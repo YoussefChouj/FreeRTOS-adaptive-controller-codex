@@ -1,0 +1,982 @@
+# livewatch logging manifests
+#
+# Each entry is a named variable set + a default sample rate, logged to a uniquely
+# named CSV. Adding one is free: it is just a list of DWARF paths, so no firmware
+# change and no reflash are needed to log a new variable.
+#
+#   python -m ground_station.livewatch manifests          # list these
+#   python -m ground_station.livewatch budget <name>      # feasible rate, no hardware
+#   python -m ground_station.livewatch log <name> --secs 60
+#
+# `vars` accepts anything `livewatch names` / `fields` resolves, plus group:<name>
+# tokens from registry.yaml. Rate ceilings are checked before logging starts --
+# see manifest.py. Keep hot manifests small: cost is per-byte AND per memory
+# region, so a few adjacent struct fields are far cheaper than the same count
+# scattered across the map.
+
+# Variables that every multi-slot preset MUST cover in the union of its slot
+# manifests, otherwise post-flight analysis cannot correlate slot data with
+# arm/disarm transitions. The capture tool refuses to load a preset that
+# misses any of these. Keep this list short -- sync runs on every capture and
+# bandwidth is paid in the union, not per-slot.
+# Mirrors the firmware's `DroneStatus` struct + FreeRTOS tick counter. Verified
+# against OBJ/JX_FLY.axf (live reads 2026-09-11).
+# NOTE: this constant is defined in Python (ground_station/livewatch/manifest.py)
+# so the capture tool can enforce it. Keep this YAML comment in sync with
+# ground_station.livewatch.manifest.REQUIRED_SYNC_VARS.
+
+
+manifests:
+
+  # -------------------------------------------------------------------------
+  # Sync slot -- required by every multi-slot preset
+  # -------------------------------------------------------------------------
+  #
+  # 4 vars, 10 Hz. ~26 B/frame = 260 B/s on USART3 (0.03% of the 921600 B/s
+  # link). The 4-var lean set covers every post-flight question:
+  #   ARM_Status  -- when did the operator arm/disarm
+  #   FlyMode     -- what flight mode was active at each tick
+  #   real_voltage -- battery sag during the run
+  #   xTickCount   -- monotonic ms clock for cross-slot time alignment
+  # Drop any of these and the union contract below will fail to load.
+
+  sync:
+    doc: >
+      Required sync channel for multi-slot presets. Captures arm status,
+      flight mode, battery voltage, FreeRTOS tick, and Euler attitude at
+      10 Hz. The capture tool (MultiSlotPresetManager) refuses any preset
+      whose union of manifests does not cover REQUIRED_SYNC_VARS -- add
+      this manifest (or any other manifest that contains all four vars)
+      to your preset.
+
+      Sync includes the Euler angles alongside the state vars because the
+      post-flight analyzer correlates ARM/FlyMode transitions with the
+      pose at that tick; without Euler in sync, the transition printout
+      is dropped (see /multislot-analyze "Failure modes"). If you add new
+      variables to this manifest, keep it small -- sync runs on every
+      capture and its bandwidth is paid forever.
+    hz: 10
+    vars:
+      # State -- the contract vars (REQUIRED_SYNC_VARS in manifest.py)
+      - DroneStatus.ARM_Status
+      - DroneStatus.FlyMode
+      - real_voltage
+      - xTickCount
+      # Pose -- required by the analyzer's transition + takeoff printouts
+      - imu_data.rol
+      - imu_data.pit
+      - imu_data.yaw
+
+  # -------------------------------------------------------------------------
+  # Arming + system health (always-safe cheap checks)
+  # -------------------------------------------------------------------------
+
+  arm_health:
+    doc: "Arm flag + system tick. The minimum set for every bench session."
+    hz: 2
+    vars:
+      - DroneStatus.ARM_Status
+      - DroneStatus.FlyMode
+      - xTickCount
+
+  boot_default:
+    doc: >
+      Idempotent re-subscription of the firmware's hardcoded boot-default
+      (slot 0). Covers: imu_data, DroneStatus, system_monitor, UA3RxFrameCnt,
+      UA3TxFrames. Runs at 10 Hz. This manifest is the host mirror of
+      ``API/subscribe.c Subscribe_BootDefault()`` -- add or remove vars there
+      and update ``ground_station/comm/boot_default_layout.py`` in lockstep.
+    hz: 10
+    vars:
+      - imu_data.rol
+      - imu_data.pit
+      - imu_data.yaw
+      - imu_data.acc_x
+      - imu_data.acc_y
+      - imu_data.acc_z
+      - imu_data.gyr_x
+      - imu_data.gyr_y
+      - imu_data.gyr_z
+      - DroneStatus.ARM_Status
+      - DroneStatus.FlyMode
+      - DroneStatus.vbat
+      - DroneStatus.cpu_temp
+      - system_monitor.cpu_usage
+      - system_monitor.tick_1k
+      - system_monitor.tick_1s
+      - system_monitor.mem_usage
+      - system_monitor.send_fps
+      - system_monitor.recv_fps
+      - UA3RxFrameCnt
+      - UA3TxFrames
+
+  health_full:
+    doc: "Full task health + liveness counters. Safe to leave running during flights."
+    hz: 5
+    vars:
+      - group:health
+
+  # -------------------------------------------------------------------------
+  # MRAC adaptive weights (the primary thesis data)
+  # -------------------------------------------------------------------------
+
+  mrac_weights:
+    doc: >
+      All four MRAC axes — Theta[0..2] per axis (3 basis weights), Whatf[0..2]
+      (filtered stack), and the e/u_deadzone flags. This is the primary dataset:
+      log at --hz 50 or higher during flight. Theta[0] = feedforward (u_nom),
+      Theta[1] = proportional, Theta[2] = derivative basis weight.
+    hz: 50
+    vars:
+      - mrac_state.roll.Theta[0]
+      - mrac_state.roll.Theta[1]
+      - mrac_state.roll.Theta[2]
+      - mrac_state.roll.Whatf[0]
+      - mrac_state.roll.Whatf[1]
+      - mrac_state.roll.Whatf[2]
+      - mrac_state.pitch.Theta[0]
+      - mrac_state.pitch.Theta[1]
+      - mrac_state.pitch.Theta[2]
+      - mrac_state.pitch.Whatf[0]
+      - mrac_state.pitch.Whatf[1]
+      - mrac_state.pitch.Whatf[2]
+      - mrac_state.yaw.Theta[0]
+      - mrac_state.yaw.Theta[1]
+      - mrac_state.yaw.Theta[2]
+      - mrac_state.yaw.Whatf[0]
+      - mrac_state.yaw.Whatf[1]
+      - mrac_state.yaw.Whatf[2]
+      - mrac_state.z_rate.Theta[0]
+      - mrac_state.z_rate.Theta[1]
+      - mrac_state.z_rate.Theta[2]
+      - mrac_state.z_rate.Whatf[0]
+      - mrac_state.z_rate.Whatf[1]
+      - mrac_state.z_rate.Whatf[2]
+
+  mrac_signals:
+    doc: >
+      Per-axis error, control, and adaptation signals — x (plant state),
+      r (reference), e (tracking error), Phi (regressor), u_nom/u_ad/u_def
+      (nominal/adaptive/total control), xm_dot/xm (reference model state).
+      Good for diagnosing adaptation dynamics and deadzone behaviour.
+    hz: 50
+    vars:
+      - mrac_state.roll.e
+      - mrac_state.roll.e_dot
+      - mrac_state.roll.u_nom
+      - mrac_state.roll.u_ad
+      - mrac_state.roll.u_def
+      - mrac_state.roll.x
+      - mrac_state.roll.r
+      - mrac_state.pitch.e
+      - mrac_state.pitch.e_dot
+      - mrac_state.pitch.u_nom
+      - mrac_state.pitch.u_ad
+      - mrac_state.pitch.u_def
+      - mrac_state.pitch.x
+      - mrac_state.pitch.r
+
+  # -------------------------------------------------------------------------
+  # EKF (shadow-mode; compute-only)
+  # -------------------------------------------------------------------------
+
+  ekf_all:
+    doc: >
+      Full 9-state EKF body-frame velocity + accelerometer bias + NIS.
+      EKF is shadow-mode (compute-only, not in the control path by design).
+      b_a bias states should decay toward zero on a static bench; large
+      residual NIS means the model is inconsistent with the measurement.
+    hz: 50
+    vars:
+      - group:ekf
+      - s_ekf.P[0]
+      - s_ekf.P[1]
+      - s_ekf.P[2]
+      - s_ekf.P[3]
+      - s_ekf.P[4]
+      - s_ekf.P[5]
+      - s_ekf.P[6]
+      - s_ekf.P[7]
+      - s_ekf.P[8]
+
+  # -------------------------------------------------------------------------
+  # Optical flow + position estimation (active control path)
+  # -------------------------------------------------------------------------
+
+  of_position:
+    doc: >
+      OF earth-frame position estimate (active control path) vs EKF shadow estimate.
+      OF is the default position source; EKF is shadow-mode only.
+      earth_x/y drift over time is expected behaviour — this log characterises it.
+    hz: 50
+    vars:
+      - ano_of.earth_x
+      - ano_of.earth_y
+      - ano_of.earth_x_ture
+      - ano_of.earth_y_ture
+      - ano_of.DISTANCE_X
+      - ano_of.DISTANCE_Y
+      - ano_of.of_quality
+      - ano_of.of2_dx_fix
+      - ano_of.of2_dy_fix
+      - s_of_bias_x
+      - s_of_bias_y
+      - s_of_bias_seeded
+      - g_estimator_ready
+      - g_of_bias_capture_req
+      - g_of_bias_mode
+      - g_of_bias_ema_freeze
+
+  of_raw:
+    doc: >
+      Raw OF pixel deltas from each sensor. of2 is the primary (largest baseline).
+      of_quality is the mean feature-tracking quality; drops below ~0.3 indicate
+      poor texture / low-light conditions where OF becomes unreliable.
+    hz: 50
+    vars:
+      - ano_of.of0_dx
+      - ano_of.of0_dy
+      - ano_of.of0_sta
+      - ano_of.of1_dx
+      - ano_of.of1_dy
+      - ano_of.of1_sta
+      - ano_of.of2_dx
+      - ano_of.of2_dy
+      - ano_of.of2_sta
+      - ano_of.of_quality
+      - ano_of.of2_dx_fix
+      - ano_of.of2_dy_fix
+
+  # -------------------------------------------------------------------------
+  # PID inner loops (attitude rate)
+  # -------------------------------------------------------------------------
+
+  inner_loops:
+    doc: >
+      Inner attitude rate loops — roll (gyroxPID), pitch (gyroyPID), yaw (gyrozPID).
+      Des/FB/U per loop. DO NOT tune via the dashboard inner sliders — they have
+      an axis swap bug (pitch→gyrox, roll→gyroy). Firmware gyrox=roll, gyroy=pitch.
+    hz: 100
+    vars:
+      - Ctrler.gyroxPID.Des
+      - Ctrler.gyroxPID.FB
+      - Ctrler.gyroxPID.U
+      - Ctrler.gyroyPID.Des
+      - Ctrler.gyroyPID.FB
+      - Ctrler.gyroyPID.U
+      - Ctrler.gyrozPID.Des
+      - Ctrler.gyrozPID.FB
+      - Ctrler.gyrozPID.U
+
+  outer_loops:
+    doc: >
+      Outer position loops — locxPID, locyPID, Z_posPID. Des=setpoint, FB=feedback
+      (from OF or EKF), U=PID output. FB sign for OF is known-inverted in firmware;
+      do NOT use the dashboard sliders for axis swap — they map pitch→gyrox, roll→gyroy.
+    hz: 50
+    vars:
+      - Ctrler.locxPID.Des
+      - Ctrler.locxPID.FB
+      - Ctrler.locxPID.U
+      - Ctrler.locyPID.Des
+      - Ctrler.locyPID.FB
+      - Ctrler.locyPID.U
+      - Ctrler.Z_posPID.Des
+      - Ctrler.Z_posPID.FB
+      - Ctrler.Z_posPID.U
+      - Ctrler.Z_ratePID.Des
+      - Ctrler.Z_ratePID.FB
+      - Ctrler.Z_ratePID.U
+
+  # -------------------------------------------------------------------------
+  # IMU / sensors
+  # -------------------------------------------------------------------------
+
+  imu_full:
+    doc: >
+      Full IMU block — raw gyro/accel, LPFs, orientation (euler angles), and
+      gravity-body projections. Gravity_Body_X/Y/Z are useful for detecting
+      pitch/roll angle independently of gyro drift.
+    hz: 80
+    vars:
+      - Gyro_X_Real
+      - Gyro_Y_Real
+      - Gyro_Z_Real
+      - Gyro_X_Lpf
+      - Gyro_Y_Lpf
+      - Gyro_Z_Lpf
+      - Acc_X_Real
+      - Acc_Y_Real
+      - Acc_Z_Real
+      - Lin_Acc_X_body
+      - Lin_Acc_Y_body
+      - Lin_Acc_Z_body
+      - Gravity_Body_X
+      - Gravity_Body_Y
+      - Gravity_Body_Z
+      - imu_data.rol
+      - imu_data.pit
+      - imu_data.yaw
+
+  # -------------------------------------------------------------------------
+  # Cascade full — for diagnosing in-flight drift / demand-ramp runaway
+  # 2026-09-13 185415/185816 saw demands ramp 0.87-4.6 deg/s² and flip the
+  # drone. Capture this preset on the next flight to attribute the ramp
+  # upstream vs downstream of the rate loop.
+  # -------------------------------------------------------------------------
+  flight_cascade_full:
+    doc: >
+      Full cascade (position -> velocity -> angle -> rate) + raw OF readings +
+      bias state. Designed to attribute the in-flight rate-demand ramp observed
+      in 2026-09-13 185415 / 185816 flights to either (a) OF position drift
+      winding up the position PID, (b) yaw angle drift (gyro Z walk) winding
+      up yawPID, or (c) something else upstream. Pair with the dashboard
+      flight_comprehensive preset so slot 0 still gets the standard
+      dashboard_frame_a telemetry (MRAC, status, attitude, battery).
+    hz: 50
+    vars:
+      # Position outer loop (catches integrator windup via SumE)
+      - Ctrler.locxPID.Des
+      - Ctrler.locxPID.FB
+      - Ctrler.locxPID.U
+      - Ctrler.locxPID.SumE
+      - Ctrler.locyPID.Des
+      - Ctrler.locyPID.FB
+      - Ctrler.locyPID.U
+      - Ctrler.locyPID.SumE
+      # Velocity loop (locxs/y -> des_roll/des_pitch via world->body rotation)
+      - Ctrler.locxsPID.Des
+      - Ctrler.locxsPID.FB
+      - Ctrler.locxsPID.U
+      - Ctrler.locysPID.Des
+      - Ctrler.locysPID.FB
+      - Ctrler.locysPID.U
+      # Angle loop (roll/pitch -> gyrox/y Des)
+      - Ctrler.rollPID.Des
+      - Ctrler.rollPID.FB
+      - Ctrler.rollPID.U
+      - Ctrler.rollPID.SumE
+      - Ctrler.pitchPID.Des
+      - Ctrler.pitchPID.FB
+      - Ctrler.pitchPID.U
+      - Ctrler.pitchPID.SumE
+      - Ctrler.yawPID.Des
+      - Ctrler.yawPID.FB
+      - Ctrler.yawPID.U
+      - Ctrler.yawPID.SumE
+      # Rate loop (gyrox/y/z — what the motor mixer sees)
+      - Ctrler.gyroxPID.Des
+      - Ctrler.gyroxPID.U
+      - Ctrler.gyroyPID.Des
+      - Ctrler.gyroyPID.U
+      - Ctrler.gyrozPID.Des
+      - Ctrler.gyrozPID.U
+      # Raw OF + bias state (to compute position drift rate independently
+      # of the integrator-warmed-up PID output)
+      - ano_of.earth_x_ture
+      - ano_of.earth_y_ture
+      - ano_of.of2_dx_fix
+      - ano_of.of2_dy_fix
+      - ano_of.of_quality
+      - s_of_bias_x
+      - s_of_bias_y
+
+  # -------------------------------------------------------------------------
+  # Bench / characterisation
+  # -------------------------------------------------------------------------
+
+  pendulum:
+    doc: "Bifilar/compound pendulum inertia test. Gyro triad for the period, attitude
+      to catch sway and rock contaminating the torsional mode. Drone hangs on lines,
+      disarmed, no tether."
+    hz: 50
+    vars:
+      - Gyro_X_Real
+      - Gyro_Y_Real
+      - Gyro_Z_Real
+      - imu_data.rol
+      - imu_data.pit
+      - imu_data.yaw
+
+  # sysid_diagnostic: [DISABLED] — s_sig/s_t_sig/omega/x_dot don't exist in current ELF.
+  # These were written speculatively against a planned firmware that hasn't shipped.
+  # Re-enable once the SysID excitation state vars are compiled in.
+  # TODO: add Ctrler.rollPID.Des and Ctrler.rollPID.FB once firmware exports them.
+  # _sysid_diagnostic:
+
+  # -------------------------------------------------------------------------
+  # Legacy / existing (kept for compatibility)
+  # -------------------------------------------------------------------------
+
+  ekf_ba_check:
+    doc: >
+      Post-reflash acceptance test for the D5 gravity fix. b_a must NOT track
+      Acc_*_Real any more: if b_a/Acc_Real is still ~1.0 on every axis the filter
+      is still a no-op and the fix did not take. Expect b_a to decay toward zero
+      on a static bench, since b_a is now identifiable only through OF and needs
+      motion. Predict input is Lin_Acc_*_body (gravity-removed), logged alongside.
+    hz: 20
+    vars:
+      - s_ekf.active
+      - s_ekf.x[3]        # b_a x
+      - s_ekf.x[4]        # b_a y
+      - s_ekf.x[5]        # b_a z
+      - s_ekf.nis
+      - Acc_X_Real
+      - Acc_Y_Real
+      - Acc_Z_Real
+      - Lin_Acc_X_body
+      - Lin_Acc_Y_body
+      - Lin_Acc_Z_body
+
+  ekf_vs_of:
+    doc: >
+      Side-by-side of the two position/velocity sources: EKF body velocity vs the
+      OF-bias estimator that remains the default. OF stays the control path; the
+      EKF is shadow-mode only.
+    hz: 50
+    vars:
+      - group:ekf
+      - ano_of.earth_x
+      - ano_of.earth_y
+      - ano_of.of2_dx_fix
+      - ano_of.of2_dy_fix
+      - ano_of.of_quality
+      - s_of_bias_x
+      - s_of_bias_y
+
+  of_drift:
+    doc: >
+      Optical-flow drift audit. DISTANCE_* against tau*(bias(t)-bias(0)) -- the
+      identity that showed the drift was the cold-start EMA ramp, not sensor noise.
+      s_of_bias_seeded should read 1 within the first locked sample.
+    hz: 50
+    vars:
+      - ano_of.of2_dx_fix
+      - ano_of.of2_dy_fix
+      - ano_of.DISTANCE_X
+      - ano_of.DISTANCE_Y
+      - ano_of.earth_x
+      - ano_of.earth_y
+      - ano_of.of_quality
+      - s_of_bias_x
+      - s_of_bias_y
+      - s_of_bias_seeded
+
+  pos_loop:
+    doc: "Outer position loop setpoint vs feedback, both axes."
+    hz: 50
+    vars:
+      - Ctrler.locxPID.Des
+      - Ctrler.locxPID.FB
+      - Ctrler.locxPID.U
+      - Ctrler.locyPID.Des
+      - Ctrler.locyPID.FB
+      - Ctrler.locyPID.U
+
+  # -------------------------------------------------------------------------
+  # Flight instability diagnostic — captures the full signal chain from outer
+  # setpoint through rate PID to motor RPM, plus IMU and MRAC state, in a single
+  # synchronous log so post-flight analysis can pinpoint which layer broke.
+  # Requires rpm_dbg[0..3] in the firmware (added 2026-09-04; reflash once).
+  # -------------------------------------------------------------------------
+
+  diag_instability_a:
+    doc: >
+      Half A of diag_instability: angle, rate, inner PID, MRAC roll/pitch weights
+      + error. Sized to fit a single subscribe slot (<=24 ranges) so it can
+      stream via the WiFi 0x21 path. Pair with diag_instability_b for the
+      full flight instability dataset.
+    hz: 5
+    vars:
+      - imu_data.rol
+      - imu_data.pit
+      - imu_data.yaw
+      - Gyro_X_Real
+      - Gyro_Y_Real
+      - Gyro_Z_Real
+      - Gyro_X_Lpf
+      - Gyro_Y_Lpf
+      - Gyro_Z_Lpf
+      - Ctrler.gyroxPID.Des
+      - Ctrler.gyroxPID.FB
+      - Ctrler.gyroxPID.U
+      - Ctrler.gyroyPID.Des
+      - Ctrler.gyroyPID.FB
+      - Ctrler.gyroyPID.U
+      - Ctrler.gyrozPID.Des
+      - Ctrler.gyrozPID.FB
+      - Ctrler.gyrozPID.U
+      - mrac_state.roll.Theta[0]
+      - mrac_state.roll.Theta[1]
+      - mrac_state.roll.Theta[2]
+      - mrac_state.roll.e
+      - mrac_state.roll.u_nom
+      - mrac_state.roll.u_ad
+
+  diag_instability_b:
+    doc: >
+      Half B of diag_instability: MRAC Whatf + u_def for roll/pitch, MRAC
+      error/control for yaw, OF position/velocity feedback, motor RPM, and
+      liveness counters. Sized to fit a single subscribe slot. Pair with
+      diag_instability_a.
+    hz: 5
+    vars:
+      - mrac_state.roll.Whatf[0]
+      - mrac_state.roll.Whatf[1]
+      - mrac_state.roll.Whatf[2]
+      - mrac_state.roll.u_def
+      - mrac_state.pitch.Theta[0]
+      - mrac_state.pitch.Theta[1]
+      - mrac_state.pitch.Theta[2]
+      - mrac_state.pitch.Whatf[0]
+      - mrac_state.pitch.Whatf[1]
+      - mrac_state.pitch.Whatf[2]
+      - mrac_state.pitch.e
+      - mrac_state.pitch.u_nom
+      - mrac_state.pitch.u_ad
+      - mrac_state.pitch.u_def
+      - mrac_state.yaw.e
+      - mrac_state.yaw.u_nom
+      - mrac_state.yaw.u_ad
+      - mrac_state.yaw.u_def
+      - ano_of.earth_x
+      - ano_of.earth_y
+      - ano_of.of2_dx_fix
+      - ano_of.of2_dy_fix
+      - rpm_ch[0]
+      - rpm_ch[1]
+
+  diag_instability:
+    doc: >
+      Full flight instability diagnostic. Single synchronous log across the
+      SWD probe covering: outer attitude setpoint vs measured (roll/pitch/yaw
+      angle + rate), inner PID des/FB/U for all three axes, MRAC adaptive
+      weights and per-axis error for roll/pitch/yaw, IMU raw and LPF, OF
+      position and velocity feedback, liveness (tick, CPU, FPS) and the four
+      motor RPM channels. rpm_dbg[0..3] are PA0/PA1/PC6/PC7 — map to motors
+      empirically (which motor corresponds to which index). At 100 Hz this
+      covers ~100 KB of CSV per minute, sized for one or two arm/disarm
+      cycles (use --secs 60 for a typical bench session).
+    hz: 100
+    vars:
+      # Outer angle setpoint vs measured (outer loop asks for angles; we see
+      # them on the wire from imu_data.rol/pit/yaw)
+      - imu_data.rol
+      - imu_data.pit
+      - imu_data.yaw
+      # Rate feedback (raw and LPF) — feeds inner loop
+      - Gyro_X_Real
+      - Gyro_Y_Real
+      - Gyro_Z_Real
+      - Gyro_X_Lpf
+      - Gyro_Y_Lpf
+      - Gyro_Z_Lpf
+      # Inner rate loop — Des/FB/U per axis. gyrox=roll rate, gyroy=pitch rate,
+      # gyroz=yaw rate. U here is the motor mixer command before any safety clamp.
+      - Ctrler.gyroxPID.Des
+      - Ctrler.gyroxPID.FB
+      - Ctrler.gyroxPID.U
+      - Ctrler.gyroyPID.Des
+      - Ctrler.gyroyPID.FB
+      - Ctrler.gyroyPID.U
+      - Ctrler.gyrozPID.Des
+      - Ctrler.gyrozPID.FB
+      - Ctrler.gyrozPID.U
+      # Z (altitude) rate loop — throttle control
+      - Ctrler.Z_ratePID.Des
+      - Ctrler.Z_ratePID.FB
+      - Ctrler.Z_ratePID.U
+      # MRAC adaptive state — Theta[0..2] per axis (3 basis weights), Whatf
+      # (filtered regressor stack), tracking error e, and control decomposition
+      # u_nom/u_ad/u_def. If u_ad blows up while e is still large, MRAC is the
+      # source. If u_def=0 with |e|>deadzone, the deadzone is swallowing output.
+      - mrac_state.roll.Theta[0]
+      - mrac_state.roll.Theta[1]
+      - mrac_state.roll.Theta[2]
+      - mrac_state.roll.Whatf[0]
+      - mrac_state.roll.Whatf[1]
+      - mrac_state.roll.Whatf[2]
+      - mrac_state.roll.e
+      - mrac_state.roll.u_nom
+      - mrac_state.roll.u_ad
+      - mrac_state.roll.u_def
+      - mrac_state.pitch.Theta[0]
+      - mrac_state.pitch.Theta[1]
+      - mrac_state.pitch.Theta[2]
+      - mrac_state.pitch.Whatf[0]
+      - mrac_state.pitch.Whatf[1]
+      - mrac_state.pitch.Whatf[2]
+      - mrac_state.pitch.e
+      - mrac_state.pitch.u_nom
+      - mrac_state.pitch.u_ad
+      - mrac_state.pitch.u_def
+      - mrac_state.yaw.e
+      - mrac_state.yaw.u_nom
+      - mrac_state.yaw.u_ad
+      - mrac_state.yaw.u_def
+      # OF position/velocity feedback (active control path)
+      - ano_of.earth_x
+      - ano_of.earth_y
+      - ano_of.of2_dx_fix
+      - ano_of.of2_dy_fix
+      - ano_of.of_quality
+      - s_of_bias_x
+      - s_of_bias_y
+      # Motor RPM — rpm_dbg[0..3] does NOT exist in current firmware DWARF.
+      # Use rpm_ch[0..3] (uint16 per channel, 128-byte struct).
+      # PA0=CH0, PA1=CH1, PC6=CH2, PC7=CH3. Motor mapping unvalidated.
+      - rpm_ch[0]
+      - rpm_ch[1]
+      - rpm_ch[2]
+      - rpm_ch[3]
+      # Liveness: detect scheduler starvation, tick stretch, watchdog kicks.
+      - xTickCount
+      - DroneStatus.ARM_Status
+      - DroneStatus.FlyMode
+      - system_monitor.stabilizerTask_fps
+      - system_monitor.IMUSampleTask_fps
+      - system_monitor.IMUUpdateTask_fps
+
+  # -------------------------------------------------------------------------
+  # Comprehensive flight test — all-in-one for adaptive controller research
+  # -------------------------------------------------------------------------
+
+  flight_comprehensive_lite:
+    doc: >
+      Lightweight comprehensive flight test (fits in 62-range limit).
+      Critical variables only: IMU, PID Des/FB/U, MRAC e/u_nom/u_ad, motors, EKF.
+      For FULL logging with all MRAC weights + PID gains, use multi-slot approach
+      with ground_station/manifests/flight-comprehensive.yaml (3 slots).
+    hz: 20
+    vars:
+      # IMU (6 vars)
+      - imu_data.rol
+      - imu_data.pit
+      - imu_data.yaw
+      - Gyro_X_Real
+      - Gyro_Y_Real
+      - Gyro_Z_Real
+      # PID critical (3 per loop × 8 = 24 vars)
+      - Ctrler.rollPID.Des
+      - Ctrler.rollPID.FB
+      - Ctrler.rollPID.U
+      - Ctrler.pitchPID.Des
+      - Ctrler.pitchPID.FB
+      - Ctrler.pitchPID.U
+      - Ctrler.yawPID.Des
+      - Ctrler.yawPID.FB
+      - Ctrler.yawPID.U
+      - Ctrler.gyroxPID.Des
+      - Ctrler.gyroxPID.FB
+      - Ctrler.gyroxPID.U
+      - Ctrler.gyroyPID.Des
+      - Ctrler.gyroyPID.FB
+      - Ctrler.gyroyPID.U
+      - Ctrler.gyrozPID.Des
+      - Ctrler.gyrozPID.FB
+      - Ctrler.gyrozPID.U
+      - Ctrler.Z_posPID.Des
+      - Ctrler.Z_posPID.FB
+      - Ctrler.Z_posPID.U
+      - Ctrler.Z_ratePID.Des
+      - Ctrler.Z_ratePID.FB
+      - Ctrler.Z_ratePID.U
+      # MRAC critical (3 per axis × 4 = 12 vars)
+      - mrac_state.roll.e
+      - mrac_state.roll.u_nom
+      - mrac_state.roll.u_ad
+      - mrac_state.pitch.e
+      - mrac_state.pitch.u_nom
+      - mrac_state.pitch.u_ad
+      - mrac_state.yaw.e
+      - mrac_state.yaw.u_nom
+      - mrac_state.yaw.u_ad
+      - mrac_state.z_rate.e
+      - mrac_state.z_rate.u_nom
+      - mrac_state.z_rate.u_ad
+      # MRAC flags (2 vars)
+      - mrac_flags.adaptation_on
+      - mrac_flags.axis_enable_roll
+      # EKF (4 critical vars)
+      - s_ekf.x[0]
+      - s_ekf.x[1]
+      - s_ekf.x[2]
+      - s_ekf.active
+      # System (4 vars)
+      - DroneStatus.ARM_Status
+      - DroneStatus.FlyMode
+      - g_cal_health
+      - xTickCount
+
+  flight_comprehensive:
+    doc: >
+      Full adaptive controller flight test. Logs:
+        - IMU: gyro (raw + LPF), euler angles
+        - PID: all 6 loops (outer: roll/pitch/yaw; inner: gyrox/gyroy/gyroz; z: pos/rate)
+        - MRAC: state + config for all 4 axes (roll/pitch/yaw/z_rate)
+        - Motors: PWM + RPM
+        - EKF: 9-state
+        - System: task counters, RC channels, TWC
+      Sized for 20 Hz. RANGE-PACKED to fit within 62-range firmware limit.
+      Uses 30 ranges total (well under limit). All variables verified against DWARF 2026-09-09.
+    hz: 20
+    vars:
+      # IMU (3 ranges)
+      - imu_data.rol
+      - imu_data.pit
+      - imu_data.yaw
+      - sensor.Gyro_deg[0]
+      - sensor.Gyro_deg[1]
+      - sensor.Gyro_deg[2]
+      - Filters.GyroxLPF
+      - Filters.GyroyLPF
+      - Filters.GyrozLPF
+      - sensor.Acc[0]
+      - sensor.Acc[1]
+      - sensor.Acc[2]
+      # PID loops (5 critical fields per loop × 8 loops = 40 vars)
+      - Ctrler.rollPID.Des
+      - Ctrler.rollPID.FB
+      - Ctrler.rollPID.U
+      - Ctrler.pitchPID.Des
+      - Ctrler.pitchPID.FB
+      - Ctrler.pitchPID.U
+      - Ctrler.yawPID.Des
+      - Ctrler.yawPID.FB
+      - Ctrler.yawPID.U
+      - Ctrler.gyroxPID.Des
+      - Ctrler.gyroxPID.FB
+      - Ctrler.gyroxPID.U
+      - Ctrler.gyroyPID.Des
+      - Ctrler.gyroyPID.FB
+      - Ctrler.gyroyPID.U
+      - Ctrler.gyrozPID.Des
+      - Ctrler.gyrozPID.FB
+      - Ctrler.gyrozPID.U
+      - Ctrler.Z_posPID.Des
+      - Ctrler.Z_posPID.FB
+      - Ctrler.Z_posPID.U
+      - Ctrler.Z_ratePID.Des
+      - Ctrler.Z_ratePID.FB
+      - Ctrler.Z_ratePID.U
+      # MRAC state (4 axes × 6 key vars = 24 vars)
+      - mrac_state.roll.e
+      - mrac_state.roll.u_nom
+      - mrac_state.roll.u_ad
+      - mrac_state.roll.Theta[0]
+      - mrac_state.roll.Theta[1]
+      - mrac_state.roll.Whatf[0]
+      - mrac_state.pitch.e
+      - mrac_state.pitch.u_nom
+      - mrac_state.pitch.u_ad
+      - mrac_state.pitch.Theta[0]
+      - mrac_state.pitch.Theta[1]
+      - mrac_state.pitch.Whatf[0]
+      - mrac_state.yaw.e
+      - mrac_state.yaw.u_nom
+      - mrac_state.yaw.u_ad
+      - mrac_state.yaw.Theta[0]
+      - mrac_state.z_rate.e
+      - mrac_state.z_rate.u_nom
+      - mrac_state.z_rate.u_ad
+      - mrac_state.z_rate.Theta[0]
+      # MRAC flags
+      - mrac_flags.adaptation_on
+      - mrac_flags.axis_enable_roll
+      - mrac_flags.axis_enable_pitch
+      # Motors + RPM (8 vars)
+      - mymotor.motor1
+      - mymotor.motor2
+      - mymotor.motor3
+      - mymotor.motor4
+      - rpm_ch[0]
+      - rpm_ch[1]
+      - rpm_ch[2]
+      - rpm_ch[3]
+      # EKF (7 vars)
+      - s_ekf.x[0]
+      - s_ekf.x[1]
+      - s_ekf.x[2]
+      - s_ekf.x[3]
+      - s_ekf.x[4]
+      - s_ekf.x[5]
+      - s_ekf.active
+      # RC channels (4 vars)
+      - Remoter.ThrCtrler
+      - Remoter.RolCtrler
+      - Remoter.PitCtrler
+      - Remoter.YawCtrler
+      # System (4 vars)
+      - DroneStatus.ARM_Status
+      - DroneStatus.FlyMode
+      - g_cal_health
+      - xTickCount
+
+  # -------------------------------------------------------------------------
+  # Thrust estimators (shadow mode validation)
+  # -------------------------------------------------------------------------
+
+  thrust_estimators:
+    doc: >
+      Three shadow-mode thrust estimators for motor dynamics validation.
+      Empirical (PWM→thrust bench LUT), blade-element (RPM→thrust k_T·ω²),
+      IMU-derived (vertical accel projection). Logs all 4 motors + total.
+      Use for PWM→RPM transient characterization and bench-vs-flight validation.
+    hz: 200
+    vars:
+      # Empirical (PWM-based, 4 motors)
+      - g_thrust_est.empirical[0]
+      - g_thrust_est.empirical[1]
+      - g_thrust_est.empirical[2]
+      - g_thrust_est.empirical[3]
+      # Blade-element (RPM-based, 4 motors)
+      - g_thrust_est.blade_element[0]
+      - g_thrust_est.blade_element[1]
+      - g_thrust_est.blade_element[2]
+      - g_thrust_est.blade_element[3]
+      # IMU-derived (total vertical thrust)
+      - g_thrust_est.imu_total
+      # Context: PWM commands and RPM feedback
+      - mymotor.motor1
+      - mymotor.motor2
+      - mymotor.motor3
+      - mymotor.motor4
+      - rpm_ch[0]
+      - rpm_ch[1]
+      - rpm_ch[2]
+      - rpm_ch[3]
+      # System tick for time alignment
+      - xTickCount
+
+  # -------------------------------------------------------------------------
+  # dashboard_frame_a — drop-in replacement for the legacy UART5 Frame A
+  # stream, routed over the USART3 subscribe path on slot 0 at 20 Hz.
+  #
+  # Source: ground_station/comm/wifi_bridge.py::_decode_frame_a (and the
+  # _decode_frame_a_uart4 sibling). The legacy Frame A payload layout is:
+  #   [8×f32: MRAC pitch/roll/yaw/z e+u_ad = 32 B]
+  #   [9×u8:  status flags = 9 B]
+  # so this manifest exposes those fields plus attitude + battery under
+  # their DWARF paths.
+  #
+  # Rate rationale (2026-09-12 wire-budget lesson):
+  #   - User-requested "20 Hz" maps to host hz=50 with effective Send_Task
+  #     cadence ~80 Hz -> divider=int(200/50)=4 -> 80/4=20 Hz measured.
+  #   - 20 vars * 4 B = 80 B payload, data frame 12+80=92 B, 20 Hz
+  #     -> 1.84 KB/s on USART3 (0.20% of 921,600 B/s wire) -- well inside
+  #     the 80% host guard.
+  #
+  # Why slot 0: legacy Frame A was on UART5 and never conflicted with the
+  # boot-default slot-0 subscribe. Re-using slot 0 here means the host's
+  # _slot0_to_sidebar() (extended for MRAC + status flags) republishes the
+  # payload under tag "a" so the dashboard sidebar updates without changes
+  # to the dashboard code itself. The firmware boot-default 12 vars at
+  # divider 20 are now superseded -- the host's
+  # ``WifiBridge._request_slot0_schema(layout="dashboard")`` re-subscribes
+  # slot 0 with this var list at divider 4 over the same wire id.
+  #
+  # The legacy UART5 Frame A stream continues to run in MIXED mode and the
+  # dashboard also keeps reading it; once MIXED mode is dropped (separate
+  # task) this manifest becomes the only source of those sidebar keys.
+  # -------------------------------------------------------------------------
+
+  dashboard_frame_a:
+    doc: >
+      Dashboard sidebar payload, slot 0 at 20 Hz. Mirrors legacy Frame A.
+      MRAC e/u_ad for all 4 axes + status flags + attitude + battery.
+      Plus xTickCount so this manifest satisfies REQUIRED_SYNC_VARS on its
+      own (a multi-slot preset can put it on slot 0 without needing a
+      separate `sync` manifest).
+      Size: 21 vars * 4 B = 84 B payload + 12 B overhead = 96 B/frame.
+    hz: 50     # host hz=50 -> divider=4 -> measured 20 Hz in MIXED mode
+    vars:
+      # Attitude (3 vars) -- dashboard attitude display + Euler sidebar
+      - imu_data.rol
+      - imu_data.pit
+      - imu_data.yaw
+      # MRAC e + u_ad for the 4 axes the dashboard bar monitor reads
+      # (lines 2089-2099 of dashboard.py). 8 vars * 4 B = 32 B -- the exact
+      # size of the legacy Frame A's MRAC block.
+      - mrac_state.pitch.e
+      - mrac_state.pitch.u_ad
+      - mrac_state.roll.e
+      - mrac_state.roll.u_ad
+      - mrac_state.yaw.e
+      - mrac_state.yaw.u_ad
+      - mrac_state.z_rate.e
+      - mrac_state.z_rate.u_ad
+      # Status flags (9 vars, 1 B each packed as 4 B in subscribe path).
+      # DWARF paths resolved against live ELF (livewatch names 2026-09-12):
+      #   status.arm            -> DroneStatus.ARM_Status
+      #   status.flymode        -> DroneStatus.FlyMode
+      #   status.sbus_lost      -> sbus_lost  (API/rc_input.h)
+      #   status.twc_execute    -> TWC.execute (TWC is a 36-byte struct -- only
+      #                          the u32 `execute` field fits the 1/2/4 protocol)
+      #   status.twc_arrived    -> TWC_arrived
+      #   status.rc_authority   -> s_authority  (Remoter task authority flag)
+      #   status.of_hold        -> g_of_hold_active
+      #   status.estimator_ready-> g_estimator_ready
+      - DroneStatus.ARM_Status
+      - DroneStatus.FlyMode
+      - sbus_lost
+      - TWC.execute
+      - TWC_arrived
+      - s_authority
+      - g_of_hold_active
+      - g_estimator_ready
+      # Battery voltage (1 var) -- vbat sidebar.
+      # NOTE: this manifest uses `real_voltage` (not `DroneStatus.vbat`) to
+      # match the firmware's boot_default subscribe in API/subscribe.c and
+      # the BOOT_DEFAULT_VARS tuple in boot_default_layout.py. The previous
+      # boot_default manifest's `DroneStatus.vbat` was a divergence -- it
+      # never matched what the firmware was emitting on slot 0.
+      - real_voltage
+      # Monotonic ms clock -- required so this manifest alone satisfies
+      # REQUIRED_SYNC_VARS (multi-slot presets can use it on slot 0 in
+      # place of the lean `sync` manifest).
+      - xTickCount
+
+  # -------------------------------------------------------------------------
+  # Bias frame — drives the DearPyGui dashboard Bias tab (WiFi mode).
+  #
+  # In WiFi mode, wifi_bridge never handles frame 0x05 (OF calibration), so
+  # _telem["of"] stays empty and the Bias tab shows "?".  This manifest
+  # subscribes to the bias variables over the standard subscribe path (slot 1)
+  # and injects them into _telem["of"] in _multislot_run, populating the
+  # Bias tab without any wifi_bridge changes.
+  #
+  # Units (DWARF float, verified against source + live reads):
+  #   s_cal_hot.b_g   -- gyro bias in rad/s  (calib.h: "rad/s")
+  #   s_cal_trim.b_a  -- accel bias in m/s² (calib.h: "m/s^2")
+  #   s_of_bias_x/y   -- OF velocity bias in m/s (raw sensor units)
+  #
+  # The subscribe decoder emits DWARF floats directly.  The display widgets
+  # apply the inverse of the injection multiplier so the Bias tab shows the
+  # same physical value in WiFi mode as it does in serial mode.
+  # -------------------------------------------------------------------------
+  bias_frame:
+    doc: >
+      Bias tab variables: OF bias mode + EMA freeze, calibration health,
+      gyro/accel bias from s_cal_hot/s_cal_trim, and OF velocity bias.
+      Use as slot 1 in the bias_logging preset (slot 0 = dashboard_frame_a).
+      At 10 Hz this is cheap (~100 B/frame).  No REQUIRED_SYNC_VARS needed
+      because slot 0 covers them in the bias_logging preset.
+    hz: 10
+    vars:
+      # OF bias mode + EMA freeze flag (ADR-0011 Phase 1)
+      - g_of_bias_mode
+      - g_of_bias_ema_freeze
+      # Calibration health (u16 bitmask)
+      - g_cal_health
+      # Gyro bias (rad/s from s_cal_hot.b_g[0..2])
+      - s_cal_hot.b_g[0]
+      - s_cal_hot.b_g[1]
+      - s_cal_hot.b_g[2]
+      # Accel bias (m/s² from s_cal_trim.b_a[0..2]) -- display widget ×1000 → mg
+      - s_cal_trim.b_a[0]
+      - s_cal_trim.b_a[1]
+      - s_cal_trim.b_a[2]
+      # OF velocity bias (m/s raw sensor units)
+      - s_of_bias_x
+      - s_of_bias_y

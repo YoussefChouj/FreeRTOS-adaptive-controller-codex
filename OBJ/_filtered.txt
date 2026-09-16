@@ -1,0 +1,320 @@
+*** Using Compiler 'V5.06 update 3 (build 300)', folder: 'C:\Keil_v5\ARM\ARMCC\Bin'
+Build target 'JX_FLY'
+compiling retarget.c...
+Error: C4051E: couldn't write file '..\obj\retarget.o': Invalid argument
+compiling systemmonitor_task.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+Error: C4051E: couldn't write file '..\obj\systemmonitor_task.o': Invalid argument
+compiling led.c...
+Error: C4051E: couldn't write file '..\obj\led.o': Invalid argument
+compiling main.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+Error: C4051E: couldn't write file '..\obj\main.o': Invalid argument
+compiling stm32f4xx_it.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\BSP\rpm.h(87): warning:  #1-D: last line of file ends without a newline
+  #endif
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_it.o': Invalid argument
+compiling RemoterTask.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+Error: C4051E: couldn't write file '..\obj\remotertask.o': Invalid argument
+compiling StabilizerTask.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+Error: C4051E: couldn't write file '..\obj\stabilizertask.o': Invalid argument
+compiling delay.c...
+Error: C4051E: couldn't write file '..\obj\delay.o': Invalid argument
+compiling AutoflyTask.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+Error: C4051E: couldn't write file '..\obj\autoflytask.o': Invalid argument
+compiling bmi088_driver.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+Error: C4051E: couldn't write file '..\obj\bmi088_driver.o': Invalid argument
+compiling imu_update.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+Error: C4051E: couldn't write file '..\obj\imu_update.o': Invalid argument
+compiling mrac_math.c...
+..\API\mrac_math.h(53): warning:  #1-D: last line of file ends without a newline
+  #endif // MRAC_MATH_H
+..\API\mrac_math.c(74): warning:  #1-D: last line of file ends without a newline
+  }
+Error: C4051E: couldn't write file '..\obj\mrac_math.o': Invalid argument
+compiling mrac.c...
+..\API\mrac_math.h(53): warning:  #1-D: last line of file ends without a newline
+  #endif // MRAC_MATH_H
+..\API\mrac.c(37): warning:  #177-D: function "MRAC_InverseMixer" was declared but never referenced
+  static void MRAC_InverseMixer(float current_vbatt, float pwm1, float pwm2, float pwm3, float pwm4,
+Error: C4051E: couldn't write file '..\obj\mrac.o': Invalid argument
+compiling pid.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+Error: C4051E: couldn't write file '..\obj\pid.o': Invalid argument
+compiling send_data.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\BSP\rpm.h(87): warning:  #1-D: last line of file ends without a newline
+  #endif
+Error: C4051E: couldn't write file '..\obj\send_data.o': Invalid argument
+compiling gyro_filter.c...
+..\API\gyro_filter.c(71): warning:  #186-D: pointless comparison of unsigned integer with zero
+      if (axis < 0 || axis >= GYRO_FILT_AXES) return;
+..\API\gyro_filter.c(85): warning:  #186-D: pointless comparison of unsigned integer with zero
+      if (!s_enabled || axis < 0 || axis >= GYRO_FILT_AXES) {
+Error: C4051E: couldn't write file '..\obj\gyro_filter.o': Invalid argument
+compiling sysid.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\API\sysid.c(163): warning:  #186-D: pointless comparison of unsigned integer with zero
+      if (axis < SYSID_AXIS_PITCH || axis > SYSID_AXIS_Z) return 0;
+..\API\sysid.c(66): warning:  #177-D: function "attitude_deg" was declared but never referenced
+  static float attitude_deg(SysID_Axis_e a)
+Error: C4051E: couldn't write file '..\obj\sysid.o': Invalid argument
+compiling rc_input.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+Error: C4051E: couldn't write file '..\obj\rc_input.o': Invalid argument
+compiling time_estimate.c...
+Error: C4051E: couldn't write file '..\obj\time_estimate.o': Invalid argument
+compiling flight_fsm.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+Error: C4051E: couldn't write file '..\obj\flight_fsm.o': Invalid argument
+compiling sys.c...
+Error: C4051E: couldn't write file '..\obj\sys.o': Invalid argument
+compiling ekf.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\API\ekf.c: 2 warnings, 0 errors
+compiling calib.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\API\calib.c: 2 warnings, 0 errors
+compiling tf_mini_plus.c...
+Error: C4051E: couldn't write file '..\obj\tf_mini_plus.o': Invalid argument
+compiling Filter.c...
+Error: C4051E: couldn't write file '..\obj\filter.o': Invalid argument
+compiling Ano_OF.c...
+Error: C4051E: couldn't write file '..\obj\ano_of.o': Invalid argument
+compiling GPS.c...
+Error: C4051E: couldn't write file '..\obj\gps.o': Invalid argument
+compiling SINS.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+Error: C4051E: couldn't write file '..\obj\sins.o': Invalid argument
+compiling Accel_Calibartion.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+Error: C4051E: couldn't write file '..\obj\accel_calibartion.o': Invalid argument
+compiling ADC.c...
+Error: C4051E: couldn't write file '..\obj\adc.o': Invalid argument
+compiling BSP.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\BSP\rpm.h(87): warning:  #1-D: last line of file ends without a newline
+  #endif
+Error: C4051E: couldn't write file '..\obj\bsp.o': Invalid argument
+compiling rpm.c...
+..\BSP\rpm.h(87): warning:  #1-D: last line of file ends without a newline
+  #endif
+..\BSP\rpm.c(254): warning:  #1-D: last line of file ends without a newline
+  }
+Error: C4051E: couldn't write file '..\obj\rpm.o': Invalid argument
+compiling spi.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+Error: C4051E: couldn't write file '..\obj\spi.o': Invalid argument
+compiling pwm.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+Error: C4051E: couldn't write file '..\obj\pwm.o': Invalid argument
+compiling usart1.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+Error: C4051E: couldn't write file '..\obj\usart1.o': Invalid argument
+compiling usart2.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+Error: C4051E: couldn't write file '..\obj\usart2.o': Invalid argument
+compiling usart4.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+Error: C4051E: couldn't write file '..\obj\usart4.o': Invalid argument
+compiling usart6.c...
+Error: C4051E: couldn't write file '..\obj\usart6.o': Invalid argument
+compiling global_declare.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+Error: C4051E: couldn't write file '..\obj\global_declare.o': Invalid argument
+compiling usart3.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+Error: C4051E: couldn't write file '..\obj\usart3.o': Invalid argument
+compiling usart5.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+Error: C4051E: couldn't write file '..\obj\usart5.o': Invalid argument
+compiling globaluse_basic_function.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+Error: C4051E: couldn't write file '..\obj\globaluse_basic_function.o': Invalid argument
+compiling misc.c...
+Error: C4051E: couldn't write file '..\obj\misc.o': Invalid argument
+compiling algorithm.c...
+..\Global_file\global_declare.h(294): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(314): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+Error: C4051E: couldn't write file '..\obj\algorithm.o': Invalid argument
+compiling stm32f4xx_adc.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_adc.o': Invalid argument
+compiling stm32f4xx_crc.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_crc.o': Invalid argument
+compiling stm32f4xx_cryp.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_cryp.o': Invalid argument
+compiling stm32f4xx_cryp_des.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_cryp_des.o': Invalid argument
+compiling stm32f4xx_can.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_can.o': Invalid argument
+compiling stm32f4xx_cryp_tdes.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_cryp_tdes.o': Invalid argument
+compiling stm32f4xx_dbgmcu.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_dbgmcu.o': Invalid argument
+compiling stm32f4xx_cryp_aes.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_cryp_aes.o': Invalid argument
+compiling stm32f4xx_dcmi.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_dcmi.o': Invalid argument
+compiling stm32f4xx_dac.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_dac.o': Invalid argument
+compiling stm32f4xx_dma.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_dma.o': Invalid argument
+compiling stm32f4xx_dma2d.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_dma2d.o': Invalid argument
+compiling stm32f4xx_exti.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_exti.o': Invalid argument
+compiling stm32f4xx_gpio.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_gpio.o': Invalid argument
+compiling stm32f4xx_hash.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_hash.o': Invalid argument
+compiling stm32f4xx_flash.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_flash.o': Invalid argument
+compiling stm32f4xx_fsmc.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_fsmc.o': Invalid argument
+compiling stm32f4xx_flash_ramfunc.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_flash_ramfunc.o': Invalid argument
+compiling stm32f4xx_hash_md5.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_hash_md5.o': Invalid argument
+compiling stm32f4xx_hash_sha1.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_hash_sha1.o': Invalid argument
+compiling stm32f4xx_iwdg.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_iwdg.o': Invalid argument
+compiling stm32f4xx_i2c.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_i2c.o': Invalid argument
+compiling stm32f4xx_pwr.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_pwr.o': Invalid argument
+compiling stm32f4xx_ltdc.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_ltdc.o': Invalid argument
+compiling stm32f4xx_rcc.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_rcc.o': Invalid argument
+compiling stm32f4xx_rng.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_rng.o': Invalid argument
+compiling stm32f4xx_rtc.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_rtc.o': Invalid argument
+compiling stm32f4xx_sai.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_sai.o': Invalid argument
+compiling stm32f4xx_sdio.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_sdio.o': Invalid argument
+compiling stm32f4xx_spi.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_spi.o': Invalid argument
+compiling stm32f4xx_syscfg.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_syscfg.o': Invalid argument
+compiling stm32f4xx_usart.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_usart.o': Invalid argument
+compiling stm32f4xx_tim.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_tim.o': Invalid argument
+compiling stm32f4xx_wwdg.c...
+Error: C4051E: couldn't write file '..\obj\stm32f4xx_wwdg.o': Invalid argument
+compiling croutine.c...
+Error: C4051E: couldn't write file '..\obj\croutine.o': Invalid argument
+compiling system_stm32f4xx.c...
+Error: C4051E: couldn't write file '..\obj\system_stm32f4xx.o': Invalid argument
+compiling list.c...
+Error: C4051E: couldn't write file '..\obj\list.o': Invalid argument
+compiling event_groups.c...
+Error: C4051E: couldn't write file '..\obj\event_groups.o': Invalid argument
+compiling queue.c...
+Error: C4051E: couldn't write file '..\obj\queue.o': Invalid argument
+compiling port.c...
+Error: C4051E: couldn't write file '..\obj\port.o': Invalid argument
+compiling heap_4.c...
+Error: C4051E: couldn't write file '..\obj\heap_4.o': Invalid argument
+compiling timers.c...
+Error: C4051E: couldn't write file '..\obj\timers.o': Invalid argument
+compiling tasks.c...
+Error: C4051E: couldn't write file '..\obj\tasks.o': Invalid argument
+linking...
+..\OBJ\JX_FLY.axf: error: L6002U: Could not open file ..\OBJ\JX_FLY.axf: Invalid argument
+Finished: 0 information, 0 warning, 0 error and 1 fatal error messages.
+"..\OBJ\JX_FLY.axf" - 1 Error(s), 69 Warning(s).
+Target not created.
+Build Time Elapsed:  00:00:09

@@ -1,0 +1,234 @@
+# Per-experiment subscribe lane profiles.
+#
+# Inspired by PX4 `configure_stream_local()`.  Each profile defines one or more
+# slots (0-3) that the host requests from the FC.  Slot 0 is reserved for the
+# firmware's boot-default stream (10 Hz: imu_data + DroneStatus + system_monitor
+# + UA3 counters).  Experiment manifests therefore occupy slots 1-3 and inherit
+# slot 0 implicitly.
+#
+# Effective data rate = 200 Hz / divider.
+#
+# Variable paths reference the ELF DWARF debug info (OBJ/JX_FLY.axf).
+# All names below have been verified against the running ELF with
+# `python -m ground_station.livewatch read <name>`.
+#
+# Slot usage conventions:
+#   slot 0  — firmware boot-default (always on, host re-subscribes for schema)
+#   slot 1  — high-rate signals (200 Hz or 100 Hz)
+#   slot 2  — medium-rate signals (50 Hz or 25 Hz)
+#   slot 3  — low-rate signals (10 Hz) or second medium-rate group
+#
+# All profiles use transport: usart3 (WiFi).
+
+manifests:
+
+  # ---------------------------------------------------------------------------
+  # _base — operator safety baseline. Always-on slot 0 (re-subscribed by host).
+  # ---------------------------------------------------------------------------
+  _base:
+    doc: >
+      Operator safety baseline. Slot 0 streams attitude, DroneStatus, link
+      counters, and system health at 10 Hz.  12 vars, ~48 B/frame.
+      The host re-subscribes slot 0 on startup to recover the 0x08 schema
+      for VoFA+ forwarding.  All names verified against live ELF.
+    transport: usart3
+    slots:
+      - slot: 0
+        divider: 20            # 200 Hz / 20 = 10 Hz
+        vofa_tab: "Boot (IMU + Status)"
+        precision: float32
+        vars:
+          - imu_data.rol
+          - imu_data.pit
+          - imu_data.yaw
+          - DroneStatus.ARM_Status
+          - DroneStatus.FlyMode
+          - real_voltage
+          - system_monitor.IMUUpdateTask_cnt
+          - system_monitor.stabilizerTask_cnt
+          - system_monitor.USART4_task_cnt
+          - xTickCount
+          - UA3RxFrameCnt
+          - UA3TxFrames
+
+  # ---------------------------------------------------------------------------
+  # mrac-weights — MRAC adaptation layer. Slot 1 = 200 Hz, slot 2 = 50 Hz.
+  # ---------------------------------------------------------------------------
+  mrac-weights:
+    doc: >
+      MRAC adaptation layer diagnostics.  Slot 1 streams all MRAC weight
+      vectors (Theta[0..2]) and tracking errors (e, e_dot) at 200 Hz.
+      Slot 2 streams the control signals (u_nom, u_ad, u_def) and reference
+      model state (xm) at 50 Hz.  Use for convergence analysis and deadzone
+      behaviour characterisation.
+    transport: usart3
+    slots:
+      - slot: 1
+        divider: 1             # 200 Hz
+        vofa_tab: "MRAC Weights + Error"
+        precision: float32
+        vars:
+          # Roll
+          - mrac_state.roll.e
+          - mrac_state.roll.e_dot
+          - mrac_state.roll.Theta[0]
+          - mrac_state.roll.Theta[1]
+          - mrac_state.roll.Theta[2]
+          # Pitch
+          - mrac_state.pitch.e
+          - mrac_state.pitch.e_dot
+          - mrac_state.pitch.Theta[0]
+          - mrac_state.pitch.Theta[1]
+          - mrac_state.pitch.Theta[2]
+          # Yaw
+          - mrac_state.yaw.e
+          - mrac_state.yaw.e_dot
+          - mrac_state.yaw.Theta[0]
+          - mrac_state.yaw.Theta[1]
+          - mrac_state.yaw.Theta[2]
+          # z_rate
+          - mrac_state.z_rate.e
+          - mrac_state.z_rate.Theta[0]
+          - mrac_state.z_rate.Theta[1]
+          - mrac_state.z_rate.Theta[2]
+      - slot: 2
+        divider: 4             # 50 Hz
+        vofa_tab: "MRAC Control + xm"
+        precision: float32
+        vars:
+          # Roll
+          - mrac_state.roll.u_nom
+          - mrac_state.roll.u_ad
+          - mrac_state.roll.u_def
+          - mrac_state.roll.xm
+          # Pitch
+          - mrac_state.pitch.u_nom
+          - mrac_state.pitch.u_ad
+          - mrac_state.pitch.u_def
+          - mrac_state.pitch.xm
+          # Yaw
+          - mrac_state.yaw.u_nom
+          - mrac_state.yaw.u_ad
+          - mrac_state.yaw.u_def
+          - mrac_state.yaw.xm
+          # z_rate
+          - mrac_state.z_rate.u_nom
+          - mrac_state.z_rate.u_ad
+          - mrac_state.z_rate.xm
+
+  # ---------------------------------------------------------------------------
+  # pid-autotune — PID outputs + gains. Slot 1 = 200 Hz, slot 2 = 50 Hz.
+  # ---------------------------------------------------------------------------
+  pid-autotune:
+    doc: >
+      PID autotune companion.  Slot 1 streams all inner-loop (gyro) and
+      outer-loop (velocity / altitude) PID desired, feedback, and output
+      signals at 200 Hz for sweep-based frequency-response identification.
+      Slot 2 streams the same axes' gain terms (Kp, Ki, Kd)
+      at 50 Hz.  Log slot 1 into a CSV and use the data for PRBS or
+      chirp identification of the inner-loop plant.
+    transport: usart3
+    slots:
+      - slot: 1
+        divider: 1             # 200 Hz
+        vofa_tab: "PID FB + Output"
+        precision: float32
+        vars:
+          - Ctrler.gyroxPID.Des
+          - Ctrler.gyroxPID.FB
+          - Ctrler.gyroxPID.U
+          - Ctrler.gyroyPID.Des
+          - Ctrler.gyroyPID.FB
+          - Ctrler.gyroyPID.U
+          - Ctrler.gyrozPID.Des
+          - Ctrler.gyrozPID.FB
+          - Ctrler.gyrozPID.U
+          - Ctrler.locxPID.Des
+          - Ctrler.locxPID.FB
+          - Ctrler.locxPID.U
+          - Ctrler.locyPID.Des
+          - Ctrler.locyPID.FB
+          - Ctrler.locyPID.U
+          - Ctrler.Z_posPID.Des
+          - Ctrler.Z_posPID.FB
+          - Ctrler.Z_posPID.U
+          - Ctrler.Z_ratePID.Des
+          - Ctrler.Z_ratePID.FB
+          - Ctrler.Z_ratePID.U
+      - slot: 2
+        divider: 4             # 50 Hz
+        vofa_tab: "PID Gains"
+        precision: float32
+        vars:
+          - Ctrler.gyroxPID.Kp
+          - Ctrler.gyroxPID.Ki
+          - Ctrler.gyroxPID.Kd
+          - Ctrler.gyroyPID.Kp
+          - Ctrler.gyroyPID.Ki
+          - Ctrler.gyroyPID.Kd
+          - Ctrler.gyrozPID.Kp
+          - Ctrler.gyrozPID.Ki
+          - Ctrler.gyrozPID.Kd
+          - Ctrler.locxPID.Kp
+          - Ctrler.locxPID.Ki
+          - Ctrler.locxPID.Kd
+          - Ctrler.locyPID.Kp
+          - Ctrler.locyPID.Ki
+          - Ctrler.locyPID.Kd
+          - Ctrler.Z_posPID.Kp
+          - Ctrler.Z_posPID.Ki
+          - Ctrler.Z_posPID.Kd
+          - Ctrler.Z_ratePID.Kp
+          - Ctrler.Z_ratePID.Ki
+          - Ctrler.Z_ratePID.Kd
+
+  # ---------------------------------------------------------------------------
+  # sysid-sweep — system identification. Slot 1 = 200 Hz.
+  # ---------------------------------------------------------------------------
+  sysid-sweep:
+    doc: >
+      System identification companion.  Slot 1 streams all PID feedback
+      signals and the plant state at 200 Hz for PRBS / chirp / step
+      identification of the inner-loop plant.  Pair with the firmware
+      SysID FSM (CMD 0x14) running in the background to inject the
+      excitation; this profile captures the plant response.
+    transport: usart3
+    slots:
+      - slot: 1
+        divider: 1             # 200 Hz
+        vofa_tab: "SysID Response"
+        precision: float32
+        vars:
+          - Ctrler.gyroxPID.Des
+          - Ctrler.gyroxPID.FB
+          - Ctrler.gyroyPID.Des
+          - Ctrler.gyroyPID.FB
+          - Ctrler.gyrozPID.Des
+          - Ctrler.gyrozPID.FB
+          - imu_data.rol
+          - imu_data.pit
+          - imu_data.yaw
+
+  # ---------------------------------------------------------------------------
+  # counters-health — frame + CPU counters. Slot 1 = 10 Hz.
+  # ---------------------------------------------------------------------------
+  counters-health:
+    doc: >
+      Link and CPU health counters.  Slot 1 streams USART3 TX/RX frame
+      counters and task health at 10 Hz.  Use for diagnosing dropped-frame
+      patterns, link budget exhaustion, and CPU overload.
+    transport: usart3
+    slots:
+      - slot: 1
+        divider: 20            # 10 Hz
+        vofa_tab: "Counters + Health"
+        precision: float32
+        vars:
+          - UA3RxFrameCnt
+          - UA3TxFrames
+          - system_monitor.IMUUpdateTask_cnt
+          - system_monitor.stabilizerTask_cnt
+          - system_monitor.IMUSampleTask_cnt
+          - xTickCount
+          - real_voltage
+          - DroneStatus.ARM_Status

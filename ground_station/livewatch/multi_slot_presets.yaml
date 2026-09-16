@@ -1,0 +1,120 @@
+# Multi-slot telemetry logging presets
+#
+# Each preset defines up to 4 slots with manifest + rate. Load via WiFi dashboard
+# Live Log tab or `python -m ground_station.livewatch stream --preset <name>`.
+#
+# REQUIRED_SYNC_VARS contract
+# ----------------------------
+# Every preset MUST include a manifest whose var list covers all four of:
+#   DroneStatus.ARM_Status, DroneStatus.FlyMode, real_voltage, xTickCount
+# The canonical way is to include the `sync` manifest (10 Hz, 4 vars) at
+# slot 0; the `sync` slot 0 is the convention, not a firmware reservation --
+# any slot number works as long as the union covers the four vars.
+# MultiSlotPresetManager.get() raises ValueError if the contract is broken,
+# which is why today's `mrac_characterization` would have refused to load
+# before this file was updated.
+#
+# Measured-max rate (2026-09-12 15:22:58 cold-boot 4-slot capture)
+# ---------------------------------------------------------------
+# MIXED mode: actual Send_Task cadence is ~80 Hz, not the 200 Hz nominal
+# `SUBSCRIBE_SEND_TASK_HZ` constant suggests. Measured-max per slot is
+# roughly ``80 / int(200 / hz)`` -- the host's divider rounds 200/hz DOWN
+# to an int, so hz=80 maps to divider=2 (giving 40 Hz), hz=50 maps to
+# divider=4 (giving 20 Hz), and hz=10 maps to divider=20 (giving 4 Hz).
+# Annotated below as `measured_max_hz`. See
+# `.agent_contracts/2026-09-12-wire-budget/journal.md` for the diagnosis.
+# These numbers will move to the SUBSCRIBE_ONLY ~200 Hz once that mode
+# becomes default; do NOT bake them into analysis scripts.
+
+presets:
+  flight_comprehensive:
+    description: "Full flight data: dashboard sidebar + IMU+PID + MRAC state + EKF (all 4 slots)"
+    measured_max_hz:  # 2026-09-12 MIXED-mode capture (SUBSCRIBE_SEND_TASK_HZ = 80U)
+      0: 20    # dashboard_frame_a @ 20 Hz req, div=4 -> 80/4 = 20 Hz
+      1: 40    # inner_loops @ 80 Hz req, div=1 -> 80/1 = 80 Hz (capped by Send_Task)
+      2: 20    # mrac_weights @ 50 Hz req, div=2 -> 80/2 = 40 Hz (rounds up: int(80/50)=1 actually)
+      3: 20    # ekf_all @ 50 Hz req, div=2 -> 80/2 = 40 Hz (rounds up: int(80/50)=1 actually)
+    slots:
+      # Slot 0 drives the dashboard sidebar at 20 Hz. dashboard_frame_a
+      # covers the dashboard's status flags, MRAC bars, attitude, vbat,
+      # AND xTickCount (so this manifest alone satisfies REQUIRED_SYNC_VARS
+      # -- no separate sync manifest needed on slot 0).
+      - slot: 0
+        manifest: dashboard_frame_a
+        hz: 20
+      - slot: 1
+        manifest: inner_loops
+        hz: 80
+      - slot: 2
+        manifest: mrac_weights
+        hz: 50
+      - slot: 3
+        manifest: ekf_all
+        hz: 50
+
+  mrac_characterization:
+    description: "MRAC state + signals + dashboard sidebar"
+    measured_max_hz:  # predicted from effective_send_task_hz=80 / divider
+      0: 20    # dashboard_frame_a @ 20 Hz req, div=4
+      1: 40    # mrac_signals @ 50 Hz req, div=2 -> 80/2 = 40 Hz
+      2: 40    # mrac_weights @ 50 Hz req, div=2 -> 80/2 = 40 Hz
+    slots:
+      - slot: 0
+        manifest: dashboard_frame_a
+        hz: 20
+      - slot: 1
+        manifest: mrac_signals
+        hz: 50
+      - slot: 2
+        manifest: mrac_weights
+        hz: 50
+
+  thrust_validation:
+    description: "Dashboard sidebar + thrust estimators + motors + RPM at high rate"
+    measured_max_hz:  # predicted (no 4-slot capture of this preset yet)
+      0: 20    # dashboard_frame_a @ 20 Hz req, div=4
+      1: 80    # thrust_estimators @ 200 Hz req, div=1 -> 80/1 = 80 Hz (capped)
+    slots:
+      - slot: 0
+        manifest: dashboard_frame_a
+        hz: 20
+      - slot: 1
+        manifest: thrust_estimators
+        hz: 200
+
+  # Diagnose 2026-09-13 185415 / 185816 in-flight demand-ramp runaway.
+  # Slot 0 = dashboard (status + MRAC + attitude), Slot 1 = full cascade
+  # (position -> velocity -> angle -> rate + OF + bias). Two slots only
+  # because the cascade manifest is large (~50 vars) — three or four slots
+  # of this would blow the 1024-byte per-frame budget.
+  flight_cascade_drift:
+    description: "Drift-runaway diagnostic: dashboard + full PID cascade + OF/bias"
+    measured_max_hz:
+      0: 20    # dashboard_frame_a @ 20 Hz req, div=4
+      1: 20    # flight_cascade_full @ 50 Hz req, div=2 -> 80/2 = 40 Hz (likely capped lower; log at 50)
+    slots:
+      - slot: 0
+        manifest: dashboard_frame_a
+        hz: 20
+      - slot: 1
+        manifest: flight_cascade_full
+        hz: 50
+
+  # Bias tab logging — populates the DearPyGui dashboard Bias tab in WiFi mode.
+  # Slot 0 = dashboard sidebar (ARM/FlyMode/MRAC/status) at 20 Hz.
+  # Slot 1 = bias_frame at 10 Hz.  Decoded slot-1 data is injected into
+  # _telem["of"] so the Bias tab live indicators update without any
+  # wifi_bridge changes.  No CSV files are opened (live-only mode).
+  bias_logging:
+    description: "Dashboard sidebar + bias tab live indicators (WiFi mode Bias tab fix)"
+    measured_max_hz:
+      0: 20    # dashboard_frame_a @ 20 Hz req, div=4 -> 80/4 = 20 Hz
+      1: 10    # bias_frame @ 10 Hz req, div=8 -> 80/8 = 10 Hz
+    slots:
+      - slot: 0
+        manifest: dashboard_frame_a
+        hz: 20
+      - slot: 1
+        manifest: bias_frame
+        hz: 10
+

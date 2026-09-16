@@ -1,0 +1,226 @@
+# Subscribe manifest layouts — operator-facing variable groupings.
+#
+# A layout is a NAMED list of variables, grouped into two frame families that
+# VoFA+ receives on separate UDP ports (1347 / 1348). The host packs the
+# variables for each frame into the FC's 0xCC 0xDE 0x21 subscribe request
+# (`livewatch.stream.build_stream_request`). The FC replies 0x08 once on UART5
+# with the accepted ranges; data frames 0x09+slot follow on USART3 (WiFi).
+#
+# The unit of layering is the SLOT, not the layout. The default manifest ships
+# at slot 1; switching layouts adds / drops slot 2 without touching slot 1.
+# Slot 0 is reserved by `livewatch` for its own auto-subscribe (see 4-place
+# collision documented in the 2026-08-09 pipeline-hardening session).
+#
+# Lane policy (docs/decisions.md 2026-08-19): the SUBSCRIBE CONTROL PLANE
+# (`0xCC 0xDE 0x21`) MUST ride the wireless-debugger UART5 sink. The firmware
+# rejects the request on USART3 (`API/subscribe.h:165-168`). WiFi carries the
+# resulting data plane only.
+#
+# The bridge that owns the UART5 sink is `serial_bridge.py` today. The
+# forthcoming `livewatch manifest apply <layout>` helper will be the wireless-
+# debugger-side supervisor; both routes land in `apply_layout()` in
+# `ground_station/comm/manifest_layer.py`.
+
+layouts:
+
+  # ---------------------------------------------------------------------------
+  # flight-default: the auto-loaded default at boot. Covers sweep + adaptive-layer
+  # experiments and the flight case without forcing a layout switch.
+  #
+  # Two slots: slot 1 = Frame A (status + PID), slot 2 = Frame B (MRAC). One
+  # data frame per slot per cycle -- the FC round-robins slots when both come
+  # due. Switching to pid-deep-dive / adaptive-deep-dive drops these slots
+  # (divider=0) and adds the new layout's slots.
+  # ---------------------------------------------------------------------------
+  flight-default:
+    doc: >
+      Status + PID inner/outer loops on Frame A (slot 1), MRAC adaptive
+      signals on Frame B (slot 2). Best for PID auto-tune sweeps and
+      adaptive-layer experiments. ~60 names, ~20.2 kB/s total, well under
+      the 73.7 kB/s USART3 budget.
+    transport: usart3
+    frame_a:
+      slot: 1
+      divider: 1
+      tab_name: "Status + PID"
+      vars:
+        # status (sidebar)
+        - DroneStatus.ARM_Status
+        - DroneStatus.FlyMode
+        - DroneStatus.vbat
+        - sbus_lost
+        - sysid_state
+        # PID inner loops
+        - Ctrler.gyroxPID.Des
+        - Ctrler.gyroxPID.FB
+        - Ctrler.gyroxPID.U
+        - Ctrler.gyroyPID.Des
+        - Ctrler.gyroyPID.FB
+        - Ctrler.gyroyPID.U
+        - Ctrler.gyrozPID.Des
+        - Ctrler.gyrozPID.FB
+        - Ctrler.gyrozPID.U
+        # PID outer loops
+        - Ctrler.locxPID.Des
+        - Ctrler.locxPID.FB
+        - Ctrler.locxPID.U
+        - Ctrler.locyPID.Des
+        - Ctrler.locyPID.FB
+        - Ctrler.locyPID.U
+        - Ctrler.Z_posPID.Des
+        - Ctrler.Z_posPID.FB
+        - Ctrler.Z_posPID.U
+        - Ctrler.Z_ratePID.Des
+        - Ctrler.Z_ratePID.FB
+        - Ctrler.Z_ratePID.U
+    frame_b:
+      slot: 2
+      divider: 1
+      tab_name: "MRAC + Adaptive"
+      vars:
+        # MRAC roll
+        - mrac_state.roll.e
+        - mrac_state.roll.e_dot
+        - mrac_state.roll.u_nom
+        - mrac_state.roll.u_ad
+        - mrac_state.roll.u_def
+        - mrac_state.roll.Theta[0]
+        - mrac_state.roll.Theta[1]
+        - mrac_state.roll.Theta[2]
+        - mrac_state.roll.xm
+        # MRAC pitch
+        - mrac_state.pitch.e
+        - mrac_state.pitch.e_dot
+        - mrac_state.pitch.u_nom
+        - mrac_state.pitch.u_ad
+        - mrac_state.pitch.u_def
+        - mrac_state.pitch.Theta[0]
+        - mrac_state.pitch.Theta[1]
+        - mrac_state.pitch.Theta[2]
+        - mrac_state.pitch.xm
+        # MRAC yaw
+        - mrac_state.yaw.e
+        - mrac_state.yaw.e_dot
+        - mrac_state.yaw.u_nom
+        - mrac_state.yaw.u_ad
+        - mrac_state.yaw.u_def
+        - mrac_state.yaw.Theta[0]
+        - mrac_state.yaw.Theta[1]
+        - mrac_state.yaw.Theta[2]
+        - mrac_state.yaw.xm
+        # MRAC z_rate
+        - mrac_state.z_rate.e
+        - mrac_state.z_rate.u_nom
+        - mrac_state.z_rate.u_ad
+        - mrac_state.z_rate.Theta[0]
+        - mrac_state.z_rate.Theta[1]
+        - mrac_state.z_rate.Theta[2]
+        - mrac_state.z_rate.xm
+
+  # ---------------------------------------------------------------------------
+  # pid-deep-dive: focus on PID inner/outer loops. MRAC stays on a slot.
+  # ---------------------------------------------------------------------------
+  pid-deep-dive:
+    doc: >
+      Every PID field for every axis on Frame A (slot 1), status sidebar on
+      Frame B (slot 2). For axis-by-axis sweep evaluation. ~26 names total.
+      REPLACES flight-default's slot 1 + slot 2 with deeper PID coverage.
+    transport: usart3
+    frame_a:
+      slot: 1
+      divider: 1
+      tab_name: "PID Deep Dive"
+      vars:
+        - Ctrler.gyroxPID.Des
+        - Ctrler.gyroxPID.FB
+        - Ctrler.gyroxPID.U
+        - Ctrler.gyroyPID.Des
+        - Ctrler.gyroyPID.FB
+        - Ctrler.gyroyPID.U
+        - Ctrler.gyrozPID.Des
+        - Ctrler.gyrozPID.FB
+        - Ctrler.gyrozPID.U
+        - Ctrler.locxPID.Des
+        - Ctrler.locxPID.FB
+        - Ctrler.locxPID.U
+        - Ctrler.locyPID.Des
+        - Ctrler.locyPID.FB
+        - Ctrler.locyPID.U
+        - Ctrler.Z_posPID.Des
+        - Ctrler.Z_posPID.FB
+        - Ctrler.Z_posPID.U
+        - Ctrler.Z_ratePID.Des
+        - Ctrler.Z_ratePID.FB
+        - Ctrler.Z_ratePID.U
+    frame_b:
+      slot: 2
+      divider: 1
+      tab_name: "Status"
+      vars:
+        - DroneStatus.ARM_Status
+        - DroneStatus.FlyMode
+        - DroneStatus.vbat
+        - sbus_lost
+        - sysid_state
+
+  # ---------------------------------------------------------------------------
+  # adaptive-deep-dive: focus on MRAC adaptation. PID stays available.
+  # ---------------------------------------------------------------------------
+  adaptive-deep-dive:
+    doc: >
+      Every MRAC axis's Theta, e, u_nom, u_ad, xm on Frame A (slot 1), PID
+      FB + status on Frame B (slot 2). For diagnosing adaptation dynamics
+      and the e_deadzone behavior. ~38 names total.
+    transport: usart3
+    frame_a:
+      slot: 1
+      divider: 1
+      tab_name: "MRAC Deep Dive"
+      vars:
+        # Roll
+        - mrac_state.roll.e
+        - mrac_state.roll.u_nom
+        - mrac_state.roll.u_ad
+        - mrac_state.roll.Theta[0]
+        - mrac_state.roll.Theta[1]
+        - mrac_state.roll.Theta[2]
+        - mrac_state.roll.xm
+        # Pitch
+        - mrac_state.pitch.e
+        - mrac_state.pitch.u_nom
+        - mrac_state.pitch.u_ad
+        - mrac_state.pitch.Theta[0]
+        - mrac_state.pitch.Theta[1]
+        - mrac_state.pitch.Theta[2]
+        - mrac_state.pitch.xm
+        # Yaw
+        - mrac_state.yaw.e
+        - mrac_state.yaw.u_nom
+        - mrac_state.yaw.u_ad
+        - mrac_state.yaw.Theta[0]
+        - mrac_state.yaw.Theta[1]
+        - mrac_state.yaw.Theta[2]
+        - mrac_state.yaw.xm
+        # z_rate
+        - mrac_state.z_rate.e
+        - mrac_state.z_rate.u_nom
+        - mrac_state.z_rate.u_ad
+        - mrac_state.z_rate.Theta[0]
+        - mrac_state.z_rate.Theta[1]
+        - mrac_state.z_rate.Theta[2]
+        - mrac_state.z_rate.xm
+    frame_b:
+      slot: 2
+      divider: 1
+      tab_name: "PID + Status"
+      vars:
+        - Ctrler.gyroxPID.FB
+        - Ctrler.gyroyPID.FB
+        - Ctrler.gyrozPID.FB
+        - Ctrler.locxPID.FB
+        - Ctrler.locyPID.FB
+        - Ctrler.Z_posPID.FB
+        - Ctrler.Z_ratePID.FB
+        - DroneStatus.ARM_Status
+        - DroneStatus.FlyMode
+        - DroneStatus.vbat

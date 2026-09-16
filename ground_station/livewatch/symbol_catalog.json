@@ -1,0 +1,480 @@
+{
+  "firmware_id": "0xE9426D33",
+  "elf_sha256": "e9426d33f0cb6fe988b7f2469d4fa497feadd67b008a4c39a3c642cd71a36540",
+  "generated_at": "2026-09-07T18:03:26+00:00",
+  "entry_count": 59,
+  "entries": [
+    {
+      "name": "Acc_X_Ori",
+      "hash": "0xAD51",
+      "address": "0x200001A8",
+      "elem_type": 6,
+      "count": 1,
+      "size_bytes": 4
+    },
+    {
+      "name": "Acc_Y_Ori",
+      "hash": "0xAE50",
+      "address": "0x200001AC",
+      "elem_type": 6,
+      "count": 1,
+      "size_bytes": 4
+    },
+    {
+      "name": "Acc_Z_Ori",
+      "hash": "0xAF53",
+      "address": "0x200001B0",
+      "elem_type": 6,
+      "count": 1,
+      "size_bytes": 4
+    },
+    {
+      "name": "Gyro_X_Ori",
+      "hash": "0x4133",
+      "address": "0x200001B4",
+      "elem_type": 6,
+      "count": 1,
+      "size_bytes": 4
+    },
+    {
+      "name": "Gyro_Y_Ori",
+      "hash": "0x4232",
+      "address": "0x200001B8",
+      "elem_type": 6,
+      "count": 1,
+      "size_bytes": 4
+    },
+    {
+      "name": "Gyro_Z_Ori",
+      "hash": "0x3F31",
+      "address": "0x200001BC",
+      "elem_type": 6,
+      "count": 1,
+      "size_bytes": 4
+    },
+    {
+      "name": "Acc_X_Real",
+      "hash": "0xF53F",
+      "address": "0x200001C0",
+      "elem_type": 6,
+      "count": 1,
+      "size_bytes": 4
+    },
+    {
+      "name": "Acc_Y_Real",
+      "hash": "0xF33E",
+      "address": "0x200001C4",
+      "elem_type": 6,
+      "count": 1,
+      "size_bytes": 4
+    },
+    {
+      "name": "Acc_Z_Real",
+      "hash": "0xED3D",
+      "address": "0x200001C8",
+      "elem_type": 6,
+      "count": 1,
+      "size_bytes": 4
+    },
+    {
+      "name": "Gyro_X_Real",
+      "hash": "0x9F5D",
+      "address": "0x200001CC",
+      "elem_type": 6,
+      "count": 1,
+      "size_bytes": 4
+    },
+    {
+      "name": "Gyro_Y_Real",
+      "hash": "0x9D5C",
+      "address": "0x200001D0",
+      "elem_type": 6,
+      "count": 1,
+      "size_bytes": 4
+    },
+    {
+      "name": "Gyro_Z_Real",
+      "hash": "0xA75F",
+      "address": "0x200001D4",
+      "elem_type": 6,
+      "count": 1,
+      "size_bytes": 4
+    },
+    {
+      "name": "Acc_X_Offset",
+      "hash": "0x5728",
+      "address": "0x200001D8",
+      "elem_type": 6,
+      "count": 1,
+      "size_bytes": 4
+    },
+    {
+      "name": "Acc_Y_Offset",
+      "hash": "0x5B29",
+      "address": "0x200001DC",
+      "elem_type": 6,
+      "count": 1,
+      "size_bytes": 4
+    },
+    {
+      "name": "Acc_Z_Offset",
+      "hash": "0x5B2A",
+      "address": "0x200001E0",
+      "elem_type": 6,
+      "count": 1,
+      "size_bytes": 4
+    },
+    {
+      "name": "Gyro_X_Offset",
+      "hash": "0x0D4A",
+      "address": "0x200001E4",
+      "elem_type": 6,
+      "count": 1,
+      "size_bytes": 4
+    },
+    {
+      "name": "Gyro_Y_Offset",
+      "hash": "0x114B",
+      "address": "0x200001E8",
+      "elem_type": 6,
+      "count": 1,
+      "size_bytes": 4
+    },
+    {
+      "name": "Gyro_Z_Offset",
+      "hash": "0x0948",
+      "address": "0x200001EC",
+      "elem_type": 6,
+      "count": 1,
+      "size_bytes": 4
+    },
+    {
+      "name": "Gyro_X_Lpf",
+      "hash": "0x4F3D",
+      "address": "0x20000218",
+      "elem_type": 0,
+      "count": 20,
+      "size_bytes": 20
+    },
+    {
+      "name": "Gyro_Y_Lpf",
+      "hash": "0x4C3C",
+      "address": "0x2000022C",
+      "elem_type": 0,
+      "count": 20,
+      "size_bytes": 20
+    },
+    {
+      "name": "Gyro_Z_Lpf",
+      "hash": "0x4D3F",
+      "address": "0x20000240",
+      "elem_type": 0,
+      "count": 20,
+      "size_bytes": 20
+    },
+    {
+      "name": "imu_data",
+      "hash": "0x9F22",
+      "address": "0x2000026C",
+      "elem_type": 0,
+      "count": 108,
+      "size_bytes": 108
+    },
+    {
+      "name": "Ctrler.pitchPID",
+      "hash": "0x5937",
+      "address": "0x2000033C",
+      "elem_type": 0,
+      "count": 80,
+      "size_bytes": 80
+    },
+    {
+      "name": "Ctrler.rollPID",
+      "hash": "0xC94C",
+      "address": "0x2000038C",
+      "elem_type": 0,
+      "count": 80,
+      "size_bytes": 80
+    },
+    {
+      "name": "Ctrler.yawPID",
+      "hash": "0xEE3E",
+      "address": "0x200003DC",
+      "elem_type": 0,
+      "count": 80,
+      "size_bytes": 80
+    },
+    {
+      "name": "Ctrler.gyroxPID",
+      "hash": "0x392A",
+      "address": "0x2000042C",
+      "elem_type": 0,
+      "count": 80,
+      "size_bytes": 80
+    },
+    {
+      "name": "Ctrler.gyroyPID",
+      "hash": "0x392B",
+      "address": "0x2000047C",
+      "elem_type": 0,
+      "count": 80,
+      "size_bytes": 80
+    },
+    {
+      "name": "Ctrler.gyrozPID",
+      "hash": "0x3128",
+      "address": "0x200004CC",
+      "elem_type": 0,
+      "count": 80,
+      "size_bytes": 80
+    },
+    {
+      "name": "Ctrler.Z_posPID",
+      "hash": "0x5338",
+      "address": "0x2000051C",
+      "elem_type": 0,
+      "count": 80,
+      "size_bytes": 80
+    },
+    {
+      "name": "Ctrler.Z_ratePID",
+      "hash": "0x4756",
+      "address": "0x2000056C",
+      "elem_type": 0,
+      "count": 80,
+      "size_bytes": 80
+    },
+    {
+      "name": "Ctrler.locxPID",
+      "hash": "0xA049",
+      "address": "0x200005BC",
+      "elem_type": 0,
+      "count": 80,
+      "size_bytes": 80
+    },
+    {
+      "name": "Ctrler.locyPID",
+      "hash": "0xA048",
+      "address": "0x2000060C",
+      "elem_type": 0,
+      "count": 80,
+      "size_bytes": 80
+    },
+    {
+      "name": "Ctrler.locxsPID",
+      "hash": "0x5C3A",
+      "address": "0x2000065C",
+      "elem_type": 0,
+      "count": 80,
+      "size_bytes": 80
+    },
+    {
+      "name": "Ctrler.locysPID",
+      "hash": "0x5D3B",
+      "address": "0x200006AC",
+      "elem_type": 0,
+      "count": 80,
+      "size_bytes": 80
+    },
+    {
+      "name": "Ctrler.stree_yaw_speed",
+      "hash": "0x4171",
+      "address": "0x200006FC",
+      "elem_type": 0,
+      "count": 80,
+      "size_bytes": 80
+    },
+    {
+      "name": "Ctrler.stree_pitch_speed",
+      "hash": "0xD178",
+      "address": "0x2000074C",
+      "elem_type": 0,
+      "count": 80,
+      "size_bytes": 80
+    },
+    {
+      "name": "mymotor",
+      "hash": "0x5B63",
+      "address": "0x20000812",
+      "elem_type": 0,
+      "count": 8,
+      "size_bytes": 8
+    },
+    {
+      "name": "rpm_dbg",
+      "hash": "0x6B4D",
+      "address": "0x2000081A",
+      "elem_type": 1,
+      "count": 4,
+      "size_bytes": 8
+    },
+    {
+      "name": "UA3RxFrameCnt",
+      "hash": "0x4115",
+      "address": "0x20000884",
+      "elem_type": 2,
+      "count": 1,
+      "size_bytes": 4
+    },
+    {
+      "name": "UA3RxLastLen",
+      "hash": "0xAF7C",
+      "address": "0x20000888",
+      "elem_type": 1,
+      "count": 1,
+      "size_bytes": 2
+    },
+    {
+      "name": "UA3TxFrames",
+      "hash": "0xFB39",
+      "address": "0x20000894",
+      "elem_type": 2,
+      "count": 1,
+      "size_bytes": 4
+    },
+    {
+      "name": "UA3TxDrops",
+      "hash": "0xE04D",
+      "address": "0x20000898",
+      "elem_type": 2,
+      "count": 1,
+      "size_bytes": 4
+    },
+    {
+      "name": "UA3TxPeak",
+      "hash": "0x6728",
+      "address": "0x2000089C",
+      "elem_type": 1,
+      "count": 1,
+      "size_bytes": 2
+    },
+    {
+      "name": "xTickCount",
+      "hash": "0x0812",
+      "address": "0x20000934",
+      "elem_type": 2,
+      "count": 1,
+      "size_bytes": 4
+    },
+    {
+      "name": "mrac_state.pitch",
+      "hash": "0x5961",
+      "address": "0x20014C10",
+      "elem_type": 0,
+      "count": 116,
+      "size_bytes": 116
+    },
+    {
+      "name": "mrac_state.roll",
+      "hash": "0x0F1A",
+      "address": "0x20014C84",
+      "elem_type": 0,
+      "count": 116,
+      "size_bytes": 116
+    },
+    {
+      "name": "mrac_state.yaw",
+      "hash": "0xF568",
+      "address": "0x20014CF8",
+      "elem_type": 0,
+      "count": 116,
+      "size_bytes": 116
+    },
+    {
+      "name": "mrac_state.z_rate",
+      "hash": "0x7520",
+      "address": "0x20014D6C",
+      "elem_type": 0,
+      "count": 116,
+      "size_bytes": 116
+    },
+    {
+      "name": "mrac_flags",
+      "hash": "0xEA21",
+      "address": "0x20014DE0",
+      "elem_type": 0,
+      "count": 14,
+      "size_bytes": 14
+    },
+    {
+      "name": "mrac_config_pitch",
+      "hash": "0xD26D",
+      "address": "0x20014DF0",
+      "elem_type": 0,
+      "count": 172,
+      "size_bytes": 172
+    },
+    {
+      "name": "mrac_config_roll",
+      "hash": "0x8C16",
+      "address": "0x20014E9C",
+      "elem_type": 0,
+      "count": 172,
+      "size_bytes": 172
+    },
+    {
+      "name": "mrac_config_yaw",
+      "hash": "0x5664",
+      "address": "0x20014F48",
+      "elem_type": 0,
+      "count": 172,
+      "size_bytes": 172
+    },
+    {
+      "name": "mrac_config_z",
+      "hash": "0xDE71",
+      "address": "0x20014FF4",
+      "elem_type": 0,
+      "count": 172,
+      "size_bytes": 172
+    },
+    {
+      "name": "rpm_dbg_edges",
+      "hash": "0xEE62",
+      "address": "0x2001630C",
+      "elem_type": 2,
+      "count": 4,
+      "size_bytes": 16
+    },
+    {
+      "name": "rpm_dbg_period_cyc",
+      "hash": "0xF731",
+      "address": "0x2001631C",
+      "elem_type": 2,
+      "count": 4,
+      "size_bytes": 16
+    },
+    {
+      "name": "UA3RxDMAbuf",
+      "hash": "0xFE28",
+      "address": "0x200168A0",
+      "elem_type": 0,
+      "count": 512,
+      "size_bytes": 512
+    },
+    {
+      "name": "UA3RxMailbox",
+      "hash": "0x884D",
+      "address": "0x20016AA0",
+      "elem_type": 0,
+      "count": 512,
+      "size_bytes": 512
+    },
+    {
+      "name": "system_monitor",
+      "hash": "0xE42A",
+      "address": "0x20017CE8",
+      "elem_type": 0,
+      "count": 56,
+      "size_bytes": 56
+    },
+    {
+      "name": "DroneStatus",
+      "hash": "0x4E7A",
+      "address": "0x20017D30",
+      "elem_type": 0,
+      "count": 12,
+      "size_bytes": 12
+    }
+  ]
+}

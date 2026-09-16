@@ -1,0 +1,41 @@
+# livewatch standard watch registry
+#
+# Named groups of firmware variables worth watching live. Add freely: a definition
+# here is free (just a DWARF lookup). Cost is only paid for the group you actively
+# poll, and even then adjacent fields coalesce into one probe transaction.
+#
+# Names are DWARF paths: base symbol, then .member and [index] as needed.
+# Anything resolvable by `livewatch names` / `livewatch fields <sym>` is valid here.
+
+groups:
+  ekf:
+    doc: "9-state body-frame EKF: velocity, accel bias (mg after *1000), NIS, active flag"
+    vars:
+      - s_ekf.active
+      - s_ekf.x[0]      # v_body x
+      - s_ekf.x[1]      # v_body y
+      - s_ekf.x[2]      # v_body z
+      - s_ekf.x[3]      # b_a x
+      - s_ekf.x[4]      # b_a y
+      - s_ekf.x[5]      # b_a z
+      - s_ekf.nis
+
+  attitude:
+    doc: "IMU attitude/rates block (fields per API/imu_update.h _imu_st)"
+    vars:
+      - imu_data
+
+  health:
+    doc: "system_monitor task/health counters — liveness proof + fault flags"
+    vars:
+      - system_monitor
+
+  mrac_pitch:
+    doc: "MRAC pitch-axis adaptive state (see MRAC_State_t)"
+    vars:
+      - mrac_state.pitch
+
+  mrac_roll:
+    doc: "MRAC roll-axis adaptive state"
+    vars:
+      - mrac_state.roll
