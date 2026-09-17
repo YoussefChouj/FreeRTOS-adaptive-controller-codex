@@ -202,18 +202,17 @@
     });
   }
 
-  // ── Export ───────────────────────────────────────────────────────────────
-  export const name = 'MRAC Controller';
-
-  export function init(api) {
+  // ── Export (shell uses window.__registerPlugin__) ────────────────────────
+  window.__PLUGIN_NAME__ = 'MRAC Controller';
+  window.__PLUGIN_INIT__ = function(api) {
     api.registerPanel('MRAC Controller', function (container) {
       container.innerHTML = buildHTML();
       api.subscribe(onState);
     });
-  }
-
-  export function destroy() {
+  };
+  window.__PLUGIN_DESTROY__ = function() {
     _hasData = false;
-  }
+  };
+  window.__registerPlugin__('MRAC Controller', window.__PLUGIN_INIT__, window.__PLUGIN_DESTROY__);
 
 })();

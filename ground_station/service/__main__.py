@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import signal
 import sys
+import time
 from pathlib import Path
 
 # Ensure repo root is on sys.path so `from ground_station import ...` works
@@ -86,8 +87,16 @@ def main() -> None:
         signal.signal(signal.SIGTERM, _stop)
 
     # ---- Start the HTTP shell (blocks) ----
+    # Keep main thread alive so daemon HTTPServer thread stays up.
+    # Signal handler above handles Ctrl+C and calls sys.exit(0).
     try:
-        start_shell(service, port=args.port)
+        api = start_shell(service, port=args.port)
+        print(f"[service] Shell bound to http://localhost:{args.port}", flush=True)
+        # Block indefinitely — signal handler will exit the process
+        # time.sleep keeps the main thread alive so the daemon HTTPServer
+        # thread (api.server.serve_forever) keeps running.
+        while True:
+            time.sleep(86400)
     except Exception as exc:
         print(f"[service] Shell failed: {exc}", flush=True)
         service.stop()

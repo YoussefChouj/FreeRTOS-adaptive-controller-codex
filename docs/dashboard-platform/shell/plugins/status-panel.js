@@ -257,10 +257,9 @@
     updateStreams(_streams);
   }
 
-  // ── Export ───────────────────────────────────────────────────────────────
-  export const name = 'Flight Status';
-
-  export function init(api) {
+  // ── Export (shell uses window.__registerPlugin__) ────────────────────────
+  window.__PLUGIN_NAME__ = 'Flight Status';
+  window.__PLUGIN_INIT__ = function(api) {
     api.registerPanel('Flight Status', function (container) {
       container.innerHTML = buildHTML();
 
@@ -276,13 +275,13 @@
       // Initial render
       updateCmdStatus();
     });
-  }
-
-  export function destroy() {
+  };
+  window.__PLUGIN_DESTROY__ = function() {
     _armStatus = null; _flyMode = null; _vbat = null;
     _dropCount = null; _streams = null; _pendingCmd = null;
     _cmdStatus = 'idle';
-  }
+  };
+  window.__registerPlugin__('Flight Status', window.__PLUGIN_INIT__, window.__PLUGIN_DESTROY__);
 
   // Expose submitCommand wrapper so other plugins / the shell can hook in
   // This panel listens passively; the shell command form drives submissions.

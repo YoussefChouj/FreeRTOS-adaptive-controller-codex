@@ -252,10 +252,9 @@
     updateInterlocks();
   }
 
-  // ── Export ───────────────────────────────────────────────────────────────
-  export const name = 'Safety Limits';
-
-  export function init(api) {
+  // ── Export (shell uses window.__registerPlugin__) ────────────────────────
+  window.__PLUGIN_NAME__ = 'Safety Limits';
+  window.__PLUGIN_INIT__ = function(api) {
     api.registerPanel('Safety Limits', function (container) {
       container.innerHTML = buildHTML();
 
@@ -282,10 +281,10 @@
 
       api.subscribe(onState);
     });
-  }
-
-  export function destroy() {
+  };
+  window.__PLUGIN_DESTROY__ = function() {
     _paramState = {};
-  }
+  };
+  window.__registerPlugin__('Safety Limits', window.__PLUGIN_INIT__, window.__PLUGIN_DESTROY__);
 
 })();

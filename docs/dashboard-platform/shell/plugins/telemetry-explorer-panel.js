@@ -210,10 +210,9 @@
     });
   }
 
-  // ── Export ───────────────────────────────────────────────────────────────
-  export const name = 'Telemetry Explorer';
-
-  export function init(api) {
+  // ── Export (shell uses window.__registerPlugin__) ────────────────────────
+  window.__PLUGIN_NAME__ = 'Telemetry Explorer';
+  window.__PLUGIN_INIT__ = function(api) {
     api.registerPanel('Telemetry Explorer', function (container) {
       container.innerHTML = buildHTML();
       wireFilter();
@@ -222,11 +221,11 @@
         onState(state);
       });
     });
-  }
-
-  export function destroy() {
+  };
+  window.__PLUGIN_DESTROY__ = function() {
     _allKeys = {}; _filter = ''; _schemaId = null; _activeSlots = [];
     if (_debounceTimer) clearTimeout(_debounceTimer);
-  }
+  };
+  window.__registerPlugin__('Telemetry Explorer', window.__PLUGIN_INIT__, window.__PLUGIN_DESTROY__);
 
 })();

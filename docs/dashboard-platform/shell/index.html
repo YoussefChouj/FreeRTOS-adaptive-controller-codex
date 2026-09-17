@@ -386,14 +386,41 @@
 
 <footer>UAV Ground Station Shell &mdash; polls every 500 ms</footer>
 
-<script>
+<script type="module">
 (function () {
   'use strict';
+
+  /* ── Plugin registry ── */
+  window.__gs_plugins__ = [];
+  window.__registerPlugin__ = function (name, init, destroy) {
+    window.__gs_plugins__.push({ name, init, destroy });
+  };
+
+  /* ── Load all plugins (they call window.__registerPlugin__ on eval) ── */
+  const PLUGIN_FILES = [
+    '/static/plugins/status-panel.js',
+    '/static/plugins/mrac-panel.js',
+    '/static/plugins/estimator-panel.js',
+    '/static/plugins/resource-panel.js',
+    '/static/plugins/safety-panel.js',
+    '/static/plugins/telemetry-explorer-panel.js',
+  ];
+
+  for (const src of PLUGIN_FILES) {
+    try {
+      const res = await fetch(src);
+      if (!res.ok) { console.warn('[shell] plugin not found:', src); continue; }
+      const text = await res.text();
+      eval(text);  // plugins call window.__registerPlugin__()
+    } catch (e) {
+      console.warn('[shell] failed to load plugin', src, e);
+    }
+  }
 
   /* ── State ── */
   let currentState = null;
   let alarms = [];
-  let plugins = [];
+  let _destroyFns = [];
 
   /* ── Layout persistence ── */
   var LAYOUT_KEY = 'gs_shell_layout';
@@ -440,6 +467,8 @@
   applyLayout();
 
   /* ── Shell API exposed to plugins ── */
+  var onStateChangeCallbacks = [];
+
   var shellApi = {
     getState: function () { return currentState; },
     subscribe: function (cb) { onStateChangeCallbacks.push(cb); },
@@ -450,13 +479,12 @@
         body: JSON.stringify({ command_id: cmdId, index: index, value: value })
       }).then(function (r) { return r.json(); });
     },
-    getPlugins: function () { return plugins; },
+    getPlugins: function () { return window.__gs_plugins__.map(function (p) { return p.name; }); },
     registerPanel: function (name, renderFn) {
-      plugins.push({ name: name, renderFn: renderFn });
       var container = document.getElementById('plugin-panels');
       var card = document.createElement('div');
       card.className = 'card';
-      card.id = 'plugin-' + name;
+      card.id = 'plugin-' + name.replace(/\s+/g, '-').toLowerCase();
       var header = document.createElement('div');
       header.className = 'card-header';
       var title = document.createElement('span');
@@ -464,7 +492,7 @@
       title.textContent = name;
       header.appendChild(title);
       var body = document.createElement('div');
-      body.id = 'plugin-body-' + name;
+      body.id = 'plugin-body-' + name.replace(/\s+/g, '-').toLowerCase();
       card.appendChild(header);
       card.appendChild(body);
       container.appendChild(card);
@@ -472,15 +500,15 @@
     }
   };
 
-  var onStateChangeCallbacks = [];
-
-  /* ── Plugin loading ── */
-  function loadPlugins() {
-    // Scan plugins/ directory for .js files (served as static files)
-    fetch('/static/plugins/')
-      .then(function (r) { return r.text(); })
-      .catch(function () { /* plugins dir may not exist */ });
-  }
+  /* ── Plugin bootstrap ── */
+  window.__gs_plugins__.forEach(function (p) {
+    try {
+      p.init(shellApi);
+      _destroyFns.push(p.destroy);
+    } catch (e) {
+      console.error('[shell] plugin init error:', p.name, e);
+    }
+  });
 
   /* ── Helpers ── */
   function fmtTime(ns) {
@@ -497,7 +525,7 @@
 
   function buildAlarms(state) {
     var result = [];
-    var now = Date.now() * 1e6; // ms → ns
+    var now = Date.now() * 1e6;
     if (state.streams) {
       Object.keys(state.streams).forEach(function (slot) {
         var s = state.streams[slot];
@@ -553,8 +581,7 @@
       return;
     }
     el.innerHTML = alarmList.map(function (a) {
-      return '<div class="alarm-item ' + a.level + '"><span class="icon">' +
-        (a.level === 'critical' ? '&#9888;' : '&#9888;') + '</span>' +
+      return '<div class="alarm-item ' + a.level + '"><span class="icon">&#9888;</span>' +
         a.text + '</div>';
     }).join('');
   }
@@ -613,7 +640,6 @@
   }
 
   /* ── Bootstrap ── */
-  loadPlugins();
   poll();
   setInterval(poll, 500);
 

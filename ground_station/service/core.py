@@ -102,10 +102,12 @@ class GroundStationService:
 
     def snapshot(self) -> ServiceState:
         with self._state_lock:
-            streams = {slot: dict(data) for slot, data in self._streams.items()}
+            # Convert int slot keys to str so the shell JS can use
+            # state.streams['1'] instead of state.streams[1].
+            streams = {str(slot): dict(data) for slot, data in self._streams.items()}
             return ServiceState(self.schema.schema_id, self.session_id,
-                                self._connected, self._samples,
-                                self._last_update_ns, streams)
+                               self._connected, self._samples,
+                               self._last_update_ns, streams)
 
     def _record_event(self, kind: str, payload: dict[str, Any]) -> None:
         if self.session_id is not None:
