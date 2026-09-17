@@ -1,0 +1,52 @@
+registry_version: 1
+schema_version: 1
+hardware_id: 0x0407
+capabilities:
+  - wifi_command
+  - wifi_subscribe
+  - multi_slot_stream
+  - static_registry
+  - build_identity
+  - swd_probe
+  - legacy_telemetry
+  - typed_discovery
+descriptors:
+  - {kind: variable, id: 1, name: build_id, type: u32_array, unit: none, scale: 1, min: 0, max: 4294967295, owner: build, rate_hz: 0, permissions: read, safety: observation, dependencies: 0, version: 1}
+  - {kind: variable, id: 2, name: DroneStatus.ARM_Status, type: u8, unit: enum, scale: 1, min: 0, max: 1, owner: flight_fsm, rate_hz: 200, permissions: read, safety: critical, dependencies: 0, version: 1}
+  - {kind: variable, id: 3, name: DroneStatus.FlyMode, type: u8, unit: enum, scale: 1, min: 0, max: 1, owner: flight_fsm, rate_hz: 100, permissions: read, safety: critical, dependencies: 0, version: 1}
+  - {kind: variable, id: 4, name: g_telemetry_mode, type: u8, unit: enum, scale: 1, min: 0, max: 2, owner: telemetry, rate_hz: 80, permissions: read, safety: operational, dependencies: 0, version: 1}
+  - {kind: variable, id: 5, name: gs_cmd_drop_count, type: u32, unit: count, scale: 1, min: 0, max: 4294967295, owner: command_ingress, rate_hz: 80, permissions: read, safety: diagnostic, dependencies: 0, version: 1}
+  - {kind: enum, id: 1, name: telemetry_mode, type: enum_u8, unit: none, scale: 1, min: 0, max: 2, owner: telemetry, rate_hz: 0, permissions: read, safety: operational, dependencies: 0, version: 1}
+  - {kind: enum, id: 2, name: safety_class, type: enum_u8, unit: none, scale: 1, min: 0, max: 4, owner: platform, rate_hz: 0, permissions: read, safety: observation, dependencies: 0, version: 1}
+  - {kind: parameter, id: 1, name: gs_max_horizontal_speed_mps, type: f32, unit: m/s, scale: 1, min: 0.05, max: 20, owner: safety, rate_hz: 0, permissions: read_write, safety: critical, dependencies: 0, version: 1}
+  - {kind: parameter, id: 2, name: gs_max_vertical_speed_mps, type: f32, unit: m/s, scale: 1, min: 0.05, max: 10, owner: safety, rate_hz: 0, permissions: read_write, safety: critical, dependencies: 0, version: 1}
+  - {kind: parameter, id: 3, name: gs_max_pitch_deg, type: f32, unit: deg, scale: 1, min: 3, max: 60, owner: safety, rate_hz: 0, permissions: read_write, safety: critical, dependencies: 0, version: 1}
+  - {kind: parameter, id: 4, name: gs_max_roll_deg, type: f32, unit: deg, scale: 1, min: 3, max: 60, owner: safety, rate_hz: 0, permissions: read_write, safety: critical, dependencies: 0, version: 1}
+  - {kind: command, id: 1, name: pid_gain, type: f32, unit: gain, scale: 1, min: 0, max: 200, owner: control, rate_hz: 0, permissions: execute, safety: boundary, dependencies: 0, version: 1}
+  - {kind: command, id: 4, name: flight_mode, type: f32, unit: enum, scale: 1, min: 0, max: 1, owner: flight_fsm, rate_hz: 0, permissions: execute, safety: critical, dependencies: 0, version: 1}
+  - {kind: command, id: 6, name: virtual_rc, type: f32, unit: normalized, scale: 1, min: -1, max: 1, owner: rc_input, rate_hz: 100, permissions: execute, safety: critical, dependencies: 1, version: 1}
+  - {kind: command, id: 13, name: abort_all, type: f32, unit: boolean, scale: 1, min: 0, max: 1, owner: safety, rate_hz: 0, permissions: execute, safety: critical, dependencies: 0, version: 1}
+  - {kind: command, id: 14, name: sdk_arm_authority, type: f32, unit: boolean, scale: 1, min: 0, max: 1, owner: flight_fsm, rate_hz: 0, permissions: execute, safety: critical, dependencies: 3, version: 1}
+  - {kind: command, id: 20, name: sysid, type: f32, unit: mixed, scale: 1, min: 0, max: 0, owner: experiment, rate_hz: 0, permissions: execute, safety: critical, dependencies: 3, version: 1}
+  - {kind: command, id: 22, name: motor_bench, type: f32, unit: mixed, scale: 1, min: 0, max: 4000, owner: bench, rate_hz: 0, permissions: execute, safety: critical, dependencies: 4, version: 1}
+  - {kind: telemetry, id: 1, name: legacy_status, type: frame_0x01, unit: mixed, scale: 1, min: 0, max: 0, owner: telemetry, rate_hz: 100, permissions: read, safety: observation, dependencies: 0, version: 14}
+  - {kind: telemetry, id: 2, name: legacy_adaptive, type: frame_0x02, unit: mixed, scale: 1, min: 0, max: 0, owner: telemetry, rate_hz: 20, permissions: read, safety: observation, dependencies: 0, version: 14}
+  - {kind: telemetry, id: 6, name: extended_attitude, type: frame_0x06, unit: mixed, scale: 1, min: 0, max: 0, owner: telemetry, rate_hz: 50, permissions: read, safety: observation, dependencies: 0, version: 14}
+  - {kind: telemetry, id: 9, name: typed_stream, type: frame_0x09, unit: mixed, scale: 1, min: 0, max: 1024, owner: subscribe, rate_hz: 80, permissions: read, safety: observation, dependencies: 2, version: 1}
+  - {kind: event, id: 1, name: boot, type: event, unit: none, scale: 1, min: 0, max: 0, owner: platform, rate_hz: 0, permissions: read, safety: diagnostic, dependencies: 0, version: 1}
+  - {kind: event, id: 2, name: command_outcome, type: event, unit: none, scale: 1, min: 0, max: 0, owner: command_service, rate_hz: 0, permissions: read, safety: critical, dependencies: 0, version: 1}
+  - {kind: plugin, id: 1, name: pid_controller, type: controller, unit: none, scale: 1, min: 0, max: 0, owner: control, rate_hz: 200, permissions: read, safety: critical, dependencies: 0, version: 1}
+  - {kind: plugin, id: 2, name: mrac_adaptive_layer, type: adaptive, unit: none, scale: 1, min: 0, max: 0, owner: control, rate_hz: 200, permissions: read, safety: critical, dependencies: 1, version: 1}
+  - {kind: plugin, id: 3, name: ekf9_estimator, type: estimator, unit: none, scale: 1, min: 0, max: 0, owner: estimation, rate_hz: 80, permissions: read, safety: critical, dependencies: 0, version: 1}
+  - {kind: plugin, id: 4, name: optical_flow, type: estimator, unit: none, scale: 1, min: 0, max: 0, owner: estimation, rate_hz: 200, permissions: read, safety: operational, dependencies: 0, version: 1}
+  - {kind: task, id: 1, name: SystemMonitor_Task, type: freertos_task, unit: none, scale: 1, min: 0, max: 0, owner: scheduler, rate_hz: 1, permissions: read, safety: diagnostic, dependencies: 0, version: 1}
+  - {kind: task, id: 2, name: IMU_DataDeal_Task, type: freertos_task, unit: none, scale: 1, min: 0, max: 0, owner: scheduler, rate_hz: 1000, permissions: read, safety: critical, dependencies: 0, version: 1}
+  - {kind: task, id: 3, name: IMUSample_Task, type: freertos_task, unit: none, scale: 1, min: 0, max: 0, owner: scheduler, rate_hz: 1000, permissions: read, safety: critical, dependencies: 0, version: 1}
+  - {kind: task, id: 4, name: Stabilizer_Task, type: freertos_task, unit: none, scale: 1, min: 0, max: 0, owner: scheduler, rate_hz: 200, permissions: read, safety: critical, dependencies: 0, version: 1}
+  - {kind: task, id: 5, name: Remoter_Task, type: freertos_task, unit: none, scale: 1, min: 0, max: 0, owner: scheduler, rate_hz: 100, permissions: read, safety: critical, dependencies: 0, version: 1}
+  - {kind: task, id: 6, name: Autofly_Task, type: freertos_task, unit: none, scale: 1, min: 0, max: 0, owner: scheduler, rate_hz: 200, permissions: read, safety: critical, dependencies: 0, version: 1}
+  - {kind: task, id: 7, name: Send_Task, type: freertos_task, unit: none, scale: 1, min: 0, max: 0, owner: scheduler, rate_hz: 80, permissions: read, safety: operational, dependencies: 0, version: 1}
+  - {kind: resource, id: 1, name: usart3_radio, type: uart_dma, unit: baud, scale: 1, min: 0, max: 921600, owner: bsp, rate_hz: 0, permissions: read, safety: operational, dependencies: 0, version: 1}
+  - {kind: resource, id: 2, name: uart5_probe_vcp, type: uart_dma, unit: baud, scale: 1, min: 0, max: 115200, owner: bsp, rate_hz: 0, permissions: read, safety: diagnostic, dependencies: 0, version: 1}
+  - {kind: resource, id: 3, name: command_queue, type: ring, unit: entries, scale: 1, min: 0, max: 16, owner: command_ingress, rate_hz: 80, permissions: read, safety: operational, dependencies: 0, version: 1}
+  - {kind: resource, id: 4, name: freertos_heap, type: heap, unit: bytes, scale: 1, min: 0, max: 20480, owner: scheduler, rate_hz: 0, permissions: read, safety: critical, dependencies: 0, version: 1}

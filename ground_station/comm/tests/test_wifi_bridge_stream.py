@@ -93,6 +93,16 @@ class TestDecodeStreamFrame(unittest.TestCase):
         names = decoded["names"]
         self.assertEqual(names, ["ch1.0", "ch1.1", "ch1.2"])
 
+    def test_sequence_metadata_reports_modulo_256_loss(self):
+        first = self.bridge._decode_stream_frame(
+            1, _build_stream_frame(1, 10, 100, [1.0]))
+        second = self.bridge._decode_stream_frame(
+            1, _build_stream_frame(1, 13, 200, [2.0]))
+        self.assertEqual(first["json"]["slot1.received"], 1)
+        self.assertEqual(second["json"]["slot1.received"], 2)
+        self.assertEqual(second["json"]["slot1.dropped"], 2)
+        self.assertAlmostEqual(second["json"]["slot1.loss_pct"], 50.0)
+
     def test_decode_truncated_payload_returns_none(self):
         # Truncated header -- only 5 bytes when 10 are needed.
         result = self.bridge._decode_stream_frame(1, b"\xAA\xBB\x09\x00\x04")

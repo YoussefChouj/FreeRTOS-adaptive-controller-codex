@@ -3,6 +3,7 @@
 #include "mrac.h"
 #include "gyro_filter.h"
 #include "fault_capture.h"
+#include "platform_registry.h"
 /* Subscribe telemetry-mode knob (telemetry-throughput-2026-09-08). Used by
  * Send_Task to gate the legacy Frame A/B/C emission when the host has
  * requested SUBSCRIBE_ONLY mode. Pulls in Subscribe_TelemetryMode_e. */
@@ -120,6 +121,7 @@ void vApplicationMallocFailedHook(void)
 // main() is the entry point of the program; execution starts here after reset and startup code runs
 int main(void)
 { 
+    PlatformRegistry_Init();
     BSP_Init(); // Initialize Board Support Package (hardware peripherals: GPIO, timers, UART, etc.)
 
     /* Persistent fault logger: checks for a captured fault from a previous boot,
@@ -398,6 +400,5 @@ void Autofly_Task(void *pvParameters)
         vTaskDelayUntil(&PreviousWakeTime, TimeIncrement );
   }
 }
-
 
 

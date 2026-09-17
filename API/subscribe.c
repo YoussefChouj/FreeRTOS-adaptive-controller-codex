@@ -9,6 +9,7 @@
  */
 
 #include "subscribe.h"
+#include "platform_registry.h"
 #include "FreeRTOS.h"
 #include "task.h"     /* xTaskGetTickCount -- the data frames' source clock */
 #include "usart5.h"   /* Uart5_Subscribe_TxSend */
@@ -865,6 +866,24 @@ void Uart5_Subscribe_HandleRequest(void)
     char err[32];
 
     if (UA5RxSubscribePending == 0U) {
+        return;
+    }
+    if ((UA5RxSubscribeLen >= 3U) &&
+        (UA5RxSubscribeBuf[2] == PLATFORM_DISCOVERY_CMD)) {
+        if (PlatformRegistry_BuildDiscovery(tx_buf, (uint16_t)sizeof(tx_buf),
+                                            &tx_len) != 0U) {
+            Subscribe_TxReplyToTransport(tx_buf, tx_len);
+        }
+        UA5RxSubscribePending = 0U;
+        return;
+    }
+    if ((UA5RxSubscribeLen >= 3U) &&
+        (UA5RxSubscribeBuf[2] == PLATFORM_REGISTRY_DIGEST_CMD)) {
+        if (PlatformRegistry_BuildDigest(tx_buf, (uint16_t)sizeof(tx_buf),
+                                         &tx_len) != 0U) {
+            Subscribe_TxReplyToTransport(tx_buf, tx_len);
+        }
+        UA5RxSubscribePending = 0U;
         return;
     }
     /* Dispatch on the CMD byte: 0x21 = streaming subscribe, 0x20 = the

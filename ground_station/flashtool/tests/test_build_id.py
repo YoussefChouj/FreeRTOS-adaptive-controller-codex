@@ -179,6 +179,9 @@ def test_next_identity_starts_at_one(tmp_path: Path):
     ident = build_id.next_identity(obj_dir, root=tmp_path)
     assert ident.build_counter == 1
     assert ident.magic == build_id.MAGIC
+    metadata = obj_dir / build_id._BUILD_ID_METADATA_FILENAME
+    assert metadata.exists()
+    assert build_id.identity_from_elf(obj_dir / "JX_FLY.axf", obj_dir=obj_dir) == ident
 
 
 def test_next_identity_increments_across_calls(tmp_path: Path):
@@ -298,3 +301,16 @@ def test_identity_from_elf_default_obj_dir_from_elf_path(tmp_path: Path):
     fake_elf.write_bytes(b"")
     ident = build_id.identity_from_elf(fake_elf)  # no obj_dir
     assert ident.build_counter == 13
+
+
+def test_identity_from_elf_uses_sidecar_for_keil_axf(tmp_path: Path):
+    obj_dir = tmp_path / "OBJ"
+    obj_dir.mkdir()
+    ident = _identity(counter=23, epoch=1_700_000_123, fingerprint=0x12345678)
+    (obj_dir / build_id._BUILD_ID_METADATA_FILENAME).write_text(
+        '{"words":[296a, 23, 1700000123, 305419896]}'.replace("296a", str(build_id.MAGIC)),
+        encoding="ascii",
+    )
+    axf = obj_dir / "JX_FLY.axf"
+    axf.write_bytes(b"ARMCC AXF")
+    assert build_id.identity_from_elf(axf) == ident

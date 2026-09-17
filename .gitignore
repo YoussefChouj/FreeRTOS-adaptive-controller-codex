@@ -7,3 +7,37 @@ __pycache__/
 *.log
 *.tmp
 .DS_Store
+
+# Keil build output (binaries, maps, deps)
+OBJ/*.axf
+OBJ/*.hex
+OBJ/*.map
+OBJ/*.htm
+OBJ/*.lnp
+OBJ/*.dep
+OBJ/*.build_log.htm
+OBJ/*.crf
+OBJ/*.d
+OBJ/*.o
+OBJ/.build_counter
+OBJ/.build_identity.json
+OBJ/.prev-flashed/
+OBJ/startup_stm32f40_41xxx.lst
+OBJ/startup_stm32f40_41xxx.o
+
+# Keil GUI state
+USER/*.uvguix.*
+
+# Python cache
+ground_station/__pycache__/
+ground_station/**/__pycache__/
+ground_station/**/*.pyc
+
+# IDE temp files
+_cmd_*.py
+_examine_*.py
+_fix_*.py
+_scan_*.py
+_test_*.py
+*.swp
+*.swo

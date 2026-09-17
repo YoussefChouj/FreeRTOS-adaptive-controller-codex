@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>UAV Ground Station</title>
+  <style>
+    :root {
+      --bg: #1a1a2e;
+      --card: #16213e;
+      --accent: #0f3460;
+      --text: #e8e8e8;
+      --muted: #8888aa;
+      --red: #e94560;
+      --green: #4ecca3;
+      --amber: #f5a623;
+      --border: #2a2a4a;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    header h1 {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .status-badge::before {
+      content: '';
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .status-badge.connected {
+      background: rgba(78, 204, 163, 0.15);
+      color: var(--green);
+    }
+    .status-badge.connected::before { background: var(--green); }
+
+    .status-badge.disconnected {
+      background: rgba(232, 232, 234, 0.1);
+      color: var(--muted);
+    }
+    .status-badge.disconnected::before { background: var(--muted); }
+
+    .status-badge.error {
+      background: rgba(233, 69, 96, 0.15);
+      color: var(--red);
+    }
+    .status-badge.error::before { background: var(--red); }
+
+    /* ── Layout ── */
+    #app {
+      display: grid;
+      grid-template-columns: 260px 1fr;
+      grid-template-rows: auto 1fr;
+      height: calc(100vh - 48px);
+    }
+
+    #sidebar {
+      grid-row: 1 / -1;
+      background: var(--card);
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+      padding: 12px;
+    }
+
+    #main {
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* ── Cards & Panels ── */
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .card-title {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .toggle-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .toggle-btn:hover { border-color: var(--accent); color: var(--text); }
+
+    /* ── State overview ── */
+    .stat-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .stat-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .stat-label {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .stat-value {
+      font-size: 15px;
+      font-weight: 600;
+      font-family: 'Consolas', monospace;
+    }
+
+    /* ── Stream table ── */
+    .stream-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .stream-table th {
+      text-align: left;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 4px 8px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .stream-table td {
+      padding: 5px 8px;
+      font-family: 'Consolas', monospace;
+    }
+
+    .stream-table tr:hover td { background: rgba(255,255,255,0.03); }
+
+    .loss-warn { color: var(--amber); }
+    .loss-critical { color: var(--red); }
+
+    /* ── Command form ── */
+    .cmd-form {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 8px 12px;
+      align-items: center;
+    }
+
+    .cmd-form label {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .cmd-form input {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 4px;
+      padding: 5px 8px;
+      font-family: 'Consolas', monospace;
+      font-size: 13px;
+      width: 100%;
+    }
+    .cmd-form input:focus { outline: none; border-color: var(--accent); }
+
+    .cmd-form button {
+      grid-column: 1 / -1;
+      background: var(--accent);
+      color: var(--text);
+      border: none;
+      border-radius: 4px;
+      padding: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .cmd-form button:hover { opacity: 0.85; }
+    .cmd-form button:active { opacity: 0.7; }
+
+    /* ── Result ── */
+    .result-box {
+      margin-top: 10px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 10px 12px;
+      font-size: 12px;
+      font-family: 'Consolas', monospace;
+      white-space: pre-wrap;
+    }
+
+    .result-ack { border-left: 3px solid var(--green); }
+    .result-applied { border-left: 3px solid var(--green); }
+    .result-rejected { border-left: 3px solid var(--red); }
+
+    /* ── Alarms ── */
+    .alarm-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .alarm-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .alarm-item.warning {
+      background: rgba(245, 166, 35, 0.12);
+      color: var(--amber);
+    }
+
+    .alarm-item.critical {
+      background: rgba(233, 69, 96, 0.12);
+      color: var(--red);
+    }
+
+    .alarm-item .icon {
+      font-size: 14px;
+    }
+
+    .no-alarms {
+      color: var(--muted);
+      font-size: 12px;
+      text-align: center;
+      padding: 8px;
+    }
+
+    /* ── Plugin panels ── */
+    #plugin-panels {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    /* ── Footer ── */
+    footer {
+      text-align: center;
+      font-size: 11px;
+      color: var(--muted);
+      padding: 8px;
+      border-top: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>UAV Ground Station</h1>
+  <div id="status" class="status-badge disconnected">Connecting…</div>
+</header>
+
+<div id="app">
+  <div id="sidebar">
+    <!-- sidebar: state summary + alarms -->
+    <div class="card" id="card-state">
+      <div class="card-header">
+        <span class="card-title">Session</span>
+        <button class="toggle-btn" data-panel="state">Hide</button>
+      </div>
+      <div class="stat-grid">
+        <div class="stat-item">
+          <span class="stat-label">Schema ID</span>
+          <span class="stat-value" id="schema_id" style="font-size:11px">—</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Session</span>
+          <span class="stat-value" id="session_id" style="font-size:11px">—</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Samples</span>
+          <span class="stat-value" id="samples">—</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Last Update</span>
+          <span class="stat-value" id="last_update" style="font-size:11px">—</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="card-alarms">
+      <div class="card-header">
+        <span class="card-title">Alarms</span>
+        <button class="toggle-btn" data-panel="alarms">Hide</button>
+      </div>
+      <div class="alarm-list" id="alarm-list">
+        <div class="no-alarms">No active alarms</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="main">
+    <div class="card" id="card-streams">
+      <div class="card-header">
+        <span class="card-title">Telemetry Streams</span>
+        <button class="toggle-btn" data-panel="streams">Hide</button>
+      </div>
+      <table class="stream-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Seq</th>
+            <th>Loss %</th>
+            <th>Samples</th>
+          </tr>
+        </thead>
+        <tbody id="stream-body"></tbody>
+      </table>
+    </div>
+
+    <div class="card" id="card-cmd">
+      <div class="card-header">
+        <span class="card-title">Command</span>
+        <button class="toggle-btn" data-panel="cmd">Hide</button>
+      </div>
+      <form class="cmd-form" id="cmd-form">
+        <label for="cmd_id">Command ID</label>
+        <input type="number" id="cmd_id" value="0" min="0" />
+        <label for="cmd_idx">Index</label>
+        <input type="number" id="cmd_idx" value="0" min="0" />
+        <label for="cmd_val">Value</label>
+        <input type="number" id="cmd_val" value="0" step="any" />
+        <button type="submit">Submit Command</button>
+      </form>
+      <div id="cmd-result"></div>
+    </div>
+
+    <div id="plugin-panels"></div>
+  </div>
+</div>
+
+<footer>UAV Ground Station Shell &mdash; polls every 500 ms</footer>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ── State ── */
+  let currentState = null;
+  let alarms = [];
+  let plugins = [];
+
+  /* ── Layout persistence ── */
+  var LAYOUT_KEY = 'gs_shell_layout';
+
+  function loadLayout() {
+    try {
+      return JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}');
+    } catch (_) { return {}; }
+  }
+
+  function saveLayout() {
+    var visible = {};
+    document.querySelectorAll('[data-panel]').forEach(function (btn) {
+      var panel = btn.getAttribute('data-panel');
+      var card = document.getElementById('card-' + panel);
+      if (card) visible[panel] = card.style.display !== 'none';
+    });
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify(visible));
+  }
+
+  function applyLayout() {
+    var saved = loadLayout();
+    Object.keys(saved).forEach(function (panel) {
+      var card = document.getElementById('card-' + panel);
+      if (!card) return;
+      card.style.display = saved[panel] ? '' : 'none';
+      var btn = document.querySelector('[data-panel="' + panel + '"]');
+      if (btn) btn.textContent = saved[panel] ? 'Hide' : 'Show';
+    });
+  }
+
+  document.querySelectorAll('[data-panel]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var panel = btn.getAttribute('data-panel');
+      var card = document.getElementById('card-' + panel);
+      if (!card) return;
+      var visible = card.style.display !== 'none';
+      card.style.display = visible ? 'none' : '';
+      btn.textContent = visible ? 'Show' : 'Hide';
+      saveLayout();
+    });
+  });
+
+  applyLayout();
+
+  /* ── Shell API exposed to plugins ── */
+  var shellApi = {
+    getState: function () { return currentState; },
+    subscribe: function (cb) { onStateChangeCallbacks.push(cb); },
+    submitCommand: function (cmdId, index, value) {
+      return fetch('/commands', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command_id: cmdId, index: index, value: value })
+      }).then(function (r) { return r.json(); });
+    },
+    getPlugins: function () { return plugins; },
+    registerPanel: function (name, renderFn) {
+      plugins.push({ name: name, renderFn: renderFn });
+      var container = document.getElementById('plugin-panels');
+      var card = document.createElement('div');
+      card.className = 'card';
+      card.id = 'plugin-' + name;
+      var header = document.createElement('div');
+      header.className = 'card-header';
+      var title = document.createElement('span');
+      title.className = 'card-title';
+      title.textContent = name;
+      header.appendChild(title);
+      var body = document.createElement('div');
+      body.id = 'plugin-body-' + name;
+      card.appendChild(header);
+      card.appendChild(body);
+      container.appendChild(card);
+      renderFn(body, shellApi);
+    }
+  };
+
+  var onStateChangeCallbacks = [];
+
+  /* ── Plugin loading ── */
+  function loadPlugins() {
+    // Scan plugins/ directory for .js files (served as static files)
+    fetch('/static/plugins/')
+      .then(function (r) { return r.text(); })
+      .catch(function () { /* plugins dir may not exist */ });
+  }
+
+  /* ── Helpers ── */
+  function fmtTime(ns) {
+    if (ns == null) return '—';
+    var d = new Date(Math.floor(ns / 1e6));
+    return d.toLocaleTimeString();
+  }
+
+  function lossClass(pct) {
+    if (pct > 5) return 'loss-critical';
+    if (pct > 1) return 'loss-warn';
+    return '';
+  }
+
+  function buildAlarms(state) {
+    var result = [];
+    var now = Date.now() * 1e6; // ms → ns
+    if (state.streams) {
+      Object.keys(state.streams).forEach(function (slot) {
+        var s = state.streams[slot];
+        if (s.loss_pct > 1) {
+          result.push({
+            level: s.loss_pct > 5 ? 'critical' : 'warning',
+            text: 'Slot ' + slot + ': ' + s.loss_pct.toFixed(2) + '% packet loss'
+          });
+        }
+        if (state.last_update_ns != null && (now - state.last_update_ns) > 3e9) {
+          result.push({
+            level: 'critical',
+            text: 'No telemetry update in 3+ seconds'
+          });
+        }
+      });
+    }
+    return result;
+  }
+
+  /* ── Rendering ── */
+  function renderState(state) {
+    document.getElementById('schema_id').textContent = state.schema_id || '—';
+    document.getElementById('session_id').textContent = state.session_id || '—';
+    document.getElementById('samples').textContent =
+      state.samples != null ? state.samples.toLocaleString() : '—';
+    document.getElementById('last_update').textContent = fmtTime(state.last_update_ns);
+  }
+
+  function renderStreams(state) {
+    var tbody = document.getElementById('stream-body');
+    if (!state.streams || Object.keys(state.streams).length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" style="color:var(--muted);text-align:center">No streams</td></tr>';
+      return;
+    }
+    var rows = Object.keys(state.streams).map(function (slot) {
+      var s = state.streams[slot];
+      var lc = lossClass(s.loss_pct || 0);
+      return '<tr>' +
+        '<td>' + slot + '</td>' +
+        '<td>' + (s.sequence != null ? s.sequence : '—') + '</td>' +
+        '<td class="' + lc + '">' + (s.loss_pct != null ? s.loss_pct.toFixed(2) + '%' : '—') + '</td>' +
+        '<td>' + ((s.received || 0) + (s.dropped || 0)).toLocaleString() + '</td>' +
+        '</tr>';
+    }).join('');
+    tbody.innerHTML = rows;
+  }
+
+  function renderAlarms(alarmList) {
+    var el = document.getElementById('alarm-list');
+    if (!alarmList || alarmList.length === 0) {
+      el.innerHTML = '<div class="no-alarms">No active alarms</div>';
+      return;
+    }
+    el.innerHTML = alarmList.map(function (a) {
+      return '<div class="alarm-item ' + a.level + '"><span class="icon">' +
+        (a.level === 'critical' ? '&#9888;' : '&#9888;') + '</span>' +
+        a.text + '</div>';
+    }).join('');
+  }
+
+  /* ── Command form ── */
+  document.getElementById('cmd-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var cmdId = parseInt(document.getElementById('cmd_id').value, 10) || 0;
+    var idx = parseInt(document.getElementById('cmd_idx').value, 10) || 0;
+    var val = parseFloat(document.getElementById('cmd_val').value) || 0;
+    var resultEl = document.getElementById('cmd-result');
+    resultEl.innerHTML = '<div class="result-box">Submitting…</div>';
+    shellApi.submitCommand(cmdId, idx, val).then(function (data) {
+      resultEl.innerHTML = '<div class="result-box result-ack">Transaction ID: ' +
+        data.transaction_id + '</div>';
+    }).catch(function (err) {
+      resultEl.innerHTML = '<div class="result-box result-rejected">Error: ' +
+        err.message + '</div>';
+    });
+  });
+
+  /* ── Polling ── */
+  function setStatus(cls, text) {
+    var el = document.getElementById('status');
+    el.className = 'status-badge ' + cls;
+    el.textContent = text;
+  }
+
+  function poll() {
+    Promise.all([
+      fetch('/health').then(function (r) { return r.json(); }).catch(function () { return null; }),
+      fetch('/state').then(function (r) { return r.json(); }).catch(function () { return null; })
+    ]).then(function (_ref) {
+      var health = _ref[0];
+      var state = _ref[1];
+
+      if (health === null || state === null) {
+        setStatus('error', 'Error');
+        return;
+      }
+
+      setStatus('connected', 'Connected');
+      currentState = state;
+
+      renderState(state);
+      renderStreams(state);
+      alarms = buildAlarms(state);
+      renderAlarms(alarms);
+
+      onStateChangeCallbacks.forEach(function (cb) {
+        try { cb(state); } catch (e) { console.error('Plugin callback error:', e); }
+      });
+    }).catch(function () {
+      setStatus('error', 'Error');
+    });
+  }
+
+  /* ── Bootstrap ── */
+  loadPlugins();
+  poll();
+  setInterval(poll, 500);
+
+})();
+</script>
+</body>
+</html>

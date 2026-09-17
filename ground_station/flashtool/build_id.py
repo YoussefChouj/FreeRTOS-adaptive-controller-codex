@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import json
 import os
 import struct
 import tempfile
@@ -76,6 +77,12 @@ _BUILD_ID_FILEPATH_RELATIVE = "..\\OBJ\\build_id.c"
 #: from zero (not from a stale CI value). Gitignored alongside the rest of
 #: ``OBJ/`` (the project-wide gitignore excludes the directory wholesale).
 _BUILD_COUNTER_FILENAME = ".build_counter"
+
+# ARMCC/Keil AXF files are not ELF files, so the initialized identity cannot
+# be recovered from the artifact with pyelftools. Keep the exact identity
+# allocated for the build in a small sidecar next to the AXF. This is written
+# atomically before UV4 starts and is covered by artifact custody.
+_BUILD_ID_METADATA_FILENAME = ".build_identity.json"
 
 #: Source roots walked to compute the source fingerprint. Order matters only
 #: for hash determinism, not correctness — two passes of the same tree at
@@ -155,6 +162,20 @@ def _write_counter(obj_dir: Path, value: int) -> None:
         raise
 
 
+def _write_identity_metadata(obj_dir: Path, identity: Identity) -> None:
+    """Persist the identity associated with the next build atomically."""
+    p = obj_dir / _BUILD_ID_METADATA_FILENAME
+    fd, name = tempfile.mkstemp(prefix=".build_identity.", suffix=".tmp", dir=obj_dir)
+    try:
+        with open(fd, "w", encoding="ascii", newline="\n") as f:
+            json.dump({"words": list(identity.as_tuple())}, f, separators=(",", ":"))
+            f.write("\n")
+        Path(name).replace(p)
+    except OSError:
+        Path(name).unlink(missing_ok=True)
+        raise
+
+
 def next_identity(obj_dir: str | Path, root: str | Path | None = None) -> Identity:
     """Allocate the next identity: increment the counter, stamp the time +
     source fingerprint. The counter is persisted before the build so a
@@ -167,31 +188,62 @@ def next_identity(obj_dir: str | Path, root: str | Path | None = None) -> Identi
     if root is None:
         root = obj_dir.parent
     fp = _source_fingerprint(Path(root))
-    return Identity(magic=MAGIC, build_counter=counter, build_epoch=epoch,
-                    source_fingerprint=fp)
+    identity = Identity(magic=MAGIC, build_counter=counter, build_epoch=epoch,
+                        source_fingerprint=fp)
+    _write_identity_metadata(obj_dir, identity)
+    return identity
 
 
 def identity_from_elf(elf_path: str | Path, obj_dir: str | Path | None = None
                       ) -> Identity:
-    """Recover the identity from an ELF — convenience for offline verification.
+    """Recover the initialized build-id words from an ELF or Keil sidecar.
 
-    The ELF itself does not carry the build counter in a parseable form
-    (DWARF gives the symbol address, not the constant value); this function
-    reads it from the on-disk ``.build_counter`` file alongside the build
-    artifacts. Returns an Identity whose ``build_counter`` matches the file
-    iff the local ELF was the last build this host emitted.
+    ARMCC V5 AXF files are valid Keil images but are not ELF, so parsing them
+    as ELF is expected to fail. The sidecar written by :func:`next_identity`
+    is authoritative for those artifacts. The counter fallback is retained
+    for old workspaces and the lightweight fake-AXF tests.
     """
-    # Resolve the on-disk counter file relative to the ELF path.
     elf_path = Path(elf_path)
     if obj_dir is None:
         obj_dir = elf_path.parent
-    counter = _read_counter(Path(obj_dir))
-    # Without DWARF round-trip we cannot recover epoch/fingerprint from the
-    # image alone; record them as zero so the comparison surfaces a clear
-    # "use next_identity() during build" message rather than silently
-    # matching a stale counter.
-    return Identity(magic=MAGIC, build_counter=counter,
-                    build_epoch=0, source_fingerprint=0)
+    obj_dir = Path(obj_dir)
+    elf_error: Exception | None = None
+    try:
+        from elftools.elf.elffile import ELFFile
+        with elf_path.open("rb") as stream:
+            elf = ELFFile(stream)
+            symtab = elf.get_section_by_name(".symtab")
+            symbols = symtab.get_symbol_by_name(BUILD_ID_SYMBOL) if symtab else None
+            if not symbols:
+                raise ValueError(f"{BUILD_ID_SYMBOL!r} not found")
+            address = int(symbols[0]["st_value"])
+            for section in elf.iter_sections():
+                start = int(section["sh_addr"])
+                size = int(section["sh_size"])
+                if start <= address and address + 16 <= start + size:
+                    offset = address - start
+                    words = struct.unpack_from("<4I", section.data(), offset)
+                    return Identity(*words)
+    except Exception as exc:
+        elf_error = exc
+
+    metadata = obj_dir / _BUILD_ID_METADATA_FILENAME
+    try:
+        raw = json.loads(metadata.read_text(encoding="ascii"))
+        words = raw["words"]
+        if len(words) != 4:
+            raise ValueError("identity sidecar must contain four words")
+        return Identity(*(int(word) & 0xFFFFFFFF for word in words))
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        pass
+
+    # Legacy artifacts predate the sidecar. They only carried the monotonic
+    # counter on disk, so preserve the historical best-effort reconstruction.
+    counter = _read_counter(obj_dir)
+    if counter:
+        return Identity(MAGIC, counter, 0, 0)
+    detail = f": {elf_error}" if elf_error else ""
+    raise ValueError(f"cannot recover {BUILD_ID_SYMBOL} from {elf_path}{detail}")
 
 
 # ---- generated C source ---------------------------------------------------
@@ -272,7 +324,15 @@ def check_identity(elf_path: str | Path) -> IdentityCheck:
             ok=False, expected=expected, observed=None,
             reasons=[f"could not read {BUILD_ID_SYMBOL} from target: {exc}"],
         )
-    observed = (raw[0], raw[1], raw[2], raw[3])
+    if isinstance(raw, (bytes, bytearray)):
+        if len(raw) != 16:
+            return IdentityCheck(
+                ok=False, expected=expected, observed=None,
+                reasons=[f"{BUILD_ID_SYMBOL} read returned {len(raw)} bytes, expected 16"],
+            )
+        observed = struct.unpack("<4I", raw)
+    else:
+        observed = tuple(raw)
     reasons: list[str] = []
     if observed[0] != MAGIC:
         reasons.append(

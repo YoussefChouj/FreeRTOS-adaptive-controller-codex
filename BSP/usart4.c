@@ -1,4 +1,5 @@
 #include "usart4.h"
+#include "gs_command.h"
 
 _linux_data_st linux_data;
 yolo_data linux_yolo_data;
@@ -92,7 +93,6 @@ void UART4_Configuration(void)
 	DMA_Cmd(DMA1_Stream4, DISABLE);
 }
 
-typedef struct { uint8_t id; uint8_t index; float value; } GS_Cmd_t;
 volatile GS_Cmd_t gs_cmd_queue[16];
 volatile uint8_t gs_cmd_head = 0, gs_cmd_tail = 0;
 volatile uint32_t gs_cmd_drop_count = 0;
@@ -138,6 +138,9 @@ void Handle_UART4_GroundStation_Command(void)
 					gs_cmd_queue[gs_cmd_head].id    = cmd_id;
 					gs_cmd_queue[gs_cmd_head].index = index;
 					gs_cmd_queue[gs_cmd_head].value = val.f;
+					gs_cmd_queue[gs_cmd_head].transaction_id = 0U;
+					gs_cmd_queue[gs_cmd_head].transaction_flags = 0U;
+					gs_cmd_queue[gs_cmd_head].transaction_transport = 0U;
 					gs_cmd_head = next_head;
 				} else {
 					gs_cmd_drop_count++;

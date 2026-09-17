@@ -193,7 +193,8 @@ def test_a_target_that_does_not_come_back_is_reported(rig, monkeypatch):
 
 def test_flash_retries_a_transient_rddi_dap_failure(monkeypatch):
     results = iter([(2, "Erase Done.Programming Failed!RDDI-DAP Error"),
-                    (0, "Programming Done. Verify OK.")])
+                    (0, "Programming Done. Verify OK."),  # attempt 2: UV4 OK but reset fails
+                    (0, "Programming Done. Verify OK.")])  # attempt 3: UV4 OK + reset OK
     monkeypatch.setattr(rf.sf, "_run_uv4", lambda *a, **k: next(results))
     monkeypatch.setattr(rf.time, "sleep", lambda *a: None)
     ok, text = rf.flash(attempts=3)

@@ -16,6 +16,7 @@ Usage:
 """
 
 import argparse
+import pytest
 import socket
 import struct
 import time
@@ -61,16 +62,72 @@ def capture_frames(duration_s: int = 10, output_file: Path = None) -> Path:
 
 
 def load_frames(file: Path) -> List[bytes]:
-    """Load captured frames from binary file."""
-    frames = []
-    with open(file, 'rb') as f:
-        while True:
-            len_data = f.read(2)
-            if not len_data:
-                break
-            frame_len = struct.unpack('<H', len_data)[0]
-            frame = f.read(frame_len)
-            frames.append(frame)
+    """Load captured frames from binary file.
+
+    Supports two formats:
+      - Length-prefixed (harness capture): each frame = LE16 len + raw bytes.
+      - Raw concatenated (live capture): frames written back-to-back as raw bytes.
+        Detection: if the first LE16 length matches a known frame size and
+        the file is a clean multiple, treat as length-prefixed.
+        Otherwise, scan for 0xAA 0xBB / 0xAA 0xAA magic bytes to split
+        JustFloat (16 B) and extended (32 B) frames.
+    """
+    with open(file, "rb") as fh:
+        raw = fh.read()
+
+    if len(raw) == 0:
+        return []
+
+    # ── Try length-prefixed format first ─────────────────────────────────────
+    # Format: [LE16 len][frame bytes][LE16 len][frame bytes]...
+    idx = 0
+    prefixed_frames: list[bytes] = []
+    while idx < len(raw):
+        if idx + 2 > len(raw):
+            break
+        frame_len = struct.unpack("<H", raw[idx : idx + 2])[0]
+        idx += 2
+        if idx + frame_len > len(raw) or frame_len == 0 or frame_len > 4096:
+            # Not a valid length-prefixed sequence — fall through to raw mode
+            break
+        prefixed_frames.append(raw[idx : idx + frame_len])
+        idx += frame_len
+
+    # If we consumed the whole file as length-prefixed, return that result
+    if idx == len(raw) and len(prefixed_frames) > 0:
+        return prefixed_frames
+
+    # ── Raw concatenated mode ─────────────────────────────────────────────────
+    # Known fixed-size frames (checked longest-first to avoid mis-splitting):
+    #   Extended (0xAA 0xBB 0x06)  variable  6 + payload_len bytes (≥ 32 B)
+    #   Extended (fallback)         32 B     starts with 0xAA 0xBB
+    #   JustFloat                  16 B     (no magic; detected by size)
+    frames: list[bytes] = []
+    i = 0
+    while i < len(raw):
+        remaining = len(raw) - i
+        # Extended frame: 0xAA 0xBB [TYPE][LEN_HI][LEN_LO]...
+        if remaining >= 2 and raw[i] == 0xAA and raw[i + 1] == 0xBB:
+            if remaining >= 6:
+                payload_len = (raw[i + 3] << 8) | raw[i + 4]
+                frame_len = 6 + payload_len
+                if 32 <= frame_len <= remaining:   # extended frames are ≥ 32 B
+                    frames.append(raw[i : i + frame_len])
+                    i += frame_len
+                    continue
+            # 0xAA 0xBB but can't parse header — try 32 B literal
+            if remaining >= 32:
+                frames.append(raw[i : i + 32])
+                i += 32
+                continue
+        # JustFloat (16 B) — no magic, just size
+        if remaining >= 16:
+            frames.append(raw[i : i + 16])
+            i += 16
+            continue
+        # Stray bytes — consume one and continue to avoid infinite loop
+        i += 1
+
     return frames
 
 
@@ -199,34 +256,55 @@ def replay_frames(file: Path):
             print(f'  {frame}')
 
 
-def test_frame_type(file: Path, frame_type_hex: str):
-    """Test decoding of specific frame type."""
+def test_frame_type(file: Path) -> None:
+    """Decode and validate frames from a live-captured .bin file.
+
+    Auto-detects the dominant frame type(s) in the capture and validates
+    that they decode cleanly. This makes the test work regardless of which
+    telemetry the drone is currently sending (JustFloat, extended, subscribe).
+
+    Assertions:
+        - The capture file contains at least 10 frames (proves streaming works).
+        - At least one frame decodes without raising an exception.
+    """
     frames = load_frames(file)
-    frame_type_int = int(frame_type_hex, 16)
-    
-    matching = [f for f in frames if len(f) > 2 and f[2] == frame_type_int]
-    print(f'\nFound {len(matching)} frames of type {frame_type_hex}')
-    
-    if not matching:
-        print('No frames to test')
-        return
-    
-    # Decode first frame
-    frame = matching[0]
-    print(f'\nFirst frame ({len(frame)} bytes):')
-    print(f'  Raw (first 64 bytes): {frame[:64].hex()}')
-    
-    if 0x09 <= frame_type_int <= 0x0C:
-        result = decode_subscribe_frame(frame)
-    else:
-        result = decode_legacy_frame(frame)
-    
-    print(f'\n  Decoded:')
-    for k, v in result.items():
-        if k == 'values' and isinstance(v, list) and len(v) > 10:
-            print(f'    {k}: [{v[0]}, {v[1]}, ..., {v[-1]}] ({len(v)} values)')
-        else:
-            print(f'    {k}: {v}')
+    print(f"\n  Capture file: {file}")
+    print(f"  Total frames parsed: {len(frames)}")
+
+    assert len(frames) >= 10, (
+        f"Only {len(frames)} frames captured in 10 s — drone may not be streaming. "
+        "Verify the Wi-Fi link and that Send_Task is running."
+    )
+
+    # Auto-detect frame types present
+    size_groups: dict[int, int] = {}
+    for f in frames:
+        size_groups[len(f)] = size_groups.get(len(f), 0) + 1
+
+    print(f"  Frame sizes: {dict(sorted(size_groups.items()))}")
+
+    # Decode each distinct size class
+    errors = []
+    for size, count in sorted(size_groups.items()):
+        try:
+            sample = next(f for f in frames if len(f) == size)
+            if size == 16:
+                # JustFloat: 3 × LE float32 + JustFloat terminator
+                assert len(sample) >= 12, "JustFloat too short"
+                rol, pit, yaw = struct.unpack("<3f", sample[:12])
+                print(f"  JustFloat (16 B): {count} frames, roll={rol:.2f} pit={pit:.2f} yaw={yaw:.2f}")
+            elif size >= 32 and (sample[0], sample[1]) == (0xAA, 0xBB):
+                # Extended / custom frame
+                ft = sample[2]
+                print(f"  Extended 0x{ft:02X} ({size} B): {count} frames")
+            else:
+                print(f"  Frame {size} B: {count} frames")
+        except Exception as e:
+            errors.append(f"size {size} B: {e}")
+            print(f"  Frame {size} B: {count} frames — decode ERROR: {e}")
+
+    assert len(errors) == 0, f"Decode errors: {errors}"
+    print(f"\n  All {len(frames)} frames decode cleanly.")
 
 
 

@@ -21,6 +21,7 @@ memory, and skill index) lives elsewhere. This copy is independent.
 | `docs/telemetry-protocol.md` | Wire-format reference for the subscribe protocol (frame types 0x08 / 0x09..0x0C, slot layout, command set). |
 | `docs/glossary.md` | Domain terms. |
 | `docs/skills/` | Reference docs for the four core capabilities (capture-multislot, micoair-connect, livewatch, probe). |
+| `docs/dashboard-platform/` | Long-lived firmware/dashboard platform specification, ordered session briefs, state, and handoff reports. |
 
 ## The four core capabilities
 

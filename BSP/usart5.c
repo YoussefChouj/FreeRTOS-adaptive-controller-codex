@@ -1,5 +1,8 @@
 #include "usart5.h"
 #include "subscribe.h"   /* SUBSCRIBE_CMD / SUBSCRIBE_STREAM_CMD payload shapes */
+#include "platform_registry.h"
+#include "command_protocol.h"
+#include "gs_command.h"
 
 /* Forward declaration: try_stage_subscribe_frame is defined below
  * handle_subscribe_frame but called from it. ARMCC C90 requires
@@ -133,7 +136,6 @@ void UART5_Configuration(void)
 		DMA_Cmd(DMA1_Stream7, DISABLE);
 }
 
-typedef struct { uint8_t id; uint8_t index; float value; } GS_Cmd_t;
 extern volatile GS_Cmd_t gs_cmd_queue[16];
 extern volatile uint8_t gs_cmd_head;
 extern volatile uint8_t gs_cmd_tail;
@@ -226,6 +228,10 @@ static uint8_t handle_subscribe_frame(const uint8_t* mailbox, uint16_t total,
 	else if (sub_cmd == SUBSCRIBE_CMD)
 	{
 		len_ok = ((payload_len % 6U) == 0U) ? 1U : 0U;
+	}
+	else if (PlatformRegistry_IsDiscoveryCommand(sub_cmd) != 0U)
+	{
+		len_ok = ((payload_len == 0U) && (mailbox[off + 5U] == 0U)) ? 1U : 0U;
 	}
 	else
 	{
@@ -354,6 +360,9 @@ static uint8_t handle_command_frame(const uint8_t* mailbox, uint16_t* offset)
 			gs_cmd_queue[gs_cmd_head].id    = cmd_id;
 			gs_cmd_queue[gs_cmd_head].index = index;
 			gs_cmd_queue[gs_cmd_head].value = val.f;
+			gs_cmd_queue[gs_cmd_head].transaction_id = 0U;
+			gs_cmd_queue[gs_cmd_head].transaction_flags = 0U;
+			gs_cmd_queue[gs_cmd_head].transaction_transport = 0U;
 			gs_cmd_head = next_head;
 		} else {
 			gs_cmd_drop_count++;
@@ -363,11 +372,61 @@ static uint8_t handle_command_frame(const uint8_t* mailbox, uint16_t* offset)
 	return 1U;
 }
 
+/* Parse the versioned S3 command envelope. Valid transactions are projected
+ * into the existing command queue; the transaction metadata travels with the
+ * record so Send_Task can emit correlated outcomes after dispatch. */
+static uint8_t handle_transaction_frame(const uint8_t* mailbox, uint16_t total,
+                                         uint16_t* offset)
+{
+	uint16_t off = *offset;
+	uint16_t payload_len;
+	uint16_t frame_len;
+	PlatformCommand_t command;
+	PlatformCommandStatus_e status;
+	union { float f; uint8_t b[4]; } val;
+	uint8_t next_head;
+	uint8_t i;
+
+	if ((mailbox[off] != PLATFORM_COMMAND_SYNC_HI) ||
+	    (mailbox[off + 1U] != PLATFORM_COMMAND_SYNC_LO)) {
+		return 0U;
+	}
+	if ((uint16_t)(total - off) < 10U) {
+		return 1U;
+	}
+	payload_len = (uint16_t)mailbox[off + 8U] |
+	              ((uint16_t)mailbox[off + 9U] << 8);
+	frame_len = (uint16_t)(11U + payload_len);
+	if ((frame_len < 15U) || ((uint16_t)(total - off) < frame_len)) {
+		return 1U;
+	}
+	status = PlatformCommand_Parse(&mailbox[off], frame_len, &command);
+	if ((status == PLATFORM_COMMAND_OK) && (command.payload_len == 4U)) {
+		for (i = 0U; i < 4U; i++) {
+			val.b[i] = command.payload[i];
+		}
+		next_head = (uint8_t)((gs_cmd_head + 1U) % 16U);
+		if (next_head != gs_cmd_tail) {
+			gs_cmd_queue[gs_cmd_head].id = command.command_id;
+			gs_cmd_queue[gs_cmd_head].index = command.index;
+			gs_cmd_queue[gs_cmd_head].value = val.f;
+			gs_cmd_queue[gs_cmd_head].transaction_id = command.transaction_id;
+			gs_cmd_queue[gs_cmd_head].transaction_flags = command.flags;
+			gs_cmd_queue[gs_cmd_head].transaction_transport = Subscribe_RxTransport;
+			gs_cmd_head = next_head;
+		} else {
+			gs_cmd_drop_count++;
+		}
+	}
+	*offset = (uint16_t)(off + frame_len);
+	return 0U;
+}
+
 static void ParseGsCommandFrames(const uint8_t* mailbox, uint16_t total,
                                   uint8_t allow_subscribe)
 {
 	uint16_t offset = 0;
-	while (offset + 9U <= total)
+	while (offset + 7U <= total)
 	{
 		if (allow_subscribe != 0U &&
 		    mailbox[offset] == 0xCC && mailbox[offset + 1U] == 0xDE)
@@ -376,6 +435,18 @@ static void ParseGsCommandFrames(const uint8_t* mailbox, uint16_t total,
 			{
 				break;
 			}
+		}
+		else if ((mailbox[offset] == PLATFORM_COMMAND_SYNC_HI) &&
+		         (mailbox[offset + 1U] == PLATFORM_COMMAND_SYNC_LO))
+		{
+			if (handle_transaction_frame(mailbox, total, &offset) != 0U)
+			{
+				break;
+			}
+		}
+		else if ((offset + 9U) > total)
+		{
+			break;
 		}
 		else if (handle_command_frame(mailbox, &offset) == 0U)
 		{

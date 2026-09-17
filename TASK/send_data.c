@@ -16,6 +16,9 @@
 #include "ekf.h"         /* Ekf9_t, ADR-0011 9-state EKF */
 #include "usart5.h"      /* UART5 extended-prefix subscribe hook (uart5_address_subscription_cmd) */
 #include "subscribe.h"   /* Subscribe_StreamTick / Subscribe_StreamOwnsUsart3 */
+#include "gs_command.h"
+#include "command_protocol.h"
+#include "rtos_observability.h"
 
 /* Body-frame gyroscope rates (rad/s) — needed for Frame C body-rate telemetry.
  * Declared as extern in bmi088_driver.h. */
@@ -631,6 +634,8 @@ extern float Lin_Acc_X_body, Lin_Acc_Y_body, Lin_Acc_Z_body;   /* gravity-remove
 
 void Send_Groundstation_Telemetry_UART4(void)
 {
+    PlatformObservability_Tick((uint16_t)((gs_cmd_head + 16U - gs_cmd_tail) % 16U),
+                               (uint16_t)(Usart3_Stream_Busy() != 0U));
     static uint8_t frame_counter = 0;
     uint16_t len = 0;
     uint8_t crc = 0;
@@ -1291,10 +1296,70 @@ void Send_Groundstation_Telemetry_UART4(void)
     }
 }
 
-typedef struct { uint8_t id; uint8_t index; float value; } GS_Cmd_t;
 extern volatile GS_Cmd_t gs_cmd_queue[16];
 extern volatile uint8_t gs_cmd_head;
 extern volatile uint8_t gs_cmd_tail;
+
+static uint8_t s_transaction_result_buf[64];
+static uint16_t s_transaction_history[16];
+static uint8_t s_transaction_history_head = 0U;
+
+static uint8_t TransactionWasSeen(uint16_t transaction_id)
+{
+    uint8_t i;
+    for (i = 0U; i < 16U; i++) {
+        if (s_transaction_history[i] == transaction_id) {
+            return 1U;
+        }
+    }
+    return 0U;
+}
+
+static void RememberTransaction(uint16_t transaction_id)
+{
+    s_transaction_history[s_transaction_history_head] = transaction_id;
+    s_transaction_history_head = (uint8_t)((s_transaction_history_head + 1U) % 16U);
+}
+
+static uint8_t CommandSafetyReject(uint8_t id)
+{
+    if ((id == 0U) || (id > 0x1EU)) {
+        return 4U; /* unknown command */
+    }
+    if ((id == 0x06U) && (DroneStatus.FlyMode != FlyMode_SDK)) {
+        return 6U; /* safety interlock */
+    }
+    if (((id == 0x0AU) || (id == 0x0BU) || (id == 0x0CU) ||
+         (id == 0x11U)) && (DroneStatus.FlyMode != FlyMode_SDK)) {
+        return 6U;
+    }
+    if ((id == 0x18U) &&
+        ((flight_phase != FLIGHT_PHASE_GROUND_IDLE) ||
+         (DroneStatus.ARM_Status != DisArmed))) {
+        return 6U;
+    }
+    return 0U;
+}
+
+static void SendTransactionResult(uint16_t transaction_id, uint8_t transport,
+                                  uint8_t outcome, uint8_t command_id,
+                                  uint8_t index, uint8_t reason,
+                                  const char* detail)
+{
+    uint16_t frame_len = 0U;
+    if ((transaction_id == 0U) ||
+        (PlatformCommand_BuildResult(transaction_id, outcome, command_id, index,
+                                     reason, detail, s_transaction_result_buf,
+                                     (uint16_t)sizeof(s_transaction_result_buf),
+                                     &frame_len) == 0U)) {
+        return;
+    }
+    if (transport == SUBSCRIBE_RX_TRANSPORT_USART3) {
+        (void)Usart3_Stream_TxSend(s_transaction_result_buf, frame_len);
+    } else {
+        Uart5_Subscribe_TxSend(s_transaction_result_buf, frame_len);
+    }
+}
 
 /* Stop TWC / sinusoid / circle, neutral sticks, clear GS mission trigger, dangerous stop */
 static void GroundStation_AbortAllPaths(void)
@@ -1316,8 +1381,31 @@ void Process_GroundStation_Command(void)
         uint8_t id = gs_cmd_queue[gs_cmd_tail].id;
         uint8_t idx = gs_cmd_queue[gs_cmd_tail].index;
         float val = gs_cmd_queue[gs_cmd_tail].value;
+        uint16_t transaction_id = gs_cmd_queue[gs_cmd_tail].transaction_id;
+        uint8_t transaction_flags = gs_cmd_queue[gs_cmd_tail].transaction_flags;
+        uint8_t transaction_transport = gs_cmd_queue[gs_cmd_tail].transaction_transport;
+        uint8_t reject_reason = CommandSafetyReject(id);
         
         gs_cmd_tail = (gs_cmd_tail + 1) % 16;
+
+        (void)transaction_flags;
+        if (transaction_id != 0U) {
+            if (TransactionWasSeen(transaction_id) != 0U) {
+                SendTransactionResult(transaction_id, transaction_transport,
+                                      PLATFORM_RESULT_APPLIED, id, idx, 0U,
+                                      "duplicate");
+                continue;
+            }
+            if (reject_reason != 0U) {
+                SendTransactionResult(transaction_id, transaction_transport,
+                                      PLATFORM_RESULT_REJECTED, id, idx,
+                                      reject_reason, "command rejected");
+                continue;
+            }
+            SendTransactionResult(transaction_id, transaction_transport,
+                                  PLATFORM_RESULT_ACK, id, idx, 0U, "queued");
+            RememberTransaction(transaction_id);
+        }
         
         // CMD 0x01 �� PID gain update
         // INDEX encodes axis+gain: (axis 0-6). (gain 0=Kp, 1=Ki, 2=Kd)
@@ -1795,6 +1883,12 @@ void Process_GroundStation_Command(void)
                 if (c > 4000.0f) c = 4000.0f;
                 motor_test_ccr = (uint16_t)(c + 0.5f);
             }
+        }
+
+        if (transaction_id != 0U) {
+            SendTransactionResult(transaction_id, transaction_transport,
+                                  PLATFORM_RESULT_APPLIED, id, idx, 0U,
+                                  "applied");
         }
     }
 }

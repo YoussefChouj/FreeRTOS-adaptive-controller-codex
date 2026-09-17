@@ -89,6 +89,16 @@ def test_restore_is_noop_without_snapshot(obj_dir: Path):
     assert any("no cache" in r for r in state.reasons)
 
 
+def test_restore_removes_new_identity_when_previous_artifacts_predate_stamping(obj_dir: Path):
+    (obj_dir / artifact_custody.IDENTITY_METADATA).write_text('{"words":[1,2,3,4]}')
+    artifact_custody.snapshot(obj_dir)
+    (obj_dir / artifact_custody.IDENTITY_METADATA).write_text('{"words":[5,6,7,8]}')
+    # Simulate a pre-stamping snapshot by removing the metadata from custody.
+    (artifact_custody.cache_dir(obj_dir) / artifact_custody.IDENTITY_METADATA).unlink()
+    artifact_custody.restore(obj_dir)
+    assert not (obj_dir / artifact_custody.IDENTITY_METADATA).exists()
+
+
 def test_restore_handles_partial_cache(obj_dir: Path):
     """If the cache is incomplete (a previous run crashed mid-restore), we
     restore what we have and complain about what we don't."""

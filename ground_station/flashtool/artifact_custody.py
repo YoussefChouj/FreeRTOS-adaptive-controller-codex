@@ -37,6 +37,11 @@ CACHE_DIRNAME = ".flashtool-cache"
 #: was programmed from, ``.map`` is what humans consult for crash triage.
 FLASHED_TRIPLE = ("JX_FLY.axf", "JX_FLY.hex", "JX_FLY.map")
 
+# Keil AXF files are not self-describing ELF artifacts. This optional sidecar
+# records the identity allocated for the AXF and must move with the flashed
+# triple when a build is abandoned.
+IDENTITY_METADATA = ".build_identity.json"
+
 
 @dataclass(frozen=True)
 class CustodyState:
@@ -71,6 +76,9 @@ def snapshot(obj_dir: str | Path) -> CustodyState:
             missing.append(f"{src} missing — nothing to snapshot")
             continue
         shutil.copy2(src, cache / name)
+    metadata = obj_dir / IDENTITY_METADATA
+    if metadata.exists():
+        shutil.copy2(metadata, cache / IDENTITY_METADATA)
     return CustodyState(
         snapped=True,
         triple_present=all((obj_dir / n).exists() for n in FLASHED_TRIPLE),
@@ -119,6 +127,14 @@ def restore(obj_dir: str | Path) -> CustodyState:
             continue
         shutil.copy2(cached, obj_dir / name)
         restored.append(name)
+    cached_metadata = cache / IDENTITY_METADATA
+    if cached_metadata.exists():
+        shutil.copy2(cached_metadata, obj_dir / IDENTITY_METADATA)
+    else:
+        # The previous flashed artifact may predate identity stamping. Remove
+        # any sidecar emitted by an abandoned build so it cannot be paired
+        # with the restored older AXF.
+        (obj_dir / IDENTITY_METADATA).unlink(missing_ok=True)
     shutil.rmtree(cache)
     if missing_in_cache:
         reasons.append(

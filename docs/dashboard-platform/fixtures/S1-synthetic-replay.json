@@ -1,0 +1,47 @@
+{
+  "fixture": "S1-synthetic-replay-v1",
+  "kind": "synthetic",
+  "generated_by": "ground_station.comm.frame_simulator.build_frame_a and ground_station.livewatch.transport.crc16_ccitt",
+  "hardware_capture": false,
+  "purpose": "Deterministic parser/replay smoke fixture for the S1 contract audit.",
+  "frames": [
+    {
+      "name": "legacy_frame_a_t0",
+      "direction": "fc_to_host",
+      "transport": "usart3",
+      "frame_type": "0x01",
+      "hex": "aa bb 01 00 29 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 01 02 00 00 01 01 00 01 0e 26"
+    },
+    {
+      "name": "command_mode_subscribe_only",
+      "direction": "host_to_fc",
+      "transport": "usart3",
+      "frame_type": "0xccdd",
+      "command_id": "0x0f",
+      "index": 102,
+      "value": 0.0,
+      "classification": "unsafe_without_ack",
+      "hex": "cc dd 0f 66 00 00 00 00 69"
+    },
+    {
+      "name": "subscribe_data_slot0_seq0",
+      "direction": "fc_to_host",
+      "transport": "usart3",
+      "frame_type": "0x09",
+      "sequence": 0,
+      "timestamp_ms": 1234,
+      "values": [1.25, -2.5],
+      "hex": "aa bb 09 00 0c 00 d2 04 00 00 00 00 a0 3f 00 00 20 c0 ef e6"
+    },
+    {
+      "name": "subscribe_data_slot0_seq1",
+      "direction": "fc_to_host",
+      "transport": "usart3",
+      "frame_type": "0x09",
+      "sequence": 1,
+      "timestamp_ms": 1239,
+      "values": [1.5, -2.25],
+      "hex": "aa bb 09 00 0c 01 d7 04 00 00 00 00 c0 3f 00 00 10 c0 fe a9"
+    }
+  ]
+}

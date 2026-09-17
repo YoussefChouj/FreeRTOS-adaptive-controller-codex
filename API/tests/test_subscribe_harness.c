@@ -20,6 +20,7 @@
 uint8_t  UA5RxSubscribeBuf[USART5_SUBSCRIBE_RX_LEN];
 uint16_t UA5RxSubscribeLen;
 volatile uint8_t UA5RxSubscribePending;
+volatile uint8_t Subscribe_RxTransport = 0U;  /* default = UART5 */
 
 /* --- simulated clock ---------------------------------------------------- */
 /* The firmware stamps xTaskGetTickCount() into every data frame. Driving it
@@ -68,6 +69,15 @@ static void capture(const uint8_t* buf, uint16_t len)
 void Uart5_Subscribe_TxSend(const uint8_t* b, uint16_t l) { capture(b, l); }
 uint8_t Usart3_Stream_Busy(void) { return usart3_busy; }
 uint8_t Usart3_Stream_TxSend(const uint8_t* b, uint16_t l) { capture(b, l); return 1U; }
+
+/* Stubs for functions in platform_registry.c that subscribe.c calls but the
+ * harness never triggers (they fire on 0x22/0x23 commands only). They must
+ * exist at link time even though they are never invoked. */
+uint8_t PlatformRegistry_BuildDiscovery(uint8_t* out, uint16_t out_cap,
+                                        uint16_t* out_len) { (void)out; (void)out_cap; (void)out_len; return 0U; }
+uint8_t PlatformRegistry_BuildDigest(uint8_t* out, uint16_t out_cap,
+                                      uint16_t* out_len) { (void)out; (void)out_cap; (void)out_len; return 0U; }
+void PlatformRegistry_Init(void) {}
 
 /* --- test scaffolding --------------------------------------------------- */
 static int fails, checks;
@@ -168,12 +178,12 @@ int main(void)
     /* ---- 3. budget is summed across slots -------------------------------- */
     stop_all();
     a[0] = (uint32_t)(uintptr_t)g_theta; s[0] = 4; c[0] = 6;
-    subscribe(0, 2, SUBSCRIBE_TRANSPORT_UART5, a, s, c, 1);
-    okv("36 B at divider 2 = 1800 B/s fits UART5's 2304 B/s alone",
+    subscribe(0, 4, SUBSCRIBE_TRANSPORT_UART5, a, s, c, 1);
+    okv("36 B at divider 4 = 1800 B/s fits UART5's 2304 B/s alone",
         cap_type[0], SUBSCRIBE_FRAME_TYPE_SCHEMA);
     cap_n = 0;
     for (i = 1; i < (int)SUBSCRIBE_MAX_SLOTS; i++) {
-        subscribe((uint8_t)i, 2, SUBSCRIBE_TRANSPORT_UART5, a, s, c, 1);
+        subscribe((uint8_t)i, 4, SUBSCRIBE_TRANSPORT_UART5, a, s, c, 1);
     }
     ok("a second identical slot trips the SUMMED budget (3600 > 2304)",
        count_type(SUBSCRIBE_FRAME_TYPE_ERROR) > 0);

@@ -46,6 +46,7 @@ def test_firmware_c_passes_its_own_harness():
                 gcc, "-m32", "-std=c99", "-Wall", "-Wextra",
                 "-Wno-unused-parameter", "-Wno-type-limits",
                 "-I", str(STUBS), "-I", str(ROOT / "API"),
+                "-I", str(ROOT / "firmware"),
                 # Widen the allowlist so the harness's own memory validates and
                 # every subscription goes through the REAL parser. The firmware
                 # build never defines these -- see the guard comment in

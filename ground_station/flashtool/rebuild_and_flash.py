@@ -271,14 +271,47 @@ def arm_status_from_telemetry(port: str, seconds: float = 2.0):
 
 
 def flash(attempts: int = 3, timeout: float = 600):
-    """UV4 -f, retrying transient RDDI-DAP write failures. -> (ok, text)."""
+    """UV4 -f, retrying writes and forcing a post-download run state."""
+    def reset_and_run() -> str:
+        from pyocd.core.helpers import ConnectHelper
+        from pyocd.core.target import Target
+        session = ConnectHelper.session_with_chosen_probe(options={
+            "target_override": "cortex_m",
+            "connect_mode": "attach",
+            "resume_on_disconnect": True,
+        })
+        if session is None:
+            raise RuntimeError("no CMSIS-DAP probe enumerated after download")
+        try:
+            session.open()
+            session.target.reset(Target.ResetType.SYSRESETREQ)
+            time.sleep(0.5)
+            state = str(session.target.get_state())
+            if "RUNNING" not in state.upper():
+                session.target.resume()
+                time.sleep(0.2)
+                state = str(session.target.get_state())
+            if "RUNNING" not in state.upper():
+                raise RuntimeError("core state after reset is %s" % state)
+            return state
+        finally:
+            session.close()
+
     text = ""
     for i in range(1, attempts + 1):
         flash_log = sf.LOG_DIR / ("reflash%d.log" % i)
         rc, text = sf._run_uv4("-f", "reflash%d.log" % i, timeout)
         if rc < 2 and "Failed" not in text:
-            _say("flash succeeded on attempt %d -- log: %s" % (i, flash_log))
-            return True, text
+            try:
+                state = reset_and_run()
+            except Exception as exc:
+                _say("post-download reset failed on attempt %d: %s" % (i, exc))
+                text += "\npost-download reset failed: %s" % exc
+                time.sleep(2)
+                continue
+            _say("flash succeeded on attempt %d -- log: %s (post-download SYSRESETREQ: %s)" %
+                 (i, flash_log, state))
+            return True, text + "\npost-download SYSRESETREQ: %s" % state
         _say("attempt %d failed (UV4 exit %d) -- log: %s; retrying" % (i, rc, flash_log))
         time.sleep(2)
     return False, text

@@ -86,27 +86,31 @@ manifests:
       UA3TxFrames. Runs at 10 Hz. This manifest is the host mirror of
       ``API/subscribe.c Subscribe_BootDefault()`` -- add or remove vars there
       and update ``ground_station/comm/boot_default_layout.py`` in lockstep.
+      NOTE: Field names updated to match current DWARF (2026-09-17).
+      - imu_data.acc_x/y/z -> imu_data.a_acc[0/1/2] (struct uses float[3] array)
+      - imu_data.gyr_x/y/z -> removed (no gyro fields in _imu_st; gyro vars are
+        standalone globals gyro_x/y/z at 0x20000154/68/7C)
+      - DroneStatus.vbat -> real_voltage (standalone var; DroneStatus has no vbat)
+      - DroneStatus.cpu_temp -> removed (no MCU temp in firmware; Real_Temp is
+        BMI088 sensor temp, not core temp)
+      - system_monitor.cpu_usage -> stabilizerTask_fps (per-task fps is the closest)
+      - system_monitor.tick_1k -> stabilizerTask_cnt (1ms tick counter)
+      - system_monitor.tick_1s -> System_cnt (1s counter)
+      - system_monitor.mem_usage/send_fps/recv_fps -> removed (no equivalents)
     hz: 10
     vars:
       - imu_data.rol
       - imu_data.pit
       - imu_data.yaw
-      - imu_data.acc_x
-      - imu_data.acc_y
-      - imu_data.acc_z
-      - imu_data.gyr_x
-      - imu_data.gyr_y
-      - imu_data.gyr_z
+      - imu_data.a_acc[0]
+      - imu_data.a_acc[1]
+      - imu_data.a_acc[2]
       - DroneStatus.ARM_Status
       - DroneStatus.FlyMode
-      - DroneStatus.vbat
-      - DroneStatus.cpu_temp
-      - system_monitor.cpu_usage
-      - system_monitor.tick_1k
-      - system_monitor.tick_1s
-      - system_monitor.mem_usage
-      - system_monitor.send_fps
-      - system_monitor.recv_fps
+      - real_voltage
+      - system_monitor.stabilizerTask_fps
+      - system_monitor.stabilizerTask_cnt
+      - system_monitor.System_cnt
       - UA3RxFrameCnt
       - UA3TxFrames
 
@@ -889,7 +893,13 @@ manifests:
       own (a multi-slot preset can put it on slot 0 without needing a
       separate `sync` manifest).
       Size: 21 vars * 4 B = 84 B payload + 12 B overhead = 96 B/frame.
-    hz: 50     # host hz=50 -> divider=4 -> measured 20 Hz in MIXED mode
+
+      NOTE: This manifest is primarily designed for the USART3 wire path (WiFi
+      subscribe). Its SWD feasibility ceiling is ~28 Hz (SWD_COST model). The
+      effective rate on MIXED-mode firmware is 80/4=20 Hz; on SUBSCRIBE_ONLY
+      firmware (200 Hz) it would be 200/4=50 Hz. Set hz to match your firmware
+      mode's Send_Task cadence.
+    hz: 20
     vars:
       # Attitude (3 vars) -- dashboard attitude display + Euler sidebar
       - imu_data.rol

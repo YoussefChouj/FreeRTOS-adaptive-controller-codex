@@ -20,7 +20,7 @@
           <Cpu>IRAM(0x20000000,0x00020000) IRAM2(0x10000000,0x00010000) IROM(0x08000000,0x00100000) CPUTYPE("Cortex-M4") FPU2 CLOCK(12000000) ELITTLE</Cpu>
           <FlashUtilSpec></FlashUtilSpec>
           <StartupFile></StartupFile>
-          <FlashDriverDll>UL2CM3(-S0 -C0 -P0 -FD20000000 -FC1000 -FN1 -FF0STM32F4xx_1024 -FS08000000 -FL0100000 -FP0($$Device:STM32F407ZGTx$CMSIS\Flash\STM32F4xx_1024.FLM))</FlashDriverDll>
+          <FlashDriverDll>UL2CM3(-O14 -S0 -C0 -P0 -FD20000000 -FC1000 -FN1 -FF0STM32F4xx_1024 -FS08000000 -FL0100000 -FP0($$Device:STM32F407ZGTx$CMSIS\Flash\STM32F4xx_1024.FLM))</FlashDriverDll>
           <DeviceId>0</DeviceId>
           <RegisterFile>$$Device:STM32F407ZGTx$Drivers\CMSIS\Device\ST\STM32F4xx\Include\stm32f4xx.h</RegisterFile>
           <MemoryEnv></MemoryEnv>
@@ -131,13 +131,13 @@
             <UseTargetDll>1</UseTargetDll>
             <UseExternalTool>0</UseExternalTool>
             <RunIndependent>0</RunIndependent>
-            <UpdateFlashBeforeDebugging>0</UpdateFlashBeforeDebugging>
+            <UpdateFlashBeforeDebugging>1</UpdateFlashBeforeDebugging>
             <Capability>1</Capability>
             <DriverSelection>4096</DriverSelection>
           </Flash1>
           <bUseTDR>1</bUseTDR>
           <Flash2>BIN\UL2CM3.DLL</Flash2>
-          <Flash3>"" ()</Flash3>
+          <Flash3></Flash3>
           <Flash4></Flash4>
           <pFcarmOut></pFcarmOut>
           <pFcarmGrp></pFcarmGrp>
@@ -643,6 +643,33 @@
         </Group>
         <Group>
           <GroupName>firmware</GroupName>
+          <Files>
+            <File>
+              <FileName>build_identity.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\firmware\build_identity.c</FilePath>
+            </File>
+            <File>
+              <FileName>command_protocol.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\firmware\command_protocol.c</FilePath>
+            </File>
+            <File>
+              <FileName>platform_registry.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\firmware\platform_registry.c</FilePath>
+            </File>
+            <File>
+              <FileName>platform_registry_gen.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\firmware\platform_registry_gen.c</FilePath>
+            </File>
+            <File>
+              <FileName>rtos_observability.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\firmware\rtos_observability.c</FilePath>
+            </File>
+          </Files>
         </Group>
         <Group>
           <GroupName>GOLBAL_FILE</GroupName>

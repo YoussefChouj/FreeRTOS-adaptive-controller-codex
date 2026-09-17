@@ -69,6 +69,7 @@ from ground_station.livewatch.stream import (
     StreamSchema,
     build_stream_request,
     pop_frame,
+    MultiStreamDecoder,
 )
 from ground_station.livewatch.symbols import SymbolResolver
 from ground_station.comm.manifest_layer import resolve_ranges_from_names

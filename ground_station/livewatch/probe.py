@@ -473,14 +473,23 @@ class ProbeSession:
             mode: ``system`` (default), ``core`` (core-only), ``hw`` (hardware assertion).
         """
         try:
-            self._target.reset(mode=mode)
+            from pyocd.core.target import Target
+            reset_types = {
+                "system": Target.ResetType.SYSRESETREQ,
+                "core": Target.ResetType.CORE,
+                "hw": Target.ResetType.HARDWARE,
+            }
+            if mode not in reset_types:
+                raise ValueError(f"unknown reset mode {mode!r}")
+            self._target.reset(reset_types[mode])
         except Exception as exc:
             raise ProbeError(f"reset({mode}) failed: {exc}") from exc
 
     def reset_halt(self):
         """Reset and halt immediately after reset."""
         try:
-            self._target.reset(reset_type="sysresetreq")
+            from pyocd.core.target import Target
+            self._target.reset(Target.ResetType.SYSRESETREQ)
             self._target.halt()
         except Exception as exc:
             raise ProbeError(f"reset_halt failed: {exc}") from exc

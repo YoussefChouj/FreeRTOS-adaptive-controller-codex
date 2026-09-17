@@ -1,0 +1,49 @@
+{
+  "format": "uav-typed-telemetry",
+  "format_version": 1,
+  "registry_version": 1,
+  "schema_version": 1,
+  "registry_crc32": "0x9F32E2EA",
+  "streams": [
+    {
+      "id": 1,
+      "name": "legacy_status",
+      "type": "frame_0x01",
+      "unit": "mixed",
+      "owner": "telemetry",
+      "rate_hz": 100,
+      "version": 14,
+      "dependencies": 0
+    },
+    {
+      "id": 2,
+      "name": "legacy_adaptive",
+      "type": "frame_0x02",
+      "unit": "mixed",
+      "owner": "telemetry",
+      "rate_hz": 20,
+      "version": 14,
+      "dependencies": 0
+    },
+    {
+      "id": 6,
+      "name": "extended_attitude",
+      "type": "frame_0x06",
+      "unit": "mixed",
+      "owner": "telemetry",
+      "rate_hz": 50,
+      "version": 14,
+      "dependencies": 0
+    },
+    {
+      "id": 9,
+      "name": "typed_stream",
+      "type": "frame_0x09",
+      "unit": "mixed",
+      "owner": "subscribe",
+      "rate_hz": 80,
+      "version": 1,
+      "dependencies": 2
+    }
+  ]
+}
