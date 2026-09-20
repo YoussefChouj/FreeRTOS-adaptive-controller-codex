@@ -630,6 +630,33 @@ def test_http_api_contract_endpoint():
         api.stop()
 
 
+def test_http_api_manifest_endpoint():
+    """GET /api/manifest returns the full system capability manifest."""
+    service = service_fixture()
+    service.start()
+    api = ApiServer(service)
+    api.start()
+    try:
+        base = "http://127.0.0.1:%d" % api.address[1]
+        status, body = _get_json(base + "/api/manifest")
+        assert status == 200
+        assert body["manifest_version"] == "v1"
+        assert "elf_identity" in body
+        assert body["elf_identity"]["exists"] is True
+        assert "firmware_symbols" in body
+        assert body["firmware_symbols"]["count"] > 300
+        assert "commands" in body
+        assert "0x01" in body["commands"]["commands"]
+        assert "telemetry" in body
+        assert body["telemetry"]["verified_published_keys_total"] > 100
+        assert "panels" in body
+        assert len(body["panels"]) == 17
+        assert "routes" in body
+        assert "/api/manifest" in body["routes"]["GET"]
+    finally:
+        api.stop()
+
+
 def test_http_api_view_model_endpoint():
     """GET /api/view-model returns a rich state snapshot with slot freshness."""
     service = service_fixture()

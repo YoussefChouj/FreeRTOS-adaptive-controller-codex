@@ -6,18 +6,21 @@ This guide is for agents (LLM or scripted) that inspect, test or extend the dash
 
 - The service (`python -m ground_station.service`) listens on **`http://127.0.0.1:8081`** by default.
 - **Set `NO_PROXY=127.0.0.1,localhost`.** The workstation runs a Clash proxy, and without this, local requests go to the proxy and fail.
-- **A live service is connected to the drone. Never POST to it.** Every POST route can reach the drone or the bus: `/commands`, `/subscribe`, `/experiments`, `/replay/<id>/play` and `/sessions/<id>/export`. Validate POST routes with unit tests that use mocked gateways and bridges (`ground_station/service/tests/`).
+- **A live service is connected to the drone. Never POST to it.** POST routes can reach the drone or the telemetry bus: `/commands`, `/subscribe`, `/experiments`, `/experiments/<name>/abort`, `/replay/<id>/play` and `/sessions/<id>/export` (and `/subscribe/preview` for pre-flight validation). Validate POST routes with unit tests that use mocked gateways and bridges (`ground_station/service/tests/`).
 - GET routes are read-only and safe to call against the live service.
 
 ## 2. Discover before you guess
 
 | Route | What it gives you |
 |---|---|
+| `GET /api/manifest` | **Single machine-readable capability manifest** describing the whole system: DWARF firmware symbols, commands, published telemetry keys, panels, and routes. Recorded with ELF identity and explicit staleness caveat. |
 | `GET /api/routes` | Every GET/POST route with a one-line description or its query params, plus the UI selector scheme. **Machine-readable source of truth.** |
+| `GET /api/symbols` | DWARF symbol names from the firmware ELF (`?prefix=N&parent=P&limit=N`; default/max limit 100/1000). Names only; no addresses. |
 | `GET /api/view-model` | The state the shell renders: streams, keys, freshness. Cheap by default. **`?stats=1` adds `session_stats` (per-stream sample counts and source rate) by scanning the whole session — on a long session that call takes tens of seconds.** Only the Firmware Resource Map's Refresh button asks for it. |
 | `GET /api/contract` | The firmware contract: schema ID, command IDs and telemetry layout (`ground_station.platform.firmware_contract`). |
 | `GET /api/diagnostics/bundle` | Recent frames, commands and faults, for bug reports. There is no bare `/api/diagnostics`; it returns 404 by design. |
 | `GET /api/actions`, `/api/events`, `/api/faults` | Action journal, event log and fault log. |
+| `GET /health`, `/health/slots`, `/slots`, `/state` | Service liveness, slot statistics, active subscriptions, and full state snapshot. |
 
 Query strings are parsed with `urlsplit`, so `/sessions?limit=5` routes the same as `/sessions`.
 
@@ -36,14 +39,47 @@ The cap is not cosmetic. Before it existed, one live flight session answered `?l
 | Selector | Element |
 |---|---|
 | `[data-testid="tab-<workspace>"]` | Workspace tab. `<workspace>` is lowercase, e.g. `tab-replay` or `tab-diagnostics`. |
-| `[data-testid="panel-<slug>"]` | Plugin card, e.g. `panel-session-replay`. |
+| `[data-testid="panel-<slug>"]` | Plugin card, e.g. `panel-session-replay` or `panel-system-overview`. |
 | `#plugin-body-<slug>` | The plugin's content root. |
 | `[data-testid="session-id"]` | Session id in the replay detail view. |
 | `[data-testid="replay-play"]` | "Play to Live View" button. **It POSTs, so do not click it against a live service.** |
 
 The same list is served at `GET /api/routes` → `ui_testids` / `ui_ids`.
 
-## 4. Smoke checks
+## 4. How does an agent drive this dashboard programmatically?
+
+Agents frequently ask how to automate interactions with this dashboard. There are two distinct mechanisms with strict safety boundaries:
+
+### 1. `journey.py` is GET-only with a click whitelist by design
+
+`ground_station/service/journey.py` provides a declarative headless journey runner for smoke-testing the live shell.
+**Its safety restriction is deliberate and must never be widened:**
+- **No POST requests:** The only HTTP call `journey.py` makes is `GET /api/diagnostics/bundle`. It never issues POSTs to `/commands`, `/subscribe`, or `/experiments`.
+- **Strict click whitelist:** The runner refuses any click selector not matching the whitelist:
+  - Workspace tabs: `.ws-tab` or `[data-testid="tab-..."]`
+  - Replay session rows: `.rp-session-item`
+- **Rejection of action targets:** Clicks on command buttons, arm switches, parameter adjustment inputs, or export buttons are rejected with an error.
+
+> [!IMPORTANT]
+> **Do not widen the journey runner or add a POST path.** The live dashboard service binds hardware transports (UDP 14550 / USART3) communicating directly with a powered aircraft. Allowing programmatic button clicks or arbitrary POSTs through a browser runner creates unacceptable risk of accidental motor spin, parameter corruption, or flight abort during testing.
+
+### 2. Offline testing via DOM harnesses (the recommended approach)
+
+When an agent needs to test or verify panel logic, variable rendering, user interaction, or error handling, **it should assert against panel state offline using a DOM harness**, without a running browser or live service.
+
+This is the established pattern across the test suite:
+- `ground_station/service/tests/time_series_panel_harness.js` (Time Series panel)
+- `ground_station/service/tests/overview_panel_harness.js` (System Overview panel)
+- `ground_station/service/tests/motor_bench_panel_harness.js` (Motor Bench panel)
+
+A DOM harness runs under Node.js (`node <harness>.js`) or pytest (`test_*_panel.py`):
+1. Instantiates a minimal fake DOM (`Element`, `document`, `window`).
+2. Stubs the `shellApi` (`getState()`, `subscribe()`, `submitCommand()`).
+3. Executes the panel's plugin script in a sandboxed VM context.
+4. Feeds realistic or edge-case telemetry dictionaries into the panel's `render()` / `onState()` callbacks.
+5. Directly inspects and asserts element text, styles, classes, and fallback badges (e.g. verifying "NOT PUBLISHED" or "NO DATA" states).
+
+## 5. Smoke checks
 
 ```bash
 # Browser walk: all tabs, screenshots, console errors, HTTP >= 400, NaN/undefined text.
@@ -52,19 +88,19 @@ NO_PROXY=127.0.0.1,localhost python -m ground_station.service.browser_smoke \
     --out logs/smoke --no-replay-detail
 # Exit code 0 means no console errors and no bad responses.
 
-# Unit tests (mocked; safe)
-python -m pytest -q -p no:cacheprovider ground_station/service/tests ground_station/comm/tests
+# Unit tests (mocked; safe; run through win.sh for Windows Python environment)
+.agent-ops/win.sh "pytest -q ground_station/service/tests ground_station/platform/tests ground_station/comm/tests"
 ```
 
 Requirements: Playwright (`pip install playwright`) and a local Chrome install (`channel="chrome"`).
 
 Pass `--no-replay-detail` against a live service with a long session: without it the walk opens one session row, and that record fetch is the heaviest request the shell makes. `--settle` (default 4.0 s) is the dwell per tab; raise it if panels are still loading when the screenshot is taken.
 
-Last verified walk (2026-09-20) — 10 tabs, `nan=0 undef=0` everywhere, **ERRORS 0 / BAD RESPONSES 0**:
+Last verified walk — 10 tabs, `nan=0 undef=0` everywhere, **ERRORS 0 / BAD RESPONSES 0**:
 
 | Tab | Panels |
 |---|---|
-| Overview | `panel-flight-status`, `panel-safety-limits`, `panel-time-series` |
+| Overview | `panel-system-overview`, `panel-flight-status`, `panel-safety-limits`, `panel-time-series` |
 | Control | `panel-flight-status`, `panel-safety-limits`, `panel-command-panel` |
 | Estimator | `panel-ekf-estimator` |
 | MRAC | `panel-mrac-controller` |
@@ -87,7 +123,7 @@ api = ApiServer(service, host="127.0.0.1", port=0,
 
 `make_handler(service, hub=None, static_root=None, experiment_runtime=None)` is the handler factory behind it.
 
-## 5. Behaviours worth knowing
+## 6. Behaviours worth knowing
 
 | Capability | Behaviour |
 |---|---|
@@ -100,18 +136,22 @@ api = ApiServer(service, host="127.0.0.1", port=0,
 | **Action journal ordering** | `/api/view-model` returns the **10 most recent** actions, newest first (`list(reversed(service.action_journal()[-10:]))`). `GET /api/actions` returns the journal in its natural oldest-first order. |
 | **Zero is not missing** | View-model stats use `x if x is not None else None`, never a truthiness test — a legitimately zero rate or count must render as `0`, not as `—`. |
 
-## 6. Where the code is
+## 7. Where the code is
 
 | Path | Role |
 |---|---|
+| `ground_station/platform/capability_manifest.py` | Generator for the system capability manifest (`docs/dashboard-platform/capability_manifest.json`). |
+| `docs/dashboard-platform/capability_manifest.json` | Generated machine-readable system capability manifest. |
+| `ground_station/platform/firmware_contract.py` | `COMMAND_TABLE`, subscribe limits, and protocol contracts. |
 | `ground_station/service/api.py` | HTTP routes; `_ROUTE_MAP` feeds `/api/routes`. **Update it when you add a route.** `test_http_api_routes_endpoint` GETs every parameterless route in it. |
+| `ground_station/service/journey.py` | Headless, read-only journey runner (GET-only; tab/replay click whitelist). |
 | `ground_station/service/core.py` | Service state, arm gate, command lifecycle, slot freshness. |
 | `ground_station/service/storage.py` | SQLite session store. `iter_records(session_id, limit=None, offset=0)` pages in SQL. |
 | `ground_station/service/browser_smoke.py` | The browser smoke walk. |
-| `ground_station/comm/wifi_bridge.py` | UDP bridge and subscribe protocol. |
+| `ground_station/comm/wifi_bridge.py` | UDP bridge, telemetry decoders, and subscribe protocol. |
 | `docs/dashboard-platform/shell/` | Shell (`index.html`) and plugins (`plugins/*.js`). See [shell/plugin-api.md](shell/plugin-api.md). |
 
-## 7. The service owns the WiFi port — stream-log cannot run beside it
+## 8. The service owns the WiFi port — stream-log cannot run beside it
 
 A running service holds **TCP 8081 and UDP 14550** in one process:
 

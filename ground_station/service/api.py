@@ -153,6 +153,7 @@ _ROUTE_MAP = {
         "/api/actions": "action journal",
         "/api/symbols": "DWARF symbol names from the firmware ELF "
                         "(?prefix=N&parent=P&limit=N; default/max limit 100/1000)",
+        "/api/manifest": "full system capability manifest (symbols, commands, telemetry, panels, routes)",
         "/api/routes": "this map",
         "/replay/<id>": "stored records for replay "
                         "(?limit=N&offset=N, default 1000, limit=0 = all)",
@@ -1053,6 +1054,22 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     qs.get("limit", [SYMBOLS_DEFAULT_LIMIT])[0],
                 )
                 self._json(status, payload)
+            # GET /api/manifest — full system capability manifest
+            elif route == "/api/manifest":
+                manifest_path = Path(__file__).parents[2] / "docs" / "dashboard-platform" / "capability_manifest.json"
+                if manifest_path.exists():
+                    try:
+                        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+                        self._json(200, payload)
+                    except Exception as exc:
+                        self._json(500, {"error": f"failed to load capability manifest: {exc}"})
+                else:
+                    try:
+                        from ground_station.platform.capability_manifest import generate_manifest
+                        payload = generate_manifest()
+                        self._json(200, payload)
+                    except Exception as exc:
+                        self._json(503, {"error": f"capability manifest unavailable: {exc}"})
             # GET /api/routes — route + UI selector map for agents
             elif route == "/api/routes":
                 self._json(200, _ROUTE_MAP)
