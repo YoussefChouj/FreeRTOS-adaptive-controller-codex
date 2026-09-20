@@ -288,3 +288,43 @@ However, key firmware operational characteristics and internal contracts remain 
   *Pre-flight Audit (findings F1 and F2):* Optical flow quality was 0 on the bench, causing shadow EKF velocity to freeze at an invalid +57 m/s reading without any ground-station warning flag.
 - **Smallest change to close:**
   Document sensor health gating thresholds in `ground_station/platform/firmware_contract.py` (e.g. `SENSOR_HEALTH_GATES = {"optical_flow": {"min_quality": 50, "fallback_mode": "attitude"}}`) and export them in `capability_manifest.json`.
+
+---
+
+## 10. Environment traps that cost real work
+
+Four environment traps on this workstation create plausible false failures and waste investigation time:
+
+### 1. Clash proxy on port 7897 intercepts localhost (flat HTTP 502)
+- **Symptom:** `curl http://127.0.0.1:8081/api/routes` (or calling via Windows tools like `curl.exe`) returns `HTTP/1.1 502 Bad Gateway` with `Content-Length: 0` and `Proxy-Connection: keep-alive`, mimicking a dead or broken service.
+- **Cause:** A Clash-style proxy runs on port 7897 (accessible on Windows at `127.0.0.1:7897` and from WSL at `172.18.48.1:7897`). If `no_proxy` is unset or omitted in Windows tooling, requests to localhost get forwarded to the proxy, which fails to route to the dashboard service.
+- **Fix:** Pass `--noproxy '*'` explicitly to curl commands, or ensure `NO_PROXY=127.0.0.1,localhost` is exported:
+  ```bash
+  curl --noproxy '*' http://127.0.0.1:8081/api/routes
+  ```
+
+### 2. UDP 14550 is single-bind ([WinError 10048])
+- **Symptom:** Running `python -m ground_station.livewatch read --transport wifi ...` or `stream_log` fails immediately with:
+  `usart3-read: cannot bind UDP 14550 ([WinError 10048] Only one usage of each socket address (protocol/network address/port) is normally permitted) -- is another process holding it?`
+- **Cause:** UDP socket binding on port 14550 is exclusive under Windows. While the dashboard service is active, its `WifiBridge` owns UDP 14550. This is port contention between tools, not a hardware fault or dropped connection.
+- **Fix:** Do not contend for UDP 14550 while the service is running. Query the running service's GET endpoints instead (`GET /api/view-model`, `GET /state`, `GET /sessions/<id>/records`), or use SWD debug probe reads (`--transport swd`).
+
+### 3. `pgrep` without `-f` reports every live worker as dead
+- **Symptom:** `pgrep run-worker` returns exit code 1 with no output, leading an agent to conclude that no workers are active even when multiple workers are running.
+- **Cause:** Workers are invoked as `bash` scripts (e.g. `bash .agent-ops/run-worker.sh ...`). Without `-f`, `pgrep` matches only against the process comm name (`bash`), not the script path in command line arguments.
+- **Fix:** Use `pgrep -cf run-worker` to match against the full command line and return a count. Avoid `pgrep -af` because `-af` dumps the entire command line—including each worker's prepended spec—which will flood your context window.
+  ```bash
+  pgrep -cf run-worker
+  ```
+
+### 4. Node on the WSL PATH is a broken npm shim
+- **Symptom:** Invoking `node --version` fails with exit code 127:
+  `/mnt/c/Users/Acer/AppData/Roaming/npm/node_modules/node/bin/node: 1: This: not found`
+- **Cause:** The `node` entry in the default WSL PATH points to `/mnt/c/Users/Acer/AppData/Roaming/npm/node`, a Windows npm wrapper whose target file (`node_modules/node/bin/node`) contains the placeholder text `"This file intentionally left blank"`.
+- **Fix:** Use the working Windows Node binary at `/mnt/c/Program Files/nodejs/node.exe`. When running directly from WSL bash, redirect stdin (e.g. `< /dev/null`) or run via `.agent-ops/win.sh` to avoid terminal handle hangs:
+  ```bash
+  "/mnt/c/Program Files/nodejs/node.exe" --version < /dev/null
+  # Or via win.sh:
+  .agent-ops/win.sh "& 'C:\Program Files\nodejs\node.exe' --version"
+  ```
+
