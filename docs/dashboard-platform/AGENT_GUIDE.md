@@ -170,3 +170,121 @@ Probe reads have no such conflict — they go over SWD and work with the service
 python -m ground_station.livewatch read --transport swd <symbol>
 python -m ground_station.livewatch verify   # always first: catches a stale ELF
 ```
+
+## 9. What an agent still cannot learn without reading C source (Ranked Gap List)
+
+The capability manifest (`GET /api/manifest` / `docs/dashboard-platform/capability_manifest.json`) and this guide provide a queryable ground truth covering firmware symbols (DWARF names), command tables, verified published telemetry keys, dashboard panels, and HTTP API routes. This eliminates the need for agents to start cold and guess surface contracts.
+
+However, key firmware operational characteristics and internal contracts remain visible only by inspecting C source code. Below is the ranked list of remaining gaps, ordered by how often they bite and the cost of the resulting failure, anchored in real project incidents.
+
+### 9.1 Retrospective on Known Project Failures
+
+| Known Project Failure | Status Under Manifest & Guide | Where Solved / Why Open |
+|---|---|---|
+| **Panels shipped bound to telemetry keys nobody published** (e.g. `ano_of.*`, `ahrs.rol`, `ekf.pos_x`, `status.status_bits`) | **CLOSED** | `manifest.telemetry.verified_published_keys` provides an explicit, machine-derived whitelist of all 114 keys published by `wifi_bridge.py` frame decoders. `manifest.telemetry.unverified_keys_in_panels` catalogs historical phantom keys and the reason for their absence. Section 2 guides agents to query `/api/manifest`. |
+| **Worker fabricated function (`generateDemoPoint` in `path-panel.js`) that reached a spec** | **NOT CLOSED by manifest; MITIGATED by test harness design & process** | The manifest indexes panel files, slugs, workspaces, gates, and consumed keys (`manifest.panels[]`), but does **not** index JavaScript functions or AST exports. An agent cannot query `/api/manifest` to verify internal panel functions. Mitigated by Section 4.2 (mandatory offline DOM harness testing; banning synthetic data in production plugins) and `.agent-ops/STANDING-RULES.md` (mandating verification of cited `file:line` before adding to specs). |
+| **Symbol names guessed wrong** (`mrac_state.What` vs `Theta`/`Whatf`; `rpm[4]` vs `rpm_ch[]`; `fault_capture.c` in `USER/` not `API/`) | **PARTIALLY CLOSED** | **Global symbols: CLOSED.** `manifest.firmware_symbols.names` and `GET /api/symbols` index all 12,000+ DWARF global symbols. Querying `rpm` immediately reveals `rpm_ch` (disproving `rpm[4]`).<br>**Struct members & nested fields: OPEN.** Manifest lists only top-level symbol names (`mrac_state`), not internal struct members (`Theta` vs `Whatf`).<br>**Source paths: OPEN.** Manifest records `elf_path` but no mapping of modules to directories (`USER/` vs `API/`). |
+
+---
+
+### 9.2 Ranked Gap List
+
+#### Rank 1: Telemetry Data Types, Physical Units, Fixed-Point Scaling, and Coordinate Frames
+- **What an agent cannot answer:**
+  - What physical units a telemetry variable represents (e.g. `c.altitude` is meters, while underlying C struct `ano_of.of_alt_cm` is centimeters; battery voltage is 0.01 V integer; body gyro rates are deg/s vs rad/s).
+  - What fixed-point multiplier is applied in C when packing into the wire frame (e.g. `TASK/send_data.c:1003-1005` scales `s_ekf.x[3]` by `1000.0f` into `int16_t` for `ekf.vel_body_x`; `mrac_state.e_filter` scaled by `1000.0f`).
+  - What the dynamic numerical range is, and whether values risk signed integer overflow.
+  - What coordinate frame a vector belongs to (NED earth frame vs body frame vs sensor frame).
+- **Evidence manifest and guide do not answer it:**
+  `manifest.telemetry.verified_published_keys` is a flat list of strings (`["c.altitude", "c.gyro_x", ...]`). It contains zero type, unit, scale factor, or frame metadata. While `manifest.commands` provides `unit`, `min_val`, and `max_val` for command parameters, telemetry keys have none. `AGENT_GUIDE.md` documents no unit conversions.
+- **Project failure anchor:**
+  - *Pre-flight Audit (finding F2):* Stationary bench telemetry showed shadow EKF velocity `+57.7 m/s`. When scaled by `1000.0f` into `int16_t` in `send_data.c`, `57714` overflowed to `-7822`, wrapping signed telemetry and corrupting ground station records.
+  - *Operator Feedback Batch (finding I1):* Motor Bench panel slider assumed RPM (1–1000), but firmware ESC mixer inputs operate on PWM pulse widths (2000–4000 microseconds).
+- **Smallest change to close:**
+  Enrich `manifest.telemetry` in `ground_station/platform/capability_manifest.py` with a `key_metadata` mapping specifying `type` (e.g. `float32`, `int16`), `unit` (e.g. `m`, `deg/s`, `V`, `PWM_us`), `scale_factor` (e.g. `0.001`), and `frame` (`body`, `ned`, `raw`), derived from `wifi_bridge.py` decoder unpack specifications and docstrings.
+
+---
+
+#### Rank 2: RTOS Scheduler Architecture, Task Cadences, and Pacing Semantics (Absolute vs Relative)
+- **What an agent cannot answer:**
+  - What execution frequency each firmware task runs at, and how it is scheduled under FreeRTOS.
+  - Whether a task uses absolute periodic pacing (`vTaskDelayUntil(&PreviousWakeTime, pdMS_TO_TICKS(10))` at `USER/main.c:340`) or relative delay (`vTaskDelay(pdMS_TO_TICKS(5))` at `USER/main.c:305`).
+  - Whether task execution contains DMA busy-waits or blocking calls that reduce effective throughput (e.g. `send_data.c:836` DMA busy wait stretching 5 ms relative delay to 12.47 ms / 80.2 Hz).
+- **Evidence manifest and guide do not answer it:**
+  The manifest contains no task inventory, thread rates, or scheduling metadata. Project sources and documentation contradicted each other three ways: `firmware_contract.py:103` stated 100 Hz "by design", `manifest_layer.py:293` calculated `200 // divider`, and `send_data.c:476` claimed 80.2 Hz.
+- **Project failure anchor:**
+  Workers repeatedly miscalculated slot bandwidth budgets, subscribe dividers, and timestamp deltas. It required hardware DWT cycle-counter profiling (`g_send_prof`) to establish that Send_Task runs at 100 Hz in normal flight but drops to relative ~80 Hz pacing when SysID or optical flow frames are active.
+- **Smallest change to close:**
+  Add a `TASK_SCHEDULE` table in `ground_station/platform/firmware_contract.py` defining task names (`Send_Task`, `StabilizerTask`, `RemoterTask`), nominal frequencies, pacing types (`absolute` vs `relative`), and entry functions, and include this table in `capability_manifest.json` under `rtos_tasks`.
+
+---
+
+#### Rank 3: Flight FSM State Machine, Mode Transitions, and Autonomous Safety Interlocks
+- **What an agent cannot answer:**
+  - What integer values in `status.flymode` correspond to which flight state (e.g. 0 = INIT/STOP, 1 = ATTITUDE, 2 = OF_HOLD/POSITION).
+  - What triggers autonomous mode collapses or safety latches (e.g. `TASK/RemoterTask.c:145` fires `DANGEROUS_STOP` when `sbus_channel[9] <= 500`, latching EMERGENCY mode; `TASK/StabilizerTask.c:265` drops position hold when `of_quality < 50`).
+  - Why firmware rejects an arming request or command dispatch.
+- **Evidence manifest and guide do not answer it:**
+  `manifest.commands` provides host-side preconditions (e.g. `requires_disarmed`), but the manifest defines no firmware FSM states, no enum mapping for `status.flymode`, and no safety interlock triggers. `AGENT_GUIDE.md` Section 6 documents only the host-side arm gate (`GroundStationService.arm_state()`).
+- **Project failure anchor:**
+  - *Pre-flight Audit (finding F3):* The drone refused to arm on the bench because `RemoterTask.c:145` latched EMERGENCY state when the RC transmitter was powered off, requiring an operator to raise channel 9 and issue `RECOVER_SDK`.
+  - *Pre-flight Audit (finding F1):* Optical flow quality was 0 on the bench, silently preventing transition to position hold because the firmware threshold requires `>= 50`.
+- **Smallest change to close:**
+  Define `FLIGHT_MODES` and `SAFETY_INTERLOCKS` enum tables in `ground_station/platform/firmware_contract.py` (mapping integer IDs to mode labels and transition requirements) and export them into `capability_manifest.json` under `flight_fsm`.
+
+---
+
+#### Rank 4: Hardware Peripheral Topology, Serial Bus Routing, and Compile-Time Feature Flags
+- **What an agent cannot answer:**
+  - Which physical microcontroller USART/UART connects to which peripheral (USART3 = WiFi ESP module; USART2 = Optical Flow sensor; UART4 = Companion computer/T265; UART5 = Serial debug).
+  - Which C preprocessor `#define` switches are active in the current build (e.g. `SUBSCRIBE_UART5_ENABLED` is undefined, rendering `Uart5_Subscribe_TxSend` a stub returning `E:UART5 disabled`).
+  - Which timer capture/compare channels map to which motor ESC outputs (TIM3 CCR1–CCR4 to motors 0–3 via `BSP/pwm.c`).
+- **Evidence manifest and guide do not answer it:**
+  The manifest records the binary ELF SHA256 and size, but does not capture active `#define` options or peripheral routing tables. `AGENT_GUIDE.md` Section 8 mentions USART3 WiFi ownership and UART5 stubbing, but lacks a complete hardware bus map.
+- **Project failure anchor:**
+  Workers repeatedly attempted to use `stream_log --transport uart5` or serial COM6 for telemetry subscriptions, resulting in silent timeouts or rejection errors because UART5 subscribe is disabled at compile time. Another worker attempted companion computer diagnostics on the wrong serial port.
+- **Smallest change to close:**
+  Add a `HARDWARE_MAP` dictionary in `ground_station/platform/firmware_contract.py` specifying UART bus assignments, baud rates, connected devices, and active compile-time `#define` flags, and expose this in `capability_manifest.json` under `hardware_topology`.
+
+---
+
+#### Rank 5: DWARF Symbol Type Metadata: Struct Member Hierarchies, Member Offsets, and Array Bounds
+- **What an agent cannot answer:**
+  - Given a global symbol name, what are its internal struct member names, data types, and byte offsets (e.g. `mrac_state.Theta` vs `mrac_state.Whatf`).
+  - Whether a symbol is a scalar primitive readable via 1/2/4-byte SWD word access or a composite struct (e.g. `DroneStatus` is a 12-byte struct).
+  - What the dimensions and index mappings of state arrays are (e.g. `s_ekf.P` is a 9x9 covariance matrix; `s_ekf.x[0..8]` state order: roll, pitch, yaw, vx, vy, vz, ...).
+- **Evidence manifest and guide do not answer it:**
+  `manifest.firmware_symbols.names` contains a flat list of symbol identifier strings (`["DroneStatus", "mrac_state", "s_ekf", ...]`). It contains no type information, no struct field trees, and no byte sizes. `GET /api/symbols` returns names only.
+- **Project failure anchor:**
+  - Specs repeatedly cited `mrac_state.What` when the C struct member is `Theta` or `Whatf`.
+  - Specs cited `rpm[4]` when the global array in C is `rpm_ch[]`.
+  - Workers attempting to read `DroneStatus` via `livewatch read --transport swd` were rejected by probe safety checks because `DroneStatus` is a 12-byte composite struct rather than a 1/2/4-byte primitive.
+- **Smallest change to close:**
+  Extend `ground_station/livewatch/symbols.py::SymbolResolver` to extract DWARF type tags (`DW_TAG_structure_type`, `DW_TAG_member`, `DW_TAG_array_type`), byte sizes, and member offsets, exposing them via `GET /api/symbols?name=<sym>&details=1` and exporting high-interest telemetry structs into `capability_manifest.json`.
+
+---
+
+#### Rank 6: Firmware Source Tree Layout and Compilation Unit Mapping
+- **What an agent cannot answer:**
+  - Which source directory contains the implementation of a given module (e.g. `USER/fault_capture.c` vs `API/fault_capture.c`).
+  - Which C source files in the repository are actually included in the Keil project build (`USER/JX_FLY.uvprojx`) versus uncompiled legacy or experimental files (e.g. `USER/demo_learning.c` or prototype stubs in `firmware/`).
+- **Evidence manifest and guide do not answer it:**
+  The manifest records `elf_identity.elf_path = "OBJ/JX_FLY.axf"`, but does not list the source compilation units that produced it. `AGENT_GUIDE.md` Section 7 ("Where the code is") lists only ground station Python and shell paths, omitting firmware directories entirely.
+- **Project failure anchor:**
+  Supervisor and worker specs misattributed `fault_capture.c` to `API/` when it resides in `USER/`. S16 review previously recorded finding D1 claiming firmware sources were missing from the repository because reviewers looked for `firmware/` instead of `API/`, `TASK/`, `BSP/`, `USER/`.
+- **Smallest change to close:**
+  Add a firmware directory overview table to `AGENT_GUIDE.md` Section 7, and extract DWARF `DW_TAG_compile_unit` file lists into `capability_manifest.json` under `compilation_units`.
+
+---
+
+#### Rank 7: Sensor / Estimator Validity Criteria and Fail-Safe Degradation Rules
+- **What an agent cannot answer:**
+  - What sensor health metrics gate estimator updates (e.g. optical flow `of_quality >= 50`).
+  - How estimators degrade when a sensor stream degrades or times out (e.g. whether velocity coasts, freezes, or zeros).
+  - Why the stationary shadow EKF velocity locked onto `+57.7 m/s` (firmware had no quality-collapse timeout reset in `Ekf9_Init`, leaving the velocity state frozen at the last pre-collapse sample).
+- **Evidence manifest and guide do not answer it:**
+  The manifest lists boolean status keys (`status.estimator_ready`, `status.of_hold`), but defines no numerical thresholds, timeout limits, or filter health gates.
+- **Project failure anchor:**
+  *Pre-flight Audit (findings F1 and F2):* Optical flow quality was 0 on the bench, causing shadow EKF velocity to freeze at an invalid +57 m/s reading without any ground-station warning flag.
+- **Smallest change to close:**
+  Document sensor health gating thresholds in `ground_station/platform/firmware_contract.py` (e.g. `SENSOR_HEALTH_GATES = {"optical_flow": {"min_quality": 50, "fallback_mode": "attitude"}}`) and export them in `capability_manifest.json`.
