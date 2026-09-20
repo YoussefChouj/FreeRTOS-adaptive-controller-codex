@@ -1,14 +1,24 @@
-"""Tests for the 50-53 B "DataBuf_to_linux-style" fallback added 2026-08-20.
+"""Tests for the 50-53 B "DataBuf_to_linux-style" fallback -- BEHAVIOUR CHANGED 2026-09-17.
 
-The live MicoAir downlink carries 50-53 B datagrams at ~98 Hz with no
-recognisable magic byte at any offset 0..4, even though TASK/send_data.c
-specifies a 4-byte 0xAA 0xAA 0x00 0x00 header for `DataBuf_to_linux`
-(line 283-286). The bytes that arrive look like 12 LE float32 values
-with no header; the wifi_bridge's existing decoder rejects all of them.
+Historical context (2026-08-20 → 2026-09-17): the live MicoAir downlink
+carries 50-53 B datagrams at ~98 Hz with no recognisable magic byte at
+any offset 0..4, even though TASK/send_data.c specifies a 4-byte 0xAA 0xAA
+0x00 0x00 header for `DataBuf_to_linux` (line 283-286). The original
+workaround treated those bytes as 12 LE float32 values in a slot-less
+"data" tag -- but the service's `_resolve_tag_slot` then routed that tag
+into a phantom `streams["-1"]` entry that the dashboard sidebar showed as
+a 700-second-stale row full of garbage floats (`f0: -2.7e-43`, etc.).
 
-The new path treats 50-53 B datagrams as 12 LE float32 + variable tail.
-This is a workaround, not a permanent fix -- the deeper diagnosis
-(FC vs ELF drift) is tracked in CLAUDE.md session state.
+Per PLANNING_PROMPT.md §1 the 50-53 B path was the wrong assumption. The
+decoder no longer fabricates a "data" tag from those bytes; the partial-
+frame handler keeps the buffer intact until a header byte (0xFE / 0xAA
+0xAA / 0xAA 0xBB / 0x7F etc.) arrives to anchor a real frame. 50-53 B
+buffers therefore fall through to `None` (wait for more data).
+
+The deeper diagnosis (FC vs ELF drift on the DataBuf_to_linux header)
+is still tracked in CLAUDE.md session state -- if/when that root cause
+is fixed in the firmware, this branch can be reintroduced WITH a real
+header check rather than the previous size-window heuristic.
 """
 from __future__ import annotations
 
@@ -37,6 +47,13 @@ def _build_52b_dataframe(values, pad_to=52):
 
 
 class TestDataBufFrame(unittest.TestCase):
+    """Behaviour after the 2026-09-17 phantom-slot fix.
+
+    50-53 B datagrams are NOT decoded by wifi_bridge anymore. The previous
+    work-around produced a `("data", payload)` tuple that the service
+    routed into a phantom `streams["-1"]` slot full of garbage floats.
+    """
+
     def setUp(self):
         self.bridge = WifiBridge(vofa_enabled=False)
         self.bridge._wifi = MagicMock()
@@ -44,45 +61,39 @@ class TestDataBufFrame(unittest.TestCase):
         self.bridge._telem_udp = MagicMock()
         self.bridge._udp_send = MagicMock()
 
-    def test_52b_frame_decodes_as_12_floats(self):
-        """50-53 B datagrams with no magic must be accepted as 12-float payloads."""
+    def test_52b_frame_no_longer_decoded(self):
+        """The 52 B 'DataBuf_to_linux' cluster must NOT be decoded anymore.
+
+        Returning a fabricated "data" tag here was the source of the
+        phantom `streams["-1"]` slot in /state. The buffer should now be
+        left untouched so the partial-frame handler can wait for a
+        properly-headered frame to arrive (or the 1024 B resync kicks
+        in if it really is unbounded noise).
+        """
         values = [0.1 * (i + 1) for i in range(12)]  # 0.1, 0.2, ..., 1.2
         frame = _build_52b_dataframe(values, pad_to=52)
         self.assertEqual(len(frame), 52)
         buf = bytearray(frame)
         result = self.bridge._parse_one(buf)
-        self.assertIsNotNone(result)
-        tag, payload = result
-        self.assertEqual(tag, "data")
-        self.assertEqual(payload["len"], 52)
-        for i in range(12):
-            self.assertAlmostEqual(payload[f"f{i}"], values[i], places=4)
-        # The 52 B frame must be fully consumed.
-        self.assertEqual(len(buf), 0)
+        self.assertIsNone(result)
+        # Buffer is unchanged (wait-for-more-data semantics).
+        self.assertEqual(len(buf), 52)
 
-    def test_50b_frame_accepted(self):
-        """A 50 B frame (still in the dominant cluster) must decode."""
+    def test_50b_frame_not_decoded(self):
+        """A 50 B frame (the lower edge of the historical cluster) must not decode."""
         values = [float(i) for i in range(12)]
         frame = _build_52b_dataframe(values, pad_to=50)
-        self.assertEqual(len(frame), 50)
         buf = bytearray(frame)
         result = self.bridge._parse_one(buf)
-        self.assertIsNotNone(result)
-        tag, payload = result
-        self.assertEqual(tag, "data")
-        self.assertEqual(payload["len"], 50)
+        self.assertIsNone(result)
 
-    def test_53b_frame_accepted(self):
-        """A 53 B frame (the upper end of the cluster) must decode."""
+    def test_53b_frame_not_decoded(self):
+        """A 53 B frame (the upper edge of the historical cluster) must not decode."""
         values = [float(i) for i in range(12)]
         frame = _build_52b_dataframe(values, pad_to=53)
-        self.assertEqual(len(frame), 53)
         buf = bytearray(frame)
         result = self.bridge._parse_one(buf)
-        self.assertIsNotNone(result)
-        tag, payload = result
-        self.assertEqual(tag, "data")
-        self.assertEqual(payload["len"], 53)
+        self.assertIsNone(result)
 
     def test_49b_frame_rejected(self):
         """49 B is below the cluster range and must not be picked up by this path.

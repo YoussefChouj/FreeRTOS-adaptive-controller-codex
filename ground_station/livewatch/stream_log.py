@@ -15,21 +15,20 @@ Names are resolved from ``OBJ/JX_FLY.axf`` (DWARF), so you name variables the wa
 you think about them and never touch an address. ``:6`` means "6 consecutive
 elements" -- one range tuple, whatever its width.
 
-Two ports, on purpose. The subscribe request always goes out the **control**
-port (UART5, the CMSIS-DAP VCP) because that is the only port the firmware
-accepts commands on. The data comes back on the **data** port, which
-``--transport`` selects.
+Two ports, on purpose. The subscribe request goes out on
+**USART3 over WiFi** for the usart3 transport. The data comes back on the
+**data** port, which ``--transport`` selects.
 
-**This is serial, not the debugger.** COM6 is the CMSIS-DAP dongle's *virtual
-COM port*, i.e. UART5's wire -- the flight controller actively pushes frames
-down it. Nothing here halts the core, reads RAM over SWD, or needs pyOCD. The
-firmware copies bytes out of its own memory and never writes back.
+``--transport usart3`` (the default) routes the subscribe request and all
+reply/data frames over the MicoAir WiFi link: the request is a
+0xCC 0xDE 0x21 datagram to UDP 14550, and schema (0x08), error (0x7F) and
+data (0x09+) frames come back on the same UDP socket. Nothing is opened on
+UART5.
 
-``--transport usart3`` routes the data to the MicoAir WiFi module, which
-is where it belongs for real flights: measured 258 Hz at ~22% wire utilisation,
-uplink ~1100 Hz ceiling, 0% loss. That path is **UDP, not a COM port** -- the
-module forwards USART3 bytes as datagrams to UDP 14550, so the data port defaults
-to ``udp:14550`` and needs no driver.
+``--transport uart5`` keeps the legacy serial subscribe path (COM6 /
+UART5).  The current firmware disables UART5 subscribe
+(SUBSCRIBE_UART5_ENABLED = 0), so this path always fails.  It is kept for
+reference and prints a clear warning on every invocation.
 """
 
 from __future__ import annotations
@@ -46,16 +45,16 @@ from .stream import (
     decode_schema, stream_bps,
 )
 from .symbols import SymbolResolver
-from .transport import LiveTransportError, UdpDataPort, pop_frame
+from .transport import LiveTransportError, UdpDataPort, pop_frame, \
+    Usart3WifiSubscribeTransport
 from .auto_split import auto_split_and_log
 
 _TRANSPORTS = {"usart3": TRANSPORT_USART3, "uart5": TRANSPORT_UART5}
 DEFAULT_FRAMES = Path(__file__).with_name("log_frames.md")
 DEFAULT_USART3_UDP_PORT = 14550
 _STRUCT_FMT = {(4, "float"): "f", (4, "int"): "i", (4, "uint"): "I",
-               (2, "int"): "h", (2, "uint"): "H",
-               (1, "int"): "b", (1, "uint"): "B"}
-
+                (2, "int"): "h", (2, "uint"): "H",
+                (1, "int"): "b", (1, "uint"): "B"}
 
 
 def _open_data(data_port: str, control, control_port: str):
@@ -127,6 +126,95 @@ def columns_for(schema) -> list[str]:
     return names
 
 
+def _make_stop(divider, transport, usart3_baud, slot=0):
+    """Build a stop-request frame (divider=0) for the given slot."""
+    return build_stream_request([], 0, transport, usart3_baud, slot)
+
+
+def _await_schema(source, ranges, timeout=1.5):
+    """Wait for a 0x08 schema reply (or 0x7F error) from ``source``.
+
+    ``source`` may be a serial port (UART5) or a Usart3WifiSubscribeTransport.
+    Both expose ``in_waiting`` / ``read()`` and their buffer holds received
+    bytes; `pop_frame` peeks at the accumulated buffer without consuming.
+    """
+    rx = bytearray()
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        frame = pop_frame(rx)
+        if frame is not None:
+            frame_type, byte5, payload = frame
+            if frame_type == 0x08:
+                return decode_schema(byte5, payload, ranges)
+            if frame_type == 0x7F:
+                msg = payload.decode("utf-8", "replace").rstrip("\x00")
+                raise LiveTransportError(
+                    "stream-log: firmware rejected the subscription: %s" % msg)
+            continue
+        waiting = getattr(source, "in_waiting", 0)
+        chunk = source.read(waiting or 1)
+        if chunk:
+            rx.extend(chunk)
+    raise LiveTransportError("stream-log: no 0x08 schema reply from the firmware")
+
+
+def _run_usart3(data_port, ranges, divider, transport, seconds, out_path,
+                quiet, req, stop, usart3_baud, slot=0):
+    """Execute a single-slot subscribe over WiFi UDP (Usart3WifiSubscribeTransport)."""
+    port = int(data_port.split(":", 1)[1]) if data_port.startswith("udp:") else DEFAULT_USART3_UDP_PORT
+    wifi = Usart3WifiSubscribeTransport(port=port)
+    try:
+        wifi.connect()
+        schema = wifi.subscribe(ranges, divider=divider, transport=transport, slot=slot)
+        cols = columns_for(schema)
+        if not quiet:
+            print("subscribed: %d value(s), %d B/frame, %.1f Hz expected"
+                  % (len(cols), schema.frame_bytes, schema.hz))
+            print("data on %s -> %s" % (data_port, out_path))
+
+        data = wifi._udp
+        data.reset_input_buffer()
+        decoder = StreamDecoder(schema)
+        out_path = Path(out_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        rows = 0
+        t0 = time.monotonic()
+        with out_path.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(["t_src_ms", "t_host_s", "seq"] + cols)
+            while time.monotonic() - t0 < seconds:
+                waiting = data.in_waiting
+                if not waiting:
+                    time.sleep(0.002)
+                    continue
+                for seq, t_ms, values in decoder.feed(data.read(waiting)):
+                    flat = []
+                    for rng in schema.ranges:
+                        got = values[rng.name or "r%d" % len(flat)]
+                        flat.extend(got if isinstance(got, list) else [got])
+                    writer.writerow(
+                        [t_ms, "%.4f" % (time.monotonic() - t0), seq] + flat)
+                    rows += 1
+        elapsed = time.monotonic() - t0
+    finally:
+        try:
+            wifi._udp.sendto(stop, (wifi.module_ip, wifi.port))
+        except Exception:
+            pass
+        wifi.close()
+
+    return {
+        "rows": rows,
+        "seconds": elapsed,
+        "hz": rows / elapsed if elapsed else 0.0,
+        "dropped": decoder.dropped,
+        "loss_pct": decoder.loss_pct,
+        "malformed": decoder.crc_errors,
+        "columns": cols,
+        "path": str(out_path),
+    }
+
+
 def run(control_port, data_port, ranges, divider, transport, seconds, out_path,
         elf="OBJ/JX_FLY.axf", usart3_baud=921600, quiet=False, auto_split=False):
     if auto_split:
@@ -134,18 +222,21 @@ def run(control_port, data_port, ranges, divider, transport, seconds, out_path,
             control_port, data_port, ranges, divider, transport,
             seconds, out_path, elf, usart3_baud, quiet)
 
-    import serial
-
     req = build_stream_request(ranges, divider, transport, usart3_baud)
     stop = build_stream_request([], 0, transport, usart3_baud)
 
+    if transport == TRANSPORT_USART3:
+        return _run_usart3(data_port, ranges, divider, transport, seconds,
+                           out_path, quiet, req, stop, usart3_baud)
+
+    # --- UART5 path (legacy; firmware ignores SUBSCRIBE_UART5) ---
+    import serial
     control = serial.Serial(control_port, 115200, timeout=0.05)
     data = _open_data(data_port, control, control_port)
     try:
         control.reset_input_buffer()
         control.write(req)
         control.flush()
-
         try:
             schema = _await_schema(control, ranges)
         except LiveTransportError:
@@ -200,27 +291,6 @@ def run(control_port, data_port, ranges, divider, transport, seconds, out_path,
         "columns": cols,
         "path": str(out_path),
     }
-
-
-def _await_schema(control, ranges, timeout=1.5):
-    rx = bytearray()
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        frame = pop_frame(rx)
-        if frame is not None:
-            frame_type, byte5, payload = frame
-            if frame_type == 0x08:
-                return decode_schema(byte5, payload, ranges)
-            if frame_type == 0x7F:
-                msg = payload.decode("utf-8", "replace").rstrip("\x00")
-                raise LiveTransportError(
-                    "stream-log: firmware rejected the subscription: %s" % msg)
-            continue
-        waiting = getattr(control, "in_waiting", 0)
-        chunk = control.read(waiting or 1)
-        if chunk:
-            rx.extend(chunk)
-    raise LiveTransportError("stream-log: no 0x08 schema reply from the firmware")
 
 
 def parse_group(spec: str):
@@ -291,6 +361,81 @@ def load_frames(path=DEFAULT_FRAMES):
     return parse_frames_markdown(path.read_text(encoding="utf-8"))
 
 
+def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
+                       usart3_baud, transport):
+    """Execute multi-slot subscribe over WiFi UDP (Usart3WifiSubscribeTransport)."""
+    port = int(data_port.split(":", 1)[1]) if data_port.startswith("udp:") else DEFAULT_USART3_UDP_PORT
+    wifi = Usart3WifiSubscribeTransport(port=port)
+    schemas, writers, handles, rows = [], {}, [], {}
+    out_path = Path(out_path)
+    subscribed_slots = []
+    try:
+        wifi.connect()
+        for slot, ranges, divider, request in plans:
+            schema = wifi.subscribe(ranges, divider=divider, transport=transport, slot=slot)
+            if schema.slot != slot:
+                raise LiveTransportError(
+                    "stream-log: asked for slot %d, firmware acknowledged %d"
+                    % (slot, schema.slot))
+            schemas.append(schema)
+            subscribed_slots.append(slot)
+            if not quiet:
+                print("slot %d: %2d value(s), %3d B/frame, %5.1f Hz -> %s"
+                      % (slot, len(columns_for(schema)), schema.frame_bytes,
+                         schema.hz, _slot_path(out_path, slot).name))
+
+        decoder = MultiStreamDecoder(schemas)
+        for schema in schemas:
+            path = _slot_path(out_path, schema.slot)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fh = path.open("w", newline="", encoding="utf-8")
+            handles.append(fh)
+            writer = csv.writer(fh)
+            writer.writerow(["t_src_ms", "t_host_s", "seq"] + columns_for(schema))
+            writers[schema.slot] = (writer, schema)
+            rows[schema.slot] = 0
+
+        wifi._udp.reset_input_buffer()
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < seconds:
+            waiting = wifi._udp.in_waiting
+            if not waiting:
+                time.sleep(0.002)
+                continue
+            for slot, seq, t_ms, values in decoder.feed(wifi._udp.read(waiting)):
+                writer, schema = writers[slot]
+                flat = []
+                for rng in schema.ranges:
+                    got = values[rng.name or "r%d" % len(flat)]
+                    flat.extend(got if isinstance(got, list) else [got])
+                writer.writerow(
+                    [t_ms, "%.4f" % (time.monotonic() - t0), seq] + flat)
+                rows[slot] += 1
+        elapsed = time.monotonic() - t0
+    finally:
+        for fh in handles:
+            fh.close()
+        # Stop every subscribed slot over WiFi
+        for slot in subscribed_slots:
+            try:
+                stop_req = build_stream_request([], 0, transport,
+                                                usart3_baud, slot)
+                wifi._udp.sendto(stop_req, (wifi.module_ip, wifi.port))
+            except Exception:
+                pass
+        wifi.close()
+
+    return [{
+        "slot": schema.slot,
+        "rows": rows[schema.slot],
+        "hz": rows[schema.slot] / elapsed if elapsed else 0.0,
+        "dropped": decoder.decoders[schema.slot].dropped,
+        "loss_pct": decoder.decoders[schema.slot].loss_pct,
+        "malformed": decoder.decoders[schema.slot].crc_errors,
+        "path": str(_slot_path(out_path, schema.slot)),
+    } for schema in schemas]
+
+
 def run_groups(control_port, data_port, groups, transport, seconds, out_path,
                elf="OBJ/JX_FLY.axf", usart3_baud=921600, quiet=False):
     """Subscribe several slots at different rates; one CSV per slot.
@@ -299,8 +444,6 @@ def run_groups(control_port, data_port, groups, transport, seconds, out_path,
     them into one table would mean padding the slow columns, and a 2 Hz signal
     padded to 80 Hz reads as though it were sampled 40x more often than it was.
     """
-    import serial
-
     resolver = SymbolResolver(elf)
     if len(groups) > MAX_SLOTS:
         raise LiveTransportError(
@@ -317,6 +460,12 @@ def run_groups(control_port, data_port, groups, transport, seconds, out_path,
         committed += stream_bps(total, divider)
         plans.append((slot, ranges, divider, request))
 
+    if transport == TRANSPORT_USART3:
+        return _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
+                                   usart3_baud, transport)
+
+    # --- UART5 path (legacy; firmware ignores SUBSCRIBE_UART5) ---
+    import serial
     control = serial.Serial(control_port, 115200, timeout=0.05)
     data = _open_data(data_port, control, control_port)
     schemas, writers, handles, rows = [], {}, [], {}
@@ -439,6 +588,13 @@ def main(argv=None):
         else args.control_port)
     if args.symbol and args.group:
         ap.error("--symbol and --group are alternatives, not both")
+
+    # Warn about uart5: firmware ignores UART5 subscribe
+    if transport == TRANSPORT_UART5:
+        print("WARNING: --transport uart5 is not supported by the current "
+              "firmware (SUBSCRIBE_UART5_ENABLED = 0). Subscribe requests are "
+              "accepted only over WiFi (USART3). Use --transport usart3 "
+              "(the default) instead.", file=sys.stderr)
 
     try:
         if args.group or not args.symbol:

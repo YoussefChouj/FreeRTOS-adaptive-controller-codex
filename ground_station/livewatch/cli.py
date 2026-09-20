@@ -140,6 +140,11 @@ def cmd_verify(args):
     fast over a wired ST-Link. Use it for a one-time reflash sanity check
     or any time the cheap sampling misses something you can reproduce.
 
+    `--identity` reads `g_fw_identity` over SWD and compares the firmware
+    CRC-32/MPEG-2 against a host-side computation from OBJ/JX_FLY.hex.
+    This is a lighter-weight check than full flash comparison and works over
+    the wireless debugger without hitting the flash segment budget.
+
     The wireless debugger throws `TransferError` in clusters (see
     `transport._read_region_with_retry` for the in-region retry). On dense
     reads one of N regions can still exhaust its retries; we wrap the
@@ -148,7 +153,27 @@ def cmd_verify(args):
     fails the run purely on probe hiccups, defeating the purpose.
     """
     from .reader import LiveReader
-    from .verify import compare, flash_segments, plan_samples
+    from .verify import IdentityCheck, compare, flash_segments, plan_samples, read_identity
+
+    if args.identity:
+        with LiveReader(args.elf, transport=SwdCmsisDap(
+                limit_packets=not getattr(args, "swd_no_limit_packets", False))) as lr:
+            def _read_raw(addr, n):
+                return lr.read_raw(addr, n)
+            addr = None
+            try:
+                sym = lr.symbols.resolve("g_fw_identity")
+                if sym:
+                    addr = sym.address
+            except Exception:
+                pass
+            id_check = read_identity(_read_raw, identity_addr=addr, elf_path=args.elf)
+        print(f"fw_identity: magic=0x{id_check.magic:08X} ver={id_check.version} "
+              f"base=0x{id_check.image_base:08X} len={id_check.image_len} "
+              f"fw_crc=0x{id_check.firmware_crc:08X} host_crc=0x{id_check.host_crc:08X} "
+              f"status={id_check.status}")
+        print(id_check.message)
+        return 0 if id_check.ok else 2
 
     segs = flash_segments(args.elf)
     samples = plan_samples(segs, n=args.chunks, full=args.full)
@@ -765,6 +790,10 @@ def build_parser():
     sp.add_argument("--full", action="store_true",
                     help="sample every chunk (slow over wireless SWD; "
                          "use a wired ST-Link for this)")
+    sp.add_argument("--identity", action="store_true",
+                    help="read g_fw_identity over SWD and compare the firmware "
+                         "CRC-32/MPEG-2 against a host-side computation from "
+                         "OBJ/JX_FLY.hex")
     sp.add_argument("--swd-no-limit-packets", action="store_true",
                     help="disable single-in-flight USB mode for SWD reads "
                          "(use only for wired probes where throughput matters more than reliability)")

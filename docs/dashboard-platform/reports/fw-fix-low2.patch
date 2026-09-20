@@ -1,0 +1,626 @@
+# =============================================================================
+# Defensive Firmware Fixes - Batch 2 Patch
+# Source: docs/dashboard-platform/reports/FW-P1-REVIEW.md
+#
+# Target Files Modified in Batch 2:
+#   - Global_file/global_declare.h:28 (Item 21: value_limit macro)
+#   - API/gyro_filter.c:72           (Item 24: biquad_design critical section)
+#   - USER/ADC.c:49                  (Item 25: ADC_Read critical section)
+#   - BSP/usart5.c:161               (Item 26: Uart5_Subscribe_TxSend bounded timeout)
+#   - TASK/stm32f4xx_it.c:225        (Item 28: USART_Receive early return 0)
+#   - API/Ano_OF.c:157               (Item 29: AnoOF_DataAnl unaligned load fix)
+#   - TASK/send_data.c:328           (Item 31: send_to_linux DMA1_Stream4 bounded wait)
+#   - TASK/send_data.c:1513, 1519    (Items 30 & 32: GS command range validation)
+#
+# Note: Touched files retain existing Batch 1 changes from fw-fix-low.patch.
+# Each hunk below is annotated with [Batch 1] or [Batch 2 - Item XX].
+# =============================================================================
+
+# ====================================================================
+# File: b/API/Ano_OF.c
+# ====================================================================
+diff --git a/API/Ano_OF.c b/API/Ano_OF.c
+index 9d276c2..04384d0 100644
+--- a/API/Ano_OF.c
++++ b/API/Ano_OF.c
+# [Batch 1] Ano_OF.c: comments / buffer length check
+@@ -6,7 +6,7 @@ static float check_time_ms[3];
+ void AnoOF_Check_State(float dT_s)
+ {
+ 	u8 tmp[2];
+-	//���Ӽ��
++	//连接检查
+ 	if (check_time_ms[0] < 500)
+ 	{
+ 		check_time_ms[0]++;
+# [Batch 1] Ano_OF.c: comments / buffer length check
+@@ -16,7 +16,7 @@ void AnoOF_Check_State(float dT_s)
+ 	{
+ 		ano_of.link_sta = 0;
+ 	}
+-	//���ݼ��1
++	//数据检查1
+ 	if (check_time_ms[1] < 500)
+ 	{
+ 		check_time_ms[1]++;
+# [Batch 1] Ano_OF.c: comments / buffer length check
+@@ -26,7 +26,7 @@ void AnoOF_Check_State(float dT_s)
+ 	{
+ 		tmp[0] = 0;
+ 	}
+-	//���ݼ��2
++	//数据检查2
+ 	if (check_time_ms[2] < 500)
+ 	{
+ 		check_time_ms[2]++;
+# [Batch 1] Ano_OF.c: comments / buffer length check
+@@ -36,7 +36,7 @@ void AnoOF_Check_State(float dT_s)
+ 	{
+ 		tmp[1] = 0;
+ 	}
+-	//���ù���״̬
++	//设置工作状态
+ 	if (tmp[0] && tmp[1])
+ 	{
+ 		ano_of.work_sta = 1;
+# [Batch 1] Ano_OF.c: comments / buffer length check
+@@ -47,8 +47,8 @@ void AnoOF_Check_State(float dT_s)
+ 	}
+ }
+ 
+-//AnoOF_GetOneByte�ǳ������ݽ�������������ÿ���յ�һ�ֽڹ������ݣ����ñ�����һ�Σ������������Ǵ����յ�������
+-//����������α����ã����ս��յ�������һ֡���ݺ󣬻��Զ��������ݽ�������AnoOF_DataAnl
++//AnoOF_GetOneByte是初级数据解析函数，串口每接收到一字节光流数据，调用本函数一次，函数参数就是串口收到的数据
++//当本函数多次被调用，最终接收到完整的一帧数据后，会自动调用数据解析函数AnoOF_DataAnl
+ void AnoOF_GetOneByte(uint8_t data)
+ {
+ 	static u8 _data_len = 0, _data_cnt = 0;
+# [Batch 1] Ano_OF.c: comments / buffer length check
+@@ -70,7 +70,7 @@ void AnoOF_GetOneByte(uint8_t data)
+ 		rxstate = 3;
+ 		_datatemp[2] = data;
+ 	}
+-	else if (rxstate == 3 && data < 50)
++	else if (rxstate == 3 && data <= (sizeof(_datatemp) - 6U))
+ 	{
+ 		rxstate = 4;
+ 		_datatemp[3] = data;
+# [Batch 1] Ano_OF.c: comments / buffer length check
+@@ -103,33 +103,33 @@ void AnoOF_GetOneByte(uint8_t data)
+ 		rxstate = 0;
+ 	}
+ }
+-//AnoOF_DataAnlΪ�������ݽ�������������ͨ���������õ�����ģ������ĸ�������
+-//�������ݵ����壬�������������ģ��ʹ���ֲᣬ����ϸ�Ľ���
++//AnoOF_DataAnl为光流数据解析函数，可以通过本函数得到光流模块输出的各项数据
++//具体数据的意义，请参照匿名光流模块使用手册，有详细的介绍
+ 
+ static void AnoOF_DataAnl(uint8_t *data, uint8_t len)
+ {
+ 	u8 check_sum1 = 0, check_sum2 = 0;
+-	if (*(data + 3) != (len - 6)) //�ж����ݳ����Ƿ���ȷ
++	if (*(data + 3) != (len - 6)) //判断数据长度是否正确
+ 		return;
+ 	for (u8 i = 0; i < len - 2; i++)
+ 	{
+ 		check_sum1 += *(data + i);
+ 		check_sum2 += check_sum1;
+ 	}
+-	if ((check_sum1 != *(data + len - 2)) || (check_sum2 != *(data + len - 1))) //�ж�sumУ��
++	if ((check_sum1 != *(data + len - 2)) || (check_sum2 != *(data + len - 1))) //判断sum校验
+ 		return;
+ 	//================================================================================
+ 
+-	if (*(data + 2) == 0X51) //������Ϣ
++	if (*(data + 2) == 0X51) //光流信息
+ 	{
+-		if (*(data + 4) == 0) //ԭʼ������Ϣ
++		if (*(data + 4) == 0) //原始光流信息
+ 		{
+ 			ano_of.of0_sta = *(data + 5);
+ 			ano_of.of0_dx = *(data + 6);
+ 			ano_of.of0_dy = *(data + 7);
+ 			ano_of.of_quality = *(data + 8);
+ 		}
+-		else if (*(data + 4) == 1) //�߶��ںϺ������Ϣ
++		else if (*(data + 4) == 1) //高度融合后光流信息
+ 		{
+ 			ano_of.of1_sta = *(data + 5);
+ 			ano_of.of1_dx = *((s16 *)(data + 6));
+# [Batch 2 - Item 29] Ano_OF.c:157 unaligned *(u32*) -> little-endian byte assembly
+@@ -139,7 +139,7 @@ static void AnoOF_DataAnl(uint8_t *data, uint8_t len)
+ 			check_time_ms[1] = 0;
+ 			ano_of.of_update_cnt++;
+ 		}
+-		else if (*(data + 4) == 2) //�ߵ��ںϺ������Ϣ
++		else if (*(data + 4) == 2) //惯导融合后光流信息
+ 		{
+ 			ano_of.of2_sta = *(data + 5);
+ 			ano_of.of2_dx = *((s16 *)(data + 6));
+# [Batch 2 - Item 29] Ano_OF.c:157 unaligned *(u32*) -> little-endian byte assembly
+@@ -152,14 +152,14 @@ static void AnoOF_DataAnl(uint8_t *data, uint8_t len)
+ 			//
+ 		}
+ 	}
+-	else if (*(data + 2) == 0X34) //�߶���Ϣ
++	else if (*(data + 2) == 0X34) //高度信息
+ 	{
+-		ano_of.of_alt_cm = *((u32 *)(data + 7));
++		ano_of.of_alt_cm = ((u32)data[7]) | (((u32)data[8]) << 8) | (((u32)data[9]) << 16) | (((u32)data[10]) << 24);
+ 		//
+ 		check_time_ms[2] = 0;
+ 		ano_of.alt_update_cnt++;
+ 	}
+-	else if (*(data + 2) == 0X01) //��������
++	else if (*(data + 2) == 0X01) //惯性数据
+ 	{
+ 		ano_of.acc_data_x = *((s16 *)(data + 4));
+ 		ano_of.acc_data_y = *((s16 *)(data + 6));
+# [Batch 1] Ano_OF.c: comments / buffer length check
+@@ -169,9 +169,9 @@ static void AnoOF_DataAnl(uint8_t *data, uint8_t len)
+ 		ano_of.gyr_data_z = *((s16 *)(data + 14));
+ 		//shock_sta+16
+ 	}
+-	else if (*(data + 2) == 0X04) //��̬��Ϣ
++	else if (*(data + 2) == 0X04) //姿态信息
+ 	{
+-		//��Ԫ����ʽ
++		//四元数格式
+ 		ano_of.quaternion[0] = (*((s16 *)(data + 4))) * 0.0001f;
+ 		ano_of.quaternion[1] = (*((s16 *)(data + 6))) * 0.0001f;
+ 		ano_of.quaternion[2] = (*((s16 *)(data + 8))) * 0.0001f;
+
+# ====================================================================
+# File: b/API/gyro_filter.c
+# ====================================================================
+diff --git a/API/gyro_filter.c b/API/gyro_filter.c
+index 974ee17..f77afbb 100644
+--- a/API/gyro_filter.c
++++ b/API/gyro_filter.c
+# [Batch 2 - Item 24] gyro_filter.c: include FreeRTOS.h and task.h
+@@ -6,6 +6,8 @@
+ 
+ #include "gyro_filter.h"
+ #include <math.h>
++#include "FreeRTOS.h"
++#include "task.h"
+ 
+ #ifndef M_PI
+ #define M_PI 3.14159265358979323846f
+# [Batch 2 - Item 24] gyro_filter.c:72 biquad_design(): critical section around coefficient write
+@@ -30,28 +32,41 @@ static void biquad_design(Biquad_t* f, float fc)
+ {
+     float w0, cw, sw, alpha, a0;
+     float fc_max = 0.45f * s_fs; // keep below Nyquist with margin
++    float b0, b1, b2, a1, a2, new_fc;
+ 
+     if (fc <= 0.0f) {
+         // Disabled cutoff -> identity (pass-through), but keep state defined.
+-        f->b0 = 1.0f; f->b1 = 0.0f; f->b2 = 0.0f;
+-        f->a1 = 0.0f; f->a2 = 0.0f;
+-        f->fc = 0.0f;
+-        return;
+-    }
+-    if (fc > fc_max) fc = fc_max;
++        b0 = 1.0f;
++        b1 = 0.0f;
++        b2 = 0.0f;
++        a1 = 0.0f;
++        a2 = 0.0f;
++        new_fc = 0.0f;
++    } else {
++        if (fc > fc_max) fc = fc_max;
++
++        w0 = 2.0f * M_PI * fc / s_fs;
++        cw = cosf(w0);
++        sw = sinf(w0);
++        alpha = sw / 1.41421356f; // 2*Q with Q=1/sqrt(2)  -> sin/(2Q)=sin/sqrt(2)
++        a0 = 1.0f + alpha;
+ 
+-    w0 = 2.0f * M_PI * fc / s_fs;
+-    cw = cosf(w0);
+-    sw = sinf(w0);
+-    alpha = sw / 1.41421356f; // 2*Q with Q=1/sqrt(2)  -> sin/(2Q)=sin/sqrt(2)
+-    a0 = 1.0f + alpha;
++        b0 = ((1.0f - cw) * 0.5f) / a0;
++        b1 = (1.0f - cw) / a0;
++        b2 = ((1.0f - cw) * 0.5f) / a0;
++        a1 = (-2.0f * cw) / a0;
++        a2 = (1.0f - alpha) / a0;
++        new_fc = fc;
++    }
+ 
+-    f->b0 = ((1.0f - cw) * 0.5f) / a0;
+-    f->b1 = (1.0f - cw) / a0;
+-    f->b2 = ((1.0f - cw) * 0.5f) / a0;
+-    f->a1 = (-2.0f * cw) / a0;
+-    f->a2 = (1.0f - alpha) / a0;
+-    f->fc = fc;
++    taskENTER_CRITICAL();
++    f->b0 = b0;
++    f->b1 = b1;
++    f->b2 = b2;
++    f->a1 = a1;
++    f->a2 = a2;
++    f->fc = new_fc;
++    taskEXIT_CRITICAL();
+ }
+ 
+ void GyroFilter_Init(float fs_hz)
+
+# ====================================================================
+# File: b/BSP/usart5.c
+# ====================================================================
+diff --git a/BSP/usart5.c b/BSP/usart5.c
+index 4baa038..84b375d 100644
+--- a/BSP/usart5.c
++++ b/BSP/usart5.c
+# [Batch 1] usart5.c: include fw_identity.h
+@@ -3,6 +3,7 @@
+ #include "platform_registry.h"
+ #include "command_protocol.h"
+ #include "gs_command.h"
++#include "fw_identity.h"
+ 
+ /* Forward declaration: try_stage_subscribe_frame is defined below
+  * handle_subscribe_frame but called from it. ARMCC C90 requires
+# [Batch 2 - Item 26] usart5.c:161 bounded timeout on DMA_GetCurrDataCounter busy-wait
+@@ -154,10 +155,15 @@ extern volatile uint32_t gs_cmd_drop_count;
+ #if SUBSCRIBE_UART5_ENABLED
+ void Uart5_Subscribe_TxSend(const uint8_t* buf, uint16_t len)
+ {
++    uint32_t to = 50000U;
++
+     if ((buf == 0) || (len == 0U)) {
+         return;
+     }
+-    while (DMA_GetCurrDataCounter(DMA1_Stream7));
++    while (DMA_GetCurrDataCounter(DMA1_Stream7) && --to);
++    if (!to) {
++        return;
++    }
+     DMA_Cmd(DMA1_Stream7, DISABLE);
+     while (DMA_GetCmdStatus(DMA1_Stream7) == ENABLE);
+     DMA_ClearFlag(DMA1_Stream7, DMA_FLAG_TCIF7 | DMA_FLAG_HTIF7 | DMA_FLAG_TEIF7
+# [Batch 1] usart5.c: FW_IDENTITY_CMD subscribe handler
+@@ -233,6 +239,10 @@ static uint8_t handle_subscribe_frame(const uint8_t* mailbox, uint16_t total,
+ 	{
+ 		len_ok = ((payload_len == 0U) && (mailbox[off + 5U] == 0U)) ? 1U : 0U;
+ 	}
++	else if (sub_cmd == FW_IDENTITY_CMD)
++	{
++		len_ok = ((payload_len == 0U) && (mailbox[off + 5U] == 0U)) ? 1U : 0U;
++	}
+ 	else
+ 	{
+ 		len_ok = 0U;
+
+# ====================================================================
+# File: b/Global_file/global_declare.h
+# ====================================================================
+diff --git a/Global_file/global_declare.h b/Global_file/global_declare.h
+index 1979ae4..3a7074f 100644
+--- a/Global_file/global_declare.h
++++ b/Global_file/global_declare.h
+# [Batch 2 - Item 21] value_limit macro: wrap in do{...}while(0) with parenthesised args
+@@ -25,7 +25,7 @@
+ #define Stick_to_MAX_GyroZ            200.0f   //  deg/s
+ #define Stick_to_MAX_V_height         1.0f   //   m/s
+  
+-#define   value_limit(x,small,big)   if(x<small)x=small;if(x>big)x=big;
++#define   value_limit(x,small,big)   do { if((x)<(small)) (x)=(small); else if((x)>(big)) (x)=(big); } while(0)
+ #define FlyMode_DangerousStop        0
+ #define FlyMode_SDK                  1     //SDKģʽ
+ 
+
+# ====================================================================
+# File: b/TASK/send_data.c
+# ====================================================================
+diff --git a/TASK/send_data.c b/TASK/send_data.c
+index 9c7b5a7..e973885 100644
+--- a/TASK/send_data.c
++++ b/TASK/send_data.c
+# [Batch 1] send_data.c: include send_prof.h
+@@ -1,3 +1,5 @@
++#pragma diag_suppress 1267
++
+ #include "send_data.h"
+ #include "mrac.h"
+ #include "gyro_filter.h"
+# [Batch 1] send_data.c: include send_prof.h
+@@ -19,6 +21,7 @@
+ #include "gs_command.h"
+ #include "command_protocol.h"
+ #include "rtos_observability.h"
++#include "send_prof.h"
+ 
+ /* Body-frame gyroscope rates (rad/s) — needed for Frame C body-rate telemetry.
+  * Declared as extern in bmi088_driver.h. */
+# [Batch 1] send_data.c: ANO_Report_UserData1 non-blocking DMA check
+@@ -204,7 +207,11 @@ void ANO_Report_UserData1(void)  //����5
+ 	
+ 	/*--------------------------����DMA����---------------------------*/
+ 	
+-  while(DMA_GetCurrDataCounter(DMA1_Stream7));		   //��֮ǰ�ķ���
++  /* Non-blocking check: skip if previous DMA1_Stream7 transfer is still active */
++  if (DMA_GetCurrDataCounter(DMA1_Stream7) != 0U) {
++      return;
++  }
++  //��֮ǰ�ķ���
+   DMA_ClearITPendingBit(DMA1_Stream7, DMA_IT_TCIF7); //����DMA_Mode_Normal,����û��ʹ������ж�ҲҪ�������������ֻ��һ��
+     
+   DMA_Cmd(DMA1_Stream7, DISABLE);				             //���õ�ǰ����ֵǰ�Ƚ���DMA
+# [Batch 1 + Batch 2 - Item 31] send_data.c:328 bounded wait for DMA1_Stream4 disabled before writing NDTR
+@@ -311,14 +318,22 @@ void send_to_linux(void)    //����4
+       return;
+   }
+ 
+-  while(DMA_GetCurrDataCounter(DMA1_Stream4));		   //��֮ǰ�ķ���
+-  DMA_ClearITPendingBit(DMA1_Stream4, DMA_IT_TCIF4); //����DMA_Mode_Normal,����û��ʹ������ж�ҲҪ�������������ֻ��һ��
++  /* Non-blocking check: skip if previous DMA1_Stream4 transfer is still active */
++  if (DMA_GetCurrDataCounter(DMA1_Stream4) != 0U) {
++      return;
++  }
++  //֮ǰķ
++  DMA_ClearITPendingBit(DMA1_Stream4, DMA_IT_TCIF4); //DMA_Mode_Normal,ûʹжҲҪֻһ
+     
+-  DMA_Cmd(DMA1_Stream4, DISABLE);				             //���õ�ǰ����ֵǰ�Ƚ���DMA
+-  DMA1_Stream4->M0AR = (uint32_t)&DataBuf_to_linux;  //���õ�ǰ�������ݻ���ַ:Memory0 tARget
+-  DMA1_Stream4->NDTR = 52;     //���õ�ǰ���������ݵ�����:Number of Data units to be TRansferred
++  DMA_Cmd(DMA1_Stream4, DISABLE);				             //õǰֵǰȽDMA
++  {
++      uint32_t timeout = 1000U;
++      while ((DMA_GetCmdStatus(DMA1_Stream4) == ENABLE) && (--timeout > 0U)) { }
++  }
++  DMA1_Stream4->M0AR = (uint32_t)&DataBuf_to_linux;  //õǰݻַ:Memory0 tARget
++  DMA1_Stream4->NDTR = 52;     //õǰݵ:Number of Data units to be TRansferred
+   DMA_Cmd(DMA1_Stream4, ENABLE);		
+-                                        //����DMA���� 		
++                                        //DMA 		
+ 
+ }
+ /* --- USART3 throughput test mode -- TEMPORARY, set back to 0 when done ------
+# [Batch 1] send_data.c: telemetry / profiling / stream-7 wait timeout
+@@ -634,17 +649,20 @@ extern float Lin_Acc_X_body, Lin_Acc_Y_body, Lin_Acc_Z_body;   /* gravity-remove
+ 
+ void Send_Groundstation_Telemetry_UART4(void)
+ {
+-    PlatformObservability_Tick((uint16_t)((gs_cmd_head + 16U - gs_cmd_tail) % 16U),
+-                               (uint16_t)(Usart3_Stream_Busy() != 0U));
+     static uint8_t frame_counter = 0;
+     uint16_t len = 0;
+     uint8_t crc = 0;
+     int i;
++    uint8_t dma_busy = 0U;
+     /* Set to 1 when the built frame(s) already carry their own trailing checksum
+      * (Frame A closes its own CRC8 before Frame C is appended). When set, the
+      * shared XOR-CRC8 at the end of this function is skipped so it does not
+      * clobber the framing. Stays 0 for single-frame buffers (B / ID / bench / OF). */
+     uint8_t frame_self_crc = 0;
++    uint32_t t_prof_sec;
++
++    PlatformObservability_Tick((uint16_t)((gs_cmd_head + 16U - gs_cmd_tail) % 16U),
++                               (uint16_t)(Usart3_Stream_Busy() != 0U));
+ 
+     /* Wait for the PREVIOUS UART5 transfer to drain BEFORE touching the buffer.
+      *
+# [Batch 1] send_data.c: telemetry / profiling / stream-7 wait timeout
+@@ -663,10 +681,8 @@ void Send_Groundstation_Telemetry_UART4(void)
+      *
+      * Waiting here costs nothing when the previous frame has already drained (the common
+      * case) and simply paces this task to the link when it has not. */
+-    while (DMA_GetCurrDataCounter(DMA1_Stream7));
+-
+-    Buf_Telemetry_UART4[0] = 0xAA;
+-    Buf_Telemetry_UART4[1] = 0xBB;
++    /* Non-blocking check: if previous UART5 DMA transfer is still active, do not busy-wait */
++    dma_busy = ((DMA_GetCurrDataCounter(DMA1_Stream7) != 0U) || (DMA_GetCmdStatus(DMA1_Stream7) == ENABLE)) ? 1U : 0U;
+ 
+     /* EKF step: runs every Send_Task tick, unconditionally — independent of which
+      * telemetry frame this tick happens to emit. NOTE the tick is 100 Hz in normal
+# [Batch 1] send_data.c: telemetry / profiling / stream-7 wait timeout
+@@ -676,6 +692,7 @@ void Send_Groundstation_Telemetry_UART4(void)
+      * operation), silently defeating the EKF_RUN_ENABLED/EKF_TELEM_ENABLED split
+      * meant to decouple "does it run" from "do we transmit it" (ADR-0011).
+      * IMU accel is in mg -> convert to m/s^2. */
++    t_prof_sec = DWT->CYCCNT;
+     if (!s_ekf_inited) {
+         Ekf9_Init(&s_ekf, EKF_RUN_ENABLED);
+         s_ekf_inited = 1U;
+# [Batch 1] send_data.c: telemetry / profiling / stream-7 wait timeout
+@@ -741,6 +758,22 @@ void Send_Groundstation_Telemetry_UART4(void)
+          * see the same vertical velocity. */
+         Ekf9_UpdateZRate(&s_ekf, ano_of.of2_h_f2_v);
+     }
++    SendProf_Record(&g_send_prof.sec_ekf, t_prof_sec);
++
++    /* UART5 still draining the previous burst: skip this tick's A/B frame
++     * instead of spinning. A staged subscribe request stays pending
++     * (UA5RxSubscribePending) and is answered on the next free tick, since
++     * its reply also needs DMA1_Stream7. */
++    if (dma_busy != 0U) {
++        t_prof_sec = DWT->CYCCNT;
++        Subscribe_StreamTick();
++        SendProf_Record(&g_send_prof.sec_subscribe_tick, t_prof_sec);
++        return;
++    }
++
++    t_prof_sec = DWT->CYCCNT;
++    Buf_Telemetry_UART4[0] = 0xAA;
++    Buf_Telemetry_UART4[1] = 0xBB;
+ 
+     if (motor_test_active) // FRAME 0x04 — motor bench-test stream @100Hz (replaces A/B while active)
+     {
+# [Batch 1] send_data.c: telemetry / profiling / stream-7 wait timeout
+@@ -1257,13 +1290,11 @@ void Send_Groundstation_Telemetry_UART4(void)
+     frame_counter++;
+     
+     // DMA transfer on UART5 wireless link (DMA1_Stream7)
+-    while(DMA_GetCurrDataCounter(DMA1_Stream7));
+-
+     DMA_Cmd(DMA1_Stream7, DISABLE);
+-    /* Wait for the stream to actually stop before rewriting M0AR/NDTR — the EN
+-     * bit clears only once the current burst has drained; reconfiguring early
+-     * corrupts the transfer. */
+-    while (DMA_GetCmdStatus(DMA1_Stream7) == ENABLE);
++    {
++        uint32_t timeout = 1000U;
++        while ((DMA_GetCmdStatus(DMA1_Stream7) == ENABLE) && (--timeout > 0U)) { }
++    }
+ 
+     /* Clear ALL stream-7 event flags before re-enabling, not just TCIF7. The
+      * larger back-to-back Frame A+C burst latches a (benign) FIFO-error FEIF7
+# [Batch 1] send_data.c: telemetry / profiling / stream-7 wait timeout
+@@ -1276,6 +1307,7 @@ void Send_Groundstation_Telemetry_UART4(void)
+     DMA1_Stream7->M0AR = (uint32_t)&Buf_Telemetry_UART4;
+     DMA1_Stream7->NDTR = len;
+     DMA_Cmd(DMA1_Stream7, ENABLE);
++    SendProf_Record(&g_send_prof.sec_telem_build, t_prof_sec);
+ 
+     /* Streaming subscription (CMD 0x21). Ticked BEFORE the request handler so
+      * a subscription accepted this cycle starts emitting on the next one,
+# [Batch 2 - Items 30 & 32] send_data.c:1513,1519 reject out-of-range GS command values
+@@ -1283,7 +1315,9 @@ void Send_Groundstation_Telemetry_UART4(void)
+      * No-op when no stream is active, so the default cadence is unchanged.
+      * When the stream is routed to USART3 this touches DMA1_Stream3 only and
+      * never waits on the UART5 telemetry burst above. */
++    t_prof_sec = DWT->CYCCNT;
+     Subscribe_StreamTick();
++    SendProf_Record(&g_send_prof.sec_subscribe_tick, t_prof_sec);
+ 
+     /* ADR-0011 follow-up (uart5_address_subscription_cmd): if a UART5
+      * subscribe request has been staged by the IRQ-side parser (BSP/usart5.c),
+# [Batch 2 - Items 30 & 32] send_data.c:1513,1519 reject out-of-range GS command values
+@@ -1292,7 +1326,9 @@ void Send_Groundstation_Telemetry_UART4(void)
+      * telemetry; no new FreeRTOS task is created, and the live telemetry
+      * cadence is unchanged when no request is pending. */
+     if (UA5RxSubscribePending != 0U) {
++        t_prof_sec = DWT->CYCCNT;
+         Uart5_Subscribe_HandleRequest();
++        SendProf_Record(&g_send_prof.sec_uart5_request, t_prof_sec);
+     }
+ }
+ 
+# [Batch 2 - Items 30 & 32] send_data.c:1513,1519 reject out-of-range GS command values
+@@ -1478,13 +1514,13 @@ void Process_GroundStation_Command(void)
+             configs[2] = &mrac_config_yaw;
+             configs[3] = &mrac_config_z;
+             if (idx < 4) {
+-                configs[idx]->mrac_to_mixer = val;
++                if (val > 1.0f) configs[idx]->mrac_to_mixer = val;
+             } else if (idx < 8) {
+                 configs[idx - 4]->u_max = val;
+             } else if (idx == 8) {
+                 if (val >= 0.0f && val <= 1.0f) gs_throttle_min_pct = val;
+             } else if (idx == 9) {
+-                if (val >= 0.0f && val <= 1.0f) gs_throttle_max_pct = val;
++                if (val >= 0.50f && val <= 1.0f) gs_throttle_max_pct = val;
+             }
+         }
+ 
+# [Batch 1] send_data.c: CMD 0x0E arm request check
+@@ -1837,16 +1873,18 @@ void Process_GroundStation_Command(void)
+         else if (id == 0x0E) {
+             if (idx == 0) {
+                 if (((uint8_t)(val + 0.5f)) != 0) {
+-                    GS_KeySDKflag = 1U;
+                     FlightFSM_Event(FLIGHT_EVENT_ARM_REQUEST);
+-                    RCInput_SetAuthority(1U);
+-                    /* If already airborne, override the -1.0f throttle floor that
+-                     * SetAuthority just set.  Without this, the motor-idle guard
+-                     * (Z_pos.FB < 0.3 && THR < -0.85) fires immediately and cuts
+-                     * motors mid-flight.  On the ground the floor stays at -1.0f
+-                     * so the pilot must raise the throttle slider deliberately. */
+-                    if (Ctrler.Z_posPID.FB > 0.35f) {
+-                        RCInput_SetVirtualStick(RC_AXIS_THR, 0.0f);
++                    if (FlightFSM_GetState() == FLIGHT_STATE_ARMED) {
++                        GS_KeySDKflag = 1U;
++                        RCInput_SetAuthority(1U);
++                        /* If already airborne, override the -1.0f throttle floor that
++                         * SetAuthority just set.  Without this, the motor-idle guard
++                         * (Z_pos.FB < 0.3 && THR < -0.85) fires immediately and cuts
++                         * motors mid-flight.  On the ground the floor stays at -1.0f
++                         * so the pilot must raise the throttle slider deliberately. */
++                        if (Ctrler.Z_posPID.FB > 0.35f) {
++                            RCInput_SetVirtualStick(RC_AXIS_THR, 0.0f);
++                        }
+                     }
+                 } else {
+                     /* ARM REQ OFF: relinquish PC authority only — drone stays ARMED.
+
+# ====================================================================
+# File: b/TASK/stm32f4xx_it.c
+# ====================================================================
+diff --git a/TASK/stm32f4xx_it.c b/TASK/stm32f4xx_it.c
+index 79d906e..3d4a556 100644
+--- a/TASK/stm32f4xx_it.c
++++ b/TASK/stm32f4xx_it.c
+# [Batch 2 - Item 28] stm32f4xx_it.c:225 USART_Receive early return 0 when buffer empty
+@@ -222,6 +222,12 @@ USHORT16 USART_Receive(USART_RX_TypeDef* USARTx)
+ 		USARTx->rxBufferPtr %= USARTx->DMALen;
+ 	}
+ 
++	if(USARTx->rxBufferPtr == USARTx->rxConter)
++	{
++		USARTx->rxSize = 0;
++		return 0U;
++	}
++
+ 	if(USARTx->rxBufferPtr < USARTx->rxConter)
+ 	{
+ 		USARTx->rxSize = USARTx->rxConter - USARTx->rxBufferPtr; //计算本次接收数据的长度
+
+# ====================================================================
+# File: b/USER/ADC.c
+# ====================================================================
+diff --git a/USER/ADC.c b/USER/ADC.c
+index c6022a1..a515812 100644
+--- a/USER/ADC.c
++++ b/USER/ADC.c
+# [Batch 2 - Item 25] ADC.c: include FreeRTOS.h and task.h
+@@ -1,4 +1,6 @@
+ #include "ADC.h"
++#include "FreeRTOS.h"
++#include "task.h"
+ 
+ void ADC1_Configuration(void)      //ADC����Դ��ѹ
+ {
+# [Batch 2 - Item 25] ADC.c:49 ADC_Read(): critical section around shared ADC1 register access
+@@ -48,21 +50,28 @@ void ADC1_Configuration(void)      //ADC����Դ��ѹ
+ 
+ uint16_t ADC_Read(void)
+ {
+-  //����ת��
++	uint16_t value = 0;
++	uint32_t eoc_timeout = 100000u;
++
++	taskENTER_CRITICAL();
++  //ת
+ 	ADC_SoftwareStartConv(ADC1);
+-	//�ȴ�ת����� — bounded: a mis-clocked/stuck ADC must never hang the caller (SystemMonitor_Task).
++	//ȴת — bounded: a mis-clocked/stuck ADC must never hang the caller (SystemMonitor_Task).
+ 	//If EOC never sets, bail out and report 0 (degraded) instead of spinning forever.
++	while(!ADC_GetFlagStatus(ADC1, ADC_FLAG_EOC))
+ 	{
+-		uint32_t eoc_timeout = 100000u;
+-		while(!ADC_GetFlagStatus(ADC1, ADC_FLAG_EOC))
++		if(--eoc_timeout == 0u)
+ 		{
+-			if(--eoc_timeout == 0u) return 0;
++			taskEXIT_CRITICAL();
++			return 0;
+ 		}
+ 	}
+-  //��ȡADCֵ
+-	uint16_t value = ADC_GetConversionValue(ADC1);
+-  ADC_ClearFlag(ADC1, ADC_FLAG_EOC);
+-  return value;
++  //ȡADCֵ
++	value = ADC_GetConversionValue(ADC1);
++	ADC_ClearFlag(ADC1, ADC_FLAG_EOC);
++	taskEXIT_CRITICAL();
++
++	return value;
+ }
+ 
+ float Voltage_Calculation(uint16_t adc_value) 

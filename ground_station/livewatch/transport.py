@@ -71,6 +71,36 @@ def crc16_ccitt(data: bytes) -> int:
     return crc
 
 
+def crc32_mpeg2(data: bytes) -> int:
+    """STM32 hardware CRC-32/MPEG-2.
+
+    Polynomial 0x04C11DB7, init 0xFFFFFFFF, no reflection, no final XOR.
+    Returns the CRC as a uint32. Matches the firmware peripheral exactly.
+    """
+    crc = 0xFFFFFFFF
+    for byte in data:
+        crc ^= byte << 24
+        for _ in range(8):
+            if crc & 0x80000000:
+                crc = ((crc << 1) ^ 0x04C11DB7) & 0xFFFFFFFF
+            else:
+                crc = (crc << 1) & 0xFFFFFFFF
+    return crc
+
+
+def crc32_mpeg2_words(words: list[int]) -> int:
+    """CRC-32/MPEG-2 fed word-wise (little-endian u32 words)."""
+    crc = 0xFFFFFFFF
+    for w in words:
+        crc ^= w
+        for _ in range(32):
+            if crc & 0x80000000:
+                crc = ((crc << 1) ^ 0x04C11DB7) & 0xFFFFFFFF
+            else:
+                crc = (crc << 1) & 0xFFFFFFFF
+    return crc
+
+
 def pop_frame(rx: bytearray) -> tuple[int, int, bytes] | None:
     """Pop one complete ``0xAA 0xBB`` frame off ``rx``, consuming its bytes.
 

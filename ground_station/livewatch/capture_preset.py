@@ -38,12 +38,12 @@ N*size*count value bytes); see the journal at
 motivated this guard.
 
 NOTE on measured-vs-requested rate: with the firmware-side fix landed
-(API/subscribe.h `SUBSCRIBE_SEND_TASK_HZ = 80U` matching the measured
-MIXED-mode cadence), the host mirrors the same constant in
-`int(80 / hz)` below so the divider sent to firmware matches what the
+(API/subscribe.h `SUBSCRIBE_SEND_TASK_HZ`; the real Send_Task cadence is
+100 Hz), the host uses 100 in
+`int(100 / hz)` below so the divider sent to firmware matches what the
 firmware's per-slot counter expects. Measured rates therefore land at
-roughly `80 / divider`, which equals the requested Hz (within the
-integer-truncation error: e.g. `int(80/50) = 1` rounds 50 Hz up to 80 Hz).
+roughly `100 / divider`, which equals the requested Hz (within the
+integer-truncation error: e.g. `int(100/30) = 3` rounds 30 Hz up to 33 Hz).
 """
 
 from __future__ import annotations
@@ -326,7 +326,7 @@ def capture(
         slot = int(slot_cfg["slot"])
         hz = float(slot_cfg["hz"])
         manifest_name = slot_cfg["manifest"]
-        divider = int(80 / hz)
+        divider = int(100 / hz)
         m = store.get(manifest_name)
         ranges = list(resolve_ranges_from_names(m.vars, resolver))
         manifests_cfg.append(

@@ -14,6 +14,7 @@ def start_shell(
     gs_service: "GroundStationService",
     port: int = 8080,
     static_root: Path | None = None,
+    experiment_runtime=None,
 ) -> ApiServer:
     """Create and start an API server that also serves the browser shell.
 
@@ -22,12 +23,16 @@ def start_shell(
         port: TCP port to listen on (default 8080).
         static_root: Path to the shell directory. If None, defaults to
             `<repo_root>/docs/dashboard-platform/shell`.
+        experiment_runtime: ExperimentRuntime instance that receives telemetry
+            ticks on every ingest_decoded call. Enables the experiment panel
+            to record samples during active experiments.
 
     Returns:
         The started ApiServer instance.
     """
     if static_root is None:
         static_root = Path(__file__).resolve().parents[2] / "docs" / "dashboard-platform" / "shell"
-    api = ApiServer(gs_service, host="0.0.0.0", port=port, static_root=static_root)
+    api = ApiServer(gs_service, host="0.0.0.0", port=port, static_root=static_root,
+                    experiment_runtime=experiment_runtime)
     api.start()
     return api

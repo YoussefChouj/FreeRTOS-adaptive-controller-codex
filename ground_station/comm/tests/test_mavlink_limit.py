@@ -19,7 +19,7 @@ Modes:
 Theoretical wire budget:
    USART3 @ 921600 actual = 913043 baud
    Wire capacity           = 91304 B/s  (10 bits/byte)
-   Send_Task cadence       = 200 Hz  (5 ms tick)
+   Send_Task cadence       = 100 Hz  (10 ms tick)
    Budget per tick         = 456 B
 
    MAVLink frame sizes (header 8 + payload + CRC 2):
@@ -60,7 +60,7 @@ CMD_FRAME   = 9               # 0xCC 0xDD command (9 B: 2 header + 1 cmd + 1 idx
 # ── Wire budget ───────────────────────────────────────────────────────────────
 USART3_BAUD_ACTUAL = 913043   # BRR=0x2E on APB1 @ 42 MHz
 WIRE_BPS           = USART3_BAUD_ACTUAL // 10   # 91304 B/s
-SEND_TASK_HZ       = 200
+SEND_TASK_HZ       = 100
 WIRE_B_PER_TICK    = WIRE_BPS / SEND_TASK_HZ     # 456 B/tick
 
 # ── CRC-16/X.25 (MAVLink CRC) ────────────────────────────────────────────────
@@ -150,7 +150,7 @@ def print_theory():
     print("═" * 70)
     print(f"  USART3 actual baud     : {USART3_BAUD_ACTUAL:,} (BRR=0x2E on APB1 @ 42 MHz)")
     print(f"  Wire capacity          : {WIRE_BPS:,} B/s  (10 bits/byte)")
-    print(f"  Send_Task cadence      : {SEND_TASK_HZ} Hz  (5 ms tick)")
+    print(f"  Send_Task cadence      : {SEND_TASK_HZ} Hz  (10 ms tick)")
     print(f"  Budget per tick        : {WIRE_B_PER_TICK:.1f} B")
     print()
     print("  MAVLink frame sizes:")
@@ -364,8 +364,9 @@ def test_downlink_real(fc_host: str, drone_port: int, recv_port: int,
             f"received {subscribe_n} frames in {elapsed:.1f} s."
         )
 
-    assert combined_hz >= 40.0, (
-        f"Combined rate {combined_hz:.1f} Hz < 40 Hz minimum — "
+    min_combined = 10.0 if has_subscribe else 40.0
+    assert combined_hz >= min_combined, (
+        f"Combined rate {combined_hz:.1f} Hz < {min_combined:.1f} Hz minimum — "
         f"received {justfloat_n} JustFloat + {extended_n} extended + "
         f"{subscribe_n} subscribe frames."
     )

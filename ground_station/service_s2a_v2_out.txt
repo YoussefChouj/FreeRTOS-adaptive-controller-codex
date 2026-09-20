@@ -1,0 +1,33 @@
+[wifi_bridge] [S2A] WiFi RX: 121 B from ('192.168.4.1', 14550), first_bytes=aabb0b006406dc719001e8ab17bec961
+[wifi_bridge] subscribe_slot(slot=0, divider=4, ranges=30, batch=1/2) -> 250 B request
+[wifi_bridge]   [S2A] Wire bytes: ccde2100f31e040100f802002004000100fc020020040001000003002004000100444f012004000100944f012004000100b84f01200400010008500120040001
+[wifi_bridge] [S2A] _recent_requests ring has 1 entries: batch=0/2 ranges=30 fsize=250 req_id=0
+[wifi_bridge] [S2A] _request_states keys: [0], id=0->sent
+[wifi_bridge] subscribe_slot(slot=0, divider=4, ranges=24, batch=2/2) -> 202 B request
+[wifi_bridge]   [S2A] Wire bytes: ccde2100c318040100e04f012004000100e44f012004000100e84f01200400010048500120040001004c50012004000100505001200400010054500120040001
+[wifi_bridge] [S2A] _recent_requests ring has 2 entries: batch=0/2 ranges=30 fsize=250 req_id=0, batch=1/2 ranges=24 fsize=202 req_id=1
+[wifi_bridge] [S2A] _request_states keys: [0, 1], id=0->sent, id=1->sent
+[wifi_bridge] [S15] Sent dashboard schema request (slot 0, 54 vars, divider=4)
+[wifi_bridge] [S15] Ranges (first 8 of 54):
+    0x200002F8 size=4 count=1 name='imu_data.rol'
+    0x200002FC size=4 count=1 name='imu_data.pit'
+    0x20000300 size=4 count=1 name='imu_data.yaw'
+    0x20014F44 size=4 count=1 name='mrac_state.pitch.e'
+    0x20014F94 size=4 count=1 name='mrac_state.pitch.u_ad'
+    0x20014FB8 size=4 count=1 name='mrac_state.roll.e'
+    0x20015008 size=4 count=1 name='mrac_state.roll.u_ad'
+    0x2001502C size=4 count=1 name='mrac_state.yaw.e'
+    ... and 46 more
+[service] Ground-station service started
+  WiFi:      192.168.4.1:14550
+  Dashboard: http://localhost:8081
+  RTOS:      off
+  Preset:    off (slot 0 only)
+  Slot TTL:  30 s
+  Session:   174f9d20b00946d4a1c684574737647b
+
+  Press Ctrl+C to stop.
+
+[wifi_bridge] [S2A] INCOMING 0x08 frame: first_bytes=aabb0800c5180401 len=204
+[wifi_bridge] Registered schema for slot 0: 24 ranges (24 named, 0 unnamed), 96 bytes, divider=4
+[service] Shell bound to http://localhost:8081

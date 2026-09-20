@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>UAV Ground Station</title>
+  <link rel="icon" href="data:,">
   <style>
     :root {
       --bg: #1a1a2e;
@@ -78,11 +79,75 @@
     }
     .status-badge.error::before { background: var(--red); }
 
+    /* ── Workspace tab bar ── */
+    #workspace-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding: 8px 16px;
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .ws-tab {
+      background: none;
+      border: 1px solid transparent;
+      color: var(--muted);
+      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .ws-tab:hover { border-color: var(--border); color: var(--text); }
+    .ws-tab.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--text);
+    }
+
+    /* ── Gate indicator bar ── */
+    #gate-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 4px 16px 8px;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+    }
+
+    .gate-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid transparent;
+    }
+    .gate-item.pass { color: var(--green); border-color: rgba(78,204,163,0.3); }
+    .gate-item.fail { color: var(--red); border-color: rgba(233,69,96,0.3); }
+    .gate-item.unknown { color: var(--muted); border-color: rgba(136,136,170,0.2); }
+    .gate-item::before { content: ''; width: 6px; height: 6px; border-radius: 50%; }
+    .gate-item.pass::before { background: var(--green); }
+    .gate-item.fail::before { background: var(--red); }
+    .gate-item.unknown::before { background: var(--muted); }
+
+    /* Plugin workspace visibility is driven by switchWorkspace() (inline display). */
+
+    /* ── Signal freshness badge ── */
+    .signal-live { color: var(--green); }
+    .signal-stale { color: var(--amber); }
+    .signal-degraded { color: var(--amber); }
+    .signal-unknown { color: var(--muted); }
+    .signal-unverified { color: var(--red); }
+    .signal-replay { color: #8888ff; }
+
     /* ── Layout ── */
     #app {
       display: grid;
       grid-template-columns: 260px 1fr;
-      grid-template-rows: auto 1fr;
+      grid-template-rows: auto auto 1fr;
       height: calc(100vh - 48px);
     }
 
@@ -94,10 +159,22 @@
       padding: 12px;
     }
 
+    #workspace-bar {
+      grid-column: 2;
+    }
+
+    #gate-bar {
+      grid-column: 2;
+    }
+
     #main {
+      grid-column: 2;
       overflow-y: auto;
       padding: 16px;
       display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
       flex-direction: column;
       gap: 16px;
     }
@@ -305,9 +382,61 @@
   <div id="status" class="status-badge disconnected">Connecting…</div>
 </header>
 
+<div id="workspace-bar">
+  <button class="ws-tab active" data-ws="overview" data-testid="tab-overview">Overview</button>
+  <button class="ws-tab" data-ws="control" data-testid="tab-control">Control</button>
+  <button class="ws-tab" data-ws="estimator" data-testid="tab-estimator">Estimator</button>
+  <button class="ws-tab" data-ws="mrac" data-testid="tab-mrac">MRAC</button>
+  <button class="ws-tab" data-ws="telemetry" data-testid="tab-telemetry">Telemetry</button>
+  <button class="ws-tab" data-ws="experiments" data-testid="tab-experiments">Experiments</button>
+  <button class="ws-tab" data-ws="paths" data-testid="tab-paths">Paths</button>
+  <button class="ws-tab" data-ws="bench" data-testid="tab-bench">Bench</button>
+  <button class="ws-tab" data-ws="replay" data-testid="tab-replay">Replay</button>
+  <button class="ws-tab" data-ws="diagnostics" data-testid="tab-diagnostics">Diagnostics</button>
+</div>
+
+<div id="gate-bar">
+  <div class="gate-item unknown" id="gate-connection" title="MicoAir WiFi connected">
+    <span class="gate-label">&#x1F4F6; CONN</span>
+  </div>
+  <div class="gate-item unknown" id="gate-disarmed" title="Drone disarmed">
+    <span class="gate-label">&#x1F6B6; DISARM</span>
+  </div>
+  <div class="gate-item unknown" id="gate-fresh" title="Telemetry freshness">
+    <span class="gate-label">&#x1F4CA; FRESH</span>
+  </div>
+  <div class="gate-item unknown" id="gate-schema" title="Telemetry schema known">
+    <span class="gate-label">&#x1F4CC; SCHEMA</span>
+  </div>
+  <div class="gate-item unknown" id="gate-command" title="Command gateway available">
+    <span class="gate-label">&#x1F4E1; CMD</span>
+  </div>
+</div>
+
 <div id="app">
   <div id="sidebar">
     <!-- sidebar: state summary + alarms -->
+    <div class="card" id="card-flight">
+      <div class="card-header">
+        <span class="card-title">Flight Status</span>
+        <button class="toggle-btn" data-panel="flight">Hide</button>
+      </div>
+      <div class="stat-grid">
+        <div class="stat-item">
+          <span class="stat-label">ARM Status</span>
+          <span class="stat-value" id="sb-arm" style="color:var(--amber)">NOT PUBLISHED</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Flight Mode</span>
+          <span class="stat-value" id="sb-flymode" style="color:var(--amber)">NOT PUBLISHED</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Battery</span>
+          <span class="stat-value" id="sb-vbat" style="color:var(--amber)">NOT PUBLISHED</span>
+        </div>
+      </div>
+    </div>
+
     <div class="card" id="card-state">
       <div class="card-header">
         <span class="card-title">Session</span>
@@ -320,7 +449,7 @@
         </div>
         <div class="stat-item">
           <span class="stat-label">Session</span>
-          <span class="stat-value" id="session_id" style="font-size:11px">—</span>
+          <span class="stat-value" id="session_id" data-testid="session-id" style="font-size:11px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:bottom">—</span>
         </div>
         <div class="stat-item">
           <span class="stat-label">Samples</span>
@@ -345,7 +474,7 @@
   </div>
 
   <div id="main">
-    <div class="card" id="card-streams">
+    <div class="card plugin-card" id="card-streams" data-workspaces="telemetry diagnostics">
       <div class="card-header">
         <span class="card-title">Telemetry Streams</span>
         <button class="toggle-btn" data-panel="streams">Hide</button>
@@ -363,10 +492,10 @@
       </table>
     </div>
 
-    <div class="card" id="card-cmd">
+    <div class="card" id="card-cmd" style="display:none">
       <div class="card-header">
         <span class="card-title">Command</span>
-        <button class="toggle-btn" data-panel="cmd">Hide</button>
+        <button class="toggle-btn" data-panel="cmd">Show</button>
       </div>
       <form class="cmd-form" id="cmd-form">
         <label for="cmd_id">Command ID</label>
@@ -386,24 +515,58 @@
 
 <footer>UAV Ground Station Shell &mdash; polls every 500 ms</footer>
 
-<script type="module">
-(function () {
+<script>
+(async function () {
   'use strict';
 
-  /* ── Plugin registry ── */
+  /* ── API version (per plugin-api.md § "Versioning and stability") ──
+   * Plugins read this constant to detect API-version mismatches. Set BEFORE
+   * any plugin is eval'd so a plugin that checks at registration time sees
+   * the right value. Earlier revisions documented this constant in
+   * plugin-api.md but never set it on the shell, so the contract was
+   * effectively a no-op: every plugin loaded against every shell version
+   * with no diagnostic. Setting it here closes the gap so the documented
+   * `if (window.__SHELL_API_VERSION__ !== 'v2')` check works. */
+  window.__SHELL_API_VERSION__ = 'v2';
+
+  /* ── Plugin registry with workspace metadata ── */
+  /* Each plugin calls __registerPlugin__(name, init, destroy) OR
+   * __registerPlugin__(name, init, destroy, meta) where meta is:
+   *   { workspace: string,    // primary workspace name e.g. 'control', 'mrac'
+   *     gates: string[],     // required safety gates e.g. ['disarmed', 'connected']
+   *     description: string } // human-readable description
+   * Plugins that pass only 3 args default to workspace='all' with no gates. */
   window.__gs_plugins__ = [];
-  window.__registerPlugin__ = function (name, init, destroy) {
-    window.__gs_plugins__.push({ name, init, destroy });
+  window.__registerPlugin__ = function (name, init, destroy, meta) {
+    meta = meta || {};
+    window.__gs_plugins__.push({
+      name: name,
+      init: init,
+      destroy: destroy || function () {},
+      workspace: meta.workspace || 'overview',
+      gates: meta.gates || [],
+      description: meta.description || '',
+    });
   };
 
   /* ── Load all plugins (they call window.__registerPlugin__ on eval) ── */
   const PLUGIN_FILES = [
-    '/static/plugins/status-panel.js',
-    '/static/plugins/mrac-panel.js',
-    '/static/plugins/estimator-panel.js',
-    '/static/plugins/resource-panel.js',
-    '/static/plugins/safety-panel.js',
-    '/static/plugins/telemetry-explorer-panel.js',
+    '/plugins/status-panel.js',
+    '/plugins/mrac-panel.js',
+    '/plugins/estimator-panel.js',
+    '/plugins/resource-panel.js',
+    '/plugins/safety-panel.js',
+    '/plugins/telemetry-explorer-panel.js',
+    '/plugins/command-panel.js',
+    '/plugins/experiment-panel.js',
+    '/plugins/motor-bench-panel.js',
+    '/plugins/time-series-panel.js',
+    '/plugins/fft-panel.js',
+    '/plugins/bandwidth-panel.js',
+    '/plugins/replay-panel.js',
+    '/plugins/path-panel.js',
+    '/plugins/slot-manager-panel.js',
+    '/plugins/resource-map-panel.js',  // S7: firmware resource/data-flow map
   ];
 
   for (const src of PLUGIN_FILES) {
@@ -466,6 +629,182 @@
 
   applyLayout();
 
+  /* ── Workspace switching ── */
+  /* State model per signal:
+   *   live       — received fresh telemetry within TTL
+   *   stale      — last received but older than TTL
+   *   degraded   — received with loss > threshold
+   *   unknown    — no data ever received on this slot
+   *   unverified — received but not confirmed against ground truth
+   *   replay     — data sourced from session replay (not live) */
+  var _activeWorkspace = 'overview';
+  var _lastArmState = null;   // cached for gate evaluation
+
+  function getSignalState(slotData, nowNs, ttlNs) {
+    // 'slotData' is state.streams[slot] or a {values, last_update_ns, loss_pct} dict
+    if (!slotData) return 'unknown';
+    var lastNs = slotData.last_update_ns || 0;
+    if (!lastNs) return 'unknown';
+    var age = nowNs - lastNs;
+    if (age > ttlNs * 2) return 'stale';
+    if (age > ttlNs) return 'stale';
+    var loss = slotData.loss_pct || 0;
+    if (loss > 5) return 'degraded';
+    if (loss > 1) return 'degraded';
+    // Check if any keys are actually fresh
+    var keyTs = slotData._key_ts || {};
+    var values = slotData.values || {};
+    var freshCount = 0;
+    var totalCount = 0;
+    if (typeof values === 'object') {
+      Object.keys(values).forEach(function (k) {
+        totalCount++;
+        var kt = keyTs[k];
+        if (kt && (nowNs - kt) < ttlNs) freshCount++;
+      });
+    }
+    if (totalCount === 0) return 'unknown';
+    if (freshCount === 0) return 'stale';
+    return 'live';
+  }
+
+  /* Safety gates: evaluated on every poll.
+   * Gates block plugin-initiated commands and parameter writes until they pass.
+   * read-only plugins (overview, telemetry) do not require gates. */
+  var _gates = {
+    connected: false,   // MicoAir WiFi is reachable (health responded)
+    disarmed: false,   // drone ARM state = 0 (safe to send parameter commands)
+    fresh: false,      // at least one slot received telemetry in last TTL
+    schema: false,     // telemetry_schema_id is known (schema 0x08 reply received)
+    command: false,    // command gateway is available
+  };
+
+  function evaluateGates(state) {
+    var nowNs = Date.now() * 1e6;
+    var ttlNs = (state && state.slot_freshness_ttl_ns) || 30e9;
+
+    // Connection gate: bridge is available and state says connected
+    var connectedGate = !!(state && (state.connected || state.streams && Object.keys(state.streams).length > 0));
+    _gates.connected = connectedGate;
+
+    // ARM gate: fails closed -- disarmed only when status.arm was seen and is 0
+    var armSeen = false, anyArmed = false;
+    if (state && state.streams) {
+      Object.keys(state.streams).forEach(function (slot) {
+        var s = state.streams[slot];
+        if (s && s.values) {
+          var arm = s.values['status.arm'];
+          if (arm != null) { armSeen = true; if (arm !== 0) anyArmed = true; }
+        }
+      });
+    }
+    _gates.disarmed = armSeen && !anyArmed;
+    _lastArmState = !armSeen ? null : (anyArmed ? 'armed' : 'disarmed');
+
+    // Freshness gate: at least one slot received telemetry within TTL
+    var fresh = false;
+    if (state && state.streams) {
+      Object.keys(state.streams).forEach(function (slot) {
+        var s = state.streams[slot];
+        if (!s) return;
+        var lastNs = s.last_update_ns || 0;
+        if (lastNs && (nowNs - lastNs) < ttlNs) fresh = true;
+      });
+    }
+    _gates.fresh = fresh;
+
+    // Schema gate: telemetry_schema_id is known
+    _gates.schema = !!(state && state.telemetry_schema_id);
+
+    // Command gate: gateway is available
+    _gates.command = !!(state && state.connected);
+  }
+
+  function renderGates() {
+    var gateMap = {
+      'gate-connection': _gates.connected,
+      'gate-disarmed': _gates.disarmed,
+      'gate-fresh': _gates.fresh,
+      'gate-schema': _gates.schema,
+      'gate-command': _gates.command,
+    };
+    Object.keys(gateMap).forEach(function (id) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      var pass = gateMap[id];
+      el.className = 'gate-item ' + (pass ? 'pass' : 'fail');
+    });
+  }
+
+  /* Gate-aware command wrapper: checks all gates before issuing a command.
+   * Returns a rejected Promise if any required gate fails.
+   * Plugins that need specific gates pass them as a string array.
+   * Plugins with no gates array can issue commands without gate checks (dangerous!). */
+  function gatedCommand(cmdId, index, value, requiredGates) {
+    requiredGates = requiredGates || [];
+    var failed = [];
+    requiredGates.forEach(function (g) {
+      if (_gates[g] === false) failed.push(g);
+    });
+    if (failed.length > 0) {
+      return Promise.reject(new Error('Gate(s) not satisfied: ' + failed.join(', ') + '. ARM=' + _lastArmState));
+    }
+    return shellApi.submitCommand(cmdId, index, value);
+  }
+
+  /* Default workspace(s) and gates per panel name. A plugin's own meta wins. */
+  var PANEL_META = {
+    'Flight Status':         { workspace: 'overview control' },
+    'Safety Limits':         { workspace: 'overview control' },
+    'Command Panel':         { workspace: 'control', gates: ['connected', 'disarmed'] },
+    'Time Series':           { workspace: 'overview telemetry' },
+    'MRAC Controller':       { workspace: 'mrac' },
+    'EKF Estimator':         { workspace: 'estimator' },
+    'Telemetry Explorer':    { workspace: 'telemetry' },
+    'Slot Manager':          { workspace: 'telemetry' },
+    'Bandwidth Manager':     { workspace: 'telemetry diagnostics' },
+    'FFT Spectrum':          { workspace: 'telemetry diagnostics' },
+    'Experiment Runtime':    { workspace: 'experiments' },
+    'Path Planning':         { workspace: 'paths' },
+    'Motor Bench':           { workspace: 'bench', gates: ['connected', 'disarmed'] },
+    'Session Replay':        { workspace: 'replay' },
+    'RTOS Resources':        { workspace: 'diagnostics' },
+    'Firmware Resource Map': { workspace: 'diagnostics' }
+  };
+
+  /* data-workspaces is a space-separated token list; 'all' matches every tab. */
+  function wsMatches(wsAttr, name) {
+    var toks = String(wsAttr || '').split(/[\s,]+/);
+    return toks.indexOf(name) >= 0 || toks.indexOf('all') >= 0;
+  }
+
+  function switchWorkspace(name) {
+    _activeWorkspace = name;
+    // Update tab active state
+    document.querySelectorAll('.ws-tab').forEach(function (btn) {
+      btn.classList.toggle('active', btn.getAttribute('data-ws') === name);
+    });
+    // Show/hide plugin cards by workspace
+    document.querySelectorAll('.plugin-card').forEach(function (card) {
+      card.style.display = wsMatches(card.getAttribute('data-workspaces'), name) ? '' : 'none';
+    });
+    // Persist selected workspace
+    try { localStorage.setItem('gs_workspace', name); } catch (_) {}
+  }
+
+  // Workspace tab click
+  document.querySelectorAll('.ws-tab').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      switchWorkspace(btn.getAttribute('data-ws'));
+    });
+  });
+
+  // Restore persisted workspace or default to overview
+  try {
+    var saved = localStorage.getItem('gs_workspace');
+    switchWorkspace(saved || 'overview');
+  } catch (_) { switchWorkspace('overview'); }
+
   /* ── Shell API exposed to plugins ── */
   var onStateChangeCallbacks = [];
 
@@ -479,25 +818,91 @@
         body: JSON.stringify({ command_id: cmdId, index: index, value: value })
       }).then(function (r) { return r.json(); });
     },
+    // S15 — slot subscription helper.
+    // POSTs to the dedicated /subscribe endpoint (added S15). The /commands
+    // endpoint used to interpret command_id=33 (0x21) as the subscribe
+    // wrapper, but the firmware only recognises 0x21 when built and sent
+    // by WifiBridge.subscribe_slot() — not as a generic 0xCC 0xDD command.
+    // Body shape: { slot: int, divider: int, ranges: [string, ...] }.
+    subscribeSlot: function (slot, divider, ranges) {
+      var body = {
+        slot:    slot,
+        divider: divider || 1,
+        ranges:  ranges || []
+      };
+      return fetch('/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      }).then(function (r) {
+        if (!r.ok) throw new Error('subscribe HTTP ' + r.status);
+        return r.json();
+      });
+    },
     getPlugins: function () { return window.__gs_plugins__.map(function (p) { return p.name; }); },
-    registerPanel: function (name, renderFn) {
+    // ── S5: workspace-aware plugin registration ──────────────────────
+    // Register a panel with workspace and gate metadata.
+    // meta: { workspace: string, gates: string[], description: string }
+    registerPanel: function (name, renderFn, meta) {
+      meta = meta || {};
+      var dflt = PANEL_META[name] || {};
+      var ws = String(meta.workspace || dflt.workspace || 'all').split(/[\s,]+/).join(' ');
+      var gates = meta.gates || dflt.gates || [];
+      var slug = name.replace(/\s+/g, '-').toLowerCase();
       var container = document.getElementById('plugin-panels');
       var card = document.createElement('div');
-      card.className = 'card';
-      card.id = 'plugin-' + name.replace(/\s+/g, '-').toLowerCase();
+      card.className = 'card plugin-card';
+      card.id = 'plugin-' + slug;
+      card.setAttribute('data-workspaces', ws);
+      card.setAttribute('data-testid', 'panel-' + slug);
+      card.setAttribute('data-gates', gates.join(' '));
+      // Start hidden if not in the active workspace
+      if (!wsMatches(ws, _activeWorkspace)) card.style.display = 'none';
       var header = document.createElement('div');
       header.className = 'card-header';
       var title = document.createElement('span');
       title.className = 'card-title';
       title.textContent = name;
       header.appendChild(title);
+      // Gate badge
+      if (gates.length > 0) {
+        var badge = document.createElement('span');
+        badge.className = 'gate-badge';
+        badge.style.cssText = 'font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(78,204,163,0.15);color:var(--green)';
+        badge.textContent = gates.join('+');
+        badge.title = 'Required gates: ' + gates.join(', ');
+        header.appendChild(badge);
+      }
       var body = document.createElement('div');
-      body.id = 'plugin-body-' + name.replace(/\s+/g, '-').toLowerCase();
+      body.id = 'plugin-body-' + slug;
       card.appendChild(header);
       card.appendChild(body);
       container.appendChild(card);
       renderFn(body, shellApi);
-    }
+    },
+    // ── S5: truthful state model helpers ──────────────────────────────
+    // getSignalState(slotData) → 'live'|'stale'|'degraded'|'unknown'|'replay'|'unverified'
+    getSignalState: function (slotData) {
+      var nowNs = Date.now() * 1e6;
+      var ttlNs = (currentState && currentState.slot_freshness_ttl_ns) || 30e9;
+      return getSignalState(slotData, nowNs, ttlNs);
+    },
+    // getGates() → { connected, disarmed, fresh, schema, command }
+    getGates: function () { return Object.assign({}, _gates); },
+    // getActiveWorkspace() → string
+    getActiveWorkspace: function () { return _activeWorkspace; },
+    // switchWorkspace(name) → void
+    switchWorkspace: switchWorkspace,
+    // ── S5: gated command submission ─────────────────────────────────
+    // gatedCommand(cmdId, index, value, requiredGates) → Promise
+    // Blocks until all requiredGates pass. Fails with descriptive error if blocked.
+    gatedCommand: gatedCommand,
+    // isGated(gateName) → boolean
+    isGated: function (gateName) { return _gates[gateName] === false; },
+    // isDisarmed() → boolean (convenience for ARM safety checks)
+    isDisarmed: function () { return _gates.disarmed; },
+    // getArmState() → 'armed'|'disarmed'|null (null = unknown)
+    getArmState: function () { return _lastArmState; },
   };
 
   /* ── Plugin bootstrap ── */
@@ -527,32 +932,61 @@
     var result = [];
     var now = Date.now() * 1e6;
     if (state.streams) {
+      var seenStale = false;
+      var seenLossWarn = {};
       Object.keys(state.streams).forEach(function (slot) {
         var s = state.streams[slot];
-        if (s.loss_pct > 1) {
+        if (s.loss_pct > 1 && !seenLossWarn[slot]) {
+          seenLossWarn[slot] = true;
           result.push({
             level: s.loss_pct > 5 ? 'critical' : 'warning',
             text: 'Slot ' + slot + ': ' + s.loss_pct.toFixed(2) + '% packet loss'
           });
         }
-        if (state.last_update_ns != null && (now - state.last_update_ns) > 3e9) {
+        // Per-slot freshness: surface "no data on slot X for 3+ s" once per slot,
+        // and a single global "no telemetry update" only if no slot has any data.
+        if (s.last_update_ns != null && (now - s.last_update_ns) > 3e9) {
           result.push({
-            level: 'critical',
-            text: 'No telemetry update in 3+ seconds'
+            level: 'warning',
+            text: 'Slot ' + slot + ': no telemetry in 3+ s'
           });
         }
       });
+      // Global stale alarm only if state.last_update_ns is set AND no slot has any values.
+      var anyValues = false;
+      Object.keys(state.streams).forEach(function (slot) {
+        var s = state.streams[slot];
+        if (s && s.values && Object.keys(s.values).length > 0) anyValues = true;
+      });
+      if (!anyValues && state.last_update_ns != null && (now - state.last_update_ns) > 3e9 && !seenStale) {
+        seenStale = true;
+        result.push({
+          level: 'critical',
+          text: 'No telemetry update in 3+ seconds'
+        });
+      }
     }
     return result;
   }
 
   /* ── Rendering ── */
+  let _lastSamplesRendered = null;
+  let _lastUpdateRendered = null;
   function renderState(state) {
     document.getElementById('schema_id').textContent = state.schema_id || '—';
-    document.getElementById('session_id').textContent = state.session_id || '—';
-    document.getElementById('samples').textContent =
-      state.samples != null ? state.samples.toLocaleString() : '—';
-    document.getElementById('last_update').textContent = fmtTime(state.last_update_ns);
+    var sidEl = document.getElementById('session_id');
+    sidEl.textContent = state.session_id || '—';
+    sidEl.title = state.session_id || '';
+    var samplesStr = state.samples != null ? state.samples.toLocaleString() : '—';
+    if (samplesStr !== _lastSamplesRendered) {
+      document.getElementById('samples').textContent = samplesStr;
+      _lastSamplesRendered = samplesStr;
+    }
+    var updateStr = fmtTime(state.last_update_ns);
+    if (updateStr !== _lastUpdateRendered) {
+      document.getElementById('last_update').textContent = updateStr;
+      _lastUpdateRendered = updateStr;
+    }
   }
 
   function renderStreams(state) {
@@ -626,6 +1060,10 @@
       setStatus('connected', 'Connected');
       currentState = state;
 
+      // S5: evaluate gates and render them on every poll
+      evaluateGates(state);
+      renderGates();
+
       renderState(state);
       renderStreams(state);
       alarms = buildAlarms(state);
@@ -642,6 +1080,31 @@
   /* ── Bootstrap ── */
   poll();
   setInterval(poll, 500);
+
+  /* ── Lifecycle: invoke registered destroy fns on tab close ── */
+  window.addEventListener('beforeunload', function () {
+    try {
+      _destroyFns.forEach(function (fn) {
+        try { if (typeof fn === 'function') fn(); } catch (e) { /* ignore */ }
+      });
+    } catch (_) { /* ignore */ }
+  });
+
+  /* Expose a refresh hook so plugins (e.g. bandwidth) can request a re-render after subscribe. */
+  window.__gs_plugins_refresh__ = function () {
+    try {
+      var st = currentState;
+      onStateChangeCallbacks.forEach(function (cb) {
+        try { cb(st); } catch (e) { console.error('refresh callback error:', e); }
+      });
+    } catch (_) { /* ignore */ }
+  };
+  /* Expose the shellApi so plugins can call subscribeSlot without re-defining it. */
+  window.__gs_shell_api__ = shellApi;
+  /* Expose gates so plugins can query them synchronously (avoid async fetch). */
+  window.__gs_gates__ = function () { return Object.assign({}, _gates); };
+  /* Expose active workspace so plugins can react to workspace changes. */
+  window.__gs_workspace__ = function () { return _activeWorkspace; };
 
 })();
 </script>

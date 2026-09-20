@@ -5,6 +5,10 @@ ground station, experiment, and agent-observability program. Agents must read
 `IMPLEMENTATION_PLAN.md` and `STATE.md` before changing code, then update
 `STATE.md` and the relevant session report when they finish.
 
+Agents driving the running service or the browser dashboard: read
+[AGENT_GUIDE.md](AGENT_GUIDE.md) first (routes, UI selectors, smoke checks,
+no-POST-to-live rule). Full doc map: [INDEX.md](INDEX.md).
+
 ## Required session order
 
 1. **S1 — Baseline and contract audit** (`sessions/S1-baseline.md`)

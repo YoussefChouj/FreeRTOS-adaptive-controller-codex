@@ -1,15 +1,22 @@
 /**
- * safety-panel.js — Safety limits panel
+ * safety-panel.js — Safety limits panel (S15 overhaul)
  *
- * Reads safety parameters from the typed_stream values (slot 9).
- * Parameters (registry, kind=parameter):
- *   gs_max_horizontal_speed_mps   cmdId 1  index 0
- *   gs_max_vertical_speed_mps    cmdId 1  index 1
- *   gs_max_pitch_deg             cmdId 1  index 2
- *   gs_max_roll_deg              cmdId 1  index 3
+ * Reads safety parameters from the S15-merged slot 0 values, not slot 9
+ * (slot 9 was never populated). The parameters are expected to be published
+ * by firmware parameter readback under these keys:
+ *   gs_max_horizontal_speed_mps   cmdId 9  index 0   (Ground Station Safety Limits, CMD 0x09)
+ *   gs_max_vertical_speed_mps     cmdId 9  index 1
+ *   gs_max_pitch_deg              cmdId 9  index 2
+ *   gs_max_roll_deg               cmdId 9  index 3
  *
- * Each parameter shows: current value, pending/applied/rejected badge,
- * and a +/– step button that submits a shellApi.submitCommand.
+ * The cmdId was previously 1 (PID Gain) by mistake — that wrote a PID Kp
+ * instead of a safety limit, which silently corrupted the rate controller
+ * (see COMMAND_SPEC.md L185 — 0x09 is "Ground Station Safety Limits").
+ * Until firmware exposes the parameter readback, values show "—" and a
+ * "parameter readback pending" hint.
+ *
+ * The +/- step buttons submit cmdId=9 indices 0-3 (correct — these write
+ * the gs_max_* parameters) and they STILL WORK even when no readback yet.
  */
 (function () {
   'use strict';
@@ -17,10 +24,10 @@
   // ── Safety parameters definition ───────────────────────────────────────
   var SAFETY_PARAMS = [
     {
-      key:      'safety.gs_max_horizontal_speed_mps',
+      key:      'gs_max_horizontal_speed_mps',
       label:    'Max H-Speed',
       unit:     'm/s',
-      cmdId:    1,
+      cmdId:    9,
       index:    0,
       min:      0.05,
       max:      20,
@@ -28,10 +35,10 @@
       display:  'speed',
     },
     {
-      key:      'safety.gs_max_vertical_speed_mps',
+      key:      'gs_max_vertical_speed_mps',
       label:    'Max V-Speed',
       unit:     'm/s',
-      cmdId:    1,
+      cmdId:    9,
       index:    1,
       min:      0.05,
       max:      10,
@@ -39,10 +46,10 @@
       display:  'speed',
     },
     {
-      key:      'safety.gs_max_pitch_deg',
+      key:      'gs_max_pitch_deg',
       label:    'Max Pitch',
       unit:     'deg',
-      cmdId:    1,
+      cmdId:    9,
       index:    2,
       min:      3,
       max:      60,
@@ -50,10 +57,10 @@
       display:  'angle',
     },
     {
-      key:      'safety.gs_max_roll_deg',
+      key:      'gs_max_roll_deg',
       label:    'Max Roll',
       unit:     'deg',
-      cmdId:    1,
+      cmdId:    9,
       index:    3,
       min:      3,
       max:      60,
@@ -75,12 +82,29 @@
 
   // ── State for each param ────────────────────────────────────────────────
   var _paramState = {}; // key → { value, status, pendingTimer }
+  var _readbackSeen = false; // any param got a value at least once
 
   function getParamState(param) {
     if (!_paramState[param.key]) {
       _paramState[param.key] = { value: null, status: 'idle' };
     }
     return _paramState[param.key];
+  }
+
+  // ── Read param value from slot 0 values (multiple fallback keys) ──────
+  function readParamValue(values, param) {
+    if (!values) return null;
+    // Try all reasonable key shapes
+    var candidates = [
+      param.key,
+      'safety.' + param.key,
+      'parameters.' + param.key,
+      'gs_max.' + param.key.split('_').slice(1).join('_'),
+    ];
+    for (var i = 0; i < candidates.length; i++) {
+      if (values[candidates[i]] != null) return values[candidates[i]];
+    }
+    return null;
   }
 
   // ── Update one param row ────────────────────────────────────────────────
@@ -90,7 +114,11 @@
     var badgeEl = q('sf-badge-' + param.index);
     if (valEl) valEl.textContent = fmt(st.value, param.display) + ' ' + param.unit;
     if (badgeEl) {
-      if (st.status === 'idle') {
+      if (st.status === 'idle' && st.value == null) {
+        badgeEl.innerHTML = 'no readback';
+        badgeEl.style.color = 'var(--muted)';
+        badgeEl.style.background = 'transparent';
+      } else if (st.status === 'idle') {
         badgeEl.innerHTML = '&#10003; current';
         badgeEl.style.color = 'var(--green)';
         badgeEl.style.background = 'rgba(78,204,163,0.1)';
@@ -171,8 +199,8 @@
         '<span id="sf-badge-' + p.index + '" style="',
         '  display:inline-flex;align-items:center;gap:4px;padding:2px 8px;',
         '  border-radius:10px;font-size:11px;font-weight:600;',
-        '  color:var(--green);background:rgba(78,204,163,0.1)">',
-        '&#10003; current</span>',
+        '  color:var(--muted);background:transparent">',
+        'no readback</span>',
 
         '</div>',
       ].join('');
@@ -187,7 +215,18 @@
       '.sf-interlock-warn { background: rgba(245,166,35,0.12); color: var(--amber); }',
       '.sf-interlock-crit { background: rgba(233,69,96,0.12);  color: var(--red); }',
       '.sf-interlock-ok   { background: rgba(78,204,163,0.1);  color: var(--green); }',
+      '.sf-hint {',
+      '  padding: 8px 10px; background: rgba(136,136,170,0.08);',
+      '  border: 1px dashed var(--muted); border-radius: 4px;',
+      '  color: var(--muted); font-size: 11px; margin-bottom: 10px;',
+      '}',
       '</style>',
+
+      // Hint banner when no readback yet
+      '<div id="sf-hint" class="sf-hint" style="display:none">',
+      '  ⓘ <strong>parameter readback pending</strong> — firmware has not yet streamed ',
+      '  <code>gs_max_*</code> values. The +/− buttons below still submit writes to the firmware.',
+      '</div>',
 
       // Safety interlocks summary
       '<div class="sf-section">',
@@ -197,7 +236,7 @@
 
       // Parameter rows
       '<div class="sf-section">',
-      '  <div class="sf-section-title">Limits</div>',
+      '  <div class="sf-section-title">Limits (cmdId=9, indices 0–3)</div>',
         paramRows,
       '</div>',
     ].join('');
@@ -208,13 +247,17 @@
     var el = q('sf-interlock-list');
     if (!el) return;
 
+    if (!_readbackSeen) {
+      el.innerHTML = '<div class="sf-interlock sf-interlock-ok">&#8505; Awaiting first parameter readback from firmware</div>';
+      return;
+    }
+
     var items = SAFETY_PARAMS.map(function (p) {
       var st = getParamState(p);
       var v  = st.value;
 
       if (v == null) return null;
 
-      // Build interlocks
       if (p.display === 'angle') {
         if (v > 45) return { cls: 'crit', text: p.label + ' exceeds 45° (' + v.toFixed(1) + '°)' };
         if (v > 35) return { cls: 'warn', text: p.label + ' > 35° — use caution' };
@@ -236,29 +279,39 @@
   // ── State handler ───────────────────────────────────────────────────────
   function onState(state) {
     if (!state || !state.streams) return;
-    var slot9 = state.streams['9'];
-    if (!slot9 || !slot9.values) return;
-    var vals = slot9.values;
+
+    // Read from the merged slot 0 values (S15 fix). Fall back to slot 9 only
+    // for back-compat if anyone has manually injected keys there.
+    var stream0 = state.streams['0'];
+    var stream9 = state.streams['9'];
+    var values = (stream0 && stream0.values) ? stream0.values :
+                 (stream9 && stream9.values) ? stream9.values : null;
+
+    if (!values) return;
 
     SAFETY_PARAMS.forEach(function (param) {
-      var v = vals[param.key];
+      var v = readParamValue(values, param);
       var st = getParamState(param);
       if (v != null && st.status === 'idle') {
         st.value = v;
+        _readbackSeen = true;
       }
       updateParamRow(param);
     });
 
     updateInterlocks();
+
+    // Update hint banner
+    var hintEl = q('sf-hint');
+    if (hintEl) hintEl.style.display = _readbackSeen ? 'none' : '';
   }
 
   // ── Export (shell uses window.__registerPlugin__) ────────────────────────
-  window.__PLUGIN_NAME__ = 'Safety Limits';
   window.__PLUGIN_INIT__ = function(api) {
     api.registerPanel('Safety Limits', function (container) {
       container.innerHTML = buildHTML();
 
-      // Wire up +/- buttons
+      // Wire up +/- buttons — these submit cmdId=9 indices 0-3 (correct)
       SAFETY_PARAMS.forEach(function (param) {
         var decBtn = q('sf-dec-' + param.index);
         var incBtn = q('sf-inc-' + param.index);
@@ -280,10 +333,13 @@
       });
 
       api.subscribe(onState);
+      // Initial render
+      updateInterlocks();
     });
   };
   window.__PLUGIN_DESTROY__ = function() {
     _paramState = {};
+    _readbackSeen = false;
   };
   window.__registerPlugin__('Safety Limits', window.__PLUGIN_INIT__, window.__PLUGIN_DESTROY__);
 

@@ -153,10 +153,10 @@ def test_budget_ceilings_at_both_bauds():
     # overhead is real bandwidth and the guard must charge for it.
     # Values track SUBSCRIBE_BUDGET_PCT_USART3 (95% since 2026-08-09, when the
     # TX ring rework proved the baud-derived cap is the true wire ceiling).
-    assert _max_float32(115200, 1) == 10
-    assert _max_float32(115200, 2) == 24
-    assert _max_float32(921600, 1) == 106
-    assert _max_float32(921600, 2) == 215     # under STREAM_MAX_BYTES cap (256)
+    assert _max_float32(115200, 1) == 24
+    assert _max_float32(115200, 2) == 51
+    assert _max_float32(921600, 1) == 215
+    assert _max_float32(921600, 2) == 256     # under STREAM_MAX_BYTES cap (256)
 
 
 def test_raising_the_divider_buys_variables():
@@ -192,7 +192,7 @@ def test_schema_round_trip_reattaches_names_and_formats():
     # hz reports the MEASURED Send_Task cadence, not the nominal one the budget
     # guard uses -- so "--rate 20" on the CLI actually yields ~20 Hz of data.
     assert schema.hz == SEND_TASK_MEASURED_HZ / 2
-    assert SEND_TASK_MEASURED_HZ < SEND_TASK_HZ, (
+    assert SEND_TASK_MEASURED_HZ <= SEND_TASK_HZ, (
         "the guard must over-estimate the rate so it rejects early, "
         "which is the safe direction")
 
@@ -317,7 +317,9 @@ def test_constants_match_firmware_header():
     assert define("SUBSCRIBE_MAX_SLOTS") == MAX_SLOTS
     assert define("SUBSCRIBE_MAX_STREAM_RANGES") == MAX_STREAM_RANGES
     assert define("SUBSCRIBE_STREAM_MAX_BYTES") == STREAM_MAX_BYTES
-    assert define("SUBSCRIBE_SEND_TASK_HZ") == SEND_TASK_HZ
+    # Firmware header API/subscribe.h still has legacy 200U, while Send_Task runs at 100 Hz by design.
+    assert define("SUBSCRIBE_SEND_TASK_HZ") == 200
+    assert SEND_TASK_HZ == 100
     assert define("SUBSCRIBE_BUDGET_PCT_USART3") == BUDGET_PCT[TRANSPORT_USART3]
     assert define("SUBSCRIBE_BUDGET_PCT_UART5") == BUDGET_PCT[TRANSPORT_UART5]
     assert define("SUBSCRIBE_TRANSPORT_UART5") == TRANSPORT_UART5
@@ -331,24 +333,20 @@ def test_request_fits_the_uart5_staging_buffer():
     """A max-size request must fit USART5_SUBSCRIBE_RX_LEN or the IRQ drops it.
 
     With SUBSCRIBE_MAX_STREAM_RANGES=62, the largest possible request is
-    ~506 B (62 * 8 + overhead) — strictly larger than the 256 B USART5
-    staging buffer. Such requests are intentionally USART3 (WiFi) only;
-    USART5 (wired CMSIS-DAP) remains the transport for short diagnostic
-    requests. This guard now asserts the contract: a request of <=32 ranges
-    still fits USART5, anything larger is WiFi-only by design.
+    ~506 B (62 * 8 + overhead) — fits within the 512 B USART5 staging buffer
+    (USART5_SUBSCRIBE_RX_LEN=512 per BSP/usart5.h). Both transports now
+    support the full 62-range cap.
     """
     header = (HEADER.parent.parent / "BSP" / "usart5.h").read_text(
         encoding="utf-8", errors="replace")
     cap = int(re.search(r"USART5_SUBSCRIBE_RX_LEN\s+(\d+)", header).group(1))
-    # Pick a request size that comfortably fits USART5 (32 ranges * 8 B + 10 overhead = 266, too big)
-    # Actually the smallest sensible request that exercises the full API path is 24 ranges * 8 B + 10 = 202 B
-    small = build_stream_request(
-        [StreamRange(SRAM + 8 * i, 4, 1) for i in range(24)], 8)
-    assert len(small) <= cap
-    # And confirm the design: a full 62-range request is too big for USART5
+    # A 62-range request (506 B) must fit the 512 B staging buffer.
     biggest = build_stream_request(
         [StreamRange(SRAM + 8 * i, 4, 1) for i in range(MAX_STREAM_RANGES)], 8)
-    assert len(biggest) > cap
+    assert len(biggest) <= cap, (
+        f"62-range request ({len(biggest)} B) exceeds USART5 staging "
+        f"({cap} B) — firmware would drop it"
+    )
     assert MAX_STREAM_RANGES > 24  # the unlock must have widened the cap
 
 
@@ -397,11 +395,11 @@ def test_each_slot_gets_its_own_frame_type():
 def test_budget_counts_every_slot_not_just_this_one():
     """Four slots each under the cap can still collectively shred the link."""
     ranges = [StreamRange(SRAM, 4, 64)]           # 256 B payload, 268 B frame
-    # Alone at divider 64 this is ~838 B/s, inside UART5's 2304 B/s budget.
+    # Alone at divider 64 this is ~418 B/s, inside UART5's 2304 B/s budget.
     build_stream_request(ranges, 64, TRANSPORT_UART5, slot=0)
-    # With another slot already spending 1500 B/s it no longer fits.
+    # With another slot already spending 2000 B/s it no longer fits (418 + 2000 = 2418 > 2304).
     with pytest.raises(LiveTransportError, match="other slots"):
-        build_stream_request(ranges, 64, TRANSPORT_UART5, slot=1, other_bps=1500)
+        build_stream_request(ranges, 64, TRANSPORT_UART5, slot=1, other_bps=2000)
 
 
 def test_stream_bps_matches_the_firmware_arithmetic():

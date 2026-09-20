@@ -892,7 +892,7 @@ manifests:
       Plus xTickCount so this manifest satisfies REQUIRED_SYNC_VARS on its
       own (a multi-slot preset can put it on slot 0 without needing a
       separate `sync` manifest).
-      Size: 21 vars * 4 B = 84 B payload + 12 B overhead = 96 B/frame.
+      Size: 54 vars * 4 B = 216 B payload + 12 B overhead = 228 B/frame.
 
       NOTE: This manifest is primarily designed for the USART3 wire path (WiFi
       subscribe). Its SWD feasibility ceiling is ~28 Hz (SWD_COST model). The
@@ -900,52 +900,74 @@ manifests:
       firmware (200 Hz) it would be 200/4=50 Hz. Set hz to match your firmware
       mode's Send_Task cadence.
     hz: 20
+    # Each entry pairs the DWARF path (what the firmware symbol table says)
+    # with the spec key the dashboard consumes + an optional ``int: true``
+    # flag for status fields that round to 0 decimals. This is the SAME
+    # mapping the builtin SchemaRegistry fallback carries, so the YAML
+    # becomes the canonical source of truth and the builtin stays a
+    # portable fallback for tests / minimal envs without a manifest.
     vars:
-      # Attitude (3 vars) -- dashboard attitude display + Euler sidebar
-      - imu_data.rol
-      - imu_data.pit
-      - imu_data.yaw
+      # Attitude (3 vars)
+      - { dwarf: "imu_data.rol", key: "status.roll_deg" }
+      - { dwarf: "imu_data.pit", key: "status.pitch_deg" }
+      - { dwarf: "imu_data.yaw", key: "status.yaw_deg" }
       # MRAC e + u_ad for the 4 axes the dashboard bar monitor reads
-      # (lines 2089-2099 of dashboard.py). 8 vars * 4 B = 32 B -- the exact
-      # size of the legacy Frame A's MRAC block.
-      - mrac_state.pitch.e
-      - mrac_state.pitch.u_ad
-      - mrac_state.roll.e
-      - mrac_state.roll.u_ad
-      - mrac_state.yaw.e
-      - mrac_state.yaw.u_ad
-      - mrac_state.z_rate.e
-      - mrac_state.z_rate.u_ad
-      # Status flags (9 vars, 1 B each packed as 4 B in subscribe path).
-      # DWARF paths resolved against live ELF (livewatch names 2026-09-12):
-      #   status.arm            -> DroneStatus.ARM_Status
-      #   status.flymode        -> DroneStatus.FlyMode
-      #   status.sbus_lost      -> sbus_lost  (API/rc_input.h)
-      #   status.twc_execute    -> TWC.execute (TWC is a 36-byte struct -- only
-      #                          the u32 `execute` field fits the 1/2/4 protocol)
-      #   status.twc_arrived    -> TWC_arrived
-      #   status.rc_authority   -> s_authority  (Remoter task authority flag)
-      #   status.of_hold        -> g_of_hold_active
-      #   status.estimator_ready-> g_estimator_ready
-      - DroneStatus.ARM_Status
-      - DroneStatus.FlyMode
-      - sbus_lost
-      - TWC.execute
-      - TWC_arrived
-      - s_authority
-      - g_of_hold_active
-      - g_estimator_ready
-      # Battery voltage (1 var) -- vbat sidebar.
-      # NOTE: this manifest uses `real_voltage` (not `DroneStatus.vbat`) to
-      # match the firmware's boot_default subscribe in API/subscribe.c and
-      # the BOOT_DEFAULT_VARS tuple in boot_default_layout.py. The previous
-      # boot_default manifest's `DroneStatus.vbat` was a divergence -- it
-      # never matched what the firmware was emitting on slot 0.
-      - real_voltage
-      # Monotonic ms clock -- required so this manifest alone satisfies
-      # REQUIRED_SYNC_VARS (multi-slot presets can use it on slot 0 in
-      # place of the lean `sync` manifest).
-      - xTickCount
+      - { dwarf: "mrac_state.pitch.e",    key: "mrac.pitch.e" }
+      - { dwarf: "mrac_state.pitch.u_ad", key: "mrac.pitch.u_ad" }
+      - { dwarf: "mrac_state.roll.e",     key: "mrac.roll.e" }
+      - { dwarf: "mrac_state.roll.u_ad",  key: "mrac.roll.u_ad" }
+      - { dwarf: "mrac_state.yaw.e",      key: "mrac.yaw.e" }
+      - { dwarf: "mrac_state.yaw.u_ad",   key: "mrac.yaw.u_ad" }
+      - { dwarf: "mrac_state.z_rate.e",   key: "mrac.z.e" }
+      - { dwarf: "mrac_state.z_rate.u_ad", key: "mrac.z.u_ad" }
+      # Status flags (8 vars, 1 B each packed as 4 B in subscribe path)
+      - { dwarf: "DroneStatus.ARM_Status", key: "status.arm",          int: true }
+      - { dwarf: "DroneStatus.FlyMode",    key: "status.flymode",      int: true }
+      - { dwarf: "sbus_lost",              key: "status.sbus",         int: true }
+      - { dwarf: "TWC.execute",            key: "status.twc_execute",  int: true }
+      - { dwarf: "TWC_arrived",            key: "status.twc_arrived",  int: true }
+      - { dwarf: "s_authority",            key: "status.rc_authority", int: true }
+      - { dwarf: "g_of_hold_active",       key: "status.of_hold",      int: true }
+      - { dwarf: "g_estimator_ready",      key: "status.estimator_ready", int: true }
+      # Battery voltage
+      - { dwarf: "real_voltage", key: "status.vbat" }
+      # Monotonic ms clock
+      - { dwarf: "xTickCount", key: "xTickCount" }
+      # MRAC full theta vector (24 entries, 4 axes * 6 weights)
+      - { dwarf: "mrac_state.pitch.Theta[0]", key: "mrac.pitch.theta_0" }
+      - { dwarf: "mrac_state.pitch.Theta[1]", key: "mrac.pitch.theta_1" }
+      - { dwarf: "mrac_state.pitch.Theta[2]", key: "mrac.pitch.theta_2" }
+      - { dwarf: "mrac_state.pitch.Theta[3]", key: "mrac.pitch.theta_3" }
+      - { dwarf: "mrac_state.pitch.Theta[4]", key: "mrac.pitch.theta_4" }
+      - { dwarf: "mrac_state.pitch.Theta[5]", key: "mrac.pitch.theta_5" }
+      - { dwarf: "mrac_state.roll.Theta[0]", key: "mrac.roll.theta_0" }
+      - { dwarf: "mrac_state.roll.Theta[1]", key: "mrac.roll.theta_1" }
+      - { dwarf: "mrac_state.roll.Theta[2]", key: "mrac.roll.theta_2" }
+      - { dwarf: "mrac_state.roll.Theta[3]", key: "mrac.roll.theta_3" }
+      - { dwarf: "mrac_state.roll.Theta[4]", key: "mrac.roll.theta_4" }
+      - { dwarf: "mrac_state.roll.Theta[5]", key: "mrac.roll.theta_5" }
+      - { dwarf: "mrac_state.yaw.Theta[0]", key: "mrac.yaw.theta_0" }
+      - { dwarf: "mrac_state.yaw.Theta[1]", key: "mrac.yaw.theta_1" }
+      - { dwarf: "mrac_state.yaw.Theta[2]", key: "mrac.yaw.theta_2" }
+      - { dwarf: "mrac_state.yaw.Theta[3]", key: "mrac.yaw.theta_3" }
+      - { dwarf: "mrac_state.yaw.Theta[4]", key: "mrac.yaw.theta_4" }
+      - { dwarf: "mrac_state.yaw.Theta[5]", key: "mrac.yaw.theta_5" }
+      - { dwarf: "mrac_state.z_rate.Theta[0]", key: "mrac.z.theta_0" }
+      - { dwarf: "mrac_state.z_rate.Theta[1]", key: "mrac.z.theta_1" }
+      - { dwarf: "mrac_state.z_rate.Theta[2]", key: "mrac.z.theta_2" }
+      - { dwarf: "mrac_state.z_rate.Theta[3]", key: "mrac.z.theta_3" }
+      - { dwarf: "mrac_state.z_rate.Theta[4]", key: "mrac.z.theta_4" }
+      - { dwarf: "mrac_state.z_rate.Theta[5]", key: "mrac.z.theta_5" }
+      # EKF 9-state body-frame vector
+      - { dwarf: "s_ekf.x[0]", key: "ekf.vel_x" }
+      - { dwarf: "s_ekf.x[1]", key: "ekf.vel_y" }
+      - { dwarf: "s_ekf.x[2]", key: "ekf.vel_z" }
+      - { dwarf: "s_ekf.x[3]", key: "ekf.bias_accel_x" }
+      - { dwarf: "s_ekf.x[4]", key: "ekf.bias_accel_y" }
+      - { dwarf: "s_ekf.x[5]", key: "ekf.bias_accel_z" }
+      - { dwarf: "s_ekf.x[6]", key: "ekf.bias_gyro_x" }
+      - { dwarf: "s_ekf.x[7]", key: "ekf.bias_gyro_y" }
+      - { dwarf: "s_ekf.x[8]", key: "ekf.bias_gyro_z" }
 
   # -------------------------------------------------------------------------
   # Bias frame — drives the DearPyGui dashboard Bias tab (WiFi mode).

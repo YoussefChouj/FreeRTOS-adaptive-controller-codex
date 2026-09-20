@@ -26,10 +26,23 @@ class Registry:
     def doc(self, group: str) -> str:
         return self._groups.get(group, {}).get("doc", "")
 
-    def expand(self, tokens: list[str]) -> list[str]:
-        """Expand any 'group:<name>' tokens into their vars; pass through plain paths."""
+    def expand(self, tokens: list) -> list[str]:
+        """Expand any 'group:<name>' tokens into their vars; pass through plain paths.
+
+        Tolerates dict-form tokens (e.g. ``{dwarf: ..., key: ...}``) used by
+        ``dashboard_frame_a`` to map a DWARF symbol to a dashboard-side key.
+        The registry contract is "DWARF paths" — dict tokens must contribute
+        their ``dwarf`` path so downstream resolvers work unchanged.
+        """
         out: list[str] = []
         for t in tokens:
+            if isinstance(t, dict):
+                dwarf = t.get("dwarf")
+                if dwarf:
+                    out.append(dwarf)
+                continue
+            if not isinstance(t, str):
+                continue
             if t.startswith("group:"):
                 out.extend(self.vars(t[len("group:"):]))
             else:

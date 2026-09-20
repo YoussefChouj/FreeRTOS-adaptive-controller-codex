@@ -1,4 +1,5 @@
 """Offline tests for the livewatch transport abstraction."""
+import struct
 from argparse import Namespace
 
 import pytest
@@ -413,3 +414,46 @@ def test_wifi_subscribe_times_out_when_no_reply(monkeypatch):
     sym = StreamRange(0x20000000, 4, 1, name="xTickCount")
     with pytest.raises(LiveTransportError, match="timeout"):
         transport.subscribe([sym], divider=1, transport=1, slot=3)
+
+
+# ---- CRC-32/MPEG-2 (STM32 hardware) -------------------------------------
+
+def test_crc32_mpeg2_known_vector():
+    """CRC-32/MPEG-2 of b"123456789" is 0x0376E6E7."""
+    from ground_station.livewatch.transport import crc32_mpeg2
+    result = crc32_mpeg2(b"123456789")
+    assert result == 0x0376E6E7, f"Expected 0x0376E6E7, got 0x{result:08X}"
+
+
+def test_crc32_mpeg2_empty_is_init():
+    """Empty input returns the init value (0xFFFFFFFF)."""
+    from ground_station.livewatch.transport import crc32_mpeg2
+    assert crc32_mpeg2(b"") == 0xFFFFFFFF
+
+
+def test_crc32_mpeg2_words_matches_byte():
+    """Word-wise CRC of little-endian words must match byte-wise CRC of the
+    bytes reversed within each 4-byte word (STM32 CRC unit processes bits
+    MSB-first, which for a little-endian word is the big-endian byte order).
+    """
+    from ground_station.livewatch.transport import crc32_mpeg2, crc32_mpeg2_words
+    import struct
+    data = b"123456789" + b"\xFF" * 3  # pad to multiple of 4
+    words = list(struct.unpack("<" + "I" * (len(data) // 4), data))
+    reversed_data = b"".join(data[i*4:(i+1)*4][::-1] for i in range(len(words)))
+    assert crc32_mpeg2_words(words) == crc32_mpeg2(reversed_data)
+
+
+def test_crc32_mpeg2_word_feeds_correctly():
+    """Word-wise feed must match the byte-wise CRC when the bytes within each
+    4-byte word are reversed (STM32 CRC processes MSB-first of the word).
+    """
+    from ground_station.livewatch.transport import crc32_mpeg2, crc32_mpeg2_words
+    import struct
+    data = bytes(range(256)) * 4  # 1024 bytes
+    expected = crc32_mpeg2(data)
+    # Word-wise must process bytes reversed within each word
+    words = list(struct.unpack("<" + "I" * (len(data) // 4), data))
+    reversed_data = b"".join(data[i*4:(i+1)*4][::-1] for i in range(len(words)))
+    actual = crc32_mpeg2_words(words)
+    assert actual == crc32_mpeg2(reversed_data), f"word={actual:08X} rev={crc32_mpeg2(reversed_data):08X}"

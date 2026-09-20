@@ -1,0 +1,108 @@
+{
+  "browser": {
+    "console_errors": "unavailable \u2014 no browser harness yet",
+    "screenshot": "unavailable \u2014 no browser harness yet",
+    "source_confirmed": "unverified",
+    "unavailable": [
+      "screenshot",
+      "console_errors",
+      "view_model"
+    ],
+    "view_model": "unavailable \u2014 /api/view-model not yet implemented"
+  },
+  "collected_at_ns": 1789693250352285600,
+  "commands": {
+    "results": [],
+    "source_confirmed": "unverified",
+    "unavailable": []
+  },
+  "evidence_status": "unverified",
+  "evidence_summary": {
+    "live_observed": [
+      "transport",
+      "frames"
+    ],
+    "source_confirmed": [
+      "git"
+    ],
+    "unverified": [
+      "firmware",
+      "service",
+      "samples",
+      "commands",
+      "browser"
+    ]
+  },
+  "firmware": {
+    "path": "C:\\Users\\Acer\\Desktop\\UAV_lab\\FreeRTOS-adaptive-controller-codex\\OBJ\\JX_FLY.axf",
+    "schema_id": null,
+    "sha256": "79978562b8e5a9ec",
+    "size_bytes": 986008,
+    "unavailable": []
+  },
+  "frames": {
+    "requests": [
+      {
+        "divider": 4,
+        "range_count": 30,
+        "request_bytes": "ccde2100f31e040100f802002004000100fc020020040001000003002004000100444f012004000100944f012004000100b84f01200400010008500120040001",
+        "slot": 0,
+        "timestamp_ns": 1789693225771213500,
+        "transport": 1
+      },
+      {
+        "divider": 4,
+        "range_count": 24,
+        "request_bytes": "ccde2100c318040100e04f012004000100e44f012004000100e84f01200400010048500120040001004c50012004000100505001200400010054500120040001",
+        "slot": 0,
+        "timestamp_ns": 1789693225771213500,
+        "transport": 1
+      }
+    ],
+    "responses": [],
+    "source_confirmed": "live_observed",
+    "unavailable": [
+      "payload omitted \u2014 not yet instrumented in wifi_bridge"
+    ]
+  },
+  "git": {
+    "branch": "main",
+    "dirty": true,
+    "head": "9423386f596f3fbb92952b1f2fffad6a83a7f78c",
+    "source_confirmed": "source_confirmed",
+    "unavailable": []
+  },
+  "process": {
+    "error": "No module named 'resource'",
+    "unavailable": []
+  },
+  "samples": {
+    "source_confirmed": "unverified",
+    "streams": {},
+    "unavailable": []
+  },
+  "service": {
+    "adapter_version": "v2",
+    "connected": true,
+    "last_update_ns": null,
+    "samples": 0,
+    "schema_id": "r1-s1-9F32E2EA",
+    "session_id": "ef9c74d7cbc74e98b5f02565bb43ac63",
+    "slot_freshness_ttl_ns": 30000000000,
+    "telemetry_schema_id": "r1-s1-9F32E2EA",
+    "unavailable": []
+  },
+  "transport": {
+    "active_slots": [],
+    "bridge_available": true,
+    "last_error": null,
+    "request_states": {
+      "0": {
+        "range_count": 24,
+        "state": "schema_pending"
+      }
+    },
+    "source_confirmed": "live_observed",
+    "unavailable": []
+  }
+}

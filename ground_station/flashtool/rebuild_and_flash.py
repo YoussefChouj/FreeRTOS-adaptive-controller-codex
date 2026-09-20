@@ -47,9 +47,12 @@ from pathlib import Path
 from . import safe_flash as sf
 from .target_power import PortUnavailable, powered_from_sample, sample
 
+from ground_station.livewatch.verify import compute_crc_from_hex
+
 SNAPSHOT = sf._OBJ / ".prev-flashed"
 ARTIFACTS = ("JX_FLY.axf", "JX_FLY.hex", "JX_FLY.map")
 DISARMED = 0
+ARCHIVE_DIR = sf._OBJ / "archive"
 
 
 def _say(msg):
@@ -88,6 +91,30 @@ def restore_artifacts() -> None:
         src = SNAPSHOT / name
         if src.exists():
             shutil.copy2(src, sf._OBJ / name)
+
+
+def archive_artifact() -> None:
+    """Copy the freshly-flashed .axf to OBJ/archive/<crc32>.axf.
+
+    Uses the CRC-32/MPEG-2 computed from the hex file as the archive name,
+    matching the firmware's g_fw_identity reporting. This lets us detect
+    when a subsequent build produces a different image without reflashing.
+    """
+    hex_path = sf._OBJ / "JX_FLY.hex"
+    axf_path = sf._OBJ / "JX_FLY.axf"
+    if not hex_path.exists() or not axf_path.exists():
+        return
+    try:
+        crc, _len, _base = compute_crc_from_hex(hex_path)
+        crc_hex = f"{crc:08x}"
+        ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+        archive_name = f"JX_FLY_{crc_hex}.axf"
+        dest = ARCHIVE_DIR / archive_name
+        if not dest.exists():
+            shutil.copy2(axf_path, dest)
+            _say(f"archived {archive_name}")
+    except Exception as exc:
+        _say(f"archive failed (non-fatal): {exc}")
 
 
 def build(rebuild: bool = True, timeout: float = 900):
@@ -458,6 +485,7 @@ def main(argv=None) -> int:
         return 8
 
     shutil.rmtree(SNAPSHOT, ignore_errors=True)
+    archive_artifact()
     _say("DONE: flashed, target alive, OBJ/JX_FLY.axf now matches the running image.")
     return 0
 

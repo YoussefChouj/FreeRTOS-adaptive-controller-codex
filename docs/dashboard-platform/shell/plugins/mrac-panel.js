@@ -1,45 +1,50 @@
 /**
- * mrac-panel.js — MRAC adaptive controller panel
+ * mrac-panel.js — MRAC adaptive controller panel (S15 overhaul)
  *
- * Reads MRAC theta parameters from the typed_stream values (slot 9).
- * Keys are expected to start with "mrac." e.g.:
- *   mrac.pitch.theta_0 … mrac.pitch.theta_5
- *   mrac.pitch.u_nom, mrac.pitch.x_m
- *   mrac.roll.theta_0  … mrac.roll.theta_5
- *   mrac.roll.u_nom, mrac.roll.x_m
- *   mrac.yaw.theta_0   … mrac.yaw.theta_5
- *   mrac.yaw.u_nom, mrac.yaw.x_m
+ * Reads MRAC tracking error (e), adaptive output (u_ad), and the full
+ * 6-element adaptive weight vector (theta_0..theta_5) per axis from the
+ * merged slot 0 values.  After the S15 slot-0 layout update, the dashboard
+ * sidebar publishes these keys (mapped from DWARF in wifi_bridge):
+ *   mrac.pitch.e, mrac.pitch.u_ad
+ *   mrac.pitch.theta_0 … mrac.pitch.theta_5   (4 B float32 each)
+ *   (same pattern for roll / yaw / z_rate axes)
  *
- * Displays a table + inline SVG bar chart per axis.
- * Axes are colour-coded: pitch = blue, roll = green, yaw = amber.
+ * The sidebar mapping is: mrac_state.<axis>.Theta[N]  →  mrac.<axis>.theta_N
+ * via WifiBridge._slot0_to_sidebar (DWARF paths verified 2026-09-17).
+ *
+ * Named keys read first; if missing (firmware hasn't resolved the symbols
+ * yet, or symbol resolution failed), the panel falls back to gyro proxy
+ * data with an honest "PROXY" badge so it is clear no real MRAC data
+ * is shown.
+ *
+ * Theta layout per axis (MAX_NUM_BASIS = 6):
+ *   theta_0  — bias / feedforward basis (correlates with u_nom)
+ *   theta_1  — proportional (correlates with angle)
+ *   theta_2  — derivative (correlates with gyro rate)
+ *   theta_3  — drag / velocity (INCLUDE_CONTROL_IN_REGRESSOR=1)
+ *   theta_4  — extra basis (structured uncertainty, structured)
+ *   theta_5  — extra basis (structured uncertainty, unstructured)
+ *
+ * The +2 slots (theta_3..theta_5) only carry useful information when
+ * INCLUDE_CONTROL_IN_REGRESSOR is enabled in firmware; otherwise they stay
+ * near zero. All 6 are displayed for completeness.
  */
 (function () {
   'use strict';
 
-  // ── Axis colour map ─────────────────────────────────────────────────────
+  // ── Axis config ─────────────────────────────────────────────────────────
+  var AXES = ['pitch', 'roll', 'yaw', 'z'];
   var AXIS_COLORS = {
     pitch: '#4a9eff',
     roll:  '#4ecca3',
     yaw:   '#f5a623',
+    z:     '#c39bd3',
   };
+  var AXIS_LABELS = { pitch: 'Pitch', roll: 'Roll', yaw: 'Yaw', z: 'Altitude' };
+  // Theta element indices per axis (0..5 — MAX_NUM_BASIS = 6)
+  var THETA_N = [0, 1, 2, 3, 4, 5];
 
-  var AXIS_LABELS = { pitch: 'Pitch', roll: 'Roll', yaw: 'Yaw' };
-
-  // ── Theta key builders ─────────────────────────────────────────────────
-  function thetaKeys(axis) {
-    return {
-      theta_0: 'mrac.' + axis + '.theta_0',
-      theta_1: 'mrac.' + axis + '.theta_1',
-      theta_2: 'mrac.' + axis + '.theta_2',
-      theta_3: 'mrac.' + axis + '.theta_3',
-      theta_4: 'mrac.' + axis + '.theta_4',
-      theta_5: 'mrac.' + axis + '.theta_5',
-      u_nom:   'mrac.' + axis + '.u_nom',
-      x_m:     'mrac.' + axis + '.x_m',
-    };
-  }
-
-  // ── DOM helpers ────────────────────────────────────────────────────────
+  // ── Helpers ─────────────────────────────────────────────────────────────
   function q(id) { return document.getElementById(id); }
 
   function fmtNum(v) {
@@ -47,163 +52,237 @@
     return parseFloat(v).toFixed(4);
   }
 
+  // ── Read with fallback ─────────────────────────────────────────────────
+  // Returns { value, source } where source is 'named' or 'proxy:<reason>'.
+  // S15: real MRAC keys come from the sidebar mapping; gyro proxy kept as
+  // fallback so the panel is never blank before firmware symbol resolution.
+  function readNamed(values, axis, suffix) {
+    var namedKey = 'mrac.' + axis + '.' + suffix;
+    if (values && values[namedKey] != null) {
+      return { value: values[namedKey], source: 'named' };
+    }
+    // Proxy fallback: gyro rate as a last resort (honest — shows nothing
+    // when drone is disarmed and gyro reads near zero).
+    var ch = { pitch: 0, roll: 1, yaw: 10, z: 10 }[axis] || 0;
+    var slot0Key = 'slot0.ch0.' + ch;
+    if (values && values[slot0Key] != null) {
+      return { value: values[slot0Key], source: 'proxy:slot0.ch0.' + ch };
+    }
+    if (values && values['ch' + ch] != null) {
+      return { value: values['ch' + ch], source: 'proxy:ch' + ch };
+    }
+    return { value: null, source: 'none' };
+  }
+
+  // ── Read theta vector elements ──────────────────────────────────────────
+  // Reads mrac.<axis>.theta_0 … theta_5. Falls back to null per element.
+  function readTheta(values, axis) {
+    return THETA_N.map(function (n) {
+      var key = 'mrac.' + axis + '.theta_' + n;
+      return {
+        value:  (values && values[key] != null) ? values[key] : null,
+        source: (values && values[key] != null) ? 'named' : 'none',
+      };
+    });
+  }
+
   // ── SVG bar chart (no external lib) ────────────────────────────────────
-  // Renders theta_0 … theta_5 as vertical bars for one axis.
-  // container: DOM element to fill
-  // values: [theta_0 … theta_5] (null for missing)
-  // color: CSS color string
-  // axisLabel: display name (Pitch / Roll / Yaw)
-  function renderAxisBars(container, values, color, axisLabel) {
-    var W = 260, H = 80;
+  // values: array of numeric values to show as bars.
+  // labels: array of same length as values.
+  // color: bar fill color.
+  // axisLabel: chart title text.
+  // subLabel: optional subtitle (e.g. source badge).
+  function renderAxisBars(container, values, labels, color, axisLabel, subLabel) {
+    var W = 260, H = 100;
     var PAD_LEFT = 28, PAD_RIGHT = 8, PAD_TOP = 14, PAD_BOT = 18;
     var INNER_W = W - PAD_LEFT - PAD_RIGHT;
     var INNER_H = H - PAD_TOP - PAD_BOT;
 
-    // Find max absolute value for scaling
-    var maxAbs = 0.01;
-    values.forEach(function (v) {
-      if (v != null && Math.abs(v) > maxAbs) maxAbs = Math.abs(v);
+    // Separate into positive (above zero) and negative (below zero) groups
+    var posVals = [], posLbls = [];
+    var negVals = [], negLbls = [];
+    values.forEach(function (v, i) {
+      if (v >= 0) { posVals.push(v); posLbls.push(labels[i]); }
+      else        { negVals.push(Math.abs(v)); negLbls.push(labels[i]); }
     });
-    var scale = INNER_H / (maxAbs * 2);
 
-    var barW = Math.floor(INNER_W / 7); // 6 bars + 1 gap
-    var gap  = Math.floor((INNER_W - barW * 6) / 7);
+    var maxPos = 0.001;
+    var maxNeg = 0.001;
+    posVals.forEach(function (v) { if (v > maxPos) maxPos = v; });
+    negVals.forEach(function (v) { if (v > maxNeg) maxNeg = v; });
+    var scalePos = INNER_H / 2 / maxPos;
+    var scaleNeg = INNER_H / 2 / maxNeg;
 
-    // Build SVG
-    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="display:block;max-width:' + W + 'px">';
-
-    // Zero line
     var zeroY = PAD_TOP + INNER_H / 2;
+    var nPos = posVals.length || 1;
+    var nNeg = negVals.length || 1;
+    var barW = Math.floor(Math.min(INNER_W / (nPos + nNeg + 2), 14));
+    var gap  = Math.max(2, Math.floor((INNER_W - barW * (nPos + nNeg + 1)) / (nPos + nNeg + 2)));
+
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" style="display:block;max-width:' + W + 'px">';
     svg += '<line x1="0" y1="' + zeroY + '" x2="' + W + '" y2="' + zeroY + '" stroke="rgba(255,255,255,0.15)" stroke-width="1"/>';
 
-    // Bars
-    values.forEach(function (v, i) {
-      if (v == null) return;
-      var cx    = PAD_LEFT + gap + i * (barW + gap) + barW / 2;
-      var halfH = Math.abs(v) * scale;
-      var x0    = cx - barW / 2;
-      var y0    = v >= 0 ? zeroY - halfH : zeroY;
-      svg += '<rect x="' + x0 + '" y="' + y0 + '" width="' + barW + '" height="' + halfH + '" fill="' + color + '" opacity="0.85" rx="2"/>';
-    });
-
-    // X-axis labels
-    values.forEach(function (v, i) {
+    // Positive bars (to the right of zero)
+    posVals.forEach(function (v, i) {
       var cx = PAD_LEFT + gap + i * (barW + gap) + barW / 2;
-      svg += '<text x="' + cx + '" y="' + (H - 4) + '" text-anchor="middle" font-size="9" fill="rgba(255,255,255,0.4)" font-family="Consolas,monospace">&#952;' + i + '</text>';
+      var barH = Math.max(1, v * scalePos);
+      var x0 = cx - barW / 2;
+      var y0 = zeroY - barH;
+      svg += '<rect x="' + x0 + '" y="' + y0 + '" width="' + barW + '" height="' + barH + '" fill="' + color + '" opacity="0.85" rx="2"/>';
+      svg += '<text x="' + cx + '" y="' + (H - 2) + '" text-anchor="middle" font-size="8" fill="rgba(255,255,255,0.45)" font-family="Consolas,monospace">' + posLbls[i] + '</text>';
     });
 
-    // Axis label
+    // Negative bars (to the left of zero)
+    var negStartX = PAD_LEFT + gap + posVals.length * (barW + gap) + gap;
+    negVals.forEach(function (v, i) {
+      var cx = negStartX + i * (barW + gap) + barW / 2;
+      var barH = Math.max(1, v * scaleNeg);
+      var x0 = cx - barW / 2;
+      var y0 = zeroY;
+      svg += '<rect x="' + x0 + '" y="' + y0 + '" width="' + barW + '" height="' + barH + '" fill="' + color + '" opacity="0.5" rx="2"/>';
+      svg += '<text x="' + cx + '" y="' + (H - 2) + '" text-anchor="middle" font-size="8" fill="rgba(255,255,255,0.35)" font-family="Consolas,monospace">' + negLbls[i] + '</text>';
+    });
+
+    // Axis label + subtitle
     svg += '<text x="3" y="' + (PAD_TOP + 10) + '" font-size="9" fill="' + color + '" font-weight="600" font-family="Segoe UI,sans-serif">' + axisLabel + '</text>';
-
-    // Max annotation
-    svg += '<text x="' + (W - PAD_RIGHT) + '" y="' + (PAD_TOP + 10) + '" text-anchor="end" font-size="9" fill="rgba(255,255,255,0.35)" font-family="Consolas,monospace">&#955;' + fmtNum(maxAbs) + '</text>';
-
+    if (subLabel) {
+      svg += '<text x="3" y="' + (PAD_TOP + 20) + '" font-size="8" fill="rgba(255,255,255,0.35)" font-family="Consolas,monospace">' + subLabel + '</text>';
+    }
     svg += '</svg>';
     container.innerHTML = svg;
   }
 
-  // ── Table row builder ───────────────────────────────────────────────────
-  function buildRow(axis, k, color) {
-    return '<tr style="border-bottom:1px solid var(--border)">' +
-      '<td style="padding:4px 6px;color:' + color + ';font-weight:600;font-size:12px">' + AXIS_LABELS[axis] + '</td>' +
-      '<td style="padding:4px 6px;font-family:Consolas,monospace;font-size:12px" id="mrac-td-' + axis + '-' + k + '">—</td>' +
-      '</tr>';
-  }
+  // ── State ───────────────────────────────────────────────────────────────
+  var _hasData = false;
+  var _proxyInUse = false;
+  // axis → { e, u_ad, theta: [ {value, source}, ... ] }
+  var _axisData = {};
 
   // ── Build panel HTML ────────────────────────────────────────────────────
   function buildHTML() {
-    var axes = ['pitch', 'roll', 'yaw'];
-    var thetaNames = ['theta_0','theta_1','theta_2','theta_3','theta_4','theta_5','u_nom','x_m'];
-    var cols = thetaNames.map(function (n) {
-      return '<th style="padding:4px 6px;text-align:right;font-size:10px">' + n.replace('theta_', '&#952;') + '</th>';
+    var axesHTML = AXES.map(function (axis) {
+      return [
+        '<div style="margin-bottom:14px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:5px">',
+        '  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">',
+        '    <span style="font-size:11px;color:var(--muted);font-weight:600">' + AXIS_LABELS[axis] + ' axis</span>',
+        '    <span id="mrac-' + axis + '-source" style="font-size:9px;color:var(--muted);font-family:Consolas,monospace">—</span>',
+        '  </div>',
+        // e + u_ad row
+        '  <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">',
+        '    <div style="flex:1;min-width:80px">',
+        '      <div style="font-size:9px;color:var(--muted)">tracking error (e)</div>',
+        '      <div id="mrac-' + axis + '-e-val" style="font-family:Consolas,monospace;font-size:14px;font-weight:600">—</div>',
+        '    </div>',
+        '    <div style="flex:1;min-width:80px">',
+        '      <div style="font-size:9px;color:var(--muted)">adaptive output (u_ad)</div>',
+        '      <div id="mrac-' + axis + '-u_ad-val" style="font-family:Consolas,monospace;font-size:14px;font-weight:600">—</div>',
+        '    </div>',
+        '  </div>',
+        // Theta bar chart (shows theta_0..theta_5)
+        '  <div style="font-size:9px;color:var(--muted);margin-bottom:2px">theta vector (theta_0..theta_5)</div>',
+        '  <div id="mrac-chart-' + axis + '"></div>',
+        '</div>',
+      ].join('');
     }).join('');
-
-    var rows = '';
-    axes.forEach(function (axis) {
-      rows += '<tr style="border-bottom:1px solid var(--border)">';
-      rows += '<td style="padding:4px 6px;color:' + AXIS_COLORS[axis] + ';font-weight:600;font-size:12px">' + AXIS_LABELS[axis] + '</td>';
-      thetaNames.forEach(function (k) {
-        rows += '<td style="padding:4px 6px;text-align:right;font-family:Consolas,monospace;font-size:12px" id="mrac-' + axis + '-' + k + '">—</td>';
-      });
-      rows += '</tr>';
-    });
-
-    var bars = '';
-    axes.forEach(function (axis) {
-      bars += '<div style="margin-bottom:10px" id="mrac-chart-' + axis + '"></div>';
-    });
 
     return [
       '<style>',
-      '.mrac-table { width: 100%; border-collapse: collapse; font-size: 12px; }',
-      '.mrac-table th { text-align: right; font-size: 10px; font-weight: 600;',
-      '  color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase;',
-      '  padding: 4px 6px; border-bottom: 1px solid var(--border); }',
-      '.mrac-table td { padding: 4px 6px; }',
-      '.mrac-table tr:hover td { background: rgba(255,255,255,0.02); }',
-      '.mrac-chart-wrap { margin-top: 8px; }',
       '.mrac-no-data { color: var(--muted); font-size: 12px; text-align: center; padding: 20px; }',
+      '.mrac-proxy-banner { padding:8px 10px;background:rgba(245,166,35,0.10);border:1px solid var(--amber);border-radius:4px;color:var(--amber);font-size:11px;margin-bottom:12px;font-weight:600; }',
+      '.mrac-proxy-pill { display:inline-block;padding:1px 6px;background:rgba(245,166,35,0.2);color:var(--amber);border-radius:8px;font-size:9px;font-weight:700;letter-spacing:0.04em;margin-left:6px; }',
       '</style>',
 
-      '<div style="margin-bottom:10px;font-size:11px;color:var(--muted)">Theta parameters (mrac.&lt;axis&gt;.theta_0…5, u_nom, x_m)</div>',
+      // Proxy-mode banner (hidden when named keys are present)
+      '<div id="mrac-proxy-banner" class="mrac-proxy-banner" style="display:none">',
+      '  <span style="font-family:Consolas,monospace">[PROXY]</span> Firmware does not yet expose mrac.* keys. Showing raw IMU channels as placeholder.',
+      '</div>',
 
-      '<div class="mrac-chart-wrap" id="mrac-charts"></div>',
-
-      '<table class="mrac-table" id="mrac-table">',
-      '  <thead><tr><th style="text-align:left">Axis</th>' + cols + '</tr></thead>',
-      '  <tbody>' + rows + '</tbody>',
-      '</table>',
+      // Per-axis blocks
+      '<div id="mrac-axes">' + axesHTML + '</div>',
     ].join('');
   }
 
-  // ── State handler ────────────────────────────────────────────────────────
-  var _axes = ['pitch', 'roll', 'yaw'];
-  var _thetaNames = ['theta_0','theta_1','theta_2','theta_3','theta_4','theta_5','u_nom','x_m'];
-  var _hasData = false;
-
+  // ── State handler ───────────────────────────────────────────────────────
   function onState(state) {
     if (!state || !state.streams) return;
-    var slot9 = state.streams['9'];
-    if (!slot9 || !slot9.values) return;
-    var vals = slot9.values;
+    var stream0 = state.streams['0'];
+    if (!stream0 || !stream0.values) return;
 
-    var allBars = { pitch: [], roll: [], yaw: [] };
-    var updated = false;
+    var values = stream0.values;
+    var anyNamed = false;
+    var anyProxy = false;
+    var anyUpdate = false;
 
-    _axes.forEach(function (axis) {
-      _thetaNames.forEach(function (k) {
-        var fullKey = 'mrac.' + axis + '.' + k;
-        var v = vals[fullKey];
-        var el = q('mrac-' + axis + '-' + k);
-        if (el) el.textContent = fmtNum(v);
-        if (k !== 'u_nom' && k !== 'x_m') {
-          // Collect for bar chart (theta_0..5 only)
-          allBars[axis].push(v);
+    AXES.forEach(function (axis) {
+      _axisData[axis] = {
+        e:     readNamed(values, axis, 'e'),
+        u_ad:  readNamed(values, axis, 'u_ad'),
+        theta: readTheta(values, axis),
+      };
+
+      var eInfo   = _axisData[axis].e;
+      var uadInfo = _axisData[axis].u_ad;
+      var thetaArr = _axisData[axis].theta;
+
+      if (eInfo.source  === 'named') anyNamed = true;
+      if (uadInfo.source === 'named') anyNamed = true;
+      thetaArr.forEach(function (t) { if (t.source === 'named') anyNamed = true; });
+      if (eInfo.source.indexOf('proxy') === 0)    anyProxy = true;
+      if (uadInfo.source.indexOf('proxy') === 0)   anyProxy = true;
+
+      // Render e + u_ad values
+      var eEl   = q('mrac-' + axis + '-e-val');
+      var uadEl = q('mrac-' + axis + '-u_ad-val');
+      var srcEl = q('mrac-' + axis + '-source');
+      if (eEl)   eEl.textContent = fmtNum(eInfo.value);
+      if (uadEl) uadEl.textContent = fmtNum(uadInfo.value);
+
+      // Source badge
+      if (srcEl) {
+        var namedCount = (eInfo.source === 'named' ? 1 : 0)
+                       + (uadInfo.source === 'named' ? 1 : 0)
+                       + thetaArr.filter(function (t) { return t.source === 'named'; }).length;
+        if (namedCount >= 6) {
+          srcEl.textContent = 'mrac.' + axis + '.*';
+          srcEl.style.color = 'var(--green)';
+        } else if (eInfo.source.indexOf('proxy') === 0 || uadInfo.source.indexOf('proxy') === 0) {
+          srcEl.textContent = '[PROXY] gyro fallback';
+          srcEl.style.color = 'var(--amber)';
+        } else {
+          srcEl.textContent = 'no data';
+          srcEl.style.color = 'var(--muted)';
         }
-        if (v != null) updated = true;
-      });
-    });
+      }
 
-    if (updated) _hasData = true;
-
-    // Render bar charts
-    var chartsEl = q('mrac-charts');
-    if (!chartsEl) return;
-    if (!_hasData) {
-      chartsEl.innerHTML = '<div class="mrac-no-data">Waiting for MRAC telemetry…</div>';
-      return;
-    }
-
-    _axes.forEach(function (axis) {
+      // Theta bar chart: labels = ['e','uad','t0','t1','t2','t3','t4','t5']
+      var thetaVals = [eInfo.value, uadInfo.value].concat(
+        thetaArr.map(function (t) { return t.value; })
+      );
+      var thetaLabels = ['e', 'uad'].concat(
+        thetaArr.map(function (_, i) { return 't' + i; })
+      );
+      var isProxy = eInfo.source.indexOf('proxy') === 0;
+      var subLabel = isProxy ? '[PROXY]' : '';
       var chartEl = q('mrac-chart-' + axis);
       if (chartEl) {
-        renderAxisBars(chartEl, allBars[axis], AXIS_COLORS[axis], AXIS_LABELS[axis]);
+        renderAxisBars(chartEl, thetaVals, thetaLabels,
+                       AXIS_COLORS[axis], AXIS_LABELS[axis], subLabel);
       }
+
+      if (eInfo.value != null || uadInfo.value != null) anyUpdate = true;
     });
+
+    // Show/hide proxy banner
+    var banner = q('mrac-proxy-banner');
+    if (banner) {
+      banner.style.display = anyProxy && !anyNamed ? '' : 'none';
+    }
+    _proxyInUse = anyProxy && !anyNamed;
+
+    if (anyUpdate) _hasData = true;
   }
 
   // ── Export (shell uses window.__registerPlugin__) ────────────────────────
-  window.__PLUGIN_NAME__ = 'MRAC Controller';
   window.__PLUGIN_INIT__ = function(api) {
     api.registerPanel('MRAC Controller', function (container) {
       container.innerHTML = buildHTML();
@@ -212,6 +291,8 @@
   };
   window.__PLUGIN_DESTROY__ = function() {
     _hasData = false;
+    _proxyInUse = false;
+    _axisData = {};
   };
   window.__registerPlugin__('MRAC Controller', window.__PLUGIN_INIT__, window.__PLUGIN_DESTROY__);
 

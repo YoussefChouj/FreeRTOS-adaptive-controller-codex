@@ -7,6 +7,9 @@ import tempfile
 
 from ground_station.analysis.session import (
     compare_sessions,
+    compute_effective_rate,
+    compute_gaps,
+    compute_jitter,
     export_session_csv,
     query_telemetry,
     telemetry_stats,
@@ -178,3 +181,246 @@ class TestExportCsv:
             reader = csv.DictReader(f)
             rows = list(reader)
         assert len(rows) == 3
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S6: jitter / gap / effective-rate tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestComputeGaps:
+    """Tests for compute_gaps: detects dt > threshold gaps per stream."""
+
+    def test_no_gaps_on_regular_telemetry(self):
+        """5 ms intervals with 5x threshold → no gaps."""
+        store = SessionStore()
+        sid = store.start_session("s", source="test")
+        # 5 records at 5 ms = 50 Hz → threshold = 25 ms
+        t = 1_000_000_000
+        for i in range(5):
+            store.append_telemetry(sid, 1, i, {"v": float(i)},
+                                   source_time_ms=t // 1_000_000,
+                                   time_ns=t)
+            t += 5_000_000  # 5 ms
+        gaps = compute_gaps(store, sid)
+        assert gaps[1] == []
+
+    def test_detects_gap_above_threshold(self):
+        """A single 200 ms gap among 5 ms intervals is detected."""
+        store = SessionStore()
+        sid = store.start_session("s", source="test")
+        t = 1_000_000_000
+        # 3 normal records at 5 ms — increment t inside the loop
+        for i in range(3):
+            store.append_telemetry(sid, 1, i, {"v": float(i)},
+                                   source_time_ms=t // 1_000_000,
+                                   time_ns=t)
+            t += 5_000_000
+        # 1 large gap (200 ms)
+        t += 200_000_000
+        store.append_telemetry(sid, 1, 3, {"v": 3.0},
+                               source_time_ms=t // 1_000_000,
+                               time_ns=t)
+        gaps = compute_gaps(store, sid)
+        # threshold = 5 * 5ms = 25 ms; wall gaps: 5ms, 5ms, 205ms → 1 gap
+        assert len(gaps[1]) == 1
+        assert gaps[1][0]["dt_ns"] == 205_000_000
+
+    def test_gap_includes_sequence_info(self):
+        """Gap record carries sequence numbers of the gap endpoints."""
+        store = SessionStore()
+        sid = store.start_session("s", source="test")
+        # Need 4 records so there are 3 gaps; median is based on the 2 non-gap dts
+        t = 1_000_000_000
+        store.append_telemetry(sid, 1, 0, {"v": 0.0}, time_ns=t)
+        t += 5_000_000
+        store.append_telemetry(sid, 1, 1, {"v": 1.0}, time_ns=t)
+        t += 1_000_000_000  # 1 s gap
+        store.append_telemetry(sid, 1, 2, {"v": 2.0}, time_ns=t)
+        t += 5_000_000
+        store.append_telemetry(sid, 1, 3, {"v": 3.0}, time_ns=t)
+        gaps = compute_gaps(store, sid)
+        assert len(gaps[1]) == 1
+        assert gaps[1][0]["sequence"] == 2
+        assert gaps[1][0]["prev_sequence"] == 1
+
+    def test_custom_threshold_multiplier(self):
+        """With 2x multiplier, smaller gaps are flagged."""
+        store = SessionStore()
+        sid = store.start_session("s", source="test")
+        t = 1_000_000_000
+        for i in range(4):
+            store.append_telemetry(sid, 1, i, {"v": float(i)}, time_ns=t)
+            t += 5_000_000
+        t += 15_000_000  # 3x the 5ms interval → 15ms gap
+        store.append_telemetry(sid, 1, 4, {"v": 4.0}, time_ns=t)
+        # default 5x threshold = 25 ms → not flagged
+        gaps_default = compute_gaps(store, sid)
+        assert gaps_default[1] == []
+        # 2x threshold = 10 ms → 15ms gap is flagged
+        gaps_custom = compute_gaps(store, sid, gap_threshold_multiplier=2.0)
+        assert len(gaps_custom[1]) == 1
+
+    def test_empty_and_single_record_session(self):
+        """Empty session or stream with <2 records returns no gaps."""
+        store = SessionStore()
+        sid_empty = store.start_session("s", source="test")
+        assert compute_gaps(store, sid_empty) == {}
+
+        sid_one = store.start_session("s", source="test")
+        store.append_telemetry(sid_one, 1, 0, {"v": 1.0}, time_ns=1_000_000_000)
+        # single record → no consecutive pair → empty
+        assert compute_gaps(store, sid_one) == {}
+
+
+class TestComputeJitter:
+    """Tests for compute_jitter: |dt - median_dt| statistics per stream."""
+
+    def test_jitter_near_zero_on_regular_telemetry(self):
+        """Perfectly regular 10 ms intervals → jitter_mean close to zero."""
+        store = SessionStore()
+        sid = store.start_session("s", source="test")
+        t = 1_000_000_000
+        for i in range(5):
+            store.append_telemetry(sid, 1, i, {"v": float(i)}, time_ns=t)
+            t += 10_000_000  # 10 ms
+        jitter = compute_jitter(store, sid)
+        # all dts = 10 ms = median → |dt - median| = 0 for every pair
+        assert jitter[1]["jitter_mean_ns"] == 0.0
+        assert jitter[1]["jitter_max_ns"] == 0
+
+    def test_jitter_nonzero_on_irregular_telemetry(self):
+        """Irregular intervals produce non-zero jitter."""
+        store = SessionStore()
+        sid = store.start_session("s", source="test")
+        # 5 records give 4 gaps.  Precompute timestamps so all intervals are used.
+        intervals = [8_000_000, 10_000_000, 10_000_000, 12_000_000]
+        t = 1_000_000_000
+        # record 0 at initial t; then t advances by each interval for the next record
+        store.append_telemetry(sid, 1, 0, {"v": 0.0}, time_ns=t)
+        for i, dt in enumerate(intervals, start=1):
+            t += dt
+            store.append_telemetry(sid, 1, i, {"v": float(i)}, time_ns=t)
+        jitter = compute_jitter(store, sid)
+        # dts = [8, 10, 10, 12] ms → sorted [8,10,10,12] → median=10ms
+        # deviations: [2, 0, 0, 2] ms → mean = 1ms
+        assert jitter[1]["jitter_mean_ns"] == 1_000_000.0
+        assert jitter[1]["jitter_max_ns"] == 2_000_000
+
+    def test_jitter_std_reported(self):
+        """jitter_std_ns is present and non-negative."""
+        store = SessionStore()
+        sid = store.start_session("s", source="test")
+        t = 1_000_000_000
+        for i in range(5):
+            store.append_telemetry(sid, 1, i, {"v": float(i)}, time_ns=t)
+            t += 10_000_000
+        jitter = compute_jitter(store, sid)
+        assert jitter[1]["jitter_std_ns"] is not None
+        assert jitter[1]["jitter_std_ns"] >= 0
+
+    def test_single_record_returns_none_stats(self):
+        """A stream with one record cannot compute jitter."""
+        store = SessionStore()
+        sid = store.start_session("s", source="test")
+        store.append_telemetry(sid, 1, 0, {"v": 1.0}, time_ns=1_000_000_000)
+        jitter = compute_jitter(store, sid)
+        assert jitter[1]["jitter_mean_ns"] is None
+        assert jitter[1]["jitter_std_ns"] is None
+        assert jitter[1]["jitter_max_ns"] is None
+
+    def test_filters_by_stream_id(self):
+        """Only the specified stream is included in the result."""
+        store = SessionStore()
+        sid = _seed_session(store)  # stream 1 + stream 2
+        jitter = compute_jitter(store, sid, stream_id=1)
+        assert 1 in jitter
+        assert 2 not in jitter
+
+
+class TestComputeEffectiveRate:
+    """Tests for compute_effective_rate: firmware source_time_ms clock analysis."""
+
+    def test_effective_rate_from_source_time_ms(self):
+        """Rate is computed from source_time_ms deltas, not wall-clock."""
+        store = SessionStore()
+        sid = store.start_session("s", source="test")
+        # 10 ms apart in firmware clock
+        for i in range(4):
+            store.append_telemetry(sid, 1, i, {"v": float(i)},
+                                   source_time_ms=100 + i * 10,
+                                   time_ns=1_000_000_000 + i * 15_000_000)
+        # wall clock is 15 ms apart → 66.7 Hz; source is 10 ms apart → 100 Hz
+        result = compute_effective_rate(store, sid)
+        # effective rate from source_time_ms should be ~100 Hz
+        assert result[1]["effective_rate_hz"] is not None
+        assert 95 < result[1]["effective_rate_hz"] < 105
+
+    def test_detects_clock_wrap_and_excludes_from_rate(self):
+        """A uint32 wrap is counted but its delta is excluded; subsequent valid deltas remain."""
+        store = SessionStore()
+        sid = store.start_session("s", source="test")
+        # record 0: near uint32 max
+        store.append_telemetry(sid, 1, 0, {"v": 0.0},
+                               source_time_ms=4_294_967_000,
+                               time_ns=1_000_000_000)
+        # record 1: wrapped to ~0 — delta excluded (negative)
+        store.append_telemetry(sid, 1, 1, {"v": 1.0},
+                               source_time_ms=1_000,
+                               time_ns=1_010_000_000)
+        # record 2: 10 ms later — valid delta included
+        store.append_telemetry(sid, 1, 2, {"v": 2.0},
+                               source_time_ms=1_010,
+                               time_ns=1_020_000_000)
+        # record 3: another 10 ms — valid delta included
+        store.append_telemetry(sid, 1, 3, {"v": 3.0},
+                               source_time_ms=1_020,
+                               time_ns=1_030_000_000)
+        result = compute_effective_rate(store, sid)
+        assert result[1]["clock_wrap_count"] == 1
+        # 2 valid deltas of 10 ms → ~100 Hz
+        assert 95 < result[1]["effective_rate_hz"] < 105
+
+    def test_missing_source_time_returns_empty(self):
+        """Streams with no source_time_ms data produce empty effective_rate dict."""
+        store = SessionStore()
+        sid = store.start_session("s", source="test")
+        store.append_telemetry(sid, 1, 0, {"v": 0.0}, time_ns=1_000_000_000)
+        store.append_telemetry(sid, 1, 1, {"v": 1.0}, time_ns=1_010_000_000)
+        result = compute_effective_rate(store, sid)
+        assert result == {}
+
+    def test_clock_drift_ppm_reported(self):
+        """source_clock_drift_ppm is computed when both clocks are available."""
+        store = SessionStore()
+        sid = store.start_session("s", source="test")
+        # source runs at exactly 10 ms (100 Hz); wall clock also 10 ms (100 Hz)
+        for i in range(4):
+            store.append_telemetry(sid, 1, i, {"v": float(i)},
+                                   source_time_ms=100 + i * 10,
+                                   time_ns=1_000_000_000 + i * 10_000_000)
+        result = compute_effective_rate(store, sid)
+        # drift should be near zero (both clocks aligned)
+        assert result[1]["source_clock_drift_ppm"] is not None
+        assert abs(result[1]["source_clock_drift_ppm"]) < 100  # within 100 ppm
+
+    def test_filters_by_stream_id(self):
+        """Only the specified stream appears in the result."""
+        store = SessionStore()
+        sid = _seed_session(store)  # stream 1 + stream 2
+        result = compute_effective_rate(store, sid, stream_id=2)
+        assert 2 in result
+        assert 1 not in result
+
+    def test_sample_count_excludes_wrapped_dts(self):
+        """sample_count reflects non-wrapped deltas only."""
+        store = SessionStore()
+        sid = store.start_session("s", source="test")
+        store.append_telemetry(sid, 1, 0, {"v": 0.0},
+                               source_time_ms=100, time_ns=1_000_000_000)
+        store.append_telemetry(sid, 1, 1, {"v": 1.0},
+                               source_time_ms=110, time_ns=1_010_000_000)
+        store.append_telemetry(sid, 1, 2, {"v": 2.0},
+                               source_time_ms=120, time_ns=1_020_000_000)
+        # 3 records → 2 source deltas
+        result = compute_effective_rate(store, sid)
+        assert result[1]["sample_count"] == 2

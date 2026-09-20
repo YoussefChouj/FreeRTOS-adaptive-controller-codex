@@ -1,62 +1,100 @@
 /**
- * estimator-panel.js — EKF / estimator panel
+ * estimator-panel.js — EKF / estimator panel (S15 overhaul)
  *
- * Reads EKF state variables from the typed_stream values (slot 9).
- * Keys are expected to start with "ekf." or "estimator." e.g.:
- *   ekf.pos_x, ekf.pos_y, ekf.pos_z   (m)
- *   ekf.vel_x, ekf.vel_y, ekf.vel_z  (m/s)
- *   ekf.bias_gyro_x, ekf.bias_gyro_y, ekf.bias_gyro_z
- *   estimator.cov_pxx, estimator.cov_pyy, ...
- *   estimator.filter_status
+ * Reads EKF state variables from slot 0 values via the sidebar mapping
+ * (WifiBridge._slot0_to_sidebar). After the S15 DASHBOARD_FRAME_A_VARS
+ * update, the sidebar publishes these keys (mapped from DWARF in firmware):
+ *   ekf.vel_x/y/z         ← s_ekf.x[0..2]  (body-frame velocity, m/s)
+ *   ekf.bias_accel_x/y/z  ← s_ekf.x[3..5]  (accel bias, m/s²)
+ *   ekf.bias_gyro_x/y/z  ← s_ekf.x[6..8]  (gyro bias, rad/s)
  *
- * Shows a simple text display grouped by: Position, Velocity, Bias, Covariance.
+ * Position keys (ekf.pos_x/y/z) are NOT present in the 9-state EKF —
+ * the model has no position state. Likewise estimator.filter_status and
+ * estimator.cov_* are not published. These fields render an explicit
+ * "not published by this build" state (n/p + note), never a zero.
+ *
+ * Source: Ekf9_t in TASK/send_data.c (static, DWARF-visible as `s_ekf`).
+ * Telemetry layout: v_body[0..2], b_a_body[3..5], b_g_body[6..8].
+ *
+ * The panel shows raw IMU channels as a proxy under an honest disclaimer
+ * when no EKF data has arrived yet.
  */
 (function () {
   'use strict';
 
-  // ── Groups ──────────────────────────────────────────────────────────────
-  var GROUPS = [
+  // ── EKF named key groups (when firmware exposes them) ────────────────
+  var EKF_GROUPS = [
     {
       label: 'Position (m)',
-      keys: ['ekf.pos_x','ekf.pos_y','ekf.pos_z',
-             'estimator.pos_x','estimator.pos_y','estimator.pos_z'],
+      keys: ['ekf.pos_x', 'ekf.pos_y', 'ekf.pos_z'],
       axisLabels: ['X', 'Y', 'Z'],
+      unit: 'm',
+      // 9-state EKF: no position states exist in this build.
+      unpublished: true,
+      unpublishedNote: 'Not published by this build — this 9-state EKF has no position states.',
     },
     {
       label: 'Velocity (m/s)',
-      keys: ['ekf.vel_x','ekf.vel_y','ekf.vel_z',
-             'estimator.vel_x','estimator.vel_y','estimator.vel_z'],
+      keys: ['ekf.vel_x', 'ekf.vel_y', 'ekf.vel_z'],
       axisLabels: ['X', 'Y', 'Z'],
+      unit: 'm/s',
     },
     {
       label: 'Gyro Bias (rad/s)',
-      keys: ['ekf.bias_gyro_x','ekf.bias_gyro_y','ekf.bias_gyro_z',
-             'estimator.bias_gyro_x','estimator.bias_gyro_y','estimator.bias_gyro_z'],
+      keys: ['ekf.bias_gyro_x', 'ekf.bias_gyro_y', 'ekf.bias_gyro_z'],
       axisLabels: ['X', 'Y', 'Z'],
+      unit: 'rad/s',
     },
     {
       label: 'Accel Bias (m/s²)',
-      keys: ['ekf.bias_acc_x','ekf.bias_acc_y','ekf.bias_acc_z',
-             'estimator.bias_acc_x','estimator.bias_acc_y','estimator.bias_acc_z'],
+      keys: ['ekf.bias_accel_x', 'ekf.bias_accel_y', 'ekf.bias_accel_z'],
       axisLabels: ['X', 'Y', 'Z'],
+      unit: 'm/s²',
     },
   ];
 
-  // Covariance group — derived at render time from any key matching cov pattern
-  var COV_KEYS = [
-    'ekf.cov_pxx','ekf.cov_pyy','ekf.cov_pzz',
-    'ekf.cov_vxx','ekf.cov_vyy','ekf.cov_vzz',
-    'estimator.cov_pxx','estimator.cov_pyy','estimator.cov_pzz',
+  // ── Raw IMU proxy groups (used until firmware exposes EKF) ────────────
+  // Honest labeling per S15 brief: rename to "Raw IMU" not "EKF"
+  var RAW_GROUPS = [
+    {
+      label: 'Raw IMU — Gyro (rad/s)',
+      keys: ['slot0.ch0.0', 'slot0.ch0.1'],
+      axisLabels: ['X', 'Y'],
+      fallback: ['ch0', 'ch1'],
+    },
+    {
+      label: 'Raw IMU — Accel (m/s²)',
+      keys: ['slot0.ch0.2'],
+      axisLabels: ['Z'],
+      fallback: ['ch2'],
+    },
+    {
+      label: 'Raw IMU — Baro Alt (m)',
+      keys: ['slot0.ch0.10'],
+      axisLabels: ['ALT'],
+      fallback: ['ch10'],
+    },
   ];
 
-  var FILTER_STATUS_LABELS = ['Initializing','Active','Degraded','Failed'];
+  // Covariance keys — do NOT exist in this build (no covariance telemetry).
+  var COV_KEYS = ['estimator.cov_pxx', 'estimator.cov_pyy', 'estimator.cov_pzz',
+                  'estimator.cov_vxvx', 'estimator.cov_vyvy', 'estimator.cov_vzvz'];
+
+  // Filter status enum labels (estimator.filter_status is not published by
+  // this build; the labels only apply if a future build adds the key).
+  var FILTER_STATUS_LABELS = ['Initializing', 'Active', 'Degraded', 'Failed'];
+
+  // Explicit marker for fields this build does not publish. Short cell text
+  // plus a prose note per group — never a bare em-dash and never a zero.
+  var NOT_PUBLISHED = 'n/p';
+  var NOT_PUBLISHED_HINT = 'Not published by this build';
 
   // ── DOM helpers ─────────────────────────────────────────────────────────
   function q(id) { return document.getElementById(id); }
 
   function fmtNum(v, dec) {
     if (v == null) return '—';
-    dec = dec === undefined ? 4 : dec;
+    dec = (dec === undefined) ? 4 : dec;
     return parseFloat(v).toFixed(dec);
   }
 
@@ -65,34 +103,62 @@
     return parseFloat(v).toExponential(3);
   }
 
+  function getValue(values, keys, fallback) {
+    if (!values) return null;
+    for (var i = 0; i < keys.length; i++) {
+      if (values[keys[i]] != null) return values[keys[i]];
+    }
+    if (fallback) {
+      for (var j = 0; j < fallback.length; j++) {
+        if (values[fallback[j]] != null) return values[fallback[j]];
+      }
+    }
+    return null;
+  }
+
   // ── Build panel HTML ────────────────────────────────────────────────────
   function buildHTML() {
-    var groupHTML = GROUPS.map(function (g, gi) {
+    // Build EKF group rows. Published groups show values when s_ekf frames
+    // arrive; structurally absent groups (position) render n/p + a note.
+    var ekfHTML = EKF_GROUPS.map(function (g) {
       var cells = g.axisLabels.map(function (al, ai) {
-        var k = g.keys[ai]; // use first key as representative id
-        return '<div style="display:flex;flex-direction:column;align-items:center;flex:1">' +
+        var initText = g.unpublished ? NOT_PUBLISHED : '—';
+        return '<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:54px">' +
           '<span style="font-size:10px;color:var(--muted)">' + al + '</span>' +
-          '<span id="ekf-' + g.keys[ai] + '" style="font-family:Consolas,monospace;font-size:13px">—</span>' +
+          '<span id="ekf-' + g.keys[ai].replace(/\./g, '-') + '" style="font-family:Consolas,monospace;font-size:13px">' + initText + '</span>' +
+          '<span style="font-size:9px;color:var(--muted)">' + g.unit + '</span>' +
           '</div>';
       }).join('');
-      // Add estimator variants
-      g.axisLabels.forEach(function (al, ai) {
-        var ki = g.keys.length / 2 + ai;
-        var k = g.keys[ki];
-        if (!k) return;
-      });
-
+      var note = g.unpublished
+        ? '<div id="ekf-note-' + g.keys[0].split('.')[1] + '" class="ekf-unpublished-note">' + g.unpublishedNote + '</div>'
+        : '';
       return '<div style="margin-bottom:12px">' +
         '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">' + g.label + '</div>' +
-        '<div style="display:flex;gap:12px">' + cells + '</div>' +
+        '<div style="display:flex;gap:8px">' + cells + '</div>' + note +
         '</div>';
     }).join('');
 
-    // Covariance row
+    // Build Raw IMU proxy rows
+    var rawHTML = RAW_GROUPS.map(function (g) {
+      var cells = g.axisLabels.map(function (al, ai) {
+        var key = g.keys[ai].replace(/\./g, '-');
+        return '<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:54px">' +
+          '<span style="font-size:10px;color:var(--muted)">' + al + '</span>' +
+          '<span id="raw-' + key + '" style="font-family:Consolas,monospace;font-size:13px">—</span>' +
+          '</div>';
+      }).join('');
+      return '<div style="margin-bottom:10px">' +
+        '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">' + g.label + '</div>' +
+        '<div style="display:flex;gap:8px">' + cells + '</div>' +
+        '</div>';
+    }).join('');
+
+    // Covariance cells — structurally absent in this build, start at n/p.
     var covCells = COV_KEYS.map(function (k) {
-      return '<div style="display:flex;flex-direction:column;align-items:center;flex:1">' +
+      var key = k.replace(/\./g, '-');
+      return '<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:64px">' +
         '<span style="font-size:9px;color:var(--muted)">' + k.split('.').pop() + '</span>' +
-        '<span id="ekf-' + k + '" style="font-family:Consolas,monospace;font-size:11px;color:var(--amber)">—</span>' +
+        '<span id="cov-' + key + '" style="font-family:Consolas,monospace;font-size:10px;color:var(--amber)">' + NOT_PUBLISHED + '</span>' +
         '</div>';
     }).join('');
 
@@ -102,28 +168,55 @@
       '.ekf-filter { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px;',
       '  border-radius: 12px; font-size: 11px; font-weight: 600; }',
       '.ekf-filter-ok    { background: rgba(78,204,163,0.15); color: var(--green); }',
-      '.ekf-filter-warn   { background: rgba(245,166,35,0.15); color: var(--amber); }',
-      '.ekf-filter-err    { background: rgba(233,69,96,0.15);  color: var(--red); }',
+      '.ekf-filter-warn  { background: rgba(245,166,35,0.15); color: var(--amber); }',
+      '.ekf-filter-err   { background: rgba(233,69,96,0.15);  color: var(--red); }',
       '.ekf-filter-unknown { background: rgba(136,136,170,0.1); color: var(--muted); }',
+      '.ekf-disclaimer {',
+      '  padding: 10px 12px; background: rgba(245,166,35,0.10);',
+      '  border: 1px solid var(--amber); border-radius: 4px;',
+      '  color: var(--amber); font-size: 11px; margin-bottom: 12px; font-weight: 600;',
+      '}',
+      '.ekf-unpublished-note {',
+      '  margin-top: 4px; font-size: 10px; color: var(--amber); font-style: italic;',
+      '}',
+      '.ekf-section-title {',
+      '  font-size: 10px; font-weight: 700; color: var(--muted);',
+      '  letter-spacing: 0.06em; text-transform: uppercase;',
+      '  margin: 14px 0 8px 0; padding-bottom: 4px;',
+      '  border-bottom: 1px solid var(--border);',
+      '}',
       '</style>',
 
-      '<div id="ekf-filter-wrap" style="margin-bottom:12px">',
-      '  <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Filter Status</div>',
-      '  <span id="ekf-filter-status" class="ekf-filter ekf-filter-unknown">—</span>',
+      // ── Filter status + disclaimer banner ──
+      '<div id="ekf-filter-wrap" style="margin-bottom:12px;display:flex;align-items:center;gap:10px">',
+      '  <div>',
+      '    <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Filter Status</div>',
+      '    <span id="ekf-filter-status" class="ekf-filter ekf-filter-unknown">' + NOT_PUBLISHED_HINT + '</span>',
+      '  </div>',
       '</div>',
 
-      groupHTML,
+      // Honest disclaimer — shown only until the first s_ekf frame arrives.
+      '<div id="ekf-disclaimer" class="ekf-disclaimer">',
+      '  ⚠ <strong>EKF telemetry not received yet</strong> — the firmware publishes ',
+      '  <code>s_ekf</code> in slot 0; below is RAW IMU telemetry (gyro, accel, baro alt) ',
+      '  until those frames arrive. Fields marked <code>n/p</code> are not published by this build.',
+      '</div>',
 
+      // ── EKF section (always visible: published cells '—' until data,
+      //    structurally absent groups n/p with an explanatory note) ──
+      '<div id="ekf-ekf-section">',
+      '  <div class="ekf-section-title">Estimator State (EKF, shadow mode — display only)</div>',
+      ekfHTML,
+      '</div>',
+
+      // ── Raw IMU section (always shown) ──
+      '<div class="ekf-section-title">Raw IMU (proxy until EKF available)</div>',
+      rawHTML,
+
+      // ── Covariance section ──
       '<div style="margin-bottom:12px">',
-      '  <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Covariance (P)</div>',
-      '  <div style="display:flex;gap:8px;flex-wrap:wrap">',
-      COV_KEYS.map(function (k) {
-        return '<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:52px">' +
-          '<span style="font-size:9px;color:var(--muted)">' + k.split('.').pop() + '</span>' +
-          '<span id="ekf-' + k + '" style="font-family:Consolas,monospace;font-size:11px;color:var(--amber)">—</span>' +
-          '</div>';
-      }).join(''),
-      '  </div>',
+      '  <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Covariance — <em>' + NOT_PUBLISHED_HINT + ' — no covariance telemetry is streamed in this build</em></div>',
+      '  <div style="display:flex;gap:8px;flex-wrap:wrap">', covCells, '</div>',
       '</div>',
     ].join('');
   }
@@ -133,49 +226,84 @@
 
   function onState(state) {
     if (!state || !state.streams) return;
-    var slot9 = state.streams['9'];
-    if (!slot9 || !slot9.values) return;
-    var vals = slot9.values;
+    var stream0 = state.streams['0'];
+    if (!stream0 || !stream0.values) return;
 
+    var values = stream0.values;
     var anyUpdate = false;
+    var ekfAvailable = false;
 
-    // Update each group — use whichever key variant is present
-    GROUPS.forEach(function (g) {
+    // ── EKF groups ──
+    EKF_GROUPS.forEach(function (g) {
       g.axisLabels.forEach(function (al, ai) {
-        // Try firmware key first, then estimator key
-        var k1 = g.keys[ai];
-        var k2 = g.keys[g.keys.length / 2 + ai];
-        var v  = vals[k1] != null ? vals[k1] : vals[k2];
-        var el = q('ekf-' + k1);
-        if (!el) el = q('ekf-' + k2);
+        var k = g.keys[ai];
+        var el = q('ekf-' + k.replace(/\./g, '-'));
+        if (g.unpublished) {
+          // Structurally absent: always n/p, even if a stray key exists.
+          if (el) el.textContent = NOT_PUBLISHED;
+          return;
+        }
+        var v = values[k];
+        if (v != null) {
+          ekfAvailable = true;
+          if (el) {
+            el.textContent = fmtNum(v, 4);
+            anyUpdate = true;
+          }
+        } else if (el) {
+          el.textContent = '—';  // published by the build, just not received yet
+        }
+      });
+    });
+
+    // The EKF section is always visible; only the "not received yet"
+    // disclaimer hides once real s_ekf values arrive.
+    var disclaimer = q('ekf-disclaimer');
+    if (disclaimer) disclaimer.style.display = ekfAvailable ? 'none' : '';
+
+    // ── Raw IMU groups (always shown) ──
+    RAW_GROUPS.forEach(function (g) {
+      g.axisLabels.forEach(function (al, ai) {
+        var slot0Key = g.keys[ai];
+        var idKey = 'raw-' + slot0Key.replace(/\./g, '-');
+        var v = getValue(values, [slot0Key], g.fallback);
+        var el = q(idKey);
         if (el) {
-          el.textContent = fmtNum(v, al === 'Z' && g.label.startsWith('Position') ? 3 : 4);
+          el.textContent = fmtNum(v, 4);
           if (v != null) anyUpdate = true;
         }
       });
     });
 
-    // Covariance
+    // ── Covariance keys — not published by this build ──
     COV_KEYS.forEach(function (k) {
-      var v = vals[k];
-      var el = q('ekf-' + k);
+      var v = values[k];
+      var el = q('cov-' + k.replace(/\./g, '-'));
       if (el) {
-        el.textContent = fmtCov(v);
+        // Only a real value (future build) replaces n/p; absence stays n/p.
+        el.textContent = (v != null) ? fmtCov(v) : NOT_PUBLISHED;
         if (v != null) anyUpdate = true;
       }
     });
 
-    // Filter status
-    var fs = vals['ekf.filter_status'] || vals['estimator.filter_status'];
+    // ── Filter status — not published by this build ──
     var fsEl = q('ekf-filter-status');
     if (fsEl) {
-      if (fs != null) {
-        var label = FILTER_STATUS_LABELS[fs] || ('Status ' + fs);
-        fsEl.textContent = label;
-        fsEl.className = 'ekf-filter ' + (fs === 0 ? 'ekf-filter-unknown' : fs === 1 ? 'ekf-filter-ok' : fs === 2 ? 'ekf-filter-warn' : 'ekf-filter-err');
+      var fsVal = values['estimator.filter_status'];
+      if (fsVal != null) {
+        var label = FILTER_STATUS_LABELS[Math.floor(fsVal)] || ('Status ' + fsVal);
+        if (fsVal === 1) {
+          fsEl.textContent = label; fsEl.className = 'ekf-filter ekf-filter-ok';
+        } else if (fsVal === 2) {
+          fsEl.textContent = label; fsEl.className = 'ekf-filter ekf-filter-warn';
+        } else if (fsVal === 3) {
+          fsEl.textContent = label; fsEl.className = 'ekf-filter ekf-filter-err';
+        } else {
+          fsEl.textContent = label; fsEl.className = 'ekf-filter ekf-filter-unknown';
+        }
         anyUpdate = true;
       } else {
-        fsEl.textContent = '—';
+        fsEl.textContent = NOT_PUBLISHED_HINT;
         fsEl.className = 'ekf-filter ekf-filter-unknown';
       }
     }
@@ -184,7 +312,6 @@
   }
 
   // ── Export (shell uses window.__registerPlugin__) ────────────────────────
-  window.__PLUGIN_NAME__ = 'EKF Estimator';
   window.__PLUGIN_INIT__ = function(api) {
     api.registerPanel('EKF Estimator', function (container) {
       container.innerHTML = buildHTML();

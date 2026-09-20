@@ -94,8 +94,12 @@ class DecodePipeline:
         ch = 0
         offset = 0
         for rng in self.schema.ranges:
-            raw = raw_payload[offset:offset + rng.nbytes]
-            offset += rng.nbytes
+            # nbytes = wire frame bytes per range (8 * count, always).
+            # The actual data is rng.size * rng.count bytes (e.g. 4 for float32).
+            # Slice only the data portion; advance offset by the wire frame size.
+            data_bytes = rng.size * rng.count
+            raw = raw_payload[offset:offset + data_bytes]
+            offset += rng.nbytes  # wire frame advance
 
             # Unpack per-element: struct doesn't expand count in format strings.
             # For 4-byte elements we use '<f' per element to avoid ambiguity with

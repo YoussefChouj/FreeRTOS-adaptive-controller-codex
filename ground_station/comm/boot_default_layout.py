@@ -117,6 +117,73 @@ DASHBOARD_FRAME_A_VARS: tuple[str, ...] = (
     # layout in place of the lean `sync` manifest). Mirrors
     # manifests.yaml :: dashboard_frame_a.
     "xTickCount",
+    # ---------------------------------------------------------------------
+    # MRAC full theta vector (added S15) — TELEMETRY_SPEC.md and
+    # S15-audit.md §2.4 require the full 6-element adaptive-weight vector
+    # for each of the 4 axes. Verified DWARF paths against OBJ/JX_FLY.axf
+    # (live reads 2026-09-17): each `mrac_state.<axis>.Theta[N]` resolves
+    # to a 4-byte float, MAX_NUM_BASIS = NUM_BASIS(4) + INCLUDE_CONTROL(2) = 6.
+    # 4 axes × 6 weights = 24 vars * 4 B = 96 B on the wire.
+    # ---------------------------------------------------------------------
+    "mrac_state.pitch.Theta[0]",
+    "mrac_state.pitch.Theta[1]",
+    "mrac_state.pitch.Theta[2]",
+    "mrac_state.pitch.Theta[3]",
+    "mrac_state.pitch.Theta[4]",
+    "mrac_state.pitch.Theta[5]",
+    "mrac_state.roll.Theta[0]",
+    "mrac_state.roll.Theta[1]",
+    "mrac_state.roll.Theta[2]",
+    "mrac_state.roll.Theta[3]",
+    "mrac_state.roll.Theta[4]",
+    "mrac_state.roll.Theta[5]",
+    "mrac_state.yaw.Theta[0]",
+    "mrac_state.yaw.Theta[1]",
+    "mrac_state.yaw.Theta[2]",
+    "mrac_state.yaw.Theta[3]",
+    "mrac_state.yaw.Theta[4]",
+    "mrac_state.yaw.Theta[5]",
+    "mrac_state.z_rate.Theta[0]",
+    "mrac_state.z_rate.Theta[1]",
+    "mrac_state.z_rate.Theta[2]",
+    "mrac_state.z_rate.Theta[3]",
+    "mrac_state.z_rate.Theta[4]",
+    "mrac_state.z_rate.Theta[5]",
+    # ---------------------------------------------------------------------
+    # EKF shadow-mode state (added S15) — TELEMETRY_SPEC.md slot 3 and
+    # S15-audit.md §2.4 require per-axis velocity, accel bias and gyro
+    # bias. Source is `s_ekf` (Ekf9_t in TASK/send_data.c, static +
+    # DWARF-visible) — 9-state body-frame vector:
+    #     x[0..2] = v_body  (vel_x, vel_y, vel_z)         m/s
+    #     x[3..5] = b_a_body (accel bias x, y, z)         m/s²
+    #     x[6..8] = b_g_body (gyro  bias x, y, z)         rad/s
+    # The 9-state model has NO POSITION STATE — for ekf.pos_x/y/z the
+    # firmware must add either (a) a 12-state position-aware variant, or
+    # (b) explicit `ekf.pos_x/y/z` scalar aliases. Until then the
+    # position keys remain absent (the sidebar / panels fall back to
+    # `s_ekf.x[0..2]` for velocity and a TODO note for position).
+    # Verified DWARF size: each element is float32 (4 B).
+    # ---------------------------------------------------------------------
+    "s_ekf.x[0]",  # ekf.vel_x          v_body[0]  (m/s)
+    "s_ekf.x[1]",  # ekf.vel_y          v_body[1]  (m/s)
+    "s_ekf.x[2]",  # ekf.vel_z          v_body[2]  (m/s)
+    "s_ekf.x[3]",  # ekf.bias_accel_x   b_a_body[0] (m/s²)
+    "s_ekf.x[4]",  # ekf.bias_accel_y   b_a_body[1] (m/s²)
+    "s_ekf.x[5]",  # ekf.bias_accel_z   b_a_body[2] (m/s²)
+    "s_ekf.x[6]",  # ekf.bias_gyro_x    b_g_body[0] (rad/s)
+    "s_ekf.x[7]",  # ekf.bias_gyro_y    b_g_body[1] (rad/s)
+    "s_ekf.x[8]",  # ekf.bias_gyro_z    b_g_body[2] (rad/s)
+    # TODO(firmware): expose ekf.pos_x/y/z — the 9-state EKF has no
+    #                 position state. Add either a 12-state variant in
+    #                 API/ekf.c or three scalar aliases in the dashboard
+    #                 layout. Until then the estimator panel's Position
+    #                 section renders "—".
+    # TODO(firmware): expose estimator.filter_status — currently in the
+    #                 Ekf9_t.active field; needs an aliased scalar for
+    #                 the subscribe path.
+    # TODO(firmware): expose estimator.cov_* — currently in s_ekf.P[0..N];
+    #                 the dashboard wants the 6 diagonal scalars as
+    #                 estimator.cov_pxx, _pyy, _pzz, _vxvx, _vyvy, _vzvz.
 )
 
 # divider=4 at the MIXED-mode measured 80 Hz Send_Task cadence gives 20 Hz on

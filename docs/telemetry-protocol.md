@@ -59,6 +59,10 @@ Live validation 2026-08-20:
 - MicoAir uplink ceiling: ~1100 Hz (commands never saturate).
 - Wire utilisation at 258 Hz subscribe stream: **~22 % of 91304 B/s**.
 
+Correction 2026-09-19: the 258.7 Hz figure above was a host polling artefact.
+Counting raw `0x09` frames on the UDP socket gives ~80 Hz before the Phase 0
+flash and ~100 Hz after it, at `divider=1`.
+
 ## Measured capacity
 
 | Metric | Value |
@@ -134,17 +138,25 @@ Active during optical-flow calibration.
 
 ## Subscribe protocol (PC → FC)
 
-PC sends a `0xCC 0xDD` **subscribe request** over UART5 to start streaming named
-variables. No subscribe over WiFi — UDP 14550 is **receive-only**.
+PC sends a `0xCC 0xDE` **subscribe request** over WiFi (UDP 14550 → USART3) to
+start streaming named variables. UART5 subscribe ingress is compiled out
+(`SUBSCRIBE_UART5_ENABLED = 0`); a request sent to COM6 is ignored.
 
 ```
-0xCC 0xDD [0x21] [slot] [divider] [addr_hi] [addr_lo] [count] [crc8]
+0xCC 0xDE 0x21 LEN_HI LEN_LO NRANGES  [divider] [transport] [slot]
+          N x ( addr u32 LE, size u16 LE, count u16 LE )  CRC8_XOR
 ```
 
-- `divider = round(80.4 / desired_hz)` — firmware runs at ~80 Hz
-- `addr` = DWARF address resolved from `OBJ/JX_FLY.axf`
+- `CRC8_XOR` = XOR of every byte from `0x21` up to the last range byte
+- `transport`: 0 = UART5, 1 = USART3
+- One request per slot; a new request **replaces** that slot's ranges
+- Max 62 ranges per slot (a 62-range request is 506 B; RX staging is 512 B)
+- `divider = round(send_hz / desired_hz)`; Send_Task measures ~100 Hz after
+  the Phase 0 flash (target 200 Hz, see `docs/architecture/send-task-perf.md`)
+- `addr` = DWARF address resolved from `OBJ/JX_FLY.axf` (check the build
+  identity first, see "Firmware Identity Protocol" below)
 - Up to **4 slots**, each at its own independent rate
-- Firmware replies `0x7F` if total rate exceeds link budget
+- Replies: `0x08` schema, `0x09 + slot` data, `0x7F` error (e.g. over link budget)
 
 Firmware `Send_Task` sends existing frames (A/B/SysID/OFCal) regardless of subscriptions.
 Subscriptions add **streaming frames** on top.
@@ -387,3 +399,60 @@ python -m ground_station.comm.tests.test_mavlink_limit
 # Uplink only
 python -m ground_station.comm.tests.test_mavlink_limit --uplink
 ```
+
+## Firmware Identity Protocol (Build ID Handshake)
+
+The firmware identity query allows ground stations and tooling (e.g. `livewatch`, `wifi_bridge`)
+to inspect the running build identity, load image geometry, and CRC32 directly over WiFi (USART3)
+or the debugger VCP (UART5) using the existing subscribe request envelope family (`0xCC 0xDE`).
+
+### Query Request (PC → FC)
+
+Sent over either USART3 (WiFi UDP 14550) or UART5 (VCP):
+
+```
+Offset  Width  Field         Value  Description
+0       1      SYNC_HI       0xCC   Subscribe family sync byte 0
+1       1      SYNC_LO       0xDE   Subscribe family sync byte 1
+2       1      CMD           0x24   FW_IDENTITY_CMD
+3       1      LEN_HI        0x00   Payload length high byte (0)
+4       1      LEN_LO        0x00   Payload length low byte (0)
+5       1      FLAGS         0x00   Unused / reserved (must be 0)
+6       1      CRC8_XOR      0x24   XOR over bytes 2..5 (0x24 ^ 0x00 ^ 0x00 ^ 0x00)
+```
+Total request frame length: **7 bytes**.
+
+### Identity Reply Frame (FC → PC, Type 0x24)
+
+Routed via `Subscribe_TxReplyToTransport` to return over whichever link (USART3 or UART5) the query arrived on.
+
+```
+Offset  Width  Field         Value       Description
+0       1      SYNC_HI       0xAA        Frame start sync byte 0
+1       1      SYNC_LO       0xBB        Frame start sync byte 1
+2       1      FRAME_TYPE    0x24        FW_IDENTITY_FRAME (0x24)
+3       1      LEN_HI        0x00        Payload length high byte (24 bytes)
+4       1      LEN_LO        0x18        Payload length low byte (0x18 = 24)
+5       1      STATUS        0x00        Frame flags / status byte
+6..9    4      magic         0x44495746  ASCII "FWID" in little-endian (0x46, 0x57, 0x49, 0x44)
+10..13  4      version       1           Contract version (uint32 LE: 0x01, 0x00, 0x00, 0x00)
+14..17  4      image_base    0x08000000  Flash load base address (uint32 LE: 0x00, 0x00, 0x00, 0x08)
+18..21  4      image_len     uint32 LE   Image length in bytes (rounded UP to multiple of 4)
+22..25  4      image_crc32   uint32 LE   STM32F4 hardware CRC-32/MPEG-2 over flash image
+26..29  4      status        1           1 = valid, 0 = uncomputed (uint32 LE: 0x01, 0x00, 0x00, 0x00)
+30      1      CRC8_XOR      uint8       XOR checksum over bytes 2..29 (FRAME_TYPE .. status)
+```
+Total reply frame length: **31 bytes**.
+
+### CRC32 Definition & Computation
+
+- **Polynomial**: `0x04C11DB7` (CRC-32/MPEG-2, standard STM32 hardware CRC peripheral)
+- **Initial Value**: `0xFFFFFFFF`
+- **Reflection / Reversal**: None (input unreversed, output unreversed)
+- **Final XOR**: None (`0x00000000`)
+- **Firmware computation**: Hardware CRC unit fed 32-bit words sequentially from flash address
+  `image_base` (`0x08000000`) to `image_base + image_len` (reading words little-endian).
+- **Host ELF computation**: Bytes of all `PT_LOAD` segments positioned at physical address (`p_paddr`)
+  relative to `0x08000000`, gaps and tail padding filled with `0xFF`, length rounded up to multiple of 4,
+  then identical word-wise CRC32.
+

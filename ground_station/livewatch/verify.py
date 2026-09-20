@@ -20,10 +20,18 @@ from pathlib import Path
 
 from elftools.elf.elffile import ELFFile
 
+import struct
+
 # STM32F407 internal flash. Segments outside this (RAM-loaded .data copies, etc.)
 # have no stable on-target image to compare against, so they are skipped.
 FLASH_BASE = 0x08000000
 FLASH_END = 0x08100000
+
+FW_IDENTITY_ADDR = 0x20016BF8  # default known offset in SRAM
+FW_IDENTITY_SIZE = 24          # magic + version + base + len + crc + status = 6 * 4
+FW_IDENTITY_MAGIC = 0x44495746
+FW_IDENTITY_STATUS_VALID = 1
+FW_IDENTITY_IMAGE_BASE = 0x08000000
 
 
 @dataclass(frozen=True)
@@ -124,3 +132,153 @@ def compare(samples: list[Sample], read_block) -> VerifyResult:
                 first_bad = s.address
     return VerifyResult(checked=len(samples), mismatched=bad,
                         first_bad=first_bad, bytes_compared=total)
+
+
+@dataclass
+class IdentityCheck:
+    """Result of g_fw_identity read + CRC comparison."""
+    ok: bool
+    magic: int
+    version: int
+    image_base: int
+    image_len: int
+    firmware_crc: int
+    host_crc: int
+    status: int
+    message: str
+
+
+def compute_crc_from_hex(hex_path: str | Path) -> tuple[int, int, int]:
+    """Read an Intel HEX file and compute the STM32 hardware CRC-32.
+
+    Gaps between records are filled with 0xFF. The last byte is padded to a
+    multiple of 4 with 0xFF so the word count is exact. Returns
+    ``(computed_crc, image_len, image_base)``.
+    """
+    from ground_station.livewatch.transport import crc32_mpeg2_words
+
+    hex_path = Path(hex_path)
+    data: dict[int, int] = {}
+    ext_addr = 0
+
+    with open(hex_path, "r", encoding="ascii") as f:
+        for line in f:
+            line = line.strip()
+            if not line or not line.startswith(":"):
+                continue
+            rec = bytes.fromhex(line[1:])
+            if len(rec) < 5:
+                continue
+            byte_count = rec[0]
+            addr = (rec[1] << 8) | rec[2]
+            rec_type = rec[3]
+            rec_data = rec[4: 4 + byte_count]
+
+            if rec_type == 0x04:       # Extended Linear Address
+                ext_addr = (rec_data[0] << 8) | rec_data[1]
+                continue
+            if rec_type == 0x05:       # Extended Segment Address
+                ext_addr = ((rec_data[0] << 24) | (rec_data[1] << 16) |
+                            (rec_data[2] << 8) | rec_data[3])
+                continue
+            if rec_type != 0x00:       # Data record
+                continue
+
+            base = (ext_addr << 16) | addr
+            for i, b in enumerate(rec_data):
+                data[base + i] = b
+
+    if not data:
+        return 0xFFFFFFFF, 0, 0
+
+    image_base = min(data.keys())
+    max_addr = max(data.keys())
+    raw_len = max_addr - image_base + 1
+    image_len = (raw_len + 3) & ~3
+
+    buf = bytearray(b"\xFF" * image_len)
+    for addr, b in data.items():
+        buf[addr - image_base] = b
+
+    n_words = image_len // 4
+    words = list(struct.unpack(f"<{n_words}I", buf))
+    crc = crc32_mpeg2_words(words)
+
+    return crc, image_len, image_base
+
+
+def read_identity(target_read, expected_base=FW_IDENTITY_IMAGE_BASE,
+                  identity_addr=None, elf_path=None, hex_path=None) -> IdentityCheck:
+    """Read g_fw_identity from target and compare CRC against computed value.
+
+    ``target_read(addr, size) -> bytes`` is a raw memory read via SWD.
+    """
+    from pathlib import Path
+
+    if identity_addr is None:
+        if elf_path is not None:
+            try:
+                from .symbols import SymbolResolver
+                sym = SymbolResolver(elf_path).resolve("g_fw_identity")
+                if sym:
+                    identity_addr = sym.address
+            except Exception:
+                pass
+        if identity_addr is None:
+            default_elf = Path(__file__).resolve().parents[2] / "OBJ" / "JX_FLY.axf"
+            if default_elf.exists():
+                try:
+                    from .symbols import SymbolResolver
+                    sym = SymbolResolver(default_elf).resolve("g_fw_identity")
+                    if sym:
+                        identity_addr = sym.address
+                except Exception:
+                    pass
+        if identity_addr is None:
+            identity_addr = FW_IDENTITY_ADDR
+
+    data = bytes(target_read(identity_addr, FW_IDENTITY_SIZE))
+    if len(data) < FW_IDENTITY_SIZE:
+        return IdentityCheck(False, 0, 0, 0, 0, 0, 0, 0,
+                             f"g_fw_identity: could not read {FW_IDENTITY_SIZE} B "
+                             f"at 0x{identity_addr:08X} (got {len(data)} B)")
+
+    magic, version, image_base, image_len, firmware_crc, status = \
+        struct.unpack("<IIIIIi", data)
+
+    if hex_path is None:
+        hex_path = Path(__file__).resolve().parents[2] / "OBJ" / "JX_FLY.hex"
+    hex_path = Path(hex_path)
+    if not hex_path.exists():
+        return IdentityCheck(False, magic, version, image_base, image_len,
+                              firmware_crc, 0, status,
+                              f"hex file not found: {hex_path}")
+
+    host_crc, host_len, host_base = compute_crc_from_hex(hex_path)
+
+    ok = True
+    issues: list[str] = []
+    if magic != FW_IDENTITY_MAGIC:
+        ok = False
+        issues.append(f"magic mismatch: 0x{magic:08X} != 0x{FW_IDENTITY_MAGIC:08X}")
+    if version != 1:
+        ok = False
+        issues.append(f"version mismatch: {version}")
+    if status != FW_IDENTITY_STATUS_VALID:
+        ok = False
+        issues.append(f"status not valid: {status}")
+    if image_base != expected_base:
+        ok = False
+        issues.append(f"image_base mismatch: 0x{image_base:08X} != 0x{expected_base:08X}")
+    if host_len != image_len:
+        ok = False
+        issues.append(f"image_len mismatch: host={host_len} vs firmware={image_len}")
+    if host_crc != firmware_crc:
+        ok = False
+        issues.append(
+            f"CRC mismatch: host=0x{host_crc:08X} firmware=0x{firmware_crc:08X}")
+
+    msg = "identity OK" if ok else "; ".join(issues)
+    return IdentityCheck(ok, magic, version, image_base, image_len,
+                         firmware_crc, host_crc, status, msg)
+

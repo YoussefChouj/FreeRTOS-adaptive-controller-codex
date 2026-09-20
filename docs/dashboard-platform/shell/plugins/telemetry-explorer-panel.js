@@ -211,7 +211,6 @@
   }
 
   // ── Export (shell uses window.__registerPlugin__) ────────────────────────
-  window.__PLUGIN_NAME__ = 'Telemetry Explorer';
   window.__PLUGIN_INIT__ = function(api) {
     api.registerPanel('Telemetry Explorer', function (container) {
       container.innerHTML = buildHTML();

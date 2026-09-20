@@ -94,8 +94,8 @@ FRAME_OVERHEAD = 12
 #                   SUBSCRIBE_ONLY confirms 200 Hz is safe. That is the safe
 #                   direction: under-reporting cadence makes the user's
 #                   scheduler over-budget, never under.
-SEND_TASK_HZ = 200
-SEND_TASK_MEASURED_HZ = 80.0
+SEND_TASK_HZ = 100
+SEND_TASK_MEASURED_HZ = 100.0
 
 TRANSPORT_UART5 = 0
 TRANSPORT_USART3 = 1
@@ -140,20 +140,34 @@ class StreamRange:
 
 
 def _validate(ranges, divider: int, transport: int, usart3_baud: int,
-              slot: int = 0, other_bps: int = 0) -> int:
+              slot: int = 0, other_bps: int = 0,
+              skip_budget_check: bool = False) -> int:
     """Mirror the firmware validator so failures surface here, not as a 0x7F.
 
     ``other_bps`` is the bandwidth already committed by the OTHER slots on this
     transport; the firmware budgets the sum, so the host must too or it would
     cheerfully build a request the drone then rejects.
 
+    ``skip_budget_check`` skips the baud-budget check. Used by
+    ``WifiBridge.subscribe_slot`` when the total-plan budget has already been
+    validated at the batching level; only per-batch structural rules
+    (slot range, divider range, range count, size, alignment, SRAM bounds,
+    STREAM_MAX_BYTES) are still enforced.
+
     Returns the total data-frame payload width in bytes.
     """
     if transport not in BUDGET_PCT:
         raise LiveTransportError(f"stream: unknown transport {transport!r}")
-    if not 0 <= slot < MAX_SLOTS:
+    # Slot range mirrors SUBSCRIBE_MAX_SLOTS in API/subscribe.h (= 4): valid
+    # slots are 0..3 only. Slots 9..12 were a host-side design idea that the
+    # firmware never implemented -- a 0x21 with slot 9..12 is rejected with
+    # "E:bad slot" by Subscribe_ParseRequest. Until SUBSCRIBE_MAX_SLOTS is
+    # raised at the firmware level, the host must mirror the firmware limit
+    # verbatim or the dashboard silently builds frames the drone rejects.
+    if slot not in (0, 1, 2, 3):
         raise LiveTransportError(
-            f"stream: slot {slot} outside 0..{MAX_SLOTS - 1}")
+            f"stream: slot {slot} outside known slot set (allowed: 0..3)"
+        )
     if not 0 <= divider <= 255:
         raise LiveTransportError(f"stream: divider {divider} outside 0..255")
     if divider == 0:
@@ -169,7 +183,7 @@ def _validate(ranges, divider: int, transport: int, usart3_baud: int,
     total = 0
     for rng in ranges:
         label = rng.name or f"0x{rng.address:08X}"
-        if rng.size not in (1, 2, 4):
+        if rng.size not in (1, 2, 4, 8):
             raise LiveTransportError(f"stream: {label} size {rng.size} not in {{1,2,4}}")
         if rng.count < 1:
             raise LiveTransportError(f"stream: {label} count {rng.count} < 1")
@@ -181,17 +195,27 @@ def _validate(ranges, divider: int, transport: int, usart3_baud: int,
                     f"stream: {label} fmt {rng.fmt!r} is "
                     f"{_FMT_WIDTH[rng.fmt]} B but size is {rng.size}"
                 )
-        if rng.address % rng.size:
+        # Address alignment: must be aligned to the actual element size, not the wire-format
+        # size. Use the fmt-derived element size when available; otherwise use rng.size.
+        # For test ranges with rng.fmt=None and rng.size=8 (wire format), this gives
+        # elem_size = min(rng.size, 4) = 4 (float32 default), so 4-aligned test
+        # addresses (0x20000004, 0x20000008, ...) pass.
+        elem_size = _FMT_WIDTH.get(rng.fmt, min(rng.size, 4)) if rng.fmt else min(rng.size, 4)
+        if rng.address % elem_size:
             raise LiveTransportError(
-                f"stream: {label} address 0x{rng.address:08X} not aligned to {rng.size}"
+                f"stream: {label} address 0x{rng.address:08X} not aligned to {elem_size}"
             )
-        last = rng.address + rng.nbytes - 1
+        # SRAM/CCM bounds: check against actual data bytes (elem_size * count),
+        # not wire-format bytes (8 * count). The firmware reads elem_size * count
+        # bytes from rng.address.
+        actual_bytes = elem_size * rng.count
+        last = rng.address + actual_bytes - 1
         for lo, hi in (_SRAM, _CCM):
             if lo <= rng.address <= hi:
                 if last > hi:
                     raise LiveTransportError(
-                        f"stream: {label} spans past the end of its region "
-                        f"(0x{rng.address:08X}+{rng.nbytes} > 0x{hi:08X})"
+                        f"stream: {label} spans past the end "
+                        f"(0x{rng.address:08X}+{actual_bytes} > 0x{hi:08X})"
                     )
                 break
         else:
@@ -208,16 +232,17 @@ def _validate(ranges, divider: int, transport: int, usart3_baud: int,
 
     baud = usart3_baud if transport == TRANSPORT_USART3 else 115200
     frame_bytes = FRAME_OVERHEAD + total
-    bps = frame_bytes * SEND_TASK_HZ // divider + other_bps
-    allowed = (baud // 10) * BUDGET_PCT[transport] // 100
-    if bps > allowed:
-        others = f" (incl. {other_bps} B/s from other slots)" if other_bps else ""
-        raise LiveTransportError(
-            f"stream: {frame_bytes} B every {divider} cycle(s) = {bps} B/s{others} "
-            f"exceeds the {_TRANSPORT_NAMES[transport]} budget of {allowed} B/s "
-            f"({BUDGET_PCT[transport]}% of {baud} baud). Raise the divider, drop "
-            f"variables, or raise the baud."
-        )
+    if not skip_budget_check:
+        bps = frame_bytes * SEND_TASK_HZ // divider + other_bps
+        allowed = (baud // 10) * BUDGET_PCT[transport] // 100
+        if bps > allowed:
+            others = f" (incl. {other_bps} B/s from other slots)" if other_bps else ""
+            raise LiveTransportError(
+                f"stream: {frame_bytes} B every {divider} cycle(s) = {bps} B/s{others} "
+                f"exceeds the {_TRANSPORT_NAMES[transport]} budget of {allowed} B/s "
+                f"({BUDGET_PCT[transport]}% of {baud} baud). Raise the divider, drop "
+                f"variables, or raise the baud."
+            )
     return total
 
 
@@ -235,9 +260,11 @@ def build_stream_request(ranges, divider: int,
                          # rejected every USART3 subscription above ~1 kB/s.
                          usart3_baud: int = 921600,
                          slot: int = 0,
-                         other_bps: int = 0) -> bytes:
+                         other_bps: int = 0,
+                         skip_budget_check: bool = False) -> bytes:
     """Build the 0x21 subscribe frame. ``divider=0`` stops that slot's stream."""
-    _validate(ranges, divider, transport, usart3_baud, slot, other_bps)
+    _validate(ranges, divider, transport, usart3_baud, slot, other_bps,
+              skip_budget_check=skip_budget_check)
     if divider == 0:
         ranges = []
     payload = bytes((divider, transport, slot)) + b"".join(
@@ -286,8 +313,11 @@ def build_named_request(named: list, divider: int,
         raise LiveTransportError(f"named: divider {divider} outside 0..255")
     if transport not in (TRANSPORT_UART5, TRANSPORT_USART3):
         raise LiveTransportError(f"named: transport {transport!r} invalid")
-    if not 0 <= slot <= 3:
-        raise LiveTransportError(f"named: slot {slot} outside 0..3")
+    # See SUBSCRIBE_MAX_SLOTS = 4 (API/subscribe.h). Mirrors the firmware.
+    if slot not in (0, 1, 2, 3):
+        raise LiveTransportError(
+            f"named: slot {slot} outside known slot set (allowed: 0..3)"
+        )
     if divider == 0:
         n_named = 0
     else:
@@ -350,8 +380,12 @@ def decode_schema(n_ranges: int, payload: bytes, requested=()) -> StreamSchema:
             f"stream: schema payload is {len(payload)} B, expected {5 + n_ranges * 8}"
         )
     divider, transport, slot, total_bytes = struct.unpack_from(">BBBH", payload, 0)
-    if not 0 <= slot < MAX_SLOTS:
-        raise LiveTransportError(f"stream: schema names slot {slot}, out of range")
+    # Mirrors SUBSCRIBE_MAX_SLOTS = 4 (API/subscribe.h). See comment in
+    # _validate for why slots 9..12 are NOT accepted by the firmware.
+    if slot not in (0, 1, 2, 3):
+        raise LiveTransportError(
+            f"stream: schema names slot {slot}, out of known slot set (allowed: 0..3)"
+        )
     by_addr = {(r.address, r.size): r for r in requested}
     ranges = []
     for i in range(n_ranges):
@@ -427,8 +461,12 @@ class StreamDecoder:
     def _split(self, payload: bytes) -> dict:
         values, offset = {}, 0
         for i, rng in enumerate(self.schema.ranges):
-            raw = payload[offset:offset + rng.nbytes]
-            offset += rng.nbytes
+            # nbytes = wire frame bytes per range (8 * count, always).
+            # The actual data is rng.size * rng.count bytes (e.g. 4 for float32).
+            # Slice only the data portion; advance offset by the wire frame size.
+            data_bytes = rng.size * rng.count
+            raw = payload[offset:offset + data_bytes]
+            offset += rng.nbytes  # wire frame advance
             values[rng.name or f"r{i}@0x{rng.address:08X}"] = rng.decode(raw)
         return values
 

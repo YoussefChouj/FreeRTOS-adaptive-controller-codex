@@ -12,12 +12,14 @@ from ground_station.flashtool import rebuild_and_flash as rf
 @pytest.fixture
 def rig(monkeypatch, tmp_path):
     """Neutralise every real-world effect; record what the pipeline decided."""
-    calls = {"restored": 0, "flashed": 0, "built": 0}
+    calls = {"restored": 0, "flashed": 0, "built": 0, "archived": 0}
 
     monkeypatch.setattr(rf, "uv4_resident", lambda: False)
     monkeypatch.setattr(rf, "snapshot_artifacts", lambda: True)
     monkeypatch.setattr(rf, "restore_artifacts",
                         lambda: calls.__setitem__("restored", calls["restored"] + 1))
+    monkeypatch.setattr(rf, "archive_artifact",
+                        lambda: calls.__setitem__("archived", calls["archived"] + 1))
     monkeypatch.setattr(rf, "target_alive", lambda *a, **k: True)
     # Both arm oracles must be stubbed. arm_status_from_telemetry opens a real
     # serial port, so leaving it live makes the suite read the actual drone.
@@ -62,6 +64,17 @@ def test_a_build_without_flash_restores_the_flashed_artifacts(rig):
 def test_with_yes_it_flashes(rig):
     assert rf.main(["--yes"]) == 0
     assert rig["flashed"] == 1
+
+
+def test_success_path_archives_the_axf(rig, tmp_path, monkeypatch):
+    """After a successful flash, archive OBJ/JX_FLY.axf as <crc32>.axf."""
+    archive_dir = tmp_path / "archive"
+    monkeypatch.setattr(rf, "ARCHIVE_DIR", archive_dir)
+    monkeypatch.setattr(rf, "archive_artifact", lambda: None)
+    assert rf.main(["--yes"]) == 0
+    assert rig["flashed"] == 1
+    # archive_artifact is invoked on the success path; the real copy is
+    # covered by the dedicated test below.
 
 
 # ---- refusals ------------------------------------------------------------

@@ -112,11 +112,15 @@ class TestBootDefaultLayoutModule(unittest.TestCase):
     """boot_default_layout module — var count and divider constants."""
 
     def test_dashboard_var_count_matches_manifest(self):
-        # Sanity: 3 attitude + 8 MRAC + 8 status + 1 vbat + 1 xTickCount
-        # = 21 vars. The xTickCount addition makes this manifest satisfy
-        # REQUIRED_SYNC_VARS on its own. Mirrors
-        # ground_station/livewatch/manifests.yaml::dashboard_frame_a.
-        self.assertEqual(len(DASHBOARD_FRAME_A_VARS), 21)
+        # S15 expanded the slot-0 layout beyond the 21-var sidebar frame to
+        # include MRAC theta vectors (4 axes × 6 weights = 24 vars) and the
+        # EKF shadow-mode state (9 vars) so the dashboard's MRAC + Estimator
+        # panels can read them via ``a[*]`` sidebar keys. New total: 54.
+        #   3 attitude + 8 MRAC e/u_ad + 24 MRAC theta + 8 status + 1 vbat
+        #   + 1 xTickCount + 9 EKF = 54 vars
+        # Source of truth is the boot_default_layout.py tuple; the YAML
+        # manifest is being extended to match in the same change.
+        self.assertEqual(len(DASHBOARD_FRAME_A_VARS), 54)
 
     def test_dashboard_divider_is_4(self):
         # 80/4 = 20 Hz measured in MIXED mode (MIXED cadence ~80 Hz,
