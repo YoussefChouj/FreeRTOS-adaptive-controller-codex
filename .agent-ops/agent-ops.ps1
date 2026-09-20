@@ -76,10 +76,26 @@ function Invoke-Wsl([string]$script) {
 # in 10 s on a model id the backend no longer offered). Throws on failure.
 function Test-WorkerBackend([string]$WorkerKind, [string]$ModelId) {
     if ($WorkerKind -ne 'agy') {
-        # ark has no cheap probe: 'claude --version' is local, and any real
-        # turn costs quota. Its burst 429s are already handled by the spawn
-        # gap and cap in spawn-worker.sh, so ark relies on those.
-        Write-Output "preflight: ark has no cheap probe (local --version proves nothing); not verified"
+        # ark has no cheap probe for *quota*: 'claude --version' is local, and
+        # any real turn costs quota. Its burst 429s are handled by the spawn gap
+        # and cap in spawn-worker.sh.
+        #
+        # But there is a cheap probe for the failure that actually killed two
+        # ark waves on 2026-09-21: Claude Code refreshes the git index at
+        # startup, and in this repo from WSL that re-hashes 111 MB of dirty
+        # OBJ/ over the 9p mount and never returns. The worker then produces
+        # zero bytes and reads exactly like a quota death. Time the refresh -
+        # it costs nothing and it is the real gate.
+        $t0 = Get-Date
+        $proj = ($opsWsl -replace '/[^/]+$', '')
+        Invoke-Wsl "cd '$proj' && timeout 25 git status --porcelain -uno >/dev/null 2>&1" | Out-Null
+        $secs = [int]((Get-Date) - $t0).TotalSeconds
+        if ($secs -ge 24) {
+            throw ("preflight: git index refresh in this repo takes >=25s from WSL, so an ark worker will hang at startup and return nothing. " +
+                   "Fix: git config --local core.checkStat minimal; core.trustctime false; then run one uninterrupted " +
+                   "'git update-index --refresh' inside WSL to warm the index. See .claude_state.md, 'Wave 6'.")
+        }
+        Write-Output "preflight: ark quota not verified (no cheap probe); git index refresh ${secs}s - startup is clear"
         return
     }
     $probe = @(Invoke-Wsl "timeout 90 agy models 2>&1")
@@ -157,7 +173,17 @@ quote at most 3 lines per file. Read only what the question needs. Change nothin
 "@)
         $qWsl = "$opsWsl/inbox/" + (Split-Path $q -Leaf)
         $projWsl = ($opsWsl -replace '/[^/]+$', '')
-        Invoke-Wsl "cd '$projWsl' && timeout $($TimeoutMin * 60) agy --dangerously-skip-permissions --mode plan --model $modelId -p `"`$(cat '$qWsl')`""
+        # 'ask' hardcoded agy while $modelId was already rewritten by -Worker, so
+        # 'ask -Worker ark' handed agy an ark model id and died on "invalid model
+        # selection" - a routing bug that reads exactly like a dead backend.
+        # Dispatch on $Worker the way 'spawn' does. Read-only on both sides comes
+        # from plan mode: --mode plan for agy, --permission-mode plan for ark.
+        $askCmd = @{
+            agy = "agy --dangerously-skip-permissions --mode plan --model $modelId"
+            ark = "claude --permission-mode plan --model $modelId"
+        }[$Worker]
+        Write-Output "ask: worker=$Worker model=$modelId"
+        Invoke-Wsl "cd '$projWsl' && timeout $($TimeoutMin * 60) $askCmd -p `"`$(cat '$qWsl')`""
     }
     # Quake drop-down (Win+` toggles it once open) attached to the tmux session.
     'attach' { Start-Process wt.exe -ArgumentList '-w', '_quake', 'wsl.exe', '-d', 'Ubuntu', '--', 'tmux', 'new', '-A', '-s', 'agent-ops' }

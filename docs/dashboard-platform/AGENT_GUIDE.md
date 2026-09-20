@@ -293,7 +293,7 @@ However, key firmware operational characteristics and internal contracts remain 
 
 ## 10. Environment traps that cost real work
 
-Four environment traps on this workstation create plausible false failures and waste investigation time:
+Six environment traps on this workstation create plausible false failures and waste investigation time:
 
 ### 1. Clash proxy on port 7897 intercepts localhost (flat HTTP 502)
 - **Symptom:** `curl http://127.0.0.1:8081/api/routes` (or calling via Windows tools like `curl.exe`) returns `HTTP/1.1 502 Bad Gateway` with `Content-Length: 0` and `Proxy-Connection: keep-alive`, mimicking a dead or broken service.
@@ -328,3 +328,43 @@ Four environment traps on this workstation create plausible false failures and w
   .agent-ops/win.sh "& 'C:\Program Files\nodejs\node.exe' --version"
   ```
 
+
+### 5. `/tmp` means two different directories on this box
+
+- **Symptom:** A file written from Git Bash to `/tmp/x.md` is confirmed present by
+  `ls -la /tmp/x.md`, and a Windows Python process reading `/tmp/x.md` in the very
+  next command raises `FileNotFoundError`.
+- **Cause:** Git Bash maps `/tmp` to `C:\Users\<user>\AppData\Local\Temp`. Windows
+  Python has no such mapping and resolves `/tmp` literally, to `C:\tmp`. Both paths
+  exist, so neither side reports anything wrong — the file is simply somewhere the
+  reader is not looking.
+- **Fix:** Never hand a POSIX temp path across the boundary. Translate it:
+  ```bash
+  F=$(cygpath -w /tmp/x.md)   # then read os.environ['F'] on the Python side
+  ```
+  Better, use the session scratchpad directory, which is a Windows path already.
+
+### 6. WSL git on this repo takes ~4 minutes, which hangs any WSL agent at startup
+
+- **Symptom:** A Claude Code worker launched inside WSL with its cwd anywhere in
+  this repository produces **zero bytes** on stdout and stderr and is eventually
+  killed by its wrapper timeout. It looks exactly like a quota exhaustion or an
+  auth failure. The same binary, same account, answers normally one directory
+  above the repo.
+- **Cause:** Claude Code refreshes the git index at startup. Through the 9p
+  `/mnt/c` mount, git cannot trust the stat data the Windows-side git wrote
+  (mtime granularity differs), so it re-reads all 866 tracked files — about
+  150 MB, 111 MB of it dirty `OBJ/` build output — on *every* command. Measured:
+  `git status --porcelain -uno` takes 237 s from WSL and 2 s from Windows.
+  Warming the index does not help; the next WSL command pays the cost again.
+  `core.checkStat minimal`, `core.trustctime false` and `core.preloadIndex true`
+  are set on the repo and do **not** fix it.
+- **Fix:** do not give a WSL agent a cwd inside the repo. Start it in a scratch
+  directory that is not a git repo and pass the project with `--add-dir`:
+  ```bash
+  mkdir -p /tmp/arkwork && cd /tmp/arkwork
+  claude --add-dir /mnt/c/Users/Acer/Desktop/UAV_lab/FreeRTOS-adaptive-controller-codex -p "..."
+  ```
+  Verified: 59 s and a correct answer, against 301 s and silence in-repo.
+  A worker started this way must use absolute paths, and must run `git` through
+  `.agent-ops/win.sh` on the Windows side rather than from WSL.
