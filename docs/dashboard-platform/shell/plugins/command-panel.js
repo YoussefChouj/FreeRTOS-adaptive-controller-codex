@@ -303,7 +303,7 @@
   // ── ARM detection ───────────────────────────────────────────────────────
   // Reads status.arm / DroneStatus.ARM_Status or api.getArmState()
   function armStatusFromState(state) {
-    if (!state) return { armed: false, sdk: false, label: 'UNKNOWN' };
+    if (!state) return { armed: false, sdk: null, label: 'UNKNOWN' };
     var armedVal = null;
     var sdkVal = null;
 
@@ -336,14 +336,14 @@
       }
     }
 
-    if (armedVal == null) return { armed: false, sdk: false, label: 'UNKNOWN' };
+    if (armedVal == null) return { armed: false, sdk: null, label: 'UNKNOWN' };
 
     var armed = (armedVal !== 0);
-    var sdk = (sdkVal != null && sdkVal !== 0);
+    var sdk = (sdkVal != null) ? (sdkVal !== 0) : null;
     var label;
-    if (armed && sdk) label = 'ARMED / SDK';
+    if (armed && sdk === true) label = 'ARMED / SDK';
     else if (armed) label = 'ARMED';
-    else if (sdk) label = 'SDK';
+    else if (sdk === true) label = 'SDK';
     else label = 'DISARMED';
     return { armed: armed, sdk: sdk, label: label, ch13: armedVal };
   }
@@ -1004,18 +1004,20 @@
     var pill = q('cp-bench-state');
     if (!pill) return;
     // Heuristic: try reading bench flag from streams if present
-    var benchOn = false;
+    var benchOn = null;
     if (_state && _state.streams) {
       var s0 = _state.streams[0] || _state.streams['0'];
       if (s0 && s0.values) {
         if (typeof s0.values.bench_mode === 'number') benchOn = s0.values.bench_mode !== 0;
-        if (typeof s0.values.ch15 === 'number' && (s0.values.ch15 & 0x01)) benchOn = true;
+        else if (typeof s0.values.ch15 === 'number') benchOn = (s0.values.ch15 & 0x01) !== 0;
       }
     }
-    if (benchOn) {
+    if (benchOn === true) {
       pill.innerHTML = '<span style="color:var(--green)">\u25CF Bench Mode: ACTIVE</span>';
-    } else {
+    } else if (benchOn === false) {
       pill.innerHTML = '<span style="color:var(--muted)">\u25CB Bench Mode: inactive</span>';
+    } else {
+      pill.innerHTML = '<span style="color:var(--amber)">\u25CB Bench Mode: NOT PUBLISHED</span>';
     }
   }
 
@@ -1085,8 +1087,15 @@
 
     var sdk = q('cp-sdk-badge');
     if (sdk) {
-      sdk.className = 'cp-sdk-badge ' + (s.sdk ? 'cp-sdk-on' : 'cp-sdk-off');
-      sdk.innerHTML = 'SDK: ' + (s.sdk ? '\u2713' : '\u2717');
+      if (s.sdk === null) {
+        sdk.className = 'cp-sdk-badge cp-sdk-unknown';
+        sdk.innerHTML = 'SDK: ?';
+        sdk.style.color = 'var(--amber)';
+      } else {
+        sdk.className = 'cp-sdk-badge ' + (s.sdk ? 'cp-sdk-on' : 'cp-sdk-off');
+        sdk.innerHTML = 'SDK: ' + (s.sdk ? '\u2713' : '\u2717');
+        sdk.style.color = '';
+      }
     }
     var sessMini = q('cp-session-mini');
     if (sessMini) {
@@ -1387,6 +1396,10 @@
       '    <button class="cp-btn cp-btn-warn" id="cp-of-ekf">EKF (2)</button>',
       '    <button class="cp-btn" id="cp-of-freeze" style="margin-left:auto">Toggle Freeze</button>',
       '  </div>',
+      '  <div style="font-size:11px;color:var(--muted);margin-top:4px;">',
+      '    <span>Mode: </span><span id="cp-of-readback-mode" style="font-family:Consolas,monospace;font-weight:600;"><span style="color:var(--amber)">NOT PUBLISHED</span></span>',
+      '    <span style="margin-left:12px;">Freeze: </span><span id="cp-of-readback-freeze" style="font-family:Consolas,monospace;font-weight:600;"><span style="color:var(--amber)">NOT PUBLISHED</span></span>',
+      '  </div>',
       '</div>',
 
       // Manual Form
@@ -1624,11 +1637,11 @@
       if (s1 && s1.values) {
         var mVal = s1.values['slot1.g_of_bias_mode'] !== undefined ? s1.values['slot1.g_of_bias_mode'] : s1.values['g_of_bias_mode'];
         var fVal = s1.values['slot1.g_of_bias_ema_freeze'] !== undefined ? s1.values['slot1.g_of_bias_ema_freeze'] : s1.values['g_of_bias_ema_freeze'];
-        ofModeSpan.textContent = mVal !== undefined ? (mVal===0?'FIXED':mVal===1?'EMA':mVal===2?'EKF':mVal) : '\u2014';
-        ofFreezeSpan.textContent = fVal !== undefined ? fVal : '\u2014';
+        ofModeSpan.innerHTML = mVal !== undefined ? (mVal===0?'FIXED':mVal===1?'EMA':mVal===2?'EKF':String(mVal)) : '<span style="color:var(--amber)">NOT PUBLISHED</span>';
+        ofFreezeSpan.innerHTML = fVal !== undefined ? String(fVal) : '<span style="color:var(--amber)">NOT PUBLISHED</span>';
       } else {
-        ofModeSpan.textContent = '\u2014';
-        ofFreezeSpan.textContent = '\u2014';
+        ofModeSpan.innerHTML = '<span style="color:var(--amber)">NOT PUBLISHED</span>';
+        ofFreezeSpan.innerHTML = '<span style="color:var(--amber)">NOT PUBLISHED</span>';
       }
     }
 

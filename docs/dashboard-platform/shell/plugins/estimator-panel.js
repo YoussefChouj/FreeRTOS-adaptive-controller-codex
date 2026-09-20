@@ -122,10 +122,11 @@
     // arrive; structurally absent groups (position) render n/p + a note.
     var ekfHTML = EKF_GROUPS.map(function (g) {
       var cells = g.axisLabels.map(function (al, ai) {
-        var initText = g.unpublished ? NOT_PUBLISHED : '—';
+        var initText = g.unpublished ? NOT_PUBLISHED : 'AWAITING DATA';
+        var initColor = g.unpublished ? 'var(--amber)' : 'var(--muted)';
         return '<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:54px">' +
           '<span style="font-size:10px;color:var(--muted)">' + al + '</span>' +
-          '<span id="ekf-' + g.keys[ai].replace(/\./g, '-') + '" style="font-family:Consolas,monospace;font-size:13px">' + initText + '</span>' +
+          '<span id="ekf-' + g.keys[ai].replace(/\./g, '-') + '" style="font-family:Consolas,monospace;font-size:13px;color:' + initColor + '">' + initText + '</span>' +
           '<span style="font-size:9px;color:var(--muted)">' + g.unit + '</span>' +
           '</div>';
       }).join('');
@@ -144,7 +145,7 @@
         var key = g.keys[ai].replace(/\./g, '-');
         return '<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:54px">' +
           '<span style="font-size:10px;color:var(--muted)">' + al + '</span>' +
-          '<span id="raw-' + key + '" style="font-family:Consolas,monospace;font-size:13px">—</span>' +
+          '<span id="raw-' + key + '" style="font-family:Consolas,monospace;font-size:13px;color:var(--muted)">AWAITING DATA</span>' +
           '</div>';
       }).join('');
       return '<div style="margin-bottom:10px">' +
@@ -223,13 +224,16 @@
 
   // ── State handler ───────────────────────────────────────────────────────
   var _hasData = false;
+  var _lastState = null;
+  var _keyLastSeen = {};
+  var _tickTimer = null;
 
-  function onState(state) {
-    if (!state || !state.streams) return;
-    var stream0 = state.streams['0'];
-    if (!stream0 || !stream0.values) return;
-
-    var values = stream0.values;
+  function renderEstimator() {
+    if (!_lastState || !_lastState.streams) return;
+    var stream0 = _lastState.streams['0'];
+    var streamReceived = (stream0 && stream0.values) ? true : false;
+    var values = streamReceived ? stream0.values : null;
+    var now = Date.now();
     var anyUpdate = false;
     var ekfAvailable = false;
 
@@ -239,25 +243,51 @@
         var k = g.keys[ai];
         var el = q('ekf-' + k.replace(/\./g, '-'));
         if (g.unpublished) {
-          // Structurally absent: always n/p, even if a stray key exists.
-          if (el) el.textContent = NOT_PUBLISHED;
+          if (el) {
+            el.textContent = NOT_PUBLISHED;
+            el.style.color = 'var(--amber)';
+          }
           return;
         }
-        var v = values[k];
+        if (!el) return;
+        if (!streamReceived) {
+          el.textContent = 'AWAITING DATA';
+          el.style.color = 'var(--muted)';
+          return;
+        }
+        var v = values ? values[k] : null;
         if (v != null) {
           ekfAvailable = true;
-          if (el) {
+          anyUpdate = true;
+          var ageMs = _keyLastSeen[k] ? (now - _keyLastSeen[k]) : 0;
+          if (ageMs > 30000) {
+            el.textContent = 'NO DATA (stale ' + (ageMs / 1000).toFixed(0) + 's)';
+            el.style.color = 'var(--muted)';
+          } else if (ageMs > 2000) {
+            el.textContent = fmtNum(v, 4) + ' (stale ' + (ageMs / 1000).toFixed(1) + 's)';
+            el.style.color = 'var(--amber)';
+          } else {
             el.textContent = fmtNum(v, 4);
-            anyUpdate = true;
+            el.style.color = '';
           }
-        } else if (el) {
-          el.textContent = '—';  // published by the build, just not received yet
+        } else {
+          if (_keyLastSeen[k]) {
+            var ageMs = now - _keyLastSeen[k];
+            if (ageMs > 30000) {
+              el.textContent = 'NO DATA (stale ' + (ageMs / 1000).toFixed(0) + 's)';
+              el.style.color = 'var(--muted)';
+            } else {
+              el.textContent = 'STALE (' + (ageMs / 1000).toFixed(1) + 's)';
+              el.style.color = 'var(--amber)';
+            }
+          } else {
+            el.textContent = 'NOT PUBLISHED';
+            el.style.color = 'var(--amber)';
+          }
         }
       });
     });
 
-    // The EKF section is always visible; only the "not received yet"
-    // disclaimer hides once real s_ekf values arrive.
     var disclaimer = q('ekf-disclaimer');
     if (disclaimer) disclaimer.style.display = ekfAvailable ? 'none' : '';
 
@@ -266,22 +296,52 @@
       g.axisLabels.forEach(function (al, ai) {
         var slot0Key = g.keys[ai];
         var idKey = 'raw-' + slot0Key.replace(/\./g, '-');
-        var v = getValue(values, [slot0Key], g.fallback);
         var el = q(idKey);
-        if (el) {
-          el.textContent = fmtNum(v, 4);
-          if (v != null) anyUpdate = true;
+        if (!el) return;
+        if (!streamReceived) {
+          el.textContent = 'AWAITING DATA';
+          el.style.color = 'var(--muted)';
+          return;
+        }
+        var v = getValue(values, [slot0Key], g.fallback);
+        if (v != null) {
+          anyUpdate = true;
+          var ageMs = _keyLastSeen[slot0Key] ? (now - _keyLastSeen[slot0Key]) : 0;
+          if (ageMs > 30000) {
+            el.textContent = 'NO DATA (stale ' + (ageMs / 1000).toFixed(0) + 's)';
+            el.style.color = 'var(--muted)';
+          } else if (ageMs > 2000) {
+            el.textContent = fmtNum(v, 4) + ' (stale ' + (ageMs / 1000).toFixed(1) + 's)';
+            el.style.color = 'var(--amber)';
+          } else {
+            el.textContent = fmtNum(v, 4);
+            el.style.color = '';
+          }
+        } else {
+          if (_keyLastSeen[slot0Key]) {
+            var ageMs = now - _keyLastSeen[slot0Key];
+            if (ageMs > 30000) {
+              el.textContent = 'NO DATA (stale ' + (ageMs / 1000).toFixed(0) + 's)';
+              el.style.color = 'var(--muted)';
+            } else {
+              el.textContent = 'STALE (' + (ageMs / 1000).toFixed(1) + 's)';
+              el.style.color = 'var(--amber)';
+            }
+          } else {
+            el.textContent = 'NOT PUBLISHED';
+            el.style.color = 'var(--amber)';
+          }
         }
       });
     });
 
     // ── Covariance keys — not published by this build ──
     COV_KEYS.forEach(function (k) {
-      var v = values[k];
+      var v = values ? values[k] : null;
       var el = q('cov-' + k.replace(/\./g, '-'));
       if (el) {
-        // Only a real value (future build) replaces n/p; absence stays n/p.
         el.textContent = (v != null) ? fmtCov(v) : NOT_PUBLISHED;
+        el.style.color = (v != null) ? '' : 'var(--amber)';
         if (v != null) anyUpdate = true;
       }
     });
@@ -289,7 +349,7 @@
     // ── Filter status — not published by this build ──
     var fsEl = q('ekf-filter-status');
     if (fsEl) {
-      var fsVal = values['estimator.filter_status'];
+      var fsVal = values ? values['estimator.filter_status'] : null;
       if (fsVal != null) {
         var label = FILTER_STATUS_LABELS[Math.floor(fsVal)] || ('Status ' + fsVal);
         if (fsVal === 1) {
@@ -311,15 +371,45 @@
     if (anyUpdate) _hasData = true;
   }
 
+  function onState(state) {
+    if (!state) return;
+    _lastState = state;
+    var now = Date.now();
+    var stream0 = state.streams ? state.streams['0'] : null;
+    var values = (stream0 && stream0.values) ? stream0.values : null;
+    if (values) {
+      EKF_GROUPS.forEach(function (g) {
+        g.keys.forEach(function (k) {
+          if (values[k] != null) _keyLastSeen[k] = now;
+        });
+      });
+      RAW_GROUPS.forEach(function (g) {
+        g.keys.forEach(function (k) {
+          if (getValue(values, [k], g.fallback) != null) _keyLastSeen[k] = now;
+        });
+      });
+    }
+    renderEstimator();
+  }
+
   // ── Export (shell uses window.__registerPlugin__) ────────────────────────
   window.__PLUGIN_INIT__ = function(api) {
     api.registerPanel('EKF Estimator', function (container) {
       container.innerHTML = buildHTML();
+      renderEstimator();
       api.subscribe(onState);
+      if (_tickTimer == null) {
+        _tickTimer = setInterval(function () {
+          if (_lastState != null) renderEstimator();
+        }, 1000);
+      }
     });
   };
   window.__PLUGIN_DESTROY__ = function() {
+    if (_tickTimer != null) { clearInterval(_tickTimer); _tickTimer = null; }
     _hasData = false;
+    _lastState = null;
+    _keyLastSeen = {};
   };
   window.__registerPlugin__('EKF Estimator', window.__PLUGIN_INIT__, window.__PLUGIN_DESTROY__);
 

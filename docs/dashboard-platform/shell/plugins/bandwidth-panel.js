@@ -28,6 +28,7 @@
   var rafPending = false;
   var _apiRef = null;     // captured api ref for refresh actions
   var _unsubscribedSlots = {}; // slot → boolean; tracks actively unsubscribed slots
+  var _tickTimer = null;
 
   // ── DOM helpers ─────────────────────────────────────────────────────────
   function q(id) { return document.getElementById(id); }
@@ -153,8 +154,8 @@
       var barW = Math.max(2, (rate / MAX_BANDWIDTH_HZ) * innerW);
       var barY = barAreaY + i * (barH + barGap);
 
-      var barColor = ss.loss_pct > 5 ? '#e94560' :
-        ss.loss_pct > 1 ? '#f5a623' : '#4a9eff';
+      var barColor = (ss.loss_pct != null && ss.loss_pct > 5) ? '#e94560' :
+        ((ss.loss_pct != null && ss.loss_pct > 1) ? '#f5a623' : '#4a9eff');
 
       svgContent += '<rect x="' + PAD.left + '" y="' + barY + '" width="' + barW +
         '" height="' + barH + '" fill="' + barColor + '" opacity="0.6" rx="2"/>';
@@ -187,11 +188,35 @@
     }
 
     var html = '';
+    var now = Date.now();
     slots.forEach(function (slot) {
       var ss = streamStates[slot];
-      var lossClass = ss.loss_pct > 5 ? 'loss-critical' :
-        ss.loss_pct > 1 ? 'loss-warn' : '';
-      var ageText = ss.last_seen ? ((Date.now() - ss.last_seen) / 1000).toFixed(1) + ' s ago' : '—';
+      var ageMs = ss.last_seen ? (now - ss.last_seen) : null;
+      var ageText = '—';
+      var lossHtml = '';
+
+      if (ss.last_seen == null) {
+        ageText = '—';
+        lossHtml = '<span style="color:var(--muted)">AWAITING DATA</span>';
+      } else if (ageMs != null && ageMs > 30000) {
+        ageText = '<span style="color:var(--muted)">' + (ageMs / 1000).toFixed(1) + ' s ago (degraded)</span>';
+        lossHtml = ss.loss_pct != null ?
+          '<span style="color:var(--muted)">NO DATA (stale ' + (ageMs / 1000).toFixed(0) + 's)</span>' :
+          '<span style="color:var(--muted)">NO DATA</span>';
+      } else if (ageMs != null && ageMs > 2000) {
+        ageText = '<span style="color:var(--amber)">' + (ageMs / 1000).toFixed(1) + ' s ago (stale)</span>';
+        lossHtml = ss.loss_pct != null ?
+          '<span style="color:var(--amber)">' + ss.loss_pct.toFixed(2) + '% (stale ' + (ageMs / 1000).toFixed(1) + 's)</span>' :
+          '<span style="color:var(--amber)">NOT PUBLISHED (stale)</span>';
+      } else {
+        ageText = (ageMs / 1000).toFixed(1) + ' s ago';
+        if (ss.loss_pct != null) {
+          var lossClass = ss.loss_pct > 5 ? 'loss-critical' : (ss.loss_pct > 1 ? 'loss-warn' : '');
+          lossHtml = '<span class="' + lossClass + '">' + ss.loss_pct.toFixed(2) + '%</span>';
+        } else {
+          lossHtml = '<span style="color:var(--amber)">NOT PUBLISHED</span>';
+        }
+      }
 
       var isSlot0 = String(slot) === '0';
       var actionCell = isSlot0 ?
@@ -202,9 +227,9 @@
         '<td><input type="checkbox" id="bw-slot-' + slot + '" ' + (ss.enabled ? 'checked' : '') + ' style="accent-color:var(--green)"/></td>' +
         '<td style="font-weight:600">Slot ' + slot + (isSlot0 ? ' <span style="font-size:10px;color:var(--muted)">(boot)</span>' : '') + '</td>' +
         '<td style="font-family:Consolas,monospace">' + (ss.effective_rate || 0).toFixed(2) + ' Hz</td>' +
-        '<td class="' + lossClass + '" style="font-family:Consolas,monospace">' + (ss.loss_pct || 0).toFixed(2) + '%</td>' +
+        '<td style="font-family:Consolas,monospace">' + lossHtml + '</td>' +
         '<td style="font-family:Consolas,monospace">' + (ss.vars != null ? ss.vars : '—') + '</td>' +
-        '<td style="font-family:Consolas,monospace;font-size:10px;color:var(--muted)">' + ageText + '</td>' +
+        '<td style="font-family:Consolas,monospace;font-size:10px">' + ageText + '</td>' +
         actionCell +
         '</tr>';
     });
@@ -437,7 +462,7 @@
         streamStates[slot] = { enabled: true };
       }
       streamStates[slot].effective_rate = rate;
-      streamStates[slot].loss_pct = (meta && meta.loss_pct != null) ? meta.loss_pct : 0;
+      streamStates[slot].loss_pct = (meta && meta.loss_pct != null) ? meta.loss_pct : null;
       streamStates[slot].vars = countVars(stream.values || {});
       streamStates[slot].last_seen = now;
 
@@ -550,7 +575,15 @@
     api.registerPanel('Bandwidth Manager', function (container) {
       container.innerHTML = buildHTML();
       bindEvents(api);
+      renderStreamTable();
       api.subscribe(onState);
+      if (_tickTimer == null) {
+        _tickTimer = setInterval(function () {
+          if (Object.keys(streamStates).length > 0) {
+            renderStreamTable();
+          }
+        }, 1000);
+      }
       setTimeout(function () {
         renderBandwidthChart();
         renderStreamTable();
@@ -558,6 +591,10 @@
     });
   };
   window.__PLUGIN_DESTROY__ = function () {
+    if (_tickTimer != null) {
+      clearInterval(_tickTimer);
+      _tickTimer = null;
+    }
     streamStates = {};
     totalRate = 0;
     _prevSample = {};

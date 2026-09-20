@@ -81,12 +81,14 @@
   }
 
   // ── State for each param ────────────────────────────────────────────────
-  var _paramState = {}; // key → { value, status, pendingTimer }
+  var _paramState = {}; // key → { value, status, pendingTimer, lastSeen }
   var _readbackSeen = false; // any param got a value at least once
+  var _streamReceived = false;
+  var _tickTimer = null;
 
   function getParamState(param) {
     if (!_paramState[param.key]) {
-      _paramState[param.key] = { value: null, status: 'idle' };
+      _paramState[param.key] = { value: null, status: 'idle', lastSeen: null };
     }
     return _paramState[param.key];
   }
@@ -112,28 +114,76 @@
     var st = getParamState(param);
     var valEl = q('sf-val-' + param.index);
     var badgeEl = q('sf-badge-' + param.index);
-    if (valEl) valEl.textContent = fmt(st.value, param.display) + ' ' + param.unit;
-    if (badgeEl) {
-      if (st.status === 'idle' && st.value == null) {
-        badgeEl.innerHTML = 'no readback';
-        badgeEl.style.color = 'var(--muted)';
-        badgeEl.style.background = 'transparent';
-      } else if (st.status === 'idle') {
-        badgeEl.innerHTML = '&#10003; current';
-        badgeEl.style.color = 'var(--green)';
-        badgeEl.style.background = 'rgba(78,204,163,0.1)';
-      } else if (st.status === 'pending') {
-        badgeEl.innerHTML = '&#8987; pending';
-        badgeEl.style.color = 'var(--amber)';
-        badgeEl.style.background = 'rgba(245,166,35,0.1)';
-      } else if (st.status === 'applied') {
-        badgeEl.innerHTML = '&#10003; applied';
-        badgeEl.style.color = 'var(--green)';
-        badgeEl.style.background = 'rgba(78,204,163,0.1)';
-      } else if (st.status === 'rejected') {
-        badgeEl.innerHTML = '&#10007; rejected';
-        badgeEl.style.color = 'var(--red)';
-        badgeEl.style.background = 'rgba(233,69,96,0.1)';
+    var now = Date.now();
+
+    if (st.value == null) {
+      if (!_streamReceived) {
+        if (valEl) {
+          valEl.textContent = 'AWAITING DATA';
+          valEl.style.color = 'var(--muted)';
+        }
+        if (badgeEl) {
+          badgeEl.innerHTML = 'awaiting readback';
+          badgeEl.style.color = 'var(--muted)';
+          badgeEl.style.background = 'transparent';
+        }
+      } else {
+        if (valEl) {
+          valEl.textContent = 'NOT PUBLISHED';
+          valEl.style.color = 'var(--amber)';
+        }
+        if (badgeEl) {
+          badgeEl.innerHTML = 'NOT PUBLISHED';
+          badgeEl.style.color = 'var(--amber)';
+          badgeEl.style.background = 'rgba(245,166,35,0.1)';
+        }
+      }
+    } else {
+      var ageMs = st.lastSeen ? (now - st.lastSeen) : 0;
+      if (ageMs > 30000) {
+        if (valEl) {
+          valEl.textContent = 'NO DATA (stale ' + (ageMs / 1000).toFixed(0) + 's)';
+          valEl.style.color = 'var(--muted)';
+        }
+        if (badgeEl) {
+          badgeEl.innerHTML = 'degraded';
+          badgeEl.style.color = 'var(--muted)';
+          badgeEl.style.background = 'rgba(136,136,170,0.1)';
+        }
+      } else if (ageMs > 2000) {
+        if (valEl) {
+          valEl.textContent = fmt(st.value, param.display) + ' ' + param.unit + ' (stale ' + (ageMs / 1000).toFixed(1) + 's)';
+          valEl.style.color = 'var(--amber)';
+        }
+        if (badgeEl) {
+          badgeEl.innerHTML = 'stale (' + (ageMs / 1000).toFixed(1) + 's)';
+          badgeEl.style.color = 'var(--amber)';
+          badgeEl.style.background = 'rgba(245,166,35,0.1)';
+        }
+      } else {
+        if (valEl) {
+          valEl.textContent = fmt(st.value, param.display) + ' ' + param.unit;
+          valEl.style.color = '';
+        }
+        if (badgeEl) {
+          if (st.status === 'idle') {
+            badgeEl.innerHTML = '&#10003; current';
+            badgeEl.style.color = 'var(--green)';
+            badgeEl.style.background = 'rgba(78,204,163,0.1)';
+          } else if (st.status === 'pending') {
+            badgeEl.innerHTML = '&#8987; pending';
+            badgeEl.style.color = 'var(--amber)';
+            badgeEl.style.background = 'rgba(245,166,35,0.1)';
+          } else if (st.status === 'applied') {
+            badgeEl.innerHTML = '&#10003; applied';
+            badgeEl.style.color = 'var(--green)';
+            badgeEl.style.background = 'rgba(78,204,163,0.1)';
+          } else if (st.status === 'rejected') {
+            badgeEl.innerHTML = '&#10007; rejected';
+            badgeEl.style.color = 'var(--red)';
+            badgeEl.style.background = 'rgba(233,69,96,0.1)';
+          }
+        }
       }
     }
   }
@@ -180,7 +230,7 @@
         // Label
         '<div style="min-width:90px">',
         '  <div style="font-size:11px;color:var(--muted)">' + p.label + '</div>',
-        '  <div id="sf-val-' + p.index + '" style="font-family:Consolas,monospace;font-size:14px;font-weight:600">— ' + p.unit + '</div>',
+        '  <div id="sf-val-' + p.index + '" style="font-family:Consolas,monospace;font-size:14px;font-weight:600;color:var(--muted)">AWAITING DATA</div>',
         '</div>',
 
         // Minus button
@@ -248,7 +298,11 @@
     if (!el) return;
 
     if (!_readbackSeen) {
-      el.innerHTML = '<div class="sf-interlock sf-interlock-ok">&#8505; Awaiting first parameter readback from firmware</div>';
+      if (_streamReceived) {
+        el.innerHTML = '<div class="sf-interlock sf-interlock-warn">&#9888; Safety limits not published by this build</div>';
+      } else {
+        el.innerHTML = '<div class="sf-interlock sf-interlock-ok">&#8505; Awaiting first parameter readback from firmware</div>';
+      }
       return;
     }
 
@@ -284,16 +338,19 @@
     // for back-compat if anyone has manually injected keys there.
     var stream0 = state.streams['0'];
     var stream9 = state.streams['9'];
+    if (stream0 != null || stream9 != null) {
+      _streamReceived = true;
+    }
     var values = (stream0 && stream0.values) ? stream0.values :
                  (stream9 && stream9.values) ? stream9.values : null;
 
-    if (!values) return;
-
+    var now = Date.now();
     SAFETY_PARAMS.forEach(function (param) {
       var v = readParamValue(values, param);
       var st = getParamState(param);
       if (v != null && st.status === 'idle') {
         st.value = v;
+        st.lastSeen = now;
         _readbackSeen = true;
       }
       updateParamRow(param);
@@ -334,12 +391,24 @@
 
       api.subscribe(onState);
       // Initial render
+      SAFETY_PARAMS.forEach(updateParamRow);
       updateInterlocks();
+
+      if (_tickTimer == null) {
+        _tickTimer = setInterval(function () {
+          if (_readbackSeen || _streamReceived) {
+            SAFETY_PARAMS.forEach(updateParamRow);
+            updateInterlocks();
+          }
+        }, 1000);
+      }
     });
   };
   window.__PLUGIN_DESTROY__ = function() {
+    if (_tickTimer != null) { clearInterval(_tickTimer); _tickTimer = null; }
     _paramState = {};
     _readbackSeen = false;
+    _streamReceived = false;
   };
   window.__registerPlugin__('Safety Limits', window.__PLUGIN_INIT__, window.__PLUGIN_DESTROY__);
 
