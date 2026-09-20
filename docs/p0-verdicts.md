@@ -5,10 +5,10 @@ agent reading source. A confidently wrong P0 costs the operator more than
 silence does. This file records only findings verified a second time, against
 source, with the lines quoted.
 
-**Status: 2 of 5 P0s verified. Findings 2, 4 and 5 are still unverified claims.**
+**Status: 3 of 5 P0s verified. Findings 2 and 4 are still unverified claims.**
 Two worker waves spawned to verify them died on provider quota (agy
 `Individual quota reached`, ark `exceeded the 5-hour usage quota`, both resetting
-around 10:20–10:53 on 2026-09-21). Do not act on 2, 4 or 5 until they are
+around 10:20–10:53 on 2026-09-21). Do not act on 2 or 4 until they are
 checked the same way.
 
 ---
@@ -145,7 +145,91 @@ against, not a sensor glitch.
 
 ---
 
-## Findings 2, 4, 5 [P0] — **NOT VERIFIED**
+## Finding 5 [P0] — silent reuse of stale IMU samples: **PARTLY — every mechanism confirmed, the consequence is misdescribed**
+
+Verified by the supervisor 2026-09-21.
+
+### Confirmed exactly as reported
+
+`BSP/spi.c:62-73` returns a value indistinguishable from data on timeout:
+
+```c
+USHORT16 spi2_read_write_byte(USHORT16 txc)
+{
+    uint32_t to = 10000U;
+    while (((SPI2->SR & SPI_SR_TXE) == 0) && --to);
+    if (!to) return 0U;
+    ...
+    if (!to) return 0U;
+    return SPI2->DR;
+}
+```
+
+`0U` is both "bus timed out" and "the sensor sent 0x00". No caller can tell them
+apart, and `GetValue()` (`API/bmi088_driver.c:183`) is `void` — it returns no
+status and checks none.
+
+`sensor.sensor_ok` is **never cleared at runtime**. Every write in the tree:
+
+```
+API/bmi088_driver.c:126,135,176   -> 0U   (inside bmi088_init)
+API/bmi088_driver.c:179           -> 1U   (end of bmi088_init)
+BSP/BSP.c:41                      -> 0U   (boot, if bmi088_init fails)
+```
+
+Its only consumers are `API/imu_update.c:151` and `IMU_EstimatorReady()` at
+`:217`, which the FSM uses to **block arming**. So it is an arm-time gate that a
+mid-flight IMU failure can never revoke.
+
+`Warning` is dead as reported: written at `bmi088_driver.c:407,409,411`, read
+nowhere in the tree.
+
+### Where the report is wrong
+
+The stated consequence is "the Mahony filter continuously integrates stale
+angular rates, causing rapid orientation divergence … immediately flipping the
+aircraft." That is not what the timeout path produces.
+
+On timeout the bytes come back `0`, so the sample is **zero, not stale**. A zero
+gyro integrates no rotation, and the accelerometer correction is skipped
+outright by the guard at `API/imu_update.c:110`:
+
+```c
+if((Acc_X_Real != 0.0f) || (Acc_Y_Real != 0.0f) || (Acc_Z_Real != 0.0f))
+```
+
+Worth noting this guard also disposes of a worse failure I went looking for:
+`invSqrt` of a zero-norm vector at `:117` would yield inf and then `0 * inf =
+NaN` through the whole quaternion. The guard prevents it. Good code.
+
+So a full SPI outage **freezes** the attitude estimate rather than diverging it.
+That is still a P0 — the estimate stops tracking an aircraft that is still
+rotating, the controller acts on a stale attitude, and recovery delivers a large
+step into the loop — but the failure signature an operator or a log would see is
+the opposite of the one described. Anyone debugging from this report would look
+for divergence and find a flatline.
+
+**Genuinely stale** data needs a different fault: `IMUSample_Task` hanging, or
+the sensor freezing while its registers still read out. Those are real and
+unguarded, but they are not the SPI timeout.
+
+### What the report missed, and it is worse than either
+
+A **partial** SPI failure — some bytes timing out, others succeeding — yields a
+sample that is neither zero nor stale but *plausible*. An MSB that times out to
+`0x00` with a valid LSB produces a small, well-formed reading that passes the
+`:110` guard and every downstream sanity check. Nothing in the firmware can
+detect it.
+
+### Verdict
+
+Severity **stays P0**. The proposed fixes are right, and fix 2 (detect frozen or
+timed-out reads) should key on *both* signatures — a zero sample and an
+unchanging one — because the code produces both by different routes.
+
+---
+
+## Findings 2 and 4 [P0] — **NOT VERIFIED**
 
 Still single-source claims from `docs/firmware-preflight-findings.md`:
 
@@ -153,7 +237,6 @@ Still single-source claims from `docs/firmware-preflight-findings.md`:
   integration and zero-rate climb.
 - **4** — raw gyro rate feedback injected with Mahony angle error and integral
   bias mutating `Gyro_*_Real`.
-- **5** — silent reuse of stale IMU samples on dropped/corrupt SPI reads.
 
 Finding 3 is the reason to check them rather than act on them: its mechanism was
 real, but its stated trigger was wrong, and the filtering that made it wrong was
