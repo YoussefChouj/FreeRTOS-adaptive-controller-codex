@@ -47,6 +47,8 @@ class Element {
     this.doc = null;
   }
   addEventListener(ev, fn) { (this.handlers[ev] = this.handlers[ev] || []).push(fn); }
+  getAttribute(name) { return this.dataset[name] !== undefined ? this.dataset[name] : null; }
+  setAttribute(name, val) { this.dataset[name] = String(val); }
   get innerHTML() { return this._html; }
   set innerHTML(html) {
     this._html = html;
