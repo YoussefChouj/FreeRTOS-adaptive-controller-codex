@@ -1,5 +1,13 @@
 # UAV Ground Station Dashboard — Engineering Analysis for ASTRA 6 Codex Planning
 
+> **SUPERSEDED — 2026-09-21.** This document was the *input* to planning, not a
+> record of the system. It is kept for provenance only. The authoritative
+> specification is `IMPROVEMENT_SPEC_2026-09-18.md`; the current agent-facing
+> reference is `AGENT_GUIDE.md`. Do not treat any gap, file path or line number
+> below as current — much of it has since been fixed, and some of it was wrong
+> when written.
+
+
 > **Purpose**: Structured description of dashboard gaps, architectural issues, and user needs for an autonomous planning model (ASTRA 6 in Codex) to analyze the codebase and produce actionable fixes.
 >
 > **User**: jiang — Control Science & Engineering master's student working on a SDM324 quadrotor running FreeRTOS adaptive controller (MRAC).

@@ -172,6 +172,17 @@ keep 30 for `transport=0` (UART5). (~3 lines plus a conditional.)
 
 ### D1: Firmware source files not in workspace
 
+> **CORRECTED 2026-09-21.** This finding was wrong about the path, and is now
+> wholly obsolete. The firmware sources are present in this workspace at the
+> **repository root** — `API/` (25 `.c` files), `TASK/`, `BSP/`, `USER/`,
+> `Global_file/` — not under a `firmware/` prefix. `BSP/usart5.c` and
+> `API/subscribe.h` both exist and are directly readable. The caveat below
+> ("verified against the Python mirror, not the C source") applied to the S16
+> review as it was actually conducted and is retained for provenance, but it is
+> **not** a limitation of this workspace: later reviews can and should verify
+> against the C source directly. `OBJ/` additionally carries `JX_FLY.axf` with
+> DWARF, so symbol existence is answerable definitively.
+
 `firmware/API/`, `firmware/TASK/`, `firmware/BSP/` directories **do not exist**
 in this workspace. `OBJ/` contains only `.o` build artifacts. All references
 to firmware source (e.g. `BSP/usart5.c:241`, `API/subscribe.h:189`) are
