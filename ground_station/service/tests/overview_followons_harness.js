@@ -65,10 +65,15 @@ class FakeDocument {
     for (const tag of tags) {
       const idm = tag.match(/\bid="([^"]+)"/);
       if (!idm) continue;
-      if (!this.elements[idm[1]]) {
-        const el = new Element(idm[1], tag.slice(1).split(/[\s>]/)[0]);
+      const id = idm[1];
+      if (!this.elements[id]) {
+        const el = new Element(id, tag.slice(1).split(/[\s>]/)[0]);
         el.doc = this;
-        this.elements[idm[1]] = el;
+        this.elements[id] = el;
+      }
+      const textMatch = html.match(new RegExp('<[a-zA-Z0-9-]+[^>]*\\bid="' + id + '"[^>]*>([^<]*)<'));
+      if (textMatch) {
+        this.elements[id].textContent = textMatch[1];
       }
     }
   }
@@ -84,16 +89,26 @@ function makeApi() {
   };
 }
 
-function loadPanel() {
+function loadPanel(withClock) {
   const doc = new FakeDocument();
   const container = new Element('container', 'div');
   container.doc = doc;
   const api = makeApi();
+  // Optional controllable clock: the session-history widgets (sparkline
+  // span, battery slope) accumulate samples over TIME, which a test cannot
+  // wait for. withClock freezes the panel's Date at an advanceable instant.
+  clockOverride = withClock ? Date.now() : null;
+  class SandboxDate extends Date {
+    constructor(...args) { if (args.length) super(...args); else super(NOW()); }
+    static now() { return NOW(); }
+  }
   const sandbox = {
     document: doc,
     console: { log() {}, warn() {}, error() {} },
-    Date, Math, Number, String, Boolean, Array, Object, JSON,
+    Date: withClock ? SandboxDate : Date,
+    Math, Number, String, Boolean, Array, Object, JSON,
     setInterval, clearInterval, setTimeout, clearTimeout,
+    module: { exports: {} },
   };
   sandbox.window = sandbox;
   sandbox.__registerPlugin__ = function (name, init, destroy) {
@@ -106,13 +121,15 @@ function loadPanel() {
   sandbox.pluginInit(api);
   api.renderFn(container);
   return {
-    sandbox, doc, api,
+    sandbox, doc, api, container,
     feed(state) { api.stateCb(state); },
+    advance(ms) { clockOverride += ms; },
     destroy() { sandbox.pluginDestroy(); },
   };
 }
 
-const NOW = () => Date.now();
+let clockOverride = null;
+const NOW = () => (clockOverride == null ? Date.now() : clockOverride);
 const nsAgo = (ms) => (NOW() - ms) * 1e6;
 
 /* Flight-ready synthetic telemetry: every checklist condition met. */
@@ -337,6 +354,241 @@ function runChecks() {
     }
     assert.strictEqual(vs2[0].d, 'subscribed but no packet yet');
     console.log('  PASS: subscribed-but-no-packet-yet → all rows UNKNOWN ("' + vs2[0].d + '")');
+    env.destroy();
+  }
+
+  // 6. Alarm history — raise/clear episodes, acknowledge, silence, CSV export
+  {
+    console.log('\n[CHECK 6: Alarm History — episodes, ACK, SILENCE, CSV export]');
+    const env = loadPanel();
+    const doc = env.doc;
+    const click = (el) => env.container.handlers['click'][0]({ target: el });
+
+    // Raise one red alarm (battery low), then clear it.
+    const low = flightReadyState();
+    low.streams['0'].values['status.vbat'] = 14.2;
+    env.feed(low);
+    let hist = doc.getElementById('ov-hist-rows').innerHTML;
+    assert.ok(hist.indexOf('RAISED') !== -1, 'raise must be logged');
+    assert.ok(hist.indexOf('BATTERY LOW') !== -1, 'raise keeps the alarm text');
+    assert.ok(/\d{2}:\d{2}:\d{2}/.test(hist), 'raise row carries a timestamp');
+    assert.strictEqual((hist.match(/RAISED/g) || []).length, 1);
+    assert.strictEqual((hist.match(/CLEARED/g) || []).length, 0, 'no clear yet');
+    console.log('  PASS: raised red alarm → history row "RAISED … BATTERY LOW" with hh:mm:ss timestamp');
+
+    env.feed(flightReadyState());   // battery back in range → clear
+    hist = doc.getElementById('ov-hist-rows').innerHTML;
+    assert.strictEqual((hist.match(/RAISED/g) || []).length, 1);
+    assert.strictEqual((hist.match(/CLEARED/g) || []).length, 1, 'clear must be logged');
+    const raisedTs = hist.match(/\d{2}:\d{2}:\d{2}/g);
+    assert.strictEqual(raisedTs.length, 2, 'raised and cleared rows each carry a timestamp');
+    assert.ok(hist.indexOf('ov-hist-ev-cleared') !== -1, 'cleared row is visibly distinct');
+    console.log('  PASS: alarm raised then cleared → TWO entries, timestamps ' +
+      raisedTs[0] + ' (RAISED) and ' + raisedTs[1] + ' (CLEARED)');
+
+    // ACKNOWLEDGE: stays in the log, visibly distinct, display-local.
+    const ackBtn = doc.getElementById('ov-ack-1');
+    assert.ok(ackBtn, 'ack button exists for episode 1');
+    click(ackBtn);
+    hist = doc.getElementById('ov-hist-rows').innerHTML;
+    assert.ok(hist.indexOf('BATTERY LOW') !== -1, 'acked alarm STAYS in the log');
+    assert.ok(hist.indexOf('ov-hist-ep-acked') !== -1, 'acked episode is visibly distinct');
+    assert.ok(hist.indexOf('>ACK<') !== -1, 'ACK tag shown');
+    assert.strictEqual(doc.getElementById('ov-ack-1').textContent, 'ACKED');
+    console.log('  PASS: ACK → episode stays in log with ACK tag and ov-hist-ep-acked styling');
+
+    // SILENCE: suppresses the banner nag, never the record; reversible.
+    env.feed(low);                   // re-raised → new episode (ref 2)
+    assert.ok(doc.getElementById('ov-banner').textContent.indexOf('BATTERY LOW') !== -1,
+      'banner shows the un-silenced alarm');
+    click(doc.getElementById('ov-sil-2'));
+    assert.ok(doc.getElementById('ov-banner').textContent.indexOf('SILENCED BY OPERATOR') !== -1,
+      'silenced alarm no longer drives the banner');
+    assert.ok(doc.getElementById('ov-alarm-list').innerHTML.indexOf('[SILENCED]') !== -1,
+      'active list marks the alarm SILENCED');
+    hist = doc.getElementById('ov-hist-rows').innerHTML;
+    assert.strictEqual((hist.match(/RAISED/g) || []).length, 2,
+      'the silenced alarm is STILL in the record');
+    assert.ok(hist.indexOf('ov-hist-tag-sil') !== -1, 'silence tag on the episode');
+    click(doc.getElementById('ov-sil-2'));   // un-silence
+    assert.ok(doc.getElementById('ov-banner').textContent.indexOf('BATTERY LOW') !== -1,
+      'un-silencing restores the banner nag');
+    console.log('  PASS: SILENCE → banner nag suppressed, record kept, reversible');
+
+    // CSV export: parseable, header + one row per episode.
+    const csv = env.sandbox.module.exports.exportAlarmLogCsv();
+    const lines = csv.split('\r\n').filter((l) => l.length > 0);
+    assert.strictEqual(lines.length, 3, 'header + 2 episodes');
+    const cells = (line) => line.match(/("([^"]|"")*"|[^,]*)/g)
+      .filter((c) => c !== undefined && c !== '')
+      .map((c) => c.replace(/^"|"$/g, '').replace(/""/g, '"'));
+    const header = cells(lines[0]);
+    assert.deepStrictEqual(header,
+      ['raised_at', 'cleared_at', 'id', 'severity', 'text_raised', 'text_last', 'acknowledged', 'silenced']);
+    const r1 = cells(lines[1]);
+    assert.strictEqual(r1[2], 'vbat-low');
+    assert.strictEqual(r1[3], 'red');
+    assert.ok(r1[0].indexOf('T') !== -1, 'raised_at is an ISO timestamp');
+    assert.ok(r1[1].length > 0, 'cleared_at set for the cleared episode');
+    assert.strictEqual(r1[6], 'yes', 'episode 1 was acknowledged');
+    const r2 = cells(lines[2]);
+    assert.strictEqual(r2[1], '', 'episode 2 still open → empty cleared_at');
+    console.log('  PASS: CSV export parses — ' + lines.length + ' lines; first lines:');
+    console.log('    ' + lines[0]);
+    console.log('    ' + lines[1]);
+    console.log('    ' + lines[2]);
+    env.destroy();
+  }
+
+  // 7. Trend-on-demand — sparkline, insufficient history, gap as a hole
+  {
+    console.log('\n[CHECK 7: Trend-on-Demand — sparkline / insufficient / gap]');
+    // 7a. Full buffer → sparkline.
+    let env = loadPanel(true);
+    for (let i = 0; i < 12; i++) {
+      const st = flightReadyState();
+      st.streams['3'].values['c.altitude'] = 1.0 + i * 0.1;
+      env.feed(st);
+      env.advance(500);
+    }
+    env.container.handlers['click'][0]({ target: env.doc.getElementById('ov-val-pos-2') });
+    let body = env.doc.getElementById('ov-trend-body').innerHTML;
+    assert.ok(body.indexOf('<svg') !== -1, 'sparkline SVG rendered');
+    assert.ok(body.indexOf('ov-spark-line') !== -1, 'polyline series drawn');
+    assert.ok(body.indexOf('samples') !== -1 && body.indexOf('gap(s)') !== -1,
+      'sample/gap basis shown under the sparkline');
+    assert.ok(body.indexOf('c.altitude') !== -1, 'the box names the key');
+    console.log('  PASS: 12-sample buffer → sparkline with basis line ("' +
+      body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() + '")');
+    env.destroy();
+
+    // 7b. Fewer than SPARK_MIN_SAMPLES → explicit insufficient state, no line.
+    env = loadPanel(true);
+    for (let i = 0; i < 3; i++) { env.feed(flightReadyState()); env.advance(500); }
+    env.container.handlers['click'][0]({ target: env.doc.getElementById('ov-val-att-0') });
+    body = env.doc.getElementById('ov-trend-body').innerHTML;
+    assert.ok(body.indexOf('INSUFFICIENT HISTORY') !== -1, 'explicit insufficient state');
+    assert.strictEqual(body.indexOf('<svg'), -1, 'no sparkline drawn');
+    assert.strictEqual(body.indexOf('<polyline'), -1, 'never a 3-point pseudo-line');
+    console.log('  PASS: 3 samples → "INSUFFICIENT HISTORY — 3 sample(s) received, 10 needed", no line at all');
+    env.destroy();
+
+    // 7c. Gap in the buffer → visible hole, line breaks, never interpolated.
+    env = loadPanel(true);
+    for (let i = 0; i < 14; i++) {
+      const st = flightReadyState();
+      if (i >= 5 && i <= 7) delete st.streams['3'].values['c.yaw'];  // 3-sample hole
+      else st.streams['3'].values['c.yaw'] = 170 + i;
+      env.feed(st);
+      env.advance(500);
+    }
+    env.container.handlers['click'][0]({ target: env.doc.getElementById('ov-val-att-2') });
+    body = env.doc.getElementById('ov-trend-body').innerHTML;
+    assert.strictEqual((body.match(/<polyline/g) || []).length, 2,
+      'two segments — the line BREAKS at the gap');
+    assert.ok(body.indexOf('ov-spark-gap') !== -1, 'the gap renders as a visible hole band');
+    assert.ok(body.indexOf('1 gap(s)') !== -1, 'the gap is counted in the basis line');
+    console.log('  PASS: 3-sample hole → line breaks into 2 segments + grey gap band ("gap(s)" counted)');
+    env.destroy();
+  }
+
+  // 8. Battery trend — falling / flat / rising / absent / insufficient
+  {
+    console.log('\n[CHECK 8: Battery Trend — estimate, no-estimate, not-published]');
+    const vbatState = (v) => ({
+      connected: true,
+      slot_freshness_ttl_ns: 30e9,
+      streams: {
+        '0': {
+          last_update_ns: nsAgo(100),
+          _key_ts: { 'status.vbat': nsAgo(100) },
+          values: { 'status.arm': 0, 'status.flymode': 0, 'status.vbat': v,
+            'status.rc_authority': 1, 'status.sbus': 0, 'status.estimator_ready': 1 },
+        },
+      },
+    });
+    const feedSeries = (env, fn, n, stepMs) => {
+      for (let i = 0; i < n; i++) { env.feed(vbatState(fn(i))); env.advance(stepMs); }
+    };
+
+    // 8a. Falling slope → time-to-empty WITH its basis.
+    let env = loadPanel(true);
+    feedSeries(env, (i) => 16.4 - i * 0.025, 20, 6000);   // −0.25 V/min over 114 s
+    let body = env.doc.getElementById('ov-bat-body').innerHTML;
+    if (body.indexOf('TIME TO 15.0 V') === -1) console.log('CHECK 8A BODY WAS:', body);
+    assert.ok(body.indexOf('TIME TO 15.0 V') !== -1, 'falling slope gives an estimate');
+    assert.ok(/−?\d+\.\d+ mV\/min|-250\.0 mV\/min/.test(body), 'slope shown: ' + body.match(/-?[\d.]+ mV\/min/));
+    assert.ok(body.indexOf('basis: 20 samples') !== -1, 'sample count in the basis');
+    assert.ok(body.indexOf('min span') !== -1, 'time span in the basis');
+    console.log('  PASS: −0.25 V/min → "' + body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() + '"');
+    env.destroy();
+
+    // 8b. Flat slope → NO estimate, no comforting number.
+    env = loadPanel(true);
+    feedSeries(env, () => 16.0, 20, 6000);
+    body = env.doc.getElementById('ov-bat-body').innerHTML;
+    assert.ok(body.indexOf('NO ESTIMATE — voltage not falling') !== -1, 'flat gives no estimate');
+    assert.strictEqual(body.indexOf('TIME TO'), -1);
+    console.log('  PASS: flat 16.0 V → "NO ESTIMATE — voltage not falling" (slope +0.0 mV/min)');
+    env.destroy();
+
+    // 8c. Rising slope → still no estimate.
+    env = loadPanel(true);
+    feedSeries(env, (i) => 15.8 + i * 0.02, 20, 6000);
+    body = env.doc.getElementById('ov-bat-body').innerHTML;
+    assert.ok(body.indexOf('NO ESTIMATE') !== -1);
+    assert.strictEqual(body.indexOf('TIME TO'), -1);
+    console.log('  PASS: rising slope → NO ESTIMATE (never a large number)');
+    env.destroy();
+
+    // 8d. vbat not published → NOT PUBLISHED, no nominal substitute.
+    env = loadPanel(true);
+    const noVbat = flightReadyState();
+    delete noVbat.streams['0'].values['status.vbat'];
+    env.feed(noVbat);
+    env.advance(6000);
+    body = env.doc.getElementById('ov-bat-body').innerHTML;
+    assert.ok(body.indexOf('NOT PUBLISHED') !== -1);
+    assert.strictEqual(body.indexOf('TIME TO'), -1);
+    console.log('  PASS: status.vbat absent → amber "NOT PUBLISHED", nothing substituted');
+    env.destroy();
+
+    // 8e. Published but too little history → INSUFFICIENT, no slope.
+    env = loadPanel(true);
+    feedSeries(env, (i) => 16.4 - i * 0.025, 4, 6000);
+    body = env.doc.getElementById('ov-bat-body').innerHTML;
+    assert.ok(body.indexOf('INSUFFICIENT HISTORY') !== -1);
+    assert.strictEqual(body.indexOf('TIME TO'), -1);
+    assert.strictEqual(body.indexOf('mV/min'), -1, 'no slope shown below the minimum');
+    console.log('  PASS: 4 samples → "INSUFFICIENT HISTORY", no slope, no estimate');
+    env.destroy();
+  }
+
+  // 9. Read-only confirmation — nothing sends, arms or gates
+  {
+    console.log('\n[CHECK 9: Read-Only — no widget sends, arms or gates anything]');
+    const src = fs.readFileSync(PANEL, 'utf8');
+    for (const marker of ['submitCommand', 'subscribeSlot', 'unsubscribeSlot',
+      'fetch(', 'XMLHttpRequest', 'getGates', 'getArmState', 'api.command']) {
+      assert.ok(src.indexOf(marker) === -1, 'panel must not contain ' + marker);
+    }
+    // And functionally: drive every interaction, assert the stubbed API saw
+    // nothing beyond the one subscribe() from panel init.
+    const env = loadPanel();
+    const low = flightReadyState();
+    low.streams['0'].values['status.vbat'] = 14.2;
+    env.feed(low);
+    const click = (el) => env.container.handlers['click'][0]({ target: el });
+    click(env.doc.getElementById('ov-ack-1'));
+    click(env.doc.getElementById('ov-sil-1'));
+    click(env.doc.getElementById('ov-val-att-0'));
+    click(env.doc.getElementById('ov-export-btn'));
+    assert.strictEqual(typeof env.api.stateCb, 'function', 'still just the state subscription');
+    assert.strictEqual(env.api.submitCommand, undefined);
+    assert.strictEqual(env.api.subscribeSlot, undefined);
+    assert.deepStrictEqual(Object.keys(env.api).sort(), ['registerPanel', 'renderFn', 'stateCb', 'subscribe']);
+    console.log('  PASS: source has no command/arm/gate call; ACK/SILENCE/trend/export clicks ' +
+      'leave the API untouched — acknowledge and silence are display-local');
     env.destroy();
   }
 

@@ -57,6 +57,10 @@ class TestOverviewFollowons(unittest.TestCase):
         self.assertIn("stale: amber age, then grey frozen", proc.stdout)
         self.assertIn("live verdicts from synthetic telemetry", proc.stdout)
         self.assertIn("no data: all UNKNOWN, none PASS", proc.stdout)
+        self.assertIn("Alarm History — episodes, ACK, SILENCE, CSV export", proc.stdout)
+        self.assertIn("Trend-on-Demand — sparkline / insufficient / gap", proc.stdout)
+        self.assertIn("Battery Trend — estimate, no-estimate, not-published", proc.stdout)
+        self.assertIn("Read-Only — no widget sends, arms or gates anything", proc.stdout)
 
 
 if __name__ == "__main__":

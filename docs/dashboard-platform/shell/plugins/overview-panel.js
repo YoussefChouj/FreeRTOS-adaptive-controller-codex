@@ -35,6 +35,25 @@
  *   slot 1 ← tags "id" and "b" (Frame ID, Frame B)
  *   slot 3 ← tag "c"  (Frame C, wifi_bridge.py:_decode_frame_c)
  * The full binding table lives in HMI_DESIGN.md and in the harness.
+ *
+ * Follow-ons (task 20260921-070956, HMI_DESIGN.md §7 items 3-5):
+ *   - Persistent session alarm history with acknowledge / silence (the PLC
+ *     standard) and a dependency-free CSV export. Acknowledge and silence
+ *     are OPERATOR ACTIONS ON THE DISPLAY ONLY — they mutate nothing but
+ *     this panel's own log entries and send nothing to the aircraft.
+ *   - Trend-on-demand: click any value cell in the mimic diagram or the
+ *     shadow box → sparkline of that key's session history.
+ *   - Battery trend / time-to-empty from the status.vbat session history.
+ *
+ * Session sample history: the buffer machinery follows time-series-panel.js
+ * (its `ringBuffers` / `sampleTimestamps` / `onState` ingestion, lines 67-69
+ * and 646-664, including its `number | null` gap convention where a sample
+ * that was never received is stored as an explicit hole, and the
+ * segment-splitting of renderChart lines 321-343 that never interpolates
+ * across one). Direct import was not possible: that panel's buffers are
+ * closure-private and it exports no symbol, so this panel keeps its own
+ * session-scoped history with identical semantics (see the task result for
+ * the finding). All history here is session-scoped and lost on reload.
  */
 (function () {
   'use strict';
@@ -48,6 +67,27 @@
   var LOSS_RED_PCT   = 5.0;
 
   var SLOT_ORDER = ['0', '1', '3', '2'];
+
+  /* ── Follow-on thresholds (task 20260921-070956, HMI_DESIGN.md §7 3-5) ──
+   * SPARK_MIN_SAMPLES: below this a sparkline is not drawn at all — an
+   *   explicit INSUFFICIENT HISTORY state renders instead. 10 samples at the
+   *   shell's ~2 Hz /state poll ≈ 5 s of session: enough that the line shows
+   *   a direction rather than two points that any noise could connect.
+   * BAT_MIN_SAMPLES / BAT_MIN_SPAN_MS: a time-to-empty the operator plans a
+   *   flight around needs more than instantaneous slope — ≥ 10 samples
+   *   spanning ≥ 30 s of actually-received vbat values.
+   * BAT_FALLING_V_PER_MIN: slopes shallower (or rising) than this give NO
+   *   estimate, never a large comforting number. 0.02 V/min is well below
+   *   any real 4S discharge (≈ 0.1-0.2 V/min under load) and above the
+   *   jitter a 2 Hz poll of a noisy ADC rail produces.
+   * ALARM_LOG_MAX: bounded episode log; overflow drops the OLDEST episodes
+   *   and the drop is counted and shown, never silently discarded. */
+  var SPARK_MIN_SAMPLES  = 10;
+  var BAT_MIN_SAMPLES    = 10;
+  var BAT_MIN_SPAN_MS    = 30000;
+  var BAT_FALLING_V_PER_MIN = 0.02;
+  var HIST_MAX           = 1200;  // session history bound (≈10 min at 2 Hz poll)
+  var ALARM_LOG_MAX      = 500;   // alarm history episodes
 
   var FLY_MODE_LABELS = ['Stabilize', 'AltHold', 'PosHold', 'Auto', 'Manual', 'SDK'];
 
@@ -183,6 +223,38 @@
   var _lastState = null;
   var _tickTimer = null;
   var _recentAlarms = [];   // [{id, text, clearedAt}] — cleared but still visible
+
+  /* Follow-on state (task 20260921-070956). All of it is session-scoped:
+   * a page reload starts every buffer, the alarm log and the trend back
+   * empty. Nothing here is persisted, and nothing here is ever sent to the
+   * aircraft — the only writers are telemetry ingestion (read-only display)
+   * and the operator's display-local acknowledge / silence / export clicks. */
+  var _hist = {};           // key → [{t: ns|null, v: number|null}] — null = gap, never interpolated
+  var _trendKey = null;     // key whose sparkline is open, or null
+  var _alarmLog = [];       // episodes [{ref, id, sev, text, textEnd, raisedAt, clearedAt, ack, silenced}]
+  var _openEpisodes = {};   // id → open episode (alarm currently active)
+  var _episodeSeq = 0;      // stable per-episode button reference
+  var _alarmLogDropped = 0; // episodes evicted by the ALARM_LOG_MAX bound
+
+  /* Every key a value cell can sparkline (mimic stages + shadow + battery). */
+  var HISTORY_KEYS = (function () {
+    var seen = {}, out = [];
+    function add(k) { if (k && !seen[k]) { seen[k] = true; out.push(k); } }
+    STAGES.forEach(function (st) { st.rows.forEach(function (r) { add(r.key); }); });
+    SHADOW_ROWS.forEach(function (r) { add(r.key); });
+    add('status.vbat');
+    return out;
+  })();
+
+  /* Value-cell id → key, for the click-to-trend delegation. */
+  var _cellKeys = (function () {
+    var m = {};
+    STAGES.forEach(function (st) {
+      st.rows.forEach(function (r, ri) { m['ov-val-' + st.id + '-' + ri] = r.key; });
+    });
+    SHADOW_ROWS.forEach(function (r, ri) { m['ov-shadow-val-' + ri] = r.key; });
+    return m;
+  })();
 
   function q(id) {
     return (typeof document !== 'undefined' && document.getElementById) ? document.getElementById(id) : null;
@@ -485,6 +557,276 @@
 
   function sevRank(s) { return s === 'red' ? 2 : 1; }
 
+  /* ── Session sample history (task 20260921-070956) ─────────────────────
+   * One sample per /state snapshot, per key — the same per-snapshot ingestion
+   * cadence as time-series-panel.js `onState`. A key that is absent, or whose
+   * value is older than the slot TTL, is stored as an explicit GAP ({t,v} both
+   * null, or t kept with v null when the sample is merely stale) — the
+   * `number | null` convention of time-series-panel.js `ringBuffers`. A gap is
+   * never interpolated through: the sparkline breaks the line and greys a band
+   * over the hole. */
+  function ingestHistory(state) {
+    var nowMs = Date.now();
+    var ttlMs = ((state && state.slot_freshness_ttl_ns) || 30e9) / 1e6;
+    for (var ki = 0; ki < HISTORY_KEYS.length; ki++) {
+      var key = HISTORY_KEYS[ki];
+      if (!_hist[key]) _hist[key] = [];
+      var f = findValue(state, key);
+      var sample = { t: null, v: null };
+      if (f && f.val != null && !isNaN(f.val) && f.ts != null) {
+        sample.t = f.ts;
+        sample.v = (nowMs - f.ts / 1e6) <= ttlMs ? Number(f.val) : null; // stale → gap
+      }
+      _hist[key].push(sample);
+      if (_hist[key].length > HIST_MAX) _hist[key].shift();
+    }
+  }
+
+  function historySpanMs(key) {
+    var h = _hist[key] || [];
+    var first = null, last = null;
+    for (var i = 0; i < h.length; i++) {
+      if (h[i] && h[i].v != null && h[i].t != null) {
+        if (first == null) first = h[i].t;
+        last = h[i].t;
+      }
+    }
+    if (first == null) return null;
+    return (last - first) / 1e6;
+  }
+
+  /* ── Sparkline (trend-on-demand) ───────────────────────────────────────
+   * Single series, so no legend — the box title names the key. The line
+   * wears the neutral text token, NOT a state colour: HMI_DESIGN.md §1
+   * reserves green/amber/red/grey for HMI states, and status colours are
+   * never chart colours. Gaps break the polyline (the segment-splitting of
+   * time-series-panel.js renderChart) and get a muted band so the hole is
+   * visible, not bridged. */
+  var SPARK_W = 240, SPARK_H = 44, SPARK_PAD = 5;
+
+  function sparklineData(key) {
+    var h = _hist[key] || [];
+    var pts = [], gaps = 0, inGap = false;
+    for (var i = 0; i < h.length; i++) {
+      if (h[i] && h[i].v != null && !isNaN(h[i].v)) {
+        pts.push({ i: i, v: h[i].v });
+        inGap = false;
+      } else if (!inGap) {
+        gaps++;
+        inGap = true;
+      }
+    }
+    return { total: h.length, pts: pts, gaps: gaps, spanMs: historySpanMs(key) };
+  }
+
+  function buildSparklineSvg(key) {
+    var d = sparklineData(key);
+    if (d.pts.length < SPARK_MIN_SAMPLES || d.pts.length < 2) {
+      return { insufficient: true, nValid: d.pts.length, nTotal: d.total,
+        minNeeded: SPARK_MIN_SAMPLES, gaps: d.gaps, spanMs: d.spanMs, svg: '' };
+    }
+    var i0 = d.pts[0].i, i1 = d.pts[d.pts.length - 1].i;
+    var vmin = Infinity, vmax = -Infinity;
+    d.pts.forEach(function (p) {
+      if (p.v < vmin) vmin = p.v;
+      if (p.v > vmax) vmax = p.v;
+    });
+    if (vmax === vmin) { vmin -= 1; vmax += 1; }  // flat data: give the line a lane
+    var innerW = SPARK_W - 2 * SPARK_PAD, innerH = SPARK_H - 2 * SPARK_PAD;
+    function x(i) { return SPARK_PAD + (i - i0) * (innerW / Math.max(1, i1 - i0)); }
+    function y(v) { return SPARK_PAD + innerH - ((v - vmin) / (vmax - vmin)) * innerH; }
+
+    // Gap bands: muted rectangles over runs of missing samples BETWEEN the
+    // first and last valid sample, so the hole is a visible hole.
+    var gapRects = [];
+    var h = _hist[key], runStart = null;
+    for (var i = i0; i <= i1; i++) {
+      var missing = !(h[i] && h[i].v != null && !isNaN(h[i].v));
+      if (missing && runStart == null) runStart = i;
+      if ((!missing || i === i1) && runStart != null) {
+        var runEnd = missing ? i : i - 1;
+        var x0 = x(runStart) - (innerW / Math.max(1, i1 - i0)) / 2;
+        var x1 = x(runEnd) + (innerW / Math.max(1, i1 - i0)) / 2;
+        gapRects.push('<rect class="ov-spark-gap" x="' + Math.max(0, x0).toFixed(1) +
+          '" y="' + SPARK_PAD + '" width="' + Math.max(1, x1 - Math.max(0, x0)).toFixed(1) +
+          '" height="' + innerH + '"/>');
+        runStart = null;
+      }
+    }
+
+    // Segments: the polyline BREAKS at every gap — never interpolated through.
+    var segments = [], cur = [];
+    for (var j = 0; j < d.pts.length; j++) {
+      if (cur.length && d.pts[j].i !== d.pts[j - 1].i + 1) { segments.push(cur); cur = []; }
+      cur.push(x(d.pts[j].i).toFixed(1) + ',' + y(d.pts[j].v).toFixed(1));
+    }
+    if (cur.length) segments.push(cur);
+    var lines = segments.map(function (seg) {
+      return '<polyline class="ov-spark-line" fill="none" points="' + seg.join(' ') + '"/>';
+    }).join('');
+
+    var lastPt = d.pts[d.pts.length - 1];
+    return {
+      insufficient: false, nValid: d.pts.length, nTotal: d.total, minNeeded: SPARK_MIN_SAMPLES,
+      gaps: d.gaps, spanMs: d.spanMs, vmin: vmin, vmax: vmax,
+      svg: '<svg class="ov-spark" viewBox="0 0 ' + SPARK_W + ' ' + SPARK_H +
+        '" preserveAspectRatio="none" role="img" aria-label="session trend sparkline">' +
+        lines + gapRects.join('') +
+        '<circle class="ov-spark-last" cx="' + x(lastPt.i).toFixed(1) + '" cy="' + y(lastPt.v).toFixed(1) + '" r="2.5">' +
+        '<title>last: ' + String(lastPt.v) + '</title></circle>' +
+        '</svg>',
+    };
+  }
+
+  /* ── Battery trend / time-to-empty (HMI_DESIGN.md §7 item 5) ───────────
+   * Highest-risk widget in the panel: the number an operator plans a flight
+   * around. Slope is least-squares over the status.vbat samples ACTUALLY
+   * RECEIVED this session (each timestamped by the firmware, not by the
+   * poll). A rising or flat slope (shallower than BAT_FALLING_V_PER_MIN)
+   * yields NO estimate — never a large comforting number. The basis (sample
+   * count, time span) is always shown next to the estimate. "Empty" is the
+   * firmware's own beep threshold VBAT_RED_V (15.0 V), not 0 V: that is the
+   * actionable floor this aircraft itself alarms on. */
+  function computeBatteryTrend(state) {
+    var out = { published: false, n: 0, spanMs: null, slopeVPerMin: null,
+      tteMin: null, vLast: null, atOrBelowFloor: false };
+    var f = findValue(state, 'status.vbat');
+    if (!f || f.val == null || isNaN(f.val)) return out;  // not published by this build
+    out.published = true;
+    var h = _hist['status.vbat'] || [];
+    var xs = [], ys = [];
+    for (var i = 0; i < h.length; i++) {
+      if (h[i] && h[i].v != null && h[i].t != null && !isNaN(h[i].v)) {
+        xs.push(h[i].t); ys.push(h[i].v);
+      }
+    }
+    out.n = xs.length;
+    if (out.n === 0) return out;
+    out.vLast = ys[ys.length - 1];
+    out.atOrBelowFloor = out.vLast <= VBAT_RED_V;
+    if (out.n < 2) return out;
+    out.spanMs = (xs[xs.length - 1] - xs[0]) / 1e6;
+    if (out.n < BAT_MIN_SAMPLES || out.spanMs < BAT_MIN_SPAN_MS) return out;
+    // Least squares slope in V per second (normalised to xs[0] to avoid
+    // catastrophic cancellation from squaring raw nanoseconds ~1.7e18).
+    var n = out.n, sx = 0, sy = 0, sxy = 0, sxx = 0, x0 = xs[0];
+    for (var j = 0; j < n; j++) {
+      var dtSec = (xs[j] - x0) / 1e9;
+      sx += dtSec; sy += ys[j]; sxy += dtSec * ys[j]; sxx += dtSec * dtSec;
+    }
+    var denom = n * sxx - sx * sx;
+    if (denom === 0) return out;
+    var slopeVPerSec = (n * sxy - sx * sy) / denom;
+    out.slopeVPerMin = slopeVPerSec * 60;   // 1 min = 60 s
+    if (out.slopeVPerMin < -BAT_FALLING_V_PER_MIN) {
+      out.tteMin = Math.max(0, (out.vLast - VBAT_RED_V) / (-out.slopeVPerMin));
+    }
+    return out;
+  }
+
+  /* ── Alarm history (HMI_DESIGN.md §7 item 3) ───────────────────────────
+   * Session-scoped episode log: one episode per raise, closed by its clear.
+   * Raise and clear are both events the operator sees, timestamped. The
+   * PLC-standard operator actions live here too:
+   *   ACKNOWLEDGE — marks the episode as seen; it STAYS in the log and stays
+   *     visibly distinct (ACK tag) from one never acknowledged. Touches
+   *     nothing but the log entry.
+   *   SILENCE — suppresses the visual nag on the display (banner + active
+   *     list dim, SILENCED tag); the record is untouched and the condition
+   *     keeps logging. Touches nothing but the log entry.
+   * Neither action sends, arms or gates anything — see onContainerClick. */
+  function updateAlarmLog(active, nowMs) {
+    var activeIds = {};
+    active.forEach(function (a) {
+      if (a.id === 'notelem') return; // initial absent state is not a flight alarm episode
+      activeIds[a.id] = a;
+    });
+    Object.keys(activeIds).forEach(function (id) {
+      var a = activeIds[id];
+      if (!_openEpisodes[id]) {
+        var ep = { ref: ++_episodeSeq, id: id, sev: a.sev, text: a.text, textEnd: a.text,
+          raisedAt: nowMs, clearedAt: null, ack: false, silenced: false };
+        _alarmLog.push(ep);
+        _openEpisodes[id] = ep;
+        if (_alarmLog.length > ALARM_LOG_MAX) {
+          _alarmLog.shift();
+          _alarmLogDropped++;
+        }
+      } else {
+        _openEpisodes[id].textEnd = a.text;  // age-bearing texts keep their latest wording
+      }
+    });
+    Object.keys(_openEpisodes).forEach(function (id) {
+      if (!activeIds[id]) {
+        _openEpisodes[id].clearedAt = nowMs;
+        delete _openEpisodes[id];
+      }
+    });
+  }
+
+  /* Display-local operator action. No api call, no command, no gate. */
+  function alarmAction(ref, action) {
+    for (var i = 0; i < _alarmLog.length; i++) {
+      if (_alarmLog[i].ref === ref) {
+        if (action === 'ack') _alarmLog[i].ack = true;
+        else if (action === 'silence') _alarmLog[i].silenced = !_alarmLog[i].silenced;
+        if (_lastState != null) render(_lastState);
+        return;
+      }
+    }
+  }
+
+  /* An active alarm id is silenced when its open episode was silenced. */
+  function silencedAlarmIds() {
+    var out = {};
+    Object.keys(_openEpisodes).forEach(function (id) {
+      if (_openEpisodes[id].silenced) out[id] = true;
+    });
+    return out;
+  }
+
+  function fmtClock(ms) {
+    var d = new Date(ms);
+    function p2(n) { return (n < 10 ? '0' : '') + n; }
+    return p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds());
+  }
+
+  function iso(ms) { return ms == null ? '' : new Date(ms).toISOString(); }
+
+  function csvField(s) {
+    return '"' + String(s == null ? '' : s).replace(/"/g, '""') + '"';
+  }
+
+  /* Dependency-free CSV export of the whole session alarm log. */
+  function exportAlarmLogCsv() {
+    var rows = [['raised_at', 'cleared_at', 'id', 'severity', 'text_raised', 'text_last', 'acknowledged', 'silenced']];
+    _alarmLog.forEach(function (ep) {
+      rows.push([iso(ep.raisedAt), iso(ep.clearedAt), ep.id, ep.sev,
+        ep.text, ep.textEnd, ep.ack ? 'yes' : 'no', ep.silenced ? 'yes' : 'no']);
+    });
+    return rows.map(function (r) { return r.map(csvField).join(','); }).join('\r\n') + '\r\n';
+  }
+
+  /* Browser download of the CSV. Guarded so the offline harness (no Blob /
+   * URL / createElement) skips the download and only the string is used. */
+  function downloadAlarmCsv() {
+    var csv = exportAlarmLogCsv();
+    if (typeof Blob === 'undefined' || typeof URL === 'undefined' ||
+        !URL.createObjectURL || typeof document === 'undefined' || !document.createElement) {
+      return csv;
+    }
+    var blob = new Blob([csv], { type: 'text/csv' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'alarm-history-' + new Date().toISOString().replace(/[:.]/g, '-') + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    return csv;
+  }
+
   /* ── HTML ────────────────────────────────────────────────────────────── */
 
   function buildHTML() {
@@ -560,6 +902,38 @@
       '.ov-chk-plain { font-size:11px; font-weight:600; }',
       '.ov-chk-hint  { font-size:9px; color:var(--muted); }',
       '.ov-chk-detail { font-size:10px; color:var(--muted); font-family:Consolas,monospace; padding-left:78px; }',
+      '.ov-row-val:hover, .ov-shadow .ov-row-val:hover { text-decoration:underline dotted; cursor:pointer; }',
+      '.ov-hist { border:1px solid var(--border); border-radius:6px; padding:6px 10px; margin-bottom:10px; background:var(--card); }',
+      '.ov-hist-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }',
+      '.ov-hist-title { font-size:11px; font-weight:700; }',
+      '.ov-hist-note { font-size:9px; color:var(--muted); }',
+      '.ov-hist-btn { font-size:9px; font-weight:600; padding:1px 7px; border:1px solid var(--border);',
+      '  border-radius:3px; background:transparent; color:var(--text); cursor:pointer; }',
+      '.ov-hist-btn:hover { border-color:var(--text); }',
+      '.ov-hist-row { display:flex; align-items:baseline; gap:8px; padding:2px 0; font-size:10px;',
+      '  border-bottom:1px solid var(--border); }',
+      '.ov-hist-row:last-child { border-bottom:none; }',
+      '.ov-hist-ts { font-family:Consolas,monospace; color:var(--muted); flex:0 0 52px; }',
+      '.ov-hist-ev { font-weight:700; flex:0 0 58px; }',
+      '.ov-hist-ev-raised-red { color:var(--red); }',
+      '.ov-hist-ev-raised-amber { color:var(--amber); }',
+      '.ov-hist-ev-cleared { color:var(--muted); }',
+      '.ov-hist-text { flex:1 1 auto; }',
+      '.ov-hist-ep-acked .ov-hist-text { font-style:italic; opacity:0.75; }',
+      '.ov-hist-tag { font-size:8px; font-weight:700; padding:0 4px; border-radius:2px;',
+      '  letter-spacing:0.05em; text-transform:uppercase; }',
+      '.ov-hist-tag-ack { border:1px solid var(--muted); color:var(--muted); }',
+      '.ov-hist-tag-sil { background:rgba(136,136,170,0.15); color:var(--muted); }',
+      '.ov-hist-silenced .ov-hist-text { opacity:0.55; }',
+      '.ov-trendrow { display:flex; gap:12px; flex-wrap:wrap; align-items:stretch; margin-bottom:10px; }',
+      '.ov-trend-box { flex:1 1 300px; border:2px solid var(--border); border-radius:6px;',
+      '  padding:6px 10px; background:var(--card); }',
+      '.ov-spark { display:block; width:100%; max-width:280px; height:44px; margin-top:4px; }',
+      '.ov-spark-line { stroke:var(--text); stroke-width:2; }',
+      '.ov-spark-gap { fill:rgba(136,136,170,0.28); }',
+      '.ov-spark-last { fill:var(--text); }',
+      '.ov-bat-tte { font-family:Consolas,monospace; font-size:14px; font-weight:700; }',
+      '.ov-bat-none { font-size:11px; font-weight:600; }',
       '</style>',
     ].join('');
 
@@ -682,7 +1056,39 @@
       '</div>',
     ].join('');
 
-    return css + '<div class="ov-root">' + strip + banner + instruments + chain.join('') + shadow + '</div>';
+    /* ── Alarm history (session log, task 20260921-070956) ──────────────
+     * Rows are filled by renderAlarmHistory(). The header note states the
+     * retention honestly: the log lives only as long as this page. */
+    var alarmHist = [
+      '<div class="ov-hist" id="ov-hist">',
+      '  <div class="ov-hist-head">',
+      '    <span class="ov-hist-title">Alarm history (session)</span>',
+      '    <span class="ov-hist-note" id="ov-hist-note">session log — lost on page reload, not persisted</span>',
+      '    <button type="button" class="ov-hist-btn" id="ov-export-btn" title="Download the session alarm log as CSV">EXPORT CSV</button>',
+      '  </div>',
+      '  <div id="ov-hist-rows"></div>',
+      '</div>',
+    ].join('');
+
+    /* ── Trend-on-demand + battery trend boxes ──────────────────────────
+     * Both filled by renderTrend() / renderBatteryTrend(). */
+    var trendRow = [
+      '<div class="ov-trendrow">',
+      '<div class="ov-trend-box" id="ov-trend-box">',
+      '  <div class="ov-stage-title">Trend on demand</div>',
+      '  <div class="ov-stage-hint">click any value cell above to plot its session history — read-only</div>',
+      '  <div id="ov-trend-body"></div>',
+      '</div>',
+      '<div class="ov-trend-box" id="ov-bat-box">',
+      '  <div class="ov-stage-title">Battery trend</div>',
+      '  <div class="ov-stage-hint">status.vbat session slope — least squares over received samples</div>',
+      '  <div id="ov-bat-body"></div>',
+      '</div>',
+      '</div>',
+    ].join('');
+
+    return css + '<div class="ov-root">' + strip + banner + alarmHist +
+      instruments + chain.join('') + trendRow + shadow + '</div>';
   }
 
   /* ── Render ──────────────────────────────────────────────────────────── */
@@ -779,16 +1185,25 @@
     /* Alarm banner + list */
     var alarms = computeAlarms(state, nowMs, ttlMs);
     updateRecentAlarms(alarms, nowMs);
+    updateAlarmLog(alarms, nowMs);
     alarms.sort(function (a, b) { return sevRank(b.sev) - sevRank(a.sev); });
-    var worst = alarms.length ? alarms[0].sev : null;
+    // Silenced episodes (operator display action) drop out of the banner's
+    // worst-of selection — the nag is suppressed, never the record.
+    var silenced = silencedAlarmIds();
+    var audible = alarms.filter(function (a) { return !silenced[a.id]; });
+    var worst = audible.length ? audible[0].sev : null;
     var banner = q('ov-banner');
     if (banner) {
       if (worst === 'red') {
         banner.className = 'ov-banner ov-banner-alarm';
-        banner.textContent = '⚠ ALARM — ' + alarms[0].text;
+        banner.textContent = '⚠ ALARM — ' + audible[0].text;
       } else if (worst === 'amber') {
         banner.className = 'ov-banner ov-banner-warn';
-        banner.textContent = 'WARNING — ' + alarms[0].text;
+        banner.textContent = 'WARNING — ' + audible[0].text;
+      } else if (alarms.length) {
+        banner.className = 'ov-banner ov-banner-warn';
+        banner.textContent = 'ALARMS SILENCED BY OPERATOR — ' + alarms.length +
+          ' active, see alarm history';
       } else {
         banner.className = 'ov-banner ov-banner-ok';
         banner.textContent = 'SYSTEM NORMAL — no active alarms';
@@ -799,7 +1214,8 @@
       var items = [];
       alarms.forEach(function (a) {
         items.push('<div class="ov-alarm-item ov-alarm-' + a.sev + '">' +
-                   (a.sev === 'red' ? '⚠ ' : '') + a.text + '</div>');
+                   (a.sev === 'red' ? '⚠ ' : '') + a.text +
+                   (silenced[a.id] ? ' [SILENCED]' : '') + '</div>');
       });
       _recentAlarms.forEach(function (r) {
         if (r.open) return;
@@ -808,6 +1224,11 @@
       });
       listEl.innerHTML = items.join('');
     }
+
+    /* Follow-on widgets (task 20260921-070956) */
+    renderAlarmHistory(nowMs);
+    renderTrend();
+    renderBatteryTrend(state);
   }
 
   /* ── Attitude indicator render ───────────────────────────────────────── */
@@ -867,8 +1288,156 @@
     });
   }
 
+  /* ── Alarm history render (task 20260921-070956) ─────────────────────── */
+
+  function renderAlarmHistory(nowMs) {
+    var noteEl = q('ov-hist-note');
+    if (noteEl) {
+      noteEl.textContent = 'session log — lost on page reload, not persisted' +
+        (_alarmLogDropped ? ' · ' + _alarmLogDropped + ' oldest episode(s) evicted by the ' + ALARM_LOG_MAX + '-episode bound' : '');
+    }
+    var rowsEl = q('ov-hist-rows');
+    if (!rowsEl) return;
+    var rows = [];
+    // Newest episode first; each episode is its RAISED event plus, once it
+    // clears, its CLEARED event — both timestamped.
+    for (var i = _alarmLog.length - 1; i >= 0; i--) {
+      var ep = _alarmLog[i];
+      var cls = 'ov-hist-row' + (ep.ack ? ' ov-hist-ep-acked' : '') + (ep.silenced ? ' ov-hist-silenced' : '');
+      var tags = (ep.ack ? '<span class="ov-hist-tag ov-hist-tag-ack">ACK</span>' : '') +
+                 (ep.silenced ? '<span class="ov-hist-tag ov-hist-tag-sil">SILENCED</span>' : '');
+      var stillOpen = ep.clearedAt == null;
+      rows.push('<div class="' + cls + '">',
+        '<span class="ov-hist-ts">' + fmtClock(ep.raisedAt) + '</span>',
+        '<span class="ov-hist-ev ov-hist-ev-raised-' + ep.sev + '">RAISED</span>',
+        '<span class="ov-hist-text">' + (ep.sev === 'red' ? '⚠ ' : '') + ep.text + ' ' + tags + '</span>',
+        '<button type="button" class="ov-hist-btn" id="ov-ack-' + ep.ref + '" title="Acknowledge — display only, stays in the log">' + (ep.ack ? 'ACKED' : 'ACK') + '</button>',
+        '<button type="button" class="ov-hist-btn" id="ov-sil-' + ep.ref + '" title="Silence the visual nag — display only, the record stays">' + (ep.silenced ? 'UNSILENCE' : 'SILENCE') + '</button>',
+        '</div>');
+      if (!stillOpen) {
+        rows.push('<div class="' + cls + '">',
+          '<span class="ov-hist-ts">' + fmtClock(ep.clearedAt) + '</span>',
+          '<span class="ov-hist-ev ov-hist-ev-cleared">CLEARED</span>',
+          '<span class="ov-hist-text">' + ep.textEnd + '</span>',
+          '</div>');
+      }
+    }
+    if (!rows.length) {
+      rows.push('<div class="ov-hist-row"><span class="ov-hist-text" style="color:var(--muted)">' +
+        'no alarms this session</span></div>');
+    }
+    rowsEl.innerHTML = rows.join('');
+  }
+
+  /* ── Trend-on-demand render ─────────────────────────────────────────── */
+
+  function renderTrend() {
+    var bodyEl = q('ov-trend-body');
+    if (!bodyEl) return;
+    if (_trendKey == null) {
+      bodyEl.innerHTML = '<div class="ov-sub">no cell selected — click a value cell in the diagram above</div>';
+      return;
+    }
+    var row = rowOfKey(_trendKey);
+    var head = '<div class="ov-row"><span class="ov-row-plain">' +
+      (row ? row.plain : _trendKey) + '</span><span class="ov-row-val" style="font-size:9px">' +
+      _trendKey + (row ? ' · ' + row.unit : '') + '</span></div>';
+    var d = buildSparklineSvg(_trendKey);
+    if (d.insufficient) {
+      // Explicit insufficient-history state: never a two-point flat line.
+      bodyEl.innerHTML = head +
+        '<div class="ov-bat-none" style="color:var(--muted)">INSUFFICIENT HISTORY — ' +
+        d.nValid + ' sample(s) received, ' + d.minNeeded + ' needed for a trend</div>' +
+        '<div class="ov-sub">keep telemetry flowing; the session buffer fills as samples arrive</div>';
+      return;
+    }
+    bodyEl.innerHTML = head + d.svg +
+      '<div class="ov-sub">' + d.nValid + ' samples · ' +
+      (d.spanMs != null ? 'span ' + fmtAge(d.spanMs) : 'span unknown — no telemetry timestamps') +
+      ' · ' + d.gaps + ' gap(s) shown as holes, never interpolated' +
+      ' · range ' + String(d.vmin) + ' … ' + String(d.vmax) + '</div>';
+  }
+
+  /* Find the display row (plain label / unit) for a history key. */
+  function rowOfKey(key) {
+    if (key === 'status.vbat') return { plain: 'Battery voltage', unit: 'V', dec: 2 };
+    for (var i = 0; i < STAGES.length; i++) {
+      for (var j = 0; j < STAGES[i].rows.length; j++) {
+        if (STAGES[i].rows[j].key === key) return STAGES[i].rows[j];
+      }
+    }
+    for (var k = 0; k < SHADOW_ROWS.length; k++) {
+      if (SHADOW_ROWS[k].key === key) return SHADOW_ROWS[k];
+    }
+    return null;
+  }
+
+  /* ── Battery trend render ───────────────────────────────────────────── */
+
+  function renderBatteryTrend(state) {
+    var bodyEl = q('ov-bat-body');
+    if (!bodyEl) return;
+    var t = computeBatteryTrend(state);
+    if (!t.published) {
+      bodyEl.innerHTML = '<div class="ov-bat-none" style="color:var(--amber)">NOT PUBLISHED</div>' +
+        '<div class="ov-sub">status.vbat is not published by this build — no nominal voltage is substituted</div>';
+      return;
+    }
+    var basis = null;
+    if (t.n > 0 && t.spanMs != null) {
+      basis = t.n + ' samples · ' + fmtAge(t.spanMs) + ' span';
+    } else if (t.n > 0) {
+      basis = t.n + ' samples';
+    }
+    if (t.slopeVPerMin == null) {
+      // Not enough honestly-received history yet.
+      bodyEl.innerHTML = '<div class="ov-bat-none" style="color:var(--muted)">INSUFFICIENT HISTORY</div>' +
+        '<div class="ov-sub">' + t.n + ' sample(s) received — need ≥ ' + BAT_MIN_SAMPLES +
+        ' spanning ≥ ' + fmtAge(BAT_MIN_SPAN_MS) + ' before any slope is shown</div>';
+      return;
+    }
+    var slopeTxt = 'slope ' + (t.slopeVPerMin >= 0 ? '+' : '') +
+      (t.slopeVPerMin * 1000).toFixed(1) + ' mV/min';
+    if (t.atOrBelowFloor) {
+      bodyEl.innerHTML = '<div class="ov-bat-tte" style="color:var(--red)">AT/BELOW ' +
+        VBAT_RED_V.toFixed(1) + ' V NOW</div>' +
+        '<div class="ov-sub">' + t.vLast.toFixed(2) + ' V — already at the firmware beep threshold; ' + slopeTxt + '</div>';
+      return;
+    }
+    if (t.tteMin == null) {
+      bodyEl.innerHTML = '<div class="ov-bat-none" style="color:var(--muted)">NO ESTIMATE — voltage not falling</div>' +
+        '<div class="ov-sub">' + slopeTxt + ' (' + t.vLast.toFixed(2) + ' V last). Shallower than −' +
+        BAT_FALLING_V_PER_MIN + ' V/min gives no time-to-empty, never a comforting number.</div>';
+      return;
+    }
+    bodyEl.innerHTML = '<div class="ov-bat-tte">TIME TO ' + VBAT_RED_V.toFixed(1) +
+      ' V ≈ ' + (t.tteMin >= 1 ? t.tteMin.toFixed(1) + ' min' : Math.round(t.tteMin * 60) + ' s') + '</div>' +
+      '<div class="ov-sub">' + slopeTxt + ' · now ' + t.vLast.toFixed(2) + ' V · basis: ' + basis +
+      ' (least squares over received samples)</div>';
+  }
+
+  /* ── Click delegation (display-local only) ────────────────────────────
+   * Every branch here mutates only this panel's own session state and
+   * re-renders. No api call, no command submission, no subscribe change, no
+   * arming, no gating: trend clicks open a sparkline; ACK / SILENCE flip
+   * flags on a log entry; EXPORT builds a CSV in the browser. */
+  function onContainerClick(e) {
+    var t = e && e.target;
+    if (!t || !t.id) return;
+    var m;
+    if (_cellKeys[t.id] !== undefined) {
+      _trendKey = (_trendKey === _cellKeys[t.id]) ? null : _cellKeys[t.id];
+      if (_lastState != null) render(_lastState);
+      return;
+    }
+    if ((m = t.id.match(/^ov-ack-(\d+)$/))) { alarmAction(Number(m[1]), 'ack'); return; }
+    if ((m = t.id.match(/^ov-sil-(\d+)$/))) { alarmAction(Number(m[1]), 'silence'); return; }
+    if (t.id === 'ov-export-btn') { downloadAlarmCsv(); return; }
+  }
+
   function onState(state) {
     _lastState = state;
+    ingestHistory(state);   // one sample per /state snapshot, per key
     render(state);
   }
 
@@ -877,6 +1446,13 @@
   window.__PLUGIN_INIT__ = function (api) {
     api.registerPanel('System Overview', function (container) {
       container.innerHTML = buildHTML();
+      // One delegated click listener for the whole panel: trend-on-demand
+      // cell clicks, alarm ACK / SILENCE and CSV EXPORT. Every branch is
+      // display-local (see onContainerClick) — nothing is sent anywhere.
+      if (!container.__ovClickWired) {
+        container.addEventListener('click', onContainerClick);
+        container.__ovClickWired = true;
+      }
       api.subscribe(onState);
       render(_lastState);
       // Age readouts must keep advancing even if the /state poll itself dies,
@@ -893,6 +1469,13 @@
     if (_tickTimer != null) { clearInterval(_tickTimer); _tickTimer = null; }
     _lastState = null;
     _recentAlarms = [];
+    // Session-scoped follow-on state: a fresh panel starts from empty
+    // buffers and an empty log — this is the documented reload behaviour.
+    _hist = {};
+    _trendKey = null;
+    _alarmLog = [];
+    _openEpisodes = {};
+    _alarmLogDropped = 0;
   };
 
   if (typeof window !== 'undefined' && window.__registerPlugin__) {
@@ -920,6 +1503,24 @@
       STALE_WARN_MS: STALE_WARN_MS,
       VBAT_RED_V: VBAT_RED_V,
       VBAT_AMBER_V: VBAT_AMBER_V,
+      /* Follow-ons (task 20260921-070956) — exercised by
+       * overview_followons_harness.js checks 6-9. */
+      ingestHistory: ingestHistory,
+      sparklineData: sparklineData,
+      buildSparklineSvg: buildSparklineSvg,
+      computeBatteryTrend: computeBatteryTrend,
+      renderBatteryTrend: renderBatteryTrend,
+      renderAlarmHistory: renderAlarmHistory,
+      renderTrend: renderTrend,
+      alarmAction: alarmAction,
+      onContainerClick: onContainerClick,
+      exportAlarmLogCsv: exportAlarmLogCsv,
+      downloadAlarmCsv: downloadAlarmCsv,
+      SPARK_MIN_SAMPLES: SPARK_MIN_SAMPLES,
+      BAT_MIN_SAMPLES: BAT_MIN_SAMPLES,
+      BAT_MIN_SPAN_MS: BAT_MIN_SPAN_MS,
+      BAT_FALLING_V_PER_MIN: BAT_FALLING_V_PER_MIN,
+      ALARM_LOG_MAX: ALARM_LOG_MAX,
     };
   }
 
