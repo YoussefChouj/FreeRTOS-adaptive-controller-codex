@@ -80,22 +80,21 @@ function Test-WorkerBackend([string]$WorkerKind, [string]$ModelId) {
         # any real turn costs quota. Its burst 429s are handled by the spawn gap
         # and cap in spawn-worker.sh.
         #
-        # But there is a cheap probe for the failure that actually killed two
-        # ark waves on 2026-09-21: Claude Code refreshes the git index at
-        # startup, and in this repo from WSL that re-hashes 111 MB of dirty
-        # OBJ/ over the 9p mount and never returns. The worker then produces
-        # zero bytes and reads exactly like a quota death. Time the refresh -
-        # it costs nothing and it is the real gate.
-        $t0 = Get-Date
-        $proj = ($opsWsl -replace '/[^/]+$', '')
-        Invoke-Wsl "cd '$proj' && timeout 25 git status --porcelain -uno >/dev/null 2>&1" | Out-Null
-        $secs = [int]((Get-Date) - $t0).TotalSeconds
-        if ($secs -ge 24) {
-            throw ("preflight: git index refresh in this repo takes >=25s from WSL, so an ark worker will hang at startup and return nothing. " +
-                   "Fix: git config --local core.checkStat minimal; core.trustctime false; then run one uninterrupted " +
-                   "'git update-index --refresh' inside WSL to warm the index. See .claude_state.md, 'Wave 6'.")
+        # What did kill two ark waves on 2026-09-21 was not quota at all:
+        # Claude Code refreshes the git index at startup, and in this repo from
+        # WSL that re-reads 111 MB of dirty OBJ/ over the 9p mount and never
+        # returns (rc=124 at 301 s, zero bytes), which reads exactly like a
+        # quota death. spawn-worker.sh now starts ark outside the repo and
+        # attaches the tree with --add-dir. That is the fix; core.checkStat and
+        # a warmed index were measured and do NOT help. Assert the workaround
+        # is still in place rather than paying 25 s to re-measure the symptom.
+        $spawnSh = Join-Path $opsWin 'spawn-worker.sh'
+        if (-not (Select-String -Path $spawnSh -SimpleMatch -Quiet -- '--add-dir')) {
+            throw ("preflight: spawn-worker.sh no longer starts ark outside the repo with --add-dir, " +
+                   "so an ark worker will hang on the WSL git index refresh and return zero bytes. " +
+                   "See .claude_state.md 'Wave 6' and AGENT_GUIDE.md trap 6.")
         }
-        Write-Output "preflight: ark quota not verified (no cheap probe); git index refresh ${secs}s - startup is clear"
+        Write-Output "preflight: ark quota not verified (no cheap probe); non-repo cwd + --add-dir workaround present"
         return
     }
     $probe = @(Invoke-Wsl "timeout 90 agy models 2>&1")
@@ -182,8 +181,12 @@ quote at most 3 lines per file. Read only what the question needs. Change nothin
             agy = "agy --dangerously-skip-permissions --mode plan --model $modelId"
             ark = "claude --permission-mode plan --model $modelId"
         }[$Worker]
-        Write-Output "ask: worker=$Worker model=$modelId"
-        Invoke-Wsl "cd '$projWsl' && timeout $($TimeoutMin * 60) $askCmd -p `"`$(cat '$qWsl')`""
+        # ark cannot start inside this repo - the git index refresh hangs it.
+        # Same non-repo cwd + --add-dir workaround as spawn (Test-WorkerBackend).
+        $askCwd = $projWsl
+        if ($Worker -eq 'ark') { $askCwd = '/tmp/arkwork/ask'; $askCmd += " --add-dir $projWsl" }
+        Write-Output "ask: worker=$Worker model=$modelId cwd=$askCwd"
+        Invoke-Wsl "mkdir -p '$askCwd' && cd '$askCwd' && timeout $($TimeoutMin * 60) $askCmd -p `"`$(cat '$qWsl')`""
     }
     # Quake drop-down (Win+` toggles it once open) attached to the tmux session.
     'attach' { Start-Process wt.exe -ArgumentList '-w', '_quake', 'wsl.exe', '-d', 'Ubuntu', '--', 'tmux', 'new', '-A', '-s', 'agent-ops' }
