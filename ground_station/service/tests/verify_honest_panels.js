@@ -97,10 +97,32 @@ class Element {
     if (!this.doc) return [];
     return this.doc.querySelectorAll(sel);
   }
-  getAttribute(name) { return this.dataset[name] || null; }
-  setAttribute(name, val) { this.dataset[name] = String(val); }
-  hasAttribute(name) { return name in this.dataset; }
-  removeAttribute(name) { delete this.dataset[name]; }
+  getAttribute(name) {
+    if (this.attributes && this.attributes[name] !== undefined) return this.attributes[name];
+    if (this.dataset && this.dataset[name] !== undefined) return this.dataset[name];
+    return null;
+  }
+  setAttribute(name, val) {
+    if (!this.attributes) this.attributes = {};
+    this.attributes[name] = String(val);
+    this.dataset[name] = String(val);
+    if (name.startsWith('data-')) {
+      const camel = name.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+      this.dataset[camel] = String(val);
+    }
+    if (name === 'id') this.id = String(val);
+    if (name === 'class') {
+      this.className = String(val);
+      this.classList._classes = new Set(String(val).split(/\s+/).filter(Boolean));
+    }
+  }
+  hasAttribute(name) {
+    return (this.attributes && name in this.attributes) || (this.dataset && name in this.dataset);
+  }
+  removeAttribute(name) {
+    if (this.attributes) delete this.attributes[name];
+    if (this.dataset) delete this.dataset[name];
+  }
   focus() {}
   blur() {}
 }
@@ -112,6 +134,7 @@ class FakeDocument {
     this.body.doc = this;
     this.elements['body'] = this.body;
     this.hidden = false;
+    this._anonCount = 0;
   }
   createElement(tag) {
     const el = new Element('', tag);
@@ -119,17 +142,54 @@ class FakeDocument {
     return el;
   }
   scan(html, parent) {
-    const tags = html.match(/<[a-zA-Z0-9-]+[^>]*>/g) || [];
-    for (const tag of tags) {
-      const idm = tag.match(/\bid="([^"]+)"/);
-      if (idm) {
-        const id = idm[1];
-        if (!this.elements[id]) {
-          const el = new Element(id, tag.slice(1).split(/[\s>]/)[0]);
-          el.doc = this;
-          el.parentElement = parent;
+    const tagRegex = /<([a-zA-Z0-9-]+)([^>]*)>/g;
+    let match;
+    while ((match = tagRegex.exec(html)) !== null) {
+      const tagName = match[1];
+      if (tagName.startsWith('/')) continue;
+      let attrStr = match[2];
+      if (attrStr.endsWith('/')) attrStr = attrStr.slice(0, -1);
+
+      const attrRegex = /([a-zA-Z0-9_-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+)))?/g;
+      let am;
+      const attrs = {};
+      while ((am = attrRegex.exec(attrStr)) !== null) {
+        const key = am[1];
+        const val = am[2] !== undefined ? am[2] : (am[3] !== undefined ? am[3] : (am[4] !== undefined ? am[4] : true));
+        attrs[key] = val;
+      }
+
+      const id = attrs.id || '';
+      let el;
+      if (id && this.elements[id]) {
+        el = this.elements[id];
+      } else {
+        el = new Element(id, tagName);
+        el.doc = this;
+        el.parentElement = parent;
+        if (id) {
           this.elements[id] = el;
+        } else {
+          this._anonCount = (this._anonCount || 0) + 1;
+          this.elements['__anon_' + this._anonCount] = el;
         }
+      }
+
+      for (const [k, v] of Object.entries(attrs)) {
+        el.setAttribute(k, v);
+      }
+      if (attrs.class) {
+        el.className = attrs.class;
+        el.classList._classes = new Set(String(attrs.class).split(/\s+/).filter(Boolean));
+      }
+      if (attrs.disabled !== undefined) {
+        el.disabled = attrs.disabled === true || attrs.disabled === 'disabled' || attrs.disabled === '';
+      }
+      if (attrs.checked !== undefined) {
+        el.checked = attrs.checked === true || attrs.checked === 'checked' || attrs.checked === '';
+      }
+      if (attrs.value !== undefined) {
+        el.value = attrs.value;
       }
     }
   }
@@ -145,9 +205,18 @@ class FakeDocument {
     }
     if (sel.startsWith('.')) {
       const cls = sel.slice(1);
-      return Object.values(this.elements).filter(e => e.classList.contains(cls) || (e.className && e.className.indexOf(cls) !== -1));
+      return Object.values(this.elements).filter(e => e.classList.contains(cls) || (e.className && e.className.split(/\s+/).includes(cls)));
     }
-    return [];
+    const attrMatch = sel.match(/^\[([a-zA-Z0-9_-]+)(?:=([\"']?)(.*?)\2)?\]$/);
+    if (attrMatch) {
+      const attr = attrMatch[1];
+      const val = attrMatch[3];
+      return Object.values(this.elements).filter(e => {
+        if (val !== undefined) return e.getAttribute(attr) === val;
+        return e.hasAttribute(attr);
+      });
+    }
+    return Object.values(this.elements).filter(e => e.tagName.toLowerCase() === sel.toLowerCase());
   }
 }
 
@@ -263,6 +332,14 @@ function createInstance(filename) {
   api.renderFn(container, api);
 
   return { doc, container, api, sandbox, registeredIntervals };
+}
+
+function assert(cond, msg) {
+  if (!cond) {
+    const err = new Error('ASSERTION FAILED: ' + msg);
+    console.error('\n❌ ' + err.message);
+    throw err;
+  }
 }
 
 async function runVerification() {
@@ -585,17 +662,59 @@ async function runVerification() {
     console.log('\nArm-gating checks:');
     const qcButtons = inst.doc.querySelectorAll('.cp-qc-btn');
     console.log(`- Quick command buttons rendered: ${qcButtons.length}`);
-    
-    // Simulate armed state
+    assert(qcButtons.length > 0, `Expected quick command buttons > 0, found ${qcButtons.length}`);
+
+    // Simulate armed state (armed: true)
     inst.api.stateCb({ streams: { '0': { values: { 'status.arm': 1 } } } });
     const abortBtn = qcButtons.find(b => b.getAttribute('data-cp-id') === 'abort');
     const ekfResetBtn = qcButtons.find(b => b.getAttribute('data-cp-id') === 'ekf_reset');
     console.log(`- When ARMED: abort (0x0D) disabled = ${abortBtn ? abortBtn.disabled : 'not found'} (must be false, never blocked)`);
     console.log(`- When ARMED: ekf_reset (0x18) disabled = ${ekfResetBtn ? ekfResetBtn.disabled : 'not found'} (must be true, blocked by arm-gating)`);
+    assert(abortBtn && abortBtn.disabled === false, 'abort (0x0D) must be false (never blocked) when ARMED');
+    assert(ekfResetBtn && ekfResetBtn.disabled === true, 'ekf_reset (0x18) must be true (blocked by arm-gating) when ARMED');
 
-    // Simulate disarmed state
+    // Simulate disarmed state (armed: false)
     inst.api.stateCb({ streams: { '0': { values: { 'status.arm': 0 } } } });
     console.log(`- When DISARMED: ekf_reset (0x18) disabled = ${ekfResetBtn ? ekfResetBtn.disabled : 'not found'} (must be false, permitted)`);
+    assert(ekfResetBtn && ekfResetBtn.disabled === false, 'ekf_reset (0x18) must be false (permitted) when DISARMED');
+
+    // Simulate unknown arm state (null / omitted)
+    inst.api.stateCb({ streams: { '0': { values: {} } } });
+    const armBadge = inst.doc.getElementById('cp-arm-badge');
+    console.log(`- When ARM UNKNOWN (null): badge = ${armBadge ? armBadge.textContent : 'null'}, ekf_reset (0x18) disabled = ${ekfResetBtn ? ekfResetBtn.disabled : 'not found'}`);
+
+    // SDK-only command checks (cmd 0x06 Virtual RC, precondition 'SDK mode only' at command-panel.js:359)
+    // 1. When SDK is null / omitted:
+    inst.api.stateCb({ streams: { '0': { values: { 'status.arm': 0 } } } });
+    const vrcPanel = inst.doc.getElementById('cp-vrc-panel');
+    console.log(`- When SDK UNKNOWN (null): Virtual RC panel display = ${vrcPanel ? vrcPanel.style.display || 'block' : 'null'} (must be 'none')`);
+    assert(vrcPanel && vrcPanel.style.display === 'none', 'Virtual RC panel must be hidden when SDK is null/unknown');
+
+    // Test form submission for SDK-only command 0x06
+    const modeToggle = inst.doc.getElementById('cp-mode-toggle');
+    if (modeToggle) modeToggle.click(); // switch to raw mode so cp-form is active
+    if (cmdSelect) {
+      cmdSelect.value = '6'; // 0x06 Virtual RC
+      cmdSelect.dispatch('change');
+    }
+    const rawForm = inst.doc.getElementById('cp-form');
+
+    // 2. When SDK is false (status.rc_authority: 0)
+    inst.api.submittedCommands = [];
+    inst.api.stateCb({ streams: { '0': { values: { 'status.arm': 0, 'status.rc_authority': 0 } } } });
+    if (rawForm) rawForm.dispatch('submit');
+    const sdkBlocked = inst.api.submittedCommands.filter(c => c.cmdId === 6).length === 0;
+    console.log(`- When SDK FALSE (0): Virtual RC (0x06) submission blocked = ${sdkBlocked} (must be true, blocked by precondition at :359)`);
+    assert(sdkBlocked, 'SDK-only command 0x06 must be blocked when SDK authority is 0');
+
+    // 3. When SDK is true (status.rc_authority: 1)
+    inst.api.submittedCommands = [];
+    inst.api.stateCb({ streams: { '0': { values: { 'status.arm': 0, 'status.rc_authority': 1 } } } });
+    if (rawForm) rawForm.dispatch('submit');
+    const sdkAllowed = inst.api.submittedCommands.filter(c => c.cmdId === 6).length === 1;
+    console.log(`- When SDK TRUE (1): Virtual RC (0x06) submission allowed = ${sdkAllowed} (must be true, permitted)`);
+    assert(sdkAllowed, 'SDK-only command 0x06 must be permitted when SDK authority is 1');
+
     console.log('- Precondition checks & safety classes active in COMMAND_REGISTRY (all 30 commands intact)');
   }
 
