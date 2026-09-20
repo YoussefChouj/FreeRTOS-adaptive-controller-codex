@@ -5,10 +5,11 @@ agent reading source. A confidently wrong P0 costs the operator more than
 silence does. This file records only findings verified a second time, against
 source, with the lines quoted.
 
-**Status: 4 of 5 P0s verified. Finding 2 is still an unverified claim.**
-Findings 1, 3, 4 and 5 were each verified against source by the supervisor on
-2026-09-21 after two worker waves spawned to do it died on provider quota.
-Do not act on Finding 2 until it is checked the same way.
+**Status: all 5 P0s verified against source.**
+All five were verified against source by the supervisor on 2026-09-21, after two
+worker waves spawned to do it died on provider quota. Four of the five had a
+wrong trigger, magnitude or consequence while the mechanism was real, and in
+every one of those four the correcting code sat outside the cited line range.
 
 ---
 
@@ -344,13 +345,111 @@ re-convergence after moving the aircraft will not get one.
 
 ---
 
-## Finding 2 [P0] — **NOT VERIFIED**
+## Finding 2 [P0] — OF/ToF loss causes runaway position and climb: **PARTLY — the altitude half is worse than reported and fires in normal flight; the OF half is partly gated; two of the proposed fixes do not work**
 
-Still a single-source claim from `docs/firmware-preflight-findings.md`: OF/ToF
-disconnect or mid-flight freeze causes runaway position integration and
-zero-rate climb.
+Verified by the supervisor 2026-09-21. This is the finding with the most in it.
 
-Findings 3, 4 and 5 are the reason to check it rather than act on it. In all
-three the mechanism was real and the stated trigger, magnitude or consequence
-was wrong — and in each case the correcting code was outside the cited line
-range.
+### Confirmed, and understated
+
+**`AnoOF_Check_State()` is dead, and deader than the report says.** Defined at
+`API/Ano_OF.c:6`, declared at `API/Ano_OF.h:72`, called nowhere. But the two
+flags it computes — `ano_of.link_sta` and `ano_of.work_sta` — are **written only
+inside it and read nowhere in the tree**. So the report's fix 1, "periodically
+call `AnoOF_Check_State(0.005f)`", would change nothing: it would set two flags
+that no consumer reads. Worse, the function ignores its own `dT_s` argument and
+increments `check_time_ms[]` by 1 per call (`:12,22,32`), so its 500-count
+threshold is 500 *calls*, not 500 ms — at 200 Hz that is a 2.5 s timeout, five
+times slower than the name promises. The whole OF health-detection subsystem is
+inert, and repairing it means writing consumers, not adding a call.
+
+**Velocity feedback is ungated. Confirmed exactly.** `TASK/StabilizerTask.c:404-405`:
+
+```c
+Ctrler.locxsPID.FB= (ano_of.of2_dy) *Cos_Yaw_01 +(-ano_of.of2_dx)*Sin_Yaw_01;
+Ctrler.locysPID.FB=  (-ano_of.of2_dx) * Cos_Yaw_01 - (ano_of.of2_dy)*Sin_Yaw_01;
+```
+
+No `of_quality` check anywhere on this path. On a frozen or disconnected sensor
+the last sample is held and fed to the velocity loop indefinitely.
+
+### Where the report is wrong
+
+**Position integration is gated, contrary to the report's bullet 3.** The
+integration it cites is inside a quality check — `:326`:
+
+```c
+if (ano_of.of_quality >= OF_MIN_QUALITY)     /* OF_MIN_QUALITY = 50U, :123 */
+{
+    float of_dx_deb = ano_of.of2_dx_fix - s_of_bias_x;
+    ...
+    ano_of.earth_x = ano_of.earth_x + (of_dx_deb*0.005f*Cos_Yaw_01 + ...);
+}
+```
+
+This matters because it splits the failure into two cases the report merges:
+
+- **Sensor reports low quality** (low-reflectivity surface, dropout) — position
+  integration stops. Velocity feedback does not. Partly handled.
+- **Sensor freezes or disconnects** — quality latches at its last good value, the
+  gate passes, and everything the report describes happens. Unhandled.
+
+Only the second case is a P0, and only the second case needs fix 2.
+
+**There is no barometer to fall back to.** Fix 4 proposes "fall back to
+barometer/IMU fusion". No barometer driver exists in `API/`, `TASK/`, `BSP/` or
+`Global_file/` — the only mention in the tree is an aspirational comment at
+`API/mrac.c:22` ("Supplied by SINS/baro-IMU fusion - wire this before flight
+test"). Of fix 4, only "command a safe throttle descent" is implementable today.
+
+### Where the report is badly understated — this is the fly-away
+
+The report treats altitude loss as a *sensor-failure* consequence. It is not.
+`TASK/StabilizerTask.c:441` is a hard band gate:
+
+```c
+if( alt_med >= 5U && alt_med <= 500U )
+```
+
+**Above 5.00 m AGL every sample is rejected** — not because anything failed, but
+because the aircraft is flying normally at a normal altitude. And the escape
+hatch that rescues the jump gate is *inside* this band gate, at `:448`
+(`|| s_alt_reject_cnt >= 20U`), so it never applies to a band rejection. There is
+no recovery path: `of2_raw_h` freezes at its last accepted value, near 5 m, for
+the rest of the flight or until the aircraft descends back below 5 m.
+
+What that does, `:460-466`:
+
+```c
+ano_of.of2_h        = ano_of.of2_raw_h;                                  /* frozen */
+ano_of.of2_h_v      = (ano_of.of2_h - ano_of.of2_last_h)/(0.005f);       /* -> 0 */
+ano_of.of2_h_f2_v   = ano_of.of2_h_f2_v*0.9f + ano_of.of2_h_v*0.1f;      /* -> 0 in ~250 ms */
+Ctrler.Z_posPID.FB  = ano_of.of2_h;                                      /* stuck at ~5 m */
+Ctrler.Z_ratePID.FB = ano_of.of2_h_f2_v;                                 /* 0 */
+```
+
+The vertical rate loop now believes the aircraft is **stationary** while it
+climbs. In the manual height-rate mode (`:1022`,
+`Ctrler.Z_ratePID.Des = RCInput_Get(RC_AXIS_THR) * gs_max_vertical_speed_mps`) a
+commanded +1 m/s produces a permanent error of 1 m/s, so throttle integrates
+upward without bound.
+
+**And centring the stick does not stop it.** With `Des = 0` and `FB = 0` the
+error is zero, so the loop holds the throttle it has already wound up — which is
+above hover. The aircraft keeps climbing at whatever rate that throttle produces,
+and the only remaining recovery is disarming. The report's "unbounded vertical
+climb or descent" is right about the outcome and silent about the two things an
+operator most needs to know: that it triggers at 5 m in healthy flight, and that
+the intuitive recovery does not work.
+
+The ToF-failure case the report leads with reaches the same state by the same
+route — a `0xFFFF` no-reading is 65535, out of band, rejected — so the fix is
+shared.
+
+### Verdict
+
+Severity **stays P0**, and the altitude half should be promoted above the OF half:
+its trigger is *normal flight at 5 m*, which needs no fault at all. Before any
+flight above about 4 m, either raise the band ceiling to the sensor's real
+maximum range and handle out-of-range explicitly, or refuse to leave
+altitude-hold's valid envelope. Fix 1 as written is a no-op and fix 4's
+barometer does not exist; fixes 2, 3 and 5 stand.
