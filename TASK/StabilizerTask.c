@@ -122,6 +122,12 @@ volatile uint8_t g_of_bias_capture_req = 0;
  * bias calibration and the earth_x/y integration so we never integrate garbage flow. */
 #define OF_MIN_QUALITY              50U
 
+/* P0 Finding 2 (docs/p0-verdicts.md): per-tick ToF validity flag. 1 = this tick's
+ * sample passed the band+jump gates in Update_Data. While 0 (out of range, e.g.
+ * above the 5 m band ceiling or a 0xFFFF no-reading) the Z loops hold their last
+ * valid FB and their integrators are frozen in Compute_Motor. */
+static uint8_t s_alt_valid_tick = 0U;
+
 /* ADR-0011 Phase 3 (CAL_AIRBORNE_HOVER_TRIM) + Phase 4 (CAL_HOT_HOVER).
  * Initialised once at boot by CalTrim_Init / CalHot_Init, ticked each control
  * cycle from Update_Data. CalHot_TickState_t reused below for the FSM transitions. */
@@ -449,27 +455,45 @@ void Update_Data(void)
 				{
 					ano_of.of2_raw_h = h_new;
 					s_alt_reject_cnt = 0U;
+					s_alt_valid_tick = 1U;   /* P0 Finding 2: sample accepted this tick */
 				}
 				else
 				{
 					s_alt_reject_cnt++;
+					s_alt_valid_tick = 0U;   /* P0 Finding 2: jump-rejected - hold */
 				}
+			}
+			else
+			{
+				s_alt_valid_tick = 0U;   /* P0 Finding 2: out of band (>5 m / 0xFFFF) - hold */
 			}
 		}
 	
 	ano_of.of2_h =ano_of.of2_raw_h; 
+	if (s_alt_valid_tick) { /* P0 Finding 2: valid sample - else hold last FB */
+	                      /* and never publish the fake-zero d(frozen h)/dt.  */
 	ano_of.of2_h_v = (ano_of.of2_h - ano_of.of2_last_h )/(0.005f);  //����ʱ��5ms
 	ano_of.of2_last_h = ano_of.of2_h;
   ano_of.of2_h_f2_v  = ano_of.of2_h_f2_v  *0.9f +ano_of.of2_h_v *0.1f;
 	 
 	Ctrler.Z_posPID.FB =  ano_of.of2_h;
 	Ctrler.Z_ratePID.FB = ano_of.of2_h_f2_v ;
+	}
 	
 	////////////////////��̬���Ƕ�ֵ����//////////////////////////////////  
 	
-	Ctrler.pitchPID.FB = -imu_data.pit  ;
-	Ctrler.rollPID.FB  = imu_data.rol ;
-	Ctrler.yawPID.FB   = -imu_data.yaw;
+	{
+		float imu_pit, imu_rol, imu_yaw;
+		taskENTER_CRITICAL();
+		imu_pit = imu_data.pit;
+		imu_rol = imu_data.rol;
+		imu_yaw = imu_data.yaw;
+		taskEXIT_CRITICAL();
+
+		Ctrler.pitchPID.FB = -imu_pit;
+		Ctrler.rollPID.FB  =  imu_rol;
+		Ctrler.yawPID.FB   = -imu_yaw;
+	}
 
 	// Phase-1 gyro low-pass (default pass-through; enable via CMD 0x15). Filters the rate FB that
 	// the rate PID, MRAC, and the system-ID frame all consume — see API/gyro_filter.c / ADR-0004.
@@ -668,11 +692,25 @@ void Compute_Motor(void)
 	cnt_h++;
 	if(cnt_h>=2)
 	{
-		ComputePID(&Ctrler.Z_posPID);
+		{   /* P0 Finding 2: ToF out of range - freeze the Z position integrator
+		     (its FB is the frozen height, so letting SumE run would wind the
+		     cascade that feeds Z_ratePID.Des). */
+			float zp_sumE = Ctrler.Z_posPID.SumE;
+			float zp_Ui   = Ctrler.Z_posPID.Ui;
+			ComputePID(&Ctrler.Z_posPID);
+			if (!s_alt_valid_tick) { Ctrler.Z_posPID.SumE = zp_sumE; Ctrler.Z_posPID.Ui = zp_Ui; }
+		}
 		cnt_h=0;
 	}
   Update_Des(case_Update_v_h_Des);
-	ComputePID(&Ctrler.Z_ratePID);
+	{   /* P0 Finding 2: ToF out of range - freeze the Z-rate integrator while
+	     still running P/D on the held FB, so the manual height-rate loop cannot
+	     wind throttle up without bound (verdict: unbounded climb at >5 m AGL). */
+		float zr_sumE = Ctrler.Z_ratePID.SumE;
+		float zr_Ui   = Ctrler.Z_ratePID.Ui;
+		ComputePID(&Ctrler.Z_ratePID);
+		if (!s_alt_valid_tick) { Ctrler.Z_ratePID.SumE = zr_sumE; Ctrler.Z_ratePID.Ui = zr_Ui; }
+	}
 
 
 	cnt_loc++;

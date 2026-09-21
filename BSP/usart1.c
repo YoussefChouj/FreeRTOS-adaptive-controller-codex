@@ -66,6 +66,10 @@ void DrvSbusGetOneByte(u8 data)
 		if ((datatmp[0] == 0x0F && (datatmp[24] == 0x00 || datatmp[24] == frame_end[frame_cnt])))
 		{
 			cnt = 0;
+			/* P0 Finding 1 (docs/p0-verdicts.md): byte 23 bit2 = frame-lost, bit3 = failsafe. */
+			/* A flagged frame carries held/defaulted sticks: decode nothing and leave   */
+			/* sbus_last_valid_tick unrefreshed so the 500 ms sbus_lost timeout fires.   */
+			if (datatmp[23] & 0x0C) return;
 			sbus_channel[0] = (s16)(datatmp[2] & 0x07) << 8 | datatmp[1];
 			sbus_channel[1] = (s16)(datatmp[3] & 0x3f) << 5 | (datatmp[2] >> 3);
 			sbus_channel[2] = (s16)(datatmp[5] & 0x01) << 10 | ((s16)datatmp[4] << 2) | (datatmp[3] >> 6);

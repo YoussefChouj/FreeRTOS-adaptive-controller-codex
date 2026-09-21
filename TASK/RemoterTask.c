@@ -131,7 +131,8 @@ void Check_Fly_Mode(void)
 	static int DangerousStop_cnt = 0;
 	Check_Stick_Motion();
 	
-		if( sbus_channel[9] <=500 ) //���˲��������Ϸ�
+		/* P0 Finding 1: RC link loss (sbus_lost) must drive the failsafe too, not just ch9. */
+		if( sbus_channel[9] <=500 || sbus_lost ) //���˲��������Ϸ�
 	{
 			DangerousStop_cnt ++;
 	}
