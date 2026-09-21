@@ -277,6 +277,28 @@ def test_journey_with_unsafe_click_target_is_rejected(tmp_path):
         _run(doc, tmp_path)
 
 
+def test_default_fetcher_bypasses_proxy_for_loopback(monkeypatch):
+    # The Clash proxy on this workstation 502s loopback; the default GET
+    # fetcher's opener must have no configured proxies. (build_opener treats
+    # an empty ProxyHandler instance as "skip the default ProxyHandler",
+    # so with no proxies configured the instance need not be retained.)
+    import urllib.request
+    from urllib.request import ProxyHandler
+
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.example:8080")
+    plain = urllib.request.build_opener()
+    assert any(getattr(h, "proxies", {}).get("http") ==
+               "http://proxy.example:8080"
+               for h in plain.handlers if isinstance(h, ProxyHandler))
+    ours = [h for h in journey._NO_PROXY_OPENER.handlers
+            if isinstance(h, ProxyHandler)]
+    assert all(h.proxies == {} for h in ours)
+    # And the fetcher must go through that opener rather than bare urlopen
+    # (which honours HTTP_PROXY/http_proxy).
+    src = Path(journey.__file__).read_text(encoding="utf-8")
+    assert "urllib.request.urlopen(" not in src
+
+
 def test_forbid_text_fails_when_forbidden_string_is_visible(tmp_path):
     doc = {"name": "nan", "steps": [
         {"name": "no nan", "page": "/", "forbid_text": ["NaN"]}]}

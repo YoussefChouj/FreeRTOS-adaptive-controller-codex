@@ -784,6 +784,8 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                 health = {
                     "ok": True,
                     "schema_id": service.schema.schema_id,
+                    "started_commit": getattr(service, "started_commit", None),
+                    "started_at": getattr(service, "started_at", None),
                     "bridge_available": service.bridge is not None,
                     "connected": getattr(snap, "connected", False),
                     "samples": getattr(snap, "samples", 0),

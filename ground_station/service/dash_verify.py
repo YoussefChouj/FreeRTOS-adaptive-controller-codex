@@ -43,6 +43,15 @@ def state_tick_values():
     return {k: vals[k] for k in sorted(vals) if "tick" in k.lower()}
 
 
+def position_keys_in_state(state):
+    """Live position keys path-panel.js binds (Frame C c.earth_x/c.earth_y)
+    that are present in a ``/state`` snapshot. Exact names only — the old
+    ``*pos_x/*pos_y`` heuristic matched phantom keys the panel never used."""
+    return sorted(k for s in state.get("streams", {}).values()
+                  for k in (s.get("values") or {})
+                  if k in ("c.earth_x", "c.earth_y"))
+
+
 def plugin_file_lines(rel_name, needles, max_hits=6):
     """Return ``path:lineno: text`` hits from a shell plugin for evidence."""
     root = os.getcwd()
@@ -486,10 +495,11 @@ def run():
         print("EVIDENCE H1 canvas right after tab switch: %s" % json.dumps(path_raw))
         print("EVIDENCE H1 canvas sample 1: %s" % json.dumps(path0))
         print("EVIDENCE H1 canvas sample 2 (1.6s later): %s" % json.dumps(path1))
-        pos_keys = sorted(k for s in http_get("/state")["streams"].values()
-                          for k in (s.get("values") or {})
-                          if k.endswith("pos_x") or k.endswith("pos_y"))
-        print("EVIDENCE H1 live *pos_x/*pos_y keys in /state: %s" % pos_keys)
+        # The panel binds Frame C earth position (c.earth_x/c.earth_y);
+        # match those exact published keys, not the old phantom ekf.pos_x/y.
+        pos_keys = position_keys_in_state(http_get("/state"))
+        print("EVIDENCE H1 live c.earth_x/c.earth_y keys in /state: %s"
+              % pos_keys)
         demo_lines = plugin_file_lines(
             "path-panel.js",
             ["function generateDemoPoint", "Lissajous", "startDemo();",
@@ -498,14 +508,11 @@ def run():
             print("EVIDENCE H1 code: %s" % ln)
         if not pos_keys:
             note("H1", "CONFIRMED",
-                 "no live pos_x/pos_y key exists in /state (%s). canvas is "
-                 "%sx%s at tab switch (0x0 = nothing draws until a window "
-                 "resize); after synthetic resize %sx%s. badge shown "
-                 "%s->%s (%r), non-bg pixels %s->%s (static=%s), metrics=%r. "
-                 "Panel starts a built-in Lissajous demo and only binds live "
-                 "keys named ekf.pos_x/pos_y, which the firmware does not "
-                 "publish; with live non-position telemetry the demo stops, "
-                 "leaving placeholder waypoints"
+                 "no live c.earth_x/c.earth_y key exists in /state (%s); the "
+                 "panel binds those Frame C keys and none are published. "
+                 "canvas is %sx%s at tab switch (0x0 = nothing draws until a "
+                 "window resize); after synthetic resize %sx%s. badge shown "
+                 "%s->%s (%r), non-bg pixels %s->%s (static=%s), metrics=%r"
                  % (pos_keys, path_raw.get("w"), path_raw.get("h"),
                     path0.get("w"), path0.get("h"),
                     path0.get("badgeShown"), path1.get("badgeShown"),

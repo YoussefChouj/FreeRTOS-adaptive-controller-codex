@@ -96,11 +96,12 @@ Requirements: Playwright (`pip install playwright`) and a local Chrome install (
 
 Pass `--no-replay-detail` against a live service with a long session: without it the walk opens one session row, and that record fetch is the heaviest request the shell makes. `--settle` (default 4.0 s) is the dwell per tab; raise it if panels are still loading when the screenshot is taken.
 
-Last verified walk — 10 tabs, `nan=0 undef=0` everywhere, **ERRORS 0 / BAD RESPONSES 0**:
+Last verified walk — 10 tabs, `nan=0 undef=0` everywhere, **ERRORS 0 / BAD RESPONSES 0**.
+Panel membership re-measured 2026-09-21 with GETs against the live service (served shell + plugin meta resolution):
 
 | Tab | Panels |
 |---|---|
-| Overview | `panel-system-overview`, `panel-flight-status`, `panel-safety-limits`, `panel-time-series` |
+| Overview | `panel-system-overview`, `panel-flight-status`, `panel-safety-limits` |
 | Control | `panel-flight-status`, `panel-safety-limits`, `panel-command-panel` |
 | Estimator | `panel-ekf-estimator` |
 | MRAC | `panel-mrac-controller` |

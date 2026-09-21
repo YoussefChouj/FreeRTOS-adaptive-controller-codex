@@ -195,9 +195,17 @@ class PageDriver(Protocol):
 JsonFetcher = Callable[[str], dict]
 
 
+# Loopback GETs must bypass any workstation proxy (the Clash proxy on this
+# box answers 127.0.0.1 requests with a flat 502). An empty ProxyHandler
+# makes urllib ignore HTTP_PROXY/http_proxy for every request this opener
+# makes; the runner only ever GETs the local service.
+_NO_PROXY_OPENER = urllib.request.build_opener(
+    urllib.request.ProxyHandler({}))
+
+
 def default_fetch_json(url: str, timeout: float = 10.0) -> dict:
-    """Fetch ``url`` with a plain GET and decode JSON."""
-    with urllib.request.urlopen(url, timeout=timeout) as resp:
+    """Fetch ``url`` with a plain, proxy-free GET and decode JSON."""
+    with _NO_PROXY_OPENER.open(url, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 

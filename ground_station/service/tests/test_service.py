@@ -112,6 +112,13 @@ def test_http_api_exposes_schema_aware_health_and_state():
         state = json.loads(opener.open(base + "/state").read())
         assert health["ok"] is True
         assert health["schema_id"] == service.schema.schema_id
+        # Startup identity fields are always published; commit may be
+        # honestly null, started_at must be a real epoch timestamp.
+        assert health["started_at"] == service.started_at
+        assert isinstance(health["started_at"], float)
+        assert health["started_commit"] == service.started_commit
+        assert health["started_commit"] is None or isinstance(
+            health["started_commit"], str)
         assert state["session_id"] == service.session_id
     finally:
         api.stop()

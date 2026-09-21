@@ -50,9 +50,10 @@
 
   // Group 2: RTOS metrics from `streams['rtos']` (SWD bridge) — same
   // vocabulary as estimator-panel.js:
-  //   n/p  = "Not published by this build"   (firmware limitation)
-  //   —    = no value seen yet               (bridge off or first sample)
+  //   n/p     = "Not published by this build"   (firmware limitation)
+  //   NO DATA = no value seen yet               (bridge off or first sample)
   var NOT_PUBLISHED = 'n/p';
+  var NO_DATA = 'NO DATA';
   var NOT_PUBLISHED_HINT = 'Not published by this build';
   var BRIDGE_OFF_HINT =
     'RTOS bridge is not running — start the ground station with ' +
@@ -100,7 +101,7 @@
   function q(id) { return document.getElementById(id); }
 
   function fmtVal(v, fmt) {
-    if (v == null) return '—';
+    if (v == null) return NO_DATA;
     if (fmt === 'int')  return parseInt(v, 10).toLocaleString();
     if (fmt === 'pct')  return parseFloat(v).toFixed(2) + '%';
     if (fmt === 'bool') return v ? 'YES' : 'NO';
@@ -135,7 +136,7 @@
       var cells = g.items.map(function (item) {
         return '<div style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:72px">' +
           '<span style="font-size:10px;color:var(--muted)">' + item.label + '</span>' +
-          '<span id="res-' + item.key + '" style="font-family:Consolas,monospace;font-size:13px">—</span>' +
+          '<span id="res-' + item.key + '" class="res-no-data" style="font-family:Consolas,monospace;font-size:13px">' + NO_DATA + '</span>' +
           '<span style="font-size:10px;color:var(--muted)">' + item.unit + '</span>' +
           '</div>';
       }).join('');
@@ -153,31 +154,35 @@
       '  <div style="display:flex;gap:12px;flex-wrap:wrap">',
       '    <div style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:72px">',
       '      <span style="font-size:10px;color:var(--muted)">Seq</span>',
-      '      <span id="res-seq" style="font-family:Consolas,monospace;font-size:13px">—</span>',
+      '      <span id="res-seq" class="res-no-data" style="font-family:Consolas,monospace;font-size:13px">' + NO_DATA + '</span>',
       '    </div>',
       '    <div style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:72px">',
       '      <span style="font-size:10px;color:var(--muted)">Loss %</span>',
-      '      <span id="res-loss" style="font-family:Consolas,monospace;font-size:13px">—</span>',
+      '      <span id="res-loss" class="res-no-data" style="font-family:Consolas,monospace;font-size:13px">' + NO_DATA + '</span>',
       '    </div>',
       '    <div style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:72px">',
       '      <span style="font-size:10px;color:var(--muted)">Dropped</span>',
-      '      <span id="res-dropped" style="font-family:Consolas,monospace;font-size:13px">—</span>',
+      '      <span id="res-dropped" class="res-no-data" style="font-family:Consolas,monospace;font-size:13px">' + NO_DATA + '</span>',
       '    </div>',
       '    <div style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:72px">',
       '      <span style="font-size:10px;color:var(--muted)">Received</span>',
-      '      <span id="res-received" style="font-family:Consolas,monospace;font-size:13px">—</span>',
+      '      <span id="res-received" class="res-no-data" style="font-family:Consolas,monospace;font-size:13px">' + NO_DATA + '</span>',
       '    </div>',
       '  </div>',
       '</div>',
     ].join('');
 
     var rtosCells = RTOS_ALL_METRICS.map(function (m) {
-      var init = m.published === false ? NOT_PUBLISHED : '—';
-      var valColor = m.published === false ? 'color:var(--amber)' : '';
+      var init, valColor, noDataCls;
+      if (m.published === false) {
+        init = NOT_PUBLISHED; valColor = 'color:var(--amber)'; noDataCls = '';
+      } else {
+        init = NO_DATA; valColor = ''; noDataCls = ' class="res-no-data"';
+      }
       var titleAttr = m.title ? ' title="' + m.title + '"' : '';
       return '<div style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:90px">' +
         '<span style="font-size:10px;color:var(--muted)">' + m.label + '</span>' +
-        '<span id="res-' + m.key.replace(/\./g, '-') + '"' + titleAttr +
+        '<span id="res-' + m.key.replace(/\./g, '-') + '"' + titleAttr + noDataCls +
         ' style="font-family:Consolas,monospace;font-size:13px;' + valColor + '">' + init + '</span>' +
         '<span style="font-size:9px;color:var(--muted)">' + m.unit + '</span>' +
         '</div>';
@@ -201,7 +206,7 @@
       '.res-warn { color: var(--amber); }',
       '.res-crit { color: var(--red); }',
       '.res-ok   { color: var(--green); }',
-      '.res-no-data { color: var(--muted); font-size: 12px; text-align: center; padding: 16px; }',
+      '.res-no-data { color: var(--muted); }',
       '</style>',
 
       // Disclaimer banner at top
@@ -229,6 +234,11 @@
     var el = q(id);
     if (!el) return;
     el.textContent = fmtVal(value, fmt);
+    if (value == null) {
+      // Absent source: muted NO DATA, never a green/— placeholder.
+      el.className = 'res-no-data';
+      return;
+    }
     if (fmt === 'pct') {
       var pct = parseFloat(value);
       el.className = '';
@@ -298,8 +308,8 @@
       }
       if (rtosSource && rtosStream.tag) rtosSource.textContent = 'from slot "' + rtosStream.tag + '"';
     } else {
-      // Bridge not running: sourced cells hold at '—', build-unpublished
-      // cells stay n/p, and the hint names the operator action.
+      // Bridge not running: sourced cells show NO DATA (res-no-data),
+      // build-unpublished cells stay n/p, and the hint names the action.
       RTOS_ALL_METRICS.forEach(function (m) {
         if (m.published !== false) updateCell('res-' + m.key.replace(/\./g, '-'), null);
       });

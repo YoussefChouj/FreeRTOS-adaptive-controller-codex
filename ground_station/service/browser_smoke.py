@@ -14,9 +14,49 @@ Exit code 1 if any console error or bad response was seen.
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import subprocess
 import sys
 import time
+import urllib.request
+
+
+def _proxy_free_get_json(url, timeout=10.0):
+    """GET ``url`` as JSON bypassing any workstation proxy (a bare
+    urlopen on this box gets 502 from Clash for 127.0.0.1)."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(url, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def current_head_commit():
+    """Short hash of current git HEAD, or None if git is unavailable."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip() or None
+
+
+def commit_mismatch_warning(health_commit, head_commit):
+    """WARNING line when the service's startup commit differs from the
+    current checkout (a stale service — the 2026-09-21 404 root cause).
+    Returns None when the states honestly match or cannot be compared."""
+    if health_commit is None:
+        return ("WARNING: /health publishes no started_commit; cannot "
+                "confirm the running service matches current code")
+    if head_commit is None:
+        return None  # no honest local basis for comparison
+    if health_commit != head_commit:
+        return ("WARNING: service started_commit %s differs from current "
+                "HEAD %s — service may be running stale code"
+                % (health_commit, head_commit))
+    return None
 
 
 def main(argv=None) -> int:
@@ -28,6 +68,20 @@ def main(argv=None) -> int:
                     help="skip clicking a replay session row (its record fetch "
                          "is large on a long session)")
     args = ap.parse_args(argv)
+
+    # Read-only startup-identity check before the browser walk. This GETs
+    # /health (safe) and warns if the running service predates HEAD.
+    try:
+        health = _proxy_free_get_json(args.url.rstrip("/") + "/health")
+    except OSError as exc:
+        print("WARNING: cannot read /health for started_commit: %s" % exc)
+    else:
+        health_commit = health.get("started_commit")
+        print("HEALTH started_commit=%s started_at=%s"
+              % (health_commit, health.get("started_at")))
+        warning = commit_mismatch_warning(health_commit, current_head_commit())
+        if warning:
+            print(warning)
 
     from playwright.sync_api import sync_playwright
 

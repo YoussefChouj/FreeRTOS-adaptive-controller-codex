@@ -26,6 +26,8 @@ packages) that imported them still works.
 """
 from __future__ import annotations
 
+import functools
+import subprocess
 import threading
 import time
 from collections import deque
@@ -184,6 +186,26 @@ class CommandAction:
         }
 
 
+@functools.lru_cache(maxsize=1)
+def _started_commit() -> str | None:
+    """Short hash of git HEAD, read once per process at first service
+    start. Returns ``None`` when git is absent, the repo is missing, or
+    the command fails — callers must render that as null, never a fake
+    hash.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    commit = out.stdout.strip()
+    return commit or None
+
+
 class GroundStationService:
     """Own the bridge boundary and publish immutable state snapshots."""
 
@@ -204,6 +226,10 @@ class GroundStationService:
         self.schema = schema or load_telemetry_schema()
         self.store = store or SessionStore()
         self.source = source
+        # Startup identity, exposed by GET /health so a walk can spot a
+        # service running stale code. The commit is read once per process.
+        self.started_at: float = time.time()
+        self.started_commit: str | None = _started_commit()
         self.session_id: str | None = None
         self.decoder = MultiStreamDecoder(schemas or [])
         # The adapter owns the seam between raw telemetry and ``streams``.
