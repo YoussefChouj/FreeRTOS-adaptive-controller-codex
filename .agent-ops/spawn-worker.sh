@@ -200,8 +200,16 @@ if [ "$WORKER_KIND" = "ark" ]; then
     mkdir -p "$LAUNCH_DIR"
     # run-worker.sh word-splits AGY_CMD on purpose, so no quoting here; these
     # paths have no spaces.
-    AGY_CMD="${AGY_CMD% -p} --add-dir $TARGET_DIR -p"
+    AGY_CMD="${AGY_CMD% -p} --add-dir $TARGET_DIR --max-turns ${ARK_MAX_TURNS:-80} -p"
     cat >> "$TASK_FILE" <<EOF
+
+Token budget (the Ark plan is metered; every tool call resends your whole context):
+- Grep before reading; read files with offset/limit. Never cat a whole log, JSON
+  dump or large file. Pipe every command's output through head or tail (-20 or less).
+- Run only the test files you added or changed, output through tail -5. Do not run
+  the full suite unless this task explicitly says so; the supervisor runs it before
+  every commit, and when a task does ask for it, run it once.
+- You have at most ${ARK_MAX_TURNS:-80} turns. Write the result file before you run out.
 
 Your shell starts in $LAUNCH_DIR, which is outside the repo on purpose: git
 run from WSL inside the repo takes minutes and would hang you at startup.
