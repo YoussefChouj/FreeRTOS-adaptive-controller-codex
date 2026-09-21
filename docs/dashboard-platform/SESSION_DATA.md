@@ -64,16 +64,65 @@ flushes and joins the writer, so `stop()` returns with the CSV complete.
 * `rows` — data rows written so far.
 * `errors` — swallowed disk/enqueue errors (a nonzero count means data was dropped).
 
-### Turning it off
+### Recording is opt-in
 
-Recording is on by default. Disable it:
+Recording is **off by default**: the service writes nothing and creates no
+session directory until recording is started explicitly — from the dashboard's
+Record control or over the HTTP API. Env vars:
 
 ```
-GS_RECORD=0 python -m ground_station.service
+GS_RECORD=1   # auto-start recording at service boot
+GS_RECORD=0   # forbid starting recording at all
+(unset)       # stopped until an agent/operator starts it
 ```
 
 The output directory is configurable with `GS_RECORD_DIR=<dir>` (default
 `logs/sessions`).
+
+### HTTP routes
+
+| Route | Purpose |
+|---|---|
+| `GET  /api/recording` | `{recording, session_dir, started_at, rows, bytes, reason, enabled}` |
+| `POST /api/recording/start` | Body `{reason?, requested_by: "operator"\|"agent:<name>", label?}`. Start while recording is a no-op returning current state. |
+| `POST /api/recording/stop` | Idempotent; finalises the manifest. |
+| `POST /api/session/note` | Body `{text, kind: "note"\|"goal"\|"marker", source?}`. Buffered (last 50) when not recording, flushed into the next recording's `events.jsonl`. |
+| `GET  /api/session/notes` | Buffered notes held while not recording. |
+
+### What a recording directory contains
+
+```
+logs/sessions/<YYYYmmdd-HHMMSS>[-label]/
+  telemetry.csv     long-format telemetry rows (see below)
+  events.jsonl      rare session events, one JSON object per line
+  manifest.json     session metadata (below)
+```
+
+`manifest.json` (`schema_version: 1`):
+
+```json
+{
+  "schema_version": 1,
+  "started_at": "<ISO>", "started_at_epoch": 1.0,
+  "stopped_at": "<ISO>", "stopped_at_epoch": 1.0,
+  "requested_by": "operator", "reason": "…", "label": "…",
+  "subscribe_layout": {"schema_id": "…", "slots": [ … ]},
+  "context": {"started_commit": "abc1234" | null,
+              "firmware_elf": {"path": "OBJ/JX_FLY.axf", "size": 1004352,
+                               "mtime": 1.0} | null},
+  "rows": 1234, "files": [ "events.jsonl", "manifest.json", "telemetry.csv" ],
+  "errors": 0
+}
+```
+
+`events.jsonl` — one JSON object per line:
+`{"t": <epoch s>, "iso": "<ISO>", "kind": "<kind>", "source": "service|operator|…", "data": {…}}`.
+Kinds: `recording_start`, `recording_stop`, `command` (data carries `id`, `idx`,
+`value`, `transaction_id`, `lifecycle` = SUBMITTED/ACKNOWLEDGED/APPLIED/
+REJECTED/TIMED_OUT/VERIFIED, `reason`), `arm_state`, `stream_stall`,
+`stream_recover`, `note`/`goal`/`marker`. Telemetry rows stay in `telemetry.csv`;
+events are rare by design (hooked at the existing single points, never polled
+row-by-row).
 
 ## Loading it in pandas
 

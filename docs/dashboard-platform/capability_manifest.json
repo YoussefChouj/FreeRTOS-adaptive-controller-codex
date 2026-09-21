@@ -2324,7 +2324,9 @@
       "/api/events": "event journal",
       "/api/faults": "fault log (rejections, timeouts)",
       "/api/manifest": "full system capability manifest (symbols, commands, telemetry, panels, routes)",
+      "/api/recording": "recording state {recording, session_dir, started_at, rows, bytes, reason}",
       "/api/routes": "this map",
+      "/api/session/notes": "operator notes buffered while not recording",
       "/api/symbols": "DWARF symbol names from the firmware ELF (?prefix=N&parent=P&limit=N; default/max limit 100/1000)",
       "/api/view-model": "browser-renderable state for agents; ?stats=1 adds session_stats (full-session scan, slow on long sessions)",
       "/artifacts": "stored artifacts",
@@ -2340,6 +2342,9 @@
       "/state": "full service state snapshot"
     },
     "POST": {
+      "/api/recording/start": "start recording {reason?, requested_by?, label?}",
+      "/api/recording/stop": "stop recording",
+      "/api/session/note": "append a note {text, kind?, source?}",
       "/commands": "send a command to the drone (arm-gated)",
       "/experiments": "start an experiment",
       "/experiments/<name>/abort": "abort an experiment",

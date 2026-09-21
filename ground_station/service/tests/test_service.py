@@ -11,7 +11,7 @@ from ground_station.platform.transactions import Outcome, RejectReason, Result
 from ground_station.service.api import ApiServer
 from ground_station.service.core import GroundStationService
 from ground_station.service.replay import SessionReplay
-from ground_station.service.storage import SessionStore
+from ground_station.service.storage import CsvRecorder, SessionStore
 
 # Bypass Windows proxy for localhost
 _orig_gai = socket.getaddrinfo
@@ -646,6 +646,89 @@ def test_http_api_routes_endpoint():
             assert code == (503 if route == "/experiments" else 200), route
     finally:
         api.stop()
+
+
+def test_recording_api_defaults_off_and_start_stop_writes_dir(tmp_path):
+    """GET /api/recording reports off by default; an explicit start creates a
+    fresh directory; stop finalises it; a second start makes a second dir."""
+    schema = StreamSchema(1, 1, 4,
+                          (StreamRange(0x20000000, 4, 1, "altitude", "f"),), 0)
+    rec = CsvRecorder(tmp_path, enabled=True)
+    service = GroundStationService(store=SessionStore(), schemas=[schema],
+                                   source="sim", recorder=rec)
+    service.start()
+    api = ApiServer(service)
+    api.start()
+    try:
+        base = "http://127.0.0.1:%d" % api.address[1]
+        # Default: off, nothing on disk.
+        status, body = _get_json(base + "/api/recording")
+        assert status == 200
+        assert body["recording"] is False and body["session_dir"] is None
+        assert list(tmp_path.iterdir()) == []
+
+        # Explicit start -> a directory plus manifest/events.
+        status, body = _post_json(base + "/api/recording/start",
+                                  {"requested_by": "agent:test",
+                                   "reason": "unit", "label": "lab"})
+        assert status == 202
+        assert body["recording"] is True
+        first_dir = list(tmp_path.iterdir())
+        assert first_dir and first_dir[0].name.endswith("-lab")
+        assert (first_dir[0] / "manifest.json").exists()
+        assert (first_dir[0] / "events.jsonl").exists()
+
+        # Starting again is a no-op -> still one directory.
+        _post_json(base + "/api/recording/start", {})
+        assert len(list(tmp_path.iterdir())) == 1
+
+        # Stop, then start again -> a second (distinct) directory.
+        status, body = _post_json(base + "/api/recording/stop", {})
+        assert status == 200 and body["recording"] is False
+        _post_json(base + "/api/recording/start", {"requested_by": "operator"})
+        assert len(list(tmp_path.iterdir())) == 2
+    finally:
+        api.stop()
+        service.stop()
+
+
+def test_recording_note_buffered_when_stopped_and_flushed(tmp_path):
+    schema = StreamSchema(1, 1, 4,
+                          (StreamRange(0x20000000, 4, 1, "altitude", "f"),), 0)
+    rec = CsvRecorder(tmp_path, enabled=True)
+    service = GroundStationService(store=SessionStore(), schemas=[schema],
+                                   source="sim", recorder=rec)
+    service.start()
+    api = ApiServer(service)
+    api.start()
+    try:
+        base = "http://127.0.0.1:%d" % api.address[1]
+        # Note while stopped -> buffered in memory, retrievable.
+        status, body = _post_json(base + "/api/session/note",
+                                  {"text": "hello", "kind": "goal",
+                                   "source": "agent:x"})
+        assert status == 201 and body["buffered"] == 1
+        status, notes = _get_json(base + "/api/session/notes")
+        assert status == 200
+        assert notes["notes"][0]["text"] == "hello"
+        assert notes["notes"][0]["kind"] == "goal"
+        # Still no recording dir yet.
+        assert list(tmp_path.iterdir()) == []
+
+        # Start -> buffered note flushed into events.jsonl.
+        _post_json(base + "/api/recording/start", {})
+        status, notes = _get_json(base + "/api/session/notes")
+        assert notes["notes"] == []  # flushed
+        _post_json(base + "/api/recording/stop", {})
+        dirs = list(tmp_path.iterdir())
+        assert len(dirs) == 1
+        events = [json.loads(l) for l in
+                  open(dirs[0] / "events.jsonl", encoding="utf-8")]
+        goals = [e for e in events if e["kind"] == "goal"]
+        assert goals and goals[0]["data"]["text"] == "hello"
+    finally:
+        api.stop()
+        service.stop()
 
 
 def test_http_api_contract_endpoint():

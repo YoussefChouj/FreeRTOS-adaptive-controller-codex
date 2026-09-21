@@ -7,14 +7,21 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import queue
+import re
 import sqlite3
 import threading
 import time
 import uuid
-from datetime import datetime
+from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
+
+# Maximum number of operator notes kept in memory while recording is STOPPED,
+# so they can be flushed into events.jsonl at the next recording start.
+NOTES_BUFFER_MAX = 50
 
 
 class SessionStore:
@@ -163,22 +170,32 @@ class SessionStore:
 
 
 class CsvRecorder:
-    """Background per-session telemetry recorder writing long-format CSV.
+    """Opt-in per-session recorder writing telemetry CSV plus a manifest and
+    an event log (events.jsonl) into one fresh directory per recording.
 
     Long format — one row per ``(received_ns, slot, key, value)`` — is
     robust to the per-slot key set changing between frames: a new channel
     needs no schema change and old keys simply stop appearing.
 
+    Recording is OFF by default: ``start()`` must be called explicitly
+    (from the dashboard or the HTTP API) before anything is written, and
+    no session directory exists until then. ``enabled=False`` (``GS_RECORD=0``)
+    forbids starting at all; ``GS_RECORD=1`` auto-starts at service boot.
+
     Rows are pushed onto a thread-safe queue by callers and written to disk
     from a single daemon thread, which flushes the buffer at most every
-    ``flush_interval_s`` (default 1 s). Callers never block on disk I/O and
-    ``note()`` never raises into the ingest path — a failed put increments
-    ``errors`` and is dropped. Mirrors ``SessionStore``'s deploy/disable
-    contract: enabled by default, disabled via the ``GS_RECORD=0`` env var
-    (see ``GroundStationService.__init__``).
+    ``flush_interval_s`` (default 1 s). ``note()`` never raises into the
+    ingest path — a failed put increments ``errors`` and is dropped.
 
-    Status lives on the instance (``path``, ``rows``, ``errors``) and is
-    surfaced by ``GET /health`` under a small ``recorder`` block.
+    Each directory also carries:
+
+      * ``manifest.json``  — written at start, rewritten (with stopped_at,
+        final row count and file list) at stop.
+      * ``events.jsonl``   — rare session events (command lifecycle,
+        arm-state changes, stream stalls, notes) as one JSON object per line.
+
+    Status lives on the instance (``recording``, ``path``, ``rows``) and is
+    surfaced by ``GET /health`` (``recorder`` block) and ``GET /api/recording``.
     """
 
     _STOP = object()
@@ -188,42 +205,242 @@ class CsvRecorder:
         self.enabled = bool(enabled)
         self.root = Path(root)
         self.flush_interval_s = float(flush_interval_s)
-        # Public status (read by /health; written by the background thread).
+        # Public status (read by /health and /api/recording; written by the
+        # background thread for ``rows``).
         self.session_dir: Path | None = None
         self.path: Path | None = None
-        self.started = False
+        self.recording = False
         self.rows = 0
         self.errors = 0
+        self.started_at: float | None = None
+        self.stopped_at: float | None = None
+        self.requested_by: str = "operator"
+        self.reason: str | None = None
+        self.label: str | None = None
+        # Subscribe layout captured at start (mirrors what the manifest records).
+        self.subscribe_layout: dict[str, Any] = {}
+        # Extra manifest context passed at start (service commit, firmware ELF).
+        self.context: dict[str, Any] = {}
+        # Operator notes buffered while recording is STOPPED (bounded), so they
+        # are not lost and can be flushed into events.jsonl at the next start.
+        self._buffered_notes: deque[dict[str, Any]] = deque(maxlen=NOTES_BUFFER_MAX)
         self._q: queue.Queue[tuple[Any, int, dict[str, Any]] | object] = queue.Queue()
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
+        self._events_lock = threading.Lock()
+        self._events_fh = None
         self._closed = False
 
-    def start(self) -> None:
-        """Create the per-run session dir and spawn the writer thread."""
-        if not self.enabled or self._closed:
-            return
+    # -- recording lifecycle -------------------------------------------------
+
+    def start(self, *, label: str | None = None,
+              requested_by: str = "operator", reason: str | None = None,
+              subscribe_layout: dict[str, Any] | None = None,
+              context: dict[str, Any] | None = None) -> bool:
+        """Begin a fresh recording: create a new directory and writer thread.
+
+        Creates ``<root>/<YYYYmmdd-HHMMSS>[-label]/`` with ``telemetry.csv``,
+        ``manifest.json`` (start fields) and ``events.jsonl`` (recording_start
+        + any notes buffered while stopped). No-op when already recording.
+        Returns True when a new recording actually began.
+        """
+        if not self.enabled or self._closed or self.recording:
+            return False
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        # The label comes from HTTP; keep it a single safe path component.
+        label = re.sub(r"[^A-Za-z0-9_-]+", "_", label or "").strip("_")[:40] or None
+        if label:
+            stamp = stamp + "-" + label
         self.session_dir = self.root / stamp
         self.path = self.session_dir / "telemetry.csv"
         try:
             self.session_dir.mkdir(parents=True, exist_ok=True)
         except OSError:
-            self.errors += 1
+            with self._lock:
+                self.errors += 1
             self.path = None
-            return
-        self.started = True
+            return False
+        self.requested_by = requested_by or "operator"
+        self.reason = reason
+        self.label = label
+        self.subscribe_layout = dict(subscribe_layout or {})
+        self.context = dict(context or {})
+        self.started_at = time.time()
+        self.stopped_at = None
+        self.rows = 0
+        self._open_events()
+        self.recording = True
+        self._write_manifest()
+        # Recording-start event, then any notes buffered while stopped.
+        self.add_event("recording_start", {
+            "requested_by": self.requested_by, "reason": self.reason,
+            "label": self.label,
+            "subscribe_layout": self.subscribe_layout,
+        })
+        buffered_to_flush = list(self._buffered_notes)
+        self._buffered_notes.clear()
+        for buffered in buffered_to_flush:
+            self._write_event_line(buffered.get("kind") or "note", buffered)
         self._thread = threading.Thread(target=self._run, name="gs-csv-recorder",
                                         daemon=True)
         self._thread.start()
+        return True
+
+    def stop(self) -> bool:
+        """Flush + join the writer thread, finalise the manifest, stop recording.
+
+        Returns True when recording was active and has now stopped.
+        """
+        was_recording = self.recording
+        if was_recording:
+            self._q.put(self._STOP)
+            if self._thread is not None:
+                self._thread.join(timeout=5.0)
+            self.add_event("recording_stop", {
+                "requested_by": self.requested_by, "reason": self.reason,
+                "rows": self.rows,
+            })
+            self.stopped_at = time.time()
+            self.recording = False
+            self._write_manifest()
+            self._close_events()
+        return was_recording
+
+    def start_telemetry_csv(self) -> bool:
+        """Back-compat alias that begins a bare recording with no metadata."""
+        return self.start()
+
+    # -- ingest paths ---------------------------------------------------------
 
     def note(self, slot: Any, values: dict[str, Any], received_ns: int) -> None:
         """Enqueue one sample's key/value pairs (never blocks, never raises)."""
-        if not self.started or self._closed:
+        if not self.recording or self._closed:
             return
         try:
             self._q.put((slot, received_ns, values))
         except Exception:
+            with self._lock:
+                self.errors += 1
+
+    def add_event(self, kind: str, data: dict[str, Any], *,
+                  source: str = "service") -> None:
+        """Append a rare session event to events.jsonl (no-op when stopped)."""
+        if not self.recording or self._closed:
+            return
+        self._write_event_line(kind, data, source=source)
+
+    def add_note(self, text: str, kind: str = "note", *,
+                 source: str | None = None) -> int:
+        """Record an operator note. Never raises.
+
+        Buffers in memory when recording is STOPPED (bounded to the last 50);
+        immediately writes an event when recording. Return value is the count
+        of buffered notes currently held (0 when written straight through).
+        """
+        entry = {"text": text, "kind": kind, "source": source or "operator"}
+        if not self.recording:
+            self._buffered_notes.append(entry)
+            return len(self._buffered_notes)
+        self._write_event_line(kind, entry, source=source or "operator")
+        return 0
+
+    def buffered_notes(self) -> list[dict[str, Any]]:
+        return list(self._buffered_notes)
+
+    # -- internals ------------------------------------------------------------
+
+    def _open_events(self) -> None:
+        try:
+            self._events_fh = open(self.events_path, "a", encoding="utf-8")
+        except OSError:
+            with self._lock:
+                self.errors += 1
+            self._events_fh = None
+
+    def _close_events(self) -> None:
+        fh = self._events_fh
+        self._events_fh = None
+        if fh is not None:
+            try:
+                fh.close()
+            except OSError:
+                pass
+
+    @property
+    def events_path(self) -> Path:
+        return self.session_dir / "events.jsonl"
+
+    @property
+    def manifest_path(self) -> Path:
+        return self.session_dir / "manifest.json"
+
+    @property
+    def bytes_written(self) -> int:
+        """Total bytes on disk for this recording (CSV + events + manifest)."""
+        total = 0
+        if self.session_dir is not None and self.session_dir.exists():
+            try:
+                for f in self.session_dir.iterdir():
+                    if f.is_file():
+                        total += os.path.getsize(f)
+            except OSError:
+                pass
+        return total
+
+    @property
+    def files(self) -> list[str]:
+        if self.session_dir is None or not self.session_dir.exists():
+            return []
+        try:
+            return sorted(f.name for f in self.session_dir.iterdir() if f.is_file())
+        except OSError:
+            return []
+
+    def _write_event_line(self, kind: str, data: dict[str, Any], *,
+                          source: str = "service", ts: float | None = None) -> None:
+        t = ts if ts is not None else time.time()
+        line = {
+            "t": round(t, 3),
+            "iso": datetime.fromtimestamp(t, tz=timezone.utc).isoformat(),
+            "kind": kind,
+            "source": source,
+            "data": data,
+        }
+        with self._events_lock:
+            if self._events_fh is None:
+                return
+            try:
+                self._events_fh.write(
+                    json.dumps(line, separators=(",", ":")) + "\n")
+                self._events_fh.flush()
+            except OSError:
+                with self._lock:
+                    self.errors += 1
+
+    def _write_manifest(self) -> None:
+        manifest = {
+            "schema_version": 1,
+            "started_at": (datetime.fromtimestamp(
+                self.started_at or time.time(), tz=timezone.utc).isoformat()
+                if self.started_at else None),
+            "started_at_epoch": self.started_at,
+            "stopped_at": (datetime.fromtimestamp(
+                self.stopped_at, tz=timezone.utc).isoformat()
+                if self.stopped_at else None),
+            "stopped_at_epoch": self.stopped_at,
+            "requested_by": self.requested_by,
+            "reason": self.reason,
+            "label": self.label,
+            "subscribe_layout": self.subscribe_layout,
+            "context": self.context,
+            "rows": self.rows,
+            "files": self.files,
+            "errors": self.errors,
+        }
+        try:
+            (self.session_dir / "manifest.json").write_text(
+                json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+        except OSError:
             with self._lock:
                 self.errors += 1
 
@@ -251,7 +468,7 @@ class CsvRecorder:
         except OSError:
             with self._lock:
                 self.errors += 1
-            self.started = False
+            self.recording = False
             return
         writer = csv.writer(f)
         pending: list[tuple[Any, int, dict[str, Any]]] = []
@@ -272,7 +489,7 @@ class CsvRecorder:
                         pass
                     self._write_rows(writer, f, pending)
                     break
-                if item is not None:
+                elif item is not None:
                     pending.append(item)
                 if pending and time.monotonic() - last_flush >= self.flush_interval_s:
                     self._write_rows(writer, f, pending)
@@ -283,12 +500,3 @@ class CsvRecorder:
                 f.close()
             except OSError:
                 pass
-
-    def stop(self) -> None:
-        """Flush remaining rows and stop the writer thread."""
-        if not self.started or self._closed:
-            return
-        self._closed = True
-        self._q.put(self._STOP)
-        if self._thread is not None:
-            self._thread.join(timeout=5.0)

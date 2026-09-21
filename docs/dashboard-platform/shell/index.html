@@ -79,6 +79,57 @@
     }
     .status-badge.error::before { background: var(--red); }
 
+    /* ── Record control ── */
+    #record-control {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: auto;
+      font-size: 12px;
+      color: var(--text);
+      white-space: nowrap;
+    }
+    #record-control .rec-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+    #record-control .rec-dot.on {
+      background: var(--red);
+      box-shadow: 0 0 6px var(--red);
+      animation: recpulse 1.2s infinite;
+    }
+    @keyframes recpulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.35; }
+    }
+    #record-control button {
+      background: var(--border);
+      color: var(--text);
+      border: 1px solid var(--muted);
+      border-radius: 5px;
+      padding: 3px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    #record-control button:hover:not(:disabled) { border-color: var(--green); }
+    #record-control button:disabled { opacity: 0.5; cursor: default; }
+    #record-control button.stop { border-color: var(--red); color: var(--red); }
+    #record-control input, #record-control select {
+      background: var(--card);
+      color: var(--text);
+      border: 1px solid var(--muted);
+      border-radius: 5px;
+      padding: 3px 6px;
+      font-size: 12px;
+    }
+    #record-control #rec-meta {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
     /* ── Workspace tab bar ── */
     #workspace-bar {
       display: flex;
@@ -380,6 +431,14 @@
 <header>
   <h1>UAV Ground Station</h1>
   <div id="status" class="status-badge disconnected">Connecting…</div>
+  <div id="record-control">
+    <span class="rec-dot" id="rec-dot"></span>
+    <button id="record-btn" disabled>● REC</button>
+    <span id="rec-meta" title="">—</span>
+    <select id="note-kind" title="note kind"><option>note</option><option>goal</option><option>marker</option></select>
+    <input id="note-input" type="text" placeholder="add note…" />
+    <button id="note-btn" disabled>Add</button>
+  </div>
 </header>
 
 <div id="workspace-bar">
@@ -1081,6 +1140,83 @@
     }).join('');
   }
 
+  /* ── Record control ── */
+  let _lastRecRendered = null;
+  function renderRecord(rec) {
+    var recBtn = document.getElementById('record-btn');
+    var dot = document.getElementById('rec-dot');
+    var meta = document.getElementById('rec-meta');
+    if (!rec) return;
+    var on = !!rec.recording;
+    window.recOn = on;
+    recBtn.disabled = false;
+    recBtn.textContent = on ? '■ Stop' : '● REC';
+    recBtn.classList.toggle('stop', on);
+    dot.classList.toggle('on', on);
+    if (on) {
+      var s = (Date.now() / 1000) - (rec.started_at || 0);
+      var metaStr = fmtClock(s) + ' · ' + fmtBytes(rec.bytes || 0);
+      if (metaStr !== _lastRecRendered) { meta.textContent = metaStr; _lastRecRendered = metaStr; }
+      meta.title = rec.session_dir || '';
+    } else {
+      if (_lastRecRendered !== '') { meta.textContent = '—'; _lastRecRendered = ''; }
+      meta.title = '';
+    }
+    document.getElementById('note-btn').disabled = !on;
+  }
+
+  function fmtClock(s) {
+    s = Math.max(0, Math.floor(s));
+    var m = Math.floor(s / 60);
+    var h = Math.floor(m / 60);
+    m = m % 60;
+    var sec = s % 60;
+    function p2(n) { return (n < 10 ? '0' : '') + n; }
+    if (h > 0) return h + ':' + p2(m) + ':' + p2(sec);
+    return (m > 0 ? m + ':' : '') + p2(sec);
+  }
+  function fmtBytes(b) {
+    if (b == null || isNaN(b)) return '0 B';
+    if (b < 1024) return b + ' B';
+    if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+    return (b / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  document.getElementById('record-btn').addEventListener('click', function () {
+    var isOn = !!window.recOn;
+    var url = isOn ? '/api/recording/stop' : '/api/recording/start';
+    var body = isOn ? null : JSON.stringify({ requested_by: 'operator' });
+    var ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var timer = ctl ? setTimeout(function () { ctl.abort(); }, 3000) : null;
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body,
+      signal: ctl ? ctl.signal : undefined
+    }).then(function (r) { return r.json(); })
+      .then(function (data) { if (data) renderRecord(data); })
+      .catch(function () { /* never break the render loop */ })
+      .finally(function () { if (timer) clearTimeout(timer); });
+  });
+
+  document.getElementById('note-btn').addEventListener('click', function () {
+    var input = document.getElementById('note-input');
+    var text = (input.value || '').trim();
+    var kind = document.getElementById('note-kind').value || 'note';
+    if (!text) return;
+    input.value = '';
+    var ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var timer = ctl ? setTimeout(function () { ctl.abort(); }, 3000) : null;
+    fetch('/api/session/note', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text, kind: kind, source: 'operator' }),
+      signal: ctl ? ctl.signal : undefined
+    }).then(function (r) { return r.json(); })
+      .catch(function () { /* never break the render loop */ })
+      .finally(function () { if (timer) clearTimeout(timer); });
+  });
+
   /* ── Command form ── */
   document.getElementById('cmd-form').addEventListener('submit', function (e) {
     e.preventDefault();
@@ -1124,10 +1260,12 @@
   function poll() {
     return Promise.all([
       fetchJsonWithTimeout('/health', 3000),
-      fetchJsonWithTimeout('/state', 3000)
+      fetchJsonWithTimeout('/state', 3000),
+      fetchJsonWithTimeout('/api/recording', 3000)
     ]).then(function (_ref) {
       var health = _ref[0];
       var state = _ref[1];
+      var rec = _ref[2];
 
       if (health === null || state === null) {
         setStatus('error', 'Error');
@@ -1142,6 +1280,7 @@
       safeStep('sidebar', function () { renderState(state); });
       safeStep('streams', function () { renderStreams(state); });
       safeStep('alarms', function () { alarms = buildAlarms(state); renderAlarms(alarms); });
+      safeStep('record', function () { renderRecord(rec); });
 
       dispatchState(state);
     }).catch(function (e) {

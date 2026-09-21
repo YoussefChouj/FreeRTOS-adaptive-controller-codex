@@ -227,14 +227,28 @@ class GroundStationService:
         self.bridge = bridge
         self.schema = schema or load_telemetry_schema()
         self.store = store or SessionStore()
-        # Per-session CSV recorder. On by default; set GS_RECORD=0 to disable.
-        # ``recorder`` is passed only by tests (which supply tmp_path + a
-        # disabled recorder) — production runs the default.
+        # Per-session CSV recorder. OPT-IN: nothing is recorded until recording
+        # is started explicitly (dashboard or HTTP API). ``recorder`` is passed
+        # only by tests (which supply tmp_path + a disabled recorder) —
+        # production runs the default. Env:
+        #   GS_RECORD=0  recording disabled entirely
+        #   GS_RECORD=1  recording auto-starts at service boot
+        #   (absent)     recording stopped until started explicitly
         if recorder is None:
-            enabled = os.environ.get("GS_RECORD", "1") != "0"
+            record_env = os.environ.get("GS_RECORD", "")
+            enabled = record_env != "0"
             recorder_root = os.environ.get("GS_RECORD_DIR", "logs/sessions")
             recorder = CsvRecorder(recorder_root, enabled=enabled)
+            self._record_auto_start = record_env == "1"
+        else:
+            self._record_auto_start = False
         self.recorder = recorder
+        # Last observed arm state for change-detection (arm_state events) and
+        # the last /health-style stream status ("flowing"/"stalled") for
+        # stall/recover events. Both start None = "not yet known": an absent
+        # value renders as not-published, never as a fake state.
+        self._last_arm_state: str | None = None
+        self._last_stream_status: str | None = None
         self.source = source
         # Startup identity, exposed by GET /health so a walk can spot a
         # service running stale code. The commit is read once per process.
@@ -323,10 +337,18 @@ class GroundStationService:
         if self.bridge:
             self.bridge.start(auto_subscribe_boot_default=auto_subscribe)
         self._record_event("service_started", {"schema_id": self.schema.schema_id})
-        # One CSV (dir) per service run, stamped with the start time. The
-        # recorder starts its own daemon thread; it is independent of the
-        # in-memory SessionStore (which still owns replay/event storage).
-        self.recorder.start()
+        # The recorder is OPT-IN. It only starts here when GS_RECORD=1 was set
+        # at boot (auto-start). Otherwise it stays stopped and no session
+        # directory exists until the dashboard or an agent starts recording.
+        if getattr(self, "_record_auto_start", False):
+            try:
+                self.recorder.start(
+                    requested_by="operator", reason="GS_RECORD=1 auto-start",
+                    subscribe_layout=self._subscribe_layout_snapshot(),
+                    context=self._manifest_context(),
+                )
+            except Exception:
+                pass
         return self.session_id
 
     def stop(self) -> None:
@@ -350,6 +372,148 @@ class GroundStationService:
             self.recorder.note(slot, sample.values, sample.received_ns)
         except Exception:
             pass
+
+    # -- session recording control (dashboard + agent HTTP API) ---------------
+
+    def _subscribe_layout_snapshot(self) -> dict[str, Any]:
+        """Capture the active subscribe layout: slots (with tag + var count),
+        the per-slot bridge request state, and the frozen schema id. Honest:
+        only slots with live data are listed; an empty layout means none.
+        """
+        slots: list[dict[str, Any]] = []
+        slot_states = (
+            getattr(getattr(self, "bridge", None), "_slot_states", {})
+            if self.bridge else {}
+        ) or {}
+        with self._state_lock:
+            for slot_key, data in self._streams.items():
+                d = data if isinstance(data, dict) else {}
+                slots.append({
+                    "slot": str(slot_key),
+                    "tag": d.get("tag"),
+                    "var_count": len((d.get("values") or {})) if isinstance(d.get("values"), dict) else 0,
+                    "request_state": slot_states.get(slot_key, "planned"),
+                })
+        return {
+            "schema_id": self.schema.schema_id,
+            "slots": slots,
+            "slot_request_states": dict(slot_states),
+        }
+
+    def _manifest_context(self) -> dict[str, Any]:
+        """Static manifest context: service commit + firmware ELF info.
+
+        The ELF info is included only when ``OBJ/JX_FLY.axf`` exists; an absent
+        file renders as ``None`` (honest "not published"), never a fake path.
+        """
+        elf_path = os.path.join("OBJ", "JX_FLY.axf")
+        elf = None
+        try:
+            if os.path.exists(elf_path):
+                st = os.stat(elf_path)
+                elf = {"path": elf_path, "size": int(st.st_size),
+                       "mtime": float(st.st_mtime)}
+        except OSError:
+            elf = None
+        return {"started_commit": self.started_commit, "firmware_elf": elf}
+
+    def recording_status(self) -> dict[str, Any]:
+        """State block for GET /api/recording."""
+        rec = self.recorder
+        return {
+            "recording": bool(getattr(rec, "recording", False)),
+            "session_dir": str(rec.session_dir) if rec.session_dir else None,
+            "started_at": getattr(rec, "started_at", None),
+            "rows": int(getattr(rec, "rows", 0)),
+            "bytes": int(getattr(rec, "bytes_written", 0)),
+            "reason": getattr(rec, "reason", None),
+            "enabled": bool(getattr(rec, "enabled", False)),
+        }
+
+    def start_recording(self, *, label: str | None = None,
+                        requested_by: str = "operator",
+                        reason: str | None = None) -> dict[str, Any]:
+        """Start a fresh recording (a start while already recording is a no-op
+        that returns the current state). Never raises into the caller.
+        """
+        try:
+            self.recorder.start(
+                label=label, requested_by=requested_by, reason=reason,
+                subscribe_layout=self._subscribe_layout_snapshot(),
+                context=self._manifest_context(),
+            )
+        except Exception:
+            pass
+        return self.recording_status()
+
+    def stop_recording(self) -> dict[str, Any]:
+        """Stop the active recording (idempotent). Never raises."""
+        try:
+            self.recorder.stop()
+        except Exception:
+            pass
+        return self.recording_status()
+
+    def add_session_note(self, text: str, kind: str = "note",
+                         source: str | None = None) -> dict[str, Any]:
+        """Append an operator note (goal/marker/note). Buffered when not
+        recording, flushed into events.jsonl at the next start."""
+        rec = self.recorder
+        buffered = 0
+        try:
+            text = str(text).strip()
+            if text:
+                buffered = rec.add_note(text or "", kind=kind, source=source)
+        except Exception:
+            pass
+        return {"saved": True, "buffered": buffered,
+                "recording": bool(getattr(rec, "recording", False))}
+
+    def list_session_notes(self) -> list[dict[str, Any]]:
+        return list(getattr(self.recorder, "buffered_notes", lambda: [])())
+
+    def _sess_event(self, kind: str, data: dict[str, Any],
+                    source: str = "service") -> None:
+        """Route a rare session event into the recorder's events.jsonl when
+        recording; a no-op otherwise. Never raises into the ingest path."""
+        try:
+            self.recorder.add_event(kind, data, source=source)
+        except Exception:
+            pass
+
+    def _maybe_log_arm_state_change(self) -> None:
+        """Log an arm_state event on a real armed/disarmed transition.
+
+        Uses the same arm-state source as the command gate (``arm_state()``).
+        """
+        try:
+            arm = self.arm_state()
+        except Exception:
+            arm = "unknown"
+        if arm == self._last_arm_state:
+            return
+        self._last_arm_state = arm
+        self._sess_event("arm_state", {"state": arm, "previous": None})
+
+    def _maybe_log_stream_health(self) -> None:
+        """Detect stream stall / recover transitions (single poll point).
+
+        Mirrors the /health/slots stream_health rule: a frame that has not
+        arrived within the freshness TTL means "stalled". A transition is
+        logged only when the status actually changes, so this is cheap.
+        """
+        ttl_ns = getattr(self.adapter, "freshness_ttl_ns", 30 * 10**9)
+        last_frame_ns = self._last_update_ns
+        if not last_frame_ns:
+            return  # nothing seen yet this session: not paused, not stalled
+        status = "stalled" if (time.time_ns() - last_frame_ns) > ttl_ns else "flowing"
+        if status == self._last_stream_status:
+            return
+        self._last_stream_status = status
+        self._sess_event(
+            "stream_recover" if status == "flowing" else "stream_stall",
+            {"status": status, "last_frame_age_ns": int(time.time_ns() - last_frame_ns)},
+        )
 
     def replay_to_bus(self, session_id: str) -> int:
         """Push a stored session's telemetry through the live ingest path.
@@ -405,6 +569,7 @@ class GroundStationService:
                 self._last_update_ns = now
                 self.adapter.apply(sample, self._streams)
             self._note_recorder(slot, sample)
+            self._maybe_log_arm_state_change()
             self._notify()
             # Check if telemetry readback confirms any pending commands.
             self._check_readback()
@@ -505,6 +670,7 @@ class GroundStationService:
             self._last_update_ns = now
             self.adapter.apply(sample, self._streams)
         self._note_recorder(slot, sample)
+        self._maybe_log_arm_state_change()
         self._notify()
         if not persist:
             return
@@ -562,6 +728,7 @@ class GroundStationService:
             self._last_update_ns = sample.received_ns
             self.adapter.apply(sample, self._streams)
         self._note_recorder(slot, sample)
+        self._maybe_log_arm_state_change()
         self._notify()
         # Check if telemetry readback confirms any pending commands.
         self._check_readback()
@@ -924,6 +1091,7 @@ class GroundStationService:
         ]
 
     def snapshot(self) -> ServiceState:
+        self._maybe_log_stream_health()
         with self._state_lock:
             # Evict slots whose last_update_ns is older than the freshness
             # TTL. The TTL lives on the adapter so future callers that
@@ -992,6 +1160,22 @@ class GroundStationService:
     def _record_event(self, kind: str, payload: dict[str, Any]) -> None:
         if self.session_id is not None:
             self.store.append_event(self.session_id, kind, payload)
+        # Mirror command lifecycle transitions into the recorder's events.jsonl
+        # (rare, only when recording). kind is like "command_submitted" /
+        # "command_acknowledged" / "command_applied" / "command_rejected" /
+        # "command_timedout" / "command_verified".
+        if kind.startswith("command_"):
+            lifecycle = kind[len("command_"):]
+            self._sess_event("command", {
+                "id": payload.get("command_id"),
+                "idx": payload.get("index"),
+                "value": payload.get("value"),
+                "transaction_id": payload.get("transaction_id"),
+                "lifecycle": lifecycle,
+                "outcome": payload.get("outcome_name"),
+                "reason": payload.get("reason_name") or payload.get("reason"),
+                "detail": payload.get("detail", ""),
+            })
 
     def _discard_unknown_tag(self, tag: str) -> None:
         """Log once per (tag, session) that an unknown frame was discarded.

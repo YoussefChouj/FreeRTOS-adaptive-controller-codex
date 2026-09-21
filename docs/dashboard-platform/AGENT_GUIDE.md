@@ -137,6 +137,42 @@ api = ApiServer(service, host="127.0.0.1", port=0,
 | **Action journal ordering** | `/api/view-model` returns the **10 most recent** actions, newest first (`list(reversed(service.action_journal()[-10:]))`). `GET /api/actions` returns the journal in its natural oldest-first order. |
 | **Zero is not missing** | View-model stats use `x if x is not None else None`, never a truthiness test — a legitimately zero rate or count must render as `0`, not as `—`. |
 
+## 6a. Session recording is opt-in — how an agent drives it
+
+Nothing is written to disk until recording is started explicitly. An agent (or
+operator) controls it over HTTP; it is a **host-side habit**, not a safety gate —
+recording, notes and events never send a drone command and never change command
+gates (shadow responsibilities only).
+
+- **Start a recording**
+  ```bash
+  curl -s -X POST http://127.0.0.1:8081/api/recording/start \
+    -H 'Content-Type: application/json' \
+    -d '{"requested_by":"agent:my-agent","reason":"measuring tau step","label":"tau-step-01"}'
+  ```
+  `requested_by` must be `operator` or `agent:<name>`. `label` is appended to the
+  directory name (`logs/sessions/<YYYYmmdd-HHMMSS>-<label>/`). Starting while a
+  recording is already active is a no-op that returns the current state.
+- **Stop** — `POST /api/recording/stop` (idempotent). Finalises `manifest.json`.
+- **Status** — `GET /api/recording` →
+  `{recording, session_dir, started_at, rows, bytes, reason, enabled}`.
+- **Leave a note for the operator / future self**
+  ```bash
+  curl -s -X POST http://127.0.0.1:8081/api/session/note \
+    -H 'Content-Type: application/json' \
+    -d '{"text":"started hover test","kind":"goal","source":"agent:my-agent"}'
+  ```
+  `kind` is `note` | `goal` | `marker`. Notes added while *not* recording are
+  buffered in memory (last 50) and flushed into the next recording's
+  `events.jsonl`. `GET /api/session/notes` returns the buffered ones.
+- **Recordings on disk** — each recording gets its own directory with
+  `telemetry.csv` (long-format rows), `events.jsonl` (command lifecycle, arm
+  state changes, stream stalls, notes, view [SESSION_DATA.md](SESSION_DATA.md))
+  and `manifest.json` (metadata, stopped/started times, subscribe layout).
+- **Auto-start at boot** — `GS_RECORD=1` starts recording at service start;
+  `GS_RECORD=0` forbids starting at all; the default (unset) is "stopped until
+  an agent/operator starts it".
+
 ## 7. Where the code is
 
 | Path | Role |

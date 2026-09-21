@@ -47,11 +47,13 @@ def _recorder_status(service) -> dict[str, Any]:
     """
     recorder = getattr(service, "recorder", None)
     if recorder is None:
-        return {"enabled": False, "started": False,
+        return {"enabled": False, "recording": False,
                 "path": None, "rows": 0, "errors": 0}
     return {
         "enabled": bool(getattr(recorder, "enabled", False)),
-        "started": bool(getattr(recorder, "started", False)),
+        # ``recording`` is the current active state; a stopped-but-enabled
+        # recorder reports enabled=True, recording=False (honest, not a fake 0).
+        "recording": bool(getattr(recorder, "recording", False)),
         "path": str(getattr(recorder, "path", None)) if getattr(recorder, "path", None) else None,
         "rows": int(getattr(recorder, "rows", 0)),
         "errors": int(getattr(recorder, "errors", 0)),
@@ -165,6 +167,8 @@ _ROUTE_MAP = {
         "/analysis/gaps": "?session_id=<sid>&stream=<int>",
         "/analysis/effective-rate": "?session_id=<sid>&stream=<int>",
         "/api/diagnostics/bundle": "frames, commands, faults for bug reports",
+        "/api/recording": "recording state {recording, session_dir, started_at, rows, bytes, reason}",
+        "/api/session/notes": "operator notes buffered while not recording",
         "/api/contract": "firmware command/subscribe contract",
         "/api/view-model": "browser-renderable state for agents; ?stats=1 adds session_stats (full-session scan, slow on long sessions)",
         "/api/events": "event journal",
@@ -181,6 +185,9 @@ _ROUTE_MAP = {
         "/commands": "send a command to the drone (arm-gated)",
         "/subscribe": "program subscribe slots on the drone",
         "/subscribe/preview": "validate a subscribe request, sends nothing",
+        "/api/recording/start": "start recording {reason?, requested_by?, label?}",
+        "/api/recording/stop": "stop recording",
+        "/api/session/note": "append a note {text, kind?, source?}",
         "/experiments": "start an experiment",
         "/experiments/<name>/abort": "abort an experiment",
         "/replay/<id>/play": "push stored telemetry onto the live bus; sends nothing to the drone",
@@ -897,6 +904,12 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                         "stalled": False,
                     }
                 self._json(200, report)
+            elif route == "/api/recording":
+                self._json(200, service.recording_status())
+            elif route == "/api/session/notes":
+                self._json(200, {"notes": service.list_session_notes(),
+                                 "recording": bool(getattr(
+                                     service.recorder, "recording", False))})
             elif route == "/slots":
                 # Slot inventory — keys in service._streams plus what the bridge
                 # currently knows about (auto-subscribed + manually subscribed).
@@ -1348,6 +1361,59 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     self._json(400, {"error": str(exc)})
                     return
                 self._json(202, {"slot": slot, "divider": divider, "ranges": ranges})
+            # POST /api/recording/start — opt-in recording. Optional JSON
+            # {reason, requested_by: "operator"|"agent:<name>", label}. A start
+            # while already recording is a no-op returning the current state.
+            # Recording never sends drone commands and never touches gates.
+            elif route == "/api/recording/start":
+                length = int(self.headers.get("Content-Length", "0"))
+                body = {}
+                if length:
+                    try:
+                        body = json.loads(self.rfile.read(length) or b"{}")
+                    except Exception:
+                        self._json(400, {"error": "invalid JSON body"})
+                        return
+                if not isinstance(body, dict):
+                    self._json(400, {"error": "body must be a JSON object"})
+                    return
+                requested_by = str(body.get("requested_by") or "operator")
+                if requested_by not in ("operator",) \
+                        and not str(requested_by).startswith("agent:"):
+                    self._json(400, {"error": "requested_by must be operator "
+                                             "or agent:<name>"})
+                    return
+                result = service.start_recording(
+                    label=(str(body["label"]) if body.get("label") else None),
+                    requested_by=requested_by,
+                    reason=(str(body["reason"]) if body.get("reason") else None),
+                )
+                status = 202 if result.get("recording") else 200
+                self._json(status, result)
+            # POST /api/recording/stop — stop the active recording (idempotent).
+            elif route == "/api/recording/stop":
+                self._json(200, service.stop_recording())
+            # POST /api/session/note — append an operator note
+            # {text, kind: "note"|"goal"|"marker", source}. Seed of the
+            # operator <-> agent communication session.
+            elif route == "/api/session/note":
+                length = int(self.headers.get("Content-Length", "0"))
+                try:
+                    body = json.loads(self.rfile.read(length) or b"{}")
+                except Exception:
+                    self._json(400, {"error": "invalid JSON body"})
+                    return
+                if not isinstance(body, dict) or not str(body.get("text") or "").strip():
+                    self._json(400, {"error": "note requires a non-empty 'text'"})
+                    return
+                kind = str(body.get("kind") or "note")
+                if kind not in ("note", "goal", "marker"):
+                    self._json(400, {"error": "kind must be note|goal|marker"})
+                    return
+                source = str(body["source"]) if body.get("source") else None
+                result = service.add_session_note(
+                    str(body["text"]), kind=kind, source=source)
+                self._json(201, result)
             # POST /subscribe/preview — pure-validation echo of /subscribe.
             # Resolves DWARF names against the firmware ELF without sending
             # any bytes to the FC. Lets the dashboard show the user what
