@@ -298,9 +298,24 @@
   }
 
   // ── Data extraction from state ──────────────────────────────────────────
+  // The Explorer streams slot values under their raw ``slot0.<dwarf>``
+  // spelling plus the adapter's spec aliases. Strip the ``slot<N>.``
+  // namespace so the selected spec key and its aliases bind to either
+  // spelling (AUDIT_2026-09-21 Bug 4 "global pattern").
+  var SLOT_PREFIX_RE = /^slot\d+\./;
+  function slotVal(slot0, want) {
+    if (!slot0 || !slot0.values) return undefined;
+    if (slot0.values[want] !== undefined) return slot0.values[want];
+    var stripped = want.replace(SLOT_PREFIX_RE, '');
+    for (var k in slot0.values) {
+      if (k.replace(SLOT_PREFIX_RE, '') === stripped) return slot0.values[k];
+    }
+    return undefined;
+  }
+
   function getChannelVal(slot0, ch) {
-    if (!slot0 || !slot0.values) return null;
-    if (slot0.values[ch] !== undefined) return slot0.values[ch];
+    var direct = slotVal(slot0, ch);
+    if (direct !== undefined) return direct;
     var ALIASES = {
       'status.roll_deg': ['imu_data.rol', 'ahrs.rol', 'ch0'],
       'status.pitch_deg': ['imu_data.pit', 'ahrs.pit', 'ch1'],
@@ -310,7 +325,8 @@
     var alts = ALIASES[ch];
     if (alts) {
       for (var i = 0; i < alts.length; i++) {
-        if (slot0.values[alts[i]] !== undefined) return slot0.values[alts[i]];
+        var alt = slotVal(slot0, alts[i]);
+        if (alt !== undefined) return alt;
       }
     }
     return null;

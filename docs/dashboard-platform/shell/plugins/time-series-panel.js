@@ -148,17 +148,45 @@
   }
 
   // ── Dynamic Variable Discovery & State Value Extraction ────────────────
+  // The Telemetry Explorer surfaces each slot's values under their raw
+  // DWARF spelling, namespace-prefixed by slot: ``slot0.imu_data.rol``,
+  // ``slot0.mrac_state.roll.e``, … (the adapter's spec aliases such as
+  // ``status.roll_deg`` are an *additional* spelling). Panels must bind to
+  // whichever spelling the stream carries, so every bare key/alias lookup
+  // tolerates (and strips) the ``slot<N>.`` namespace prefix. Without this
+  // seam the panels honestly render "waiting for data" while the Explorer
+  // shows every variable streaming (AUDIT_2026-09-21 Bug 4 "global pattern").
+  var SLOT_PREFIX_RE = /^slot\d+\./;
+
+  function slotVal(slotValues, want) {
+    if (slotValues == null) return undefined;
+    if (slotValues[want] !== undefined) return slotValues[want];
+    // Fall back: a key whose slot-prefix-stripped form matches the want.
+    var stripped = want.replace(SLOT_PREFIX_RE, '');
+    for (var k in slotValues) {
+      if (k.replace(SLOT_PREFIX_RE, '') === stripped) return slotValues[k];
+    }
+    return undefined;
+  }
+
+  // ano_of.of_alt_cm is in cm on the wire; convert to meters for Z display.
+  function numericSlotValue(slotValues, want) {
+    var v = slotVal(slotValues, want);
+    if (v === null || v === undefined) return undefined;
+    var n = Number(v);
+    if (isNaN(n)) return undefined;
+    if (want === 'ano_of.of_alt_cm') return n / 100.0;
+    return n;
+  }
+
   function getValFromState(state, key) {
     if (!state || !state.streams) return null;
     var slots = Object.keys(state.streams);
 
     // 1. Direct search across all streaming slots
     for (var i = 0; i < slots.length; i++) {
-      var s = state.streams[slots[i]];
-      if (s && s.values && s.values[key] !== undefined && s.values[key] !== null) {
-        var v = Number(s.values[key]);
-        if (!isNaN(v)) return v;
-      }
+      var v = numericSlotValue(state.streams[slots[i]].values, key);
+      if (v !== undefined) return v;
     }
 
     // 2. Search aliases
@@ -167,17 +195,8 @@
       for (var a = 0; a < alts.length; a++) {
         var altKey = alts[a];
         for (var j = 0; j < slots.length; j++) {
-          var s2 = state.streams[slots[j]];
-          if (s2 && s2.values && s2.values[altKey] !== undefined && s2.values[altKey] !== null) {
-            var val = Number(s2.values[altKey]);
-            if (!isNaN(val)) {
-              // ano_of.of_alt_cm is in cm on the wire; convert to meters for Z
-              if (altKey === 'ano_of.of_alt_cm') {
-                return val / 100.0;
-              }
-              return val;
-            }
-          }
+          var val = numericSlotValue(state.streams[slots[j]].values, altKey);
+          if (val !== undefined) return val;
         }
       }
     }

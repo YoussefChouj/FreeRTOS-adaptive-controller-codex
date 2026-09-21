@@ -1533,14 +1533,14 @@
   "elf_identity": {
     "caveat": "OBJ/ holds both current and stale build artifacts. A symbol in the ELF reflects the last build, which may not match what is currently flashed on the hardware. This manifest describes build artifacts and host decoder contracts; it does not assert that this build is currently running on the aircraft.",
     "elf_path": "OBJ/JX_FLY.axf",
-    "elf_sha256": "63bc568917968f30a9252154e567201b55b0db084bf8e7c93b27d2ddca272d9c",
+    "elf_sha256": "c6f30caf41fbccb2380578684e14e41c64366095065a4dfa0617210b008af49c",
     "exists": true,
-    "size_bytes": 1003440
+    "size_bytes": 1003536
   },
   "firmware_symbols": {
     "count": 344,
     "elf_path": "OBJ/JX_FLY.axf",
-    "elf_sha256": "63bc568917968f30a9252154e567201b55b0db084bf8e7c93b27d2ddca272d9c",
+    "elf_sha256": "c6f30caf41fbccb2380578684e14e41c64366095065a4dfa0617210b008af49c",
     "names": [
       "AHBPrescTable",
       "APBAHBPrescTable",

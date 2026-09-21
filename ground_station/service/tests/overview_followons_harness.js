@@ -592,3 +592,5 @@ function runChecks() {
 }
 
 try { runChecks(); } catch (e) { console.error(e); process.exit(1); }
+// Panel timers keep the event loop alive; exit once every check has run.
+process.exit(0);
