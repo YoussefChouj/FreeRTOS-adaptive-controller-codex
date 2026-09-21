@@ -174,7 +174,10 @@ void Check_Fly_Mode(void)
 		{
 			if (FlightFSM_GetState() == FLIGHT_STATE_DISARMED)
 				FlightFSM_Event(FLIGHT_EVENT_ARM_REQUEST);
-			sbus_flyup_trigger = 1U;
+			if (FlightFSM_GetState() == FLIGHT_STATE_ARMED)
+			{
+				sbus_flyup_trigger = 1U;
+			}
 		}
 		ch6_prev = ch6_now;
 	}
@@ -190,9 +193,12 @@ void Check_Fly_Mode(void)
 			if (FlightFSM_GetState() == FLIGHT_STATE_DISARMED)
 			{
 				FlightFSM_Event(FLIGHT_EVENT_ARM_REQUEST);
-				RCInput_SetAuthority(1U);
 			}
-			sbus_path_trigger = 1U;
+			if (FlightFSM_GetState() == FLIGHT_STATE_ARMED)
+			{
+				RCInput_SetAuthority(1U);
+				sbus_path_trigger = 1U;
+			}
 		}
 		ch8_prev = ch8_now;
 	}

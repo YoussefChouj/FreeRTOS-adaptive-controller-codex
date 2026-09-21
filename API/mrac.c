@@ -197,10 +197,13 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
         }
         case 1: {
             // 1st-order: xm_dot = bw*(r - xm), unity DC gain. P solves 2*Am*P = 1.
-            float dx = config->ref_model_bw * (r - state->xm);
+            float bw = config->ref_model_bw;
+            float dx;
+            if (bw < 0.1f) bw = 0.1f;   // P = 1/(2*bw): bw 0 divides by zero
+            dx = bw * (r - state->xm);
             state->xm    += MRAC_DT * dx;
             state->xm_dot = dx;
-            P = 1.0f / (2.0f * config->ref_model_bw);
+            P = 1.0f / (2.0f * bw);
             break;
         }
         case 0:
@@ -257,8 +260,13 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
     // tanh-saturated in Phase 1 (e is, via PBe).
     if (mrac_flags.ref_model_type == 2) {
         float wn = config->ref_model_bw;
-        float a0 = wn * wn;
-        float a1 = 2.0f * config->ref_model_zeta * wn;
+        float zeta = config->ref_model_zeta;
+        float a0;
+        float a1;
+        if (wn < 0.1f) wn = 0.1f;       // a0 and a1 are denominators below
+        if (zeta < 0.1f) zeta = 0.1f;
+        a0 = wn * wn;
+        a1 = 2.0f * zeta * wn;
         P_e    = config->ref_Q1 / (2.0f * a0);
         P_edot = (config->ref_Q1 / a0 + config->ref_Q2) / (2.0f * a1);
         s = PBe * P_e + state->e_dot * P_edot;
@@ -345,6 +353,14 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
 #else
     state->u_ad = raw_u_ad;
 #endif
+
+    if (config->u_max > 0.0f) {
+        if (state->u_ad > config->u_max) {
+            state->u_ad = config->u_max;
+        } else if (state->u_ad < -config->u_max) {
+            state->u_ad = -config->u_max;
+        }
+    }
 }
 
 // ------------------------------------------------------------------------------

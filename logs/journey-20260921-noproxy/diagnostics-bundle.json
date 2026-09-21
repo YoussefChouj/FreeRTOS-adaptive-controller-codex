@@ -1,0 +1,107 @@
+{
+  "browser": {
+    "base_url": "http://127.0.0.1:8081/",
+    "console_errors": [],
+    "fixture": null,
+    "http_errors": [],
+    "journey": "default-shell-smoke",
+    "observed_by": "ground_station.service.journey",
+    "report": "report.json",
+    "screenshot": "step-00-shell-loads-with-all-workspace-tabs.png",
+    "screenshots": [
+      "step-00-shell-loads-with-all-workspace-tabs.png"
+    ],
+    "source_confirmed": "live_observed",
+    "steps": [
+      {
+        "index": 0,
+        "name": "shell loads with all workspace tabs",
+        "url": "http://127.0.0.1:8081/",
+        "verdict": "pass"
+      }
+    ],
+    "unavailable": [],
+    "verdict": "pass",
+    "view_model_endpoint": "GET /api/view-model",
+    "view_model_note": "/api/view-model is implemented and live \u2014 agents use it directly; no browser harness needed"
+  },
+  "collected_at_ns": 1789970194754265600,
+  "commands": {
+    "results": [],
+    "source_confirmed": "unverified",
+    "unavailable": []
+  },
+  "evidence_status": "unverified",
+  "evidence_summary": {
+    "live_observed": [
+      "transport",
+      "browser"
+    ],
+    "replayed": [],
+    "source_confirmed": [
+      "git"
+    ],
+    "unverified": [
+      "firmware",
+      "service",
+      "frames",
+      "samples",
+      "commands"
+    ]
+  },
+  "firmware": {
+    "path": "C:\\Users\\Acer\\Desktop\\UAV_lab\\FreeRTOS-adaptive-controller-codex\\OBJ\\JX_FLY.axf",
+    "schema_id": "r1-s1-9F32E2EA",
+    "sha256": "c043eaea04b879ac",
+    "size_bytes": 1001816,
+    "unavailable": []
+  },
+  "frames": {
+    "requests": [],
+    "responses": [],
+    "source_confirmed": "unverified",
+    "total_request_frames": 0,
+    "total_response_frames": 0,
+    "unavailable": []
+  },
+  "git": {
+    "branch": "main",
+    "dirty": true,
+    "head": "ff8946300f9b9e484f93b59ff0d89b280c3b4653",
+    "source_confirmed": "source_confirmed",
+    "unavailable": []
+  },
+  "process": {
+    "error": "No module named 'resource'",
+    "unavailable": []
+  },
+  "samples": {
+    "raw_frames_received": 0,
+    "raw_frames_sent": 0,
+    "source_confirmed": "unverified",
+    "streams": {},
+    "unavailable": []
+  },
+  "service": {
+    "adapter_version": "v2",
+    "connected": true,
+    "last_update_ns": 1789969648532182400,
+    "samples": 59930,
+    "schema_id": "r1-s1-9F32E2EA",
+    "session_id": "16e7d40251764746b9b186337abfd06a",
+    "slot_freshness_ttl_ns": 30000000000,
+    "telemetry_schema_id": "r1-s1-9F32E2EA",
+    "unavailable": []
+  },
+  "transport": {
+    "active_slots": [],
+    "bridge_available": true,
+    "last_error": null,
+    "request_states": {},
+    "slot_schema_identity": {},
+    "slot_states": {},
+    "source_confirmed": "live_observed",
+    "unavailable": [],
+    "wifi_connected": null
+  }
+}

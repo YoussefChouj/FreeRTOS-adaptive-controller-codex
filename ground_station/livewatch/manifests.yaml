@@ -887,19 +887,23 @@ manifests:
 
   dashboard_frame_a:
     doc: >
-      Dashboard sidebar payload, slot 0 at 20 Hz. Mirrors legacy Frame A.
+      Dashboard sidebar payload, slot 0 at 16 Hz. Mirrors legacy Frame A.
       MRAC e/u_ad for all 4 axes + status flags + attitude + battery.
       Plus xTickCount so this manifest satisfies REQUIRED_SYNC_VARS on its
       own (a multi-slot preset can put it on slot 0 without needing a
       separate `sync` manifest).
-      Size: 54 vars * 4 B = 216 B payload + 12 B overhead = 228 B/frame.
+      Size: 81 vars * 4 B = 324 B payload + 12 B overhead = 336 B/frame
+      (2026-09-21 binding-table task added 27 vars: FSM state/phase, raw
+      gyro + accel, OF earth position + ANO altitude, rate-loop PID FB/U,
+      estimator-mode flags, GS safety parameter readback).
+      Divider raised 4 -> 5 to keep bytes/s roughly flat.
 
       NOTE: This manifest is primarily designed for the USART3 wire path (WiFi
       subscribe). Its SWD feasibility ceiling is ~28 Hz (SWD_COST model). The
-      effective rate on MIXED-mode firmware is 80/4=20 Hz; on SUBSCRIBE_ONLY
-      firmware (200 Hz) it would be 200/4=50 Hz. Set hz to match your firmware
+      effective rate on MIXED-mode firmware is 80/5=16 Hz; on SUBSCRIBE_ONLY
+      firmware (200 Hz) it would be 200/5=40 Hz. Set hz to match your firmware
       mode's Send_Task cadence.
-    hz: 20
+    hz: 40
     # Each entry pairs the DWARF path (what the firmware symbol table says)
     # with the spec key the dashboard consumes + an optional ``int: true``
     # flag for status fields that round to 0 decimals. This is the SAME
@@ -968,6 +972,38 @@ manifests:
       - { dwarf: "s_ekf.x[6]", key: "ekf.bias_gyro_x" }
       - { dwarf: "s_ekf.x[7]", key: "ekf.bias_gyro_y" }
       - { dwarf: "s_ekf.x[8]", key: "ekf.bias_gyro_z" }
+      # Flight FSM state + phase (flight_fsm.c:7-8) — Overview FSM widget.
+      - { dwarf: "s_state",      key: "s_state",      int: true }
+      - { dwarf: "flight_phase", key: "flight_phase", int: true }
+      # Raw body gyro rates (rad/s) — Frame C packs these (send_data.c:1100).
+      - { dwarf: "Gyro_X_Real", key: "c.gyro_x" }
+      - { dwarf: "Gyro_Y_Real", key: "c.gyro_y" }
+      - { dwarf: "Gyro_Z_Real", key: "c.gyro_z" }
+      # Raw body accel (m/s^2) — estimator raw-IMU group.
+      - { dwarf: "Acc_X_Real", key: "imu.acc_x" }
+      - { dwarf: "Acc_Y_Real", key: "imu.acc_y" }
+      - { dwarf: "Acc_Z_Real", key: "imu.acc_z" }
+      # OF world position (m) + ANO altitude (cm) — Frame C sources.
+      - { dwarf: "ano_of.earth_x",   key: "c.earth_x" }
+      - { dwarf: "ano_of.earth_y",   key: "c.earth_y" }
+      - { dwarf: "ano_of.of_alt_cm", key: "c.altitude_cm" }
+      # Rate-loop PID feedback/output — Frame B sources (send_data.c:1196).
+      - { dwarf: "Ctrler.gyroxPID.FB", key: "pid.gyrox.FB" }
+      - { dwarf: "Ctrler.gyroxPID.U",  key: "pid.gyrox.U" }
+      - { dwarf: "Ctrler.gyroyPID.FB", key: "pid.gyroy.FB" }
+      - { dwarf: "Ctrler.gyroyPID.U",  key: "pid.gyroy.U" }
+      - { dwarf: "Ctrler.gyrozPID.FB", key: "pid.gyroz.FB" }
+      - { dwarf: "Ctrler.gyrozPID.U",  key: "pid.gyroz.U" }
+      # Estimator-mode readback flags (StabilizerTask.c).
+      - { dwarf: "g_of_bias_mode",       key: "g_of_bias_mode",       int: true }
+      - { dwarf: "g_of_bias_ema_freeze",  key: "g_of_bias_ema_freeze", int: true }
+      # GS safety parameter readback — safety-limits panel.
+      - { dwarf: "gs_max_horizontal_speed_mps", key: "gs_max_horizontal_speed_mps" }
+      - { dwarf: "gs_max_vertical_speed_mps",   key: "gs_max_vertical_speed_mps" }
+      - { dwarf: "gs_max_pitch_deg",             key: "gs_max_pitch_deg" }
+      - { dwarf: "gs_max_roll_deg",              key: "gs_max_roll_deg" }
+      - { dwarf: "gs_throttle_max_pct",          key: "gs_throttle_max_pct" }
+      - { dwarf: "gs_throttle_min_pct",          key: "gs_throttle_min_pct" }
 
   # -------------------------------------------------------------------------
   # Bias frame — drives the DearPyGui dashboard Bias tab (WiFi mode).

@@ -1,0 +1,362 @@
+[
+  {
+    "cmd": "CMD 0x00: No-op",
+    "cmd_id": 0,
+    "idx": 0,
+    "value": 0.0,
+    "txid": 1,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x01 idx=0: Pitch Kp = 1.5",
+    "cmd_id": 1,
+    "idx": 0,
+    "value": 1.5,
+    "txid": 2,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x01 idx=1: Pitch Ki = 0.1",
+    "cmd_id": 1,
+    "idx": 1,
+    "value": 0.1,
+    "txid": 3,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x01 idx=2: Pitch Kd = 0.05",
+    "cmd_id": 1,
+    "idx": 2,
+    "value": 0.05,
+    "txid": 4,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x02 idx=0: MRAC Gamma axis=0 basis=0",
+    "cmd_id": 2,
+    "idx": 0,
+    "value": 0.01,
+    "txid": 5,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x03 idx=0: Mixer 0 = 0.8",
+    "cmd_id": 3,
+    "idx": 0,
+    "value": 0.8,
+    "txid": 6,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x04 idx=0: Abort/stop",
+    "cmd_id": 4,
+    "idx": 0,
+    "value": 0.0,
+    "txid": 7,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x05 idx=0: MRAC What_limit",
+    "cmd_id": 5,
+    "idx": 0,
+    "value": 10.0,
+    "txid": 8,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x07 idx=0: Enable bench mode",
+    "cmd_id": 7,
+    "idx": 0,
+    "value": 1.0,
+    "txid": 9,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x07 idx=0: Disable bench mode",
+    "cmd_id": 7,
+    "idx": 0,
+    "value": 0.0,
+    "txid": 10,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x08 idx=0: MRAC What_tol",
+    "cmd_id": 8,
+    "idx": 0,
+    "value": 0.1,
+    "txid": 11,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x09 idx=0: Max horiz speed = 5 m/s",
+    "cmd_id": 9,
+    "idx": 0,
+    "value": 5.0,
+    "txid": 12,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x09 idx=1: Max vert speed = 2 m/s",
+    "cmd_id": 9,
+    "idx": 1,
+    "value": 2.0,
+    "txid": 13,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x09 idx=2: Max pitch = 30 deg",
+    "cmd_id": 9,
+    "idx": 2,
+    "value": 30.0,
+    "txid": 14,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x09 idx=3: Max roll = 30 deg",
+    "cmd_id": 9,
+    "idx": 3,
+    "value": 30.0,
+    "txid": 15,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x0E idx=0: Release SDK authority",
+    "cmd_id": 14,
+    "idx": 0,
+    "value": 0.0,
+    "txid": 16,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x0F idx=100: Legacy mode",
+    "cmd_id": 15,
+    "idx": 100,
+    "value": 0.0,
+    "txid": 17,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x0F idx=101: Mixed mode",
+    "cmd_id": 15,
+    "idx": 101,
+    "value": 0.0,
+    "txid": 18,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x0F idx=102: Subscribe-only mode",
+    "cmd_id": 15,
+    "idx": 102,
+    "value": 0.0,
+    "txid": 19,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x0F idx=0: Clear MRAC flag 0",
+    "cmd_id": 15,
+    "idx": 0,
+    "value": 0.0,
+    "txid": 20,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x10 idx=0: Reset world origin",
+    "cmd_id": 16,
+    "idx": 0,
+    "value": 0.0,
+    "txid": 21,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x12 idx=0: Waypoint spacing = 1m",
+    "cmd_id": 18,
+    "idx": 0,
+    "value": 1.0,
+    "txid": 22,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x13 idx=0: Switch ref model 0",
+    "cmd_id": 19,
+    "idx": 0,
+    "value": 0.0,
+    "txid": 23,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x13 idx=1: Switch ref model 1",
+    "cmd_id": 19,
+    "idx": 1,
+    "value": 0.0,
+    "txid": 24,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x14 idx=7: Disable geofence",
+    "cmd_id": 20,
+    "idx": 7,
+    "value": 0.0,
+    "txid": 25,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x14 idx=7: Enable geofence",
+    "cmd_id": 20,
+    "idx": 7,
+    "value": 1.0,
+    "txid": 26,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x15 idx=0: Enable gyro filter",
+    "cmd_id": 21,
+    "idx": 0,
+    "value": 1.0,
+    "txid": 27,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x15 idx=1: Cutoff = 100 Hz",
+    "cmd_id": 21,
+    "idx": 1,
+    "value": 100.0,
+    "txid": 28,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x15 idx=0: Disable gyro filter",
+    "cmd_id": 21,
+    "idx": 0,
+    "value": 0.0,
+    "txid": 29,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x17 idx=0: Capture OF bias",
+    "cmd_id": 23,
+    "idx": 0,
+    "value": 0.0,
+    "txid": 30,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x1E idx=0: Set FIXED bias mode",
+    "cmd_id": 30,
+    "idx": 0,
+    "value": 0.0,
+    "txid": 31,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x1E idx=0: Set EMA bias mode",
+    "cmd_id": 30,
+    "idx": 0,
+    "value": 1.0,
+    "txid": 32,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x1E idx=1: EMA unfreeze",
+    "cmd_id": 30,
+    "idx": 1,
+    "value": 0.0,
+    "txid": 33,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x1E idx=1: EMA freeze",
+    "cmd_id": 30,
+    "idx": 1,
+    "value": 1.0,
+    "txid": 34,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x1E idx=0: Set EKF bias mode",
+    "cmd_id": 30,
+    "idx": 0,
+    "value": 2.0,
+    "txid": 35,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  },
+  {
+    "cmd": "CMD 0x1E idx=0: Back to FIXED bias mode",
+    "cmd_id": 30,
+    "idx": 0,
+    "value": 0.0,
+    "txid": 36,
+    "status": "timeout",
+    "reason": "no_response",
+    "detail": "No response within 3.0s"
+  }
+]

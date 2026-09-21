@@ -1,0 +1,21 @@
+﻿{
+    "0":  {
+              "_key_ts":  {
+                              "status.pitch_deg":  1789676022631778900,
+                              "status.roll_deg":  1789676022631778900,
+                              "status.yaw_deg":  1789676022631778900
+                          },
+              "dropped":  0,
+              "last_update_ns":  1789676022631778900,
+              "loss_pct":  0.0,
+              "received":  23203,
+              "sequence":  23203,
+              "source_time_ms":  0,
+              "tag":  "typed",
+              "values":  {
+                             "status.pitch_deg":  -1.298,
+                             "status.roll_deg":  -0.681,
+                             "status.yaw_deg":  -2.116
+                         }
+          }
+}

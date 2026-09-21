@@ -18,8 +18,9 @@
 #include "usart5.h"
 
 uint8_t  UA5RxSubscribeBuf[USART5_SUBSCRIBE_RX_LEN];
-uint16_t UA5RxSubscribeLen;
+volatile uint16_t UA5RxSubscribeLen;
 volatile uint8_t UA5RxSubscribePending;
+volatile uint8_t UA5RxSubscribeTransport = 0U;  /* default = UART5 */
 volatile uint8_t Subscribe_RxTransport = 0U;  /* default = UART5 */
 
 /* --- simulated clock ---------------------------------------------------- */
@@ -74,10 +75,18 @@ uint8_t Usart3_Stream_TxSend(const uint8_t* b, uint16_t l) { capture(b, l); retu
  * harness never triggers (they fire on 0x22/0x23 commands only). They must
  * exist at link time even though they are never invoked. */
 uint8_t PlatformRegistry_BuildDiscovery(uint8_t* out, uint16_t out_cap,
-                                        uint16_t* out_len) { (void)out; (void)out_cap; (void)out_len; return 0U; }
+                                         uint16_t* out_len) { (void)out; (void)out_cap; (void)out_len; return 0U; }
 uint8_t PlatformRegistry_BuildDigest(uint8_t* out, uint16_t out_cap,
-                                      uint16_t* out_len) { (void)out; (void)out_cap; (void)out_len; return 0U; }
+                                       uint16_t* out_len) { (void)out; (void)out_cap; (void)out_len; return 0U; }
 void PlatformRegistry_Init(void) {}
+
+/* Stub: firmware now serves FW_IDENTITY_CMD via this function.
+ * The host harness has no g_fw_identity; return 0 (not built). */
+uint8_t FwIdentity_BuildReply(uint8_t* out, uint16_t out_cap, uint16_t* out_len)
+{
+    (void)out; (void)out_cap; (void)out_len;
+    return 0U;
+}
 
 /* --- test scaffolding --------------------------------------------------- */
 static int fails, checks;

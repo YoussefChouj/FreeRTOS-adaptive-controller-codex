@@ -54,25 +54,30 @@
   ];
 
   // ── Raw IMU proxy groups (used until firmware exposes EKF) ────────────
-  // Honest labeling per S15 brief: rename to "Raw IMU" not "EKF"
+  // Honest labeling per S15 brief: rename to "Raw IMU" not "EKF".
+  // 2026-09-21 binding fix: the slot-0 subscribe layout now streams the
+  // raw BMI088 gyro/accel symbols and the ANO module altitude, mapped by
+  // the service to c.gyro_*, imu.acc_* and c.altitude_cm. The old
+  // slot0.chN.M keys only existed when the 0x08 schema was missing.
   var RAW_GROUPS = [
     {
       label: 'Raw IMU — Gyro (rad/s)',
-      keys: ['slot0.ch0.0', 'slot0.ch0.1'],
-      axisLabels: ['X', 'Y'],
-      fallback: ['ch0', 'ch1'],
+      keys: ['c.gyro_x', 'c.gyro_y', 'c.gyro_z'],
+      axisLabels: ['X', 'Y', 'Z'],
+      fallback: ['Gyro_X_Real', 'Gyro_Y_Real', 'Gyro_Z_Real'],
     },
     {
       label: 'Raw IMU — Accel (m/s²)',
-      keys: ['slot0.ch0.2'],
-      axisLabels: ['Z'],
-      fallback: ['ch2'],
+      keys: ['imu.acc_x', 'imu.acc_y', 'imu.acc_z'],
+      axisLabels: ['X', 'Y', 'Z'],
+      fallback: ['Acc_X_Real', 'Acc_Y_Real', 'Acc_Z_Real'],
     },
     {
-      label: 'Raw IMU — Baro Alt (m)',
-      keys: ['slot0.ch0.10'],
+      label: 'Raw IMU — ANO Alt (m)',
+      keys: ['c.altitude_cm'],
       axisLabels: ['ALT'],
-      fallback: ['ch10'],
+      fallback: ['ano_of.of_alt_cm'],
+      scale: 0.01,  // symbol is in cm; Frame C divided by 100 for metres
     },
   ];
 
@@ -304,6 +309,7 @@
           return;
         }
         var v = getValue(values, [slot0Key], g.fallback);
+        if (v != null && g.scale) v = Number(v) * g.scale;
         if (v != null) {
           anyUpdate = true;
           var ageMs = _keyLastSeen[slot0Key] ? (now - _keyLastSeen[slot0Key]) : 0;

@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .vscode/
+.worktrees/
 *.log
 *.tmp
 .DS_Store
@@ -24,6 +25,7 @@ OBJ/.build_identity.json
 OBJ/.prev-flashed/
 OBJ/startup_stm32f40_41xxx.lst
 OBJ/startup_stm32f40_41xxx.o
+OBJ/archive/
 
 # Keil GUI state
 USER/*.uvguix.*
@@ -33,11 +35,12 @@ ground_station/__pycache__/
 ground_station/**/__pycache__/
 ground_station/**/*.pyc
 
-# IDE temp files
-_cmd_*.py
-_examine_*.py
-_fix_*.py
-_scan_*.py
-_test_*.py
-*.swp
-*.swo
+# Agent infrastructure (session state, friction tracking)
+.agent_memory/
+.agent_state/
+
+# Cursor / Claude agent config
+.claude/
+.cursor/
+AGENTS.md
+ground_station/service_test_*.txt

@@ -32,9 +32,35 @@ CtrlerTypeDef Ctrler={
 };                  
 
 /******���ַ��롢�����޷���P I D ����޷���������޷�***********************/
+#define PID_IS_NONFINITE(x) (((x) != (x)) || ((x) > 1e12f) || ((x) < -1e12f))
+
 void ComputePID(PIDTypeDef *pPID)
 {
-	pPID->E = pPID->Des - pPID->FB;//���㵱ǰƫ��
+	if (PID_IS_NONFINITE(pPID->Des) || PID_IS_NONFINITE(pPID->FB) ||
+	    PID_IS_NONFINITE(pPID->SumE) || PID_IS_NONFINITE(pPID->PreE))
+	{
+		pPID->SumE = 0.0f;
+		pPID->PreE = 0.0f;
+		pPID->E    = 0.0f;
+		pPID->Up   = 0.0f;
+		pPID->Ui   = 0.0f;
+		pPID->Ud   = 0.0f;
+		pPID->U    = 0.0f;
+		return;
+	}
+
+	pPID->E = pPID->Des - pPID->FB;
+	if (PID_IS_NONFINITE(pPID->E))
+	{
+		pPID->SumE = 0.0f;
+		pPID->PreE = 0.0f;
+		pPID->E    = 0.0f;
+		pPID->Up   = 0.0f;
+		pPID->Ui   = 0.0f;
+		pPID->Ud   = 0.0f;
+		pPID->U    = 0.0f;
+		return;
+	}//���㵱ǰƫ��
 
 	if(pPID->aw_mode == AW_CLAMP)
 	{
@@ -113,6 +139,12 @@ void ComputePID(PIDTypeDef *pPID)
 
 		pPID->U = pPID->Up + pPID->Ui + pPID->Ud;/*λ��ʽPID���㹫ʽ*/
 		value_limit( pPID->U , -pPID->UMax , pPID->UMax );  /*PID��������޷�*/
+	}
+
+	if (PID_IS_NONFINITE(pPID->U) || PID_IS_NONFINITE(pPID->SumE))
+	{
+		pPID->SumE = 0.0f;
+		pPID->U    = 0.0f;
 	}
 
 	pPID->PreE = pPID->E ;//���汾��ƫ��

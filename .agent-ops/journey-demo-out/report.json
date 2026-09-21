@@ -1,0 +1,83 @@
+{
+  "base_url": "http://127.0.0.1:8081/",
+  "bundle": {
+    "error": null,
+    "fetched": true,
+    "path": "diagnostics-bundle.json"
+  },
+  "bundle_url": "http://127.0.0.1:8081/api/diagnostics/bundle",
+  "console_errors": [],
+  "counts": {
+    "failed": 1,
+    "passed": 1,
+    "steps": 2
+  },
+  "finished_ns": 1789904664895614700,
+  "fixture": null,
+  "http_errors": [],
+  "journey": "preflight demo",
+  "screenshots": [
+    "step-00-overview-loads.png",
+    "step-01-motors-must-be-armed.png"
+  ],
+  "started_ns": 1789904664892582700,
+  "steps": [
+    {
+      "assertions": [
+        {
+          "expected": "UAV Ground Station",
+          "kind": "text",
+          "passed": true
+        }
+      ],
+      "console_errors": [],
+      "error": null,
+      "failures": [],
+      "http_errors": [],
+      "index": 0,
+      "name": "overview loads",
+      "screenshot": "step-00-overview-loads.png",
+      "url": "http://127.0.0.1:8081/",
+      "verdict": "pass"
+    },
+    {
+      "assertions": [
+        {
+          "actual": "text not visible. visible text was: UAV Ground Station Connecting... DISARMED",
+          "expected": "MOTORS ARMED",
+          "kind": "text",
+          "passed": false
+        },
+        {
+          "actual": "no visible element matched [data-testid=\"motors-armed-indicator\"]",
+          "expected": "[data-testid=\"motors-armed-indicator\"]",
+          "kind": "testid",
+          "passed": false
+        }
+      ],
+      "console_errors": [],
+      "error": null,
+      "failures": [
+        {
+          "actual": "text not visible. visible text was: UAV Ground Station Connecting... DISARMED",
+          "expected": "MOTORS ARMED",
+          "kind": "text",
+          "passed": false
+        },
+        {
+          "actual": "no visible element matched [data-testid=\"motors-armed-indicator\"]",
+          "expected": "[data-testid=\"motors-armed-indicator\"]",
+          "kind": "testid",
+          "passed": false
+        }
+      ],
+      "http_errors": [],
+      "index": 1,
+      "name": "motors must be armed",
+      "screenshot": "step-01-motors-must-be-armed.png",
+      "url": "http://127.0.0.1:8081/control",
+      "verdict": "fail"
+    }
+  ],
+  "verdict": "fail"
+}

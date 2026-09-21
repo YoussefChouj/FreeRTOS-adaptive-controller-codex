@@ -1,0 +1,35 @@
+﻿{
+    "adapter_version":  "v2",
+    "command_results":  [
+
+                        ],
+    "connected":  true,
+    "last_transaction_result":  null,
+    "last_update_ns":  1789675800220342000,
+    "samples":  6267,
+    "schema_id":  "r1-s1-9F32E2EA",
+    "session_id":  "7c7220ab4a604aafbe23678ce209d826",
+    "slot_freshness_ttl_ns":  30000000000,
+    "streams":  {
+                    "0":  {
+                              "_key_ts":  {
+                                              "status.pitch_deg":  1789675800220342000,
+                                              "status.roll_deg":  1789675800220342000,
+                                              "status.yaw_deg":  1789675800220342000
+                                          },
+                              "dropped":  0,
+                              "last_update_ns":  1789675800220342000,
+                              "loss_pct":  0.0,
+                              "received":  6267,
+                              "sequence":  6267,
+                              "source_time_ms":  0,
+                              "tag":  "typed",
+                              "values":  {
+                                             "status.pitch_deg":  -1.031,
+                                             "status.roll_deg":  -0.788,
+                                             "status.yaw_deg":  25.343
+                                         }
+                          }
+                },
+    "telemetry_schema_id":  null
+}

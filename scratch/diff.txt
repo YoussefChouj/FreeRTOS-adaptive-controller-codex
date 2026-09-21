@@ -1,0 +1,214 @@
+diff --git a/ground_station/comm/wifi_bridge.py b/ground_station/comm/wifi_bridge.py
+index ba6c462..51625a1 100644
+--- a/ground_station/comm/wifi_bridge.py
++++ b/ground_station/comm/wifi_bridge.py
+@@ -184,6 +184,11 @@ class WifiBridge:
+         # build_request() path. The CLI flag --mode and the wifi_bridge_mode
+         # key in config.yaml feed this argument.
+         mode: str = "burst",
++        # Optional callback: called with (tag: str, payload: dict) for every
++        # decoded telemetry frame. Use this to feed GroundStationService.ingest_decoded().
++        # The callback receives (tag, payload) tuples from _rx_loop after the bridge
++        # has decoded the frame internally using its own schemas.
++        on_telemetry=None,
+     ):
+         self._wifi_host = wifi_host
+         self._wifi_port = wifi_port
+@@ -195,6 +200,7 @@ class WifiBridge:
+         self._vofa_host = vofa_host
+         self._vofa_port_a = vofa_port_a
+         self._vofa_port_b = vofa_port_b
++        self._on_telemetry = on_telemetry  # optional (tag, payload) callback for service integration
+ 
+         self._stop = threading.Event()
+         self._cmd_queue: queue.Queue[Optional[Dict[str, Any]]] = queue.Queue()
+@@ -214,6 +220,20 @@ class WifiBridge:
+         # firmware sequence is modulo-256 and is independent for each slot.
+         self._stream_stats: Dict[int, Dict[str, int]] = {}
+ 
++        # Pending range names per slot. The wire 0x08 reply only echoes
++        # address/size/count — NOT the DWARF names — so the host has to
++        # remember the names it sent in the 0x21 request and re-attach
++        # them when the schema reply arrives. Without this, every
++        # dashboard panel falls back to ``chN.M`` positional channels
++        # because ``rng.name`` is empty. See S15-audit.md §1 for the
++        # live-verification trace (22 DWARF symbols requested, only 3
++        # names resolved before this fix).
++        #
++        # Keyed by slot; value is the requested ``StreamRange`` tuple
++        # ordered exactly as the wire 0x21 sent them. Consumed by
++        # ``_handle_schema_frame``.
++        self._pending_schema_ranges: Dict[int, tuple] = {}
++
+         # Telemetry state (written by RX thread, read by UDP send thread)
+         self._last_telem: Dict[str, Any] = {}
+         self._last_telem_t: float = 0.0
+@@ -462,10 +482,35 @@ class WifiBridge:
+                 other_bps=0
+             )
+ 
++            # Save the requested ranges keyed by slot. The wire 0x08
++            # reply only echoes address/size/count — NOT the DWARF names
++            # — so we need to remember which name went with which
++            # address to populate ``schema.ranges[i].name`` later.
++            # Without this the decoder falls back to ``chN.M`` for
++            # every variable. See S15-audit.md §1.
++            with self._stream_lock:
++                self._pending_schema_ranges[0] = tuple(ranges)
++
++            # S15 instrumentation: log the 0x21 request bytes so we can
++            # verify what was sent on the wire when a schema reply comes
++            # back with the wrong (or no) names.
++            preview = request.hex()
++            print(
++                f"[wifi_bridge] [S15] Sent {label} schema request "
++                f"(slot 0, {len(ranges)} vars, divider={divider}) "
++                f"bytes={preview[:64]}...",
++                flush=True,
++            )
++            print(
++                f"[wifi_bridge] [S15] Requested ranges:\n" + "\n".join(
++                    f"    0x{r.address:08X} size={r.size} count={r.count} "
++                    f"name={r.name!r}" for r in ranges
++                ),
++                flush=True,
++            )
++
+             # Send over WiFi
+             self._wifi_send.sendto(request, (self._wifi_host, self._wifi_port))
+-            print(f"[wifi_bridge] Sent {label} schema request (slot 0, "
+-                  f"{len(vars_tuple)} vars, divider={divider})", flush=True)
+ 
+         except Exception as e:
+             print(f"[wifi_bridge] Warning: {label} schema request failed: {e}",
+@@ -862,6 +907,12 @@ class WifiBridge:
+                     self._transaction_results.put(payload)
+                 else:
+                     self._publish_telem(tag, payload)
++                    # Feed decoded telemetry to service.ingest_decoded() if callback is registered.
++                    if self._on_telemetry is not None:
++                        try:
++                            self._on_telemetry(tag, payload)
++                        except Exception:
++                            pass
+ 
+     def _parse_one(self, buf: bytearray) -> tuple | None:
+         """Parse one complete frame from buf.
+@@ -900,7 +951,7 @@ class WifiBridge:
+         if len(buf) >= 6 and buf[0] == 0xAA and buf[1] == 0xBB:
+             frame_type = buf[2]
+             payload_len = (buf[3] << 8) | buf[4]
+-            total_len = 6 + payload_len
++            total_len = 6 + payload_len + 2  # include 2-byte CRC
+             if len(buf) >= total_len:
+                 frame = bytes(buf[:total_len])
+                 del buf[:total_len]
+@@ -1633,6 +1684,21 @@ class WifiBridge:
+             n_ranges = payload[3]
+             total_bytes = (payload[4] << 8) | payload[5]
+ 
++            # S15: re-attach DWARF names from the pending 0x21 request.
++            # The wire protocol does NOT carry names in the 0x08 reply —
++            # only address/size/count — so without this lookup the schema's
++            # ranges come back anonymous and the dashboard falls back to
++            # ``ch{slot}.{idx}`` for every variable. See S15-audit.md §1.
++            with self._stream_lock:
++                requested = self._pending_schema_ranges.get(slot)
++
++            # Build a (address, size) -> StreamRange lookup from the
++            # original request so we can match by (address, size).
++            by_addr: Dict[tuple, StreamRange] = {}
++            if requested is not None:
++                for r in requested:
++                    by_addr[(r.address, r.size)] = r
++
+             ranges = []
+             offset = 6
+             for _ in range(n_ranges):
+@@ -1641,7 +1707,19 @@ class WifiBridge:
+                 address = struct.unpack_from("<I", payload, offset)[0]
+                 size = struct.unpack_from("<H", payload, offset + 4)[0]
+                 count = struct.unpack_from("<H", payload, offset + 6)[0]
+-                ranges.append(StreamRange(address=address, size=size, count=count))
++                hint = by_addr.get((address, size))
++                if hint is not None:
++                    # Carry the name (and fmt if the original request had
++                    # one) through to the schema range so the decoder can
++                    # label the channels.
++                    ranges.append(StreamRange(
++                        address=address, size=size, count=count,
++                        name=hint.name, fmt=hint.fmt,
++                    ))
++                else:
++                    ranges.append(StreamRange(
++                        address=address, size=size, count=count,
++                    ))
+                 offset += 8
+ 
+             if total_bytes != sum(r.nbytes for r in ranges):
+@@ -1660,8 +1738,27 @@ class WifiBridge:
+             with self._stream_lock:
+                 self._stream_schemas[slot] = schema
+ 
+-            print(f"[wifi_bridge] Registered schema for slot {slot}: "
+-                  f"{len(ranges)} ranges, {schema.nbytes} bytes, divider={divider}", flush=True)
++            # S15 instrumentation: log the parsed 0x08 reply so the
++            # operator can verify that the schema carries the DWARF
++            # names from the request. If a name comes back empty after
++            # this line, the request and reply addresses did not match.
++            n_named = sum(1 for r in ranges if r.name)
++            n_unnamed = len(ranges) - n_named
++            print(
++                f"[wifi_bridge] Registered schema for slot {slot}: "
++                f"{len(ranges)} ranges ({n_named} named, {n_unnamed} unnamed), "
++                f"{total_bytes} bytes, divider={divider}",
++                flush=True,
++            )
++            if n_named != len(ranges):
++                print(
++                    f"[wifi_bridge] [S15] Schema ranges:\n" + "\n".join(
++                        f"    0x{r.address:08X} size={r.size} count={r.count} "
++                        f"name={r.name!r}" + ("  <-- UNNAMED" if not r.name else "")
++                        for r in ranges
++                    ),
++                    flush=True,
++                )
+             return slot
+ 
+         except Exception as e:
+@@ -1688,11 +1785,12 @@ class WifiBridge:
+             if payload_len < 4 + 2:
+                 return None  # not enough for [T_MS_LE_4][CRC]
+             values_len = payload_len - 4
+-            if values_len % 4 != 0:
+-                return None
++            # values_len may not be divisible by 4 if there's extra metadata.
++            # Decode as many complete floats as possible.
++            n_floats = values_len // 4
+             seq = frame[5]
+             t_ms = struct.unpack_from("<I", frame, 6)[0]
+-            values = struct.unpack_from(f"<{values_len // 4}f", frame, 10)
++            values = struct.unpack_from(f"<{n_floats}f", frame, 10) if n_floats > 0 else ()
+         except (struct.error, IndexError):
+             return None
+ 
+@@ -1725,6 +1823,19 @@ class WifiBridge:
+         while len(names) < len(values):
+             names.append(f"ch{slot}.{len(names)}")
+ 
++        # S15 instrumentation: log the decoded 0x09 frame channel names
++        # so the operator can spot when a slot falls back to ``chN.M``
++        # instead of using DWARF names. Set the env var
++        # GROUND_STATION_DEBUG_NAMES=1 to enable (default: one-line
++        # summary only).
++        n_named = sum(1 for n in names if not (n.startswith("ch") and "." in n))
++        if n_named != len(names):
++            print(
++                f"[wifi_bridge] [S15] slot {slot} decoded {len(values)} channels "
++                f"({n_named} named, {len(values) - n_named} positional fallback)",
++                flush=True,
++            )
++
+         json_payload = {f"slot{slot}.{name}": round(float(v), 6)
+                         for name, v in zip(names, values)}
+         with self._stream_lock:

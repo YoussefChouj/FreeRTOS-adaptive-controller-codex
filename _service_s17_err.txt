@@ -1,0 +1,5 @@
+usage: __main__.py [-h] [--port PORT] [--wifi-host WIFI_HOST]
+                   [--wifi-port WIFI_PORT] [--no-auto-subscribe]
+                   [--rtos-bridge] [--rtos-interval RTOS_INTERVAL]
+                   [--preset PRESET] [--freshness-ttl FRESHNESS_TTL]
+__main__.py: error: unrecognized arguments: 2>&1

@@ -88,4 +88,8 @@
 ..\obj\main.o: ..\API\mrac.h
 ..\obj\main.o: ..\API\gyro_filter.h
 ..\obj\main.o: fault_capture.h
+..\obj\main.o: ..\firmware\platform_registry.h
+..\obj\main.o: ..\firmware\platform_registry_gen.h
 ..\obj\main.o: ..\API\subscribe.h
+..\obj\main.o: ..\API\fw_identity.h
+..\obj\main.o: ..\API\send_prof.h

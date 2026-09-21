@@ -1,0 +1,133 @@
+# FreeRTOS-adaptive-controller-codex — Project Agent Instructions
+
+## Project identity
+
+This is a clean workspace derived from the full UAV adaptive controller project.
+It contains only the firmware code plus the four operational capabilities needed
+to work with the running hardware.
+
+**Original project** (full agent orchestration): `FreeRTOS---Six_Degrees_of_Freedom _Adaptive_controller`
+
+## What is in this project
+
+| Path | What it is |
+| --- | --- |
+| `API/` `TASK/` `BSP/` `USER/` | STM32F4 firmware sources. Compiled by Keil ARMCC V5.06. |
+| `FreeRTOS/` `Global_file/` `stm32_lib/` | Vendor / FreeRTOS / HAL support headers and sources. |
+| `OBJ/JX_FLY.axf` | Build output with DWARF — needed for symbol-named reads. |
+| `ground_station/livewatch/` | pyOCD probe: read/write memory, registers, flash, breakpoints, watchpoints, RTT, SWO, GDB, DWARF-named reads. |
+| `ground_station/comm/` | UDP/serial telemetry: `wifi_bridge`, frame decoders, subscribe protocol helpers. |
+| `ground_station/flashtool/` | Keil/UV4 build orchestration + pyOCD flash helpers. |
+| `docs/telemetry-protocol.md` | Wire-format reference for subscribe protocol (frame types 0x08/0x09..0x0C). |
+| `docs/glossary.md` | Domain terms. |
+| `docs/skills/` | Reference docs for the four core capabilities. |
+| `docs/dashboard-platform/` | Long-lived firmware/dashboard platform specification. |
+
+## The four core capabilities
+
+These are the only agent-level workflows in this project.
+
+### 1. livewatch (probe)
+Full pyOCD capability layer. Read or write any memory, flash, halt/step/resume/reset,
+breakpoints, watchpoints, RTT, SWO trace, GDB server — by DWARF name or by address.
+
+```powershell
+# Always verify first — catches stale ELF
+python -m ground_station.livewatch verify
+
+python -m ground_station.livewatch read mrac_state.roll.What[0]
+python -m ground_station.livewatch watch group:ekf --hz 20 --secs 30
+python -m ground_station.livewatch log of_drift --secs 60
+```
+
+### 2. capture-multislot
+Drive a multi-slot subscribe capture over WiFi from a shell (no GUI).
+
+```powershell
+python -m ground_station.livewatch.capture_preset flight_comprehensive --secs 10
+```
+
+Preset definitions: `ground_station/livewatch/multi_slot_presets.yaml`
+
+### 3. micoair-connect
+Establish and validate a working MicoAir WiFi UDP connection (`192.168.4.1` AP).
+
+### 4. stream-log
+Log any firmware variables from the running drone to CSV over serial or WiFi,
+at up to four independent rates — no firmware change and no reflash.
+
+```powershell
+python -m ground_station.livewatch.stream_log --seconds 30 --out logs/run.csv
+```
+
+## Firmware build
+
+```powershell
+# Keil uVision CLI build (from USER/ directory)
+UV4 -b -t JX_FLY -j0 JX_FLY.uvprojx
+
+# Then flash
+python -m ground_station.flashtool.rebuild_and_flash --force --yes
+```
+
+## Hardware notes
+
+- **Flashing**: SWD wireless debugger on UART5, WiFi module on USART3.
+- **Inner-PID axis mapping**: `gyrox` = roll loop, `gyroy` = pitch loop.
+- **EKF** (`s_ekf`) is shadow mode. Do not wire EKF output into control paths without explicit approval.
+- **Cold-boot == flash**. A successful firmware flash produces a cold-boot init by default.
+- **Flash integrity is the operator's responsibility.** UV4 silent link noop is a known failure mode.
+  Verify with `python -m ground_station.livewatch verify`.
+
+## Safety
+
+- **Research drone override (2026-08-18):** All pyOCD probe capabilities are unlocked.
+  The agent has unrestricted access to `python -m ground_station.livewatch`.
+- **EKF shadow mode**: Do not wire `s_ekf` output into control paths without explicit approval.
+- **Arm gate**: Flashing is blocked when armed.
+
+## Conventions
+
+- C for Keil ARMCC V5.06. Declarations at block top, no VLAs, no C99-only constructs.
+- Match surrounding style over personal preference.
+- Minimum code that solves the problem. Nothing speculative.
+- Touch only what the task requires.
+
+## Available skills
+
+Use slash commands to invoke these:
+
+| Skill | Purpose |
+| --- | --- |
+| `/telemetry-control` | Real-time telemetry observation + command injection |
+| `/autonomous-drone-debug` | Extended open-loop debug session without operator interaction |
+| `/session-start` | Begin a session — read state, surface open items |
+| `/session-end` | Wrap up — summarize, verify, update session state |
+| `/friction` | Capture a friction moment to `.agent_memory/frictions.jsonl` |
+| `/distill-frictions` | Synthesize friction patterns into prevention proposals |
+| `/google-style-guide` | Apply Google Developer Documentation Style Guide |
+| `/livewatch` | Reference: full probe capability (also in `docs/skills/livewatch.md`) |
+| `/stream-log` | Reference: variable-rate CSV logging + rebuild/flash pipeline |
+| `/capture-multislot` | Reference: multi-slot WiFi capture (also in `docs/skills/capture-multislot.md`) |
+
+## Session state
+
+The canonical session state lives in `.claude_state.md`. Read it at the start of every
+session. Update it at the end.
+
+## Friction tracking
+
+Lightweight friction capture via `/friction`. Aggregated synthesis via `/distill-frictions`.
+Friction data lives in `.agent_memory/frictions.jsonl`. Proposals land in
+`.agent_state/friction-proposals/`.
+
+## What was deliberately removed
+
+This copy has none of the following (from the parent project):
+- Cursor / Claude rule files, agent definitions, command files, hooks
+- The dispatcher / planner / implementer / reviewer subagents
+- Session archives, agent contracts, agent memory, agent scripts
+- The wiki, the knowledge graph, the CocoIndex database
+- The Streamlit web dashboard, the legacy GUI, the simulation harness
+
+If you need any of those, they live in the parent project.

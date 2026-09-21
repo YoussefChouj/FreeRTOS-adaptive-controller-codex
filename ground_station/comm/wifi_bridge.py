@@ -76,6 +76,8 @@ from .boot_default_layout import (
     BOOT_DEFAULT_DIVIDER,
     DASHBOARD_FRAME_A_VARS,
     DASHBOARD_FRAME_A_DIVIDER,
+    DASHBOARD_PANEL_EXTRA_VARS,
+    DASHBOARD_PANEL_EXTRA_DIVIDER,
 )
 from ground_station.platform.transactions import Command as TransactionCommand
 from ground_station.platform.transactions import build_command as build_transaction_command
@@ -428,7 +430,10 @@ class WifiBridge:
                 default at divider 20 → ~10 Hz wire rate.
 
         See ``ground_station/comm/boot_default_layout.py`` for the var lists
-        and divider rationale.
+        and divider rationale. With ``layout="dashboard"`` a second request
+        is fired for slot 1 carrying ``DASHBOARD_PANEL_EXTRA_VARS`` — the
+        Frame B/C-equivalent variables the block-diagram / estimator /
+        safety panels read (2026-09-22 binding-table task).
         """
         if layout == "dashboard":
             vars_tuple = DASHBOARD_FRAME_A_VARS
@@ -443,6 +448,26 @@ class WifiBridge:
                 f"layout must be 'dashboard' or 'boot_default', got {layout!r}"
             )
 
+        self._request_stream_schema(0, vars_tuple, divider, label)
+        if layout == "dashboard":
+            # Panel extras ride on slot 1: the firmware caps a slot at
+            # SUBSCRIBE_MAX_STREAM_RANGES = 62 ranges (API/subscribe.h:189),
+            # and 54 sidebar + 25 panel vars on one slot would be rejected
+            # whole with "E:too many ranges", killing the sidebar stream.
+            self._request_stream_schema(
+                1, DASHBOARD_PANEL_EXTRA_VARS, DASHBOARD_PANEL_EXTRA_DIVIDER,
+                "dashboard-panel-extras")
+
+    def _request_stream_schema(self, slot: int, vars_tuple, divider: int,
+                               label: str) -> None:
+        """Send a 0x21 subscribe request for one slot's var tuple.
+
+        Shared by the slot-0 dashboard/boot-default layouts and the slot-1
+        panel-extras layout (2026-09-22 binding-table task). The 0x08
+        schema reply arrives on the RX thread and is decoded by
+        ``_parse_one`` → ``_handle_schema_frame``, which reads the slot's
+        entry in ``_pending_schema_ranges`` to name the channels.
+        """
         try:
             from ground_station.livewatch.stream import build_stream_request, StreamRange
             from ground_station.livewatch.symbols import SymbolResolver
@@ -477,13 +502,13 @@ class WifiBridge:
                       file=sys.stderr, flush=True)
                 return
 
-            # Build 0x21 request for slot 0. TRANSPORT_USART3 = 1.
+            # Build 0x21 request. TRANSPORT_USART3 = 1.
             request = build_stream_request(
                 ranges=ranges,
                 divider=divider,
                 transport=1,
                 usart3_baud=921600,
-                slot=0,
+                slot=slot,
                 other_bps=0
             )
 
@@ -494,7 +519,7 @@ class WifiBridge:
             # Without this the decoder falls back to ``chN.M`` for
             # every variable. See S15-audit.md §1.
             with self._stream_lock:
-                self._pending_schema_ranges[0] = tuple(ranges)
+                self._pending_schema_ranges[slot] = tuple(ranges)
 
             # S15 instrumentation: log the 0x21 request bytes so we can
             # verify what was sent on the wire when a schema reply comes
@@ -502,7 +527,7 @@ class WifiBridge:
             preview = request.hex()
             print(
                 f"[wifi_bridge] [S15] Sent {label} schema request "
-                f"(slot 0, {len(ranges)} vars, divider={divider}) "
+                f"(slot {slot}, {len(ranges)} vars, divider={divider}) "
                 f"bytes={preview[:64]}...",
                 flush=True,
             )

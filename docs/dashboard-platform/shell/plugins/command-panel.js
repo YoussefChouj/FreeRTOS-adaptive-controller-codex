@@ -1629,19 +1629,33 @@
 
   function renderReadbackValue() {
     var s1 = _state && _state.streams ? (_state.streams[1] || _state.streams['1']) : null;
-    
+    // 2026-09-21 binding fix: g_of_bias_mode / g_of_bias_ema_freeze now
+    // stream on slot 0 (auto-subscribed dashboard layout, service maps
+    // them to their unprefixed spellings); slot 1 only carries them when
+    // a preset explicitly subscribed the bias frame there.
+    var s0 = _state && _state.streams ? (_state.streams[0] || _state.streams['0']) : null;
+
     // OF Bias specific readback
     var ofModeSpan = q('cp-of-readback-mode');
     var ofFreezeSpan = q('cp-of-readback-freeze');
     if (ofModeSpan && ofFreezeSpan) {
+      var mVal, fVal;
       if (s1 && s1.values) {
-        var mVal = s1.values['slot1.g_of_bias_mode'] !== undefined ? s1.values['slot1.g_of_bias_mode'] : s1.values['g_of_bias_mode'];
-        var fVal = s1.values['slot1.g_of_bias_ema_freeze'] !== undefined ? s1.values['slot1.g_of_bias_ema_freeze'] : s1.values['g_of_bias_ema_freeze'];
-        ofModeSpan.innerHTML = mVal !== undefined ? (mVal===0?'FIXED':mVal===1?'EMA':mVal===2?'EKF':String(mVal)) : '<span style="color:var(--amber)">NOT PUBLISHED</span>';
-        ofFreezeSpan.innerHTML = fVal !== undefined ? String(fVal) : '<span style="color:var(--amber)">NOT PUBLISHED</span>';
-      } else {
+        mVal = s1.values['slot1.g_of_bias_mode'] !== undefined ? s1.values['slot1.g_of_bias_mode'] : s1.values['g_of_bias_mode'];
+        fVal = s1.values['slot1.g_of_bias_ema_freeze'] !== undefined ? s1.values['slot1.g_of_bias_ema_freeze'] : s1.values['g_of_bias_ema_freeze'];
+      }
+      if (mVal === undefined && s0 && s0.values) {
+        mVal = s0.values['g_of_bias_mode'] !== undefined ? s0.values['g_of_bias_mode'] : s0.values['slot0.g_of_bias_mode'];
+      }
+      if (fVal === undefined && s0 && s0.values) {
+        fVal = s0.values['g_of_bias_ema_freeze'] !== undefined ? s0.values['g_of_bias_ema_freeze'] : s0.values['slot0.g_of_bias_ema_freeze'];
+      }
+      if (mVal === undefined && !(s1 && s1.values) && !(s0 && s0.values)) {
         ofModeSpan.innerHTML = '<span style="color:var(--amber)">NOT PUBLISHED</span>';
         ofFreezeSpan.innerHTML = '<span style="color:var(--amber)">NOT PUBLISHED</span>';
+      } else {
+        ofModeSpan.innerHTML = mVal !== undefined ? (mVal===0?'FIXED':mVal===1?'EMA':mVal===2?'EKF':String(mVal)) : '<span style="color:var(--amber)">NOT PUBLISHED</span>';
+        ofFreezeSpan.innerHTML = fVal !== undefined ? String(fVal) : '<span style="color:var(--amber)">NOT PUBLISHED</span>';
       }
     }
 

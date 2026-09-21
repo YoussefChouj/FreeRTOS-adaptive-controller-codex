@@ -35,8 +35,8 @@ extern UCHAR8 Custom_DataBuf[68];
  * DMA burst overran a 96 B mailbox and corrupted whatever sat after it in
  * BSS -- this was the prime suspect in the recent HardFault incident
  * (subscribe audit Finding 1). BSS growth: +160 B (1.6 % of 192 KB RAM). */
-#define USART3_RXDMA_LEN           256
-#define USART3_RXMB_LEN            256
+#define USART3_RXDMA_LEN           512
+#define USART3_RXMB_LEN            512
 
 /* ---- continuous TX ring ------------------------------------------------
  * 3.6x the largest frame the throughput ladder emits (1124 B). The top rung

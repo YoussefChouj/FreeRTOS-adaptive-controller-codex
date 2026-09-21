@@ -1,3 +1,5 @@
+#pragma diag_suppress 1267
+
 #include "send_data.h"
 #include "mrac.h"
 #include "gyro_filter.h"
@@ -19,6 +21,7 @@
 #include "gs_command.h"
 #include "command_protocol.h"
 #include "rtos_observability.h"
+#include "send_prof.h"
 
 /* Body-frame gyroscope rates (rad/s) — needed for Frame C body-rate telemetry.
  * Declared as extern in bmi088_driver.h. */
@@ -204,7 +207,11 @@ void ANO_Report_UserData1(void)  //����5
 	
 	/*--------------------------����DMA����---------------------------*/
 	
-  while(DMA_GetCurrDataCounter(DMA1_Stream7));		   //��֮ǰ�ķ���
+  /* Non-blocking check: skip if previous DMA1_Stream7 transfer is still active */
+  if (DMA_GetCurrDataCounter(DMA1_Stream7) != 0U) {
+      return;
+  }
+  //��֮ǰ�ķ���
   DMA_ClearITPendingBit(DMA1_Stream7, DMA_IT_TCIF7); //����DMA_Mode_Normal,����û��ʹ������ж�ҲҪ�������������ֻ��һ��
     
   DMA_Cmd(DMA1_Stream7, DISABLE);				             //���õ�ǰ����ֵǰ�Ƚ���DMA
@@ -311,14 +318,22 @@ void send_to_linux(void)    //����4
       return;
   }
 
-  while(DMA_GetCurrDataCounter(DMA1_Stream4));		   //��֮ǰ�ķ���
-  DMA_ClearITPendingBit(DMA1_Stream4, DMA_IT_TCIF4); //����DMA_Mode_Normal,����û��ʹ������ж�ҲҪ�������������ֻ��һ��
+  /* Non-blocking check: skip if previous DMA1_Stream4 transfer is still active */
+  if (DMA_GetCurrDataCounter(DMA1_Stream4) != 0U) {
+      return;
+  }
+  //֮ǰķ
+  DMA_ClearITPendingBit(DMA1_Stream4, DMA_IT_TCIF4); //DMA_Mode_Normal,ûʹжҲҪֻһ
     
-  DMA_Cmd(DMA1_Stream4, DISABLE);				             //���õ�ǰ����ֵǰ�Ƚ���DMA
-  DMA1_Stream4->M0AR = (uint32_t)&DataBuf_to_linux;  //���õ�ǰ�������ݻ���ַ:Memory0 tARget
-  DMA1_Stream4->NDTR = 52;     //���õ�ǰ���������ݵ�����:Number of Data units to be TRansferred
+  DMA_Cmd(DMA1_Stream4, DISABLE);				             //õǰֵǰȽDMA
+  {
+      uint32_t timeout = 1000U;
+      while ((DMA_GetCmdStatus(DMA1_Stream4) == ENABLE) && (--timeout > 0U)) { }
+  }
+  DMA1_Stream4->M0AR = (uint32_t)&DataBuf_to_linux;  //õǰݻַ:Memory0 tARget
+  DMA1_Stream4->NDTR = 52;     //õǰݵ:Number of Data units to be TRansferred
   DMA_Cmd(DMA1_Stream4, ENABLE);		
-                                        //����DMA���� 		
+                                        //DMA 		
 
 }
 /* --- USART3 throughput test mode -- TEMPORARY, set back to 0 when done ------
@@ -634,17 +649,20 @@ extern float Lin_Acc_X_body, Lin_Acc_Y_body, Lin_Acc_Z_body;   /* gravity-remove
 
 void Send_Groundstation_Telemetry_UART4(void)
 {
-    PlatformObservability_Tick((uint16_t)((gs_cmd_head + 16U - gs_cmd_tail) % 16U),
-                               (uint16_t)(Usart3_Stream_Busy() != 0U));
     static uint8_t frame_counter = 0;
     uint16_t len = 0;
     uint8_t crc = 0;
     int i;
+    uint8_t dma_busy = 0U;
     /* Set to 1 when the built frame(s) already carry their own trailing checksum
      * (Frame A closes its own CRC8 before Frame C is appended). When set, the
      * shared XOR-CRC8 at the end of this function is skipped so it does not
      * clobber the framing. Stays 0 for single-frame buffers (B / ID / bench / OF). */
     uint8_t frame_self_crc = 0;
+    uint32_t t_prof_sec;
+
+    PlatformObservability_Tick((uint16_t)((gs_cmd_head + 16U - gs_cmd_tail) % 16U),
+                               (uint16_t)(Usart3_Stream_Busy() != 0U));
 
     /* Wait for the PREVIOUS UART5 transfer to drain BEFORE touching the buffer.
      *
@@ -663,10 +681,8 @@ void Send_Groundstation_Telemetry_UART4(void)
      *
      * Waiting here costs nothing when the previous frame has already drained (the common
      * case) and simply paces this task to the link when it has not. */
-    while (DMA_GetCurrDataCounter(DMA1_Stream7));
-
-    Buf_Telemetry_UART4[0] = 0xAA;
-    Buf_Telemetry_UART4[1] = 0xBB;
+    /* Non-blocking check: if previous UART5 DMA transfer is still active, do not busy-wait */
+    dma_busy = ((DMA_GetCurrDataCounter(DMA1_Stream7) != 0U) || (DMA_GetCmdStatus(DMA1_Stream7) == ENABLE)) ? 1U : 0U;
 
     /* EKF step: runs every Send_Task tick, unconditionally — independent of which
      * telemetry frame this tick happens to emit. NOTE the tick is 100 Hz in normal
@@ -676,6 +692,7 @@ void Send_Groundstation_Telemetry_UART4(void)
      * operation), silently defeating the EKF_RUN_ENABLED/EKF_TELEM_ENABLED split
      * meant to decouple "does it run" from "do we transmit it" (ADR-0011).
      * IMU accel is in mg -> convert to m/s^2. */
+    t_prof_sec = DWT->CYCCNT;
     if (!s_ekf_inited) {
         Ekf9_Init(&s_ekf, EKF_RUN_ENABLED);
         s_ekf_inited = 1U;
@@ -741,6 +758,22 @@ void Send_Groundstation_Telemetry_UART4(void)
          * see the same vertical velocity. */
         Ekf9_UpdateZRate(&s_ekf, ano_of.of2_h_f2_v);
     }
+    SendProf_Record(&g_send_prof.sec_ekf, t_prof_sec);
+
+    /* UART5 still draining the previous burst: skip this tick's A/B frame
+     * instead of spinning. A staged subscribe request stays pending
+     * (UA5RxSubscribePending) and is answered on the next free tick, since
+     * its reply also needs DMA1_Stream7. */
+    if (dma_busy != 0U) {
+        t_prof_sec = DWT->CYCCNT;
+        Subscribe_StreamTick();
+        SendProf_Record(&g_send_prof.sec_subscribe_tick, t_prof_sec);
+        return;
+    }
+
+    t_prof_sec = DWT->CYCCNT;
+    Buf_Telemetry_UART4[0] = 0xAA;
+    Buf_Telemetry_UART4[1] = 0xBB;
 
     if (motor_test_active) // FRAME 0x04 — motor bench-test stream @100Hz (replaces A/B while active)
     {
@@ -1257,13 +1290,11 @@ void Send_Groundstation_Telemetry_UART4(void)
     frame_counter++;
     
     // DMA transfer on UART5 wireless link (DMA1_Stream7)
-    while(DMA_GetCurrDataCounter(DMA1_Stream7));
-
     DMA_Cmd(DMA1_Stream7, DISABLE);
-    /* Wait for the stream to actually stop before rewriting M0AR/NDTR — the EN
-     * bit clears only once the current burst has drained; reconfiguring early
-     * corrupts the transfer. */
-    while (DMA_GetCmdStatus(DMA1_Stream7) == ENABLE);
+    {
+        uint32_t timeout = 1000U;
+        while ((DMA_GetCmdStatus(DMA1_Stream7) == ENABLE) && (--timeout > 0U)) { }
+    }
 
     /* Clear ALL stream-7 event flags before re-enabling, not just TCIF7. The
      * larger back-to-back Frame A+C burst latches a (benign) FIFO-error FEIF7
@@ -1276,6 +1307,7 @@ void Send_Groundstation_Telemetry_UART4(void)
     DMA1_Stream7->M0AR = (uint32_t)&Buf_Telemetry_UART4;
     DMA1_Stream7->NDTR = len;
     DMA_Cmd(DMA1_Stream7, ENABLE);
+    SendProf_Record(&g_send_prof.sec_telem_build, t_prof_sec);
 
     /* Streaming subscription (CMD 0x21). Ticked BEFORE the request handler so
      * a subscription accepted this cycle starts emitting on the next one,
@@ -1283,7 +1315,9 @@ void Send_Groundstation_Telemetry_UART4(void)
      * No-op when no stream is active, so the default cadence is unchanged.
      * When the stream is routed to USART3 this touches DMA1_Stream3 only and
      * never waits on the UART5 telemetry burst above. */
+    t_prof_sec = DWT->CYCCNT;
     Subscribe_StreamTick();
+    SendProf_Record(&g_send_prof.sec_subscribe_tick, t_prof_sec);
 
     /* ADR-0011 follow-up (uart5_address_subscription_cmd): if a UART5
      * subscribe request has been staged by the IRQ-side parser (BSP/usart5.c),
@@ -1292,7 +1326,9 @@ void Send_Groundstation_Telemetry_UART4(void)
      * telemetry; no new FreeRTOS task is created, and the live telemetry
      * cadence is unchanged when no request is pending. */
     if (UA5RxSubscribePending != 0U) {
+        t_prof_sec = DWT->CYCCNT;
         Uart5_Subscribe_HandleRequest();
+        SendProf_Record(&g_send_prof.sec_uart5_request, t_prof_sec);
     }
 }
 
@@ -1443,8 +1479,16 @@ void Process_GroundStation_Command(void)
             
             if (axis < 4 && elem < MAX_NUM_BASIS) {
                 if      (id == 0x02 && val >  0.0f) configs[axis]->gamma[elem]      = val;
-                else if (id == 0x05 && val >= 0.0f) configs[axis]->What_limit[elem] = val;
-                else if (id == 0x08 && val >= 0.0f) configs[axis]->What_tol[elem]   = val;
+                /* The projection only divides by What_tol inside the
+                 * (What_limit - What_tol) band, so a limit below tol inverts it.
+                 * elem 0 also keeps the symmetric lower bound MRAC_Init sets. */
+                else if (id == 0x05 && val >= configs[axis]->What_tol[elem]) {
+                    configs[axis]->What_limit[elem] = val;
+                    if (elem == 0) configs[axis]->What_lower_limit[0] = -val;
+                }
+                else if (id == 0x08 && val >= 0.0f &&
+                         val <= configs[axis]->What_limit[elem])
+                    configs[axis]->What_tol[elem] = val;
             }
         }
 
@@ -1478,13 +1522,13 @@ void Process_GroundStation_Command(void)
             configs[2] = &mrac_config_yaw;
             configs[3] = &mrac_config_z;
             if (idx < 4) {
-                configs[idx]->mrac_to_mixer = val;
+                if (val > 1.0f) configs[idx]->mrac_to_mixer = val;
             } else if (idx < 8) {
                 configs[idx - 4]->u_max = val;
             } else if (idx == 8) {
                 if (val >= 0.0f && val <= 1.0f) gs_throttle_min_pct = val;
             } else if (idx == 9) {
-                if (val >= 0.0f && val <= 1.0f) gs_throttle_max_pct = val;
+                if (val >= 0.50f && val <= 1.0f) gs_throttle_max_pct = val;
             }
         }
 
@@ -1837,16 +1881,18 @@ void Process_GroundStation_Command(void)
         else if (id == 0x0E) {
             if (idx == 0) {
                 if (((uint8_t)(val + 0.5f)) != 0) {
-                    GS_KeySDKflag = 1U;
                     FlightFSM_Event(FLIGHT_EVENT_ARM_REQUEST);
-                    RCInput_SetAuthority(1U);
-                    /* If already airborne, override the -1.0f throttle floor that
-                     * SetAuthority just set.  Without this, the motor-idle guard
-                     * (Z_pos.FB < 0.3 && THR < -0.85) fires immediately and cuts
-                     * motors mid-flight.  On the ground the floor stays at -1.0f
-                     * so the pilot must raise the throttle slider deliberately. */
-                    if (Ctrler.Z_posPID.FB > 0.35f) {
-                        RCInput_SetVirtualStick(RC_AXIS_THR, 0.0f);
+                    if (FlightFSM_GetState() == FLIGHT_STATE_ARMED) {
+                        GS_KeySDKflag = 1U;
+                        RCInput_SetAuthority(1U);
+                        /* If already airborne, override the -1.0f throttle floor that
+                         * SetAuthority just set.  Without this, the motor-idle guard
+                         * (Z_pos.FB < 0.3 && THR < -0.85) fires immediately and cuts
+                         * motors mid-flight.  On the ground the floor stays at -1.0f
+                         * so the pilot must raise the throttle slider deliberately. */
+                        if (Ctrler.Z_posPID.FB > 0.35f) {
+                            RCInput_SetVirtualStick(RC_AXIS_THR, 0.0f);
+                        }
                     }
                 } else {
                     /* ARM REQ OFF: relinquish PC authority only — drone stays ARMED.

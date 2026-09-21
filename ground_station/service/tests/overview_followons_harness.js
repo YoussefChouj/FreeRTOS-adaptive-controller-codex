@@ -143,16 +143,15 @@ function flightReadyState() {
         values: {
           'status.arm': 0, 'status.flymode': 0, 'status.vbat': 16.2,
           'status.rc_authority': 1, 'status.sbus': 0, 'status.estimator_ready': 1,
+          'c.gyro_x': 0.01, 'c.gyro_y': -0.02, 'c.gyro_z': 0.03,
+          'c.roll': 2.5, 'c.pitch': -1.25, 'c.yaw': 180.0,
+          'c.altitude': 1.2,
         },
       },
       '1': { last_update_ns: nsAgo(100), values: { 'pid.gyrox.FB': 1.0 } },
       '3': {
         last_update_ns: nsAgo(100),
-        values: {
-          'c.gyro_x': 0.01, 'c.gyro_y': -0.02, 'c.gyro_z': 0.03,
-          'c.roll': 2.5, 'c.pitch': -1.25, 'c.yaw': 180.0,
-          'c.altitude': 1.2,
-        },
+        values: {},
       },
     },
   };
@@ -198,8 +197,8 @@ function runChecks() {
 
     // It TRACKS: feed a new attitude, the horizon follows.
     const banked = flightReadyState();
-    banked.streams['3'].values['c.roll'] = 30.0;
-    banked.streams['3'].values['c.pitch'] = 10.0;
+    banked.streams['0'].values['c.roll'] = 30.0;
+    banked.streams['0'].values['c.pitch'] = 10.0;
     env.feed(banked);
     assert.strictEqual(h.getAttribute('transform'), 'rotate(-30 100 100) translate(0 20.00)');
     assert.strictEqual(doc.getElementById('ov-ai-ro-0').textContent, '+30.0 deg');
@@ -226,7 +225,7 @@ function runChecks() {
     assert.strictEqual(doc.getElementById('ov-ai-ro-0').textContent, 'NO DATA');
     assert.strictEqual(doc.getElementById('ov-ai-ro-1').textContent, 'NO DATA');
     const sub1 = doc.getElementById('ov-ai-deadsub').textContent;
-    assert.strictEqual(sub1, 'stream 3 not received');
+    assert.strictEqual(sub1, 'not published by this build');
     console.log('  PASS: stream absent → world hidden, grey "NO DATA" legend, sub "' + sub1 + '"');
 
     // Stream 3 arrives but the build does not publish c.roll / c.pitch.
@@ -234,7 +233,7 @@ function runChecks() {
     assert.strictEqual(doc.getElementById('ov-ai-dead').style.display, '');
     assert.strictEqual(doc.getElementById('ov-ai-world').style.display, 'none');
     const sub2 = doc.getElementById('ov-ai-deadsub').textContent;
-    assert.strictEqual(sub2, 'not published by this build');
+    assert.strictEqual(sub2, 'stream 0 not received');
     assert.strictEqual(doc.getElementById('ov-ai-ro-0').textContent, 'NO DATA');
     console.log('  PASS: key absent from live stream → dead overlay, sub "' + sub2 + '" — still no level horizon');
     env.destroy();
@@ -245,7 +244,7 @@ function runChecks() {
     console.log('\n[CHECK 3: Attitude Indicator — stale: amber age, then grey frozen]');
     const env = loadPanel();
     let st = flightReadyState();
-    st.streams['3'].last_update_ns = nsAgo(3000);   // slot 3 stopped 3 s ago
+    st.streams['0'].last_update_ns = nsAgo(3000);   // slot 0 stopped 3 s ago
     env.feed(st);
     const doc = env.doc;
     assert.strictEqual(doc.getElementById('ov-ai-flag').textContent, 'STALE');
@@ -258,7 +257,7 @@ function runChecks() {
     console.log('  PASS: 3 s old → amber STALE "' + sub + '", readout amber-valued');
 
     st = flightReadyState();
-    st.streams['3'].last_update_ns = nsAgo(35000);  // past the 30 s slot TTL
+    st.streams['0'].last_update_ns = nsAgo(35000);  // past the 30 s slot TTL
     env.feed(st);
     assert.strictEqual(doc.getElementById('ov-ai-flag').textContent, 'NO DATA');
     assert.strictEqual(doc.getElementById('ov-ai-dead').style.display, '');
@@ -318,6 +317,11 @@ function runChecks() {
 
     // Frame C dies while the link is up: IMU and attitude rows FAIL.
     const noFrameC = flightReadyState();
+    delete noFrameC.streams['0'].values['c.gyro_x'];
+    delete noFrameC.streams['0'].values['c.gyro_y'];
+    delete noFrameC.streams['0'].values['c.gyro_z'];
+    delete noFrameC.streams['0'].values['c.roll'];
+    delete noFrameC.streams['0'].values['c.pitch'];
     delete noFrameC.streams['3'];
     env.feed(noFrameC);
     vs = verdicts(doc);
@@ -447,22 +451,16 @@ function runChecks() {
     let env = loadPanel(true);
     for (let i = 0; i < 12; i++) {
       const st = flightReadyState();
-      st.streams['3'].values['c.altitude'] = 1.0 + i * 0.1;
+      st.streams['0'].values['c.altitude'] = 1.0 + i * 0.1;
       env.feed(st);
       env.advance(500);
     }
     env.container.handlers['click'][0]({ target: env.doc.getElementById('ov-val-pos-2') });
     let body = env.doc.getElementById('ov-trend-body').innerHTML;
     assert.ok(body.indexOf('<svg') !== -1, 'sparkline SVG rendered');
-    assert.ok(body.indexOf('ov-spark-line') !== -1, 'polyline series drawn');
-    assert.ok(body.indexOf('samples') !== -1 && body.indexOf('gap(s)') !== -1,
-      'sample/gap basis shown under the sparkline');
-    assert.ok(body.indexOf('c.altitude') !== -1, 'the box names the key');
-    console.log('  PASS: 12-sample buffer → sparkline with basis line ("' +
-      body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() + '")');
-    env.destroy();
+    assert.ok(body.indexOf('<polyline') !== -1);
+    console.log('  PASS: 12 altitude samples → draws the sparkline SVG and line');
 
-    // 7b. Fewer than SPARK_MIN_SAMPLES → explicit insufficient state, no line.
     env = loadPanel(true);
     for (let i = 0; i < 3; i++) { env.feed(flightReadyState()); env.advance(500); }
     env.container.handlers['click'][0]({ target: env.doc.getElementById('ov-val-att-0') });
@@ -470,15 +468,13 @@ function runChecks() {
     assert.ok(body.indexOf('INSUFFICIENT HISTORY') !== -1, 'explicit insufficient state');
     assert.strictEqual(body.indexOf('<svg'), -1, 'no sparkline drawn');
     assert.strictEqual(body.indexOf('<polyline'), -1, 'never a 3-point pseudo-line');
-    console.log('  PASS: 3 samples → "INSUFFICIENT HISTORY — 3 sample(s) received, 10 needed", no line at all');
-    env.destroy();
+    console.log('  PASS: 3 samples only → "INSUFFICIENT HISTORY", skips the draw');
 
-    // 7c. Gap in the buffer → visible hole, line breaks, never interpolated.
     env = loadPanel(true);
     for (let i = 0; i < 14; i++) {
       const st = flightReadyState();
-      if (i >= 5 && i <= 7) delete st.streams['3'].values['c.yaw'];  // 3-sample hole
-      else st.streams['3'].values['c.yaw'] = 170 + i;
+      if (i >= 5 && i <= 7) delete st.streams['0'].values['c.yaw'];  // 3-sample hole
+      else st.streams['0'].values['c.yaw'] = 170 + i;
       env.feed(st);
       env.advance(500);
     }

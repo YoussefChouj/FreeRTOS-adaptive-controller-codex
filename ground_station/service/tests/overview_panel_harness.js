@@ -126,21 +126,16 @@ function fullState() {
           'mrac.pitch.u_ad': -0.021, 'mrac.pitch.e': 0.033,
           'ekf.vel_x': 1.5, 'ekf.vel_y': -0.5, 'ekf.vel_z': 0.1,
           'ekf.bias_gyro_x': 0.0001, 'ekf.bias_gyro_y': -0.0002, 'ekf.bias_gyro_z': 0.0003,
-        },
-      },
-      '1': {
-        last_update_ns: nsAgo(100),
-        values: {
           'pid.gyrox.FB': 12.3, 'pid.gyroy.FB': -45.6, 'pid.gyroz.FB': 7.8,
           'pid.gyrox.U': 0.123, 'pid.gyroy.U': -0.234, 'pid.gyroz.U': 0.345,
+          'c.gyro_x': 0.12, 'c.gyro_y': -0.34, 'c.gyro_z': 0.56,
+          'c.roll': 2.5, 'c.pitch': -1.25, 'c.yaw': 180.0,
+          'c.earth_x': 12.34, 'c.earth_y': -5.67, 'c.altitude': 275.0,
         },
       },
       '3': {
         last_update_ns: nsAgo(100),
         values: {
-          'c.gyro_x': 0.12, 'c.gyro_y': -0.34, 'c.gyro_z': 0.56,
-          'c.roll': 2.5, 'c.pitch': -1.25, 'c.yaw': 180.0,
-          'c.earth_x': 12.34, 'c.earth_y': -5.67, 'c.altitude': 2.75,
           'motor.rpm_0': 5400, 'motor.rpm_1': 5500, 'motor.rpm_2': 5600, 'motor.rpm_3': 5700,
         },
       },
@@ -206,8 +201,8 @@ function runChecks() {
     }
     const v = doc.getElementById('ov-val-imu-0').textContent;
     assert.notStrictEqual(v, '0'); assert.notStrictEqual(v, '0.00 rad/s'); assert.notStrictEqual(v, '—');
-    assert.strictEqual(v, 'NO DATA');
-    assert.strictEqual(doc.getElementById('ov-sub-imu').textContent, 'stream 3 not received');
+    assert.strictEqual(doc.getElementById('ov-sub-imu').textContent, 'not published by this build');
+    assert.strictEqual(doc.getElementById('ov-sub-motors').textContent, 'stream 3 not received');
     console.log('  PASS: absent stages render grey "NO DATA / stream N not received" — no zeros, no blanks');
 
     // Key absent while slot present → "not published by this build"
@@ -227,10 +222,10 @@ function runChecks() {
     env.feed(st);
     const doc = env.doc;
 
-    const att = doc.getElementById('ov-stage-att');
+    const att = doc.getElementById('ov-stage-motors');
     assert.strictEqual(att.className, 'ov-stage ov-stage-warn', 'stale stage must be amber');
-    assert.strictEqual(doc.getElementById('ov-flag-att').textContent, 'STALE');
-    const sub = doc.getElementById('ov-sub-att').textContent;
+    assert.strictEqual(doc.getElementById('ov-flag-motors').textContent, 'STALE');
+    const sub = doc.getElementById('ov-sub-motors').textContent;
     assert.ok(/^age 3\.\d s$/.test(sub), 'age readout must be shown, got "' + sub + '"');
     assert.strictEqual(doc.getElementById('ov-stage-mrac').className, 'ov-stage ov-stage-ok',
       'slot-0 stage stays green — fault localises to slot 3 only');
@@ -241,11 +236,11 @@ function runChecks() {
     st = fullState();
     st.streams['3'].last_update_ns = nsAgo(35000);  // past the 30 s slot TTL
     env.feed(st);
-    assert.strictEqual(doc.getElementById('ov-stage-att').className, 'ov-stage ov-stage-nodata',
+    assert.strictEqual(doc.getElementById('ov-stage-motors').className, 'ov-stage ov-stage-nodata',
       'past TTL the stage must go grey');
-    const sub2 = doc.getElementById('ov-sub-att').textContent;
+    const sub2 = doc.getElementById('ov-sub-motors').textContent;
     assert.ok(sub2.indexOf('stale 3') === 0, 'grey sub shows frozen age, got "' + sub2 + '"');
-    assert.strictEqual(doc.getElementById('ov-val-att-0').textContent, 'NO DATA',
+    assert.strictEqual(doc.getElementById('ov-val-motors-0').textContent, 'NO DATA',
       'frozen last value must NOT be displayed as live');
     console.log('  PASS: after TTL the stage is grey "NO DATA" (' + sub2 + ') — frozen value suppressed');
     env.destroy();

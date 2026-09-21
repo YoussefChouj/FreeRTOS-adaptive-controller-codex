@@ -1,0 +1,257 @@
+{
+  "commands": [
+    {
+      "cmd_id": 0,
+      "index": 0,
+      "value": 0.0,
+      "description": "No-op",
+      "txid": 9
+    },
+    {
+      "cmd_id": 1,
+      "index": 0,
+      "value": 1.5,
+      "description": "PID: pitch Kp",
+      "txid": 10
+    },
+    {
+      "cmd_id": 3,
+      "index": 0,
+      "value": 0.8,
+      "description": "Mixer 0",
+      "txid": 11
+    },
+    {
+      "cmd_id": 7,
+      "index": 0,
+      "value": 1.0,
+      "description": "Bench mode ON",
+      "txid": 12
+    },
+    {
+      "cmd_id": 7,
+      "index": 0,
+      "value": 0.0,
+      "description": "Bench mode OFF",
+      "txid": 13
+    },
+    {
+      "cmd_id": 9,
+      "index": 0,
+      "value": 5.0,
+      "description": "Max horiz speed",
+      "txid": 14
+    },
+    {
+      "cmd_id": 14,
+      "index": 0,
+      "value": 0.0,
+      "description": "Release SDK authority",
+      "txid": 15
+    },
+    {
+      "cmd_id": 16,
+      "index": 0,
+      "value": 0.0,
+      "description": "Reset world origin",
+      "txid": 16
+    },
+    {
+      "cmd_id": 18,
+      "index": 0,
+      "value": 1.0,
+      "description": "Waypoint spacing",
+      "txid": 17
+    },
+    {
+      "cmd_id": 19,
+      "index": 0,
+      "value": 0.0,
+      "description": "Switch ref model",
+      "txid": 18
+    },
+    {
+      "cmd_id": 20,
+      "index": 7,
+      "value": 1.0,
+      "description": "Geofence enable",
+      "txid": 19
+    },
+    {
+      "cmd_id": 20,
+      "index": 7,
+      "value": 0.0,
+      "description": "Geofence disable",
+      "txid": 20
+    },
+    {
+      "cmd_id": 21,
+      "index": 0,
+      "value": 1.0,
+      "description": "Gyro filter enable",
+      "txid": 21
+    },
+    {
+      "cmd_id": 21,
+      "index": 1,
+      "value": 100.0,
+      "description": "Gyro filter cutoff",
+      "txid": 22
+    },
+    {
+      "cmd_id": 21,
+      "index": 0,
+      "value": 0.0,
+      "description": "Gyro filter disable",
+      "txid": 23
+    },
+    {
+      "cmd_id": 23,
+      "index": 0,
+      "value": 0.0,
+      "description": "OF bias capture",
+      "txid": 24
+    },
+    {
+      "cmd_id": 30,
+      "index": 0,
+      "value": 0.0,
+      "description": "Bias mode = FIXED",
+      "txid": 25
+    },
+    {
+      "cmd_id": 30,
+      "index": 0,
+      "value": 1.0,
+      "description": "Bias mode = EMA",
+      "txid": 26
+    },
+    {
+      "cmd_id": 30,
+      "index": 1,
+      "value": 1.0,
+      "description": "EMA freeze ON",
+      "txid": 27
+    },
+    {
+      "cmd_id": 30,
+      "index": 1,
+      "value": 0.0,
+      "description": "EMA freeze OFF",
+      "txid": 28
+    },
+    {
+      "cmd_id": 30,
+      "index": 0,
+      "value": 2.0,
+      "description": "Bias mode = EKF",
+      "txid": 29
+    },
+    {
+      "cmd_id": 30,
+      "index": 0,
+      "value": 0.0,
+      "description": "Bias mode = FIXED (back to default)",
+      "txid": 30
+    }
+  ],
+  "results": [
+    {
+      "command_id": 30,
+      "detail": "queued",
+      "index": 0,
+      "reason": "NONE",
+      "status": "ack",
+      "time_ns": 1789680061782043100,
+      "transaction_id": 4
+    },
+    {
+      "command_id": 30,
+      "detail": "applied",
+      "index": 0,
+      "reason": "NONE",
+      "status": "applied",
+      "time_ns": 1789680061844408500,
+      "transaction_id": 4
+    },
+    {
+      "command_id": 16,
+      "detail": "queued",
+      "index": 0,
+      "reason": "NONE",
+      "status": "ack",
+      "time_ns": 1789680078537875300,
+      "transaction_id": 5
+    },
+    {
+      "command_id": 16,
+      "detail": "applied",
+      "index": 0,
+      "reason": "NONE",
+      "status": "applied",
+      "time_ns": 1789680078600157800,
+      "transaction_id": 5
+    },
+    {
+      "command_id": 7,
+      "detail": "queued",
+      "index": 0,
+      "reason": "NONE",
+      "status": "ack",
+      "time_ns": 1789680095247579800,
+      "transaction_id": 6
+    },
+    {
+      "command_id": 7,
+      "detail": "applied",
+      "index": 0,
+      "reason": "NONE",
+      "status": "applied",
+      "time_ns": 1789680095308889000,
+      "transaction_id": 6
+    },
+    {
+      "command_id": 7,
+      "detail": "queued",
+      "index": 0,
+      "reason": "NONE",
+      "status": "ack",
+      "time_ns": 1789680111450368500,
+      "transaction_id": 7
+    },
+    {
+      "command_id": 7,
+      "detail": "applied",
+      "index": 0,
+      "reason": "NONE",
+      "status": "applied",
+      "time_ns": 1789680111514065600,
+      "transaction_id": 7
+    },
+    {
+      "command_id": 23,
+      "detail": "queued",
+      "index": 0,
+      "reason": "NONE",
+      "status": "ack",
+      "time_ns": 1789680127734085900,
+      "transaction_id": 8
+    },
+    {
+      "command_id": 23,
+      "detail": "applied",
+      "index": 0,
+      "reason": "NONE",
+      "status": "applied",
+      "time_ns": 1789680127796021200,
+      "transaction_id": 8
+    }
+  ],
+  "initial_bias_mode": 2,
+  "final_bias_mode": 0,
+  "summary": {
+    "applied": 0,
+    "rejected": 0,
+    "pending": 22
+  }
+}

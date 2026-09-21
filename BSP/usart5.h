@@ -7,9 +7,9 @@
 /*����5ͨ�Ż��峤��*/
 #define UART5_RX_STREAM         DMA1_Stream0
 #define UART5_TX_STREAM         DMA1_Stream7
-#define USART5_RXDMA_LEN           256
-#define USART5_RXMB_LEN            256
-#define USART5_SUBSCRIBE_RX_LEN    256
+#define USART5_RXDMA_LEN           512
+#define USART5_RXMB_LEN            512
+#define USART5_SUBSCRIBE_RX_LEN    512
 
 void UART5_Configuration(void);
 void Handle_UART5_GroundStation_Command(void);
@@ -44,7 +44,8 @@ void Uart5_Subscribe_TxSend(const uint8_t* buf, uint16_t len);
 extern UCHAR8 UA5RxDMAbuf[USART5_RXDMA_LEN] ;
 extern UCHAR8 UA5RxMailbox[USART5_RXMB_LEN] ;
 extern UCHAR8 UA5RxSubscribeBuf[USART5_SUBSCRIBE_RX_LEN];
-extern uint16_t UA5RxSubscribeLen;
+extern volatile uint16_t UA5RxSubscribeLen;
 extern volatile uint8_t UA5RxSubscribePending;
+extern volatile uint8_t UA5RxSubscribeTransport;
 extern USART_RX_TypeDef UART5_Rcr;
 #endif

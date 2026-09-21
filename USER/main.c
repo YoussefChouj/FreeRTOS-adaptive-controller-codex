@@ -8,6 +8,8 @@
  * Send_Task to gate the legacy Frame A/B/C emission when the host has
  * requested SUBSCRIBE_ONLY mode. Pulls in Subscribe_TelemetryMode_e. */
 #include "subscribe.h"
+#include "fw_identity.h"
+#include "send_prof.h"
 
 /* DEBUG-telemetry-bisect: instrumentation kept for future use. Flip to `#if 1`
  * to re-enable the UART5 polling checkpoints and the priority-5 counter
@@ -122,6 +124,8 @@ void vApplicationMallocFailedHook(void)
 int main(void)
 { 
     PlatformRegistry_Init();
+    RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_CRC, ENABLE);
+    FwIdentity_Compute();
     BSP_Init(); // Initialize Board Support Package (hardware peripherals: GPIO, timers, UART, etc.)
 
     /* Persistent fault logger: checks for a captured fault from a previous boot,
@@ -241,16 +245,23 @@ void SystemMonitor_Task(void *pvParameters)
 }
 
 /*--------------------------------------------------------
-�������ܣ� ���ߴ������� (h��n sh�� g��ng n��ng: w�� xi��n chu��n k��u r��n w��) - "Function: Wireless serial port task"
+Function: Wireless serial port task
 // Frame rate: 100 Hz normal flight; 200 Hz during a SysID run (id_frame_on) for clean high-rate ID.
 ----------------------------------------------------------*/
 void Send_Task(void *pvParameters)
 {
     TickType_t PreviousWakeTime;
+    uint32_t t_start;
+    uint32_t t_sec;
+
+    SendProf_Init();
     PreviousWakeTime = xTaskGetTickCount();
     /* DEBUG-telemetry-bisect: dbg_uart5_puts("SEND-RAN\r\n"); (fires once when Send_Task first runs) */
   while(1)
   {
+        t_start = DWT->CYCCNT;
+        SendProf_TaskStart(t_start);
+
         // SysID high-rate mode (id_frame_on): stream the single-axis ID frame at a STABLE 200 Hz
         // (1:1 with the 200 Hz Stabilizer loop -> no aliasing; clean periodic capture for FRF /
         // 2nd-order+ plant ID, which a multisine needs to avoid spectral leakage).
@@ -274,16 +285,29 @@ void Send_Task(void *pvParameters)
             if (g_telemetry_mode != SUBSCRIBE_TELEMETRY_SUBSCRIBE_ONLY) {
                 Send_Groundstation_Telemetry_UART4(); // single-axis ID frame (0x03) or OF-cal frame (0x05) -> UART5 (DMA1_Stream7)
             } else {
+                t_sec = DWT->CYCCNT;
                 Subscribe_StreamTick();                // 0x0A stream frames on USART3 (WiFi) for active slots
+                SendProf_Record(&g_send_prof.sec_subscribe_tick, t_sec);
+                if (UA5RxSubscribePending != 0U) { // serial subscribe mailbox; MIXED services it inside Send_Groundstation_Telemetry_UART4
+                    t_sec = DWT->CYCCNT;
+                    Uart5_Subscribe_HandleRequest();
+                    SendProf_Record(&g_send_prof.sec_uart5_request, t_sec);
+                }
             }
 #else
             Send_Groundstation_Telemetry_UART4(); // single-axis ID frame (0x03) or OF-cal frame (0x05) -> UART5 (DMA1_Stream7)
 #endif
+            t_sec = DWT->CYCCNT;
             Process_GroundStation_Command();      // still service START/ABORT/flag commands
+            SendProf_Record(&g_send_prof.sec_process_cmd, t_sec);
+
+            SendProf_TaskEnd(t_start);
             vTaskDelay(pdMS_TO_TICKS(5));          // hard 5 ms floor = stable ~200 Hz, no runaway
             PreviousWakeTime = xTaskGetTickCount(); // re-base so the 100 Hz path resumes cleanly after a run
         } else {
+            t_sec = DWT->CYCCNT;
             send_to_linux(); // Send data to Linux companion computer (if present)
+            SendProf_Record(&g_send_prof.sec_send_to_linux, t_sec);
 #if SUBSCRIBE_BUILD_DEFAULT_SUBSCRIBE
             /* Same gate as the SysID branch above: in SUBSCRIBE_ONLY the
              * 3.7 ms legacy DMA busy-wait goes away and Send_Task runs at
@@ -292,13 +316,27 @@ void Send_Task(void *pvParameters)
             if (g_telemetry_mode != SUBSCRIBE_TELEMETRY_SUBSCRIBE_ONLY) {
                 Send_Groundstation_Telemetry_UART4(); // Send telemetry to Ground Station
             } else {
+                t_sec = DWT->CYCCNT;
                 Subscribe_StreamTick();                // 0x0A stream frames on USART3 (WiFi) for active slots
+                SendProf_Record(&g_send_prof.sec_subscribe_tick, t_sec);
+                if (UA5RxSubscribePending != 0U) { // serial subscribe mailbox; MIXED services it inside Send_Groundstation_Telemetry_UART4
+                    t_sec = DWT->CYCCNT;
+                    Uart5_Subscribe_HandleRequest();
+                    SendProf_Record(&g_send_prof.sec_uart5_request, t_sec);
+                }
             }
 #else
             Send_Groundstation_Telemetry_UART4(); // Send telemetry to Ground Station
 #endif
+            t_sec = DWT->CYCCNT;
             Process_GroundStation_Command(); // Process received commands
-            usart3_send();//�������������� - "UART3 send task" - transmit data via UART3 peripheral
+            SendProf_Record(&g_send_prof.sec_process_cmd, t_sec);
+
+            t_sec = DWT->CYCCNT;
+            usart3_send();// - "UART3 send task" - transmit data via UART3 peripheral
+            SendProf_Record(&g_send_prof.sec_usart3_send, t_sec);
+
+            SendProf_TaskEnd(t_start);
             vTaskDelayUntil(&PreviousWakeTime, pdMS_TO_TICKS(10)); // 10ms = 100 Hz
         }
         system_monitor.USART2_task_cnt++; // Increment task execution counter (for monitoring task health)

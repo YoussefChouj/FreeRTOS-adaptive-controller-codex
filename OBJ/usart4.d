@@ -85,3 +85,4 @@
 ..\obj\usart4.o: ..\BSP\usart5.h
 ..\obj\usart4.o: ..\API\GPS.h
 ..\obj\usart4.o: ..\TASK\send_data.h
+..\obj\usart4.o: ..\firmware\gs_command.h

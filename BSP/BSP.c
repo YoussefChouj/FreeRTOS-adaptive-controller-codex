@@ -37,7 +37,9 @@ void BSP_Init(void)
     delay_ms(2000);
 
     SPI_Configuration();
-    bmi088_init();
+    if (!bmi088_init()) {
+        sensor.sensor_ok = 0U;
+    }
 
     USART1_Configuration();
     USART2_Configuration();

@@ -95,3 +95,7 @@
 ..\obj\send_data.o: ..\API\calib.h
 ..\obj\send_data.o: ..\API\ekf.h
 ..\obj\send_data.o: ..\API\subscribe.h
+..\obj\send_data.o: ..\firmware\gs_command.h
+..\obj\send_data.o: ..\firmware\command_protocol.h
+..\obj\send_data.o: ..\firmware\rtos_observability.h
+..\obj\send_data.o: ..\API\send_prof.h

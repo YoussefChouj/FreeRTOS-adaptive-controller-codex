@@ -1,0 +1,104 @@
+{
+  "base_url": "http://127.0.0.1:8099/",
+  "bundle": {
+    "error": "HTTPError: HTTP Error 404: File not found",
+    "fetched": false,
+    "path": "diagnostics-bundle.json"
+  },
+  "bundle_url": "http://127.0.0.1:8099/api/diagnostics/bundle",
+  "console_errors": [
+    "[error] Failed to load resource: the server responded with a status of 404 (File not found)",
+    "[error] [replay] fetchSessions error: SyntaxError: Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON",
+    "[error] Failed to load resource: the server responded with a status of 501 (Unsupported method ('POST'))"
+  ],
+  "counts": {
+    "failed": 0,
+    "passed": 1,
+    "steps": 1
+  },
+  "finished_ns": 1789904964378109900,
+  "fixture": null,
+  "http_errors": [
+    "404 GET http://127.0.0.1:8099/experiments",
+    "404 GET http://127.0.0.1:8099/sessions",
+    "404 GET http://127.0.0.1:8099/health/slots",
+    "404 GET http://127.0.0.1:8099/health",
+    "404 GET http://127.0.0.1:8099/state",
+    "501 POST http://127.0.0.1:8099/subscribe/preview"
+  ],
+  "journey": "real-driver-shell-static",
+  "screenshots": [
+    "step-00-shell-renders-over-static-http.png"
+  ],
+  "started_ns": 1789904961659738000,
+  "steps": [
+    {
+      "assertions": [
+        {
+          "expected": "UAV Ground Station",
+          "kind": "text",
+          "passed": true
+        },
+        {
+          "expected": "Diagnostics",
+          "kind": "text",
+          "passed": true
+        },
+        {
+          "expected": "[data-testid=\"tab-diagnostics\"]",
+          "kind": "testid",
+          "passed": true
+        }
+      ],
+      "console_errors": [
+        "[error] Failed to load resource: the server responded with a status of 404 (File not found)",
+        "[error] Failed to load resource: the server responded with a status of 404 (File not found)",
+        "[error] [replay] fetchSessions error: SyntaxError: Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON",
+        "[error] Failed to load resource: the server responded with a status of 404 (File not found)",
+        "[error] Failed to load resource: the server responded with a status of 404 (File not found)",
+        "[error] Failed to load resource: the server responded with a status of 404 (File not found)",
+        "[error] Failed to load resource: the server responded with a status of 501 (Unsupported method ('POST'))",
+        "[error] Failed to load resource: the server responded with a status of 404 (File not found)",
+        "[error] Failed to load resource: the server responded with a status of 404 (File not found)",
+        "[error] Failed to load resource: the server responded with a status of 404 (File not found)",
+        "[error] Failed to load resource: the server responded with a status of 404 (File not found)",
+        "[error] Failed to load resource: the server responded with a status of 404 (File not found)",
+        "[error] Failed to load resource: the server responded with a status of 404 (File not found)",
+        "[error] Failed to load resource: the server responded with a status of 404 (File not found)",
+        "[error] Failed to load resource: the server responded with a status of 404 (File not found)",
+        "[error] Failed to load resource: the server responded with a status of 404 (File not found)",
+        "[error] Failed to load resource: the server responded with a status of 404 (File not found)",
+        "[error] Failed to load resource: the server responded with a status of 404 (File not found)",
+        "[error] Failed to load resource: the server responded with a status of 404 (File not found)"
+      ],
+      "error": null,
+      "failures": [],
+      "http_errors": [
+        "404 GET http://127.0.0.1:8099/experiments",
+        "404 GET http://127.0.0.1:8099/sessions",
+        "404 GET http://127.0.0.1:8099/health/slots",
+        "404 GET http://127.0.0.1:8099/health",
+        "404 GET http://127.0.0.1:8099/state",
+        "501 POST http://127.0.0.1:8099/subscribe/preview",
+        "404 GET http://127.0.0.1:8099/experiments",
+        "404 GET http://127.0.0.1:8099/health",
+        "404 GET http://127.0.0.1:8099/state",
+        "404 GET http://127.0.0.1:8099/experiments",
+        "404 GET http://127.0.0.1:8099/health",
+        "404 GET http://127.0.0.1:8099/state",
+        "404 GET http://127.0.0.1:8099/experiments",
+        "404 GET http://127.0.0.1:8099/state",
+        "404 GET http://127.0.0.1:8099/health",
+        "404 GET http://127.0.0.1:8099/experiments",
+        "404 GET http://127.0.0.1:8099/health",
+        "404 GET http://127.0.0.1:8099/state"
+      ],
+      "index": 0,
+      "name": "shell renders over static http",
+      "screenshot": "step-00-shell-renders-over-static-http.png",
+      "url": "http://127.0.0.1:8099/index.html",
+      "verdict": "pass"
+    }
+  ],
+  "verdict": "pass"
+}

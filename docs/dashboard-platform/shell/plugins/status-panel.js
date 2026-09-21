@@ -463,9 +463,9 @@
         source = 'gyro_*';
         break;
       }
-      if (v['rate.roll'] != null) {
-        roll = v['rate.roll']; pitch = v['rate.pitch']; yaw = v['rate.yaw'];
-        source = 'rate.*';
+      if (v['c.gyro_x'] != null) {
+        roll = v['c.gyro_x']; pitch = v['c.gyro_y']; yaw = v['c.gyro_z'];
+        source = 'c.gyro_*';
         break;
       }
     }

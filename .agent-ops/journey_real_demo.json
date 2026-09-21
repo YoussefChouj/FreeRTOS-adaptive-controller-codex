@@ -1,0 +1,14 @@
+{
+  "name": "real-driver-shell-static",
+  "fail_on_console_errors": false,
+  "steps": [
+    {
+      "name": "shell renders over static http",
+      "page": "/index.html",
+      "tab": "diagnostics",
+      "assert_text": ["UAV Ground Station", "Diagnostics"],
+      "assert_testid": ["tab-diagnostics"],
+      "allow_console_errors": true
+    }
+  ]
+}

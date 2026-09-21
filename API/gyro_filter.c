@@ -6,6 +6,8 @@
 
 #include "gyro_filter.h"
 #include <math.h>
+#include "FreeRTOS.h"
+#include "task.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846f
@@ -30,28 +32,41 @@ static void biquad_design(Biquad_t* f, float fc)
 {
     float w0, cw, sw, alpha, a0;
     float fc_max = 0.45f * s_fs; // keep below Nyquist with margin
+    float b0, b1, b2, a1, a2, new_fc;
 
     if (fc <= 0.0f) {
         // Disabled cutoff -> identity (pass-through), but keep state defined.
-        f->b0 = 1.0f; f->b1 = 0.0f; f->b2 = 0.0f;
-        f->a1 = 0.0f; f->a2 = 0.0f;
-        f->fc = 0.0f;
-        return;
+        b0 = 1.0f;
+        b1 = 0.0f;
+        b2 = 0.0f;
+        a1 = 0.0f;
+        a2 = 0.0f;
+        new_fc = 0.0f;
+    } else {
+        if (fc > fc_max) fc = fc_max;
+
+        w0 = 2.0f * M_PI * fc / s_fs;
+        cw = cosf(w0);
+        sw = sinf(w0);
+        alpha = sw / 1.41421356f; // 2*Q with Q=1/sqrt(2)  -> sin/(2Q)=sin/sqrt(2)
+        a0 = 1.0f + alpha;
+
+        b0 = ((1.0f - cw) * 0.5f) / a0;
+        b1 = (1.0f - cw) / a0;
+        b2 = ((1.0f - cw) * 0.5f) / a0;
+        a1 = (-2.0f * cw) / a0;
+        a2 = (1.0f - alpha) / a0;
+        new_fc = fc;
     }
-    if (fc > fc_max) fc = fc_max;
 
-    w0 = 2.0f * M_PI * fc / s_fs;
-    cw = cosf(w0);
-    sw = sinf(w0);
-    alpha = sw / 1.41421356f; // 2*Q with Q=1/sqrt(2)  -> sin/(2Q)=sin/sqrt(2)
-    a0 = 1.0f + alpha;
-
-    f->b0 = ((1.0f - cw) * 0.5f) / a0;
-    f->b1 = (1.0f - cw) / a0;
-    f->b2 = ((1.0f - cw) * 0.5f) / a0;
-    f->a1 = (-2.0f * cw) / a0;
-    f->a2 = (1.0f - alpha) / a0;
-    f->fc = fc;
+    taskENTER_CRITICAL();
+    f->b0 = b0;
+    f->b1 = b1;
+    f->b2 = b2;
+    f->a1 = a1;
+    f->a2 = a2;
+    f->fc = new_fc;
+    taskEXIT_CRITICAL();
 }
 
 void GyroFilter_Init(float fs_hz)

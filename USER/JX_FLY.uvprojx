@@ -584,6 +584,26 @@
               <FileType>5</FileType>
               <FilePath>.\ADC.h</FilePath>
             </File>
+            <File>
+              <FileName>fw_identity.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\API\fw_identity.c</FilePath>
+            </File>
+            <File>
+              <FileName>fw_identity.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\API\fw_identity.h</FilePath>
+            </File>
+            <File>
+              <FileName>send_prof.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\API\send_prof.c</FilePath>
+            </File>
+            <File>
+              <FileName>send_prof.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\API\send_prof.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

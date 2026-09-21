@@ -19,7 +19,7 @@ void USART1_Configuration(void)
 	RCC_APB2PeriphClockCmd(RCC_APB2Periph_USART1,ENABLE);
 
   NVIC_InitStructure.NVIC_IRQChannel                     = USART1_IRQn;
-  NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority   = 0;
+  NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority   = 5;
   NVIC_InitStructure.NVIC_IRQChannelSubPriority          = 0;
   NVIC_InitStructure.NVIC_IRQChannelCmd                  = ENABLE;
   NVIC_Init(&NVIC_InitStructure);
@@ -47,7 +47,7 @@ void USART1_Configuration(void)
 }
 
 
-unsigned short sbus_channel[16];
+volatile unsigned short sbus_channel[16];
 
 
 

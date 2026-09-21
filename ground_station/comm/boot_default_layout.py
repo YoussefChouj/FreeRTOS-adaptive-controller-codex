@@ -191,3 +191,61 @@ DASHBOARD_FRAME_A_VARS: tuple[str, ...] = (
 # the firmware-side Send_Task rate fix lands, bump this to 10 to keep the wire
 # at 20 Hz. See module docstring for the full rationale.
 DASHBOARD_FRAME_A_DIVIDER: int = 4
+
+# ---------------------------------------------------------------------------
+# Slot-1 panel extras (2026-09-22 binding-table task, audit "global pattern").
+# Every panel that read a Frame B/C key the WiFi link never delivers gets the
+# same firmware variable streamed here. They CANNOT join DASHBOARD_FRAME_A_VARS
+# on slot 0: the firmware 0x21 stream request caps a slot at
+# SUBSCRIBE_MAX_STREAM_RANGES = 62 ranges (API/subscribe.h:189, rejected with
+# "E:too many ranges"), and 54 + 25 = 79 > 62 would kill the whole sidebar
+# stream. So the service auto-subscribes these 25 on slot 1 instead.
+# All DWARF paths verified against the live ELF via /api/symbols
+# (2026-09-21); each is the exact symbol the legacy frame builder packs
+# (TASK/send_data.c:1090-1130 gyro/earth/alt, :1196-1198 PID,
+# flight_fsm.c:7-8 FSM, StabilizerTask.c estimator-mode flags).
+# ---------------------------------------------------------------------------
+DASHBOARD_PANEL_EXTRA_VARS: tuple[str, ...] = (
+    # Flight FSM state + phase — Overview flight-state-machine widget.
+    "s_state",
+    "flight_phase",
+    # Raw body gyro rates (rad/s, BMI088 pre-filter) — gyro stage,
+    # pre-flight "IMU publishing" item, estimator raw-IMU group.
+    "Gyro_X_Real",
+    "Gyro_Y_Real",
+    "Gyro_Z_Real",
+    # Raw body accel (m/s^2, BMI088) — estimator raw-IMU accel group.
+    "Acc_X_Real",
+    "Acc_Y_Real",
+    "Acc_Z_Real",
+    # Optical-flow world position (m) + ANO module altitude (cm) —
+    # position-estimate stage, Path panel, estimator altitude.
+    "ano_of.earth_x",
+    "ano_of.earth_y",
+    "ano_of.of_alt_cm",
+    # Rate-loop PID feedback and output — block-diagram "Rate filter
+    # (flown)" and "Rate controllers" stages (Frame B equivalent).
+    "Ctrler.gyroxPID.FB",
+    "Ctrler.gyroxPID.U",
+    "Ctrler.gyroyPID.FB",
+    "Ctrler.gyroyPID.U",
+    "Ctrler.gyrozPID.FB",
+    "Ctrler.gyrozPID.U",
+    # Estimator-mode readback flags — command-panel OF-bias section.
+    "g_of_bias_mode",
+    "g_of_bias_ema_freeze",
+    # GS safety parameter readback — safety-limits panel. Slow-changing,
+    # but 6 * 4 B at 16 Hz is negligible on a 91 kB/s wire.
+    "gs_max_horizontal_speed_mps",
+    "gs_max_vertical_speed_mps",
+    "gs_max_pitch_deg",
+    "gs_max_roll_deg",
+    "gs_throttle_max_pct",
+    "gs_throttle_min_pct",
+)
+
+# divider=5 at the MIXED-mode measured 80 Hz Send_Task cadence gives 16 Hz on
+# the wire (20 Hz at the nominal 100 Hz cadence). Slot-1 frame is
+# 25 vars * 4 B + 12 B overhead = 112 B, so ~1.8 kB/s -- about 2% of the
+# 91.3 kB/s USART3 wire, on top of slot 0's ~4.6 kB/s.
+DASHBOARD_PANEL_EXTRA_DIVIDER: int = 5

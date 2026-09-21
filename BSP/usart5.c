@@ -3,6 +3,7 @@
 #include "platform_registry.h"
 #include "command_protocol.h"
 #include "gs_command.h"
+#include "fw_identity.h"
 
 /* Forward declaration: try_stage_subscribe_frame is defined below
  * handle_subscribe_frame but called from it. ARMCC C90 requires
@@ -30,7 +31,7 @@ UCHAR8 UA5RxMailbox[USART5_RXMB_LEN] = {0};
  * frame lands; Send_Task picks it up off the back of the UART5 DMA hand-off in
  * TASK/send_data.c. */
 UCHAR8 UA5RxSubscribeBuf[USART5_SUBSCRIBE_RX_LEN] = {0};
-uint16_t UA5RxSubscribeLen = 0U;
+volatile uint16_t UA5RxSubscribeLen = 0U;
 /* Set by the IRQ-side parser when a complete, CRC-valid 0xCC 0xDE subscribe
  * request lands. Cleared by Send_Task after the reply DMA completes (or by
  * the validator if the request is rejected with a 0x7F error reply). */
@@ -38,6 +39,10 @@ volatile uint8_t UA5RxSubscribePending = 0U;
 /* Last transport that delivered a subscribe request. UART5 is the safe
  * default before any request arrives. */
 volatile uint8_t Subscribe_RxTransport = SUBSCRIBE_RX_TRANSPORT_UART5;
+/* Transport of the staged request, latched under the same mask as the frame.
+ * Subscribe_RxTransport tracks the *current* ingress and can be overwritten by
+ * a later UART5 frame before Send_Task replies; the reply must use this one. */
+volatile uint8_t UA5RxSubscribeTransport = SUBSCRIBE_RX_TRANSPORT_UART5;
 USART_RX_TypeDef UART5_Rcr = {UART5,UART5_RX_STREAM,UA5RxMailbox,UA5RxDMAbuf,USART5_RXMB_LEN,USART5_RXDMA_LEN,0,0,0};
 
 void UART5_Configuration(void)
@@ -154,10 +159,15 @@ extern volatile uint32_t gs_cmd_drop_count;
 #if SUBSCRIBE_UART5_ENABLED
 void Uart5_Subscribe_TxSend(const uint8_t* buf, uint16_t len)
 {
+    uint32_t to = 50000U;
+
     if ((buf == 0) || (len == 0U)) {
         return;
     }
-    while (DMA_GetCurrDataCounter(DMA1_Stream7));
+    while (DMA_GetCurrDataCounter(DMA1_Stream7) && --to);
+    if (!to) {
+        return;
+    }
     DMA_Cmd(DMA1_Stream7, DISABLE);
     while (DMA_GetCmdStatus(DMA1_Stream7) == ENABLE);
     DMA_ClearFlag(DMA1_Stream7, DMA_FLAG_TCIF7 | DMA_FLAG_HTIF7 | DMA_FLAG_TEIF7
@@ -230,6 +240,10 @@ static uint8_t handle_subscribe_frame(const uint8_t* mailbox, uint16_t total,
 		len_ok = ((payload_len % 6U) == 0U) ? 1U : 0U;
 	}
 	else if (PlatformRegistry_IsDiscoveryCommand(sub_cmd) != 0U)
+	{
+		len_ok = ((payload_len == 0U) && (mailbox[off + 5U] == 0U)) ? 1U : 0U;
+	}
+	else if (sub_cmd == FW_IDENTITY_CMD)
 	{
 		len_ok = ((payload_len == 0U) && (mailbox[off + 5U] == 0U)) ? 1U : 0U;
 	}
@@ -319,6 +333,7 @@ static uint8_t try_stage_subscribe_frame(const uint8_t* mailbox, uint16_t off,
 			UA5RxSubscribeBuf[i] = mailbox[off + i];
 		}
 		UA5RxSubscribeLen = frame_len;
+		UA5RxSubscribeTransport = Subscribe_RxTransport;
 		UA5RxSubscribePending = 1U;
 	}
 	__set_PRIMASK(pri);

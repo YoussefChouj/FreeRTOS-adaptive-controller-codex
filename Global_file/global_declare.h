@@ -25,7 +25,7 @@
 #define Stick_to_MAX_GyroZ            200.0f   //  deg/s
 #define Stick_to_MAX_V_height         1.0f   //   m/s
  
-#define   value_limit(x,small,big)   if(x<small)x=small;if(x>big)x=big;
+#define   value_limit(x,small,big)   do { if((x)<(small)) (x)=(small); else if((x)>(big)) (x)=(big); } while(0)
 #define FlyMode_DangerousStop        0
 #define FlyMode_SDK                  1     //SDKģʽ
 

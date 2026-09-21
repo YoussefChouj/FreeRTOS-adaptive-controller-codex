@@ -1,0 +1,144 @@
+{
+  "base_url": "http://127.0.0.1:8081/",
+  "bundle": {
+    "error": "HTTPError: HTTP Error 502: Bad Gateway",
+    "fetched": false,
+    "path": "diagnostics-bundle.json"
+  },
+  "bundle_url": "http://127.0.0.1:8081/api/diagnostics/bundle",
+  "console_errors": [],
+  "counts": {
+    "failed": 0,
+    "passed": 1,
+    "steps": 1
+  },
+  "finished_ns": 1789970152928465700,
+  "fixture": null,
+  "http_errors": [],
+  "journey": "default-shell-smoke",
+  "screenshots": [
+    "step-00-shell-loads-with-all-workspace-tabs.png"
+  ],
+  "started_ns": 1789970148571703300,
+  "steps": [
+    {
+      "assertions": [
+        {
+          "expected": "UAV Ground Station",
+          "kind": "text",
+          "passed": true
+        },
+        {
+          "expected": "Overview",
+          "kind": "text",
+          "passed": true
+        },
+        {
+          "expected": "Control",
+          "kind": "text",
+          "passed": true
+        },
+        {
+          "expected": "Estimator",
+          "kind": "text",
+          "passed": true
+        },
+        {
+          "expected": "MRAC",
+          "kind": "text",
+          "passed": true
+        },
+        {
+          "expected": "Telemetry",
+          "kind": "text",
+          "passed": true
+        },
+        {
+          "expected": "Experiments",
+          "kind": "text",
+          "passed": true
+        },
+        {
+          "expected": "Paths",
+          "kind": "text",
+          "passed": true
+        },
+        {
+          "expected": "Bench",
+          "kind": "text",
+          "passed": true
+        },
+        {
+          "expected": "Replay",
+          "kind": "text",
+          "passed": true
+        },
+        {
+          "expected": "Diagnostics",
+          "kind": "text",
+          "passed": true
+        },
+        {
+          "expected": "[data-testid=\"tab-overview\"]",
+          "kind": "testid",
+          "passed": true
+        },
+        {
+          "expected": "[data-testid=\"tab-control\"]",
+          "kind": "testid",
+          "passed": true
+        },
+        {
+          "expected": "[data-testid=\"tab-estimator\"]",
+          "kind": "testid",
+          "passed": true
+        },
+        {
+          "expected": "[data-testid=\"tab-mrac\"]",
+          "kind": "testid",
+          "passed": true
+        },
+        {
+          "expected": "[data-testid=\"tab-telemetry\"]",
+          "kind": "testid",
+          "passed": true
+        },
+        {
+          "expected": "[data-testid=\"tab-experiments\"]",
+          "kind": "testid",
+          "passed": true
+        },
+        {
+          "expected": "[data-testid=\"tab-paths\"]",
+          "kind": "testid",
+          "passed": true
+        },
+        {
+          "expected": "[data-testid=\"tab-bench\"]",
+          "kind": "testid",
+          "passed": true
+        },
+        {
+          "expected": "[data-testid=\"tab-replay\"]",
+          "kind": "testid",
+          "passed": true
+        },
+        {
+          "expected": "[data-testid=\"tab-diagnostics\"]",
+          "kind": "testid",
+          "passed": true
+        }
+      ],
+      "console_errors": [],
+      "error": null,
+      "failures": [],
+      "http_errors": [],
+      "index": 0,
+      "name": "shell loads with all workspace tabs",
+      "screenshot": "step-00-shell-loads-with-all-workspace-tabs.png",
+      "url": "http://127.0.0.1:8081/",
+      "verdict": "pass"
+    }
+  ],
+  "verdict": "pass"
+}

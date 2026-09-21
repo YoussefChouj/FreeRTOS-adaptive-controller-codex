@@ -1,0 +1,41 @@
+{
+  "browser": {
+    "base_url": "http://127.0.0.1:8081/",
+    "console_errors": [],
+    "fixture": null,
+    "http_errors": [],
+    "journey": "preflight demo",
+    "observed_by": "ground_station.service.journey",
+    "report": "report.json",
+    "screenshot": "step-00-overview-loads.png",
+    "screenshots": [
+      "step-00-overview-loads.png",
+      "step-01-motors-must-be-armed.png"
+    ],
+    "source_confirmed": "live_observed",
+    "steps": [
+      {
+        "index": 0,
+        "name": "overview loads",
+        "url": "http://127.0.0.1:8081/",
+        "verdict": "pass"
+      },
+      {
+        "index": 1,
+        "name": "motors must be armed",
+        "url": "http://127.0.0.1:8081/control",
+        "verdict": "fail"
+      }
+    ],
+    "unavailable": [],
+    "verdict": "fail"
+  },
+  "evidence_summary": {
+    "live_observed": [
+      "browser"
+    ],
+    "replayed": [],
+    "source_confirmed": [],
+    "unverified": []
+  }
+}

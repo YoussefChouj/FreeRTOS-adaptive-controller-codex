@@ -1,0 +1,11 @@
+      // OF Bias Panel
+      '<div class="cp-section">',
+      '  <div style="font-size:10px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em;">OF Bias Estimator</div>',
+      '  <div style="display:flex;gap:4px;margin-bottom:6px;">',
+      '    <button class="cp-btn" id="cp-of-fixed">FIXED (0)</button>',
+      '    <button class="cp-btn" id="cp-of-ema">EMA (1)</button>',
+      '    <button class="cp-btn cp-btn-warn" id="cp-of-ekf">EKF (2)</button>',
+      '    <button class="cp-btn" id="cp-of-freeze" style="margin-left:auto">Toggle Freeze</button>',
+      '  </div>',
+      '  <div style="font-size:11px;color:var(--muted)">Mode readback: <span id="cp-of-readback-mode">\u2014</span> | Freeze: <span id="cp-of-readback-freeze">\u2014</span></div>',
+      '</div>',

@@ -1,0 +1,4 @@
+V1 Before: 0.0
+V1 After: 1234567
+V2 keys: 'TestI2RpmKeyMapping' object has no attribute 'bridge'
+V3 ekf mapped: ['ekf.vel_x', 'ekf.vel_y', 'ekf.vel_z', 'ekf.bias_accel_x', 'ekf.bias_accel_y', 'ekf.bias_accel_z', 'ekf.bias_gyro_x', 'ekf.bias_gyro_y', 'ekf.bias_gyro_z']

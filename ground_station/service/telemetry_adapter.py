@@ -83,7 +83,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from .schema_registry import SchemaRegistry
 
@@ -242,14 +242,55 @@ class TelemetryAdapter:
         Stream metadata is taken from the typed decoder's per-slot
         counters (``received``, ``dropped``, ``loss_pct``) and the wire
         ``Sequence`` / source timestamp bytes.
+
+        Slot-0 samples additionally carry the dashboard spec-key aliases
+        (see :meth:`_dashboard_aliases`) so plugins reading ``status.*`` /
+        ``mrac.*`` / ``ekf.*`` see live values on this path too.
         """
+        values = dict(values)
+        values.update(self._dashboard_aliases(slot, values))
         return NormalizedSample(
             slot=slot,
             tag="typed",
-            values=dict(values),
+            values=values,
             received_ns=received_ns if received_ns is not None else time.time_ns(),
             metadata=metadata,
         )
+
+    def _dashboard_aliases(self, slot: int, payload: Mapping) -> dict:
+        """Spec-key aliases for a slot-0 typed payload.
+
+        The typed subscribe path keys slot-0 values ``slot0.<dwarf>``
+        (``wifi_bridge._decode_stream_frame``) or by bare range name
+        (``MultiStreamDecoder._split``). The shell's panels read the
+        dashboard spec keys the legacy Frame A sidebar mapping produced
+        (``status.arm``, ``mrac.roll.e``, ...). Without this seam every
+        panel honestly renders "not published" while all underlying
+        variables stream -- the 2026-09-21 audit's "global pattern".
+
+        Only DWARF names registered in the :class:`SchemaRegistry` get an
+        alias: an unregistered name keeps its single raw spelling so the
+        values dict never grows ambiguous short keys (``seq``, ``t_ms``,
+        ``received`` ...). Aliases are ADDITIVE -- the raw spelling stays.
+        """
+        prefix = f"slot{slot}."
+        pairs: list[tuple[str, float]] = []
+        for k, v in payload.items():
+            if not isinstance(k, str) or k == "__stream_metadata__":
+                continue
+            dwarf = k[len(prefix):] if k.startswith(prefix) else k
+            
+            # Always provide the un-prefixed raw DWARF name for UI panels
+            if dwarf != k and dwarf not in ["t_ms", "seq", "received", "dropped", "crc_errors", "loss_pct"]:
+                pairs.append((dwarf, float(v)))
+                
+            if not dwarf or self._schema.resolve(dwarf) is None:
+                continue
+            try:
+                pairs.append((dwarf, float(v)))
+            except (TypeError, ValueError):
+                continue
+        return self._schema.resolve_all(pairs) if pairs else {}
 
     def adapt_from_bridge(
         self,
@@ -283,13 +324,21 @@ class TelemetryAdapter:
         ``sidebar`` and ``external`` by inspecting the tag, so the
         typed path keeps its identity even when metadata is hoisted
         into the top-level fields.
+
+        Slot-0 payloads additionally carry the dashboard spec-key
+        aliases (see :meth:`_dashboard_aliases`). For the sidebar
+        ``"a"`` tag the payload is already spec-keyed, so the alias
+        pass is a harmless no-op (spec keys are not DWARF names and
+        resolve to ``None``).
         """
         if metadata is None:
             metadata = self.extract_metadata("", slot, payload)
+        values = dict(payload)
+        values.update(self._dashboard_aliases(slot, values))
         return NormalizedSample(
             slot=slot,
             tag="typed",
-            values=dict(payload),
+            values=values,
             received_ns=received_ns if received_ns is not None else time.time_ns(),
             metadata=metadata,
         )

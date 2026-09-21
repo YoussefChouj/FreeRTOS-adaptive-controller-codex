@@ -222,6 +222,12 @@ USHORT16 USART_Receive(USART_RX_TypeDef* USARTx)
 		USARTx->rxBufferPtr %= USARTx->DMALen;
 	}
 
+	if(USARTx->rxBufferPtr == USARTx->rxConter)
+	{
+		USARTx->rxSize = 0;
+		return 0U;
+	}
+
 	if(USARTx->rxBufferPtr < USARTx->rxConter)
 	{
 		USARTx->rxSize = USARTx->rxConter - USARTx->rxBufferPtr; //计算本次接收数据的长度

@@ -1,0 +1,39 @@
+{
+  "browser": {
+    "base_url": "http://127.0.0.1:8099/",
+    "console_errors": [
+      "[error] Failed to load resource: the server responded with a status of 404 (File not found)",
+      "[error] [replay] fetchSessions error: SyntaxError: Unexpected token '<', \"<!DOCTYPE \"... is not valid JSON",
+      "[error] Failed to load resource: the server responded with a status of 501 (Unsupported method ('POST'))"
+    ],
+    "fixture": null,
+    "http_errors": [
+      "404 GET http://127.0.0.1:8099/experiments",
+      "404 GET http://127.0.0.1:8099/sessions",
+      "404 GET http://127.0.0.1:8099/health/slots",
+      "404 GET http://127.0.0.1:8099/health",
+      "404 GET http://127.0.0.1:8099/state",
+      "501 POST http://127.0.0.1:8099/subscribe/preview"
+    ],
+    "journey": "real-driver-shell-static",
+    "observed_by": "ground_station.service.journey",
+    "report": "report.json",
+    "screenshot": "step-00-shell-renders-over-static-http.png",
+    "screenshots": [
+      "step-00-shell-renders-over-static-http.png"
+    ],
+    "source_confirmed": "live_observed",
+    "steps": [
+      {
+        "index": 0,
+        "name": "shell renders over static http",
+        "url": "http://127.0.0.1:8099/index.html",
+        "verdict": "pass"
+      }
+    ],
+    "unavailable": [],
+    "verdict": "pass"
+  },
+  "error": "GET http://127.0.0.1:8099/api/diagnostics/bundle failed: HTTPError: HTTP Error 404: File not found",
+  "unavailable": "service diagnostics bundle; browser section contains the journey observations"
+}

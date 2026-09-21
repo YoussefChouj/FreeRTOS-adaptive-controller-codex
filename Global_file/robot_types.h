@@ -106,10 +106,10 @@ typedef struct
 	unsigned short IMUUpdateTask_cnt;
 	unsigned short stabilizerTask_cnt;
 	unsigned short remoter_task_cnt;
-	unsigned short USART1_task_cnt;
-	unsigned short USART2_task_cnt;
-	unsigned short USART4_task_cnt;
-	unsigned short USART5_task_cnt;
+	volatile unsigned short USART1_task_cnt;
+	volatile unsigned short USART2_task_cnt;
+	volatile unsigned short USART4_task_cnt;
+	volatile unsigned short USART5_task_cnt;
 	unsigned short AutoflyTask_cnt;
 }SYSTEM_MONITOR;
 

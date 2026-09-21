@@ -276,12 +276,54 @@ class SchemaRegistry:
             "s_ekf.x[6]":  "ekf.bias_gyro_x",
             "s_ekf.x[7]":  "ekf.bias_gyro_y",
             "s_ekf.x[8]":  "ekf.bias_gyro_z",
+            # -------------------------------------------------------------
+            # Slot-0 subscribe aliases (2026-09-21 binding-table task).
+            # Frame B/C quantities the shell reads under their legacy
+            # spec keys are now streamed as raw DWARF symbols on slot 0
+            # (boot_default_layout.DASHBOARD_FRAME_A_VARS). Frame C packs
+            # exactly these symbols (TASK/send_data.c:1090-1130), Frame B
+            # packs the PID loop fields (send_data.c:1196-1198), so each
+            # alias names the same firmware variable the legacy decoder
+            # read -- never a proxy.
+            # -------------------------------------------------------------
+            "Gyro_X_Real":       "c.gyro_x",
+            "Gyro_Y_Real":       "c.gyro_y",
+            "Gyro_Z_Real":       "c.gyro_z",
+            "Acc_X_Real":        "imu.acc_x",
+            "Acc_Y_Real":        "imu.acc_y",
+            "Acc_Z_Real":        "imu.acc_z",
+            "ano_of.earth_x":    "c.earth_x",
+            "ano_of.earth_y":    "c.earth_y",
+            # Altitude stays in cm in the symbol (ano_of.of_alt_cm);
+            # Frame C divided by 100. The *_cm suffix keeps the unit
+            # honest -- the panel converts for display.
+            "ano_of.of_alt_cm":  "c.altitude_cm",
+            "Ctrler.gyroxPID.FB": "pid.gyrox.FB",
+            "Ctrler.gyroxPID.U":  "pid.gyrox.U",
+            "Ctrler.gyroyPID.FB": "pid.gyroy.FB",
+            "Ctrler.gyroyPID.U":  "pid.gyroy.U",
+            "Ctrler.gyrozPID.FB": "pid.gyroz.FB",
+            "Ctrler.gyrozPID.U":  "pid.gyroz.U",
+            # Identity spellings: panels read these keys unprefixed while
+            # the raw typed stream carries them as ``slot0.<name>``.
+            "s_state":               "s_state",
+            "flight_phase":          "flight_phase",
+            "g_of_bias_mode":        "g_of_bias_mode",
+            "g_of_bias_ema_freeze":  "g_of_bias_ema_freeze",
+            "gs_max_horizontal_speed_mps": "gs_max_horizontal_speed_mps",
+            "gs_max_vertical_speed_mps":   "gs_max_vertical_speed_mps",
+            "gs_max_pitch_deg":             "gs_max_pitch_deg",
+            "gs_max_roll_deg":              "gs_max_roll_deg",
+            "gs_throttle_max_pct":          "gs_throttle_max_pct",
+            "gs_throttle_min_pct":         "gs_throttle_min_pct",
         }
         int_keys = {
             "status.arm", "status.flymode", "status.sbus",
             "status.twc_execute", "status.twc_arrived",
             "status.rc_authority", "status.of_hold",
             "status.estimator_ready",
+            "s_state", "flight_phase",
+            "g_of_bias_mode", "g_of_bias_ema_freeze",
         }
         return cls(mapping, int_keys=int_keys)
 

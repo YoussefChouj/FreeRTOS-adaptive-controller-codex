@@ -35,6 +35,8 @@
 ..\obj\subscribe.o: ..\stm32_lib\stm32f4xx_dac.h
 ..\obj\subscribe.o: ..\stm32_lib\stm32f4xx_dcmi.h
 ..\obj\subscribe.o: ..\stm32_lib\stm32f4xx_fsmc.h
+..\obj\subscribe.o: ..\firmware\platform_registry.h
+..\obj\subscribe.o: ..\firmware\platform_registry_gen.h
 ..\obj\subscribe.o: ..\FreeRTOS\include\FreeRTOS.h
 ..\obj\subscribe.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stddef.h
 ..\obj\subscribe.o: ..\FreeRTOS\include\FreeRTOSConfig.h
@@ -86,3 +88,4 @@
 ..\obj\subscribe.o: ..\BSP\usart5.h
 ..\obj\subscribe.o: ..\API\GPS.h
 ..\obj\subscribe.o: ..\TASK\send_data.h
+..\obj\subscribe.o: ..\API\fw_identity.h

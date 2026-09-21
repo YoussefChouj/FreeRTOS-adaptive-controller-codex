@@ -1,0 +1,412 @@
+........................................................................ [ 17%]
+........................................................................ [ 34%]
+..........................F............................................. [ 52%]
+..................................................................... [ 68%]
+...............................................FFFFFsFFFs.FFssFsFsssssss [ 86%]
+sssssssssss..FF.FFF..........FFFF........ssssssssss.ss.sF                [100%]
+================================== FAILURES ===================================
+____________________ test_http_subscribe_preview_endpoint _____________________
+
+    def test_http_subscribe_preview_endpoint():
+        """POST /subscribe/preview returns DWARF resolution preview without
+        touching the WiFi socket. Regression test for S16 subscribe_preview()
+        integration into api.py."""
+        service = service_fixture()
+        service.start()
+        # Give it a mock bridge that has subscribe_preview so the endpoint can call it.
+        service.bridge = MagicMock()
+        service.bridge.subscribe_preview = lambda **kw: service.bridge._impl.subscribe_preview(**kw)
+        service.bridge._impl = MagicMock()
+        service.bridge._impl.subscribe_preview = lambda **kw: service.bridge._preview_impl(**kw)
+        # Wire the real bridge impl so we test real resolver logic.
+        from ground_station.comm.wifi_bridge import WifiBridge
+        _real_bridge = WifiBridge(vofa_enabled=False)
+        service.bridge = _real_bridge  # replace mock with real bridge
+    
+        api = ApiServer(service)
+        api.start()
+        try:
+            base = "http://127.0.0.1:%d" % api.address[1]
+            status, body = _post_json(base + "/subscribe/preview", {
+                "slot": 0, "divider": 4, "ranges": [],
+            })
+>           assert status == 200, f"expected 200, got {status}: {body}"
+E           AssertionError: expected 200, got 400: {'error': "'WifiBridge' object has no attribute 'subscribe_preview'"}
+E           assert 400 == 200
+
+ground_station\service\tests\test_service.py:557: AssertionError
+________ TestWifiBridgeOneRequestPerSlot.test_30_ranges_single_request ________
+
+self = <test_subscribe_batching.TestWifiBridgeOneRequestPerSlot testMethod=test_30_ranges_single_request>
+
+    def test_30_ranges_single_request(self):
+        """30 ranges = 1 request = 1 sendto call."""
+        self.bridge._wifi_send.reset_mock()
+        ranges = [_make_range(i) for i in range(30)]
+>       self.bridge.subscribe_slot(slot=0, divider=1, ranges=ranges, transport=1)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'WifiBridge' object has no attribute 'subscribe_slot'
+
+ground_station\comm\tests\test_subscribe_batching.py:164: AttributeError
+_____ TestWifiBridgeOneRequestPerSlot.test_31_ranges_single_request_uart5 _____
+
+self = <test_subscribe_batching.TestWifiBridgeOneRequestPerSlot testMethod=test_31_ranges_single_request_uart5>
+
+    def test_31_ranges_single_request_uart5(self):
+        """transport=0 (UART5): 31 ranges = 1 request = 1 sendto call.
+    
+        With one-request-per-slot and coalescing, adjacent ranges merge
+        into fewer entries. Non-adjacent ranges with gap=8 stay separate.
+        """
+        self.bridge._wifi_send.reset_mock()
+        # Use gap=8 so ranges are NOT adjacent (won't coalesce)
+        ranges = [_make_range(i, gap=8) for i in range(31)]
+>       self.bridge.subscribe_slot(slot=0, divider=23, ranges=ranges, transport=0)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'WifiBridge' object has no attribute 'subscribe_slot'
+
+ground_station\comm\tests\test_subscribe_batching.py:187: AttributeError
+____ TestWifiBridgeOneRequestPerSlot.test_31_ranges_single_request_usart3 _____
+
+self = <test_subscribe_batching.TestWifiBridgeOneRequestPerSlot testMethod=test_31_ranges_single_request_usart3>
+
+    def test_31_ranges_single_request_usart3(self):
+        """transport=1 (USART3): 31 ranges = 1 request = 1 sendto call."""
+        self.bridge._wifi_send.reset_mock()
+        ranges = [_make_range(i) for i in range(31)]
+>       self.bridge.subscribe_slot(slot=0, divider=1, ranges=ranges, transport=1)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'WifiBridge' object has no attribute 'subscribe_slot'
+
+ground_station\comm\tests\test_subscribe_batching.py:173: AttributeError
+____ TestWifiBridgeOneRequestPerSlot.test_54_ranges_single_request_usart3 _____
+
+self = <test_subscribe_batching.TestWifiBridgeOneRequestPerSlot testMethod=test_54_ranges_single_request_usart3>
+
+    def test_54_ranges_single_request_usart3(self):
+        """transport=1 (USART3): 54 ranges (dashboard plan) = 1 request."""
+        self.bridge._wifi_send.reset_mock()
+        ranges = [_make_range(i, gap=8) for i in range(54)]
+>       self.bridge.subscribe_slot(slot=0, divider=4, ranges=ranges, transport=1)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'WifiBridge' object has no attribute 'subscribe_slot'
+
+ground_station\comm\tests\test_subscribe_batching.py:210: AttributeError
+____ TestWifiBridgeOneRequestPerSlot.test_62_ranges_single_request_usart3 _____
+
+self = <test_subscribe_batching.TestWifiBridgeOneRequestPerSlot testMethod=test_62_ranges_single_request_usart3>
+
+    def test_62_ranges_single_request_usart3(self):
+        """transport=1 (USART3): 62 non-adjacent ranges = 1 request = 1 sendto call.
+    
+        SUBSCRIBE_MAX_STREAM_RANGES=62 and both transports have 512 B
+        staging, so 62 ranges is the maximum that fits on either link.
+        """
+        self.bridge._wifi_send.reset_mock()
+        ranges = [_make_range(i, gap=8) for i in range(62)]
+>       self.bridge.subscribe_slot(slot=0, divider=1, ranges=ranges, transport=1)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'WifiBridge' object has no attribute 'subscribe_slot'
+
+ground_station\comm\tests\test_subscribe_batching.py:201: AttributeError
+________ TestWifiBridgeOneRequestPerSlot.test_caller_divider_preserved ________
+
+self = <test_subscribe_batching.TestWifiBridgeOneRequestPerSlot testMethod=test_caller_divider_preserved>
+
+    def test_caller_divider_preserved(self):
+        """The caller's divider is passed verbatim."""
+        self.bridge._wifi_send.reset_mock()
+        ranges = [_make_range(i, gap=8) for i in range(5)]
+>       self.bridge.subscribe_slot(slot=1, divider=8, ranges=ranges, transport=1)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'WifiBridge' object has no attribute 'subscribe_slot'
+
+ground_station\comm\tests\test_subscribe_batching.py:266: AttributeError
+_________ TestWifiBridgeOneRequestPerSlot.test_caller_slot_preserved __________
+
+self = <test_subscribe_batching.TestWifiBridgeOneRequestPerSlot testMethod=test_caller_slot_preserved>
+
+    def test_caller_slot_preserved(self):
+        """The caller's slot is passed verbatim."""
+        self.bridge._wifi_send.reset_mock()
+        ranges = [_make_range(i, gap=8) for i in range(5)]
+>       self.bridge.subscribe_slot(slot=2, divider=1, ranges=ranges, transport=1)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'WifiBridge' object has no attribute 'subscribe_slot'
+
+ground_station\comm\tests\test_subscribe_batching.py:275: AttributeError
+_______ TestWifiBridgeOneRequestPerSlot.test_caller_transport_preserved _______
+
+self = <test_subscribe_batching.TestWifiBridgeOneRequestPerSlot testMethod=test_caller_transport_preserved>
+
+    def test_caller_transport_preserved(self):
+        """The caller's transport is passed verbatim."""
+        self.bridge._wifi_send.reset_mock()
+        ranges = [_make_range(i, gap=8) for i in range(5)]
+>       self.bridge.subscribe_slot(slot=0, divider=1, ranges=ranges, transport=1)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'WifiBridge' object has no attribute 'subscribe_slot'
+
+ground_station\comm\tests\test_subscribe_batching.py:284: AttributeError
+_______ TestWifiBridgeOneRequestPerSlot.test_no_pending_batches_remain ________
+
+self = <test_subscribe_batching.TestWifiBridgeOneRequestPerSlot testMethod=test_no_pending_batches_remain>
+
+    def test_no_pending_batches_remain(self):
+        """After subscribe_slot, no _pending_batches exist (one request per slot)."""
+        self.bridge._wifi_send.reset_mock()
+        ranges = [_make_range(i, gap=8) for i in range(5)]
+>       self.bridge.subscribe_slot(slot=0, divider=1, ranges=ranges, transport=1)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'WifiBridge' object has no attribute 'subscribe_slot'
+
+ground_station\comm\tests\test_subscribe_batching.py:346: AttributeError
+________ TestWifiBridgeOneRequestPerSlot.test_one_range_single_request ________
+
+self = <test_subscribe_batching.TestWifiBridgeOneRequestPerSlot testMethod=test_one_range_single_request>
+
+    def test_one_range_single_request(self):
+        """1 range produces exactly 1 sendto call."""
+        self.bridge._wifi_send.reset_mock()
+        r = [_make_range(0)]
+>       self.bridge.subscribe_slot(slot=0, divider=1, ranges=r, transport=1)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'WifiBridge' object has no attribute 'subscribe_slot'
+
+ground_station\comm\tests\test_subscribe_batching.py:157: AttributeError
+_ TestWifiBridgeOneRequestPerSlot.test_slot0_with_explicit_ranges_no_override _
+
+self = <test_subscribe_batching.TestWifiBridgeOneRequestPerSlot testMethod=test_slot0_with_explicit_ranges_no_override>
+
+    def test_slot0_with_explicit_ranges_no_override(self):
+        """subscribe_slot(slot=0, ranges=[...]) uses caller's ranges."""
+        self.bridge._wifi_send.reset_mock()
+        explicit = [_make_range(i, gap=8) for i in range(5)]
+>       self.bridge.subscribe_slot(slot=0, divider=3, ranges=explicit, transport=1)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'WifiBridge' object has no attribute 'subscribe_slot'
+
+ground_station\comm\tests\test_subscribe_batching.py:293: AttributeError
+________ TestWifiBridgeOneRequestPerSlot.test_zero_ranges_stop_request ________
+
+self = <test_subscribe_batching.TestWifiBridgeOneRequestPerSlot testMethod=test_zero_ranges_stop_request>
+
+    def test_zero_ranges_stop_request(self):
+        """Zero ranges with divider>0 sends a stop (divider=0) request."""
+        self.bridge._wifi_send.reset_mock()
+>       self.bridge.subscribe_slot(slot=0, divider=0, ranges=[], transport=1)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'WifiBridge' object has no attribute 'subscribe_slot'
+
+ground_station\comm\tests\test_subscribe_batching.py:148: AttributeError
+______________ test_wifi_bridge_decodes_transaction_result_frame ______________
+
+    def test_wifi_bridge_decodes_transaction_result_frame():
+        bridge = WifiBridge(vofa_enabled=False)
+        expected = Result(0x4243, Outcome.REJECTED, 0xFE, 0,
+                          RejectReason.UNKNOWN_COMMAND, "command rejected")
+        rx = bytearray(build_result(expected))
+        decoded = bridge._parse_one(rx)
+>       assert decoded == ("transaction", expected)
+E       AssertionError: assert None == ('transaction', Result(transaction_id=16963, outcome=<Outcome.REJECTED: 1>, command_id=254, index=0, reason=<RejectReason.UNKNOWN_COMMAND: 4>, detail='command rejected', version=1))
+
+ground_station\comm\tests\test_transaction_events.py:13: AssertionError
+_____________ test_wifi_bridge_rx_loop_queues_transaction_result ______________
+
+    def test_wifi_bridge_rx_loop_queues_transaction_result():
+        bridge = WifiBridge(vofa_enabled=False)
+        expected = Result(7, Outcome.APPLIED, 1, 0, detail="applied")
+        decoded = bridge._parse_one(bytearray(build_result(expected)))
+>       assert decoded[0] == "transaction"
+               ^^^^^^^^^^
+E       TypeError: 'NoneType' object is not subscriptable
+
+ground_station\comm\tests\test_transaction_events.py:21: TypeError
+_________________ TestDataBufFrame.test_50b_frame_not_decoded _________________
+
+self = <test_wifi_bridge_dataframe.TestDataBufFrame testMethod=test_50b_frame_not_decoded>
+
+    def test_50b_frame_not_decoded(self):
+        """A 50 B frame (the lower edge of the historical cluster) must not decode."""
+        values = [float(i) for i in range(12)]
+        frame = _build_52b_dataframe(values, pad_to=50)
+        buf = bytearray(frame)
+        result = self.bridge._parse_one(buf)
+>       self.assertIsNone(result)
+E       AssertionError: ('data', {'f0': 0.0, 'f1': 1.0, 'f2': 2.0, 'f3': 3.0, 'f4': 4.0, 'f5': 5.0, 'f6': 6.0, 'f7': 7.0, 'f8': 8.0, 'f9': 9.0, 'f10': 10.0, 'f11': 11.0, 'len': 50, 'tail': b'\x00\x00@@\x00\x00\x80@\x00\x00\xa0@\x00\x00\xc0@\x00\x00\xe0@\x00\x00\x00A\x00\x00\x10A\x00\x00 A\x00\x000A\x00\x00'}) is not None
+
+ground_station\comm\tests\test_wifi_bridge_dataframe.py:88: AssertionError
+______________ TestDataBufFrame.test_52b_frame_no_longer_decoded ______________
+
+self = <test_wifi_bridge_dataframe.TestDataBufFrame testMethod=test_52b_frame_no_longer_decoded>
+
+    def test_52b_frame_no_longer_decoded(self):
+        """The 52 B 'DataBuf_to_linux' cluster must NOT be decoded anymore.
+    
+        Returning a fabricated "data" tag here was the source of the
+        phantom `streams["-1"]` slot in /state. The buffer should now be
+        left untouched so the partial-frame handler can wait for a
+        properly-headered frame to arrive (or the 1024 B resync kicks
+        in if it really is unbounded noise).
+        """
+        values = [0.1 * (i + 1) for i in range(12)]  # 0.1, 0.2, ..., 1.2
+        frame = _build_52b_dataframe(values, pad_to=52)
+        self.assertEqual(len(frame), 52)
+        buf = bytearray(frame)
+        result = self.bridge._parse_one(buf)
+>       self.assertIsNone(result)
+E       AssertionError: ('data', {'f0': 0.10000000149011612, 'f1': 0.20000000298023224, 'f2': 0.30000001192092896, 'f3': 0.4000000059604645, 'f4': 0.5, 'f5': 0.6000000238418579, 'f6': 0.699999988079071, 'f7': 0.800000011920929, 'f8': 0.8999999761581421, 'f9': 1.0, 'f10': 1.100000023841858, 'f11': 1.2000000476837158, 'len': 52, 'tail': b'\xcd\xcc\xcc>\x00\x00\x00?\x9a\x99\x19?333?\xcd\xccL?fff?\x00\x00\x80?\xcd\xcc\x8c?\x9a\x99\x99?\x00\x00\x00\x00'}) is not None
+
+ground_station\comm\tests\test_wifi_bridge_dataframe.py:78: AssertionError
+_________________ TestDataBufFrame.test_53b_frame_not_decoded _________________
+
+self = <test_wifi_bridge_dataframe.TestDataBufFrame testMethod=test_53b_frame_not_decoded>
+
+    def test_53b_frame_not_decoded(self):
+        """A 53 B frame (the upper edge of the historical cluster) must not decode."""
+        values = [float(i) for i in range(12)]
+        frame = _build_52b_dataframe(values, pad_to=53)
+        buf = bytearray(frame)
+        result = self.bridge._parse_one(buf)
+>       self.assertIsNone(result)
+E       AssertionError: ('data', {'f0': 0.0, 'f1': 1.0, 'f2': 2.0, 'f3': 3.0, 'f4': 4.0, 'f5': 5.0, 'f6': 6.0, 'f7': 7.0, 'f8': 8.0, 'f9': 9.0, 'f10': 10.0, 'f11': 11.0, 'len': 53, 'tail': b'\x00\x00@@\x00\x00\x80@\x00\x00\xa0@\x00\x00\xc0@\x00\x00\xe0@\x00\x00\x00A\x00\x00\x10A\x00\x00 A\x00\x000A\x00\x00\x00\x00\x00'}) is not None
+
+ground_station\comm\tests\test_wifi_bridge_dataframe.py:96: AssertionError
+______________ TestCrcValidation.test_corrupted_crc_is_rejected _______________
+
+self = <test_wifi_bridge_stream.TestCrcValidation testMethod=test_corrupted_crc_is_rejected>
+
+    def test_corrupted_crc_is_rejected(self):
+        """A frame with a wrong CRC byte is dropped and crc_errors is incremented."""
+        frame = _build_stream_frame(slot=1, seq=1, t_ms=100, values=[1.0])
+        # Corrupt the last byte (CRC low byte)
+        bad_frame = bytearray(frame)
+        bad_frame[-1] ^= 0xFF  # flip all bits in the CRC
+        result = self.bridge._decode_stream_frame(1, bad_frame)
+>       self.assertIsNone(result)
+E       AssertionError: {'json': {'slot1.ch1.0': 1.0, 'slot1.t_ms': 100, 'slot1.seq': 1, 'slot1.received': 1, 'slot1.dropped': 0, 'slot1.loss_pct': 0.0}, 'values': [1.0], 'names': ['ch1.0']} is not None
+
+ground_station\comm\tests\test_wifi_bridge_stream.py:200: AssertionError
+---------------------------- Captured stdout call -----------------------------
+[wifi_bridge] [S15] slot 1 decoded 1 channels (0 named, 1 positional fallback)
+_____ TestCrcValidation.test_crc_error_payload_contains_crc_errors_field ______
+
+self = <test_wifi_bridge_stream.TestCrcValidation testMethod=test_crc_error_payload_contains_crc_errors_field>
+
+    def test_crc_error_payload_contains_crc_errors_field(self):
+        """The JSON payload from a valid frame carries crc_errors from _stream_stats."""
+        # Pre-seed crc_errors via a bad frame
+        bad = bytearray(_build_stream_frame(slot=1, seq=0, t_ms=0, values=[0.0]))
+        bad[-1] ^= 0xFF
+        self.bridge._decode_stream_frame(1, bad)
+        # Now send a valid frame
+        frame = _build_stream_frame(slot=1, seq=1, t_ms=100, values=[3.14])
+        result = self.bridge._decode_stream_frame(1, frame)
+        self.assertIsNotNone(result)
+        # crc_errors=1 from the bad frame, now in the payload
+>       self.assertEqual(result["json"]["slot1.crc_errors"], 1)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'slot1.crc_errors'
+
+ground_station\comm\tests\test_wifi_bridge_stream.py:232: KeyError
+---------------------------- Captured stdout call -----------------------------
+[wifi_bridge] [S15] slot 1 decoded 1 channels (0 named, 1 positional fallback)
+[wifi_bridge] [S15] slot 1 decoded 1 channels (0 named, 1 positional fallback)
+_______ TestCrcValidation.test_crc_validation_does_not_misalign_buffer ________
+
+self = <test_wifi_bridge_stream.TestCrcValidation testMethod=test_crc_validation_does_not_misalign_buffer>
+
+    def test_crc_validation_does_not_misalign_buffer(self):
+        """After a CRC error the buffer is untouched; the next correct frame parses."""
+        # Send one bad frame followed by a valid one
+        bad = bytearray(_build_stream_frame(slot=1, seq=10, t_ms=0, values=[0.0]))
+        bad[-1] ^= 0xFF
+        good = _build_stream_frame(slot=1, seq=11, t_ms=200, values=[9.99])
+        # Simulate a buffer with bad+good concatenated
+        buf = bad + good
+        # _decode_stream_frame only looks at the frame it's given, not a shared buffer.
+        # The caller (_parse_one) passes bytes(buf[:total]) so bad was already stripped.
+        # We test the two-step: first bad returns None, then good succeeds.
+>       self.assertIsNone(self.bridge._decode_stream_frame(1, bad))
+E       AssertionError: {'json': {'slot1.ch1.0': 0.0, 'slot1.t_ms': 0, 'slot1.seq': 10, 'slot1.received': 1, 'slot1.dropped': 0, 'slot1.loss_pct': 0.0}, 'values': [0.0], 'names': ['ch1.0']} is not None
+
+ground_station\comm\tests\test_wifi_bridge_stream.py:245: AssertionError
+---------------------------- Captured stdout call -----------------------------
+[wifi_bridge] [S15] slot 1 decoded 1 channels (0 named, 1 positional fallback)
+_____ TestCrcValidation.test_second_corrupted_frame_increments_crc_errors _____
+
+self = <test_wifi_bridge_stream.TestCrcValidation testMethod=test_second_corrupted_frame_increments_crc_errors>
+
+    def test_second_corrupted_frame_increments_crc_errors(self):
+        """Multiple CRC failures accumulate crc_errors without resetting other counters."""
+        for i in range(3):
+            frame = _build_stream_frame(slot=0, seq=i, t_ms=i * 100, values=[float(i)])
+            bad = bytearray(frame)
+            bad[-1] ^= 0x01
+            self.bridge._decode_stream_frame(0, bad)
+        with self.bridge._stream_lock:
+            stats = self.bridge._stream_stats.get(0, {})
+>       self.assertEqual(stats["crc_errors"], 3)
+E       AssertionError: 0 != 3
+
+ground_station\comm\tests\test_wifi_bridge_stream.py:217: AssertionError
+---------------------------- Captured stdout call -----------------------------
+[wifi_bridge] [S15] slot 0 decoded 1 channels (0 named, 1 positional fallback)
+[wifi_bridge] [S15] slot 0 decoded 1 channels (0 named, 1 positional fallback)
+[wifi_bridge] [S15] slot 0 decoded 1 channels (0 named, 1 positional fallback)
+_____ TestStaleSchemaDetection.test_schema_frame_unknown_slot_is_ignored ______
+
+self = <test_wifi_bridge_stream.TestStaleSchemaDetection testMethod=test_schema_frame_unknown_slot_is_ignored>
+
+    def test_schema_frame_unknown_slot_is_ignored(self):
+        """A 0x08 for a slot with no pending request is still registered.
+    
+        The firmware echoes the accepted ranges; registration is not gated on
+        a prior 0x21 request. Without a pending range lookup, the schema will
+        have anonymous channel names, but it is still valid and gets registered.
+        """
+        # Firmware payload_len = 5 + n_ranges*8 = 13; frame = 20 B.
+        from ground_station.livewatch.transport import _xor_crc
+        n_ranges = 1
+        divider = 4
+        transport = 1
+        slot = 2
+        total_bytes = 4
+        config_fixed = bytes([divider, transport, slot, n_ranges,
+                             (total_bytes >> 8) & 0xFF, total_bytes & 0xFF])
+>       rng_fixed = rng  # 8 B
+                    ^^^
+E       NameError: name 'rng' is not defined
+
+ground_station\comm\tests\test_wifi_bridge_stream.py:697: NameError
+============================== warnings summary ===============================
+ground_station\comm\tests\test_mavlink_limit.py:132
+  C:\Users\Acer\Desktop\UAV_lab\FreeRTOS-adaptive-controller-codex\ground_station\comm\tests\test_mavlink_limit.py:132: PytestCollectionWarning: cannot collect test class 'TestResult' because it has a __new__ constructor (from: ground_station/comm/tests/test_mavlink_limit.py)
+    class TestResult(NamedTuple):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED ground_station/service/tests/test_service.py::test_http_subscribe_preview_endpoint
+FAILED ground_station/comm/tests/test_subscribe_batching.py::TestWifiBridgeOneRequestPerSlot::test_30_ranges_single_request
+FAILED ground_station/comm/tests/test_subscribe_batching.py::TestWifiBridgeOneRequestPerSlot::test_31_ranges_single_request_uart5
+FAILED ground_station/comm/tests/test_subscribe_batching.py::TestWifiBridgeOneRequestPerSlot::test_31_ranges_single_request_usart3
+FAILED ground_station/comm/tests/test_subscribe_batching.py::TestWifiBridgeOneRequestPerSlot::test_54_ranges_single_request_usart3
+FAILED ground_station/comm/tests/test_subscribe_batching.py::TestWifiBridgeOneRequestPerSlot::test_62_ranges_single_request_usart3
+FAILED ground_station/comm/tests/test_subscribe_batching.py::TestWifiBridgeOneRequestPerSlot::test_caller_divider_preserved
+FAILED ground_station/comm/tests/test_subscribe_batching.py::TestWifiBridgeOneRequestPerSlot::test_caller_slot_preserved
+FAILED ground_station/comm/tests/test_subscribe_batching.py::TestWifiBridgeOneRequestPerSlot::test_caller_transport_preserved
+FAILED ground_station/comm/tests/test_subscribe_batching.py::TestWifiBridgeOneRequestPerSlot::test_no_pending_batches_remain
+FAILED ground_station/comm/tests/test_subscribe_batching.py::TestWifiBridgeOneRequestPerSlot::test_one_range_single_request
+FAILED ground_station/comm/tests/test_subscribe_batching.py::TestWifiBridgeOneRequestPerSlot::test_slot0_with_explicit_ranges_no_override
+FAILED ground_station/comm/tests/test_subscribe_batching.py::TestWifiBridgeOneRequestPerSlot::test_zero_ranges_stop_request
+FAILED ground_station/comm/tests/test_transaction_events.py::test_wifi_bridge_decodes_transaction_result_frame
+FAILED ground_station/comm/tests/test_transaction_events.py::test_wifi_bridge_rx_loop_queues_transaction_result
+FAILED ground_station/comm/tests/test_wifi_bridge_dataframe.py::TestDataBufFrame::test_50b_frame_not_decoded
+FAILED ground_station/comm/tests/test_wifi_bridge_dataframe.py::TestDataBufFrame::test_52b_frame_no_longer_decoded
+FAILED ground_station/comm/tests/test_wifi_bridge_dataframe.py::TestDataBufFrame::test_53b_frame_not_decoded
+FAILED ground_station/comm/tests/test_wifi_bridge_stream.py::TestCrcValidation::test_corrupted_crc_is_rejected
+FAILED ground_station/comm/tests/test_wifi_bridge_stream.py::TestCrcValidation::test_crc_error_payload_contains_crc_errors_field
+FAILED ground_station/comm/tests/test_wifi_bridge_stream.py::TestCrcValidation::test_crc_validation_does_not_misalign_buffer
+FAILED ground_station/comm/tests/test_wifi_bridge_stream.py::TestCrcValidation::test_second_corrupted_frame_increments_crc_errors
+FAILED ground_station/comm/tests/test_wifi_bridge_stream.py::TestStaleSchemaDetection::test_schema_frame_unknown_slot_is_ignored
+23 failed, 355 passed, 37 skipped, 1 warning, 3 subtests passed in 60.55s (0:01:00)

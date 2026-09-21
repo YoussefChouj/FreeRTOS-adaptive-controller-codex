@@ -24,15 +24,15 @@ FP32 Gyro_X_Ori;
 FP32 Gyro_Y_Ori;
 FP32 Gyro_Z_Ori;
 
-FP32 Acc_X_Real;											//µ¥Î»Îªmg
+FP32 Acc_X_Real;											//ï¿½ï¿½Î»Îªmg
 FP32 Acc_Y_Real;
 FP32 Acc_Z_Real;
 
-FP32 Gyro_X_Real;											//µ¥Î»Îª»¡¶ÈÃ¿Ãë
+FP32 Gyro_X_Real;											//ï¿½ï¿½Î»Îªï¿½ï¿½ï¿½ï¿½Ã¿ï¿½ï¿½
 FP32 Gyro_Y_Real;
 FP32 Gyro_Z_Real;
 
-/*ÒÔÏÂÎªÁãÆ®±ê¶¨Öµ*/
+/*ï¿½ï¿½ï¿½ï¿½Îªï¿½ï¿½Æ®ï¿½ê¶¨Öµ*/
 FP32 Acc_X_Offset = 0;
 FP32 Acc_Y_Offset = 0;
 FP32 Acc_Z_Offset = 0;
@@ -47,7 +47,7 @@ int  Const_offset = CALI_NUM;
 int  flag_offset = 0;
 FP32 testvalue[3] = {0};
 
-FP32 SEE = 0;    //Z_OFFSETÊµÊ±±ê¶¨µÄÖµ
+FP32 SEE = 0;    //Z_OFFSETÊµÊ±ï¿½ê¶¨ï¿½ï¿½Öµ
 
 
 int GetOffset(void);
@@ -98,8 +98,9 @@ UINT32 Acc_Range_Coe;
 
 UCHAR8 Acc_ID,Gyro_ID;
 int  GetStill = 0;
-bool bmi088_init(void)								//IMU³õÊ¼»¯
+bool bmi088_init(void)								//IMUï¿½ï¿½Ê¼ï¿½ï¿½
 {
+	uint32_t cali_retries;
 	BMI088_Read_Acc_Data(ACC_ID);
 	BMI088_Read_Gyro_Data(GYRO_ID);
 	
@@ -111,7 +112,7 @@ bool bmi088_init(void)								//IMU³õÊ¼»¯
 	BMI088_Read_Acc_Data(ACC_ID);
 	BMI088_Read_Gyro_Data(GYRO_ID);
 	
-	//³õÊ¼»¯Ê±ÒªÇóÆô¶¯AccÎªNormalÄ£Ê½£¬ÐèÒªÐ´PWR¼Ä´æÆ÷
+	//ï¿½ï¿½Ê¼ï¿½ï¿½Ê±Òªï¿½ï¿½ï¿½ï¿½ï¿½ï¿½AccÎªNormalÄ£Ê½ï¿½ï¿½ï¿½ï¿½ÒªÐ´PWRï¿½Ä´ï¿½ï¿½ï¿½
 	
 	Acc_ID = BMI088_Read_Acc_Data(ACC_ID);
 	Gyro_ID = BMI088_Read_Gyro_Data(GYRO_ID);
@@ -122,7 +123,8 @@ bool bmi088_init(void)								//IMU³õÊ¼»¯
 		BMI088_Write_Acc_Data(ACC_SOFT_R,0XB6);
 		BMI088_Write_Gyro_Data(GYRO_SOFT_R,0XB6);
 		delay_ms(50);
-		return TRUE;
+		sensor.sensor_ok = 0U;
+		return FALSE;
 	}
 	
 	if((BMI088_Read_Acc_Data(ACC_ERR) & 0x1D/*0b00011101*/ )!= 0)																	//Acc_Err_Ocur
@@ -130,44 +132,52 @@ bool bmi088_init(void)								//IMU³õÊ¼»¯
 		BMI088_Write_Acc_Data(ACC_SOFT_R,0XB6);
 		BMI088_Write_Gyro_Data(GYRO_SOFT_R,0XB6);
 		delay_ms(50);
-		return TRUE;
+		sensor.sensor_ok = 0U;
+		return FALSE;
 	}
 	
-//AccÅäÖÃ
-	//ÅäÖÃODR£¬Filter
-	BMI088_Write_Acc_Data(ACC_CONF,0XAC);//0b10101100);															//ÅäÖÃ¼ÓËÙ¶È¼ÆÊä³öËÙÂÊ1600Hz£¬NormalÊä³öÄ£Ê½
+//Accï¿½ï¿½ï¿½ï¿½
+	//ï¿½ï¿½ï¿½ï¿½ODRï¿½ï¿½Filter
+	BMI088_Write_Acc_Data(ACC_CONF,0XAC);//0b10101100);															//ï¿½ï¿½ï¿½Ã¼ï¿½ï¿½Ù¶È¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½1600Hzï¿½ï¿½Normalï¿½ï¿½ï¿½Ä£Ê½
 	delay_ms(10);
-	//ÅäÖÃ²âÁ¿·¶Î§
-	BMI088_Write_Acc_Data(ACC_RANGE,0X01);//0b00000001);														//ÅäÖÃ¼ÓËÙ¶È¼ÆÊä³ö·¶Î§+-6g
+	//ï¿½ï¿½ï¿½Ã²ï¿½ï¿½ï¿½ï¿½ï¿½Î§
+	BMI088_Write_Acc_Data(ACC_RANGE,0X01);//0b00000001);														//ï¿½ï¿½ï¿½Ã¼ï¿½ï¿½Ù¶È¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î§+-6g
 	delay_ms(10);
-	//ÅäÖÃµçÔ´ÊôÐÔ
-	BMI088_Write_Acc_Data(ACC_PWR_CONF,0x00);															//ÅäÖÃ½øÈë»î¶¯Ä£Ê½
+	//ï¿½ï¿½ï¿½Ãµï¿½Ô´ï¿½ï¿½ï¿½ï¿½
+	BMI088_Write_Acc_Data(ACC_PWR_CONF,0x00);															//ï¿½ï¿½ï¿½Ã½ï¿½ï¿½ï¿½î¶¯Ä£Ê½
 	delay_ms(10);
-	//ÅäÖÃµçÔ´¿ª¹Ø
-	BMI088_Write_Acc_Data(ACC_PWR_CTRL,0x04);															//´ò¿ª¼ÓËÙ¶È¼ÆµçÔ´
+	//ï¿½ï¿½ï¿½Ãµï¿½Ô´ï¿½ï¿½ï¿½ï¿½
+	BMI088_Write_Acc_Data(ACC_PWR_CTRL,0x04);															//ï¿½ò¿ª¼ï¿½ï¿½Ù¶È¼Æµï¿½Ô´
 	delay_ms(10);
-	//¼ÆËã¼ÓËÙ¶È¼ÆÁ¿³ÌÏµÊý
+	//ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ù¶È¼ï¿½ï¿½ï¿½ï¿½ï¿½Ïµï¿½ï¿½
 	Acc_Range_Coe = pow(2,(BMI088_Read_Acc_Data(ACC_RANGE)+1)) + 2;
 	delay_ms(10);
 	
-//GyroÅäÖÃ
-	//ÅäÖÃ²âÁ¿·¶Î§
-	BMI088_Write_Gyro_Data(GYRO_RANGE,0X01);															//ÅäÖÃÍÓÂÝÒÇÁ¿³Ì+-1000¡ã/s
+//Gyroï¿½ï¿½ï¿½ï¿½
+	//ï¿½ï¿½ï¿½Ã²ï¿½ï¿½ï¿½ï¿½ï¿½Î§
+	BMI088_Write_Gyro_Data(GYRO_RANGE,0X01);															//ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½+-1000ï¿½ï¿½/s
 	delay_ms(10);
-	//ÅäÖÃµÍÍ¨ÂË²¨´ø¿í
-	BMI088_Write_Gyro_Data(GYRO_BANDW,0X00);															//ÅäÖÃÊä³öËÙÂÊ2000Hz£¬´ø¿í532Hz
+	//ï¿½ï¿½ï¿½Ãµï¿½Í¨ï¿½Ë²ï¿½ï¿½ï¿½ï¿½ï¿½
+	BMI088_Write_Gyro_Data(GYRO_BANDW,0X00);															//ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½2000Hzï¿½ï¿½ï¿½ï¿½ï¿½ï¿½532Hz
 	delay_ms(10);
-	//ÅäÖÃµçÔ´Ä£Ê½
-	BMI088_Write_Gyro_Data(GYRO_POWER,0x00);															//Õý³£Ä£Ê½
+	//ï¿½ï¿½ï¿½Ãµï¿½Ô´Ä£Ê½
+	BMI088_Write_Gyro_Data(GYRO_POWER,0x00);															//ï¿½ï¿½ï¿½ï¿½Ä£Ê½
 	delay_ms(10);
 	
 	delay_ms(100);
 
-	while(!GetStill)             //ÖªµÀ¼ì²â¾²Ö¹²Å³öËÀÑ­»·
+	cali_retries = 10U * CALI_NUM;
+	while(!GetStill && --cali_retries)             //Öªï¿½ï¿½ï¿½ï¿½â¾²Ö¹ï¿½Å³ï¿½ï¿½ï¿½Ñ­ï¿½ï¿½
 	{
 	  GetStill = GetOffset();
 	}
-	return FALSE;
+	if (!GetStill)
+	{
+		sensor.sensor_ok = 0U;
+		return FALSE;
+	}
+	sensor.sensor_ok = 1U;
+	return TRUE;
 }
 
 void GetValue(void)
@@ -191,9 +201,9 @@ void GetValue(void)
   USHORT16 Temp_Ori;	
 
 	
-	//Ô­Ê¼Êý¾Ý»ñÈ¡
+	//Ô­Ê¼ï¿½ï¿½ï¿½Ý»ï¿½È¡
 	
-	//ÅÐ¶ÏÊý¾Ý×´Ì¬£¿Acc_Data_Rdy_Reg   ACC_STATUS
+	//ï¿½Ð¶ï¿½ï¿½ï¿½ï¿½ï¿½×´Ì¬ï¿½ï¿½Acc_Data_Rdy_Reg   ACC_STATUS
 	Acc_X_MSB = BMI088_Read_Acc_Data(ACC_X_MSB);
 	Acc_X_LSB = BMI088_Read_Acc_Data(ACC_X_LSB);
 	Acc_Y_MSB = BMI088_Read_Acc_Data(ACC_Y_MSB);
@@ -208,16 +218,16 @@ void GetValue(void)
 	Gyro_Z_MSB = BMI088_Read_Gyro_Data(GYRO_Z_MSB);
 	Gyro_Z_LSB = BMI088_Read_Gyro_Data(GYRO_Z_LSB);
 	
-	Acc_X_Ori = ((SSHORT16)(Acc_X_MSB<<8 | Acc_X_LSB))/32767.0f*1000.0f*Acc_Range_Coe;			//RangeÎª¼ÓËÙ¶È¼ÆÉè¶¨µÄ²âÁ¿·¶Î§£¬µ¥Î»m*g
+	Acc_X_Ori = ((SSHORT16)(Acc_X_MSB<<8 | Acc_X_LSB))/32767.0f*1000.0f*Acc_Range_Coe;			//RangeÎªï¿½ï¿½ï¿½Ù¶È¼ï¿½ï¿½è¶¨ï¿½Ä²ï¿½ï¿½ï¿½ï¿½ï¿½Î§ï¿½ï¿½ï¿½ï¿½Î»m*g
 	
 	Acc_Y_Ori = ((SSHORT16)(Acc_Y_MSB<<8 | Acc_Y_LSB))/32767.0f*1000.0f*Acc_Range_Coe;			//Range = 6g;
 	Acc_Z_Ori = ((SSHORT16)(Acc_Z_MSB<<8 | Acc_Z_LSB))/32767.0f*1000.0f*Acc_Range_Coe;
 	
-	Gyro_X_Ori = ((SSHORT16)(Gyro_X_MSB<<8 | Gyro_X_LSB))/32767.0f*1000.0f;									//µ¥Î»¡ã/s
-	Gyro_Y_Ori = ((SSHORT16)(Gyro_Y_MSB<<8 | Gyro_Y_LSB))/32767.0f*1000.0f;									//Range = 1000¡ã/s
+	Gyro_X_Ori = ((SSHORT16)(Gyro_X_MSB<<8 | Gyro_X_LSB))/32767.0f*1000.0f;									//ï¿½ï¿½Î»ï¿½ï¿½/s
+	Gyro_Y_Ori = ((SSHORT16)(Gyro_Y_MSB<<8 | Gyro_Y_LSB))/32767.0f*1000.0f;									//Range = 1000ï¿½ï¿½/s
 	Gyro_Z_Ori = ((SSHORT16)(Gyro_Z_MSB<<8 | Gyro_Z_LSB))/32767.0f*1000.0f;
 	
-	//Ò×³öÏÖNaN
+	//ï¿½×³ï¿½ï¿½ï¿½NaN
 	Temp_MSB = BMI088_Read_Acc_Data(TEMP_MSB);
 	Temp_LSB = BMI088_Read_Acc_Data(TEMP_LSB);
 	
@@ -229,7 +239,7 @@ void GetValue(void)
 }
 
 
-//×îÐ¡¶þ³Ë·¨
+//ï¿½ï¿½Ð¡ï¿½ï¿½ï¿½Ë·ï¿½
 FP32 leastSquareLinearFit(FP32 x[], FP32 y[], const int num)  
 {
  FP32 a = 0;
@@ -261,13 +271,13 @@ FP32 leastSquareLinearFit(FP32 x[], FP32 y[], const int num)
 
 int gyro_flag = 0;
 int acc_flag = 0;
-//Ð£×¼¹¤×÷Ê±£¬D3µÆ³ÖÐøÉÁË¸
+//Ð£×¼ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½D3ï¿½Æ³ï¿½ï¿½ï¿½ï¿½ï¿½Ë¸
 int GetOffset(void)         
 {
 	  GetValue();
 	  
 	
-	  // ÍÓÂÝÒÇÐ£×¼
+	  // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð£×¼
 	  if(Cali_Cnt)
 		{
 		  Status_offset[0][CALI_NUM-Cali_Cnt] = Gyro_X_Ori;
@@ -407,12 +417,12 @@ void Sensor_Data_Prepare(void)				//IMUï¿½ï¿½ï¿½ï¿½×¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×ªï
 
 	//////////////////////////////////////////////////////////////////
 		
-		//ÍÓÂÝÒÇ¼ÓËÀÇø	Ò×³öÏÖNaN
+		//ï¿½ï¿½ï¿½ï¿½ï¿½Ç¼ï¿½ï¿½ï¿½ï¿½ï¿½	ï¿½×³ï¿½ï¿½ï¿½NaN
 		Gyro_X_Ori = Limit_Zero(Gyro_X_Ori,0.002f);
 		Gyro_Y_Ori = Limit_Zero(Gyro_Y_Ori,0.002f);
 		Gyro_Z_Ori = Limit_Zero(Gyro_Z_Ori,0.002f);
 		
-		//µ¥Î»×ª»»
+		//ï¿½ï¿½Î»×ªï¿½ï¿½
 		Gyro_X_Real = Gyro_X_Ori*0.0174533f;
 		Gyro_Y_Real = Gyro_Y_Ori*0.0174533f;
 		Gyro_Z_Real = Gyro_Z_Ori*0.0174533f;

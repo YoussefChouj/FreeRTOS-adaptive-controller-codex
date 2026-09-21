@@ -30,18 +30,18 @@ presets:
   flight_comprehensive:
     description: "Full flight data: dashboard sidebar + IMU+PID + MRAC state + EKF (all 4 slots)"
     measured_max_hz:  # 2026-09-12 MIXED-mode capture (SUBSCRIBE_SEND_TASK_HZ = 80U)
-      0: 20    # dashboard_frame_a @ 20 Hz req, div=4 -> 80/4 = 20 Hz
+      0: 16    # dashboard_frame_a @ 40 Hz req, div=5 -> 80/5 = 16 Hz (2026-09-21 binding-table vars)
       1: 40    # inner_loops @ 80 Hz req, div=1 -> 80/1 = 80 Hz (capped by Send_Task)
       2: 20    # mrac_weights @ 50 Hz req, div=2 -> 80/2 = 40 Hz (rounds up: int(80/50)=1 actually)
       3: 20    # ekf_all @ 50 Hz req, div=2 -> 80/2 = 40 Hz (rounds up: int(80/50)=1 actually)
     slots:
-      # Slot 0 drives the dashboard sidebar at 20 Hz. dashboard_frame_a
+      # Slot 0 drives the dashboard sidebar at 16 Hz. dashboard_frame_a
       # covers the dashboard's status flags, MRAC bars, attitude, vbat,
       # AND xTickCount (so this manifest alone satisfies REQUIRED_SYNC_VARS
       # -- no separate sync manifest needed on slot 0).
       - slot: 0
         manifest: dashboard_frame_a
-        hz: 20
+        hz: 40
       - slot: 1
         manifest: inner_loops
         hz: 80
@@ -55,13 +55,13 @@ presets:
   mrac_characterization:
     description: "MRAC state + signals + dashboard sidebar"
     measured_max_hz:  # predicted from effective_send_task_hz=80 / divider
-      0: 20    # dashboard_frame_a @ 20 Hz req, div=4
+      0: 16    # dashboard_frame_a @ 40 Hz req, div=5
       1: 40    # mrac_signals @ 50 Hz req, div=2 -> 80/2 = 40 Hz
       2: 40    # mrac_weights @ 50 Hz req, div=2 -> 80/2 = 40 Hz
     slots:
       - slot: 0
         manifest: dashboard_frame_a
-        hz: 20
+        hz: 40
       - slot: 1
         manifest: mrac_signals
         hz: 50
@@ -72,12 +72,12 @@ presets:
   thrust_validation:
     description: "Dashboard sidebar + thrust estimators + motors + RPM at high rate"
     measured_max_hz:  # predicted (no 4-slot capture of this preset yet)
-      0: 20    # dashboard_frame_a @ 20 Hz req, div=4
+      0: 16    # dashboard_frame_a @ 40 Hz req, div=5
       1: 80    # thrust_estimators @ 200 Hz req, div=1 -> 80/1 = 80 Hz (capped)
     slots:
       - slot: 0
         manifest: dashboard_frame_a
-        hz: 20
+        hz: 40
       - slot: 1
         manifest: thrust_estimators
         hz: 200
@@ -90,12 +90,12 @@ presets:
   flight_cascade_drift:
     description: "Drift-runaway diagnostic: dashboard + full PID cascade + OF/bias"
     measured_max_hz:
-      0: 20    # dashboard_frame_a @ 20 Hz req, div=4
+      0: 16    # dashboard_frame_a @ 40 Hz req, div=5
       1: 20    # flight_cascade_full @ 50 Hz req, div=2 -> 80/2 = 40 Hz (likely capped lower; log at 50)
     slots:
       - slot: 0
         manifest: dashboard_frame_a
-        hz: 20
+        hz: 40
       - slot: 1
         manifest: flight_cascade_full
         hz: 50
@@ -108,12 +108,12 @@ presets:
   bias_logging:
     description: "Dashboard sidebar + bias tab live indicators (WiFi mode Bias tab fix)"
     measured_max_hz:
-      0: 20    # dashboard_frame_a @ 20 Hz req, div=4 -> 80/4 = 20 Hz
+      0: 16    # dashboard_frame_a @ 40 Hz req, div=5 -> 80/5 = 16 Hz (2026-09-21 binding-table vars)
       1: 10    # bias_frame @ 10 Hz req, div=8 -> 80/8 = 10 Hz
     slots:
       - slot: 0
         manifest: dashboard_frame_a
-        hz: 20
+        hz: 40
       - slot: 1
         manifest: bias_frame
         hz: 10

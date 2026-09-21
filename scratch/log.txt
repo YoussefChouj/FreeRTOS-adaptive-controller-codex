@@ -1,0 +1,237 @@
+commit 898d00518085dadc81371d6daf2d849a5b1e19d6
+Author: jiang <jiang@uav.local>
+Date:   Thu Sep 17 10:37:44 2026 +0800
+
+    feat(platform): dashboard-platform S1-S12 — ground station service, telemetry, command protocol, plugins, shell
+    
+    Major additions:
+    - ground_station/service/: api, core, gateway, storage, replay, simulator
+    - ground_station/platform/: discovery, experiments, plugins, resources, telemetry, transactions, shell
+    - ground_station/analysis/: artifacts, runs, session
+    - ground_station/comm/: wifi_bridge stream, transaction events, mavlink limit
+    - ground_station/livewatch/: capture_preset, probe, manifests
+    - ground_station/flashtool/: safe_flash, rebuild_and_flash, artifact_custody, build_id
+    - firmware/: command_protocol, platform_registry, rtos_observability, build_identity
+    - docs/dashboard-platform/: S1-S12 sessions, reports, shell UI, plugin API
+    - registry/platform_registry.yaml
+    - scripts/generate_platform_registry.py
+    
+    Changes:
+    - API/subscribe.c: subscribe_c API updated
+    - BSP/usart4.c, usart5.c: updated
+    - TASK/send_data.c: updated
+    - USER/main.c, .uvprojx, .uvguix: updated
+    - README.md: updated
+    
+    Build artifacts (OBJ/*.axf, *.hex, *.map, *.o, *.crf, *.d, *.htm, *.lnp, *.dep) excluded via .gitignore
+
+diff --git a/ground_station/comm/wifi_bridge.py b/ground_station/comm/wifi_bridge.py
+index 3448594..ba6c462 100644
+--- a/ground_station/comm/wifi_bridge.py
++++ b/ground_station/comm/wifi_bridge.py
+@@ -77,6 +77,10 @@ from .boot_default_layout import (
+     DASHBOARD_FRAME_A_VARS,
+     DASHBOARD_FRAME_A_DIVIDER,
+ )
++from ground_station.platform.transactions import Command as TransactionCommand
++from ground_station.platform.transactions import build_command as build_transaction_command
++from ground_station.platform.transactions import Result as TransactionResult
++from ground_station.platform.transactions import parse_result_parts
+ 
+ 
+ def _parse_simple_yaml(path: Path) -> Dict[str, Any]:
+@@ -205,6 +209,10 @@ class WifiBridge:
+         # pipeline-hardening session).
+         self._stream_schemas: Dict[int, Any] = {}
+         self._stream_lock = threading.Lock()
++        # Per-slot sequence accounting is kept at the transport boundary so
++        # dashboards can distinguish radio loss from a stale value. The
++        # firmware sequence is modulo-256 and is independent for each slot.
++        self._stream_stats: Dict[int, Dict[str, int]] = {}
+ 
+         # Telemetry state (written by RX thread, read by UDP send thread)
+         self._last_telem: Dict[str, Any] = {}
+@@ -217,6 +225,8 @@ class WifiBridge:
+         self._cmd_udp: Optional[socket.socket] = None
+         self._telem_udp: Optional[socket.socket] = None
+         self._udp_send: Optional[socket.socket] = None   # separate socket for mirror
++        self._transaction_id = 0
++        self._transaction_results: queue.Queue[TransactionResult] = queue.Queue()
+ 
+         # Preset-subscribe state (written/read by calling thread and RX thread)
+         self._preset_schema_event = threading.Event()
+@@ -277,30 +287,24 @@ class WifiBridge:
+         """
+         self._wifi = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+         self._wifi.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+-        # Bind to the MicoAir interface IP with an ephemeral port.
+-        # Binding to 0.0.0.0:14550 does NOT receive MicoAir frames on Windows
+-        # (the MicoAir sends to the specific interface IP, not the wildcard).
+-        # Binding to 192.168.4.2:14550 and sending from the same socket also does
+-        # NOT work — the MicoAir apparently suppresses data when the nudge source
+-        # port equals its own RX port (14550).  The solution: bind to
+-        # 192.168.4.2:0 (ephemeral port on the specific IP) and use the SAME
+-        # socket for both sending the nudge and receiving the data frames.
+-        # The MicoAir responds to the nudge source port (ephemeral) and the OS
+-        # routes the response to the socket bound to that same ephemeral port.
+-        self._wifi.bind(("192.168.4.2", 0))
++        # Bind to port 14550: this socket handles BOTH nudge send (to aim MicoAir
++        # downlink) AND all response/telemetry frames from the MicoAir (which routes
++        # responses back to the send port). Previously this was an ephemeral port,
++        # which received telemetry but NOT command result frames (those arrive from
++        # port 14550 where _wifi_send was bound). Merging into one socket fixes
++        # the routing: all inbound data goes to the same socket that sent the nudge.
++        self._wifi.bind(("0.0.0.0", 14550))
+         self._wifi.settimeout(0.1)
+ 
+-        # Nudge: 1-byte datagram to tell the MicoAir to aim its downlink at us.
+-        # Sent on the same socket as RX so the MicoAir's response goes to our RX.
++        # Nudge on the same socket so MicoAir routes the response here.
+         try:
+             self._wifi.sendto(b"\x00", (self._nudge_host, self._nudge_port))
+         except OSError:
+             pass
+ 
+-        # Separate send socket for command frames (0xCC 0xDD) that must originate
+-        # from port 14550 (the MicoAir's command port).
+-        self._wifi_send = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+-        self._wifi_send.bind(("192.168.4.2", 14550))
++        # _wifi_send is the same socket as _wifi (merged for unified RX/TX on port 14550).
++        # Point the attribute at _wifi so send_transaction / _send_cmd_frame work unchanged.
++        self._wifi_send = self._wifi
+ 
+         self._cmd_udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+         self._cmd_udp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+@@ -312,6 +316,8 @@ class WifiBridge:
+         self._telem_udp.setblocking(False)
+ 
+         self._udp_send = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
++        self._transaction_id = 0
++        self._transaction_results = queue.Queue()
+ 
+         # Telemetry-mode switch BEFORE threads start so the FC's
+         # g_telemetry_mode is settled on the first Send_Task cycle. We use
+@@ -353,6 +359,23 @@ class WifiBridge:
+         """Enqueue a command (thread-safe, for programmatic use)."""
+         self._cmd_queue.put_nowait({"cmd_id": cmd_id, "index": index, "value": value})
+ 
++    def send_transaction(self, cmd_id: int, index: int, value: float,
++                         flags: int = 0) -> int:
++        """Send a versioned command envelope and return its transaction ID."""
++        self._transaction_id = (self._transaction_id + 1) & 0xFFFF
++        if self._transaction_id == 0:
++            self._transaction_id = 1
++        command = TransactionCommand(self._transaction_id, cmd_id, index, value, flags)
++        self._send_transaction_frame(build_transaction_command(command))
++        return command.transaction_id
++
++    def poll_transaction_result(self, timeout: float = 0.0) -> Optional[TransactionResult]:
++        """Return the next correlated transaction outcome, if available."""
++        try:
++            return self._transaction_results.get(timeout=max(0.0, timeout))
++        except queue.Empty:
++            return None
++
+     def apply_manifest_schema(self, slot: int, schema) -> None:
+         """Record a per-slot schema so 0x09+slot frames can be named.
+ 
+@@ -362,6 +385,8 @@ class WifiBridge:
+         """
+         with self._stream_lock:
+             self._stream_schemas[slot] = schema
++            self._stream_stats[slot] = {"received": 0, "dropped": 0,
++                                        "crc_errors": 0, "last_seq": -1}
+ 
+     def _request_slot0_schema(self, layout: str = "dashboard") -> None:
+         """Send 0x21 subscribe request for slot 0 using the chosen layout.
+@@ -833,7 +858,10 @@ class WifiBridge:
+                 if result is None:
+                     break  # partial frame: wait for more data
+                 tag, payload = result
+-                self._publish_telem(tag, payload)
++                if tag == "transaction":
++                    self._transaction_results.put(payload)
++                else:
++                    self._publish_telem(tag, payload)
+ 
+     def _parse_one(self, buf: bytearray) -> tuple | None:
+         """Parse one complete frame from buf.
+@@ -902,6 +930,12 @@ class WifiBridge:
+                             if not self._pending_preset_slots:
+                                 self._preset_schema_event.set()
+                     return None  # don't forward schema to dashboard
++                elif frame_type in (0x30, 0x31, 0x32):
++                    try:
++                        result = parse_result_parts(frame_type, frame[5], frame[6:-1])
++                    except Exception:
++                        return None
++                    return "transaction", result
+                 # Subscribe data frames: TYPE = 0x09 + slot.
+                 # Slot 0 is reserved for livewatch's auto-subscribe; the
+                 # data frame type would be 0x09 but the FC emits only 0x0A
+@@ -938,6 +972,21 @@ class WifiBridge:
+                 else:
+                     return None  # unknown frame type — wait for more data
+ 
++        # --- 50-53 B raw datagrams: 12 LE float32 + variable tail (2-5 B) ---
++        # Observed at ~98 Hz on USART3 TX. These are telemetry payloads with no
++        # magic header. Match by size window; 12 floats = 48 B + tail = 50-53 B.
++        # Goes before the JustFloat block so it takes priority over that heuristic.
++        if 50 <= len(buf) <= 53:
++            raw12 = bytes(buf[:48])  # 12 floats × 4 bytes = 48
++            floats = list(struct.unpack("<12f", raw12))
++            tail_len = len(buf) - 12
++            result = {f"f{i}": float(floats[i]) for i in range(12)}
++            result["len"] = len(buf)
++            if tail_len > 0:
++                result["tail"] = bytes(buf[12:])
++            del buf[:]
++            return "data", result
++
+         # --- Raw 16-byte JustFloat attitude (usart3_send fallback) ---
+         # When no subscribe stream and no telemetry mirror is active.
+         if len(buf) >= 16 and buf[12:16] == b"\x00\x00\x80\x7f":
+@@ -1479,10 +1528,19 @@ class WifiBridge:
+             crc ^= b
+         frame = body + bytes([crc])
+         try:
+-            self._wifi_send.sendto(frame, (self._wifi_host, self._wifi_port))
++            sender = getattr(self, "_wifi_send", self._wifi)
++            sender.sendto(frame, (self._wifi_host, self._wifi_port))
+         except OSError as e:
+             print(f"[wifi_bridge] send error: {e}", file=sys.stderr)
+ 
++    def _send_transaction_frame(self, frame: bytes) -> None:
++        """Send one versioned transaction envelope over the command socket."""
++        try:
++            sender = getattr(self, "_wifi_send", self._wifi)
++            sender.sendto(frame, (self._wifi_host, self._wifi_port))
++        except OSError as e:
++            print(f"[wifi_bridge] transaction send error: {e}", file=sys.stderr)
++
+     # CMD 0x0F index mapping for the telemetry-mode switch.
+     # See TASK/send_data.c::Process_GroundStation_Command (idx 100..102).
+     # idx 0..12 is the MRAC feature-flag multiplex (different handler).
+@@ -1669,8 +1727,22 @@ class WifiBridge:
+ 
+         json_payload = {f"slot{slot}.{name}": round(float(v), 6)
+                         for name, v in zip(names, values)}
++        with self._stream_lock:
++            stats = self._stream_stats.setdefault(
++                slot, {"received": 0, "dropped": 0, "crc_errors": 0, "last_seq": -1})
++            previous = stats["last_seq"]
++            if previous >= 0:
++                stats["dropped"] += (seq - previous - 1) & 0xFF
++            stats["last_seq"] = int(seq)
++            stats["received"] += 1
++            received = stats["received"]
++            dropped = stats["dropped"]
++        total = received + dropped
+         json_payload[f"slot{slot}.t_ms"] = int(t_ms)
+         json_payload[f"slot{slot}.seq"] = int(seq)
++        json_payload[f"slot{slot}.received"] = received
++        json_payload[f"slot{slot}.dropped"] = dropped
++        json_payload[f"slot{slot}.loss_pct"] = round(100.0 * dropped / total, 3) if total else 0.0
+         return {"json": json_payload, "values": list(values), "names": names}
+ 
+     def _forward_vofa(self, slot: int, values: list) -> None:

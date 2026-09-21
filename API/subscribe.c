@@ -14,6 +14,7 @@
 #include "task.h"     /* xTaskGetTickCount -- the data frames' source clock */
 #include "usart5.h"   /* Uart5_Subscribe_TxSend */
 #include "usart3.h"   /* Usart3_Stream_TxSend / Usart3_Stream_Busy, USART3_BAUD */
+#include "fw_identity.h"
 
 /* File-scope reply buffer. Send_Task stack is 500 words (2 kB); the worst-
  * case reply is 6 (header) + 32 * (6 + 4) (tuples with 4-byte value) + 1 (CRC)
@@ -355,7 +356,9 @@ static void Subscribe_TxReplyToTransport(const uint8_t* buf, uint16_t len)
     if ((buf == 0) || (len == 0U)) {
         return;
     }
-    if (Subscribe_RxTransport == SUBSCRIBE_RX_TRANSPORT_USART3) {
+    /* Latched with the staged frame: Subscribe_RxTransport may already have
+     * moved on to a newer ingress by the time Send_Task gets here. */
+    if (UA5RxSubscribeTransport == SUBSCRIBE_RX_TRANSPORT_USART3) {
         (void)Usart3_Stream_TxSend(buf, len);
     } else {
         Uart5_Subscribe_TxSend(buf, len);
@@ -380,9 +383,9 @@ static uint8_t s_rr;
 static Subscribe_Stream_t s_stream_staging;
 
 /* Data-frame buffer. Held by DMA between arming and completion, hence
- * file-scope: 6 header + 1024 payload + 1 CRC = 1031 B, far past what a
+ * file-scope: 6 header + 4 ts + 1024 payload + 2 CRC = 1036 B, far past what a
  * 500-word Send_Task stack could carry. */
-static uint8_t stream_buf[SUBSCRIBE_STREAM_MAX_BYTES + 8U];
+static uint8_t stream_buf[SUBSCRIBE_STREAM_MAX_BYTES + SUBSCRIBE_STREAM_FRAME_OVERHEAD];
 static uint16_t stream_len;
 
 uint8_t Subscribe_ValidateRange(uint32_t address, uint16_t size, uint16_t count,
@@ -531,6 +534,14 @@ uint8_t Subscribe_ParseStreamRequest(const uint8_t* buf, uint16_t len,
         (void)CopyStr((uint8_t*)err_out, "E:bad transport", err_cap);
         return 0U;
     }
+#if !SUBSCRIBE_UART5_ENABLED
+    /* Uart5_Subscribe_TxSend is a no-op stub in this build: ACKing a UART5
+     * stream would arm a slot whose every frame is dropped silently. */
+    if (transport == SUBSCRIBE_TRANSPORT_UART5) {
+        (void)CopyStr((uint8_t*)err_out, "E:UART5 disabled", err_cap);
+        return 0U;
+    }
+#endif
     if (n_ranges == 0U) {
         (void)CopyStr((uint8_t*)err_out, "E:no ranges", err_cap);
         return 0U;
@@ -881,6 +892,15 @@ void Uart5_Subscribe_HandleRequest(void)
         (UA5RxSubscribeBuf[2] == PLATFORM_REGISTRY_DIGEST_CMD)) {
         if (PlatformRegistry_BuildDigest(tx_buf, (uint16_t)sizeof(tx_buf),
                                          &tx_len) != 0U) {
+            Subscribe_TxReplyToTransport(tx_buf, tx_len);
+        }
+        UA5RxSubscribePending = 0U;
+        return;
+    }
+    if ((UA5RxSubscribeLen >= 3U) &&
+        (UA5RxSubscribeBuf[2] == FW_IDENTITY_CMD)) {
+        if (FwIdentity_BuildReply(tx_buf, (uint16_t)sizeof(tx_buf),
+                                  &tx_len) != 0U) {
             Subscribe_TxReplyToTransport(tx_buf, tx_len);
         }
         UA5RxSubscribePending = 0U;

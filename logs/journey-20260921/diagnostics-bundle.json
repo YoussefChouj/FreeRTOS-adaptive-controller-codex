@@ -1,0 +1,28 @@
+{
+  "browser": {
+    "base_url": "http://127.0.0.1:8081/",
+    "console_errors": [],
+    "fixture": null,
+    "http_errors": [],
+    "journey": "default-shell-smoke",
+    "observed_by": "ground_station.service.journey",
+    "report": "report.json",
+    "screenshot": "step-00-shell-loads-with-all-workspace-tabs.png",
+    "screenshots": [
+      "step-00-shell-loads-with-all-workspace-tabs.png"
+    ],
+    "source_confirmed": "live_observed",
+    "steps": [
+      {
+        "index": 0,
+        "name": "shell loads with all workspace tabs",
+        "url": "http://127.0.0.1:8081/",
+        "verdict": "pass"
+      }
+    ],
+    "unavailable": [],
+    "verdict": "pass"
+  },
+  "error": "GET http://127.0.0.1:8081/api/diagnostics/bundle failed: HTTPError: HTTP Error 502: Bad Gateway",
+  "unavailable": "service diagnostics bundle; browser section contains the journey observations"
+}

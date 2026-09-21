@@ -104,10 +104,21 @@
   /* ── Mimic-diagram stage model ─────────────────────────────────────────
    * Every row: plain-language label, the verified key, its unit, decimals.
    * plain = operator label; key = symbol an expert can trace. */
+  /* Slot binding (2026-09-21 binding-table task): the WiFi link carries
+   * ONLY the typed slot-0 subscribe stream -- the legacy Frame B/C frames
+   * never arrive on USART3 in this mode, so every stage that read a Frame
+   * B/C key was honestly "NO DATA" while the underlying variables streamed
+   * fine. The slot-0 layout now carries the same firmware variables the
+   * frame builders pack (send_data.c:1090-1130 gyro/earth/alt, :1196-1198
+   * PID), and the service maps them to the same spec keys below. Stages
+   * whose data is slot-0-published therefore bind to slot '0'; the motors
+   * stage stays on slot 3 -- the firmware has no per-motor RPM scalar a
+   * slot can subscribe to (RPM_Get computes on the fly), so it honestly
+   * renders NO DATA until firmware exposes one. */
   var STAGES = [
     {
-      id: 'imu', title: 'Gyro sensor', hint: 'Frame C · c.gyro_*',
-      slot: '3',
+      id: 'imu', title: 'Gyro sensor', hint: 'slot 0 · Gyro_*_Real → c.gyro_* (Frame C source)',
+      slot: '0',
       rows: [
         { plain: 'Roll rate',  key: 'c.gyro_x', unit: 'rad/s', dec: 2, signed: true },
         { plain: 'Pitch rate', key: 'c.gyro_y', unit: 'rad/s', dec: 2, signed: true },
@@ -115,8 +126,8 @@
       ],
     },
     {
-      id: 'filter', title: 'Rate filter (flown)', hint: 'Frame B · pid.gyro*.FB — GyroFilter output',
-      slot: '1',
+      id: 'filter', title: 'Rate filter (flown)', hint: 'slot 0 · Ctrler.gyro*PID.FB → pid.gyro*.FB (Frame B source)',
+      slot: '0',
       rows: [
         { plain: 'Filtered roll rate',  key: 'pid.gyrox.FB', unit: 'deg/s', dec: 1, signed: true },
         { plain: 'Filtered pitch rate', key: 'pid.gyroy.FB', unit: 'deg/s', dec: 1, signed: true },
@@ -124,26 +135,26 @@
       ],
     },
     {
-      id: 'att', title: 'Attitude estimate', hint: 'Frame C · c.roll / c.pitch / c.yaw',
-      slot: '3',
+      id: 'att', title: 'Attitude estimate', hint: 'slot 0 · imu_data.rol/pit/yaw → c.roll / c.pitch / c.yaw (Frame C source)',
+      slot: '0',
       rows: [
-        { plain: 'Roll',  key: 'c.roll',  unit: 'deg', dec: 1, signed: true },
-        { plain: 'Pitch', key: 'c.pitch', unit: 'deg', dec: 1, signed: true },
-        { plain: 'Yaw',   key: 'c.yaw',   unit: 'deg', dec: 1, signed: true },
+        { plain: 'Roll',  key: 'c.roll',  unit: 'deg', dec: 1, signed: true, alt: 'status.roll_deg' },
+        { plain: 'Pitch', key: 'c.pitch', unit: 'deg', dec: 1, signed: true, alt: 'status.pitch_deg' },
+        { plain: 'Yaw',   key: 'c.yaw',   unit: 'deg', dec: 1, signed: true, alt: 'status.yaw_deg' },
       ],
     },
     {
-      id: 'pos', title: 'Position estimate', hint: 'Frame C · c.earth_x / c.earth_y / c.altitude',
-      slot: '3',
+      id: 'pos', title: 'Position estimate', hint: 'slot 0 · ano_of.earth_x/y + of_alt_cm → c.earth_* / c.altitude (Frame C source)',
+      slot: '0',
       rows: [
         { plain: 'Position X', key: 'c.earth_x',  unit: 'm', dec: 2, signed: true },
         { plain: 'Position Y', key: 'c.earth_y',  unit: 'm', dec: 2, signed: true },
-        { plain: 'Altitude',   key: 'c.altitude', unit: 'm', dec: 2 },
+        { plain: 'Altitude',   key: 'c.altitude', unit: 'm', dec: 2, alt: 'c.altitude_cm', scale: 0.01 },
       ],
     },
     {
-      id: 'rctrl', title: 'Rate controllers', hint: 'Frame B · pid.gyro*.U — normalised mixer command',
-      slot: '1',
+      id: 'rctrl', title: 'Rate controllers', hint: 'slot 0 · Ctrler.gyro*PID.U → pid.gyro*.U (Frame B source)',
+      slot: '0',
       rows: [
         { plain: 'Roll output',  key: 'pid.gyrox.U', unit: 'cmd', dec: 3, signed: true },
         { plain: 'Pitch output', key: 'pid.gyroy.U', unit: 'cmd', dec: 3, signed: true },
@@ -151,7 +162,7 @@
       ],
     },
     {
-      id: 'mrac', title: 'MRAC augmentation', hint: 'Frame A · mrac.*.u_ad / .e — adaptive add-on',
+      id: 'mrac', title: 'MRAC augmentation', hint: 'slot 0 · mrac.*.u_ad / .e — adaptive add-on',
       slot: '0',
       rows: [
         { plain: 'Roll adaptive',  key: 'mrac.roll.u_ad',  unit: 'cmd',  dec: 3, signed: true },
@@ -161,7 +172,7 @@
       ],
     },
     {
-      id: 'motors', title: 'Motors', hint: 'Frame C · motor.rpm_0..3',
+      id: 'motors', title: 'Motors', hint: 'Frame C · motor.rpm_0..3 — no RPM scalar to subscribe (firmware TODO)',
       slot: '3',
       rows: [
         { plain: 'Motor 1', key: 'motor.rpm_0', unit: 'rpm', dec: 0 },
@@ -194,14 +205,16 @@
   var AI_PITCH_PPD = 2.0;
 
   var AI_ROWS = [
-    { plain: 'Roll',  key: 'c.roll',  unit: 'deg', dec: 1, signed: true },
-    { plain: 'Pitch', key: 'c.pitch', unit: 'deg', dec: 1, signed: true },
-    { plain: 'Yaw',   key: 'c.yaw',   unit: 'deg', dec: 1, signed: true },
+    { plain: 'Roll',  key: 'c.roll',  unit: 'deg', dec: 1, signed: true, alt: 'status.roll_deg' },
+    { plain: 'Pitch', key: 'c.pitch', unit: 'deg', dec: 1, signed: true, alt: 'status.pitch_deg' },
+    { plain: 'Yaw',   key: 'c.yaw',   unit: 'deg', dec: 1, signed: true, alt: 'status.yaw_deg' },
   ];
 
   /* Classification stage for the horizon: roll + pitch drive the picture,
-   * so they — not yaw — decide whether the instrument is live. */
-  var AI_STAGE = { id: 'ai', slot: '3', rows: [AI_ROWS[0], AI_ROWS[1]] };
+   * so they — not yaw — decide whether the instrument is live. Bound to
+   * slot 0 since the 2026-09-21 binding fix (attitude streams there as
+   * status.roll_deg/pitch_deg/yaw_deg; Frame C never arrives on WiFi). */
+  var AI_STAGE = { id: 'ai', slot: '0', rows: [AI_ROWS[0], AI_ROWS[1]] };
 
   /* ── Pre-flight checklist — task 20260921-065323 ────────────────────────
    * One row per condition that is genuinely observable in telemetry today.
@@ -366,7 +379,33 @@
 
   /* History lookup with the slot-0 raw alias. Returns the same shape as
    * findValue ({val, ts, ...}) or null. Both bindings are the same firmware
-   * variable, so this is not a proxy — it is another spelling of one value. */
+   * variable, so this is not a proxy — it is another spelling of one value.
+   * Stage rows may also declare an `alt` (the slot-0 spec spelling of a
+   * legacy Frame B/C key) and a `scale` (unit conversion the legacy frame
+   * builder applied, e.g. ano_of.of_alt_cm cm → m) — folded in here so
+   * cells and sparklines always show the same unit. */
+  var _rowAlias = (function () {
+    var m = {};
+    STAGES.forEach(function (st) {
+      st.rows.forEach(function (r) { if (r.alt) m[r.key] = r.alt; });
+    });
+    AI_ROWS.forEach(function (r) { if (r.alt) m[r.key] = r.alt; });
+    return m;
+  })();
+  var _keyScale = (function () {
+    var m = {};
+    STAGES.forEach(function (st) {
+      st.rows.forEach(function (r) { if (r.scale) m[r.key] = r.scale; });
+    });
+    return m;
+  })();
+  // Merge stage/AI aliases into the weight alias map (single lookup table).
+  (function () {
+    for (var k in _rowAlias) {
+      if (!_weightAlias[k]) _weightAlias[k] = _rowAlias[k];
+    }
+  })();
+
   function findHistoryValue(state, key) {
     var f = findValue(state, key);
     if (f && f.val != null) return f;
@@ -374,6 +413,16 @@
     if (raw) {
       var g = findValue(state, raw);
       if (g && g.val != null) return g;
+    }
+    return f;
+  }
+
+  /* Row lookup for stage cells: key → alt fallback, then unit scale. */
+  function findRowValue(state, row) {
+    var f = (row.alt) ? findHistoryValue(state, row.key) : findValue(state, row.key);
+    if (f && f.val != null && row.scale) {
+      f = { val: Number(f.val) * row.scale, ts: f.ts,
+            slotName: f.slotName, loss: f.loss };
     }
     return f;
   }
@@ -433,7 +482,8 @@
     }
     var anyKey = false;
     for (var i = 0; i < stage.rows.length; i++) {
-      if (s.values[stage.rows[i].key] != null) { anyKey = true; break; }
+      var r = stage.rows[i];
+      if (s.values[r.key] != null || (r.alt && s.values[r.alt] != null)) { anyKey = true; break; }
     }
     if (!anyKey) {
       return { cls: 'nodata', label: 'NO DATA', sub: 'not published by this build' };
@@ -707,7 +757,9 @@
       var sample = { t: null, v: null };
       if (f && f.val != null && !isNaN(f.val) && f.ts != null) {
         sample.t = f.ts;
-        sample.v = (nowMs - f.ts / 1e6) <= ttlMs ? Number(f.val) : null; // stale → gap
+        sample.v = (nowMs - f.ts / 1e6) <= ttlMs
+          ? Number(f.val) * (_keyScale[key] || 1)  // row unit scale (cm → m etc.)
+          : null; // stale → gap
       }
       _hist[key].push(sample);
       if (_hist[key].length > HIST_MAX) _hist[key].shift();
@@ -1530,7 +1582,7 @@
       st.rows.forEach(function (r, ri) {
         var el = q('ov-val-' + st.id + '-' + ri);
         if (!el) return;
-        var f = (cs.cls === 'nodata') ? null : findValue(state, r.key);
+        var f = (cs.cls === 'nodata') ? null : findRowValue(state, r);
         if (f == null || f.val == null || isNaN(f.val)) {
           el.textContent = (cs.cls === 'nodata') ? 'NO DATA' : 'NOT PUBLISHED';
           el.className = 'ov-row-val ov-row-val-nodata';
@@ -1624,8 +1676,8 @@
     }
     var horizon = q('ov-ai-horizon');
     if (horizon) {
-      var roll = dead ? null : findValue(state, 'c.roll');
-      var pitch = dead ? null : findValue(state, 'c.pitch');
+      var roll = dead ? null : findHistoryValue(state, 'c.roll');
+      var pitch = dead ? null : findHistoryValue(state, 'c.pitch');
       if (roll && pitch && roll.val != null && pitch.val != null &&
           !isNaN(roll.val) && !isNaN(pitch.val)) {
         horizon.setAttribute('transform',
@@ -1636,7 +1688,7 @@
     AI_ROWS.forEach(function (r, ri) {
       var el = q('ov-ai-ro-' + ri);
       if (!el) return;
-      var f = dead ? null : findValue(state, r.key);
+      var f = dead ? null : findRowValue(state, r);
       if (f == null || f.val == null || isNaN(f.val)) {
         el.textContent = (cs.cls === 'nodata') ? 'NO DATA' : 'NOT PUBLISHED';
         el.className = 'ov-ai-ro-val ov-ai-ro-val-nodata';

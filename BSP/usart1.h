@@ -14,7 +14,7 @@ void USART1_Configuration(void);
 void sbus_decode(unsigned char buffer[24]);
 void DrvSbusGetOneByte(u8 data);
 	
-extern  unsigned short sbus_channel[16];
+extern  volatile unsigned short sbus_channel[16];
 
 
 

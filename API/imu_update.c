@@ -148,7 +148,7 @@ void IMU_Update_Mahony(_imu_st *imu,float dt)
 	}
 
 	/* A3: publish readiness — settled, or the hard timeout as a lockout guard. */
-	g_estimator_ready = (s_settled || (s_boot_t > IMU_READY_TIMEOUT)) ? 1U : 0U;
+	g_estimator_ready = (sensor.sensor_ok && (s_settled || (s_boot_t > IMU_READY_TIMEOUT))) ? 1U : 0U;
 
 	/* TkTk+1, */
 	delta_theta[0] = Gyro_X_Real*half_T;
@@ -214,6 +214,9 @@ void IMU_Update_Mahony(_imu_st *imu,float dt)
  * arming and by StabilizerTask to hold the OF world origin at zero. */
 uint8_t IMU_EstimatorReady(void)
 {
+	if (!sensor.sensor_ok) {
+		return 0U;
+	}
 	return g_estimator_ready;
 }
 

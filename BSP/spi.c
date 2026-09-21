@@ -61,9 +61,13 @@ void SPI_Configuration(void)
 
 USHORT16 spi2_read_write_byte(USHORT16 txc)
 {
-	while((SPI2->SR&SPI_SR_TXE)==0);
+	uint32_t to = 10000U;
+	while (((SPI2->SR & SPI_SR_TXE) == 0) && --to);
+	if (!to) return 0U;
 	SPI2->DR = txc;
-	while((SPI2->SR&SPI_SR_RXNE)==0);
+	to = 10000U;
+	while (((SPI2->SR & SPI_SR_RXNE) == 0) && --to);
+	if (!to) return 0U;
 	return SPI2->DR;
 }
 

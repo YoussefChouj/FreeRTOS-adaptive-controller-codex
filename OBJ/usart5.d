@@ -86,3 +86,8 @@
 ..\obj\usart5.o: ..\API\GPS.h
 ..\obj\usart5.o: ..\TASK\send_data.h
 ..\obj\usart5.o: ..\API\subscribe.h
+..\obj\usart5.o: ..\firmware\platform_registry.h
+..\obj\usart5.o: ..\firmware\platform_registry_gen.h
+..\obj\usart5.o: ..\firmware\command_protocol.h
+..\obj\usart5.o: ..\firmware\gs_command.h
+..\obj\usart5.o: ..\API\fw_identity.h
