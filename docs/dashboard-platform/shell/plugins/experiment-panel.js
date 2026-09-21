@@ -318,7 +318,7 @@
       badge.style.color = color;
     }
     if (tickLabel) tickLabel.textContent = 'Tick: ' + (run.tick != null ? run.tick : '—');
-    if (sampleCount) sampleCount.textContent = (run.samples ? run.samples.length : 0) + ' samples';
+    if (sampleCount) sampleCount.textContent = (run.samples ? run.samples.length : '—') + ' samples';
 
     if (startBtn) startBtn.disabled = true;
     if (abortBtn) abortBtn.disabled = (state === 'complete' || state === 'aborted');
@@ -326,19 +326,22 @@
     // Update progress bars
     var settlePct = 0, measurePct = 0;
     if (run.settle_ticks && run.settle_ticks > 0) {
-      settlePct = state === 'measuring' || state === 'complete' || state === 'aborted'
+      settlePct = state === 'measuring' || state === 'complete'
         ? 1.0
         : Math.min(1.0, (run.tick || 0) / run.settle_ticks);
     }
     if (run.measure_ticks && run.measure_ticks > 0) {
-      if (state === 'complete' || state === 'aborted') {
+      if (state === 'complete') {
         measurePct = 1.0;
       } else if (state === 'measuring') {
         measurePct = Math.min(1.0, Math.max(0, (run.tick || 0) - (run.settle_ticks || 0)) / run.measure_ticks);
       }
     }
-    updateSettleBar(settlePct, state === 'settling' ? color : STATE_COLORS.complete);
-    updateMeasureBar(measurePct, state === 'measuring' ? color : STATE_COLORS.complete);
+    // An aborted run never completed a phase: bars show the real fraction
+    // in the aborted color instead of a green full bar.
+    var barColor = state === 'aborted' ? STATE_COLORS.aborted : STATE_COLORS.complete;
+    updateSettleBar(settlePct, state === 'settling' ? color : barColor);
+    updateMeasureBar(measurePct, state === 'measuring' ? color : barColor);
   }
 
   function updateSettleBar(pct, color) {
