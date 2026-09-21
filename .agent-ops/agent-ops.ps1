@@ -43,10 +43,16 @@ $modelMap = @{
     'opus'      = 'claude-opus-4-6-thinking'
     'gpt'       = 'gpt-oss-120b-medium'
 }
-# Volcengine Ark Agent Plan (Medium): its own monthly AFP budget, separate from
-# both agy pools and the supervisor's Claude plan. 'auto' bills at a 0.5x AFP
-# coefficient through 2026-11-08, so it is the default; the rest are 1M-context.
+# Volcengine Ark Agent Plan (Medium): its own AFP budget, separate from both agy
+# pools and the supervisor's Claude plan. AFP per 1M tokens = coefficient x 100,
+# input and output alike, and cached input gets no discount (Ark docs 2516283,
+# via the Ark console assistant 2026-09-21). So the model is the main cost lever:
+# 'cheap' (0.5) is the default; 'glm' (4.5) and 'deepseek' (5.5) are for
+# firmware and review work only. 'auto' (ark-code-latest) is whatever model is
+# enabled in the Ark console, so its cost is not known from here.
 $arkModelMap = @{
+    'cheap'    = 'deepseek-v4-flash[1m]'
+    'mini'     = 'doubao-seed-2.0-mini'
     'auto'     = 'ark-code-latest'
     'glm'      = 'glm-5.3[1m]'
     'kimi'     = 'kimi-k3[1m]'
@@ -54,7 +60,7 @@ $arkModelMap = @{
     'flash'    = 'deepseek-v4.1-flash[1m]'
 }
 if ($Worker -eq 'ark') {
-    if (-not $PSBoundParameters.ContainsKey('Model')) { $Model = 'auto' }
+    if (-not $PSBoundParameters.ContainsKey('Model')) { $Model = 'cheap' }
     $modelId = if ($arkModelMap.ContainsKey($Model)) { $arkModelMap[$Model] } else { $Model }
 } else {
     $modelId = if ($modelMap.ContainsKey($Model)) { $modelMap[$Model] } else { $Model }
