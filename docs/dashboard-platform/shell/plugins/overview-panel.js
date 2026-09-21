@@ -45,6 +45,16 @@
  *     shadow box → sparkline of that key's session history.
  *   - Battery trend / time-to-empty from the status.vbat session history.
  *
+ * Experiment observability (task 20260921-103141):
+ *   - Flight FSM view: every state of FlightState_t / FlightPhase_t rendered,
+ *     the current one highlighted, with last transition and dwell time. The
+ *     state list is read from API/flight_fsm.h; it is never inferred from
+ *     status.arm / status.flymode.
+ *   - Adaptation (MRAC) view: the six adaptive weights per axis, their
+ *     session sparklines, and a converging / drifting / frozen verdict that
+ *     displays the numeric evidence it rests on — UNKNOWN until enough
+ *     samples were actually received.
+ *
  * Session sample history: the buffer machinery follows time-series-panel.js
  * (its `ringBuffers` / `sampleTimestamps` / `onState` ingestion, lines 67-69
  * and 646-664, including its `number | null` gap convention where a sample
@@ -219,10 +229,108 @@
       eval: evalFaults },
   ];
 
+  /* ── Flight FSM model — task 20260921-103141 ────────────────────────────
+   * State lists are copied verbatim from the firmware enums so the panel
+   * cannot silently drift from the aircraft:
+   *   FlightState_t  — API/flight_fsm.h:6-10
+   *     DISARMED = 0, ARMED = 1, EMERGENCY = 2
+   *   FlightPhase_t  — API/flight_fsm.h:17-22
+   *     GROUND_IDLE = 0, FLYING = 1, LANDING = 2, LANDED = 3
+   * Binding (read-only): neither enum is emitted by any frame decoder in
+   * wifi_bridge.py. The only honest keys are the firmware's own variables,
+   * reachable when a slot is subscribed to their DWARF names
+   * (boot_default_layout / slot manager; raw names pass through on slot 0):
+   *   FSM_STATE_KEY 's_state'     — static FlightState_t, flight_fsm.c:7
+   *   FSM_PHASE_KEY 'flight_phase' — extern volatile, flight_fsm.c:8
+   * They are absent from the boot-default layout, so with no custom
+   * subscription this widget reads NOT PUBLISHED (see task result finding).
+   * The state is NEVER inferred from status.arm / status.flymode: those are
+   * synced BY the FSM, and presenting a guess from them as the state would
+   * hide exactly the desync the operator needs to see. */
+  var FSM_STATE_KEY = 's_state';
+  var FSM_PHASE_KEY = 'flight_phase';
+
+  var FLIGHT_STATES = [
+    { val: 0, name: 'DISARMED',  plain: 'Disarmed' },
+    { val: 1, name: 'ARMED',     plain: 'Armed' },
+    { val: 2, name: 'EMERGENCY', plain: 'Emergency stop' },
+  ];
+
+  var FLIGHT_PHASES = [
+    { val: 0, name: 'GROUND_IDLE', plain: 'Ground idle' },
+    { val: 1, name: 'FLYING',      plain: 'Flying' },
+    { val: 2, name: 'LANDING',     plain: 'Landing' },
+    { val: 3, name: 'LANDED',      plain: 'Landed' },
+  ];
+
+  /* ── Adaptation (MRAC) model — task 20260921-103141 ─────────────────────
+   * The adaptive weights are mrac_state.<axis>.Theta[0..5] in firmware
+   * (API/mrac.c — the field is named Theta, not What; Whatf/What_limit are
+   * different objects). Verified published:
+   *   Frame B, 20 Hz, TASK/send_data.c:1176-1194 → wifi_bridge.py:1361-1366
+   *   decodes mrac.<axis>.theta_0..5 → slot 1.
+   * The boot slot-0 subscribe layout also streams the raw DWARF paths
+   * mrac_state.<axis>.Theta[N] (boot_default_layout.py:128-152, raw
+   * passthrough wifi_bridge.py:1149-1151); both spellings name the same
+   * firmware variable, so the raw path is an honest alias, never a proxy.
+   * Weight basis meanings: API/mrac.c:373 comment
+   *   [bias, proportional, derivative, drag, structured, unstructured]. */
+  var ADAPT_AXES = [
+    { axis: 'roll',   label: 'Roll' },
+    { axis: 'pitch',  label: 'Pitch' },
+    { axis: 'yaw',    label: 'Yaw' },
+    { axis: 'z_rate', label: 'Z rate' },
+  ];
+
+  var WEIGHT_PLAIN = ['bias', 'proportional', 'derivative', 'drag', 'structured', 'unstructured'];
+
+  var ADAPT_WEIGHTS = (function () {
+    var out = [];
+    ADAPT_AXES.forEach(function (a) {
+      for (var n = 0; n < 6; n++) {
+        out.push({ axis: a.axis, axisLabel: a.label, n: n,
+          key: 'mrac.' + a.axis + '.theta_' + n,
+          raw: 'mrac_state.' + a.axis + '.Theta[' + n + ']',
+          plain: WEIGHT_PLAIN[n] });
+      }
+    });
+    return out;
+  })();
+
+  /* Verdict thresholds. Theta scale comes from the firmware config in
+   * API/mrac.c:379-380 (roll/pitch What_limit 0.02-0.20, What_tol
+   * 0.005-0.04). Samples are polled at the shell's ~2 Hz /state cadence.
+   * ADAPT_WINDOW: snapshots examined, ≈ 10 s at 2 Hz.
+   * ADAPT_MIN_SNAPS / ADAPT_MIN_SPAN_MS: below either, the verdict is
+   *   UNKNOWN — 10 snapshots spanning ≥ 5 s, matching SPARK_MIN_SAMPLES.
+   * ADAPT_MIN_KEYS: an axis must publish at least 4 of 6 weights.
+   * FROZEN_STEP: mean |Δv| per polled sample below 5e-4 = 1/10 of the
+   *   smallest What_tol (0.005); FROZEN_TRAVEL 1e-3 is the matching bound
+   *   on half-window mean travel. Below both, weights are not moving.
+   * CONVERGE_RATIO: late-window movement below half the early-window
+   *   movement = the adaptation transient has decayed → converging. */
+  var ADAPT_WINDOW      = 20;
+  var ADAPT_MIN_SNAPS   = 10;
+  var ADAPT_MIN_SPAN_MS = 5000;
+  var ADAPT_MIN_KEYS    = 4;
+  var FROZEN_STEP       = 0.0005;
+  var FROZEN_TRAVEL     = 0.001;
+  var CONVERGE_RATIO    = 0.5;
+
   /* ── State ───────────────────────────────────────────────────────────── */
   var _lastState = null;
   var _tickTimer = null;
   var _recentAlarms = [];   // [{id, text, clearedAt}] — cleared but still visible
+
+  /* FSM transition tracking (task 20260921-103141), session-scoped. Per
+   * kind: last value observed, the value before it, entry timestamp (firmware
+   * ns when the key carries one, else host ms) and the host-clock time of the
+   * last change. Absence of the key changes nothing — a NOT PUBLISHED spell
+   * must not look like a transition. */
+  function freshTrack() {
+    return { last: null, prev: null, sinceTs: null, sinceMs: null, atTs: null, atMs: null };
+  }
+  var _fsmTrans = { state: freshTrack(), phase: freshTrack() };
 
   /* Follow-on state (task 20260921-070956). All of it is session-scoped:
    * a page reload starts every buffer, the alarm log and the trend back
@@ -236,15 +344,39 @@
   var _episodeSeq = 0;      // stable per-episode button reference
   var _alarmLogDropped = 0; // episodes evicted by the ALARM_LOG_MAX bound
 
-  /* Every key a value cell can sparkline (mimic stages + shadow + battery). */
+  /* Every key a value cell can sparkline: mimic stages + shadow + battery +
+   * the adaptation weights (task 20260921-103141). Weight history is stored
+   * under its dotted Frame B key; _weightAlias points at the raw DWARF path
+   * the slot-0 subscribe stream uses when the dotted key is absent. */
+  var _weightAlias = (function () {
+    var m = {};
+    ADAPT_WEIGHTS.forEach(function (w) { m[w.key] = w.raw; });
+    return m;
+  })();
+
   var HISTORY_KEYS = (function () {
     var seen = {}, out = [];
     function add(k) { if (k && !seen[k]) { seen[k] = true; out.push(k); } }
     STAGES.forEach(function (st) { st.rows.forEach(function (r) { add(r.key); }); });
     SHADOW_ROWS.forEach(function (r) { add(r.key); });
     add('status.vbat');
+    ADAPT_WEIGHTS.forEach(function (w) { add(w.key); });
     return out;
   })();
+
+  /* History lookup with the slot-0 raw alias. Returns the same shape as
+   * findValue ({val, ts, ...}) or null. Both bindings are the same firmware
+   * variable, so this is not a proxy — it is another spelling of one value. */
+  function findHistoryValue(state, key) {
+    var f = findValue(state, key);
+    if (f && f.val != null) return f;
+    var raw = _weightAlias[key];
+    if (raw) {
+      var g = findValue(state, raw);
+      if (g && g.val != null) return g;
+    }
+    return f;
+  }
 
   /* Value-cell id → key, for the click-to-trend delegation. */
   var _cellKeys = (function () {
@@ -571,7 +703,7 @@
     for (var ki = 0; ki < HISTORY_KEYS.length; ki++) {
       var key = HISTORY_KEYS[ki];
       if (!_hist[key]) _hist[key] = [];
-      var f = findValue(state, key);
+      var f = findHistoryValue(state, key);
       var sample = { t: null, v: null };
       if (f && f.val != null && !isNaN(f.val) && f.ts != null) {
         sample.t = f.ts;
@@ -721,6 +853,152 @@
     if (out.slopeVPerMin < -BAT_FALLING_V_PER_MIN) {
       out.tteMin = Math.max(0, (out.vLast - VBAT_RED_V) / (-out.slopeVPerMin));
     }
+    return out;
+  }
+
+  /* ── Flight FSM logic (task 20260921-103141) ─────────────────────────── */
+
+  /* Record observed value changes for one FSM kind. Only a real published
+   * value drives it — an absent key does not. */
+  function trackFsmKind(kind, f, nowMs) {
+    var tr = _fsmTrans[kind];
+    if (!f || f.val == null || isNaN(f.val)) return;
+    var n = Number(f.val);
+    if (tr.last === null) {
+      tr.last = n; tr.sinceTs = f.ts; tr.sinceMs = nowMs;
+    } else if (n !== tr.last) {
+      tr.prev = tr.last;
+      tr.last = n;
+      tr.atMs = nowMs; tr.atTs = f.ts;
+      tr.sinceMs = nowMs; tr.sinceTs = f.ts;
+    }
+  }
+
+  /* Four honesty states for a raw-key binding, same distinctions as
+   * status-panel.js: not published / stale (age shown) / frozen / live. */
+  function keyLiveState(f, nowMs, ttlMs) {
+    if (!f || f.val == null || isNaN(f.val)) {
+      return { cls: 'np', label: 'NOT PUBLISHED', sub: 'not published by this build', age: null };
+    }
+    var age = (f.ts != null) ? Math.max(0, nowMs - f.ts / 1e6) : null;
+    if (age != null && age > ttlMs) {
+      return { cls: 'nodata', label: 'NO DATA', sub: 'frozen ' + fmtAge(age), age: age };
+    }
+    if (age != null && age > STALE_WARN_MS) {
+      return { cls: 'warn', label: 'STALE', sub: 'age ' + fmtAge(age), age: age };
+    }
+    return { cls: 'ok', label: 'LIVE', sub: '', age: age };
+  }
+
+  /* Time in the current value. Firmware timestamps when both ends carry
+   * them, else host wall clock. */
+  function fsmDwell(tr, f, nowMs) {
+    if (tr.last === null || !f) return null;
+    if (f.ts != null && tr.sinceTs != null) return Math.max(0, (f.ts - tr.sinceTs) / 1e6);
+    if (tr.sinceMs != null) return Math.max(0, nowMs - tr.sinceMs);
+    return null;
+  }
+
+  /* ── Adaptation verdict (task 20260921-103141) ─────────────────────────
+   * An INFERENCE over received samples, so every number behind it is
+   * returned for display. Window = trailing ADAPT_WINDOW snapshots; per
+   * weight the value series is split chronologically, and the mean step
+   * |Δv| of the early vs late half says whether the transient decayed. */
+
+  function arrMean(xs) {
+    var s = 0;
+    for (var i = 0; i < xs.length; i++) s += xs[i];
+    return xs.length ? s / xs.length : null;
+  }
+
+  function stepMean(pts) {
+    if (pts.length < 2) return null;
+    var s = 0;
+    for (var i = 1; i < pts.length; i++) s += Math.abs(pts[i].v - pts[i - 1].v);
+    return s / (pts.length - 1);
+  }
+
+  function computeAdaptVerdict(axis, nowMs) {
+    var weights = [];
+    for (var wi = 0; wi < ADAPT_WEIGHTS.length; wi++) {
+      if (ADAPT_WEIGHTS[wi].axis === axis) weights.push(ADAPT_WEIGHTS[wi]);
+    }
+    var out = { verdict: 'unknown', publishedKeys: 0, nSnaps: 0, spanMs: null,
+      samplesMin: null, samplesMax: null, stepEarly: null, stepLate: null,
+      travel: null, ratio: null, reason: '' };
+
+    var lenMin = Infinity, ptsByKey = [];
+    for (var k = 0; k < weights.length; k++) {
+      var h = _hist[weights[k].key] || [];
+      if (h.length < lenMin) lenMin = h.length;
+      var i0 = Math.max(0, h.length - ADAPT_WINDOW), pts = [];
+      for (var i = i0; i < h.length; i++) {
+        if (h[i] && h[i].v != null && h[i].t != null && !isNaN(h[i].v)) {
+          pts.push({ t: h[i].t, v: h[i].v });
+        }
+      }
+      if (pts.length) out.publishedKeys++;
+      ptsByKey.push(pts);
+    }
+    if (lenMin === Infinity) lenMin = 0;
+
+    // Snapshots in window where ≥ ADAPT_MIN_KEYS weights were present.
+    var absStart = Math.max(0, lenMin - ADAPT_WINDOW);
+    var nSnaps = 0, tMin = null, tMax = null;
+    for (var s = absStart; s < lenMin; s++) {
+      var present = 0;
+      for (var kk = 0; kk < weights.length; kk++) {
+        var hh = _hist[weights[kk].key] || [];
+        if (hh[s] && hh[s].v != null && !isNaN(hh[s].v)) {
+          present++;
+          if (hh[s].t != null) {
+            if (tMin == null || hh[s].t < tMin) tMin = hh[s].t;
+            if (tMax == null || hh[s].t > tMax) tMax = hh[s].t;
+          }
+        }
+      }
+      if (present >= ADAPT_MIN_KEYS) nSnaps++;
+    }
+    out.nSnaps = nSnaps;
+    out.spanMs = (tMin != null && tMax != null) ? (tMax - tMin) / 1e6 : null;
+    var counts = ptsByKey.map(function (p) { return p.length; });
+    out.samplesMin = counts.length ? Math.min.apply(null, counts) : 0;
+    out.samplesMax = counts.length ? Math.max.apply(null, counts) : 0;
+
+    if (out.publishedKeys < ADAPT_MIN_KEYS) {
+      out.reason = 'only ' + out.publishedKeys + ' of 6 weights published by this build';
+      return out;
+    }
+    if (nSnaps < ADAPT_MIN_SNAPS || out.spanMs == null || out.spanMs < ADAPT_MIN_SPAN_MS) {
+      out.reason = 'need ≥ ' + ADAPT_MIN_SNAPS + ' snapshots spanning ≥ ' +
+        fmtAge(ADAPT_MIN_SPAN_MS) + ' — have ' + nSnaps +
+        (out.spanMs != null ? ' spanning ' + fmtAge(out.spanMs) : ' with no timestamps');
+      return out;
+    }
+
+    var stepEarly = -Infinity, stepLate = -Infinity, travel = -Infinity;
+    for (var p = 0; p < ptsByKey.length; p++) {
+      var pts = ptsByKey[p];
+      var half = Math.floor(pts.length / 2);
+      var early = pts.slice(0, half), late = pts.slice(half);
+      if (!early.length || !late.length) continue;
+      var se = stepMean(early), sl = stepMean(late);
+      if (se != null && se > stepEarly) stepEarly = se;
+      if (sl != null && sl > stepLate) stepLate = sl;
+      var tv = Math.abs(arrMean(late.map(function (q2) { return q2.v; })) -
+                       arrMean(early.map(function (q2) { return q2.v; })));
+      if (tv > travel) travel = tv;
+    }
+    if (stepEarly === -Infinity || stepLate === -Infinity || travel === -Infinity) {
+      out.reason = 'not enough consecutive samples within the window';
+      return out;
+    }
+    out.stepEarly = stepEarly; out.stepLate = stepLate; out.travel = travel;
+    out.ratio = (stepEarly > 0) ? stepLate / stepEarly : null;
+
+    if (stepLate < FROZEN_STEP && travel < FROZEN_TRAVEL) out.verdict = 'frozen';
+    else if (out.ratio != null && out.ratio < CONVERGE_RATIO) out.verdict = 'converging';
+    else out.verdict = 'drifting';
     return out;
   }
 
@@ -934,6 +1212,44 @@
       '.ov-spark-last { fill:var(--text); }',
       '.ov-bat-tte { font-family:Consolas,monospace; font-size:14px; font-weight:700; }',
       '.ov-bat-none { font-size:11px; font-weight:600; }',
+      /* Flight FSM (task 20260921-103141) */
+      '.ov-fsm { border:2px solid var(--border); border-radius:6px; padding:6px 10px;',
+      '  margin-bottom:10px; background:var(--card); }',
+      '.ov-fsm-chain { display:flex; align-items:center; gap:4px; flex-wrap:wrap; margin:3px 0; }',
+      '.ov-fsm-state { padding:3px 10px; border:1px solid var(--border); border-radius:4px;',
+      '  font-size:10px; font-weight:700; letter-spacing:0.03em; color:var(--muted);',
+      '  background:transparent; white-space:nowrap; }',
+      '.ov-fsm-arrow { color:var(--muted); font-size:11px; }',
+      '.ov-fsm-cur-ok     { border-color:var(--green); color:var(--green); background:rgba(78,204,163,0.12); }',
+      '.ov-fsm-cur-warn   { border-color:var(--amber); color:var(--amber); background:rgba(245,166,35,0.12); }',
+      '.ov-fsm-cur-nodata { border-color:var(--muted); color:var(--muted); border-style:dashed; }',
+      '.ov-fsm-kindlabel { font-size:10px; color:var(--muted); min-width:46px; }',
+      '.ov-fsm-meta { font-size:10px; color:var(--muted); font-family:Consolas,monospace;',
+      '  display:flex; gap:14px; flex-wrap:wrap; margin-top:2px; }',
+      '.ov-fsm-np { color:var(--amber); font-weight:700; font-size:11px; }',
+      '.ov-fsm-line { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:2px 0; }',
+      /* Adaptation (task 20260921-103141) */
+      '.ov-adapt { border:2px solid var(--border); border-radius:6px; padding:6px 10px;',
+      '  margin-bottom:10px; background:var(--card); }',
+      '.ov-adapt-axes { display:flex; gap:12px; flex-wrap:wrap; }',
+      '.ov-adapt-axis { flex:1 1 420px; min-width:340px; border:1px solid var(--border);',
+      '  border-radius:5px; padding:6px 8px; }',
+      '.ov-adapt-head { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }',
+      '.ov-adapt-verdict { display:inline-block; min-width:104px; text-align:center; padding:2px 8px;',
+      '  border-radius:3px; font-size:10px; font-weight:700; letter-spacing:0.04em; text-transform:uppercase; }',
+      '.ov-adapt-converging { background:rgba(78,204,163,0.15); color:var(--green); }',
+      '.ov-adapt-drifting   { background:rgba(245,166,35,0.18); color:var(--amber); }',
+      '.ov-adapt-frozen     { background:rgba(136,136,170,0.15); color:var(--muted); }',
+      '.ov-adapt-unknown    { background:rgba(136,136,170,0.12); color:var(--muted); }',
+      '.ov-adapt-evidence { font-size:9px; color:var(--muted); font-family:Consolas,monospace;',
+      '  margin:3px 0 5px 0; }',
+      '.ov-weight-grid { display:grid; grid-template-columns:repeat(3,minmax(120px,1fr)); gap:6px 10px; }',
+      '.ov-weight-cell { border:1px solid var(--border); border-radius:4px; padding:3px 6px; }',
+      '.ov-weight-title { font-size:9px; color:var(--muted); display:flex; justify-content:space-between; }',
+      '.ov-weight-val { font-family:Consolas,monospace; font-size:11px; font-weight:700; }',
+      '.ov-weight-val-np { color:var(--amber); font-weight:600; font-size:9px; }',
+      '.ov-weight-spark { display:block; width:100%; height:34px; margin-top:2px; }',
+      '.ov-weight-ins { color:var(--muted); font-size:9px; font-family:Consolas,monospace; padding-top:2px; }',
       '</style>',
     ].join('');
 
@@ -1087,8 +1403,61 @@
       '</div>',
     ].join('');
 
+    /* ── Flight FSM view (task 20260921-103141) ────────────────────────
+     * State pills for both enums, current one highlighted; meta lines
+     * filled by renderFsm(). Read-only: the view sends nothing. */
+    function statePills(prefix, list) {
+      var pills = ['<div class="ov-fsm-chain">'];
+      list.forEach(function (st, idx) {
+        if (idx > 0) pills.push('<span class="ov-fsm-arrow">→</span>');
+        pills.push('<span class="ov-fsm-state" id="' + prefix + '-state-' + st.val + '">' +
+          st.name + '</span>');
+      });
+      pills.push('</div>');
+      return pills.join('');
+    }
+    var fsmView = [
+      '<div class="ov-fsm" id="ov-fsm">',
+      '  <div class="ov-stage-title">Flight state machine',
+      '    <span class="ov-fsm-np" id="ov-fsm-np"></span></div>',
+      '  <div class="ov-stage-hint">states from firmware enums FlightState_t / FlightPhase_t (API/flight_fsm.h:6-22) — read-only, not inferred from other values</div>',
+      '  <div class="ov-fsm-line"><span class="ov-fsm-kindlabel">State</span>',
+      statePills('ov-fsm', FLIGHT_STATES), '</div>',
+      '  <div class="ov-fsm-meta" id="ov-fsm-meta"></div>',
+      '  <div class="ov-fsm-line" style="margin-top:5px"><span class="ov-fsm-kindlabel">Phase</span>',
+      statePills('ov-fph', FLIGHT_PHASES), '</div>',
+      '  <div class="ov-fsm-meta" id="ov-fph-meta"></div>',
+      '</div>',
+    ].join('');
+
+    /* ── Adaptation (MRAC) view (task 20260921-103141) ───────────────── */
+    var adaptAxesHtml = ADAPT_AXES.map(function (a) {
+      var cells = ADAPT_WEIGHTS.filter(function (w) { return w.axis === a.axis; })
+        .map(function (w) {
+          return '<div class="ov-weight-cell">' +
+            '<div class="ov-weight-title"><span>θ' + w.n + ' · ' + w.plain + '</span></div>' +
+            '<div class="ov-weight-val ov-weight-val-np" id="ov-weight-val-' + w.axis + '-' + w.n + '">NOT PUBLISHED</div>' +
+            '<div id="ov-weight-plot-' + w.axis + '-' + w.n + '"></div>' +
+            '</div>';
+        }).join('');
+      return '<div class="ov-adapt-axis">' +
+        '<div class="ov-adapt-head"><span class="ov-stage-title">' + a.label +
+        ' adaptive weights</span>' +
+        '<span class="ov-adapt-verdict ov-adapt-unknown" id="ov-adapt-verdict-' + a.axis + '">UNKNOWN</span></div>' +
+        '<div class="ov-adapt-evidence" id="ov-adapt-ev-' + a.axis + '"></div>' +
+        '<div class="ov-weight-grid">' + cells + '</div>' +
+        '</div>';
+    }).join('');
+    var adaptView = [
+      '<div class="ov-adapt" id="ov-adapt">',
+      '  <div class="ov-stage-title">Adaptation (MRAC) — the experiment</div>',
+      '  <div class="ov-stage-hint">adaptive weights mrac.<axis>.theta_0..5 (Frame B, 20 Hz — API/mrac.c mrac_state) · verdict is an inference; evidence shown beside it · read-only</div>',
+      '  <div class="ov-adapt-axes">' + adaptAxesHtml + '</div>',
+      '</div>',
+    ].join('');
+
     return css + '<div class="ov-root">' + strip + banner + alarmHist +
-      instruments + chain.join('') + trendRow + shadow + '</div>';
+      instruments + fsmView + adaptView + chain.join('') + trendRow + shadow + '</div>';
   }
 
   /* ── Render ──────────────────────────────────────────────────────────── */
@@ -1144,6 +1513,10 @@
     /* Attitude indicator + pre-flight checklist (task 20260921-065323) */
     renderAttitude(state, nowMs, ttlMs);
     renderChecklist(state, nowMs, ttlMs);
+
+    /* Flight FSM + adaptation views (task 20260921-103141) */
+    renderFsm(state, nowMs, ttlMs);
+    renderAdaptation(state, nowMs, ttlMs);
 
     /* Mimic stages */
     STAGES.forEach(function (st) {
@@ -1285,6 +1658,128 @@
       if (vEl) { vEl.textContent = verdict.v.toUpperCase(); vEl.className = 'ov-chk-verdict ov-chk-' + verdict.v; }
       var dEl = q('ov-chk-d-' + i);
       if (dEl) dEl.textContent = verdict.detail;
+    });
+  }
+
+  /* ── Flight FSM render (task 20260921-103141) ────────────────────────── */
+
+  function nameByVal(list, val) {
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].val === val) return list[i].name;
+    }
+    return null;
+  }
+
+  /* Name when the enum is known, else the numeric value — same fallback
+   * as the UNRECOGNIZED VALUE branch, so a transition never reads "null →". */
+  function nameOrVal(list, val) {
+    var nm = nameByVal(list, val);
+    return (nm != null) ? nm : val;
+  }
+
+  function renderFsmKind(kind, key, list, prefix, metaId, nowMs, ttlMs) {
+    var f = findValue(_lastState, key);
+    trackFsmKind(kind, f, nowMs);
+    var live = keyLiveState(f, nowMs, ttlMs);
+    var tr = _fsmTrans[kind];
+    var n = (f && f.val != null && !isNaN(f.val)) ? Number(f.val) : null;
+    var recognized = (n != null && nameByVal(list, n) != null);
+
+    list.forEach(function (st) {
+      var el = q(prefix + '-state-' + st.val);
+      if (!el) return;
+      var isCur = recognized && n === st.val;
+      var tone = (live.cls === 'ok') ? 'ok' : (live.cls === 'warn') ? 'warn' : 'nodata';
+      el.className = 'ov-fsm-state' + (isCur ? ' ov-fsm-cur-' + tone : '');
+    });
+
+    var meta = q(metaId);
+    if (!meta) return;
+    if (live.cls === 'np') {
+      meta.innerHTML = '<span class="ov-fsm-np">NOT PUBLISHED — ' + live.sub + '</span>' +
+        '<span>key ' + key + ' absent from every stream</span>';
+      return;
+    }
+    var bits = [];
+    if (!recognized) {
+      bits.push('<span class="ov-fsm-np">UNRECOGNIZED VALUE ' + n + ' — not in API/flight_fsm.h enum</span>');
+    }
+    bits.push('<span>' + live.label + (live.sub ? ' (' + live.sub + ')' : '') + '</span>');
+    if (tr.prev !== null) {
+      bits.push('<span>last transition: ' + nameOrVal(list, tr.prev) + ' → ' +
+        nameOrVal(list, tr.last) + ' (observed ' + fmtClock(tr.atMs) + ')</span>');
+    } else {
+      bits.push('<span>no transition observed this session</span>');
+    }
+    var dwell = fsmDwell(tr, f, nowMs);
+    if (dwell != null) {
+      bits.push('dwell ' + fmtAge(dwell) + (tr.prev === null ? ' since first packet' : ''));
+    }
+    meta.innerHTML = bits.map(function (b) { return '<span>' + b + '</span>'; })
+      .join('<span> · </span>');
+  }
+
+  function renderFsm(state, nowMs, ttlMs) {
+    renderFsmKind('state', FSM_STATE_KEY, FLIGHT_STATES, 'ov-fsm', 'ov-fsm-meta', nowMs, ttlMs);
+    renderFsmKind('phase', FSM_PHASE_KEY, FLIGHT_PHASES, 'ov-fph', 'ov-fph-meta', nowMs, ttlMs);
+  }
+
+  /* ── Adaptation (MRAC) render (task 20260921-103141) ─────────────────── */
+
+  function renderAdaptation(state, nowMs, ttlMs) {
+    ADAPT_AXES.forEach(function (a) {
+      var r = computeAdaptVerdict(a.axis, nowMs);
+      var vEl = q('ov-adapt-verdict-' + a.axis);
+      if (vEl) {
+        vEl.textContent = r.verdict.toUpperCase();
+        vEl.className = 'ov-adapt-verdict ov-adapt-' + r.verdict;
+      }
+      var eEl = q('ov-adapt-ev-' + a.axis);
+      if (eEl) {
+        var basis = 'window ' + ADAPT_WINDOW + ' snapshots (' + r.nSnaps + ' used) · ' +
+          r.samplesMin + '–' + r.samplesMax + ' samples/weight' +
+          (r.spanMs != null ? ' · span ' + fmtAge(r.spanMs) : '');
+        if (r.verdict === 'unknown') {
+          eEl.textContent = 'UNKNOWN — ' + r.reason + ' · evidence so far: ' + basis;
+        } else {
+          eEl.textContent = 'evidence: ' + basis + ' · early Δ ' +
+            r.stepEarly.toExponential(2) + ' → late Δ ' + r.stepLate.toExponential(2) +
+            ' (' + (r.ratio * 100).toFixed(0) + '%) · travel ' + r.travel.toExponential(2);
+        }
+      }
+    });
+
+    ADAPT_WEIGHTS.forEach(function (w) {
+      var valEl = q('ov-weight-val-' + w.axis + '-' + w.n);
+      var f = findHistoryValue(state, w.key);
+      if (valEl) {
+        // Same four honesty states the FSM pills distinguish.
+        var live = keyLiveState(f, nowMs, ttlMs);
+        if (live.cls === 'np') {
+          valEl.textContent = 'NOT PUBLISHED';
+          valEl.className = 'ov-weight-val ov-weight-val-np';
+        } else {
+          var v = Number(f.val);
+          valEl.textContent = (v >= 0 ? '+' : '') + v.toFixed(4) +
+            (live.sub ? ' · ' + live.sub : '');
+          // Reuse the FSM pill styling verbatim: warn = stale (amber),
+          // nodata = frozen past TTL (muted).
+          valEl.className = 'ov-weight-val' +
+            (live.cls === 'warn' ? ' ov-fsm-cur-warn' :
+             live.cls === 'nodata' ? ' ov-fsm-cur-nodata' : '');
+        }
+      }
+      var plotEl = q('ov-weight-plot-' + w.axis + '-' + w.n);
+      if (plotEl) {
+        var d = buildSparklineSvg(w.key);
+        if (d.insufficient) {
+          plotEl.innerHTML = '<div class="ov-weight-ins">' + d.nValid + '/' + d.minNeeded +
+            ' samples' + (d.gaps ? ' · ' + d.gaps + ' gap(s)' : '') + '</div>';
+        } else {
+          // Same SVG the trend-on-demand box draws, sized to the weight cell.
+          plotEl.innerHTML = d.svg.replace('class="ov-spark"', 'class="ov-weight-spark"');
+        }
+      }
     });
   }
 
@@ -1476,6 +1971,7 @@
     _alarmLog = [];
     _openEpisodes = {};
     _alarmLogDropped = 0;
+    _fsmTrans = { state: freshTrack(), phase: freshTrack() };
   };
 
   if (typeof window !== 'undefined' && window.__registerPlugin__) {
@@ -1521,6 +2017,25 @@
       BAT_MIN_SPAN_MS: BAT_MIN_SPAN_MS,
       BAT_FALLING_V_PER_MIN: BAT_FALLING_V_PER_MIN,
       ALARM_LOG_MAX: ALARM_LOG_MAX,
+      /* Experiment observability (task 20260921-103141). */
+      FLIGHT_STATES: FLIGHT_STATES,
+      FLIGHT_PHASES: FLIGHT_PHASES,
+      FSM_STATE_KEY: FSM_STATE_KEY,
+      FSM_PHASE_KEY: FSM_PHASE_KEY,
+      ADAPT_AXES: ADAPT_AXES,
+      ADAPT_WEIGHTS: ADAPT_WEIGHTS,
+      ADAPT_WINDOW: ADAPT_WINDOW,
+      ADAPT_MIN_SNAPS: ADAPT_MIN_SNAPS,
+      ADAPT_MIN_SPAN_MS: ADAPT_MIN_SPAN_MS,
+      ADAPT_MIN_KEYS: ADAPT_MIN_KEYS,
+      FROZEN_STEP: FROZEN_STEP,
+      FROZEN_TRAVEL: FROZEN_TRAVEL,
+      CONVERGE_RATIO: CONVERGE_RATIO,
+      findHistoryValue: findHistoryValue,
+      computeAdaptVerdict: computeAdaptVerdict,
+      renderFsm: renderFsm,
+      renderAdaptation: renderAdaptation,
+      keyLiveState: keyLiveState,
     };
   }
 
