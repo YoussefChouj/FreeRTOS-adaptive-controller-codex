@@ -215,6 +215,14 @@
       '  RTOS resource counters live in the group above (SWD bridge); <code>n/p</code> = not published by this build.',
       '</div>',
 
+      // Telemetry-bridge wellness (from /health/slots stream_health). This is
+      // deliberately a distinct signal from the RTOS/SWD bridge so the page
+      // stops telling the operator the whole link is down when the WiFi
+      // telemetry stream is, in fact, flowing (AUDIT_2026-09-21 Diagnostics).
+      '<div id="res-bridge-status" class="res-bridge-unknown" ',
+      'style="padding:8px 10px;border-radius:4px;font-size:11px;font-weight:600;margin-bottom:12px;color:var(--muted);background:rgba(136,136,170,0.08);border:1px dashed var(--muted)">',
+      'Telemetry bridge: …</div>',
+
       rtosGroupHTML,
       streamMetaHTML,
       imuGroupHTML,
@@ -250,6 +258,60 @@
 
   // ── State handler ───────────────────────────────────────────────────────
   var _hasData = false;
+
+  // Bridge wellness comes from GET /health/slots (stream_health). It is the
+  // single honest source for "the telemetry bridge is actually flowing", as
+  // opposed to the presence of an rtos.* SWD stream, which this build does
+  // not subscribe. A single failed poll keeps the last known state rather
+  // than flapping to a bare "not running".
+  var _bridgeHealth = null;      // last /health/slots payload, or null
+  var _bridgePollTimer = null;   // setInterval handle for /health/slots polls
+
+  // Level -> display text for the telemetry-bridge banner. ``telemetry_seen``
+  // distinguishes "running + streaming" from an explicit "no frames" state.
+  function bridgeStateFromHealth(health) {
+    if (!health || !health.stream_health) {
+      return { level: 'unknown', text: 'Telemetry bridge: status unavailable' };
+    }
+    var sh = health.stream_health;
+    var ageS = sh.last_frame_age_ns != null ? sh.last_frame_age_ns / 1e9 : null;
+    var ago = ageS == null ? null :
+      (ageS < 1 ? (ageS * 1000).toFixed(0) + ' ms ago' : ageS.toFixed(1).replace(/\.0$/, '') + ' s ago');
+    if (sh.telemetry_seen) {
+      if (sh.stalled) {
+        return { level: 'stalled',
+          text: 'Telemetry stalled — last frame ' + (ago != null ? ago : '(age unknown)') };
+      }
+      return { level: 'ok',
+        text: 'Telemetry bridge running — streaming (last frame ' +
+          (ago != null ? ago : 'age unknown') + ')' };
+    }
+    return { level: 'down',
+      text: 'Telemetry bridge not running — no frames received' };
+  }
+
+  function renderBridgeHealth() {
+    var el = q('res-bridge-status');
+    if (!el) return;
+    var s = bridgeStateFromHealth(_bridgeHealth);
+    el.textContent = '⚠ ' + s.text;
+    el.className = 'res-bridge-' + s.level;
+    el.style.cssText =
+      'padding:8px 10px;border-radius:4px;font-size:11px;font-weight:600;margin-bottom:12px;' +
+      (s.level === 'ok' ? 'color:var(--green);background:rgba(78,204,163,0.10);border:1px solid var(--green);' :
+       s.level === 'stalled' ? 'color:var(--red);background:rgba(233,69,96,0.12);border:1px solid var(--red);' :
+       s.level === 'down' ? 'color:var(--amber);background:rgba(245,166,35,0.10);border:1px solid var(--amber);' :
+       'color:var(--muted);background:rgba(136,136,170,0.08);border:1px dashed var(--muted);');
+  }
+
+  function pollBridgeHealth() {
+    if (typeof fetch !== 'function') return;
+    fetch('/health/slots', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (health) { _bridgeHealth = health; })
+      .catch(function () { /* keep last known wellness on a transient failure */ })
+      .then(function () { renderBridgeHealth(); });
+  }
 
   function onState(state) {
     if (!state || !state.streams) return;
@@ -331,10 +393,19 @@
     api.registerPanel('RTOS Resources', function (container) {
       container.innerHTML = buildHTML();
       api.subscribe(onState);
+      // Poll bridge wellness immediately and every 3 s while the panel is
+      // visible. A missing /health/slots route renders "status unavailable",
+      // never a fabricated "stalled" or "not running".
+      if (typeof fetch === 'function') {
+        pollBridgeHealth();
+        if (_bridgePollTimer == null) _bridgePollTimer = setInterval(pollBridgeHealth, 3000);
+      }
     });
   };
   window.__PLUGIN_DESTROY__ = function() {
     _hasData = false;
+    if (_bridgePollTimer != null) { clearInterval(_bridgePollTimer); _bridgePollTimer = null; }
+    _bridgeHealth = null;
   };
   window.__registerPlugin__('RTOS Resources', window.__PLUGIN_INIT__, window.__PLUGIN_DESTROY__);
 
