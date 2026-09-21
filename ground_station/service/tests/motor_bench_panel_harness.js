@@ -73,6 +73,7 @@ function makeApi(opts) {
     disarmed: opts.disarmed !== undefined ? opts.disarmed : true,
     armState: opts.armState !== undefined ? opts.armState : 'disarmed',
     failAfter: opts.failAfter, // gatedCommand rejects once command count reaches this
+    txid: 0,
     gatedCommand(id, idx, val, gates) {
       api.commands.push({
         t: Date.now(), kind: 'gated', id, idx, val,
@@ -81,7 +82,9 @@ function makeApi(opts) {
       if (api.failAfter !== undefined && api.commands.length >= api.failAfter) {
         return Promise.reject(new Error('simulated send failure #' + api.commands.length));
       }
-      return Promise.resolve({ ok: true });
+      // Mirror the real /commands POST: a backend transaction id comes back.
+      api.txid += 1; api.lastTxid = api.txid;
+      return Promise.resolve({ transaction_id: api.txid, ok: true });
     },
     submitCommand(id, idx, val) {
       api.commands.push({ t: Date.now(), kind: 'submit', id, idx, val, gates: null });
@@ -351,12 +354,66 @@ function scenarioLabels() {
   check(!/percent/.test(src), 'no invented percentage scale in the panel source');
 }
 
+// ── 7. Bug 6: firmware ack / command lifecycle is surfaced in the UI ────────
+async function scenarioAck() {
+  console.log('== 7. Firmware ack / command lifecycle feedback (Bug 6) ==');
+  const api = makeApi();
+  const h = loadPanel(api);
+  const doc = h.doc;
+
+  // Before any send: no command rows shown.
+  const preArea = doc.getElementById('mb-lifecycle');
+  check(preArea !== null &&
+    preArea.innerHTML.indexOf('CCR') === -1 && preArea.innerHTML.indexOf('SUBMITTED') === -1,
+    'lifecycle area exists and is empty of command rows before any send');
+
+  // A single CCR command (idx 2, val 2600) -> SUBMITTED visible immediately.
+  doc.getElementById('mb-ccr').value = '2600';
+  doc.getElementById('mb-ccr').dispatch('input');
+  doc.getElementById('mb-ccr').dispatch('change');
+  await sleep(20);
+  let lc = doc.getElementById('mb-lifecycle').innerHTML;
+  check(lc.indexOf('SUBMITTED') !== -1 && lc.indexOf('CCR') !== -1,
+    'command shows SUBMITTED immediately on the click (visible feedback): ' + lc.replace(/<[^>]*>/g, ' ').trim());
+  check(api.lastTxid >= 1, 'panel captured a backend transaction id (' + api.lastTxid + ')');
+
+  // Firmware ACKs (status "ack") -> ACKNOWLEDGED.
+  api.stateCb({ streams: { '3': { values: {} } },
+    command_results: [{ transaction_id: api.lastTxid, command_id: 22, index: 2,
+      status: 'ack', reason: 'NONE', detail: 'queued' }] });
+  lc = doc.getElementById('mb-lifecycle').innerHTML;
+  check(lc.indexOf('ACKNOWLEDGED') !== -1, 'firmware ACK advances lifecycle to ACKNOWLEDGED');
+
+  // Firmware APPLIES -> APPLIED.
+  api.stateCb({ streams: { '3': { values: {} } },
+    command_results: [{ transaction_id: api.lastTxid, command_id: 22, index: 2,
+      status: 'applied', reason: 'NONE', detail: 'applied' }] });
+  lc = doc.getElementById('mb-lifecycle').innerHTML;
+  check(lc.indexOf('APPLIED') !== -1 && lc.indexOf('ACKNOWLEDGED') === -1,
+    'the FC APPlying advances the single per-tx entry to APPLIED (terminal ack)');
+
+  // A fresh command that the FQ rejects -> REJECTED with the reason surfaced.
+  doc.getElementById('mb-ccr').value = '2800';
+  doc.getElementById('mb-ccr').dispatch('input');
+  doc.getElementById('mb-ccr').dispatch('change');
+  await sleep(20);
+  const rejTx = api.lastTxid;
+  api.stateCb({ streams: { '3': { values: {} } },
+    command_results: [{ transaction_id: rejTx, command_id: 22, index: 2,
+      status: 'rejected', reason: 'SAFETY_INTERLOCK', detail: 'arm state unknown' }] });
+  lc = doc.getElementById('mb-lifecycle').innerHTML;
+  check(lc.indexOf('REJECTED') !== -1 && lc.indexOf('SAFETY_INTERLOCK') !== -1,
+    'firmware REJECTED produces "REJECTED" with reason surfaced: ' +
+    lc.replace(/<[^>]*>/g, ' ').trim());
+}
+
 // ── main ───────────────────────────────────────────────────────────────────
 (async () => {
   await scenarioSequence();
   await scenarioTiming();
   await scenarioStops();
   scenarioLabels();
+  await scenarioAck();
   console.log(failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED');
   process.exit(failures === 0 ? 0 : 1);
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -859,6 +859,64 @@ def test_submit_command_motor_bench_rejected_when_arm_unknown_or_stale():
     assert service.submit_command(0x16, index=0, value=100.0) == 7
 
 
+def test_motor_bench_click_acknowledged_and_applied_via_fake_bridge():
+    """Bug 6: a disarmed bench click transmits cmd 0x16 over the (fake) bridge
+    and the firmware ACK then APPLIED result advances the command lifecycle
+    that the dashboard surface, without any network."""
+    import struct as _struct
+    from ground_station.platform.transactions import Command, build_command
+
+    service, bridge = _bridge_service()
+    service.start()
+    service.ingest_decoded("a", {"status.arm": 0.0})
+    assert service.is_disarmed()
+
+    # The exact click sequence the panel issues: select M1, CCR=2000, enable=1.
+    for idx, val in ((1, 1.0), (2, 2000.0), (0, 1.0)):
+        txid = service.submit_command(0x16, index=idx, value=val)
+        # The tx propagated to the bridge (the wire frame the panel produced).
+        assert txid == bridge.next_txid
+        # The action journal logged it as SUBMITTED with a 15-byte wire frame.
+        action = next(a for a in service.action_journal()
+                     if a["command_id"] == 0x16 and a["index"] == idx)
+        assert action["lifecycle"] == "submitted"
+        assert action["wire_bytes"] == 15
+        # The exact 0xCC 0xDF frame the click produces parses as cmd 0x16.
+        frame = build_command(Command(transaction_id=0, command_id=0x16,
+                                      index=idx, value=val, flags=0))
+        assert frame[:2] == b"\xCC\xDF"
+        assert frame[6] == 0x16 and frame[7] == idx
+        assert _struct.unpack("<f", frame[10:14])[0] == val
+
+    # Firmware ACKs the first select, then APPLIES it.
+    acks = [(t, Result(t, Outcome.ACK, 0x16, 1, RejectReason.NONE, "queued"))
+            for t in range(1, 4)]
+    applied = Result(1, Outcome.APPLIED, 0x16, 1, RejectReason.NONE, "applied")
+    for _, r in acks:
+        bridge.results.append(r)
+    bridge.results.append(applied)
+    for _ in range(4):
+        service.poll_command()
+
+    state = service.snapshot()
+    # ACK + APPLIED both surfaced so the operator sees the firmware heard it.
+    statuses = [c["status"] for c in state.command_results]
+    assert "ack" in statuses and "applied" in statuses
+    # The panel correlates via /state command_results, which keeps every result:
+    assert any(c["transaction_id"] == 1 and c["status"] == "applied"
+               for c in service.snapshot().command_results)
+
+    # A rejected bench command surfaces its safety reason.
+    rej_tx = service.submit_command(0x16, index=0, value=1.0)
+    bridge.results.append(Result(rej_tx, Outcome.REJECTED, 0x16, 0,
+                                 RejectReason.SAFETY_INTERLOCK,
+                                 "arm state unknown"))
+    service.poll_command()
+    rej_state = service.snapshot()
+    assert rej_state.last_transaction_result["status"] == "rejected"
+    assert rej_state.last_transaction_result["reason"] == "SAFETY_INTERLOCK"
+
+
 def test_expire_commands_marks_timed_out_once():
     """Commands with no firmware result after 1.0 s become timed_out, one fault each."""
     from ground_station.service.core import COMMAND_TIMEOUT_NS

@@ -38,6 +38,15 @@
   var CMD_ID_MOTOR_BENCH = 22;   // 0x16
   var CMD_ID_ABORT_ALL   = 13;
 
+  // Firmware command-lifecycle feedback (Bug 6): the backend tracks each
+  // transaction through SUBMITTED -> ACKNOWLEDGED / APPLIED / REJECTED
+  // and exposes results in the /state snapshot as `command_results` (service
+  // core.py::_result_to_entry). We correlate the transaction_id the /commands
+  // POST returns with those entries so the operator SEES the firmware ack.
+  var LIFECYCLE_MAX = 8;
+  var _lifecycleHistory = [];  // newest first, bounded
+  var _txByTxid = {};           // transaction_id -> lifecycle entry
+
   // CMD 0x16 index semantics (firmware contract)
   var IDX_ENABLE = 0;   // 1 = bench test ON (each send pets the dead-man)
   var IDX_SELECT = 1;   // 1..4 = M1..M4 (uint8_t cast — integers only)
@@ -74,6 +83,70 @@
   var _ccr = CCR_OFF;
   var _heartbeatTimer = null;
 
+  function idxLabel(idx) {
+    return idx === 0 ? 'enable' : (idx === 1 ? 'select' : (idx === 2 ? 'CCR' : 'idx' + idx));
+  }
+  function statusFromResult(status) {
+    if (status === 'ack') return 'ACKNOWLEDGED';
+    if (status === 'applied') return 'APPLIED';
+    if (status === 'rejected') return 'REJECTED';
+    return 'SUBMITTED';
+  }
+  function updateLifecycleUI() {
+    var el = q('mb-lifecycle');
+    if (!el) return;
+    if (!_lifecycleHistory.length) {
+      el.innerHTML = '<div class="mb-waiting">No bench commands sent yet</div>';
+      return;
+    }
+    var rows = _lifecycleHistory.map(function (e) {
+      var cls = e.status === 'REJECTED' ? ' mb-lc-rejected'
+        : ((e.status === 'ACKNOWLEDGED') || (e.status === 'APPLIED') ? ' mb-lc-ok' : '');
+      var extra = (e.status === 'REJECTED' && e.reason) ? ' (' + e.reason + ')' : '';
+      return '<div class="mb-lc-row' + cls + '">' +
+        '<span>' + idxLabel(e.idx) + ' ' + String(e.val) + '</span>' +
+        '<span class="mb-lc-tx">tx ' + (e.txid != null ? e.txid : 'pending') + '</span>' +
+        '<span class="mb-lc-state">' + e.status + extra + '</span>' +
+        '</div>';
+    }).join('');
+    el.innerHTML = rows;
+  }
+  // Record a just-issued command at SUBMITTED (visible immediately on the
+  // click — the key "something happened" feedback) and remember its txid once
+  // the /commands POST answers, so the next /state tick can show the ack.
+  function recordCommand(idx, val, txid) {
+    var entry = { idx: idx, val: val, txid: txid, status: 'SUBMITTED',
+      reason: '', detail: '', time: Date.now() };
+    if (txid != null) _txByTxid[txid] = entry;
+    _lifecycleHistory.unshift(entry);
+    if (_lifecycleHistory.length > LIFECYCLE_MAX) {
+      var evicted = _lifecycleHistory.pop();
+      if (evicted.txid != null) delete _txByTxid[evicted.txid];
+    }
+    updateLifecycleUI();
+  }
+  // Correlate firmware results (from the /state `command_results` list) with
+  // the transactions we issued and advance their lifecycle.
+  function applyCommandResults(state) {
+    if (!state || !Array.isArray(state.command_results)) return;
+    var changed = false;
+    for (var i = 0; i < state.command_results.length; i++) {
+      var r = state.command_results[i];
+      var txid = r == null ? null : r.transaction_id;
+      if (txid == null) continue;
+      var entry = _txByTxid[txid];
+      if (!entry) continue;
+      var next = statusFromResult(r.status);
+      if (next !== entry.status) {
+        entry.status = next;
+        entry.reason = r.reason || '';
+        entry.detail = r.detail || '';
+        changed = true;
+      }
+    }
+    if (changed) updateLifecycleUI();
+  }
+
   // ── Command send (always gated, heartbeats included) ───────────────────
   function sendBench(api, idx, val) {
     if (typeof api.isDisarmed === 'function' && !api.isDisarmed()) {
@@ -81,10 +154,29 @@
       console.error(err.message);
       return Promise.reject(err);
     }
+    var promise;
     if (typeof api.gatedCommand === 'function') {
-      return api.gatedCommand(CMD_ID_MOTOR_BENCH, idx, val, ['disarmed']);
+      promise = api.gatedCommand(CMD_ID_MOTOR_BENCH, idx, val, ['disarmed']);
+    } else {
+      promise = api.submitCommand(CMD_ID_MOTOR_BENCH, idx, val);
     }
-    return api.submitCommand(CMD_ID_MOTOR_BENCH, idx, val);
+    // Record SUBMITTED immediately; attach the txid when the POST answers.
+    recordCommand(idx, val, null);
+    promise.then(function (data) {
+      var txid = data && (data.transaction_id != null ? data.transaction_id : data.t);
+      if (txid != null) {
+        for (var i = 0; i < _lifecycleHistory.length; i++) {
+          var e = _lifecycleHistory[i];
+          if (e.idx === idx && e.val === val && e.status === 'SUBMITTED' && e.txid == null) {
+            e.txid = txid;
+            _txByTxid[txid] = e;
+            break;
+          }
+        }
+        updateLifecycleUI();
+      }
+    }).catch(function () { /* send failed: SUBMITTED entry simply never resolves */ });
+    return promise;
   }
 
   // ── Heartbeat ───────────────────────────────────────────────────────────
@@ -293,6 +385,15 @@
       '.mb-warning-crit { background: rgba(233,69,96,0.12); color: var(--red); }',
       '.mb-info { font-size: 11px; color: var(--muted); margin-top: 4px; }',
       '.mb-hb-status { font-size: 11px; font-weight: 600; color: var(--muted); }',
+      '.mb-lifecycle { font-family: Consolas, monospace; font-size: 11px;',
+      '  background: var(--bg); border: 1px solid var(--border); border-radius: 4px;',
+      '  padding: 6px 8px; }',
+      '.mb-lc-row { display: flex; justify-content: space-between; gap: 10px;',
+      '  padding: 2px 0; color: var(--muted); }',
+      '.mb-lc-row.mb-lc-ok { color: var(--green); }',
+      '.mb-lc-row.mb-lc-rejected { color: var(--red); }',
+      '.mb-lc-tx { color: var(--muted); }',
+      '.mb-lc-state { font-weight: 600; }',
       '.mb-feedback {',
       '  background: var(--bg); border: 1px solid var(--border);',
       '  border-radius: 4px; padding: 6px 8px;',
@@ -334,6 +435,17 @@
       '  </div>',
       '  <div class="mb-info">Heartbeat 10 Hz while ON. Firmware dead-man zeroes motors',
       '    500 ms after the last heartbeat.</div>',
+      '</div>',
+
+      /* Firmware ack / command lifecycle (Bug 6) */
+      '<div class="mb-section">',
+      '  <div class="mb-label">Firmware ack / command lifecycle</div>',
+      '  <div id="mb-lifecycle" class="mb-lifecycle">',
+      '    <div class="mb-waiting">No bench commands sent yet</div>',
+      '  </div>',
+      '  <div class="mb-info">Most recent first. SUBMITTED = queued locally;',
+      '    ACKNOWLEDGED then APPLIED = the FC worked the command; REJECTED = blocked.',
+      '    In DISARMED this confirms the FC is hearing the panel.</div>',
       '</div>',
 
       /* Motor select (idx 1) */
@@ -378,7 +490,14 @@
 
   // ── State handler — RPM feedback + arm-state watch ───────────────────────
   function onState(state) {
-    if (!state || !state.streams) return;
+    if (!state) return;
+
+    // Bug 6: surface the firmware ack. Correlate /state command_results with
+    // the transactions we issued and show SUBMITTED -> ACKNOWLEDGED / APPLIED
+    // / REJECTED. stream-feedback parsing below handles the rest.
+    applyCommandResults(state);
+
+    if (!state.streams) return;
 
     // Read RPM feedback from Frame C (tag "c" -> slot 3). The bridge expands
     // the wire rpm[4] array to the motor.rpm_0..3 scalar keys below.
