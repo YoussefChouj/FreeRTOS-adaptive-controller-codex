@@ -6,7 +6,7 @@ Task text travels through a file, so no PowerShell -> WSL quoting issues.
   .agent-ops\agent-ops.ps1 preflight [-Worker agy|ark] [-Model flash]  # cheap auth/model check (spawn runs it too)
   .agent-ops\agent-ops.ps1 spawn "task text"      # or: spawn -File task.md  [-TimeoutMin 120] [-Model flash] [-Effort low] [-Worktree]
   .agent-ops\agent-ops.ps1 ask "question"         # one-shot read-only lookup; prints only the answer
-  .agent-ops\agent-ops.ps1 wait <task_id>         # block until EXIT/BLOCKED/STALLED, then print a digest
+  .agent-ops\agent-ops.ps1 wait <task_id>         # block until DONE/FAILED/EXIT/BLOCKED (not STALLED), then print a digest
   .agent-ops\agent-ops.ps1 status                 # last 15 state.log lines + live workers
   .agent-ops\agent-ops.ps1 output [task_id] [-Lines 40]   # tail a worker's stdout (default: newest)
   .agent-ops\agent-ops.ps1 kill <window_id|all>   # stop worker window(s)

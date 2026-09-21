@@ -1,0 +1,1 @@
+{}{"ts":"2026-09-21T15:35+08:00","area":"agent-ops wait","what":"wait returned minutes after the worker logged DONE; supervisor reported still-running and the operator noticed first. Its STALLED exit also looked like a failure while the worker was alive.","fix":"wait should return as soon as state.log has DONE/EXIT/FAILED for the id, and not exit on STALLED","status":"open"}
