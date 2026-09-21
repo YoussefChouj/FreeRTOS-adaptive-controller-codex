@@ -57,65 +57,87 @@
     return a + (b - a) * t;
   }
 
+  // ── Frame C position keys — every spelling the adapter publishes ─────────
+  // Bug 5 binding fix: stream values appear under BOTH the adapter's spec
+  // alias (`c.earth_x`, `c.earth_y`, `c.altitude_cm`) and the raw, slot /
+  // namespace-prefixed DWARF spelling (`slot1.ano_of.earth_x`,
+  // `slot1.ano_of.of_alt_cm`, `slot3.c.earth_x`, …). We match a bare spec
+  // name against both the stored key and any key with a ``slot#.`` prefix
+  // stripped (the same `SLOT_PREFIX_RE` pattern used by the time-series fix
+  // for Bug 4). Position is present even when its value is 0.0 (origin); we
+  // only report "no position data" when the keys are genuinely absent.
+  var SLOT_PREFIX_RE = /^slot\d+\./;
+  var POS_X_KEYS = ['c.earth_x', 'earth_x', 'ano_of.earth_x', 'pos_x'];
+  var POS_Y_KEYS = ['c.earth_y', 'earth_y', 'ano_of.earth_y', 'pos_y'];
+  // Altitude is published in cm (`*_alt_cm`) and metres (`c.altitude`).
+  var POS_Z_KEYS = ['c.altitude_cm', 'c.altitude', 'altitude',
+                    'ano_of.of_alt_cm', 'ano_of.of_alt_cm_m', 'of_alt_cm', 'pos_z'];
+
+  // Return the first defined numeric value from valueMap matching any of
+  // `names`, bare or slot-prefixed. Returns undefined when absent.
+  function lookupValue(valueMap, names) {
+    if (!valueMap) return undefined;
+    for (var i = 0; i < names.length; i++) {
+      if (valueMap[names[i]] !== undefined) return valueMap[names[i]];
+    }
+    for (var k in valueMap) {
+      var bare = k.replace(SLOT_PREFIX_RE, '');
+      for (var j = 0; j < names.length; j++) {
+        if (bare === names[j]) return valueMap[k];
+      }
+    }
+    return undefined;
+  }
+
   // ── Parse Frame C position from state ───────────────────────────────────
+  // Returns {x, y, z} with x/y/z in metres, or null when position is
+  // genuinely absent. Altitude is published in centimetres under the
+  // `*_alt_cm` names and in metres under `c.altitude`; we normalise to
+  // metres. Absent altitude stays null — never a fabricated 0.
+  function metreAltitude(valueMap, zNum) {
+    if (zNum === undefined || zNum === null || isNaN(Number(zNum))) return null;
+    // Only scale when the cm-typed name matched (i.e. no metres-typed name
+    // was present earlier in the key list).
+    if (valueMap['c.altitude'] !== undefined || valueMap['altitude'] !== undefined) {
+      return parseFloat(zNum);
+    }
+    for (var k in valueMap) {
+      if (/alt_cm/.test(k.replace(SLOT_PREFIX_RE, ''))) {
+        return parseFloat(zNum) / 100;
+      }
+    }
+    return parseFloat(zNum);
+  }
+
   function extractPosition(state) {
     if (!state) return null;
 
-    var x = null, y = null;
-
-    // 1. Check state.streams: Frame C is published under tag 'c', mapped to slot 3
+    // 1. /state stream snapshot: slot -> { values: {…}, _key_ts: {…} }.
     if (state.streams) {
-      var candidateSlots = ['3', 'c', '0'];
-      Object.keys(state.streams).forEach(function (k) {
-        if (candidateSlots.indexOf(k) === -1) candidateSlots.push(k);
-      });
-
-      for (var i = 0; i < candidateSlots.length; i++) {
-        var slot = state.streams[candidateSlots[i]];
-        if (slot && slot.values) {
-          var vals = slot.values;
-          if (vals['c.earth_x'] !== undefined && vals['c.earth_y'] !== undefined) {
-            x = vals['c.earth_x'];
-            y = vals['c.earth_y'];
-            break;
-          }
-          if (vals['earth_x'] !== undefined && vals['earth_y'] !== undefined) {
-            x = vals['earth_x'];
-            y = vals['earth_y'];
-            break;
-          }
+      var k = Object.keys(state.streams);
+      for (var i = 0; i < k.length; i++) {
+        var vals = state.streams[k[i]] && state.streams[k[i]].values;
+        if (!vals) continue;
+        var x = lookupValue(vals, POS_X_KEYS);
+        var y = lookupValue(vals, POS_Y_KEYS);
+        if (x !== undefined && y !== undefined &&
+            !isNaN(Number(x)) && !isNaN(Number(y))) {
+          return { x: parseFloat(x), y: parseFloat(y),
+                   z: metreAltitude(vals, lookupValue(vals, POS_Z_KEYS)) };
         }
       }
     }
 
-    // 2. Direct tag object or state properties fallback
-    if (x === null && state.c) {
-      if (state.c['c.earth_x'] !== undefined && state.c['c.earth_y'] !== undefined) {
-        x = state.c['c.earth_x'];
-        y = state.c['c.earth_y'];
-      } else if (state.c.earth_x !== undefined && state.c.earth_y !== undefined) {
-        x = state.c.earth_x;
-        y = state.c.earth_y;
-      }
+    // 2. Flat fallbacks (older adapter shapes: state.values or state itself).
+    var flat = state.values || state;
+    var fx = lookupValue(flat, POS_X_KEYS);
+    var fy = lookupValue(flat, POS_Y_KEYS);
+    if (fx !== undefined && fy !== undefined &&
+        !isNaN(Number(fx)) && !isNaN(Number(fy))) {
+      return { x: parseFloat(fx), y: parseFloat(fy),
+               z: metreAltitude(flat, lookupValue(flat, POS_Z_KEYS)) };
     }
 
-    if (x === null && state.values) {
-      if (state.values['c.earth_x'] !== undefined && state.values['c.earth_y'] !== undefined) {
-        x = state.values['c.earth_x'];
-        y = state.values['c.earth_y'];
-      }
-    }
-
-    if (x === null) {
-      if (state['c.earth_x'] !== undefined && state['c.earth_y'] !== undefined) {
-        x = state['c.earth_x'];
-        y = state['c.earth_y'];
-      }
-    }
-
-    if (x !== null && y !== null && !isNaN(Number(x)) && !isNaN(Number(y))) {
-      return { x: parseFloat(x), y: parseFloat(y) };
-    }
     return null;
   }
 
@@ -129,7 +151,7 @@
     }
 
     // Update current position
-    _currentPos = { x: pos.x, y: pos.y };
+    _currentPos = { x: pos.x, y: pos.y, z: pos.z == null ? null : pos.z };
 
     // Recalculate metrics
     updateMetrics();
@@ -456,16 +478,86 @@
   // ── Home/Target markers ──────────────────────────────────────────────────
   function setHomeHere() {
     if (_currentPos) {
-      _homePos = { x: _currentPos.x, y: _currentPos.y };
+      _homePos = { x: _currentPos.x, y: _currentPos.y, z: _currentPos.z };
       render();
     }
   }
 
   function setTargetHere() {
     if (_currentPos) {
-      _targetPos = { x: _currentPos.x, y: _currentPos.y };
+      _targetPos = { x: _currentPos.x, y: _currentPos.y, z: _currentPos.z };
       render();
     }
+  }
+
+  // ── Manual home/target/waypoint entry (ground-side planning only) ───────
+  // These are pure UI edits to the on-panel markers / waypoint list. They
+  // never POST anything to the drone (the panel ships with no command path;
+  // see the offline harness's zero-fetch guard). Empty numeric fields are
+  // read as NaN and fall back to the field default, never a fake 0.
+  function readNum(id, def) {
+    var el = q(id);
+    if (!el) return def;
+    var v = parseFloat(el.value);
+    return isNaN(v) ? def : v;
+  }
+
+  function setTargetManual() {
+    _targetPos = { x: readNum('pp-target-x', 0), y: readNum('pp-target-y', 0),
+                   z: readNum('pp-target-z', 0) };
+    render();
+  }
+
+  function setHomeManual() {
+    _homePos = { x: readNum('pp-home-x', 0), y: readNum('pp-home-y', 0),
+                 z: readNum('pp-home-z', 0) };
+    render();
+  }
+
+  // Append one manually-entered waypoint (x, y, z in metres).
+  function addManualWaypoint() {
+    _waypoints.push({ x: readNum('pp-wp-x', 0), y: readNum('pp-wp-y', 0),
+                      z: readNum('pp-wp-z', 0), reached: false });
+    updatePlannedPath();
+    renderWaypointTable();
+    render();
+  }
+
+  // ── Random path generator ───────────────────────────────────────────────
+  // Generates N waypoints in a bounding box (±boxM in X and Y), walking a
+  // random direction each step with an average segment length close to the
+  // configured spacing (metres), clamped inside the box. Deterministic
+  // under a seeded Math.random, so the harness can verify spacing and bounds.
+  function round2(v) { return Math.round(v * 100) / 100; }
+
+  function generateRandomPath() {
+    var n = Math.max(2, Math.round(readNum('pp-rand-n', 6)));
+    var spacing = Math.max(0.1, readNum('pp-rand-spacing', 5));
+    var boxM = Math.max(1, readNum('pp-rand-box', 100));
+
+    var pts = [];
+    var px = round2((Math.random() * 2 - 1) * boxM);
+    var py = round2((Math.random() * 2 - 1) * boxM);
+    pts.push({ x: px, y: py, z: readNum('pp-rand-z', 0), reached: false });
+
+    for (var i = 1; i < n; i++) {
+      // Step length randomly in [0.6, 1.4]×spacing so the ~average spacing
+      // is configurable while the path stays organic.
+      var ang = Math.random() * Math.PI * 2;
+      var step = spacing * (0.6 + Math.random() * 0.8);
+      var nx = px + Math.cos(ang) * step;
+      var ny = py + Math.sin(ang) * step;
+      nx = Math.max(-boxM, Math.min(boxM, nx));
+      ny = Math.max(-boxM, Math.min(boxM, ny));
+      pts.push({ x: round2(nx), y: round2(ny), z: readNum('pp-rand-z', 0),
+                 reached: false });
+      px = nx; py = ny;
+    }
+
+    _waypoints = pts;
+    updatePlannedPath();
+    renderWaypointTable();
+    render();
   }
 
   // ── Build HTML ──────────────────────────────────────────────────────────
@@ -511,6 +603,9 @@
       '.pp-legend-item { display: flex; align-items: center; gap: 8px; }',
       '.pp-legend-dot { width: 10px; height: 10px; border-radius: 50%; }',
       '.pp-legend-line { width: 20px; height: 2px; }',
+      '.pp-entry-row { display: flex; gap: 4px; align-items: center; margin-bottom: 4px; flex-wrap: wrap; }',
+      '.pp-entry-row .pp-wp-input { width: 44px; }',
+      '.pp-hint { font-size: 10px; color: var(--muted); margin-top: 4px; line-height: 1.4; }',
       '</style>',
 
       '<div class="pp-container">',
@@ -541,14 +636,50 @@
       '<button id="pp-zoom-out-2" class="pp-zoom-btn">Zoom Out</button>',
       '</div>',
       '<div class="pp-action-row" style="margin-top:4px">',
-      '<button id="pp-set-home" class="pp-action-btn">Set Home</button>',
-      '<button id="pp-set-target" class="pp-action-btn">Set Target</button>',
+      '<button id="pp-set-home" class="pp-action-btn" title="Home = current position">Set Home = cur</button>',
+      '<button id="pp-set-target" class="pp-action-btn" title="Target = current position">Set Target = cur</button>',
       '</div>',
       '</div>',
 
       '<div>',
       '<div class="pp-section-label">Waypoints</div>',
       '<div id="pp-wp-table"></div>',
+      '<div class="pp-entry-row">',
+      '<input id="pp-wp-x" class="pp-wp-input" placeholder="x" type="number" step="0.1">',
+      '<input id="pp-wp-y" class="pp-wp-input" placeholder="y" type="number" step="0.1">',
+      '<input id="pp-wp-z" class="pp-wp-input" placeholder="z" type="number" step="0.1">',
+      '<button id="pp-add-manual-wp" class="pp-btn pp-btn-sm" title="Append waypoint (x,y,z)">+ Add (x,y,z)</button>',
+      '</div>',
+      '</div>',
+
+      '<div>',
+      '<div class="pp-section-label">Home / Target entry</div>',
+      '<div class="pp-entry-row">',
+      '<input id="pp-home-x" class="pp-wp-input" placeholder="hx" type="number" step="0.1">',
+      '<input id="pp-home-y" class="pp-wp-input" placeholder="hy" type="number" step="0.1">',
+      '<input id="pp-home-z" class="pp-wp-input" placeholder="hz" type="number" step="0.1">',
+      '<button id="pp-set-home-manual" class="pp-action-btn" title="Set home from fields">Set Home</button>',
+      '</div>',
+      '<div class="pp-entry-row" style="margin-top:4px">',
+      '<input id="pp-target-x" class="pp-wp-input" placeholder="tx" type="number" step="0.1">',
+      '<input id="pp-target-y" class="pp-wp-input" placeholder="ty" type="number" step="0.1">',
+      '<input id="pp-target-z" class="pp-wp-input" placeholder="tz" type="number" step="0.1">',
+      '<button id="pp-set-target-manual" class="pp-action-btn" title="Set target from fields">Set Target</button>',
+      '</div>',
+      '</div>',
+
+      '<div>',
+      '<div class="pp-section-label">Random path generator</div>',
+      '<div class="pp-entry-row">',
+      '<input id="pp-rand-n" class="pp-wp-input" value="6" type="number" min="2" step="1" title="Waypoints">',
+      '<input id="pp-rand-spacing" class="pp-wp-input" value="5" type="number" min="0.1" step="0.5" title="Spacing (m)">',
+      '<input id="pp-rand-box" class="pp-wp-input" value="100" type="number" min="1" step="10" title="Bounding box +/- m">',
+      '<input id="pp-rand-z" class="pp-wp-input" value="0" type="number" step="0.1" title="Planned altitude (m)">',
+      '</div>',
+      '<div class="pp-entry-row" style="margin-top:4px">',
+      '<button id="pp-rand-gen" class="pp-btn pp-btn-sm" title="Fill waypoint list with a random bounded path">Generate Random Path</button>',
+      '</div>',
+      '<div class="pp-hint">Options: points, spacing&nbsp;(m), &#177;box&nbsp;(m), altitude&nbsp;(m).</div>',
       '</div>',
 
       '<div>',
@@ -605,6 +736,10 @@
       // Home/Target buttons
       q('pp-set-home').addEventListener('click', setHomeHere);
       q('pp-set-target').addEventListener('click', setTargetHere);
+      q('pp-set-home-manual').addEventListener('click', setHomeManual);
+      q('pp-set-target-manual').addEventListener('click', setTargetManual);
+      q('pp-add-manual-wp').addEventListener('click', addManualWaypoint);
+      q('pp-rand-gen').addEventListener('click', generateRandomPath);
 
       // Subscribe to live state for Frame C position
       api.subscribe(function (state) {
