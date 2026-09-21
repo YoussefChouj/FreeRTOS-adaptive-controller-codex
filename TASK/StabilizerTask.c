@@ -604,7 +604,11 @@ void Update_Motor(void)
              * offset is captured on bench activation so of2_h is already relative to the fixture
              * resting height. The controller therefore does not fight prop wash at any altitude.
              * Throttle_cap_active (CMD 0x08) is also independent and does not affect this. */
-            if (Ctrler.Z_posPID.FB > 0.2f)
+            /* P0 Finding 3: height alone must not leave GROUND_IDLE — a slow hand-lift of an
+             * armed aircraft ramps of2_h past every alt gate, so gate the transition itself
+             * on THR >= 20% or an executing TWC policy, matching the IDLE interlock below. */
+            if (Ctrler.Z_posPID.FB > 0.2f &&
+                (TWC.execute || RCInput_Get(RC_AXIS_THR) >= 0.2f))
                 flight_phase = FLIGHT_PHASE_FLYING;
 
             /* IDLE motors: hold until pilot or policy pushes THR above 20%. */

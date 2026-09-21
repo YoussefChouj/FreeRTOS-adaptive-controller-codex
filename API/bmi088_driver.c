@@ -333,10 +333,40 @@ FP32  ORI_Accy = 0;
 FP32  ORI_Accz = 0;
 
 
-void Sensor_Data_Prepare(void)				//IMUÊý¾Ý×¼±¸£¨×ø±ê×ª»»£¬ÂË²¨£¬½ÃÕýÁãÆ«£©
+void Sensor_Data_Prepare(void)				//IMUï¿½ï¿½ï¿½ï¿½×¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×ªï¿½ï¿½ï¿½ï¿½ï¿½Ë²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æ«ï¿½ï¿½
 {
 		GetValue();
-		//½ÃÕýÁãÆ«
+
+		/* P0 Finding 5: an SPI timeout returns 0 indistinguishably from data, so a full
+		 * outage reads as an all-zero sample and a frozen sensor/task as an unchanging
+		 * one - either silently freezes the attitude estimate. Latch after 15 consecutive
+		 * faulted samples (15 ms @ 1 kHz) by clearing sensor_ok: drops the already-published
+		 * g_estimator_ready and blocks re-arming until reboot. */
+		{
+			static float s_prev_ax, s_prev_ay, s_prev_az;
+			static float s_prev_gx, s_prev_gy, s_prev_gz;
+			static UCHAR8 s_have_prev = 0U;
+			static UCHAR8 s_bad_runs  = 0U;
+			UCHAR8 zero, same;
+
+			zero = (Acc_X_Ori == 0.0f && Acc_Y_Ori == 0.0f && Acc_Z_Ori == 0.0f &&
+			        Gyro_X_Ori == 0.0f && Gyro_Y_Ori == 0.0f && Gyro_Z_Ori == 0.0f);
+			same = (s_have_prev != 0U &&
+			        Acc_X_Ori == s_prev_ax && Acc_Y_Ori == s_prev_ay && Acc_Z_Ori == s_prev_az &&
+			        Gyro_X_Ori == s_prev_gx && Gyro_Y_Ori == s_prev_gy && Gyro_Z_Ori == s_prev_gz);
+			s_prev_ax = Acc_X_Ori;  s_prev_ay = Acc_Y_Ori;  s_prev_az = Acc_Z_Ori;
+			s_prev_gx = Gyro_X_Ori; s_prev_gy = Gyro_Y_Ori; s_prev_gz = Gyro_Z_Ori;
+			s_have_prev = 1U;
+
+			if (zero || same)
+			{
+				if (s_bad_runs < 255U) s_bad_runs++;
+				if (s_bad_runs >= 15U) sensor.sensor_ok = 0U;
+			}
+			else
+				s_bad_runs = 0U;
+		}
+		//ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æ«
 		Acc_X_Ori = Cali_Rol_CoeA*(Acc_X_Ori - Acc_X_Offset);
 		Acc_Y_Ori = Cali_Rol_CoeA*(Acc_Y_Ori - Acc_Y_Offset);
 		Acc_Z_Ori = Cali_Rol_CoeA*(Acc_Z_Ori - Acc_Z_Offset);
