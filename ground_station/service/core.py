@@ -27,6 +27,7 @@ packages) that imported them still works.
 from __future__ import annotations
 
 import functools
+import os
 import subprocess
 import threading
 import time
@@ -39,7 +40,7 @@ from ground_station.platform.telemetry import TelemetrySchema, load_telemetry_sc
 
 from .gateway import CommandGateway
 from .schema_registry import SchemaRegistry
-from .storage import SessionStore
+from .storage import CsvRecorder, SessionStore
 from .telemetry_adapter import StreamMetadata, TelemetryAdapter
 
 # Maximum number of recent command results retained in the service snapshot.
@@ -221,10 +222,19 @@ class GroundStationService:
         adapter: TelemetryAdapter | None = None,
         schema_registry: SchemaRegistry | None = None,
         experiment_runtime=None,
+        recorder: CsvRecorder | None = None,
     ) -> None:
         self.bridge = bridge
         self.schema = schema or load_telemetry_schema()
         self.store = store or SessionStore()
+        # Per-session CSV recorder. On by default; set GS_RECORD=0 to disable.
+        # ``recorder`` is passed only by tests (which supply tmp_path + a
+        # disabled recorder) — production runs the default.
+        if recorder is None:
+            enabled = os.environ.get("GS_RECORD", "1") != "0"
+            recorder_root = os.environ.get("GS_RECORD_DIR", "logs/sessions")
+            recorder = CsvRecorder(recorder_root, enabled=enabled)
+        self.recorder = recorder
         self.source = source
         # Startup identity, exposed by GET /health so a walk can spot a
         # service running stale code. The commit is read once per process.
@@ -313,6 +323,10 @@ class GroundStationService:
         if self.bridge:
             self.bridge.start(auto_subscribe_boot_default=auto_subscribe)
         self._record_event("service_started", {"schema_id": self.schema.schema_id})
+        # One CSV (dir) per service run, stamped with the start time. The
+        # recorder starts its own daemon thread; it is independent of the
+        # in-memory SessionStore (which still owns replay/event storage).
+        self.recorder.start()
         return self.session_id
 
     def stop(self) -> None:
@@ -322,7 +336,20 @@ class GroundStationService:
         if self.bridge:
             self.bridge.stop()
         self.store.end_session(self.session_id)
+        # Flush + join the CSV writer before returning so the CSV on disk is
+        # complete when stop() returns. Never raises into the caller.
+        try:
+            self.recorder.stop()
+        except Exception:
+            pass
         self._connected = False
+
+    def _note_recorder(self, slot: Any, sample) -> None:
+        """Push one adapted sample's key/value rows to the CSV recorder."""
+        try:
+            self.recorder.note(slot, sample.values, sample.received_ns)
+        except Exception:
+            pass
 
     def replay_to_bus(self, session_id: str) -> int:
         """Push a stored session's telemetry through the live ingest path.
@@ -377,6 +404,7 @@ class GroundStationService:
                 self._samples += 1
                 self._last_update_ns = now
                 self.adapter.apply(sample, self._streams)
+            self._note_recorder(slot, sample)
             self._notify()
             # Check if telemetry readback confirms any pending commands.
             self._check_readback()
@@ -476,6 +504,7 @@ class GroundStationService:
             self._samples += 1
             self._last_update_ns = now
             self.adapter.apply(sample, self._streams)
+        self._note_recorder(slot, sample)
         self._notify()
         if not persist:
             return
@@ -532,6 +561,7 @@ class GroundStationService:
         with self._state_lock:
             self._last_update_ns = sample.received_ns
             self.adapter.apply(sample, self._streams)
+        self._note_recorder(slot, sample)
         self._notify()
         # Check if telemetry readback confirms any pending commands.
         self._check_readback()

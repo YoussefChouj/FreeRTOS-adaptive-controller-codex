@@ -44,3 +44,6 @@ ground_station/**/*.pyc
 .cursor/
 AGENTS.md
 ground_station/service_test_*.txt
+
+# Per-session telemetry CSV recorder output
+logs/sessions/

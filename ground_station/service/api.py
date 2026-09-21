@@ -39,6 +39,25 @@ def _mime_type(path: str) -> str:
     return _MIME_TYPES.get(ext, "application/octet-stream")
 
 
+def _recorder_status(service) -> dict[str, Any]:
+    """Recorder block for GET /health — path/rows/errors of the CSV writer.
+
+    Uses getattr so a store-less stub passed to the handler in tests cannot
+    take the liveness endpoint down.
+    """
+    recorder = getattr(service, "recorder", None)
+    if recorder is None:
+        return {"enabled": False, "started": False,
+                "path": None, "rows": 0, "errors": 0}
+    return {
+        "enabled": bool(getattr(recorder, "enabled", False)),
+        "started": bool(getattr(recorder, "started", False)),
+        "path": str(getattr(recorder, "path", None)) if getattr(recorder, "path", None) else None,
+        "rows": int(getattr(recorder, "rows", 0)),
+        "errors": int(getattr(recorder, "errors", 0)),
+    }
+
+
 def _slot_status(data: dict, now_ns: int, ttl_ns: int) -> str:
     """Compute per-slot liveness status: live / mixed / stale / dead."""
     last = data.get("last_update_ns") or 0
@@ -792,6 +811,7 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     "last_update_ns": getattr(snap, "last_update_ns", None),
                     "active_streams": len(streams),
                     "session_id": getattr(snap, "session_id", None),
+                    "recorder": _recorder_status(service),
                 }
                 self._json(200, health)
             elif route == "/health/slots":

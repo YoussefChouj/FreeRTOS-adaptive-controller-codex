@@ -5,11 +5,14 @@ transactional, replayable, and available in the Python standard library.
 """
 from __future__ import annotations
 
+import csv
 import json
+import queue
 import sqlite3
 import threading
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -157,3 +160,135 @@ class SessionStore:
     def close(self) -> None:
         with self._lock:
             self._db.close()
+
+
+class CsvRecorder:
+    """Background per-session telemetry recorder writing long-format CSV.
+
+    Long format — one row per ``(received_ns, slot, key, value)`` — is
+    robust to the per-slot key set changing between frames: a new channel
+    needs no schema change and old keys simply stop appearing.
+
+    Rows are pushed onto a thread-safe queue by callers and written to disk
+    from a single daemon thread, which flushes the buffer at most every
+    ``flush_interval_s`` (default 1 s). Callers never block on disk I/O and
+    ``note()`` never raises into the ingest path — a failed put increments
+    ``errors`` and is dropped. Mirrors ``SessionStore``'s deploy/disable
+    contract: enabled by default, disabled via the ``GS_RECORD=0`` env var
+    (see ``GroundStationService.__init__``).
+
+    Status lives on the instance (``path``, ``rows``, ``errors``) and is
+    surfaced by ``GET /health`` under a small ``recorder`` block.
+    """
+
+    _STOP = object()
+
+    def __init__(self, root: str | Path = "logs/sessions", *,
+                 enabled: bool = True, flush_interval_s: float = 1.0) -> None:
+        self.enabled = bool(enabled)
+        self.root = Path(root)
+        self.flush_interval_s = float(flush_interval_s)
+        # Public status (read by /health; written by the background thread).
+        self.session_dir: Path | None = None
+        self.path: Path | None = None
+        self.started = False
+        self.rows = 0
+        self.errors = 0
+        self._q: queue.Queue[tuple[Any, int, dict[str, Any]] | object] = queue.Queue()
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+        self._closed = False
+
+    def start(self) -> None:
+        """Create the per-run session dir and spawn the writer thread."""
+        if not self.enabled or self._closed:
+            return
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        self.session_dir = self.root / stamp
+        self.path = self.session_dir / "telemetry.csv"
+        try:
+            self.session_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            self.errors += 1
+            self.path = None
+            return
+        self.started = True
+        self._thread = threading.Thread(target=self._run, name="gs-csv-recorder",
+                                        daemon=True)
+        self._thread.start()
+
+    def note(self, slot: Any, values: dict[str, Any], received_ns: int) -> None:
+        """Enqueue one sample's key/value pairs (never blocks, never raises)."""
+        if not self.started or self._closed:
+            return
+        try:
+            self._q.put((slot, received_ns, values))
+        except Exception:
+            with self._lock:
+                self.errors += 1
+
+    def _write_rows(self, writer, f, pending: list[tuple[Any, int, dict[str, Any]]]) -> None:
+        header = ("received_ns", "slot", "key", "value")
+        with self._lock:
+            start = self.rows
+            rows_written = start
+            for slot, received_ns, values in pending:
+                if rows_written == 0:
+                    writer.writerow(header)
+                for key, value in values.items():
+                    writer.writerow((received_ns, slot, key, value))
+                    rows_written += 1
+            added = rows_written - start
+            if added:
+                self.rows = rows_written
+        # Called only from the writer thread; flush the file after each batch
+        # so the CSV stays readable if the process is killed between flushes.
+        f.flush()
+
+    def _run(self) -> None:
+        try:
+            f = open(self.path, "w", newline="", encoding="utf-8")
+        except OSError:
+            with self._lock:
+                self.errors += 1
+            self.started = False
+            return
+        writer = csv.writer(f)
+        pending: list[tuple[Any, int, dict[str, Any]]] = []
+        last_flush = time.monotonic()
+        try:
+            while True:
+                try:
+                    item = self._q.get(timeout=0.25)
+                except queue.Empty:
+                    item = None
+                if item is self._STOP:
+                    # Drain whatever arrived after the stop sentinel, then
+                    # flush everything and exit (stop() joins us first).
+                    try:
+                        while True:
+                            pending.append(self._q.get_nowait())
+                    except queue.Empty:
+                        pass
+                    self._write_rows(writer, f, pending)
+                    break
+                if item is not None:
+                    pending.append(item)
+                if pending and time.monotonic() - last_flush >= self.flush_interval_s:
+                    self._write_rows(writer, f, pending)
+                    pending = []
+                    last_flush = time.monotonic()
+        finally:
+            try:
+                f.close()
+            except OSError:
+                pass
+
+    def stop(self) -> None:
+        """Flush remaining rows and stop the writer thread."""
+        if not self.started or self._closed:
+            return
+        self._closed = True
+        self._q.put(self._STOP)
+        if self._thread is not None:
+            self._thread.join(timeout=5.0)
