@@ -200,7 +200,13 @@ if [ "$WORKER_KIND" = "ark" ]; then
     mkdir -p "$LAUNCH_DIR"
     # run-worker.sh word-splits AGY_CMD on purpose, so no quoting here; these
     # paths have no spaces.
-    AGY_CMD="${AGY_CMD% -p} --add-dir $TARGET_DIR --max-turns ${ARK_MAX_TURNS:-80} -p"
+    # Compact early: every call resends the whole context, so a worker that
+    # grows to the model's full window costs several times more per turn.
+    # The value is a percentage of the model's window; 25 assumes a 1M window
+    # (about 256k). Set ARK_AUTOCOMPACT_PCT if ark-code-latest has a smaller one.
+    # --strict-mcp-config with no --mcp-config loads no MCP servers, whose tool
+    # schemas would otherwise be resent on every call.
+    AGY_CMD="env CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=${ARK_AUTOCOMPACT_PCT:-25} ${AGY_CMD% -p} --add-dir $TARGET_DIR --max-turns ${ARK_MAX_TURNS:-60} --strict-mcp-config -p"
     cat >> "$TASK_FILE" <<EOF
 
 Token budget (the Ark plan is metered; every tool call resends your whole context):
