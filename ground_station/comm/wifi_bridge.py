@@ -201,8 +201,8 @@ class WifiBridge:
         # ~8-10 min of silence, silently stopping streaming. A periodic
         # re-nudge keeps the route fresh. 1-byte 0x00 is a no-op command the
         # FC ignores (see docs/skills/micoair-connect.md). 30 s is far inside
-        # the module idle window but cheap (1 B / 30 s).
-        keepalive_interval: float = 30.0,
+        # the module idle window but cheap (1 B / 5 s).
+        keepalive_interval: float = 5.0,
     ):
         self._wifi_host = wifi_host
         self._wifi_port = wifi_port
