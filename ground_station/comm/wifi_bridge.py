@@ -195,6 +195,14 @@ class WifiBridge:
         # The callback receives (tag, payload) tuples from _rx_loop after the bridge
         # has decoded the frame internally using its own schemas.
         on_telemetry=None,
+        # The MicoAir module routes USART3 downlink to the source of the MOST
+        # RECENT uplink datagram. The 1-byte nudge sent at start() aims it at
+        # this host, but the module's route (session) mapping idles out after
+        # ~8-10 min of silence, silently stopping streaming. A periodic
+        # re-nudge keeps the route fresh. 1-byte 0x00 is a no-op command the
+        # FC ignores (see docs/skills/micoair-connect.md). 30 s is far inside
+        # the module idle window but cheap (1 B / 30 s).
+        keepalive_interval: float = 30.0,
     ):
         self._wifi_host = wifi_host
         self._wifi_port = wifi_port
@@ -210,6 +218,12 @@ class WifiBridge:
 
         self._stop = threading.Event()
         self._cmd_queue: queue.Queue[Optional[Dict[str, Any]]] = queue.Queue()
+        # Keep-alive state: monotonic time of the last downlink-aim nudge. We
+        # re-nudge every `keepalive_interval` s to stop the MicoAir module's
+        # route expiring (~8-10 min idle), which would otherwise silently halt
+        # all USART3 telemetry with no socket error and no firmware change.
+        self._keepalive_interval = keepalive_interval
+        self._last_nudge = 0.0
 
         # Subscribe-stream schemas, one per slot. Populated by
         # `apply_manifest_schema()` (called by the launcher when a layout
@@ -1338,10 +1352,40 @@ class WifiBridge:
                 float(cmd["value"]),
             )
 
+    def _send_keepalive_nudge(self) -> None:
+        """Re-aim the MicoAir downlink at this host on a timer.
+
+        The MicoAir routes USART3 telemetry to the source of the most recent
+        uplink datagram and its route mapping idles out after several minutes
+        of silence (observed ~8-10 min). Sending the same 1-byte 0x00 nudge
+        that start() uses re-aims it at our socket, which is cheap (1 B every
+        keepalive_interval s) and harmless to the FC (a no-op command frame).
+        """
+        w = getattr(self, "_wifi", None)
+        if w is None:
+            return
+        now = time.monotonic()
+        if now - self._last_nudge < self._keepalive_interval:
+            return
+        try:
+            w.sendto(b"\x00", (self._nudge_host, self._nudge_port))
+        except OSError:
+            pass
+        self._last_nudge = now
+
     def _telem_loop(self) -> None:
-        """Periodically re-send latest telemetry to the dashboard mirror port."""
+        """Periodically re-send latest telemetry to the dashboard mirror port.
+
+        Also refreshes the MicoAir downlink aim by re-sending the 1-byte
+        nudge every `keepalive_interval` s. Without this the module's route
+        to this host idles out after ~8-10 min and streaming silently stops;
+        see docs/skills/micoair-connect.md "The nudge requirement".
+        """
         while not self._stop.is_set():
             time.sleep(0.1)
+            # Refresh the downlink route BEFORE the mirror check so the
+            # keep-alive still fires even when no telemetry has arrived yet.
+            self._send_keepalive_nudge()
             with self._telem_lock:
                 if not self._last_telem:
                     continue

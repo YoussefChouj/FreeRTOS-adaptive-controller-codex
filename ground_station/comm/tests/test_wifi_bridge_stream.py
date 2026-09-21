@@ -768,5 +768,62 @@ class TestStaleSchemaDetection(unittest.TestCase):
         self.assertEqual(decoded["names"][0], "new_addr")
 
 
+class TestKeepaliveNudge(unittest.TestCase):
+    """The periodic re-nudge must refresh the MicoAir downlink route.
+
+    Stalls ~8-10 min after start are caused by the module's downlink aim
+    idling out (it routes telemetry to the source of the most recent uplink).
+    A 1-byte 0x00 nudge re-aims it. We unit-test the timer + payload with a
+    fake monotonic clock and a stubbed socket -- no network.
+    """
+
+    def _bridge(self, interval: float = 10.0):
+        br = WifiBridge(vofa_enabled=False, keepalive_interval=interval)
+        br._wifi = MagicMock()
+        return br
+
+    def test_no_nudge_until_interval_elapses(self):
+        br = self._bridge(interval=10.0)
+        br._last_nudge = 0.0
+        clock = iter([0.0, 5.0, 12.0, 12.0, 30.0])
+        with unittest.mock.patch(
+            "ground_station.comm.wifi_bridge.time.monotonic",
+            side_effect=lambda: next(clock),
+        ):
+            br._send_keepalive_nudge()   # now=0   -> within interval, no send
+            self.assertEqual(br._wifi.sendto.call_count, 0)
+            br._send_keepalive_nudge()   # now=5   -> still within interval
+            self.assertEqual(br._wifi.sendto.call_count, 0)
+            br._send_keepalive_nudge()   # now=12  -> 12-0>=10, send; last=12
+            self.assertEqual(br._wifi.sendto.call_count, 1)
+            br._send_keepalive_nudge()   # now=12  -> 12-12<10, no send
+            self.assertEqual(br._wifi.sendto.call_count, 1)
+            br._send_keepalive_nudge()   # now=30  -> 30-12>=10, send again
+            self.assertEqual(br._wifi.sendto.call_count, 2)
+            br._wifi.sendto.assert_called_with(b"\x00",
+                                               ("192.168.4.1", 14550))
+
+    def test_immediate_interval_sends_every_call(self):
+        br = self._bridge(interval=0.0)
+        br._last_nudge = 0.0
+        with unittest.mock.patch(
+            "ground_station.comm.wifi_bridge.time.monotonic",
+            side_effect=lambda: 100.0,
+        ):
+            br._send_keepalive_nudge()
+            br._send_keepalive_nudge()
+        self.assertEqual(br._wifi.sendto.call_count, 2)
+
+    def test_no_wifi_socket_noop(self):
+        br = self._bridge()
+        br._wifi = None
+        with unittest.mock.patch(
+            "ground_station.comm.wifi_bridge.time.monotonic",
+            side_effect=lambda: 100.0,
+        ):
+            br._send_keepalive_nudge()   # must not raise
+        self.assertIsNone(br._wifi)
+
+
 if __name__ == "__main__":
     unittest.main()

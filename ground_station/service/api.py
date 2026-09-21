@@ -851,6 +851,31 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                         "stale_keys":       stale_keys,
                         "request_state":    slot_states.get(slot_key, "planned"),
                     }
+                # Top-level stream health. This is the signal the Diagnostics
+                # tab needs: it survives per-slot TTL eviction. Once a slot is
+                # older than the TTL the snapshot() pass evicts it, so
+                # ``slots`` alone degrades to {} the same whether nothing was
+                # ever subscribed OR the link silently stalled -- the two
+                # cases are indistinguishable without a session-lifetime
+                # counter. ``_last_update_ns`` is set on every ingest and is
+                # never evicted, so a stall shows up here even minutes after
+                # the last frame (when every slot has already been dropped
+                # from ``slots``). None means no frame has EVER arrived this
+                # session (honest "not published", not 0).
+                last_frame_ns = getattr(service, "_last_update_ns", None)
+                if last_frame_ns:
+                    last_frame_age_ns = now_ns - last_frame_ns
+                    report["stream_health"] = {
+                        "telemetry_seen": True,
+                        "last_frame_age_ns": last_frame_age_ns,
+                        "stalled": last_frame_age_ns > ttl_ns,
+                    }
+                else:
+                    report["stream_health"] = {
+                        "telemetry_seen": False,
+                        "last_frame_age_ns": None,
+                        "stalled": False,
+                    }
                 self._json(200, report)
             elif route == "/slots":
                 # Slot inventory — keys in service._streams plus what the bridge

@@ -538,6 +538,37 @@ def test_http_health_slots_has_ttl_ns():
         api.stop()
 
 
+def test_http_health_slots_stream_health_signal():
+    """/health/slots exposes a session-lifetime stall signal even after slots
+    are TTL-evicted, so the Diagnostics tab can distinguish "stalled link"
+    from "nothing ever subscribed" (both show as slots=={})."""
+    service = service_fixture()
+    service.start()
+    # No frames yet: must be truthfully "not published", not 0.
+    assert service._last_update_ns is None
+    api = ApiServer(service)
+    api.start()
+    try:
+        base = "http://127.0.0.1:%d" % api.address[1]
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        report = json.loads(opener.open(base + "/health/slots").read())
+        sh = report["stream_health"]
+        assert sh["telemetry_seen"] is False
+        assert sh["last_frame_age_ns"] is None
+        assert sh["stalled"] is False
+        # A frame far older than the TTL => stalled, but still reported.
+        past = time.time_ns() - 100 * 10**9
+        service.ingest_decoded("a", {"status.arm": 1.0}, time_ns=past)
+        report = json.loads(opener.open(base + "/health/slots").read())
+        sh = report["stream_health"]
+        assert sh["telemetry_seen"] is True
+        assert sh["stalled"] is True
+        assert sh["last_frame_age_ns"] is not None
+        assert sh["last_frame_age_ns"] > report["ttl_ns"]
+    finally:
+        api.stop()
+
+
 def test_http_subscribe_preview_endpoint():
     """POST /subscribe/preview returns DWARF resolution preview without
     touching the WiFi socket. Regression test for S16 subscribe_preview()
