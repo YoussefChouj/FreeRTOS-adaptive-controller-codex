@@ -1321,3 +1321,87 @@ def test_command_arm_gate_fails_closed_over_http():
                       for a in service.action_journal())
     finally:
         api.stop()
+
+
+# ── Estimator mode gate tests (task 20260922-061216) ──────────────────────────
+
+def test_estimator_mode_switch_rejected_when_armed():
+    """CMD 0x1E idx=0 (estimator mode switch) is rejected when drone is armed."""
+    import pytest
+    service = service_fixture()
+    service.start()
+    service.gateway = MagicMock()
+    service.gateway.submit.return_value = 99
+
+    # Ingest armed telemetry
+    service.ingest_decoded("a", {"status.arm": 1.0})
+    assert not service.is_disarmed()
+
+    with pytest.raises(ValueError, match="ESTIMATOR_MODE"):
+        service.submit_command(0x1E, index=0, value=1.0)
+
+    faults = service.fault_log()
+    assert any(
+        f.get("reason") == "SAFETY_INTERLOCK" and f.get("command_id") == 0x1E
+        for f in faults
+    )
+
+
+def test_estimator_mode_switch_rejected_when_arm_unknown():
+    """CMD 0x1E idx=0 fails closed when arm state is unknown."""
+    import pytest
+    service = service_fixture()
+    service.start()
+    service.gateway = MagicMock()
+    service.gateway.submit.return_value = 99
+
+    assert service.arm_state() == "unknown"
+
+    with pytest.raises(ValueError, match="arm state unknown"):
+        service.submit_command(0x1E, index=0, value=2.0)
+
+
+def test_estimator_mode_switch_accepted_when_disarmed():
+    """CMD 0x1E idx=0 is accepted when drone is disarmed."""
+    service = service_fixture()
+    service.start()
+    service.gateway = MagicMock()
+    service.gateway.submit.return_value = 77
+
+    service.ingest_decoded("a", {"status.arm": 0.0})
+    assert service.is_disarmed()
+
+    txid = service.submit_command(0x1E, index=0, value=1.0)
+    assert txid == 77
+
+
+def test_estimator_tau_allowed_while_armed():
+    """CMD 0x1E idx=2 (tau change) is allowed regardless of arm state."""
+    service = service_fixture()
+    service.start()
+    service.gateway = MagicMock()
+    service.gateway.submit.return_value = 55
+
+    # Armed
+    service.ingest_decoded("a", {"status.arm": 1.0})
+    assert not service.is_disarmed()
+
+    # tau change should succeed even while armed
+    txid = service.submit_command(0x1E, index=2, value=30.0)
+    assert txid == 55
+
+
+def test_estimator_freeze_allowed_while_armed():
+    """CMD 0x1E idx=1 (EMA freeze) is allowed regardless of arm state."""
+    service = service_fixture()
+    service.start()
+    service.gateway = MagicMock()
+    service.gateway.submit.return_value = 44
+
+    # Armed
+    service.ingest_decoded("a", {"status.arm": 1.0})
+    assert not service.is_disarmed()
+
+    # freeze should succeed even while armed
+    txid = service.submit_command(0x1E, index=1, value=1.0)
+    assert txid == 44

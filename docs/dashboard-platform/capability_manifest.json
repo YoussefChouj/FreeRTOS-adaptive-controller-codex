@@ -1533,14 +1533,14 @@
   "elf_identity": {
     "caveat": "OBJ/ holds both current and stale build artifacts. A symbol in the ELF reflects the last build, which may not match what is currently flashed on the hardware. This manifest describes build artifacts and host decoder contracts; it does not assert that this build is currently running on the aircraft.",
     "elf_path": "OBJ/JX_FLY.axf",
-    "elf_sha256": "c6f30caf41fbccb2380578684e14e41c64366095065a4dfa0617210b008af49c",
+    "elf_sha256": "607c3efdcacdbea873df6aacf69f3c488b1a0d62cfd717a4613d5b03276c1548",
     "exists": true,
-    "size_bytes": 1003536
+    "size_bytes": 1004352
   },
   "firmware_symbols": {
-    "count": 344,
+    "count": 347,
     "elf_path": "OBJ/JX_FLY.axf",
-    "elf_sha256": "c6f30caf41fbccb2380578684e14e41c64366095065a4dfa0617210b008af49c",
+    "elf_sha256": "607c3efdcacdbea873df6aacf69f3c488b1a0d62cfd717a4613d5b03276c1548",
     "names": [
       "AHBPrescTable",
       "APBAHBPrescTable",
@@ -1687,11 +1687,14 @@
       "flag_offset",
       "flight_phase",
       "g_cal_health",
+      "g_ekf_of_fallback",
+      "g_ekf_of_health",
       "g_estimator_ready",
       "g_fw_identity",
       "g_imu_settle_metric",
       "g_of_bias_capture_req",
       "g_of_bias_ema_freeze",
+      "g_of_bias_ema_tau_s",
       "g_of_bias_mode",
       "g_of_hold_active",
       "g_platform_descriptors",

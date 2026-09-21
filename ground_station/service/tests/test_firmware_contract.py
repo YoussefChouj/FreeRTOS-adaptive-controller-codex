@@ -309,8 +309,9 @@ def test_service_action_journal_updates_on_applied():
     service = GroundStationService(store=store, bridge=mock_bridge, source="test")
     service.start()
 
-    service.submit_command(0x1E, index=0, value=1.0)
-    applied = Result(3, Outcome.APPLIED, 0x1E, 0, RejectReason.NONE)
+    # idx=1 (EMA freeze) is not arm-gated; idx=0 (mode) is disarmed-only.
+    service.submit_command(0x1E, index=1, value=1.0)
+    applied = Result(3, Outcome.APPLIED, 0x1E, 1, RejectReason.NONE)
     service.record_command_result(applied)
 
     journal = service.action_journal()

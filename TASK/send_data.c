@@ -32,7 +32,10 @@ extern FP32 Gyro_Z_Real;
 /* ADR-0011: calibration state from TASK/StabilizerTask.c */
 extern volatile uint8_t g_of_bias_capture_req; /* CMD 0x17 one-shot OF bias capture req */
 extern volatile uint8_t g_of_bias_mode;        /* CMD 0x1E idx=0: 0=FIXED 1=EMA 2=EKF */
-extern volatile uint8_t g_of_bias_ema_freeze;   /* CMD 0x1E idx=1: 1=freeze EMA update */
+extern volatile uint8_t g_of_bias_ema_freeze;  /* CMD 0x1E idx=1: 1=freeze EMA update */
+extern float g_of_bias_ema_tau_s;              /* CMD 0x1E idx=2: EMA tau (s), [1,300] */
+extern volatile uint8_t g_ekf_of_health;       /* 1=EKF healthy, 0=diverged (fallback active) */
+extern volatile uint8_t g_ekf_of_fallback;     /* 1=EKF fell back to FIXED this flight */
 extern CalTrim_t s_cal_trim;   /* accel bias (mg), from TASK/StabilizerTask.c */
 extern CalHot_t  s_cal_hot;    /* gyro bias (rad/s), from TASK/StabilizerTask.c */
 extern uint16_t  g_cal_health; /* bitmask, from TASK/StabilizerTask.c */
@@ -1421,7 +1424,12 @@ void Process_GroundStation_Command(void)
         uint8_t transaction_flags = gs_cmd_queue[gs_cmd_tail].transaction_flags;
         uint8_t transaction_transport = gs_cmd_queue[gs_cmd_tail].transaction_transport;
         uint8_t reject_reason = CommandSafetyReject(id);
-        
+
+        /* CMD 0x1E idx=0 (estimator mode switch) is disarmed-only */
+        if ((reject_reason == 0U) && (id == 0x1EU) && (idx == 0U) &&
+            (DroneStatus.ARM_Status != DisArmed)) {
+            reject_reason = 6U;
+        }
         gs_cmd_tail = (gs_cmd_tail + 1) % 16;
 
         (void)transaction_flags;
@@ -1825,18 +1833,34 @@ void Process_GroundStation_Command(void)
 
         /* CMD 0x1E — OF bias estimation mode selector.
          *   idx=0: set mode (val=0 FIXED, val=1 EMA, val=2 EKF)
+         *          DISARMED ONLY: mode switch is rejected when armed
+         *          (safety gate mirrors CMD 0x18 and motor bench gate).
+         *          Firmware falls back to FIXED automatically on EKF
+         *          health failure (g_ekf_of_fallback set sticky).
          *   idx=1: set EMA freeze flag (val=0 run, val=1 freeze)
+         *          Allowed any time (freeze = safe, no control impact).
+         *   idx=2: set EMA time constant tau (seconds).
+         *          Clamped to [1.0, 300.0] s. Allowed any time.
+         *          Larger tau → slower tracking, less pull-back.
          *
-         * g_of_bias_mode and g_of_bias_ema_freeze are volatile and live-pokeable
-         * via SWD (python -m ground_station.livewatch read/poke) without a reflash.
-         * The dashboard wires this to three mode buttons + one freeze toggle. */
+         * All globals are volatile and DWARF-subscribable. */
         else if (id == 0x1E) {
             if (idx == 0) {
-                if (val >= 2.0f)       g_of_bias_mode = 2U;
-                else if (val >= 1.0f)  g_of_bias_mode = 1U;
-                else                    g_of_bias_mode = 0U;
+                /* Mode change — DISARMED ONLY */
+                if (DroneStatus.ARM_Status != DisArmed) {
+                    /* reject: drone is armed — do not change estimator mid-flight */
+                } else {
+                    if (val >= 2.0f)       g_of_bias_mode = 2U;
+                    else if (val >= 1.0f)  g_of_bias_mode = 1U;
+                    else                   g_of_bias_mode = 0U;
+                }
             } else if (idx == 1) {
                 g_of_bias_ema_freeze = (val >= 0.5f) ? 1U : 0U;
+            } else if (idx == 2) {
+                /* Tau clamp: [1.0, 300.0] s */
+                if (val < 1.0f)   val = 1.0f;
+                if (val > 300.0f) val = 300.0f;
+                g_of_bias_ema_tau_s = val;
             }
         }
 

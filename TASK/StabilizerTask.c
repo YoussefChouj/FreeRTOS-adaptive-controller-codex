@@ -96,9 +96,23 @@ static float s_land_sink_bias = 0.0f;
 volatile uint8_t g_of_bias_mode = OF_BIAS_MODE_DEFAULT; /* 0=FIXED 1=EMA 2=EKF */
 volatile uint8_t g_of_bias_ema_freeze = 0U;             /* 1=freeze EMA update */
 
-/* EMA time constant and gain — used only in Mode 1 (EMA). */
-#define OF_BIAS_EMA_TAU_S  20.0f
-#define OF_BIAS_EMA_ALPHA  (0.005f / OF_BIAS_EMA_TAU_S) /* dt=5ms @ 200 Hz */
+/* EMA time constant — operator-configurable via CMD 0x1E idx=2.
+ * Valid range: [1.0, 300.0] s. Default 20 s. The per-tick alpha is
+ * recomputed each cycle as dt/tau so tau changes take effect immediately.
+ * Clamped in the command handler; plain global so DWARF-subscribable. */
+#define OF_BIAS_EMA_TAU_DEFAULT  20.0f
+#define OF_BIAS_EMA_TAU_MIN       1.0f
+#define OF_BIAS_EMA_TAU_MAX     300.0f
+float g_of_bias_ema_tau_s = OF_BIAS_EMA_TAU_DEFAULT; /* EMA time constant (s) */
+
+/* EKF (Mode 2) health and fallback flags.
+ * g_ekf_of_health: 1=healthy, 0=diverged (innovation magnitude > threshold).
+ * g_ekf_of_fallback: set to 1 once after any health-triggered mode fallback;
+ *   sticky until the next ARM so the operator can see it on the dashboard.
+ * Both are plain globals so they are DWARF-subscribable. */
+#define EKF_OF_INNOV_THRESH  2.0f  /* m/s — innovation > this → unhealthy */
+volatile uint8_t g_ekf_of_health   = 1U; /* 1=healthy 0=diverged  */
+volatile uint8_t g_ekf_of_fallback = 0U; /* 1=fell back to FIXED  */
 
 /* OF velocity-bias EMA state. s_of_bias_seeded gates the seed-on-first-sample
  * logic (see comment above). g_of_bias_ema_freeze gates the continuous update. */
@@ -303,30 +317,51 @@ void Update_Data(void)
 			}
 			/* ---- Mode 1 (EMA): continuous tracking with optional freeze ---- */
 			else if (g_of_bias_mode == 1U) {
+				float ema_alpha;
 				if (of_ok && !s_of_bias_seeded) {
 					s_of_bias_seeded = 1;
 					s_of_bias_x = (float)ano_of.of2_dx_fix;
 					s_of_bias_y = (float)ano_of.of2_dy_fix;
 				}
+				/* Per-tick alpha computed from configurable tau: alpha = dt/tau.
+				 * tau is clamped [1,300] s in the command handler, safe to divide. */
+				ema_alpha = 0.005f / g_of_bias_ema_tau_s;
 				/* EMA runs only when not frozen */
 				if (of_ok && !g_of_bias_ema_freeze) {
-					s_of_bias_x += OF_BIAS_EMA_ALPHA
+					s_of_bias_x += ema_alpha
 						* ((float)ano_of.of2_dx_fix - s_of_bias_x);
-					s_of_bias_y += OF_BIAS_EMA_ALPHA
+					s_of_bias_y += ema_alpha
 						* ((float)ano_of.of2_dy_fix - s_of_bias_y);
 				}
 			}
-			/* ---- Mode 2 (EKF): tick the 6-state KF ---- */
+			/* ---- Mode 2 (EKF): tick the 6-state KF, check health ---- */
 			else if (g_of_bias_mode == 2U) {
+				float ofx;
+				float ofy;
+				float innov_mag;
 				if (!s_ekf_of_inited) {
 					EkfOf_Init(&s_ekf_of);
 					s_ekf_of_inited = 1U;
+					g_ekf_of_health = 1U; /* healthy on init */
 				}
-				{
-					float ofx = ((float)ano_of.of2_dx_fix - s_of_bias_x) * 0.01f; /* m/s */
-					float ofy = ((float)ano_of.of2_dy_fix - s_of_bias_y) * 0.01f;
-					EkfOf_Predict(&s_ekf_of, 0.005f);
-					if (of_ok) EkfOf_Update(&s_ekf_of, ofx, ofy);
+				ofx = ((float)ano_of.of2_dx_fix - s_of_bias_x) * 0.01f; /* m/s */
+				ofy = ((float)ano_of.of2_dy_fix - s_of_bias_y) * 0.01f;
+				EkfOf_Predict(&s_ekf_of, 0.005f);
+				if (of_ok) EkfOf_Update(&s_ekf_of, ofx, ofy);
+				/* Innovation-based health monitor.
+				 * innov_x/y are the post-update residuals set in EkfOf_Update.
+				 * Large innovations indicate KF divergence. On health failure:
+				 *   - force g_of_bias_mode back to 0 (FIXED)
+				 *   - set g_ekf_of_fallback sticky flag for dashboard
+				 *   - control path falls to Mode 0 this tick via the outer if. */
+				innov_mag = s_ekf_of.innov_x * s_ekf_of.innov_x
+				          + s_ekf_of.innov_y * s_ekf_of.innov_y;
+				if (innov_mag > (EKF_OF_INNOV_THRESH * EKF_OF_INNOV_THRESH)) {
+					g_ekf_of_health = 0U;
+					g_of_bias_mode  = 0U; /* forced fallback to FIXED */
+					g_ekf_of_fallback = 1U;
+				} else {
+					g_ekf_of_health = 1U;
 				}
 			}
 		}
@@ -783,6 +818,9 @@ void Compute_Motor(void)
 					EkfOf_Update(&s_ekf_of, ofx, ofy);
 				}
 			}
+			/* Clear EKF fallback sticky flag on ARM 0→1 edge so the
+			 * dashboard sees a clean state for each new flight. */
+			g_ekf_of_fallback = 0U;
 		}
 		s_prev_armed = armed_now;
 	}

@@ -234,6 +234,16 @@ DASHBOARD_PANEL_EXTRA_VARS: tuple[str, ...] = (
     # Estimator-mode readback flags — command-panel OF-bias section.
     "g_of_bias_mode",
     "g_of_bias_ema_freeze",
+    # Estimator extended readback (task 20260922-061216).
+    # EMA tau is configurable at run-time (CMD 0x1E idx=2); the panel
+    # reads it back so the numeric input stays in sync with firmware.
+    # EKF health / fallback: dashboard shows current health and sticky
+    # fallback flag so the operator knows if EKF fell back to FIXED.
+    # 3 vars * 4 B = 12 B at 16 Hz — negligible on the wire.
+    # Slot-1 total: 25+3 = 28 ranges, well under the 62-range cap.
+    "g_of_bias_ema_tau_s",     # float, current EMA time constant (s)
+    "g_ekf_of_health",         # u8:  1=healthy 0=diverged
+    "g_ekf_of_fallback",       # u8:  1=fell back to FIXED this flight
     # GS safety parameter readback — safety-limits panel. Slow-changing,
     # but 6 * 4 B at 16 Hz is negligible on a 91 kB/s wire.
     "gs_max_horizontal_speed_mps",
@@ -246,6 +256,6 @@ DASHBOARD_PANEL_EXTRA_VARS: tuple[str, ...] = (
 
 # divider=5 at the MIXED-mode measured 80 Hz Send_Task cadence gives 16 Hz on
 # the wire (20 Hz at the nominal 100 Hz cadence). Slot-1 frame is
-# 25 vars * 4 B + 12 B overhead = 112 B, so ~1.8 kB/s -- about 2% of the
+# 28 vars * 4 B + 12 B overhead = 124 B, so ~2.0 kB/s -- about 2% of the
 # 91.3 kB/s USART3 wire, on top of slot 0's ~4.6 kB/s.
 DASHBOARD_PANEL_EXTRA_DIVIDER: int = 5

@@ -600,17 +600,27 @@ class GroundStationService:
                        flags: int = 0) -> int:
         if self.gateway is None:
             raise RuntimeError("command gateway is unavailable without a bridge")
-        # Safety gate: motor bench commands (0x16) require drone to be disarmed
-        arm = self.arm_state() if command_id == 0x16 else "disarmed"
+        # Safety gate: motor bench (0x16) and estimator mode switch (0x1E idx=0)
+        # require drone to be disarmed. Tau change (0x1E idx=2) and EMA freeze
+        # (0x1E idx=1) are allowed any time (fail-open for those).
+        needs_disarmed = (
+            command_id == 0x16
+            or (command_id == 0x1E and index == 0)
+        )
+        arm = self.arm_state() if needs_disarmed else "disarmed"
         if arm != "disarmed":
             why = "arm state unknown" if arm == "unknown" else "drone is not disarmed"
+            cmd_label = (
+                "0x16 (MOTOR_BENCH)" if command_id == 0x16
+                else "0x1E idx=0 (ESTIMATOR_MODE)"
+            )
             self._fault_log.append({
                 "transaction_id": 0,
                 "command_id": command_id,
                 "index": index,
                 "outcome": "rejected",
                 "reason": "SAFETY_INTERLOCK",
-                "detail": "command 0x16 (MOTOR_BENCH) rejected: " + why,
+                "detail": "command " + cmd_label + " rejected: " + why,
                 "time_ns": time.time_ns(),
             })
             self._record_event("command_rejected", {
@@ -618,7 +628,7 @@ class GroundStationService:
                 "reason": "SAFETY_INTERLOCK",
                 "detail": why,
             })
-            raise ValueError("command 0x16 (MOTOR_BENCH) rejected: " + why)
+            raise ValueError("command " + cmd_label + " rejected: " + why)
 
         # Build the wire frame to capture wire_bytes and record the action.
         from ground_station.platform.transactions import build_command, Command
