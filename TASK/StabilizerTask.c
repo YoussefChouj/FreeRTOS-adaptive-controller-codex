@@ -186,7 +186,23 @@ void stabilizer_Task(void)
 		 Reset_World_Origin();
 	 }
 
-	 Check_Fly_Mode(); //�ж����˻���״̬
+	 Check_Fly_Mode();
+
+	 /* Bug 2 (audit 2026-09-21 §1 row 2): published arm state must track the
+	  * motor gate unconditionally. s_sync() in flight_fsm.c writes ARM_Status
+	  * on every FSM transition, but the real flag that gates motor output in
+	  * Update_Motor() is FlightFSM_GetState()==FLIGHT_STATE_ARMED -- mirror it
+	  * into DroneStatus.ARM_Status every control cycle so the telemetry byte
+	  * (Frame A + slot-0 address subscription) can never diverge from it, on
+	  * both the RC and SDK arm paths. Observability only. */
+	 {
+		 uint8_t armed_pub;
+		 armed_pub = (FlightFSM_GetState() == FLIGHT_STATE_ARMED) ? (uint8_t)Armed : (uint8_t)DisArmed;
+		 if (DroneStatus.ARM_Status != armed_pub) {
+			 DroneStatus.ARM_Status = armed_pub;
+		 }
+	 }
+ //�ж����˻���״̬
 
 	 /* ADR-0011: set BOOT_OK + COLD_OK on the rising edge of g_estimator_ready.
 	  * Cold-cal degraded/timeout detection is left to the dashboard via the
