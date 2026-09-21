@@ -164,6 +164,10 @@
       svg.innerHTML = '<text x="' + (CHART_W / 2) + '" y="' + (CHART_H / 2) +
         '" text-anchor="middle" fill="rgba(136,136,170,0.6)" font-size="12">' +
         'Collecting samples… (' + sampleBuffer.length + '/' + FFT_SIZE + ')</text>';
+      // Reset the peak readout so a stale peak from a previous variable
+      // or window does not linger while the new buffer fills.
+      var _peakInfo = q('fft-peak-info');
+      if (_peakInfo) _peakInfo.innerHTML = 'Peak: —';
       return;
     }
 

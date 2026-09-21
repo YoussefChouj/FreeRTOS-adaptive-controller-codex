@@ -74,7 +74,7 @@
     if (state) {
       html += '<table style="width:100%;font-size:12px;border-collapse:collapse;margin-bottom:12px">';
       html += '<tr><td style="padding:2px 6px;color:var(--muted);width:120px">Schema ID</td><td style="padding:2px 6px;font-family:monospace;font-size:11px">' + escHtml(state.telemetry_schema_id || state.schema_id || '—') + '</td></tr>';
-      html += '<tr><td style="padding:2px 6px;color:var(--muted)">Session</td><td style="padding:2px 6px;font-family:monospace;font-size:11px">' + escHtml((state.session_id || '').substring(0, 16) + '…') + '</td></tr>';
+      html += '<tr><td style="padding:2px 6px;color:var(--muted)">Session</td><td style="padding:2px 6px;font-family:monospace;font-size:11px">' + escHtml(state.session_id ? state.session_id.substring(0, 16) + '…' : 'NO DATA') + '</td></tr>';
       html += '<tr><td style="padding:2px 6px;color:var(--muted)">Samples</td><td style="padding:2px 6px;font-family:monospace">' + (state.samples != null ? state.samples.toLocaleString() : '—') + '</td></tr>';
       html += '<tr><td style="padding:2px 6px;color:var(--muted)">Connected</td><td style="padding:2px 6px">' + (state.connected ? '&#x1F7E2; Yes' : '&#x1F534; No') + '</td></tr>';
       html += '</table>';
@@ -101,13 +101,14 @@
         var s = slotData[slot];
         var sigState = api.getSignalState(s);
         var sigClass = 'signal-' + sigState;
-        var loss = s.loss_pct || 0;
-        var lossClass = loss > 5 ? 'color:var(--red)' : loss > 1 ? 'color:var(--amber)' : '';
+        var loss = s.loss_pct != null ? s.loss_pct : null;
+        var lossClass = loss != null && loss > 5 ? 'color:var(--red)' :
+          loss != null && loss > 1 ? 'color:var(--amber)' : '';
         html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.05)">';
         html += '<td style="padding:3px 6px;font-family:monospace">' + slot + '</td>';
-        html += '<td style="padding:3px 6px;text-align:right;font-family:monospace">' + (s.received || 0).toLocaleString() + '</td>';
-        html += '<td style="padding:3px 6px;text-align:right;font-family:monospace">' + (s.dropped || 0).toLocaleString() + '</td>';
-        html += '<td style="padding:3px 6px;text-align:right;font-family:monospace;' + lossClass + '">' + loss.toFixed(2) + '%</td>';
+        html += '<td style="padding:3px 6px;text-align:right;font-family:monospace">' + (s.received != null ? s.received.toLocaleString() : 'NOT PUBLISHED') + '</td>';
+        html += '<td style="padding:3px 6px;text-align:right;font-family:monospace">' + (s.dropped != null ? s.dropped.toLocaleString() : 'NOT PUBLISHED') + '</td>';
+        html += '<td style="padding:3px 6px;text-align:right;font-family:monospace;' + lossClass + '">' + (loss != null ? loss.toFixed(2) + '%' : 'NOT PUBLISHED') + '</td>';
         html += '<td style="padding:3px 6px;text-align:right;font-family:monospace">' + Object.keys(s.values || {}).length + '</td>';
         html += '<td style="padding:3px 6px;" class="' + sigClass + '">' + sigState + '</td>';
         html += '</tr>';

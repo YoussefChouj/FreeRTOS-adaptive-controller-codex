@@ -75,11 +75,13 @@
   var _prevSample = {}; // slot → { t_ms, seq, ts }
 
   function calculateRate(slotId, meta) {
-    if (!meta || meta.t_ms == null || meta.sequence == null) return 0;
+    // null = not computable yet (no metadata or no previous sample); the
+    // table renders that as NO DATA rather than a fake 0.00 Hz.
+    if (!meta || meta.t_ms == null || meta.sequence == null) return null;
     var now = Date.now();
     var prev = _prevSample[slotId];
     _prevSample[slotId] = { t_ms: meta.t_ms, seq: meta.sequence, ts: now };
-    if (!prev) return 0;
+    if (!prev) return null;
     var dSeq = meta.sequence - prev.seq;
     var dT   = (meta.t_ms - prev.t_ms) / 1000.0; // seconds
     if (dT <= 0 || dSeq <= 0) return 0;
@@ -226,7 +228,9 @@
       html += '<tr>' +
         '<td><input type="checkbox" id="bw-slot-' + slot + '" ' + (ss.enabled ? 'checked' : '') + ' style="accent-color:var(--green)"/></td>' +
         '<td style="font-weight:600">Slot ' + slot + (isSlot0 ? ' <span style="font-size:10px;color:var(--muted)">(boot)</span>' : '') + '</td>' +
-        '<td style="font-family:Consolas,monospace">' + (ss.effective_rate || 0).toFixed(2) + ' Hz</td>' +
+        '<td style="font-family:Consolas,monospace">' +
+          (ss.effective_rate != null ? ss.effective_rate.toFixed(2) + ' Hz' : 'NO DATA') +
+          '</td>' +
         '<td style="font-family:Consolas,monospace">' + lossHtml + '</td>' +
         '<td style="font-family:Consolas,monospace">' + (ss.vars != null ? ss.vars : '—') + '</td>' +
         '<td style="font-family:Consolas,monospace;font-size:10px">' + ageText + '</td>' +
