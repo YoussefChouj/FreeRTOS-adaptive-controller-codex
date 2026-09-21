@@ -382,8 +382,9 @@ async function runChecks() {
     const env = loadPanel();
     await micro();
     env.fire(env.byData('.sm-preset-btn', 'data-preset', 'ekf'), 'click');
-    const btn2 = env.byData('.sm-subscribe-btn', 'data-slot', '2');
+    const btn2 = env.byData('.sm-channel-btn', 'data-slot', '2');
     env.fire(btn2, 'click');
+    env.fire(env.doc.getElementById('sm-submit-btn'), 'click');
     await micro();
     const pc = env.previewCalls();
     assert.ok(pc.some((c) => c.slot === 2 && c.divider === 1 &&
@@ -394,7 +395,7 @@ async function runChecks() {
     assert.strictEqual(sc[0].divider, 1);
     assert.strictEqual(sc[0].ranges.length, 9);
     assert.ok(env.doc.getElementById('sm-result').textContent
-      .indexOf('OK - Slot 2') !== -1);
+      .indexOf('OK - Channel 2') !== -1);
     assert.strictEqual(env.doc.getElementById('sm-selection').style.display, '');
     assert.strictEqual(env.doc.getElementById('sm-selection-id').textContent, '#2');
     console.log('  PASS: preview (2,1,9 ranges) then subscribeSlot (2,1,9); OK result + banner #2');
@@ -410,8 +411,9 @@ async function runChecks() {
       slot: 3, divider: 1, ranges: [], unresolved: ['bogus.symbol'],
     };
     env.fire(env.byData('.sm-preset-btn', 'data-preset', 'ekf'), 'click');
-    const btn3 = env.byData('.sm-subscribe-btn', 'data-slot', '3');
+    const btn3 = env.byData('.sm-channel-btn', 'data-slot', '3');
     env.fire(btn3, 'click');
+    env.fire(env.doc.getElementById('sm-submit-btn'), 'click');
     await micro();
     assert.strictEqual(env.slotCalls().length, 0,
       'unresolved preview must prevent any subscribeSlot call');
@@ -428,8 +430,9 @@ async function runChecks() {
     console.log('\n[CHECK 6: per-slot selection removed via Clear]');
     const env = loadPanel();
     await micro();
-    const btn1 = env.byData('.sm-subscribe-btn', 'data-slot', '1');
+    const btn1 = env.byData('.sm-channel-btn', 'data-slot', '1');
     env.fire(btn1, 'click');
+    env.fire(env.doc.getElementById('sm-submit-btn'), 'click');
     await micro();
     assert.strictEqual(env.doc.getElementById('sm-selection').style.display, '');
     env.fire(env.doc.getElementById('sm-clear-selection'), 'click');

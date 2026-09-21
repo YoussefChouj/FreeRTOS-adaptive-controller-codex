@@ -339,9 +339,9 @@
 
       // Subscribe controls
       '  <div class="sm-subscribe">',
-      '    <span style="font-size:11px;color:var(--muted);margin-right:6px">Subscribe slot:</span>',
+      '    <span style="font-size:11px;color:var(--muted);margin-right:6px" title="Slots are independent telemetry channels. You can subscribe to up to 4 concurrently.">Telemetry Channel (Slot):</span>',
       SUBSCRIBABLE_SLOTS.map(function (s) {
-        return '<button class="sm-slot-btn sm-subscribe-btn" data-slot="' + s + '">' + s + '</button>';
+        return '<button class="sm-slot-btn sm-channel-btn' + (s === 0 ? ' active' : '') + '" data-slot="' + s + '">' + s + '</button>';
       }).join(''),
       '    <span id="sm-rate-wrap" style="margin-left:8px;display:inline-flex;align-items:center;gap:4px">',
       '      <span style="font-size:11px;color:var(--muted)">rate</span>',
@@ -394,6 +394,9 @@
       '      <button class="sm-slot-btn sm-preset-btn" data-preset="of">Optical flow</button>',
       '      <button class="sm-slot-btn sm-preset-btn" data-preset="pid">PID loops</button>',
       '    </div>',
+      '  </div>',
+      '  <div style="margin-top:8px;">',
+      '    <button id="sm-submit-btn" class="sm-slot-btn" style="background:var(--accent);color:var(--bg);font-weight:bold;padding:6px 12px">Subscribe to Channel</button>',
       '  </div>',
 
       // Selection indicator ?? shows the most recently subscribed slot + when.
@@ -488,8 +491,7 @@
   }
 
   function refreshPreview(api) {
-    var selectedBtn = document.querySelector('.sm-subscribe-btn.active');
-    var selectedSlot = selectedBtn ? parseInt(selectedBtn.getAttribute('data-slot'), 10) : 0;
+    var selectedSlot = _activeChannelId;
     var rateChoice = _rateChoice();
     var divider = rateChoice ? rateChoice.divider : SUBSCRIBE_DIVIDER_DEFAULT;
     var ranges = selectedSlot === 0 ? [] : _readRanges();
@@ -764,34 +766,43 @@
     if (_rangesChanged) _rangesChanged();
   }
 
-  // ???? Event wiring ????????????????????????????????????????????????????????????????????????????????????????????????????????????
+  var _activeChannelId = 0;
+
+  // ==== Event wiring ============================================================================================================================
   function bindEvents(api) {
-    // Subscribe buttons
-    document.querySelectorAll('.sm-subscribe-btn').forEach(function (btn) {
+    // Channel selection buttons
+    document.querySelectorAll('.sm-channel-btn').forEach(function (btn) {
       btn.addEventListener('click', function () {
-        var slotId = parseInt(btn.getAttribute('data-slot'), 10);
-        var rateChoice = _rateChoice();
-        var divider = rateChoice ? rateChoice.divider : SUBSCRIBE_DIVIDER_DEFAULT;
-        if (slotId !== 0 && isNaN(slotId)) return;
-        // Highlight the active slot so refreshPreview() picks the right
-        // one on the next input change. The .active CSS class gives the
-        // operator visual feedback about which slot is being previewed.
-        document.querySelectorAll('.sm-subscribe-btn').forEach(function (b) {
+        document.querySelectorAll('.sm-channel-btn').forEach(function (b) {
           b.classList.toggle('active', b === btn);
         });
-        // Slot 0 has its own auto-subscribe (boot_default / dashboard
-        // layout); it doesn't need ranges. Slots 1..3 REQUIRE explicit
-        // ranges or the bridge raises ``ValueError("slot N requires
-        // explicit ranges")``.
+        var slotId = parseInt(btn.getAttribute('data-slot'), 10);
+        _activeChannelId = slotId;
+        var rangesEl = q('sm-ranges');
+        if (rangesEl) {
+          rangesEl.style.display = (slotId === 0) ? 'none' : 'block';
+        }
+        _schedulePreview();
+      });
+    });
+
+    // Actual subscribe button
+    var submitBtn = q('sm-submit-btn');
+    if (submitBtn) {
+      submitBtn.addEventListener('click', function () {
+        var slotId = _activeChannelId;
+        var rateChoice = _rateChoice();
+        var divider = rateChoice ? rateChoice.divider : SUBSCRIBE_DIVIDER_DEFAULT;
         var ranges = slotId === 0 ? [] : _readRanges();
-        showResult('Subscribing slot ' + slotId + ' @ ' +
+        
+        showResult('Subscribing channel ' + slotId + ' @ ' +
                    (rateChoice ? _fmtHz(rateChoice.achieved) + ' Hz' : 'divider ' + divider) +
                    ' (wire divider ' + divider +
                    (ranges.length ? ', ranges=' + ranges.length : '') + ')...', null);
+                   
         submitSubscribe(api, slotId, divider, ranges).then(function (res) {
           if (res.ok) {
-            showResult('OK - Slot ' + slotId + ' subscribe sent via ' + res.via, true);
-            // Track "selected slot" for the indicator banner.
+            showResult('OK - Channel ' + slotId + ' subscribe sent via ' + res.via, true);
             _selectedSlot = slotId;
             _selectedAt   = Date.now();
             updateSelectionBanner();
@@ -800,7 +811,7 @@
           }
         });
       });
-    });
+    }
 
     // Debounced preview trigger. Fires when the user edits the ranges
     // textarea, divider input, or clicks a preset. 200 ms is short
