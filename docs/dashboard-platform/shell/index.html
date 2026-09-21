@@ -808,10 +808,60 @@
 
   /* ── Shell API exposed to plugins ── */
   var onStateChangeCallbacks = [];
+  /* Name of the panel whose renderFn is currently executing (set by
+   * registerPanel). Lets subscribe() attribute a callback to the panel that
+   * registered it, so a throwing callback can be reported inside that
+   * panel's card only (Bug 1 hardening). */
+  var _currentPanelName = null;
+
+  function slugFor(name) {
+    return String(name).replace(/\s+/g, '-').toLowerCase();
+  }
+
+  /* Show a plugin render/callback failure inside that plugin's own card.
+   * Never throws and never touches other panels. */
+  function showPanelError(panelName, err) {
+    try {
+      var slug = slugFor(panelName);
+      var body = document.getElementById('plugin-body-' + slug);
+      if (!body) { console.error('[shell] plugin error:', panelName, err); return; }
+      var box = document.getElementById('plugin-err-' + slug);
+      if (!box) {
+        box = document.createElement('div');
+        box.id = 'plugin-err-' + slug;
+        box.setAttribute('data-testid', 'plugin-error-' + slug);
+        box.style.cssText = 'margin-top:6px;padding:6px 8px;border-radius:4px;' +
+          'background:rgba(233,69,96,0.12);border:1px solid var(--red);' +
+          'color:var(--red);font-size:11px;white-space:pre-wrap;';
+        body.appendChild(box);
+      }
+      box.textContent = 'Plugin error: ' +
+        (err && err.message ? err.message : String(err));
+    } catch (_) { /* error reporting must never kill the poll loop */ }
+  }
+
+  /* Deliver state to every subscribed plugin. A callback that throws is
+   * logged and reported inside its own panel's card only; it must never
+   * stop the other callbacks or the poll loop (Bug 1 hardening). */
+  function dispatchState(state) {
+    onStateChangeCallbacks.forEach(function (entry) {
+      try {
+        entry.cb(state);
+      } catch (e) {
+        console.error('[shell] plugin callback error:', entry.panel || 'anonymous', e);
+        if (entry.panel) showPanelError(entry.panel, e);
+      }
+    });
+  }
 
   var shellApi = {
     getState: function () { return currentState; },
-    subscribe: function (cb) { onStateChangeCallbacks.push(cb); },
+    subscribe: function (cb, panelName) {
+      onStateChangeCallbacks.push({
+        cb: cb,
+        panel: panelName || _currentPanelName || null,
+      });
+    },
     submitCommand: function (cmdId, index, value) {
       return fetch('/commands', {
         method: 'POST',
@@ -879,7 +929,17 @@
       card.appendChild(header);
       card.appendChild(body);
       container.appendChild(card);
-      renderFn(body, shellApi);
+      // Bug 1 hardening: a plugin whose initial render throws gets an error
+      // message inside its own card — the shell keeps running.
+      _currentPanelName = name;
+      try {
+        renderFn(body, shellApi);
+      } catch (e) {
+        console.error('[shell] plugin render error:', name, e);
+        showPanelError(name, e);
+      } finally {
+        _currentPanelName = null;
+      }
     },
     // ── S5: truthful state model helpers ──────────────────────────────
     // getSignalState(slotData) → 'live'|'stale'|'degraded'|'unknown'|'replay'|'unverified'
@@ -1045,10 +1105,26 @@
     el.textContent = text;
   }
 
+  /* Bug 1 hardening: isolate each render step so one throwing step cannot
+   * abort the rest of the tick (which is what froze every panel together). */
+  function safeStep(label, fn) {
+    try { fn(); } catch (e) { console.error('[shell] render step failed:', label, e); }
+  }
+
+  /* A hung request must not stall the self-rescheduling loop: abort after ms. */
+  function fetchJsonWithTimeout(url, ms) {
+    var ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var timer = ctl ? setTimeout(function () { ctl.abort(); }, ms) : null;
+    return fetch(url, ctl ? { signal: ctl.signal } : undefined)
+      .then(function (r) { return r.json(); })
+      .catch(function () { return null; })
+      .finally(function () { if (timer) clearTimeout(timer); });
+  }
+
   function poll() {
-    Promise.all([
-      fetch('/health').then(function (r) { return r.json(); }).catch(function () { return null; }),
-      fetch('/state').then(function (r) { return r.json(); }).catch(function () { return null; })
+    return Promise.all([
+      fetchJsonWithTimeout('/health', 3000),
+      fetchJsonWithTimeout('/state', 3000)
     ]).then(function (_ref) {
       var health = _ref[0];
       var state = _ref[1];
@@ -1062,25 +1138,34 @@
       currentState = state;
 
       // S5: evaluate gates and render them on every poll
-      evaluateGates(state);
-      renderGates();
+      safeStep('gates', function () { evaluateGates(state); renderGates(); });
+      safeStep('sidebar', function () { renderState(state); });
+      safeStep('streams', function () { renderStreams(state); });
+      safeStep('alarms', function () { alarms = buildAlarms(state); renderAlarms(alarms); });
 
-      renderState(state);
-      renderStreams(state);
-      alarms = buildAlarms(state);
-      renderAlarms(alarms);
-
-      onStateChangeCallbacks.forEach(function (cb) {
-        try { cb(state); } catch (e) { console.error('Plugin callback error:', e); }
-      });
-    }).catch(function () {
+      dispatchState(state);
+    }).catch(function (e) {
+      console.error('[shell] poll failed:', e);
       setStatus('error', 'Error');
     });
   }
 
+  /* ── Polling loop (Bug 1 hardening) ──
+   * Self-rescheduling chain: the next tick is armed in finally(), so no
+   * failure — a synchronous throw in poll(), a rejected promise, or a
+   * crashed render step — can ever stop the page from updating again.
+   * A failure in one plugin or one request only affects that panel. */
+  function pollForever() {
+    Promise.resolve().then(poll).catch(function (e) {
+      console.error('[shell] poll crashed:', e);
+      setStatus('error', 'Error');
+    }).finally(function () {
+      setTimeout(pollForever, 500);
+    });
+  }
+
   /* ── Bootstrap ── */
-  poll();
-  setInterval(poll, 500);
+  pollForever();
 
   /* ── Lifecycle: invoke registered destroy fns on tab close ── */
   window.addEventListener('beforeunload', function () {
@@ -1094,10 +1179,7 @@
   /* Expose a refresh hook so plugins (e.g. bandwidth) can request a re-render after subscribe. */
   window.__gs_plugins_refresh__ = function () {
     try {
-      var st = currentState;
-      onStateChangeCallbacks.forEach(function (cb) {
-        try { cb(st); } catch (e) { console.error('refresh callback error:', e); }
-      });
+      dispatchState(currentState);
     } catch (_) { /* ignore */ }
   };
   /* Expose the shellApi so plugins can call subscribeSlot without re-defining it. */

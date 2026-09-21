@@ -874,11 +874,16 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                 # the slot-manager-panel comment for the matching fix.
                 self._json(200, {"slots": slots, "subscribable": [0, 1, 2, 3]})
             elif route == "/state":
-                cached = hub.latest_state()
-                if cached is not None:
-                    self._json(200, cached)
-                else:
-                    self._json(200, service.snapshot().__dict__)
+                # Bug 1 (AUDIT_2026-09-21 §Bug 1): this route used to prefer
+                # hub.latest_state(), but the hub was only ever written by the
+                # gateway result-polling thread (command results / expiries).
+                # Normal telemetry ingest never published, so the first
+                # command froze /state on that one cached snapshot forever:
+                # the browser page stopped updating while /health — computed
+                # live from the service — kept reporting rising samples.
+                # Serve a fresh snapshot on every request; snapshot() is cheap
+                # and the /health handler already computes one per poll.
+                self._json(200, service.snapshot().__dict__)
             # GET /sessions — list all sessions
             elif route == "/sessions":
                 try:
@@ -1406,6 +1411,12 @@ class ApiServer:
         self.static_root = static_root
         self.experiment_runtime = experiment_runtime
         self.hub = StateHub()
+        # Bug 1 (AUDIT_2026-09-21 §Bug 1): the hub cache was refreshed only
+        # on command results, so any hub consumer saw a frozen view after
+        # the first command. Mirror every service notification (telemetry
+        # ingest, command results) into the hub so hub.latest_state()
+        # tracks the live service state.
+        service.add_listener(self.hub.publish)
         self._stop_event = threading.Event()
         self.server = ThreadingHTTPServer(
             (host, port),

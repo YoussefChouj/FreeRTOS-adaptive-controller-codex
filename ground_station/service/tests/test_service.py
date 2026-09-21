@@ -1119,3 +1119,116 @@ def test_store_iter_records_offset_without_limit():
     everything = list(service.store.iter_records(sid))
     assert list(service.store.iter_records(sid, offset=3)) == everything[3:]
     assert list(service.store.iter_records(sid, limit=2, offset=1)) == everything[1:3]
+
+
+class _FakeCommandBridge:
+    """Minimal bridge for Bug 1: sends transactions, queues 0x30/0x32-style
+    results for the gateway polling thread to drain (the production path
+    that publishes snapshots into the hub)."""
+
+    def __init__(self):
+        self.next_txid = 0
+        self.results = []
+
+    def start(self, auto_subscribe_boot_default=True):
+        pass
+
+    def stop(self):
+        pass
+
+    def send_transaction(self, command_id, index, value, flags):
+        self.next_txid += 1
+        return self.next_txid
+
+    def poll_transaction_result(self, timeout=0.0):
+        return self.results.pop(0) if self.results else None
+
+
+def _bridge_service():
+    schema = StreamSchema(1, 1, 4,
+                          (StreamRange(0x20000000, 4, 1, "altitude", "f"),), 0)
+    bridge = _FakeCommandBridge()
+    service = GroundStationService(bridge=bridge, store=SessionStore(),
+                                   schemas=[schema], source="sim")
+    return service, bridge
+
+
+def test_state_stays_fresh_after_command_result_publish():
+    """Bug 1 regression (AUDIT_2026-09-21 §Bug 1).
+
+    /state used to prefer hub.latest_state(), a cache written only by the
+    gateway result-polling thread. After the first command result was
+    published, every /state poll returned that one frozen snapshot, so the
+    dashboard stopped updating while /health (computed live) stayed green.
+    /state must always reflect the live service state, and the exact
+    /commands + command-result shapes the shell polls must survive.
+    """
+    service, bridge = _bridge_service()
+    service.start()
+    api, base = _api_for(service)
+    try:
+        now = time.time_ns()
+        # Telemetry flows before the command.
+        assert service.ingest(data_frame(0, 7, 100, 1.25), time_ns=now) == 1
+        status, state = _get_json(base + "/state")
+        assert status == 200
+        assert state["samples"] == 1
+
+        # The operator's command click — exact /commands response shape.
+        status, resp = _post_json(base + "/commands",
+                                  {"command_id": 0x0E, "index": 0, "value": 1})
+        assert status == 202
+        assert isinstance(resp["transaction_id"], int)
+
+        # Firmware applied it: the gateway polling thread picks the result
+        # up off the bridge and publishes a snapshot into the hub.
+        bridge.results.append(Result(resp["transaction_id"], Outcome.APPLIED,
+                                     0x0E, 0, detail="applied"))
+        deadline = time.time() + 5.0
+        while (api.hub.latest_state() is None
+               or api.hub.latest_state().get("last_transaction_result") is None):
+            if time.time() > deadline:
+                raise AssertionError("gateway polling thread never published")
+            time.sleep(0.05)
+        published = api.hub.latest_state()["last_transaction_result"]
+        assert published["transaction_id"] == resp["transaction_id"]
+        assert published["status"] == "applied"
+
+        # More telemetry arrives AFTER the hub publish. Pre-fix, /state
+        # kept serving the frozen cached snapshot (samples == 1 forever).
+        assert service.ingest(data_frame(0, 8, 105, 1.5),
+                              time_ns=now + 40_000_000) == 1
+        status, state = _get_json(base + "/state")
+        assert status == 200
+        assert state["samples"] == 2, (
+            "/state served a stale snapshot after the command publish "
+            "(Bug 1 regression)")
+        # Command feedback is still visible in the fresh snapshot.
+        assert state["last_transaction_result"]["transaction_id"] == \
+            resp["transaction_id"]
+        assert state["last_transaction_result"]["status"] == "applied"
+        assert any(r["transaction_id"] == resp["transaction_id"]
+                   for r in state["command_results"])
+        # Telemetry stream data still present alongside command fields.
+        assert "0" in state["streams"]
+    finally:
+        api.stop()
+
+
+def test_command_arm_gate_fails_closed_over_http():
+    """0x16 (MOTOR_BENCH) stays blocked while ARM state is unknown (fail closed)."""
+    service, _bridge = _bridge_service()
+    service.start()
+    api, base = _api_for(service)
+    try:
+        # No status.arm telemetry ingested -> arm_state() is "unknown".
+        status, resp = _post_json(base + "/commands",
+                                  {"command_id": 0x16, "index": 0, "value": 1})
+        assert status == 400
+        assert "rejected" in str(resp.get("error", "")).lower()
+        # Nothing was transmitted to the drone.
+        assert service.gateway._pending == set()
+        assert not any(a["command_id"] == 0x16
+                      for a in service.action_journal())
+    finally:
+        api.stop()
