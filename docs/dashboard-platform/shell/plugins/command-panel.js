@@ -1402,6 +1402,9 @@
       '  </div>',
       '</div>',
 
+      // Parameter & Flag Widgets (AUDIT §3.1–3.2)
+      buildWidgetsSection(),
+
       // Manual Form
       '<div class="cp-section">',
       '  <div style="font-size:10px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em;">Manual Command</div>',
@@ -1720,6 +1723,307 @@
     }
   }
 
+  // ── Parameter & Flag Widgets (AUDIT_2026-09-21 §3.1–3.2) ────────────────
+  // Value-parameter commands are surfaced as permanent widgets (numeric input,
+  // plus a slider when the catalog defines a finite range) that show the
+  // CURRENT value (from telemetry, tolerant slot-prefixed lookup) and the
+  // value to SET, with an explicit Send. Flag commands are surfaced as
+  // checkboxes/toggles whose state follows telemetry (never optimistic).
+  //
+  // Every send routes through submitCommand(), so the existing arm/precondition
+  // gates fail closed exactly as before. The render/poll loop is untouched:
+  // a POST that rejects or drops the link surfaces as a result status and the
+  // loop keeps running (Bug 1, commit 7dea39f, must not regress).
+  var WIDGET_VALUE_COMMANDS = [0x01, 0x02, 0x05, 0x08, 0x09, 0x12, 0x15];
+  var WIDGET_FLAG_COMMANDS  = [0x0E, 0x0F];
+  // Best-effort readback symbol per (cmd, param index) for the current-value
+  // display. Absent mapping -> — / not published, never 0. Refined by the
+  // /api/contract fetch at mount (which fills _commandSymbols).
+  var _widgetReadback = {
+    0x0E: { 0: 'status.rc_authority' }
+  };
+  // Tolerant slot-prefix matcher: matches ``slot<N>.<key>``.
+  var SLOT_PREFIX_RE = /^slot\d+\.\s*(.+)$/;
+
+  function findParam(cmdId, paramIndex) {
+    var params = COMMAND_PARAMS_REGISTRY[cmdId] || [];
+    for (var i = 0; i < params.length; i++) {
+      if (params[i].index === paramIndex) return params[i];
+    }
+    return null;
+  }
+
+  // Params for a command; commands not modelled in the catalog fall back to a
+  // single synthesized index-0 setter so the widget still renders.
+  function widgetParams(cmdId) {
+    var ps = COMMAND_PARAMS_REGISTRY[cmdId];
+    if (ps && ps.length) return ps;
+    return [{ index: 0, name: 'set', unit: 'bool', min_val: 0, max_val: 1 }];
+  }
+
+  function widgetSymbol(cmdId, p) {
+    if (p && p.symbol) return p.symbol;
+    if (_commandSymbols[cmdId] && _commandSymbols[cmdId][p.index]) return _commandSymbols[cmdId][p.index];
+    if (_widgetReadback[cmdId] && _widgetReadback[cmdId][p.index]) return _widgetReadback[cmdId][p.index];
+    return null;
+  }
+
+  // Tolerant, slot-prefix-aware telemetry lookup (matches time-series-panel's
+  // approach): a bare key or any ``slot<N>.<key>`` spelling is found.
+  function streamValue(key) {
+    var state = _state;
+    if (!state || !state.streams) return undefined;
+    var slotKeys = Object.keys(state.streams);
+    for (var i = 0; i < slotKeys.length; i++) {
+      var s = state.streams[slotKeys[i]];
+      if (!s || !s.values) continue;
+      var v = s.values;
+      if (key in v) return v[key];
+      for (var k in v) {
+        var m = SLOT_PREFIX_RE.exec(k);
+        if (m && m[1] === key) return v[k];
+      }
+    }
+    return undefined;
+  }
+
+  function isSelectorParam(p) {
+    return (p.unit === 'enum' || p.unit === 'index' || p.unit === 'axis' ||
+            p.unit === 'param' || p.unit === 'type' || p.unit === 'selector') &&
+           p.min_val != null && p.max_val != null && (p.max_val - p.min_val <= 20);
+  }
+
+  function buildParamReadbackSpan(cmdId, p, sym) {
+    if (!sym) {
+      return '<div style="font-size:11px;margin-top:4px;"><span style="color:var(--muted)">Current: </span>' +
+             '<span style="color:var(--amber)">— / not published</span></div>';
+    }
+    return '<div style="font-size:11px;margin-top:4px;"><span style="color:var(--muted)">Current (' +
+           escapeHtml(sym) + '): </span><span class="cp-widget-current" id="cp-widget-current-' +
+           cmdId + '-' + p.index + '"><span style="color:var(--amber)">— / not published</span></span></div>';
+  }
+
+  function buildParamControlHtml(cmdId, p) {
+    var uid = cmdId + '-' + p.index;
+    var label = escapeHtml(p.name) + (p.unit ?
+      ' <span style="font-size:10px;color:var(--muted);font-weight:normal">(' + escapeHtml(p.unit) + ')</span>' : '');
+    var readback = buildParamReadbackSpan(cmdId, p, widgetSymbol(cmdId, p));
+    if (isSelectorParam(p)) {
+      var opts = [];
+      for (var oi = p.min_val; oi <= p.max_val; oi++) opts.push('<option value="' + oi + '">' + oi + '</option>');
+      return [
+        '<div class="cp-widget-p" data-cmd="' + cmdId + '" data-param="' + p.index + '">',
+        '  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">',
+        '    <label for="cp-widget-input-' + uid + '" style="font-weight:600;font-size:12px;min-width:130px;">' + label + '</label>',
+        '    <select id="cp-widget-input-' + uid + '" class="cp-param-input" style="flex:1;">' + opts.join('') + '</select>',
+        '    <button type="button" id="cp-widget-send-' + uid + '" class="cp-submit"',
+        '      style="width:auto;margin:0;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer;">Send</button>',
+        '  </div>',
+        readback,
+        '</div>'
+      ].join('');
+    }
+    // Numeric value param.
+    var hasRange = (p.min_val != null && p.max_val != null);
+    var minT = (p.min_val != null) ? p.min_val : '-∞';
+    var maxT = (p.max_val != null) ? p.max_val : '+∞';
+    var rangeStr = 'Range: ' + minT + ' .. ' + maxT;
+    var initVal = (p.min_val != null) ? p.min_val : 0;
+    return [
+      '<div class="cp-widget-p" data-cmd="' + cmdId + '" data-param="' + p.index + '">',
+      '  <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px;">',
+      '    <label for="cp-widget-input-' + uid + '" style="font-weight:600;font-size:12px;">' + label + '</label>',
+      '    <span class="cp-param-range">' + rangeStr + '</span>',
+      '  </div>',
+      '  <div style="display:flex;gap:6px;align-items:center;">',
+      hasRange ? '<input type="range" id="cp-widget-slider-' + uid + '" min="' + p.min_val + '" max="' + p.max_val +
+                 '" step="1" value="' + initVal + '" style="flex:1;" />' : '',
+      '    <input type="number" id="cp-widget-input-' + uid + '" class="cp-param-input"',
+      (p.min_val != null ? ' min="' + p.min_val + '"' : ''),
+      (p.max_val != null ? ' max="' + p.max_val + '"' : ''),
+      ' step="any" value="' + initVal + '" style="width:110px;" />',
+      '    <button type="button" id="cp-widget-send-' + uid + '" class="cp-submit"',
+      '      style="width:auto;margin:0;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer;">Send</button>',
+      '  </div>',
+      '  <div style="font-size:11px;color:var(--red);" id="cp-widget-warn-' + uid + '"></div>',
+      readback,
+      '</div>'
+    ].join('');
+  }
+
+  function buildWidgetValueHtml(cmdId) {
+    var reg = getRegistryEntry(cmdId);
+    var inner = widgetParams(cmdId).map(function (p) { return buildParamControlHtml(cmdId, p); }).join('');
+    return [
+      '<div class="cp-param-card" data-widget="value" data-cmd="' + hexId(cmdId) + '">',
+      '  <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">',
+      '    <span style="font-weight:700;font-size:12px;">' + hexId(cmdId) + ' – ' + escapeHtml(reg.name) + '</span>',
+      '    <span style="font-size:10px;color:' + (SAFETY_CLASS_COLORS[reg.safetyClass] || 'var(--muted)') + ';">' +
+      '      ' + escapeHtml(reg.precondition) + '</span>',
+      '  </div>',
+      inner,
+      '</div>'
+    ].join('');
+  }
+
+  function buildFlagToggleHtml(cmdId) {
+    var reg = getRegistryEntry(cmdId);
+    var rows = widgetParams(cmdId)
+      .filter(function (p) { return p.unit === 'bool'; })
+      .map(function (p) {
+        var sym = widgetSymbol(cmdId, p);
+        var stateFrag = sym
+          ? '<span class="cp-flag-state" id="cp-flag-state-' + cmdId + '-' + p.index + '" style="font-size:10px;">' +
+            '<span style="color:var(--amber)">not published</span></span>'
+          : '<span class="cp-flag-state" id="cp-flag-state-' + cmdId + '-' + p.index + '" style="font-size:10px;">' +
+            '<span style="color:var(--amber)">not published</span></span>';
+        return [
+          '<label class="cp-flag-row" data-cmd="' + cmdId + '" data-param="' + p.index + '"',
+          '  style="display:flex;align-items:center;gap:8px;font-size:12px;padding:3px 0;cursor:pointer;">',
+          '  <input type="checkbox" id="cp-flag-' + cmdId + '-' + p.index + '" />',
+          '  <span style="flex:1;font-weight:600;">' + escapeHtml(p.name) + '</span>',
+          stateFrag,
+          '</label>'
+        ].join('');
+      }).join('');
+    return [
+      '<div class="cp-param-card" data-widget="flag" data-cmd="' + hexId(cmdId) + '">',
+      '  <div style="font-weight:700;font-size:12px;margin-bottom:4px;">' + hexId(cmdId) + ' – ' +
+      escapeHtml(reg.name) + '</div>',
+      rows,
+      '</div>'
+    ].join('');
+  }
+
+  function buildWidgetsSection() {
+    var valueHtml = WIDGET_VALUE_COMMANDS.map(function (c) {
+      var ps = widgetParams(c);
+      return (ps && ps.length) ? buildWidgetValueHtml(c) : '';
+    }).join('');
+    var flagHtml = WIDGET_FLAG_COMMANDS.map(function (c) {
+      var bools = widgetParams(c).filter(function (p) { return p.unit === 'bool'; });
+      return bools.length ? buildFlagToggleHtml(c) : '';
+    }).join('');
+    return [
+      '<div class="cp-section" data-testid="cp-param-widgets">',
+      '  <div style="font-size:10px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em;">Parameter Widgets</div>',
+      valueHtml,
+      '  <div style="font-size:10px;color:var(--muted);margin:12px 0 6px;text-transform:uppercase;letter-spacing:0.05em;">Flag Toggles</div>',
+      flagHtml,
+      '</div>'
+    ].join('');
+  }
+
+  function currentFlagState(cmdId, p) {
+    var sym = widgetSymbol(cmdId, p);
+    if (!sym) return null;
+    var v = streamValue(sym);
+    if (v === undefined || v === null) return null;
+    return Number(v) !== 0;
+  }
+
+  function refreshFlagToggles() {
+    WIDGET_FLAG_COMMANDS.forEach(function (cmdId) {
+      widgetParams(cmdId).forEach(function (p) {
+        if (p.unit !== 'bool') return;
+        var cb = q('cp-flag-' + cmdId + '-' + p.index);
+        if (!cb) return;
+        var st = currentFlagState(cmdId, p);
+        // State follows telemetry, never optimistic.
+        cb.checked = (st === true);
+        cb.indeterminate = (st === null);
+        var badge = q('cp-flag-state-' + cmdId + '-' + p.index);
+        if (badge) {
+          if (st === null) badge.innerHTML = '<span style="color:var(--amber)">not published</span>';
+          else badge.textContent = st ? 'ON' : 'OFF';
+        }
+      });
+    });
+  }
+
+  function refreshWidgetReadbacks() {
+    WIDGET_VALUE_COMMANDS.forEach(function (cmdId) {
+      widgetParams(cmdId).forEach(function (p) {
+        var sym = widgetSymbol(cmdId, p);
+        if (!sym) return;
+        var el = q('cp-widget-current-' + cmdId + '-' + p.index);
+        if (!el) return;
+        var v = streamValue(sym);
+        if (v === undefined || v === null) {
+          el.innerHTML = '<span style="color:var(--amber)">— / not published</span>';
+        } else {
+          el.innerHTML = '<span style="color:var(--green);font-weight:600;">' + v + '</span>';
+        }
+      });
+    });
+  }
+
+  function widgetParamValue(cmdId, p) {
+    var el = q('cp-widget-input-' + cmdId + '-' + p.index);
+    if (!el) return undefined;
+    var v = parseFloat(el.value);
+    return isNaN(v) ? undefined : v;
+  }
+
+  function validateWidgetNumeric(cmdId, p) {
+    var input = q('cp-widget-input-' + cmdId + '-' + p.index);
+    var send = q('cp-widget-send-' + cmdId + '-' + p.index);
+    var warn = q('cp-widget-warn-' + cmdId + '-' + p.index);
+    if (!input) return true;
+    var raw = String(input.value).trim();
+    var val = parseFloat(raw);
+    var reason = '';
+    if (raw === '' || isNaN(val)) reason = 'enter a numeric value';
+    else if (p.min_val != null && val < p.min_val) reason = 'value ' + val + ' is below min ' + p.min_val;
+    else if (p.max_val != null && val > p.max_val) reason = 'value ' + val + ' exceeds max ' + p.max_val;
+    if (send) send.disabled = (reason !== '');
+    if (warn) warn.innerHTML = reason ? '<span style="color:var(--red)">' + escapeHtml(reason) + '</span>' : '';
+    return reason === '';
+  }
+
+  function submitParamWidget(cmdId, p, val) {
+    if (p.unit !== 'bool' &&
+        ((p.min_val != null && val < p.min_val) || (p.max_val != null && val > p.max_val))) {
+      setResultStatus('rejected', 'value ' + val + ' out of range for ' + p.name);
+      return;
+    }
+    submitCommand(cmdId, p.index, val);
+  }
+
+  function wireWidgets() {
+    WIDGET_VALUE_COMMANDS.forEach(function (cmdId) {
+      (COMMAND_PARAMS_REGISTRY[cmdId] || []).forEach(function (p) {
+        var input = q('cp-widget-input-' + cmdId + '-' + p.index);
+        var slider = q('cp-widget-slider-' + cmdId + '-' + p.index);
+        var sendBtn = q('cp-widget-send-' + cmdId + '-' + p.index);
+        if (slider && input) {
+          slider.addEventListener('input', function () { input.value = slider.value; validateWidgetNumeric(cmdId, p); });
+          input.addEventListener('input', function () { slider.value = input.value; validateWidgetNumeric(cmdId, p); });
+        } else if (input) {
+          input.addEventListener('input', function () { validateWidgetNumeric(cmdId, p); });
+        }
+        if (sendBtn) {
+          sendBtn.addEventListener('click', function () {
+            var v = widgetParamValue(cmdId, p);
+            if (v === undefined) return;
+            submitParamWidget(cmdId, p, v);
+          });
+        }
+        if (input) validateWidgetNumeric(cmdId, p);
+      });
+    });
+    WIDGET_FLAG_COMMANDS.forEach(function (cmdId) {
+      widgetParams(cmdId).forEach(function (p) {
+        if (p.unit !== 'bool') return;
+        var cb = q('cp-flag-' + cmdId + '-' + p.index);
+        if (!cb) return;
+        cb.addEventListener('change', function () {
+          submitParamWidget(cmdId, p, cb.checked ? 1 : 0);
+        });
+      });
+    });
+  }
+
   // ── Export ──────────────────────────────────────────────────────────────
   window.__PLUGIN_INIT__ = function (api) {
     _api = api;
@@ -1780,6 +2084,7 @@
       wireVirtualRC();
       wireNavPaths();
       wireOfBias();
+      wireWidgets();
       wireHistoryFilters();
 
       // Load and render history
@@ -1803,6 +2108,8 @@
           refreshBenchModePill();
           refreshVirtualRCPanel();
           renderReadbackValue();
+          refreshFlagToggles();
+          refreshWidgetReadbacks();
         });
       }
       // Initial state fetch in case subscribe fires only on changes
@@ -1811,6 +2118,8 @@
       refreshBenchModePill();
       refreshVirtualRCPanel();
       renderReadbackValue();
+      refreshFlagToggles();
+      refreshWidgetReadbacks();
     });
   };
 
