@@ -477,12 +477,26 @@
     }
   }
 
+  /* Estimator symbols span several slots (mode/tau/health live in slot 1),
+   * so merge every stream's values; null when no stream has values yet. */
+  function mergedValues(state) {
+    var streams = state && state.streams;
+    var out = null;
+    if (!streams) return null;
+    Object.keys(streams).forEach(function (sid) {
+      var v = streams[sid] && streams[sid].values;
+      if (!v) return;
+      if (!out) out = {};
+      Object.keys(v).forEach(function (k) { out[k] = v[k]; });
+    });
+    return out;
+  }
+
   /* ── Main render ────────────────────────────────────────────────────── */
   function renderEstimator() {
     if (!_lastState || !_lastState.streams) return;
-    var stream0 = _lastState.streams['0'];
-    var streamReceived = (stream0 && stream0.values) ? true : false;
-    var values = streamReceived ? stream0.values : null;
+    var values = mergedValues(_lastState);
+    var streamReceived = values ? true : false;
     var now = Date.now();
     var anyUpdate = false;
     var ekfAvailable = false;
@@ -604,8 +618,7 @@
     if (!state) return;
     _lastState = state;
     var now = Date.now();
-    var stream0 = state.streams ? state.streams['0'] : null;
-    var values = (stream0 && stream0.values) ? stream0.values : null;
+    var values = mergedValues(state);
     if (values) {
       EKF_GROUPS.forEach(function (g) {
         g.keys.forEach(function (k) {

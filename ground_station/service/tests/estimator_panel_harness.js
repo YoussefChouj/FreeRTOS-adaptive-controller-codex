@@ -260,6 +260,25 @@ function check(label, cond) {
     console.log('');
   }
 
+  /* --- Test 6: values merge across streams (mode/tau/health are in slot 1) --- */
+  {
+    const src = fs.readFileSync(PANEL, 'utf8');
+    const m = src.match(/function mergedValues\(state\) \{[\s\S]*?\r?\n  \}\r?\n/);
+    check('mergedValues defined in panel', m != null);
+    check('panel no longer reads only stream 0',!/streams\['0'\]/.test(src));
+    if (m) {
+      const mergedValues = vm.runInNewContext('(' + m[0] + ')', { Object });
+      const merged = mergedValues({ streams: {
+        '0': { values: { 'slot0.DroneStatus.ARM_Status': 0 } },
+        '1': { values: { 'slot1.g_of_bias_mode': 2, 'slot1.g_ekf_of_health': 1 } },
+      } });
+      check('slot1 mode visible after merge', merged['slot1.g_of_bias_mode'] === 2);
+      check('slot0 arm visible after merge', merged['slot0.DroneStatus.ARM_Status'] === 0);
+      check('no streams -> null (not zeros)', mergedValues({ streams: {} }) === null);
+    }
+    console.log('');
+  }
+
   console.log('=== ' + (failures === 0 ? 'ALL PASSED' : failures + ' FAILURE(S)') + ' ===\n');
   process.exit(failures === 0 ? 0 : 1);
 })().catch(e => { console.error(e); process.exit(1); });
