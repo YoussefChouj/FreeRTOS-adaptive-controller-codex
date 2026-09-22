@@ -105,6 +105,14 @@ TOOLS: list[dict[str, Any]] = [
                         "properties": {"session_dir": {"type": "string"}},
                         "required": ["session_dir"]},
     },
+    {
+        "name": "explain_symbol",
+        "description": "Deterministic explanation of a firmware symbol from the "
+                       "agent map combined with its live telemetry value if active.",
+        "inputSchema": {"type": "object",
+                        "properties": {"name": {"type": "string"}},
+                        "required": ["name"]},
+    },
 ]
 
 SERVER_IDENTITY = {"name": "dashboard", "version": "1.0.0"}
@@ -224,6 +232,8 @@ class McpServer:
             return self._text(self._wrap(payload, status))
         if name == "analyze_session":
             return self._text(self._analyze_session(args))
+        if name == "explain_symbol":
+            return self._text(self._explain_symbol(args))
         return {"content": [{"type": "text",
                              "text": json.dumps({"error": f"unknown tool {name}"})}]}
 
@@ -346,8 +356,58 @@ class McpServer:
                     pass
         return total
 
+    def _explain_symbol(self, args: dict) -> dict[str, Any]:
+        name = str(args.get("name", "")).strip()
+        if not name:
+            return {"error": "missing 'name' argument"}
+
+        # Step 1: explain logic
+        explanation = ""
+        found = False
+        try:
+            from ground_station.agent_map.explain import format_explain
+            explanation, found = format_explain(name)
+        except Exception as exc:
+            explanation = f"explain unavailable: {exc}"
+
+        # Step 2: latest streamed value from GET /state. Exact key, or a
+        # dotted key whose tail is exactly `name`; ambiguity returns nothing
+        # rather than a value that may belong to another variable.
+        live_val = None
+        has_live = False
+        matches: dict[str, Any] = {}
+        status, state = _http("GET", "/state")
+        streams = state.get("streams") if status == 200 and isinstance(state, dict) else None
+        for data in (streams or {}).values():
+            vals = data.get("values") if isinstance(data, dict) else None
+            for k, v in (vals or {}).items():
+                if k == name or k.endswith("." + name):
+                    matches[k] = v[-1] if isinstance(v, (list, tuple)) and v else v
+        if name in matches:
+            matches = {name: matches[name]}
+        if len(matches) == 1:
+            live_val = next(iter(matches.values()))
+            has_live = True
+
+        # Step 3: combine into result text
+        if has_live:
+            live_str = f"live value: {live_val}"
+        else:
+            live_str = "live value: (not streaming / unavailable)"
+
+        combined_text = f"{explanation}\n  {live_str}"
+
+        return {
+            "name": name,
+            "explanation": explanation,
+            "live_value": live_val if has_live else None,
+            "text": combined_text,
+        }
+
     @staticmethod
     def _text(result: Any) -> dict[str, Any]:
+        if isinstance(result, dict) and "text" in result:
+            return {"content": [{"type": "text", "text": str(result["text"])}]}
         return {"content": [{"type": "text",
                              "text": json.dumps(result, default=str)}]}
 

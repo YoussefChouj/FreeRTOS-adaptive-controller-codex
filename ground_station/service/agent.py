@@ -12,6 +12,8 @@ amended by the phase-1A operator spec:
     ``autonomous``. ``autonomous`` still requires approval for ARM unless the
     operator has separately flipped ``allow_agent_arm`` (memory only, resets
     on restart).
+    Param writes to tier-0 (flight-critical) state need approval in every
+    mode (agent-map step 4, ``PARAM_WRITE_TIER``).
   * The agent layer NEVER bypasses ``POST /commands``: a ``command`` step goes
     through the same ``submit_command`` path (including the arm gate) the HTTP
     route uses. ``api.py`` wiring only; nothing here lives in a control path.
@@ -39,9 +41,9 @@ from ground_station.service.activity import ActivityJournal
 # ---------------------------------------------------------------------------
 # ``risk`` is ``safe`` or ``critical``.
 #   safe    -> runs without an approval, in every mode.
-#   critical-> needs a human approval in ``supervised`` mode (and in
+#   critical-> needs a human approval in ``supervised`` mode, and in
 #              ``autonomous`` too when it is an arm/motor/throttle action and
-#              ``allow_agent_arm`` is off).
+#              ``allow_agent_arm`` is off, or a param write to tier-0 state.
 #
 # UI actions are executed by the browser (pushed over SSE as ``ui_action`` and
 # acked by the shell). Service actions run here on the service thread.
@@ -210,8 +212,55 @@ CRITICAL_PARAM_WRITE: frozenset[int] = frozenset({
 WHY_CRITICAL_ARM = "arm_or_motor_or_throttle"
 WHY_CRITICAL_PARAM = "param_write"
 
+# ---- Tier enforcement (docs/dashboard-platform/AGENT_MAP_SPEC.md, step 4) ---
+# Safety tier of the firmware state each param-write command changes; tiers
+# are those of docs/agent-map/modules.yaml. Every handler lives in
+# TASK/send_data.c (the 0xAA command switch) and writes state read by tier-0
+# code: PID gains (pid.c), MRAC gamma / weight limit / tolerance / reference
+# model (mrac.c), mixer saturation, safety limits and waypoint spacing
+# (StabilizerTask.c), gyro LPF (gyro_filter.c), OF bias mode
+# (StabilizerTask.c position loop). A command missing here counts as tier 0.
+# A write to tier-0 state needs operator approval in EVERY mode, autonomous
+# included.
+PARAM_WRITE_TIER: dict[int, int] = {
+    0x01: 0, 0x02: 0, 0x03: 0, 0x05: 0, 0x08: 0,
+    0x09: 0, 0x12: 0, 0x13: 0, 0x15: 0, 0x1E: 0,
+}
+
+# Tier-1 -> tier-0 data flow a command switches on. 0x1E idx=0 val=2 selects
+# the EKF-OF bias estimate (API/ekf_of.c, tier 1) for the position loop in
+# TASK/StabilizerTask.c (tier 0). Flagged on the step and its approval.
+FLAG_TIER1_TO_TIER0 = "tier1_to_tier0"
+
+
+def command_tier(command_id: int) -> int | None:
+    """Tier of the state a critical command changes; None for safe commands."""
+    kind = classify_command(command_id)
+    if kind is None:
+        return None
+    if kind == WHY_CRITICAL_ARM:
+        return 0
+    return PARAM_WRITE_TIER.get(command_id, 0)
+
+
+def command_flags(args: dict) -> list[str]:
+    """Tier-flow flags for a ``command`` step's args."""
+    cid = int(args.get("command_id", 0))
+    try:
+        idx = int(args.get("index", 0))
+        val = float(args.get("value", 0))
+    except (TypeError, ValueError):
+        return []
+    if cid == 0x1E and idx == 0 and val >= 2.0:
+        return [FLAG_TIER1_TO_TIER0]
+    return []
+
 # ---- modes -----------------------------------------------------------------
 MODES = ("off", "supervised", "autonomous")
+# Tier-0 param-write access in autonomous mode. "partial": each write waits
+# for operator approval; "full": runs without one. Operator-only, memory
+# only (resets to "partial" on restart), no effect in supervised mode.
+TIER0_ACCESS = ("partial", "full")
 
 # ---- action bounds --------------------------------------------------------
 WAIT_MS_MAX = 60_000
@@ -350,10 +399,13 @@ class ApprovalItem:
         self.args = args
         self.label = label
         self.why_critical = why_critical
-        # True for motor/throttle/arm (these wait even in autonomous unless
-        # allow_agent_arm); False for param writes (auto-approved in
-        # autonomous). Decided mutably.
-        self.bypass_if_autonomous = why_critical == WHY_CRITICAL_PARAM
+        # Only a param write to non-tier-0 state is auto-approved in
+        # autonomous; PARAM_WRITE_TIER currently maps every one to tier 0.
+        cid = int(args.get("command_id", 0))
+        self.tier = command_tier(cid)
+        self.flags = command_flags(args)
+        self.bypass_if_autonomous = (why_critical == WHY_CRITICAL_PARAM
+                                     and self.tier != 0)
         self._decided = threading.Event()
         self._approved = False
         self._decided_by = None
@@ -397,6 +449,8 @@ class ApprovalItem:
             "args": self.args,
             "label": self.label,
             "why_critical": self.why_critical,
+            "tier": self.tier,
+            "flags": self.flags,
             "state": self.state,
         }
 
@@ -450,6 +504,10 @@ class PlanStep:
             "label": self.label,
             "on_error": self.on_error,
             "risk": ("critical" if self.what_critical else "safe"),
+            "tier": (command_tier(int(self.args.get("command_id", 0)))
+                     if self.action == "command" else None),
+            "flags": (command_flags(self.args)
+                      if self.action == "command" else []),
             "needs_approval": self.needs_approval,
             "status": self.status,
             "result": self.result,
@@ -532,6 +590,7 @@ class AgentManager:
                          if self.journal_root is not None else None)
         self.mode = "supervised"
         self.allow_agent_arm = False
+        self.tier0_access = "partial"
         self.control_changed_at: float | None = None
         self.control_changed_by: str | None = None
 
@@ -594,6 +653,7 @@ class AgentManager:
             return {
                 "mode": self.mode,
                 "allow_agent_arm": self.allow_agent_arm,
+                "tier0_access": self.tier0_access,
                 "changed_at": self.control_changed_at,
                 "changed_by": self.control_changed_by,
             }
@@ -601,7 +661,14 @@ class AgentManager:
     def set_control(self, payload: dict[str, Any]) -> dict[str, Any]:
         mode = payload.get("mode")
         allow = payload.get("allow_agent_arm")
+        access = payload.get("tier0_access")
         source = str(payload.get("source") or "operator")
+        if (allow is not None or access is not None)                 and source.startswith("agent:"):
+            raise PermissionError(
+                "allow_agent_arm and tier0_access are operator-only")
+        if access is not None and access not in TIER0_ACCESS:
+            raise ValueError(
+                f"tier0_access must be one of {', '.join(TIER0_ACCESS)}")
         with self._lock:
             changes = []
             if mode is not None:
@@ -617,6 +684,9 @@ class AgentManager:
                 if new_val != self.allow_agent_arm:
                     self.allow_agent_arm = new_val
                     changes.append(f"allow_agent_arm={new_val}")
+            if access is not None and access != self.tier0_access:
+                self.tier0_access = access
+                changes.append(f"tier0_access={access}")
             if changes:
                 self.control_changed_at = time.time()
                 self.control_changed_by = source
@@ -776,7 +846,13 @@ class AgentManager:
             return True
         if kind == WHY_CRITICAL_ARM:
             return not self.allow_agent_arm
-        return False  # param write in autonomous: no approval
+        # param write in autonomous. A tier-1 -> tier-0 flow always waits;
+        # tier-0 state waits unless the operator granted full tier-0 access.
+        if command_flags(step.args):
+            return True
+        if command_tier(int(step.args.get("command_id", 0))) == 0:
+            return self.tier0_access != "full"
+        return False
 
     def _require_enabled_no_local(self) -> None:
         if self.mode == "off":

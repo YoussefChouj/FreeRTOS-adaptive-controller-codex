@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 
 HARNESS = Path(__file__).with_name("all_panels_audit.js")
+PLUGINS_DIR = Path(__file__).resolve().parents[3] / "docs" / "dashboard-platform" / "shell" / "plugins"
 _FALLBACK_NODE = "/mnt/c/Program Files/nodejs/node.exe"
 
 
@@ -27,7 +28,7 @@ class TestAllPanelsAudit(unittest.TestCase):
             return _FALLBACK_NODE
         return None
 
-    def test_all_17_panels_offline_audit(self):
+    def test_all_panels_offline_audit(self):
         node = self._find_node()
         if not node:
             self.skipTest("no working node on PATH or fallback location")
@@ -43,7 +44,10 @@ class TestAllPanelsAudit(unittest.TestCase):
             "all panels audit harness failed:\n" + proc.stdout + proc.stderr,
         )
         data = json.loads(proc.stdout)
-        self.assertEqual(len(data), 17, f"Expected 17 panels audited, got {len(data)}")
+        plugins = PLUGINS_DIR.glob("*.js")
+        expected = len(list(plugins))
+        self.assertEqual(len(data), expected,
+                         f"Expected {expected} panels audited, got {len(data)}")
         for filename, res in data.items():
             self.assertEqual(
                 res.get("status"), "OK",

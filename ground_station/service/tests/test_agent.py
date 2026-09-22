@@ -286,21 +286,99 @@ def test_mode_off_cancels_running_plan_and_returns_423(service, api):
     assert gateway.submit.call_count == 0
 
 
-def test_autonomous_param_write_runs_without_approval(service, api):
+def test_autonomous_tier0_param_write_still_waits(service, api):
     gateway = _mock_gateway(service)
     _, base = api
     _post(base + "/api/agent/control", {"mode": "autonomous", "source": "operator"})
-    # ssh toggles allow_agent_arm — here param write must run WITHOUT approval
+    # PID gains are tier-0 state: approval is required even in autonomous
     status, created = _post(base + "/api/agent/plans", {
         "title": "auto-param", "source": "agent:test",
         "steps": [{"action": "command", "args": {"command_id": 0x01}}],
     })
     assert status == 201
     pid = created["plan_id"]
-    assert created["approvals"] == []  # param write not queued in autonomous
+    assert created["approvals"] and created["approvals"][0]["tier"] == 0
+    _wait_detail(base, pid, lambda d: any(s["status"] == "awaiting_approval"
+                                          for s in d["steps"]))
+    assert gateway.submit.call_count == 0
+    # allow_agent_arm does not release a tier-0 param write
+    _post(base + "/api/agent/control",
+          {"allow_agent_arm": True, "source": "operator"})
+    _wait_detail(base, pid, lambda d: False, timeout=0.5)
+    assert gateway.submit.call_count == 0
+
+
+def test_full_tier0_access_releases_param_write(service, api):
+    gateway = _mock_gateway(service)
+    _, base = api
+    _post(base + "/api/agent/control", {"mode": "autonomous", "source": "operator"})
+    status, created = _post(base + "/api/agent/plans", {
+        "title": "auto-param", "source": "agent:test",
+        "steps": [{"action": "command", "args": {"command_id": 0x01}}],
+    })
+    pid = created["plan_id"]
+    _wait_detail(base, pid, lambda d: any(s["status"] == "awaiting_approval"
+                                          for s in d["steps"]))
+    assert gateway.submit.call_count == 0
+    status, ctl = _post(base + "/api/agent/control",
+                        {"tier0_access": "full", "source": "operator"})
+    assert status == 200 and ctl["tier0_access"] == "full"
     detail = _wait_detail(base, pid, lambda d: d["status"] in ("done", "failed"))
     assert detail is not None and detail["status"] == "done"
     assert gateway.submit.call_count >= 1
+    # later tier-0 writes run without queueing
+    status, created = _post(base + "/api/agent/plans?queue=true", {
+        "title": "auto-param-2", "source": "agent:test",
+        "steps": [{"action": "command", "args": {"command_id": 0x15}}],
+    })
+    assert created["approvals"] == []
+
+
+def test_tier0_access_is_operator_only(service, api):
+    _mock_gateway(service)
+    _, base = api
+    status, _ = _post(base + "/api/agent/control",
+                      {"tier0_access": "full", "source": "agent:test"})
+    assert status == 403
+    status, _ = _post(base + "/api/agent/control",
+                      {"allow_agent_arm": True, "source": "agent:test"})
+    assert status == 403
+    status, _ = _post(base + "/api/agent/control",
+                      {"tier0_access": "everything", "source": "operator"})
+    assert status == 400
+    status, ctl = _get(base + "/api/agent/control")
+    assert ctl["tier0_access"] == "partial" and ctl["allow_agent_arm"] is False
+
+
+def test_tier1_to_tier0_flow_waits_even_with_full_access(service, api):
+    _mock_gateway(service)
+    _, base = api
+    _post(base + "/api/agent/control", {"mode": "autonomous", "source": "operator"})
+    _post(base + "/api/agent/control", {"tier0_access": "full", "source": "operator"})
+    status, created = _post(base + "/api/agent/plans", {
+        "title": "ekf-of bias", "source": "agent:test",
+        "steps": [{"action": "command",
+                   "args": {"command_id": 0x1E, "index": 0, "value": 2}}],
+    })
+    assert status == 201
+    assert created["approvals"][0]["flags"] == ["tier1_to_tier0"]
+
+
+def test_tier1_to_tier0_flow_is_flagged(service, api):
+    _mock_gateway(service)
+    _, base = api
+    status, created = _post(base + "/api/agent/plans", {
+        "title": "ekf-of bias", "source": "agent:test",
+        "steps": [
+            {"action": "command",
+             "args": {"command_id": 0x1E, "index": 0, "value": 2}},
+            {"action": "command",
+             "args": {"command_id": 0x1E, "index": 0, "value": 1}},
+        ],
+    })
+    assert status == 201
+    assert created["approvals"][0]["flags"] == ["tier1_to_tier0"]
+    assert created["approvals"][1]["flags"] == []
 
 
 def test_autonomous_arm_still_waits_unless_allow_agent_arm(service, api):

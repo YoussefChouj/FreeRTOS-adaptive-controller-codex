@@ -187,7 +187,7 @@ _ROUTE_MAP = {
                         "(?prefix=N&parent=P&limit=N; default/max limit 100/1000)",
         "/api/manifest": "full system capability manifest (symbols, commands, telemetry, panels, routes)",
         "/api/routes": "this map",
-        "/api/agent/control": "agent control state {mode, allow_agent_arm, changed_at, changed_by}",
+        "/api/agent/control": "agent control state {mode, allow_agent_arm, tier0_access, changed_at, changed_by}",
         "/api/agent/actions": "agent action registry {actions: [{name, risk, args_schema, description}]}",
         "/api/agent/plans": "recent plans (last 20)",
         "/api/agent/plans/<id>": "one plan with per-step status/result/error",
@@ -213,7 +213,7 @@ _ROUTE_MAP = {
         "/experiments/<name>/abort": "abort an experiment",
         "/replay/<id>/play": "push stored telemetry onto the live bus; sends nothing to the drone",
         "/sessions/<id>/export": "export a session to CSV",
-        "/api/agent/control": "set control {mode?, allow_agent_arm?, source} (423 while off)",
+        "/api/agent/control": "set control {mode?, allow_agent_arm?, tier0_access?: partial|full, source} (423 while off; 403 if an agent: source sets allow_agent_arm/tier0_access)",
         "/api/agent/plans": "submit a plan {title, goal?, source, steps}, ?queue:true to enqueue (201 / 409 / 400)",
         "/api/agent/plans/<id>/cancel": "cancel a plan",
         "/api/agent/approvals/<plan_id>/<step_id>/approve|reject": "decide one approval {source?}",
@@ -1671,6 +1671,9 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                         self._json(400, {"error": "body requires a 'source'"})
                         return
                     result = _AGENT.set_control(body)
+                except PermissionError as exc:
+                    self._json(403, {"error": str(exc)})
+                    return
                 except ValueError as exc:
                     self._json(400, {"error": str(exc)})
                     return

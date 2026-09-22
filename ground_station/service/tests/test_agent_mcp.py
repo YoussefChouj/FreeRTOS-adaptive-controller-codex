@@ -42,7 +42,7 @@ def api(service):
 SERVER_NAMES = [
     "get_state", "list_actions", "run_plan", "get_plan", "cancel_plan",
     "say", "wait_for_operator", "get_recording", "list_sessions",
-    "analyze_session",
+    "analyze_session", "explain_symbol",
 ]
 
 
@@ -138,6 +138,44 @@ def test_mcp_get_state_and_say(service, api):
         resp = _request(proc, 11, "tools/call",
                         {"name": "say", "arguments": {"text": "via mcp"}})
         assert "result" in resp
+    finally:
+        proc.stdin.close() if proc.stdin else None
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+
+
+def test_mcp_explain_symbol(service, api):
+    import struct
+    from ground_station.livewatch.transport import crc16_ccitt
+
+    def data_frame(slot: int, sequence: int, source_ms: int, value: float) -> bytes:
+        payload = struct.pack("<If", source_ms, value)
+        frame_type = 0x09 + slot
+        header = bytes((0xAA, 0xBB, frame_type, 0, len(payload), sequence))
+        return header + payload + crc16_ccitt(header[2:] + payload).to_bytes(2, "big")
+
+    server, base = api
+    api_port = server.address[1]
+    repo_root = Path(__file__).resolve().parents[3]
+    proc = _connect(api_port, repo_root)
+    try:
+        # 1. explain symbol with streaming value (from fixture schema: 'altitude')
+        service.ingest(data_frame(0, 1, 100, 42.5), time_ns=1000)
+        resp = _request(proc, 20, "tools/call",
+                        {"name": "explain_symbol", "arguments": {"name": "altitude"}})
+        assert "result" in resp, resp
+        text = resp["result"]["content"][0]["text"]
+        assert "live value: 42.5" in text
+
+        # 2. explain symbol not streaming
+        resp = _request(proc, 21, "tools/call",
+                        {"name": "explain_symbol", "arguments": {"name": "s_ekf"}})
+        assert "result" in resp, resp
+        text = resp["result"]["content"][0]["text"]
+        assert "s_ekf" in text
+        assert "live value: (not streaming / unavailable)" in text
     finally:
         proc.stdin.close() if proc.stdin else None
         try:

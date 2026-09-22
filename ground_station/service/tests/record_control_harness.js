@@ -66,6 +66,7 @@ function makeHarness() {
   let recState = { recording: false, started_at: 0, bytes: 0, session_dir: null, reason: null, enabled: true };
 
   const doc = {
+    addEventListener() {},
     getElementById(id) {
       if (!elements.has(id)) elements.set(id, new El(id));
       return elements.get(id);

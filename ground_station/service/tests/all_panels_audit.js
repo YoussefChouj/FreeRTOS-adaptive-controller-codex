@@ -154,6 +154,10 @@ function makeApi() {
     meta: null,
     currentState: null,
     subscribe(cb) { this.stateCb = cb; },
+    // Phase 1B agent hooks (shell index.html); inert offline.
+    onAgentEvent() {},
+    ackUiAction() { return Promise.resolve({}); },
+    getAgentControl() { return Promise.resolve({ mode: "off" }); },
     registerPanel(name, renderFn, meta) {
       this.panelName = name;
       this.renderFn = renderFn;
@@ -219,7 +223,8 @@ function createInstance(filename) {
   vm.createContext(sandbox);
   vm.runInContext(code, sandbox, { filename: filepath });
   sandbox.pluginInit(api);
-  api.renderFn(container, api);
+  // Chrome-only plugins (co-pilot drawer, mode pill) register no panel.
+  if (api.renderFn) api.renderFn(container, api);
 
   return { doc, container, api, sandbox };
 }

@@ -62,6 +62,7 @@ function makeHarness() {
   const timers = [];
 
   const doc = {
+    addEventListener() {},
     getElementById(id) {
       if (!elements.has(id)) elements.set(id, new El(id));
       return elements.get(id);
