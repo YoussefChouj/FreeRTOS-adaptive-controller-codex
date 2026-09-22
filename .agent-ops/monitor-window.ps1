@@ -1,4 +1,4 @@
-﻿# monitor-window.ps1 - small always-on-top window showing worker health.
+# monitor-window.ps1 - small always-on-top window showing worker health.
 # Started automatically by 'agent-ops.ps1 spawn' (one instance at a time),
 # or by hand: .agent-ops\agent-ops.ps1 monitor
 # Reads state.log and logs\<id>.out directly; costs the supervisor nothing.
@@ -21,20 +21,21 @@ $alertKinds = 'STALLED|NEEDS_INPUT|NET_DOWN|LOOP|BLOCKED|FAILED'
 $form = New-Object Windows.Forms.Form
 $form.Text = 'agent-ops workers'
 $form.TopMost = $true
-$form.FormBorderStyle = 'SizableToolWindow'
-$form.Size = New-Object Drawing.Size(640, 190)
+$form.FormBorderStyle = 'Sizable'
+$form.Size = New-Object Drawing.Size(700, 240)
+$form.BackColor = [Drawing.Color]::FromArgb(40, 44, 52)
 $wa = [Windows.Forms.Screen]::PrimaryScreen.WorkingArea
-$form.StartPosition = 'Manual'
-$form.Location = New-Object Drawing.Point(($wa.Right - 650), ($wa.Bottom - 200))
+$form.StartPosition = 'CenterScreen'
 
 $list = New-Object Windows.Forms.ListView
 $list.Dock = 'Fill'
 $list.View = 'Details'
 $list.FullRowSelect = $true
-$list.HeaderStyle = 'Nonclickable'
-$list.Font = New-Object Drawing.Font('Consolas', 9)
+$list.GridLines = $true
+$list.BorderStyle = 'None'
+$list.Font = New-Object Drawing.Font('Segoe UI', 10)
 $list.BackColor = [Drawing.Color]::FromArgb(30, 30, 30)
-foreach ($c in @(@('task', 70), @('state', 95), @('status age', 70), @('output age', 75), @('last message', 320))) {
+foreach ($c in @(@('task', 80), @('state', 105), @('status age', 85), @('output age', 85), @('last message', 320))) {
     [void]$list.Columns.Add($c[0], $c[1])
 }
 $list.ShowItemToolTips = $true
@@ -51,9 +52,9 @@ $list.Add_DoubleClick({
 # Full text of the selected (or first) row's message, wrapped, under the list.
 $detail = New-Object Windows.Forms.TextBox
 $detail.Multiline = $true; $detail.ReadOnly = $true; $detail.WordWrap = $true
-$detail.Dock = 'Bottom'; $detail.Height = 40; $detail.BorderStyle = 'None'
-$detail.Font = New-Object Drawing.Font('Consolas', 9)
-$detail.BackColor = [Drawing.Color]::FromArgb(45, 45, 45); $detail.ForeColor = [Drawing.Color]::Gainsboro
+$detail.Dock = 'Bottom'; $detail.Height = 50; $detail.BorderStyle = 'None'
+$detail.Font = New-Object Drawing.Font('Segoe UI', 10)
+$detail.BackColor = [Drawing.Color]::FromArgb(20, 20, 20); $detail.ForeColor = [Drawing.Color]::PaleGreen
 function Update-Detail {
     $it = if ($list.SelectedItems.Count) { $list.SelectedItems[0] } elseif ($list.Items.Count) { $list.Items[0] } else { $null }
     $detail.Text = if ($it) { "$($it.Tag): $($it.ToolTipText)" } else { '' }

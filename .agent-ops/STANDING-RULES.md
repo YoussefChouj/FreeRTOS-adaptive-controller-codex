@@ -71,10 +71,11 @@ Corollaries:
 Applies to every agent: interactive sessions, workers, dashboard agents.
 Spec: `docs/dashboard-platform/AGENT_MAP_SPEC.md`. No vector RAG, no LLM-written metadata.
 
-1. Exact name known: `rg`/grep, or Serena `find_symbol` / `find_referencing_symbols` when the
-   `serena` MCP server is loaded (Windows sessions; WSL workers run without MCP).
-2. When `ground_station/agent_map/` exists: run `python -m ground_station.agent_map explain <name>`
-   before opening files.
+1. Exact name known: Serena `find_symbol` / `find_referencing_symbols` when the `serena` tools
+   are loaded (Windows sessions and opencode workers; read-only), else `rg`/grep. Never `find`
+   over the whole repo: the paths are in the task file or one Serena call away.
+2. Firmware symbol, variable or module: `.agent-ops/win.sh "python -m ground_station.agent_map explain <name>"`
+   (Windows Python; WSL python lacks pyelftools) before opening files. It covers firmware only.
 3. Do not search `stm32_lib/`, `FreeRTOS/` or `OBJ/` unless the task is about vendor code.
 4. Check the file's safety tier (spec, step 2) before editing. Tier 0 (flight-critical)
    needs explicit permission in the task.

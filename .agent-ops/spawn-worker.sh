@@ -56,6 +56,7 @@ mkdir -p "$OPS_DIR/tasks" "$OPS_DIR/logs"
 WORKER_KIND="agy"
 case "${AGY_CMD%% *}" in
     claude) WORKER_KIND="ark" ;;
+    */oc-worker.sh) WORKER_KIND="oc" ;;
 esac
 ARK_GAP_FILE="$OPS_DIR/.ark-last-spawn"
 if [ "$WORKER_KIND" = "ark" ]; then
@@ -195,7 +196,9 @@ fi
 # trap 6. Do not "fix" this with core.checkStat/trustctime - measured, no.
 TARGET_DIR="${WORKTREE_DIR:-$PROJECT_DIR}"
 LAUNCH_DIR="$TARGET_DIR"
-if [ "$WORKER_KIND" = "ark" ]; then
+if [ "$WORKER_KIND" = "ark" ] || [ "$WORKER_KIND" = "oc" ]; then
+    # opencode also snapshots the tree with git at startup, so it gets the
+    # same non-repo cwd; it reaches the repo through absolute paths.
     LAUNCH_DIR="${ARK_CWD:-/tmp/arkwork/$TASK_ID}"
     mkdir -p "$LAUNCH_DIR"
     # run-worker.sh word-splits AGY_CMD on purpose, so no quoting here; these
@@ -207,7 +210,12 @@ if [ "$WORKER_KIND" = "ark" ]; then
     # --max-turns only stops a runaway loop; it does not lower the cost per turn.
     # --strict-mcp-config with no --mcp-config loads no MCP servers, whose tool
     # schemas would otherwise be resent on every call.
-    AGY_CMD="env CLAUDE_CODE_AUTO_COMPACT_WINDOW=${ARK_COMPACT_WINDOW:-256000} ${AGY_CMD% -p} --add-dir $TARGET_DIR --max-turns ${ARK_MAX_TURNS:-120} --strict-mcp-config -p"
+    # Pin every model slot to the spawn model: on 2026-09-22 a deepseek-v4-flash
+    # worker ran its built-in Explore subagent on glm-5.3 (9x the cost) and
+    # drained the weekly quota.
+    M="$(printf '%s' "$AGY_CMD" | sed -n 's/.*--model \([^ ]*\).*/\1/p')"
+    PIN="CLAUDE_CODE_SUBAGENT_MODEL=$M ANTHROPIC_SMALL_FAST_MODEL=$M ANTHROPIC_DEFAULT_HAIKU_MODEL=$M ANTHROPIC_DEFAULT_SONNET_MODEL=$M ANTHROPIC_DEFAULT_OPUS_MODEL=$M"
+    [ "$WORKER_KIND" = "ark" ] && AGY_CMD="env $PIN CLAUDE_CODE_AUTO_COMPACT_WINDOW=${ARK_COMPACT_WINDOW:-256000} ${AGY_CMD% -p} --add-dir $TARGET_DIR --max-turns ${ARK_MAX_TURNS:-240} --strict-mcp-config -p"
     cat >> "$TASK_FILE" <<EOF
 
 Token budget (the Ark plan is metered; every tool call resends your whole context):
@@ -216,7 +224,7 @@ Token budget (the Ark plan is metered; every tool call resends your whole contex
 - Run only the test files you added or changed, output through tail -5. Do not run
   the full suite unless this task explicitly says so; the supervisor runs it before
   every commit, and when a task does ask for it, run it once.
-- You have at most ${ARK_MAX_TURNS:-120} turns. Write the result file before you run out.
+- You have at most ${ARK_MAX_TURNS:-240} turns. Write the result file before you run out.
 
 Your shell starts in $LAUNCH_DIR, which is outside the repo on purpose: git
 run from WSL inside the repo takes minutes and would hang you at startup.

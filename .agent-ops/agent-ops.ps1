@@ -7,6 +7,7 @@ Task text travels through a file, so no PowerShell -> WSL quoting issues.
   .agent-ops\agent-ops.ps1 spawn "task text"      # or: spawn -File task.md  [-TimeoutMin 120] [-Model flash] [-Effort low] [-Worktree]
   .agent-ops\agent-ops.ps1 ask "question"         # one-shot read-only lookup; prints only the answer
   .agent-ops\agent-ops.ps1 wait <task_id>         # block until DONE/FAILED/EXIT/BLOCKED (not STALLED), then print a digest
+  .agent-ops\agent-ops.ps1 verify <task_id>       # deterministic acceptance checks; one PASS/WARN/FAIL verdict
   .agent-ops\agent-ops.ps1 status                 # last 15 state.log lines + live workers
   .agent-ops\agent-ops.ps1 output [task_id] [-Lines 40]   # tail a worker's stdout (default: newest)
   .agent-ops\agent-ops.ps1 kill <window_id|all>   # stop worker window(s)
@@ -14,14 +15,14 @@ Task text travels through a file, so no PowerShell -> WSL quoting issues.
 #>
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('preflight', 'spawn', 'ask', 'wait', 'status', 'output', 'kill', 'monitor', 'attach', 'prune')]
+    [ValidateSet('preflight', 'spawn', 'ask', 'wait', 'verify', 'status', 'output', 'kill', 'monitor', 'attach', 'prune')]
     [string]$Action,
     [Parameter(Position = 1)]
     [string]$Arg,
     [string]$File,
     [int]$Lines = 40,
     [int]$TimeoutMin = 120,
-    [ValidateSet('agy', 'ark')]
+    [ValidateSet('agy', 'ark', 'oc')]
     [string]$Worker = 'agy',
     # Alias from $modelMap below, or a raw id from `agy models`.
     [string]$Model = 'flash',
@@ -59,9 +60,28 @@ $arkModelMap = @{
     'deepseek' = 'deepseek-v4-pro[1m]'
     'flash'    = 'deepseek-v4.1-flash[1m]'
 }
+# opencode (-Worker oc): free models. Hetzner Inference (experimental, free,
+# 10 req/min per key) and OpenRouter :free ids (20 req/min, 1000 req/day for
+# the whole account). oc-worker.sh refuses any OpenRouter id without :free,
+# so the paid credit is never touched. All six passed a read/write tool test
+# on 2026-09-23 (north-mini-code did not: it copied line-number prefixes).
+# 'free' is OpenRouter's router over its free models only (openrouter/free);
+# it is the one OpenRouter id allowed without the :free suffix.
+$ocModelMap = @{
+    'qwen'   = 'hetzner/Qwen/Qwen3.6-35B-A3B-FP8'
+    'free'   = 'openrouter/openrouter/free'
+    'qwen27' = 'hetzner/Qwen3.8-27B'
+    'nemo'   = 'openrouter/nvidia/nemotron-3-super-120b-a12b:free'
+    'ultra'  = 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free'
+    'nex'    = 'openrouter/nex-agi/nex-n2.5-pro:free'
+    'laguna' = 'openrouter/poolside/laguna-s-2.1:free'
+}
 if ($Worker -eq 'ark') {
     if (-not $PSBoundParameters.ContainsKey('Model')) { $Model = 'cheap' }
     $modelId = if ($arkModelMap.ContainsKey($Model)) { $arkModelMap[$Model] } else { $Model }
+} elseif ($Worker -eq 'oc') {
+    if (-not $PSBoundParameters.ContainsKey('Model')) { $Model = 'qwen' }
+    $modelId = if ($ocModelMap.ContainsKey($Model)) { $ocModelMap[$Model] } else { $Model }
 } else {
     $modelId = if ($modelMap.ContainsKey($Model)) { $modelMap[$Model] } else { $Model }
 }
@@ -81,6 +101,13 @@ function Invoke-Wsl([string]$script) {
 # later (2026-09-21: @63 ran 12 min against a dead 401 login; @64 died rc=1
 # in 10 s on a model id the backend no longer offered). Throws on failure.
 function Test-WorkerBackend([string]$WorkerKind, [string]$ModelId) {
+    if ($WorkerKind -eq 'oc') {
+        if ($ModelId -like 'openrouter/*' -and $ModelId -notlike '*:free' -and $ModelId -ne 'openrouter/openrouter/free') {
+            throw "preflight: $ModelId is a paid OpenRouter model; use a :free id or an alias (qwen, free, qwen27, nemo, ultra, nex, laguna)"
+        }
+        Write-Output "preflight: oc model $ModelId (no quota probe; 429s show in the worker log)"
+        return
+    }
     if ($WorkerKind -ne 'agy') {
         # ark has no cheap probe for *quota*: 'claude --version' is local, and
         # any real turn costs quota. Its burst 429s are handled by the spawn gap
@@ -150,15 +177,28 @@ switch ($Action) {
         $cmd = @{
             agy      = "agy $flags -p"
             ark      = "claude --dangerously-skip-permissions --model $modelId -p"
+            oc       = "$opsWsl/oc-worker.sh $modelId"
         }[$Worker]
         Write-Output "model: $modelId$(if ($Effort) { " effort: $Effort" })"
         $wtFlag = if ($Worktree) { ' -w' } else { '' }
+        # Whole-tree snapshot (untracked included, OBJ excluded) built in a
+        # throwaway index before the worker starts. 'verify' diffs against it,
+        # so edits to files that were already dirty at spawn still show. ~1 s.
+        $repo = Split-Path $opsWin
+        $tmpIdx = Join-Path $env:TEMP ('agent-ops-' + [guid]::NewGuid() + '.index')
+        Copy-Item (Join-Path $repo '.git\index') $tmpIdx
+        $env:GIT_INDEX_FILE = $tmpIdx
+        git -C $repo -c core.safecrlf=false add -A -- . ':(exclude)OBJ'
+        $preTree = git -C $repo write-tree
+        Remove-Item Env:GIT_INDEX_FILE
+        Remove-Item $tmpIdx
         $out = Invoke-Wsl "AGY_CMD='$cmd' AGY_TIMEOUT=$($TimeoutMin * 60) '$opsWsl/spawn-worker.sh' -f '$inboxWsl'$wtFlag"
         $out
         # Baseline so 'wait' can show only what the worker changed.
         if ("$out" -match 'spawned (\d{8}-\d{6})') {
             git -C (Split-Path $opsWin) status --short -- . ':(exclude)OBJ' |
                 Set-Content -Encoding utf8 (Join-Path $opsWin "tasks\$($Matches[1]).pre-status")
+            [IO.File]::WriteAllText((Join-Path $opsWin "tasks\$($Matches[1]).pre-tree"), $preTree)
         }
         & $PSCommandPath monitor
     }
@@ -237,6 +277,11 @@ quote at most 3 lines per file. Read only what the question needs. Change nothin
         git -C (Split-Path $opsWin) status --short -- . ':(exclude)OBJ' |
             Where-Object { $before -notcontains $_ } | Select-Object -First 20
         $global:LASTEXITCODE = $waitRc
+    }
+    'verify' {
+        if ($Arg -notmatch '^\d{8}-\d{6}$') { throw 'verify needs a task id like 20260919-132708' }
+        # All checks live in verify_task.py; exit 0 PASS, 1 WARN, 2 FAIL.
+        python (Join-Path $opsWin 'verify_task.py') $Arg
     }
     'status' {
         # A tmux window stays open after its worker exits (scrollback is kept on
