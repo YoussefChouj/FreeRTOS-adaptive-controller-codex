@@ -104,6 +104,36 @@ def main(argv=None) -> int:
             print("NO TABS: shell did not load at %s" % args.url)
             b.close()
             return 1
+        # Liveness gate.  This check exists because the smoke run reported
+        # ERRORS 0 / BAD RESPONSES 0 on a dashboard whose every panel was
+        # blank: /state answered 200 with a body containing a bare NaN, so
+        # JSON.parse threw inside the shell's own poll and the rejection was
+        # swallowed by a .catch().  Watching for noise cannot see that.  The
+        # only reliable signal is whether live values actually reached the
+        # DOM, so assert that rather than the absence of complaints.
+        parse = pg.evaluate("""async () => {
+          const out = [];
+          for (const r of ['/state', '/api/agent/state', '/api/actions']) {
+            try {
+              const res = await fetch(r);
+              JSON.parse(await res.text());   // the browser's parser, not ours
+            } catch (e) { out.push(r + ': ' + e.message.slice(0, 120)); }
+          }
+          return out;
+        }""")
+        for p in parse:
+            errs.append("[unparseable] %s" % p)
+        live = pg.eval_on_selector_all(
+            "#card-state .stat-value, #card-flight .stat-value",
+            "els=>els.map(e=>e.textContent.trim())")
+        stale = [v for v in live if v in ("", "—", "-", "NOT PUBLISHED")]
+        print("STATE %d/%d sidebar values live: %s" % (
+            len(live) - len(stale), len(live), live))
+        if live and len(stale) == len(live):
+            # Every single one still at its placeholder: the shell rendered
+            # markup but never rendered data.
+            errs.append("[no live state] sidebar is entirely unpopulated")
+
         for t in tabs:
             n0 = len(errs)
             pg.locator(".ws-tab", has_text=t).first.click()

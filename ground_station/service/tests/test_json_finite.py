@@ -80,3 +80,58 @@ def test_live_state_shape_survives_the_round_trip():
     out = _strict_loads(json.dumps(_json_safe(payload)))
     assert len(out["streams"]["1"]["values"]) == 87
     assert set(out["streams"]["1"]["values"].values()) == {None}
+
+
+# ── through the real HTTP route ──────────────────────────────────────
+
+def test_a_real_response_is_browser_parseable_only_because_of_the_guard(
+        monkeypatch):
+    """Drive the actual ApiServer, with and without ``_json_safe``.
+
+    The helper tests above prove the mapping; this one proves the mapping is
+    actually wired into the response path, and -- by disabling it -- that the
+    route really would emit a bare ``NaN`` without it.  That is the red half
+    of the proof, which no server-side ``json.loads`` could have shown.
+    """
+    import time
+    import urllib.request
+
+    from ground_station.livewatch.stream import StreamRange, StreamSchema
+    from ground_station.service import api as api_mod
+    from ground_station.service.core import GroundStationService
+    from ground_station.service.storage import SessionStore
+
+    schema = StreamSchema(1, 1, 4,
+                          (StreamRange(0x20000000, 4, 1, "altitude", "f"),), 0)
+    service = GroundStationService(store=SessionStore(), schemas=[schema],
+                                   source="sim")
+    srv = api_mod.ApiServer(service, host="127.0.0.1", port=0)
+    srv.start()
+    time.sleep(0.2)
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    url = "http://127.0.0.1:%d/state" % srv.address[1]
+    try:
+        with service._state_lock:
+            service._streams[0] = {"values": {"ch0.1": float("nan")}}
+
+        # Red: restore the original serialiser exactly -- no sanitising pass
+        # and json.dumps' default allow_nan=True -- and the route emits a
+        # token no browser accepts.  (Disabling only _json_safe is not the
+        # old behaviour: allow_nan=False then raises server-side, which is
+        # the second half of the guard doing its job.)
+        real_dumps = json.dumps
+        monkeypatch.setattr(api_mod, "_json_safe", lambda v: v)
+        monkeypatch.setattr(api_mod.json, "dumps", lambda o, **kw: real_dumps(
+            o, **{k: v for k, v in kw.items() if k != "allow_nan"}))
+        raw = opener.open(url, timeout=5).read().decode()
+        assert "NaN" in raw
+        with pytest.raises(ValueError):
+            _strict_loads(raw)
+
+        # Green: with it, the same state parses under browser rules.
+        monkeypatch.undo()
+        raw = opener.open(url, timeout=5).read().decode()
+        assert "NaN" not in raw
+        assert _strict_loads(raw)["streams"]["0"]["values"]["ch0.1"] is None
+    finally:
+        srv.stop()
