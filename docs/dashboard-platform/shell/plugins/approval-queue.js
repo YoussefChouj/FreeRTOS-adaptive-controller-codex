@@ -44,6 +44,15 @@
 
   function itemKey(x) { return (x && x.plan_id) + ':' + (x && x.step_id); }
 
+  // Pending-count badge on the Approvals tab (item 2) so approvals stay visible
+  // without occupying every workspace.
+  function updateBadge() {
+    var b = document.getElementById('approval-badge');
+    if (!b) return;
+    b.style.display = queue.length ? 'inline-block' : 'none';
+    b.textContent = String(queue.length);
+  }
+
   window.__registerPlugin__('Approvals', function (api) {
     var container;
     try {
@@ -51,7 +60,7 @@
       api.registerPanel(name, function (body) {
         container = body;
         body.setAttribute('data-testid', 'approval-queue');
-      });
+      }, { workspace: 'approvals', gates: [], description: 'Ordered pending approval queue' });
     } catch (e) { console.warn('[approvals] panel skip:', e && e.message); }
 
     function decide(a, result) {
@@ -64,7 +73,7 @@
       if (next === 'full' && !window.confirm(
           'Grant FULL tier-0 access? In autonomous mode the agent will write '
           + 'flight-critical parameters (PID, MRAC, mixer, safety limits, gyro LPF) '
-          + 'without asking you. EKF-into-control changes still need approval.')) {
+          + 'and EKF-into-control changes without asking you, and may arm the drone.')) {
         return;
       }
       fetch('/api/agent/control', {
@@ -108,6 +117,7 @@
     function render() {
       if (!container) return;
       container.innerHTML = '';
+      updateBadge();
       renderControl();
       var h = document.createElement('h4');
       h.textContent = 'Pending proposals (' + queue.length + ')';

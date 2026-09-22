@@ -687,6 +687,11 @@ class AgentManager:
             if access is not None and access != self.tier0_access:
                 self.tier0_access = access
                 changes.append(f"tier0_access={access}")
+                # Full access includes arming; partial takes it back.
+                arm = access == "full"
+                if arm != self.allow_agent_arm:
+                    self.allow_agent_arm = arm
+                    changes.append(f"allow_agent_arm={arm}")
             if changes:
                 self.control_changed_at = time.time()
                 self.control_changed_by = source
@@ -846,13 +851,14 @@ class AgentManager:
             return True
         if kind == WHY_CRITICAL_ARM:
             return not self.allow_agent_arm
-        # param write in autonomous. A tier-1 -> tier-0 flow always waits;
-        # tier-0 state waits unless the operator granted full tier-0 access.
+        # param write in autonomous. Full tier-0 access releases everything,
+        # tier-1 -> tier-0 flows (EKF into control) included; otherwise both
+        # tier-0 state and tier-1 -> tier-0 flows wait.
+        if self.tier0_access == "full":
+            return False
         if command_flags(step.args):
             return True
-        if command_tier(int(step.args.get("command_id", 0))) == 0:
-            return self.tier0_access != "full"
-        return False
+        return command_tier(int(step.args.get("command_id", 0))) == 0
 
     def _require_enabled_no_local(self) -> None:
         if self.mode == "off":

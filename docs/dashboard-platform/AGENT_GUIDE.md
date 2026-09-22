@@ -424,7 +424,9 @@ path — an agent never bypasses `POST /commands`.
 * `supervised` (default) — critical steps wait for an operator approval.
 * `autonomous` — non-critical and parameter-write steps run without approval.
   **ARM still needs approval** unless you also set `allow_agent_arm: true`
-  (lives in memory only, resets on restart).
+  (lives in memory only, resets on restart). Operator `tier0_access: full`
+  releases every step without approval (tier-0 params, tier-1 -> tier-0 flows)
+  and sets `allow_agent_arm: true`; `partial` sets it back to false.
 
 ### 10.2 Risk rules (the CRITICAL RULE)
 

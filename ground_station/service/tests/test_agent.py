@@ -350,7 +350,7 @@ def test_tier0_access_is_operator_only(service, api):
     assert ctl["tier0_access"] == "partial" and ctl["allow_agent_arm"] is False
 
 
-def test_tier1_to_tier0_flow_waits_even_with_full_access(service, api):
+def test_tier1_to_tier0_flow_released_with_full_access(service, api):
     _mock_gateway(service)
     _, base = api
     _post(base + "/api/agent/control", {"mode": "autonomous", "source": "operator"})
@@ -361,7 +361,18 @@ def test_tier1_to_tier0_flow_waits_even_with_full_access(service, api):
                    "args": {"command_id": 0x1E, "index": 0, "value": 2}}],
     })
     assert status == 201
-    assert created["approvals"][0]["flags"] == ["tier1_to_tier0"]
+    assert created["approvals"] == []
+
+
+def test_full_access_grants_arm_and_partial_revokes_it(service, api):
+    _, base = api
+    _post(base + "/api/agent/control", {"mode": "autonomous", "source": "operator"})
+    _, full = _post(base + "/api/agent/control",
+                    {"tier0_access": "full", "source": "operator"})
+    assert full["allow_agent_arm"] is True
+    _, partial = _post(base + "/api/agent/control",
+                       {"tier0_access": "partial", "source": "operator"})
+    assert partial["allow_agent_arm"] is False
 
 
 def test_tier1_to_tier0_flow_is_flagged(service, api):
