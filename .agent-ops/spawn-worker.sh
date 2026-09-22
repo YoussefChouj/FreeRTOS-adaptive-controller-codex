@@ -38,12 +38,19 @@ SESSION="${AGY_SESSION:-agent-ops}"
 TIMEOUT_SECS="${AGY_TIMEOUT:-7200}"
 WINDOW="agy-worker"
 
-# Cap concurrent workers (12 GB host, WSL capped at 4 GB; see logs/*.mem).
-MAX_WORKERS="${AGY_MAX_WORKERS:-3}"
+# Cap concurrent workers by memory: a worker peaks near 620 MB RSS (logs/*.mem),
+# so a new one needs WORKER_MB free in WSL. Hard ceiling AGY_MAX_WORKERS (7).
+MAX_WORKERS="${AGY_MAX_WORKERS:-7}"
+WORKER_MB="${AGY_WORKER_MB:-700}"
 LIVE_IDS="$(pgrep -af 'run-worker\.sh [0-9]{8}-[0-9]{6}' | grep -oE '[0-9]{8}-[0-9]{6}' | sort -u || true)"
 LIVE="$(printf '%s\n' "$LIVE_IDS" | grep -c . || true)"
+AVAIL_MB="$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)"
 if [ "$LIVE" -ge "$MAX_WORKERS" ]; then
     echo "spawn-worker: $LIVE workers already running (AGY_MAX_WORKERS=$MAX_WORKERS); wait for one to exit" >&2
+    exit 3
+fi
+if [ "$AVAIL_MB" -lt "$WORKER_MB" ]; then
+    echo "spawn-worker: only ${AVAIL_MB} MB free in WSL, a worker needs ${WORKER_MB} MB; wait for one to exit" >&2
     exit 3
 fi
 
@@ -213,6 +220,32 @@ if [ "$WORKER_KIND" = "ark" ] || [ "$WORKER_KIND" = "oc" ]; then
     # Pin every model slot to the spawn model: on 2026-09-22 a deepseek-v4-flash
     # worker ran its built-in Explore subagent on glm-5.3 (9x the cost) and
     # drained the weekly quota.
+    # Serena binds to exactly one project directory. Left at its default it
+    # points at the main checkout, whose .serena/project.yml has read_only:
+    # true, so a worker bound to it gets symbol search and no edits - which is
+    # what we want for a worker that is not isolated. A worktree worker instead
+    # gets a Serena bound to its own checkout, with read_only flipped off, so
+    # replace_symbol_body edits land inside the worktree and nowhere else.
+    # Enforcement lives in project.yml (server side), not in opencode's tool
+    # list, because the worker cannot talk its way around the former.
+    if [ "$WORKER_KIND" = "oc" ] && [ -n "$WORKTREE_DIR" ]; then
+        sed -e 's/^read_only: true$/read_only: false/' \
+            -e "s/^project_name: .*/project_name: \"uav-fw-$TASK_ID\"/" \
+            "$PROJECT_DIR/.serena/project.yml" > "$WORKTREE_DIR/.serena/project.yml"
+        # project.yml is tracked, so the rewrite above would show up as a change
+        # the worker never made; keep it out of the worktree's status and diff.
+        git -C "$WORKTREE_DIR" update-index --skip-worktree .serena/project.yml
+        AGY_CMD="env SERENA_PROJECT=$(wslpath -w "$WORKTREE_DIR") $AGY_CMD"
+        cat >> "$TASK_FILE" <<EOF
+
+Serena is bound to your worktree and editing is enabled there. Prefer its
+symbol tools over text edits: find_symbol to read one function instead of the
+whole file, replace_symbol_body / insert_after_symbol to change it. They locate
+the edit by symbol name, so they cannot corrupt an unrelated part of the file
+the way a mistargeted search-and-replace can. Serena's shell tool is off; run
+commands through bash and Windows tooling through win.sh.
+EOF
+    fi
     M="$(printf '%s' "$AGY_CMD" | sed -n 's/.*--model \([^ ]*\).*/\1/p')"
     PIN="CLAUDE_CODE_SUBAGENT_MODEL=$M ANTHROPIC_SMALL_FAST_MODEL=$M ANTHROPIC_DEFAULT_HAIKU_MODEL=$M ANTHROPIC_DEFAULT_SONNET_MODEL=$M ANTHROPIC_DEFAULT_OPUS_MODEL=$M"
     [ "$WORKER_KIND" = "ark" ] && AGY_CMD="env $PIN CLAUDE_CODE_AUTO_COMPACT_WINDOW=${ARK_COMPACT_WINDOW:-256000} ${AGY_CMD% -p} --add-dir $TARGET_DIR --max-turns ${ARK_MAX_TURNS:-240} --strict-mcp-config -p"

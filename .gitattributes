@@ -1,0 +1,2 @@
+# Shell scripts run in WSL bash: keep LF in every checkout, worktrees included.
+*.sh text eol=lf
