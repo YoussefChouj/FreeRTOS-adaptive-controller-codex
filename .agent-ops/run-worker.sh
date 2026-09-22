@@ -63,7 +63,11 @@ SID="$(ps -o sid= $$ | tr -d ' ')"
             hit=$(printf '%s\n' "$chunk" | grep -m1 -iE 'auto-rejecting|rejected permission|user rejected' | cut -c1-140)
             [ -n "$hit" ] && log "NEEDS_INPUT: $hit"
             if [ $(( now - last_net )) -ge 300 ]; then
-                hit=$(printf '%s\n' "$chunk" | grep -m1 -iE 'ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|fetch failed|socket hang up|network error|rate.?limit|\b(429|502|503|504)\b' | cut -c1-140)
+                # Require an HTTP status to carry status/code/reason context.
+                # A bare '\b502\b' matched "api.py:502:" and a bare 'rate.?limit'
+                # matched a worker writing "Rate limiting: 10 req/min" into its
+                # own report, so every long task ended with a spurious NET_DOWN.
+                hit=$(printf '%s\n' "$chunk" | grep -m1 -iE 'ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|fetch failed|socket hang up|network error|rate limit (exceeded|reached)|too many requests|(status|code|http|error)[^0-9a-z]{0,10}(429|50[234])\b|\b(429|50[234]) (too many|bad gateway|service unavailable|gateway time)' | cut -c1-140)
                 [ -n "$hit" ] && { log "NET_DOWN: $hit"; last_net=$now; }
             fi
             errs=$(printf '%s\n' "$chunk" | grep -E '^(FAILED|ERROR) |Error:|error:' | sort -u)
