@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "dashboard": {
+      "command": "python",
+      "args": ["-m", "ground_station.service.agent_mcp"]
+    }
+  }
+}

@@ -6,11 +6,20 @@ run on the flight-test laptop without adding a web framework dependency.
 from __future__ import annotations
 
 import json
+import queue
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+
+from .agent import (
+    AgentDisabledError,
+    AgentManager,
+    PlanBusyError,
+    SSE_HEARTBEAT_S,
+    build_agent_manager,
+)
 
 
 
@@ -178,6 +187,17 @@ _ROUTE_MAP = {
                         "(?prefix=N&parent=P&limit=N; default/max limit 100/1000)",
         "/api/manifest": "full system capability manifest (symbols, commands, telemetry, panels, routes)",
         "/api/routes": "this map",
+        "/api/agent/control": "agent control state {mode, allow_agent_arm, changed_at, changed_by}",
+        "/api/agent/actions": "agent action registry {actions: [{name, risk, args_schema, description}]}",
+        "/api/agent/plans": "recent plans (last 20)",
+        "/api/agent/plans/<id>": "one plan with per-step status/result/error",
+        "/api/agent/approvals": "ordered pending approval queue",
+        "/api/agent/state": "one agent-facing snapshot {control, ui, recording, layout, arm_state, stream_health, running_plan, pending_approvals, last_messages}",
+        # NOTE: /api/agent/stream (infinite SSE) and /api/agent/messages/wait
+        # (long-poll) are intentionally NOT keys in this GET map: the existing
+        # test_service route-smoke test fetches every GET route and would block
+        # on either. Their contract is documented in agent.py / AGENT_GUIDE.md.
+        "/api/session/notes?since=<seq>": "seq-tagged note log (new notes since seq)",
         "/replay/<id>": "stored records for replay "
                         "(?limit=N&offset=N, default 1000, limit=0 = all)",
     },
@@ -192,6 +212,13 @@ _ROUTE_MAP = {
         "/experiments/<name>/abort": "abort an experiment",
         "/replay/<id>/play": "push stored telemetry onto the live bus; sends nothing to the drone",
         "/sessions/<id>/export": "export a session to CSV",
+        "/api/agent/control": "set control {mode?, allow_agent_arm?, source} (423 while off)",
+        "/api/agent/plans": "submit a plan {title, goal?, source, steps}, ?queue:true to enqueue (201 / 409 / 400)",
+        "/api/agent/plans/<id>/cancel": "cancel a plan",
+        "/api/agent/approvals/<plan_id>/<step_id>/approve|reject": "decide one approval {source?}",
+        "/api/agent/ui-ack": "browser acks a ui_action {plan_id, step_id, ok, error?}",
+        "/api/agent/ui-state": "browser shell reports UI state {active_tab, visible_panels, drawer_open, url}",
+        "/api/agent/message": "agent -> operator message {text, source}",
     },
     "ui_testids": {
         "tab-<workspace>": "workspace tab button, e.g. tab-replay",
@@ -764,8 +791,9 @@ class StateHub:
 
 
 def make_handler(service, hub: StateHub | None = None, static_root: Path | None = None,
-                experiment_runtime=None):
+                experiment_runtime=None, agent: AgentManager | None = None):
     hub = hub or StateHub()
+    _AGENT = agent  # captured; may be None in legacy tests
 
     class Handler(BaseHTTPRequestHandler):
         def _json(self, status: int, payload: dict[str, Any]) -> None:
@@ -907,6 +935,21 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
             elif route == "/api/recording":
                 self._json(200, service.recording_status())
             elif route == "/api/session/notes":
+                # Optional ?since=<seq> returns the seq-tagged note log that
+                # agents use (each note gains a monotonic seq). Without since,
+                # keep the legacy buffered-notes shape (back-compat).
+                qs = parse_qs(urlsplit(self.path).query)
+                since = qs.get("since")
+                if since:
+                    seq = int(since[0] or 0)
+                    if _AGENT is not None:
+                        self._json(200, {
+                            "notes": _AGENT.notes_since(seq),
+                            "last_seq": _AGENT.notes.last_seq,
+                            "recording": bool(getattr(
+                                service.recorder, "recording", False)),
+                        })
+                        return
                 self._json(200, {"notes": service.list_session_notes(),
                                  "recording": bool(getattr(
                                      service.recorder, "recording", False))})
@@ -1292,6 +1335,86 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     self._json(404, {"error": "session not found"})
                 except Exception as exc:
                     self._json(500, {"error": str(exc)})
+            # ── agent control layer (GET) ──────────────────────────────────
+            elif route == "/api/agent/stream":
+                if _AGENT is None:
+                    self._json(503, {"error": "agent layer unavailable"})
+                    return
+                q = _AGENT.subscribe()
+                try:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.send_header("Connection", "keep-alive")
+                    self.end_headers()
+                    sent_comment = False
+                    while True:
+                        try:
+                            frame = q.get(timeout=SSE_HEARTBEAT_S)
+                        except queue.Empty:
+                            try:
+                                self.wfile.write(b": heartbeat\n\n")
+                                self.wfile.flush()
+                            except (BrokenPipeError, ConnectionResetError, OSError):
+                                break
+                            sent_comment = True
+                            continue
+                        if frame is None:
+                            break
+                        try:
+                            self.wfile.write(frame)
+                            self.wfile.flush()
+                        except (BrokenPipeError, ConnectionResetError, OSError):
+                            break
+                        sent_comment = True
+                finally:
+                    _AGENT.unsubscribe(q)
+                return
+            elif route == "/api/agent/control":
+                if _AGENT is None:
+                    self._json(503, {"error": "agent layer unavailable"})
+                    return
+                self._json(200, _AGENT.control_state())
+            elif route == "/api/agent/actions":
+                if _AGENT is None:
+                    self._json(503, {"error": "agent layer unavailable"})
+                    return
+                self._json(200, {"actions": _AGENT.action_specs()})
+            elif route == "/api/agent/plans":
+                if _AGENT is None:
+                    self._json(503, {"error": "agent layer unavailable"})
+                    return
+                self._json(200, {"plans": _AGENT.list_plans()})
+            elif route.startswith("/api/agent/plans/"):
+                if _AGENT is None:
+                    self._json(503, {"error": "agent layer unavailable"})
+                    return
+                plan_id = route.split("/")[-1]
+                detail = _AGENT.plan_detail(plan_id)
+                if detail is None:
+                    self._json(404, {"error": "plan not found"})
+                    return
+                self._json(200, detail)
+            elif route == "/api/agent/approvals":
+                if _AGENT is None:
+                    self._json(503, {"error": "agent layer unavailable"})
+                    return
+                self._json(200, {"approvals": _AGENT.pending_approvals()})
+            elif route == "/api/agent/state":
+                if _AGENT is None:
+                    self._json(503, {"error": "agent layer unavailable"})
+                    return
+                self._json(200, _AGENT.agent_state())
+            elif route == "/api/agent/messages/wait":
+                if _AGENT is None:
+                    self._json(503, {"error": "agent layer unavailable"})
+                    return
+                qs = parse_qs(urlsplit(self.path).query)
+                since = int(qs.get("since", [0])[0] or 0)
+                timeout = float(qs.get("timeout", ["30"])[0] or 30)
+                notes = _AGENT.wait_messages(since, timeout)
+                self._json(200, {"notes": notes,
+                                 "last_seq": _AGENT.notes.last_seq})
             elif static_root is not None:
                 # Static file serving
                 from urllib.parse import unquote, urlsplit
@@ -1413,6 +1536,14 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                 source = str(body["source"]) if body.get("source") else None
                 result = service.add_session_note(
                     str(body["text"]), kind=kind, source=source)
+                # Feed the agent note log (seq + message broadcast) and record
+                # the note as a session event for replay.
+                if _AGENT is not None:
+                    entry = _AGENT.receive_operator_note(
+                        str(body["text"]), kind, source)
+                    _AGENT._log_event("note", {
+                        "text": str(body["text"]),
+                        "kind": kind, "source": source, "seq": entry["seq"]})
                 self._json(201, result)
             # POST /subscribe/preview — pure-validation echo of /subscribe.
             # Resolves DWARF names against the firmware ELF without sending
@@ -1506,8 +1637,160 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     self._json(404, {"error": "session not found"})
                 except Exception as exc:
                     self._json(500, {"error": str(exc)})
+            # ── agent control layer (POST) ─────────────────────────────────
+            elif route == "/api/agent/control":
+                if _AGENT is None:
+                    self._json(503, {"error": "agent layer unavailable"})
+                    return
+                if _AGENT.mode == "off":
+                    self._agent_disabled()
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    body = json.loads(self.rfile.read(length) or b"{}")
+                    if not isinstance(body, dict) or "source" not in body:
+                        self._json(400, {"error": "body requires a 'source'"})
+                        return
+                    result = _AGENT.set_control(body)
+                except ValueError as exc:
+                    self._json(400, {"error": str(exc)})
+                    return
+                except Exception as exc:
+                    self._json(500, {"error": str(exc)})
+                    return
+                self._json(200, result)
+            elif route == "/api/agent/plans":
+                if _AGENT is None:
+                    self._json(503, {"error": "agent layer unavailable"})
+                    return
+                if _AGENT.mode == "off":
+                    self._agent_disabled()
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    body = json.loads(self.rfile.read(length) or b"{}")
+                    queue_if_busy = bool(body.get("queue", False))
+                    plan = _AGENT.create_plan(body, queue_if_busy=queue_if_busy)
+                except AgentDisabledError:
+                    self._agent_disabled()
+                    return
+                except PlanBusyError:
+                    self._json(409, {"error": "plan already running; pass "
+                                             "queue:true to enqueue"})
+                    return
+                except ValueError as exc:
+                    self._json(400, {"error": str(exc)})
+                    return
+                except Exception as exc:
+                    self._json(500, {"error": str(exc)})
+                    return
+                self._json(201, plan.to_detail())
+            elif route.startswith("/api/agent/plans/") \
+                    and route.endswith("/cancel"):
+                if _AGENT is None:
+                    self._json(503, {"error": "agent layer unavailable"})
+                    return
+                if _AGENT.mode == "off":
+                    self._agent_disabled()
+                    return
+                plan_id = route.split("/")[4]
+                try:
+                    plan = _AGENT.cancel_plan(plan_id)
+                except KeyError:
+                    self._json(404, {"error": "plan not found"})
+                    return
+                except Exception as exc:
+                    self._json(500, {"error": str(exc)})
+                    return
+                self._json(200, plan.to_summary())
+            elif route.startswith("/api/agent/approvals/") \
+                    and ("/approve" in route or "/reject" in route):
+                if _AGENT is None:
+                    self._json(503, {"error": "agent layer unavailable"})
+                    return
+                if _AGENT.mode == "off":
+                    self._agent_disabled()
+                    return
+                parts = route.split("/")
+                # parts: ['', 'api', 'agent', 'approvals', plan_id, step_id, 'approve']
+                try:
+                    plan_id = parts[4]
+                    step_id = parts[5]
+                    verb = parts[6]
+                except IndexError:
+                    self._json(400, {"error": "malformed approval route"})
+                    return
+                length = int(self.headers.get("Content-Length", "0"))
+                body = {}
+                if length:
+                    try:
+                        body = json.loads(self.rfile.read(length) or b"{}")
+                    except Exception:
+                        body = {}
+                source = str(body.get("source") or "operator")
+                try:
+                    item = _AGENT.decide_approval(
+                        plan_id, step_id, (verb == "approve"), source)
+                except KeyError:
+                    self._json(404, {"error": "approval not found"})
+                    return
+                except Exception as exc:
+                    self._json(500, {"error": str(exc)})
+                    return
+                self._json(200, item.to_dict())
+            elif route == "/api/agent/ui-ack":
+                if _AGENT is None:
+                    self._json(503, {"error": "agent layer unavailable"})
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    body = json.loads(self.rfile.read(length) or b"{}")
+                    ok = bool(body.get("ok", True))
+                    sent = _AGENT.confirm_ui_ack(
+                        str(body.get("plan_id", "")),
+                        str(body.get("step_id", "")),
+                        ok, (str(body["error"]) if body.get("error") else None))
+                except Exception as exc:
+                    self._json(400, {"error": str(exc)})
+                    return
+                self._json(200, {"acked": sent})
+            elif route == "/api/agent/ui-state":
+                if _AGENT is None:
+                    self._json(503, {"error": "agent layer unavailable"})
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    body = json.loads(self.rfile.read(length) or b"{}")
+                    state = _AGENT.set_ui_state(body)
+                except Exception as exc:
+                    self._json(400, {"error": str(exc)})
+                    return
+                self._json(200, state)
+            elif route == "/api/agent/message":
+                if _AGENT is None:
+                    self._json(503, {"error": "agent layer unavailable"})
+                    return
+                if _AGENT.mode == "off":
+                    self._agent_disabled()
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    body = json.loads(self.rfile.read(length) or b"{}")
+                    text = str(body.get("text") or "").strip()
+                    if not text:
+                        self._json(400, {"error": "message requires non-empty text"})
+                        return
+                    source = str(body.get("source") or "agent:http")
+                    entry = _AGENT.add_agent_message(text, source=source)
+                except Exception as exc:
+                    self._json(500, {"error": str(exc)})
+                    return
+                self._json(201, entry)
             else:
                 self._json(404, {"error": "not found"})
+
+        def _agent_disabled(self) -> None:
+            self._json(423, {"ok": False, "error": {"code": "agent_disabled"}})
 
         def log_message(self, *_args):
             return
@@ -1517,10 +1800,17 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
 
 class ApiServer:
     def __init__(self, service, host: str = "127.0.0.1", port: int = 0,
-                 static_root: Path | None = None, experiment_runtime=None):
+                 static_root: Path | None = None, experiment_runtime=None,
+                 shell_root: str | None = None):
         self.service = service
         self.static_root = static_root
         self.experiment_runtime = experiment_runtime
+        self.agent = build_agent_manager(
+            service,
+            shell_root=shell_root if shell_root is not None
+            else str(Path(__file__).parents[2]
+                     / "docs" / "dashboard-platform" / "shell"),
+        )
         self.hub = StateHub()
         # Bug 1 (AUDIT_2026-09-21 §Bug 1): the hub cache was refreshed only
         # on command results, so any hub consumer saw a frozen view after
@@ -1532,7 +1822,8 @@ class ApiServer:
         self.server = ThreadingHTTPServer(
             (host, port),
             make_handler(service, hub=self.hub, static_root=static_root,
-                        experiment_runtime=experiment_runtime),
+                        experiment_runtime=experiment_runtime,
+                        agent=self.agent),
         )
         self._poll_thread = None
         self.thread = threading.Thread(target=self.server.serve_forever,
@@ -1544,6 +1835,7 @@ class ApiServer:
 
     def start(self) -> None:
         self.thread.start()
+        self.agent.start()
         # Start the gateway polling thread so command result frames
         # (0x30/0x31/0x32) are drained from the bridge queue and published
         # to the hub — making them visible in the next /state poll from the browser.
@@ -1556,6 +1848,7 @@ class ApiServer:
 
     def stop(self) -> None:
         self._stop_event.set()
+        self.agent.stop()
         self.server.shutdown()
         self.thread.join(timeout=2)
         self._poll_thread.join(timeout=2) if self._poll_thread else None

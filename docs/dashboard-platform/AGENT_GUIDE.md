@@ -405,3 +405,125 @@ Six environment traps on this workstation create plausible false failures and wa
   Verified: 59 s and a correct answer, against 301 s and silence in-repo.
   A worker started this way must use absolute paths, and must run `git` through
   `.agent-ops/win.sh` on the Windows side rather than from WSL.
+
+## 10. Driving the dashboard (agent control layer)
+
+Phase 1A adds a deterministic **agent control layer**: an agent submits a whole
+ordered **plan** in one call and the service executes it step by step. This
+*replaces* one-tool-call-per-step driving (section 4). Everything here lives in
+`ground_station/service/agent.py` + `agent_mcp.py`; it only *wires* the control
+path — an agent never bypasses `POST /commands`.
+
+### 10.1 The master switch
+
+`GET/POST /api/agent/control` returns/sets
+`{mode, allow_agent_arm, changed_at, changed_by}`.
+
+* `off` — kill switch. Cancels every running plan and every pending approval.
+  While off, every agent-mutating route returns **423** `agent_disabled`.
+* `supervised` (default) — critical steps wait for an operator approval.
+* `autonomous` — non-critical and parameter-write steps run without approval.
+  **ARM still needs approval** unless you also set `allow_agent_arm: true`
+  (lives in memory only, resets on restart).
+
+### 10.2 Risk rules (the CRITICAL RULE)
+
+A `command` step is **critical** (needs approval) if and only if it
+
+* spins motors / injects throttle or a virtual stick, **or**
+* writes a tuning/limit parameter.
+
+That is `classify_command(command_id)` in `agent.py`:
+critical arm/motor/throttle = `{0x06, 0x07, 0x16}`; critical param write =
+`{0x01,0x02,0x03,0x05,0x08,0x09,0x12,0x13,0x15,0x1E}`; **disarm and emergency
+stop (`0x0D ABORT_ALL_PATHS`, `0x04 FLIGHT_MODE_ABORT`) are never critical.**
+Every other command (and every UI / service action) is `safe`.
+
+The UI/other service actions: `switch_tab`, `highlight`, `clear_highlight`,
+`show_guide`, `open_drawer`, `scroll_to` (browser/SSE `ui_action`),
+`subscribe`, `subscribe_preview`, `recording_start`, `recording_stop`, `say`,
+`wait_ms` (<=60 s), `wait_for` (telemetry predicate, <=120 s), `command`.
+
+### 10.3 Plan JSON examples
+
+A 5-step safe setup plan:
+
+```json
+POST /api/agent/plans
+{
+  "title": "prep",
+  "goal": "sub and record",
+  "source": "agent:co-pilot",
+  "steps": [
+    {"action": "subscribe", "args": {"slot": 0, "divider": 1}},
+    {"action": "recording_start", "args": {"reason": "prep", "label": "trial-01"}},
+    {"action": "show_guide", "args": {"title": "progress",
+                                       "steps": ["start", "verify", "stop"]}},
+    {"action": "wait_for", "args": {"key": "altitude", "op": ">",
+                                    "value": 0.5, "timeout_s": 30}},
+    {"action": "say", "args": {"text": "setup complete"}}
+  ]
+}
+```
+
+A plan with a critical step (this one sets a PID gain — it will sit in the
+approval queue until the operator approves it):
+
+```json
+{
+  "title": "tune pid",
+  "goal": "raise Kp",
+  "source": "agent:co-pilot",
+  "steps": [
+    {"action": "command", "args": {"command_id": 1, "index": 0},
+     "label": "set PID Kp", "on_error": "stop"}
+  ]
+}
+```
+
+All critical steps enter the **approval queue up front, in order**. The
+operator approves/rejects item by item; there is no expiry. A rejected step
+stops the plan unless that step carries `"on_error": "continue"`. Approve/​reject
+via `POST /api/agent/approvals/<plan_id>/<step_id>/approve|reject {source}`.
+
+Run one plan at a time; a second `POST` gets **409** unless you pass
+`"queue": true`. Cancel with `POST /api/agent/plans/<id>/cancel`.
+
+### 10.4 Events
+
+`GET /api/agent/stream` is a Server-Sent-Events stream (`text/event-stream`,
+15 s heartbeat) with event types `control`, `plan`, `step`, `approval`,
+`ui_action`, `message`, `shell_updated`. UI steps are delivered as
+`ui_action`; the browser confirms with `POST /api/agent/ui-ack`
+`{plan_id, step_id, ok, error?}` within 5 s or the step fails with
+`ui_timeout`. `GET /api/agent/state` is one cheap snapshot for agents
+(`control`, `ui`, `recording`, `layout`, `arm_state`, `stream_health`,
+`running_plan`, `pending_approvals`, `last_messages`).
+
+### 10.5 Messages
+
+`say` / `POST /api/agent/message {text, source}` appends an `agent` note.
+Operator notes (`note`/`goal`/`marker`) are also broadcast as `message`.
+`GET /api/session/notes?since=<seq>` returns notes after a monotonic `seq`;
+`GET /api/agent/messages/wait?since=<seq>&timeout=<s<=60>` long-polls for new
+operator notes — this is how an agent “listens” to the operator.
+
+### 10.6 MCP setup
+
+The service exposes a stdio MCP server:
+
+```bash
+cd <repo-root>
+python -m ground_station.service.agent_mcp
+```
+
+If the official `mcp` SDK is installed it is *not* required here — this server
+implements the JSON-RPC subset itself (`initialize`, `notifications/initialized`,
+`tools/list`, `tools/call`, `ping`, `server/discover`) and talks to the live
+service on `GS_URL` (default `http://127.0.0.1:8081`).
+
+Tools: `get_state`, `list_actions`, `run_plan`, `get_plan`, `cancel_plan`,
+`say`, `wait_for_operator`, `get_recording`, `list_sessions`,
+`analyze_session`. Register it in any MCP client via the root `.mcp.json`
+(server `dashboard`).
+
