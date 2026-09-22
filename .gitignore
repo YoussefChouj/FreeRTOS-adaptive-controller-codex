@@ -61,3 +61,6 @@ scratch/
 
 # browser_smoke screenshots are per-run artifacts, not history
 logs/browser_smoke/
+
+# queue runner state is per-machine, not history
+.agent-ops/queue.json

@@ -74,6 +74,36 @@ worktree task file. A non-worktree worker gets the read-only set: `find_symbol`,
 
 **Spawn → wait → result.md → verify.**
 
+**Or queue it and walk away** (`.agent-ops/task_queue.py`, added 2026-09-23). It runs that
+whole sequence one task at a time and stops at the first verdict that is not PASS — queued
+tasks build on each other, and carrying on past an unconfirmed result is how a bad edit ends
+up underneath four more. `--keep-going` overrides.
+
+```powershell
+python .agent-ops/task_queue.py add .agent-ops/tasks-pending-foo.md -w oc
+python .agent-ops/task_queue.py list
+python .agent-ops/task_queue.py run --max 3
+```
+
+Two things it does that the supervisor used to do by hand, and mostly forgot to:
+
+- **A WARN goes to a reviewer** before it reaches a human. WARN is the verdict a tired
+  supervisor waves through. The reviewer runs in `/tmp/ocwork/review` with no repo access, so
+  it judges the findings it was handed rather than reading around them — containment, not a
+  promise in a prompt. It answers `benign | needs-review | likely-bug`.
+- **Every non-PASS is appended to `.agent_memory/frictions.jsonl`**, with the finding lines
+  carried verbatim. The log only ever got entries when someone remembered, and the failures
+  that taught the most were the ones nobody had the energy to write up afterwards.
+
+State lives in `.agent-ops/queue.json` (gitignored) and is saved after every transition, so an
+interrupted run resumes with the in-flight task already recorded. The seam is the `Ops` class:
+the run loop never shells out itself, which is why `.agent-ops/tests/test_task_queue.py` can
+exercise the whole thing — sequencing, stop rule, review, frictions, persistence — with no
+worker and no quota.
+
+The module is `task_queue.py`, not `queue.py`: the latter shadows the standard library.
+
+
 - Spawn: `agent-ops.ps1 spawn "task"` (or `-File task.md`). Returns `spawned <TASK_ID>`.
 - Wait: `agent-ops.ps1 wait <task_id>`. Exit codes: 0 success, 2 worker failed, 3 gave up, 4 needs attention, 5 idle death (rc=0 but no result file).
 - **Result file** is at `.agent-ops/tasks/<TASK_ID>.result.md`. A task without it is a failure.
