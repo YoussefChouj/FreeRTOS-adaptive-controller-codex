@@ -46,13 +46,16 @@
       api.registerPanel('Activity', function (body) {
         container = body;
         body.setAttribute('data-testid', 'activity-timeline');
+        // The long collapsible Activity log belongs to the Approvals tab only
+        // (operator walkthrough 2 item 3): it must never appear on the
+        // Overview or any other workspace/tab.
         // source filter buttons
         ['all', 'operator', 'agent', 'system'].forEach(function (f) {
           var btn = document.createElement('button');
           btn.textContent = f;
           btn.addEventListener('click', function () { sourceFilter = f === 'all' ? null : f; render(); });
         });
-      });
+      }, { workspace: 'approvals' });
     } catch (e) { console.warn('[timeline] panel skip:', e && e.message); }
 
     // backfill from the history API when possible
@@ -142,5 +145,5 @@
 
     window.__gs_ui_state__ = window.__gs_ui_state__ || {};
     window.__gs_ui_state__[KEY] = { handle: handle, get: view, ingest: ingest, setIsFilter: function (f) { sourceFilter = f; } };
-  }, function () {}, { workspace: 'overview', description: 'Chronological activity timeline' });
+  }, function () {}, { workspace: 'approvals', description: 'Chronological activity timeline (Approvals tab only)' });
 })();

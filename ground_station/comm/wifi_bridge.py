@@ -79,6 +79,11 @@ from .boot_default_layout import (
     DASHBOARD_PANEL_EXTRA_VARS,
     DASHBOARD_PANEL_EXTRA_DIVIDER,
 )
+# Subscribe stream constants reused for the bytes/s budget projection in
+# /subscribe/preview. FRAME_OVERHEAD mirrors SUBSCRIBE_STREAM_FRAME_OVERHEAD
+# in API/subscribe.h; the payload is the sum of resolved DWARF symbol sizes.
+from ground_station.livewatch.stream import FRAME_OVERHEAD  # noqa: E402
+
 from ground_station.platform.transactions import Command as TransactionCommand
 from ground_station.platform.transactions import build_command as build_transaction_command
 from ground_station.platform.transactions import Result as TransactionResult
@@ -289,6 +294,15 @@ class WifiBridge:
 
         # SymbolResolver for preset variable resolution (built lazily in start())
         self._preset_resolver: Optional["SymbolResolver"] = None
+
+        # Per-slot subscribe lifecycle state. Values follow the transaction
+        # state machine: "planned" (armed to send) -> "sent" (0x21 request on
+        # the wire) -> "schema_received" (0x08 ack decoded) -> "streaming"
+        # (0x09+slot data frames flowing). "error" holds a machine-readable
+        # reason. The service exposes these to the dashboard so the Slot
+        # Manager can render pending / acked / live / error per slot.
+        # Keyed by slot 0..3 (SUBSCRIBE_MAX_SLOTS = 4).
+        self._slot_states: Dict[int, str] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -935,15 +949,50 @@ class WifiBridge:
                                 count=1, name=r, fmt=symbol.fmt)
             stream_ranges.append(r)
 
+        # Fresh subscribe cycle: clear this slot's stale schema, stream
+        # stats and lifecycle state BEFORE sending. This cleanup lives in
+        # subscribe_slot (not _send_subscribe_bytes) so a batch-release
+        # send inside _handle_schema_frame does NOT wipe the schema that
+        # was just registered (S3A fix). Other slots are untouched.
+        with self._stream_lock:
+            self._stream_schemas.pop(slot, None)
+            self._stream_stats.pop(slot, None)
+            self._slot_states[slot] = "planned"
+            if divider:
+                self._pending_schema_ranges[slot] = tuple(stream_ranges)
+            else:
+                self._pending_schema_ranges.pop(slot, None)
+
+        return self._send_subscribe_bytes(
+            slot, divider, stream_ranges, transport=transport,
+        )
+
+    def _send_subscribe_bytes(
+        self,
+        slot: int,
+        divider: int,
+        ranges: list,
+        transport: int = 1,
+        request_id: Optional[int] = None,
+    ) -> bytes:
+        """Build and ship the 0x21 request for ``slot``, advancing its
+        lifecycle state to ``sent``. Returns the request bytes.
+
+        Used both directly by :meth:`subscribe_slot` (fresh cycle start) and
+        by the RX thread to release a deferred batch. It deliberately does
+        NOT clear ``_stream_schemas`` / ``_stream_stats`` -- only
+        ``subscribe_slot`` does, so a schema reply that triggers a release
+        does not erase the schema it just registered.
+        """
+        from ground_station.livewatch.stream import build_stream_request
+
         request = build_stream_request(
-            ranges=stream_ranges,
+            ranges=ranges,
             divider=divider,
             transport=transport,
             slot=slot,
         )
-        if divider:
-            with self._stream_lock:
-                self._pending_schema_ranges[slot] = tuple(stream_ranges)
+        self._slot_states[slot] = "sent"
         self._wifi_send.sendto(request, (self._wifi_host, self._wifi_port))
         return request
 
@@ -994,26 +1043,45 @@ class WifiBridge:
 
         resolved_names: list = []
         unresolved: list = []
+        total_payload_bytes = 0
+        expected_hz = self._expected_rate_for_slot(slot, divider)
         for r in preview_ranges:
             if isinstance(r, str):
                 try:
                     self._ensure_preset_resolver()
-                    self._preset_resolver.resolve(r)
+                    sym = self._preset_resolver.resolve(r)
                     resolved_names.append(r)
+                    # Symbol.size is the DWARF byte size of the variable
+                    # (mirrored from _sizeof in livewatch/symbols.py). The
+                    # subscribe protocol only accepts 1/2/4-byte members, so
+                    # this sum is the honest payload the FC will stream.
+                    total_payload_bytes += getattr(sym, "size", 0)
                 except Exception:
                     unresolved.append(r)
                 continue
             # Pre-built StreamRange — already resolved by the caller.
             name = getattr(r, "name", None) or f"<StreamRange@{id(r):x}>"
             resolved_names.append(name)
+            total_payload_bytes += getattr(r, "size", 0)
 
+        # Projected on-wire cost of the subscription, using the same
+        # arithmetic as the firmware transport (stream_bps: 12 B frame
+        # overhead + payload, at the 100 Hz Send_Task contract). This is a
+        # *plan* the slot-manager shows against the link budget before the
+        # user clicks Subscribe; the live used-bytes/s is measured on real
+        # RX frames in the bandwidth panel (see docs/dashboard-platform/
+        # shell/plugins/bandwidth-panel.js, WIFI_LINK_CAPACITY_BPS).
+        projected_bps = (FRAME_OVERHEAD + total_payload_bytes) * expected_hz
         return {
             "slot": slot,
             "divider": divider,
             "ranges": resolved_names,
             "unresolved": unresolved,
             "var_count": len(resolved_names),
-            "expected_rate_hz": self._expected_rate_for_slot(slot, divider),
+            "expected_rate_hz": expected_hz,
+            "payload_bytes": total_payload_bytes,
+            "frame_bytes": FRAME_OVERHEAD + total_payload_bytes,
+            "projected_bps": int(projected_bps),
         }
 
     @staticmethod
@@ -1933,6 +2001,11 @@ class WifiBridge:
             with self._stream_lock:
                 self._stream_schemas[slot] = schema
                 self._pending_schema_ranges.pop(slot, None)
+                # Advance the per-slot lifecycle only forward. A schema
+                # reply to a fresh request moves 'sent' -> 'schema_received';
+                # it never regresses a slot that is already streaming.
+                if self._slot_states.get(slot) == "sent":
+                    self._slot_states[slot] = "schema_received"
 
             # S15 instrumentation: log the parsed 0x08 reply so the
             # operator can verify that the schema carries the DWARF
@@ -2070,17 +2143,49 @@ class WifiBridge:
                 stats["dropped"] += (seq - previous - 1) & 0xFF
             stats["last_seq"] = int(seq)
             stats["received"] += 1
+            stats["bytes_received"] = stats.get("bytes_received", 0) + len(frame)
             received = stats["received"]
             dropped = stats["dropped"]
             crc_errors = stats["crc_errors"]
+            bytes_received = stats["bytes_received"]
+            # First data frame after acked: slot is live. Data only ever
+            # advances the lifecycle forward -- never regress.
+            self._slot_states[slot] = "streaming"
         total = received + dropped
         json_payload[f"slot{slot}.t_ms"] = int(t_ms)
         json_payload[f"slot{slot}.seq"] = int(seq)
         json_payload[f"slot{slot}.received"] = received
         json_payload[f"slot{slot}.dropped"] = dropped
         json_payload[f"slot{slot}.crc_errors"] = crc_errors
+        # Cumulative actual wire bytes received for this slot (headers +
+        # payload + CRC of every 0x09+slot frame). Feeds the live link-
+        # budget readout (used B/s vs ~91 304 B/s capacity).
+        json_payload[f"slot{slot}.bytes_received"] = bytes_received
         json_payload[f"slot{slot}.loss_pct"] = round(100.0 * dropped / total, 3) if total else 0.0
         return {"json": json_payload, "values": list(values), "names": names}
+
+    def _stream_metadata(self, slot: int):
+        """Return a typed ``StreamMetadata`` for ``slot`` from its stats.
+
+        Used by the service seam (``adapt_from_bridge`` / diagnostics) so a
+        slot's cumulative loss / CRC-error counters survive as typed metadata
+        rather than being folded back into the values dict.
+        """
+        from ground_station.service.telemetry_adapter import StreamMetadata
+
+        with self._stream_lock:
+            s = self._stream_stats.get(slot)
+            if not s:
+                return StreamMetadata()
+            received = s.get("received", 0)
+            dropped = s.get("dropped", 0)
+            total = received + dropped
+            return StreamMetadata(
+                received=received,
+                dropped=dropped,
+                loss_pct=round(100.0 * dropped / total, 3) if total else 0.0,
+                crc_errors=s.get("crc_errors", 0),
+            )
 
     def _forward_vofa(self, slot: int, values: list) -> None:
         """Forward one subscribe frame's values to the VoFA+ UDP sink.

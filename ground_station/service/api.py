@@ -20,9 +20,92 @@ from .agent import (
     SSE_HEARTBEAT_S,
     build_agent_manager,
 )
+from .copilot import Copilot
+def _validate_request_headers(headers: dict[str, str],
+                               bound_host: str | None = None) -> tuple[int, str] | None:
+    """Validate Host, Origin, and Content-Type headers for POST/PUT/DELETE
+    requests.
 
+    Returns ``None`` if valid, or ``(status_code, message)`` tuple if invalid.
 
+    ``bound_host`` is the host the server is bound to (e.g. ``"192.168.1.10"``).
+    If ``bound_host`` is a loopback name it is ignored (no extra host is
+    permitted).  When ``bound_host`` is ``"0.0.0.0"`` only loopback names are
+    accepted for the Host and Origin headers.
+    """
+    allowed_hosts = {"127.0.0.1", "localhost", "::1"}
 
+    # If the server was bound to a specific non-loopback address, allow it too.
+    if bound_host and bound_host not in (
+        "0.0.0.0", "127.0.0.1", "localhost", "::1",
+        "::", "[::]",
+    ):
+        allowed_hosts.add(bound_host)
+
+    # ── Host header validation ───────────────────────────────────────────
+    host_header = headers.get("Host")
+    if host_header is None:
+        return (403, "Missing Host header")
+    # Extract hostname from Host header (remove port if present)
+    host = host_header
+    if host.startswith("["):
+        # IPv6 address
+        end = host.find("]")
+        if end == -1:
+            return (403, "Invalid Host header")
+        host = host[1:end]
+    else:
+        # Remove port separator
+        colon = host.find(":")
+        if colon != -1:
+            host = host[:colon]
+    if host not in allowed_hosts:
+        return (403, f"Host header not allowed: {host}")
+
+    # ── Origin header validation ─────────────────────────────────────────
+    origin_header = headers.get("Origin")
+    if origin_header is not None:
+        # Parse origin: scheme://host[:port]
+        if not origin_header.startswith(("http://", "https://")):
+            return (403, "Invalid Origin header")
+        # Extract the host part
+        origin = origin_header.split("://")[1]
+        if origin.startswith("["):
+            end = origin.find("]")
+            if end == -1:
+                return (403, "Invalid Origin header")
+            origin_host = origin[1:end]
+        else:
+            colon = origin.find(":")
+            if colon != -1:
+                origin_host = origin[:colon]
+            else:
+                origin_host = origin
+        if origin_host not in allowed_hosts:
+            return (403, f"Origin header not allowed: {origin_host}")
+
+    # ── Content-Type validation ──────────────────────────────────────────
+    content_type = headers.get("Content-Type")
+    content_length = headers.get("Content-Length")
+    has_body = False
+    if content_length is not None:
+        try:
+            if int(content_length) > 0:
+                has_body = True
+        except ValueError:
+            pass
+    if has_body:
+        if content_type is None:
+            return (415, "Missing Content-Type header")
+        # Accept any media type whose type part is application/json
+        # (e.g. ``application/json; charset=utf-8``).
+        ctype = content_type.split(";")[0].strip().lower()
+        if ctype != "application/json":
+            return (415, f"Invalid Content-Type: {content_type}, "
+                                 "expected application/json")
+
+    # If no body, Content-Type can be anything or absent
+    return None
 
 # MIME type mapping for static file serving
 _MIME_TYPES: dict[str, str] = {
@@ -851,9 +934,11 @@ class StateHub:
 
 
 def make_handler(service, hub: StateHub | None = None, static_root: Path | None = None,
-                experiment_runtime=None, agent: AgentManager | None = None):
+                 experiment_runtime=None, agent: AgentManager | None = None,
+                 copilot: Copilot | None = None):
     hub = hub or StateHub()
     _AGENT = agent  # captured; may be None in legacy tests
+    _COPILOT_SOURCE = "agent:copilot"  # shared constant so agent can check it
 
     class Handler(BaseHTTPRequestHandler):
         def _json(self, status: int, payload: dict[str, Any]) -> None:
@@ -1527,6 +1612,14 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
         def do_POST(self):  # noqa: N802
             from urllib.parse import parse_qs, urlsplit
             route = urlsplit(self.path).path
+            # Validate headers
+            bound_host = self.server.server_address[0]
+            err = _validate_request_headers(self.headers, bound_host)
+            if err is not None:
+                self._drain_body()
+                self._json(err[0], {"error": err[1]})
+                return
+            
 
             if route == "/commands":
                 try:
@@ -1725,6 +1818,7 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     self._json(503, {"error": "agent layer unavailable"})
                     return
                 if _AGENT.mode == "off":
+                    self._drain_body()
                     self._agent_disabled()
                     return
                 try:
@@ -1749,6 +1843,7 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     self._json(503, {"error": "agent layer unavailable"})
                     return
                 if _AGENT.mode == "off":
+                    self._drain_body()
                     self._agent_disabled()
                     return
                 try:
@@ -1794,6 +1889,7 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     self._json(503, {"error": "agent layer unavailable"})
                     return
                 if _AGENT.mode == "off":
+                    self._drain_body()
                     self._agent_disabled()
                     return
                 parts = route.split("/")
@@ -1856,6 +1952,7 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     self._json(503, {"error": "agent layer unavailable"})
                     return
                 if _AGENT.mode == "off":
+                    self._drain_body()
                     self._agent_disabled()
                     return
                 try:
@@ -1874,6 +1971,17 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
             else:
                 self._json(404, {"error": "not found"})
 
+        def _drain_body(self) -> None:
+            """Read and discard the request body before sending an error.
+
+            On Windows, sending a response while the socket still has unread
+            data causes ``ConnectionAbortedError [WinError 10053]``.  Drain
+            the body so the connection stays clean.
+            """
+            length = int(self.headers.get("Content-Length", "0"))
+            if length:
+                self.rfile.read(length)
+
         def _agent_disabled(self) -> None:
             self._json(423, {"ok": False, "error": {"code": "agent_disabled"}})
 
@@ -1886,15 +1994,18 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
 class ApiServer:
     def __init__(self, service, host: str = "127.0.0.1", port: int = 0,
                  static_root: Path | None = None, experiment_runtime=None,
-                 shell_root: str | None = None):
+                 shell_root: str | None = None,
+                 copilot: Copilot | None = None):
         self.service = service
         self.static_root = static_root
         self.experiment_runtime = experiment_runtime
+        self.copilot = copilot
         self.agent = build_agent_manager(
             service,
             shell_root=shell_root if shell_root is not None
             else str(Path(__file__).parents[2]
-                     / "docs" / "dashboard-platform" / "shell"),
+                      / "docs" / "dashboard-platform" / "shell"),
+            copilot=copilot,
         )
         self.hub = StateHub()
         # Bug 1 (AUDIT_2026-09-21 §Bug 1): the hub cache was refreshed only
@@ -1907,8 +2018,9 @@ class ApiServer:
         self.server = ThreadingHTTPServer(
             (host, port),
             make_handler(service, hub=self.hub, static_root=static_root,
-                        experiment_runtime=experiment_runtime,
-                        agent=self.agent),
+                         experiment_runtime=experiment_runtime,
+                         agent=self.agent,
+                         copilot=copilot),
         )
         self._poll_thread = None
         self.thread = threading.Thread(target=self.server.serve_forever,

@@ -479,12 +479,27 @@
     // expected_rate_hz is hardwired to the 100 Hz contract, so it is not
     // used here when the form states a different cadence.
     var choice = _rateChoice();
+    var achievedHz = null;
     if (choice && choice.divider === divider) {
+      achievedHz = choice.achieved;
       html += '<span class="sm-fresh fresh-mixed" title="achieved ' + choice.cadence + ' Hz cadence / divider ' + divider + '">' +
               _fmtHz(choice.achieved) + ' Hz achieved @ ' + _fmtHz(choice.cadence) + ' Hz cadence</span>';
     } else if (typeof _previewResult.expected_rate_hz === 'number' &&
                _previewResult.expected_rate_hz > 0) {
+      achievedHz = _previewResult.expected_rate_hz;
       html += '<span class="sm-fresh fresh-mixed">~' + _previewResult.expected_rate_hz.toFixed(1) + ' Hz expected</span>';
+    }
+    // Bytes/s projection against the WiFi link budget. The backend returns
+    // the honest payload sum (resolved DWARF symbol sizes) and the projected
+    // bps at the 100 Hz contract; we re-scale that to the cadence-honest
+    // achieved rate here so it tracks whatever divider the rate form chose.
+    var projectedBps = _previewResult.projected_bps;
+    if (typeof projectedBps === 'number' && projectedBps > 0 && achievedHz && _previewResult.expected_rate_hz > 0) {
+      projectedBps = projectedBps * (achievedHz / _previewResult.expected_rate_hz);
+    }
+    if (typeof projectedBps === 'number' && projectedBps >= 0) {
+      html += '<span class="sm-fresh" style="background:rgba(0,0,0,0.25);color:var(--text)" title="Shared WiFi telemetry link budget. Capacity and used are shown live in the Bandwidth panel (WIFI_LINK_CAPACITY_BPS = 91304 B/s from docs/telemetry-protocol.md).">' +
+              '&#8645; ' + projectedBps.toFixed(0) + ' B/s of 91,304 B/s (' + Math.min(100, projectedBps / 91304 * 100).toFixed(1) + '%)</span>';
     }
     html += '</div>';
     el.innerHTML = html;
@@ -553,8 +568,26 @@
                    rowStatus === 'mixed' ? 'sm-row-mixed' :
                    rowStatus === 'live'  ? 'sm-row-live'  : '';
 
+      // Per-slot subscribe transaction state from /health/slots
+      // ``request_state`` (planned -> sent -> schema_received -> streaming,
+      // set by WifiBridge._slot_states). Rendered as a small badge in the
+      // slot cell so the operator sees the pending/acked/live lifecycle the
+      // fixed /subscribe path executes, and can tell a stuck slot from a
+      // healthy one at a glance.
+      var reqState = (_healthBySlot[slotId] && _healthBySlot[slotId].request_state) || 'planned';
+      var stateBadge = '';
+      if (reqState === 'streaming') {
+        stateBadge = '<span class="sm-fresh fresh-ok" title="schema acked, frames flowing">live</span>';
+      } else if (reqState === 'schema_received') {
+        stateBadge = '<span class="sm-fresh fresh-mixed" title="schema acked, awaiting first framed value">acked</span>';
+      } else if (reqState === 'sent') {
+        stateBadge = '<span class="sm-fresh fresh-mixed" title="subscribe request sent, no schema reply yet">pending</span>';
+      } else {
+        stateBadge = '<span class="sm-fresh fresh-bad" title="no subscribe request in flight or no reply">error</span>';
+      }
+
       html += '<tr class="sm-row-clickable ' + rowCls + '" data-slot="' + slotId + '">' +
-        '<td><strong>Slot ' + slotId + '</strong></td>' +
+        '<td><strong>Slot ' + slotId + '</strong> ' + stateBadge + '</td>' +
         '<td>' + (meta.tag != null ? meta.tag : '??') + '</td>' +
         '<td>' + varCount + '</td>' +
         '<td>' + (meta.sequence != null ? meta.sequence : '??') + '</td>' +

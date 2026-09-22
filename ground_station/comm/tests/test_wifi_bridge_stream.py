@@ -364,7 +364,6 @@ class TestCounterSingleOwner(unittest.TestCase):
         self.assertEqual(stats["received"], 2)
 
 
-@pytest.mark.skip(reason="spec for unimplemented subscribe transaction layer; see reports/COMM-TEST-TRIAGE.md")
 class TestSchemaRenegotiation(unittest.TestCase):
     """New subscribe requests clear stale schema and stats."""
 
@@ -456,7 +455,6 @@ class TestSchemaRenegotiation(unittest.TestCase):
         self.assertEqual(self.bridge._slot_states[0], "sent")
 
 
-@pytest.mark.skip(reason="spec for unimplemented subscribe transaction layer; see reports/COMM-TEST-TRIAGE.md")
 class TestStreamStateMachine(unittest.TestCase):
     """Slot state transitions: planned → sent → schema_received → streaming."""
 
@@ -529,8 +527,48 @@ class TestStreamStateMachine(unittest.TestCase):
         # _handle_schema_frame only advances from 'sent'; 'schema_received' is already past that
         self.assertEqual(self.bridge._slot_states[1], "schema_received")
 
+    def test_new_slot_full_lifecycle_planned_sent_acked_live(self):
+        """A brand-new slot (3) walks planned -> sent -> acked -> live end to end.
 
-@pytest.mark.skip(reason="spec for unimplemented subscribe transaction layer; see reports/COMM-TEST-TRIAGE.md")
+        This is the regression test for the item-1 bug: subscribing a NEW
+        slot did not work because the per-slot subscribe transaction layer
+        was unimplemented, so an operator's request to a fresh slot never
+        produced a per-slot lifecycle, and the dashboard could never show
+        pending/acked/live/error state for it. Fake transport, no drone:
+        a brand-new WifiBridge instance, MagicMock sockets, pre-built
+        StreamRange to bypass the ELF resolver.
+        """
+        # Fresh bridge: no slot has any state yet.
+        self.assertNotIn(3, self.bridge._slot_states)
+        self.bridge._wifi_send = MagicMock()
+        # 1. Request on new slot 3 -> request bytes on the wire, state 'sent'.
+        request = self.bridge.subscribe_slot(
+            slot=3, divider=4,
+            ranges=[StreamRange(address=0x20002000, size=4, count=1, name="new.var")],
+            transport=1,
+        )
+        self.assertTrue(request.startswith(b"\xCC\xDE"))
+        self.assertEqual(self.bridge._slot_states[3], "sent")
+        self.bridge._wifi_send.sendto.assert_called_once()
+        # Build the 0x08 ack the FC would echo for slot 3 (1 range, 4 B).
+        from ground_station.livewatch.transport import _xor_crc
+        n_ranges, divider, transport, slot, total_bytes = 1, 4, 1, 3, 4
+        payload = bytes([n_ranges, divider, transport, slot,
+                         (total_bytes >> 8) & 0xFF, total_bytes & 0xFF]) + \
+                  struct.pack("<IHH", 0x20002000, 4, 1)
+        payload_len = 5 + n_ranges * 8
+        crc_byte = _xor_crc(bytes([0x08, payload_len >> 8, payload_len & 0xFF]) + payload)
+        ack = bytes([0xAA, 0xBB, 0x08, payload_len >> 8, payload_len & 0xFF]) + payload + bytes([crc_byte])
+        # 2. Ack decoded -> state 'schema_received'.
+        self.assertEqual(self.bridge._handle_schema_frame(ack), 3)
+        self.assertEqual(self.bridge._slot_states[3], "schema_received")
+        # 3. First data frame -> state 'streaming'.
+        data = _build_stream_frame(slot=3, seq=0, t_ms=1000, values=[1.0])
+        decoded = self.bridge._decode_stream_frame(3, data)
+        self.assertIsNotNone(decoded)
+        self.assertEqual(self.bridge._slot_states[3], "streaming")
+
+
 class TestStreamMetadataCrcErrors(unittest.TestCase):
     """StreamMetadata carries crc_errors from the typed metadata path."""
 
@@ -611,7 +649,6 @@ class TestReconnectSequence(unittest.TestCase):
         # dropped = (0-252-1) & 0xFF = 3
         self.assertEqual(stats_after["dropped"], 3)
 
-    @pytest.mark.skip(reason="spec for unimplemented subscribe transaction layer; see reports/COMM-TEST-TRIAGE.md")
     def test_stats_persist_after_stop(self):
         """stop() does not clear _stream_stats or _stream_schemas."""
         self.bridge._stream_stats[0] = {"received": 42, "dropped": 3, "crc_errors": 1, "last_seq": 41}
@@ -624,7 +661,6 @@ class TestReconnectSequence(unittest.TestCase):
         self.assertIsNotNone(self.bridge._stream_schemas.get(0))
         self.assertEqual(self.bridge._slot_states[0], "streaming")
 
-    @pytest.mark.skip(reason="spec for unimplemented subscribe transaction layer; see reports/COMM-TEST-TRIAGE.md")
     def test_new_subscribe_clears_stats_and_schema(self):
         """subscribe_slot() resets that slot's stats, schema, and slot state.
 
@@ -649,7 +685,6 @@ class TestReconnectSequence(unittest.TestCase):
         self.bridge._stream_stats[2] = {"received": 7, "dropped": 0, "crc_errors": 0, "last_seq": 6}
         self.assertEqual(self.bridge._stream_stats[2]["received"], 7)
 
-    @pytest.mark.skip(reason="spec for unimplemented subscribe transaction layer; see reports/COMM-TEST-TRIAGE.md")
     def test_reconnect_only_clears_target_slot(self):
         """subscribe_slot(slot=1) does NOT clear slot 0 stats or schema."""
         self.bridge._stream_stats[0] = {"received": 50, "dropped": 0, "crc_errors": 0, "last_seq": 49}
@@ -713,7 +748,6 @@ class TestStaleSchemaDetection(unittest.TestCase):
         # But pending ranges for other slots are unaffected
         self.assertNotIn(0, self.bridge._pending_schema_ranges)
 
-    @pytest.mark.skip(reason="spec for unimplemented subscribe transaction layer; see reports/COMM-TEST-TRIAGE.md")
     def test_reconnect_drops_frames_with_old_schema(self):
         """After a reconnect, stale schemas cannot corrupt fresh data.
 
@@ -827,3 +861,208 @@ class TestKeepaliveNudge(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSubscribeLifecycle(unittest.TestCase):
+    """Full lifecycle: subscribe_slot → schema ack → data frames.
+
+    Uses only in-process mocks (no drone, no network).  Verifies that
+    the wifi_bridge correctly:
+      1. Builds a 0x21 request and tracks slot state as ``sent``.
+      2. Handles the 0x08 schema reply, registers the schema,
+         and advances state to ``schema_received``.
+      3. Decodes 0x09+slot data frames, advances state to ``streaming``,
+         and emits the correct JSON with values and metadata.
+    """
+
+    def setUp(self):
+        self.bridge = WifiBridge(vofa_enabled=False)
+        self.bridge._wifi = MagicMock()
+        self.bridge._cmd_udp = MagicMock()
+        self.bridge._telem_udp = MagicMock()
+        self.bridge._udp_send = MagicMock()
+        self.bridge._wifi_send = MagicMock()
+
+    def _build_schema_frame(self, slot, n_ranges, divider, total_bytes,
+                            ranges_addr_size_count):
+        """Build a 0x08 schema frame that the firmware would send.
+
+        ``ranges_addr_size_count`` is a list of
+        ``(address, size, count)`` tuples (one per range).
+        """
+        from ground_station.livewatch.transport import _xor_crc
+        n_ranges = len(ranges_addr_size_count)
+        config = bytes([
+            n_ranges, divider, 1, slot,  # n_ranges, divider, transport, slot
+            (total_bytes >> 8) & 0xFF, total_bytes & 0xFF,
+        ])
+        range_bytes = b""
+        for addr, size, count in ranges_addr_size_count:
+            range_bytes += struct.pack("<IHH", addr, size, count)
+        payload = config + range_bytes
+        payload_len = 5 + n_ranges * 8
+        len_hi = (payload_len >> 8) & 0xFF
+        len_lo = payload_len & 0xFF
+        crc_body = bytes([0x08, len_hi, len_lo]) + payload
+        crc_byte = _xor_crc(crc_body)
+        return (bytes([0xAA, 0xBB, 0x08, len_hi, len_lo]) +
+                payload + bytes([crc_byte]))
+
+    def test_full_lifecycle_slot_1(self):
+        """Subscribe slot 1 → get schema ack → receive data frames."""
+        rng1 = StreamRange(
+            address=0x20001000, size=4, count=1,
+            name="Ctrler.gyroxPID.FB", fmt="f")
+        rng2 = StreamRange(
+            address=0x20001004, size=4, count=1,
+            name="Ctrler.gyroxPID.U", fmt="f")
+
+        # 1. subscribe_slot sends the 0x21 request and sets state to "planned"
+        #    then "sent".
+        request = self.bridge.subscribe_slot(
+            slot=1, divider=4, ranges=[rng1, rng2], transport=1)
+        self.assertEqual(self.bridge._slot_states.get(1), "sent")
+        self.assertTrue(len(request) > 0)
+
+        # 2. Simulate 0x08 schema reply.
+        schema_frame = self._build_schema_frame(
+            slot=1, n_ranges=2, divider=4, total_bytes=8,
+            ranges_addr_size_count=[
+                (0x20001000, 4, 1),
+                (0x20001004, 4, 1),
+            ])
+        result_slot = self.bridge._handle_schema_frame(schema_frame)
+        self.assertEqual(result_slot, 1)
+        self.assertEqual(self.bridge._slot_states.get(1), "schema_received")
+
+        # Schema is now registered and can decode data.
+        with self.bridge._stream_lock:
+            schema = self.bridge._stream_schemas.get(1)
+        self.assertIsNotNone(schema)
+        self.assertEqual(len(schema.ranges), 2)
+        self.assertEqual(schema.ranges[0].name, "Ctrler.gyroxPID.FB")
+        self.assertEqual(schema.ranges[1].name, "Ctrler.gyroxPID.U")
+
+        # 3. Simulate first data frame → state transitions to "streaming".
+        frame1 = _build_stream_frame(slot=1, seq=0, t_ms=1000,
+                                     values=[0.5, 0.25])
+        decoded1 = self.bridge._decode_stream_frame(1, frame1)
+        self.assertIsNotNone(decoded1)
+        self.assertEqual(self.bridge._slot_states.get(1), "streaming")
+        self.assertEqual(decoded1["names"],
+                         ["Ctrler.gyroxPID.FB", "Ctrler.gyroxPID.U"])
+        self.assertEqual(decoded1["values"], [0.5, 0.25])
+        self.assertIn("slot1.Ctrler.gyroxPID.FB", decoded1["json"])
+
+        # 4. Simulate second data frame (sequence gap).
+        frame2 = _build_stream_frame(slot=1, seq=2, t_ms=1020,
+                                     values=[0.6, 0.30])
+        decoded2 = self.bridge._decode_stream_frame(1, frame2)
+        self.assertIsNotNone(decoded2)
+        # Values are packed as float32 and unpacked, so check
+        # the rounded values match.
+        self.assertAlmostEqual(decoded2["values"][0], 0.6, places=3)
+        self.assertAlmostEqual(decoded2["values"][1], 0.30, places=3)
+        # Missing seq=1 should be counted as dropped.
+        with self.bridge._stream_lock:
+            stats = self.bridge._stream_stats.get(1)
+        self.assertIsNotNone(stats)
+        self.assertEqual(stats["received"], 2)
+        self.assertGreaterEqual(stats["dropped"], 1)
+
+    def test_subscribe_preview_includes_projected_bps(self):
+        """subscribe_preview returns payload_bytes, frame_bytes, projected_bps."""
+        # Use the real subscribe_preview which resolves against the ELF.
+        preview = self.bridge.subscribe_preview(
+            slot=1, divider=4,
+            ranges=["xTickCount"])
+        self.assertIsNotNone(preview)
+        self.assertIn("slot", preview)
+        self.assertIn("ranges", preview)
+        self.assertIn("expected_rate_hz", preview)
+        self.assertIn("payload_bytes", preview)
+        self.assertIn("frame_bytes", preview)
+        self.assertIn("projected_bps", preview)
+        self.assertGreater(preview["projected_bps"], 0)
+
+    def test_unsubscribe_divider_zero_clears_slot(self):
+        """divider=0 unsubscribes the slot and clears schema stats."""
+        rng = StreamRange(
+            address=0x20001000, size=4, count=1,
+            name="test.x", fmt="f")
+        self.bridge.subscribe_slot(slot=1, divider=4, ranges=[rng])
+        self.assertEqual(self.bridge._slot_states.get(1), "sent")
+
+        # Unsubscribe
+        self.bridge.subscribe_slot(slot=1, divider=0, ranges=[])
+        self.assertNotIn(1, self.bridge._pending_schema_ranges)
+        # divider=0 still sends a 0x21 frame (to tell FC to stop),
+        # so state moves through planned→sent; it's the absence of
+        # pending ranges that matters for unsubscribe semantics.
+        self.assertEqual(self.bridge._slot_states.get(1), "sent")
+        # Old schema and stats are cleared.
+        with self.bridge._stream_lock:
+            self.assertNotIn(1, self.bridge._stream_schemas)
+            self.assertNotIn(1, self.bridge._stream_stats)
+
+    def test_stream_metadata_returns_typed_metadata(self):
+        """_stream_metadata returns a StreamMetadata instance."""
+        rng = StreamRange(
+            address=0x20001000, size=4, count=1,
+            name="test.x", fmt="f")
+        self.bridge.subscribe_slot(slot=1, divider=4, ranges=[rng])
+        self.bridge._send_subscribe_bytes(
+            slot=1, divider=4,
+            ranges=[StreamRange(address=0x20001000, size=4,
+                                count=1, name="test.x", fmt="f")])
+
+        # Pretend schema was received.
+        self.bridge._slot_states[1] = "schema_received"
+        frame = _build_stream_frame(slot=1, seq=0, t_ms=1000, values=[1.0])
+        self.bridge._decode_stream_frame(1, frame)
+
+        # Now stream_metadata should have stats.
+        from ground_station.service.telemetry_adapter import StreamMetadata
+        meta = self.bridge._stream_metadata(1)
+        self.assertIsInstance(meta, StreamMetadata)
+        self.assertEqual(meta.received, 1)
+        self.assertGreater(meta.crc_errors, -1)  # just exists
+
+    def test_new_subscribe_cleans_stale_schema(self):
+        """Re-subscribing a slot clears the old schema and stats."""
+        rng1 = StreamRange(
+            address=0x20001000, size=4, count=1,
+            name="old_sym", fmt="f")
+        self.bridge.subscribe_slot(slot=1, divider=4, ranges=[rng1])
+
+        # Simulate schema for the first subscription.
+        schema1 = self._build_schema_frame(
+            slot=1, n_ranges=1, divider=4, total_bytes=4,
+            ranges_addr_size_count=[(0x20001000, 4, 1)])
+        self.bridge._handle_schema_frame(schema1)
+        with self.bridge._stream_lock:
+            old_schema = self.bridge._stream_schemas.get(1)
+        self.assertIsNotNone(old_schema)
+        self.assertEqual(old_schema.ranges[0].name, "old_sym")
+
+        # Subscribe again with different symbol.
+        rng2 = StreamRange(
+            address=0x20002000, size=4, count=1,
+            name="new_sym", fmt="f")
+        self.bridge.subscribe_slot(slot=1, divider=4, ranges=[rng2])
+
+        # Old schema and stats should be cleared.
+        with self.bridge._stream_lock:
+            new_schema = self.bridge._stream_schemas.get(1)
+        self.assertIsNone(new_schema)
+        self.assertNotIn(1, self.bridge._stream_stats)
+
+        # Simulate schema for the second subscription.
+        schema2 = self._build_schema_frame(
+            slot=1, n_ranges=1, divider=4, total_bytes=4,
+            ranges_addr_size_count=[(0x20002000, 4, 1)])
+        self.bridge._handle_schema_frame(schema2)
+        with self.bridge._stream_lock:
+            final_schema = self.bridge._stream_schemas.get(1)
+        self.assertIsNotNone(final_schema)
+        self.assertEqual(final_schema.ranges[0].name, "new_sym")

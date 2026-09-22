@@ -427,6 +427,47 @@
     return f;
   }
 
+  /* ── "not published: in preset X" hint (operator walkthrough 2 item 2) ──
+   * A mimic block that reads no published-on-this-stream symbol is pure
+   * blank/NO DATA today. When that happens we look up which Live-Log
+   * preset's slot manifest WOULD publish the block's first symbol and
+   * surface it on the block's sub-line so the operator sees the cause
+   * instead of an empty box.
+   *
+   * This panel is READ ONLY — it never sends anything (verified by the
+   * read-only harness). The GET /api/preset-for-symbol call is made by the
+   * SHELL, which caches the result and exposes it synchronously here via
+   * window.__gs_preset_for_symbol(symbol). If the shell has not furnished
+   * the helper (or it returns no carrier), we honestly keep the
+   * "not published by this build" line unchanged. */
+  var _npHint = {};   // stageId -> { state, symbol, text }
+  function ensurePresetHint(stage) {
+    var c = _npHint[stage.id];
+    if (c && (c.state === 'loading' || c.state === 'done' || c.state === 'failed')) return c.text;
+    var win = (typeof window !== 'undefined') ? window : null;
+    var presetLookup = win && typeof win.__gs_preset_for_symbol === 'function'
+      ? win.__gs_preset_for_symbol : null;
+    var key = (stage.rows[0] && stage.rows[0].key) || '';
+    if (!key || !presetLookup) {
+      _npHint[stage.id] = { state: 'failed', symbol: key, text: null };
+      return null;
+    }
+    _npHint[stage.id] = { state: 'loading', symbol: key, text: null };
+    var carriers = presetLookup(key);   // null while the shell's fetch is in flight
+    if (carriers == null) return null;  // still resolving — keep the honest line
+    var text;
+    if (Array.isArray(carriers) && carriers.length) {
+      var names = [];
+      carriers.forEach(function (p) { if (p && p.preset && names.indexOf(p.preset) === -1) names.push(p.preset); });
+      text = 'not published: in preset ' + (names.slice(0, 2).join(', ') || '?') +
+             ' · carriers ' + key;
+    } else {
+      text = 'not published by this build · no preset carries ' + key;
+    }
+    _npHint[stage.id] = { state: 'done', symbol: key, text: text };
+    return text;
+  }
+
   /* Value-cell id → key, for the click-to-trend delegation. */
   var _cellKeys = (function () {
     var m = {};
@@ -1608,7 +1649,18 @@
       var flag = q('ov-flag-' + st.id);
       if (flag) { flag.textContent = cs.label; flag.className = 'ov-stage-flag ov-flag-' + cs.cls; }
       var sub = q('ov-sub-' + st.id);
-      if (sub) sub.textContent = cs.sub;
+      if (sub) {
+        if (cs.cls === 'nodata') {
+          // Ask which preset would publish this block's symbol, and render
+          // "not published: in preset X" instead of a bare blank block.
+          sub.setAttribute('data-np', '1');
+          var hint = ensurePresetHint(st);
+          sub.textContent = hint || cs.sub;
+        } else {
+          if (sub.hasAttribute && sub.hasAttribute('data-np')) sub.removeAttribute('data-np');
+          sub.textContent = cs.sub;
+        }
+      }
       st.rows.forEach(function (r, ri) {
         var el = q('ov-val-' + st.id + '-' + ri);
         if (!el) return;

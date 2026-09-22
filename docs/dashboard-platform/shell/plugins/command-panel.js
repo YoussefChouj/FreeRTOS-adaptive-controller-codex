@@ -256,6 +256,26 @@
     0x1E: {
       0: 'g_of_bias_mode',
       1: 'g_of_bias_ema_freeze'
+    },
+    // MRAC runtime flags (CMD 0x0F idx 0-12) -> DWARF members of the
+    // MRAC_FeatureFlags_t struct (API/mrac.h:223). These are read back via
+    // streamValue('<dwarf>'), which matches the raw ``slotN.<dwarf>`` keys the
+    // subscribe stream publishes, so the toggles show real ON/OFF once a
+    // preset carrying them (e.g. dashboard_frame_a) is subscribed.
+    0x0F: {
+      0: 'mrac_flags.adaptation_on',
+      1: 'mrac_flags.projection_on',
+      2: 'mrac_flags.deadzone_on',
+      3: 'mrac_flags.hard_freeze_on',
+      4: 'mrac_flags.tanh_saturation_on',
+      5: 'mrac_flags.e_modification_on',
+      6: 'mrac_flags.l1_filtering_on',
+      7: 'mrac_flags.axis_enable_pitch',
+      8: 'mrac_flags.axis_enable_roll',
+      9: 'mrac_flags.axis_enable_yaw',
+      10: 'mrac_flags.output_injection_on',
+      11: 'mrac_flags.id_frame_on',
+      12: 'mrac_flags.of_frame_on'
     }
   };
   var _rawModeForced = false;
@@ -1917,6 +1937,16 @@
           '</label>'
         ].join('');
       }).join('');
+    if (cmdId === 0x0F) {
+      rows +=
+        '<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:6px;font-size:11px;color:var(--muted)">' +
+        'Flag state reads "not published" when the MRAC flag DWARF symbols are not in any subscribed slot. ' +
+        'Click to subscribe them via the fixed /subscribe path (operator-only, never automatic).</div>' +
+        '<button id="cp-publish-flags" class="cp-btn" style="margin-top:6px;background:var(--accent);color:var(--bg);' +
+        'border:none;padding:5px 10px;border-radius:4px;font-weight:600;cursor:pointer;font-size:11px">' +
+        '&#127760; Publish flag state</button>' +
+        '<div id="cp-publish-flags-result" style="margin-top:4px;font-size:11px"></div>';
+    }
     return [
       '<div class="cp-param-card" data-widget="flag" data-cmd="' + hexId(cmdId) + '">',
       '  <div style="font-weight:700;font-size:12px;margin-bottom:4px;">' + hexId(cmdId) + ' – ' +
@@ -2070,6 +2100,34 @@
         });
       });
     });
+
+    // One-click "publish flag state". Operator-clICKED ONLY -- this function
+    // is never called on load or on any timer. It re-subscribes the MRAC flag
+    // DWARF symbols into a dedicated slot via the fixed /subscribe path
+    // (shellApi.subscribeSlot -> POST /subscribe). 14 x 1-byte flags at a
+    // low divider is a negligible slice of the wire budget.
+    var publishBtn = q('cp-publish-flags');
+    if (publishBtn) {
+      publishBtn.addEventListener('click', function () {
+        var resultEl = q('cp-publish-flags-result');
+        var map = (_commandSymbols[0x0F] || {});
+        var symbols = Object.keys(map).map(function (k) { return map[k]; });
+        if (!resultEl) return;
+        // Slot 3 is reused as-is: whatever it streams now is replaced.
+        if (!window.confirm('Subscribe ' + symbols.length + ' flag symbols on slot 3?\n' +
+                            'This replaces anything slot 3 is streaming now.')) return;
+        resultEl.innerHTML = 'Subscribing ' + symbols.length + ' flag symbols on slot 3...';
+        if (_api && typeof _api.subscribeSlot === 'function') {
+          _api.subscribeSlot(3, 20, symbols).then(function () {
+            resultEl.innerHTML = '<span style="color:var(--green)">Flag state published to slot 3 (subscribe sent).</span>';
+          }).catch(function (err) {
+            resultEl.innerHTML = '<span style="color:var(--red)">Publish failed: ' + escapeHtml(err && err.message ? err.message : String(err)) + '</span>';
+          });
+        } else {
+          resultEl.innerHTML = '<span style="color:var(--red)">shellApi.subscribeSlot unavailable.</span>';
+        }
+      });
+    }
   }
 
   // ── Export ──────────────────────────────────────────────────────────────

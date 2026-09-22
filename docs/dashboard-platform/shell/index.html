@@ -450,6 +450,13 @@
     }
     /* The banner's inline display:flex would otherwise win over the class. */
     #reload-banner.hidden { display: none !important; }
+    /* Agent-mode strip is fixed at the bottom-centre of the viewport
+       (header-mode-pill.js). On narrow/phone widths give the scrolled
+       content bottom clearance so the strip never covers a panel's last row. */
+    @media (max-width: 640px) {
+      body { padding-bottom: 76px; }
+      #main { padding-bottom: 76px; }
+    }
   </style>
 </head>
 <body>
@@ -754,6 +761,13 @@
     var app = document.getElementById('app');
     if (!app) return;
     app.classList.toggle('sidebar-hidden', !!collapsed);
+    var sidebar = document.getElementById('sidebar');
+    // Reopening must fully restore the sidebar even if a prior action left an
+    // inline display:none on it (the collapse hides via the class, not by
+    // clearing content): clearing inline display here guarantees the same
+    // DOM subtree always round-trips back into view — nothing is re-parented
+    // or dropped on the hide/show cycle.
+    if (!collapsed && sidebar) sidebar.style.display = '';
     var rb = document.getElementById('sidebar-reopen');
     if (rb) rb.style.display = collapsed ? 'block' : 'none';
     try { localStorage.setItem('gs_sidebar_collapsed', collapsed ? '1' : '0'); } catch (_) {}
@@ -1638,6 +1652,30 @@
   window.__gs_gates__ = function () { return Object.assign({}, _gates); };
   /* Expose active workspace so plugins can react to workspace changes. */
   window.__gs_workspace__ = function () { return _activeWorkspace; };
+  /* ── Preset-for-symbol hint (operator walkthrough 2 item 2): the shell does
+   * the single read-only GET /api/preset-for-symbol and caches it, then hands
+   * plugins a synchronous lookup. This keeps read-only plugins (e.g. the
+   * overview data-flow blocks) free of any `fetch`/network call of their own
+   * while still letting an empty block say "not published: in preset X". */
+  window.__gs_preset_for_symbol = (function () {
+    var cache = {};
+    function fill(key) {
+      if (cache[key] !== undefined) return;
+      cache[key] = null;   // in-flight sentinel
+      try {
+        fetch('/api/preset-for-symbol?symbol=' + encodeURIComponent(key))
+          .then(function (r) { try { return r.json(); } catch (_) { return {}; } })
+          .then(function (b) { cache[key] = (b && b.presets) || []; })
+          .catch(function () { cache[key] = []; });
+      } catch (_) { cache[key] = []; }
+    }
+    return function (symbol) {
+      var key = String(symbol || '');
+      if (!key) return [];
+      fill(key);
+      return cache[key];   // null while the fetch is in flight; carriers[] after
+    };
+  })();
 
   /* ── Phase 1B init: agent SSE, ui-state reporting ── */
   function getWorkspacePanelNames(ws) {

@@ -22,13 +22,23 @@
   var WARNING_THRESHOLD = 0.8;
   var CRITICAL_THRESHOLD = 0.95;
 
+  // WiFi link capacity assumption, B/s. Source: docs/telemetry-protocol.md
+  // "Wire capacity" — USART3 @ 921600 baud, BRR=0x2E => 913043 baud => 91304
+  // B/s wire (10 bits/byte). The MicoAir bridges this to WiFi UDP. This is
+  // the denominator for the live-link-budget percentage in this panel.
+  var WIFI_LINK_CAPACITY_BPS = 91304;
+
   // ── State ──────────────────────────────────────────────────────────────
   var streamStates = {};  // slot → {enabled, loss_pct, effective_rate, vars, last_seen}
   var totalRate = 0;
+  var usedBytesPerSec = 0; // live measured used link budget in B/s (from actual received bytes)
+  var _bytesMeasurable = false; // true once >=2 bridge byte samples exist for an active slot
   var rafPending = false;
   var _apiRef = null;     // captured api ref for refresh actions
   var _unsubscribedSlots = {}; // slot → boolean; tracks actively unsubscribed slots
   var _tickTimer = null;
+  // slot → { bytes, ts } — previous cumulative bytes_received for the rolling B/s
+  var _prevBytes = {};
 
   // ── DOM helpers ─────────────────────────────────────────────────────────
   function q(id) { return document.getElementById(id); }
@@ -86,6 +96,24 @@
     var dT   = (meta.t_ms - prev.t_ms) / 1000.0; // seconds
     if (dT <= 0 || dSeq <= 0) return 0;
     return dSeq / dT;
+  }
+
+  // ── Live bytes/s calculation ───────────────────────────────────────────
+  // Live link budget, from ACTUAL received telemetry bytes (not the plan).
+  // The bridge accumulates ``slotN.bytes_received`` (sum of wire 0x09+slot
+  // frame lengths). True even when the subscribed payload size is unknown to
+  // this panel: real received frames at the real rate ARE the used budget.
+  // Returns B/s or null when not yet measurable (fewer than 2 samples).
+  function calculateBytesRate(slotId, bytesReceived) {
+    if (bytesReceived == null) return null;
+    var now = Date.now();
+    var prev = _prevBytes[slotId];
+    _prevBytes[slotId] = { bytes: bytesReceived, ts: now };
+    if (!prev || prev.bytes == null) return null;
+    var dBytes = bytesReceived - prev.bytes;
+    var dT = (now - prev.ts) / 1000.0;
+    if (dT <= 0 || dBytes <= 0) return 0;
+    return dBytes / dT;
   }
 
   // ── Chart rendering ────────────────────────────────────────────────────
@@ -404,6 +432,12 @@
       '        <span id="bw-used">' + totalRate.toFixed(1) + '</span>',
       '        <span style="font-size:14px;color:var(--muted)"> / ' + MAX_BANDWIDTH_HZ + ' Hz</span>',
       '      </div>',
+      '      <div style="font-size:11px;color:var(--muted);margin-top:6px" title="Measured from actual received telemetry bytes/s against the ' + WIFI_LINK_CAPACITY_BPS + ' B/s wire capacity (docs/telemetry-protocol.md). Refreshes every state poll.">Live link budget:</div>',
+      '      <div style="font-size:16px;font-weight:700;font-family:Consolas,monospace">',
+      '        <span id="bw-bytes">no data</span>',
+      '        <span style="font-size:12px;color:var(--muted)"> / ' + WIFI_LINK_CAPACITY_BPS + ' B/s</span>',
+      '        <span style="font-size:13px;color:var(--muted)">(<span id="bw-bytes-pct">—</span>)</span>',
+      '      </div>',
       '    </div>',
       '    <div class="bw-actions">',
       '      <button id="bw-refresh-btn" class="bw-btn bw-btn-secondary">↻ Refresh</button>',
@@ -455,23 +489,35 @@
 
     var now = Date.now();
     totalRate = 0;
+    usedBytesPerSec = 0;
+    _bytesMeasurable = false;
 
     Object.keys(state.streams).forEach(function (slot) {
       if (_unsubscribedSlots[String(slot)]) return;
       var stream = state.streams[slot];
       var meta = readMeta(stream, slot);
       var rate = calculateRate(slot, meta);
+      // Live B/s from the cumulative actual-received bytes the bridge reports.
+      var vals = (stream && stream.values) || {};
+      var key = 'slot' + slot + '.bytes_received';
+      var bytesReceived = vals[key] != null ? vals[key] : null;
+      var bytesRate = calculateBytesRate(slot, bytesReceived);
 
       if (!streamStates[slot]) {
         streamStates[slot] = { enabled: true };
       }
       streamStates[slot].effective_rate = rate;
+      streamStates[slot].bytes_per_sec = bytesRate;
       streamStates[slot].loss_pct = (meta && meta.loss_pct != null) ? meta.loss_pct : null;
       streamStates[slot].vars = countVars(stream.values || {});
       streamStates[slot].last_seen = now;
 
       if (streamStates[slot].enabled) {
         totalRate += rate;
+        if (bytesRate != null) {
+          usedBytesPerSec += bytesRate;
+          _bytesMeasurable = true;
+        }
       }
     });
 
@@ -480,6 +526,7 @@
       if (!state.streams[slot] || _unsubscribedSlots[String(slot)]) {
         delete streamStates[slot];
         delete _prevSample[slot];
+        delete _prevBytes[slot];
       }
     });
 
@@ -490,11 +537,28 @@
         renderBandwidthChart();
         renderStreamTable();
         renderBudgetWarning();
+        renderBytesBudget();
 
         var usedEl = q('bw-used');
         if (usedEl) usedEl.textContent = totalRate.toFixed(1);
       });
     }
+  }
+
+  // ── Live link-budget readout ────────────────────────────────────────────
+  // x% of the wire capacity, from ACTUAL received bytes (not the plan).
+  // "no data" (never a fake 0) until at least two bridge samples arrive per
+  // slot, so a cold link reads honestly unmeasured rather than 0 %.
+  function renderBytesBudget() {
+    var numEl = q('bw-bytes');
+    var pctEl = q('bw-bytes-pct');
+    if (!_bytesMeasurable) {
+      if (numEl) numEl.textContent = 'no data';
+      if (pctEl) pctEl.textContent = '—';
+      return;
+    }
+    if (numEl) numEl.textContent = usedBytesPerSec.toFixed(0);
+    if (pctEl) pctEl.textContent = (100.0 * usedBytesPerSec / WIFI_LINK_CAPACITY_BPS).toFixed(1) + ' %';
   }
 
   // ── Event bindings ──────────────────────────────────────────────────────

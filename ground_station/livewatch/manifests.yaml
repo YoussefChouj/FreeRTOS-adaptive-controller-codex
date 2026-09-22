@@ -937,6 +937,25 @@ manifests:
       - { dwarf: "real_voltage", key: "status.vbat" }
       # Monotonic ms clock
       - { dwarf: "xTickCount", key: "xTickCount" }
+      # MRAC feature flags (uint8 struct, API/mrac.h:223 MRAC_FeatureFlags_t).
+      # Command 0x0F indices 0-12 write these; subscribing them here makes the
+      # Command panel's flag readback show a real ON/OFF instead of the
+      # unconfirmed "not published" state, and lets the operator verify writes.
+      # 1 byte each -> packs to ~3 ranges, negligible budget.
+      - { dwarf: "mrac_flags.adaptation_on",       key: "mrac_flags.adaptation_on",       int: true }
+      - { dwarf: "mrac_flags.projection_on",       key: "mrac_flags.projection_on",       int: true }
+      - { dwarf: "mrac_flags.deadzone_on",         key: "mrac_flags.deadzone_on",         int: true }
+      - { dwarf: "mrac_flags.hard_freeze_on",      key: "mrac_flags.hard_freeze_on",      int: true }
+      - { dwarf: "mrac_flags.tanh_saturation_on",  key: "mrac_flags.tanh_saturation_on",  int: true }
+      - { dwarf: "mrac_flags.e_modification_on",   key: "mrac_flags.e_modification_on",   int: true }
+      - { dwarf: "mrac_flags.l1_filtering_on",     key: "mrac_flags.l1_filtering_on",     int: true }
+      - { dwarf: "mrac_flags.axis_enable_pitch",   key: "mrac_flags.axis_enable_pitch",   int: true }
+      - { dwarf: "mrac_flags.axis_enable_roll",    key: "mrac_flags.axis_enable_roll",    int: true }
+      - { dwarf: "mrac_flags.axis_enable_yaw",     key: "mrac_flags.axis_enable_yaw",     int: true }
+      - { dwarf: "mrac_flags.output_injection_on", key: "mrac_flags.output_injection_on", int: true }
+      - { dwarf: "mrac_flags.id_frame_on",         key: "mrac_flags.id_frame_on",         int: true }
+      - { dwarf: "mrac_flags.of_frame_on",         key: "mrac_flags.of_frame_on",         int: true }
+      - { dwarf: "mrac_flags.ref_model_type",      key: "mrac_flags.ref_model_type",      int: true }
       # MRAC full theta vector (24 entries, 4 axes * 6 weights)
       - { dwarf: "mrac_state.pitch.Theta[0]", key: "mrac.pitch.theta_0" }
       - { dwarf: "mrac_state.pitch.Theta[1]", key: "mrac.pitch.theta_1" }

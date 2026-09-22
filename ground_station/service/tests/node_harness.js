@@ -165,10 +165,43 @@ function main() {
   check(st.get().open === true, 'drawer opens');
   check(ctx.api._acks !== undefined, 'api wiring present');
 
+  // item 5: an operator-sent message must render exactly once, labelled
+  // operator — the agent's own turn re-emits the operator text as a separate
+  // SSE `message` event, which must be dropped, not shown a second time.
+  st.handle({ event: 'message', data: { seq: 1, text: 'hi', kind: 'agent', source: 'operator', ts: 1 } });
+  st.handle({ event: 'message', data: { seq: 2124, text: 'hi', kind: 'message', source: 'agent', ts: 2 } });
+  const hiMsgs = st.get().messages.filter((m) => m.text === 'hi');
+  check(hiMsgs.length === 1, 'operator "hi" rendered once (agent echo deduped)');
+  check(hiMsgs[0] && hiMsgs[0].source === 'operator', 'operator message labelled operator, not agent');
+
   // 3) header mode pill + STOP
   console.log('\n[B] Header mode pill & big STOP');
   ctx = runPlugin('header-mode-pill.js');
   st = ctx.requireTest('headerMode');
+  // item 4: pill + STOP live in a fixed bottom-centre strip so they never
+  // cover the workspace tab names.
+  const stripDom = ctx.document._all.find((e) => e.id === 'agent-mode-strip');
+  check(!!stripDom, 'agent-mode strip is created at init');
+  let modeText = '';
+  if (stripDom) {
+    const pillDom = ctx.document._all.find((e) => e.id === 'agent-mode-pill');
+    const stopDom = ctx.document._all.find((e) => e.id === 'agent-stop');
+    check(!!pillDom && !!stopDom, 'pill and STOP both exist');
+    check(stripDom._children.indexOf(pillDom) !== -1 && stripDom._children.indexOf(stopDom) !== -1,
+          'pill + STOP are children of the bottom strip');
+    const stripCss = String(stripDom.style.cssText);
+    check(/position:\s*fixed/.test(stripCss) && /bottom:\s*8px/.test(stripCss) &&
+          /translateX\(-50%\)/.test(stripCss),
+          'strip is fixed bottom-centre of the viewport');
+    const pillCss = String(pillDom.style.cssText), stopCss = String(stopDom.style.cssText);
+    check(!/position:\s*fixed/.test(pillCss) && !/position:\s*fixed/.test(stopCss),
+          'pill + STOP are in-flow inside the strip, not independently fixed');
+    check(!/top:\s*8px|top:\s*44px/.test(pillCss + stopCss + stripCss),
+          'no top-anchored pill/STOP (nothing over the workspace tab names)');
+    // pill resolves the shell's cached control (supervised) instead of 'unknown'
+    modeText = pillDom.textContent || '';
+    check(/SUPERVISED/.test(modeText), 'pill shows the real mode (' + JSON.stringify(modeText) + '), not UNKNOWN');
+  }
   st.handle({ event: 'control', data: { mode: 'autonomous', allow_agent_arm: false } });
   check(st.get().control.mode === 'autonomous', 'mode pill follows control event');
   st.apply({ mode: 'off', allow_agent_arm: false });

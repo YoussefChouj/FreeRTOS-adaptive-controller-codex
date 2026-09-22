@@ -92,6 +92,15 @@
       if (a && typeof a.reportUiState === 'function') a.reportUiState({ drawer_open: open });
     }
 
+    // Dedup guard (co-pilot duplicate, operator walkthrough 2 item 5):
+    // the agent's turn is also re-emitted over SSE as a `message`/`activity`
+    // event carrying source=agent whose text repeats the operator's own
+    // input. The operator's message (source=operator) must render exactly
+    // once, labelled operator; the agent-sourced echo of that same input is
+    // dropped inside a short window so the history never shows it twice.
+    var DUP_WINDOW_MS = 8000;
+    var _lastOperator = null;   // { text, ts } of the most recent operator message
+
     handle = function (evt) {
       if (evt && (evt.event === 'message' || evt.event === 'activity')) {
         var d = evt.data || {};
@@ -101,8 +110,22 @@
           kind: d.kind || 'info', source: d.source || (d.data || {}).source || 'agent',
           ts: d.ts || d.t || Date.now() / 1000,
         };
-        pushMessage(entry);
-        renderList();
+        var now = Date.now();
+        if (entry.source === 'operator') {
+          // The operator's own message — always render, labelled operator.
+          _lastOperator = { text: entry.text, ts: now };
+          pushMessage(entry);
+          renderList();
+        } else if (_lastOperator && entry.text === _lastOperator.text &&
+                   now - _lastOperator.ts < DUP_WINDOW_MS) {
+          // The agent re-emits the operator's message as its own turn within
+          // the window — render the operator's copy only.
+          _lastOperator = null;   // consume the guard so a later text is not masked
+          return;
+        } else {
+          pushMessage(entry);
+          renderList();
+        }
       }
     };
     api.onAgentEvent(handle);

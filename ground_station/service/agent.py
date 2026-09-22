@@ -619,6 +619,12 @@ class AgentManager:
         self._shell_debounce: float | None = None
         self.shell_watch_enabled = os.environ.get("GS_SHELL_WATCH", "1") != "0"
 
+        # Copilot: optional LLM-powered assistant reply on operator notes.
+        self.copilot: Any = None
+        self._copilot_queue: queue.Queue[str | None] = queue.Queue(maxsize=3)
+        self._copilot_worker: threading.Thread | None = None
+        self._copilot_stop = threading.Event()
+
     # -- lifecycle ----------------------------------------------------------
     def start(self) -> None:
         with self._lock:
@@ -626,12 +632,30 @@ class AgentManager:
                 return
             self._running = True
         self._control_changed_init()
+        # Start the copilot worker thread if a copilot is configured.
+        if self.copilot is not None:
+            self._copilot_stop.clear()
+            self._copilot_worker = threading.Thread(
+                target=self._copilot_worker_loop,
+                name="copilot_worker",
+                daemon=True,
+            )
+            self._copilot_worker.start()
         if self.shell_watch_enabled and self.shell_root:
             threading.Thread(target=self._shell_watch_loop, name="agent_shell_watch",
                              daemon=True).start()
 
     def stop(self) -> None:
         self._stop_event.set()
+        # Signal copilot worker to stop.
+        self._copilot_stop.set()
+        try:
+            self._copilot_queue.put_nowait(None)  # sentinel to unblock worker
+        except Exception:
+            pass
+        if self._copilot_worker is not None:
+            self._copilot_worker.join(timeout=3)
+            self._copilot_worker = None
         with self._lock:
             self._running = False
             for s in self._subscribers:
@@ -1266,6 +1290,30 @@ class AgentManager:
             pass
         self._activity(kind, data)
 
+    # -- copilot worker -------------------------------------------------------
+    def _copilot_worker_loop(self) -> None:
+        """Background worker: pulls queued operator messages and calls copilot."""
+        while not self._copilot_stop.is_set():
+            try:
+                msg = self._copilot_queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            if msg is None:
+                break  # sentinel -> shutdown
+            if not msg:
+                continue
+            try:
+                self.copilot.handle(msg)
+            except Exception:  # noqa: BLE001 - don't crash the worker
+                pass
+
+    def _feed_copilot(self, text: str) -> None:
+        """Queue an operator message for the copilot (non-blocking)."""
+        try:
+            self._copilot_queue.put_nowait(text)
+        except queue.Full:
+            pass  # queue full (max 3); drop the oldest request silently.
+
     # -- ui step execution ---------------------------------------------------
     def _exec_ui(self, plan: Plan, step: PlanStep) -> Any:
         # Push the ui_action and wait for the browser ack (5 s).
@@ -1413,6 +1461,11 @@ class AgentManager:
     def receive_operator_note(self, text: str, kind: str,
                               source: str | None) -> dict:
         entry = self.notes.append(str(text), str(kind), source or "operator")
+        # Fire the copilot on operator-originated notes (not agent messages).
+        # Never answer our own copilot output to avoid echo loops.
+        if (self.copilot is not None
+                and source not in ("agent:copilot", "agent:copilot:reply")):
+            self._feed_copilot(str(text))
         return entry
 
     def notes_since(self, seq: int) -> list[dict[str, Any]]:
@@ -1515,5 +1568,8 @@ class PlanCancelled(Exception):
 
 # Deferred import guard so importing agent.py never pulls service wiring in.
 def build_agent_manager(service, shell_root: str | None = None,
-                        journal_root: str | None = None) -> AgentManager:
-    return AgentManager(service, shell_root=shell_root, journal_root=journal_root)
+                        journal_root: str | None = None,
+                        copilot: Any = None) -> AgentManager:
+    mgr = AgentManager(service, shell_root=shell_root, journal_root=journal_root)
+    mgr.copilot = copilot
+    return mgr
