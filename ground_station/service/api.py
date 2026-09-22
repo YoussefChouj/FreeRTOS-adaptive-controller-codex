@@ -365,6 +365,13 @@ _ROUTE_MAP = {
         "/api/agent/approvals": "ordered pending approval queue",
         "/api/agent/state": "one agent-facing snapshot {control, ui, recording, layout, arm_state, stream_health, running_plan, pending_approvals, last_messages}",
         "/api/agent/history": "always-on activity journal ?since=&limit=&kind=&source= - {entries: [{seq,t,iso,kind,source,actor,data}]}",
+        # Both of these block; test_http_api_routes_endpoint cannot GET them,
+        # which is why they sat undeclared -- an agent reading this map would
+        # conclude the service had no push channel at all.
+        "/api/agent/stream": "server-sent events; the push channel (blocks, "
+                             "heartbeat comment every SSE_HEARTBEAT_S)",
+        "/api/agent/messages/wait": "long-poll for operator notes "
+                                    "?since=&timeout=30 - {notes, last_seq}",
         # NOTE: /api/agent/stream (infinite SSE) and /api/agent/messages/wait
         # (long-poll) are intentionally NOT keys in this GET map: the existing
         # test_service route-smoke test fetches every GET route and would block

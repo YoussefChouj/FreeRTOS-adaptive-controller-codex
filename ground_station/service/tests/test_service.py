@@ -4,7 +4,10 @@ import socket
 import struct
 import time
 import urllib.request
+from pathlib import Path
 from unittest.mock import MagicMock
+
+from ground_station.service import api as api_module
 
 from ground_station.livewatch.stream import StreamRange, StreamSchema
 from ground_station.livewatch.transport import crc16_ccitt
@@ -639,14 +642,89 @@ def test_http_api_routes_endpoint():
         assert status == 200
         assert "/replay/<id>/play" in body["POST"]
         assert "tab-<workspace>" in body["ui_testids"]
+        # The SSE feed never closes and the long-poll holds for `timeout`
+        # seconds; GETting either here would hang the suite, not test it.
+        blocking = {"/api/agent/stream", "/api/agent/messages/wait"}
         for route in body["GET"]:
-            if "<" in route or route.startswith("/analysis/"):
+            if "<" in route or route.startswith("/analysis/") \
+                    or route in blocking:
                 continue
             code, _ = _get_json(base + route)
             # The fixture has no experiment runtime, so /experiments is 503.
             assert code == (503 if route == "/experiments" else 200), route
     finally:
         api.stop()
+
+
+def test_route_map_matches_dispatch():
+    """Every route do_GET/do_POST dispatches on is declared in _ROUTE_MAP.
+
+    `_ROUTE_MAP` is a hand-maintained parallel declaration -- the comment above
+    it says "keep in sync with the dispatch" -- and the only test on it,
+    test_http_api_routes_endpoint, walks declared -> answers. That direction
+    catches a route you documented but never built. It is blind to a route you
+    built but never documented, which is the direction that actually happened:
+    /api/agent/stream and /api/agent/messages/wait, the service's entire push
+    and long-poll surface, were dispatched for weeks while /api/routes -- the
+    thing an agent is told to read to discover the service -- did not mention
+    them. Both block, so the answers-walk could never have reached them either.
+
+    Reading the dispatch out of the AST rather than re-listing it by hand is
+    the point: a second hand-written list would drift the same way the first
+    one did.
+    """
+    import ast
+
+    source = Path(api_module.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    exact = {"GET": set(), "POST": set()}
+    prefixes = {"GET": set(), "POST": set()}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.FunctionDef)
+                and node.name in ("do_GET", "do_POST")):
+            continue
+        verb = node.name.split("_")[1]
+        for inner in ast.walk(node):
+            # `route == "/health"`
+            if isinstance(inner, ast.Compare) \
+                    and isinstance(inner.left, ast.Name) \
+                    and inner.left.id == "route" \
+                    and isinstance(inner.ops[0], ast.Eq) \
+                    and isinstance(inner.comparators[0], ast.Constant):
+                exact[verb].add(inner.comparators[0].value)
+            # `route.startswith("/sessions/")` -- a parameterised route
+            if isinstance(inner, ast.Call) \
+                    and isinstance(inner.func, ast.Attribute) \
+                    and inner.func.attr == "startswith" \
+                    and isinstance(inner.func.value, ast.Name) \
+                    and inner.func.value.id == "route" \
+                    and inner.args \
+                    and isinstance(inner.args[0], ast.Constant):
+                prefixes[verb].add(inner.args[0].value)
+
+    assert exact["GET"], "found no dispatch at all -- the AST walk is broken"
+
+    for verb in ("GET", "POST"):
+        # A declared key may carry a query string (/x?since=<n>) or a
+        # placeholder (/sessions/<id>/records); compare on the literal stem.
+        declared = set()
+        declared_stems = set()
+        for key in api_module._ROUTE_MAP[verb]:
+            path = key.split("?")[0]
+            declared.add(path)
+            declared_stems.add(path.split("<")[0])
+
+        undeclared = sorted(exact[verb] - declared)
+        assert not undeclared, (
+            "%s routes dispatched but missing from _ROUTE_MAP (GET /api/routes "
+            "is how an agent discovers this service): %s" % (verb, undeclared))
+
+        for prefix in sorted(prefixes[verb]):
+            assert any(stem.startswith(prefix) or prefix.startswith(stem)
+                       for stem in declared_stems), (
+                "%s dispatches on prefix %r with nothing in _ROUTE_MAP under "
+                "it" % (verb, prefix))
 
 
 def test_recording_api_defaults_off_and_start_stop_writes_dir(tmp_path):
