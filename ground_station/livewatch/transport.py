@@ -562,16 +562,44 @@ class Usart3LongRange(LiveTransport):
     )
     gap_merge_bytes = 26
 
-    def __init__(self, port: int = 14550, module_ip: str = "192.168.4.1"):
+    def __init__(self, port: int = 14550, module_ip: str = "192.168.4.1",
+                 udp_factory=None):
+        """Store configuration. Opens nothing -- ``connect()`` does that.
+
+        This used to build the UdpDataPort right here, which meant merely
+        naming the transport bound UDP 14550 and sent the nudge datagram to
+        the drone. ``LiveTransport`` says construction is cheap and
+        ``connect()`` is where I/O begins; the other two adapters honour that,
+        and this one inverted it while its ``connect()`` was ``return self``.
+
+        The cost was not theoretical: a test whose only claim was "the CLI
+        picks this class" transmitted to the flight controller, and the
+        workaround -- mocking ``socket.socket`` at module import -- leaked
+        across the whole pytest session and broke 68 tests in other files.
+
+        ``udp_factory`` mirrors ``Uart5LongRange``'s ``serial_factory``: the
+        seam is a constructor parameter, so a caller or test substitutes the
+        port without reaching past the interface or patching the stdlib.
+        """
         self.port = int(port)
         self.module_ip = module_ip
-        self._udp: UdpDataPort = UdpDataPort(self.port, self.module_ip)
+        self._udp_factory = udp_factory or UdpDataPort
+        self._udp: UdpDataPort | None = None
         self._rx = bytearray()
         self.timeout = 2.0
         self._subscribed_slot = None
 
     def connect(self) -> "Usart3LongRange":
+        if self._udp is None:
+            self._udp = self._udp_factory(self.port, self.module_ip)
         return self
+
+    def _port(self) -> UdpDataPort:
+        """The open UDP port, or a message naming the omission."""
+        if self._udp is None:
+            raise LiveTransportError(
+                "%s-read: not connected -- call connect() before use" % self.name)
+        return self._udp
 
     def close(self) -> None:
         udp = self._udp
@@ -591,8 +619,9 @@ class Usart3LongRange(LiveTransport):
     def _drain_quiet_window(self) -> None:
         deadline = time.monotonic() + 0.05
         while time.monotonic() < deadline:
-            self._udp._drain()
-            if not self._udp.in_waiting:
+            udp = self._port()
+            udp._drain()
+            if not udp.in_waiting:
                 time.sleep(0.005)
         self._rx.clear()
 
@@ -638,7 +667,7 @@ class Usart3WifiSubscribeTransport(Usart3LongRange):
                 request = build_stream_request(
                     [], divider=0, transport=TRANSPORT_USART3,
                     slot=slot, usart3_baud=921600)
-                self._udp._sock.sendto(request, (self.module_ip, self.port))
+                self._port()._sock.sendto(request, (self.module_ip, self.port))
             except OSError:
                 pass
             self._subscribed_slot = None
@@ -668,7 +697,7 @@ class Usart3WifiSubscribeTransport(Usart3LongRange):
             usart3_baud=921600,
         )
         self._subscribed_slot = slot if divider else None
-        self._udp._sock.sendto(request, (self.module_ip, self.port))
+        self._port()._sock.sendto(request, (self.module_ip, self.port))
         _, _, payload = self._wait_for_frame(
             self._SCHEMA_FRAME,
             "firmware 0x08 schema reply on WiFi",
@@ -732,10 +761,11 @@ class Usart3WifiSubscribeTransport(Usart3LongRange):
                     msg = payload.decode("utf-8", errors="replace").rstrip("\x00")
                     raise LiveTransportError(f"wifi: firmware error: {msg}")
                 continue
-            self._udp._drain()
-            udp_buffer = getattr(self._udp, "_buf", None)
+            udp = self._port()
+            udp._drain()
+            udp_buffer = getattr(udp, "_buf", None)
             if udp_buffer:
-                self._rx.extend(self._udp.read(len(udp_buffer)))
+                self._rx.extend(udp.read(len(udp_buffer)))
             time.sleep(0.002)
         raise LiveTransportError(f"wifi: timeout waiting for {purpose}")
 

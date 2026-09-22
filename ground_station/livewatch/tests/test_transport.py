@@ -228,19 +228,53 @@ def _wifi_frame(frame_type, payload=b"", count=0):
 def test_cli_wifi_constructs_wifi_transport():
     """The wifi transport choice instantiates Usart3WifiSubscribeTransport.
 
-    The claim is about which class the CLI picks, so the socket is faked: the
-    real constructor binds UDP 14550 -- which the live wifi_bridge holds, so
-    this failed on any machine actually flying -- and then sends the nudge
-    datagram to 192.168.4.1. A selection test has no business transmitting to
-    the flight controller. It only ever passed because another module had left
-    `socket.socket` mocked for the whole session (see ground_station/conftest.py).
+    Naming a transport must not open one. This test used to bind UDP 14550 --
+    held by the live wifi_bridge, so it failed on any machine actually flying
+    -- and send the nudge datagram to 192.168.4.1, because the constructor did
+    the I/O that `LiveTransport` puts in `connect()`. A selection test has no
+    business transmitting to the flight controller; the socket assertion below
+    is what keeps it that way.
     """
     args = Namespace(transport="wifi", uart5_port=None, uart5_baud=None)
     with mock.patch.object(transport_mod.socket, "socket") as make_sock:
-        make_sock.return_value = mock.MagicMock()
         built = _transport(args)
-    assert isinstance(built, Usart3WifiSubscribeTransport)
-    assert make_sock.return_value.bind.call_args[0][0] == ("0.0.0.0", 14550)
+        assert isinstance(built, Usart3WifiSubscribeTransport)
+        assert make_sock.call_count == 0, (
+            "constructing a transport opened a socket; connect() is where "
+            "I/O belongs")
+
+
+@pytest.mark.parametrize("build", [
+    lambda: SwdCmsisDap(),
+    lambda: Uart5LongRange("COM42"),
+    lambda: Usart3WifiSubscribeTransport(14550, "192.168.4.1"),
+], ids=["swd", "uart5", "wifi"])
+def test_constructing_a_transport_touches_no_hardware(build, monkeypatch):
+    """Every adapter: `__init__` configures, `connect()` opens. No exceptions.
+
+    `LiveTransport` declares this lifecycle but nothing enforced it, and the
+    wifi adapter quietly inverted it -- binding a port and transmitting from
+    its constructor while its `connect()` was `return self`. That is what made
+    the suite unable to name a transport without touching the drone, and what
+    pushed a test into patching `socket.socket` at module scope, which then
+    leaked across the session and broke 68 tests in other files.
+
+    Parametrized rather than written once per adapter so the next transport
+    added to this module is covered by adding one line, and is caught here
+    rather than by whatever it breaks three directories away.
+    """
+    opened = []
+    monkeypatch.setattr(transport_mod.socket, "socket",
+                        lambda *a, **kw: opened.append("socket"))
+    build()
+    assert opened == []
+
+
+def test_using_the_wifi_transport_before_connect_says_so():
+    """The failure names the omission instead of raising AttributeError on None."""
+    transport = Usart3WifiSubscribeTransport(14550, "192.168.4.1")
+    with pytest.raises(LiveTransportError, match="not connected"):
+        transport._port()
 
 
 class FakeUdpSock:
@@ -323,13 +357,13 @@ def test_wifi_subscribe_sends_stream_request_and_decodes_0x08_schema(monkeypatch
                     self._rx.extend(chunk)
 
     rx_buf = bytearray()
-    monkeypatch.setattr(
-        "ground_station.livewatch.transport.UdpDataPort",
-        lambda *a, **kw: FakeUdpDataPort(sock, rx_buf))
-    transport = Usart3WifiSubscribeTransport(14550, "192.168.4.1")
-    transport._udp = FakeUdpDataPort(sock, rx_buf)
-    transport.port = 14550
-    transport.module_ip = "192.168.4.1"
+    # The fake goes in through the constructor seam, so neither the module
+    # global nor the transport's private attribute has to be reached for. The
+    # three lines that re-set port/module_ip after construction were there
+    # because the old __init__ had already opened a real port with them.
+    transport = Usart3WifiSubscribeTransport(
+        14550, "192.168.4.1",
+        udp_factory=lambda *a, **kw: FakeUdpDataPort(sock, rx_buf)).connect()
     transport._rx = rx_buf
     transport.timeout = 1.0
 
@@ -375,13 +409,13 @@ def test_wifi_subscribe_raises_on_0x7F_error(monkeypatch):
                 if chunk:
                     self._rx.extend(chunk)
 
-    monkeypatch.setattr(
-        "ground_station.livewatch.transport.UdpDataPort",
-        lambda *a, **kw: FakeUdpDataPort(sock, rx_buf))
-    transport = Usart3WifiSubscribeTransport(14550, "192.168.4.1")
-    transport._udp = FakeUdpDataPort(sock, rx_buf)
-    transport.port = 14550
-    transport.module_ip = "192.168.4.1"
+    # The fake goes in through the constructor seam, so neither the module
+    # global nor the transport's private attribute has to be reached for. The
+    # three lines that re-set port/module_ip after construction were there
+    # because the old __init__ had already opened a real port with them.
+    transport = Usart3WifiSubscribeTransport(
+        14550, "192.168.4.1",
+        udp_factory=lambda *a, **kw: FakeUdpDataPort(sock, rx_buf)).connect()
     transport._rx = rx_buf
     transport.timeout = 1.0
 
@@ -412,13 +446,13 @@ def test_wifi_subscribe_times_out_when_no_reply(monkeypatch):
                 if chunk:
                     self._rx.extend(chunk)
 
-    monkeypatch.setattr(
-        "ground_station.livewatch.transport.UdpDataPort",
-        lambda *a, **kw: FakeUdpDataPort(sock, rx_buf))
-    transport = Usart3WifiSubscribeTransport(14550, "192.168.4.1")
-    transport._udp = FakeUdpDataPort(sock, rx_buf)
-    transport.port = 14550
-    transport.module_ip = "192.168.4.1"
+    # The fake goes in through the constructor seam, so neither the module
+    # global nor the transport's private attribute has to be reached for. The
+    # three lines that re-set port/module_ip after construction were there
+    # because the old __init__ had already opened a real port with them.
+    transport = Usart3WifiSubscribeTransport(
+        14550, "192.168.4.1",
+        udp_factory=lambda *a, **kw: FakeUdpDataPort(sock, rx_buf)).connect()
     transport._rx = rx_buf
     transport.timeout = 0.01  # fast timeout for the test
 
