@@ -571,7 +571,12 @@
   </div>
 
   <div id="main">
-    <div class="card plugin-card" id="card-streams" data-workspaces="telemetry diagnostics">
+    <!-- The one .plugin-card written by hand rather than built by the plugin
+         host, which sets data-testid="panel-<slug>" on every card it creates.
+         Without it this card enumerated as null in browser_smoke, so the only
+         statically-authored panel was the one panel no check could name. -->
+    <div class="card plugin-card" id="card-streams" data-testid="panel-streams"
+         data-workspaces="telemetry diagnostics">
       <div class="card-header">
         <span class="card-title">Telemetry Streams</span>
         <button class="toggle-btn" data-panel="streams">Hide</button>
@@ -1453,6 +1458,16 @@
     tbody.innerHTML = rows;
   }
 
+  // Every innerHTML sink in this file that takes a value from outside the file
+  // goes through here.  Alarm text is locally generated today, but the shell is
+  // the one place where firmware symbol names, service error bodies and
+  // operator text all converge, so the sink is escaped rather than audited.
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
   function renderAlarms(alarmList) {
     var el = document.getElementById('alarm-list');
     if (!alarmList || alarmList.length === 0) {
@@ -1460,8 +1475,9 @@
       return;
     }
     el.innerHTML = alarmList.map(function (a) {
-      return '<div class="alarm-item ' + a.level + '"><span class="icon">&#9888;</span>' +
-        a.text + '</div>';
+      return '<div class="alarm-item ' + escapeHtml(a.level) +
+        '"><span class="icon">&#9888;</span>' +
+        escapeHtml(a.text) + '</div>';
     }).join('');
   }
 
@@ -1555,7 +1571,7 @@
         data.transaction_id + '</div>';
     }).catch(function (err) {
       resultEl.innerHTML = '<div class="result-box result-rejected">Error: ' +
-        err.message + '</div>';
+        escapeHtml(err.message) + '</div>';
     });
   });
 

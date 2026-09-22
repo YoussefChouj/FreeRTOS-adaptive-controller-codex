@@ -286,6 +286,67 @@ def test_mode_off_cancels_running_plan_and_returns_423(service, api):
     assert gateway.submit.call_count == 0
 
 
+def test_agent_cannot_approve_its_own_critical_step(service, api):
+    """An ``agent:`` source is refused at the approval queue.
+
+    The approval exists to put a human in front of a critical step, so an
+    agent approving one removes the only gate.  ``set_control`` already
+    refused an ``agent:`` source for the operator-only switches; the approval
+    route did not.
+
+    This covers the honest path.  An agent that lies and sends
+    ``source: "operator"`` is still indistinguishable -- see the trust-model
+    note in ``AgentManager.decide_approval``.
+    """
+    gateway = _mock_gateway(service)
+    _, base = api
+    status, created = _post(base + "/api/agent/plans", {
+        "title": "self-approve", "source": "agent:test",
+        "steps": [{"action": "command", "args": {"command_id": 0x01}}],
+    })
+    assert status == 201
+    pid = created["plan_id"]
+    _, ap = _get(base + "/api/agent/approvals")
+    assert len(ap["approvals"]) == 1
+    step_id = ap["approvals"][0]["step_id"]
+    url = base + "/api/agent/approvals/%s/%s/approve" % (pid, step_id)
+
+    status, body = _post(url, {"source": "agent:test"})
+    assert status == 403, body
+    assert gateway.submit.call_count == 0, "critical step ran on a self-approval"
+
+    # The operator can still approve the very same item.
+    status, body = _post(url, {"source": "operator"})
+    assert status == 200, body
+
+
+def test_mode_off_cancel_with_a_body_does_not_break_the_connection(service, api):
+    """The cancel route must drain the request body before answering 423.
+
+    Five sibling 423 paths call ``_drain_body`` first; the cancel route did
+    not, so the server closed the socket with the client's body still in
+    flight.  On Windows that surfaces in the *caller* as
+    ``ConnectionAbortedError [WinError 10053]`` rather than a clean 423, which
+    is why it reads as a flake instead of a failure.
+
+    It is a race, so one POST is not a test: with the drain removed a single
+    attempt still passed 4 times in 5.  Repeating it turns a 20% detection rate
+    into ~96%, and with the drain in place every attempt passes.
+    """
+    _, base = api
+    status, _ = _post(base + "/api/agent/control",
+                      {"mode": "off", "source": "operator"})
+    assert status == 200
+    # A body far larger than the socket send buffer, so the client is still
+    # writing when the server answers -- the condition that aborts the send.
+    payload = {"reason": "operator cancelled", "pad": "x" * 512000}
+    for attempt in range(15):
+        status, body = _post(base + "/api/agent/plans/no-such-plan/cancel",
+                             payload)
+        assert status == 423, "attempt %d: %r" % (attempt, body)
+        assert body["error"]["code"] == "agent_disabled"
+
+
 def test_autonomous_tier0_param_write_still_waits(service, api):
     gateway = _mock_gateway(service)
     _, base = api

@@ -29,6 +29,15 @@
     return k.replace(/^(rtos|system|ekf|estimator|safety|mrac|legacy)\./, '');
   }
 
+  // Telemetry keys are DWARF symbol names carried up from the firmware, so
+  // they are not ours to trust in an HTML string -- quotes included, since
+  // one of the two sinks below is a title="" attribute.
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
   // ── State ───────────────────────────────────────────────────────────────
   var _allKeys    = {};    // key → true   (accumulated set)
   var _filter    = '';    // current filter string
@@ -167,7 +176,8 @@
     tbody.innerHTML = entries.map(function (e) {
       var type = typeof e.value;
       return '<tr>' +
-        '<td class="te-key" title="' + e.key + '">' + shortKey(e.key) + '</td>' +
+        '<td class="te-key" title="' + escapeHtml(e.key) + '">' +
+          escapeHtml(shortKey(e.key)) + '</td>' +
         '<td class="te-value">' + fmtVal(e.value) + '</td>' +
         '<td class="te-slot">' + e.slot + '</td>' +
         '<td class="te-type">' + type + '</td>' +

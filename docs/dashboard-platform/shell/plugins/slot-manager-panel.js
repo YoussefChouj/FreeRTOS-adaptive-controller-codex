@@ -120,6 +120,14 @@
   }
 
   // ???? Unit inference from key prefix ????????????????????????????????????????????????????????????????????????
+  // Channel keys are DWARF symbol names carried up from the firmware, so they
+  // are not ours to trust when concatenated into an HTML string below.
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
   function inferUnit(key) {
     var k = key.toLowerCase();
     if (/^(status|mrac)\./.test(key)) return '';
@@ -609,7 +617,7 @@
             var v = vals[k];
             var unit = inferUnit(k);
             return '<div class="sm-channel-row">' +
-              '<span class="sm-channel-key">' + k + '</span>' +
+              '<span class="sm-channel-key">' + escapeHtml(k) + '</span>' +
               '<span><span class="sm-channel-val">' + formatVal(k, v) + '</span>' +
               (unit ? '<span class="sm-channel-unit">' + unit + '</span>' : '') +
               '</span></div>';

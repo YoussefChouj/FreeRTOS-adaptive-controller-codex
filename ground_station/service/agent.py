@@ -1134,6 +1134,18 @@ class AgentManager:
 
     def decide_approval(self, plan_id: str, step_id: str, approve: bool,
                         source: str) -> ApprovalItem:
+        # An approval exists to put a human between the agent and a critical
+        # step, so an agent approving one defeats the whole mechanism.
+        # ``set_control`` already refuses an ``agent:`` source for the
+        # operator-only switches; the approval queue did not, which left the
+        # arm gate one self-declared POST away from being waved through.
+        #
+        # This closes the honest path only.  Nothing here distinguishes the
+        # operator from an agent that simply claims ``source: "operator"`` --
+        # the trust model is self-declaration, and fixing that needs a real
+        # operator credential.  See docs/dashboard-platform/AGENT_GUIDE.md.
+        if str(source).startswith("agent:"):
+            raise PermissionError("approvals are operator-only")
         with self._lock:
             item = None
             for a in self._approvals:

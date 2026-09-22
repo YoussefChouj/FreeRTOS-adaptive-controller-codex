@@ -58,3 +58,6 @@ docs/agent-map/agent_map.json
 # Agent scratch space: throwaway scripts and one-off outputs, never part of a task result
 scratch/
 .agent-ops/tmp/
+
+# browser_smoke screenshots are per-run artifacts, not history
+logs/browser_smoke/

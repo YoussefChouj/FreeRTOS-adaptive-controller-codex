@@ -17,6 +17,14 @@
 (function () {
   'use strict';
 
+  // Service responses and rejection messages reach innerHTML below; escape
+  // them rather than trust whatever the service or the network hands back.
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
   // ── Configuration ──────────────────────────────────────────────────────
   var MAX_BANDWIDTH_HZ = 80;
   var WARNING_THRESHOLD = 0.8;
@@ -349,7 +357,7 @@
           btn.textContent = '✕';
           var resEl = q('bw-request-result');
           if (resEl) {
-            resEl.innerHTML = '<span style="color:var(--red)">&#10007; Failed to unsubscribe slot ' + slot + ': ' + (err && err.message ? err.message : err) + '</span>';
+            resEl.innerHTML = '<span style="color:var(--red)">&#10007; Failed to unsubscribe slot ' + slot + ': ' + escapeHtml(err && err.message ? err.message : err) + '</span>';
           }
         });
       });
@@ -619,12 +627,12 @@
           apiRef.subscribeSlot(slot, divider, [])
             .then(function (res) {
               resultEl.innerHTML = '<span style="color:var(--green)">&#10003; Subscribed slot ' +
-                slot + ' divider=' + divider + ' via ' + (res && res.via ? res.via : '/subscribe') + '</span>';
+                slot + ' divider=' + divider + ' via ' + escapeHtml(res && res.via ? res.via : '/subscribe') + '</span>';
               if (typeof window.__gs_plugins_refresh__ === 'function') window.__gs_plugins_refresh__();
             })
             .catch(function (err) {
               resultEl.innerHTML = '<span style="color:var(--red)">&#10007; Subscribe failed: ' +
-                (err && err.message ? err.message : err) + '</span>';
+                escapeHtml(err && err.message ? err.message : err) + '</span>';
             });
         } else {
           // Fallback: refresh local view even if /subscribe is unavailable.

@@ -21,6 +21,12 @@ from .agent import (
     build_agent_manager,
 )
 from .copilot import Copilot
+# Largest request body any route accepts.  The biggest real body is a plan or a
+# subscribe range list, both far under this; 1 MiB leaves room without letting a
+# single POST decide how much the service will read.
+_MAX_BODY_BYTES = 1 << 20
+
+
 def _validate_request_headers(headers: dict[str, str],
                                bound_host: str | None = None) -> tuple[int, str] | None:
     """Validate Host, Origin, and Content-Type headers for POST/PUT/DELETE
@@ -1619,11 +1625,25 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                 self._drain_body()
                 self._json(err[0], {"error": err[1]})
                 return
-            
+
+            # Reject an unreadable or oversized body once, here, rather than in
+            # each of the thirteen routes that read one.  We deliberately do not
+            # drain first: the header we are rejecting is the only thing that
+            # says how much there is to drain, so trusting it to clean up would
+            # reintroduce exactly the unbounded read we are refusing.  Close the
+            # connection instead of leaving an unread body on a keep-alive socket.
+            try:
+                self._content_length()
+            except ValueError as exc:
+                self.close_connection = True
+                status = 413 if "too large" in str(exc) else 400
+                self._json(status, {"error": str(exc)})
+                return
+
 
             if route == "/commands":
                 try:
-                    length = int(self.headers.get("Content-Length", "0"))
+                    length = self._content_length()
                     body = json.loads(self.rfile.read(length) or b"{}")
                     txid = service.submit_command(int(body["command_id"]),
                                                   int(body.get("index", 0)),
@@ -1647,7 +1667,7 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     self._json(503, {"error": "bridge unavailable"})
                     return
                 try:
-                    length = int(self.headers.get("Content-Length", "0"))
+                    length = self._content_length()
                     body = json.loads(self.rfile.read(length) or b"{}")
                     slot = int(body.get("slot", 0))
                     divider = int(body.get("divider", 1))
@@ -1664,7 +1684,7 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
             # while already recording is a no-op returning the current state.
             # Recording never sends drone commands and never touches gates.
             elif route == "/api/recording/start":
-                length = int(self.headers.get("Content-Length", "0"))
+                length = self._content_length()
                 body = {}
                 if length:
                     try:
@@ -1695,7 +1715,7 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
             # {text, kind: "note"|"goal"|"marker", source}. Seed of the
             # operator <-> agent communication session.
             elif route == "/api/session/note":
-                length = int(self.headers.get("Content-Length", "0"))
+                length = self._content_length()
                 try:
                     body = json.loads(self.rfile.read(length) or b"{}")
                 except Exception:
@@ -1732,7 +1752,7 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     self._json(503, {"error": "bridge unavailable"})
                     return
                 try:
-                    length = int(self.headers.get("Content-Length", "0"))
+                    length = self._content_length()
                     body = json.loads(self.rfile.read(length) or b"{}")
                     slot = int(body.get("slot", 0))
                     divider = int(body.get("divider", 1))
@@ -1750,7 +1770,7 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     self._json(503, {"error": "experiment runtime not available"})
                     return
                 try:
-                    length = int(self.headers.get("Content-Length", "0"))
+                    length = self._content_length()
                     body = json.loads(self.rfile.read(length) or b"{}")
                     name = body["name"]
                     settle_ticks = int(body.get("settle_ticks", 0))
@@ -1801,7 +1821,7 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     self._json(404, {"error": "missing session id"})
                     return
                 try:
-                    length = int(self.headers.get("Content-Length", "0"))
+                    length = self._content_length()
                     body = json.loads(self.rfile.read(length) or b"{}")
                     output_path = body["output_path"]
                     stream_id = body.get("stream_id")
@@ -1822,7 +1842,7 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     self._agent_disabled()
                     return
                 try:
-                    length = int(self.headers.get("Content-Length", "0"))
+                    length = self._content_length()
                     body = json.loads(self.rfile.read(length) or b"{}")
                     if not isinstance(body, dict) or "source" not in body:
                         self._json(400, {"error": "body requires a 'source'"})
@@ -1847,7 +1867,7 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     self._agent_disabled()
                     return
                 try:
-                    length = int(self.headers.get("Content-Length", "0"))
+                    length = self._content_length()
                     body = json.loads(self.rfile.read(length) or b"{}")
                     queue_if_busy = bool(body.get("queue", False))
                     plan = _AGENT.create_plan(body, queue_if_busy=queue_if_busy)
@@ -1871,6 +1891,13 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     self._json(503, {"error": "agent layer unavailable"})
                     return
                 if _AGENT.mode == "off":
+                    # The five sibling 423 paths drain first; this one did not,
+                    # so the client's body was still in flight when the socket
+                    # closed -- ConnectionAbortedError [WinError 10053] on the
+                    # client's send.  Reproduced with a 512 KB body in
+                    # test_mode_off_cancel_with_a_body_does_not_break_the_connection;
+                    # it is a race, ~1 failure in 5 per attempt without this drain.
+                    self._drain_body()
                     self._agent_disabled()
                     return
                 plan_id = route.split("/")[4]
@@ -1901,7 +1928,7 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                 except IndexError:
                     self._json(400, {"error": "malformed approval route"})
                     return
-                length = int(self.headers.get("Content-Length", "0"))
+                length = self._content_length()
                 body = {}
                 if length:
                     try:
@@ -1915,6 +1942,9 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                 except KeyError:
                     self._json(404, {"error": "approval not found"})
                     return
+                except PermissionError as exc:
+                    self._json(403, {"error": str(exc)})
+                    return
                 except Exception as exc:
                     self._json(500, {"error": str(exc)})
                     return
@@ -1924,7 +1954,7 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     self._json(503, {"error": "agent layer unavailable"})
                     return
                 try:
-                    length = int(self.headers.get("Content-Length", "0"))
+                    length = self._content_length()
                     body = json.loads(self.rfile.read(length) or b"{}")
                     ok = bool(body.get("ok", True))
                     sent = _AGENT.confirm_ui_ack(
@@ -1940,7 +1970,7 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     self._json(503, {"error": "agent layer unavailable"})
                     return
                 try:
-                    length = int(self.headers.get("Content-Length", "0"))
+                    length = self._content_length()
                     body = json.loads(self.rfile.read(length) or b"{}")
                     state = _AGENT.set_ui_state(body)
                 except Exception as exc:
@@ -1956,7 +1986,7 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     self._agent_disabled()
                     return
                 try:
-                    length = int(self.headers.get("Content-Length", "0"))
+                    length = self._content_length()
                     body = json.loads(self.rfile.read(length) or b"{}")
                     text = str(body.get("text") or "").strip()
                     if not text:
@@ -1971,16 +2001,49 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
             else:
                 self._json(404, {"error": "not found"})
 
+        def _content_length(self) -> int:
+            """Return the declared body length, or raise ``ValueError``.
+
+            Every POST handler used to inline ``int(headers["Content-Length"])``
+            and hand the result straight to ``rfile.read``.  That trusted the
+            client twice: a non-numeric header raised out of the handler, and a
+            huge one made the server read until the socket ran dry.  Both
+            checks live here now so a handler only has to ask for the length.
+            """
+            raw = self.headers.get("Content-Length", "0")
+            try:
+                length = int(raw)
+            except (TypeError, ValueError):
+                raise ValueError("invalid Content-Length")
+            if length < 0:
+                raise ValueError("negative Content-Length")
+            if length > _MAX_BODY_BYTES:
+                raise ValueError(
+                    "body too large (max %d bytes)" % _MAX_BODY_BYTES)
+            return length
+
         def _drain_body(self) -> None:
             """Read and discard the request body before sending an error.
 
             On Windows, sending a response while the socket still has unread
             data causes ``ConnectionAbortedError [WinError 10053]``.  Drain
             the body so the connection stays clean.
+
+            This runs on the *rejection* path, so it must never raise and must
+            never be talked into a large read by the header it is reacting to:
+            a rejected request is exactly the one whose Content-Length we have
+            already decided not to trust.
             """
-            length = int(self.headers.get("Content-Length", "0"))
-            if length:
-                self.rfile.read(length)
+            try:
+                length = min(int(self.headers.get("Content-Length", "0")),
+                             _MAX_BODY_BYTES)
+            except (TypeError, ValueError):
+                return
+            if length > 0:
+                try:
+                    self.rfile.read(length)
+                except Exception:
+                    pass
 
         def _agent_disabled(self) -> None:
             self._json(423, {"ok": False, "error": {"code": "agent_disabled"}})
