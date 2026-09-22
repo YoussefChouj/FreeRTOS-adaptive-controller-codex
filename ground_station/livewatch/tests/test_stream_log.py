@@ -3,8 +3,10 @@
 These tests use a fake UDP socket and mock Usart3WifiSubscribeTransport so
 no real hardware is needed.
 
-Hermeticity: socket.socket is patched at module level before any transport
-imports so no real UDP port 14550 is ever bound, even during module imports.
+Hermeticity: socket.socket is patched for the duration of the transport
+imports below so no real UDP port 14550 is ever bound, even during module
+imports -- and restored immediately afterwards.  The tests themselves need
+nothing from it; they drive ``_FakeUdpSocket`` directly.
 """
 import argparse
 import csv
@@ -18,16 +20,29 @@ import pytest
 
 # Patch socket.socket BEFORE any transport/stream_log imports so UdpDataPort
 # and Usart3WifiSubscribeTransport constructors never bind a real UDP port.
-_real_socket.socket = mock.MagicMock(spec=_real_socket.socket)
-
-from ground_station.livewatch.stream_log import (
-    _await_schema, _run_usart3, _run_groups_usart3, _TRANSPORTS,
-    TRANSPORT_USART3, TRANSPORT_UART5,
-)
-from ground_station.livewatch.stream import (
-    StreamRange, build_stream_request, decode_schema,
-)
-from ground_station.livewatch.transport import LiveTransportError, pop_frame, crc16_ccitt
+#
+# It is restored in the finally: this used to be a bare assignment with no
+# undo, which replaced the stdlib socket class for the whole pytest session.
+# `livewatch` sorts before `service`, so every later test that bound a socket
+# got a MagicMock instead -- 68 failures and 32 errors in a full-tree run, all
+# of them unpacking `self.socket.getsockname()` into nothing. Each of those
+# files passed on its own, which is exactly what made it hard to see.
+_socket_patch = mock.patch.object(
+    _real_socket, "socket", mock.MagicMock(spec=_real_socket.socket))
+_socket_patch.start()
+try:
+    from ground_station.livewatch.stream_log import (
+        _await_schema, _run_usart3, _run_groups_usart3, _TRANSPORTS,
+        TRANSPORT_USART3, TRANSPORT_UART5,
+    )
+    from ground_station.livewatch.stream import (
+        StreamRange, build_stream_request, decode_schema,
+    )
+    from ground_station.livewatch.transport import (
+        LiveTransportError, pop_frame, crc16_ccitt,
+    )
+finally:
+    _socket_patch.stop()
 
 # Default test range (in SRAM, 4-byte float)
 _TEST_RANGE = StreamRange(0x20000000, 4, 1, "test")
