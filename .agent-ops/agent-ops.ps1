@@ -180,7 +180,16 @@ switch ($Action) {
             oc       = "$opsWsl/oc-worker.sh $modelId"
         }[$Worker]
         Write-Output "model: $modelId$(if ($Effort) { " effort: $Effort" })"
-        $wtFlag = if ($Worktree) { ' -w' } else { '' }
+        # oc is the free pool, so it runs the most and is trusted the least;
+        # and it is the only worker whose Serena is writable, which it can only
+        # be safely inside a worktree (spawn-worker.sh:231). Default it into
+        # .worktrees/<id> so a bad edit never lands in the main checkout.
+        # -Worktree:$false opts out; the other workers are unchanged.
+        $useWorktree = if ($PSBoundParameters.ContainsKey('Worktree')) {
+            [bool]$Worktree
+        } else { $Worker -eq 'oc' }
+        $wtFlag = if ($useWorktree) { ' -w' } else { '' }
+        if ($useWorktree) { Write-Output "worktree: .worktrees/<task-id> (isolated)" }
         # Whole-tree snapshot (untracked included, OBJ excluded) built in a
         # throwaway index before the worker starts. 'verify' diffs against it,
         # so edits to files that were already dirty at spawn still show. ~1 s.
@@ -271,11 +280,20 @@ quote at most 3 lines per file. Read only what the question needs. Change nothin
         Write-Output '== result'
         $result = Join-Path $opsWin "tasks\$Arg.result.md"
         if (Test-Path $result) { Get-Content $result -TotalCount 30 } else { 'no result file yet' }
-        Write-Output '== files changed since spawn (OBJ/ excluded; files already dirty then are not shown)'
-        $pre = Join-Path $opsWin "tasks\$Arg.pre-status"
-        $before = if (Test-Path $pre) { @(Get-Content $pre) } else { @() }
-        git -C (Split-Path $opsWin) status --short -- . ':(exclude)OBJ' |
-            Where-Object { $before -notcontains $_ } | Select-Object -First 20
+        # A -Worktree spawn works in .worktrees/<id>, which .gitignore hides
+        # from the main checkout entirely: status here reported nothing for
+        # such a task no matter how much it rewrote. Follow the worker.
+        $wtDir = Join-Path (Split-Path $opsWin) ".worktrees\$Arg"
+        if (Test-Path $wtDir) {
+            Write-Output "== files changed in .worktrees\$Arg (worktree spawn)"
+            git -C $wtDir status --short -- . ':(exclude)OBJ' | Select-Object -First 20
+        } else {
+            Write-Output '== files changed since spawn (OBJ/ excluded; files already dirty then are not shown)'
+            $pre = Join-Path $opsWin "tasks\$Arg.pre-status"
+            $before = if (Test-Path $pre) { @(Get-Content $pre) } else { @() }
+            git -C (Split-Path $opsWin) status --short -- . ':(exclude)OBJ' |
+                Where-Object { $before -notcontains $_ } | Select-Object -First 20
+        }
         $global:LASTEXITCODE = $waitRc
     }
     'verify' {

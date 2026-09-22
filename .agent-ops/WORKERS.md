@@ -44,6 +44,17 @@ interop, `~/.config/opencode/serena-mcp.sh`). Which checkout it binds to depends
 | plain | main repo | refused — `.serena/project.yml` has `read_only: true` |
 | `-Worktree` | that worktree | allowed — `spawn-worker.sh` writes a `read_only: false` copy of `project.yml` into the worktree and exports `SERENA_PROJECT=<windows path>` |
 
+**`oc` spawns into a worktree by default** (2026-09-23). It is the free pool, so it runs the
+most and is supervised the least, and it is the only worker whose Serena is writable — which is
+only safe inside a worktree. Pass `-Worktree:$false` to put an oc worker in the main checkout;
+`agy` and `ark` still default to the main checkout and need `-Worktree` to opt in.
+
+`verify` and `wait` follow the worker into `.worktrees/<task-id>`. They did not before: that
+directory is gitignored, so the change diff, the secrets scan and the test run all operated on
+the main checkout and a worktree task verified clean whatever it did. Covered by the worktree
+tests in `.agent-ops/tests/test_verify_task.py`, which build a real linked worktree rather than
+a mock — the bug was in git's behaviour, not in ours.
+
 The enforcement point is `read_only` in `project.yml`, which is server-side: the Serena process
 itself refuses every edit tool, so a worker cannot talk its way past it. The opencode `tools` block
 denies exactly one thing, `serena_execute_shell_command` — `read_only` does not cover the shell tool

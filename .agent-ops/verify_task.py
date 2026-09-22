@@ -214,6 +214,82 @@ def ignore(path: str) -> bool:
     return False
 
 
+def git_out(args: List[str], cwd: str) -> str:
+    """``git <args>`` in ``cwd``, stdout stripped, '' on any failure."""
+    try:
+        return subprocess.run(["git"] + args, cwd=cwd, capture_output=True,
+                              text=True).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def work_tree_for(repo_root: str, task_id: str) -> Tuple[str, bool]:
+    """The directory whose edits belong to ``task_id``, and whether it is a
+    linked worktree.
+
+    A ``-Worktree`` spawn runs the worker in ``.worktrees/<task_id>``, and
+    ``.worktrees/`` is listed in .gitignore (line 7).  So the ``git add -A``
+    below, run in the main checkout, could never see a single edit such a
+    worker made: every worktree task verified as "no files changed" no matter
+    what it rewrote.  A silent all-clear on the one spawn mode we introduced
+    *for* isolation is worse than no check at all.
+    """
+    wt = os.path.join(repo_root, ".worktrees", task_id)
+    if os.path.isdir(os.path.join(wt, ".git")) or os.path.isfile(
+            os.path.join(wt, ".git")):
+        return wt, True
+    return repo_root, False
+
+
+def worktree_base_tree(workdir: str) -> str:
+    """The tree the worker's branch started from.
+
+    Deliberately not ``HEAD^{tree}``: a worker that committed its work would
+    then be diffed against its own commit and look idle.  Where the branch
+    forked off the trunk is what "changed by this task" actually means.
+    """
+    for trunk in ("main", "master"):
+        base = git_out(["merge-base", "HEAD", trunk], workdir)
+        if base:
+            tree = git_out(["rev-parse", base + "^{tree}"], workdir)
+            if tree:
+                return tree
+    return git_out(["rev-parse", "HEAD^{tree}"], workdir)
+
+
+def current_tree(workdir: str) -> str:
+    """Tree of everything in ``workdir`` right now, tracked or not.
+
+    Built in a throwaway index so the worker's real index is untouched.  The
+    index lives at ``git rev-parse --git-path index`` rather than
+    ``<dir>/.git/index``: in a linked worktree ``.git`` is a *file*, and that
+    hardcoded path is what made this whole branch unusable outside the main
+    checkout.
+    """
+    index_path = git_out(["rev-parse", "--git-path", "index"], workdir)
+    tmp = tempfile.NamedTemporaryFile(delete=False)
+    tmp.close()
+    try:
+        if index_path:
+            src = index_path if os.path.isabs(index_path) else os.path.join(
+                workdir, index_path)
+            if os.path.exists(src):
+                shutil.copy(src, tmp.name)
+        env = os.environ.copy()
+        env["GIT_INDEX_FILE"] = tmp.name
+        subprocess.run(
+            ["git", "-c", "core.safecrlf=false", "add", "-A", "--", ".",
+             ":(exclude)OBJ"],
+            cwd=workdir, env=env, capture_output=True, text=True,
+        )
+        return subprocess.run(
+            ["git", "write-tree"], cwd=workdir, env=env,
+            capture_output=True, text=True,
+        ).stdout.strip()
+    finally:
+        os.unlink(tmp.name)
+
+
 def main():
     if len(sys.argv) < 2:
         print("usage: verify_task.py <task_id> [--no-tests]", file=sys.stderr)
@@ -276,29 +352,29 @@ def main():
         findings.append(("FAIL", "result.md not found"))
 
     # 4. changed files
+    workdir, in_worktree = work_tree_for(repo_root, task_id)
+    rel_prefix = f".worktrees/{task_id}/" if in_worktree else ""
     pre_tree_file = os.path.join(repo_root, ".agent-ops", "tasks", f"{task_id}.pre-tree")
+    pre_tree = ""
+    if in_worktree:
+        # The recorded pre-tree was snapshotted from the main checkout, which
+        # this worker never touched. Its own base is where its branch forked.
+        pre_tree = worktree_base_tree(workdir)
+        branch = git_out(["rev-parse", "--abbrev-ref", "HEAD"], workdir)
+        findings.append(("INFO", f"worktree spawn: diffing .worktrees/{task_id} ({branch})"))
+        if not pre_tree:
+            findings.append(("WARN", "worktree base tree unresolved; diff may be wrong"))
+    elif os.path.exists(pre_tree_file):
+        with open(pre_tree_file, 'r') as f:
+            pre_tree = f.read().strip()
+
     changed = []
-    if os.path.exists(pre_tree_file):
+    if pre_tree:
         try:
-            with open(pre_tree_file, 'r') as f:
-                pre_tree = f.read().strip()
-            tmp_index = tempfile.NamedTemporaryFile(delete=False)
-            tmp_index.close()
-            shutil.copy(os.path.join(repo_root, ".git", "index"), tmp_index.name)
-            env = os.environ.copy()
-            env["GIT_INDEX_FILE"] = tmp_index.name
-            subprocess.run(
-                ["git", "-c", "core.safecrlf=false", "add", "-A", "--", ".", ":(exclude)OBJ"],
-                cwd=repo_root, env=env, capture_output=True, text=True,
-            )
-            now_tree = subprocess.run(
-                ["git", "write-tree"], cwd=repo_root, env=env,
-                capture_output=True, text=True,
-            ).stdout.strip()
-            os.unlink(tmp_index.name)
+            now_tree = current_tree(workdir)
             diff = subprocess.run(
                 ["git", "diff", "--name-status", pre_tree, now_tree],
-                cwd=repo_root, capture_output=True, text=True,
+                cwd=workdir, capture_output=True, text=True,
             ).stdout.strip()
             for line in diff.split('\n'):
                 if not line.strip():
@@ -325,7 +401,7 @@ def main():
             base = raw.decode('utf-8', errors='replace').splitlines()
         try:
             status = subprocess.run(
-                ["git", "status", "--short"], cwd=repo_root,
+                ["git", "status", "--short"], cwd=workdir,
                 capture_output=True, text=True,
             ).stdout.splitlines()
             # Normalise to the same "    M <path>" shape the pre-tree branch
@@ -381,7 +457,12 @@ def main():
     # slashes; the WSL side runs with the repo as its working directory, so a
     # Windows absolute path (backslashes) would simply fail to open and the scan
     # would report clean without having read the file.
-    rel_files = sorted({p.replace("\\", "/") for p in path_lines})
+    # A worktree lives at .worktrees/<id> *inside* repo_root, so prefixing the
+    # worker's paths keeps a single scan base. Without it every file a worktree
+    # worker created failed the os.path.exists below and dropped out of the
+    # scan, while result.md and the log kept `scanned` non-empty -- so the
+    # secrets check reported clean having read none of the worker's output.
+    rel_files = sorted({rel_prefix + p.replace("\\", "/") for p in path_lines})
     rel_files += [f".agent-ops/tasks/{task_id}.result.md",
                   f".agent-ops/logs/{task_id}.out"]
     scanned = [p for p in rel_files if os.path.exists(os.path.join(repo_root, p))]
@@ -439,8 +520,10 @@ def main():
         test_argvs = pick_tests(path_lines)
         for argv in test_argvs:
             try:
+                # In the worker's own tree: running the suite in the main
+                # checkout would report on code the worker never changed.
                 result = subprocess.run(
-                    argv, cwd=repo_root, capture_output=True, text=True, timeout=900,
+                    argv, cwd=workdir, capture_output=True, text=True, timeout=900,
                 )
                 output = result.stdout + result.stderr
                 if argv[0] == "python" and "pytest" in argv:

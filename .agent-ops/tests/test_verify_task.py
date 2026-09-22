@@ -172,3 +172,139 @@ def test_ignore_clean():
     assert not ignore("src/main.py")
     assert not ignore("docs/readme.md")
     assert not ignore("README.md")
+
+# ── worktree resolution ──────────────────────────────────────────────
+#
+# A `-Worktree` spawn runs the worker in `.worktrees/<task_id>`, and
+# `.worktrees/` is gitignored. Everything below exists because `verify`
+# used to do all of its work in the main checkout, so a worktree worker's
+# edits were invisible to the change diff AND to the secrets scan, and the
+# task verified clean no matter what it did.
+
+import subprocess
+import tempfile
+import shutil
+
+from verify_task import work_tree_for, worktree_base_tree, current_tree
+
+
+def _git(args, cwd):
+    return subprocess.run(["git"] + args, cwd=cwd, capture_output=True,
+                          text=True, check=True).stdout.strip()
+
+
+@pytest.fixture
+def repo_with_worktree():
+    """A real repo with a real linked worktree at .worktrees/<id>.
+
+    Real git, not a mock: the bug was entirely about what git does with a
+    linked worktree (`.git` is a file, `.worktrees/` is ignored), so a mock
+    would have reproduced my assumptions instead of git's behaviour.
+    """
+    root = tempfile.mkdtemp()
+    _git(["init", "-q", "-b", "main"], root)
+    _git(["config", "user.email", "t@t"], root)
+    _git(["config", "user.name", "t"], root)
+    with open(os.path.join(root, ".gitignore"), "w") as f:
+        f.write(".worktrees/\n")
+    with open(os.path.join(root, "app.py"), "w") as f:
+        f.write("original\n")
+    _git(["add", "-A"], root)
+    _git(["commit", "-qm", "base"], root)
+    task_id = "20260923-120000"
+    _git(["worktree", "add", "-q", ".worktrees/" + task_id, "-b",
+          "agy/" + task_id], root)
+    yield root, task_id
+    try:
+        shutil.rmtree(root)
+    except OSError:
+        pass
+
+
+def test_worktree_is_gitignored_so_the_main_checkout_cannot_see_it(
+        repo_with_worktree):
+    """The premise. If this ever fails, the rest of these tests are moot."""
+    root, task_id = repo_with_worktree
+    wt = os.path.join(root, ".worktrees", task_id)
+    with open(os.path.join(wt, "app.py"), "w") as f:
+        f.write("worker edit\n")
+    assert _git(["status", "--short"], root) == ""
+
+
+def test_work_tree_for_finds_the_worktree(repo_with_worktree):
+    root, task_id = repo_with_worktree
+    workdir, in_wt = work_tree_for(root, task_id)
+    assert in_wt is True
+    assert os.path.samefile(workdir, os.path.join(root, ".worktrees", task_id))
+
+
+def test_work_tree_for_falls_back_to_the_repo(repo_with_worktree):
+    """A plain spawn has no worktree; nothing about it may change."""
+    root, _ = repo_with_worktree
+    workdir, in_wt = work_tree_for(root, "20260101-000000")
+    assert in_wt is False
+    assert workdir == root
+
+
+def test_a_worktree_edit_shows_up_in_the_diff(repo_with_worktree):
+    """The whole point: an edit inside the worktree must be reported.
+
+    Before the fix this diff was computed in the main checkout and came back
+    empty, so `verify` printed no changed files for a worker that had
+    rewritten the file.
+    """
+    root, task_id = repo_with_worktree
+    workdir, _ = work_tree_for(root, task_id)
+    base = worktree_base_tree(workdir)
+    assert base, "base tree must resolve"
+    with open(os.path.join(workdir, "app.py"), "w") as f:
+        f.write("worker edit\n")
+    with open(os.path.join(workdir, "brand_new.py"), "w") as f:
+        f.write("untracked too\n")
+    diff = subprocess.run(
+        ["git", "diff", "--name-status", base, current_tree(workdir)],
+        cwd=workdir, capture_output=True, text=True).stdout
+    assert "app.py" in diff
+    assert "brand_new.py" in diff, "untracked files must be included"
+
+
+def test_the_same_diff_is_empty_from_the_main_checkout(repo_with_worktree):
+    """Red half: current_tree(repo_root) is what verify used to compute."""
+    root, task_id = repo_with_worktree
+    workdir, _ = work_tree_for(root, task_id)
+    with open(os.path.join(workdir, "app.py"), "w") as f:
+        f.write("worker edit\n")
+    head_tree = _git(["rev-parse", "HEAD^{tree}"], root)
+    diff = subprocess.run(
+        ["git", "diff", "--name-status", head_tree, current_tree(root)],
+        cwd=root, capture_output=True, text=True).stdout.strip()
+    assert diff == "", "if this is non-empty the old code was not broken"
+
+
+def test_base_tree_survives_a_worker_that_committed(repo_with_worktree):
+    """`HEAD^{tree}` would diff the worker against itself and see nothing."""
+    root, task_id = repo_with_worktree
+    workdir, _ = work_tree_for(root, task_id)
+    with open(os.path.join(workdir, "app.py"), "w") as f:
+        f.write("worker edit\n")
+    _git(["config", "user.email", "w@w"], workdir)
+    _git(["config", "user.name", "w"], workdir)
+    _git(["add", "-A"], workdir)
+    _git(["commit", "-qm", "worker commit"], workdir)
+    diff = subprocess.run(
+        ["git", "diff", "--name-status", worktree_base_tree(workdir),
+         current_tree(workdir)],
+        cwd=workdir, capture_output=True, text=True).stdout
+    assert "app.py" in diff
+
+
+def test_current_tree_does_not_disturb_the_real_index(repo_with_worktree):
+    """It runs `git add -A`; that must land in a throwaway index only."""
+    root, task_id = repo_with_worktree
+    workdir, _ = work_tree_for(root, task_id)
+    with open(os.path.join(workdir, "scratch.py"), "w") as f:
+        f.write("x\n")
+    current_tree(workdir)
+    assert "scratch.py" in _git(["status", "--short"], workdir)
+    assert _git(["diff", "--cached", "--name-only"], workdir) == "", \
+        "add -A leaked into the worker's own index"
