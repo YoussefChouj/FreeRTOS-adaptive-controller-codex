@@ -21,6 +21,7 @@ Navigation guide for `docs/dashboard-platform/`. Start at [README.md](README.md)
 | [TELEMETRY_SPEC.md](TELEMETRY_SPEC.md) | Telemetry reference: stream/slot mapping, channel index to physical meaning, naming conventions, update rates, loss handling, schema reference |
 | [COMMAND_SPEC.md](COMMAND_SPEC.md) | Command reference: all 30 command IDs, index semantics, value ranges, result codes, safety restrictions |
 | [shell/plugin-api.md](shell/plugin-api.md) | Canonical Shell API reference: all 5 methods, ServiceState/StreamState schemas, error handling, versioning |
+| [DESIGN_SEAMS_2026-09-23.md](DESIGN_SEAMS_2026-09-23.md) | Seam review, firmware + ground station: why `subscribe.c` is deep and `api.py` is shallow, the transport lifecycle fix, and the proposed route-table restructure |
 
 ---
 
