@@ -5,7 +5,7 @@ Limit-test script for the MAVLink WiFi protocol.
 .. rubric:: pytest integration
 These functions are manual hardware integration tests. They require the FC to be
 reachable on the MicoAir WiFi network and cannot run in the CI environment.
-They are excluded from the normal pytest run via @pytest.mark.skip; run them
+The two that touch hardware are gated on GS_HARDWARE_TESTS=1 (see below); run them
 manually as scripts when needed.
 
 Modes:
@@ -36,6 +36,7 @@ Usage:
 """
 
 import argparse
+import os
 import pytest
 import socket
 import struct
@@ -43,6 +44,21 @@ import time
 import threading
 import sys
 from typing import NamedTuple, Optional
+
+# The docstring above has always claimed these are "excluded from the normal
+# pytest run via @pytest.mark.skip". They were not: no marker was ever applied
+# and ground_station/comm/tests/conftest.py supplies every parameter as a
+# fixture, so both collected and RAN under a plain `pytest ground_station` --
+# nudging the flight controller and then flooding it with two seconds of
+# 0xCC 0xDD command frames at target_hz, against live hardware, with no one
+# asking for it. test_downlink_real additionally binds the telemetry port the
+# wifi_bridge already owns, which is the only reason anyone noticed.
+#
+# test_downlink_sim is left alone: it is pure UDP loopback against FakeFC and
+# touches no hardware.
+hardware_only = pytest.mark.skipif(
+    os.environ.get("GS_HARDWARE_TESTS") != "1",
+    reason="transmits to the live FC; set GS_HARDWARE_TESTS=1 to run")
 
 
 # ── Network constants ──────────────────────────────────────────────────────────
@@ -130,6 +146,10 @@ def build_command_frame(cmd_id: int, index: int, value: float) -> bytes:
 
 # ── Test results structure ─────────────────────────────────────────────────────
 class TestResult(NamedTuple):
+    # Not a test class -- pytest collects anything named Test*, then warns it
+    # cannot, every single run. This says so once instead.
+    __test__ = False
+
     name: str
     offered_hz: float
     received_hz: Optional[float]
@@ -272,6 +292,7 @@ class FakeFC:
 # ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 3 — Downlink: telemetry receive test
 # ══════════════════════════════════════════════════════════════════════════════
+@hardware_only
 def test_downlink_real(fc_host: str, drone_port: int, recv_port: int,
                       duration_s: float = 10.0) -> None:
     """Receive telemetry frames from the real FC over WiFi.
@@ -467,6 +488,7 @@ def test_downlink_sim(sim_host: str, sim_recv_port: int,
 # ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 5 — Uplink: command flood test
 # ══════════════════════════════════════════════════════════════════════════════
+@hardware_only
 def test_uplink(target_hz: float, uplink_host: str, uplink_port: int,
                 duration_s: float = 2.0, frame_len: int = CMD_FRAME) -> None:
     """Flood the FC with 0xCC 0xDD commands at target rate.

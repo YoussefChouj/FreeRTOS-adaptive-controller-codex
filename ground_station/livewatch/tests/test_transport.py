@@ -1,9 +1,11 @@
 """Offline tests for the livewatch transport abstraction."""
 import struct
 from argparse import Namespace
+from unittest import mock
 
 import pytest
 
+from ground_station.livewatch import transport as transport_mod
 from ground_station.livewatch.cli import _transport
 from ground_station.livewatch.reader import Plan, Region
 from ground_station.livewatch.symbols import Symbol
@@ -224,10 +226,21 @@ def _wifi_frame(frame_type, payload=b"", count=0):
 
 
 def test_cli_wifi_constructs_wifi_transport():
-    """The wifi transport choice instantiates Usart3WifiSubscribeTransport."""
+    """The wifi transport choice instantiates Usart3WifiSubscribeTransport.
+
+    The claim is about which class the CLI picks, so the socket is faked: the
+    real constructor binds UDP 14550 -- which the live wifi_bridge holds, so
+    this failed on any machine actually flying -- and then sends the nudge
+    datagram to 192.168.4.1. A selection test has no business transmitting to
+    the flight controller. It only ever passed because another module had left
+    `socket.socket` mocked for the whole session (see ground_station/conftest.py).
+    """
     args = Namespace(transport="wifi", uart5_port=None, uart5_baud=None)
-    from ground_station.livewatch.transport import Usart3WifiSubscribeTransport
-    assert isinstance(_transport(args), Usart3WifiSubscribeTransport)
+    with mock.patch.object(transport_mod.socket, "socket") as make_sock:
+        make_sock.return_value = mock.MagicMock()
+        built = _transport(args)
+    assert isinstance(built, Usart3WifiSubscribeTransport)
+    assert make_sock.return_value.bind.call_args[0][0] == ("0.0.0.0", 14550)
 
 
 class FakeUdpSock:

@@ -140,6 +140,10 @@ static void subscribe(uint8_t slot, uint8_t divider, uint8_t transport,
     Uart5_Subscribe_HandleRequest();
 }
 
+#if SUBSCRIBE_UART5_ENABLED
+/* Only the UART5-enabled main resets between sections; the production main
+ * runs two subscriptions and stops. Guarded so -Wall -Wextra stays clean in
+ * both builds. */
 static void stop_all(void)
 {
     uint32_t a = 0; uint16_t s = 0, c = 0;
@@ -157,7 +161,14 @@ static int count_type(uint8_t t)
     for (i = 0; i < cap_n; i++) { if (cap_type[i] == t) { n++; } }
     return n;
 }
+#endif
 
+#if SUBSCRIBE_UART5_ENABLED
+
+/* Most of what follows drives UART5, because UART5's baud is what the link
+ * budget is computed against. That only exercises the parser in a build where
+ * UART5 is wired, so the test compiles this file twice; the #else below is the
+ * build that actually ships. */
 int main(void)
 {
     uint32_t a[2]; uint16_t s[2], c[2];
@@ -216,7 +227,8 @@ int main(void)
 
     okv("slow slot emitted 80/8 times", count_type(SUBSCRIBE_FRAME_TYPE_DATA + 1), 10);
     okv("fast slot got every tick (multi-frame dispatch)", count_type(SUBSCRIBE_FRAME_TYPE_DATA), 80);
-    ok("per-tick emission cap honored (N*80)", cap_n <= SUBSCRIBE_MAX_FRAMES_PER_TICK * 80);
+    ok("per-tick emission cap honored (N*80)",
+       cap_n <= (int)(SUBSCRIBE_MAX_FRAMES_PER_TICK * 80U));
     okv("no stray frame types", cap_n,
         count_type(SUBSCRIBE_FRAME_TYPE_DATA) + count_type(SUBSCRIBE_FRAME_TYPE_DATA + 1));
 
@@ -298,3 +310,59 @@ int main(void)
     printf("\n%d checks, %d failure(s)\n", checks, fails);
     return fails ? 1 : 0;
 }
+
+#else  /* the production build: SUBSCRIBE_UART5_ENABLED is never #define'd */
+
+/* Uart5_Subscribe_TxSend is a no-op stub here, so a UART5 subscribe that was
+ * ACKed would hand the host a slot whose every frame is silently dropped --
+ * the host waits for data that cannot arrive. API/subscribe.c:537 refuses it
+ * instead (2026-09-20).
+ *
+ * The checks above went on asserting the pre-2026-09-20 ACK, so this file
+ * reported 7 failures of its own for three days and the suite carried them.
+ * Splitting the two builds is what makes both behaviours assertable: neither
+ * one can be stated in a binary compiled the other way. */
+int main(void)
+{
+    uint32_t a[2]; uint16_t s[2], c[2];
+    int i, bad;
+
+    a[0] = (uint32_t)(uintptr_t)g_theta; s[0] = 4; c[0] = 6;
+    a[1] = (uint32_t)(uintptr_t)g_rpm;   s[1] = 2; c[1] = 2;
+
+    cap_n = 0;
+    subscribe(0, 4, SUBSCRIBE_TRANSPORT_UART5, a, s, c, 1);
+    okv("a UART5 subscribe still draws exactly one reply", cap_n, 1);
+    okv("and it is a refusal, not a schema",
+        cap_type[0], SUBSCRIBE_FRAME_TYPE_ERROR);
+    ok("the refusal names the reason, so the host need not guess",
+       cap_n == 1 && cap_len[0] > 6 + 16 &&
+       memcmp(&cap_body[0][6], "E:UART5 disabled", 16) == 0);
+
+    /* Refusing UART5 must not cost the transport that does carry the data.
+     * Two ranges, then a tick, because "accepted" is not the claim worth
+     * making -- "still streams correct frames" is. */
+    cap_n = 0;
+    subscribe(0, 1, SUBSCRIBE_TRANSPORT_USART3, a, s, c, 2);
+    okv("USART3 is still accepted in the same build",
+        cap_type[0], SUBSCRIBE_FRAME_TYPE_SCHEMA);
+
+    cap_n = 0;
+    Subscribe_StreamTick();
+    okv("and a tick emits one data frame", cap_n, 1);
+
+    bad = 0;
+    for (i = 0; i < cap_n; i++) {
+        uint16_t n = cap_len[i];
+        uint16_t want = crc16_ccitt(&cap_body[i][2], (uint16_t)(n - 4U));
+        uint16_t got  = (uint16_t)(((uint16_t)cap_body[i][n - 2U] << 8)
+                                   | cap_body[i][n - 1U]);
+        if (want != got) { bad++; }
+    }
+    okv("whose CRC16-CCITT validates", bad, 0);
+
+    printf("\n%d checks, %d failure(s)\n", checks, fails);
+    return fails ? 1 : 0;
+}
+
+#endif

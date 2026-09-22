@@ -39,6 +39,21 @@ def test_firmware_c_passes_its_own_harness():
     if not _gcc_supports_m32(gcc):
         pytest.skip("gcc cannot target 32-bit; firmware assumes 32-bit pointers")
 
+    # Two builds, because two behaviours are being asserted and neither can be
+    # stated in a binary compiled the other way. The default build is what
+    # ships: UART5 is not wired, so subscribe.c refuses a UART5 subscribe. The
+    # -DSUBSCRIBE_UART5_ENABLED=1 build is the only one in which the link
+    # budget -- which is computed from UART5's baud -- can be exercised at all.
+    #
+    # The harness used to be built once, without the flag, while asserting the
+    # ACK that subscribe.c stopped sending on 2026-09-20. It reported 7 of its
+    # own 25 checks failing and the suite simply carried the failure.
+    for label, extra in (("production (UART5 disabled)", []),
+                         ("UART5 enabled", ["-DSUBSCRIBE_UART5_ENABLED=1"])):
+        _build_and_run(gcc, label, extra)
+
+
+def _build_and_run(gcc, label, extra_defines):
     with tempfile.TemporaryDirectory() as tmp:
         exe = Path(tmp) / "harness.exe"
         build = subprocess.run(
@@ -53,17 +68,19 @@ def test_firmware_c_passes_its_own_harness():
                 # subscribe.h.
                 "-DSUBSCRIBE_ADDR_SRAM_LO=0x00000000U",
                 "-DSUBSCRIBE_ADDR_SRAM_HI=0xFFFFFFFEU",
+            ] + extra_defines + [
                 str(HARNESS), str(SOURCE), "-o", str(exe),
             ],
             capture_output=True, text=True,
         )
         assert build.returncode == 0, (
-            "subscribe.c failed to compile:\n" + build.stderr)
+            "subscribe.c failed to compile [%s]:\n%s" % (label, build.stderr))
 
         run = subprocess.run([str(exe)], capture_output=True, text=True)
         assert run.returncode == 0, (
-            "firmware harness reported failures:\n" + run.stdout + run.stderr)
-        assert "0 failure(s)" in run.stdout, run.stdout
+            "firmware harness reported failures [%s]:\n%s"
+            % (label, run.stdout + run.stderr))
+        assert "0 failure(s)" in run.stdout, "[%s] %s" % (label, run.stdout)
 
 
 @pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not on PATH")
