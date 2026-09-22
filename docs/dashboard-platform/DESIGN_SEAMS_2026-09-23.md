@@ -1,8 +1,13 @@
 # Seam design review — firmware and ground station
 
 **2026-09-23.** Written against `90f06ca`, with the drone powered and connected.
-Tree at time of writing: **870 passed, 27 skipped, 0 failed** (123 s), 24/24 node DOM
-harnesses, `browser_smoke` ERRORS 0 / BAD RESPONSES 0.
+Tree at time of writing, all re-run after the last commit: **870 passed, 27 skipped,
+0 failed** (123 s); **27/27** node DOM harnesses; `browser_smoke` 11 tabs, ERRORS 0 /
+BAD RESPONSES 0, `nan=0` on every tab.
+
+(`.claude_state.md` said 24/24 node harnesses. There are 27. The number was carried
+forward rather than re-counted -- which is the same failure mode as section 3, one
+directory over.)
 
 This is a design review, not a bug list. It uses the vocabulary deliberately: a
 **module** is anything with an interface and an implementation; its **interface** is
@@ -224,13 +229,18 @@ authors must remember.
 Three reasons, in order of weight:
 
 1. **The drone is powered and the service on 8081 is live** with a session holding
-   ~395 k samples. A 2150-line restructure is not something to land against running
+   ~512 k samples. A 2150-line restructure is not something to land against running
    hardware.
 2. **The running service is already 3 commits behind** (`702cd47` vs HEAD). Adding a
    large refactor widens a gap the operator has to close.
 3. The tests cross the seam at HTTP, not at the handler, so they would survive the
    refactor unchanged — which is good news for doing it later, and removes any urgency
    to do it now.
+
+One caveat on the evidence above: `browser_smoke` runs against the **live 8081
+service**, which is 3 commits behind. It therefore confirms the shell and the running
+service are healthy; it does not exercise the route declaration fixed in `90f06ca`.
+That is covered by the python tree, which runs its own `ApiServer`.
 
 **Migration path.** Incremental, one route family at a time: stand up `ROUTES` beside
 the chain, move `/api/agent/*` first (13 routes, best-tested, most agent-facing), let
@@ -245,7 +255,8 @@ family lands — at which point delete it.
 - **Did not restart the 8081 service.** It is 3 commits behind and its only functional
   gap is the NaN guard — and I proved that guard is not firing right now by regexing
   the raw text of `/state`, `/api/view-model`, `/health` and `/slots` for
-  `NaN|-?Infinity`: **zero tokens in all four.** The `NOT PUBLISHED` sidebar values are
+  `NaN|-?Infinity`: **zero tokens in all four**, and `browser_smoke` independently
+  reports `nan=0` on all 11 tabs. The `NOT PUBLISHED` sidebar values are
   simply keys the current 3-key typed slot does not carry, not a serialisation failure.
   Restarting would kill a live session against a powered drone to fix a bug that is not
   occurring. Operator's call; flagged in `.claude_state.md`.
