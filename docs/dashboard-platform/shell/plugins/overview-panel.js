@@ -1183,7 +1183,7 @@
       '.ov-alarm-clear { border-color:var(--muted); color:var(--muted); font-style:italic; }',
       '.ov-chain { display:flex; align-items:stretch; gap:0; flex-wrap:wrap; margin-bottom:10px; }',
       '.ov-stage { flex:1 1 120px; min-width:120px; border:2px solid var(--muted); border-radius:6px;',
-      '  padding:6px 8px; background:var(--card); position:relative; }',
+      '  padding:16px 8px 6px 8px; background:var(--card); position:relative; box-sizing:border-box; }',
       '.ov-arrow { align-self:center; color:var(--muted); font-size:18px; padding:0 4px; font-weight:700; }',
       '.ov-stage-ok     { border-color:var(--green); }',
       '.ov-stage-warn   { border-color:var(--amber); }',
@@ -1207,7 +1207,7 @@
       '.ov-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(110px,1fr)); gap:2px 14px; margin-top:4px; }',
       '.ov-instrow { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start; margin-bottom:10px; }',
       '.ov-ai-box { flex:0 1 210px; border:2px solid var(--muted); border-radius:6px;',
-      '  padding:6px 8px; background:var(--card); position:relative; }',
+      '  padding:16px 8px 6px 8px; background:var(--card); position:relative; box-sizing:border-box; }',
       '.ov-ai-box-ok     { border-color:var(--green); }',
       '.ov-ai-box-warn   { border-color:var(--amber); }',
       '.ov-ai-box-alarm  { border-color:var(--red); }',
@@ -1257,7 +1257,16 @@
       '.ov-hist-silenced .ov-hist-text { opacity:0.55; }',
       '.ov-trendrow { display:flex; gap:12px; flex-wrap:wrap; align-items:stretch; margin-bottom:10px; }',
       '.ov-trend-box { flex:1 1 300px; border:2px solid var(--border); border-radius:6px;',
-      '  padding:6px 10px; background:var(--card); }',
+      '  padding:6px 10px; background:var(--card); box-sizing:border-box; }',
+      /* Fullscreen expand/shrink toggle for the trend plot (item 4) */
+      '.ov-trend-box.ov-expanded {',
+      '  position: fixed; inset: 0; z-index: 2000; width: 100vw; height: 100vh;',
+      '  max-width: none; max-height: none; border: none; border-radius: 0;',
+      '  background: var(--card); padding: 24px; overflow: auto;',
+      '}',
+      '.ov-trend-box.ov-expanded .ov-stage-title { font-size:14px; }',
+      '.ov-trend-box.ov-expanded .ov-spark { max-width:none; height: 62vh; }',
+      '.ov-trend-box.ov-expanded .ov-sub { font-size:12px; }',
       '.ov-spark { display:block; width:100%; max-width:280px; height:44px; margin-top:4px; }',
       '.ov-spark-line { stroke:var(--text); stroke-width:2; }',
       '.ov-spark-gap { fill:rgba(136,136,170,0.28); }',
@@ -1302,6 +1311,16 @@
       '.ov-weight-val-np { color:var(--amber); font-weight:600; font-size:9px; }',
       '.ov-weight-spark { display:block; width:100%; height:34px; margin-top:2px; }',
       '.ov-weight-ins { color:var(--muted); font-size:9px; font-family:Consolas,monospace; padding-top:2px; }',
+      /* long titles/labels wrap instead of underlapping the top-right flag */
+      '.ov-stage-title, .ov-row-plain, .ov-ai-ro-label { overflow-wrap:anywhere; }',
+      /* phone: stack stages and AI/checklist full-width so nothing collides */
+      '@media (max-width: 768px) {',
+      '  .ov-stage { min-width:100%; flex-basis:100%; }',
+      '  .ov-ai-box { flex:1 1 100%; max-width:none; }',
+      '  .ov-check { flex:1 1 100%; min-width:0; }',
+      '  .ov-trend-box { flex:1 1 100%; }',
+      '  .ov-arw { display:none; }',
+      '}',
       '</style>',
     ].join('');
 
@@ -1349,6 +1368,13 @@
       '  <line x1="100" y1="12" x2="100" y2="22" stroke="var(--text)" stroke-width="2"/><!-- 0° roll ref -->',
       '  <line x1="60"  y1="100" x2="88"  y2="100" stroke="var(--text)" stroke-width="3"/><!-- wings -->',
       '  <line x1="112" y1="100" x2="140" y2="100" stroke="var(--text)" stroke-width="3"/>',
+      '  <!-- Heading vector (item 7): a compass needle pivoting on the centre,',
+      '       rotated by yaw. Points to the fixed top (nose) at yaw 0°. -->',
+      '  <g id="ov-ai-heading" transform="rotate(0 100 100)" stroke="var(--text)"',
+      '     stroke-width="2.5" stroke-linecap="round">',
+      '    <line x1="100" y1="100" x2="100" y2="34"/>',
+      '    <polygon points="100,22 92,36 108,36" fill="var(--text)" stroke="none"/>',
+      '  </g>',
       '  <circle cx="100" cy="100" r="3.5" fill="var(--text)"/>',
       '</g>',
       '<g id="ov-ai-dead" style="display:none">',
@@ -1443,7 +1469,11 @@
     var trendRow = [
       '<div class="ov-trendrow">',
       '<div class="ov-trend-box" id="ov-trend-box">',
-      '  <div class="ov-stage-title">Trend on demand</div>',
+      '  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">',
+      '    <div class="ov-stage-title">Trend on demand</div>',
+      '    <button type="button" class="ov-hist-btn" id="ov-trend-expand"',
+      '      title="Expand the trend plot to fullscreen / shrink back">&#x26F6; Expand</button>',
+      '  </div>',
       '  <div class="ov-stage-hint">click any value cell above to plot its session history — read-only</div>',
       '  <div id="ov-trend-body"></div>',
       '</div>',
@@ -1683,6 +1713,16 @@
         horizon.setAttribute('transform',
           'rotate(' + (-Number(roll.val)) + ' 100 100) translate(0 ' +
           (Number(pitch.val) * AI_PITCH_PPD).toFixed(2) + ')');
+      }
+    }
+    // Heading vector (item 7): rotate the compass needle by yaw so the
+    // heading visibly tracks the drone's turn, not just the numeric readout.
+    var heading = q('ov-ai-heading');
+    if (heading) {
+      var yaw = dead ? null : findHistoryValue(state, 'c.yaw');
+      if (yaw && yaw.val != null && !isNaN(yaw.val)) {
+        heading.setAttribute('transform',
+          'rotate(' + (-Number(yaw.val)).toFixed(2) + ' 100 100)');
       }
     }
     AI_ROWS.forEach(function (r, ri) {
@@ -1957,7 +1997,16 @@
         BAT_FALLING_V_PER_MIN + ' V/min gives no time-to-empty, never a comforting number.</div>';
       return;
     }
-    bodyEl.innerHTML = '<div class="ov-bat-tte">TIME TO ' + VBAT_RED_V.toFixed(1) +
+    // item 8: an estimate with real received samples also draws a sparkline of
+    // the actual status.vbat history, so the trend is a chart not just a number
+    // (the slope is never shown bereft of the samples it came from).
+    var sp = buildSparklineSvg('status.vbat');
+    var chart = (!sp.insufficient && sp.svg) ?
+      '<div class="ov-bat-chart">' + sp.svg +
+        '<div class="ov-sub-svglabel">last ' + sp.nValid + ' received samples (least-squares basis)</div>' +
+      '</div>' : '';
+    bodyEl.innerHTML = chart +
+      '<div class="ov-bat-tte">TIME TO ' + VBAT_RED_V.toFixed(1) +
       ' V ≈ ' + (t.tteMin >= 1 ? t.tteMin.toFixed(1) + ' min' : Math.round(t.tteMin * 60) + ' s') + '</div>' +
       '<div class="ov-sub">' + slopeTxt + ' · now ' + t.vLast.toFixed(2) + ' V · basis: ' + basis +
       ' (least squares over received samples)</div>';
@@ -1980,6 +2029,14 @@
     if ((m = t.id.match(/^ov-ack-(\d+)$/))) { alarmAction(Number(m[1]), 'ack'); return; }
     if ((m = t.id.match(/^ov-sil-(\d+)$/))) { alarmAction(Number(m[1]), 'silence'); return; }
     if (t.id === 'ov-export-btn') { downloadAlarmCsv(); return; }
+    if (t.id === 'ov-trend-expand') {
+      var box = q('ov-trend-box');
+      if (!box) return;
+      var expanded = !box.classList.contains('ov-expanded');
+      box.classList.toggle('ov-expanded', expanded);
+      t.innerHTML = expanded ? '&#x2926; Shrink' : '&#x26F6; Expand';
+      t.title = expanded ? 'Shrink back to panel' : 'Expand to fullscreen';
+    }
   }
 
   function onState(state) {

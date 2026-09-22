@@ -61,6 +61,9 @@
         + 'background:rgba(78,204,163,.15);border:1px solid var(--green,#4ECCA3);'
         + 'color:var(--green,#4ECCA3);cursor:pointer;';
       send.addEventListener('click', function () { sendMessage(input, api); });
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); sendMessage(input, api); }
+      });
 
       drawer.appendChild(list);
       drawer.appendChild(input);

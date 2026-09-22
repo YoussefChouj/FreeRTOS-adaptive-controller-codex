@@ -1400,6 +1400,9 @@
       '    <span>Mode: </span><span id="cp-of-readback-mode" style="font-family:Consolas,monospace;font-weight:600;"><span style="color:var(--amber)">NOT PUBLISHED</span></span>',
       '    <span style="margin-left:12px;">Freeze: </span><span id="cp-of-readback-freeze" style="font-family:Consolas,monospace;font-weight:600;"><span style="color:var(--amber)">NOT PUBLISHED</span></span>',
       '  </div>',
+      // Item 14: a "not published" value names which Live-Log preset's slot
+      // carries the symbol, so the operator knows what to record to see it.
+      '  <div id="cp-of-preset-hint" style="font-size:10px;color:var(--muted);margin-top:3px;"></div>',
       '</div>',
 
       // Parameter & Flag Widgets (AUDIT §3.1–3.2)
@@ -1630,6 +1633,30 @@
     renderReadbackValue();
   }
 
+  // Item 14: ask the service which Live-Log preset's slot carries a symbol and
+  // render that preset name as a hint next to a "not published" readback. The
+  // mapping is computed service-side from multi_slot_presets.yaml — never
+  // hardcoded here. Read-only GET; no subscribe button.
+  function presetPresetHint(elId, symbol) {
+    var el = q(elId);
+    if (!el) return;
+    if (!symbol) return;
+    fetch('/api/preset-for-symbol?symbol=' + encodeURIComponent(symbol), { method: 'GET' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d || !d.presets || !d.presets.length) return;
+        var seen = {};
+        var names = [];
+        d.presets.forEach(function (p) {
+          if (!seen[p.preset]) { seen[p.preset] = 1; names.push(p.preset); }
+        });
+        if (names.length) {
+          el.textContent = 'Record with preset: ' + names.join(', ') + ' — to publish this value';
+        }
+      })
+      .catch(function () { /* hint is best-effort; never break the panel */ });
+  }
+
   function renderReadbackValue() {
     var s1 = _state && _state.streams ? (_state.streams[1] || _state.streams['1']) : null;
     // 2026-09-21 binding fix: g_of_bias_mode / g_of_bias_ema_freeze now
@@ -1656,11 +1683,15 @@
       if (mVal === undefined && !(s1 && s1.values) && !(s0 && s0.values)) {
         ofModeSpan.innerHTML = '<span style="color:var(--amber)">NOT PUBLISHED</span>';
         ofFreezeSpan.innerHTML = '<span style="color:var(--amber)">NOT PUBLISHED</span>';
+        // Item 14 hint: these symbols are carried by the bias_logging preset.
+        presetPresetHint('cp-of-preset-hint', 'g_of_bias_mode');
       } else {
+        var ofHint = q('cp-of-preset-hint');
+        if (ofHint) ofHint.textContent = '';
+      }
         ofModeSpan.innerHTML = mVal !== undefined ? (mVal===0?'FIXED':mVal===1?'EMA':mVal===2?'EKF':String(mVal)) : '<span style="color:var(--amber)">NOT PUBLISHED</span>';
         ofFreezeSpan.innerHTML = fVal !== undefined ? String(fVal) : '<span style="color:var(--amber)">NOT PUBLISHED</span>';
       }
-    }
 
     // Update per-param readback indicators in the branching form
     var cmdId = parseInt(_els.cmdIdSelect ? _els.cmdIdSelect.value : 0, 10) || 0;
@@ -1914,6 +1945,10 @@
     ].join('');
   }
 
+  // Last value the operator sent per flag ("cmdId-index"), kept only while
+  // telemetry cannot confirm it.
+  var _flagSent = {};
+
   function currentFlagState(cmdId, p) {
     var sym = widgetSymbol(cmdId, p);
     if (!sym) return null;
@@ -1929,10 +1964,22 @@
         var cb = q('cp-flag-' + cmdId + '-' + p.index);
         if (!cb) return;
         var st = currentFlagState(cmdId, p);
+        var key = cmdId + '-' + p.index;
+        var sent = _flagSent[key];
+        var badge = q('cp-flag-state-' + cmdId + '-' + p.index);
+        if (st === null && sent !== undefined) {
+          // No telemetry to confirm: keep the operator's last sent value
+          // instead of wiping the click on the next tick.
+          cb.checked = sent;
+          cb.indeterminate = false;
+          if (badge) badge.innerHTML = '<span style="color:var(--amber)">requested ' + (sent ? 'ON' : 'OFF') +
+            ' · unconfirmed (not published)</span>';
+          return;
+        }
         // State follows telemetry, never optimistic.
+        if (st !== null) delete _flagSent[key];
         cb.checked = (st === true);
         cb.indeterminate = (st === null);
-        var badge = q('cp-flag-state-' + cmdId + '-' + p.index);
         if (badge) {
           if (st === null) badge.innerHTML = '<span style="color:var(--amber)">not published</span>';
           else badge.textContent = st ? 'ON' : 'OFF';
@@ -2018,6 +2065,7 @@
         var cb = q('cp-flag-' + cmdId + '-' + p.index);
         if (!cb) return;
         cb.addEventListener('change', function () {
+          _flagSent[cmdId + '-' + p.index] = cb.checked;
           submitParamWidget(cmdId, p, cb.checked ? 1 : 0);
         });
       });

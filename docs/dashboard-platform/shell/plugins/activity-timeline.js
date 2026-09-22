@@ -117,9 +117,11 @@
 
     function makeRow(it, upcoming) {
       var row = document.createElement('div');
-      row.style.cssText = 'font-size:12px;padding:3px 0;'
+      row.style.cssText = 'font-size:12px;padding:3px 0;display:flex;flex-wrap:wrap;'
+        + 'align-items:baseline;gap:6px;'
         + (upcoming ? 'opacity:.4;font-style:italic;' : '');
       var head = document.createElement('span');
+      head.style.cssText = 'overflow-wrap:anywhere;flex:1 1 auto;';
       head.textContent = '[' + (it.kind || '?') + '] ' + (it.actor || (it.source || '')) + ' ';
       var src = document.createElement('span');
       src.textContent = it.source || '';

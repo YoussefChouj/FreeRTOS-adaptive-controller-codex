@@ -48,6 +48,64 @@ def _mime_type(path: str) -> str:
     return _MIME_TYPES.get(ext, "application/octet-stream")
 
 
+def preset_carriers(symbol: str, *, include_all: bool = False) -> dict:
+    """Item 14 — compute, from ``livewatch/multi_slot_presets.yaml`` and
+    ``livewatch/manifests.yaml`` (NOT hardcoded), which preset(s) carry a given
+    telemetry/sidebar symbol inside some slot's manifest. A symbol matches a
+    manifest var by case-insensitive substring (the panel keys like ``pid.gyrox``
+    and ``mrac.*`` are colloquial spellings of DWARF paths such as
+    ``Ctrler.gyroXPID…``).
+
+    Read-only API for the shell: panels that show a value as "not published"
+    can append a hint naming the preset whose slot would publish it, so the
+    operator knows which Live-Log preset to record to see the value.
+    """
+    from ground_station.livewatch.manifest import ManifestStore, MultiSlotPresetManager
+    try:
+        store = ManifestStore()
+        pm = MultiSlotPresetManager()
+        names = pm.list_presets()
+    except Exception:
+        return {"symbol": symbol, "presets": [], "note": "preset/manifest files unavailable"}
+    hits = []
+    for pname in names:
+        try:
+            pconf = pm.get(pname, validate_sync_contract=False)
+        except Exception:
+            continue
+        for slot in pconf.get("slots", []):
+            mname = slot.get("manifest")
+            if not mname:
+                continue
+            try:
+                vars_ = store.get(mname).vars
+            except Exception:
+                continue
+            for var in vars_:
+                vlow = var.lower()
+                # Match the sidebar/colloquial key against a manifest var.
+                # ``mrac.roll.u_ad`` and the DWARF ``mrac_state.roll.u_ad`` are
+                # different spellings of the same value, so besides a full
+                # substring match we also accept the symbol's last path segment
+                # (``u_ad``, ``Theta[0]``, ``gyrox``, …) appearing in the var.
+                tail = symbol.rsplit(".", 1)[-1].lower() if symbol else ""
+                if (symbol and symbol.lower() in vlow) or (tail and tail in vlow):
+                    hits.append({
+                        "preset": pname,
+                        "slot": slot.get("slot"),
+                        "manifest": mname,
+                        "hz": slot.get("hz"),
+                        "matched_var": var,
+                    })
+    # Drop duplicate renders of the same (preset, slot, manifest) pair.
+    uniq: dict[tuple, dict] = {}
+    for h in hits:
+        uniq.setdefault((h["preset"], h["slot"], h["manifest"]), h)
+    result = list(uniq.values())
+    result.sort(key=lambda h: (h["preset"], str(h["slot"])))
+    return {"symbol": symbol, "presets": result}
+
+
 def _recorder_status(service) -> dict[str, Any]:
     """Recorder block for GET /health — path/rows/errors of the CSV writer.
 
@@ -179,6 +237,7 @@ _ROUTE_MAP = {
         "/api/recording": "recording state {recording, session_dir, started_at, rows, bytes, reason}",
         "/api/session/notes": "operator notes buffered while not recording",
         "/api/contract": "firmware command/subscribe contract",
+        "/api/preset-for-symbol": "preset(s) whose slot manifest carries the symbol (item 14; ?symbol=<key>; read-only, computed from multi_slot_presets.yaml)",
         "/api/view-model": "browser-renderable state for agents; ?stats=1 adds session_stats (full-session scan, slow on long sessions)",
         "/api/events": "event journal",
         "/api/faults": "fault log (rejections, timeouts)",
@@ -954,6 +1013,10 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                 self._json(200, {"notes": service.list_session_notes(),
                                  "recording": bool(getattr(
                                      service.recorder, "recording", False))})
+            elif route == "/api/preset-for-symbol":
+                qs = parse_qs(urlsplit(self.path).query)
+                symbol = (qs.get("symbol") or [""])[0].strip()
+                self._json(200, preset_carriers(symbol or "mrac.roll.u_ad"))
             elif route == "/slots":
                 # Slot inventory — keys in service._streams plus what the bridge
                 # currently knows about (auto-subscribed + manually subscribed).

@@ -418,11 +418,22 @@ class GroundStationService:
         return {"started_commit": self.started_commit, "firmware_elf": elf}
 
     def recording_status(self) -> dict[str, Any]:
-        """State block for GET /api/recording."""
+        """State block for GET /api/recording / POST /api/recording/stop."""
         rec = self.recorder
+        sd = rec.session_dir if rec.session_dir else None
+        # session_dir is stored relative to the CWD (default ``logs/sessions/…``);
+        # surface an absolute path so the operator can locate the saved log on
+        # the filesystem without knowing the service's working directory.
+        abs_path = None
+        if sd:
+            try:
+                abs_path = str(os.path.realpath(sd))
+            except Exception:
+                abs_path = str(sd)
         return {
             "recording": bool(getattr(rec, "recording", False)),
-            "session_dir": str(rec.session_dir) if rec.session_dir else None,
+            "session_dir": str(sd) if sd else None,
+            "session_abs_path": abs_path,
             "started_at": getattr(rec, "started_at", None),
             "rows": int(getattr(rec, "rows", 0)),
             "bytes": int(getattr(rec, "bytes_written", 0)),

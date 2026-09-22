@@ -1,4 +1,5 @@
 import json
+import os
 import socket
 import struct
 import time
@@ -676,6 +677,14 @@ def test_recording_api_defaults_off_and_start_stop_writes_dir(tmp_path):
         first_dir = list(tmp_path.iterdir())
         assert first_dir and first_dir[0].name.endswith("-lab")
         assert (first_dir[0] / "manifest.json").exists()
+        # Item 9: the operator-facing status carries the absolute path of the
+        # saved session directory, even though ``session_dir`` is stored
+        # relative to the CWD by the recorder.
+        assert body["session_abs_path"] is not None
+        assert os.path.isabs(body["session_abs_path"])
+        assert body["session_abs_path"].endswith(
+            first_dir[0].name), body["session_abs_path"]
+        assert (first_dir[0].name in body["session_dir"])
         assert (first_dir[0] / "events.jsonl").exists()
 
         # Starting again is a no-op -> still one directory.
@@ -690,6 +699,24 @@ def test_recording_api_defaults_off_and_start_stop_writes_dir(tmp_path):
     finally:
         api.stop()
         service.stop()
+
+
+def test_preset_for_symbol_route_maps_symbol_to_carrying_preset():
+    """Item 14 — GET /api/preset-for-symbol names the multi_slot_presets.yaml
+    preset whose slot manifest carries a given symbol. The mapping is computed
+    from the YAML (manifests.yaml + multi_slot_presets.yaml), not hardcoded."""
+    from ground_station.service.api import preset_carriers
+    # mrac_state.roll.Theta[0] is a var of the ``mrac_weights`` manifest, which
+    # both flight_comprehensive (slot 2) and mrac_characterization (slot 2) use.
+    out = preset_carriers("mrac_state.roll.Theta[0]")
+    assert "symbol" in out and isinstance(out["presets"], list)
+    carrying = [(h["preset"], h["manifest"]) for h in out["presets"]]
+    assert ("flight_comprehensive", "mrac_weights") in carrying
+    assert ("mrac_characterization", "mrac_weights") in carrying
+    # Colloquial sidebar key: tail segment ``u_ad`` matches the DWARF ``u_ad``.
+    out2 = preset_carriers("mrac.roll.u_ad")
+    assert any(h["manifest"] == "mrac_signals" or h["manifest"] == "mrac_weights"
+               for h in out2["presets"]), out2
 
 
 def test_recording_note_buffered_when_stopped_and_flushed(tmp_path):

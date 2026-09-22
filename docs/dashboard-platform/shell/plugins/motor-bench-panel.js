@@ -418,10 +418,17 @@
       '  <div class="mb-info">Bench testing only. Do not fly.</div>',
       '</div>',
 
-      /* Safety warning */
+      /* Safety warning — bench motors are ONLY driven while the FSM stays
+       * DISARMED (TASK/StabilizerTask.c:583-599). Never send Arm authorization
+       * before bench mode: arming the aircraft exits bench mode and stops this
+       * panel's dead-man heartbeat. */
       '<div class="mb-section">',
       '  <div class="mb-warning mb-warning-crit">',
       '    &#9888; Propellers must be removed or guarded before testing',
+      '  </div>',
+      '  <div class="mb-warning mb-warning-crit">',
+      '    &#9888; Drone must stay DISARMED — do not send Arm authorization.',
+      '    Keep the kill switch (CH9) HIGH to stay disarmed.',
       '  </div>',
       '</div>',
 

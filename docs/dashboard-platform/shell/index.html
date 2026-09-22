@@ -157,6 +157,13 @@
       color: var(--text);
     }
 
+    /* Pending-approvals count badge on the Approvals tab */
+    .approval-badge {
+      display: inline-block; margin-left: 6px; padding: 0 6px;
+      border-radius: 8px; background: var(--red, #e94560);
+      color: #fff; font-size: 10px; font-weight: 700; line-height: 15px;
+    }
+
     /* ── Gate indicator bar ── */
     #gate-bar {
       display: flex;
@@ -201,6 +208,23 @@
       grid-template-rows: auto auto 1fr;
       height: calc(100vh - 48px);
     }
+
+    /* Sidebar collapse (item 1). Collapsing drops the first grid column to 0
+     * so #main + the workspace/gate bars (column 2) take the full freed width;
+     * a fixed re-open button appears when the sidebar is hidden. */
+    #app.sidebar-hidden { grid-template-columns: 0 1fr; }
+    #app.sidebar-hidden #sidebar { display: none; }
+    #sidebar-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    #sidebar-reopen {
+      position: fixed; left: 8px; top: 118px; z-index: 999;
+      background: var(--card); border: 1px solid var(--border);
+      color: var(--text); font-size: 13px; padding: 5px 10px; border-radius: 4px;
+      cursor: pointer;
+    }
+    #sidebar-reopen:hover { border-color: var(--accent); }
 
     #sidebar {
       grid-row: 1 / -1;
@@ -424,6 +448,8 @@
       padding: 8px;
       border-top: 1px solid var(--border);
     }
+    /* The banner's inline display:flex would otherwise win over the class. */
+    #reload-banner.hidden { display: none !important; }
   </style>
 </head>
 <body>
@@ -452,6 +478,7 @@
   <button class="ws-tab" data-ws="bench" data-testid="tab-bench">Bench</button>
   <button class="ws-tab" data-ws="replay" data-testid="tab-replay">Replay</button>
   <button class="ws-tab" data-ws="diagnostics" data-testid="tab-diagnostics">Diagnostics</button>
+  <button class="ws-tab" data-ws="approvals" data-testid="tab-approvals">Approvals<span class="approval-badge" id="approval-badge" style="display:none"></span></button>
 </div>
 
 <div id="gate-bar">
@@ -474,6 +501,10 @@
 
 <div id="app">
   <div id="sidebar">
+    <div id="sidebar-header">
+      <span class="card-title" style="color:var(--muted)">Flight State</span>
+      <button id="sidebar-collapse" class="toggle-btn" title="Collapse sidebar (free space for plots)">&larr; Hide</button>
+    </div>
     <!-- sidebar: state summary + alarms -->
     <div class="card" id="card-flight">
       <div class="card-header">
@@ -587,6 +618,10 @@
   </div>
 </div>
 
+<!-- Sidebar re-open control (item 1): fixed, visible only when the sidebar is
+     collapsed so there is always a way back. -->
+<button id="sidebar-reopen" style="display:none" title="Restore sidebar">&#187; Show sidebar</button>
+
 <script>
 (async function () {
   'use strict';
@@ -640,6 +675,8 @@
     '/plugins/path-panel.js',
     '/plugins/slot-manager-panel.js',
     '/plugins/resource-map-panel.js',  // S7: firmware resource/data-flow map
+    '/plugins/pid-gains-panel.js',     // PID inner/outer gains with firmware defaults
+    '/plugins/record-helper.js',       // recorder: saved log path, note-kind helper
     // Phase 1B: agent UI plugins
     '/plugins/copilot-drawer.js',       // A: co-pilot drawer
     '/plugins/header-mode-pill.js',     // B: header mode pill + big STOP
@@ -708,6 +745,29 @@
   });
 
   applyLayout();
+
+  /* ── Sidebar collapse / re-open (item 1) ── */
+  /* Collapsing the sidebar drops its grid column to 0 so the workspace bar,
+   * gate bar and #main reflow to the full freed width. A fixed re-open button
+   * stays available so the sidebar is never stuck hidden. */
+  function setSidebarCollapsed(collapsed) {
+    var app = document.getElementById('app');
+    if (!app) return;
+    app.classList.toggle('sidebar-hidden', !!collapsed);
+    var rb = document.getElementById('sidebar-reopen');
+    if (rb) rb.style.display = collapsed ? 'block' : 'none';
+    try { localStorage.setItem('gs_sidebar_collapsed', collapsed ? '1' : '0'); } catch (_) {}
+    // Reflow canvas plots that listen for resize.
+    try { window.dispatchEvent(new Event('resize')); } catch (_) {}
+  }
+  var cb = document.getElementById('sidebar-collapse');
+  if (cb) cb.addEventListener('click', function () { setSidebarCollapsed(true); });
+  var rb = document.getElementById('sidebar-reopen');
+  if (rb) rb.addEventListener('click', function () { setSidebarCollapsed(false); });
+  // Restore persisted collapse state.
+  try {
+    if (localStorage.getItem('gs_sidebar_collapsed') === '1') setSidebarCollapsed(true);
+  } catch (_) {}
 
   /* ── Workspace switching ── */
   /* State model per signal:
@@ -849,7 +909,8 @@
     'Motor Bench':           { workspace: 'bench', gates: ['connected', 'disarmed'] },
     'Session Replay':        { workspace: 'replay' },
     'RTOS Resources':        { workspace: 'diagnostics' },
-    'Firmware Resource Map': { workspace: 'diagnostics' }
+    'Firmware Resource Map': { workspace: 'diagnostics' },
+    'Approvals':             { workspace: 'approvals' }
   };
 
   /* data-workspaces is a space-separated token list; 'all' matches every tab. */

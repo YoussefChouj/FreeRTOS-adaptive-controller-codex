@@ -52,6 +52,12 @@
     return parseFloat(v).toFixed(4);
   }
 
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
   // ── Read with fallback ─────────────────────────────────────────────────
   // Returns { value, source } where source is 'named' or 'proxy:<reason>'.
   // S15: real MRAC keys come from the sidebar mapping; gyro proxy kept as
@@ -152,6 +158,106 @@
     container.innerHTML = svg;
   }
 
+  // ── Convergence ranking (item 11) ──────────────────────────────────────
+  // Ranked view sorts adaptive weights by recent drift so weights that are
+  // still moving (not yet converged) rise to the top. Works for any number of
+  // weights: entries are keyed by the label we actually collect, not a fixed
+  // axis×theta grid.
+  var RANK_HISTORY_LEN = 60; // samples kept per weight (~30 s at the panel poll)
+  var _mode = 'natural';     // 'natural' | 'ranked'
+  // weight label ("pitch.theta_2", "roll.theta_0", …) -> rolling value array
+  var _hist = {};
+
+  // Sample standard deviation of the last N values — a crude proxy for
+  // |dW/dt| activity over the window. Weights pinned near a converged value
+  // have ~0 variance and sink; drifting weights have high variance and float.
+  function variance(arr) {
+    var n = arr.length;
+    if (n < 2) return 0;
+    var sum = 0;
+    for (var i = 0; i < n; i++) sum += arr[i];
+    var mean = sum / n;
+    var acc = 0;
+    for (var j = 0; j < n; j++) { var d = arr[j] - mean; acc += d * d; }
+    return acc / (n - 1);
+  }
+
+  function recordHist(n) {
+    for (var key in n) {
+      if (n[key] == null) continue;
+      var ring = _hist[key];
+      if (!ring) { ring = []; _hist[key] = ring; }
+      ring.push(n[key]);
+      if (ring.length > RANK_HISTORY_LEN) ring.shift();
+    }
+  }
+
+  // Build one row per weight we have seen, sorted by variance desc.
+  function rankedRows() {
+    var rows = [];
+    for (var key in _hist) {
+      var ring = _hist[key];
+      var idx = ring[ring.length - 1];
+      rows.push({
+        key: key,
+        value: (idx == null) ? null : Number(idx),
+        var: variance(ring),
+      });
+    }
+    rows.sort(function (a, b) { return b.var - a.var; });
+    return rows;
+  }
+
+  function renderRanked() {
+    var el = q('mrac-ranked');
+    if (!el) return;
+    var rows = rankedRows();
+    var maxVar = 0.000001;
+    rows.forEach(function (r) { if (r.var > maxVar) maxVar = r.var; });
+    var html = '<div style="font-size:11px;color:var(--muted);margin-bottom:6px;">' +
+      'Adaptive weights ranked by recent drift (variance over last ' +
+      RANK_HISTORY_LEN + ' samples). Drifting weights (not yet converged) sort to top. ' +
+      (rows.length === 0 ? 'No weights seen yet.' : '') +
+      '</div>';
+    rows.forEach(function (r, i) {
+      if (r.value == null) return;
+      var rel = maxVar > 0 ? String((r.var / maxVar) * 100).slice(0, 3) : '0';
+      html += '<div style="display:flex;align-items:center;gap:8px;padding:3px 0;' +
+        'border-top:1px solid rgba(255,255,255,0.06);">' +
+        '<span style="width:22px;font-weight:700;font-size:11px;color:var(--muted)">#' + (i + 1) + '</span>' +
+        '<span style="flex:1;font-family:Consolas,monospace;font-size:11px">' + escapeHtml(r.key) + '</span>' +
+        '<span style="width:70px;text-align:right;font-family:Consolas,monospace;font-size:11px">' +
+        fmtNum(r.value) + '</span>' +
+        '<span style="width:90px;text-align:right;font-family:Consolas,monospace;font-size:10px;color:' +
+        (r.var > 4e-8 ? 'var(--amber)' : 'var(--green)') + '">drift ' + rel + '%</span>' +
+        '</div>';
+    });
+    el.innerHTML = html;
+  }
+
+  function setMode(mode) {
+    _mode = mode;
+    var toggle = q('mrac-rank-toggle');
+    var hint = q('mrac-rank-hint');
+    var ranked = q('mrac-ranked');
+    var axes = q('mrac-axes');
+    if (toggle) toggle.textContent = mode === 'ranked' ? 'Natural order ▾' : 'Rank by drift ▾';
+    if (hint) hint.textContent = mode === 'ranked'
+      ? 'ranking on — weights sorted by drift, most drifting first'
+      : 'ranking off — natural order (axis &rarr; theta_0..theta_5)';
+    if (ranked) ranked.style.display = mode === 'ranked' ? '' : 'none';
+    if (axes) axes.style.display = mode === 'ranked' ? 'none' : '';
+    if (mode === 'ranked') renderRanked();
+  }
+
+  function bindRankToggle() {
+    var toggle = q('mrac-rank-toggle');
+    if (!toggle) return;
+    toggle.addEventListener('click', function () {
+      setMode(_mode === 'ranked' ? 'natural' : 'ranked');
+    });
+  }
+
   // ── State ───────────────────────────────────────────────────────────────
   var _hasData = false;
   var _proxyInUse = false;
@@ -197,6 +303,15 @@
       '  <span style="font-family:Consolas,monospace">[PROXY]</span> Firmware does not yet expose mrac.* keys. Showing raw IMU channels as placeholder.',
       '</div>',
 
+      // Convergence ranking toggle (operator walkthrough 2026-09-22, item 11).
+      // Ranks every adaptive weight by its recent drift (variance of the last
+      // ~N samples); drifting (not-yet-converged) weights sort to the top.
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">',
+      '  <button id="mrac-rank-toggle" type="button" style="padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;">Rank by drift ▾</button>',
+      '  <span id="mrac-rank-hint" style="font-size:10px;color:var(--muted)">ranking off — natural order (axis &rarr; theta_0..theta_5)</span>',
+      '</div>',
+      '<div id="mrac-ranked" style="display:none"></div>',
+
       // Per-axis blocks
       '<div id="mrac-axes">' + axesHTML + '</div>',
     ].join('');
@@ -212,6 +327,17 @@
     var anyNamed = false;
     var anyProxy = false;
     var anyUpdate = false;
+
+    // Feed this tick's theta values into the convergence history (all axes).
+    try {
+    var sample = {};
+    AXES.forEach(function (a2) {
+      readTheta(values, a2).forEach(function (t, i) {
+        if (t.value != null) sample[a2 + '.theta_' + i] = Number(t.value);
+      });
+    });
+    recordHist(sample);
+  } catch (e) { /* ranking is best-effort; never break the panel */ }
 
     AXES.forEach(function (axis) {
       _axisData[axis] = {
@@ -279,6 +405,9 @@
     }
     _proxyInUse = anyProxy && !anyNamed;
 
+    // Keep the ranked (drift-sorted) view fresh while it is active.
+    if (_mode === 'ranked') renderRanked();
+
     if (anyUpdate) _hasData = true;
   }
 
@@ -286,6 +415,7 @@
   window.__PLUGIN_INIT__ = function(api) {
     api.registerPanel('MRAC Controller', function (container) {
       container.innerHTML = buildHTML();
+      bindRankToggle();
       api.subscribe(onState);
     });
   };
@@ -293,6 +423,16 @@
     _hasData = false;
     _proxyInUse = false;
     _axisData = {};
+    _hist = {};
+  };
+  // Test hook for the offline Node harness (convergence ranking, item 11).
+  window.__MRAC_TEST__ = {
+    recordHist: recordHist,
+    rankedRows: rankedRows,
+    variance: variance,
+    RANK_HISTORY_LEN: RANK_HISTORY_LEN,
+    setMode: setMode,
+    mode: function () { return _mode; },
   };
   window.__registerPlugin__('MRAC Controller', window.__PLUGIN_INIT__, window.__PLUGIN_DESTROY__);
 

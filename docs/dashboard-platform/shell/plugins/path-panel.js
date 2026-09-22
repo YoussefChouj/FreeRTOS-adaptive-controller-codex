@@ -27,6 +27,7 @@
   var _totalDistance = 0;
   var _maxDeviation = 0;
   var _plannedPath = [];     // Waypoint path for deviation calculation
+  var _autoFitted = false;   // one-shot auto-fit of the flown path (item 6)
 
   var MAX_TRAIL = 100;
   var MIN_ZOOM = 0.2;
@@ -217,6 +218,12 @@
       _elDemoIndicator.style.display = 'none';
     }
 
+    // Frame the plot to the flown path (item 6): once a real spread appears,
+    // zoom/pan so the trail fills the canvas instead of collapsing to a blue
+    // dot in the middle against a bare black/white grid. Fires once per data
+    // set (>=3 points with an extent); a manual zoom / reset re-arms it.
+    autoFitView();
+
     // Grid
     drawGrid(W, H);
 
@@ -356,6 +363,38 @@
     });
   }
 
+  /* Fit the world-space view so the flown path spans the canvas (item 6).
+   * Runs once per data set — a manual zoom / reset re-arms it. Only acts
+   * when there are >=3 points with a non-trivial extent, so a stationary
+   * drone (or the harness's 1-2 point feeds) never jumps the view. */
+  function autoFitView() {
+    if (_autoFitted || _trajectory.length < 3) return;
+    var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (var i = 0; i < _trajectory.length; i++) {
+      var pt = _trajectory[i];
+      if (pt.x < minX) minX = pt.x;
+      if (pt.x > maxX) maxX = pt.x;
+      if (pt.y < minY) minY = pt.y;
+      if (pt.y > maxY) maxY = pt.y;
+    }
+    var spanX = maxX - minX;
+    var spanY = maxY - minY;
+    if (spanX < 0.5 && spanY < 0.5) return;   // no real spread yet (stationary)
+    var W = _canvas ? _canvas.width : 800;
+    var H = _canvas ? _canvas.height : 400;
+    var pad = 40;
+    // Screen scale is `world * _zoom * 20` px per unit (see worldToScreen).
+    var sX = (W - pad) / (spanX * 20);
+    var sY = (H - pad) / (spanY * 20);
+    _zoom = Math.min(Math.max(Math.min(sX, sY), MIN_ZOOM), MAX_ZOOM);
+    var midX = (minX + maxX) / 2;
+    var midY = (minY + maxY) / 2;
+    // worldToScreen:  x' = W/2 + _panX + wx*_zoom*20 ; y' = H/2 - _panY - wy*_zoom*20
+    _panX = -(midX * _zoom * 20);
+    _panY =  (midY * _zoom * 20);
+    _autoFitted = true;
+  }
+
   function drawMarker(wx, wy, label, color, radius) {
     var W = _canvas.width;
     var H = _canvas.height;
@@ -460,11 +499,13 @@
   // ── Zoom controls ────────────────────────────────────────────────────────
   function zoomIn() {
     _zoom = Math.min(_zoom + ZOOM_STEP, MAX_ZOOM);
+    _autoFitted = true;   // manual zoom takes over from auto-fit
     render();
   }
 
   function zoomOut() {
     _zoom = Math.max(_zoom - ZOOM_STEP, MIN_ZOOM);
+    _autoFitted = true;   // manual zoom takes over from auto-fit
     render();
   }
 
@@ -472,6 +513,7 @@
     _zoom = 1.0;
     _panX = 0;
     _panY = 0;
+    _autoFitted = false;  // re-arm auto-fit so the flown path re-frames
     render();
   }
 
@@ -710,8 +752,12 @@
       _elDemoIndicator = q('pp-demo-badge');
 
       // Size canvas
+      // The bitmap must track the wrap's real size. A hidden tab reports 0,
+      // and tab/sidebar changes fire no window resize, so CSS would stretch a
+      // stale bitmap into smeared slices.
       function resizeCanvas() {
         var wrap = _canvas.parentElement;
+        if (!wrap || wrap.offsetWidth === 0) return;
         _canvas.width = wrap.offsetWidth;
         _canvas.height = Math.max(400, wrap.offsetHeight);
         render();
@@ -720,6 +766,9 @@
       // Initial setup
       resizeCanvas();
       window.addEventListener('resize', resizeCanvas);
+      if (typeof ResizeObserver !== 'undefined') {
+        new ResizeObserver(resizeCanvas).observe(_canvas.parentElement);
+      }
 
       _waypoints = [];
       updatePlannedPath();
@@ -768,6 +817,7 @@
     _zoom = 1.0;
     _panX = 0;
     _panY = 0;
+    _autoFitted = false;
   };
 
   window.__registerPlugin__('Path Planning', window.__PLUGIN_INIT__, window.__PLUGIN_DESTROY__);
