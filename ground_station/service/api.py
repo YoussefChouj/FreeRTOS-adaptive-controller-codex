@@ -6,6 +6,7 @@ run on the flight-test laptop without adding a web framework dependency.
 from __future__ import annotations
 
 import json
+import math
 import queue
 import threading
 import time
@@ -25,6 +26,28 @@ from .copilot import Copilot
 # subscribe range list, both far under this; 1 MiB leaves room without letting a
 # single POST decide how much the service will read.
 _MAX_BODY_BYTES = 1 << 20
+
+
+def _json_safe(value: Any) -> Any:
+    """Replace non-finite floats with ``None``, recursively.
+
+    ``json.dumps`` writes NaN and Infinity as the bare tokens ``NaN`` and
+    ``Infinity``.  Python reads those back, so every server-side test passed,
+    but they are not JSON and ``JSON.parse`` rejects the whole document.  An
+    uninitialised float channel in one telemetry slot therefore made the
+    *entire* ``/state`` response unreadable to the browser, and the shell's
+    poll threw before it rendered anything -- which is what left the sidebar
+    reading "NOT PUBLISHED" with the drone connected and streaming cleanly.
+
+    ``None`` is the honest mapping: the reading exists but has no value.
+    """
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
 
 
 def _validate_request_headers(headers: dict[str, str],
@@ -948,7 +971,11 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
 
     class Handler(BaseHTTPRequestHandler):
         def _json(self, status: int, payload: dict[str, Any]) -> None:
-            body = json.dumps(payload, sort_keys=True, default=str).encode()
+            # allow_nan=False turns a missed non-finite value into a loud
+            # failure here rather than a silent JSON.parse error in the
+            # browser; _json_safe is what makes that never fire.
+            body = json.dumps(_json_safe(payload), sort_keys=True,
+                              default=str, allow_nan=False).encode()
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
