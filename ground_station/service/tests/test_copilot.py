@@ -23,6 +23,7 @@ from ground_station.service.copilot import (
     OpenAILLM,
     build_copilot,
     _has_key,
+    _short_error,
 )
 
 
@@ -430,3 +431,59 @@ def test_build_copilot_uses_env_defaults():
         os.environ.pop("COPILOT_API_KEY", None)
         os.environ.pop("COPILOT_MODEL", None)
         os.environ.pop("COPILOT_BASE_URL", None)
+
+
+# ── _short_error redaction ─────────────────────────────────────────────────
+#
+# _short_error feeds the operator's chat.  Its input can be a request URL or an
+# upstream error body, so it is the last place an API key can escape.  Every key
+# literal below is fake.
+
+# 45 chars after the prefix, so it survives a 117-char cut only in part.
+_FAKE_LONG = "sk-fake-" + "q7w8e9r1t2y3u4i5o6p7a8s9d0f1g2h3j4k5l6z7x"
+_FAKE_SLICE = "q7w8e9r1t2y3u4i5o6p7"  # 20 chars, distinctive
+
+
+def test_short_error_redacts_key_straddling_the_truncation_point():
+    # The regression.  This prefix is 88 chars, so the key starts before the
+    # 117-char cut and runs past it: truncate-then-redact left a 29-char
+    # fragment, too short for the old {40,} rule, and printed it in chat.
+    out = _short_error("upstream refused: " + "x" * 69 + " " + _FAKE_LONG)
+    assert _FAKE_SLICE not in out
+    assert _FAKE_LONG not in out
+
+
+def test_short_error_redacts_key_shorter_than_the_old_threshold():
+    # 24 chars: under the old {40,} rule, never redacted at all.
+    key = "sk-fake-abcd1234efgh5678"
+    out = _short_error("connect failed for " + key)
+    assert key not in out
+    assert "REDACTED" in out
+
+
+def test_short_error_redacts_bearer_token_and_keeps_the_label():
+    out = _short_error("Authorization: Bearer abc123def")
+    assert "abc123def" not in out
+    # The label survives, so the operator still learns which header failed.
+    assert out == "Authorization: Bearer REDACTED"
+
+
+def test_short_error_redacts_labelled_query_parameters():
+    for label in ("api_key=", "api-key:", "token=", "key="):
+        out = _short_error("GET https://x/v1?" + label + "tok_9f2b1c")
+        assert "tok_9f2b1c" not in out, label
+        assert "REDACTED" in out, label
+
+
+def test_short_error_passes_through_a_message_with_no_key():
+    msg = "plain timeout after 30s"
+    assert _short_error(msg) == msg
+
+
+def test_short_error_returns_only_the_first_line():
+    assert _short_error("first line only\nTraceback...\n  File x") == "first line only"
+
+
+def test_short_error_never_exceeds_120_chars():
+    for msg in ("short", "y" * 500, "z" * 400 + " " + _FAKE_LONG):
+        assert len(_short_error(msg)) <= 120

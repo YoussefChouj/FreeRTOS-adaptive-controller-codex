@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import threading
 import time
 import urllib.error
@@ -320,15 +321,34 @@ class Copilot:
         return "\n".join(parts)
 
 
+# A token introduced by a label we recognise: "Bearer x", "api_key=x",
+# "api-key: x", "token=x", "key=x".  The label is kept (it tells the operator
+# what failed); only the value after it is replaced.  `\b` before the
+# alternation stops the bare `key` branch from matching inside `api_key`,
+# where `_` is a word character and so offers no boundary.
+_LABELLED_SECRET_RE = re.compile(
+    r"(?i)(\b(?:bearer|api[_-]?key|token|key)\b\s*[:=]?\s*)(\S+)")
+# Vendor-prefixed keys carry no label of their own.
+_SK_SECRET_RE = re.compile(r"\bsk-\S+")
+# Backstop for anything else key-shaped.  20 is short enough to catch the
+# shorter vendor keys and long enough not to eat ordinary words.
+_LONG_TOKEN_RE = re.compile(r"[A-Za-z0-9_\-]{20,}")
+
+
 def _short_error(detail: str) -> str:
-    """Return a short, operator-friendly error message (max ~120 chars)."""
-    # Strip any trace of the API key or long stack traces.
+    """Return a short, operator-friendly error message (max 120 chars).
+
+    The detail can be a request URL or an upstream error body, either of which
+    may carry the API key, so redact before shortening.  Truncating first would
+    cut a key that straddles the limit down to a fragment too short for the
+    length-based backstop to catch, leaking it into the operator's chat.
+    """
     cleaned = detail.split("\n")[0].strip()
+    cleaned = _SK_SECRET_RE.sub("REDACTED", cleaned)
+    cleaned = _LABELLED_SECRET_RE.sub(lambda m: m.group(1) + "REDACTED", cleaned)
+    cleaned = _LONG_TOKEN_RE.sub("REDACTED", cleaned)
     if len(cleaned) > 120:
         cleaned = cleaned[:117] + "..."
-    # Remove any token-like substrings that might leak keys.
-    import re
-    cleaned = re.sub(r"[A-Za-z0-9_\-]{40,}", "TOKEN", cleaned)
     return cleaned
 
 
