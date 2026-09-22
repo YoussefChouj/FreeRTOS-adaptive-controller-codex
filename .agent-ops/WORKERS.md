@@ -37,11 +37,23 @@ Reference for planners before spawning a worker. Facts sourced from the listed f
 - Best-effort only — `verify` re-checks the log and the paths deterministically.
 
 **Serena (oc workers):** every oc worker has the `serena` MCP server (Windows `serena.exe` over WSL
-interop, `~/.config/opencode/serena-mcp.sh`), bound to the main repo. `.serena/project.yml` is
-`read_only: true` and the opencode `tools` block disables Serena's shell/edit/memory-write tools, so
-workers get `find_symbol`, `find_referencing_symbols`, `get_symbols_overview`, `get_diagnostics_for_file`.
-Task files should say "locate code with serena find_symbol, not find/grep over the repo".
-In a worktree Serena still points at main: use it to navigate, then edit the worktree copy.
+interop, `~/.config/opencode/serena-mcp.sh`). Which checkout it binds to depends on the spawn:
+
+| Spawn | Serena project | Editing |
+| --- | --- | --- |
+| plain | main repo | refused — `.serena/project.yml` has `read_only: true` |
+| `-Worktree` | that worktree | allowed — `spawn-worker.sh` writes a `read_only: false` copy of `project.yml` into the worktree and exports `SERENA_PROJECT=<windows path>` |
+
+The enforcement point is `read_only` in `project.yml`, which is server-side: the Serena process
+itself refuses every edit tool, so a worker cannot talk its way past it. The opencode `tools` block
+denies exactly one thing, `serena_execute_shell_command` — `read_only` does not cover the shell tool
+and it would bypass opencode's own bash deny rules.
+
+So a worktree worker should edit *through* Serena (`replace_symbol_body`, `insert_after_symbol`)
+rather than by line-based search-and-replace: the symbol tools locate the edit by name and cannot
+corrupt an unrelated part of the file. `spawn-worker.sh` appends a paragraph saying so to every
+worktree task file. A non-worktree worker gets the read-only set: `find_symbol`,
+`find_referencing_symbols`, `get_symbols_overview`, `get_diagnostics_for_file`.
 
 **win.sh HW_WRITE guard:** `win.sh` refuses flash/reset/halt/poke commands with exit 126 unless `AGENT_OPS_ALLOW_HW=1`. Workers build; the supervisor flashes.
 
