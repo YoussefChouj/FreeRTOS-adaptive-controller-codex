@@ -574,6 +574,19 @@
 
 <footer>UAV Ground Station Shell &mdash; polls every 500 ms</footer>
 
+<!-- Phase 1B: code-reload banner (shown when index.html or shared shell
+     files change; preserves sessionStorage state across reload). -->
+<div id="reload-banner" class="hidden" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:var(--card,#1f2430);border-top:1px solid var(--green,#4ECCA3);color:var(--fg,#e6e9ef);padding:12px 16px;font-size:13px;display:flex;gap:12px;align-items:center;justify-content:space-between;">
+  <div>
+    <strong>What changed</strong> <span id="reload-files" style="opacity:.85">—</span>
+    <div id="reload-summary" style="opacity:.6;font-size:12px;margin-top:2px;"></div>
+  </div>
+  <div style="display:flex;gap:8px;flex:0 0 auto;">
+    <button id="reload-stay" style="background:none;border:1px solid rgba(230,233,239,.4);color:inherit;padding:6px 12px;border-radius:4px;">Stay</button>
+    <button id="reload-now" style="background:var(--green,#4ECCA3);border:none;color:#0a0d12;padding:6px 14px;border-radius:4px;font-weight:600;">Reload</button>
+  </div>
+</div>
+
 <script>
 (async function () {
   'use strict';
@@ -627,6 +640,13 @@
     '/plugins/path-panel.js',
     '/plugins/slot-manager-panel.js',
     '/plugins/resource-map-panel.js',  // S7: firmware resource/data-flow map
+    // Phase 1B: agent UI plugins
+    '/plugins/copilot-drawer.js',       // A: co-pilot drawer
+    '/plugins/header-mode-pill.js',     // B: header mode pill + big STOP
+    '/plugins/approval-queue.js',       // C: ordered approval queue
+    '/plugins/activity-timeline.js',    // D: activity timeline
+    '/plugins/highlight-overlay.js',    // E: highlight overlay + ui executor
+    '/plugins/code-reload-banner.js',   // F: per-plugin hot reload + banner
   ];
 
   for (const src of PLUGIN_FILES) {
@@ -850,6 +870,10 @@
     });
     // Persist selected workspace
     try { localStorage.setItem('gs_workspace', name); } catch (_) {}
+    // Phase 1B: report the tab switch to the agent (observable UI state).
+    if (typeof shellApi !== 'undefined' && typeof shellApi.reportUiState === 'function') {
+      shellApi.reportUiState();
+    }
   }
 
   // Workspace tab click
@@ -1023,7 +1047,233 @@
     isDisarmed: function () { return _gates.disarmed; },
     // getArmState() → 'armed'|'disarmed'|null (null = unknown)
     getArmState: function () { return _lastArmState; },
+    // ── Phase 1B: agent SSE + UI action integration ────────────────────
+    // onAgentEvent(cb) — subscribe to /api/agent/stream events. The shell
+    // disambiguates event: names from the data payload, so plugins just see
+    // { event, data }. Returns an unsubscribe function.
+    onAgentEvent: function (cb) {
+      if (typeof cb !== 'function') return function () {};
+      _agentSsSubs.push(cb);
+      return function () {
+        var i = _agentSsSubs.indexOf(cb);
+        if (i >= 0) _agentSsSubs.splice(i, 1);
+      };
+    },
+    // getAgentControl() → current {mode, allow_agent_arm, changed_at, changed_by}
+    getAgentControl: function () {
+      return _agentControl || { mode: 'unknown', allow_agent_arm: false };
+    },
+    // reportUiState() → POST the shell's current UI state so the agent can
+    // observe what the operator is looking at. Call on tab switch / drawer.
+    reportUiState: function (extras) {
+      var payload = {
+        active_tab: _activeWorkspace,
+        visible_panels: getWorkspacePanelNames(_activeWorkspace),
+        drawer_open: !!(document.getElementById('copilot-drawer') &&
+                        document.getElementById('copilot-drawer').classList.contains('open')),
+        url: location.pathname,
+      };
+      if (extras) Object.keys(extras).forEach(function (k) {
+        payload[k] = extras[k];
+      });
+      return fetch('/api/agent/ui-state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).catch(function () { /* best effort */ });
+    },
+    // ackUiAction() → browser confirms it executed (or failed) a ui_action.
+    ackUiAction: function (plan_id, step_id, ok, error) {
+      return fetch('/api/agent/ui-ack', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan_id: plan_id, step_id: step_id,
+                               ok: !!ok, error: error || null })
+      }).catch(function () {});
+    },
+    // runUiAction() → execute a single ui_action command from the agent and
+    // ack it. 'highlight' animates the [data-testid=...] target (if any).
+    runUiAction: function (action) {
+      var plan_id = action.plan_id, step_id = action.step_id;
+      var act = action.action, args = action.args || {};
+      function ack(ok, error) {
+        shellApi.ackUiAction(plan_id, step_id, ok, error);
+      }
+      try {
+        if (act === 'highlight') {
+          var target = args.testid && document.querySelector(
+            '[data-testid="' + window.CSS.escape(args.testid) + '"]');
+          if (!target) { ack(false, 'no element matching testid=' + args.testid); return; }
+          flashHighlight(target, args.text || args.label);
+          ack(true);
+        } else if (act === 'navigate') {
+          if (typeof switchWorkspace === 'function' && args.tab) {
+            switchWorkspace(args.tab);
+            if (typeof shellApi.reportUiState === 'function') shellApi.reportUiState();
+          }
+          ack(true);
+        } else if (act === 'say') {
+          ack(true);
+        } else {
+          ack(false, 'unknown ui_action: ' + act);
+        }
+      } catch (e) {
+        ack(false, String(e && e.message || e));
+      }
+    },
+  }; // /shellApi
+  var _lastAgentAckSeq = 0;
+
+  /* ── Phase 1B: agent SSE stream (control/approval/plan/step/message/
+   * ui_action/shell_updated/activity) → plugin dispatch + hot reload ── */
+  var _agentSsSubs = [];
+  function dispatchAgentEvent(event, data) {
+    var msg = { event: event, data: data };
+    _agentSsSubs.slice().forEach(function (cb) {
+      try { cb(msg); } catch (e) { console.error('[shell] agent event cb error', e); }
+    });
+    // built-in control state listener
+    if (event === 'control' && data && typeof data === 'object') {
+      _agentControl = data;
+      if (typeof renderAgentModePill === 'function') renderAgentModePill();
+    }
+    // ui_action executor: run it and ack back to the agent
+    if (event === 'ui_action' && typeof shellApi.runUiAction === 'function') {
+      shellApi.runUiAction(data);
+    }
+    // shell_updated → per-plugin hot reload or full-reload banner
+    if (event === 'shell_updated' && data && Array.isArray(data.files)) {
+      handleShellUpdated(data.files, data.at);
+    }
+  }
+  var _agentControl = null;
+  function connectAgentSSE() {
+    if (!window.EventSource || window.__gs_agent_es__) return;
+    var es;
+    try { es = new EventSource('/api/agent/stream'); }
+    catch (e) { return; }
+    window.__gs_agent_es__ = es;
+    es.addEventListener('control', function (e) {
+      try { dispatchAgentEvent('control', JSON.parse(e.data)); } catch (_) {}
+    });
+    es.addEventListener('approval', function (e) {
+      try { dispatchAgentEvent('approval', JSON.parse(e.data)); } catch (_) {}
+    });
+    es.addEventListener('plan', function (e) {
+      try { dispatchAgentEvent('plan', JSON.parse(e.data)); } catch (_) {}
+    });
+    es.addEventListener('step', function (e) {
+      try { dispatchAgentEvent('step', JSON.parse(e.data)); } catch (_) {}
+    });
+    es.addEventListener('message', function (e) {
+      try { dispatchAgentEvent('message', JSON.parse(e.data)); } catch (_) {}
+    });
+    es.addEventListener('ui_action', function (e) {
+      try { dispatchAgentEvent('ui_action', JSON.parse(e.data)); } catch (_) {}
+    });
+    es.addEventListener('shell_updated', function (e) {
+      try { dispatchAgentEvent('shell_updated', JSON.parse(e.data)); } catch (_) {}
+    });
+    es.addEventListener('activity', function (e) {
+      try { dispatchAgentEvent('activity', JSON.parse(e.data)); } catch (_) {}
+    });
+    es.onerror = function () {
+      // transient; EventSource auto-reconnects. Close on page unload only.
+    };
+    window.addEventListener('beforeunload', function () { try { es.close(); } catch (_) {} });
+  }
+
+  /* ── Phase 1B: hot reload + what-changed banner ── */
+  var _hotReloaded = {};
+  // Map a plugin file back to the plugin name(s) it registered, so we can
+  // re-mount only that plugin instead of a full reload.
+  function pluginNamesInFile(src) {
+    var base = src.replace(/^.*\//, '').replace(/\.js$/, '');
+    // convention: <basename>-panel.js → the plugin registers a panel; fall
+    // back to scanning registered plugin names that mention the file.
+    var names = window.__gs_plugins__.map(function (p) { return p.name; });
+    var matches = names.filter(function (n) {
+      var slug = n.replace(/\s+/g, '-').toLowerCase();
+      return slug.indexOf(base) === 0 || base.indexOf(slug.split('-')[0]) === 0;
+    });
+    return matches.length ? matches : null;
+  }
+  function remountPluginFile(src) {
+    // Fetch the updated file, eval it (re-registers into __gs_plugins__),
+    // then re-init that plugin. The plugin's own destroy() ran implicitly when
+    // the page kept running; we mount a fresh panel body for it.
+    return fetch(src).then(function (res) {
+      if (!res.ok) throw new Error('git ' + res.status);
+      return res.text();
+    }).then(function (text) {
+      var names = pluginNamesInFile(src);
+      eval(text); // re-registers the plugin (pushes a new entry)
+      var fresh = window.__gs_plugins__.slice(-names.length || -1);
+      fresh.forEach(function (p) {
+        try {
+          p.init(shellApi);
+          _destroyFns.push(p.destroy);
+          console.log('[shell] hot-reloaded plugin:', p.name);
+        } catch (e) { console.error('[shell] hot-reload init error:', p.name, e); }
+      });
+      _hotReloaded[src] = true;
+    });
+  }
+  function backfillChangedCard(files, names, summary) {
+    var card = document.getElementById('reload-banner');
+    if (card) card.classList.remove('hidden');
+    var list = document.getElementById('reload-files');
+    if (list) list.textContent = (names && names.length ? names.join(', ') : files.join(', '));
+    var sum = document.getElementById('reload-summary');
+    if (sum && summary) sum.textContent = summary;
+  }
+  function handleShellUpdated(files, at) {
+    var pluginFiles = files.filter(function (f) { return /^plugins\/.*\.js$/.test(f); });
+    // files may be bare "plugins/x.js" or full paths; normalise
+    var normalized = pluginFiles.map(function (f) { return '/' + f.replace(/^\/+/, ''); });
+    var sharedChanged = files.some(function (f) {
+      return !/^plugins\/.*\.js$/.test(f); // index.html or shared shell file
+    });
+    if (sharedChanged) {
+      // Preserve sessionStorage state across the reload.
+      try { sessionStorage.setItem('gs_sse_state', JSON.stringify({
+        control: _agentControl, at: at || Date.now() })); } catch (_) {}
+      backfillChangedCard(files, normalized, at ? 'shell updated' : null);
+      showReloadBanner();
+      return;
+    }
+    normalized.forEach(function (src) { remountPluginFile(src); });
+  }
+  // Global hook used by the code-reload plugin to hot-reload a single plugin
+  // file (remount only that plugin, no full page reload).
+  window.__gs_hot_reload_plugin__ = function (src) {
+    return remountPluginFile(src);
   };
+
+  function showReloadBanner() {
+    var banner = document.getElementById('reload-banner');
+    if (banner) {
+      banner.classList.remove('hidden');
+      var btn = document.getElementById('reload-now');
+      if (btn) btn.onclick = function () { window.location.reload(); };
+      var stay = document.getElementById('reload-stay');
+      if (stay) stay.onclick = function () { banner.classList.add('hidden'); };
+    }
+  }
+  /* highlight flash used by runUiAction('highlight') */
+  function flashHighlight(el, text) {
+    var cls = 'ag-highlight';
+    el.classList.add(cls);
+    var tip = el.getAttribute('data-ag-tip');
+    if (text && !tip) { el.setAttribute('data-ag-tip', text); }
+    setTimeout(function () { el.classList.remove(cls); }, 1800);
+  }
+  /* ── operator -> agent UI-state reporting (clicks / tab switches) ── */
+  function wireUiStateReporting() {
+    document.addEventListener('click', function () {
+      if (typeof shellApi.reportUiState === 'function') shellApi.reportUiState({ click: true });
+    }, true);
+  }
 
   /* ── Plugin bootstrap ── */
   window.__gs_plugins__.forEach(function (p) {
@@ -1327,6 +1577,15 @@
   window.__gs_gates__ = function () { return Object.assign({}, _gates); };
   /* Expose active workspace so plugins can react to workspace changes. */
   window.__gs_workspace__ = function () { return _activeWorkspace; };
+
+  /* ── Phase 1B init: agent SSE, ui-state reporting ── */
+  function getWorkspacePanelNames(ws) {
+    return window.__gs_plugins__
+      .filter(function (p) { return String(p.workspace).split(/\s/).indexOf(ws) >= 0; })
+      .map(function (p) { return p.name; });
+  }
+  connectAgentSSE();
+  wireUiStateReporting();
 
 })();
 </script>

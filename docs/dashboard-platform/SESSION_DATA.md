@@ -150,3 +150,37 @@ generalized persistence beyond this change.
   `__init__`, `start`, `stop`, `_note_recorder`, and the three ingest paths.
 * `/health` recorder block: `ground_station/service/api.py` — `_recorder_status`.
 * Ignore rule: `.gitignore` covers `logs/sessions/`.
+
+## Telemetry (`REC`) vs. the always-on activity journal
+
+There are **two** independent on-disk artifacts. They are deliberately split:
+
+| | **Telemetry recorder (`REC`)** | **Activity journal (always on)** |
+|---|---|---|
+| Path | `logs/sessions/<yyyyMMdd-HHMMSS>/telemetry.csv` | `logs/activity/<YYYY-MM-DD>.jsonl` |
+| Content | raw adapted sample rows (`received_ns,slot,key,value`) | one JSON event per line: `{seq,t,iso,kind,source,actor,data}` |
+| On/off | **opt-in** — operator starts/stops it (`recording_start` / `recording_stop`) | **always on**; independent of `REC` |
+| Survives restart | each start makes a fresh session dir | yes — daily rotation, `seq` resumes from the largest on disk |
+| Lifetime | per recording session | persistent, rotated at UTC midnight |
+| Who reads it | analysis/replay offline | live agent UI (timeline) and `GET /api/agent/history` |
+
+Deciding factors:
+
+* Executing a **critical command** (arm/motor/param) telemetry recording is
+  *off* still lands operator + agent actions in the activity journal, because
+  the operator must be able to reconstruct *why* the drone did something even
+  if no one had started `REC`.
+* The journal is high-granularity but low-cardinality (rare events), so it can
+  be a bounded in-memory ring + an append-only JSONL file with no ingest-path
+  penalty — unlike the high-rate telemetry CSV.
+
+Service lifecycle that writes to the journal: `control` mode changes, `approval`
+decisions, `plan_created/done/failed/cancelled`, agent `message`s, `ui_state`
+(operator tab/drawer switches), `ui_action` executions and `shell_updated`.
+Each write also pushes an SSE `activity` event to `/api/agent/stream`.
+
+* Journal implementation: `ground_station/service/activity.py` — `ActivityJournal`.
+* Wiring: `ground_station/service/agent.py` — `AgentManager._activity`.
+* History API: `GET /api/agent/history?since=&limit=&kind=&source=` in
+  `ground_station/service/api.py`.
+* Root override for tests: env var `GS_ACTIVITY_ROOT`.

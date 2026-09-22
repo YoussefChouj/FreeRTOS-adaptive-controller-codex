@@ -29,7 +29,10 @@ import queue
 import threading
 import time
 from collections import deque
+from pathlib import Path
 from typing import Any, Callable
+
+from ground_station.service.activity import ActivityJournal
 
 # ---------------------------------------------------------------------------
 # Action registry
@@ -512,9 +515,21 @@ class AgentManager:
     latest value for a ``wait_for`` step.
     """
 
-    def __init__(self, service, shell_root: str | None = None) -> None:
+    def __init__(self, service, shell_root: str | None = None,
+                 journal_root: str | None = None) -> None:
         self.service = service
         self.shell_root = shell_root
+        # Always-on activity journal (Phase 1B). Defaults to GS_ACTIVITY_ROOT
+        # then <repo>/logs/activity when used in a real serving context; tests
+        # that do not opt in pass shell_root=None and journal_root=None so
+        # they never write journal files to the repo.
+        self.journal_root = (journal_root
+                             or os.environ.get("GS_ACTIVITY_ROOT")
+                             or (str(Path(__file__).resolve().parents[2]
+                                     / "logs" / "activity")
+                                 if self.shell_root is not None else None))
+        self._journal = (ActivityJournal(self.journal_root)
+                         if self.journal_root is not None else None)
         self.mode = "supervised"
         self.allow_agent_arm = False
         self.control_changed_at: float | None = None
@@ -1033,13 +1048,24 @@ class AgentManager:
     # -- UI state -----------------------------------------------------------
     def set_ui_state(self, payload: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
-            self._ui_state = {
+            new_state = {
                 "active_tab": payload.get("active_tab"),
                 "visible_panels": payload.get("visible_panels") or [],
                 "drawer_open": bool(payload.get("drawer_open", False)),
                 "url": payload.get("url"),
                 "reported_at": time.time(),
             }
+            # Only journal a *change* in what the operator is looking at, so
+            # interactive tab/drawer/click changes appear on the timeline but
+            # a normal report of unchanged state does not flood the journal.
+            prev = self._ui_state or {}
+            changed = (new_state["active_tab"] != prev.get("active_tab")
+                       or new_state["drawer_open"] != prev.get("drawer_open")
+                       or new_state["url"] != prev.get("url"))
+            self._ui_state = new_state
+            if changed:
+                self._activity("ui_state", new_state,
+                               actor="operator", source="operator")
             return self._ui_state
 
     def ui_state(self) -> dict[str, Any]:
@@ -1131,12 +1157,32 @@ class AgentManager:
 
     def _on_message(self, entry: dict[str, Any]) -> None:
         self._broadcast("message", entry)
+        self._activity("message", entry, actor=entry.get("source", "agent"),
+                       source="agent")
+
+    def _activity(self, kind: str, data: dict[str, Any],
+                  actor: str = "agent", source: str = "agent") -> dict:
+        """Append to the always-on journal and push an ``activity`` SSE event."""
+        if self._journal is None:
+            return {}
+        entry = self._journal.record(kind, source=source, actor=actor, data=data)
+        self._broadcast("activity", entry)
+        return entry
+
+    def journal_history(self, since: int = 0, limit: int = 100,
+                        kind: str | None = None, source: str | None = None
+                        ) -> list[dict]:
+        if self._journal is None:
+            return []
+        return self._journal.history(since=since, limit=limit, kind=kind,
+                                     source=source)
 
     def _log_event(self, kind: str, data: dict[str, Any]) -> None:
         try:
             self.service._sess_event(kind, data, source="agent")
         except Exception:
             pass
+        self._activity(kind, data)
 
     # -- ui step execution ---------------------------------------------------
     def _exec_ui(self, plan: Plan, step: PlanStep) -> Any:
@@ -1386,5 +1432,6 @@ class PlanCancelled(Exception):
 
 
 # Deferred import guard so importing agent.py never pulls service wiring in.
-def build_agent_manager(service, shell_root: str | None = None) -> AgentManager:
-    return AgentManager(service, shell_root=shell_root)
+def build_agent_manager(service, shell_root: str | None = None,
+                        journal_root: str | None = None) -> AgentManager:
+    return AgentManager(service, shell_root=shell_root, journal_root=journal_root)

@@ -493,14 +493,32 @@ Run one plan at a time; a second `POST` gets **409** unless you pass
 
 `GET /api/agent/stream` is a Server-Sent-Events stream (`text/event-stream`,
 15 s heartbeat) with event types `control`, `plan`, `step`, `approval`,
-`ui_action`, `message`, `shell_updated`. UI steps are delivered as
+`ui_action`, `message`, `shell_updated`, `activity`. UI steps are delivered as
 `ui_action`; the browser confirms with `POST /api/agent/ui-ack`
 `{plan_id, step_id, ok, error?}` within 5 s or the step fails with
 `ui_timeout`. `GET /api/agent/state` is one cheap snapshot for agents
 (`control`, `ui`, `recording`, `layout`, `arm_state`, `stream_health`,
 `running_plan`, `pending_approvals`, `last_messages`).
 
-### 10.5 Messages
+### 10.5 Telemetry (`REC`) vs. the always-on activity journal
+
+Two separate on-disk artifacts, by design:
+
+* **Telemetry recorder (`REC`, opt-in):** `logs/sessions/<ts>/telemetry.csv`
+  with raw sample rows, only while recording is on. See `SESSION_DATA.md`.
+* **Activity journal (always on):** `logs/activity/<YYYY-MM-DD>.jsonl` — one
+  JSON event per line `{seq,t,iso,kind,source,actor,data}`, written regardless
+  of `REC`, daily-rotated, and surviving restarts (`seq` resumes from disk).
+  Every write also pushes an SSE `activity` event on `/api/agent/stream`
+  and is servable via `GET /api/agent/history?since=&limit=&kind=&source=`
+  (in-memory ring + file). Source: `ground_station/service/activity.py`,
+  wired in `AgentManager._activity`.
+
+Use the age-test: *telemetry* answers "what did the sensors read at rate R?" —
+you need `REC`. *Activity* answers "what did the operator/agent do, and when?"
+— that is always available even if nobody hit the record button.
+
+### 10.6 Messages
 
 `say` / `POST /api/agent/message {text, source}` appends an `agent` note.
 Operator notes (`note`/`goal`/`marker`) are also broadcast as `message`.

@@ -193,6 +193,7 @@ _ROUTE_MAP = {
         "/api/agent/plans/<id>": "one plan with per-step status/result/error",
         "/api/agent/approvals": "ordered pending approval queue",
         "/api/agent/state": "one agent-facing snapshot {control, ui, recording, layout, arm_state, stream_health, running_plan, pending_approvals, last_messages}",
+        "/api/agent/history": "always-on activity journal ?since=&limit=&kind=&source= - {entries: [{seq,t,iso,kind,source,actor,data}]}",
         # NOTE: /api/agent/stream (infinite SSE) and /api/agent/messages/wait
         # (long-poll) are intentionally NOT keys in this GET map: the existing
         # test_service route-smoke test fetches every GET route and would block
@@ -1415,6 +1416,24 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                 notes = _AGENT.wait_messages(since, timeout)
                 self._json(200, {"notes": notes,
                                  "last_seq": _AGENT.notes.last_seq})
+            elif route == "/api/agent/history":
+                if _AGENT is None:
+                    self._json(503, {"error": "agent layer unavailable"})
+                    return
+                qs = parse_qs(urlsplit(self.path).query)
+                try:
+                    since = int(qs.get("since", ["0"])[0] or 0)
+                except ValueError:
+                    since = 0
+                limit = int(qs.get("limit", ["100"])[0] or 100)
+                limit = min(max(0, limit), 2000)
+                kind = qs.get("kind", [None])[0] or None
+                source = qs.get("source", [None])[0] or None
+                rows = _AGENT.journal_history(since=since, limit=limit,
+                                              kind=kind, source=source)
+                self._json(200, {"entries": rows,
+                                 "since": since,
+                                 "count": len(rows)})
             elif static_root is not None:
                 # Static file serving
                 from urllib.parse import unquote, urlsplit
