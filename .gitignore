@@ -47,3 +47,10 @@ ground_station/service_test_*.txt
 
 # Per-session telemetry CSV recorder output
 logs/sessions/
+
+# clangd / Serena (generated: python -m ground_station.flashtool.compile_commands)
+compile_commands.json
+.cache/
+
+# Agent map (generated: python -m ground_station.agent_map build)
+docs/agent-map/agent_map.json

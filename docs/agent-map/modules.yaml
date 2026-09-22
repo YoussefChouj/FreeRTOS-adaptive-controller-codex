@@ -1,0 +1,47 @@
+# Agent-map modules: purpose + safety tier per file.
+# This is the only HUMAN-authored input to the agent map (everything else is
+# regenerated). A worker may DRAFT; only the operator marks it confirmed.
+# Format: list of {path, module, tier, note?}.
+#
+# Tier semantics:
+#   0  flight-critical: a change can crash the drone
+#   1  estimation / shadow: must never reach control paths
+#   2  telemetry, UI, tooling
+# Values are file:line anchors only as a hint for reviewers; the yaml `path`
+# is what the generator matches.
+draft: false
+confirmed: true
+operator: user, 2026-09-22 (chat approval of send_data.c tier 0 + s_ekf override)
+modules:
+  # --- tier 0 (flight-critical) ---
+  - {path: TASK/StabilizerTask.c, module: stabilizer control loop, tier: 0}
+  - {path: API/mrac.c, module: MRAC adaptive law, tier: 0}
+  - {path: API/mrac_math.c, module: MRAC math helpers, tier: 0}
+  - {path: API/pid.c, module: PID controller, tier: 0}
+  - {path: API/flight_fsm.c, module: flight state machine, tier: 0}
+  - {path: API/rc_input.c, module: RC input decode, tier: 0}
+  - {path: TASK/RemoterTask.c, module: remote control task, tier: 0}
+  - {path: BSP/pwm.c, module: PWM motor output, tier: 0}
+  - {path: API/imu_update.c, module: IMU update, tier: 0}
+  - {path: API/gyro_filter.c, module: gyro filter, tier: 0}
+  - {path: API/bmi088_driver.c, module: BMI088 IMU driver, tier: 0}
+  - {path: USER/main.c, module: main / init, tier: 0}
+  # command handler: 0xAA param writes (PID, MRAC, mixer, limits) land here
+  - {path: TASK/send_data.c, module: telemetry + command handler, tier: 0}
+  # --- tier 1 (estimation / shadow) ---
+  - {path: API/ekf.c, module: EKF estimator, tier: 1}
+  - {path: API/ekf_of.c, module: optical-flow EKF, tier: 1}
+  - {path: API/SINS.c, module: strapdown inertial nav, tier: 1}
+  - {path: API/thrust_estimators.c, module: thrust estimator, tier: 1}
+  - {path: API/Ano_OF.c, module: ANO optical flow, tier: 1}
+  - {path: API/GPS.c, module: GPS decode, tier: 1}
+  - {path: API/tf_mini_plus.c, module: TF-Mini lidar, tier: 1}
+  - {path: API/Filter.c, module: filters, tier: 1}
+  - {path: API/sysid.c, module: system identification, tier: 1}
+  # --- tier 2 (telemetry, UI, tooling) ---
+  - {path: API/subscribe.c, module: subscription protocol, tier: 2}
+  - {path: API/send_prof.c, module: profiling send, tier: 2}
+  - {path: ground_station/**, module: ground station tooling, tier: 2}
+# Per-symbol overrides: {name, tier, note}. Beat the tier of the defining file.
+symbols:
+  - {name: s_ekf, tier: 1, note: shadow EKF instance defined in TASK/send_data.c; must not reach control}

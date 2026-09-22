@@ -66,6 +66,23 @@ Corollaries:
   `~/.claude/settings.json`.
 - Create no commits. Do not run `git add`.
 
+## Code navigation protocol
+
+Applies to every agent: interactive sessions, workers, dashboard agents.
+Spec: `docs/dashboard-platform/AGENT_MAP_SPEC.md`. No vector RAG, no LLM-written metadata.
+
+1. Exact name known: `rg`/grep, or Serena `find_symbol` / `find_referencing_symbols` when the
+   `serena` MCP server is loaded (Windows sessions; WSL workers run without MCP).
+2. When `ground_station/agent_map/` exists: run `python -m ground_station.agent_map explain <name>`
+   before opening files.
+3. Do not search `stm32_lib/`, `FreeRTOS/` or `OBJ/` unless the task is about vendor code.
+4. Check the file's safety tier (spec, step 2) before editing. Tier 0 (flight-critical)
+   needs explicit permission in the task.
+5. Log navigation failures (could not find X, landed in the wrong file) to
+   `.agent_memory/frictions.jsonl`.
+6. After firmware sources are added or moved, regenerate clangd's database:
+   `python -m ground_station.flashtool.compile_commands`.
+
 ## Honesty rules
 
 - If a step cannot be run honestly, **say so and leave it untested rather than
