@@ -2314,6 +2314,7 @@
   ],
   "routes": {
     "GET": {
+      "/.well-known/agent-permissions.json": "permission manifest for arriving agents (LAS-WG shape); generated from the live action registry + control state",
       "/analysis/compare": "?a=<sid>&b=<sid>&stream=<int>&key=<key>",
       "/analysis/effective-rate": "?session_id=<sid>&stream=<int>",
       "/analysis/gaps": "?session_id=<sid>&stream=<int>",
@@ -2345,6 +2346,7 @@
       "/experiments/<name>": "one experiment",
       "/health": "service liveness + bridge connection",
       "/health/slots": "per-slot seq/loss/samples",
+      "/llms.txt": "Markdown map of what an agent should read first (text/markdown)",
       "/replay/<id>": "stored records for replay (?limit=N&offset=N, default 1000, limit=0 = all)",
       "/sessions": "session list (?limit=N)",
       "/sessions/<id>": "one session",
