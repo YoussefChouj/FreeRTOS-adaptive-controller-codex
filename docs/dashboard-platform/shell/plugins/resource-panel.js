@@ -1,54 +1,34 @@
 /**
  * resource-panel.js — RTOS resource panel (S15 overhaul)
  *
- * S15 fix: previously labeled groups "Scheduler / IMU Rate / Magnetometer /
- * Environment" implying they're RTOS metrics. In reality these are the
- * raw telemetry channels (ch0..ch11) being used as proxies for what would
- * otherwise be `rtos.*` keys.
+ * S15 relabelled three groups of raw telemetry channels (ch0..ch11) that had
+ * been masquerading as RTOS metrics, and added a banner apologising for them.
+ * They are now gone entirely, because the relabelling could not make them
+ * correct:
  *
- * This panel:
- *  - Relabels the ch0..ch11 groups as "Raw IMU Telemetry (via chN)"
- *  - "RTOS Metrics" group reads the SWD bridge at `streams['rtos']`.
- *    Keys the firmware cannot publish (rtos.usart3_tx_bytes) render
- *    n/p — "Not published by this build"; with no bridge at all the
- *    group names the missing --rtos-bridge flag instead.
- *  - Keeps the legacy ch0..ch11 raw telemetry display below it.
+ *  - `chN` keys only exist when the firmware schema carries no names
+ *    (wifi_bridge.py:2117 synthesises them as a fallback). This build sends
+ *    DWARF names, so all twelve cells read NO DATA permanently — measured
+ *    2026-09-23: zero `chN` keys anywhere in /state.
+ *  - Worse than dead, the labels were a guess. ch0 is index 0 of whatever the
+ *    operator put in slot 0; the Slot Manager exists precisely so that layout
+ *    can change. Calling it "Gyro X" is wrong the moment it does.
+ *  - The same signals are live and correctly named in the Data Flow and
+ *    Estimator panels (`c.gyro_x`, `imu.acc_x`, `c.altitude_cm`).
+ *
+ * Panels that legitimately fall back to `slot0.ch0.N` — estimator, mrac — do
+ * so behind an explicit [PROXY] badge, which is the honest way to use it.
+ *
+ * What is left is what the panel's name promises: RTOS counters from the SWD
+ * bridge at `streams['rtos']` (keys the firmware cannot publish render n/p —
+ * "Not published by this build"; with no bridge at all the group names the
+ * missing --rtos-bridge flag instead) plus slot-0 stream metadata.
  */
 (function () {
   'use strict';
 
   // ── Metric definitions ─────────────────────────────────────────────────
-  // Group 1 (renamed): raw IMU channels — these are NOT RTOS metrics, but
-  // are commonly used as proxies for estimator/IMU rate display.
-  var IMU_GROUPS = [
-    {
-      label: 'IMU Rate (raw via chN)',
-      items: [
-        { key: 'ch0', label: 'Gyro X',  unit: 'rad/s', fmt: 'float' },
-        { key: 'ch1', label: 'Gyro Y',  unit: 'rad/s', fmt: 'float' },
-        { key: 'ch2', label: 'Accel Z', unit: 'm/s²',  fmt: 'float' },
-      ],
-    },
-    {
-      label: 'Magnetometer (raw via chN)',
-      items: [
-        { key: 'ch3', label: 'Mag X', unit: '', fmt: 'float' },
-        { key: 'ch4', label: 'Mag Y', unit: '', fmt: 'float' },
-        { key: 'ch5', label: 'Mag Z', unit: '', fmt: 'float' },
-      ],
-    },
-    {
-      label: 'Environment (raw via chN)',
-      items: [
-        { key: 'ch6',  label: 'Baro Temp',   unit: '°C',  fmt: 'float' },
-        { key: 'ch7',  label: 'Baro Press',  unit: 'hPa', fmt: 'float' },
-        { key: 'ch10', label: 'Altitude',    unit: 'm',   fmt: 'float' },
-        { key: 'ch11', label: 'Battery',     unit: 'V',   fmt: 'float' },
-      ],
-    },
-  ];
-
-  // Group 2: RTOS metrics from `streams['rtos']` (SWD bridge) — same
+  // RTOS metrics from `streams['rtos']` (SWD bridge) — same
   // vocabulary as estimator-panel.js:
   //   n/p     = "Not published by this build"   (firmware limitation)
   //   NO DATA = no value seen yet               (bridge off or first sample)
@@ -132,22 +112,6 @@
 
   // ── Build panel HTML ───────────────────────────────────────────────────
   function buildHTML() {
-    var imuGroupHTML = IMU_GROUPS.map(function (g) {
-      var cells = g.items.map(function (item) {
-        return '<div style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:72px">' +
-          '<span style="font-size:10px;color:var(--muted)">' + item.label + '</span>' +
-          '<span id="res-' + item.key + '" class="res-no-data" style="font-family:Consolas,monospace;font-size:13px">' + NO_DATA + '</span>' +
-          '<span style="font-size:10px;color:var(--muted)">' + item.unit + '</span>' +
-          '</div>';
-      }).join('');
-      return [
-        '<div style="margin-bottom:12px">',
-        '  <div style="font-size:11px;color:var(--muted);margin-bottom:6px">' + g.label + '</div>',
-        '  <div style="display:flex;gap:12px;flex-wrap:wrap">' + cells + '</div>',
-        '</div>',
-      ].join('');
-    }).join('');
-
     var streamMetaHTML = [
       '<div style="margin-bottom:12px">',
       '  <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Stream Metadata (slot 0)</div>',
@@ -209,11 +173,9 @@
       '.res-no-data { color: var(--muted); }',
       '</style>',
 
-      // Disclaimer banner at top
-      '<div style="padding:8px 10px;background:rgba(245,166,35,0.10);border:1px solid var(--amber);border-radius:4px;color:var(--amber);font-size:11px;margin-bottom:12px;font-weight:600">',
-      '  ⓘ The ch0..ch11 groups below are <strong>raw IMU telemetry channels</strong>, not RTOS metrics. ',
-      '  RTOS resource counters live in the group above (SWD bridge); <code>n/p</code> = not published by this build.',
-      '</div>',
+      // The disclaimer banner that used to sit here explained the ch0..ch11
+      // groups. Those are gone (see the file header), so there is nothing
+      // left to disclaim.
 
       // Telemetry-bridge wellness (from /health/slots stream_health). This is
       // deliberately a distinct signal from the RTOS/SWD bridge so the page
@@ -225,19 +187,10 @@
 
       rtosGroupHTML,
       streamMetaHTML,
-      imuGroupHTML,
     ].join('');
   }
 
   // ── Update a metric cell ───────────────────────────────────────────────
-  function getChannelVal(values, ch) {
-    if (!values) return null;
-    // Try slot0.ch0.N, chN, both forms
-    if (values['slot0.ch0.' + ch] != null) return values['slot0.ch0.' + ch];
-    if (values['ch' + ch] != null) return values['ch' + ch];
-    return null;
-  }
-
   function updateCell(id, value, fmt) {
     var el = q(id);
     if (!el) return;
@@ -331,17 +284,6 @@
                                 (vals[slotPrefix + 'dropped'] != null ? vals[slotPrefix + 'dropped'] : null));
       updateCell('res-received', s.received != null ? s.received :
                                 (vals[slotPrefix + 'received'] != null ? vals[slotPrefix + 'received'] : null));
-    }
-
-    // IMU channels (slot 0)
-    if (stream0 && stream0.values) {
-      IMU_GROUPS.forEach(function (g) {
-        g.items.forEach(function (item) {
-          var ch = parseInt(item.key.replace('ch', ''), 10);
-          var v = getChannelVal(stream0.values, ch);
-          updateCell('res-' + item.key, v, item.fmt);
-        });
-      });
     }
 
     // RTOS stream (any slot containing rtos.* or system.* keys)
