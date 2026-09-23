@@ -474,21 +474,21 @@
   </div>
 </header>
 
-<div id="workspace-bar">
-  <button class="ws-tab active" data-ws="overview" data-testid="tab-overview">Overview</button>
-  <button class="ws-tab" data-ws="control" data-testid="tab-control">Control</button>
-  <button class="ws-tab" data-ws="estimator" data-testid="tab-estimator">Estimator</button>
-  <button class="ws-tab" data-ws="mrac" data-testid="tab-mrac">MRAC</button>
-  <button class="ws-tab" data-ws="telemetry" data-testid="tab-telemetry">Telemetry</button>
-  <button class="ws-tab" data-ws="experiments" data-testid="tab-experiments">Experiments</button>
-  <button class="ws-tab" data-ws="paths" data-testid="tab-paths">Paths</button>
-  <button class="ws-tab" data-ws="bench" data-testid="tab-bench">Bench</button>
-  <button class="ws-tab" data-ws="replay" data-testid="tab-replay">Replay</button>
-  <button class="ws-tab" data-ws="diagnostics" data-testid="tab-diagnostics">Diagnostics</button>
-  <button class="ws-tab" data-ws="approvals" data-testid="tab-approvals">Approvals<span class="approval-badge" id="approval-badge" style="display:none"></span></button>
+<div id="workspace-bar" role="tablist" aria-label="Workspace">
+  <button class="ws-tab active" role="tab" aria-selected="true" data-ws="overview" data-testid="tab-overview">Overview</button>
+  <button class="ws-tab" role="tab" aria-selected="false" data-ws="control" data-testid="tab-control">Control</button>
+  <button class="ws-tab" role="tab" aria-selected="false" data-ws="estimator" data-testid="tab-estimator">Estimator</button>
+  <button class="ws-tab" role="tab" aria-selected="false" data-ws="mrac" data-testid="tab-mrac">MRAC</button>
+  <button class="ws-tab" role="tab" aria-selected="false" data-ws="telemetry" data-testid="tab-telemetry">Telemetry</button>
+  <button class="ws-tab" role="tab" aria-selected="false" data-ws="experiments" data-testid="tab-experiments">Experiments</button>
+  <button class="ws-tab" role="tab" aria-selected="false" data-ws="paths" data-testid="tab-paths">Paths</button>
+  <button class="ws-tab" role="tab" aria-selected="false" data-ws="bench" data-testid="tab-bench">Bench</button>
+  <button class="ws-tab" role="tab" aria-selected="false" data-ws="replay" data-testid="tab-replay">Replay</button>
+  <button class="ws-tab" role="tab" aria-selected="false" data-ws="diagnostics" data-testid="tab-diagnostics">Diagnostics</button>
+  <button class="ws-tab" role="tab" aria-selected="false" data-ws="approvals" data-testid="tab-approvals">Approvals<span class="approval-badge" id="approval-badge" style="display:none"></span></button>
 </div>
 
-<div id="gate-bar">
+<div id="gate-bar" role="status" aria-live="polite" aria-label="Flight gates and alarms">
   <div class="gate-item unknown" id="gate-connection" title="MicoAir WiFi connected">
     <span class="gate-label">&#x1F4F6; CONN</span>
   </div>
@@ -941,9 +941,13 @@
 
   function switchWorkspace(name) {
     _activeWorkspace = name;
-    // Update tab active state
+    // Update tab active state. aria-selected carries the same fact as the
+    // .active class, but into the accessibility tree, which is what an agent
+    // driving this page actually reads — a CSS class is invisible to it.
     document.querySelectorAll('.ws-tab').forEach(function (btn) {
-      btn.classList.toggle('active', btn.getAttribute('data-ws') === name);
+      var on = btn.getAttribute('data-ws') === name;
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-selected', on ? 'true' : 'false');
     });
     // Show/hide plugin cards by workspace
     document.querySelectorAll('.plugin-card').forEach(function (card) {
@@ -1071,6 +1075,16 @@
       card.setAttribute('data-workspaces', ws);
       card.setAttribute('data-testid', 'panel-' + slug);
       card.setAttribute('data-gates', gates.join(' '));
+      /* Landmark + accessible name. data-testid only helps an agent that was
+       * told the selector in advance; role/aria-label put the panel in the
+       * accessibility tree, which is what a browser agent reads when it has
+       * to find a panel it was not briefed on. Workspace switching already
+       * sets display:none, which removes hidden panels from that tree, so an
+       * agent sees exactly the panels the operator sees. */
+      card.setAttribute('role', 'region');
+      card.setAttribute('aria-label', gates.length
+        ? name + ' (requires ' + gates.join(' and ') + ')'
+        : name);
       // Start hidden if not in the active workspace
       if (!wsMatches(ws, _activeWorkspace)) card.style.display = 'none';
       var header = document.createElement('div');
