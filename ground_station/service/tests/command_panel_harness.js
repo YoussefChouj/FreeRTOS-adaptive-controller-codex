@@ -46,6 +46,11 @@ class Element {
   dispatch(ev) {
     (this.handlers[ev] || []).forEach((fn) => fn.call(this, { type: ev, target: this }));
   }
+  querySelector(sel) {
+    if (!sel || !this.doc) return null;
+    var m = sel.match(/^#([\w-]+)$/);
+    return m ? this.doc.getElementById(m[1]) : null;
+  }
   get innerHTML() { return this._html; }
   set innerHTML(html) { this._html = html; if (this.doc) this.doc.scan(html); }
 }
@@ -97,7 +102,7 @@ function makeApi(opts) {
     },
     getState() { return null; },
     subscribe(cb) { api.stateCb = cb; },
-    registerPanel(name, renderFn) { api.panelName = name; api.renderFn = renderFn; },
+    registerPanel(name, renderFn, opts) { api.panelName = name; api._commandRenderFn = name === 'Command Panel' ? renderFn : api._commandRenderFn; api.renderFn = renderFn; },
   };
   return api;
 }
@@ -129,7 +134,7 @@ function loadPanel(api) {
   vm.createContext(sandbox);
   vm.runInContext(fs.readFileSync(PANEL, 'utf8'), sandbox, { filename: PANEL });
   sandbox.pluginInit(api);
-  api.renderFn(container);
+  (api._commandRenderFn || api.renderFn)(container);
   return { sandbox, doc, container, api };
 }
 

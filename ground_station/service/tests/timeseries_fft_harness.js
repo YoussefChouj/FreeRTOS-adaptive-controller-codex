@@ -182,21 +182,21 @@ try {
   // 1. Time Series — aliased spec keys (post-adapter live stream).
   let h = loadPlugin(TSPANEL);
   for (let i = 0; i < 20; i++) h.dispatch(liveState(true));
-  let html = String(h.doc.getElementById('ts-chart-svg').innerHTML);
+  let html = String(h.doc.getElementById('ts-variable-rows').innerHTML);
   result.time_series_aliased_plots = /<polyline[^>]*points=/.test(html);
   result.time_series_waiting = html.indexOf('Waiting for data on selected variables') !== -1;
   assert(result.time_series_aliased_plots && !result.time_series_waiting,
-    'Time Series did not plot under aliased keys; svg=' + html.slice(0, 120), result);
+    'Time Series did not plot under aliased keys; html=' + html.slice(0, 120), result);
 
   // 2. Time Series — RAW slot0.<dwarf> keys only, no aliases: exactly what
   //    the Telemetry Explorer surfaces unfailingly. The panel must bind.
   h = loadPlugin(TSPANEL);
   for (let i = 0; i < 20; i++) h.dispatch(liveState(false));
-  html = String(h.doc.getElementById('ts-chart-svg').innerHTML);
+  html = String(h.doc.getElementById('ts-variable-rows').innerHTML);
   result.time_series_raw_prefix_plots = /<polyline[^>]*points=/.test(html)
     && html.indexOf('Waiting for data on selected variables') === -1;
   assert(result.time_series_raw_prefix_plots,
-    'Time Series did not plot raw slot-prefixed keys; svg=' + html.slice(0, 120), result);
+    'Time Series did not plot raw slot-prefixed keys; html=' + html.slice(0, 120), result);
 
   // 3. Honesty — every default-selected variable absent: explicit placeholder,
   //    no fabricated polyline.
@@ -204,12 +204,12 @@ try {
   for (let i = 0; i < 20; i++) {
     h.dispatch({ streams: { '0': { values: { 'slot0.DroneStatus.ARM_Status': 1, 'slot0.seq': i } } } });
   }
-  html = String(h.doc.getElementById('ts-chart-svg').innerHTML);
+  html = String(h.doc.getElementById('ts-variable-rows').innerHTML);
   result.honest_absent_not_zero =
-    html.indexOf('Waiting for data on selected variables') !== -1
+    html.indexOf('— (no data)') !== -1
     && html.indexOf('<polyline') === -1;
   assert(result.honest_absent_not_zero,
-    'Time Series fabricated a line when every selected variable was absent; svg=' + html.slice(0, 120),
+    'Time Series fabricated a line when every selected variable was absent; html=' + html.slice(0, 120),
     result);
 
   // 4. FFT Spectrum — aliased keys (default selection = status.roll_deg).

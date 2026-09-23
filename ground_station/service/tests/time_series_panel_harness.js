@@ -184,12 +184,12 @@ function runChecks() {
 
     api.stateCb(syntheticState); api.stateCb(syntheticState);
 
-    const svg = doc.getElementById('ts-chart-svg');
-    assert(svg, 'SVG chart must exist');
-    const svgHtml = svg.innerHTML;
+    const chartArea = doc.getElementById('ts-variable-rows');
+    assert(chartArea, 'Chart area (ts-variable-rows) must exist');
+    const chartHtml = chartArea.innerHTML;
 
-    // Verify coordinates are rendered into SVG polyline points
-    assert(svgHtml.indexOf('polyline') !== -1, 'SVG must contain rendered polyline traces');
+    // Verify coordinates are rendered into SVG polyline traces (separate mode uses ts-variable-rows)
+    assert(chartHtml.indexOf('polyline') !== -1, 'Chart area must contain rendered polyline traces');
     console.log('  PASS: Polylines rendered for received position and status values');
 
     const legend = doc.getElementById('ts-legend');
@@ -400,12 +400,26 @@ function runChecks() {
     const scrubberBefore = doc.getElementById('ts-scrubber');
     const countBefore = Number(scrubberBefore.max) + 1;
 
+    // eefa5c9 moved the default view to per-variable rows; the "Zoomed Region"
+    // banner is drawn only by renderOverlayChart(), so in separate mode there is
+    // no label to assert on. Assert the effect instead: count the sample points
+    // actually plotted across the rows.
+    function plottedPoints() {
+      const rows = doc.getElementById('ts-variable-rows');
+      const attrs = String(rows.innerHTML).match(/points="([^"]*)"/g) || [];
+      return attrs.reduce((n, a) => n + a.split(/\s+/).filter((t) => t.indexOf(',') !== -1).length, 0);
+    }
+
+    const pointsBefore = plottedPoints();
+    assert(pointsBefore > 0, 'Chart area must plot sample points before zoom');
+
     // Trigger Zoom In button
     const btnZIn = doc.getElementById('ts-btn-zoom-in');
     btnZIn.click();
 
-    const svgZoom = doc.getElementById('ts-chart-svg');
-    assert(svgZoom.innerHTML.indexOf('Zoomed Region') !== -1, 'SVG chart indicates active Zoomed Region');
+    const pointsDuring = plottedPoints();
+    assert(pointsDuring > 0 && pointsDuring < pointsBefore,
+      'Zoom in must narrow the plotted window (during=' + pointsDuring + ', before=' + pointsBefore + ')');
 
     // Verify buffer was not truncated or dropped during zoom
     const scrubberDuring = doc.getElementById('ts-scrubber');
@@ -417,7 +431,7 @@ function runChecks() {
     const btnZReset = doc.getElementById('ts-btn-zoom-reset');
     btnZReset.click();
 
-    assert(svgZoom.innerHTML.indexOf('Zoomed Region') === -1, 'Reset Zoom clears zoomed indicator');
+    assert.strictEqual(plottedPoints(), pointsBefore, 'Reset zoom restores the full plotted window');
     const scrubberAfter = doc.getElementById('ts-scrubber');
     assert.strictEqual(Number(scrubberAfter.max) + 1, countBefore, 'Reset zoom restores full buffer view');
     console.log('  PASS: Reset zoom restores full buffer view');
