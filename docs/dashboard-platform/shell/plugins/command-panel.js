@@ -1387,6 +1387,39 @@
       '.cp-hist-val { color: var(--amber); }',
       '.cp-hist-status { text-align: center; }',
       '.cp-no-history { color: var(--muted); font-size: 11px; text-align: center; padding: 10px; }',
+      /* Parameters Panel */
+      '.cp-params-search { width:100%; padding:6px 10px; background:var(--bg); border:1px solid var(--border); border-radius:4px; color:var(--text); font-size:12px; font-family:Consolas,monospace; box-sizing:border-box; margin-bottom:10px; }',
+      '.cp-params-search:focus { outline:none; border-color:var(--accent); }',
+      '.cp-params-section { margin-bottom:14px; }',
+      '.cp-params-section-title { font-size:10px; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px; padding:3px 8px; border-radius:3px; font-weight:700; }',
+      '.cp-params-cmd-group { margin-bottom:8px; }',
+      /* --accent (#0f3460) is a surface colour in this shell, not a foreground.
+       * On --bg (#1a1a2e) it measures 1.36:1, so the command-group headings --
+       * the things the operator scans to find a parameter -- were invisible.
+       * The file's own correct use of --accent is as a BACKGROUND with
+       * --text on top (.cp-submit, line 1314). */
+      '.cp-params-cmd-name { font-size:11px; font-weight:600; padding:2px 0; color:var(--text); }',
+      '.cp-params-row { display:flex; align-items:center; gap:6px; padding:5px 8px; background:var(--bg); border:1px solid var(--border); border-radius:4px; margin-bottom:3px; font-size:11px; flex-wrap:wrap; }',
+      '.cp-params-row:hover { border-color:rgba(255,255,255,0.12); }',
+      '.cp-params-row-cmdid { font-family:Consolas,monospace; font-size:10px; color:var(--muted); min-width:36px; }',
+      '.cp-params-row-name { font-weight:600; min-width:100px; flex:1; }',
+      '.cp-params-row-idx { font-family:Consolas,monospace; font-size:10px; color:var(--muted); }',
+      '.cp-params-row-unit { font-size:10px; color:var(--muted); }',
+      '.cp-params-row-range { font-size:10px; color:var(--muted); font-family:Consolas,monospace; }',
+      '.cp-params-row-input { width:90px; background:var(--bg); border:1px solid var(--border); color:var(--text); border-radius:3px; padding:3px 6px; font-family:Consolas,monospace; font-size:11px; }',
+      '.cp-params-row-input:focus { outline:none; border-color:var(--accent); }',
+      '.cp-params-row-input.out-of-range { border-color:var(--red); background:rgba(233,69,96,0.08); }',
+      '.cp-params-row-slider { flex:1; min-width:60px; accent-color:var(--accent); }',
+      /* color was var(--bg) on a var(--accent) fill: 1.36:1, an unreadable
+       * label on the one control in this panel that transmits. */
+      '.cp-params-row-apply { padding:3px 8px; border-radius:3px; border:1px solid var(--accent); background:var(--accent); color:var(--text); font-size:10px; font-weight:600; cursor:pointer; white-space:nowrap; }',
+      '.cp-params-row-apply:hover:not(:disabled) { opacity:0.85; }',
+      '.cp-params-row-apply:disabled { opacity:0.4; cursor:default; }',
+      '.cp-params-row-precond { font-size:9px; color:var(--muted); max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }',
+      '.cp-params-row-critical { border-left:3px solid var(--red); }',
+      '.cp-params-row-critical .cp-params-row-name::before { content:"\\26A0"; margin-right:4px; font-size:10px; }',
+      '.cp-params-no-results { text-align:center; color:var(--muted); font-size:12px; padding:20px; }',
+      '.cp-params-filter-info { font-size:10px; color:var(--muted); margin-bottom:6px; }',
       '</style>',
 
       // ARM/SDK bar
@@ -2130,6 +2163,299 @@
     }
   }
 
+  // ── Parameters Browse Panel ──────────────────────────────────────────────
+  // A second, searchable list of all parameters across every command, grouped
+  // by safetyClass from COMMAND_REGISTRY, with slider + number input, and an
+  // explicit Apply button. Nothing is sent on slider movement or typing.
+
+  // Build the parameter list, grouped by safetyClass then command name.
+  function buildParamsPanelBody() {
+    // Gather [safetyClass, cmdId, param] tuples from the registry.
+    var groups = {};
+    var allCmdIds = [];
+    for (var cid in COMMAND_PARAMS_REGISTRY) {
+      /* Radix 10, not 16. The registry literal writes its keys as 0x01, 0x02,
+       * ... but JS stores numeric keys as DECIMAL strings, so for..in yields
+       * '30' for 0x1E. Reparsing that as hex gave 48 -- a command id that is
+       * not in the registry -- so COMMAND_PARAMS_REGISTRY[ci] came back
+       * undefined and params.length threw, killing the whole panel render.
+       * Ids 0x00..0x09 happened to survive because their decimal and hex
+       * spellings coincide. */
+      var ci = parseInt(cid, 10);
+      if (COMMAND_PARAMS_REGISTRY.hasOwnProperty(cid)) {
+        allCmdIds.push(ci);
+        var reg = COMMAND_REGISTRY[ci];
+        var cls = reg ? reg.safetyClass : 'diagnostic';
+        if (!groups[cls]) groups[cls] = {};
+        var cmdName = reg ? reg.name : getCommandName(ci);
+        if (!groups[cls][cmdName]) groups[cls][cmdName] = { cmdId: ci };
+        var params = COMMAND_PARAMS_REGISTRY[ci];
+        for (var j = 0; j < params.length; j++) {
+          groups[cls][cmdName].params = groups[cls][cmdName].params || [];
+          groups[cls][cmdName].params.push(params[j]);
+        }
+      }
+    }
+
+    var html = [];
+    var safetyOrder = ['critical', 'boundary', 'operational', 'diagnostic'];
+    for (var g = 0; g < safetyOrder.length; g++) {
+      var cls = safetyOrder[g];
+      var group = groups[cls];
+      if (!group) continue;
+      // check if group has own properties
+      var cmdNames = [];
+      for (var cn in group) {
+        if (group.hasOwnProperty(cn)) cmdNames.push(cn);
+      }
+      if (cmdNames.length === 0) continue;
+      cmdNames.sort();
+      var color = SAFETY_CLASS_COLORS[cls] || 'var(--muted)';
+      var label = SAFETY_CLASS_LABELS[cls] || cls;
+      html.push(
+        '<div class="cp-params-section">',
+        '  <div class="cp-params-section-title" style="background:' + color + '22; color:' + color + ';">' + label + '</div>',
+        '');
+      for (var c = 0; c < cmdNames.length; c++) {
+        var cmdName = cmdNames[c];
+        var cmdData = group[cmdName];
+        var cmdId = cmdData.cmdId;
+        var params = cmdData.params;
+        if (!params) continue;
+        html.push(
+          '<div class="cp-params-cmd-group">',
+          '  <div class="cp-params-cmd-name">' + escapeHtml(cmdName) + ' (' + hexId(cmdId) + ')</div>',
+          '');
+        for (var p = 0; p < params.length; p++) {
+          var param = params[p];
+          var uid = 'pp-' + cmdId + '-' + param.index;
+          var hasRange = (param.min_val != null && param.max_val != null);
+          var minT = (param.min_val != null) ? String(param.min_val) : '-\u221E';
+          var maxT = (param.max_val != null) ? String(param.max_val) : '+\u221E';
+          var rangeStr = minT + ' .. ' + maxT;
+          var initVal = (param.min_val != null) ? String(param.min_val) : '0';
+          var rowCls = 'cp-params-row';
+          var cmdReg = COMMAND_REGISTRY[cmdId];
+          if (cmdReg && cmdReg.safetyClass === 'critical') {
+            rowCls += ' cp-params-row-critical';
+          }
+          html.push(
+            '<div class="' + rowCls + '" data-param-uid="' + uid + '"',
+            '  data-param-name="' + escapeHtml(param.name).toLowerCase() + '"',
+            '  data-cmd-name="' + escapeHtml(cmdName).toLowerCase() + '"',
+            '  data-unit="' + escapeHtml(param.unit).toLowerCase() + '"',
+            '  data-cmd-id="' + hexId(cmdId) + '"',
+            '  data-precondition="' + escapeHtml(cmdReg ? cmdReg.precondition : 'unknown') + '"',
+            '  data-min="' + (param.min_val != null ? String(param.min_val) : '') + '"',
+            '  data-max="' + (param.max_val != null ? String(param.max_val) : '') + '"',
+            '  data-has-range="' + (hasRange ? '1' : '0') + '"',
+            '  data-default="' + initVal + '">',
+            '  <span class="cp-params-row-cmdid">' + hexId(cmdId) + '</span>',
+            '  <span class="cp-params-row-name">' + escapeHtml(param.name) + '</span>',
+            '  <span class="cp-params-row-idx">idx:' + param.index + '</span>',
+            '  <span class="cp-params-row-unit">' + escapeHtml(param.unit) + '</span>',
+            '  <span class="cp-params-row-range">' + rangeStr + '</span>',
+            hasRange ? '<input type="range" class="cp-params-row-slider" id="' + uid + '-slider" min="' + param.min_val + '" max="' + param.max_val + '" step="1" value="' + initVal + '" />' : '',
+            '  <input type="number" class="cp-params-row-input" id="' + uid + '-input" step="any" value="' + initVal + '"',
+            (param.min_val != null ? ' min="' + param.min_val + '"' : ''),
+            (param.max_val != null ? ' max="' + param.max_val + '"' : ''),
+            ' />',
+            '  <button type="button" class="cp-params-row-apply" id="' + uid + '-apply" data-cmdid="' + cmdId + '" data-idx="' + param.index + '" data-unit="' + escapeHtml(param.unit) + '">Apply</button>',
+            '  <span class="cp-params-row-precond" title="' + escapeHtml(cmdReg ? cmdReg.precondition : 'unknown') + '">' + escapeHtml(cmdReg ? cmdReg.precondition : 'unknown') + '</span>',
+            '</div>');
+        }
+        html.push('  </div>');
+      }
+      html.push('</div>');
+    }
+    return html.join('');
+  }
+
+  function wireParamsPanel(container) {
+    var searchInput = container.querySelector('.cp-params-search');
+    var resultsContainer = container.querySelector('.cp-params-results');
+    var filterInfo = container.querySelector('.cp-params-filter-info');
+
+    if (!searchInput || !resultsContainer) return;
+
+    function applyFilter() {
+      var q = searchInput.value.toLowerCase().trim();
+      var rows = resultsContainer.querySelectorAll('.cp-params-row');
+      var visibleCount = 0;
+      var sectionParents = {};
+
+      for (var i = 0; i < rows.length; i++) {
+        var row = rows[i];
+        var pName = row.getAttribute('data-param-name') || '';
+        var cName = row.getAttribute('data-cmd-name') || '';
+        var unit = row.getAttribute('data-unit') || '';
+        var precondition = row.getAttribute('data-precondition') || '';
+        var match = !q ||
+          pName.indexOf(q) !== -1 ||
+          cName.indexOf(q) !== -1 ||
+          unit.indexOf(q) !== -1 ||
+          precondition.toLowerCase().indexOf(q) !== -1;
+        row.style.display = match ? '' : 'none';
+        if (match) visibleCount++;
+
+        // Track parent section visibility for parent elements
+        var section = row.closest('.cp-params-section');
+        var cmdGroup = row.closest('.cp-params-cmd-group');
+        if (section) {
+          if (!sectionParents[section.getAttribute('class')]) {
+            sectionParents[section.getAttribute('class')] = section;
+          }
+        }
+        if (cmdGroup) {
+          if (!sectionParents[cmdGroup.getAttribute('class')]) {
+            sectionParents[cmdGroup.getAttribute('class')] = cmdGroup;
+          }
+        }
+      }
+
+      // Show/hide cmd groups
+      var cmdGroups = resultsContainer.querySelectorAll('.cp-params-cmd-group');
+      for (var j = 0; j < cmdGroups.length; j++) {
+        var cg = cmdGroups[j];
+        var childRows = cg.querySelectorAll('.cp-params-row');
+        var anyVisible = false;
+        for (var k = 0; k < childRows.length; k++) {
+          if (childRows[k].style.display !== 'none') { anyVisible = true; break; }
+        }
+        cg.style.display = anyVisible ? '' : 'none';
+      }
+
+      // Show/hide sections
+      var sections = resultsContainer.querySelectorAll('.cp-params-section');
+      for (var l = 0; l < sections.length; l++) {
+        var sec = sections[l];
+        var secChildGroups = sec.querySelectorAll('.cp-params-cmd-group');
+        var secVisible = false;
+        for (var m = 0; m < secChildGroups.length; m++) {
+          if (secChildGroups[m].style.display !== 'none') { secVisible = true; break; }
+        }
+        sec.style.display = secVisible ? '' : 'none';
+      }
+
+      // Update info text
+      if (filterInfo) {
+        filterInfo.textContent = visibleCount + ' of ' + rows.length + ' parameters shown';
+      }
+
+      // Show no-results message
+      var existingNoResults = resultsContainer.querySelector('.cp-params-no-results');
+      if (visibleCount === 0) {
+        if (!existingNoResults) {
+          var nr = document.createElement('div');
+          nr.className = 'cp-params-no-results';
+          nr.textContent = 'No parameters match "' + escapeHtml(searchInput.value) + '"';
+          resultsContainer.appendChild(nr);
+        }
+      } else if (existingNoResults) {
+        resultsContainer.removeChild(existingNoResults);
+      }
+    }
+
+    searchInput.addEventListener('input', applyFilter);
+    /* Run once at wire time. The count label is seeded with the literal
+     * '0 parameters' in the panel markup and was only ever corrected inside
+     * applyFilter(), so a freshly opened panel claimed nothing was there while
+     * showing all 85 rows. */
+    applyFilter();
+
+    // Wire Apply buttons
+    var applyButtons = container.querySelectorAll('.cp-params-row-apply');
+    for (var b = 0; b < applyButtons.length; b++) {
+      applyButtons[b].addEventListener('click', (function(btn) {
+        return function () {
+          /* Radix 10: data-cmdid is written from a Number (line 2249), so the
+           * attribute holds '30', not '1E'. Reading it as hex produced 48 and
+           * Apply would have transmitted command 0x30 instead of 0x1E. The
+           * existing queued-command handler at line 846 gets this right. */
+          var cmdId = parseInt(btn.getAttribute('data-cmdid'), 10);
+          var idx = parseInt(btn.getAttribute('data-idx'), 10);
+          var row = btn.closest('.cp-params-row');
+          if (!row) return;
+          var input = row.querySelector('.cp-params-row-input');
+          var slider = row.querySelector('.cp-params-row-slider');
+          var valStr = input ? input.value : '';
+          var val = parseFloat(valStr);
+          var hasRange = row.getAttribute('data-has-range') === '1';
+          if (isNaN(val)) {
+            if (input) input.classList.add('out-of-range');
+            return;
+          }
+          if (hasRange) {
+            var mn = parseFloat(row.getAttribute('data-min'));
+            var mx = parseFloat(row.getAttribute('data-max'));
+            if (val < mn || val > mx) {
+              if (input) input.classList.add('out-of-range');
+              return;
+            }
+          }
+          /* Route through this file's own submitCommand(), NOT _api.submitCommand.
+           * The local wrapper (line 473) is where canIssueCriticalCommand() runs,
+           * where the result poll starts and where the send lands in the history
+           * log. Calling _api directly skipped the arm/precondition interlock
+           * entirely, so a flight-critical parameter could be sent while armed,
+           * with no status, no history row, and an unhandled promise rejection
+           * on refusal. Every other send in this panel goes through the wrapper
+           * — see the note at line 1810. */
+          submitCommand(cmdId, idx, val);
+        };
+      })(applyButtons[b]));
+    }
+
+    // Wire slider + input sync for each row
+    var rows = resultsContainer.querySelectorAll('.cp-params-row');
+    for (var r = 0; r < rows.length; r++) {
+      var row = rows[r];
+      var slider = row.querySelector('.cp-params-row-slider');
+      var input = row.querySelector('.cp-params-row-input');
+      if (!input) continue;
+      var hasRange = row.getAttribute('data-has-range') === '1';
+      if (hasRange && slider) {
+        /* Bind per row through an IIFE. `var slider` and `var input` are
+         * function-scoped and reassigned on every iteration, so listeners that
+         * closed over the bare names all resolved to the LAST row's elements:
+         * dragging any slider wrote into the bottom row's number box instead of
+         * its own. The Apply handler above and the validator below already do
+         * this correctly; these two did not. Sync only — neither sends. */
+        (function (sl, inp) {
+          sl.addEventListener('input', function () { inp.value = sl.value; });
+          inp.addEventListener('input', function () { sl.value = inp.value; });
+        })(slider, input);
+      } else {
+        // Unbounded: just update input value formatting
+        input.addEventListener('change', function () {
+          var v = parseFloat(this.value);
+          if (isNaN(v)) {
+            this.classList.add('out-of-range');
+          } else {
+            this.classList.remove('out-of-range');
+          }
+        });
+      }
+      // Validate range visually
+      input.addEventListener('input', (function(inp, row) {
+        return function () {
+          var hasR = row.getAttribute('data-has-range') === '1';
+          if (!hasR) return;
+          var mn = parseFloat(row.getAttribute('data-min'));
+          var mx = parseFloat(row.getAttribute('data-max'));
+          var v = parseFloat(inp.value);
+          if (isNaN(v)) {
+            inp.classList.add('out-of-range');
+          } else if (v < mn || v > mx) {
+            inp.classList.add('out-of-range');
+          } else {
+            inp.classList.remove('out-of-range');
+          }
+        };
+      })(input, row));
+    }
+  }
+
   // ── Export ──────────────────────────────────────────────────────────────
   window.__PLUGIN_INIT__ = function (api) {
     _api = api;
@@ -2227,6 +2553,24 @@
       refreshFlagToggles();
       refreshWidgetReadbacks();
     });
+
+    // ── Parameters Browse Panel ──────────────────────────────────────────
+    // Second panel from this same plugin, sharing COMMAND_REGISTRY and
+    // COMMAND_PARAMS_REGISTRY scope. Uses identical gates to Command Panel.
+    api.registerPanel('Parameters', function (container) {
+      container.innerHTML = [
+        '<div style="display:flex;flex-direction:column;gap:10px;">',
+        '  <input type="text" class="cp-params-search" id="cp-params-search" placeholder="Filter by name, command, unit, or precondition..." />',
+        '  <div class="cp-params-filter-info" id="cp-params-filter-info">0 parameters</div>',
+        '  <div class="cp-params-results" id="cp-params-results"></div>',
+        '</div>',
+      ].join('');
+      // Build the parameter list body
+      var resultsContainer = container.querySelector('#cp-params-results');
+      resultsContainer.innerHTML = buildParamsPanelBody();
+      // Wire search filter + slider/input sync
+      wireParamsPanel(container);
+    }, { workspace: 'control', gates: ['connected', 'disarmed'] });
   };
 
   window.__PLUGIN_DESTROY__ = function () {
