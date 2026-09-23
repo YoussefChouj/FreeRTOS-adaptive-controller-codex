@@ -39,3 +39,7 @@ Rules: no firmware edits, no probe, no flashing, no contact with 127.0.0.1:8081.
 ## Workspace rule (hard)
 Work ONLY inside your own worktree (your starting cwd, under .worktrees/<id>). Never edit files in the main checkout. Commit on your branch there.
 
+
+## First command (hard)
+Run: `cd "$(git rev-parse --show-toplevel 2>/dev/null)"; pwd`. Then cd to the worktree path given at the bottom of this task (under .worktrees/), and run `git rev-parse --show-toplevel`. It MUST end in .worktrees/<id>. Repeat that check right before `git commit`. If it prints the main checkout, STOP and cd back to the worktree. Edits or commits in the main checkout are a task failure.
+
