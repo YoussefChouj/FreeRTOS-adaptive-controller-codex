@@ -86,6 +86,9 @@
   var rafPending = false;
   var selectedKeysCache = null;
 
+  // View mode: 'separate' = small multiples (default), 'overlay' = shared Y axis
+  var viewMode = 'separate';
+
   // ── Persistence Helpers ────────────────────────────────────────────────
   function loadSavedSelection() {
     if (selectedKeysCache) return selectedKeysCache;
@@ -265,6 +268,178 @@
 
   // ── SVG Chart Rendering ────────────────────────────────────────────────
   function renderChart() {
+    if (viewMode === 'overlay') {
+      renderOverlayChart();
+      return;
+    }
+    // Separate mode: small multiples - one SVG row per variable
+    var rowsEl = q('ts-variable-rows');
+    var xaxisEl = q('ts-vrow-xaxis');
+    if (!rowsEl) return;
+    if (!xaxisEl) return;
+
+    var rangeInfo = getActiveViewRange();
+    var innerW = CHART_W - PAD.left - PAD.right;
+    /* Derived here, not shared: enabledKeys is a local of renderOverlayChart(),
+     * so referencing it from this function threw ReferenceError on every frame. */
+    var enabledKeys = Object.keys(knownVars).filter(function (k) { return knownVars[k].enabled; });
+
+    if (rangeInfo.total === 0) {
+      rowsEl.innerHTML = '';
+      xaxisEl.style.display = 'none';
+      return;
+    }
+
+    if (enabledKeys.length === 0) {
+      rowsEl.innerHTML = '';
+      xaxisEl.style.display = 'none';
+      return;
+    }
+
+    /* Row geometry is local to the small multiples and must NOT reuse PAD.top.
+     * The variable name and its latest value sit in an HTML header above each
+     * SVG, so a row SVG contains nothing but the plot. PAD.top is 26px, sized
+     * for the overlay chart's title row; using it here put the bottom gridline
+     * at y = 26 + plotH, outside a 60px viewBox, and clipped every trace. */
+    var ROW_PAD_TOP = 5;
+    var ROW_PAD_BOTTOM = 7;
+    var rowH = 64;
+    var plotH = rowH - ROW_PAD_TOP - ROW_PAD_BOTTOM;
+    var xaxisH = 20;
+
+    // Shared X axis time reference
+    var latestT = sampleTimestamps[sampleTimestamps.length - 1] || Date.now();
+    var sampleCount = Math.max(1, rangeInfo.end - rangeInfo.start);
+
+    // X-axis labels (shared across all rows)
+    var xLabelHtml = '';
+    var xTicks = 5;
+    for (var xt = 0; xt <= xTicks; xt++) {
+      var xPct = xt / xTicks;
+      var xIdx = Math.round(rangeInfo.start + xPct * sampleCount);
+      var sampleT = sampleTimestamps[xIdx];
+      var timeText = '';
+      if (sampleT) {
+        var secAgo = (latestT - sampleT) / 1000;
+        timeText = secAgo <= 0.05 ? '0s' : '-' + secAgo.toFixed(1) + 's';
+      } else {
+        timeText = '#' + xIdx;
+      }
+      xLabelHtml += '<span style="position:absolute;left:' + (PAD.left + innerW * xPct).toFixed(0) + 'px">' + timeText + '</span>';
+    }
+    xaxisEl.innerHTML = xLabelHtml;
+    xaxisEl.style.display = 'block';
+    xaxisEl.style.position = 'relative';
+    xaxisEl.style.height = xaxisH + 'px';
+
+    var rowsHtml = '';
+    enabledKeys.forEach(function (k) {
+      var meta = knownVars[k];
+      var buf = ringBuffers[k] || [];
+
+      // Per-variable Y scaling
+      var vMin = Infinity;
+      var vMax = -Infinity;
+      var hasData = false;
+      /* The header prints the newest sample that exists, not buf[rangeInfo.end]:
+       * hasData is true when ANY sample in the range is non-null, so a gap at
+       * the end of the range would otherwise call .toFixed() on null and throw. */
+      var lastVal = null;
+      for (var si = rangeInfo.start; si <= rangeInfo.end; si++) {
+        var sv = buf[si];
+        if (sv != null && !isNaN(sv)) {
+          hasData = true;
+          lastVal = sv;
+          if (sv < vMin) vMin = sv;
+          if (sv > vMax) vMax = sv;
+        }
+      }
+
+      if (!hasData) {
+        vMin = 0;
+        vMax = 1;
+      }
+      var vSpan = vMax - vMin || 1.0;
+      var vPad = vSpan * 0.1;
+      vMin -= vPad;
+      vMax += vPad;
+      vSpan = vMax - vMin;
+
+      var svgW = CHART_W;
+      var svgH = rowH;
+
+      var svgRow = '';
+
+      // Grid lines
+      var gridLines = 4;
+      for (var g = 0; g <= gridLines; g++) {
+        var yPct = g / gridLines;
+        var yPx = ROW_PAD_TOP + plotH * (1 - yPct);
+        var gVal = vMin + vSpan * yPct;
+        svgRow += '<line x1="' + PAD.left + '" y1="' + yPx + '" x2="' + (CHART_W - PAD.right) + '" y2="' + yPx + '" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>';
+        svgRow += '<text x="' + (PAD.left - 6) + '" y="' + (yPx + 3) + '" text-anchor="end" font-size="8" fill="rgba(255,255,255,0.4)" font-family="Consolas,monospace">' + gVal.toFixed(2) + '</text>';
+      }
+
+      // Zero reference
+      if (vMin < 0 && vMax > 0) {
+        var zeroY = ROW_PAD_TOP + plotH * (1 - (0 - vMin) / vSpan);
+        svgRow += '<line x1="' + PAD.left + '" y1="' + zeroY + '" x2="' + (CHART_W - PAD.right) + '" y2="' + zeroY + '" stroke="rgba(255,255,255,0.22)" stroke-width="1" stroke-dasharray="4,3"/>';
+      }
+
+      // Trace segments
+      var segments = [];
+      var curSeg = [];
+      var lastPt = null;
+      for (var i = rangeInfo.start; i <= rangeInfo.end; i++) {
+        var val = buf[i];
+        if (val != null && !isNaN(val)) {
+          var xPct = (i - rangeInfo.start) / sampleCount;
+          var yPct = (val - vMin) / vSpan;
+          var xPx = PAD.left + innerW * xPct;
+          var yPx = ROW_PAD_TOP + plotH * (1 - yPct);
+          curSeg.push(xPx.toFixed(1) + ',' + yPx.toFixed(1));
+          lastPt = { x: xPx, y: yPx };
+        } else {
+          if (curSeg.length > 0) { segments.push(curSeg); curSeg = []; }
+        }
+      }
+      if (curSeg.length > 0) segments.push(curSeg);
+
+      segments.forEach(function (pts) {
+        if (pts.length >= 2) {
+          svgRow += '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' + meta.color + '" stroke-width="1.8" opacity="0.9"/>';
+        } else if (pts.length === 1) {
+          var coord = pts[0].split(',');
+          svgRow += '<circle cx="' + coord[0] + '" cy="' + coord[1] + '" r="2" fill="' + meta.color + '"/>';
+        }
+      });
+
+      // Latest marker
+      if (lastPt) {
+        svgRow += '<circle cx="' + lastPt.x.toFixed(1) + '" cy="' + lastPt.y.toFixed(1) + '" r="3.5" fill="' + meta.color + '"/>';
+      }
+
+      /* No zoom-region overlay here. In separate mode every row is already
+       * drawn over getActiveViewRange(), so the zoom window IS the row: there
+       * is no surrounding context to shade. The overlay chart shades it because
+       * it draws the full buffer. */
+
+      var svgHtml = '<svg class="ts-vrow-svg" viewBox="0 0 ' + svgW + ' ' + svgH + '" preserveAspectRatio="none">' + svgRow + '</svg>';
+
+      rowsHtml += '<div class="ts-vrow">' +
+        '<div class="ts-vrow-header">' +
+        '<span class="ts-vrow-label" style="color:' + meta.color + '">' + meta.label + '</span>' +
+        '<span class="ts-vrow-value">' + (lastVal != null ? lastVal.toFixed(4) + (meta.unit ? ' ' + meta.unit : '') : '\u2014 (no data)') + '</span>' +
+        '</div>' +
+        svgHtml +
+        '</div>';
+    });
+
+    rowsEl.innerHTML = rowsHtml;
+  }
+
+  // ── Overlay Chart (shared Y axis, original behaviour) ──────────────────
+  function renderOverlayChart() {
     var svg = q('ts-chart-svg');
     if (!svg) return;
 
@@ -404,7 +579,7 @@
     if (zoomWindow) {
       svgContent += '<rect x="' + PAD.left + '" y="4" width="' + innerW + '" height="18" fill="rgba(78,204,163,0.15)" rx="3"/>';
       svgContent += '<text x="' + (CHART_W / 2) + '" y="16" text-anchor="middle" font-size="10" fill="#4ecca3" font-family="Segoe UI,sans-serif" font-weight="600">' +
-        '🔍 Zoomed Region: ' + (rangeInfo.end - rangeInfo.start + 1) + ' samples (' +
+        'Zoomed Region: ' + (rangeInfo.end - rangeInfo.start + 1) + ' samples (' +
         ((sampleTimestamps[rangeInfo.end] - sampleTimestamps[rangeInfo.start]) / 1000).toFixed(2) + 's)' +
         '</text>';
     }
@@ -751,6 +926,18 @@
       '.ts-legend-dot { width:10px;height:3px;border-radius:2px; }',
       '.ts-legend-name { font-size:11px;font-weight:600;color:var(--text); }',
       '.ts-legend-val { font-size:11px;font-family:Consolas,monospace;color:var(--muted); }',
+      /* Small multiples: one row per variable with independent Y scale */
+      '.ts-mode-toggle { display:inline-flex;border:1px solid var(--border,#2a2a4a);border-radius:4px;overflow:hidden; }',
+      '.ts-mode-btn { background:var(--card,#16213e);color:var(--text);border:none;padding:3px 10px;font-size:11px;cursor:pointer;transition:all 0.15s; }',
+      '.ts-mode-btn:hover { filter:brightness(1.2); }',
+      '.ts-mode-btn.ts-active { background:var(--accent,#0f3460);color:#fff;font-weight:700; }',
+      '.ts-variable-rows { display:flex;flex-direction:column;gap:2px; }',
+      '.ts-vrow { display:flex;flex-direction:column;background:rgba(0,0,0,0.15);border-radius:4px;overflow:hidden; }',
+      '.ts-vrow-header { display:flex;align-items:baseline;gap:8px;padding:3px 8px; }',
+      '.ts-vrow-label { font-size:11px;font-weight:700; }',
+      '.ts-vrow-value { font-size:11px;font-family:Consolas,monospace;color:var(--muted); }',
+      '.ts-vrow-svg { display:block;width:100%; }',
+      '.ts-vrow-xaxis { padding:0 8px 0 56px;font-size:9px;color:rgba(255,255,255,0.4);font-family:Consolas,monospace;min-height:16px; }',
       '</style>',
 
       '<div class="ts-panel-root" id="ts-panel-root">',
@@ -801,7 +988,16 @@
       '  </div>',
 
       '  <div class="ts-chart-wrap">',
-      '    <svg id="ts-chart-svg" class="ts-svg" viewBox="0 0 ' + CHART_W + ' ' + CHART_H + '"></svg>',
+      '    <div class="ts-bar-section">',
+      '      <span style="font-size:11px;color:var(--muted);margin-right:4px;">View:</span>',
+      '      <span class="ts-mode-toggle">',
+      '        <button id="ts-mode-overlay" class="ts-mode-btn" type="button" title="Overlay: all variables on shared Y axis">Overlay</button>',
+      '        <button id="ts-mode-separate" class="ts-mode-btn ts-active" type="button" title="Separate: each variable on its own Y axis">Separate</button>',
+      '      </span>',
+      '    </div>',
+      '    <div id="ts-variable-rows" class="ts-variable-rows"></div>',
+      '    <div id="ts-vrow-xaxis" class="ts-vrow-xaxis" style="display:none;"></div>',
+      '    <svg id="ts-chart-svg" class="ts-svg" style="display:none;" viewBox="0 0 ' + CHART_W + ' ' + CHART_H + '"></svg>',
       '    <div id="ts-legend" class="ts-legend"></div>',
       '  </div>',
       '</div>'
@@ -853,6 +1049,38 @@
 
     var btnZReset = q('ts-btn-zoom-reset');
     if (btnZReset) btnZReset.addEventListener('click', resetZoom);
+
+    // Mode Toggle: Separate vs Overlay
+    var btnOverlay = q('ts-mode-overlay');
+    var btnSeparate = q('ts-mode-separate');
+    if (btnOverlay && btnSeparate) {
+      btnOverlay.addEventListener('click', function () {
+        viewMode = 'overlay';
+        btnOverlay.className = 'ts-mode-btn ts-active';
+        btnSeparate.className = 'ts-mode-btn';
+        var overlaySvg = q('ts-chart-svg');
+        if (overlaySvg) overlaySvg.style.display = 'block';
+        var rowsEl = q('ts-variable-rows');
+        if (rowsEl) rowsEl.style.display = 'none';
+        var xaxisEl = q('ts-vrow-xaxis');
+        if (xaxisEl) xaxisEl.style.display = 'none';
+        renderChart();
+      });
+      btnSeparate.addEventListener('click', function () {
+        viewMode = 'separate';
+        btnSeparate.className = 'ts-mode-btn ts-active';
+        btnOverlay.className = 'ts-mode-btn';
+        var overlaySvg = q('ts-chart-svg');
+        if (overlaySvg) overlaySvg.style.display = 'none';
+        /* '' restores the stylesheet rule, which is display:flex/column. Setting
+         * 'block' here would leave the rows stacked without the 2px gap and
+         * silently override .ts-variable-rows for the rest of the session.
+         * renderChart() re-shows the shared x-axis, which overlay mode hid. */
+        var rowsEl = q('ts-variable-rows');
+        if (rowsEl) rowsEl.style.display = '';
+        renderChart();
+      });
+    }
 
     // Dropdown Variable Picker Toggle
     var pickerToggle = q('ts-picker-toggle');
