@@ -53,13 +53,19 @@ def dry_run(
 
     # Extract trajectory from workflow or use directly
     trajectory = _extract_trajectory(workflow_or_trajectory)
+    # Extract intent name from workflow if present
+    intent_str = str(workflow_or_trajectory)[:200] if isinstance(workflow_or_trajectory, str) else ""
+    if isinstance(workflow_or_trajectory, dict) and "name" in workflow_or_trajectory:
+        intent_str = str(workflow_or_trajectory["name"])[:200]
+    elif workflow_or_trajectory:
+        intent_str = str(workflow_or_trajectory)[:200]
     if not trajectory:
         run = Run(
             kind=kind,
             tags=(tags or []) + ["sim"],
             params=params,
             outcome="skipped",
-            metrics={"reason": "empty trajectory"},
+            metrics={},
         )
         if store:
             store.create(run)
@@ -93,7 +99,7 @@ def dry_run(
 
     run = Run(
         kind=kind,
-        intent=str(workflow_or_trajectory)[:200] if workflow_or_trajectory else "",
+        intent=intent_str,
         tags=(tags or []) + ["sim"],
         params=params,
         outcome=outcome,

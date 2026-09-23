@@ -38,12 +38,15 @@ class TestPlantStepResponse:
     """Plant step response matches analytic first-order-plus-integrator shape."""
 
     def test_roll_plant_step_response(self) -> None:
-        """Roll axis: G(s) = K/(s*(1+s/p)) -> step response is a rising
-        exponential of the form K*(1 - a*exp(-p1*t) - b*exp(-p2*t))."""
+        """Roll axis: G(s) = K/(s*(1+s/p)) -> under unit mixer-unit step,
+        the rate ramps with asymptotic slope = K * dt / mrac_to_mixer.
+        The response is monotonically increasing from 0.
+        """
+        from ground_station.research.sim.constants import MIXER_R_P
         plant = IdentifiedPlant(dt=1.0 / 500.0)
         plant.reset()
 
-        # Step input: 1.0 on roll
+        # Step input: 1.0 mixer-unit on roll
         n = 500  # 1 second of simulation
         responses = []
         for _ in range(n):
@@ -57,15 +60,19 @@ class TestPlantStepResponse:
         for i in range(1, len(responses)):
             assert responses[i] >= responses[i - 1] - 1e-10, \
                 f"Non-monotonic at step {i}"
-        # 3. The 2nd derivative should be negative (concave down initially)
-        mid = n // 4
-        slope_early = (responses[mid] - responses[0]) / mid
-        slope_late = (responses[-1] - responses[mid]) / (n - mid)
-        assert slope_early > slope_late, \
-            f"Slope should decrease: early={slope_early:.4f}, late={slope_late:.4f}"
+        # 3. Asymptotic per-sample slope approaches K*dt/mrac_to_mixer
+        #    after the transport delay (T=0.015s, N=7 samples).
+        delay_samples = int(round(0.015 / (1.0 / 500.0)))  # = 7
+        late_slope = (responses[-1] - responses[n - 100]) / (100 - delay_samples)
+        expected_slope = 165.0 * (1.0 / 500.0) / MIXER_R_P  # K*dt/mrac_to_mixer
+        assert late_slope == pytest.approx(expected_slope, rel=0.10), \
+            f"Late slope {late_slope:.6f} != expected {expected_slope:.6f}"
 
     def test_yaw_plant_pure_integrator(self) -> None:
-        """Yaw axis: G(s) = K/s -> step response is a perfect ramp: y = K*u*t."""
+        """Yaw axis: G(s) = K/s -> step response is a perfect ramp.
+        With mixer-unit input u, the rate is y[n] = K * sum(u[0:n]) * dt / MIXER_YAW.
+        """
+        from ground_station.research.sim.constants import MIXER_YAW
         plant = IdentifiedPlant(dt=1.0 / 500.0)
         plant.reset()
 
@@ -75,16 +82,20 @@ class TestPlantStepResponse:
             state = plant.step({"roll": 0.0, "pitch": 0.0, "yaw": 1.0})
             responses.append(state["r"])
 
-        # Pure integrator: y[n] = K * sum(u) = K * n * dt * u
+        # Pure integrator: y[n] = K * sum of previous inputs * dt / MIXER_YAW
+        # y[0] = 0 (initial), y[i] = K * i * dt * u / MIXER_YAW for i >= 1
         K = constants.YAW_K
-        expected = [K * (i + 1) * (1.0 / 500.0) * 1.0 for i in range(n)]
+        expected = [K * i * (1.0 / 500.0) * 1.0 / MIXER_YAW for i in range(n)]
 
         for i in range(n):
             assert responses[i] == pytest.approx(expected[i], rel=1e-4), \
                 f"Yaw step mismatch at {i}: got {responses[i]:.6f}, expected {expected[i]:.6f}"
 
     def test_pitch_plant_step_response(self) -> None:
-        """Pitch axis behaves like roll: monotonically increasing step response."""
+        """Pitch axis behaves like roll: monotonically increasing step response.
+        Asymptotic slope = K * dt / mrac_to_mixer per sample.
+        """
+        from ground_station.research.sim.constants import MIXER_R_P
         plant = IdentifiedPlant(dt=1.0 / 500.0)
         plant.reset()
 
@@ -99,10 +110,13 @@ class TestPlantStepResponse:
         for i in range(1, len(responses)):
             assert responses[i] >= responses[i - 1] - 1e-10
 
-        mid = n // 4
-        slope_early = (responses[mid] - responses[0]) / mid
-        slope_late = (responses[-1] - responses[mid]) / (n - mid)
-        assert slope_early > slope_late
+        # Late slope should approach K*dt/mrac_to_mixer after delay
+        # (T=0.012s -> N=6 samples)
+        delay_samples = int(round(0.012 / (1.0 / 500.0)))  # = 6
+        late_slope = (responses[-1] - responses[n - 100]) / (100 - delay_samples)
+        expected_slope = 185.0 * (1.0 / 500.0) / MIXER_R_P  # K*dt/mrac_to_mixer
+        assert late_slope == pytest.approx(expected_slope, rel=0.10), \
+            f"Late slope {late_slope:.6f} != expected {expected_slope:.6f}"
 
 
 # ---------------------------------------------------------------------------
@@ -134,12 +148,13 @@ class TestClosedLoopPIDStability:
         max_rate = 0.0
         max_attitude = 0.0
         attitudes = [0.0]
+        rate_fb = {"roll": 0.0, "pitch": 0.0, "yaw": 0.0}
 
         for i in range(n):
             att_sp = {"roll": att_sp_roll[i], "pitch": 0.0, "yaw": 0.0}
             att_fb = {"roll": attitudes[-1], "pitch": 0.0, "yaw": 0.0}
 
-            pid_out = pid.step(att_sp, att_fb)
+            pid_out = pid.step_with_rate_feedback(att_sp, att_fb, rate_fb)
 
             plant_input = {
                 "roll": pid_out.get("roll", 0.0),
@@ -148,6 +163,7 @@ class TestClosedLoopPIDStability:
             }
             plant_state = plant.step(plant_input)
             rate = plant_state["p"]
+            rate_fb["roll"] = rate
             attitudes.append(attitudes[-1] + rate * (1.0 / 500.0))
 
             max_rate = max(max_rate, abs(rate))
@@ -183,12 +199,13 @@ class TestClosedLoopPIDStability:
         max_rate = 0.0
         max_attitude = 0.0
         attitudes = [0.0]
+        rate_fb = {"roll": 0.0, "pitch": 0.0, "yaw": 0.0}
 
         for i in range(n):
             att_sp = {"roll": 0.0, "pitch": att_sp_pitch[i], "yaw": 0.0}
             att_fb = {"roll": 0.0, "pitch": attitudes[-1], "yaw": 0.0}
 
-            pid_out = pid.step(att_sp, att_fb)
+            pid_out = pid.step_with_rate_feedback(att_sp, att_fb, rate_fb)
             plant_input = {
                 "roll": 0.0,
                 "pitch": pid_out.get("pitch", 0.0),
@@ -196,6 +213,7 @@ class TestClosedLoopPIDStability:
             }
             plant_state = plant.step(plant_input)
             rate = plant_state["q"]
+            rate_fb["pitch"] = rate
             attitudes.append(attitudes[-1] + rate * (1.0 / 500.0))
 
             max_rate = max(max_rate, abs(rate))
@@ -365,10 +383,13 @@ class TestDryRun:
         assert _extract_trajectory("/tmp/no_such_file.csv") == []
 
     def test_rmse(self) -> None:
-        """_rmse computes root mean square correctly."""
+        """_rmse computes root mean square correctly.
+
+        RMS = sqrt(mean(x^2)). For [3, 4]: sqrt((9+16)/2) = sqrt(12.5).
+        """
         assert _rmse([]) == 0.0
         assert _rmse([1.0]) == 1.0
-        assert _rmse([3.0, 4.0]) == pytest.approx(5.0)
+        assert _rmse([3.0, 4.0]) == pytest.approx(5.0 / 2**0.5)  # sqrt(12.5)
         assert _rmse([0.0, 0.0, 0.0]) == 0.0
 
 
@@ -380,7 +401,11 @@ class TestReferenceModel:
     """Reference model produces correct step responses."""
 
     def test_first_order_ref_model(self) -> None:
-        """1st-order ref model: xm(t) = r*(1 - exp(-bw*t))."""
+        """1st-order ref model: discrete forward Euler xm[n+1] = xm[n] + dt*bw*(r-xm[n]).
+
+        First tick: xm[0] = bw * dt * r = 30 * 0.002 * 1.0 = 0.06.
+        After many ticks, xm converges to r (continuous: r*(1-exp(-bw*t))).
+        """
         rm = ReferenceModel("first_order", bw=30.0, zeta=0.8, dt=1.0 / 500.0)
         rm.reset()
 
@@ -391,7 +416,10 @@ class TestReferenceModel:
             xm = rm.step(r)
             xm_values.append(xm)
 
-        assert xm_values[0] == pytest.approx(r * (1.0 - math.exp(-30.0 * 0.002)), rel=1e-3)
+        # First tick: forward Euler gives xm = bw*dt*r (discrete approximation)
+        assert xm_values[0] == pytest.approx(30.0 * 0.002 * 1.0, abs=1e-10)
+        # After 500 ticks (1s), xm converges close to r=1.0
+        # Time constant tau = 1/bw = 0.033s, so after 1s (~30 tau) it is > 99.9%
         assert xm_values[-1] == pytest.approx(r, rel=0.01)
 
     def test_second_order_ref_model(self) -> None:
@@ -426,8 +454,19 @@ class TestReferenceModel:
         assert rm_yaw.bw == 30.0
 
     def test_ref_model_error(self) -> None:
-        """ReferenceModel.error returns x - xm."""
+        """ReferenceModel.error returns x - xm.
+
+        Verify error is zero when x equals the converged xm.
+        First-order system with bw=30 converges to r=1.0 in ~3/bw ≈ 0.1s.
+        At dt=0.002, that's ~50 steps.
+        """
         rm = ReferenceModel("first_order", bw=30.0, dt=1.0 / 500.0)
         rm.reset()
-        rm.step(1.0, x=0.5)
-        assert rm.error(0.5) == pytest.approx(0.0, abs=1e-10)
+        r = 1.0
+        # Run enough steps for xm to converge to r
+        for _ in range(200):
+            rm.step(r)
+        # After convergence, xm ≈ r = 1.0
+        assert rm.xm == pytest.approx(r, rel=0.01)
+        # error(1.0) should be ~0 (forward Euler accumulates small error)
+        assert rm.error(r) == pytest.approx(0.0, abs=1e-5)
