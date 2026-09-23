@@ -92,7 +92,9 @@
       fallback: ['Gyro_X_Real', 'Gyro_Y_Real', 'Gyro_Z_Real'],
     },
     {
-      label: 'Raw IMU — Accel (m/s²)',
+      /* mg, not m/s²: Acc_*_Real is declared in milli-g at
+       * API/bmi088_driver.c:27, and reads ~1012 on Z with the drone level. */
+      label: 'Raw IMU — Accel (mg)',
       keys: ['imu.acc_x', 'imu.acc_y', 'imu.acc_z'],
       axisLabels: ['X', 'Y', 'Z'],
       fallback: ['Acc_X_Real', 'Acc_Y_Real', 'Acc_Z_Real'],
