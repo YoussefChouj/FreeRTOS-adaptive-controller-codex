@@ -176,12 +176,15 @@ class CascadedPID:
             pid.reset()
 
     def step(self, attitude_sp: dict[str, float],
-             attitude_fb: dict[str, float]) -> dict[str, float]:
+             attitude_fb: dict[str, float],
+             rate_fb: Optional[dict[str, float]] = None) -> dict[str, float]:
         """One control tick.
 
         Args:
             attitude_sp: attitude setpoints in deg for {'roll', 'pitch', 'yaw'}.
             attitude_fb: attitude feedback in deg for {'roll', 'pitch', 'yaw'}.
+            rate_fb: optional rate feedback in rad/s for the inner rate loop.
+                If None, rate feedback defaults to 0.0 (open-loop).
 
         Returns:
             dict with per-axis mixer-unit outputs {'roll': U, 'pitch': U, 'yaw': U}.
@@ -193,10 +196,12 @@ class CascadedPID:
             att_sp_deg = attitude_sp.get(axis, 0.0)
             att_fb_deg = attitude_fb.get(axis, 0.0)
             rate_sp_deg = self._outer[axis].step(att_sp_deg, att_fb_deg)
-            # inner loop: rate PID (deg/s in -> mixer units out)
-            # feedback is zero since plant produces raw rates
-            # (the plant.step() in the sim loop provides the measured rate)
-            U = self._inner[axis].step(rate_sp_deg, 0.0)
+            # inner loop: rate PID
+            if rate_fb is not None:
+                rate_fb_deg = rate_fb.get(axis, 0.0) * RAD2DEG  # rad/s -> deg/s
+                U = self._inner[axis].step(rate_sp_deg, rate_fb_deg)
+            else:
+                U = self._inner[axis].step(rate_sp_deg, 0.0)
             result[axis] = U
         return result
 

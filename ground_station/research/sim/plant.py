@@ -5,9 +5,9 @@ Ported from the original project's sim/plant.py IdentifiedPlant / _AxisSim.
 The plant is discrete at a configurable rate (default 500 Hz).
 
 Plant boundary: ``step(u_dict) -> state_dict``, ``reset()``.
-Command units are the firmware u (u_nom + u_ad), not SI Nm: the identified K
-folds in torque effectiveness and 1/J, so feeding the same command the
-firmware computes reproduces the same rate.
+Command units are Nm (torque). The identified K folds in torque effectiveness
+and 1/J. Callers that hold mixer-unit commands must divide by mrac_to_mixer
+before passing to the plant.
 """
 from __future__ import annotations
 
@@ -22,36 +22,49 @@ from .constants import (
     PITCH_K, PITCH_POLE, PITCH_DELAY,
     YAW_K,
     DEFAULT_DT,
+    MIXER_R_P,
+    MIXER_YAW,
 )
 
 
 @dataclass(frozen=True)
 class AxisModel:
-    """Identified per-axis rate plant ``K/(s*(1+s/p))*e^(-s*T)``.
+    """Identified per-axis rate plant ``K/(s(1+s/p))*e^(-s*T)``.
 
     ``pole=None`` selects the pure-integrator ``K/s`` realisation (yaw).
     ``delay`` is the transport delay T in seconds (0 = no delay).
+    ``mrac_to_mixer`` is the gain from mixer-unit torque command to Nm,
+    defaulting to MIXER_R_P for roll/pitch and MIXER_YAW for yaw.
     """
     K: float
     pole: Optional[float] = None
     delay: float = 0.0
+    mrac_to_mixer: float = MIXER_R_P
 
 
 # Per-axis models keyed by axis name.
 _AXIS_MODELS: dict[str, AxisModel] = {
-    "roll": AxisModel(K=ROLL_K, pole=ROLL_POLE, delay=ROLL_DELAY),
-    "pitch": AxisModel(K=PITCH_K, pole=PITCH_POLE, delay=PITCH_DELAY),
-    "yaw": AxisModel(K=YAW_K, pole=None, delay=0.0),
+    "roll": AxisModel(K=ROLL_K, pole=ROLL_POLE, delay=ROLL_DELAY,
+                      mrac_to_mixer=MIXER_R_P),
+    "pitch": AxisModel(K=PITCH_K, pole=PITCH_POLE, delay=PITCH_DELAY,
+                       mrac_to_mixer=MIXER_R_P),
+    "yaw": AxisModel(K=YAW_K, pole=None, delay=0.0,
+                     mrac_to_mixer=MIXER_YAW),
 }
 
 _RATE_KEY = {"roll": "p", "pitch": "q", "yaw": "r"}
 
 
 class _AxisSim:
-    """Single-axis discrete state-space + integer transport-delay buffer."""
+    """Single-axis discrete state-space + integer transport-delay buffer.
+
+    The plant models rate dynamics in Nm (torque). If the caller passes
+    mixer-unit commands, the ``mrac_to_mixer`` factor converts to Nm.
+    """
 
     def __init__(self, model: AxisModel, dt: float) -> None:
         self.dt = dt
+        self.mrac_to_mixer = model.mrac_to_mixer
         if model.pole is None:
             # K/s : ZOH discretisation of integrator: Ad=1, Bd=dt, C=K
             A = np.array([[0.0]])
@@ -80,16 +93,17 @@ class _AxisSim:
         self._delay_pos = 0
 
     def step(self, u: float) -> float:
+        # Convert mixer-unit torque to Nm if needed
+        u_nm = u / self.mrac_to_mixer
         # output reflects current state (y = C x), then state advances
         y = float((self.Cd @ self.x).item())
         # apply transport delay
         if self.N > 0:
-            self._delay_buf[self._delay_pos] = u
-            u_eff = self._delay_buf[self._delay_pos]
+            self._delay_buf[self._delay_pos] = u_nm
             self._delay_pos = (self._delay_pos + 1) % self.N
             u_eff = self._delay_buf[self._delay_pos]
         else:
-            u_eff = u
+            u_eff = u_nm
         self.x = self.Ad @ self.x + self.Bd * u_eff
         return y
 
@@ -100,6 +114,9 @@ class IdentifiedPlant:
     ``step(u_dict) -> state_dict`` where u_dict carries per-axis command keys
     ``{'roll', 'pitch', 'yaw'}`` (any subset, default 0).
     Returns state dict with keys ``{'p', 'q', 'r'}`` (body angular rates rad/s).
+
+    Command units are Nm (torque). Callers holding mixer-unit commands should
+    divide by ``mrac_to_mixer`` before passing to the plant.
     """
 
     def __init__(self, dt: float = DEFAULT_DT,

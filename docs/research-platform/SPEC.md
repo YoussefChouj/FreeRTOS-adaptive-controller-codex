@@ -42,3 +42,16 @@ Package: `ground_station/research/`
 - `analysis.py` — Core: `rmse_of`, `overshoot`, `settling_time`, `saturation_time`, `dominant_peaks`. Plugin registry: `@metric("name")`. Stubs: `u_ad_spike_ratio`, `w_norm_convergence`, `gate_saturation` (all skip with None when columns missing). `generate_report()` writes `report.md`.
 - `__main__.py` — CLI: `import <path>`, `list [--kind] [--phase]`, `show <id>`, `analyze <id> [--axis]`, `query <sql> [params...]`.
 Tests: 45 pass — JSON round-trip, step overshoot, sine RMSE, query filtering, import CSV/parquet, plugin registry, stub skip. Full tree: 1005 passed, 27 skipped.
+
+## T3 as built
+
+Package: `ground_station/research/sim/`
+- `plant.py` — Discrete rate-plant per axis: `G(s)=K/(s*(1+s/p))*e^(-sT)` for roll/pitch, `G(s)=K/s` for yaw. ZOH discretisation at configurable dt (default 500 Hz). Transport delay via integer-sample FIFO.
+- `reference_model.py` — Per-axis reference models (2nd-order for roll/pitch, 1st-order for yaw), forward/semi-implicit Euler integration matching firmware.
+- `baseline.py` — Cascaded attitude->rate PID matching firmware's positional form with conditional integration, independent term clamping, and sum clamping.
+- `replay.py` — Replay captured commands through plant+PID, producing time-series outputs (response, xm_physics, pid_output, u_ad).
+- `dryrun.py` — `dry_run(workflow_or_trajectory)` executes sim and stores a validation Run tagged `sim`.
+- `constants.py` — All physical constants ported from original project with file:line citations. Every value verified.
+Fixes: plant now divides mixer-unit inputs by mrac_to_mixer to get Nm; replay fixed variable shadowing and list accumulation; baseline.step accepts optional rate_fb; all 16 sim tests pass.
+Full tree: 1021 passed, 27 skipped, 3 subtests.
+Constants NOT FOUND: R_MOTOR (arm length) — cited from plant.py ~140 but exact line not isolated; all other constants verified against original sources.
