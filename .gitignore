@@ -64,3 +64,5 @@ logs/browser_smoke/
 
 # queue runner state is per-machine, not history
 .agent-ops/queue.json
+logs/service/
+logs/smoke/
