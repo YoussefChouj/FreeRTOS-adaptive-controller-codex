@@ -210,6 +210,10 @@ class Copilot:
         # [(role, content), ...]  oldest gets pruned past _MAX_HISTORY_TURNS.
         self._history: list[tuple[str, str]] = []
         self._enabled = True
+        # Rate-limiter for error visibility: at most one error note per minute,
+        # so a flaky endpoint doesn't flood the chat with identical messages.
+        self._last_error_time = 0.0
+        self._ERROR_RATE_LIMIT_S = 60.0
 
     # -- public API ---------------------------------------------------------
     def handle(self, message: str) -> str:
@@ -235,13 +239,22 @@ class Copilot:
             reply = self._llm(messages)
         except (LLMError, Exception) as exc:  # noqa: BLE001
             # On error, post a short friendly message; never log the key.
+            # Rate-limit to one note per minute so a flaky endpoint doesn't
+            # flood the chat with identical messages.
+            now = time.monotonic()
             err_text = _short_error(str(exc))
             with self._lock:
+                if now - self._last_error_time >= self._ERROR_RATE_LIMIT_S:
+                    self._last_error_time = now
+                    self._say(f"Co-pilot error: {err_text}", "agent:copilot")
+                else:
+                    self._history.append(("assistant", f"[error suppressed: {err_text} (rate-limited)]"))
+                    while len(self._history) > _MAX_HISTORY_TURNS * 2:
+                        self._history.pop(0)
+                    return f"Co-pilot error suppressed (rate-limited: {err_text})"
                 self._history.append(("assistant", err_text))
                 while len(self._history) > _MAX_HISTORY_TURNS * 2:
                     self._history.pop(0)
-            # Post error in chat.
-            self._say(f"Co-pilot error: {err_text}", "agent:copilot")
             return err_text
 
         # Record assistant reply in history and post it.
@@ -421,8 +434,8 @@ def _has_key() -> bool:
 
 
 def build_copilot(llm: LLMAdapter | None = None,
-                  agent_state_fn: Callable[[], dict] | None = None,
-                  say_fn: Callable[[str, str], dict] | None = None,
+                 agent_state_fn: Callable[[], dict] | None = None,
+                 say_fn: Callable[[str, str], dict] | None = None,
                   ) -> Copilot | None:
     """Create a Copilot instance from env vars and the given hooks.
 

@@ -1212,6 +1212,7 @@ class WifiBridge:
         if len(buf) >= 68 and buf[0] == 0xAA and buf[1] == 0xAA and buf[2] == 0x01:
             frame = bytes(buf[:68])
             del buf[:68]
+            self._check_resubscribe()
             return "a", self._decode_frame_a(frame)
 
         # --- Variable-length frames: 0xAA 0xBB (Buf_Telemetry_UART4) ---

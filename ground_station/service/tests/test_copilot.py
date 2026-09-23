@@ -174,6 +174,41 @@ def test_key_never_in_error_message(copilot):
         assert tokens == [], f"token leak in: {text!r}"
 
 
+# ── Error rate limiting ──────────────────────────────────────────────────────
+
+def test_llm_error_is_rate_limited(copilot):
+    """Rapid LLM errors produce at most one say-log entry per minute."""
+    c, llm, log = copilot
+    llm.raise_on = True
+    # First error: posted immediately.
+    c.handle("fail 1")
+    assert len(log) == 1
+    # Second error within 60 s: suppressed.
+    c.handle("fail 2")
+    assert len(log) == 1
+    c.handle("fail 3")
+    assert len(log) == 1
+
+
+def test_llm_error_visible_after_rate_limit_cool(say_log, state_fn):
+    """After the rate-limit window expires the next error is posted again."""
+    log, say_fn = say_log
+    llm = FakeLLM(raise_on=True)
+    c = Copilot(llm, state_fn, say_fn)
+
+    c.handle("fail")
+    assert len(log) == 1
+    # Advance past the 60 s rate-limit window.
+    import ground_station.service.copilot as cp_mod
+    old = cp_mod.time.monotonic
+    cp_mod.time.monotonic = lambda: old() + 61
+    try:
+        c.handle("fail again")
+        assert len(log) == 2
+    finally:
+        cp_mod.time.monotonic = old
+
+
 # ── Operator echo not re-answered (no loops) ──────────────────────────────
 # This tests the copilot layer itself -- the agent.py integration test
 # verifies that agent messages don't trigger copilot.
