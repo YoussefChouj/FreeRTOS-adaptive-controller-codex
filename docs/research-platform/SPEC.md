@@ -33,3 +33,12 @@ reference them there and never copy numbers from memory.
 3. Sim/replay harness.
 4. Executor and workflow library (ground side). The firmware Simplex and runtime variants need the operator's review, because they are tier 0.
 5. Terminal agent and findings channel.
+
+## T2 as built
+
+Package: `ground_station/research/`
+- `run.py` — `Run` dataclass (frozen), fields: id/ULID, kind, intent, hypothesis, phase, firmware_hash, git_commit, params, variant, trajectory, captures, events, notes, outcome, metrics, tags, created_at. JSON round-trip via `to_json()`/`from_json()`, file save/load.
+- `store.py` — `Store` class. Location: `UAV_RUNS_DIR` env, default `D:/uav-runs` else `~/uav-runs`. Layout: `<dir>/runs/<id>/run.json`, `<dir>/runs/<id>/captures/` (parquet via pyarrow, CSV fallback), `<dir>/index.sqlite` (runs + metrics tables). API: `create`, `get`, `update`, `query(sql_where, params)`, `import_capture(path, kind, **meta)`.
+- `analysis.py` — Core: `rmse_of`, `overshoot`, `settling_time`, `saturation_time`, `dominant_peaks`. Plugin registry: `@metric("name")`. Stubs: `u_ad_spike_ratio`, `w_norm_convergence`, `gate_saturation` (all skip with None when columns missing). `generate_report()` writes `report.md`.
+- `__main__.py` — CLI: `import <path>`, `list [--kind] [--phase]`, `show <id>`, `analyze <id> [--axis]`, `query <sql> [params...]`.
+Tests: 45 pass — JSON round-trip, step overshoot, sine RMSE, query filtering, import CSV/parquet, plugin registry, stub skip. Full tree: 1005 passed, 27 skipped.
