@@ -1417,7 +1417,7 @@
    *
    * This card is the only alarm surface visible on every tab, but it used to
    * report transport health alone — packet loss and staleness. So it read "No
-   * active alarms" while status.sbus said the RC link was down, a condition the
+   * active alarms" while status.sbus_lost said the RC link was down, a condition the
    * Overview panel raises as critical (overview-panel.js:760) but which is
    * invisible from any other tab. These rules follow the same keys and the same
    * sense as that panel so the two cannot disagree.
@@ -1428,11 +1428,11 @@
   function buildFlightAlarms(state) {
     var out = [];
 
-    /* status.sbus aliases the firmware field `sbus_lost`
+    /* status.sbus_lost mirrors the firmware field `sbus_lost`
      * (schema_registry.py:227): 0 means the link is UP. */
-    var sbus = alarmValue(state, 'status.sbus');
+    var sbus = alarmValue(state, 'status.sbus_lost');
     if (sbus != null && Number(sbus) !== 0) {
-      out.push({ level: 'critical', text: 'RC receiver link lost (status.sbus = ' + Number(sbus) + ')' });
+      out.push({ level: 'critical', text: 'RC receiver link lost (status.sbus_lost = ' + Number(sbus) + ')' });
     }
 
     var est = alarmValue(state, 'status.estimator_ready');

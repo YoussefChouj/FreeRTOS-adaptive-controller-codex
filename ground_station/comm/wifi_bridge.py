@@ -1334,7 +1334,7 @@ class WifiBridge:
             # and treat it as a 0/1 flag here.
             "DroneStatus.ARM_Status": "status.arm",
             "DroneStatus.FlyMode":   "status.flymode",
-            "sbus_lost":             "status.sbus",   # sidebar reads "status.sbus"
+            "sbus_lost":             "status.sbus_lost",
             "TWC.execute":           "status.twc_execute",
             "TWC_arrived":           "status.twc_arrived",
             "s_authority":           "status.rc_authority",
@@ -1370,7 +1370,7 @@ class WifiBridge:
                 # Integer status fields round-trip better at 0 decimals.
                 if key in (
                     "status.arm", "status.flymode",
-                    "status.sbus", "status.twc_execute", "status.twc_arrived",
+                    "status.sbus_lost", "status.twc_execute", "status.twc_arrived",
                     "status.rc_authority", "status.of_hold", "status.estimator_ready",
                 ):
                     out[key] = round(float(v), 0)
@@ -1792,7 +1792,7 @@ class WifiBridge:
                 "mrac.z.e": float(z_e), "mrac.z.u_ad": float(z_u),
                 "status.arm": float(arm_u8),
                 "status.flymode": float(flymode_u8),
-                "status.sbus": float(sbus_lost_u8),
+                "status.sbus_lost": float(sbus_lost_u8),
                 "status.twc_execute": float(twc_exec_u8),
                 "status.twc_arrived": float(twc_arr_u8),
                 "status.rc_authority": float(rc_auth_u8),
@@ -1824,7 +1824,7 @@ class WifiBridge:
                 "mrac.z.e": float(z_e), "mrac.z.u_ad": float(z_u),
                 "status.arm": float(arm_u8),
                 "status.flymode": float(flymode_u8),
-                "status.sbus": float(sbus_lost_u8),
+                "status.sbus_lost": float(sbus_lost_u8),
                 "status.twc_execute": float(twc_exec_u8),
                 "status.twc_arrived": float(twc_arr_u8),
                 "status.rc_authority": float(rc_auth_u8),

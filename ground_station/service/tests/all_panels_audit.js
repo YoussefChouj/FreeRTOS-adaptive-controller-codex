@@ -253,7 +253,7 @@ const fullPayload = {
       loss_pct: 0.0,
       values: {
         'status.arm': 1, 'status.flymode': 1, 'status.vbat': 16.2,
-        'status.rc_authority': 1, 'status.sbus': 0, 'status.estimator_ready': 1,
+        'status.rc_authority': 1, 'status.sbus_lost': 0, 'status.estimator_ready': 1,
         'status.roll_deg': 2.5, 'status.pitch_deg': -1.25, 'status.yaw_deg': 180.0,
         'status.twc_execute': 0, 'status.twc_arrived': 0, 'status.of_hold': 1,
         'mrac.roll.u_ad': 0.0123, 'mrac.roll.e': -0.0456,

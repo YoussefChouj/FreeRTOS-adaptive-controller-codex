@@ -159,8 +159,8 @@ def test_rx_loop_stream_a_then_c_then_b():
 # Frame A status block: firmware DWARF name -> the spec key every consumer reads.
 # Both transports decode the same 9 wire bytes, so both must emit the same keys.
 # Until 2026-09-23 the serial bridge emitted "status.sbus_lost" while the WiFi
-# bridge emitted "status.sbus"; the sidebar and overview panels only ever read
-# "status.sbus", so the RC-link-lost indicator read "not published" on serial.
+# bridge emitted "status.sbus", so on serial the panels' RC-link-lost indicator
+# read "not published". The key is now "status.sbus_lost" everywhere.
 _FRAME_A_STATUS_DWARF = [
     "DroneStatus.ARM_Status",
     "DroneStatus.FlyMode",
@@ -193,12 +193,12 @@ def test_frame_a_status_keys_match_the_schema_registry():
 
 
 def test_frame_a_sbus_alias_carries_the_lost_flag():
-    """status.sbus is the alias for `sbus_lost`: 1 means the RC link is LOST."""
+    """status.sbus_lost carries firmware `sbus_lost`: 1 means the RC link is LOST."""
     lost = bytes([1, 2, 1, 0, 1, 1, 0, 0, GS_PROTO_VERSION])
     payload = struct.pack("<8f", *[0.1 * i for i in range(8)]) + lost
     out = dict(bridge._unpack_frame_a(MAX_NUM_BASIS, payload))
-    assert out["status.sbus"] == 1.0
-    assert "status.sbus_lost" not in out
+    assert out["status.sbus_lost"] == 1.0
+    assert "status.sbus" not in out
 
 
 if __name__ == "__main__":

@@ -121,7 +121,7 @@ function fullState() {
         last_update_ns: nsAgo(100),
         values: {
           'status.arm': 1, 'status.flymode': 1, 'status.vbat': 16.2,
-          'status.rc_authority': 1, 'status.sbus': 0, 'status.estimator_ready': 1,
+          'status.rc_authority': 1, 'status.sbus_lost': 0, 'status.estimator_ready': 1,
           'mrac.roll.u_ad': 0.0123, 'mrac.roll.e': -0.0456,
           'mrac.pitch.u_ad': -0.021, 'mrac.pitch.e': 0.033,
           'ekf.vel_x': 1.5, 'ekf.vel_y': -0.5, 'ekf.vel_z': 0.1,

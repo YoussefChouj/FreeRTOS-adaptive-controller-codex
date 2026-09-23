@@ -142,7 +142,7 @@ function flightReadyState() {
         last_update_ns: nsAgo(100),
         values: {
           'status.arm': 0, 'status.flymode': 0, 'status.vbat': 16.2,
-          'status.rc_authority': 1, 'status.sbus': 0, 'status.estimator_ready': 1,
+          'status.rc_authority': 1, 'status.sbus_lost': 0, 'status.estimator_ready': 1,
           'c.gyro_x': 0.01, 'c.gyro_y': -0.02, 'c.gyro_z': 0.03,
           'c.roll': 2.5, 'c.pitch': -1.25, 'c.yaw': 180.0,
           'c.altitude': 1.2,
@@ -291,7 +291,7 @@ function runChecks() {
     const bad = flightReadyState();
     bad.streams['0'].values['status.arm'] = 1;
     bad.streams['0'].values['status.vbat'] = 14.2;
-    bad.streams['0'].values['status.sbus'] = 1;
+    bad.streams['0'].values['status.sbus_lost'] = 1;
     bad.streams['0'].values['status.estimator_ready'] = 0;
     env.feed(bad);
     vs = verdicts(doc);
@@ -499,7 +499,7 @@ function runChecks() {
           last_update_ns: nsAgo(100),
           _key_ts: { 'status.vbat': nsAgo(100) },
           values: { 'status.arm': 0, 'status.flymode': 0, 'status.vbat': v,
-            'status.rc_authority': 1, 'status.sbus': 0, 'status.estimator_ready': 1 },
+            'status.rc_authority': 1, 'status.sbus_lost': 0, 'status.estimator_ready': 1 },
         },
       },
     });

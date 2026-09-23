@@ -517,7 +517,7 @@
       rc_authority:    values['status.rc_authority']    != null ? !!values['status.rc_authority'] : null,
       of_hold:         values['status.of_hold']         != null ? !!values['status.of_hold'] : null,
       estimator_ready: values['status.estimator_ready'] != null ? !!values['status.estimator_ready'] : null,
-      sbus:            values['status.sbus']            != null ? (values['status.sbus'] === 0) : null,
+      sbus:            values['status.sbus_lost']            != null ? (values['status.sbus_lost'] === 0) : null,
     };
   }
 
@@ -561,11 +561,9 @@
     setSbRow('sb-altitude', alt != null ? (Number(alt) / 100).toFixed(2) + ' m' : 'NOT PUBLISHED',
              alt != null ? '' : 'var(--amber)');
 
-    /* status.sbus is the alias for the firmware field `sbus_lost`
-     * (schema_registry.py:227), so 0 means the link is UP. The alias drops the
-     * _lost suffix and therefore reads backwards; the sense below follows the
-     * firmware field, not the alias name. */
-    var sbus = readAcrossSlots(state, 'status.sbus');
+    /* status.sbus_lost mirrors the firmware field `sbus_lost`
+     * (schema_registry.py:227): 0 means the link is UP. */
+    var sbus = readAcrossSlots(state, 'status.sbus_lost');
     if (sbus == null) setSbRow('sb-rclink', 'NOT PUBLISHED', 'var(--amber)');
     else if (Number(sbus) === 0) setSbRow('sb-rclink', 'UP', 'var(--green)');
     else setSbRow('sb-rclink', 'LOST', 'var(--red)');

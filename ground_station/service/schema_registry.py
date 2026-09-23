@@ -224,7 +224,7 @@ class SchemaRegistry:
             # Status flags (8 -- mirrors _decode_frame_a 9-byte block)
             "DroneStatus.ARM_Status":  "status.arm",
             "DroneStatus.FlyMode":     "status.flymode",
-            "sbus_lost":               "status.sbus",
+            "sbus_lost":               "status.sbus_lost",
             "TWC.execute":             "status.twc_execute",
             "TWC_arrived":             "status.twc_arrived",
             "s_authority":             "status.rc_authority",
@@ -318,7 +318,7 @@ class SchemaRegistry:
             "gs_throttle_min_pct":         "gs_throttle_min_pct",
         }
         int_keys = {
-            "status.arm", "status.flymode", "status.sbus",
+            "status.arm", "status.flymode", "status.sbus_lost",
             "status.twc_execute", "status.twc_arrived",
             "status.rc_authority", "status.of_hold",
             "status.estimator_ready",

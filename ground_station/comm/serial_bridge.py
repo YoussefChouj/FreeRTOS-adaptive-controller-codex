@@ -609,7 +609,7 @@ class SerialBridge:
         # I7  = mrac_z_u_ad
         # I8  = status_arm
         # I9  = status_flymode
-        # I10 = status_sbus       (firmware field is `sbus_lost`; 1 = LOST)
+        # I10 = status_sbus_lost  (firmware field is `sbus_lost`; 1 = LOST)
         # I11 = status_twc_execute
         # I12 = status_twc_arrived
         #
@@ -624,7 +624,7 @@ class SerialBridge:
         #   float z.u_ad       (uses mrac_state.z_rate.u_ad)
         #   uint8 status.arm
         #   uint8 status.flymode
-        #   uint8 sbus_lost      -> emitted as "status.sbus" (1 = LOST)
+        #   uint8 sbus_lost      -> emitted as "status.sbus_lost" (1 = LOST)
         #   uint8 status.twc_execute
         #   uint8 status.twc_arrived
         #   uint8 rc_authority   <- 1=PC authority, 0=RC (added in v2)
@@ -691,10 +691,8 @@ class SerialBridge:
             ("mrac.z.u_ad", float(z_u)),
             ("status.arm", float(arm_u8)),
             ("status.flymode", float(flymode_u8)),
-            # Alias is "status.sbus", not "status.sbus_lost": every consumer
-            # (wifi_bridge, schema_registry, capability_manifest, the sidebar
-            # and overview panels) reads "status.sbus". 1 still means LOST.
-            ("status.sbus", float(sbus_lost_u8)),
+            # Same key the WiFi bridge and schema_registry emit; 1 = LOST.
+            ("status.sbus_lost", float(sbus_lost_u8)),
             ("status.twc_execute", float(twc_exec_u8)),
             ("status.twc_arrived", float(twc_arr_u8)),
             ("status.rc_authority", float(rc_authority_u8)),

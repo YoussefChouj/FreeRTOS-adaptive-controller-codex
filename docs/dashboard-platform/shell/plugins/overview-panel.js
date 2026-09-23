@@ -234,7 +234,7 @@
       eval: evalImu },
     { id: 'attitude',  plain: 'Attitude estimate available', hint: 'Frame C · c.roll / c.pitch',
       eval: evalAttitude },
-    { id: 'rc',        plain: 'RC receiver link up', hint: 'Frame A · status.sbus = 0',
+    { id: 'rc',        plain: 'RC receiver link up', hint: 'Frame A · status.sbus_lost = 0',
       eval: evalRc },
     { id: 'estimator', plain: 'Estimator ready', hint: 'Frame A/ID · status.estimator_ready = 1',
       eval: evalEstimator },
@@ -663,14 +663,14 @@
 
   function evalRc(state, nowMs, ttlMs) {
     if (!hasStreams(state)) return V('unknown', 'no telemetry received — cannot judge');
-    var r = findValue(state, 'status.sbus');
-    if (r == null || r.val == null || isNaN(r.val)) return V('unknown', 'status.sbus not published');
+    var r = findValue(state, 'status.sbus_lost');
+    if (r == null || r.val == null || isNaN(r.val)) return V('unknown', 'status.sbus_lost not published');
     if (r.ts != null) {
       var age = Math.max(0, nowMs - r.ts / 1e6);
-      if (age > ttlMs) return V('unknown', 'status.sbus frozen ' + fmtAge(age) + ' ago');
+      if (age > ttlMs) return V('unknown', 'status.sbus_lost frozen ' + fmtAge(age) + ' ago');
     }
-    if (Number(r.val) === 0) return V('pass', 'status.sbus = 0 — receiver link up');
-    return V('fail', 'RC RECEIVER LINK LOST (status.sbus = ' + Number(r.val) + ')');
+    if (Number(r.val) === 0) return V('pass', 'status.sbus_lost = 0 — receiver link up');
+    return V('fail', 'RC RECEIVER LINK LOST (status.sbus_lost = ' + Number(r.val) + ')');
   }
 
   function evalEstimator(state, nowMs, ttlMs) {
@@ -757,9 +757,9 @@
     if (est && Number(est.val) === 0) {
       out.push({ id: 'estimator', sev: 'amber', text: 'Estimator not ready (status.estimator_ready = 0)' });
     }
-    var sbus = findValue(state, 'status.sbus');
+    var sbus = findValue(state, 'status.sbus_lost');
     if (sbus && Number(sbus.val) !== 0) {
-      out.push({ id: 'sbus', sev: 'red', text: 'RC RECEIVER LINK LOST (status.sbus = ' + Number(sbus.val) + ')' });
+      out.push({ id: 'sbus', sev: 'red', text: 'RC RECEIVER LINK LOST (status.sbus_lost = ' + Number(sbus.val) + ')' });
     }
     return out;
   }
@@ -1642,7 +1642,7 @@
     }
     var rcA = findValue(state, 'status.rc_authority');
     setPill('ov-pill-rc', 'RC AUTH', rcA == null ? null : Number(rcA.val) !== 0);
-    var sb = findValue(state, 'status.sbus');
+    var sb = findValue(state, 'status.sbus_lost');
     setPill('ov-pill-sbus', 'SBUS', sb == null ? null : Number(sb.val) === 0);
     var es = findValue(state, 'status.estimator_ready');
     setPill('ov-pill-est', 'ESTIMATOR', es == null ? null : Number(es.val) !== 0);

@@ -37,7 +37,7 @@ class TestBuiltinDashboardMapping(unittest.TestCase):
         expected = {
             "DroneStatus.ARM_Status": "status.arm",
             "DroneStatus.FlyMode":    "status.flymode",
-            "sbus_lost":              "status.sbus",
+            "sbus_lost":              "status.sbus_lost",
             "TWC.execute":            "status.twc_execute",
             "TWC_arrived":            "status.twc_arrived",
             "s_authority":            "status.rc_authority",

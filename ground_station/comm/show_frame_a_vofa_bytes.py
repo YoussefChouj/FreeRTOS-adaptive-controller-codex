@@ -32,7 +32,7 @@ def _sample_frame_a_lines() -> list[tuple[str, float]]:
         ("mrac.z.u_ad", -0.933064),
         ("status.arm", 1.0),
         ("status.flymode", 2.0),
-        ("status.sbus", 0.0),
+        ("status.sbus_lost", 0.0),
     ]
 
 

@@ -45,7 +45,7 @@ Active alarm conditions (all derived from verified published keys):
 |----|----------|-----------|--------|
 | `vbat-low` | red | `status.vbat` < 15.0 V | firmware beeper threshold, `TASK/StabilizerTask.c:1329` (`Get_Voltage`) |
 | `vbat-warn` | amber | `status.vbat` < 15.5 V | dashboard-only early warning, 0.5 V above the firmware beep (4S pack) |
-| `sbus` | red | `status.sbus` ≠ 0 | `status.sbus` is `sbus_lost`; non-zero means the RC receiver link is down |
+| `sbus` | red | `status.sbus_lost` ≠ 0 | mirrors firmware `sbus_lost`; non-zero means the RC receiver link is down |
 | `loss-<slot>` | red / amber | `loss_pct` > 5 % / > 1 % | shell loss thresholds, `plugin-api.md` |
 | `stale-<slot>` | amber | slot age 2 s … TTL | see §3 |
 | `estimator` | amber | `status.estimator_ready` = 0 | published by Frame A / Frame ID |
@@ -109,7 +109,7 @@ tags `id`/`b`→slot 1, tag `c`→slot 3.
 | strip | `status.flymode` | 0/1 | 1657, 1689, 1458, 1229 | Flight mode |
 | strip | `status.vbat` | 0/1 | 1237, 1387 | Battery |
 | strip | `status.rc_authority` | 0/1 | 1661, 1459, 1233 | RC AUTH pill |
-| strip | `status.sbus` | 0 | 1660, 1690, 1230 | SBUS pill |
+| strip | `status.sbus_lost` | 0 | 1660, 1690, 1230 | SBUS pill |
 | strip | `status.estimator_ready` | 0/1 | 1663, 1461, 1235 | ESTIMATOR pill |
 | stage | `c.gyro_x/y/z` | 3 | 1428 | Gyro sensor |
 | stage | `pid.gyrox/gyroy/gyroz.FB` | 1 | 1379 | Rate filter (flown) |

@@ -10,7 +10,7 @@ These are physical quantities that stream properly under their raw DWARF names b
 |-----------------|---------------------------------|-------|
 | `status.arm` | `DroneStatus.ARM_Status` | Status flags |
 | `status.flymode` | `DroneStatus.FlyMode` | Status flags |
-| `status.sbus` | `sbus_lost` | Status flags |
+| `status.sbus_lost` | `sbus_lost` | Status flags |
 | `status.twc_execute` | `TWC.execute` | Status flags |
 | `status.twc_arrived` | `TWC_arrived` | Status flags |
 | `status.rc_authority` | `s_authority` | Status flags |

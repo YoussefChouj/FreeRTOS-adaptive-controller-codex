@@ -184,7 +184,7 @@ function checkLive() {
           'status.rc_authority': 1.0,
           'status.of_hold': 1.0,
           'status.estimator_ready': 1.0,
-          'status.sbus': 0.0,
+          'status.sbus_lost': 0.0,
         }
       },
       '2': {

@@ -927,7 +927,7 @@ manifests:
       # Status flags (8 vars, 1 B each packed as 4 B in subscribe path)
       - { dwarf: "DroneStatus.ARM_Status", key: "status.arm",          int: true }
       - { dwarf: "DroneStatus.FlyMode",    key: "status.flymode",      int: true }
-      - { dwarf: "sbus_lost",              key: "status.sbus",         int: true }
+      - { dwarf: "sbus_lost",              key: "status.sbus_lost",         int: true }
       - { dwarf: "TWC.execute",            key: "status.twc_execute",  int: true }
       - { dwarf: "TWC_arrived",            key: "status.twc_arrived",  int: true }
       - { dwarf: "s_authority",            key: "status.rc_authority", int: true }
