@@ -232,7 +232,7 @@
       eval: evalBattery },
     { id: 'imu',       plain: 'IMU publishing', hint: 'Frame C · c.gyro_x/y/z @ 50 Hz',
       eval: evalImu },
-    { id: 'attitude',  plain: 'Attitude estimate available', hint: 'Frame C · c.roll / c.pitch',
+    { id: 'attitude',  plain: 'Attitude estimate available', hint: 'slot 0 · status.roll_deg / pitch_deg (or Frame C)',
       eval: evalAttitude },
     { id: 'rc',        plain: 'RC receiver link up', hint: 'Frame A · status.sbus_lost = 0',
       eval: evalRc },
@@ -622,6 +622,23 @@
     var age = Math.max(0, nowMs - newest / 1e6);
     if (age > ttlMs)         return V('fail', 'frozen — no packet for ' + fmtAge(age));
     if (age > STALE_WARN_MS) return V('fail', 'last packet ' + fmtAge(age) + ' ago — link slow');
+    /* A rebooted FC forgets its subscribe slots and sends only the attitude
+     * fallback frame, which keeps last_update_ns fresh on its own. Require a
+     * fresh subscribed key besides the three fallback attitude keys. */
+    var newestSub = null;
+    names.forEach(function (n) {
+      var kts = state.streams[n]._key_ts || {};
+      Object.keys(kts).forEach(function (k) {
+        if (/^status\.(roll|pitch|yaw)_deg$/.test(k)) return;
+        if (newestSub == null || kts[k] > newestSub) newestSub = kts[k];
+      });
+    });
+    if (newestSub != null) {
+      var subAge = Math.max(0, nowMs - newestSub / 1e6);
+      if (subAge > 5000)
+        return V('fail', 'only attitude fallback frames; subscribed data frozen ' +
+                 fmtAge(subAge) + ' (FC rebooted? bridge re-subscribes automatically)');
+    }
     return V('pass', 'last packet ' + fmtAge(age) + ' ago');
   }
 
@@ -658,6 +675,11 @@
   }
 
   function evalAttitude(state, nowMs, ttlMs) {
+    // On WiFi the attitude arrives in slot 0 as status.*_deg; Frame C never
+    // does (see AI_STAGE), so c.roll alone failed with the horizon live.
+    var v = keyRowVerdict(state, nowMs, ttlMs, ['status.roll_deg', 'status.pitch_deg'],
+                          'status.roll_deg / pitch_deg live');
+    if (v.v === 'pass') return v;
     return keyRowVerdict(state, nowMs, ttlMs, ['c.roll', 'c.pitch'], 'c.roll / c.pitch live');
   }
 

@@ -50,7 +50,8 @@
     var b = document.getElementById('approval-badge');
     if (!b) return;
     b.style.display = queue.length ? 'inline-block' : 'none';
-    b.textContent = String(queue.length);
+    // Empty, not "0": a hidden 0 still reached the tab's text as "Approvals0".
+    b.textContent = queue.length ? String(queue.length) : '';
   }
 
   window.__registerPlugin__('Approvals', function (api) {

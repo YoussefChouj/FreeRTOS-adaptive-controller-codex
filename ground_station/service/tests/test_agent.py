@@ -567,8 +567,10 @@ def test_notes_since_and_long_poll(service, api):
     _post(base + "/api/session/note", {"text": "note one", "kind": "note",
                                        "source": "test"})
     status, notes = _get(base + "/api/session/notes?since=0")
-    assert status == 200 and len(notes["notes"]) == 1
-    seq = notes["notes"][0]["seq"]
+    # Without a key the co-pilot answers the first note with an "is off" line.
+    mine = [n for n in notes["notes"] if n["source"] == "test"]
+    assert status == 200 and len(mine) == 1
+    seq = notes["notes"][-1]["seq"]
     # long-poll blocks until a *new* note arrives
     result = {}
     def poll():

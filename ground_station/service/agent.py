@@ -624,6 +624,7 @@ class AgentManager:
         self._copilot_queue: queue.Queue[str | None] = queue.Queue(maxsize=3)
         self._copilot_worker: threading.Thread | None = None
         self._copilot_stop = threading.Event()
+        self._copilot_off_notified = False
 
     # -- lifecycle ----------------------------------------------------------
     def start(self) -> None:
@@ -1475,9 +1476,17 @@ class AgentManager:
         entry = self.notes.append(str(text), str(kind), source or "operator")
         # Fire the copilot on operator-originated notes (not agent messages).
         # Never answer our own copilot output to avoid echo loops.
-        if (self.copilot is not None
-                and source not in ("agent:copilot", "agent:copilot:reply")):
+        if source in ("agent:copilot", "agent:copilot:reply"):
+            return entry
+        if self.copilot is not None:
             self._feed_copilot(str(text))
+        elif kind in ("note", "goal") and not self._copilot_off_notified:
+            # Say once why nobody answers, instead of leaving the chat silent.
+            self._copilot_off_notified = True
+            self.add_agent_message(
+                "Co-pilot is off: no API key found (COPILOT_API_KEY or the WSL "
+                "agent-keys.env). See docs/RUNBOOK.md, section Co-pilot.",
+                "agent:copilot")
         return entry
 
     def notes_since(self, seq: int) -> list[dict[str, Any]]:

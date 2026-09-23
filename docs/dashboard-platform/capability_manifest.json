@@ -1968,7 +1968,6 @@
       "name": "Flight Status",
       "slug": "flight-status",
       "workspaces": [
-        "overview",
         "control"
       ]
     },
@@ -2096,7 +2095,6 @@
       "name": "Safety Limits",
       "slug": "safety-limits",
       "workspaces": [
-        "overview",
         "control"
       ]
     },
@@ -2209,7 +2207,6 @@
       "name": "Time Series",
       "slug": "time-series",
       "workspaces": [
-        "overview",
         "telemetry"
       ]
     },
@@ -2234,8 +2231,7 @@
       "name": "FFT Spectrum",
       "slug": "fft-spectrum",
       "workspaces": [
-        "telemetry",
-        "diagnostics"
+        "telemetry"
       ]
     },
     {
@@ -2252,8 +2248,7 @@
       "name": "Bandwidth Manager",
       "slug": "bandwidth-manager",
       "workspaces": [
-        "telemetry",
-        "diagnostics"
+        "telemetry"
       ]
     },
     {

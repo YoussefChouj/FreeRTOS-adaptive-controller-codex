@@ -91,8 +91,10 @@ class OpenAILLM(LLMAdapter):
         body = json.dumps(payload).encode("utf-8")
         url = f"{self._base}/chat/completions"
 
-        # ProxyHandler({}) means "use env vars only" -- never force a proxy.
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        # ProxyHandler() with no argument reads HTTPS_PROXY and friends (and the
+        # Windows registry proxy). ProxyHandler({}) would disable proxies, and
+        # the endpoints are unreachable here without the local Clash proxy.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler())
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self._key}",
@@ -127,7 +129,10 @@ class OpenAILLM(LLMAdapter):
         if not choices:
             raise HTTPError("LLM response has no choices")
         msg = choices[0].get("message", {})
-        return str(msg.get("content", ""))
+        text = str(msg.get("content") or "")
+        # Reasoning models may prepend a <think> block and blank lines.
+        text = re.sub(r"(?s)<think>.*?</think>", "", text).strip()
+        return text or "(empty reply from the model)"
 
 
 class FakeLLM(LLMAdapter):
@@ -266,17 +271,22 @@ class Copilot:
 
         system = self._system_prompt(state)
 
-        # Assemble the conversation.
-        messages: list[dict] = [{"role": "system", "content": system}]
-        # Add recent history (keep it bounded by character cap).
-        content_parts: list[str] = []
-        for role, text in self._history:
-            entry = f"{role}: {text}"
-            if sum(len(p) for p in content_parts) + len(entry) > _TOKEN_CAP_CHARACTERS:
+        # Assemble the conversation: the newest history turns that fit the
+        # character cap, oldest first. handle() has already appended user_text
+        # as the last history entry, so it is not added again.
+        with self._lock:
+            history = list(self._history)
+        kept: list[dict] = []
+        used = 0
+        for role, text in reversed(history):
+            if kept and used + len(text) > _TOKEN_CAP_CHARACTERS:
                 break
-            content_parts.append(entry)
-        messages.append({"role": "user", "content": user_text})
-        return messages
+            kept.append({"role": role, "content": text})
+            used += len(text)
+        if not kept:
+            kept.append({"role": "user", "content": user_text})
+        kept.reverse()
+        return [{"role": "system", "content": system}] + kept
 
     def _system_prompt(self, state: dict) -> str:
         """Build the system prompt from the state snapshot."""
@@ -314,6 +324,13 @@ class Copilot:
                 ]
                 if recent_texts:
                     parts.append(f"  Recent messages: {'; '.join(recent_texts)[:200]}")
+            telemetry = state.get("telemetry")
+            if telemetry:
+                parts.append("  Latest telemetry (status.sbus_lost 1 = RC link lost):")
+                for key, value in telemetry.items():
+                    parts.append(f"    {key} = {value}")
+            elif "telemetry" in state:
+                parts.append("  Latest telemetry: none received (drone off or link down)")
         else:
             parts.append("  (no state snapshot available)")
 
@@ -360,16 +377,47 @@ def _default_model() -> str:
 
 
 def _default_base_url() -> str:
-    return os.environ.get("COPILOT_BASE_URL",
-                            "https://inference.hetzner.com/api/v1")
+    return (os.environ.get("COPILOT_BASE_URL")
+            or _key_file_value("HETZNER_BASE_URL")
+            or "https://inference.hetzner.com/api/v1")
+
+
+# The worker keys live in WSL (~/.config/agent-keys.env, mode 600). When
+# COPILOT_API_KEY is not in the environment the service reads HETZNER_API_KEY
+# from that file, so starting the service needs no key on the command line.
+# COPILOT_KEY_FILE overrides the path; set it to an empty string to disable.
+_DEFAULT_KEY_FILE = r"\\wsl.localhost\Ubuntu\home\youssef\.config\agent-keys.env"
+
+
+def _key_file_value(name: str) -> str:
+    path = os.environ.get("COPILOT_KEY_FILE", _DEFAULT_KEY_FILE)
+    if not path:
+        return ""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return ""
+    for line in lines:
+        line = line.strip()
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        k, sep, v = line.partition("=")
+        if sep and k.strip() == name:
+            return v.strip().strip("'\"")
+    return ""
+
+
+def _api_key() -> str:
+    return (os.environ.get("COPILOT_API_KEY", "").strip()
+            or _key_file_value("HETZNER_API_KEY"))
 
 
 def _has_key() -> bool:
     """Return True when a co-pilot API key is configured and copilot is ON."""
     if os.environ.get("COPILOT_OFF", ""):
         return False
-    key = os.environ.get("COPILOT_API_KEY", "")
-    return bool(key.strip())
+    return bool(_api_key())
 
 
 def build_copilot(llm: LLMAdapter | None = None,
@@ -384,7 +432,7 @@ def build_copilot(llm: LLMAdapter | None = None,
         return None
 
     if llm is None:
-        key = os.environ.get("COPILOT_API_KEY", "")
+        key = _api_key()
         llm = OpenAILLM(
             base_url=_default_base_url(),
             model=_default_model(),

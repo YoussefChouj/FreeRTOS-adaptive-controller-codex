@@ -14,11 +14,18 @@ belongs to the tree, not to that file: the next module-level patch of a
 shared global would be just as invisible, and would again be blamed on the
 code it broke rather than on the code that did it.
 """
+import os
 import socket
 import subprocess
 import time
 
 import pytest
+
+# The service builds a live co-pilot whenever it finds a key, and it also reads
+# the WSL key file. No test may reach the real LLM: tests that need a co-pilot
+# pass a FakeLLM or set COPILOT_API_KEY themselves.
+os.environ.pop("COPILOT_API_KEY", None)
+os.environ["COPILOT_KEY_FILE"] = ""
 
 # Attributes whose replacement leaks across every later module. Each is one a
 # test has a plausible reason to fake, and a catastrophic one to keep faked.

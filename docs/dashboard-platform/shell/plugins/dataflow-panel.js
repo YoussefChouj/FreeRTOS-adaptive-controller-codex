@@ -528,7 +528,7 @@
         _state = state;
         render(container);
       });
-    }, { workspace: 'overview diagnostics' });
+    }, { workspace: 'diagnostics' });
   };
   window.__PLUGIN_DESTROY__ = function () { _state = null; };
   window.__registerPlugin__('Data Flow', window.__PLUGIN_INIT__, window.__PLUGIN_DESTROY__);

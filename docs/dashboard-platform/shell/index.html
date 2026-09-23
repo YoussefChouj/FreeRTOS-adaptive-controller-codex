@@ -583,7 +583,7 @@
          Without it this card enumerated as null in browser_smoke, so the only
          statically-authored panel was the one panel no check could name. -->
     <div class="card plugin-card" id="card-streams" data-testid="panel-streams"
-         data-workspaces="telemetry diagnostics">
+         data-workspaces="telemetry">
       <div class="card-header">
         <span class="card-title">Telemetry Streams</span>
         <button class="toggle-btn" data-panel="streams">Hide</button>
@@ -861,6 +861,9 @@
         var s = state.streams[slot];
         if (s && s.values) {
           var arm = s.values['status.arm'];
+          // A frozen arm=0 (FC rebooted, slots lost) proves nothing: skip it.
+          var armTs = (s._key_ts || {})['status.arm'];
+          if (armTs && nowNs - armTs > ttlNs) arm = null;
           if (arm != null) { armSeen = true; if (arm !== 0) anyArmed = true; }
         }
       });
@@ -921,16 +924,19 @@
 
   /* Default workspace(s) and gates per panel name. A plugin's own meta wins. */
   var PANEL_META = {
-    'Flight Status':         { workspace: 'overview control' },
-    'Safety Limits':         { workspace: 'overview control' },
+    // One home tab per panel: a panel shown on two tabs reads as two sources.
+    'Flight Status':         { workspace: 'control' },
+    'PID Gains':             { workspace: 'control' },
+    'What changed':          { workspace: 'diagnostics' },
+    'Safety Limits':         { workspace: 'control' },
     'Command Panel':         { workspace: 'control', gates: ['connected', 'disarmed'] },
-    'Time Series':           { workspace: 'overview telemetry' },
+    'Time Series':           { workspace: 'telemetry' },
     'MRAC Controller':       { workspace: 'mrac' },
     'EKF Estimator':         { workspace: 'estimator' },
     'Telemetry Explorer':    { workspace: 'telemetry' },
     'Slot Manager':          { workspace: 'telemetry' },
-    'Bandwidth Manager':     { workspace: 'telemetry diagnostics' },
-    'FFT Spectrum':          { workspace: 'telemetry diagnostics' },
+    'Bandwidth Manager':     { workspace: 'telemetry' },
+    'FFT Spectrum':          { workspace: 'telemetry' },
     'Experiment Runtime':    { workspace: 'experiments' },
     'Path Planning':         { workspace: 'paths' },
     'Motor Bench':           { workspace: 'bench', gates: ['connected', 'disarmed'] },

@@ -574,6 +574,49 @@
     else setSbRow('sb-estimator', 'NOT READY', 'var(--amber)');
   }
 
+  /* A value is only as good as its age. After an FC power cycle the subscribe
+   * slots stop while the attitude fallback frame keeps the stream "alive", so
+   * the last pre-reboot values would otherwise sit here looking live. */
+  var STALE_AFTER_S = 5;
+  var SB_KEYS = {
+    'sb-arm': 'status.arm', 'sb-flymode': 'status.flymode', 'sb-vbat': 'status.vbat',
+    'sb-attitude': 'status.roll_deg', 'sb-altitude': 'c.altitude_cm',
+    'sb-rclink': 'status.sbus_lost', 'sb-estimator': 'status.estimator_ready',
+    'sp-arm-badge': 'status.arm', 'sp-flymode': 'status.flymode', 'sp-vbat': 'status.vbat'
+  };
+
+  function keyAgeS(state, key) {
+    if (!state || !state.streams) return null;
+    var best = null;
+    Object.keys(state.streams).forEach(function (slot) {
+      var ts = (state.streams[slot] || {})._key_ts || {};
+      if (ts[key] && (best == null || ts[key] > best)) best = ts[key];
+    });
+    return best == null ? null : Math.max(0, Date.now() / 1000 - best / 1e9);
+  }
+
+  function fmtAge(s) {
+    if (s < 90) return Math.round(s) + ' s';
+    if (s < 5400) return Math.round(s / 60) + ' min';
+    return Math.round(s / 3600) + ' h';
+  }
+
+  function markStaleRows(state) {
+    Object.keys(SB_KEYS).forEach(function (id) {
+      var el = q(id);
+      if (!el) return;
+      var age = keyAgeS(state, SB_KEYS[id]);
+      var stale = age != null && age > STALE_AFTER_S;
+      el.style.opacity = stale ? '0.5' : '';
+      el.setAttribute('data-stale', stale ? 'true' : 'false');
+      el.title = stale ? 'last received ' + fmtAge(age) + ' ago; not live' : '';
+      if (stale && el.textContent.indexOf('(stale') < 0) {
+        el.textContent += ' (stale ' + fmtAge(age) + ')';
+        el.style.color = 'var(--muted, #888)';
+      }
+    });
+  }
+
   function readDropCount(s) {
     if (!s) return null;
     if (s.dropped != null) return s.dropped;
@@ -639,6 +682,7 @@
 
     _rates = readRates(state);
     updateRates(_rates);
+    markStaleRows(state);
 
     // Wire transaction result feedback → "Last Command" indicator.
     var tr = state.last_transaction_result;

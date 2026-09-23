@@ -222,6 +222,14 @@ class WifiBridge:
         self._on_telemetry = on_telemetry  # optional (tag, payload) callback for service integration
 
         self._stop = threading.Event()
+        # Subscribe watchdog. The FC keeps its slots in RAM, so a power cycle
+        # drops them: it comes back sending only its fallback frames, and every
+        # subscribed key froze at its last value while the link looked alive.
+        # When the bridge auto-subscribed at start, it re-sends that request
+        # whenever other frames arrive but no subscribe data has for a while.
+        self._resubscribe_layout: Optional[str] = None
+        self._last_stream_rx = 0.0
+        self._last_resubscribe = 0.0
         self._cmd_queue: queue.Queue[Optional[Dict[str, Any]]] = queue.Queue()
         # Keep-alive state: monotonic time of the last downlink-aim nudge. We
         # re-nudge every `keepalive_interval` s to stop the MicoAir module's
@@ -395,7 +403,35 @@ class WifiBridge:
         # dashboard's sidebar via _slot0_to_sidebar() — see boot_default_layout
         # docstring for the dashboard vs firmware-mirror distinction.
         if auto_subscribe_boot_default:
+            self._resubscribe_layout = "dashboard"
+            self._last_resubscribe = time.monotonic()
             self._request_slot0_schema(layout="dashboard")
+
+    # Subscribe data silent this long while other frames arrive = FC rebooted.
+    _RESUBSCRIBE_AFTER_S = 3.0
+    # Minimum spacing between re-sends, so a rejected request does not spam.
+    _RESUBSCRIBE_EVERY_S = 10.0
+
+    def _check_resubscribe(self) -> None:
+        """Re-send the auto-subscribe when the FC has evidently forgotten it.
+
+        Called on the RX thread for every non-subscribe frame. The request
+        resolves DWARF symbols, so it runs on its own thread.
+        """
+        layout = self._resubscribe_layout
+        if layout is None:
+            return
+        now = time.monotonic()
+        if now - self._last_stream_rx < self._RESUBSCRIBE_AFTER_S:
+            return
+        if now - self._last_resubscribe < self._RESUBSCRIBE_EVERY_S:
+            return
+        self._last_resubscribe = now
+        print("[wifi_bridge] frames arrive but no subscribe data: FC likely "
+              f"rebooted, re-sending the {layout} subscribe",
+              file=sys.stderr, flush=True)
+        threading.Thread(target=self._request_slot0_schema, args=(layout,),
+                         name="wifi_bridge_resubscribe", daemon=True).start()
 
     def stop(self) -> None:
         """Stop all threads."""
@@ -1195,6 +1231,8 @@ class WifiBridge:
             if len(buf) >= total_len:
                 frame = bytes(buf[:total_len])
                 del buf[:total_len]
+                if not 0x08 <= frame_type <= 0x0C:
+                    self._check_resubscribe()
                 if frame_type == 0x01:
                     return "a", self._decode_frame_a_uart4(frame)
                 elif frame_type == 0x02:
@@ -1235,6 +1273,7 @@ class WifiBridge:
                     slot = frame_type - 0x09
                     decoded = self._decode_stream_frame(slot, frame)
                     if decoded is not None:
+                        self._last_stream_rx = time.monotonic()
                         # Two downstream sinks: dashboard JSON mirror and
                         # VoFA+ JustFloat. The latter only fires if a
                         # schema was registered for this slot.
@@ -1270,6 +1309,7 @@ class WifiBridge:
             del buf[:12]
             del buf[:4]  # JustFloat terminator
             rol, pit, yaw = struct.unpack("<3f", raw12)
+            self._check_resubscribe()
             return "a", {
                 "status.roll_deg": round(rol, 3),
                 "status.pitch_deg": round(pit, 3),

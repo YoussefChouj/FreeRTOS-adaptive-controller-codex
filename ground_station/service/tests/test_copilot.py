@@ -487,3 +487,69 @@ def test_short_error_returns_only_the_first_line():
 def test_short_error_never_exceeds_120_chars():
     for msg in ("short", "y" * 500, "z" * 400 + " " + _FAKE_LONG):
         assert len(_short_error(msg)) <= 120
+
+
+# ── wiring and conversation memory ─────────────────────────────────────────
+
+def test_key_file_supplies_key_and_base_url(tmp_path, monkeypatch):
+    """Without COPILOT_API_KEY the Hetzner entries of the key file are used."""
+    f = tmp_path / "agent-keys.env"
+    f.write_text("export HETZNER_API_KEY='file-key'\nHETZNER_BASE_URL=https://h.example/api/v1\n")
+    monkeypatch.delenv("COPILOT_API_KEY", raising=False)
+    monkeypatch.delenv("COPILOT_OFF", raising=False)
+    monkeypatch.delenv("COPILOT_BASE_URL", raising=False)
+    monkeypatch.setenv("COPILOT_KEY_FILE", str(f))
+    cop = build_copilot(agent_state_fn=lambda: {}, say_fn=MagicMock())
+    assert cop is not None
+    assert cop._llm._key == "file-key"
+    assert cop._llm._base == "https://h.example/api/v1"
+
+
+def test_history_reaches_the_llm_once_per_turn():
+    """Earlier turns are sent, and the new message is not duplicated."""
+    seen = []
+
+    class _Rec(FakeLLM):
+        def __call__(self, messages):
+            seen.append(messages)
+            return "ok"
+
+    cop = Copilot(_Rec(), lambda: {}, MagicMock())
+    cop.handle("first")
+    cop.handle("second")
+    roles = [(m["role"], m["content"]) for m in seen[-1][1:]]
+    assert roles == [("user", "first"), ("assistant", "ok"), ("user", "second")]
+
+
+def test_api_server_builds_the_copilot(service, monkeypatch):
+    """ApiServer wires a co-pilot when a key exists; notes get an answer."""
+    from ground_station.service.api import ApiServer
+    from ground_station.service import copilot as copilot_mod
+
+    monkeypatch.setenv("COPILOT_API_KEY", "k")
+    monkeypatch.delenv("COPILOT_OFF", raising=False)
+    monkeypatch.setattr(copilot_mod, "OpenAILLM", lambda **kw: FakeLLM("pong"))
+    api = ApiServer(service, port=0)
+    try:
+        assert api.agent.copilot is not None
+        state = api._copilot_state()
+        assert "telemetry" in state
+    finally:
+        api.server.server_close()
+
+
+def test_copilot_off_says_so_once(service, monkeypatch):
+    """With no key the operator gets one explanation instead of silence."""
+    from ground_station.service.api import ApiServer
+
+    monkeypatch.delenv("COPILOT_API_KEY", raising=False)
+    monkeypatch.setenv("COPILOT_KEY_FILE", "")
+    api = ApiServer(service, port=0)
+    try:
+        api.agent.receive_operator_note("hello", "note", "operator")
+        api.agent.receive_operator_note("again", "note", "operator")
+        agent_msgs = [n for n in api.agent.notes_since(0) if n.get("kind") == "agent"]
+        assert len(agent_msgs) == 1
+        assert "Co-pilot is off" in agent_msgs[0]["text"]
+    finally:
+        api.server.server_close()

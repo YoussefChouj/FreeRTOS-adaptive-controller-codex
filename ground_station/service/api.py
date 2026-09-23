@@ -19,9 +19,10 @@ from .agent import (
     AgentManager,
     PlanBusyError,
     SSE_HEARTBEAT_S,
+    _latest_value,
     build_agent_manager,
 )
-from .copilot import Copilot
+from .copilot import Copilot, build_copilot
 # Largest request body any route accepts.  The biggest real body is a plan or a
 # subscribe range list, both far under this; 1 MiB leaves room without letting a
 # single POST decide how much the service will read.
@@ -2130,6 +2131,14 @@ class ApiServer:
                       / "docs" / "dashboard-platform" / "shell"),
             copilot=copilot,
         )
+        # The co-pilot needs the agent manager's state and say hooks, so it can
+        # only be built once the manager exists. Without this nothing ever
+        # built it and operator messages went unanswered.
+        if copilot is None:
+            copilot = build_copilot(agent_state_fn=self._copilot_state,
+                                    say_fn=self.agent.add_agent_message)
+            self.copilot = copilot
+            self.agent.copilot = copilot
         self.hub = StateHub()
         # Bug 1 (AUDIT_2026-09-21 §Bug 1): the hub cache was refreshed only
         # on command results, so any hub consumer saw a frozen view after
@@ -2148,6 +2157,28 @@ class ApiServer:
         self._poll_thread = None
         self.thread = threading.Thread(target=self.server.serve_forever,
                                        name="ground_station_api", daemon=True)
+
+    # Telemetry keys the co-pilot sees on every turn; enough to answer "is it
+    # armed / linked / healthy" without pulling the whole snapshot.
+    _COPILOT_KEYS = ("status.arm", "status.flymode", "status.sbus_lost",
+                     "status.rc_authority", "status.estimator_ready",
+                     "status.of_hold", "status.twc_execute", "status.vbat",
+                     "status.roll_deg", "status.pitch_deg", "status.yaw_deg")
+
+    def _copilot_state(self) -> dict:
+        state = self.agent.agent_state()
+        telemetry: dict = {}
+        try:
+            snap = self.service.snapshot()
+            for data in (getattr(snap, "streams", {}) or {}).values():
+                vals = (data or {}).get("values") or {} if isinstance(data, dict) else {}
+                for key in self._COPILOT_KEYS:
+                    if key in vals and key not in telemetry:
+                        telemetry[key] = _latest_value(vals[key])
+        except Exception:
+            pass
+        state["telemetry"] = telemetry
+        return state
 
     @property
     def address(self):
