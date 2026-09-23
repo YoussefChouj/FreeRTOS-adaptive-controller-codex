@@ -90,6 +90,43 @@
     sidebar.insertBefore(card, sidebar.firstChild);
   }
 
+  /* Extra always-visible flight indicators.
+   *
+   * The three original rows (arm / flymode / vbat) are ALSO written statically
+   * in index.html, and that static copy is the one the browser uses: the shell
+   * binds each card's Hide button directly at load (index.html:728), so a card
+   * this plugin built afterwards would carry a dead button. ensureSidebar()
+   * above is therefore only a fallback for a DOM that has no card at all.
+   *
+   * These rows are appended to whichever card exists, so there is exactly one
+   * definition of them rather than a second copy to drift out of sync. */
+  var EXTRA_ROWS = [
+    { id: 'sb-attitude',  label: 'Attitude R/P/Y', style: 'font-size:11px' },
+    { id: 'sb-altitude',  label: 'Altitude' },
+    { id: 'sb-rclink',    label: 'RC Link' },
+    { id: 'sb-estimator', label: 'Estimator' },
+  ];
+
+  function ensureFlightRows() {
+    if (typeof document === 'undefined' || !document.getElementById) return;
+    if (typeof document.createElement !== 'function') return;
+    var card = document.getElementById('card-flight');
+    if (!card || typeof card.querySelector !== 'function') return;
+    var grid = card.querySelector('.stat-grid');
+    if (!grid) return;
+    for (var i = 0; i < EXTRA_ROWS.length; i++) {
+      var r = EXTRA_ROWS[i];
+      if (document.getElementById(r.id)) continue;
+      var item = document.createElement('div');
+      item.className = 'stat-item';
+      item.innerHTML =
+        '<span class="stat-label">' + r.label + '</span>' +
+        '<span class="stat-value" id="' + r.id + '"' +
+        ' style="color:var(--amber);' + (r.style || '') + '">NOT PUBLISHED</span>';
+      grid.appendChild(item);
+    }
+  }
+
   function hideDuplicatedStreamCard() {
     if (typeof document === 'undefined' || !document.getElementById) return;
     var card = document.getElementById('card-streams');
@@ -484,6 +521,61 @@
     };
   }
 
+  /* The sidebar spans every tab, so it must not care which slot a key arrived
+   * on: status.* lands on slot 0 today and c.altitude_cm on slot 1, but that is
+   * a subscribe layout, not a contract. Look in every slot. */
+  function readAcrossSlots(state, key) {
+    if (!state || !state.streams) return null;
+    var slots = Object.keys(state.streams);
+    for (var i = 0; i < slots.length; i++) {
+      var s = state.streams[slots[i]];
+      var v = s && s.values;
+      if (v && v[key] != null) return v[key];
+    }
+    return null;
+  }
+
+  function setSbRow(id, text, color) {
+    var el = q(id);
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = color || '';
+  }
+
+  function updateFlightRows(state) {
+    var r = readAcrossSlots(state, 'status.roll_deg');
+    var p = readAcrossSlots(state, 'status.pitch_deg');
+    var y = readAcrossSlots(state, 'status.yaw_deg');
+    if (r != null && p != null && y != null) {
+      setSbRow('sb-attitude', Number(r).toFixed(1) + ' / ' + Number(p).toFixed(1) +
+                              ' / ' + Number(y).toFixed(1) + '°', '');
+    } else {
+      setSbRow('sb-attitude', 'NOT PUBLISHED', 'var(--amber)');
+    }
+
+    /* c.altitude_cm is the Frame C altitude in centimetres. It is NOT
+     * ano_of.of_alt_cm: that field is a u32 in the firmware (API/Ano_OF.h:36)
+     * and wraps to ~4.3e7 on a negative reading, which is normal on the ground.
+     * Do not substitute one for the other here. */
+    var alt = readAcrossSlots(state, 'c.altitude_cm');
+    setSbRow('sb-altitude', alt != null ? (Number(alt) / 100).toFixed(2) + ' m' : 'NOT PUBLISHED',
+             alt != null ? '' : 'var(--amber)');
+
+    /* status.sbus is the alias for the firmware field `sbus_lost`
+     * (schema_registry.py:227), so 0 means the link is UP. The alias drops the
+     * _lost suffix and therefore reads backwards; the sense below follows the
+     * firmware field, not the alias name. */
+    var sbus = readAcrossSlots(state, 'status.sbus');
+    if (sbus == null) setSbRow('sb-rclink', 'NOT PUBLISHED', 'var(--amber)');
+    else if (Number(sbus) === 0) setSbRow('sb-rclink', 'UP', 'var(--green)');
+    else setSbRow('sb-rclink', 'LOST', 'var(--red)');
+
+    var est = readAcrossSlots(state, 'status.estimator_ready');
+    if (est == null) setSbRow('sb-estimator', 'NOT PUBLISHED', 'var(--amber)');
+    else if (Number(est) !== 0) setSbRow('sb-estimator', 'READY', 'var(--green)');
+    else setSbRow('sb-estimator', 'NOT READY', 'var(--amber)');
+  }
+
   function readDropCount(s) {
     if (!s) return null;
     if (s.dropped != null) return s.dropped;
@@ -497,7 +589,9 @@
   // ── State change handler ─────────────────────────────────────────────────
   function onState(state) {
     ensureSidebar();
+    ensureFlightRows();
     hideDuplicatedStreamCard();
+    updateFlightRows(state);
 
     if (!state) {
       updateArm(null, 'no telemetry');
@@ -588,6 +682,7 @@
   // ── Export (shell uses window.__registerPlugin__) ────────────────────────
   window.__PLUGIN_INIT__ = function(api) {
     ensureSidebar();
+    ensureFlightRows();
     hideDuplicatedStreamCard();
 
     api.registerPanel('Flight Status', function (container) {
@@ -633,6 +728,9 @@
       updateVbat: updateVbat,
       updateRates: updateRates,
       ensureSidebar: ensureSidebar,
+      ensureFlightRows: ensureFlightRows,
+      readAcrossSlots: readAcrossSlots,
+      updateFlightRows: updateFlightRows,
     };
   }
 

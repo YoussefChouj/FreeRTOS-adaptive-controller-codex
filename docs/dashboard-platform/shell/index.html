@@ -1378,8 +1378,56 @@
     return '';
   }
 
+  /* Look a key up in whichever slot carries it. Which slot a key lands on is a
+   * subscribe layout, not a contract. */
+  function alarmValue(state, key) {
+    if (!state || !state.streams) return null;
+    var slots = Object.keys(state.streams);
+    for (var i = 0; i < slots.length; i++) {
+      var s = state.streams[slots[i]];
+      var v = s && s.values;
+      if (v && v[key] != null) return v[key];
+    }
+    return null;
+  }
+
+  /* Flight-state alarms.
+   *
+   * This card is the only alarm surface visible on every tab, but it used to
+   * report transport health alone — packet loss and staleness. So it read "No
+   * active alarms" while status.sbus said the RC link was down, a condition the
+   * Overview panel raises as critical (overview-panel.js:760) but which is
+   * invisible from any other tab. These rules follow the same keys and the same
+   * sense as that panel so the two cannot disagree.
+   *
+   * Only conditions with a firmware-defined sense are listed. Nothing here
+   * invents a threshold: a low-battery alarm would need a pack cutoff voltage
+   * that is not recorded anywhere in this repo, so there is deliberately none. */
+  function buildFlightAlarms(state) {
+    var out = [];
+
+    /* status.sbus aliases the firmware field `sbus_lost`
+     * (schema_registry.py:227): 0 means the link is UP. */
+    var sbus = alarmValue(state, 'status.sbus');
+    if (sbus != null && Number(sbus) !== 0) {
+      out.push({ level: 'critical', text: 'RC receiver link lost (status.sbus = ' + Number(sbus) + ')' });
+    }
+
+    var est = alarmValue(state, 'status.estimator_ready');
+    if (est != null && Number(est) === 0) {
+      out.push({ level: 'warning', text: 'Attitude estimator not ready' });
+    }
+
+    var arm = alarmValue(state, 'status.arm');
+    if (arm != null && Number(arm) !== 0) {
+      out.push({ level: 'warning', text: 'Drone is ARMED' });
+    }
+
+    return out;
+  }
+
   function buildAlarms(state) {
-    var result = [];
+    var result = buildFlightAlarms(state);
     var now = Date.now() * 1e6;
     if (state.streams) {
       var seenStale = false;
