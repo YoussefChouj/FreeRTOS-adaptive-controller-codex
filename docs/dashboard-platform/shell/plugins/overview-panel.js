@@ -288,11 +288,18 @@
    * firmware variable, so the raw path is an honest alias, never a proxy.
    * Weight basis meanings: API/mrac.c:373 comment
    *   [bias, proportional, derivative, drag, structured, unstructured]. */
+  /* `axis` is the FIRMWARE spelling (used to build the raw DWARF path);
+   * `alias` is the DASHBOARD spelling the service publishes under. They are
+   * identical for roll/pitch/yaw, which is why only Z ever broke: firmware
+   * calls the axis `z_rate`, the service alias table publishes it as
+   * `mrac.z.*` (ground_station/service/schema_registry.py:263-268). Building
+   * the dotted key from the firmware spelling missed every Z weight and the
+   * panel reported "0 of 6 published" while /state carried all six. */
   var ADAPT_AXES = [
     { axis: 'roll',   label: 'Roll' },
     { axis: 'pitch',  label: 'Pitch' },
     { axis: 'yaw',    label: 'Yaw' },
-    { axis: 'z_rate', label: 'Z rate' },
+    { axis: 'z_rate', label: 'Z rate', alias: 'z' },
   ];
 
   var WEIGHT_PLAIN = ['bias', 'proportional', 'derivative', 'drag', 'structured', 'unstructured'];
@@ -302,7 +309,7 @@
     ADAPT_AXES.forEach(function (a) {
       for (var n = 0; n < 6; n++) {
         out.push({ axis: a.axis, axisLabel: a.label, n: n,
-          key: 'mrac.' + a.axis + '.theta_' + n,
+          key: 'mrac.' + (a.alias || a.axis) + '.theta_' + n,
           raw: 'mrac_state.' + a.axis + '.Theta[' + n + ']',
           plain: WEIGHT_PLAIN[n] });
       }
@@ -413,6 +420,13 @@
     if (raw) {
       var g = findValue(state, raw);
       if (g && g.val != null) return g;
+      /* The slot-0 subscribe stream publishes raw DWARF paths under a
+       * `slot<N>.` prefix, so the bare-name lookup above never matched and
+       * this fallback was dead. Try the prefixed spelling before giving up. */
+      for (var i = 0; i < SLOT_ORDER.length; i++) {
+        var h = findValue(state, SLOT_ORDER[i] + '.' + raw);
+        if (h && h.val != null) return h;
+      }
     }
     return f;
   }

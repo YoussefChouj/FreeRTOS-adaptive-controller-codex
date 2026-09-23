@@ -401,6 +401,7 @@
       '      <button class="sm-slot-btn sm-preset-btn" data-preset="imu">IMU full</button>',
       '      <button class="sm-slot-btn sm-preset-btn" data-preset="of">Optical flow</button>',
       '      <button class="sm-slot-btn sm-preset-btn" data-preset="pid">PID loops</button>',
+      '      <button class="sm-slot-btn sm-preset-btn" data-preset="gains">PID gains</button>',
       '    </div>',
       '  </div>',
       '  <div style="margin-top:8px;">',
@@ -663,6 +664,7 @@
     imu:  'imu_data.rol, imu_data.pit, imu_data.yaw, Gyro_X_Real, Gyro_Y_Real, Gyro_Z_Real, Gyro_X_Lpf, Gyro_Y_Lpf, Gyro_Z_Lpf, Acc_X_Real, Acc_Y_Real, Acc_Z_Real',
     of:   'ano_of.earth_x, ano_of.earth_y, ano_of.earth_x_ture, ano_of.earth_y_ture, ano_of.DISTANCE_X, ano_of.DISTANCE_Y, ano_of.of_quality, ano_of.of2_dx_fix, ano_of.of2_dy_fix, s_of_bias_x, s_of_bias_y, g_estimator_ready',
     pid:  'Ctrler.rollPID.Des, Ctrler.rollPID.FB, Ctrler.rollPID.U, Ctrler.pitchPID.Des, Ctrler.pitchPID.FB, Ctrler.pitchPID.U, Ctrler.yawPID.Des, Ctrler.yawPID.FB, Ctrler.yawPID.U, Ctrler.gyroxPID.Des, Ctrler.gyroxPID.FB, Ctrler.gyroxPID.U',
+    gains:  'Ctrler.gyroxPID.Kp, Ctrler.gyroxPID.Ki, Ctrler.gyroxPID.Kd, Ctrler.gyroyPID.Kp, Ctrler.gyroyPID.Ki, Ctrler.gyroyPID.Kd, Ctrler.gyrozPID.Kp, Ctrler.gyrozPID.Ki, Ctrler.gyrozPID.Kd, Ctrler.pitchPID.Kp, Ctrler.pitchPID.Ki, Ctrler.pitchPID.Kd, Ctrler.rollPID.Kp, Ctrler.rollPID.Ki, Ctrler.rollPID.Kd, Ctrler.yawPID.Kp, Ctrler.yawPID.Ki, Ctrler.yawPID.Kd',
   };
 
   function _parseRanges(text) {
