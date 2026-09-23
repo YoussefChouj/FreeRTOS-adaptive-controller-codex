@@ -156,10 +156,57 @@ def test_rx_loop_stream_a_then_c_then_b():
     assert b, "Frame B must still decode after an interleaved Frame C (no desync)"
 
 
+# Frame A status block: firmware DWARF name -> the spec key every consumer reads.
+# Both transports decode the same 9 wire bytes, so both must emit the same keys.
+# Until 2026-09-23 the serial bridge emitted "status.sbus_lost" while the WiFi
+# bridge emitted "status.sbus"; the sidebar and overview panels only ever read
+# "status.sbus", so the RC-link-lost indicator read "not published" on serial.
+_FRAME_A_STATUS_DWARF = [
+    "DroneStatus.ARM_Status",
+    "DroneStatus.FlyMode",
+    "sbus_lost",
+    "TWC.execute",
+    "TWC_arrived",
+    "s_authority",
+    "g_of_hold_active",
+    "g_estimator_ready",
+]
+
+
+def test_frame_a_status_keys_match_the_schema_registry():
+    from ground_station.service.schema_registry import SchemaRegistry
+
+    registry = SchemaRegistry.builtin_dashboard()
+    expected = set()
+    for dwarf in _FRAME_A_STATUS_DWARF:
+        spec = registry.resolve(dwarf)
+        assert spec is not None, f"{dwarf} has no alias in the schema registry"
+        expected.add(spec)
+
+    out = dict(bridge._unpack_frame_a(MAX_NUM_BASIS, _frame_a_v13_payload(of_hold=1, est_ready=1)))
+    emitted = {k for k in out if k.startswith("status.")}
+
+    assert emitted == expected, (
+        "serial bridge Frame A status keys diverged from the schema registry; "
+        f"only-serial={sorted(emitted - expected)} only-registry={sorted(expected - emitted)}"
+    )
+
+
+def test_frame_a_sbus_alias_carries_the_lost_flag():
+    """status.sbus is the alias for `sbus_lost`: 1 means the RC link is LOST."""
+    lost = bytes([1, 2, 1, 0, 1, 1, 0, 0, GS_PROTO_VERSION])
+    payload = struct.pack("<8f", *[0.1 * i for i in range(8)]) + lost
+    out = dict(bridge._unpack_frame_a(MAX_NUM_BASIS, payload))
+    assert out["status.sbus"] == 1.0
+    assert "status.sbus_lost" not in out
+
+
 if __name__ == "__main__":
     test_unpack_frame_a_v10_39byte()
     test_unpack_frame_a_v13_41byte()
     test_unpack_frame_a_rejects_wrong_length()
     test_dispatch_udp_accepts_39_and_41()
     test_rx_loop_stream_a_then_c_then_b()
-    print("OK all 5 tests passed")
+    test_frame_a_status_keys_match_the_schema_registry()
+    test_frame_a_sbus_alias_carries_the_lost_flag()
+    print("OK all 7 tests passed")
