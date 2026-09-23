@@ -358,6 +358,8 @@ _ROUTE_MAP = {
                         "(?prefix=N&parent=P&limit=N; default/max limit 100/1000)",
         "/api/manifest": "full system capability manifest (symbols, commands, telemetry, panels, routes)",
         "/api/routes": "this map",
+        "/.well-known/agent-permissions.json": "permission manifest for arriving agents (LAS-WG shape); generated from the live action registry + control state",
+        "/llms.txt": "Markdown map of what an agent should read first (text/markdown)",
         "/api/agent/control": "agent control state {mode, allow_agent_arm, tier0_access, changed_at, changed_by}",
         "/api/agent/actions": "agent action registry {actions: [{name, risk, args_schema, description}]}",
         "/api/agent/plans": "recent plans (last 20)",
@@ -1370,6 +1372,30 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
             # GET /api/routes — route + UI selector map for agents
             elif route == "/api/routes":
                 self._json(200, _ROUTE_MAP)
+            # GET /.well-known/agent-permissions.json and GET /llms.txt —
+            # the two places an agent looks before it has been told anything.
+            # Both are generated per request from the live registry and
+            # control state, so neither can describe a permission the service
+            # does not enforce. Serve them even when the agent layer is
+            # missing: an arriving agent still needs the DOM rules and the
+            # "this commands real hardware" warning, and a 503 here would
+            # read as "no restrictions".
+            elif route == "/.well-known/agent-permissions.json":
+                from ground_station.service.agent_permissions import (
+                    build_permission_manifest,
+                )
+                specs = _AGENT.action_specs() if _AGENT is not None else []
+                ctl = _AGENT.control_state() if _AGENT is not None else {}
+                self._json(200, build_permission_manifest(specs, ctl))
+            elif route == "/llms.txt":
+                from ground_station.service.agent_permissions import build_llms_txt
+                ctl = _AGENT.control_state() if _AGENT is not None else {}
+                body = build_llms_txt(ctl).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/markdown; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
             # GET /api/view-model — browser-renderable state snapshot for agents
             elif route == "/api/view-model":
                 snap = service.snapshot()

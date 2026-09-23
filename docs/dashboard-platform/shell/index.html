@@ -4,6 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>UAV Ground Station</title>
+  <!-- Discovery for arriving agents. The manifest says which controls on this
+       page may be operated without a human and warns that the page commands a
+       powered-on aircraft; llms.txt points at the four documents worth reading
+       first. Both are generated server-side from the live action registry, so
+       they cannot drift from what the service enforces. -->
+  <link rel="agent-permissions" href="/.well-known/agent-permissions.json" />
+  <link rel="llms-txt" type="text/markdown" href="/llms.txt" />
   <link rel="icon" href="data:,">
   <style>
     :root {
