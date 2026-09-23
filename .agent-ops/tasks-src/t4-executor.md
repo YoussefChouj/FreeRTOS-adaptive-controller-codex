@@ -47,3 +47,7 @@ The executor must go THROUGH those existing paths (plans and approvals), never a
 - The full tree is green (paste the last line).
 - Append a "## T4 as built" section (at most 20 lines) to the SPEC.
 - Commit on your branch; the message ends with: Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+## Workspace rule (hard)
+Work ONLY inside your own worktree (your starting cwd, under .worktrees/<id>). Never edit files in the main checkout. Commit on your branch there.
+

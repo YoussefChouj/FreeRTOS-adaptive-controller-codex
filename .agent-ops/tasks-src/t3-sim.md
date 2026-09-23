@@ -30,3 +30,7 @@ Copy the needed values into `ground_station/research/sim/constants.py`, with a c
 - The full tree is green (paste the last line of `python -m pytest ground_station .agent-ops/tests -q -p no:cacheprovider -o faulthandler_timeout=120`).
 - Append a "## T3 as built" section (at most 15 lines) to the SPEC, and list any constant you could NOT find.
 - Commit on your branch; the message ends with: Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+## Workspace rule (hard)
+Work ONLY inside your own worktree (your starting cwd, under .worktrees/<id>). Never edit files in the main checkout. Commit on your branch there.
+

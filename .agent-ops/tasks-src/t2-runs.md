@@ -39,3 +39,7 @@ The Run importer must ingest these existing formats.
 - The full tree is green: `python -m pytest ground_station .agent-ops/tests -q -p no:cacheprovider -o faulthandler_timeout=120` (paste the last line).
 - Update docs/research-platform/SPEC.md only by appending a "## T2 as built" section (at most 15 lines).
 - Commit on your branch; the message ends with: Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+## Workspace rule (hard)
+Work ONLY inside your own worktree (your starting cwd, under .worktrees/<id>). Never edit files in the main checkout. Commit on your branch there.
+
