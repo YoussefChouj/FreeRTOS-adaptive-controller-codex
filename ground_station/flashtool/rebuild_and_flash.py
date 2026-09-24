@@ -297,7 +297,7 @@ def arm_status_from_telemetry(port: str, seconds: float = 2.0):
     return seen.pop(), frames
 
 
-def flash(attempts: int = 3, timeout: float = 600):
+def flash(attempts: int = 3, timeout: float = 600, reset_fn=None):
     """UV4 -f, retrying writes and forcing a post-download run state."""
     def reset_and_run() -> str:
         from pyocd.core.helpers import ConnectHelper
@@ -325,12 +325,14 @@ def flash(attempts: int = 3, timeout: float = 600):
             session.close()
 
     text = ""
+    if reset_fn is None:
+        reset_fn = reset_and_run
     for i in range(1, attempts + 1):
         flash_log = sf.LOG_DIR / ("reflash%d.log" % i)
         rc, text = sf._run_uv4("-f", "reflash%d.log" % i, timeout)
         if rc < 2 and "Failed" not in text:
             try:
-                state = reset_and_run()
+                state = reset_fn()
             except Exception as exc:
                 _say("post-download reset failed on attempt %d: %s" % (i, exc))
                 text += "\npost-download reset failed: %s" % exc
