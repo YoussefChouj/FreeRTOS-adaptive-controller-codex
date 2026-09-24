@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import time
 import tracemalloc
 from pathlib import Path
@@ -30,7 +31,7 @@ from ground_station.livewatch.stream import StreamRange, StreamSchema
 from ground_station.livewatch.transport import crc16_ccitt
 from ground_station.service.agent import AgentManager
 from ground_station.service.core import GroundStationService
-from ground_station.service.storage import SessionStore
+from ground_station.service.storage import CsvRecorder, SessionStore
 
 os.environ.setdefault("GS_SHELL_WATCH", "0")
 
@@ -52,13 +53,23 @@ def _schema():
     )
 
 
-def _make_service():
-    """Create a minimal service with an agent manager (no HTTP server)."""
+def _make_service(tmp_path: Path | None = None):
+    """Create a minimal service with an agent manager (no HTTP server).
+
+    When *tmp_path* is given the session store and recorder write into it
+    (pytest provides ``tmp_path``; standalone callers pass ``None``).
+    """
+    if tmp_path is not None:
+        store = SessionStore(path=str(tmp_path / "sessions"))
+        recorder = CsvRecorder(root=str(tmp_path), enabled=False)
+    else:
+        store = SessionStore()
+        recorder = None
     svc = GroundStationService(
-        store=SessionStore(),
+        store=store,
         schemas=[_schema()],
         source="sim",
-        recorder=None,  # disable CSV recorder to isolate RAM usage
+        recorder=recorder,
     )
     svc.start()
     agent = AgentManager(svc, shell_root=None, journal_root=None)
@@ -102,12 +113,20 @@ def _feed_subscribe_frame(service, slot, i):
 # ---------------------------------------------------------------------------
 
 
-def run_soak(frames_per_slot: int, short: bool = False) -> dict:
+def run_soak(frames_per_slot: int, short: bool = False, tmp_path: Path | None = None) -> dict:
     """Feed frames through the ingest path and measure retained memory.
 
     Batches at 1 k / 5 k / 10 k when short, else 50 k / 100 k / 200 k.
+    Uses a temporary directory so recordings never land in the repo's ``logs/``.
+    When *tmp_path* is given it is used directly; otherwise a fresh temp
+    directory is created and cleaned up.
     """
-    svc, agent = _make_service()
+    _own_tmpdir: str | None = None
+    if tmp_path is None:
+        _own_tmpdir = tempfile.mkdtemp()
+        tmp_path = Path(_own_tmpdir)
+
+    svc, agent = _make_service(tmp_path=tmp_path)
     tracemalloc.start()
     gc_collect()
 
@@ -145,6 +164,9 @@ def run_soak(frames_per_slot: int, short: bool = False) -> dict:
         agent.stop()
         svc.stop()
         tracemalloc.stop()
+        if _own_tmpdir is not None:
+            import shutil
+            shutil.rmtree(_own_tmpdir, ignore_errors=True)
 
     # Top 15 memory consumers
     tracemalloc.start()
@@ -169,9 +191,9 @@ def gc_collect():
 # ---------------------------------------------------------------------------
 
 
-def test_memory_growth_under_load():
+def test_memory_growth_under_load(tmp_path):
     """Feeding 10k then 5k frames must grow < 5 MB between batches."""
-    result = run_soak(frames_per_slot=10_000, short=True)
+    result = run_soak(frames_per_slot=10_000, short=True, tmp_path=tmp_path)
     snaps = result["snapshots"]
 
     print("\n=== Soak Results ===")
@@ -193,9 +215,9 @@ def test_memory_growth_under_load():
     )
 
 
-def test_top_memory_consumers():
+def test_top_memory_consumers(tmp_path):
     """Print top memory consumers for debugging."""
-    result = run_soak(frames_per_slot=10_000, short=True)
+    result = run_soak(frames_per_slot=10_000, short=True, tmp_path=tmp_path)
     print("\n=== Top 15 Memory Consumers ===")
     for location, size_mb in result["top15"]:
         print(f"  {size_mb:>8} MB  {location}")

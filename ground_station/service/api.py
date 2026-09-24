@@ -10,6 +10,7 @@ import math
 import queue
 import threading
 import time
+import tracemalloc
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,11 @@ from .copilot import Copilot, build_copilot
 # subscribe range list, both far under this; 1 MiB leaves room without letting a
 # single POST decide how much the service will read.
 _MAX_BODY_BYTES = 1 << 20
+
+
+class _global:
+    """Module-level mutable state shared across requests."""
+    prev_snapshot: Any = None
 
 
 def _json_safe(value: Any) -> Any:
@@ -359,6 +365,7 @@ _ROUTE_MAP = {
                         "(?prefix=N&parent=P&limit=N; default/max limit 100/1000)",
         "/api/manifest": "full system capability manifest (symbols, commands, telemetry, panels, routes)",
         "/api/routes": "this map",
+        "/api/debug/memory": "tracemalloc snapshot, psutil stats, gc counts, top object types",
         "/.well-known/agent-permissions.json": "permission manifest for arriving agents (LAS-WG shape); generated from the live action registry + control state",
         "/llms.txt": "Markdown map of what an agent should read first (text/markdown)",
         "/api/agent/control": "agent control state {mode, allow_agent_arm, tier0_access, changed_at, changed_by}",
@@ -1373,6 +1380,82 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
             # GET /api/routes — route + UI selector map for agents
             elif route == "/api/routes":
                 self._json(200, _ROUTE_MAP)
+            # GET /api/debug/memory — tracemalloc snapshot + process stats
+            elif route == "/api/debug/memory":
+                import gc as _gc
+                _resp: dict[str, Any] = {}
+                # -- always-on fields --
+                # process rss / private via psutil if available
+                _proc: dict[str, int] | None = None
+                try:
+                    import psutil
+                    _p = psutil.Process()
+                    _mem = _p.memory_info()
+                    _proc = {"rss": _mem.rss, "vms": _mem.vms}
+                except Exception:
+                    _proc = None
+                _resp["process"] = _proc
+                _resp["gc_counts"] = list(_gc.get_stats())
+                # top-20 object types by count
+                _type_counts: dict[str, int] = {}
+                try:
+                    for _obj in _gc.get_objects():
+                        _tname = type(_obj).__name__
+                        _type_counts[_tname] = _type_counts.get(_tname, 0) + 1
+                    _sorted = sorted(_type_counts.items(), key=lambda x: -x[1])[:20]
+                    _resp["top_types"] = {k: v for k, v in _sorted}
+                except Exception:
+                    _resp["top_types"] = {}
+                # -- tracemalloc fields --
+                if tracemalloc.is_tracing():
+                    _snap = tracemalloc.take_snapshot()
+                    _total = sum(e.size for e in _snap.statistics("lineno"))
+                    # peak = sum of largest per-frame allocation across all snapshots
+                    # tracemalloc doesn't expose peak directly in older Python;
+                    # use total as a practical approximation
+                    _peak = _total  # total IS the current allocation size
+                    _resp["tracing"] = True
+                    _resp["traced_mb"] = round(_total / 1024 / 1024, 2)
+                    _resp["peak_mb"] = round(_peak / 1024 / 1024, 2)
+                    # top 25 by traceback
+                    _top = _snap.statistics("traceback")[:25]
+                    _top_list = []
+                    for _entry in _top:
+                        _frames = []
+                        for _f in list(_entry.traceback)[:6]:
+                            _ff = getattr(_f, 'filename', None) or str(_f)
+                            _fl = getattr(_f, 'lineno', None) or getattr(_f, 'line', None) or 0
+                            _frames.append({"file": _ff, "line": _fl})
+                        _top_list.append({
+                            "size_kb": round(_entry.size / 1024, 2),
+                            "count": _entry.count,
+                            "traceback": _frames,
+                        })
+                    _resp["top"] = _top_list
+                    # diff_top (compare to previous snapshot)
+                    _global.prev_snapshot = _global.prev_snapshot or _snap
+                    try:
+                        _diff = _snap.compare_to(_global.prev_snapshot, "lineno")
+                    except Exception:
+                        _diff = _snap.compare_to(_snap, "lineno")
+                    _global.prev_snapshot = _snap
+                    _diff_top = _diff[:25]
+                    _diff_list = []
+                    for _d in _diff_top:
+                        _frames = []
+                        for _f in list(_d.traceback)[:6]:
+                            _ff = getattr(_f, 'filename', None) or str(_f)
+                            _fl = getattr(_f, 'lineno', None) or getattr(_f, 'line', None) or 0
+                            _frames.append({"file": _ff, "line": _fl})
+                        _diff_list.append({
+                            "size_kb": round(_d.size_diff / 1024, 2),
+                            "count_diff": _d.count_diff,
+                            "traceback": _frames,
+                        })
+                    _resp["diff_top"] = _diff_list
+                else:
+                    _resp["tracing"] = False
+                self._json(200, _resp)
             # GET /.well-known/agent-permissions.json and GET /llms.txt —
             # the two places an agent looks before it has been told anything.
             # Both are generated per request from the live registry and
