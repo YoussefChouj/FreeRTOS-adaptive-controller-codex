@@ -1,0 +1,54 @@
+# Validate new feature workflow
+#
+# A template for validating new features before full deployment.
+# The operator reviews and modifies the hypothesis/envelope before execution.
+name: validate_new_feature
+hypothesis: New feature X improves tracking performance within safety bounds
+phase: validation
+variant: experimental
+trajectory: step
+changes:
+  - feature X enabled
+capture:
+  preset: flight_comprehensive
+  secs: 10
+envelope:
+  - kind: state
+    key: roll.max_deg
+    lo: -40.0
+    hi: 40.0
+    mode: enforce
+  - kind: state
+    key: pitch.max_deg
+    lo: -40.0
+    hi: 40.0
+    mode: enforce
+  - kind: state
+    key: yaw.max_deg
+    lo: -60.0
+    hi: 60.0
+    mode: enforce
+  - kind: state
+    key: z.min_m
+    lo: 0.42
+    hi: 0.65
+    mode: enforce
+  - kind: adaptive_health
+    key: w_norm.max
+    lo: 0.0
+    hi: 5.0
+    mode: observe_only
+revert: always
+steps:
+  - type: set_params
+    feature_x: true
+  - type: fly_trajectory
+    name: step
+    amplitude_deg: 10.0
+  - type: capture
+    preset: flight_comprehensive
+    secs: 10
+  - type: analyze
+  - type: note
+    text: New feature validation complete
+  - type: revert

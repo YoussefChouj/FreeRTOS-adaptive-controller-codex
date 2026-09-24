@@ -1,4 +1,4 @@
-"""CLI: ``python -m ground_station.research {import,list,show,analyze,query}``."""
+"""CLI: ``python -m ground_station.research {import,list,show,analyze,query,workflow,campaign}``."""
 from __future__ import annotations
 
 import argparse
@@ -9,6 +9,9 @@ from pathlib import Path
 from .run import Run, Event, Note
 from .store import Store, UAV_RUNS_DIR
 from .analysis import analyse_run, generate_report, list_plugins, load_csv_columns
+from .workflow import validate_workflow_file
+from .executor import run_workflow, SimBackend, DashboardBackend
+from .campaign import plan_campaign, next_point, campaign_is_within_envelope
 
 
 def cmd_import(args: argparse.Namespace) -> int:
@@ -132,6 +135,29 @@ def main(argv: list[str] | None = None) -> int:
     p_query.add_argument("sql", help="WHERE clause (without keyword)")
     p_query.add_argument("params", nargs="*", help="bound values")
 
+    # --- workflow subcommand -----------------------------------------------
+    p_workflow = sub.add_parser("workflow", help="workflow management")
+    wf_sub = p_workflow.add_subparsers(dest="workflow_command")
+
+    wf_validate = wf_sub.add_parser("validate", help="validate a workflow YAML")
+    wf_validate.add_argument("workflow_path", help="path to workflow YAML")
+
+    wf_dryrun = wf_sub.add_parser("dryrun", help="dry-run a workflow in sim")
+    wf_dryrun.add_argument("workflow_path", help="path to workflow YAML")
+
+    wf_run = wf_sub.add_parser("run", help="execute a workflow in sim")
+    wf_run.add_argument("workflow_path", help="path to workflow YAML")
+
+    # --- campaign subcommand -----------------------------------------------
+    p_campaign = sub.add_parser("campaign", help="campaign planning")
+    camp_sub = p_campaign.add_subparsers(dest="campaign_command")
+
+    camp_plan = camp_sub.add_parser("plan", help="plan a campaign")
+    camp_plan.add_argument("envelope_path", help="JSON envelope file")
+    camp_plan.add_argument("--budget-steps", type=int, default=20)
+    camp_plan.add_argument("--strategy", default="grid",
+                           choices=("grid", "successive_halving"))
+
     args = parser.parse_args(argv)
     if not args.command:
         parser.print_help()
@@ -146,6 +172,109 @@ def main(argv: list[str] | None = None) -> int:
     }
     fn = cmds[args.command]
     return fn(args)
+
+
+def cmd_workflow(args: argparse.Namespace) -> int:
+    """Handle workflow subcommands: validate, dryrun, run."""
+    sub = args.workflow_command
+    path = Path(args.workflow_path)
+
+    if sub == "validate":
+        try:
+            spec = validate_workflow_file(path)
+            print(f"OK: {spec.name}")
+            print(f"  hypothesis: {spec.hypothesis}")
+            print(f"  phase: {spec.phase}")
+            print(f"  variant: {spec.variant}")
+            print(f"  steps: {len(spec.steps)}")
+            if spec.envelope:
+                print(f"  envelope: {len(spec.envelope)} bounds")
+                for b in spec.envelope:
+                    print(f"    {b.kind}:{b.key} = [{b.lo}, {b.hi}] ({b.mode})")
+            print(f"  revert: {spec.revert}")
+            return 0
+        except (ValueError, FileNotFoundError) as exc:
+            print(f"FAIL: {exc}", file=sys.stderr)
+            return 1
+
+    elif sub == "dryrun":
+        try:
+            spec = validate_workflow_file(path)
+        except (ValueError, FileNotFoundError) as exc:
+            print(f"FAIL: {exc}", file=sys.stderr)
+            return 1
+        backend = SimBackend()
+        try:
+            run = backend.dry_run(spec)
+            print(f"dry_run: {run.id}")
+            print(f"  outcome: {run.outcome}")
+            print(f"  metrics: {json.dumps(run.metrics, default=str)}")
+            return 0
+        except Exception as exc:
+            print(f"dry_run FAILED: {exc}", file=sys.stderr)
+            return 1
+
+    elif sub == "run":
+        try:
+            spec = validate_workflow_file(path)
+        except (ValueError, FileNotFoundError) as exc:
+            print(f"FAIL: {exc}", file=sys.stderr)
+            return 1
+        backend = SimBackend()
+        store = Store()
+        try:
+            result = run_workflow(spec, backend, store=store)
+            print(f"run: {result.run.id}")
+            print(f"  outcome: {result.outcome}")
+            print(f"  steps_run: {result.steps_run}")
+            print(f"  sim_run_id: {result.sim_run_id}")
+            store.close()
+            return 0
+        except Exception as exc:
+            print(f"run FAILED: {exc}", file=sys.stderr)
+            store.close()
+            return 1
+
+    else:
+        print(f"unknown workflow subcommand: {sub}", file=sys.stderr)
+        return 1
+
+
+def cmd_campaign(args: argparse.Namespace) -> int:
+    """Handle campaign subcommand: plan."""
+    sub = args.campaign_command
+    if sub != "plan":
+        print(f"unknown campaign subcommand: {sub}", file=sys.stderr)
+        return 1
+
+    envelope_path = Path(args.envelope_path)
+    if not envelope_path.exists():
+        print(f"NOT FOUND: {envelope_path}", file=sys.stderr)
+        return 1
+
+    with open(envelope_path, encoding="utf-8") as fh:
+        envelope_data = json.load(fh)
+
+    from .campaign import CampaignEnvelope
+    envelope = CampaignEnvelope.from_dict(envelope_data)
+    budget = int(args.budget_steps)
+    strategy = args.strategy
+
+    plan = plan_campaign(envelope, budget, strategy=strategy)
+    print(json.dumps(plan.to_dict(), indent=2, default=str))
+
+    points = []
+    p = next_point(plan)
+    while p and len(points) < 5:
+        points.append(p)
+        p = next_point(plan)
+
+    if points:
+        print(f"\nfirst {len(points)} points:")
+        for pt in points:
+            print(f"  {json.dumps(pt.to_dict())}")
+
+    return 0
 
 
 if __name__ == "__main__":

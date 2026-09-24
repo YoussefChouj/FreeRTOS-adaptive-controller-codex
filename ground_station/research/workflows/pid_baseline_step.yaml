@@ -1,0 +1,46 @@
+# Baseline PID step test workflow
+#
+# Steps through a parameter freeze, a step trajectory, capture, and revert.
+name: pid_baseline_step
+hypothesis: Baseline PID tracking is within spec for 15-degree step input
+phase: alpha
+variant: pid
+trajectory: step
+changes:
+  - baseline pid gains from firmware defaults
+capture:
+  preset: flight_comprehensive
+  secs: 12
+envelope:
+  - kind: state
+    key: roll.max_deg
+    lo: -40.0
+    hi: 40.0
+    mode: enforce
+  - kind: state
+    key: pitch.max_deg
+    lo: -40.0
+    hi: 40.0
+    mode: enforce
+  - kind: adaptive_health
+    key: w_norm.max
+    lo: 0.0
+    hi: 5.0
+    mode: observe_only
+revert: always
+steps:
+  - type: set_params
+    gains:
+      Kp: 1.0
+      Ki: 0.5
+      Kd: 0.01
+  - type: fly_trajectory
+    name: step
+    amplitude_deg: 15.0
+  - type: capture
+    preset: flight_comprehensive
+    secs: 12
+  - type: analyze
+  - type: note
+    text: PID baseline step test complete
+  - type: revert

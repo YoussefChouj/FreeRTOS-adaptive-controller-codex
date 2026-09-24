@@ -1,0 +1,43 @@
+# Chirp system identification on roll axis
+#
+# Generates a chirp excitation on the roll axis for system identification.
+name: chirp_sysid_roll
+hypothesis: Roll axis frequency response matches the identified plant model
+phase: alpha
+variant: pid
+trajectory: chirp
+changes:
+  - roll-axis chirp excitation for sysid
+capture:
+  preset: sysid_comprehensive
+  secs: 20
+envelope:
+  - kind: state
+    key: roll.max_deg
+    lo: -30.0
+    hi: 30.0
+    mode: enforce
+  - kind: state
+    key: pitch.max_deg
+    lo: -10.0
+    hi: 10.0
+    mode: observe_only
+revert: always
+steps:
+  - type: set_params
+    gains:
+      Kp: 1.0
+      Ki: 0.5
+      Kd: 0.01
+  - type: fly_trajectory
+    name: chirp
+    amplitude_deg: 5.0
+    f_start_hz: 0.5
+    f_end_hz: 10.0
+  - type: capture
+    preset: sysid_comprehensive
+    secs: 20
+  - type: analyze
+  - type: note
+    text: Roll chirp system identification complete
+  - type: revert
