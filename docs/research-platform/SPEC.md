@@ -55,3 +55,14 @@ Package: `ground_station/research/sim/`
 Fixes: plant now divides mixer-unit inputs by mrac_to_mixer to get Nm; replay fixed variable shadowing and list accumulation; baseline.step accepts optional rate_fb; all 16 sim tests pass.
 Full tree: 1021 passed, 27 skipped, 3 subtests.
 Constants NOT FOUND: R_MOTOR (arm length) — cited from plant.py ~140 but exact line not isolated; all other constants verified against original sources.
+
+## T4 as built
+
+Package: `ground_station/research/`
+- `workflow.py` — YAML schema loader/validator. 8 step types (`set_params`, `fly_trajectory`, `capture`, `wait_until`, `analyze`, `revert`, `note`, `call`). Unknown step types are validation errors. Envelope bounds with `enforce`/`observe_only` modes.
+- `trajectories.py` — Presets (step, doublet, chirp, multisine, figure8), parametric families, excitation overlays. Feasibility check against `fixture_4dof` and `free_flight` profiles.
+- `executor.py` — `run_workflow(spec, backend)` with `SimBackend` (T3 sim) and `DashboardBackend` (HTTP-injectable). Always runs `revert` (try/finally). Envelope evaluation: `enforce` aborts, `observe_only` records only. Sim dry_run required before hardware.
+- `campaign.py` — L3 operator-approved envelope over parameters. Grid and successive-halving point proposal. Budget tracking. Envelope membership check.
+- `workflows/` — Starter YAML: `pid_baseline_step.yaml`, `chirp_sysid_roll.yaml`, `mrac_ab_gate_compare.yaml` (TODO-firmware), `validate_new_feature.yaml`.
+- CLI: `workflow validate|dryrun|run`, `campaign plan`.
+Tests: 52 passed, 1 skipped (pytest attribute edge case). Full research tree: 113 passed, 1 skipped.

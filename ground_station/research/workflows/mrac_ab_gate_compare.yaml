@@ -1,0 +1,66 @@
+# MRAC adaptive-gate comparison (A/B test)
+#
+# Compares MRAC variant A vs variant B using the runtime variant parameter.
+# TODO-firmware: the variant parameter must be exposed to the ground station
+# so the executor can switch at runtime.  Until then this workflow is
+# marked TODO and validation is expected to pass, but hardware execution
+# requires firmware changes.
+name: mrac_ab_gate_compare
+hypothesis: MRAC variant B reduces RMSE by at least 10% over variant A
+phase: alpha
+variant: mrac
+changes:
+  - MRAC gamma tuning for variant A
+  - MRAC gamma tuning for variant B
+  - runtime variant switch via TODO-firmware parameter
+capture:
+  preset: flight_comprehensive
+  secs: 15
+envelope:
+  - kind: state
+    key: roll.max_deg
+    lo: -30.0
+    hi: 30.0
+    mode: enforce
+  - kind: state
+    key: pitch.max_deg
+    lo: -30.0
+    hi: 30.0
+    mode: enforce
+  - kind: adaptive_health
+    key: w_norm.max
+    lo: 0.0
+    hi: 3.0
+    mode: enforce
+  - kind: adaptive_health
+    key: u_ad.saturation_pct
+    lo: 0.0
+    hi: 90.0
+    mode: observe_only
+revert: always
+steps:
+  - type: set_params
+    variant: A
+    gamma: 0.01
+  - type: fly_trajectory
+    name: doublet
+    amplitude_deg: 10.0
+  - type: capture
+    preset: flight_comprehensive
+    secs: 15
+  - type: call
+    workflow: analyze
+  - type: set_params
+    variant: B
+    gamma: 0.02
+  - type: fly_trajectory
+    name: doublet
+    amplitude_deg: 10.0
+  - type: capture
+    preset: flight_comprehensive
+    secs: 15
+  - type: call
+    workflow: analyze
+  - type: note
+    text: "TODO-firmware: variant switch requires firmware support"
+  - type: revert
