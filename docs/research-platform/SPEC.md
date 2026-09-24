@@ -66,3 +66,17 @@ Package: `ground_station/research/`
 - `workflows/` — Starter YAML: `pid_baseline_step.yaml`, `chirp_sysid_roll.yaml`, `mrac_ab_gate_compare.yaml` (TODO-firmware), `validate_new_feature.yaml`.
 - CLI: `workflow validate|dryrun|run`, `campaign plan`.
 Tests: 52 passed, 1 skipped (pytest attribute edge case). Full research tree: 113 passed, 1 skipped.
+
+## T5 as built
+
+Package: `ground_station/service/terminal.py` + `shell/plugins/terminal-panel.js`
+- WebSocket `/api/terminal/ws` — token auth via `?token=` (401 without); PTY spawns `opencode` or `claude`; resize via `{"type":"resize","rows":N,"cols":M}`; loopback-only; token written to `.agent_state/terminal-token`.
+- Terminal panel: xterm.js + xterm-addon-fit from cdn.jsdelivr.net; "Terminal" tab; token stored in sessionStorage (try/catch).
+- `ui_navigate(tab)` / `ui_highlight(panel)` MCP tools broadcast `ui` SSE events.
+- `file_finding` MCP tool: create/list findings in `docs/research-platform/findings/`.
+- CLI: `python -m ground_station.research finding new|list`.
+- `docs/research-platform/AGENT_RESEARCH_GUIDE.md` — 70-line hand-written guide.
+- `python -m ground_station.research catalog` writes `CATALOG.md` from workflow lib + action registry.
+- `opencode.json` — dashboard MCP server + permission policy (flash/arm/livewatch blocked).
+Tests: 20 passed, 6 skipped (Unix-only PTY). Full research tree: 136 passed, 7 skipped.
+

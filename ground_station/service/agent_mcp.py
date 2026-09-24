@@ -106,6 +106,42 @@ TOOLS: list[dict[str, Any]] = [
                         "required": ["session_dir"]},
     },
     {
+        "name": "ui_navigate",
+        "description": "Switch the dashboard to a named workspace tab "
+                       "(broadcasts a 'ui' SSE event).",
+        "inputSchema": {"type": "object",
+                        "properties": {"tab": {"type": "string"}},
+                        "required": ["tab"]},
+    },
+    {
+        "name": "ui_highlight",
+        "description": "Visually highlight a dashboard panel by slug "
+                       "(broadcasts a 'ui' SSE event).",
+        "inputSchema": {"type": "object",
+                        "properties": {"panel": {"type": "string"}},
+                        "required": ["panel"]},
+    },
+    {
+        "name": "file_finding",
+        "description": "Create or list findings in the research findings channel.",
+        "inputSchema": {"type": "object",
+                        "properties": {
+                            "action": {"type": "string",
+                                       "enum": ["new", "list"]},
+                            "id": {"type": "string"},
+                            "date": {"type": "string"},
+                            "severity": {"type": "string"},
+                            "status": {"type": "string",
+                                       "enum": ["open", "in-progress", "resolved"]},
+                            "runs": {"type": "array",
+                                     "items": {"type": "string"}},
+                            "summary": {"type": "string"},
+                            "evidence": {"type": "string"},
+                            "suggested_action": {"type": "string"},
+                        },
+                        "required": ["action"]},
+    },
+    {
         "name": "explain_symbol",
         "description": "Deterministic explanation of a firmware symbol from the "
                        "agent map combined with its live telemetry value if active.",
@@ -234,6 +270,12 @@ class McpServer:
             return self._text(self._analyze_session(args))
         if name == "explain_symbol":
             return self._text(self._explain_symbol(args))
+        if name == "ui_navigate":
+            return self._text(self._ui_navigate(args))
+        if name == "ui_highlight":
+            return self._text(self._ui_highlight(args))
+        if name == "file_finding":
+            return self._text(self._file_finding(args))
         return {"content": [{"type": "text",
                              "text": json.dumps({"error": f"unknown tool {name}"})}]}
 
@@ -403,6 +445,97 @@ class McpServer:
             "live_value": live_val if has_live else None,
             "text": combined_text,
         }
+
+    def _ui_navigate(self, args: dict) -> dict[str, Any]:
+        tab = str(args.get("tab", ""))
+        if not tab:
+            return {"error": "missing 'tab' argument"}
+        status, payload = _http("POST", "/api/agent/plans", {
+            "title": f"ui_navigate:{tab}",
+            "goal": f"Navigate to tab {tab}",
+            "source": "agent:mcp",
+            "steps": [{
+                "action": "ui_navigate",
+                "args": {"tab": tab},
+                "on_error": "stop",
+            }],
+        })
+        return {"navigated_to": tab, "status": status}
+
+    def _ui_highlight(self, args: dict) -> dict[str, Any]:
+        panel = str(args.get("panel", ""))
+        if not panel:
+            return {"error": "missing 'panel' argument"}
+        status, payload = _http("POST", "/api/agent/plans", {
+            "title": f"ui_highlight:{panel}",
+            "goal": f"Highlight panel {panel}",
+            "source": "agent:mcp",
+            "steps": [{
+                "action": "ui_highlight",
+                "args": {"panel": panel},
+                "on_error": "stop",
+            }],
+        })
+        return {"highlighted": panel, "status": status}
+
+    def _file_finding(self, args: dict) -> dict[str, Any]:
+        """Create or list a research finding."""
+        action = str(args.get("action", ""))
+        if action == "list":
+            return self._list_findings()
+        if action == "new":
+            return self._create_finding(args)
+        return {"error": f"unknown file_finding action: {action}"}
+
+    def _list_findings(self) -> dict[str, Any]:
+        from pathlib import Path
+        findings_dir = Path(__file__).resolve().parents[2] / "docs" / "research-platform" / "findings"
+        results = []
+        if findings_dir.exists():
+            for f in sorted(findings_dir.glob("*.md")):
+                results.append(f.name)
+        return {"findings": results}
+
+    def _create_finding(self, args: dict) -> dict[str, Any]:
+        """Create a finding markdown file from frontmatter + body."""
+        from pathlib import Path
+        findings_dir = Path(__file__).resolve().parents[2] / "docs" / "research-platform" / "findings"
+        findings_dir.mkdir(parents=True, exist_ok=True)
+        fid = str(args.get("id", "F-UNKNOWN"))
+        date = str(args.get("date", ""))
+        severity = str(args.get("severity", "medium"))
+        status = str(args.get("status", "open"))
+        runs_list = args.get("runs", [])
+        summary = str(args.get("summary", ""))
+        evidence = str(args.get("evidence", ""))
+        suggested_action = str(args.get("suggested_action", ""))
+
+        # Build frontmatter
+        frontmatter = [
+            f"id: {fid}",
+            f"date: {date or 'TBD'}",
+            f"severity: {severity}",
+            f"status: {status}",
+            f"runs: {json.dumps(runs_list)}",
+            f"summary: {summary}",
+            "",
+            "---",
+            "",
+        ]
+        body_lines = []
+        if evidence:
+            body_lines.append("## Evidence")
+            body_lines.append(evidence)
+            body_lines.append("")
+        if suggested_action:
+            body_lines.append("## Suggested Action")
+            body_lines.append(suggested_action)
+            body_lines.append("")
+
+        content = "\n".join(frontmatter) + "\n".join(body_lines)
+        fpath = findings_dir / f"{fid}.md"
+        fpath.write_text(content, encoding="utf-8")
+        return {"created": str(fpath), "id": fid}
 
     @staticmethod
     def _text(result: Any) -> dict[str, Any]:

@@ -463,6 +463,7 @@ def get_panels() -> list[dict[str, Any]]:
         "Session Replay": {"workspace": "replay", "gates": []},
         "RTOS Resources": {"workspace": "diagnostics", "gates": []},
         "Firmware Resource Map": {"workspace": "diagnostics", "gates": []},
+        "Terminal":              {"workspace": "terminal", "gates": []},
     }
 
     plugin_files = [
@@ -483,6 +484,7 @@ def get_panels() -> list[dict[str, Any]]:
         ("path-panel.js", "Path Planning", ["paths"], [], "Waypoints, circle/sinusoid path tracking visualization"),
         ("slot-manager-panel.js", "Slot Manager", ["telemetry"], [], "Telemetry subscribe slot configuration and DWARF variable picker"),
         ("resource-map-panel.js", "Firmware Resource Map", ["diagnostics"], [], "RTOS task memory regions, UART ownership, and subscribe link budgets"),
+        ("terminal-panel.js", "Terminal", ["terminal"], [], "Terminal PTY session via WebSocket (xterm.js)"),
     ]
 
     # Specific telemetry keys read per plugin

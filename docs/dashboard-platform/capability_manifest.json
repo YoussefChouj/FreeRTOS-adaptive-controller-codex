@@ -2305,6 +2305,17 @@
       "workspaces": [
         "diagnostics"
       ]
+    },
+    {
+      "description": "Terminal PTY session via WebSocket (xterm.js)",
+      "file": "docs/dashboard-platform/shell/plugins/terminal-panel.js",
+      "gates": [],
+      "keys_read": [],
+      "name": "Terminal",
+      "slug": "terminal",
+      "workspaces": [
+        "terminal"
+      ]
     }
   ],
   "routes": {
@@ -2336,6 +2347,7 @@
       "/api/session/notes": "operator notes buffered while not recording",
       "/api/session/notes?since=<seq>": "seq-tagged note log (new notes since seq)",
       "/api/symbols": "DWARF symbol names from the firmware ELF (?prefix=N&parent=P&limit=N; default/max limit 100/1000)",
+      "/api/terminal/ws": "terminal PTY WebSocket (?token= required, 401 without)",
       "/api/view-model": "browser-renderable state for agents; ?stats=1 adds session_stats (full-session scan, slow on long sessions)",
       "/artifacts": "stored artifacts",
       "/experiments": "active experiment runs (503 without runtime)",

@@ -12,6 +12,8 @@ from .analysis import analyse_run, generate_report, list_plugins, load_csv_colum
 from .workflow import validate_workflow_file
 from .executor import run_workflow, SimBackend, DashboardBackend
 from .campaign import plan_campaign, next_point, campaign_is_within_envelope
+from .finding import main as finding_main
+from .catalog import main as catalog_main
 
 
 def cmd_import(args: argparse.Namespace) -> int:
@@ -158,10 +160,52 @@ def main(argv: list[str] | None = None) -> int:
     camp_plan.add_argument("--strategy", default="grid",
                            choices=("grid", "successive_halving"))
 
+    # --- finding subcommand ----------------------------------------------
+    p_finding = sub.add_parser("finding", help="findings channel")
+    find_sub = p_finding.add_subparsers(dest="finding_command")
+    find_list = find_sub.add_parser("list", help="list all findings")
+    find_new = find_sub.add_parser("new", help="create a new finding")
+    find_new.add_argument("finding_id", default="F-TEMP", help="finding ID")
+    find_new.add_argument("--date", default="", help="date string")
+    find_new.add_argument("--severity", default="medium",
+                          choices=("low", "medium", "high", "critical"))
+    find_new.add_argument("--status", default="open",
+                          choices=("open", "in-progress", "resolved"))
+    find_new.add_argument("--runs", default="", help="comma-separated run IDs")
+    find_new.add_argument("--summary", default="", help="one-line summary")
+    find_new.add_argument("--evidence", default="", help="evidence text")
+    find_new.add_argument("--suggested-action", default="", help="suggested action")
+
     args = parser.parse_args(argv)
     if not args.command:
         parser.print_help()
         return 0
+
+    # --- finding subcommand (delegates to finding.py) --------------------
+    if args.command == "finding":
+        # Re-parse with the finding subcommands
+        finding_argv = ["finding"]
+        sub = args.finding_command or ""
+        if sub == "new":
+            finding_argv.extend(["new", args.finding_id or "F-TEMP",
+                                 "--severity", args.finding_severity or "medium",
+                                 "--status", args.finding_status or "open",
+                                 "--summary", args.finding_summary or ""])
+            if args.finding_date:
+                finding_argv.extend(["--date", args.finding_date])
+            if args.finding_runs:
+                finding_argv.extend(["--runs", args.finding_runs])
+            if args.finding_evidence:
+                finding_argv.extend(["--evidence", args.finding_evidence])
+            if args.finding_suggested_action:
+                finding_argv.extend(["--suggested-action", args.finding_suggested_action])
+        elif sub == "list":
+            finding_argv.append("list")
+        sys.argv = ["research"] + finding_argv
+        return finding_main(finding_argv[1:])
+
+    if args.command == "catalog":
+        return catalog_main()
 
     cmds = {
         "import": cmd_import,

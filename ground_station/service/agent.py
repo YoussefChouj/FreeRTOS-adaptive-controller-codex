@@ -98,6 +98,22 @@ UI_ACTION_SPECS: dict[str, dict[str, Any]] = {
                  "properties": {"testid": {"type": "string"}},
                  "required": ["testid"]},
     },
+    "ui_navigate": {
+        "risk": "safe",
+        "where": "ui",
+        "description": "Switch the dashboard to a named workspace tab.",
+        "args": {"type": "object",
+                 "properties": {"tab": {"type": "string"}},
+                 "required": ["tab"]},
+    },
+    "ui_highlight": {
+        "risk": "safe",
+        "where": "ui",
+        "description": "Visually highlight a panel by its name slug.",
+        "args": {"type": "object",
+                 "properties": {"panel": {"type": "string"}},
+                 "required": ["panel"]},
+    },
 }
 
 # Service actions run server-side (no browser round-trip).
@@ -922,6 +938,12 @@ class AgentManager:
         elif action == "show_guide":
             if not args.get("title") or not isinstance(args.get("steps"), list):
                 bad("'title' and 'steps' are required")
+        elif action == "ui_navigate":
+            if not args.get("tab"):
+                bad("'tab' is required")
+        elif action == "ui_highlight":
+            if not args.get("panel"):
+                bad("'panel' is required")
 
     def list_plans(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -1449,6 +1471,18 @@ class AgentManager:
                 float(args.get("value", 0.0)),
                 int(args.get("flags", 0)),
             )
+        if action == "ui_navigate":
+            self._broadcast("ui", {
+                "action": "switch_tab",
+                "tab": str(args["tab"]),
+            })
+            return {"navigated_to": args["tab"]}
+        if action == "ui_highlight":
+            self._broadcast("ui", {
+                "action": "highlight",
+                "panel": str(args["panel"]),
+            })
+            return {"highlighted": args["panel"]}
         raise RuntimeError(f"unknown service action '{action}'")
 
     def _sleepable(self, plan: Plan, seconds: float) -> None:

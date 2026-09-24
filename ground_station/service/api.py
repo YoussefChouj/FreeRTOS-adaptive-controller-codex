@@ -389,6 +389,7 @@ _ROUTE_MAP = {
         "/api/session/notes?since=<seq>": "seq-tagged note log (new notes since seq)",
         "/replay/<id>": "stored records for replay "
                         "(?limit=N&offset=N, default 1000, limit=0 = all)",
+        "/api/terminal/ws": "terminal PTY WebSocket (?token= required, 401 without)",
     },
     "POST": {
         "/commands": "send a command to the drone (arm-gated)",
@@ -980,13 +981,44 @@ class StateHub:
 
 
 def make_handler(service, hub: StateHub | None = None, static_root: Path | None = None,
-                 experiment_runtime=None, agent: AgentManager | None = None,
-                 copilot: Copilot | None = None):
+                  experiment_runtime=None, agent: AgentManager | None = None,
+                  copilot: Copilot | None = None,
+                  terminal_manager=None):
     hub = hub or StateHub()
     _AGENT = agent  # captured; may be None in legacy tests
     _COPILOT_SOURCE = "agent:copilot"  # shared constant so agent can check it
 
     class Handler(BaseHTTPRequestHandler):
+        _terminal_manager = terminal_manager
+
+        def _handle_terminal_ws(self) -> None:
+            """Handle the terminal WebSocket upgrade."""
+            import socket as _socket
+            # Read the HTTP request line
+            request_line = self.rfile.readline(65537)
+            if not request_line:
+                return
+            headers = {}
+            while True:
+                line = self.rfile.readline(65537)
+                if line in (b"\r\n", b"\n", b""):
+                    break
+                if b":" in line:
+                    key, _, val = line.partition(b":")
+                    headers[key.strip().decode("utf-8").lower()] = val.strip().decode("utf-8")
+            # Extract socket directly
+            sock = self.request
+            mgr = self._terminal_manager
+            if mgr is None:
+                return
+            try:
+                mgr.handle_ws(sock)
+            except Exception:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
         def _json(self, status: int, payload: dict[str, Any]) -> None:
             # allow_nan=False turns a missed non-finite value into a loud
             # failure here rather than a silent JSON.parse error in the
@@ -1634,7 +1666,14 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     self._json(404, {"error": "session not found"})
                 except Exception as exc:
                     self._json(500, {"error": str(exc)})
-            # ── agent control layer (GET) ──────────────────────────────────
+            # terminal PTY WebSocket
+            elif route.startswith("/api/terminal/ws"):
+                if getattr(self, "_terminal_manager", None) is None:
+                    self._json(503, {"error": "terminal unavailable"})
+                    return
+                self._handle_terminal_ws()
+                return
+            # agent control layer (GET)
             elif route == "/api/agent/stream":
                 if _AGENT is None:
                     self._json(503, {"error": "agent layer unavailable"})
@@ -2202,11 +2241,13 @@ class ApiServer:
     def __init__(self, service, host: str = "127.0.0.1", port: int = 0,
                  static_root: Path | None = None, experiment_runtime=None,
                  shell_root: str | None = None,
-                 copilot: Copilot | None = None):
+                 copilot: Copilot | None = None,
+                 terminal_manager=None):
         self.service = service
         self.static_root = static_root
         self.experiment_runtime = experiment_runtime
         self.copilot = copilot
+        self.terminal_manager = terminal_manager
         self.agent = build_agent_manager(
             service,
             shell_root=shell_root if shell_root is not None
@@ -2235,7 +2276,8 @@ class ApiServer:
             make_handler(service, hub=self.hub, static_root=static_root,
                          experiment_runtime=experiment_runtime,
                          agent=self.agent,
-                         copilot=copilot),
+                         copilot=copilot,
+                         terminal_manager=self.terminal_manager),
         )
         self._poll_thread = None
         self.thread = threading.Thread(target=self.server.serve_forever,

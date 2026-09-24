@@ -493,6 +493,7 @@
   <button class="ws-tab" role="tab" aria-selected="false" data-ws="replay" data-testid="tab-replay">Replay</button>
   <button class="ws-tab" role="tab" aria-selected="false" data-ws="diagnostics" data-testid="tab-diagnostics">Diagnostics</button>
   <button class="ws-tab" role="tab" aria-selected="false" data-ws="approvals" data-testid="tab-approvals">Approvals<span class="approval-badge" id="approval-badge" style="display:none"></span></button>
+  <button class="ws-tab" role="tab" aria-selected="false" data-ws="terminal" data-testid="tab-terminal">Terminal</button>
 </div>
 
 <div id="gate-bar" role="status" aria-live="polite" aria-label="Flight gates and alarms">
@@ -943,7 +944,8 @@
     'Session Replay':        { workspace: 'replay' },
     'RTOS Resources':        { workspace: 'diagnostics' },
     'Firmware Resource Map': { workspace: 'diagnostics' },
-    'Approvals':             { workspace: 'approvals' }
+    'Approvals':             { workspace: 'approvals' },
+    'Terminal':              { workspace: 'terminal' }
   };
 
   /* data-workspaces is a space-separated token list; 'all' matches every tab. */

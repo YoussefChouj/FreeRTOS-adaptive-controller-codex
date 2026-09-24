@@ -42,7 +42,8 @@ def api(service):
 SERVER_NAMES = [
     "get_state", "list_actions", "run_plan", "get_plan", "cancel_plan",
     "say", "wait_for_operator", "get_recording", "list_sessions",
-    "analyze_session", "explain_symbol",
+    "analyze_session", "explain_symbol", "ui_navigate", "ui_highlight",
+    "file_finding",
 ]
 
 
