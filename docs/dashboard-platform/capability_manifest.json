@@ -2325,6 +2325,7 @@
       "/api/agent/state": "one agent-facing snapshot {control, ui, recording, layout, arm_state, stream_health, running_plan, pending_approvals, last_messages}",
       "/api/agent/stream": "server-sent events; the push channel (blocks, heartbeat comment every SSE_HEARTBEAT_S)",
       "/api/contract": "firmware command/subscribe contract",
+      "/api/debug/memory": "tracemalloc snapshot, psutil stats, gc counts, top object types",
       "/api/diagnostics/bundle": "frames, commands, faults for bug reports",
       "/api/events": "event journal",
       "/api/faults": "fault log (rejections, timeouts)",
