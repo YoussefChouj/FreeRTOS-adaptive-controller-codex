@@ -5,6 +5,7 @@ The PTY runs ``python -c "print('hi')"`` for testing.
 """
 import json
 import os
+import re
 import socket
 import sys
 import tempfile
@@ -382,6 +383,18 @@ class TestCatalog:
 
 class TestTerminalPanel:
     """Terminal tab registered in PANEL_META and capability manifest."""
+
+    def test_terminal_in_plugin_files(self):
+        """terminal-panel.js is listed in PLUGIN_FILES of index.html."""
+        shell = ROOT / "docs" / "dashboard-platform" / "shell" / "index.html"
+        text = shell.read_text(encoding="utf-8")
+        m = re.search(
+            r"const\s+PLUGIN_FILES\s*=\s*\[(.*?)\];", text, re.DOTALL
+        )
+        assert m, "PLUGIN_FILES array not found in index.html"
+        assert (
+            "/plugins/terminal-panel.js" in m.group(1)
+        ), "terminal-panel.js is not in PLUGIN_FILES — terminal workspace will show panels=[]"
 
     def test_panel_in_index_html(self):
         """Terminal panel is in PANEL_META."""
