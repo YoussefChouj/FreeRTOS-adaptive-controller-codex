@@ -1755,6 +1755,31 @@ void Process_GroundStation_Command(void)
             }
         }
 
+        /* CMD 0x19 - Simplex run-time assurance (docs/research-platform/SIMPLEX.md).
+         * idx 0 mode, 1 variant, 2 roll_max, 3 pitch_max, 4 w_norm_max,
+         * 5 sat_ticks_max, 6 hold_ticks, 7 reset counters. Out-of-range writes are ignored. */
+        else if (id == 0x19) {
+            if (idx == 0 && val >= 0.0f && val <= 2.0f) {
+                mrac_simplex.mode = (uint8_t)(val + 0.5f);
+            } else if (idx == 1 && val >= 0.0f && val <= 1.0f) {
+                mrac_simplex.variant = (uint8_t)(val + 0.5f);
+            } else if (idx == 2 && val > 0.0f) {
+                mrac_simplex.roll_max = val;
+            } else if (idx == 3 && val > 0.0f) {
+                mrac_simplex.pitch_max = val;
+            } else if (idx == 4 && val > 0.0f) {
+                mrac_simplex.w_norm_max = val;
+            } else if (idx == 5 && val >= 1.0f && val <= 65535.0f) {
+                mrac_simplex.sat_ticks_max = (uint16_t)(val + 0.5f);
+            } else if (idx == 6 && val >= 0.0f && val <= 65535.0f) {
+                mrac_simplex.hold_ticks = (uint16_t)(val + 0.5f);
+            } else if (idx == 7) {
+                mrac_simplex.trip_count       = 0;
+                mrac_simplex.would_trip_count = 0;
+                mrac_simplex.tripped          = 0;
+                mrac_simplex.reason           = 0;
+            }
+        }
         /* CMD 0x14 — SysID excitation control (ADR-0004). Set params (idx 0-5) then start/abort (idx 6).
          *   idx 0=axis(0 pitch,1 roll,2 yaw,3 Z)  1=signal(0 chirp,1 multisine)  2=f0 Hz  3=f1 Hz
          *       4=amplitude (deg/s; Z in m/s)  5=duration s  6=start(>=0.5)/abort(<0.5)
