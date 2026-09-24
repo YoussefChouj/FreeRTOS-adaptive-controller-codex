@@ -273,6 +273,8 @@ UI_ACK_TIMEOUT_S = 5.0
 UI_STALE_S = 10.0
 NOTES_RECENT = 10
 RECENT_PLANS = 20
+MAX_PLANS = 1000
+MAX_APPROVALS = 5000
 SHELL_WATCH_INTERVAL_S = 2.0
 SHELL_DEBOUNCE_S = 1.0
 
@@ -981,6 +983,46 @@ class AgentManager:
                                  name=f"agent_plan_{nxt.plan_id}",
                                  daemon=True).start()
                 self._broadcast_plan(nxt)
+        # Evict oldest completed plans when the dict exceeds the limit.
+        self._evict_completed_plans()
+
+    def _evict_completed_plans(self) -> None:
+        """Remove terminal-status plans from _plans when over the limit.
+
+        Keeps the most-recently-finished plans (via _plan_order) so the
+        ``/api/plans`` endpoint can still list them.
+        """
+        if len(self._plans) <= MAX_PLANS:
+            return
+        # Walk _plan_order backwards (newest first) to find completed plans
+        # and remove the oldest ones until we are under the limit.
+        to_remove = []
+        for plan_id in reversed(self._plan_order):
+            p = self._plans.get(plan_id)
+            if p and p.status in STEPS_TERMINAL:
+                to_remove.append(plan_id)
+                if len(self._plans) - len(to_remove) <= MAX_PLANS:
+                    break
+        # Remove in forward order so we keep the newest completions.
+        for plan_id in to_remove:
+            self._plans.pop(plan_id, None)
+        # Also trim _approvals if it has grown beyond the limit.
+        self._trim_approvals()
+
+    def _trim_approvals(self) -> None:
+        """Prune _approvals to MAX_APPROVALS when over the limit.
+
+        Removes the oldest undecided approvals first; already-decided ones
+        are always safe to drop since they no longer affect control flow.
+        """
+        if len(self._approvals) <= MAX_APPROVALS:
+            return
+        decided = [a for a in self._approvals if a.decided]
+        undecided = [a for a in self._approvals if not a.decided]
+        # Drop all decided first, then oldest undecided.
+        drop = max(0, len(self._approvals) - MAX_APPROVALS)
+        kept = decided[drop:] + undecided
+        self._approvals = kept
 
     def _run_plan(self, plan: Plan) -> None:
         try:
@@ -1059,6 +1101,7 @@ class AgentManager:
                 plan.finished_at = time.time()
                 if self._running_plan == plan.plan_id:
                     self._running_plan = None
+                self._evict_completed_plans()
             self._log_event("plan_failed", {"plan_id": plan.plan_id,
                                             "error": repr(e)})
             self._broadcast_plan(plan)
@@ -1078,6 +1121,7 @@ class AgentManager:
                                if a.plan_id != plan.plan_id]
             if self._running_plan == plan.plan_id:
                 self._running_plan = None
+            self._evict_completed_plans()
         self._log_event("plan_failed", {"plan_id": plan.plan_id, "error": error})
         self._broadcast_plan(plan)
         self._broadcast("approval", {"queue": self.pending_approvals()})
