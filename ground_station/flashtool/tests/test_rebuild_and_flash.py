@@ -204,17 +204,49 @@ def test_a_target_that_does_not_come_back_is_reported(rig, monkeypatch):
 
 # ---- the retry that saved the session -----------------------------------
 
+class _MockSession:
+    class _Target:
+        @staticmethod
+        def get_state():
+            return "RUNNING"
+    target = _Target()
+    @staticmethod
+    def open():
+        pass
+    @staticmethod
+    def close():
+        pass
+
+
+def _mock_reset():
+    return "RUNNING"
+
+
 def test_flash_retries_a_transient_rddi_dap_failure(monkeypatch):
+    import pyocd.core.helpers
+    monkeypatch.setattr(
+        pyocd.core.helpers.ConnectHelper, "session_with_chosen_probe",
+        lambda **options: (_ for _ in ()).throw(
+            AssertionError("real probe touched")
+        ),
+    )
     results = iter([(2, "Erase Done.Programming Failed!RDDI-DAP Error"),
-                    (0, "Programming Done. Verify OK."),  # attempt 2: UV4 OK but reset fails
-                    (0, "Programming Done. Verify OK.")])  # attempt 3: UV4 OK + reset OK
+                    (0, "Programming Done. Verify OK."),
+                    (0, "Programming Done. Verify OK.")])
     monkeypatch.setattr(rf.sf, "_run_uv4", lambda *a, **k: next(results))
     monkeypatch.setattr(rf.time, "sleep", lambda *a: None)
-    ok, text = rf.flash(attempts=3)
+    ok, text = rf.flash(attempts=3, reset_fn=_mock_reset)
     assert ok and "Verify OK" in text
 
 
 def test_flash_gives_up_rather_than_looping_forever(monkeypatch):
+    import pyocd.core.helpers
+    monkeypatch.setattr(
+        pyocd.core.helpers.ConnectHelper, "session_with_chosen_probe",
+        lambda **options: (_ for _ in ()).throw(
+            AssertionError("real probe touched")
+        ),
+    )
     monkeypatch.setattr(rf.sf, "_run_uv4",
                         lambda *a, **k: (2, "Programming Failed!RDDI-DAP Error"))
     monkeypatch.setattr(rf.time, "sleep", lambda *a: None)
