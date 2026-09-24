@@ -106,6 +106,14 @@ TOOLS: list[dict[str, Any]] = [
                         "required": ["session_dir"]},
     },
     {
+        "name": "explain_symbol",
+        "description": "Deterministic explanation of a firmware symbol from the "
+                       "agent map combined with its live telemetry value if active.",
+        "inputSchema": {"type": "object",
+                        "properties": {"name": {"type": "string"}},
+                        "required": ["name"]},
+    },
+    {
         "name": "ui_navigate",
         "description": "Switch the dashboard to a named workspace tab "
                        "(broadcasts a 'ui' SSE event).",
@@ -140,14 +148,6 @@ TOOLS: list[dict[str, Any]] = [
                             "suggested_action": {"type": "string"},
                         },
                         "required": ["action"]},
-    },
-    {
-        "name": "explain_symbol",
-        "description": "Deterministic explanation of a firmware symbol from the "
-                       "agent map combined with its live telemetry value if active.",
-        "inputSchema": {"type": "object",
-                        "properties": {"name": {"type": "string"}},
-                        "required": ["name"]},
     },
 ]
 

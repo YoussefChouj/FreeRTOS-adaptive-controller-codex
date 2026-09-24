@@ -72,7 +72,7 @@ def test_capability_manifest_structure():
 
     # Panels
     panels = manifest["panels"]
-    assert len(panels) == 17
+    assert len(panels) == 18
     panel_names = {p["name"] for p in panels}
     assert "System Overview" in panel_names
     assert "Flight Status" in panel_names

@@ -644,7 +644,7 @@ def test_http_api_routes_endpoint():
         assert "tab-<workspace>" in body["ui_testids"]
         # The SSE feed never closes and the long-poll holds for `timeout`
         # seconds; GETting either here would hang the suite, not test it.
-        blocking = {"/api/agent/stream", "/api/agent/messages/wait"}
+        blocking = {"/api/agent/stream", "/api/agent/messages/wait", "/api/terminal/ws"}
         for route in body["GET"]:
             if "<" in route or route.startswith("/analysis/") \
                     or route in blocking:
@@ -876,7 +876,7 @@ def test_http_api_manifest_endpoint():
         assert "telemetry" in body
         assert body["telemetry"]["verified_published_keys_total"] > 100
         assert "panels" in body
-        assert len(body["panels"]) == 17
+        assert len(body["panels"]) == 18
         assert "routes" in body
         assert "/api/manifest" in body["routes"]["GET"]
     finally:
