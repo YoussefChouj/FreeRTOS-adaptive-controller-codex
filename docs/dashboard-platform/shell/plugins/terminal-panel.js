@@ -24,6 +24,15 @@ Events from the agent layer:
     xtermReject = rej;
   });
 
+  function appendScript(s) {
+    var parent = document.head || document.body || document.documentElement;
+    if (parent) {
+      parent.appendChild(s);
+    } else {
+      xtermReject(new Error("no document to load xterm.js into"));
+    }
+  }
+
   function loadXterm() {
     if (xtermLoaded && fitLoaded) {
       xtermResolve(window.Terminal);
@@ -48,12 +57,12 @@ Events from the agent layer:
         s2.onerror = function () {
           xtermReject(new Error("xterm-addon-fit failed to load"));
         };
-        document.head.appendChild(s2);
+        appendScript(s2);
       };
       s1.onerror = function () {
         xtermReject(new Error("xterm.js failed to load from CDN"));
       };
-      document.head.appendChild(s1);
+      appendScript(s1);
     }
     return xtermPromise;
   }
@@ -153,7 +162,7 @@ Events from the agent layer:
   }
 
   /* -- Panel rendering --------------------------------------------------- */
-  function render() {
+  function render(container) {
     if (terminalEl) return; /* already rendered */
 
     /* Create container */
@@ -267,7 +276,7 @@ Events from the agent layer:
     });
 
     /* Append to plugin card body */
-    var body = document.getElementById("plugin-body-terminal");
+    var body = container || document.getElementById("plugin-body-terminal");
     if (body) {
       body.innerHTML = "";
       body.appendChild(terminalEl);
@@ -275,11 +284,18 @@ Events from the agent layer:
   }
 
   /* -- Registration ------------------------------------------------------ */
-  if (typeof shellApi !== "undefined" && typeof shellApi.registerPanel === "function") {
-    shellApi.registerPanel("Terminal", render, {
+  window.__PLUGIN_INIT__ = function (api) {
+    api.registerPanel("Terminal", render, {
       workspace: "terminal",
       gates: [],
       description: "Terminal PTY session via WebSocket (xterm.js)",
     });
+  };
+
+  window.__PLUGIN_DESTROY__ = function () {};
+
+  if (typeof window !== "undefined" && window.__registerPlugin__) {
+    window.__registerPlugin__("Terminal", window.__PLUGIN_INIT__, window.__PLUGIN_DESTROY__,
+      { workspace: "terminal", description: "Terminal PTY session via WebSocket (xterm.js)" });
   }
 })();
