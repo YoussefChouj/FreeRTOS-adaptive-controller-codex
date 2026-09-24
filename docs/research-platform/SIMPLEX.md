@@ -50,3 +50,24 @@ With defaults: **bit-identical control output to the pre-Simplex build.**
 2. Pitch angle: `|imu.pit| > pitch_max`
 3. Weight norm: `max(axis) ||Theta||_2 > w_norm_max`
 4. u_ad saturation: `|u_ad| >= u_max × 0.999` sustained > `sat_ticks_max` ticks
+
+## Ground-side param names
+
+The ground encoder (`ground_station/comm/simplex_encoder.py`) maps these
+named params to CMD 0x19 index/value pairs so that a plan can write them:
+
+| Ground name                  | Index | Value type | Safety tier |
+|------------------------------|-------|------------|-------------|
+| `simplex.mode`               | 0     | float 0/1/2 | tier-0     |
+| `simplex.variant`            | 1     | float 0/1   | tier-0     |
+| `simplex.roll_max`           | 2     | float > 0   | tier-0     |
+| `simplex.pitch_max`          | 3     | float > 0   | tier-0     |
+| `simplex.w_norm_max`         | 4     | float > 0   | tier-0     |
+| `simplex.sat_ticks_max`      | 5     | float > 0   | tier-0     |
+| `simplex.hold_ticks`         | 6     | float ≥ 0   | tier-0     |
+| `simplex.reset_counters`     | 7     | float ≥ 0.5 | tier-0     |
+
+All eight params are in `CRITICAL_PARAM_WRITE` and `PARAM_WRITE_TIER` with
+tier 0, requiring operator approval in every mode (supervised, autonomous,
+partial). Wire encoding uses the legacy 0xCC 0xDD frame
+`[0xCC][0xDD][0x19][INDEX][VALUE float32 LE][CRC8-XOR]`.
