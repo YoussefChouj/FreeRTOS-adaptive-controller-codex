@@ -237,6 +237,29 @@ typedef struct {
     uint8_t ref_model_type;         // Reference model: 0 = passthrough (xm=r), 1 = first-order, 2 = second-order
 } MRAC_FeatureFlags_t;
 
+
+// ------------------------------------------------------------------------------
+// 6. Simplex fallback (mode-based freeze + fade of u_ad injection)
+// ------------------------------------------------------------------------------
+typedef struct {
+    uint8_t  mode;              /* 0 = off (inert, default), 1 = enforce, 2 = observe_only */
+    uint8_t  variant;           /* 0 = PID+MRAC per mrac_flags (default), 1 = PID only */
+    uint8_t  tripped;           /* 1 while the fallback is active (enforce only) */
+    uint8_t  reason;            /* last trigger: 0 none, 1 roll, 2 pitch, 3 W norm, 4 u_ad sat */
+    uint16_t trip_count;        /* enforce trips */
+    uint16_t would_trip_count;  /* observe_only would-be trips */
+    uint16_t sat_ticks[4];      /* consecutive ticks |u_ad| >= u_max per axis */
+    uint16_t clear_ticks;       /* ticks back inside the envelope while tripped */
+    uint16_t hold_ticks;        /* hysteresis hold before resuming (default 200 = 1 s) */
+    uint16_t sat_ticks_max;     /* u_ad saturation trigger (default 40 = 200 ms) */
+    float    roll_max;          /* rad, default 3.14f */
+    float    pitch_max;         /* rad, default 3.14f */
+    float    w_norm_max;        /* ||Theta||_2 per axis, default 1.0e6f */
+    float    fade;              /* u_ad multiplier, 1.0 = full, 0.0 = faded out */
+} MRAC_Simplex_t;
+
+extern MRAC_Simplex_t mrac_simplex;
+void MRAC_SimplexStep(void);
 // ------------------------------------------------------------------------------
 // External Globals
 // ------------------------------------------------------------------------------

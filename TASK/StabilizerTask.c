@@ -893,10 +893,10 @@ void Compute_Motor(void)
 		// u_total = u_nom + (u_ad * scaling_factor)
 		// NaN/Inf guard: if u_ad is not finite (e.g. due to diverged adaptive weights),
 		// fall back to zero correction so the PID baseline always reaches the motors.
-		float mrac_z     = mrac_state.z_rate.u_ad * mrac_config_z.mrac_to_mixer;
-		float mrac_roll  = mrac_state.roll.u_ad  * mrac_config_roll.mrac_to_mixer;
-		float mrac_pitch = mrac_state.pitch.u_ad * mrac_config_pitch.mrac_to_mixer;
-		float mrac_yaw   = mrac_state.yaw.u_ad   * mrac_config_yaw.mrac_to_mixer;
+		float mrac_z     = mrac_state.z_rate.u_ad * mrac_config_z.mrac_to_mixer * mrac_simplex.fade;
+		float mrac_roll  = mrac_state.roll.u_ad  * mrac_config_roll.mrac_to_mixer * mrac_simplex.fade;
+		float mrac_pitch = mrac_state.pitch.u_ad * mrac_config_pitch.mrac_to_mixer * mrac_simplex.fade;
+		float mrac_yaw   = mrac_state.yaw.u_ad   * mrac_config_yaw.mrac_to_mixer * mrac_simplex.fade;
 		if (!isfinite(mrac_z))     mrac_z     = 0.0f;
 		if (!isfinite(mrac_roll))  mrac_roll  = 0.0f;
 		if (!isfinite(mrac_pitch)) mrac_pitch = 0.0f;

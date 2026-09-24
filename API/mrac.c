@@ -8,6 +8,7 @@
 #include "mrac.h"
 #include "mrac_math.h"
 #include <math.h>
+#include "imu_update.h"
 
 // Global instance of the MRAC runtime states
 MRAC_State_t mrac_state;
@@ -18,6 +19,10 @@ MRAC_AxisConfig_t mrac_config_pitch;
 MRAC_AxisConfig_t mrac_config_roll;
 MRAC_AxisConfig_t mrac_config_yaw;
 MRAC_AxisConfig_t mrac_config_z;
+
+/* Simplex fallback. Defaults are inert: mode 0, variant 0, fade 1. */
+MRAC_Simplex_t mrac_simplex = {0, 0, 0, 0, 0, 0, {0, 0, 0, 0}, 0, 200, 40,
+                               3.14f, 3.14f, 1.0e6f, 1.0f};
 
 // Supplied by SINS/baro-IMU fusion � wire this before flight test.
 
@@ -247,6 +252,12 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
         return;
     }
 
+    /* Simplex: freeze Theta/Whatf (never reset) while tripped or in the PID-only
+     * variant; u_ad is still computed and faded at the injection point. */
+    if (mrac_simplex.tripped || mrac_simplex.variant == 1) {
+        do_adaptation = 0;
+    }
+
     PBe = state->e;
 
     // Tanh saturation: bound effective error to +/-e_sat regardless of spike magnitude
@@ -360,6 +371,73 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
         } else if (state->u_ad < -config->u_max) {
             state->u_ad = -config->u_max;
         }
+    }
+}
+
+void MRAC_SimplexStep(void)
+{
+    static uint8_t prev_trigger = 0;
+    const MRAC_AxisConfig_t *configs[4];
+    MRAC_AxisState_t *axes[4];
+    float   sum_w2;
+    float   target;
+    uint8_t trigger;
+    uint8_t r;
+    uint8_t i;
+    uint8_t a;
+
+    configs[0] = &mrac_config_pitch; axes[0] = &mrac_state.pitch;
+    configs[1] = &mrac_config_roll;  axes[1] = &mrac_state.roll;
+    configs[2] = &mrac_config_yaw;   axes[2] = &mrac_state.yaw;
+    configs[3] = &mrac_config_z;     axes[3] = &mrac_state.z_rate;
+
+    r = 0;
+    for (a = 0; a < 4; a++) {
+        if (fabsf(axes[a]->u_ad) >= configs[a]->u_max * 0.999f) {
+            if (mrac_simplex.sat_ticks[a] < 0xFFFFU) mrac_simplex.sat_ticks[a]++;
+        } else {
+            mrac_simplex.sat_ticks[a] = 0;
+        }
+        if (r == 0 && mrac_simplex.sat_ticks[a] > mrac_simplex.sat_ticks_max) r = 4;
+        sum_w2 = 0.0f;
+        for (i = 0; i < MAX_NUM_BASIS; i++) sum_w2 += axes[a]->Theta[i] * axes[a]->Theta[i];
+        if (sqrtf(sum_w2) > mrac_simplex.w_norm_max) r = 3;
+    }
+    if (fabsf(imu_data.pit) > mrac_simplex.pitch_max) r = 2;
+    if (fabsf(imu_data.rol) > mrac_simplex.roll_max)   r = 1;
+    trigger = (uint8_t)(r != 0);
+
+    if (mrac_simplex.mode == 0) {
+        mrac_simplex.tripped     = 0;
+        mrac_simplex.clear_ticks = 0;
+        prev_trigger = 0;
+    } else if (trigger) {
+        mrac_simplex.clear_ticks = 0;
+        if (mrac_simplex.mode == 1 && mrac_simplex.tripped == 0) {
+            mrac_simplex.tripped = 1;
+            mrac_simplex.trip_count++;
+            mrac_simplex.reason = r;
+        } else if (mrac_simplex.mode == 2) {
+            if (prev_trigger == 0) mrac_simplex.would_trip_count++;
+            mrac_simplex.reason = r;
+        }
+        prev_trigger = 1;
+    } else {
+        if (mrac_simplex.tripped) {
+            mrac_simplex.clear_ticks++;
+            if (mrac_simplex.clear_ticks >= mrac_simplex.hold_ticks) mrac_simplex.tripped = 0;
+        }
+        prev_trigger = 0;
+    }
+
+    /* Fade u_ad over ~100 ms toward 0 (tripped or PID-only) or back to 1. */
+    target = (mrac_simplex.tripped || mrac_simplex.variant == 1) ? 0.0f : 1.0f;
+    if (mrac_simplex.fade > target) {
+        mrac_simplex.fade -= MRAC_DT / 0.1f;
+        if (mrac_simplex.fade < target) mrac_simplex.fade = target;
+    } else if (mrac_simplex.fade < target) {
+        mrac_simplex.fade += MRAC_DT / 0.1f;
+        if (mrac_simplex.fade > target) mrac_simplex.fade = target;
     }
 }
 
@@ -549,6 +627,9 @@ void MRAC_Control(const CtrlerTypeDef* current_state)
     float cross_pitch, cross_roll;
     float r_pitch, r_roll, r_yaw, r_z;
     
+
+    /* Simplex fallback step — evaluate triggers and manage fade. */
+    MRAC_SimplexStep();
     // Main execution cycle (Hooked into FreeRTOS / Tasks)
     
     // 1. Acquire current Gyro Rates (p, q, r) and Z-velocity from inner-loop cascade
