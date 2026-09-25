@@ -10,6 +10,7 @@
 read-only attach session to the running target.
 """
 from __future__ import annotations
+from .rtos import cmd_rtos
 
 import argparse
 import csv
@@ -774,6 +775,10 @@ def build_parser():
     sp.add_argument("names", nargs="+", help="paths and/or group:<name> tokens")
     _transport_args(sp)
     sp.set_defaults(func=cmd_read)
+
+    sp = sub.add_parser("rtos", help="FreeRTOS task and health metrics")
+    _transport_args(sp)
+    sp.set_defaults(func=cmd_rtos)
 
     sp = sub.add_parser("watch", help="stream at N Hz (needs hardware)")
     sp.add_argument("names", nargs="+", help="paths and/or group:<name> tokens")
