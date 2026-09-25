@@ -239,6 +239,28 @@ class TestApply(unittest.TestCase):
         self.assertEqual(streams[0]["_key_ts"]["a"], 100)    # stale timestamp on ``a``
         self.assertEqual(streams[0]["_key_ts"]["c"], 200)   # fresh timestamp on ``c``
 
+    def test_keys_not_sent_for_ttl_are_pruned(self):
+        """A key the slot stopped sending (old layout, ``chN.i`` placeholder)
+        is dropped once it is older than the freshness TTL."""
+        a = _adapter()
+        streams = _streams()
+        s = 1_000_000_000
+        a.apply(NormalizedSample(
+            slot=1, tag="typed", values={"ch1.0": 9.0, "old": 1.0, "live": 0.0},
+            received_ns=s, metadata=StreamMetadata(),
+        ), streams)
+        a.apply(NormalizedSample(
+            slot=1, tag="typed", values={"live": 1.0},
+            received_ns=20 * s, metadata=StreamMetadata(),
+        ), streams)
+        self.assertIn("old", streams[1]["values"])          # within TTL
+        a.apply(NormalizedSample(
+            slot=1, tag="typed", values={"live": 2.0},
+            received_ns=40 * s, metadata=StreamMetadata(),
+        ), streams)
+        self.assertEqual(set(streams[1]["values"]), {"live"})
+        self.assertEqual(set(streams[1]["_key_ts"]), {"live"})
+
     def test_metadata_uses_max_not_sum(self):
         """``meta.X or existing.get(X)`` keeps the most-informative value.
 

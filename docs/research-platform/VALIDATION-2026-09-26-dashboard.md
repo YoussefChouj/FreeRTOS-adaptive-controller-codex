@@ -86,6 +86,23 @@ Also found:
 - PID dry run had no report because the worker's script unchecked Analyse. The session itself (`20260926-012004`) recorded 284,678 rows over 15.4 s.
 - Real defect found: `metadata.json` had empty `session_id`, `preset` and `signal_map_used`. Fixed in `flight_report.py` (T22 merge plus role->present-key map). Re-validation: T24.
 
+## T24 re-validation (VPS headless, 01:42-01:45) + supervisor checks (01:50-01:55)
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Dry run PID | PASS | `014248_pid_symmetric_t24_pid`: index.csv label `t24_pid`, status done, 16 plots, metadata controller pid, preset flight_test_adaptive, session_id filled, signal_map_used 72 roles |
+| Dry run MRAC | PASS | `014434_mrac_symmetric_t24_mrac`: label `t24_mrac`, status done, 16 plots, controller mrac |
+| metadata.json `label` | FIXED | was None (manifest had it, report metadata did not copy it); `flight_report.py` now writes `manifest.get("label")` |
+| Visible-panel map | PASS | no panel visible on more than one tab |
+| Console errors | PASS | 0 across all tabs |
+| Streaming | FIXED | all 4 slots live (received counters advance, last_update age 0.0 s). Worker FAIL was stale leftover keys: slot0 74/268, slot1 53/79, slot2 20/76, slot3 9/35 older than 5 s -- `chN.i` placeholders from before the 0x08 schema, and slot 1 keys of an earlier layout (`c.*`, `flight_phase`, `slot1.s_state`). `telemetry_adapter.apply` now drops keys not refreshed within the 30 s freshness TTL |
+
+Found by the supervisor: T24 left a third recording running (`logs/sessions/20260926-014449-t24_mrac`, 9.3 M rows, 466 MB when
+stopped at 01:53). Stopping it auto-started an Analyse job, which was killed; `015310_mrac_symmetric_t24_mrac` is junk and
+should be deleted by the operator along with that session folder. `#record-btn` is a toggle: an interrupted script leaves it on.
+
+Not exposed over GET: the active preset (only in the flight report metadata). Battery sometimes read "NOT PUBLISHED" (T24 worker report, not re-checked).
+
 ## NOT RUN
 - Did not verify if JS heap size could be collected as it was not explicitly available via the /health API or Playwright without deeper Chrome DevTools Protocol instrumentation.
 - Did not click Arm, Throttle, or command buttons (forbidden by safety rules).

@@ -251,6 +251,7 @@ class TestFlightReportGenerate:
             meta = json.load(f)
             
         assert meta["session_id"] == session_dir.name
+        assert "label" in meta
         assert meta["preset"] == "test_override_preset"
         assert "signal_map_used" in meta
         assert isinstance(meta["signal_map_used"], dict)

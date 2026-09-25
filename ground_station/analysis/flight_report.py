@@ -1820,6 +1820,7 @@ def generate_report(
         "payload": payload,
         "notes": notes,
         "session_id": session_dir.name,
+        "label": manifest.get("label"),
         "started_at": manifest.get("started_at"),
         "started_at_epoch": manifest.get("started_at_epoch"),
         "stopped_at": manifest.get("stopped_at"),

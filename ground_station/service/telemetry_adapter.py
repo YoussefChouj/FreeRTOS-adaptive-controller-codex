@@ -191,6 +191,8 @@ class TelemetryAdapter:
         # path carries its own ``sequence`` byte from the wire; this
         # counter is only used as a fallback when ``sequence`` is 0.
         self._counter: dict[Any, int] = {}
+        # Per-slot time of the last stale-key prune (see ``apply``).
+        self._last_prune_ns: dict[Any, int] = {}
 
     # ---- public surface ------------------------------------------------
 
@@ -500,6 +502,18 @@ class TelemetryAdapter:
             existing["_key_ts"] = key_ts
         for k in sample.values:
             key_ts[k] = ns
+
+        # Drop keys the slot has stopped sending (placeholders from before
+        # the 0x08 schema, or variables of an earlier layout). Otherwise they
+        # sit in ``values`` with a frozen value. Once a second per slot.
+        if ns - self._last_prune_ns.get(slot, 0) >= 1_000_000_000:
+            self._last_prune_ns[slot] = ns
+            cutoff = ns - self._freshness_ttl_ns
+            gone = [k for k, t in key_ts.items() if t < cutoff]
+            for k in gone:
+                del key_ts[k]
+                if isinstance(existing_values, dict):
+                    existing_values.pop(k, None)
 
     def evict_stale(
         self,
