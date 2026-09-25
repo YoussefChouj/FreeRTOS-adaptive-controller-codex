@@ -276,12 +276,23 @@ def main() -> None:
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, _stop)
 
+    # ---- Terminal manager (optional, PTY-backed) ----
+    terminal_mgr = None
+    try:
+        from ground_station.service.terminal import TerminalManager
+        terminal_mgr = TerminalManager()
+        print(f"[terminal] token file: {terminal_mgr.get_token_file()}",
+              file=sys.stderr)
+    except Exception as exc:
+        print(f"[service] terminal: {exc}", file=sys.stderr)
+
     # ---- Start the HTTP shell (blocks) ----
     # Keep main thread alive so daemon HTTPServer thread stays up.
     # Signal handler above handles Ctrl+C and calls sys.exit(0).
     try:
         api = start_shell(service, port=args.port,
-                         experiment_runtime=experiment_runtime)
+                          experiment_runtime=experiment_runtime,
+                          terminal_manager=terminal_mgr)
         print(f"[service] Shell bound to http://localhost:{args.port}", flush=True)
         # Block indefinitely — signal handler will exit the process
         # time.sleep keeps the main thread alive so the daemon HTTPServer

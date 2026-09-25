@@ -1062,6 +1062,11 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
             if route == "/health":
                 snap = service.snapshot()
                 streams = getattr(snap, "streams", {}) or {}
+                try:
+                    import psutil
+                    _rss_mb = round(psutil.Process().memory_info().rss / 1024 / 1024, 1)
+                except Exception:
+                    _rss_mb = None
                 health = {
                     "ok": True,
                     "schema_id": service.schema.schema_id,
@@ -1074,6 +1079,7 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     "active_streams": len(streams),
                     "session_id": getattr(snap, "session_id", None),
                     "recorder": _recorder_status(service),
+                    "process_rss_mb": _rss_mb,
                 }
                 self._json(200, health)
             elif route == "/health/slots":
