@@ -125,23 +125,50 @@ def _run_analysis_subprocess(
     payload: str = "unknown",
     notes: str = "",
 ) -> subprocess.Popen:
-    """Launch the analysis as a background subprocess."""
-    cmd = [
-        sys.executable, "-c",
-        f"""
-import sys, os
-sys.path.insert(0, r'{_get_project_root()}')
-from ground_station.analysis.flight_report import generate_report
-generate_report(
-    session_dir=r'{session_dir}',
-    out_dir=r'{output_dir}',
-    notes=r'{notes}',
-    controller=r'{controller}',
-    payload=r'{payload}',
-)
-"""
-    ]
-    return subprocess.Popen(cmd)
+    """Launch the analysis as a background subprocess.
+
+    Arguments travel as JSON on argv (notes are free text; splicing them into
+    source code broke on quotes). The child records done/failed on exit.
+    """
+    args = {
+        "session_dir": str(session_dir), "output_dir": str(output_dir),
+        "controller": controller, "payload": payload, "notes": notes,
+    }
+    cmd = [sys.executable, "-m", "ground_station.analysis.flight_test_folder",
+           json.dumps(args)]
+    return subprocess.Popen(cmd, cwd=str(_get_project_root()))
+
+
+def _set_index_status(output_dir: Path | str, status: str) -> None:
+    """Set analysis_status on the index.csv row whose output_path is output_dir."""
+    output_dir = Path(output_dir)
+    index_path = output_dir.parent.parent / "index.csv"  # <date>/<run>/report
+    if not index_path.exists():
+        return
+    with open(index_path, newline="", encoding="utf-8") as f:
+        rows = list(csv.reader(f))
+    for row in rows[1:]:
+        if len(row) >= 7 and Path(row[5]) == output_dir:
+            row[6] = status
+    with open(index_path, "w", newline="", encoding="utf-8") as f:
+        csv.writer(f).writerows(rows)
+
+
+def _analysis_main(args: dict[str, str]) -> int:
+    """Child-process entry: build the report, then record done or failed."""
+    session_id = Path(args["session_dir"]).name
+    status = "failed"
+    try:
+        generate_report(
+            session_dir=args["session_dir"], out_dir=args["output_dir"],
+            notes=args["notes"], controller=args["controller"],
+            payload=args["payload"],
+        )
+        status = "done"
+    finally:
+        update_analysis_status(session_id, status, output_path=args["output_dir"])
+        _set_index_status(args["output_dir"], status)
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -213,14 +240,13 @@ def run_analysis_and_track(
     # Step 3: Update status tracking
     update_analysis_status(session_id, "pending", output_path=str(report_dir))
 
-    # Step 4: Launch background analysis
+    # Step 4: Mark running before launch, so a fast child's done/failed is not overwritten
+    update_analysis_status(session_id, "running", output_path=str(report_dir))
+    _set_index_status(report_dir, "running")
     proc = _run_analysis_subprocess(
         session_dir, report_dir,
         controller=controller, payload=payload, notes=notes
     )
-
-    # Update status to running
-    update_analysis_status(session_id, "running", output_path=str(report_dir))
 
     return output_dir, proc
 
@@ -267,3 +293,7 @@ def list_flight_tests(date_str: str | None = None) -> list[dict[str, Any]]:
                 break
 
     return results
+
+
+if __name__ == "__main__":
+    sys.exit(_analysis_main(json.loads(sys.argv[1])))
