@@ -312,6 +312,10 @@ class WifiBridge:
         # Keyed by slot 0..3 (SUBSCRIBE_MAX_SLOTS = 4).
         self._slot_states: Dict[int, str] = {}
 
+        # Rate-limiting for the S15 decode-line: tracks the last-named-count
+        # per slot so we only log when the name ratio changes (e.g. 0 → 48).
+        self._last_named_log: Dict[int, int] = {}
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -2039,9 +2043,20 @@ class WifiBridge:
                 slot=slot
             )
 
+            # Count named ranges BEFORE locking so we know whether to pop.
+            n_named = sum(1 for r in ranges if r.name)
+            n_unnamed = len(ranges) - n_named
+
             with self._stream_lock:
                 self._stream_schemas[slot] = schema
-                self._pending_schema_ranges.pop(slot, None)
+                # Only pop pending ranges when the lookup actually matched
+                # at least one address.  A stale 0x08 (e.g. from MicoAir's
+                # post-restart buffer) will land here with addresses that
+                # don't match the pending request -- popping would destroy
+                # the pending entry that the *real* 0x08 from the matching
+                # 0x21 needs.  Leave it so the next 0x08 finds it.
+                if n_named > 0:
+                    self._pending_schema_ranges.pop(slot, None)
                 # Advance the per-slot lifecycle only forward. A schema
                 # reply to a fresh request moves 'sent' -> 'schema_received';
                 # it never regresses a slot that is already streaming.
@@ -2052,7 +2067,6 @@ class WifiBridge:
             # operator can verify that the schema carries the DWARF
             # names from the request. If a name comes back empty after
             # this line, the request and reply addresses did not match.
-            n_named = sum(1 for r in ranges if r.name)
             n_unnamed = len(ranges) - n_named
             print(
                 f"[wifi_bridge] Registered schema for slot {slot}: "
@@ -2163,16 +2177,19 @@ class WifiBridge:
 
         # S15 instrumentation: log the decoded 0x09 frame channel names
         # so the operator can spot when a slot falls back to ``chN.M``
-        # instead of using DWARF names. Set the env var
-        # GROUND_STATION_DEBUG_NAMES=1 to enable (default: one-line
-        # summary only).
+        # instead of using DWARF names.  Rate-limited to once per state
+        # change (named-count delta) to avoid ~350 KB/min of repeated
+        # identical lines.
         n_named = sum(1 for n in names if not (n.startswith("ch") and "." in n))
         if n_named != len(names):
-            print(
-                f"[wifi_bridge] [S15] slot {slot} decoded {len(values)} channels "
-                f"({n_named} named, {len(values) - n_named} positional fallback)",
-                flush=True,
-            )
+            prev = self._last_named_log.get(slot, -1)
+            if n_named != prev:
+                self._last_named_log[slot] = n_named
+                print(
+                    f"[wifi_bridge] [S15] slot {slot} decoded {len(values)} channels "
+                    f"({n_named} named, {len(values) - n_named} positional fallback)",
+                    flush=True,
+                )
 
         json_payload = {f"slot{slot}.{name}": round(float(v), 6)
                         for name, v in zip(names, values)}
