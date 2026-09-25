@@ -233,6 +233,44 @@ class TestFlightReportGenerate:
         assert "rmse" in metrics["attitude"]["roll"]
         assert metrics["attitude"]["roll"]["rmse"] > 0
 
+    def test_metadata_fields(self, tmp_path):
+        """Test that session_id, preset, and signal_map_used are correctly written to metadata.json."""
+        # Session 1: No meta file, test parameter priority
+        session_dir = _create_synthetic_session(tmp_path / "sess1")
+        
+        out_dir = tmp_path / "report1"
+
+        from ground_station.analysis.flight_report import generate_report
+        result = generate_report(
+            str(session_dir),
+            out_dir=str(out_dir),
+            preset="test_override_preset",
+        )
+
+        with open(out_dir / "metadata.json") as f:
+            meta = json.load(f)
+            
+        assert meta["session_id"] == session_dir.name
+        assert meta["preset"] == "test_override_preset"
+        assert "signal_map_used" in meta
+        assert isinstance(meta["signal_map_used"], dict)
+        
+        # Session 2: Test fallback to session_meta.json
+        session_dir2 = _create_synthetic_session(tmp_path / "sess2")
+        with open(session_dir2 / "session_meta.json", "w") as f:
+            json.dump({"preset": "test_fallback_preset"}, f)
+            
+        out_dir_fallback = tmp_path / "report2"
+        result_fallback = generate_report(
+            str(session_dir2),
+            out_dir=str(out_dir_fallback),
+        )
+
+        with open(out_dir_fallback / "metadata.json") as f:
+            meta_fallback = json.load(f)
+            
+        assert meta_fallback["preset"] == "test_fallback_preset"
+
     def test_metrics_have_expected_structure(self, tmp_path):
         """Metrics contain RMSE, MAE, max_abs_error, ITAE, etc."""
         session_dir = _create_synthetic_session(tmp_path)
@@ -257,6 +295,9 @@ class TestFlightReportGenerate:
 
     def test_plot_files_generated(self, tmp_path):
         """Plots directory contains PNG and PDF files."""
+        from ground_station.analysis.flight_report import HAS_MPL
+        if not HAS_MPL:
+            pytest.skip("matplotlib not installed")
         session_dir = _create_synthetic_session(tmp_path)
         out_dir = tmp_path / "report3"
 
@@ -821,6 +862,9 @@ class TestRpmInFlightReport:
 
     def test_rpm_plot_generated(self, tmp_path):
         """RPM plot PNG and PDF are created."""
+        from ground_station.analysis.flight_report import HAS_MPL
+        if not HAS_MPL:
+            pytest.skip("matplotlib not installed")
         session_dir = self._create_rpm_session(tmp_path)
         out_dir = tmp_path / "rpm-plots"
 

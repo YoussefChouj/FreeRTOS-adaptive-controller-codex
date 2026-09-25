@@ -2003,6 +2003,7 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                             controller = analyse_meta.get("controller", "unknown")
                             payload = analyse_meta.get("payload", "unknown")
                             notes = analyse_meta.get("notes", "")
+                            preset = analyse_meta.get("preset", "")
                             try:
                                 ft_dir, proc = run_analysis_and_track(
                                     session_dir,
@@ -2010,6 +2011,7 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                                     payload=payload,
                                     label=label,
                                     notes=notes,
+                                    preset=preset,
                                 )
                                 result["flight_test_dir"] = str(ft_dir)
                                 result["analysis_pid"] = proc.pid

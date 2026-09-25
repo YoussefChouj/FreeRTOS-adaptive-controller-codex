@@ -124,6 +124,7 @@ def _run_analysis_subprocess(
     controller: str = "unknown",
     payload: str = "unknown",
     notes: str = "",
+    preset: str = "",
 ) -> subprocess.Popen:
     """Launch the analysis as a background subprocess.
 
@@ -133,6 +134,7 @@ def _run_analysis_subprocess(
     args = {
         "session_dir": str(session_dir), "output_dir": str(output_dir),
         "controller": controller, "payload": payload, "notes": notes,
+        "preset": preset,
     }
     cmd = [sys.executable, "-m", "ground_station.analysis.flight_test_folder",
            json.dumps(args)]
@@ -162,7 +164,7 @@ def _analysis_main(args: dict[str, str]) -> int:
         generate_report(
             session_dir=args["session_dir"], out_dir=args["output_dir"],
             notes=args["notes"], controller=args["controller"],
-            payload=args["payload"],
+            payload=args["payload"], preset=args.get("preset", ""),
         )
         status = "done"
     finally:
@@ -217,6 +219,7 @@ def run_analysis_and_track(
     payload: str = "unknown",
     label: str = "",
     notes: str = "",
+    preset: str = "",
 ) -> tuple[Path, subprocess.Popen]:
     """Create folder, update index, launch analysis, track status.
 
@@ -245,7 +248,7 @@ def run_analysis_and_track(
     _set_index_status(report_dir, "running")
     proc = _run_analysis_subprocess(
         session_dir, report_dir,
-        controller=controller, payload=payload, notes=notes
+        controller=controller, payload=payload, notes=notes, preset=preset
     )
 
     return output_dir, proc
