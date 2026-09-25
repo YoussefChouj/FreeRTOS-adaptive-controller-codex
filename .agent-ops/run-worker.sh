@@ -134,6 +134,22 @@ elif [ ! -s "$RESULT_FILE" ]; then
         "$rc" "$(tail -n 10 "$OUT_FILE")" > "$RESULT_FILE"
 fi
 [ -s "$MEM_FILE" ] && log "MEM: peak worker RSS $(cat "$MEM_FILE") MB (WSL side)"
+# One ledger line per run, same shape as the VPS ~/runs/ledger.jsonl, for worker_stats.py.
+case "$AGY_CMD" in claude*) lane=ark ;; *oc-worker.sh*) lane=oc ;; *) lane=agy ;; esac
+model=$(sed -nE 's/.*--model[ =]([^ ]+).*/\1/p' <<<"$AGY_CMD")
+[ "$lane" = oc ] && model=$(awk '{print $2}' <<<"$AGY_CMD")
+model="$lane/${model:-default}"
+tailtxt=$(tail -n 40 "$OUT_FILE" 2>/dev/null)
+if [ "$idle_death" -eq 1 ]; then st=IDLE_DEATH
+elif [ "$rc" -eq 0 ]; then st=OK
+elif [ "$rc" -eq 124 ]; then st=TIMEOUT
+elif grep -qiE 'RESOURCE_EXHAUSTED|quota|rate.?limit|\b429\b|usage limit' <<<"$tailtxt"; then st=QUOTA
+elif grep -qiE 'unauthori[sz]ed|\b401\b|\b403\b|log ?in|auth' <<<"$tailtxt"; then st=AUTH
+else st=FAIL; fi
+note=; [ "$st" = QUOTA ] && note=$(grep -m1 -iE 'reset|quota|exhausted|429|limit' <<<"$tailtxt" | tr -d '\042\134' | tr '\t\r' '  ' | cut -c1-200)
+printf '{"ts":"%s","id":"%s","lane":"%s","model":"%s","status":"%s","secs":%d,"note":"%s"}\n' \
+    "$(date -Iseconds)" "$TASK_ID" "$lane" "$model" "$st" $(( $(date +%s) - start_ts )) "$note" \
+    >> "$OPS_DIR/logs/ledger.jsonl"
 # Always the last line for this task; waiters key on it. IDLE_DEATH rides on
 # the EXIT line (wait-task.sh turns it into its own exit code) so the
 # last-line contract is unchanged.

@@ -7,6 +7,8 @@
 #   vps-worker.sh wait <id>      block until done; prints status + digest (run in background)
 #   vps-worker.sh fetch <id>     fetch branch; print digest + diffstat (read this, not the log)
 #   vps-worker.sh status | log <id> [lines] | kill <id> | clean <id>
+#   vps-worker.sh stats [days]   per-model history (VPS + local ledgers): runs, OK%, median secs,
+#                                QUOTA hits in 5h/window + last quota text. Pick workers from it.
 # Model aliases: qwen | free | gem | agy | agy:<model>  (ssh oc-agent '~/.local/bin/agy models')
 #                fake:ok|quota|net|auth test the chain without a model call.
 # Network drops: every remote step retries (5 tries, 15..240s apart); `wait` survives any
@@ -47,8 +49,15 @@ status)
     ssh_ 'tmux ls 2>/dev/null; for f in ~/runs/*.out; do [ -e "$f" ] && echo "$(basename $f .out): $(grep -E "^(STARTED|DONE|waiting|FALLBACK|RETRY)" $f | tail -1)"; done; free -h | sed -n 2p' ;;
 log)   ssh_ "tail -n ${3:-40} ~/runs/$2.out | tr -d '\007'" ;;
 fetch) retry git fetch -q vps "worker/$2:refs/remotes/vps/$2" && git log --oneline -1 "vps/$2" && digest "$2" && git diff --stat "HEAD...vps/$2" | tail -8 ;;
+stats) o=$(dirname "$0"); { ssh_ 'cat ~/runs/ledger.jsonl 2>/dev/null' || echo "vps-worker: vps ledger unreachable" >&2
+         cat "$o/logs/ledger.jsonl" 2>/dev/null; } | python "$o/worker_stats.py" --days "${2:-7}" -
+       # Live remaining quota: `agy -p /usage` is headless, ~2 s, 0 tokens (q1, verified 2026-09-26).
+       # Ark has no key-level usage API (needs account AK/SK), so its only signal is the QUOTA history above.
+       echo; echo "agy quota remaining (pool, window, left, resets UTC):"
+       echo "[vps]";   ssh_ 'timeout 60 ~/.local/bin/agy -p /usage 2>&1' | sed 's/^/  /' || echo "  unreachable"
+       echo "[local]"; wsl -d Ubuntu -e bash -lc 'timeout 60 agy -p /usage 2>&1' | sed 's/^/  /' || echo "  unreachable" ;;
 kill)  ssh_ "tmux kill-session -t '$2'" ;;
 clean) ssh_ "cd FreeRTOS-adaptive-controller-codex && git worktree remove --force ~/wt/$2; git branch -D worker/$2 base/$2; rm -f ~/runs/$2.* ~/tasks/$2.md"
        git update-ref -d "refs/remotes/vps/$2" 2>/dev/null || true ;;
-*) sed -n 2,14p "$0"; exit 2 ;;
+*) sed -n 2,16p "$0"; exit 2 ;;
 esac

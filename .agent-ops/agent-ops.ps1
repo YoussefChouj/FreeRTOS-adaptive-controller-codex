@@ -4,7 +4,7 @@ Claude Code (supervisor) calls this; it forwards to the WSL scripts.
 Task text travels through a file, so no PowerShell -> WSL quoting issues.
 
   .agent-ops\agent-ops.ps1 preflight [-Worker agy|ark] [-Model flash]  # cheap auth/model check (spawn runs it too)
-  .agent-ops\agent-ops.ps1 spawn "task text"      # or: spawn -File task.md  [-TimeoutMin 120] [-Model flash] [-Effort low] [-Worktree]
+  .agent-ops\agent-ops.ps1 spawn "task text"      # or: spawn -File task.md  [-TimeoutMin 120] [-Model flash] [-Effort low] [-Worktree] [-Force]
   .agent-ops\agent-ops.ps1 ask "question"         # one-shot read-only lookup; prints only the answer
   .agent-ops\agent-ops.ps1 wait <task_id>         # block until DONE/FAILED/EXIT/BLOCKED (not STALLED), then print a digest
   .agent-ops\agent-ops.ps1 verify <task_id>       # deterministic acceptance checks; one PASS/WARN/FAIL verdict
@@ -29,6 +29,8 @@ param(
     [ValidateSet('low', 'medium', 'high')]
     [string]$Effort,
     [switch]$Worktree,
+    # spawn: skip the laptop power guard (battery / CPU / RAM / one local worker).
+    [switch]$Force,
     # prune: delete tasks/ and logs/ files older than this; live tasks kept.
     [int]$RetentionDays = 14
 )
@@ -89,6 +91,24 @@ if ($Worker -eq 'ark') {
 $ErrorActionPreference = 'Stop'
 $opsWin = $PSScriptRoot
 $opsWsl = (wsl -d Ubuntu -- wslpath -a ($opsWin -replace '\\', '/')).Trim()
+
+# The charger drops out under sustained load and the laptop dies (2026-09-26 00:00),
+# so a local worker starts only on AC power, with headroom, and one at a time.
+# Server-side workers (.agent-ops/vps-worker.sh) cost the laptop nothing: use them first.
+function Assert-LocalHeadroom {
+    $why = @()
+    $bat = Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($bat -and $bat.BatteryStatus -ne 2) { $why += "on battery ($($bat.EstimatedChargeRemaining)%)" }
+    $cpu = (Get-CimInstance Win32_Processor | Measure-Object LoadPercentage -Average).Average
+    if ($cpu -gt 70) { $why += "CPU at $cpu%" }
+    $freeGb = [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB, 1)
+    if ($freeGb -lt 2) { $why += "only $freeGb GB RAM free" }
+    $running = [int]((Invoke-Wsl 'pgrep -fc "[r]un-worker.sh" || true') | Select-Object -Last 1)
+    if ($running -ge 1) { $why += "$running local worker(s) already running" }
+    if ($why) {
+        throw "power guard: $($why -join '; '). Run it on the VPS instead (bash .agent-ops/vps-worker.sh spawn ...), or pass -Force."
+    }
+}
 
 function Invoke-Wsl([string]$script) {
     # Pass the script on stdin so no argument is re-parsed by a shell;
@@ -159,6 +179,7 @@ switch ($Action) {
     # Standalone check for the operator: same preflight the spawn path runs.
     'preflight' { Test-WorkerBackend $Worker $modelId; if ($? -and $Worker -eq 'agy') { Write-Output "preflight: $Worker backend usable (model $modelId)" } }
     'spawn' {
+        if (-not $Force) { Assert-LocalHeadroom }
         New-Item -ItemType Directory -Force (Join-Path $opsWin 'inbox') | Out-Null
         $inbox = Join-Path $opsWin ('inbox\' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '.md')
         if ($File) { Copy-Item $File $inbox }
