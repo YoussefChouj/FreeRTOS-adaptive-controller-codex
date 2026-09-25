@@ -1,86 +1,57 @@
-import time
-import threading
+"""GET /api/rtos: probe-backed FreeRTOS health, cached, never blocking.
 
-_rtos_cache = None
-_rtos_cache_time = 0.0
-_rtos_lock = threading.Lock()
+One SWD snapshot per refresh (no sleep); CPU % is computed against the previous refresh once the firmware's
+1 Hz snapshot has advanced. A concurrent caller gets the cached payload instead of waiting on the probe.
+"""
+import threading
+import time
+
+CACHE_S = 2.0
+
+_lock = threading.Lock()
+_cache = None          # last payload
+_cache_time = 0.0
+_prev_snap = None      # last raw snapshot, for the CPU % window
+_name_cache = {}
+
+
+def _open_reader():
+    from ground_station.livewatch.cli import _DEFAULT_ELF
+    from ground_station.livewatch.reader import LiveReader
+    from ground_station.livewatch.transport import SwdCmsisDap
+    return LiveReader(str(_DEFAULT_ELF), transport=SwdCmsisDap())
+
+
+def reset():
+    global _cache, _cache_time, _prev_snap
+    _cache, _cache_time, _prev_snap = None, 0.0, None
+    _name_cache.clear()
+
 
 def get_rtos_state():
-    global _rtos_cache, _rtos_cache_time
+    global _cache, _cache_time, _prev_snap
+    from ground_station.livewatch import rtos
     now = time.time()
-    
-    with _rtos_lock:
-        if now - _rtos_cache_time < 1.0 and _rtos_cache is not None:
-            return _rtos_cache
-            
-        try:
-            from ground_station.livewatch.reader import LiveReader
-            from ground_station.livewatch.transport import SwdCmsisDap
-            from ground_station.livewatch.cli import _DEFAULT_ELF
-            
-            with LiveReader(str(_DEFAULT_ELF), transport=SwdCmsisDap()) as lr:
-                vars_to_read = [
-                    "g_task_snapshot", "g_task_snapshot_count", "g_task_snapshot_total_time",
-                    "g_heap_free", "g_heap_min_free", "g_reset_csr",
-                    "g_loop_period_cyc_last", "g_loop_period_cyc_max",
-                    "g_loop_period_cyc_min", "g_loop_overrun_count"
-                ]
-                res1 = lr.read_many(vars_to_read)
-                time.sleep(0.5)  # 500ms window for cpu % instead of 1.0s to avoid blocking /api too long
-                res2 = lr.read_many(vars_to_read)
-                
-            # Process and build JSON payload
-            t1_total = res1.get("g_task_snapshot_total_time", 0)
-            t2_total = res2.get("g_task_snapshot_total_time", 0)
-            dt = t2_total - t1_total
-            
-            t1_tasks = res1.get("g_task_snapshot", [])
-            t2_tasks = res2.get("g_task_snapshot", [])
-            t1_count = res1.get("g_task_snapshot_count", 0)
-            t2_count = res2.get("g_task_snapshot_count", 0)
-            
-            t1_map = {t.get("pcTaskName", b"").decode("ascii", "ignore").strip("\x00"): t for t in t1_tasks[:t1_count]}
-            t2_map = {t.get("pcTaskName", b"").decode("ascii", "ignore").strip("\x00"): t for t in t2_tasks[:t2_count]}
-            
-            tasks = []
-            for name, t2 in sorted(t2_map.items()):
-                t1 = t1_map.get(name, t2)
-                run1 = t1.get("ulRunTimeCounter", 0)
-                run2 = t2.get("ulRunTimeCounter", 0)
-                
-                cpu = 0.0
-                if dt > 0:
-                    cpu = (run2 - run1) / dt * 100.0
-                
-                tasks.append({
-                    "name": name,
-                    "priority": t2.get("uxCurrentPriority", 0),
-                    "state": t2.get("eCurrentState", 0),
-                    "cpu_percent": round(cpu, 1),
-                    "stack_hwm": t2.get("usStackHighWaterMark", 0)
-                })
-                
-            payload = {
-                "available": True,
-                "tasks": tasks,
-                "heap_free": res2.get("g_heap_free", 0),
-                "heap_min_free": res2.get("g_heap_min_free", 0),
-                "loop_stats": {
-                    "last_cycles": res2.get("g_loop_period_cyc_last", 0),
-                    "min_cycles": res2.get("g_loop_period_cyc_min", 0),
-                    "max_cycles": res2.get("g_loop_period_cyc_max", 0),
-                    "overruns": res2.get("g_loop_overrun_count", 0),
-                },
-                "reset_csr": res2.get("g_reset_csr", 0)
-            }
-            _rtos_cache = payload
-            _rtos_cache_time = time.time()
-            return payload
-            
-        except Exception as e:
-            payload = {"available": False, "reason": str(e)}
-            # Do NOT cache failures for a full second, or maybe do cache them so we don't spam the broken probe?
-            # Cache them for 1 second.
-            _rtos_cache = payload
-            _rtos_cache_time = time.time()
-            return payload
+    if _cache is not None and now - _cache_time < CACHE_S:
+        return _cache
+    if not _lock.acquire(blocking=False):
+        return _cache if _cache is not None else {"available": False, "reason": "probe busy"}
+    try:
+        with _open_reader() as lr:
+            snap = rtos.read_snapshot(lr, name_cache=_name_cache)
+        prev = _prev_snap
+        payload = rtos.build_report(snap, prev)
+        if payload["cpu_window_s"] is None and _cache is not None:
+            # firmware 1 Hz snapshot has not advanced since the last refresh: keep prev, reuse the last CPU %
+            last = {t["number"]: t["cpu_percent"] for t in _cache.get("tasks", [])}
+            for t in payload["tasks"]:
+                t["cpu_percent"] = last.get(t["number"])
+            payload["cpu_window_s"] = _cache.get("cpu_window_s")
+        if prev is None or snap["g_task_snapshot_total_time"] != prev["g_task_snapshot_total_time"]:
+            _prev_snap = snap
+        _cache, _cache_time = payload, time.time()
+        return payload
+    except Exception as e:  # probe absent, busy in another process, stale ELF...
+        return {"available": False, "reason": f"{type(e).__name__}: {e}"}
+    finally:
+        _lock.release()

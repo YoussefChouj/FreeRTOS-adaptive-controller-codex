@@ -365,6 +365,7 @@ _ROUTE_MAP = {
                         "(?prefix=N&parent=P&limit=N; default/max limit 100/1000)",
         "/api/manifest": "full system capability manifest (symbols, commands, telemetry, panels, routes)",
         "/api/routes": "this map",
+        "/api/rtos": "probe-backed FreeRTOS health: task CPU %, stack HWM, heap, loop timing, reset cause (cached 2 s)",
         "/api/debug/memory": "tracemalloc snapshot, psutil stats, gc counts, top object types",
         "/.well-known/agent-permissions.json": "permission manifest for arriving agents (LAS-WG shape); generated from the live action registry + control state",
         "/llms.txt": "Markdown map of what an agent should read first (text/markdown)",

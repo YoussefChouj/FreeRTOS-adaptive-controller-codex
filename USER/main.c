@@ -231,7 +231,7 @@ void start_task(void *pvParameters)
 �������ܣ� ϵͳ������ (h��n sh�� g��ng n��ng: x�� t��ng ji��n sh�� q��) - "Function: System monitor"
 ֡��    ��  1 (zh��n l��: 1) - "Frame rate: 1 Hz" (runs once per second)
 ----------------------------------------------------------*/
-#define MAX_TASKS 10
+#define MAX_TASKS 16   /* 10 app tasks + idle + timer = 12; uxTaskGetSystemState returns 0 if too small */
 volatile UBaseType_t g_task_snapshot_count;
 volatile uint32_t g_task_snapshot_total_time;
 TaskStatus_t g_task_snapshot[MAX_TASKS];

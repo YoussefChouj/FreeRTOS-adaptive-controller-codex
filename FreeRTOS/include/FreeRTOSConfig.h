@@ -137,9 +137,10 @@
     *((volatile uint32_t *)0xE000EDFC) |= 0x01000000; \
     *((volatile uint32_t *)0xE0001000) |= 1; \
 } while(0)
-/* Shift by 12: 168MHz / 4096 = 41kHz tick rate. A 32-bit counter wraps in ~29 hours, avoiding wrap inside stats window. */
-#define portGET_RUN_TIME_COUNTER_VALUE() ( (*((volatile uint32_t *)0xE0001004)) >> 12 )
-                       //Ϊ1ʱ��������ʱ��ͳ�ƹ���
+/* Raw CYCCNT (168 MHz). It wraps every 25.6 s; the kernel's switched-in delta and the host's two-read CPU%
+   window are both 32-bit modular subtractions over << 25.6 s, so the wrap is harmless. A >>N shift would
+   make the counter wrap at 2^(32-N) and corrupt those deltas at every wrap. */
+#define portGET_RUN_TIME_COUNTER_VALUE() ( *((volatile uint32_t *)0xE0001004) )
 #define configUSE_TRACE_FACILITY				1                       //Ϊ1���ÿ��ӻ����ٵ���
 #define configUSE_STATS_FORMATTING_FUNCTIONS	1                       //���configUSE_TRACE_FACILITYͬʱΪ1ʱ���������3������
                                                                         //prvWriteNameToBuffer(),vTaskList(),

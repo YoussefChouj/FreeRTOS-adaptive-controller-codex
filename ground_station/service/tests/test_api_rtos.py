@@ -1,60 +1,49 @@
-import pytest
-import time
+from ground_station.livewatch.tests.test_rtos import NAMES, FakeReader, frame
 from ground_station.service import rtos_api
 
-def test_api_rtos_success(monkeypatch):
-    class MockLiveReader:
-        def __init__(self, *args, **kwargs):
-            self.read_count = 0
-            
-        def __enter__(self): return self
-        def __exit__(self, *a): pass
-        
-        def read_many(self, names):
-            self.read_count += 1
-            if self.read_count == 1:
-                return {
-                    "g_task_snapshot_total_time": 1000,
-                    "g_task_snapshot_count": 1,
-                    "g_task_snapshot": [
-                        {"pcTaskName": b"Test\x00", "ulRunTimeCounter": 10}
-                    ]
-                }
-            else:
-                return {
-                    "g_task_snapshot_total_time": 2000,
-                    "g_task_snapshot_count": 1,
-                    "g_task_snapshot": [
-                        {"pcTaskName": b"Test\x00", "ulRunTimeCounter": 210, "uxCurrentPriority": 1, "eCurrentState": 0, "usStackHighWaterMark": 100}
-                    ],
-                    "g_heap_free": 1024,
-                    "g_reset_csr": (1<<27)
-                }
 
-    monkeypatch.setattr("ground_station.livewatch.reader.LiveReader", MockLiveReader)
-    monkeypatch.setattr("time.sleep", lambda x: None)
-    
-    # reset cache
-    rtos_api._rtos_cache = None
-    rtos_api._rtos_cache_time = 0
-    
-    res = rtos_api.get_rtos_state()
-    assert res["available"] is True
-    assert res["tasks"][0]["name"] == "Test"
-    assert res["tasks"][0]["cpu_percent"] == 20.0
-    assert res["heap_free"] == 1024
-    
-def test_api_rtos_failure(monkeypatch):
-    class MockLiveReaderFail:
-        def __init__(self, *args, **kwargs):
-            pass
-        def __enter__(self): raise RuntimeError("Probe disconnected")
-        def __exit__(self, *a): pass
-        
-    monkeypatch.setattr("ground_station.livewatch.reader.LiveReader", MockLiveReaderFail)
-    rtos_api._rtos_cache = None
-    rtos_api._rtos_cache_time = 0
-    
-    res = rtos_api.get_rtos_state()
-    assert res["available"] is False
-    assert "Probe disconnected" in res["reason"]
+def _run(monkeypatch, frames, clock):
+    lr = FakeReader(frames, NAMES)
+    monkeypatch.setattr(rtos_api, "_open_reader", lambda: lr)
+    monkeypatch.setattr(rtos_api.time, "time", lambda: clock[0])
+    rtos_api.reset()
+    return lr
+
+
+def test_first_call_no_cpu_then_window(monkeypatch):
+    clock = [100.0]
+    a = frame(0, [(0x20002000, 2, 0, 5, 0, 100)])
+    b = frame(168_000_000, [(0x20002000, 2, 0, 5, 33_600_000, 99)])
+    _run(monkeypatch, [a, a, b], clock)
+    r1 = rtos_api.get_rtos_state()
+    assert r1["available"] and r1["tasks"][0]["cpu_percent"] is None
+    assert rtos_api.get_rtos_state() is r1                    # cached inside CACHE_S
+    clock[0] += 3
+    r2 = rtos_api.get_rtos_state()                            # same fw snapshot: prev kept
+    assert r2["tasks"][0]["cpu_percent"] is None
+    clock[0] += 3
+    r3 = rtos_api.get_rtos_state()
+    assert r3["tasks"][0]["cpu_percent"] == 20.0 and r3["cpu_window_s"] == 1.0
+    clock[0] += 3
+    r4 = rtos_api.get_rtos_state()                            # fw not advanced: last CPU % carried
+    assert r4["tasks"][0]["cpu_percent"] == 20.0
+
+
+def test_probe_failure_is_unavailable(monkeypatch):
+    def boom():
+        raise RuntimeError("no probe")
+    monkeypatch.setattr(rtos_api, "_open_reader", boom)
+    rtos_api.reset()
+    r = rtos_api.get_rtos_state()
+    assert r == {"available": False, "reason": "RuntimeError: no probe"}
+    assert rtos_api._lock.acquire(blocking=False)
+    rtos_api._lock.release()
+
+
+def test_busy_lock_returns_without_blocking(monkeypatch):
+    rtos_api.reset()
+    rtos_api._lock.acquire()
+    try:
+        assert rtos_api.get_rtos_state() == {"available": False, "reason": "probe busy"}
+    finally:
+        rtos_api._lock.release()
