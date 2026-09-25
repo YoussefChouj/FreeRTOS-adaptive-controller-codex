@@ -1224,7 +1224,9 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     # Add analysis status from tracking
                     try:
                         from ground_station.analysis.flight_test_folder import load_analysis_status
-                        sid = status.get("session_id", "") or analyse_meta.get("session_id", "")
+                        # analysis_status.json is keyed by the session folder name
+                        sid = (status.get("session_id", "") or analyse_meta.get("session_id", "")
+                               or Path(status.get("session_dir") or "").name)
                         if sid:
                             analysis_data = load_analysis_status().get(sid, {})
                             if analysis_data:

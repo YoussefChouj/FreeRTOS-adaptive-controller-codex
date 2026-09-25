@@ -779,6 +779,32 @@ class TestRpmInFlightReport:
         # Motor2 ~3200 RPM
         assert rpm["motor2"]["mean"] == pytest.approx(3200.0, rel=0.05)
 
+    def test_rpm_leftover_period_with_frozen_edges_is_not_reported(self, tmp_path):
+        """Disarmed drone: edges never advance but the period register holds an
+        old value. No RPM may be reported (was 19k RPM on a real session)."""
+        session_dir = tmp_path / "rpm-leftover"
+        session_dir.mkdir()
+        rows = ["received_ns,slot,key,value"]
+        for i in range(100):
+            t_ns = 1_000_000_000 + i * 10_000_000
+            rows.append(f"{t_ns},0,arm,0.0")
+            for ch in range(4):
+                rows.append(f"{t_ns},2,slot2.rpm_dbg_period_cyc[{ch}],520000")
+                rows.append(f"{t_ns},2,slot2.rpm_dbg_edges[{ch}],{77 + ch}")
+        (session_dir / "telemetry.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
+        (session_dir / "manifest.json").write_text("{}", encoding="utf-8")
+        out_dir = tmp_path / "rpm-leftover-report"
+
+        from ground_station.analysis.flight_report import generate_report
+        generate_report(str(session_dir), out_dir=str(out_dir))
+
+        rpm = json.loads((out_dir / "metrics.json").read_text())["rpm"]
+        for motor in ("motor1", "motor2", "motor3", "motor4"):
+            assert rpm[motor]["mean"] == 0.0
+            assert rpm[motor]["stale_fraction"] == 1.0
+        assert "asymmetry_index" not in rpm
+        assert "Motors not spinning" in (out_dir / "summary.md").read_text(encoding="utf-8")
+
     def test_rpm_stale_fraction_for_frozen_motor(self, tmp_path):
         """Motor3 has frozen edges after sample 150 out of 200 => stale fraction > 0."""
         session_dir = self._create_rpm_session(tmp_path)

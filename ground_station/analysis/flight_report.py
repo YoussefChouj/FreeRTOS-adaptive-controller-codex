@@ -719,19 +719,25 @@ def compute_metrics(
 
         # Stale detection: edge counter not increasing for >=3 consecutive samples
         _STALE_WINDOW = 3
-        stale_count = 0
+        stale_mask: list[bool] = []
         consecutive_stale = 0
         prev_edge: float | None = None
         for ec in edges_aligned:
             if prev_edge is not None and ec <= prev_edge:
                 consecutive_stale += 1
-                if consecutive_stale >= _STALE_WINDOW:
-                    stale_count += 1
             else:
                 consecutive_stale = 0
+            stale_mask.append(consecutive_stale >= _STALE_WINDOW)
             prev_edge = ec if ec > 0 else prev_edge
+        # Edge counter never advanced: the period register holds a leftover
+        # value from an earlier spin, so no sample measures the motor.
+        if max(edges_aligned) <= edges_aligned[0]:
+            stale_mask = [True] * n
+        stale_count = sum(stale_mask)
 
-        valid_rpms = [r for r in rpm_series if not math.isnan(r)]
+        # Stats over fresh samples only; stale samples repeat an old period.
+        valid_rpms = [r for r, s in zip(rpm_series, stale_mask)
+                      if not s and not math.isnan(r)]
         motor_label = f"motor{ch_idx + 1}"
         if valid_rpms:
             metrics["rpm"][motor_label] = {
