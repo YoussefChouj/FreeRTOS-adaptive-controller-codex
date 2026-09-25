@@ -1019,13 +1019,38 @@
       '<div class="pp-container">',
 
       /* Canvas area */
-      '<div class="pp-canvas-wrap" id="pp-2d-wrap">',
+      '<div id="pp-2d-wrap" class="pp-canvas-wrap">',
       '<canvas id="pp-canvas" class="pp-canvas"></canvas>',
       '<div id="pp-demo-badge" class="pp-demo-badge">No position data</div>',
       '<div class="pp-controls">',
       '<button id="pp-zoom-in" class="pp-btn pp-btn-sm">+</button>',
       '<button id="pp-zoom-out" class="pp-btn pp-btn-sm">&#8722;</button>',
       '<button id="pp-reset-view" class="pp-btn pp-btn-sm">&#8634;</button>',
+      '</div>',
+      '</div>',
+
+      /* 3D view */
+      '<div class="pp-view-toggle">',
+      '<button id="pp-view-2d" class="pp-view-btn active">2D</button>',
+      '<button id="pp-view-3d" class="pp-view-btn">3D</button>',
+      '</div>',
+      '<div id="pp-3d-wrap" class="pp-3d-wrap" style="display:none">',
+      '<canvas id="pp-3d-canvas" class="pp-3d-canvas"></canvas>',
+      '<div class="pp-3d-controls">',
+      '<button id="pp-3d-top" class="pp-3d-btn" title="Top view (XZ)">Top</button>',
+      '<button id="pp-3d-side" class="pp-3d-btn" title="Side view">Side</button>',
+      '<button id="pp-3d-front" class="pp-3d-btn" title="Front view">Front</button>',
+      '<button id="pp-3d-iso" class="pp-3d-btn active" title="Isometric view">Iso</button>',
+      '<button id="pp-3d-reset" class="pp-3d-btn" title="Reset view">Reset</button>',
+      '<button id="pp-3d-clear" class="pp-3d-btn" title="Clear 3D path">Clear</button>',
+      '</div>',
+      '<div class="pp-3d-legend">',
+      '<div class="pp-3d-legend-item"><div class="pp-3d-legend-line" style="background:#4a9eff"></div>Actual path</div>',
+      '<div class="pp-3d-legend-item"><div class="pp-3d-legend-dash"></div>Desired path</div>',
+      '<div id="pp-3d-error" class="pp-3d-legend-item" style="margin-top:4px;color:#4a9eff">Error: — m</div>',
+      '</div>',
+      '<div class="pp-3d-controls" style="bottom:auto;top:8px;right:8px">',
+      '<div class="pp-3d-follow-row"><span>Follow drone</span><div id="pp-3d-follow-toggle" class="pp-3d-follow-toggle" role="switch" aria-checked="false" title="Toggle follow drone"></div></div>',
       '</div>',
       '</div>',
 
@@ -1090,16 +1115,22 @@
       '<div class="pp-hint">Options: points, spacing&nbsp;(m), &#177;box&nbsp;(m), altitude&nbsp;(m).</div>',
       '</div>',
 
-      '<div>',
-      '<div class="pp-section-label">Legend</div>',
-      '<div class="pp-legend">',
-      '<div class="pp-legend-item"><div class="pp-legend-dot" style="background:#4a9eff"></div>Current Position</div>',
-      '<div class="pp-legend-item"><div class="pp-legend-dot" style="background:#4ecca3"></div>Home</div>',
-      '<div class="pp-legend-item"><div class="pp-legend-dot" style="background:#e94560"></div>Target</div>',
-      '<div class="pp-legend-item"><div class="pp-legend-dot" style="background:#f5a623"></div>Waypoints</div>',
-      '<div class="pp-legend-item"><div class="pp-legend-line" style="background:rgba(74,158,255,0.6)"></div>Trajectory</div>',
-      '</div>',
-      '</div>',
+       '<div>',
+       '<div class="pp-section-label">Session data</div>',
+       '<div id="pp-session-status" class="pp-demo-badge" style="position:static;cursor:default">No session loaded</div>',
+       '<button id="pp-load-session" class="pp-btn pp-btn-sm" style="margin-top:4px">Load last session</button>',
+       '</div>',
+
+       '<div>',
+       '<div class="pp-section-label">Legend</div>',
+       '<div class="pp-legend">',
+       '<div class="pp-legend-item"><div class="pp-legend-dot" style="background:#4a9eff"></div>Current Position</div>',
+       '<div class="pp-legend-item"><div class="pp-legend-dot" style="background:#4ecca3"></div>Home</div>',
+       '<div class="pp-legend-item"><div class="pp-legend-dot" style="background:#e94560"></div>Target</div>',
+       '<div class="pp-legend-item"><div class="pp-legend-dot" style="background:#f5a623"></div>Waypoints</div>',
+       '<div class="pp-legend-item"><div class="pp-legend-line" style="background:rgba(74,158,255,0.6)"></div>Trajectory</div>',
+       '</div>',
+       '</div>',
 
       '</div>',
       '</div>'
@@ -1113,6 +1144,7 @@
 
       _canvas = q('pp-canvas');
       _ctx = _canvas.getContext('2d');
+      _el3DCanvas = q('pp-3d-canvas');
       _elMetrics = q('pp-metrics');
       _elWaypointTable = q('pp-wp-table');
       _elDemoIndicator = q('pp-demo-badge');
@@ -1134,6 +1166,19 @@
       window.addEventListener('resize', resizeCanvas);
       if (typeof ResizeObserver !== 'undefined') {
         new ResizeObserver(resizeCanvas).observe(_canvas.parentElement);
+        new ResizeObserver(function () {
+          if (!_el3DCanvas) return;
+          if (_threeRenderer && _threeCamera) {
+            var w3 = _el3DCanvas.clientWidth;
+            var h3 = _el3DCanvas.clientHeight;
+            if (w3 > 0 && h3 > 0) {
+              _threeCamera.aspect = w3 / h3;
+              _threeCamera.updateProjectionMatrix();
+              _threeRenderer.setSize(w3, h3);
+              render3D();
+            }
+          }
+        }).observe(document.getElementById('pp-3d-wrap'));
       }
 
       _waypoints = [];
