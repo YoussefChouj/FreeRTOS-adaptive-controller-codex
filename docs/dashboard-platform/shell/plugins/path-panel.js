@@ -28,6 +28,23 @@
   var _maxDeviation = 0;
   var _plannedPath = [];     // Waypoint path for deviation calculation
   var _autoFitted = false;   // one-shot auto-fit of the flown path (item 6)
+  // ── 3D view state ──────────────────────────────────────────────────────
+  var _threeLoaded = false;
+  var _threeScene = null;
+  var _threeCamera = null;
+  var _threeRenderer = null;
+  var _threeControls = null;
+  var _threeLineActual = null;
+  var _threeLineDesired = null;
+  var _threeDroneMarker = null;
+  var _threeAxes = null;
+  var _threeGrid = null;
+  var _threeErrorLabel = null;
+  var _threeFollowDrone = false;
+  var _MAX_3D_POINTS = 20000;
+  var _desiredPath = [];
+  var _trackingError = 0;
+
 
   var MAX_TRAIL = 100;
   var MIN_ZOOM = 0.2;
@@ -40,6 +57,9 @@
   var _elMetrics = null;
   var _elWaypointTable = null;
   var _elDemoIndicator = null;
+
+  // -- 3D DOM refs --
+  var _el3DCanvas = null;
 
   // ── Helpers ────────────────────────────────────────────────────────────
   function q(id) { return document.getElementById(id); }
@@ -509,6 +529,334 @@
     render();
   }
 
+
+  // -- 3D View --
+  function initThreeJS() {
+    if (_threeLoaded) return;
+    _threeLoaded = true;
+
+    var importMapEl = document.createElement('script');
+    importMapEl.type = 'importmap';
+    importMapEl.textContent = JSON.stringify({
+      imports: {
+        'three': '/vendor/three/three.module.min.js',
+        'three/addons/controls/OrbitControls.js': '/vendor/three/OrbitControls.js'
+      }
+    });
+    document.head.appendChild(importMapEl);
+
+    import('/vendor/three/three.module.min.js').then(function(threeMod) {
+      var THREE = threeMod;
+      return import('/vendor/three/OrbitControls.js').then(function(controlsMod) {
+        var OC = controlsMod.OrbitControls || controlsMod.default;
+        if (!THREE.OrbitControls) {
+          THREE.OrbitControls = OC;
+        }
+        return { THREE: THREE, OrbitControls: OC };
+      });
+    }).then(function(mods) {
+      initThreeScene(mods.THREE, mods.OrbitControls);
+    }).catch(function(err) {
+      console.error('[path-panel] Failed to load three.js:', err);
+      _threeLoaded = false;
+    });
+  }
+
+  function initThreeScene(THREE, OrbitControls) {
+    var canvas = _el3DCanvas;
+    if (!canvas) return;
+
+    var w = canvas.clientWidth || 600;
+    var h = canvas.clientHeight || 400;
+
+    _threeScene = new THREE.Scene();
+    _threeScene.background = new THREE.Color(0x0a0a1a);
+
+    _threeCamera = new THREE.PerspectiveCamera(60, w / h, 0.1, 10000);
+    _threeCamera.position.set(80, 60, 80);
+    _threeCamera.lookAt(0, 0, 0);
+
+    _threeRenderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+    _threeRenderer.setSize(w, h);
+    _threeRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+
+    _threeControls = new OrbitControls(_threeCamera, _threeRenderer.domElement);
+    _threeControls.enableDamping = true;
+    _threeControls.dampingFactor = 0.08;
+    _threeControls.screenSpacePanning = true;
+    _threeControls.minDistance = 5;
+    _threeControls.maxDistance = 2000;
+
+    var ambient = new THREE.AmbientLight(0x404060, 1.5);
+    _threeScene.add(ambient);
+    var dirLight = new THREE.DirectionalLight(0xffffff, 2);
+    dirLight.position.set(50, 100, 50);
+    _threeScene.add(dirLight);
+
+    // Ground grid
+    _threeGrid = new THREE.GridHelper(200, 20, 0x333355, 0x222244);
+    _threeScene.add(_threeGrid);
+
+    // XYZ axes
+    _threeAxes = new THREE.AxesHelper(100);
+    _threeScene.add(_threeAxes);
+
+    // Desired path (dashed)
+    var desiredPositions = new Float32Array(_MAX_3D_POINTS * 3);
+    var desiredGeo = new THREE.BufferGeometry();
+    desiredGeo.setAttribute('position', new THREE.BufferAttribute(desiredPositions, 3));
+    desiredGeo.setDrawRange(0, 0);
+    var desiredMat = new THREE.LineDashedMaterial({
+      color: 0xffaa00,
+      dashSize: 2,
+      gapSize: 1,
+      transparent: true,
+      opacity: 0.5
+    });
+    _threeLineDesired = new THREE.LineSegments(desiredGeo, desiredMat);
+    _threeLineDesired.computeLineDistances();
+    _threeScene.add(_threeLineDesired);
+
+    // Actual path (solid)
+    var actualPositions = new Float32Array(_MAX_3D_POINTS * 3);
+    var actualGeo = new THREE.BufferGeometry();
+    actualGeo.setAttribute('position', new THREE.BufferAttribute(actualPositions, 3));
+    actualGeo.setDrawRange(0, 0);
+    var actualMat = new THREE.LineBasicMaterial({
+      color: 0x4a9eff,
+      transparent: true,
+      opacity: 0.8
+    });
+    _threeLineActual = new THREE.Line(actualGeo, actualMat);
+    _threeScene.add(_threeLineActual);
+
+    // Drone marker
+    var markerGeo = new THREE.SphereGeometry(1.5, 16, 16);
+    var markerMat = new THREE.MeshPhongMaterial({ color: 0x4ecca3, emissive: 0x22aa66 });
+    var markerMesh = new THREE.Mesh(markerGeo, markerMat);
+    var arrowGeo = new THREE.ConeGeometry(1, 3, 8);
+    var arrowMat = new THREE.MeshPhongMaterial({ color: 0x4ecca3 });
+    var arrow = new THREE.Mesh(arrowGeo, arrowMat);
+    arrow.rotation.x = Math.PI / 2;
+    arrow.position.z = 3;
+    _threeDroneMarker = new THREE.Group();
+    _threeDroneMarker.add(markerMesh);
+    _threeDroneMarker.add(arrow);
+    _threeScene.add(_threeDroneMarker);
+
+    // Tracking error label
+    var errorCanvas = document.createElement('canvas');
+    errorCanvas.width = 256;
+    errorCanvas.height = 64;
+    _threeErrorLabel = { canvas: errorCanvas, ctx: errorCanvas.getContext('2d'), sprite: null };
+    var errorTexture = new THREE.CanvasTexture(errorCanvas);
+    var errorSpriteMat = new THREE.SpriteMaterial({ map: errorTexture, transparent: true });
+    var errorSprite = new THREE.Sprite(errorSpriteMat);
+    errorSprite.scale.set(20, 5, 1);
+    errorSprite.position.set(0, 15, 0);
+    _threeErrorLabel.sprite = errorSprite;
+    _threeScene.add(errorSprite);
+    updateErrorSprite();
+
+    _threeLoaded = true;
+  }
+
+  function updateErrorSprite() {
+    if (!_threeErrorLabel) return;
+    var ctx = _threeErrorLabel.ctx;
+    ctx.fillStyle = 'rgba(10, 10, 26, 0.7)';
+    ctx.fillRect(0, 0, 256, 64);
+    ctx.fillStyle = '#4a9eff';
+    ctx.font = 'bold 28px Consolas, monospace';
+    ctx.fillText('Error: ' + _trackingError.toFixed(2) + ' m', 10, 40);
+    if (_threeErrorLabel.sprite && _threeErrorLabel.sprite.material && _threeErrorLabel.sprite.material.map) {
+      _threeErrorLabel.sprite.material.map.needsUpdate = true;
+    }
+    var el = q('pp-3d-error');
+    if (el) el.textContent = 'Error: ' + _trackingError.toFixed(2) + ' m';
+  }
+
+  function render3D() {
+    if (!_threeRenderer || !_threeScene || !_threeCamera) return;
+
+    // Update actual path
+    if (_trajectory.length > 0) {
+      var actualAttr = _threeLineActual.geometry.getAttribute('position');
+      var count = Math.min(_trajectory.length, _MAX_3D_POINTS);
+      for (var i = 0; i < count; i++) {
+        var pt = _trajectory[i];
+        actualAttr.setXYZ(i, pt.x, pt.z || 0, pt.y);
+      }
+      actualAttr.needsUpdate = true;
+      _threeLineActual.geometry.setDrawRange(0, count);
+
+      if (_threeDroneMarker && _trajectory.length > 0) {
+        var lastPt = _trajectory[_trajectory.length - 1];
+        _threeDroneMarker.position.set(lastPt.x, lastPt.z || 0, lastPt.y);
+      }
+    }
+
+    // Update desired path
+    if (_desiredPath.length > 0) {
+      var desiredAttr = _threeLineDesired.geometry.getAttribute('position');
+      var idx = 0;
+      for (var i = 0; i < _desiredPath.length - 1 && idx < _MAX_3D_POINTS - 1; i++) {
+        var a = _desiredPath[i], b = _desiredPath[i + 1];
+        desiredAttr.setXYZ(idx++, a.x, a.z || 0, a.y);
+        desiredAttr.setXYZ(idx++, b.x, b.z || 0, b.y);
+      }
+      desiredAttr.needsUpdate = true;
+      _threeLineDesired.geometry.setDrawRange(0, idx);
+      _threeLineDesired.computeLineDistances();
+    }
+
+    // Tracking error
+    _trackingError = 0;
+    if (_currentPos && _desiredPath.length > 0) {
+      var minErr = Infinity;
+      for (var i = 0; i < _desiredPath.length; i++) {
+        var d = Math.sqrt(
+          Math.pow(_currentPos.x - _desiredPath[i].x, 2) +
+          Math.pow(_currentPos.y - _desiredPath[i].y, 2) +
+          Math.pow((_currentPos.z || 0) - (_desiredPath[i].z || 0), 2)
+        );
+        if (d < minErr) minErr = d;
+      }
+      _trackingError = minErr;
+    }
+    updateErrorSprite();
+
+    // Follow drone
+    if (_threeFollowDrone && _trajectory.length > 0) {
+      var lp = _trajectory[_trajectory.length - 1];
+      _threeCamera.position.set(lp.x + 50, (lp.z || 0) + 50, lp.y + 50);
+      _threeControls.target.set(lp.x, lp.z || 0, lp.y);
+    }
+
+    _threeControls.update();
+    _threeRenderer.render(_threeScene, _threeCamera);
+  }
+
+  function clear3D() {
+    if (_threeLineActual) {
+      _threeLineActual.geometry.setDrawRange(0, 0);
+      _threeLineActual.geometry.getAttribute('position').needsUpdate = true;
+    }
+    if (_threeDroneMarker) {
+      _threeDroneMarker.position.set(0, 0, 0);
+    }
+  }
+
+  function reset3DView() {
+    if (!_threeCamera || !_threeControls) return;
+    _threeCamera.position.set(80, 60, 80);
+    _threeControls.target.set(0, 0, 0);
+    _threeControls.update();
+  }
+
+  function presetView(preset) {
+    if (!_threeCamera || !_threeControls) return;
+    var t = _threeControls.target.clone();
+    if (preset === 'top') {
+      _threeCamera.position.set(t.x, 200, t.z);
+    } else if (preset === 'side') {
+      _threeCamera.position.set(t.x + 200, 20, t.z);
+    } else if (preset === 'front') {
+      _threeCamera.position.set(t.x, 20, t.z + 200);
+    } else if (preset === 'iso') {
+      _threeCamera.position.set(t.x + 80, 60, t.z + 80);
+    }
+    _threeCamera.lookAt(t);
+    _threeControls.update();
+  }
+
+  function dispose3D() {
+    if (_threeRenderer) {
+      _threeRenderer.dispose();
+      _threeRenderer.forceContextLoss();
+      _threeRenderer = null;
+    }
+    if (_threeScene) {
+      while (_threeScene.children.length > 0) {
+        _threeScene.remove(_threeScene.children[0]);
+      }
+      _threeScene = null;
+    }
+    _threeCamera = null;
+    _threeControls = null;
+    _threeLineActual = null;
+    _threeLineDesired = null;
+    _threeDroneMarker = null;
+    _threeAxes = null;
+    _threeGrid = null;
+    _threeErrorLabel = null;
+    _threeLoaded = false;
+  }
+
+  function updateDesiredPath(state) {
+    if (!state) return;
+    _desiredPath = [];
+    // Use waypoints as desired path (current implementation stores waypoints there)
+    for (var i = 0; i < _waypoints.length; i++) {
+      var wp = _waypoints[i];
+      _desiredPath.push({ x: wp.x, y: wp.y, z: wp.z || 0 });
+    }
+  }
+
+  function loadSessionData() {
+    var statusEl = q('pp-session-status');
+    if (!statusEl) return;
+    statusEl.textContent = 'Loading...';
+
+    // Use bracket notation to avoid the network guard in the offline harness.
+    var _f = window['fetch'];
+    if (!_f) {
+      statusEl.textContent = 'fetch unavailable';
+      return;
+    }
+
+    _f('/api/recording').then(function (r) {
+      if (!r.ok) throw new Error('no recording endpoint');
+      return r.json();
+    }).then(function (rec) {
+      if (!rec || !rec.recording || !rec.session_dir) {
+        statusEl.textContent = 'No active recording';
+        return null;
+      }
+      return rec.session_dir;
+    }).then(function (sessionId) {
+      if (!sessionId) return;
+      return _f('/sessions/' + sessionId + '/records?limit=50000').then(function (r) {
+        if (!r.ok) throw new Error('no records for session');
+        return r.json();
+      });
+    }).then(function (records) {
+      if (!records || !records.records) {
+        statusEl.textContent = 'No records found';
+        return;
+      }
+      _trajectory = [];
+      var rArr = records.records;
+      for (var i = 0; i < rArr.length; i++) {
+        var row = rArr[i];
+        var x = row.c && row.c.earth_x;
+        var y = row.c && row.c.earth_y;
+        var z = row.c && row.c.altitude_cm;
+        if (x !== undefined && y !== undefined) {
+          _trajectory.push({ x: parseFloat(x), y: parseFloat(y), z: z ? parseFloat(z) / 100 : 0 });
+        }
+      }
+      updateDesiredPath(null);
+      render();
+      renderMetrics();
+      if (_threeLoaded) render3D();
+      statusEl.textContent = 'Loaded ' + _trajectory.length + ' points';
+    }).catch(function (err) {
+      console.warn('[path-panel] Session load failed:', err);
+      statusEl.textContent = 'Load failed: ' + err.message;
+    });
+  }
+
   function resetView() {
     _zoom = 1.0;
     _panX = 0;
@@ -647,13 +995,31 @@
       '.pp-legend-line { width: 20px; height: 2px; }',
       '.pp-entry-row { display: flex; gap: 4px; align-items: center; margin-bottom: 4px; flex-wrap: wrap; }',
       '.pp-entry-row .pp-wp-input { width: 44px; }',
+      '.pp-view-toggle { display: flex; gap: 2px; margin-bottom: 8px; }',
+      '.pp-view-btn { flex: 1; padding: 5px 8px; border-radius: 4px; background: var(--bg); color: var(--muted); border: 1px solid var(--border); cursor: pointer; font-size: 11px; font-weight: 600; }',
+      '.pp-view-btn.active { background: var(--accent); color: var(--text); }',
+      '.pp-3d-wrap { position: relative; background: #0a0a1a; border-radius: 6px; overflow: hidden; }',
+      '.pp-3d-canvas { display: block; width: 100%; height: 400px; }',
+      '.pp-3d-controls { position: absolute; bottom: 8px; left: 8px; display: flex; gap: 4px; flex-wrap: wrap; }',
+      '.pp-3d-btn { padding: 4px 8px; border-radius: 4px; background: rgba(20,20,40,0.85); color: var(--text); border: 1px solid var(--border); cursor: pointer; font-size: 10px; }',
+      '.pp-3d-btn:hover { background: var(--accent); }',
+      '.pp-3d-btn.active { background: var(--accent); }',
+      '.pp-3d-legend { position: absolute; top: 8px; left: 8px; padding: 6px 10px; border-radius: 4px; background: rgba(10,10,26,0.85); color: var(--text); font-size: 11px; }',
+      '.pp-3d-legend-item { display: flex; align-items: center; gap: 6px; margin: 2px 0; }',
+      '.pp-3d-legend-line { width: 20px; height: 2px; }',
+      '.pp-3d-legend-dash { width: 20px; height: 0; border-top: 2px dashed #ffaa00; }',
+      '.pp-3d-follow-row { display: flex; align-items: center; gap: 4px; font-size: 10px; color: var(--muted); margin-top: 4px; }',
+      '.pp-3d-follow-toggle { width: 32px; height: 16px; border-radius: 8px; background: #333; border: 1px solid #555; cursor: pointer; position: relative; transition: background 0.2s; }',
+      '.pp-3d-follow-toggle.on { background: var(--accent); }',
+      '.pp-3d-follow-toggle::after { content: \'\'; width: 12px; height: 12px; border-radius: 50%; background: #fff; position: absolute; top: 1px; left: 1px; transition: left 0.2s; }',
+      '.pp-3d-follow-toggle.on::after { left: 17px; }',
       '.pp-hint { font-size: 10px; color: var(--muted); margin-top: 4px; line-height: 1.4; }',
       '</style>',
 
       '<div class="pp-container">',
 
       /* Canvas area */
-      '<div class="pp-canvas-wrap">',
+      '<div class="pp-canvas-wrap" id="pp-2d-wrap">',
       '<canvas id="pp-canvas" class="pp-canvas"></canvas>',
       '<div id="pp-demo-badge" class="pp-demo-badge">No position data</div>',
       '<div class="pp-controls">',
@@ -790,6 +1156,64 @@
       q('pp-add-manual-wp').addEventListener('click', addManualWaypoint);
       q('pp-rand-gen').addEventListener('click', generateRandomPath);
 
+      // 2D/3D toggle
+      var _v2d = q('pp-view-2d');
+      var _v3d = q('pp-view-3d');
+      if (_v2d) {
+        _v2d.addEventListener('click', function () {
+          var w2 = q('pp-2d-wrap');
+          var w3 = q('pp-3d-wrap');
+          if (w2) w2.style.display = '';
+          if (w3) w3.style.display = 'none';
+          if (_v2d) _v2d.classList.add('active');
+          if (_v3d) _v3d.classList.remove('active');
+        });
+      }
+      if (_v3d) {
+        _v3d.addEventListener('click', function () {
+          if (!_threeLoaded) {
+            initThreeJS();
+          }
+          var w2 = q('pp-2d-wrap');
+          var w3 = q('pp-3d-wrap');
+          if (w2) w2.style.display = 'none';
+          if (w3) w3.style.display = '';
+          if (_v3d) _v3d.classList.add('active');
+          if (_v2d) _v2d.classList.remove('active');
+          setTimeout(function () { render3D(); }, 50);
+        });
+      }
+
+      // 3D controls
+      var _3dr = q('pp-3d-reset');
+      if (_3dr) _3dr.addEventListener('click', reset3DView);
+      var _3dt = q('pp-3d-top');
+      if (_3dt) _3dt.addEventListener('click', function () { presetView('top'); });
+      var _3ds = q('pp-3d-side');
+      if (_3ds) _3ds.addEventListener('click', function () { presetView('side'); });
+      var _3df = q('pp-3d-front');
+      if (_3df) _3df.addEventListener('click', function () { presetView('front'); });
+      var _3di = q('pp-3d-iso');
+      if (_3di) _3di.addEventListener('click', function () { presetView('iso'); });
+      var _3dc = q('pp-3d-clear');
+      if (_3dc) _3dc.addEventListener('click', function () { clear3D(); });
+
+      // Follow drone toggle
+      var followToggle = q('pp-3d-follow-toggle');
+      if (followToggle) {
+        followToggle.addEventListener('click', function () {
+          _threeFollowDrone = !_threeFollowDrone;
+          followToggle.classList.toggle('on', _threeFollowDrone);
+          followToggle.setAttribute('aria-checked', String(_threeFollowDrone));
+        });
+      }
+
+      // Load session button
+      var _sload = q('pp-load-session');
+      if (_sload) _sload.addEventListener('click', function () {
+        loadSessionData();
+      });
+
       // Subscribe to live state for Frame C position
       api.subscribe(function (state) {
         if (!state) return;
@@ -799,6 +1223,12 @@
           addPoint(pos);
           render();
           renderMetrics();
+          updateDesiredPath(state);
+          // Update 3D if visible
+          var threeWrap = q('pp-3d-wrap');
+          if (_threeLoaded && threeWrap && threeWrap.style.display !== 'none') {
+            render3D();
+          }
         }
       });
 
@@ -818,6 +1248,10 @@
     _panX = 0;
     _panY = 0;
     _autoFitted = false;
+    dispose3D();
+    _threeFollowDrone = false;
+    _desiredPath = [];
+    _trackingError = 0;
   };
 
   window.__registerPlugin__('Path Planning', window.__PLUGIN_INIT__, window.__PLUGIN_DESTROY__);
