@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import json
 import os
-import random
+import secrets
 import selectors
 import socket
 import struct
@@ -59,7 +59,7 @@ if not _IS_WINDOWS:
 # ---------------------------------------------------------------------------
 # Token management
 # ---------------------------------------------------------------------------
-_DEFAULT_STATE_DIR = Path(__file__).resolve().parents[3] / ".agent_state"
+_DEFAULT_STATE_DIR = Path(__file__).resolve().parents[2] / ".agent_state"
 
 
 def _ensure_token(state_dir: Path | None = None) -> str:
@@ -69,9 +69,8 @@ def _ensure_token(state_dir: Path | None = None) -> str:
     token_file = d / "terminal-token"
     if token_file.exists():
         return token_file.read_text(encoding="utf-8").strip()
-    token = format(random.getrandbits(128), "032x")
+    token = secrets.token_hex(16)
     token_file.write_text(token + "\n", encoding="utf-8")
-    print(f"[terminal] token: {token}", file=sys.stderr)
     return token
 
 
