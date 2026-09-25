@@ -39,3 +39,17 @@ groups:
     doc: "MRAC roll-axis adaptive state"
     vars:
       - mrac_state.roll
+
+  rtos_health:
+    doc: "FreeRTOS health metrics: tasks, heap, loop timing, and reset cause"
+    vars:
+      - g_task_snapshot
+      - g_task_snapshot_count
+      - g_task_snapshot_total_time
+      - g_heap_free
+      - g_heap_min_free
+      - g_reset_csr
+      - g_loop_period_cyc_last
+      - g_loop_period_cyc_max
+      - g_loop_period_cyc_min
+      - g_loop_overrun_count

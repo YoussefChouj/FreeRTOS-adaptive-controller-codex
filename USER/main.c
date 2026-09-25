@@ -121,8 +121,12 @@ void vApplicationMallocFailedHook(void)
  */
 
 // main() is the entry point of the program; execution starts here after reset and startup code runs
+volatile uint32_t g_reset_csr = 0U;
+
 int main(void)
 { 
+    g_reset_csr = RCC->CSR;
+    RCC_ClearFlag();
     PlatformRegistry_Init();
     RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_CRC, ENABLE);
     FwIdentity_Compute();
@@ -227,6 +231,14 @@ void start_task(void *pvParameters)
 �������ܣ� ϵͳ������ (h��n sh�� g��ng n��ng: x�� t��ng ji��n sh�� q��) - "Function: System monitor"
 ֡��    ��  1 (zh��n l��: 1) - "Frame rate: 1 Hz" (runs once per second)
 ----------------------------------------------------------*/
+#define MAX_TASKS 10
+volatile UBaseType_t g_task_snapshot_count;
+volatile uint32_t g_task_snapshot_total_time;
+TaskStatus_t g_task_snapshot[MAX_TASKS];
+
+volatile size_t g_heap_free;
+volatile size_t g_heap_min_free;
+
 void SystemMonitor_Task(void *pvParameters)
 {
     TickType_t PreviousWakeTime; // Stores the last time this task was woken up
@@ -239,6 +251,10 @@ void SystemMonitor_Task(void *pvParameters)
                            // the dashboard battery widget (status.vbat / id.vbat), and the SysID
                            // operating-point log. Previously only called from the unused
                            // ANO_Report_UserData1(), so real_voltage stayed 0 everywhere.
+
+      g_task_snapshot_count = uxTaskGetSystemState((TaskStatus_t*)g_task_snapshot, MAX_TASKS, (uint32_t*)&g_task_snapshot_total_time);
+      g_heap_free = xPortGetFreeHeapSize();
+      g_heap_min_free = xPortGetMinimumEverFreeHeapSize();
 
       vTaskDelayUntil(&PreviousWakeTime, TimeIncrement ); // Sleep until exactly 1000ms has passed since last wake (maintains precise 1 Hz timing)
   }
@@ -385,10 +401,20 @@ void IMUSample_Task(void *pvParameters)
 �������ܣ� ������̬���� (h��n sh�� g��ng n��ng: k��ng zh�� z�� t��i r��n w��) - "Function: Control attitude task" (stabilization/flight control)
 ֡��    �� 200 (zh��n l��: 200) - "Frame rate: 200 Hz"
 ----------------------------------------------------------*/
+volatile uint32_t g_loop_period_cyc_last = 0;
+volatile uint32_t g_loop_period_cyc_max = 0;
+volatile uint32_t g_loop_period_cyc_min = 0xFFFFFFFFU;
+volatile uint32_t g_loop_overrun_count = 0;
+volatile uint32_t g_loop_stats_reset = 0;
+
+/* Overrun threshold is 1.5x nominal (1260000 cycles) to catch misses. */
+#define LOOP_OVERRUN_CYCLES (168000000U / 200U * 3U / 2U)
+
 void Stabilizer_Task(void *pvParameters)
 {
     TickType_t PreviousWakeTime;
     const TickType_t TimeIncrement = pdMS_TO_TICKS(5); // 5ms = 200 Hz
+    uint32_t last_cyccnt = DWT->CYCCNT;
     PreviousWakeTime = xTaskGetTickCount();
     MRAC_Init(); // Must run once before the control loop: populates mrac_config_* gains,
                  // mrac_to_mixer scalers, and axis_enable flags. Without this call all
@@ -397,6 +423,22 @@ void Stabilizer_Task(void *pvParameters)
     GyroFilter_Init(200.0f); // Phase-1 gyro LPF; starts DISABLED (pass-through) — see ADR-0004.
   while(1)
     {
+        uint32_t now = DWT->CYCCNT;
+        uint32_t delta = now - last_cyccnt;
+        last_cyccnt = now;
+        
+        if (g_loop_stats_reset) {
+            g_loop_period_cyc_max = 0;
+            g_loop_period_cyc_min = 0xFFFFFFFFU;
+            g_loop_overrun_count = 0;
+            g_loop_stats_reset = 0;
+        } else {
+            g_loop_period_cyc_last = delta;
+            if (delta > g_loop_period_cyc_max) g_loop_period_cyc_max = delta;
+            if (delta < g_loop_period_cyc_min) g_loop_period_cyc_min = delta;
+            if (delta > LOOP_OVERRUN_CYCLES) g_loop_overrun_count++;
+        }
+
                         // PERF: Keep fixed-period scheduling for control-loop determinism.
         stabilizer_Task(); // Run PID controllers and compute motor outputs to stabilize aircraft
 

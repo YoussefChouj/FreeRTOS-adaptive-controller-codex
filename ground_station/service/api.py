@@ -1473,6 +1473,11 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                 self._json(200, contract.to_dict())
             # GET /api/symbols — DWARF symbol names for the slot picker.
             # Pure read: static analysis of the firmware ELF, sends nothing.
+            # GET /api/rtos — probe-backed RTOS health snapshot
+            elif route == "/api/rtos":
+                from ground_station.service.rtos_api import get_rtos_state
+                self._json(200, get_rtos_state())
+
             elif route == "/api/symbols":
                 qs = parse_qs(urlsplit(self.path).query)
                 prefix = qs.get("prefix", [""])[0]

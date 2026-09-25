@@ -1137,3 +1137,9 @@ manifests:
       - Ctrler.locyPID.FB
       - Ctrler.Z_posPID.Des
       - Ctrler.Z_posPID.FB
+
+  rtos_health:
+    doc: "FreeRTOS health metrics: tasks, heap, loop timing, and reset cause"
+    default_hz: 1
+    vars:
+      - group:rtos_health

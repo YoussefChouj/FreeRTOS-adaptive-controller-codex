@@ -130,7 +130,16 @@
 /***************************************************************************************************************/
 /*                                FreeRTOS������ʱ�������״̬�ռ��йص�����ѡ��                                 */
 /***************************************************************************************************************/
-#define configGENERATE_RUN_TIME_STATS	        0                       //Ϊ1ʱ��������ʱ��ͳ�ƹ���
+#define configGENERATE_RUN_TIME_STATS	        1
+
+/* CoreDebug_DEMCR_TRCENA_Msk = 0x01000000, DWT_CTRL_CYCCNTENA_Msk = 1 */
+#define portCONFIGURE_TIMER_FOR_RUN_TIME_STATS() do { \
+    *((volatile uint32_t *)0xE000EDFC) |= 0x01000000; \
+    *((volatile uint32_t *)0xE0001000) |= 1; \
+} while(0)
+/* Shift by 12: 168MHz / 4096 = 41kHz tick rate. A 32-bit counter wraps in ~29 hours, avoiding wrap inside stats window. */
+#define portGET_RUN_TIME_COUNTER_VALUE() ( (*((volatile uint32_t *)0xE0001004)) >> 12 )
+                       //Ϊ1ʱ��������ʱ��ͳ�ƹ���
 #define configUSE_TRACE_FACILITY				1                       //Ϊ1���ÿ��ӻ����ٵ���
 #define configUSE_STATS_FORMATTING_FUNCTIONS	1                       //���configUSE_TRACE_FACILITYͬʱΪ1ʱ���������3������
                                                                         //prvWriteNameToBuffer(),vTaskList(),
