@@ -167,6 +167,7 @@ def apply_startup_preset(service, preset_name: str, *,
     # 3. Resolve each slot's manifest to DWARF names, then subscribe.
     store = ManifestStore()
     applied = []
+    preset_slots = {}
     for slot_spec in preset["slots"]:
         slot = int(slot_spec["slot"])
         manifest_name = slot_spec["manifest"]
@@ -181,6 +182,7 @@ def apply_startup_preset(service, preset_name: str, *,
                   f"{manifest_name!r} failed: {exc}", flush=True)
             continue
         n_ranges = bridge.subscribe_slot(slot=slot, divider=divider, ranges=list(mvars))
+        preset_slots[slot] = {"manifest": manifest_name, "n_ranges": n_ranges}
         applied.append((slot, divider, list(mvars)))
         print(f"[service]   slot {slot} -> {manifest_name} "
               f"@ {requested_hz} Hz (divider={divider}, "
@@ -194,6 +196,45 @@ def apply_startup_preset(service, preset_name: str, *,
     # default dashboard layout.
     bridge._resubscribe_fn = _replay_preset
     bridge._resubscribe_layout = "preset " + preset_name
+
+    # 4. Wait for 0x08 schema replies to register in the bridge.
+    #    After the pre-clear phase the MicoAir may route 0x08 replies to
+    #    the ephemeral socket used by preclear_fc_subscriptions instead of
+    #    the bridge's port 14550, causing schema registration to fail.
+    #    This retry loop re-subscribes slots whose schemas did not arrive
+    #    within the timeout, up to MAX_RETRIES times.
+    MAX_RETRIES = 3
+    TIMEOUT_S = 1.5
+
+    def _matches(schema, entry):
+        # A late 0x08 for the default layout must not count as the preset's.
+        return (schema is not None and schema.divider == entry[1]
+                and len(schema.ranges) == preset_slots[entry[0]]["n_ranges"])
+
+    def _missing_slots():
+        with bridge._stream_lock:
+            return [a for a in applied if not _matches(bridge._stream_schemas.get(a[0]), a)]
+
+    time.sleep(TIMEOUT_S)
+    for attempt in range(1, MAX_RETRIES + 1):
+        missing = _missing_slots()
+        if not missing:
+            break
+        for slot_n, div, names in missing:
+            print(f"[service]   RETRY {attempt}: slot {slot_n} schema missing, "
+                  f"re-subscribing ({preset_slots[slot_n]['manifest']})", flush=True)
+            bridge.subscribe_slot(slot=slot_n, divider=div, ranges=names)
+        time.sleep(TIMEOUT_S)
+
+    missing_ids = {a[0] for a in _missing_slots()}
+    for slot_n, _div, _names in applied:
+        if slot_n in missing_ids:
+            print(f"[service]   slot {slot_n} schema MISSING after "
+                  f"{MAX_RETRIES} retries", flush=True)
+        else:
+            print(f"[service]   slot {slot_n} schema registered "
+                  f"({len(bridge._stream_schemas[slot_n].ranges)} ranges)", flush=True)
+
     print(f"[service] Preset {preset_name!r} loaded. Wait ~2 s for "
           f"0x08 schema replies; /state.streams will populate.", flush=True)
 
