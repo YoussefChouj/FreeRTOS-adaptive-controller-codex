@@ -32,13 +32,15 @@ spawn)
     retry ssh_ "tmux has -t '$2' 2>/dev/null || tmux new -d -s '$2' '~/bin/oc-run $2 $3 ~/tasks/$2.md'"
     echo "spawned $2 on vps (base $(git rev-parse --short HEAD))" ;;
 wait)
-    # The remote loop exits 0 when .rc appears, 3 when the session died without one;
-    # ssh itself exits 255 on a network drop, which just reconnects.
+    # Trust only a sentinel printed remotely, never ssh's exit code: a dropped or killed
+    # ssh can exit 0 on Windows. No sentinel = connection lost, so reconnect.
     while :; do
-        r=0; ssh_ "while [ ! -e ~/runs/$2.rc ]; do tmux has -t '$2' 2>/dev/null || { sleep 5; [ -e ~/runs/$2.rc ] || exit 3; }; sleep 20; done; tail -1 ~/runs/$2.out" || r=$?
-        [ $r -eq 0 ] && break
-        [ $r -eq 3 ] && { echo "LOST: tmux session $2 ended without a result; read 'log $2 60'"; exit 3; }
-        echo "vps-worker: connection lost (rc=$r), reconnecting in 30s" >&2; sleep 30
+        o=$(ssh_ "while [ ! -e ~/runs/$2.rc ]; do tmux has -t '$2' 2>/dev/null || { sleep 5; [ -e ~/runs/$2.rc ] || { echo @@LOST; exit; }; }; sleep 20; done; echo @@READY; tail -1 ~/runs/$2.out" 2>/dev/null || true)
+        case "$o" in
+            *@@READY*) echo "${o#*@@READY}" | sed '/^$/d'; break ;;
+            *@@LOST*) echo "LOST: tmux session $2 ended without a result; read 'log $2 60'"; exit 3 ;;
+        esac
+        echo "vps-worker: connection lost, reconnecting in 30s" >&2; sleep 30
     done
     retry git fetch -q vps "worker/$2:refs/remotes/vps/$2" && digest "$2" ;;
 status)
