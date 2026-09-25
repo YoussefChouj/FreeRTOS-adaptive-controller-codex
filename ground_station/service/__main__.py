@@ -180,11 +180,11 @@ def apply_startup_preset(service, preset_name: str, *,
             print(f"[service]   slot {slot} manifest "
                   f"{manifest_name!r} failed: {exc}", flush=True)
             continue
-        bridge.subscribe_slot(slot=slot, divider=divider, ranges=list(mvars))
+        n_ranges = bridge.subscribe_slot(slot=slot, divider=divider, ranges=list(mvars))
         applied.append((slot, divider, list(mvars)))
         print(f"[service]   slot {slot} -> {manifest_name} "
               f"@ {requested_hz} Hz (divider={divider}, "
-              f"{len(list(mvars))} vars)", flush=True)
+              f"{len(mvars)} vars, {n_ranges} ranges)", flush=True)
 
     def _replay_preset():
         for slot_n, div, names in applied:

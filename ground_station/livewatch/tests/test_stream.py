@@ -503,3 +503,142 @@ def test_schema_with_no_requested_hint_still_decodes():
     payload = struct.pack(">BBBH", 1, TRANSPORT_UART5, 0, 8) + struct.pack(
         "<IHH", SRAM + 0x200, 4, 2)
     assert decode_schema(1, payload, ()).ranges[0].address == SRAM + 0x200
+
+
+# --------------------------------------------------------------------------
+# coalesce_ranges and per-element names
+# --------------------------------------------------------------------------
+
+from ground_station.livewatch.stream import coalesce_ranges
+
+
+def test_coalesce_contiguous_same_size_fmt():
+    """Three adjacent float32 vars coalesce into one count=3 range."""
+    r1 = StreamRange(SRAM, 4, 1, "a", "f")
+    r2 = StreamRange(SRAM + 4, 4, 1, "b", "f")
+    r3 = StreamRange(SRAM + 8, 4, 1, "c", "f")
+    out = coalesce_ranges([r1, r2, r3])
+    assert len(out) == 1
+    assert out[0].count == 3
+    assert out[0].address == SRAM
+    assert out[0].name == "a"
+    # Per-element names preserved
+    assert out[0]._names == ("a", "b", "c")
+
+
+def test_coalesce_preserves_non_contiguous_separate():
+    """Gaps in address space prevent coalescing."""
+    r1 = StreamRange(SRAM, 4, 1, "a", "f")
+    r2 = StreamRange(SRAM + 8, 4, 1, "b", "f")  # 4-byte gap
+    out = coalesce_ranges([r1, r2])
+    assert len(out) == 2
+
+
+def test_coalesce_preserves_different_sizes_separate():
+    """Same address but different sizes stay separate."""
+    r1 = StreamRange(SRAM, 2, 1, "short", "H")
+    r2 = StreamRange(SRAM + 2, 4, 1, "float", "f")
+    out = coalesce_ranges([r1, r2])
+    assert len(out) == 2
+
+
+def test_coalesce_preserves_different_fmts_separate():
+    """Same size but different fmt (unsigned vs signed) stay separate."""
+    r1 = StreamRange(SRAM, 4, 1, "u", "I")
+    r2 = StreamRange(SRAM + 4, 4, 1, "s", "i")
+    out = coalesce_ranges([r1, r2])
+    assert len(out) == 2
+
+
+def test_coalesce_empty_returns_empty():
+    assert coalesce_ranges([]) == []
+
+
+def test_coalesce_single_returns_single():
+    r = StreamRange(SRAM, 4, 1, "x", "f")
+    out = coalesce_ranges([r])
+    assert len(out) == 1
+    assert out[0].count == 1
+
+
+def test_coalesce_count_reduction():
+    """40 adjacent vars must coalesce to fewer ranges."""
+    ranges = [StreamRange(SRAM + 4 * i, 4, 1, "v%d" % i, "f") for i in range(40)]
+    out = coalesce_ranges(ranges)
+    # All 40 are contiguous same-size-same-fmt -> 1 range
+    assert len(out) == 1
+    assert out[0].count == 40
+
+
+def test_stream_range_element_names_coalesced():
+    """For a coalesced range with stored _names, use them."""
+    names = ("a", "b", "c")
+    r = StreamRange(SRAM, 4, 3, "a", "f", _names=names)
+    assert r._element_names() == names
+
+
+def test_stream_range_element_names_non_coalesced_empty():
+    """For a non-coalesced range without _names, count>1 returns empty."""
+    r = StreamRange(SRAM, 4, 4, "rpm_dbg", "I")
+    # Empty tuple signals "use legacy behaviour" (one key with list value)
+    assert r._element_names() == ()
+
+
+def test_decode_schema_preserves_names():
+    """decode_schema copies _names from the requested hint."""
+    r = StreamRange(0x20000000, 4, 1, "orig", "f", _names=("orig",))
+    schema = _schema_for([r], slot=0, divider=1)
+    assert schema.ranges[0]._names == ("orig",)
+
+
+def test_schema_round_trip_with_coalesced():
+    """Coalesced range survives schema round-trip with correct names."""
+    r1 = StreamRange(SRAM, 4, 1, "a", "f")
+    r2 = StreamRange(SRAM + 4, 4, 1, "b", "f")
+    coalesced = coalesce_ranges([r1, r2])
+    assert len(coalesced) == 1
+    schema = _schema_for(coalesced, slot=0, divider=1)
+    assert len(schema.ranges) == 1
+    assert schema.ranges[0].count == 2
+    names = schema.ranges[0]._element_names()
+    assert names == ("a", "b")
+
+
+def test_columns_for_with_coalesced():
+    """columns_for produces per-element names from a coalesced schema."""
+    from ground_station.livewatch.stream_log import columns_for
+    r1 = StreamRange(SRAM, 4, 1, "theta[0]", "f")
+    r2 = StreamRange(SRAM + 4, 4, 1, "theta[1]", "f")
+    r3 = StreamRange(SRAM + 8, 4, 1, "theta[2]", "f")
+    coalesced = coalesce_ranges([r1, r2, r3])
+    schema = _schema_for(coalesced, slot=0, divider=1)
+    cols = columns_for(schema)
+    assert cols == ["theta[0]", "theta[1]", "theta[2]"]
+
+
+def test_columns_for_non_coalesced_still_works():
+    """Non-coalesced ranges produce their names unchanged."""
+    from ground_station.livewatch.stream_log import columns_for
+    r1 = StreamRange(SRAM, 4, 1, "var_a", "f")
+    r2 = StreamRange(SRAM + 4, 4, 1, "var_b", "f")
+    schema = _schema_for([r1, r2], slot=0, divider=1)
+    cols = columns_for(schema)
+    assert cols == ["var_a", "var_b"]
+
+
+def test_decoder_with_coalesced_uses_per_element_names():
+    """StreamDecoder._split emits one key per element, not one list."""
+    r1 = StreamRange(SRAM, 4, 1, "a", "f")
+    r2 = StreamRange(SRAM + 4, 4, 1, "b", "f")
+    coalesced = coalesce_ranges([r1, r2])
+    schema = _schema_for(coalesced, slot=0, divider=1)
+    # Pack two float values
+    payload = struct.pack("<2f", 1.5, 2.5)
+    dec = StreamDecoder(schema)
+    (seq, _, values), = dec.feed(_data_frame(0, payload))
+    assert "a" in values
+    assert "b" in values
+    assert values["a"] == 1.5
+    assert values["b"] == 2.5
+    # Not one key with a list
+    assert "a" not in [k for k in values if isinstance(values[k], list)]

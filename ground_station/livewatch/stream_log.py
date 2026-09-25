@@ -118,11 +118,14 @@ def _kind_of(sym) -> str:
 def columns_for(schema) -> list[str]:
     names = []
     for rng in schema.ranges:
-        label = rng.name or "0x%08X" % rng.address
-        if rng.count == 1:
-            names.append(label)
+        if rng._names is not None:
+            names.extend(rng._names)
         else:
-            names.extend("%s[%d]" % (label, i) for i in range(rng.count))
+            label = rng.name or "0x%08X" % rng.address
+            if rng.count == 1:
+                names.append(label)
+            else:
+                names.extend("%s[%d]" % (label, i) for i in range(rng.count))
     return names
 
 
@@ -190,8 +193,12 @@ def _run_usart3(data_port, ranges, divider, transport, seconds, out_path,
                 for seq, t_ms, values in decoder.feed(data.read(waiting)):
                     flat = []
                     for rng in schema.ranges:
-                        got = values[rng.name or "r%d" % len(flat)]
-                        flat.extend(got if isinstance(got, list) else [got])
+                        if rng._names is not None:
+                            for en in rng._names:
+                                flat.append(values.get(en, 0))
+                        else:
+                            got = values.get(rng.name or "r%d" % len(flat), 0)
+                            flat.extend(got if isinstance(got, list) else [got])
                     writer.writerow(
                         [t_ms, "%.4f" % (time.monotonic() - t0), seq] + flat)
                     rows += 1
@@ -265,8 +272,12 @@ def run(control_port, data_port, ranges, divider, transport, seconds, out_path,
                 for seq, t_ms, values in decoder.feed(data.read(waiting)):
                     flat = []
                     for rng in schema.ranges:
-                        got = values[rng.name or "r%d" % len(flat)]
-                        flat.extend(got if isinstance(got, list) else [got])
+                        if rng._names is not None:
+                            for en in rng._names:
+                                flat.append(values.get(en, 0))
+                        else:
+                            got = values.get(rng.name or "r%d" % len(flat), 0)
+                            flat.extend(got if isinstance(got, list) else [got])
                     writer.writerow(
                         [t_ms, "%.4f" % (time.monotonic() - t0), seq] + flat)
                     rows += 1
@@ -406,8 +417,12 @@ def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
                 writer, schema = writers[slot]
                 flat = []
                 for rng in schema.ranges:
-                    got = values[rng.name or "r%d" % len(flat)]
-                    flat.extend(got if isinstance(got, list) else [got])
+                    if rng._names is not None:
+                        for en in rng._names:
+                            flat.append(values.get(en, 0))
+                    else:
+                        got = values.get(rng.name or "r%d" % len(flat), 0)
+                        flat.extend(got if isinstance(got, list) else [got])
                 writer.writerow(
                     [t_ms, "%.4f" % (time.monotonic() - t0), seq] + flat)
                 rows[slot] += 1
@@ -506,10 +521,10 @@ def run_groups(control_port, data_port, groups, transport, seconds, out_path,
                 continue
             for slot, seq, t_ms, values in decoder.feed(data.read(waiting)):
                 writer, schema = writers[slot]
+                cols = columns_for(schema)
                 flat = []
-                for rng in schema.ranges:
-                    got = values[rng.name or "r%d" % len(flat)]
-                    flat.extend(got if isinstance(got, list) else [got])
+                for cname in cols:
+                    flat.append(values.get(cname, 0))
                 writer.writerow(
                     [t_ms, "%.4f" % (time.monotonic() - t0), seq] + flat)
                 rows[slot] += 1
