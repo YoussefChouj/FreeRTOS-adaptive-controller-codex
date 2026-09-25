@@ -1091,7 +1091,9 @@ manifests:
       Flight-test slot 2: attitude-loop setpoint/feedback/output per axis
       (tracking error = Des - FB), the four motor commands and throttle
       (asymmetric-load signature), and the two MRAC flags that tell a
-      PID-only run from an MRAC-active one.
+      PID-only run from an MRAC-active one. Measured motor speed: last
+      accepted revolution period per channel (RPM = 60*168e6/period) and
+      the monotonic edge counter (no new edges = motor stopped/stale).
     hz: 50
     vars:
       - Ctrler.rollPID.Des
@@ -1110,6 +1112,14 @@ manifests:
       - Throttle_out
       - mrac_flags.adaptation_on
       - mrac_flags.output_injection_on
+      - rpm_dbg_period_cyc[0]
+      - rpm_dbg_period_cyc[1]
+      - rpm_dbg_period_cyc[2]
+      - rpm_dbg_period_cyc[3]
+      - rpm_dbg_edges[0]
+      - rpm_dbg_edges[1]
+      - rpm_dbg_edges[2]
+      - rpm_dbg_edges[3]
 
   flight_test_position:
     doc: >

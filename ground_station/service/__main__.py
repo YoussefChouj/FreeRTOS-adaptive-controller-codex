@@ -118,6 +118,10 @@ def apply_startup_preset(service, preset_name: str, *,
     if service.bridge is None:
         raise RuntimeError("service.bridge is None -- cannot load preset")
 
+    # The pre-clear below silences subscribe data; stop the bridge watchdog
+    # from re-sending the dashboard layout over the preset meanwhile.
+    service.bridge._resubscribe_layout = None
+
     # Lazy import: capture_preset pulls in numpy/pyyaml/etc. We don't want
     # the simple `python -m ground_station.service` startup to pay that
     # cost unless the operator actually asked for a preset.
@@ -162,6 +166,7 @@ def apply_startup_preset(service, preset_name: str, *,
 
     # 3. Resolve each slot's manifest to DWARF names, then subscribe.
     store = ManifestStore()
+    applied = []
     for slot_spec in preset["slots"]:
         slot = int(slot_spec["slot"])
         manifest_name = slot_spec["manifest"]
@@ -175,12 +180,20 @@ def apply_startup_preset(service, preset_name: str, *,
             print(f"[service]   slot {slot} manifest "
                   f"{manifest_name!r} failed: {exc}", flush=True)
             continue
-        bridge.subscribe_slot(slot=slot, divider=divider, ranges=list(mvars),
-                              schema_timeout=1.0)
+        bridge.subscribe_slot(slot=slot, divider=divider, ranges=list(mvars))
+        applied.append((slot, divider, list(mvars)))
         print(f"[service]   slot {slot} -> {manifest_name} "
               f"@ {requested_hz} Hz (divider={divider}, "
               f"{len(list(mvars))} vars)", flush=True)
 
+    def _replay_preset():
+        for slot_n, div, names in applied:
+            bridge.subscribe_slot(slot=slot_n, divider=div, ranges=names)
+
+    # FC reboot mid-session -> the watchdog restores this preset, not the
+    # default dashboard layout.
+    bridge._resubscribe_fn = _replay_preset
+    bridge._resubscribe_layout = "preset " + preset_name
     print(f"[service] Preset {preset_name!r} loaded. Wait ~2 s for "
           f"0x08 schema replies; /state.streams will populate.", flush=True)
 

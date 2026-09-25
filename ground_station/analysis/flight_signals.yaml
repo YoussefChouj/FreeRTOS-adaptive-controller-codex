@@ -78,3 +78,11 @@ pos_z: slot3.ano_of.of_alt_cm
 pos_x_sp: slot3.Ctrler.locxPID.Des
 pos_y_sp: slot3.Ctrler.locyPID.Des
 pos_z_sp: slot3.Ctrler.Z_posPID.Des
+rpm_period_cyc1: slot2.rpm_dbg_period_cyc[0]
+rpm_edges1: slot2.rpm_dbg_edges[0]
+rpm_period_cyc2: slot2.rpm_dbg_period_cyc[1]
+rpm_edges2: slot2.rpm_dbg_edges[1]
+rpm_period_cyc3: slot2.rpm_dbg_period_cyc[2]
+rpm_edges3: slot2.rpm_dbg_edges[2]
+rpm_period_cyc4: slot2.rpm_dbg_period_cyc[3]
+rpm_edges4: slot2.rpm_dbg_edges[3]

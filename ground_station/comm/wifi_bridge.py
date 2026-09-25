@@ -228,6 +228,9 @@ class WifiBridge:
         # When the bridge auto-subscribed at start, it re-sends that request
         # whenever other frames arrive but no subscribe data has for a while.
         self._resubscribe_layout: Optional[str] = None
+        # When set (a multi-slot preset is active), the watchdog replays this
+        # instead of the dashboard layout, so an FC reboot restores the preset.
+        self._resubscribe_fn = None
         self._last_stream_rx = 0.0
         self._last_resubscribe = 0.0
         self._cmd_queue: queue.Queue[Optional[Dict[str, Any]]] = queue.Queue()
@@ -434,6 +437,11 @@ class WifiBridge:
         print("[wifi_bridge] frames arrive but no subscribe data: FC likely "
               f"rebooted, re-sending the {layout} subscribe",
               file=sys.stderr, flush=True)
+        fn = self._resubscribe_fn
+        if fn is not None:
+            threading.Thread(target=fn, name="wifi_bridge_resubscribe",
+                             daemon=True).start()
+            return
         threading.Thread(target=self._request_slot0_schema, args=(layout,),
                          name="wifi_bridge_resubscribe", daemon=True).start()
 
