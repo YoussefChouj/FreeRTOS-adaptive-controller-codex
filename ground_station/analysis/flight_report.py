@@ -1787,7 +1787,12 @@ def generate_report(
     manifest["controller"] = controller
     manifest["payload"] = payload
     manifest["notes"] = notes
-    manifest["signal_map_used"] = {k: v for k, v in signal_map.items() if k in pivoted}
+    # role -> first fallback key actually present in this session
+    manifest["signal_map_used"] = {
+        role: next(k for k in keys if k in pivoted)
+        for role, keys in signal_map.items()
+        if any(k in pivoted for k in keys)
+    }
 
     # Metrics
     metrics = compute_metrics(pivoted, segmentation, signal_map, telemetry)

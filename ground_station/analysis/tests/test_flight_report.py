@@ -254,6 +254,8 @@ class TestFlightReportGenerate:
         assert meta["preset"] == "test_override_preset"
         assert "signal_map_used" in meta
         assert isinstance(meta["signal_map_used"], dict)
+        assert meta["signal_map_used"], "no role resolved to a telemetry key"
+        assert all(isinstance(v, str) for v in meta["signal_map_used"].values())
         
         # Session 2: Test fallback to session_meta.json
         session_dir2 = _create_synthetic_session(tmp_path / "sess2")

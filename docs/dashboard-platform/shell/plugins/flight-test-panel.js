@@ -79,6 +79,21 @@
     payloadRow.appendChild(payloadLabel);
     payloadRow.appendChild(payloadSelect);
 
+    // Run label (becomes the session label in index.csv)
+    var labelRow = document.createElement('div');
+    labelRow.style.cssText = 'margin-bottom:4px;';
+    var labelLabel = document.createElement('span');
+    labelLabel.style.cssText = 'display:block;margin-bottom:2px;color:var(--muted,#666);';
+    labelLabel.textContent = 'Label:';
+    var labelInput = document.createElement('input');
+    labelInput.type = 'text';
+    labelInput.id = 'flight-test-label';
+    labelInput.placeholder = 'e.g. pid_hover_01';
+    labelInput.style.cssText = 'width:100%;font-size:11px;padding:2px 4px;' +
+      'box-sizing:border-box;';
+    labelRow.appendChild(labelLabel);
+    labelRow.appendChild(labelInput);
+
     // Notes field
     var notesRow = document.createElement('div');
     notesRow.style.cssText = 'margin-bottom:4px;';
@@ -103,6 +118,7 @@
     panel.appendChild(checkRow);
     panel.appendChild(ctrlRow);
     panel.appendChild(payloadRow);
+    panel.appendChild(labelRow);
     panel.appendChild(notesRow);
     panel.appendChild(statusEl);
     ctl.appendChild(panel);
@@ -169,11 +185,13 @@
         var ctrlSel = q('flight-test-controller');
         var payloadSel = q('flight-test-payload');
         var notesInp = q('flight-test-notes');
+        var labelInp = q('flight-test-label');
         return {
           analyse: check ? check.checked : false,
           controller: ctrlSel ? (ctrlSel.value || '') : '',
           payload: payloadSel ? (payloadSel.value || '') : '',
           notes: notesInp ? (notesInp.value || '').trim() : '',
+          label: labelInp ? (labelInp.value || '').trim() : '',
         };
       };
       var btn = q('record-btn');

@@ -1615,6 +1615,7 @@
       if (ft.controller) extra.controller = ft.controller;
       if (ft.payload) extra.payload = ft.payload;
       if (ft.notes) extra.notes = ft.notes;
+      if (ft.label) extra.label = ft.label;
       body = JSON.stringify(extra);
     }
     var ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
