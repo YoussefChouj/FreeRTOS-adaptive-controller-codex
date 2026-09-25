@@ -109,6 +109,7 @@
     return true;
   }
 
+  var _pollTries = 0;
   function _pollStatus() {
     fetch('/api/recording', { method: 'GET' })
       .then(function (r) { return r.json(); })
@@ -140,6 +141,11 @@
           el.style.color = '';
         }
         el.textContent = lines.length ? lines.join('  |  ') : '';
+        // Analysis runs in the background: keep polling until it finishes (max ~5 min).
+        var st = data.analysis_status;
+        if ((st === 'pending' || st === 'running') && _pollTries++ < 100) {
+          setTimeout(_pollStatus, 3000);
+        }
       })
       .catch(function () {
         // Ignore fetch errors
@@ -175,7 +181,7 @@
         btn._flightTestBound = true;
         btn.addEventListener('click', function () {
           // Stopping: poll for the analysis status afterwards.
-          if (window.recOn) setTimeout(_pollStatus, 1000);
+          if (window.recOn) { _pollTries = 0; setTimeout(_pollStatus, 1000); }
         });
       }
     }
