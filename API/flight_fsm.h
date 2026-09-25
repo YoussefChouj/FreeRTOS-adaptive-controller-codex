@@ -23,6 +23,12 @@ typedef enum {
 
 extern volatile FlightPhase_t flight_phase;
 
+/* Motor-idle gate: 1 = idle PWM allowed, 0 = motors stay at PWM_ZERO.
+ * Cleared on every ARM, DISARM, EMERGENCY, and landing->disarm transition.
+ * Set only by a deliberate stick gesture (RightStick bottom-right hold)
+ * or GS CMD 0x0E idx=1 while ARMED + GROUND_IDLE + throttle low. */
+extern volatile uint8_t g_motor_idle_enabled;
+
 typedef enum {
     FLIGHT_EVENT_ARM_REQUEST    = 0,
     FLIGHT_EVENT_DISARM_REQUEST = 1,

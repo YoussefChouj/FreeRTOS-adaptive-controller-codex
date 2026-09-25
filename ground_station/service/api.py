@@ -1125,6 +1125,8 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     "last_update_ns": getattr(snap, "last_update_ns", None),
                     "active_streams": len(streams),
                     "session_id": getattr(snap, "session_id", None),
+                    "active_preset": getattr(service, "active_preset", None),
+                    "preset_loaded_at": getattr(service, "preset_loaded_at", None),
                     "recorder": _recorder_status(service),
                     "process_rss_mb": _rss_mb,
                 }
@@ -1299,7 +1301,10 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                 # live from the service — kept reporting rising samples.
                 # Serve a fresh snapshot on every request; snapshot() is cheap
                 # and the /health handler already computes one per poll.
-                self._json(200, service.snapshot().__dict__)
+                state_dict = dict(service.snapshot().__dict__)
+                state_dict["active_preset"] = getattr(service, "active_preset", None)
+                state_dict["preset_loaded_at"] = getattr(service, "preset_loaded_at", None)
+                self._json(200, state_dict)
             # GET /sessions — list all sessions
             elif route == "/sessions":
                 try:
@@ -2412,7 +2417,7 @@ class ApiServer:
     # Telemetry keys the co-pilot sees on every turn; enough to answer "is it
     # armed / linked / healthy" without pulling the whole snapshot.
     _COPILOT_KEYS = ("status.arm", "status.flymode", "status.sbus_lost",
-                     "status.rc_authority", "status.estimator_ready",
+                     "status.rc_authority", "status.estimator_ready", "status.motor_idle",
                      "status.of_hold", "status.twc_execute", "status.vbat",
                      "status.roll_deg", "status.pitch_deg", "status.yaw_deg")
 

@@ -1023,7 +1023,7 @@ void Send_Groundstation_Telemetry_UART4(void)
     {
         // FRAME A �� header: [type][LEN_hi][LEN_lo][MAX_NUM_BASIS], payload 37 bytes (16-bit LEN)
         {
-            uint16_t payload_len = 41U; /* +1 rc_authority +1 of_hold +1 estimator_ready +1 GS_PROTO_VERSION */
+            uint16_t payload_len = 42U; /* +1 rc_authority +1 of_hold +1 estimator_ready +1 motor_idle_enabled +1 GS_PROTO_VERSION */
             Buf_Telemetry_UART4[2] = 0x01; // ID
             Buf_Telemetry_UART4[3] = (uint8_t)(payload_len >> 8);
             Buf_Telemetry_UART4[4] = (uint8_t)(payload_len & 0xFFU);
@@ -1054,6 +1054,7 @@ void Send_Groundstation_Telemetry_UART4(void)
         Buf_Telemetry_UART4[len++] = RCInput_GetAuthority(); /* 1=PC authority, 0=RC */
         Buf_Telemetry_UART4[len++] = g_of_hold_active; /* 1=OF position-hold, 0=angle mode (ch6) */
         Buf_Telemetry_UART4[len++] = g_estimator_ready; /* 1=estimator converged/armable, 0=warming up */
+        Buf_Telemetry_UART4[len++] = g_motor_idle_enabled; /* 1=idle PWM allowed, 0=motors at zero */
         Buf_Telemetry_UART4[len++] = GS_PROTO_VERSION; /* protocol version — must match serial_bridge.py */
 
         /* Close Frame A with its OWN XOR-CRC8 before appending Frame C, so Frame A
@@ -1950,6 +1951,25 @@ void Process_GroundStation_Command(void)
                      * motors. Pilot disarms via RC stick gesture after landing. */
                     GS_KeySDKflag = 0U;
                     RCInput_SetAuthority(0U);
+                }
+            }
+            /* idx 1: motor idle enable/disable (same guards as RC gesture) */
+            else if (idx == 1) {
+                if (((uint8_t)(val + 0.5f)) != 0) {
+                    if (FlightFSM_GetState() == FLIGHT_STATE_ARMED &&
+                        flight_phase == FLIGHT_PHASE_GROUND_IDLE &&
+                        RCInput_Get(RC_AXIS_THR) < RC_IDLE_THR_THRESHOLD &&
+                        !g_motor_idle_enabled)
+                    {
+                        g_motor_idle_enabled = 1U;
+                    }
+                } else {
+                    /* idle disable without disarming: return to zero-motors */
+                    if (FlightFSM_GetState() == FLIGHT_STATE_ARMED &&
+                        flight_phase == FLIGHT_PHASE_GROUND_IDLE)
+                    {
+                        g_motor_idle_enabled = 0U;
+                    }
                 }
             }
         }

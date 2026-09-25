@@ -120,6 +120,23 @@ void Check_Stick_Motion(void)
 		FlightFSM_Event(FLIGHT_EVENT_DISARM_REQUEST);
 		StickMotion.LeftStick_RightDown_cnt=0;StickMotion.LeftStick_LeftDown_cnt=0;
 	}
+
+	/* Idle-enable gesture: RightStick bottom-right (pitch MIN + roll MAX) held
+	 * for IDLE_ENABLE_Delay_time ticks.  Accepted only when ARMED, GROUND_IDLE,
+	 * throttle stick low, and idle not already enabled.  This is the deliberate
+	 * second step after arming that allows motors to spin at idle RPM.
+	 * RightStick_RightDown_cnt is counted above but otherwise unused. */
+	if (StickMotion.RightStick_RightDown_cnt >= IDLE_ENABLE_Delay_time)
+	{
+		if (FlightFSM_GetState() == FLIGHT_STATE_ARMED &&
+		    flight_phase == FLIGHT_PHASE_GROUND_IDLE &&
+		    is_Stick_MIN(eff_thr) &&
+		    !g_motor_idle_enabled)
+		{
+			g_motor_idle_enabled = 1U;
+		}
+		StickMotion.RightStick_RightDown_cnt = 0;
+	}
 }
 /*************************************************************************
 �� �� ����void Check_Fly_Mode(void)
@@ -166,7 +183,9 @@ void Check_Fly_Mode(void)
 
 	/* --- SBUS ch7 (FLYUP_CH): rising-edge fly-up to Z=0.5 m trigger -----------
 	 * Arms the drone if disarmed, then sets sbus_flyup_trigger.
-	 * Authority is released in StabilizerTask when the trigger is consumed.   */
+	 * Authority is released in StabilizerTask when the trigger is consumed.
+	 * Trigger is DROPPED (not pended) when idle is not enabled — motors must
+	 * not spin without the explicit idle gesture. */
 	{
 		static uint8_t ch6_prev = 0U;
 		uint8_t ch6_now = (FLYUP_CH > 500U) ? 1U : 0U;
@@ -174,7 +193,8 @@ void Check_Fly_Mode(void)
 		{
 			if (FlightFSM_GetState() == FLIGHT_STATE_DISARMED)
 				FlightFSM_Event(FLIGHT_EVENT_ARM_REQUEST);
-			if (FlightFSM_GetState() == FLIGHT_STATE_ARMED)
+			if (FlightFSM_GetState() == FLIGHT_STATE_ARMED &&
+			    g_motor_idle_enabled)
 			{
 				sbus_flyup_trigger = 1U;
 			}
@@ -184,7 +204,8 @@ void Check_Fly_Mode(void)
 
 	/* --- SBUS ch8 (PATH_EXEC_CH): rising-edge preset-path trigger --------------
 	 * Arms the drone (if needed) and sets sbus_path_trigger so the path
-	 * execution handler can launch the preset path loaded from the GS.         */
+	 * execution handler can launch the preset path loaded from the GS.
+	 * Trigger is DROPPED when idle is not enabled (same as ch7). */
 	{
 		static uint8_t ch8_prev = 0U;
 		uint8_t ch8_now = (PATH_EXEC_CH > 500U) ? 1U : 0U;
@@ -194,7 +215,8 @@ void Check_Fly_Mode(void)
 			{
 				FlightFSM_Event(FLIGHT_EVENT_ARM_REQUEST);
 			}
-			if (FlightFSM_GetState() == FLIGHT_STATE_ARMED)
+			if (FlightFSM_GetState() == FLIGHT_STATE_ARMED &&
+			    g_motor_idle_enabled)
 			{
 				RCInput_SetAuthority(1U);
 				sbus_path_trigger = 1U;

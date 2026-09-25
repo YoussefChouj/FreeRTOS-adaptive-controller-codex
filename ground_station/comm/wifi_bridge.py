@@ -1405,6 +1405,7 @@ class WifiBridge:
             "s_authority":           "status.rc_authority",
             "g_of_hold_active":     "status.of_hold",
             "g_estimator_ready":     "status.estimator_ready",
+            "g_motor_idle_enabled":  "status.motor_idle",
             # Battery
             "real_voltage":          "status.vbat",
             # MRAC bars (8 -- mirrors _decode_frame_a 32-byte MRAC block).

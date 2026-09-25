@@ -69,10 +69,10 @@ def _pack_telemetry_frame(frame_type: int, max_num_basis: int, payload: bytes) -
 
 
 def build_frame_a(max_num_basis: int, t_s: float) -> bytes:
-    """8 floats (sine, distinct Hz) + status bytes + proto_version; LEN = 41 (v13).
+    """8 floats (sine, distinct Hz) + status bytes + proto_version; LEN = 42 (v15).
 
-    v13 status (9 u8): arm, flymode, sbus_lost, twc_execute, twc_arrived,
-    rc_authority, of_hold, estimator_ready, GS_PROTO_VERSION. Matches send_data.c
+    v15 status (10 u8): arm, flymode, sbus_lost, twc_execute, twc_arrived,
+    rc_authority, of_hold, estimator_ready, motor_idle_enabled, GS_PROTO_VERSION. Matches send_data.c
     Frame A and serial_bridge `_unpack_frame_a`.
     """
     freqs_hz = [0.31, 0.47, 0.59, 0.71, 0.83, 0.97, 1.09, 1.21]
@@ -85,11 +85,12 @@ def build_frame_a(max_num_basis: int, t_s: float) -> bytes:
     rc_authority_u8 = 1
     of_hold_u8 = 0
     estimator_ready_u8 = 1
+    motor_idle_enabled_u8 = 0
     payload = struct.pack(
-        "<8fBBBBBBBBB",
+        "<8fBBBBBBBBBB",
         *floats,
         arm_u8, flymode_u8, sbus_lost_u8, twc_execute_u8, twc_arrived_u8,
-        rc_authority_u8, of_hold_u8, estimator_ready_u8,
+        rc_authority_u8, of_hold_u8, estimator_ready_u8, motor_idle_enabled_u8,
         GS_PROTO_VERSION,
     )
     return _pack_telemetry_frame(FRAME_A, max_num_basis, payload)

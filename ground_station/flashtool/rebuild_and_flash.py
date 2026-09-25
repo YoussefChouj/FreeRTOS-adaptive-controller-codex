@@ -286,7 +286,7 @@ def arm_status_from_telemetry(port: str, seconds: float = 2.0):
             ftype = buf[i + 2]
             ln = (buf[i + 3] << 8) | buf[i + 4]
             if 0 < ln <= 400 and i + 6 + ln <= len(buf):
-                if ftype == 0x01 and ln in (39, 41):
+                if ftype == 0x01 and ln in (39, 41, 42):
                     seen.add(buf[i + 6 + 32])
                     frames += 1
                 i += 6 + ln

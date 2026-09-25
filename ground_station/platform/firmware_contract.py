@@ -337,6 +337,20 @@ COMMAND_TABLE: dict[int, CommandSpec] = {
             danger_level="dangerous",
         ),
     ),
+    0x0E: CommandSpec(
+        id=0x0E, name="SDK_ARM_AUTHORITY",
+        description="Ground-station arm switch. idx 0: arm authority (val>=0.5 arm, "
+                    "<0.5 release). idx 1: motor idle enable (val>=0.5 enable idle PWM, "
+                    "<0.5 disable; requires ARMED + GROUND_IDLE).",
+        params=(
+            CommandParam(0, "arm_auth", "bool", 0, 1),
+            CommandParam(1, "motor_idle_enable", "bool", 0, 1),
+        ),
+        safety=SafetyClass(
+            description="Arms the drone or enables motor idle. Critical.",
+            danger_level="dangerous",
+        ),
+    ),
     0x0F: CommandSpec(
         id=0x0F, name="MULTIPLEX_FLAGS",
         description="Multiplexed command: MRAC flags (idx 0..12) or telemetry mode (idx 100..102).",

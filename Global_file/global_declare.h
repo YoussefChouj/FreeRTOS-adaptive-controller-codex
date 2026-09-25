@@ -44,11 +44,15 @@
  *      v13a: Added 4x u16 RPM channels to Frame C payload (50 B payload total).
  * v14: Frame 0x05 grew 39->53 B always-on (added acc_bias[3] mg, gyro_bias[3] 1e-4 rad/s,
  *      cal_health u16). With EKF_TELEM_ENABLED=1: 53->73 B (added v_body[3] mm/s, P_diag[3]
- *      1e-3, NIS 1e-3, K_last[3] 1e-3). Added CMD 0x18 force_recal. */
-#define GS_PROTO_VERSION             14U
+ *      1e-3, NIS 1e-3, K_last[3] 1e-3). Added CMD 0x18 force_recal.
+ * v15: Frame 0x01 grew 41->42 B (added u8 status.motor_idle_enabled before proto_version):
+ *      1=idle PWM allowed (motors at 2150), 0=motors held at zero after arm.
+ *      Added CMD 0x0E idx=1 motor-idle enable/disable sub-command. */
+#define GS_PROTO_VERSION             15U
 
 #define ARM_Delay_time  150
 #define DISARM_Delay_time  50// 50*20ms = 1s
+#define IDLE_ENABLE_Delay_time  150  /* 150*10ms = 1.5s, same as arm */
 #define DisArmed    0    //���˻�����
 #define Armed       1    //���˻�����
 

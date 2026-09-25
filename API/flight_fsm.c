@@ -6,6 +6,7 @@
 
 static FlightState_t s_state = FLIGHT_STATE_DISARMED;
 volatile FlightPhase_t flight_phase = FLIGHT_PHASE_GROUND_IDLE;
+volatile uint8_t g_motor_idle_enabled = 0U;
 
 static void s_sync(FlightState_t st)
 {
@@ -25,6 +26,7 @@ void FlightFSM_Init(void)
 {
     taskENTER_CRITICAL();
     s_state = FLIGHT_STATE_DISARMED;
+    g_motor_idle_enabled = 0U;
     s_sync(s_state);
     taskEXIT_CRITICAL();
 }
@@ -37,16 +39,16 @@ void FlightFSM_Event(FlightEvent_t event)
         /* Pre-arm gate: refuse to arm until the attitude estimator has converged
          * (A2). IMU_EstimatorReady() has a hard timeout fallback so this can
          * never lock the pilot out. DANGEROUS_STOP is never gated. */
-        if (event == FLIGHT_EVENT_ARM_REQUEST && IMU_EstimatorReady()) { s_state = FLIGHT_STATE_ARMED;     s_sync(s_state); }
-        if (event == FLIGHT_EVENT_DANGEROUS_STOP)                      { s_state = FLIGHT_STATE_EMERGENCY; s_sync(s_state); }
+        if (event == FLIGHT_EVENT_ARM_REQUEST && IMU_EstimatorReady()) { g_motor_idle_enabled = 0U; s_state = FLIGHT_STATE_ARMED;     s_sync(s_state); }
+        if (event == FLIGHT_EVENT_DANGEROUS_STOP)                      { g_motor_idle_enabled = 0U; s_state = FLIGHT_STATE_EMERGENCY; s_sync(s_state); }
         break;
     case FLIGHT_STATE_ARMED:
-        if (event == FLIGHT_EVENT_DISARM_REQUEST) { s_state = FLIGHT_STATE_DISARMED;  s_sync(s_state); flight_phase = FLIGHT_PHASE_GROUND_IDLE; }
-        if (event == FLIGHT_EVENT_DANGEROUS_STOP) { s_state = FLIGHT_STATE_EMERGENCY; s_sync(s_state); flight_phase = FLIGHT_PHASE_GROUND_IDLE; }
+        if (event == FLIGHT_EVENT_DISARM_REQUEST) { g_motor_idle_enabled = 0U; s_state = FLIGHT_STATE_DISARMED;  s_sync(s_state); flight_phase = FLIGHT_PHASE_GROUND_IDLE; }
+        if (event == FLIGHT_EVENT_DANGEROUS_STOP) { g_motor_idle_enabled = 0U; s_state = FLIGHT_STATE_EMERGENCY; s_sync(s_state); flight_phase = FLIGHT_PHASE_GROUND_IDLE; }
         break;
     case FLIGHT_STATE_EMERGENCY:
-        if (event == FLIGHT_EVENT_RECOVER_SDK)    { s_state = FLIGHT_STATE_DISARMED;  s_sync(s_state); flight_phase = FLIGHT_PHASE_GROUND_IDLE; }
-        if (event == FLIGHT_EVENT_DISARM_REQUEST) { s_state = FLIGHT_STATE_DISARMED;  s_sync(s_state); flight_phase = FLIGHT_PHASE_GROUND_IDLE; }
+        if (event == FLIGHT_EVENT_RECOVER_SDK)    { g_motor_idle_enabled = 0U; s_state = FLIGHT_STATE_DISARMED;  s_sync(s_state); flight_phase = FLIGHT_PHASE_GROUND_IDLE; }
+        if (event == FLIGHT_EVENT_DISARM_REQUEST) { g_motor_idle_enabled = 0U; s_state = FLIGHT_STATE_DISARMED;  s_sync(s_state); flight_phase = FLIGHT_PHASE_GROUND_IDLE; }
         break;
     default:
         break;

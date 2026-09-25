@@ -71,7 +71,7 @@ except ImportError:  # pragma: no cover
 # v14: Frame 0x05 grew 39->53 B always-on (acc_bias, gyro_bias, cal_health).
 #       With EKF_TELEM_ENABLED=1: 53->73 B (v_body, P_diag, NIS, K_last).
 #       Added CMD 0x18 force_recal (ADR-0011).
-GS_PROTO_VERSION: int = 14
+GS_PROTO_VERSION: int = 15
 
 cmd_queue: "queue.Queue[Optional[Dict[str, Any]]]" = queue.Queue()
 
@@ -636,6 +636,7 @@ class SerialBridge:
         # emits 41. Accept both so the bridge parses either firmware build.
         of_hold_u8 = 0
         estimator_ready_u8 = 0
+        motor_idle_enabled_u8 = 0
         if len(payload) == 39:
             fmt = "<8fBBBBBBB"
             (
@@ -649,6 +650,13 @@ class SerialBridge:
                 p_e, p_u, r_e, r_u, y_e, y_u, z_e, z_u,
                 arm_u8, flymode_u8, sbus_lost_u8, twc_exec_u8, twc_arr_u8,
                 rc_authority_u8, of_hold_u8, estimator_ready_u8, proto_ver_u8,
+            ) = struct.unpack(fmt, payload)
+        elif len(payload) == 42:
+            fmt = "<8fBBBBBBBBBB"
+            (
+                p_e, p_u, r_e, r_u, y_e, y_u, z_e, z_u,
+                arm_u8, flymode_u8, sbus_lost_u8, twc_exec_u8, twc_arr_u8,
+                rc_authority_u8, of_hold_u8, estimator_ready_u8, motor_idle_enabled_u8, proto_ver_u8,
             ) = struct.unpack(fmt, payload)
         else:
             return []
@@ -698,6 +706,7 @@ class SerialBridge:
             ("status.rc_authority", float(rc_authority_u8)),
             ("status.of_hold", float(of_hold_u8)),
             ("status.estimator_ready", float(estimator_ready_u8)),
+            ("status.motor_idle", float(motor_idle_enabled_u8)),
         ]
 
     def _unpack_frame_b(self, max_num_basis: int, payload: bytes) -> List[Tuple[str, float]]:
@@ -1212,8 +1221,8 @@ class SerialBridge:
         max_num_basis = data[5]
 
         if frame_type == 0x01:
-            # v10 = 39 B, v13 = 41 B (adds of_hold + estimator_ready). Accept both.
-            if len_payload not in (39, 41):
+            # v10 = 39 B, v13 = 41 B (adds of_hold + estimator_ready), v15 = 42 B (adds motor_idle_enabled).
+            if len_payload not in (39, 41, 42):
                 return
         elif frame_type == 0x02:
             # Matches committed TASK/send_data.c (v10/v13): 4*(MAX_NUM_BASIS+2)+36 = 4N+44 floats.
@@ -1319,8 +1328,8 @@ class SerialBridge:
 
             # Basic header sanity checks to avoid blocking on corrupted LEN values.
             if frame_type == 0x01:
-                # v10 = 39 B, v13 = 41 B (adds of_hold + estimator_ready). Accept both.
-                if len_payload not in (39, 41):
+                # v10 = 39 B, v13 = 41 B (adds of_hold + estimator_ready), v15 = 42 B (adds motor_idle_enabled).
+                if len_payload not in (39, 41, 42):
                     sync_seen = False
                     continue
             elif frame_type == 0x02:

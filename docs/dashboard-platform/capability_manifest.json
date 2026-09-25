@@ -769,6 +769,53 @@
           "description": "Stops all path following. Neutral sticks. Dangerous stop."
         }
       },
+      "0x0E": {
+        "applied_async": true,
+        "description": "Ground-station arm switch. idx 0: arm authority (val>=0.5 arm, <0.5 release). idx 1: motor idle enable (val>=0.5 enable idle PWM, <0.5 disable; requires ARMED + GROUND_IDLE).",
+        "id": 14,
+        "id_hex": "0x0E",
+        "name": "SDK_ARM_AUTHORITY",
+        "notes": "",
+        "parameters": [
+          {
+            "description": "",
+            "index": 0,
+            "max_val": 1,
+            "min_val": 0,
+            "name": "arm_auth",
+            "range": [
+              0,
+              1
+            ],
+            "symbol": null,
+            "unit": "bool"
+          },
+          {
+            "description": "",
+            "index": 1,
+            "max_val": 1,
+            "min_val": 0,
+            "name": "motor_idle_enable",
+            "range": [
+              0,
+              1
+            ],
+            "symbol": null,
+            "unit": "bool"
+          }
+        ],
+        "preconditions": {
+          "requires_armed": false,
+          "requires_disarmed": false,
+          "requires_ground_idle": false,
+          "requires_sdk_mode": false
+        },
+        "returns_ack": true,
+        "safety_class": {
+          "danger_level": "dangerous",
+          "description": "Arms the drone or enables motor idle. Critical."
+        }
+      },
       "0x0F": {
         "applied_async": true,
         "description": "Multiplexed command: MRAC flags (idx 0..12) or telemetry mode (idx 100..102).",
@@ -1527,20 +1574,20 @@
         }
       }
     },
-    "count": 24,
+    "count": 25,
     "source": "ground_station/platform/firmware_contract.py"
   },
   "elf_identity": {
     "caveat": "OBJ/ holds both current and stale build artifacts. A symbol in the ELF reflects the last build, which may not match what is currently flashed on the hardware. This manifest describes build artifacts and host decoder contracts; it does not assert that this build is currently running on the aircraft.",
     "elf_path": "OBJ/JX_FLY.axf",
-    "elf_sha256": "844f3597c376509e7a9e42817eba4094af2640dd2e75c91b9987d79d9b86062a",
+    "elf_sha256": "94af7f14d3ec31a0b0567e5dcbd07ebc19cd1c4f5544f5a08aea6673b0502446",
     "exists": true,
-    "size_bytes": 1007612
+    "size_bytes": 1008320
   },
   "firmware_symbols": {
-    "count": 348,
+    "count": 349,
     "elf_path": "OBJ/JX_FLY.axf",
-    "elf_sha256": "844f3597c376509e7a9e42817eba4094af2640dd2e75c91b9987d79d9b86062a",
+    "elf_sha256": "94af7f14d3ec31a0b0567e5dcbd07ebc19cd1c4f5544f5a08aea6673b0502446",
     "names": [
       "AHBPrescTable",
       "APBAHBPrescTable",
@@ -1692,6 +1739,7 @@
       "g_estimator_ready",
       "g_fw_identity",
       "g_imu_settle_metric",
+      "g_motor_idle_enabled",
       "g_of_bias_capture_req",
       "g_of_bias_ema_freeze",
       "g_of_bias_ema_tau_s",

@@ -318,3 +318,32 @@ On the bench, the optical flow sensor currently reports `of_quality = 0`. The co
    Under free-flight conditions, motor currents reach 60-80 A total. Static analysis cannot assess electrical noise, ground bounce, or EMI coupling into the SPI2 bus lines between the STM32 and BMI088.
 4. **Specific SBUS Receiver Hardware Failsafe Behavior**:
    Different radio receivers (FrSky vs Futaba vs ELRS) have configurable failsafe modes (hold, no-pulses, custom values). We cannot verify by code inspection whether the physical receiver installed on the drone will emit continuous failsafe packets or cease output entirely upon transmitter loss.
+
+---
+
+## Arm / Idle Decoupling
+
+**Change date**: 2026-09-25 (task F1)
+
+Arming the aircraft no longer spins motors. After ARM, motors stay at
+`Motor_PWM_ZERO` (2000) until a separate **idle-enable** gesture is performed:
+
+- **RC gesture**: RightStick bottom-right corner hold (pitch MIN + roll MAX) for
+  1.5 s (`IDLE_ENABLE_Delay_time = 150` ticks at 10 ms). Only accepted when
+  ARMED, `flight_phase == GROUND_IDLE`, and throttle stick low.
+  Counter: `StickMotion.RightStick_RightDown_cnt` (was unused).
+- **GS command**: CMD `0x0E` idx=1 val=1 (idle enable) / val=0 (idle disable).
+  Same guards as the RC gesture. Requires `allow_agent_arm` for agents.
+
+`g_motor_idle_enabled` (volatile uint8_t, defined in `API/flight_fsm.c`) is
+cleared on every ARM, DISARM, EMERGENCY, and landing→disarm transition.
+
+While ARMED with idle not enabled: integrators are cleared every tick
+(`Clear_Structure()`), setpoints are pinned, and takeoff detection is blocked.
+
+ch7 fly-up and ch8 path triggers may still ARM, but their trigger signals are
+**dropped** (not pended) when idle is not enabled. The pilot must perform the
+idle gesture first.
+
+The flag is telemetered in Frame A (proto v15, +1 byte before `GS_PROTO_VERSION`)
+and readable via livewatch (`python -m ground_station.livewatch read g_motor_idle_enabled`).

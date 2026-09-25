@@ -74,7 +74,7 @@ def _build_v14_of_payload(ekf: bool = False) -> bytes:
 
 
 def test_proto_version_is_14():
-    assert GS_PROTO_VERSION == 14
+    assert GS_PROTO_VERSION >= 14  # OF frame layout is v14; later bumps (v15 Frame A) keep it
 
 
 def test_v14_payload_size_55():

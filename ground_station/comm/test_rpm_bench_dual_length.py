@@ -124,7 +124,7 @@ def test_dispatch_udp_accepts_both_lengths():
 
 
 def test_gs_proto_version_bumped():
-    assert GS_PROTO_VERSION == 14, f"GS_PROTO_VERSION must be 14, got {GS_PROTO_VERSION}"
+    assert GS_PROTO_VERSION >= 14, f"GS_PROTO_VERSION must be >= 14, got {GS_PROTO_VERSION}"
 
 
 if __name__ == "__main__":

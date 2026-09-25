@@ -650,25 +650,36 @@ void Update_Motor(void)
         }
         else if (flight_phase == FLIGHT_PHASE_GROUND_IDLE)
         {
-            /* Auto-detect takeoff: transition to FLYING once the OF sensor reads > 0.2 m above
-             * the zeroed height. Bench mode (CMD 0x07) does NOT block this — the height
-             * offset is captured on bench activation so of2_h is already relative to the fixture
-             * resting height. The controller therefore does not fight prop wash at any altitude.
-             * Throttle_cap_active (CMD 0x08) is also independent and does not affect this. */
-            /* P0 Finding 3: height alone must not leave GROUND_IDLE — a slow hand-lift of an
-             * armed aircraft ramps of2_h past every alt gate, so gate the transition itself
-             * on THR >= 20% or an executing TWC policy, matching the IDLE interlock below. */
-            if (Ctrler.Z_posPID.FB > 0.2f &&
-                (TWC.execute || RCInput_Get(RC_AXIS_THR) >= 0.2f))
-                flight_phase = FLIGHT_PHASE_FLYING;
-
-            /* IDLE motors: hold until pilot or policy pushes THR above 20%. */
-            if (!TWC.execute && RCInput_Get(RC_AXIS_THR) < 0.2f)
-                Set_IDLE_Motors();
-            else if (SDK_DelayWakeFlag == 1)
-                Set_IDLE_Motors();
+            if (!g_motor_idle_enabled)
+            {
+                /* ARMED but idle not yet enabled: motors at zero, integrators
+                 * cleared so they do not wind up while waiting for the idle
+                 * gesture.  Takeoff detection is impossible in this state. */
+                Clear_Structure();
+                Set_Zero_Motors();
+            }
             else
-                Set_PWM_Motors();
+            {
+                /* Auto-detect takeoff: transition to FLYING once the OF sensor reads > 0.2 m above
+                 * the zeroed height. Bench mode (CMD 0x07) does NOT block this — the height
+                 * offset is captured on bench activation so of2_h is already relative to the fixture
+                 * resting height. The controller therefore does not fight prop wash at any altitude.
+                 * Throttle_cap_active (CMD 0x08) is also independent and does not affect this. */
+                /* P0 Finding 3: height alone must not leave GROUND_IDLE — a slow hand-lift of an
+                 * armed aircraft ramps of2_h past every alt gate, so gate the transition itself
+                 * on THR >= 20% or an executing TWC policy, matching the IDLE interlock below. */
+                if (Ctrler.Z_posPID.FB > 0.2f &&
+                    (TWC.execute || RCInput_Get(RC_AXIS_THR) >= 0.2f))
+                    flight_phase = FLIGHT_PHASE_FLYING;
+
+                /* IDLE motors: hold until pilot or policy pushes THR above 20%. */
+                if (!TWC.execute && RCInput_Get(RC_AXIS_THR) < 0.2f)
+                    Set_IDLE_Motors();
+                else if (SDK_DelayWakeFlag == 1)
+                    Set_IDLE_Motors();
+                else
+                    Set_PWM_Motors();
+            }
         }
         else if (flight_phase == FLIGHT_PHASE_FLYING)
         {
@@ -1060,8 +1071,10 @@ TWC.real_yaw = Ctrler.yawPID.FB; //�ṹ���Ա������ʼ��һ
 				break;
 			}
 
-			/* GROUND_IDLE hold: pin Z setpoint until pilot pushes THR above 20%. */
-			if (flight_phase == FLIGHT_PHASE_GROUND_IDLE && !TWC.execute && RCInput_Get(RC_AXIS_THR) < 0.2f)
+			/* GROUND_IDLE hold: pin Z setpoint until pilot pushes THR above 20%.
+			 * Also pin when idle not yet enabled (motors at zero, no takeoff possible). */
+			if (flight_phase == FLIGHT_PHASE_GROUND_IDLE &&
+			    (!g_motor_idle_enabled || (!TWC.execute && RCInput_Get(RC_AXIS_THR) < 0.2f)))
 			{
 				Ctrler.Z_posPID.Des = Ctrler.Z_posPID.FB;
 				break;
@@ -1103,7 +1116,8 @@ TWC.real_yaw = Ctrler.yawPID.FB; //�ṹ���Ա������ʼ��һ
 					Ctrler.Z_ratePID.Des -= s_land_sink_bias;
 				}
 			}
-			else if (flight_phase == FLIGHT_PHASE_GROUND_IDLE && !TWC.execute && RCInput_Get(RC_AXIS_THR) < 0.2f)
+			else if (flight_phase == FLIGHT_PHASE_GROUND_IDLE &&
+			         (!g_motor_idle_enabled || (!TWC.execute && RCInput_Get(RC_AXIS_THR) < 0.2f)))
 				Ctrler.Z_ratePID.Des = 0.0f;
 			else if(RCInput_IsActive(RC_AXIS_THR))
  				Ctrler.Z_ratePID.Des = RCInput_Get(RC_AXIS_THR) * gs_max_vertical_speed_mps ;

@@ -230,6 +230,7 @@ class SchemaRegistry:
             "s_authority":             "status.rc_authority",
             "g_of_hold_active":        "status.of_hold",
             "g_estimator_ready":       "status.estimator_ready",
+            "g_motor_idle_enabled":    "status.motor_idle",
             # Battery
             "real_voltage":            "status.vbat",
             # MRAC bars (8 -- mirrors _decode_frame_a 32-byte block)
@@ -321,7 +322,7 @@ class SchemaRegistry:
             "status.arm", "status.flymode", "status.sbus_lost",
             "status.twc_execute", "status.twc_arrived",
             "status.rc_authority", "status.of_hold",
-            "status.estimator_ready",
+            "status.estimator_ready", "status.motor_idle",
             "s_state", "flight_phase",
             "g_of_bias_mode", "g_of_bias_ema_freeze",
         }

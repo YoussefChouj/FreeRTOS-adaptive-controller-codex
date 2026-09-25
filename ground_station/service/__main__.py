@@ -241,6 +241,9 @@ def apply_startup_preset(service, preset_name: str, *,
     print(f"[service] Preset {preset_name!r} loaded. Wait ~2 s for "
           f"0x08 schema replies; /state.streams will populate.", flush=True)
 
+    # Track this preset so GET /health and /state surface active_preset.
+    service.set_active_preset(preset_name, time.time())
+
 
 def main() -> None:
     parser = _build_argparser()

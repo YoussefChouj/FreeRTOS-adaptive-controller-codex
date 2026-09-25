@@ -945,6 +945,7 @@ manifests:
       - { dwarf: "s_authority",            key: "status.rc_authority", int: true }
       - { dwarf: "g_of_hold_active",       key: "status.of_hold",      int: true }
       - { dwarf: "g_estimator_ready",      key: "status.estimator_ready", int: true }
+      - { dwarf: "g_motor_idle_enabled",   key: "status.motor_idle",   int: true }
       # Battery voltage
       - { dwarf: "real_voltage", key: "status.vbat" }
       # Monotonic ms clock

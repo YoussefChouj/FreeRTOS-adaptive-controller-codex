@@ -170,6 +170,7 @@ _FRAME_A_STATUS_DWARF = [
     "s_authority",
     "g_of_hold_active",
     "g_estimator_ready",
+    "g_motor_idle_enabled",
 ]
 
 

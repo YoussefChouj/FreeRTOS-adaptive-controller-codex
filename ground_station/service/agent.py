@@ -220,7 +220,7 @@ SERVICE_ACTION_SPECS: dict[str, dict[str, Any]] = {
 #     abort / idx 1 recover) are emergency-stop / disarm-family actions.
 #
 # These two sets are intentionally readonly; command classification is stable.
-CRITICAL_ARM_MOTOR_THROTTLE: frozenset[int] = frozenset({0x06, 0x07, 0x16})
+CRITICAL_ARM_MOTOR_THROTTLE: frozenset[int] = frozenset({0x06, 0x07, 0x0E, 0x16})
 CRITICAL_PARAM_WRITE: frozenset[int] = frozenset({
     0x01, 0x02, 0x03, 0x05, 0x08, 0x09, 0x12, 0x13, 0x15, 0x19, 0x1E,
 })

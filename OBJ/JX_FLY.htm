@@ -3,7 +3,7 @@
 <title>Static Call Graph - [..\OBJ\JX_FLY.axf]</title></head>
 <body><HR>
 <H1>Static Call Graph for image ..\OBJ\JX_FLY.axf</H1><HR>
-<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 5060300: Last Updated: Thu Sep 24 21:33:23 2026
+<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 5060300: Last Updated: Sat Sep 26 06:52:42 2026
 <BR><P>
 <H3>Maximum Stack Usage =        668 bytes + Unknown(Functions without stacksize, Cycles, Untraceable Function Pointers)</H3><H3>
 Call chain for Maximum Stack Depth:</H3>
@@ -1040,9 +1040,9 @@ Global Symbols
 <BR>[Called By]<UL><LI><a href="#[1b3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Update_Data
 </UL>
 
-<P><STRONG><a name="[d3]"></a>Check_Fly_Mode</STRONG> (Thumb, 230 bytes, Stack size 8 bytes, remotertask.o(i.Check_Fly_Mode))
+<P><STRONG><a name="[d3]"></a>Check_Fly_Mode</STRONG> (Thumb, 246 bytes, Stack size 8 bytes, remotertask.o(i.Check_Fly_Mode))
 <BR><BR>[Stack]<UL><LI>Max Depth = 176 + Unknown Stack Size
-<LI>Call Chain = Check_Fly_Mode &rArr; Check_Stick_Motion &rArr; FlightFSM_Event &rArr; vPortExitCritical &rArr; __2printf &rArr; _printf_char_file &rArr; _printf_char_common &rArr; __printf
+<LI>Call Chain = Check_Fly_Mode &rArr; Check_Stick_Motion &rArr; FlightFSM_GetState &rArr; vPortExitCritical &rArr; __2printf &rArr; _printf_char_file &rArr; _printf_char_common &rArr; __printf
 </UL>
 <BR>[Calls]<UL><LI><a href="#[d7]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RCInput_SetAuthority
 <LI><a href="#[d6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;FlightFSM_GetState
@@ -1052,16 +1052,17 @@ Global Symbols
 <BR>[Called By]<UL><LI><a href="#[18e]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;stabilizer_Task
 </UL>
 
-<P><STRONG><a name="[d4]"></a>Check_Stick_Motion</STRONG> (Thumb, 552 bytes, Stack size 24 bytes, remotertask.o(i.Check_Stick_Motion))
+<P><STRONG><a name="[d4]"></a>Check_Stick_Motion</STRONG> (Thumb, 606 bytes, Stack size 24 bytes, remotertask.o(i.Check_Stick_Motion))
 <BR><BR>[Stack]<UL><LI>Max Depth = 168 + Unknown Stack Size
-<LI>Call Chain = Check_Stick_Motion &rArr; FlightFSM_Event &rArr; vPortExitCritical &rArr; __2printf &rArr; _printf_char_file &rArr; _printf_char_common &rArr; __printf
+<LI>Call Chain = Check_Stick_Motion &rArr; FlightFSM_GetState &rArr; vPortExitCritical &rArr; __2printf &rArr; _printf_char_file &rArr; _printf_char_common &rArr; __printf
 </UL>
-<BR>[Calls]<UL><LI><a href="#[d5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;FlightFSM_Event
+<BR>[Calls]<UL><LI><a href="#[d6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;FlightFSM_GetState
+<LI><a href="#[d5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;FlightFSM_Event
 </UL>
 <BR>[Called By]<UL><LI><a href="#[d3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Check_Fly_Mode
 </UL>
 
-<P><STRONG><a name="[1be]"></a>Clear_Structure</STRONG> (Thumb, 124 bytes, Stack size 0 bytes, pid.o(i.Clear_Structure))
+<P><STRONG><a name="[1bd]"></a>Clear_Structure</STRONG> (Thumb, 124 bytes, Stack size 0 bytes, pid.o(i.Clear_Structure))
 <BR><BR>[Called By]<UL><LI><a href="#[1bb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Update_Motor
 </UL>
 
@@ -1373,7 +1374,7 @@ Global Symbols
 <BR>[Called By]<UL><LI><a href="#[fa]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;FaultRecord_Init
 </UL>
 
-<P><STRONG><a name="[d5]"></a>FlightFSM_Event</STRONG> (Thumb, 176 bytes, Stack size 8 bytes, flight_fsm.o(i.FlightFSM_Event))
+<P><STRONG><a name="[d5]"></a>FlightFSM_Event</STRONG> (Thumb, 206 bytes, Stack size 8 bytes, flight_fsm.o(i.FlightFSM_Event))
 <BR><BR>[Stack]<UL><LI>Max Depth = 144 + Unknown Stack Size
 <LI>Call Chain = FlightFSM_Event &rArr; vPortExitCritical &rArr; __2printf &rArr; _printf_char_file &rArr; _printf_char_common &rArr; __printf
 </UL>
@@ -1397,7 +1398,8 @@ Global Symbols
 <BR>[Calls]<UL><LI><a href="#[107]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;vPortExitCritical
 <LI><a href="#[104]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;vPortEnterCritical
 </UL>
-<BR>[Called By]<UL><LI><a href="#[d3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Check_Fly_Mode
+<BR>[Called By]<UL><LI><a href="#[d4]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Check_Stick_Motion
+<LI><a href="#[d3]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Check_Fly_Mode
 <LI><a href="#[18e]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;stabilizer_Task
 <LI><a href="#[150]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Process_GroundStation_Command
 <LI><a href="#[1bb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Update_Motor
@@ -1793,7 +1795,7 @@ Global Symbols
 <BR><BR>[Called By]<UL><LI><a href="#[143]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;handle_subscribe_frame
 </UL>
 
-<P><STRONG><a name="[150]"></a>Process_GroundStation_Command</STRONG> (Thumb, 3488 bytes, Stack size 64 bytes, send_data.o(i.Process_GroundStation_Command))
+<P><STRONG><a name="[150]"></a>Process_GroundStation_Command</STRONG> (Thumb, 3586 bytes, Stack size 64 bytes, send_data.o(i.Process_GroundStation_Command))
 <BR><BR>[Stack]<UL><LI>Max Depth = 280 + Unknown Stack Size
 <LI>Call Chain = Process_GroundStation_Command &rArr; GyroFilter_SetCutoff &rArr; biquad_design &rArr; vPortExitCritical &rArr; __2printf &rArr; _printf_char_file &rArr; _printf_char_common &rArr; __printf
 </UL>
@@ -1816,6 +1818,7 @@ Global Symbols
 <LI><a href="#[11a]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;GroundStation_AbortAllPaths
 <LI><a href="#[151]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;CommandSafetyReject
 <LI><a href="#[156]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;AutoflyTask_WaypointReset
+<LI><a href="#[15d]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RCInput_Get
 <LI><a href="#[db]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Reset_World_Origin
 </UL>
 <BR>[Called By]<UL><LI><a href="#[6c]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Send_Task
@@ -1875,7 +1878,8 @@ Global Symbols
 <BR>[Calls]<UL><LI><a href="#[15e]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;s_normalize
 <LI><a href="#[15f]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;s_clamp
 </UL>
-<BR>[Called By]<UL><LI><a href="#[160]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RCInput_IsActive
+<BR>[Called By]<UL><LI><a href="#[150]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Process_GroundStation_Command
+<LI><a href="#[160]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RCInput_IsActive
 <LI><a href="#[1bb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Update_Motor
 <LI><a href="#[d9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Update_Des
 </UL>
@@ -2077,7 +2081,7 @@ Global Symbols
 <BR><BR>[Called By]<UL><LI><a href="#[6c]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Send_Task
 </UL>
 
-<P><STRONG><a name="[176]"></a>Send_Groundstation_Telemetry_UART4</STRONG> (Thumb, 5610 bytes, Stack size 144 bytes, send_data.o(i.Send_Groundstation_Telemetry_UART4))
+<P><STRONG><a name="[176]"></a>Send_Groundstation_Telemetry_UART4</STRONG> (Thumb, 5630 bytes, Stack size 144 bytes, send_data.o(i.Send_Groundstation_Telemetry_UART4))
 <BR><BR>[Stack]<UL><LI>Max Depth = 424<LI>Call Chain = Send_Groundstation_Telemetry_UART4 &rArr; Uart5_Subscribe_HandleRequest &rArr; HandleStreamRequest &rArr; Subscribe_ParseStreamRequest &rArr; Subscribe_ValidateRange &rArr; Subscribe_ValidateTuple &rArr; CopyStr
 </UL>
 <BR>[Calls]<UL><LI><a href="#[b8]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;xTaskGetTickCount
@@ -2152,7 +2156,7 @@ Global Symbols
 <BR><BR>[Called By]<UL><LI><a href="#[150]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Process_GroundStation_Command
 </UL>
 
-<P><STRONG><a name="[1bd]"></a>Set_IDLE_Motors</STRONG> (Thumb, 26 bytes, Stack size 0 bytes, pwm.o(i.Set_IDLE_Motors))
+<P><STRONG><a name="[1be]"></a>Set_IDLE_Motors</STRONG> (Thumb, 26 bytes, Stack size 0 bytes, pwm.o(i.Set_IDLE_Motors))
 <BR><BR>[Called By]<UL><LI><a href="#[1bb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Update_Motor
 </UL>
 
@@ -2684,7 +2688,7 @@ Global Symbols
 <BR>[Called By]<UL><LI><a href="#[18e]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;stabilizer_Task
 </UL>
 
-<P><STRONG><a name="[d9]"></a>Update_Des</STRONG> (Thumb, 1686 bytes, Stack size 32 bytes, stabilizertask.o(i.Update_Des))
+<P><STRONG><a name="[d9]"></a>Update_Des</STRONG> (Thumb, 1702 bytes, Stack size 32 bytes, stabilizertask.o(i.Update_Des))
 <BR><BR>[Stack]<UL><LI>Max Depth = 272<LI>Call Chain = Update_Des &rArr; accel_to_lean_angles &rArr; __hardfp_cos &rArr; __ieee754_rem_pio2 &rArr; __aeabi_dmul
 </UL>
 <BR>[Calls]<UL><LI><a href="#[d7]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RCInput_SetAuthority
@@ -2697,7 +2701,7 @@ Global Symbols
 <BR>[Called By]<UL><LI><a href="#[d8]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Compute_Motor
 </UL>
 
-<P><STRONG><a name="[1bb]"></a>Update_Motor</STRONG> (Thumb, 632 bytes, Stack size 8 bytes, stabilizertask.o(i.Update_Motor))
+<P><STRONG><a name="[1bb]"></a>Update_Motor</STRONG> (Thumb, 648 bytes, Stack size 8 bytes, stabilizertask.o(i.Update_Motor))
 <BR><BR>[Stack]<UL><LI>Max Depth = 152 + Unknown Stack Size
 <LI>Call Chain = Update_Motor &rArr; FlightFSM_GetState &rArr; vPortExitCritical &rArr; __2printf &rArr; _printf_char_file &rArr; _printf_char_common &rArr; __printf
 </UL>
@@ -2705,10 +2709,10 @@ Global Symbols
 <LI><a href="#[d5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;FlightFSM_Event
 <LI><a href="#[140]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Set_Zero_Motors
 <LI><a href="#[1bc]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Set_PWM_Motors
-<LI><a href="#[1bd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Set_IDLE_Motors
+<LI><a href="#[1be]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Set_IDLE_Motors
 <LI><a href="#[16e]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;SDK_StateMachine_Init
 <LI><a href="#[15d]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;RCInput_Get
-<LI><a href="#[1be]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Clear_Structure
+<LI><a href="#[1bd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Clear_Structure
 </UL>
 <BR>[Called By]<UL><LI><a href="#[18e]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;stabilizer_Task
 </UL>

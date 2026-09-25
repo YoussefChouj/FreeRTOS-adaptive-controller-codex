@@ -305,6 +305,15 @@ class GroundStationService:
         # with the original persist/replay tests and lets the dashboard JS
         # do its own staleness rendering via ``Date.now() - last_update_ns``.
         self._started_at_ns: int = 0
+        # Active preset tracking. Set at startup (--preset) or at runtime via
+        # set_active_preset(). Exposed by GET /health and GET /state.
+        self.active_preset: str | None = None
+        self.preset_loaded_at: float | None = None
+
+    def set_active_preset(self, name: str | None, timestamp: float | None = None) -> None:
+        """Mark the active preset and the wall-clock time it was (re)applied."""
+        self.active_preset = name
+        self.preset_loaded_at = timestamp or time.time()
 
     @staticmethod
     def _default_ttl_ns() -> int:
