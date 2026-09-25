@@ -978,15 +978,21 @@ class WifiBridge:
         divider: int,
         ranges: Optional[list] = None,
         transport: int = 1,
-    ) -> bytes:
+    ) -> int:
         """Send ONE 0x21 request for ``slot``. ``divider=0`` stops the slot.
 
         ``ranges`` holds DWARF names (resolved against the ELF) or
         ``StreamRange`` objects. Names/fmts are remembered so the 0x08
         schema reply decodes with named, correctly-typed channels.
-        Returns the request bytes; exactly one datagram is sent.
+        Returns the number of ranges in the request (after coalescing).
+
+        Adjacent ranges with the same size and fmt are coalesced into a
+        single range with count > 1, reducing the per-slot range count
+        so the 62-range firmware limit is less likely to be hit.
         """
-        from ground_station.livewatch.stream import build_stream_request, StreamRange
+        from ground_station.livewatch.stream import (
+            StreamRange, build_stream_request, coalesce_ranges,
+        )
 
         stream_ranges = []
         for r in ranges or []:
@@ -996,6 +1002,11 @@ class WifiBridge:
                 r = StreamRange(address=symbol.address, size=symbol.size,
                                 count=1, name=r, fmt=symbol.fmt)
             stream_ranges.append(r)
+
+        # Coalesce contiguous ranges (same size + fmt) to stay within the
+        # firmware MAX_STREAM_RANGES = 62 limit per slot.
+        stream_ranges = coalesce_ranges(stream_ranges)
+        n_ranges = len(stream_ranges)
 
         # Fresh subscribe cycle: clear this slot's stale schema, stream
         # stats and lifecycle state BEFORE sending. This cleanup lives in
@@ -1011,9 +1022,10 @@ class WifiBridge:
             else:
                 self._pending_schema_ranges.pop(slot, None)
 
-        return self._send_subscribe_bytes(
+        self._send_subscribe_bytes(
             slot, divider, stream_ranges, transport=transport,
         )
+        return n_ranges
 
     def _send_subscribe_bytes(
         self,
@@ -2025,12 +2037,13 @@ class WifiBridge:
                 count = struct.unpack_from("<H", payload, offset + 6)[0]
                 hint = by_addr.get((address, size))
                 if hint is not None:
-                    # Carry the name (and fmt if the original request had
-                    # one) through to the schema range so the decoder can
+                    # Carry the name (and fmt, _names if the original request
+                    # had them) through to the schema range so the decoder can
                     # label the channels.
                     ranges.append(StreamRange(
                         address=address, size=size, count=count,
                         name=hint.name, fmt=hint.fmt,
+                        _names=hint._names if hasattr(hint, "_names") else None,
                     ))
                 else:
                     ranges.append(StreamRange(
@@ -2164,21 +2177,28 @@ class WifiBridge:
             # and fmt. For a packed range we expand the name list per count.
             idx = 0
             for rng in schema.ranges:
-                for i in range(rng.count):
-                    if rng.name and "," in rng.name:
-                        # Multi-name packed range -- pick the i-th name.
-                        # The resolver packed adjacent same-size scalars into
-                        # one range in address order, so split by ", ".
-                        names_at_idx = [n.strip() for n in rng.name.split(",")]
-                        if i < len(names_at_idx):
-                            names.append(names_at_idx[i])
+                # Use _names for coalesced ranges (per-element names stored
+                # during coalescing); fall back to legacy name expansion.
+                elem_names = rng._names if hasattr(rng, "_names") else None
+                if elem_names is not None:
+                    names.extend(elem_names)
+                    idx += len(elem_names)
+                else:
+                    for i in range(rng.count):
+                        if rng.name and "," in rng.name:
+                            # Multi-name packed range -- pick the i-th name.
+                            # The resolver packed adjacent same-size scalars into
+                            # one range in address order, so split by ", ".
+                            names_at_idx = [n.strip() for n in rng.name.split(",")]
+                            if i < len(names_at_idx):
+                                names.append(names_at_idx[i])
+                            else:
+                                names.append(f"{rng.name}[{i}]")
+                        elif rng.name:
+                            names.append(rng.name if rng.count == 1 else f"{rng.name}[{i}]")
                         else:
-                            names.append(f"{rng.name}[{i}]")
-                    elif rng.name:
-                        names.append(rng.name if rng.count == 1 else f"{rng.name}[{i}]")
-                    else:
-                        names.append(f"ch{slot}.{idx}")
-                    idx += 1
+                            names.append(f"ch{slot}.{idx}")
+                        idx += 1
         # Pad to match value count if schema is short (defensive).
         while len(names) < len(values):
             names.append(f"ch{slot}.{len(names)}")

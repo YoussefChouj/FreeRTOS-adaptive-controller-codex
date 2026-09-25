@@ -120,13 +120,19 @@ _FMT_WIDTH = {"f": 4, "i": 4, "I": 4, "h": 2, "H": 2, "b": 1, "B": 1}
 
 @dataclass(frozen=True)
 class StreamRange:
-    """``count`` consecutive ``size``-byte elements starting at ``address``."""
+    """``count`` consecutive ``size``-byte elements starting at ``address``.
+
+    ``names`` holds the original per-element labels (used when ranges are
+    coalesced so the decoder emits one key per element rather than a single
+    key with a list value).
+    """
 
     address: int
     size: int
     count: int = 1
     name: str = ""
     fmt: str | None = None
+    _names: tuple[str, ...] | None = None
 
     @property
     def nbytes(self) -> int:
@@ -137,6 +143,66 @@ class StreamRange:
         if self.fmt is None:
             return raw
         return list(struct.unpack("<%d%s" % (self.count, self.fmt), raw))
+
+    def _element_names(self) -> tuple[str, ...]:
+        """Per-element names for this range (one key per value).
+
+        If ``_names`` is explicitly set (coalesced range) return those names.
+        For non-coalesced ranges with count > 1 return empty so the caller
+        falls back to legacy behaviour (one key with a list).  For count == 1
+        return the single-element tuple ``(name,)`` so coalescing can pick up
+        the original names.
+        """
+        if self._names is not None:
+            return self._names
+        if self.count == 1 and self.name:
+            return (self.name,)
+        return ()
+
+
+def coalesce_ranges(ranges: list) -> list[StreamRange]:
+    """Merge adjacent StreamRanges into fewer ranges with count > 1.
+
+    Two ranges are mergeable when they are contiguous in memory (range end
+    equals the next start), have the same ``size`` and the same ``fmt``.
+    The first range's ``name`` is kept; the merged range's ``count`` is the
+    sum of the individual counts.  Original per-element names are stored in
+    ``_names`` so the decoder can emit one key per element.
+
+    This turns N single-element ranges for contiguous variables into a
+    single range, reducing the per-slot range count that the firmware
+    enforces (MAX_STREAM_RANGES = 62).
+    """
+    if not ranges:
+        return []
+    sorted_ranges = sorted(ranges, key=lambda r: r.address)
+    out: list[StreamRange] = [sorted_ranges[0]]
+    for rng in sorted_ranges[1:]:
+        prev = out[-1]
+        prev_end = prev.address + prev.size * prev.count
+        if (prev_end == rng.address
+                and prev.size == rng.size
+                and prev.fmt == rng.fmt):
+            all_names: list[str] = []
+            if prev._names is not None:
+                all_names.extend(prev._names)
+            else:
+                all_names.extend(prev._element_names())
+            if rng._names is not None:
+                all_names.extend(rng._names)
+            else:
+                all_names.extend(rng._element_names())
+            out[-1] = StreamRange(
+                address=prev.address,
+                size=prev.size,
+                count=prev.count + rng.count,
+                name=prev.name,
+                fmt=prev.fmt,
+                _names=tuple(all_names),
+            )
+        else:
+            out.append(rng)
+    return out
 
 
 def _validate(ranges, divider: int, transport: int, usart3_baud: int,
@@ -404,6 +470,7 @@ def decode_schema(n_ranges: int, payload: bytes, requested=()) -> StreamSchema:
             address, size, count,
             name=hint.name if hint else "",
             fmt=hint.fmt if hint else None,
+            _names=hint._names if hint else None,
         ))
     schema = StreamSchema(divider, transport, total_bytes, tuple(ranges), slot)
     if sum(r.nbytes for r in ranges) != total_bytes:
@@ -467,7 +534,15 @@ class StreamDecoder:
             data_bytes = rng.size * rng.count
             raw = payload[offset:offset + data_bytes]
             offset += rng.nbytes  # wire frame advance
-            values[rng.name or f"r{i}@0x{rng.address:08X}"] = rng.decode(raw)
+            # Only use per-element names for coalesced ranges (_names is set).
+            # Non-coalesced ranges keep the legacy behaviour: one key with a
+            # list value.
+            if rng._names is not None:
+                decoded = rng.decode(raw)
+                for j, ename in enumerate(rng._names):
+                    values[ename] = decoded[j] if j < len(decoded) else decoded[-1]
+            else:
+                values[rng.name or f"r{i}@0x{rng.address:08X}"] = rng.decode(raw)
         return values
 
     @property

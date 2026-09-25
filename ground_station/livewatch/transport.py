@@ -745,6 +745,8 @@ class Usart3WifiSubscribeTransport(Usart3LongRange):
 
     def _sym_to_range(self, sym) -> "StreamRange":
         from ground_station.livewatch.stream import StreamRange
+        if isinstance(sym, StreamRange):
+            return sym
         return StreamRange(sym.address, sym.size, 1, name=sym.name)
 
     def _wait_for_frame(self, wanted_type: int, purpose: str,

@@ -442,3 +442,67 @@ def test_schema_frame_still_parses_with_vofa_noise_tail():
     schema = decode_schema(count, pl, [_TEST_RANGE])
     assert schema.slot == 0
     assert len(schema.ranges) == 1
+
+# ---------------------------------------------------------------------------
+# Tests: SYM:N — count > 1 produces N columns and correct frame size
+# ---------------------------------------------------------------------------
+
+def test_sym_n_count_4_produces_4_columns_and_16b_payload():
+    """A ``--group "20:var:4"`` subscription should log 4 columns, not 1.
+
+    The frame size for ``uint32_t[4]`` is 16 B (4 × 4 B). The CSV header
+    must list ``name[0]`` through ``name[3]``.
+    """
+    from ground_station.livewatch.stream_log import columns_for
+    from ground_station.livewatch.stream import StreamRange, decode_schema
+
+    # Simulate a StreamRange with count=4 (as resolve_ranges produces)
+    rng = StreamRange(0x20000000, 4, 4, "rpm_dbg_period_cyc", "I")
+    payload = _make_schema_payload([rng], slot=0, divider=1)
+    schema = decode_schema(1, payload, [rng])
+    cols = columns_for(schema)
+    assert len(cols) == 4, f"expected 4 columns, got {cols}"
+    assert cols == ["rpm_dbg_period_cyc[0]", "rpm_dbg_period_cyc[1]",
+                    "rpm_dbg_period_cyc[2]", "rpm_dbg_period_cyc[3]"]
+    assert schema.ranges[0].count == 4
+    # Frame payload must be 16 B (4 elements × 4 B each)
+    assert schema.total_bytes == 16
+
+
+def test_sym_n_count_2_list_produces_2_columns():
+    """A comma-separated list ``var1:2,var2:2`` must give 4 columns total."""
+    from ground_station.livewatch.stream_log import columns_for
+    from ground_station.livewatch.stream import StreamRange, decode_schema
+
+    rng1 = StreamRange(0x20000000, 4, 2, "rpm_dbg_period_cyc", "I")
+    rng2 = StreamRange(0x20000010, 4, 2, "rpm_dbg_edges", "I")
+    payload = _make_schema_payload([rng1, rng2], slot=0, divider=1)
+    schema = decode_schema(2, payload, [rng1, rng2])
+    cols = columns_for(schema)
+    assert len(cols) == 4
+    assert cols == ["rpm_dbg_period_cyc[0]", "rpm_dbg_period_cyc[1]",
+                    "rpm_dbg_edges[0]", "rpm_dbg_edges[1]"]
+
+
+def test_run_usart3_with_count_4_writes_4_data_columns(tmp_path):
+    """Integration: _run_usart3 with a count-4 range writes 4 data columns."""
+    req = build_stream_request([_TEST_RANGE], 1, TRANSPORT_USART3)
+    stop = build_stream_request([], 0, TRANSPORT_USART3, slot=0)
+    fake = FakeUsart3WifiTransport()
+    # Range with count=4
+    rng4 = StreamRange(0x20000000, 4, 4, "rpm_dbg_period_cyc", "I")
+    data = struct.pack("<4I", 100, 200, 300, 400)
+    fake._stage(_schema_frame([rng4], slot=0, divider=1))
+    fake._stage(_data_frame(data, slot=0, seq=0, t_ms=1000))
+
+    with _patched_transport(fake), _run_timed():
+        out = tmp_path / "symn.csv"
+        result = _run_usart3(
+            "udp:14550", [rng4], 1, TRANSPORT_USART3, 5.0,
+            str(out), True, req, stop, 921600, slot=0,
+        )
+    rows = list(csv.reader(out.open("r", newline="")))
+    # Header should have 7 columns (t_src_ms, t_host_s, seq + 4 data)
+    assert len(rows[0]) == 7, f"expected 7 header cols, got {len(rows[0])}: {rows[0]}"
+    assert result["columns"] == ["rpm_dbg_period_cyc[0]", "rpm_dbg_period_cyc[1]",
+                                  "rpm_dbg_period_cyc[2]", "rpm_dbg_period_cyc[3]"]

@@ -542,11 +542,13 @@ class TestStreamStateMachine(unittest.TestCase):
         self.assertNotIn(3, self.bridge._slot_states)
         self.bridge._wifi_send = MagicMock()
         # 1. Request on new slot 3 -> request bytes on the wire, state 'sent'.
-        request = self.bridge.subscribe_slot(
+        self.bridge.subscribe_slot(
             slot=3, divider=4,
             ranges=[StreamRange(address=0x20002000, size=4, count=1, name="new.var")],
             transport=1,
         )
+        call_args = self.bridge._wifi_send.sendto.call_args
+        request = call_args[0][0]
         self.assertTrue(request.startswith(b"\xCC\xDE"))
         self.assertEqual(self.bridge._slot_states[3], "sent")
         self.bridge._wifi_send.sendto.assert_called_once()
@@ -909,7 +911,12 @@ class TestSubscribeLifecycle(unittest.TestCase):
                 payload + bytes([crc_byte]))
 
     def test_full_lifecycle_slot_1(self):
-        """Subscribe slot 1 → get schema ack → receive data frames."""
+        """Subscribe slot 1 → get schema ack → receive data frames.
+
+        Two adjacent StreamRange objects get coalesced into 1 range (count=2).
+        The firmware echoes 1 range with count=2; the schema stores the
+        original per-element names in ``_names``.
+        """
         rng1 = StreamRange(
             address=0x20001000, size=4, count=1,
             name="Ctrler.gyroxPID.FB", fmt="f")
@@ -919,18 +926,17 @@ class TestSubscribeLifecycle(unittest.TestCase):
 
         # 1. subscribe_slot sends the 0x21 request and sets state to "planned"
         #    then "sent".
-        request = self.bridge.subscribe_slot(
+        self.bridge.subscribe_slot(
             slot=1, divider=4, ranges=[rng1, rng2], transport=1)
         self.assertEqual(self.bridge._slot_states.get(1), "sent")
-        self.assertTrue(len(request) > 0)
+        call_args = self.bridge._wifi_send.sendto.call_args
+        self.assertTrue(len(call_args[0][0]) > 0)
 
-        # 2. Simulate 0x08 schema reply.
+        # 2. Simulate 0x08 schema reply.  The firmware echoes back the
+        #    coalesced range (1 range, count=2) because that's what we sent.
         schema_frame = self._build_schema_frame(
-            slot=1, n_ranges=2, divider=4, total_bytes=8,
-            ranges_addr_size_count=[
-                (0x20001000, 4, 1),
-                (0x20001004, 4, 1),
-            ])
+            slot=1, n_ranges=1, divider=4, total_bytes=8,
+            ranges_addr_size_count=[(0x20001000, 4, 2)])
         result_slot = self.bridge._handle_schema_frame(schema_frame)
         self.assertEqual(result_slot, 1)
         self.assertEqual(self.bridge._slot_states.get(1), "schema_received")
@@ -939,9 +945,11 @@ class TestSubscribeLifecycle(unittest.TestCase):
         with self.bridge._stream_lock:
             schema = self.bridge._stream_schemas.get(1)
         self.assertIsNotNone(schema)
-        self.assertEqual(len(schema.ranges), 2)
-        self.assertEqual(schema.ranges[0].name, "Ctrler.gyroxPID.FB")
-        self.assertEqual(schema.ranges[1].name, "Ctrler.gyroxPID.U")
+        self.assertEqual(len(schema.ranges), 1)
+        # The coalesced range has per-element names
+        self.assertEqual(schema.ranges[0].count, 2)
+        self.assertEqual(schema.ranges[0]._names,
+                          ("Ctrler.gyroxPID.FB", "Ctrler.gyroxPID.U"))
 
         # 3. Simulate first data frame → state transitions to "streaming".
         frame1 = _build_stream_frame(slot=1, seq=0, t_ms=1000,
