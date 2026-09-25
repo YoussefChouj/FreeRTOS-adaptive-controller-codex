@@ -66,3 +66,4 @@ logs/browser_smoke/
 .agent-ops/queue.json
 logs/service/
 logs/smoke/
+firmware_backups/
