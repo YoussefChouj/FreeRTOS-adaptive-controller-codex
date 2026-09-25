@@ -1617,7 +1617,7 @@ def get_elf_hash(session_dir: Path) -> str | None:
     elf_path_str = elf_info.get("path", "")
     if elf_path_str:
         # Try to resolve the ELF file
-        base = session_dir.parent.parent.parent.parent  # Go up to project root
+        base = Path(session_dir).resolve().parents[2]  # logs/sessions/<id> -> project root
         elf_path = base / elf_path_str.replace("\\", "/")
         if elf_path.exists():
             h = hashlib.sha256()

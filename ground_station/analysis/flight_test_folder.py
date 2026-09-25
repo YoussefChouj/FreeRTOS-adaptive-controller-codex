@@ -25,7 +25,7 @@ from ground_station.analysis.flight_report import generate_report
 
 def _get_project_root() -> Path:
     """Derive project root from this module's location."""
-    return Path(__file__).resolve().parent.parent.parent.parent
+    return Path(__file__).resolve().parents[2]  # ground_station/analysis/<this> -> repo root
 
 
 def create_flight_test_folder(

@@ -1608,15 +1608,14 @@
     var url = isOn ? '/api/recording/stop' : '/api/recording/start';
     var body = isOn ? null : JSON.stringify({ requested_by: 'operator' });
     // Merge flight-test fields from flight-test-panel.js if present
-    if (!isOn && window.__flight_test_start_body__) {
-      var ft = window.__flight_test_start_body__;
+    if (!isOn && typeof window.__flight_test_fields__ === 'function') {
+      var ft = window.__flight_test_fields__();
       var extra = { requested_by: 'operator' };
       if (ft.analyse) extra.analyse = true;
       if (ft.controller) extra.controller = ft.controller;
       if (ft.payload) extra.payload = ft.payload;
       if (ft.notes) extra.notes = ft.notes;
       body = JSON.stringify(extra);
-      window.__flight_test_start_body__ = null; // clear after use
     }
     var ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
     var timer = ctl ? setTimeout(function () { ctl.abort(); }, 3000) : null;
