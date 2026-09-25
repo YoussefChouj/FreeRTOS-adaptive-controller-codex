@@ -100,21 +100,26 @@ presets:
         manifest: flight_cascade_full
         hz: 50
 
-  # Bias tab logging — populates the DearPyGui dashboard Bias tab in WiFi mode.
-  # Slot 0 = dashboard sidebar (ARM/FlyMode/MRAC/status) at 20 Hz.
-  # Slot 1 = bias_frame at 10 Hz.  Decoded slot-1 data is injected into
-  # _telem["of"] so the Bias tab live indicators update without any
-  # wifi_bridge changes.  No CSV files are opened (live-only mode).
-  bias_logging:
-    description: "Dashboard sidebar + bias tab live indicators (WiFi mode Bias tab fix)"
-    measured_max_hz:
-      0: 16    # dashboard_frame_a @ 40 Hz req, div=5 -> 80/5 = 16 Hz (2026-09-21 binding-table vars)
-      1: 10    # bias_frame @ 10 Hz req, div=8 -> 80/8 = 10 Hz
+
+  # -------------------------------------------------------------------------
+  # T13: flight-test telemetry preset for PID-only vs MRAC comparison
+  # 4 slots, all at 10 Hz -> total ~1520 B/s (within 1600 B/s UART5 ceiling)
+  # Slot 0 = sync (status + attitude), Slot 1 = inner_loops (PID)
+  # Slot 2 = mrac_signals_minimal (e, u_nom, u_ad), Slot 3 = custom (motors)
+  # Budget: 40B*10 + 48B*10 + 36B*10 + 48B*10 = 1520 B/s
+  # -------------------------------------------------------------------------
+  flight_test_adaptive:
+    description: "Flight test PID vs MRAC (+asymmetric load): sidebar/MRAC state, rate loops, attitude loops+motors+MRAC flags, OF position+setpoints"
     slots:
       - slot: 0
         manifest: dashboard_frame_a
         hz: 40
       - slot: 1
-        manifest: bias_frame
-        hz: 10
-
+        manifest: inner_loops
+        hz: 80
+      - slot: 2
+        manifest: flight_test_outer
+        hz: 50
+      - slot: 3
+        manifest: flight_test_position
+        hz: 20
