@@ -114,6 +114,16 @@ printf '%s\n' \
 assert_grep '\[vps-task-alpha\] PROGRESS: fallback after 120s on gemini-3.1-pro-high' "$MOCK_STATE" "state.log contains PROGRESS fallback line"
 assert_grep 'Line 3: fallback to qwen' "$MOCK_LOGS/vps-task-alpha.out" "Mirrored log has Line 3"
 
+echo "=== Test 3b: Worker RETRY transition and NET failure ==="
+printf '%s
+' "=== RUN task-net ===" "--- TRANS ---" "RETRY after NET on agy/default in 60s" "--- LOG ---" "net log" "=== END ===" > "$MOCK_SSH_DATA"
+"$BRIDGE_SH" --once
+assert_grep '\[vps-task-net\] PROGRESS: retry after NET on agy/default in 60s' "$MOCK_STATE" "state.log contains PROGRESS retry line"
+printf '%s
+' "=== RUN task-net ===" "--- TRANS ---" "DONE rc=1 status=NET 2026-09-25T15:04:00+00:00" "--- LOG ---" "=== END ===" > "$MOCK_SSH_DATA"
+"$BRIDGE_SH" --once
+assert_grep '\[vps-task-net\] FAILED: NET' "$MOCK_STATE" "NET: FAILED line"
+
 echo "=== Test 4: Worker DONE status=OK rc=0 ==="
 printf '%s\n' \
 "=== RUN task-alpha ===" \

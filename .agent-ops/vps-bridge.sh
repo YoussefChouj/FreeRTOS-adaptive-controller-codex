@@ -7,7 +7,7 @@ SEEN_FILE="${SEEN_FILE:-$LOGS_DIR/vps-bridge.seen}"
 SSH_HOST="${VPS_SSH_HOST:-oc-agent}"
 mkdir -p "$LOGS_DIR"
 touch "$SEEN_FILE"
-REMOTE_SCRIPT='for f in ~/runs/*.out; do [ -f "$f" ] || continue; id=$(basename "$f" .out); echo "=== RUN $id ==="; echo "--- TRANS ---"; grep -E "^(STARTED|FALLBACK|DONE)" "$f" | tail -n 1; echo "--- LOG ---"; tail -n 300 "$f"; echo "=== END ==="; done'
+REMOTE_SCRIPT='for f in ~/runs/*.out; do [ -f "$f" ] || continue; id=$(basename "$f" .out); echo "=== RUN $id ==="; echo "--- TRANS ---"; grep -E "^(STARTED|FALLBACK|RETRY|DONE)" "$f" | tail -n 1; echo "--- LOG ---"; tail -n 300 "$f"; echo "=== END ==="; done'
 
 log_state() {
     local id="$1" msg="$2" ts
@@ -23,15 +23,15 @@ handle_transition() {
     if [[ "$trans" =~ ^STARTED ]]; then
         model=""; [[ "$trans" =~ model=([^ ]+) ]] && model="model=${BASH_REMATCH[1]}"
         log_state "$id" "STARTED: vps ${model:-${trans#STARTED }}"
-    elif [[ "$trans" =~ ^FALLBACK ]]; then
-        rest="${trans#FALLBACK}"; rest="${rest# }"
-        log_state "$id" "PROGRESS: fallback${rest:+ $rest}"
+    elif [[ "$trans" =~ ^(FALLBACK|RETRY) ]]; then
+        kind="${BASH_REMATCH[1]}"; rest="${trans#$kind}"; rest="${rest# }"
+        log_state "$id" "PROGRESS: ${kind,,}${rest:+ $rest}"
     elif [[ "$trans" =~ ^DONE ]]; then
         rc=0; st="OK"
         [[ "$trans" =~ rc=([0-9]+) ]] && rc="${BASH_REMATCH[1]}"
         [[ "$trans" =~ status=([A-Za-z0-9_-]+) ]] && st="${BASH_REMATCH[1]}"
         log_state "$id" "DONE: status=$st"
-        case "${st^^}" in QUOTA|AUTH|FAIL|TIMEOUT) log_state "$id" "FAILED: $st" ;; esac
+        case "${st^^}" in OK) ;; *) log_state "$id" "FAILED: $st" ;; esac
         log_state "$id" "EXIT: rc=$rc"
     fi
     grep -v "^${id}${tab}" "$SEEN_FILE" 2>/dev/null > "$SEEN_FILE.tmp" || true
