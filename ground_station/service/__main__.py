@@ -16,6 +16,8 @@ import sys
 import time
 from pathlib import Path
 
+from ground_station.platform.firmware_contract import SUBSCRIBE_SEND_TASK_HZ
+
 # Ensure repo root is on sys.path so `from ground_station import ...` works
 # regardless of where the user invokes from.
 _repo_root = Path(__file__).resolve().parents[2]
@@ -172,9 +174,10 @@ def apply_startup_preset(service, preset_name: str, *,
         slot = int(slot_spec["slot"])
         manifest_name = slot_spec["manifest"]
         requested_hz = int(slot_spec["hz"])
-        # MIXED-mode rate constant -- matches capture_preset.py:189.
-        # At 80 Hz Send_Task, divider = int(80/hz). Rounds 80/50 down to 1.
-        divider = max(1, int(80 / requested_hz))
+        # Send_Task cadence is 100 Hz (measured 2026-09-26: dividers 2/1/1/4
+        # gave 50/100/100/25 Hz frames), same as capture_preset.py's
+        # int(100 / hz). The old int(80 / hz) doubled 50 Hz slots to 100 Hz.
+        divider = max(1, int(SUBSCRIBE_SEND_TASK_HZ / requested_hz))
         try:
             mvars = store.get(manifest_name).vars
         except Exception as exc:
