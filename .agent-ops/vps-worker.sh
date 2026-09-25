@@ -14,7 +14,7 @@ ssh_() { ssh -o ServerAliveInterval=60 -o ServerAliveCountMax=5 "$h" "$@"; }
 digest() { MSYS_NO_PATHCONV=1 git show "vps/$1:.agent-ops/out/$1.md" 2>/dev/null || echo "(no digest written: read 'log $1 60')"; }
 case "${1:-}" in
 spawn)
-    [ -n "$(git status --porcelain -uno)" ] && echo "WARNING: uncommitted changes are NOT sent to the worker" >&2
+    d=$(git status --porcelain -uno | wc -l); [ "$d" -gt 0 ] && echo "note: $d modified tracked file(s) not sent (only HEAD is)" >&2
     git push -qf vps "HEAD:refs/heads/base/$2" "HEAD:refs/heads/laptop-main"
     scp -q "$4" "$h:tasks/$2.md"
     ssh_ "tmux new -d -s '$2' '~/bin/oc-run $2 $3 ~/tasks/$2.md'" && echo "spawned $2 on vps (base $(git rev-parse --short HEAD))" ;;

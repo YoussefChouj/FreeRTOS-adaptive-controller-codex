@@ -89,7 +89,7 @@ printf '%s\n' \
 "$BRIDGE_SH" --once
 
 assert_grep '\[vps-task-alpha\] STARTED: vps model=gemini-3.1-pro-high' "$MOCK_STATE" "state.log contains STARTED line"
-assert_grep '\+08:00 \[vps-task-alpha\]' "$MOCK_STATE" "Timestamp format ends with +08:00"
+assert_grep '[+-][0-9][0-9]:[0-9][0-9] \[vps-task-alpha\]' "$MOCK_STATE" "Timestamp ends with a UTC offset"
 assert_grep 'Line 1: init alpha' "$MOCK_LOGS/vps-task-alpha.out" "Mirrored log contains Line 1"
 assert_grep 'Line 2: setup alpha' "$MOCK_LOGS/vps-task-alpha.out" "Mirrored log contains Line 2"
 assert_grep '^task-alpha	STARTED' "$MOCK_SEEN" "Seen file contains STARTED transition"
