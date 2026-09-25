@@ -28,6 +28,12 @@
       'padding:6px 8px;background:var(--card,#fff);border:1px solid var(--border,#ddd);' +
       'border-radius:4px;line-height:1.5;';
 
+    // Preset hint label
+    var presetHint = document.createElement('div');
+    presetHint.style.cssText = 'font-size:10px;color:var(--muted,#888);margin-bottom:4px;';
+    presetHint.textContent = 'Preset: flight_test_adaptive';
+    panel.appendChild(presetHint);
+
     // Analyse checkbox
     var checkRow = document.createElement('div');
     checkRow.style.cssText = 'margin-bottom:4px;';
@@ -150,21 +156,34 @@
         return;
       }
       _buildUI(ctl);
-      // Attach click handler to show status after stop
+      // Attach click handler: on start-recording, expose flight-test fields
+      // so the shell includes them in /api/recording/start body.
       var btn = q('record-btn');
       if (btn && !btn._flightTestBound) {
         btn._flightTestBound = true;
         btn.addEventListener('click', function () {
-          var ctl = q('record-control');
-          if (!ctl) return;
-          // Check if we were recording (before the button click toggles state)
+          // Determine if we are starting or stopping by checking current state.
           fetch('/api/recording', { method: 'GET' })
             .then(function (r) { return r.json(); })
             .then(function (data) {
               if (data && data.recording) {
-                // Was recording — will stop; poll status after
+                // Was recording — will stop; poll status after.
                 setTimeout(_pollStatus, 1000);
+                return;
               }
+              // Starting a new recording — attach flight-test fields to the
+              // body so the shell's fetch picks them up via
+              // window.__flight_test_start_body__.
+              var check = q('flight-test-analyse');
+              var ctrlSel = q('flight-test-controller');
+              var payloadSel = q('flight-test-payload');
+              var notesInp = q('flight-test-notes');
+              window.__flight_test_start_body__ = {
+                analyse: check ? check.checked : false,
+                controller: ctrlSel ? (ctrlSel.value || '') : '',
+                payload: payloadSel ? (payloadSel.value || '') : '',
+                notes: notesInp ? (notesInp.value || '').trim() : '',
+              };
             })
             .catch(function () {});
         });
