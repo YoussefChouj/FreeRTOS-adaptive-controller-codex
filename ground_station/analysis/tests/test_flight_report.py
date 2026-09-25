@@ -837,3 +837,282 @@ class TestRpmInFlightReport:
             metrics = json.load(f)
         # rpm section should exist but be empty
         assert "rpm" in metrics
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for T20: YAML string values, per-slot telemetry quality,
+# and stale motor RPM summary
+# ---------------------------------------------------------------------------
+
+class TestYamlStringValueRegression:
+    """Regression: YAML signal-map values are strings, not lists.
+
+    The flight_signals.yaml preset uses ``role: key`` (string) format.
+    When ``compute_metrics`` iterates ``for k in keys``, iterating a
+    string yields single characters, none of which match pivoted keys,
+    so every role lands in ``missing_signals``.  The fix normalises
+    YAML values to lists in ``_load_signal_map``.
+    """
+
+    def _create_yaml_preset_session(
+        self, base_dir: Path, label: str = "yaml-preset"
+    ) -> Path:
+        """Session with YAML preset + keys that match the preset keys."""
+        session_dir = base_dir / label
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        # Write telemetry with keys matching the YAML preset format
+        n_points = 100
+        dt_s = 0.02
+        rows = []
+        base_ns = 1_000_000_000_000_000_000
+        for i in range(n_points):
+            t_ns = base_ns + i * int(dt_s * 1e9)
+            fields = [
+                f"{t_ns},0,slot0.imu_data.rol,5.0",
+                f"{t_ns},0,slot0.imu_data.pit,3.0",
+                f"{t_ns},0,slot0.imu_data.yaw,1.0",
+                f"{t_ns},2,slot2.Ctrler.rollPID.Des,10.0",
+                f"{t_ns},2,slot2.Ctrler.pitchPID.Des,5.0",
+                f"{t_ns},2,slot2.Ctrler.yawPID.Des,0.0",
+                f"{t_ns},2,slot2.mymotor.motor1,500",
+                f"{t_ns},2,slot2.mymotor.motor2,510",
+                f"{t_ns},2,slot2.mymotor.motor3,505",
+                f"{t_ns},2,slot2.mymotor.motor4,515",
+                f"{t_ns},2,slot2.mrac_flags.output_injection_on,0",
+                f"{t_ns},0,slot0.real_voltage,12.6",
+                f"{t_ns},0,slot0.DroneStatus.ARM_Status,0",
+                f"{t_ns},2,slot2.rpm_dbg_period_cyc[0],10080000",
+                f"{t_ns},2,slot2.rpm_dbg_edges[0],{i}",
+                f"{t_ns},2,slot2.rpm_dbg_period_cyc[1],10080000",
+                f"{t_ns},2,slot2.rpm_dbg_edges[1],{i}",
+                f"{t_ns},2,slot2.rpm_dbg_period_cyc[2],10080000",
+                f"{t_ns},2,slot2.rpm_dbg_edges[2],{i}",
+                f"{t_ns},2,slot2.rpm_dbg_period_cyc[3],10080000",
+                f"{t_ns},2,slot2.rpm_dbg_edges[3],{i}",
+            ]
+            rows.extend(fields)
+
+        csv_path = session_dir / "telemetry.csv"
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            f.write("received_ns,slot,key,value\n")
+            for row in rows:
+                f.write(row + "\n")
+
+        # Write YAML preset in the same directory as the project-level one
+        yaml_path = base_dir / "flight_signals.yaml"
+        yaml_path.write_text("""\
+roll: slot0.imu_data.rol
+pitch: slot0.imu_data.pit
+yaw: slot0.imu_data.yaw
+roll_sp: slot2.Ctrler.rollPID.Des
+pitch_sp: slot2.Ctrler.pitchPID.Des
+yaw_sp: slot2.Ctrler.yawPID.Des
+motor1: slot2.mymotor.motor1
+motor2: slot2.mymotor.motor2
+motor3: slot2.mymotor.motor3
+motor4: slot2.mymotor.motor4
+mrac_active: slot2.mrac_flags.output_injection_on
+vbat: slot0.real_voltage
+arm: slot0.DroneStatus.ARM_Status
+""")
+
+        manifest = {"label": label, "rows": len(rows)}
+        with open(session_dir / "manifest.json", "w") as f:
+            json.dump(manifest, f)
+
+        return session_dir
+
+    def test_yaml_string_values_are_normalized(self, tmp_path):
+        """Roles from YAML preset are resolved even when values are strings."""
+        session_dir = self._create_yaml_preset_session(tmp_path)
+        out_dir = tmp_path / "report"
+
+        from ground_station.analysis.flight_report import generate_report, _load_signal_map
+        sm = _load_signal_map(session_dir)
+        # Values must be lists, not strings
+        for role, keys in sm.items():
+            assert isinstance(keys, list), f"{role} value is {type(keys).__name__}, expected list"
+
+        # Key roles should be present and non-empty
+        assert sm["roll_sp"] == ["slot2.Ctrler.rollPID.Des"]
+        assert sm["motor1"] == ["slot2.mymotor.motor1"]
+        assert sm["mrac_active"] == ["slot2.mrac_flags.output_injection_on"]
+
+    def test_yaml_preset_signals_not_missing(self, tmp_path):
+        """Mapped signals from YAML preset must NOT appear in missing_signals."""
+        session_dir = self._create_yaml_preset_session(tmp_path)
+        out_dir = tmp_path / "report"
+
+        from ground_station.analysis.flight_report import generate_report
+        generate_report(str(session_dir), out_dir=str(out_dir))
+
+        with open(out_dir / "metrics.json") as f:
+            metrics = json.load(f)
+
+        missing = metrics.get("missing_signals", [])
+        # These should be found by the YAML preset
+        assert "roll_sp" not in missing, f"roll_sp should be found; missing={missing}"
+        assert "motor1" not in missing, f"motor1 should be found; missing={missing}"
+        assert "mrac_active" not in missing, f"mrac_active should be found; missing={missing}"
+
+    def test_yaml_preset_attitude_metrics_computed(self, tmp_path):
+        """Attitude metrics are computed when YAML preset provides keys."""
+        session_dir = self._create_yaml_preset_session(tmp_path)
+        out_dir = tmp_path / "report"
+
+        from ground_station.analysis.flight_report import generate_report
+        generate_report(str(session_dir), out_dir=str(out_dir))
+
+        with open(out_dir / "metrics.json") as f:
+            metrics = json.load(f)
+
+        assert "attitude" in metrics
+        for axis in ("roll", "pitch", "yaw"):
+            assert axis in metrics["attitude"], f"{axis} attitude metrics missing"
+            assert metrics["attitude"][axis].get("rmse") is not None
+
+
+class TestPerSlotTelemetryQuality:
+    """Regression: telemetry quality dt/rate/gaps must be per-slot."""
+
+    def _create_multi_slot_session(self, base_dir: Path, label: str = "multi-slot") -> Path:
+        """Session with keys from 2 slots sharing received_ns timestamps."""
+        session_dir = base_dir / label
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        # 50 frames @50Hz in slot0, 100 frames @50Hz in slot1
+        # Each frame has 10 keys (10 rows per received_ns)
+        rows = []
+        base_ns = 1_000_000_000_000_000_000
+
+        for i in range(50):
+            t_ns = base_ns + i * int(0.02 * 1e9)
+            # Slot0 keys
+            for k, v in [("key_a", 1.0), ("key_b", 2.0), ("key_c", 3.0)]:
+                rows.append(f"{t_ns},0,{k},{v}")
+            # Slot1 keys
+            for k, v in [("key_d", 4.0), ("key_e", 5.0)]:
+                rows.append(f"{t_ns},1,{k},{v}")
+
+        csv_path = session_dir / "telemetry.csv"
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            f.write("received_ns,slot,key,value\n")
+            for row in rows:
+                f.write(row + "\n")
+
+        manifest = {"label": label, "rows": len(rows)}
+        with open(session_dir / "manifest.json", "w") as f:
+            json.dump(manifest, f)
+
+        return session_dir
+
+    def test_telemetry_quality_has_slot_rates(self, tmp_path):
+        """Per-slot rate is reported in telemetry_quality.slot_rates."""
+        session_dir = self._create_multi_slot_session(tmp_path)
+        out_dir = tmp_path / "report"
+
+        from ground_station.analysis.flight_report import generate_report
+        generate_report(str(session_dir), out_dir=str(out_dir))
+
+        with open(out_dir / "metrics.json") as f:
+            metrics = json.load(f)
+
+        tq = metrics.get("telemetry_quality", {})
+        assert "slot_rates" in tq, "slot_rates should be in telemetry_quality"
+        sr = tq["slot_rates"]
+        assert "0" in sr, "slot 0 rate should be present"
+        assert "1" in sr, "slot 1 rate should be present"
+        # Rate should be ~50 Hz
+        assert sr["0"] is not None
+        assert sr["1"] is not None
+
+    def test_median_dt_not_zero(self, tmp_path):
+        """Median dt should reflect actual frame rate, not 0."""
+        session_dir = self._create_multi_slot_session(tmp_path)
+        out_dir = tmp_path / "report"
+
+        from ground_station.analysis.flight_report import generate_report
+        generate_report(str(session_dir), out_dir=str(out_dir))
+
+        with open(out_dir / "metrics.json") as f:
+            metrics = json.load(f)
+
+        tq = metrics.get("telemetry_quality", {})
+        # Median dt should be ~20_000_000 ns (20 ms), not 0
+        assert tq.get("median_dt_ns", 0) > 0, f"median_dt_ns should be >0, got {tq.get('median_dt_ns')}"
+
+
+class TestStaleMotorRpmSummary:
+    """Regression: Motor RPM section must always show per-motor lines."""
+
+    def _create_stale_rpm_session(self, base_dir: Path, label: str = "stale-rpm") -> Path:
+        """Session with RPM data but all edges frozen (stale)."""
+        session_dir = base_dir / label
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        rows = []
+        base_ns = 1_000_000_000_000_000_000
+        for i in range(50):
+            t_ns = base_ns + i * int(0.02 * 1e9)
+            fields = [
+                f"{t_ns},0,roll_deg,0.0",
+                f"{t_ns},0,roll_sp,0.0",
+                f"{t_ns},0,vbat,12.6",
+                f"{t_ns},0,arm,0",
+                # RPM period ~3000 RPM (period=10080000), but edges frozen
+                f"{t_ns},2,slot2.rpm_dbg_period_cyc[0],10080000",
+                f"{t_ns},2,slot2.rpm_dbg_edges[0],100",
+                f"{t_ns},2,slot2.rpm_dbg_period_cyc[1],10080000",
+                f"{t_ns},2,slot2.rpm_dbg_edges[1],200",
+                f"{t_ns},2,slot2.rpm_dbg_period_cyc[2],10080000",
+                f"{t_ns},2,slot2.rpm_dbg_edges[2],300",
+                f"{t_ns},2,slot2.rpm_dbg_period_cyc[3],10080000",
+                f"{t_ns},2,slot2.rpm_dbg_edges[3],400",
+            ]
+            rows.extend(fields)
+
+        csv_path = session_dir / "telemetry.csv"
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            f.write("received_ns,slot,key,value\n")
+            for row in rows:
+                f.write(row + "\n")
+
+        manifest = {"label": label, "rows": len(rows)}
+        with open(session_dir / "manifest.json", "w") as f:
+            json.dump(manifest, f)
+
+        return session_dir
+
+    def test_stale_rpm_section_in_summary(self, tmp_path):
+        """Summary includes Motor RPM section with per-motor lines even when all stale."""
+        session_dir = self._create_stale_rpm_session(tmp_path)
+        out_dir = tmp_path / "report"
+
+        from ground_station.analysis.flight_report import generate_report
+        generate_report(str(session_dir), out_dir=str(out_dir))
+
+        with open(out_dir / "summary.md") as f:
+            summary = f.read()
+
+        assert "Motor RPM" in summary, "Motor RPM section must be in summary"
+        assert "motor1" in summary, "motor1 must be listed"
+        assert "motor2" in summary, "motor2 must be listed"
+        assert "motor3" in summary, "motor3 must be listed"
+        assert "motor4" in summary, "motor4 must be listed"
+
+    def test_stale_rpm_has_stale_fraction(self, tmp_path):
+        """Stale RPM metrics have stale_fraction reflecting frozen edges."""
+        session_dir = self._create_stale_rpm_session(tmp_path)
+        out_dir = tmp_path / "report"
+
+        from ground_station.analysis.flight_report import generate_report
+        generate_report(str(session_dir), out_dir=str(out_dir))
+
+        with open(out_dir / "metrics.json") as f:
+            metrics = json.load(f)
+
+        rpm = metrics.get("rpm", {})
+        for motor in ("motor1", "motor2", "motor3", "motor4"):
+            assert motor in rpm, f"{motor} in rpm metrics"
+            assert "stale_fraction" in rpm[motor], f"stale_fraction for {motor}"

@@ -119,21 +119,68 @@ DEFAULT_SIGNALS: dict[str, list[str]] = {
 def _load_signal_map(session_dir: Path) -> dict[str, list[str]]:
     """Load signal map from YAML if present; otherwise return built-in defaults.
 
-    The returned map always includes all default roles so that
-    compute_metrics can properly identify which signals are missing.
+    Searches for the preset YAML in three locations:
+      1. session_dir.parent / "flight_signals.yaml"  (session-level preset)
+      2. sibling "flight_signals.yaml" in the analysis package
+         directory (project-level preset, e.g. used by dashboard), but ONLY
+         when the session is under the same project root as the preset
+      3. falls back to DEFAULT_SIGNALS
+
+    YAML values may be a single key string or a list of fallback keys.
+    Both formats are normalised to ``list[str]`` so that
+    ``compute_metrics`` can iterate them uniformly.
     """
+    # 1. session-level preset
     yaml_path = session_dir.parent / "flight_signals.yaml"
-    if not yaml_path.exists():
-        return dict(DEFAULT_SIGNALS)
+    if yaml_path.exists():
+        data = _read_yaml_file(yaml_path)
+        if data is not None:
+            return _normalize_signal_map(data)
+
+    # 2. project-level preset (ground_station/analysis/flight_signals.yaml)
+    #    Only when the session is under the same project root.
+    pkg_dir = Path(__file__).resolve().parent
+    project_yaml = pkg_dir / "flight_signals.yaml"
+    if project_yaml.exists():
+        # Check if session_dir is under the same project root
+        project_root = pkg_dir.parents[2]  # analysis/ground_station/<root>
+        try:
+            session_dir.resolve().relative_to(project_root.resolve())
+            # Session is under project root — use the project-level preset
+            data = _read_yaml_file(project_yaml)
+            if data is not None:
+                return _normalize_signal_map(data)
+        except ValueError:
+            # Session is outside the project root — skip project-level preset
+            pass
+
+    return dict(DEFAULT_SIGNALS)
+
+
+def _read_yaml_file(path: Path) -> dict[str, Any] | None:
+    """Return parsed YAML or None on failure."""
     try:
         import yaml
-        with open(yaml_path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
         if isinstance(data, dict):
             return data
     except Exception:
         pass
-    return dict(DEFAULT_SIGNALS)
+    return None
+
+
+def _normalize_signal_map(data: dict[str, Any]) -> dict[str, list[str]]:
+    """Convert every value in the signal map to a list of strings."""
+    result: dict[str, list[str]] = {}
+    for role, val in data.items():
+        if isinstance(val, list):
+            result[role] = [str(v) for v in val]
+        elif isinstance(val, str):
+            result[role] = [val]
+        else:
+            result[role] = []
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -396,6 +443,7 @@ def compute_metrics(
     pivoted: dict[str, tuple[list[int], list[float]]],
     segmentation: dict[str, Any],
     signal_map: dict[str, list[str]],
+    telemetry: list[tuple[int, int, str, float]] | None = None,
 ) -> dict[str, Any]:
     """Compute all flight-test metrics.
 
@@ -719,26 +767,69 @@ def compute_metrics(
 
     # vbat sag (already handled above if available)
 
-    # Telemetry quality
-    total_rows = sum(len(pivoted[k][0]) for k in pivoted)
-    unique_timestamps = set()
-    all_ts_list = []
-    for k, (ts, _) in pivoted.items():
-        all_ts_list.extend(ts)
-    if all_ts_list:
-        all_ts_list.sort()
-        if len(all_ts_list) >= 2:
-            dts = [all_ts_list[i+1] - all_ts_list[i] for i in range(len(all_ts_list)-1)]
-            median_dt = statistics.median(dts) if dts else 0
-            gap_threshold = median_dt * 5
-            gaps = sum(1 for dt in dts if dt > gap_threshold)
-            metrics["telemetry_quality"] = {
-                "total_samples": total_rows,
-                "median_dt_ns": round(median_dt, 2),
-                "estimated_rate_hz": round(1e9 / median_dt, 2) if median_dt > 0 else None,
-                "gap_count": gaps,
-                "gap_rate": round(gaps / len(dts) * 100, 4) if dts else 0.0,
-            }
+    # Telemetry quality — compute per-slot over unique frame timestamps.
+    # A single frame (one received_ns) may contain many keys; computing dt over
+    # all raw rows would produce spurious 0-dt gaps.
+    if telemetry:
+        slot_ts: dict[int, set[int]] = {}
+        total_rows = len(telemetry)
+        for ts, slot, _key, _val in telemetry:
+            slot_ts.setdefault(slot, set()).add(ts)
+        all_dts: list[float] = []
+        slot_rates: dict[int, float | None] = {}
+        total_gaps = 0
+        total_dt_count = 0
+        for slot, timestamps in sorted(slot_ts.items()):
+            sorted_ts = sorted(timestamps)
+            if len(sorted_ts) >= 2:
+                dts = [sorted_ts[i + 1] - sorted_ts[i] for i in range(len(sorted_ts) - 1)]
+                med_dt = statistics.median(dts)
+                total_dts = sum(dts)
+                all_dts.append(med_dt)
+                total_dt_count += len(dts)
+                gap_thresh = med_dt * 5 if med_dt > 0 else 0
+                gaps = sum(1 for d in dts if d > gap_thresh)
+                total_gaps += gaps
+                if med_dt > 0:
+                    slot_rates[slot] = round(1e9 / med_dt, 2)
+                else:
+                    slot_rates[slot] = None
+        if all_dts:
+            overall_median_dt = statistics.median(all_dts)
+        elif total_dt_count > 0:
+            overall_median_dt = 0
+        else:
+            overall_median_dt = 0
+        overall_est_rate: float | None = None
+        if overall_median_dt > 0:
+            overall_est_rate = round(1e9 / overall_median_dt, 2)
+        metrics["telemetry_quality"] = {
+            "total_samples": total_rows,
+            "median_dt_ns": round(overall_median_dt, 2),
+            "estimated_rate_hz": overall_est_rate,
+            "gap_count": total_gaps,
+            "gap_rate": round(total_gaps / max(total_dt_count, 1) * 100, 4),
+            "slot_rates": {str(k): v for k, v in slot_rates.items()},
+        }
+    else:
+        total_rows = sum(len(pivoted[k][0]) for k in pivoted)
+        all_ts_list = []
+        for k, (ts, _) in pivoted.items():
+            all_ts_list.extend(ts)
+        if all_ts_list:
+            all_ts_list.sort()
+            if len(all_ts_list) >= 2:
+                dts = [all_ts_list[i + 1] - all_ts_list[i] for i in range(len(all_ts_list) - 1)]
+                median_dt = statistics.median(dts) if dts else 0
+                gap_threshold = median_dt * 5
+                gaps = sum(1 for dt in dts if dt > gap_threshold)
+                metrics["telemetry_quality"] = {
+                    "total_samples": total_rows,
+                    "median_dt_ns": round(median_dt, 2),
+                    "estimated_rate_hz": round(1e9 / median_dt, 2) if median_dt > 0 else None,
+                    "gap_count": gaps,
+                    "gap_rate": round(gaps / len(dts) * 100, 4) if dts else 0.0,
+                }
 
     return metrics
 
@@ -1543,18 +1634,32 @@ def generate_summary(
         lines.append("### Motor RPM")
         lines.append("")
         has_data = False
+        all_stale = True
         for motor_key in ("motor1", "motor2", "motor3", "motor4"):
             m = rpm.get(motor_key)
-            if m and m.get("mean", 0) > 0:
-                has_data = True
-                lines.append(
-                    f"- **{motor_key}**: mean={m['mean']} RPM, "
-                    f"std={m['std']} RPM, max={m['max']} RPM, "
-                    f"stale={m['stale_fraction']:.4f}"
-                )
-        if has_data and "asymmetry_index" in rpm:
-            lines.append(f"- Asymmetry index (`asymmetry_index`): {rpm['asymmetry_index']}")
-        lines.append("")
+            if m:
+                all_stale = all_stale and m.get("mean", 0) == 0
+                if m.get("mean", 0) > 0:
+                    has_data = True
+                stale_val = m.get("stale_fraction", 0.0)
+                if m.get("mean", 0) > 0:
+                    lines.append(
+                        f"- **{motor_key}**: mean={m['mean']} RPM, "
+                        f"std={m['std']} RPM, max={m['max']} RPM, "
+                        f"stale={stale_val:.4f}"
+                    )
+                else:
+                    lines.append(
+                        f"- **{motor_key}**: mean=0 RPM, "
+                        f"stale_fraction={stale_val:.4f}"
+                    )
+        if all_stale and has_data is False:
+            lines.append("- Motors not spinning (all samples stale)")
+            lines.append("")
+        else:
+            if "asymmetry_index" in rpm:
+                lines.append(f"- Asymmetry index (`asymmetry_index`): {rpm['asymmetry_index']}")
+            lines.append("")
 
     mrac = metrics.get("mrac", {})
     if mrac:
@@ -1678,7 +1783,7 @@ def generate_report(
     manifest["signal_map_used"] = {k: v for k, v in signal_map.items() if k in pivoted}
 
     # Metrics
-    metrics = compute_metrics(pivoted, segmentation, signal_map)
+    metrics = compute_metrics(pivoted, segmentation, signal_map, telemetry)
 
     # Collect git info
     git_commit = get_git_commit()
@@ -1830,7 +1935,7 @@ def generate_compare_report(
             telemetry = read_telemetry_csv(sd_path)
             pivoted = pivot(telemetry)
             segmentation = segment_telemetry(telemetry, pivoted)
-            metrics = compute_metrics(pivoted, segmentation, signal_map)
+            metrics = compute_metrics(pivoted, segmentation, signal_map, telemetry)
             sessions.append((label, metrics, segmentation))
         except Exception as exc:
             sessions.append((label, {"error": str(exc)}, {}))
