@@ -480,7 +480,15 @@ class TelemetryAdapter:
         existing["source_time_ms"] = meta.source_time_ms or existing.get("source_time_ms", 0)
         existing["received"]       = meta.received or existing.get("received", 0)
         existing["dropped"]        = meta.dropped or existing.get("dropped", 0)
-        existing["loss_pct"]       = meta.loss_pct or existing.get("loss_pct", 0.0)
+        # Always derive ``loss_pct`` from the merged counters so it stays
+        # consistent with the ``received`` / ``dropped`` values shown to the
+        # user.  The ``or`` trick on line-482 preserves the bridge's counters
+        # when the sidebar path (meta.received=0) arrives, and the computed
+        # ``loss_pct`` will naturally reflect the preserved values.
+        recv = existing.get("received", 0)
+        drop = existing.get("dropped", 0)
+        total = recv + drop
+        existing["loss_pct"] = round(100.0 * drop / total, 3) if total else 0.0
         existing["last_update_ns"] = ns
 
         # Per-key freshness map. Plugins reading ``_key_ts[k]`` can

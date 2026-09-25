@@ -478,7 +478,7 @@ def test_state_stream_metadata_visible_over_http():
         assert s0["sequence"] == 42
         assert s0["received"] == 42
         assert s0["dropped"] == 1
-        assert abs(s0["loss_pct"] - 2.3) < 1e-6
+        assert s0["loss_pct"] == round(100.0 / 43, 3)  # derived from received/dropped
         assert s0["last_update_ns"] == 2000
         # Both raw subscribe keys and sidebar keys coexist in values.
         assert s0["values"]["slot0.imu_data.rol"] == 0.1

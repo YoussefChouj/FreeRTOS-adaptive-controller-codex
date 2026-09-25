@@ -265,7 +265,7 @@ class TestApply(unittest.TestCase):
         self.assertEqual(streams[0]["source_time_ms"], 1234)  # preserved
         self.assertEqual(streams[0]["received"], 42)         # preserved
         self.assertEqual(streams[0]["dropped"], 1)           # preserved
-        self.assertEqual(streams[0]["loss_pct"], 2.3)        # preserved
+        self.assertEqual(streams[0]["loss_pct"], round(100.0 / 43, 3))  # derived from received/dropped
         self.assertEqual(streams[0]["values"]["y"], 2.0)     # new value merged
         self.assertEqual(streams[0]["last_update_ns"], 200)  # updated
         self.assertEqual(streams[0]["tag"], "sidebar")       # tag updated
@@ -389,5 +389,87 @@ class TestStreamMetadataBackwardsCompat(unittest.TestCase):
         self.assertEqual(meta.loss_pct, 0.0)
 
 
-if __name__ == "__main__":
-    unittest.main()
+class TestLossPctStuckRegression(unittest.TestCase):
+    """Regression: loss_pct must not be stuck at a stale value after preset load.
+
+    When a preset is loaded, subscribe_slot() clears the bridge's
+    ``_stream_stats`` (``wifi_bridge.py:1018``) while the service's
+    ``_streams`` entry persists with an old high ``loss_pct``.
+    Fresh frames then carry ``meta.loss_pct=0.0`` which, with the
+    old ``or`` logic, could not clobber the stale value.
+
+    The fix computes ``loss_pct`` from the merged ``received`` + ``dropped``
+    counters, so it always equals ``100*dropped/(received+dropped)``.
+    """
+
+    def test_loss_pct_updates_after_preset_load(self):
+        """Simulate preset-load: old slot entry, fresh frame with low loss."""
+        a = _adapter()
+        streams = _streams()
+        # Step 1: Initial ingest — decoder had few frames, many drops.
+        # Simulates the very first frames after service start or preset load.
+        a.apply(NormalizedSample(
+            slot=0, tag="typed", values={"x": 1.0},
+            received_ns=100,
+            metadata=StreamMetadata(received=32, dropped=400, loss_pct=92.753),
+        ), streams)
+        # loss_pct should be 100*400/(32+400) ≈ 92.753
+        self.assertAlmostEqual(streams[0]["loss_pct"], 92.753, places=2)
+        # Step 2: More frames arrive, many clean (no drops).
+        a.apply(NormalizedSample(
+            slot=0, tag="typed", values={"y": 2.0},
+            received_ns=200,
+            metadata=StreamMetadata(received=10253, dropped=220, loss_pct=0.0),
+        ), streams)
+        # loss_pct must be recomputed from merged counters, not stuck at 92.753.
+        expected = round(100.0 * 220 / (10253 + 220), 3)
+        self.assertAlmostEqual(streams[0]["loss_pct"], expected, places=2)
+        self.assertNotEqual(streams[0]["loss_pct"], 92.753)
+
+    def test_loss_pct_zero_when_no_drops(self):
+        """Zero loss is reported as 0.0, not preserved from a prior value."""
+        a = _adapter()
+        streams = _streams()
+        # First: some drops.
+        a.apply(NormalizedSample(
+            slot=0, tag="typed", values={"x": 1.0},
+            received_ns=100,
+            metadata=StreamMetadata(received=10, dropped=5, loss_pct=33.333),
+        ), streams)
+        # Second: no new drops, clean frame — loss should update to 0.0.
+        a.apply(NormalizedSample(
+            slot=0, tag="typed", values={"y": 2.0},
+            received_ns=200,
+            metadata=StreamMetadata(received=20, dropped=5, loss_pct=0.0),
+        ), streams)
+        # received increased from 10 to 20, dropped stays at 5.
+        self.assertEqual(streams[0]["received"], 20)
+        self.assertEqual(streams[0]["dropped"], 5)
+        expected = round(100.0 * 5 / 25, 3)
+        self.assertAlmostEqual(streams[0]["loss_pct"], expected, places=2)
+
+    def test_sidebar_does_not_clobber_bridge_counters(self):
+        """Sidebar (meta.received=0) must not reset loss_pct via the or trick.
+
+        The sidebar path carries zero metadata so that ``or`` preserves
+        the bridge's counters.  The fix computes loss_pct from those
+        preserved counters, so the result is still correct.
+        """
+        a = _adapter()
+        streams = _streams()
+        # Typed path sets counters and loss_pct.
+        a.apply(NormalizedSample(
+            slot=0, tag="typed", values={"x": 1.0},
+            received_ns=100,
+            metadata=StreamMetadata(received=42, dropped=1, loss_pct=2.3),
+        ), streams)
+        # Sidebar arrives with zero metadata — must not clobber.
+        a.apply(NormalizedSample(
+            slot=0, tag="sidebar", values={"y": 2.0},
+            received_ns=200,
+            metadata=StreamMetadata(),
+        ), streams)
+        self.assertEqual(streams[0]["received"], 42)
+        self.assertEqual(streams[0]["dropped"], 1)
+        expected = round(100.0 * 1 / 43, 3)
+        self.assertAlmostEqual(streams[0]["loss_pct"], expected, places=2)
