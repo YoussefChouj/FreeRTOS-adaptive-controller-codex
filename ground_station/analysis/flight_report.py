@@ -105,6 +105,14 @@ DEFAULT_SIGNALS: dict[str, list[str]] = {
     "pos_x_sp": [],
     "pos_y_sp": [],
     "pos_z_sp": [],
+    "rpm_period_cyc1": ["slot2.rpm_dbg_period_cyc[0]"],
+    "rpm_period_cyc2": ["slot2.rpm_dbg_period_cyc[1]"],
+    "rpm_period_cyc3": ["slot2.rpm_dbg_period_cyc[2]"],
+    "rpm_period_cyc4": ["slot2.rpm_dbg_period_cyc[3]"],
+    "rpm_edges1": ["slot2.rpm_dbg_edges[0]"],
+    "rpm_edges2": ["slot2.rpm_dbg_edges[1]"],
+    "rpm_edges3": ["slot2.rpm_dbg_edges[2]"],
+    "rpm_edges4": ["slot2.rpm_dbg_edges[3]"],
 }
 
 
@@ -401,6 +409,7 @@ def compute_metrics(
         "motor_imbalance": {},
         "mrac": {},
         "vbat_sag": {},
+        "rpm": {},
         "telemetry_quality": {},
         "missing_signals": [],
     }
@@ -612,6 +621,103 @@ def compute_metrics(
                 "min_voltage": round(min(v_vals), 4),
                 "sag_v": round(max(v_vals) - min(v_vals), 4),
             }
+
+    # -----------------------------------------------------------------------
+    # RPM metrics — convert period_cyc → RPM, detect stale/edge-frozen.
+    # Source: BSP/rpm.h:31  RPM_PULSES_PER_REV=2,  line 82  "RPM =
+    #         60*SystemCoreClock/this"  with SystemCoreClock=168 MHz
+    #         (BSP/rpm.h:60, BSP/rpm.c:185).
+    # -----------------------------------------------------------------------
+    _rpm_period_keys = [
+        "slot2.rpm_dbg_period_cyc[0]",
+        "slot2.rpm_dbg_period_cyc[1]",
+        "slot2.rpm_dbg_period_cyc[2]",
+        "slot2.rpm_dbg_period_cyc[3]",
+    ]
+    _rpm_edge_keys = [
+        "slot2.rpm_dbg_edges[0]",
+        "slot2.rpm_dbg_edges[1]",
+        "slot2.rpm_dbg_edges[2]",
+        "slot2.rpm_dbg_edges[3]",
+    ]
+    _has_any_rpm = False
+    for ch_idx in range(4):
+        period_key = _rpm_period_keys[ch_idx]
+        edge_key = _rpm_edge_keys[ch_idx]
+        period_vals = pivoted.get(period_key)
+        edge_vals = pivoted.get(edge_key)
+        if period_vals is None or edge_vals is None:
+            continue
+        p_ts, p_list = period_vals
+        e_ts, e_list = edge_vals
+        n = min(len(p_list), len(e_list))
+        if n == 0:
+            continue
+        _has_any_rpm = True
+        period_aligned = p_list[:n]
+        edges_aligned = e_list[:n]
+
+        # Convert to RPM using firmware formula
+        #   RPM = 60 * SystemCoreClock / period_cyc
+        #   period_cyc is a full-revolution period (ISR accumulates 2 edges).
+        #   Source: BSP/rpm.h:82
+        _SYSTEM_CORE_CLOCK = 168_000_000
+        rpm_series: list[float] = []
+        for pc, ec in zip(period_aligned, edges_aligned):
+            if pc <= 0:
+                rpm_series.append(float("nan"))
+            else:
+                rpm_series.append((60.0 * _SYSTEM_CORE_CLOCK) / pc)
+
+        # Stale detection: edge counter not increasing for >=3 consecutive samples
+        _STALE_WINDOW = 3
+        stale_count = 0
+        consecutive_stale = 0
+        prev_edge: float | None = None
+        for ec in edges_aligned:
+            if prev_edge is not None and ec <= prev_edge:
+                consecutive_stale += 1
+                if consecutive_stale >= _STALE_WINDOW:
+                    stale_count += 1
+            else:
+                consecutive_stale = 0
+            prev_edge = ec if ec > 0 else prev_edge
+
+        valid_rpms = [r for r in rpm_series if not math.isnan(r)]
+        motor_label = f"motor{ch_idx + 1}"
+        if valid_rpms:
+            metrics["rpm"][motor_label] = {
+                "mean": round(statistics.mean(valid_rpms), 4),
+                "std": round(statistics.stdev(valid_rpms), 4) if len(valid_rpms) >= 2 else 0.0,
+                "max": round(max(valid_rpms), 4),
+                "stale_fraction": round(stale_count / max(len(rpm_series), 1), 6),
+            }
+        else:
+            metrics["rpm"][motor_label] = {
+                "mean": 0.0,
+                "std": 0.0,
+                "max": 0.0,
+                "stale_fraction": 1.0 if rpm_series else 0.0,
+            }
+
+    # Asymmetry index across motors
+    if _has_any_rpm:
+        motor_means = {
+            i + 1: metrics["rpm"].get(f"motor{i+1}", {}).get("mean", 0.0)
+            for i in range(4)
+        }
+        valid_means = [v for v in motor_means.values() if v > 0]
+        if len(valid_means) >= 2:
+            overall_mean = statistics.mean(valid_means)
+            if overall_mean > 0:
+                metrics["rpm"]["asymmetry_index"] = round(
+                    (max(valid_means) - min(valid_means)) / overall_mean, 6
+                )
+        # Front-back / left-right: no motor-layout mapping found in codebase.
+        # Source: searched BSP/, USER/, ground_station/ — none defines motor
+        #         physical layout (FL/FR/BL/BR).  Skipping these fields.
+
+    # vbat sag (already handled above if available)
 
     # Telemetry quality
     total_rows = sum(len(pivoted[k][0]) for k in pivoted)
@@ -1183,6 +1289,71 @@ def plot_time_series_overview(
     return files
 
 
+def plot_rpm(
+    pivoted: dict[str, tuple[list[int], list[float]]],
+    signal_map: dict[str, list[str]],
+    out_dir: Path,
+) -> list[str]:
+    """Plot 4 motor RPM traces vs time (research-paper style)."""
+    if not HAS_MPL:
+        return []
+    _setup_style()
+    files = []
+
+    _SYSTEM_CORE_CLOCK = 168_000_000
+
+    period_keys = [
+        "slot2.rpm_dbg_period_cyc[0]",
+        "slot2.rpm_dbg_period_cyc[1]",
+        "slot2.rpm_dbg_period_cyc[2]",
+        "slot2.rpm_dbg_period_cyc[3]",
+    ]
+
+    rpm_series: dict[int, tuple[list[float], list[float]]] = {}
+    for ch_idx, pk in enumerate(period_keys):
+        pv = pivoted.get(pk)
+        if pv is None:
+            continue
+        ts, p_list = pv
+        n = len(p_list)
+        if n == 0:
+            continue
+        t_norm = [(t - ts[0]) / 1e9 for t in ts]
+        rpm_vals: list[float] = []
+        for pc in p_list:
+            if pc > 0:
+                rpm_vals.append((60.0 * _SYSTEM_CORE_CLOCK) / pc)
+            else:
+                rpm_vals.append(float("nan"))
+        rpm_series[ch_idx + 1] = (t_norm, rpm_vals)
+
+    if not rpm_series:
+        return files
+
+    colors = _get_default_cmap()
+    fig, ax = plt.subplots(figsize=(7, 4))
+    fig.suptitle("Motor RPM", fontsize=14)
+
+    for i, (ch, (t_norm, rpm_vals)) in enumerate(sorted(rpm_series.items())):
+        valid_mask = [not math.isnan(v) for v in rpm_vals]
+        t_valid = [t_norm[j] for j in range(len(t_norm)) if valid_mask[j]]
+        v_valid = [rpm_vals[j] for j in range(len(rpm_vals)) if valid_mask[j]]
+        ax.plot(t_valid, v_valid, color=colors[i], label=f"motor{ch}", alpha=0.8)
+
+    ax.set_ylabel("RPM")
+    ax.set_xlabel("Time (s)")
+    ax.legend(loc="best", fontsize=9)
+
+    plt.tight_layout()
+    png_path = out_dir / "motor_rpm.png"
+    pdf_path = out_dir / "motor_rpm.pdf"
+    fig.savefig(png_path, format="png")
+    fig.savefig(pdf_path, format="pdf")
+    plt.close(fig)
+    files.extend([str(png_path), str(pdf_path)])
+    return files
+
+
 # ---------------------------------------------------------------------------
 # Compare mode
 # ---------------------------------------------------------------------------
@@ -1365,6 +1536,24 @@ def generate_summary(
         lines.append(f"- Estimated rate: {tq.get('estimated_rate_hz', 'N/A')} Hz")
         lines.append(f"- Median dt: {tq.get('median_dt_ns', 'N/A')} ns")
         lines.append(f"- Gaps: {tq.get('gap_count', 'N/A')} ({tq.get('gap_rate', 'N/A')}%)")
+        lines.append("")
+
+    rpm = metrics.get("rpm", {})
+    if rpm:
+        lines.append("### Motor RPM")
+        lines.append("")
+        has_data = False
+        for motor_key in ("motor1", "motor2", "motor3", "motor4"):
+            m = rpm.get(motor_key)
+            if m and m.get("mean", 0) > 0:
+                has_data = True
+                lines.append(
+                    f"- **{motor_key}**: mean={m['mean']} RPM, "
+                    f"std={m['std']} RPM, max={m['max']} RPM, "
+                    f"stale={m['stale_fraction']:.4f}"
+                )
+        if has_data and "asymmetry_index" in rpm:
+            lines.append(f"- Asymmetry index (`asymmetry_index`): {rpm['asymmetry_index']}")
         lines.append("")
 
     mrac = metrics.get("mrac", {})
@@ -1559,9 +1748,11 @@ def generate_report(
         plot_psd,
         plot_trajectory_3d,
         plot_time_series_overview,
+        plot_rpm,
     ]
     plot_args = [
         (pivoted, signal_map, out_dir / "plots", segmentation),
+        (pivoted, signal_map, out_dir / "plots",),
         (pivoted, signal_map, out_dir / "plots",),
         (pivoted, signal_map, out_dir / "plots",),
         (pivoted, signal_map, out_dir / "plots",),
