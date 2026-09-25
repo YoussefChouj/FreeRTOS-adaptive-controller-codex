@@ -697,6 +697,7 @@
     '/plugins/resource-map-panel.js',  // S7: firmware resource/data-flow map
     '/plugins/pid-gains-panel.js',     // PID inner/outer gains with firmware defaults
     '/plugins/record-helper.js',       // recorder: saved log path, note-kind helper
+    '/plugins/flight-test-panel.js',    // T14b: flight-test pipeline UI (analyse, controller, payload, notes)
     '/plugins/dataflow-panel.js',      // sensor -> estimator -> control -> motors block diagram
     // Phase 1B: agent UI plugins
     '/plugins/copilot-drawer.js',       // A: co-pilot drawer
@@ -1606,6 +1607,17 @@
     var isOn = !!window.recOn;
     var url = isOn ? '/api/recording/stop' : '/api/recording/start';
     var body = isOn ? null : JSON.stringify({ requested_by: 'operator' });
+    // Merge flight-test fields from flight-test-panel.js if present
+    if (!isOn && window.__flight_test_start_body__) {
+      var ft = window.__flight_test_start_body__;
+      var extra = { requested_by: 'operator' };
+      if (ft.analyse) extra.analyse = true;
+      if (ft.controller) extra.controller = ft.controller;
+      if (ft.payload) extra.payload = ft.payload;
+      if (ft.notes) extra.notes = ft.notes;
+      body = JSON.stringify(extra);
+      window.__flight_test_start_body__ = null; // clear after use
+    }
     var ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
     var timer = ctl ? setTimeout(function () { ctl.abort(); }, 3000) : null;
     fetch(url, {
