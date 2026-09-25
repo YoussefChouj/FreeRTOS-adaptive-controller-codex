@@ -66,3 +66,56 @@ performed, and the EKF stays in shadow mode.
   is now `partial`, so re-grant it from the control drawer if you want tier-0 writes.
 - The probe HID wedged at about 22:06 when two processes accessed it at once, and it recovered
   after a physical replug. T7 removes the test that caused this.
+
+---
+
+# 2026-09-25: flight-test preparation (PID vs MRAC, symmetric/asymmetric payload)
+
+All checks ran with the drone powered, connected and **disarmed**. No motor was spun. EKF stays in shadow mode.
+
+## Code on main
+
+| Commit | What |
+| --- | --- |
+| 6a4173e, 3ade4c4 | `flight_test_adaptive` preset: setpoints, motors, throttle, MRAC flags, OF position, motor RPM period/edges |
+| d894962, d68cda0 | Flight analysis (`flight_report`), `logs/flight_tests/` folders, REC "Analyse" hook, UI panel |
+| b3cf5cb, 00bcf95, 631cf5e | Paths 3D view (vendored three.js 0.160.1); markup fix; OrbitControls/layout fix |
+| 156938c, cd43f9d | Preset range coalescing (62-range limit); loader retries lost 0x08 schema replies |
+| 421718f | Service memory leak: in-memory SessionStore capped at 10000 rows per table |
+| f534bf2 | Motor RPM in analysis (RPM = 60*168e6/period_cyc) |
+| d113aa5, d4b6e7f | REC fields sent on first click; output root; analysis records done/failed; args as JSON |
+| 868bb15 | Report loads mapped signals; per-slot telemetry rate; RPM section always printed |
+| 1fe703b | Leftover RPM period at standstill ignored; `GET /api/recording` returns analysis_status |
+
+## Measured results
+
+- **Memory leak:** before, private memory grew about 18 MB/min. After the fix it went 40 -> 60 MB, then stayed flat at 60 MB for 6 min.
+- **Preset load (T17):** live `--preset flight_test_adaptive` named all 4 slots (36/6/11/5 ranges). Slots 1 and 3 needed 1-2 schema retries. 0 new drops in 10 s.
+- **Paths 3D (631cf5e):** in headless Chrome the canvas is 1076x560, drag and wheel both work, 0 console errors.
+- **Analysis of real session `20260925-185617` (after 868bb15):**
+  - Attitude RMSE: roll 0.681289, pitch 2.06189, yaw 25.189489.
+  - Telemetry rate 72.71 Hz; median dt 13753150 ns; 17 gaps (0.6043%).
+  - Per-slot rates: 50.3 / 132.33 / 131.15 / 25.01 Hz.
+  - No missing signals.
+- **Dry REC + Analyse, 21:08** (`20260925-210835-t20dry`, 12 s):
+  - 234006 rows.
+  - Folder `flight_tests/2026-09-25/210857_pid_symmetric_t20dry`; index row `done`; 8 plots.
+  - Notes containing a `"` were stored intact.
+  - Roll RMSE 0.991679, pitch 2.01579; 68.43 Hz; 11 gaps (0.3176%).
+  - This run exposed 2 bugs, both fixed in 1fe703b:
+    - A disarmed motor4 reported 19387 RPM, from a leftover period register value.
+    - `GET /api/recording` analysis_status was always null.
+- **Dry REC + Analyse, 21:34, after 1fe703b and a service restart** (`20260925-213435-statusdry`, 12 s):
+  - 223316 rows.
+  - `GET /api/recording` reported analysis_status `done` 25 s after stop; index row `done`.
+  - 16 plot files (8 plots as PNG + PDF).
+  - All 4 motors: mean 0 RPM, stale_fraction 1.0, "Motors not spinning (all samples stale)".
+  - 67.11 Hz; 10 gaps (0.3025%).
+- **Full pytest tree on 1fe703b:** 1216 passed, 35 skipped (613 s).
+- **Slot counters after the 21:33 restart:** slot 0 dropped 220 and slot 1 dropped 43, all during preset load. Neither count rose afterwards: at the 21:40 sample slot 0 had received 10253 and slot 1 had received 20354. Slots 2 and 3 dropped 0. `loss_pct` stayed at 87.302 and 36.134, which does not equal dropped/received (about 2% and 0.2%). That field looks stuck at its preset-load value. Not yet investigated.
+
+## NOT RUN
+
+- Any armed test, or any test with motors spinning, including every PID vs MRAC flight (symmetric and asymmetric payload). These are for the operator.
+- RPM analysis with motors actually spinning: only the stopped case was measured.
+- Browser click-through of the REC panel after 1fe703b (the pipeline was checked over the HTTP API only).
