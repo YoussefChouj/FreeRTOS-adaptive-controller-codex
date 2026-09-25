@@ -471,6 +471,12 @@ class GroundStationService:
                 subscribe_layout=self._subscribe_layout_snapshot(),
                 context=self._manifest_context(),
             )
+            preset_name = ""
+            bridge = getattr(self, "bridge", None)
+            if bridge:
+                layout = getattr(bridge, "_resubscribe_layout", "") or ""
+                if layout.startswith("preset "):
+                    preset_name = layout[7:]
             # Store flight-test metadata on the recorder
             analyse_meta = {
                 "analyse": bool(analyse),
@@ -479,6 +485,7 @@ class GroundStationService:
                 "notes": notes or "",
                 "session_dir": str(self.recorder.session_dir) if self.recorder.session_dir else "",
                 "label": label or "",
+                "preset": preset_name,
             }
             self.recorder.analyse_meta = analyse_meta
         except Exception:

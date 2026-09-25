@@ -1749,6 +1749,7 @@ def generate_report(
     notes: str = "",
     controller: str = "unknown",
     payload: str = "unknown",
+    preset: str = "",
 ) -> dict[str, Any]:
     """Generate a complete flight-test report.
 
@@ -1796,17 +1797,30 @@ def generate_report(
     elf_hash = get_elf_hash(session_dir)
 
     # Write metadata.json
+    session_preset = None
+    meta_path = session_dir / "session_meta.json"
+    if meta_path.exists():
+        try:
+            with open(meta_path, encoding="utf-8") as mf:
+                session_preset = json.load(mf).get("preset")
+        except Exception:
+            pass
+    if not session_preset and manifest.get("preset"):
+        session_preset = manifest.get("preset")
+
+    final_preset = session_preset or preset or None
+
     metadata = {
         "controller": controller,
         "payload": payload,
         "notes": notes,
-        "session_id": manifest.get("label", ""),
+        "session_id": session_dir.name,
         "started_at": manifest.get("started_at"),
         "started_at_epoch": manifest.get("started_at_epoch"),
         "stopped_at": manifest.get("stopped_at"),
         "stopped_at_epoch": manifest.get("stopped_at_epoch"),
         "firmware_elf_hash": elf_hash,
-        "preset": manifest.get("preset", ""),
+        "preset": final_preset,
         "signal_map_used": manifest["signal_map_used"],
         "git_commit": git_commit,
         "segmentation": {
