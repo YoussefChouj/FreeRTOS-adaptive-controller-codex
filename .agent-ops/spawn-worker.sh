@@ -39,8 +39,9 @@ TIMEOUT_SECS="${AGY_TIMEOUT:-7200}"
 WINDOW="agy-worker"
 
 # Cap concurrent workers by memory: a worker peaks near 620 MB RSS (logs/*.mem),
-# so a new one needs WORKER_MB free in WSL. Hard ceiling AGY_MAX_WORKERS (7).
-MAX_WORKERS="${AGY_MAX_WORKERS:-7}"
+# so a new one needs WORKER_MB free in WSL. Hard ceiling AGY_MAX_WORKERS (2): the
+# laptop charger drops out under heavy parallel load (battery at 3.5% health).
+MAX_WORKERS="${AGY_MAX_WORKERS:-2}"
 WORKER_MB="${AGY_WORKER_MB:-700}"
 LIVE_IDS="$(pgrep -af 'run-worker\.sh [0-9]{8}-[0-9]{6}' | grep -oE '[0-9]{8}-[0-9]{6}' | sort -u || true)"
 LIVE="$(printf '%s\n' "$LIVE_IDS" | grep -c . || true)"

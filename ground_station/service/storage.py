@@ -23,12 +23,23 @@ from typing import Any, Iterator
 # so they can be flushed into events.jsonl at the next recording start.
 NOTES_BUFFER_MAX = 50
 
+# An in-memory SessionStore keeps only the newest rows per high-rate table.
+# Unbounded, every live frame stayed in RAM: ~20 MB/min, 1.7 GB after 2 h.
+# Durable recording is CsvRecorder's job; this store only backs paged reads.
+MEMORY_MAX_ROWS = 10_000
+
 
 class SessionStore:
     """Thread-safe SQLite store for one or more ground-station sessions."""
 
-    def __init__(self, path: str | Path = ":memory:") -> None:
+    def __init__(self, path: str | Path = ":memory:",
+                 max_rows: int | None = None) -> None:
         self.path = str(path)
+        # Rows kept per table (telemetry, raw_frames); None keeps everything.
+        self.max_rows = max_rows if max_rows is not None else (
+            MEMORY_MAX_ROWS if self.path == ":memory:" else None)
+        self._prune_every = min(1000, self.max_rows) if self.max_rows else 0
+        self._inserts = {"telemetry": 0, "raw_frames": 0}
         self._db = sqlite3.connect(self.path, check_same_thread=False)
         self._lock = threading.RLock()
         self._db.row_factory = sqlite3.Row
@@ -111,6 +122,7 @@ class SessionStore:
                  source_time_ms, json.dumps(values, sort_keys=True,
                                             separators=(",", ":"))),
             )
+            self._prune("telemetry", cur.lastrowid)
             self._db.commit()
             return int(cur.lastrowid)
 
@@ -121,8 +133,18 @@ class SessionStore:
                 "INSERT INTO raw_frames(session_id,time_ns,direction,data) VALUES(?,?,?,?)",
                 (session_id, time_ns or time.time_ns(), direction, sqlite3.Binary(data)),
             )
+            self._prune("raw_frames", cur.lastrowid)
             self._db.commit()
             return int(cur.lastrowid)
+
+    def _prune(self, table: str, last_id: int) -> None:
+        """Drop rows older than the newest ``max_rows`` (caller holds the lock)."""
+        if not self._prune_every:
+            return
+        self._inserts[table] += 1
+        if self._inserts[table] % self._prune_every == 0:
+            self._db.execute(f"DELETE FROM {table} WHERE id <= ?",
+                             (last_id - self.max_rows,))
 
     def session(self, session_id: str) -> dict[str, Any]:
         with self._lock:
