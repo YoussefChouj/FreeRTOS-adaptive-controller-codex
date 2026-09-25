@@ -37,6 +37,7 @@ import secrets
 import selectors
 import socket
 import struct
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -45,6 +46,7 @@ from typing import Any
 # Platform detection: pty/termios are Unix-only
 _IS_WINDOWS = sys.platform == "win32"
 _PTY_AVAILABLE = False
+_WINPTY_AVAILABLE = False
 
 if not _IS_WINDOWS:
     try:
@@ -55,6 +57,13 @@ if not _IS_WINDOWS:
         _PTY_AVAILABLE = True
     except ImportError:
         pass
+else:
+    # On Windows try pywinpty first, then fall back to pipe-backed cmd.exe
+    try:
+        import winpty
+        _WINPTY_AVAILABLE = True
+    except ImportError:
+        _WINPTY_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
 # Token management
@@ -81,6 +90,37 @@ def _token_file(state_dir: Path | None = None) -> Path:
 # ---------------------------------------------------------------------------
 # Command builder
 # ---------------------------------------------------------------------------
+def _build_windows_cmd() -> list[str]:
+    """Build a command that provides an interactive stdin/stdout shell on Windows.
+
+    Uses a simple Python script that reads lines from stdin, tries to eval()
+    them (for expressions), and falls back to exec() (for statements).
+    The ``-u`` flag ensures unbuffered output so pipe-based clients get
+    responses immediately.
+    """
+    _lines = [
+        "import sys",
+        "while True:",
+        "    try:",
+        "        line = sys.stdin.readline()",
+        "        if not line:",
+        "            break",
+        "        line = line.strip()",
+        "        if not line:",
+        "            continue",
+        "        try:",
+        "            r = eval(line, globals())",
+        "            if r is not None:",
+        "                print(r)",
+        "        except:",
+        "            exec(line, globals())",
+        "    except:",
+        "        pass",
+    ]
+    _script = "\n".join(_lines)
+    return ["python", "-u", "-c", _script]
+
+
 def build_command(repo_wsl_path: str | None = None,
                   state_dir: Path | None = None) -> list[str]:
     """Return the shell command list for the PTY.
@@ -91,18 +131,16 @@ def build_command(repo_wsl_path: str | None = None,
     """
     override = os.environ.get("TERMINAL_CMD")
     if override:
-        return ["/bin/sh", "-c", override]
+        return ["/bin/sh", "-c", override] if not _IS_WINDOWS else ["cmd.exe", "/c", override]
 
     agent = os.environ.get("TERMINAL_AGENT", "opencode")
     if repo_wsl_path:
         cmd = f'cd "{repo_wsl_path}" && {agent}'
-        return ["/bin/sh", "-c", cmd]
+        return ["/bin/sh", "-c", cmd] if not _IS_WINDOWS else ["cmd.exe", "/c", cmd]
 
-    # WSL default
-    if repo_wsl_path:
-        cmd = f'cd "{repo_wsl_path}" && {agent}'
-        return ["wsl", "-e", "bash", "-lc", cmd]
-
+    # Default shell
+    if _IS_WINDOWS:
+        return _build_windows_cmd()
     return ["/bin/sh", "-c", agent]
 
 
@@ -112,13 +150,13 @@ def build_command(repo_wsl_path: str | None = None,
 _MASK_KEY_LEN = 4
 
 
-def _ws_accept(key: str) -> bytes:
+def _ws_accept(key: str) -> str:
     """Compute the WebSocket accept string."""
     import hashlib
     import base64
     guide = "258EAFA5-E914-47DA-95CA-5AB5DC59B3FF"
     combined = key + guide
-    return base64.b64encode(hashlib.sha1(combined.encode()).digest())
+    return base64.b64encode(hashlib.sha1(combined.encode()).digest()).decode()
 
 
 def _ws_read_frame(sock: socket.socket) -> tuple[int, bytes] | None:
@@ -186,6 +224,110 @@ def _ws_send_close(sock: socket.socket) -> None:
 # ---------------------------------------------------------------------------
 # PTY session
 # ---------------------------------------------------------------------------
+
+class PipeSession:
+    """Manage one pipe-backed subprocess + WS client connection.
+
+    Used as a fallback on Windows where ``pty`` is unavailable.
+    Spawns ``python -u -i`` by default (unbuffered, works well with pipes)
+    and pipes stdout/stderr to the WS client.
+    Client input is written to the subprocess stdin via WS frames.
+    """
+
+    def __init__(self, process: "subprocess.Popen[bytes]",
+                 client_sock: socket.socket,
+                 cmd: list[str]) -> None:
+        self.process = process
+        self.client_sock = client_sock
+        self.cmd = cmd
+        self._closed = False
+
+    def run(self) -> None:
+        """Read WS frames from client -> subprocess stdin; subprocess stdout
+        -> WS client.  Uses polling: reads from the client socket with a
+        short timeout, and after receiving a frame writes to stdin then
+        polls stdout until output is produced."""
+        import time as _time
+        self.client_sock.settimeout(0.5)  # short timeout for polling
+        try:
+            while not self._closed:
+                # Read one WS frame from client (with short timeout)
+                try:
+                    raw = _ws_read_frame(self.client_sock)
+                except Exception:
+                    break
+                if raw is None:
+                    break
+                opcode, payload = raw
+                if opcode == 8:  # close
+                    break
+                if opcode in (1, 2):
+                    # Write to stdin, then poll for output
+                    self.write(payload.decode("utf-8", errors="replace"))
+                    # Poll stdout for up to 5 seconds waiting for output
+                    deadline = _time.monotonic() + 5
+                    while _time.monotonic() < deadline:
+                        try:
+                            data = os.read(
+                                self.process.stdout.fileno(), 65536)
+                        except OSError:
+                            _time.sleep(0.05)
+                            continue
+                        if not data:
+                            break
+                        try:
+                            _ws_send_text(
+                                self.client_sock,
+                                data.decode("utf-8", errors="replace"))
+                        except Exception:
+                            break
+                    # If process died, stop
+                    if self.process.poll() is not None:
+                        break
+                else:
+                    # Check for stdout data even on non-text frames
+                    try:
+                        data = os.read(
+                            self.process.stdout.fileno(), 65536)
+                        if data:
+                            _ws_send_text(
+                                self.client_sock,
+                                data.decode("utf-8", errors="replace"))
+                    except Exception:
+                        pass
+        finally:
+            self.close()
+
+    def write(self, data: str) -> None:
+        """Write input from client into the subprocess stdin."""
+        try:
+            self.process.stdin.write(data.encode("utf-8"))
+            self.process.stdin.flush()
+        except Exception:
+            pass
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self.client_sock.close()
+        except Exception:
+            pass
+        try:
+            self.process.stdin.close()
+        except Exception:
+            pass
+        try:
+            self.process.terminate()
+            self.process.wait(timeout=3)
+        except Exception:
+            try:
+                self.process.kill()
+                self.process.wait(timeout=3)
+            except Exception:
+                pass
+
 
 class PtySession:
     """Manage one PTY + WS client connection."""
@@ -310,84 +452,67 @@ class TerminalManager:
             return False
         return provided == self._token
 
-    def handle_ws(self, client_sock: socket.socket) -> None:
-        """Accept one WS handshake, then run a PTY session."""
-        # Read HTTP upgrade request
-        request = b""
-        while b"\r\n\r\n" not in request:
-            chunk = client_sock.recv(4096)
-            if not chunk:
-                client_sock.close()
-                return
-            request += chunk
-        lines = request.decode("utf-8", errors="replace").split("\r\n")
-        path = lines[0].split(" ")[1] if lines else "/"
+    def handle_ws(self, client_sock: socket.socket, ws_key: str) -> None:
+        """Accept WS handshake (101), then run a PTY or pipe session.
 
-        # Parse query string for token
-        token: str | None = None
-        if "?" in path:
-            qs = path.split("?", 1)[1]
-            for param in qs.split("&"):
-                if param.startswith("token="):
-                    token = param[8:]
-                    break
+        The HTTP upgrade request and token have already been parsed and
+        validated by ``_handle_terminal_ws`` in ``api.py``.  This method
+        receives the raw ``ws_key`` so it does NOT re-read from the socket.
 
-        if not self.check_token(token):
-            client_sock.sendall(
-                b"HTTP/1.1 401 Unauthorized\r\n"
-                b"Content-Length: 28\r\n\r\n"
-                b'{"error":"terminal-auth-required"}')
-            client_sock.close()
-            return
-
-        # Check upgrade header
-        upgrade_hdr = ""
-        connection_hdr = ""
-        ws_key = ""
-        for line in lines[1:]:
-            if line.lower().startswith("upgrade:"):
-                upgrade_hdr = line.split(":", 1)[1].strip()
-            elif line.lower().startswith("connection:"):
-                connection_hdr = line.split(":", 1)[1].strip()
-            elif line.lower().startswith("sec-websocket-key:"):
-                ws_key = line.split(":", 1)[1].strip()
-
-        if upgrade_hdr.upper() != "WEBSOCKET" or "upgrade" not in connection_hdr.upper():
-            client_sock.close()
-            return
-        if not ws_key:
-            client_sock.close()
-            return
-
-        # Accept handshake
+        On Unix with ``pty`` available, spawns a PTY.  On Windows (where
+        ``pty`` is unavailable) falls back to a pipe-backed ``cmd.exe``.
+        """
+        # Send 101 Switching Protocols
         accept = _ws_accept(ws_key)
         response = (
             b"HTTP/1.1 101 Switching Protocols\r\n"
             b"Upgrade: websocket\r\n"
             b"Connection: Upgrade\r\n"
-            b"Sec-WebSocket-Accept: " + accept + b"\r\n\r\n"
+            b"Sec-WebSocket-Accept: " + accept.encode() + b"\r\n\r\n"
         )
         client_sock.sendall(response)
 
-        # Spawn PTY
-        master_fd, slave_fd = pty.openpty()
-        try:
-            import fcntl, termios
-            flags = fcntl.fcntl(slave_fd, fcntl.F_GETFL)
-            fcntl.fcntl(slave_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-            os.write(slave_fd, b"\n")
-        except Exception:
-            pass
+        # Spawn session — PTY on Unix, pipe-backed cmd.exe on Windows
+        session = None
+        if _PTY_AVAILABLE:
+            try:
+                master_fd, slave_fd = pty.openpty()
+                try:
+                    import fcntl, termios
+                    flags = fcntl.fcntl(slave_fd, fcntl.F_GETFL)
+                    fcntl.fcntl(slave_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+                    os.write(slave_fd, b"\n")
+                except Exception:
+                    pass
+                try:
+                    os.close(slave_fd)
+                except Exception:
+                    pass
+                session = PtySession(master_fd, client_sock, self._cmd)
+            except Exception:
+                pass
 
-        # Close slave side in parent
-        try:
-            os.close(slave_fd)
-        except Exception:
-            pass
+        if session is None:
+            # Fallback: pipe-backed subprocess (cmd.exe on Windows)
+            cmd = self._cmd if self._cmd else ["cmd.exe"]
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+                if _IS_WINDOWS else 0,
+            )
+            # Send a newline to get the shell prompt
+            try:
+                proc.stdin.write(b"\n")
+                proc.stdin.flush()
+            except Exception:
+                pass
+            session = PipeSession(proc, client_sock, self._cmd)
 
-        session = PtySession(master_fd, client_sock, self._cmd)
+        sid = id(session)
         with self._lock:
-            sid = id(session)
             self._sessions[sid] = session
         try:
             session.run()
