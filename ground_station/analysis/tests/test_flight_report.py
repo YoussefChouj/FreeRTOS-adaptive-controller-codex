@@ -563,3 +563,277 @@ class TestRealSession:
             plot_files = list((out_dir / "plots").glob("*")) if (out_dir / "plots").exists() else []
             print(f"\nBench sample report: {len(files_produced)} output dirs/files, "
                   f"{len(plot_files)} plot files")
+
+
+# ---------------------------------------------------------------------------
+# Tests for rpm_signals
+# ---------------------------------------------------------------------------
+
+class TestRpmSignals:
+    """Tests for ground_station.analysis.rpm_signals module."""
+
+    def test_known_period_gives_expected_rpm(self):
+        """A known period_cyc should produce the exact expected RPM value.
+
+        Formula: RPM = 60 * 168_000_000 / period_cyc
+        If period_cyc = 10_080_000 => RPM = 1000
+        """
+        from ground_station.analysis.rpm_signals import compute_rpm
+
+        # period_cyc = 10_080_000 cycles => 1000 RPM
+        period = [10_080_000.0]
+        edges = [1.0]
+        rpms = compute_rpm(period, edges)
+        assert len(rpms) == 1
+        assert rpms[0] == pytest.approx(1000.0, rel=1e-6)
+
+    def test_period_168e6_gives_60_rpm(self):
+        """period_cyc = SystemCoreClock => 60 RPM (1 rev per second)."""
+        from ground_station.analysis.rpm_signals import compute_rpm
+
+        period = [168_000_000.0]
+        edges = [1.0]
+        rpms = compute_rpm(period, edges)
+        assert rpms[0] == pytest.approx(60.0, rel=1e-6)
+
+    def test_period_0_gives_nan(self):
+        """Zero period must yield NaN, not inf."""
+        from ground_station.analysis.rpm_signals import compute_rpm
+
+        period = [0.0, 0, -1.0]
+        edges = [1.0, 2.0, 3.0]
+        rpms = compute_rpm(period, edges)
+        for r in rpms:
+            assert math.isnan(r), f"Expected NaN but got {r}"
+
+    def test_frozen_edges_give_nan(self):
+        """When edge counter stops increasing, RPM becomes NaN after hold_window."""
+        from ground_station.analysis.rpm_signals import compute_rpm
+
+        # period for ~3000 RPM
+        period = [3360000.0] * 10
+        edges = [100.0] * 10  # frozen at 100
+
+        rpms = compute_rpm(period, edges, hold_window=3)
+        # First 2 samples may be valid (holding window = 3)
+        # After 3 consecutive no-increase, NaN kicks in
+        import math
+        nan_count = sum(1 for r in rpms if math.isnan(r))
+        assert nan_count >= 7, f"Expected >=7 NaN but got {nan_count} NaN out of {rpms}"
+
+    def test_increasing_edges_not_stale(self):
+        """Monotonically increasing edges should never be stale."""
+        from ground_station.analysis.rpm_signals import compute_rpm
+
+        period = [3360000.0] * 100
+        edges = [float(i) for i in range(1, 101)]  # steadily increasing
+        rpms = compute_rpm(period, edges, hold_window=10)
+        for r in rpms:
+            assert not math.isnan(r), f"Unexpected NaN: {rpms}"
+
+    def test_rpm_metrics(self):
+        """rpm_metrics returns expected keys and values."""
+        from ground_station.analysis.rpm_signals import rpm_metrics
+
+        valid_rpms = [1000.0, 2000.0, 3000.0, 4000.0, 5000.0]
+        result = rpm_metrics(valid_rpms)
+        assert "mean" in result
+        assert "std" in result
+        assert "max" in result
+        assert "stale_fraction" in result
+        assert result["mean"] == pytest.approx(3000.0)
+        assert result["max"] == pytest.approx(5000.0)
+        assert result["stale_fraction"] == 0.0
+
+    def test_rpm_metrics_empty(self):
+        """All-NaN input gives zero metrics."""
+        from ground_station.analysis.rpm_signals import rpm_metrics
+
+        result = rpm_metrics([float("nan")] * 10)
+        assert result["mean"] == 0.0
+        assert result["max"] == 0.0
+        assert result["stale_fraction"] == 1.0
+
+    def test_asymmetry_index(self):
+        """(max-mean - min-mean) / mean(mean) across motors."""
+        from ground_station.analysis.rpm_signals import asymmetry_index
+        import statistics
+
+        means = {1: 3000.0, 2: 3000.0, 3: 3000.0, 4: 4000.0}
+        ai = asymmetry_index(means)
+        overall = statistics.mean([3000.0, 3000.0, 3000.0, 4000.0])
+        expected = (4000.0 - 3000.0) / overall
+        assert ai == pytest.approx(expected, rel=1e-6)
+
+    def test_asymmetry_index_few_motors(self):
+        """Fewer than 2 valid means => None."""
+        from ground_station.analysis.rpm_signals import asymmetry_index
+
+        means = {1: 3000.0}
+        assert asymmetry_index(means) is None
+
+
+class TestRpmInFlightReport:
+    """RPM integration into flight_report (synthetic session)."""
+
+    def _create_rpm_session(self, base_dir: Path, label: str = "rpm-test") -> Path:
+        """Create a synthetic session with RPM period/edge keys."""
+        session_dir = base_dir / label
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        n_points = 200
+        dt_s = 0.02
+        rows = []
+        received_base = 1_000_000_000_000_000_000
+
+        for i in range(n_points):
+            t_ns = received_base + i * int(dt_s * 1e9)
+            t_s = i * dt_s
+
+            # RPM ~3000 for motor1 (period = 60*168e6/3000 = 3_360_000)
+            rpm1 = 3000.0
+            period1 = int(60 * 168_000_000 / rpm1)
+            edge1 = float(100 + i)
+
+            # RPM ~3200 for motor2
+            rpm2 = 3200.0
+            period2 = int(60 * 168_000_000 / rpm2)
+            edge2 = float(200 + i)
+
+            # Motor3: edges frozen at sample 150 (stale test)
+            period3 = int(60 * 168_000_000 / 3000.0)
+            edge3 = float(150) if i >= 150 else float(150 + i)
+
+            # Motor4: period 0 for first 5 samples, then 0 RPM
+            if i < 5:
+                period4 = 0
+            else:
+                period4 = int(60 * 168_000_000 / 3100.0)
+            edge4 = float(300 + i)
+
+            fields = [
+                f"{t_ns},0,arm,0.0",
+                f"{t_ns},0,roll_deg,0.0",
+                f"{t_ns},0,roll_sp,0.0",
+                f"{t_ns},0,vbat,12.6",
+                f"{t_ns},0,motor1,{500 + 0.1*i:.2f}",
+                f"{t_ns},0,motor2,{500 + 0.1*i:.2f}",
+                f"{t_ns},0,motor3,{500 + 0.1*i:.2f}",
+                f"{t_ns},0,motor4,{500 + 0.1*i:.2f}",
+                f"{t_ns},2,slot2.rpm_dbg_period_cyc[0],{period1:.0f}",
+                f"{t_ns},2,slot2.rpm_dbg_edges[0],{edge1:.0f}",
+                f"{t_ns},2,slot2.rpm_dbg_period_cyc[1],{period2:.0f}",
+                f"{t_ns},2,slot2.rpm_dbg_edges[1],{edge2:.0f}",
+                f"{t_ns},2,slot2.rpm_dbg_period_cyc[2],{period3:.0f}",
+                f"{t_ns},2,slot2.rpm_dbg_edges[2],{edge3:.0f}",
+                f"{t_ns},2,slot2.rpm_dbg_period_cyc[3],{period4:.0f}",
+                f"{t_ns},2,slot2.rpm_dbg_edges[3],{edge4:.0f}",
+            ]
+            rows.extend(fields)
+
+        csv_path = session_dir / "telemetry.csv"
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            f.write("received_ns,slot,key,value\n")
+            for row in rows:
+                f.write(row + "\n")
+
+        manifest = {
+            "label": label,
+            "reason": "rpm test fixture",
+            "rows": len(rows),
+        }
+        with open(session_dir / "manifest.json", "w", encoding="utf-8") as f:
+            json.dump(manifest, f)
+
+        return session_dir
+
+    def test_rpm_session_produces_metrics(self, tmp_path):
+        """A session with RPM data produces rpm metrics in the report."""
+        session_dir = self._create_rpm_session(tmp_path)
+        out_dir = tmp_path / "rpm-report"
+
+        from ground_station.analysis.flight_report import generate_report
+        result = generate_report(str(session_dir), out_dir=str(out_dir))
+
+        with open(out_dir / "metrics.json") as f:
+            metrics = json.load(f)
+
+        assert "rpm" in metrics
+        for motor in ("motor1", "motor2", "motor3", "motor4"):
+            assert motor in metrics["rpm"], f"Missing {motor} in rpm metrics"
+
+    def test_rpm_mean_values_are_reasonable(self, tmp_path):
+        """RPM means should be close to injected values (~3000, ~3200, etc.)."""
+        session_dir = self._create_rpm_session(tmp_path)
+        out_dir = tmp_path / "rpm-values"
+
+        from ground_station.analysis.flight_report import generate_report
+        result = generate_report(str(session_dir), out_dir=str(out_dir))
+
+        with open(out_dir / "metrics.json") as f:
+            metrics = json.load(f)
+
+        rpm = metrics["rpm"]
+        # Motor1 ~3000 RPM
+        assert rpm["motor1"]["mean"] == pytest.approx(3000.0, rel=0.05)
+        # Motor2 ~3200 RPM
+        assert rpm["motor2"]["mean"] == pytest.approx(3200.0, rel=0.05)
+
+    def test_rpm_stale_fraction_for_frozen_motor(self, tmp_path):
+        """Motor3 has frozen edges after sample 150 out of 200 => stale fraction > 0."""
+        session_dir = self._create_rpm_session(tmp_path)
+        out_dir = tmp_path / "rpm-stale"
+
+        from ground_station.analysis.flight_report import generate_report
+        result = generate_report(str(session_dir), out_dir=str(out_dir))
+
+        with open(out_dir / "metrics.json") as f:
+            metrics = json.load(f)
+
+        stale = metrics["rpm"]["motor3"]["stale_fraction"]
+        assert stale > 0.0, f"Expected stale_fraction > 0 but got {stale}"
+
+    def test_rpm_plot_generated(self, tmp_path):
+        """RPM plot PNG and PDF are created."""
+        session_dir = self._create_rpm_session(tmp_path)
+        out_dir = tmp_path / "rpm-plots"
+
+        from ground_station.analysis.flight_report import generate_report
+        result = generate_report(str(session_dir), out_dir=str(out_dir))
+
+        plots_dir = out_dir / "plots"
+        assert plots_dir.exists()
+        rpm_png = plots_dir / "motor_rpm.png"
+        rpm_pdf = plots_dir / "motor_rpm.pdf"
+        assert rpm_png.exists(), "Expected motor_rpm.png"
+        assert rpm_pdf.exists(), "Expected motor_rpm.pdf"
+
+    def test_summary_includes_rpm(self, tmp_path):
+        """Summary markdown contains Motor RPM section."""
+        session_dir = self._create_rpm_session(tmp_path)
+        out_dir = tmp_path / "rpm-summary"
+
+        from ground_station.analysis.flight_report import generate_report
+        generate_report(str(session_dir), out_dir=str(out_dir))
+
+        with open(out_dir / "summary.md") as f:
+            summary = f.read()
+        assert "Motor RPM" in summary
+        assert "motor1" in summary
+        assert "asymmetry_index" in summary
+
+    def test_absent_rpm_keys_degrade_gracefully(self, tmp_path):
+        """A session without RPM keys produces a report without crashing."""
+        session_dir = _create_synthetic_session(tmp_path, "no-rpm")
+        out_dir = tmp_path / "no-rpm-report"
+
+        from ground_station.analysis.flight_report import generate_report
+        result = generate_report(str(session_dir), out_dir=str(out_dir))
+
+        assert (out_dir / "metrics.json").exists()
+        assert (out_dir / "summary.md").exists()
+        # Should not crash; rpm metrics may be absent or empty
+        with open(out_dir / "metrics.json") as f:
+            metrics = json.load(f)
+        # rpm section should exist but be empty
+        assert "rpm" in metrics
