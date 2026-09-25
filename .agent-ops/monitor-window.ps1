@@ -18,6 +18,15 @@ $ops = $PSScriptRoot
 $stateLog = Join-Path $ops 'state.log'
 $alertKinds = 'STALLED|NEEDS_INPUT|NET_DOWN|LOOP|BLOCKED|FAILED'
 
+$gitBash = 'C:\Program Files\Git\bin\bash.exe'
+$bridgeProc = $null
+$bridgeScript = Join-Path $ops 'vps-bridge.sh'
+if ((Test-Path $gitBash) -and (Test-Path $bridgeScript)) {
+    try {
+        $bridgeProc = Start-Process -FilePath $gitBash -ArgumentList "`"$bridgeScript`"" -WorkingDirectory $ops -WindowStyle Hidden -PassThru
+    } catch {}
+}
+
 $form = New-Object Windows.Forms.Form
 $form.Text = 'agent-ops workers'
 $form.TopMost = $true
@@ -90,7 +99,7 @@ function Update-View {
     $now = [DateTimeOffset]::Now
     $tasks = [ordered]@{}
     for ($i = 0; $i -lt $lines.Count; $i++) {
-        if ($lines[$i] -notmatch '^(\S+) \[(\d{8}-\d{6})\] (\w+): ?(.*)$') { continue }
+        if ($lines[$i] -notmatch '^(\S+) \[([\w-]+)\] (\w+): ?(.*)$') { continue }
         $ts = [DateTimeOffset]::Parse($Matches[1]); $id = $Matches[2]; $kind = $Matches[3]; $msg = $Matches[4]
         if (-not $tasks.Contains($id)) { $tasks[$id] = @{ kind = ''; msg = ''; status = $ts; exited = $null; alert = '' } }
         $t = $tasks[$id]
@@ -120,7 +129,8 @@ function Update-View {
         if (-not $t.exited -and ($now - $t.status).TotalHours -gt 3) { continue }
         $out = Join-Path $ops "logs\$id.out"
         $outAge = if (Test-Path $out) { Format-Age ((Get-Date) - (Get-Item $out).LastWriteTime) } else { '-' }
-        $row = New-Object Windows.Forms.ListViewItem($id.Substring(9))
+        $label = if ($id.Length -ge 9 -and $id -match '^\d{8}-') { $id.Substring(9) } else { $id }
+        $row = New-Object Windows.Forms.ListViewItem($label)
         foreach ($v in @($t.kind, (Format-Age ($now - $t.status)), $outAge, $t.msg)) { [void]$row.SubItems.Add([string]$v) }
         $row.ForeColor = if ($t.exited) { [Drawing.Color]::Gray }
                          elseif ($t.alert) { [Drawing.Color]::OrangeRed }
@@ -146,6 +156,16 @@ $timer.Interval = 5000
 $timer.Add_Tick({ Update-View })
 $timer.Start()
 $form.Add_Shown({ [void][AgentOps.Win]::ShowWindow($form.Handle, 5); Update-View })
-$form.Add_FormClosed({ $timer.Stop(); $tray.Visible = $false; $tray.Dispose() })
+$form.Add_FormClosed({
+    $timer.Stop()
+    $tray.Visible = $false
+    $tray.Dispose()
+    if ($bridgeProc -and -not $bridgeProc.HasExited) {
+        try { $bridgeProc.Kill() } catch {}
+    }
+})
 [Windows.Forms.Application]::Run($form)
+if ($bridgeProc -and -not $bridgeProc.HasExited) {
+    try { $bridgeProc.Kill() } catch {}
+}
 $mutex.ReleaseMutex()
