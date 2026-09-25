@@ -548,10 +548,8 @@
     import('/vendor/three/three.module.min.js').then(function(threeMod) {
       var THREE = threeMod;
       return import('/vendor/three/OrbitControls.js').then(function(controlsMod) {
+        // Module namespace objects are frozen; pass OC alongside THREE instead of attaching it.
         var OC = controlsMod.OrbitControls || controlsMod.default;
-        if (!THREE.OrbitControls) {
-          THREE.OrbitControls = OC;
-        }
         return { THREE: THREE, OrbitControls: OC };
       });
     }).then(function(mods) {
@@ -995,11 +993,13 @@
       '.pp-legend-line { width: 20px; height: 2px; }',
       '.pp-entry-row { display: flex; gap: 4px; align-items: center; margin-bottom: 4px; flex-wrap: wrap; }',
       '.pp-entry-row .pp-wp-input { width: 44px; }',
+      '.pp-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }',
+      '.pp-main > .pp-canvas-wrap { flex: 1; min-height: 400px; }',
       '.pp-view-toggle { display: flex; gap: 2px; margin-bottom: 8px; }',
       '.pp-view-btn { flex: 1; padding: 5px 8px; border-radius: 4px; background: var(--bg); color: var(--muted); border: 1px solid var(--border); cursor: pointer; font-size: 11px; font-weight: 600; }',
       '.pp-view-btn.active { background: var(--accent); color: var(--text); }',
       '.pp-3d-wrap { position: relative; background: #0a0a1a; border-radius: 6px; overflow: hidden; }',
-      '.pp-3d-canvas { display: block; width: 100%; height: 400px; }',
+      '.pp-3d-canvas { display: block; width: 100%; height: 560px; }',
       '.pp-3d-controls { position: absolute; bottom: 8px; left: 8px; display: flex; gap: 4px; flex-wrap: wrap; }',
       '.pp-3d-btn { padding: 4px 8px; border-radius: 4px; background: rgba(20,20,40,0.85); color: var(--text); border: 1px solid var(--border); cursor: pointer; font-size: 10px; }',
       '.pp-3d-btn:hover { background: var(--accent); }',
@@ -1018,7 +1018,12 @@
 
       '<div class="pp-container">',
 
-      /* Canvas area */
+      /* Main column: view toggle, then the 2D or 3D view (one grid cell, so the sidebar keeps its column) */
+      '<div class="pp-main">',
+      '<div class="pp-view-toggle">',
+      '<button id="pp-view-2d" class="pp-view-btn active">2D</button>',
+      '<button id="pp-view-3d" class="pp-view-btn">3D</button>',
+      '</div>',
       '<div id="pp-2d-wrap" class="pp-canvas-wrap">',
       '<canvas id="pp-canvas" class="pp-canvas"></canvas>',
       '<div id="pp-demo-badge" class="pp-demo-badge">No position data</div>',
@@ -1030,10 +1035,6 @@
       '</div>',
 
       /* 3D view */
-      '<div class="pp-view-toggle">',
-      '<button id="pp-view-2d" class="pp-view-btn active">2D</button>',
-      '<button id="pp-view-3d" class="pp-view-btn">3D</button>',
-      '</div>',
       '<div id="pp-3d-wrap" class="pp-3d-wrap" style="display:none">',
       '<canvas id="pp-3d-canvas" class="pp-3d-canvas"></canvas>',
       '<div class="pp-3d-controls">',
@@ -1049,8 +1050,9 @@
       '<div class="pp-3d-legend-item"><div class="pp-3d-legend-dash"></div>Desired path</div>',
       '<div id="pp-3d-error" class="pp-3d-legend-item" style="margin-top:4px;color:#4a9eff">Error: — m</div>',
       '</div>',
-      '<div class="pp-3d-controls" style="bottom:auto;top:8px;right:8px">',
+      '<div class="pp-3d-controls" style="bottom:auto;top:8px;left:auto;right:8px">',
       '<div class="pp-3d-follow-row"><span>Follow drone</span><div id="pp-3d-follow-toggle" class="pp-3d-follow-toggle" role="switch" aria-checked="false" title="Toggle follow drone"></div></div>',
+      '</div>',
       '</div>',
       '</div>',
 
