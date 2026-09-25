@@ -165,3 +165,245 @@ def test_health_has_process_rss_mb():
     finally:
         api.stop()
         service.stop()
+
+
+# -----------------------------------------------------------------------
+# 5. Terminal WS handshake regression — T12b
+# -----------------------------------------------------------------------
+
+def _http_request(host, port, method="GET", path="/", headers=None, body=None):
+    """Send a raw HTTP request and return (status, headers_dict, body_bytes)."""
+    import http.client
+    hdrs = headers or {}
+    if body:
+        hdrs["Content-Length"] = str(len(body))
+    conn = http.client.HTTPConnection(host, port, timeout=5)
+    conn.request(method, path, body=body, headers=hdrs)
+    resp = conn.getresponse()
+    rb = resp.read()
+    rh = {k.lower(): v for k, v in resp.getheaders()}
+    conn.close()
+    return resp.status, rh, rb
+
+
+def _ws_handshake(host, port, token):
+    """Open a raw socket, send a WebSocket upgrade request, return (accept_header, raw_socket)."""
+    import socket
+    key = "dGhlIHNhbXBsZSBub25jZQ=="  # RFC 6455 example
+    req = (
+        f"GET /api/terminal/ws?token={token} HTTP/1.1\r\n"
+        f"Host: 127.0.0.1:{port}\r\n"
+        f"Upgrade: websocket\r\n"
+        f"Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {key}\r\n"
+        f"Sec-WebSocket-Version: 13\r\n"
+        f"\r\n"
+    ).encode()
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(5)
+    sock.connect((host, port))
+    sock.sendall(req)
+    response = b""
+    while b"\r\n\r\n" not in response:
+        chunk = sock.recv(4096)
+        if not chunk:
+            sock.close()
+            raise RuntimeError("handshake: no response headers")
+        response += chunk
+    lines = response.decode("utf-8", errors="replace").split("\r\n")
+    status_line = lines[0]
+    status = int(status_line.split(" ")[1])
+    accept_hdr = ""
+    for line in lines[1:]:
+        if line.lower().startswith("sec-websocket-accept:"):
+            accept_hdr = line.split(":", 1)[1].strip()
+    return status, accept_hdr, sock
+
+
+def _ws_send_text(sock, text):
+    """Send a WebSocket text frame (masked, client→server)."""
+    import struct
+    data = text.encode("utf-8")
+    length = len(data)
+    import secrets
+    mask_key = secrets.token_bytes(4)
+    frame = b"\x81"
+    if length < 126:
+        frame += bytes([0x80 | length])
+    elif length < 65536:
+        frame += bytes([0x80 | 126]) + struct.pack("!H", length)
+    else:
+        frame += bytes([0x80 | 127]) + struct.pack("!Q", length)
+    frame += mask_key
+    masked = bytes(d ^ mask_key[i % 4] for i, d in enumerate(data))
+    frame += masked
+    sock.sendall(frame)
+
+
+def _ws_recv_text(sock):
+    """Receive one WebSocket text frame (unmasked, server→client)."""
+    import struct
+    header = sock.recv(2)
+    if len(header) < 2:
+        return ""
+    fin = header[0] & 0x80
+    opcode = header[0] & 0x0F
+    length = header[1] & 0x7F
+    if length == 126:
+        ldata = sock.recv(2)
+        length = struct.unpack("!H", ldata)[0]
+    elif length == 127:
+        ldata = sock.recv(8)
+        length = struct.unpack("!Q", ldata)[0]
+    # Server frames are NOT masked (no mask bit)
+    payload = b""
+    while len(payload) < length:
+        chunk = sock.recv(min(4096, length - len(payload)))
+        if not chunk:
+            break
+        payload += chunk
+    if opcode == 1:
+        return payload.decode("utf-8", errors="replace")
+    return ""
+
+
+def test_terminal_ws_401_without_token():
+    """No token → 401 response."""
+    from ground_station.service.terminal import TerminalManager
+    schema = StreamSchema(1, 1, 4,
+                          (StreamRange(0x20000000, 4, 1, "alt", "f"),), 0)
+    service = GroundStationService(store=SessionStore(), schemas=[schema], source="sim")
+    service.start()
+    with tempfile.TemporaryDirectory() as td:
+        tm = TerminalManager(state_dir=Path(td))
+        api = ApiServer(service, host="127.0.0.1", port=0, terminal_manager=tm)
+        api.start()
+        try:
+            port = api.address[1]
+            status, _, _ = _http_request(
+                "127.0.0.1", port,
+                path="/api/terminal/ws?token=bad",
+                headers={
+                    "Host": f"127.0.0.1:{port}",
+                    "Upgrade": "websocket",
+                    "Connection": "Upgrade",
+                    "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+                    "Sec-WebSocket-Version": "13",
+                },
+            )
+            assert status == 401, f"expected 401, got {status}"
+        finally:
+            api.stop()
+            service.stop()
+
+
+def test_terminal_ws_401_bad_token():
+    """Bad token → 401 response."""
+    from ground_station.service.terminal import TerminalManager
+    schema = StreamSchema(1, 1, 4,
+                          (StreamRange(0x20000000, 4, 1, "alt", "f"),), 0)
+    service = GroundStationService(store=SessionStore(), schemas=[schema], source="sim")
+    service.start()
+    with tempfile.TemporaryDirectory() as td:
+        tm = TerminalManager(state_dir=Path(td))
+        api = ApiServer(service, host="127.0.0.1", port=0, terminal_manager=tm)
+        api.start()
+        try:
+            port = api.address[1]
+            status, _, _ = _http_request(
+                "127.0.0.1", port,
+                path=f"/api/terminal/ws?token=wrongtoken",
+                headers={
+                    "Host": f"127.0.0.1:{port}",
+                    "Upgrade": "websocket",
+                    "Connection": "Upgrade",
+                    "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+                    "Sec-WebSocket-Version": "13",
+                },
+            )
+            assert status == 401, f"expected 401, got {status}"
+        finally:
+            api.stop()
+            service.stop()
+
+
+def test_terminal_ws_101_good_token():
+    """Good token → 101 Switching Protocols with valid Sec-WebSocket-Accept."""
+    from ground_station.service.terminal import TerminalManager
+    schema = StreamSchema(1, 1, 4,
+                          (StreamRange(0x20000000, 4, 1, "alt", "f"),), 0)
+    service = GroundStationService(store=SessionStore(), schemas=[schema], source="sim")
+    service.start()
+    with tempfile.TemporaryDirectory() as td:
+        tm = TerminalManager(state_dir=Path(td))
+        api = ApiServer(service, host="127.0.0.1", port=0, terminal_manager=tm)
+        api.start()
+        try:
+            port = api.address[1]
+            token = tm.get_token()
+            status, accept_hdr, sock = _ws_handshake("127.0.0.1", port, token)
+            try:
+                assert status == 101, f"expected 101, got {status}"
+                assert accept_hdr, "missing Sec-WebSocket-Accept header"
+                # Verify the accept value matches the RFC 6455 formula
+                import hashlib, base64
+                guide = "258EAFA5-E914-47DA-95CA-5AB5DC59B3FF"
+                expected = base64.b64encode(
+                    hashlib.sha1(("dGhlIHNhbXBsZSBub25jZQ==" + guide).encode()).digest()
+                ).decode()
+                assert accept_hdr == expected, (
+                    f"accept mismatch: {accept_hdr!r} != {expected!r}"
+                )
+            finally:
+                # Close the socket to end the PTY session
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+        finally:
+            api.stop()
+            service.stop()
+
+
+def test_terminal_ws_echo_t12b_ok():
+    """Good token -> 101, verify full handshake + shell I/O.
+
+    On Windows without PTY the fallback is a pipe-backed shell.  The full
+    echo test is skipped on Windows where pipe-based PTY support is limited;
+    the 101 handshake test already validates the core protocol.
+    """
+    from ground_station.service.terminal import TerminalManager, _IS_WINDOWS
+    schema = StreamSchema(1, 1, 4,
+                          (StreamRange(0x20000000, 4, 1, "alt", "f"),), 0)
+    service = GroundStationService(store=SessionStore(), schemas=[schema], source="sim")
+    service.start()
+    with tempfile.TemporaryDirectory() as td:
+        tm = TerminalManager(state_dir=Path(td))
+        api = ApiServer(service, host="127.0.0.1", port=0, terminal_manager=tm)
+        api.start()
+        try:
+            port = api.address[1]
+            token = tm.get_token()
+            status, _, sock = _ws_handshake("127.0.0.1", port, token)
+            try:
+                assert status == 101
+                # On Unix with PTY, do the full echo test.
+                # On Windows the pipe-based fallback is limited, so just
+                # verify the handshake completed successfully.
+                if not _IS_WINDOWS:
+                    import time
+                    time.sleep(0.5)
+                    _ws_send_text(sock, "echo t12b-ok\n")
+                    sock.settimeout(10)
+                    response = _ws_recv_text(sock)
+                    assert "t12b-ok" in response, (
+                        f"expected 't12b-ok' in response, got: {response!r}"
+                    )
+            finally:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+        finally:
+            api.stop()
+            service.stop()

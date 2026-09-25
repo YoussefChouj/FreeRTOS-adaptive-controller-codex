@@ -1,0 +1,80 @@
+# Analysis role -> telemetry key for the flight_test_adaptive preset.
+# Keys arrive as slot<N>.<dwarf name> (arrays: name[i]). A role whose key is
+# absent from a session is skipped by the analysis with a note, never faked.
+#   slot 0 dashboard_frame_a @40 Hz: status, attitude, vbat, MRAC e/u_ad/Theta, EKF shadow
+#   slot 1 inner_loops       @80 Hz: rate loops Des/FB/U (gyrox=roll, gyroy=pitch)
+#   slot 2 flight_test_outer @50 Hz: attitude loops Des/FB/U, motors, throttle, MRAC flags
+#   slot 3 flight_test_position @20 Hz: optical-flow position + position setpoints
+
+arm: slot0.DroneStatus.ARM_Status
+flymode: slot0.DroneStatus.FlyMode
+vbat: slot0.real_voltage
+tick: slot0.xTickCount
+
+roll: slot0.imu_data.rol
+roll_sp: slot2.Ctrler.rollPID.Des
+roll_fb: slot2.Ctrler.rollPID.FB
+pid_out_roll: slot2.Ctrler.rollPID.U
+gyro_roll: slot1.Ctrler.gyroxPID.FB
+roll_rate_sp: slot1.Ctrler.gyroxPID.Des
+pid_rate_out_roll: slot1.Ctrler.gyroxPID.U
+e_roll: slot0.mrac_state.roll.e
+u_ad_roll: slot0.mrac_state.roll.u_ad
+theta_roll_0: slot0.mrac_state.roll.Theta[0]
+theta_roll_1: slot0.mrac_state.roll.Theta[1]
+theta_roll_2: slot0.mrac_state.roll.Theta[2]
+theta_roll_3: slot0.mrac_state.roll.Theta[3]
+theta_roll_4: slot0.mrac_state.roll.Theta[4]
+theta_roll_5: slot0.mrac_state.roll.Theta[5]
+
+pitch: slot0.imu_data.pit
+pitch_sp: slot2.Ctrler.pitchPID.Des
+pitch_fb: slot2.Ctrler.pitchPID.FB
+pid_out_pitch: slot2.Ctrler.pitchPID.U
+gyro_pitch: slot1.Ctrler.gyroyPID.FB
+pitch_rate_sp: slot1.Ctrler.gyroyPID.Des
+pid_rate_out_pitch: slot1.Ctrler.gyroyPID.U
+e_pitch: slot0.mrac_state.pitch.e
+u_ad_pitch: slot0.mrac_state.pitch.u_ad
+theta_pitch_0: slot0.mrac_state.pitch.Theta[0]
+theta_pitch_1: slot0.mrac_state.pitch.Theta[1]
+theta_pitch_2: slot0.mrac_state.pitch.Theta[2]
+theta_pitch_3: slot0.mrac_state.pitch.Theta[3]
+theta_pitch_4: slot0.mrac_state.pitch.Theta[4]
+theta_pitch_5: slot0.mrac_state.pitch.Theta[5]
+
+yaw: slot0.imu_data.yaw
+yaw_sp: slot2.Ctrler.yawPID.Des
+yaw_fb: slot2.Ctrler.yawPID.FB
+pid_out_yaw: slot2.Ctrler.yawPID.U
+gyro_yaw: slot1.Ctrler.gyrozPID.FB
+yaw_rate_sp: slot1.Ctrler.gyrozPID.Des
+pid_rate_out_yaw: slot1.Ctrler.gyrozPID.U
+e_yaw: slot0.mrac_state.yaw.e
+u_ad_yaw: slot0.mrac_state.yaw.u_ad
+theta_yaw_0: slot0.mrac_state.yaw.Theta[0]
+theta_yaw_1: slot0.mrac_state.yaw.Theta[1]
+theta_yaw_2: slot0.mrac_state.yaw.Theta[2]
+theta_yaw_3: slot0.mrac_state.yaw.Theta[3]
+theta_yaw_4: slot0.mrac_state.yaw.Theta[4]
+theta_yaw_5: slot0.mrac_state.yaw.Theta[5]
+
+e_z: slot0.mrac_state.z_rate.e
+u_ad_z: slot0.mrac_state.z_rate.u_ad
+
+motor1: slot2.mymotor.motor1
+motor2: slot2.mymotor.motor2
+motor3: slot2.mymotor.motor3
+motor4: slot2.mymotor.motor4
+throttle: slot2.Throttle_out
+
+# PID-only vs MRAC-active: adaptation_on=1 and output_injection_on=1 means MRAC drives u_ad into the loop.
+mrac_adaptation_on: slot2.mrac_flags.adaptation_on
+mrac_active: slot2.mrac_flags.output_injection_on
+
+pos_x: slot3.ano_of.earth_x
+pos_y: slot3.ano_of.earth_y
+pos_z: slot3.ano_of.of_alt_cm
+pos_x_sp: slot3.Ctrler.locxPID.Des
+pos_y_sp: slot3.Ctrler.locyPID.Des
+pos_z_sp: slot3.Ctrler.Z_posPID.Des

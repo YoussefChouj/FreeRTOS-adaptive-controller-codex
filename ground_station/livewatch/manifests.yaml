@@ -808,14 +808,26 @@ manifests:
       - s_ekf.active
       # RC channels (4 vars)
       - Remoter.ThrCtrler
-      - Remoter.RolCtrler
-      - Remoter.PitCtrler
-      - Remoter.YawCtrler
-      # System (4 vars)
-      - DroneStatus.ARM_Status
-      - DroneStatus.FlyMode
-      - g_cal_health
-      - xTickCount
+
+  # -------------------------------------------------------------------------
+  # T13: mrac_signals_minimal — lean MRAC tracking data (slot 2 replacement)
+  # Only e, u_nom, u_ad per axis (roll/pitch). 6 vars total.
+  # Used when budget requires a smaller MRAC slot.
+  # -------------------------------------------------------------------------
+
+  mrac_signals_minimal:
+    doc: >
+      Lean MRAC tracking error + control signals. Only e, u_nom, u_ad for
+      roll and pitch axes (6 vars total). Use as a budget-friendly replacement
+      for mrac_signals in the flight_test_adaptive preset.
+    hz: 20
+    vars:
+      - mrac_state.roll.e
+      - mrac_state.roll.u_nom
+      - mrac_state.roll.u_ad
+      - mrac_state.pitch.e
+      - mrac_state.pitch.u_nom
+      - mrac_state.pitch.u_ad
 
   # -------------------------------------------------------------------------
   # Thrust estimators (shadow mode validation)
@@ -1067,3 +1079,50 @@ manifests:
       # OF velocity bias (m/s raw sensor units)
       - s_of_bias_x
       - s_of_bias_y
+
+  # -------------------------------------------------------------------------
+  # T13: flight_test_adaptive_status — slot 0 of flight_test_adaptive preset
+  # Extends sync with MRAC flags needed for PID-vs-MRAC comparison.
+  # Covers REQUIRED_SYNC_VARS: ARM_Status, FlyMode, real_voltage, xTickCount
+  # -------------------------------------------------------------------------
+
+  flight_test_outer:
+    doc: >
+      Flight-test slot 2: attitude-loop setpoint/feedback/output per axis
+      (tracking error = Des - FB), the four motor commands and throttle
+      (asymmetric-load signature), and the two MRAC flags that tell a
+      PID-only run from an MRAC-active one.
+    hz: 50
+    vars:
+      - Ctrler.rollPID.Des
+      - Ctrler.rollPID.FB
+      - Ctrler.rollPID.U
+      - Ctrler.pitchPID.Des
+      - Ctrler.pitchPID.FB
+      - Ctrler.pitchPID.U
+      - Ctrler.yawPID.Des
+      - Ctrler.yawPID.FB
+      - Ctrler.yawPID.U
+      - mymotor.motor1
+      - mymotor.motor2
+      - mymotor.motor3
+      - mymotor.motor4
+      - Throttle_out
+      - mrac_flags.adaptation_on
+      - mrac_flags.output_injection_on
+
+  flight_test_position:
+    doc: >
+      Flight-test slot 3: optical-flow position estimate and the position
+      loop setpoints/feedback, for the flown-vs-desired path plot.
+    hz: 20
+    vars:
+      - ano_of.earth_x
+      - ano_of.earth_y
+      - ano_of.of_alt_cm
+      - Ctrler.locxPID.Des
+      - Ctrler.locxPID.FB
+      - Ctrler.locyPID.Des
+      - Ctrler.locyPID.FB
+      - Ctrler.Z_posPID.Des
+      - Ctrler.Z_posPID.FB

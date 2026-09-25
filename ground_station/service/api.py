@@ -993,27 +993,73 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
         _terminal_manager = terminal_manager
 
         def _handle_terminal_ws(self) -> None:
-            """Handle the terminal WebSocket upgrade."""
-            import socket as _socket
-            # Read the HTTP request line
-            request_line = self.rfile.readline(65537)
-            if not request_line:
+            """Handle the terminal WebSocket upgrade.
+
+            The HTTP request line and headers are already parsed by
+            ``BaseHTTPRequestHandler.handle_one_request`` / ``parse_request``.
+            We use ``self.raw_requestline`` and ``self.headers`` directly
+            instead of re-reading from ``self.rfile`` (which would return
+            empty and cause the handler to return silently, hanging the
+            client).  After validation we delegate to
+            ``manager.handle_ws(sock, ws_key)`` which sends the 101
+            response and runs the PTY session.
+            """
+            headers = dict(self.headers)
+
+            # Extract path and query token from the already-parsed request line
+            raw_line = getattr(self, "raw_requestline", b"")
+            if not raw_line:
                 return
-            headers = {}
-            while True:
-                line = self.rfile.readline(65537)
-                if line in (b"\r\n", b"\n", b""):
-                    break
-                if b":" in line:
-                    key, _, val = line.partition(b":")
-                    headers[key.strip().decode("utf-8").lower()] = val.strip().decode("utf-8")
-            # Extract socket directly
+            path = raw_line.decode("utf-8", errors="replace").split(" ")[1]
+            token = None
+            if "?" in path:
+                qs = path.split("?", 1)[1]
+                for param in qs.split("&"):
+                    if param.startswith("token="):
+                        token = param[6:]
+                        break
+
             sock = self.request
             mgr = self._terminal_manager
             if mgr is None:
                 return
+
+            # Validate token — respond immediately, don't call handle_ws
+            if not mgr.check_token(token):
+                try:
+                    sock.sendall(
+                        b"HTTP/1.1 401 Unauthorized\r\n"
+                        b"Content-Length: 28\r\n\r\n"
+                        b'{"error":"terminal-auth-required"}')
+                    sock.close()
+                except Exception:
+                    pass
+                return
+
+            # Validate WebSocket upgrade headers
+            ws_key = headers.get("Sec-WebSocket-Key", "")
+            upgrade_hdr = headers.get("Upgrade", "")
+            connection_hdr = headers.get("Connection", "")
+
+            if upgrade_hdr.upper() != "WEBSOCKET" \
+                    or "UPGRADE" not in connection_hdr.upper():
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+                return
+            if not ws_key:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+                return
+
+            # Delegate to handle_ws with the pre-parsed ws_key.
+            # handle_ws will send the 101 response, spawn the PTY, and run
+            # the session loop.  It does NOT read the HTTP request again.
             try:
-                mgr.handle_ws(sock)
+                mgr.handle_ws(sock, ws_key)
             except Exception:
                 try:
                     sock.close()
