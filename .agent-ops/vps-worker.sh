@@ -1,8 +1,8 @@
 #!/bin/bash
 # Remote opencode workers on the Hetzner VPS (ssh host oc-agent, user agent).
-# Server side: ~/bin/oc-run (max 3 concurrent; Hetzner and Google each serialized), runs in
+# Server side: ~/bin/oc-run (max 3 concurrent; Hetzner and Google each serialized, agy too), runs in
 # ~/wt/<id> on branch worker/<id>, log ~/runs/<id>.out.
-#   vps-worker.sh spawn <id> <qwen|free|gem|provider/model> <task.md>
+#   vps-worker.sh spawn <id> <qwen|free|gem|agy|agy:<model>|provider/model> <task.md>
 #   vps-worker.sh status | log <id> [lines] | fetch <id> | kill <id> | clean <id>
 set -eu
 h=oc-agent
