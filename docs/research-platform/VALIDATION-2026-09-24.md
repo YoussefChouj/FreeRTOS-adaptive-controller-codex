@@ -111,6 +111,11 @@ All checks ran with the drone powered, connected and **disarmed**. No motor was 
   - 16 plot files (8 plots as PNG + PDF).
   - All 4 motors: mean 0 RPM, stale_fraction 1.0, "Motors not spinning (all samples stale)".
   - 67.11 Hz; 10 gaps (0.3025%).
+- **Browser click-through, 21:43** (headless Chrome, e86f570; controller mrac, payload asymmetric, Analyse on, 10 s):
+  - The status line read "Analysis: done | Output: ...340_mrac_asymmetriceport" 46 s after stop, with 0 console errors.
+  - Before e86f570 the panel polled only once and would have stayed at "running".
+  - metadata.json has the right controller, payload, notes, times, ELF hash and git commit. But session_id is null, preset is '' and signal_map_used is {} (being fixed as T22).
+- **browser_smoke, 21:40:** 12 views, ERRORS 0, BAD RESPONSES 0.
 - **Full pytest tree on 1fe703b:** 1216 passed, 35 skipped (613 s).
 - **Slot counters after the 21:33 restart:** slot 0 dropped 220 and slot 1 dropped 43, all during preset load. Neither count rose afterwards: at the 21:40 sample slot 0 had received 10253 and slot 1 had received 20354. Slots 2 and 3 dropped 0. `loss_pct` stayed at 87.302 and 36.134, which does not equal dropped/received (about 2% and 0.2%). That field looks stuck at its preset-load value. Not yet investigated.
 
@@ -118,4 +123,3 @@ All checks ran with the drone powered, connected and **disarmed**. No motor was 
 
 - Any armed test, or any test with motors spinning, including every PID vs MRAC flight (symmetric and asymmetric payload). These are for the operator.
 - RPM analysis with motors actually spinning: only the stopped case was measured.
-- Browser click-through of the REC panel after 1fe703b (the pipeline was checked over the HTTP API only).
