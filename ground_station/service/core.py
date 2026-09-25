@@ -430,7 +430,7 @@ class GroundStationService:
                 abs_path = str(os.path.realpath(sd))
             except Exception:
                 abs_path = str(sd)
-        return {
+        result = {
             "recording": bool(getattr(rec, "recording", False)),
             "session_dir": str(sd) if sd else None,
             "session_abs_path": abs_path,
@@ -440,12 +440,30 @@ class GroundStationService:
             "reason": getattr(rec, "reason", None),
             "enabled": bool(getattr(rec, "enabled", False)),
         }
+        # Include flight-test metadata if present
+        analyse_meta = getattr(rec, "analyse_meta", {}) or {}
+        if analyse_meta:
+            result["analyse"] = bool(analyse_meta.get("analyse"))
+            result["controller"] = analyse_meta.get("controller", "")
+            result["payload"] = analyse_meta.get("payload", "")
+            result["notes"] = analyse_meta.get("notes", "")
+        return result
 
     def start_recording(self, *, label: str | None = None,
                         requested_by: str = "operator",
-                        reason: str | None = None) -> dict[str, Any]:
+                        reason: str | None = None,
+                        analyse: bool = False,
+                        controller: str = "",
+                        payload: str = "",
+                        notes: str = "") -> dict[str, Any]:
         """Start a fresh recording (a start while already recording is a no-op
         that returns the current state). Never raises into the caller.
+
+        Extended for flight-test pipeline:
+            analyse: bool — whether to auto-run analysis on stop
+            controller: "pid" | "mrac" — controller type
+            payload: "symmetric" | "asymmetric" — payload condition
+            notes: free-text operator notes
         """
         try:
             self.recorder.start(
@@ -453,6 +471,16 @@ class GroundStationService:
                 subscribe_layout=self._subscribe_layout_snapshot(),
                 context=self._manifest_context(),
             )
+            # Store flight-test metadata on the recorder
+            analyse_meta = {
+                "analyse": bool(analyse),
+                "controller": controller or "unknown",
+                "payload": payload or "unknown",
+                "notes": notes or "",
+                "session_dir": str(self.recorder.session_dir) if self.recorder.session_dir else "",
+                "label": label or "",
+            }
+            self.recorder.analyse_meta = analyse_meta
         except Exception:
             pass
         return self.recording_status()

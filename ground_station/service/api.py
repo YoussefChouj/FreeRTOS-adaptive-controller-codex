@@ -353,7 +353,7 @@ _ROUTE_MAP = {
         "/analysis/gaps": "?session_id=<sid>&stream=<int>",
         "/analysis/effective-rate": "?session_id=<sid>&stream=<int>",
         "/api/diagnostics/bundle": "frames, commands, faults for bug reports",
-        "/api/recording": "recording state {recording, session_dir, started_at, rows, bytes, reason}",
+        "/api/recording": "recording state {recording, session_dir, started_at, rows, bytes, reason, analyse, analysis_status}",
         "/api/session/notes": "operator notes buffered while not recording",
         "/api/contract": "firmware command/subscribe contract",
         "/api/preset-for-symbol": "preset(s) whose slot manifest carries the symbol (item 14; ?symbol=<key>; read-only, computed from multi_slot_presets.yaml)",
@@ -375,6 +375,7 @@ _ROUTE_MAP = {
         "/api/agent/approvals": "ordered pending approval queue",
         "/api/agent/state": "one agent-facing snapshot {control, ui, recording, layout, arm_state, stream_health, running_plan, pending_approvals, last_messages}",
         "/api/agent/history": "always-on activity journal ?since=&limit=&kind=&source= - {entries: [{seq,t,iso,kind,source,actor,data}]}",
+        "/api/flight_tests": "list flight-test runs (GET ?date=YYYY-MM-DD)",
         # Both of these block; test_http_api_routes_endpoint cannot GET them,
         # which is why they sat undeclared -- an agent reading this map would
         # conclude the service had no push channel at all.
@@ -1166,7 +1167,36 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     }
                 self._json(200, report)
             elif route == "/api/recording":
-                self._json(200, service.recording_status())
+                status = service.recording_status()
+                # Enrich with analysis status if present
+                analyse_meta = getattr(service.recorder, "analyse_meta", {}) or {}
+                if analyse_meta:
+                    status["analyse"] = bool(analyse_meta.get("analyse"))
+                    status["controller"] = analyse_meta.get("controller", "")
+                    status["payload"] = analyse_meta.get("payload", "")
+                    status["notes"] = analyse_meta.get("notes", "")
+                    # Add analysis status from tracking
+                    try:
+                        from ground_station.analysis.flight_test_folder import load_analysis_status
+                        sid = status.get("session_id", "") or analyse_meta.get("session_id", "")
+                        if sid:
+                            analysis_data = load_analysis_status().get(sid, {})
+                            if analysis_data:
+                                status["analysis_status"] = analysis_data.get("status", "unknown")
+                                status["analysis_output_path"] = analysis_data.get("output_path", "")
+                    except Exception:
+                        pass
+                self._json(200, status)
+            elif route == "/api/flight_tests":
+                # List flight-test runs, optionally filtered by date
+                qs = parse_qs(urlsplit(self.path).query)
+                date_param = qs.get("date", [None])[0]
+                try:
+                    from ground_station.analysis.flight_test_folder import list_flight_tests
+                    tests = list_flight_tests(date_str=date_param if date_param else None)
+                    self._json(200, {"flight_tests": tests})
+                except Exception as exc:
+                    self._json(500, {"error": str(exc)})
             elif route == "/api/session/notes":
                 # Optional ?since=<seq> returns the seq-tagged note log that
                 # agents use (each note gains a monotonic seq). Without since,
@@ -1872,6 +1902,8 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
             # {reason, requested_by: "operator"|"agent:<name>", label}. A start
             # while already recording is a no-op returning the current state.
             # Recording never sends drone commands and never touches gates.
+            # Extended fields for flight-test pipeline:
+            #   {analyse: bool, controller: "pid"|"mrac", payload: "symmetric"|"asymmetric", notes: str}
             elif route == "/api/recording/start":
                 length = self._content_length()
                 body = {}
@@ -1890,16 +1922,54 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     self._json(400, {"error": "requested_by must be operator "
                                              "or agent:<name>"})
                     return
+                # Extract flight-test fields
+                analyse = bool(body.get("analyse", False))
+                controller = str(body.get("controller", "")).strip()
+                payload = str(body.get("payload", "")).strip()
+                notes = str(body.get("notes", "")).strip()
                 result = service.start_recording(
                     label=(str(body["label"]) if body.get("label") else None),
                     requested_by=requested_by,
                     reason=(str(body["reason"]) if body.get("reason") else None),
+                    analyse=analyse,
+                    controller=controller,
+                    payload=payload,
+                    notes=notes,
                 )
                 status = 202 if result.get("recording") else 200
                 self._json(status, result)
             # POST /api/recording/stop — stop the active recording (idempotent).
+            # If the recording was started with analyse=True, launches background
+            # analysis and organized flight-test folder creation.
             elif route == "/api/recording/stop":
-                self._json(200, service.stop_recording())
+                result = service.stop_recording()
+                # Trigger analysis if the recording had analyse enabled
+                recorder = getattr(service, "recorder", None)
+                analyse_meta = getattr(recorder, "analyse_meta", {}) or {}
+                if analyse_meta and bool(analyse_meta.get("analyse")):
+                    session_dir = analyse_meta.get("session_dir", "")
+                    if session_dir:
+                        try:
+                            from ground_station.analysis.flight_test_folder import run_analysis_and_track
+                            label = analyse_meta.get("label", "")
+                            controller = analyse_meta.get("controller", "unknown")
+                            payload = analyse_meta.get("payload", "unknown")
+                            notes = analyse_meta.get("notes", "")
+                            try:
+                                ft_dir, proc = run_analysis_and_track(
+                                    session_dir,
+                                    controller=controller,
+                                    payload=payload,
+                                    label=label,
+                                    notes=notes,
+                                )
+                                result["flight_test_dir"] = str(ft_dir)
+                                result["analysis_pid"] = proc.pid
+                            except Exception as analysis_exc:
+                                result["analysis_error"] = str(analysis_exc)
+                        except Exception as import_exc:
+                            result["analysis_error"] = str(import_exc)
+                self._json(200, result)
             # POST /api/session/note — append an operator note
             # {text, kind: "note"|"goal"|"marker", source}. Seed of the
             # operator <-> agent communication session.
