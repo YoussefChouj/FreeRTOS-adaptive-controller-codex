@@ -782,6 +782,79 @@
     });
   }
 
+  function updateRibbonGeometry(geo, points, radius, dashed) {
+    if (!geo || !points || points.length < 2) {
+      if (geo) geo.setDrawRange(0, 0);
+      return;
+    }
+    var attr = geo.getAttribute('position');
+    var arr = attr.array;
+    var vIdx = 0;
+    var r = radius || 0.08;
+    var count = points.length;
+    var maxSegments = (arr.length / 36) | 0;
+    var segLimit = Math.min(count - 1, maxSegments);
+    var accumDist = 0;
+
+    for (var i = 0; i < segLimit; i++) {
+      var p1 = points[i];
+      var p2 = points[i + 1];
+      var ax = p1.x, ay = p1.z || 0, az = p1.y;
+      var bx = p2.x, by = p2.z || 0, bz = p2.y;
+      var dx = bx - ax, dy = by - ay, dz = bz - az;
+      var len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (len < 1e-4) continue;
+
+      if (dashed) {
+        var dashStep = Math.floor(accumDist / 0.5);
+        accumDist += len;
+        if (dashStep % 2 !== 0) {
+          continue;
+        }
+      }
+
+      dx /= len; dy /= len; dz /= len;
+
+      var v1x, v1y, v1z;
+      if (Math.abs(dy) < 0.9) {
+        v1x = dz; v1y = 0; v1z = -dx;
+      } else {
+        v1x = 0; v1y = -dz; v1z = dy;
+      }
+      var l1 = Math.sqrt(v1x * v1x + v1y * v1y + v1z * v1z);
+      if (l1 < 1e-4) { v1x = 1; v1y = 0; v1z = 0; }
+      else { v1x /= l1; v1y /= l1; v1z /= l1; }
+
+      var v2x = dy * v1z - dz * v1y;
+      var v2y = dz * v1x - dx * v1z;
+      var v2z = dx * v1y - dy * v1x;
+
+      var w1x = v1x * r, w1y = v1y * r, w1z = v1z * r;
+      var w2x = v2x * r, w2y = v2y * r, w2z = v2z * r;
+
+      // Quad 1
+      arr[vIdx++] = ax + w1x; arr[vIdx++] = ay + w1y; arr[vIdx++] = az + w1z;
+      arr[vIdx++] = bx + w1x; arr[vIdx++] = by + w1y; arr[vIdx++] = bz + w1z;
+      arr[vIdx++] = ax - w1x; arr[vIdx++] = ay - w1y; arr[vIdx++] = az - w1z;
+
+      arr[vIdx++] = ax - w1x; arr[vIdx++] = ay - w1y; arr[vIdx++] = az - w1z;
+      arr[vIdx++] = bx + w1x; arr[vIdx++] = by + w1y; arr[vIdx++] = bz + w1z;
+      arr[vIdx++] = bx - w1x; arr[vIdx++] = by - w1y; arr[vIdx++] = bz - w1z;
+
+      // Quad 2
+      arr[vIdx++] = ax + w2x; arr[vIdx++] = ay + w2y; arr[vIdx++] = az + w2z;
+      arr[vIdx++] = bx + w2x; arr[vIdx++] = by + w2y; arr[vIdx++] = bz + w2z;
+      arr[vIdx++] = ax - w2x; arr[vIdx++] = ay - w2y; arr[vIdx++] = az - w2z;
+
+      arr[vIdx++] = ax - w2x; arr[vIdx++] = ay - w2y; arr[vIdx++] = az - w2z;
+      arr[vIdx++] = bx + w2x; arr[vIdx++] = by + w2y; arr[vIdx++] = bz + w2z;
+      arr[vIdx++] = bx - w2x; arr[vIdx++] = by - w2y; arr[vIdx++] = bz - w2z;
+    }
+
+    attr.needsUpdate = true;
+    geo.setDrawRange(0, vIdx / 3);
+  }
+
   function initThreeScene(THREE, OrbitControls) {
     var canvas = _el3DCanvas;
     if (!canvas) return;
@@ -792,8 +865,8 @@
     _threeScene = new THREE.Scene();
     _threeScene.background = new THREE.Color(0x0a0a1a);
 
-    _threeCamera = new THREE.PerspectiveCamera(60, w / h, 0.1, 10000);
-    _threeCamera.position.set(80, 60, 80);
+    _threeCamera = new THREE.PerspectiveCamera(60, w / h, 0.05, 1000);
+    _threeCamera.position.set(8, 6, 8);
     _threeCamera.lookAt(0, 0, 0);
 
     _threeRenderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
@@ -814,11 +887,11 @@
     _threeScene.add(dirLight);
 
     // Ground grid
-    _threeGrid = new THREE.GridHelper(200, 20, 0x333355, 0x222244);
+    _threeGrid = new THREE.GridHelper(20, 20, 0x333355, 0x222244);
     _threeScene.add(_threeGrid);
 
     // XYZ axes
-    _threeAxes = new THREE.AxesHelper(100);
+    _threeAxes = new THREE.AxesHelper(2);
     _threeScene.add(_threeAxes);
 
     // Thick cross-ribbon geometry helper (antialiased 3D line from any viewing angle)
@@ -831,79 +904,6 @@
       return geo;
     }
 
-    function updateRibbonGeometry(geo, points, radius, dashed) {
-      if (!geo || !points || points.length < 2) {
-        if (geo) geo.setDrawRange(0, 0);
-        return;
-      }
-      var attr = geo.getAttribute('position');
-      var arr = attr.array;
-      var vIdx = 0;
-      var r = radius || 0.08;
-      var count = points.length;
-      var maxSegments = (arr.length / 36) | 0;
-      var segLimit = Math.min(count - 1, maxSegments);
-      var accumDist = 0;
-
-      for (var i = 0; i < segLimit; i++) {
-        var p1 = points[i];
-        var p2 = points[i + 1];
-        var ax = p1.x, ay = p1.z || 0, az = p1.y;
-        var bx = p2.x, by = p2.z || 0, bz = p2.y;
-        var dx = bx - ax, dy = by - ay, dz = bz - az;
-        var len = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (len < 1e-4) continue;
-
-        if (dashed) {
-          var dashStep = Math.floor(accumDist / 0.5);
-          accumDist += len;
-          if (dashStep % 2 !== 0) {
-            continue;
-          }
-        }
-
-        dx /= len; dy /= len; dz /= len;
-
-        var v1x, v1y, v1z;
-        if (Math.abs(dy) < 0.9) {
-          v1x = dz; v1y = 0; v1z = -dx;
-        } else {
-          v1x = 0; v1y = -dz; v1z = dy;
-        }
-        var l1 = Math.sqrt(v1x * v1x + v1y * v1y + v1z * v1z);
-        if (l1 < 1e-4) { v1x = 1; v1y = 0; v1z = 0; }
-        else { v1x /= l1; v1y /= l1; v1z /= l1; }
-
-        var v2x = dy * v1z - dz * v1y;
-        var v2y = dz * v1x - dx * v1z;
-        var v2z = dx * v1y - dy * v1x;
-
-        var w1x = v1x * r, w1y = v1y * r, w1z = v1z * r;
-        var w2x = v2x * r, w2y = v2y * r, w2z = v2z * r;
-
-        // Quad 1
-        arr[vIdx++] = ax + w1x; arr[vIdx++] = ay + w1y; arr[vIdx++] = az + w1z;
-        arr[vIdx++] = bx + w1x; arr[vIdx++] = by + w1y; arr[vIdx++] = bz + w1z;
-        arr[vIdx++] = ax - w1x; arr[vIdx++] = ay - w1y; arr[vIdx++] = az - w1z;
-
-        arr[vIdx++] = ax - w1x; arr[vIdx++] = ay - w1y; arr[vIdx++] = az - w1z;
-        arr[vIdx++] = bx + w1x; arr[vIdx++] = by + w1y; arr[vIdx++] = bz + w1z;
-        arr[vIdx++] = bx - w1x; arr[vIdx++] = by - w1y; arr[vIdx++] = bz - w1z;
-
-        // Quad 2
-        arr[vIdx++] = ax + w2x; arr[vIdx++] = ay + w2y; arr[vIdx++] = az + w2z;
-        arr[vIdx++] = bx + w2x; arr[vIdx++] = by + w2y; arr[vIdx++] = bz + w2z;
-        arr[vIdx++] = ax - w2x; arr[vIdx++] = ay - w2y; arr[vIdx++] = az - w2z;
-
-        arr[vIdx++] = ax - w2x; arr[vIdx++] = ay - w2y; arr[vIdx++] = az - w2z;
-        arr[vIdx++] = bx + w2x; arr[vIdx++] = by + w2y; arr[vIdx++] = bz + w2z;
-        arr[vIdx++] = bx - w2x; arr[vIdx++] = by - w2y; arr[vIdx++] = bz - w2z;
-      }
-
-      attr.needsUpdate = true;
-      geo.setDrawRange(0, vIdx / 3);
-    }
-
     // Desired path (thick cross-ribbon mesh, amber/orange 0xffaa00, dashed)
     var desiredGeo = buildRibbonGeometry(_MAX_3D_POINTS);
     var desiredMat = new THREE.MeshBasicMaterial({
@@ -913,6 +913,7 @@
       opacity: 0.85
     });
     _threeLineDesired = new THREE.Mesh(desiredGeo, desiredMat);
+    _threeLineDesired.frustumCulled = false;
     _threeScene.add(_threeLineDesired);
 
     // Actual path (thick cross-ribbon mesh, solid cyan/blue 0x4a9eff)
@@ -924,6 +925,7 @@
       opacity: 0.85
     });
     _threeLineActual = new THREE.Mesh(actualGeo, actualMat);
+    _threeLineActual.frustumCulled = false;
     _threeScene.add(_threeLineActual);
 
     // Planned path overlay (hand-placed waypoints preview)
@@ -942,14 +944,14 @@
     _threeScene.add(_threeLinePlan);
 
     // Drone marker
-    var markerGeo = new THREE.SphereGeometry(1.5, 16, 16);
+    var markerGeo = new THREE.SphereGeometry(0.15, 16, 16);
     var markerMat = new THREE.MeshPhongMaterial({ color: 0x4ecca3, emissive: 0x22aa66 });
     var markerMesh = new THREE.Mesh(markerGeo, markerMat);
-    var arrowGeo = new THREE.ConeGeometry(1, 3, 8);
+    var arrowGeo = new THREE.ConeGeometry(0.1, 0.3, 8);
     var arrowMat = new THREE.MeshPhongMaterial({ color: 0x4ecca3 });
     var arrow = new THREE.Mesh(arrowGeo, arrowMat);
     arrow.rotation.x = Math.PI / 2;
-    arrow.position.z = 3;
+    arrow.position.z = 0.3;
     _threeDroneMarker = new THREE.Group();
     _threeDroneMarker.add(markerMesh);
     _threeDroneMarker.add(arrow);
@@ -963,13 +965,24 @@
     var errorTexture = new THREE.CanvasTexture(errorCanvas);
     var errorSpriteMat = new THREE.SpriteMaterial({ map: errorTexture, transparent: true });
     var errorSprite = new THREE.Sprite(errorSpriteMat);
-    errorSprite.scale.set(20, 5, 1);
-    errorSprite.position.set(0, 15, 0);
+    errorSprite.scale.set(1.6, 0.4, 1);
+    errorSprite.position.set(0, 0.6, 0);
     _threeErrorLabel.sprite = errorSprite;
     _threeScene.add(errorSprite);
     updateErrorSprite();
 
     _threeLoaded = true;
+    render3D();
+
+    // Damped OrbitControls need update() every frame; redraw only while the 3D view is shown.
+    (function loop3D() {
+      if (!_threeRenderer) return;
+      requestAnimationFrame(loop3D);
+      var wrap = q('pp-3d-wrap');
+      if (!wrap || wrap.style.display === 'none') return;
+      _threeControls.update();
+      _threeRenderer.render(_threeScene, _threeCamera);
+    })();
   }
 
   function updateErrorSprite() {
@@ -1037,7 +1050,7 @@
     // Follow drone
     if (_threeFollowDrone && activeActual.length > 0) {
       var lp = activeActual[activeActual.length - 1];
-      _threeCamera.position.set(lp.x + 50, (lp.z || 0) + 50, lp.y + 50);
+      _threeCamera.position.set(lp.x + 5, (lp.z || 0) + 5, lp.y + 5);
       _threeControls.target.set(lp.x, lp.z || 0, lp.y);
     }
 
@@ -1065,7 +1078,7 @@
 
   function reset3DView() {
     if (!_threeCamera || !_threeControls) return;
-    _threeCamera.position.set(80, 60, 80);
+    _threeCamera.position.set(8, 6, 8);
     _threeControls.target.set(0, 0, 0);
     _threeControls.update();
   }
@@ -1074,13 +1087,13 @@
     if (!_threeCamera || !_threeControls) return;
     var t = _threeControls.target.clone();
     if (preset === 'top') {
-      _threeCamera.position.set(t.x, 200, t.z);
+      _threeCamera.position.set(t.x, 20, t.z);
     } else if (preset === 'side') {
-      _threeCamera.position.set(t.x + 200, 20, t.z);
+      _threeCamera.position.set(t.x + 20, 2, t.z);
     } else if (preset === 'front') {
-      _threeCamera.position.set(t.x, 20, t.z + 200);
+      _threeCamera.position.set(t.x, 2, t.z + 20);
     } else if (preset === 'iso') {
-      _threeCamera.position.set(t.x + 80, 60, t.z + 80);
+      _threeCamera.position.set(t.x + 8, 6, t.z + 8);
     }
     _threeCamera.lookAt(t);
     _threeControls.update();

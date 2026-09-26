@@ -467,6 +467,28 @@ function runChecks() {
     env.destroy();
   }
 
+  // 9. render3D only calls helpers visible from its own scope. The harness has no WebGL,
+  // so render3D never runs here; a helper nested inside initThreeScene threw a
+  // ReferenceError on every frame in the browser (blank 3D view).
+  {
+    console.log('\n[CHECK 9: render3D helpers declared at plugin scope]');
+    const src = fs.readFileSync(PANEL, 'utf8');
+    const start = src.indexOf('  function render3D()');
+    assert.ok(start >= 0, 'render3D not found');
+    const end = src.indexOf('\n  }\n', start);
+    const body = src.slice(start, end);
+    const called = new Set((body.match(/\b([A-Za-z_]\w*)\s*\(/g) || []).map((m) => m.replace(/\s*\($/, '')));
+    const decl = /^( *)function ([A-Za-z_]\w*)\s*\(/gm;
+    let m;
+    while ((m = decl.exec(src)) !== null) {
+      if (called.has(m[2]) && m[2] !== 'render3D') {
+        assert.strictEqual(m[1].length, 2,
+          'render3D calls ' + m[2] + ' but it is declared at indent ' + m[1].length + ' (not plugin scope)');
+      }
+    }
+    console.log('  PASS: every local helper render3D calls is declared at plugin scope');
+  }
+
   console.log('\nALL CHECKS PASSED SUCCESSFULLY.');
 }
 
