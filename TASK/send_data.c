@@ -1966,10 +1966,12 @@ void Process_GroundStation_Command(void)
             else if (idx == 1) {
                 if (((uint8_t)(val + 0.5f)) != 0) {
                     if (FlightFSM_GetState() == FLIGHT_STATE_ARMED &&
-                        flight_phase == FLIGHT_PHASE_GROUND_IDLE &&
+                        (flight_phase == FLIGHT_PHASE_GROUND_IDLE ||
+                         flight_phase == FLIGHT_PHASE_LANDED) &&
                         RCInput_Get(RC_AXIS_THR) < RC_IDLE_THR_THRESHOLD &&
                         !g_motor_idle_enabled)
                     {
+                        flight_phase = FLIGHT_PHASE_GROUND_IDLE; /* LANDED -> re-idle */
                         g_motor_idle_enabled = 1U;
                     }
                 } else {

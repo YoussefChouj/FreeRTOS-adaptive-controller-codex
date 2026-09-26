@@ -129,10 +129,14 @@ void Check_Stick_Motion(void)
 	if (StickMotion.RightStick_RightDown_cnt >= IDLE_ENABLE_Delay_time)
 	{
 		if (FlightFSM_GetState() == FLIGHT_STATE_ARMED &&
-		    flight_phase == FLIGHT_PHASE_GROUND_IDLE &&
+		    (flight_phase == FLIGHT_PHASE_GROUND_IDLE ||
+		     flight_phase == FLIGHT_PHASE_LANDED) &&
 		    is_Stick_MIN(eff_thr) &&
 		    !g_motor_idle_enabled)
 		{
+			/* Re-arming after a landing: the idle gesture returns LANDED to
+			 * GROUND_IDLE so takeoff detection runs again. */
+			flight_phase = FLIGHT_PHASE_GROUND_IDLE;
 			g_motor_idle_enabled = 1U;
 		}
 		StickMotion.RightStick_RightDown_cnt = 0;
