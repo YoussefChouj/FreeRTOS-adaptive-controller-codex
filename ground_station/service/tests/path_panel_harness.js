@@ -551,6 +551,40 @@ function runChecks() {
     env.destroy();
   }
 
+  // 12. Mouse drawing: clamping into the room, 2 cm thinning, screen <-> world inverse.
+  {
+    console.log('\n[CHECK 12: draw clamping, thinning, screen/world inverse]');
+    const env = loadPanel();
+    const T = env.sandbox.__pathPanelTest;
+    const room = { w: 1.4, d: 1.4, h: 1.0 };
+    const c = T.clampToRoom({ x: 2, y: -3, z: 1.5 }, room);
+    assert.deepStrictEqual([c.x, c.y, c.z], [0.7, -0.7, 1.0], 'clamp to walls/ceiling');
+    assert.strictEqual(T.clampToRoom({ x: 0, y: 0, z: -0.2 }, room).z, 0, 'clamp to floor');
+    const pts = [];
+    let added = 0;
+    for (let i = 0; i <= 100; i++) {           // 1 mm steps along x: 0 .. 0.1 m
+      if (T.thinAppend(pts, { x: i * 0.001, y: 0, z: 0.5 }, T.DRAW_MIN_STEP, room)) added++;
+    }
+    assert.strictEqual(added, pts.length);
+    assert.strictEqual(pts.length, 6, 'expected 0,2,4,6,8,10 cm; got ' + JSON.stringify(pts.map(q => q.x)));
+    for (let i = 1; i < pts.length; i++) {
+      assert.ok(Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y) >= T.DRAW_MIN_STEP - 1e-9, 'spacing');
+    }
+    const out = [];
+    T.thinAppend(out, { x: 5, y: 0, z: 0.5 }, T.DRAW_MIN_STEP, room);
+    assert.strictEqual(T.thinAppend(out, { x: 6, y: 0, z: 0.5 }, T.DRAW_MIN_STEP, room), false,
+      'two far-outside points clamp to the same wall point and must thin to one');
+    [[0.3, -0.2], [-0.7, 0.7], [0, 0]].forEach(([x, y]) => {
+      const sc = T.worldToScreen(x, y, 800, 600);
+      const w = T.screenToWorld(sc.x, sc.y, 800, 600);
+      assert.ok(Math.abs(w.x - x) < 1e-9 && Math.abs(w.y - y) < 1e-9, 'screen/world inverse at ' + x + ',' + y);
+    });
+    const z = T.roomFitZoom(800, 600);
+    assert.ok(Math.abs(1.4 * 20 * z - 600 * 0.85) < 1e-6, 'room fit zoom frames 85% of the short side');
+    console.log('  PASS: clamp to 1.4 x 1.4 x 1.0 room, 101 mm-steps thin to 6 pts at 2 cm, inverse exact, fit zoom ' + z.toFixed(2));
+    env.destroy();
+  }
+
   console.log('\nALL CHECKS PASSED SUCCESSFULLY.');
 }
 

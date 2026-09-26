@@ -49,6 +49,11 @@
   var _MAX_3D_POINTS = 20000;
   var _THREE = null;
   var _threeRoomGroup = null;
+  var _threeDrawPlane = null;  // translucent plane at the draw altitude (draw mode only)
+  var _drawMode = false;       // mouse draws waypoints instead of orbiting / panning
+  var _drawAlt = 0.5;          // draw plane altitude (m)
+  var _drawStroke = false;     // a stroke is in progress
+  var _drawUndo = [];          // waypoint lists before each stroke / clear
 
   // ── Flight room (metres): centred on x/y origin, floor at z = 0 ────────
   var ROOM_KEY = 'pp_room_v1';
@@ -61,7 +66,7 @@
 
   var MAX_TRAIL = 20000;
   var MIN_ZOOM = 0.2;
-  var MAX_ZOOM = 5.0;
+  var MAX_ZOOM = 50.0;   // 20 px/m * 50 = 1000 px/m: room-scale paths fit
   var ZOOM_STEP = 0.2;
 
   // ── DOM refs ────────────────────────────────────────────────────────────
@@ -471,7 +476,7 @@
     _ctx.fillStyle = '#0a0a1a';
     _ctx.fillRect(0, 0, W, H);
 
-    if (!_currentPos) {
+    if (!_currentPos && !_waypoints.length) {
       // With no data the panel draws nothing and says it has no position data
       _ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
       _ctx.font = '14px Consolas, monospace';
@@ -498,6 +503,9 @@
     // Grid
     drawGrid(W, H);
 
+    // Room walls (x/y footprint)
+    drawRoom2D(W, H);
+
     // Trajectory trail
     drawTrail();
 
@@ -517,7 +525,7 @@
     if (_targetPos) drawMarker(_targetPos.x, _targetPos.y, 'T', '#e94560', 12);
 
     // Current position
-    drawMarker(_currentPos.x, _currentPos.y, '', '#4a9eff', 8);
+    if (_currentPos) drawMarker(_currentPos.x, _currentPos.y, '', '#4a9eff', 8);
 
     // Axes labels
     _ctx.fillStyle = 'rgba(255,255,255,0.3)';
@@ -569,6 +577,43 @@
     _ctx.stroke();
 
     _ctx.setLineDash([]);
+  }
+
+  function screenToWorld(sx, sy, W, H) {
+    return {
+      x: (sx - W / 2 - _panX) / (_zoom * 20),
+      y: (H / 2 - _panY - sy) / (_zoom * 20)
+    };
+  }
+
+  function drawRoom2D(W, H) {
+    var b = roomBounds();
+    var a = worldToScreen(b.x0, b.y1, W, H);
+    var c = worldToScreen(b.x1, b.y0, W, H);
+    _ctx.strokeStyle = 'rgba(120, 140, 255, 0.55)';
+    _ctx.lineWidth = 1.5;
+    _ctx.beginPath();
+    _ctx.moveTo(a.x, a.y);
+    _ctx.lineTo(c.x, a.y);
+    _ctx.lineTo(c.x, c.y);
+    _ctx.lineTo(a.x, c.y);
+    _ctx.lineTo(a.x, a.y);
+    _ctx.stroke();
+  }
+
+  // Zoom that frames the room footprint in a W x H canvas (20 px/m at zoom 1).
+  function roomFitZoom(W, H) {
+    var z = Math.min(W, H) * 0.85 / (Math.max(_room.w, _room.d) * 20);
+    return Math.min(Math.max(z, MIN_ZOOM), MAX_ZOOM);
+  }
+
+  function fitRoom2D() {
+    if (!_canvas) return;
+    _zoom = roomFitZoom(_canvas.width, _canvas.height);
+    _panX = 0;
+    _panY = 0;
+    _autoFitted = true;   // keep the room framing; reset view re-arms auto-fit
+    render();
   }
 
   function worldToScreen(wx, wy, W, H) {
@@ -1085,6 +1130,8 @@
   function render3D() {
     if (!_threeRenderer || !_threeScene || !_threeCamera) return;
 
+    updateDrawPlane();
+
     var activeActual = getActiveTrajectory();
     var activeDesired = getActiveDesiredTrajectory();
 
@@ -1215,14 +1262,33 @@
     _threeAxes.position.y = 0.002;
     g.add(_threeAxes);
 
+    _threeDrawPlane = new THREE.Mesh(
+      new THREE.PlaneGeometry(_room.w, _room.d),
+      new THREE.MeshBasicMaterial({ color: 0x4ecca3, transparent: true, opacity: 0.12,
+                                    side: THREE.DoubleSide, depthWrite: false }));
+    _threeDrawPlane.rotation.x = -Math.PI / 2;
+    g.add(_threeDrawPlane);
+    updateDrawPlane();
+
     _threeRoomGroup = g;
     _threeScene.add(g);
+  }
+
+  function syncDrawAltInput() {
+    var el = q('pp-draw-alt');
+    if (el) {
+      el.max = String(_room.h);
+      if (_drawAlt > _room.h) _drawAlt = _room.h;
+      el.value = String(_drawAlt);
+    }
+    setDrawAlt(_drawAlt);
   }
 
   function setRoom(r) {
     if (!validRoom(r)) return false;
     _room = { w: r.w, d: r.d, h: r.h };
     storageSet(ROOM_KEY, JSON.stringify(_room));
+    syncDrawAltInput();
     buildRoom3D();
     reset3DView();
     render3D();
@@ -1250,6 +1316,7 @@
     _threeAxes = null;
     _threeGrid = null;
     _threeRoomGroup = null;
+    _threeDrawPlane = null;
     _threeErrorLabel = null;
     _threeLoaded = false;
   }
@@ -1511,6 +1578,143 @@
     if (_threeLoaded) render3D();
   }
 
+  // ── Mouse drawing ───────────────────────────────────────────────────────
+  // Strokes are clamped into the room and thinned to DRAW_MIN_STEP so a
+  // mouse drag gives a usable waypoint list, not one point per pixel.
+  var DRAW_MIN_STEP = 0.02;
+  var DRAW_UNDO_MAX = 20;
+
+  function clampToRoom(pt, room) {
+    var hw = room.w / 2, hd = room.d / 2;
+    return {
+      x: round3(Math.max(-hw, Math.min(hw, pt.x))),
+      y: round3(Math.max(-hd, Math.min(hd, pt.y))),
+      z: round3(Math.max(0, Math.min(room.h, pt.z))),
+      reached: false
+    };
+  }
+
+  // Appends pt (clamped) to pts unless it is closer than minStep to the last
+  // point. Returns true when a point was added.
+  function thinAppend(pts, pt, minStep, room) {
+    var c = clampToRoom(pt, room);
+    var last = pts.length ? pts[pts.length - 1] : null;
+    if (last && Math.hypot(c.x - last.x, c.y - last.y, c.z - last.z) < minStep - 1e-9) return false;
+    pts.push(c);
+    return true;
+  }
+
+  function drawPushUndo() {
+    _drawUndo.push(_waypoints.map(function (w) { return { x: w.x, y: w.y, z: w.z, reached: false }; }));
+    if (_drawUndo.length > DRAW_UNDO_MAX) _drawUndo.shift();
+  }
+
+  function waypointsChanged(full) {
+    updatePlannedPath();
+    if (full) renderWaypointTable();
+    render();
+    if (_threeLoaded) render3D();
+  }
+
+  function drawUndo() {
+    if (!_drawUndo.length) return;
+    _waypoints = _drawUndo.pop();
+    waypointsChanged(true);
+  }
+
+  function drawClear() {
+    if (!_waypoints.length) return;
+    drawPushUndo();
+    _waypoints = [];
+    waypointsChanged(true);
+  }
+
+  function drawAddPoint(pt) {
+    if (thinAppend(_waypoints, pt, DRAW_MIN_STEP, _room)) waypointsChanged(false);
+  }
+
+  function setDrawMode(on) {
+    var btn = q('pp-draw-toggle');
+    _drawMode = !!on;
+    _drawStroke = false;
+    if (btn) {
+      btn.classList.toggle('active', _drawMode);
+      btn.textContent = _drawMode ? 'Drawing: on' : 'Draw';
+    }
+    if (_threeControls) _threeControls.enabled = !_drawMode;
+    if (_canvas) _canvas.style.cursor = _drawMode ? 'crosshair' : '';
+    if (_el3DCanvas) _el3DCanvas.style.cursor = _drawMode ? 'crosshair' : '';
+    if (_drawMode) fitRoom2D();
+    if (_threeLoaded) render3D();
+  }
+
+  function setDrawAlt(v) {
+    if (!isFinite(v)) return;
+    _drawAlt = Math.max(0, Math.min(_room.h, v));
+    var lbl = q('pp-draw-alt-val');
+    if (lbl) lbl.textContent = _drawAlt.toFixed(2) + ' m';
+    if (_threeLoaded) render3D();
+  }
+
+  function updateDrawPlane() {
+    if (!_threeDrawPlane) return;
+    _threeDrawPlane.visible = _drawMode;
+    _threeDrawPlane.position.y = _drawAlt;
+  }
+
+  // Room point under the mouse on the horizontal plane z = _drawAlt, or null.
+  function pick3D(ev) {
+    var THREE = _THREE;
+    var rect, ndc, ray, hit;
+    if (!THREE || !_threeCamera || !_el3DCanvas) return null;
+    rect = _el3DCanvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    ndc = new THREE.Vector2((ev.clientX - rect.left) / rect.width * 2 - 1,
+                            -(ev.clientY - rect.top) / rect.height * 2 + 1);
+    ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, _threeCamera);
+    hit = new THREE.Vector3();
+    if (!ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -_drawAlt), hit)) return null;
+    return { x: hit.x, y: hit.z, z: _drawAlt };   // three (x, y, z) = room (x, z, y)
+  }
+
+  function pick2D(ev) {
+    var rect = _canvas.getBoundingClientRect();
+    var sx = (ev.clientX - rect.left) * (_canvas.width / (rect.width || 1));
+    var sy = (ev.clientY - rect.top) * (_canvas.height / (rect.height || 1));
+    var w = screenToWorld(sx, sy, _canvas.width, _canvas.height);
+    return { x: w.x, y: w.y, z: _drawAlt };
+  }
+
+  function bindDrawCanvas(el, pick) {
+    if (!el) return;
+    el.addEventListener('pointerdown', function (ev) {
+      var pt;
+      if (!_drawMode || ev.button !== 0) return;
+      pt = pick(ev);
+      if (!pt) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      drawPushUndo();
+      _drawStroke = true;
+      if (el.setPointerCapture) el.setPointerCapture(ev.pointerId);
+      drawAddPoint(pt);
+    }, true);
+    el.addEventListener('pointermove', function (ev) {
+      var pt;
+      if (!_drawMode || !_drawStroke) return;
+      pt = pick(ev);
+      if (pt) drawAddPoint(pt);
+    });
+    var end = function () {
+      if (!_drawStroke) return;
+      _drawStroke = false;
+      renderWaypointTable();
+    };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+  }
+
   // ── Build HTML ──────────────────────────────────────────────────────────
   function buildHTML() {
     return [
@@ -1691,6 +1895,21 @@
       '</div>',
 
       '<div>',
+      '<div class="pp-section-label">Draw path</div>',
+      '<div class="pp-entry-row">',
+      '<button id="pp-draw-toggle" class="pp-btn pp-btn-sm" title="Drag on the 2D or 3D view to add waypoints">Draw</button>',
+      '<button id="pp-draw-undo" class="pp-btn pp-btn-sm" title="Undo last stroke">Undo</button>',
+      '<button id="pp-draw-clear" class="pp-btn pp-btn-sm" title="Clear all waypoints (undoable)">Clear</button>',
+      '<button id="pp-fit-room" class="pp-btn pp-btn-sm" title="Frame the room in the 2D view">Fit room</button>',
+      '</div>',
+      '<div class="pp-entry-row">',
+      '<input id="pp-draw-alt" type="range" min="0" max="1" step="0.05" value="0.5" title="Draw altitude (m)" style="flex:1">',
+      '<span id="pp-draw-alt-val" class="pp-hint">0.50 m</span>',
+      '</div>',
+      '<div class="pp-hint">Drag to draw at the chosen altitude; points 2&nbsp;cm apart, clamped to the room. Orbit is paused while drawing.</div>',
+      '</div>',
+
+      '<div>',
       '<div class="pp-section-label">Random path generator</div>',
       '<div class="pp-entry-row">',
       '<input id="pp-rand-n" class="pp-wp-input" value="6" type="number" min="2" step="1" title="Waypoints">',
@@ -1799,6 +2018,14 @@
       q('pp-add-manual-wp').addEventListener('click', addManualWaypoint);
       q('pp-rand-gen').addEventListener('click', generateRandomPath);
       q('pp-preset-load').addEventListener('click', loadPresetPath);
+      q('pp-draw-toggle').addEventListener('click', function () { setDrawMode(!_drawMode); });
+      q('pp-draw-undo').addEventListener('click', drawUndo);
+      q('pp-draw-clear').addEventListener('click', drawClear);
+      q('pp-fit-room').addEventListener('click', fitRoom2D);
+      q('pp-draw-alt').addEventListener('input', function () { setDrawAlt(parseFloat(this.value)); });
+      syncDrawAltInput();
+      bindDrawCanvas(_canvas, pick2D);
+      bindDrawCanvas(_el3DCanvas, pick3D);
 
       // 2D/3D toggle
       var _v2d = q('pp-view-2d');
@@ -1959,6 +2186,8 @@
     roomBounds: roomBounds, isOutOfRoom: isOutOfRoom, countOutOfRoom: countOutOfRoom,
     roomViewPose: roomViewPose, validRoom: validRoom,
     presetPath: presetPath, PRESET_KINDS: PRESET_KINDS, PRESET_MARGIN: PRESET_MARGIN,
+    clampToRoom: clampToRoom, thinAppend: thinAppend, DRAW_MIN_STEP: DRAW_MIN_STEP,
+    screenToWorld: screenToWorld, worldToScreen: worldToScreen, roomFitZoom: roomFitZoom,
     getRoom: function () { return { w: _room.w, d: _room.d, h: _room.h }; }
   };
 
