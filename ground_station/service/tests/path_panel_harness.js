@@ -339,10 +339,11 @@ function runChecks() {
     console.log('\n[CHECK 5: zoom in / out / reset via marker screen x]');
     const env = loadPanel();
     env.feed(frameC(100, 0));   // screen x at zoom 1: 300 + 1*20 = 320
+    env.click('pp-set-home');   // no live-position dot; probe the Home marker
 
     function curDotX() {
-      const dots = env.ctx.arcs.filter((a) => a.r === 8);
-      assert.ok(dots.length, 'current-position r=8 dot must be drawn');
+      const dots = env.ctx.arcs.filter((a) => a.r === 12);
+      assert.ok(dots.length, 'home r=12 marker must be drawn');
       return dots[dots.length - 1].x;
     }
     env.ctx.reset();
@@ -582,6 +583,51 @@ function runChecks() {
     const z = T.roomFitZoom(800, 600);
     assert.ok(Math.abs(1.4 * 20 * z - 600 * 0.85) < 1e-6, 'room fit zoom frames 85% of the short side');
     console.log('  PASS: clamp to 1.4 x 1.4 x 1.0 room, 101 mm-steps thin to 6 pts at 2 cm, inverse exact, fit zoom ' + z.toFixed(2));
+    env.destroy();
+  }
+
+  // 13. Saved paths: serialize/parse round trip, bad files rejected, library capped.
+  {
+    console.log('\n[CHECK 13: saved path serialize/parse/library]');
+    const env = loadPanel();
+    const T = env.sandbox.__pathPanelTest;
+    const room = { w: 1.4, d: 1.4, h: 1.0 };
+    const pts = T.presetPath('circle', 0.4, 0.5, room);
+    const ser = T.serializePath('  my   loop ', pts, room, 1000);
+    assert.strictEqual(ser.name, 'my loop');
+    assert.strictEqual(ser.type, 'custom');
+    const back = T.parsePathFile(JSON.stringify(ser));
+    assert.ok(back && back.points.length === pts.length, 'round trip length');
+    back.points.forEach((q2, i) => {
+      assert.ok(q2.x === pts[i].x && q2.y === pts[i].y && q2.z === pts[i].z, 'round trip point ' + i);
+    });
+    assert.strictEqual(back.room.w, 1.4);
+    // path_library.py records without z and without room parse, z = 0.
+    const lib = T.parsePathFile({ name: 'srv', points: [{ x: 1, y: 2 }, { x: 3, y: 4 }] });
+    assert.ok(lib && lib.points[1].z === 0 && lib.room === null);
+    const bad = ['not json', '{}', '{"points":[]}', '{"points":[{"x":"1","y":0}]}',
+                 JSON.stringify({ points: [{ x: 0, y: 0, z: null }, { x: 1, y: 0, z: 'a' }] })];
+    bad.forEach((b2) => assert.strictEqual(T.parsePathFile(b2), null, 'accepted bad file: ' + b2));
+    let L = [];
+    for (let i = 0; i < T.LIB_MAX + 5; i++) L = T.libraryPut(L, { name: 'p' + i, points: [] });
+    assert.strictEqual(L.length, T.LIB_MAX);
+    assert.strictEqual(L[0].name, 'p' + (T.LIB_MAX + 4));
+    L = T.libraryPut(L, { name: 'p10', points: [1] });
+    assert.strictEqual(L.filter((e) => e.name === 'p10').length, 1, 'same name must replace');
+    assert.strictEqual(L[0].name, 'p10');
+    console.log('  PASS: ' + pts.length + '-point round trip exact; ' + bad.length + ' bad files rejected; library capped at ' + T.LIB_MAX);
+    env.destroy();
+  }
+
+  // 14. Measured trace only: no live-position dot, no 2D grid lines.
+  {
+    console.log('\n[CHECK 14: no position dot, no grid, origin axes kept]');
+    const env = loadPanel();
+    env.feed(frameC(100, 0));
+    env.feed(frameC(120, 40));
+    assert.strictEqual(env.ctx.arcs.filter((a) => a.r === 8 || a.r === 11).length, 0, 'position dot drawn');
+    assert.ok(env.ctx.texts.some((x) => x.text === 'X') && env.ctx.texts.some((x) => x.text === 'Y'), 'axis labels');
+    console.log('  PASS: 0 position-dot arcs; X/Y axis labels drawn');
     env.destroy();
   }
 

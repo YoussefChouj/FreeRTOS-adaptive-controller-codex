@@ -41,9 +41,7 @@
   var _threeLineActual = null;
   var _threeLineDesired = null;
   var _threeLinePlan = null;
-  var _threeDroneMarker = null;
   var _threeAxes = null;
-  var _threeGrid = null;
   var _threeErrorLabel = null;
   var _threeFollowDrone = false;
   var _MAX_3D_POINTS = 20000;
@@ -500,8 +498,8 @@
     // set (>=3 points with an extent); a manual zoom / reset re-arms it.
     autoFitView();
 
-    // Grid
-    drawGrid(W, H);
+    // Origin axes
+    drawAxes2D(W, H);
 
     // Room walls (x/y footprint)
     drawRoom2D(W, H);
@@ -524,9 +522,6 @@
     // Target position
     if (_targetPos) drawMarker(_targetPos.x, _targetPos.y, 'T', '#e94560', 12);
 
-    // Current position
-    if (_currentPos) drawMarker(_currentPos.x, _currentPos.y, '', '#4a9eff', 8);
-
     // Axes labels
     _ctx.fillStyle = 'rgba(255,255,255,0.3)';
     _ctx.font = '10px Consolas, monospace';
@@ -534,30 +529,7 @@
     _ctx.fillText('Y', 8, 15);
   }
 
-  function drawGrid(W, H) {
-    var gridSize = 50 * _zoom;
-    var offsetX = (W / 2 + _panX) % gridSize;
-    var offsetY = (H / 2 + _panY) % gridSize;
-
-    _ctx.strokeStyle = 'rgba(255,255,255,0.08)';
-    _ctx.lineWidth = 1;
-
-    // Vertical lines
-    for (var x = offsetX; x < W; x += gridSize) {
-      _ctx.beginPath();
-      _ctx.moveTo(x, 0);
-      _ctx.lineTo(x, H);
-      _ctx.stroke();
-    }
-
-    // Horizontal lines
-    for (var y = offsetY; y < H; y += gridSize) {
-      _ctx.beginPath();
-      _ctx.moveTo(0, y);
-      _ctx.lineTo(W, y);
-      _ctx.stroke();
-    }
-
+  function drawAxes2D(W, H) {
     // Origin crosshairs
     var originX = W / 2 + _panX;
     var originY = H / 2 + _panY;
@@ -1068,20 +1040,6 @@
     _threeLinePlan = new THREE.Line(planGeo, planMat);
     _threeScene.add(_threeLinePlan);
 
-    // Drone marker
-    var markerGeo = new THREE.SphereGeometry(0.03, 16, 16);
-    var markerMat = new THREE.MeshPhongMaterial({ color: 0x4ecca3, emissive: 0x22aa66 });
-    var markerMesh = new THREE.Mesh(markerGeo, markerMat);
-    var arrowGeo = new THREE.ConeGeometry(0.02, 0.06, 12);
-    var arrowMat = new THREE.MeshPhongMaterial({ color: 0x4ecca3 });
-    var arrow = new THREE.Mesh(arrowGeo, arrowMat);
-    arrow.rotation.x = Math.PI / 2;
-    arrow.position.z = 0.05;
-    _threeDroneMarker = new THREE.Group();
-    _threeDroneMarker.add(markerMesh);
-    _threeDroneMarker.add(arrow);
-    _threeScene.add(_threeDroneMarker);
-
     // Tracking error label
     var errorCanvas = document.createElement('canvas');
     errorCanvas.width = 256;
@@ -1139,13 +1097,9 @@
     if (activeActual.length > 0 && _threeLineActual) {
       updateRibbonGeometry(_threeLineActual.geometry, activeActual, 0.012, false, actualSegColor);
 
-      if (_threeDroneMarker) {
-        var lastPt = activeActual[activeActual.length - 1];
-        _threeDroneMarker.position.set(lastPt.x, lastPt.z || 0, lastPt.y);
-        _threeDroneMarker.rotation.y = -(lastPt.yaw || 0) * (Math.PI / 180);
-        if (_threeErrorLabel && _threeErrorLabel.sprite) {
-          _threeErrorLabel.sprite.position.set(lastPt.x, (lastPt.z || 0) + 0.12, lastPt.y);
-        }
+      var lastPt = activeActual[activeActual.length - 1];
+      if (_threeErrorLabel && _threeErrorLabel.sprite) {
+        _threeErrorLabel.sprite.position.set(lastPt.x, (lastPt.z || 0) + 0.12, lastPt.y);
       }
     } else if (_threeLineActual) {
       _threeLineActual.geometry.setDrawRange(0, 0);
@@ -1207,9 +1161,6 @@
       _threeLinePlan.geometry.setDrawRange(0, 0);
       _threeLinePlan.geometry.getAttribute('position').needsUpdate = true;
     }
-    if (_threeDroneMarker) {
-      _threeDroneMarker.position.set(0, 0, 0);
-    }
   }
 
   function reset3DView() {
@@ -1228,7 +1179,7 @@
   // Translucent room box, 0.1 m / 0.5 m floor grid and 0.3 m axes.
   function buildRoom3D() {
     var THREE = _THREE;
-    var g, boxGeo, walls, edges, size, minor, major;
+    var g, boxGeo, walls, edges;
     if (!THREE || !_threeScene) return;
     if (_threeRoomGroup) {
       _threeScene.remove(_threeRoomGroup);
@@ -1248,15 +1199,6 @@
       new THREE.LineBasicMaterial({ color: 0x6a8cff, transparent: true, opacity: 0.6 }));
     edges.position.y = _room.h / 2;
     g.add(edges);
-
-    // Square grids covering the room plus 0.5 m, in whole 0.5 m cells.
-    size = Math.ceil((Math.max(_room.w, _room.d) + 0.5) / 0.5) * 0.5;
-    minor = new THREE.GridHelper(size, Math.round(size / 0.1), 0x1c1c38, 0x1c1c38);
-    major = new THREE.GridHelper(size, Math.round(size / 0.5), 0x3a3a6a, 0x3a3a6a);
-    major.position.y = 0.001;
-    g.add(minor);
-    g.add(major);
-    _threeGrid = major;
 
     _threeAxes = new THREE.AxesHelper(0.3);
     _threeAxes.position.y = 0.002;
@@ -1312,9 +1254,7 @@
     _threeLineActual = null;
     _threeLineDesired = null;
     _threeLinePlan = null;
-    _threeDroneMarker = null;
     _threeAxes = null;
-    _threeGrid = null;
     _threeRoomGroup = null;
     _threeDrawPlane = null;
     _threeErrorLabel = null;
@@ -1602,6 +1542,157 @@
     if (last && Math.hypot(c.x - last.x, c.y - last.y, c.z - last.z) < minStep - 1e-9) return false;
     pts.push(c);
     return true;
+  }
+
+  // ── Saved paths ─────────────────────────────────────────────────────────
+  // Kept in this browser (localStorage) and exported/imported as JSON files in
+  // the ground_station/service/path_library.py schema. The panel stays
+  // network-free on purpose (harness CHECK 6).
+  var LIB_KEY = 'pp_paths_v1';
+  var LIB_MAX = 50;
+  var PATH_MAX_POINTS = 5000;
+
+  function cleanName(name) {
+    var n = String(name == null ? '' : name).replace(/\s+/g, ' ').trim().slice(0, 60);
+    return n || 'path';
+  }
+
+  function serializePath(name, pts, room, now) {
+    return {
+      name: cleanName(name),
+      created_at: now,
+      type: 'custom',
+      room: { w: room.w, d: room.d, h: room.h },
+      points: pts.map(function (w) { return { x: round3(w.x), y: round3(w.y), z: round3(w.z) }; })
+    };
+  }
+
+  // Returns {name, points, room} or null. Rejects anything that is not a list
+  // of finite x/y/z points; z defaults to 0 as in path_library.resample_path.
+  function parsePathFile(obj) {
+    var raw, pts = [], i, pt, z;
+    if (typeof obj === 'string') {
+      try { obj = JSON.parse(obj); } catch (e) { return null; }
+    }
+    raw = obj && (Array.isArray(obj) ? obj : obj.points);
+    if (!Array.isArray(raw) || !raw.length || raw.length > PATH_MAX_POINTS) return null;
+    for (i = 0; i < raw.length; i++) {
+      pt = raw[i];
+      z = pt && pt.z != null ? pt.z : 0;
+      if (!pt || typeof pt.x !== 'number' || typeof pt.y !== 'number' || typeof z !== 'number' ||
+          !isFinite(pt.x) || !isFinite(pt.y) || !isFinite(z)) return null;
+      pts.push({ x: pt.x, y: pt.y, z: z, reached: false });
+    }
+    return {
+      name: cleanName(obj.name),
+      points: pts,
+      room: validRoom(obj.room) ? { w: obj.room.w, d: obj.room.d, h: obj.room.h } : null
+    };
+  }
+
+  // Same name replaces; newest first; at most LIB_MAX entries.
+  function libraryPut(lib, entry) {
+    var out = lib.filter(function (e) { return e.name !== entry.name; });
+    out.unshift(entry);
+    return out.slice(0, LIB_MAX);
+  }
+
+  function libraryLoad() {
+    var lib;
+    try { lib = JSON.parse(storageGet(LIB_KEY) || '[]'); } catch (e) { lib = []; }
+    return Array.isArray(lib) ? lib.filter(function (e) { return parsePathFile(e); }) : [];
+  }
+
+  function librarySave(lib) { storageSet(LIB_KEY, JSON.stringify(lib)); }
+
+  function renderLibrarySelect() {
+    var sel = q('pp-lib-select');
+    var lib = libraryLoad();
+    if (!sel) return;
+    sel.innerHTML = '';
+    lib.forEach(function (e) {
+      var o = document.createElement('option');
+      o.value = e.name;
+      o.textContent = e.name + ' (' + e.points.length + ' pts)';
+      sel.appendChild(o);
+    });
+    if (!lib.length) {
+      sel.innerHTML = '<option value="">(no saved paths)</option>';
+    }
+  }
+
+  function setLibStatus(text) {
+    var el = q('pp-lib-status');
+    if (el) el.textContent = text;
+  }
+
+  function applyLoadedPath(parsed) {
+    drawPushUndo();
+    _waypoints = parsed.points;
+    waypointsChanged(true);
+  }
+
+  function libSaveCurrent() {
+    var nameEl = q('pp-lib-name');
+    var entry;
+    if (!_waypoints.length) { setLibStatus('Nothing to save: no waypoints.'); return; }
+    entry = serializePath(nameEl ? nameEl.value : '', _waypoints, _room, Date.now() / 1000);
+    librarySave(libraryPut(libraryLoad(), entry));
+    renderLibrarySelect();
+    q('pp-lib-select').value = entry.name;
+    setLibStatus('Saved "' + entry.name + '" (' + entry.points.length + ' pts) in this browser.');
+  }
+
+  function libSelected() {
+    var sel = q('pp-lib-select');
+    var name = sel ? sel.value : '';
+    return libraryLoad().filter(function (e) { return e.name === name; })[0] || null;
+  }
+
+  function libLoadSelected() {
+    var e = libSelected();
+    var parsed = e && parsePathFile(e);
+    if (!parsed) { setLibStatus('No saved path selected.'); return; }
+    applyLoadedPath(parsed);
+    setLibStatus('Loaded "' + parsed.name + '" (' + parsed.points.length + ' pts). Undo restores the previous list.');
+  }
+
+  function libDeleteSelected() {
+    var e = libSelected();
+    if (!e || !window.confirm('Remove saved path "' + e.name + '" from this browser?')) return;
+    librarySave(libraryLoad().filter(function (x) { return x.name !== e.name; }));
+    renderLibrarySelect();
+    setLibStatus('Removed "' + e.name + '".');
+  }
+
+  function libExport() {
+    var nameEl = q('pp-lib-name');
+    var entry, blob, a;
+    if (!_waypoints.length) { setLibStatus('Nothing to export: no waypoints.'); return; }
+    entry = serializePath(nameEl ? nameEl.value : '', _waypoints, _room, Date.now() / 1000);
+    blob = new Blob([JSON.stringify(entry, null, 2)], { type: 'application/json' });
+    a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = entry.name.replace(/[^A-Za-z0-9_.-]+/g, '_') + '.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+    setLibStatus('Exported ' + a.download + '.');
+  }
+
+  function libImportFile(file) {
+    var reader;
+    if (!file) return;
+    reader = new FileReader();
+    reader.onload = function () {
+      var parsed = parsePathFile(String(reader.result));
+      if (!parsed) { setLibStatus('Import failed: ' + file.name + ' is not a path file.'); return; }
+      applyLoadedPath(parsed);
+      if (q('pp-lib-name')) q('pp-lib-name').value = parsed.name;
+      setLibStatus('Imported "' + parsed.name + '" (' + parsed.points.length + ' pts). Save to keep it here.');
+    };
+    reader.readAsText(file);
   }
 
   function drawPushUndo() {
@@ -1910,6 +2001,25 @@
       '</div>',
 
       '<div>',
+      '<div class="pp-section-label">Saved paths</div>',
+      '<div class="pp-entry-row">',
+      '<input id="pp-lib-name" class="pp-wp-input" type="text" placeholder="name" maxlength="60" style="flex:1" title="Path name (same name overwrites)">',
+      '<button id="pp-lib-save" class="pp-btn pp-btn-sm" title="Save the waypoint list in this browser">Save</button>',
+      '</div>',
+      '<div class="pp-entry-row">',
+      '<select id="pp-lib-select" class="pp-wp-input" style="flex:1" title="Saved paths"></select>',
+      '<button id="pp-lib-load" class="pp-btn pp-btn-sm" title="Replace the waypoint list (undoable)">Load</button>',
+      '<button id="pp-lib-delete" class="pp-btn pp-btn-sm" title="Remove from this browser">Del</button>',
+      '</div>',
+      '<div class="pp-entry-row">',
+      '<button id="pp-lib-export" class="pp-btn pp-btn-sm" title="Download as JSON">Export</button>',
+      '<button id="pp-lib-import" class="pp-btn pp-btn-sm" title="Load a JSON path file">Import</button>',
+      '<input id="pp-lib-file" type="file" accept=".json,application/json" style="display:none">',
+      '</div>',
+      '<div id="pp-lib-status" class="pp-hint">Paths are stored in this browser; Export for a file copy.</div>',
+      '</div>',
+
+      '<div>',
       '<div class="pp-section-label">Random path generator</div>',
       '<div class="pp-entry-row">',
       '<input id="pp-rand-n" class="pp-wp-input" value="6" type="number" min="2" step="1" title="Waypoints">',
@@ -2022,6 +2132,16 @@
       q('pp-draw-undo').addEventListener('click', drawUndo);
       q('pp-draw-clear').addEventListener('click', drawClear);
       q('pp-fit-room').addEventListener('click', fitRoom2D);
+      q('pp-lib-save').addEventListener('click', libSaveCurrent);
+      q('pp-lib-load').addEventListener('click', libLoadSelected);
+      q('pp-lib-delete').addEventListener('click', libDeleteSelected);
+      q('pp-lib-export').addEventListener('click', libExport);
+      q('pp-lib-import').addEventListener('click', function () { q('pp-lib-file').click(); });
+      q('pp-lib-file').addEventListener('change', function () {
+        libImportFile(this.files && this.files[0]);
+        this.value = '';
+      });
+      renderLibrarySelect();
       q('pp-draw-alt').addEventListener('input', function () { setDrawAlt(parseFloat(this.value)); });
       syncDrawAltInput();
       bindDrawCanvas(_canvas, pick2D);
@@ -2186,6 +2306,7 @@
     roomBounds: roomBounds, isOutOfRoom: isOutOfRoom, countOutOfRoom: countOutOfRoom,
     roomViewPose: roomViewPose, validRoom: validRoom,
     presetPath: presetPath, PRESET_KINDS: PRESET_KINDS, PRESET_MARGIN: PRESET_MARGIN,
+    serializePath: serializePath, parsePathFile: parsePathFile, libraryPut: libraryPut, LIB_MAX: LIB_MAX,
     clampToRoom: clampToRoom, thinAppend: thinAppend, DRAW_MIN_STEP: DRAW_MIN_STEP,
     screenToWorld: screenToWorld, worldToScreen: worldToScreen, roomFitZoom: roomFitZoom,
     getRoom: function () { return { w: _room.w, d: _room.d, h: _room.h }; }

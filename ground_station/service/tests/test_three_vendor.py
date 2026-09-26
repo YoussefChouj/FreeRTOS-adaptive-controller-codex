@@ -139,7 +139,7 @@ class TestPathPanel3D(unittest.TestCase):
     def test_existing_2d_preserved(self):
         self.assertIn('pp-canvas', self.content)
         self.assertIn('drawTrail', self.content)
-        self.assertIn('drawGrid', self.content)
+        self.assertIn('drawAxes2D', self.content)  # grid removed by request; origin axes kept
 
 
 class TestPathPanelSyntax(unittest.TestCase):
