@@ -163,9 +163,9 @@ function runChecks() {
   {
     console.log('\n[CHECK 1: binding from c.earth_x/c.earth_y/c.altitude_cm]');
     const env = loadPanel();
-    env.feed(frameC(10, 20, 400, undefined, false)); // alt 400 cm
+    env.feed(frameC(1000, 2000, 400, undefined, false)); // alt 400 cm
     env.ctx.reset();   // drop the pre-position "No position data" render
-    env.feed(frameC(12, 24, 400));
+    env.feed(frameC(1200, 2400, 400));
     assert.ok(!env.ctx.texts.some((t) => t.text === 'No position data'),
       'position must be bound, not "No position data"');
     const html = env.doc.getElementById('pp-metrics').innerHTML;

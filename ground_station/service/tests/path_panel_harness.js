@@ -236,9 +236,9 @@ function runChecks() {
   {
     console.log('\n[CHECK 2: position rendered from c.earth_x/c.earth_y]');
     const env = loadPanel();
-    env.feed(frameC(10, 20));
+    env.feed(frameC(1000, 2000));
     env.ctx.reset();            // ignore pre-position no-data renders
-    env.feed(frameC(12, 24));
+    env.feed(frameC(1200, 2400));
     assert.ok(!env.ctx.texts.some((t) => t.text === 'No position data'),
       'no-data text must be gone once position arrives');
     assert.strictEqual(env.doc.getElementById('pp-demo-badge').style.display,
@@ -294,7 +294,7 @@ function runChecks() {
   {
     console.log('\n[CHECK 4: Set Home / Set Target markers]');
     const env = loadPanel();
-    env.feed(frameC(1, 0));
+    env.feed(frameC(100, 0));
 
     env.ctx.reset();
     env.click('pp-set-home');
@@ -316,7 +316,7 @@ function runChecks() {
   {
     console.log('\n[CHECK 5: zoom in / out / reset via marker screen x]');
     const env = loadPanel();
-    env.feed(frameC(1, 0));   // screen x at zoom 1: 300 + 1*20 = 320
+    env.feed(frameC(100, 0));   // screen x at zoom 1: 300 + 1*20 = 320
 
     function curDotX() {
       const dots = env.ctx.arcs.filter((a) => a.r === 8);
@@ -347,7 +347,7 @@ function runChecks() {
   {
     console.log('\n[CHECK 6: mission payload captured by fetch stub, zero sends]');
     const env = loadPanel();
-    env.feed(frameC(1, 0));
+    env.feed(frameC(100, 0));
     env.click('pp-add-wp');
     env.click('pp-set-home');
     env.click('pp-set-target');

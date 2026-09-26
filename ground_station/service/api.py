@@ -1257,6 +1257,19 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     self._json(200, {"flight_tests": tests})
                 except Exception as exc:
                     self._json(500, {"error": str(exc)})
+            elif route == "/api/paths":
+                import ground_station.service.path_library as pl
+                self._json(200, {"paths": pl.list_paths()})
+                
+            elif route.startswith("/api/paths/"):
+                import ground_station.service.path_library as pl
+                path_id = route.split("/")[-1]
+                p = pl.get_path(path_id)
+                if p:
+                    self._json(200, p)
+                else:
+                    self._json(404, {"error": "not found"})
+                    
             elif route == "/api/session/notes":
                 # Optional ?since=<seq> returns the seq-tagged note log that
                 # agents use (each note gains a monotonic seq). Without since,
