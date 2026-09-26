@@ -46,7 +46,7 @@
   var _trackingError = 0;
 
 
-  var MAX_TRAIL = 100;
+  var MAX_TRAIL = 20000;
   var MIN_ZOOM = 0.2;
   var MAX_ZOOM = 5.0;
   var ZOOM_STEP = 0.2;
@@ -93,6 +93,8 @@
   // Altitude is published in cm (`*_alt_cm`) and metres (`c.altitude`).
   var POS_Z_KEYS = ['c.altitude_cm', 'c.altitude', 'altitude',
                     'ano_of.of_alt_cm', 'ano_of.of_alt_cm_m', 'of_alt_cm', 'pos_z'];
+
+  var POS_YAW_KEYS = ['c.yaw', 'yaw', 'imu_data.yaw', 'status.yaw_deg'];
 
   // Return the first defined numeric value from valueMap matching any of
   // `names`, bare or slot-prefixed. Returns undefined when absent.
@@ -141,10 +143,12 @@
         if (!vals) continue;
         var x = lookupValue(vals, POS_X_KEYS);
         var y = lookupValue(vals, POS_Y_KEYS);
+        var yaw = lookupValue(vals, POS_YAW_KEYS);
         if (x !== undefined && y !== undefined &&
             !isNaN(Number(x)) && !isNaN(Number(y))) {
-          return { x: parseFloat(x), y: parseFloat(y),
-                   z: metreAltitude(vals, lookupValue(vals, POS_Z_KEYS)) };
+          return { x: parseFloat(x) / 100, y: parseFloat(y) / 100,
+                   z: metreAltitude(vals, lookupValue(vals, POS_Z_KEYS)),
+                   yaw: yaw !== undefined ? parseFloat(yaw) : 0 };
         }
       }
     }
@@ -153,10 +157,12 @@
     var flat = state.values || state;
     var fx = lookupValue(flat, POS_X_KEYS);
     var fy = lookupValue(flat, POS_Y_KEYS);
+    var fyaw = lookupValue(flat, POS_YAW_KEYS);
     if (fx !== undefined && fy !== undefined &&
         !isNaN(Number(fx)) && !isNaN(Number(fy))) {
-      return { x: parseFloat(fx), y: parseFloat(fy),
-               z: metreAltitude(flat, lookupValue(flat, POS_Z_KEYS)) };
+      return { x: parseFloat(fx) / 100, y: parseFloat(fy) / 100,
+               z: metreAltitude(flat, lookupValue(flat, POS_Z_KEYS)),
+               yaw: fyaw !== undefined ? parseFloat(fyaw) : 0 };
     }
 
     return null;
@@ -166,13 +172,13 @@
   function addPoint(pos) {
     if (!pos || pos.x == null || pos.y == null) return;
 
-    _trajectory.push({ x: pos.x, y: pos.y, t: Date.now() });
+    _trajectory.push({ x: pos.x, y: pos.y, z: pos.z, yaw: pos.yaw, t: Date.now() });
     if (_trajectory.length > MAX_TRAIL) {
       _trajectory.shift();
     }
 
     // Update current position
-    _currentPos = { x: pos.x, y: pos.y, z: pos.z == null ? null : pos.z };
+    _currentPos = { x: pos.x, y: pos.y, z: pos.z == null ? null : pos.z, yaw: pos.yaw || 0 };
 
     // Recalculate metrics
     updateMetrics();
@@ -343,9 +349,11 @@
     }
     _ctx.stroke();
 
-    // Gradient fade for older points
-    for (var i = 1; i < _trajectory.length; i++) {
-      var alpha = (i / _trajectory.length) * 0.5;
+    // Gradient fade for older points (only last 100 points to avoid lag)
+    var startIdx = Math.max(1, _trajectory.length - 100);
+    var tailLen = _trajectory.length - startIdx;
+    for (var i = startIdx; i < _trajectory.length; i++) {
+      var alpha = ((i - startIdx) / tailLen) * 0.5;
       var pt = worldToScreen(_trajectory[i].x, _trajectory[i].y, W, H);
       _ctx.beginPath();
       _ctx.fillStyle = 'rgba(74, 158, 255, ' + alpha + ')';
@@ -691,6 +699,7 @@
       if (_threeDroneMarker && _trajectory.length > 0) {
         var lastPt = _trajectory[_trajectory.length - 1];
         _threeDroneMarker.position.set(lastPt.x, lastPt.z || 0, lastPt.y);
+        _threeDroneMarker.rotation.y = -(lastPt.yaw || 0) * (Math.PI / 180);
       }
     }
 
@@ -840,8 +849,15 @@
         var x = row.c && row.c.earth_x;
         var y = row.c && row.c.earth_y;
         var z = row.c && row.c.altitude_cm;
+        var yaw = row.imu_data && row.imu_data.yaw || row.status && row.status.yaw_deg;
+        if (yaw === undefined) yaw = row["imu_data.yaw"] || row["status.yaw_deg"];
         if (x !== undefined && y !== undefined) {
-          _trajectory.push({ x: parseFloat(x), y: parseFloat(y), z: z ? parseFloat(z) / 100 : 0 });
+          _trajectory.push({ 
+            x: parseFloat(x) / 100, 
+            y: parseFloat(y) / 100, 
+            z: z ? parseFloat(z) / 100 : 0,
+            yaw: yaw ? parseFloat(yaw) : 0
+          });
         }
       }
       updateDesiredPath(null);

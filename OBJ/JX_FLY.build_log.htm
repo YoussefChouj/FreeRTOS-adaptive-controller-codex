@@ -27,15 +27,23 @@ Project File Date:  09/26/2026
 <h2>Output:</h2>
 *** Using Compiler 'V5.06 update 3 (build 300)', folder: 'C:\Keil_v5\ARM\ARMCC\Bin'
 Build target 'JX_FLY'
+compiling ekf.c...
+..\Global_file\global_declare.h(329): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(349): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\API\ekf.c: 2 warnings, 0 errors
+linking...
+Program Size: Code=94692 RO-data=4360 RW-data=2692 ZI-data=122012  
 FromELF: creating hex file...
-"..\OBJ\JX_FLY.axf" - 0 Error(s), 0 Warning(s).
+"..\OBJ\JX_FLY.axf" - 0 Error(s), 2 Warning(s).
 
 <h2>Collection of Component include folders:</h2>
   C:\Users\Acer\Desktop\UAV_lab\FreeRTOS-adaptive-controller-codex\USER\RTE
   C:\Keil_v5\ARM\PACK\Keil\STM32F4xx_DFP\2.2.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include
 
 <h2>Collection of Component Files used:</h2>
-Build Time Elapsed:  00:00:03
+Build Time Elapsed:  00:00:11
 </pre>
 </body>
 </html>
