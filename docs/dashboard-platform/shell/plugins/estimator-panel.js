@@ -15,6 +15,7 @@
  * Variables read from slot-1 subscribe (DASHBOARD_PANEL_EXTRA_VARS):
  *   g_of_bias_mode        — active mode (0/1/2)
  *   g_of_bias_ema_freeze  — EMA freeze flag
+ *   g_of_handheld_test    — handheld test flag (CMD 0x1E idx=3)
  *   g_of_bias_ema_tau_s   — current EMA tau (s)
  *   g_ekf_of_health       — 1=healthy 0=diverged
  *   g_ekf_of_fallback     — 1=fell back to FIXED this flight
@@ -271,6 +272,17 @@
       '      <span id="est-freeze-state" class="est-health-unk">?</span>',
       '    </div>',
       '  </div>',
+      '  <div>',
+      '    <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Handheld Test</div>',
+      '    <div style="display:flex;gap:6px;align-items:center">',
+      '      <button id="est-btn-handheld" style="padding:3px 10px;border-radius:4px;border:1px solid var(--border);',
+      '              background:transparent;color:var(--muted);cursor:pointer;font-size:11px;font-weight:600"',
+      '              onclick="window._estToggleHandheld()" title="Integrate OF position on the ground so the drone can be moved by hand (modes 0 and 2). Hold still when enabling: position is zeroed and the bias frozen. Firmware clears it in flight.">',
+      '        <span id="est-handheld-label">ENABLE</span>',
+      '      </button>',
+      '      <span id="est-handheld-state" class="est-health-unk">?</span>',
+      '    </div>',
+      '  </div>',
       '</div>',
 
       /* ── EKF-OF health section ── */
@@ -346,7 +358,8 @@
   var _keyLastSeen = {};
   var _tickTimer = null;
   var _currentMode = null;    /* last known mode from telemetry */
-  var _freezeState = null;    /* last known freeze from telemetry */
+  var _freezeState = null;
+  var _handheldState = null;    /* last known freeze from telemetry */
 
   /* Expose mode/tau/freeze send functions on window so onclick="" works */
   window._estSetMode = function (mode) {
@@ -385,6 +398,15 @@
     if (fn) fn().catch(function (e) { console.error('freeze toggle rejected:', e); });
   };
 
+  window._estToggleHandheld = function () {
+    if (!_api) return;
+    var v = (_handheldState === 1) ? 0 : 1;
+    var fn = typeof _api.submitCommand === 'function'
+      ? function () { return _api.submitCommand(CMD_ESTIMATOR, 3, v); }
+      : null;
+    if (fn) fn().catch(function (e) { console.error('handheld toggle rejected:', e); });
+  };
+
   /* ── Render helpers ─────────────────────────────────────────────────── */
   function updateModeButtons(mode, armState) {
     var disabled = (armState !== 'disarmed');
@@ -421,6 +443,22 @@
     } else {
       if (lbl) lbl.textContent = 'FREEZE';
       if (st)  { st.textContent = 'RUNNING'; st.className = 'est-health-ok'; }
+    }
+  }
+
+  function updateHandheldState(h) {
+    _handheldState = h;
+    var lbl = q('est-handheld-label');
+    var st  = q('est-handheld-state');
+    if (h === null) {
+      if (lbl) lbl.textContent = 'ENABLE';
+      if (st)  { st.textContent = 'NOT PUBLISHED'; st.className = 'est-health-unk'; }
+    } else if (h === 1) {
+      if (lbl) lbl.textContent = 'DISABLE';
+      if (st)  { st.textContent = 'ACTIVE'; st.className = 'est-health-bad'; }
+    } else {
+      if (lbl) lbl.textContent = 'ENABLE';
+      if (st)  { st.textContent = 'OFF'; st.className = 'est-health-ok'; }
     }
   }
 
@@ -516,6 +554,7 @@
     var modeV    = values ? slotLookup(values, 'g_of_bias_mode')       : null;
     var freezeV  = values ? slotLookup(values, 'g_of_bias_ema_freeze') : null;
     var tauV     = values ? slotLookup(values, 'g_of_bias_ema_tau_s')  : null;
+    var handV    = values ? slotLookup(values, 'g_of_handheld_test')   : null;
     var healthV  = values ? slotLookup(values, 'g_ekf_of_health')      : null;
     var fallbkV  = values ? slotLookup(values, 'g_ekf_of_fallback')    : null;
 
@@ -525,6 +564,7 @@
     updateModeButtons(mode, armState);
     updateFreezeState((freezeV != null) ? Math.round(parseFloat(freezeV)) : null);
     updateTauReadback((tauV != null) ? parseFloat(tauV) : null);
+    updateHandheldState((handV != null) ? Math.round(parseFloat(handV)) : null);
     updateEkfOfHealth(
       (healthV != null) ? parseFloat(healthV) : null,
       (fallbkV != null) ? parseFloat(fallbkV) : null
@@ -662,6 +702,7 @@
     delete window._estSetMode;
     delete window._estSetTau;
     delete window._estToggleFreeze;
+    delete window._estToggleHandheld;
   };
   window.__registerPlugin__('EKF Estimator', window.__PLUGIN_INIT__, window.__PLUGIN_DESTROY__);
 

@@ -32,6 +32,7 @@ extern FP32 Gyro_Z_Real;
 /* ADR-0011: calibration state from TASK/StabilizerTask.c */
 extern volatile uint8_t g_of_bias_capture_req; /* CMD 0x17 one-shot OF bias capture req */
 extern volatile uint8_t g_of_bias_mode;        /* CMD 0x1E idx=0: 0=FIXED 1=EMA 2=EKF */
+extern volatile uint8_t g_of_handheld_test;    /* CMD 0x1E idx=3: 1=integrate OF on ground */
 extern volatile uint8_t g_of_bias_ema_freeze;  /* CMD 0x1E idx=1: 1=freeze EMA update */
 extern float g_of_bias_ema_tau_s;              /* CMD 0x1E idx=2: EMA tau (s), [1,300] */
 extern volatile uint8_t g_ekf_of_health;       /* 1=EKF healthy, 0=diverged (fallback active) */
@@ -1875,6 +1876,8 @@ void Process_GroundStation_Command(void)
          *   idx=2: set EMA time constant tau (seconds).
          *          Clamped to [1.0, 300.0] s. Allowed any time.
          *          Larger tau → slower tracking, less pull-back.
+         *   idx=3: handheld test (val=0 off, val=1 on). Integrates OF
+         *          position on the ground; firmware clears it in flight.
          *
          * All globals are volatile and DWARF-subscribable. */
         else if (id == 0x1E) {
@@ -1894,6 +1897,8 @@ void Process_GroundStation_Command(void)
                 if (val < 1.0f)   val = 1.0f;
                 if (val > 300.0f) val = 300.0f;
                 g_of_bias_ema_tau_s = val;
+            } else if (idx == 3) {
+                g_of_handheld_test = (val >= 0.5f) ? 1U : 0U;
             }
         }
 

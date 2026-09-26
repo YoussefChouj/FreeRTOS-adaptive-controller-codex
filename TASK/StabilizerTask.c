@@ -115,6 +115,10 @@ float g_of_bias_ema_tau_s = OF_BIAS_EMA_TAU_DEFAULT; /* EMA time constant (s) */
 #define EKF_OF_INNOV_THRESH  2.0f  /* m/s — innovation > this → unhealthy */
 volatile uint8_t g_ekf_of_health   = 1U; /* 1=healthy 0=diverged  */
 volatile uint8_t g_ekf_of_fallback = 0U; /* 1=fell back to FIXED  */
+/* Handheld test (CMD 0x1E idx=3): integrate OF position on the ground so the
+ * drone can be carried by hand (modes 0/2). Freezes the ground bias EMA, zeroes
+ * the origin on enable, and self-clears once the drone is flying. */
+volatile uint8_t g_of_handheld_test = 0U;
 
 /* OF velocity-bias EMA state. s_of_bias_seeded gates the seed-on-first-sample
  * logic (see comment above). g_of_bias_ema_freeze gates the continuous update. */
@@ -388,8 +392,9 @@ void Update_Data(void)
 			 * GROUND_IDLE or LANDED): OF zero wanders 1-3 counts at rest,
 			 * integrating to cm/s drift before takeoff. */
 			if (ano_of.of_quality >= OF_MIN_QUALITY &&
-			    DroneStatus.ARM_Status == Armed &&
-			    (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING))
+			    (g_of_handheld_test ||
+			     (DroneStatus.ARM_Status == Armed &&
+			      (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING))))
 			{
 				float of_dx_deb = ano_of.of2_dx_fix - s_of_bias_x;
 				float of_dy_deb = ano_of.of2_dy_fix - s_of_bias_y;
@@ -820,12 +825,14 @@ void Compute_Motor(void)
 		 * drift. While disarmed, average OF with a 1 s EMA and snap to that. */
 		static float s_of_pre_x = 0.0f, s_of_pre_y = 0.0f;
 		static uint8_t s_of_pre_ok = 0U;
+		static uint8_t s_prev_handheld = 0U;
 		uint8_t armed_now = (DroneStatus.ARM_Status == Armed) ? 1U : 0U;
 		/* FIX 2026-09-26: keep averaging while armed on the ground too and
 		 * track the Mode 0 bias with it, so the bias locks at takeoff. */
 		uint8_t on_ground = (!armed_now || (flight_phase != FLIGHT_PHASE_FLYING &&
 		                     flight_phase != FLIGHT_PHASE_LANDING)) ? 1U : 0U;
-		if (on_ground && ano_of.of_quality >= OF_MIN_QUALITY) {
+		if (!on_ground) g_of_handheld_test = 0U; /* never carried into flight */
+		if (on_ground && !g_of_handheld_test && ano_of.of_quality >= OF_MIN_QUALITY) {
 			if (!s_of_pre_ok) {
 				s_of_pre_x = (float)ano_of.of2_dx_fix;
 				s_of_pre_y = (float)ano_of.of2_dy_fix;
@@ -875,10 +882,20 @@ void Compute_Motor(void)
 			 * dashboard sees a clean state for each new flight. */
 			g_ekf_of_fallback = 0U;
 		}
-		else if (armed_now && on_ground && s_of_pre_ok && g_of_bias_mode == 0U) {
+		else if (armed_now && on_ground && !g_of_handheld_test && s_of_pre_ok && g_of_bias_mode == 0U) {
 			s_of_bias_x = s_of_pre_x;
 			s_of_bias_y = s_of_pre_y;
 		}
+		/* Handheld test enabled: zero the origin but keep the averaged bias
+		 * (Reset_World_Origin() zeroes it). Hold still when enabling. */
+		if (g_of_handheld_test && !s_prev_handheld) {
+			float keep_bx = s_of_bias_x;
+			float keep_by = s_of_bias_y;
+			Reset_World_Origin();
+			s_of_bias_x = s_of_pre_ok ? s_of_pre_x : keep_bx;
+			s_of_bias_y = s_of_pre_ok ? s_of_pre_y : keep_by;
+		}
+		s_prev_handheld = g_of_handheld_test;
 		s_prev_armed = armed_now;
 	}
 	/* Tier 1.0 (2026-09-13): only run position/velocity PIDs while armed.

@@ -234,6 +234,7 @@ DASHBOARD_PANEL_EXTRA_VARS: tuple[str, ...] = (
     # Estimator-mode readback flags — command-panel OF-bias section.
     "g_of_bias_mode",
     "g_of_bias_ema_freeze",
+    "g_of_handheld_test",
     # Estimator extended readback (task 20260922-061216).
     # EMA tau is configurable at run-time (CMD 0x1E idx=2); the panel
     # reads it back so the numeric input stays in sync with firmware.

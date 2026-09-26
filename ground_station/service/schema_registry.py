@@ -311,6 +311,7 @@ class SchemaRegistry:
             "flight_phase":          "flight_phase",
             "g_of_bias_mode":        "g_of_bias_mode",
             "g_of_bias_ema_freeze":  "g_of_bias_ema_freeze",
+            "g_of_handheld_test":    "g_of_handheld_test",
             "gs_max_horizontal_speed_mps": "gs_max_horizontal_speed_mps",
             "gs_max_vertical_speed_mps":   "gs_max_vertical_speed_mps",
             "gs_max_pitch_deg":             "gs_max_pitch_deg",
@@ -324,7 +325,7 @@ class SchemaRegistry:
             "status.rc_authority", "status.of_hold",
             "status.estimator_ready", "status.motor_idle",
             "s_state", "flight_phase",
-            "g_of_bias_mode", "g_of_bias_ema_freeze",
+            "g_of_bias_mode", "g_of_bias_ema_freeze", "g_of_handheld_test",
         }
         return cls(mapping, int_keys=int_keys)
 
