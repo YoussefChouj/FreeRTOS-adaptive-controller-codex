@@ -42,6 +42,7 @@
   var _threeLineDesired = null;
   var _threeLinePlan = null;
   var _threeAxes = null;
+  var _threeShadow = null;
   var _threeErrorLabel = null;
   var _threeFollowDrone = false;
   var _MAX_3D_POINTS = 20000;
@@ -144,11 +145,10 @@
     return n;
   }
 
-  // Camera pose (three.js axes: y up, z = world y) that frames the whole room.
-  function roomViewPose(preset) {
-    var rad = 0.5 * Math.sqrt(_room.w * _room.w + _room.d * _room.d + _room.h * _room.h);
+  // Camera pose (three.js axes: y up, z = world y) framing a sphere of radius
+  // rad around target t.
+  function viewPose(preset, t, rad) {
     var dist = 2.3 * rad;   // fov 60: rad / sin(30 deg) = 2 rad, plus margin
-    var t = { x: 0, y: _room.h / 2, z: 0 };
     var p;
     if (preset === 'top') p = { x: t.x, y: t.y + dist, z: t.z + 0.001 };
     else if (preset === 'side') p = { x: t.x + dist, y: t.y, z: t.z };
@@ -160,12 +160,37 @@
     return { pos: p, target: t };
   }
 
+  function roomViewPose(preset) {
+    var rad = 0.5 * Math.sqrt(_room.w * _room.w + _room.d * _room.d + _room.h * _room.h);
+    return viewPose(preset, { x: 0, y: _room.h / 2, z: 0 }, rad);
+  }
+
+  // Iso pose framing the bounding box of points clamped to the room (min radius
+  // 0.25 m), so a sensor outlier cannot zoom the view out; room pose when empty.
+  function pathViewPose(points) {
+    var i, pt, z, x0, x1, y0, y1, z0, z1, dx, dy, dz;
+    if (!points || points.length === 0) return roomViewPose('iso');
+    x0 = y0 = z0 = Infinity; x1 = y1 = z1 = -Infinity;
+    for (i = 0; i < points.length; i++) {
+      pt = clampToRoom({ x: points[i].x, y: points[i].y, z: points[i].z || 0 }, _room);
+      z = pt.z;
+      if (pt.x < x0) x0 = pt.x; if (pt.x > x1) x1 = pt.x;
+      if (pt.y < y0) y0 = pt.y; if (pt.y > y1) y1 = pt.y;
+      if (z < z0) z0 = z; if (z > z1) z1 = z;
+    }
+    dx = x1 - x0; dy = y1 - y0; dz = z1 - z0;
+    return viewPose('iso', { x: (x0 + x1) / 2, y: (z0 + z1) / 2, z: (y0 + y1) / 2 },
+                    Math.max(0.25, 0.5 * Math.sqrt(dx * dx + dy * dy + dz * dz)));
+  }
+
   // Ribbon segment colour: blue inside the room, red when either end is outside.
+  // Older segments fade to 35 % brightness so the newest part of the trail stands out.
   function actualSegColor(points, i, out) {
+    var f = points.length > 2 ? 0.35 + 0.65 * i / (points.length - 2) : 1;
     if (isOutOfRoom(points[i]) || isOutOfRoom(points[i + 1])) {
-      out[0] = 1.0; out[1] = 0.25; out[2] = 0.25;
+      out[0] = 1.0 * f; out[1] = 0.25 * f; out[2] = 0.25 * f;
     } else {
-      out[0] = 0.29; out[1] = 0.62; out[2] = 1.0;
+      out[0] = 0.29 * f; out[1] = 0.62 * f; out[2] = 1.0 * f;
     }
   }
 
@@ -1006,12 +1031,6 @@
     _threeControls.maxDistance = 20;
     reset3DView();
 
-    var ambient = new THREE.AmbientLight(0x404060, 1.5);
-    _threeScene.add(ambient);
-    var dirLight = new THREE.DirectionalLight(0xffffff, 2);
-    dirLight.position.set(3, 6, 3);
-    _threeScene.add(dirLight);
-
     // Room box, floor grid and axes (rebuilt when the room size changes)
     buildRoom3D();
 
@@ -1051,6 +1070,16 @@
     _threeLineActual = new THREE.Mesh(actualGeo, actualMat);
     _threeLineActual.frustumCulled = false;
     _threeScene.add(_threeLineActual);
+
+    // Floor projection of the actual path
+    var shadowGeo = new THREE.BufferGeometry();
+    shadowGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(_MAX_3D_POINTS * 3), 3));
+    shadowGeo.setDrawRange(0, 0);
+    _threeShadow = new THREE.Line(shadowGeo, new THREE.LineBasicMaterial({
+      color: 0x8899bb, transparent: true, opacity: 0.35, depthWrite: false
+    }));
+    _threeShadow.frustumCulled = false;
+    _threeScene.add(_threeShadow);
 
     // Planned path overlay (hand-placed waypoints preview)
     var planPositions = new Float32Array(_MAX_3D_POINTS * 3);
@@ -1131,6 +1160,16 @@
     } else if (_threeLineActual) {
       _threeLineActual.geometry.setDrawRange(0, 0);
     }
+    if (_threeShadow) {
+      var shAttr = _threeShadow.geometry.getAttribute('position');
+      var shStart = Math.max(0, activeActual.length - _MAX_3D_POINTS);
+      var sh;
+      for (sh = shStart; sh < activeActual.length; sh++) {
+        shAttr.setXYZ(sh - shStart, activeActual[sh].x, 0.001, activeActual[sh].y);
+      }
+      shAttr.needsUpdate = true;
+      _threeShadow.geometry.setDrawRange(0, activeActual.length - shStart);
+    }
 
     // Update desired path
     if (activeDesired.length > 0 && _threeLineDesired) {
@@ -1176,6 +1215,7 @@
   }
 
   function clear3D() {
+    if (_threeShadow) _threeShadow.geometry.setDrawRange(0, 0);
     if (_threeLineActual) {
       _threeLineActual.geometry.setDrawRange(0, 0);
       _threeLineActual.geometry.getAttribute('position').needsUpdate = true;
@@ -1188,6 +1228,15 @@
       _threeLinePlan.geometry.setDrawRange(0, 0);
       _threeLinePlan.geometry.getAttribute('position').needsUpdate = true;
     }
+  }
+
+  function fitPath3D() {
+    if (!_threeCamera || !_threeControls) return;
+    var pose = pathViewPose(getActiveTrajectory().concat(_plannedPath || []));
+    _threeControls.target.set(pose.target.x, pose.target.y, pose.target.z);
+    _threeCamera.position.set(pose.pos.x, pose.pos.y, pose.pos.z);
+    _threeCamera.lookAt(_threeControls.target);
+    _threeControls.update();
   }
 
   function reset3DView() {
@@ -1282,6 +1331,7 @@
     _threeLineDesired = null;
     _threeLinePlan = null;
     _threeAxes = null;
+    _threeShadow = null;
     _threeRoomGroup = null;
     _threeDrawPlane = null;
     _threeErrorLabel = null;
@@ -1959,6 +2009,7 @@
       '<button id="pp-3d-side" class="pp-3d-btn" title="Side view">Side</button>',
       '<button id="pp-3d-front" class="pp-3d-btn" title="Front view">Front</button>',
       '<button id="pp-3d-iso" class="pp-3d-btn active" title="Isometric view">Iso</button>',
+      '<button id="pp-3d-fit" class="pp-3d-btn" title="Frame the flown and planned paths">Fit path</button>',
       '<button id="pp-3d-reset" class="pp-3d-btn" title="Reset view">Reset</button>',
       '<button id="pp-3d-clear" class="pp-3d-btn" title="Clear 3D path">Clear</button>',
       '</div>',
@@ -2244,6 +2295,8 @@
       // 3D controls
       var _3dr = q('pp-3d-reset');
       if (_3dr) _3dr.addEventListener('click', reset3DView);
+      var _3dfit = q('pp-3d-fit');
+      if (_3dfit) _3dfit.addEventListener('click', fitPath3D);
       var _3dt = q('pp-3d-top');
       if (_3dt) _3dt.addEventListener('click', function () { presetView('top'); });
       var _3ds = q('pp-3d-side');
@@ -2370,7 +2423,7 @@
   // Pure helpers exposed for the node harness (no DOM or WebGL needed).
   window.__pathPanelTest = {
     roomBounds: roomBounds, isOutOfRoom: isOutOfRoom, countOutOfRoom: countOutOfRoom,
-    roomViewPose: roomViewPose, validRoom: validRoom,
+    roomViewPose: roomViewPose, validRoom: validRoom, pathViewPose: pathViewPose, actualSegColor: actualSegColor,
     presetPath: presetPath, PRESET_KINDS: PRESET_KINDS, PRESET_MARGIN: PRESET_MARGIN,
     serializePath: serializePath, parsePathFile: parsePathFile, libraryPut: libraryPut, LIB_MAX: LIB_MAX,
     shiftPoints: shiftPoints, validOrigin: validOrigin,

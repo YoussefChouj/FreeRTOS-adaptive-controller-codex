@@ -659,6 +659,35 @@ function runChecks() {
     env.destroy();
   }
 
+  // 16. Fit-to-path pose and trail recency fade.
+  {
+    console.log('\n[CHECK 16: fit-to-path pose + trail fade]');
+    const env = loadPanel();
+    const T = env.sandbox.__pathPanelTest;
+    const near = (a, b2) => Math.abs(a - b2) < 1e-9;
+    const pts = [{ x: 0, y: 0, z: 0.2 }, { x: 0.6, y: 0.4, z: 0.6 }];
+    const pose = T.pathViewPose(pts);
+    assert.ok(near(pose.target.x, 0.3) && near(pose.target.y, 0.4) && near(pose.target.z, 0.2), 'target = bbox centre (three axes)');
+    const d = Math.hypot(pose.pos.x - 0.3, pose.pos.y - 0.4, pose.pos.z - 0.2);
+    const rad = 0.5 * Math.hypot(0.6, 0.4, 0.4);
+    assert.ok(Math.abs(d - 2.3 * rad) < 1e-9, 'distance = 2.3 * bbox radius');
+    const tiny = T.pathViewPose([{ x: 0.1, y: 0.1, z: 0.5 }]);
+    const dt = Math.hypot(tiny.pos.x - 0.1, tiny.pos.y - 0.5, tiny.pos.z - 0.1);
+    assert.ok(Math.abs(dt - 2.3 * 0.25) < 1e-9, 'min radius 0.25 m');
+    const outl = T.pathViewPose([{ x: 0, y: 0, z: 0.5 }, { x: 0, y: 0, z: 50 }]);
+    assert.ok(near(outl.target.y, 0.75), 'altitude outlier clamped to room height');
+    const empty = T.pathViewPose([]);
+    const room = T.roomViewPose('iso');
+    assert.ok(near(empty.pos.x, room.pos.x) && near(empty.pos.y, room.pos.y), 'empty -> room iso');
+    const line = [{ x: 0, y: 0, z: 0.5 }, { x: 0.1, y: 0, z: 0.5 }, { x: 0.2, y: 0, z: 0.5 }];
+    const c0 = [0, 0, 0], c1 = [0, 0, 0];
+    T.actualSegColor(line, 0, c0);
+    T.actualSegColor(line, 1, c1);
+    assert.ok(near(c1[2], 1.0) && near(c0[2], 0.35), 'newest full, oldest 35 %');
+    console.log('  PASS: fit target (0.3, 0.4, 0.2), dist ' + d.toFixed(3) + ' m; fade oldest ' + c0[2] + ' newest ' + c1[2]);
+    env.destroy();
+  }
+
   console.log('\nALL CHECKS PASSED SUCCESSFULLY.');
 }
 
