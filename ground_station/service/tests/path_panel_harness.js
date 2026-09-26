@@ -521,6 +521,36 @@ function runChecks() {
     env.destroy();
   }
 
+  // 11. Room presets stay inside the room (with margin) for any size/altitude input.
+  {
+    console.log('\n[CHECK 11: room-fitted presets]');
+    const env = loadPanel();
+    const T = env.sandbox.__pathPanelTest;
+    const rooms = [{ w: 1.4, d: 1.4, h: 1.0 }, { w: 2.0, d: 1.2, h: 0.6 }];
+    const inputs = [[0.4, 0.5], [5, 5], [-1, -1], [NaN, NaN]];
+    let n = 0;
+    rooms.forEach((room) => {
+      T.PRESET_KINDS.forEach((kind) => {
+        inputs.forEach(([size, alt]) => {
+          const pts = T.presetPath(kind, size, alt, room);
+          assert.ok(pts.length >= 2, kind + ' has < 2 points');
+          pts.forEach((pt) => {
+            const lim = (v, half) => Math.abs(v) <= half - T.PRESET_MARGIN + 1e-9;
+            assert.ok(lim(pt.x, room.w / 2) && lim(pt.y, room.d / 2), kind + ' x/y outside margin: ' + JSON.stringify(pt));
+            assert.ok(pt.z >= 0 && pt.z <= room.h - T.PRESET_MARGIN + 1e-9, kind + ' z outside room: ' + JSON.stringify(pt));
+            n++;
+          });
+        });
+      });
+    });
+    const c = T.presetPath('circle', 0.4, 0.5, rooms[0]);
+    assert.ok(Math.abs(Math.hypot(c[9].x, c[9].y) - 0.4) < 0.002 && c[9].z === 0.5, 'circle radius/altitude');
+    const big = T.presetPath('square', 5, 0.5, rooms[0]);
+    assert.strictEqual(big[1].x, 0.55, 'oversize square not clamped to 0.7 - 0.15');
+    console.log('  PASS: ' + T.PRESET_KINDS.length + ' presets x 2 rooms x 4 inputs, ' + n + ' points all inside the margin');
+    env.destroy();
+  }
+
   console.log('\nALL CHECKS PASSED SUCCESSFULLY.');
 }
 

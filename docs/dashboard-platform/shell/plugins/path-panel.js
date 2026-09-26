@@ -1418,8 +1418,8 @@
 
   function generateRandomPath() {
     var n = Math.max(2, Math.round(readNum('pp-rand-n', 6)));
-    var spacing = Math.max(0.1, readNum('pp-rand-spacing', 5));
-    var boxM = Math.max(1, readNum('pp-rand-box', 100));
+    var spacing = Math.max(0.05, readNum('pp-rand-spacing', 0.3));
+    var boxM = Math.max(0.1, readNum('pp-rand-box', 0.5));
 
     var pts = [];
     var px = round2((Math.random() * 2 - 1) * boxM);
@@ -1444,6 +1444,71 @@
     updatePlannedPath();
     renderWaypointTable();
     render();
+    if (_threeLoaded) render3D();
+  }
+
+  // ── Room-fitted preset paths ────────────────────────────────────────────
+  // Shapes are centred on the room origin and kept PRESET_MARGIN inside the
+  // walls and ceiling: size (radius / half-width, m) and altitude (m) are
+  // clamped, so any input yields a path inside the room.
+  var PRESET_MARGIN = 0.15;
+  var PRESET_KINDS = ['hover', 'line', 'square', 'circle', 'figure8', 'helix'];
+
+  function round3(v) { return Math.round(v * 1000) / 1000; }
+
+  function presetPath(kind, size, alt, room) {
+    var zMin = Math.min(0.1, room.h / 2);
+    var zMax = Math.max(zMin, room.h - PRESET_MARGIN);
+    var sMax = Math.max(0, Math.min(room.w, room.d) / 2 - PRESET_MARGIN);
+    var sz = Math.max(0, Math.min(isFinite(size) ? size : 0.4, sMax));
+    var z = Math.max(zMin, Math.min(isFinite(alt) ? alt : 0.5, zMax));
+    var pts = [];
+    var i, n, t, z0, z1;
+    function add(x, y, pz) { pts.push({ x: round3(x), y: round3(y), z: round3(pz), reached: false }); }
+
+    if (kind === 'hover') {
+      add(0, 0, 0);
+      add(0, 0, z);
+    } else if (kind === 'line') {
+      add(-sz, 0, z);
+      add(sz, 0, z);
+    } else if (kind === 'square') {
+      add(-sz, -sz, z); add(sz, -sz, z); add(sz, sz, z); add(-sz, sz, z); add(-sz, -sz, z);
+    } else if (kind === 'circle') {
+      n = 36;
+      for (i = 0; i <= n; i++) {
+        t = 2 * Math.PI * i / n;
+        add(sz * Math.cos(t), sz * Math.sin(t), z);
+      }
+    } else if (kind === 'figure8') {
+      n = 48;
+      for (i = 0; i <= n; i++) {
+        t = 2 * Math.PI * i / n;
+        add(sz * Math.sin(t), sz * Math.sin(t) * Math.cos(t), z);
+      }
+    } else if (kind === 'helix') {
+      // Two turns climbing 0.5 m (less in a low room), centred on the altitude.
+      z0 = Math.max(zMin, z - 0.25);
+      z1 = Math.min(zMax, z0 + 0.5);
+      n = 72;
+      for (i = 0; i <= n; i++) {
+        t = 4 * Math.PI * i / n;
+        add(sz * Math.cos(t), sz * Math.sin(t), z0 + (z1 - z0) * i / n);
+      }
+    }
+    return pts;
+  }
+
+  function loadPresetPath() {
+    var sel = q('pp-preset-kind');
+    var pts = presetPath(sel ? sel.value : 'circle', readNum('pp-preset-size', 0.4),
+                         readNum('pp-preset-alt', 0.5), _room);
+    if (!pts.length) return;
+    _waypoints = pts;
+    updatePlannedPath();
+    renderWaypointTable();
+    render();
+    if (_threeLoaded) render3D();
   }
 
   // ── Build HTML ──────────────────────────────────────────────────────────
@@ -1611,12 +1676,27 @@
       '</div>',
 
       '<div>',
+      '<div class="pp-section-label">Room presets</div>',
+      '<div class="pp-entry-row">',
+      '<select id="pp-preset-kind" class="pp-wp-input" title="Preset shape">',
+      '<option value="hover">Hover</option><option value="line">Line</option>',
+      '<option value="square">Square</option><option value="circle" selected>Circle</option>',
+      '<option value="figure8">Figure-8</option><option value="helix">Helix</option>',
+      '</select>',
+      '<input id="pp-preset-size" class="pp-wp-input" value="0.4" type="number" min="0" step="0.05" title="Size: radius / half-width (m)">',
+      '<input id="pp-preset-alt" class="pp-wp-input" value="0.5" type="number" min="0" step="0.05" title="Altitude (m)">',
+      '<button id="pp-preset-load" class="pp-btn pp-btn-sm" title="Replace the waypoint list with this preset">Load</button>',
+      '</div>',
+      '<div class="pp-hint">Shape, size&nbsp;(m), altitude&nbsp;(m). Kept 0.15&nbsp;m inside the room; out-of-range values are clamped.</div>',
+      '</div>',
+
+      '<div>',
       '<div class="pp-section-label">Random path generator</div>',
       '<div class="pp-entry-row">',
       '<input id="pp-rand-n" class="pp-wp-input" value="6" type="number" min="2" step="1" title="Waypoints">',
-      '<input id="pp-rand-spacing" class="pp-wp-input" value="5" type="number" min="0.1" step="0.5" title="Spacing (m)">',
-      '<input id="pp-rand-box" class="pp-wp-input" value="100" type="number" min="1" step="10" title="Bounding box +/- m">',
-      '<input id="pp-rand-z" class="pp-wp-input" value="0" type="number" step="0.1" title="Planned altitude (m)">',
+      '<input id="pp-rand-spacing" class="pp-wp-input" value="0.3" type="number" min="0.05" step="0.05" title="Spacing (m)">',
+      '<input id="pp-rand-box" class="pp-wp-input" value="0.5" type="number" min="0.1" step="0.1" title="Bounding box +/- m">',
+      '<input id="pp-rand-z" class="pp-wp-input" value="0.5" type="number" step="0.1" title="Planned altitude (m)">',
       '</div>',
       '<div class="pp-entry-row" style="margin-top:4px">',
       '<button id="pp-rand-gen" class="pp-btn pp-btn-sm" title="Fill waypoint list with a random bounded path">Generate Random Path</button>',
@@ -1718,6 +1798,7 @@
       q('pp-set-target-manual').addEventListener('click', setTargetManual);
       q('pp-add-manual-wp').addEventListener('click', addManualWaypoint);
       q('pp-rand-gen').addEventListener('click', generateRandomPath);
+      q('pp-preset-load').addEventListener('click', loadPresetPath);
 
       // 2D/3D toggle
       var _v2d = q('pp-view-2d');
@@ -1877,6 +1958,7 @@
   window.__pathPanelTest = {
     roomBounds: roomBounds, isOutOfRoom: isOutOfRoom, countOutOfRoom: countOutOfRoom,
     roomViewPose: roomViewPose, validRoom: validRoom,
+    presetPath: presetPath, PRESET_KINDS: PRESET_KINDS, PRESET_MARGIN: PRESET_MARGIN,
     getRoom: function () { return { w: _room.w, d: _room.d, h: _room.h }; }
   };
 
