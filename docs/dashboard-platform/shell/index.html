@@ -32,17 +32,22 @@
       color: var(--text);
       font-family: 'Segoe UI', system-ui, sans-serif;
       font-size: 14px;
-      min-height: 100vh;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
     }
 
     /* ── Header ── */
+    /* Lives at the top of #sidebar: stacked, wrapping, no full-width bar. */
     header {
-      background: var(--card);
       border-bottom: 1px solid var(--border);
-      padding: 10px 20px;
+      padding: 0 0 10px;
+      margin-bottom: 8px;
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
-      gap: 16px;
+      gap: 8px;
     }
 
     header h1 {
@@ -90,12 +95,13 @@
     #record-control {
       display: flex;
       align-items: center;
-      gap: 8px;
-      margin-left: auto;
+      flex-wrap: wrap;
+      gap: 6px;
+      width: 100%;
       font-size: 12px;
       color: var(--text);
-      white-space: nowrap;
     }
+    #record-control #note-input { flex: 1 1 90px; min-width: 0; }
     #record-control .rec-dot {
       width: 9px;
       height: 9px;
@@ -142,9 +148,10 @@
       display: flex;
       flex-wrap: wrap;
       gap: 4px;
-      padding: 8px 16px;
+      padding: 6px 12px;
       background: var(--card);
       border-bottom: 1px solid var(--border);
+      flex: 0 0 auto;
     }
 
     .ws-tab {
@@ -175,9 +182,9 @@
     #gate-bar {
       display: flex;
       flex-wrap: wrap;
-      gap: 6px;
-      padding: 4px 16px 8px;
-      background: var(--bg);
+      gap: 4px;
+      padding: 0 0 8px;
+      margin-bottom: 8px;
       border-bottom: 1px solid var(--border);
       font-size: 11px;
     }
@@ -212,8 +219,9 @@
     #app {
       display: grid;
       grid-template-columns: 260px 1fr;
-      grid-template-rows: auto auto 1fr;
-      height: calc(100vh - 48px);
+      grid-template-rows: minmax(0, 1fr);
+      flex: 1 1 auto;
+      min-height: 0;
     }
 
     /* Sidebar collapse (item 1). Collapsing drops the first grid column to 0
@@ -226,10 +234,9 @@
       margin-bottom: 8px;
     }
     #sidebar-reopen {
-      position: fixed; left: 8px; top: 118px; z-index: 999;
-      background: var(--card); border: 1px solid var(--border);
-      color: var(--text); font-size: 13px; padding: 5px 10px; border-radius: 4px;
-      cursor: pointer;
+      background: var(--bg); border: 1px solid var(--border);
+      color: var(--text); font-size: 12px; padding: 4px 10px; border-radius: 4px;
+      cursor: pointer; margin-right: 6px;
     }
     #sidebar-reopen:hover { border-color: var(--accent); }
 
@@ -239,14 +246,6 @@
       border-right: 1px solid var(--border);
       overflow-y: auto;
       padding: 12px;
-    }
-
-    #workspace-bar {
-      grid-column: 2;
-    }
-
-    #gate-bar {
-      grid-column: 2;
     }
 
     #main {
@@ -452,8 +451,9 @@
       text-align: center;
       font-size: 11px;
       color: var(--muted);
-      padding: 8px;
+      padding: 4px;
       border-top: 1px solid var(--border);
+      flex: 0 0 auto;
     }
     /* The banner's inline display:flex would otherwise win over the class. */
     #reload-banner.hidden { display: none !important; }
@@ -468,20 +468,9 @@
 </head>
 <body>
 
-<header>
-  <h1>UAV Ground Station</h1>
-  <div id="status" class="status-badge disconnected">Connecting…</div>
-  <div id="record-control">
-    <span class="rec-dot" id="rec-dot"></span>
-    <button id="record-btn" disabled>● REC</button>
-    <span id="rec-meta" title="">—</span>
-    <select id="note-kind" title="note kind"><option>note</option><option>goal</option><option>marker</option></select>
-    <input id="note-input" type="text" placeholder="add note…" />
-    <button id="note-btn" disabled>Add</button>
-  </div>
-</header>
-
 <div id="workspace-bar" role="tablist" aria-label="Workspace">
+  <!-- Sidebar re-open control: visible only when the sidebar is collapsed. -->
+  <button id="sidebar-reopen" style="display:none" title="Restore sidebar">&#187; Sidebar</button>
   <button class="ws-tab active" role="tab" aria-selected="true" data-ws="overview" data-testid="tab-overview">Overview</button>
   <button class="ws-tab" role="tab" aria-selected="false" data-ws="control" data-testid="tab-control">Control</button>
   <button class="ws-tab" role="tab" aria-selected="false" data-ws="estimator" data-testid="tab-estimator">Estimator</button>
@@ -496,26 +485,38 @@
   <button class="ws-tab" role="tab" aria-selected="false" data-ws="terminal" data-testid="tab-terminal">Terminal</button>
 </div>
 
-<div id="gate-bar" role="status" aria-live="polite" aria-label="Flight gates and alarms">
-  <div class="gate-item unknown" id="gate-connection" title="MicoAir WiFi connected">
-    <span class="gate-label">&#x1F4F6; CONN</span>
-  </div>
-  <div class="gate-item unknown" id="gate-disarmed" title="Drone disarmed">
-    <span class="gate-label">&#x1F6B6; DISARM</span>
-  </div>
-  <div class="gate-item unknown" id="gate-fresh" title="Telemetry freshness">
-    <span class="gate-label">&#x1F4CA; FRESH</span>
-  </div>
-  <div class="gate-item unknown" id="gate-schema" title="Telemetry schema known">
-    <span class="gate-label">&#x1F4CC; SCHEMA</span>
-  </div>
-  <div class="gate-item unknown" id="gate-command" title="Command gateway available">
-    <span class="gate-label">&#x1F4E1; CMD</span>
-  </div>
-</div>
-
 <div id="app">
   <div id="sidebar">
+    <!-- Shell header + gate bar live in the sidebar; only the tab row stays on top. -->
+    <header>
+      <h1>UAV Ground Station</h1>
+      <div id="status" class="status-badge disconnected">Connecting…</div>
+      <div id="record-control">
+        <span class="rec-dot" id="rec-dot"></span>
+        <button id="record-btn" disabled>● REC</button>
+        <span id="rec-meta" title="">—</span>
+        <select id="note-kind" title="note kind"><option>note</option><option>goal</option><option>marker</option></select>
+        <input id="note-input" type="text" placeholder="add note…" />
+        <button id="note-btn" disabled>Add</button>
+      </div>
+    </header>
+    <div id="gate-bar" role="status" aria-live="polite" aria-label="Flight gates and alarms">
+      <div class="gate-item unknown" id="gate-connection" title="MicoAir WiFi connected">
+        <span class="gate-label">&#x1F4F6; CONN</span>
+      </div>
+      <div class="gate-item unknown" id="gate-disarmed" title="Drone disarmed">
+        <span class="gate-label">&#x1F6B6; DISARM</span>
+      </div>
+      <div class="gate-item unknown" id="gate-fresh" title="Telemetry freshness">
+        <span class="gate-label">&#x1F4CA; FRESH</span>
+      </div>
+      <div class="gate-item unknown" id="gate-schema" title="Telemetry schema known">
+        <span class="gate-label">&#x1F4CC; SCHEMA</span>
+      </div>
+      <div class="gate-item unknown" id="gate-command" title="Command gateway available">
+        <span class="gate-label">&#x1F4E1; CMD</span>
+      </div>
+    </div>
     <div id="sidebar-header">
       <span class="card-title" style="color:var(--muted)">Flight State</span>
       <button id="sidebar-collapse" class="toggle-btn" title="Collapse sidebar (free space for plots)">&larr; Hide</button>
@@ -637,10 +638,6 @@
     <button id="reload-now" style="background:var(--green,#4ECCA3);border:none;color:#0a0d12;padding:6px 14px;border-radius:4px;font-weight:600;">Reload</button>
   </div>
 </div>
-
-<!-- Sidebar re-open control (item 1): fixed, visible only when the sidebar is
-     collapsed so there is always a way back. -->
-<button id="sidebar-reopen" style="display:none" title="Restore sidebar">&#187; Show sidebar</button>
 
 <script>
 (async function () {
