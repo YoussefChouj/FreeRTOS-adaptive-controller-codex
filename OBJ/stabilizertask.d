@@ -87,6 +87,7 @@
 ..\obj\stabilizertask.o: ..\BSP\pwm.h
 ..\obj\stabilizertask.o: ..\API\Ano_OF.h
 ..\obj\stabilizertask.o: ..\API\ekf_of.h
+..\obj\stabilizertask.o: ..\API\ekf.h
 ..\obj\stabilizertask.o: ..\USER\ADC.h
 ..\obj\stabilizertask.o: ..\API\mrac.h
 ..\obj\stabilizertask.o: ..\API\gyro_filter.h

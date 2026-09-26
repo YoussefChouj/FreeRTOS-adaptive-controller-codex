@@ -181,13 +181,13 @@ manifests:
       - mrac_state.pitch.r
 
   # -------------------------------------------------------------------------
-  # EKF (shadow-mode; compute-only)
+  # EKF (x/y velocity selectable into the control path via g_ekf_gate)
   # -------------------------------------------------------------------------
 
   ekf_all:
     doc: >
       Full 9-state EKF body-frame velocity + accelerometer bias + NIS.
-      EKF is shadow-mode (compute-only, not in the control path by design).
+      Control use is gated by g_ekf_gate (ctrl_enable && healthy); default legacy OF.
       b_a bias states should decay toward zero on a static bench; large
       residual NIS means the model is inconsistent with the measurement.
     hz: 50
@@ -209,8 +209,8 @@ manifests:
 
   of_position:
     doc: >
-      OF earth-frame position estimate (active control path) vs EKF shadow estimate.
-      OF is the default position source; EKF is shadow-mode only.
+      OF earth-frame position estimate vs EKF estimate. OF is the default position source;
+      EKF feeds XY velocity FB only when g_ekf_gate.ctrl_enable && healthy.
       earth_x/y drift over time is expected behaviour — this log characterises it.
     hz: 50
     vars:
@@ -436,8 +436,8 @@ manifests:
   ekf_vs_of:
     doc: >
       Side-by-side of the two position/velocity sources: EKF body velocity vs the
-      OF-bias estimator that remains the default. OF stays the control path; the
-      EKF is shadow-mode only.
+      OF-bias estimator that remains the default. EKF enters the XY velocity FB only
+      when g_ekf_gate.ctrl_enable && healthy (bias mode default GATED).
     hz: 50
     vars:
       - group:ekf

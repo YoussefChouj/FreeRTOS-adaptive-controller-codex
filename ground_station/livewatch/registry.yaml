@@ -19,6 +19,16 @@ groups:
       - s_ekf.x[4]      # b_a y
       - s_ekf.x[5]      # b_a z
       - s_ekf.nis
+      - g_ekf_gate.bias_mode       # applied: 0 FIXED, 1 ONLINE, 2 GATED
+      - g_ekf_gate.bias_mode_req   # write here; applied on ground only
+      - g_ekf_gate.ctrl_enable     # 1 = EKF velocity feeds locxs/locysPID.FB
+      - g_ekf_gate.ctrl_enable_req
+      - g_ekf_gate.healthy         # latched 0 on divergence until ground reinit
+      - g_ekf_gate.fallback_count
+      - g_ekf_gate.vx_cms          # compare with ano_of.of2_dx
+      - g_ekf_gate.vy_cms          # compare with ano_of.of2_dy
+      - ano_of.of2_dx
+      - ano_of.of2_dy
 
   attitude:
     doc: "IMU attitude/rates block (fields per API/imu_update.h _imu_st)"

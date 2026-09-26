@@ -1,7 +1,7 @@
 Dependencies for Project 'JX_FLY', Target 'JX_FLY': (DO NOT MODIFY !)
 F (..\NOTE\readme.txt)(0x00000000)()
 F (..\NOTE\pcb.txt)(0x00000000)()
-F (.\main.c)(0x6AB705BB)(--c99 -c --cpu Cortex-M4.fp -g -O0 --apcs=interwork --split_sections -I ..\USER -I ..\stm32_lib -I ..\TASK -I ..\Global_file -I ..\BSP -I ..\API -I ..\firmware -I ..\FreeRTOS\include -I ..\FreeRTOS\portable\RVDS\ARM_CM4F --C99-IC:\Users\Acer\Desktop\UAV_lab\FreeRTOS-adaptive-controller-codex\USER\RTE-IC:\Keil_v5\ARM\PACK\Keil\STM32F4xx_DFP\2.2.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-IC:\Keil_v5\ARM\CMSIS\Include-D__UVISION_VERSION="521" -DSTM32F407xx -DSTM32F40_41xxx -DUSE_STDPERIPH_DRIVER-o ..\obj\main.o --omf_browse ..\obj\main.crf --depend ..\obj\main.d)
+F (.\main.c)(0x6AB70AD9)(--c99 -c --cpu Cortex-M4.fp -g -O0 --apcs=interwork --split_sections -I ..\USER -I ..\stm32_lib -I ..\TASK -I ..\Global_file -I ..\BSP -I ..\API -I ..\firmware -I ..\FreeRTOS\include -I ..\FreeRTOS\portable\RVDS\ARM_CM4F --C99-IC:\Users\Acer\Desktop\UAV_lab\FreeRTOS-adaptive-controller-codex\USER\RTE-IC:\Keil_v5\ARM\PACK\Keil\STM32F4xx_DFP\2.2.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-IC:\Keil_v5\ARM\CMSIS\Include-D__UVISION_VERSION="521" -DSTM32F407xx -DSTM32F40_41xxx -DUSE_STDPERIPH_DRIVER-o ..\obj\main.o --omf_browse ..\obj\main.crf --depend ..\obj\main.d)
 I (main.h)(0x6AAE900D)
 I (..\API\imu_update.h)(0x6A64791C)
 I (..\Global_file\global_declare.h)(0x6AB6FA63)
@@ -286,7 +286,7 @@ I (..\TASK\send_data.h)(0x6A9F0B73)
 I (..\BSP\usart3.h)(0x6AAE651E)
 I (..\API\rc_input.h)(0x6AA2AC1E)
 I (..\API\flight_fsm.h)(0x6AB6FA63)
-F (..\TASK\StabilizerTask.c)(0x6AB6FA63)(--c99 -c --cpu Cortex-M4.fp -g -O0 --apcs=interwork --split_sections -I ..\USER -I ..\stm32_lib -I ..\TASK -I ..\Global_file -I ..\BSP -I ..\API -I ..\firmware -I ..\FreeRTOS\include -I ..\FreeRTOS\portable\RVDS\ARM_CM4F --C99-IC:\Users\Acer\Desktop\UAV_lab\FreeRTOS-adaptive-controller-codex\USER\RTE-IC:\Keil_v5\ARM\PACK\Keil\STM32F4xx_DFP\2.2.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-IC:\Keil_v5\ARM\CMSIS\Include-D__UVISION_VERSION="521" -DSTM32F407xx -DSTM32F40_41xxx -DUSE_STDPERIPH_DRIVER-o ..\obj\stabilizertask.o --omf_browse ..\obj\stabilizertask.crf --depend ..\obj\stabilizertask.d)
+F (..\TASK\StabilizerTask.c)(0x6AB70CC9)(--c99 -c --cpu Cortex-M4.fp -g -O0 --apcs=interwork --split_sections -I ..\USER -I ..\stm32_lib -I ..\TASK -I ..\Global_file -I ..\BSP -I ..\API -I ..\firmware -I ..\FreeRTOS\include -I ..\FreeRTOS\portable\RVDS\ARM_CM4F --C99-IC:\Users\Acer\Desktop\UAV_lab\FreeRTOS-adaptive-controller-codex\USER\RTE-IC:\Keil_v5\ARM\PACK\Keil\STM32F4xx_DFP\2.2.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-IC:\Keil_v5\ARM\CMSIS\Include-D__UVISION_VERSION="521" -DSTM32F407xx -DSTM32F40_41xxx -DUSE_STDPERIPH_DRIVER-o ..\obj\stabilizertask.o --omf_browse ..\obj\stabilizertask.crf --depend ..\obj\stabilizertask.d)
 I (..\TASK\StabilizerTask.h)(0x6A5FB30F)
 I (..\Global_file\algorithm.h)(0x677CE0C8)
 I (..\USER\main.h)(0x6AAE900D)
@@ -368,6 +368,7 @@ I (..\API\SINS.h)(0x650AA14A)
 I (..\BSP\pwm.h)(0x6A0F09C3)
 I (..\API\Ano_OF.h)(0x658A340A)
 I (..\API\ekf_of.h)(0x6AA7A7F0)
+I (..\API\ekf.h)(0x6AB70CC9)
 I (..\USER\ADC.h)(0x67B585A9)
 I (..\API\mrac.h)(0x6AB5268E)
 I (..\API\gyro_filter.h)(0x6A3150F6)
@@ -623,7 +624,7 @@ I (..\TASK\send_data.h)(0x6A9F0B73)
 I (..\BSP\usart3.h)(0x6AAE651E)
 I (..\API\flight_fsm.h)(0x6AB6FA63)
 I (..\API\rc_input.h)(0x6AA2AC1E)
-F (..\TASK\send_data.c)(0x6AB6FAA1)(--c99 -c --cpu Cortex-M4.fp -g -O0 --apcs=interwork --split_sections -I ..\USER -I ..\stm32_lib -I ..\TASK -I ..\Global_file -I ..\BSP -I ..\API -I ..\firmware -I ..\FreeRTOS\include -I ..\FreeRTOS\portable\RVDS\ARM_CM4F --C99-IC:\Users\Acer\Desktop\UAV_lab\FreeRTOS-adaptive-controller-codex\USER\RTE-IC:\Keil_v5\ARM\PACK\Keil\STM32F4xx_DFP\2.2.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-IC:\Keil_v5\ARM\CMSIS\Include-D__UVISION_VERSION="521" -DSTM32F407xx -DSTM32F40_41xxx -DUSE_STDPERIPH_DRIVER-o ..\obj\send_data.o --omf_browse ..\obj\send_data.crf --depend ..\obj\send_data.d)
+F (..\TASK\send_data.c)(0x6AB71167)(--c99 -c --cpu Cortex-M4.fp -g -O0 --apcs=interwork --split_sections -I ..\USER -I ..\stm32_lib -I ..\TASK -I ..\Global_file -I ..\BSP -I ..\API -I ..\firmware -I ..\FreeRTOS\include -I ..\FreeRTOS\portable\RVDS\ARM_CM4F --C99-IC:\Users\Acer\Desktop\UAV_lab\FreeRTOS-adaptive-controller-codex\USER\RTE-IC:\Keil_v5\ARM\PACK\Keil\STM32F4xx_DFP\2.2.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-IC:\Keil_v5\ARM\CMSIS\Include-D__UVISION_VERSION="521" -DSTM32F407xx -DSTM32F40_41xxx -DUSE_STDPERIPH_DRIVER-o ..\obj\send_data.o --omf_browse ..\obj\send_data.crf --depend ..\obj\send_data.d)
 I (..\TASK\send_data.h)(0x6A9F0B73)
 I (..\Global_file\global_declare.h)(0x6AB6FA63)
 I (..\stm32_lib\stm32f4xx.h)(0x5710F358)
@@ -711,7 +712,7 @@ I (..\API\rc_input.h)(0x6AA2AC1E)
 I (..\API\flight_fsm.h)(0x6AB6FA63)
 I (..\BSP\rpm.h)(0x6AAE900D)
 I (..\API\calib.h)(0x6A619D51)
-I (..\API\ekf.h)(0x6A65001D)
+I (..\API\ekf.h)(0x6AB70CC9)
 I (..\API\subscribe.h)(0x6AAABB39)
 I (..\firmware\gs_command.h)(0x6AAAEE05)
 I (..\firmware\command_protocol.h)(0x6AAACD01)
@@ -1230,8 +1231,8 @@ I (..\FreeRTOS\portable\RVDS\ARM_CM4F\portmacro.h)(0x573F3A18)
 I (..\FreeRTOS\include\mpu_wrappers.h)(0x573F3A18)
 I (..\FreeRTOS\include\task.h)(0x573F3A18)
 I (..\FreeRTOS\include\list.h)(0x573F3A18)
-F (..\API\ekf.c)(0x6A65001D)(--c99 -c --cpu Cortex-M4.fp -g -O0 --apcs=interwork --split_sections -I ..\USER -I ..\stm32_lib -I ..\TASK -I ..\Global_file -I ..\BSP -I ..\API -I ..\firmware -I ..\FreeRTOS\include -I ..\FreeRTOS\portable\RVDS\ARM_CM4F --C99-IC:\Users\Acer\Desktop\UAV_lab\FreeRTOS-adaptive-controller-codex\USER\RTE-IC:\Keil_v5\ARM\PACK\Keil\STM32F4xx_DFP\2.2.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-IC:\Keil_v5\ARM\CMSIS\Include-D__UVISION_VERSION="521" -DSTM32F407xx -DSTM32F40_41xxx -DUSE_STDPERIPH_DRIVER-o ..\obj\ekf.o --omf_browse ..\obj\ekf.crf --depend ..\obj\ekf.d)
-I (..\API\ekf.h)(0x6A65001D)
+F (..\API\ekf.c)(0x6AB70D13)(--c99 -c --cpu Cortex-M4.fp -g -O0 --apcs=interwork --split_sections -I ..\USER -I ..\stm32_lib -I ..\TASK -I ..\Global_file -I ..\BSP -I ..\API -I ..\firmware -I ..\FreeRTOS\include -I ..\FreeRTOS\portable\RVDS\ARM_CM4F --C99-IC:\Users\Acer\Desktop\UAV_lab\FreeRTOS-adaptive-controller-codex\USER\RTE-IC:\Keil_v5\ARM\PACK\Keil\STM32F4xx_DFP\2.2.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-IC:\Keil_v5\ARM\CMSIS\Include-D__UVISION_VERSION="521" -DSTM32F407xx -DSTM32F40_41xxx -DUSE_STDPERIPH_DRIVER-o ..\obj\ekf.o --omf_browse ..\obj\ekf.crf --depend ..\obj\ekf.d)
+I (..\API\ekf.h)(0x6AB70CC9)
 I (..\Global_file\global_declare.h)(0x6AB6FA63)
 I (..\stm32_lib\stm32f4xx.h)(0x5710F358)
 I (..\stm32_lib\core_cm4.h)(0x5710F356)

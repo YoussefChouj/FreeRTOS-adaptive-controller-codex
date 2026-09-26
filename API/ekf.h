@@ -65,4 +65,46 @@ extern void Ekf9_UpdateAccXY(Ekf9_t *e, float lin_acc_x, float lin_acc_y);
  *  z_rate: vertical velocity, m/s (positive = climbing) */
 extern void Ekf9_UpdateZRate(Ekf9_t *e, float z_rate);
 
+/* ---- Control-path gate (operator-authorized 2026-09-26) ---------------------
+ * Bias modes. b_a is observable only through the P[v,b_a] cross-covariance
+ * (F[i,i+3] = -dt); b_g has no coupling in F or H, so it never moves in any mode. */
+#define EKF_BIAS_FIXED   0U   /* biases frozen at their init value (cold calibration upstream) */
+#define EKF_BIAS_ONLINE  1U   /* biases update always */
+#define EKF_BIAS_GATED   2U   /* biases update on ground, frozen while flying */
+
+/* 5 m/s is well past the indoor optical-flow flight envelope; a larger body
+ * velocity estimate means the filter has diverged. */
+#define EKF_VEL_LIM_MPS  5.0f
+/* 0.25 (m/s)^2 = 0.5 m/s 1-sigma. With OF updates (R_of 6.16e-4) P_vv stays near
+ * 1e-3; reaching 0.25 means the filter has been predict-only (OF lost) for long. */
+#define EKF_PVV_LIM      0.25f
+
+typedef struct {
+    uint8_t  bias_mode;       /* applied EKF_BIAS_* */
+    uint8_t  bias_mode_req;   /* requested; applied on ground only */
+    uint8_t  ctrl_enable;     /* applied: 1 = velocity loops use vx/vy_cms */
+    uint8_t  ctrl_enable_req; /* requested; applied on ground only */
+    uint8_t  reinit_req;      /* 1 = re-init filter + clear latch (ground only) */
+    uint8_t  healthy;         /* 0 latched on failure until reinit */
+    uint8_t  bias_frozen;     /* freeze state last applied, 0xFF = none yet */
+    uint32_t fallback_count;  /* healthy 1 -> 0 transitions */
+    float    vx_cms;          /* published x[0] * 100 (cm/s, of2_dx units) */
+    float    vy_cms;          /* published x[1] * 100 (cm/s, of2_dy units) */
+} Ekf9Gate_t;
+
+/** Freeze (1) or release (0) the bias states: zero their P rows/cols and Q, so
+ *  every gain row for b_a/b_g stays exactly zero. Release restores init Q/P. */
+extern void Ekf9_SetBiasFrozen(Ekf9_t *e, uint8_t frozen);
+
+/** 1 if x[0..2] and P_vx/P_vy are finite and inside the limits above. */
+extern uint8_t Ekf9_Healthy(const Ekf9_t *e);
+
+/** Call after every filter step. flying = ARMED && idle enabled. Applies the
+ *  requests on ground only, the freeze state on transitions, latches health,
+ *  and publishes vx/vy_cms. An inactive filter is reported unhealthy. */
+extern void Ekf9_GateStep(Ekf9_t *e, volatile Ekf9Gate_t *g, uint8_t flying);
+
+/* Defined in TASK/send_data.c (filter owner); StabilizerTask reads vx/vy_cms, healthy, ctrl_enable. */
+extern volatile Ekf9Gate_t g_ekf_gate;
+
 #endif /* __EKF_H__ */

@@ -4,7 +4,7 @@ Do not contact 127.0.0.1:8081, do not touch the probe or UDP 14550, and do not f
 
 ## Evidence (supervisor, live, 2026-09-25 15:30, measured)
 
-The supervisor has already made two fixes in the main working tree. They are **uncommitted**, so first copy them into your worktree from `/mnt/c/Users/Acer/Desktop/UAV_lab/FreeRTOS-adaptive-controller-codex/`:
+The supervisor has already made two fixes in the main working tree. They are **uncommitted**, so first they are committed on main (your branch includes them).
 
 1. `ground_station/service/__main__.py` `apply_startup_preset` called `bridge.subscribe_slot(..., schema_timeout=1.0)`. That kwarg does not exist, so `--preset` **never** loaded: the service logged `WARNING: preset ... failed to auto-load` and fell back to the 2-slot dashboard layout. The kwarg is now removed.
 2. The bridge reboot watchdog (`wifi_bridge.py` `_check_resubscribe`) re-sent the dashboard layout over the preset. Two changes fix that:

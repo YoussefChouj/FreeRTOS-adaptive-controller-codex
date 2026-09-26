@@ -1,5 +1,6 @@
 #include "StabilizerTask.h"
 #include "ekf_of.h"         /* 6-state OF position+bias KF (Mode 2 bias estimation) */
+#include "ekf.h"            /* g_ekf_gate: EKF body velocity for the x/y velocity loops */
 #include "math.h"
 #include "pid.h"
 #include "ADC.h"
@@ -458,8 +459,17 @@ void Update_Data(void)
 //	  Ctrler.locxsPID.FB= ano_of.of2_dy;                           |
 //    Ctrler.locysPID.FB= -ano_of.of2_dx;   //��������ϵ��          |-->x(����)          
 
-		Ctrler.locxsPID.FB= (ano_of.of2_dy) *Cos_Yaw_01 +(-ano_of.of2_dx)*Sin_Yaw_01;
-    Ctrler.locysPID.FB=  (-ano_of.of2_dx) * Cos_Yaw_01 - (ano_of.of2_dy)*Sin_Yaw_01; //��������ϵ��
+		{
+			/* EKF velocity only when selected (on ground) and still healthy; else legacy raw OF. */
+			float fb_dx = ano_of.of2_dx;
+			float fb_dy = ano_of.of2_dy;
+			if (g_ekf_gate.ctrl_enable && g_ekf_gate.healthy) {
+				fb_dx = g_ekf_gate.vx_cms;
+				fb_dy = g_ekf_gate.vy_cms;
+			}
+			Ctrler.locxsPID.FB= (fb_dy) *Cos_Yaw_01 +(-fb_dx)*Sin_Yaw_01;
+			Ctrler.locysPID.FB=  (-fb_dx) * Cos_Yaw_01 - (fb_dy)*Sin_Yaw_01;
+		}
 	
 	  /* Altitude sanity gate (of_alt_cm is cm, u16). Three layers (ADR-0011 Z-gate),
 	   * mirroring PX4/DJI altitude filtering:

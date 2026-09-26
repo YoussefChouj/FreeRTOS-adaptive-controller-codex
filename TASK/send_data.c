@@ -59,6 +59,8 @@ extern uint8_t g_estimator_ready;
 
 static Ekf9_t s_ekf;          /* ADR-0011 parallel EKF instance */
 static uint8_t s_ekf_inited = 0U;
+/* Positional: bias_mode FIXED, reqs 0, healthy 1, bias_frozen 0xFF (apply on first step). */
+volatile Ekf9Gate_t g_ekf_gate = { EKF_BIAS_GATED, EKF_BIAS_GATED, 0U, 0U, 0U, 1U, 0xFFU, 0U, 0.0f, 0.0f };  /* GATED default: grounded test 2026-09-26, FIXED(b_a=0) crept 121 cm/120 s vs GATED 0.6 cm */
 
 /**
  * @module  send_data.c
@@ -698,6 +700,9 @@ void Send_Groundstation_Telemetry_UART4(void)
     t_prof_sec = DWT->CYCCNT;
     if (!s_ekf_inited) {
         Ekf9_Init(&s_ekf, EKF_RUN_ENABLED);
+        /* Freeze before the first step; Ekf9_GateStep releases it if the mode allows. */
+        Ekf9_SetBiasFrozen(&s_ekf, 1U);
+        g_ekf_gate.bias_frozen = 1U;
         s_ekf_inited = 1U;
     }
     if (s_ekf.active) {
@@ -761,6 +766,8 @@ void Send_Groundstation_Telemetry_UART4(void)
          * see the same vertical velocity. */
         Ekf9_UpdateZRate(&s_ekf, ano_of.of2_h_f2_v);
     }
+    Ekf9_GateStep(&s_ekf, &g_ekf_gate,
+                  (uint8_t)((FlightFSM_GetState() == FLIGHT_STATE_ARMED && g_motor_idle_enabled) ? 1U : 0U));
     SendProf_Record(&g_send_prof.sec_ekf, t_prof_sec);
 
     /* UART5 still draining the previous burst: skip this tick's A/B frame
@@ -1922,6 +1929,8 @@ void Process_GroundStation_Command(void)
                     /* Re-init EKF */
                     if (s_ekf_inited) {
                         Ekf9_Init(&s_ekf, EKF_RUN_ENABLED);
+                        Ekf9_SetBiasFrozen(&s_ekf, 1U);
+                        g_ekf_gate.bias_frozen = 1U;
                     }
                 }
             }

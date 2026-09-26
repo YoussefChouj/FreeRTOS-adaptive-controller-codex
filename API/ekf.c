@@ -27,6 +27,9 @@
 static float s_Po[81];   /* predict:  pre-update P snapshot */
 static float s_AP[81];   /* update:   (I - K H) P intermediate */
 
+#define EKF_Q_BA 1e-6f   /* ADR-0011 Q_ba */
+#define EKF_Q_BG 5e-9f   /* ADR-0011 Q_bg */
+
 /* ------------------------------------------------------------------ */
 /* Init                                                                 */
 /* ------------------------------------------------------------------ */
@@ -39,8 +42,8 @@ void Ekf9_Init(Ekf9_t *e, uint8_t active)
     }
     /* Q defaults from ADR-0011 table: Q_v=1e-3, Q_ba=1e-6, Q_bg=5e-9 */
     e->Q_diag[0] = 1e-3f;  e->Q_diag[1] = 1e-3f;  e->Q_diag[2] = 1e-3f;
-    e->Q_diag[3] = 1e-6f;  e->Q_diag[4] = 1e-6f;  e->Q_diag[5] = 1e-6f;
-    e->Q_diag[6] = 5e-9f;  e->Q_diag[7] = 5e-9f;  e->Q_diag[8] = 5e-9f;
+    e->Q_diag[3] = EKF_Q_BA;  e->Q_diag[4] = EKF_Q_BA;  e->Q_diag[5] = EKF_Q_BA;
+    e->Q_diag[6] = EKF_Q_BG;  e->Q_diag[7] = EKF_Q_BG;  e->Q_diag[8] = EKF_Q_BG;
 
     /* P initial = diag(Q) */
     for (i = 0U; i < 9U; i++) {
@@ -145,16 +148,17 @@ static void s_Update2x2(Ekf9_t *e,
     float s01 = e->P[0 * 9U + 1U];
     float s10 = e->P[1 * 9U + 0U];
     float s11 = e->P[1 * 9U + 1U] + R;
+    float det, sinv00, sinv01, sinv10, sinv11;
 
     /* 2x2 inverse: det = s00*s11 - s01*s10 */
-    float det = s00 * s11 - s01 * s10;
+    det = s00 * s11 - s01 * s10;
     if (det <= 0.0f) return;   /* singular — reject update */
 
     /* S^-1 */
-    float sinv00 =  s11 / det;
-    float sinv01 = -s01 / det;
-    float sinv10 = -s10 / det;
-    float sinv11 =  s00 / det;
+    sinv00 =  s11 / det;
+    sinv01 = -s01 / det;
+    sinv10 = -s10 / det;
+    sinv11 =  s00 / det;
 
     /* K = P H^T S^-1.  H^T = [[1,0],[0,1],[0,0],...].
      * K[i*3+0] = P[i,0]*sinv00 + P[i,1]*sinv10  (col 0 = OF-x)
@@ -221,10 +225,11 @@ static void s_Update2x2(Ekf9_t *e,
 /* ------------------------------------------------------------------ */
 void Ekf9_UpdateOf(Ekf9_t *e, float of_x, float of_y)
 {
+    float y0, y1;
     if (!e->active) return;
 
-    float y0 = of_x - e->x[0];
-    float y1 = of_y - e->x[1];
+    y0 = of_x - e->x[0];
+    y1 = of_y - e->x[1];
     s_Update2x2(e, y0, y1, e->R_of, &e->nis);
 }
 
@@ -237,10 +242,11 @@ void Ekf9_UpdateOf(Ekf9_t *e, float of_x, float of_y)
 /* ------------------------------------------------------------------ */
 void Ekf9_UpdateAccXY(Ekf9_t *e, float lin_acc_x, float lin_acc_y)
 {
+    float y0, y1;
     if (!e->active) return;
 
-    float y0 = lin_acc_x - e->x[0];
-    float y1 = lin_acc_y - e->x[1];
+    y0 = lin_acc_x - e->x[0];
+    y1 = lin_acc_y - e->x[1];
     s_Update2x2(e, y0, y1, e->R_acc, &e->nis);
 }
 
@@ -249,10 +255,11 @@ void Ekf9_UpdateAccXY(Ekf9_t *e, float lin_acc_x, float lin_acc_y)
 /* ------------------------------------------------------------------ */
 void Ekf9_UpdateZRate(Ekf9_t *e, float z_rate)
 {
+    float y, s_zz;
     if (!e->active) return;
 
-    float y = z_rate - e->x[2];
-    float s_zz = e->P[2 * 9U + 2U] + e->R_z;
+    y = z_rate - e->x[2];
+    s_zz = e->P[2 * 9U + 2U] + e->R_z;
     if (s_zz <= 0.0f) return;
 
     /* K[i] = P[i,2] / s_zz */
@@ -302,4 +309,62 @@ void Ekf9_UpdateZRate(Ekf9_t *e, float z_rate)
     e->k_last[0] = e->K[0U * 3U + 2U];
     e->k_last[1] = e->K[1U * 3U + 2U];
     e->k_last[2] = e->K[2U * 3U + 2U];
+}
+
+/* ------------------------------------------------------------------ */
+/* Control-path gate                                                    */
+/* ------------------------------------------------------------------ */
+void Ekf9_SetBiasFrozen(Ekf9_t *e, uint8_t frozen)
+{
+    uint8_t i, j;
+    for (i = 3U; i < 9U; i++) {
+        e->Q_diag[i] = frozen ? 0.0f : ((i < 6U) ? EKF_Q_BA : EKF_Q_BG);
+        for (j = 0U; j < 9U; j++) {
+            e->P[i * 9U + j] = 0.0f;
+            e->P[j * 9U + i] = 0.0f;
+        }
+        e->P[i * 9U + i] = e->Q_diag[i];
+    }
+}
+
+uint8_t Ekf9_Healthy(const Ekf9_t *e)
+{
+    uint8_t i;
+    float v;
+    for (i = 0U; i < 3U; i++) {
+        v = e->x[i];
+        if (!((v == v) && (v < EKF_VEL_LIM_MPS) && (v > -EKF_VEL_LIM_MPS))) return 0U;
+    }
+    for (i = 0U; i < 2U; i++) {
+        v = e->P[i * 10U];
+        if (!((v == v) && (v >= 0.0f) && (v < EKF_PVV_LIM))) return 0U;
+    }
+    return 1U;
+}
+
+void Ekf9_GateStep(Ekf9_t *e, volatile Ekf9Gate_t *g, uint8_t flying)
+{
+    uint8_t frozen;
+    if (!flying) {
+        if (g->reinit_req) {
+            Ekf9_Init(e, e->active);
+            g->reinit_req  = 0U;
+            g->healthy     = 1U;
+            g->bias_frozen = 0xFFU;
+        }
+        if (g->bias_mode_req <= EKF_BIAS_GATED) g->bias_mode = g->bias_mode_req;
+        g->ctrl_enable = (g->ctrl_enable_req != 0U) ? 1U : 0U;
+    }
+    frozen = ((g->bias_mode == EKF_BIAS_FIXED) ||
+              (g->bias_mode == EKF_BIAS_GATED && flying)) ? 1U : 0U;
+    if (frozen != g->bias_frozen) {
+        Ekf9_SetBiasFrozen(e, frozen);
+        g->bias_frozen = frozen;
+    }
+    if (g->healthy && !(e->active && Ekf9_Healthy(e))) {
+        g->healthy = 0U;
+        g->fallback_count++;
+    }
+    g->vx_cms = e->x[0] * 100.0f;
+    g->vy_cms = e->x[1] * 100.0f;
 }

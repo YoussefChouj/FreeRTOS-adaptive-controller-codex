@@ -231,7 +231,7 @@ void start_task(void *pvParameters)
 �������ܣ� ϵͳ������ (h��n sh�� g��ng n��ng: x�� t��ng ji��n sh�� q��) - "Function: System monitor"
 ֡��    ��  1 (zh��n l��: 1) - "Frame rate: 1 Hz" (runs once per second)
 ----------------------------------------------------------*/
-#define MAX_TASKS 16   /* 10 app tasks + idle + timer = 12; uxTaskGetSystemState returns 0 if too small */
+#define MAX_TASKS 16   /* 9 tasks measured live (incl. idle + timer); uxTaskGetSystemState returns 0 if too small */
 volatile UBaseType_t g_task_snapshot_count;
 volatile uint32_t g_task_snapshot_total_time;
 TaskStatus_t g_task_snapshot[MAX_TASKS];
@@ -409,12 +409,16 @@ volatile uint32_t g_loop_stats_reset = 0;
 
 /* Overrun threshold is 1.5x nominal (1260000 cycles) to catch misses. */
 #define LOOP_OVERRUN_CYCLES (168000000U / 200U * 3U / 2U)
+/* SendProf_Init and RPM_DwtInit zero DWT->CYCCNT after this task starts, so the first deltas wrap to ~2^32.
+   Skip stats for the first 1 s (200 iterations) so max/overrun only see steady-state periods. */
+#define LOOP_STATS_WARMUP_ITERS 200U
 
 void Stabilizer_Task(void *pvParameters)
 {
     TickType_t PreviousWakeTime;
     const TickType_t TimeIncrement = pdMS_TO_TICKS(5); // 5ms = 200 Hz
     uint32_t last_cyccnt = DWT->CYCCNT;
+    uint16_t warm = 0;
     PreviousWakeTime = xTaskGetTickCount();
     MRAC_Init(); // Must run once before the control loop: populates mrac_config_* gains,
                  // mrac_to_mixer scalers, and axis_enable flags. Without this call all
@@ -427,7 +431,9 @@ void Stabilizer_Task(void *pvParameters)
         uint32_t delta = now - last_cyccnt;
         last_cyccnt = now;
         
-        if (g_loop_stats_reset) {
+        if (warm < LOOP_STATS_WARMUP_ITERS) {
+            warm++;
+        } else if (g_loop_stats_reset) {
             g_loop_period_cyc_max = 0;
             g_loop_period_cyc_min = 0xFFFFFFFFU;
             g_loop_overrun_count = 0;
