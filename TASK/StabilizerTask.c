@@ -808,7 +808,22 @@ void Compute_Motor(void)
 	 * the dashboard button mid-flight to re-anchor the path. */
 	{
 		static uint8_t s_prev_armed = 0U;
+		/* FIX 2026-09-26: OF is integer counts, so a single-sample bias
+		 * snap leaves up to 1 count residual that integrates to ~1.4 cm/s
+		 * drift. While disarmed, average OF with a 1 s EMA and snap to that. */
+		static float s_of_pre_x = 0.0f, s_of_pre_y = 0.0f;
+		static uint8_t s_of_pre_ok = 0U;
 		uint8_t armed_now = (DroneStatus.ARM_Status == Armed) ? 1U : 0U;
+		if (!armed_now && ano_of.of_quality >= OF_MIN_QUALITY) {
+			if (!s_of_pre_ok) {
+				s_of_pre_x = (float)ano_of.of2_dx_fix;
+				s_of_pre_y = (float)ano_of.of2_dy_fix;
+				s_of_pre_ok = 1U;
+			} else {
+				s_of_pre_x += 0.005f * ((float)ano_of.of2_dx_fix - s_of_pre_x);
+				s_of_pre_y += 0.005f * ((float)ano_of.of2_dy_fix - s_of_pre_y);
+			}
+		}
 		if (armed_now && !s_prev_armed) {
 			Reset_World_Origin();
 			/* Also clear any position-PID integral the previous session
@@ -827,8 +842,13 @@ void Compute_Motor(void)
 			 * at ARM rather than cold-starting from (0,0,0,0).
 			 * Gated on OF quality. */
 			if (ano_of.of_quality >= OF_MIN_QUALITY) {
-				s_of_bias_x = (float)ano_of.of2_dx_fix;
-				s_of_bias_y = (float)ano_of.of2_dy_fix;
+				if (s_of_pre_ok) {
+					s_of_bias_x = s_of_pre_x;
+					s_of_bias_y = s_of_pre_y;
+				} else {
+					s_of_bias_x = (float)ano_of.of2_dx_fix;
+					s_of_bias_y = (float)ano_of.of2_dy_fix;
+				}
 				s_of_bias_seeded = 1U;
 				/* Mode 2: inject one debiased OF update into the KF
 				 * to warm-start its vel/bias states at ARM */
