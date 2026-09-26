@@ -1627,14 +1627,14 @@
   "elf_identity": {
     "caveat": "OBJ/ holds both current and stale build artifacts. A symbol in the ELF reflects the last build, which may not match what is currently flashed on the hardware. This manifest describes build artifacts and host decoder contracts; it does not assert that this build is currently running on the aircraft.",
     "elf_path": "OBJ/JX_FLY.axf",
-    "elf_sha256": "a33dd22914eeaf5aaa1a8f9b8b7a938901edb7d9afa9e4c99d7a2352824a8024",
+    "elf_sha256": "43c1e1039d7d938634efc871219fc0b9a3184f4c6ead31c60f2d2f91007f15cf",
     "exists": true,
-    "size_bytes": 1019396
+    "size_bytes": 1019388
   },
   "firmware_symbols": {
     "count": 367,
     "elf_path": "OBJ/JX_FLY.axf",
-    "elf_sha256": "a33dd22914eeaf5aaa1a8f9b8b7a938901edb7d9afa9e4c99d7a2352824a8024",
+    "elf_sha256": "43c1e1039d7d938634efc871219fc0b9a3184f4c6ead31c60f2d2f91007f15cf",
     "names": [
       "AHBPrescTable",
       "APBAHBPrescTable",
@@ -2456,6 +2456,8 @@
       "/api/faults": "fault log (rejections, timeouts)",
       "/api/flight_tests": "list flight-test runs (GET ?date=YYYY-MM-DD)",
       "/api/manifest": "full system capability manifest (symbols, commands, telemetry, panels, routes)",
+      "/api/paths": "list or create paths",
+      "/api/paths/<id>": "get, update or delete path",
       "/api/preset-for-symbol": "preset(s) whose slot manifest carries the symbol (item 14; ?symbol=<key>; read-only, computed from multi_slot_presets.yaml)",
       "/api/recording": "recording state {recording, session_dir, started_at, rows, bytes, reason, analyse, analysis_status}",
       "/api/routes": "this map",
