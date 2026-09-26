@@ -152,6 +152,15 @@ SERVICE_ACTION_SPECS: dict[str, dict[str, Any]] = {
         "description": "Stop the active recording (POST /api/recording/stop).",
         "args": {"type": "object"},
     },
+    "preset_apply": {
+        "risk": "safe",
+        "where": "service",
+        "description": "Switch the live subscribe preset (POST /api/presets/apply); "
+                       "refused unless disarmed. 'dashboard' restores the default layout.",
+        "args": {"type": "object",
+                 "properties": {"name": {"type": "string"}},
+                 "required": ["name"]},
+    },
     "say": {
         "risk": "safe",
         "where": "service",
@@ -1453,6 +1462,12 @@ class AgentManager:
             )
         if action == "recording_stop":
             return svc.stop_recording()
+        if action == "preset_apply":
+            from .api import start_preset_apply
+            code, result = start_preset_apply(svc, str(args["name"]))
+            if code >= 400:
+                raise RuntimeError(result.get("error", "preset apply failed"))
+            return result
         if action == "say":
             self.add_agent_message(str(args["text"]), source=plan.source)
             return {"sent": True}

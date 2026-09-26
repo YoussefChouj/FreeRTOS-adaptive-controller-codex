@@ -225,6 +225,96 @@ def preset_carriers(symbol: str, *, include_all: bool = False) -> dict:
     return {"symbol": symbol, "presets": result}
 
 
+# The built-in boot layout (sidebar + panel extras + flight outer/position,
+# see comm/boot_default_layout.py) is offered next to the YAML presets.
+DASHBOARD_LAYOUT_NAME = "dashboard"
+_preset_apply_lock = threading.Lock()
+_preset_apply_status: dict = {"busy": False, "name": None, "error": None,
+                              "finished_at": None}
+
+
+def list_presets(service) -> dict:
+    """Presets the operator can switch to: the default dashboard layout plus
+    every entry in ``livewatch/multi_slot_presets.yaml`` (read at call time, so
+    a new YAML preset shows up without a service restart)."""
+    from ground_station.livewatch.manifest import MultiSlotPresetManager
+    presets = [{"name": DASHBOARD_LAYOUT_NAME,
+                "description": "Default 4-slot flight layout (sidebar, panels, "
+                               "loops/motors/RPM/sticks, OF/EKF position)",
+                "slots": []}]
+    try:
+        pm = MultiSlotPresetManager()
+        names = pm.list_presets()
+    except Exception:
+        pm, names = None, []
+    for name in names:
+        try:
+            pconf = pm.get(name, validate_sync_contract=False)
+        except Exception:
+            continue
+        presets.append({
+            "name": name,
+            "description": pconf.get("description", ""),
+            "slots": [{"slot": s.get("slot"), "manifest": s.get("manifest"),
+                       "hz": s.get("hz")} for s in pconf.get("slots", [])],
+        })
+    active = getattr(service, "active_preset", None) or DASHBOARD_LAYOUT_NAME
+    return {"presets": presets, "active": active,
+            "loaded_at": getattr(service, "preset_loaded_at", None),
+            "apply": dict(_preset_apply_status)}
+
+
+def start_preset_apply(service, name: str) -> tuple[int, dict]:
+    """Switch the live subscription to ``name`` in a background thread.
+
+    Refused unless the drone reads disarmed: a preset switch pre-clears all
+    slots, which blanks telemetry for several seconds."""
+    known = {p["name"] for p in list_presets(service)["presets"]}
+    if name not in known:
+        return 404, {"ok": False, "error": f"unknown preset {name!r}"}
+    if service.bridge is None:
+        return 409, {"ok": False, "error": "no WiFi bridge"}
+    arm = service.arm_state()
+    if arm != "disarmed":
+        return 409, {"ok": False, "error": f"refused: arm state is {arm}; "
+                                           "switch presets only while disarmed"}
+    if not _preset_apply_lock.acquire(blocking=False):
+        return 409, {"ok": False, "error": "a preset switch is already running"}
+    _preset_apply_status.update(busy=True, name=name, error=None, finished_at=None)
+
+    def _run() -> None:
+        try:
+            bridge = service.bridge
+            if name == DASHBOARD_LAYOUT_NAME:
+                bridge._resubscribe_fn = None
+                bridge._resubscribe_layout = DASHBOARD_LAYOUT_NAME
+                bridge._request_slot0_schema(DASHBOARD_LAYOUT_NAME)
+                service.set_active_preset(None, time.time())
+            else:
+                from ground_station.service.__main__ import apply_startup_preset
+                apply_startup_preset(service, name,
+                                     wifi_host=bridge._wifi_host,
+                                     wifi_port=bridge._wifi_port)
+        except Exception as exc:
+            _preset_apply_status["error"] = str(exc)
+            # A failed preset may already have pre-cleared the slots and
+            # disabled the resubscribe watchdog: fall back to the default.
+            try:
+                bridge = service.bridge
+                bridge._resubscribe_fn = None
+                bridge._resubscribe_layout = DASHBOARD_LAYOUT_NAME
+                bridge._request_slot0_schema(DASHBOARD_LAYOUT_NAME)
+                service.set_active_preset(None, time.time())
+            except Exception:
+                pass
+        finally:
+            _preset_apply_status.update(busy=False, finished_at=time.time())
+            _preset_apply_lock.release()
+
+    threading.Thread(target=_run, name="preset-apply", daemon=True).start()
+    return 202, {"ok": True, "started": True, "name": name}
+
+
 def _recorder_status(service) -> dict[str, Any]:
     """Recorder block for GET /health — path/rows/errors of the CSV writer.
 
@@ -359,6 +449,7 @@ _ROUTE_MAP = {
         "/api/paths/<id>": "get, update or delete path",
         "/api/contract": "firmware command/subscribe contract",
         "/api/preset-for-symbol": "preset(s) whose slot manifest carries the symbol (item 14; ?symbol=<key>; read-only, computed from multi_slot_presets.yaml)",
+        "/api/presets": "subscribe presets (default dashboard layout + multi_slot_presets.yaml), active preset, apply status",
         "/api/view-model": "browser-renderable state for agents; ?stats=1 adds session_stats (full-session scan, slow on long sessions)",
         "/api/events": "event journal",
         "/api/faults": "fault log (rejections, timeouts)",
@@ -401,6 +492,7 @@ _ROUTE_MAP = {
         "/subscribe/preview": "validate a subscribe request, sends nothing",
         "/api/recording/start": "start recording {reason?, requested_by?, label?}",
         "/api/recording/stop": "stop recording",
+        "/api/presets/apply": "{name}: switch the live subscription to a preset (disarmed only; background, ~6-10 s telemetry gap)",
         "/api/session/note": "append a note {text, kind?, source?}",
         "/experiments": "start an experiment",
         "/experiments/<name>/abort": "abort an experiment",
@@ -1293,6 +1385,8 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                 qs = parse_qs(urlsplit(self.path).query)
                 symbol = (qs.get("symbol") or [""])[0].strip()
                 self._json(200, preset_carriers(symbol or "mrac.roll.u_ad"))
+            elif route == "/api/presets":
+                self._json(200, list_presets(service))
             elif route == "/slots":
                 # Slot inventory — keys in service._streams plus what the bridge
                 # currently knows about (auto-subscribed + manually subscribed).
@@ -1985,6 +2079,19 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
             # Recording never sends drone commands and never touches gates.
             # Extended fields for flight-test pipeline:
             #   {analyse: bool, controller: "pid"|"mrac", payload: "symmetric"|"asymmetric", notes: str}
+            elif route == "/api/presets/apply":
+                length = self._content_length()
+                try:
+                    body = json.loads(self.rfile.read(length) or b"{}") if length else {}
+                except Exception:
+                    self._json(400, {"error": "invalid JSON body"})
+                    return
+                name = str(body.get("name") or "").strip() if isinstance(body, dict) else ""
+                if not name:
+                    self._json(400, {"error": "body must be {\"name\": <preset>}"})
+                    return
+                code, result = start_preset_apply(service, name)
+                self._json(code, result)
             elif route == "/api/recording/start":
                 length = self._content_length()
                 body = {}
