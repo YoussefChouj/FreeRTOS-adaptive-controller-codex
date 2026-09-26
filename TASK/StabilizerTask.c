@@ -381,8 +381,13 @@ void Update_Data(void)
 			Ctrler.locxPID.FB = ano_of.earth_x_ture;
 			Ctrler.locyPID.FB = ano_of.earth_y_ture;
 		} else {
-			/* Modes 0 and 1: debias raw OF and integrate as before */
-			if (ano_of.of_quality >= OF_MIN_QUALITY)
+			/* Modes 0 and 1: debias raw OF and integrate as before.
+			 * FIX 2026-09-26: hold position while on the ground (disarmed,
+			 * GROUND_IDLE or LANDED): OF zero wanders 1-3 counts at rest,
+			 * integrating to cm/s drift before takeoff. */
+			if (ano_of.of_quality >= OF_MIN_QUALITY &&
+			    DroneStatus.ARM_Status == Armed &&
+			    (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING))
 			{
 				float of_dx_deb = ano_of.of2_dx_fix - s_of_bias_x;
 				float of_dy_deb = ano_of.of2_dy_fix - s_of_bias_y;
@@ -814,7 +819,11 @@ void Compute_Motor(void)
 		static float s_of_pre_x = 0.0f, s_of_pre_y = 0.0f;
 		static uint8_t s_of_pre_ok = 0U;
 		uint8_t armed_now = (DroneStatus.ARM_Status == Armed) ? 1U : 0U;
-		if (!armed_now && ano_of.of_quality >= OF_MIN_QUALITY) {
+		/* FIX 2026-09-26: keep averaging while armed on the ground too and
+		 * track the Mode 0 bias with it, so the bias locks at takeoff. */
+		uint8_t on_ground = (!armed_now || (flight_phase != FLIGHT_PHASE_FLYING &&
+		                     flight_phase != FLIGHT_PHASE_LANDING)) ? 1U : 0U;
+		if (on_ground && ano_of.of_quality >= OF_MIN_QUALITY) {
 			if (!s_of_pre_ok) {
 				s_of_pre_x = (float)ano_of.of2_dx_fix;
 				s_of_pre_y = (float)ano_of.of2_dy_fix;
@@ -863,6 +872,10 @@ void Compute_Motor(void)
 			/* Clear EKF fallback sticky flag on ARM 0→1 edge so the
 			 * dashboard sees a clean state for each new flight. */
 			g_ekf_of_fallback = 0U;
+		}
+		else if (armed_now && on_ground && s_of_pre_ok && g_of_bias_mode == 0U) {
+			s_of_bias_x = s_of_pre_x;
+			s_of_bias_y = s_of_pre_y;
 		}
 		s_prev_armed = armed_now;
 	}
