@@ -871,6 +871,13 @@ void Compute_Motor(void)
 		uint8_t on_ground = (!armed_now || (flight_phase != FLIGHT_PHASE_FLYING &&
 		                     flight_phase != FLIGHT_PHASE_LANDING)) ? 1U : 0U;
 		if (!on_ground) g_of_handheld_test = 0U; /* never carried into flight */
+		/* FIX 2026-09-27: GROUND_IDLE lasts until of2_h > 0.2 m, so the drone
+		 * is already airborne and moving while still "on_ground". Averaging then
+		 * locked the lift-off velocity into the Mode 0 bias, and the position
+		 * loop held that velocity as "zero" for the whole flight (slow one-way
+		 * drift). Average only while motors are off or at idle (THR < 20%). */
+		if (armed_now && (TWC.execute || RCInput_Get(RC_AXIS_THR) >= 0.2f))
+			on_ground = 0U;
 		if (on_ground && !g_of_handheld_test && ano_of.of_quality >= OF_MIN_QUALITY) {
 			if (!s_of_pre_ok) {
 				s_of_pre_x = (float)ano_of.of2_dx_fix;
@@ -1024,25 +1031,25 @@ void Compute_Motor(void)
 	mymotor.motor1= Throttle_out
 									-u_gyroy//pitch
 									-u_gyrox//
-									+u_gyroz;//yaw  // FIX 2026-09-27: sign flipped, see M4
+									-u_gyroz;//yaw  // FIX 2026-09-10: M1 is BR,CW -> -yaw (decrease for +u_gyroz)
 
 	mymotor.motor2= Throttle_out
 									+u_gyroy//pitch
 									+u_gyrox//roll
-									+u_gyroz;//yaw  // FIX 2026-09-27: sign flipped, see M4
+									-u_gyroz;//yaw  // FIX 2026-09-10: M2 is FL,CW -> -yaw
 
 	mymotor.motor3= Throttle_out
 									-u_gyroy//pitch
 									+u_gyrox//roll
-									-u_gyroz;//yaw  // FIX 2026-09-27: sign flipped, see M4
+									+u_gyroz;//yaw  // FIX 2026-09-10: M3 is BL,CCW -> +yaw
 
   mymotor.motor4= Throttle_out
 									+u_gyroy//pitch
 									-u_gyrox//roll
-									-u_gyroz;//yaw  // FIX 2026-09-27: the 09-10 signs were positive feedback.
-									// All 5 flights of 2026-09-27: +gyrozPID.U (M3/M4 up) drove gyroz.FB
-									// negative to -258 deg/s with sticks centred. Speeding CW props (M1/M2)
-									// yaws the body CCW (+), so +u_gyroz raises M1/M2.
+									+u_gyroz;//yaw  // FIX 2026-09-10: M4 is FR,CCW -> +yaw
+									// 2026-09-27: verified correct. eed871e flipped these and the spin got faster
+									// (-17 -> -190 deg/s in 0.2 s vs -3 -> -94 in 0.8 s). The lift-off yaw spin has
+									// the same direction under both signs: a physical yaw torque, not the mixer.
 	
 	/* Shadow thrust estimators (200 Hz, after motor mixer, before Set_PWM_Motors).
 	 * Three models: empirical (PWM→thrust bench LUT), blade-element (RPM→thrust),
