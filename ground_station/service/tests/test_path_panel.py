@@ -56,6 +56,8 @@ class TestPathPanel(unittest.TestCase):
         self.assertIn("mission payload captured by fetch stub", proc.stdout)
         self.assertIn("a real network call is structurally impossible",
                       proc.stdout)
+        self.assertIn("desired trace from telemetry", proc.stdout)
+        self.assertIn("tracking metrics RMS/max/per-axis", proc.stdout)
 
 
 if __name__ == "__main__":

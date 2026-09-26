@@ -42,11 +42,10 @@ class TestVendorFiles(unittest.TestCase):
         content = f.read_text()
         self.assertIn('0.160', content, 'VERSION.txt must mention v0.160.x')
 
-    def test_line_addons_exist(self):
+    def test_vendor_is_clean_no_unsupported_addons(self):
         line_dir = VENDOR_THREE / 'lines'
-        self.assertTrue(line_dir.exists(), 'lines/ directory missing')
-        for f in ['Line2.js', 'LineMaterial.js', 'LineGeometry.js', 'LineSegments2.js', 'LineSegmentsGeometry.js']:
-            self.assertTrue((line_dir / f).exists(), f + ' not found')
+        self.assertFalse(line_dir.exists(), 'lines/ directory removed in favor of thick ribbon/tube mesh')
+
 
 
 class TestMimeTypes(unittest.TestCase):
@@ -129,6 +128,10 @@ class TestPathPanel3D(unittest.TestCase):
         self.assertIn('_MAX_3D_POINTS', self.content)
         self.assertIn('BufferGeometry', self.content)
         self.assertIn('setDrawRange', self.content)
+
+    def test_thick_line_ribbon_mesh_support(self):
+        self.assertIn('updateRibbonGeometry', self.content)
+        self.assertIn('buildRibbonGeometry', self.content)
 
     def test_dispose_on_destroy(self):
         self.assertIn('dispose3D()', self.content)

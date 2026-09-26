@@ -32,17 +32,24 @@ function makeCtx() {
   return {
     fillStyle: '', strokeStyle: '', font: '', textAlign: '',
     textBaseline: '', lineWidth: 1,
-    texts: [], arcs: [],
+    texts: [], arcs: [], strokes: [], dashes: [],
     fillRect() {},
-    beginPath() {},
-    moveTo() {},
-    lineTo() {},
-    stroke() {},
+    beginPath() { this._curPath = []; },
+    moveTo(x, y) { this._curPath = [{ x, y }]; },
+    lineTo(x, y) { if (this._curPath) this._curPath.push({ x, y }); },
+    stroke() {
+      this.strokes.push({
+        path: this._curPath ? this._curPath.slice() : [],
+        strokeStyle: this.strokeStyle,
+        lineWidth: this.lineWidth,
+        dash: this._curDash ? this._curDash.slice() : []
+      });
+    },
     fill() {},
-    setLineDash() {},
+    setLineDash(d) { this._curDash = d ? d.slice() : []; this.dashes.push(d); },
     fillText(text, x, y) { this.texts.push({ text, x, y }); },
     arc(x, y, r) { this.arcs.push({ x, y, r, fill: this.fillStyle }); },
-    reset() { this.texts = []; this.arcs = []; },
+    reset() { this.texts = []; this.arcs = []; this.strokes = []; this.dashes = []; this._curPath = []; },
   };
 }
 
@@ -191,6 +198,12 @@ function loadPanel() {
       assert.ok(el && el.handlers.click, 'no click handler on #' + id);
       el.handlers.click.forEach((fn) => fn.call(el));
     },
+    input(id, val) {
+      const el = doc.getElementById(id);
+      assert.ok(el && el.handlers.input, 'no input handler on #' + id);
+      el.value = String(val);
+      el.handlers.input.forEach((fn) => fn.call(el));
+    },
     destroy() { sandbox.pluginDestroy(); },
   };
 }
@@ -199,6 +212,15 @@ function frameC(x, y, extra) {
   const values = Object.assign({}, extra);
   if (x !== undefined) values['c.earth_x'] = x;
   if (y !== undefined) values['c.earth_y'] = y;
+  return { connected: true, streams: { '3': { values } } };
+}
+
+function frameTelemetry(actualX, actualY, desiredX, desiredY, extra) {
+  const values = Object.assign({}, extra);
+  if (actualX !== undefined) values['c.earth_x'] = actualX;
+  if (actualY !== undefined) values['c.earth_y'] = actualY;
+  if (desiredX !== undefined) values['pid.locx.Des'] = desiredX;
+  if (desiredY !== undefined) values['pid.locy.Des'] = desiredY;
   return { connected: true, streams: { '3': { values } } };
 }
 
@@ -363,6 +385,85 @@ function runChecks() {
     assert.strictEqual(src.indexOf('fetch('), -1);
     console.log('  PASS: zero fetch/XHR sends after every interaction; no fetch in source;');
     console.log('        sandbox has no require — a real network call is structurally impossible');
+    env.destroy();
+  }
+
+  // 7. Desired trace from telemetry (normalized cm->m, distinct dashed line, waypoints separate)
+  {
+    console.log('\n[CHECK 7: desired trace from telemetry, normalized cm->m, waypoints separate plan overlay]');
+    const env = loadPanel();
+    // Feed 2 samples with actual and desired (in cm)
+    env.feed(frameTelemetry(1000, 2000, 1200, 2400, { 'c.altitude': 2.0, 'pid.z_pos.Des': 2.5 }));
+    env.feed(frameTelemetry(1100, 2200, 1300, 2600, { 'c.altitude': 2.0, 'pid.z_pos.Des': 2.5 }));
+
+    // Verify desired dashed stroke was rendered
+    const hasDesiredStroke = env.ctx.strokes.some((s) =>
+      s.strokeStyle.indexOf('255, 170, 0') !== -1 && s.dash && s.dash.length === 2 && s.dash[0] === 4
+    );
+    assert.ok(hasDesiredStroke, 'desired trace must be drawn with dashed orange line');
+
+    // Verify actual stroke was rendered in blue
+    const hasActualStroke = env.ctx.strokes.some((s) =>
+      s.strokeStyle.indexOf('74, 158, 255') !== -1
+    );
+    assert.ok(hasActualStroke, 'actual trail must be drawn with solid blue line');
+
+    // Add hand-placed waypoint -> should NOT affect desired trace or actual trail points
+    env.click('pp-add-wp');
+    const table = env.doc.getElementById('pp-wp-table');
+    assert.strictEqual(table.querySelectorAll('.pp-wp-input').length, 2, 'one hand-placed waypoint in table');
+    env.feed(frameTelemetry(1100, 2200, 1300, 2600, { 'c.altitude': 2.0, 'pid.z_pos.Des': 2.5 }));
+    const html = env.doc.getElementById('pp-metrics').innerHTML;
+    assert.strictEqual(metricTile(html, 'Waypoints'), '1', 'hand-placed waypoints remain separate plan overlay');
+    assert.strictEqual(metricTile(html, 'Trail Points'), '3', 'actual trail points count');
+
+    console.log('  PASS: desired trace from telemetry rendered in distinct dashed style; waypoints remain separate plan overlay');
+    env.destroy();
+  }
+
+  // 8. Tracking metrics (RMS, max, per-axis RMS) and scrubbing recording
+  {
+    console.log('\n[CHECK 8: tracking metrics RMS/max/per-axis and scrubbing recording]');
+    const env = loadPanel();
+    // Known values:
+    // Sample 1: actual = (10, 20, 1) m, desired = (7, 20, 1) m -> dx=3, dy=0, dz=0. 3D error = 3 m.
+    // Sample 2: actual = (10, 20, 1) m, desired = (10, 16, 1) m -> dx=0, dy=4, dz=0. 3D error = 4 m.
+    // N=2:
+    // RMS X = sqrt((9+0)/2) = 2.12 m
+    // RMS Y = sqrt((0+16)/2) = 2.83 m
+    // RMS Z = 0.00 m
+    // Max Error = 4.00 m
+    // RMS Error = sqrt((9+16)/2) = sqrt(12.5) = 3.54 m
+    env.feed(frameTelemetry(1000, 2000, 700, 2000, { 'c.altitude': 1.0, 'pid.z_pos.Des': 1.0 }));
+    env.feed(frameTelemetry(1000, 2000, 1000, 1600, { 'c.altitude': 1.0, 'pid.z_pos.Des': 1.0 }));
+
+    let html = env.doc.getElementById('pp-metrics').innerHTML;
+    assert.strictEqual(metricTile(html, 'RMS Error'), '3.54 m', 'RMS error must be 3.54 m');
+    assert.strictEqual(metricTile(html, 'Max Error'), '4.00 m', 'Max error must be 4.00 m');
+    assert.strictEqual(metricTile(html, 'RMS X'), '2.12 m', 'RMS X must be 2.12 m');
+    assert.strictEqual(metricTile(html, 'RMS Y'), '2.83 m', 'RMS Y must be 2.83 m');
+    assert.strictEqual(metricTile(html, 'RMS Z'), '0.00 m', 'RMS Z must be 0.00 m');
+    console.log('  PASS: tracking metrics RMS/max/per-axis match known answers: RMS=3.54, Max=4.00, X=2.12, Y=2.83, Z=0.00');
+
+    // Test scrubbing to index 0: only sample 1 is evaluated
+    env.input('pp-replay-scrub', 0);
+    html = env.doc.getElementById('pp-metrics').innerHTML;
+    assert.strictEqual(metricTile(html, 'RMS Error'), '3.00 m', 'Scrubbed to sample 0 RMS error must be 3.00 m');
+    assert.strictEqual(metricTile(html, 'Max Error'), '3.00 m', 'Scrubbed to sample 0 Max error must be 3.00 m');
+    assert.strictEqual(metricTile(html, 'RMS X'), '3.00 m', 'Scrubbed to sample 0 RMS X must be 3.00 m');
+    assert.strictEqual(metricTile(html, 'RMS Y'), '0.00 m', 'Scrubbed to sample 0 RMS Y must be 0.00 m');
+    assert.strictEqual(metricTile(html, 'RMS Z'), '0.00 m', 'Scrubbed to sample 0 RMS Z must be 0.00 m');
+    assert.strictEqual(metricTile(html, 'Trail Points'), '1', 'Scrubbed trail points must be 1');
+    console.log('  PASS: scrubbing recording updates metrics correctly on prefix of data');
+
+    // Scrub back to sample 1
+    env.input('pp-replay-scrub', 1);
+    html = env.doc.getElementById('pp-metrics').innerHTML;
+    assert.strictEqual(metricTile(html, 'RMS Error'), '3.54 m');
+    assert.strictEqual(metricTile(html, 'Max Error'), '4.00 m');
+    assert.strictEqual(metricTile(html, 'Trail Points'), '2');
+    console.log('  PASS: scrub restore recovers full dataset metrics');
+
     env.destroy();
   }
 

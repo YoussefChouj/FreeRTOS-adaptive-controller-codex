@@ -16,7 +16,8 @@
   'use strict';
 
   // ── State ───────────────────────────────────────────────────────────────
-  var _trajectory = [];       // Array of {x, y, t} points
+  var _trajectory = [];       // Array of {x, y, z, yaw, t} points (actual)
+  var _desiredTrajectory = []; // Array of {x, y, z, t} points (desired from telemetry)
   var _waypoints = [];        // Array of {x, y, reached}
   var _homePos = null;
   var _targetPos = null;
@@ -28,6 +29,9 @@
   var _maxDeviation = 0;
   var _plannedPath = [];     // Waypoint path for deviation calculation
   var _autoFitted = false;   // one-shot auto-fit of the flown path (item 6)
+  var _scrubIndex = null;    // null = live / latest, integer = index in trajectory
+  var _trackingMetrics = { count: 0, rms: null, max: null, rmsX: null, rmsY: null, rmsZ: null };
+
   // ── 3D view state ──────────────────────────────────────────────────────
   var _threeLoaded = false;
   var _threeScene = null;
@@ -36,6 +40,7 @@
   var _threeControls = null;
   var _threeLineActual = null;
   var _threeLineDesired = null;
+  var _threeLinePlan = null;
   var _threeDroneMarker = null;
   var _threeAxes = null;
   var _threeGrid = null;
@@ -168,11 +173,82 @@
     return null;
   }
 
-  // ── Update trajectory ───────────────────────────────────────────────────
-  function addPoint(pos) {
-    if (!pos || pos.x == null || pos.y == null) return;
+  // ── Desired position keys (firmware setpoints streamed in flight presets) ──
+  var DES_X_KEYS = ['pid.locx.Des', 'Ctrler.locxPID.Des', 'locxPID.Des', 'locx.Des',
+                    'c.desired_x', 'desired_x_cm', 'desired_x', 'des_x', 'desired_x_m'];
+  var DES_Y_KEYS = ['pid.locy.Des', 'Ctrler.locyPID.Des', 'locyPID.Des', 'locy.Des',
+                    'c.desired_y', 'desired_y_cm', 'desired_y', 'des_y', 'desired_y_m'];
+  var DES_Z_KEYS = ['pid.z_pos.Des', 'Ctrler.Z_posPID.Des', 'Z_posPID.Des', 'z_pos.Des',
+                    'c.desired_z', 'desired_z', 'des_z', 'pid.z.Des', 'c.desired_alt_cm'];
 
-    _trajectory.push({ x: pos.x, y: pos.y, z: pos.z, yaw: pos.yaw, t: Date.now() });
+  function parseDesiredValues(valueMap) {
+    if (!valueMap) return null;
+    var rawX = lookupValue(valueMap, DES_X_KEYS);
+    var rawY = lookupValue(valueMap, DES_Y_KEYS);
+    if (rawX === undefined || rawY === undefined || isNaN(Number(rawX)) || isNaN(Number(rawY))) {
+      return null;
+    }
+    var x = parseFloat(rawX);
+    var y = parseFloat(rawY);
+    var xKey = '';
+    for (var k in valueMap) {
+      var bare = k.replace(SLOT_PREFIX_RE, '');
+      if (DES_X_KEYS.indexOf(bare) !== -1) { xKey = bare; break; }
+    }
+    if (!/_m$/.test(xKey)) {
+      x = x / 100;
+      y = y / 100;
+    }
+
+    var z = 0;
+    var rawZ = lookupValue(valueMap, DES_Z_KEYS);
+    if (rawZ !== undefined && rawZ !== null && !isNaN(Number(rawZ))) {
+      var zKey = '';
+      for (var kz in valueMap) {
+        var bareZ = kz.replace(SLOT_PREFIX_RE, '');
+        if (DES_Z_KEYS.indexOf(bareZ) !== -1) { zKey = bareZ; break; }
+      }
+      if (/alt_cm|_cm$/.test(zKey)) {
+        z = parseFloat(rawZ) / 100;
+      } else {
+        z = parseFloat(rawZ);
+      }
+    }
+    return { x: x, y: y, z: z };
+  }
+
+  function extractDesiredPosition(state) {
+    if (!state) return null;
+    if (state.streams) {
+      var k = Object.keys(state.streams);
+      for (var i = 0; i < k.length; i++) {
+        var vals = state.streams[k[i]] && state.streams[k[i]].values;
+        var res = parseDesiredValues(vals);
+        if (res) return res;
+      }
+    }
+    var flat = state.values || state;
+    return parseDesiredValues(flat);
+  }
+
+  // ── Update trajectory ───────────────────────────────────────────────────
+  var _lastTs = 0;
+  function nextTimestamp(t) {
+    if (t !== undefined && t !== null && !isNaN(Number(t))) {
+      var n = Number(t);
+      if (n > _lastTs) _lastTs = n;
+      return n;
+    }
+    var now = Date.now();
+    if (now <= _lastTs) now = _lastTs + 1;
+    _lastTs = now;
+    return now;
+  }
+
+  function addPoint(pos, optTime) {
+    if (!pos || pos.x == null || pos.y == null) return;
+    var t = pos.t !== undefined ? pos.t : (optTime !== undefined ? optTime : nextTimestamp());
+    _trajectory.push({ x: pos.x, y: pos.y, z: pos.z, yaw: pos.yaw, t: t });
     if (_trajectory.length > MAX_TRAIL) {
       _trajectory.shift();
     }
@@ -184,17 +260,112 @@
     updateMetrics();
   }
 
+  function addDesiredPoint(des, optTime) {
+    if (!des || des.x == null || des.y == null) return;
+    var t = des.t !== undefined ? des.t : (optTime !== undefined ? optTime : nextTimestamp());
+    _desiredTrajectory.push({ x: des.x, y: des.y, z: des.z == null ? 0 : des.z, t: t });
+    if (_desiredTrajectory.length > MAX_TRAIL) {
+      _desiredTrajectory.shift();
+    }
+    _desiredPath = _desiredTrajectory;
+    updateMetrics();
+  }
+
+  function getActiveTrajectory() {
+    if (_scrubIndex != null && _scrubIndex >= 0 && _scrubIndex < _trajectory.length) {
+      return _trajectory.slice(0, _scrubIndex + 1);
+    }
+    return _trajectory;
+  }
+
+  function getActiveDesiredTrajectory() {
+    if (_scrubIndex != null && _scrubIndex >= 0) {
+      var activeActual = getActiveTrajectory();
+      if (activeActual.length === 0) return [];
+      var lastT = activeActual[activeActual.length - 1].t;
+      if (lastT !== undefined && _desiredTrajectory.length > 0 && _desiredTrajectory[0].t !== undefined) {
+        var filtered = [];
+        for (var i = 0; i < _desiredTrajectory.length; i++) {
+          if (_desiredTrajectory[i].t <= lastT) filtered.push(_desiredTrajectory[i]);
+          else break;
+        }
+        return filtered.length > 0 ? filtered : _desiredTrajectory.slice(0, 1);
+      }
+      return _desiredTrajectory.slice(0, Math.min(_scrubIndex + 1, _desiredTrajectory.length));
+    }
+    return _desiredTrajectory;
+  }
+
+  function computeTrackingMetrics(actualList, desiredList) {
+    if (!actualList || !desiredList || actualList.length === 0 || desiredList.length === 0) {
+      return { count: 0, rms: null, max: null, rmsX: null, rmsY: null, rmsZ: null };
+    }
+
+    var pairs = [];
+    var j = 0;
+    for (var i = 0; i < actualList.length; i++) {
+      var a = actualList[i];
+      if (a.t !== undefined && desiredList[0].t !== undefined && desiredList.length > 1) {
+        while (j < desiredList.length - 1 &&
+               Math.abs(desiredList[j + 1].t - a.t) < Math.abs(desiredList[j].t - a.t)) {
+          j++;
+        }
+        pairs.push({ actual: a, desired: desiredList[j] });
+        if (j < desiredList.length - 1 && desiredList[j].t === a.t) {
+          j++;
+        }
+      } else {
+        if (i < desiredList.length) {
+          pairs.push({ actual: a, desired: desiredList[i] });
+        }
+      }
+    }
+
+    if (pairs.length === 0) {
+      return { count: 0, rms: null, max: null, rmsX: null, rmsY: null, rmsZ: null };
+    }
+
+    var sumSqX = 0, sumSqY = 0, sumSqZ = 0, sumSq3D = 0;
+    var maxErr = 0;
+    for (var k = 0; k < pairs.length; k++) {
+      var p = pairs[k];
+      var dx = p.actual.x - p.desired.x;
+      var dy = p.actual.y - p.desired.y;
+      var dz = (p.actual.z != null ? p.actual.z : 0) - (p.desired.z != null ? p.desired.z : 0);
+      var errSq = dx * dx + dy * dy + dz * dz;
+      var err = Math.sqrt(errSq);
+      sumSqX += dx * dx;
+      sumSqY += dy * dy;
+      sumSqZ += dz * dz;
+      sumSq3D += errSq;
+      if (err > maxErr) maxErr = err;
+    }
+
+    var N = pairs.length;
+    return {
+      count: N,
+      rms: Math.sqrt(sumSq3D / N),
+      max: maxErr,
+      rmsX: Math.sqrt(sumSqX / N),
+      rmsY: Math.sqrt(sumSqY / N),
+      rmsZ: Math.sqrt(sumSqZ / N)
+    };
+  }
+
   function updateMetrics() {
+    var activeActual = getActiveTrajectory();
+    var activeDesired = getActiveDesiredTrajectory();
+
     // Total distance along trajectory
     _totalDistance = 0;
-    for (var i = 1; i < _trajectory.length; i++) {
-      _totalDistance += distance(_trajectory[i - 1], _trajectory[i]);
+    for (var i = 1; i < activeActual.length; i++) {
+      _totalDistance += distance(activeActual[i - 1], activeActual[i]);
     }
 
     // Max deviation from planned path (if waypoints exist)
     _maxDeviation = 0;
     if (_plannedPath.length > 1) {
-      _trajectory.forEach(function (pt) {
+      activeActual.forEach(function (pt) {
         var minDist = Infinity;
         // Find distance to nearest segment of planned path
         for (var i = 0; i < _plannedPath.length - 1; i++) {
@@ -204,6 +375,10 @@
         if (minDist > _maxDeviation) _maxDeviation = minDist;
       });
     }
+
+    // Tracking metrics between time-aligned actual and desired samples
+    _trackingMetrics = computeTrackingMetrics(activeActual, activeDesired);
+    _trackingError = _trackingMetrics.rms != null ? _trackingMetrics.rms : 0;
   }
 
   function pointToSegmentDist(p, a, b) {
@@ -255,6 +430,9 @@
 
     // Trajectory trail
     drawTrail();
+
+    // Desired trace from telemetry
+    drawDesiredTrail();
 
     // Planned path (waypoints)
     drawPlannedPath();
@@ -331,7 +509,8 @@
   }
 
   function drawTrail() {
-    if (_trajectory.length < 2) return;
+    var pts = getActiveTrajectory();
+    if (pts.length < 2) return;
 
     var W = _canvas.width;
     var H = _canvas.height;
@@ -340,27 +519,51 @@
     _ctx.strokeStyle = 'rgba(74, 158, 255, 0.6)';
     _ctx.lineWidth = 2;
 
-    var first = worldToScreen(_trajectory[0].x, _trajectory[0].y, W, H);
+    var first = worldToScreen(pts[0].x, pts[0].y, W, H);
     _ctx.moveTo(first.x, first.y);
 
-    for (var i = 1; i < _trajectory.length; i++) {
-      var pt = worldToScreen(_trajectory[i].x, _trajectory[i].y, W, H);
+    for (var i = 1; i < pts.length; i++) {
+      var pt = worldToScreen(pts[i].x, pts[i].y, W, H);
       _ctx.lineTo(pt.x, pt.y);
     }
     _ctx.stroke();
 
     // Gradient fade for older points (only last 100 points to avoid lag)
-    var startIdx = Math.max(1, _trajectory.length - 100);
-    var tailLen = _trajectory.length - startIdx;
-    for (var i = startIdx; i < _trajectory.length; i++) {
+    var startIdx = Math.max(1, pts.length - 100);
+    var tailLen = pts.length - startIdx;
+    for (var i = startIdx; i < pts.length; i++) {
       var alpha = ((i - startIdx) / tailLen) * 0.5;
-      var pt = worldToScreen(_trajectory[i].x, _trajectory[i].y, W, H);
+      var pt = worldToScreen(pts[i].x, pts[i].y, W, H);
       _ctx.beginPath();
       _ctx.fillStyle = 'rgba(74, 158, 255, ' + alpha + ')';
       _ctx.arc(pt.x, pt.y, 2, 0, Math.PI * 2);
       _ctx.fill();
     }
   }
+
+  function drawDesiredTrail() {
+    var pts = getActiveDesiredTrajectory();
+    if (pts.length < 2) return;
+
+    var W = _canvas.width;
+    var H = _canvas.height;
+
+    _ctx.beginPath();
+    _ctx.strokeStyle = 'rgba(255, 170, 0, 0.85)';
+    _ctx.lineWidth = 1.5;
+    _ctx.setLineDash([4, 4]);
+
+    var first = worldToScreen(pts[0].x, pts[0].y, W, H);
+    _ctx.moveTo(first.x, first.y);
+
+    for (var i = 1; i < pts.length; i++) {
+      var pt = worldToScreen(pts[i].x, pts[i].y, W, H);
+      _ctx.lineTo(pt.x, pt.y);
+    }
+    _ctx.stroke();
+    _ctx.setLineDash([]);
+  }
+
 
   function drawPlannedPath() {
     if (_plannedPath.length < 2) return;
@@ -455,14 +658,25 @@
   function renderMetrics() {
     if (!_elMetrics) return;
 
+    var activeActual = getActiveTrajectory();
     var distStr = _currentPos ? fmtNum(_totalDistance, 2) + ' m' : '—';
     var devStr = (_currentPos && _plannedPath.length > 1) ? fmtNum(_maxDeviation, 2) + ' m' : '—';
+    var rmsStr = (_trackingMetrics && _trackingMetrics.rms != null) ? fmtNum(_trackingMetrics.rms, 2) + ' m' : '—';
+    var maxErrStr = (_trackingMetrics && _trackingMetrics.max != null) ? fmtNum(_trackingMetrics.max, 2) + ' m' : '—';
+    var rmsXStr = (_trackingMetrics && _trackingMetrics.rmsX != null) ? fmtNum(_trackingMetrics.rmsX, 2) + ' m' : '—';
+    var rmsYStr = (_trackingMetrics && _trackingMetrics.rmsY != null) ? fmtNum(_trackingMetrics.rmsY, 2) + ' m' : '—';
+    var rmsZStr = (_trackingMetrics && _trackingMetrics.rmsZ != null) ? fmtNum(_trackingMetrics.rmsZ, 2) + ' m' : '—';
 
     _elMetrics.innerHTML = [
       '<div class="pp-metric"><span class="pp-metric-label">Distance</span><span class="pp-metric-value">' + distStr + '</span></div>',
       '<div class="pp-metric"><span class="pp-metric-label">Max Deviation</span><span class="pp-metric-value">' + devStr + '</span></div>',
       '<div class="pp-metric"><span class="pp-metric-label">Waypoints</span><span class="pp-metric-value">' + _waypoints.length + '</span></div>',
-      '<div class="pp-metric"><span class="pp-metric-label">Trail Points</span><span class="pp-metric-value">' + _trajectory.length + '</span></div>'
+      '<div class="pp-metric"><span class="pp-metric-label">Trail Points</span><span class="pp-metric-value">' + activeActual.length + '</span></div>',
+      '<div class="pp-metric"><span class="pp-metric-label">RMS Error</span><span class="pp-metric-value">' + rmsStr + '</span></div>',
+      '<div class="pp-metric"><span class="pp-metric-label">Max Error</span><span class="pp-metric-value">' + maxErrStr + '</span></div>',
+      '<div class="pp-metric"><span class="pp-metric-label">RMS X</span><span class="pp-metric-value">' + rmsXStr + '</span></div>',
+      '<div class="pp-metric"><span class="pp-metric-label">RMS Y</span><span class="pp-metric-value">' + rmsYStr + '</span></div>',
+      '<div class="pp-metric"><span class="pp-metric-label">RMS Z</span><span class="pp-metric-value">' + rmsZStr + '</span></div>'
     ].join('');
   }
 
@@ -607,34 +821,125 @@
     _threeAxes = new THREE.AxesHelper(100);
     _threeScene.add(_threeAxes);
 
-    // Desired path (dashed)
-    var desiredPositions = new Float32Array(_MAX_3D_POINTS * 3);
-    var desiredGeo = new THREE.BufferGeometry();
-    desiredGeo.setAttribute('position', new THREE.BufferAttribute(desiredPositions, 3));
-    desiredGeo.setDrawRange(0, 0);
-    var desiredMat = new THREE.LineDashedMaterial({
+    // Thick cross-ribbon geometry helper (antialiased 3D line from any viewing angle)
+    function buildRibbonGeometry(maxPoints) {
+      var maxSegments = Math.max(1, maxPoints - 1);
+      var positions = new Float32Array(maxSegments * 12 * 3);
+      var geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geo.setDrawRange(0, 0);
+      return geo;
+    }
+
+    function updateRibbonGeometry(geo, points, radius, dashed) {
+      if (!geo || !points || points.length < 2) {
+        if (geo) geo.setDrawRange(0, 0);
+        return;
+      }
+      var attr = geo.getAttribute('position');
+      var arr = attr.array;
+      var vIdx = 0;
+      var r = radius || 0.08;
+      var count = points.length;
+      var maxSegments = (arr.length / 36) | 0;
+      var segLimit = Math.min(count - 1, maxSegments);
+      var accumDist = 0;
+
+      for (var i = 0; i < segLimit; i++) {
+        var p1 = points[i];
+        var p2 = points[i + 1];
+        var ax = p1.x, ay = p1.z || 0, az = p1.y;
+        var bx = p2.x, by = p2.z || 0, bz = p2.y;
+        var dx = bx - ax, dy = by - ay, dz = bz - az;
+        var len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (len < 1e-4) continue;
+
+        if (dashed) {
+          var dashStep = Math.floor(accumDist / 0.5);
+          accumDist += len;
+          if (dashStep % 2 !== 0) {
+            continue;
+          }
+        }
+
+        dx /= len; dy /= len; dz /= len;
+
+        var v1x, v1y, v1z;
+        if (Math.abs(dy) < 0.9) {
+          v1x = dz; v1y = 0; v1z = -dx;
+        } else {
+          v1x = 0; v1y = -dz; v1z = dy;
+        }
+        var l1 = Math.sqrt(v1x * v1x + v1y * v1y + v1z * v1z);
+        if (l1 < 1e-4) { v1x = 1; v1y = 0; v1z = 0; }
+        else { v1x /= l1; v1y /= l1; v1z /= l1; }
+
+        var v2x = dy * v1z - dz * v1y;
+        var v2y = dz * v1x - dx * v1z;
+        var v2z = dx * v1y - dy * v1x;
+
+        var w1x = v1x * r, w1y = v1y * r, w1z = v1z * r;
+        var w2x = v2x * r, w2y = v2y * r, w2z = v2z * r;
+
+        // Quad 1
+        arr[vIdx++] = ax + w1x; arr[vIdx++] = ay + w1y; arr[vIdx++] = az + w1z;
+        arr[vIdx++] = bx + w1x; arr[vIdx++] = by + w1y; arr[vIdx++] = bz + w1z;
+        arr[vIdx++] = ax - w1x; arr[vIdx++] = ay - w1y; arr[vIdx++] = az - w1z;
+
+        arr[vIdx++] = ax - w1x; arr[vIdx++] = ay - w1y; arr[vIdx++] = az - w1z;
+        arr[vIdx++] = bx + w1x; arr[vIdx++] = by + w1y; arr[vIdx++] = bz + w1z;
+        arr[vIdx++] = bx - w1x; arr[vIdx++] = by - w1y; arr[vIdx++] = bz - w1z;
+
+        // Quad 2
+        arr[vIdx++] = ax + w2x; arr[vIdx++] = ay + w2y; arr[vIdx++] = az + w2z;
+        arr[vIdx++] = bx + w2x; arr[vIdx++] = by + w2y; arr[vIdx++] = bz + w2z;
+        arr[vIdx++] = ax - w2x; arr[vIdx++] = ay - w2y; arr[vIdx++] = az - w2z;
+
+        arr[vIdx++] = ax - w2x; arr[vIdx++] = ay - w2y; arr[vIdx++] = az - w2z;
+        arr[vIdx++] = bx + w2x; arr[vIdx++] = by + w2y; arr[vIdx++] = bz + w2z;
+        arr[vIdx++] = bx - w2x; arr[vIdx++] = by - w2y; arr[vIdx++] = bz - w2z;
+      }
+
+      attr.needsUpdate = true;
+      geo.setDrawRange(0, vIdx / 3);
+    }
+
+    // Desired path (thick cross-ribbon mesh, amber/orange 0xffaa00, dashed)
+    var desiredGeo = buildRibbonGeometry(_MAX_3D_POINTS);
+    var desiredMat = new THREE.MeshBasicMaterial({
       color: 0xffaa00,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.85
+    });
+    _threeLineDesired = new THREE.Mesh(desiredGeo, desiredMat);
+    _threeScene.add(_threeLineDesired);
+
+    // Actual path (thick cross-ribbon mesh, solid cyan/blue 0x4a9eff)
+    var actualGeo = buildRibbonGeometry(_MAX_3D_POINTS);
+    var actualMat = new THREE.MeshBasicMaterial({
+      color: 0x4a9eff,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.85
+    });
+    _threeLineActual = new THREE.Mesh(actualGeo, actualMat);
+    _threeScene.add(_threeLineActual);
+
+    // Planned path overlay (hand-placed waypoints preview)
+    var planPositions = new Float32Array(_MAX_3D_POINTS * 3);
+    var planGeo = new THREE.BufferGeometry();
+    planGeo.setAttribute('position', new THREE.BufferAttribute(planPositions, 3));
+    planGeo.setDrawRange(0, 0);
+    var planMat = new THREE.LineDashedMaterial({
+      color: 0xf5a623,
       dashSize: 2,
       gapSize: 1,
       transparent: true,
       opacity: 0.5
     });
-    _threeLineDesired = new THREE.LineSegments(desiredGeo, desiredMat);
-    _threeLineDesired.computeLineDistances();
-    _threeScene.add(_threeLineDesired);
-
-    // Actual path (solid)
-    var actualPositions = new Float32Array(_MAX_3D_POINTS * 3);
-    var actualGeo = new THREE.BufferGeometry();
-    actualGeo.setAttribute('position', new THREE.BufferAttribute(actualPositions, 3));
-    actualGeo.setDrawRange(0, 0);
-    var actualMat = new THREE.LineBasicMaterial({
-      color: 0x4a9eff,
-      transparent: true,
-      opacity: 0.8
-    });
-    _threeLineActual = new THREE.Line(actualGeo, actualMat);
-    _threeScene.add(_threeLineActual);
+    _threeLinePlan = new THREE.Line(planGeo, planMat);
+    _threeScene.add(_threeLinePlan);
 
     // Drone marker
     var markerGeo = new THREE.SphereGeometry(1.5, 16, 16);
@@ -673,69 +978,65 @@
     ctx.fillStyle = 'rgba(10, 10, 26, 0.7)';
     ctx.fillRect(0, 0, 256, 64);
     ctx.fillStyle = '#4a9eff';
-    ctx.font = 'bold 28px Consolas, monospace';
-    ctx.fillText('Error: ' + _trackingError.toFixed(2) + ' m', 10, 40);
+    ctx.font = 'bold 20px Consolas, monospace';
+    var rmsText = (_trackingMetrics && _trackingMetrics.rms != null) ? _trackingMetrics.rms.toFixed(2) : '—';
+    var maxText = (_trackingMetrics && _trackingMetrics.max != null) ? _trackingMetrics.max.toFixed(2) : '—';
+    ctx.fillText('RMS: ' + rmsText + ' m | Max: ' + maxText + ' m', 10, 38);
     if (_threeErrorLabel.sprite && _threeErrorLabel.sprite.material && _threeErrorLabel.sprite.material.map) {
       _threeErrorLabel.sprite.material.map.needsUpdate = true;
     }
     var el = q('pp-3d-error');
-    if (el) el.textContent = 'Error: ' + _trackingError.toFixed(2) + ' m';
+    if (el) el.textContent = 'RMS: ' + rmsText + ' m | Max: ' + maxText + ' m';
   }
 
   function render3D() {
     if (!_threeRenderer || !_threeScene || !_threeCamera) return;
 
-    // Update actual path
-    if (_trajectory.length > 0) {
-      var actualAttr = _threeLineActual.geometry.getAttribute('position');
-      var count = Math.min(_trajectory.length, _MAX_3D_POINTS);
-      for (var i = 0; i < count; i++) {
-        var pt = _trajectory[i];
-        actualAttr.setXYZ(i, pt.x, pt.z || 0, pt.y);
-      }
-      actualAttr.needsUpdate = true;
-      _threeLineActual.geometry.setDrawRange(0, count);
+    var activeActual = getActiveTrajectory();
+    var activeDesired = getActiveDesiredTrajectory();
 
-      if (_threeDroneMarker && _trajectory.length > 0) {
-        var lastPt = _trajectory[_trajectory.length - 1];
+    // Update actual path
+    if (activeActual.length > 0 && _threeLineActual) {
+      updateRibbonGeometry(_threeLineActual.geometry, activeActual, 0.08, false);
+
+      if (_threeDroneMarker) {
+        var lastPt = activeActual[activeActual.length - 1];
         _threeDroneMarker.position.set(lastPt.x, lastPt.z || 0, lastPt.y);
         _threeDroneMarker.rotation.y = -(lastPt.yaw || 0) * (Math.PI / 180);
       }
+    } else if (_threeLineActual) {
+      _threeLineActual.geometry.setDrawRange(0, 0);
     }
 
     // Update desired path
-    if (_desiredPath.length > 0) {
-      var desiredAttr = _threeLineDesired.geometry.getAttribute('position');
-      var idx = 0;
-      for (var i = 0; i < _desiredPath.length - 1 && idx < _MAX_3D_POINTS - 1; i++) {
-        var a = _desiredPath[i], b = _desiredPath[i + 1];
-        desiredAttr.setXYZ(idx++, a.x, a.z || 0, a.y);
-        desiredAttr.setXYZ(idx++, b.x, b.z || 0, b.y);
-      }
-      desiredAttr.needsUpdate = true;
-      _threeLineDesired.geometry.setDrawRange(0, idx);
-      _threeLineDesired.computeLineDistances();
+    if (activeDesired.length > 0 && _threeLineDesired) {
+      updateRibbonGeometry(_threeLineDesired.geometry, activeDesired, 0.04, true);
+    } else if (_threeLineDesired) {
+      _threeLineDesired.geometry.setDrawRange(0, 0);
     }
 
-    // Tracking error
-    _trackingError = 0;
-    if (_currentPos && _desiredPath.length > 0) {
-      var minErr = Infinity;
-      for (var i = 0; i < _desiredPath.length; i++) {
-        var d = Math.sqrt(
-          Math.pow(_currentPos.x - _desiredPath[i].x, 2) +
-          Math.pow(_currentPos.y - _desiredPath[i].y, 2) +
-          Math.pow((_currentPos.z || 0) - (_desiredPath[i].z || 0), 2)
-        );
-        if (d < minErr) minErr = d;
+    // Update planned path overlay (hand-placed waypoints)
+    if (_plannedPath.length > 0 && _threeLinePlan) {
+      var planAttr = _threeLinePlan.geometry.getAttribute('position');
+      var planCount = Math.min(_plannedPath.length, _MAX_3D_POINTS);
+      for (var p = 0; p < planCount; p++) {
+        var pw = _plannedPath[p];
+        planAttr.setXYZ(p, pw.x, pw.z || 0, pw.y);
       }
-      _trackingError = minErr;
+      planAttr.needsUpdate = true;
+      _threeLinePlan.geometry.setDrawRange(0, planCount);
+      if (typeof _threeLinePlan.computeLineDistances === 'function') {
+        _threeLinePlan.computeLineDistances();
+      }
+    } else if (_threeLinePlan) {
+      _threeLinePlan.geometry.setDrawRange(0, 0);
     }
+
     updateErrorSprite();
 
     // Follow drone
-    if (_threeFollowDrone && _trajectory.length > 0) {
-      var lp = _trajectory[_trajectory.length - 1];
+    if (_threeFollowDrone && activeActual.length > 0) {
+      var lp = activeActual[activeActual.length - 1];
       _threeCamera.position.set(lp.x + 50, (lp.z || 0) + 50, lp.y + 50);
       _threeControls.target.set(lp.x, lp.z || 0, lp.y);
     }
@@ -748,6 +1049,14 @@
     if (_threeLineActual) {
       _threeLineActual.geometry.setDrawRange(0, 0);
       _threeLineActual.geometry.getAttribute('position').needsUpdate = true;
+    }
+    if (_threeLineDesired) {
+      _threeLineDesired.geometry.setDrawRange(0, 0);
+      _threeLineDesired.geometry.getAttribute('position').needsUpdate = true;
+    }
+    if (_threeLinePlan) {
+      _threeLinePlan.geometry.setDrawRange(0, 0);
+      _threeLinePlan.geometry.getAttribute('position').needsUpdate = true;
     }
     if (_threeDroneMarker) {
       _threeDroneMarker.position.set(0, 0, 0);
@@ -793,6 +1102,7 @@
     _threeControls = null;
     _threeLineActual = null;
     _threeLineDesired = null;
+    _threeLinePlan = null;
     _threeDroneMarker = null;
     _threeAxes = null;
     _threeGrid = null;
@@ -802,11 +1112,9 @@
 
   function updateDesiredPath(state) {
     if (!state) return;
-    _desiredPath = [];
-    // Use waypoints as desired path (current implementation stores waypoints there)
-    for (var i = 0; i < _waypoints.length; i++) {
-      var wp = _waypoints[i];
-      _desiredPath.push({ x: wp.x, y: wp.y, z: wp.z || 0 });
+    var des = extractDesiredPosition(state);
+    if (des) {
+      addDesiredPoint(des, Date.now());
     }
   }
 
@@ -843,6 +1151,7 @@
         return;
       }
       _trajectory = [];
+      _desiredTrajectory = [];
       var rArr = records.records;
       for (var i = 0; i < rArr.length; i++) {
         var row = rArr[i];
@@ -851,16 +1160,45 @@
         var z = row.c && row.c.altitude_cm;
         var yaw = row.imu_data && row.imu_data.yaw || row.status && row.status.yaw_deg;
         if (yaw === undefined) yaw = row["imu_data.yaw"] || row["status.yaw_deg"];
+        var t = row.timestamp || row.t || i;
         if (x !== undefined && y !== undefined) {
           _trajectory.push({ 
             x: parseFloat(x) / 100, 
             y: parseFloat(y) / 100, 
             z: z ? parseFloat(z) / 100 : 0,
-            yaw: yaw ? parseFloat(yaw) : 0
+            yaw: yaw ? parseFloat(yaw) : 0,
+            t: t
+          });
+        }
+        var dx = (row.pid && row.pid.locx && row.pid.locx.Des) || row["pid.locx.Des"] || 
+                 (row.Ctrler && row.Ctrler.locxPID && row.Ctrler.locxPID.Des) || row["Ctrler.locxPID.Des"] ||
+                 (row.c && row.c.desired_x);
+        var dy = (row.pid && row.pid.locy && row.pid.locy.Des) || row["pid.locy.Des"] || 
+                 (row.Ctrler && row.Ctrler.locyPID && row.Ctrler.locyPID.Des) || row["Ctrler.locyPID.Des"] ||
+                 (row.c && row.c.desired_y);
+        var dz = (row.pid && row.pid.z_pos && row.pid.z_pos.Des) || row["pid.z_pos.Des"] || 
+                 (row.Ctrler && row.Ctrler.Z_posPID && row.Ctrler.Z_posPID.Des) || row["Ctrler.Z_posPID.Des"] ||
+                 (row.c && row.c.desired_z);
+        if (dx !== undefined && dy !== undefined) {
+          _desiredTrajectory.push({
+            x: parseFloat(dx) / 100,
+            y: parseFloat(dy) / 100,
+            z: dz !== undefined ? parseFloat(dz) : 0,
+            t: t
           });
         }
       }
-      updateDesiredPath(null);
+      _desiredPath = _desiredTrajectory;
+      _scrubIndex = null;
+      var scrubEl = q('pp-replay-scrub');
+      if (scrubEl) {
+        scrubEl.min = 0;
+        scrubEl.max = Math.max(0, _trajectory.length - 1);
+        scrubEl.value = scrubEl.max;
+      }
+      var timeEl = q('pp-replay-time');
+      if (timeEl) timeEl.textContent = 'Live';
+      updateMetrics();
       render();
       renderMetrics();
       if (_threeLoaded) render3D();
@@ -1140,13 +1478,22 @@
        '</div>',
 
        '<div>',
+       '<div class="pp-section-label">Playback &amp; Scrub</div>',
+       '<div class="pp-entry-row" style="align-items:center;gap:8px">',
+       '<input id="pp-replay-scrub" type="range" min="0" max="100" value="100" style="flex:1" title="Scrub recording / trail">',
+       '<span id="pp-replay-time" style="font-family:monospace;font-size:11px;min-width:45px;color:#aaa">Live</span>',
+       '</div>',
+       '</div>',
+
+       '<div>',
        '<div class="pp-section-label">Legend</div>',
        '<div class="pp-legend">',
        '<div class="pp-legend-item"><div class="pp-legend-dot" style="background:#4a9eff"></div>Current Position</div>',
        '<div class="pp-legend-item"><div class="pp-legend-dot" style="background:#4ecca3"></div>Home</div>',
        '<div class="pp-legend-item"><div class="pp-legend-dot" style="background:#e94560"></div>Target</div>',
        '<div class="pp-legend-item"><div class="pp-legend-dot" style="background:#f5a623"></div>Waypoints</div>',
-       '<div class="pp-legend-item"><div class="pp-legend-line" style="background:rgba(74,158,255,0.6)"></div>Trajectory</div>',
+       '<div class="pp-legend-item"><div class="pp-legend-line" style="background:rgba(74,158,255,0.6)"></div>Actual Trail</div>',
+       '<div class="pp-legend-item"><div class="pp-legend-line" style="background:#ff9f43;border-top:1px dashed #ff9f43"></div>Desired Trace</div>',
        '</div>',
        '</div>',
 
@@ -1277,16 +1624,52 @@
         loadSessionData();
       });
 
-      // Subscribe to live state for Frame C position
+      // Scrubber input
+      var scrubEl = q('pp-replay-scrub');
+      var timeEl = q('pp-replay-time');
+      if (scrubEl) {
+        scrubEl.addEventListener('input', function () {
+          var val = parseInt(scrubEl.value, 10);
+          var max = parseInt(scrubEl.max, 10);
+          if (val >= max || max === 0) {
+            _scrubIndex = null;
+            if (timeEl) timeEl.textContent = 'Live';
+          } else {
+            _scrubIndex = val;
+            if (timeEl) timeEl.textContent = (val + 1) + '/' + (max + 1);
+          }
+          updateMetrics();
+          render();
+          renderMetrics();
+          if (_threeLoaded) render3D();
+        });
+      }
+
+      // Subscribe to live state for Frame C position and desired position
       api.subscribe(function (state) {
         if (!state) return;
 
         var pos = extractPosition(state);
-        if (pos) {
-          addPoint(pos);
+        var des = extractDesiredPosition(state);
+
+        if (pos || des) {
+          var frameTime = (pos && pos.t !== undefined) ? pos.t : ((des && des.t !== undefined) ? des.t : nextTimestamp());
+          if (pos) {
+            addPoint(pos, frameTime);
+          }
+          if (des) {
+            addDesiredPoint(des, frameTime);
+          }
+          if (_scrubIndex === null) {
+            var sc = q('pp-replay-scrub');
+            if (sc && _trajectory.length > 0) {
+              sc.min = 0;
+              sc.max = Math.max(0, _trajectory.length - 1);
+              sc.value = sc.max;
+            }
+          }
           render();
           renderMetrics();
-          updateDesiredPath(state);
           // Update 3D if visible
           var threeWrap = q('pp-3d-wrap');
           if (_threeLoaded && threeWrap && threeWrap.style.display !== 'none') {
@@ -1302,6 +1685,8 @@
 
   window.__PLUGIN_DESTROY__ = function () {
     _trajectory = [];
+    _desiredTrajectory = [];
+    _desiredPath = [];
     _waypoints = [];
     _plannedPath = [];
     _currentPos = null;
@@ -1311,9 +1696,11 @@
     _panX = 0;
     _panY = 0;
     _autoFitted = false;
+    _scrubIndex = null;
+    _lastTs = 0;
+    _trackingMetrics = { count: 0, rms: null, max: null, rmsX: null, rmsY: null, rmsZ: null };
     dispose3D();
     _threeFollowDrone = false;
-    _desiredPath = [];
     _trackingError = 0;
   };
 
