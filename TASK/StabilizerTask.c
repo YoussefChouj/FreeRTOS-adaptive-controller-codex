@@ -130,6 +130,12 @@ static u8 s_of_bias_seeded = 0;
  * Its position state (x[0], x[3]) feeds Ctrler.locx/yPID.FB in EKF mode. */
 EkfOf_t s_ekf_of;
 static uint8_t s_ekf_of_inited = 0U;
+/* Mode 2: last KF body-frame position (m) and a resync flag. earth_x/y are
+ * accumulated from yaw-rotated KF position increments, not by rotating the
+ * whole body-frame position with the current yaw (FIX 2026-09-26). */
+static float s_ekf_prev_px = 0.0f;
+static float s_ekf_prev_py = 0.0f;
+static uint8_t s_ekf_pos_synced = 0U;
 
 /* Manual bias snap (CMD 0x17). g_of_bias_capture_req is set from the ground
  * station (Send_Task) when the pilot has placed the drone level and still; it
@@ -141,6 +147,9 @@ volatile uint8_t g_of_bias_capture_req = 0;
  * ~250-255 on the bench. Below this we treat the sensor as unlocked: freeze both the
  * bias calibration and the earth_x/y integration so we never integrate garbage flow. */
 #define OF_MIN_QUALITY              50U
+/* Handheld test: OF range floor. At 1-4 cm (resting on the ground) the module
+ * still reports quality 255 but its velocity is not usable. */
+#define OF_HANDHELD_MIN_ALT_CM      10U
 
 /* P0 Finding 2 (docs/p0-verdicts.md): per-tick ToF validity flag. 1 = this tick's
  * sample passed the band+jump gates in Update_Data. While 0 (out of range, e.g.
@@ -193,6 +202,7 @@ void Reset_World_Origin(void)
 	if (g_of_bias_mode == 2U && s_ekf_of_inited) {
 		EkfOf_ResetPos(&s_ekf_of);
 	}
+	s_ekf_pos_synced = 0U;
 }
 
 void stabilizer_Task(void)
@@ -378,21 +388,29 @@ void Update_Data(void)
 			 * EkfOf_ResetPos() was called from Reset_World_Origin() below.
 			 * FIX 2026-09-26: KF states are metres; earth_x/y and locx/yPID
 			 * are cm (modes 0/1), so scale by 100. */
-			float ekf_px = s_ekf_of.x[0] * 100.0f;
-			float ekf_py = s_ekf_of.x[3] * 100.0f;
-			ano_of.earth_x = ekf_px * Cos_Yaw_01 + ekf_py * Sin_Yaw_01;
-			ano_of.earth_y = ekf_py * Cos_Yaw_01 - ekf_px * Sin_Yaw_01;
+			float ekf_dx = (s_ekf_of.x[0] - s_ekf_prev_px) * 100.0f;
+			float ekf_dy = (s_ekf_of.x[3] - s_ekf_prev_py) * 100.0f;
+			if (!s_ekf_pos_synced) {
+				ekf_dx = 0.0f;
+				ekf_dy = 0.0f;
+				s_ekf_pos_synced = 1U;
+			}
+			s_ekf_prev_px = s_ekf_of.x[0];
+			s_ekf_prev_py = s_ekf_of.x[3];
+			ano_of.earth_x += ekf_dx * Cos_Yaw_01 + ekf_dy * Sin_Yaw_01;
+			ano_of.earth_y += ekf_dy * Cos_Yaw_01 - ekf_dx * Sin_Yaw_01;
 			ano_of.earth_x_ture =  ano_of.earth_y;
 			ano_of.earth_y_ture = -ano_of.earth_x;
 			Ctrler.locxPID.FB = ano_of.earth_x_ture;
 			Ctrler.locyPID.FB = ano_of.earth_y_ture;
 		} else {
+			s_ekf_pos_synced = 0U;
 			/* Modes 0 and 1: debias raw OF and integrate as before.
 			 * FIX 2026-09-26: hold position while on the ground (disarmed,
 			 * GROUND_IDLE or LANDED): OF zero wanders 1-3 counts at rest,
 			 * integrating to cm/s drift before takeoff. */
 			if (ano_of.of_quality >= OF_MIN_QUALITY &&
-			    (g_of_handheld_test ||
+			    ((g_of_handheld_test && ano_of.of_alt_cm >= OF_HANDHELD_MIN_ALT_CM) ||
 			     (DroneStatus.ARM_Status == Armed &&
 			      (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING))))
 			{
