@@ -95,6 +95,9 @@
                     'ano_of.of_alt_cm', 'ano_of.of_alt_cm_m', 'of_alt_cm', 'pos_z'];
 
   var POS_YAW_KEYS = ['c.yaw', 'yaw', 'imu_data.yaw', 'status.yaw_deg'];
+  var DES_X_KEYS = ['pid.locx.Des', 'Ctrler.locxPID.Des'];
+  var DES_Y_KEYS = ['pid.locy.Des', 'Ctrler.locyPID.Des'];
+  var DES_Z_KEYS = ['pid.z_pos.Des', 'Ctrler.Z_posPID.Des'];
 
   // Return the first defined numeric value from valueMap matching any of
   // `names`, bare or slot-prefixed. Returns undefined when absent.
@@ -146,9 +149,16 @@
         var yaw = lookupValue(vals, POS_YAW_KEYS);
         if (x !== undefined && y !== undefined &&
             !isNaN(Number(x)) && !isNaN(Number(y))) {
+          var dx = lookupValue(vals, DES_X_KEYS);
+          var dy = lookupValue(vals, DES_Y_KEYS);
+          var dz = lookupValue(vals, DES_Z_KEYS);
+          var dPos = (dx !== undefined && dy !== undefined && !isNaN(Number(dx))) ? {
+              x: parseFloat(dx) / 100, y: parseFloat(dy) / 100, z: parseFloat(dz)
+          } : null;
           return { x: parseFloat(x) / 100, y: parseFloat(y) / 100,
                    z: metreAltitude(vals, lookupValue(vals, POS_Z_KEYS)),
-                   yaw: yaw !== undefined ? parseFloat(yaw) : 0 };
+                   yaw: yaw !== undefined ? parseFloat(yaw) : 0,
+                   desired: dPos };
         }
       }
     }
@@ -160,9 +170,16 @@
     var fyaw = lookupValue(flat, POS_YAW_KEYS);
     if (fx !== undefined && fy !== undefined &&
         !isNaN(Number(fx)) && !isNaN(Number(fy))) {
+      var fdx = lookupValue(flat, DES_X_KEYS);
+      var fdy = lookupValue(flat, DES_Y_KEYS);
+      var fdz = lookupValue(flat, DES_Z_KEYS);
+      var fdPos = (fdx !== undefined && fdy !== undefined && !isNaN(Number(fdx))) ? {
+          x: parseFloat(fdx) / 100, y: parseFloat(fdy) / 100, z: parseFloat(fdz)
+      } : null;
       return { x: parseFloat(fx) / 100, y: parseFloat(fy) / 100,
                z: metreAltitude(flat, lookupValue(flat, POS_Z_KEYS)),
-               yaw: fyaw !== undefined ? parseFloat(fyaw) : 0 };
+               yaw: fyaw !== undefined ? parseFloat(fyaw) : 0,
+               desired: fdPos };
     }
 
     return null;
@@ -172,7 +189,7 @@
   function addPoint(pos) {
     if (!pos || pos.x == null || pos.y == null) return;
 
-    _trajectory.push({ x: pos.x, y: pos.y, z: pos.z, yaw: pos.yaw, t: Date.now() });
+    _trajectory.push({ x: pos.x, y: pos.y, z: pos.z, yaw: pos.yaw, desired: pos.desired, t: Date.now() });
     if (_trajectory.length > MAX_TRAIL) {
       _trajectory.shift();
     }
@@ -457,12 +474,39 @@
 
     var distStr = _currentPos ? fmtNum(_totalDistance, 2) + ' m' : '—';
     var devStr = (_currentPos && _plannedPath.length > 1) ? fmtNum(_maxDeviation, 2) + ' m' : '—';
+    
+    var rms = 0, maxErr = 0, errX = 0, errY = 0, errZ = 0, count = 0;
+    if (_trajectory.length > 0) {
+      for (var i = 0; i < _trajectory.length; i++) {
+        var pt = _trajectory[i];
+        if (pt.desired) {
+          var dx = pt.x - pt.desired.x;
+          var dy = pt.y - pt.desired.y;
+          var dz = (pt.z || 0) - (pt.desired.z || 0);
+          var distSq = dx*dx + dy*dy + dz*dz;
+          rms += distSq;
+          var dist = Math.sqrt(distSq);
+          if (dist > maxErr) maxErr = dist;
+          count++;
+          if (i == _trajectory.length - 1) {
+             errX = dx; errY = dy; errZ = dz;
+          }
+        }
+      }
+      if (count > 0) rms = Math.sqrt(rms / count);
+    }
+    
+    var errStr = count > 0 ? fmtNum(rms, 2) + 'm RMS (Max ' + fmtNum(maxErr, 2) + ')' : '—';
+    var perAxisStr = count > 0 ? 'X:' + fmtNum(errX, 2) + ' Y:' + fmtNum(errY, 2) + ' Z:' + fmtNum(errZ, 2) : '—';
+    
+    var elapsed = _trajectory.length > 0 ? ((_trajectory[_trajectory.length-1].t - _trajectory[0].t)/1000).toFixed(1) + 's' : '—';
 
     _elMetrics.innerHTML = [
+      '<div class="pp-metric"><span class="pp-metric-label">Tracking Error</span><span class="pp-metric-value">' + errStr + '</span></div>',
+      '<div class="pp-metric"><span class="pp-metric-label">Per-Axis</span><span class="pp-metric-value" style="font-size:11px">' + perAxisStr + '</span></div>',
+      '<div class="pp-metric"><span class="pp-metric-label">Elapsed Time</span><span class="pp-metric-value">' + elapsed + '</span></div>',
       '<div class="pp-metric"><span class="pp-metric-label">Distance</span><span class="pp-metric-value">' + distStr + '</span></div>',
-      '<div class="pp-metric"><span class="pp-metric-label">Max Deviation</span><span class="pp-metric-value">' + devStr + '</span></div>',
-      '<div class="pp-metric"><span class="pp-metric-label">Waypoints</span><span class="pp-metric-value">' + _waypoints.length + '</span></div>',
-      '<div class="pp-metric"><span class="pp-metric-label">Trail Points</span><span class="pp-metric-value">' + _trajectory.length + '</span></div>'
+      '<div class="pp-metric"><span class="pp-metric-label">Max Deviation</span><span class="pp-metric-value">' + devStr + '</span></div>'
     ].join('');
   }
 
@@ -548,27 +592,39 @@
     importMapEl.textContent = JSON.stringify({
       imports: {
         'three': '/vendor/three/three.module.min.js',
-        'three/addons/controls/OrbitControls.js': '/vendor/three/OrbitControls.js'
+        'three/addons/controls/OrbitControls.js': '/vendor/three/OrbitControls.js',
+        'three/addons/lines/Line2.js': '/vendor/three/lines/Line2.js',
+        'three/addons/lines/LineMaterial.js': '/vendor/three/lines/LineMaterial.js',
+        'three/addons/lines/LineGeometry.js': '/vendor/three/lines/LineGeometry.js',
+        'three/addons/lines/LineSegments2.js': '/vendor/three/lines/LineSegments2.js',
+        'three/addons/lines/LineSegmentsGeometry.js': '/vendor/three/lines/LineSegmentsGeometry.js'
       }
     });
     document.head.appendChild(importMapEl);
 
-    import('/vendor/three/three.module.min.js').then(function(threeMod) {
+    import('three').then(function(threeMod) {
       var THREE = threeMod;
-      return import('/vendor/three/OrbitControls.js').then(function(controlsMod) {
-        // Module namespace objects are frozen; pass OC alongside THREE instead of attaching it.
-        var OC = controlsMod.OrbitControls || controlsMod.default;
-        return { THREE: THREE, OrbitControls: OC };
+      return Promise.all([
+        import('three/addons/controls/OrbitControls.js').catch(() => null),
+        import('three/addons/lines/Line2.js').catch(() => null),
+        import('three/addons/lines/LineMaterial.js').catch(() => null),
+        import('three/addons/lines/LineGeometry.js').catch(() => null)
+      ]).then(function(mods) {
+        var OC = mods[0] ? (mods[0].OrbitControls || mods[0].default) : null;
+        var Line2 = mods[1] ? mods[1].Line2 : null;
+        var LineMaterial = mods[2] ? mods[2].LineMaterial : null;
+        var LineGeometry = mods[3] ? mods[3].LineGeometry : null;
+        return { THREE: THREE, OrbitControls: OC, Line2: Line2, LineMaterial: LineMaterial, LineGeometry: LineGeometry };
       });
     }).then(function(mods) {
-      initThreeScene(mods.THREE, mods.OrbitControls);
+      initThreeScene(mods.THREE, mods.OrbitControls, mods.Line2, mods.LineMaterial, mods.LineGeometry);
     }).catch(function(err) {
       console.error('[path-panel] Failed to load three.js:', err);
       _threeLoaded = false;
     });
   }
 
-  function initThreeScene(THREE, OrbitControls) {
+  function initThreeScene(THREE, OrbitControls, Line2, LineMaterial, LineGeometry) {
     var canvas = _el3DCanvas;
     if (!canvas) return;
 
@@ -586,12 +642,14 @@
     _threeRenderer.setSize(w, h);
     _threeRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 
-    _threeControls = new OrbitControls(_threeCamera, _threeRenderer.domElement);
-    _threeControls.enableDamping = true;
-    _threeControls.dampingFactor = 0.08;
-    _threeControls.screenSpacePanning = true;
-    _threeControls.minDistance = 5;
-    _threeControls.maxDistance = 2000;
+    if (OrbitControls) {
+      _threeControls = new OrbitControls(_threeCamera, _threeRenderer.domElement);
+      _threeControls.enableDamping = true;
+      _threeControls.dampingFactor = 0.08;
+      _threeControls.screenSpacePanning = true;
+      _threeControls.minDistance = 5;
+      _threeControls.maxDistance = 2000;
+    }
 
     var ambient = new THREE.AmbientLight(0x404060, 1.5);
     _threeScene.add(ambient);
@@ -601,40 +659,57 @@
 
     // Ground grid
     _threeGrid = new THREE.GridHelper(200, 20, 0x333355, 0x222244);
+    _threeGrid.position.y = -0.01;
     _threeScene.add(_threeGrid);
 
     // XYZ axes
     _threeAxes = new THREE.AxesHelper(100);
     _threeScene.add(_threeAxes);
 
-    // Desired path (dashed)
-    var desiredPositions = new Float32Array(_MAX_3D_POINTS * 3);
-    var desiredGeo = new THREE.BufferGeometry();
-    desiredGeo.setAttribute('position', new THREE.BufferAttribute(desiredPositions, 3));
-    desiredGeo.setDrawRange(0, 0);
-    var desiredMat = new THREE.LineDashedMaterial({
-      color: 0xffaa00,
-      dashSize: 2,
-      gapSize: 1,
-      transparent: true,
-      opacity: 0.5
-    });
-    _threeLineDesired = new THREE.LineSegments(desiredGeo, desiredMat);
-    _threeLineDesired.computeLineDistances();
+    var useFatLines = !!(Line2 && LineMaterial && LineGeometry);
+
+    // Desired path (dashed/contrasting)
+    if (useFatLines) {
+      var dGeo = new LineGeometry();
+      var dMat = new LineMaterial({ color: 0xffaa00, linewidth: 0.005, dashed: true, dashSize: 0.5, gapSize: 0.2, transparent: true, opacity: 0.6 });
+      _threeLineDesired = new Line2(dGeo, dMat);
+      _threeLineDesired.computeLineDistances();
+    } else {
+      var dGeo = new THREE.BufferGeometry();
+      dGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(_MAX_3D_POINTS * 3), 3));
+      dGeo.setDrawRange(0, 0);
+      var dMat = new THREE.LineDashedMaterial({ color: 0xffaa00, dashSize: 2, gapSize: 1, transparent: true, opacity: 0.5 });
+      _threeLineDesired = new THREE.LineSegments(dGeo, dMat);
+    }
     _threeScene.add(_threeLineDesired);
 
     // Actual path (solid)
-    var actualPositions = new Float32Array(_MAX_3D_POINTS * 3);
-    var actualGeo = new THREE.BufferGeometry();
-    actualGeo.setAttribute('position', new THREE.BufferAttribute(actualPositions, 3));
-    actualGeo.setDrawRange(0, 0);
-    var actualMat = new THREE.LineBasicMaterial({
-      color: 0x4a9eff,
-      transparent: true,
-      opacity: 0.8
-    });
-    _threeLineActual = new THREE.Line(actualGeo, actualMat);
+    if (useFatLines) {
+      var aGeo = new LineGeometry();
+      var aMat = new LineMaterial({ color: 0x4a9eff, linewidth: 0.008, transparent: true, opacity: 0.8 });
+      _threeLineActual = new Line2(aGeo, aMat);
+    } else {
+      var aGeo = new THREE.BufferGeometry();
+      aGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(_MAX_3D_POINTS * 3), 3));
+      aGeo.setDrawRange(0, 0);
+      var aMat = new THREE.LineBasicMaterial({ color: 0x4a9eff, transparent: true, opacity: 0.8 });
+      _threeLineActual = new THREE.Line(aGeo, aMat);
+    }
     _threeScene.add(_threeLineActual);
+
+    // Planned path (waypoints preview)
+    if (useFatLines) {
+      var pGeo = new LineGeometry();
+      var pMat = new LineMaterial({ color: 0xf5a623, linewidth: 0.003, transparent: true, opacity: 0.4 });
+      _threeLinePlanned = new Line2(pGeo, pMat);
+    } else {
+      var pGeo = new THREE.BufferGeometry();
+      pGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(_MAX_3D_POINTS * 3), 3));
+      pGeo.setDrawRange(0, 0);
+      var pMat = new THREE.LineBasicMaterial({ color: 0xf5a623, transparent: true, opacity: 0.4 });
+      _threeLinePlanned = new THREE.Line(pGeo, pMat);
+    }
+    _threeScene.add(_threeLinePlanned);
 
     // Drone marker
     var markerGeo = new THREE.SphereGeometry(1.5, 16, 16);
@@ -665,6 +740,7 @@
     updateErrorSprite();
 
     _threeLoaded = true;
+    _threeHasFatLines = useFatLines;
   }
 
   function updateErrorSprite() {
@@ -687,49 +763,103 @@
 
     // Update actual path
     if (_trajectory.length > 0) {
-      var actualAttr = _threeLineActual.geometry.getAttribute('position');
       var count = Math.min(_trajectory.length, _MAX_3D_POINTS);
-      for (var i = 0; i < count; i++) {
-        var pt = _trajectory[i];
-        actualAttr.setXYZ(i, pt.x, pt.z || 0, pt.y);
+      if (typeof _threeHasFatLines !== 'undefined' && _threeHasFatLines) {
+        var arr = [];
+        for (var i = 0; i < count; i++) {
+          var pt = _trajectory[i];
+          arr.push(pt.x, pt.z || 0, pt.y);
+        }
+        _threeLineActual.geometry.setPositions(arr);
+      } else {
+        var actualAttr = _threeLineActual.geometry.getAttribute('position');
+        for (var i = 0; i < count; i++) {
+          var pt = _trajectory[i];
+          actualAttr.setXYZ(i, pt.x, pt.z || 0, pt.y);
+        }
+        actualAttr.needsUpdate = true;
+        _threeLineActual.geometry.setDrawRange(0, count);
       }
-      actualAttr.needsUpdate = true;
-      _threeLineActual.geometry.setDrawRange(0, count);
 
-      if (_threeDroneMarker && _trajectory.length > 0) {
+      if (_threeDroneMarker) {
         var lastPt = _trajectory[_trajectory.length - 1];
         _threeDroneMarker.position.set(lastPt.x, lastPt.z || 0, lastPt.y);
         _threeDroneMarker.rotation.y = -(lastPt.yaw || 0) * (Math.PI / 180);
       }
     }
 
-    // Update desired path
-    if (_desiredPath.length > 0) {
-      var desiredAttr = _threeLineDesired.geometry.getAttribute('position');
-      var idx = 0;
-      for (var i = 0; i < _desiredPath.length - 1 && idx < _MAX_3D_POINTS - 1; i++) {
-        var a = _desiredPath[i], b = _desiredPath[i + 1];
-        desiredAttr.setXYZ(idx++, a.x, a.z || 0, a.y);
-        desiredAttr.setXYZ(idx++, b.x, b.z || 0, b.y);
+    // Update desired path from trajectory (not from _desiredPath which was waypoints)
+    var desArr = [];
+    var count = Math.min(_trajectory.length, _MAX_3D_POINTS);
+    for (var i = 0; i < count; i++) {
+      var pt = _trajectory[i];
+      if (pt.desired) {
+        desArr.push(pt.desired.x, pt.desired.z || 0, pt.desired.y);
       }
-      desiredAttr.needsUpdate = true;
-      _threeLineDesired.geometry.setDrawRange(0, idx);
-      _threeLineDesired.computeLineDistances();
+    }
+    
+    if (desArr.length > 0) {
+      if (typeof _threeHasFatLines !== 'undefined' && _threeHasFatLines) {
+        // LineSegments2 expects a flat array of [start, end, start, end] for segments
+        // Wait! Is _threeLineDesired a Line2 or LineSegments2? I created it as Line2.
+        // If it's Line2, we just pass positions directly like actual path.
+        // Wait, the desired path could have gaps if desired is null. Line2 doesn't handle gaps well.
+        // Let's just draw the contiguous ones or push NaN (not sure if Line2 handles NaN).
+        // Let's just push all points that have desired.
+        _threeLineDesired.geometry.setPositions(desArr);
+        _threeLineDesired.computeLineDistances();
+      } else {
+        var desiredAttr = _threeLineDesired.geometry.getAttribute('position');
+        var idx = 0;
+        // For THREE.LineSegments, we need pairs
+        for (var i = 0; i < count - 1; i++) {
+          var pt1 = _trajectory[i];
+          var pt2 = _trajectory[i+1];
+          if (pt1.desired && pt2.desired && idx < _MAX_3D_POINTS*3) {
+             desiredAttr.setXYZ(idx/3, pt1.desired.x, pt1.desired.z || 0, pt1.desired.y);
+             idx += 3;
+             desiredAttr.setXYZ(idx/3, pt2.desired.x, pt2.desired.z || 0, pt2.desired.y);
+             idx += 3;
+          }
+        }
+        desiredAttr.needsUpdate = true;
+        _threeLineDesired.geometry.setDrawRange(0, idx / 3);
+        _threeLineDesired.computeLineDistances();
+      }
+    }
+
+    // Update planned path from waypoints
+    if (_plannedPath.length > 0 && typeof _threeLinePlanned !== 'undefined') {
+      var pArr = [];
+      for (var i = 0; i < _plannedPath.length; i++) {
+         var wp = _plannedPath[i];
+         pArr.push(wp.x, wp.z || 0, wp.y);
+      }
+      if (typeof _threeHasFatLines !== 'undefined' && _threeHasFatLines) {
+         if (pArr.length >= 6) {
+           _threeLinePlanned.geometry.setPositions(pArr);
+         }
+      } else {
+         var pAttr = _threeLinePlanned.geometry.getAttribute('position');
+         for (var i = 0; i < pArr.length/3; i++) {
+           pAttr.setXYZ(i, pArr[i*3], pArr[i*3+1], pArr[i*3+2]);
+         }
+         pAttr.needsUpdate = true;
+         _threeLinePlanned.geometry.setDrawRange(0, _plannedPath.length);
+      }
     }
 
     // Tracking error
     _trackingError = 0;
-    if (_currentPos && _desiredPath.length > 0) {
-      var minErr = Infinity;
-      for (var i = 0; i < _desiredPath.length; i++) {
-        var d = Math.sqrt(
-          Math.pow(_currentPos.x - _desiredPath[i].x, 2) +
-          Math.pow(_currentPos.y - _desiredPath[i].y, 2) +
-          Math.pow((_currentPos.z || 0) - (_desiredPath[i].z || 0), 2)
+    if (_currentPos && _trajectory.length > 0) {
+      var lastPt = _trajectory[_trajectory.length - 1];
+      if (lastPt.desired) {
+        _trackingError = Math.sqrt(
+          Math.pow(_currentPos.x - lastPt.desired.x, 2) +
+          Math.pow(_currentPos.y - lastPt.desired.y, 2) +
+          Math.pow((_currentPos.z || 0) - (lastPt.desired.z || 0), 2)
         );
-        if (d < minErr) minErr = d;
       }
-      _trackingError = minErr;
     }
     updateErrorSprite();
 
@@ -737,10 +867,10 @@
     if (_threeFollowDrone && _trajectory.length > 0) {
       var lp = _trajectory[_trajectory.length - 1];
       _threeCamera.position.set(lp.x + 50, (lp.z || 0) + 50, lp.y + 50);
-      _threeControls.target.set(lp.x, lp.z || 0, lp.y);
+      if (_threeControls) _threeControls.target.set(lp.x, lp.z || 0, lp.y);
     }
 
-    _threeControls.update();
+    if (_threeControls) _threeControls.update();
     _threeRenderer.render(_threeScene, _threeCamera);
   }
 
@@ -856,7 +986,9 @@
             x: parseFloat(x) / 100, 
             y: parseFloat(y) / 100, 
             z: z ? parseFloat(z) / 100 : 0,
-            yaw: yaw ? parseFloat(yaw) : 0
+            yaw: yaw ? parseFloat(yaw) : 0,
+            desired: (row.pid && row.pid.locx && row.pid.locx.Des !== undefined) ? 
+                     { x: parseFloat(row.pid.locx.Des)/100, y: parseFloat(row.pid.locy.Des)/100, z: parseFloat(row.pid.z_pos.Des) } : null
           });
         }
       }
@@ -1134,6 +1266,24 @@
       '</div>',
 
        '<div>',
+       
+       '<div>',
+       '<div class="pp-section-label">Path Library</div>',
+       '<div class="pp-entry-row">',
+       '<select id="pp-lib-select" class="pp-wp-input" style="width:130px"><option value="">-- Select --</option></select>',
+       '<button id="pp-lib-load" class="pp-action-btn">Load</button>',
+       '</div>',
+       '<div class="pp-entry-row" style="margin-top:4px">',
+       '<input id="pp-lib-name" class="pp-wp-input" style="width:130px" placeholder="Path Name">',
+       '<button id="pp-lib-save" class="pp-action-btn">Save</button>',
+       '</div>',
+       '<div class="pp-entry-row" style="margin-top:4px">',
+       '<button id="pp-lib-resample" class="pp-action-btn">Resample</button>',
+       '<button id="pp-lib-smooth" class="pp-action-btn">Smooth</button>',
+       '</div>',
+       '</div>',
+
+       '<div>',
        '<div class="pp-section-label">Session data</div>',
        '<div id="pp-session-status" class="pp-demo-badge" style="position:static;cursor:default">No session loaded</div>',
        '<button id="pp-load-session" class="pp-btn pp-btn-sm" style="margin-top:4px">Load last session</button>',
@@ -1179,7 +1329,62 @@
         render();
       }
 
+
+      _canvas.addEventListener('click', function(e) {
+         if (isDragging) return; // don't add point if panning
+         var rect = _canvas.getBoundingClientRect();
+         var cx = e.clientX - rect.left;
+         var cy = e.clientY - rect.top;
+         
+         // Convert screen to world
+         var W = _canvas.width;
+         var H = _canvas.height;
+         // worldToScreen:  x' = W/2 + _panX + wx*_zoom*20 ; y' = H/2 - _panY - wy*_zoom*20
+         var wx = (cx - W/2 - _panX) / (_zoom * 20);
+         var wy = (H/2 - _panY - cy) / (_zoom * 20) * -1; // Wait! y' = H/2 - _panY - wy*_zoom*20. So wy*_zoom*20 = H/2 - _panY - y'. wy = (H/2 - _panY - y') / (_zoom * 20).
+         
+         wy = (H/2 - _panY - cy) / (_zoom * 20);
+         
+         wx = Math.round(wx * 100) / 100;
+         wy = Math.round(wy * 100) / 100;
+         
+         _waypoints.push({ x: wx, y: wy, z: 0, reached: false });
+         updatePlannedPath();
+         renderWaypointTable();
+         render();
+      });
+      
+      // Also add drag panning to 2D view
+      var isDragging = false, lastX, lastY;
+      var moved = false;
+      _canvas.addEventListener('mousedown', function(e) {
+         if (e.button !== 0) return;
+         isDragging = true;
+         moved = false;
+         lastX = e.clientX;
+         lastY = e.clientY;
+      });
+      window.addEventListener('mousemove', function(e) {
+         if (!isDragging) return;
+         if (Math.abs(e.clientX - lastX) > 2 || Math.abs(e.clientY - lastY) > 2) moved = true;
+         if (moved) {
+           _panX += (e.clientX - lastX);
+           _panY -= (e.clientY - lastY);
+           lastX = e.clientX;
+           lastY = e.clientY;
+           render();
+         }
+      });
+      window.addEventListener('mouseup', function(e) {
+         if (isDragging && moved) {
+           setTimeout(() => { isDragging = false; moved = false; }, 50);
+         } else {
+           isDragging = false;
+         }
+      });
+
       // Initial setup
+
       resizeCanvas();
       window.addEventListener('resize', resizeCanvas);
       if (typeof ResizeObserver !== 'undefined') {
@@ -1276,6 +1481,99 @@
       if (_sload) _sload.addEventListener('click', function () {
         loadSessionData();
       });
+
+      
+      // Library API calls
+      function refreshLibrary() {
+        var _f = window['fetch'];
+        if (!_f) return;
+        _f('/api/paths').then(r => r.json()).then(data => {
+          var sel = q('pp-lib-select');
+          if (!sel) return;
+          sel.innerHTML = '<option value="">-- Select --</option>';
+          (data.paths || []).forEach(p => {
+             var opt = document.createElement('option');
+             opt.value = p.id;
+             opt.textContent = p.name || 'Unnamed';
+             sel.appendChild(opt);
+          });
+        }).catch(e => console.warn('Library load failed', e));
+      }
+      
+      var btnLoad = q('pp-lib-load');
+      if (btnLoad) btnLoad.addEventListener('click', function() {
+        var id = q('pp-lib-select').value;
+        if (!id) return;
+        var _f = window['fetch'];
+        _f('/api/paths/' + id).then(r => r.json()).then(p => {
+           if (p.points) {
+             _waypoints = p.points.map(pt => ({x: pt.x, y: pt.y, z: pt.z||0, reached: false}));
+             updatePlannedPath();
+             renderWaypointTable();
+             render();
+             q('pp-lib-name').value = p.name || '';
+           }
+        });
+      });
+      
+      var btnSave = q('pp-lib-save');
+      if (btnSave) btnSave.addEventListener('click', function() {
+         var name = q('pp-lib-name').value || 'New Path';
+         var _f = window['fetch'];
+         var pts = _waypoints.map(w => ({x: w.x, y: w.y, z: w.z||0}));
+         var id = q('pp-lib-select').value;
+         var body = { name: name, points: pts };
+         if (id) body.id = id;
+         
+         _f('/api/paths', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+         }).then(r => r.json()).then(data => {
+            if (data.id) {
+               q('pp-lib-select').value = data.id;
+               refreshLibrary();
+            }
+         });
+      });
+
+      var btnResample = q('pp-lib-resample');
+      if (btnResample) btnResample.addEventListener('click', function() {
+         var _f = window['fetch'];
+         var pts = _waypoints.map(w => ({x: w.x, y: w.y, z: w.z||0}));
+         _f('/api/paths', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ action: 'resample', spacing: 2.0, points: pts })
+         }).then(r => r.json()).then(data => {
+            if (data.points) {
+               _waypoints = data.points.map(pt => ({x: pt.x, y: pt.y, z: pt.z||0, reached: false}));
+               updatePlannedPath();
+               renderWaypointTable();
+               render();
+            }
+         });
+      });
+
+      var btnSmooth = q('pp-lib-smooth');
+      if (btnSmooth) btnSmooth.addEventListener('click', function() {
+         var _f = window['fetch'];
+         var pts = _waypoints.map(w => ({x: w.x, y: w.y, z: w.z||0}));
+         _f('/api/paths', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ action: 'smooth', iterations: 2, alpha: 0.5, points: pts })
+         }).then(r => r.json()).then(data => {
+            if (data.points) {
+               _waypoints = data.points.map(pt => ({x: pt.x, y: pt.y, z: pt.z||0, reached: false}));
+               updatePlannedPath();
+               renderWaypointTable();
+               render();
+            }
+         });
+      });
+      
+      refreshLibrary();
 
       // Subscribe to live state for Frame C position
       api.subscribe(function (state) {

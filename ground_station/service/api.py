@@ -355,6 +355,8 @@ _ROUTE_MAP = {
         "/api/diagnostics/bundle": "frames, commands, faults for bug reports",
         "/api/recording": "recording state {recording, session_dir, started_at, rows, bytes, reason, analyse, analysis_status}",
         "/api/session/notes": "operator notes buffered while not recording",
+        "/api/paths": "list or create paths",
+        "/api/paths/<id>": "get, update or delete path",
         "/api/contract": "firmware command/subscribe contract",
         "/api/preset-for-symbol": "preset(s) whose slot manifest carries the symbol (item 14; ?symbol=<key>; read-only, computed from multi_slot_presets.yaml)",
         "/api/view-model": "browser-renderable state for agents; ?stats=1 adds session_stats (full-session scan, slow on long sessions)",

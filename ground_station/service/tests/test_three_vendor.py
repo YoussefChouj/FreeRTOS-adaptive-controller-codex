@@ -42,6 +42,12 @@ class TestVendorFiles(unittest.TestCase):
         content = f.read_text()
         self.assertIn('0.160', content, 'VERSION.txt must mention v0.160.x')
 
+    def test_line_addons_exist(self):
+        line_dir = VENDOR_THREE / 'lines'
+        self.assertTrue(line_dir.exists(), 'lines/ directory missing')
+        for f in ['Line2.js', 'LineMaterial.js', 'LineGeometry.js', 'LineSegments2.js', 'LineSegmentsGeometry.js']:
+            self.assertTrue((line_dir / f).exists(), f + ' not found')
+
 
 class TestMimeTypes(unittest.TestCase):
     def test_js_mime_type_mapping(self):
