@@ -5,6 +5,7 @@
 #include "pid.h"
 #include "ADC.h"
 #include "mrac.h"
+#include "controller.h"
 #include "gyro_filter.h"
 #include "sysid.h"
 #include "rc_input.h"
@@ -897,6 +898,7 @@ void Compute_Motor(void)
 	
 	// Execute MRAC after all PID controllers have computed their nominal outputs (u_nom)
 	// MRAC uses the current PID rates, references, and nominal outputs to learn and compute u_ad.
+	Controller_CheckSwitch(DroneStatus.ARM_Status == Armed);
 	MRAC_Control(&Ctrler);
 	
  
@@ -906,41 +908,12 @@ void Compute_Motor(void)
 	 // free-flight hover is 2950. PWM ceiling is 4000 - anything above risks ESC saturation.
 	 Throttle_th = bench_mode_active ? (short)3200 : (short)2950;
 
-#if ENABLE_MRAC_OUTPUT_INJECTION == 1
-	// Runtime shadow-mode gate (mrac_flags.output_injection_on, CMD 0x0F idx 10).
-	// When OFF the motors see pure PID even though MRAC keeps learning/logging u_ad.
-	if (mrac_flags.output_injection_on) {
-		// Inject MRAC adaptive signals.
-		// u_total = u_nom + (u_ad * scaling_factor)
-		// NaN/Inf guard: if u_ad is not finite (e.g. due to diverged adaptive weights),
-		// fall back to zero correction so the PID baseline always reaches the motors.
-		float mrac_z     = mrac_state.z_rate.u_ad * mrac_config_z.mrac_to_mixer * mrac_simplex.fade;
-		float mrac_roll  = mrac_state.roll.u_ad  * mrac_config_roll.mrac_to_mixer * mrac_simplex.fade;
-		float mrac_pitch = mrac_state.pitch.u_ad * mrac_config_pitch.mrac_to_mixer * mrac_simplex.fade;
-		float mrac_yaw   = mrac_state.yaw.u_ad   * mrac_config_yaw.mrac_to_mixer * mrac_simplex.fade;
-		if (!isfinite(mrac_z))     mrac_z     = 0.0f;
-		if (!isfinite(mrac_roll))  mrac_roll  = 0.0f;
-		if (!isfinite(mrac_pitch)) mrac_pitch = 0.0f;
-		if (!isfinite(mrac_yaw))   mrac_yaw   = 0.0f;
-		Throttle_out = Ctrler.Z_ratePID.U + Throttle_th + mrac_z;
-		u_gyrox      = Ctrler.gyroxPID.U  + mrac_roll;
-		u_gyroy      = -(Ctrler.gyroyPID.U + mrac_pitch); // Motor mixer needs gyroy reversed
-		u_gyroz      = Ctrler.gyrozPID.U  + mrac_yaw;
-	} else {
-		// Runtime shadow mode: MRAC computes silently, motors see normal PID output.
-		Throttle_out = Ctrler.Z_ratePID.U + Throttle_th;
-		u_gyrox  = Ctrler.gyroxPID.U;
-		u_gyroy  = -Ctrler.gyroyPID.U;
-		u_gyroz  = Ctrler.gyrozPID.U;
-	}
-#else
-	// Compile-time shadow mode: MRAC computes silently, but motors only see normal PID output.
-    Throttle_out=Ctrler.Z_ratePID.U + Throttle_th;
-
-	u_gyrox  = Ctrler.gyroxPID.U ;
-	u_gyroy  = -Ctrler.gyroyPID.U;
-	u_gyroz  = Ctrler.gyrozPID.U ;
-#endif
+	// Controller layer (API/controller.c): u = u_nom + correction of the selected controller.
+	// CTRL_MRAC (default) == PID + MRAC u_ad gated by output_injection_on and simplex fade; CTRL_PID == pure PID.
+	Throttle_out = Controller_Update(CTRL_AXIS_Z, Ctrler.Z_ratePID.U) + Throttle_th;
+	u_gyrox      = Controller_Update(CTRL_AXIS_ROLL, Ctrler.gyroxPID.U);
+	u_gyroy      = -Controller_Update(CTRL_AXIS_PITCH, Ctrler.gyroyPID.U); // Motor mixer needs gyroy reversed
+	u_gyroz      = Controller_Update(CTRL_AXIS_YAW, Ctrler.gyrozPID.U);
 	{
 		float pwm_lo = 2000.0f + gs_throttle_min_pct * 2000.0f;
 		float pwm_hi = 2000.0f + gs_throttle_max_pct * 2000.0f;

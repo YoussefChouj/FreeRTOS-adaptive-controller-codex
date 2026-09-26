@@ -93,7 +93,7 @@ def main():
                           "P_vv_final": [P[0], P[1]], "P_bax_final": P[2], "bias_frozen": g[6],
                           "healthy": g[5], "fallback_count": g[8]}
             print(f"mode {m}: {results[m]}", flush=True)
-        p.write_memory(A["req"], 0, 8)      # leave the default (FIXED) applied
+        p.write_memory(A["req"], 2, 8)      # restore the firmware default (EKF_BIAS_GATED)
         p.write_memory(A["reinit"], 1, 8)
     print("csv", out)
 

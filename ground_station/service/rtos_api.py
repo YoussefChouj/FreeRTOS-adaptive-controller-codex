@@ -7,6 +7,8 @@ import threading
 import time
 
 CACHE_S = 2.0
+PREV_MAX_AGE_S = 20.0   # CYCCNT wraps every 2^32/168 MHz = 25.6 s: an older prev gives a wrong modular delta
+COLD_WAIT_S = 2.5      # > one 1 Hz firmware refresh
 
 _lock = threading.Lock()
 _cache = None          # last payload
@@ -37,9 +39,20 @@ def get_rtos_state():
     if not _lock.acquire(blocking=False):
         return _cache if _cache is not None else {"available": False, "reason": "probe busy"}
     try:
-        with _open_reader() as lr:
-            snap = rtos.read_snapshot(lr, name_cache=_name_cache)
         prev = _prev_snap
+        if prev is not None and now - prev["t_host"] > PREV_MAX_AGE_S:
+            prev = None
+        with _open_reader() as lr:
+            if prev is None:
+                # cold start or stale prev: take the window inside this call, across one firmware refresh
+                prev = rtos._snapshot_retry(lr, _name_cache)
+                deadline = time.time() + COLD_WAIT_S
+                snap = prev
+                while time.time() < deadline and snap["g_task_snapshot_total_time"] == prev["g_task_snapshot_total_time"]:
+                    time.sleep(0.2)
+                    snap = rtos._snapshot_retry(lr, _name_cache)
+            else:
+                snap = rtos._snapshot_retry(lr, _name_cache)
         payload = rtos.build_report(snap, prev)
         if payload["cpu_window_s"] is None and _cache is not None:
             # firmware 1 Hz snapshot has not advanced since the last refresh: keep prev, reuse the last CPU %

@@ -1,11 +1,24 @@
 *** Using Compiler 'V5.06 update 3 (build 300)', folder: 'C:\Keil_v5\ARM\ARMCC\Bin'
 Build target 'JX_FLY'
-compiling send_data.c...
+compiling controller.c...
+compiling main.c...
+..\Global_file\global_declare.h(329): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(349): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+main.c: 2 warnings, 0 errors
+compiling StabilizerTask.c...
+..\Global_file\global_declare.h(329): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
+..\Global_file\global_declare.h(349): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+          __asm volatile("mov r0, r0\n" \
 ..\BSP\rpm.h(87): warning:  #1-D: last line of file ends without a newline
   #endif
-..\TASK\send_data.c: 1 warning, 0 errors
+..\TASK\StabilizerTask.c(82): warning:  #9-D: nested comment is not allowed
+  /* Optical-flow velocity-bias estimation mode selector.
+..\TASK\StabilizerTask.c: 4 warnings, 0 errors
 linking...
-Program Size: Code=94636 RO-data=4304 RW-data=2692 ZI-data=122012  
+Program Size: Code=94700 RO-data=4360 RW-data=2692 ZI-data=122012  
 FromELF: creating hex file...
-"..\OBJ\JX_FLY.axf" - 0 Error(s), 1 Warning(s).
-Build Time Elapsed:  00:00:07
+"..\OBJ\JX_FLY.axf" - 0 Error(s), 6 Warning(s).
+Build Time Elapsed:  00:00:10

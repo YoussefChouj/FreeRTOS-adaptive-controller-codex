@@ -505,6 +505,11 @@
               <FilePath>..\API\ekf.c</FilePath>
             </File>
             <File>
+              <FileName>controller.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\API\controller.c</FilePath>
+            </File>
+            <File>
               <FileName>ekf_of.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\API\ekf_of.c</FilePath>

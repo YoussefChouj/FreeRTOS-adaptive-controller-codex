@@ -1,6 +1,7 @@
 #include "main.h"
 #include "creat_task.h"
 #include "mrac.h"
+#include "controller.h"
 #include "gyro_filter.h"
 #include "fault_capture.h"
 #include "platform_registry.h"
@@ -420,7 +421,7 @@ void Stabilizer_Task(void *pvParameters)
     uint32_t last_cyccnt = DWT->CYCCNT;
     uint16_t warm = 0;
     PreviousWakeTime = xTaskGetTickCount();
-    MRAC_Init(); // Must run once before the control loop: populates mrac_config_* gains,
+    Controller_Init(); // MRAC_Init() inside. Must run once before the control loop: populates mrac_config_* gains,
                  // mrac_to_mixer scalers, and axis_enable flags. Without this call all
                  // configs stay zero-initialized, causing division-by-zero (u_nom = +/-inf)
                  // and NaN in u_ad that corrupts the motor throttle channel.

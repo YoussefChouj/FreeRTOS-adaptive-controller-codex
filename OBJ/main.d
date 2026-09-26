@@ -86,6 +86,7 @@
 ..\obj\main.o: ..\TASK\send_data.h
 ..\obj\main.o: ..\Global_file\creat_task.h
 ..\obj\main.o: ..\API\mrac.h
+..\obj\main.o: ..\API\controller.h
 ..\obj\main.o: ..\API\gyro_filter.h
 ..\obj\main.o: fault_capture.h
 ..\obj\main.o: ..\firmware\platform_registry.h

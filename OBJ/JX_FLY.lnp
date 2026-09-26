@@ -18,6 +18,7 @@
 "..\obj\sysid.o"
 "..\obj\gyro_filter.o"
 "..\obj\ekf.o"
+"..\obj\controller.o"
 "..\obj\ekf_of.o"
 "..\obj\thrust_estimators.o"
 "..\obj\calib.o"

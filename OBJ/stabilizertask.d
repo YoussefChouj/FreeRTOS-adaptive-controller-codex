@@ -90,6 +90,7 @@
 ..\obj\stabilizertask.o: ..\API\ekf.h
 ..\obj\stabilizertask.o: ..\USER\ADC.h
 ..\obj\stabilizertask.o: ..\API\mrac.h
+..\obj\stabilizertask.o: ..\API\controller.h
 ..\obj\stabilizertask.o: ..\API\gyro_filter.h
 ..\obj\stabilizertask.o: ..\API\sysid.h
 ..\obj\stabilizertask.o: ..\API\rc_input.h
