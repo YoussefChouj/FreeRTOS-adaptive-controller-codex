@@ -1024,22 +1024,25 @@ void Compute_Motor(void)
 	mymotor.motor1= Throttle_out
 									-u_gyroy//pitch
 									-u_gyrox//
-									-u_gyroz;//yaw  // FIX 2026-09-10: M1 is BR,CW -> -yaw (decrease for +u_gyroz)
+									+u_gyroz;//yaw  // FIX 2026-09-27: sign flipped, see M4
 
 	mymotor.motor2= Throttle_out
 									+u_gyroy//pitch
 									+u_gyrox//roll
-									-u_gyroz;//yaw  // FIX 2026-09-10: M2 is FL,CW -> -yaw
+									+u_gyroz;//yaw  // FIX 2026-09-27: sign flipped, see M4
 
 	mymotor.motor3= Throttle_out
 									-u_gyroy//pitch
 									+u_gyrox//roll
-									+u_gyroz;//yaw  // FIX 2026-09-10: M3 is BL,CCW -> +yaw
+									-u_gyroz;//yaw  // FIX 2026-09-27: sign flipped, see M4
 
   mymotor.motor4= Throttle_out
 									+u_gyroy//pitch
 									-u_gyrox//roll
-									+u_gyroz;//yaw  // FIX 2026-09-10: M4 is FR,CCW -> +yaw
+									-u_gyroz;//yaw  // FIX 2026-09-27: the 09-10 signs were positive feedback.
+									// All 5 flights of 2026-09-27: +gyrozPID.U (M3/M4 up) drove gyroz.FB
+									// negative to -258 deg/s with sticks centred. Speeding CW props (M1/M2)
+									// yaws the body CCW (+), so +u_gyroz raises M1/M2.
 	
 	/* Shadow thrust estimators (200 Hz, after motor mixer, before Set_PWM_Motors).
 	 * Three models: empirical (PWM→thrust bench LUT), blade-element (RPM→thrust),
