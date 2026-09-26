@@ -631,6 +631,34 @@ function runChecks() {
     env.destroy();
   }
 
+  // 15. World origin: set here -> current reads (0, 0), new samples offset; reset restores.
+  {
+    console.log('\n[CHECK 15: set/reset world origin (display only)]');
+    const env = loadPanel();
+    const T = env.sandbox.__pathPanelTest;
+    const near = (a, b2) => Math.abs(a - b2) < 1e-9;
+    env.feed(frameC(100, 50));
+    const raw = T.getCurrentPos();
+    env.click('pp-set-origin');
+    const o = T.getOrigin();
+    assert.ok(near(o.x, raw.x) && near(o.y, raw.y), 'origin = raw current');
+    let c = T.getCurrentPos();
+    assert.ok(near(c.x, 0) && near(c.y, 0), 'current must read 0,0 after set origin');
+    env.feed(frameC(150, 50));
+    c = T.getCurrentPos();
+    assert.ok(near(c.y, 0) && c.x > 0, 'new sample offset by origin');
+    const moved = c.x;
+    env.click('pp-clear-origin');
+    c = T.getCurrentPos();
+    assert.ok(near(c.x, moved + raw.x) && near(c.y, raw.y), 'reset restores firmware frame');
+    assert.ok(T.validOrigin({ x: 0, y: 0 }) && !T.validOrigin({ x: NaN, y: 0 }) && !T.validOrigin({ x: '1', y: 0 }));
+    const arr = [{ x: 1, y: 2 }];
+    T.shiftPoints(arr, 1, 2);
+    assert.ok(arr[0].x === 0 && arr[0].y === 0);
+    console.log('  PASS: origin (' + raw.x + ', ' + raw.y + ') -> current 0,0; next sample x=' + moved + '; reset restores');
+    env.destroy();
+  }
+
   console.log('\nALL CHECKS PASSED SUCCESSFULLY.');
 }
 

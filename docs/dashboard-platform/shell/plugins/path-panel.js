@@ -58,6 +58,13 @@
   var ROOM_DEFAULT = { w: 1.4, d: 1.4, h: 1.0 };
   var ROOM_TOL = 0.01;
   var _room = loadRoom();
+
+  // ── World origin (display only) ─────────────────────────────────────────
+  // Measured and desired x/y are shown relative to _origin, a point in the
+  // firmware frame. Nothing is sent to the drone; waypoints, home and target
+  // stay in the room frame.
+  var ORIGIN_KEY = 'pp_origin_v1';
+  var _origin = loadOrigin();
   var _desiredPath = [];
   var _trackingError = 0;
 
@@ -97,6 +104,26 @@
     try { r = JSON.parse(storageGet(ROOM_KEY) || 'null'); } catch (e) { r = null; }
     if (r) r = { w: Number(r.w), d: Number(r.d), h: Number(r.h) };
     return validRoom(r) ? r : { w: ROOM_DEFAULT.w, d: ROOM_DEFAULT.d, h: ROOM_DEFAULT.h };
+  }
+
+  function validOrigin(o) {
+    return !!o && typeof o.x === 'number' && typeof o.y === 'number' && isFinite(o.x) && isFinite(o.y);
+  }
+
+  function loadOrigin() {
+    var o = null;
+    try { o = JSON.parse(storageGet(ORIGIN_KEY) || 'null'); } catch (e) { o = null; }
+    return validOrigin(o) ? { x: o.x, y: o.y } : { x: 0, y: 0 };
+  }
+
+  // Move every point of arr by -dx, -dy in place (re-expressing it after the
+  // origin moved by dx, dy).
+  function shiftPoints(arr, dx, dy) {
+    var i;
+    for (i = 0; i < arr.length; i++) {
+      arr[i].x -= dx;
+      arr[i].y -= dy;
+    }
   }
 
   function roomBounds() {
@@ -321,13 +348,13 @@
   function addPoint(pos, optTime) {
     if (!pos || pos.x == null || pos.y == null) return;
     var t = pos.t !== undefined ? pos.t : (optTime !== undefined ? optTime : nextTimestamp());
-    _trajectory.push({ x: pos.x, y: pos.y, z: pos.z, yaw: pos.yaw, t: t });
+    _trajectory.push({ x: pos.x - _origin.x, y: pos.y - _origin.y, z: pos.z, yaw: pos.yaw, t: t });
     if (_trajectory.length > MAX_TRAIL) {
       _trajectory.shift();
     }
 
     // Update current position
-    _currentPos = { x: pos.x, y: pos.y, z: pos.z == null ? null : pos.z, yaw: pos.yaw || 0 };
+    _currentPos = { x: pos.x - _origin.x, y: pos.y - _origin.y, z: pos.z == null ? null : pos.z, yaw: pos.yaw || 0 };
 
     // Recalculate metrics
     updateMetrics();
@@ -336,7 +363,7 @@
   function addDesiredPoint(des, optTime) {
     if (!des || des.x == null || des.y == null) return;
     var t = des.t !== undefined ? des.t : (optTime !== undefined ? optTime : nextTimestamp());
-    _desiredTrajectory.push({ x: des.x, y: des.y, z: des.z == null ? 0 : des.z, t: t });
+    _desiredTrajectory.push({ x: des.x - _origin.x, y: des.y - _origin.y, z: des.z == null ? 0 : des.z, t: t });
     if (_desiredTrajectory.length > MAX_TRAIL) {
       _desiredTrajectory.shift();
     }
@@ -1368,6 +1395,37 @@
     render();
   }
 
+  function setOrigin(o) {
+    var dx = o.x - _origin.x;
+    var dy = o.y - _origin.y;
+    shiftPoints(_trajectory, dx, dy);
+    shiftPoints(_desiredTrajectory, dx, dy);
+    if (_currentPos) shiftPoints([_currentPos], dx, dy);
+    _origin = { x: o.x, y: o.y };
+    storageSet(ORIGIN_KEY, JSON.stringify(_origin));
+    renderOriginStatus();
+    render();
+  }
+
+  // The current measured position becomes (0, 0); altitude is untouched.
+  function setOriginHere() {
+    if (!_currentPos) {
+      if (q('pp-origin-status')) q('pp-origin-status').textContent = 'No measured position yet; origin unchanged.';
+      return;
+    }
+    setOrigin({ x: _currentPos.x + _origin.x, y: _currentPos.y + _origin.y });
+  }
+
+  function clearOrigin() { setOrigin({ x: 0, y: 0 }); }
+
+  function renderOriginStatus() {
+    var el = q('pp-origin-status');
+    if (!el) return;
+    el.textContent = (_origin.x || _origin.y)
+      ? 'Origin at firmware (' + _origin.x.toFixed(2) + ', ' + _origin.y.toFixed(2) + ') m; display only.'
+      : 'Origin = firmware origin.';
+  }
+
   // ── Home/Target markers ──────────────────────────────────────────────────
   function setHomeHere() {
     if (_currentPos) {
@@ -1941,6 +1999,11 @@
       '<button id="pp-set-home" class="pp-action-btn" title="Home = current position">Set Home = cur</button>',
       '<button id="pp-set-target" class="pp-action-btn" title="Target = current position">Set Target = cur</button>',
       '</div>',
+      '<div class="pp-action-row" style="margin-top:4px">',
+      '<button id="pp-set-origin" class="pp-action-btn" title="Show the current position as x = y = 0 (display only)">Set origin here</button>',
+      '<button id="pp-clear-origin" class="pp-action-btn" title="Back to the firmware origin">Reset origin</button>',
+      '</div>',
+      '<div id="pp-origin-status" class="pp-hint"></div>',
       '</div>',
 
       '<div>',
@@ -2122,6 +2185,9 @@
 
       // Home/Target buttons
       q('pp-set-home').addEventListener('click', setHomeHere);
+      q('pp-set-origin').addEventListener('click', setOriginHere);
+      q('pp-clear-origin').addEventListener('click', clearOrigin);
+      renderOriginStatus();
       q('pp-set-target').addEventListener('click', setTargetHere);
       q('pp-set-home-manual').addEventListener('click', setHomeManual);
       q('pp-set-target-manual').addEventListener('click', setTargetManual);
@@ -2307,6 +2373,9 @@
     roomViewPose: roomViewPose, validRoom: validRoom,
     presetPath: presetPath, PRESET_KINDS: PRESET_KINDS, PRESET_MARGIN: PRESET_MARGIN,
     serializePath: serializePath, parsePathFile: parsePathFile, libraryPut: libraryPut, LIB_MAX: LIB_MAX,
+    shiftPoints: shiftPoints, validOrigin: validOrigin,
+    getOrigin: function () { return { x: _origin.x, y: _origin.y }; },
+    getCurrentPos: function () { return _currentPos && { x: _currentPos.x, y: _currentPos.y }; },
     clampToRoom: clampToRoom, thinAppend: thinAppend, DRAW_MIN_STEP: DRAW_MIN_STEP,
     screenToWorld: screenToWorld, worldToScreen: worldToScreen, roomFitZoom: roomFitZoom,
     getRoom: function () { return { w: _room.w, d: _room.d, h: _room.h }; }
