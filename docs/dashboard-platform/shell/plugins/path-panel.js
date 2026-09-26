@@ -47,6 +47,14 @@
   var _threeErrorLabel = null;
   var _threeFollowDrone = false;
   var _MAX_3D_POINTS = 20000;
+  var _THREE = null;
+  var _threeRoomGroup = null;
+
+  // ── Flight room (metres): centred on x/y origin, floor at z = 0 ────────
+  var ROOM_KEY = 'pp_room_v1';
+  var ROOM_DEFAULT = { w: 1.4, d: 1.4, h: 1.0 };
+  var ROOM_TOL = 0.01;
+  var _room = loadRoom();
   var _desiredPath = [];
   var _trackingError = 0;
 
@@ -68,6 +76,68 @@
 
   // ── Helpers ────────────────────────────────────────────────────────────
   function q(id) { return document.getElementById(id); }
+
+  // localStorage can be missing or throw (private window, blocked site data).
+  function storageGet(key) {
+    try { return window.localStorage ? window.localStorage.getItem(key) : null; } catch (e) { return null; }
+  }
+  function storageSet(key, val) {
+    try { if (window.localStorage) window.localStorage.setItem(key, val); } catch (e) { /* display prefs only */ }
+  }
+
+  function validRoom(r) {
+    return !!r && r.w >= 0.2 && r.w <= 50 && r.d >= 0.2 && r.d <= 50 && r.h >= 0.2 && r.h <= 20;
+  }
+
+  function loadRoom() {
+    var r = null;
+    try { r = JSON.parse(storageGet(ROOM_KEY) || 'null'); } catch (e) { r = null; }
+    if (r) r = { w: Number(r.w), d: Number(r.d), h: Number(r.h) };
+    return validRoom(r) ? r : { w: ROOM_DEFAULT.w, d: ROOM_DEFAULT.d, h: ROOM_DEFAULT.h };
+  }
+
+  function roomBounds() {
+    return { x0: -_room.w / 2, x1: _room.w / 2, y0: -_room.d / 2, y1: _room.d / 2, z0: 0, z1: _room.h };
+  }
+
+  function isOutOfRoom(p) {
+    var b = roomBounds();
+    var z = p.z || 0;
+    return p.x < b.x0 - ROOM_TOL || p.x > b.x1 + ROOM_TOL ||
+      p.y < b.y0 - ROOM_TOL || p.y > b.y1 + ROOM_TOL ||
+      z < b.z0 - ROOM_TOL || z > b.z1 + ROOM_TOL;
+  }
+
+  function countOutOfRoom(points) {
+    var n = 0;
+    for (var i = 0; i < points.length; i++) if (isOutOfRoom(points[i])) n++;
+    return n;
+  }
+
+  // Camera pose (three.js axes: y up, z = world y) that frames the whole room.
+  function roomViewPose(preset) {
+    var rad = 0.5 * Math.sqrt(_room.w * _room.w + _room.d * _room.d + _room.h * _room.h);
+    var dist = 2.3 * rad;   // fov 60: rad / sin(30 deg) = 2 rad, plus margin
+    var t = { x: 0, y: _room.h / 2, z: 0 };
+    var p;
+    if (preset === 'top') p = { x: t.x, y: t.y + dist, z: t.z + 0.001 };
+    else if (preset === 'side') p = { x: t.x + dist, y: t.y, z: t.z };
+    else if (preset === 'front') p = { x: t.x, y: t.y, z: t.z + dist };
+    else {
+      var k = dist / Math.sqrt(1 + 0.5625 + 1);
+      p = { x: t.x + k, y: t.y + 0.75 * k, z: t.z + k };
+    }
+    return { pos: p, target: t };
+  }
+
+  // Ribbon segment colour: blue inside the room, red when either end is outside.
+  function actualSegColor(points, i, out) {
+    if (isOutOfRoom(points[i]) || isOutOfRoom(points[i + 1])) {
+      out[0] = 1.0; out[1] = 0.25; out[2] = 0.25;
+    } else {
+      out[0] = 0.29; out[1] = 0.62; out[2] = 1.0;
+    }
+  }
 
   function fmtNum(v, dec) {
     if (v == null) return '—';
@@ -782,15 +852,19 @@
     });
   }
 
-  function updateRibbonGeometry(geo, points, radius, dashed) {
+  // colorFn(points, i, rgbOut), optional: per-segment colour for geometries with a colour attribute.
+  function updateRibbonGeometry(geo, points, radius, dashed, colorFn) {
     if (!geo || !points || points.length < 2) {
       if (geo) geo.setDrawRange(0, 0);
       return;
     }
     var attr = geo.getAttribute('position');
     var arr = attr.array;
+    var colAttr = colorFn ? geo.getAttribute('color') : null;
+    var carr = colAttr ? colAttr.array : null;
+    var rgb = [0, 0, 0];
     var vIdx = 0;
-    var r = radius || 0.08;
+    var r = radius || 0.012;
     var count = points.length;
     var maxSegments = (arr.length / 36) | 0;
     var segLimit = Math.min(count - 1, maxSegments);
@@ -806,7 +880,7 @@
       if (len < 1e-4) continue;
 
       if (dashed) {
-        var dashStep = Math.floor(accumDist / 0.5);
+        var dashStep = Math.floor(accumDist / 0.08);
         accumDist += len;
         if (dashStep % 2 !== 0) {
           continue;
@@ -849,9 +923,17 @@
       arr[vIdx++] = ax - w2x; arr[vIdx++] = ay - w2y; arr[vIdx++] = az - w2z;
       arr[vIdx++] = bx + w2x; arr[vIdx++] = by + w2y; arr[vIdx++] = bz + w2z;
       arr[vIdx++] = bx - w2x; arr[vIdx++] = by - w2y; arr[vIdx++] = bz - w2z;
+
+      if (carr) {
+        colorFn(points, i, rgb);
+        for (var c = vIdx - 36; c < vIdx; c += 3) {
+          carr[c] = rgb[0]; carr[c + 1] = rgb[1]; carr[c + 2] = rgb[2];
+        }
+      }
     }
 
     attr.needsUpdate = true;
+    if (colAttr) colAttr.needsUpdate = true;
     geo.setDrawRange(0, vIdx / 3);
   }
 
@@ -865,9 +947,8 @@
     _threeScene = new THREE.Scene();
     _threeScene.background = new THREE.Color(0x0a0a1a);
 
-    _threeCamera = new THREE.PerspectiveCamera(60, w / h, 0.05, 1000);
-    _threeCamera.position.set(8, 6, 8);
-    _threeCamera.lookAt(0, 0, 0);
+    _THREE = THREE;
+    _threeCamera = new THREE.PerspectiveCamera(60, w / h, 0.01, 100);
 
     _threeRenderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
     _threeRenderer.setSize(w, h);
@@ -877,29 +958,28 @@
     _threeControls.enableDamping = true;
     _threeControls.dampingFactor = 0.08;
     _threeControls.screenSpacePanning = true;
-    _threeControls.minDistance = 5;
-    _threeControls.maxDistance = 2000;
+    _threeControls.minDistance = 0.2;
+    _threeControls.maxDistance = 20;
+    reset3DView();
 
     var ambient = new THREE.AmbientLight(0x404060, 1.5);
     _threeScene.add(ambient);
     var dirLight = new THREE.DirectionalLight(0xffffff, 2);
-    dirLight.position.set(50, 100, 50);
+    dirLight.position.set(3, 6, 3);
     _threeScene.add(dirLight);
 
-    // Ground grid
-    _threeGrid = new THREE.GridHelper(20, 20, 0x333355, 0x222244);
-    _threeScene.add(_threeGrid);
-
-    // XYZ axes
-    _threeAxes = new THREE.AxesHelper(2);
-    _threeScene.add(_threeAxes);
+    // Room box, floor grid and axes (rebuilt when the room size changes)
+    buildRoom3D();
 
     // Thick cross-ribbon geometry helper (antialiased 3D line from any viewing angle)
-    function buildRibbonGeometry(maxPoints) {
+    function buildRibbonGeometry(maxPoints, withColor) {
       var maxSegments = Math.max(1, maxPoints - 1);
       var positions = new Float32Array(maxSegments * 12 * 3);
       var geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      if (withColor) {
+        geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(maxSegments * 12 * 3), 3));
+      }
       geo.setDrawRange(0, 0);
       return geo;
     }
@@ -916,10 +996,10 @@
     _threeLineDesired.frustumCulled = false;
     _threeScene.add(_threeLineDesired);
 
-    // Actual path (thick cross-ribbon mesh, solid cyan/blue 0x4a9eff)
-    var actualGeo = buildRibbonGeometry(_MAX_3D_POINTS);
+    // Actual path (thick cross-ribbon mesh; per-segment colour: blue inside the room, red outside)
+    var actualGeo = buildRibbonGeometry(_MAX_3D_POINTS, true);
     var actualMat = new THREE.MeshBasicMaterial({
-      color: 0x4a9eff,
+      vertexColors: true,
       side: THREE.DoubleSide,
       transparent: true,
       opacity: 0.85
@@ -935,8 +1015,8 @@
     planGeo.setDrawRange(0, 0);
     var planMat = new THREE.LineDashedMaterial({
       color: 0xf5a623,
-      dashSize: 2,
-      gapSize: 1,
+      dashSize: 0.05,
+      gapSize: 0.03,
       transparent: true,
       opacity: 0.5
     });
@@ -944,14 +1024,14 @@
     _threeScene.add(_threeLinePlan);
 
     // Drone marker
-    var markerGeo = new THREE.SphereGeometry(0.15, 16, 16);
+    var markerGeo = new THREE.SphereGeometry(0.03, 16, 16);
     var markerMat = new THREE.MeshPhongMaterial({ color: 0x4ecca3, emissive: 0x22aa66 });
     var markerMesh = new THREE.Mesh(markerGeo, markerMat);
-    var arrowGeo = new THREE.ConeGeometry(0.1, 0.3, 8);
+    var arrowGeo = new THREE.ConeGeometry(0.02, 0.06, 12);
     var arrowMat = new THREE.MeshPhongMaterial({ color: 0x4ecca3 });
     var arrow = new THREE.Mesh(arrowGeo, arrowMat);
     arrow.rotation.x = Math.PI / 2;
-    arrow.position.z = 0.3;
+    arrow.position.z = 0.05;
     _threeDroneMarker = new THREE.Group();
     _threeDroneMarker.add(markerMesh);
     _threeDroneMarker.add(arrow);
@@ -965,8 +1045,8 @@
     var errorTexture = new THREE.CanvasTexture(errorCanvas);
     var errorSpriteMat = new THREE.SpriteMaterial({ map: errorTexture, transparent: true });
     var errorSprite = new THREE.Sprite(errorSpriteMat);
-    errorSprite.scale.set(1.6, 0.4, 1);
-    errorSprite.position.set(0, 0.6, 0);
+    errorSprite.scale.set(0.4, 0.1, 1);
+    errorSprite.position.set(0, _room.h + 0.1, 0);
     _threeErrorLabel.sprite = errorSprite;
     _threeScene.add(errorSprite);
     updateErrorSprite();
@@ -1010,12 +1090,15 @@
 
     // Update actual path
     if (activeActual.length > 0 && _threeLineActual) {
-      updateRibbonGeometry(_threeLineActual.geometry, activeActual, 0.08, false);
+      updateRibbonGeometry(_threeLineActual.geometry, activeActual, 0.012, false, actualSegColor);
 
       if (_threeDroneMarker) {
         var lastPt = activeActual[activeActual.length - 1];
         _threeDroneMarker.position.set(lastPt.x, lastPt.z || 0, lastPt.y);
         _threeDroneMarker.rotation.y = -(lastPt.yaw || 0) * (Math.PI / 180);
+        if (_threeErrorLabel && _threeErrorLabel.sprite) {
+          _threeErrorLabel.sprite.position.set(lastPt.x, (lastPt.z || 0) + 0.12, lastPt.y);
+        }
       }
     } else if (_threeLineActual) {
       _threeLineActual.geometry.setDrawRange(0, 0);
@@ -1023,7 +1106,7 @@
 
     // Update desired path
     if (activeDesired.length > 0 && _threeLineDesired) {
-      updateRibbonGeometry(_threeLineDesired.geometry, activeDesired, 0.04, true);
+      updateRibbonGeometry(_threeLineDesired.geometry, activeDesired, 0.007, true);
     } else if (_threeLineDesired) {
       _threeLineDesired.geometry.setDrawRange(0, 0);
     }
@@ -1046,11 +1129,17 @@
     }
 
     updateErrorSprite();
+    var oobEl = q('pp-3d-oob');
+    if (oobEl) {
+      var oob = countOutOfRoom(activeActual);
+      oobEl.textContent = 'Outside room: ' + oob + ' / ' + activeActual.length + ' pts';
+      oobEl.style.color = oob > 0 ? '#ff5050' : '';
+    }
 
     // Follow drone
     if (_threeFollowDrone && activeActual.length > 0) {
       var lp = activeActual[activeActual.length - 1];
-      _threeCamera.position.set(lp.x + 5, (lp.z || 0) + 5, lp.y + 5);
+      _threeCamera.position.set(lp.x + 0.6, (lp.z || 0) + 0.45, lp.y + 0.6);
       _threeControls.target.set(lp.x, lp.z || 0, lp.y);
     }
 
@@ -1077,26 +1166,67 @@
   }
 
   function reset3DView() {
-    if (!_threeCamera || !_threeControls) return;
-    _threeCamera.position.set(8, 6, 8);
-    _threeControls.target.set(0, 0, 0);
-    _threeControls.update();
+    presetView('iso');
   }
 
   function presetView(preset) {
     if (!_threeCamera || !_threeControls) return;
-    var t = _threeControls.target.clone();
-    if (preset === 'top') {
-      _threeCamera.position.set(t.x, 20, t.z);
-    } else if (preset === 'side') {
-      _threeCamera.position.set(t.x + 20, 2, t.z);
-    } else if (preset === 'front') {
-      _threeCamera.position.set(t.x, 2, t.z + 20);
-    } else if (preset === 'iso') {
-      _threeCamera.position.set(t.x + 8, 6, t.z + 8);
-    }
-    _threeCamera.lookAt(t);
+    var pose = roomViewPose(preset);
+    _threeControls.target.set(pose.target.x, pose.target.y, pose.target.z);
+    _threeCamera.position.set(pose.pos.x, pose.pos.y, pose.pos.z);
+    _threeCamera.lookAt(_threeControls.target);
     _threeControls.update();
+  }
+
+  // Translucent room box, 0.1 m / 0.5 m floor grid and 0.3 m axes.
+  function buildRoom3D() {
+    var THREE = _THREE;
+    var g, boxGeo, walls, edges, size, minor, major;
+    if (!THREE || !_threeScene) return;
+    if (_threeRoomGroup) {
+      _threeScene.remove(_threeRoomGroup);
+      _threeRoomGroup.traverse(function (o) {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) o.material.dispose();
+      });
+    }
+    g = new THREE.Group();
+    boxGeo = new THREE.BoxGeometry(_room.w, _room.h, _room.d);
+    walls = new THREE.Mesh(boxGeo, new THREE.MeshBasicMaterial({
+      color: 0x4a9eff, transparent: true, opacity: 0.04, side: THREE.BackSide, depthWrite: false
+    }));
+    walls.position.y = _room.h / 2;
+    g.add(walls);
+    edges = new THREE.LineSegments(new THREE.EdgesGeometry(boxGeo),
+      new THREE.LineBasicMaterial({ color: 0x6a8cff, transparent: true, opacity: 0.6 }));
+    edges.position.y = _room.h / 2;
+    g.add(edges);
+
+    // Square grids covering the room plus 0.5 m, in whole 0.5 m cells.
+    size = Math.ceil((Math.max(_room.w, _room.d) + 0.5) / 0.5) * 0.5;
+    minor = new THREE.GridHelper(size, Math.round(size / 0.1), 0x1c1c38, 0x1c1c38);
+    major = new THREE.GridHelper(size, Math.round(size / 0.5), 0x3a3a6a, 0x3a3a6a);
+    major.position.y = 0.001;
+    g.add(minor);
+    g.add(major);
+    _threeGrid = major;
+
+    _threeAxes = new THREE.AxesHelper(0.3);
+    _threeAxes.position.y = 0.002;
+    g.add(_threeAxes);
+
+    _threeRoomGroup = g;
+    _threeScene.add(g);
+  }
+
+  function setRoom(r) {
+    if (!validRoom(r)) return false;
+    _room = { w: r.w, d: r.d, h: r.h };
+    storageSet(ROOM_KEY, JSON.stringify(_room));
+    buildRoom3D();
+    reset3DView();
+    render3D();
+    return true;
   }
 
   function dispose3D() {
@@ -1119,6 +1249,7 @@
     _threeDroneMarker = null;
     _threeAxes = null;
     _threeGrid = null;
+    _threeRoomGroup = null;
     _threeErrorLabel = null;
     _threeLoaded = false;
   }
@@ -1380,6 +1511,7 @@
       '.pp-3d-follow-toggle.on { background: var(--accent); }',
       '.pp-3d-follow-toggle::after { content: \'\'; width: 12px; height: 12px; border-radius: 50%; background: #fff; position: absolute; top: 1px; left: 1px; transition: left 0.2s; }',
       '.pp-3d-follow-toggle.on::after { left: 17px; }',
+      '.pp-room-in { width: 44px; padding: 2px 3px; font-size: 10px; background: rgba(20,20,40,0.85); color: var(--text); border: 1px solid var(--border); border-radius: 3px; }',
       '.pp-hint { font-size: 10px; color: var(--muted); margin-top: 4px; line-height: 1.4; }',
       '</style>',
 
@@ -1415,10 +1547,18 @@
       '<div class="pp-3d-legend">',
       '<div class="pp-3d-legend-item"><div class="pp-3d-legend-line" style="background:#4a9eff"></div>Actual path</div>',
       '<div class="pp-3d-legend-item"><div class="pp-3d-legend-dash"></div>Desired path</div>',
+      '<div class="pp-3d-legend-item"><div class="pp-3d-legend-line" style="background:#ff4040"></div>Outside room</div>',
       '<div id="pp-3d-error" class="pp-3d-legend-item" style="margin-top:4px;color:#4a9eff">Error: — m</div>',
+      '<div id="pp-3d-oob" class="pp-3d-legend-item">Outside room: 0 / 0 pts</div>',
       '</div>',
       '<div class="pp-3d-controls" style="bottom:auto;top:8px;left:auto;right:8px">',
       '<div class="pp-3d-follow-row"><span>Follow drone</span><div id="pp-3d-follow-toggle" class="pp-3d-follow-toggle" role="switch" aria-checked="false" title="Toggle follow drone"></div></div>',
+      '<div class="pp-3d-follow-row" title="Flight room W x D x H in metres, centred on the origin, floor at z = 0">',
+      '<span>Room m</span>',
+      '<input id="pp-room-w" class="pp-room-in" type="number" step="0.1" min="0.2" max="50">',
+      '<span>&#215;</span><input id="pp-room-d" class="pp-room-in" type="number" step="0.1" min="0.2" max="50">',
+      '<span>&#215;</span><input id="pp-room-h" class="pp-room-in" type="number" step="0.1" min="0.2" max="20">',
+      '</div>',
       '</div>',
       '</div>',
       '</div>',
@@ -1621,6 +1761,22 @@
       var _3dc = q('pp-3d-clear');
       if (_3dc) _3dc.addEventListener('click', function () { clear3D(); });
 
+      // Room size inputs
+      var roomIds = ['pp-room-w', 'pp-room-d', 'pp-room-h'];
+      var syncRoomInputs = function () {
+        var vals = [_room.w, _room.d, _room.h];
+        for (var ri = 0; ri < 3; ri++) {
+          var inp = q(roomIds[ri]);
+          if (inp) inp.value = String(vals[ri]);
+        }
+      };
+      var onRoomChange = function () {
+        var v = roomIds.map(function (id) { var el = q(id); return el ? parseFloat(el.value) : NaN; });
+        if (!setRoom({ w: v[0], d: v[1], h: v[2] })) syncRoomInputs();
+      };
+      roomIds.forEach(function (id) { var el = q(id); if (el) el.addEventListener('change', onRoomChange); });
+      syncRoomInputs();
+
       // Follow drone toggle
       var followToggle = q('pp-3d-follow-toggle');
       if (followToggle) {
@@ -1715,6 +1871,13 @@
     dispose3D();
     _threeFollowDrone = false;
     _trackingError = 0;
+  };
+
+  // Pure helpers exposed for the node harness (no DOM or WebGL needed).
+  window.__pathPanelTest = {
+    roomBounds: roomBounds, isOutOfRoom: isOutOfRoom, countOutOfRoom: countOutOfRoom,
+    roomViewPose: roomViewPose, validRoom: validRoom,
+    getRoom: function () { return { w: _room.w, d: _room.d, h: _room.h }; }
   };
 
   window.__registerPlugin__('Path Planning', window.__PLUGIN_INIT__, window.__PLUGIN_DESTROY__);

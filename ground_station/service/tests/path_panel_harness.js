@@ -489,6 +489,38 @@ function runChecks() {
     console.log('  PASS: every local helper render3D calls is declared at plugin scope');
   }
 
+  // 10. Room model: default size, out-of-room count, camera presets aimed inside the room.
+  {
+    console.log('\n[CHECK 10: room bounds, out-of-room count, view presets]');
+    const env = loadPanel();
+    const T = env.sandbox.__pathPanelTest;
+    assert.ok(T, 'window.__pathPanelTest not exposed');
+    const r = T.getRoom();
+    assert.deepStrictEqual([r.w, r.d, r.h], [1.4, 1.4, 1.0], 'default room is not 1.4 x 1.4 x 1.0');
+    const b = T.roomBounds();
+    assert.deepStrictEqual([b.x0, b.x1, b.y0, b.y1, b.z0, b.z1], [-0.7, 0.7, -0.7, 0.7, 0, 1.0]);
+    const pts = [
+      { x: 0, y: 0, z: 0.5 },      // centre
+      { x: 0.705, y: 0, z: 0.5 },  // inside the 1 cm tolerance
+      { x: 0.8, y: 0, z: 0.5 },    // past +x wall
+      { x: 0, y: -0.9, z: 0.5 },   // past -y wall
+      { x: 0, y: 0, z: 1.2 },      // above ceiling
+      { x: 0, y: 0, z: -0.1 },     // below floor
+    ];
+    assert.strictEqual(T.countOutOfRoom(pts), 4, 'out-of-room count');
+    console.log('  PASS: default room 1.4 x 1.4 x 1.0 m, 4/6 test points outside');
+    ['top', 'side', 'front', 'iso'].forEach((name) => {
+      const pose = T.roomViewPose(name);
+      const tgt = { x: pose.target.x, y: pose.target.z, z: pose.target.y };  // three -> room axes
+      assert.ok(!T.isOutOfRoom(tgt), name + ' target outside room');
+      const dist = Math.hypot(pose.pos.x - pose.target.x, pose.pos.y - pose.target.y, pose.pos.z - pose.target.z);
+      assert.ok(dist > 0.2 && dist < 20, name + ' camera distance ' + dist + ' outside controls range');
+    });
+    assert.ok(!T.validRoom({ w: 0.1, d: 1, h: 1 }) && !T.validRoom({ w: NaN, d: 1, h: 1 }), 'invalid room accepted');
+    console.log('  PASS: top/side/front/iso aim inside the room within 0.2..20 m');
+    env.destroy();
+  }
+
   console.log('\nALL CHECKS PASSED SUCCESSFULLY.');
 }
 
