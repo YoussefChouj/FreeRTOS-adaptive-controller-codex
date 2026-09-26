@@ -44,7 +44,7 @@ class TestVendorFiles(unittest.TestCase):
 
     def test_vendor_is_clean_no_unsupported_addons(self):
         line_dir = VENDOR_THREE / 'lines'
-        self.assertFalse(line_dir.exists(), 'lines/ directory removed in favor of thick ribbon/tube mesh')
+        self.assertFalse(line_dir.exists(), 'lines/ addon not vendored; paths are THREE.Line polylines')
 
 
 
@@ -129,9 +129,10 @@ class TestPathPanel3D(unittest.TestCase):
         self.assertIn('BufferGeometry', self.content)
         self.assertIn('setDrawRange', self.content)
 
-    def test_thick_line_ribbon_mesh_support(self):
-        self.assertIn('updateRibbonGeometry', self.content)
-        self.assertIn('buildRibbonGeometry', self.content)
+    def test_thin_smoothed_line(self):
+        self.assertIn('smoothPolyline', self.content)
+        self.assertIn('updateLineGeometry', self.content)
+        self.assertNotIn('Ribbon', self.content)
 
     def test_dispose_on_destroy(self):
         self.assertIn('dispose3D()', self.content)

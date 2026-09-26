@@ -402,6 +402,7 @@
       '      <button class="sm-slot-btn sm-preset-btn" data-preset="of">Optical flow</button>',
       '      <button class="sm-slot-btn sm-preset-btn" data-preset="pid">PID loops</button>',
       '      <button class="sm-slot-btn sm-preset-btn" data-preset="gains">PID gains</button>',
+      '      <button class="sm-slot-btn sm-preset-btn" data-preset="paths3d" title="Position setpoint + feedback for the Paths 3D view; subscribe at the highest rate">Paths 3D position</button>',
       '    </div>',
       '  </div>',
       '  <div style="margin-top:8px;">',
@@ -659,6 +660,7 @@
   // Mirror of the manifests in ground_station/livewatch/manifests.yaml.
   // Adding a new manifest here is a one-line change.
   var _PRESETS = {
+    paths3d: 'Ctrler.locxPID.Des, Ctrler.locxPID.FB, Ctrler.locyPID.Des, Ctrler.locyPID.FB, Ctrler.Z_posPID.Des, Ctrler.Z_posPID.FB, ano_of.earth_x, ano_of.earth_y, ano_of.of_alt_cm, imu_data.yaw',
     mrac: 'mrac_state.roll.Theta[0], mrac_state.roll.Theta[1], mrac_state.roll.Theta[2], mrac_state.roll.e, mrac_state.roll.u_ad, mrac_state.pitch.Theta[0], mrac_state.pitch.Theta[1], mrac_state.pitch.e, mrac_state.pitch.u_ad, mrac_state.yaw.e, mrac_state.yaw.u_ad, mrac_state.z_rate.e, mrac_state.z_rate.u_ad',
     ekf:  's_ekf.x[0], s_ekf.x[1], s_ekf.x[2], s_ekf.x[3], s_ekf.x[4], s_ekf.x[5], s_ekf.x[6], s_ekf.x[7], s_ekf.x[8]',
     imu:  'imu_data.rol, imu_data.pit, imu_data.yaw, Gyro_X_Real, Gyro_Y_Real, Gyro_Z_Real, Gyro_X_Lpf, Gyro_Y_Lpf, Gyro_Z_Lpf, Acc_X_Real, Acc_Y_Real, Acc_Z_Real',

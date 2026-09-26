@@ -344,7 +344,11 @@ async function runChecks() {
     env.fire(mrac, 'click');
     assert.strictEqual(env.doc.getElementById('sm-ranges').value
       .split(/[,\s]+/).filter(Boolean).length, 13);
-    console.log('  PASS: EKF preset 9 ranges; MRAC preset 13 ranges');
+    env.fire(env.byData('.sm-preset-btn', 'data-preset', 'paths3d'), 'click');
+    const p3 = env.doc.getElementById('sm-ranges').value.split(/[,\s]+/).filter(Boolean);
+    assert.strictEqual(p3.length, 10);
+    ['Ctrler.locxPID.Des', 'Ctrler.locyPID.FB', 'Ctrler.Z_posPID.Des', 'ano_of.of_alt_cm'].forEach(function (k) { assert.ok(p3.indexOf(k) !== -1, k); });
+    console.log('  PASS: EKF preset 9 ranges; MRAC preset 13 ranges; Paths 3D preset 10 ranges');
     env.destroy();
   }
 

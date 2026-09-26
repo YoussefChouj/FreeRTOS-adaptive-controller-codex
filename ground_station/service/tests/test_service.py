@@ -644,7 +644,10 @@ def test_http_api_routes_endpoint():
         assert "tab-<workspace>" in body["ui_testids"]
         # The SSE feed never closes and the long-poll holds for `timeout`
         # seconds; GETting either here would hang the suite, not test it.
-        blocking = {"/api/agent/stream", "/api/agent/messages/wait", "/api/terminal/ws"}
+        # /api/rtos opens the real SWD probe and blocks while the live
+        # service holds it.
+        blocking = {"/api/agent/stream", "/api/agent/messages/wait", "/api/terminal/ws",
+                    "/api/rtos"}
         for route in body["GET"]:
             if "<" in route or route.startswith("/analysis/") \
                     or route in blocking:

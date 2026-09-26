@@ -26,6 +26,9 @@
   var _panX = 0;
   var _panY = 0;
   var _totalDistance = 0;
+  var _rxFb = [];              // wall-clock ms of recent feedback samples (rate / speed)
+  var _rxDes = [];             // wall-clock ms of recent desired samples
+  var RX_KEEP = 64;
   var _maxDeviation = 0;
   var _plannedPath = [];     // Waypoint path for deviation calculation
   var _autoFitted = false;   // one-shot auto-fit of the flown path (item 6)
@@ -43,14 +46,19 @@
   var _threeLinePlan = null;
   var _threeAxes = null;
   var _threeShadow = null;
-  var _threeErrorLabel = null;
   var _threeFollowDrone = false;
   var _MAX_3D_POINTS = 20000;
   var _THREE = null;
   var _threeRoomGroup = null;
   var _threeDrawPlane = null;  // translucent plane at the draw altitude (draw mode only)
   var _drawMode = false;       // mouse draws waypoints instead of orbiting / panning
-  var _drawAlt = 0.5;          // draw plane altitude (m)
+  var _drawAlt = 0.5;          // draw plane offset along its normal (m): z for xy, y for xz, x for yz
+  var _api = null;             // plugin api (submitCommand)
+  var _exec = null;            // running Execute/Stop sequence: { steps, i, txid, t0, label }
+  var _holdYaw = null;         // yaw setpoint that holds the current heading (Ctrler.yawPID.FB units)
+  var _sdk = null;             // SDK authority from telemetry (1 = SDK)
+  var EXEC_TIMEOUT_MS = 5000;
+  var _plane = { kind: 'xy', tilt: 0, spacing: 0.02 };  // path plane, tilt (deg) about its first axis, point spacing (m)
   var _drawStroke = false;     // a stroke is in progress
   var _drawUndo = [];          // waypoint lists before each stroke / clear
 
@@ -183,7 +191,7 @@
                     Math.max(0.25, 0.5 * Math.sqrt(dx * dx + dy * dy + dz * dz)));
   }
 
-  // Ribbon segment colour: blue inside the room, red when either end is outside.
+  // Trail segment colour: blue inside the room, red when either end is outside.
   // Older segments fade to 35 % brightness so the newest part of the trail stands out.
   function actualSegColor(points, i, out) {
     var f = points.length > 2 ? 0.35 + 0.65 * i / (points.length - 2) : 1;
@@ -374,6 +382,8 @@
     if (!pos || pos.x == null || pos.y == null) return;
     var t = pos.t !== undefined ? pos.t : (optTime !== undefined ? optTime : nextTimestamp());
     _trajectory.push({ x: pos.x - _origin.x, y: pos.y - _origin.y, z: pos.z, yaw: pos.yaw, t: t });
+    _rxFb.push(Date.now());
+    if (_rxFb.length > RX_KEEP) _rxFb.shift();
     if (_trajectory.length > MAX_TRAIL) {
       _trajectory.shift();
     }
@@ -389,6 +399,8 @@
     if (!des || des.x == null || des.y == null) return;
     var t = des.t !== undefined ? des.t : (optTime !== undefined ? optTime : nextTimestamp());
     _desiredTrajectory.push({ x: des.x - _origin.x, y: des.y - _origin.y, z: des.z == null ? 0 : des.z, t: t });
+    _rxDes.push(Date.now());
+    if (_rxDes.length > RX_KEEP) _rxDes.shift();
     if (_desiredTrajectory.length > MAX_TRAIL) {
       _desiredTrajectory.shift();
     }
@@ -793,6 +805,23 @@
     }
   }
 
+  function rxRate(rx, now) {
+    if (rx.length < 3 || now - rx[rx.length - 1] > 2000) return null;
+    return (rx.length - 1) * 1000 / Math.max(1, rx[rx.length - 1] - rx[0]);
+  }
+
+  function path3DLength(pts) {
+    var L = 0, i;
+    for (i = 1; i < pts.length; i++) {
+      L += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y, (pts[i].z || 0) - (pts[i - 1].z || 0));
+    }
+    return L;
+  }
+
+  function fmtXYZ(p) {
+    return p ? fmtNum(p.x, 2) + ', ' + fmtNum(p.y, 2) + ', ' + (p.z == null ? '—' : fmtNum(p.z, 2)) : '—';
+  }
+
   // ── Metrics display ─────────────────────────────────────────────────────
   function renderMetrics() {
     if (!_elMetrics) return;
@@ -816,6 +845,39 @@
       '<div class="pp-metric"><span class="pp-metric-label">RMS X</span><span class="pp-metric-value">' + rmsXStr + '</span></div>',
       '<div class="pp-metric"><span class="pp-metric-label">RMS Y</span><span class="pp-metric-value">' + rmsYStr + '</span></div>',
       '<div class="pp-metric"><span class="pp-metric-label">RMS Z</span><span class="pp-metric-value">' + rmsZStr + '</span></div>'
+    ].join('') + renderLiveMetrics(activeActual);
+  }
+
+  // Live block: position, setpoint, error, rates, speed, plan length; a hint names
+  // the missing telemetry when a cell cannot be filled.
+  function renderLiveMetrics(activeActual) {
+    var now = Date.now();
+    var fbHz = rxRate(_rxFb, now), desHz = rxRate(_rxDes, now);
+    var des = _desiredTrajectory.length ? _desiredTrajectory[_desiredTrajectory.length - 1] : null;
+    var err = (_currentPos && des)
+      ? Math.hypot(_currentPos.x - des.x, _currentPos.y - des.y, _currentPos.z == null ? 0 : _currentPos.z - des.z) : null;
+    var n = _rxFb.length, speed = null, k, hint = [];
+    if (fbHz != null && activeActual.length >= 2) {
+      k = Math.min(n, activeActual.length, 10);
+      speed = path3DLength(activeActual.slice(-k)) * 1000 / Math.max(1, _rxFb[n - 1] - _rxFb[n - k]);
+    }
+    if (!_currentPos) hint.push('no position feedback (locxPID/locyPID/Z_posPID FB)');
+    if (!des) hint.push('no setpoint (Des) telemetry');
+    if (hint.length) hint.push('load the "Paths 3D position" slot preset');
+    function cell(label, value, wide) {
+      return '<div class="pp-metric' + (wide ? ' pp-metric-wide' : '') + '"><span class="pp-metric-label">' + label +
+        '</span><span class="pp-metric-value">' + value + '</span></div>';
+    }
+    return [
+      cell('Position FB (m)', fmtXYZ(_currentPos), true),
+      cell('Setpoint Des (m)', fmtXYZ(des), true),
+      cell('Live error', err == null ? '—' : fmtNum(err, 3) + ' m'),
+      cell('Speed', speed == null ? '—' : fmtNum(speed, 2) + ' m/s'),
+      cell('FB rate', fbHz == null ? '—' : fmtNum(fbHz, 0) + ' Hz'),
+      cell('Des rate', desHz == null ? '—' : fmtNum(desHz, 0) + ' Hz'),
+      cell('Path 3D', activeActual.length > 1 ? fmtNum(path3DLength(activeActual), 2) + ' m' : '—'),
+      cell('Plan length', _waypoints.length > 1 ? fmtNum(path3DLength(_waypoints), 2) + ' m' : '—'),
+      hint.length ? '<div class="pp-metric pp-metric-wide pp-metric-hint">' + hint.join('; ') + '.</div>' : ''
     ].join('');
   }
 
@@ -921,89 +983,81 @@
     });
   }
 
-  // colorFn(points, i, rgbOut), optional: per-segment colour for geometries with a colour attribute.
-  function updateRibbonGeometry(geo, points, radius, dashed, colorFn) {
-    if (!geo || !points || points.length < 2) {
-      if (geo) geo.setDrawRange(0, 0);
-      return;
+  var SMOOTH_STEP = 0.01;     // m between interpolated samples
+  var SMOOTH_MAX_SUB = 8;     // samples per raw segment, upper bound
+  var SMOOTH_MIN_SEG = 0.002; // raw points closer than 2 mm are merged (sensor jitter)
+
+  // Centripetal Catmull-Rom through the raw points (world x, y, z in m). Returns
+  // dense samples {x, y, z, i}; i is the raw index of the segment start (colouring).
+  // Centripetal (alpha 0.5) does not overshoot or form cusps on uneven spacing.
+  function smoothPolyline(points, maxOut) {
+    var pts = [], out = [], i, k, n, a, b, c, d, t0, t1, t2, t3, t, len;
+    var a1, a2, a3, b1, b2, q;
+    var cap = maxOut || Infinity;
+    if (!points) return out;
+    for (i = 0; i < points.length; i++) {
+      a = points[i];
+      if (pts.length) {
+        b = pts[pts.length - 1];
+        if (Math.hypot(a.x - b.x, a.y - b.y, (a.z || 0) - b.z) < SMOOTH_MIN_SEG) continue;
+      }
+      pts.push({ x: a.x, y: a.y, z: a.z || 0, i: i });
     }
-    var attr = geo.getAttribute('position');
-    var arr = attr.array;
-    var colAttr = colorFn ? geo.getAttribute('color') : null;
-    var carr = colAttr ? colAttr.array : null;
-    var rgb = [0, 0, 0];
-    var vIdx = 0;
-    var r = radius || 0.012;
-    var count = points.length;
-    var maxSegments = (arr.length / 36) | 0;
-    var segLimit = Math.min(count - 1, maxSegments);
-    var accumDist = 0;
-
-    for (var i = 0; i < segLimit; i++) {
-      var p1 = points[i];
-      var p2 = points[i + 1];
-      var ax = p1.x, ay = p1.z || 0, az = p1.y;
-      var bx = p2.x, by = p2.z || 0, bz = p2.y;
-      var dx = bx - ax, dy = by - ay, dz = bz - az;
-      var len = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (len < 1e-4) continue;
-
-      if (dashed) {
-        var dashStep = Math.floor(accumDist / 0.08);
-        accumDist += len;
-        if (dashStep % 2 !== 0) {
-          continue;
+    if (pts.length < 2) return pts;
+    function knot(ti, p0, p1) {
+      return ti + Math.max(1e-6, Math.sqrt(Math.hypot(p1.x - p0.x, p1.y - p0.y, p1.z - p0.z)));
+    }
+    function lerp(p0, p1, ta, tb, tv) {
+      var w = (tv - ta) / (tb - ta);
+      return { x: p0.x + (p1.x - p0.x) * w, y: p0.y + (p1.y - p0.y) * w, z: p0.z + (p1.z - p0.z) * w };
+    }
+    out.push({ x: pts[0].x, y: pts[0].y, z: pts[0].z, i: pts[0].i });
+    for (k = 0; k < pts.length - 1 && out.length < cap; k++) {
+      b = pts[k]; c = pts[k + 1];
+      len = Math.hypot(c.x - b.x, c.y - b.y, c.z - b.z);
+      n = Math.max(1, Math.min(SMOOTH_MAX_SUB, Math.ceil(len / SMOOTH_STEP)));
+      // Mirror phantom end points so the end segments stay straight-ish.
+      a = k > 0 ? pts[k - 1] : { x: 2 * b.x - c.x, y: 2 * b.y - c.y, z: 2 * b.z - c.z };
+      d = k + 2 < pts.length ? pts[k + 2] : { x: 2 * c.x - b.x, y: 2 * c.y - b.y, z: 2 * c.z - b.z };
+      t0 = 0; t1 = knot(t0, a, b); t2 = knot(t1, b, c); t3 = knot(t2, c, d);
+      for (i = 1; i <= n && out.length < cap; i++) {
+        if (i === n) { q = { x: c.x, y: c.y, z: c.z }; }
+        else {
+          t = t1 + (t2 - t1) * i / n;
+          a1 = lerp(a, b, t0, t1, t); a2 = lerp(b, c, t1, t2, t); a3 = lerp(c, d, t2, t3, t);
+          b1 = lerp(a1, a2, t0, t2, t); b2 = lerp(a2, a3, t1, t3, t);
+          q = lerp(b1, b2, t1, t2, t);
         }
-      }
-
-      dx /= len; dy /= len; dz /= len;
-
-      var v1x, v1y, v1z;
-      if (Math.abs(dy) < 0.9) {
-        v1x = dz; v1y = 0; v1z = -dx;
-      } else {
-        v1x = 0; v1y = -dz; v1z = dy;
-      }
-      var l1 = Math.sqrt(v1x * v1x + v1y * v1y + v1z * v1z);
-      if (l1 < 1e-4) { v1x = 1; v1y = 0; v1z = 0; }
-      else { v1x /= l1; v1y /= l1; v1z /= l1; }
-
-      var v2x = dy * v1z - dz * v1y;
-      var v2y = dz * v1x - dx * v1z;
-      var v2z = dx * v1y - dy * v1x;
-
-      var w1x = v1x * r, w1y = v1y * r, w1z = v1z * r;
-      var w2x = v2x * r, w2y = v2y * r, w2z = v2z * r;
-
-      // Quad 1
-      arr[vIdx++] = ax + w1x; arr[vIdx++] = ay + w1y; arr[vIdx++] = az + w1z;
-      arr[vIdx++] = bx + w1x; arr[vIdx++] = by + w1y; arr[vIdx++] = bz + w1z;
-      arr[vIdx++] = ax - w1x; arr[vIdx++] = ay - w1y; arr[vIdx++] = az - w1z;
-
-      arr[vIdx++] = ax - w1x; arr[vIdx++] = ay - w1y; arr[vIdx++] = az - w1z;
-      arr[vIdx++] = bx + w1x; arr[vIdx++] = by + w1y; arr[vIdx++] = bz + w1z;
-      arr[vIdx++] = bx - w1x; arr[vIdx++] = by - w1y; arr[vIdx++] = bz - w1z;
-
-      // Quad 2
-      arr[vIdx++] = ax + w2x; arr[vIdx++] = ay + w2y; arr[vIdx++] = az + w2z;
-      arr[vIdx++] = bx + w2x; arr[vIdx++] = by + w2y; arr[vIdx++] = bz + w2z;
-      arr[vIdx++] = ax - w2x; arr[vIdx++] = ay - w2y; arr[vIdx++] = az - w2z;
-
-      arr[vIdx++] = ax - w2x; arr[vIdx++] = ay - w2y; arr[vIdx++] = az - w2z;
-      arr[vIdx++] = bx + w2x; arr[vIdx++] = by + w2y; arr[vIdx++] = bz + w2z;
-      arr[vIdx++] = bx - w2x; arr[vIdx++] = by - w2y; arr[vIdx++] = bz - w2z;
-
-      if (carr) {
-        colorFn(points, i, rgb);
-        for (var c = vIdx - 36; c < vIdx; c += 3) {
-          carr[c] = rgb[0]; carr[c + 1] = rgb[1]; carr[c + 2] = rgb[2];
-        }
+        q.i = b.i;
+        out.push(q);
       }
     }
+    return out;
+  }
 
+  // Fill a THREE.Line with the smoothed path; colorFn(points, i, rgbOut) optional.
+  function updateLineGeometry(line, points, colorFn) {
+    var geo = line && line.geometry;
+    var attr, colAttr, dense, rgb = [0, 0, 0], j, pt, last = -1;
+    if (!geo) return;
+    if (!points || points.length < 2) { geo.setDrawRange(0, 0); return; }
+    attr = geo.getAttribute('position');
+    colAttr = colorFn ? geo.getAttribute('color') : null;
+    dense = smoothPolyline(points, attr.count);
+    for (j = 0; j < dense.length; j++) {
+      pt = dense[j];
+      attr.setXYZ(j, pt.x, pt.z, pt.y);   // three.js: y up, z = world y
+      if (colAttr) {
+        if (pt.i !== last) { colorFn(points, Math.min(pt.i, points.length - 2), rgb); last = pt.i; }
+        colAttr.setXYZ(j, rgb[0], rgb[1], rgb[2]);
+      }
+    }
     attr.needsUpdate = true;
     if (colAttr) colAttr.needsUpdate = true;
-    geo.setDrawRange(0, vIdx / 3);
+    geo.setDrawRange(0, dense.length);
+    if (line.material && line.material.isLineDashedMaterial && typeof line.computeLineDistances === 'function') {
+      line.computeLineDistances();
+    }
   }
 
   function initThreeScene(THREE, OrbitControls) {
@@ -1034,40 +1088,27 @@
     // Room box, floor grid and axes (rebuilt when the room size changes)
     buildRoom3D();
 
-    // Thick cross-ribbon geometry helper (antialiased 3D line from any viewing angle)
-    function buildRibbonGeometry(maxPoints, withColor) {
-      var maxSegments = Math.max(1, maxPoints - 1);
-      var positions = new Float32Array(maxSegments * 12 * 3);
+    // Thin polyline buffer sized for the smoothed samples (up to 4 per raw point on average).
+    function buildLineGeometry(withColor) {
+      var n = _MAX_3D_POINTS * 4;
       var geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      if (withColor) {
-        geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(maxSegments * 12 * 3), 3));
-      }
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+      if (withColor) geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
       geo.setDrawRange(0, 0);
       return geo;
     }
 
-    // Desired path (thick cross-ribbon mesh, amber/orange 0xffaa00, dashed)
-    var desiredGeo = buildRibbonGeometry(_MAX_3D_POINTS);
-    var desiredMat = new THREE.MeshBasicMaterial({
-      color: 0xffaa00,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: 0.85
-    });
-    _threeLineDesired = new THREE.Mesh(desiredGeo, desiredMat);
+    // Desired path (thin dashed amber line)
+    _threeLineDesired = new THREE.Line(buildLineGeometry(false), new THREE.LineDashedMaterial({
+      color: 0xffaa00, dashSize: 0.04, gapSize: 0.025, transparent: true, opacity: 0.9
+    }));
     _threeLineDesired.frustumCulled = false;
     _threeScene.add(_threeLineDesired);
 
-    // Actual path (thick cross-ribbon mesh; per-segment colour: blue inside the room, red outside)
-    var actualGeo = buildRibbonGeometry(_MAX_3D_POINTS, true);
-    var actualMat = new THREE.MeshBasicMaterial({
-      vertexColors: true,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: 0.85
-    });
-    _threeLineActual = new THREE.Mesh(actualGeo, actualMat);
+    // Actual path (thin line; per-vertex colour: blue inside the room, red outside, older faded)
+    _threeLineActual = new THREE.Line(buildLineGeometry(true), new THREE.LineBasicMaterial({
+      vertexColors: true
+    }));
     _threeLineActual.frustumCulled = false;
     _threeScene.add(_threeLineActual);
 
@@ -1096,18 +1137,6 @@
     _threeLinePlan = new THREE.Line(planGeo, planMat);
     _threeScene.add(_threeLinePlan);
 
-    // Tracking error label
-    var errorCanvas = document.createElement('canvas');
-    errorCanvas.width = 256;
-    errorCanvas.height = 64;
-    _threeErrorLabel = { canvas: errorCanvas, ctx: errorCanvas.getContext('2d'), sprite: null };
-    var errorTexture = new THREE.CanvasTexture(errorCanvas);
-    var errorSpriteMat = new THREE.SpriteMaterial({ map: errorTexture, transparent: true });
-    var errorSprite = new THREE.Sprite(errorSpriteMat);
-    errorSprite.scale.set(0.4, 0.1, 1);
-    errorSprite.position.set(0, _room.h + 0.1, 0);
-    _threeErrorLabel.sprite = errorSprite;
-    _threeScene.add(errorSprite);
     updateErrorSprite();
 
     _threeLoaded = true;
@@ -1125,18 +1154,8 @@
   }
 
   function updateErrorSprite() {
-    if (!_threeErrorLabel) return;
-    var ctx = _threeErrorLabel.ctx;
-    ctx.fillStyle = 'rgba(10, 10, 26, 0.7)';
-    ctx.fillRect(0, 0, 256, 64);
-    ctx.fillStyle = '#4a9eff';
-    ctx.font = 'bold 20px Consolas, monospace';
     var rmsText = (_trackingMetrics && _trackingMetrics.rms != null) ? _trackingMetrics.rms.toFixed(2) : '—';
     var maxText = (_trackingMetrics && _trackingMetrics.max != null) ? _trackingMetrics.max.toFixed(2) : '—';
-    ctx.fillText('RMS: ' + rmsText + ' m | Max: ' + maxText + ' m', 10, 38);
-    if (_threeErrorLabel.sprite && _threeErrorLabel.sprite.material && _threeErrorLabel.sprite.material.map) {
-      _threeErrorLabel.sprite.material.map.needsUpdate = true;
-    }
     var el = q('pp-3d-error');
     if (el) el.textContent = 'RMS: ' + rmsText + ' m | Max: ' + maxText + ' m';
   }
@@ -1151,12 +1170,7 @@
 
     // Update actual path
     if (activeActual.length > 0 && _threeLineActual) {
-      updateRibbonGeometry(_threeLineActual.geometry, activeActual, 0.012, false, actualSegColor);
-
-      var lastPt = activeActual[activeActual.length - 1];
-      if (_threeErrorLabel && _threeErrorLabel.sprite) {
-        _threeErrorLabel.sprite.position.set(lastPt.x, (lastPt.z || 0) + 0.12, lastPt.y);
-      }
+      updateLineGeometry(_threeLineActual, activeActual, actualSegColor);
     } else if (_threeLineActual) {
       _threeLineActual.geometry.setDrawRange(0, 0);
     }
@@ -1173,7 +1187,7 @@
 
     // Update desired path
     if (activeDesired.length > 0 && _threeLineDesired) {
-      updateRibbonGeometry(_threeLineDesired.geometry, activeDesired, 0.007, true);
+      updateLineGeometry(_threeLineDesired, activeDesired);
     } else if (_threeLineDesired) {
       _threeLineDesired.geometry.setDrawRange(0, 0);
     }
@@ -1214,7 +1228,18 @@
     _threeRenderer.render(_threeScene, _threeCamera);
   }
 
+  // Empties the flown and desired trails (the planned path keeps its own Clear).
   function clear3D() {
+    _trajectory = [];
+    _desiredTrajectory = [];
+    _rxFb = [];
+    _rxDes = [];
+    _desiredPath = _desiredTrajectory;
+    _scrubIndex = null;
+    _autoFitted = false;
+    updateMetrics();
+    renderMetrics();
+    render();
     if (_threeShadow) _threeShadow.geometry.setDrawRange(0, 0);
     if (_threeLineActual) {
       _threeLineActual.geometry.setDrawRange(0, 0);
@@ -1281,10 +1306,9 @@
     g.add(_threeAxes);
 
     _threeDrawPlane = new THREE.Mesh(
-      new THREE.PlaneGeometry(_room.w, _room.d),
+      new THREE.PlaneGeometry(Math.max(_room.w, _room.d, _room.h) * 1.5, Math.max(_room.w, _room.d, _room.h) * 1.5),
       new THREE.MeshBasicMaterial({ color: 0x4ecca3, transparent: true, opacity: 0.12,
                                     side: THREE.DoubleSide, depthWrite: false }));
-    _threeDrawPlane.rotation.x = -Math.PI / 2;
     g.add(_threeDrawPlane);
     updateDrawPlane();
 
@@ -1294,9 +1318,11 @@
 
   function syncDrawAltInput() {
     var el = q('pp-draw-alt');
+    var r = drawOffsetRange();
+    _drawAlt = Math.max(r[0], Math.min(r[1], _drawAlt));
     if (el) {
-      el.max = String(_room.h);
-      if (_drawAlt > _room.h) _drawAlt = _room.h;
+      el.min = String(r[0]);
+      el.max = String(r[1]);
       el.value = String(_drawAlt);
     }
     setDrawAlt(_drawAlt);
@@ -1334,7 +1360,6 @@
     _threeShadow = null;
     _threeRoomGroup = null;
     _threeDrawPlane = null;
-    _threeErrorLabel = null;
     _threeLoaded = false;
   }
 
@@ -1571,19 +1596,82 @@
 
   function round3(v) { return Math.round(v * 1000) / 1000; }
 
-  function presetPath(kind, size, alt, room) {
+  var PLANE_KINDS = ['xy', 'xz', 'yz'];
+
+  // Orthonormal frame of a path plane through origin o: e1, e2 span the plane,
+  // n is its normal. tilt (deg) rotates e2 towards n about e1, so xy with tilt
+  // 30 is a floor plane sloping up along +y.
+  function planeFrame(kind, tiltDeg, o) {
+    var t = (isFinite(tiltDeg) ? tiltDeg : 0) * Math.PI / 180;
+    var c = Math.cos(t), sn = Math.sin(t);
+    var e1, e2, n;
+    if (kind === 'xz') { e1 = [1, 0, 0]; e2 = [0, 0, 1]; n = [0, -1, 0]; }
+    else if (kind === 'yz') { e1 = [0, 1, 0]; e2 = [0, 0, 1]; n = [1, 0, 0]; }
+    else { e1 = [1, 0, 0]; e2 = [0, 1, 0]; n = [0, 0, 1]; }
+    return {
+      o: o, e1: e1,
+      e2: [c * e2[0] + sn * n[0], c * e2[1] + sn * n[1], c * e2[2] + sn * n[2]],
+      n: [c * n[0] - sn * e2[0], c * n[1] - sn * e2[1], c * n[2] - sn * e2[2]]
+    };
+  }
+
+  function planePoint(f, u, v, w) {
+    return {
+      x: f.o.x + u * f.e1[0] + v * f.e2[0] + w * f.n[0],
+      y: f.o.y + u * f.e1[1] + v * f.e2[1] + w * f.n[1],
+      z: f.o.z + u * f.e1[2] + v * f.e2[2] + w * f.n[2]
+    };
+  }
+
+  // Resample a polyline at a fixed arc-length step. Corners sharper than 30 deg
+  // and both end points are kept, so a square keeps its corners.
+  function resamplePath(pts, step) {
+    var out, i, a, b, c, seg, carry, d, ux, uy, uz, l1, l2, cosT;
+    if (!pts || pts.length < 2 || !(step > 0)) return pts ? pts.slice() : [];
+    out = [pts[0]];
+    carry = 0;   // arc length since the last emitted point
+    for (i = 1; i < pts.length; i++) {
+      a = pts[i - 1]; b = pts[i];
+      seg = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+      if (seg < 1e-9) continue;
+      ux = (b.x - a.x) / seg; uy = (b.y - a.y) / seg; uz = (b.z - a.z) / seg;
+      d = step - carry;
+      while (d < seg - 1e-9) {
+        out.push({ x: a.x + ux * d, y: a.y + uy * d, z: a.z + uz * d });
+        d += step;
+      }
+      carry = seg - (d - step);
+      c = pts[i + 1];
+      if (c) {
+        l1 = seg; l2 = Math.hypot(c.x - b.x, c.y - b.y, c.z - b.z);
+        cosT = l2 < 1e-9 ? 1 : ((b.x - a.x) * (c.x - b.x) + (b.y - a.y) * (c.y - b.y) + (b.z - a.z) * (c.z - b.z)) / (l1 * l2);
+        if (cosT < Math.cos(Math.PI / 6)) { out.push(b); carry = 0; }
+      }
+    }
+    b = pts[pts.length - 1];
+    a = out[out.length - 1];
+    if (Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z) > step * 0.25) out.push(b);
+    else out[out.length - 1] = b;
+    return out;
+  }
+
+  // opts (optional): { plane: 'xy'|'xz'|'yz', tilt: deg, spacing: m }. The shape
+  // is built in plane coordinates (u, v; w along the normal for the helix),
+  // centred on (0, 0, alt), then scaled down uniformly until every point is
+  // PRESET_MARGIN inside the room, then resampled at the spacing.
+  function presetPath(kind, size, alt, room, opts) {
     var zMin = Math.min(0.1, room.h / 2);
     var zMax = Math.max(zMin, room.h - PRESET_MARGIN);
-    var sMax = Math.max(0, Math.min(room.w, room.d) / 2 - PRESET_MARGIN);
-    var sz = Math.max(0, Math.min(isFinite(size) ? size : 0.4, sMax));
+    var sz = Math.max(0, isFinite(size) ? size : 0.4);
     var z = Math.max(zMin, Math.min(isFinite(alt) ? alt : 0.5, zMax));
-    var pts = [];
-    var i, n, t, z0, z1;
-    function add(x, y, pz) { pts.push({ x: round3(x), y: round3(y), z: round3(pz), reached: false }); }
+    var o = opts || {};
+    var f = planeFrame(o.plane, o.tilt, { x: 0, y: 0, z: z });
+    var raw = [], pts = [];
+    var i, n, t, z0, z1, k, pt, sc, lo, hi, dv;
+    function add(u, v, w) { raw.push(planePoint(f, u, v, w || 0)); }
 
     if (kind === 'hover') {
-      add(0, 0, 0);
-      add(0, 0, z);
+      return [{ x: 0, y: 0, z: 0, reached: false }, { x: 0, y: 0, z: round3(z), reached: false }];
     } else if (kind === 'line') {
       add(-sz, 0, z);
       add(sz, 0, z);
@@ -1593,13 +1681,13 @@
       n = 36;
       for (i = 0; i <= n; i++) {
         t = 2 * Math.PI * i / n;
-        add(sz * Math.cos(t), sz * Math.sin(t), z);
+        add(sz * Math.cos(t), sz * Math.sin(t));
       }
     } else if (kind === 'figure8') {
       n = 48;
       for (i = 0; i <= n; i++) {
         t = 2 * Math.PI * i / n;
-        add(sz * Math.sin(t), sz * Math.sin(t) * Math.cos(t), z);
+        add(sz * Math.sin(t), sz * Math.sin(t) * Math.cos(t));
       }
     } else if (kind === 'helix') {
       // Two turns climbing 0.5 m (less in a low room), centred on the altitude.
@@ -1608,16 +1696,193 @@
       n = 72;
       for (i = 0; i <= n; i++) {
         t = 4 * Math.PI * i / n;
-        add(sz * Math.cos(t), sz * Math.sin(t), z0 + (z1 - z0) * i / n);
+        add(sz * Math.cos(t), sz * Math.sin(t), z0 - z + (z1 - z0) * i / n);
       }
     }
+    // Uniform scale about the centre so the whole shape clears the walls.
+    lo = [-room.w / 2 + PRESET_MARGIN, -room.d / 2 + PRESET_MARGIN, zMin];
+    hi = [room.w / 2 - PRESET_MARGIN, room.d / 2 - PRESET_MARGIN, zMax];
+    sc = 1;
+    for (i = 0; i < raw.length; i++) {
+      pt = [raw[i].x, raw[i].y, raw[i].z];
+      for (k = 0; k < 3; k++) {
+        dv = pt[k] - [f.o.x, f.o.y, f.o.z][k];
+        if (dv > 1e-12) sc = Math.min(sc, Math.max(0, hi[k] - [f.o.x, f.o.y, f.o.z][k]) / dv);
+        else if (dv < -1e-12) sc = Math.min(sc, Math.max(0, [f.o.x, f.o.y, f.o.z][k] - lo[k]) / -dv);
+      }
+    }
+    for (i = 0; i < raw.length; i++) {
+      raw[i] = { x: f.o.x + (raw[i].x - f.o.x) * sc, y: f.o.y + (raw[i].y - f.o.y) * sc, z: f.o.z + (raw[i].z - f.o.z) * sc };
+    }
+    if (o.spacing > 0) raw = resamplePath(raw, o.spacing);
+    for (i = 0; i < raw.length; i++) {
+      pts.push({ x: round3(raw[i].x), y: round3(raw[i].y), z: round3(raw[i].z), reached: false });
+    }
     return pts;
+  }
+
+  // Firmware path commands (send_data.c, SDK mode only). Units: x/y cm, z m.
+  //   hover   -> 0x0A TWC point  (0 x, 1 y, 2 z, 3 yaw, 4 execute)
+  //   line    -> 0x0B sinusoid   (0-2 centre, 3 amp, 4 freq Hz, 5 dur s, 6 axis, 7 active)
+  //   circle  -> 0x0C circle     (0-2 centre, 3 radius, 4 omega rad/s, 5 dur s, 6 active)
+  //   figure8 -> 0x11 figure-8   (0-2 centre, 3 amp, 4 omega, 5 dur s, 6 type, 7 active); type 1 = lobes along x
+  // Size and altitude are taken from the room-fitted preview so the drone flies what is drawn.
+  var EXEC_KINDS = ['hover', 'line', 'circle', 'figure8'];
+  var STOP_STEPS = [[0x0B, 7, 0], [0x0C, 6, 0], [0x11, 7, 0]];
+
+  function executePlan(kind, size, alt, room, origin, opts) {
+    var o = opts || {}, pts, a, z, cx, cy, sp, dur, i;
+    if (EXEC_KINDS.indexOf(kind) < 0) {
+      return { error: kind + ' needs waypoint-upload firmware (flyable now: hover, line, circle, figure-8)' };
+    }
+    if (kind !== 'hover' && ((o.plane && o.plane !== 'xy') || (o.tilt && Math.abs(o.tilt) > 1e-9))) {
+      return { error: 'firmware paths are horizontal only; set plane xy, tilt 0' };
+    }
+    pts = presetPath(kind, size, alt, room);
+    z = pts[pts.length - 1].z;
+    a = 0;
+    for (i = 0; i < pts.length; i++) a = Math.max(a, Math.abs(pts[i].x));
+    cx = Math.round((origin.x || 0) * 1000) / 10;
+    cy = Math.round((origin.y || 0) * 1000) / 10;
+    sp = isFinite(o.speed) && o.speed > 0 ? Math.min(o.speed, 1) : 0.2;
+    dur = isFinite(o.duration) && o.duration > 0 ? o.duration : 20;
+    if (kind === 'hover') {
+      if (o.yaw == null || !isFinite(o.yaw)) return { error: 'no yaw telemetry (Ctrler.yawPID.FB or imu_data.yaw); hover would turn to yaw 0' };
+      return { steps: [[0x0A, 0, cx], [0x0A, 1, cy], [0x0A, 2, z], [0x0A, 3, round3(o.yaw)], [0x0A, 4, 1]] };
+    }
+    if (a < 0.02) return { error: 'size too small' };
+    if (kind === 'line') {
+      return { steps: [[0x0B, 0, cx], [0x0B, 1, cy], [0x0B, 2, z], [0x0B, 3, round3(a * 100)],
+                       [0x0B, 4, round3(sp / (2 * Math.PI * a))], [0x0B, 5, dur], [0x0B, 6, 0], [0x0B, 7, 1]] };
+    }
+    if (kind === 'circle') {
+      return { steps: [[0x0C, 0, cx], [0x0C, 1, cy], [0x0C, 2, z], [0x0C, 3, round3(a * 100)],
+                       [0x0C, 4, round3(sp / a)], [0x0C, 5, dur], [0x0C, 6, 1]] };
+    }
+    return { steps: [[0x11, 0, cx], [0x11, 1, cy], [0x11, 2, z], [0x11, 3, round3(a * 100)],
+                     [0x11, 4, round3(sp / a)], [0x11, 5, dur], [0x11, 6, 1], [0x11, 7, 1]] };
+  }
+
+  function stepText(st) {
+    return '0x' + (st[0] < 16 ? '0' : '') + st[0].toString(16).toUpperCase() + '[' + st[1] + ']=' + st[2];
+  }
+
+  function setExecStatus(text, cls) {
+    var el = q('pp-exec-status');
+    if (!el) return;
+    el.textContent = text;
+    el.className = 'pp-hint' + (cls ? ' ' + cls : '');
+  }
+
+  // Send steps one at a time; the next goes only after the previous is applied.
+  function runSteps(steps, label) {
+    _exec = { steps: steps, i: 0, txid: null, t0: 0, label: label };
+    sendNextStep();
+  }
+
+  function sendNextStep() {
+    var ex = _exec, st;
+    if (!ex) return;
+    if (ex.i >= ex.steps.length) {
+      setExecStatus(ex.label + ': all ' + ex.steps.length + ' commands applied', 'pp-exec-ok');
+      _exec = null;
+      return;
+    }
+    st = ex.steps[ex.i];
+    ex.txid = null;
+    ex.t0 = Date.now();
+    setExecStatus(ex.label + ': sending ' + (ex.i + 1) + '/' + ex.steps.length + ' ' + stepText(st));
+    _api.submitCommand(st[0], st[1], st[2]).then(function (r) {
+      if (_exec !== ex) return;
+      if (!r || r.transaction_id == null) { failExec('no transaction id'); return; }
+      ex.txid = r.transaction_id;
+    }, function (e) {
+      if (_exec === ex) failExec('submit failed: ' + (e && e.message ? e.message : e));
+    });
+  }
+
+  function failExec(why) {
+    var ex = _exec;
+    _exec = null;
+    setExecStatus((ex ? ex.label + ' stopped at ' + stepText(ex.steps[ex.i]) + ': ' : '') + why, 'pp-exec-bad');
+  }
+
+  function checkExec(state) {
+    var ex = _exec, res = [], i, r, reason;
+    if (!ex) return;
+    if (ex.txid != null && state) {
+      if (state.last_transaction_result) res.push(state.last_transaction_result);
+      if (state.command_results) res = res.concat(state.command_results);
+      for (i = 0; i < res.length; i++) {
+        r = res[i];
+        if (!r || r.transaction_id !== ex.txid) continue;
+        if (r.status === 'applied' || r.status === 'verified') {
+          ex.i++;
+          sendNextStep();
+          return;
+        }
+        if (r.status === 'rejected' || r.status === 'timed_out' || r.status === 'error') {
+          reason = r.detail || r.reason || '';
+          failExec(r.status + (reason ? ' (' + reason + ')' : ''));
+          return;
+        }
+      }
+    }
+    if (Date.now() - ex.t0 > EXEC_TIMEOUT_MS) failExec('no result in ' + EXEC_TIMEOUT_MS / 1000 + ' s');
+  }
+
+  function sdkFrom(state) {
+    var s0, v;
+    if (state.status && typeof state.status.rc_authority === 'number') return state.status.rc_authority;
+    s0 = state.streams ? (state.streams[0] || state.streams['0']) : null;
+    v = s0 && s0.values;
+    if (!v) return null;
+    if (typeof v['status.rc_authority'] === 'number') return v['status.rc_authority'];
+    if (typeof v.s_authority === 'number') return v.s_authority;
+    if (typeof v.ch14 === 'number') return v.ch14 & 1;
+    return null;
+  }
+
+  // Heading hold for TWC: the yaw loop compares set_yaw with yawPID.FB = -imu_data.yaw.
+  function holdYawFrom(state) {
+    var k, v, streams = state.streams || {};
+    for (k in streams) {
+      v = streams[k] && streams[k].values;
+      if (v && isFinite(v['Ctrler.yawPID.FB'])) return Number(v['Ctrler.yawPID.FB']);
+    }
+    for (k in streams) {
+      v = streams[k] && streams[k].values;
+      if (v && isFinite(v['imu_data.yaw'])) return -Number(v['imu_data.yaw']);
+    }
+    return null;
+  }
+
+  function executePath() {
+    var sel = q('pp-preset-kind'), kind = sel ? sel.value : 'circle', plan;
+    if (_exec) { setExecStatus('busy: ' + _exec.label + ' still sending', 'pp-exec-bad'); return; }
+    if (!_api || typeof _api.submitCommand !== 'function') { setExecStatus('no command channel', 'pp-exec-bad'); return; }
+    if (_sdk !== 1) { setExecStatus('FlyMode is not SDK. Take SDK authority first (cmd 0x0E).', 'pp-exec-bad'); return; }
+    plan = executePlan(kind, readNum('pp-preset-size', 0.4), readNum('pp-preset-alt', 0.5), _room, _origin,
+      { plane: _plane.kind, tilt: _plane.tilt, speed: readNum('pp-exec-speed', 0.2),
+        duration: readNum('pp-exec-dur', 20), yaw: _holdYaw });
+    if (plan.error) { setExecStatus(plan.error, 'pp-exec-bad'); return; }
+    if (typeof window.confirm !== 'function' ||
+        !window.confirm('Send ' + kind + ' to the drone?\n' + plan.steps.map(stepText).join('\n'))) {
+      setExecStatus('cancelled');
+      return;
+    }
+    runSteps(plan.steps, 'Execute ' + kind);
+  }
+
+  function stopPath() {
+    if (!_api || typeof _api.submitCommand !== 'function') { setExecStatus('no command channel', 'pp-exec-bad'); return; }
+    runSteps(STOP_STEPS.slice(), 'Stop');
   }
 
   function loadPresetPath() {
     var sel = q('pp-preset-kind');
     var pts = presetPath(sel ? sel.value : 'circle', readNum('pp-preset-size', 0.4),
-                         readNum('pp-preset-alt', 0.5), _room);
+                         readNum('pp-preset-alt', 0.5), _room, _plane);
     if (!pts.length) return;
     _waypoints = pts;
     updatePlannedPath();
@@ -1829,7 +2094,7 @@
   }
 
   function drawAddPoint(pt) {
-    if (thinAppend(_waypoints, pt, DRAW_MIN_STEP, _room)) waypointsChanged(false);
+    if (thinAppend(_waypoints, pt, _plane.spacing > 0 ? _plane.spacing : DRAW_MIN_STEP, _room)) waypointsChanged(false);
   }
 
   function setDrawMode(on) {
@@ -1847,21 +2112,59 @@
     if (_threeLoaded) render3D();
   }
 
+  // Offset range of the draw plane along its normal axis: z for xy, y for xz, x for yz.
+  function drawOffsetRange() {
+    if (_plane.kind === 'xz') return [-_room.d / 2, _room.d / 2];
+    if (_plane.kind === 'yz') return [-_room.w / 2, _room.w / 2];
+    return [0, _room.h];
+  }
+
+  // The draw plane: tilted about its first axis through a pivot on the offset
+  // axis (vertical planes pivot at mid-height).
+  function drawFrame() {
+    var o;
+    if (_plane.kind === 'xz') o = { x: 0, y: _drawAlt, z: _room.h / 2 };
+    else if (_plane.kind === 'yz') o = { x: _drawAlt, y: 0, z: _room.h / 2 };
+    else o = { x: 0, y: 0, z: _drawAlt };
+    return planeFrame(_plane.kind, _plane.tilt, o);
+  }
+
   function setDrawAlt(v) {
+    var r = drawOffsetRange();
     if (!isFinite(v)) return;
-    _drawAlt = Math.max(0, Math.min(_room.h, v));
+    _drawAlt = Math.max(r[0], Math.min(r[1], v));
     var lbl = q('pp-draw-alt-val');
-    if (lbl) lbl.textContent = _drawAlt.toFixed(2) + ' m';
+    if (lbl) lbl.textContent = ({ xy: 'z ', xz: 'y ', yz: 'x ' }[_plane.kind] || '') + _drawAlt.toFixed(2) + ' m';
+    if (_threeLoaded) render3D();
+  }
+
+  function setPlane(kind, tilt, spacing) {
+    if (PLANE_KINDS.indexOf(kind) >= 0 && kind !== _plane.kind) {
+      _plane.kind = kind;
+      _drawAlt = kind === 'xy' ? 0.5 : 0;
+      syncDrawAltInput();
+    }
+    if (isFinite(tilt)) _plane.tilt = Math.max(-80, Math.min(80, tilt));
+    if (isFinite(spacing)) _plane.spacing = Math.max(0.005, Math.min(0.5, spacing));
     if (_threeLoaded) render3D();
   }
 
   function updateDrawPlane() {
-    if (!_threeDrawPlane) return;
+    var f, THREE = _THREE, c;
+    if (!_threeDrawPlane || !THREE) return;
     _threeDrawPlane.visible = _drawMode;
-    _threeDrawPlane.position.y = _drawAlt;
+    f = drawFrame();
+    c = planePoint(f, 0, 0, 0);
+    // PlaneGeometry spans local x/y with normal +z; three axes are (x, z, y) of the room.
+    _threeDrawPlane.position.set(c.x, c.z, c.y);
+    _threeDrawPlane.rotation.set(0, 0, 0);
+    _threeDrawPlane.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(
+      new THREE.Vector3(f.e1[0], f.e1[2], f.e1[1]),
+      new THREE.Vector3(f.e2[0], f.e2[2], f.e2[1]),
+      new THREE.Vector3(f.n[0], f.n[2], f.n[1])));
   }
 
-  // Room point under the mouse on the horizontal plane z = _drawAlt, or null.
+  // Room point under the mouse on the draw plane, or null.
   function pick3D(ev) {
     var THREE = _THREE;
     var rect, ndc, ray, hit;
@@ -1873,8 +2176,18 @@
     ray = new THREE.Raycaster();
     ray.setFromCamera(ndc, _threeCamera);
     hit = new THREE.Vector3();
-    if (!ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -_drawAlt), hit)) return null;
-    return { x: hit.x, y: hit.z, z: _drawAlt };   // three (x, y, z) = room (x, z, y)
+    var f = drawFrame();
+    var nv = new THREE.Vector3(f.n[0], f.n[2], f.n[1]);   // three (x, y, z) = room (x, z, y)
+    if (!ray.ray.intersectPlane(new THREE.Plane(nv, -nv.dot(new THREE.Vector3(f.o.x, f.o.z, f.o.y))), hit)) return null;
+    return { x: hit.x, y: hit.z, z: hit.y };
+  }
+
+  // Top-view pick lifted vertically onto the draw plane. Vertical planes (or
+  // tilts near 90 deg) project to a line in top view, so the 2D view refuses them.
+  function planeFromTop(x, y) {
+    var f = drawFrame();
+    if (Math.abs(f.n[2]) < 0.2) return null;
+    return { x: x, y: y, z: f.o.z - (f.n[0] * (x - f.o.x) + f.n[1] * (y - f.o.y)) / f.n[2] };
   }
 
   function pick2D(ev) {
@@ -1882,7 +2195,7 @@
     var sx = (ev.clientX - rect.left) * (_canvas.width / (rect.width || 1));
     var sy = (ev.clientY - rect.top) * (_canvas.height / (rect.height || 1));
     var w = screenToWorld(sx, sy, _canvas.width, _canvas.height);
-    return { x: w.x, y: w.y, z: _drawAlt };
+    return planeFromTop(w.x, w.y);
   }
 
   function bindDrawCanvas(el, pick) {
@@ -1919,7 +2232,7 @@
     return [
       '<style>',
       /* Scoped styles */
-      '.pp-container { display: grid; grid-template-columns: 1fr 220px; gap: 12px; height: 100%; }',
+      '.pp-container { display: grid; grid-template-columns: 1fr 220px; gap: 12px; height: 100%; min-height: 0; }',
       '.pp-canvas-wrap { position: relative; background: #0a0a1a; border-radius: 6px; overflow: hidden; }',
       '.pp-canvas { display: block; width: 100%; height: 100%; min-height: 400px; }',
       '.pp-controls { position: absolute; top: 8px; right: 8px; display: flex; flex-direction: column; gap: 4px; }',
@@ -1929,7 +2242,15 @@
       '.pp-btn:hover { opacity: 0.85; }',
       '.pp-demo-badge { position: absolute; top: 8px; left: 8px; padding: 4px 8px; border-radius: 4px;',
       '  background: rgba(233,69,96,0.2); color: var(--red); font-size: 10px; font-weight: 600; }',
-      '.pp-sidebar { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }',
+      '.pp-sidebar { display: flex; flex-direction: column; gap: 10px; overflow-y: scroll; min-height: 0;',
+      '  max-height: calc(100vh - 120px); padding-right: 6px; scrollbar-width: thin; scrollbar-color: var(--accent) transparent; }',
+      '.pp-sidebar::-webkit-scrollbar { width: 8px; }',
+      '.pp-sidebar::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 4px; }',
+      '.pp-sidebar::-webkit-scrollbar-track { background: rgba(255,255,255,0.04); border-radius: 4px; }',
+      '.pp-metric-wide { grid-column: 1 / -1; }',
+      '.pp-exec-ok { color: var(--ok, #3fb950); }',
+      '.pp-exec-bad { color: var(--bad, #f85149); }',
+      '.pp-metric-hint { font-size: 10px; color: var(--muted); line-height: 1.35; }',
       '.pp-section-label { font-size: 10px; font-weight: 700; color: var(--muted); letter-spacing: 0.08em;',
       '  text-transform: uppercase; margin-bottom: 6px; }',
       '.pp-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }',
@@ -2011,7 +2332,7 @@
       '<button id="pp-3d-iso" class="pp-3d-btn active" title="Isometric view">Iso</button>',
       '<button id="pp-3d-fit" class="pp-3d-btn" title="Frame the flown and planned paths">Fit path</button>',
       '<button id="pp-3d-reset" class="pp-3d-btn" title="Reset view">Reset</button>',
-      '<button id="pp-3d-clear" class="pp-3d-btn" title="Clear 3D path">Clear</button>',
+      '<button id="pp-3d-clear" class="pp-3d-btn" title="Clear the flown and desired trails">Clear trail</button>',
       '</div>',
       '<div class="pp-3d-legend">',
       '<div class="pp-3d-legend-item"><div class="pp-3d-legend-line" style="background:#4a9eff"></div>Actual path</div>',
@@ -2096,7 +2417,33 @@
       '<input id="pp-preset-alt" class="pp-wp-input" value="0.5" type="number" min="0" step="0.05" title="Altitude (m)">',
       '<button id="pp-preset-load" class="pp-btn pp-btn-sm" title="Replace the waypoint list with this preset">Load</button>',
       '</div>',
-      '<div class="pp-hint">Shape, size&nbsp;(m), altitude&nbsp;(m). Kept 0.15&nbsp;m inside the room; out-of-range values are clamped.</div>',
+      '<div class="pp-hint">Shape, size&nbsp;(m), centre altitude&nbsp;(m), on the plane below. Scaled to stay 0.15&nbsp;m inside the room.</div>',
+      '</div>',
+
+      '<div>',
+      '<div class="pp-section-label">Path plane</div>',
+      '<div class="pp-entry-row">',
+      '<select id="pp-plane-kind" class="pp-wp-input" title="Plane for presets and drawing">',
+      '<option value="xy" selected>XY (floor)</option><option value="xz">XZ (wall)</option><option value="yz">YZ (wall)</option>',
+      '</select>',
+      '<input id="pp-plane-tilt" class="pp-wp-input" value="0" type="number" min="-80" max="80" step="5" title="Tilt about the plane\'s first axis (deg)">',
+      '<input id="pp-plane-spacing" class="pp-wp-input" value="0.02" type="number" min="0.005" max="0.5" step="0.005" title="Point spacing (m)">',
+      '</div>',
+      '<div class="pp-hint">Plane, tilt&nbsp;(deg), point spacing&nbsp;(m). Applies to presets and drawing; the draw slider moves the plane along its normal.</div>',
+      '</div>',
+
+      '<div>',
+      '<div class="pp-section-label">Execute on drone</div>',
+      '<div class="pp-entry-row">',
+      '<input id="pp-exec-speed" class="pp-wp-input" value="0.2" type="number" min="0.05" max="1" step="0.05" title="Path speed (m/s)">',
+      '<input id="pp-exec-dur" class="pp-wp-input" value="20" type="number" min="1" max="300" step="1" title="Duration (s); the firmware stops the path after it">',
+      '</div>',
+      '<div class="pp-entry-row">',
+      '<button id="pp-exec-go" class="pp-btn pp-btn-sm" title="Send the selected preset to the firmware (SDK mode only)">Execute preset</button>',
+      '<button id="pp-exec-stop" class="pp-btn pp-btn-sm" title="Deactivate sinusoid, circle and figure-8 paths">Stop path</button>',
+      '</div>',
+      '<div class="pp-hint">Speed&nbsp;(m/s), duration&nbsp;(s). Uses the preset kind, size, altitude and the world origin. Flyable: hover, line, circle, figure-8 (xy plane, no tilt). SDK mode only; never arms.</div>',
+      '<div id="pp-exec-status" class="pp-hint">idle</div>',
       '</div>',
 
       '<div>',
@@ -2108,10 +2455,10 @@
       '<button id="pp-fit-room" class="pp-btn pp-btn-sm" title="Frame the room in the 2D view">Fit room</button>',
       '</div>',
       '<div class="pp-entry-row">',
-      '<input id="pp-draw-alt" type="range" min="0" max="1" step="0.05" value="0.5" title="Draw altitude (m)" style="flex:1">',
+      '<input id="pp-draw-alt" type="range" min="0" max="1" step="0.05" value="0.5" title="Draw plane offset (m)" style="flex:1">',
       '<span id="pp-draw-alt-val" class="pp-hint">0.50 m</span>',
       '</div>',
-      '<div class="pp-hint">Drag to draw at the chosen altitude; points 2&nbsp;cm apart, clamped to the room. Orbit is paused while drawing.</div>',
+      '<div class="pp-hint">Drag to draw on the path plane; points at the set spacing, clamped to the room. Wall planes: draw in 3D. Orbit is paused while drawing.</div>',
       '</div>',
 
       '<div>',
@@ -2180,6 +2527,7 @@
 
   // ── Init ────────────────────────────────────────────────────────────────
   window.__PLUGIN_INIT__ = function (api) {
+    _api = api;
     api.registerPanel('Path Planning', function (container) {
       container.innerHTML = buildHTML();
 
@@ -2245,6 +2593,8 @@
       q('pp-add-manual-wp').addEventListener('click', addManualWaypoint);
       q('pp-rand-gen').addEventListener('click', generateRandomPath);
       q('pp-preset-load').addEventListener('click', loadPresetPath);
+      q('pp-exec-go').addEventListener('click', executePath);
+      q('pp-exec-stop').addEventListener('click', stopPath);
       q('pp-draw-toggle').addEventListener('click', function () { setDrawMode(!_drawMode); });
       q('pp-draw-undo').addEventListener('click', drawUndo);
       q('pp-draw-clear').addEventListener('click', drawClear);
@@ -2260,6 +2610,9 @@
       });
       renderLibrarySelect();
       q('pp-draw-alt').addEventListener('input', function () { setDrawAlt(parseFloat(this.value)); });
+      q('pp-plane-kind').addEventListener('change', function () { setPlane(this.value); });
+      q('pp-plane-tilt').addEventListener('change', function () { setPlane(null, parseFloat(this.value)); });
+      q('pp-plane-spacing').addEventListener('change', function () { setPlane(null, NaN, parseFloat(this.value)); });
       syncDrawAltInput();
       bindDrawCanvas(_canvas, pick2D);
       bindDrawCanvas(_el3DCanvas, pick3D);
@@ -2364,6 +2717,10 @@
       // Subscribe to live state for Frame C position and desired position
       api.subscribe(function (state) {
         if (!state) return;
+        var sdkNow = sdkFrom(state), yawNow = holdYawFrom(state);
+        if (sdkNow != null) _sdk = sdkNow;
+        if (yawNow != null) _holdYaw = yawNow;
+        checkExec(state);
 
         var pos = extractPosition(state);
         var des = extractDesiredPosition(state);
@@ -2424,6 +2781,13 @@
   window.__pathPanelTest = {
     roomBounds: roomBounds, isOutOfRoom: isOutOfRoom, countOutOfRoom: countOutOfRoom,
     roomViewPose: roomViewPose, validRoom: validRoom, pathViewPose: pathViewPose, actualSegColor: actualSegColor,
+    smoothPolyline: smoothPolyline, SMOOTH_STEP: SMOOTH_STEP,
+    planeFrame: planeFrame, resamplePath: resamplePath, setPlane: setPlane, planeFromTop: planeFromTop,
+    getPlane: function () { return { kind: _plane.kind, tilt: _plane.tilt, spacing: _plane.spacing, off: _drawAlt }; },
+    renderLiveMetrics: renderLiveMetrics, rxRate: rxRate, path3DLength: path3DLength,
+    executePlan: executePlan, STOP_STEPS: STOP_STEPS, checkExec: checkExec,
+    getExec: function () { return _exec; }, getSdk: function () { return _sdk; }, getHoldYaw: function () { return _holdYaw; },
+    getTrailLengths: function () { return { actual: _trajectory.length, desired: _desiredTrajectory.length }; },
     presetPath: presetPath, PRESET_KINDS: PRESET_KINDS, PRESET_MARGIN: PRESET_MARGIN,
     serializePath: serializePath, parsePathFile: parsePathFile, libraryPut: libraryPut, LIB_MAX: LIB_MAX,
     shiftPoints: shiftPoints, validOrigin: validOrigin,

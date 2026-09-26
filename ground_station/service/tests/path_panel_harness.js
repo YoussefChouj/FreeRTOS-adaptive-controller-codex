@@ -688,6 +688,188 @@ function runChecks() {
     env.destroy();
   }
 
+  // 17. Smoothed thin trail and Clear trail.
+  {
+    console.log('\n[CHECK 17: Catmull-Rom smoothing + Clear trail empties arrays]');
+    const env = loadPanel();
+    const T = env.sandbox.__pathPanelTest;
+    const raw = [];
+    for (let k = 0; k <= 8; k++) raw.push({ x: Math.cos(k * Math.PI / 4) * 0.4, y: Math.sin(k * Math.PI / 4) * 0.4, z: 0.5 });
+    const d = T.smoothPolyline(raw);
+    assert.ok(d.length > raw.length * 3, 'densified: ' + d.length);
+    let maxDev = 0, hits = 0;
+    for (const pt of d) maxDev = Math.max(maxDev, Math.abs(Math.hypot(pt.x, pt.y) - 0.4));
+    for (const r of raw) if (d.some((pt) => Math.hypot(pt.x - r.x, pt.y - r.y) < 1e-9)) hits++;
+    assert.strictEqual(hits, raw.length, 'passes through every raw point');
+    const sag = 0.4 * (1 - Math.cos(Math.PI / 8));   // straight-chord error at mid-segment
+    assert.ok(maxDev < 0.7 * sag, 'spline beats straight chords: dev ' + maxDev + ' vs chord ' + sag);
+    const jit = T.smoothPolyline([{ x: 0, y: 0, z: 0 }, { x: 0.001, y: 0, z: 0 }, { x: 0.1, y: 0, z: 0 }]);
+    assert.ok(jit.every((pt) => pt.x >= -1e-9 && pt.x <= 0.1 + 1e-9 && Math.abs(pt.y) < 1e-12), 'jitter merged, no overshoot');
+    env.feed(frameC(100, 50));
+    env.feed(frameC(120, 60));
+    env.feed(frameC(140, 70));
+    assert.ok(T.getTrailLengths().actual >= 2, 'trail filled: ' + T.getTrailLengths().actual);
+    env.click('pp-3d-clear');
+    assert.strictEqual(T.getTrailLengths().actual, 0, 'Clear trail empties actual');
+    assert.strictEqual(T.getTrailLengths().desired, 0, 'Clear trail empties desired');
+    console.log('  PASS: ' + raw.length + ' raw -> ' + d.length + ' samples through all raw points, circle dev ' + maxDev.toFixed(4) + ' m; clear -> 0');
+    env.destroy();
+  }
+
+  // 18. Path plane: kind / tilt / spacing for presets and drawing.
+  {
+    console.log('\n[CHECK 18: path plane (xy/xz/yz, tilt, spacing) for presets + drawing]');
+    const env = loadPanel();
+    const T = env.sandbox.__pathPanelTest;
+    const room = { w: 3, d: 3, h: 2 };
+    const inRoom = (p) => Math.abs(p.x) <= room.w / 2 - 0.15 + 1e-3 && Math.abs(p.y) <= room.d / 2 - 0.15 + 1e-3 &&
+      p.z >= Math.min(0.1, room.h / 2) - 1e-3 && p.z <= room.h - 0.15 + 1e-3;
+    // Default opts keep the old geometry (CHECK 11 relies on it).
+    const c0 = T.presetPath('circle', 0.4, 0.5, room);
+    const c1 = T.presetPath('circle', 0.4, 0.5, room, { plane: 'xy', tilt: 0 });
+    assert.strictEqual(JSON.stringify(c0), JSON.stringify(c1), 'xy/0 == legacy');
+    // Vertical xz circle: y constant, radius 0.4 about (0, alt).
+    const cz = T.presetPath('circle', 0.4, 1.0, room, { plane: 'xz' });
+    assert.ok(cz.every((p) => Math.abs(p.y) < 1e-9), 'xz: y = 0');
+    assert.ok(cz.every((p) => Math.abs(Math.hypot(p.x, p.z - 1.0) - 0.4) < 0.002), 'xz: radius 0.4 about z=1');
+    const cy = T.presetPath('circle', 0.4, 1.0, room, { plane: 'yz' });
+    assert.ok(cy.every((p) => Math.abs(p.x) < 1e-9), 'yz: x = 0');
+    // Tilted xy circle: in a plane with normal (0, -sin, cos).
+    const ct = T.presetPath('circle', 0.4, 1.0, room, { plane: 'xy', tilt: 30 });
+    const s30 = Math.sin(Math.PI / 6), c30 = Math.cos(Math.PI / 6);
+    assert.ok(ct.every((p) => Math.abs(-s30 * p.y + c30 * (p.z - 1.0)) < 0.002), 'tilt: points on plane');
+    assert.ok(Math.max(...ct.map((p) => p.z)) - Math.min(...ct.map((p) => p.z)) > 0.35, 'tilt: z varies');
+    // Too big for the room: uniform scale keeps the shape a circle and inside.
+    const big = T.presetPath('circle', 5, 1.0, room, { plane: 'xz' });
+    const r0 = Math.hypot(big[0].x, big[0].z - 1.0);
+    assert.ok(big.every(inRoom), 'big xz circle inside room');
+    assert.ok(big.every((p) => Math.abs(Math.hypot(p.x, p.z - 1.0) - r0) < 0.002), 'big stays circular, r ' + r0);
+    for (const kind of T.PRESET_KINDS) for (const plane of ['xy', 'xz', 'yz']) for (const tilt of [-45, 0, 60]) {
+      const pts = T.presetPath(kind, 0.8, 1.0, room, { plane: plane, tilt: tilt, spacing: 0.05 });
+      assert.ok(pts.length >= 2 && pts.slice(kind === 'hover' ? 1 : 0).every(inRoom), kind + ' ' + plane + ' ' + tilt + ' in room');
+    }
+    // Spacing: resampled steps <= spacing, square keeps its 4 corners.
+    const sq = T.presetPath('square', 0.4, 0.5, room, { spacing: 0.05 });
+    for (let i = 1; i < sq.length; i++) {
+      const d = Math.hypot(sq[i].x - sq[i - 1].x, sq[i].y - sq[i - 1].y, sq[i].z - sq[i - 1].z);
+      assert.ok(d <= 0.05 + 2e-3, 'step ' + d);
+    }
+    for (const cx of [[0.4, 0.4], [-0.4, 0.4], [-0.4, -0.4], [0.4, -0.4]]) {
+      assert.ok(sq.some((p) => Math.abs(p.x - cx[0]) < 1e-3 && Math.abs(p.y - cx[1]) < 1e-3), 'corner ' + cx);
+    }
+    // Drawing: top-view lift onto a tilted xy plane; vertical planes refuse 2D.
+    T.setPlane('xy', 20);
+    const lp = T.planeFromTop(0.1, 0.5);
+    assert.ok(Math.abs(lp.z - (0.5 + 0.5 * Math.tan(20 * Math.PI / 180))) < 1e-6, 'lift z ' + lp.z);
+    T.setPlane('xz', 0);
+    assert.strictEqual(T.planeFromTop(0.1, 0.2), null, 'xz refuses top view');
+    T.setPlane(null, NaN, 0.07);
+    assert.strictEqual(T.getPlane().spacing, 0.07, 'spacing set');
+    console.log('  PASS: xy/0 == legacy, xz/yz vertical, tilt on-plane, big scaled uniformly (r ' + r0.toFixed(3) +
+      '), ' + T.PRESET_KINDS.length * 9 + ' combos in room, square ' + sq.length + ' pts @0.05 m with corners');
+    env.destroy();
+  }
+
+  // 19. Live metrics block + hint when setpoint telemetry is missing.
+  {
+    console.log('\n[CHECK 19: live metrics (rates, error, path length) + missing-Des hint]');
+    const env = loadPanel();
+    const T = env.sandbox.__pathPanelTest;
+    const html0 = env.doc.getElementById('pp-metrics').innerHTML;
+    assert.ok(/no position feedback/.test(html0) && /no setpoint/.test(html0), 'hint names missing FB and Des');
+    env.feed(frameC(100, 50));
+    env.feed(frameC(120, 60));
+    env.feed(frameC(140, 70));
+    let html = env.doc.getElementById('pp-metrics').innerHTML;
+    assert.ok(/ Hz$/.test(metricTile(html, 'FB rate')), 'FB rate filled: ' + metricTile(html, 'FB rate'));
+    assert.strictEqual(metricTile(html, 'Des rate'), '—', 'no Des yet');
+    assert.ok(/no setpoint/.test(html) && !/no position feedback/.test(html), 'hint now only Des');
+    env.feed(frameTelemetry(160, 80, 150, 80));
+    env.feed(frameTelemetry(180, 90, 150, 80));
+    env.feed(frameTelemetry(200, 100, 150, 80));
+    html = env.doc.getElementById('pp-metrics').innerHTML;
+    assert.ok(/ m$/.test(metricTile(html, 'Live error')), 'live error: ' + metricTile(html, 'Live error'));
+    assert.ok(!/pp-metric-hint/.test(html), 'hint gone once FB and Des arrive');
+    assert.strictEqual(T.rxRate([0, 100, 200, 300], 350), 10, 'rate 10 Hz');
+    assert.strictEqual(T.rxRate([0, 100, 200], 5000), null, 'stale -> null');
+    assert.ok(Math.abs(T.path3DLength([{ x: 0, y: 0, z: 0 }, { x: 0.3, y: 0.4, z: 0 }, { x: 0.3, y: 0.4, z: 1 }]) - 1.5) < 1e-12, '3D length');
+    env.click('pp-3d-clear');
+    html = env.doc.getElementById('pp-metrics').innerHTML;
+    assert.strictEqual(metricTile(html, 'FB rate'), '—', 'clear resets FB rate');
+    console.log('  PASS: missing-FB/Des hint, FB rate + live error fill, clear resets rate; rxRate/path3DLength exact');
+    env.destroy();
+  }
+
+  // 20. Execute / Stop: preset -> firmware path commands, one at a time, SDK only.
+  {
+    console.log('\n[CHECK 20: execute preset via 0x0A/0x0B/0x0C/0x11, stop, SDK gate, abort on reject]');
+    const env = loadPanel();
+    const T = env.sandbox.__pathPanelTest;
+    const room = { w: 3, d: 3, h: 2 };
+    const o = { x: 0.5, y: -0.25 };
+    // Units: centre in cm, z in m, amplitude/radius in cm; omega = v/r, f = v/(2 pi A).
+    let pl = T.executePlan('circle', 0.4, 0.8, room, o, { speed: 0.2, duration: 15 });
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(pl.steps)),
+      [[12, 0, 50], [12, 1, -25], [12, 2, 0.8], [12, 3, 40], [12, 4, 0.5], [12, 5, 15], [12, 6, 1]], 'circle steps');
+    pl = T.executePlan('line', 0.4, 0.8, room, o, { speed: 0.2 });
+    assert.strictEqual(pl.steps[3][2], 40, 'line amp cm');
+    assert.strictEqual(pl.steps[4][2], Math.round(0.2 / (2 * Math.PI * 0.4) * 1000) / 1000, 'line freq');
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(pl.steps[7])), [11, 7, 1], 'line active last');
+    pl = T.executePlan('figure8', 0.4, 0.8, room, o, {});
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(pl.steps.slice(-2))), [[17, 6, 1], [17, 7, 1]], 'fig8 type 1 then active');
+    assert.ok(/hover would turn/.test(T.executePlan('hover', 0.4, 0.8, room, o, {}).error), 'hover needs yaw');
+    pl = T.executePlan('hover', 0.4, 0.8, room, o, { yaw: -12.5 });
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(pl.steps)), [[10, 0, 50], [10, 1, -25], [10, 2, 0.8], [10, 3, -12.5], [10, 4, 1]], 'hover steps');
+    for (const k of ['square', 'helix', 'drawn']) assert.ok(/waypoint-upload/.test(T.executePlan(k, 0.4, 0.8, room, o, {}).error), k + ' refused');
+    assert.ok(/horizontal only/.test(T.executePlan('circle', 0.4, 0.8, room, o, { plane: 'xz' }).error), 'xz refused');
+    assert.ok(/horizontal only/.test(T.executePlan('circle', 0.4, 0.8, room, o, { tilt: 10 }).error), 'tilt refused');
+    // Big preset is room-fitted: the drone gets the fitted radius, not the typed one.
+    pl = T.executePlan('circle', 5, 0.8, room, o, {});
+    assert.ok(pl.steps[3][2] < 150 && pl.steps[3][2] > 50, 'fitted radius ' + pl.steps[3][2]);
+
+    // Handler: sync thenable submit stub records calls.
+    const sent = [];
+    let nextId = 1, confirms = 0;
+    env.api.submitCommand = (c, i, v) => { sent.push([c, i, v]); const id = nextId++; return { then(ok) { ok({ transaction_id: id }); } }; };
+    env.sandbox.confirm = () => { confirms++; return true; };
+    env.doc.getElementById('pp-preset-kind').value = 'circle';
+    const status = () => env.doc.getElementById('pp-exec-status').textContent;
+    env.click('pp-exec-go');
+    assert.strictEqual(sent.length, 0, 'no SDK -> nothing sent');
+    assert.ok(/not SDK/.test(status()), 'status: ' + status());
+    const sdk = (extra) => Object.assign({ connected: true, status: { rc_authority: 1 }, streams: {} }, extra || {});
+    env.feed(sdk());
+    assert.strictEqual(T.getSdk(), 1, 'sdk seen');
+    env.click('pp-exec-go');
+    assert.strictEqual(confirms, 1, 'confirm asked');
+    assert.strictEqual(sent.length, 1, 'first step only before its result');
+    for (let k = 1; k <= 7; k++) env.feed(sdk({ last_transaction_result: { transaction_id: k, status: 'applied' } }));
+    assert.strictEqual(sent.length, 7, 'all 7 sent: ' + sent.length);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(sent[6])), [12, 6, 1], 'active last');
+    assert.ok(/all 7 commands applied/.test(status()), status());
+    // Reject mid-sequence: active=1 never sent.
+    sent.length = 0;
+    env.click('pp-exec-go');
+    env.feed(sdk({ command_results: [{ transaction_id: 8, status: 'applied' }] }));
+    env.feed(sdk({ command_results: [{ transaction_id: 9, status: 'rejected', reason: 'interlock' }] }));
+    env.feed(sdk({ command_results: [{ transaction_id: 9, status: 'rejected', reason: 'interlock' }] }));
+    assert.strictEqual(sent.length, 2, 'stopped after reject');
+    assert.ok(!sent.some((s) => s[1] === 6 && s[2] === 1), 'active never sent');
+    assert.ok(/rejected .interlock./.test(status()), status());
+    assert.strictEqual(T.getExec(), null, 'idle after abort');
+    // Hover uses heading from Ctrler.yawPID.FB, else -imu_data.yaw.
+    env.feed(sdk({ streams: { '0': { values: { 'imu_data.yaw': 30 } } } }));
+    assert.strictEqual(T.getHoldYaw(), -30, 'hold yaw = -imu yaw');
+    // Stop: three deactivations, never 0x0D.
+    sent.length = 0;
+    env.click('pp-exec-stop');
+    for (let k = nextId - 1; k < nextId + 3; k++) env.feed(sdk({ last_transaction_result: { transaction_id: k, status: 'verified' } }));
+    assert.deepStrictEqual(sent, [[11, 7, 0], [12, 6, 0], [17, 7, 0]], 'stop steps');
+    assert.ok(!sent.some((s) => s[0] === 13), 'no 0x0D');
+    console.log('  PASS: units (cm/m), 7-step circle one-at-a-time, SDK gate, abort on reject, hover yaw, stop = 3 deactivations');
+    env.destroy();
+  }
+
   console.log('\nALL CHECKS PASSED SUCCESSFULLY.');
 }
 
