@@ -181,8 +181,21 @@ uint16_t g_cal_health = 0U;   /* bitmask: 0x01 BOOT_OK | 0x02 COLD_OK | 0x04 COL
  * button had been broken in exactly this way for the entire v3 era; the
  * fix makes the reset sticky. The bias estimator (OF_BIAS_*) will start
  * accumulating again from the new (zero) state on the next tick. */
+/* FIX 2026-09-26: Mode 2 KF measures (OF - s_of_bias) = vel - bias. Any change
+ * of s_of_bias by d counts shifts that measurement by -d*0.01 m/s, so shift the
+ * KF bias state by the same amount; otherwise the step is read as velocity and
+ * integrates into position. Every s_of_bias writer calls this with its delta. */
+static void Of_RebaseKfBias(float dbx, float dby)
+{
+	if (g_of_bias_mode == 2U && s_ekf_of_inited) {
+		s_ekf_of.x[2] += dbx * 0.01f;
+		s_ekf_of.x[5] += dby * 0.01f;
+	}
+}
+
 void Reset_World_Origin(void)
 {
+	Of_RebaseKfBias(-s_of_bias_x, -s_of_bias_y);
 	ano_of.earth_x       = 0.0f;
 	ano_of.earth_y       = 0.0f;
 	ano_of.earth_x_ture  = 0.0f;
@@ -292,6 +305,7 @@ void stabilizer_Task(void)
 *************************************************************************/
 void Update_Data(void)
 {
+	u8 pos_integrate;
 	
 	Cos_Yaw_01=cos(-imu_data.yaw* DEG2RAD);
 	Sin_Yaw_01=sin(-imu_data.yaw* DEG2RAD);
@@ -311,14 +325,10 @@ void Update_Data(void)
 			if (g_of_bias_capture_req) {
 				g_of_bias_capture_req = 0;
 				if (of_ok) {
+					Of_RebaseKfBias((float)ano_of.of2_dx_fix - s_of_bias_x,
+					                (float)ano_of.of2_dy_fix - s_of_bias_y);
 					s_of_bias_x = (float)ano_of.of2_dx_fix;
 					s_of_bias_y = (float)ano_of.of2_dy_fix;
-					/* Mode 2: inject debiased OF as KF velocity measurement */
-					if (g_of_bias_mode == 2U && s_ekf_of_inited) {
-						float ofx = ((float)ano_of.of2_dx_fix - s_of_bias_x) * 0.01f;
-						float ofy = ((float)ano_of.of2_dy_fix - s_of_bias_y) * 0.01f;
-						EkfOf_Update(&s_ekf_of, ofx, ofy);
-					}
 				}
 			}
 
@@ -381,7 +391,15 @@ void Update_Data(void)
 				}
 			}
 		}
-		/* ---- Position integration: Modes 0/1 use raw OF, Mode 2 uses KF ---- */
+		/* ---- Position integration: Modes 0/1 use raw OF, Mode 2 uses KF ----
+		 * FIX 2026-09-26: one ground-hold gate for all modes (mode 2 used to
+		 * integrate on the ground, so armed-idle drift became a takeoff step).
+		 * Handheld alt is band-limited: raw u32 glitches (2905, 0xFFFFFFFF). */
+		pos_integrate = (u8)(ano_of.of_quality >= OF_MIN_QUALITY &&
+		    ((g_of_handheld_test && ano_of.of_alt_cm >= OF_HANDHELD_MIN_ALT_CM &&
+		      ano_of.of_alt_cm <= 500U) ||
+		     (DroneStatus.ARM_Status == Armed &&
+		      (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING))));
 		if (g_of_bias_mode == 2U) {
 			/* Mode 2: EKF state x[0]=pos_x, x[3]=pos_y is already debiased by
 			 * construction. Apply yaw rotation and feed directly to PID FB.
@@ -397,22 +415,24 @@ void Update_Data(void)
 			}
 			s_ekf_prev_px = s_ekf_of.x[0];
 			s_ekf_prev_py = s_ekf_of.x[3];
-			ano_of.earth_x += ekf_dx * Cos_Yaw_01 + ekf_dy * Sin_Yaw_01;
-			ano_of.earth_y += ekf_dy * Cos_Yaw_01 - ekf_dx * Sin_Yaw_01;
+			if (pos_integrate) {
+				ano_of.earth_x += ekf_dx * Cos_Yaw_01 + ekf_dy * Sin_Yaw_01;
+				ano_of.earth_y += ekf_dy * Cos_Yaw_01 - ekf_dx * Sin_Yaw_01;
+			}
 			ano_of.earth_x_ture =  ano_of.earth_y;
 			ano_of.earth_y_ture = -ano_of.earth_x;
 			Ctrler.locxPID.FB = ano_of.earth_x_ture;
 			Ctrler.locyPID.FB = ano_of.earth_y_ture;
 		} else {
 			s_ekf_pos_synced = 0U;
+			/* Re-init the KF on the next entry to mode 2: its vel/bias states
+			 * are stale (or diverged, after a health fallback). */
+			s_ekf_of_inited = 0U;
 			/* Modes 0 and 1: debias raw OF and integrate as before.
 			 * FIX 2026-09-26: hold position while on the ground (disarmed,
 			 * GROUND_IDLE or LANDED): OF zero wanders 1-3 counts at rest,
 			 * integrating to cm/s drift before takeoff. */
-			if (ano_of.of_quality >= OF_MIN_QUALITY &&
-			    ((g_of_handheld_test && ano_of.of_alt_cm >= OF_HANDHELD_MIN_ALT_CM) ||
-			     (DroneStatus.ARM_Status == Armed &&
-			      (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING))))
+			if (pos_integrate)
 			{
 				float of_dx_deb = ano_of.of2_dx_fix - s_of_bias_x;
 				float of_dy_deb = ano_of.of2_dy_fix - s_of_bias_y;
@@ -502,7 +522,7 @@ void Update_Data(void)
 			Ctrler.locysPID.FB=  (-fb_dx) * Cos_Yaw_01 - (fb_dy)*Sin_Yaw_01;
 		}
 	
-	  /* Altitude sanity gate (of_alt_cm is cm, u16). Three layers (ADR-0011 Z-gate),
+	  /* Altitude sanity gate (of_alt_cm is cm, u32; clamped to u16 below). Three layers (ADR-0011 Z-gate),
 	   * mirroring PX4/DJI altitude filtering:
 	   *   1. median-of-3 on the raw sample — a lone spike (in-band or the 0xFFFF
 	   *      no-reading) is never the median of three, so it is dropped before the
@@ -523,7 +543,8 @@ void Update_Data(void)
 			/* Layer 1: median-of-3. */
 			s_alt_hist[2] = s_alt_hist[1];
 			s_alt_hist[1] = s_alt_hist[0];
-			s_alt_hist[0] = ano_of.of_alt_cm;
+			/* of_alt_cm is u32: clamp, a bare cast aliases 65536+x to x cm */
+			s_alt_hist[0] = (ano_of.of_alt_cm > 0xFFFFU) ? 0xFFFFU : (u16)ano_of.of_alt_cm;
 			if (s_alt_hist_n < 3U) s_alt_hist_n++;
 			if (s_alt_hist_n >= 3U)
 			{
@@ -533,7 +554,7 @@ void Update_Data(void)
 			}
 			else
 			{
-				alt_med = ano_of.of_alt_cm;  /* warmup: not enough history yet */
+				alt_med = s_alt_hist[0];  /* warmup: not enough history yet */
 			}
 
 			/* Layer 2: band gate. */
@@ -886,15 +907,13 @@ void Compute_Motor(void)
 					s_of_bias_y = (float)ano_of.of2_dy_fix;
 				}
 				s_of_bias_seeded = 1U;
-				/* Mode 2: inject one debiased OF update into the KF
-				 * to warm-start its vel/bias states at ARM */
-				if (g_of_bias_mode == 2U && s_ekf_of_inited) {
-					float ofx = ((float)ano_of.of2_dx_fix - s_of_bias_x) * 0.01f;
-					float ofy = ((float)ano_of.of2_dy_fix - s_of_bias_y) * 0.01f;
-					/* One predict+update warms the KF state from current OF */
-					EkfOf_Predict(&s_ekf_of, 0.005f);
-					EkfOf_Update(&s_ekf_of, ofx, ofy);
-				}
+			}
+			/* Mode 2: Reset_World_Origin() rebased the KF to bias 0; rebase
+			 * to the snapped bias. On the ground at ARM velocity is zero. */
+			Of_RebaseKfBias(s_of_bias_x, s_of_bias_y);
+			if (g_of_bias_mode == 2U && s_ekf_of_inited) {
+				s_ekf_of.x[1] = 0.0f;
+				s_ekf_of.x[4] = 0.0f;
 			}
 			/* Clear EKF fallback sticky flag on ARM 0→1 edge so the
 			 * dashboard sees a clean state for each new flight. */
@@ -912,6 +931,11 @@ void Compute_Motor(void)
 			Reset_World_Origin();
 			s_of_bias_x = s_of_pre_ok ? s_of_pre_x : keep_bx;
 			s_of_bias_y = s_of_pre_ok ? s_of_pre_y : keep_by;
+			Of_RebaseKfBias(s_of_bias_x, s_of_bias_y);
+			if (g_of_bias_mode == 2U && s_ekf_of_inited) {
+				s_ekf_of.x[1] = 0.0f;
+				s_ekf_of.x[4] = 0.0f;
+			}
 		}
 		s_prev_handheld = g_of_handheld_test;
 		s_prev_armed = armed_now;
