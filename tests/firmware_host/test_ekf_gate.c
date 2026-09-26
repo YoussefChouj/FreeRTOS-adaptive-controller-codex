@@ -133,6 +133,23 @@ static void test_inactive_filter_unhealthy(void)
     printf("PASS inactive filter reports unhealthy\n");
 }
 
+static void test_nis_z_rate(void)
+{
+    Ekf9_t e;
+    volatile Ekf9Gate_t *g = &g_ekf_gate;
+    boot(&e, g, 1U);
+    /* Set P[2,2] to a known value, R_z to another */
+    e.P[2 * 9 + 2] = 2.0f;
+    e.R_z = 3.0f;
+    e.x[2] = 0.0f; /* vel_z */
+    /* Update with z_rate = 5.0. y = 5.0. s_zz = 2.0 + 3.0 = 5.0.
+       e->nis should be y*y / s_zz = 25.0 / 5.0 = 5.0.
+       If it used R_z, it would be 25.0 / 3.0 = 8.333. */
+    Ekf9_UpdateZRate(&e, 5.0f);
+    assert(e.nis > 4.9f && e.nis < 5.1f);
+    printf("PASS Z-rate NIS uses s_zz\n");
+}
+
 int main(void)
 {
     test_fixed_freezes_bias();
@@ -141,6 +158,7 @@ int main(void)
     test_gated_freezes_in_flight();
     test_nan_latches_fallback();
     test_inactive_filter_unhealthy();
+    test_nis_z_rate();
     printf("ALL PASS\n");
     return 0;
 }

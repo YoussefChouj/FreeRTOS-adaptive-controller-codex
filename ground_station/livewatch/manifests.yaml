@@ -1121,6 +1121,8 @@ manifests:
       - rpm_dbg_edges[1]
       - rpm_dbg_edges[2]
       - rpm_dbg_edges[3]
+      - g_ctrl_select
+
 
   flight_test_position:
     doc: >

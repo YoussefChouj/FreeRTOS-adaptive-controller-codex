@@ -450,17 +450,24 @@ def _service_symbol_resolver(service):
     resolver = getattr(bridge, "_preset_resolver", None) if bridge is not None else None
     if resolver is not None:
         return resolver, None
-    if _own_symbol_resolver is not None:
-        return _own_symbol_resolver, None
-    if _own_symbol_resolver_error is None:
-        try:
-            elf_path = Path(__file__).parents[2] / "OBJ" / "JX_FLY.axf"
-            if not elf_path.exists():
-                raise FileNotFoundError(f"firmware ELF not found at {elf_path}")
+        
+    try:
+        elf_path = Path(__file__).parents[2] / "OBJ" / "JX_FLY.axf"
+        if not elf_path.exists():
+            return None, f"firmware ELF not found at {elf_path}"
+            
+        current_mtime = elf_path.stat().st_mtime
+        last_mtime = globals().get("_own_symbol_resolver_mtime", 0)
+        
+        if _own_symbol_resolver is None or last_mtime != current_mtime:
             from ground_station.livewatch.symbols import SymbolResolver
             _own_symbol_resolver = SymbolResolver(str(elf_path))
-        except Exception as exc:  # surfaced verbatim in the 503 payload
-            _own_symbol_resolver_error = str(exc)
+            globals()["_own_symbol_resolver_mtime"] = current_mtime
+            _own_symbol_resolver_error = None
+            
+    except Exception as exc:  # surfaced verbatim in the 503 payload
+        _own_symbol_resolver_error = str(exc)
+        
     if _own_symbol_resolver is not None:
         return _own_symbol_resolver, None
     return None, _own_symbol_resolver_error

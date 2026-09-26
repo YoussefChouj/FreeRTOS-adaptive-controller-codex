@@ -325,46 +325,43 @@ def check_rec(url: str, results: list[CheckResult]) -> CheckResult:
     session_dir = rec_start.get("session_dir")
     session_id = rec_start.get("session_id") or rec_start.get("session_abs_path")
 
-    # GET /api/recording — verify active
-    st, rec_get = get_json(url + "api/recording")
-    if st != 200 or not rec_get or not rec_get.get("recording"):
-        r.mark_fail("GET /api/recording shows not recording", rec_get)
-        results.append(r)
-        return r
+    try:
+        # GET /api/recording — verify active
+        st, rec_get = get_json(url + "api/recording")
+        if st != 200 or not rec_get or not rec_get.get("recording"):
+            r.mark_fail("GET /api/recording shows not recording", rec_get)
+            results.append(r)
+            return r
 
-    rows_first = rec_get.get("rows", 0)
+        rows_first = rec_get.get("rows", 0)
 
-    # Wait for rows to grow over 3 s
-    time.sleep(3)
-    st, rec_get2 = get_json(url + "api/recording")
-    rows_second = rec_get2.get("rows", 0) if st == 200 else 0
+        # Wait for rows to grow over 3 s
+        time.sleep(3)
+        st, rec_get2 = get_json(url + "api/recording")
+        rows_second = rec_get2.get("rows", 0) if st == 200 else 0
 
-    rows_grown = rows_second > rows_first
+        rows_grown = rows_second > rows_first
 
-    # POST /api/session/note
-    note_text = f"e2e note at {datetime.now(timezone.utc).isoformat()}"
-    note_st, note_resp = post_json(url + "api/session/note", {
-        "text": note_text, "kind": "goal", "source": "agent:e2e"
-    })
+        # POST /api/session/note
+        note_text = f"e2e note at {datetime.now(timezone.utc).isoformat()}"
+        note_st, note_resp = post_json(url + "api/session/note", {
+            "text": note_text, "kind": "goal", "source": "agent:e2e"
+        })
 
-    # GET /api/session/notes — verify note lands
-    # When recording is active, notes are flushed immediately into the CSV
-    # and won't appear in the buffer, so we accept note_posted=True as success.
-    notes_st, notes = get_json(url + "api/session/notes")
-    note_landed = False
-    if note_st == 201:
-        # Note was accepted; when recording is active it's flushed immediately
-        # to events.jsonl, so it won't appear in /api/session/notes buffer.
-        # If recording is active, accept note_posted as success.
-        note_landed = True  # accepted = landed (buffered or flushed)
-    elif notes_st == 200 and notes:
-        for n in notes.get("notes", []):
-            if note_text in str(n.get("text", "")):
-                note_landed = True
-                break
+        # GET /api/session/notes — verify note lands
+        notes_st, notes = get_json(url + "api/session/notes")
+        note_landed = False
+        if note_st == 201:
+            note_landed = True  # accepted = landed (buffered or flushed)
+        elif notes_st == 200 and notes:
+            for n in notes.get("notes", []):
+                if note_text in str(n.get("text", "")):
+                    note_landed = True
+                    break
+    finally:
+        # POST /api/recording/stop — freezes row count
+        rec_stop_st, rec_stop = post_json(url + "api/recording/stop", {})
 
-    # POST /api/recording/stop — freezes row count
-    rec_stop_st, rec_stop = post_json(url + "api/recording/stop", {})
     if rec_stop_st != 200 or not rec_stop or rec_stop.get("recording"):
         r.mark_fail("POST /api/recording/stop failed", rec_stop)
         results.append(r)

@@ -764,12 +764,18 @@ class WifiBridge:
 
     def _ensure_preset_resolver(self) -> None:
         """Build a SymbolResolver from the firmware ELF if we do not have one."""
-        if self._preset_resolver is not None:
-            return
         from ground_station.livewatch.symbols import SymbolResolver
         elf_path = Path(__file__).parents[2] / "OBJ" / "JX_FLY.axf"
-        if elf_path.exists():
+        
+        if not elf_path.exists():
+            return
+            
+        current_mtime = elf_path.stat().st_mtime
+        last_mtime = getattr(self, "_preset_resolver_mtime", None)
+        
+        if self._preset_resolver is None or last_mtime != current_mtime:
             self._preset_resolver = SymbolResolver(str(elf_path))
+            self._preset_resolver_mtime = current_mtime
 
     def _subscribe_preset_single(
         self,

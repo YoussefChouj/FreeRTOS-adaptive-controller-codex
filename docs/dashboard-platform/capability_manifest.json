@@ -1572,9 +1572,56 @@
           "danger_level": "safe",
           "description": "Safe at runtime."
         }
+      },
+      "0x1F": {
+        "applied_async": true,
+        "description": "Active controller: PID=0, MRAC=1, MRAC_STRUCT=2, MRAC_RBF=3, 3LAYER=4. Switched when disarmed.",
+        "id": 31,
+        "id_hex": "0x1F",
+        "name": "CTRL_SELECT",
+        "notes": "",
+        "parameters": [
+          {
+            "description": "",
+            "index": 0,
+            "max_val": 4,
+            "min_val": 0,
+            "name": "ctrl_id",
+            "range": [
+              0,
+              4
+            ],
+            "symbol": "g_ctrl_select_req",
+            "unit": "enum"
+          },
+          {
+            "description": "",
+            "index": 1,
+            "max_val": 15,
+            "min_val": 0,
+            "name": "axis_mask",
+            "range": [
+              0,
+              15
+            ],
+            "symbol": "g_ctrl_axis_mask",
+            "unit": "int"
+          }
+        ],
+        "preconditions": {
+          "requires_armed": false,
+          "requires_disarmed": true,
+          "requires_ground_idle": false,
+          "requires_sdk_mode": false
+        },
+        "returns_ack": true,
+        "safety_class": {
+          "danger_level": "safe",
+          "description": "Changes controller structure. Safe to request anytime, applied on disarm."
+        }
       }
     },
-    "count": 25,
+    "count": 26,
     "source": "ground_station/platform/firmware_contract.py"
   },
   "elf_identity": {

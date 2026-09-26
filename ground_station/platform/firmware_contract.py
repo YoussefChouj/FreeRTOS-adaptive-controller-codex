@@ -497,6 +497,18 @@ COMMAND_TABLE: dict[int, CommandSpec] = {
         ),
         safety=SafetyClass(description="Safe at runtime."),
     ),
+    0x1F: CommandSpec(
+        id=0x1F, name="CTRL_SELECT",
+        description="Active controller: PID=0, MRAC=1, MRAC_STRUCT=2, MRAC_RBF=3, 3LAYER=4. Switched when disarmed.",
+        params=(
+            CommandParam(0, "ctrl_id", "enum", 0, 4, symbol="g_ctrl_select_req"),
+            CommandParam(1, "axis_mask", "int", 0, 15, symbol="g_ctrl_axis_mask"),
+        ),
+        safety=SafetyClass(
+            requires_disarmed=True,
+            description="Changes controller structure. Safe to request anytime, applied on disarm.",
+        ),
+    ),
 }
 
 

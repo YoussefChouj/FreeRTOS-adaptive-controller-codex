@@ -424,7 +424,19 @@ class GroundStationService:
                        "mtime": float(st.st_mtime)}
         except OSError:
             elf = None
-        return {"started_commit": self.started_commit, "firmware_elf": elf}
+
+        ctrl_select = None
+        with self._state_lock:
+            for slot_data in self._streams.values():
+                if isinstance(slot_data, dict) and "values" in slot_data:
+                    if "g_ctrl_select" in slot_data["values"]:
+                        ctrl_select = slot_data["values"]["g_ctrl_select"]
+                        break
+
+        ctx = {"started_commit": self.started_commit, "firmware_elf": elf}
+        if ctrl_select is not None:
+            ctx["g_ctrl_select"] = int(ctrl_select)
+        return ctx
 
     def recording_status(self) -> dict[str, Any]:
         """State block for GET /api/recording / POST /api/recording/stop."""

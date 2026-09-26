@@ -303,7 +303,7 @@ void Ekf9_UpdateZRate(Ekf9_t *e, float z_rate)
         }
     }
 
-    e->nis = y * y / e->R_z;
+    e->nis = y * y / s_zz;
 
     /* Cache K[0..2] for telemetry */
     e->k_last[0] = e->K[0U * 3U + 2U];

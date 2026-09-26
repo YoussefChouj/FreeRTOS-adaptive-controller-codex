@@ -125,7 +125,7 @@ def test_manifest_fields(tmp_path):
     rec = CsvRecorder(tmp_path, enabled=True)
     rec.start(requested_by="operator", reason="unit test",
               label="lab", subscribe_layout={"schema_id": "r1", "slots": ["0"]},
-              context={"started_commit": "abc1234", "firmware_elf": {"path": "OBJ/JX_FLY.axf", "size": 1}})
+              context={"started_commit": "abc1234", "firmware_elf": {"path": "OBJ/JX_FLY.axf", "size": 1}, "g_ctrl_select": 1})
     rec.note(0, {"status.arm": 1}, received_ns=5)
     rec.stop()
 
@@ -138,6 +138,7 @@ def test_manifest_fields(tmp_path):
     assert manifest["subscribe_layout"] == {"schema_id": "r1", "slots": ["0"]}
     assert manifest["context"]["started_commit"] == "abc1234"
     assert manifest["context"]["firmware_elf"]["size"] == 1
+    assert manifest["context"]["g_ctrl_select"] == 1
     assert manifest["started_at"] and manifest["started_at_epoch"]
     assert manifest["stopped_at"] and manifest["stopped_at_epoch"]
     assert manifest["rows"] == 1
