@@ -198,10 +198,10 @@ function runChecks() {
     assert(legendHtml.indexOf('Pos X') !== -1, 'Legend must display Pos X');
     assert(legendHtml.indexOf('Pos Y') !== -1, 'Legend must display Pos Y');
     assert(legendHtml.indexOf('Pos Z (Alt)') !== -1, 'Legend must display Pos Z (Alt)');
-    assert(legendHtml.indexOf('12.3450 m') !== -1, 'Legend must show Pos X = 12.3450 m');
-    assert(legendHtml.indexOf('-45.6780 m') !== -1, 'Legend must show Pos Y = -45.6780 m');
+    assert(legendHtml.indexOf('12.3450 cm') !== -1, 'Legend must show Pos X = 12.3450 cm');
+    assert(legendHtml.indexOf('-45.6780 cm') !== -1, 'Legend must show Pos Y = -45.6780 cm');
     assert(legendHtml.indexOf('2.7500 m') !== -1, 'Legend must show Pos Z = 2.7500 m');
-    console.log('  PASS: Legend reports verified values: Pos X = 12.3450 m, Pos Y = -45.6780 m, Pos Z = 2.7500 m');
+    console.log('  PASS: Legend reports verified values: Pos X = 12.3450 cm, Pos Y = -45.6780 cm, Pos Z = 2.7500 m');
 
     // Missing axis test: omit c.altitude in a payload
     const missingZState = {

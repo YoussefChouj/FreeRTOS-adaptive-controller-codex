@@ -40,8 +40,8 @@
 
   // Default known flight variables with physical units & display metadata
   var DEFAULT_DEFS = {
-    'c.earth_x':       { key: 'c.earth_x',       label: 'Pos X',        unit: 'm',   color: '#ff5964', defaultEnabled: true },
-    'c.earth_y':       { key: 'c.earth_y',       label: 'Pos Y',        unit: 'm',   color: '#35a7ff', defaultEnabled: true },
+    'c.earth_x':       { key: 'c.earth_x',       label: 'Pos X',        unit: 'cm',  color: '#ff5964', defaultEnabled: true },
+    'c.earth_y':       { key: 'c.earth_y',       label: 'Pos Y',        unit: 'cm',  color: '#35a7ff', defaultEnabled: true },
     'c.altitude':      { key: 'c.altitude',      label: 'Pos Z (Alt)',  unit: 'm',   color: '#38b000', defaultEnabled: true },
     'status.roll_deg':  { key: 'status.roll_deg',  label: 'Roll',         unit: 'deg', color: '#4a9eff', defaultEnabled: true },
     'status.pitch_deg': { key: 'status.pitch_deg', label: 'Pitch',        unit: 'deg', color: '#4ecca3', defaultEnabled: true },
