@@ -260,3 +260,62 @@ DASHBOARD_PANEL_EXTRA_VARS: tuple[str, ...] = (
 # 28 vars * 4 B + 12 B overhead = 124 B, so ~2.0 kB/s -- about 2% of the
 # 91.3 kB/s USART3 wire, on top of slot 0's ~4.6 kB/s.
 DASHBOARD_PANEL_EXTRA_DIVIDER: int = 5
+
+
+# ---------------------------------------------------------------------------
+# Slots 2/3 of the default "dashboard" layout: full flight-test telemetry,
+# subscribed automatically at bridge start so every recording carries it
+# (operator request 2026-09-26: comprehensive 4-slot + RPM by default).
+# ---------------------------------------------------------------------------
+
+DASHBOARD_FLIGHT_OUTER_VARS: tuple[str, ...] = (
+    # Attitude loops: setpoint / feedback / output.
+    "Ctrler.rollPID.Des", "Ctrler.rollPID.FB", "Ctrler.rollPID.U",
+    "Ctrler.pitchPID.Des", "Ctrler.pitchPID.FB", "Ctrler.pitchPID.U",
+    "Ctrler.yawPID.Des", "Ctrler.yawPID.FB", "Ctrler.yawPID.U",
+    # Rate loops (gyrox = roll, gyroy = pitch).
+    "Ctrler.gyroxPID.Des", "Ctrler.gyroxPID.FB", "Ctrler.gyroxPID.U",
+    "Ctrler.gyroyPID.Des", "Ctrler.gyroyPID.FB", "Ctrler.gyroyPID.U",
+    "Ctrler.gyrozPID.Des", "Ctrler.gyrozPID.FB", "Ctrler.gyrozPID.U",
+    # Altitude loops.
+    "Ctrler.Z_posPID.Des", "Ctrler.Z_posPID.FB", "Ctrler.Z_posPID.U",
+    "Ctrler.Z_ratePID.Des", "Ctrler.Z_ratePID.FB", "Ctrler.Z_ratePID.U",
+    # Mixer output and measured motor speed (RPM = 60*168e6/period).
+    "mymotor.motor1", "mymotor.motor2", "mymotor.motor3", "mymotor.motor4",
+    "Throttle_out",
+    "rpm_dbg_period_cyc[0]", "rpm_dbg_period_cyc[1]",
+    "rpm_dbg_period_cyc[2]", "rpm_dbg_period_cyc[3]",
+    "rpm_dbg_edges[0]", "rpm_dbg_edges[1]",
+    "rpm_dbg_edges[2]", "rpm_dbg_edges[3]",
+    # Pilot sticks and mode switches.
+    "Remoter.RolCtrler", "Remoter.PitCtrler", "Remoter.YawCtrler",
+    "Remoter.ThrCtrler", "Remoter.DinggaoSwitch", "Remoter.DingdianSwitch",
+    # Controller selection / MRAC state.
+    "g_ctrl_select",
+    "mrac_flags.adaptation_on",
+    "mrac_flags.output_injection_on",
+)
+
+# divider=2 at the 100 Hz Send_Task cadence -> 50 Hz; 46 vars ~ 9 kB/s.
+DASHBOARD_FLIGHT_OUTER_DIVIDER: int = 2
+
+DASHBOARD_FLIGHT_POSITION_VARS: tuple[str, ...] = (
+    "ano_of.earth_x", "ano_of.earth_y",
+    "ano_of.earth_x_ture", "ano_of.earth_y_ture",
+    "ano_of.of2_dx_fix", "ano_of.of2_dy_fix",
+    "ano_of.of_quality", "ano_of.of2_sta",
+    "Ctrler.locxPID.Des", "Ctrler.locxPID.FB",
+    "Ctrler.locxPID.U", "Ctrler.locxPID.SumE",
+    "Ctrler.locyPID.Des", "Ctrler.locyPID.FB",
+    "Ctrler.locyPID.U", "Ctrler.locyPID.SumE",
+    "Ctrler.locxsPID.Des", "Ctrler.locxsPID.FB", "Ctrler.locxsPID.U",
+    "Ctrler.locysPID.Des", "Ctrler.locysPID.FB", "Ctrler.locysPID.U",
+    "s_of_bias_x", "s_of_bias_y",
+    "s_ekf_of.x[0]", "s_ekf_of.x[1]", "s_ekf_of.x[2]",
+    "s_ekf_of.x[3]", "s_ekf_of.x[4]", "s_ekf_of.x[5]",
+    "g_of_hold_active",
+    "DroneStatus.FlyMode",
+)
+
+# divider=4 at 100 Hz -> 25 Hz (OF module updates slower than that).
+DASHBOARD_FLIGHT_POSITION_DIVIDER: int = 4

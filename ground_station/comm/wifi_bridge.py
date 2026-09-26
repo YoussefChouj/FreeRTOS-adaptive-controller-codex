@@ -78,6 +78,10 @@ from .boot_default_layout import (
     DASHBOARD_FRAME_A_DIVIDER,
     DASHBOARD_PANEL_EXTRA_VARS,
     DASHBOARD_PANEL_EXTRA_DIVIDER,
+    DASHBOARD_FLIGHT_OUTER_VARS,
+    DASHBOARD_FLIGHT_OUTER_DIVIDER,
+    DASHBOARD_FLIGHT_POSITION_VARS,
+    DASHBOARD_FLIGHT_POSITION_DIVIDER,
 )
 # Subscribe stream constants reused for the bytes/s budget projection in
 # /subscribe/preview. FRAME_OVERHEAD mirrors SUBSCRIBE_STREAM_FRAME_OVERHEAD
@@ -533,6 +537,14 @@ class WifiBridge:
             self._request_stream_schema(
                 1, DASHBOARD_PANEL_EXTRA_VARS, DASHBOARD_PANEL_EXTRA_DIVIDER,
                 "dashboard-panel-extras")
+            # Flight-test telemetry (loops, motors, RPM, sticks, OF/EKF
+            # position) on slots 2/3 so every recording carries it.
+            self._request_stream_schema(
+                2, DASHBOARD_FLIGHT_OUTER_VARS, DASHBOARD_FLIGHT_OUTER_DIVIDER,
+                "dashboard-flight-outer")
+            self._request_stream_schema(
+                3, DASHBOARD_FLIGHT_POSITION_VARS,
+                DASHBOARD_FLIGHT_POSITION_DIVIDER, "dashboard-flight-position")
 
     def _request_stream_schema(self, slot: int, vars_tuple, divider: int,
                                label: str) -> None:
