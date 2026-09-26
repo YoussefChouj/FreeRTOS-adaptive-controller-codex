@@ -371,9 +371,11 @@ void Update_Data(void)
 		if (g_of_bias_mode == 2U) {
 			/* Mode 2: EKF state x[0]=pos_x, x[3]=pos_y is already debiased by
 			 * construction. Apply yaw rotation and feed directly to PID FB.
-			 * EkfOf_ResetPos() was called from Reset_World_Origin() below. */
-			float ekf_px = s_ekf_of.x[0];
-			float ekf_py = s_ekf_of.x[3];
+			 * EkfOf_ResetPos() was called from Reset_World_Origin() below.
+			 * FIX 2026-09-26: KF states are metres; earth_x/y and locx/yPID
+			 * are cm (modes 0/1), so scale by 100. */
+			float ekf_px = s_ekf_of.x[0] * 100.0f;
+			float ekf_py = s_ekf_of.x[3] * 100.0f;
 			ano_of.earth_x = ekf_px * Cos_Yaw_01 + ekf_py * Sin_Yaw_01;
 			ano_of.earth_y = ekf_py * Cos_Yaw_01 - ekf_px * Sin_Yaw_01;
 			ano_of.earth_x_ture =  ano_of.earth_y;
