@@ -3,7 +3,7 @@
 (1) reference model vs plant: RMSE % of true-rate RMS and lag, zigzag_1.0 nominal noise-free, gamma = 0.
     Same method as sanity_mrac3l.check_b, which used firmware-default knobs; the ref model copies the tuned
     ang/rate gains, so it must be measured with them.  A tag without a 3L class runs on MRAC3L_Unrouted.
-(2) routing diagnosis on every 8th tune row: time-mean gate weight per band (and its time std), max ||W||,
+(2) routing diagnosis on every 5th tune row (all 4 trajectories): time-mean gate weight per band (and its time std), max ||W||,
     RMS u_ad / RMS u_nom (roll+pitch).  Output: stdout + results/yard_3l.json.
 """
 import json, sys
@@ -61,7 +61,7 @@ def diag(cls, params, rl):
 
 
 def main():
-    rl = scen.rows('tune')[::8]
+    rl = scen.rows('tune')[::5]      # stride 5 (not 8): every 8th row was a 'steps' row (fix 2026-09-28)
     out = {}
     for t in sys.argv[1:]:
         p = json.load(open('results/%s_tune.json' % t))['params']
