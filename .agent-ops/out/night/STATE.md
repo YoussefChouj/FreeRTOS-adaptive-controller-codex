@@ -1,4 +1,4 @@
-# Night run STATE (rewritten each milestone) — 2026-09-27 23:55 CST
+# Night run STATE (rewritten each milestone) — 2026-09-27 00:00 CST (09-28)
 
 ## Done
 - bench_v1 frozen 5577b03 (23:45 CST, before any tuning); label fix + API doc + ledger prereg 998c89c.
@@ -9,18 +9,23 @@
 - pid_fw test split (495 rows): median 0.594 m, div 9.1%, sat 4.0%, zigzag xtrack 0.118 m.
   Worst families: payload 1.00, combo_wind_payload 0.98, combo_unseen 0.96, battery 0.94.
 - Worker briefs committed (aafc9ff): W1 INDI+L1, W2 SE3+ESO + MRAC S6/S10/RBF6/12/24.
+- H0 CONFIRMED, H1 CONFIRMED: pid_tuned test median 0.121 m, paired diff -0.472 [-0.524,-0.412] (-80%),
+  div 5.1%, xtrack 0.068 m; combo_unseen still 0.845 m. (326692a)
+- Protocol P1 (ledger): every controller 2x64 CMA-ES evals; stage 2 = tune2.py restart from stage 1;
+  FwPID-based controllers use pid_tuned as stage 1; pid_tuned2 = budget control. H1b prereg.
+- W3 brief (3-layer MRAC) + prev_ref/ copies committed 326692a; dispatch when a worker slot frees.
 
 ## Running
-- pid_tuned CMA-ES tune (sim/bench/results_pid_tune.log -> results/pid_tuned_tune.json); then test eval.
+- pid_tuned2 stage-2 tune + test eval (sim/bench/results_pid_tuned2.log), background bxmg0vexp.
 - VPS workers nw1 (INDI, L1) and nw2 (SE3ESO, MRAC x5) on agy gemini-3.1-pro-high (fallback qwen);
   one background wait -> .agent-ops/out/nw{1,2}.wait.
 
 ## Next
-1. pid_tuned test eval; ledger H0/H1 results.
+1. pid_tuned2 result -> ledger H1b; dispatch W3 (vps-worker.sh spawn nw3 agy:gemini-3.1-pro-high,qwen ...).
 2. Verify worker deliverables (read the code, run sanity + 4-row smoke locally), commit, tune each
    (64 evals), test eval, ledger H2-H5.
 3. W3 brief: 3-layer frequency-routed MRAC with ablations (unrouted / reactive / predictive / both).
 4. report.py: leaderboard + paired bootstrap CIs, per-family table, constraints; REPORT.md by 08:00.
 
 ## Evaluation counts on the test split (report these)
-pid_fw 1
+pid_fw 1, pid_tuned 1
