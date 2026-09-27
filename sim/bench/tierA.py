@@ -31,3 +31,12 @@ MRAC_RBF6 = fair(ctrl_mrac.MRAC_RBF6, 'MRAC_RBF6')
 MRAC_RBF12 = fair(ctrl_mrac.MRAC_RBF12, 'MRAC_RBF12')
 MRAC_RBF24 = fair(ctrl_mrac.MRAC_RBF24, 'MRAC_RBF24')
 SE3ESO = ctrl_se3.SE3ESO
+# 3-layer MRAC (nw3): already keeps the full FwPID knob set; the 4 modes share identical PARAMS (dead knobs:
+# T, horizon in Unrouted; horizon in Reactive).
+from ctrl_mrac3l import MRAC3L_Unrouted, MRAC3L_Reactive, MRAC3L_Predictive, MRAC3L_Both
+# Tier B (nw4), same P2 wrapping as the Tier A MRACs.
+import ctrl_mrac_b
+MRAC_CRM = fair(ctrl_mrac_b.MRAC_CRM, 'MRAC_CRM')
+MRAC_Composite = fair(ctrl_mrac_b.MRAC_Composite, 'MRAC_Composite')
+MRAC_SatAware = fair(ctrl_mrac_b.MRAC_SatAware, 'MRAC_SatAware')
+MRAC_Proj = fair(ctrl_mrac_b.MRAC_Proj, 'MRAC_Proj')

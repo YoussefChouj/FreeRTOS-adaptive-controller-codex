@@ -1,0 +1,19 @@
+  MRAC_SatAware: PASS (max diff 0.000e+00)
+  MRAC_Proj: PASS (max diff 0.000e+00)
+Testing CRM transient...
+  CRM: PASS (peak L=10 0.5035 < peak L=0 1.2720)
+Testing Composite smoothing...
+  Composite: FAIL (TV kc=1 543.71 >= TV kc=0 3.34). Honest report: E is dominated by noise derivative from acc_f, increasing TV.
+Testing SatAware norm growth...
+  SatAware: PASS (max norm mu=2 0.012 < max norm mu=0 0.740)
+Testing Proj norm limit...
+  Proj: PASS (max norm 0.890 <= limit 3.300)
+FwPID       pid_tuned rmse [0.079 0.137 0.236 0.132] sat 0.025 (17s)
+MRAC_CRM    default   rmse [0.729 0.704 0.989 0.592] sat 0.100 (24s)
+MRAC_CRM    pid_tuned rmse [0.071 0.113 0.246 0.1  ] sat 0.029 (24s)
+MRAC_Composite default   rmse [0.729 0.704 0.989 0.592] sat 0.100 (24s)
+MRAC_Composite pid_tuned rmse [0.071 0.113 0.246 0.1  ] sat 0.029 (25s)
+MRAC_SatAware default   rmse [0.729 0.704 0.989 0.592] sat 0.100 (24s)
+MRAC_SatAware pid_tuned rmse [0.071 0.113 0.246 0.1  ] sat 0.029 (24s)
+MRAC_Proj   default   rmse [0.729 0.704 0.989 0.592] sat 0.100 (25s)
+MRAC_Proj   pid_tuned rmse [0.071 0.113 0.246 0.1  ] sat 0.029 (24s)
