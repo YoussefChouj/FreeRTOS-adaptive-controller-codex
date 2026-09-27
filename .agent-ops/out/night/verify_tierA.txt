@@ -1,0 +1,38 @@
+== sanity_indi
+Without filter sync: rate error at t=0.4s: 0.633 dps
+With filter sync max error: 0.525 dps
+Without filter sync max error: 0.656 dps
+PASS: INDI rejects disturbance with no steady-state error, and sync filter helps stability/transient.
+== sanity_l1
+Fast adapt (Am=-50, wc=2Hz) max error: 1.173
+High bw (Am=-10, wc=5Hz) max error: 0.608
+PASS: increasing Am (adaptation rate) does not make the transient worse.
+PASS: C(s) bandwidth sets the robustness/performance trade (higher bw = smaller transient).
+== sanity_se3
+Testing (b) ESO steady-state error removal...
+Final d_hat: [0.         0.         5.00094581]
+Final pos: [0.         0.         0.01362561]
+PASS
+== sanity_mrac
+Error gamma=0: 5298.57
+Error gamma=1.0: 5229.77
+Max W norm: 0.0281
+PASS
+== smoke
+FwPID       default   rmse [0.732 0.707 0.825 0.569] sat 0.022 (20s)
+FwPID       pid_tuned rmse [0.079 0.137 0.236 0.132] sat 0.025 (18s)
+INDI        default   rmse [0.767 0.772 0.852 0.533] sat 0.000 (21s)
+INDI        pid_tuned rmse [0.086 0.107 0.268 0.101] sat 0.000 (18s)
+L1          default   rmse [0.778 0.656 0.919 0.636] sat 0.119 (18s)
+L1          pid_tuned rmse [0.063 0.132 0.24  0.125] sat 0.080 (19s)
+MRAC_S6     default   rmse [0.729 0.704 0.989 0.592] sat 0.100 (25s)
+MRAC_S6     pid_tuned rmse [0.071 0.113 0.246 0.1  ] sat 0.029 (27s)
+MRAC_S10    default   rmse [0.725 0.692 0.915 0.589] sat 0.084 (26s)
+MRAC_S10    pid_tuned rmse [0.057 0.118 0.232 0.106] sat 0.027 (24s)
+MRAC_RBF6   default   rmse [0.729 0.746 0.909 0.558] sat 0.101 (24s)
+MRAC_RBF6   pid_tuned rmse [0.067 0.134 0.244 0.092] sat 0.026 (26s)
+MRAC_RBF12  default   rmse [0.722 0.759 0.913 0.582] sat 0.104 (27s)
+MRAC_RBF12  pid_tuned rmse [0.057 0.131 0.232 0.093] sat 0.026 (25s)
+MRAC_RBF24  default   rmse [0.726 0.705 0.849 0.541] sat 0.049 (24s)
+MRAC_RBF24  pid_tuned rmse [0.058 0.123 0.241 0.113] sat 0.024 (24s)
+SE3ESO      default   rmse [0.223 0.362 0.747 0.378] sat 0.000 (16s)
