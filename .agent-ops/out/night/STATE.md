@@ -1,4 +1,4 @@
-# Night run STATE (rewritten each milestone) — 2026-09-27 00:00 CST (09-28)
+# Night run STATE (rewritten each milestone) — 2026-09-28 00:40 CST
 
 ## Done
 - bench_v1 frozen 5577b03 (23:45 CST, before any tuning); label fix + API doc + ledger prereg 998c89c.
@@ -19,16 +19,22 @@
 - W4 Tier B brief + H6b/H7 prereg committed 24fdb53.
 - W3 brief (3-layer MRAC) + prev_ref/ copies committed 326692a; dispatch when a worker slot frees.
 
+## Runni- nw1/nw2 verified + committed 9fa65bb: sanity_{indi,l1,se3,mrac} PASS, 4-row smoke finite for all 8.
+  P2 (ledger): tierA.py fair variants keep full FwPID knobs incl. ff_v/ff_a (workers had fixed them at 0);
+  INDI drops rate_kp/kd (dead). With pid_tuned knobs they start near pid_tuned (smoke 0.06-0.27 m).
+- MRAC sanity weak: 1-axis 50% LOE error -1.3% at gamma 1, best -3.4% at gamma 100, Th hits TH_MAX=3
+  (sim_coupled normalized law + sigma 0.01 + norm clamp; b7d65dc). Metric is vs the step, not vs the
+  reference model, so inconclusive; the bench tune decides. MRAC_Proj (Tier B) frees th_max.
+
 ## Running
-- VPS workers nw1 (INDI, L1) and nw2 (SE3ESO, MRAC x5) on agy gemini-3.1-pro-high (fallback qwen);
-  one background wait -> .agent-ops/out/nw{1,2}.wait.
+- run_tierA.sh (local, 2 at a time): se3_eso (bench tune + tune2), indi, l1, mrac_s6/s10/rbf6/12/24
+  (tune2 from pid_tuned) then test eval each. Logs sim/bench/results/logs/<tag>.log.
+- VPS nw3 (3-layer MRAC, W3) and nw4 (Tier B, base 9fa65bb). Waits: .agent-ops/out/nw{3,4}.wait.
 
 ## Next
-1. Dispatch W3 (vps-worker.sh spawn nw3 agy:gemini-3.1-pro-high,qwen ...).
-2. Verify worker deliverables (read the code, run sanity + 4-row smoke locally), commit, tune each
-   (64 evals), test eval, ledger H2-H5.
-3. W3 brief: 3-layer frequency-routed MRAC with ablations (unrouted / reactive / predictive / both).
-4. report.py: leaderboard + paired bootstrap CIs, per-family table, constraints; REPORT.md by 08:00.
+1. When run_tierA ends: ledger result H2-H5 vs pid_tuned2 (preds were vs pid_tuned; report both), commit.
+2. nw3: verify (sanity + smoke), tune all 4 modes (P1/P2), H6 on tune split, H6b on test, yardsticks.
+3. nw4: verify, tune, H7. Then report.py, deployability, REPORT.md by 08:00.
 
-## Evaluation counts on the test split (report these)
+ation counts on the test split (report these)
 pid_fw 1, pid_tuned 1, pid_tuned2 1
