@@ -1,4 +1,4 @@
-# Night run STATE (rewritten each milestone) — 2026-09-28 01:35 CST
+# Night run STATE (rewritten each milestone) — 2026-09-28 01:30 CST
 
 ## Done
 - bench_v1 frozen 5577b03 (23:45 CST, before any tuning); label fix + API doc + ledger prereg 998c89c.
@@ -38,7 +38,10 @@
 - nw5 (c_ref C89 L1 + MRAC_S6 + COST.md) on VPS, bg wait b5l6ddske.
 
 ## Running
-- bgtf2b929 (run_tierA.sh, committed) runs mrac3l_{both,unrouted,reactive,predictive}, mrac_{crm,sataware,composite,proj} (-> ~02:40).
+- bgtf2b929: Tier B mrac_{crm,sataware,composite,proj} tune2+test. The 4 mrac3l jobs crashed (per-row horizon,
+  fixed e9f81b6, ledger N-3Lcrash).
+- bfxgiriqv: after batch 2 -> rerun 4 mrac3l tune2+test (run_batch3.out), then *_tn tune-split evals, yard_3l.py.
+- nw5 (b5l6ddske), nw6 (bs2vsrae0) on VPS.
 
 ## Next
 2. H6: bench.py eval 3L modes --split tune with tag suffix _tn (tune2 owns <tag>_tune.json); paired CI
