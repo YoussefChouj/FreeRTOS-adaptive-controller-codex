@@ -40,7 +40,7 @@ FP32 Acc_Z_Offset = 0;
 FP32 Gyro_X_Offset = 0;
 FP32 Gyro_Y_Offset = 0;
 FP32 Gyro_Z_Offset = 0;
-volatile UCHAR8 g_gyro_z_bias_track = 1;   /* Keil watch: 0 = off */
+volatile UCHAR8 g_gyro_z_bias_track = 2;   /* 0 = off, 1 = disarmed only, 2 = also armed/flying */
 volatile UINT32 g_gyro_z_bias_blocks = 0;  /* still blocks applied */
 
 FP32 Status_offset[3][CALI_NUM] = {0};  //1 X;2 Y;3 Z.
@@ -411,8 +411,10 @@ void Sensor_Data_Prepare(void)				//IMU����׼��������ת�
 	 * residual z rate (boot calibration leaves ~-0.07 deg/s, likely thermal -> yaw
 	 * creep). 1 s blocks @ 1 kHz on the LPF output; still = every sample under
 	 * 6 deg/s on all axes and |mean| under 0.5/0.5/1 deg/s. Each still block moves
-	 * the offset 10% of the block mean (tau ~10 s). Set 0 in Keil to disable. */
-	if (g_gyro_z_bias_track && gyro_flag && FlightFSM_GetState() != FLIGHT_STATE_ARMED)
+	 * the offset 10% of the block mean (tau ~10 s). Set 0 in Keil to disable;
+	 * 2 keeps trimming while armed (still gate still applies, so only calm hover blocks count). */
+	if (g_gyro_z_bias_track && gyro_flag &&
+	    (g_gyro_z_bias_track == 2U || FlightFSM_GetState() != FLIGHT_STATE_ARMED))
 	{
 		static FP32 s_sx, s_sy, s_sz;
 		static USHORT16 s_n = 0U;

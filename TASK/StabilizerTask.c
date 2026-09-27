@@ -44,8 +44,8 @@ uint8_t g_of_hold_active = 0;
  * set dbg_motor_manual=0 to stop. Props off. Never halt the CPU while a motor spins. */
 volatile uint8_t  dbg_motor_manual = 0U;
 volatile uint16_t dbg_motor_ccr[4] = {2000U, 2000U, 2000U, 2000U};
-/* Yaw mixer sign: +1 = M1/M2 (CW props) get +u_gyroz, M3/M4 (CCW) get -u_gyroz; -1 = old 09-10 signs. */
-volatile float g_yaw_mix_dir = 1.0f;
+/* Yaw mixer sign: -1 = 09-10 signs (M3/M4 get +u_gyroz), +1 = flipped. Flight4 (+1) spun 3.5x faster. */
+volatile float g_yaw_mix_dir = -1.0f;
 
 float Sin_roll_01= 0;
 float Cos_roll_01= 0;
@@ -1074,6 +1074,7 @@ void Compute_Motor(void)
 									// the old signs (M3/M4 +u) gyrozU pinned +350, M3/M4 high, drone spun CW: CCW props sped
 									// up -> CW reaction torque -> positive feedback. Default +1 = fixed signs; set
 									// g_yaw_mix_dir = -1 to get the old 09-10 signs back without reflashing.
+									// Flight4 (+1): gz -150 -> -770 deg/s in 3 s vs -220 with -1 -> default back to -1.
 	
 	/* Shadow thrust estimators (200 Hz, after motor mixer, before Set_PWM_Motors).
 	 * Three models: empirical (PWM→thrust bench LUT), blade-element (RPM→thrust),
