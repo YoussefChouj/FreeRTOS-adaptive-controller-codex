@@ -15,7 +15,7 @@ CtrlerTypeDef Ctrler={
 
 	{ 0,  0, 5   , 0.01 ,10, 0,0, 0, 0, 0,   0,  0, 300,  300,  20,  100,  1000,   2},//gyrox
 	{ 0,  0, 5   , 0.01 ,10, 0,0, 0, 0, 0,   0,  0, 300,  300,  20,  100,  1000,   2},//gyroy
-	{ 0,  0, 4.0, 0.001 ,2.0, 0,0, 0, 0, 0,  0,  0, 350,  350,  60,  10,   2000,     20},//gyroz  Kp 8->4, Kd 0.02->2.0: add rate-loop damping to fight overshoot from saturation (2026-09-13); Umax 350 (kept from 2026-07-19); EMin 20 + SumEMax 2000 kept as-is
+	{ 0,  0, 4.0, 0.001 ,2.0, 0,0, 0, 0, 0,  0,  0, 650,  650,  60,  10,   2000,     20},//gyroz  Umax/Upmax 350->650 (flight5: U pinned at 350 whole flight, 2026-09-27); Kp 8->4, Kd 0.02->2.0: add rate-loop damping to fight overshoot from saturation (2026-09-13); Umax 350 (kept from 2026-07-19); EMin 20 + SumEMax 2000 kept as-is
 	
 	{ 0,  0, 0.7, 0.005 ,0.1, 0,0, 0, 0, 0,   0,  0, 1.0 , 0.9,  0.3,  0.3,  30,     0.3},//h
 	{ 0,  0, 400,  0.435,  1.5,0,0, 0, 0, 0,   0, 0,300, 300, 60,   60,    30,    0.1},//h rate: added Kd 0->1.5 to damp 0.4Hz oscillation (flight_1784538359)
