@@ -31,7 +31,7 @@ AXES = {
     ),
     'z': dict(
         J0 = 1.5,  # mass
-        K_EFF = 222.0,
+        K_EFF = 950.0 / (1.5 * 9.81),  # firmware: hover 2950 vs idle 2000 PWM, 1.5 kg -> ~64.6 units/N
         ANG = dict(Kp=0.7, Ki=0.005, Kd=0.1, Umax=1.0, Upmax=0.9, Uimax=0.3, Udmax=0.3, SumEmax=30, EMin=0.3),
         RATE = dict(Kp=400, Ki=0.435, Kd=1.5, Umax=300, Upmax=300, Uimax=60, Udmax=60, SumEmax=30, EMin=0.1),
         OMEGA_U = 5.0, TH_MAX = 3.0, U_SCALE = 300.0, U_TOT_MAX = 300.0, LAM = 4.0,
@@ -85,8 +85,12 @@ def command(t, axis):
     elif axis == 'yaw':
         c[(t >= 1) & (t < 3)] = 45.0
         c[(t >= 3) & (t < 5)] = -45.0
-        c[(t >= 6) & (t < 7.5)] = 170.0
-        c[(t >= 7.5) & (t < 9)] = -170.0
+        # every step < 180 deg so the short-way direction is never ambiguous;
+        # 160 -> -160 crosses the +-180 wrap
+        c[(t >= 5) & (t < 7.5)] = 90.0
+        c[(t >= 7.5) & (t < 9)] = 160.0
+        c[(t >= 9) & (t < 11)] = -160.0
+        c[t >= 11] = -90.0
     elif axis == 'z':
         c[(t >= 1) & (t < 3)] = 1.0
         c[(t >= 3) & (t < 5)] = 0.5
@@ -233,13 +237,16 @@ def simulate(axis, ctrl, P, gamma, log_ref=True):
             buf[bi] = tau_cmd
             bi = (bi + 1) % (d_steps + 1)
             tau_del = buf[bi]
-            tau += DT_P / cfg['TAU_M'] * (lam * tau_del - tau)
+            if axis == 'z':
+                tau += DT_P / cfg['TAU_M'] * (tau_del - tau)   # lam applied once, in thrust
+            else:
+                tau += DT_P / cfg['TAU_M'] * (lam * tau_del - tau)
             ip = k * SUB + j
             
             if axis == 'z':
-                actual_thrust_N = lam * (cfg['J0'] * 9.81 + tau) + bias
+                thrust = lam * (cfg['J0'] * 9.81 + tau) + bias   # hover trim + PID, scaled by motor gain
                 dist = gust[ip] - P['drag'] * p * np.abs(p)
-                p += DT_P * ((actual_thrust_N - Jt * 9.81) / Jt + dist / Jt)
+                p += DT_P * (thrust - Jt * 9.81 + dist) / Jt
                 phi += DT_P * p
             else:
                 dist = bias + gust[ip] - P['drag'] * p * np.abs(p)

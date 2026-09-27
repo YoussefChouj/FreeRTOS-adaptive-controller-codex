@@ -43,39 +43,33 @@ SCEN = {
                         qr_amp=1.0, seed=15),
 }
 
-# Override specific axis biases based on prompt
-AXIS_SCEN = {ax: {k: {k2: v2.copy() if isinstance(v2, np.ndarray) else v2 for k2, v2 in P.items()} for k, P in SCEN.items()} for ax in ('pitch', 'yaw', 'z')}
+# Per-axis mapping of the shared scenario set. Torque-type terms (bias, gust, drag)
+# are specified in pitch N*m; each axis sees the same fraction of controller authority,
+# so they are rescaled by K_EFF_pitch / K_EFF_axis (controller units per plant unit).
+K_P = S.AXES['pitch']['K_EFF']
+TORQUE_KEYS = ('bias0', 'bias_f', 'gust', 'drag')
+# Flight 8: measured yaw rate-loop output ~450 units against a constant rotor imbalance.
+YAW_FLIGHT8_BIAS = 450.0 / S.AXES['yaw']['K_EFF']
 
-# Pitch uses default SCEN
-# Yaw: constant rotor-imbalance torque equal to ~450 PID units
-K_EFF_YAW = S.AXES['yaw']['K_EFF']
-yaw_bias = 450.0 / K_EFF_YAW
-for k in AXIS_SCEN['yaw']:
-    AXIS_SCEN['yaw'][k]['bias0'] = np.array([yaw_bias], float)
-AXIS_SCEN['yaw']['S2 Mass/Inertia + Bias']['bias0'] = np.array([yaw_bias + 0.02], float)
-AXIS_SCEN['yaw']['S5 Combined']['bias0'] = np.array([yaw_bias + 0.015], float)
+def to_axis(P, axis):
+    P = {k: (v.copy() if isinstance(v, np.ndarray) else v) for k, v in P.items()}
+    if axis == 'pitch':
+        return P
+    for k in TORQUE_KEYS:
+        P[k] = P[k] * (K_P / S.AXES[axis]['K_EFF'])
+    if axis == 'z':
+        # one motor at lam_f -> collective thrust loses (1 - lam_f)/4
+        P['lam_f'] = 1.0 - (1.0 - P['lam_f']) / 4.0
+        # mass change bounded by the 31 % collective headroom (Umax 300 of 950 hover)
+        P['Jr'] = 1.0 + (P['Jr'] - 1.0) * 0.375
+        # sensors: fused vertical speed ~0.1 m/s, altitude ~0.03 m (deg/s, deg for attitude)
+        P['noise_p'] = P['noise_p'] * 0.05
+        P['noise_phi'] = P['noise_phi'] * 0.1
+    return P
 
-# Z: battery sag = thrust gain -15%
-for k in AXIS_SCEN['z']:
-    if 'fault' not in k and 'Combined' not in k:
-        AXIS_SCEN['z'][k]['lam_f'] = np.array([0.85], float)
-        AXIS_SCEN['z'][k]['t_f'] = np.array([0.0], float) # active immediately
-AXIS_SCEN['z']['S3 Motor fault @ 6s']['lam_f'] = np.array([0.6 * 0.85], float)
-AXIS_SCEN['z']['S5 Combined']['lam_f'] = np.array([0.7 * 0.85], float)
-AXIS_SCEN['z']['S5 Combined']['t_f'] = np.array([0.0], float) # start with battery sag, fault at 6s?
-# Actually, the fault parameter in S.simulate is single t_f.
-# If t_f=0, it's always faulted. But we want fault at 6s.
-# Let's adjust S5 Combined for Z to have lam_f = 0.7 * 0.85 after t_f=6.0, but before 6.0 it is 0.85.
-# Wait, S.simulate uses lam = np.where(tk >= t_f, lam_f, 1.0).
-# For z, to have 0.85 before 6s, I'd have to change simulate. 
-# Let's just say for Z, nominal `lam` is 0.85 everywhere if battery sag is always present, but prompt says "bias (yaw: constant... z: battery sag = thrust gain -15%)".
-# So bias scenario for Z is JUST battery sag.
-# Let's redefine AXIS_SCEN['z']['S2 Mass/Inertia + Bias'] to be the battery sag scenario!
-# Wait, prompt: "nominal, bias (yaw: constant rotor-imbalance... z: battery sag...), inertia/mass change + motor fault, drag+gust, combined."
-# So S2 is Bias.
-AXIS_SCEN['z']['S2 Mass/Inertia + Bias'] = scen(lam_f=0.85, t_f=0.0, seed=12)
-AXIS_SCEN['z']['S5 Combined'] = scen(Jr=1.3, lam_f=0.7*0.85, t_f=6.0, drag=0.002, gust=0.008, noise_p=1.5, noise_phi=0.3, qr_amp=1.0, seed=15)
-# Wait, if S5 Combined has lam_f = 0.7*0.85 after 6.0s, it's 1.0 before 6.0s. I will modify sim_axes.py to allow `lam0`.
+AXIS_SCEN = {ax: {k: to_axis(P, ax) for k, P in SCEN.items()} for ax in ('pitch', 'yaw', 'z')}
+# Yaw S2 bias is the measured Flight 8 imbalance rather than the generic scaled bias.
+AXIS_SCEN['yaw']['S2 Mass/Inertia + Bias']['bias0'] = np.array([YAW_FLIGHT8_BIAS], float)
 
 def mc_params(n, seed, axis):
     r = np.random.default_rng(seed)
@@ -83,15 +77,8 @@ def mc_params(n, seed, axis):
              bias_f=r.uniform(-0.015, 0.015, n), lam_f=r.uniform(0.5, 1.0, n),
              t_f=r.uniform(4.0, 9.0, n), drag=r.uniform(0, 0.003, n),
              gust=r.uniform(0, 0.012, n), noise_p=r.uniform(0, 2.0, n),
-             noise_phi=r.uniform(0, 0.3, n), qr_amp=r.uniform(0, 1.0, n), seed=seed,
-             lam0=np.ones(n))
-    if axis == 'yaw':
-        P['bias0'] += yaw_bias
-    if axis == 'z':
-        # Apply battery sag
-        P['lam0'] = r.uniform(0.8, 0.9, n)
-        P['lam_f'] *= P['lam0']
-    return P
+             noise_phi=r.uniform(0, 0.3, n), qr_amp=r.uniform(0, 1.0, n), seed=seed)
+    return to_axis(P, axis)
 
 def tile(P, reps):
     return {k: (np.tile(v, reps) if k != 'seed' else v) for k, v in P.items()}
@@ -108,7 +95,7 @@ def tune(axis):
     for c in S.CONTROLLERS[1:]:
         P = tile(Pt, len(GAMMAS))
         g = np.repeat(GAMMAS, N_TUNE)
-        m = S.metrics(S.simulate(axis, c, P, g, log_ref=False), axis)
+        m = S.metrics(S.simulate(axis, c, P, g), axis)
         J = m['rms_ref'].reshape(len(GAMMAS), N_TUNE)
         cost = np.where(np.isinf(J).any(1), np.inf, J.mean(1))
         res[c] = float(GAMMAS[np.argmin(cost)])
@@ -169,11 +156,6 @@ def main():
         gam = {'PID': 0.0, **tuned}
         
         names = list(SCEN)
-        # Add lam0 to deterministic scenarios for Z
-        for n in names:
-            if 'lam0' not in AXIS_SCEN[axis][n]:
-                AXIS_SCEN[axis][n]['lam0'] = np.array([1.0], float)
-                
         Pall = concat([AXIS_SCEN[axis][n] for n in names])
         
         logs, tab = {}, {}
