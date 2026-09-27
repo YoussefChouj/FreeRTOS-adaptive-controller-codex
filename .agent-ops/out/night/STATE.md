@@ -1,4 +1,4 @@
-# Night run STATE (rewritten each milestone) — 2026-09-28 02:30 CST
+# Night run STATE (rewritten each milestone) — 2026-09-28 02:40 CST (RUN COMPLETE)
 
 ## Done (all committed; hashes in ledger.jsonl)
 - bench_v1 frozen 5577b03. Calibration NRMSE ~1 => RELATIVE results only; b=8, hover 3090, yaw imb 430.
@@ -15,8 +15,5 @@
   mismatch 18-27% dominates s_err, predictive inert on steps; yard_3l stride bug fixed (N-yard3l).
 - c_ref C89 L1 + MRAC_S6 (79a27c9) test_equiv PASS.
 
-## Next
-1. Commit leaderboard.md + heldout_test.md.
-2. Fill REPORT.md markers (LEADERBOARD, HELDOUT, 3L, H6, H6b, FINALISTS), verdict line 1, H3 fam note,
-   repro additions (h6b_subset.py, diag_3l_pred.py). Commit, SendUserFile proactive.
-3. Finalists: mrac_sataware (flight plan) + mrac3l_unrouted (no c_ref) ; pid_tuned2 as fallback baseline.
+## Status
+All Done-when items true: REPORT.md committed 6f6c2a1 and sent (SendUserFile proactive). No further experiments.
