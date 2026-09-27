@@ -1,0 +1,812 @@
+{
+ "pitch": {
+  "scenarios": {
+   "PID": {
+    "rms_ref": [
+     0.0,
+     1.3539580474969133,
+     2.9904602672431992,
+     1.4576705364049098,
+     5.410436052896818
+    ],
+    "peak_ref": [
+     0.0,
+     4.048492425431512,
+     7.356707495249976,
+     3.8299757504123253,
+     13.534036155633641
+    ],
+    "rms_cmd": [
+     5.546734560045694,
+     6.038139464345658,
+     6.340149772691211,
+     5.60562268247642,
+     8.321868276797783
+    ],
+    "effort": [
+     32.146052037051525,
+     69.86926598443445,
+     69.54189166212582,
+     62.26404784633622,
+     134.30981158270814
+    ],
+    "du": [
+     12.776984095264439,
+     13.359762168088118,
+     12.799189860885226,
+     15.459273488839836,
+     150.22683622992324
+    ]
+   },
+   "S6": {
+    "rms_ref": [
+     0.10789557189020309,
+     0.35200075882568566,
+     0.6585399939159952,
+     1.166052486953515,
+     1.6384638614221023
+    ],
+    "peak_ref": [
+     0.27312526690899563,
+     1.7494888114380798,
+     3.015396106233906,
+     3.810134863843914,
+     4.830768273172664
+    ],
+    "rms_cmd": [
+     5.496562562714014,
+     5.478080632855401,
+     5.51800237022205,
+     5.220945806482118,
+     6.23179326230777
+    ],
+    "effort": [
+     32.08375785468559,
+     70.95674662475244,
+     69.7970028062437,
+     91.2002005445298,
+     153.44035630115732
+    ],
+    "du": [
+     12.830615384091962,
+     13.3663385401899,
+     12.860117083297991,
+     18.679092908830444,
+     150.5780919321605
+    ]
+   },
+   "S10": {
+    "rms_ref": [
+     0.07677694698594575,
+     0.4398348899087504,
+     0.8473506046257155,
+     1.2764771753696398,
+     1.6307559420431812
+    ],
+    "peak_ref": [
+     0.199808725034611,
+     1.771908969496673,
+     3.8683519446895396,
+     4.2862478523302325,
+     5.048655626351696
+    ],
+    "rms_cmd": [
+     5.525618756799206,
+     5.559447101608243,
+     5.639777986033842,
+     5.245143990242926,
+     6.012096627569203
+    ],
+    "effort": [
+     32.063692388990326,
+     70.59225004824154,
+     69.7669909038243,
+     69.35603519708062,
+     139.74566714493415
+    ],
+    "du": [
+     12.780312373641008,
+     13.438117346641189,
+     12.810870101779283,
+     16.82103464356571,
+     151.3306051300335
+    ]
+   },
+   "RBF6": {
+    "rms_ref": [
+     0.11252480072625026,
+     0.4282936801431461,
+     0.7399733214941805,
+     1.2424862260010934,
+     1.3710366089497006
+    ],
+    "peak_ref": [
+     0.2682189696754467,
+     1.6570765373369287,
+     3.2774305627669484,
+     4.108478965604908,
+     5.32262196955745
+    ],
+    "rms_cmd": [
+     5.508551510075011,
+     5.4399589010211535,
+     5.550888713183919,
+     5.417522533078894,
+     5.9431039198791895
+    ],
+    "effort": [
+     32.07892602599061,
+     70.84257239952682,
+     69.81115072652689,
+     67.89155755367851,
+     137.68460324354405
+    ],
+    "du": [
+     12.82339792129979,
+     13.599205894337771,
+     12.853126696557663,
+     16.36861531388972,
+     151.04368663315938
+    ]
+   },
+   "RBF12": {
+    "rms_ref": [
+     0.0982324972587154,
+     0.40416677673191387,
+     0.7211036751443404,
+     1.2442993165615097,
+     1.386823673792299
+    ],
+    "peak_ref": [
+     0.25555171156448164,
+     1.6994413758006086,
+     3.2543726170249467,
+     4.054015818269326,
+     5.156572405744894
+    ],
+    "rms_cmd": [
+     5.5074077043966785,
+     5.445154350687308,
+     5.5430462282912245,
+     5.445592256539833,
+     5.943164639377935
+    ],
+    "effort": [
+     32.07941357742781,
+     70.83041551740861,
+     69.79913482990703,
+     67.84749413237748,
+     137.46270777353612
+    ],
+    "du": [
+     12.826159668515421,
+     13.575377641206131,
+     12.855141552354018,
+     16.337282423851835,
+     150.98483930278798
+    ]
+   },
+   "RBF24": {
+    "rms_ref": [
+     0.08261421336402876,
+     0.38810409563588155,
+     0.7072329579520519,
+     1.2000748938032404,
+     1.3855322628554916
+    ],
+    "peak_ref": [
+     0.22321845319645295,
+     1.676230139329265,
+     3.2832576079187903,
+     3.880896092751864,
+     4.665790893850466
+    ],
+    "rms_cmd": [
+     5.510881042707281,
+     5.477064732495735,
+     5.5601174566517155,
+     5.484180232757285,
+     5.9705156112548785
+    ],
+    "effort": [
+     32.08295337937216,
+     70.83670100050911,
+     69.7809976082846,
+     68.86447308647244,
+     137.64061227092006
+    ],
+    "du": [
+     12.826309021870237,
+     13.570494016397683,
+     12.854924202524359,
+     16.382131214456685,
+     150.98137797687306
+    ]
+   }
+  },
+  "mc_medians": {
+   "PID": {
+    "rms_ref": 2.0026856180194303,
+    "peak_ref": 5.617582222406339,
+    "rms_cmd": 6.058188470361165,
+    "effort": 86.72073392250142,
+    "du": 93.57937542344987
+   },
+   "S6": {
+    "rms_ref": 0.8648917362759525,
+    "peak_ref": 2.7514339817362754,
+    "rms_cmd": 5.675011498521322,
+    "effort": 98.63267627502137,
+    "du": 94.06926388509847
+   },
+   "S10": {
+    "rms_ref": 1.0177535098791202,
+    "peak_ref": 2.8005484164658214,
+    "rms_cmd": 5.65348862434455,
+    "effort": 94.35090003518476,
+    "du": 93.84952116316185
+   },
+   "RBF6": {
+    "rms_ref": 1.055771758419743,
+    "peak_ref": 3.146724060835111,
+    "rms_cmd": 5.638675293502386,
+    "effort": 90.36005842744832,
+    "du": 93.73966157913728
+   },
+   "RBF12": {
+    "rms_ref": 1.0340703167009089,
+    "peak_ref": 3.1976423790421094,
+    "rms_cmd": 5.647114321506245,
+    "effort": 90.41041029343523,
+    "du": 93.71743074521373
+   },
+   "RBF24": {
+    "rms_ref": 1.028141354195296,
+    "peak_ref": 3.2993067001657597,
+    "rms_cmd": 5.670838600156351,
+    "effort": 91.20109843992444,
+    "du": 93.71513297990262
+   }
+  }
+ },
+ "yaw": {
+  "scenarios": {
+   "PID": {
+    "rms_ref": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "peak_ref": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "rms_cmd": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "effort": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "du": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ]
+   },
+   "S6": {
+    "rms_ref": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "peak_ref": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "rms_cmd": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "effort": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "du": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ]
+   },
+   "S10": {
+    "rms_ref": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "peak_ref": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "rms_cmd": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "effort": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "du": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ]
+   },
+   "RBF6": {
+    "rms_ref": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "peak_ref": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "rms_cmd": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "effort": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "du": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ]
+   },
+   "RBF12": {
+    "rms_ref": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "peak_ref": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "rms_cmd": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "effort": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "du": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ]
+   },
+   "RBF24": {
+    "rms_ref": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "peak_ref": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "rms_cmd": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "effort": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "du": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ]
+   }
+  },
+  "mc_medians": {
+   "PID": {
+    "rms_ref": 39.87123428320527,
+    "peak_ref": 101.50087777268533,
+    "rms_cmd": 74.68200146958453,
+    "effort": 204.92409695290073,
+    "du": 19.149008651415947
+   },
+   "S6": {
+    "rms_ref": 43.91986217789364,
+    "peak_ref": 96.77634462931422,
+    "rms_cmd": 75.64951935266096,
+    "effort": 205.79749543233092,
+    "du": 18.64119335038422
+   },
+   "S10": {
+    "rms_ref": 40.603294328443816,
+    "peak_ref": 93.93404327175287,
+    "rms_cmd": 74.86551825093801,
+    "effort": 205.63091830322946,
+    "du": 19.10085351355007
+   },
+   "RBF6": {
+    "rms_ref": 43.96525934300056,
+    "peak_ref": 96.6980498170091,
+    "rms_cmd": 75.52440130306498,
+    "effort": 205.79625668938604,
+    "du": 19.222902774730148
+   },
+   "RBF12": {
+    "rms_ref": 44.86643141486882,
+    "peak_ref": 100.61494481190029,
+    "rms_cmd": 75.9767803831793,
+    "effort": 210.19079041792872,
+    "du": 18.579301565845245
+   },
+   "RBF24": {
+    "rms_ref": 45.24103043736901,
+    "peak_ref": 101.67129030621399,
+    "rms_cmd": 75.83684748825092,
+    "effort": 210.64240566998538,
+    "du": 18.548191850562617
+   }
+  }
+ },
+ "z": {
+  "scenarios": {
+   "PID": {
+    "rms_ref": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "peak_ref": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "rms_cmd": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "effort": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "du": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ]
+   },
+   "S6": {
+    "rms_ref": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "peak_ref": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "rms_cmd": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "effort": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "du": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ]
+   },
+   "S10": {
+    "rms_ref": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "peak_ref": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "rms_cmd": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "effort": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "du": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ]
+   },
+   "RBF6": {
+    "rms_ref": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "peak_ref": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "rms_cmd": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "effort": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "du": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ]
+   },
+   "RBF12": {
+    "rms_ref": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "peak_ref": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "rms_cmd": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "effort": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "du": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ]
+   },
+   "RBF24": {
+    "rms_ref": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "peak_ref": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "rms_cmd": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "effort": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ],
+    "du": [
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity,
+     Infinity
+    ]
+   }
+  },
+  "mc_medians": {
+   "PID": {
+    "rms_ref": 0.48296577740500896,
+    "peak_ref": 0.8285941129685868,
+    "rms_cmd": 0.7015203166291559,
+    "effort": 198.87184986293548,
+    "du": 135.02701537205263
+   },
+   "S6": {
+    "rms_ref": 0.41842255181922355,
+    "peak_ref": 0.7414427236206731,
+    "rms_cmd": 0.6622894714946514,
+    "effort": 210.08946020580018,
+    "du": 139.7330444650745
+   },
+   "S10": {
+    "rms_ref": 0.41980127593407557,
+    "peak_ref": 0.7442981027324472,
+    "rms_cmd": 0.6638119307058504,
+    "effort": 210.7786199131192,
+    "du": 139.55342364008786
+   },
+   "RBF6": {
+    "rms_ref": 0.40340312106504816,
+    "peak_ref": 0.7136351053146246,
+    "rms_cmd": 0.6510771493524566,
+    "effort": 211.80495443959302,
+    "du": 141.168844181948
+   },
+   "RBF12": {
+    "rms_ref": 0.397851374475832,
+    "peak_ref": 0.7019057469446732,
+    "rms_cmd": 0.648019622419372,
+    "effort": 211.27554992520317,
+    "du": 141.1126181181595
+   },
+   "RBF24": {
+    "rms_ref": 0.3976267861304482,
+    "peak_ref": 0.7014832945411311,
+    "rms_cmd": 0.6483910720689063,
+    "effort": 210.51220900334215,
+    "du": 140.7637482045668
+   }
+  }
+ }
+}
