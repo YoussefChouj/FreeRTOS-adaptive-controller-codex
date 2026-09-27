@@ -117,50 +117,23 @@ def make_disturbance(B, n_p, gust_amp, seed):
     g /= g[2000:].std(0, keepdims=True) + 1e-12
     return g * gust_amp[None, :]
 
-def reference_model(t_c, cmd_r, cmd_p, cmd_y, cmd_z):
-    B = 1
-    ang_r, rate_r = PID(ANG_PR, B), PID(RATE_PR, B)
-    ang_p, rate_p = PID(ANG_PR, B), PID(RATE_PR, B)
-    ang_y, rate_y = PID(ANG_Y, B), PID(RATE_Y, B)
-    pos_z, rate_z = PID(POS_Z, B), PID(RATE_Z, B)
+def nominal_params(B):
+    z = np.zeros(B)
+    return dict(Jr=np.ones(B), t_f=np.full(B, 99.0), lam_f=np.ones(B),
+                bias_r=z.copy(), bias_p=z.copy(), bias_y=z.copy(),
+                gust_r=z.copy(), gust_p=z.copy(), gust_y=z.copy(), drag=z.copy(),
+                noise_p=z.copy(), noise_phi=z.copy(), noise_z=z.copy(), seed=0)
 
+def reference_model(t_c, cmd_r, cmd_p, cmd_y, cmd_z):
+    """Nominal firmware PID on the same nonlinear plant (mixer, lag, delay, clamp),
+    no disturbance: the trajectory the adaptive layer should restore. MRAC works in rad."""
     n_c = len(t_c)
-    n_p = n_c * SUB
-    
-    phi, theta, psi, z = np.zeros(B), np.zeros(B), np.zeros(B), np.zeros(B)
-    p, q, r, vz = np.zeros(B), np.zeros(B), np.zeros(B), np.zeros(B)
-    
-    L = {k: np.zeros((n_c, B)) for k in ('phi', 'theta', 'psi', 'z', 'p', 'q', 'r', 'vz')}
-    
-    for k in range(n_c):
-        rate_des_r = ang_r.step(cmd_r[k] - np.rad2deg(phi))
-        U_pid_r = rate_r.step(rate_des_r - np.rad2deg(p))
-        rate_des_p = ang_p.step(cmd_p[k] - np.rad2deg(theta))
-        U_pid_p = rate_p.step(rate_des_p - np.rad2deg(q))
-        rate_des_y = ang_y.step(cmd_y[k] - np.rad2deg(psi))
-        U_pid_y = rate_y.step(rate_des_y - np.rad2deg(r))
-        
-        vz_des = pos_z.step(cmd_z[k] - z)
-        U_pid_z = rate_z.step(vz_des - vz)
-        
-        tau_x = U_pid_r / 3162.16
-        tau_y = U_pid_p / 3162.16
-        tau_z = U_pid_y / 5059.46
-        F_z = U_pid_z / 222.0 + M_mass * g
-        
-        for j in range(SUB):
-            p += DT_P * (tau_x - (Jz - Jy) * q * r) / Jx
-            q += DT_P * (tau_y - (Jx - Jz) * p * r) / Jy
-            r += DT_P * (tau_z - (Jy - Jx) * p * q) / Jz
-            vz += DT_P * (F_z - M_mass * g) / M_mass
-            phi += DT_P * p
-            theta += DT_P * q
-            psi += DT_P * r
-            z += DT_P * vz
-            
-        L['phi'][k], L['theta'][k], L['psi'][k], L['z'][k] = phi, theta, psi, z
-        L['p'][k], L['q'][k], L['r'][k], L['vz'][k] = p, q, r, vz
-        
+    dummy = {k: np.zeros((n_c, 1)) for k in ('phi', 'theta', 'psi', 'z', 'p', 'q', 'r', 'vz')}
+    lg = simulate('PID', nominal_params(1), np.zeros(1), t_c, cmd_r, cmd_p, cmd_y, cmd_z, dummy)
+    # logs hold the state after step k; the controller at step k sees the state before it
+    sh = lambda a: np.vstack([np.zeros((1, a.shape[1])), a[:-1]])
+    L = {k: sh(np.deg2rad(lg[k])) for k in ('phi', 'theta', 'psi', 'p', 'q', 'r')}
+    L['z'], L['vz'] = sh(lg['z']), sh(lg['vz'])
     return L
 def simulate(ctrl, P, gamma, t_c, cmd_r, cmd_p, cmd_y, cmd_z, ref_log):
     B = len(P['Jr'])
@@ -203,13 +176,13 @@ def simulate(ctrl, P, gamma, t_c, cmd_r, cmd_p, cmd_y, cmd_z, ref_log):
     phi, theta, psi, z = np.zeros(B), np.zeros(B), np.zeros(B), np.zeros(B)
     p, q, r, vz = np.zeros(B), np.zeros(B), np.zeros(B), np.zeros(B)
     
-    buf1 = np.ones((d_steps + 1, B)) * 2000
-    buf2 = np.ones((d_steps + 1, B)) * 2000
-    buf3 = np.ones((d_steps + 1, B)) * 2000
-    buf4 = np.ones((d_steps + 1, B)) * 2000
+    buf1 = np.ones((d_steps + 1, B)) * HOVER_PWM
+    buf2 = np.ones((d_steps + 1, B)) * HOVER_PWM
+    buf3 = np.ones((d_steps + 1, B)) * HOVER_PWM
+    buf4 = np.ones((d_steps + 1, B)) * HOVER_PWM
     bi = 0
     
-    M1_act, M2_act, M3_act, M4_act = np.ones(B)*2000, np.ones(B)*2000, np.ones(B)*2000, np.ones(B)*2000
+    M1_act, M2_act, M3_act, M4_act = (np.ones(B) * HOVER_PWM for _ in range(4))
 
     L = {k: np.zeros((n_c, B)) for k in ('phi', 'theta', 'psi', 'z', 'p', 'q', 'r', 'vz', 
                                          'sat', 'M1', 'M2', 'M3', 'M4', 'U_pid_r', 'U_pid_y')}

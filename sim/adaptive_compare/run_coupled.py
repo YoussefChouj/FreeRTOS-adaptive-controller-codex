@@ -6,6 +6,8 @@ import time
 
 import sim_coupled as sim
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+
 # Scenarios
 # C1 nominal hover + attitude steps on roll AND yaw simultaneously
 # C2 flight8 reality: constant yaw imbalance torque that needs ~450-650 yaw U so M3/M4 run near the 4000 clamp, then roll/pitch steps + climb command -> show saturation, lost climb authority, cross-axis error;
@@ -46,7 +48,7 @@ def setup_scenarios():
     P['bias_p'][3] = 0.01
     
     # C5: Combined
-    P['bias_y'][4] = 0.0988
+    P['bias_y'][4] = -0.0988  # same sign as the Flight 8 imbalance (C2)
     P['t_f'][4] = 6.0
     P['lam_f'][4] = 0.75
     P['gust_r'][4] = 0.02
@@ -59,13 +61,13 @@ def setup_scenarios():
     
     return names, P
 
-def setup_mc(B=30):
+def setup_mc(B=30, seed=42):
     P = make_P(B)
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(seed)
     P['Jr'] = rng.uniform(0.8, 1.6, B)
     P['t_f'] = np.full(B, 6.0)
     P['lam_f'] = rng.uniform(0.5, 1.0, B)
-    P['bias_y'] = rng.uniform(0, 0.12, B)
+    P['bias_y'] = rng.uniform(-0.11, 0.11, B)  # up to the Flight 8 magnitude, either sign
     P['bias_r'] = rng.uniform(-0.03, 0.03, B)
     P['bias_p'] = rng.uniform(-0.03, 0.03, B)
     P['gust_r'] = rng.uniform(0, 0.03, B)
@@ -75,8 +77,29 @@ def setup_mc(B=30):
     P['noise_phi'] = np.full(B, 0.5)
     return P
 
+GAMMAS = np.logspace(-1.5, 2.0, 15)
+N_TUNE = 8
+
+def dev(L, ref_deg, i):
+    er = L['phi'][:, i] - ref_deg['phi']
+    ep = L['theta'][:, i] - ref_deg['theta']
+    ey = ((L['psi'][:, i] - ref_deg['psi'] + 180) % 360) - 180
+    ez = L['z'][:, i] - ref_deg['z']
+    return [float(np.sqrt(np.mean(e ** 2))) for e in (er, ep, ey, ez)]
+
+def tune(c, t_c, cmds, ref_log, ref_deg):
+    # gamma per controller on a separate MC set (seed 101): cost = roll+pitch+yaw deg + z in dm,
+    # deviation from the nominal PID trajectory; any divergence makes a gamma infeasible
+    Pt = setup_mc(N_TUNE, 101)
+    P = {k: (np.tile(v, len(GAMMAS)) if k != 'seed' else v) for k, v in Pt.items()}
+    L = sim.simulate(c, P, np.repeat(GAMMAS, N_TUNE), t_c, *cmds, ref_log)
+    J = np.array([sum(dev(L, ref_deg, i)[:3]) + 10 * dev(L, ref_deg, i)[3] for i in range(len(P['Jr']))])
+    J = np.where(L['diverged'], np.inf, J).reshape(len(GAMMAS), N_TUNE)
+    cost = np.where(np.isinf(J).any(1), np.inf, J.mean(1))
+    return float(GAMMAS[np.argmin(cost)])
+
 def main():
-    os.makedirs('sim/adaptive_compare/figures_coupled', exist_ok=True)
+    os.makedirs(HERE + '/figures_coupled', exist_ok=True)
     
     T_END = 14.0
     t_c = np.arange(int(round(T_END / sim.DT_C))) * sim.DT_C
@@ -100,22 +123,27 @@ def main():
     print("Simulating reference...")
     ref_log = sim.reference_model(t_c, cmd_r, cmd_p, cmd_y, cmd_z)
     
+    ref_deg = {k: np.rad2deg(ref_log[k][:, 0]) for k in ('phi', 'theta', 'psi')}
+    ref_deg['z'] = ref_log['z'][:, 0]
+    cmds = (cmd_r, cmd_p, cmd_y, cmd_z)
+    gam = {'PID': 0.0}
+    for c in sim.CONTROLLERS[1:]:
+        gam[c] = tune(c, t_c, cmds, ref_log, ref_deg)
+        print(f"tuned {c}: gamma={gam[c]:.3g}")
     names, P = setup_scenarios()
-    gamma = np.full(len(P['Jr']), 0.1)  # Using generic tuned gamma 0.1
     
     logs = {}
     controllers = sim.CONTROLLERS
     for c in controllers:
         print(f"Simulating scenario {c}...")
-        logs[c] = sim.simulate(c, P, gamma, t_c, cmd_r, cmd_p, cmd_y, cmd_z, ref_log)
+        logs[c] = sim.simulate(c, P, np.full(len(names), gam[c]), t_c, cmd_r, cmd_p, cmd_y, cmd_z, ref_log)
         
     print("Simulating Monte Carlo...")
     P_mc = setup_mc(30)
-    gamma_mc = np.full(30, 0.1)
     mc = {}
     for c in controllers:
         print(f"MC {c}...")
-        mc[c] = sim.simulate(c, P_mc, gamma_mc, t_c, cmd_r, cmd_p, cmd_y, cmd_z, ref_log)
+        mc[c] = sim.simulate(c, P_mc, np.full(30, gam[c]), t_c, cmd_r, cmd_p, cmd_y, cmd_z, ref_log)
 
     print("Generating metrics and plots...")
     
@@ -153,7 +181,7 @@ def main():
     ax[4].legend()
     
     fig.tight_layout()
-    fig.savefig('sim/adaptive_compare/figures_coupled/F1_C2_time_plot.png', dpi=200)
+    fig.savefig(HERE + '/figures_coupled/F1_C2_time_plot.png', dpi=200)
     plt.close(fig)
 
     # Plot RMS bar chart per axis
@@ -173,7 +201,7 @@ def main():
         ax[idx].set_xticklabels([n[:2] for n in names])
     ax[0].legend()
     fig.tight_layout()
-    fig.savefig('sim/adaptive_compare/figures_coupled/F2_rms_bars.png', dpi=200)
+    fig.savefig(HERE + '/figures_coupled/F2_rms_bars.png', dpi=200)
     plt.close(fig)
 
     # Saturation-time chart
@@ -186,21 +214,21 @@ def main():
     ax.set_ylabel('% Time Saturated')
     ax.legend()
     fig.tight_layout()
-    fig.savefig('sim/adaptive_compare/figures_coupled/F3_saturation.png', dpi=200)
+    fig.savefig(HERE + '/figures_coupled/F3_saturation.png', dpi=200)
     plt.close(fig)
 
     # MC Box plot (Roll error)
-    fig, ax = plt.subplots(figsize=(8, 4))
-    data = []
-    for c in controllers:
-        err = mc[c]['phi'] - logs['PID']['phi'][:, 0:1]
-        rms = np.sqrt(np.mean(err**2, axis=0))
-        rms = np.where(mc[c]['diverged'], np.nan, rms)
-        data.append(rms[~np.isnan(rms)])
-    ax.boxplot(data, tick_labels=controllers)
-    ax.set_ylabel('MC Roll RMS Error')
+    fig, axs = plt.subplots(1, 4, figsize=(16, 4))
+    for j, (a, u) in enumerate((('Roll', 'deg'), ('Pitch', 'deg'), ('Yaw', 'deg'), ('Altitude', 'm'))):
+        data = []
+        for c in controllers:
+            D = np.array([dev(mc[c], ref_deg, i)[j] for i in range(30)])
+            data.append(D[~mc[c]['diverged']])
+        axs[j].boxplot(data, tick_labels=controllers, showfliers=False)
+        axs[j].set_title(f'MC {a} RMS deviation ({u})')
+        axs[j].tick_params(axis='x', labelsize=8)
     fig.tight_layout()
-    fig.savefig('sim/adaptive_compare/figures_coupled/F4_mc_boxplot.png', dpi=200)
+    fig.savefig(HERE + '/figures_coupled/F4_mc_boxplot.png', dpi=200)
     plt.close(fig)
 
     # Trajectory top view C5
@@ -222,7 +250,7 @@ def main():
     ax.set_ylabel('Y (m)')
     ax.set_title('Top-view Trajectory C5')
     fig.tight_layout()
-    fig.savefig('sim/adaptive_compare/figures_coupled/F5_trajectory.png', dpi=200)
+    fig.savefig(HERE + '/figures_coupled/F5_trajectory.png', dpi=200)
     plt.close(fig)
 
     # Generate output JSON
@@ -253,13 +281,16 @@ def main():
                 'diverged': bool(logs[c]['diverged'][idx])
             }
     
+    results['gamma'] = gam
     results['mc_medians'] = {}
     for c in controllers:
-        err = mc[c]['phi'] - logs['PID']['phi'][:, 0:1]
-        rms = np.sqrt(np.mean(err**2, axis=0))
-        results['mc_medians'][c] = float(np.nanmedian(np.where(mc[c]['diverged'], np.nan, rms)))
+        D = np.array([dev(mc[c], ref_deg, i) for i in range(30)])
+        D[mc[c]['diverged']] = np.nan
+        results['mc_medians'][c] = {a: float(np.nanmedian(D[:, j])) for j, a in enumerate(('roll', 'pitch', 'yaw', 'z'))}
+        results['mc_medians'][c]['diverged'] = int(mc[c]['diverged'].sum())
+        results['mc_medians'][c]['sat_pct'] = float(np.median(mc[c]['sat'].mean(0)) * 100)
 
-    with open('sim/adaptive_compare/results_coupled.json', 'w') as f:
+    with open(HERE + '/results_coupled.json', 'w') as f:
         json.dump(results, f, indent=2)
         
     # Generate remaining 2 PNGs to satisfy >= 7 PNGs requirement
@@ -269,7 +300,7 @@ def main():
         ax.plot(t_c, ((logs[c]['psi'][:, 4] + 180) % 360) - 180, label=c)
     ax.legend()
     ax.set_title('C5 Yaw Angle')
-    fig.savefig('sim/adaptive_compare/figures_coupled/F6_C5_yaw.png', dpi=200)
+    fig.savefig(HERE + '/figures_coupled/F6_C5_yaw.png', dpi=200)
     plt.close(fig)
     
     fig, ax = plt.subplots()
@@ -278,7 +309,7 @@ def main():
     ax.plot(t_c, cmd_z, label='Cmd')
     ax.legend()
     ax.set_title('C5 Altitude')
-    fig.savefig('sim/adaptive_compare/figures_coupled/F7_C5_alt.png', dpi=200)
+    fig.savefig(HERE + '/figures_coupled/F7_C5_alt.png', dpi=200)
     plt.close(fig)
 
     print("Done!")
