@@ -42,3 +42,21 @@ SysID never reads `test` or `test2` rows. The held-out families (ground_effect, 
 Every controller is tuned with P1 (2x64 CMA-ES on `tune`). Each gets one line with its falsifiable prediction versus pid_tuned2 on `test2`. The `test2` eval count is reported per controller.
 
 - (filled after the literature review and the tune-split results; a line added after the controller's first test2 eval is invalid)
+
+## Amendment A1 to section 1 (2026-09-28 07:45 CST)
+
+Written AFTER the sim H-scale result (commit 9072f0b, KILLED) and BEFORE any real-log H-scale run.
+
+- **Status of the results.**
+  - For sim, the registered verdict stays KILLED. The A1 re-run is a labelled sensitivity analysis.
+  - For the real logs, A1 is the primary protocol, because it is registered before the first real-log run.
+- **Why.** Three problems in the B1 code make the selection non-sparse. On roll, the L band selected all 33 of the 33 library features.
+  - `cv_threshold` shuffles 200 Hz samples into i.i.d. folds. Neighbouring samples are strongly autocorrelated, so the validation folds leak, and CV picks a near-minimum threshold.
+  - The bootstrap resamples individual samples i.i.d., which overstates how certain each inclusion is.
+  - STLSQ thresholds raw coefficients on unstandardised columns, so whether a feature survives depends on its units.
+- **Changes.** Everything not listed here is unchanged: the bands, the splits, the 50 bootstraps, p_incl ≥ 0.6, Jaccard < 0.5 on ≥ 2/3 axes, and band-sum NRMSE ≤ 0.90 × global on ≥ 2/3 axes.
+  1. **Standardised columns.** Each column is scaled to unit std on `id_fit`, per band. STLSQ thresholds the standardised coefficients; reported coefficients are de-standardised.
+  2. **Grouped CV.** The 5 CV folds are groups of whole rows (runs), with no sample-level shuffling. For real logs, the folds are whole airborne segments.
+  3. **1-SE rule.** The threshold is the largest candidate whose mean CV error is within one standard error of the minimum.
+  4. **Row-level bootstrap.** The bootstrap resamples whole rows with replacement, not samples.
+- **Reporting.** Selected/K is reported per axis × band. If any band selects more than 0.5 K, it is flagged as non-sparse in the results.
