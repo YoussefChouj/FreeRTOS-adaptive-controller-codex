@@ -15,7 +15,7 @@ CtrlerTypeDef Ctrler={
 
 	{ 0,  0, 5   , 0.01 ,10, 0,0, 0, 0, 0,   0,  0, 300,  300,  20,  100,  1000,   2},//gyrox
 	{ 0,  0, 5   , 0.01 ,10, 0,0, 0, 0, 0,   0,  0, 300,  300,  20,  100,  1000,   2},//gyroy
-	{ 0,  0, 4.0, 0.005 ,2.0, 0,0, 0, 0, 0,  0,  0, 650,  650,  500,  10,   100000,     20},//gyroz  Ki 0.001->0.005, UiMax 60->500, SumEMax 2000->100000: old Ui ceiling was Ki*SumEMax=2, so flight6 held a P-only -50 deg/s drift with U~450 (2026-09-27); Umax/Upmax 350->650 (flight5: U pinned at 350 whole flight, 2026-09-27); Kp 8->4, Kd 0.02->2.0: add rate-loop damping to fight overshoot from saturation (2026-09-13); Umax 350 (kept from 2026-07-19); EMin 20 + SumEMax 2000 kept as-is
+	{ 0,  0, 4.0, 0.005 ,2.0, 0,0, 0, 0, 0,  0,  0, 650,  650,  500,  10,   100000,     1000},//gyroz  EMin 20->1000: legacy integral-separation gate |E|<EMin blocked all integration at E~110, flight7 (2026-09-27); Ki 0.001->0.005, UiMax 60->500, SumEMax 2000->100000: old Ui ceiling was Ki*SumEMax=2, so flight6 held a P-only -50 deg/s drift with U~450 (2026-09-27); Umax/Upmax 350->650 (flight5: U pinned at 350 whole flight, 2026-09-27); Kp 8->4, Kd 0.02->2.0: add rate-loop damping to fight overshoot from saturation (2026-09-13); Umax 350 (kept from 2026-07-19); EMin 20 + SumEMax 2000 kept as-is
 	
 	{ 0,  0, 0.7, 0.005 ,0.1, 0,0, 0, 0, 0,   0,  0, 1.0 , 0.9,  0.3,  0.3,  30,     0.3},//h
 	{ 0,  0, 400,  0.435,  1.5,0,0, 0, 0, 0,   0, 0,300, 300, 60,   60,    30,    0.1},//h rate: added Kd 0->1.5 to damp 0.4Hz oscillation (flight_1784538359)
