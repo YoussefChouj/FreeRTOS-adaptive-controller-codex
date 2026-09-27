@@ -1,37 +1,26 @@
-# Night run STATE (rewrite at each milestone; <=80 lines)
-Updated 23:32 CST 2026-09-27. Phase 0 (target end ~00:30).
+# Night run STATE (rewritten each milestone) — 2026-09-27 23:55 CST
 
-## Done (commits)
-- d25d9e0 brief; STATE+ledger; c3b020d fw_inventory.md + prev_digest.md (verified).
-- sim/bench/calib_logs.py -> calib_v1.json (ARX fit; see findings).
+## Done
+- bench_v1 frozen 5577b03 (23:45 CST, before any tuning); label fix + API doc + ledger prereg 998c89c.
+  - Calibration: replay fit poor (NRMSE ~1) => results RELATIVE only. b_roll = 8 dps2/U (near-best set
+    {8,11,16}; only 8 has no 3-8 Hz limit cycle, calib_check.py). Hover PWM 3090, yaw imbalance 430.
+  - Known limit: Z authority (3250 cap) => payload 1.3x rows fall at t~1.3 s under firmware PID.
+- Ledger H0-H6 pre-registered (.agent-ops/out/night/ledger.jsonl).
+- pid_fw test split (495 rows): median 0.594 m, div 9.1%, sat 4.0%, zigzag xtrack 0.118 m.
+  Worst families: payload 1.00, combo_wind_payload 0.98, combo_unseen 0.96, battery 0.94.
+- Worker briefs committed (aafc9ff): W1 INDI+L1, W2 SE3+ESO + MRAC S6/S10/RBF6/12/24.
 
-## Firmware facts (fw_inventory, spot-checked StabilizerTask.c)
-- Rates: att+rate+yaw 200 Hz; Z_pos + locx/locxs 100 Hz (cnt_h/cnt_loc>=2); Z_rate 200 Hz.
-- XY loop EXISTS (not a gap): locx pos[cm] Kp.8 Ki.01 Kd4 U300 SumE200 EMin30 -> clamp +-120 cm/s
-  -> locxs vel[cm/s] Kp3 Ki0 Kd6 U600 SumE200 EMin10 -> accel cm/s2 -> world->body by yaw
-  -> atan(a*cos/981) clamp 15 deg (gs_max_pitch/roll_deg=15) -> roll/pitch Des.
-- target_z rate-limited 0.005 m/cycle. Throttle = Z_rate.U + 2950, clamp 2000..4000 (min/max pct 0/1).
-- Mixer (dir=-1): M1=T-gy-gx-gz, M2=T+gy+gx-gz, M3=T-gy+gx+gz, M4=T+gy-gx+gz. yaw Des clamp +-60 dps.
-- Filters: gyro 3rd-order BW 50 Hz @1k; accel BW 30 Hz; Mahony Kp .5 Ki .001; rate filt off.
-- EKF: Ekf9 v_body/b_a/b_g (no acc update); EkfOf [pos,vel,bias]x2 used for XY pos (mode 2).
-- Sim frame: standard ZYX, body z up; XY loop modelled structurally (same gains/clamps/rates),
-  signs made self-consistent instead of copying firmware frame reflection.
+## Running
+- pid_tuned CMA-ES tune (sim/bench/results_pid_tune.log -> results/pid_tuned_tune.json); then test eval.
+- VPS workers nw1 (INDI, L1) and nw2 (SE3ESO, MRAC x5) on agy gemini-3.1-pro-high (fallback qwen);
+  one background wait -> .agent-ops/out/nw{1,2}.wait.
 
-## PREV priors (prev_digest) and conflicts
-- sysid roll K165 pole19.8 d15ms; pitch K185 pole16-18 d12ms; yaw integrator K~37 ("lumped gain").
-- mujoco mass 1.2961 kg, I=.00839/.0093/.01485, arm .2 m, motor tau .025 s; thrust poly; max 8.37 N/motor.
-- sim_coupled used m1.5, J .0023/.0023/.0015, b_roll=7.88 dps2/U, b_yaw=7.55 dps2/U.
-- Yaw: PREV 0.0134 Nm/U -> 52 dps2/U: unstable with gyroz Kp4 + 15ms -> rejected; keep 7.55.
-- Spin-dir conflict irrelevant: sim uses flight-validated firmware mixer sign.
+## Next
+1. pid_tuned test eval; ledger H0/H1 results.
+2. Verify worker deliverables (read the code, run sanity + 4-row smoke locally), commit, tune each
+   (64 evals), test eval, ledger H2-H5.
+3. W3 brief: 3-layer frequency-routed MRAC with ablations (unrouted / reactive / predictive / both).
+4. report.py: leaderboard + paired bootstrap CIs, per-family table, constraints; REPORT.md by 08:00.
 
-## Log findings (calib_v1.json)
-- ARX rate fit R2~0.02 (50 Hz logs too coarse) -> b not identifiable that way.
-- Hover PWM 2950..3164 (rises flight1->8, battery/aging). Nominal 3090.
-- Consistent yaw imbalance: M1,M2 -330..-540, M3,M4 +300..+550 => U_yaw ~350..510 in hover.
-- ToF alt noise ~0.7 cm; f2,f3 have spike glitches (1e8) -> dropout/spike family.
-- OF dx std 0.2..1.7 (10 Hz log).
-
-## Next action
-1. calib replay: roll/pitch closed-loop replay of rollPID.Des -> FB over b grid; pick b, report NRMSE.
-2. sim/bench/plant.py (6-DOF vectorized, 1 kHz plant/200 Hz ctrl, sensors+EKF approx, fw cascade).
-3. bench_v1 freeze (scenarios/families/splits/metrics) + commit, then Tier A controllers via VPS worker.
+## Evaluation counts on the test split (report these)
+pid_fw 1
