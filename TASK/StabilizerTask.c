@@ -39,6 +39,11 @@ float Cos_Yaw_01= 0;
 float Sin_Yaw_01= 0;
 /* OF position-hold applied state (see case_Update_pitrol_Des); telemetered as status.of_hold. */
 uint8_t g_of_hold_active = 0;
+/* Keil debug manual motor override: set dbg_motor_manual=1 in the Watch window, then edit
+ * dbg_motor_ccr[0..3] (M1..M4, 2000=stop, 2150=idle, max 4000). DISARMED-only, no dead-man:
+ * set dbg_motor_manual=0 to stop. Props off. Never halt the CPU while a motor spins. */
+volatile uint8_t  dbg_motor_manual = 0U;
+volatile uint16_t dbg_motor_ccr[4] = {2000U, 2000U, 2000U, 2000U};
 
 float Sin_roll_01= 0;
 float Cos_roll_01= 0;
@@ -662,6 +667,22 @@ void Update_Motor(void)
         mymotor.motor2 = (motor_test_id == 2U) ? (short)motor_test_ccr : Motor_PWM_ZERO;
         mymotor.motor3 = (motor_test_id == 3U) ? (short)motor_test_ccr : Motor_PWM_ZERO;
         mymotor.motor4 = (motor_test_id == 4U) ? (short)motor_test_ccr : Motor_PWM_ZERO;
+        Set_PWM_Motors();
+        return;
+    }
+
+    if (dbg_motor_manual)
+    {
+        if (state != FLIGHT_STATE_DISARMED)
+        {
+            dbg_motor_manual = 0U;
+            Set_Zero_Motors();
+            return;
+        }
+        mymotor.motor1 = (short)dbg_motor_ccr[0];
+        mymotor.motor2 = (short)dbg_motor_ccr[1];
+        mymotor.motor3 = (short)dbg_motor_ccr[2];
+        mymotor.motor4 = (short)dbg_motor_ccr[3];
         Set_PWM_Motors();
         return;
     }
