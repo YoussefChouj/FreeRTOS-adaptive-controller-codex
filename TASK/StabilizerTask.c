@@ -44,6 +44,8 @@ uint8_t g_of_hold_active = 0;
  * set dbg_motor_manual=0 to stop. Props off. Never halt the CPU while a motor spins. */
 volatile uint8_t  dbg_motor_manual = 0U;
 volatile uint16_t dbg_motor_ccr[4] = {2000U, 2000U, 2000U, 2000U};
+/* Yaw mixer sign: +1 = M1/M2 (CW props) get +u_gyroz, M3/M4 (CCW) get -u_gyroz; -1 = old 09-10 signs. */
+volatile float g_yaw_mix_dir = 1.0f;
 
 float Sin_roll_01= 0;
 float Cos_roll_01= 0;
@@ -1052,25 +1054,26 @@ void Compute_Motor(void)
 	mymotor.motor1= Throttle_out
 									-u_gyroy//pitch
 									-u_gyrox//
-									-u_gyroz;//yaw  // FIX 2026-09-10: M1 is BR,CW -> -yaw (decrease for +u_gyroz)
+									+g_yaw_mix_dir*u_gyroz;//yaw  M1 CW prop
 
 	mymotor.motor2= Throttle_out
 									+u_gyroy//pitch
 									+u_gyrox//roll
-									-u_gyroz;//yaw  // FIX 2026-09-10: M2 is FL,CW -> -yaw
+									+g_yaw_mix_dir*u_gyroz;//yaw  M2 CW prop
 
 	mymotor.motor3= Throttle_out
 									-u_gyroy//pitch
 									+u_gyrox//roll
-									+u_gyroz;//yaw  // FIX 2026-09-10: M3 is BL,CCW -> +yaw
+									-g_yaw_mix_dir*u_gyroz;//yaw  M3 CCW prop
 
   mymotor.motor4= Throttle_out
 									+u_gyroy//pitch
 									-u_gyrox//roll
-									+u_gyroz;//yaw  // FIX 2026-09-10: M4 is FR,CCW -> +yaw
-									// 2026-09-27: verified correct. eed871e flipped these and the spin got faster
-									// (-17 -> -190 deg/s in 0.2 s vs -3 -> -94 in 0.8 s). The lift-off yaw spin has
-									// the same direction under both signs: a physical yaw torque, not the mixer.
+									-g_yaw_mix_dir*u_gyroz;//yaw  M4 CCW prop
+									// 2026-09-27: motor dirs measured on the bench (M1/M2 CW, M3/M4 CCW). In flight1/3 with
+									// the old signs (M3/M4 +u) gyrozU pinned +350, M3/M4 high, drone spun CW: CCW props sped
+									// up -> CW reaction torque -> positive feedback. Default +1 = fixed signs; set
+									// g_yaw_mix_dir = -1 to get the old 09-10 signs back without reflashing.
 	
 	/* Shadow thrust estimators (200 Hz, after motor mixer, before Set_PWM_Motors).
 	 * Three models: empirical (PWM→thrust bench LUT), blade-element (RPM→thrust),
