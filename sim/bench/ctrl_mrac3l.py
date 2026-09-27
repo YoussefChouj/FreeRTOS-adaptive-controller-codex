@@ -7,6 +7,21 @@ from fwpid import FwPID, scaled
 from sim_coupled import PID, ANG_PR, RATE_PR
 from plant import B_RP, J0
 
+
+def _preview(o, horizon):
+    """o['preview'](n) takes one int; a tune batch carries one horizon per row (fix 2026-09-28, P1 crash)."""
+    h = np.atleast_1d(np.asarray(horizon)).astype(int)
+    if h.size == 1 or np.all(h == h[0]):
+        return o['preview'](int(h[0]))
+    out = None
+    for n in np.unique(h):
+        r = o['preview'](int(n)); m = h == n
+        if out is None:
+            out = {k: np.array(v, dtype=float) for k, v in r.items()}
+        for k, v in r.items():
+            out[k][m] = np.asarray(v)[m]
+    return out
+
 class MRAC3L(FwPID):
     MODE = 'None'
     PARAMS = dict(FwPID.PARAMS)
@@ -87,7 +102,7 @@ class MRAC3L(FwPID):
         des_rp = self.des.T
         self.angle_m, self.rate_m, self.U_lag, self.buf_idx = self._step_ref_model(0, des_rp, self.angle_m, self.rate_m, self.U_lag, self.U_buf, self.buf_idx)
         
-        r_ahead = o['preview'](int(self.p['horizon']))
+        r_ahead = _preview(o, self.p['horizon'])
         yaw_ahead = np.deg2rad(r_ahead['yaw'])
         c, s_ = np.cos(yaw_ahead), np.sin(yaw_ahead)
         af = c * r_ahead['a'][:, 0] + s_ * r_ahead['a'][:, 1]
