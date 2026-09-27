@@ -8,6 +8,12 @@ from sim_coupled import PID, ANG_PR, RATE_PR
 from plant import B_RP, J0
 
 
+def _col(v):
+    """Per-row param (B,) -> (B, 1) so it broadcasts over (axis, row, k); scalars unchanged (fix 2026-09-28, P1 crash 2)."""
+    v = np.asarray(v, dtype=float)
+    return v[:, None] if v.ndim == 1 else v
+
+
 def _preview(o, horizon):
     """o['preview'](n) takes one int; a tune batch carries one horizon per row (fix 2026-09-28, P1 crash)."""
     h = np.atleast_1d(np.asarray(horizon)).astype(int)
@@ -131,7 +137,7 @@ class MRAC3L(FwPID):
         E_P = self._band_energies(rate_m_rad_ahead, self.y_P, self.E_P)
         
         def softmax_gate(E):
-            logits = np.log(np.maximum(E, 1e-12)) / self.p['T']
+            logits = np.log(np.maximum(E, 1e-12)) / _col(self.p['T'])
             logits -= np.max(logits, axis=-1, keepdims=True)
             ex = np.exp(logits)
             return ex / np.sum(ex, axis=-1, keepdims=True)
@@ -148,14 +154,14 @@ class MRAC3L(FwPID):
         elif self.MODE == 'Both':
             g = (g_R + g_P) / 2.0
             
-        alpha_tau = self.dt / (self.p['tau'] + self.dt)
+        alpha_tau = self.dt / (_col(self.p['tau']) + self.dt)
         self.g_smooth += alpha_tau * (g - self.g_smooth)
         
-        Gamma_t = self.p['gamma'] * np.einsum('xbi,ij->xbj', self.g_smooth, self.A)
+        Gamma_t = _col(self.p['gamma']) * np.einsum('xbi,ij->xbj', self.g_smooth, self.A)
         Gamma_t = np.maximum(Gamma_t, 1e-3)
         
         denom = 1.0 + np.sum(phi**2, axis=-1, keepdims=True)
-        dW = Gamma_t * phi * (s_err[:, :, None] / denom) - self.p['sigma'] * self.W
+        dW = Gamma_t * phi * (s_err[:, :, None] / denom) - _col(self.p['sigma']) * self.W
         self.W += self.dt * dW
         nrm = np.sqrt(np.sum(self.W**2, axis=-1, keepdims=True))
         self.W *= np.minimum(1.0, 3.0 / (nrm + 1e-12))
