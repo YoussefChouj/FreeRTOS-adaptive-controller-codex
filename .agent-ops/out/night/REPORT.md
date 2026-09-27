@@ -120,4 +120,14 @@ python report.py --split test --ref pid_tuned2 --out ../../.agent-ops/out/night/
 python yard_3l.py mrac3l_unrouted mrac3l_reactive mrac3l_predictive mrac3l_both
 python sanity_indi.py; python sanity_l1.py; python sanity_se3.py; python sanity_mrac.py; python sanity_mrac3l.py
 ```
-TBD-REPRO: ledger compare commands, c_ref test, hybrid.
+```bash
+cd sim/bench
+python heldout.py --ref pid_tuned2 --out results/heldout_test.md       # held-out families / trajectories
+python ledger.py result H6 mrac3l_both_tn --vs mrac3l_unrouted_tn --split tune --verdict "..."   # re-derives the paired CI
+python -c "import ledger; print(ledger.compare('mrac_sataware', 'pid_tuned2', 'test'))"
+python sanity_hybrid.py
+python tune2.py ctrl_hybrid:Hybrid_RBF12_L1Yaw --start results/pid_tuned_tune.json --tag hybrid
+# C reference (64-bit Linux/WSL): builds the C89 shared objects and checks them against the Python classes
+(cd c_ref && gcc -std=c89 -pedantic -O2 -fPIC -shared -o c_ref.so aug_l1.c aug_mrac_s6.c c_api.c)
+python c_ref/test_equiv.py          # pass: rel err <= 1e-3 of peak |u|
+```
