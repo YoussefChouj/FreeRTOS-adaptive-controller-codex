@@ -55,11 +55,16 @@ def compute_nrmse(y_true, y_pred):
     return float(rmse / std)
 
 
-def fit_axis_band(theta, y, alpha=1e-5, n_boot=50, k_folds=5, p_cutoff=0.6, seed=42):
+def fit_axis_band(theta, y, alpha=1e-5, n_boot=50, k_folds=5, p_cutoff=0.6, seed=42,
+                  groups=None, one_se=False, standardize=False):
     """Run CV thresholding and 50-bootstrap ensemble on regressor matrix theta and target y."""
-    best_th, _ = cv_threshold(theta, y, k_folds=k_folds, alpha=alpha, seed=seed)
+    best_th, _ = cv_threshold(
+        theta, y, k_folds=k_folds, alpha=alpha, seed=seed,
+        groups=groups, one_se=one_se, standardize=standardize
+    )
     p_incl, med_coef, _ = bootstrap_ensemble(
-        theta, y, threshold=best_th, alpha=alpha, n_boot=n_boot, seed=seed
+        theta, y, threshold=best_th, alpha=alpha, n_boot=n_boot, seed=seed,
+        groups=groups, standardize=standardize
     )
     selected_mask = (p_incl >= p_cutoff)
     coef = med_coef.copy()
@@ -72,13 +77,16 @@ def fit_axis_band(theta, y, alpha=1e-5, n_boot=50, k_folds=5, p_cutoff=0.6, seed
     }
 
 
-def run_sim_protocol(cache_dir=CACHE_DIR, verbose=True):
+def run_sim_protocol(cache_dir=CACHE_DIR, verbose=True, amend=None):
     """Run the H-scale protocol on simulated data."""
     t0 = time.time()
     os.makedirs(RESULTS_DIR, exist_ok=True)
     os.makedirs(LIBRARY_DIR, exist_ok=True)
+    is_a1 = (amend == 'a1')
 
     if verbose:
+        if is_a1:
+            print("=== Multiscale H-scale sysID: Amendment A1 Enabled ===")
         print("=== Generating / Loading Datasets ===")
     d_fit = generate_dataset('id_fit', use_cache=True, cache_dir=cache_dir)
     d_val = generate_dataset('id_val', use_cache=True, cache_dir=cache_dir)
@@ -127,7 +135,14 @@ def run_sim_protocol(cache_dir=CACHE_DIR, verbose=True):
                     continue
                 th_c = th_band[c_mask].reshape(-1, n_features)
                 tg_c = tg_band[c_mask, :, ax_idx].reshape(-1)
-                res_c = fit_axis_band(th_c, tg_c, seed=100 + ax_idx * 10)
+                if is_a1:
+                    groups_c = np.repeat(np.arange(np.sum(c_mask)), th_band.shape[1])
+                else:
+                    groups_c = None
+                res_c = fit_axis_band(
+                    th_c, tg_c, seed=100 + ax_idx * 10,
+                    groups=groups_c, one_se=is_a1, standardize=is_a1
+                )
                 models[ax][b][tc] = res_c
                 sel_names = set(feature_names[i] for i in range(n_features) if res_c['selected_mask'][i])
                 selected_sets[ax][b][tc] = sel_names
@@ -135,7 +150,14 @@ def run_sim_protocol(cache_dir=CACHE_DIR, verbose=True):
             # 2. Fit pooled (all classes)
             th_pool = th_band.reshape(-1, n_features)
             tg_pool = tg_band[:, :, ax_idx].reshape(-1)
-            res_pool = fit_axis_band(th_pool, tg_pool, seed=200 + ax_idx * 10)
+            if is_a1:
+                groups_pool = np.repeat(np.arange(th_band.shape[0]), th_band.shape[1])
+            else:
+                groups_pool = None
+            res_pool = fit_axis_band(
+                th_pool, tg_pool, seed=200 + ax_idx * 10,
+                groups=groups_pool, one_se=is_a1, standardize=is_a1
+            )
             models[ax][b]['pooled'] = res_pool
             sel_names_pool = set(feature_names[i] for i in range(n_features) if res_pool['selected_mask'][i])
             selected_sets[ax][b]['pooled'] = sel_names_pool
@@ -278,17 +300,30 @@ def run_sim_protocol(cache_dir=CACHE_DIR, verbose=True):
                         'universal': is_u
                     })
 
+            K = int(n_features)
+            n_sel = int(len(sel_list))
+            sel_over_k = float(n_sel / K)
+            non_sparse = bool(sel_over_k > 0.5)
+
             hscale_sim_data['axes'][ax]['bands'][b] = {
                 'threshold': pool_m['threshold'],
+                'K': K,
+                'n_selected': n_sel,
+                'selected_over_K': sel_over_k,
+                'non_sparse_flag': non_sparse,
                 'selected_features': sel_list,
                 'universal_features': universal_features[ax][b]
             }
 
-    json_path = os.path.join(RESULTS_DIR, 'hscale_sim.json')
+    if is_a1:
+        hscale_sim_data['amendment'] = 'a1'
+
+    suffix = f"_{amend}" if amend else ""
+    json_path = os.path.join(RESULTS_DIR, f'hscale_sim{suffix}.json')
     with open(json_path, 'w', encoding='utf-8') as f:
         json.dump(hscale_sim_data, f, indent=2)
 
-    # 2. Prepare and save features_sim.json (reusable feature library)
+    # 2. Prepare and save features_sim{suffix}.json (reusable feature library)
     library_data = {}
     for ax in AXES:
         library_data[ax] = {}
@@ -310,13 +345,14 @@ def run_sim_protocol(cache_dir=CACHE_DIR, verbose=True):
                             })
                     library_data[ax][b][tc] = feat_list
 
-    lib_path = os.path.join(LIBRARY_DIR, 'features_sim.json')
+    lib_path = os.path.join(LIBRARY_DIR, f'features_sim{suffix}.json')
     with open(lib_path, 'w', encoding='utf-8') as f:
         json.dump(library_data, f, indent=2)
 
-    # 3. Prepare and save hscale_sim.md (at most 120 lines)
+    # 3. Prepare and save hscale_sim{suffix}.md (at most 120 lines)
+    title = "# Multiscale H-scale sysID Protocol Results (Simulation - Amendment A1)" if is_a1 else "# Multiscale H-scale sysID Protocol Results (Simulation)"
     md_lines = [
-        "# Multiscale H-scale sysID Protocol Results (Simulation)",
+        title,
         "",
         f"**Verdict:** `{final_verdict}`  ",
         f"**Runtime:** {runtime:.1f} s  ",
@@ -356,23 +392,27 @@ def run_sim_protocol(cache_dir=CACHE_DIR, verbose=True):
 
     md_lines += [
         "",
-        "## Selected Features (Inclusion Probability >= 0.6) and Universal Features",
+        "## Selected Features (Inclusion Probability >= 0.6) and Band Sparsity",
         "",
-        "| Axis | Band | Selected Features (Pooled) | Universal Features |",
-        "|---|---|---|---|",
+        "| Axis | Band | Threshold | K | n_selected | selected / K | Non-sparse Flag | Selected Features (Pooled) | Universal Features |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
 
     for ax in AXES:
         for b in ['L', 'M', 'H', 'global']:
-            sel_str = ", ".join(f['name'] for f in hscale_sim_data['axes'][ax]['bands'][b]['selected_features'])
+            b_info = hscale_sim_data['axes'][ax]['bands'][b]
+            sel_str = ", ".join(f['name'] for f in b_info['selected_features'])
             if not sel_str:
                 sel_str = "(none)"
             univ_str = ", ".join(universal_features[ax][b])
             if not univ_str:
                 univ_str = "(none)"
-            md_lines.append(f"| {ax} | {b} | {sel_str} | {univ_str} |")
+            md_lines.append(
+                f"| {ax} | {b} | {b_info['threshold']:.4e} | {b_info['K']} | {b_info['n_selected']} | "
+                f"{b_info['selected_over_K']:.3f} | {b_info['non_sparse_flag']} | {sel_str} | {univ_str} |"
+            )
 
-    md_path = os.path.join(RESULTS_DIR, 'hscale_sim.md')
+    md_path = os.path.join(RESULTS_DIR, f'hscale_sim{suffix}.md')
     md_content = "\n".join(md_lines) + "\n"
     with open(md_path, 'w', encoding='utf-8') as f:
         f.write(md_content)
@@ -380,7 +420,7 @@ def run_sim_protocol(cache_dir=CACHE_DIR, verbose=True):
     return hscale_sim_data
 
 
-def run_real_protocol(glob_pattern, synthetic_dict=None):
+def run_real_protocol(glob_pattern, synthetic_dict=None, amend=None):
     """Run real-log pipeline either from file glob or from synthetic dict."""
     if synthetic_dict is not None:
         # Run synthetic real log verification
@@ -402,12 +442,13 @@ def main():
     parser = argparse.ArgumentParser(description="Multiscale H-scale sysID Protocol Runner")
     parser.add_argument('--sim', action='store_true', help="Run simulation H-scale protocol end-to-end")
     parser.add_argument('--real', type=str, default=None, help="Glob pattern for flight logs")
+    parser.add_argument('--amend', type=str, default=None, choices=['a1'], help="PREREG2 amendment (e.g. a1)")
     args = parser.parse_args()
 
     if args.sim:
-        run_sim_protocol(verbose=True)
+        run_sim_protocol(verbose=True, amend=args.amend)
     elif args.real is not None:
-        res = run_real_protocol(args.real)
+        res = run_real_protocol(args.real, amend=args.amend)
         print(f"Real-log run result: {res}")
     else:
         parser.print_help()

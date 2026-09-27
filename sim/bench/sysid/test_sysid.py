@@ -160,3 +160,150 @@ def test_load_library_format(tmp_path):
     assert 'L' in loaded['roll']
     assert loaded['roll']['L']['pooled'][0]['name'] == 'u_x'
 
+
+def test_group_cv_isolation(monkeypatch):
+    """Group CV never puts samples of one group in both train and val."""
+    group_sizes = [50, 100, 75, 120, 60, 90, 80, 110]
+    groups = np.concatenate([np.full(s, i) for i, s in enumerate(group_sizes)])
+    N = len(groups)
+    K = 4
+    Theta = np.zeros((N, K))
+    Theta[:, 0] = np.arange(N)
+    Y = np.random.randn(N)
+
+    import sim.bench.sysid.sindy as sindy_mod
+    orig_stlsq = sindy_mod.stlsq
+    checked_folds = 0
+
+    def spy_stlsq(T, y, **kwargs):
+        nonlocal checked_folds
+        train_idx = T[:, 0].astype(int)
+        val_idx = np.setdiff1d(np.arange(N), train_idx)
+        val_groups = set(groups[val_idx])
+        train_groups = set(groups[train_idx])
+        assert len(val_groups.intersection(train_groups)) == 0, (
+            f"Group leak detected: {val_groups.intersection(train_groups)}"
+        )
+        checked_folds += 1
+        return orig_stlsq(T, y, **kwargs)
+
+    monkeypatch.setattr(sindy_mod, 'stlsq', spy_stlsq)
+    best_th, _ = cv_threshold(Theta, Y, k_folds=5, groups=groups, seed=42)
+    assert checked_folds > 0
+
+
+def test_standardised_selection_scale_invariance():
+    """Standardised selection is invariant to scaling one column by 1000."""
+    rng = np.random.default_rng(42)
+    N = 200
+    K = 10
+    Theta = rng.standard_normal((N, K))
+    w_true = np.zeros(K)
+    w_true[0] = 2.0
+    w_true[2] = -1.5
+    w_true[5] = 1.0
+    Y = Theta @ w_true + 0.1 * rng.standard_normal(N)
+
+    Theta_scaled = Theta.copy()
+    Theta_scaled[:, 2] *= 1000.0
+
+    threshold = 0.5
+    w1 = stlsq(Theta, Y, threshold=threshold, alpha=1e-5, standardize=True)
+    w2 = stlsq(Theta_scaled, Y, threshold=threshold, alpha=1e-5, standardize=True)
+
+    mask1 = (np.abs(w1) > 1e-9)
+    mask2 = (np.abs(w2) > 1e-9)
+    assert np.array_equal(mask1, mask2), f"Selected feature masks differed: {mask1} vs {mask2}"
+
+    p_incl1, _, _ = bootstrap_ensemble(Theta, Y, threshold=threshold, n_boot=40, seed=123, standardize=True)
+    p_incl2, _, _ = bootstrap_ensemble(Theta_scaled, Y, threshold=threshold, n_boot=40, seed=123, standardize=True)
+    assert np.allclose(p_incl1, p_incl2, atol=1e-7), f"Inclusion probabilities differed: {p_incl1} vs {p_incl2}"
+
+
+def test_a1_ar1_sparse_recovery():
+    """On a sparse 3-term system with AR(1)-correlated noise (phi = 0.98) in 6 groups,
+    A1 selects at most 1 spurious term out of 10, while plain shuffled CV selects more.
+    Assert the A1 half; print the shuffled count.
+    """
+    n_groups = 6
+    n_per_group = 300
+    phi = 0.98
+    seed = 42
+    rng = np.random.default_rng(seed)
+    N = n_groups * n_per_group
+
+    Theta = np.zeros((N, 13))
+    groups = np.repeat(np.arange(n_groups), n_per_group)
+
+    true_coefs = np.zeros(13)
+    true_coefs[0] = 2.0
+    true_coefs[1] = -1.5
+    true_coefs[2] = 1.0
+
+    Y = np.zeros(N)
+
+    for g in range(n_groups):
+        start = g * n_per_group
+        end = start + n_per_group
+        eps = rng.standard_normal(n_per_group)
+        eta = np.zeros(n_per_group)
+        eta[0] = eps[0]
+        sigma = 0.5 * np.sqrt(1 - phi**2)
+        for t in range(1, n_per_group):
+            eta[t] = phi * eta[t-1] + sigma * eps[t]
+
+        for j in range(13):
+            x = np.zeros(n_per_group)
+            x[0] = rng.standard_normal()
+            e_x = rng.standard_normal(n_per_group)
+            for t in range(1, n_per_group):
+                x[t] = 0.5 * x[t-1] + e_x[t]
+            Theta[start:end, j] = x
+
+        Y[start:end] = Theta[start:end] @ true_coefs + eta
+
+    # Plain shuffled CV
+    th_plain, _ = cv_threshold(Theta, Y, k_folds=5, seed=42, groups=None, one_se=False, standardize=False)
+    p_plain, _, _ = bootstrap_ensemble(Theta, Y, threshold=th_plain, n_boot=50, seed=42, groups=None, standardize=False)
+    spurious_plain = int(np.sum((p_plain >= 0.6)[3:]))
+    print(f"Plain shuffled CV selected spurious terms: {spurious_plain}/10")
+
+    # A1 protocol: Grouped CV + 1-SE + standardize + Row bootstrap
+    th_a1, _ = cv_threshold(Theta, Y, k_folds=5, seed=42, groups=groups, one_se=True, standardize=True)
+    p_a1, _, _ = bootstrap_ensemble(Theta, Y, threshold=th_a1, n_boot=50, seed=42, groups=groups, standardize=True)
+    spurious_a1 = int(np.sum((p_a1 >= 0.6)[3:]))
+
+    assert spurious_a1 <= 1, f"A1 selected {spurious_a1} spurious terms (> 1)"
+    assert spurious_plain > 1, f"Plain CV did not select more spurious terms: {spurious_plain}"
+
+
+def test_row_bootstrap_resamples_whole_groups(monkeypatch):
+    """The row bootstrap resamples whole groups."""
+    n_groups = 6
+    group_size = 25
+    groups = np.repeat(np.arange(n_groups), group_size)
+    N = len(groups)
+    K = 3
+    Theta = np.zeros((N, K))
+    Theta[:, 0] = np.arange(N)
+    Y = np.arange(N, dtype=float)
+
+    captured_indices = []
+    import sim.bench.sysid.sindy as sindy_mod
+    orig_stlsq = sindy_mod.stlsq
+
+    def spy_stlsq(T, y, **kwargs):
+        captured_indices.append(T[:, 0].astype(int))
+        return orig_stlsq(T, y, **kwargs)
+
+    monkeypatch.setattr(sindy_mod, 'stlsq', spy_stlsq)
+    bootstrap_ensemble(Theta, Y, threshold=0.1, n_boot=20, groups=groups, seed=42)
+
+    assert len(captured_indices) == 20
+    for boot_idx in captured_indices:
+        counts = np.bincount(boot_idx, minlength=N)
+        for g in range(n_groups):
+            g_indices = np.where(groups == g)[0]
+            g_counts = counts[g_indices]
+            assert np.all(g_counts == g_counts[0]), f"Group {g} had unequal sample counts: {g_counts}"
+

@@ -1,0 +1,770 @@
+{
+  "verdict": "SUPPORTED",
+  "runtime_s": 574.0882833003998,
+  "conditions": {
+    "condition_a_jaccard": {
+      "description": "Mean pairwise Jaccard index < 0.5 on at least 2 of 3 axes",
+      "passed": true,
+      "axes": {
+        "roll": {
+          "matrix": [
+            [
+              1.0,
+              0.5714285714285714,
+              0.5
+            ],
+            [
+              0.5714285714285714,
+              1.0,
+              0.5
+            ],
+            [
+              0.5,
+              0.5,
+              1.0
+            ]
+          ],
+          "j_LM": 0.5714285714285714,
+          "j_LH": 0.5,
+          "j_MH": 0.5,
+          "mean_jaccard": 0.5238095238095238,
+          "pass": false
+        },
+        "pitch": {
+          "matrix": [
+            [
+              1.0,
+              0.2727272727272727,
+              0.35714285714285715
+            ],
+            [
+              0.2727272727272727,
+              1.0,
+              0.375
+            ],
+            [
+              0.35714285714285715,
+              0.375,
+              1.0
+            ]
+          ],
+          "j_LM": 0.2727272727272727,
+          "j_LH": 0.35714285714285715,
+          "j_MH": 0.375,
+          "mean_jaccard": 0.33495670995670995,
+          "pass": true
+        },
+        "yaw": {
+          "matrix": [
+            [
+              1.0,
+              0.3333333333333333,
+              0.5
+            ],
+            [
+              0.3333333333333333,
+              1.0,
+              0.42857142857142855
+            ],
+            [
+              0.5,
+              0.42857142857142855,
+              1.0
+            ]
+          ],
+          "j_LM": 0.3333333333333333,
+          "j_LH": 0.5,
+          "j_MH": 0.42857142857142855,
+          "mean_jaccard": 0.42063492063492064,
+          "pass": true
+        }
+      }
+    },
+    "condition_b_nrmse": {
+      "description": "Band-sum NRMSE <= 0.90 x global NRMSE on id_val on at least 2 of 3 axes",
+      "passed": true,
+      "axes": {
+        "roll": {
+          "nrmse_global": 0.18306785774089787,
+          "nrmse_band_sum": 0.0817369505018171,
+          "ratio": 0.4464844430391608,
+          "pass": true
+        },
+        "pitch": {
+          "nrmse_global": 0.19468350114074723,
+          "nrmse_band_sum": 0.08509710550318601,
+          "ratio": 0.4371048650993014,
+          "pass": true
+        },
+        "yaw": {
+          "nrmse_global": 0.6076622224380239,
+          "nrmse_band_sum": 0.09244336430272691,
+          "ratio": 0.15212952342475972,
+          "pass": true
+        }
+      }
+    }
+  },
+  "generalization_id_traj": {
+    "roll": {
+      "nrmse_global": 0.1924431804833313,
+      "nrmse_band_sum": 0.08288922001022805,
+      "ratio": 0.43072048488310866,
+      "pass": true
+    },
+    "pitch": {
+      "nrmse_global": 0.18383982789218992,
+      "nrmse_band_sum": 0.08915808487387855,
+      "ratio": 0.4849769818440211,
+      "pass": true
+    },
+    "yaw": {
+      "nrmse_global": 0.5861504928637516,
+      "nrmse_band_sum": 0.10273522987115456,
+      "ratio": 0.17527107990513105,
+      "pass": true
+    }
+  },
+  "axes": {
+    "roll": {
+      "mean_jaccard": 0.5238095238095238,
+      "jaccard_matrix": [
+        [
+          1.0,
+          0.5714285714285714,
+          0.5
+        ],
+        [
+          0.5714285714285714,
+          1.0,
+          0.5
+        ],
+        [
+          0.5,
+          0.5,
+          1.0
+        ]
+      ],
+      "val_nrmse_ratio": 0.4464844430391608,
+      "traj_nrmse_ratio": 0.43072048488310866,
+      "bands": {
+        "L": {
+          "threshold": 0.22663497574309732,
+          "K": 33,
+          "n_selected": 7,
+          "selected_over_K": 0.21212121212121213,
+          "non_sparse_flag": false,
+          "selected_features": [
+            {
+              "name": "u_x",
+              "p_incl": 1.0,
+              "coef": -0.1834271988888238,
+              "universal": true
+            },
+            {
+              "name": "u_y",
+              "p_incl": 0.66,
+              "coef": 0.03770064295353621,
+              "universal": false
+            },
+            {
+              "name": "u_z",
+              "p_incl": 0.64,
+              "coef": -0.00853661837759468,
+              "universal": false
+            },
+            {
+              "name": "u_lag_x",
+              "p_incl": 0.84,
+              "coef": 0.05224606367047856,
+              "universal": false
+            },
+            {
+              "name": "u_lag_y",
+              "p_incl": 0.66,
+              "coef": -0.03658536074109488,
+              "universal": false
+            },
+            {
+              "name": "u_lag_z",
+              "p_incl": 0.64,
+              "coef": 0.008606666847818016,
+              "universal": false
+            },
+            {
+              "name": "sin_roll",
+              "p_incl": 0.8,
+              "coef": -3.1143687674254394,
+              "universal": false
+            }
+          ],
+          "universal_features": [
+            "u_x"
+          ]
+        },
+        "M": {
+          "threshold": 0.38196812818377945,
+          "K": 33,
+          "n_selected": 4,
+          "selected_over_K": 0.12121212121212122,
+          "non_sparse_flag": false,
+          "selected_features": [
+            {
+              "name": "u_x",
+              "p_incl": 1.0,
+              "coef": -0.17861399468178799,
+              "universal": true
+            },
+            {
+              "name": "u_y",
+              "p_incl": 0.94,
+              "coef": 0.010972149152435768,
+              "universal": false
+            },
+            {
+              "name": "u_lag_x",
+              "p_incl": 1.0,
+              "coef": 0.1658356700446872,
+              "universal": true
+            },
+            {
+              "name": "u_lag_y",
+              "p_incl": 1.0,
+              "coef": -0.05072680920467587,
+              "universal": true
+            }
+          ],
+          "universal_features": [
+            "u_lag_x",
+            "u_lag_y",
+            "u_x"
+          ]
+        },
+        "H": {
+          "threshold": 0.15643913353200808,
+          "K": 33,
+          "n_selected": 8,
+          "selected_over_K": 0.24242424242424243,
+          "non_sparse_flag": false,
+          "selected_features": [
+            {
+              "name": "w_x",
+              "p_incl": 1.0,
+              "coef": 1.4388260400747872,
+              "universal": false
+            },
+            {
+              "name": "u_x",
+              "p_incl": 1.0,
+              "coef": -0.1448719244409713,
+              "universal": true
+            },
+            {
+              "name": "u_y",
+              "p_incl": 0.88,
+              "coef": 0.0015823440280532388,
+              "universal": false
+            },
+            {
+              "name": "u_lag_x",
+              "p_incl": 1.0,
+              "coef": 0.08740444544498471,
+              "universal": true
+            },
+            {
+              "name": "u_lag_y",
+              "p_incl": 1.0,
+              "coef": -0.022962171523975852,
+              "universal": false
+            },
+            {
+              "name": "v_by",
+              "p_incl": 1.0,
+              "coef": -13.003503329391737,
+              "universal": false
+            },
+            {
+              "name": "sin_roll",
+              "p_incl": 1.0,
+              "coef": -271.1791021736233,
+              "universal": true
+            },
+            {
+              "name": "sin_pitch",
+              "p_incl": 1.0,
+              "coef": 86.02638893671164,
+              "universal": false
+            }
+          ],
+          "universal_features": [
+            "sin_roll",
+            "u_lag_x",
+            "u_x"
+          ]
+        },
+        "global": {
+          "threshold": 1.8891771599612208,
+          "K": 33,
+          "n_selected": 3,
+          "selected_over_K": 0.09090909090909091,
+          "non_sparse_flag": false,
+          "selected_features": [
+            {
+              "name": "u_x",
+              "p_incl": 1.0,
+              "coef": -0.15640569664412235,
+              "universal": true
+            },
+            {
+              "name": "u_lag_x",
+              "p_incl": 1.0,
+              "coef": 0.1335240885793297,
+              "universal": true
+            },
+            {
+              "name": "u_lag_y",
+              "p_incl": 0.78,
+              "coef": -0.03680890074400163,
+              "universal": false
+            }
+          ],
+          "universal_features": [
+            "u_lag_x",
+            "u_x"
+          ]
+        }
+      }
+    },
+    "pitch": {
+      "mean_jaccard": 0.33495670995670995,
+      "jaccard_matrix": [
+        [
+          1.0,
+          0.2727272727272727,
+          0.35714285714285715
+        ],
+        [
+          0.2727272727272727,
+          1.0,
+          0.375
+        ],
+        [
+          0.35714285714285715,
+          0.375,
+          1.0
+        ]
+      ],
+      "val_nrmse_ratio": 0.4371048650993014,
+      "traj_nrmse_ratio": 0.4849769818440211,
+      "bands": {
+        "L": {
+          "threshold": 0.042100348790941024,
+          "K": 33,
+          "n_selected": 11,
+          "selected_over_K": 0.3333333333333333,
+          "non_sparse_flag": false,
+          "selected_features": [
+            {
+              "name": "bias",
+              "p_incl": 0.76,
+              "coef": -0.05169153171629799,
+              "universal": false
+            },
+            {
+              "name": "w_x",
+              "p_incl": 0.62,
+              "coef": 0.6514291951534558,
+              "universal": false
+            },
+            {
+              "name": "u_x",
+              "p_incl": 0.94,
+              "coef": 0.04172738226653767,
+              "universal": false
+            },
+            {
+              "name": "u_y",
+              "p_incl": 1.0,
+              "coef": -0.12005384103847835,
+              "universal": true
+            },
+            {
+              "name": "u_z",
+              "p_incl": 0.78,
+              "coef": 0.0028861462592511067,
+              "universal": false
+            },
+            {
+              "name": "u_lag_x",
+              "p_incl": 0.94,
+              "coef": -0.04093846974255351,
+              "universal": false
+            },
+            {
+              "name": "u_lag_y",
+              "p_incl": 0.86,
+              "coef": -0.008624642082553046,
+              "universal": false
+            },
+            {
+              "name": "u_lag_z",
+              "p_incl": 0.78,
+              "coef": -0.0026995185117261833,
+              "universal": false
+            },
+            {
+              "name": "v_bx",
+              "p_incl": 0.68,
+              "coef": -0.11496007918311675,
+              "universal": false
+            },
+            {
+              "name": "v_by",
+              "p_incl": 0.6,
+              "coef": -0.21272365751351185,
+              "universal": false
+            },
+            {
+              "name": "sin_pitch",
+              "p_incl": 1.0,
+              "coef": -2.723638100461502,
+              "universal": false
+            }
+          ],
+          "universal_features": [
+            "u_y"
+          ]
+        },
+        "M": {
+          "threshold": 0.450832531918231,
+          "K": 33,
+          "n_selected": 3,
+          "selected_over_K": 0.09090909090909091,
+          "non_sparse_flag": false,
+          "selected_features": [
+            {
+              "name": "u_y",
+              "p_incl": 1.0,
+              "coef": -0.16484624068191533,
+              "universal": true
+            },
+            {
+              "name": "u_lag_x",
+              "p_incl": 1.0,
+              "coef": -0.03775542780722081,
+              "universal": true
+            },
+            {
+              "name": "u_lag_y",
+              "p_incl": 1.0,
+              "coef": 0.15256020743326343,
+              "universal": true
+            }
+          ],
+          "universal_features": [
+            "u_lag_x",
+            "u_lag_y",
+            "u_y"
+          ]
+        },
+        "H": {
+          "threshold": 0.1936198664317325,
+          "K": 33,
+          "n_selected": 8,
+          "selected_over_K": 0.24242424242424243,
+          "non_sparse_flag": false,
+          "selected_features": [
+            {
+              "name": "w_y",
+              "p_incl": 0.96,
+              "coef": 1.436552970913465,
+              "universal": false
+            },
+            {
+              "name": "w_z*w_x",
+              "p_incl": 1.0,
+              "coef": 1.644071853907188,
+              "universal": true
+            },
+            {
+              "name": "u_y",
+              "p_incl": 1.0,
+              "coef": -0.13062870561764767,
+              "universal": true
+            },
+            {
+              "name": "u_lag_x",
+              "p_incl": 1.0,
+              "coef": -0.014743724049178886,
+              "universal": true
+            },
+            {
+              "name": "u_lag_y",
+              "p_incl": 1.0,
+              "coef": 0.07903073740624368,
+              "universal": true
+            },
+            {
+              "name": "v_bx",
+              "p_incl": 1.0,
+              "coef": 12.615291114711772,
+              "universal": false
+            },
+            {
+              "name": "sin_roll",
+              "p_incl": 1.0,
+              "coef": 73.77703680408177,
+              "universal": true
+            },
+            {
+              "name": "sin_pitch",
+              "p_incl": 1.0,
+              "coef": -279.77658344261425,
+              "universal": true
+            }
+          ],
+          "universal_features": [
+            "sin_pitch",
+            "sin_roll",
+            "u_lag_x",
+            "u_lag_y",
+            "u_y",
+            "w_z*w_x"
+          ]
+        },
+        "global": {
+          "threshold": 0.6582529052773062,
+          "K": 33,
+          "n_selected": 4,
+          "selected_over_K": 0.12121212121212122,
+          "non_sparse_flag": false,
+          "selected_features": [
+            {
+              "name": "u_x",
+              "p_incl": 1.0,
+              "coef": 0.007367382022897991,
+              "universal": false
+            },
+            {
+              "name": "u_y",
+              "p_incl": 1.0,
+              "coef": -0.1384432325465401,
+              "universal": true
+            },
+            {
+              "name": "u_lag_x",
+              "p_incl": 1.0,
+              "coef": -0.0447281604948119,
+              "universal": true
+            },
+            {
+              "name": "u_lag_y",
+              "p_incl": 1.0,
+              "coef": 0.10929362327280862,
+              "universal": true
+            }
+          ],
+          "universal_features": [
+            "u_lag_x",
+            "u_lag_y",
+            "u_y"
+          ]
+        }
+      }
+    },
+    "yaw": {
+      "mean_jaccard": 0.42063492063492064,
+      "jaccard_matrix": [
+        [
+          1.0,
+          0.3333333333333333,
+          0.5
+        ],
+        [
+          0.3333333333333333,
+          1.0,
+          0.42857142857142855
+        ],
+        [
+          0.5,
+          0.42857142857142855,
+          1.0
+        ]
+      ],
+      "val_nrmse_ratio": 0.15212952342475972,
+      "traj_nrmse_ratio": 0.17527107990513105,
+      "bands": {
+        "L": {
+          "threshold": 2.3238763061813703,
+          "K": 33,
+          "n_selected": 2,
+          "selected_over_K": 0.06060606060606061,
+          "non_sparse_flag": false,
+          "selected_features": [
+            {
+              "name": "u_z",
+              "p_incl": 1.0,
+              "coef": -0.17654606681866658,
+              "universal": true
+            },
+            {
+              "name": "u_lag_z",
+              "p_incl": 0.86,
+              "coef": 0.04698477242923616,
+              "universal": false
+            }
+          ],
+          "universal_features": [
+            "u_z"
+          ]
+        },
+        "M": {
+          "threshold": 0.3372534963356114,
+          "K": 33,
+          "n_selected": 6,
+          "selected_over_K": 0.18181818181818182,
+          "non_sparse_flag": false,
+          "selected_features": [
+            {
+              "name": "w_z",
+              "p_incl": 0.96,
+              "coef": 0.9398410175171308,
+              "universal": false
+            },
+            {
+              "name": "u_z",
+              "p_incl": 1.0,
+              "coef": -0.16571531420083813,
+              "universal": true
+            },
+            {
+              "name": "u_lag_z",
+              "p_incl": 1.0,
+              "coef": 0.16888221453822677,
+              "universal": true
+            },
+            {
+              "name": "thrust",
+              "p_incl": 1.0,
+              "coef": 67.86343947641213,
+              "universal": true
+            },
+            {
+              "name": "thrust^2",
+              "p_incl": 1.0,
+              "coef": -22.80251886666108,
+              "universal": true
+            },
+            {
+              "name": "ge_term",
+              "p_incl": 1.0,
+              "coef": 11259.252102540162,
+              "universal": false
+            }
+          ],
+          "universal_features": [
+            "thrust",
+            "thrust^2",
+            "u_lag_z",
+            "u_z"
+          ]
+        },
+        "H": {
+          "threshold": 0.2810795934642587,
+          "K": 33,
+          "n_selected": 4,
+          "selected_over_K": 0.12121212121212122,
+          "non_sparse_flag": false,
+          "selected_features": [
+            {
+              "name": "u_z",
+              "p_incl": 1.0,
+              "coef": -0.15840166828433389,
+              "universal": true
+            },
+            {
+              "name": "u_lag_z",
+              "p_incl": 1.0,
+              "coef": 0.16343277824970812,
+              "universal": true
+            },
+            {
+              "name": "v_bz",
+              "p_incl": 1.0,
+              "coef": 10.137021633598916,
+              "universal": false
+            },
+            {
+              "name": "ge_term",
+              "p_incl": 1.0,
+              "coef": 12287.124736811376,
+              "universal": false
+            }
+          ],
+          "universal_features": [
+            "u_lag_z",
+            "u_z"
+          ]
+        },
+        "global": {
+          "threshold": 1.9979714321051223,
+          "K": 33,
+          "n_selected": 7,
+          "selected_over_K": 0.21212121212121213,
+          "non_sparse_flag": false,
+          "selected_features": [
+            {
+              "name": "bias",
+              "p_incl": 1.0,
+              "coef": -111.97842947351319,
+              "universal": true
+            },
+            {
+              "name": "w_z",
+              "p_incl": 1.0,
+              "coef": -15.23074783776447,
+              "universal": true
+            },
+            {
+              "name": "u_z",
+              "p_incl": 1.0,
+              "coef": -0.2555259300211837,
+              "universal": true
+            },
+            {
+              "name": "u_lag_z",
+              "p_incl": 1.0,
+              "coef": 0.19013030188643426,
+              "universal": true
+            },
+            {
+              "name": "thrust",
+              "p_incl": 0.98,
+              "coef": 77.58747332632844,
+              "universal": false
+            },
+            {
+              "name": "thrust^2",
+              "p_incl": 0.88,
+              "coef": -24.537364908595375,
+              "universal": false
+            },
+            {
+              "name": "v_sq",
+              "p_incl": 0.84,
+              "coef": 28.707095813825056,
+              "universal": false
+            }
+          ],
+          "universal_features": [
+            "bias",
+            "u_lag_z",
+            "u_z",
+            "w_z"
+          ]
+        }
+      }
+    }
+  },
+  "amendment": "a1"
+}
