@@ -1,4 +1,4 @@
-# Night run STATE (rewritten each milestone) — 2026-09-28 00:40 CST
+# Night run STATE (rewritten each milestone) — 2026-09-28 01:05 CST
 
 ## Done
 - bench_v1 frozen 5577b03 (23:45 CST, before any tuning); label fix + API doc + ledger prereg 998c89c.
@@ -18,23 +18,25 @@
   (>half diverge; tuned gains trade robustness on the unseen combo). pid_tuned2 = constraint reference.
 - W4 Tier B brief + H6b/H7 prereg committed 24fdb53.
 - W3 brief (3-layer MRAC) + prev_ref/ copies committed 326692a; dispatch when a worker slot frees.
-
-## Runni- nw1/nw2 verified + committed 9fa65bb: sanity_{indi,l1,se3,mrac} PASS, 4-row smoke finite for all 8.
+- nw1/nw2 verified + committed 9fa65bb: sanity_{indi,l1,se3,mrac} PASS, 4-row smoke finite for all 8.
   P2 (ledger): tierA.py fair variants keep full FwPID knobs incl. ff_v/ff_a (workers had fixed them at 0);
   INDI drops rate_kp/kd (dead). With pid_tuned knobs they start near pid_tuned (smoke 0.06-0.27 m).
 - MRAC sanity weak: 1-axis 50% LOE error -1.3% at gamma 1, best -3.4% at gamma 100, Th hits TH_MAX=3
-  (sim_coupled normalized law + sigma 0.01 + norm clamp; b7d65dc). Metric is vs the step, not vs the
-  reference model, so inconclusive; the bench tune decides. MRAC_Proj (Tier B) frees th_max.
+  (b7d65dc). Metric is vs the step, not the reference model => inconclusive. MRAC_Proj keeps th_max 3.0.
+- 1985aea: test results vs pid_tuned2 (paired): l1 0.084 +0.007 [+0.001,+0.010]; indi 0.109 +0.031;
+  mrac_s6 0.099; mrac_s10 0.101; se3_eso 0.228 +0.151 (div 21.8%). H2 SURVIVES vs pid_tuned but loses to
+  pid_tuned2; H3 SURVIVES (-30% vs pid_tuned), yaw_imb_hi 0.104 vs 0.219, combo_unseen 0.455 vs inf;
+  H4 KILLED. 3L (nw3) + Tier B (nw4) verified (verify_mrac3l.txt, verify_mrac_b.txt).
 
 ## Running
-- run_tierA.sh (local, 2 at a time): se3_eso (bench tune + tune2), indi, l1, mrac_s6/s10/rbf6/12/24
-  (tune2 from pid_tuned) then test eval each. Logs sim/bench/results/logs/<tag>.log.
-- VPS nw3 (3-layer MRAC, W3) and nw4 (Tier B, base 9fa65bb). Waits: .agent-ops/out/nw{3,4}.wait.
+- run_tierA.sh: mrac_rbf6/12/24 (bf3uf9bbt). Then bgtf2b929 swaps in run_tierA.sh.new (3L + Tier B tags)
+  and runs mrac3l_{both,unrouted,reactive,predictive}, mrac_{crm,sataware,composite,proj} (-> ~02:40).
 
 ## Next
-1. When run_tierA ends: ledger result H2-H5 vs pid_tuned2 (preds were vs pid_tuned; report both), commit.
-2. nw3: verify (sanity + smoke), tune all 4 modes (P1/P2), H6 on tune split, H6b on test, yardsticks.
-3. nw4: verify, tune, H7. Then report.py, deployability, REPORT.md by 08:00.
+1. H5 result (mrac_* vs pid_tuned); commit run_tierA.sh + results.
+2. H6: bench.py eval 3L modes --split tune with tag suffix _tn (tune2 owns <tag>_tune.json); paired CI
+   both/reactive/predictive vs unrouted. H6b on test. Yardsticks (refmodel with tuned knobs, xtrack).
+3. H7 Tier B vs mrac_s6. Then report.py, deployability, REPORT.md by 08:00.
 
-ation counts on the test split (report these)
-pid_fw 1, pid_tuned 1, pid_tuned2 1
+## Test-split evaluation counts (report these)
+pid_fw 1, pid_tuned 1, pid_tuned2 1, indi 1, l1 1, se3_eso 1, mrac_s6 1, mrac_s10 1
