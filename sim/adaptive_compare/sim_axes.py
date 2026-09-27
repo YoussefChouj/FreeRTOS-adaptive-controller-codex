@@ -254,7 +254,10 @@ def simulate(axis, ctrl, P, gamma, log_ref=True):
             L['phi'][k] = phi
             L['p'][k] = p
         else:
-            bad = np.abs(phi) > np.deg2rad(180)
+            if axis == 'yaw' and cfg['wrap']:
+                bad = np.zeros(B, bool)
+            else:
+                bad = np.abs(phi) > np.deg2rad(180)
             diverged |= bad
             phi = np.where(bad, np.sign(phi) * np.deg2rad(180), phi)
             p = np.where(bad, 0.0, p)
@@ -288,10 +291,9 @@ def metrics(L, axis, t0=0.5):
     ec = L['phi'][m] - L['cmd'][m, None]
     
     if axis == 'yaw' and AXES[axis]['wrap']:
-        e = np.where(e >= 180, e - 360, e)
-        e = np.where(e <= -180, e + 360, e)
-        ec = np.where(ec >= 180, ec - 360, ec)
-        ec = np.where(ec <= -180, ec + 360, ec)
+        e = ((e + 180) % 360) - 180
+        ec = ((ec + 180) % 360) - 180
+
         
     u = L['U_pid'][m] + L['u_ad'][m]
     out = dict(rms_ref=np.sqrt((e ** 2).mean(0)), peak_ref=np.abs(e).max(0),

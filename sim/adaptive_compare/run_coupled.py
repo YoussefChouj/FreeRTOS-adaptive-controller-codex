@@ -30,8 +30,8 @@ def setup_scenarios():
     B = len(names)
     P = make_P(B)
     
-    # C2: constant yaw imbalance torque. U_Y ~ 500 => tau = 500 / 5059 = 0.0988 Nm
-    P['bias_y'][1] = 0.0988
+    # C2: constant yaw imbalance torque. U_Y ~ 540 => tau = 540 / 5059 = 0.1067 Nm
+    P['bias_y'][1] = -0.1067
     
     # C3: motor fault (M1 loses 25% at 6s)
     P['t_f'][2] = 6.0
@@ -162,7 +162,9 @@ def main():
     width = 0.15
     for idx, (axis_name, var) in enumerate([('Roll', 'phi'), ('Pitch', 'theta'), ('Yaw', 'psi'), ('Alt', 'z')]):
         for k, c in enumerate(controllers):
-            err = logs[c][var] - ref_log[var]
+            err = logs[c][var] - logs['PID'][var][:, 0:1]
+            if var == 'psi':
+                err = ((err + 180) % 360) - 180
             rms = np.sqrt(np.mean(err**2, axis=0))
             rms = np.where(logs[c]['diverged'], np.nan, rms)
             ax[idx].bar(x + k*width, rms, width, label=c)
@@ -191,7 +193,7 @@ def main():
     fig, ax = plt.subplots(figsize=(8, 4))
     data = []
     for c in controllers:
-        err = mc[c]['phi'] - ref_log['phi']
+        err = mc[c]['phi'] - logs['PID']['phi'][:, 0:1]
         rms = np.sqrt(np.mean(err**2, axis=0))
         rms = np.where(mc[c]['diverged'], np.nan, rms)
         data.append(rms[~np.isnan(rms)])
@@ -228,22 +230,32 @@ def main():
     for idx, n in enumerate(names):
         results['scenarios'][n] = {}
         for c in controllers:
-            err_r = logs[c]['phi'][:, idx] - ref_log['phi'][:, 0]
-            err_p = logs[c]['theta'][:, idx] - ref_log['theta'][:, 0]
-            err_y = logs[c]['psi'][:, idx] - ref_log['psi'][:, 0]
-            err_z = logs[c]['z'][:, idx] - ref_log['z'][:, 0]
+            err_r = logs[c]['phi'][:, idx] - logs['PID']['phi'][:, 0]
+            err_p = logs[c]['theta'][:, idx] - logs['PID']['theta'][:, 0]
+            err_y = ((logs[c]['psi'][:, idx] - logs['PID']['psi'][:, 0] + 180) % 360) - 180
+            err_z = logs[c]['z'][:, idx] - logs['PID']['z'][:, 0]
+            
+            cmd_err_r = logs[c]['phi'][:, idx] - cmd_r
+            cmd_err_p = logs[c]['theta'][:, idx] - cmd_p
+            cmd_err_y = ((logs[c]['psi'][:, idx] - cmd_y + 180) % 360) - 180
+            cmd_err_z = logs[c]['z'][:, idx] - cmd_z
+            
             results['scenarios'][n][c] = {
                 'rms_roll': float(np.sqrt(np.mean(err_r**2))),
                 'rms_pitch': float(np.sqrt(np.mean(err_p**2))),
                 'rms_yaw': float(np.sqrt(np.mean(err_y**2))),
                 'rms_z': float(np.sqrt(np.mean(err_z**2))),
+                'rms_cmd_roll': float(np.sqrt(np.mean(cmd_err_r**2))),
+                'rms_cmd_pitch': float(np.sqrt(np.mean(cmd_err_p**2))),
+                'rms_cmd_yaw': float(np.sqrt(np.mean(cmd_err_y**2))),
+                'rms_cmd_z': float(np.sqrt(np.mean(cmd_err_z**2))),
                 'sat_pct': float(np.mean(logs[c]['sat'][:, idx]) * 100),
                 'diverged': bool(logs[c]['diverged'][idx])
             }
     
     results['mc_medians'] = {}
     for c in controllers:
-        err = mc[c]['phi'] - ref_log['phi']
+        err = mc[c]['phi'] - logs['PID']['phi'][:, 0:1]
         rms = np.sqrt(np.mean(err**2, axis=0))
         results['mc_medians'][c] = float(np.nanmedian(np.where(mc[c]['diverged'], np.nan, rms)))
 
@@ -252,9 +264,9 @@ def main():
         
     # Generate remaining 2 PNGs to satisfy >= 7 PNGs requirement
     fig, ax = plt.subplots()
-    ax.plot(t_c, cmd_y, label='Cmd')
+    ax.plot(t_c, ((cmd_y + 180) % 360) - 180, label='Cmd')
     for c in ['PID', best]:
-        ax.plot(t_c, logs[c]['psi'][:, 4], label=c)
+        ax.plot(t_c, ((logs[c]['psi'][:, 4] + 180) % 360) - 180, label=c)
     ax.legend()
     ax.set_title('C5 Yaw Angle')
     fig.savefig('sim/adaptive_compare/figures_coupled/F6_C5_yaw.png', dpi=200)
@@ -270,6 +282,17 @@ def main():
     plt.close(fig)
 
     print("Done!")
+    
+    # Print steady yaw U and motor means for C2 (PID)
+    idx_c2 = names.index('C2 Yaw Imbalance (Flight 8)')
+    t_mask = t_c > 12.0
+    u_y_steady = np.mean(logs['PID']['U_pid_y'][t_mask, idx_c2])
+    m1_mean = np.mean(logs['PID']['M1'][t_mask, idx_c2])
+    m2_mean = np.mean(logs['PID']['M2'][t_mask, idx_c2])
+    m3_mean = np.mean(logs['PID']['M3'][t_mask, idx_c2])
+    m4_mean = np.mean(logs['PID']['M4'][t_mask, idx_c2])
+    print(f"C2 PID steady yaw U: {u_y_steady:.1f}")
+    print(f"C2 PID M1..M4 means: {m1_mean:.1f}, {m2_mean:.1f}, {m3_mean:.1f}, {m4_mean:.1f}")
 
 if __name__ == '__main__':
     main()

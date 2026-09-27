@@ -236,7 +236,7 @@ def simulate(ctrl, P, gamma, t_c, cmd_r, cmd_p, cmd_y, cmd_z, ref_log):
         
         U_tot_r = np.clip(U_pid_r + u_ad_r, -500, 500)
         U_tot_p = np.clip(U_pid_p + u_ad_p, -500, 500)
-        U_tot_y = np.clip(U_pid_y + u_ad_y, -500, 500)
+        U_tot_y = np.clip(U_pid_y + u_ad_y, -650, 650)
         Thr_out = np.clip(U_pid_z + 2950, 2000, 4000)
         
         M1 = Thr_out + U_tot_p - U_tot_r - U_tot_y
