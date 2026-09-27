@@ -1,4 +1,4 @@
-# Night run STATE (rewritten each milestone) — 2026-09-28 01:05 CST
+# Night run STATE (rewritten each milestone) — 2026-09-28 01:25 CST
 
 ## Done
 - bench_v1 frozen 5577b03 (23:45 CST, before any tuning); label fix + API doc + ledger prereg 998c89c.
@@ -28,6 +28,14 @@
   pid_tuned2; H3 SURVIVES (-30% vs pid_tuned), yaw_imb_hi 0.104 vs 0.219, combo_unseen 0.455 vs inf;
   H4 KILLED. 3L (nw3) + Tier B (nw4) verified (verify_mrac3l.txt, verify_mrac_b.txt).
 
+- Test (vs pid_tuned): mrac_rbf12 0.074 -0.047 [-0.053,-0.041] (best median; div 7.1% > pid_tuned2 6.7%,
+  combo_unseen inf, yaw_imb_hi 0.206); mrac_rbf6 0.085. rbf24 running. H5 result after rbf24.
+- yard_3l.py (75b2315): refmodel with pid_tuned knobs 16.4% RMSE / -2.5 ms lag (was 46.6% with fw defaults);
+  u_ad/u_nom RMS 0.15 (adaptation not negligible). Run per 3L tag after batch 2.
+- H8 prereg (Tier C, 75b2315): Hybrid_RBF12_L1Yaw (rbf12 roll/pitch + L1 yaw). Leak disclosed (idea from test
+  results) => claim judged on held-out rows only vs best Tier A. nw6 implements (VPS, bg wait bs2vsrae0).
+- nw5 (c_ref C89 L1 + MRAC_S6 + COST.md) on VPS, bg wait b5l6ddske.
+
 ## Running
 - run_tierA.sh: mrac_rbf6/12/24 (bf3uf9bbt). Then bgtf2b929 swaps in run_tierA.sh.new (3L + Tier B tags)
   and runs mrac3l_{both,unrouted,reactive,predictive}, mrac_{crm,sataware,composite,proj} (-> ~02:40).
@@ -36,7 +44,9 @@
 1. H5 result (mrac_* vs pid_tuned); commit run_tierA.sh + results.
 2. H6: bench.py eval 3L modes --split tune with tag suffix _tn (tune2 owns <tag>_tune.json); paired CI
    both/reactive/predictive vs unrouted. H6b on test. Yardsticks (refmodel with tuned knobs, xtrack).
-3. H7 Tier B vs mrac_s6. Then report.py, deployability, REPORT.md by 08:00.
+3. H7 Tier B vs mrac_s6. H8: verify nw6, tune2 ctrl_hybrid:Hybrid_RBF12_L1Yaw from pid_tuned (P1),
+   test eval, ablation vs rbf12 and l1. Maybe extend c_ref to rbf12/hybrid if finalist.
+4. report.py, deployability, REPORT.md by 08:00.
 
 ## Test-split evaluation counts (report these)
-pid_fw 1, pid_tuned 1, pid_tuned2 1, indi 1, l1 1, se3_eso 1, mrac_s6 1, mrac_s10 1
+pid_fw 1, pid_tuned 1, pid_tuned2 1, indi 1, l1 1, se3_eso 1, mrac_s6 1, mrac_s10 1, mrac_rbf6 1, mrac_rbf12 1
