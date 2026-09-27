@@ -1,0 +1,2264 @@
+{
+  "verdict": "KILLED",
+  "runtime_s": 1275.1984612941742,
+  "conditions": {
+    "condition_a_jaccard": {
+      "description": "Mean pairwise Jaccard index < 0.5 on at least 2 of 3 axes",
+      "passed": false,
+      "axes": {
+        "roll": {
+          "matrix": [
+            [
+              1.0,
+              0.8484848484848485,
+              0.696969696969697
+            ],
+            [
+              0.8484848484848485,
+              1.0,
+              0.7586206896551724
+            ],
+            [
+              0.696969696969697,
+              0.7586206896551724,
+              1.0
+            ]
+          ],
+          "j_LM": 0.8484848484848485,
+          "j_LH": 0.696969696969697,
+          "j_MH": 0.7586206896551724,
+          "mean_jaccard": 0.7680250783699059,
+          "pass": false
+        },
+        "pitch": {
+          "matrix": [
+            [
+              1.0,
+              0.8709677419354839,
+              0.6451612903225806
+            ],
+            [
+              0.8709677419354839,
+              1.0,
+              0.7407407407407407
+            ],
+            [
+              0.6451612903225806,
+              0.7407407407407407,
+              1.0
+            ]
+          ],
+          "j_LM": 0.8709677419354839,
+          "j_LH": 0.6451612903225806,
+          "j_MH": 0.7407407407407407,
+          "mean_jaccard": 0.7522899243329352,
+          "pass": false
+        },
+        "yaw": {
+          "matrix": [
+            [
+              1.0,
+              0.25,
+              0.28125
+            ],
+            [
+              0.25,
+              1.0,
+              0.7
+            ],
+            [
+              0.28125,
+              0.7,
+              1.0
+            ]
+          ],
+          "j_LM": 0.25,
+          "j_LH": 0.28125,
+          "j_MH": 0.7,
+          "mean_jaccard": 0.41041666666666665,
+          "pass": true
+        }
+      }
+    },
+    "condition_b_nrmse": {
+      "description": "Band-sum NRMSE <= 0.90 x global NRMSE on id_val on at least 2 of 3 axes",
+      "passed": true,
+      "axes": {
+        "roll": {
+          "nrmse_global": 0.18038527351551695,
+          "nrmse_band_sum": 0.08560545965339852,
+          "ratio": 0.4745701130975897,
+          "pass": true
+        },
+        "pitch": {
+          "nrmse_global": 0.19237347951421813,
+          "nrmse_band_sum": 0.09753145209824031,
+          "ratio": 0.5069901129018767,
+          "pass": true
+        },
+        "yaw": {
+          "nrmse_global": 0.3426867202034321,
+          "nrmse_band_sum": 0.44945016409891897,
+          "ratio": 1.3115482380878605,
+          "pass": false
+        }
+      }
+    }
+  },
+  "generalization_id_traj": {
+    "roll": {
+      "nrmse_global": 0.18681979353165357,
+      "nrmse_band_sum": 0.08449802002920427,
+      "ratio": 0.45229693509369745,
+      "pass": true
+    },
+    "pitch": {
+      "nrmse_global": 0.18536179975422934,
+      "nrmse_band_sum": 0.09377587165629278,
+      "ratio": 0.5059072137874683,
+      "pass": true
+    },
+    "yaw": {
+      "nrmse_global": 0.4069495227444676,
+      "nrmse_band_sum": 0.4513379577333486,
+      "ratio": 1.109076021737353,
+      "pass": false
+    }
+  },
+  "axes": {
+    "roll": {
+      "mean_jaccard": 0.7680250783699059,
+      "jaccard_matrix": [
+        [
+          1.0,
+          0.8484848484848485,
+          0.696969696969697
+        ],
+        [
+          0.8484848484848485,
+          1.0,
+          0.7586206896551724
+        ],
+        [
+          0.696969696969697,
+          0.7586206896551724,
+          1.0
+        ]
+      ],
+      "val_nrmse_ratio": 0.4745701130975897,
+      "traj_nrmse_ratio": 0.45229693509369745,
+      "bands": {
+        "L": {
+          "threshold": 0.0029086557224976602,
+          "selected_features": [
+            {
+              "name": "bias",
+              "p_incl": 1.0,
+              "coef": -0.8662295748426785,
+              "universal": true
+            },
+            {
+              "name": "w_x",
+              "p_incl": 1.0,
+              "coef": -0.18983209485984684,
+              "universal": true
+            },
+            {
+              "name": "w_y",
+              "p_incl": 1.0,
+              "coef": 0.11898945389798032,
+              "universal": true
+            },
+            {
+              "name": "w_z",
+              "p_incl": 1.0,
+              "coef": 0.05496374644248521,
+              "universal": true
+            },
+            {
+              "name": "w_x*w_y",
+              "p_incl": 0.9,
+              "coef": 0.006312495407395104,
+              "universal": true
+            },
+            {
+              "name": "w_y*w_z",
+              "p_incl": 1.0,
+              "coef": -0.39074762242243677,
+              "universal": true
+            },
+            {
+              "name": "w_z*w_x",
+              "p_incl": 0.88,
+              "coef": -0.009801413861831294,
+              "universal": true
+            },
+            {
+              "name": "w_x^2",
+              "p_incl": 0.92,
+              "coef": 0.008791447040336887,
+              "universal": true
+            },
+            {
+              "name": "w_y^2",
+              "p_incl": 1.0,
+              "coef": 0.04136293190820507,
+              "universal": true
+            },
+            {
+              "name": "w_z^2",
+              "p_incl": 1.0,
+              "coef": -0.011255372484860877,
+              "universal": false
+            },
+            {
+              "name": "|w_x|w_x",
+              "p_incl": 1.0,
+              "coef": 0.16483172094098564,
+              "universal": true
+            },
+            {
+              "name": "|w_y|w_y",
+              "p_incl": 1.0,
+              "coef": 0.08120913033110178,
+              "universal": true
+            },
+            {
+              "name": "|w_z|w_z",
+              "p_incl": 1.0,
+              "coef": -0.10081494941022592,
+              "universal": false
+            },
+            {
+              "name": "u_x",
+              "p_incl": 1.0,
+              "coef": -0.17311066289857063,
+              "universal": true
+            },
+            {
+              "name": "u_y",
+              "p_incl": 1.0,
+              "coef": 0.026896487041229298,
+              "universal": true
+            },
+            {
+              "name": "u_z",
+              "p_incl": 1.0,
+              "coef": -0.005039750540837813,
+              "universal": false
+            },
+            {
+              "name": "u_lag_x",
+              "p_incl": 1.0,
+              "coef": 0.0346618971390368,
+              "universal": true
+            },
+            {
+              "name": "u_lag_y",
+              "p_incl": 1.0,
+              "coef": -0.027167887278585566,
+              "universal": true
+            },
+            {
+              "name": "u_lag_z",
+              "p_incl": 1.0,
+              "coef": 0.005009666081807695,
+              "universal": false
+            },
+            {
+              "name": "thrust",
+              "p_incl": 1.0,
+              "coef": 0.8074280698325935,
+              "universal": true
+            },
+            {
+              "name": "thrust^2",
+              "p_incl": 1.0,
+              "coef": -0.3484905829230245,
+              "universal": true
+            },
+            {
+              "name": "v_bx",
+              "p_incl": 1.0,
+              "coef": -0.12791672029873324,
+              "universal": true
+            },
+            {
+              "name": "v_by",
+              "p_incl": 1.0,
+              "coef": 0.249342644479156,
+              "universal": true
+            },
+            {
+              "name": "v_bz",
+              "p_incl": 0.98,
+              "coef": 0.023434171058657142,
+              "universal": true
+            },
+            {
+              "name": "|v_bx|v_bx",
+              "p_incl": 1.0,
+              "coef": 0.11380505202153159,
+              "universal": true
+            },
+            {
+              "name": "|v_by|v_by",
+              "p_incl": 1.0,
+              "coef": -0.10373192013487553,
+              "universal": true
+            },
+            {
+              "name": "|v_bz|v_bz",
+              "p_incl": 1.0,
+              "coef": 0.09040110042436711,
+              "universal": true
+            },
+            {
+              "name": "ge_term",
+              "p_incl": 1.0,
+              "coef": -29.1381950702308,
+              "universal": true
+            },
+            {
+              "name": "sin_roll",
+              "p_incl": 1.0,
+              "coef": -3.5055734446249,
+              "universal": true
+            },
+            {
+              "name": "cos_roll",
+              "p_incl": 1.0,
+              "coef": 0.871045976157135,
+              "universal": true
+            },
+            {
+              "name": "sin_pitch",
+              "p_incl": 1.0,
+              "coef": -0.1187200016688659,
+              "universal": true
+            },
+            {
+              "name": "cos_pitch",
+              "p_incl": 1.0,
+              "coef": -0.2835451965699725,
+              "universal": true
+            },
+            {
+              "name": "v_sq",
+              "p_incl": 1.0,
+              "coef": -0.061834251110041635,
+              "universal": true
+            }
+          ],
+          "universal_features": [
+            "bias",
+            "cos_pitch",
+            "cos_roll",
+            "ge_term",
+            "sin_pitch",
+            "sin_roll",
+            "thrust",
+            "thrust^2",
+            "u_lag_x",
+            "u_lag_y",
+            "u_x",
+            "u_y",
+            "v_bx",
+            "v_by",
+            "v_bz",
+            "v_sq",
+            "w_x",
+            "w_x*w_y",
+            "w_x^2",
+            "w_y",
+            "w_y*w_z",
+            "w_y^2",
+            "w_z",
+            "w_z*w_x",
+            "|v_bx|v_bx",
+            "|v_by|v_by",
+            "|v_bz|v_bz",
+            "|w_x|w_x",
+            "|w_y|w_y"
+          ]
+        },
+        "M": {
+          "threshold": 0.007569515102902703,
+          "selected_features": [
+            {
+              "name": "w_x",
+              "p_incl": 1.0,
+              "coef": -0.6687707307892989,
+              "universal": true
+            },
+            {
+              "name": "w_y",
+              "p_incl": 1.0,
+              "coef": -0.33179854378258683,
+              "universal": true
+            },
+            {
+              "name": "w_z",
+              "p_incl": 1.0,
+              "coef": -0.05817762481379367,
+              "universal": true
+            },
+            {
+              "name": "w_y*w_z",
+              "p_incl": 1.0,
+              "coef": -0.31259406815370655,
+              "universal": true
+            },
+            {
+              "name": "w_z*w_x",
+              "p_incl": 1.0,
+              "coef": -0.1486383441822258,
+              "universal": false
+            },
+            {
+              "name": "w_x^2",
+              "p_incl": 1.0,
+              "coef": 0.09175129309257041,
+              "universal": true
+            },
+            {
+              "name": "w_y^2",
+              "p_incl": 0.72,
+              "coef": -0.020865293861807827,
+              "universal": true
+            },
+            {
+              "name": "|w_x|w_x",
+              "p_incl": 1.0,
+              "coef": -0.13848594184903212,
+              "universal": false
+            },
+            {
+              "name": "|w_y|w_y",
+              "p_incl": 1.0,
+              "coef": 0.07778469158712141,
+              "universal": false
+            },
+            {
+              "name": "|w_z|w_z",
+              "p_incl": 1.0,
+              "coef": 0.06764139083530599,
+              "universal": false
+            },
+            {
+              "name": "u_x",
+              "p_incl": 1.0,
+              "coef": -0.1839909351954929,
+              "universal": true
+            },
+            {
+              "name": "u_y",
+              "p_incl": 1.0,
+              "coef": 0.008435284389971664,
+              "universal": false
+            },
+            {
+              "name": "u_lag_x",
+              "p_incl": 1.0,
+              "coef": 0.16751867666049025,
+              "universal": true
+            },
+            {
+              "name": "u_lag_y",
+              "p_incl": 1.0,
+              "coef": -0.04821431785803075,
+              "universal": true
+            },
+            {
+              "name": "thrust",
+              "p_incl": 0.98,
+              "coef": -0.5878114951147722,
+              "universal": true
+            },
+            {
+              "name": "thrust^2",
+              "p_incl": 1.0,
+              "coef": 0.5578689221568873,
+              "universal": true
+            },
+            {
+              "name": "v_bx",
+              "p_incl": 1.0,
+              "coef": -1.1810118476665248,
+              "universal": true
+            },
+            {
+              "name": "v_by",
+              "p_incl": 1.0,
+              "coef": 1.496804743074016,
+              "universal": true
+            },
+            {
+              "name": "v_bz",
+              "p_incl": 1.0,
+              "coef": 0.7395421306158285,
+              "universal": true
+            },
+            {
+              "name": "|v_bx|v_bx",
+              "p_incl": 1.0,
+              "coef": 0.32758747646442105,
+              "universal": true
+            },
+            {
+              "name": "|v_by|v_by",
+              "p_incl": 1.0,
+              "coef": -0.11605775383471804,
+              "universal": true
+            },
+            {
+              "name": "|v_bz|v_bz",
+              "p_incl": 1.0,
+              "coef": -0.19127720831868691,
+              "universal": true
+            },
+            {
+              "name": "ge_term",
+              "p_incl": 1.0,
+              "coef": 104.15810462519883,
+              "universal": true
+            },
+            {
+              "name": "sin_roll",
+              "p_incl": 1.0,
+              "coef": -1.5494129564727932,
+              "universal": true
+            },
+            {
+              "name": "cos_roll",
+              "p_incl": 1.0,
+              "coef": -8.9509618701247,
+              "universal": true
+            },
+            {
+              "name": "sin_pitch",
+              "p_incl": 1.0,
+              "coef": 0.7502749388289813,
+              "universal": true
+            },
+            {
+              "name": "cos_pitch",
+              "p_incl": 1.0,
+              "coef": -2.926200136433519,
+              "universal": true
+            },
+            {
+              "name": "v_sq",
+              "p_incl": 0.98,
+              "coef": 0.5041024790354691,
+              "universal": true
+            }
+          ],
+          "universal_features": [
+            "cos_pitch",
+            "cos_roll",
+            "ge_term",
+            "sin_pitch",
+            "sin_roll",
+            "thrust",
+            "thrust^2",
+            "u_lag_x",
+            "u_lag_y",
+            "u_x",
+            "v_bx",
+            "v_by",
+            "v_bz",
+            "v_sq",
+            "w_x",
+            "w_x^2",
+            "w_y",
+            "w_y*w_z",
+            "w_y^2",
+            "w_z",
+            "|v_bx|v_bx",
+            "|v_by|v_by",
+            "|v_bz|v_bz"
+          ]
+        },
+        "H": {
+          "threshold": 0.027330891209792776,
+          "selected_features": [
+            {
+              "name": "w_x",
+              "p_incl": 1.0,
+              "coef": 1.030234511568136,
+              "universal": true
+            },
+            {
+              "name": "w_y",
+              "p_incl": 1.0,
+              "coef": 1.3113053599243278,
+              "universal": true
+            },
+            {
+              "name": "w_z",
+              "p_incl": 1.0,
+              "coef": -0.12720221249513736,
+              "universal": false
+            },
+            {
+              "name": "w_x*w_y",
+              "p_incl": 0.78,
+              "coef": 0.05844074090490663,
+              "universal": false
+            },
+            {
+              "name": "w_z*w_x",
+              "p_incl": 1.0,
+              "coef": -0.6589954557490861,
+              "universal": true
+            },
+            {
+              "name": "w_y^2",
+              "p_incl": 0.94,
+              "coef": 0.06473481044609361,
+              "universal": false
+            },
+            {
+              "name": "|w_x|w_x",
+              "p_incl": 1.0,
+              "coef": 0.2522333672390148,
+              "universal": true
+            },
+            {
+              "name": "|w_y|w_y",
+              "p_incl": 1.0,
+              "coef": -0.11194874065492086,
+              "universal": false
+            },
+            {
+              "name": "u_x",
+              "p_incl": 1.0,
+              "coef": -0.14489792058418272,
+              "universal": true
+            },
+            {
+              "name": "u_lag_x",
+              "p_incl": 1.0,
+              "coef": 0.08745029204343725,
+              "universal": false
+            },
+            {
+              "name": "thrust",
+              "p_incl": 0.9,
+              "coef": -0.25934319800445965,
+              "universal": true
+            },
+            {
+              "name": "thrust^2",
+              "p_incl": 0.8,
+              "coef": -0.11132314055557818,
+              "universal": true
+            },
+            {
+              "name": "v_bx",
+              "p_incl": 1.0,
+              "coef": -1.5192842359064067,
+              "universal": true
+            },
+            {
+              "name": "v_by",
+              "p_incl": 1.0,
+              "coef": -15.102453639944265,
+              "universal": true
+            },
+            {
+              "name": "v_bz",
+              "p_incl": 0.94,
+              "coef": 0.2672978415171021,
+              "universal": true
+            },
+            {
+              "name": "|v_bx|v_bx",
+              "p_incl": 1.0,
+              "coef": 0.5392067181175735,
+              "universal": true
+            },
+            {
+              "name": "|v_by|v_by",
+              "p_incl": 1.0,
+              "coef": 2.5056542870205796,
+              "universal": true
+            },
+            {
+              "name": "ge_term",
+              "p_incl": 1.0,
+              "coef": 135.94013868355148,
+              "universal": true
+            },
+            {
+              "name": "sin_roll",
+              "p_incl": 1.0,
+              "coef": -260.9646644149272,
+              "universal": true
+            },
+            {
+              "name": "cos_roll",
+              "p_incl": 1.0,
+              "coef": -4.930767885350812,
+              "universal": true
+            },
+            {
+              "name": "sin_pitch",
+              "p_incl": 1.0,
+              "coef": 170.48826169611976,
+              "universal": true
+            },
+            {
+              "name": "cos_pitch",
+              "p_incl": 1.0,
+              "coef": -26.70055612841128,
+              "universal": true
+            },
+            {
+              "name": "v_sq",
+              "p_incl": 1.0,
+              "coef": -6.17731038652226,
+              "universal": true
+            }
+          ],
+          "universal_features": [
+            "cos_pitch",
+            "cos_roll",
+            "ge_term",
+            "sin_pitch",
+            "sin_roll",
+            "thrust",
+            "thrust^2",
+            "u_x",
+            "v_bx",
+            "v_by",
+            "v_bz",
+            "v_sq",
+            "w_x",
+            "w_y",
+            "w_z*w_x",
+            "|v_bx|v_bx",
+            "|v_by|v_by",
+            "|w_x|w_x"
+          ]
+        },
+        "global": {
+          "threshold": 0.02029926822489007,
+          "selected_features": [
+            {
+              "name": "bias",
+              "p_incl": 1.0,
+              "coef": -19.516385633087715,
+              "universal": true
+            },
+            {
+              "name": "w_x",
+              "p_incl": 1.0,
+              "coef": 1.6896507601216948,
+              "universal": true
+            },
+            {
+              "name": "w_y",
+              "p_incl": 1.0,
+              "coef": -1.6428029604409544,
+              "universal": true
+            },
+            {
+              "name": "w_z",
+              "p_incl": 1.0,
+              "coef": 0.10213059580053135,
+              "universal": false
+            },
+            {
+              "name": "w_x*w_y",
+              "p_incl": 1.0,
+              "coef": -0.09777345528952727,
+              "universal": false
+            },
+            {
+              "name": "w_y*w_z",
+              "p_incl": 1.0,
+              "coef": 0.2116479540458419,
+              "universal": true
+            },
+            {
+              "name": "w_z*w_x",
+              "p_incl": 1.0,
+              "coef": -0.3920200622961625,
+              "universal": false
+            },
+            {
+              "name": "w_x^2",
+              "p_incl": 1.0,
+              "coef": 0.07465346188048423,
+              "universal": false
+            },
+            {
+              "name": "w_y^2",
+              "p_incl": 0.92,
+              "coef": 0.041039920593800766,
+              "universal": false
+            },
+            {
+              "name": "w_z^2",
+              "p_incl": 1.0,
+              "coef": -0.17953997885872394,
+              "universal": false
+            },
+            {
+              "name": "|w_x|w_x",
+              "p_incl": 1.0,
+              "coef": -0.30043643543822557,
+              "universal": true
+            },
+            {
+              "name": "|w_y|w_y",
+              "p_incl": 1.0,
+              "coef": 0.3135779672197415,
+              "universal": false
+            },
+            {
+              "name": "|w_z|w_z",
+              "p_incl": 0.74,
+              "coef": -0.0319516070276245,
+              "universal": false
+            },
+            {
+              "name": "u_x",
+              "p_incl": 1.0,
+              "coef": -0.1532150939293219,
+              "universal": true
+            },
+            {
+              "name": "u_lag_x",
+              "p_incl": 1.0,
+              "coef": 0.12830340224617504,
+              "universal": false
+            },
+            {
+              "name": "u_lag_y",
+              "p_incl": 1.0,
+              "coef": -0.04332824898038255,
+              "universal": false
+            },
+            {
+              "name": "thrust",
+              "p_incl": 1.0,
+              "coef": 5.345501711423092,
+              "universal": true
+            },
+            {
+              "name": "thrust^2",
+              "p_incl": 1.0,
+              "coef": -1.5993839097341724,
+              "universal": true
+            },
+            {
+              "name": "v_bx",
+              "p_incl": 1.0,
+              "coef": -0.3017119671468278,
+              "universal": true
+            },
+            {
+              "name": "v_by",
+              "p_incl": 1.0,
+              "coef": -0.789981209914225,
+              "universal": true
+            },
+            {
+              "name": "v_bz",
+              "p_incl": 1.0,
+              "coef": 1.496989455394477,
+              "universal": true
+            },
+            {
+              "name": "|v_bx|v_bx",
+              "p_incl": 1.0,
+              "coef": -0.9228182081713175,
+              "universal": false
+            },
+            {
+              "name": "|v_by|v_by",
+              "p_incl": 1.0,
+              "coef": 0.5930089963173626,
+              "universal": true
+            },
+            {
+              "name": "|v_bz|v_bz",
+              "p_incl": 1.0,
+              "coef": -0.533953562625614,
+              "universal": false
+            },
+            {
+              "name": "ge_term",
+              "p_incl": 1.0,
+              "coef": -198.0117176216872,
+              "universal": true
+            },
+            {
+              "name": "sin_roll",
+              "p_incl": 1.0,
+              "coef": -7.223822361764423,
+              "universal": true
+            },
+            {
+              "name": "cos_roll",
+              "p_incl": 1.0,
+              "coef": 6.43060357994276,
+              "universal": true
+            },
+            {
+              "name": "sin_pitch",
+              "p_incl": 1.0,
+              "coef": 1.1020041777655318,
+              "universal": true
+            },
+            {
+              "name": "cos_pitch",
+              "p_incl": 1.0,
+              "coef": 7.701165756652994,
+              "universal": true
+            },
+            {
+              "name": "v_sq",
+              "p_incl": 1.0,
+              "coef": 2.47144222124048,
+              "universal": true
+            }
+          ],
+          "universal_features": [
+            "bias",
+            "cos_pitch",
+            "cos_roll",
+            "ge_term",
+            "sin_pitch",
+            "sin_roll",
+            "thrust",
+            "thrust^2",
+            "u_x",
+            "v_bx",
+            "v_by",
+            "v_bz",
+            "v_sq",
+            "w_x",
+            "w_y",
+            "w_y*w_z",
+            "|v_by|v_by",
+            "|w_x|w_x"
+          ]
+        }
+      }
+    },
+    "pitch": {
+      "mean_jaccard": 0.7522899243329352,
+      "jaccard_matrix": [
+        [
+          1.0,
+          0.8709677419354839,
+          0.6451612903225806
+        ],
+        [
+          0.8709677419354839,
+          1.0,
+          0.7407407407407407
+        ],
+        [
+          0.6451612903225806,
+          0.7407407407407407,
+          1.0
+        ]
+      ],
+      "val_nrmse_ratio": 0.5069901129018767,
+      "traj_nrmse_ratio": 0.5059072137874683,
+      "bands": {
+        "L": {
+          "threshold": 0.0028714955523306543,
+          "selected_features": [
+            {
+              "name": "bias",
+              "p_incl": 1.0,
+              "coef": -0.22652820930306142,
+              "universal": true
+            },
+            {
+              "name": "w_x",
+              "p_incl": 1.0,
+              "coef": 0.4215024126949668,
+              "universal": true
+            },
+            {
+              "name": "w_y",
+              "p_incl": 1.0,
+              "coef": 0.2605913508700255,
+              "universal": true
+            },
+            {
+              "name": "w_z",
+              "p_incl": 1.0,
+              "coef": 0.12287024879700408,
+              "universal": true
+            },
+            {
+              "name": "w_x*w_y",
+              "p_incl": 1.0,
+              "coef": -0.037132674994059325,
+              "universal": true
+            },
+            {
+              "name": "w_y*w_z",
+              "p_incl": 0.98,
+              "coef": -0.01617523684728806,
+              "universal": true
+            },
+            {
+              "name": "w_z*w_x",
+              "p_incl": 1.0,
+              "coef": 0.19993516864915722,
+              "universal": true
+            },
+            {
+              "name": "w_x^2",
+              "p_incl": 1.0,
+              "coef": -0.012131261796708905,
+              "universal": true
+            },
+            {
+              "name": "w_y^2",
+              "p_incl": 1.0,
+              "coef": 0.013143979478764015,
+              "universal": true
+            },
+            {
+              "name": "w_z^2",
+              "p_incl": 1.0,
+              "coef": -0.01419274622639793,
+              "universal": false
+            },
+            {
+              "name": "|w_x|w_x",
+              "p_incl": 1.0,
+              "coef": 0.09069884992210978,
+              "universal": true
+            },
+            {
+              "name": "|w_y|w_y",
+              "p_incl": 1.0,
+              "coef": 0.12481874805313448,
+              "universal": true
+            },
+            {
+              "name": "|w_z|w_z",
+              "p_incl": 1.0,
+              "coef": -0.21631885756066999,
+              "universal": true
+            },
+            {
+              "name": "u_x",
+              "p_incl": 1.0,
+              "coef": 0.044441392256469835,
+              "universal": false
+            },
+            {
+              "name": "u_y",
+              "p_incl": 1.0,
+              "coef": -0.10768145157325351,
+              "universal": true
+            },
+            {
+              "name": "u_lag_x",
+              "p_incl": 1.0,
+              "coef": -0.04426392963629025,
+              "universal": false
+            },
+            {
+              "name": "u_lag_y",
+              "p_incl": 1.0,
+              "coef": -0.01729586190075445,
+              "universal": true
+            },
+            {
+              "name": "thrust",
+              "p_incl": 1.0,
+              "coef": -0.9103732050989597,
+              "universal": true
+            },
+            {
+              "name": "thrust^2",
+              "p_incl": 1.0,
+              "coef": 0.3464568686859787,
+              "universal": true
+            },
+            {
+              "name": "v_bx",
+              "p_incl": 1.0,
+              "coef": -0.18436220836396364,
+              "universal": true
+            },
+            {
+              "name": "v_by",
+              "p_incl": 1.0,
+              "coef": -0.17247730049235832,
+              "universal": true
+            },
+            {
+              "name": "v_bz",
+              "p_incl": 1.0,
+              "coef": 0.2626693781034562,
+              "universal": true
+            },
+            {
+              "name": "|v_bx|v_bx",
+              "p_incl": 1.0,
+              "coef": 0.19357479365697516,
+              "universal": true
+            },
+            {
+              "name": "|v_by|v_by",
+              "p_incl": 1.0,
+              "coef": 0.10799020900749152,
+              "universal": true
+            },
+            {
+              "name": "|v_bz|v_bz",
+              "p_incl": 1.0,
+              "coef": -0.15657834341660676,
+              "universal": true
+            },
+            {
+              "name": "ge_term",
+              "p_incl": 1.0,
+              "coef": 27.370419843220684,
+              "universal": true
+            },
+            {
+              "name": "sin_roll",
+              "p_incl": 1.0,
+              "coef": 0.026818438982222585,
+              "universal": true
+            },
+            {
+              "name": "cos_roll",
+              "p_incl": 1.0,
+              "coef": 0.44072603073943667,
+              "universal": true
+            },
+            {
+              "name": "sin_pitch",
+              "p_incl": 1.0,
+              "coef": -2.6465348476835096,
+              "universal": true
+            },
+            {
+              "name": "cos_pitch",
+              "p_incl": 0.98,
+              "coef": 0.3540435655666435,
+              "universal": true
+            },
+            {
+              "name": "v_sq",
+              "p_incl": 1.0,
+              "coef": -0.09899843523491769,
+              "universal": true
+            }
+          ],
+          "universal_features": [
+            "bias",
+            "cos_pitch",
+            "cos_roll",
+            "ge_term",
+            "sin_pitch",
+            "sin_roll",
+            "thrust",
+            "thrust^2",
+            "u_lag_y",
+            "u_y",
+            "v_bx",
+            "v_by",
+            "v_bz",
+            "v_sq",
+            "w_x",
+            "w_x*w_y",
+            "w_x^2",
+            "w_y",
+            "w_y*w_z",
+            "w_y^2",
+            "w_z",
+            "w_z*w_x",
+            "|v_bx|v_bx",
+            "|v_by|v_by",
+            "|v_bz|v_bz",
+            "|w_x|w_x",
+            "|w_y|w_y",
+            "|w_z|w_z"
+          ]
+        },
+        "M": {
+          "threshold": 0.007900537734507322,
+          "selected_features": [
+            {
+              "name": "w_x",
+              "p_incl": 1.0,
+              "coef": -1.0702463654119672,
+              "universal": true
+            },
+            {
+              "name": "w_y",
+              "p_incl": 1.0,
+              "coef": -0.6927923209123175,
+              "universal": true
+            },
+            {
+              "name": "w_z",
+              "p_incl": 0.68,
+              "coef": 0.023071389460810908,
+              "universal": false
+            },
+            {
+              "name": "w_y*w_z",
+              "p_incl": 1.0,
+              "coef": -0.137137348688095,
+              "universal": false
+            },
+            {
+              "name": "w_z*w_x",
+              "p_incl": 1.0,
+              "coef": -0.25532921132975595,
+              "universal": false
+            },
+            {
+              "name": "w_y^2",
+              "p_incl": 0.98,
+              "coef": 0.02606917608556604,
+              "universal": false
+            },
+            {
+              "name": "w_z^2",
+              "p_incl": 0.72,
+              "coef": 0.07882369571699743,
+              "universal": false
+            },
+            {
+              "name": "|w_x|w_x",
+              "p_incl": 0.62,
+              "coef": -0.014677138638380435,
+              "universal": false
+            },
+            {
+              "name": "|w_y|w_y",
+              "p_incl": 1.0,
+              "coef": -0.18007231814405344,
+              "universal": true
+            },
+            {
+              "name": "|w_z|w_z",
+              "p_incl": 0.68,
+              "coef": -0.018246643647262827,
+              "universal": false
+            },
+            {
+              "name": "u_y",
+              "p_incl": 1.0,
+              "coef": -0.16890689764427366,
+              "universal": true
+            },
+            {
+              "name": "u_lag_x",
+              "p_incl": 1.0,
+              "coef": -0.0387294109956377,
+              "universal": false
+            },
+            {
+              "name": "u_lag_y",
+              "p_incl": 1.0,
+              "coef": 0.15498100603315362,
+              "universal": true
+            },
+            {
+              "name": "thrust",
+              "p_incl": 1.0,
+              "coef": 1.4117647030513822,
+              "universal": true
+            },
+            {
+              "name": "thrust^2",
+              "p_incl": 1.0,
+              "coef": -0.7437133087293188,
+              "universal": true
+            },
+            {
+              "name": "v_bx",
+              "p_incl": 1.0,
+              "coef": -1.9923700825594954,
+              "universal": true
+            },
+            {
+              "name": "v_by",
+              "p_incl": 1.0,
+              "coef": 3.1837288400907067,
+              "universal": true
+            },
+            {
+              "name": "v_bz",
+              "p_incl": 1.0,
+              "coef": -0.12288131565150878,
+              "universal": true
+            },
+            {
+              "name": "|v_bx|v_bx",
+              "p_incl": 1.0,
+              "coef": 0.2732523363726894,
+              "universal": true
+            },
+            {
+              "name": "|v_by|v_by",
+              "p_incl": 1.0,
+              "coef": -0.2986615421981689,
+              "universal": true
+            },
+            {
+              "name": "|v_bz|v_bz",
+              "p_incl": 1.0,
+              "coef": 0.1721123581188173,
+              "universal": true
+            },
+            {
+              "name": "ge_term",
+              "p_incl": 1.0,
+              "coef": -110.39448829978195,
+              "universal": true
+            },
+            {
+              "name": "sin_roll",
+              "p_incl": 1.0,
+              "coef": -1.0017951030697672,
+              "universal": true
+            },
+            {
+              "name": "cos_roll",
+              "p_incl": 1.0,
+              "coef": 1.4765401378669287,
+              "universal": true
+            },
+            {
+              "name": "sin_pitch",
+              "p_incl": 1.0,
+              "coef": -1.6377707373226327,
+              "universal": true
+            },
+            {
+              "name": "cos_pitch",
+              "p_incl": 1.0,
+              "coef": 5.615353220259632,
+              "universal": true
+            },
+            {
+              "name": "v_sq",
+              "p_incl": 1.0,
+              "coef": -7.709438926420255,
+              "universal": true
+            }
+          ],
+          "universal_features": [
+            "cos_pitch",
+            "cos_roll",
+            "ge_term",
+            "sin_pitch",
+            "sin_roll",
+            "thrust",
+            "thrust^2",
+            "u_lag_y",
+            "u_y",
+            "v_bx",
+            "v_by",
+            "v_bz",
+            "v_sq",
+            "w_x",
+            "w_y",
+            "|v_bx|v_bx",
+            "|v_by|v_by",
+            "|v_bz|v_bz",
+            "|w_y|w_y"
+          ]
+        },
+        "H": {
+          "threshold": 0.07346818321973464,
+          "selected_features": [
+            {
+              "name": "w_x",
+              "p_incl": 1.0,
+              "coef": 1.2915627641112084,
+              "universal": false
+            },
+            {
+              "name": "w_y",
+              "p_incl": 1.0,
+              "coef": 1.0987319029164735,
+              "universal": true
+            },
+            {
+              "name": "w_y*w_z",
+              "p_incl": 1.0,
+              "coef": 0.7307337092543099,
+              "universal": true
+            },
+            {
+              "name": "w_z*w_x",
+              "p_incl": 1.0,
+              "coef": 1.760313676949032,
+              "universal": true
+            },
+            {
+              "name": "|w_x|w_x",
+              "p_incl": 1.0,
+              "coef": -0.1538713389013412,
+              "universal": false
+            },
+            {
+              "name": "|w_y|w_y",
+              "p_incl": 0.96,
+              "coef": 0.10523846757162267,
+              "universal": false
+            },
+            {
+              "name": "u_y",
+              "p_incl": 1.0,
+              "coef": -0.13058852558850637,
+              "universal": true
+            },
+            {
+              "name": "u_lag_y",
+              "p_incl": 1.0,
+              "coef": 0.07760408662482993,
+              "universal": false
+            },
+            {
+              "name": "thrust",
+              "p_incl": 0.98,
+              "coef": -1.1395907101466927,
+              "universal": true
+            },
+            {
+              "name": "thrust^2",
+              "p_incl": 1.0,
+              "coef": 0.5880988569846979,
+              "universal": true
+            },
+            {
+              "name": "v_bx",
+              "p_incl": 1.0,
+              "coef": 13.739908486448268,
+              "universal": true
+            },
+            {
+              "name": "v_by",
+              "p_incl": 1.0,
+              "coef": 0.9194719061079952,
+              "universal": true
+            },
+            {
+              "name": "v_bz",
+              "p_incl": 0.86,
+              "coef": -0.29368542756507177,
+              "universal": true
+            },
+            {
+              "name": "|v_bx|v_bx",
+              "p_incl": 1.0,
+              "coef": -1.4457902141447612,
+              "universal": true
+            },
+            {
+              "name": "ge_term",
+              "p_incl": 1.0,
+              "coef": -128.5618919698987,
+              "universal": true
+            },
+            {
+              "name": "sin_roll",
+              "p_incl": 1.0,
+              "coef": 135.18022831015082,
+              "universal": true
+            },
+            {
+              "name": "cos_roll",
+              "p_incl": 1.0,
+              "coef": -2.506045897593939,
+              "universal": true
+            },
+            {
+              "name": "sin_pitch",
+              "p_incl": 1.0,
+              "coef": -266.54439210885926,
+              "universal": true
+            },
+            {
+              "name": "cos_pitch",
+              "p_incl": 1.0,
+              "coef": 11.450537546815276,
+              "universal": true
+            },
+            {
+              "name": "v_sq",
+              "p_incl": 1.0,
+              "coef": 4.342786067351774,
+              "universal": true
+            }
+          ],
+          "universal_features": [
+            "cos_pitch",
+            "cos_roll",
+            "ge_term",
+            "sin_pitch",
+            "sin_roll",
+            "thrust",
+            "thrust^2",
+            "u_y",
+            "v_bx",
+            "v_by",
+            "v_bz",
+            "v_sq",
+            "w_y",
+            "w_y*w_z",
+            "w_z*w_x",
+            "|v_bx|v_bx",
+            "|v_by|v_by"
+          ]
+        },
+        "global": {
+          "threshold": 0.03224271974794956,
+          "selected_features": [
+            {
+              "name": "bias",
+              "p_incl": 1.0,
+              "coef": 36.29081398195021,
+              "universal": true
+            },
+            {
+              "name": "w_x",
+              "p_incl": 1.0,
+              "coef": -1.5263862413179188,
+              "universal": true
+            },
+            {
+              "name": "w_y",
+              "p_incl": 1.0,
+              "coef": 1.396943216274337,
+              "universal": true
+            },
+            {
+              "name": "w_x*w_y",
+              "p_incl": 1.0,
+              "coef": 0.16941842312444177,
+              "universal": true
+            },
+            {
+              "name": "w_y*w_z",
+              "p_incl": 1.0,
+              "coef": 0.10922292470508889,
+              "universal": false
+            },
+            {
+              "name": "w_z*w_x",
+              "p_incl": 1.0,
+              "coef": 0.6749799330685204,
+              "universal": true
+            },
+            {
+              "name": "w_x^2",
+              "p_incl": 1.0,
+              "coef": -0.07312633069566284,
+              "universal": true
+            },
+            {
+              "name": "w_y^2",
+              "p_incl": 0.94,
+              "coef": 0.05822823676013526,
+              "universal": true
+            },
+            {
+              "name": "w_z^2",
+              "p_incl": 1.0,
+              "coef": 0.08398396480378173,
+              "universal": false
+            },
+            {
+              "name": "|w_x|w_x",
+              "p_incl": 1.0,
+              "coef": 0.3936865985277359,
+              "universal": false
+            },
+            {
+              "name": "|w_y|w_y",
+              "p_incl": 1.0,
+              "coef": -0.21784785008802487,
+              "universal": false
+            },
+            {
+              "name": "u_y",
+              "p_incl": 1.0,
+              "coef": -0.13717432005023533,
+              "universal": true
+            },
+            {
+              "name": "u_lag_x",
+              "p_incl": 1.0,
+              "coef": -0.041099661778157624,
+              "universal": false
+            },
+            {
+              "name": "u_lag_y",
+              "p_incl": 1.0,
+              "coef": 0.1084501355726673,
+              "universal": true
+            },
+            {
+              "name": "thrust",
+              "p_incl": 1.0,
+              "coef": 3.747360751051861,
+              "universal": true
+            },
+            {
+              "name": "thrust^2",
+              "p_incl": 1.0,
+              "coef": -2.4912651622313877,
+              "universal": true
+            },
+            {
+              "name": "v_bx",
+              "p_incl": 1.0,
+              "coef": 0.21871298517731802,
+              "universal": true
+            },
+            {
+              "name": "v_by",
+              "p_incl": 1.0,
+              "coef": 0.8616769140796536,
+              "universal": true
+            },
+            {
+              "name": "v_bz",
+              "p_incl": 1.0,
+              "coef": -0.6928863119838449,
+              "universal": true
+            },
+            {
+              "name": "|v_by|v_by",
+              "p_incl": 1.0,
+              "coef": -1.3493634118552174,
+              "universal": true
+            },
+            {
+              "name": "|v_bz|v_bz",
+              "p_incl": 1.0,
+              "coef": 0.41482236507533365,
+              "universal": true
+            },
+            {
+              "name": "ge_term",
+              "p_incl": 1.0,
+              "coef": 308.6077950477069,
+              "universal": true
+            },
+            {
+              "name": "sin_roll",
+              "p_incl": 1.0,
+              "coef": 1.3752207190132575,
+              "universal": false
+            },
+            {
+              "name": "cos_roll",
+              "p_incl": 1.0,
+              "coef": -10.950845804531863,
+              "universal": true
+            },
+            {
+              "name": "sin_pitch",
+              "p_incl": 1.0,
+              "coef": -8.620693757664736,
+              "universal": true
+            },
+            {
+              "name": "cos_pitch",
+              "p_incl": 1.0,
+              "coef": -24.70388585812396,
+              "universal": true
+            },
+            {
+              "name": "v_sq",
+              "p_incl": 1.0,
+              "coef": -3.483524226136629,
+              "universal": true
+            }
+          ],
+          "universal_features": [
+            "bias",
+            "cos_pitch",
+            "cos_roll",
+            "ge_term",
+            "sin_pitch",
+            "thrust",
+            "thrust^2",
+            "u_lag_y",
+            "u_y",
+            "v_bx",
+            "v_by",
+            "v_bz",
+            "v_sq",
+            "w_x",
+            "w_x*w_y",
+            "w_x^2",
+            "w_y",
+            "w_y^2",
+            "w_z",
+            "w_z*w_x",
+            "|v_bx|v_bx",
+            "|v_by|v_by",
+            "|v_bz|v_bz"
+          ]
+        }
+      }
+    },
+    "yaw": {
+      "mean_jaccard": 0.41041666666666665,
+      "jaccard_matrix": [
+        [
+          1.0,
+          0.25,
+          0.28125
+        ],
+        [
+          0.25,
+          1.0,
+          0.7
+        ],
+        [
+          0.28125,
+          0.7,
+          1.0
+        ]
+      ],
+      "val_nrmse_ratio": 1.3115482380878605,
+      "traj_nrmse_ratio": 1.109076021737353,
+      "bands": {
+        "L": {
+          "threshold": 0.005614654619236,
+          "selected_features": [
+            {
+              "name": "bias",
+              "p_incl": 1.0,
+              "coef": 1.775721769220986,
+              "universal": true
+            },
+            {
+              "name": "w_x",
+              "p_incl": 1.0,
+              "coef": -0.13711538743262613,
+              "universal": true
+            },
+            {
+              "name": "w_y",
+              "p_incl": 1.0,
+              "coef": 0.20119512563175573,
+              "universal": true
+            },
+            {
+              "name": "w_z",
+              "p_incl": 1.0,
+              "coef": -0.2201572483292393,
+              "universal": true
+            },
+            {
+              "name": "w_x*w_y",
+              "p_incl": 1.0,
+              "coef": 0.04204900441763955,
+              "universal": false
+            },
+            {
+              "name": "w_y*w_z",
+              "p_incl": 1.0,
+              "coef": -0.10992521177890271,
+              "universal": true
+            },
+            {
+              "name": "w_z*w_x",
+              "p_incl": 1.0,
+              "coef": 0.048597423279406686,
+              "universal": true
+            },
+            {
+              "name": "w_x^2",
+              "p_incl": 1.0,
+              "coef": 0.040244363998962404,
+              "universal": true
+            },
+            {
+              "name": "w_y^2",
+              "p_incl": 1.0,
+              "coef": -0.12208383329755107,
+              "universal": true
+            },
+            {
+              "name": "w_z^2",
+              "p_incl": 1.0,
+              "coef": 0.0268637635701793,
+              "universal": false
+            },
+            {
+              "name": "|w_x|w_x",
+              "p_incl": 0.84,
+              "coef": 0.014722156440766077,
+              "universal": false
+            },
+            {
+              "name": "|w_y|w_y",
+              "p_incl": 1.0,
+              "coef": -0.10279712444034486,
+              "universal": true
+            },
+            {
+              "name": "|w_z|w_z",
+              "p_incl": 0.92,
+              "coef": 0.025200873149175906,
+              "universal": false
+            },
+            {
+              "name": "u_x",
+              "p_incl": 1.0,
+              "coef": -0.02276920746084407,
+              "universal": false
+            },
+            {
+              "name": "u_y",
+              "p_incl": 1.0,
+              "coef": 0.008611292556020165,
+              "universal": false
+            },
+            {
+              "name": "u_z",
+              "p_incl": 1.0,
+              "coef": -0.18292701255076166,
+              "universal": true
+            },
+            {
+              "name": "u_lag_x",
+              "p_incl": 1.0,
+              "coef": 0.02297903098476594,
+              "universal": false
+            },
+            {
+              "name": "u_lag_y",
+              "p_incl": 1.0,
+              "coef": -0.008623509699157025,
+              "universal": false
+            },
+            {
+              "name": "u_lag_z",
+              "p_incl": 1.0,
+              "coef": 0.05162096504933761,
+              "universal": false
+            },
+            {
+              "name": "thrust",
+              "p_incl": 1.0,
+              "coef": -2.9350323862018834,
+              "universal": true
+            },
+            {
+              "name": "thrust^2",
+              "p_incl": 1.0,
+              "coef": 1.2719057062939787,
+              "universal": true
+            },
+            {
+              "name": "v_bx",
+              "p_incl": 1.0,
+              "coef": -0.0659434220266011,
+              "universal": true
+            },
+            {
+              "name": "v_by",
+              "p_incl": 1.0,
+              "coef": 0.07350206442652069,
+              "universal": true
+            },
+            {
+              "name": "v_bz",
+              "p_incl": 1.0,
+              "coef": 0.2665597019908175,
+              "universal": true
+            },
+            {
+              "name": "|v_bx|v_bx",
+              "p_incl": 1.0,
+              "coef": 0.09322205773009176,
+              "universal": true
+            },
+            {
+              "name": "|v_bz|v_bz",
+              "p_incl": 1.0,
+              "coef": -0.06779003126775424,
+              "universal": true
+            },
+            {
+              "name": "ge_term",
+              "p_incl": 1.0,
+              "coef": -15.203735940627453,
+              "universal": true
+            },
+            {
+              "name": "sin_roll",
+              "p_incl": 1.0,
+              "coef": -0.043603527443983894,
+              "universal": false
+            },
+            {
+              "name": "cos_roll",
+              "p_incl": 1.0,
+              "coef": 3.158220273224074,
+              "universal": true
+            },
+            {
+              "name": "sin_pitch",
+              "p_incl": 1.0,
+              "coef": 0.19638618323941054,
+              "universal": true
+            },
+            {
+              "name": "cos_pitch",
+              "p_incl": 1.0,
+              "coef": -3.329115070138134,
+              "universal": true
+            },
+            {
+              "name": "v_sq",
+              "p_incl": 1.0,
+              "coef": -0.0743958850092507,
+              "universal": false
+            }
+          ],
+          "universal_features": [
+            "bias",
+            "cos_pitch",
+            "cos_roll",
+            "ge_term",
+            "sin_pitch",
+            "thrust",
+            "thrust^2",
+            "u_z",
+            "v_bx",
+            "v_by",
+            "v_bz",
+            "w_x",
+            "w_x^2",
+            "w_y",
+            "w_y*w_z",
+            "w_y^2",
+            "w_z",
+            "w_z*w_x",
+            "|v_bx|v_bx",
+            "|v_by|v_by",
+            "|v_bz|v_bz",
+            "|w_y|w_y"
+          ]
+        },
+        "M": {
+          "threshold": 1.2412578371085392,
+          "selected_features": [
+            {
+              "name": "w_z",
+              "p_incl": 1.0,
+              "coef": 21.787788165836332,
+              "universal": false
+            },
+            {
+              "name": "thrust",
+              "p_incl": 1.0,
+              "coef": 24.40379967331621,
+              "universal": true
+            },
+            {
+              "name": "thrust^2",
+              "p_incl": 1.0,
+              "coef": -9.649299512514176,
+              "universal": true
+            },
+            {
+              "name": "v_bz",
+              "p_incl": 1.0,
+              "coef": 6.503800881887324,
+              "universal": true
+            },
+            {
+              "name": "ge_term",
+              "p_incl": 1.0,
+              "coef": 21870.180964578,
+              "universal": true
+            },
+            {
+              "name": "cos_roll",
+              "p_incl": 1.0,
+              "coef": -96.36273502053466,
+              "universal": true
+            },
+            {
+              "name": "cos_pitch",
+              "p_incl": 1.0,
+              "coef": -31.518467549030767,
+              "universal": true
+            },
+            {
+              "name": "v_sq",
+              "p_incl": 1.0,
+              "coef": 32.24096354288402,
+              "universal": true
+            }
+          ],
+          "universal_features": [
+            "cos_pitch",
+            "cos_roll",
+            "ge_term",
+            "thrust",
+            "thrust^2",
+            "v_bz",
+            "v_sq"
+          ]
+        },
+        "H": {
+          "threshold": 1.5540406927488908,
+          "selected_features": [
+            {
+              "name": "w_z",
+              "p_incl": 1.0,
+              "coef": 29.75279168054336,
+              "universal": true
+            },
+            {
+              "name": "thrust^2",
+              "p_incl": 0.78,
+              "coef": 2.760951908102131,
+              "universal": false
+            },
+            {
+              "name": "v_bz",
+              "p_incl": 1.0,
+              "coef": 37.598141392031806,
+              "universal": true
+            },
+            {
+              "name": "|v_bz|v_bz",
+              "p_incl": 1.0,
+              "coef": -5.40255504167839,
+              "universal": false
+            },
+            {
+              "name": "ge_term",
+              "p_incl": 1.0,
+              "coef": 35269.175436282196,
+              "universal": true
+            },
+            {
+              "name": "cos_roll",
+              "p_incl": 1.0,
+              "coef": 65.95799144717229,
+              "universal": true
+            },
+            {
+              "name": "sin_pitch",
+              "p_incl": 0.76,
+              "coef": -4.5969254305540215,
+              "universal": true
+            },
+            {
+              "name": "cos_pitch",
+              "p_incl": 1.0,
+              "coef": -127.91078073596469,
+              "universal": true
+            },
+            {
+              "name": "v_sq",
+              "p_incl": 1.0,
+              "coef": 68.54641508154629,
+              "universal": true
+            }
+          ],
+          "universal_features": [
+            "cos_pitch",
+            "cos_roll",
+            "ge_term",
+            "sin_pitch",
+            "sin_roll",
+            "v_bz",
+            "v_sq",
+            "w_z"
+          ]
+        },
+        "global": {
+          "threshold": 0.12012502926207157,
+          "selected_features": [
+            {
+              "name": "bias",
+              "p_incl": 1.0,
+              "coef": -296.1738903946814,
+              "universal": true
+            },
+            {
+              "name": "w_z",
+              "p_incl": 1.0,
+              "coef": -16.64095269802303,
+              "universal": true
+            },
+            {
+              "name": "w_x*w_y",
+              "p_incl": 1.0,
+              "coef": -1.8121812202074827,
+              "universal": false
+            },
+            {
+              "name": "w_y*w_z",
+              "p_incl": 0.98,
+              "coef": -0.18667089243868867,
+              "universal": false
+            },
+            {
+              "name": "w_x^2",
+              "p_incl": 1.0,
+              "coef": -0.6687863269913865,
+              "universal": true
+            },
+            {
+              "name": "w_y^2",
+              "p_incl": 1.0,
+              "coef": -1.043944817275273,
+              "universal": true
+            },
+            {
+              "name": "w_z^2",
+              "p_incl": 1.0,
+              "coef": -0.48855064440916507,
+              "universal": false
+            },
+            {
+              "name": "|w_z|w_z",
+              "p_incl": 1.0,
+              "coef": 1.2519304380489604,
+              "universal": false
+            },
+            {
+              "name": "u_z",
+              "p_incl": 1.0,
+              "coef": -0.25419369278815523,
+              "universal": false
+            },
+            {
+              "name": "u_lag_z",
+              "p_incl": 1.0,
+              "coef": 0.19158467607142002,
+              "universal": false
+            },
+            {
+              "name": "thrust",
+              "p_incl": 1.0,
+              "coef": 78.4645267327414,
+              "universal": true
+            },
+            {
+              "name": "thrust^2",
+              "p_incl": 1.0,
+              "coef": -21.569955988232543,
+              "universal": true
+            },
+            {
+              "name": "v_bx",
+              "p_incl": 1.0,
+              "coef": 1.2302251835159141,
+              "universal": false
+            },
+            {
+              "name": "v_by",
+              "p_incl": 1.0,
+              "coef": 0.8657523017904062,
+              "universal": false
+            },
+            {
+              "name": "v_bz",
+              "p_incl": 1.0,
+              "coef": 7.8350603587666185,
+              "universal": true
+            },
+            {
+              "name": "|v_bx|v_bx",
+              "p_incl": 1.0,
+              "coef": -1.3845805546864614,
+              "universal": false
+            },
+            {
+              "name": "|v_by|v_by",
+              "p_incl": 1.0,
+              "coef": -1.138817708356108,
+              "universal": false
+            },
+            {
+              "name": "|v_bz|v_bz",
+              "p_incl": 1.0,
+              "coef": -1.5071894188593264,
+              "universal": false
+            },
+            {
+              "name": "ge_term",
+              "p_incl": 1.0,
+              "coef": 1206.664568756617,
+              "universal": true
+            },
+            {
+              "name": "sin_roll",
+              "p_incl": 1.0,
+              "coef": 0.6526380682750021,
+              "universal": true
+            },
+            {
+              "name": "cos_roll",
+              "p_incl": 1.0,
+              "coef": 73.52811290811931,
+              "universal": true
+            },
+            {
+              "name": "sin_pitch",
+              "p_incl": 1.0,
+              "coef": -1.689258236720248,
+              "universal": true
+            },
+            {
+              "name": "cos_pitch",
+              "p_incl": 1.0,
+              "coef": 99.09474084393146,
+              "universal": true
+            },
+            {
+              "name": "v_sq",
+              "p_incl": 1.0,
+              "coef": 30.888135755663477,
+              "universal": true
+            }
+          ],
+          "universal_features": [
+            "bias",
+            "cos_pitch",
+            "cos_roll",
+            "ge_term",
+            "sin_pitch",
+            "sin_roll",
+            "thrust",
+            "thrust^2",
+            "v_bz",
+            "v_sq",
+            "w_x",
+            "w_x^2",
+            "w_y^2",
+            "w_z"
+          ]
+        }
+      }
+    }
+  }
+}
