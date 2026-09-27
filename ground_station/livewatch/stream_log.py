@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import socket
 import sys
 import time
 from pathlib import Path
@@ -373,13 +374,18 @@ def load_frames(path=DEFAULT_FRAMES):
 
 
 def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
-                       usart3_baud, transport):
+                       usart3_baud, transport, vofa=None):
     """Execute multi-slot subscribe over WiFi UDP (Usart3WifiSubscribeTransport)."""
     port = int(data_port.split(":", 1)[1]) if data_port.startswith("udp:") else DEFAULT_USART3_UDP_PORT
     wifi = Usart3WifiSubscribeTransport(port=port)
     schemas, writers, handles, rows = [], {}, [], {}
     out_path = Path(out_path)
     subscribed_slots = []
+    vofa_sock = vofa_addr = None
+    if vofa:
+        host, vport = vofa.rsplit(":", 1)
+        vofa_addr = (host, int(vport))
+        vofa_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         wifi.connect()
         for slot, ranges, divider, request in plans:
@@ -426,8 +432,14 @@ def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
                 writer.writerow(
                     [t_ms, "%.4f" % (time.monotonic() - t0), seq] + flat)
                 rows[slot] += 1
+                if vofa_sock is not None and slot == schemas[0].slot:
+                    # VOFA+ FireWater: "v0,v1,...\n", channel order = CSV column order
+                    vofa_sock.sendto((",".join("%g" % v for v in flat) + "\n").encode(),
+                                     vofa_addr)
         elapsed = time.monotonic() - t0
     finally:
+        if vofa_sock is not None:
+            vofa_sock.close()
         for fh in handles:
             fh.close()
         # Stop every subscribed slot over WiFi
@@ -452,7 +464,8 @@ def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
 
 
 def run_groups(control_port, data_port, groups, transport, seconds, out_path,
-               elf="OBJ/JX_FLY.axf", usart3_baud=921600, quiet=False):
+               elf="OBJ/JX_FLY.axf", usart3_baud=921600, quiet=False,
+               vofa=None):
     """Subscribe several slots at different rates; one CSV per slot.
 
     Separate files because the slots tick at different rates -- interleaving
@@ -477,7 +490,7 @@ def run_groups(control_port, data_port, groups, transport, seconds, out_path,
 
     if transport == TRANSPORT_USART3:
         return _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
-                                   usart3_baud, transport)
+                                   usart3_baud, transport, vofa=vofa)
 
     # --- UART5 path (legacy; firmware ignores SUBSCRIBE_UART5) ---
     import serial
@@ -592,6 +605,9 @@ def main(argv=None):
                          "slots when link budget is exceeded. Merges streams "
                          "on the host side into one CSV.")
     ap.add_argument("--elf", default="OBJ/JX_FLY.axf")
+    ap.add_argument("--vofa", default=None, metavar="HOST:PORT",
+                    help="also forward slot-0 rows to VOFA+ as FireWater over UDP "
+                         "(e.g. 127.0.0.1:1347); WiFi transport only")
     ap.add_argument("--frames", default=None, metavar="FILE",
                     help="Markdown frame table to log when neither --symbol nor "
                          "--group is given (default: %s)" % DEFAULT_FRAMES.name)
@@ -621,7 +637,7 @@ def main(argv=None):
                 print("frame: %s (%d slot(s))" % (frames, len(groups)))
             stats = run_groups(args.control_port, data_port, groups, transport,
                                args.seconds, args.out, elf=args.elf,
-                               usart3_baud=args.usart3_baud)
+                               usart3_baud=args.usart3_baud, vofa=args.vofa)
             print("")
             for row in stats:
                 print("slot %d: %5d rows = %5.1f Hz   dropped %d (%.2f%%)   "
