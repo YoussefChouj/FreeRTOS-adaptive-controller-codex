@@ -1016,6 +1016,16 @@ void Compute_Motor(void)
 	if (SysID_IsAxisActive(SYSID_AXIS_ROLL))  Ctrler.gyroxPID.Des += SysID_GetRateSetpoint(SYSID_AXIS_ROLL);
 	if (SysID_IsAxisActive(SYSID_AXIS_YAW))   Ctrler.gyrozPID.Des += SysID_GetRateSetpoint(SYSID_AXIS_YAW);
 
+	/* FIX 2026-09-27: flight8 wound gyrozPID up to U=650 on the ground at idle
+	 * (heading-hold Des with the airframe unable to turn). Hold the yaw integrals
+	 * at 0 until lift-off throttle; same idle test as the OF bias averaging. */
+	if (flight_phase != FLIGHT_PHASE_FLYING && flight_phase != FLIGHT_PHASE_LANDING &&
+	    !TWC.execute && RCInput_Get(RC_AXIS_THR) < 0.2f)
+	{
+		Ctrler.gyrozPID.SumE = 0.0f;
+		Ctrler.yawPID.SumE   = 0.0f;
+	}
+
 	ComputePID(&Ctrler.gyroxPID);
 	ComputePID(&Ctrler.gyroyPID);
 	ComputePID(&Ctrler.gyrozPID);
