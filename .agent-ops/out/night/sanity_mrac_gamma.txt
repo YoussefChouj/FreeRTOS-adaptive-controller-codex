@@ -1,0 +1,6 @@
+Testing (b) MRAC parameter boundedness and tracking improvement...
+gamma     0.0  err_sum    5298.6  maxW 0.0000
+gamma     1.0  err_sum    5229.8  maxW 0.0281
+gamma    10.0  err_sum    5233.8  maxW 0.2457
+gamma   100.0  err_sum    5116.1  maxW 3.0000
+gamma  1000.0  err_sum    5446.4  maxW 3.0000
