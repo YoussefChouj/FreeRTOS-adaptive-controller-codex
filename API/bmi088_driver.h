@@ -94,6 +94,8 @@ extern _sensor_st sensor;
 extern FP32 Gyro_X_Real;											//单位为弧度每秒
 extern FP32 Gyro_Y_Real;
 extern FP32 Gyro_Z_Real;
+extern volatile UCHAR8 g_gyro_z_bias_track;
+extern volatile UINT32 g_gyro_z_bias_blocks;
 
 extern FP32 Acc_X_Real;											//单位为mg
 extern FP32 Acc_Y_Real;

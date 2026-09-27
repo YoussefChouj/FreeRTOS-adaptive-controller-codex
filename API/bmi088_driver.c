@@ -1,4 +1,5 @@
 #include "bmi088_driver.h"
+#include "flight_fsm.h"
 
 
 Filter6axisTypeDef Filters;
@@ -39,6 +40,8 @@ FP32 Acc_Z_Offset = 0;
 FP32 Gyro_X_Offset = 0;
 FP32 Gyro_Y_Offset = 0;
 FP32 Gyro_Z_Offset = 0;
+volatile UCHAR8 g_gyro_z_bias_track = 1;   /* Keil watch: 0 = off */
+volatile UINT32 g_gyro_z_bias_blocks = 0;  /* still blocks applied */
 
 FP32 Status_offset[3][CALI_NUM] = {0};  //1 X;2 Y;3 Z.
 FP32 Num_offset[CALI_NUM] = {0};
@@ -403,6 +406,38 @@ void Sensor_Data_Prepare(void)				//IMU����׼��������ת�
 	Gyro_X_Ori=Filters.GyroxLPF.output ;
 	Gyro_Y_Ori=Filters.GyroyLPF.output ;
 	Gyro_Z_Ori=Filters.GyrozLPF.output ;
+
+	/* g_gyro_z_bias_track: while DISARMED and still, trim Gyro_Z_Offset toward the
+	 * residual z rate (boot calibration leaves ~-0.07 deg/s, likely thermal -> yaw
+	 * creep). 1 s blocks @ 1 kHz on the LPF output; still = every sample under
+	 * 6 deg/s on all axes and |mean| under 0.5/0.5/1 deg/s. Each still block moves
+	 * the offset 10% of the block mean (tau ~10 s). Set 0 in Keil to disable. */
+	if (g_gyro_z_bias_track && gyro_flag && FlightFSM_GetState() != FLIGHT_STATE_ARMED)
+	{
+		static FP32 s_sx, s_sy, s_sz;
+		static USHORT16 s_n = 0U;
+		static UCHAR8 s_moved = 0U;
+
+		if (Gyro_X_Ori > 6.0f || Gyro_X_Ori < -6.0f ||
+		    Gyro_Y_Ori > 6.0f || Gyro_Y_Ori < -6.0f ||
+		    Gyro_Z_Ori > 6.0f || Gyro_Z_Ori < -6.0f)
+			s_moved = 1U;
+		s_sx += Gyro_X_Ori; s_sy += Gyro_Y_Ori; s_sz += Gyro_Z_Ori;
+		if (++s_n >= 1000U)
+		{
+			s_sx /= 1000.0f; s_sy /= 1000.0f; s_sz /= 1000.0f;
+			if (!s_moved &&
+			    s_sx < 0.5f && s_sx > -0.5f && s_sy < 0.5f && s_sy > -0.5f &&
+			    s_sz < 1.0f && s_sz > -1.0f)
+			{
+				Gyro_Z_Offset += 0.1f * s_sz;
+				g_gyro_z_bias_blocks++;
+			}
+			s_sx = s_sy = s_sz = 0.0f;
+			s_n = 0U;
+			s_moved = 0U;
+		}
+	}
 	
 	Filters.AccxLPF.input = Acc_X_Ori;
 	Filters.AccyLPF.input = Acc_Y_Ori;
