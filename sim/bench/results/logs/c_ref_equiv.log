@@ -1,0 +1,27 @@
+  recorded 4000 ticks
+  axis roll: max_abs=7.917399e-05  peak_u=350.0000  rel_err=2.262114e-07  PASS
+  axis pitch: max_abs=7.585425e-05  peak_u=350.0000  rel_err=2.167264e-07  PASS
+  axis yaw: max_abs=4.575000e-05  peak_u=700.0000  rel_err=6.535714e-08  PASS
+
+=== L1 [tuned] ===
+  bench rmse: 0.081628
+  recorded 4000 ticks
+  axis roll: max_abs=2.504653e-05  peak_u=331.8777  rel_err=7.546917e-08  PASS
+  axis pitch: max_abs=2.953949e-05  peak_u=333.6015  rel_err=8.854724e-08  PASS
+  axis yaw: max_abs=3.837745e-05  peak_u=683.6015  rel_err=5.614009e-08  PASS
+
+=== MRAC_S6 [default] ===
+  bench rmse: inf
+  recorded 4000 ticks
+  axis roll: max_abs=3.205777e-03  peak_|u_ad|=2871.8914  rel_err=1.116260e-06  PASS
+  axis pitch: max_abs=1.023222e-03  peak_|u_ad|=1435.4544  rel_err=7.128212e-07  PASS
+
+=== MRAC_S6 [tuned] ===
+  bench rmse: 0.085243
+  recorded 4000 ticks
+  axis roll: max_abs=9.905716e-06  peak_|u_ad|=7.5364  rel_err=1.314391e-06  PASS
+  axis pitch: max_abs=3.076642e-05  peak_|u_ad|=21.2414  rel_err=1.448414e-06  PASS
+
+ALL PASS
+
+[exited with code 0]
