@@ -50,7 +50,7 @@ def main():
     if a.vs:
         m['paired'] = compare(a.tag, a.vs, a.split)
     print(json.dumps(add(id=a.arg1, type='result', split=a.split, controller=a.tag, config_hash=r['config_hash'],
-                         metrics=m, verdict=a.verdict))[:900])
+                         metrics=m, verdict=a.verdict)))
 
 
 if __name__ == '__main__':

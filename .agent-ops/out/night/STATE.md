@@ -13,19 +13,22 @@
   div 5.1%, xtrack 0.068 m; combo_unseen still 0.845 m. (326692a)
 - Protocol P1 (ledger): every controller 2x64 CMA-ES evals; stage 2 = tune2.py restart from stage 1;
   FwPID-based controllers use pid_tuned as stage 1; pid_tuned2 = budget control. H1b prereg.
+- H1b KILLED: pid_tuned2 (128 evals) test median 0.0775 m, -36% vs pid_tuned [-0.048,-0.037];
+  64 evals was not converged => P1 equal budget is decisive. div 6.7%; combo_unseen median = inf
+  (>half diverge; tuned gains trade robustness on the unseen combo). pid_tuned2 = constraint reference.
+- W4 Tier B brief + H6b/H7 prereg committed 24fdb53.
 - W3 brief (3-layer MRAC) + prev_ref/ copies committed 326692a; dispatch when a worker slot frees.
 
 ## Running
-- pid_tuned2 stage-2 tune + test eval (sim/bench/results_pid_tuned2.log), background bxmg0vexp.
 - VPS workers nw1 (INDI, L1) and nw2 (SE3ESO, MRAC x5) on agy gemini-3.1-pro-high (fallback qwen);
   one background wait -> .agent-ops/out/nw{1,2}.wait.
 
 ## Next
-1. pid_tuned2 result -> ledger H1b; dispatch W3 (vps-worker.sh spawn nw3 agy:gemini-3.1-pro-high,qwen ...).
+1. Dispatch W3 (vps-worker.sh spawn nw3 agy:gemini-3.1-pro-high,qwen ...).
 2. Verify worker deliverables (read the code, run sanity + 4-row smoke locally), commit, tune each
    (64 evals), test eval, ledger H2-H5.
 3. W3 brief: 3-layer frequency-routed MRAC with ablations (unrouted / reactive / predictive / both).
 4. report.py: leaderboard + paired bootstrap CIs, per-family table, constraints; REPORT.md by 08:00.
 
 ## Evaluation counts on the test split (report these)
-pid_fw 1, pid_tuned 1
+pid_fw 1, pid_tuned 1, pid_tuned2 1
