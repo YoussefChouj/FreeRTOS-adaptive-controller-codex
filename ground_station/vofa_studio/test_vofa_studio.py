@@ -112,6 +112,7 @@ def test_session_fake_runner(tmp_path, monkeypatch):
     assert [x["rows"] for x in st["slots"]] == [20, 20]     # empty slot dropped
     assert st["vofa"] == ["b", "real_voltage"]
     assert st["health"]["real_voltage"] == 19.0
+    assert str((tmp_path / "run1.slot0.csv").resolve()) in st["saved"]
     first = rx.recv(256).decode()
     assert first.endswith("\n") and len(first.strip().split(",")) == 2
     lines = (tmp_path / "run1.slot0.csv").read_text().splitlines()

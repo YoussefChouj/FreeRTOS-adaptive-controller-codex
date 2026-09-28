@@ -428,7 +428,13 @@ class Session:
             "slots": slots,
             "vofa": list(self._vofa_names) if self._vofa_sock else [],
             "health": {k: flat.get(k) for k in STATUS_VARS},
+            "saved": self.saved_files() if self.state in ("done", "error") else [],
         }
+
+    def saved_files(self):
+        """Absolute paths of this session's files in LOG_DIR."""
+        return sorted(str(p.resolve()) for p in
+                      self.base.parent.glob(self.base.name + ".*") if p.is_file())
 
     def _write_meta(self):
         meta = {

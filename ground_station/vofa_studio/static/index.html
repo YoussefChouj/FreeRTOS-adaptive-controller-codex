@@ -121,6 +121,7 @@ background:var(--panel);border:1px solid var(--line);display:none;white-space:pr
       <span id="state">idle</span>
       <span id="clock" class="big"></span>
     </div>
+    <div id="savedTo" class="mut" style="margin-top:6px;user-select:all"></div>
     <div class="row" style="margin-top:10px">
       <input id="markNote" placeholder="event note" style="flex:1">
       <button id="btnMark" disabled>Mark (M)</button>
@@ -361,6 +362,8 @@ function showStatus(st) {
   $("state").textContent = st.state + (st.name ? " · " + st.name : "");
   $("state").style.color = st.state === "error" ? "var(--bad)" : st.state === "streaming" ? "var(--ok)" : "";
   $("sessErr").textContent = st.error || "";
+  const saved = st.saved || [];
+  $("savedTo").innerHTML = saved.length ? "saved to:<br>" + saved.map(esc).join("<br>") : "";
   if (st.state !== "idle") {
     let c = `${(st.elapsed || 0).toFixed(0)} s`;
     if (st.remaining != null) c += ` · ${st.remaining.toFixed(0)} s left`;
@@ -380,7 +383,7 @@ function showStatus(st) {
   }).join("");
   renderValues();
   updateButtons();
-  if (was && !running) { toast(`session ${st.state}: ${st.name}`); nextName(); }
+  if (was && !running) { toast(`session ${st.state}: ${st.name}` + (saved.length ? " → " + saved[0].replace(/[^\\/]+$/, "") : "")); nextName(); }
 }
 function renderValues() {
   if (!lastStatus || !lastStatus.slots) return;
