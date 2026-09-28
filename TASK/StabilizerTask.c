@@ -1039,8 +1039,10 @@ void Compute_Motor(void)
 
 	 //Throttle_th=2800+(16.70f-real_voltage)*105.5f;  //4s+d435i+t265+orin
 	 // Fixture (extendable metal) adds load. 3200 covers ~+250 g fixture at 4S full;
-	 // free-flight hover is 2950. PWM ceiling is 4000 - anything above risks ESC saturation.
-	 Throttle_th = bench_mode_active ? (short)3200 : (short)2950;
+	 // free-flight hover 2950->3150: flight_test_pid_2/_4 (matched props, 2026-09-28) hovered at
+	 // motor avg 3135-3145 with Z_rate P carrying the missing ~190 -> 0.4-0.5 m altitude sag.
+	 // PWM ceiling is 4000 - anything above risks ESC saturation.
+	 Throttle_th = bench_mode_active ? (short)3200 : (short)3150;
 
 	// Controller layer (API/controller.c): u = u_nom + correction of the selected controller.
 	// CTRL_MRAC (default) == PID + MRAC u_ad gated by output_injection_on and simplex fade; CTRL_PID == pure PID.
@@ -1064,22 +1066,22 @@ void Compute_Motor(void)
 	mymotor.motor1= Throttle_out
 									-u_gyroy//pitch
 									-u_gyrox//
-									+g_yaw_mix_dir*u_gyroz;//yaw  M1 CW prop
+									-g_yaw_mix_dir*u_gyroz;//yaw  M1 CW prop
 
 	mymotor.motor2= Throttle_out
 									+u_gyroy//pitch
 									+u_gyrox//roll
-									+g_yaw_mix_dir*u_gyroz;//yaw  M2 CW prop
+									-g_yaw_mix_dir*u_gyroz;//yaw  M2 CW prop
 
 	mymotor.motor3= Throttle_out
 									-u_gyroy//pitch
 									+u_gyrox//roll
-									-g_yaw_mix_dir*u_gyroz;//yaw  M3 CCW prop
+									+g_yaw_mix_dir*u_gyroz;//yaw  M3 CCW prop
 
   mymotor.motor4= Throttle_out
 									+u_gyroy//pitch
 									-u_gyrox//roll
-									-g_yaw_mix_dir*u_gyroz;//yaw  M4 CCW prop
+									+g_yaw_mix_dir*u_gyroz;//yaw  M4 CCW prop
 									// 2026-09-27: motor dirs measured on the bench (M1/M2 CW, M3/M4 CCW). In flight1/3 with
 									// the old signs (M3/M4 +u) gyrozU pinned +350, M3/M4 high, drone spun CW: CCW props sped
 									// up -> CW reaction torque -> positive feedback. Default +1 = fixed signs; set
