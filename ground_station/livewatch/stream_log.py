@@ -374,12 +374,19 @@ def load_frames(path=DEFAULT_FRAMES):
 
 
 def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
-                       usart3_baud, transport, vofa=None):
-    """Execute multi-slot subscribe over WiFi UDP (Usart3WifiSubscribeTransport)."""
+                       usart3_baud, transport, vofa=None, stop_event=None,
+                       on_start=None, on_row=None):
+    """Execute multi-slot subscribe over WiFi UDP (Usart3WifiSubscribeTransport).
+
+    Hooks for embedding (VOFA Studio): ``stop_event`` ends the run early,
+    ``on_start(schemas, decoder)`` fires once subscribed, and
+    ``on_row(slot, seq, t_ms, t_host, flat)`` fires per decoded frame.
+    ``out_path=None`` skips the built-in CSV writer.
+    """
     port = int(data_port.split(":", 1)[1]) if data_port.startswith("udp:") else DEFAULT_USART3_UDP_PORT
     wifi = Usart3WifiSubscribeTransport(port=port)
     schemas, writers, handles, rows = [], {}, [], {}
-    out_path = Path(out_path)
+    out_path = Path(out_path) if out_path is not None else None
     subscribed_slots = []
     vofa_sock = vofa_addr = None
     if vofa:
@@ -396,13 +403,17 @@ def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
                     % (slot, schema.slot))
             schemas.append(schema)
             subscribed_slots.append(slot)
-            if not quiet:
+            if not quiet and out_path is not None:
                 print("slot %d: %2d value(s), %3d B/frame, %5.1f Hz -> %s"
                       % (slot, len(columns_for(schema)), schema.frame_bytes,
                          schema.hz, _slot_path(out_path, slot).name))
 
         decoder = MultiStreamDecoder(schemas)
         for schema in schemas:
+            rows[schema.slot] = 0
+            writers[schema.slot] = (None, schema)
+            if out_path is None:
+                continue
             path = _slot_path(out_path, schema.slot)
             path.parent.mkdir(parents=True, exist_ok=True)
             fh = path.open("w", newline="", encoding="utf-8")
@@ -410,11 +421,13 @@ def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
             writer = csv.writer(fh)
             writer.writerow(["t_src_ms", "t_host_s", "seq"] + columns_for(schema))
             writers[schema.slot] = (writer, schema)
-            rows[schema.slot] = 0
 
+        if on_start is not None:
+            on_start(schemas, decoder)
         wifi._udp.reset_input_buffer()
         t0 = time.monotonic()
-        while time.monotonic() - t0 < seconds:
+        while time.monotonic() - t0 < seconds and not (
+                stop_event is not None and stop_event.is_set()):
             waiting = wifi._udp.in_waiting
             if not waiting:
                 time.sleep(0.002)
@@ -429,9 +442,12 @@ def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
                     else:
                         got = values.get(rng.name or "r%d" % len(flat), 0)
                         flat.extend(got if isinstance(got, list) else [got])
-                writer.writerow(
-                    [t_ms, "%.4f" % (time.monotonic() - t0), seq] + flat)
+                t_host = time.monotonic() - t0
+                if writer is not None:
+                    writer.writerow([t_ms, "%.4f" % t_host, seq] + flat)
                 rows[slot] += 1
+                if on_row is not None:
+                    on_row(slot, seq, t_ms, t_host, flat)
                 if vofa_sock is not None and slot == schemas[0].slot:
                     # VOFA+ FireWater: "v0,v1,...\n", channel order = CSV column order
                     vofa_sock.sendto((",".join("%g" % v for v in flat) + "\n").encode(),
@@ -459,13 +475,13 @@ def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
         "dropped": decoder.decoders[schema.slot].dropped,
         "loss_pct": decoder.decoders[schema.slot].loss_pct,
         "malformed": decoder.decoders[schema.slot].crc_errors,
-        "path": str(_slot_path(out_path, schema.slot)),
+        "path": str(_slot_path(out_path, schema.slot)) if out_path else "",
     } for schema in schemas]
 
 
 def run_groups(control_port, data_port, groups, transport, seconds, out_path,
                elf="OBJ/JX_FLY.axf", usart3_baud=921600, quiet=False,
-               vofa=None):
+               vofa=None, **hooks):
     """Subscribe several slots at different rates; one CSV per slot.
 
     Separate files because the slots tick at different rates -- interleaving
@@ -490,7 +506,7 @@ def run_groups(control_port, data_port, groups, transport, seconds, out_path,
 
     if transport == TRANSPORT_USART3:
         return _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
-                                   usart3_baud, transport, vofa=vofa)
+                                   usart3_baud, transport, vofa=vofa, **hooks)
 
     # --- UART5 path (legacy; firmware ignores SUBSCRIBE_UART5) ---
     import serial
