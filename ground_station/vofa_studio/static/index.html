@@ -91,9 +91,11 @@ background:var(--panel);border:1px solid var(--line);display:none;white-space:pr
     </div>
     <div class="cols" id="colList"></div>
     <div class="row" style="margin-top:8px">
-      <button id="btnVofaApply">Apply names + restart VOFA+</button>
+      <h2 style="margin:0">Plotted in VOFA+</h2>
+      <button id="btnLegend">refresh</button>
       <span id="vofaInfo" class="mut"></span>
     </div>
+    <div id="vofaLegend" class="mut"></div>
   </section>
 </div>
 <div>
@@ -313,7 +315,7 @@ function renderChips(known) {
     if (b.dataset.r !== undefined && +b.dataset.r < v.length - 1) { const i = +b.dataset.r; [v[i+1], v[i]] = [v[i], v[i+1]]; }
     renderColumns();
   });
-  $("vofaInfo").textContent = preset.vofa.length ? `${preset.vofa.length} channels` : "";
+  renderLegend();
 }
 
 // ------------------------------------------------------------ session
@@ -322,7 +324,6 @@ function updateButtons() {
   $("btnStart").title = plan && !plan.ok ? "fix the plan first" : "";
   $("btnStop").disabled = !running;
   $("btnMark").disabled = !(lastStatus && lastStatus.state === "streaming");
-  $("btnVofaApply").disabled = running || !preset.vofa.length;
   $("btnSave").disabled = $("btnDelete").disabled = !$("presetSel").value;
 }
 async function nextName() { $("sessName").value = (await api("/api/next_name")).name; }
@@ -413,15 +414,26 @@ $("btnVofaSlot0").onclick = () => {
   renderColumns();
 };
 $("btnVofaClear").onclick = () => { preset.vofa = []; renderColumns(); };
-$("btnVofaApply").onclick = async () => {
-  if (!await ask(`Close VOFA+, rename ${preset.vofa.length} channels and restart it?`)) return;
-  $("btnVofaApply").disabled = true; $("vofaInfo").textContent = "closing VOFA+…";
+// Legend: only the channels a VOFA+ tab actually plots. While streaming, the
+// sent list (missing columns dropped) defines I<n>; otherwise the preset does.
+let legendTabs = [];
+function renderLegend() {
+  const names = lastStatus && lastStatus.vofa && lastStatus.vofa.length ? lastStatus.vofa : preset.vofa;
+  const rows = legendTabs.filter(t => t.lines.length).map(t =>
+    `<div><b>${esc(t.name)}</b>: ` + t.lines.map(i =>
+      `I${i}=<span class="${i < names.length ? "" : "bad"}">${esc(names[i] || "(not sent)")}</span>`).join(", ") + `</div>`);
+  $("vofaLegend").innerHTML = rows.join("") || "no tab plots a channel yet";
+}
+async function loadLegend() {
   try {
-    const r = await api("/api/vofa/apply", {method: "POST", body: {names: preset.vofa}});
-    $("vofaInfo").textContent = `VOFA+ ${r.closed}, renamed ${r.names.length}, relaunched`;
-  } catch (e) { $("vofaInfo").textContent = ""; toast("VOFA+: " + e.message, true); }
-  updateButtons();
-};
+    const r = await api("/api/vofa/legend");
+    legendTabs = r.tabs;
+    $("vofaInfo").textContent = "VOFA+ layout saved " + new Date(r.saved * 1000).toLocaleTimeString();
+  } catch (e) { legendTabs = []; $("vofaInfo").textContent = "VOFA+ layout: " + e.message; }
+  renderLegend();
+}
+$("btnLegend").onclick = loadLegend;
+setInterval(loadLegend, 5000);
 $("mode").onchange = () => {
   $("lblSecs").hidden = $("mode").value !== "timed";
   $("lblWin").hidden = $("mode").value !== "rolling";
@@ -438,6 +450,7 @@ document.addEventListener("keydown", ev => {
   if ($("presetSel").value) await loadPreset($("presetSel").value);
   await nextName();
   poll();
+  loadLegend();
 })();
 </script>
 </body>

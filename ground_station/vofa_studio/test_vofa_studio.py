@@ -146,3 +146,17 @@ def test_next_session_name(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "LOG_DIR", tmp_path)
     (tmp_path / "flight8.slot0.csv").write_text("")
     assert core.next_session_name() == "flight9"
+
+
+def test_read_tabs_fixture(tmp_path):
+    def chart(lines):
+        return {"path": "WaveChart", "ctx": {"rbw": {"ctx": {".": {"lines": lines}}}}}
+    tv = {"type": "tabviews", "ctx": [{"tabs": [
+        {"name": "gyro", "widgets": [chart([2, 1]), chart([1, 5])]},
+        {"name": "empty", "widgets": [chart([])]},
+        {"name": "bare", "widgets": [{"path": "WaveChart", "ctx": {}}]}]}]}
+    p = tmp_path / "vofa+.tabviews.json"
+    p.write_text(json.dumps(tv), encoding="utf-8")
+    assert vofa_config.read_tabs(p) == [{"name": "gyro", "lines": [1, 2, 5]},
+                                        {"name": "empty", "lines": []},
+                                        {"name": "bare", "lines": []}]

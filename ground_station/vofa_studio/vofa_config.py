@@ -13,7 +13,8 @@ import time
 from pathlib import Path
 
 CONFIG = Path(os.path.expandvars(r"%LOCALAPPDATA%\vofa+\100\context\vofa+.config.json"))
-SHORTCUT = r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\VOFA+\x64\vofa+.lnk"
+TABVIEWS = CONFIG.with_name("vofa+.tabviews.json")
+SHORTCUT =r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\VOFA+\x64\vofa+.lnk"
 EXE = "vofa+.exe"
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -40,6 +41,23 @@ def read_names(path=CONFIG):
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     ctx = _find_settings(data)
     return [e.get("name", "") for e in ctx] if ctx is not None else []
+
+
+def read_tabs(path=TABVIEWS):
+    """Tabs and the 0-based channel indices their WaveCharts plot (rbw.lines).
+
+    VOFA+ rewrites this file when it exits, so live edits show after a close.
+    """
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    tabs = []
+    for group in data.get("ctx", []):
+        for tab in group.get("tabs", []):
+            lines = set()
+            for w in tab.get("widgets", []):
+                rbw = w.get("ctx", {}).get("rbw", {}).get("ctx", {}).get(".", {})
+                lines.update(i for i in rbw.get("lines", []) if isinstance(i, int))
+            tabs.append({"name": tab.get("name", ""), "lines": sorted(lines)})
+    return tabs
 
 
 def patch_names(names, path=CONFIG, backup=True):

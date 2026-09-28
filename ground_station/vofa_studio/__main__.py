@@ -159,15 +159,13 @@ async def vofa_names(request):
     return web.json_response({"names": names, "running": running})
 
 
-async def vofa_apply(request):
-    body = await request.json()
-    names = body.get("names") or []
-    if not names:
-        return _err("no names")
+async def vofa_legend(request):
     try:
-        return web.json_response(await _off(vofa_config.apply_names, names))
+        tabs = await _off(vofa_config.read_tabs)
+        saved = vofa_config.TABVIEWS.stat().st_mtime
     except Exception as exc:
         return _err(exc, 500)
+    return web.json_response({"tabs": tabs, "saved": saved})
 
 
 async def index(request):
@@ -190,7 +188,7 @@ def make_app():
     app.router.add_post("/api/session/mark", session_mark)
     app.router.add_get("/api/session/status", session_status)
     app.router.add_get("/api/vofa/names", vofa_names)
-    app.router.add_post("/api/vofa/apply", vofa_apply)
+    app.router.add_get("/api/vofa/legend", vofa_legend)
     return app
 
 
