@@ -54,6 +54,13 @@ background:var(--panel);border:1px solid var(--line);display:none;white-space:pr
 #dlg{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center}
 #dlg>div{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;min-width:300px}
 #dlg input{width:100%;margin:8px 0}
+.pk{max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:5px}
+.pk label{display:grid;grid-template-columns:20px minmax(0,1fr);gap:4px;padding:5px 6px;
+border-bottom:1px solid var(--line);cursor:pointer}
+.pk label:last-child{border-bottom:0}
+.pk label.on{background:var(--chip)}
+.pk b{font:13px ui-monospace,Consolas,monospace}
+.pk .why{font-size:12px;color:var(--mut)}
 </style>
 </head>
 <body>
@@ -67,6 +74,15 @@ background:var(--panel);border:1px solid var(--line);display:none;white-space:pr
 </header>
 <main>
 <div>
+  <section>
+    <h2>Presets <span class="mut" style="text-transform:none;letter-spacing:0">— tick several to combine them</span></h2>
+    <div class="row" style="margin-bottom:6px">
+      <input id="pkFilter" placeholder="filter presets" style="flex:1">
+      <button id="btnPkNone" title="untick all but the preset in the dropdown">back to one</button>
+      <span id="pkSum" class="mut"></span>
+    </div>
+    <div id="pkList" class="pk"></div>
+  </section>
   <section>
     <h2>Budget</h2>
     <div class="row"><b>Total</b><div class="bar"><div id="totBar"></div></div>
@@ -192,21 +208,55 @@ const fmtB = n => n >= 1e6 ? (n/1e6).toFixed(1)+" MB" : n >= 1e3 ? (n/1e3).toFix
 const realRate = r => { const d = Math.max(1, Math.min(255, Math.round(100 / r))); return 100 / d; };
 
 // ------------------------------------------------------------ presets
+let presetInfo = [], picked = [];   // picked: ticked preset names, in tick order
 async function loadPresetList(select) {
-  const names = await api("/api/presets");
-  $("presetSel").innerHTML = names.map(n => `<option>${esc(n)}</option>`).join("");
+  presetInfo = await api("/api/presets?info=1");
+  $("presetSel").innerHTML = presetInfo.map(p => `<option>${esc(p.name)}</option>`).join("");
   if (select) $("presetSel").value = select;
+  picked = picked.filter(n => presetInfo.some(p => p.name === n));
+  renderPicker();
 }
 async function loadPreset(name) {
   preset = await api("/api/presets/" + encodeURIComponent(name));
   preset.vofa = preset.vofa || [];
+  picked = [name]; $("presetSel").value = name;
   $("presetNotes").value = preset.notes || "";
-  renderSlots(); schedulePlan();
+  renderPicker(); renderSlots(); schedulePlan();
 }
 async function savePreset(name) {
   preset.name = name; preset.notes = $("presetNotes").value;
   preset = await api("/api/presets", {method: "POST", body: preset});
+  picked = [name];
   await loadPresetList(name); toast("saved " + name);
+}
+// Two or more ticks: the server merges them (vars deduped at their fastest
+// rate, folded into <= 4 slots); the budget below re-checks the result.
+async function applyPicked() {
+  if (picked.length === 1) return loadPreset(picked[0]);
+  if (!picked.length) { renderPicker(); return; }
+  preset = await api("/api/presets/merge", {method: "POST", body: {names: picked}});
+  $("presetNotes").value = picked.join(" + ");
+  renderPicker(); renderSlots(); schedulePlan();
+}
+function renderPicker() {
+  const f = $("pkFilter").value.toLowerCase();
+  $("pkList").innerHTML = presetInfo.filter(p => !f || (p.name + " " + p.notes).toLowerCase().includes(f)
+      || picked.includes(p.name)).map(p => {
+    const on = picked.includes(p.name);
+    const rates = p.rates.map(r => realRate(r).toFixed(r >= 10 ? 0 : 1)).join("/");
+    return `<label class="${on ? "on" : ""}"><input type="checkbox" data-n="${esc(p.name)}" ${on ? "checked" : ""}>
+      <span><b>${esc(p.name)}</b> <span class="mut">${p.n_vars} vars · ${rates} Hz</span>
+      <div class="why">${esc(p.notes || "(no description)")}</div></span></label>`;
+  }).join("");
+  $("pkList").querySelectorAll("input").forEach(cb => cb.onchange = () => {
+    const n = cb.dataset.n;
+    picked = cb.checked ? picked.concat([n]) : picked.filter(x => x !== n);
+    applyPicked().catch(e => toast(e.message, true));
+  });
+  const multi = picked.length > 1;
+  $("pkSum").textContent = multi ? `combining ${picked.length}: ${preset.slots.reduce((a, s) => a + s.vars.length, 0)} unique vars` : "";
+  $("presetSel").disabled = multi;
+  updateButtons();
 }
 
 // -------------------------------------------------------------- slots
@@ -325,7 +375,8 @@ function updateButtons() {
   $("btnStart").title = plan && !plan.ok ? "fix the plan first" : "";
   $("btnStop").disabled = !running;
   $("btnMark").disabled = !(lastStatus && lastStatus.state === "streaming");
-  $("btnSave").disabled = $("btnDelete").disabled = !$("presetSel").value;
+  // A combination has no file of its own: only "Save as…" applies.
+  $("btnSave").disabled = $("btnDelete").disabled = !$("presetSel").value || picked.length > 1;
 }
 async function nextName() { $("sessName").value = (await api("/api/next_name")).name; }
 async function start() {
@@ -411,6 +462,8 @@ $("btnDelete").onclick = async () => {
 };
 $("btnAddSlot").onclick = () => { preset.slots.push({rate: 10, vars: []}); renderSlots(); schedulePlan(); };
 $("colFilter").oninput = renderColumns;
+$("pkFilter").oninput = renderPicker;
+$("btnPkNone").onclick = () => { if ($("presetSel").value) loadPreset($("presetSel").value); };
 $("valFilter").oninput = renderValues;
 $("btnVofaSlot0").onclick = () => {
   preset.vofa = plan ? plan.slots[0].vars.filter(v => v.ok).flatMap(v => v.columns) : [];

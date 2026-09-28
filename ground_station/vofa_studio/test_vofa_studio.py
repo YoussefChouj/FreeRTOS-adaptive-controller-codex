@@ -38,6 +38,39 @@ def test_shipped_presets_fit_budget():
         assert set(core.STATUS_VARS) <= {v for s in p["slots"] for v in s["vars"]}, name
 
 
+def test_merge_presets():
+    a = {"name": "a", "notes": "A", "slots": [{"rate": 100, "vars": ["x", "y"]},
+                                             {"rate": 5, "vars": ["s"]}], "vofa": ["x", "y"]}
+    b = {"name": "b", "notes": "B", "slots": [{"rate": 33, "vars": ["y", "z"]},
+                                             {"rate": 30, "vars": ["w"]},
+                                             {"rate": 5, "vars": ["s", "x"]}], "vofa": ["z", "x"]}
+    m = core.merge_presets([a, b])
+    assert m["name"] == "a_b" and m["notes"] == "a: A\nb: B"
+    assert m["vofa"] == ["x", "y", "z"]
+    # y kept at 100 Hz, 33/30 Hz share divider 3, x not demoted to 5 Hz
+    assert m["slots"] == [{"rate": 100.0, "vars": ["x", "y"]},
+                          {"rate": 33.333, "vars": ["z", "w"]},
+                          {"rate": 5.0, "vars": ["s"]}]
+    # six dividers fold to four, each var at >= its requested rate
+    many = [{"name": str(r), "slots": [{"rate": r, "vars": ["v%d" % r]}]}
+            for r in (100, 50, 25, 20, 10, 1)]
+    m = core.merge_presets(many)
+    assert len(m["slots"]) == core.MAX_SLOTS
+    got = {v: s["rate"] for s in m["slots"] for v in s["vars"]}
+    assert all(got["v%d" % r] >= r * 0.99 for r in (100, 50, 25, 20, 10, 1))
+
+
+@pytest.mark.skipif(not core.ELF.exists(), reason="no ELF")
+def test_merge_all_shipped_presets_is_well_formed():
+    from ground_station.livewatch.symbols import SymbolResolver
+    names = core.list_presets()
+    m = core.merge_presets([core.load_preset(n) for n in names])
+    flat = [v for s in m["slots"] for v in s["vars"]]
+    assert len(flat) == len(set(flat)) and len(m["slots"]) <= core.MAX_SLOTS
+    plan = core.plan_budget(SymbolResolver(core.ELF), m["slots"])
+    assert all(v["ok"] for s in plan["slots"] for v in s["vars"])   # may exceed budget
+
+
 def test_preset_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "PRESETS_DIR", tmp_path)
     saved = core.save_preset({"name": "t1", "slots": [{"rate": "25", "vars": [" a ", ""]}],

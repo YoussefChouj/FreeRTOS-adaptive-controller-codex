@@ -36,7 +36,17 @@ async def _off(fn, *args):
 # ------------------------------------------------------------------ presets
 
 async def presets_list(request):
+    if request.query.get("info"):
+        return web.json_response(await _off(core.preset_info))
     return web.json_response(core.list_presets())
+
+
+async def presets_merge(request):
+    try:
+        names = (await request.json()).get("names") or []
+        return web.json_response(core.merge_presets([core.load_preset(n) for n in names]))
+    except (ValueError, FileNotFoundError) as exc:
+        return _err(exc, 404)
 
 
 async def preset_get(request):
@@ -179,6 +189,7 @@ def make_app():
     app.router.add_get("/api/presets", presets_list)
     app.router.add_get("/api/presets/{name}", preset_get)
     app.router.add_post("/api/presets", preset_save)
+    app.router.add_post("/api/presets/merge", presets_merge)
     app.router.add_delete("/api/presets/{name}", preset_delete)
     app.router.add_get("/api/symbols", symbols)
     app.router.add_post("/api/budget", budget)

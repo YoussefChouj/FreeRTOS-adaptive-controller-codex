@@ -75,6 +75,57 @@ def delete_preset(name):
     (PRESETS_DIR / (name + ".json")).unlink()
 
 
+def preset_info():
+    """Name, purpose and size of every preset, for the picker."""
+    out = []
+    for name in list_presets():
+        p = load_preset(name)
+        out.append({"name": name, "notes": p.get("notes", ""),
+                    "n_vars": sum(len(s["vars"]) for s in p["slots"]),
+                    "rates": [s["rate"] for s in p["slots"]]})
+    return out
+
+
+def merge_presets(presets):
+    """Union of several presets into one plan of at most MAX_SLOTS slots.
+
+    Slots are keyed by the real send divider, so 30 Hz and 33 Hz share a slot.
+    A var listed at several rates is kept once, at the fastest. With more than
+    MAX_SLOTS dividers, the closest adjacent pair is folded into the faster one
+    (never undersample a var, pay the least extra bandwidth).
+    """
+    fastest = {}                              # var -> smallest divider
+    order = []
+    for p in presets:
+        for s in p.get("slots", []):
+            d = divider_for(s["rate"])
+            for v in s.get("vars", []):
+                if v not in fastest:
+                    order.append(v)
+                    fastest[v] = d
+                else:
+                    fastest[v] = min(fastest[v], d)
+    divs = sorted(set(fastest.values()))
+    while len(divs) > MAX_SLOTS:
+        i = min(range(len(divs) - 1), key=lambda k: divs[k + 1] / divs[k])
+        slow = divs.pop(i + 1)
+        for v, d in fastest.items():
+            if d == slow:
+                fastest[v] = divs[i]
+    vofa = []
+    for p in presets:
+        vofa += [c for c in p.get("vofa", []) if c not in vofa]
+    names = [p.get("name", "") for p in presets]
+    return {
+        "name": "_".join(names),
+        "notes": "\n".join("%s: %s" % (p.get("name", ""), p.get("notes", ""))
+                           for p in presets),
+        "slots": [{"rate": round(SEND_TASK_MEASURED_HZ / d, 3),
+                   "vars": [v for v in order if fastest[v] == d]} for d in divs],
+        "vofa": vofa,
+    }
+
+
 # ---------------------------------------------------------------- budget
 
 def divider_for(rate):
