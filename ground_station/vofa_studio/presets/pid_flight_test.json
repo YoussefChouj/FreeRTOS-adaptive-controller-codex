@@ -1,0 +1,98 @@
+{
+  "name": "pid_flight_test",
+  "notes": "PID flight test: full cascade (rate, attitude, position, altitude), motors, throttle.",
+  "slots": [
+    {
+      "rate": 50.0,
+      "vars": [
+        "Ctrler.gyroxPID.Des",
+        "Ctrler.gyroxPID.FB",
+        "Ctrler.gyroxPID.U",
+        "Ctrler.gyroyPID.Des",
+        "Ctrler.gyroyPID.FB",
+        "Ctrler.gyroyPID.U",
+        "Ctrler.gyrozPID.Des",
+        "Ctrler.gyrozPID.FB",
+        "Ctrler.gyrozPID.U",
+        "Ctrler.rollPID.Des",
+        "Ctrler.rollPID.FB",
+        "Ctrler.rollPID.U",
+        "Ctrler.pitchPID.Des",
+        "Ctrler.pitchPID.FB",
+        "Ctrler.pitchPID.U",
+        "Ctrler.yawPID.Des",
+        "Ctrler.yawPID.FB",
+        "Ctrler.yawPID.U",
+        "mymotor.motor1",
+        "mymotor.motor2",
+        "mymotor.motor3",
+        "mymotor.motor4",
+        "Throttle_out",
+        "flight_phase",
+        "DroneStatus.ARM_Status",
+        "DroneStatus.FlyMode",
+        "real_voltage"
+      ]
+    },
+    {
+      "rate": 25.0,
+      "vars": [
+        "Ctrler.locxPID.Des",
+        "Ctrler.locxPID.FB",
+        "Ctrler.locxPID.U",
+        "Ctrler.locyPID.Des",
+        "Ctrler.locyPID.FB",
+        "Ctrler.locyPID.U",
+        "Ctrler.Z_posPID.Des",
+        "Ctrler.Z_posPID.FB",
+        "Ctrler.Z_posPID.U",
+        "Ctrler.Z_ratePID.Des",
+        "Ctrler.Z_ratePID.FB",
+        "Ctrler.Z_ratePID.U",
+        "ano_of.of_alt_cm",
+        "Ctrler.gyroxPID.SumE",
+        "Ctrler.gyroyPID.SumE",
+        "Ctrler.gyrozPID.SumE",
+        "Ctrler.rollPID.SumE",
+        "Ctrler.pitchPID.SumE",
+        "Ctrler.yawPID.SumE"
+      ]
+    },
+    {
+      "rate": 10.0,
+      "vars": [
+        "Ctrler.locxsPID.Des",
+        "Ctrler.locxsPID.FB",
+        "Ctrler.locxsPID.U",
+        "Ctrler.locysPID.Des",
+        "Ctrler.locysPID.FB",
+        "Ctrler.locysPID.U",
+        "ano_of.earth_x",
+        "ano_of.earth_y",
+        "ano_of.of_quality",
+        "mrac_flags.adaptation_on",
+        "mrac_flags.output_injection_on",
+        "g_ctrl_select"
+      ]
+    }
+  ],
+  "vofa": [
+    "Ctrler.gyroxPID.FB",
+    "Ctrler.gyroyPID.FB",
+    "Ctrler.gyrozPID.FB",
+    "Ctrler.rollPID.FB",
+    "Ctrler.pitchPID.FB",
+    "Ctrler.yawPID.FB",
+    "Ctrler.gyroxPID.Des",
+    "Ctrler.gyroyPID.Des",
+    "Ctrler.rollPID.Des",
+    "Ctrler.pitchPID.Des",
+    "mymotor.motor1",
+    "mymotor.motor2",
+    "mymotor.motor3",
+    "mymotor.motor4",
+    "Ctrler.Z_posPID.FB",
+    "Ctrler.Z_posPID.Des",
+    "real_voltage"
+  ]
+}

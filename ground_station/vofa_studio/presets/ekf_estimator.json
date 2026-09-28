@@ -1,0 +1,80 @@
+{
+  "name": "ekf_estimator",
+  "notes": "EKF velocity/accel-bias state, covariance, NIS, gate, versus optical flow.",
+  "slots": [
+    {
+      "rate": 50.0,
+      "vars": [
+        "s_ekf.active",
+        "s_ekf.x[0]",
+        "s_ekf.x[1]",
+        "s_ekf.x[2]",
+        "s_ekf.x[3]",
+        "s_ekf.x[4]",
+        "s_ekf.x[5]",
+        "s_ekf.nis",
+        "g_ekf_gate.bias_mode",
+        "g_ekf_gate.ctrl_enable",
+        "g_ekf_gate.healthy",
+        "g_ekf_gate.fallback_count",
+        "g_ekf_gate.vx_cms",
+        "g_ekf_gate.vy_cms",
+        "ano_of.of2_dx_fix",
+        "ano_of.of2_dy_fix"
+      ]
+    },
+    {
+      "rate": 20.0,
+      "vars": [
+        "s_ekf.P[0]",
+        "s_ekf.P[1]",
+        "s_ekf.P[2]",
+        "s_ekf.P[3]",
+        "s_ekf.P[4]",
+        "s_ekf.P[5]",
+        "s_ekf.P[6]",
+        "s_ekf.P[7]",
+        "s_ekf.P[8]",
+        "Lin_Acc_X_body",
+        "Lin_Acc_Y_body",
+        "Lin_Acc_Z_body",
+        "Acc_X_Real",
+        "Acc_Y_Real",
+        "Acc_Z_Real",
+        "ano_of.of_quality",
+        "ano_of.of_alt_cm"
+      ]
+    },
+    {
+      "rate": 5.0,
+      "vars": [
+        "g_ekf_gate.bias_mode_req",
+        "g_ekf_gate.ctrl_enable_req",
+        "g_cal_health",
+        "s_cal_hot.b_g[0]",
+        "s_cal_hot.b_g[1]",
+        "s_cal_hot.b_g[2]",
+        "s_cal_trim.b_a[0]",
+        "s_cal_trim.b_a[1]",
+        "s_cal_trim.b_a[2]",
+        "flight_phase",
+        "DroneStatus.ARM_Status",
+        "DroneStatus.FlyMode",
+        "real_voltage"
+      ]
+    }
+  ],
+  "vofa": [
+    "s_ekf.x[0]",
+    "s_ekf.x[1]",
+    "g_ekf_gate.vx_cms",
+    "g_ekf_gate.vy_cms",
+    "ano_of.of2_dx_fix",
+    "ano_of.of2_dy_fix",
+    "s_ekf.nis",
+    "s_ekf.x[3]",
+    "s_ekf.x[4]",
+    "s_ekf.x[5]",
+    "g_ekf_gate.healthy"
+  ]
+}

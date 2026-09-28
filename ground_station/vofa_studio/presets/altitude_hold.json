@@ -1,0 +1,52 @@
+{
+  "name": "altitude_hold",
+  "notes": "Height loops, OF altitude, throttle, thrust estimate, motors, battery sag.",
+  "slots": [
+    {
+      "rate": 50.0,
+      "vars": [
+        "Ctrler.Z_posPID.Des",
+        "Ctrler.Z_posPID.FB",
+        "Ctrler.Z_posPID.U",
+        "Ctrler.Z_ratePID.Des",
+        "Ctrler.Z_ratePID.FB",
+        "Ctrler.Z_ratePID.U",
+        "ano_of.of_alt_cm",
+        "Throttle_out",
+        "Lin_Acc_Z_body",
+        "mymotor.motor1",
+        "mymotor.motor2",
+        "mymotor.motor3",
+        "mymotor.motor4"
+      ]
+    },
+    {
+      "rate": 10.0,
+      "vars": [
+        "Ctrler.Z_posPID.SumE",
+        "Ctrler.Z_ratePID.SumE",
+        "g_thrust_est.imu_total",
+        "s_ekf.x[2]",
+        "flight_phase",
+        "DroneStatus.ARM_Status",
+        "DroneStatus.FlyMode",
+        "real_voltage"
+      ]
+    }
+  ],
+  "vofa": [
+    "Ctrler.Z_posPID.Des",
+    "Ctrler.Z_posPID.FB",
+    "Ctrler.Z_posPID.U",
+    "Ctrler.Z_ratePID.Des",
+    "Ctrler.Z_ratePID.FB",
+    "Ctrler.Z_ratePID.U",
+    "ano_of.of_alt_cm",
+    "Throttle_out",
+    "mymotor.motor1",
+    "mymotor.motor2",
+    "mymotor.motor3",
+    "mymotor.motor4",
+    "real_voltage"
+  ]
+}

@@ -1,0 +1,69 @@
+{
+  "name": "attitude_tuning",
+  "notes": "Attitude (angle) and rate loops at 50 Hz, integrators, motors.",
+  "slots": [
+    {
+      "rate": 50.0,
+      "vars": [
+        "Ctrler.rollPID.Des",
+        "Ctrler.rollPID.FB",
+        "Ctrler.rollPID.U",
+        "Ctrler.pitchPID.Des",
+        "Ctrler.pitchPID.FB",
+        "Ctrler.pitchPID.U",
+        "Ctrler.yawPID.Des",
+        "Ctrler.yawPID.FB",
+        "Ctrler.yawPID.U",
+        "Ctrler.gyroxPID.Des",
+        "Ctrler.gyroxPID.FB",
+        "Ctrler.gyroxPID.U",
+        "Ctrler.gyroyPID.Des",
+        "Ctrler.gyroyPID.FB",
+        "Ctrler.gyroyPID.U",
+        "Ctrler.gyrozPID.Des",
+        "Ctrler.gyrozPID.FB",
+        "Ctrler.gyrozPID.U",
+        "mymotor.motor1",
+        "mymotor.motor2",
+        "mymotor.motor3",
+        "mymotor.motor4"
+      ]
+    },
+    {
+      "rate": 10.0,
+      "vars": [
+        "Ctrler.gyroxPID.SumE",
+        "Ctrler.gyroyPID.SumE",
+        "Ctrler.gyrozPID.SumE",
+        "Ctrler.rollPID.SumE",
+        "Ctrler.pitchPID.SumE",
+        "Ctrler.yawPID.SumE",
+        "imu_data.rol",
+        "imu_data.pit",
+        "imu_data.yaw",
+        "Throttle_out",
+        "flight_phase",
+        "DroneStatus.ARM_Status",
+        "DroneStatus.FlyMode",
+        "real_voltage"
+      ]
+    }
+  ],
+  "vofa": [
+    "Ctrler.rollPID.Des",
+    "Ctrler.rollPID.FB",
+    "Ctrler.rollPID.U",
+    "Ctrler.pitchPID.Des",
+    "Ctrler.pitchPID.FB",
+    "Ctrler.pitchPID.U",
+    "Ctrler.yawPID.Des",
+    "Ctrler.yawPID.FB",
+    "Ctrler.yawPID.U",
+    "Ctrler.gyroxPID.Des",
+    "Ctrler.gyroyPID.Des",
+    "Ctrler.gyrozPID.Des",
+    "Ctrler.gyroxPID.FB",
+    "Ctrler.gyroyPID.FB",
+    "Ctrler.gyrozPID.FB"
+  ]
+}

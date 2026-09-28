@@ -27,6 +27,17 @@ def test_plan_budget_default_preset():
     assert not bad["ok"] and bad["slots"][0]["vars"][0]["ok"] is False
 
 
+@pytest.mark.skipif(not core.ELF.exists(), reason="no ELF")
+def test_shipped_presets_fit_budget():
+    from ground_station.livewatch.symbols import SymbolResolver
+    r = SymbolResolver(core.ELF)
+    for name in core.list_presets():
+        p = core.load_preset(name)
+        plan = core.plan_budget(r, p["slots"])
+        assert plan["ok"], (name, plan["errors"], [s["errors"] for s in plan["slots"]])
+        assert set(core.STATUS_VARS) <= {v for s in p["slots"] for v in s["vars"]}, name
+
+
 def test_preset_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "PRESETS_DIR", tmp_path)
     saved = core.save_preset({"name": "t1", "slots": [{"rate": "25", "vars": [" a ", ""]}],

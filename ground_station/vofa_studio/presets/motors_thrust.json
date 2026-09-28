@@ -1,0 +1,61 @@
+{
+  "name": "motors_thrust",
+  "notes": "Motor commands, RPM, thrust estimators (empirical, blade element, IMU), battery.",
+  "slots": [
+    {
+      "rate": 100.0,
+      "vars": [
+        "mymotor.motor1",
+        "mymotor.motor2",
+        "mymotor.motor3",
+        "mymotor.motor4",
+        "rpm_dbg_period_cyc[0]",
+        "rpm_dbg_period_cyc[1]",
+        "rpm_dbg_period_cyc[2]",
+        "rpm_dbg_period_cyc[3]",
+        "Throttle_out"
+      ]
+    },
+    {
+      "rate": 25.0,
+      "vars": [
+        "g_thrust_est.empirical[0]",
+        "g_thrust_est.empirical[1]",
+        "g_thrust_est.empirical[2]",
+        "g_thrust_est.empirical[3]",
+        "g_thrust_est.blade_element[0]",
+        "g_thrust_est.blade_element[1]",
+        "g_thrust_est.blade_element[2]",
+        "g_thrust_est.blade_element[3]",
+        "g_thrust_est.imu_total",
+        "Lin_Acc_Z_body",
+        "rpm_dbg_edges[0]",
+        "rpm_dbg_edges[1]",
+        "rpm_dbg_edges[2]",
+        "rpm_dbg_edges[3]"
+      ]
+    },
+    {
+      "rate": 5.0,
+      "vars": [
+        "flight_phase",
+        "DroneStatus.ARM_Status",
+        "DroneStatus.FlyMode",
+        "real_voltage"
+      ]
+    }
+  ],
+  "vofa": [
+    "mymotor.motor1",
+    "mymotor.motor2",
+    "mymotor.motor3",
+    "mymotor.motor4",
+    "rpm_dbg_period_cyc[0]",
+    "rpm_dbg_period_cyc[1]",
+    "rpm_dbg_period_cyc[2]",
+    "rpm_dbg_period_cyc[3]",
+    "g_thrust_est.imu_total",
+    "Throttle_out",
+    "real_voltage"
+  ]
+}

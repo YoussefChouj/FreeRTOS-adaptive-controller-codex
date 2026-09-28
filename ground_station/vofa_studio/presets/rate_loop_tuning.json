@@ -1,0 +1,58 @@
+{
+  "name": "rate_loop_tuning",
+  "notes": "Inner rate loops at 100 Hz with raw and filtered gyro, integrators, motors.",
+  "slots": [
+    {
+      "rate": 100.0,
+      "vars": [
+        "Ctrler.gyroxPID.Des",
+        "Ctrler.gyroxPID.FB",
+        "Ctrler.gyroxPID.U",
+        "Ctrler.gyroyPID.Des",
+        "Ctrler.gyroyPID.FB",
+        "Ctrler.gyroyPID.U",
+        "Ctrler.gyrozPID.Des",
+        "Ctrler.gyrozPID.FB",
+        "Ctrler.gyrozPID.U",
+        "Gyro_X_Real",
+        "Gyro_Y_Real",
+        "Gyro_Z_Real",
+        "mymotor.motor1",
+        "mymotor.motor2",
+        "mymotor.motor3",
+        "mymotor.motor4"
+      ]
+    },
+    {
+      "rate": 20.0,
+      "vars": [
+        "Gyro_X_Lpf.out",
+        "Gyro_Y_Lpf.out",
+        "Gyro_Z_Lpf.out",
+        "Ctrler.gyroxPID.SumE",
+        "Ctrler.gyroyPID.SumE",
+        "Ctrler.gyrozPID.SumE",
+        "Throttle_out",
+        "flight_phase",
+        "DroneStatus.ARM_Status",
+        "DroneStatus.FlyMode",
+        "real_voltage"
+      ]
+    }
+  ],
+  "vofa": [
+    "Ctrler.gyroxPID.Des",
+    "Ctrler.gyroxPID.FB",
+    "Ctrler.gyroxPID.U",
+    "Ctrler.gyroyPID.Des",
+    "Ctrler.gyroyPID.FB",
+    "Ctrler.gyroyPID.U",
+    "Ctrler.gyrozPID.Des",
+    "Ctrler.gyrozPID.FB",
+    "Ctrler.gyrozPID.U",
+    "mymotor.motor1",
+    "mymotor.motor2",
+    "mymotor.motor3",
+    "mymotor.motor4"
+  ]
+}

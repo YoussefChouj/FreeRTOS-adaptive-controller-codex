@@ -1,0 +1,75 @@
+{
+  "name": "position_hold_of",
+  "notes": "Optical-flow position hold: loc/locs cascade, flow raw+fixed, bias, EKF velocity.",
+  "slots": [
+    {
+      "rate": 50.0,
+      "vars": [
+        "Ctrler.locxPID.Des",
+        "Ctrler.locxPID.FB",
+        "Ctrler.locxPID.U",
+        "Ctrler.locyPID.Des",
+        "Ctrler.locyPID.FB",
+        "Ctrler.locyPID.U",
+        "Ctrler.locxsPID.Des",
+        "Ctrler.locxsPID.FB",
+        "Ctrler.locxsPID.U",
+        "Ctrler.locysPID.Des",
+        "Ctrler.locysPID.FB",
+        "Ctrler.locysPID.U",
+        "ano_of.of2_dx_fix",
+        "ano_of.of2_dy_fix",
+        "ano_of.earth_x",
+        "ano_of.earth_y"
+      ]
+    },
+    {
+      "rate": 20.0,
+      "vars": [
+        "ano_of.of2_dx",
+        "ano_of.of2_dy",
+        "ano_of.DISTANCE_X",
+        "ano_of.DISTANCE_Y",
+        "ano_of.of_quality",
+        "ano_of.of_alt_cm",
+        "s_of_bias_x",
+        "s_of_bias_y",
+        "s_of_bias_seeded",
+        "g_of_bias_mode",
+        "g_ekf_gate.vx_cms",
+        "g_ekf_gate.vy_cms",
+        "g_ekf_gate.ctrl_enable",
+        "imu_data.rol",
+        "imu_data.pit",
+        "imu_data.yaw"
+      ]
+    },
+    {
+      "rate": 5.0,
+      "vars": [
+        "Ctrler.locxPID.SumE",
+        "Ctrler.locyPID.SumE",
+        "g_estimator_ready",
+        "g_of_bias_ema_freeze",
+        "flight_phase",
+        "DroneStatus.ARM_Status",
+        "DroneStatus.FlyMode",
+        "real_voltage"
+      ]
+    }
+  ],
+  "vofa": [
+    "Ctrler.locxPID.FB",
+    "Ctrler.locyPID.FB",
+    "Ctrler.locxsPID.FB",
+    "Ctrler.locysPID.FB",
+    "Ctrler.locxPID.Des",
+    "Ctrler.locyPID.Des",
+    "Ctrler.locxsPID.Des",
+    "Ctrler.locysPID.Des",
+    "ano_of.of2_dx_fix",
+    "ano_of.of2_dy_fix",
+    "g_ekf_gate.vx_cms",
+    "g_ekf_gate.vy_cms"
+  ]
+}

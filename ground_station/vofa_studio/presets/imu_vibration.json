@@ -1,0 +1,50 @@
+{
+  "name": "imu_vibration",
+  "notes": "Raw/filtered gyro and accel at 100 Hz for vibration and filter checks.",
+  "slots": [
+    {
+      "rate": 100.0,
+      "vars": [
+        "Gyro_X_Real",
+        "Gyro_Y_Real",
+        "Gyro_Z_Real",
+        "Gyro_X_Lpf.out",
+        "Gyro_Y_Lpf.out",
+        "Gyro_Z_Lpf.out",
+        "Acc_X_Real",
+        "Acc_Y_Real",
+        "Acc_Z_Real"
+      ]
+    },
+    {
+      "rate": 20.0,
+      "vars": [
+        "Lin_Acc_X_body",
+        "Lin_Acc_Y_body",
+        "Lin_Acc_Z_body",
+        "imu_data.rol",
+        "imu_data.pit",
+        "imu_data.yaw",
+        "mymotor.motor1",
+        "mymotor.motor2",
+        "mymotor.motor3",
+        "mymotor.motor4",
+        "flight_phase",
+        "DroneStatus.ARM_Status",
+        "DroneStatus.FlyMode",
+        "real_voltage"
+      ]
+    }
+  ],
+  "vofa": [
+    "Gyro_X_Real",
+    "Gyro_Y_Real",
+    "Gyro_Z_Real",
+    "Gyro_X_Lpf.out",
+    "Gyro_Y_Lpf.out",
+    "Gyro_Z_Lpf.out",
+    "Acc_X_Real",
+    "Acc_Y_Real",
+    "Acc_Z_Real"
+  ]
+}

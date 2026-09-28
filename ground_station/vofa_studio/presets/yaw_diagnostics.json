@@ -1,0 +1,59 @@
+{
+  "name": "yaw_diagnostics",
+  "notes": "Yaw loop, gyro-z bias handling, yaw mixing direction, motor split.",
+  "slots": [
+    {
+      "rate": 50.0,
+      "vars": [
+        "Ctrler.gyrozPID.Des",
+        "Ctrler.gyrozPID.FB",
+        "Ctrler.gyrozPID.U",
+        "Ctrler.yawPID.Des",
+        "Ctrler.yawPID.FB",
+        "Ctrler.yawPID.U",
+        "Gyro_Z_Real",
+        "Gyro_Z_Lpf.out",
+        "imu_data.yaw",
+        "mymotor.motor1",
+        "mymotor.motor2",
+        "mymotor.motor3",
+        "mymotor.motor4",
+        "mrac_state.yaw.e",
+        "mrac_state.yaw.u_nom",
+        "mrac_state.yaw.u_ad"
+      ]
+    },
+    {
+      "rate": 10.0,
+      "vars": [
+        "g_yaw_mix_dir",
+        "g_gyro_z_bias_blocks",
+        "g_gyro_z_bias_track",
+        "g_of_handheld_test",
+        "Ctrler.gyrozPID.SumE",
+        "Ctrler.yawPID.SumE",
+        "g_cal_health",
+        "s_cal_hot.b_g[0]",
+        "s_cal_hot.b_g[1]",
+        "s_cal_hot.b_g[2]",
+        "flight_phase",
+        "DroneStatus.ARM_Status",
+        "DroneStatus.FlyMode",
+        "real_voltage"
+      ]
+    }
+  ],
+  "vofa": [
+    "Ctrler.gyrozPID.Des",
+    "Ctrler.gyrozPID.FB",
+    "Ctrler.gyrozPID.U",
+    "Ctrler.yawPID.Des",
+    "Ctrler.yawPID.FB",
+    "Ctrler.yawPID.U",
+    "Gyro_Z_Real",
+    "mymotor.motor1",
+    "mymotor.motor2",
+    "mymotor.motor3",
+    "mymotor.motor4"
+  ]
+}

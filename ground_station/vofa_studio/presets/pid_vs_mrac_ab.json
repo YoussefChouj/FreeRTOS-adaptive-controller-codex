@@ -1,0 +1,82 @@
+{
+  "name": "pid_vs_mrac_ab",
+  "notes": "Same signal set whichever controller is active, for A/B flights switching g_ctrl_select.",
+  "slots": [
+    {
+      "rate": 50.0,
+      "vars": [
+        "Ctrler.gyroxPID.Des",
+        "Ctrler.gyroxPID.FB",
+        "Ctrler.gyroxPID.U",
+        "Ctrler.gyroyPID.Des",
+        "Ctrler.gyroyPID.FB",
+        "Ctrler.gyroyPID.U",
+        "Ctrler.gyrozPID.Des",
+        "Ctrler.gyrozPID.FB",
+        "Ctrler.gyrozPID.U",
+        "imu_data.rol",
+        "imu_data.pit",
+        "imu_data.yaw",
+        "mrac_flags.adaptation_on",
+        "mrac_flags.output_injection_on",
+        "g_ctrl_select",
+        "mrac_state.roll.u_nom",
+        "mrac_state.roll.u_ad",
+        "mrac_state.pitch.u_nom",
+        "mrac_state.pitch.u_ad",
+        "mrac_state.yaw.u_nom",
+        "mrac_state.yaw.u_ad",
+        "mymotor.motor1",
+        "mymotor.motor2",
+        "mymotor.motor3",
+        "mymotor.motor4",
+        "flight_phase",
+        "DroneStatus.ARM_Status",
+        "DroneStatus.FlyMode",
+        "real_voltage"
+      ]
+    },
+    {
+      "rate": 10.0,
+      "vars": [
+        "Ctrler.rollPID.Des",
+        "Ctrler.rollPID.FB",
+        "Ctrler.rollPID.U",
+        "Ctrler.pitchPID.Des",
+        "Ctrler.pitchPID.FB",
+        "Ctrler.pitchPID.U",
+        "Ctrler.yawPID.Des",
+        "Ctrler.yawPID.FB",
+        "Ctrler.yawPID.U",
+        "Ctrler.Z_posPID.Des",
+        "Ctrler.Z_posPID.FB",
+        "Ctrler.Z_posPID.U",
+        "Ctrler.Z_ratePID.Des",
+        "Ctrler.Z_ratePID.FB",
+        "Ctrler.Z_ratePID.U",
+        "ano_of.earth_x",
+        "ano_of.earth_y",
+        "ano_of.of_alt_cm"
+      ]
+    }
+  ],
+  "vofa": [
+    "Ctrler.gyroxPID.FB",
+    "Ctrler.gyroyPID.FB",
+    "Ctrler.gyrozPID.FB",
+    "Ctrler.gyroxPID.Des",
+    "Ctrler.gyroyPID.Des",
+    "Ctrler.gyrozPID.Des",
+    "g_ctrl_select",
+    "mrac_state.roll.u_nom",
+    "mrac_state.roll.u_ad",
+    "mrac_state.pitch.u_nom",
+    "mrac_state.pitch.u_ad",
+    "mrac_state.yaw.u_nom",
+    "mrac_state.yaw.u_ad",
+    "mymotor.motor1",
+    "mymotor.motor2",
+    "mymotor.motor3",
+    "mymotor.motor4"
+  ]
+}

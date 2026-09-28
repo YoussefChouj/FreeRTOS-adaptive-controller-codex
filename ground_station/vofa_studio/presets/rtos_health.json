@@ -1,0 +1,52 @@
+{
+  "name": "rtos_health",
+  "notes": "Ground check: task rates, loop timing, heap, link counters, calibration, battery.",
+  "slots": [
+    {
+      "rate": 10.0,
+      "vars": [
+        "system_monitor.stabilizerTask_fps",
+        "system_monitor.stabilizerTask_cnt",
+        "system_monitor.System_cnt",
+        "g_heap_free",
+        "g_heap_min_free",
+        "g_loop_period_cyc_last",
+        "g_loop_period_cyc_max",
+        "g_loop_period_cyc_min",
+        "g_loop_overrun_count",
+        "UA3RxFrameCnt",
+        "UA3TxFrames",
+        "xTickCount",
+        "g_reset_csr",
+        "flight_phase",
+        "DroneStatus.ARM_Status",
+        "DroneStatus.FlyMode",
+        "real_voltage",
+        "imu_data.rol",
+        "imu_data.pit",
+        "imu_data.yaw"
+      ]
+    },
+    {
+      "rate": 2.0,
+      "vars": [
+        "g_cal_health",
+        "s_cal_hot.b_g[0]",
+        "s_cal_hot.b_g[1]",
+        "s_cal_hot.b_g[2]",
+        "s_cal_trim.b_a[0]",
+        "s_cal_trim.b_a[1]",
+        "s_cal_trim.b_a[2]",
+        "g_task_snapshot_count",
+        "g_task_snapshot_total_time"
+      ]
+    }
+  ],
+  "vofa": [
+    "system_monitor.stabilizerTask_fps",
+    "g_loop_period_cyc_last",
+    "g_loop_period_cyc_max",
+    "g_heap_free",
+    "real_voltage"
+  ]
+}
