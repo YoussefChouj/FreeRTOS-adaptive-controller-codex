@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VOFA Studio</title>
+<style>
+:root{--bg:#f6f7f9;--panel:#fff;--fg:#1c2330;--mut:#6b7585;--line:#dde1e7;--acc:#2563eb;
+--ok:#16a34a;--warn:#d97706;--bad:#dc2626;--bar:#e8ebf0;--chip:#eef2ff}
+@media (prefers-color-scheme:dark){:root{--bg:#12151b;--panel:#1b2029;--fg:#e4e8ef;--mut:#8b95a5;
+--line:#2c3340;--acc:#60a5fa;--ok:#4ade80;--warn:#fbbf24;--bad:#f87171;--bar:#2a303b;--chip:#243049}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,Segoe UI,sans-serif}
+header{display:flex;gap:12px;align-items:center;padding:10px 16px;background:var(--panel);
+border-bottom:1px solid var(--line);flex-wrap:wrap}
+header h1{font-size:16px;margin:0 8px 0 0}
+main{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:14px;padding:14px 16px}
+@media (max-width:1000px){main{grid-template-columns:1fr}}
+section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:14px}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);margin:0 0 10px}
+input,select,textarea,button{font:inherit;color:inherit}
+input,select,textarea{background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:4px 6px}
+button{background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:4px 10px;cursor:pointer}
+button:hover{border-color:var(--acc)}
+button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
+button.danger{border-color:var(--bad);color:var(--bad)}
+button:disabled{opacity:.45;cursor:not-allowed}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.mut{color:var(--mut)}.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+.slot{border:1px solid var(--line);border-radius:6px;padding:8px;margin-bottom:10px}
+.slot-head{display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap}
+.var{display:grid;grid-template-columns:minmax(0,1fr) 110px 60px 26px;gap:6px;align-items:center;margin:3px 0}
+.var input{width:100%;font-family:ui-monospace,Consolas,monospace;font-size:13px}
+.var .info{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar{height:8px;background:var(--bar);border-radius:4px;overflow:hidden;flex:1;min-width:80px}
+.bar>div{height:100%;background:var(--ok)}
+.chips{display:flex;flex-wrap:wrap;gap:4px;min-height:28px}
+.chip{background:var(--chip);border-radius:12px;padding:2px 4px 2px 10px;font:12px ui-monospace,Consolas,monospace;
+display:flex;align-items:center;gap:2px}
+.chip button{border:0;background:none;padding:0 4px;font-size:12px}
+.cols{max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:5px;padding:4px;
+font:12px ui-monospace,Consolas,monospace;columns:2}
+.cols label{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+table{border-collapse:collapse;width:100%;font-size:13px}
+td,th{padding:3px 6px;border-bottom:1px solid var(--line);text-align:right}
+td:first-child,th:first-child{text-align:left}
+.vals{max-height:320px;overflow:auto;font:12px ui-monospace,Consolas,monospace}
+.big{font-size:22px;font-weight:600}
+.health{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center}
+.health div{background:var(--bg);border-radius:6px;padding:6px}
+#state{padding:2px 8px;border-radius:10px;background:var(--bar)}
+#toast{position:fixed;bottom:14px;right:14px;max-width:420px;padding:8px 12px;border-radius:6px;
+background:var(--panel);border:1px solid var(--line);display:none;white-space:pre-wrap}
+</style>
+</head>
+<body>
+<header>
+  <h1>VOFA Studio</h1>
+  <select id="presetSel" title="Preset"></select>
+  <button id="btnSave">Save</button>
+  <button id="btnSaveAs">Save as…</button>
+  <button id="btnDelete" class="danger">Delete</button>
+  <input id="presetNotes" placeholder="preset notes" style="flex:1;min-width:160px">
+</header>
+<main>
+<div>
+  <section>
+    <h2>Budget</h2>
+    <div class="row"><b>Total</b><div class="bar"><div id="totBar"></div></div>
+      <span id="totTxt" class="mut"></span></div>
+    <div id="planErr" class="bad" style="margin-top:6px"></div>
+  </section>
+  <section>
+    <h2>Slots</h2>
+    <div id="slots"></div>
+    <button id="btnAddSlot">+ slot</button>
+    <datalist id="symList"></datalist>
+  </section>
+  <section>
+    <h2>VOFA+ channels</h2>
+    <div class="mut" style="margin-bottom:4px">Order sent = channel order in VOFA+ (I0, I1, …).
+      Emitted at the fastest selected slot; slower values hold.</div>
+    <div class="chips" id="vofaChips"></div>
+    <div class="row" style="margin:6px 0">
+      <input id="colFilter" placeholder="filter columns" style="flex:1">
+      <button id="btnVofaSlot0">= slot 0</button>
+      <button id="btnVofaClear">clear</button>
+    </div>
+    <div class="cols" id="colList"></div>
+    <div class="row" style="margin-top:8px">
+      <button id="btnVofaApply">Apply names + restart VOFA+</button>
+      <span id="vofaInfo" class="mut"></span>
+    </div>
+  </section>
+</div>
+<div>
+  <section>
+    <h2>Session</h2>
+    <div class="row">
+      <input id="sessName" style="width:140px" title="session name">
+      <select id="mode">
+        <option value="timed">Timed</option>
+        <option value="rolling">Rolling window</option>
+        <option value="unlimited">Unlimited</option>
+      </select>
+      <label id="lblSecs">stop after <input id="secs" type="number" min="1" value="60" style="width:70px"> s</label>
+      <label id="lblWin" hidden>keep last <input id="win" type="number" min="10" value="120" style="width:70px"> s</label>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <input id="sessNotes" placeholder="flight notes (saved in meta.json)" style="flex:1">
+      <label class="mut">VOFA <input id="vofaAddr" value="127.0.0.1:1347" style="width:130px"></label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button id="btnStart" class="pri">Start</button>
+      <button id="btnStop" class="danger" disabled>Stop</button>
+      <span id="state">idle</span>
+      <span id="clock" class="big"></span>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <input id="markNote" placeholder="event note" style="flex:1">
+      <button id="btnMark" disabled>Mark (M)</button>
+    </div>
+    <div id="sessErr" class="bad" style="margin-top:6px"></div>
+  </section>
+  <section>
+    <h2>Health</h2>
+    <div class="health">
+      <div><div class="mut">ARM</div><div id="hArm" class="big">–</div></div>
+      <div><div class="mut">Voltage</div><div id="hVolt" class="big">–</div></div>
+      <div><div class="mut">Phase</div><div id="hPhase" class="big">–</div></div>
+    </div>
+  </section>
+  <section>
+    <h2>Link</h2>
+    <table><thead><tr><th>slot</th><th>rows</th><th>Hz</th><th>target</th><th>loss %</th><th>drop</th><th>crc</th><th>file</th></tr></thead>
+    <tbody id="linkBody"></tbody></table>
+  </section>
+  <section>
+    <h2>Latest values</h2>
+    <input id="valFilter" placeholder="filter" style="width:100%;margin-bottom:6px">
+    <div class="vals"><table><tbody id="valBody"></tbody></table></div>
+  </section>
+</div>
+</main>
+<div id="toast"></div>
+<script>
+const $ = id => document.getElementById(id);
+let preset = {name: "", notes: "", slots: [], vofa: []};
+let plan = null, running = false, lastStatus = null;
+
+async function api(path, opts = {}) {
+  if (opts.body && typeof opts.body !== "string") {
+    opts.body = JSON.stringify(opts.body);
+    opts.headers = {"Content-Type": "application/json"};
+  }
+  const r = await fetch(path, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+function toast(msg, bad) {
+  const t = $("toast"); t.textContent = msg; t.style.display = "block";
+  t.style.borderColor = bad ? "var(--bad)" : "var(--line)";
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = "none", bad ? 7000 : 3000);
+}
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmtB = n => n >= 1e6 ? (n/1e6).toFixed(1)+" MB" : n >= 1e3 ? (n/1e3).toFixed(0)+" kB" : n+" B";
+const realRate = r => { const d = Math.max(1, Math.min(255, Math.round(100 / r))); return 100 / d; };
+
+// ------------------------------------------------------------ presets
+async function loadPresetList(select) {
+  const names = await api("/api/presets");
+  $("presetSel").innerHTML = names.map(n => `<option>${esc(n)}</option>`).join("");
+  if (select) $("presetSel").value = select;
+}
+async function loadPreset(name) {
+  preset = await api("/api/presets/" + encodeURIComponent(name));
+  preset.vofa = preset.vofa || [];
+  $("presetNotes").value = preset.notes || "";
+  renderSlots(); schedulePlan();
+}
+async function savePreset(name) {
+  preset.name = name; preset.notes = $("presetNotes").value;
+  preset = await api("/api/presets", {method: "POST", body: preset});
+  await loadPresetList(name); toast("saved " + name);
+}
+
+// -------------------------------------------------------------- slots
+function renderSlots() {
+  const box = $("slots"); box.innerHTML = "";
+  preset.slots.forEach((s, si) => {
+    const pl = plan && plan.slots[si];
+    const div = document.createElement("div"); div.className = "slot";
+    const pct = pl && plan.budget_bps ? 100 * pl.bps / plan.budget_bps : 0;
+    div.innerHTML = `<div class="slot-head">
+      <b>Slot ${si}</b>
+      <label><input type="number" min="0.4" max="100" step="any" value="${s.rate}" style="width:64px" data-rate> Hz</label>
+      <span class="mut">→ ${realRate(s.rate || 1).toFixed(1)} Hz real</span>
+      <div class="bar"><div style="width:${Math.min(100,pct)}%"></div></div>
+      <span class="mut">${pl ? pl.bps + " B/s · " + pl.frame_bytes + " B/frame" : ""}</span>
+      <button data-delslot title="remove slot">✕</button></div>
+      <div data-vars></div>
+      <div class="row"><button data-addvar>+ variable</button>
+      <span class="bad">${pl ? pl.errors.filter(e => !e.startsWith("unresolved")).map(esc).join("; ") : ""}</span></div>`;
+    const vbox = div.querySelector("[data-vars]");
+    s.vars.forEach((v, vi) => {
+      const e = pl && pl.vars[vi];
+      const info = !e ? "" : e.ok
+        ? `<span class="mut">${e.count > 1 ? e.count + "×" : ""}${e.size} B = ${e.bytes} B</span>`
+        : `<span class="bad" title="${esc(e.error)}">${esc(e.error)}</span>`;
+      const row = document.createElement("div"); row.className = "var";
+      row.innerHTML = `<input list="symList" value="${esc(v)}" spellcheck="false">
+        <div class="info">${info}</div>
+        <select title="move to slot">${preset.slots.map((_, k) =>
+          `<option value="${k}" ${k === si ? "selected" : ""}>→${k}</option>`).join("")}</select>
+        <button title="remove">✕</button>`;
+      const inp = row.querySelector("input");
+      inp.oninput = () => { suggest(inp.value); };
+      inp.onchange = () => { s.vars[vi] = inp.value.trim(); schedulePlan(); };
+      row.querySelector("select").onchange = ev => {
+        const k = +ev.target.value; s.vars.splice(vi, 1); preset.slots[k].vars.push(v);
+        renderSlots(); schedulePlan();
+      };
+      row.querySelector("button").onclick = () => { s.vars.splice(vi, 1); renderSlots(); schedulePlan(); };
+      vbox.appendChild(row);
+    });
+    div.querySelector("[data-rate]").onchange = ev => { s.rate = +ev.target.value; renderSlots(); schedulePlan(); };
+    div.querySelector("[data-addvar]").onclick = () => {
+      s.vars.push(""); renderSlots();
+      const ins = box.children[si].querySelectorAll(".var input"); ins[ins.length - 1].focus();
+    };
+    div.querySelector("[data-delslot]").onclick = () => {
+      if (s.vars.length && !confirm(`Remove slot ${si} and its ${s.vars.length} variables?`)) return;
+      preset.slots.splice(si, 1); renderSlots(); schedulePlan();
+    };
+    box.appendChild(div);
+  });
+  $("btnAddSlot").disabled = preset.slots.length >= 4;
+}
+let sugT;
+function suggest(q) {
+  clearTimeout(sugT);
+  sugT = setTimeout(async () => {
+    const hits = await api("/api/symbols?q=" + encodeURIComponent(q)).catch(() => []);
+    $("symList").innerHTML = hits.map(h => `<option value="${esc(h)}">`).join("");
+  }, 150);
+}
+
+// ------------------------------------------------------------- budget
+let planT;
+function schedulePlan() { clearTimeout(planT); planT = setTimeout(runPlan, 250); }
+async function runPlan() {
+  try { plan = await api("/api/budget", {method: "POST", body: {slots: preset.slots}}); }
+  catch (e) { toast("budget: " + e.message, true); return; }
+  const pct = 100 * plan.total_bps / plan.budget_bps;
+  $("totBar").style.width = Math.min(100, pct) + "%";
+  $("totBar").style.background = pct > 100 ? "var(--bad)" : pct > 80 ? "var(--warn)" : "var(--ok)";
+  $("totTxt").textContent = `${plan.total_bps} / ${plan.budget_bps} B/s · ${plan.remaining_bps} B/s left (${pct.toFixed(1)}%)`;
+  const errs = plan.errors.concat(plan.slots.flatMap(s => s.errors.map(e => `slot ${s.slot}: ${e}`)));
+  $("planErr").textContent = errs.join(" · ");
+  renderSlots(); renderColumns(); updateButtons();
+}
+
+// --------------------------------------------------------------- vofa
+function allColumns() {
+  if (!plan) return [];
+  return plan.slots.flatMap(s => s.vars.filter(v => v.ok).flatMap(v => v.columns.map(c => ({c, slot: s.slot}))));
+}
+function renderColumns() {
+  const cols = allColumns(), f = $("colFilter").value.toLowerCase();
+  const known = new Set(cols.map(x => x.c));
+  $("colList").innerHTML = cols.filter(x => x.c.toLowerCase().includes(f)).map(x =>
+    `<label><input type="checkbox" data-c="${esc(x.c)}" ${preset.vofa.includes(x.c) ? "checked" : ""}> <span class="mut">${x.slot}</span> ${esc(x.c)}</label>`).join("");
+  $("colList").querySelectorAll("input").forEach(cb => cb.onchange = () => {
+    const c = cb.dataset.c;
+    if (cb.checked) { if (!preset.vofa.includes(c)) preset.vofa.push(c); }
+    else preset.vofa = preset.vofa.filter(x => x !== c);
+    renderChips();
+  });
+  renderChips(known);
+}
+function renderChips(known) {
+  known = known || new Set(allColumns().map(x => x.c));
+  $("vofaChips").innerHTML = preset.vofa.map((c, i) =>
+    `<span class="chip" title="I${i}"><span class="mut">${i}</span>&nbsp;<span class="${known.has(c) ? "" : "bad"}">${esc(c)}</span>
+     <button data-l="${i}">◀</button><button data-r="${i}">▶</button><button data-x="${i}">✕</button></span>`).join("")
+    || `<span class="mut">no channels selected</span>`;
+  $("vofaChips").querySelectorAll("button").forEach(b => b.onclick = () => {
+    const v = preset.vofa;
+    if (b.dataset.x !== undefined) v.splice(+b.dataset.x, 1);
+    if (b.dataset.l !== undefined && +b.dataset.l > 0) { const i = +b.dataset.l; [v[i-1], v[i]] = [v[i], v[i-1]]; }
+    if (b.dataset.r !== undefined && +b.dataset.r < v.length - 1) { const i = +b.dataset.r; [v[i+1], v[i]] = [v[i], v[i+1]]; }
+    renderColumns();
+  });
+  $("vofaInfo").textContent = preset.vofa.length ? `${preset.vofa.length} channels` : "";
+}
+
+// ------------------------------------------------------------ session
+function updateButtons() {
+  $("btnStart").disabled = running || !plan || !plan.ok;
+  $("btnStart").title = plan && !plan.ok ? "fix the plan first" : "";
+  $("btnStop").disabled = !running;
+  $("btnMark").disabled = !(lastStatus && lastStatus.state === "streaming");
+  $("btnVofaApply").disabled = running || !preset.vofa.length;
+  $("btnSave").disabled = $("btnDelete").disabled = !$("presetSel").value;
+}
+async function nextName() { $("sessName").value = (await api("/api/next_name")).name; }
+async function start() {
+  $("sessErr").textContent = "";
+  try {
+    await api("/api/session/start", {method: "POST", body: {
+      preset, name: $("sessName").value.trim(), mode: $("mode").value,
+      seconds: +$("secs").value, window_s: +$("win").value,
+      vofa: preset.vofa, vofa_addr: $("vofaAddr").value.trim(), notes: $("sessNotes").value}});
+    running = true; updateButtons(); poll();
+  } catch (e) { $("sessErr").textContent = e.message; }
+}
+async function stop() {
+  $("btnStop").disabled = true;
+  try { showStatus(await api("/api/session/stop", {method: "POST"})); } catch (e) { toast(e.message, true); }
+}
+async function mark() {
+  if ($("btnMark").disabled) return;
+  try {
+    const r = await api("/api/session/mark", {method: "POST", body: {note: $("markNote").value}});
+    toast(`marked @ ${r.t_host_s.toFixed(1)} s ${r.note}`); $("markNote").value = "";
+  } catch (e) { toast(e.message, true); }
+}
+let pollH;
+async function poll() {
+  clearTimeout(pollH);
+  try { showStatus(await api("/api/session/status")); } catch (e) {}
+  if (running) pollH = setTimeout(poll, 500);
+}
+function showStatus(st) {
+  const was = running;
+  lastStatus = st;
+  running = st.state === "connecting" || st.state === "streaming";
+  $("state").textContent = st.state + (st.name ? " · " + st.name : "");
+  $("state").style.color = st.state === "error" ? "var(--bad)" : st.state === "streaming" ? "var(--ok)" : "";
+  $("sessErr").textContent = st.error || "";
+  if (st.state !== "idle") {
+    let c = `${(st.elapsed || 0).toFixed(0)} s`;
+    if (st.remaining != null) c += ` · ${st.remaining.toFixed(0)} s left`;
+    if (st.window_s) c += ` · window ${st.window_s} s`;
+    $("clock").textContent = c;
+  }
+  const h = st.health || {};
+  $("hArm").textContent = h["DroneStatus.ARM_Status"] ?? "–";
+  $("hArm").className = "big " + (h["DroneStatus.ARM_Status"] ? "warn" : "");
+  $("hVolt").textContent = h.real_voltage != null ? (+h.real_voltage).toFixed(2) + " V" : "–";
+  $("hPhase").textContent = h.flight_phase ?? "–";
+  $("linkBody").innerHTML = (st.slots || []).map(s => {
+    const tgt = preset.slots[s.slot] ? realRate(preset.slots[s.slot].rate).toFixed(1) : "";
+    const lc = s.loss_pct > 5 ? "bad" : s.loss_pct > 1 ? "warn" : "";
+    return `<tr><td>${s.slot}</td><td>${s.rows}</td><td>${s.hz}</td><td class="mut">${tgt}</td>
+      <td class="${lc}">${s.loss_pct}</td><td>${s.dropped}</td><td>${s.malformed}</td><td>${fmtB(s.bytes)}</td></tr>`;
+  }).join("");
+  renderValues();
+  updateButtons();
+  if (was && !running) { toast(`session ${st.state}: ${st.name}`); nextName(); }
+}
+function renderValues() {
+  if (!lastStatus || !lastStatus.slots) return;
+  const f = $("valFilter").value.toLowerCase();
+  const rows = [];
+  lastStatus.slots.forEach(s => Object.entries(s.values).forEach(([k, v]) => {
+    if (!f || k.toLowerCase().includes(f))
+      rows.push(`<tr><td>${esc(k)}</td><td>${typeof v === "number" ? +v.toPrecision(6) : esc(v)}</td></tr>`);
+  }));
+  $("valBody").innerHTML = rows.join("");
+}
+
+// -------------------------------------------------------------- wiring
+$("presetSel").onchange = () => loadPreset($("presetSel").value);
+$("btnSave").onclick = () => savePreset($("presetSel").value).catch(e => toast(e.message, true));
+$("btnSaveAs").onclick = () => {
+  const n = prompt("New preset name (letters, digits, _ -):", preset.name + "_copy");
+  if (n) savePreset(n.trim()).catch(e => toast(e.message, true));
+};
+$("btnDelete").onclick = async () => {
+  const n = $("presetSel").value;
+  if (!n || !confirm(`Delete preset ${n}?`)) return;
+  await api("/api/presets/" + encodeURIComponent(n), {method: "DELETE"}).catch(e => toast(e.message, true));
+  await loadPresetList(); if ($("presetSel").value) loadPreset($("presetSel").value);
+};
+$("btnAddSlot").onclick = () => { preset.slots.push({rate: 10, vars: []}); renderSlots(); schedulePlan(); };
+$("colFilter").oninput = renderColumns;
+$("valFilter").oninput = renderValues;
+$("btnVofaSlot0").onclick = () => {
+  preset.vofa = plan ? plan.slots[0].vars.filter(v => v.ok).flatMap(v => v.columns) : [];
+  renderColumns();
+};
+$("btnVofaClear").onclick = () => { preset.vofa = []; renderColumns(); };
+$("btnVofaApply").onclick = async () => {
+  if (!confirm(`Close VOFA+, rename ${preset.vofa.length} channels and restart it?`)) return;
+  $("btnVofaApply").disabled = true; $("vofaInfo").textContent = "closing VOFA+…";
+  try {
+    const r = await api("/api/vofa/apply", {method: "POST", body: {names: preset.vofa}});
+    $("vofaInfo").textContent = `VOFA+ ${r.closed}, renamed ${r.names.length}, relaunched`;
+  } catch (e) { $("vofaInfo").textContent = ""; toast("VOFA+: " + e.message, true); }
+  updateButtons();
+};
+$("mode").onchange = () => {
+  $("lblSecs").hidden = $("mode").value !== "timed";
+  $("lblWin").hidden = $("mode").value !== "rolling";
+};
+$("btnStart").onclick = start;
+$("btnStop").onclick = stop;
+$("btnMark").onclick = mark;
+document.addEventListener("keydown", ev => {
+  if (ev.key.toLowerCase() === "m" && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName)) mark();
+});
+
+(async () => {
+  await loadPresetList("flight_default");
+  if ($("presetSel").value) await loadPreset($("presetSel").value);
+  await nextName();
+  poll();
+})();
+</script>
+</body>
+</html>

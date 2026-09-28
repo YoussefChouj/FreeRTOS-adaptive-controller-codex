@@ -95,7 +95,8 @@ def plan_budget(resolver, slots):
             try:
                 rng = resolve_ranges(resolver, [spec])[0]
                 ranges.append(rng)
-                cols = [rng.name] if rng.count == 1 else                     ["%s[%d]" % (rng.name, i) for i in range(rng.count)]
+                cols = ([rng.name] if rng.count == 1 else
+                        ["%s[%d]" % (rng.name, i) for i in range(rng.count)])
                 entries.append({"spec": spec, "ok": True, "size": rng.size,
                                 "count": rng.count, "bytes": rng.nbytes,
                                 "columns": cols})
@@ -176,6 +177,8 @@ class RollingWriter:
         self._fh = self._w = None
         self._seg_start = None
         self._seq = 0
+        self._t_col = header.index("t_host_s")
+        self._last_t = 0.0
 
     def _open(self, t_host):
         if self._fh is not None:
@@ -196,13 +199,13 @@ class RollingWriter:
         if self._fh is None or t_host - self._seg_start >= self.segment_s:
             self._open(t_host)
         self._w.writerow(row)
+        self._last_t = t_host
 
     def close(self):
         if self._fh is not None:
             self._fh.close()
             self._fh = None
-        end = self._segs[-1][0] + self.segment_s if self._segs else 0.0
-        cutoff = end - self.window_s
+        cutoff = self._last_t - self.window_s
         with self.path.open("w", newline="", encoding="utf-8") as out:
             w = csv.writer(out)
             w.writerow(self.header)
@@ -211,7 +214,7 @@ class RollingWriter:
                     r = csv.reader(fh)
                     next(r, None)
                     for row in r:
-                        if float(row[1]) >= cutoff:
+                        if float(row[self._t_col]) >= cutoff:
                             w.writerow(row)
                 seg.unlink(missing_ok=True)
         self._segs = []
@@ -269,6 +272,7 @@ class Session:
         self.t_src_ms, self.t_host = 0, 0.0
         self._writers, self._decoder = {}, None
         self._vofa_map, self._vofa_sock, self._vofa_slot = [], None, None
+        self._vofa_names = []
         self._rate_snap = (time.monotonic(), {})
         self._rates = {}
         self._events_lock = threading.Lock()
@@ -337,7 +341,8 @@ class Session:
         for slot, cols in self.columns.items():
             for i, c in enumerate(cols):
                 where.setdefault(c, (slot, i))
-        self._vofa_map = [where[c] for c in self.vofa_channels if c in where]
+        self._vofa_names = [c for c in self.vofa_channels if c in where]
+        self._vofa_map = [where[c] for c in self._vofa_names]
         if not self._vofa_map or not self.vofa_addr:
             return
         # Emit on the fastest slot that feeds a channel; others sample-and-hold.
@@ -421,8 +426,7 @@ class Session:
             "remaining": None if remaining is None else round(remaining, 1),
             "window_s": self.window_s if self.mode == "rolling" else None,
             "slots": slots,
-            "vofa": [self.vofa_channels[i] for i in range(len(self._vofa_map))]
-            if self._vofa_map else [],
+            "vofa": list(self._vofa_names) if self._vofa_sock else [],
             "health": {k: flat.get(k) for k in STATUS_VARS},
         }
 
