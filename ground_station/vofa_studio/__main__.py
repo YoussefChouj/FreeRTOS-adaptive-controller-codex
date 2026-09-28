@@ -171,7 +171,8 @@ async def vofa_apply(request):
 
 
 async def index(request):
-    return web.FileResponse(STATIC / "index.html")
+    return web.FileResponse(STATIC / "index.html",
+                            headers={"Cache-Control": "no-store"})
 
 
 def make_app():

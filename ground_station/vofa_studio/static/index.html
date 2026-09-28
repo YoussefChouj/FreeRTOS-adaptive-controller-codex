@@ -51,6 +51,9 @@ td:first-child,th:first-child{text-align:left}
 #state{padding:2px 8px;border-radius:10px;background:var(--bar)}
 #toast{position:fixed;bottom:14px;right:14px;max-width:420px;padding:8px 12px;border-radius:6px;
 background:var(--panel);border:1px solid var(--line);display:none;white-space:pre-wrap}
+#dlg{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center}
+#dlg>div{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;min-width:300px}
+#dlg input{width:100%;margin:8px 0}
 </style>
 </head>
 <body>
@@ -143,6 +146,8 @@ background:var(--panel);border:1px solid var(--line);display:none;white-space:pr
 </div>
 </main>
 <div id="toast"></div>
+<div id="dlg"><div><div id="dlgMsg"></div><input id="dlgIn">
+  <div class="row"><button id="dlgOk">OK</button><button id="dlgNo">Cancel</button></div></div></div>
 <script>
 const $ = id => document.getElementById(id);
 let preset = {name: "", notes: "", slots: [], vofa: []};
@@ -157,6 +162,22 @@ async function api(path, opts = {}) {
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || r.statusText);
   return j;
+}
+// In-page confirm/prompt: embedded browser panes block window.confirm/prompt.
+// Resolves true/false (confirm) or the entered string/null (when value is given).
+function ask(msg, value) {
+  return new Promise(done => {
+    const input = value !== undefined;
+    $("dlgMsg").textContent = msg; $("dlgIn").hidden = !input; $("dlgIn").value = input ? value : "";
+    $("dlg").style.display = "flex"; (input ? $("dlgIn") : $("dlgOk")).focus();
+    const end = ok => {
+      $("dlg").style.display = "none"; $("dlgIn").onkeydown = null;
+      done(input ? (ok ? $("dlgIn").value : null) : ok);
+    };
+    $("dlgOk").onclick = () => end(true);
+    $("dlgNo").onclick = () => end(false);
+    $("dlgIn").onkeydown = ev => { if (ev.key === "Enter") end(true); if (ev.key === "Escape") end(false); };
+  });
 }
 function toast(msg, bad) {
   const t = $("toast"); t.textContent = msg; t.style.display = "block";
@@ -229,8 +250,8 @@ function renderSlots() {
       s.vars.push(""); renderSlots();
       const ins = box.children[si].querySelectorAll(".var input"); ins[ins.length - 1].focus();
     };
-    div.querySelector("[data-delslot]").onclick = () => {
-      if (s.vars.length && !confirm(`Remove slot ${si} and its ${s.vars.length} variables?`)) return;
+    div.querySelector("[data-delslot]").onclick = async () => {
+      if (s.vars.length && !await ask(`Remove slot ${si} and its ${s.vars.length} variables?`)) return;
       preset.slots.splice(si, 1); renderSlots(); schedulePlan();
     };
     box.appendChild(div);
@@ -374,13 +395,13 @@ function renderValues() {
 // -------------------------------------------------------------- wiring
 $("presetSel").onchange = () => loadPreset($("presetSel").value);
 $("btnSave").onclick = () => savePreset($("presetSel").value).catch(e => toast(e.message, true));
-$("btnSaveAs").onclick = () => {
-  const n = prompt("New preset name (letters, digits, _ -):", preset.name + "_copy");
+$("btnSaveAs").onclick = async () => {
+  const n = await ask("New preset name (letters, digits, _ -):", preset.name + "_copy");
   if (n) savePreset(n.trim()).catch(e => toast(e.message, true));
 };
 $("btnDelete").onclick = async () => {
   const n = $("presetSel").value;
-  if (!n || !confirm(`Delete preset ${n}?`)) return;
+  if (!n || !await ask(`Delete preset ${n}?`)) return;
   await api("/api/presets/" + encodeURIComponent(n), {method: "DELETE"}).catch(e => toast(e.message, true));
   await loadPresetList(); if ($("presetSel").value) loadPreset($("presetSel").value);
 };
@@ -393,7 +414,7 @@ $("btnVofaSlot0").onclick = () => {
 };
 $("btnVofaClear").onclick = () => { preset.vofa = []; renderColumns(); };
 $("btnVofaApply").onclick = async () => {
-  if (!confirm(`Close VOFA+, rename ${preset.vofa.length} channels and restart it?`)) return;
+  if (!await ask(`Close VOFA+, rename ${preset.vofa.length} channels and restart it?`)) return;
   $("btnVofaApply").disabled = true; $("vofaInfo").textContent = "closing VOFA+…";
   try {
     const r = await api("/api/vofa/apply", {method: "POST", body: {names: preset.vofa}});
