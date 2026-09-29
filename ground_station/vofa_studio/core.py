@@ -18,7 +18,8 @@ import time
 from pathlib import Path
 
 from ground_station.livewatch.stream import (
-    BUDGET_PCT, MAX_SLOTS, SEND_TASK_MEASURED_HZ, TRANSPORT_USART3,
+    BUDGET_PCT, MAX_SLOTS, MAX_STREAM_RANGES, SEND_TASK_MEASURED_HZ,
+    TRANSPORT_USART3,
     _validate, stream_bps,
 )
 from ground_station.livewatch.stream_log import (
@@ -112,6 +113,25 @@ def merge_presets(presets):
         for v, d in fastest.items():
             if d == slow:
                 fastest[v] = divs[i]
+    slots = [{"rate": round(SEND_TASK_MEASURED_HZ / d, 3),
+              "vars": [v for v in order if fastest[v] == d]} for d in divs]
+    # One var spec is one firmware range; a slot over the range limit spills
+    # its tail into a new slot at the same rate. With no slot free, the slowest
+    # slot is folded into the next faster one first (oversample, never under).
+    # Still over: plan_budget flags it.
+    while True:
+        over = [s for s in slots if len(s["vars"]) > MAX_STREAM_RANGES]
+        if not over:
+            break
+        if len(slots) >= MAX_SLOTS:
+            if len(slots[-1]["vars"]) + len(slots[-2]["vars"]) > MAX_STREAM_RANGES:
+                break
+            slots[-2]["vars"] += slots.pop()["vars"]
+            continue
+        i = slots.index(over[0])
+        extra = slots[i]["vars"][MAX_STREAM_RANGES:]
+        del slots[i]["vars"][MAX_STREAM_RANGES:]
+        slots.insert(i + 1, {"rate": slots[i]["rate"], "vars": extra})
     vofa = []
     for p in presets:
         vofa += [c for c in p.get("vofa", []) if c not in vofa]
@@ -120,8 +140,7 @@ def merge_presets(presets):
         "name": "_".join(names),
         "notes": "\n".join("%s: %s" % (p.get("name", ""), p.get("notes", ""))
                            for p in presets),
-        "slots": [{"rate": round(SEND_TASK_MEASURED_HZ / d, 3),
-                   "vars": [v for v in order if fastest[v] == d]} for d in divs],
+        "slots": slots,
         "vofa": vofa,
     }
 

@@ -372,7 +372,10 @@ function renderChips(known) {
 // ------------------------------------------------------------ session
 function updateButtons() {
   $("btnStart").disabled = running || !plan || !plan.ok;
-  $("btnStart").title = plan && !plan.ok ? "fix the plan first" : "";
+  const why = plan && !plan.ok ? plan.errors.concat(...plan.slots.map((s, i) =>
+    s.errors.map(e => "slot " + i + ": " + e))) : [];
+  $("btnStart").title = why.length ? "fix the plan first: " + why.join("; ") : "";
+  $("btnStart").textContent = why.length && !running ? "Start (plan error, see budget)" : "Start";
   $("btnStop").disabled = !running;
   $("btnMark").disabled = !(lastStatus && lastStatus.state === "streaming");
   // A combination has no file of its own: only "Save as…" applies.

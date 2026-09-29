@@ -58,6 +58,14 @@ def test_merge_presets():
     assert len(m["slots"]) == core.MAX_SLOTS
     got = {v: s["rate"] for s in m["slots"] for v in s["vars"]}
     assert all(got["v%d" % r] >= r * 0.99 for r in (100, 50, 25, 20, 10, 1))
+    # over the range limit: slowest slot folds up, fast slot spills at same rate
+    lim = core.MAX_STREAM_RANGES
+    fast = ["f%d" % k for k in range(lim + 5)]
+    big = [{"name": "p", "slots": [{"rate": 100, "vars": fast}, {"rate": 25, "vars": ["a"]},
+                                   {"rate": 10, "vars": ["b"]}, {"rate": 5, "vars": ["c"]}]}]
+    m = core.merge_presets(big)
+    assert [(s["rate"], len(s["vars"])) for s in m["slots"]] == \
+        [(100.0, lim), (100.0, 5), (25.0, 1), (10.0, 2)]
 
 
 @pytest.mark.skipif(not core.ELF.exists(), reason="no ELF")
