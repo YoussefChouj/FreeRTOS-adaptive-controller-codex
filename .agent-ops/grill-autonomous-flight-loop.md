@@ -246,4 +246,38 @@ controllers (currently PID + adaptive layer).
   J not improved over N flights (converged: report), sim-vs-flight J gap growing, A data-quality
   critical twice. Plus a PROTECTED addition the operator must write: firmware crash detect (tilt over a
   limit for a short time -> motors off), since a bad controller can flip faster than the GS loop.
-- then: shared-understanding summary.
+- Q12 DECIDED (user, 2026-09-30): accepted as proposed: three levels, and firmware crash detect added to
+  the protected set (operator-written).
+
+## Shared-understanding summary (2026-09-30, awaiting operator confirmation; nothing built)
+All numbers below are PROPOSED or COMPUTED, none measured; they are calibrated on the first flights.
+1. Session: operator-gated battery sessions. Operator swaps pack, names the pack ID, places the drone at pad
+   centre with the nose to the marked end wall, powers on (so the OF frame is aligned with the room), keeps
+   the RC transmitter on and in reach (ch10 kill), enables allow_agent_arm, and gives a per-battery "go".
+   The agent then runs the campaign plan queue unattended while the operator stays in the room.
+2. Flight loop: next-flight gate (predicted post-flight SoC >= 30% from resting V learned per pack;
+   cool-down >= last flight; blocking analysis done; plan validated) -> write gains / flash firmware while
+   landed + disarmed, read back, log gain set + firmware hash -> start stream log + phone recording -> arm,
+   take off -> hover or maneuver (<= 120 s) -> return to estimated origin at hover height, settle -> NEW GS
+   land command (FLIGHT_PHASE_LANDING, touchdown auto-disarm) -> stop logs -> A blocking part -> flight
+   score J -> tuner picks the next step; A background part (camera truth, long reports) runs async.
+   Analysis wait cap (value TBD) -> pause + notify.
+3. Firmware safety net (protected, never touched by the agent): heartbeat-loss auto-land; low-V backstop
+   auto-land below the agent's in-air trigger; rectangular fence +-1.1 x +-1.6 m and ceiling 1.5 m;
+   crash detect (operator-written); existing ch10 kill, stick takeover, SBUS-loss stop, beep < 15.0 V.
+4. Agent aborts (Q12): in-flight abort -> 0x0D + land at origin; flight failure -> auto-revert; campaign
+   stop -> operator. Path envelope +-0.8 x +-1.3 m checked statically before arming.
+5. Plans: one YAML per campaign; experiment = maneuver + controller settings + capture preset + duration
+   + repeats. Maneuvers: the 4 existing firmware presets, 0x14 SysID, and ONE uploaded-trajectory executor
+   (CCM buffer of x/y/z/yaw/t, time interpolation) fed by the GS pipeline shape -> tilt -> fixed arc-length
+   resample -> timing profile -> validator -> chunked upload. Covers the inclination parameter, the richer
+   preset set and hand-drawn paths.
+6. Autonomy: inside an open campaign the agent has full freedom over gains and non-protected flight code,
+   each code change passing the nine-step Q10c gate (incl. SIL of the real C file, hover-first, auto-revert).
+7. Interface to A: B computes the sim bench J exactly from A's metrics; one descriptor YAML per controller;
+   A's recommendations are evidence. Missing metrics are requested from A's session.
+8. Camera: phone rigidly clamped ~2 m high in a corner, ADB recorder only, offline rotor-disc tracking
+   (fallback body outline), feeds A only, never the safety loop.
+Build-time items needing operator action: tier-0 permission for the safety-net firmware pieces (built
+outside any campaign), crash detect (operator-written), PROTECTED markers, agent.py tier-0 rule exception
+for open campaigns, platform-tools (adb) install, bench check imu_data.yaw ~0 after boot.
