@@ -13,7 +13,7 @@ CtrlerTypeDef Ctrler={
 	//yaw KP   3   -> 4
 	
 
-	{ 0,  0, 5   , 0.01 ,10, 0,0, 0, 0, 0,   0,  0, 300,  300,  20,  100,  1000,   2},//gyrox
+	{ 0,  0, 5   , 0.01 , 8, 0,0, 0, 0, 0,   0,  0, 300,  300,  20,  100,  1000,   2},//gyrox  Kd 10->8: flight15 roll rate err rms 10.8 vs pitch 5.4 dps, U std 105 vs 69 - test if D amplifies noise (2026-09-29)
 	{ 0,  0, 5   , 0.01 ,10, 0,0, 0, 0, 0,   0,  0, 300,  300,  20,  100,  1000,   2},//gyroy
 	{ 0,  0, 4.0, 0.005 ,2.0, 0,0, 0, 0, 0,  0,  0, 650,  650,  500,  10,   100000,     1000},//gyroz  EMin 20->1000: legacy integral-separation gate |E|<EMin blocked all integration at E~110, flight7 (2026-09-27); Ki 0.001->0.005, UiMax 60->500, SumEMax 2000->100000: old Ui ceiling was Ki*SumEMax=2, so flight6 held a P-only -50 deg/s drift with U~450 (2026-09-27); Umax/Upmax 350->650 (flight5: U pinned at 350 whole flight, 2026-09-27); Kp 8->4, Kd 0.02->2.0: add rate-loop damping to fight overshoot from saturation (2026-09-13); Umax 350 (kept from 2026-07-19); EMin 20 + SumEMax 2000 kept as-is
 	
@@ -22,8 +22,8 @@ CtrlerTypeDef Ctrler={
 	
 		/*des FB  Kp   Ki  Kd   Up Ui Ud E preE SumE U Umax Upmax Uimax Udmax SumEmax Emin***/	  //�����Ĳ���
 	//hui fei zhe   1.8outKP    1.8 0.45inKP KI
-	{ 0,  0, 0.8    , 0.01 ,4.0, 0,0, 0, 0, 0,   0,  0, 300, 300,  20,   50,     200,     30},//locx
-	{ 0,  0, 0.8    , 0.01 ,4.0, 0,0, 0, 0, 0,   0,  0, 300, 300,  20,   50,     200,     30},//locy
+	{ 0,  0, 0.6    , 0.01 ,4.0, 0,0, 0, 0, 0,   0,  0, 300, 300,  20,   50,     200,     30},//locx  Kp 0.8->0.6: flight15 0.5-0.8 Hz pendulum sway from pos-hold, drift +-13 cm (2026-09-29)
+	{ 0,  0, 0.6    , 0.01 ,4.0, 0,0, 0, 0, 0,   0,  0, 300, 300,  20,   50,     200,     30},//locy  Kp 0.8->0.6: same as locx (2026-09-29)
 	{ 0,  0, 3.0      , 0 ,6.00, 0,0, 0, 0, 0,   0,  0, 600, 600, 100,   100,     200,   10},//locxs
 	{ 0,  0, 3.0      , 0 ,6.00, 0,0, 0, 0, 0,   0,  0, 600, 600, 100,   100,     200,   10},//locys
 	
