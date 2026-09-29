@@ -186,4 +186,25 @@ controllers (currently PID + adaptive layer).
   per-campaign gain envelope once (per parameter: min, max, max change per flight); agent writes gains
   only while landed + disarmed, only inside the envelope, reads them back, logs the exact set per flight;
   anything outside the envelope -> asks. Requires a narrow exception to the agent.py rule.
-- then: controller-agnostic interface to A, stop/abort criteria.
+- Q10 DECIDED (user, 2026-09-30): once the operator starts a campaign the agent has FULL FREEDOM over
+  gains (no approved range needed) AND may change flight-critical firmware code when a control-theory
+  justification supports it; some parameters stay off limits. This is the explicit tier-0 grant for
+  workflow B campaigns (AGENTS.md: tier 0 needs explicit permission). Read-back of every write and
+  per-flight logging of the exact gain set / firmware hash still apply (from the proposal).
+  Facts (read 2026-09-30): tier-0 files per docs/agent-map/modules.yaml: StabilizerTask.c, mrac.c,
+  mrac_math.c, pid.c, flight_fsm.c, rc_input.c, RemoterTask.c, pwm.c, imu_update.c, gyro_filter.c,
+  bmi088_driver.c, main.c, send_data.c. Sim bench exists: sim/bench (plant.py, calib_replay against
+  logs, controller ports ctrl_*.py, c_ref/ C-reference with test_equiv.py) -> a pre-flight sim gate is
+  feasible.
+- Q10b OPEN: what is off limits. Proposed PROTECTED SET = the safety net, never changed by the agent:
+  RC input + ch10 kill + pilot takeover (rc_input.c, RemoterTask.c, AutoflyTask_PathArbitrate), arm/disarm
+  and landing transitions (flight_fsm.c), heartbeat-loss auto-land, low-V backstop, geofence/ceiling,
+  trajectory-upload bounds check, flash-when-armed block, motor output driver + mixer saturation
+  (pwm.c), IMU driver (bmi088_driver.c), init (main.c); params: safety limits (tilt/rate limits, fence,
+  ceiling, low-V thresholds, heartbeat timeout, mixer saturation). Everything that shapes how well it
+  flies is open: PID/MRAC code and gains, filters, EKF modes, trajectory tracking. Mixed files
+  (StabilizerTask.c, send_data.c) get PROTECTED BEGIN/END markers. Enforced mechanically: a protected
+  list (paths, marked regions, param IDs) checked against every diff and every param write; a hit ->
+  refuse + ask operator.
+- then: gate a code change must pass before it flies (build, sim bench, rollback image), controller-
+  agnostic interface to A, stop/abort criteria.
