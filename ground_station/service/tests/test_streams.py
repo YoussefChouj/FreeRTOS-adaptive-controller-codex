@@ -73,13 +73,17 @@ SMALL = {"slot": 1, "vars": ["imu_data.rol", "imu_data.pit"], "rate": 10,
 
 # --------------------------------------------- the tab dependency table
 def test_tab_needs_verified_against_plugins_and_default_layout():
+    from ground_station.service.schema_registry import SchemaRegistry
+    aliases = SchemaRegistry.builtin_dashboard()
     slots = default_slots()
     for stem, label, needs in TAB_NEEDS:
         src = (PLUGINS / (stem + ".js")).read_text(encoding="utf-8")
         for slot, vars_ in needs.items():
             for v in vars_:
-                assert re.search(r"[\"'`.\s]" + re.escape(v) + r"[\"'`\s\[\],;)}:.]",
-                                 src), "%s does not mention %s" % (stem, v)
+                names = [n for n in (v, aliases.resolve(v)) if n]
+                assert any(re.search(r"[\"'`.\s]" + re.escape(n)
+                                     + r"[\"'`\s\[\],;)}:.]", src)
+                           for n in names),                     "%s does not mention %s" % (stem, " or ".join(names))
                 assert v in slots[slot]["vars"], \
                     "%s needs %s on slot %d but the default layout lacks it" % (
                         stem, v, slot)
@@ -127,7 +131,8 @@ def test_swap_flags_tabs_and_names_the_holder(resolver, tmp_path):
 @needs_elf
 def test_custom_slot_carrying_the_variable_satisfies_the_tab(resolver, tmp_path):
     _, m = _mgr(resolver, tmp_path)
-    m._overrides[1] = dict(SMALL, vars=SMALL["vars"] + ["ano_of.of_alt_cm"],
+    m._overrides[1] = dict(SMALL, vars=SMALL["vars"] + [
+        "ano_of.of_alt_cm", "Gyro_X_Real", "Gyro_Y_Real", "Gyro_Z_Real"],
                            divider=10, source="custom", default=False)
     tabs = {t["tab"]: t for t in m.tab_status()}
     assert tabs["status-panel"]["ok"] and tabs["time-series-panel"]["ok"]

@@ -32,12 +32,20 @@ SLOT_COUNT = 4
 
 # Variables each tab reads that are NOT on slot 0, so they only arrive while
 # the dashboard's slot 1-3 groups are streamed. Derived from the plugin sources
-# with strict regexes (tests/test_streams.py re-verifies every pair).
+# with strict regexes, by symbol or by its schema_registry alias (c.gyro_x,
+# pid.gyrox.U, ...); tests/test_streams.py re-verifies every pair.
 # (plugin file stem, tab label, {slot: variables})
 TAB_NEEDS: tuple = (
     ("command-panel", "Command Panel", {
         1: ("g_of_bias_mode", "g_of_bias_ema_freeze"),
         2: ("mrac_flags.output_injection_on",),
+    }),
+    ("dataflow-panel", "Data Flow", {
+        1: ("Gyro_X_Real", "Gyro_Y_Real", "Gyro_Z_Real",
+            "Acc_X_Real", "Acc_Y_Real", "Acc_Z_Real", "ano_of.of_alt_cm",
+            "Ctrler.gyroxPID.FB", "Ctrler.gyroxPID.U",
+            "Ctrler.gyroyPID.FB", "Ctrler.gyroyPID.U",
+            "Ctrler.gyrozPID.FB", "Ctrler.gyrozPID.U"),
     }),
     ("estimator-panel", "EKF Estimator", {
         1: ("Gyro_X_Real", "Gyro_Y_Real", "Gyro_Z_Real",
@@ -48,7 +56,11 @@ TAB_NEEDS: tuple = (
         3: ("s_of_bias_x", "s_of_bias_y"),
     }),
     ("overview-panel", "System Overview", {
-        1: ("s_state", "flight_phase", "ano_of.of_alt_cm"),
+        1: ("s_state", "flight_phase", "ano_of.of_alt_cm",
+            "Gyro_X_Real", "Gyro_Y_Real", "Gyro_Z_Real",
+            "Ctrler.gyroxPID.FB", "Ctrler.gyroxPID.U",
+            "Ctrler.gyroyPID.FB", "Ctrler.gyroyPID.U",
+            "Ctrler.gyrozPID.FB", "Ctrler.gyrozPID.U"),
     }),
     ("path-panel", "Path Planning", {
         1: ("ano_of.of_alt_cm",),
@@ -58,7 +70,9 @@ TAB_NEEDS: tuple = (
         1: ("gs_max_horizontal_speed_mps", "gs_max_vertical_speed_mps",
             "gs_max_pitch_deg", "gs_max_roll_deg"),
     }),
-    ("status-panel", "Flight Status", {1: ("ano_of.of_alt_cm",)}),
+    ("status-panel", "Flight Status", {
+        1: ("ano_of.of_alt_cm", "Gyro_X_Real", "Gyro_Y_Real", "Gyro_Z_Real"),
+    }),
     ("time-series-panel", "Time Series", {1: ("ano_of.of_alt_cm",)}),
 )
 

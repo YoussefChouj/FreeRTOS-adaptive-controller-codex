@@ -39,7 +39,7 @@ Do NOT POST to a live service. Demo-server screenshots were taken against a mock
 1. **Slot-0 headroom is 1.** Fly variables took slot 0 from 54 to 61 of 62 ranges. The spec said "check the budget before adding"; it fits but leaves little room.
 2. **Swap gate is `can_swap && !active_preset && !apply.busy`.** Disarmed-only per spec; additionally refused while a full-layout preset is active or an apply is in flight.
 3. **Restore of a lost tab** is one click in a chip on the Streams panel; it is not shown inside the affected panel itself. Spec says the tab "shows" the message.
-4. **Tab-to-slot map** is the `TAB_NEEDS` table in `streams.py`, built by reading the plugins. `s_ekf_of.x[*]` was dropped as never read. Please spot-check it, because the spec said "do not guess".
+4. **Tab-to-slot map** is the `TAB_NEEDS` table in `streams.py`, built by reading the plugins. `s_ekf_of.x[*]` was dropped as never read. Review fix: the first pass matched raw symbols only and missed reads through schema aliases (`c.gyro_*`, `imu.acc_*`, `pid.gyro*.FB/U`); Data Flow, System Overview and Flight Status now list them, and the test accepts either spelling. Please spot-check it, because the spec said "do not guess".
 5. **Single preset store** is `vofa_studio/presets/*.json`; the YAML layouts are read-only, as specified.
 6. **Forward channels** are seeded from slots 1-3 names; target 127.0.0.1:1347 (FireWater UDP).
 7. **`/subscribe` has no arm gate of its own.** The gate sits in the streams service only, so anything calling `/subscribe` directly bypasses it.
