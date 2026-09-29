@@ -1,0 +1,1355 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "flightlab/metrics.schema.json",
+ "title": "flightlab metrics.json v1 (spec 6.2). Owned by the supervisor (WP0); workers must not edit.",
+ "type": "object",
+ "required": [
+  "schema_version",
+  "flight",
+  "segments",
+  "controller",
+  "data_quality",
+  "loops",
+  "motors",
+  "battery",
+  "position",
+  "spectrum",
+  "mrac",
+  "plugins_run",
+  "plugins_skipped",
+  "plugins_failed",
+  "warnings"
+ ],
+ "additionalProperties": true,
+ "properties": {
+  "schema_version": {
+   "const": 1
+  },
+  "flight": {
+   "type": "object",
+   "properties": {
+    "name": {
+     "type": "string"
+    },
+    "source_format": {
+     "type": "string"
+    },
+    "started_at": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "ended_at": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "git": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "elf_mtime": {},
+    "notes": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "preset": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "duration_s": {
+     "type": [
+      "number",
+      "null"
+     ]
+    }
+   },
+   "required": [
+    "name",
+    "source_format",
+    "started_at",
+    "ended_at",
+    "git",
+    "elf_mtime",
+    "notes",
+    "preset",
+    "duration_s"
+   ],
+   "additionalProperties": false
+  },
+  "segments": {
+   "type": "object",
+   "properties": {
+    "armed": {
+     "type": "array",
+     "items": {
+      "type": "array",
+      "items": {
+       "type": "number"
+      },
+      "minItems": 2,
+      "maxItems": 2
+     }
+    },
+    "airborne": {
+     "type": "array",
+     "items": {
+      "type": "array",
+      "items": {
+       "type": "number"
+      },
+      "minItems": 2,
+      "maxItems": 2
+     }
+    },
+    "landing": {
+     "type": "array",
+     "items": {
+      "type": "array",
+      "items": {
+       "type": "number"
+      },
+      "minItems": 2,
+      "maxItems": 2
+     }
+    },
+    "steady": {
+     "type": "array",
+     "items": {
+      "type": "array",
+      "items": {
+       "type": "number"
+      },
+      "minItems": 2,
+      "maxItems": 2
+     }
+    }
+   },
+   "required": [
+    "armed",
+    "airborne",
+    "landing",
+    "steady"
+   ],
+   "additionalProperties": false
+  },
+  "controller": {
+   "type": "object",
+   "properties": {
+    "mrac_mode": {
+     "enum": [
+      null,
+      "off",
+      "shadow",
+      "active"
+     ]
+    },
+    "ctrl_select": {
+     "type": [
+      "integer",
+      "null"
+     ]
+    }
+   },
+   "required": [
+    "mrac_mode",
+    "ctrl_select"
+   ],
+   "additionalProperties": false
+  },
+  "data_quality": {
+   "oneOf": [
+    {
+     "type": "null"
+    },
+    {
+     "$ref": "#/$defs/dataQuality"
+    }
+   ]
+  },
+  "loops": {
+   "oneOf": [
+    {
+     "type": "null"
+    },
+    {
+     "type": "object",
+     "additionalProperties": {
+      "$ref": "#/$defs/loop"
+     }
+    }
+   ]
+  },
+  "motors": {
+   "oneOf": [
+    {
+     "type": "null"
+    },
+    {
+     "type": "object",
+     "properties": {
+      "airborne": {
+       "oneOf": [
+        {
+         "type": "null"
+        },
+        {
+         "$ref": "#/$defs/motorSeg"
+        }
+       ]
+      },
+      "steady": {
+       "oneOf": [
+        {
+         "type": "null"
+        },
+        {
+         "$ref": "#/$defs/motorSeg"
+        }
+       ]
+      }
+     },
+     "required": [
+      "airborne",
+      "steady"
+     ],
+     "additionalProperties": false
+    }
+   ]
+  },
+  "battery": {
+   "oneOf": [
+    {
+     "type": "null"
+    },
+    {
+     "$ref": "#/$defs/battery"
+    }
+   ]
+  },
+  "position": {
+   "oneOf": [
+    {
+     "type": "null"
+    },
+    {
+     "type": "object",
+     "properties": {
+      "airborne": {
+       "oneOf": [
+        {
+         "type": "null"
+        },
+        {
+         "$ref": "#/$defs/posSeg"
+        }
+       ]
+      },
+      "steady": {
+       "oneOf": [
+        {
+         "type": "null"
+        },
+        {
+         "$ref": "#/$defs/posSeg"
+        }
+       ]
+      }
+     },
+     "required": [
+      "airborne",
+      "steady"
+     ],
+     "additionalProperties": false
+    }
+   ]
+  },
+  "spectrum": {
+   "oneOf": [
+    {
+     "type": "null"
+    },
+    {
+     "type": "object",
+     "properties": {
+      "segment": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "loops": {
+       "type": "object",
+       "additionalProperties": {
+        "$ref": "#/$defs/loopSpec"
+       }
+      },
+      "rpm": {
+       "oneOf": [
+        {
+         "type": "null"
+        },
+        {
+         "type": "object",
+         "additionalProperties": {
+          "type": "array",
+          "items": {
+           "type": "object",
+           "properties": {
+            "hz": {
+             "type": [
+              "number",
+              "null"
+             ]
+            },
+            "psd": {
+             "type": [
+              "number",
+              "null"
+             ]
+            }
+           },
+           "required": [
+            "hz",
+            "psd"
+           ],
+           "additionalProperties": false
+          }
+         }
+        }
+       ]
+      }
+     },
+     "required": [
+      "segment",
+      "loops",
+      "rpm"
+     ],
+     "additionalProperties": false
+    }
+   ]
+  },
+  "mrac": {
+   "oneOf": [
+    {
+     "type": "null"
+    },
+    {
+     "type": "object",
+     "additionalProperties": {
+      "$ref": "#/$defs/mracAxis"
+     }
+    }
+   ]
+  },
+  "plugins_run": {
+   "type": "array",
+   "items": {
+    "type": "string"
+   }
+  },
+  "plugins_skipped": {
+   "type": "object",
+   "additionalProperties": {
+    "type": "array",
+    "items": {
+     "type": "string"
+    }
+   }
+  },
+  "plugins_failed": {
+   "type": "object",
+   "additionalProperties": {
+    "type": "string"
+   }
+  },
+  "warnings": {
+   "type": "array",
+   "items": {
+    "type": "string"
+   }
+  }
+ },
+ "$defs": {
+  "segStats": {
+   "type": "object",
+   "properties": {
+    "n": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "e_mean": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "e_std": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "e_rms": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "e_p95_abs": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "e_max_abs": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "iae": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "itae": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "fb_std": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "des_std": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "u_mean": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "u_std": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "u_p95_abs": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "u_sat_frac": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "sume_sat_frac": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "ui_share": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "osc_peak_hz": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "osc_peak_ratio": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "lag_ms": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "track_gain": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "track_phase_deg": {
+     "type": [
+      "number",
+      "null"
+     ]
+    }
+   },
+   "required": [
+    "n",
+    "e_mean",
+    "e_std",
+    "e_rms",
+    "e_p95_abs",
+    "e_max_abs",
+    "iae",
+    "itae",
+    "fb_std",
+    "des_std",
+    "u_mean",
+    "u_std",
+    "u_p95_abs",
+    "u_sat_frac",
+    "sume_sat_frac",
+    "ui_share",
+    "osc_peak_hz",
+    "osc_peak_ratio",
+    "lag_ms",
+    "track_gain",
+    "track_phase_deg"
+   ],
+   "additionalProperties": false
+  },
+  "loop": {
+   "type": "object",
+   "properties": {
+    "prefix": {
+     "type": "string"
+    },
+    "level": {
+     "type": "string"
+    },
+    "gains": {
+     "oneOf": [
+      {
+       "type": "null"
+      },
+      {
+       "type": "object",
+       "properties": {
+        "Kp": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "Ki": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "Kd": {
+         "type": [
+          "number",
+          "null"
+         ]
+        }
+       },
+       "required": [
+        "Kp",
+        "Ki",
+        "Kd"
+       ],
+       "additionalProperties": false
+      }
+     ]
+    },
+    "limits": {
+     "type": "object",
+     "properties": {
+      "UMax": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "UiMax": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "SumEMax": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "source": {
+       "type": [
+        "string",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "UMax",
+      "UiMax",
+      "SumEMax",
+      "source"
+     ],
+     "additionalProperties": false
+    },
+    "missing": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "airborne": {
+     "oneOf": [
+      {
+       "type": "null"
+      },
+      {
+       "$ref": "#/$defs/segStats"
+      }
+     ]
+    },
+    "steady": {
+     "oneOf": [
+      {
+       "type": "null"
+      },
+      {
+       "$ref": "#/$defs/segStats"
+      }
+     ]
+    }
+   },
+   "required": [
+    "prefix",
+    "level",
+    "gains",
+    "limits",
+    "missing",
+    "airborne",
+    "steady"
+   ],
+   "additionalProperties": false
+  },
+  "motorStats": {
+   "type": "object",
+   "properties": {
+    "mean": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "std": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "min": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "max": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "p95": {
+     "type": [
+      "number",
+      "null"
+     ]
+    }
+   },
+   "required": [
+    "mean",
+    "std",
+    "min",
+    "max",
+    "p95"
+   ],
+   "additionalProperties": false
+  },
+  "motorSeg": {
+   "type": "object",
+   "properties": {
+    "per_motor": {
+     "type": "object",
+     "additionalProperties": {
+      "$ref": "#/$defs/motorStats"
+     }
+    },
+    "clamp_hi_frac": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "clamp_lo_frac": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "yaw_pair_diff": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "yaw_pair_pct": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "spread_p95": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "throttle_mean": {
+     "type": [
+      "number",
+      "null"
+     ]
+    }
+   },
+   "required": [
+    "per_motor",
+    "clamp_hi_frac",
+    "clamp_lo_frac",
+    "yaw_pair_diff",
+    "yaw_pair_pct",
+    "spread_p95",
+    "throttle_mean"
+   ],
+   "additionalProperties": false
+  },
+  "battery": {
+   "type": "object",
+   "properties": {
+    "var": {
+     "type": "string"
+    },
+    "cells": {
+     "type": [
+      "integer",
+      "null"
+     ]
+    },
+    "v_rest_start": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "v_end": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "v_min_airborne": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "sag_v": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "v_rest_start_cell": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "v_end_cell": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "v_min_airborne_cell": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "sag_v_cell": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "soc_est_start": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "soc_est_end": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "soc_approx": {
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "var",
+    "cells",
+    "v_rest_start",
+    "v_end",
+    "v_min_airborne",
+    "sag_v",
+    "v_rest_start_cell",
+    "v_end_cell",
+    "v_min_airborne_cell",
+    "sag_v_cell",
+    "soc_est_start",
+    "soc_est_end",
+    "soc_approx"
+   ],
+   "additionalProperties": false
+  },
+  "posSeg": {
+   "type": "object",
+   "properties": {
+    "of_quality_min": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "of_quality_p5": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "of_quality_low_frac": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "drift_rms": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "drift_max": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "of_alt_cm_mean": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "of_alt_cm_std": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "alt_e_mean": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "alt_e_rms": {
+     "type": [
+      "number",
+      "null"
+     ]
+    }
+   },
+   "required": [
+    "of_quality_min",
+    "of_quality_p5",
+    "of_quality_low_frac",
+    "drift_rms",
+    "drift_max",
+    "of_alt_cm_mean",
+    "of_alt_cm_std",
+    "alt_e_mean",
+    "alt_e_rms"
+   ],
+   "additionalProperties": false
+  },
+  "loopSpec": {
+   "type": "object",
+   "properties": {
+    "fb_peaks": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "properties": {
+       "hz": {
+        "type": [
+         "number",
+         "null"
+        ]
+       },
+       "psd": {
+        "type": [
+         "number",
+         "null"
+        ]
+       }
+      },
+      "required": [
+       "hz",
+       "psd"
+      ],
+      "additionalProperties": false
+     }
+    },
+    "u_peaks": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "properties": {
+       "hz": {
+        "type": [
+         "number",
+         "null"
+        ]
+       },
+       "psd": {
+        "type": [
+         "number",
+         "null"
+        ]
+       }
+      },
+      "required": [
+       "hz",
+       "psd"
+      ],
+      "additionalProperties": false
+     }
+    },
+    "band_power": {
+     "type": "object",
+     "properties": {
+      "fb": {
+       "type": "object",
+       "additionalProperties": {
+        "type": [
+         "number",
+         "null"
+        ]
+       }
+      },
+      "u": {
+       "type": "object",
+       "additionalProperties": {
+        "type": [
+         "number",
+         "null"
+        ]
+       }
+      }
+     },
+     "required": [
+      "fb",
+      "u"
+     ],
+     "additionalProperties": false
+    }
+   },
+   "required": [
+    "fb_peaks",
+    "u_peaks",
+    "band_power"
+   ],
+   "additionalProperties": false
+  },
+  "mracStats": {
+   "type": "object",
+   "properties": {
+    "e_rms": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "u_nom_rms": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "u_ad_rms": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "authority_ratio": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "u_ad_max_abs": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "u_ad_hf_frac": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "corr_uad_unom": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "corr_uad_e": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "corr_uad_unom_lp": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "corr_uad_e_lp": {
+     "type": [
+      "number",
+      "null"
+     ]
+    }
+   },
+   "required": [
+    "e_rms",
+    "u_nom_rms",
+    "u_ad_rms",
+    "authority_ratio",
+    "u_ad_max_abs",
+    "u_ad_hf_frac",
+    "corr_uad_unom",
+    "corr_uad_e",
+    "corr_uad_unom_lp",
+    "corr_uad_e_lp"
+   ],
+   "additionalProperties": false
+  },
+  "weight": {
+   "type": "object",
+   "properties": {
+    "final": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "max_abs": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "slope_last30": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "converged": {
+     "type": [
+      "boolean",
+      "null"
+     ]
+    },
+    "t90_s": {
+     "type": [
+      "number",
+      "null"
+     ]
+    }
+   },
+   "required": [
+    "final",
+    "max_abs",
+    "slope_last30",
+    "converged",
+    "t90_s"
+   ],
+   "additionalProperties": false
+  },
+  "mracAxis": {
+   "type": "object",
+   "properties": {
+    "prefix": {
+     "type": "string"
+    },
+    "missing": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "mode_frac": {
+     "type": "object",
+     "properties": {
+      "off": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "shadow": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "active": {
+       "type": [
+        "number",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "off",
+      "shadow",
+      "active"
+     ],
+     "additionalProperties": false
+    },
+    "airborne": {
+     "oneOf": [
+      {
+       "type": "null"
+      },
+      {
+       "$ref": "#/$defs/mracStats"
+      }
+     ]
+    },
+    "steady": {
+     "oneOf": [
+      {
+       "type": "null"
+      },
+      {
+       "$ref": "#/$defs/mracStats"
+      }
+     ]
+    },
+    "weights": {
+     "type": "object",
+     "additionalProperties": {
+      "$ref": "#/$defs/weight"
+     }
+    }
+   },
+   "required": [
+    "prefix",
+    "missing",
+    "mode_frac",
+    "airborne",
+    "steady",
+    "weights"
+   ],
+   "additionalProperties": false
+  },
+  "slot": {
+   "type": "object",
+   "properties": {
+    "index": {
+     "type": "integer"
+    },
+    "rate_hz": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "n_rows": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "duration_s": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "rate_measured_hz": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "seq_drops": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "tsrc_gaps": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "drop_pct": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "dt_median_ms": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "dt_p99_ms": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "dt_max_ms": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "tsrc_backsteps": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "host_latency_std_ms": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "n_vars": {
+     "type": [
+      "number",
+      "null"
+     ]
+    }
+   },
+   "required": [
+    "index",
+    "rate_hz",
+    "n_rows",
+    "duration_s",
+    "rate_measured_hz",
+    "seq_drops",
+    "tsrc_gaps",
+    "drop_pct",
+    "dt_median_ms",
+    "dt_p99_ms",
+    "dt_max_ms",
+    "tsrc_backsteps",
+    "host_latency_std_ms",
+    "n_vars"
+   ],
+   "additionalProperties": false
+  },
+  "dataQuality": {
+   "type": "object",
+   "properties": {
+    "slots": {
+     "type": "array",
+     "items": {
+      "$ref": "#/$defs/slot"
+     }
+    },
+    "stuck_vars": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "nan_vars": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "worst_drop_pct": {
+     "type": [
+      "number",
+      "null"
+     ]
+    },
+    "clock_drift_ppm": {
+     "type": [
+      "number",
+      "null"
+     ]
+    }
+   },
+   "required": [
+    "slots",
+    "stuck_vars",
+    "nan_vars",
+    "worst_drop_pct",
+    "clock_drift_ppm"
+   ],
+   "additionalProperties": false
+  }
+ }
+}

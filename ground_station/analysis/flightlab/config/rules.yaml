@@ -1,0 +1,37 @@
+# HEURISTIC DEFAULTS. None of these values was measured or calibrated. Recalibrate on flights 12-16
+# and record the evidence in the commit message when a value changes (spec 7).
+
+segments:
+  takeoff_settle_s: 3.0
+  pre_land_s: 1.0
+  hold_window_s: 2.0
+  min_steady_s: 5.0
+
+params:
+  data_quality: {stuck_min_samples: 50, nan_frac_max: 0.5, gap_factor: 1.5}
+  pid: {osc_fmin_hz: 1.0, osc_nperseg_s: 2.0, lag_max_s: 0.5, track_f0_hz: 1.0, sat_margin: 0.98}
+  motors: {clamp_margin: 5}          # PWM counts from pwm_max/pwm_zero that count as clamped
+  position: {quality_min: 50}
+  spectrum:
+    nperseg_s: 2.0
+    top_k: 5
+    bands_hz: [[0, 2], [2, 8], [8, 20], [20, null]]     # null = Nyquist
+  mrac: {hf_cutoff_hz: 5.0, lp_hz: 1.0, conv_window_s: 30.0, conv_tol: 0.05, eps: 1.0e-6, t90_frac: 0.9}
+
+thresholds:
+  DQ-DROP: {drop_warn: 1.0, drop_crit: 5.0}          # percent
+  PID-OSC: {osc_ratio: 4.0, osc_fmin: 2.0, d_band_hz: 15.0, factor: 0.85}
+  PID-BIAS:
+    bias_k: 1.0
+    bias_abs: {rate: 2.0, attitude: 1.0, velocity: 5.0, position: 5.0, altitude_pos: 0.05, altitude_rate: 5.0}
+  PID-IWINDUP: {sat_warn: 0.05}
+  PID-SAT: {sat_warn: 0.05}
+  PID-LAG: {excite_min: 1.0, lag_deg: 60.0, gain_min: 0.7, factor: 1.15}
+  MOT-CLAMP: {clamp_warn: 0.01, clamp_crit: 0.05}
+  MOT-YAWPAIR: {yawpair_warn: 5.0}                   # percent
+  BAT-LOW: {cell_warn: 3.6, cell_crit: 3.5}          # V per cell, airborne minimum
+  BAT-SAG: {sag_warn: 0.3}                           # V per cell, rest minus airborne minimum
+  ALT-SAG: {alt_sag_m: 0.10}
+  MRAC-READY: {ready_lo: 0.05, ready_hi: 0.5, hf_max: 0.3}
+  MRAC-CHATTER: {hf_max: 0.3}
+  MRAC-WORSE: {worse_pct: 10.0}

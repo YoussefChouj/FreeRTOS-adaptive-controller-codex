@@ -1,0 +1,23 @@
+# Battery model. The pack on this drone is NOT characterised: cell count is auto-detected from the
+# resting voltage, and the OCV table is a generic LiPo curve (APPROXIMATE, not measured on this pack).
+# SoC estimates derived from it must be reported as approximate.
+
+battery:
+  var: real_voltage                # volts, pack total
+  cells: auto                      # int to force; auto = round(v_rest / cell_nominal_v) within cells_range
+  cells_range: [2, 6]
+  cell_nominal_v: 3.85
+  ocv_approximate: true
+  ocv_table:                       # [cell volts, SoC fraction], ascending volts; generic LiPo at rest
+    - [3.30, 0.00]
+    - [3.50, 0.05]
+    - [3.60, 0.10]
+    - [3.70, 0.20]
+    - [3.75, 0.30]
+    - [3.79, 0.40]
+    - [3.83, 0.50]
+    - [3.87, 0.60]
+    - [3.92, 0.70]
+    - [3.97, 0.80]
+    - [4.06, 0.90]
+    - [4.20, 1.00]

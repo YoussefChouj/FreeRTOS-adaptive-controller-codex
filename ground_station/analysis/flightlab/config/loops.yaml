@@ -1,0 +1,52 @@
+# Controller and actuator definitions for flightlab (spec 6.2). Adding a controller = new entries here
+# + a plugin file + rules; no core change.
+#
+# limits: copied from the API/pid.c init table at commit 19b1472 (supervisor read, 2026-09-29).
+#   Gains are NOT listed: they are not streamed, and pid.c is not proof of what is flashed (rule LOG-GAINS).
+#   If a flight's firmware differs from 19b1472, these limits may be stale; ctrl_limits_source says where
+#   they came from so the report can print it.
+# unit: null = not verified from firmware. Do not guess units.
+# des_hold_tol: HEURISTIC DEFAULT (not measured). Max change of Des within segments.hold_window_s for a
+#   window to count as "steady" (spec 5). Units are those of the Des field.
+# Error is always Des - FB (wrapped to [-180, 180) when wrap_deg is true), never the firmware E field.
+
+ctrl_limits_source: "API/pid.c@19b1472"
+
+loops:
+  rate_roll:  {prefix: Ctrler.gyroxPID,  level: rate,          axis: roll,  unit: null, wrap_deg: false, limits: {UMax: 300, UiMax: 20,  SumEMax: 1000}}
+  rate_pitch: {prefix: Ctrler.gyroyPID,  level: rate,          axis: pitch, unit: null, wrap_deg: false, limits: {UMax: 300, UiMax: 20,  SumEMax: 1000}}
+  rate_yaw:   {prefix: Ctrler.gyrozPID,  level: rate,          axis: yaw,   unit: null, wrap_deg: false, limits: {UMax: 650, UiMax: 500, SumEMax: 100000}}
+  att_roll:   {prefix: Ctrler.rollPID,   level: attitude,      axis: roll,  unit: null, wrap_deg: false, limits: {UMax: 200, UiMax: 10,  SumEMax: 120}}
+  att_pitch:  {prefix: Ctrler.pitchPID,  level: attitude,      axis: pitch, unit: null, wrap_deg: false, limits: {UMax: 200, UiMax: 10,  SumEMax: 120}}
+  att_yaw:    {prefix: Ctrler.yawPID,    level: attitude,      axis: yaw,   unit: null, wrap_deg: true,  limits: {UMax: 160, UiMax: 2,   SumEMax: 50}}
+  alt_pos:    {prefix: Ctrler.Z_posPID,  level: altitude_pos,  axis: z,     unit: null, wrap_deg: false, limits: {UMax: 1.0, UiMax: 0.3, SumEMax: 30},   des_hold_tol: 0.05}
+  alt_rate:   {prefix: Ctrler.Z_ratePID, level: altitude_rate, axis: z,     unit: null, wrap_deg: false, limits: {UMax: 300, UiMax: 100, SumEMax: 250}}
+  pos_x:      {prefix: Ctrler.locxPID,   level: position,      axis: x,     unit: null, wrap_deg: false, limits: {UMax: 300, UiMax: 20,  SumEMax: 200},  des_hold_tol: 5.0}
+  pos_y:      {prefix: Ctrler.locyPID,   level: position,      axis: y,     unit: null, wrap_deg: false, limits: {UMax: 300, UiMax: 20,  SumEMax: 200},  des_hold_tol: 5.0}
+  vel_x:      {prefix: Ctrler.locxsPID,  level: velocity,      axis: x,     unit: null, wrap_deg: false, limits: {UMax: 600, UiMax: 100, SumEMax: 200}}
+  vel_y:      {prefix: Ctrler.locysPID,  level: velocity,      axis: y,     unit: null, wrap_deg: false, limits: {UMax: 600, UiMax: 100, SumEMax: 200}}
+
+# Field suffixes of a PID struct as streamed: <prefix>.<field>.
+pid_fields: {des: Des, fb: FB, u: U, sume: SumE, kp: Kp, ki: Ki, kd: Kd}
+
+motors:
+  vars: [mymotor.motor1, mymotor.motor2, mymotor.motor3, mymotor.motor4]
+  spin: {mymotor.motor1: CW, mymotor.motor2: CW, mymotor.motor3: CCW, mymotor.motor4: CCW}
+  pwm_zero: 2000            # BSP/pwm.h Motor_PWM_ZERO; clamp in BSP/pwm.c value_limit()
+  pwm_max: 4000             # BSP/pwm.h Motor_PWM_MAX
+  throttle_var: Throttle_out
+
+mrac:
+  axes:
+    roll:   {prefix: mrac_state.roll,   loop: rate_roll}
+    pitch:  {prefix: mrac_state.pitch,  loop: rate_pitch}
+    yaw:    {prefix: mrac_state.yaw,    loop: rate_yaw}
+    z_rate: {prefix: mrac_state.z_rate, loop: alt_rate}
+  fields: {e: e, r: r, x: x, u_ad: u_ad, u_nom: u_nom, e_dot: e_dot, u_def: u_def}
+  weight_patterns: ["Theta[[]*]", "Whatf[[]*]"]    # fnmatch, relative to the axis prefix
+  flags: {adaptation: mrac_flags.adaptation_on, injection: mrac_flags.output_injection_on}
+
+phase:
+  var: flight_phase
+  values: {GROUND_IDLE: 0, FLYING: 1, LANDING: 2, LANDED: 3}
+  arm_var: DroneStatus.ARM_Status
