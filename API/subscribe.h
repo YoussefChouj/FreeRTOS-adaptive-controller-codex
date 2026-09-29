@@ -204,10 +204,13 @@ uint32_t Subscribe_TimeMs(void);
  * multiplier -- four 64 B frames at 200 Hz still fit the 95% USART3 budget. */
 #define SUBSCRIBE_MAX_FRAMES_PER_TICK  SUBSCRIBE_MAX_SLOTS
 
-/* Max data-frame payload. 1024 B = 256 float32, which at the nominal 100 Hz
- * over a 921600 link is already past the budget guard below, so a larger
- * buffer would be RAM that can never be filled. */
-#define SUBSCRIBE_STREAM_MAX_BYTES   1024U
+/* Max data-frame payload: 2032 B = 508 float32. A fast slot is capped by the
+ * link budget below long before this, but a slow slot is not: 500 adaptive
+ * weights at 20 Hz is 40 kB/s, well inside the budget, and needs one 2000 B
+ * frame. 2032 keeps the whole frame (2044 B) within the 2047 B the USART3 TX
+ * ring is guaranteed to have free whenever Usart3_Stream_Busy() is clear
+ * (checked in subscribe.c), so a frame is never refused for its size. */
+#define SUBSCRIBE_STREAM_MAX_BYTES   2032U
 
 #define SUBSCRIBE_TRANSPORT_UART5    0U
 #define SUBSCRIBE_TRANSPORT_USART3   1U

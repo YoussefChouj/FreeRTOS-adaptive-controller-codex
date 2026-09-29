@@ -151,6 +151,12 @@ start streaming named variables. UART5 subscribe ingress is compiled out
 - `transport`: 0 = UART5, 1 = USART3
 - One request per slot; a new request **replaces** that slot's ranges
 - Max 62 ranges per slot (a 62-range request is 506 B; RX staging is 512 B)
+- A range is `(addr, size, count)`: one range covers a whole contiguous block
+  (an array, a struct of same-size fields). Hosts merge neighbouring variables
+  into one range before sending, so the 62 counts memory blocks, not variables
+- Max payload per data frame: 2032 B (508 float32; 1024 B before the
+  2026-09-29 firmware). Hosts read both limits from the ELF
+  (`s_stream_staging.ranges`, `stream_buf`), not from a constant
 - `divider = round(send_hz / desired_hz)`; Send_Task measures ~100 Hz after
   the Phase 0 flash (target 200 Hz, see `docs/architecture/send-task-perf.md`)
 - `addr` = DWARF address resolved from `OBJ/JX_FLY.axf` (check the build

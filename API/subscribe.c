@@ -383,8 +383,11 @@ static uint8_t s_rr;
 static Subscribe_Stream_t s_stream_staging;
 
 /* Data-frame buffer. Held by DMA between arming and completion, hence
- * file-scope: 6 header + 4 ts + 1024 payload + 2 CRC = 1036 B, far past what a
+ * file-scope: 6 header + 4 ts + 2032 payload + 2 CRC = 2044 B, far past what a
  * 500-word Send_Task stack could carry. */
+#if (SUBSCRIBE_STREAM_MAX_BYTES + SUBSCRIBE_STREAM_FRAME_OVERHEAD) > (USART3_TX_RING_LEN / 2U - 1U)
+#error "a full data frame must fit the USART3 TX ring whenever Usart3_Stream_Busy() is clear"
+#endif
 static uint8_t stream_buf[SUBSCRIBE_STREAM_MAX_BYTES + SUBSCRIBE_STREAM_FRAME_OVERHEAD];
 static uint16_t stream_len;
 

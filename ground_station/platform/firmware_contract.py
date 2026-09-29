@@ -99,7 +99,7 @@ class CommandSpec:
 
 SUBSCRIBE_MAX_SLOTS = 4          # slots 0..3
 SUBSCRIBE_MAX_RANGES = 62        # per-slot range tuple limit
-SUBSCRIBE_STREAM_MAX_BYTES = 1024  # max data-frame payload
+SUBSCRIBE_STREAM_MAX_BYTES = 2032  # max data-frame payload (API/subscribe.h)
 SUBSCRIBE_STREAM_FRAME_OVERHEAD = 12  # non-value bytes in a data frame
 SUBSCRIBE_SEND_TASK_HZ = 100     # nominal Send_Task rate (Hz) (100 Hz by design)
 SUBSCRIBE_BUDGET_PCT_USART3 = 95  # fraction of USART3 wire usable by subscribe

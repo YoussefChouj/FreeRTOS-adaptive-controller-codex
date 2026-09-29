@@ -67,7 +67,7 @@ def test_command_0x18_requires_disarmed_and_ground_idle():
 def test_subscribe_limits_match_firmware():
     assert SUBSCRIBE_MAX_SLOTS == 4
     assert SUBSCRIBE_MAX_RANGES == 62
-    assert SUBSCRIBE_STREAM_MAX_BYTES == 1024
+    assert SUBSCRIBE_STREAM_MAX_BYTES == 2032
 
 
 def test_frame_size_subscribe_request_known_values():
@@ -134,7 +134,7 @@ def test_contract_validate_subscribe_plan():
     ok, reason = firmware_contract.subscribe_validate_plan(62, 1024, 1, 1)
     assert ok, reason
 
-    ok, reason = firmware_contract.subscribe_validate_plan(62, 1025, 1, 1)
+    ok, reason = firmware_contract.subscribe_validate_plan(62, SUBSCRIBE_STREAM_MAX_BYTES + 1, 1, 1)
     assert not ok
     assert "exceeds max" in reason
 
