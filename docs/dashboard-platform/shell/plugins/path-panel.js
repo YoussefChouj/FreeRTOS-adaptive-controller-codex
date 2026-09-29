@@ -1183,6 +1183,10 @@
     _threePoint.renderOrder = 9;
     _threeScene.add(_threePoint);
     rebuildEventMarkers();
+    // Loaded review logs need fresh scene objects after a (re)init.
+    _rvGroup = new THREE.Group();
+    _threeScene.add(_rvGroup);
+    Object.keys(_rvSel).forEach(function (k) { _rvSel[k].line = null; _rvSel[k].point = null; _rvSel[k].markers = null; });
     _threeControls.enabled = _mode !== 'fly';
     if (_mode === 'fly') fitFlyCamera();
 
@@ -1226,6 +1230,19 @@
     if (!_threeRenderer || !_threeScene || !_threeCamera) return;
 
     updateDrawPlane();
+
+    // Review shows the saved logs instead of the live trail.
+    var review = _mode === 'review';
+    [_threeLineActual, _threeShadow, _threeLineDesired, _threeLinePlan, _threePoint, _threeEventGroup].forEach(function (o) {
+      if (o) o.visible = !review;
+    });
+    if (_rvGroup) _rvGroup.visible = review;
+    if (review) {
+      rvRender3D();
+      _threeControls.update();
+      _threeRenderer.render(_threeScene, _threeCamera);
+      return;
+    }
 
     var activeActual = getActiveTrajectory();
     var activeDesired = getActiveDesiredTrajectory();
@@ -1328,6 +1345,7 @@
 
   function fitPath3D() {
     if (!_threeCamera || !_threeControls) return;
+    if (_mode === 'review') { rvFit(); return; }
     var pose = pathViewPose(getActiveTrajectory().concat(_plannedPath || []));
     _threeControls.target.set(pose.target.x, pose.target.y, pose.target.z);
     _threeCamera.position.set(pose.pos.x, pose.pos.y, pose.pos.z);
@@ -1434,6 +1452,7 @@
     _threeDrawPlane = null;
     _threeEventGroup = null;
     _threePoint = null;
+    _rvGroup = null;
     _eventTex = {};
     _threeLoaded = false;
   }
@@ -2624,13 +2643,14 @@
 
   function syncFlyInputs() {
     var thr = q('pp-fly-thr'), val = q('pp-fly-thr-val'), m = q('pp-fly-metric'), tr = q('pp-fly-trail');
-    var rthr = q('pp-rv-thr'), rval = q('pp-rv-thr-val');
+    var rthr = q('pp-rv-thr'), rval = q('pp-rv-thr-val'), rmet = q('pp-rv-metric');
     if (thr) thr.value = String(_fly.thr);
     if (val) val.textContent = fmtNum(_fly.thr, 2) + ' m';
     if (m) m.value = _fly.metric;
     if (tr) tr.value = _fly.trail;
     if (rthr) rthr.value = String(_fly.thr);
     if (rval) rval.textContent = fmtNum(_fly.thr, 2) + ' m';
+    if (rmet) rmet.value = _fly.metric;
   }
 
   function refreshFlyViews() {
@@ -2806,6 +2826,365 @@
     if (el) el.textContent = text;
   }
 
+  // ── Review mode: overlay of saved REC logs ─────────────────────────────
+  // Any number of saved REC sessions (GET /api/rec-logs) are drawn together,
+  // one colour per log or coloured by error, against one scrubber whose t = 0
+  // is the path execute of each log (REC start when a log has none).
+  var RV_KEY = 'pp_rv_sel_v1';
+  var RV_COLORS = ['#4a9eff', '#ff9f43', '#c77dff', '#4ecca3', '#ff5c8a', '#f5e663', '#7bdff2', '#b8f2a0'];
+  var RV_MAX_POINTS = 6000;
+  var _rvLogs = [];            // server list: { name, label, started_at, duration_s, rows, recording }
+  var _rvSel = {};             // name -> loaded log (see rvBuild)
+  var _rvOrder = [];           // selection order (colour assignment, legend order)
+  var _rvT = null;             // scrubber time in s; null = end of every log
+  var _rvTimer = null;
+  var _rvStatus = '';
+  var _rvGroup = null;         // THREE.Group holding every log's line / point / markers
+
+  function hexRgb(h) {
+    var n = parseInt(String(h).replace('#', ''), 16);
+    return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+  }
+
+  function rvColorFor(order) { return RV_COLORS[order % RV_COLORS.length]; }
+
+  function rvSaveSel() { storageSet(RV_KEY, JSON.stringify(_rvOrder)); }
+
+  function rvSetStatus(t) {
+    _rvStatus = t;
+    var el = q('pp-rv-status');
+    if (el) el.textContent = t;
+  }
+
+  function rvRefresh() {
+    var f = window['fetch'];
+    if (typeof f !== 'function') { rvSetStatus('fetch unavailable'); return; }
+    rvSetStatus('Listing logs…');
+    f('/api/rec-logs').then(function (r) {
+      if (!r || !r.ok) throw new Error('no log list');
+      return r.json();
+    }).then(function (d) {
+      _rvLogs = (d && d.logs) || [];
+      rvSetStatus(_rvLogs.length ? _rvLogs.length + ' saved log' + (_rvLogs.length === 1 ? '' : 's') : 'No saved REC logs yet (press REC to record one)');
+      rvRenderList();
+    }).catch(function (e) {
+      rvSetStatus('Could not list logs: ' + (e && e.message ? e.message : e));
+    });
+  }
+
+  function fmtWhen(epoch) {
+    var d;
+    if (!isFinite(epoch)) return '';
+    d = new Date(epoch * 1000);
+    return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2) +
+      ' ' + ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+  }
+
+  function rvRenderList() {
+    var el = q('pp-rv-list'), html = '', i, l, sel, name;
+    if (!el) return;
+    for (i = 0; i < _rvLogs.length; i++) {
+      l = _rvLogs[i]; name = l.name; sel = _rvSel[name];
+      html += '<div class="pp-rv-row">' +
+        '<input type="checkbox" data-rv-name="' + escapeText(name) + '"' + (sel ? ' checked' : '') + ' title="Overlay this log">' +
+        '<i class="pp-rv-sw" style="background:' + (sel ? sel.color : 'transparent') + '"></i>' +
+        '<span class="pp-rv-name" title="' + escapeText(name) + '">' + escapeText(l.label || name) +
+        '<small> ' + escapeText(fmtWhen(l.started_at)) + (l.duration_s != null ? ' &middot; ' + fmtNum(l.duration_s, 0) + ' s' : '') +
+        (l.recording ? ' &middot; recording' : '') + '</small></span>' +
+        '<label class="pp-rv-err" title="Colour this log green/red by error instead of its own colour">' +
+        '<input type="checkbox" data-rv-err="' + escapeText(name) + '"' + (sel && sel.byError ? ' checked' : '') + (sel ? '' : ' disabled') + '>err</label>' +
+        '</div>';
+    }
+    el.innerHTML = html;
+  }
+
+  // Server samples [t_s, x, y, z, dx, dy, dz, e3, exy] -> panel points (t in ms).
+  function rvConvert(data) {
+    var pts = [], i, s, evs = [], e;
+    for (i = 0; i < (data.samples || []).length; i++) {
+      s = data.samples[i];
+      pts.push({ t: s[0] * 1000, x: s[1], y: s[2], z: s[3], dx: s[4], dy: s[5], dz: s[6], e3: s[7], exy: s[8] });
+    }
+    for (i = 0; i < (data.events || []).length; i++) {
+      e = data.events[i];
+      if (!EVENT_KINDS[e.kind]) continue;
+      evs.push({ t: e.t * 1000, kind: e.kind, text: e.text, pos: e.pos ? { x: e.pos[0], y: e.pos[1], z: e.pos[2] } : null });
+    }
+    return { pts: pts, events: evs };
+  }
+
+  function rvToggle(name, on) {
+    var i;
+    if (!on) {
+      rvDispose(name);
+      delete _rvSel[name];
+      i = _rvOrder.indexOf(name);
+      if (i >= 0) _rvOrder.splice(i, 1);
+      rvSaveSel(); rvAfterChange();
+      return;
+    }
+    if (_rvSel[name]) return;
+    rvLoad(name);
+  }
+
+  function rvLoad(name) {
+    var f = window['fetch'];
+    if (typeof f !== 'function') return;
+    var slot = { name: name, label: name, color: rvColorFor(_rvOrder.length), byError: false, pts: [], events: [],
+                 tRef: 'rec_start', loading: true, error: null, hasSetpoint: false };
+    _rvSel[name] = slot;
+    _rvOrder.push(name);
+    rvSetStatus('Loading ' + name + '…');
+    rvRenderList();
+    f('/api/rec-logs/' + encodeURIComponent(name) + '?max_points=' + RV_MAX_POINTS).then(function (r) {
+      if (!r || !r.ok) throw new Error(r && r.status === 404 ? 'log no longer exists' : 'load failed');
+      return r.json();
+    }).then(function (d) {
+      var c;
+      if (_rvSel[name] !== slot) return;             // deselected while loading
+      c = rvConvert(d);
+      slot.pts = c.pts; slot.events = c.events; slot.loading = false;
+      slot.label = d.label || name; slot.tRef = d.t_ref; slot.hasSetpoint = !!d.has_setpoint;
+      slot.truncated = !!d.truncated; slot.nSamples = d.n_samples;
+      rvSetStatus(name + ': ' + slot.pts.length + ' points' + (slot.truncated ? ' (thinned from ' + slot.nSamples + ')' : ''));
+      rvSaveSel(); rvAfterChange(true);
+    }).catch(function (e) {
+      if (_rvSel[name] !== slot) return;
+      slot.loading = false; slot.error = e && e.message ? e.message : String(e);
+      rvSetStatus(name + ': ' + slot.error);
+      rvDispose(name); delete _rvSel[name];
+      var i = _rvOrder.indexOf(name); if (i >= 0) _rvOrder.splice(i, 1);
+      rvSaveSel(); rvAfterChange();
+    });
+  }
+
+  function rvSetByError(name, on) {
+    if (!_rvSel[name]) return;
+    _rvSel[name].byError = !!on;
+    _rvSel[name].colorKey = null;
+    rvAfterChange();
+  }
+
+  function rvAfterChange(fit) {
+    rvRenderList();
+    rvSyncScrub();
+    renderReviewLegend();
+    if (fit) rvFit();
+    if (_threeLoaded) render3D();
+  }
+
+  // Scrubber span (s) over the loaded logs.
+  function rvRange() {
+    var lo = Infinity, hi = -Infinity, i, l;
+    for (i = 0; i < _rvOrder.length; i++) {
+      l = _rvSel[_rvOrder[i]];
+      if (!l || !l.pts.length) continue;
+      lo = Math.min(lo, l.pts[0].t / 1000);
+      hi = Math.max(hi, l.pts[l.pts.length - 1].t / 1000);
+    }
+    return lo <= hi ? { min: lo, max: hi } : null;
+  }
+
+  function rvSyncScrub() {
+    var sc = q('pp-rv-scrub'), r = rvRange(), tl = q('pp-rv-time');
+    if (!sc) return;
+    if (!r) { sc.min = '0'; sc.max = '0'; sc.value = '0'; if (tl) tl.textContent = '—'; return; }
+    sc.min = String(Math.floor(r.min * 10) / 10);
+    sc.max = String(Math.ceil(r.max * 10) / 10);
+    sc.value = _rvT == null ? sc.max : String(Math.max(r.min, Math.min(r.max, _rvT)));
+    if (tl) tl.textContent = _rvT == null ? 'end' : (_rvT >= 0 ? '+' : '') + fmtNum(_rvT, 1) + ' s';
+  }
+
+  // Last index with pts[i].t <= tMs, or -1.
+  function rvIndexAt(pts, tMs) {
+    var lo = 0, hi = pts.length - 1, mid, ans = -1;
+    while (lo <= hi) {
+      mid = (lo + hi) >> 1;
+      if (pts[mid].t <= tMs) { ans = mid; lo = mid + 1; } else hi = mid - 1;
+    }
+    return ans;
+  }
+
+  // Whole-log error statistics for the legend: from path execute when the log
+  // has one (the run), otherwise every sample.
+  function rvStats(l) {
+    return flyStats(l.pts, _fly.thr, errKey(), l.tRef === 'path_execute' ? 0 : null);
+  }
+
+  function renderReviewLegend() {
+    var el = q('pp-rv-legend'), html, i, l, s;
+    if (!el) return;
+    if (!_rvOrder.length) { el.innerHTML = '<div class="pp-hint">Select one or more saved logs.</div>'; return; }
+    html = '<table class="pp-rv-table"><thead><tr><th></th><th>Log</th><th>RMS</th><th>Max</th><th>&gt;' + fmtNum(_fly.thr, 2) +
+      ' m</th></tr></thead><tbody>';
+    for (i = 0; i < _rvOrder.length; i++) {
+      l = _rvSel[_rvOrder[i]];
+      if (!l) continue;
+      if (l.loading) { html += '<tr><td><i class="pp-rv-sw" style="background:' + l.color + '"></i></td><td colspan="4">' + escapeText(l.label) + ' …</td></tr>'; continue; }
+      s = rvStats(l);
+      html += '<tr><td><i class="pp-rv-sw" style="background:' + l.color + '"></i></td>' +
+        '<td title="' + escapeText(l.name) + ' (t = 0 at ' + (l.tRef === 'path_execute' ? 'path execute' : 'REC start') + ')">' +
+        escapeText(l.label) + '<small> ' + (l.tRef === 'path_execute' ? 'exec' : 'rec') + '</small></td>' +
+        (l.hasSetpoint
+          ? '<td>' + fmtNum(s.rms, 3) + '</td><td>' + fmtNum(s.max, 3) + '</td><td>' + (s.pctAbove == null ? '—' : fmtNum(s.pctAbove, 0) + ' %') + '</td>'
+          : '<td colspan="3" title="This log has no firmware setpoint (.Des) to measure error against">no setpoint</td>') +
+        '</tr>';
+    }
+    html += '</tbody></table><div class="pp-hint">Error metric: ' + (_fly.metric === 'xy' ? 'xy' : '3D') +
+      '. RMS and max in m; share of time above the threshold. Stats cover the run from path execute (or the whole log).</div>';
+    el.innerHTML = html;
+  }
+
+  function rvFit() {
+    var all = [], i, l, j;
+    if (!_threeCamera || !_threeControls) return;
+    for (i = 0; i < _rvOrder.length; i++) {
+      l = _rvSel[_rvOrder[i]];
+      if (!l) continue;
+      for (j = 0; j < l.pts.length; j += Math.max(1, Math.floor(l.pts.length / 400))) {
+        all.push({ x: l.pts[j].x - _origin.x, y: l.pts[j].y - _origin.y, z: l.pts[j].z || 0 });
+      }
+    }
+    var pose = pathViewPose(all);
+    _threeControls.target.set(pose.target.x, pose.target.y, pose.target.z);
+    _threeCamera.position.set(pose.pos.x, pose.pos.y, pose.pos.z);
+    _threeCamera.lookAt(_threeControls.target);
+    _threeControls.update();
+  }
+
+  function onReviewShown() {
+    var saved = null, i, names;
+    rvRefresh();
+    rvSyncScrub();
+    renderReviewLegend();
+    // Restore last session's selection once.
+    if (!_rvOrder.length) {
+      try { saved = JSON.parse(storageGet(RV_KEY) || 'null'); } catch (e) { saved = null; }
+      if (saved && saved.length) {
+        names = saved.slice(0, 8);
+        for (i = 0; i < names.length; i++) if (validRvName(names[i])) rvToggle(names[i], true);
+      }
+    }
+  }
+
+  function validRvName(n) { return typeof n === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(n); }
+
+  // ── Review 3D objects ──────────────────────────────────────────────────
+  function rvDispose(name) {
+    var l = _rvSel[name], i, o;
+    if (!l || !_rvGroup) return;
+    ['line', 'point'].forEach(function (k) {
+      if (l[k]) {
+        _rvGroup.remove(l[k]);
+        if (l[k].geometry) l[k].geometry.dispose();
+        if (l[k].material) l[k].material.dispose();
+        l[k] = null;
+      }
+    });
+    if (l.markers) {
+      for (i = 0; i < l.markers.length; i++) {
+        o = l.markers[i];
+        _rvGroup.remove(o);
+        if (o.material) o.material.dispose();
+      }
+      l.markers = null;
+    }
+  }
+
+  function rvBuild3D(l) {
+    var THREE = _THREE, n = l.pts.length, geo, i, ev, tex, sp;
+    if (!THREE || !_rvGroup || !n) return;
+    geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+    geo.setDrawRange(0, 0);
+    l.line = new THREE.Line(geo, new THREE.LineBasicMaterial({ vertexColors: true }));
+    l.line.frustumCulled = false;
+    _rvGroup.add(l.line);
+    l.point = new THREE.Mesh(new THREE.SphereGeometry(0.02, 14, 10), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+    l.point.renderOrder = 9;
+    _rvGroup.add(l.point);
+    l.markers = [];
+    for (i = 0; i < l.events.length; i++) {
+      ev = l.events[i];
+      if (!ev.pos) continue;
+      tex = eventTexture(ev.kind);
+      if (!tex) continue;
+      sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+      sp.scale.set(0.06, 0.06, 1);
+      sp.renderOrder = 10;
+      sp.userData = { t: ev.t };
+      sp.position.set(ev.pos.x - _origin.x, (ev.pos.z || 0) + 0.03, ev.pos.y - _origin.y);
+      _rvGroup.add(sp);
+      l.markers.push(sp);
+    }
+    l.colorKey = null;
+    l.builtOrigin = { x: _origin.x, y: _origin.y };
+  }
+
+  function rvPaint(l) {
+    var key = (l.byError ? 'e' + _fly.thr + errKey() : 'c') + '|' + l.color + '|' + _origin.x + ',' + _origin.y, geo, pos, col, i, p, e, rgb, base, k;
+    if (l.colorKey === key || !l.line) return;
+    geo = l.line.geometry;
+    pos = geo.getAttribute('position'); col = geo.getAttribute('color');
+    base = hexRgb(l.color); k = errKey();
+    for (i = 0; i < l.pts.length; i++) {
+      p = l.pts[i];
+      pos.setXYZ(i, p.x - _origin.x, p.z || 0, p.y - _origin.y);
+      if (l.byError) {
+        e = p[k];
+        rgb = e == null ? [0.45, 0.55, 0.75] : (e > _fly.thr ? [1, 0.25, 0.25] : [0.2, 0.85, 0.45]);
+      } else rgb = base;
+      col.setXYZ(i, rgb[0], rgb[1], rgb[2]);
+    }
+    pos.needsUpdate = true; col.needsUpdate = true;
+    l.colorKey = key;
+  }
+
+  // Draw every loaded log up to the scrubber time.
+  function rvRender3D() {
+    var i, l, idx, tMs, p, j, mk, e;
+    if (!_rvGroup) return;
+    for (i = 0; i < _rvOrder.length; i++) {
+      l = _rvSel[_rvOrder[i]];
+      if (!l || l.loading || !l.pts.length) continue;
+      if (!l.line) rvBuild3D(l);
+      if (!l.line) continue;
+      rvPaint(l);
+      tMs = _rvT == null ? Infinity : _rvT * 1000;
+      idx = _rvT == null ? l.pts.length - 1 : rvIndexAt(l.pts, tMs);
+      l.line.geometry.setDrawRange(0, idx + 1);
+      l.point.visible = idx >= 0;
+      if (idx >= 0) {
+        p = l.pts[idx];
+        l.point.position.set(p.x - _origin.x, p.z || 0, p.y - _origin.y);
+        e = p[errKey()];
+        l.point.material.color.setHex(l.byError && e != null ? (e > _fly.thr ? 0xff4040 : 0x4ecca3) : parseInt(l.color.slice(1), 16));
+      }
+      for (j = 0; j < (l.markers || []).length; j++) {
+        mk = l.markers[j];
+        mk.visible = mk.userData.t <= tMs;
+      }
+    }
+  }
+
+  function rvPlayToggle() {
+    var r, btn = q('pp-rv-play');
+    if (_rvTimer) { clearInterval(_rvTimer); _rvTimer = null; if (btn) btn.textContent = '▶'; return; }
+    r = rvRange();
+    if (!r || typeof setInterval !== 'function') return;
+    if (_rvT == null || _rvT >= r.max) _rvT = r.min;
+    if (btn) btn.textContent = '❚❚';
+    _rvTimer = setInterval(function () {
+      var rr = rvRange();
+      if (!rr) { rvPlayToggle(); return; }
+      _rvT += 0.1;
+      if (_rvT >= rr.max) { _rvT = null; rvPlayToggle(); }
+      rvSyncScrub();
+      if (_threeLoaded) render3D();
+    }, 100);
+  }
+
   // ── Build HTML ──────────────────────────────────────────────────────────
   function buildHTML() {
     return [
@@ -2901,6 +3280,16 @@
       '.pp-mode-fly .pp-3d-canvas { height: calc(100vh - 300px); min-height: 380px; }',
       '.pp-mode-review .pp-3d-canvas { height: calc(100vh - 220px); min-height: 380px; }',
       '.pp-mode-fly.pp-container { grid-template-columns: 1fr; }',
+      '.pp-mode-review.pp-container { grid-template-columns: 1fr 300px; }',
+      '.pp-rv-row { display: flex; align-items: center; gap: 6px; font-size: 11px; padding: 3px 0; border-bottom: 1px solid var(--border); }',
+      '.pp-rv-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
+      '.pp-rv-name small, .pp-rv-table small { color: var(--muted); font-size: 9px; }',
+      '.pp-rv-sw { display: inline-block; width: 12px; height: 12px; border-radius: 2px; border: 1px solid var(--border); flex: none; }',
+      '.pp-rv-err { font-size: 10px; color: var(--muted); white-space: nowrap; }',
+      '.pp-rv-list { max-height: 220px; overflow-y: auto; }',
+      '.pp-rv-table { width: 100%; border-collapse: collapse; font-size: 11px; font-family: Consolas, monospace; }',
+      '.pp-rv-table th { text-align: left; font-size: 10px; color: var(--muted); padding: 3px 4px; border-bottom: 1px solid var(--border); }',
+      '.pp-rv-table td { padding: 3px 4px; }',
       '</style>',
 
       '<div id="pp-container" class="pp-container pp-mode-plan">',
@@ -3146,6 +3535,33 @@
 
       '<div id="pp-tools-review" style="display:none">',
       '<div>',
+      '<div class="pp-section-label">Saved REC logs</div>',
+      '<div class="pp-entry-row">',
+      '<button id="pp-rv-refresh" class="pp-btn pp-btn-sm" title="Re-read the list of saved REC sessions">Refresh</button>',
+      '<button id="pp-rv-fit" class="pp-btn pp-btn-sm" title="Frame the selected logs">Fit</button>',
+      '</div>',
+      '<div id="pp-rv-status" class="pp-hint">Open Review to list saved logs.</div>',
+      '<div id="pp-rv-list" class="pp-rv-list"></div>',
+      '</div>',
+      '<div>',
+      '<div class="pp-section-label">Scrubber</div>',
+      '<div class="pp-entry-row" style="align-items:center;gap:8px">',
+      '<button id="pp-rv-play" class="pp-btn pp-btn-sm" title="Play / pause">&#9654;</button>',
+      '<input id="pp-rv-scrub" type="range" min="0" max="0" step="0.1" value="0" style="flex:1" title="Shared time: 0 = path execute (REC start when a log has none)">',
+      '<span id="pp-rv-time" style="font-family:monospace;font-size:11px;min-width:52px;color:#aaa">—</span>',
+      '</div>',
+      '</div>',
+      '<div>',
+      '<div class="pp-section-label">Legend</div>',
+      '<div id="pp-rv-legend"></div>',
+      '</div>',
+      '<div>',
+      '<div class="pp-section-label">Error metric</div>',
+      '<div class="pp-entry-row">',
+      '<select id="pp-rv-metric" class="pp-wp-input" title="3D: x, y and z error. xy: horizontal only"><option value="3d">3D</option><option value="xy">xy</option></select>',
+      '</div>',
+      '</div>',
+      '<div>',
       '<div class="pp-section-label">Error threshold</div>',
       '<div class="pp-entry-row">',
       '<input id="pp-rv-thr" type="range" min="0.01" max="1" step="0.01" value="0.10" style="flex:1" title="Shared with Fly mode">',
@@ -3271,6 +3687,29 @@
       if (flyTrail) flyTrail.addEventListener('change', function () { setFly({ trail: this.value }); });
       var rvThr = q('pp-rv-thr');
       if (rvThr) rvThr.addEventListener('input', function () { setFly({ thr: parseFloat(this.value) }); });
+      var rvMetric = q('pp-rv-metric');
+      if (rvMetric) rvMetric.addEventListener('change', function () { setFly({ metric: this.value }); });
+      var rvRef = q('pp-rv-refresh');
+      if (rvRef) rvRef.addEventListener('click', rvRefresh);
+      var rvFitBtn = q('pp-rv-fit');
+      if (rvFitBtn) rvFitBtn.addEventListener('click', rvFit);
+      var rvPlay = q('pp-rv-play');
+      if (rvPlay) rvPlay.addEventListener('click', rvPlayToggle);
+      var rvScrub = q('pp-rv-scrub');
+      if (rvScrub) rvScrub.addEventListener('input', function () {
+        _rvT = parseFloat(this.value) >= parseFloat(this.max) ? null : parseFloat(this.value);
+        rvSyncScrub();
+        if (_threeLoaded) render3D();
+      });
+      var rvList = q('pp-rv-list');
+      if (rvList) rvList.addEventListener('change', function (ev) {
+        var t = ev && ev.target, nm;
+        if (!t || typeof t.getAttribute !== 'function') return;
+        nm = t.getAttribute('data-rv-name');
+        if (nm) { rvToggle(nm, !!t.checked); return; }
+        nm = t.getAttribute('data-rv-err');
+        if (nm) rvSetByError(nm, !!t.checked);
+      });
       var flyFit = q('pp-fly-fit');
       if (flyFit) flyFit.addEventListener('click', fitFlyCamera);
       var flyClear = q('pp-fly-clear');
@@ -3420,6 +3859,8 @@
     _threeFollowDrone = false;
     _trackingError = 0;
     stopNotesPoll();
+    if (_rvTimer) { clearInterval(_rvTimer); _rvTimer = null; }
+    _rvSel = {}; _rvOrder = []; _rvLogs = []; _rvT = null;
     if (_keyHandler && typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
       document.removeEventListener('keydown', _keyHandler);
     }
@@ -3459,7 +3900,11 @@
     getFly: function () { return { thr: _fly.thr, metric: _fly.metric, trail: _fly.trail }; },
     getEvents: function () { return _events.slice(); }, getRunT0: function () { return _runT0; },
     getTrajectory: function () { return _trajectory.slice(); },
-    EVENT_KINDS: EVENT_KINDS, FLY_DEFAULT: FLY_DEFAULT
+    EVENT_KINDS: EVENT_KINDS, FLY_DEFAULT: FLY_DEFAULT,
+    // Review mode
+    rvConvert: rvConvert, rvToggle: rvToggle, rvSetByError: rvSetByError, rvRange: rvRange, rvIndexAt: rvIndexAt,
+    rvStats: rvStats, rvRefresh: rvRefresh, getRv: function () { return { order: _rvOrder.slice(), sel: _rvSel, t: _rvT }; },
+    RV_COLORS: RV_COLORS
   };
 
   window.__registerPlugin__('Path Planning', window.__PLUGIN_INIT__, window.__PLUGIN_DESTROY__);

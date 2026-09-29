@@ -22,7 +22,7 @@ class TestPathFly(unittest.TestCase):
                               timeout=120, cwd=str(Path(__file__).resolve().parents[3]))
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("ALL CHECKS PASSED SUCCESSFULLY.", proc.stdout)
-        for n in range(1, 10):
+        for n in range(1, 13):
             self.assertIn("[CHECK %d:" % n, proc.stdout)
 
 

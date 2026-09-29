@@ -68,7 +68,10 @@ function loadPanel(opts) {
     Date, Math, Number, String, Boolean, Array, Object, JSON, isNaN, setInterval, clearInterval, setTimeout, clearTimeout,
     fetch(url, o) {
       gets.push({ url, opts: o });
-      return Promise.resolve({ ok: true, json: () => Promise.resolve(opts.notes ? { notes: opts.notes } : {}) });
+      const hit = opts.fetchMap && Object.keys(opts.fetchMap).find((k) => url === k || (k.slice(-1) === '?' && url.indexOf(k) === 0));
+      if (hit) return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(opts.fetchMap[hit]) });
+      if (opts.fetchMap && url.indexOf('/api/rec-logs/') === 0) return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) });
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(opts.notes ? { notes: opts.notes } : {}) });
     },
     localStorage: { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } },
   };
@@ -97,7 +100,7 @@ function frame(px, py, pz, dx, dy, dz, extra) {
 const deq = (a, b, m) => assert.deepStrictEqual(JSON.parse(JSON.stringify(a)), JSON.parse(JSON.stringify(b)), m);
 const near = (a, b, e) => Math.abs(a - b) <= (e || 1e-9);
 
-function run() {
+async function run() {
   console.log('--- PATH PANEL FLY MODE OFFLINE CHECKS ---');
 
   {
@@ -274,6 +277,104 @@ function run() {
     console.log('  PASS');
   }
 
+  // ── Review mode ───────────────────────────────────────────────────────
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  // 10 s log at 10 Hz, t = 0 at path execute; constant 3D error `e`.
+  const mkLog = (e, extra) => Object.assign({
+    name: 'x', label: 'x', t_ref: 'path_execute', has_setpoint: true, has_z: true, truncated: false, n_samples: 101,
+    samples: Array.from({ length: 101 }, (_, i) => [i / 10 - 2, i * 0.01, 0, 0.5, 0, 0, 0.5, e, e]),
+    events: [{ t: 1, kind: 'adapt', text: 'adaptation ON', pos: [0.1, 0, 0.5] }, { t: 3, kind: 'bogus', text: 'x', pos: null }],
+  }, extra || {});
+  const RVMAP = {
+    '/api/rec-logs/A?': mkLog(0.05, { label: 'hover_pid' }),
+    '/api/rec-logs/B?': mkLog(0.20, { label: 'circle_mrac', t_ref: 'rec_start' }),
+    '/api/rec-logs/C?': mkLog(null, { label: 'nosp', has_setpoint: false }),
+    '/api/rec-logs/D?': mkLog(0.10, { label: 'fourth' }),
+    '/api/rec-logs': { logs: [{ name: 'A', label: 'hover_pid', started_at: 1.7e9, duration_s: 10 }, { name: 'B', label: 'circle_mrac', started_at: 1.7e9 + 100, duration_s: 10 }, { name: 'C', label: 'nosp', started_at: 1.7e9 + 200 }, { name: 'D', label: 'fourth', started_at: 1.7e9 + 300 }] },
+  };
+
+  {
+    console.log('\n[CHECK 10: server samples -> panel points (ms), unknown event kinds dropped]');
+    const T = loadPanel().T;
+    const c = T.rvConvert(mkLog(0.05));
+    assert.strictEqual(c.pts.length, 101);
+    assert.ok(near(c.pts[0].t, -2000) && near(c.pts[100].t, 8000), 'seconds -> ms, t = 0 at path execute');
+    assert.ok(near(c.pts[5].e3, 0.05) && near(c.pts[5].z, 0.5));
+    assert.strictEqual(c.events.length, 1, 'unknown kind dropped');
+    assert.ok(near(c.events[0].t, 1000) && near(c.events[0].pos.z, 0.5));
+    console.log('  PASS');
+  }
+
+  {
+    console.log('\n[CHECK 11: pick N logs (4), one colour each, legend RMS / max / % above, no-setpoint honest]');
+    const env = loadPanel({ fetchMap: RVMAP }); const T = env.T;
+    T.setMode('review');
+    await sleep(20);
+    assert.ok(/4 saved logs/.test(env.el('pp-rv-status').textContent), env.el('pp-rv-status').textContent);
+    const list = env.el('pp-rv-list').innerHTML;
+    for (const n of ['A', 'B', 'C', 'D']) assert.ok(list.indexOf('data-rv-name="' + n + '"') >= 0, 'row ' + n);
+    ['A', 'B', 'C', 'D'].forEach((n) => T.rvToggle(n, true));
+    await sleep(30);
+    const rv = T.getRv();
+    deq(rv.order, ['A', 'B', 'C', 'D']);
+    const colors = rv.order.map((n) => rv.sel[n].color);
+    assert.strictEqual(new Set(colors).size, 4, 'one colour per log: ' + colors);
+    const leg = env.el('pp-rv-legend').innerHTML;
+    assert.ok(/hover_pid/.test(leg) && /circle_mrac/.test(leg));
+    // A: 0.05 always below 0.10 -> 0 % ; B: 0.20 always above -> 100 %
+    const rowOf = (label) => leg.split('<tr>').find((r) => r.indexOf(label) >= 0);
+    assert.ok(/0\.050<\/td><td>0\.050<\/td><td>0 %/.test(rowOf('hover_pid')), rowOf('hover_pid'));
+    assert.ok(/0\.200<\/td><td>0\.200<\/td><td>100 %/.test(rowOf('circle_mrac')), rowOf('circle_mrac'));
+    assert.ok(/no setpoint/.test(rowOf('nosp')) && !/0\.000/.test(rowOf('nosp')), 'no fabricated zero error');
+    assert.ok(/exec/.test(rowOf('hover_pid')) && /rec/.test(rowOf('circle_mrac')), 't = 0 reference shown per log');
+    // threshold moves the legend: at 0.25 B is under, at 0.03 A is over
+    T.setFly({ thr: 0.25 });
+    assert.ok(/0\.200<\/td><td>0\.200<\/td><td>0 %/.test(env.el('pp-rv-legend').innerHTML.split('<tr>').find((r) => r.indexOf('circle_mrac') >= 0)));
+    T.setFly({ thr: 0.03 });
+    assert.ok(/100 %/.test(env.el('pp-rv-legend').innerHTML.split('<tr>').find((r) => r.indexOf('hover_pid') >= 0)));
+    // per-log colour-by-error toggle
+    T.rvSetByError('A', true);
+    assert.strictEqual(T.getRv().sel.A.byError, true);
+    assert.strictEqual(T.getRv().sel.B.byError, false);
+    assert.ok(/data-rv-err="A" checked/.test(env.el('pp-rv-list').innerHTML));
+    // selection persists
+    assert.deepStrictEqual(JSON.parse(env.store['pp_rv_sel_v1']), ['A', 'B', 'C', 'D']);
+    T.rvToggle('C', false);
+    deq(T.getRv().order, ['A', 'B', 'D']);
+    deq(JSON.parse(env.store['pp_rv_sel_v1']), ['A', 'B', 'D']);
+    console.log('  PASS'); env.destroy();
+  }
+
+  {
+    console.log('\n[CHECK 12: shared scrubber range and per-log index; missing log is dropped]');
+    const env = loadPanel({ fetchMap: RVMAP }); const T = env.T;
+    T.setMode('review'); await sleep(20);
+    T.rvToggle('nope', true);
+    await sleep(30);
+    deq(T.getRv().order, [], 'a 404 log leaves the selection');
+    assert.ok(/no longer exists/.test(env.el('pp-rv-status').textContent), env.el('pp-rv-status').textContent);
+    T.rvToggle('A', true); T.rvToggle('B', true);
+    await sleep(30);
+    deq(T.getRv().order, ['A', 'B']);
+    const r = T.rvRange();
+    assert.ok(near(r.min, -2) && near(r.max, 8), JSON.stringify(r));
+    const sc = env.el('pp-rv-scrub');
+    assert.ok(parseFloat(sc.min) <= -2 && parseFloat(sc.max) >= 8);
+    const pts = T.rvConvert(mkLog(0.05)).pts;
+    assert.strictEqual(T.rvIndexAt(pts, -3000), -1);
+    assert.strictEqual(T.rvIndexAt(pts, 0), 20);
+    assert.strictEqual(T.rvIndexAt(pts, 99999), 100);
+    // scrubber input sets the shared time; the end restores "whole log"
+    sc.value = '1.5'; sc.handlers.input.forEach((f) => f.call(sc));
+    assert.strictEqual(T.getRv().t, 1.5);
+    assert.ok(/\+1\.5 s/.test(env.el('pp-rv-time').textContent));
+    sc.value = sc.max; sc.handlers.input.forEach((f) => f.call(sc));
+    assert.strictEqual(T.getRv().t, null);
+    // GET only
+    assert.strictEqual(env.gets.filter((g) => g.opts && g.opts.method && g.opts.method !== 'GET').length, 0);
+    console.log('  PASS'); env.destroy();
+  }
+
   console.log('\nALL CHECKS PASSED SUCCESSFULLY.');
 }
-run();
+run().catch((e) => { console.error(e); process.exit(1); });

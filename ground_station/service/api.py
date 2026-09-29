@@ -444,6 +444,8 @@ _ROUTE_MAP = {
         "/analysis/effective-rate": "?session_id=<sid>&stream=<int>",
         "/api/diagnostics/bundle": "frames, commands, faults for bug reports",
         "/api/recording": "recording state {recording, session_dir, started_at, rows, bytes, reason, analyse, analysis_status}",
+        "/api/rec-logs": "saved REC sessions (newest first): name, label, start, duration, rows (read-only; Path panel Review mode)",
+        "/api/rec-logs/<name>": "one saved REC session as a trajectory + events for the Path panel overlay (?max_points=N; read-only)",
         "/api/session/notes": "operator notes buffered while not recording",
         "/api/paths": "list or create paths",
         "/api/paths/<id>": "get, update or delete path",
@@ -1339,6 +1341,28 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     except Exception:
                         pass
                 self._json(200, status)
+            elif route == "/api/rec-logs" or route.startswith("/api/rec-logs/"):
+                # Read-only view of saved REC sessions for the Path panel's
+                # Review mode. The root is the recorder's own session root.
+                from ground_station.service import rec_logs
+                root = Path(getattr(getattr(service, "recorder", None), "root", None)
+                            or "logs/sessions")
+                if route == "/api/rec-logs":
+                    self._json(200, rec_logs.list_rec_logs(root))
+                else:
+                    qs = parse_qs(urlsplit(self.path).query)
+                    try:
+                        mp = int((qs.get("max_points") or [rec_logs.DEFAULT_MAX_POINTS])[0])
+                    except ValueError:
+                        mp = rec_logs.DEFAULT_MAX_POINTS
+                    try:
+                        self._json(200, rec_logs.load_rec_log(root, route.split("/")[-1], mp))
+                    except ValueError:
+                        self._json(400, {"error": "invalid log name"})
+                    except FileNotFoundError:
+                        self._json(404, {"error": "no such REC log"})
+                    except Exception as exc:  # noqa: BLE001 - a bad log must not kill the handler
+                        self._json(500, {"error": "could not read log: %s" % exc})
             elif route == "/api/flight_tests":
                 # List flight-test runs, optionally filtered by date
                 qs = parse_qs(urlsplit(self.path).query)
