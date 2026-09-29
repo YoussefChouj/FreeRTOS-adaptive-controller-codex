@@ -612,12 +612,12 @@ class TestSubscribeTransactionLifecycle(unittest.TestCase):
 
 
 class TestDashboardLayoutBatching(unittest.TestCase):
-    """Verify the current 54-var DASHBOARD_FRAME_A_VARS fits in one request."""
+    """Verify the current 61-var DASHBOARD_FRAME_A_VARS fits in one request."""
 
     def test_dashboard_vars_exceed_limit(self):
-        """DASHBOARD_FRAME_A_VARS has 54 entries."""
+        """DASHBOARD_FRAME_A_VARS has 61 entries (54 + 7 Fly-mode extras)."""
         from ground_station.comm.boot_default_layout import DASHBOARD_FRAME_A_VARS
-        self.assertEqual(len(DASHBOARD_FRAME_A_VARS), 54)
+        self.assertEqual(len(DASHBOARD_FRAME_A_VARS), 61)
         self.assertGreater(len(DASHBOARD_FRAME_A_VARS), 30)
 
     @pytest.mark.skip(reason="spec for unimplemented subscribe transaction layer; see reports/COMM-TEST-TRIAGE.md")

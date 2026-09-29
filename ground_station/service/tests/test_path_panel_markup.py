@@ -43,6 +43,8 @@ class TestPathPanelMarkup(unittest.TestCase):
         #    renderWaypointTable) are intentionally excluded — they are added
         #    to the DOM imperatively and do not belong in the static markup.
         DYNAMIC_IDS = {"pp-add-wp"}  # created in renderWaypointTable() line ~477
+        # Shell header controls (index.html), driven by the Fly-mode R / N keys.
+        DYNAMIC_IDS |= {"record-btn", "note-input"}
 
         # 3. Extract all id="..." from the buildHTML function.
         #    Grab the function body by finding `function buildHTML()` and
@@ -99,7 +101,7 @@ class TestPathPanelMarkup(unittest.TestCase):
         markup_ids = set(re.findall(r'''id\s*=\s*["']([^"']+)["']''', return_array))
 
         # Any ID not in markup (or dynamically generated) is a broken reference
-        DYNAMIC_IDS = {"pp-add-wp"}
+        DYNAMIC_IDS = {"pp-add-wp", "record-btn", "note-input"}
         broken = [qid for qid in all_queried if qid not in markup_ids and qid not in DYNAMIC_IDS]
         self.assertEqual(
             broken, [],

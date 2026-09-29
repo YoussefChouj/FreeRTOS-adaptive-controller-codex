@@ -166,4 +166,24 @@ controllers (currently PID + adaptive layer).
   Buffer example 120 s x 10 Hz x 4 floats = 19,200 B (computed; rate proposed) -> CCM, not main SRAM.
   Rejected: streaming setpoints live (WiFi jitter pollutes tuning metrics); flash per path (slow,
   blocked when armed). Firmware change is flight-path code -> tier-0 permission at build time.
-- then: agent autonomy over gains, controller-agnostic interface to A, stop/abort criteria.
+- Q9b DECIDED (user, 2026-09-30): accepted as proposed, with a user ADDITION: points must be at a FIXED
+  DISTANCE apart, and the user or the agent sets exactly how the path is timed (velocity per point,
+  acceleration, jerk limits, named profiles) so trajectories are smooth. Recorded design consequence:
+  GS pipeline = shape (preset generator or hand drawing) -> tilt rotation -> resample at fixed arc-length
+  spacing (parameter) -> timing profile (constant speed / trapezoid accel-limited / S-curve jerk-limited /
+  per-point velocity override) -> validator (envelope, ceiling, <= 120 s, speed/accel/jerk limits) -> upload.
+  Firmware buffer = fixed-spacing points, each x/y/z/yaw + timestamp (5 floats = 20 B); firmware stays
+  simple and interpolates by time between neighbours. Point count follows path length / spacing, not
+  duration: e.g. 60 m path (120 s at 0.5 m/s) at 5 cm spacing = 1,200 points x 20 B = 24,000 B
+  (computed; speed and spacing proposed) -> CCM. Exceptions: hold/dwell = zero-distance segment with a
+  time gap; step/doublet presets use profile "none" (they are meant to be sharp). Fact (read 2026-09-30):
+  firmware already has CMD 0x14 SysID excitation (chirp/multisine on pitch/roll/yaw rate or Z, f0/f1,
+  amplitude, duration, geofence flag; TASK/send_data.c:1792) -> frequency sweeps use 0x14 as a
+  maneuver kind in the plan, not a position chirp.
+- Q10 OPEN: agent autonomy over gains. Fact (read 2026-09-30): ground_station/service/agent.py:240-253
+  classes every PID/MRAC/limits/filter param-write command (0x01..0x1E list) as tier 0, and a tier-0
+  write "needs operator approval in EVERY mode, autonomous included". Proposed: operator approves a
+  per-campaign gain envelope once (per parameter: min, max, max change per flight); agent writes gains
+  only while landed + disarmed, only inside the envelope, reads them back, logs the exact set per flight;
+  anything outside the envelope -> asks. Requires a narrow exception to the agent.py rule.
+- then: controller-agnostic interface to A, stop/abort criteria.

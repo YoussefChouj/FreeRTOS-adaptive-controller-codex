@@ -35,6 +35,31 @@
   var _scrubIndex = null;    // null = live / latest, integer = index in trajectory
   var _trackingMetrics = { count: 0, rms: null, max: null, rmsX: null, rmsY: null, rmsZ: null };
 
+  // ── Modes (Plan / Fly / Review) and Fly-mode settings ──────────────────
+  // Plan keeps the planning tools; Fly fills the panel with the 3D view for a
+  // flight test; Review overlays saved REC logs. Spec:
+  // docs/dashboard-platform/3d-panel-flight-ux-spec.md
+  var MODE_KEY = 'pp_mode_v1';
+  var FLY_KEY = 'pp_fly_v1';
+  var MODES = ['plan', 'fly', 'review'];
+  // 0.10 m is a starting value chosen in the design review, not a measured one.
+  var FLY_DEFAULT = { thr: 0.10, metric: '3d', trail: 'whole' };
+  var THR_MIN = 0.01;
+  var THR_MAX = 1.0;
+  var FADE_POINTS = 400;       // Fading trail: newest points at full brightness
+  var MAX_EVENTS = 500;
+  var _mode = loadMode();
+  var _fly = loadFly();        // { thr (m), metric '3d'|'xy', trail 'whole'|'fading' }
+  var _events = [];            // { kind, text, t (ms), pos {x,y,z}|null, source }
+  var _runT0 = null;           // wall ms of the last path execute (run start)
+  var _flyStatus = { mode: null, adapt: null, vbat: null, twc: null };
+  var _lastPathEvt = { dir: null, t: 0 };
+  var _notesSeq = 0;
+  var _notesTimer = null;
+  var _threeEventGroup = null;
+  var _threePoint = null;
+  var _eventTex = {};
+
   // ── 3D view state ──────────────────────────────────────────────────────
   var _threeLoaded = false;
   var _threeScene = null;
@@ -155,9 +180,10 @@
 
   // Camera pose (three.js axes: y up, z = world y) framing a sphere of radius
   // rad around target t.
-  function viewPose(preset, t, rad) {
+  function viewPose(preset, t, rad, aspect) {
     var dist = 2.3 * rad;   // fov 60: rad / sin(30 deg) = 2 rad, plus margin
     var p;
+    if (aspect > 0 && aspect < 1) dist /= aspect;   // narrow canvas: the horizontal fov is the limit
     if (preset === 'top') p = { x: t.x, y: t.y + dist, z: t.z + 0.001 };
     else if (preset === 'side') p = { x: t.x + dist, y: t.y, z: t.z };
     else if (preset === 'front') p = { x: t.x, y: t.y, z: t.z + dist };
@@ -168,9 +194,9 @@
     return { pos: p, target: t };
   }
 
-  function roomViewPose(preset) {
+  function roomViewPose(preset, aspect) {
     var rad = 0.5 * Math.sqrt(_room.w * _room.w + _room.d * _room.d + _room.h * _room.h);
-    return viewPose(preset, { x: 0, y: _room.h / 2, z: 0 }, rad);
+    return viewPose(preset, { x: 0, y: _room.h / 2, z: 0 }, rad, aspect);
   }
 
   // Iso pose framing the bounding box of points clamped to the room (min radius
@@ -270,6 +296,16 @@
     return parseFloat(zNum);
   }
 
+  // Height in metres. The firmware altitude PID feedback (Ctrler.Z_posPID.FB,
+  // metres) is preferred: the Z setpoint is in the same unit, so the Fly-mode
+  // 3D error compares like with like. Otherwise the optical-flow altitude.
+  var POS_Z_M_KEYS = ['Ctrler.Z_posPID.FB', 'Z_posPID.FB', 'pid.z_pos.FB'];
+  function positionZ(valueMap) {
+    var zm = lookupValue(valueMap, POS_Z_M_KEYS);
+    if (zm !== undefined && zm !== null && !isNaN(Number(zm))) return parseFloat(zm);
+    return metreAltitude(valueMap, lookupValue(valueMap, POS_Z_KEYS));
+  }
+
   function extractPosition(state) {
     if (!state) return null;
 
@@ -285,7 +321,7 @@
         if (x !== undefined && y !== undefined &&
             !isNaN(Number(x)) && !isNaN(Number(y))) {
           return { x: parseFloat(x) / 100, y: parseFloat(y) / 100,
-                   z: metreAltitude(vals, lookupValue(vals, POS_Z_KEYS)),
+                   z: positionZ(vals),
                    yaw: yaw !== undefined ? parseFloat(yaw) : 0 };
         }
       }
@@ -299,7 +335,7 @@
     if (fx !== undefined && fy !== undefined &&
         !isNaN(Number(fx)) && !isNaN(Number(fy))) {
       return { x: parseFloat(fx) / 100, y: parseFloat(fy) / 100,
-               z: metreAltitude(flat, lookupValue(flat, POS_Z_KEYS)),
+               z: positionZ(flat),
                yaw: fyaw !== undefined ? parseFloat(fyaw) : 0 };
     }
 
@@ -334,8 +370,10 @@
     }
 
     var z = 0;
+    var hasZ = false;   // false: no z setpoint published, so z must not enter an error
     var rawZ = lookupValue(valueMap, DES_Z_KEYS);
     if (rawZ !== undefined && rawZ !== null && !isNaN(Number(rawZ))) {
+      hasZ = true;
       var zKey = '';
       for (var kz in valueMap) {
         var bareZ = kz.replace(SLOT_PREFIX_RE, '');
@@ -347,7 +385,7 @@
         z = parseFloat(rawZ);
       }
     }
-    return { x: x, y: y, z: z };
+    return { x: x, y: y, z: z, hasZ: hasZ };
   }
 
   function extractDesiredPosition(state) {
@@ -381,7 +419,8 @@
   function addPoint(pos, optTime) {
     if (!pos || pos.x == null || pos.y == null) return;
     var t = pos.t !== undefined ? pos.t : (optTime !== undefined ? optTime : nextTimestamp());
-    _trajectory.push({ x: pos.x - _origin.x, y: pos.y - _origin.y, z: pos.z, yaw: pos.yaw, t: t });
+    _trajectory.push({ x: pos.x - _origin.x, y: pos.y - _origin.y, z: pos.z, yaw: pos.yaw, t: t,
+                       e3: pos.e3 == null ? null : pos.e3, exy: pos.exy == null ? null : pos.exy });
     _rxFb.push(Date.now());
     if (_rxFb.length > RX_KEEP) _rxFb.shift();
     if (_trajectory.length > MAX_TRAIL) {
@@ -1137,6 +1176,20 @@
     _threeLinePlan = new THREE.Line(planGeo, planMat);
     _threeScene.add(_threeLinePlan);
 
+    // The drone is drawn as a point only (no body model).
+    _threePoint = new THREE.Mesh(new THREE.SphereGeometry(0.022, 16, 12),
+      new THREE.MeshBasicMaterial({ color: 0x4a9eff }));
+    _threePoint.visible = false;
+    _threePoint.renderOrder = 9;
+    _threeScene.add(_threePoint);
+    rebuildEventMarkers();
+    // Loaded review logs need fresh scene objects after a (re)init.
+    _rvGroup = new THREE.Group();
+    _threeScene.add(_rvGroup);
+    Object.keys(_rvSel).forEach(function (k) { _rvSel[k].line = null; _rvSel[k].point = null; _rvSel[k].markers = null; });
+    _threeControls.enabled = _mode !== 'fly';
+    if (_mode === 'fly') fitFlyCamera();
+
     updateErrorSprite();
 
     _threeLoaded = true;
@@ -1160,17 +1213,45 @@
     if (el) el.textContent = 'RMS: ' + rmsText + ' m | Max: ' + maxText + ' m';
   }
 
+  // Drone point at the newest (or scrubbed) position, coloured by its error.
+  function updateDronePoint(active) {
+    var p, e, col;
+    if (!_threePoint) return;
+    if (!active.length) { _threePoint.visible = false; return; }
+    p = active[active.length - 1];
+    _threePoint.position.set(p.x, p.z || 0, p.y);
+    _threePoint.visible = true;
+    e = p[errKey()];
+    col = e == null ? 0x4a9eff : (e > _fly.thr ? 0xff4040 : 0x4ecca3);
+    _threePoint.material.color.setHex(col);
+  }
+
   function render3D() {
     if (!_threeRenderer || !_threeScene || !_threeCamera) return;
 
     updateDrawPlane();
+
+    // Review shows the saved logs instead of the live trail.
+    var review = _mode === 'review';
+    [_threeLineActual, _threeShadow, _threeLineDesired, _threeLinePlan, _threePoint, _threeEventGroup].forEach(function (o) {
+      if (o) o.visible = !review;
+    });
+    if (_rvGroup) _rvGroup.visible = review;
+    if (review) {
+      rvRender3D();
+      _threeControls.update();
+      _threeRenderer.render(_threeScene, _threeCamera);
+      return;
+    }
 
     var activeActual = getActiveTrajectory();
     var activeDesired = getActiveDesiredTrajectory();
 
     // Update actual path
     if (activeActual.length > 0 && _threeLineActual) {
-      updateLineGeometry(_threeLineActual, activeActual, actualSegColor);
+      // Fly and Review colour the trail by tracking error; Plan by room bounds.
+      updateLineGeometry(_threeLineActual, activeActual,
+        _mode === 'plan' ? actualSegColor : flyColorFn(_fly.thr, errKey(), _fly.trail === 'fading' && _mode === 'fly'));
     } else if (_threeLineActual) {
       _threeLineActual.geometry.setDrawRange(0, 0);
     }
@@ -1209,6 +1290,7 @@
       _threeLinePlan.geometry.setDrawRange(0, 0);
     }
 
+    updateDronePoint(activeActual);
     updateErrorSprite();
     var oobEl = q('pp-3d-oob');
     if (oobEl) {
@@ -1218,7 +1300,7 @@
     }
 
     // Follow drone
-    if (_threeFollowDrone && activeActual.length > 0) {
+    if (_threeFollowDrone && _mode === 'plan' && activeActual.length > 0) {
       var lp = activeActual[activeActual.length - 1];
       _threeCamera.position.set(lp.x + 0.6, (lp.z || 0) + 0.45, lp.y + 0.6);
       _threeControls.target.set(lp.x, lp.z || 0, lp.y);
@@ -1237,6 +1319,12 @@
     _desiredPath = _desiredTrajectory;
     _scrubIndex = null;
     _autoFitted = false;
+    _events = [];
+    _runT0 = null;
+    _lastPathEvt = { dir: null, t: 0 };
+    rebuildEventMarkers();
+    renderFlyEvents();
+    renderFlyStrip();
     updateMetrics();
     renderMetrics();
     render();
@@ -1257,6 +1345,7 @@
 
   function fitPath3D() {
     if (!_threeCamera || !_threeControls) return;
+    if (_mode === 'review') { rvFit(); return; }
     var pose = pathViewPose(getActiveTrajectory().concat(_plannedPath || []));
     _threeControls.target.set(pose.target.x, pose.target.y, pose.target.z);
     _threeCamera.position.set(pose.pos.x, pose.pos.y, pose.pos.z);
@@ -1268,9 +1357,9 @@
     presetView('iso');
   }
 
-  function presetView(preset) {
+  function presetView(preset, aspect) {
     if (!_threeCamera || !_threeControls) return;
-    var pose = roomViewPose(preset);
+    var pose = roomViewPose(preset, aspect);
     _threeControls.target.set(pose.target.x, pose.target.y, pose.target.z);
     _threeCamera.position.set(pose.pos.x, pose.pos.y, pose.pos.z);
     _threeCamera.lookAt(_threeControls.target);
@@ -1335,6 +1424,7 @@
     syncDrawAltInput();
     buildRoom3D();
     reset3DView();
+    if (_mode === 'fly') fitFlyCamera();
     render3D();
     return true;
   }
@@ -1360,6 +1450,10 @@
     _threeShadow = null;
     _threeRoomGroup = null;
     _threeDrawPlane = null;
+    _threeEventGroup = null;
+    _threePoint = null;
+    _rvGroup = null;
+    _eventTex = {};
     _threeLoaded = false;
   }
 
@@ -1786,6 +1880,8 @@
     if (ex.i >= ex.steps.length) {
       setExecStatus(ex.label + ': all ' + ex.steps.length + ' commands applied', 'pp-exec-ok');
       _exec = null;
+      if (/^Execute/.test(ex.label)) pathEvent('execute', 'path ' + ex.label.toLowerCase(), Date.now(), 'panel');
+      else if (/^Stop/.test(ex.label)) pathEvent('stop', 'path stop', Date.now(), 'panel');
       return;
     }
     st = ex.steps[ex.i];
@@ -2227,6 +2323,868 @@
     el.addEventListener('pointercancel', end);
   }
 
+  // ── Fly mode: error, statistics, colours, events, strip ─────────────────
+  // DroneStatus.FlyMode values defined by the firmware (Global_file/global_declare.h,
+  // set by API/flight_fsm.c): 0 FlyMode_DangerousStop, 1 FlyMode_SDK.
+  var FLY_MODE_LABELS = ['Stop', 'SDK'];
+  var MODE_KEYS = ['status.flymode', 'DroneStatus.FlyMode'];
+  var ADAPT_KEYS = ['mrac_flags.adaptation_on'];
+  var VBAT_KEYS = ['status.vbat', 'real_voltage'];
+  var TWC_KEYS = ['status.twc_execute', 'TWC.execute'];
+  var STAT_GAP_MS = 500;       // a gap longer than this is not carried across in time-weighted stats
+
+  var EVENT_KINDS = {
+    adapt:   { label: 'Adaptation on/off', letter: 'A', color: 0xc77dff, css: '#c77dff' },
+    mode:    { label: 'Mode change',       letter: 'M', color: 0xffd166, css: '#ffd166' },
+    path:    { label: 'Path execute/stop', letter: 'P', color: 0x4cc9f0, css: '#4cc9f0' },
+    note:    { label: 'REC note',          letter: 'N', color: 0xffffff, css: '#ffffff' },
+    finding: { label: 'Agent finding',     letter: 'F', color: 0xff9f1c, css: '#ff9f1c' }
+  };
+  var EVENT_ORDER = ['adapt', 'mode', 'path', 'note', 'finding'];
+  var FLY_VIEWS = ['top', 'side', 'front', 'iso'];   // keys 1-4, same order as the camera buttons
+  var _flyView = 'iso';
+  var _keyHandler = null;
+  var _recStopArmedAt = 0;
+
+  function validFly(f) {
+    return !!f && isFinite(f.thr) && f.thr >= THR_MIN && f.thr <= THR_MAX &&
+      (f.metric === '3d' || f.metric === 'xy') && (f.trail === 'whole' || f.trail === 'fading');
+  }
+
+  function loadFly() {
+    var f = null;
+    try { f = JSON.parse(storageGet(FLY_KEY) || 'null'); } catch (e) { f = null; }
+    if (f) f = { thr: Number(f.thr), metric: f.metric, trail: f.trail };
+    return validFly(f) ? f : { thr: FLY_DEFAULT.thr, metric: FLY_DEFAULT.metric, trail: FLY_DEFAULT.trail };
+  }
+
+  function loadMode() {
+    var m = storageGet(MODE_KEY);
+    return MODES.indexOf(m) >= 0 ? m : 'plan';
+  }
+
+  function setFly(patch) {
+    var next = { thr: _fly.thr, metric: _fly.metric, trail: _fly.trail };
+    var k;
+    for (k in patch) if (Object.prototype.hasOwnProperty.call(patch, k)) next[k] = patch[k];
+    if (!validFly(next)) return false;
+    _fly = next;
+    storageSet(FLY_KEY, JSON.stringify(_fly));
+    syncFlyInputs();
+    refreshFlyViews();
+    return true;
+  }
+
+  // Position error between a measured and a firmware-setpoint point (metres).
+  // 3D needs both heights; without a z setpoint the 3D error falls back to xy
+  // instead of comparing a height against a fabricated 0.
+  function errorBetween(p, d) {
+    var dx, dy, exy, e3;
+    if (!p || !d || p.x == null || d.x == null || p.y == null || d.y == null) return null;
+    dx = p.x - d.x; dy = p.y - d.y;
+    exy = Math.hypot(dx, dy);
+    e3 = exy;
+    if (d.hasZ && p.z != null && d.z != null) e3 = Math.hypot(dx, dy, p.z - d.z);
+    return { e3: e3, exy: exy };
+  }
+
+  function errKey() { return _fly.metric === 'xy' ? 'exy' : 'e3'; }
+
+  // Error statistics over points {t (ms), e3, exy}. Time-weighted share above
+  // the threshold: each sample holds until the next one (gaps over STAT_GAP_MS
+  // are not carried); with under two usable samples it falls back to a sample
+  // count. t0 (ms) skips earlier points.
+  function flyStats(points, thr, key, t0) {
+    var n = 0, sumSq = 0, max = null, cur = null, above = 0, span = 0, aboveT = 0;
+    var prevT = null, prevE = null, i, p, e, dt;
+    for (i = 0; i < (points ? points.length : 0); i++) {
+      p = points[i];
+      if (t0 != null && p.t < t0) continue;
+      e = p[key];
+      if (e == null || !isFinite(e)) continue;
+      n++; sumSq += e * e; cur = e;
+      if (max === null || e > max) max = e;
+      if (e > thr) above++;
+      if (prevT !== null) {
+        dt = p.t - prevT;
+        if (dt > 0 && dt <= STAT_GAP_MS) { span += dt; if (prevE > thr) aboveT += dt; }
+      }
+      prevT = p.t; prevE = e;
+    }
+    return {
+      n: n, cur: cur, max: max,
+      rms: n ? Math.sqrt(sumSq / n) : null,
+      pctAbove: span > 0 ? 100 * aboveT / span : (n ? 100 * above / n : null)
+    };
+  }
+
+  function fmtRunTime(ms) {
+    var s, m;
+    if (ms == null || !isFinite(ms) || ms < 0) return '—';
+    s = Math.floor(ms / 1000);
+    m = Math.floor(s / 60);
+    s = s % 60;
+    return m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
+  // Trail colour by error: green at or below the threshold, red above, grey-blue
+  // where no setpoint was published. A segment is red when either end is above.
+  // Fading dims all but the newest FADE_POINTS points.
+  function flyColorFn(thr, key, fading) {
+    return function (points, i, out) {
+      var a = points[i][key], b = points[i + 1] ? points[i + 1][key] : null, e, f = 1, age;
+      e = a == null ? b : (b == null ? a : Math.max(a, b));
+      if (fading) {
+        age = points.length - 2 - i;
+        f = age <= FADE_POINTS ? 1 - 0.85 * age / FADE_POINTS : 0.15;
+      }
+      if (e == null) { out[0] = 0.45 * f; out[1] = 0.55 * f; out[2] = 0.75 * f; }
+      else if (e > thr) { out[0] = 1.0 * f; out[1] = 0.25 * f; out[2] = 0.25 * f; }
+      else { out[0] = 0.20 * f; out[1] = 0.85 * f; out[2] = 0.45 * f; }
+    };
+  }
+
+  // First numeric value for any of `names` across every stream (bare or
+  // slot-prefixed), then the flat / status fallbacks. null when absent.
+  function lookupAny(state, names) {
+    var k, v, r, i, streams = state && state.streams;
+    if (!state) return null;
+    if (streams) {
+      for (k in streams) {
+        v = streams[k] && streams[k].values;
+        if (!v) continue;
+        r = lookupValue(v, names);
+        if (r !== undefined && r !== null && !isNaN(Number(r))) return Number(r);
+      }
+    }
+    v = state.values || state;
+    r = lookupValue(v, names);
+    if (r !== undefined && r !== null && !isNaN(Number(r))) return Number(r);
+    if (state.status) {
+      for (i = 0; i < names.length; i++) {
+        if (names[i].indexOf('status.') !== 0) continue;
+        r = state.status[names[i].slice(7)];
+        if (r !== undefined && r !== null && !isNaN(Number(r))) return Number(r);
+      }
+    }
+    return null;
+  }
+
+  function extractFlyStatus(state) {
+    return {
+      mode: lookupAny(state, MODE_KEYS),
+      adapt: lookupAny(state, ADAPT_KEYS),
+      vbat: lookupAny(state, VBAT_KEYS),
+      twc: lookupAny(state, TWC_KEYS)
+    };
+  }
+
+  function modeLabel(v) {
+    if (v == null) return '—';
+    return FLY_MODE_LABELS[v] || ('mode ' + v);
+  }
+
+  // Command values that start / stop a firmware path (the last step of each
+  // Execute sequence and the Stop steps); shared by the live panel and the
+  // server-side log parser (rec_logs.py) so both mark the same events.
+  function isPathExecuteCmd(cmd, idx, val) {
+    return val === 1 && ((cmd === 0x0A && idx === 4) || (cmd === 0x0B && idx === 7) ||
+                         (cmd === 0x0C && idx === 6) || (cmd === 0x11 && idx === 7));
+  }
+  function isPathStopCmd(cmd, idx, val) {
+    return val === 0 && ((cmd === 0x0B && idx === 7) || (cmd === 0x0C && idx === 6) ||
+                         (cmd === 0x11 && idx === 7));
+  }
+
+  // Trajectory point nearest in time to t (ms); null when there is none within
+  // 5 s (an event outside the trail has no place to sit).
+  function posAtTime(t) {
+    var i, best = null, bd = Infinity, d;
+    for (i = _trajectory.length - 1; i >= 0; i--) {
+      d = Math.abs(_trajectory[i].t - t);
+      if (d < bd) { bd = d; best = _trajectory[i]; }
+      else if (_trajectory[i].t < t) break;
+    }
+    if (!best || bd > 5000) return null;
+    return { x: best.x, y: best.y, z: best.z == null ? 0 : best.z };
+  }
+
+  function pushEvent(kind, text, t, source) {
+    var ev;
+    if (!EVENT_KINDS[kind]) return null;
+    t = t == null ? Date.now() : t;
+    ev = { kind: kind, text: String(text), t: t, pos: posAtTime(t), source: source || 'panel' };
+    _events.push(ev);
+    if (_events.length > MAX_EVENTS) _events.shift();
+    rebuildEventMarkers();
+    renderFlyEvents();
+    return ev;
+  }
+
+  // dir 'execute' starts the run clock; the same direction twice within 3 s is
+  // one event (the panel's own command and the TWC flag both report it).
+  function pathEvent(dir, text, t, source) {
+    t = t == null ? Date.now() : t;
+    if (_lastPathEvt.dir === dir && t - _lastPathEvt.t < 3000) return null;
+    _lastPathEvt = { dir: dir, t: t };
+    if (dir === 'execute') _runT0 = t;
+    return pushEvent('path', text, t, source);
+  }
+
+  function detectEvents(st, now) {
+    var p = _flyStatus;
+    if (st.adapt != null && p.adapt != null && (st.adapt ? 1 : 0) !== (p.adapt ? 1 : 0)) {
+      pushEvent('adapt', 'adaptation ' + (st.adapt ? 'ON' : 'OFF'), now, 'telemetry');
+    }
+    if (st.mode != null && p.mode != null && st.mode !== p.mode) {
+      pushEvent('mode', modeLabel(p.mode) + ' → ' + modeLabel(st.mode), now, 'telemetry');
+    }
+    if (st.twc != null && p.twc != null && (st.twc ? 1 : 0) !== (p.twc ? 1 : 0)) {
+      pathEvent(st.twc ? 'execute' : 'stop', st.twc ? 'path execute (TWC)' : 'path stop (TWC)', now, 'telemetry');
+    }
+    if (st.mode != null) p.mode = st.mode;
+    if (st.adapt != null) p.adapt = st.adapt;
+    if (st.vbat != null) p.vbat = st.vbat;
+    if (st.twc != null) p.twc = st.twc;
+  }
+
+  // REC notes and agent findings come from the service note log (read-only
+  // GET). Only notes inside the current trail's time range become markers.
+  function applyNotes(list) {
+    var i, n, t, kind;
+    if (!list || !list.length) return;
+    for (i = 0; i < list.length; i++) {
+      n = list[i];
+      if (!n || typeof n.seq !== 'number' || n.seq <= _notesSeq) continue;
+      _notesSeq = n.seq;
+      t = Number(n.ts) * 1000;
+      if (!isFinite(t) || !_trajectory.length || t < _trajectory[0].t - 1000) continue;
+      // Agent messages carry kind 'agent' and a source like 'agent:copilot'.
+      kind = (String(n.source || '').indexOf('agent') === 0 || n.kind === 'agent' || n.kind === 'finding') ? 'finding' : 'note';
+      pushEvent(kind, (n.kind && n.kind !== 'note' && kind === 'note' ? n.kind + ': ' : '') + n.text, t, n.source || 'operator');
+    }
+  }
+
+  function pollNotes() {
+    var f = window['fetch'];
+    if (typeof f !== 'function') return;
+    f('/api/session/notes?since=' + _notesSeq).then(function (r) {
+      return r && r.ok ? r.json() : null;
+    }).then(function (d) {
+      if (d && d.notes) applyNotes(d.notes);
+    }).catch(function () { /* the marker feed is best-effort */ });
+  }
+
+  function startNotesPoll() {
+    if (_notesTimer || typeof setInterval !== 'function') return;
+    _notesTimer = setInterval(pollNotes, 3000);
+    if (_notesTimer && typeof _notesTimer.unref === 'function') _notesTimer.unref();
+    pollNotes();
+  }
+
+  function stopNotesPoll() {
+    if (_notesTimer) { clearInterval(_notesTimer); _notesTimer = null; }
+  }
+
+  function flyCell(label, value, color) {
+    return '<div class="pp-fly-cell"><span class="pp-fly-label">' + label + '</span>' +
+      '<span class="pp-fly-value"' + (color ? ' style="color:' + color + '"' : '') + '>' + value + '</span></div>';
+  }
+
+  function renderFlyStrip() {
+    var el = q('pp-fly-strip'), pts, s, t0, last, run, col, adapt;
+    if (!el) return;
+    pts = getActiveTrajectory();
+    t0 = (_runT0 != null && pts.length && pts[pts.length - 1].t >= _runT0) ? _runT0 : null;
+    s = flyStats(pts, _fly.thr, errKey(), t0);
+    last = pts.length ? pts[pts.length - 1] : null;
+    run = last ? last.t - (t0 != null ? t0 : pts[0].t) : null;
+    col = s.cur == null ? '' : (s.cur > _fly.thr ? '#ff5050' : '#4ecca3');
+    adapt = _flyStatus.adapt;
+    el.innerHTML = [
+      flyCell('Error ' + (_fly.metric === 'xy' ? 'xy' : '3D'), s.cur == null ? '—' : fmtNum(s.cur, 3) + ' m', col),
+      flyCell('Run RMS', s.rms == null ? '—' : fmtNum(s.rms, 3) + ' m'),
+      flyCell('Above ' + fmtNum(_fly.thr, 2) + ' m', s.pctAbove == null ? '—' : fmtNum(s.pctAbove, 0) + ' %'),
+      flyCell('Flight mode', modeLabel(_flyStatus.mode)),
+      flyCell('Adaptation', adapt == null ? '—' : (adapt ? 'ON' : 'OFF'), adapt ? '#c77dff' : ''),
+      flyCell('Vbat', _flyStatus.vbat == null ? '—' : fmtNum(_flyStatus.vbat, 2) + ' V'),
+      flyCell(t0 != null ? 'Run time' : 'Trail time', fmtRunTime(run))
+    ].join('');
+    renderFlyLegend(s);
+  }
+
+  function renderFlyLegend(s) {
+    var el = q('pp-fly-legend'), html = '', i, k;
+    if (!el) return;
+    html += '<span class="pp-fly-key"><i style="background:#4ecca3"></i>&le; ' + fmtNum(_fly.thr, 2) + ' m</span>';
+    html += '<span class="pp-fly-key"><i style="background:#ff4040"></i>&gt; ' + fmtNum(_fly.thr, 2) + ' m</span>';
+    for (i = 0; i < EVENT_ORDER.length; i++) {
+      k = EVENT_KINDS[EVENT_ORDER[i]];
+      html += '<span class="pp-fly-key"><b style="color:' + k.css + '">' + k.letter + '</b> ' + k.label + '</span>';
+    }
+    el.innerHTML = html;
+  }
+
+  function renderFlyEvents() {
+    var el = q('pp-fly-events'), i, ev, base, html = '', n = 0;
+    if (!el) return;
+    base = _trajectory.length ? _trajectory[0].t : (_events.length ? _events[0].t : 0);
+    for (i = _events.length - 1; i >= 0 && n < 6; i--, n++) {
+      ev = _events[i];
+      html += '<div class="pp-fly-ev"><b style="color:' + EVENT_KINDS[ev.kind].css + '">' + EVENT_KINDS[ev.kind].letter +
+        '</b> <span class="pp-fly-ev-t">' + fmtRunTime(ev.t - base) + '</span> ' + escapeText(ev.text) + '</div>';
+    }
+    el.innerHTML = html || '<div class="pp-fly-ev pp-fly-ev-none">No events yet</div>';
+  }
+
+  function escapeText(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function syncFlyInputs() {
+    var thr = q('pp-fly-thr'), val = q('pp-fly-thr-val'), m = q('pp-fly-metric'), tr = q('pp-fly-trail');
+    var rthr = q('pp-rv-thr'), rval = q('pp-rv-thr-val'), rmet = q('pp-rv-metric');
+    if (thr) thr.value = String(_fly.thr);
+    if (val) val.textContent = fmtNum(_fly.thr, 2) + ' m';
+    if (m) m.value = _fly.metric;
+    if (tr) tr.value = _fly.trail;
+    if (rthr) rthr.value = String(_fly.thr);
+    if (rval) rval.textContent = fmtNum(_fly.thr, 2) + ' m';
+    if (rmet) rmet.value = _fly.metric;
+  }
+
+  function refreshFlyViews() {
+    renderFlyStrip();
+    if (typeof renderReviewLegend === 'function') renderReviewLegend();
+    if (_threeLoaded) render3D();
+  }
+
+  // ── Event markers in 3D ────────────────────────────────────────────────
+  function eventTexture(kind) {
+    var c, g, k = EVENT_KINDS[kind];
+    if (_eventTex[kind]) return _eventTex[kind];
+    if (!_THREE || typeof document.createElement !== 'function') return null;
+    c = document.createElement('canvas');
+    c.width = 64; c.height = 64;
+    g = c.getContext('2d');
+    if (!g) return null;
+    g.fillStyle = 'rgba(10,10,26,0.85)';
+    g.beginPath(); g.arc(32, 32, 28, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = k.css; g.lineWidth = 5;
+    g.beginPath(); g.arc(32, 32, 28, 0, Math.PI * 2); g.stroke();
+    g.fillStyle = k.css; g.font = 'bold 34px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(k.letter, 32, 34);
+    _eventTex[kind] = new _THREE.CanvasTexture(c);
+    return _eventTex[kind];
+  }
+
+  function clearEventGroup() {
+    var i, o;
+    if (!_threeEventGroup) return;
+    for (i = _threeEventGroup.children.length - 1; i >= 0; i--) {
+      o = _threeEventGroup.children[i];
+      _threeEventGroup.remove(o);
+      if (o.material) o.material.dispose();      // the shared textures stay cached
+    }
+  }
+
+  // One sprite per event at the trail position where it happened, lifted 3 cm
+  // so it does not sit on the line.
+  function rebuildEventMarkers() {
+    var i, ev, tex, sp;
+    if (!_THREE || !_threeScene) return;
+    if (!_threeEventGroup) { _threeEventGroup = new _THREE.Group(); _threeScene.add(_threeEventGroup); }
+    clearEventGroup();
+    for (i = 0; i < _events.length; i++) {
+      ev = _events[i];
+      if (!ev.pos) continue;
+      tex = eventTexture(ev.kind);
+      if (!tex) continue;
+      sp = new _THREE.Sprite(new _THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+      sp.scale.set(0.07, 0.07, 1);
+      sp.position.set(ev.pos.x, ev.pos.z + 0.03, ev.pos.y);
+      sp.renderOrder = 10;
+      _threeEventGroup.add(sp);
+    }
+  }
+
+  // ── Mode switching ─────────────────────────────────────────────────────
+  function setMode(mode) {
+    if (MODES.indexOf(mode) < 0) return false;
+    _mode = mode;
+    storageSet(MODE_KEY, mode);
+    applyModeLayout();
+    return true;
+  }
+
+  function setView(v) {
+    var w2 = q('pp-2d-wrap'), w3 = q('pp-3d-wrap'), b2 = q('pp-view-2d'), b3 = q('pp-view-3d');
+    if (v === '3d') {
+      if (!_threeLoaded) initThreeJS();
+      if (w2) w2.style.display = 'none';
+      if (w3) w3.style.display = '';
+      if (b3) b3.className = 'pp-view-btn active';
+      if (b2) b2.className = 'pp-view-btn';
+      setTimeout(function () { render3D(); }, 50);
+    } else {
+      if (w2) w2.style.display = '';
+      if (w3) w3.style.display = 'none';
+      if (b2) b2.className = 'pp-view-btn active';
+      if (b3) b3.className = 'pp-view-btn';
+    }
+  }
+
+  function show(id, on) {
+    var el = q(id);
+    if (el) el.style.display = on ? '' : 'none';
+  }
+
+  function applyModeLayout() {
+    var cont = q('pp-container'), i, b;
+    if (cont) cont.className = 'pp-container pp-mode-' + _mode;
+    for (i = 0; i < MODES.length; i++) {
+      b = q('pp-mode-' + MODES[i]);
+      if (b) b.className = 'pp-mode-btn' + (MODES[i] === _mode ? ' active' : '');
+    }
+    show('pp-sidebar', _mode !== 'fly');
+    show('pp-tools-plan', _mode === 'plan');
+    show('pp-tools-review', _mode === 'review');
+    show('pp-fly-bar', _mode === 'fly');
+    show('pp-fly-events', _mode === 'fly');
+    show('pp-view-toggle', _mode === 'plan');
+    show('pp-3d-legend', _mode === 'plan');
+    show('pp-3d-topright', _mode === 'plan');
+    if (_mode !== 'plan') setView('3d');
+    if (_threeControls) _threeControls.enabled = _mode !== 'fly';
+    if (_mode === 'fly') { fitFlyCamera(); startNotesPoll(); } else stopNotesPoll();
+    syncFlyInputs();
+    renderFlyStrip();
+    renderFlyEvents();
+    if (typeof onReviewShown === 'function' && _mode === 'review') onReviewShown();
+    if (_threeLoaded) render3D();
+  }
+
+  // Fixed room camera: refit to the canvas aspect (a narrow canvas needs a
+  // longer view to keep the room in frame).
+  function fitFlyCamera() {
+    var w, h;
+    if (!_threeCamera || !_threeControls) return;
+    w = _el3DCanvas ? _el3DCanvas.clientWidth : 0;
+    h = _el3DCanvas ? _el3DCanvas.clientHeight : 0;
+    presetView(_flyView, w > 0 && h > 0 ? w / h : undefined);
+  }
+
+  function setFlyView(v) {
+    if (FLY_VIEWS.indexOf(v) < 0) return;
+    _flyView = v;
+    presetView(v, _el3DCanvas && _el3DCanvas.clientHeight > 0 ? _el3DCanvas.clientWidth / _el3DCanvas.clientHeight : undefined);
+  }
+
+  function isTypingTarget(t) {
+    var tag = t && t.tagName ? String(t.tagName).toUpperCase() : '';
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || !!(t && t.isContentEditable);
+  }
+
+  // Fly-mode shortcuts. UI only: none of them sends a flight command.
+  //   R  REC (a second press within 1.5 s is needed to STOP a running REC)
+  //   N  focus the note box       F  refit camera
+  //   T  whole flight / fading trail        1-4  Top / Side / Front / Iso
+  function onFlyKey(ev) {
+    var k, w3, rb, ni, now;
+    if (_mode !== 'fly' || !ev || ev.ctrlKey || ev.metaKey || ev.altKey || isTypingTarget(ev.target)) return;
+    w3 = q('pp-3d-wrap');
+    // A hidden workspace tab reports width 0: ignore keys meant for another tab.
+    if (!w3 || (typeof w3.offsetWidth === 'number' && w3.offsetWidth === 0)) return;
+    k = String(ev.key || '').toLowerCase();
+    if (k === 'r') {
+      rb = document.getElementById('record-btn');
+      if (!rb || rb.disabled) return;
+      now = Date.now();
+      if (window.recOn && now - _recStopArmedAt > 1500) {
+        _recStopArmedAt = now;
+        setFlyHint('Press R again to stop REC');
+        return;
+      }
+      _recStopArmedAt = 0;
+      rb.click();
+    } else if (k === 'n') {
+      ni = document.getElementById('note-input');
+      if (ni && typeof ni.focus === 'function') { ni.focus(); if (ev.preventDefault) ev.preventDefault(); }
+    } else if (k === 'f') {
+      fitFlyCamera();
+    } else if (k === 't') {
+      setFly({ trail: _fly.trail === 'whole' ? 'fading' : 'whole' });
+    } else if (k >= '1' && k <= '4') {
+      setFlyView(FLY_VIEWS[Number(k) - 1]);
+    } else {
+      return;
+    }
+  }
+
+  function setFlyHint(text) {
+    var el = q('pp-fly-hint');
+    if (el) el.textContent = text;
+  }
+
+  // ── Review mode: overlay of saved REC logs ─────────────────────────────
+  // Any number of saved REC sessions (GET /api/rec-logs) are drawn together,
+  // one colour per log or coloured by error, against one scrubber whose t = 0
+  // is the path execute of each log (REC start when a log has none).
+  var RV_KEY = 'pp_rv_sel_v1';
+  var RV_COLORS = ['#4a9eff', '#ff9f43', '#c77dff', '#4ecca3', '#ff5c8a', '#f5e663', '#7bdff2', '#b8f2a0'];
+  var RV_MAX_POINTS = 6000;
+  var _rvLogs = [];            // server list: { name, label, started_at, duration_s, rows, recording }
+  var _rvSel = {};             // name -> loaded log (see rvBuild)
+  var _rvOrder = [];           // selection order (colour assignment, legend order)
+  var _rvT = null;             // scrubber time in s; null = end of every log
+  var _rvTimer = null;
+  var _rvStatus = '';
+  var _rvGroup = null;         // THREE.Group holding every log's line / point / markers
+
+  function hexRgb(h) {
+    var n = parseInt(String(h).replace('#', ''), 16);
+    return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+  }
+
+  function rvColorFor(order) { return RV_COLORS[order % RV_COLORS.length]; }
+
+  function rvSaveSel() { storageSet(RV_KEY, JSON.stringify(_rvOrder)); }
+
+  function rvSetStatus(t) {
+    _rvStatus = t;
+    var el = q('pp-rv-status');
+    if (el) el.textContent = t;
+  }
+
+  function rvRefresh() {
+    var f = window['fetch'];
+    if (typeof f !== 'function') { rvSetStatus('fetch unavailable'); return; }
+    rvSetStatus('Listing logs…');
+    f('/api/rec-logs').then(function (r) {
+      if (!r || !r.ok) throw new Error('no log list');
+      return r.json();
+    }).then(function (d) {
+      _rvLogs = (d && d.logs) || [];
+      rvSetStatus(_rvLogs.length ? _rvLogs.length + ' saved log' + (_rvLogs.length === 1 ? '' : 's') : 'No saved REC logs yet (press REC to record one)');
+      rvRenderList();
+    }).catch(function (e) {
+      rvSetStatus('Could not list logs: ' + (e && e.message ? e.message : e));
+    });
+  }
+
+  function fmtWhen(epoch) {
+    var d;
+    if (!isFinite(epoch)) return '';
+    d = new Date(epoch * 1000);
+    return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2) +
+      ' ' + ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+  }
+
+  function rvRenderList() {
+    var el = q('pp-rv-list'), html = '', i, l, sel, name;
+    if (!el) return;
+    for (i = 0; i < _rvLogs.length; i++) {
+      l = _rvLogs[i]; name = l.name; sel = _rvSel[name];
+      html += '<div class="pp-rv-row">' +
+        '<input type="checkbox" data-rv-name="' + escapeText(name) + '"' + (sel ? ' checked' : '') + ' title="Overlay this log">' +
+        '<i class="pp-rv-sw" style="background:' + (sel ? sel.color : 'transparent') + '"></i>' +
+        '<span class="pp-rv-name" title="' + escapeText(name) + '">' + escapeText(l.label || name) +
+        '<small> ' + escapeText(fmtWhen(l.started_at)) + (l.duration_s != null ? ' &middot; ' + fmtNum(l.duration_s, 0) + ' s' : '') +
+        (l.recording ? ' &middot; recording' : '') + '</small></span>' +
+        '<label class="pp-rv-err" title="Colour this log green/red by error instead of its own colour">' +
+        '<input type="checkbox" data-rv-err="' + escapeText(name) + '"' + (sel && sel.byError ? ' checked' : '') + (sel ? '' : ' disabled') + '>err</label>' +
+        '</div>';
+    }
+    el.innerHTML = html;
+  }
+
+  // Server samples [t_s, x, y, z, dx, dy, dz, e3, exy] -> panel points (t in ms).
+  function rvConvert(data) {
+    var pts = [], i, s, evs = [], e;
+    for (i = 0; i < (data.samples || []).length; i++) {
+      s = data.samples[i];
+      pts.push({ t: s[0] * 1000, x: s[1], y: s[2], z: s[3], dx: s[4], dy: s[5], dz: s[6], e3: s[7], exy: s[8] });
+    }
+    for (i = 0; i < (data.events || []).length; i++) {
+      e = data.events[i];
+      if (!EVENT_KINDS[e.kind]) continue;
+      evs.push({ t: e.t * 1000, kind: e.kind, text: e.text, pos: e.pos ? { x: e.pos[0], y: e.pos[1], z: e.pos[2] } : null });
+    }
+    return { pts: pts, events: evs };
+  }
+
+  function rvToggle(name, on) {
+    var i;
+    if (!on) {
+      rvDispose(name);
+      delete _rvSel[name];
+      i = _rvOrder.indexOf(name);
+      if (i >= 0) _rvOrder.splice(i, 1);
+      rvSaveSel(); rvAfterChange();
+      return;
+    }
+    if (_rvSel[name]) return;
+    rvLoad(name);
+  }
+
+  function rvLoad(name) {
+    var f = window['fetch'];
+    if (typeof f !== 'function') return;
+    var slot = { name: name, label: name, color: rvColorFor(_rvOrder.length), byError: false, pts: [], events: [],
+                 tRef: 'rec_start', loading: true, error: null, hasSetpoint: false };
+    _rvSel[name] = slot;
+    _rvOrder.push(name);
+    rvSetStatus('Loading ' + name + '…');
+    rvRenderList();
+    f('/api/rec-logs/' + encodeURIComponent(name) + '?max_points=' + RV_MAX_POINTS).then(function (r) {
+      if (!r || !r.ok) throw new Error(r && r.status === 404 ? 'log no longer exists' : 'load failed');
+      return r.json();
+    }).then(function (d) {
+      var c;
+      if (_rvSel[name] !== slot) return;             // deselected while loading
+      c = rvConvert(d);
+      slot.pts = c.pts; slot.events = c.events; slot.loading = false;
+      slot.label = d.label || name; slot.tRef = d.t_ref; slot.hasSetpoint = !!d.has_setpoint;
+      slot.truncated = !!d.truncated; slot.nSamples = d.n_samples;
+      rvSetStatus(name + ': ' + slot.pts.length + ' points' + (slot.truncated ? ' (thinned from ' + slot.nSamples + ')' : ''));
+      rvSaveSel(); rvAfterChange(true);
+    }).catch(function (e) {
+      if (_rvSel[name] !== slot) return;
+      slot.loading = false; slot.error = e && e.message ? e.message : String(e);
+      rvSetStatus(name + ': ' + slot.error);
+      rvDispose(name); delete _rvSel[name];
+      var i = _rvOrder.indexOf(name); if (i >= 0) _rvOrder.splice(i, 1);
+      rvSaveSel(); rvAfterChange();
+    });
+  }
+
+  function rvSetByError(name, on) {
+    if (!_rvSel[name]) return;
+    _rvSel[name].byError = !!on;
+    _rvSel[name].colorKey = null;
+    rvAfterChange();
+  }
+
+  function rvAfterChange(fit) {
+    rvRenderList();
+    rvSyncScrub();
+    renderReviewLegend();
+    if (fit) rvFit();
+    if (_threeLoaded) render3D();
+  }
+
+  // Scrubber span (s) over the loaded logs.
+  function rvRange() {
+    var lo = Infinity, hi = -Infinity, i, l;
+    for (i = 0; i < _rvOrder.length; i++) {
+      l = _rvSel[_rvOrder[i]];
+      if (!l || !l.pts.length) continue;
+      lo = Math.min(lo, l.pts[0].t / 1000);
+      hi = Math.max(hi, l.pts[l.pts.length - 1].t / 1000);
+    }
+    return lo <= hi ? { min: lo, max: hi } : null;
+  }
+
+  function rvSyncScrub() {
+    var sc = q('pp-rv-scrub'), r = rvRange(), tl = q('pp-rv-time');
+    if (!sc) return;
+    if (!r) { sc.min = '0'; sc.max = '0'; sc.value = '0'; if (tl) tl.textContent = '—'; return; }
+    sc.min = String(Math.floor(r.min * 10) / 10);
+    sc.max = String(Math.ceil(r.max * 10) / 10);
+    sc.value = _rvT == null ? sc.max : String(Math.max(r.min, Math.min(r.max, _rvT)));
+    if (tl) tl.textContent = _rvT == null ? 'end' : (_rvT >= 0 ? '+' : '') + fmtNum(_rvT, 1) + ' s';
+  }
+
+  // Last index with pts[i].t <= tMs, or -1.
+  function rvIndexAt(pts, tMs) {
+    var lo = 0, hi = pts.length - 1, mid, ans = -1;
+    while (lo <= hi) {
+      mid = (lo + hi) >> 1;
+      if (pts[mid].t <= tMs) { ans = mid; lo = mid + 1; } else hi = mid - 1;
+    }
+    return ans;
+  }
+
+  // Whole-log error statistics for the legend: from path execute when the log
+  // has one (the run), otherwise every sample.
+  function rvStats(l) {
+    return flyStats(l.pts, _fly.thr, errKey(), l.tRef === 'path_execute' ? 0 : null);
+  }
+
+  function renderReviewLegend() {
+    var el = q('pp-rv-legend'), html, i, l, s;
+    if (!el) return;
+    if (!_rvOrder.length) { el.innerHTML = '<div class="pp-hint">Select one or more saved logs.</div>'; return; }
+    html = '<table class="pp-rv-table"><thead><tr><th></th><th>Log</th><th>RMS</th><th>Max</th><th>&gt;' + fmtNum(_fly.thr, 2) +
+      ' m</th></tr></thead><tbody>';
+    for (i = 0; i < _rvOrder.length; i++) {
+      l = _rvSel[_rvOrder[i]];
+      if (!l) continue;
+      if (l.loading) { html += '<tr><td><i class="pp-rv-sw" style="background:' + l.color + '"></i></td><td colspan="4">' + escapeText(l.label) + ' …</td></tr>'; continue; }
+      s = rvStats(l);
+      html += '<tr><td><i class="pp-rv-sw" style="background:' + l.color + '"></i></td>' +
+        '<td title="' + escapeText(l.name) + ' (t = 0 at ' + (l.tRef === 'path_execute' ? 'path execute' : 'REC start') + ')">' +
+        escapeText(l.label) + '<small> ' + (l.tRef === 'path_execute' ? 'exec' : 'rec') + '</small></td>' +
+        (l.hasSetpoint
+          ? '<td>' + fmtNum(s.rms, 3) + '</td><td>' + fmtNum(s.max, 3) + '</td><td>' + (s.pctAbove == null ? '—' : fmtNum(s.pctAbove, 0) + ' %') + '</td>'
+          : '<td colspan="3" title="This log has no firmware setpoint (.Des) to measure error against">no setpoint</td>') +
+        '</tr>';
+    }
+    html += '</tbody></table><div class="pp-hint">Error metric: ' + (_fly.metric === 'xy' ? 'xy' : '3D') +
+      '. RMS and max in m; share of time above the threshold. Stats cover the run from path execute (or the whole log).</div>';
+    el.innerHTML = html;
+  }
+
+  function rvFit() {
+    var all = [], i, l, j;
+    if (!_threeCamera || !_threeControls) return;
+    for (i = 0; i < _rvOrder.length; i++) {
+      l = _rvSel[_rvOrder[i]];
+      if (!l) continue;
+      for (j = 0; j < l.pts.length; j += Math.max(1, Math.floor(l.pts.length / 400))) {
+        all.push({ x: l.pts[j].x - _origin.x, y: l.pts[j].y - _origin.y, z: l.pts[j].z || 0 });
+      }
+    }
+    var pose = pathViewPose(all);
+    _threeControls.target.set(pose.target.x, pose.target.y, pose.target.z);
+    _threeCamera.position.set(pose.pos.x, pose.pos.y, pose.pos.z);
+    _threeCamera.lookAt(_threeControls.target);
+    _threeControls.update();
+  }
+
+  function onReviewShown() {
+    var saved = null, i, names;
+    rvRefresh();
+    rvSyncScrub();
+    renderReviewLegend();
+    // Restore last session's selection once.
+    if (!_rvOrder.length) {
+      try { saved = JSON.parse(storageGet(RV_KEY) || 'null'); } catch (e) { saved = null; }
+      if (saved && saved.length) {
+        names = saved.slice(0, 8);
+        for (i = 0; i < names.length; i++) if (validRvName(names[i])) rvToggle(names[i], true);
+      }
+    }
+  }
+
+  function validRvName(n) { return typeof n === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(n); }
+
+  // ── Review 3D objects ──────────────────────────────────────────────────
+  function rvDispose(name) {
+    var l = _rvSel[name], i, o;
+    if (!l || !_rvGroup) return;
+    ['line', 'point'].forEach(function (k) {
+      if (l[k]) {
+        _rvGroup.remove(l[k]);
+        if (l[k].geometry) l[k].geometry.dispose();
+        if (l[k].material) l[k].material.dispose();
+        l[k] = null;
+      }
+    });
+    if (l.markers) {
+      for (i = 0; i < l.markers.length; i++) {
+        o = l.markers[i];
+        _rvGroup.remove(o);
+        if (o.material) o.material.dispose();
+      }
+      l.markers = null;
+    }
+  }
+
+  function rvBuild3D(l) {
+    var THREE = _THREE, n = l.pts.length, geo, i, ev, tex, sp;
+    if (!THREE || !_rvGroup || !n) return;
+    geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+    geo.setDrawRange(0, 0);
+    l.line = new THREE.Line(geo, new THREE.LineBasicMaterial({ vertexColors: true }));
+    l.line.frustumCulled = false;
+    _rvGroup.add(l.line);
+    l.point = new THREE.Mesh(new THREE.SphereGeometry(0.02, 14, 10), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+    l.point.renderOrder = 9;
+    _rvGroup.add(l.point);
+    l.markers = [];
+    for (i = 0; i < l.events.length; i++) {
+      ev = l.events[i];
+      if (!ev.pos) continue;
+      tex = eventTexture(ev.kind);
+      if (!tex) continue;
+      sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+      sp.scale.set(0.06, 0.06, 1);
+      sp.renderOrder = 10;
+      sp.userData = { t: ev.t };
+      sp.position.set(ev.pos.x - _origin.x, (ev.pos.z || 0) + 0.03, ev.pos.y - _origin.y);
+      _rvGroup.add(sp);
+      l.markers.push(sp);
+    }
+    l.colorKey = null;
+    l.builtOrigin = { x: _origin.x, y: _origin.y };
+  }
+
+  function rvPaint(l) {
+    var key = (l.byError ? 'e' + _fly.thr + errKey() : 'c') + '|' + l.color + '|' + _origin.x + ',' + _origin.y, geo, pos, col, i, p, e, rgb, base, k;
+    if (l.colorKey === key || !l.line) return;
+    geo = l.line.geometry;
+    pos = geo.getAttribute('position'); col = geo.getAttribute('color');
+    base = hexRgb(l.color); k = errKey();
+    for (i = 0; i < l.pts.length; i++) {
+      p = l.pts[i];
+      pos.setXYZ(i, p.x - _origin.x, p.z || 0, p.y - _origin.y);
+      if (l.byError) {
+        e = p[k];
+        rgb = e == null ? [0.45, 0.55, 0.75] : (e > _fly.thr ? [1, 0.25, 0.25] : [0.2, 0.85, 0.45]);
+      } else rgb = base;
+      col.setXYZ(i, rgb[0], rgb[1], rgb[2]);
+    }
+    pos.needsUpdate = true; col.needsUpdate = true;
+    l.colorKey = key;
+  }
+
+  // Draw every loaded log up to the scrubber time.
+  function rvRender3D() {
+    var i, l, idx, tMs, p, j, mk, e;
+    if (!_rvGroup) return;
+    for (i = 0; i < _rvOrder.length; i++) {
+      l = _rvSel[_rvOrder[i]];
+      if (!l || l.loading || !l.pts.length) continue;
+      if (!l.line) rvBuild3D(l);
+      if (!l.line) continue;
+      rvPaint(l);
+      tMs = _rvT == null ? Infinity : _rvT * 1000;
+      idx = _rvT == null ? l.pts.length - 1 : rvIndexAt(l.pts, tMs);
+      l.line.geometry.setDrawRange(0, idx + 1);
+      l.point.visible = idx >= 0;
+      if (idx >= 0) {
+        p = l.pts[idx];
+        l.point.position.set(p.x - _origin.x, p.z || 0, p.y - _origin.y);
+        e = p[errKey()];
+        l.point.material.color.setHex(l.byError && e != null ? (e > _fly.thr ? 0xff4040 : 0x4ecca3) : parseInt(l.color.slice(1), 16));
+      }
+      for (j = 0; j < (l.markers || []).length; j++) {
+        mk = l.markers[j];
+        mk.visible = mk.userData.t <= tMs;
+      }
+    }
+  }
+
+  function rvPlayToggle() {
+    var r, btn = q('pp-rv-play');
+    if (_rvTimer) { clearInterval(_rvTimer); _rvTimer = null; if (btn) btn.textContent = '▶'; return; }
+    r = rvRange();
+    if (!r || typeof setInterval !== 'function') return;
+    if (_rvT == null || _rvT >= r.max) _rvT = r.min;
+    if (btn) btn.textContent = '❚❚';
+    _rvTimer = setInterval(function () {
+      var rr = rvRange();
+      if (!rr) { rvPlayToggle(); return; }
+      _rvT += 0.1;
+      if (_rvT >= rr.max) { _rvT = null; rvPlayToggle(); }
+      rvSyncScrub();
+      if (_threeLoaded) render3D();
+    }, 100);
+  }
+
   // ── Build HTML ──────────────────────────────────────────────────────────
   function buildHTML() {
     return [
@@ -2302,13 +3260,65 @@
       '.pp-3d-follow-toggle.on::after { left: 17px; }',
       '.pp-room-in { width: 44px; padding: 2px 3px; font-size: 10px; background: rgba(20,20,40,0.85); color: var(--text); border: 1px solid var(--border); border-radius: 3px; }',
       '.pp-hint { font-size: 10px; color: var(--muted); margin-top: 4px; line-height: 1.4; }',
+      /* Mode bar and Fly mode */
+      '.pp-mode-bar { display: flex; gap: 2px; margin-bottom: 8px; align-items: center; }',
+      '.pp-mode-btn { padding: 6px 16px; border-radius: 4px; background: var(--bg); color: var(--muted); border: 1px solid var(--border); cursor: pointer; font-size: 12px; font-weight: 700; }',
+      '.pp-mode-btn.active { background: var(--accent); color: var(--text); }',
+      '.pp-mode-spacer { flex: 1; }',
+      '.pp-fly-strip { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; margin-bottom: 6px; }',
+      '.pp-fly-cell { display: flex; flex-direction: column; gap: 2px; background: var(--bg); padding: 6px 8px; border-radius: 4px; min-width: 0; }',
+      '.pp-fly-label { font-size: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }',
+      '.pp-fly-value { font-size: 16px; font-weight: 700; font-family: Consolas, monospace; color: var(--green); white-space: nowrap; }',
+      '.pp-fly-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; font-size: 11px; color: var(--muted); }',
+      '.pp-fly-row input[type=range] { width: 160px; }',
+      '.pp-fly-row select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 3px; padding: 2px 4px; font-size: 11px; }',
+      '.pp-fly-legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 10px; color: var(--muted); margin-bottom: 4px; }',
+      '.pp-fly-key i { display: inline-block; width: 14px; height: 3px; margin-right: 4px; vertical-align: middle; }',
+      '.pp-fly-events { font-size: 11px; font-family: Consolas, monospace; max-height: 96px; overflow-y: auto; margin-top: 6px; }',
+      '.pp-fly-ev-t { color: var(--muted); }',
+      '.pp-fly-ev-none { color: var(--muted); }',
+      '.pp-mode-fly .pp-3d-canvas { height: calc(100vh - 300px); min-height: 380px; }',
+      '.pp-mode-review .pp-3d-canvas { height: calc(100vh - 220px); min-height: 380px; }',
+      '.pp-mode-fly.pp-container { grid-template-columns: 1fr; }',
+      '.pp-mode-review.pp-container { grid-template-columns: 1fr 300px; }',
+      '.pp-rv-row { display: flex; align-items: center; gap: 6px; font-size: 11px; padding: 3px 0; border-bottom: 1px solid var(--border); }',
+      '.pp-rv-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
+      '.pp-rv-name small, .pp-rv-table small { color: var(--muted); font-size: 9px; }',
+      '.pp-rv-sw { display: inline-block; width: 12px; height: 12px; border-radius: 2px; border: 1px solid var(--border); flex: none; }',
+      '.pp-rv-err { font-size: 10px; color: var(--muted); white-space: nowrap; }',
+      '.pp-rv-list { max-height: 220px; overflow-y: auto; }',
+      '.pp-rv-table { width: 100%; border-collapse: collapse; font-size: 11px; font-family: Consolas, monospace; }',
+      '.pp-rv-table th { text-align: left; font-size: 10px; color: var(--muted); padding: 3px 4px; border-bottom: 1px solid var(--border); }',
+      '.pp-rv-table td { padding: 3px 4px; }',
       '</style>',
 
-      '<div class="pp-container">',
+      '<div id="pp-container" class="pp-container pp-mode-plan">',
 
-      /* Main column: view toggle, then the 2D or 3D view (one grid cell, so the sidebar keeps its column) */
+      /* Main column: mode bar, view toggle, then the 2D or 3D view (one grid cell, so the sidebar keeps its column) */
       '<div class="pp-main">',
-      '<div class="pp-view-toggle">',
+      '<div class="pp-mode-bar">',
+      '<button id="pp-mode-plan" class="pp-mode-btn active" title="Planning tools: waypoints, presets, draw, execute">Plan</button>',
+      '<button id="pp-mode-fly" class="pp-mode-btn" title="Fly: 3D view fills the panel, error-coloured trail, event markers">Fly</button>',
+      '<button id="pp-mode-review" class="pp-mode-btn" title="Review: overlay saved REC logs">Review</button>',
+      '</div>',
+      /* Fly bar: strip, controls, legend, events (Fly mode only) */
+      '<div id="pp-fly-bar" style="display:none">',
+      '<div id="pp-fly-strip" class="pp-fly-strip"></div>',
+      '<div class="pp-fly-row">',
+      '<span>Error threshold</span>',
+      '<input id="pp-fly-thr" type="range" min="0.01" max="1" step="0.01" value="0.10" title="Trail is red above this error (starting value 0.10 m, not measured)">',
+      '<span id="pp-fly-thr-val">0.10 m</span>',
+      '<span>Metric</span>',
+      '<select id="pp-fly-metric" title="3D: x, y and z error. xy: horizontal error only"><option value="3d">3D</option><option value="xy">xy</option></select>',
+      '<span>Trail</span>',
+      '<select id="pp-fly-trail" title="Whole flight or fading trail (T)"><option value="whole">Whole flight</option><option value="fading">Fading</option></select>',
+      '<button id="pp-fly-fit" class="pp-3d-btn" title="Refit the room camera (F)">Fit</button>',
+      '<button id="pp-fly-clear" class="pp-3d-btn" title="Clear the flown trail and events">Clear trail</button>',
+      '</div>',
+      '<div id="pp-fly-legend" class="pp-fly-legend"></div>',
+      '<div id="pp-fly-hint" class="pp-hint">Keys: R REC (press twice to stop) &middot; N note &middot; F fit &middot; T trail &middot; 1 Top &middot; 2 Side &middot; 3 Front &middot; 4 Iso. UI only, never a flight command.</div>',
+      '</div>',
+      '<div id="pp-view-toggle" class="pp-view-toggle">',
       '<button id="pp-view-2d" class="pp-view-btn active">2D</button>',
       '<button id="pp-view-3d" class="pp-view-btn">3D</button>',
       '</div>',
@@ -2334,14 +3344,14 @@
       '<button id="pp-3d-reset" class="pp-3d-btn" title="Reset view">Reset</button>',
       '<button id="pp-3d-clear" class="pp-3d-btn" title="Clear the flown and desired trails">Clear trail</button>',
       '</div>',
-      '<div class="pp-3d-legend">',
+      '<div id="pp-3d-legend" class="pp-3d-legend">',
       '<div class="pp-3d-legend-item"><div class="pp-3d-legend-line" style="background:#4a9eff"></div>Actual path</div>',
       '<div class="pp-3d-legend-item"><div class="pp-3d-legend-dash"></div>Desired path</div>',
       '<div class="pp-3d-legend-item"><div class="pp-3d-legend-line" style="background:#ff4040"></div>Outside room</div>',
       '<div id="pp-3d-error" class="pp-3d-legend-item" style="margin-top:4px;color:#4a9eff">Error: — m</div>',
       '<div id="pp-3d-oob" class="pp-3d-legend-item">Outside room: 0 / 0 pts</div>',
       '</div>',
-      '<div class="pp-3d-controls" style="bottom:auto;top:8px;left:auto;right:8px">',
+      '<div id="pp-3d-topright" class="pp-3d-controls" style="bottom:auto;top:8px;left:auto;right:8px">',
       '<div class="pp-3d-follow-row"><span>Follow drone</span><div id="pp-3d-follow-toggle" class="pp-3d-follow-toggle" role="switch" aria-checked="false" title="Toggle follow drone"></div></div>',
       '<div class="pp-3d-follow-row" title="Flight room W x D x H in metres, centred on the origin, floor at z = 0">',
       '<span>Room m</span>',
@@ -2351,10 +3361,12 @@
       '</div>',
       '</div>',
       '</div>',
+      '<div id="pp-fly-events" class="pp-fly-events" style="display:none"></div>',
       '</div>',
 
-      /* Sidebar */
-      '<div class="pp-sidebar">',
+      /* Sidebar: Plan tools, or the Review tools; hidden in Fly mode */
+      '<div id="pp-sidebar" class="pp-sidebar">',
+      '<div id="pp-tools-plan">',
 
       '<div>',
       '<div class="pp-section-label">Path Metrics</div>',
@@ -2519,6 +3531,44 @@
        '<div class="pp-legend-item"><div class="pp-legend-line" style="background:#ff9f43;border-top:1px dashed #ff9f43"></div>Desired Trace</div>',
        '</div>',
        '</div>',
+      '</div>',   /* end #pp-tools-plan */
+
+      '<div id="pp-tools-review" style="display:none">',
+      '<div>',
+      '<div class="pp-section-label">Saved REC logs</div>',
+      '<div class="pp-entry-row">',
+      '<button id="pp-rv-refresh" class="pp-btn pp-btn-sm" title="Re-read the list of saved REC sessions">Refresh</button>',
+      '<button id="pp-rv-fit" class="pp-btn pp-btn-sm" title="Frame the selected logs">Fit</button>',
+      '</div>',
+      '<div id="pp-rv-status" class="pp-hint">Open Review to list saved logs.</div>',
+      '<div id="pp-rv-list" class="pp-rv-list"></div>',
+      '</div>',
+      '<div>',
+      '<div class="pp-section-label">Scrubber</div>',
+      '<div class="pp-entry-row" style="align-items:center;gap:8px">',
+      '<button id="pp-rv-play" class="pp-btn pp-btn-sm" title="Play / pause">&#9654;</button>',
+      '<input id="pp-rv-scrub" type="range" min="0" max="0" step="0.1" value="0" style="flex:1" title="Shared time: 0 = path execute (REC start when a log has none)">',
+      '<span id="pp-rv-time" style="font-family:monospace;font-size:11px;min-width:52px;color:#aaa">—</span>',
+      '</div>',
+      '</div>',
+      '<div>',
+      '<div class="pp-section-label">Legend</div>',
+      '<div id="pp-rv-legend"></div>',
+      '</div>',
+      '<div>',
+      '<div class="pp-section-label">Error metric</div>',
+      '<div class="pp-entry-row">',
+      '<select id="pp-rv-metric" class="pp-wp-input" title="3D: x, y and z error. xy: horizontal only"><option value="3d">3D</option><option value="xy">xy</option></select>',
+      '</div>',
+      '</div>',
+      '<div>',
+      '<div class="pp-section-label">Error threshold</div>',
+      '<div class="pp-entry-row">',
+      '<input id="pp-rv-thr" type="range" min="0.01" max="1" step="0.01" value="0.10" style="flex:1" title="Shared with Fly mode">',
+      '<span id="pp-rv-thr-val" class="pp-hint">0.10 m</span>',
+      '</div>',
+      '</div>',
+      '</div>',
 
       '</div>',
       '</div>'
@@ -2564,6 +3614,7 @@
               _threeCamera.aspect = w3 / h3;
               _threeCamera.updateProjectionMatrix();
               _threeRenderer.setSize(w3, h3);
+              if (_mode === 'fly') fitFlyCamera();   // keep the whole room in frame
               render3D();
             }
           }
@@ -2620,30 +3671,56 @@
       // 2D/3D toggle
       var _v2d = q('pp-view-2d');
       var _v3d = q('pp-view-3d');
-      if (_v2d) {
-        _v2d.addEventListener('click', function () {
-          var w2 = q('pp-2d-wrap');
-          var w3 = q('pp-3d-wrap');
-          if (w2) w2.style.display = '';
-          if (w3) w3.style.display = 'none';
-          if (_v2d) _v2d.classList.add('active');
-          if (_v3d) _v3d.classList.remove('active');
-        });
+      if (_v2d) _v2d.addEventListener('click', function () { setView('2d'); });
+      if (_v3d) _v3d.addEventListener('click', function () { setView('3d'); });
+
+      // Mode bar (Plan / Fly / Review) and Fly controls
+      MODES.forEach(function (m) {
+        var b = q('pp-mode-' + m);
+        if (b) b.addEventListener('click', function () { setMode(m); });
+      });
+      var flyThr = q('pp-fly-thr');
+      if (flyThr) flyThr.addEventListener('input', function () { setFly({ thr: parseFloat(this.value) }); });
+      var flyMetric = q('pp-fly-metric');
+      if (flyMetric) flyMetric.addEventListener('change', function () { setFly({ metric: this.value }); });
+      var flyTrail = q('pp-fly-trail');
+      if (flyTrail) flyTrail.addEventListener('change', function () { setFly({ trail: this.value }); });
+      var rvThr = q('pp-rv-thr');
+      if (rvThr) rvThr.addEventListener('input', function () { setFly({ thr: parseFloat(this.value) }); });
+      var rvMetric = q('pp-rv-metric');
+      if (rvMetric) rvMetric.addEventListener('change', function () { setFly({ metric: this.value }); });
+      var rvRef = q('pp-rv-refresh');
+      if (rvRef) rvRef.addEventListener('click', rvRefresh);
+      var rvFitBtn = q('pp-rv-fit');
+      if (rvFitBtn) rvFitBtn.addEventListener('click', rvFit);
+      var rvPlay = q('pp-rv-play');
+      if (rvPlay) rvPlay.addEventListener('click', rvPlayToggle);
+      var rvScrub = q('pp-rv-scrub');
+      if (rvScrub) rvScrub.addEventListener('input', function () {
+        _rvT = parseFloat(this.value) >= parseFloat(this.max) ? null : parseFloat(this.value);
+        rvSyncScrub();
+        if (_threeLoaded) render3D();
+      });
+      var rvList = q('pp-rv-list');
+      if (rvList) rvList.addEventListener('change', function (ev) {
+        var t = ev && ev.target, nm;
+        if (!t || typeof t.getAttribute !== 'function') return;
+        nm = t.getAttribute('data-rv-name');
+        if (nm) { rvToggle(nm, !!t.checked); return; }
+        nm = t.getAttribute('data-rv-err');
+        if (nm) rvSetByError(nm, !!t.checked);
+      });
+      var flyFit = q('pp-fly-fit');
+      if (flyFit) flyFit.addEventListener('click', fitFlyCamera);
+      var flyClear = q('pp-fly-clear');
+      if (flyClear) flyClear.addEventListener('click', function () { clear3D(); });
+      if (typeof document.addEventListener === 'function') {
+        _keyHandler = onFlyKey;
+        document.addEventListener('keydown', _keyHandler);
       }
-      if (_v3d) {
-        _v3d.addEventListener('click', function () {
-          if (!_threeLoaded) {
-            initThreeJS();
-          }
-          var w2 = q('pp-2d-wrap');
-          var w3 = q('pp-3d-wrap');
-          if (w2) w2.style.display = 'none';
-          if (w3) w3.style.display = '';
-          if (_v3d) _v3d.classList.add('active');
-          if (_v2d) _v2d.classList.remove('active');
-          setTimeout(function () { render3D(); }, 50);
-        });
-      }
+      syncFlyInputs();
+      renderFlyStrip();
+      renderFlyEvents();
 
       // 3D controls
       var _3dr = q('pp-3d-reset');
@@ -2724,10 +3801,14 @@
 
         var pos = extractPosition(state);
         var des = extractDesiredPosition(state);
+        var flySt = extractFlyStatus(state);
+        detectEvents(flySt, Date.now());
 
         if (pos || des) {
           var frameTime = (pos && pos.t !== undefined) ? pos.t : ((des && des.t !== undefined) ? des.t : nextTimestamp());
           if (pos) {
+            var perr = errorBetween(pos, des);
+            if (perr) { pos.e3 = perr.e3; pos.exy = perr.exy; }
             addPoint(pos, frameTime);
           }
           if (des) {
@@ -2743,6 +3824,7 @@
           }
           render();
           renderMetrics();
+          if (_mode === 'fly') renderFlyStrip();
           // Update 3D if visible
           var threeWrap = q('pp-3d-wrap');
           if (_threeLoaded && threeWrap && threeWrap.style.display !== 'none') {
@@ -2753,6 +3835,7 @@
 
       // Initial render
       render();
+      applyModeLayout();
     });
   };
 
@@ -2775,6 +3858,18 @@
     dispose3D();
     _threeFollowDrone = false;
     _trackingError = 0;
+    stopNotesPoll();
+    if (_rvTimer) { clearInterval(_rvTimer); _rvTimer = null; }
+    _rvSel = {}; _rvOrder = []; _rvLogs = []; _rvT = null;
+    if (_keyHandler && typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+      document.removeEventListener('keydown', _keyHandler);
+    }
+    _keyHandler = null;
+    _events = [];
+    _runT0 = null;
+    _lastPathEvt = { dir: null, t: 0 };
+    _flyStatus = { mode: null, adapt: null, vbat: null, twc: null };
+    _notesSeq = 0;
   };
 
   // Pure helpers exposed for the node harness (no DOM or WebGL needed).
@@ -2795,7 +3890,21 @@
     getCurrentPos: function () { return _currentPos && { x: _currentPos.x, y: _currentPos.y }; },
     clampToRoom: clampToRoom, thinAppend: thinAppend, DRAW_MIN_STEP: DRAW_MIN_STEP,
     screenToWorld: screenToWorld, worldToScreen: worldToScreen, roomFitZoom: roomFitZoom,
-    getRoom: function () { return { w: _room.w, d: _room.d, h: _room.h }; }
+    getRoom: function () { return { w: _room.w, d: _room.d, h: _room.h }; },
+    // Fly mode
+    errorBetween: errorBetween, flyStats: flyStats, flyColorFn: flyColorFn, fmtRunTime: fmtRunTime,
+    extractFlyStatus: extractFlyStatus, extractPosition: extractPosition, extractDesiredPosition: extractDesiredPosition,
+    detectEvents: detectEvents, pushEvent: pushEvent, pathEvent: pathEvent, applyNotes: applyNotes,
+    isPathExecuteCmd: isPathExecuteCmd, isPathStopCmd: isPathStopCmd, onFlyKey: onFlyKey,
+    setMode: setMode, getMode: function () { return _mode; }, setFly: setFly,
+    getFly: function () { return { thr: _fly.thr, metric: _fly.metric, trail: _fly.trail }; },
+    getEvents: function () { return _events.slice(); }, getRunT0: function () { return _runT0; },
+    getTrajectory: function () { return _trajectory.slice(); },
+    EVENT_KINDS: EVENT_KINDS, FLY_DEFAULT: FLY_DEFAULT,
+    // Review mode
+    rvConvert: rvConvert, rvToggle: rvToggle, rvSetByError: rvSetByError, rvRange: rvRange, rvIndexAt: rvIndexAt,
+    rvStats: rvStats, rvRefresh: rvRefresh, getRv: function () { return { order: _rvOrder.slice(), sel: _rvSel, t: _rvT }; },
+    RV_COLORS: RV_COLORS
   };
 
   window.__registerPlugin__('Path Planning', window.__PLUGIN_INIT__, window.__PLUGIN_DESTROY__);

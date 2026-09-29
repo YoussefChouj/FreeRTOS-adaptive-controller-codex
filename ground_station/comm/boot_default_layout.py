@@ -173,6 +173,25 @@ DASHBOARD_FRAME_A_VARS: tuple[str, ...] = (
     "s_ekf.x[6]",  # ekf.bias_gyro_x    b_g_body[0] (rad/s)
     "s_ekf.x[7]",  # ekf.bias_gyro_y    b_g_body[1] (rad/s)
     "s_ekf.x[8]",  # ekf.bias_gyro_z    b_g_body[2] (rad/s)
+    # ---------------------------------------------------------------------
+    # Fly-mode extras (3D panel flight UX spec, 2026-09-29). The Path panel's
+    # Fly mode reads position, firmware setpoint and adaptation state from
+    # slot 0 alone, so a flight needs no other slot for the trail and the
+    # metrics strip. Mode (DroneStatus.FlyMode) and Vbat (real_voltage) are
+    # already above. Position is metric-consistent: earth_x/y in cm (Frame C
+    # source), Z_posPID.FB/.Des in metres, locx/locy PID Des in cm.
+    # Budget: +7 vars = +28 B/frame; 61 raw ranges <= MAX_STREAM_RANGES 62
+    # (request 3 + 61*8 = 491 B <= the 499 B USART3 mailbox limit). ONE range
+    # of headroom is left: do not add to this tuple without moving vars to
+    # slot 1 (tests/test_slot0_layout.py pins the count against the ELF).
+    # ---------------------------------------------------------------------
+    "ano_of.earth_x",
+    "ano_of.earth_y",
+    "Ctrler.Z_posPID.FB",
+    "Ctrler.locxPID.Des",
+    "Ctrler.locyPID.Des",
+    "Ctrler.Z_posPID.Des",
+    "mrac_flags.adaptation_on",
     # TODO(firmware): expose ekf.pos_x/y/z — the 9-state EKF has no
     #                 position state. Add either a 12-state variant in
     #                 API/ekf.c or three scalar aliases in the dashboard

@@ -208,13 +208,35 @@ def make_app():
     return app
 
 
+def dashboard_owns_link(port=8081, timeout=0.6):
+    """True when the 8081 dashboard service answers: it is the only owner of
+    the FC link, and a second subscriber would fight it for the slots."""
+    import urllib.request
+    # Loopback only: an HTTP_PROXY in the environment (e.g. Clash) would
+    # otherwise take the request and report the dashboard as absent.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(
+                "http://127.0.0.1:%d/health" % port, timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
 def main():
     ap = argparse.ArgumentParser(prog="vofa_studio")
     ap.add_argument("--port", type=int, default=8090)
     ap.add_argument("--no-browser", action="store_true")
+    ap.add_argument("--dashboard-port", type=int, default=8081,
+                    help="port of the dashboard service (only for tests)")
     args = ap.parse_args()
     if args.port == 8081:
         ap.error("8081 belongs to the dashboard service")
+    if dashboard_owns_link(args.dashboard_port):
+        ap.exit(2, "VOFA Studio not started: the dashboard on :%d owns the "
+                   "FC link. Use its Streams panel (swap slots, log, forward "
+                   "to VOFA+), or stop the dashboard first.\n"
+                % args.dashboard_port)
     threading.Thread(target=resolver, daemon=True).start()  # warm the DWARF index
     url = "http://127.0.0.1:%d/" % args.port
     if not args.no_browser:

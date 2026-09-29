@@ -16,6 +16,7 @@ This guide is for agents (LLM or scripted) that inspect, test or extend the dash
 | `GET /api/manifest` | **Single machine-readable capability manifest** describing the whole system: DWARF firmware symbols, commands, published telemetry keys, panels, and routes. Recorded with ELF identity and explicit staleness caveat. |
 | `GET /api/routes` | Every GET/POST route with a one-line description or its query params, plus the UI selector scheme. **Machine-readable source of truth.** |
 | `GET /api/symbols` | DWARF symbol names from the firmware ELF (`?prefix=N&parent=P&limit=N`; default/max limit 100/1000). Names only; no addresses. |
+| `GET /api/streams`, `/api/streams/presets[/<name>]` | Slot 0-3 assignment, budget, arm gate, log/forward status, and the per-slot preset store. Read-only. The matching `POST /api/streams/*` routes change slots 1-3 (disarmed only), so never call them against a live service. |
 | `GET /api/view-model` | The state the shell renders: streams, keys, freshness. Cheap by default. **`?stats=1` adds `session_stats` (per-stream sample counts and source rate) by scanning the whole session — on a long session that call takes tens of seconds.** Only the Firmware Resource Map's Refresh button asks for it. |
 | `GET /api/contract` | The firmware contract: schema ID, command IDs and telemetry layout (`ground_station.platform.firmware_contract`). |
 | `GET /api/diagnostics/bundle` | Recent frames, commands and faults, for bug reports. There is no bare `/api/diagnostics`; it returns 404 by design. |
