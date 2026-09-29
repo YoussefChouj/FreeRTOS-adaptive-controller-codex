@@ -69,3 +69,4 @@ logs/smoke/
 firmware_backups/
 
 .firecrawl/
+logs/activity/
