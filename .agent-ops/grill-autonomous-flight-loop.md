@@ -206,5 +206,17 @@ controllers (currently PID + adaptive layer).
   (StabilizerTask.c, send_data.c) get PROTECTED BEGIN/END markers. Enforced mechanically: a protected
   list (paths, marked regions, param IDs) checked against every diff and every param write; a hit ->
   refuse + ask operator.
-- then: gate a code change must pass before it flies (build, sim bench, rollback image), controller-
-  agnostic interface to A, stop/abort criteria.
+- Q10b DECIDED (user, 2026-09-30): accepted as proposed. The protected set above is off limits to the
+  agent in every campaign; changes to it come from the operator only.
+- Q10c OPEN: the gate a firmware code change must pass before it flies. Facts: sim/bench runs Python
+  ports of the firmware (fwpid.py mirrors the StabilizerTask cascade) and c_ref/ holds standalone C
+  copies of the augmentations (aug_l1.c, aug_mrac_s6.c include only their own headers), so the bench does
+  NOT compile API/pid.c or API/mrac.c: a firmware edit is not simulated unless it is mirrored into the
+  sim. flashtool/artifact_custody.py already snapshots/restores the OBJ axf/hex/map triple around a
+  build. Proposed gate, in order: protected-list diff check; written justification (control-theory
+  argument + predicted measurable effect) logged; Keil build 0 errors + map RAM check; the changed
+  controller C file compiled on the host into the bench (software-in-the-loop, no hand port) and the
+  standard scenario set run: stable and not worse than last-known-good; last-known-good hex + hash kept;
+  one code change per flight; first flight after a change = short hover only; auto-revert to
+  last-known-good on abort or worse metrics; firmware hash logged per flight.
+- then: controller-agnostic interface to A, stop/abort criteria.
