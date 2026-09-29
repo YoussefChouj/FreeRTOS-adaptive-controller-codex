@@ -5,6 +5,8 @@ Decisions from the operator grilling (Q1–Q21). Target: `docs/dashboard-platfor
 
 ## Build order
 
+**Status (2026-09-29): items 1-3 implemented** (2203d9c, 18196b9, a87ad8f/bd474b7/16b7a91). Not yet exercised on live hardware.
+
 1. **Fly mode** (for the flight tests): layout, threshold trail, event markers, metrics strip, shortcuts.
 2. **Multi-log overlay.**
 3. **Streams panel**, which brings VOFA Studio into the dashboard.
@@ -73,6 +75,17 @@ Until item 3 lands, do high-rate logging with an existing dashboard preset plus 
   - a "forward to VOFA+" toggle (FireWater to 127.0.0.1:1347)
 - **Preset store:** the VOFA Studio JSON per-slot presets (`vofa_studio/presets/`) become the single store for slots 1–3. The YAML full layouts (`livewatch/multi_slot_presets.yaml`) stay read-only until retired.
 - **Slot swaps:** disarmed only. Swapping while armed waits for a bench measurement showing that re-subscribing does not disturb loop timing.
+
+### Phase 3 as built
+
+- Backend `ground_station/service/streams.py`, routes in `api.py`: `GET /api/streams`, `/api/streams/presets[/<name>]`;
+  `POST /api/streams/plan | apply | restore | presets | presets/delete | log/start | log/stop | forward`.
+  `apply` answers 202 (accepted), 409 (armed, active preset, or busy) or 400 (over budget / unresolved variable).
+- Frontend `shell/plugins/streams-panel.js` (panel "Streams", telemetry workspace).
+- `python -m ground_station.vofa_studio` exits with code 2 while 8081 owns the link (`--dashboard-port` to override).
+- Tests: `test_streams.py` (33), `test_streams_panel.py` + `streams_panel_harness.js` (16 checks).
+- Slot 0 now carries 61 of 62 ranges (headroom 1) after the Fly-mode variables.
+- Not done: slot swaps while armed; `/subscribe` has no arm gate of its own (the gate is in the streams service).
 
 ## Later
 

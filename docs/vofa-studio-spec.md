@@ -11,6 +11,11 @@ static HTML/JS page. Run `python -m ground_station.vofa_studio` to open
 http://127.0.0.1:8090. Do not use 8081, which belongs to the dashboard service.
 No new dependencies. One stream at a time.
 
+**Update 2026-09-29:** VOFA Studio is now optional. The dashboard's Streams panel
+(`docs/dashboard-platform/3d-panel-flight-ux-spec.md`, section 3) owns slot swaps, logging and
+the VOFA+ forward, and the 8081 dashboard is the only link owner. `python -m ground_station.vofa_studio`
+refuses to start (exit 2) while 8081 is up. Its JSON presets remain the single store for slots 1-3.
+
 ## Existing pipeline to reuse (do not duplicate)
 
 - `ground_station/livewatch/stream_log.py`:
