@@ -212,8 +212,11 @@ def dashboard_owns_link(port=8081, timeout=0.6):
     """True when the 8081 dashboard service answers: it is the only owner of
     the FC link, and a second subscriber would fight it for the slots."""
     import urllib.request
+    # Loopback only: an HTTP_PROXY in the environment (e.g. Clash) would
+    # otherwise take the request and report the dashboard as absent.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        with urllib.request.urlopen(
+        with opener.open(
                 "http://127.0.0.1:%d/health" % port, timeout=timeout):
             return True
     except Exception:

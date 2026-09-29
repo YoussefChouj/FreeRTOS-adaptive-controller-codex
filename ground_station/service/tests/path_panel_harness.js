@@ -473,12 +473,14 @@ function runChecks() {
   // ReferenceError on every frame in the browser (blank 3D view).
   {
     console.log('\n[CHECK 9: render3D helpers declared at plugin scope]');
-    const src = fs.readFileSync(PANEL, 'utf8');
+    // CRLF checkouts (Windows autocrlf) would hide the closing-brace end marker
+    // and stretch the body over the rest of the file.
+    const src = fs.readFileSync(PANEL, 'utf8').replace(/\r\n/g, '\n');
     const start = src.indexOf('  function render3D()');
     assert.ok(start >= 0, 'render3D not found');
     const end = src.indexOf('\n  }\n', start);
     const body = src.slice(start, end);
-    const called = new Set((body.match(/\b([A-Za-z_]\w*)\s*\(/g) || []).map((m) => m.replace(/\s*\($/, '')));
+    const called = new Set((body.match(/(?<![.\w$])([A-Za-z_]\w*)\s*\(/g) || []).map((m) => m.replace(/\s*\($/, '')));
     const decl = /^( *)function ([A-Za-z_]\w*)\s*\(/gm;
     let m;
     while ((m = decl.exec(src)) !== null) {
