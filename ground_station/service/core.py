@@ -308,6 +308,9 @@ class GroundStationService:
         # Active preset tracking. Set at startup (--preset) or at runtime via
         # set_active_preset(). Exposed by GET /health and GET /state.
         self.active_preset: str | None = None
+        # Streams panel manager (slot swaps, stream log, VOFA+ forward); built
+        # lazily by ground_station.service.streams.get_manager().
+        self.streams = None
         self.preset_loaded_at: float | None = None
 
     def set_active_preset(self, name: str | None, timestamp: float | None = None) -> None:
@@ -381,6 +384,12 @@ class GroundStationService:
             self.recorder.note(slot, sample.values, sample.received_ns)
         except Exception:
             pass
+        streams = getattr(self, "streams", None)
+        if streams is not None:
+            try:
+                streams.note(slot, sample)
+            except Exception:
+                pass
 
     # -- session recording control (dashboard + agent HTTP API) ---------------
 

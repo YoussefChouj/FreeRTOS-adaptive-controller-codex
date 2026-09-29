@@ -308,6 +308,11 @@ def start_preset_apply(service, name: str) -> tuple[int, dict]:
             except Exception:
                 pass
         finally:
+            try:
+                if getattr(service, "streams", None) is not None:
+                    service.streams.reset()
+            except Exception:
+                pass
             _preset_apply_status.update(busy=False, finished_at=time.time())
             _preset_apply_lock.release()
 
@@ -444,6 +449,15 @@ _ROUTE_MAP = {
         "/analysis/effective-rate": "?session_id=<sid>&stream=<int>",
         "/api/diagnostics/bundle": "frames, commands, faults for bug reports",
         "/api/recording": "recording state {recording, session_dir, started_at, rows, bytes, reason, analyse, analysis_status}",
+        "/api/streams": "Streams panel: slots 0-3 (0 fixed), budget plan, per-tab coverage, swap/log/forward status",
+        "/api/streams/presets": "VOFA Studio JSON slot presets (GET list; POST saves one)",
+        "/api/streams/presets/<name>": "one preset: notes, slots [{rate, vars}], vofa channels (GET)",
+        "/api/streams/plan": "POST {slots:[{rate,vars}]} -> link budget and per-slot errors (read-only)",
+        "/api/streams/apply": "POST {slots:[{slot,vars,rate,name?}|{slot,restore:true}]} swap slots 1-3; refused unless disarmed",
+        "/api/streams/restore": "POST {slots:[n..]|\"all\"} put slots back on the dashboard layout; refused unless disarmed",
+        "/api/streams/log/start": "POST {name?,mode:timed|rolling|unlimited,seconds?,window_s?} per-slot CSV under logs/vofa (no flight command)",
+        "/api/streams/log/stop": "POST stop the stream log",
+        "/api/streams/forward": "POST {enable,channels|preset,addr?} FireWater UDP forward to VOFA+ (default 127.0.0.1:1347)",
         "/api/rec-logs": "saved REC sessions (newest first): name, label, start, duration, rows (read-only; Path panel Review mode)",
         "/api/rec-logs/<name>": "one saved REC session as a trajectory + events for the Path panel overlay (?max_points=N; read-only)",
         "/api/session/notes": "operator notes buffered while not recording",
@@ -1341,6 +1355,14 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     except Exception:
                         pass
                 self._json(200, status)
+            elif route == "/api/streams" or route.startswith("/api/streams/"):
+                # Streams panel: slot table, presets, budget, tab coverage.
+                from ground_station.service import streams as _streams
+                try:
+                    code, payload = _streams.handle_get(service, route)
+                except Exception as exc:  # noqa: BLE001 - keep the handler alive
+                    code, payload = 500, {"error": "streams: %s" % exc}
+                self._json(code, payload)
             elif route == "/api/rec-logs" or route.startswith("/api/rec-logs/"):
                 # Read-only view of saved REC sessions for the Path panel's
                 # Review mode. The root is the recorder's own session root.
@@ -2103,6 +2125,24 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
             # Recording never sends drone commands and never touches gates.
             # Extended fields for flight-test pipeline:
             #   {analyse: bool, controller: "pid"|"mrac", payload: "symmetric"|"asymmetric", notes: str}
+            elif route.startswith("/api/streams/"):
+                # Streams panel actions: disarmed-only slot swaps, presets,
+                # stream logging, VOFA+ forward. No flight commands.
+                from ground_station.service import streams as _streams
+                length = self._content_length()
+                try:
+                    body = json.loads(self.rfile.read(length) or b"{}") if length else {}
+                except Exception:
+                    self._json(400, {"error": "invalid JSON body"})
+                    return
+                if not isinstance(body, dict):
+                    self._json(400, {"error": "body must be a JSON object"})
+                    return
+                try:
+                    code, payload = _streams.handle_post(service, route, body)
+                except Exception as exc:  # noqa: BLE001
+                    code, payload = 500, {"error": "streams: %s" % exc}
+                self._json(code, payload)
             elif route == "/api/presets/apply":
                 length = self._content_length()
                 try:
