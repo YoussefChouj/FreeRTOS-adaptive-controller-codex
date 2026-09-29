@@ -3,27 +3,27 @@
 CtrlerTypeDef Ctrler={
 
 /*des FB  Kp   Ki    Kd Up Ui Ud E preE SumE U Umax Upmax Uimax Udmax SumEmax Emin***/
-	//pitch: reduced Kp 3.0->2.6 for more phase margin, increased Kd 8.0->9.5 for better damping (PM=30° fix, flight_1784538359)
-	{ 0,  0, 2.6, 0.1,  9.5, 0, 0, 0, 0, 0,   0,  0, 200,  200,  10,  10,  120,     3},
-	//roll: same tuning as pitch (PM=30° fix, flight_1784538359)
-	{ 0,  0, 2.6, 0.1,  9.5, 0, 0, 0, 0, 0,   0,  0, 200,  200,  10,  10,  120,     3},
-	//yaw: increased Kp 6.0->6.5 for tracking, added Kd 0->1.5 to damp 0.4Hz oscillation (flight_1784538359)
-	{ 0,  0, 6.5, 0.04,  1.5, 0, 0, 0, 0, 0,   0,  0, 160,  160,  2,  10,     50,     2},
+	//pitch: Kp 2.6->3.0, Kd 9.5->8 restored to FreeRTOS_original (operator: tuned on this drone, 2026-09-29); UiMax/SumEMax kept
+	{ 0,  0, 3.0, 0.1,  8, 0, 0, 0, 0, 0,   0,  0, 200,  200,  10,  10,  120,     3},
+	//roll: same as pitch
+	{ 0,  0, 3.0, 0.1,  8, 0, 0, 0, 0, 0,   0,  0, 200,  200,  10,  10,  120,     3},
+	//yaw: Kp 6.5->6.0, Kd 1.5->0 restored to FreeRTOS_original (operator: tuned on this drone, 2026-09-29); Umax 160 kept
+	{ 0,  0, 6.0, 0.04,  0, 0, 0, 0, 0, 0,   0,  0, 160,  160,  2,  10,     50,     2},
 	//skywalker  4         letian40A    3       pitch/roll KP
 	//yaw KP   3   -> 4
 	
 
-	{ 0,  0, 5   , 0.01 , 8, 0,0, 0, 0, 0,   0,  0, 300,  300,  20,  100,  1000,   2},//gyrox  Kd 10->8: flight15 roll rate err rms 10.8 vs pitch 5.4 dps, U std 105 vs 69 - test if D amplifies noise (2026-09-29)
+	{ 0,  0, 5   , 0.01 ,10, 0,0, 0, 0, 0,   0,  0, 300,  300,  20,  100,  1000,   2},//gyrox  Kd 8->10 restored to FreeRTOS_original (operator: tuned on this drone, 2026-09-29); flight16 at Kd 8: roll 25 Hz limit cycle ~19.7 dps vs ~14.7 at Kd 10 (flight15)
 	{ 0,  0, 5   , 0.01 ,10, 0,0, 0, 0, 0,   0,  0, 300,  300,  20,  100,  1000,   2},//gyroy
-	{ 0,  0, 4.0, 0.005 ,2.0, 0,0, 0, 0, 0,  0,  0, 650,  650,  500,  10,   100000,     1000},//gyroz  EMin 20->1000: legacy integral-separation gate |E|<EMin blocked all integration at E~110, flight7 (2026-09-27); Ki 0.001->0.005, UiMax 60->500, SumEMax 2000->100000: old Ui ceiling was Ki*SumEMax=2, so flight6 held a P-only -50 deg/s drift with U~450 (2026-09-27); Umax/Upmax 350->650 (flight5: U pinned at 350 whole flight, 2026-09-27); Kp 8->4, Kd 0.02->2.0: add rate-loop damping to fight overshoot from saturation (2026-09-13); Umax 350 (kept from 2026-07-19); EMin 20 + SumEMax 2000 kept as-is
+	{ 0,  0, 8.0, 0.001 ,0.02, 0,0, 0, 0, 0,  0,  0, 650,  650,  500,  10,   100000,     1000},//gyroz  Kp 4->8, Ki 0.005->0.001, Kd 2.0->0.02 restored to FreeRTOS_original (operator: tuned on this drone, 2026-09-29); limits kept, so Ui cap = Ki*SumEMax = 100 vs flight16 hover trim U~110 (Ui~106); EMin 20->1000: legacy integral-separation gate |E|<EMin blocked all integration at E~110, flight7 (2026-09-27); Ki 0.001->0.005, UiMax 60->500, SumEMax 2000->100000: old Ui ceiling was Ki*SumEMax=2, so flight6 held a P-only -50 deg/s drift with U~450 (2026-09-27); Umax/Upmax 350->650 (flight5: U pinned at 350 whole flight, 2026-09-27); Kp 8->4, Kd 0.02->2.0: add rate-loop damping to fight overshoot from saturation (2026-09-13); Umax 350 (kept from 2026-07-19); EMin 20 + SumEMax 2000 kept as-is
 	
 	{ 0,  0, 0.7, 0.005 ,0.1, 0,0, 0, 0, 0,   0,  0, 1.0 , 0.9,  0.3,  0.3,  30,     0.3},//h
-	{ 0,  0, 400,  0.435,  1.5,0,0, 0, 0, 0,   0, 0,300, 300, 100,   60,    250,    10},//h rate  EMin 0.1->10, SumEMax 30->250, UiMax 60->100: legacy gate |E|<0.1 + Ui cap 13 left hover thrust on P, steady E~0.5 m/s (flight_test_pid_4, 2026-09-28); added Kd 0->1.5 to damp 0.4Hz oscillation (flight_1784538359)
+	{ 0,  0, 400,  0.435,  0,0,0, 0, 0, 0,   0, 0,300, 300, 100,   60,    250,    10},//h rate  EMin 0.1->10, SumEMax 30->250, UiMax 60->100: legacy gate |E|<0.1 + Ui cap 13 left hover thrust on P, steady E~0.5 m/s (flight_test_pid_4, 2026-09-28); added Kd 0->1.5 to damp 0.4Hz oscillation (flight_1784538359); Kd 1.5->0 restored to FreeRTOS_original (operator: tuned on this drone, 2026-09-29)
 	
 		/*des FB  Kp   Ki  Kd   Up Ui Ud E preE SumE U Umax Upmax Uimax Udmax SumEmax Emin***/	  //�����Ĳ���
 	//hui fei zhe   1.8outKP    1.8 0.45inKP KI
-	{ 0,  0, 0.6    , 0.01 ,4.0, 0,0, 0, 0, 0,   0,  0, 300, 300,  20,   50,     200,     30},//locx  Kp 0.8->0.6: flight15 0.5-0.8 Hz pendulum sway from pos-hold, drift +-13 cm (2026-09-29)
-	{ 0,  0, 0.6    , 0.01 ,4.0, 0,0, 0, 0, 0,   0,  0, 300, 300,  20,   50,     200,     30},//locy  Kp 0.8->0.6: same as locx (2026-09-29)
+	{ 0,  0, 0.8    , 0.01 ,4.0, 0,0, 0, 0, 0,   0,  0, 300, 300,  20,   50,     200,     30},//locx  Kp 0.6->0.8 restored to FreeRTOS_original (operator: tuned on this drone, 2026-09-29)
+	{ 0,  0, 0.8    , 0.01 ,4.0, 0,0, 0, 0, 0,   0,  0, 300, 300,  20,   50,     200,     30},//locy  same as locx
 	{ 0,  0, 3.0      , 0 ,6.00, 0,0, 0, 0, 0,   0,  0, 600, 600, 100,   100,     200,   10},//locxs
 	{ 0,  0, 3.0      , 0 ,6.00, 0,0, 0, 0, 0,   0,  0, 600, 600, 100,   100,     200,   10},//locys
 	
