@@ -55,7 +55,29 @@ controllers (currently PID + adaptive layer).
 - Per-experiment limit (user, 2026-09-29): max 120 s airborne per experiment (motor heating).
   A ground cool-down between flights is still open.
 
+- Q5 battery (user, 2026-09-29): option 1 + firmware backstop.
+  (a) PRE-FLIGHT GATE on resting voltage (disarmed, settled) -> SoC via 4S LiPo curve; fly only if
+      predicted post-flight SoC >= 30%. Per-flight drop is LEARNED per pack from measured resting V
+      before/after each 120 s flight. Otherwise end the battery session and ask for a swap.
+  (b) IN-AIR agent trigger on filtered LOADED voltage -> stop test, return to origin, GS land.
+      Starts conservative, recalibrated from measured sag on these packs.
+  (c) Existing firmware beep <15.0 V kept.
+  (d) FIRMWARE LOW-VOLTAGE AUTO-LAND backstop (tier-0), threshold BELOW the agent's so the agent
+      normally fires first; firmware only catches agent failure. Same FLIGHT_PHASE_LANDING path.
+  No current sensor found; voltage only. All thresholds unmeasured -> calibrate on first flights.
+- Packs (user-given, ACG, all 4S1P, 16.8 V full): 1x 5300 mAh 45C 463 g; 2x 4000 mAh 30C 363 g.
+  Label "14.8 V" is the NOMINAL voltage (3.7 V/cell), not the discharge floor.
+  Consequences: ~100 g mass difference changes hover throttle and the adaptive layer's job, so every
+  battery session must record PACK ID (operator names it at "go"; label the two small packs A/B so
+  aging is tracked). Learned per-flight drop and sag are stored PER PACK.
+- User feedback on Q4: path envelope <=0.7 m is TOO LIMITING -> reopened as Q6.
+- Fact: OF earth_x/y are rotated by imu_data.yaw (StabilizerTask.c:426-451); yaw comes from the AHRS
+  quaternion (API/imu_update.c:198), no magnetometer found -> world x axis = nose direction at
+  POWER-ON, slow gyro drift after. Inferred from code; verify on bench (imu_data.yaw after boot).
+  => If the drone is placed nose-to-a-marked-wall at each battery swap (= power-on), the OF frame is
+  aligned with the room, so a RECTANGULAR fence becomes possible.
+
 ## Open questions (in order)
-- Q5 battery 30% definition (resting vs loaded voltage, pre-flight gate vs in-air trigger)
-- then: motor cool-down between flights, GS land command, origin return (OF drift), battery 30% definition
-  under load, test-plan library format, controller-agnostic interface to A, stop criteria.
+- Q6 path envelope + fence shape (rectangular room-aligned fence vs bigger circle)
+- then: motor cool-down between flights, test-plan library format, controller-agnostic interface to A,
+  stop/abort criteria.
