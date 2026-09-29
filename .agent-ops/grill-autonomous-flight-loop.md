@@ -77,7 +77,21 @@ controllers (currently PID + adaptive layer).
   => If the drone is placed nose-to-a-marked-wall at each battery swap (= power-on), the OF frame is
   aligned with the room, so a RECTANGULAR fence becomes possible.
 
+- Q6 fence (user, 2026-09-29): RECTANGULAR ROOM-ALIGNED FENCE (replaces Q4's circle).
+  Operator places drone at pad centre, nose toward a MARKED end wall (4 m axis) at every battery swap
+  (= power-on) -> OF x axis = room length axis. Proposed, unmeasured: fence +-1.1 m (width) x +-1.6 m
+  (length) = 0.4 m wall margin; path envelope +-0.8 x +-1.3 m (0.3 m overshoot/drift margin); ceiling
+  1.5 m (room 2 m). Agent statically checks each path's full extent vs envelope before flying it
+  (reject if outside). At takeoff agent checks imu_data.yaw drift; beyond a threshold (TBD) that
+  flight falls back to a circular fence. Bench check first: imu_data.yaw ~0 right after boot.
+- Fact (for Q7): docs/research-platform/SPEC.md:25 already lists "no motion capture; cross-track RMSE
+  judged against the drone's own estimate" as an open thesis risk. Code has a legacy T265 position
+  feed (Global_file/global_declare.h:75 t265posx/y via linux_data; StabilizerTask.c:506-513, commented
+  out) and API/mrac.h:22 PAYLOAD_HEAVY comment "Jetson Orin, Realsense D435i, T265".
+
 ## Open questions (in order)
-- Q6 path envelope + fence shape (rectangular room-aligned fence vs bigger circle)
+- Q7 independent position truth: user asks if their camera "with separate localisation" is good for
+  motion capture. Need: which camera, fixed in room or on the drone. Leaning: external fixed camera
+  (+ tag on drone), offline, feeds A only, never the safety loop.
 - then: motor cool-down between flights, test-plan library format, controller-agnostic interface to A,
   stop/abort criteria.
