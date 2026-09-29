@@ -272,6 +272,7 @@ function renderSlots() {
       <span class="mut">→ ${realRate(s.rate || 1).toFixed(1)} Hz real</span>
       <div class="bar"><div style="width:${Math.min(100,pct)}%"></div></div>
       <span class="mut">${pl ? pl.bps + " B/s · " + pl.frame_bytes + " B/frame" : ""}</span>
+      <span class="mut" title="memory blocks (neighbouring vars share one) and payload, against the flashed firmware's limits">${pl && pl.max_ranges ? "ranges " + pl.ranges + "/" + pl.max_ranges + " · " + pl.payload + "/" + pl.max_bytes + " B" : ""}</span>
       <button data-delslot title="remove slot">✕</button></div>
       <div data-vars></div>
       <div class="row"><button data-addvar>+ variable</button>

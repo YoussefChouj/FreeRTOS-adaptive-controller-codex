@@ -48,7 +48,7 @@ ERROR_FRAME = 0x7F
 # so 62 ranges comfortably covers the 100+ scalar vars in the comprehensive
 # flight-test manifests.
 MAX_STREAM_RANGES = 62
-STREAM_MAX_BYTES = 1024
+STREAM_MAX_BYTES = 2032  # header value; planners use firmware_limits() off the ELF
 
 # Concurrent subscriptions. Each slot has its own variables, rate and transport,
 # so one link can carry signals that deserve very different attention:
