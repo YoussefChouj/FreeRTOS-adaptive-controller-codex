@@ -128,5 +128,11 @@ controllers (currently PID + adaptive layer).
   controller analysis; tape can fly off. Both blades equally, thin, rebalance.
   Proposed Q7b: record a ~30 s hover clip with the CURRENT props first (next operator flight, phone
   locked, 1/100 s), agent checks disc/body detectability offline; paint only if discs are too faint.
+- Q7b DECIDED (user, 2026-09-29): option 1 (hover clip with current props, check rotor discs offline),
+  FALLBACK option 3 (body-outline tracking via background subtraction, accept few-cm bias). No paint.
+  Phone role (proposed, user asked "free processor?"): phone = agent-controlled RECORDER over ADB
+  (start/stop, adb pull, clock offset), NOT a processor; all vision offline on PC. On-phone processing
+  only if camera position ever enters the flight loop (excluded: camera feeds A only).
+  Fact: adb and scrcpy are NOT on PATH on this PC (checked 2026-09-29) -> platform-tools needed later.
 - then: motor cool-down between flights, test-plan library format, controller-agnostic interface to A,
   stop/abort criteria.
