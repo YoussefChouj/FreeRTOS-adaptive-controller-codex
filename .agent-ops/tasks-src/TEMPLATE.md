@@ -6,6 +6,8 @@
 - agy:gemini-3.8-flash-low lookups;
 - qwen mechanical edits; free last resort;
 - typical fallback chain `agy:gemini-3.8-flash-high,qwen`.
+Gemini briefs: paste the <guardrails> block from gemini-guardrails.md FIRST, then context,
+then the task instructions LAST ("Based on the contracts above, ..."). See that file.
 -->
 
 ## Goal
