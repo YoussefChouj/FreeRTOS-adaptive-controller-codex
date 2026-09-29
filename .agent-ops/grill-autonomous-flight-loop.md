@@ -219,4 +219,19 @@ controllers (currently PID + adaptive layer).
   standard scenario set run: stable and not worse than last-known-good; last-known-good hex + hash kept;
   one code change per flight; first flight after a change = short hover only; auto-revert to
   last-known-good on abort or worse metrics; firmware hash logged per flight.
-- then: controller-agnostic interface to A, stop/abort criteria.
+- Q10c DECIDED (user, 2026-09-30): accepted as proposed, all nine steps, including compiling the real
+  changed controller C file into the bench (no hand port) and the hover-first rule after a code change.
+- Q11 OPEN: controller-agnostic interface between A and B's tuner. Facts: A = ground_station/analysis/
+  flightlab; plugins data_quality, pid_loops, mrac, spectrum, position, motors, battery; analyze() returns
+  metrics dict + Recommendation(id, severity, category in data/pid/mrac/hardware/battery/logging,
+  target = firmware field e.g. "Ctrler.gyroxPID.Kd", action increase/decrease/..., factor, evidence,
+  rationale, confidence) (registry.py). rules.yaml header: thresholds are heuristic, not calibrated.
+  Sim bench: Controller.PARAMS {knob: (default, lo, hi, log|lin)}; per-run metrics rmse, rmse_xy/z/yaw,
+  max_err, xtrack, sat, effort, tilt_max, diverged; objective J = median(rmse) + 0.25*mean(min(rmse,2))
+  + 5*max(0, sat - SAT_BUDGET) (bench.py:76). Proposed three layers: (1) one controller-agnostic flight
+  score computed by B from A's metrics on vehicle states, same metric names and same J as the sim bench;
+  (2) one descriptor YAML per controller: knobs with firmware field, param-write CMD/idx, default, lo,
+  hi, scale (same shape as sim PARAMS); adding a controller = descriptor + optional A diagnostic plugin;
+  (3) A's controller-specific diagnostics and rule Recommendations are evidence the agent cites, not
+  commands. A stays owned by its session; missing metrics are requested from it, not patched by B.
+- then: stop/abort criteria, shared-understanding summary.
