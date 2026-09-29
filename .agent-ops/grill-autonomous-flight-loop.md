@@ -139,7 +139,17 @@ controllers (currently PID + adaptive layer).
   User pushback: A's analysis can take > 120 s. So the next-flight gate is the LAST of:
   cool-down done, resting voltage settled (Q5 gate), analysis the next flight depends on done.
   Drone stays disarmed on the ground while waiting; idle electronics drain is caught by the Q5 gate.
-- Q8b OPEN: does every flight wait for the full analysis? Proposed: split A's output into a blocking
+- Q8b DECIDED (user, 2026-09-29): accepted as proposed below. Wait cap value set after timing A on real logs.
+  Proposal was: split A's output into a blocking
   "decision" part (telemetry metrics -> next tuning step) and a non-blocking part (camera/video truth,
   long reports) that runs in the background. Analysis wait cap (value TBD) -> pause session + notify.
-- then: test-plan library format, controller-agnostic interface to A, stop/abort criteria.
+- Q9 OPEN: test-plan library format. Facts (read 2026-09-29):
+  firmware presets in TASK/send_data.c, SDK mode + GS authority only (AutoflyTask_PathArbitrate):
+  0x0A TWC point-to-point (target x/y/z, yaw, execute), 0x0B sinusoid (center, amplitude, frequency,
+  duration, axis), 0x0C circle (center, radius, angular_speed, duration), 0x11 figure-8 (center,
+  amplitude, angular_speed, duration). Dashboard path library ground_station/service/path_library.py:
+  one JSON per path in logs/paths/ (points x/y/z, spacing); 0 paths saved on disk now.
+  Proposed: one YAML plan per campaign; experiment = maneuver (firmware preset + params, or a named
+  library path) + controller settings (name -> value) + capture preset + duration <= 120 s + repeats;
+  validator computes the full trajectory before arming and rejects anything outside envelope/ceiling.
+- then: agent autonomy over gains, controller-agnostic interface to A, stop/abort criteria.
