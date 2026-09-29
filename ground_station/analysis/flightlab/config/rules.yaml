@@ -20,6 +20,12 @@ params:
 
 thresholds:
   DQ-DROP: {drop_warn: 1.0, drop_crit: 5.0}          # percent
+  DQ-STUCK:                                          # fnmatch patterns: constant by design, not flagged
+    expected_const: ["*.Kp", "*.Ki", "*.Kd", "Ctrler.locxPID.Des", "Ctrler.locyPID.Des",
+                     "DroneStatus.ARM_Status", "DroneStatus.FlyMode", "Gyro_Z_Offset", "flight_phase",
+                     "mrac_flags.*", "g_ctrl_select", "g_of_bias_mode", "g_of_handheld_test", "g_yaw_mix_dir",
+                     "dbg_motor_manual", "TWC.execute", "g_ekf_gate.ctrl_enable", "g_estimator_ready",
+                     "g_of_bias_ema_freeze", "g_gyro_z_bias_*", "s_of_bias_*"]
   PID-OSC: {osc_ratio: 4.0, osc_fmin: 2.0, d_band_hz: 15.0, factor: 0.85}
   PID-BIAS:
     bias_k: 1.0

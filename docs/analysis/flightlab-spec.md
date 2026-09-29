@@ -146,7 +146,7 @@ estimate at frequency f0), `linear_slope(t, y)`, `settle_time(t, y, frac=0.1)`, 
 | battery | `battery` | v_rest_start (median over armed-but-not-airborne before first takeoff), v_end, v_min_airborne, sag_v, per-cell versions (cells from battery.yaml), soc_est_start/end from battery.yaml OCV table (flagged approximate) |
 | position | `position` | OF: of_quality min/p5/frac below `quality_min`, drift radius rms/max of (locx.FB-Des, locy.FB-Des), of_alt_cm stats; altitude: Z_pos e_mean/e_rms (sign convention: FB - Des < 0 = sag) |
 | spectrum | `spectrum` | for each rate loop FB and U, airborne: top 5 peaks (hz, psd), band power 0-2, 2-8, 8-20, 20-Nyquist; motor RPM peaks if `rpm_dbg_period_cyc[*]` present (reuse `ground_station/analysis/rpm_signals.py` conversion) |
-| mrac | `mrac.<axis>` | mode_frac {off, shadow, active} over airborne; e_rms; u_nom_rms; u_ad_rms; authority_ratio = u_ad_rms / u_nom_rms; u_ad_max_abs; u_ad_hf_frac (power > `hf_hz` / total); corr_uad_unom and corr_uad_e, raw and after 1 Hz lowpass; per weight (Theta[i], Whatf[i]): final, max_abs, slope_last30 (per s, over last 30 % of airborne), converged (bool: abs(slope_last30) * remaining_airborne_s < `conv_tol` * max(abs(final), eps)), t90_s |
+| mrac | `mrac.<axis>` | mode_frac {off, shadow, active} over airborne; e_rms; u_nom_rms; u_ad_rms; authority_ratio = u_ad_rms / u_nom_rms; u_ad_max_abs; u_ad_hf_frac (power > `hf_cutoff_hz` / total); corr_uad_unom and corr_uad_e, raw and after 1 Hz lowpass; per weight (Theta[i], Whatf[i]): final, max_abs, slope_last30 (per s, least-squares over the last `conv_window_s` s of airborne), converged (bool: abs(slope_last30) * conv_window_s < `conv_tol` * max(abs(final), eps)), t90_s |
 
 `loops.yaml` (WP0) defines each loop: `prefix` (e.g. `Ctrler.gyroxPID`), `level` (rate/attitude/velocity/position/
 altitude_pos/altitude_rate), `axis`, `unit` (null when unverified), `wrap_deg` (att_yaw only), `limits` (UMax,
@@ -176,6 +176,7 @@ recalibrate on flights 12–16). v1 rule set (each gets a positive and a negativ
 | --- | --- | --- |
 | DQ-DROP | any slot drop_pct > drop_warn | conclusions weakened; check WiFi |
 | DQ-MISSING | a loop/axis has partial vars | add named vars to preset |
+| DQ-STUCK | a stuck var matches no `expected_const` pattern | variable not updating; check logging/sensor |
 | LOG-GAINS | gains not streamed | add a 1 Hz params slot with the PID structs (limits known next flight) |
 | PID-OSC | rate/att loop osc_peak_ratio > osc_ratio and osc_peak_hz > osc_fmin | f > d_band_hz: decrease Kd (x0.85); else decrease Kp (x0.85) |
 | PID-BIAS | steady abs(e_mean) > bias_k * e_std and abs(e_mean) > bias_abs[level] | increase Ki or check integrator gating (EMin, SumEMax, aw_mode) |
