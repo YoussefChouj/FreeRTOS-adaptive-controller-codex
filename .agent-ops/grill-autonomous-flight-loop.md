@@ -98,5 +98,19 @@ controllers (currently PID + adaptive layer).
   it is an ESP32-CAM-style board (TTL only for flashing, video over WiFi = shares air with drone link);
   (b) own phone, already USB-connected to PC. Proposed: phone, fixed high in a room corner (geometry:
   path envelope spans ~61 deg horizontally from a corner, fence ~75 deg, computed not measured).
+- Q7 partial (user, 2026-09-29): PHONE (Xiaomi Redmi Note 15 Pro+, Android) is the truth camera, ~2 m
+  high on carbon boxes, pointing slightly down, held by a DJI OM 5 gimbal; phone + OM 5 on PC USB.
+  Checkerboards fixed on two walls. Proposed: replace gimbal by a rigid clamp (a gimbal moves the
+  camera = moving reference; ActiveTrack must never run); keep wall boards in view as per-frame
+  camera-moved check. Recording path (scrcpy camera source = PC clock + agent start/stop, vs phone
+  camera app with manual focus/shutter + adb pull) -> pick by bench test.
+  Geometry (computed from room + proposed envelope, not measured): line of sight to the drone is only
+  ~7-31 deg below horizontal over most of the envelope -> a FLAT TOP TAG is seen nearly edge-on;
+  height-plane intersection amplifies height error 1/tan(angle) = ~1.7-5x. Single camera is weak
+  along its view axis -> second camera at the adjacent corner (laptop webcam or chip camera) only if
+  a ground test at known floor points shows the along-view error is too big.
+- Q7b OPEN: marker. Proposed: bright matte sphere (ping-pong-ball class) on a short light standoff at
+  frame centre, above the prop disks, same look from every side; optional 2nd colour ball on the nose
+  for yaw later. Markerless (drone features / video segmentation) = fallback only. Asked for photos.
 - then: motor cool-down between flights, test-plan library format, controller-agnostic interface to A,
   stop/abort criteria.
