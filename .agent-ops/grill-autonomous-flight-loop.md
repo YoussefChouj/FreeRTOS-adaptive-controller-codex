@@ -234,4 +234,16 @@ controllers (currently PID + adaptive layer).
   hi, scale (same shape as sim PARAMS); adding a controller = descriptor + optional A diagnostic plugin;
   (3) A's controller-specific diagnostics and rule Recommendations are evidence the agent cites, not
   commands. A stays owned by its session; missing metrics are requested from it, not patched by B.
-- then: stop/abort criteria, shared-understanding summary.
+- Q11 DECIDED (user, 2026-09-30): accepted as proposed; the flight score reuses the sim bench J exactly.
+- Q12 OPEN: stop/abort criteria. Facts: agent.py:228 lists 0x0D ABORT_ALL_PATHS and 0x04
+  FLIGHT_MODE_ABORT (idx 0 abort / idx 1 recover) as never-critical emergency commands; grep of
+  API/*.c and StabilizerTask.c found no tilt-exceeded / crash-detect auto-disarm (grep, not exhaustive).
+  Proposed three levels (all numbers proposed, to be set from first flights): (1) in-flight abort by the
+  agent -> 0x0D abort path + land at origin: position error beyond envelope margin, tilt over limit,
+  live oscillation (rate-error RMS over a window), motor saturation fraction over a window, stale
+  telemetry; (2) flight-level failure -> Q10c auto-revert; (3) campaign stop, operator needed: any
+  firmware safety trigger (heartbeat, geofence, low-V backstop), two consecutive aborts, battery 30%,
+  J not improved over N flights (converged: report), sim-vs-flight J gap growing, A data-quality
+  critical twice. Plus a PROTECTED addition the operator must write: firmware crash detect (tilt over a
+  limit for a short time -> motors off), since a bad controller can flip faster than the GS loop.
+- then: shared-understanding summary.
