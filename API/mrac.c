@@ -82,33 +82,6 @@ static void MRAC_InverseMixer(float current_vbatt, float pwm1, float pwm2, float
 // Helper: Regressor Generator (Structured Physics-Based)
 // ------------------------------------------------------------------------------
 // Populates the Phi vector mirroring 6DOF quadcopter physics.
-static void MRAC_GenerateStructuredBasis(MRAC_Axis_e axis, MRAC_AxisState_t* state, float cross_coupling)
-{
-    // Fetch Current state (rate or Vz)
-    float x = state->x; 
-    
-    // Base terms (Bias, Damping, Drag)
-    state->Phi[0] = 1.0f;               // Bias
-    state->Phi[1] = x;                  // Damping
-    state->Phi[2] = x * tanhf(x);       // Nonlinear drag (bounded: saturates at high rate)
-    
-    // Handle cross-coupling appropriately per axis
-    if (axis == MRAC_AXIS_Z || axis == MRAC_AXIS_YAW) {
-#if INCLUDE_CONTROL_IN_REGRESSOR == 1
-        state->Phi[3] = 0.0f;           // u_nom is already in Phi[4], keep Phi[3] empty to prevent collinear drift
-#else
-        state->Phi[3] = state->u_nom;   // In 4-term basis, use empty cross-coupling slot for u_nom
-#endif
-    } else {
-        state->Phi[3] = cross_coupling; // Pitch/Roll gyroscopic cross-coupling
-    }
-    
-#if INCLUDE_CONTROL_IN_REGRESSOR == 1
-    // Append control features to the regressor
-    state->Phi[4] = state->u_nom;       // Control scaling factor
-    state->Phi[5] = state->xm;          // Reference feedforward factor
-#endif
-}
 
 static void MRAC_ProjectGradient(float grad[], const float Theta[], int num_basis,
                                  const float* limit, const float* tol, const float* lower_limit)
@@ -162,8 +135,66 @@ static void MRAC_ProjectGradient(float grad[], const float Theta[], int num_basi
     }
 }
 
+
+const MRAC_FeatureDesc_t mrac_feature_desc[MRAC_N_FEATURES] = {
+    {0, "bias",      MRAC_BLK_STRUCT, MRAC_GRP_BIAS},
+    {1, "rate",      MRAC_BLK_STRUCT, MRAC_GRP_RATE},
+    {2, "rate_tanh", MRAC_BLK_STRUCT, MRAC_GRP_AERO},
+    {3, "cross",     MRAC_BLK_STRUCT, MRAC_GRP_COUPLING},
+    {4, "u_nom",     MRAC_BLK_STRUCT, MRAC_GRP_CTRL},
+    {5, "xm",        MRAC_BLK_STRUCT, MRAC_GRP_REF}
+};
+
+static void MRAC_GenStructured(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *phi)
+{
+    
+    phi[0] = 1.0f;
+    phi[1] = bus->x;
+     
+    phi[2] = bus->x * tanhf(bus->x);
+#if INCLUDE_CONTROL_IN_REGRESSOR == 1
+    if (axis == MRAC_AXIS_Z || axis == MRAC_AXIS_YAW) {
+        phi[3] = 0.0f;
+    } else {
+        phi[3] = bus->cross;
+    }
+    phi[4] = bus->u_nom;
+    phi[5] = bus->xm;
+#else
+    if (axis == MRAC_AXIS_Z || axis == MRAC_AXIS_YAW) {
+        phi[3] = bus->u_nom;
+    } else {
+        phi[3] = bus->cross;
+    }
+#endif
+}
+
+MRAC_Bus_t mrac_bus[AXES];
+
+const MRAC_BlockDesc_t mrac_block_table[] = {
+    {MRAC_BLK_STRUCT, 0, MRAC_N_STRUCT, MRAC_GenStructured}
+};
+#define MRAC_N_BLOCKS ((int)(sizeof(mrac_block_table) / sizeof(mrac_block_table[0])))
+
+float mrac_g_gamma[AXES][MRAC_N_GROUPS];
+float mrac_g_sigma[AXES][MRAC_N_GROUPS];
+float mrac_g_phi[AXES][MRAC_N_GROUPS];
+float mrac_u_ff[AXES];
+
+static void MRAC_L2_Update(void)
+{
+}
+
+static float MRAC_L3_Feedforward(MRAC_Axis_e axis, const MRAC_Bus_t *bus)
+{
+    (void)axis;
+    (void)bus;
+    return 0.0f; // consumed from stage S4
+}
+
 // ------------------------------------------------------------------------------
 // Helper: Axis Update Core
+
 // ------------------------------------------------------------------------------
 // Runs the core MRAC algorithm for a single axis.
 static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const MRAC_AxisConfig_t* config, float cross_coupling, float r)
@@ -175,7 +206,7 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
     float raw_xdot;
     float Phi_sq;
     float denom;
-    float grad[MAX_NUM_BASIS];
+    static float grad[MAX_NUM_BASIS];
     float y;
     float PBe;
     float sigma_e;
@@ -234,9 +265,19 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
     // 3. Compute nominal control (done externally)
     
     // 4. Generate Basis/Regressor vector (Phi)
-#if USE_STRUCTURED_UNCERTAINTY == 1
-    MRAC_GenerateStructuredBasis(axis_id, state, cross_coupling);
-#endif
+    mrac_bus[axis_id].x = state->x;
+    mrac_bus[axis_id].xm = state->xm;
+    mrac_bus[axis_id].xm_dot = state->xm_dot;
+    mrac_bus[axis_id].e = state->e;
+    mrac_bus[axis_id].e_dot = state->e_dot;
+    mrac_bus[axis_id].u_nom = state->u_nom;
+    mrac_bus[axis_id].cross = cross_coupling;
+    mrac_bus[axis_id].r = r;
+
+    for (i = 0; i < MRAC_N_BLOCKS; i++) {
+        mrac_block_table[i].generator(axis_id, &mrac_bus[axis_id], state->Phi + mrac_block_table[i].first);
+    }
+    mrac_u_ff[axis_id] = MRAC_L3_Feedforward(axis_id, &mrac_bus[axis_id]);
     
     // 5. Update adaptive weights using Lyapunov gradient descent
     Phi_sq = MRAC_VectorNormSquare(state->Phi, MAX_NUM_BASIS);
@@ -316,14 +357,14 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
 
         for (i = 0; i < MAX_NUM_BASIS; i++) {
 #if FIX_LEAKAGE_NORMALIZATION == 1
-            y = config->gamma[i] * (grad[i]
+            y = config->gamma[i] * mrac_g_gamma[axis_id][mrac_feature_desc[i].group] * (grad[i]
                 - sigma_lf_active * (state->Theta[i] - state->Whatf[i])
-                - sigma_eff * state->Theta[i]
+                - sigma_eff * mrac_g_sigma[axis_id][mrac_feature_desc[i].group] * state->Theta[i]
                 );
 #else
-            y = config->gamma[i] * (grad[i]
+            y = config->gamma[i] * mrac_g_gamma[axis_id][mrac_feature_desc[i].group] * (grad[i]
                 - sigma_lf_active * (state->Theta[i] - state->Whatf[i]) / denom
-                - sigma_eff * state->Theta[i] / denom
+                - sigma_eff * mrac_g_sigma[axis_id][mrac_feature_desc[i].group] * state->Theta[i] / denom
                 );
 #endif
 
@@ -354,7 +395,7 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
     // 6. Compute adaptive control component (u_ad = Theta^T * Phi)
     raw_u_ad = 0.0f;
     for (i = 0; i < MAX_NUM_BASIS; i++) {
-        raw_u_ad += state->Theta[i] * state->Phi[i];
+        raw_u_ad += state->Theta[i] * (state->Phi[i] * mrac_g_phi[axis_id][mrac_feature_desc[i].group]);
     }
 
 #if ENABLE_PERFORMANCE_RECOVERY == 1
@@ -445,132 +486,112 @@ void MRAC_SimplexStep(void)
 // Public API Operations
 // ------------------------------------------------------------------------------
 
+#define MRAC_SET(f, p, r, y, z) \
+    mrac_config_pitch.f = (p); \
+    mrac_config_roll.f = (r); \
+    mrac_config_yaw.f = (y); \
+    mrac_config_z.f = (z)
+
+#define MRAC_BASIS(ax, i, g, lim, t, low) \
+    mrac_config_##ax.gamma[i] = (g); \
+    mrac_config_##ax.What_limit[i] = (lim); \
+    mrac_config_##ax.What_tol[i] = (t); \
+    mrac_config_##ax.What_lower_limit[i] = (low)
+
 void MRAC_Init(void)
 {
-    // Tuning parameters for Pitch/Roll (Identical geometry)
-    // Gamma: learning rates for [bias, damping, drag, cross-coupling, u_nom, xm]
-    float PR_Gamma[6] = {1.5f, 0.2f, 0.05f, 0.05f, 0.1f, 0.1f};
-    float Yaw_Gamma[6] = {1.0f, 0.1f, 0.05f, 0.05f, 0.1f, 0.1f};
-    float Z_Gamma[6]   = {2.0f, 0.5f, 0.10f, 0.10f, 0.2f, 0.2f};
+    int i, j;
 
-    // Limits and tolerances (Max disturbance authority)
-    float PR_Wlim[6] = {0.15f, 0.05f, 0.02f, 0.05f, 0.20f, 0.15f};
-    float PR_Wtol[6] = {0.03f, 0.01f, 0.005f, 0.01f, 0.04f, 0.03f};
-    
-    float Z_Wlim[6] = {1.00f, 0.10f, 0.05f, 0.05f, 0.20f, 0.20f};
-    float Z_Wtol[6] = {0.20f, 0.02f, 0.01f, 0.01f, 0.04f, 0.04f};
-    int i;
+    /* Per-axis scalars: one row per float field of MRAC_AxisConfig_t, in struct order.
+     * Zeros are listed on purpose: these fields were never set before the tables existed. */
+    /*       field            pitch                      roll                       yaw                        z */
+    MRAC_SET(sigma_lf,        0.8f,                      0.8f,                      1.0f,                      0.0f);
+    MRAC_SET(sigma,           0.01f,                     0.01f,                     0.01f,                     0.01f);
+    MRAC_SET(gam_f,           16.0f,                     16.0f,                     16.0f,                     0.0f);
+    MRAC_SET(omega_u,         4.0f,                      5.0f,                      4.0f,                      20.0f);
+    MRAC_SET(lambda_perf,     0.0f,                      0.0f,                      0.0f,                      0.0f);
+    MRAC_SET(tau_v,           0.0f,                      0.0f,                      0.0f,                      0.0f);
+    MRAC_SET(u_max,           6.73863f,                  6.73863f,                  2.027f,                    13.47726f);
+    MRAC_SET(mrac_to_mixer,   DEFAULT_MRAC_TO_MIXER_PR,  DEFAULT_MRAC_TO_MIXER_PR,  DEFAULT_MRAC_TO_MIXER_YAW, DEFAULT_MRAC_TO_MIXER_Z);
+    MRAC_SET(J,               0.0023f,                   0.0023f,                   0.0015f,                   1.5f);
+    MRAC_SET(e_deadzone,      0.05f,                     0.05f,                     0.05f,                     0.05f);
+    MRAC_SET(e_freeze,        1.2f,                      1.2f,                      1.0f,                      1.2f);
+    MRAC_SET(e_sat,           0.5f,                      0.5f,                      0.7f,                      0.4f);
+    MRAC_SET(k_e,             0.05f,                     0.05f,                     0.05f,                     0.0f);
+    MRAC_SET(ref_model_bw,    44.0f,                     44.0f,                     30.0f,                     20.0f);
+    MRAC_SET(ref_model_zeta,  0.8f,                      0.8f,                      0.8f,                      0.8f);
+    MRAC_SET(P_lyap,          0.0f,                      0.0f,                      0.0f,                      0.0f);
+    MRAC_SET(ref_Q1,          1.0f,                      1.0f,                      1.0f,                      1.0f);
+    MRAC_SET(ref_Q2,          1.0f,                      1.0f,                      1.0f,                      1.0f);
+    MRAC_SET(wc_edot,         30.0f,                     30.0f,                     30.0f,                     30.0f);
 
-    for (i = 0; i < MAX_NUM_BASIS; i++) {
-        // Pitch
-        mrac_config_pitch.gamma[i]      = PR_Gamma[i];
-        mrac_config_pitch.What_limit[i] = PR_Wlim[i];
-        mrac_config_pitch.What_tol[i]   = PR_Wtol[i];
-        
-        // Roll
-        mrac_config_roll.gamma[i]       = PR_Gamma[i];
-        mrac_config_roll.What_limit[i]  = PR_Wlim[i];
-        mrac_config_roll.What_tol[i]    = PR_Wtol[i];
-        
-        // Yaw
-        mrac_config_yaw.gamma[i]        = Yaw_Gamma[i];
-        mrac_config_yaw.What_limit[i]   = PR_Wlim[i] * 0.6f; // Smaller authorities for yaw
-        mrac_config_yaw.What_tol[i]     = PR_Wtol[i] * 0.6f;
-        
-        // Z-Axis
-        mrac_config_z.gamma[i]          = Z_Gamma[i];
-        mrac_config_z.What_limit[i]     = Z_Wlim[i];
-        mrac_config_z.What_tol[i]       = Z_Wtol[i];
+    /* Basis weights: gamma = learning rate, limit/lower = weight bounds (projection),
+     * tol = projection boundary layer. Yaw limit/tol = pitch/roll value * 0.6f. */
+    /*         axis   i  gamma  limit        tol          lower           feature */
+    MRAC_BASIS(pitch, 0, 1.50f, 0.15f,       0.03f,       -0.15f);     /* bias */
+    MRAC_BASIS(pitch, 1, 0.20f, 0.05f,       0.01f,       0.0f);       /* rate */
+    MRAC_BASIS(pitch, 2, 0.05f, 0.02f,       0.005f,      0.0f);       /* rate_tanh */
+    MRAC_BASIS(pitch, 3, 0.05f, 0.05f,       0.01f,       0.0f);       /* cross */
+    MRAC_BASIS(pitch, 4, 0.10f, 0.20f,       0.04f,       0.0f);       /* u_nom */
+    MRAC_BASIS(pitch, 5, 0.10f, 0.15f,       0.03f,       0.0f);       /* xm */
+    MRAC_BASIS(roll,  0, 1.50f, 0.15f,       0.03f,       -0.15f);     /* bias */
+    MRAC_BASIS(roll,  1, 0.20f, 0.05f,       0.01f,       0.0f);       /* rate */
+    MRAC_BASIS(roll,  2, 0.05f, 0.02f,       0.005f,      0.0f);       /* rate_tanh */
+    MRAC_BASIS(roll,  3, 0.05f, 0.05f,       0.01f,       0.0f);       /* cross */
+    MRAC_BASIS(roll,  4, 0.10f, 0.20f,       0.04f,       0.0f);       /* u_nom */
+    MRAC_BASIS(roll,  5, 0.10f, 0.15f,       0.03f,       0.0f);       /* xm */
+    MRAC_BASIS(yaw,   0, 1.00f, 0.15f*0.6f,  0.03f*0.6f,  -0.15f*0.6f); /* bias */
+    MRAC_BASIS(yaw,   1, 0.10f, 0.05f*0.6f,  0.01f*0.6f,  0.0f);       /* rate */
+    MRAC_BASIS(yaw,   2, 0.05f, 0.02f*0.6f,  0.005f*0.6f, 0.0f);       /* rate_tanh */
+    MRAC_BASIS(yaw,   3, 0.05f, 0.05f*0.6f,  0.01f*0.6f,  0.0f);       /* cross */
+    MRAC_BASIS(yaw,   4, 0.10f, 0.20f*0.6f,  0.04f*0.6f,  0.0f);       /* u_nom */
+    MRAC_BASIS(yaw,   5, 0.10f, 0.15f*0.6f,  0.03f*0.6f,  0.0f);       /* xm */
+    MRAC_BASIS(z,     0, 2.00f, 1.00f,       0.20f,       0.0f);       /* bias */
+    MRAC_BASIS(z,     1, 0.50f, 0.10f,       0.02f,       0.0f);       /* rate */
+    MRAC_BASIS(z,     2, 0.10f, 0.05f,       0.01f,       0.0f);       /* rate_tanh */
+    MRAC_BASIS(z,     3, 0.10f, 0.05f,       0.01f,       0.0f);       /* cross */
+    MRAC_BASIS(z,     4, 0.20f, 0.20f,       0.04f,       0.0f);       /* u_nom */
+    MRAC_BASIS(z,     5, 0.20f, 0.20f,       0.04f,       0.0f);       /* xm */
+
+    /* History and provenance (newest first)
+     * 2026-09-29 S1b    Local arrays and per-axis assignments -> MRAC_SET / MRAC_BASIS tables, bit-exact
+     *                   (API/tests/run_mrac_equiv.py EQUIV OK). Yaw cells stay the products x*0.6f so they
+     *                   round exactly as the old PR_Wlim[i]*0.6f did.
+     * lower             Bias weight (i=0) unlocked below zero on p/r/y, symmetric with its limit, so the law
+     *                   can cancel a standing torque bias (e.g. yaw reactive-torque imbalance). Every other
+     *                   weight, and the z bias, keeps lower bound 0 (floored).
+     * ref_Q1/Q2 wc_edot 2nd-order matrix-P law (ADR-0007), used only when ref_model_type==2 (p/r), harmless
+     *                   on yaw/z. Q = I; Q1=wn would recover the old scalar gain 1/(2*wn). wc_edot = LPF
+     *                   cutoff of the finite-difference rate derivative.
+     * ref_model_bw      SysID 2026-06-18. Pitch: closed-loop -3dB ~44 rad/s (K~185, lag pole ~2.6Hz, delay
+     *                   ~12ms, rel-degree 2), 2nd-order ref. Roll: ~44.1 rad/s, repeatable <0.3% (multisine
+     *                   x7 + chirp; K~165, pole ~3.2Hz, delay ~15ms). Yaw 30: PROVISIONAL, yaw is a pure
+     *                   integrator G~37/s (rel-degree 1) -> should get a first-order ref (ADR-0005); 30 is
+     *                   unvalidated, needs a yaw closed-loop BW measurement before injection. Z 20: slower
+     *                   translation bandwidth.
+     * omega_u           Perf-recovery LPF on u_ad = p/4 of the identified lag pole (docs/sysid_results.md).
+     *                   Pitch p = 16-18 rad/s -> 4.0. Roll p = 19.8 rad/s (7 runs, <0.3% spread) -> 5.0,
+     *                   phase lag -18.5 deg (-82 deg at the old 30). The old 30 sat above the plant corner,
+     *                   so it was inert. Yaw 4.0: no pole below the 2.2 Hz coherent band, but the same
+     *                   motors/ESCs/gyro filter as roll and K~37 is ~5x weaker, so no higher than roll
+     *                   (was 20, copied from roll's old number).
+     * e_freeze          2026-06-16 data-grounded, passthrough max|e|: pitch 0.77, roll 0.82 -> 1.2 (was 5.0,
+     *                   never fired). Yaw 1.0 kept (max|e|=1.28, still catches true outliers). Z 1.2
+     *                   (max|e|=1.0; was 0 = disabled, closes the spike-protection gap).
+     * e_sat             2026-06-16 ~p99 of |e|: p/r 0.5 (was 3.5, tanh stayed linear), yaw 0.7 (was 2.0),
+     *                   z 0.4 ~p95-p99 (was 0 = tanh disabled on the most over-driven axis).
+     * J                 kg*m^2 on p/r/y; z holds the mass in kg.
+     * u_max             U_MAX_PITCH / U_MAX_ROLL / U_MAX_YAW / U_MAX_Z.
+     */
+
+    for (i = 0; i < (int)AXES; i++) {
+        mrac_u_ff[i] = 0.0f;
+        for (j = 0; j < MRAC_N_GROUPS; j++) {
+            mrac_g_gamma[i][j] = 1.0f;
+            mrac_g_sigma[i][j] = 1.0f;
+            mrac_g_phi[i][j] = 1.0f;
+        }
     }
-
-    // Unlock the bias weight (theta_0) below zero so the adaptive law can inject a
-    // negative constant term to cancel a standing torque bias (e.g. yaw reactive-
-    // torque imbalance). Without this the lower bound defaults to 0 and the bias
-    // weight is floored, so MRAC cannot reject a constant disturbance. Symmetric
-    // with the upper authority; all other weights keep the default 0 lower bound.
-    mrac_config_pitch.What_lower_limit[0] = -mrac_config_pitch.What_limit[0];
-    mrac_config_roll.What_lower_limit[0]  = -mrac_config_roll.What_limit[0];
-    mrac_config_yaw.What_lower_limit[0]   = -mrac_config_yaw.What_limit[0];
-
-    // Set Scalar Constants: Pitch
-    mrac_config_pitch.sigma = 0.01f;
-    mrac_config_pitch.e_deadzone = 0.05f;
-    mrac_config_pitch.J = 0.0023f; // kg*m^2
-    mrac_config_pitch.ref_model_bw = 44.0f;  // SysID 2026-06-18: closed-loop -3dB BW ~44 rad/s (plant
-                                             // K~185, lag pole ~2.6Hz, delay ~12ms; rel-degree 2). Use 2nd-order ref.
-    mrac_config_pitch.ref_model_zeta = 0.8f; // 2nd-order model damping
-    mrac_config_pitch.omega_u = 4.0f; // perf-recovery LPF on u_ad. Set from the identified lag
-                                      // pole: docs/sysid_results.md pitch p = 16-18 rad/s, so
-                                      // p/4 ~ 4.0. Was 30 rad/s, which sits ABOVE the plant's own
-                                      // corner and is therefore inert as a robustness device.
-    mrac_config_pitch.u_max = 6.73863f; // U_MAX_PITCH
-    mrac_config_pitch.mrac_to_mixer = DEFAULT_MRAC_TO_MIXER_PR;
-    mrac_config_pitch.sigma_lf = 0.8f;
-    mrac_config_pitch.gam_f = 16.0f;
-    mrac_config_pitch.e_freeze = 1.2f; // data-grounded (2026-06-16): passthrough max|e|=0.77; was 5.0 (never fired)
-    mrac_config_pitch.e_sat = 0.5f;    // data-grounded: ~p99 of |e|; was 3.5 (tanh stayed linear, never engaged)
-    mrac_config_pitch.k_e = 0.05f;
-    
-    // Set Scalar Constants: Roll
-    mrac_config_roll.sigma = 0.01f;
-    mrac_config_roll.e_deadzone = 0.05f;
-    mrac_config_roll.J = 0.0023f; // kg*m^2
-    mrac_config_roll.ref_model_bw = 44.0f;  // SysID 2026-06-18: closed-loop -3dB BW ~44.1 rad/s, repeatable
-                                            // <0.3% (multisine x7 + chirp; K~165, pole ~3.2Hz, delay ~15ms; rel-deg 2). 2nd-order ref.
-    mrac_config_roll.ref_model_zeta = 0.8f;
-    mrac_config_roll.omega_u = 5.0f; // p/4 from docs/sysid_results.md roll p = 19.8 rad/s
-                                     // (7 runs, <0.3% spread). Phase lag of pole+delay at this
-                                     // cutoff is -18.5 deg; at the old 30 rad/s it was -82 deg.
-    mrac_config_roll.u_max = 6.73863f; // U_MAX_ROLL
-    mrac_config_roll.mrac_to_mixer = DEFAULT_MRAC_TO_MIXER_PR;
-    mrac_config_roll.sigma_lf = 0.8f;
-    mrac_config_roll.gam_f = 16.0f;
-    mrac_config_roll.e_freeze = 1.2f; // data-grounded (2026-06-16): passthrough max|e|=0.82; was 5.0 (never fired)
-    mrac_config_roll.e_sat = 0.5f;    // data-grounded: ~p99 of |e|; was 3.5 (never engaged)
-    mrac_config_roll.k_e = 0.05f;
-
-    // Set Scalar Constants: Yaw
-    mrac_config_yaw.sigma = 0.01f;
-    mrac_config_yaw.e_deadzone = 0.05f;
-    mrac_config_yaw.J = 0.0015f; // kg*m^2
-    mrac_config_yaw.ref_model_bw = 30.0f;   // PROVISIONAL. SysID 2026-06-18: yaw is a PURE INTEGRATOR
-                                            // G~37/s (relative degree 1, no pole) -> should use FIRST-order ref
-                                            // (per-axis type, see ADR-0005). 30 rad/s unvalidated; needs a yaw
-                                            // closed-loop BW measurement (yaw is the slow axis) before injection.
-    mrac_config_yaw.ref_model_zeta = 0.8f;
-    mrac_config_yaw.omega_u = 4.0f; // Yaw's "no lag pole" (docs/sysid_results.md) only means no
-                                    // pole below the 2.2 Hz coherent band; the same motors/ESCs/
-                                    // gyro filter that give roll p = 19.8 rad/s act here too, and
-                                    // yaw authority K ~ 37 is ~5x weaker. So bound it no higher
-                                    // than roll's. Was 20 rad/s, copied from roll's old number.
-    mrac_config_yaw.u_max = 2.027f; // U_MAX_YAW
-    mrac_config_yaw.mrac_to_mixer = DEFAULT_MRAC_TO_MIXER_YAW;
-    mrac_config_yaw.sigma_lf = 1.0f;
-    mrac_config_yaw.gam_f = 16.0f;
-    mrac_config_yaw.e_freeze = 1.0f;  // keep: passthrough max|e|=1.28 so this still catches true outliers
-    mrac_config_yaw.e_sat = 0.7f;     // data-grounded (2026-06-16): ~p99 of |e|; was 2.0 (never engaged)
-    mrac_config_yaw.k_e = 0.05f;
-
-    // Set Scalar Constants: Z-Axis
-    mrac_config_z.sigma = 0.01f;
-    mrac_config_z.e_deadzone = 0.05f;
-    mrac_config_z.e_freeze = 1.2f;  // data-grounded (2026-06-16): close Z spike-protection gap (was 0 = disabled); passthrough max|e|=1.0
-    mrac_config_z.e_sat = 0.4f;     // data-grounded: ~p95-p99 of |e|; was 0 = tanh disabled on the most over-driven axis
-    mrac_config_z.J = 1.5f; // Mass in kg (not inertia)
-    mrac_config_z.ref_model_bw = 20.0f; // Slower translation bandwidth
-    mrac_config_z.ref_model_zeta = 0.8f;
-    mrac_config_z.omega_u = 20.0f;
-    mrac_config_z.u_max = 13.47726f; // U_MAX_Z
-    mrac_config_z.mrac_to_mixer = DEFAULT_MRAC_TO_MIXER_Z;
-
-    // 2nd-order matrix-P state-space law params (ADR-0007), consumed only when
-    // ref_model_type==2 (pitch/roll); set for all axes, harmless on yaw/z.
-    // Q = I default (Q1=Q2=1). Q1=wn would recover the old scalar e-channel gain
-    // 1/(2*wn). wc_edot: LPF cutoff for the finite-difference rate derivative.
-    mrac_config_pitch.ref_Q1 = 1.0f; mrac_config_pitch.ref_Q2 = 1.0f; mrac_config_pitch.wc_edot = 30.0f;
-    mrac_config_roll.ref_Q1  = 1.0f; mrac_config_roll.ref_Q2  = 1.0f; mrac_config_roll.wc_edot  = 30.0f;
-    mrac_config_yaw.ref_Q1   = 1.0f; mrac_config_yaw.ref_Q2   = 1.0f; mrac_config_yaw.wc_edot   = 30.0f;
-    mrac_config_z.ref_Q1     = 1.0f; mrac_config_z.ref_Q2     = 1.0f; mrac_config_z.wc_edot     = 30.0f;
 
     mrac_flags.adaptation_on      = ENABLE_MRAC_COMPUTATION;
     mrac_flags.projection_on      = ENABLE_PROJECTION_OPERATOR;
@@ -630,6 +651,7 @@ void MRAC_Control(const CtrlerTypeDef* current_state)
 
     /* Simplex fallback step — evaluate triggers and manage fade. */
     MRAC_SimplexStep();
+    MRAC_L2_Update();
     // Main execution cycle (Hooked into FreeRTOS / Tasks)
     
     // 1. Acquire current Gyro Rates (p, q, r) and Z-velocity from inner-loop cascade

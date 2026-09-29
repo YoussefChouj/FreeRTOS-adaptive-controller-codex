@@ -42,9 +42,12 @@
 
 
 
-// Regressor type selection (choose ONE)
-#define USE_STRUCTURED_UNCERTAINTY     1    // Physics-based: 6 features (bias, angle, rate, drag, un, v) [RECOMMENDED]
-#define USE_UNSTRUCTURED_UNCERTAINTY   0    // RBF-based: 6 features (computational cost higher, enable for comparison)
+// Basis variant and capacity: select with -DMRAC_VARIANT=... (see mrac_variant.h)
+#include "mrac_variant.h"
+#define MAX_NUM_BASIS MRAC_CAPACITY
+
+typedef char MRAC_Assert_Features[ (MRAC_N_FEATURES <= MRAC_CAPACITY) ? 1 : -1 ];
+typedef char MRAC_Assert_Basis[ (MAX_NUM_BASIS <= 16) ? 1 : -1 ];
 
 // Core adaptive features
 #define ENABLE_MRAC_COMPUTATION        1    // Master switch for adaptive law turn off mrac computations
@@ -77,23 +80,6 @@
 // Define maximum basis size depending on the chosen uncertainty model.
 // For structured 6DOF: [Bias, Rate, Quadratic Rate, Cross-Coupling, LOE, Perf Rec]
 
-#define NUM_BASIS   4
-
-#if USE_STRUCTURED_UNCERTAINTY == 1
-    //  Structured: [bias, angle, rate, drag] + [un, v] = 4 or 6 features 
-    #if INCLUDE_CONTROL_IN_REGRESSOR == 1
-        #define MAX_NUM_BASIS   (NUM_BASIS + 2)
-    #else
-        #define MAX_NUM_BASIS   NUM_BASIS
-    #endif
-#else
-    //  Unstructured (RBF): 
-    #if INCLUDE_CONTROL_IN_REGRESSOR == 1
-        #define MAX_NUM_BASIS   (2*NUM_BASIS + 2)
-    #else
-        #define MAX_NUM_BASIS   (2*NUM_BASIS)
-    #endif
-#endif
 
 // ------------------------------------------------------------------------------
 // 3. Definitions and Types
@@ -118,6 +104,45 @@ typedef enum {
 
 #define MRAC_DT             0.005f      // [s] 5ms control period (200Hz)
 
+typedef struct { float x, xm, xm_dot, e, e_dot, u_nom, cross, r; } MRAC_Bus_t;
+extern MRAC_Bus_t mrac_bus[AXES];
+
+// Provisional groups
+typedef enum {
+    MRAC_GRP_BIAS,
+    MRAC_GRP_RATE,
+    MRAC_GRP_AERO,
+    MRAC_GRP_COUPLING,
+    MRAC_GRP_CTRL,
+    MRAC_GRP_REF
+} MRAC_FeatureGroup_e;
+
+typedef enum {
+    MRAC_BLK_STRUCT
+} MRAC_BlockKind_e;
+
+typedef struct {
+    uint8_t index;
+    const char *name;
+    MRAC_BlockKind_e block;
+    MRAC_FeatureGroup_e group;
+} MRAC_FeatureDesc_t;
+
+extern const MRAC_FeatureDesc_t mrac_feature_desc[MRAC_N_FEATURES];
+
+typedef void (*MRAC_BlockGenerator_t)(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *phi);
+
+typedef struct {
+    MRAC_BlockKind_e kind;
+    uint8_t first;
+    uint8_t count;
+    MRAC_BlockGenerator_t generator;
+} MRAC_BlockDesc_t;
+
+extern float mrac_g_gamma[AXES][MRAC_N_GROUPS];
+extern float mrac_g_sigma[AXES][MRAC_N_GROUPS];
+extern float mrac_g_phi[AXES][MRAC_N_GROUPS];
+extern float mrac_u_ff[AXES];
 
 // Configuration structure for an MRAC axis (constants and gains)
 typedef struct {
