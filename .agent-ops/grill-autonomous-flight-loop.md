@@ -152,4 +152,18 @@ controllers (currently PID + adaptive layer).
   Proposed: one YAML plan per campaign; experiment = maneuver (firmware preset + params, or a named
   library path) + controller settings (name -> value) + capture preset + duration <= 120 s + repeats;
   validator computes the full trajectory before arming and rejects anything outside envelope/ceiling.
+- Q9 DECIDED (user, 2026-09-30): YAML plan format accepted as proposed. User ADDITIONS:
+  (a) inclination-angle parameters on the presets, (b) a richer preset set, (c) a custom preset:
+  user draws a trajectory by hand, uploaded to firmware (WiFi uplink or compiled in, whichever works best).
+  Facts (read 2026-09-30): MCU STM32F407ZG; main SRAM 128 KB, build uses RW+ZI 125,776 B -> ~5.3 KB
+  free (computed from OBJ/JX_FLY.map). CCM 64 KB at 0x10000000 declared as IRAM2 in the uvprojx; no
+  firmware data placed there found (grep). path-panel.js already refuses drawn/custom kinds with
+  "needs waypoint-upload firmware (flyable now: hover, line, circle, figure-8)".
+- Q9b OPEN: how to deliver (a)(b)(c). Proposed: ONE generic uploaded-trajectory executor in firmware
+  (time-sampled x/y/z/yaw buffer in CCM, uploaded over WiFi in chunks, checksum + bounds check in
+  firmware, executes only when complete, interpolates between samples); ALL new presets incl. tilted
+  ones generated on the GS in Python and validated there; existing 4 firmware presets kept unchanged.
+  Buffer example 120 s x 10 Hz x 4 floats = 19,200 B (computed; rate proposed) -> CCM, not main SRAM.
+  Rejected: streaming setpoints live (WiFi jitter pollutes tuning metrics); flash per path (slow,
+  blocked when armed). Firmware change is flight-path code -> tier-0 permission at build time.
 - then: agent autonomy over gains, controller-agnostic interface to A, stop/abort criteria.
