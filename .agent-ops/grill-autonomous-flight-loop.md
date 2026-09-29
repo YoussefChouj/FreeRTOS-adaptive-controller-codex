@@ -112,5 +112,21 @@ controllers (currently PID + adaptive layer).
 - Q7b OPEN: marker. Proposed: bright matte sphere (ping-pong-ball class) on a short light standoff at
   frame centre, above the prop disks, same look from every side; optional 2nd colour ball on the nose
   for yaw later. Markerless (drone features / video segmentation) = fallback only. Asked for photos.
+- Q7b user reply (2026-09-29): no standoff possible; only option may be colouring prop tips. Props:
+  black with silver/black tips, white with black/white tips, black and white "orthogonal" (layout to
+  confirm by photo/clip). User-given: z, roll, pitch estimates are the most accurate; yaw and x/y
+  drift most. => Camera only has to measure x, y (+ yaw); z from ToF and roll/pitch from AHRS used as
+  inputs (they are gravity/floor-referenced, so they do not drift). Revised: ToF-height ray-plane
+  intersection is acceptable because a ToF error gives a bounded, non-growing camera xy error while
+  OF drift grows with time; drift growth is what A judges.
+  Fact: props already carry 2 reflective marks per prop (blade undersides) for RPM sensing
+  (BSP/rpm.h:30-31, RPM_PULSES_PER_REV=2) -> hover RPM is loggable, so ring formation vs shutter
+  can be computed from data (2-blade prop needs >= half a rev per exposure: >= 3000 rpm at 1/100 s).
+  Idea: a spinning prop smears into a disc/ring = ellipse in image; ellipse centre = motor axis; ellipse
+  major axis = prop diameter unfaded by view angle -> range. Front/back colour difference -> yaw.
+  Paint caution: tip paint = imbalance at the worst radius -> vibration -> IMU noise that pollutes the
+  controller analysis; tape can fly off. Both blades equally, thin, rebalance.
+  Proposed Q7b: record a ~30 s hover clip with the CURRENT props first (next operator flight, phone
+  locked, 1/100 s), agent checks disc/body detectability offline; paint only if discs are too faint.
 - then: motor cool-down between flights, test-plan library format, controller-agnostic interface to A,
   stop/abort criteria.
