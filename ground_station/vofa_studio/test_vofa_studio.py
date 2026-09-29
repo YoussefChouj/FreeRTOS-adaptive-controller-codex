@@ -59,7 +59,7 @@ def test_merge_presets():
     got = {v: s["rate"] for s in m["slots"] for v in s["vars"]}
     assert all(got["v%d" % r] >= r * 0.99 for r in (100, 50, 25, 20, 10, 1))
     # over the range limit: slowest slot folds up, fast slot spills at same rate
-    lim = core.MAX_STREAM_RANGES
+    lim = core.stream.MAX_STREAM_RANGES
     fast = ["f%d" % k for k in range(lim + 5)]
     big = [{"name": "p", "slots": [{"rate": 100, "vars": fast}, {"rate": 25, "vars": ["a"]},
                                    {"rate": 10, "vars": ["b"]}, {"rate": 5, "vars": ["c"]}]}]
@@ -213,3 +213,27 @@ def test_read_tabs_fixture(tmp_path):
     assert vofa_config.read_tabs(p) == [{"name": "gyro", "lines": [1, 2, 5]},
                                         {"name": "empty", "lines": []},
                                         {"name": "bare", "lines": []}]
+
+
+def test_merge_presets_spills_by_fits():
+    # vars of one memory block cost one range together: 300 vars in 3 blocks,
+    # two blocks per slot -> 200 + 100, not 62-sized chunks
+    fits = lambda vs: len({v.split(".")[0] for v in vs}) <= 2
+    vs = ["b%d.%d" % (b, k) for b in range(3) for k in range(100)]
+    m = core.merge_presets([{"name": "w", "slots": [{"rate": 20, "vars": vs}]}], fits)
+    assert [(s["rate"], len(s["vars"])) for s in m["slots"]] == [(20.0, 200), (20.0, 100)]
+
+
+@pytest.mark.skipif(not core.ELF.exists(), reason="no ELF")
+def test_limits_come_from_elf_and_plan_counts_merged_ranges():
+    from ground_station.livewatch.symbols import SymbolResolver
+    r = SymbolResolver(core.ELF)
+    n, nbytes = core.stream.firmware_limits(r)
+    assert n == 62 and nbytes >= 1024 and nbytes % 4 == 0
+    names = core.list_presets()
+    m = core.merge_presets([core.load_preset(p) for p in names], core.slot_fits(r))
+    plan = core.plan_budget(r, m["slots"])
+    for s in plan["slots"]:
+        assert s["ranges"] <= min(len(s["vars"]), s["max_ranges"]), s["errors"]
+        assert s["payload"] <= s["max_bytes"]
+    assert sum(s["ranges"] for s in plan["slots"]) < sum(len(s["vars"]) for s in plan["slots"])

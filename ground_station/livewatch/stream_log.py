@@ -42,8 +42,8 @@ from pathlib import Path
 
 from .stream import (
     MAX_SLOTS, MultiStreamDecoder, SEND_TASK_MEASURED_HZ, StreamDecoder,
-    StreamRange, TRANSPORT_UART5, TRANSPORT_USART3, build_stream_request,
-    decode_schema, stream_bps,
+    StreamRange, TRANSPORT_UART5, TRANSPORT_USART3, apply_firmware_limits,
+    build_stream_request, coalesce_ranges, decode_schema, stream_bps,
 )
 from .symbols import SymbolResolver
 from .transport import LiveTransportError, UdpDataPort, pop_frame, \
@@ -489,6 +489,7 @@ def run_groups(control_port, data_port, groups, transport, seconds, out_path,
     padded to 80 Hz reads as though it were sampled 40x more often than it was.
     """
     resolver = SymbolResolver(elf)
+    apply_firmware_limits(resolver)
     if len(groups) > MAX_SLOTS:
         raise LiveTransportError(
             "stream-log: %d groups but the firmware has %d slots"
@@ -496,7 +497,10 @@ def run_groups(control_port, data_port, groups, transport, seconds, out_path,
 
     plans, committed = [], 0
     for slot, (rate, specs) in enumerate(groups):
-        ranges = resolve_ranges(resolver, specs)
+        # Neighbouring variables go out as one range, which is what the
+        # firmware copies anyway; the range limit then counts memory blocks,
+        # not variables.
+        ranges = coalesce_ranges(resolve_ranges(resolver, specs))
         divider = max(1, min(255, round(SEND_TASK_MEASURED_HZ / rate)))
         request = build_stream_request(ranges, divider, transport, usart3_baud,
                                        slot, committed)
@@ -664,7 +668,8 @@ def main(argv=None):
 
         divider = max(1, min(255, round(SEND_TASK_MEASURED_HZ / max(args.rate, 0.4))))
         resolver = SymbolResolver(args.elf)
-        ranges = resolve_ranges(resolver, args.symbol)
+        apply_firmware_limits(resolver)
+        ranges = coalesce_ranges(resolve_ranges(resolver, args.symbol))
         result = run(args.control_port, data_port, ranges, divider, transport,
                      args.seconds, args.out, elf=args.elf,
                      usart3_baud=args.usart3_baud, auto_split=args.auto_split)

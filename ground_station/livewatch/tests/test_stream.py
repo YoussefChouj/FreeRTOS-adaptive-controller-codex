@@ -542,12 +542,21 @@ def test_coalesce_preserves_different_sizes_separate():
     assert len(out) == 2
 
 
-def test_coalesce_preserves_different_fmts_separate():
-    """Same size but different fmt (unsigned vs signed) stay separate."""
+def test_coalesce_merges_mixed_fmts_of_same_size():
+    """A struct mixing float and int32 fields still goes out as one range;
+    the per-element formats ride along in _fmts for the host decode."""
+    import struct
     r1 = StreamRange(SRAM, 4, 1, "u", "I")
-    r2 = StreamRange(SRAM + 4, 4, 1, "s", "i")
-    out = coalesce_ranges([r1, r2])
-    assert len(out) == 2
+    r2 = StreamRange(SRAM + 4, 4, 2, "w", "f")
+    r3 = StreamRange(SRAM + 12, 4, 1, "s", "i")
+    out = coalesce_ranges([r1, r2, r3])
+    assert len(out) == 1 and out[0].count == 4
+    assert out[0]._names == ("u", "w[0]", "w[1]", "s")
+    assert out[0]._fmts == ("I", "f", "f", "i")
+    raw = struct.pack("<Iffi", 7, 1.5, -2.0, -3)
+    assert out[0].decode(raw) == [7, 1.5, -2.0, -3]
+    # a pointer-less range (fmt unknown) never merges with a typed one
+    assert len(coalesce_ranges([StreamRange(SRAM, 4, 1, "a", None), r2])) == 2
 
 
 def test_coalesce_empty_returns_empty():
@@ -577,11 +586,10 @@ def test_stream_range_element_names_coalesced():
     assert r._element_names() == names
 
 
-def test_stream_range_element_names_non_coalesced_empty():
-    """For a non-coalesced range without _names, count>1 returns empty."""
+def test_stream_range_element_names_array():
+    """An array keeps its element labels when merged with neighbours."""
     r = StreamRange(SRAM, 4, 4, "rpm_dbg", "I")
-    # Empty tuple signals "use legacy behaviour" (one key with list value)
-    assert r._element_names() == ()
+    assert r._element_names() == tuple("rpm_dbg[%d]" % i for i in range(4))
 
 
 def test_decode_schema_preserves_names():

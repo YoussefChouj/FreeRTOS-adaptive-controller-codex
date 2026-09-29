@@ -133,6 +133,10 @@ class StreamRange:
     name: str = ""
     fmt: str | None = None
     _names: tuple[str, ...] | None = None
+    # Per-element struct formats when a coalesced range mixes same-size types
+    # (a float next to an int32 in one struct). The firmware copies bytes and
+    # never looks at types, so only the host decode has to know.
+    _fmts: tuple[str, ...] | None = None
 
     @property
     def nbytes(self) -> int:
@@ -140,6 +144,8 @@ class StreamRange:
 
     def decode(self, raw: bytes):
         """Unpack this range's slice of a data frame."""
+        if self._fmts is not None:
+            return list(struct.unpack("<" + "".join(self._fmts), raw))
         if self.fmt is None:
             return raw
         return list(struct.unpack("<%d%s" % (self.count, self.fmt), raw))
@@ -148,23 +154,27 @@ class StreamRange:
         """Per-element names for this range (one key per value).
 
         If ``_names`` is explicitly set (coalesced range) return those names.
-        For non-coalesced ranges with count > 1 return empty so the caller
-        falls back to legacy behaviour (one key with a list).  For count == 1
-        return the single-element tuple ``(name,)`` so coalescing can pick up
-        the original names.
+        Otherwise ``(name,)`` for a scalar and ``name[0]..name[n-1]`` for an
+        array, the same labels ``columns_for`` gives an uncoalesced range, so a
+        column keeps its name whether or not its range got merged.
         """
         if self._names is not None:
             return self._names
-        if self.count == 1 and self.name:
-            return (self.name,)
-        return ()
+        label = self.name or "0x%08X" % self.address
+        if self.count == 1:
+            return (label,)
+        return tuple("%s[%d]" % (label, i) for i in range(self.count))
+
+    def _element_fmts(self) -> tuple[str, ...]:
+        return self._fmts if self._fmts is not None else (self.fmt,) * self.count
 
 
 def coalesce_ranges(ranges: list) -> list[StreamRange]:
     """Merge adjacent StreamRanges into fewer ranges with count > 1.
 
     Two ranges are mergeable when they are contiguous in memory (range end
-    equals the next start), have the same ``size`` and the same ``fmt``.
+    equals the next start) and have the same ``size``; their ``fmt`` may
+    differ when both are known (kept per element in ``_fmts``).
     The first range's ``name`` is kept; the merged range's ``count`` is the
     sum of the individual counts.  Original per-element names are stored in
     ``_names`` so the decoder can emit one key per element.
@@ -182,27 +192,50 @@ def coalesce_ranges(ranges: list) -> list[StreamRange]:
         prev_end = prev.address + prev.size * prev.count
         if (prev_end == rng.address
                 and prev.size == rng.size
-                and prev.fmt == rng.fmt):
-            all_names: list[str] = []
-            if prev._names is not None:
-                all_names.extend(prev._names)
-            else:
-                all_names.extend(prev._element_names())
-            if rng._names is not None:
-                all_names.extend(rng._names)
-            else:
-                all_names.extend(rng._element_names())
+                and (prev.fmt == rng.fmt or (prev.fmt and rng.fmt))):
+            all_names = prev._element_names() + rng._element_names()
+            fmts = prev._element_fmts() + rng._element_fmts()
             out[-1] = StreamRange(
                 address=prev.address,
                 size=prev.size,
                 count=prev.count + rng.count,
                 name=prev.name,
                 fmt=prev.fmt,
-                _names=tuple(all_names),
+                _names=all_names,
+                _fmts=fmts if len(set(fmts)) > 1 else None,
             )
         else:
             out.append(rng)
     return out
+
+
+def firmware_limits(resolver) -> tuple[int, int]:
+    """(ranges per slot, payload bytes per frame) as built into this ELF.
+
+    Read off the sizes of the firmware's own buffers (``s_stream_staging.ranges``
+    holds SUBSCRIBE_MAX_STREAM_RANGES 8-byte ranges, ``stream_buf`` is
+    SUBSCRIBE_STREAM_MAX_BYTES + frame overhead), so the host follows a rebuilt
+    firmware instead of a constant kept in step by hand. The ELF is already
+    trusted for every address; its limits are no less current. Falls back to
+    the constants when the symbols are missing.
+    """
+    try:
+        n = resolver.resolve("s_stream_staging.ranges").size // 8
+        payload = resolver.resolve("stream_buf").size - FRAME_OVERHEAD
+    except Exception:
+        return MAX_STREAM_RANGES, STREAM_MAX_BYTES
+    return n, payload
+
+
+def apply_firmware_limits(resolver) -> tuple[int, int]:
+    """Adopt :func:`firmware_limits` as this module's limits and return them.
+
+    Module-wide on purpose: a process talks to one flashed image, described by
+    one ELF, and every validator below reads these globals at call time.
+    """
+    global MAX_STREAM_RANGES, STREAM_MAX_BYTES
+    MAX_STREAM_RANGES, STREAM_MAX_BYTES = firmware_limits(resolver)
+    return MAX_STREAM_RANGES, STREAM_MAX_BYTES
 
 
 def _validate(ranges, divider: int, transport: int, usart3_baud: int,
@@ -471,6 +504,7 @@ def decode_schema(n_ranges: int, payload: bytes, requested=()) -> StreamSchema:
             name=hint.name if hint else "",
             fmt=hint.fmt if hint else None,
             _names=hint._names if hint else None,
+            _fmts=hint._fmts if hint else None,
         ))
     schema = StreamSchema(divider, transport, total_bytes, tuple(ranges), slot)
     if sum(r.nbytes for r in ranges) != total_bytes:

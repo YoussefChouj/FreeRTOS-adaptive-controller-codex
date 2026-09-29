@@ -20,9 +20,12 @@ _session = None
 def resolver():
     global _resolver
     with _resolver_lock:
-        if _resolver is None:
-            _resolver = SymbolResolver(core.ELF)
-        return _resolver
+        # Reload after a rebuild: addresses and stream limits both come from
+        # the ELF, and the planner must describe the image now on the board.
+        mtime = core.ELF.stat().st_mtime
+        if _resolver is None or _resolver[0] != mtime:
+            _resolver = (mtime, SymbolResolver(core.ELF))
+        return _resolver[1]
 
 
 def _err(msg, status=400):
@@ -44,7 +47,9 @@ async def presets_list(request):
 async def presets_merge(request):
     try:
         names = (await request.json()).get("names") or []
-        return web.json_response(core.merge_presets([core.load_preset(n) for n in names]))
+        presets = [core.load_preset(n) for n in names]
+        return web.json_response(await _off(
+            lambda: core.merge_presets(presets, core.slot_fits(resolver()))))
     except (ValueError, FileNotFoundError) as exc:
         return _err(exc, 404)
 

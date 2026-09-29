@@ -17,10 +17,10 @@ import threading
 import time
 from pathlib import Path
 
+from ground_station.livewatch import stream
 from ground_station.livewatch.stream import (
-    BUDGET_PCT, MAX_SLOTS, MAX_STREAM_RANGES, SEND_TASK_MEASURED_HZ,
-    TRANSPORT_USART3,
-    _validate, stream_bps,
+    BUDGET_PCT, MAX_SLOTS, SEND_TASK_MEASURED_HZ, TRANSPORT_USART3,
+    _validate, apply_firmware_limits, coalesce_ranges, stream_bps,
 )
 from ground_station.livewatch.stream_log import (
     columns_for, resolve_ranges, run_groups,
@@ -87,14 +87,51 @@ def preset_info():
     return out
 
 
-def merge_presets(presets):
+def slot_fits(resolver):
+    """A ``fits(vars)`` for merge_presets: the slot's vars, merged into
+    contiguous memory blocks, stay within the range and payload limits of the
+    firmware this ELF describes. Unresolvable vars weigh nothing here;
+    plan_budget reports them."""
+    apply_firmware_limits(resolver)
+    cache = {}
+
+    def one(spec):
+        if spec not in cache:
+            try:
+                cache[spec] = resolve_ranges(resolver, [spec])[0]
+            except Exception:
+                cache[spec] = None
+        return cache[spec]
+
+    def fits(specs):
+        ranges = coalesce_ranges([r for r in map(one, specs) if r is not None])
+        return (len(ranges) <= stream.MAX_STREAM_RANGES and
+                sum(r.nbytes for r in ranges) <= stream.STREAM_MAX_BYTES)
+    return fits
+
+
+def _fitting_prefix(specs, fits):
+    """Longest head of ``specs`` (at least one) that fits. Scanned, not
+    bisected: adding a var can bridge two blocks and lower the range count."""
+    k = len(specs) - 1
+    while k > 1 and not fits(specs[:k]):
+        k -= 1
+    return k
+
+
+def merge_presets(presets, fits=None):
     """Union of several presets into one plan of at most MAX_SLOTS slots.
 
     Slots are keyed by the real send divider, so 30 Hz and 33 Hz share a slot.
     A var listed at several rates is kept once, at the fastest. With more than
     MAX_SLOTS dividers, the closest adjacent pair is folded into the faster one
     (never undersample a var, pay the least extra bandwidth).
+
+    ``fits(vars)`` says whether one slot can carry those vars (slot_fits with
+    the ELF at hand); without it every var counts as one range.
     """
+    if fits is None:
+        fits = lambda specs: len(specs) <= stream.MAX_STREAM_RANGES
     fastest = {}                              # var -> smallest divider
     order = []
     for p in presets:
@@ -115,22 +152,22 @@ def merge_presets(presets):
                 fastest[v] = divs[i]
     slots = [{"rate": round(SEND_TASK_MEASURED_HZ / d, 3),
               "vars": [v for v in order if fastest[v] == d]} for d in divs]
-    # One var spec is one firmware range; a slot over the range limit spills
-    # its tail into a new slot at the same rate. With no slot free, the slowest
-    # slot is folded into the next faster one first (oversample, never under).
-    # Still over: plan_budget flags it.
+    # A slot that does not fit spills its tail into a new slot at the same
+    # rate. With no slot free, the slowest slot is folded into the next faster
+    # one first (oversample, never under). Still over: plan_budget flags it.
     while True:
-        over = [s for s in slots if len(s["vars"]) > MAX_STREAM_RANGES]
+        over = [s for s in slots if len(s["vars"]) > 1 and not fits(s["vars"])]
         if not over:
             break
         if len(slots) >= MAX_SLOTS:
-            if len(slots[-1]["vars"]) + len(slots[-2]["vars"]) > MAX_STREAM_RANGES:
+            if not fits(slots[-2]["vars"] + slots[-1]["vars"]):
                 break
             slots[-2]["vars"] += slots.pop()["vars"]
             continue
         i = slots.index(over[0])
-        extra = slots[i]["vars"][MAX_STREAM_RANGES:]
-        del slots[i]["vars"][MAX_STREAM_RANGES:]
+        k = _fitting_prefix(slots[i]["vars"], fits)
+        extra = slots[i]["vars"][k:]
+        del slots[i]["vars"][k:]
         slots.insert(i + 1, {"rate": slots[i]["rate"], "vars": extra})
     vofa = []
     for p in presets:
@@ -155,8 +192,10 @@ def plan_budget(resolver, slots):
     """Per-slot and total bandwidth, mirroring the firmware validator.
 
     Each variable is resolved on its own so an error points at the entry that
-    caused it instead of failing the whole slot.
+    caused it instead of failing the whole slot. Limits are checked on the
+    ranges actually sent: neighbouring variables merged into one block.
     """
+    max_ranges, max_bytes = apply_firmware_limits(resolver)
     out, total = [], 0
     for idx, slot in enumerate(slots):
         rate = float(slot.get("rate") or 0)
@@ -177,11 +216,12 @@ def plan_budget(resolver, slots):
             divider = 0
         else:
             divider = divider_for(rate)
+        merged = coalesce_ranges(ranges)
         payload = sum(r.nbytes for r in ranges)
         bps = stream_bps(payload, divider) if divider and ranges else 0
         if ranges and divider:
             try:
-                _validate(ranges, divider, TRANSPORT_USART3, USART3_BAUD, idx,
+                _validate(merged, divider, TRANSPORT_USART3, USART3_BAUD, idx,
                           0, skip_budget_check=True)
             except Exception as exc:
                 errors.append(str(exc))
@@ -192,6 +232,8 @@ def plan_budget(resolver, slots):
             "slot": idx, "rate_req": rate, "divider": divider,
             "rate_real": SEND_TASK_MEASURED_HZ / divider if divider else 0.0,
             "payload": payload, "frame_bytes": payload + 12 if ranges else 0,
+            "ranges": len(merged), "max_ranges": max_ranges,
+            "max_bytes": max_bytes,
             "bps": bps, "vars": entries, "errors": errors,
         })
     errors = []
