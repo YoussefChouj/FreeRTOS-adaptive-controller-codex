@@ -93,5 +93,10 @@ controllers (currently PID + adaptive layer).
 - Q7 independent position truth: user asks if their camera "with separate localisation" is good for
   motion capture. Need: which camera, fixed in room or on the drone. Leaning: external fixed camera
   (+ tag on drone), offline, feeds A only, never the safety loop.
+  User has (2026-09-29): (a) bare camera module reached via a USB-to-TTL adapter, model unknown, wiring
+  unknown -> do NOT guess pins; serial link is too slow for video (115200 baud = ~11.5 kB/s) unless
+  it is an ESP32-CAM-style board (TTL only for flashing, video over WiFi = shares air with drone link);
+  (b) own phone, already USB-connected to PC. Proposed: phone, fixed high in a room corner (geometry:
+  path envelope spans ~61 deg horizontally from a corner, fence ~75 deg, computed not measured).
 - then: motor cool-down between flights, test-plan library format, controller-agnostic interface to A,
   stop/abort criteria.
