@@ -134,5 +134,12 @@ controllers (currently PID + adaptive layer).
   (start/stop, adb pull, clock offset), NOT a processor; all vision offline on PC. On-phone processing
   only if camera position ever enters the flight loop (excluded: camera feeds A only).
   Fact: adb and scrcpy are NOT on PATH on this PC (checked 2026-09-29) -> platform-tools needed later.
-- then: motor cool-down between flights, test-plan library format, controller-agnostic interface to A,
-  stop/abort criteria.
+- Q8 DECIDED (user, 2026-09-29): motors-off ground cool-down >= duration of the flight just flown
+  (120 s flight -> >= 120 s; proposed, not measured). No motor/ESC temperature sensor known (unverified).
+  User pushback: A's analysis can take > 120 s. So the next-flight gate is the LAST of:
+  cool-down done, resting voltage settled (Q5 gate), analysis the next flight depends on done.
+  Drone stays disarmed on the ground while waiting; idle electronics drain is caught by the Q5 gate.
+- Q8b OPEN: does every flight wait for the full analysis? Proposed: split A's output into a blocking
+  "decision" part (telemetry metrics -> next tuning step) and a non-blocking part (camera/video truth,
+  long reports) that runs in the background. Analysis wait cap (value TBD) -> pause session + notify.
+- then: test-plan library format, controller-agnostic interface to A, stop/abort criteria.
