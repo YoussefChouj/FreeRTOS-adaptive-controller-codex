@@ -114,6 +114,8 @@ function loadPanel(seed) {
     pow: Math.pow, round: Math.round, floor: Math.floor, ceil: Math.ceil,
     min: Math.min, max: Math.max, sqrt: Math.sqrt, abs: Math.abs,
     cos: Math.cos, sin: Math.sin, PI: Math.PI,
+    hypot: Math.hypot, atan2: Math.atan2, tan: Math.tan, exp: Math.exp, log: Math.log,
+    sign: Math.sign, trunc: Math.trunc, cbrt: Math.cbrt,
   };
   sandbox.isNaN = (v) => (typeof v === 'number' && isNaN(v)) || v === undefined;
   sandbox.fetch = function (url, opts) { fetchRecords.push({ url, opts }); return Promise.resolve({ ok: true, json: () => Promise.resolve({}) }); };

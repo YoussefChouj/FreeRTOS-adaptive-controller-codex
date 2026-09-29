@@ -115,12 +115,46 @@ class TestBootDefaultLayoutModule(unittest.TestCase):
         # S15 expanded the slot-0 layout beyond the 21-var sidebar frame to
         # include MRAC theta vectors (4 axes × 6 weights = 24 vars) and the
         # EKF shadow-mode state (9 vars) so the dashboard's MRAC + Estimator
-        # panels can read them via ``a[*]`` sidebar keys. New total: 54.
+        # panels can read them via ``a[*]`` sidebar keys: 54.
         #   3 attitude + 8 MRAC e/u_ad + 24 MRAC theta + 8 status + 1 vbat
         #   + 1 xTickCount + 9 EKF = 54 vars
+        # The Fly-mode extras (3D panel flight UX spec) add 7 more: OF
+        # earth x/y, Z_pos FB + Des, locx/locy Des, adaptation flag. New
+        # total: 61, one below MAX_STREAM_RANGES (62).
         # Source of truth is the boot_default_layout.py tuple; the YAML
         # manifest is being extended to match in the same change.
-        self.assertEqual(len(DASHBOARD_FRAME_A_VARS), 54)
+        self.assertEqual(len(DASHBOARD_FRAME_A_VARS), 61)
+
+    def test_fly_mode_vars_on_slot0(self):
+        # Fly mode reads these from slot 0 alone.
+        need = {"ano_of.earth_x", "ano_of.earth_y", "Ctrler.Z_posPID.FB",
+                "Ctrler.locxPID.Des", "Ctrler.locyPID.Des",
+                "Ctrler.Z_posPID.Des", "mrac_flags.adaptation_on",
+                "DroneStatus.FlyMode", "real_voltage"}
+        self.assertTrue(need <= set(DASHBOARD_FRAME_A_VARS), need - set(DASHBOARD_FRAME_A_VARS))
+        self.assertEqual(len(set(DASHBOARD_FRAME_A_VARS)), len(DASHBOARD_FRAME_A_VARS))
+
+    def test_slot0_request_fits_against_real_elf(self):
+        # Resolve every slot-0 var against the ELF and build the real 0x21
+        # request: it must be accepted (<= 62 ranges, budget) and fit the
+        # 499 B USART3 mailbox.
+        import pathlib
+        elf = pathlib.Path(__file__).resolve().parents[3] / "OBJ" / "JX_FLY.axf"
+        if not elf.exists():
+            self.skipTest("OBJ/JX_FLY.axf not present")
+        from ground_station.livewatch.stream import (
+            MAX_STREAM_RANGES, StreamRange, build_stream_request)
+        from ground_station.livewatch.symbols import SymbolResolver
+        res = SymbolResolver(str(elf))
+        ranges = []
+        for name in DASHBOARD_FRAME_A_VARS:
+            sym = res.resolve(name)
+            ranges.append(StreamRange(address=sym.address, size=sym.size,
+                                      count=1, name=name, fmt=sym.fmt))
+        self.assertLessEqual(len(ranges), MAX_STREAM_RANGES)
+        req = build_stream_request(ranges=ranges, divider=DASHBOARD_FRAME_A_DIVIDER,
+                                   transport=1, usart3_baud=921600, slot=0, other_bps=0)
+        self.assertLessEqual(len(req) - 3, 499 + 3)
 
     def test_dashboard_divider_is_4(self):
         # 80/4 = 20 Hz measured in MIXED mode (MIXED cadence ~80 Hz,
