@@ -344,6 +344,90 @@ float mrac_u_ff[AXES] MRAC_CCM;
 
 MRAC_Cyc_t mrac_cyc;
 
+#if MRAC_L2_MODE != 0 || MRAC_L3_MODE != 0
+
+MRAC_LayerSel_t mrac_layer_sel = {1, 1, 0, 0, 0, 0};
+MRAC_LayerSel_t mrac_layer_sel_req = {1, 1, 0, 0, 0, 0};
+
+void MRAC_LayerSelectStep(uint8_t armed)
+{
+    if (armed == 0) {
+        if (mrac_layer_sel_req.l2_input > MRAC_L2_IN_RESID) {
+            mrac_layer_sel_req.l2_input = mrac_layer_sel.l2_input;
+        }
+        if (mrac_layer_sel_req.l2_norm > MRAC_L2_NORM_SOFTMAX) {
+            mrac_layer_sel_req.l2_norm = mrac_layer_sel.l2_norm;
+        }
+        if (mrac_layer_sel_req.l3_src > MRAC_L3_SRC_RDOT) {
+            mrac_layer_sel_req.l3_src = mrac_layer_sel.l3_src;
+        }
+        
+        if (mrac_layer_sel.l2_on != mrac_layer_sel_req.l2_on ||
+            mrac_layer_sel.l3_on != mrac_layer_sel_req.l3_on ||
+            mrac_layer_sel.l2_input != mrac_layer_sel_req.l2_input ||
+            mrac_layer_sel.l2_norm != mrac_layer_sel_req.l2_norm ||
+            mrac_layer_sel.l2_out_mask != mrac_layer_sel_req.l2_out_mask ||
+            mrac_layer_sel.l3_src != mrac_layer_sel_req.l3_src) {
+            
+            mrac_layer_sel = mrac_layer_sel_req;
+            
+            /* reset L2 filter states and energies */
+            int a, k;
+            for (a = 0; a < (int)AXES; a++) {
+                for (k = 0; k < MRAC_L2_N_BANDS; k++) {
+                    mrac_l2_state[a][k].z1 = 0.0f;
+                    mrac_l2_state[a][k].z2 = 0.0f;
+                    mrac_l2_energy[a][k] = 0.0f;
+                }
+            }
+            /* set every gate to 1.0f and mrac_u_ff to 0.0f */
+            int g;
+            for (a = 0; a < (int)AXES; a++) {
+                mrac_u_ff[a] = 0.0f;
+                for (g = 0; g < MRAC_N_GROUPS; g++) {
+                    mrac_g_gamma[a][g] = 1.0f;
+                    mrac_g_sigma[a][g] = 1.0f;
+                    mrac_g_phi[a][g] = 1.0f;
+                }
+            }
+        }
+    } else {
+        /* armed: out-of-range fields are refused (active value written back), valid ones stay pending until disarmed */
+        if (mrac_layer_sel_req.l2_input > MRAC_L2_IN_RESID) {
+            mrac_layer_sel_req.l2_input = mrac_layer_sel.l2_input;
+        }
+        if (mrac_layer_sel_req.l2_norm > MRAC_L2_NORM_SOFTMAX) {
+            mrac_layer_sel_req.l2_norm = mrac_layer_sel.l2_norm;
+        }
+        if (mrac_layer_sel_req.l3_src > MRAC_L3_SRC_RDOT) {
+            mrac_layer_sel_req.l3_src = mrac_layer_sel.l3_src;
+        }
+    }
+}
+
+float MRAC_GetOutput(MRAC_Axis_e axis)
+{
+    float u_ad;
+    float u_max;
+    if (axis == MRAC_AXIS_PITCH) { u_ad = mrac_state.pitch.u_ad; u_max = mrac_config_pitch.u_max; }
+    else if (axis == MRAC_AXIS_ROLL) { u_ad = mrac_state.roll.u_ad; u_max = mrac_config_roll.u_max; }
+    else if (axis == MRAC_AXIS_YAW) { u_ad = mrac_state.yaw.u_ad; u_max = mrac_config_yaw.u_max; }
+    else { u_ad = mrac_state.z_rate.u_ad; u_max = mrac_config_z.u_max; }
+    
+    if (mrac_layer_sel.l3_on) {
+        u_ad += mrac_u_ff[axis];
+    }
+    
+    if (u_max > 0.0f) {
+        if (u_ad > u_max) u_ad = u_max;
+        if (u_ad < -u_max) u_ad = -u_max;
+    }
+    return u_ad;
+}
+
+#include "mrac_layers.h"
+
+#else
 static void MRAC_L2_Update(void)
 {
 }
@@ -354,6 +438,16 @@ static float MRAC_L3_Feedforward(MRAC_Axis_e axis, const MRAC_Bus_t *bus)
     (void)bus;
     return 0.0f; // consumed from stage S4
 }
+
+float MRAC_GetOutput(MRAC_Axis_e axis)
+{
+    if (axis == MRAC_AXIS_PITCH) return mrac_state.pitch.u_ad;
+    if (axis == MRAC_AXIS_ROLL) return mrac_state.roll.u_ad;
+    if (axis == MRAC_AXIS_YAW) return mrac_state.yaw.u_ad;
+    return mrac_state.z_rate.u_ad;
+}
+
+#endif
 
 // Closes the cycle record of one MRAC_UpdateAxis call. t0 = entry, t1..t2 = bus fill,
 // t2..t3 = block generators, t3..now = the rest. Unsigned deltas survive a CYCCNT wrap; a
@@ -868,6 +962,9 @@ void MRAC_Init(void)
     mrac_flags.of_frame_on        = 0;                       // OF calibration frame off by default (CMD 0x0F idx 12)
     mrac_flags.ref_model_type     = DEFAULT_REF_MODEL_TYPE;  // reference model type (CMD 0x13); 0 = passthrough
 
+#if MRAC_L2_MODE != 0 || MRAC_L3_MODE != 0
+    MRAC_Layers_Init();
+#endif
     MRAC_Reset();
 }
 

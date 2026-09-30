@@ -153,6 +153,28 @@ typedef struct {
 } MRAC_BlockDesc_t;
 
 extern float mrac_g_gamma[AXES][MRAC_N_GROUPS];
+
+#if MRAC_L2_MODE != 0 || MRAC_L3_MODE != 0
+#ifndef MRAC_L2_N_BANDS
+#define MRAC_L2_N_BANDS 4
+#endif
+
+typedef struct {
+    float z1;
+    float z2;
+} MRAC_L2_BandState_t;
+
+extern MRAC_L2_BandState_t mrac_l2_state[AXES][MRAC_L2_N_BANDS];
+extern float mrac_l2_energy[AXES][MRAC_L2_N_BANDS];
+
+typedef struct {
+    float k_ff;
+    float tau_d;
+    float u_ff_max;
+} MRAC_L3_Cfg_t;
+extern MRAC_L3_Cfg_t mrac_l3_cfg[AXES];
+#endif
+
 extern float mrac_g_sigma[AXES][MRAC_N_GROUPS];
 extern float mrac_g_phi[AXES][MRAC_N_GROUPS];
 extern float mrac_u_ff[AXES];
@@ -365,6 +387,42 @@ void MRAC_GetPrior(uint8_t axis, float *out_arr);
 // ------------------------------------------------------------------------------
 // 4. Public Function Prototypes
 // ------------------------------------------------------------------------------
+
+
+#if MRAC_L2_MODE != 0 || MRAC_L3_MODE != 0
+#define MRAC_L2_IN_ERR 0
+#define MRAC_L2_IN_GYRO 1
+#define MRAC_L2_IN_REF 2
+#define MRAC_L2_IN_UAD 3
+#define MRAC_L2_IN_RESID 4
+
+#define MRAC_L2_NORM_NONE 0
+#define MRAC_L2_NORM_INDEP 1
+#define MRAC_L2_NORM_MEAN 2
+#define MRAC_L2_NORM_SOFTMAX 3
+
+#define MRAC_L2_OUT_GAMMA (1 << 0)
+#define MRAC_L2_OUT_PHI   (1 << 1)
+#define MRAC_L2_OUT_SIGMA (1 << 2)
+
+#define MRAC_L3_SRC_XMDOT 0
+#define MRAC_L3_SRC_RDOT  1
+
+typedef struct {
+    uint8_t l2_on;
+    uint8_t l3_on;
+    uint8_t l2_input;
+    uint8_t l2_norm;
+    uint8_t l2_out_mask;
+    uint8_t l3_src;
+} MRAC_LayerSel_t;
+
+extern MRAC_LayerSel_t mrac_layer_sel;
+extern MRAC_LayerSel_t mrac_layer_sel_req;
+
+void MRAC_LayerSelectStep(uint8_t armed);
+float MRAC_GetOutput(MRAC_Axis_e axis);
+#endif
 
 // Initialize MRAC states, base configurations, and zero the adaptive weights
 void MRAC_Init(void);

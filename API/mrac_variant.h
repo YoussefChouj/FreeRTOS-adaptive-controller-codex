@@ -6,9 +6,27 @@
 #define MRAC_VARIANT_SINDY 2
 #define MRAC_VARIANT_HYBRID_RBF 3
 #define MRAC_VARIANT_HYBRID_SINDY 4
+#define MRAC_VARIANT_3L_STRUCT 5
+#define MRAC_VARIANT_3L_HYBRID_SINDY 6
 
 #ifndef MRAC_VARIANT
 #define MRAC_VARIANT MRAC_VARIANT_STRUCT6
+#endif
+
+#if MRAC_VARIANT >= MRAC_VARIANT_3L_STRUCT
+    #ifndef MRAC_L2_MODE
+        #define MRAC_L2_MODE 1
+    #endif
+    #ifndef MRAC_L3_MODE
+        #define MRAC_L3_MODE 1
+    #endif
+#else
+    #ifndef MRAC_L2_MODE
+        #define MRAC_L2_MODE 0
+    #endif
+    #ifndef MRAC_L3_MODE
+        #define MRAC_L3_MODE 0
+    #endif
 #endif
 
 #if MRAC_VARIANT == MRAC_VARIANT_STRUCT6
@@ -36,6 +54,16 @@
     #define MRAC_N_SINDY 0
     #define MRAC_N_GROUPS 8
 #elif MRAC_VARIANT == MRAC_VARIANT_HYBRID_SINDY
+    #define MRAC_N_STRUCT 6
+    #define MRAC_N_RBF 0
+    #define MRAC_N_SINDY 6
+    #define MRAC_N_GROUPS 8
+#elif MRAC_VARIANT == MRAC_VARIANT_3L_STRUCT
+    #define MRAC_N_STRUCT 6
+    #define MRAC_N_RBF 0
+    #define MRAC_N_SINDY 0
+    #define MRAC_N_GROUPS 6
+#elif MRAC_VARIANT == MRAC_VARIANT_3L_HYBRID_SINDY
     #define MRAC_N_STRUCT 6
     #define MRAC_N_RBF 0
     #define MRAC_N_SINDY 6
