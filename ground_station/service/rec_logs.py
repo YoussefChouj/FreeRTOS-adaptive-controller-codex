@@ -166,7 +166,7 @@ class _Held:
         else:
             return None
         if "dz" in v:
-            dz: float | None = v["dz"]
+            dz: float | None = v["dz"]  # Z_posPID.Des is in metres in firmware (TASK/AutoflyTask.c:89)
         elif "dz_cm" in v:
             dz = v["dz_cm"] / 100.0
         else:

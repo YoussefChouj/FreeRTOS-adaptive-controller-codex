@@ -892,6 +892,24 @@ function runChecks() {
     env.destroy();
   }
 
+  // 21. Replay frame z scale
+  {
+    console.log('\n[CHECK 21: replay frame with known cm x/y and metre z plots desired and actual z on the same scale]');
+    const env = loadPanel();
+    const T = env.sandbox.__pathPanelTest;
+    const plain = (o) => JSON.parse(JSON.stringify(o));
+    
+    const des = T.replayDesired({ 'pid.locx.Des': 120, 'pid.locy.Des': 240, 'pid.z_pos.Des': 1.8 });
+    assert.deepStrictEqual(plain(des), { x: 1.2, y: 2.4, z: 1.8 }, 'desired z is raw metres, x/y scaled from cm');
+
+    const state = { streams: { '0': { values: { 'c.earth_x': 100, 'c.earth_y': 200, 'Ctrler.Z_posPID.FB': 1.5, 'pid.locx.Des': 120, 'pid.locy.Des': 240, 'pid.z_pos.Des': 1.8 } } } };
+    assert.deepStrictEqual(plain(T.extractPosition(state)), { x: 1, y: 2, z: 1.5, yaw: 0 }, 'actual z is raw metres, x/y scaled from cm');
+    assert.deepStrictEqual(plain(T.extractDesiredPosition(state)), { x: 1.2, y: 2.4, z: 1.8, hasZ: true }, 'live desired z is raw metres, x/y scaled from cm');
+    
+    console.log('  PASS: actual and desired z are plotted on the same scale (metres), x/y are scaled from cm');
+    env.destroy();
+  }
+
   console.log('\nALL CHECKS PASSED SUCCESSFULLY.');
 }
 

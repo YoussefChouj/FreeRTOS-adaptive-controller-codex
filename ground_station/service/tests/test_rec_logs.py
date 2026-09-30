@@ -274,3 +274,16 @@ def test_concurrent_loads_single_flight_and_capped(tmp_path, monkeypatch):
     assert sorted(calls) == sorted(names)        # one parse per log
     assert peak[0] <= 2                          # at most two parses at a time
     assert not rec_logs._INFLIGHT
+
+
+def test_dz_is_metres_raw(tmp_path):
+    rec_logs._CACHE.clear()
+    _manual(tmp_path, "20260101-000000",
+            [(T0, {"c.earth_x": 20.0, "c.earth_y": 0.0, "c.altitude": 1.5,
+                   "pid.locx.Des": 10.0, "pid.locy.Des": 0.0, "pid.z_pos.Des": 1.2})])
+    d = rec_logs.load_rec_log(tmp_path, "20260101-000000")
+    s = d["samples"][0]
+    t, x, y, z, dx, dy, dz, e3, exy = s
+    assert math.isclose(x, 0.2) and math.isclose(dx, 0.1)
+    assert math.isclose(z, 1.5) and math.isclose(dz, 1.2)
+    assert e3 == pytest.approx(math.hypot(0.1, 0.3), abs=1e-4)
