@@ -39,5 +39,7 @@ thresholds:
   BAT-SAG: {sag_warn: 0.3}                           # V per cell, rest minus airborne minimum
   ALT-SAG: {alt_sag_m: 0.10}
   MRAC-READY: {ready_lo: 0.05, ready_hi: 0.5, hf_max: 0.3}
+  MRAC-AUTH: {auth_max: 0.5}                       # steady u_ad_rms / u_nom_rms
   MRAC-CHATTER: {hf_max: 0.3}
+  MRAC-DRIFT: {min_change: 0.01}                   # |slope_last30| * conv_window_s; below = noise
   MRAC-WORSE: {worse_pct: 10.0}

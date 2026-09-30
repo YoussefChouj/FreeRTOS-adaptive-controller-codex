@@ -188,8 +188,9 @@ recalibrate on flights 12–16). v1 rule set (each gets a positive and a negativ
 | BAT-LOW | v_min per cell < cell_crit | critical: land earlier |
 | BAT-SAG | sag per cell > sag_warn | battery health / internal resistance |
 | ALT-SAG | altitude steady e_mean indicates FB below Des beyond alt_sag_m | raise hover throttle / Z_rate integrator (EMin, SumEMax, UiMax) |
-| MRAC-READY | mode shadow, authority_ratio in [ready_lo, ready_hi], all weights converged, u_ad_hf_frac < hf_max | axis is a candidate for active mode |
-| MRAC-DRIFT | any weight not converged | reduce gamma or enable projection before going active |
+| MRAC-READY | mode shadow, authority_ratio in [ready_lo, ready_hi], all weights effectively converged (MRAC-DRIFT does not fire), u_ad_hf_frac < hf_max | axis is a candidate for active mode |
+| MRAC-AUTH | mode shadow or active, steady authority_ratio > auth_max (added 2026-09-30) | adaptive term would dominate the nominal PID; check gamma / regressor scaling before going active |
+| MRAC-DRIFT | a weight has converged False and abs(slope_last30) * conv_window_s >= min_change (weights ~1e-3 are noise-dominated under the relative test; floor added 2026-09-30) | reduce gamma or enable projection before going active |
 | MRAC-CHATTER | u_ad_hf_frac > hf_max | filter u_ad / reduce gamma |
 | MRAC-WORSE | mode active and ledger baseline (same preset name, mode != active) exists and steady e_rms worse by > worse_pct | return axis to shadow / reduce gamma |
 
