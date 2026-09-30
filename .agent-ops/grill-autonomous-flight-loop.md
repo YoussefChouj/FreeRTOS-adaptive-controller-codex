@@ -281,3 +281,20 @@ All numbers below are PROPOSED or COMPUTED, none measured; they are calibrated o
 Build-time items needing operator action: tier-0 permission for the safety-net firmware pieces (built
 outside any campaign), crash detect (operator-written), PROTECTED markers, agent.py tier-0 rule exception
 for open campaigns, platform-tools (adb) install, bench check imu_data.yaw ~0 after boot.
+
+## Operator confirmation + build-time additions (2026-09-30 09:42, user)
+Summary CONFIRMED ("this exactly match what i want"). Build authorized end-to-end, no check-ins; tier-0 edits for
+the planned firmware pieces authorized by this request (built outside any campaign, reviewed before flashing).
+Crash detect: user now asks for everything to be implemented, so the agent writes it; it stays in the protected set
+and is flagged for operator review. Additions:
+- A1 Takeoff: arm -> motors at idle (settle) -> auto-climb to the hover point (origin x/y, hover_z, proposed 0.7 m,
+  same path as RC ch7 auto-climb) -> settle -> execute the planned maneuver/trajectory (trajectories start and end
+  at the hover point).
+- A2 Land (agent AND operator, i.e. GS land and RC ch5): first fly to the hover point (rate-limited), settle, then
+  the existing descent + touchdown auto-disarm. Timeout fallback: descend in place.
+- A3 Telemetry: every flight records a locked "campaign" capture set with all needed AND optional variables
+  (incl. shadow-mode controller outputs, adaptive weights/features), at the maximum rate the link sustains without
+  loss; per-session self-describing manifest so datasets with different columns stay combinable.
+- A4 Go surface: a Claude Code skill (/flight-campaign) clarifies objectives with the operator, writes + validates
+  the campaign YAML and opens the campaign; the per-battery "go" (pack ID + checklist) is given on a dashboard
+  Campaign panel (also possible from chat via MCP); the panel always offers Pause / Land / Abort.
