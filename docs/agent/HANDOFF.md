@@ -22,14 +22,15 @@ and (b) an asymmetric (off-centre) load. Then workflow B build (wfb stream), fli
 - NOT found in the ledger: any flight with MRAC injection on, or any flown circle/figure8. Treat both as first flights.
 - Firmware at HEAD da55bce = S2b + operator tuning (yaw Ki 0.005, Throttle_th 3100/3050, rpm_dbg_rpm). Keil-built,
   axf matches committed source, NOT flashed. The drone runs an older build (last ledger flash 2026-09-29 08:20).
-- No written demo protocol yet. flightlab WP4 (rules/report/compare) not built; briefs 2f35e29, 3ccf8c0.
+- No written demo protocol yet. flightlab WP4 (rules/report/compare): VPS workers delivered, files untracked in main,
+  session 2a667b8b is fixing WP4a and rewriting WP4b inline (briefs 2f35e29, 3ccf8c0). Do not touch those files.
 - Stale worktrees removed 2026-09-30 (win-p2/p3/p4/paths3d, both MRAC agent trees); branches kept.
 
 ## Next actions (most urgent first)
 1. Operator in lab: `ah lock hw`, flash da55bce (`rebuild_and_flash --force --yes`), `livewatch verify`, props-off bench
    check: CTRL_SELECT toggles PID<->MRAC, MRAC telemetry streams, circle/figure8 start+stop on ground, simplex fade.
 2. Write the demo protocol (per condition: hover baseline, load hover, circle; PID then MRAC, same battery, same preset).
-3. Dispatch WP4a/WP4b to a VPS agy worker (outside workers only). Open: `service/agent.py` lacks wide CMD 0x20..0x2B;
+3. flightlab WP4a/WP4b: already dispatched and delivered (do NOT re-dispatch; session 2a667b8b owns it). Open: `service/agent.py` lacks wide CMD 0x20..0x2B;
    replay desired z not /100.
 
 ## Do not
