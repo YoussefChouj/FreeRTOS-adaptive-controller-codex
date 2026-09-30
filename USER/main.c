@@ -3,6 +3,7 @@
 #include "mrac.h"
 #include "controller.h"
 #include "gyro_filter.h"
+#include "wfb_glue.h"   /* WFB glue */
 #include "fault_capture.h"
 #include "platform_registry.h"
 /* Subscribe telemetry-mode knob (telemetry-throughput-2026-09-08). Used by
@@ -426,6 +427,7 @@ void Stabilizer_Task(void *pvParameters)
                  // configs stay zero-initialized, causing division-by-zero (u_nom = +/-inf)
                  // and NaN in u_ad that corrupts the motor throttle channel.
     GyroFilter_Init(200.0f); // Phase-1 gyro LPF; starts DISABLED (pass-through) — see ADR-0004.
+    wfb_glue_init(); // WFB glue: Workflow B state lives in zero-init CCM; sets the boot values.
   while(1)
     {
         uint32_t now = DWT->CYCCNT;

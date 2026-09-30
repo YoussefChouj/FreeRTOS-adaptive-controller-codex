@@ -22,6 +22,9 @@
 #include "command_protocol.h"
 #include "rtos_observability.h"
 #include "send_prof.h"
+/* WFB BEGIN glue */
+#include "wfb_glue.h"
+/* WFB END glue */
 
 /* Body-frame gyroscope rates (rad/s) — needed for Frame C body-rate telemetry.
  * Declared as extern in bmi088_driver.h. */
@@ -1436,6 +1439,9 @@ void Process_GroundStation_Command(void)
         uint8_t transaction_flags = gs_cmd_queue[gs_cmd_tail].transaction_flags;
         uint8_t transaction_transport = gs_cmd_queue[gs_cmd_tail].transaction_transport;
         uint8_t reject_reason = CommandSafetyReject(id);
+        /* WFB BEGIN glue */
+        uint8_t wfb_res = WFB_RESULT_APPLIED;
+        /* WFB END glue */
 
         /* CMD 0x1E idx=0 (estimator mode switch) is disarmed-only */
         if ((reject_reason == 0U) && (id == 0x1EU) && (idx == 0U) &&
@@ -1552,6 +1558,14 @@ void Process_GroundStation_Command(void)
             }
         }
 
+        /* WFB BEGIN glue */
+        /* CMD 0x1A primitives / 0x1B trajectory upload (docs/workflow-b/interfaces.md sec 1) */
+        else if ((id == WFB_CMD_PRIM) || (id == WFB_CMD_TRAJ)) {
+            taskENTER_CRITICAL();
+            wfb_res = wfb_glue_on_cmd(id, idx, val, (uint32_t)xTaskGetTickCount() * (uint32_t)portTICK_PERIOD_MS);
+            taskEXIT_CRITICAL();
+        }
+        /* WFB END glue */
         // CMD 0x09 �� velocity / angle safety limits (ground station)
         else if (id == 0x09) {
             if (idx == 0) {
@@ -2019,6 +2033,20 @@ void Process_GroundStation_Command(void)
             }
         }
 
+        /* WFB BEGIN glue */
+        if ((wfb_res == WFB_RESULT_REJECTED) && (transaction_id != 0U)) {
+            /* A rejected 0x1A/0x1B must execute again when retried with the same txid, so it
+             * leaves the duplicate history (it was the last one remembered above). */
+            uint8_t last_slot = (uint8_t)((s_transaction_history_head + 15U) % 16U);
+            if (s_transaction_history[last_slot] == transaction_id) {
+                s_transaction_history[last_slot] = 0U;
+            }
+            SendTransactionResult(transaction_id, transaction_transport,
+                                  PLATFORM_RESULT_REJECTED, id, idx,
+                                  (uint8_t)g_wfb_status.last_err, "wfb rejected");
+            continue;
+        }
+        /* WFB END glue */
         if (transaction_id != 0U) {
             SendTransactionResult(transaction_id, transaction_transport,
                                   PLATFORM_RESULT_APPLIED, id, idx, 0U,

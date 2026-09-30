@@ -45,6 +45,7 @@ typedef struct {
     uint32_t last_ms;
     uint32_t hb_ref_ms;        /* TAKEOFF accept, then every HEARTBEAT */
     uint32_t traj_start_ms;
+    float yaw_hold_deg;        /* heading the setpoints carry: TWC.execute = 1 also drives the yaw loop */
     uint8_t have_tick;
     uint8_t gs_flight_active;  /* TAKEOFF accepted until disarm */
     uint8_t takeoff_pending;   /* one-shot fly-up request for the next tick */
@@ -104,7 +105,7 @@ static wfb_err_t wfb_glue_cmd_prim(uint8_t idx, float val, uint32_t now_ms)
     wfb_err_t err;
 
     switch (idx) {
-    case 0u: /* TAKEOFF */
+    case WFB_PRIM_CMD_TAKEOFF:
         if (!s_wfb.have_tick || !in->armed || !in->motors_idle || !in->sbus_live || in->airborne ||
             s_wfb.takeover || s_wfb.safety.action != (uint8_t)WFB_ACT_NONE) {
             return WFB_ERR_STATE;
@@ -114,14 +115,15 @@ static wfb_err_t wfb_glue_cmd_prim(uint8_t idx, float val, uint32_t now_ms)
             s_wfb.gs_flight_active = 1u;
             s_wfb.takeoff_pending = 1u;
             s_wfb.hb_ref_ms = now_ms;
+            s_wfb.yaw_hold_deg = in->yaw_deg;
         }
         return err;
-    case 1u: /* LAND */
+    case WFB_PRIM_CMD_LAND:
         return wfb_glue_land();
-    case 2u: /* HEARTBEAT */
+    case WFB_PRIM_CMD_HEARTBEAT:
         s_wfb.hb_ref_ms = now_ms;
         return WFB_ERR_NONE;
-    case 3u: /* SET_HOVER_Z */
+    case WFB_PRIM_CMD_SET_HOVER_Z:
         if (s_wfb.prim.state != (uint8_t)WFB_PRIM_IDLE) {
             return WFB_ERR_STATE;
         }
@@ -140,19 +142,19 @@ static wfb_err_t wfb_glue_cmd_traj(uint8_t idx, float val, uint32_t now_ms)
     wfb_prim_in_t pin;
     wfb_err_t err;
 
-    if (idx <= 3u && !isfinite(val)) {
-        return WFB_ERR_RANGE; /* BEGIN, APPEND, CRC_HI, COMMIT carry a payload */
+    if (idx <= WFB_TRAJ_CMD_COMMIT && !isfinite(val)) {
+        return WFB_ERR_RANGE; /* only the payload-carrying commands look at val */
     }
     switch (idx) {
-    case 0u: /* BEGIN: clears the 12 kB buffer here, never in the tick */
+    case WFB_TRAJ_CMD_BEGIN: /* clears the 12 kB buffer here, never in the tick */
         return wfb_traj_begin(&s_wfb.traj, val);
-    case 1u: /* APPEND */
+    case WFB_TRAJ_CMD_APPEND:
         return wfb_traj_append(&s_wfb.traj, val);
-    case 2u: /* CRC_HI */
+    case WFB_TRAJ_CMD_CRC_HI:
         return wfb_traj_crc_hi(&s_wfb.traj, val);
-    case 3u: /* COMMIT */
+    case WFB_TRAJ_CMD_COMMIT:
         return wfb_traj_commit(&s_wfb.traj, val, &s_wfb.traj_lim, s_wfb.prim_cfg.hover_z_m);
-    case 4u: /* START */
+    case WFB_TRAJ_CMD_START:
         if (s_wfb.prim.state != (uint8_t)WFB_PRIM_HOVER) {
             return WFB_ERR_STATE;
         }
@@ -162,14 +164,14 @@ static wfb_err_t wfb_glue_cmd_traj(uint8_t idx, float val, uint32_t now_ms)
             s_wfb.traj_start_ms = now_ms;
         }
         return err;
-    case 5u: /* STOP */
+    case WFB_TRAJ_CMD_STOP:
         err = wfb_traj_stop(&s_wfb.traj);
         if (err == WFB_ERR_NONE && s_wfb.prim.state == (uint8_t)WFB_PRIM_TRAJ) {
             wfb_glue_prim_in(&pin, &s_wfb.last_in, 0.0f);
             (void)wfb_prim_traj_end(&s_wfb.prim, &pin);
         }
         return err;
-    case 6u: /* CLEAR */
+    case WFB_TRAJ_CMD_CLEAR:
         return wfb_traj_clear(&s_wfb.traj);
     default:
         return WFB_ERR_RANGE;
@@ -228,7 +230,7 @@ uint8_t wfb_glue_rc_land(uint32_t now_ms)
     if (!s_wfb.gs_flight_active || s_wfb.takeover) {
         return 0u; /* RC flight or pilot takeover: the caller runs today's ch5 code */
     }
-    err = wfb_glue_cmd_prim(1u, 0.0f, now_ms);
+    err = wfb_glue_cmd_prim(WFB_PRIM_CMD_LAND, 0.0f, now_ms);
     s_wfb.last_err = (uint8_t)err;
     wfb_glue_mirror(g_wfb_status.hb_age, g_wfb_status.traj_t);
     return (err == WFB_ERR_NONE) ? 1u : 0u;
@@ -324,6 +326,7 @@ void wfb_glue_tick(const wfb_glue_in_t *in, wfb_glue_out_t *out)
             if (wfb_traj_sample(&s_wfb.traj, traj_t_s, &pt)) {
                 sampled = 1u;
             } else {
+                s_wfb.yaw_hold_deg = pt.yaw_deg; /* DONE hands back the end point: hold its heading */
                 (void)wfb_prim_traj_end(&s_wfb.prim, &pin); /* DONE: rate-limited return to hover */
             }
         }
@@ -346,13 +349,13 @@ void wfb_glue_tick(const wfb_glue_in_t *in, wfb_glue_out_t *out)
                 out->x_sp_m = pt.x_m;
                 out->y_sp_m = pt.y_m;
                 out->z_sp_m = pt.z_m;
-                out->yaw_sp_deg = pt.yaw_deg;
-                out->yaw_valid = 1u;
+                s_wfb.yaw_hold_deg = pt.yaw_deg;
             } else {
                 out->x_sp_m = pout.x_sp_m;
                 out->y_sp_m = pout.y_sp_m;
                 out->z_sp_m = pout.z_sp_m;
             }
+            out->yaw_sp_deg = s_wfb.yaw_hold_deg;
         }
         if (s_wfb.takeoff_pending && st == (uint8_t)WFB_PRIM_CLIMB) {
             out->takeoff_req = 1u;

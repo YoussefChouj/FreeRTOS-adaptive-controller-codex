@@ -19,6 +19,21 @@
 #define WFB_CMD_PRIM 0x1Au
 #define WFB_CMD_TRAJ 0x1Bu
 
+/* CMD 0x1A idx: flight primitives (interfaces.md section 1) */
+#define WFB_PRIM_CMD_TAKEOFF     0u
+#define WFB_PRIM_CMD_LAND        1u
+#define WFB_PRIM_CMD_HEARTBEAT   2u
+#define WFB_PRIM_CMD_SET_HOVER_Z 3u
+
+/* CMD 0x1B idx: trajectory upload and control; BEGIN..COMMIT carry a payload */
+#define WFB_TRAJ_CMD_BEGIN  0u
+#define WFB_TRAJ_CMD_APPEND 1u
+#define WFB_TRAJ_CMD_CRC_HI 2u
+#define WFB_TRAJ_CMD_COMMIT 3u
+#define WFB_TRAJ_CMD_START  4u
+#define WFB_TRAJ_CMD_STOP   5u
+#define WFB_TRAJ_CMD_CLEAR  6u
+
 /* interfaces.md section 2; every field float so the telemetry decoder needs one type. */
 typedef struct {
     float prim_state;
@@ -45,6 +60,7 @@ typedef struct {
     float roll_deg;
     float pitch_deg;
     float vbat_v;
+    float yaw_deg;        /* heading in the TWC.set_yaw frame (Ctrler.yawPID.FB) */
     uint8_t armed;        /* FSM not DISARMED */
     uint8_t motors_idle;  /* motor idle enabled (the ch7 fly-up precondition) */
     uint8_t sbus_live;    /* physical RC link present */
@@ -54,12 +70,11 @@ typedef struct {
 
 /* What the firmware must do this tick. */
 typedef struct {
-    uint8_t setpoint_valid;  /* drive TWC target (x/y m -> cm) + execute = 1 */
-    uint8_t yaw_valid;       /* also drive TWC.set_yaw (trajectory execution only) */
+    uint8_t setpoint_valid;  /* drive TWC target (x/y m -> cm), TWC.set_yaw and execute = 1 */
     float x_sp_m;
     float y_sp_m;
     float z_sp_m;
-    float yaw_sp_deg;
+    float yaw_sp_deg;        /* takeoff heading; the trajectory's yaw while one executes, then its last */
     uint8_t takeoff_req;     /* one-shot: the ch7 fly-up path (sbus_flyup_trigger = 1) */
     uint8_t land_req;        /* level: enter the existing LANDING phase (acted on only while FLYING) */
     uint8_t motor_stop_req;  /* level: safety KILL -> FLIGHT_EVENT_DANGEROUS_STOP */
@@ -70,7 +85,7 @@ extern wfb_status_t g_wfb_status;
 void    wfb_glue_init(void);
 uint8_t wfb_glue_on_cmd(uint8_t cmd, uint8_t idx, float val, uint32_t now_ms); /* WFB_RESULT_* */
 void    wfb_glue_tick(const wfb_glue_in_t *in, wfb_glue_out_t *out);            /* 200 Hz */
-uint8_t wfb_glue_rc_land(uint32_t now_ms); /* RC ch5 edge; 1 = handled as CMD 0x1A idx 1, 0 = caller runs today's code */
+uint8_t wfb_glue_rc_land(uint32_t now_ms); /* RC ch5 edge; 1 = handled as WFB_PRIM_CMD_LAND, 0 = caller runs today's code */
 void    wfb_glue_disarmed(void);           /* disarm edge: clears flight, trip and takeover latches */
 
 #endif /* WFB_GLUE_H */

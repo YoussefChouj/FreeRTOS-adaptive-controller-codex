@@ -490,6 +490,26 @@
               <FilePath>..\API\mrac_math.c</FilePath>
             </File>
             <File>
+              <FileName>wfb_traj.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\API\wfb_traj.c</FilePath>
+            </File>
+            <File>
+              <FileName>wfb_safety.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\API\wfb_safety.c</FilePath>
+            </File>
+            <File>
+              <FileName>wfb_prim.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\API\wfb_prim.c</FilePath>
+            </File>
+            <File>
+              <FileName>wfb_glue.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\API\wfb_glue.c</FilePath>
+            </File>
+            <File>
               <FileName>sysid.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\API\sysid.c</FilePath>

@@ -14,6 +14,9 @@
 #include "RemoterTask.h"   /* OFHOLD_CH (ch6 OF-hold enable switch), sbus_channel[] */
 #include "thrust_estimators.h"
 #include "rpm.h"
+/* WFB BEGIN glue */
+#include "wfb_glue.h"       /* Workflow B: GS takeoff/trajectory/land sequencer + safety net */
+/* WFB END glue */
 
 /**
  * @module  StabilizerTask.c
@@ -225,6 +228,60 @@ void Reset_World_Origin(void)
 	s_ekf_pos_synced = 0U;
 }
 
+/* WFB BEGIN glue */
+/* Workflow B (docs/workflow-b/interfaces.md): once per 200 Hz tick, snapshot the vehicle into
+ * API/wfb_glue.c and apply what it asks for through the existing firmware paths. This function
+ * only converts units and routes requests; every decision lives in the glue (host-tested). */
+static void Wfb_Step(void)
+{
+	static uint8_t s_was_armed = 0U;   /* disarm edge; the armed_pub mirror above is not one (s_sync writes ARM_Status too) */
+	wfb_glue_in_t  in;
+	wfb_glue_out_t out;
+
+	in.now_ms      = (uint32_t)xTaskGetTickCount() * (uint32_t)portTICK_PERIOD_MS;
+	in.x_m         = Ctrler.locxPID.FB * 0.01f;   /* TWC / loc loops are cm, the glue is m */
+	in.y_m         = Ctrler.locyPID.FB * 0.01f;
+	in.z_m         = Ctrler.Z_posPID.FB;           /* already m */
+	in.roll_deg    = imu_data.rol;
+	in.pitch_deg   = imu_data.pit;
+	in.vbat_v      = real_voltage;
+	in.yaw_deg     = Ctrler.yawPID.FB;             /* the TWC.set_yaw frame */
+	in.armed       = (FlightFSM_GetState() == FLIGHT_STATE_ARMED) ? 1U : 0U;
+	in.motors_idle = g_motor_idle_enabled ? 1U : 0U;
+	in.sbus_live   = sbus_lost ? 0U : 1U;
+	in.airborne    = (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING) ? 1U : 0U;
+	in.rc_override = (RCInput_IsActive(RC_AXIS_ROLL) || RCInput_IsActive(RC_AXIS_PITCH)) ? 1U : 0U;
+
+	/* send_data.c and RemoterTask.c call into the glue from other tasks */
+	taskENTER_CRITICAL();
+	if (s_was_armed && !in.armed) {
+		wfb_glue_disarmed();
+	}
+	wfb_glue_tick(&in, &out);
+	taskEXIT_CRITICAL();
+	s_was_armed = in.armed;
+
+	/* PROTECTED BEGIN wfb_apply */
+	if (out.motor_stop_req) {
+		FlightFSM_Event(FLIGHT_EVENT_DANGEROUS_STOP);
+	} else if (out.land_req) {
+		if (flight_phase == FLIGHT_PHASE_FLYING) {   /* same two lines as the RC ch5 land */
+			flight_phase = FLIGHT_PHASE_LANDING;
+			TWC.execute  = 0U;
+		}
+	} else if (out.takeoff_req) {
+		sbus_flyup_trigger = 1U;                      /* the ch7 fly-up path, consumed in Update_Data() */
+	} else if (out.setpoint_valid) {
+		TWC.target_x = out.x_sp_m * 100.0f;           /* m -> cm */
+		TWC.target_y = out.y_sp_m * 100.0f;
+		TWC.target_z = out.z_sp_m;
+		TWC.set_yaw  = out.yaw_sp_deg;
+		TWC.execute  = 1U;
+	}
+	/* PROTECTED END wfb_apply */
+}
+/* WFB END glue */
+
 void stabilizer_Task(void)
 {
 	 /* A4: while the attitude estimator is still converging, hold the OF world
@@ -296,6 +353,8 @@ void stabilizer_Task(void)
 	 }
 
 	 Update_Data();
+
+	 Wfb_Step();   /* WFB glue: after Update_Data() so the FB values are this tick's */
 
 	 Compute_Motor();
 
