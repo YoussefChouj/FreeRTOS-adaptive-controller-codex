@@ -20,9 +20,9 @@ Design is confirmed in `.agent-ops/grill-autonomous-flight-loop.md` (Q1-Q12). Sp
 ## Next actions (write 3 lines, most urgent first)
 1. Check the AUTO block below; push unpushed commits if the tree is verified.
 2. Re-dispatch WP4a/WP4b (workers, not Claude subagents while the Claude quota is exhausted; see env.md).
-3. Verify the MRAC S2b files: they were pre-staged and got swept into commit 1053086 (pushed) UNVERIFIED
-   (API/mrac.h, TASK/send_data.c, comm/mrac_param_encoder.py + test, livewatch mrac_features/elf_const/manifest/symbols/presets,
-   docs/telemetry-protocol.md, docs/firmware-table-pattern.md). Run their scoped tests + armcc build; fix forward if any fail. Do not flash before this.
+3. MRAC S2b files (swept into commit 1053086) are VERIFIED 2026-09-30 14:40: EQUIV OK default/cap16/cap24 + SELFTEST OK,
+   armcc mrac.c 4 warn/0 err and send_data.c 1 warn/0 err, FMA 0, scoped pytest 76 + 236 passed (test_telemetry_harness needs the live drone),
+   Keil 0 errors. axf built, NOT flashed (flash waits for the operator in the lab). Open: service/agent.py lacks wide CMD 0x20..0x2B.
 
 ## Do not
 - Do not arm, idle or spin motors outside an operator-opened battery session (AGENTS.md > Authorizations).
