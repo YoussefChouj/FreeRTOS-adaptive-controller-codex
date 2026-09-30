@@ -1,0 +1,29 @@
+# MRAC controller descriptor for Workflow B tuning campaigns (loaded by analysis/controller_descriptor.py).
+#
+# Knobs are written by CMD 0x02 MRAC_GAMMA or 0x05 MRAC_WEIGHT_LIMIT with idx = axis << 4 | elem
+# (TASK/send_data.c:1497-1498); axes 0..3 = mrac_config_pitch roll yaw z, elems 0..5 = bias rate
+# rate_tanh cross u_nom xm. Defaults are the MRAC_BASIS rows in API/mrac.c.
+# Contract value ranges: gamma 0..unbounded (firmware_contract.py:191, firmware also needs > 0);
+# What_limit 0..unbounded (firmware_contract.py:224).
+# Range: default x0.5 .. x2, searched on a log scale.
+#
+# The firmware rejects a What_limit below the element's What_tol. Each limit's lo (0.5 x default)
+# stays above its default tol (0.2 x default), so every proposal is accepted while What_tol is at
+# its default. Writing What_limit[0] also sets What_lower_limit[0] = -value.
+name: mrac
+shadow_outputs:
+  - mrac_state.pitch.u_ad
+  - mrac_state.roll.u_ad
+  - mrac_state.yaw.u_ad
+  - mrac_state.z_rate.u_ad
+knobs:
+  # adaptation gains, bias and rate elements
+  - {symbol: "mrac_config_pitch.gamma[0]", cmd_id: 0x02, idx: 0,  default: 1.5, lo: 0.75, hi: 3.0, scale: log}  # API/mrac.c:571
+  - {symbol: "mrac_config_roll.gamma[0]",  cmd_id: 0x02, idx: 16, default: 1.5, lo: 0.75, hi: 3.0, scale: log}  # API/mrac.c:577
+  - {symbol: "mrac_config_pitch.gamma[1]", cmd_id: 0x02, idx: 1,  default: 0.2, lo: 0.1,  hi: 0.4, scale: log}  # API/mrac.c:572
+  - {symbol: "mrac_config_roll.gamma[1]",  cmd_id: 0x02, idx: 17, default: 0.2, lo: 0.1,  hi: 0.4, scale: log}  # API/mrac.c:578
+  - {symbol: "mrac_config_yaw.gamma[0]",   cmd_id: 0x02, idx: 32, default: 1.0, lo: 0.5,  hi: 2.0, scale: log}  # API/mrac.c:583
+  - {symbol: "mrac_config_z.gamma[0]",     cmd_id: 0x02, idx: 48, default: 2.0, lo: 1.0,  hi: 4.0, scale: log}  # API/mrac.c:589
+  # output bound of the bias weight (default tol 0.03, API/mrac.c:571/577)
+  - {symbol: "mrac_config_pitch.What_limit[0]", cmd_id: 0x05, idx: 0,  default: 0.15, lo: 0.075, hi: 0.3, scale: log}  # API/mrac.c:571
+  - {symbol: "mrac_config_roll.What_limit[0]",  cmd_id: 0x05, idx: 16, default: 0.15, lo: 0.075, hi: 0.3, scale: log}  # API/mrac.c:577
