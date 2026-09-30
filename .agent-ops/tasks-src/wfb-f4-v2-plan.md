@@ -55,3 +55,29 @@ wfb_prim_in_t is exactly x,y,z,dt (the worker's partial init was complete).
 Host test brief (worker): the 10 original cases + RC-flight fence -> land_req, takeover latch, hb from takeoff,
 no setpoint in DESCEND, takeoff_req one-shot. Keil build under `ah lock keil`; map: RW_IRAM1 growth < 64 B,
 RW_IRAM2 +~12.3 kB. NO flash.
+
+## v2 TASK status (2026-10-01, supervisor)
+Glue committed c889103 on workflow-b. Deviations from the original API (deliberate): uint32 now_ms instead of float
+now_s (precision); rc_land returns uint8 (1 handled, 0 = caller runs today's ch5 code: not a GS flight, or taken over);
+wfb_glue_in_t gains rc_override; out gains yaw_valid; no descend_in_place_req (LAND_IN_PLACE maps to prim DESCEND ->
+land_req). After takeover the safety net sees gs_flight_active = 0 (RC-flight checks only). land_now / trips latch
+until disarm (a re-fly without disarm lands again). TAKEOFF also requires !airborne and at least one tick since init.
+DONE (uncommitted, worktree):
+- send_data.c: include; `uint8_t wfb_res = WFB_RESULT_APPLIED;` after reject_reason; branch
+  `else if ((id == WFB_CMD_PRIM) || (id == WFB_CMD_TRAJ))` before the 0x09 comment, on_cmd under
+  taskENTER/EXIT_CRITICAL with xTaskGetTickCount()*portTICK_PERIOD_MS; before the final APPLIED send: REJECTED
+  -> clear the txid from history slot (head+15)%16 (retry re-executes), send REJECTED reason=last_err "wfb rejected",
+  continue. Repeated-txid rule: satisfied by the existing 16-slot duplicate history (send_data.c ~1357-1373, 1447).
+- RemoterTask.c: include; ch5 edge -> wfb_glue_rc_land under critical, existing two lines run only if not handled;
+  PROTECTED rc_kill (sbus_channel[9]/sbus_lost if/else + DANGEROUS_STOP/RECOVER_SDK if/else), rc_ch5_land.
+TODO:
+- StabilizerTask.c: include; disarm edge (armed_pub block ~245-256) -> wfb_glue_disarmed() under critical, PROTECTED
+  arm_disarm; after Update_Data() (~297) the snapshot (x=locxPID.FB*0.01f, y=locyPID.FB*0.01f, z=Z_posPID.FB,
+  roll/pitch=imu_data.rol/pit, vbat=real_voltage, armed=ARM_Status!=DisArmed, motors_idle=g_motor_idle_enabled,
+  sbus_live=sbus_lost==0, airborne=phase FLYING||LANDING, rc_override=IsActive(ROLL)||IsActive(PITCH),
+  now_ms) -> tick under critical -> PROTECTED wfb_apply: motor_stop -> FlightFSM_Event(DANGEROUS_STOP); else
+  takeoff -> sbus_flyup_trigger=1U; land_req && FLYING -> LANDING + TWC.execute=0; else setpoint -> TWC.target x/y
+  cm, z m, execute=1, set_yaw if yaw_valid. Verify every variable name by grep before use.
+- wfb_glue_init(): StabilizerTask init (before the loop) preferred over USER/main.c (not in allow-list).
+- USER/JX_FLY.uvprojx: 4 <File> entries next to API/mrac.c; xml parse check.
+- Keil (ah lock keil), isfinite under ARMCC, map RW_IRAM1 growth < 64 B, RW_IRAM2 ~ +12.3 kB. NO flash.
