@@ -77,16 +77,24 @@ class SymbolResolver:
 
     def resolve(self, path: str) -> Symbol:
         """Resolve 's_ekf.x[3]' -> Symbol(address, size, fmt)."""
-        base, steps = _parse_path(path)
-        die = self._var_index.get(base)
-        if die is None:
-            raise KeyError(f"unknown symbol {base!r} "
-                           f"(not a global/static variable in {self.elf_path.name})")
-        addr = _var_address(die)
-        typ = self._resolve_type(die.get_DIE_from_attribute("DW_AT_type"))
-        for step in steps:
-            addr, typ = self._apply_step(addr, typ, step, base)
+        addr, typ = self._locate(path)
         return Symbol(path, addr, typ.size, typ.fmt)
+
+    def enumerators(self, path: str) -> dict[int, str]:
+        """Value -> enumerator-name map of the enum type behind `path`.
+
+        `path` names any enum-typed variable or member, e.g.
+        'mrac_feature_desc[0].group'. The map covers the whole enum type, so one
+        lookup decodes every element of the array it belongs to.
+        """
+        _, typ = self._locate(path)
+        if typ.die is None or typ.die.tag != "DW_TAG_enumeration_type":
+            raise TypeError(f"{path} is not enum-typed (got {typ.kind})")
+        out: dict[int, str] = {}
+        for c in typ.die.iter_children():
+            if c.tag == "DW_TAG_enumerator":
+                out[c.attributes["DW_AT_const_value"].value] = c.attributes["DW_AT_name"].value.decode()
+        return out
 
     def names(self) -> list[str]:
         """All resolvable base variable names (for GUI dropdowns / registry building)."""
@@ -117,6 +125,19 @@ class SymbolResolver:
         self._f.close()
 
     # ---- internals ------------------------------------------------------
+
+    def _locate(self, path: str):
+        """Walk `path` through the DWARF type tree -> (absolute address, _Type)."""
+        base, steps = _parse_path(path)
+        die = self._var_index.get(base)
+        if die is None:
+            raise KeyError(f"unknown symbol {base!r} "
+                           f"(not a global/static variable in {self.elf_path.name})")
+        addr = _var_address(die)
+        typ = self._resolve_type(die.get_DIE_from_attribute("DW_AT_type"))
+        for step in steps:
+            addr, typ = self._apply_step(addr, typ, step, base)
+        return addr, typ
 
     def _build_var_index(self):
         # File-scope variables (globals + file statics) are direct CU children and

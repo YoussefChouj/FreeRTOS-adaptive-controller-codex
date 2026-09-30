@@ -70,12 +70,29 @@ class Manifest:
         return "".join(c if (c.isalnum() or c in "-_") else "_" for c in self.name)
 
 
-class ManifestStore:
-    """Loads manifests.yaml. Missing file is fine -- ad-hoc manifests still work."""
+def _is_counted(token) -> bool:
+    """True for a counted-array token: ``{dwarf: <array path>, count_from: <const symbol>}``."""
+    return isinstance(token, dict) and "count_from" in token
 
-    def __init__(self, path: str | Path | None = None, registry: Registry | None = None):
+
+class ManifestStore:
+    """Loads manifests.yaml. Missing file is fine -- ad-hoc manifests still work.
+
+    A var token may be a *counted array*: ``{dwarf: mrac_state.roll.Theta,
+    count_from: mrac_n_features}``. It expands to ``mrac_state.roll.Theta[0]`` ..
+    ``Theta[N-1]`` where N is the value of the const `count_from`, read from the
+    firmware ELF (`elf_path`, default OBJ/JX_FLY.axf). The DWARF array length is the
+    build's storage capacity and can exceed the live count, so the count cannot be
+    taken from DWARF alone. The ELF is opened only when a manifest containing such
+    a token is fetched; every other manifest works without one.
+    """
+
+    def __init__(self, path: str | Path | None = None, registry: Registry | None = None,
+                 elf_path: str | Path | None = None):
         self.path = Path(path) if path else _DEFAULT_MANIFESTS
         self.registry = registry or Registry()
+        self.elf_path = Path(elf_path) if elf_path else None
+        self._counted: dict[tuple[str, str], list[str]] = {}
         data = {}
         if self.path.exists():
             with open(self.path) as f:
@@ -85,18 +102,62 @@ class ManifestStore:
     def names(self) -> list[str]:
         return sorted(self._m)
 
-    def get(self, name: str) -> Manifest:
+    def get(self, name: str, expand_counted: bool = True) -> Manifest:
+        """Manifest `name`. `expand_counted=False` skips counted-array tokens instead of
+        reading the ELF, for callers that only need the plain scalar vars."""
         if not name:
             raise KeyError(f"no manifest given; use one of {self.names()} or --vars")
         if name not in self._m:
             raise KeyError(f"no manifest {name!r}; have {self.names()}")
         spec = self._m[name]
+        tokens = self._expand_counted(name, list(spec.get("vars", [])), expand_counted)
         return Manifest(
             name=name,
-            vars=self.registry.expand(list(spec.get("vars", []))),
+            vars=self.registry.expand(tokens),
             hz=float(spec.get("hz", 20.0)),
             doc=spec.get("doc", ""),
         )
+
+    def _expand_counted(self, name: str, tokens: list, expand: bool) -> list:
+        """Replace counted-array tokens by their element paths (or drop them)."""
+        if not any(_is_counted(t) for t in tokens):
+            return tokens
+        out: list = []
+        elf = None
+        try:
+            for t in tokens:
+                if not _is_counted(t):
+                    out.append(t)
+                    continue
+                if not expand:
+                    continue
+                array, count = t.get("dwarf"), t["count_from"]
+                if not array:
+                    raise ValueError(f"manifest {name!r}: counted token {t!r} has no 'dwarf' path")
+                if (array, count) not in self._counted:
+                    if elf is None:
+                        elf = self._open_elf(name)
+                    try:
+                        self._counted[(array, count)] = elf.counted_array(array, count)
+                    except (KeyError, ValueError, TypeError) as exc:
+                        raise ValueError(f"manifest {name!r}: cannot expand {array!r} by "
+                                         f"{count!r} from {elf.elf_path}: "
+                                         f"{exc.args[0] if exc.args else exc}") from exc
+                out.extend(self._counted[(array, count)])
+        finally:
+            if elf is not None:
+                elf.close()
+        return out
+
+    def _open_elf(self, name: str):
+        from elftools.common.exceptions import ELFError
+        from .elf_const import DEFAULT_ELF, ElfConstReader
+        path = self.elf_path or DEFAULT_ELF
+        try:
+            return ElfConstReader(path)
+        except (OSError, ValueError, ELFError) as exc:
+            raise ValueError(f"manifest {name!r} needs the firmware ELF to size its "
+                             f"arrays, but {path} cannot be read: {exc}") from exc
 
     def adhoc(self, tokens: list[str], hz: float, name: str = "adhoc") -> Manifest:
         return Manifest(name=name, vars=self.registry.expand(tokens), hz=hz)
@@ -425,6 +486,9 @@ class MultiSlotPresetManager:
         prevention: the bad case cannot exist, by construction.
         """
         store = ManifestStore()  # uses default manifests.yaml
+        # Counted-array tokens (MRAC Theta/Phi) are never sync vars, so the contract
+        # is checked without reading the ELF: a stale or missing build cannot make a
+        # preset unloadable here.
         slots = preset.get("slots", []) or []
         covered: set[str] = set()
         for slot_cfg in slots:
@@ -435,7 +499,7 @@ class MultiSlotPresetManager:
                     f"'manifest' field; each slot must name a manifest from "
                     f"manifests.yaml")
             try:
-                manifest = store.get(manifest_name)
+                manifest = store.get(manifest_name, expand_counted=False)
             except KeyError as exc:
                 raise ValueError(
                     f"preset {preset_name!r}: slot {slot_cfg.get('slot')!r} "

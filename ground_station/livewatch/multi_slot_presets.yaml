@@ -123,3 +123,25 @@ presets:
       - slot: 3
         manifest: flight_test_position
         hz: 20
+
+
+  # -------------------------------------------------------------------------
+  # MRAC Theta + Phi of all 4 axes at any feature count N
+  # Slot 0 = sync, slot 1 = Theta (weights), slot 2 = Phi (regressor).
+  # Slots 1-2 use counted-array manifests: N comes from `mrac_n_features` in
+  # the ELF (capture --elf), so this preset follows the build with no edit.
+  # Budget at N=6: 4*6 floats -> 108 B/frame per slot; one contiguous range
+  # per axis. A four-axis slot stays under the 2032 B frame payload up to N=127.
+  # -------------------------------------------------------------------------
+  mrac_theta_phi:
+    description: "MRAC Theta and Phi, all 4 axes, all N features (N read from the ELF)"
+    slots:
+      - slot: 0
+        manifest: sync
+        hz: 10
+      - slot: 1
+        manifest: mrac_theta
+        hz: 50
+      - slot: 2
+        manifest: mrac_phi
+        hz: 50

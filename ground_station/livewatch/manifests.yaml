@@ -181,6 +181,43 @@ manifests:
       - mrac_state.pitch.r
 
   # -------------------------------------------------------------------------
+  # MRAC weights / regressor at any feature count N (counted-array tokens)
+  # -------------------------------------------------------------------------
+  #
+  # `count_from` names a const in the firmware ELF; the token expands to
+  # <dwarf>[0] .. <dwarf>[N-1] (see ManifestStore in manifest.py). These two
+  # manifests therefore need OBJ/JX_FLY.axf (or --elf) built from the firmware
+  # being flown; every other manifest here works without it.
+
+  mrac_theta:
+    doc: >
+      Theta (adaptive weights) of all four MRAC axes (pitch, roll, yaw, z_rate), every live
+      feature 0..N-1. N is `mrac_n_features` read from the firmware ELF, not the
+      DWARF array length: the arrays are sized by the build's MRAC_CAPACITY, which
+      can exceed N. Each axis is one contiguous range on the wire.
+      Feature order is `livewatch mrac-features`.
+    hz: 50
+    vars:
+      - { dwarf: "mrac_state.pitch.Theta", count_from: mrac_n_features }
+      - { dwarf: "mrac_state.roll.Theta", count_from: mrac_n_features }
+      - { dwarf: "mrac_state.yaw.Theta", count_from: mrac_n_features }
+      - { dwarf: "mrac_state.z_rate.Theta", count_from: mrac_n_features }
+
+  mrac_phi:
+    doc: >
+      Phi (regressor) of all four MRAC axes (pitch, roll, yaw, z_rate), every live
+      feature 0..N-1. N is `mrac_n_features` read from the firmware ELF, not the
+      DWARF array length: the arrays are sized by the build's MRAC_CAPACITY, which
+      can exceed N. Each axis is one contiguous range on the wire.
+      Feature order is `livewatch mrac-features`.
+    hz: 50
+    vars:
+      - { dwarf: "mrac_state.pitch.Phi", count_from: mrac_n_features }
+      - { dwarf: "mrac_state.roll.Phi", count_from: mrac_n_features }
+      - { dwarf: "mrac_state.yaw.Phi", count_from: mrac_n_features }
+      - { dwarf: "mrac_state.z_rate.Phi", count_from: mrac_n_features }
+
+  # -------------------------------------------------------------------------
   # EKF (x/y velocity selectable into the control path via g_ekf_gate)
   # -------------------------------------------------------------------------
 

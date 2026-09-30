@@ -91,10 +91,19 @@ Byte 1: 0xBB
 Byte 2: frame_type  (0x01 = Frame A, 0x02 = Frame B, 0x03 = SysID, ...)
 Byte 3: LEN_hi       (payload length, big-endian uint16)
 Byte 4: LEN_lo
-Byte 5: MAX_NUM_BASIS  (MRAC basis count)
+Byte 5: MRAC_TELEM_WINDOW  (MRAC float window per axis; formerly named MAX_NUM_BASIS)
 Bytes 6..(6+LEN-1): payload
 Last byte: CRC8_XOR  (XOR of bytes 2..(6+LEN-1))
 ```
+
+**Byte 5 is the telemetry window**, `MRAC_TELEM_WINDOW` in `API/mrac.h`: the number of MRAC
+feature floats per axis that Frame B carries. It is fixed at 6 and does not follow
+`MRAC_CAPACITY` or `MRAC_N_FEATURES`, so the frame layout stays put when the feature count
+changes. The window is inside the frame CRC. A parser takes it from this byte and computes the
+Frame B float count as `4 * (window + 2) + 36`; it must not assume 6. `serial_bridge.py` does
+this (`data[5]` on the UDP path, `header[3]` after the two sync bytes on the serial path).
+Run `python -m ground_station.livewatch mrac-features` to read the build's feature count
+(`mrac_n_features`, which can exceed the window) and feature names from the ELF.
 
 ### Frame A (0x01) — 100 Hz, MRAC inner loops + status
 
@@ -126,7 +135,8 @@ v10 firmware emits 39-byte payload (no `of_hold`/`estimator_ready`). v13 emits 4
 
 ### Frame B (0x02) — 20 Hz, MRAC weights + PID + path
 
-Payload size depends on `MAX_NUM_BASIS`. See `TASK/send_data.c`.
+Payload size depends on the header window (byte 5): the float section is
+`4 * (window + 2) + 36` float32 values. See `TASK/send_data.c`.
 
 ### SysID frame (0x03) — 100 Hz, excitation data
 
@@ -195,8 +205,10 @@ python -m ground_station.livewatch.stream_log --transport usart3 \
 | 0x02 | MRAC gamma | |
 | 0x03 | mixer / u_max | |
 | 0x04 | flight mode | idx0=DangerousStop+abort, idx1=SDK |
+| 0x05 | MRAC What_limit | per element, elem 0..15; see below |
 | 0x06 | virtual RC | SBUS lost + SDK authority |
 | 0x07 | bench mode | |
+| 0x08 | MRAC What_tol | per element, elem 0..15; see below |
 | 0x09 | GS safety limits | max_horiz_m/s, max_vert_m/s, max_pitch/roll_deg |
 | 0x0A | TWC (point target) | FlyMode_SDK only |
 | 0x0B | sinusoid path | FlyMode_SDK only |
@@ -208,8 +220,58 @@ python -m ground_station.livewatch.stream_log --transport usart3 \
 | 0x14 | abort SysID | |
 | 0x17 | capture OF velocity bias | Drone must be level+still |
 | 0x18 | force recal | GROUND_IDLE + disarmed only |
+| 0x20..0x2B | MRAC element param, wide | gamma / What_limit / What_tol, elem 0..255; see below |
 
 Full table: `ground_station/comm/serial_bridge.py` `_pack_command_frame`.
+
+### MRAC per-element parameter commands
+
+Three per-element tunables of each MRAC axis are writable at run time: `gamma`, `What_limit`,
+`What_tol`. There are two encodings. Both are the 9-byte frame above, and both end in the same
+firmware routine (`MracElemParamApply`, `TASK/send_data.c`), so the value checks are identical.
+
+| Encoding | CMD | IDX | Elements |
+|---|---|---|---|
+| legacy | 0x02 gamma, 0x05 What_limit, 0x08 What_tol | `(axis << 4) \| elem` | 0..15 |
+| wide | `0x20 + (field << 2) + axis` | `elem` (8 bit) | 0..255 |
+
+The legacy frames are unchanged, byte for byte. The wide command block has one CMD per
+(field, axis) because one frame cannot carry axis, field, element and value together:
+
+| field | pitch (axis 0) | roll (1) | yaw (2) | z_rate (3) |
+|---|---|---|---|---|
+| gamma (field 0) | 0x20 | 0x21 | 0x22 | 0x23 |
+| What_limit (1) | 0x24 | 0x25 | 0x26 | 0x27 |
+| What_tol (2) | 0x28 | 0x29 | 0x2A | 0x2B |
+
+Axis order is the firmware config order: pitch, roll, yaw, z_rate.
+
+Examples (value as float32 little-endian, CRC = XOR of bytes 2..7):
+
+```
+gamma      roll  elem 3   2.5   CC DD 02 13 00 00 20 40 71     legacy
+What_limit yaw   elem 20  4.0   CC DD 26 14 00 00 80 40 F2     wide
+What_tol   z     elem 255 0.5   CC DD 2B FF 00 00 00 3F EB     wide, last id
+```
+
+Checks (all silent: an update that fails one is dropped, and there is no reply):
+
+- the axis is below 4 and the element is below `MRAC_N_FEATURES`. The bound is the feature
+  count, not the storage capacity, so padding cells of a build with spare capacity are not
+  reachable;
+- `gamma`: value > 0;
+- `What_limit`: value >= `What_tol[elem]`; for element 0 the firmware also sets
+  `What_lower_limit[0] = -value`;
+- `What_tol`: 0 <= value <= `What_limit[elem]`.
+
+`CommandSafetyReject` lets 0x20..0x2B through; any other id above 0x1E is still rejected.
+
+Ground side: `ground_station.comm.mrac_param_encoder.encode_mrac_param(field, axis, elem,
+value)` returns `(cmd_id, index, value)`, using the legacy command for elem < 16 and the wide
+one from 16 up; `encode_mrac_param_frame` returns the finished frame. The feature count and
+names of a build come from `python -m ground_station.livewatch mrac-features`. The dashboard
+service command table (`ground_station/platform/firmware_contract.py`,
+`ground_station/service/core.py`) does not list 0x20..0x2B yet.
 
 ## VOFA+ integration
 

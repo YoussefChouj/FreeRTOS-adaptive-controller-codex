@@ -47,7 +47,9 @@
 #define MAX_NUM_BASIS MRAC_CAPACITY
 
 typedef char MRAC_Assert_Features[ (MRAC_N_FEATURES <= MRAC_CAPACITY) ? 1 : -1 ];
-typedef char MRAC_Assert_Basis[ (MAX_NUM_BASIS <= 16) ? 1 : -1 ];
+// Element indices travel as 8 bits (wide CMD 0x20..0x2B) and mrac_n_features / MRAC_FeatureDesc_t.index are uint8_t,
+// so 255 is the largest count that survives every one of them (256 would wrap mrac_n_features to 0).
+typedef char MRAC_Assert_Basis[ (MRAC_N_FEATURES <= 255) ? 1 : -1 ];
 
 // Features carried on the wire (Frame B Theta/Phi and header byte [5]). Fixed at 6 so the
 // frame layout does not change with MRAC_CAPACITY; the ground station reads the same 6.
@@ -105,7 +107,8 @@ typedef enum {
 // Refactored to mutable float fields in MRAC_AxisConfig_t
 
 // Initial gamma/What_limit/What_tol values are set in MRAC_Init() (mrac.c).
-// They are runtime-mutable via CMD 0x02 / 0x05 / 0x08 from the ground station.
+// They are runtime-mutable via CMD 0x02 / 0x05 / 0x08 (4-bit element) or the wide CMD 0x20..0x2B (8-bit element)
+// from the ground station.
 
 #define MRAC_DT             0.005f      // [s] 5ms control period (200Hz)
 

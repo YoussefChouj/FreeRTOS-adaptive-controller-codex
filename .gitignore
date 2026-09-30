@@ -42,7 +42,6 @@ ground_station/**/*.pyc
 # Cursor / Claude agent config
 .claude/
 .cursor/
-AGENTS.md
 ground_station/service_test_*.txt
 
 # Per-session telemetry CSV recorder output
@@ -69,4 +68,8 @@ logs/smoke/
 firmware_backups/
 
 .firecrawl/
+# Skipper — machine-local artifacts (hook scratch + derived index), never commit
+.claude/.skipper-*
+.skipper/*
+!.skipper/receipts/
 logs/activity/

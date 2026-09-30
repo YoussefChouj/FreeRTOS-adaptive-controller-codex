@@ -205,11 +205,33 @@ def cmd_verify(args):
 
 def cmd_manifests(args):
     from .manifest import ManifestStore
-    store = ManifestStore()
+    store = ManifestStore(elf_path=args.elf)
     for n in store.names():
-        m = store.get(n)
+        try:
+            m = store.get(n)
+        except ValueError as exc:   # counted-array manifest and the ELF cannot size it
+            print(f"{n:16s} {'?':>5s} Hz  {'?':>3} vars   {exc}")
+            continue
         doc = " ".join(m.doc.split())
         print(f"{n:16s} {m.hz:>5g} Hz  {len(m.vars):>3} vars   {doc[:90]}")
+
+
+def cmd_mrac_features(args):
+    """MRAC feature descriptor from the ELF. Offline: no hardware, no probe."""
+    from elftools.common.exceptions import ELFError
+    from .mrac_features import read_mrac_features
+    try:
+        feats = read_mrac_features(args.elf)
+    except (OSError, ELFError, KeyError, ValueError, TypeError) as exc:
+        print(f"ERROR: {exc.args[0] if exc.args else exc} "
+              f"(ELF missing, predates the MRAC descriptor, or is not a firmware build?)",
+              file=sys.stderr)
+        return 1
+    print(f"# {Path(args.elf).name}: mrac_n_features = {len(feats)}")
+    print(f"{'idx':>3}  {'name':<12} {'group':<18} block")
+    for f in feats:
+        print(f"{f.index:>3}  {f.name:<12} {f.group:<18} {f.block}")
+    return 0
 
 
 def cmd_transports(args):
@@ -663,7 +685,7 @@ def cmd_probe_session(args):
 def _manifest_for(args):
     """Either a named manifest or an ad-hoc one built from --vars."""
     from .manifest import ManifestStore
-    store = ManifestStore()
+    store = ManifestStore(elf_path=args.elf)
     if args.vars:
         return store.adhoc(args.vars, hz=args.hz or 20.0, name=args.name or "adhoc")
     m = store.get(args.manifest)
@@ -767,6 +789,9 @@ def build_parser():
 
     sp = sub.add_parser("groups", help="list registry watch groups")
     sp.set_defaults(func=cmd_groups)
+
+    sp = sub.add_parser("mrac-features", help="MRAC feature count + descriptor from the ELF (no hardware)")
+    sp.set_defaults(func=cmd_mrac_features)
 
     sp = sub.add_parser("transports", help="list live-read transports and cost models")
     sp.set_defaults(func=cmd_transports)

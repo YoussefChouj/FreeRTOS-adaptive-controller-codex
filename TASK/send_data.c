@@ -94,7 +94,7 @@ static uint16_t crc16_xmodem(const uint8_t* data, uint16_t len)
 /* Frame C body-rate/attitude/position telemetry (0x06, 50 Hz).
  * Emitted back-to-back with Frame A inside the same DMA TX call so they are atomic on wire.
  * Layout (50 B payload): rol, pit, yaw, gyro[3], earth_x, earth_y, altitude, rpm[4], seq_hi, seq_lo.
- * CRC16 covers [frame_type | LEN_hi | LEN_lo | MAX_NUM_BASIS | payload bytes].
+ * CRC16 covers [frame_type | LEN_hi | LEN_lo | MRAC_TELEM_WINDOW | payload bytes].
  * SerialBridge ignores 0x06 on firmware older than GS_PROTO_VERSION v13. */
 static uint8_t  s_frame_c_buf[60] = {0};
 static uint16_t s_frame_c_seq      = 0U;
@@ -1032,7 +1032,7 @@ void Send_Groundstation_Telemetry_UART4(void)
     }
     else if (frame_counter % 5 != 0) // 100Hz Frame A
     {
-        // FRAME A �� header: [type][LEN_hi][LEN_lo][MAX_NUM_BASIS], payload 37 bytes (16-bit LEN)
+        // FRAME A �� header: [type][LEN_hi][LEN_lo][MRAC_TELEM_WINDOW], payload 37 bytes (16-bit LEN)
         {
             uint16_t payload_len = 42U; /* +1 rc_authority +1 of_hold +1 estimator_ready +1 motor_idle_enabled +1 GS_PROTO_VERSION */
             Buf_Telemetry_UART4[2] = 0x01; // ID
@@ -1155,7 +1155,7 @@ void Send_Groundstation_Telemetry_UART4(void)
             s_frame_c_buf[3] = (uint8_t)(c_payload_len >> 8);
             s_frame_c_buf[4] = (uint8_t)(c_payload_len & 0xFFU);
 
-            /* CRC16-CCITT (XModem) over [frame_type | LEN_hi | LEN_lo | MAX_NUM_BASIS | payload]
+            /* CRC16-CCITT (XModem) over [frame_type | LEN_hi | LEN_lo | MRAC_TELEM_WINDOW | payload]
              * = every byte from index 2 up to (but not including) the CRC itself = c_len-2. */
             c_crc = crc16_xmodem(&s_frame_c_buf[2], (uint16_t)(c_len - 2U));
             s_frame_c_buf[c_len++] = (uint8_t)(c_crc >> 8);
@@ -1291,7 +1291,7 @@ void Send_Groundstation_Telemetry_UART4(void)
     
     // CONSTRAINT: CRC coverage must match the host parser exactly.
     // WHY: Any mismatch causes silent frame drops in serial_bridge.
-    /* CRC8 XOR over all bytes after sync: frame type, 16-bit LEN, MAX_NUM_BASIS, payload (index 2 .. len-1).
+    /* CRC8 XOR over all bytes after sync: frame type, 16-bit LEN, MRAC_TELEM_WINDOW, payload (index 2 .. len-1).
      * Skipped when the buffer already carries its own checksum(s) — i.e. the Frame A + Frame C
      * path, where Frame A closed its own CRC8 above and Frame C carries its own CRC16. */
     if (!frame_self_crc) {
@@ -1372,9 +1372,47 @@ static void RememberTransaction(uint16_t transaction_id)
     s_transaction_history_head = (uint8_t)((s_transaction_history_head + 1U) % 16U);
 }
 
+/* MRAC per-element parameter commands. Two encodings share one applier:
+ *   legacy 0x02 gamma / 0x05 What_limit / 0x08 What_tol: INDEX = (axis << 4) | elem, 4-bit elem.
+ *   wide block 0x20..0x2B: id = MRAC_ELEM_CMD_BASE + (field << 2) + axis, INDEX = elem (8-bit).
+ * Both carry the value as a float32, so the wide block loses no precision. */
+#define MRAC_ELEM_FIELD_GAMMA   0U
+#define MRAC_ELEM_FIELD_LIMIT   1U
+#define MRAC_ELEM_FIELD_TOL     2U
+#define MRAC_ELEM_CMD_BASE      0x20U
+#define MRAC_ELEM_CMD_LAST      (MRAC_ELEM_CMD_BASE + (MRAC_ELEM_FIELD_TOL << 2) + 3U)
+#define MRAC_ELEM_CMD_IS(id)    (((id) >= MRAC_ELEM_CMD_BASE) && ((id) <= MRAC_ELEM_CMD_LAST))
+
+/* Apply one validated element update. Elements at or past MRAC_N_FEATURES are capacity
+ * padding, not weights, so they are rejected on both encodings. Invalid values and
+ * out-of-range axis/elem are dropped silently, as the legacy handler always did. */
+static void MracElemParamApply(uint8_t axis, uint8_t field, uint8_t elem, float val)
+{
+    MRAC_AxisConfig_t* configs[4];
+    configs[0] = &mrac_config_pitch;
+    configs[1] = &mrac_config_roll;
+    configs[2] = &mrac_config_yaw;
+    configs[3] = &mrac_config_z;
+
+    if (axis >= 4U || elem >= MRAC_N_FEATURES) {
+        return;
+    }
+    if      (field == MRAC_ELEM_FIELD_GAMMA && val >  0.0f) configs[axis]->gamma[elem]      = val;
+    /* The projection only divides by What_tol inside the
+     * (What_limit - What_tol) band, so a limit below tol inverts it.
+     * elem 0 also keeps the symmetric lower bound MRAC_Init sets. */
+    else if (field == MRAC_ELEM_FIELD_LIMIT && val >= configs[axis]->What_tol[elem]) {
+        configs[axis]->What_limit[elem] = val;
+        if (elem == 0U) configs[axis]->What_lower_limit[0] = -val;
+    }
+    else if (field == MRAC_ELEM_FIELD_TOL && val >= 0.0f &&
+             val <= configs[axis]->What_limit[elem])
+        configs[axis]->What_tol[elem] = val;
+}
+
 static uint8_t CommandSafetyReject(uint8_t id)
 {
-    if ((id == 0U) || (id > 0x1EU)) {
+    if ((id == 0U) || ((id > 0x1EU) && !MRAC_ELEM_CMD_IS(id))) {
         return 4U; /* unknown command */
     }
     if ((id == 0x06U) && (DroneStatus.FlyMode != FlyMode_SDK)) {
@@ -1490,26 +1528,18 @@ void Process_GroundStation_Command(void)
         else if (id == 0x02 || id == 0x05 || id == 0x08) {
             uint8_t axis = (idx >> 4) & 0x0F;
             uint8_t elem = idx & 0x0F;
-            
-            MRAC_AxisConfig_t* configs[4];
-            configs[0] = &mrac_config_pitch;
-            configs[1] = &mrac_config_roll;
-            configs[2] = &mrac_config_yaw;
-            configs[3] = &mrac_config_z;
-            
-            if (axis < 4 && elem < MAX_NUM_BASIS) {
-                if      (id == 0x02 && val >  0.0f) configs[axis]->gamma[elem]      = val;
-                /* The projection only divides by What_tol inside the
-                 * (What_limit - What_tol) band, so a limit below tol inverts it.
-                 * elem 0 also keeps the symmetric lower bound MRAC_Init sets. */
-                else if (id == 0x05 && val >= configs[axis]->What_tol[elem]) {
-                    configs[axis]->What_limit[elem] = val;
-                    if (elem == 0) configs[axis]->What_lower_limit[0] = -val;
-                }
-                else if (id == 0x08 && val >= 0.0f &&
-                         val <= configs[axis]->What_limit[elem])
-                    configs[axis]->What_tol[elem] = val;
-            }
+            uint8_t field = (id == 0x02) ? MRAC_ELEM_FIELD_GAMMA :
+                            (id == 0x05) ? MRAC_ELEM_FIELD_LIMIT : MRAC_ELEM_FIELD_TOL;
+
+            MracElemParamApply(axis, field, elem, val);
+        }
+
+        // CMD 0x20..0x2B - MRAC element update with an 8-bit element index (for N_FEATURES > 16).
+        // id = 0x20 + (field << 2) + axis; field 0 = gamma, 1 = What_limit, 2 = What_tol; INDEX = element.
+        else if (MRAC_ELEM_CMD_IS(id)) {
+            uint8_t sel = (uint8_t)(id - MRAC_ELEM_CMD_BASE);
+
+            MracElemParamApply((uint8_t)(sel & 0x03U), (uint8_t)(sel >> 2), idx, val);
         }
 
         // CMD 0x06 — virtual stick injection. val is normalised [-1.0, +1.0]. idx: [0]=thr,[1]=pitch,[2]=roll,[3]=yaw.

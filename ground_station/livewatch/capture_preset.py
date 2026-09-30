@@ -250,7 +250,7 @@ def capture(
     wifi_port: int = 14550,
 ) -> int:
     pm = MultiSlotPresetManager()
-    store = ManifestStore()
+    store = ManifestStore(elf_path=elf_path)
     resolver = SymbolResolver(elf_path)
 
     preset = pm.get(preset_name)
