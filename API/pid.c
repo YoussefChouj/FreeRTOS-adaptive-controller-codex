@@ -18,7 +18,7 @@ CtrlerTypeDef Ctrler={
 
     PID_ROW(5,    0.01,  10,   300,  300,   20,    100,   1000,    2     ), /* gyroxPID     roll rate  (inner) */
     PID_ROW(5,    0.01,  10,   300,  300,   20,    100,   1000,    2     ), /* gyroyPID     pitch rate (inner) */
-    PID_ROW(8.0,  0.001, 0.02, 650,  650,   500,   10,    100000,  1000  ), /* gyrozPID     yaw rate   (inner) */
+    PID_ROW(8.0,  0.005, 0.02, 650,  650,   500,   10,    100000,  1000  ), /* gyrozPID     yaw rate   (inner) */
 
     PID_ROW(0.7,  0.005, 0.1,  1.0,  0.9,   0.3,   0.3,   30,      0.3   ), /* Z_posPID     altitude */
     PID_ROW(400,  0.435, 0,    300,  300,   100,   60,    250,     10    ), /* Z_ratePID    climb rate (inner) */

@@ -33,6 +33,8 @@ static RPM_ChannelState_t rpm_ch[RPM_NUM_CH];
  * in the Watch window while waving a mark past the sensor. */
 volatile uint32_t rpm_dbg_edges[RPM_NUM_CH]     = {0};
 volatile uint32_t rpm_dbg_period_cyc[RPM_NUM_CH] = {0};
+/* Last RPM_Get() result per channel, for loggers (RPM_Get runs every stabilizer loop). */
+volatile uint16_t rpm_dbg_rpm[RPM_NUM_CH]        = {0};
 
 /* ----------------------------- init ----------------------------- */
 
@@ -194,7 +196,7 @@ void RPM_EdgeISR(uint8_t ch)
 
 /* ----------------------------- query ----------------------------- */
 
-uint16_t RPM_Get(uint8_t ch)
+static uint16_t RPM_Compute(uint8_t ch)
 {
     /* Task-context read.  May cross an ISR mid-update — torn ring samples are
      * accepted because each ring slot is a u32 (atomic on M4), and a torn
@@ -251,4 +253,15 @@ uint16_t RPM_Get(uint8_t ch)
         rpm32 = 65535U;
     }
     return (uint16_t)rpm32;
+}
+
+uint16_t RPM_Get(uint8_t ch)
+{
+    uint16_t rpm;
+
+    rpm = RPM_Compute(ch);
+    if (ch < RPM_NUM_CH) {
+        rpm_dbg_rpm[ch] = rpm;
+    }
+    return rpm;
 }

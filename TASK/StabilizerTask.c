@@ -1042,7 +1042,7 @@ void Compute_Motor(void)
 	 // free-flight hover 2950->3150: flight_test_pid_2/_4 (matched props, 2026-09-28) hovered at
 	 // motor avg 3135-3145 with Z_rate P carrying the missing ~190 -> 0.4-0.5 m altitude sag.
 	 // PWM ceiling is 4000 - anything above risks ESC saturation.
-	 Throttle_th = bench_mode_active ? (short)3200 : (short)3150;
+	 Throttle_th = bench_mode_active ? (short)3100 : (short)3050;
 
 	// Controller layer (API/controller.c): u = u_nom + correction of the selected controller.
 	// CTRL_MRAC (default) == PID + MRAC u_ad gated by output_injection_on and simplex fade; CTRL_PID == pure PID.
