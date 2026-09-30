@@ -12,6 +12,7 @@ per-element parameter encoder, plots) tied to the build being analysed.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -61,3 +62,26 @@ def read_mrac_n_features(elf_path: str | Path = DEFAULT_ELF) -> int:
     """`mrac_n_features` from `elf_path` (cheaper than the full descriptor)."""
     with ElfConstReader(elf_path) as elf:
         return int(elf.scalar(COUNT_SYMBOL))
+
+
+def source_n_features(variant_header: str | Path) -> int:
+    """MRAC_N_FEATURES of the default variant as written in API/mrac_variant.h.
+
+    The header defines the count as MRAC_N_STRUCT + MRAC_N_RBF + MRAC_N_SINDY, each set per variant, so this sums
+    the three in the branch of the default variant. Tests use it to compare the source with the ELF.
+    """
+    text = Path(variant_header).read_text(encoding="latin-1")
+    default = re.search(r"#\s*define\s+MRAC_VARIANT\s+(MRAC_VARIANT_\w+)", text)
+    if not default:
+        raise ValueError("default MRAC_VARIANT not found in %s" % variant_header)
+    branch = re.search(r"#\s*(?:el)?if\s+MRAC_VARIANT\s*==\s*%s\b(.*?)#\s*(?:elif|else|endif)" % default.group(1),
+                       text, re.S)
+    if not branch:
+        raise ValueError("branch of %s not found in %s" % (default.group(1), variant_header))
+    total = 0
+    for part in ("STRUCT", "RBF", "SINDY"):
+        define = re.search(r"#\s*define\s+MRAC_N_%s\s+(\d+)" % part, branch.group(1))
+        if not define:
+            raise ValueError("MRAC_N_%s not defined for %s" % (part, default.group(1)))
+        total += int(define.group(1))
+    return total

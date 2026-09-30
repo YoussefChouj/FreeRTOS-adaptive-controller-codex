@@ -32,6 +32,7 @@ from ground_station.comm.mrac_param_encoder import (
     encode_mrac_param_legacy, encode_mrac_param_wide,
 )
 from ground_station.comm.serial_bridge import SerialBridge
+from ground_station.livewatch.mrac_features import source_n_features
 
 ROOT = Path(__file__).resolve().parents[3]
 SEND_DATA_C = ROOT / "TASK" / "send_data.c"
@@ -44,8 +45,7 @@ def _c_text(path: Path) -> str:
     return re.sub(r"\s+", " ", path.read_text(encoding="latin-1"))
 
 
-N_FEATURES = int(re.search(r"#\s*define\s+MRAC_N_FEATURES\s+(\d+)",
-                           MRAC_VARIANT_H.read_text(encoding="latin-1")).group(1))
+N_FEATURES = source_n_features(MRAC_VARIANT_H)
 GAMMA, LIMIT, TOL = range(3)
 
 

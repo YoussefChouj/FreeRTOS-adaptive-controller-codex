@@ -17,7 +17,7 @@ from ground_station.livewatch.elf_const import (
 )
 from ground_station.livewatch.mrac_features import (
     COUNT_SYMBOL, DESC_SYMBOL, MracFeature, features_from, read_mrac_features,
-    read_mrac_n_features,
+    read_mrac_n_features, source_n_features,
 )
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -90,10 +90,7 @@ def test_descriptor_matches_the_c_source(features):
 
 
 def test_feature_count_is_mrac_n_features(features):
-    define = re.search(r"#\s*define\s+MRAC_N_FEATURES\s+(\d+)",
-                       MRAC_VARIANT_H.read_text(encoding="latin-1"))
-    assert define, "MRAC_N_FEATURES not defined in API/mrac_variant.h"
-    assert len(features) == int(define.group(1))
+    assert len(features) == source_n_features(MRAC_VARIANT_H)
     assert read_mrac_n_features(ELF) == len(features)
 
 

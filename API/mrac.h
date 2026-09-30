@@ -122,11 +122,15 @@ typedef enum {
     MRAC_GRP_AERO,
     MRAC_GRP_COUPLING,
     MRAC_GRP_CTRL,
-    MRAC_GRP_REF
+    MRAC_GRP_REF,
+    MRAC_GRP_RBF,
+    MRAC_GRP_POLY
 } MRAC_FeatureGroup_e;
 
 typedef enum {
-    MRAC_BLK_STRUCT
+    MRAC_BLK_STRUCT,
+    MRAC_BLK_RBF,
+    MRAC_BLK_SINDY
 } MRAC_BlockKind_e;
 
 typedef struct {

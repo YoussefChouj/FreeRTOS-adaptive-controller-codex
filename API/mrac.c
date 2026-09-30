@@ -147,16 +147,156 @@ static void MRAC_ProjectGradient(float grad[], const float Theta[], int num_basi
 }
 
 
+// SINDY & RBF block generator inserted here 
+#if MRAC_N_RBF > 0
+float mrac_rbf_centres[MRAC_N_RBF] MRAC_CCM;
+float mrac_rbf_inv_2w2[AXES] MRAC_CCM;
+float mrac_rbf_inv_x_scale[AXES] MRAC_CCM;
+
+static void MRAC_GenRBF(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *phi)
+{
+    float z = bus->x * mrac_rbf_inv_x_scale[axis];
+    int k;
+    for (k = 0; k < MRAC_N_RBF; k++) {
+        float dz = z - mrac_rbf_centres[k];
+        phi[k] = expf(-dz * dz * mrac_rbf_inv_2w2[axis]);
+    }
+}
+#endif
+
+#if MRAC_N_SINDY > 0
+typedef struct {
+    const char *name;
+    uint8_t p_x;
+    uint8_t p_absx;
+    uint8_t p_u;
+    uint8_t p_absu;
+    uint8_t p_cross;
+    uint8_t p_xm;
+    MRAC_FeatureGroup_e group;
+} MRAC_SindyTerm_t;
+
+const MRAC_SindyTerm_t mrac_sindy_table[MRAC_N_SINDY] = {
+#if MRAC_N_STRUCT == 0
+    {"1",            0, 0, 0, 0, 0, 0, MRAC_GRP_BIAS},
+    {"x",            1, 0, 0, 0, 0, 0, MRAC_GRP_RATE},
+    {"cross",        0, 0, 0, 0, 1, 0, MRAC_GRP_COUPLING},
+    {"u_nom",        0, 0, 1, 0, 0, 0, MRAC_GRP_CTRL},
+    {"xm",           0, 0, 0, 0, 0, 1, MRAC_GRP_REF},
+#endif
+    {"x|x|",         1, 1, 0, 0, 0, 0, MRAC_GRP_AERO},
+    {"x^3",          3, 0, 0, 0, 0, 0, MRAC_GRP_POLY},
+    {"x*u_nom",      1, 0, 1, 0, 0, 0, MRAC_GRP_POLY},
+    {"x*cross",      1, 0, 0, 0, 1, 0, MRAC_GRP_POLY},
+    {"u_nom|u_nom|", 0, 0, 1, 1, 0, 0, MRAC_GRP_POLY},
+    {"xm*x",         1, 0, 0, 0, 0, 1, MRAC_GRP_POLY}
+};
+
+typedef char MRAC_Assert_Sindy_Count[ ((int)(sizeof(mrac_sindy_table) / sizeof(mrac_sindy_table[0])) == MRAC_N_SINDY) ? 1 : -1 ];
+
+static void MRAC_GenSindy(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *phi)
+{
+    int i;
+    float abs_x = fabsf(bus->x);
+    float abs_u = fabsf(bus->u_nom);
+    for (i = 0; i < MRAC_N_SINDY; i++) {
+        float val = 1.0f;
+        uint8_t k;
+        for (k = 0; k < mrac_sindy_table[i].p_x; k++) val *= bus->x;
+        for (k = 0; k < mrac_sindy_table[i].p_absx; k++) val *= abs_x;
+        for (k = 0; k < mrac_sindy_table[i].p_u; k++) val *= bus->u_nom;
+        for (k = 0; k < mrac_sindy_table[i].p_absu; k++) val *= abs_u;
+        for (k = 0; k < mrac_sindy_table[i].p_cross; k++) val *= bus->cross;
+        for (k = 0; k < mrac_sindy_table[i].p_xm; k++) val *= bus->xm;
+        phi[i] = val;
+    }
+    (void)axis;
+}
+#endif
+
 const MRAC_FeatureDesc_t mrac_feature_desc[MRAC_N_FEATURES] = {
+#if MRAC_N_STRUCT > 0
     {0, "bias",      MRAC_BLK_STRUCT, MRAC_GRP_BIAS},
     {1, "rate",      MRAC_BLK_STRUCT, MRAC_GRP_RATE},
     {2, "rate_tanh", MRAC_BLK_STRUCT, MRAC_GRP_AERO},
     {3, "cross",     MRAC_BLK_STRUCT, MRAC_GRP_COUPLING},
     {4, "u_nom",     MRAC_BLK_STRUCT, MRAC_GRP_CTRL},
-    {5, "xm",        MRAC_BLK_STRUCT, MRAC_GRP_REF}
+    {5, "xm",        MRAC_BLK_STRUCT, MRAC_GRP_REF},
+#endif
+#if MRAC_N_RBF > 0
+    {MRAC_N_STRUCT + 0, "rbf00", MRAC_BLK_RBF, MRAC_GRP_RBF},
+#endif
+#if MRAC_N_RBF > 1
+    {MRAC_N_STRUCT + 1, "rbf01", MRAC_BLK_RBF, MRAC_GRP_RBF},
+#endif
+#if MRAC_N_RBF > 2
+    {MRAC_N_STRUCT + 2, "rbf02", MRAC_BLK_RBF, MRAC_GRP_RBF},
+#endif
+#if MRAC_N_RBF > 3
+    {MRAC_N_STRUCT + 3, "rbf03", MRAC_BLK_RBF, MRAC_GRP_RBF},
+#endif
+#if MRAC_N_RBF > 4
+    {MRAC_N_STRUCT + 4, "rbf04", MRAC_BLK_RBF, MRAC_GRP_RBF},
+#endif
+#if MRAC_N_RBF > 5
+    {MRAC_N_STRUCT + 5, "rbf05", MRAC_BLK_RBF, MRAC_GRP_RBF},
+#endif
+#if MRAC_N_RBF > 6
+    {MRAC_N_STRUCT + 6, "rbf06", MRAC_BLK_RBF, MRAC_GRP_RBF},
+#endif
+#if MRAC_N_RBF > 7
+    {MRAC_N_STRUCT + 7, "rbf07", MRAC_BLK_RBF, MRAC_GRP_RBF},
+#endif
+#if MRAC_N_RBF > 8
+    {MRAC_N_STRUCT + 8, "rbf08", MRAC_BLK_RBF, MRAC_GRP_RBF},
+#endif
+#if MRAC_N_RBF > 9
+    {MRAC_N_STRUCT + 9, "rbf09", MRAC_BLK_RBF, MRAC_GRP_RBF},
+#endif
+#if MRAC_N_RBF > 10
+    {MRAC_N_STRUCT + 10, "rbf10", MRAC_BLK_RBF, MRAC_GRP_RBF},
+#endif
+#if MRAC_N_RBF > 11
+    {MRAC_N_STRUCT + 11, "rbf11", MRAC_BLK_RBF, MRAC_GRP_RBF},
+#endif
+#if MRAC_N_RBF > 12
+    {MRAC_N_STRUCT + 12, "rbf12", MRAC_BLK_RBF, MRAC_GRP_RBF},
+#endif
+#if MRAC_N_RBF > 13
+    {MRAC_N_STRUCT + 13, "rbf13", MRAC_BLK_RBF, MRAC_GRP_RBF},
+#endif
+#if MRAC_N_RBF > 14
+    {MRAC_N_STRUCT + 14, "rbf14", MRAC_BLK_RBF, MRAC_GRP_RBF},
+#endif
+#if MRAC_N_RBF > 15
+    {MRAC_N_STRUCT + 15, "rbf15", MRAC_BLK_RBF, MRAC_GRP_RBF},
+#endif
+#if MRAC_N_SINDY > 0
+#if MRAC_N_STRUCT == 0
+    {MRAC_N_STRUCT + MRAC_N_RBF + 0, "1", MRAC_BLK_SINDY, MRAC_GRP_BIAS},
+    {MRAC_N_STRUCT + MRAC_N_RBF + 1, "x", MRAC_BLK_SINDY, MRAC_GRP_RATE},
+    {MRAC_N_STRUCT + MRAC_N_RBF + 2, "cross", MRAC_BLK_SINDY, MRAC_GRP_COUPLING},
+    {MRAC_N_STRUCT + MRAC_N_RBF + 3, "u_nom", MRAC_BLK_SINDY, MRAC_GRP_CTRL},
+    {MRAC_N_STRUCT + MRAC_N_RBF + 4, "xm", MRAC_BLK_SINDY, MRAC_GRP_REF},
+    {MRAC_N_STRUCT + MRAC_N_RBF + 5, "x|x|", MRAC_BLK_SINDY, MRAC_GRP_AERO},
+    {MRAC_N_STRUCT + MRAC_N_RBF + 6, "x^3", MRAC_BLK_SINDY, MRAC_GRP_POLY},
+    {MRAC_N_STRUCT + MRAC_N_RBF + 7, "x*u_nom", MRAC_BLK_SINDY, MRAC_GRP_POLY},
+    {MRAC_N_STRUCT + MRAC_N_RBF + 8, "x*cross", MRAC_BLK_SINDY, MRAC_GRP_POLY},
+    {MRAC_N_STRUCT + MRAC_N_RBF + 9, "u_nom|u_nom|", MRAC_BLK_SINDY, MRAC_GRP_POLY},
+    {MRAC_N_STRUCT + MRAC_N_RBF + 10, "xm*x", MRAC_BLK_SINDY, MRAC_GRP_POLY}
+#else
+    {MRAC_N_STRUCT + MRAC_N_RBF + 0, "x|x|", MRAC_BLK_SINDY, MRAC_GRP_AERO},
+    {MRAC_N_STRUCT + MRAC_N_RBF + 1, "x^3", MRAC_BLK_SINDY, MRAC_GRP_POLY},
+    {MRAC_N_STRUCT + MRAC_N_RBF + 2, "x*u_nom", MRAC_BLK_SINDY, MRAC_GRP_POLY},
+    {MRAC_N_STRUCT + MRAC_N_RBF + 3, "x*cross", MRAC_BLK_SINDY, MRAC_GRP_POLY},
+    {MRAC_N_STRUCT + MRAC_N_RBF + 4, "u_nom|u_nom|", MRAC_BLK_SINDY, MRAC_GRP_POLY},
+    {MRAC_N_STRUCT + MRAC_N_RBF + 5, "xm*x", MRAC_BLK_SINDY, MRAC_GRP_POLY}
+#endif
+#endif
 };
 const uint8_t mrac_n_features = MRAC_N_FEATURES;
 
+#if MRAC_N_STRUCT > 0
 static void MRAC_GenStructured(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *phi)
 {
     
@@ -181,10 +321,19 @@ static void MRAC_GenStructured(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *p
 #endif
 }
 
+#endif
 MRAC_Bus_t mrac_bus[AXES] MRAC_CCM;
 
 const MRAC_BlockDesc_t mrac_block_table[] = {
-    {MRAC_BLK_STRUCT, 0, MRAC_N_STRUCT, MRAC_GenStructured}
+#if MRAC_N_STRUCT > 0
+    {MRAC_BLK_STRUCT, 0, MRAC_N_STRUCT, MRAC_GenStructured},
+#endif
+#if MRAC_N_RBF > 0
+    {MRAC_BLK_RBF, MRAC_N_STRUCT, MRAC_N_RBF, MRAC_GenRBF},
+#endif
+#if MRAC_N_SINDY > 0
+    {MRAC_BLK_SINDY, MRAC_N_STRUCT + MRAC_N_RBF, MRAC_N_SINDY, MRAC_GenSindy},
+#endif
 };
 #define MRAC_N_BLOCKS ((int)(sizeof(mrac_block_table) / sizeof(mrac_block_table[0])))
 
@@ -537,6 +686,31 @@ void MRAC_SimplexStep(void)
     mrac_config_##ax.What_limit[i] = (lim); \
     mrac_config_##ax.What_tol[i] = (t); \
     mrac_config_##ax.What_lower_limit[i] = (low)
+#define MRAC_BLOCK_GAIN(ax, first, count, g, lim, t, low) \
+    do { \
+        int _i; \
+        for (_i = 0; _i < (count); _i++) { \
+            mrac_config_##ax.gamma[(first) + _i] = (g); \
+            mrac_config_##ax.What_limit[(first) + _i] = (lim); \
+            mrac_config_##ax.What_tol[(first) + _i] = (t); \
+            mrac_config_##ax.What_lower_limit[(first) + _i] = (low); \
+        } \
+    } while (0)
+
+#if MRAC_N_RBF > 0
+/* Centre spacing on the normalised axis [-1, 1]; a single centre sits at 0 and uses spacing 2. */
+#if MRAC_N_RBF > 1
+    #define MRAC_RBF_SPACING (2.0f / (float)(MRAC_N_RBF - 1))
+#else
+    #define MRAC_RBF_SPACING 2.0f
+#endif
+#define MRAC_RBF_ROW(ax, scale, factor) \
+    do { \
+        float _w = (factor) * MRAC_RBF_SPACING; \
+        mrac_rbf_inv_x_scale[MRAC_AXIS_##ax] = 1.0f / (scale); \
+        mrac_rbf_inv_2w2[MRAC_AXIS_##ax] = 1.0f / (2.0f * _w * _w); \
+    } while (0)
+#endif
 
 void MRAC_Init(void)
 {
@@ -568,6 +742,7 @@ void MRAC_Init(void)
     /* Basis weights: gamma = learning rate, limit/lower = weight bounds (projection),
      * tol = projection boundary layer. Yaw limit/tol = pitch/roll value * 0.6f. */
     /*         axis   i  gamma  limit        tol          lower           feature */
+#if MRAC_N_STRUCT > 0
     MRAC_BASIS(pitch, 0, 1.50f, 0.15f,       0.03f,       -0.15f);     /* bias */
     MRAC_BASIS(pitch, 1, 0.20f, 0.05f,       0.01f,       0.0f);       /* rate */
     MRAC_BASIS(pitch, 2, 0.05f, 0.02f,       0.005f,      0.0f);       /* rate_tanh */
@@ -592,8 +767,51 @@ void MRAC_Init(void)
     MRAC_BASIS(z,     3, 0.10f, 0.05f,       0.01f,       0.0f);       /* cross */
     MRAC_BASIS(z,     4, 0.20f, 0.20f,       0.04f,       0.0f);       /* u_nom */
     MRAC_BASIS(z,     5, 0.20f, 0.20f,       0.04f,       0.0f);       /* xm */
+#endif
+
+#if MRAC_N_RBF > 0
+    /* RBF block (PROVISIONAL): phi_k = exp(-(z - c_k)^2 / (2 w^2)), z = x / x_scale, centres shared by all axes.
+     *           axis    x_scale  width_factor (w = factor * centre spacing) */
+    MRAC_RBF_ROW(PITCH,  5.0f,    1.0f);
+    MRAC_RBF_ROW(ROLL,   5.0f,    1.0f);
+    MRAC_RBF_ROW(YAW,    5.0f,    1.0f);
+    MRAC_RBF_ROW(Z,      2.0f,    1.0f);
+    {
+        int k;
+        for (k = 0; k < MRAC_N_RBF; k++) {
+#if MRAC_N_RBF > 1
+            mrac_rbf_centres[k] = -1.0f + (float)k * MRAC_RBF_SPACING;
+#else
+            mrac_rbf_centres[k] = 0.0f;
+#endif
+        }
+    }
+
+    /* RBF block gains (PROVISIONAL), signed weights: lower = -limit.
+     *              axis    first          count       gamma   limit    tol      lower */
+    MRAC_BLOCK_GAIN(pitch,  MRAC_N_STRUCT, MRAC_N_RBF, 0.05f,  0.02f,   0.005f,  -0.02f);
+    MRAC_BLOCK_GAIN(roll,   MRAC_N_STRUCT, MRAC_N_RBF, 0.05f,  0.02f,   0.005f,  -0.02f);
+    MRAC_BLOCK_GAIN(yaw,    MRAC_N_STRUCT, MRAC_N_RBF, 0.05f,  0.012f,  0.003f,  -0.012f);
+    MRAC_BLOCK_GAIN(z,      MRAC_N_STRUCT, MRAC_N_RBF, 0.10f,  0.05f,   0.01f,   -0.05f);
+#endif
+
+#if MRAC_N_SINDY > 0
+    /* Library block gains (PROVISIONAL), signed weights: lower = -limit. Library signals are used unscaled.
+     *              axis    first                       count         gamma   limit    tol      lower */
+    MRAC_BLOCK_GAIN(pitch,  MRAC_N_STRUCT + MRAC_N_RBF, MRAC_N_SINDY, 0.05f,  0.02f,   0.005f,  -0.02f);
+    MRAC_BLOCK_GAIN(roll,   MRAC_N_STRUCT + MRAC_N_RBF, MRAC_N_SINDY, 0.05f,  0.02f,   0.005f,  -0.02f);
+    MRAC_BLOCK_GAIN(yaw,    MRAC_N_STRUCT + MRAC_N_RBF, MRAC_N_SINDY, 0.05f,  0.012f,  0.003f,  -0.012f);
+    MRAC_BLOCK_GAIN(z,      MRAC_N_STRUCT + MRAC_N_RBF, MRAC_N_SINDY, 0.10f,  0.05f,   0.01f,   -0.05f);
+#endif
+
 
     /* History and provenance (newest first)
+     * 2026-09-30 S3     RBF and library block rows. ALL PROVISIONAL: never flown, not data-grounded.
+     *                   x_scale (pitch/roll/yaw 5.0, z 2.0, in the unit of the axis state x) and width_factor
+     *                   1.0 are placeholders chosen by the S3 worker without a recorded-range source: set
+     *                   them from recorded |x| before any flight with MRAC_VARIANT != 0.
+     *                   Block gains = per-axis minimum of the struct rows above (gamma, limit, tol) with
+     *                   lower = -limit; yaw limit 0.012 = 0.02 x 0.6.
      * 2026-09-29 S1b    Local arrays and per-axis assignments -> MRAC_SET / MRAC_BASIS tables, bit-exact
      *                   (API/tests/run_mrac_equiv.py EQUIV OK). Yaw cells stay the products x*0.6f so they
      *                   round exactly as the old PR_Wlim[i]*0.6f did.
