@@ -634,3 +634,34 @@ def test_wait_for_injected_telemetry(service, api):
                           timeout=8)
     assert detail is not None and detail["status"] == "done"
     assert detail["steps"][0]["status"] == "done"
+def test_wide_mrac_classification_and_tier0():
+    from ground_station.service.agent import CRITICAL_PARAM_WRITE, PARAM_WRITE_TIER
+    from ground_station.comm.mrac_param_encoder import WIDE_CMD_BASE, WIDE_CMD_LAST
+    
+    # 0x1F and 0x2C unchanged
+    assert 0x1F not in CRITICAL_PARAM_WRITE
+    assert 0x1F not in PARAM_WRITE_TIER
+    assert 0x2C not in CRITICAL_PARAM_WRITE
+    assert 0x2C not in PARAM_WRITE_TIER
+
+    for cmd_id in range(WIDE_CMD_BASE, WIDE_CMD_LAST + 1):
+        assert cmd_id in CRITICAL_PARAM_WRITE
+        assert PARAM_WRITE_TIER.get(cmd_id) == 0
+
+def test_wide_mrac_param_is_critical_and_tier0(service, api):
+    from ground_station.comm.mrac_param_encoder import encode_mrac_param_wide
+    from ground_station.service.agent import WHY_CRITICAL_PARAM
+    
+    _, base = api
+    cmd, index, value = encode_mrac_param_wide("gamma", 0, 16, 1.0)
+    
+    status, created = _post(base + "/api/agent/plans", {
+        "title": "wide", "source": "agent:test",
+        "steps": [{"action": "command", "args": {"command_id": cmd, "index": index, "value": value}}],
+    })
+    assert status == 201
+    approvals = created["approvals"]
+    assert len(approvals) == 1
+    assert approvals[0]["why_critical"] == WHY_CRITICAL_PARAM
+    assert approvals[0]["tier"] == 0
+

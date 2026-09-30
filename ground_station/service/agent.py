@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ground_station.service.activity import ActivityJournal
+from ground_station.comm.mrac_param_encoder import WIDE_CMD_BASE, WIDE_CMD_LAST
 
 # ---------------------------------------------------------------------------
 # Action registry
@@ -225,6 +226,7 @@ SERVICE_ACTION_SPECS: dict[str, dict[str, Any]] = {
 #     0x05 MRAC_WEIGHT_LIMIT, 0x08 MRAC_TOLERANCE, 0x09 SAFETY_LIMITS,
 #     0x12 WAYPOINT_SPACING, 0x13 REF_MODEL_TYPE, 0x15 GYRO_LPF,
 #     0x1E OF_BIAS_MODE.
+#     Also wide MRAC parameter commands (from mrac_param_encoder.py).
 #   * NEVER critical: 0x0D ABORT_ALL_PATHS and 0x04 FLIGHT_MODE_ABORT (idx 0
 #     abort / idx 1 recover) are emergency-stop / disarm-family actions.
 #
@@ -232,7 +234,7 @@ SERVICE_ACTION_SPECS: dict[str, dict[str, Any]] = {
 CRITICAL_ARM_MOTOR_THROTTLE: frozenset[int] = frozenset({0x06, 0x07, 0x0E, 0x16})
 CRITICAL_PARAM_WRITE: frozenset[int] = frozenset({
     0x01, 0x02, 0x03, 0x05, 0x08, 0x09, 0x12, 0x13, 0x15, 0x19, 0x1E,
-})
+}.union(range(WIDE_CMD_BASE, WIDE_CMD_LAST + 1)))
 
 WHY_CRITICAL_ARM = "arm_or_motor_or_throttle"
 WHY_CRITICAL_PARAM = "param_write"
@@ -247,9 +249,11 @@ WHY_CRITICAL_PARAM = "param_write"
 # (StabilizerTask.c position loop). A command missing here counts as tier 0.
 # A write to tier-0 state needs operator approval in EVERY mode, autonomous
 # included.
+# Also wide MRAC elements CMD 0x20..0x2B from ground_station/comm/mrac_param_encoder.py.
 PARAM_WRITE_TIER: dict[int, int] = {
     0x01: 0, 0x02: 0, 0x03: 0, 0x05: 0, 0x08: 0,
     0x09: 0, 0x12: 0, 0x13: 0, 0x15: 0, 0x19: 0, 0x1E: 0,
+    **{k: 0 for k in range(WIDE_CMD_BASE, WIDE_CMD_LAST + 1)},
 }
 
 # Tier-1 -> tier-0 data flow a command switches on. 0x1E idx=0 val=2 selects
