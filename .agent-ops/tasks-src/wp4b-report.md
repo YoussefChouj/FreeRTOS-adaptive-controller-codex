@@ -86,6 +86,8 @@ M = C:\Users\Acer\Desktop\UAV_lab\FreeRTOS-adaptive-controller-codex\logs\vofa
 newest other *.meta.json), then `python -m ground_station.analysis.flightlab compare flight15 flight16`. Check
 report.md, report.html (open it: self-contained, figures visible as data URIs), the worktree
 docs/flights/ledger.csv rows, compare.md. rules/ is empty in your worktree, so 0 recommendations is expected.
+Remote host: if directory M does not exist on your machine, do not look for or fabricate logs. Write
+`NOT RUN: end-to-end (logs not on this host)` in the report; the supervisor runs it. The pytest run is still required.
 
 ## Report `.agent-ops/out/wp4b.md` (commit it)
 Branch, commit hash, changed files; verbatim pytest tail; e2e command outputs; first 40 lines of the flight16

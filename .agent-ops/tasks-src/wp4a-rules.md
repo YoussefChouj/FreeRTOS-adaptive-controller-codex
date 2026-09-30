@@ -97,6 +97,8 @@ render_md does not exist in your worktree, so `analyze()` cannot run. Use the ma
 with `pl.load(r"C:\Users\Acer\Desktop\UAV_lab\FreeRTOS-adaptive-controller-codex\logs\vofa\flight16.meta.json")`,
 `OUT` = a temp dir, then `pl.discover("rules")` and
 `recs, skipped, failed = pl.run_rules(m, cfg, {"ledger_rows": [], "log": log})`. failed must be empty.
+Remote host: if that file does not exist on your machine, do not look for or fabricate another log. Write
+`NOT RUN: flight16 integration (log not on this host)` in the report; the supervisor runs it.
 
 ## Report `.agent-ops/out/wp4a.md` (commit it)
 Branch, commit hash, changed files; verbatim tail of the pytest run; the flight16 integration output as a table
