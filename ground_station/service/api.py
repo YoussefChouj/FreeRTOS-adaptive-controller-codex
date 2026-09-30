@@ -1372,7 +1372,9 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                 root = Path(getattr(getattr(service, "recorder", None), "root", None)
                             or "logs/sessions")
                 if route == "/api/rec-logs":
-                    self._json(200, rec_logs.list_rec_logs(root))
+                    rec = getattr(service, "recorder", None)
+                    live = getattr(rec, "session_dir", None) if getattr(rec, "recording", False) else None
+                    self._json(200, rec_logs.list_rec_logs(root, active=live.name if live else None))
                 else:
                     qs = parse_qs(urlsplit(self.path).query)
                     try:

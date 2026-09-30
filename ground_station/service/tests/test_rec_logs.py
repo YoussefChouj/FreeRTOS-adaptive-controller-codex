@@ -189,3 +189,88 @@ def test_routes_list_load_and_errors(tmp_path):
     finally:
         api.stop()
         svc.stop()
+
+
+def _manual(root, name, frames, events=()):
+    """A session dir written by hand: frames = [(t, {key: value})]."""
+    d = root / name
+    d.mkdir(parents=True)
+    rows = ["received_ns,slot,key,value"]
+    for t, vals in frames:
+        rows += ["%d,0,%s,%s" % (_ns(t), k, v) for k, v in vals.items()]
+    (d / "telemetry.csv").write_text("\n".join(rows) + "\n")
+    (d / "events.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+    (d / "manifest.json").write_text(json.dumps({"started_at_epoch": T0}))
+    return d
+
+
+def test_last_frame_kept_inside_throttle_window(tmp_path):
+    rec_logs._CACHE.clear()
+    _manual(tmp_path, "20260101-000000", [(T0, {"c.earth_x": 0, "c.earth_y": 0}),
+                                           (T0 + 0.005, {"c.earth_x": 42, "c.earth_y": 0})])
+    s = rec_logs.load_rec_log(tmp_path, "20260101-000000")["samples"]
+    assert len(s) == 2 and s[-1][1] == pytest.approx(0.42)
+
+
+def test_event_pos_without_altitude_is_null_not_zero(tmp_path):
+    rec_logs._CACHE.clear()
+    _manual(tmp_path, "20260101-000000",
+            [(T0 + i / 50.0, {"c.earth_x": 10, "c.earth_y": 20}) for i in range(10)],
+            [{"t": T0 + 0.05, "kind": "note", "source": "operator", "data": {"text": "hi"}}])
+    ev = rec_logs.load_rec_log(tmp_path, "20260101-000000")["events"][0]
+    assert ev["pos"][:2] == [0.1, 0.2] and ev["pos"][2] is None
+
+
+def test_cache_sees_notes_appended_after_stop(tmp_path):
+    rec_logs._CACHE.clear()
+    name = _record(tmp_path)
+    before = len(rec_logs.load_rec_log(tmp_path, name)["events"])
+    ev = tmp_path / name / "events.jsonl"
+    with ev.open("a") as fh:
+        fh.write(json.dumps({"t": T0 + 8.0, "kind": "note", "source": "operator",
+                             "data": {"text": "late note"}}) + "\n")
+    after = rec_logs.load_rec_log(tmp_path, name)["events"]
+    assert len(after) == before + 1 and any(e["text"] == "late note" for e in after)
+
+
+def test_recording_flag_only_for_active_session(tmp_path):
+    for name in ("20260101-000000", "20260101-000100"):
+        _manual(tmp_path, name, [(T0, {"c.earth_x": 0, "c.earth_y": 0})])   # no stopped_at
+    logs = {r["name"]: r["recording"] for r in rec_logs.list_rec_logs(tmp_path)["logs"]}
+    assert logs == {"20260101-000000": False, "20260101-000100": False}   # crashed, not live
+    logs = {r["name"]: r["recording"]
+            for r in rec_logs.list_rec_logs(tmp_path, active="20260101-000100")["logs"]}
+    assert logs == {"20260101-000000": False, "20260101-000100": True}
+
+
+def test_concurrent_loads_single_flight_and_capped(tmp_path, monkeypatch):
+    import threading
+    rec_logs._CACHE.clear()
+    names = [_record(tmp_path, label="c%d" % i, seconds=1.0) for i in range(4)]
+    real = rec_logs._scan_telemetry
+    calls, live, peak, lock = [], [0], [0], threading.Lock()
+
+    def slow(path):
+        with lock:
+            calls.append(path.parent.name)
+            live[0] += 1
+            peak[0] = max(peak[0], live[0])
+        time.sleep(0.15)
+        try:
+            return real(path)
+        finally:
+            with lock:
+                live[0] -= 1
+
+    monkeypatch.setattr(rec_logs, "_scan_telemetry", slow)
+    out = []
+    threads = [threading.Thread(target=lambda n=n: out.append(rec_logs.load_rec_log(tmp_path, n)))
+               for n in names + names]           # every log requested twice at once
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(10)
+    assert len(out) == 8
+    assert sorted(calls) == sorted(names)        # one parse per log
+    assert peak[0] <= 2                          # at most two parses at a time
+    assert not rec_logs._INFLIGHT

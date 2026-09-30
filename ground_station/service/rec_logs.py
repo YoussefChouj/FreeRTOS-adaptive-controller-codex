@@ -100,8 +100,12 @@ def _read_json(path: Path) -> dict[str, Any]:
         return {}
 
 
-def list_rec_logs(root: Path, limit: int = 200) -> dict[str, Any]:
-    """Saved REC sessions under ``root``, newest first (manifests only)."""
+def list_rec_logs(root: Path, limit: int = 200, active: str | None = None) -> dict[str, Any]:
+    """Saved REC sessions under ``root``, newest first (manifests only).
+
+    ``active`` is the directory name the recorder is writing right now; only
+    that session is flagged ``recording`` (a crashed session also lacks a
+    stopped_at, so the manifest alone cannot tell)."""
     logs: list[dict[str, Any]] = []
     root = Path(root)
     if root.is_dir():
@@ -126,8 +130,7 @@ def list_rec_logs(root: Path, limit: int = 200) -> dict[str, Any]:
                                else None),
                 "rows": man.get("rows"),
                 "bytes": st.st_size,
-                # A recording still in progress has no stopped_at yet.
-                "recording": isinstance(started, (int, float)) and stopped is None,
+                "recording": active is not None and d.name == active and stopped is None,
             })
     logs.sort(key=lambda r: (r["started_at"] or 0, r["name"]), reverse=True)
     return {"logs": logs[:max(1, int(limit))], "count": len(logs), "root": str(root)}
@@ -201,12 +204,12 @@ def _scan_telemetry(csv_path: Path):
     rows = 0
     field_cache: dict[str, str | None] = {}
 
-    def flush() -> None:
+    def flush(final: bool = False) -> None:
         t = state["cur_t"]
         if t is None or not state["dirty"]:
             return
         state["dirty"] = False
-        if t - state["last_emit"] < MIN_SAMPLE_DT_S:
+        if not final and t - state["last_emit"] < MIN_SAMPLE_DT_S:
             return
         pos = held.position()
         if pos is None:
@@ -248,7 +251,7 @@ def _scan_telemetry(csv_path: Path):
                 changes.append((t, field, old, val))
             if field in ("x", "y"):
                 state["dirty"] = True
-    flush()
+    flush(final=True)                        # the last frame always closes the track
     return samples, changes, rows
 
 
@@ -337,6 +340,20 @@ def _dedupe_path(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 _CACHE: "OrderedDict[tuple, dict]" = OrderedDict()
 _CACHE_LOCK = threading.Lock()
 _CACHE_MAX = 6
+# A big log takes seconds to parse on a request thread of the live service
+# (GIL shared with telemetry decode), and Review mode restores several logs
+# at once: cap concurrent parses and let duplicate requests wait for the one
+# parse already running instead of starting their own.
+_PARSE_SLOTS = threading.BoundedSemaphore(2)
+_INFLIGHT: dict[tuple, threading.Lock] = {}
+
+
+def _sig(path: Path) -> tuple[int, int] | None:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return st.st_mtime_ns, st.st_size
 
 
 def load_rec_log(root: Path, name: str, max_points: int = DEFAULT_MAX_POINTS) -> dict[str, Any]:
@@ -354,13 +371,35 @@ def load_rec_log(root: Path, name: str, max_points: int = DEFAULT_MAX_POINTS) ->
     if not csv_path.is_file():
         raise FileNotFoundError(name)
     max_points = max(50, min(int(max_points or DEFAULT_MAX_POINTS), MAX_POINTS_CAP))
-    st = csv_path.stat()
-    ck = (str(csv_path), st.st_mtime_ns, st.st_size, max_points)
+    # Notes land in events.jsonl and the stop time in manifest.json after the
+    # CSV is closed, so all three files key the cache.
+    ck = (str(csv_path), _sig(csv_path), _sig(d / "events.jsonl"),
+          _sig(d / "manifest.json"), max_points)
     with _CACHE_LOCK:
         if ck in _CACHE:
             _CACHE.move_to_end(ck)
             return _CACHE[ck]
+        gate = _INFLIGHT.setdefault(ck, threading.Lock())
+    try:
+        with gate:
+            with _CACHE_LOCK:
+                if ck in _CACHE:                 # built while we waited
+                    _CACHE.move_to_end(ck)
+                    return _CACHE[ck]
+            with _PARSE_SLOTS:
+                result = _build(d, name, csv_path, max_points)
+            with _CACHE_LOCK:
+                _CACHE[ck] = result
+                while len(_CACHE) > _CACHE_MAX:
+                    _CACHE.popitem(last=False)
+            return result
+    finally:
+        with _CACHE_LOCK:
+            if _INFLIGHT.get(ck) is gate and not gate.locked():
+                del _INFLIGHT[ck]
 
+
+def _build(d: Path, name: str, csv_path: Path, max_points: int) -> dict[str, Any]:
     man = _read_json(d / "manifest.json")
     samples, changes, rows = _scan_telemetry(csv_path)
     events = _classify_events(d / "events.jsonl")
@@ -398,7 +437,7 @@ def load_rec_log(root: Path, name: str, max_points: int = DEFAULT_MAX_POINTS) ->
         s = _nearest(samples, e["t"])
         out_events.append({
             "t": _r(e["t"] - t_ref, 3), "kind": e["kind"], "text": e["text"],
-            "pos": [_r(s[1]), _r(s[2]), _r(s[3] if s[3] is not None else 0.0)] if s else None,
+            "pos": [_r(s[1]), _r(s[2]), _r(s[3])] if s else None,   # no altitude stays null
         })
     result = {
         "name": name,
@@ -415,8 +454,4 @@ def load_rec_log(root: Path, name: str, max_points: int = DEFAULT_MAX_POINTS) ->
         "samples": out_samples,
         "events": out_events,
     }
-    with _CACHE_LOCK:
-        _CACHE[ck] = result
-        while len(_CACHE) > _CACHE_MAX:
-            _CACHE.popitem(last=False)
     return result

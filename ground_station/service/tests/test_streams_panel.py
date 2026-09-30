@@ -25,7 +25,7 @@ class TestStreamsPanel(unittest.TestCase):
                               text=True, timeout=120)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertNotIn("FAIL", proc.stdout)
-        self.assertIn("16 passed", proc.stdout)
+        self.assertIn("19 passed", proc.stdout)
 
     def test_plugin_is_registered_in_the_shell(self):
         html = INDEX.read_text(encoding="utf-8")

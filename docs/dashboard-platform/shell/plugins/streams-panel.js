@@ -38,7 +38,7 @@
   var _planTimer = null;
   var _acTimer = null;
   var _acSlot = null;
-  var _acItems = [];
+  var _acItems = {};       // slot -> names shown in that slot's suggestion box
   var _fwdSeeded = false;
   var _onClick = null, _onInput = null, _onChange = null;
 
@@ -385,14 +385,14 @@
     var tok = d ? lastToken(d.vars) : '';
     var box = q('st-ac-' + slot);
     if (!box) return;
-    if (tok.length < 2) { box.innerHTML = ''; _acItems = []; return; }
+    if (tok.length < 2) { box.innerHTML = ''; _acItems[slot] = []; return; }
     var url = '/api/symbols?limit=12&prefix=' + encodeURIComponent(tok);
     // "parent." / "parent[" drills into members instead of matching a prefix.
     var m = /^(.*?)[.\[]$/.exec(tok);
     if (m && m[1]) url = '/api/symbols?parent=' + encodeURIComponent(m[1]);
     getJson(url).then(function (r) {
-      _acItems = ((r && r.names) || []).slice(0, 12);
-      box.innerHTML = _acItems.map(function (n, i) {
+      _acItems[slot] = ((r && r.names) || []).slice(0, 12);
+      box.innerHTML = _acItems[slot].map(function (n, i) {
         return '<button class="st-ac-item" data-act="ac" data-slot="' + slot +
           '" data-i="' + i + '">' + esc(n) + '</button>';
       }).join('');
@@ -400,10 +400,10 @@
   }
   function pickAutocomplete(slot, i) {
     var d = _drafts[slot];
-    var name = _acItems[i];
+    var name = (_acItems[slot] || [])[i];
     if (!d || !name) return;
     d.vars = d.vars.slice(0, d.vars.length - lastToken(d.vars).length) + name + ' ';
-    _acItems = [];
+    _acItems[slot] = [];
     renderEditors();
     var ta = q('st-vars-' + slot);
     if (ta && ta.focus) ta.focus();
@@ -433,6 +433,7 @@
       if (r.status === 202) {
         setMsg('slot ' + slot + ' applying');
         _open[slot] = false; delete _drafts[slot];
+        dropDraftPlan();
         renderEditors();
       } else {
         setMsg((r.body && r.body.error) || ('apply failed (' + r.status + ')'), true);
@@ -441,13 +442,23 @@
     }).catch(function (e) { setMsg('apply failed: ' + e, true); });
   }
 
+  // The draft plan describes editors that just closed: drop it so the table
+  // falls back to the snapshot's plan, and re-plan only for editors still open.
+  function dropDraftPlan() {
+    _plan = null;
+    if (Object.keys(_open).some(function (n) { return _open[n]; })) schedulePlan();
+  }
+
   function restoreSlots(list) {
     var slots = list.filter(function (n) { return !isNaN(n); });
     if (!slots.length) return;
     setMsg('restoring slot ' + slots.join(', '));
     postJson('/api/streams/restore', { slots: slots }).then(function (r) {
       if (r.status >= 400) setMsg((r.body && r.body.error) || 'restore failed', true);
-      else slots.forEach(function (n) { _open[n] = false; delete _drafts[n]; });
+      else {
+        slots.forEach(function (n) { _open[n] = false; delete _drafts[n]; });
+        dropDraftPlan();
+      }
       renderEditors();
       refresh();
     }).catch(function (e) { setMsg('restore failed: ' + e, true); });
@@ -464,7 +475,7 @@
     }).then(function (r) {
       if (r.status < 300) { setMsg('saved preset ' + name); loadPresets(); }
       else setMsg((r.body && r.body.error) || 'save failed', true);
-    });
+    }).catch(function (e) { setMsg('save failed: ' + e, true); });
   }
 
   function chooseFromPreset(slot, name) {
@@ -499,10 +510,11 @@
     postJson('/api/streams/log/start', body).then(function (r) {
       if (r.status >= 400) setMsg((r.body && r.body.error) || 'log start failed', true);
       refresh();
-    });
+    }).catch(function (e) { setMsg('log start failed: ' + e, true); });
   }
   function stopLog() {
-    postJson('/api/streams/log/stop', {}).then(function () { refresh(); });
+    postJson('/api/streams/log/stop', {}).then(function () { refresh(); })
+      .catch(function (e) { setMsg('log stop failed: ' + e, true); });
   }
   function toggleForward() {
     var on = _snap && _snap.forward && _snap.forward.active;
@@ -513,7 +525,7 @@
     postJson('/api/streams/forward', body).then(function (r) {
       if (r.status >= 400) setMsg((r.body && r.body.error) || 'forward failed', true);
       refresh();
-    });
+    }).catch(function (e) { setMsg('forward failed: ' + e, true); });
   }
 
   // ---- events (delegated) -----------------------------------------------------------------
@@ -656,7 +668,7 @@
   window.__PLUGIN_DESTROY__ = function () {
     teardown();
     _snap = null; _presets = []; _presetBody = {}; _drafts = {}; _open = {};
-    _plan = null; _msg = ''; _acItems = [];
+    _plan = null; _msg = ''; _acItems = {};
   };
 
   // Test hooks (pure helpers and state accessors; the fake-DOM harness uses these).
@@ -666,7 +678,8 @@
     setSnap: function (s) { _snap = s; }, getSnap: function () { return _snap; },
     setDraft: function (n, d) { _drafts[n] = d; }, setOpen: function (n, v) { _open[n] = v; },
     renderTable: renderTable, renderTabs: renderTabs, renderHead: renderHead,
-    renderEditors: renderEditors, renderLogFwd: renderLogFwd, planLine: planLine
+    renderEditors: renderEditors, renderLogFwd: renderLogFwd, planLine: planLine,
+    planOf: planOf
   };
 
   window.__registerPlugin__('Streams', window.__PLUGIN_INIT__, window.__PLUGIN_DESTROY__);

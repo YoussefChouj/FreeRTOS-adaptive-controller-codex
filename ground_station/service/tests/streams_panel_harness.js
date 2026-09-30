@@ -73,6 +73,7 @@ function load(routes) {
       let hit = routes[key];
       if (typeof hit === 'function') hit = hit(url, body);
       hit = hit || { status: 404, body: {} };
+      if (hit.reject) return Promise.reject(new Error(hit.reject));
       return Promise.resolve({ ok: hit.status < 400, status: hit.status,
         json: () => Promise.resolve(hit.body) });
     },
@@ -222,6 +223,53 @@ async function check(name, fn) {
     assert.strictEqual(ap.length, 1);
     same(ap[0].body.slots[0].vars, ['alpha', 'beta', 'gamma', 'delta']);
     assert.strictEqual(ap[0].body.slots[0].slot, 1);
+  });
+
+  await check('after apply the table drops the draft plan for the snapshot plan', async () => {
+    const h = load(routes(snap()));
+    h.render(); await h.settle();
+    h.click({ 'data-act': 'edit', 'data-slot': '1' });
+    h.fire('input', { 'data-act': 'vars', 'data-slot': '1' }, { value: 'alpha' });
+    await h.flush();
+    assert.strictEqual(h.T.planOf(1).payload, 30, 'draft plan while editing');
+    h.click({ 'data-act': 'apply', 'data-slot': '1' });
+    await h.settle();
+    assert.strictEqual(h.T.planOf(1).payload, 100, 'snapshot plan after apply');
+  });
+
+  await check('suggestions stay with the slot that asked for them', async () => {
+    const h = load(routes(snap()));
+    h.render(); await h.settle();
+    h.click({ 'data-act': 'edit', 'data-slot': '1' });
+    h.click({ 'data-act': 'edit', 'data-slot': '2' });
+    h.fire('input', { 'data-act': 'vars', 'data-slot': '1' }, { value: 'P.' });
+    await h.flush();
+    h.fire('input', { 'data-act': 'vars', 'data-slot': '2' }, { value: 'gy' });
+    await h.flush();
+    h.click({ 'data-act': 'ac', 'data-slot': '1', 'data-i': '0' });
+    assert.strictEqual(h.T.draftAssignments().filter((a) => a.slot === 1)[0].vars.join(' '), 'P.child');
+  });
+
+  await check('network failure on log/forward/preset shows a message, no unhandled rejection', async () => {
+    const down = { reject: 'net down' };
+    const h = load(routes(snap(), { 'POST /api/streams/log/start': down, 'POST /api/streams/log/stop': down,
+      'POST /api/streams/forward': down }));
+    let unhandled = 0;
+    const onU = () => { unhandled += 1; };
+    process.on('unhandledRejection', onU);
+    h.render(); await h.settle();
+    h.click({}, { id: 'st-log-start' });
+    await h.settle();
+    assert.ok(/log start failed: .*net down/.test(h.doc.getElementById('st-msg').textContent));
+    h.click({}, { id: 'st-log-stop' });
+    await h.settle();
+    assert.ok(/log stop failed/.test(h.doc.getElementById('st-msg').textContent));
+    h.click({}, { id: 'st-fwd-btn' });
+    await h.settle();
+    assert.ok(/forward failed/.test(h.doc.getElementById('st-msg').textContent));
+    await new Promise((r) => setImmediate(r));
+    process.off('unhandledRejection', onU);
+    assert.strictEqual(unhandled, 0);
   });
 
   await check('apply refusal (409) surfaces the service message', async () => {
