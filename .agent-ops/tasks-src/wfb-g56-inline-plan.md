@@ -54,7 +54,61 @@ Brief: `.agent-ops/tasks-src/wfb-g56.md` (allow-list, tests, acceptance command)
 - Tests per brief list, plus mutants: drop-needed-before-optional, divider round vs int, alignment gap,
   half-open segment end.
 
+## Facts verified 2026-10-01 (session 2) -- supersede the UNVERIFIED notes above
+- Units: `locxPID/locyPID .FB/.Des` are cm, `Z_posPID` is m: TASK/StabilizerTask.c:242-244 (workflow-b)
+  `in.x_m = Ctrler.locxPID.FB * 0.01f; /* TWC / loc loops are cm, the glue is m */`, `in.z_m = Z_posPID.FB; /* already m */`.
+- Attitude: `imu_data.rol/pit/yaw` (manifests.yaml:66-68). Airborne: `flight_phase` (1 B; airborne =
+  FLYING|LANDING, StabilizerTask.c:252). Motors `mymotor.motor1..4` are `short` (2 B), CCR 2000..4000 (bench SAT 2005/3995).
+- ELF check works and is fast (1.3 s): `SymbolResolver("OBJ/JX_FLY.axf").resolve(sym).size` (livewatch/symbols.py;
+  test_manifest.py:20 uses the same ELF path `parents[3]/"OBJ"/"JX_FLY.axf"`). All resolve: real_voltage 4,
+  flight_phase 1, DroneStatus.ARM_Status 1, .FlyMode 1, imu_data.rol 4, mymotor.motor1 2, Ctrler.locxPID.FB 4,
+  mrac_state.roll.Theta[5] 4, .u_def 4, mrac_state.z_rate.e_dot 4, xTickCount 4.
+  Tests: (a) every symbol resolves in the ELF with size <= 4 (strong); (b) brief's catalog test = catalog root
+  prefix match, with a named `DWARF_ONLY = {"real_voltage", "flight_phase"}` exception (not in the on-board table).
+- MRAC: `MRAC_N_FEATURES 6` (API/mrac_variant.h:12) = MAX_NUM_BASIS (mrac.h:47); members e, Theta[6], Whatf[6],
+  u_nom, u_ad, u_def, e_dot (mrac.h:233-255). Axes pitch, roll, yaw, z_rate. Manifests list elements one by one
+  (`mrac_state.roll.Theta[0]`, manifests.yaml:135), so every CAMPAIGN_SET entry is ONE scalar = one range.
+- Divider (two different 200/100 figures, both real): the live host sends `divider = int(100 / hz)`
+  (capture_preset.py:329; stream.py:97 `SEND_TASK_HZ = 100`, the real Send_Task cadence), but the firmware
+  budget guard prices a slot at `frame * 200 / divider` (API/subscribe.c:592, subscribe.h:271
+  `SUBSCRIBE_SEND_TASK_HZ 200U`). Plan with both: `divider = max(1, int(SEND_TASK_HZ / rate_hz))`,
+  `guard_bps = (FRAME_OVERHEAD + 4*n) * 200 / divider`, budget `87552 * 0.8 = 70041.6` (brief; stricter than
+  manifest.py's 92160*80 %). Slot `hz` = `SEND_TASK_HZ / divider` (what the drone emits); 200 and 100 both give divider 1.
+- Limits: import `MAX_SLOTS, MAX_STREAM_RANGES, STREAM_MAX_BYTES (2032 = payload, subscribe.h:213), FRAME_OVERHEAD,
+  SEND_TASK_HZ` from livewatch/stream.py and `DEFAULT_VALUE_BYTES, REQUIRED_SYNC_VARS` from manifest.py; no copies.
+  `VARS_PER_SLOT = min(MAX_STREAM_RANGES, STREAM_MAX_BYTES // DEFAULT_VALUE_BYTES)` (= 62; both limits in one line).
+- Expected plan (arithmetic, assert in tests): needed 26 = REQUIRED_SYNC_VARS 4 + flight_phase + position 6 +
+  attitude 3 + rate FB/Des 8 + motors 4; optional 68 = 4 axes x 17. At 50 Hz (div 2): 62+32 vars,
+  (260+140)*100 = 40000 B/s, nothing dropped. At 100 Hz (div 1): keep 55 optional (62+19 vars, 52000+17600 =
+  69600 B/s), drop the last 13; 56 would be 70400 > 70041.6.
+- CSV naming: stream_log `_slot_path(out, slot)` = `<stem>.slot<N>.csv` (stream_log.py:595); header row
+  `["t_src_ms","t_host_s","seq"] + columns_for(schema)` (:422). Manifest `csv` = that file name, relative.
+- bench import is 6.2 s cold (plant+scen). Adapter imports bench lazily through one cached `_bench()` helper so
+  importing the adapter stays cheap; the other-cwd test runs a subprocess with PYTHONPATH=repo root.
+- No module in ground_station/analysis imports livewatch yet; analysis -> livewatch (reader of what capture
+  writes) is the right direction.
+
+## Final design decisions (session 2)
+- campaign_capture.py owns every symbol name: `Axis(NamedTuple): feedback, reference, to_m`;
+  `POSITION_AXES` (x, y cm -> 0.01; z m -> 1.0, citing StabilizerTask.c:242-244), `MOTORS`, `ATTITUDE`,
+  `RATE_LOOPS`, `STATUS = REQUIRED_SYNC_VARS + ("flight_phase",)`, `MRAC_SHADOW` (priority order: u_ad, u_nom,
+  u_def per axis, then e, e_dot, then Theta, then Whatf; dropping takes from the end). The adapter imports
+  POSITION_AXES + MOTORS, so it contains no symbol or controller names and cannot disagree with the capture.
+- `slots_for(rate_hz, *, budget_bps=PLANNING_BUDGET_BPS) -> tuple[list[dict], list[str]]`: slots
+  `{"slot", "hz", "vars"}`; CaptureError if rate <= 0 or needed alone does not fit (<= 4 slots and budget).
+- `CaptureError(RuntimeError)` for probe/budget; `ManifestError(ValueError)` for bad manifests. Validation shared
+  by write and read: schema, pack_id, rate_hz > 0 finite, 1..4 slots with unique slot ids 0..3, hz > 0, csv a plain
+  file name, vars non-empty + unique across slots, dropped list[str], segments unique names, finite t0 < t1,
+  non-overlapping, written sorted by t0.
+- Adapter: base timeline = slot holding `POSITION_AXES[0].feedback`; other columns by nearest `t_host_s` within
+  0.1 s else NaN (searchsorted); segment [t0, t1). diverged = n < 10 or any non-finite tracking error (a telemetry
+  gap counts: never score a flight the tuner could not see). rmse_xy/rmse_z computed as bench even when diverged
+  (NaN if no samples). sat over finite motor samples, NaN if none (then J is NaN -> tuner's Result.usable False).
+  `score([])` -> ValueError.
+
 ## NEXT
-1. Verify locxPID.FB unit and imu attitude member names (2 greps).
-2. Write the 4 files + fixture script inside the test (no committed fixture dir unless needed).
-3. Acceptance, mutants, commit on workflow-b by pathspec, push, ledger, DONE record here, state, clean vps.
+1. Write the 4 files from "Final design decisions" (no more reading needed), fixture built inside the tests
+   via write_manifest + csv (no committed fixture dir).
+2. Acceptance cmd from the brief with `-p no:cacheprovider`; mutants: optional-before-needed, divider round vs
+   int, alignment gap tolerance, half-open segment end, guard 200 vs 100.
+3. Commit on workflow-b by pathspec, push, ledger line, DONE record here, state, `vps-worker.sh clean wfb-g56`.
