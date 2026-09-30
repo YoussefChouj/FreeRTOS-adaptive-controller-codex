@@ -91,6 +91,13 @@ def test_upsert_none_started_at_replaces_not_duplicates(tmp_path):
     assert rows[0]["notes"] == "v2"
 
 
+def test_motor_sections_none_written_empty(tmp_path):
+    p = tmp_path / "ledger.csv"
+    L.upsert(_metrics(motors={"airborne": None, "steady": None}), [], p)
+    row = L.read_rows(p)[0]
+    assert row["clamp_hi_frac"] == "" and row["yaw_pair_pct"] == ""
+
+
 def test_upsert_sort_started_at_empty_last_then_flight(tmp_path):
     p = tmp_path / "ledger.csv"
     L.upsert(_metrics(name="f_b", started_at=""), [], p)

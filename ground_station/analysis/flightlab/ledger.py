@@ -79,8 +79,9 @@ def _row_from_metrics(metrics: dict, recs, analyzed_at: str) -> dict:
     for l in _loop_names():
         steady = (loops.get(l) or {}).get("steady") or {}
         row[_LOOP_COL_PREFIX + l] = steady.get("e_rms")
-    row["clamp_hi_frac"] = (metrics.get("motors") or {}).get("airborne", {}).get("clamp_hi_frac")
-    row["yaw_pair_pct"] = (metrics.get("motors") or {}).get("steady", {}).get("yaw_pair_pct")
+    motors = metrics.get("motors") or {}  # a plugin may report a section as None (e.g. no steady segment)
+    row["clamp_hi_frac"] = (motors.get("airborne") or {}).get("clamp_hi_frac")
+    row["yaw_pair_pct"] = (motors.get("steady") or {}).get("yaw_pair_pct")
     row["n_warn"] = sum(1 for r in recs if r.severity == "warn")
     row["n_critical"] = sum(1 for r in recs if r.severity == "critical")
     return row
