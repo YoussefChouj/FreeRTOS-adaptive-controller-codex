@@ -10,15 +10,26 @@
 #include <math.h>
 #include "imu_update.h"
 
+// Adaptive state lives in the CPU-only 64 KB CCM (0x10000000); USER/JX_FLY.sct places section
+// MRAC_CCM there and __main still zeroes it. No DMA may read or write an object tagged MRAC_CCM.
+// CYCCNT is already running: RPM_DwtInit enables it at boot. Host builds have neither.
+#ifdef __CC_ARM
+    #define MRAC_CCM __attribute__((section("MRAC_CCM"), zero_init))
+    #define MRAC_CYC_NOW() (DWT->CYCCNT)
+#else
+    #define MRAC_CCM
+    #define MRAC_CYC_NOW() 0U
+#endif
+
 // Global instance of the MRAC runtime states
-MRAC_State_t mrac_state;
+MRAC_State_t mrac_state MRAC_CCM;
 MRAC_FeatureFlags_t mrac_flags = {0};
 
 // Global configurations for the 4 axes
-MRAC_AxisConfig_t mrac_config_pitch;
-MRAC_AxisConfig_t mrac_config_roll;
-MRAC_AxisConfig_t mrac_config_yaw;
-MRAC_AxisConfig_t mrac_config_z;
+MRAC_AxisConfig_t mrac_config_pitch MRAC_CCM;
+MRAC_AxisConfig_t mrac_config_roll MRAC_CCM;
+MRAC_AxisConfig_t mrac_config_yaw MRAC_CCM;
+MRAC_AxisConfig_t mrac_config_z MRAC_CCM;
 
 /* Simplex fallback. Defaults are inert: mode 0, variant 0, fade 1. */
 MRAC_Simplex_t mrac_simplex = {0, 0, 0, 0, 0, 0, {0, 0, 0, 0}, 0, 200, 40,
@@ -144,6 +155,7 @@ const MRAC_FeatureDesc_t mrac_feature_desc[MRAC_N_FEATURES] = {
     {4, "u_nom",     MRAC_BLK_STRUCT, MRAC_GRP_CTRL},
     {5, "xm",        MRAC_BLK_STRUCT, MRAC_GRP_REF}
 };
+const uint8_t mrac_n_features = MRAC_N_FEATURES;
 
 static void MRAC_GenStructured(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *phi)
 {
@@ -169,17 +181,19 @@ static void MRAC_GenStructured(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *p
 #endif
 }
 
-MRAC_Bus_t mrac_bus[AXES];
+MRAC_Bus_t mrac_bus[AXES] MRAC_CCM;
 
 const MRAC_BlockDesc_t mrac_block_table[] = {
     {MRAC_BLK_STRUCT, 0, MRAC_N_STRUCT, MRAC_GenStructured}
 };
 #define MRAC_N_BLOCKS ((int)(sizeof(mrac_block_table) / sizeof(mrac_block_table[0])))
 
-float mrac_g_gamma[AXES][MRAC_N_GROUPS];
-float mrac_g_sigma[AXES][MRAC_N_GROUPS];
-float mrac_g_phi[AXES][MRAC_N_GROUPS];
-float mrac_u_ff[AXES];
+float mrac_g_gamma[AXES][MRAC_N_GROUPS] MRAC_CCM;
+float mrac_g_sigma[AXES][MRAC_N_GROUPS] MRAC_CCM;
+float mrac_g_phi[AXES][MRAC_N_GROUPS] MRAC_CCM;
+float mrac_u_ff[AXES] MRAC_CCM;
+
+MRAC_Cyc_t mrac_cyc;
 
 static void MRAC_L2_Update(void)
 {
@@ -190,6 +204,25 @@ static float MRAC_L3_Feedforward(MRAC_Axis_e axis, const MRAC_Bus_t *bus)
     (void)axis;
     (void)bus;
     return 0.0f; // consumed from stage S4
+}
+
+// Closes the cycle record of one MRAC_UpdateAxis call. t0 = entry, t1..t2 = bus fill,
+// t2..t3 = block generators, t3..now = the rest. Unsigned deltas survive a CYCCNT wrap; a
+// SendProf_Init CYCCNT reset inside a call gives one huge max, clear mrac_cyc.max.
+static void MRAC_CycEnd(MRAC_Axis_e axis_id, uint32_t t0, uint32_t t1, uint32_t t2, uint32_t t3)
+{
+    uint32_t t4 = MRAC_CYC_NOW();
+    MRAC_CycSet_t *last = &mrac_cyc.last[axis_id];
+    MRAC_CycSet_t *max = &mrac_cyc.max[axis_id];
+
+    last->bus    = t2 - t1;
+    last->blocks = t3 - t2;
+    last->law    = t4 - t3;
+    last->total  = t4 - t0;
+    if (last->bus    > max->bus)    max->bus    = last->bus;
+    if (last->blocks > max->blocks) max->blocks = last->blocks;
+    if (last->law    > max->law)    max->law    = last->law;
+    if (last->total  > max->total)  max->total  = last->total;
 }
 
 // ------------------------------------------------------------------------------
@@ -206,7 +239,7 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
     float raw_xdot;
     float Phi_sq;
     float denom;
-    static float grad[MAX_NUM_BASIS];
+    static float grad[MAX_NUM_BASIS] MRAC_CCM;
     float y;
     float PBe;
     float sigma_e;
@@ -215,7 +248,9 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
     float raw_u_ad;
     int do_adaptation;
     int i;
+    uint32_t t0, t1, t2, t3;
 
+    t0 = MRAC_CYC_NOW();
     // 1. Update reference model dynamics (runtime-selectable via mrac_flags.ref_model_type)
     //    Adaptive-law gain: 1st-order/passthrough use the scalar heuristic P (ADR-0003);
     //    the 2nd-order case uses the FULL matrix-P state-space drive (ADR-0007, supersedes
@@ -265,6 +300,7 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
     // 3. Compute nominal control (done externally)
     
     // 4. Generate Basis/Regressor vector (Phi)
+    t1 = MRAC_CYC_NOW();
     mrac_bus[axis_id].x = state->x;
     mrac_bus[axis_id].xm = state->xm;
     mrac_bus[axis_id].xm_dot = state->xm_dot;
@@ -273,14 +309,16 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
     mrac_bus[axis_id].u_nom = state->u_nom;
     mrac_bus[axis_id].cross = cross_coupling;
     mrac_bus[axis_id].r = r;
+    t2 = MRAC_CYC_NOW();
 
     for (i = 0; i < MRAC_N_BLOCKS; i++) {
         mrac_block_table[i].generator(axis_id, &mrac_bus[axis_id], state->Phi + mrac_block_table[i].first);
     }
+    t3 = MRAC_CYC_NOW();
     mrac_u_ff[axis_id] = MRAC_L3_Feedforward(axis_id, &mrac_bus[axis_id]);
     
     // 5. Update adaptive weights using Lyapunov gradient descent
-    Phi_sq = MRAC_VectorNormSquare(state->Phi, MAX_NUM_BASIS);
+    Phi_sq = MRAC_VectorNormSquare(state->Phi, MRAC_N_FEATURES);
     denom = 1.0f + Phi_sq;
 
     // Proceed with adaptation only if error is outside deadzone
@@ -290,6 +328,7 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
     if (mrac_flags.hard_freeze_on && config->e_freeze > 0.0f && fabsf(state->e) > config->e_freeze) {
         // Freeze pauses adaptation/output only; Theta is intentionally preserved.
         state->u_ad = 0.0f;
+        MRAC_CycEnd(axis_id, t0, t1, t2, t3);
         return;
     }
 
@@ -334,7 +373,7 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
         sigma_eff = config->sigma + sigma_e;
         sigma_lf_active = mrac_flags.l1_filtering_on ? config->sigma_lf : 0.0f;
 
-        for (i = 0; i < MAX_NUM_BASIS; i++) {
+        for (i = 0; i < MRAC_N_FEATURES; i++) {
             grad[i] = (-s * state->Phi[i]) / denom;
         }
 
@@ -344,18 +383,18 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
          * projection must bound the combined gradient — otherwise a large
          * sigma_prior pushes Theta past What_limit (prior-D-fix). */
         if (sigma_prior != 0.0f) {
-            for (i = 0; i < MAX_NUM_BASIS; i++) {
+            for (i = 0; i < MRAC_N_FEATURES; i++) {
                 grad[i] -= sigma_prior * (state->Theta[i] - Theta_prior[axis_id][i]);
             }
         }
 #endif
 
         if (mrac_flags.projection_on) {
-            MRAC_ProjectGradient(grad, state->Theta, MAX_NUM_BASIS,
+            MRAC_ProjectGradient(grad, state->Theta, MRAC_N_FEATURES,
                                  config->What_limit, config->What_tol, config->What_lower_limit);
         }
 
-        for (i = 0; i < MAX_NUM_BASIS; i++) {
+        for (i = 0; i < MRAC_N_FEATURES; i++) {
 #if FIX_LEAKAGE_NORMALIZATION == 1
             y = config->gamma[i] * mrac_g_gamma[axis_id][mrac_feature_desc[i].group] * (grad[i]
                 - sigma_lf_active * (state->Theta[i] - state->Whatf[i])
@@ -394,7 +433,7 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
     
     // 6. Compute adaptive control component (u_ad = Theta^T * Phi)
     raw_u_ad = 0.0f;
-    for (i = 0; i < MAX_NUM_BASIS; i++) {
+    for (i = 0; i < MRAC_N_FEATURES; i++) {
         raw_u_ad += state->Theta[i] * (state->Phi[i] * mrac_g_phi[axis_id][mrac_feature_desc[i].group]);
     }
 
@@ -413,6 +452,7 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
             state->u_ad = -config->u_max;
         }
     }
+    MRAC_CycEnd(axis_id, t0, t1, t2, t3);
 }
 
 void MRAC_SimplexStep(void)
@@ -441,7 +481,7 @@ void MRAC_SimplexStep(void)
         }
         if (r == 0 && mrac_simplex.sat_ticks[a] > mrac_simplex.sat_ticks_max) r = 4;
         sum_w2 = 0.0f;
-        for (i = 0; i < MAX_NUM_BASIS; i++) sum_w2 += axes[a]->Theta[i] * axes[a]->Theta[i];
+        for (i = 0; i < MRAC_N_FEATURES; i++) sum_w2 += axes[a]->Theta[i] * axes[a]->Theta[i];
         if (sqrtf(sum_w2) > mrac_simplex.w_norm_max) r = 3;
     }
     if (fabsf(imu_data.pit) > mrac_simplex.pitch_max) r = 2;
@@ -647,11 +687,16 @@ void MRAC_Control(const CtrlerTypeDef* current_state)
     float p_rate, q_rate, r_rate;
     float cross_pitch, cross_roll;
     float r_pitch, r_roll, r_yaw, r_z;
+    uint32_t t_l2;
     
 
     /* Simplex fallback step — evaluate triggers and manage fade. */
     MRAC_SimplexStep();
+    t_l2 = MRAC_CYC_NOW();
     MRAC_L2_Update();
+    t_l2 = MRAC_CYC_NOW() - t_l2;
+    mrac_cyc.l2_last = t_l2;
+    if (t_l2 > mrac_cyc.l2_max) mrac_cyc.l2_max = t_l2;
     // Main execution cycle (Hooked into FreeRTOS / Tasks)
     
     // 1. Acquire current Gyro Rates (p, q, r) and Z-velocity from inner-loop cascade

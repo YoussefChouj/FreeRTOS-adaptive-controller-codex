@@ -627,8 +627,11 @@ void usart3_send(void)
   (void)Usart3_Stream_TxSend(str_USART, tx_len);
 }
 
-/* Max frame: 6-byte header + payload + 1 CRC; Frame B payload up to ~326 bytes @ MAX_NUM_BASIS=8 */
+/* Max frame: 6-byte header + payload + 1 CRC; Frame B is the largest, 305 bytes @ MRAC_TELEM_WINDOW=6 */
 UCHAR8 Buf_Telemetry_UART4[512] = {0};
+/* Frame B: 6 header + (4 * (MRAC_TELEM_WINDOW + 2) MRAC + 36 PID floats) * 4 + 26 tail + 1 CRC8. */
+typedef char FrameB_Fits_Buf[ (6 + (4 * (MRAC_TELEM_WINDOW + 2) + 36) * 4 + 26 + 1 <= sizeof(Buf_Telemetry_UART4)) ? 1 : -1 ];
+typedef char FrameB_Float_Count_U8[ (4 * (MRAC_TELEM_WINDOW + 2) + 36 <= 255) ? 1 : -1 ];
 
 /* OF-calibration frame 0x05 sources: body-frame accel (bmi088_driver.c, mg) and the v3 OF
  * velocity bias (StabilizerTask.c). FP32 is float; the extern re-declares are type-compatible. */
@@ -811,7 +814,7 @@ void Send_Groundstation_Telemetry_UART4(void)
         Buf_Telemetry_UART4[2] = 0x04; // bench frame type
         Buf_Telemetry_UART4[3] = (uint8_t)(payload_len >> 8);
         Buf_Telemetry_UART4[4] = (uint8_t)(payload_len & 0xFFU);
-        Buf_Telemetry_UART4[5] = MAX_NUM_BASIS; // header parity with other frames
+        Buf_Telemetry_UART4[5] = MRAC_TELEM_WINDOW; // header parity with other frames
         len = 6;
 
         Buf_Telemetry_UART4[len++] = (uint8_t)(bench_sample_counter & 0xFFU);
@@ -861,7 +864,7 @@ void Send_Groundstation_Telemetry_UART4(void)
         Buf_Telemetry_UART4[2] = 0x03; // ID frame type
         Buf_Telemetry_UART4[3] = (uint8_t)(payload_len >> 8);
         Buf_Telemetry_UART4[4] = (uint8_t)(payload_len & 0xFFU);
-        Buf_Telemetry_UART4[5] = MAX_NUM_BASIS;
+        Buf_Telemetry_UART4[5] = MRAC_TELEM_WINDOW;
         len = 6;
 
         Buf_Telemetry_UART4[len++] = (uint8_t)(id_sample_counter & 0xFFU);
@@ -941,7 +944,7 @@ void Send_Groundstation_Telemetry_UART4(void)
         Buf_Telemetry_UART4[2] = 0x05; // OF calibration frame type
         Buf_Telemetry_UART4[3] = (uint8_t)(payload_len >> 8);
         Buf_Telemetry_UART4[4] = (uint8_t)(payload_len & 0xFFU);
-        Buf_Telemetry_UART4[5] = MAX_NUM_BASIS;
+        Buf_Telemetry_UART4[5] = MRAC_TELEM_WINDOW;
         len = 6;
 
         Buf_Telemetry_UART4[len++] = (uint8_t)(of_sample_counter & 0xFFU);
@@ -1035,7 +1038,7 @@ void Send_Groundstation_Telemetry_UART4(void)
             Buf_Telemetry_UART4[2] = 0x01; // ID
             Buf_Telemetry_UART4[3] = (uint8_t)(payload_len >> 8);
             Buf_Telemetry_UART4[4] = (uint8_t)(payload_len & 0xFFU);
-            Buf_Telemetry_UART4[5] = MAX_NUM_BASIS;
+            Buf_Telemetry_UART4[5] = MRAC_TELEM_WINDOW;
             len = 6;
         }
 
@@ -1095,7 +1098,7 @@ void Send_Groundstation_Telemetry_UART4(void)
             s_frame_c_buf[2] = 0x06;
             /* LEN (indices 3,4) is backfilled from the actual bytes written once the
              * payload is complete — see below — so it can never drift from the layout. */
-            s_frame_c_buf[5] = MAX_NUM_BASIS;
+            s_frame_c_buf[5] = MRAC_TELEM_WINDOW;
             c_len = 6;
 
             /* rol, pit, yaw (deg) */
@@ -1174,21 +1177,21 @@ void Send_Groundstation_Telemetry_UART4(void)
     else // 20Hz Frame B
     {
         // FRAME B �� same 16-bit payload LEN as Frame A
-        // MRAC: 4 axes * (MAX_NUM_BASIS + 2) floats
+        // MRAC: 4 axes * (MRAC_TELEM_WINDOW + 2) floats
         // PID: 12 loops * 3 floats = 36 floats
         // Tail: u8 + 3f + f + f + u8 + f(real_voltage) = 26 bytes
-        uint8_t total_floats = 4 * (MAX_NUM_BASIS + 2) + 36;
+        uint8_t total_floats = 4 * (MRAC_TELEM_WINDOW + 2) + 36;
         uint16_t payload_len = (uint16_t)((uint16_t)total_floats * 4U + 26U);
         Buf_Telemetry_UART4[2] = 0x02; // ID
         Buf_Telemetry_UART4[3] = (uint8_t)(payload_len >> 8);
         Buf_Telemetry_UART4[4] = (uint8_t)(payload_len & 0xFFU);
-        Buf_Telemetry_UART4[5] = MAX_NUM_BASIS;
+        Buf_Telemetry_UART4[5] = MRAC_TELEM_WINDOW;
         len = 6;
         
         // 4 Axes MRAC
         MRAC_AxisState_t* axes[4] = {&mrac_state.pitch, &mrac_state.roll, &mrac_state.yaw, &mrac_state.z_rate};
         for(int ax = 0; ax < 4; ax++) {
-            for(i = 0; i < MAX_NUM_BASIS; i++) {
+            for(i = 0; i < MRAC_TELEM_WINDOW; i++) {
                 Buf_Telemetry_UART4[len++] = BYTE0(axes[ax]->Theta[i]);
                 Buf_Telemetry_UART4[len++] = BYTE1(axes[ax]->Theta[i]);
                 Buf_Telemetry_UART4[len++] = BYTE2(axes[ax]->Theta[i]);

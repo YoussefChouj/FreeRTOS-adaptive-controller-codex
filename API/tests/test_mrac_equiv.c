@@ -5,6 +5,14 @@
 
 #include "mrac.h"
 
+/* Features the dumps cover. The base tree has no MRAC_N_FEATURES (its storage is exactly the
+   feature count); a wider MRAC_CAPACITY in the new tree only adds unused storage. */
+#ifdef MRAC_N_FEATURES
+    #define N_ACTIVE MRAC_N_FEATURES
+#else
+    #define N_ACTIVE MAX_NUM_BASIS
+#endif
+
 /* imu_data global definition for host test driver */
 _imu_st imu_data = {0.0f, 0.0f};
 
@@ -34,7 +42,7 @@ static inline void print_u32_hex(const char *tag, uint32_t u) {
 
 static void print_axis_config(const char *name, const MRAC_AxisConfig_t *cfg) {
     char tag[128];
-    for (int i = 0; i < MAX_NUM_BASIS; i++) {
+    for (int i = 0; i < N_ACTIVE; i++) {
         snprintf(tag, sizeof(tag), "cfg.%s.gamma.%d", name, i);
         print_float_hex(tag, cfg->gamma[i]);
     }
@@ -46,15 +54,15 @@ static void print_axis_config(const char *name, const MRAC_AxisConfig_t *cfg) {
     print_float_hex(tag, cfg->gam_f);
     snprintf(tag, sizeof(tag), "cfg.%s.omega_u", name);
     print_float_hex(tag, cfg->omega_u);
-    for (int i = 0; i < MAX_NUM_BASIS; i++) {
+    for (int i = 0; i < N_ACTIVE; i++) {
         snprintf(tag, sizeof(tag), "cfg.%s.What_limit.%d", name, i);
         print_float_hex(tag, cfg->What_limit[i]);
     }
-    for (int i = 0; i < MAX_NUM_BASIS; i++) {
+    for (int i = 0; i < N_ACTIVE; i++) {
         snprintf(tag, sizeof(tag), "cfg.%s.What_tol.%d", name, i);
         print_float_hex(tag, cfg->What_tol[i]);
     }
-    for (int i = 0; i < MAX_NUM_BASIS; i++) {
+    for (int i = 0; i < N_ACTIVE; i++) {
         snprintf(tag, sizeof(tag), "cfg.%s.What_lower_limit.%d", name, i);
         print_float_hex(tag, cfg->What_lower_limit[i]);
     }
@@ -141,15 +149,15 @@ static void print_axis_step(const char *scn_name, int step, const char *axis_nam
     print_float_hex(tag, st->xdot_f);
     snprintf(tag, sizeof(tag), "%s:%d:%s:u_ad", scn_name, step, axis_name);
     print_float_hex(tag, st->u_ad);
-    for (int i = 0; i < MAX_NUM_BASIS; i++) {
+    for (int i = 0; i < N_ACTIVE; i++) {
         snprintf(tag, sizeof(tag), "%s:%d:%s:Phi.%d", scn_name, step, axis_name, i);
         print_float_hex(tag, st->Phi[i]);
     }
-    for (int i = 0; i < MAX_NUM_BASIS; i++) {
+    for (int i = 0; i < N_ACTIVE; i++) {
         snprintf(tag, sizeof(tag), "%s:%d:%s:Theta.%d", scn_name, step, axis_name, i);
         print_float_hex(tag, st->Theta[i]);
     }
-    for (int i = 0; i < MAX_NUM_BASIS; i++) {
+    for (int i = 0; i < N_ACTIVE; i++) {
         snprintf(tag, sizeof(tag), "%s:%d:%s:Whatf.%d", scn_name, step, axis_name, i);
         print_float_hex(tag, st->Whatf[i]);
     }
@@ -276,7 +284,7 @@ int main(void) {
 #ifdef MRAC_ENABLE_SIGMA_PRIOR
         if (scn == 10) {
             sigma_prior = 0.5f;
-            for (int i = 0; i < MAX_NUM_BASIS; i++) {
+            for (int i = 0; i < N_ACTIVE; i++) {
                 Theta_prior[0][i] = 0.4f * mrac_config_pitch.What_limit[i] * ((i % 2 == 0) ? 0.8f : 0.4f);
                 Theta_prior[1][i] = 0.4f * mrac_config_roll.What_limit[i]  * ((i % 2 == 0) ? 0.8f : 0.4f);
                 Theta_prior[2][i] = 0.4f * mrac_config_yaw.What_limit[i]   * ((i % 2 == 0) ? 0.8f : 0.4f);
@@ -289,7 +297,7 @@ int main(void) {
 
         /* inside-band at start: a weight resting on a bound is not an entry */
         for (int a = 0; a < 4; a++)
-            for (int i = 0; i < MAX_NUM_BASIS; i++) prev_band[a][i] = 3;
+            for (int i = 0; i < N_ACTIVE; i++) prev_band[a][i] = 3;
         for (int step = 0; step < 4000; step++) {
             if (scn == 8 && step == 2000) {
                 MRAC_Reset();
@@ -382,7 +390,7 @@ int main(void) {
                 const MRAC_AxisConfig_t *cf[4] = { &mrac_config_pitch, &mrac_config_roll, &mrac_config_yaw, &mrac_config_z };
                 int up_entry = 0, lo_entry = 0;
                 for (int a = 0; a < 4; a++) {
-                    for (int i = 0; i < MAX_NUM_BASIS; i++) {
+                    for (int i = 0; i < N_ACTIVE; i++) {
                         int band = 0;
                         if (st[a]->Theta[i] >= cf[a]->What_limit[i] - cf[a]->What_tol[i]) band |= 1;
                         if (st[a]->Theta[i] <= cf[a]->What_lower_limit[i] + cf[a]->What_tol[i]) band |= 2;

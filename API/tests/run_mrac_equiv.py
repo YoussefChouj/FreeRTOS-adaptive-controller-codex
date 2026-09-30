@@ -236,6 +236,8 @@ def main():
     parser = argparse.ArgumentParser(description="Host bit-exact equivalence test for MRAC firmware")
     parser.add_argument("--base", default="4458435", help="Base git commit revision (default: 4458435)")
     parser.add_argument("--self-test", action="store_true", help="Run self-test with intentional perturbations")
+    parser.add_argument("--define", action="append", default=[], metavar="NAME=VAL",
+                        help="Extra -D for the new-tree builds only (the base tree predates e.g. MRAC_CAPACITY)")
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parent.parent.parent
@@ -256,11 +258,13 @@ def main():
         new_dir.mkdir()
         copy_working_tree(new_dir, repo_root)
 
+        new_defs = ["-D" + d for d in args.define]
+
         # 1. Plain build (without -DMRAC_ENABLE_SIGMA_PRIOR)
         ref_bin_plain = tmp_dir / "ref_plain"
         new_bin_plain = tmp_dir / "new_plain"
         build_binary(ref_dir, driver_path, stubs_dir, ref_bin_plain, extra_flags=[])
-        build_binary(new_dir, driver_path, stubs_dir, new_bin_plain, extra_flags=[])
+        build_binary(new_dir, driver_path, stubs_dir, new_bin_plain, extra_flags=new_defs)
 
         lines_plain, cov_plain, mismatch_plain = compare_streams(ref_bin_plain, new_bin_plain)
         if mismatch_plain is not None:
@@ -278,7 +282,7 @@ def main():
         ref_bin_sigma = tmp_dir / "ref_sigma"
         new_bin_sigma = tmp_dir / "new_sigma"
         build_binary(ref_dir, driver_path, stubs_dir, ref_bin_sigma, extra_flags=["-DMRAC_ENABLE_SIGMA_PRIOR"])
-        build_binary(new_dir, driver_path, stubs_dir, new_bin_sigma, extra_flags=["-DMRAC_ENABLE_SIGMA_PRIOR"])
+        build_binary(new_dir, driver_path, stubs_dir, new_bin_sigma, extra_flags=["-DMRAC_ENABLE_SIGMA_PRIOR"] + new_defs)
 
         lines_sigma, cov_sigma, mismatch_sigma = compare_streams(ref_bin_sigma, new_bin_sigma)
         if mismatch_sigma is not None:

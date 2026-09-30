@@ -49,6 +49,11 @@
 typedef char MRAC_Assert_Features[ (MRAC_N_FEATURES <= MRAC_CAPACITY) ? 1 : -1 ];
 typedef char MRAC_Assert_Basis[ (MAX_NUM_BASIS <= 16) ? 1 : -1 ];
 
+// Features carried on the wire (Frame B Theta/Phi and header byte [5]). Fixed at 6 so the
+// frame layout does not change with MRAC_CAPACITY; the ground station reads the same 6.
+#define MRAC_TELEM_WINDOW 6
+typedef char MRAC_Assert_Window[ (MRAC_TELEM_WINDOW <= MRAC_N_FEATURES) ? 1 : -1 ];
+
 // Core adaptive features
 #define ENABLE_MRAC_COMPUTATION        1    // Master switch for adaptive law turn off mrac computations
 #define ENABLE_MRAC_OUTPUT_INJECTION   1    // The "Shadow Mode" toggle. If 0, MRAC learns and computes u_ad, but we send 0.0f to the motor mixer.
@@ -129,6 +134,7 @@ typedef struct {
 } MRAC_FeatureDesc_t;
 
 extern const MRAC_FeatureDesc_t mrac_feature_desc[MRAC_N_FEATURES];
+extern const uint8_t mrac_n_features;   // MRAC_N_FEATURES, readable from the ELF by name
 
 typedef void (*MRAC_BlockGenerator_t)(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *phi);
 
@@ -143,6 +149,18 @@ extern float mrac_g_gamma[AXES][MRAC_N_GROUPS];
 extern float mrac_g_sigma[AXES][MRAC_N_GROUPS];
 extern float mrac_g_phi[AXES][MRAC_N_GROUPS];
 extern float mrac_u_ff[AXES];
+
+// DWT cycles per layer of MRAC_UpdateAxis, read from the ELF as mrac_cyc. last = latest tick,
+// max = worst since reset (write 0 to clear). blocks = generators; law = L3 feedforward,
+// adaptive law and output; total = whole call. L2 is timed once per tick, not per axis.
+// Host builds have no DWT and read 0.
+typedef struct { uint32_t bus, blocks, law, total; } MRAC_CycSet_t;
+typedef struct {
+    MRAC_CycSet_t last[AXES];
+    MRAC_CycSet_t max[AXES];
+    uint32_t l2_last, l2_max;
+} MRAC_Cyc_t;
+extern MRAC_Cyc_t mrac_cyc;
 
 // Configuration structure for an MRAC axis (constants and gains)
 typedef struct {
