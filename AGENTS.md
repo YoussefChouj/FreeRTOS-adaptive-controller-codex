@@ -105,8 +105,9 @@ Never, without a fresh operator instruction: spin motors or send idle / MOTOR_BE
 flash while armed, let a worker touch 8081 or the probe.
 
 The hardware rows (probe, 8081, reflash, arm) are usable only by the session that holds stream `main` and the `hw`
-lock (see Streams below). A harness other than Claude Code that takes a stream over holds the code, test, worker and
-commit rights of a supervisor, but the hardware rows only after the operator grants them in that chat.
+lock (see Streams below). Every grant is agent-agnostic (operator 2026-09-30): a supervisor session in any harness or
+account (Claude Code, Cursor, Codex, agy, ...) holds all rows above, hardware included, with no re-grant in its chat.
+Delegated work goes to outside workers only (agy, ark, oc), never to Claude Code subagents.
 
 ## Precedence and roles
 
