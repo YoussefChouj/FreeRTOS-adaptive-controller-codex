@@ -1465,6 +1465,30 @@
     }
   }
 
+  // First recorded value among the aliases; 0 is a real setpoint, so only
+  // undefined / null / '' fall through (a || chain would skip 0).
+  function firstRecorded(vals) {
+    for (var i = 0; i < vals.length; i++) {
+      var v = vals[i];
+      if (v !== undefined && v !== null && v !== '') return v;
+    }
+    return undefined;
+  }
+
+  // Desired setpoint of one session record: x/y from cm to m, z unchanged.
+  // null when x or y was not recorded.
+  function replayDesired(row) {
+    var pid = row.pid || {}, ctl = row.Ctrler || {}, c = row.c || {};
+    var dx = firstRecorded([pid.locx && pid.locx.Des, row["pid.locx.Des"],
+      ctl.locxPID && ctl.locxPID.Des, row["Ctrler.locxPID.Des"], c.desired_x]);
+    var dy = firstRecorded([pid.locy && pid.locy.Des, row["pid.locy.Des"],
+      ctl.locyPID && ctl.locyPID.Des, row["Ctrler.locyPID.Des"], c.desired_y]);
+    var dz = firstRecorded([pid.z_pos && pid.z_pos.Des, row["pid.z_pos.Des"],
+      ctl.Z_posPID && ctl.Z_posPID.Des, row["Ctrler.Z_posPID.Des"], c.desired_z]);
+    if (dx === undefined || dy === undefined) return null;
+    return { x: parseFloat(dx) / 100, y: parseFloat(dy) / 100, z: dz !== undefined ? parseFloat(dz) : 0 };
+  }
+
   function loadSessionData() {
     var statusEl = q('pp-session-status');
     if (!statusEl) return;
@@ -1517,22 +1541,10 @@
             t: t
           });
         }
-        var dx = (row.pid && row.pid.locx && row.pid.locx.Des) || row["pid.locx.Des"] || 
-                 (row.Ctrler && row.Ctrler.locxPID && row.Ctrler.locxPID.Des) || row["Ctrler.locxPID.Des"] ||
-                 (row.c && row.c.desired_x);
-        var dy = (row.pid && row.pid.locy && row.pid.locy.Des) || row["pid.locy.Des"] || 
-                 (row.Ctrler && row.Ctrler.locyPID && row.Ctrler.locyPID.Des) || row["Ctrler.locyPID.Des"] ||
-                 (row.c && row.c.desired_y);
-        var dz = (row.pid && row.pid.z_pos && row.pid.z_pos.Des) || row["pid.z_pos.Des"] || 
-                 (row.Ctrler && row.Ctrler.Z_posPID && row.Ctrler.Z_posPID.Des) || row["Ctrler.Z_posPID.Des"] ||
-                 (row.c && row.c.desired_z);
-        if (dx !== undefined && dy !== undefined) {
-          _desiredTrajectory.push({
-            x: parseFloat(dx) / 100,
-            y: parseFloat(dy) / 100,
-            z: dz !== undefined ? parseFloat(dz) : 0,
-            t: t
-          });
+        var des = replayDesired(row);
+        if (des) {
+          des.t = t;
+          _desiredTrajectory.push(des);
         }
       }
       _desiredPath = _desiredTrajectory;
@@ -3899,7 +3911,7 @@
     setMode: setMode, getMode: function () { return _mode; }, setFly: setFly,
     getFly: function () { return { thr: _fly.thr, metric: _fly.metric, trail: _fly.trail }; },
     getEvents: function () { return _events.slice(); }, getRunT0: function () { return _runT0; },
-    getTrajectory: function () { return _trajectory.slice(); },
+    getTrajectory: function () { return _trajectory.slice(); }, replayDesired: replayDesired,
     EVENT_KINDS: EVENT_KINDS, FLY_DEFAULT: FLY_DEFAULT,
     // Review mode
     rvConvert: rvConvert, rvToggle: rvToggle, rvSetByError: rvSetByError, rvRange: rvRange, rvIndexAt: rvIndexAt,

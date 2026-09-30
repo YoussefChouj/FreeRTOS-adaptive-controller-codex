@@ -872,6 +872,26 @@ function runChecks() {
     env.destroy();
   }
 
+  // Session replay: a desired setpoint of 0 is real, not missing.
+  {
+    console.log('\n[CHECK: session replay keeps desired x/y/z = 0]');
+    const env = loadPanel();
+    const T = env.sandbox.__pathPanelTest;
+    const plain = (o) => JSON.parse(JSON.stringify(o));
+    // 0 in the first alias must win over a non-zero later alias.
+    assert.deepStrictEqual(plain(T.replayDesired({ pid: { locx: { Des: 0 }, locy: { Des: 0 }, z_pos: { Des: 0 } },
+      'Ctrler.locxPID.Des': 250, 'Ctrler.locyPID.Des': 300, 'Ctrler.Z_posPID.Des': 1.5 })),
+      { x: 0, y: 0, z: 0 }, 'desired 0 must not fall through to a later alias');
+    // Flat CSV keys, string cells: '0' kept, '' skipped to the next alias.
+    assert.deepStrictEqual(plain(T.replayDesired({ 'pid.locx.Des': '0', 'pid.locy.Des': '',
+      'Ctrler.locyPID.Des': '150' })), { x: 0, y: 1.5, z: 0 }, 'flat keys: "0" kept, "" skipped');
+    // x or y absent / null -> no desired point (no NaN pushed).
+    assert.strictEqual(T.replayDesired({ 'pid.locx.Des': 0 }), null, 'missing y -> null');
+    assert.strictEqual(T.replayDesired({ 'pid.locx.Des': 0, 'pid.locy.Des': null }), null, 'null y -> null');
+    console.log('  PASS: replay desired 0 kept; "" / null treated as missing');
+    env.destroy();
+  }
+
   console.log('\nALL CHECKS PASSED SUCCESSFULLY.');
 }
 
