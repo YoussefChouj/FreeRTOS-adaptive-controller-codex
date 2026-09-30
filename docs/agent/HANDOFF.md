@@ -6,9 +6,9 @@ History is in `docs/agent/ledger/` (grep it, never read it whole).
 This is the page of stream `main` (main tree: Keil build, flash, probe, 8081, merges). Other streams have their own
 page in `.worktrees/<stream>/docs/agent/streams/<stream>.md`. Start every session with
 `python -m ground_station.agent_handoff start [stream] --as <harness>`; see all streams with `... board`.
-Session a8a271e7 (MRAC) is live again (2026-09-30 19:40): S3 (RBF/SINDy/hybrid variants) runs as VPS worker `s3`, brief
-0329eb6. S3+ lands on branch `mrac/next`, NOT on main, until the demo image is flashed and flown; main's `API/mrac*` stays
-at S2b. `wfb` has a live session: leave it.
+Session a8a271e7 (MRAC), 2026-09-30 20:25: S3 (RBF/SINDy/hybrid variants 1..4, default bit-exact) is reviewed and pushed
+as 5432f04 on branch `mrac/next`; S4 (L2 gate, L3 feedforward) runs as VPS worker `s4`, brief d348deb. S3+ stays OFF main
+until the demo image is flashed and flown; main's `API/mrac*` stays at S2b. `wfb` has a live session: leave it.
 
 ## Goal now
 LAB DEMO (operator priority, 2026-09-30): PID vs PID+MRAC augmentation on (a) trajectory tracking (circle/figure8)
