@@ -9,17 +9,18 @@ static void none_reset(void) { }
 static float none_correction(uint8_t axis) { (void)axis; return 0.0f; }
 
 /* MRAC_Control() still runs every cycle in Compute_Motor (it learns in shadow mode too);
- * this entry only decides whether its u_ad reaches the mixer. */
+ * this entry only decides whether its u_ad reaches the mixer. MRAC_GetOutput returns u_ad unchanged
+ * in 2-layer builds and adds the L3 feed-forward plus the u_max clamp in 3-layer builds (S4). */
 static float mrac_correction(uint8_t axis)
 {
 #if ENABLE_MRAC_OUTPUT_INJECTION == 1
     float u;
     if (!mrac_flags.output_injection_on) return 0.0f;
     switch (axis) {
-    case CTRL_AXIS_PITCH: u = mrac_state.pitch.u_ad  * mrac_config_pitch.mrac_to_mixer; break;
-    case CTRL_AXIS_ROLL:  u = mrac_state.roll.u_ad   * mrac_config_roll.mrac_to_mixer;  break;
-    case CTRL_AXIS_YAW:   u = mrac_state.yaw.u_ad    * mrac_config_yaw.mrac_to_mixer;   break;
-    case CTRL_AXIS_Z:     u = mrac_state.z_rate.u_ad * mrac_config_z.mrac_to_mixer;     break;
+    case CTRL_AXIS_PITCH: u = MRAC_GetOutput(MRAC_AXIS_PITCH) * mrac_config_pitch.mrac_to_mixer; break;
+    case CTRL_AXIS_ROLL:  u = MRAC_GetOutput(MRAC_AXIS_ROLL)  * mrac_config_roll.mrac_to_mixer;  break;
+    case CTRL_AXIS_YAW:   u = MRAC_GetOutput(MRAC_AXIS_YAW)   * mrac_config_yaw.mrac_to_mixer;   break;
+    case CTRL_AXIS_Z:     u = MRAC_GetOutput(MRAC_AXIS_Z)     * mrac_config_z.mrac_to_mixer;     break;
     default:              return 0.0f;
     }
     return u * mrac_simplex.fade;
@@ -46,6 +47,9 @@ void Controller_Init(void)
 void Controller_CheckSwitch(uint8_t armed)
 {
     uint8_t req = g_ctrl_select_req;
+#if MRAC_L2_MODE != 0 || MRAC_L3_MODE != 0
+    MRAC_LayerSelectStep(armed);                    /* same latch: layer changes apply only when disarmed */
+#endif
     if (req == g_ctrl_select || armed) return;      /* armed: request stays pending until disarm */
     if (req >= CTRL_MAX || !controllers[req].available) {
         g_ctrl_select_req = g_ctrl_select;          /* refuse, visibly */

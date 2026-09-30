@@ -421,8 +421,9 @@ extern MRAC_LayerSel_t mrac_layer_sel;
 extern MRAC_LayerSel_t mrac_layer_sel_req;
 
 void MRAC_LayerSelectStep(uint8_t armed);
-float MRAC_GetOutput(MRAC_Axis_e axis);
 #endif
+/* Declared in every build: controller.c calls it, and an implicit declaration would return int. */
+float MRAC_GetOutput(MRAC_Axis_e axis);
 
 // Initialize MRAC states, base configurations, and zero the adaptive weights
 void MRAC_Init(void);
