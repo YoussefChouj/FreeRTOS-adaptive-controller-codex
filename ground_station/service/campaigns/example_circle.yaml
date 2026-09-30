@@ -1,0 +1,78 @@
+# Unique campaign identifier matching [a-z0-9_-]{1,40}
+campaign: circle_pid_01
+# Non-empty human-readable objective string
+objective: "reduce circle tracking error"
+# Controller descriptor name under ground_station/analysis/controllers/
+controller: pid
+# Non-empty list of unique battery pack identifiers
+packs:
+  # First battery pack identifier
+  - P4000-1
+  # Second battery pack identifier
+  - P4000-2
+# Maximum total flight budget for this campaign (int >= 1)
+max_flights: 12
+# Parameter bounds and per-flight step limits for controller gains
+envelope:
+  # Gain limits for locxPID.Kp
+  locxPID.Kp:
+    # Minimum allowable gain value
+    min: 0.3
+    # Maximum allowable gain value
+    max: 1.2
+    # Maximum gain change per flight step
+    max_step: 0.1
+# Ordered queue of flight trajectory experiments (>= 1 item)
+experiments:
+  # First experiment: circular trajectory
+  - name: circle_r05
+    # Trajectory shape key from trajectory_pipeline.SHAPES
+    shape: circle
+    # Shape-specific geometric parameters mapping
+    params:
+      # Radius of the circle in metres
+      radius_m: 0.5
+    # Kinematic flight profile constraints
+    profile:
+      # Target cruise velocity in m/s (0 < v <= WFB_TRAJ_V_MAX)
+      v_cruise_mps: 0.3
+      # Maximum acceleration limit in m/s^2 (> 0)
+      a_max_mps2: 0.5
+      # Arc-length resampling resolution in metres (> 0)
+      ds_m: 0.05
+      # Target hover altitude in metres [WFB_HOVER_Z_MIN, WFB_HOVER_Z_MAX]
+      hover_z_m: 0.8
+      # Commanded yaw orientation in degrees [-180, 180]
+      yaw_deg: 0.0
+    # Telemetry capture preset name
+    capture: campaign
+    # Repetition count for this experiment (int >= 1)
+    repeats: 2
+  # Second experiment: figure-8 trajectory
+  - name: figure8_w10_h05
+    # Trajectory shape key from trajectory_pipeline.SHAPES
+    shape: figure8
+    # Shape-specific geometric parameters mapping
+    params:
+      # Figure-8 width span in metres
+      width_m: 1.0
+      # Figure-8 height span in metres
+      height_m: 0.5
+    # Kinematic flight profile constraints
+    profile:
+      # Target cruise velocity in m/s (0 < v <= WFB_TRAJ_V_MAX)
+      v_cruise_mps: 0.3
+      # Maximum acceleration limit in m/s^2 (> 0)
+      a_max_mps2: 0.5
+      # Arc-length resampling resolution in metres (> 0)
+      ds_m: 0.05
+      # Target hover altitude in metres [WFB_HOVER_Z_MIN, WFB_HOVER_Z_MAX]
+      hover_z_m: 0.8
+      # Commanded yaw orientation in degrees [-180, 180]
+      yaw_deg: 0.0
+    # Telemetry capture preset name
+    capture: campaign
+    # Repetition count for this experiment (int >= 1)
+    repeats: 2
+# Optional overrides for AbortLimits fields
+abort: {}
