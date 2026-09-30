@@ -49,7 +49,8 @@ COMMIT checks, in this order (first failure sets `last_err`):
 1. CRC32 (IEEE 802.3, reflected poly 0xEDB88320, init 0xFFFFFFFF, final xor 0xFFFFFFFF) over the 20 x N
    bytes of the buffer as stored little-endian. Host equivalent: `zlib.crc32(struct.pack('<%df' % (5*N), ...))`.
 2. `t[0] == 0` and t strictly increasing.
-3. Every point inside the envelope: |x| <= 0.8 m, |y| <= 1.3 m, `WFB_TRAJ_Z_MIN` <= z <= 1.5 m.
+3. Every point inside the envelope: |x| <= 0.8 m, |y| <= 1.3 m, `WFB_TRAJ_Z_MIN` <= z <= 1.5 m, and
+   |yaw_deg| <= 180 (a generator wraps headings to +/-180 deg before upload).
 4. First and last point within `WFB_TRAJ_ENDPOINT_TOL` of the hover point (uses the current `hover_z`).
 5. Every segment speed <= `WFB_TRAJ_V_MAX`.
 
@@ -135,7 +136,21 @@ wfb_err_t wfb_traj_stop(wfb_traj_t *tr);
 wfb_err_t wfb_traj_clear(wfb_traj_t *tr);
 int       wfb_traj_sample(wfb_traj_t *tr, float t_s, wfb_traj_point_t *out); /* 1 = running, 0 = finished (out = last point, state DONE) */
 uint32_t  wfb_crc32(const uint8_t *data, uint32_t len);
+void      wfb_traj_default_limits(wfb_traj_limits_t *out);   /* the section 1 constants */
+#define WFB_TRAJ_MAX_POINTS 600u
 ```
+
+Defined behaviour (settled during the build, binding for the integration and for the host `validate`):
+- `commit` outside LOADING returns `WFB_ERR_STATE` and changes nothing. A `commit` that fails while LOADING
+  leaves the state EMPTY. Order inside `commit`: state, CRC_HI present, float count, `crc_lo` range, then
+  the five COMMIT checks of section 1.
+- `crc_hi` and `crc_lo` reject 65536, -1, non-integers and NaN with `WFB_ERR_RANGE`.
+- Every limit comparison is written in negated form (`!(v <= limit)`), so a NaN value or a NaN limit fails
+  the check instead of passing it.
+- `sample` in EMPTY, LOADING or READY returns 0 and does not write `*out`.
+- The yaw wrap in `sample` has no loop; it relies on check 3 keeping stored yaw inside +/-180 deg.
+- `begin` clears `cap` x 20 bytes (12 kB at 600 points); the integration calls it from the command handler,
+  not from the 200 Hz loop.
 
 ### `API/wfb_safety.h`
 
@@ -151,6 +166,7 @@ typedef struct { float low_v_t, tilt_t, airborne_t; uint8_t trip, action; } wfb_
 
 void         wfb_safety_init(wfb_safety_t *s);
 wfb_action_t wfb_safety_step(wfb_safety_t *s, const wfb_safety_limits_t *lim, const wfb_safety_in_t *in);
+void         wfb_safety_default_limits(wfb_safety_limits_t *out);   /* the section 1 constants */
 ```
 
 Rules. Trip -> action: TILT -> KILL; FENCE, CEILING -> LAND_IN_PLACE; HEARTBEAT, LOW_V, AIRBORNE_CAP ->
@@ -158,6 +174,8 @@ LAND_VIA_HOVER. The action is latched and only escalates (KILL > LAND_IN_PLACE >
 `wfb_safety_init`. `trip` keeps the first cause of the current action level. Nothing trips while `airborne == 0`.
 HEARTBEAT and AIRBORNE_CAP apply only while `gs_flight_active == 1` (an RC-only flight is never landed by them).
 TILT, FENCE, CEILING and LOW_V apply to every flight.
+Comparisons are in negated form, so a non-finite input trips its check. When several checks trip in the same
+step, `trip` is the first in this order: TILT, FENCE, CEILING, LOW_V, HEARTBEAT, AIRBORNE_CAP.
 
 ### `API/wfb_prim.h`
 
@@ -177,7 +195,11 @@ wfb_err_t wfb_prim_land(wfb_prim_t *p, const wfb_prim_in_t *in);      /* any air
 wfb_err_t wfb_prim_land_in_place(wfb_prim_t *p);           /* any airborne state -> DESCEND */
 void      wfb_prim_disarmed(wfb_prim_t *p);                /* -> IDLE */
 void      wfb_prim_step(wfb_prim_t *p, const wfb_prim_cfg_t *cfg, const wfb_prim_in_t *in, wfb_prim_out_t *out);
+void      wfb_prim_default_cfg(wfb_prim_cfg_t *out);       /* the section 1 constants, hover_z 0.5 m */
 ```
+
+A module may add private fields to its state struct (`wfb_prim_t` carries `uint8_t descend_frozen`). Signatures,
+enum values and the fields listed here do not change.
 
 Behaviour. CLIMB: setpoint (0, 0, hover_z); -> HOVER after the settle condition holds. RETURN: the XY setpoint
 starts at the current position and moves toward (0, 0) at `xy_rate_mps` (the firmware has no XY ramp,
@@ -186,6 +208,11 @@ condition met -> DESCEND if `land_after_return`, else HOVER. RETURN + SETTLE tog
 `return_timeout_s` -> DESCEND when `land_after_return`, else stay in SETTLE. DESCEND: `out->descend = 1`, XY
 setpoint frozen; the existing landing code (`StabilizerTask.c:1226-1242`, 694-735) does the rest. In TRAJ the
 module outputs nothing; the integration feeds `wfb_traj_sample` to the setpoints.
+
+Defined behaviour. `land` and `land_in_place` are idempotent: `return_t` restarts only when landing is newly
+added; from DESCEND both return `WFB_ERR_NONE`; `land` from IDLE returns `WFB_ERR_STATE`. A non-finite position
+estimate never becomes a setpoint. The integration passes a constant `dt_s` (a NaN `dt_s` would stall the
+settle and return timers) and converts the metre setpoints to cm for `TWC.target_x/y`.
 
 ## 4. Ground-station interfaces (Python)
 
@@ -196,9 +223,9 @@ every module is testable with `service/fake_drone.py`.
 | Module | Public interface |
 |---|---|
 | `platform/wfb_commands.py` | `encode(cmd, idx, value, txid) -> bytes`; `class WfbClient(send)`: `arm()`, `idle()`, `takeoff()`, `land()`, `heartbeat()`, `set_hover_z(z)`, `traj_begin(n)`, `traj_append(v)`, `traj_commit(crc)`, `traj_start()`, `traj_stop()`, `traj_clear()`, `kill()`; each returns `bool` (APPLIED) |
-| `service/trajectory_pipeline.py` | `TrajPoint(x, y, z, yaw_deg, t)`; `generate(shape, params, profile) -> list[TrajPoint]` (shape -> tilt rotation -> fixed arc-length resample -> timing profile); `validate(points, limits, hover_z) -> list[str]` (same five checks as COMMIT); `crc32(points) -> int` |
+| `service/trajectory_pipeline.py` | `TrajPoint(x, y, z, yaw_deg, t)`; `TrajLimits`; `Profile(v_cruise_mps, a_max_mps2, ds_m, hover_z_m, yaw_deg)`; `generate(shape, params, profile, limits) -> list[TrajPoint]` (shape -> tilt rotation -> fixed arc-length resample -> timing profile); `validate(points, limits, hover_z) -> list[str]` (the COMMIT checks on float32 values, tags COUNT, RANGE, TIME, BOUNDS, ENDPOINT, SPEED, every problem listed); `crc32(points) -> int` |
 | `platform/trajectory_upload.py` | `upload(points, client, attempts=3) -> UploadResult(ok, attempts, error)` |
-| `analysis/battery_model.py` | `PackRegistry.load(path)`; `predict_soc(pack_id, resting_v) -> float`; `next_flight_allowed(pack_id, resting_v, cooldown_s) -> (bool, reason)`; `sag_critical(pack_id, loaded_v_filtered) -> bool` |
+| `analysis/battery_model.py` | `PackRegistry.load(path)`; `predict_soc(pack_id, resting_v) -> float`; `record_flight(pack_id, soc_before, soc_after)`; `expected_drop(pack_id) -> float`; `next_flight_allowed(pack_id, resting_v, cooldown_s) -> (bool, reason)` (rest time met and predicted SoC minus the expected drop >= 30 %); `sag_critical(pack_id, loaded_v_filtered) -> bool`; packs in `analysis/packs.yaml` |
 | `livewatch/campaign_capture.py` | `CAMPAIGN_SET` (locked variable list, needed + optional); `probe_max_rate(stream) -> float` (highest rate with zero loss); `write_manifest(session_dir, ...)` |
 | `analysis/workflow_b_adapter.py` | `flight_rows(session_dir) -> list[dict]` (keys as `bench.run_rows`: at least `rmse`, `sat`); `score(rows) -> float` = `bench.objective(rows)` by import (`sys.path` insert of `sim/bench`); never a copy of the formula |
 | `analysis/controller_descriptor.py` | `load(path) -> Descriptor(name, knobs, shadow_outputs)`; knob = `{symbol, cmd_id, idx, default, lo, hi, scale}`; files in `ground_station/analysis/controllers/<name>.yaml` |
