@@ -99,10 +99,14 @@ Anything not listed here is NOT authorized. Grants expire as stated. Workers hol
 | Commit and push at every verified task boundary, no asking | any agent | repo `origin` | operator 2026-09-23 | standing |
 | EKF in the control path, bias default fixed-at-boot | supervisor | firmware | operator 2026-09-26 | standing |
 | Arm, idle and fly | agent | ONLY inside an operator-opened battery session: `allow_agent_arm` on, operator said "go" for this battery, RC transmitter on and in reach (ch10 = hard kill) | operator 2026-09-29, workflow B | ends at 30% battery or any abort; next battery needs a new "go" |
-| Claude Code subagents (Sonnet 5.5) | supervisor | workflow-B build only | operator 2026-09-30 | ends with that build |
+| Claude Code subagents (Agent tool) | nobody | REVOKED: outside workers only (agy, ark, oc) | operator 2026-09-30 14:20 | until the operator re-grants |
 
 Never, without a fresh operator instruction: spin motors or send idle / MOTOR_BENCH, arm outside the session above,
 flash while armed, let a worker touch 8081 or the probe.
+
+The hardware rows (probe, 8081, reflash, arm) are usable only by the session that holds stream `main` and the `hw`
+lock (see Streams below). A harness other than Claude Code that takes a stream over holds the code, test, worker and
+commit rights of a supervisor, but the hardware rows only after the operator grants them in that chat.
 
 ## Precedence and roles
 
@@ -110,20 +114,43 @@ flash while armed, let a worker touch 8081 or the probe.
 5. Harness-private memory (for example `~/.claude/.../memory`) is a convenience copy and never widens a grant.
 If two rules conflict, the stricter one wins until the operator says otherwise.
 
-- **supervisor**: the main session that verifies and integrates. Holds the grants above.
+- **supervisor**: a session the operator started on a stream, in any harness or account. It verifies and integrates
+  that stream. The role follows how the session was started, not which tool runs it.
 - **worker**: a delegated agent. Edits only its named checkout, never flashes, never contacts 8081 or the probe.
 - A harness without the dashboard MCP tools uses read-only `GET http://127.0.0.1:8081/api/routes` (bypass any proxy) and
   leaves live POSTs to the supervisor.
 
 ## Session handoff
 
-Sessions end abruptly (plan limits), and an agent at its limit cannot write. So:
-- At every task boundary: commit, then update `docs/agent/HANDOFF.md` (goal, next 3 actions, blockers, do-nots),
-  then run `python -m ground_station.agent_handoff refresh` (rewrites the mechanical block: branch, HEAD, dirty paths, 8081).
-- To continue in another harness: `python -m ground_station.agent_handoff prompt --for codex|agy|opencode|generic`
-  and paste the output (about 6k tokens). It declares the role and inlines AGENTS.md, HANDOFF.md and `rules.md`.
-- Durable lessons go to `docs/agent/memory/` (git-tracked), not only to a harness-private memory. Environment facts go
-  to `env.md`, behavior rules to `rules.md`.
+Several sessions run in parallel, and any of them can end abruptly (plan limit). An agent at its limit cannot write.
+The tool is `python -m ground_station.agent_handoff` (`ah` below). It runs from any worktree, in any harness or account.
+
+**Streams.** A stream is one line of work: one tree, one branch, one page, one session at a time.
+- Stream `main` = the main tree. It is the only stream that builds with Keil, flashes, uses the probe or 8081, and
+  merges other branches. Its page is `docs/agent/HANDOFF.md`.
+- Every other stream lives in `.worktrees/<stream>` on branch `<stream>`. Its page is `docs/agent/streams/<stream>.md`,
+  committed on its own branch, so pages never conflict in a merge.
+- First command of every session: `ah start [stream] --as <harness>`. It claims the stream, refreshes the page and
+  prints the board and the page. If it answers STOP, a live session holds that tree: run `ah new <name>` for your own
+  worktree, or pick another stream. Use `--takeover` only when the operator says the other session is dead or at its limit.
+- Never edit another stream's tree or page. Read other streams with `ah board`.
+
+**Shared resources.** Take the lock before use, release it after: `ah lock hw` (probe, flash, 8081 writes, arming) and
+`ah lock keil` (UV4 build, writes `OBJ/`). Exit code 3 means another stream holds it: do other work, do not poll.
+Locks expire (default 30 min). Workers are scarce: count running ones first (`ah board --workers`), one worker per
+stream, and see `docs/agent/memory/rules.md` > Parallel sessions.
+
+**At every task boundary:** commit with an explicit pathspec (`git commit -m "..." -- <paths>`; never `git add -A`,
+`git add .` or `commit -a`, because other sessions' files are in the same index), push, overwrite the stream page
+(goal, facts, next 3 actions, do-nots), then `ah refresh`.
+
+**Continuing elsewhere** (another Claude account, Cursor, Codex, agy): the claims, locks and pages are files on this
+machine and in git, so nothing depends on a harness's own session store. A harness that reads this repo runs
+`ah start <stream> --as <harness> --takeover`. One that cannot gets the output of `ah prompt <stream> --for <harness>`
+pasted in (about 4k tokens: role, AGENTS.md, the stream page, `rules.md`). Do not resume the old transcript.
+
+Durable lessons go to `docs/agent/memory/` (git-tracked), not only to a harness-private memory. Environment facts go
+to `env.md`, behavior rules to `rules.md`.
 
 ## Conventions
 
@@ -165,8 +192,8 @@ Probe and capture references: `docs/skills/livewatch.md`, `docs/skills/capture-m
 
 ## Session state
 
-The live handoff page is `docs/agent/HANDOFF.md` (small, overwritten at each checkpoint). Read it at the start of
-every session and update it at every task boundary. `.claude_state.md` is a stub; the full history is archived in
+The live handoff page is your stream's page (`docs/agent/HANDOFF.md` for `main`, `docs/agent/streams/<stream>.md`
+otherwise; small, overwritten at each checkpoint). `ah start` prints it; update it at every task boundary. `.claude_state.md` is a stub; the full history is archived in
 `docs/agent/ledger/` and must not be read whole.
 
 ## Friction tracking

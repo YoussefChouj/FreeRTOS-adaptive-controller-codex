@@ -3,6 +3,11 @@
 Read order for a new agent: `AGENTS.md` -> this file -> `docs/agent/memory/rules.md` (+ `env.md` if you touch workers/hardware).
 History is in `docs/agent/ledger/` (grep it, never read it whole).
 
+This is the page of stream `main` (main tree: Keil build, flash, probe, 8081, merges). Other streams have their own
+page in `.worktrees/<stream>/docs/agent/streams/<stream>.md`. Start every session with
+`python -m ground_station.agent_handoff start [stream] --as <harness>`; see all streams with `... board`.
+Known overlap 2026-09-30: MRAC (session a8a271e7) and the handoff work both ran in the main tree. New work takes a worktree.
+
 ## Goal now
 Workflow B (autonomous flight loop) build, plus flightlab (workflow A) WP4 and MRAC firmware work.
 Design is confirmed in `.agent-ops/grill-autonomous-flight-loop.md` (Q1-Q12). Specs: `docs/analysis/flightlab-spec.md`,
@@ -30,27 +35,23 @@ Design is confirmed in `.agent-ops/grill-autonomous-flight-loop.md` (Q1-Q12). Sp
 - Do not run a bare `git status` (about 200 dirty OBJ files).
 
 <!-- AUTO:BEGIN -->
-Refreshed: 2026-09-30 14:24 (mechanical, no LLM)
-- Branch / HEAD: main @ 1053086; unpushed commits: 0
-- Dirty paths outside OBJ/: 187
+Refreshed: 2026-09-30 14:45 (mechanical, no LLM)
+- Tree: .; branch / HEAD: main @ 5f555b9; unpushed commits: 0
+- Dirty paths outside OBJ/: 195
   - M .agent-ops/served/estimator-panel.js
+  -  M .claude_state.md
+  -  M AGENTS.md
   -  M API/pid.c
   -  M BSP/rpm.c
   -  M TASK/StabilizerTask.c
   -  M USER/JX_FLY.uvguix.Acer
   -  M USER/JX_FLY.uvoptx
-  -  M docs/agent/HANDOFF.md
-  - ?? .agent-ops/out/diag-empty-ui.md
-  - ?? .agent-ops/out/e2e-live.json
-  - ?? .agent-ops/out/ekf-modes.txt
-  - ?? .agent-ops/out/flash-f2b.txt
-  - ?? .agent-ops/out/flash-p1.txt
-  - ... +175 more
+  - ... +187 more
 - Dashboard 8081: DOWN or unreachable
 - Last commits:
+  - 5f555b9 handoff: MRAC S2b verified (equiv, armcc, pytest, Keil build); not flashed
+  - 95e6561 handoff: flag MRAC S2b files swept into 1053086 as unverified
   - 1053086 agent handoff: tool-neutral HANDOFF.md, rules/env memory, Authorizations table, agent_handoff script
   - 3ccf8c0 flightlab: WP4 briefs mark the flight16 steps NOT RUN on remote hosts
   - 9270e2c path-panel: session replay keeps desired x/y/z = 0
-  - 2e20b6f docs: workflow B confirmed; build-time additions A1-A4
-  - 2f35e29 flightlab: WP4a rules and WP4b report/ledger/compare briefs
 <!-- AUTO:END -->
