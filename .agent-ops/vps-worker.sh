@@ -9,7 +9,7 @@
 #   vps-worker.sh status | log <id> [lines] | kill <id> | clean <id>
 #   vps-worker.sh stats [days]   per-model history (VPS + local ledgers): runs, OK%, median secs,
 #                                QUOTA hits in 5h/window + last quota text. Pick workers from it.
-# Model aliases: qwen | free | gem | agy | agy:<model>  (ssh oc-agent '~/.local/bin/agy models')
+# Model aliases: qwen | free | gem | ark (deepseek-v4-flash) | agy | agy:<model>  (ssh oc-agent '~/.local/bin/agy models')
 #                fake:ok|quota|net|auth test the chain without a model call.
 # Network drops: every remote step retries (5 tries, 15..240s apart); `wait` survives any
 # outage and ends with LOST if the run's tmux session is gone without a result.
