@@ -53,7 +53,7 @@ building is OK, outside workers only, explicit-pathspec commits, never commit OB
 | 11 | MRAC smoothing in firmware: reset at injection-on, 2.5 s ramp, learn gate, disarm ramp; host test | none |
 | 12 | Stream-slot reliability (GS): per-slot watchdog + stale state, replay wait/retry, logger faults, pre-arm slot gate, loader masks | none |
 | 13 | Drift fix in firmware as WP-9/10 decide: inner caps, outer integrators gated to FLYING, trim, velocity SumE logged | 9, 10 |
-| 14 | EKF tilt-input shadow (optional, if time allows) | none |
+| 14 | EKF tilt input: shadow + guarded active path (wp/8 merged at e7b6b48; brief committed) | none |
 | 15 | Thrust/RPM telemetry fixes (CCR unit, k_T, imu_total input, rpm median-of-5) + `hover_thrust_id` k_T/mass/payload-torque analysis | none |
 
 ## Status log (append one line per event)
@@ -70,3 +70,4 @@ building is OK, outside workers only, explicit-pathspec commits, never commit OB
   (std 0.23) / pitch -0.90 (std 0.18). shadow13 skipped (p95 alt 0.1 m, brief hop only).
 - ~00:30 WP-10 BLOCKED (ranking never ran; scratch files; ruff) -> CTE round launched with decisions 0b6edc9.
   WP-11 running. WP-12 pre-empted before any commit (slot given to WP-10 CTE); relaunch after 11 or 10.
+- 2026-10-02 ~01:00 wp/8 (8-state OF EKF, code complete) merged into night at e7b6b48 as the WP-14 base; WP-14 brief written (tilt-only input, real shadow, rebase sign, persistence gate, KF velocity FB behind g_ekf_of_vel_fb=0). Queue: 12, 15, 14.
