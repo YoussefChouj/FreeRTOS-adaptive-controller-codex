@@ -1,35 +1,32 @@
-import pytest
+import json
+import tempfile
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-import tempfile
-import json
-from pathlib import Path
-from ground_station.analysis.drift_rootcause import hover_mask, mixer_decompose, pid_step, reconstruct_ui, main
+import pytest
+
+from ground_station.analysis.drift_rootcause import (
+    hover_mask,
+    main,
+    mixer_decompose,
+    pid_step,
+    reconstruct_ui,
+)
+
 
 def test_hover_mask():
-    # synthetic altitude ramp/hold/land
-    t = np.arange(1000)
     z = np.zeros(1000)
-    # 0 to 200: ramp to 100
     z[0:200] = np.linspace(0, 100, 200)
-    # 200 to 800: hold at 100
     z[200:800] = 100
-    # 800 to 1000: land to 0
     z[800:] = np.linspace(100, 0, 200)
-    
     df = pd.DataFrame({'Ctrler.Z_posPID.FB': z})
     mask = hover_mask(df)
-    
-    # p95 is ~100. 0.6 * p95 = 60.
-    # > 60 is from idx 120 to 880.
-    # first 15% skipped: 15% of 1000 is 150.
-    # so mask should be True from 150 to 880.
     assert not mask.iloc[0:150].any()
     assert mask.iloc[150:880].all()
     assert not mask.iloc[880:].any()
 
 def test_mixer_identity():
-    # build M1..M4 from random T, u_x, u_y, u_z, d=+/-1
     for d in [1.0, -1.0]:
         T = np.random.uniform(2000, 3000)
         u_x = np.random.uniform(-100, 100)
@@ -43,7 +40,7 @@ def test_mixer_identity():
         
         rx, ry, rz = mixer_decompose(m1, m2, m3, m4)
         assert np.isclose(rx, u_x)
-        assert np.isclose(ry, u_y)
+        assert np.isclose(ry, -u_y) # mixer decomposes to -u_y, meaning pitch = -gyroyPID.U
         assert np.isclose(rz, d * u_z)
 
 def test_ui_reconstruction():
@@ -53,47 +50,38 @@ def test_ui_reconstruction():
         'UMax': 200.0, 'UpMax': 200.0, 'UiMax': 2.4, 'UdMax': 10.0,
         'SumEMax': 120.0, 'EMin': 3.0
     }
-    
-    # Run pid_step until Ui settles at the cap
-    # Error < EMin to accumulate
     e_series = np.array([2.0] * 500)
     for e in e_series:
-        pid_step(pPID, e)
+        pid_step(pPID, e, mode='legacy')
         
     expected_cap = min(pPID['UiMax'], pPID['Ki'] * pPID['SumEMax'])
     assert np.isclose(pPID['Ui'], expected_cap)
     
-    recon_ui = reconstruct_ui(pPID['U'], 2.0, 3.0)
+    recon_ui = reconstruct_ui(pPID['U'], 2.0, 3.0, 0.0)
     assert np.isclose(recon_ui, pPID['Ui'])
     
-    # Test below cap
     pPID['SumE'] = 0.0
     pPID['Ui'] = 0.0
     pPID['U'] = 0.0
-    for e in [1.0, 1.0, 1.0, 1.0, 1.0]: # e < EMin, accumulates
-        pid_step(pPID, e)
+    for e in [1.0, 1.0, 1.0, 1.0, 1.0]:
+        pid_step(pPID, e, mode='legacy')
     
-    recon_ui = reconstruct_ui(pPID['U'], 1.0, 3.0)
+    recon_ui = reconstruct_ui(pPID['U'], 1.0, 3.0, 0.0)
     assert np.isclose(recon_ui, pPID['Ui'])
 
 def test_main(monkeypatch, capsys):
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
-        
         meta = {"preset": {"slots": [{"rate": 100}]}}
         meta_file = tmp_path / "f17_synthetic.meta.json"
         with open(meta_file, 'w') as f:
             json.dump(meta, f)
             
         csv_file = tmp_path / "f17_synthetic.slot0.csv"
-        # Create a header-only CSV
         with open(csv_file, 'w') as f:
             f.write("t_src_ms,t_host_s,seq,Ctrler.Z_posPID.FB\n")
             
-        import sys
-        monkeypatch.setattr(sys, 'argv', ['drift_rootcause', '--logs', str(tmp_path)])
-        
-        main()
+        main(['--logs', str(tmp_path)])
         
         captured = capsys.readouterr()
         assert "T1" in captured.out
@@ -101,6 +89,7 @@ def test_main(monkeypatch, capsys):
         assert "T3" in captured.out
         assert "T4" in captured.out
         assert "T5" in captured.out
+        assert "WP-13 numbers" in captured.out
         assert "f17_synthetic - skipped: empty" in captured.out
 
 if __name__ == '__main__':
