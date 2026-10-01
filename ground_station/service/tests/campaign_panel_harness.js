@@ -111,6 +111,7 @@ function runHarness() {
       }
       if (url === '/api/agent/control') {
         if (opts && opts.method === 'POST') {
+          if (ctx._armFail) return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'Fail' }) });
           return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
         }
         return Promise.resolve({
@@ -185,7 +186,8 @@ function runHarness() {
     const goes = fetchCalls.filter(f => f.url === '/api/campaign/go');
     if (goes.length === 1 && goes[0].opts.method === 'POST') {
       const b = JSON.parse(goes[0].opts.body);
-      if (b.campaign_path === 'path/to/camp' && b.pack_id === 'p123' && b.source === 'operator' && Object.keys(b.checklist).length === 6) {
+      const expectedChecklist = { pack_swapped: true, drone_on_pad: true, powered_in_place: true, rc_ready: true, phone_recording: true, operator_present: true };
+      if (b.campaign_path === 'path/to/camp' && b.pack_id === 'p123' && b.source === 'operator' && JSON.stringify(b.checklist) === JSON.stringify(expectedChecklist) && fetchCalls.filter(f => f.url === '/api/campaign/go').length === 1) {
         passCheck('c', 'Go exact POST');
       } else throw new Error('Bad go body: ' + goes[0].opts.body);
     } else throw new Error('Bad go fetch');
@@ -202,98 +204,123 @@ function runHarness() {
     
     setTimeout(() => {
       const posts = fetchCalls.filter(f => f.opts && f.opts.method === 'POST');
-      if (posts.find(f => f.url === '/api/campaign/pause' && JSON.parse(f.opts.body).source === 'operator') &&
-          posts.find(f => f.url === '/api/campaign/land' && JSON.parse(f.opts.body).source === 'operator') &&
-          posts.find(f => f.url === '/api/campaign/abort' && JSON.parse(f.opts.body).source === 'operator')) {
+      if (posts.length === 3 &&
+          posts.filter(f => f.url === '/api/campaign/pause' && JSON.parse(f.opts.body).source === 'operator').length === 1 &&
+          posts.filter(f => f.url === '/api/campaign/land' && JSON.parse(f.opts.body).source === 'operator').length === 1 &&
+          posts.filter(f => f.url === '/api/campaign/abort' && JSON.parse(f.opts.body).source === 'operator').length === 1) {
         passCheck('e', 'Commands sent');
       } else throw new Error('Commands missing');
       
       // d. Pause/Land/Abort present in idle, running, waiting_for_go, operator_needed and error states
       const statuses = ['idle', 'running', 'waiting_for_go', 'operator_needed', 'error'];
       let dPass = true;
-      statuses.forEach(s => {
-        ctx._fakeState = { status: s };
-        ctx._timerFn(); // poll
-        if (!getEl('cp-pause-btn') || !getEl('cp-land-btn') || !getEl('cp-abort-btn')) dPass = false;
-        if (getEl('cp-pause-btn').style.display === 'none') dPass = false; // Never hidden
-      });
-      if (dPass) passCheck('d', 'Buttons present');
-      else throw new Error('Buttons not present');
-      
-      // f. waiting_for_go shows the pack and prefills the pack ID
-      qPack.dataset.touched = '';
-      ctx._fakeState = { status: 'waiting_for_go', waiting_pack: 'wp789' };
-      ctx._timerFn();
-      setTimeout(() => {
-        if (qPack.value === 'wp789' && getEl('cp-wait-msg').textContent.includes('wp789')) passCheck('f', 'Waiting prefilled');
-        else {
-          console.log("qPack value:", qPack.value);
-          console.log("cp-wait-msg:", getEl('cp-wait-msg').textContent);
-          throw new Error('Waiting prefill failed');
-        }
-        
-        // g. flights render one row each
-        ctx._fakeState = {
-          status: 'running',
-          flights: [
-            { flight_id: 'f1', pack_id: 'p1', experiment: 'e1', j: 1, decision: 'go', abort_level: 'none', abort_reason: 'n', hover_only: false },
-            { flight_id: 'f2', hover_only: true }
-          ]
-        };
-        ctx._timerFn();
-        setTimeout(() => {
-          if (getEl('cp-flights-body').innerHTML.includes('f1') && getEl('cp-flights-body').innerHTML.includes('f2')) passCheck('g', 'Flights rendered');
-          else throw new Error('Flights missing');
+      let dIndex = 0;
+      function nextStatus() {
+        if (dIndex >= statuses.length) {
+          if (dPass) passCheck('d', 'Buttons present');
+          else throw new Error('Buttons not present');
           
-          // h. 409 and 503 error text shown
-          qPath.value = 'a'; qPack.value = 'b';
-          checkIds.forEach(id => getEl('cp-chk-' + id).checked = true);
-          qPath.dispatch('input'); // re-enable go
-          ctx._goFail = 409;
-          qGoBtn.dispatch('click');
+          // f. waiting_for_go shows the pack and prefills the pack ID
+          ctx._fakeState = { status: 'idle' };
+          ctx._timerFn();
           setTimeout(() => {
-            if (getEl('cp-error').style.display === 'block' && getEl('cp-error').textContent.includes('409')) {
-              ctx._goFail = 503;
-              qGoBtn.dispatch('click');
+            ctx._fakeState = { status: 'waiting_for_go', waiting_pack: 'wp789' };
+            ctx._timerFn();
+            setTimeout(() => {
+              if (qPack.value === 'wp789' && getEl('cp-wait-msg').textContent.includes('wp789')) passCheck('f', 'Waiting prefilled');
+              else throw new Error('Waiting prefill failed');
+              
+              // g. flights render one row each, P1 check: HTML escaping
+              ctx._fakeState = {
+                status: 'running',
+                flights: [
+                  { flight_id: 'f1', pack_id: 'p1', experiment: 'e1', j: 1, decision: 'go', abort_level: 'none', abort_reason: '<b>x</b>', hover_only: false },
+                  { flight_id: 'f2', hover_only: true }
+                ]
+              };
+              ctx._timerFn();
               setTimeout(() => {
-                if (getEl('cp-error').style.display === 'block' && getEl('cp-error').textContent.includes('503')) passCheck('h', 'Errors shown');
-                else throw new Error('Error not shown 503');
+                const fb = getEl('cp-flights-body').innerHTML;
+                if (fb.includes('f1') && fb.includes('f2') && fb.includes('&lt;b&gt;x&lt;/b&gt;') && !fb.includes('<b>x</b>')) passCheck('g', 'Flights rendered');
+                else throw new Error('Flights missing or not escaped properly');
                 
-                // i. allow_agent_arm: confirm false -> no POST; confirm true -> POST
-                fetchCalls = [];
-                confirmResult = false;
-                getEl('cp-allow-arm').checked = true;
-                getEl('cp-allow-arm').dispatch('change');
-                let hasPost = fetchCalls.some(f => f.url === '/api/agent/control' && f.opts && f.opts.method === 'POST');
-                if (hasPost) throw new Error('Should not POST on confirm false');
-                
-                confirmResult = true;
-                getEl('cp-allow-arm').checked = true;
-                getEl('cp-allow-arm').dispatch('change');
+                // h. 409 and 503 error text shown
+                qPath.value = 'a'; qPack.value = 'b';
+                checkIds.forEach(id => getEl('cp-chk-' + id).checked = true);
+                qPath.dispatch('input'); // re-enable go
+                ctx._goFail = 409;
+                qGoBtn.dispatch('click');
                 setTimeout(() => {
-                  hasPost = fetchCalls.some(f => f.url === '/api/agent/control' && f.opts && f.opts.method === 'POST' && JSON.parse(f.opts.body).allow_agent_arm === true);
-                  if (!hasPost) throw new Error('Should POST on confirm true');
-                  
-                  passCheck('i', 'allow_agent_arm confirm');
-                  
-                  // k. zero submitCommand/gatedCommand calls over the whole run
-                  if (api.submitCount === 0 && api.gatedCount === 0) passCheck('k', 'Zero old API calls');
-                  else throw new Error('Called old API');
-                  
-                  // j. after teardown, advancing timers causes no further fetch
-                  ctx.window.__PLUGIN_DESTROY__();
-                  fetchCalls = [];
-                  if (ctx._timerFn !== null) throw new Error('Timer not cleared');
-                  passCheck('j', 'No timer after teardown');
-                  
-                  console.log('ALL CHECKS PASSED');
-                  process.exit(0);
+                  if (getEl('cp-error').style.display === 'block' && getEl('cp-error').textContent === 'Conflict 409') {
+                    ctx._goFail = 503;
+                    qGoBtn.dispatch('click');
+                    setTimeout(() => {
+                      if (getEl('cp-error').style.display === 'block' && getEl('cp-error').textContent === 'Deps 503') passCheck('h', 'Errors shown');
+                      else throw new Error('Error not shown 503');
+                      
+                      // i. allow_agent_arm: confirm false -> no POST; confirm true -> POST
+                      fetchCalls = [];
+                      confirmResult = false;
+                      const armToggle = getEl('cp-allow-arm');
+                      armToggle.checked = true;
+                      armToggle.dispatch('change');
+                      let hasPost = fetchCalls.some(f => f.url === '/api/agent/control' && f.opts && f.opts.method === 'POST');
+                      if (hasPost) throw new Error('Should not POST on confirm false');
+                      
+                      confirmResult = true;
+                      armToggle.checked = true;
+                      armToggle.dispatch('change');
+                      setTimeout(() => {
+                        hasPost = fetchCalls.some(f => f.url === '/api/agent/control' && f.opts && f.opts.method === 'POST' && JSON.parse(f.opts.body).allow_agent_arm === true);
+                        if (!hasPost) throw new Error('Should POST on confirm true');
+                        
+                        // P4 check: network error reverts the toggle
+                        ctx._armFail = true;
+                        armToggle.checked = false; // it was true
+                        armToggle.dispatch('change');
+                        setTimeout(() => {
+                          if (!armToggle.checked) throw new Error('Toggle should revert to true on POST failure');
+                          passCheck('i', 'allow_agent_arm confirm');
+                          
+                          // k. zero submitCommand/gatedCommand calls over the whole run
+                          if (api.submitCount === 0 && api.gatedCount === 0) passCheck('k', 'Zero old API calls');
+                          else throw new Error('Called old API');
+                          
+                          // j. after teardown, advancing timers causes no further fetch
+                          const capturedTimer = ctx._timerFn;
+                          ctx.window.__PLUGIN_DESTROY__();
+                          fetchCalls = [];
+                          if (ctx._timerFn !== null) throw new Error('Timer not cleared');
+                          
+                          if (capturedTimer) {
+                            try { capturedTimer(); } catch(e) {}
+                          }
+                          setTimeout(() => {
+                            if (fetchCalls.length !== 0) throw new Error('Fetched after teardown');
+                            passCheck('j', 'No timer after teardown');
+                            
+                            console.log('ALL CHECKS PASSED');
+                            process.exit(0);
+                          }, 50);
+                        }, 50);
+                      }, 50);
+                    }, 50);
+                  } else throw new Error('Error not shown 409');
                 }, 50);
               }, 50);
-            } else throw new Error('Error not shown 409');
+            }, 50);
           }, 50);
-        }, 50);
-      }, 50);
+        } else {
+          ctx._fakeState = { status: statuses[dIndex++] };
+          ctx._timerFn();
+          setTimeout(() => {
+            if (!getEl('cp-pause-btn') || !getEl('cp-land-btn') || !getEl('cp-abort-btn')) dPass = false;
+            if (getEl('cp-pause-btn').style.display === 'none') dPass = false;
+            nextStatus();
+          }, 10);
+        }
+      }
+      nextStatus();
     }, 50);
   }, 50);
 }

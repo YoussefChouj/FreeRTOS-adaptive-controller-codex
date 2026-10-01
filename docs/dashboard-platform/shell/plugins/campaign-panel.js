@@ -16,22 +16,44 @@
     { id: 'operator_present', label: 'Operator stays in the room' }
   ];
 
+  function escapeHtml(unsafe) {
+    if (unsafe === undefined || unsafe === null) return '';
+    return String(unsafe)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
   function q(id) {
     if (!_container) return null;
     return _container.querySelector('#' + id) || document.getElementById(id);
   }
 
   function fetchState() {
+    if (!_api) return;
     fetch('/api/campaign/state')
       .then(function (r) {
-        if (!r.ok) throw new Error('HTTP ' + r.status);
+        if (!r.ok) {
+          return r.json().catch(function() { return { error: 'HTTP ' + r.status }; })
+            .then(function(data) {
+              showError(data.error || ('HTTP ' + r.status));
+              throw new Error('__HANDLED__');
+            });
+        }
         return r.json();
       })
       .then(function (data) {
+        showError('');
         _state = data;
         renderState();
       })
-      .catch(function () {});
+      .catch(function (e) {
+        if (e.message !== '__HANDLED__') {
+          showError(e.message);
+        }
+      });
   }
 
   function renderState() {
@@ -61,12 +83,12 @@
     if (flightsBody) {
       var rows = (_state.flights || []).map(function(f) {
         return '<tr>' +
-          '<td>' + (f.flight_id !== undefined ? f.flight_id : '') + '</td>' +
-          '<td>' + (f.pack_id !== undefined ? f.pack_id : '') + '</td>' +
-          '<td>' + (f.experiment !== undefined ? f.experiment : '') + '</td>' +
-          '<td>' + (f.j !== undefined ? f.j : '') + '</td>' +
-          '<td>' + (f.decision !== undefined ? f.decision : '') + '</td>' +
-          '<td>' + (f.abort_level !== undefined ? f.abort_level : '') + '/' + (f.abort_reason !== undefined ? f.abort_reason : '') + '</td>' +
+          '<td>' + escapeHtml(f.flight_id) + '</td>' +
+          '<td>' + escapeHtml(f.pack_id) + '</td>' +
+          '<td>' + escapeHtml(f.experiment) + '</td>' +
+          '<td>' + escapeHtml(f.j) + '</td>' +
+          '<td>' + escapeHtml(f.decision) + '</td>' +
+          '<td>' + escapeHtml(f.abort_level) + '/' + escapeHtml(f.abort_reason) + '</td>' +
           '<td>' + (f.hover_only ? 'yes' : 'no') + '</td>' +
           '</tr>';
       });
@@ -107,6 +129,9 @@
   }
 
   function handleGo() {
+    var goBtn = q('cp-go-btn');
+    if (goBtn) goBtn.disabled = true;
+
     var pathInput = q('cp-path');
     var packInput = q('cp-pack-id');
 
@@ -128,6 +153,7 @@
     })
     .then(function(r) {
       if (!r.ok) {
+        checkGoReady();
         return r.json().catch(function() { return { error: 'HTTP ' + r.status }; })
           .then(function(data) { showError(data.error || ('HTTP ' + r.status)); });
       } else {
@@ -141,6 +167,7 @@
       }
     })
     .catch(function(e) {
+      checkGoReady();
       showError(e.message);
     });
   }
@@ -166,10 +193,12 @@
   }
 
   function handleAllowArmChange(e) {
-    var next = e.target.checked;
+    var target = e.target;
+    var next = target.checked;
+    var prev = !next;
     if (next) {
       if (!window.confirm('Allow agent arm?')) {
-        e.target.checked = false;
+        target.checked = false;
         return;
       }
     }
@@ -181,6 +210,7 @@
     })
     .then(function(r) {
       if (!r.ok) {
+        target.checked = prev;
         return r.json().catch(function() { return { error: 'HTTP ' + r.status }; })
           .then(function(data) { showError(data.error || ('HTTP ' + r.status)); });
       } else {
@@ -188,6 +218,7 @@
       }
     })
     .catch(function(err) {
+      target.checked = prev;
       showError(err.message);
     });
   }
@@ -260,6 +291,9 @@
         })
         .catch(function(){});
 
+      if (_pollingTimer) {
+        clearInterval(_pollingTimer);
+      }
       fetchState();
       _pollingTimer = setInterval(fetchState, 1000);
     });

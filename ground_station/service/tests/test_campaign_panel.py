@@ -27,7 +27,7 @@ class TestCampaignPanel(unittest.TestCase):
             "campaign-panel harness failed:\n" + proc.stdout + proc.stderr,
         )
         self.assertIn("ALL CHECKS PASSED", proc.stdout)
-        
+
         tags = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l']
         lines = proc.stdout.splitlines()
         for tag in tags:
