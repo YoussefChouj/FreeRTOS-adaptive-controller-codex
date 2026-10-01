@@ -13,7 +13,9 @@ You write task files and the report. You never write or fix the code in scope yo
 3. Wait: `timeout 540 bash .agent-ops/vps-worker.sh wait wp<id>-r<n>`.
    Exit 124 = still running: run the same command again, at most 6 times in a row.
    Still running after that: `bash .agent-ops/vps-worker.sh kill wp<id>-r<n>` and report BLOCKED.
-4. Take the work: `git merge --ff-only vps/wp<id>-r<n>`.
+   On DONE, `wait` has already fetched the worker branch as `vps/wp<id>-r<n>`; never run `git fetch`.
+4. Take the work: `git merge --ff-only vps/wp<id>-r<n>`. The model that ran is in that commit's
+   subject (`git log -1 vps/wp<id>-r<n>`), not in the digest; use it for the report.
 5. Gate: `python .agent-ops/gate.py --base main --allow <glob> ...` (every allow glob in the brief).
    The worker's DONE and "passed" are claims. The gate and your own runs are the evidence.
 6. Bounce when the gate FAILs, an acceptance command fails, or the diff breaks the spec:
