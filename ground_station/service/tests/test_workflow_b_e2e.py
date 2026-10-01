@@ -194,7 +194,7 @@ def test_pause_land_abort(api_server, campaign_yaml):
     code, _ = _post(base + "/api/campaign/pause", {})
     assert code == 200
     state = _wait_state(base, lambda s: s.get("status") in ("operator_stop", "error", "complete"))
-    print("LAND REASON IS", state.get("reason")); assert state.get("status") == "operator_stop"
+    assert state.get("status") == "operator_stop"
     assert state.get("reason") == "operator pause"
 
 def test_non_sim_returns_503(real_api_server, campaign_yaml):
