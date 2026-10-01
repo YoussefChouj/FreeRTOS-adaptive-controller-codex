@@ -51,11 +51,13 @@ building is OK, outside workers only, explicit-pathspec commits, never commit OB
 | 9 | Log analysis: quantify A and B per flight, motor-position map from the mixer, cap/trim numbers, push vs V/time, position-error budget | none |
 | 10 | Calibrated cascade sim (real caps, rates, torque bias, lean bias); rank fixes for hover, asymmetric load and dense waypoints (velocity FF) | uses WP-9 facts (brief carries them) |
 | 11 | MRAC smoothing in firmware: reset at injection-on, 2.5 s ramp, learn gate, disarm ramp; host test | none |
-| 12 | Logging: per-slot re-subscribe, dead variables (thrust empirical/imu_total, of_alt_cm), RPM k_T calibration | none |
+| 12 | Stream-slot reliability (GS): per-slot watchdog + stale state, replay wait/retry, logger faults, pre-arm slot gate, loader masks | none |
 | 13 | Drift fix in firmware as WP-9/10 decide: inner caps, outer integrators gated to FLYING, trim, velocity SumE logged | 9, 10 |
 | 14 | EKF tilt-input shadow (optional, if time allows) | none |
+| 15 | Thrust/RPM telemetry fixes (CCR unit, k_T, imu_total input, rpm median-of-5) + `hover_thrust_id` k_T/mass/payload-torque analysis | none |
 
 ## Status log (append one line per event)
 - 2026-10-01 ~21:30 plan written; logs on VPS; next: night branch + WP-9/WP-10 briefs.
 - ~22:10 night branch + ../wt-night @ 5d9d83f; mixer decomposition (yaw split, roll 40 ticks); WP-9/10 briefs committed;
   managers launched from ../wt-night (`bash .agent-ops/manager.sh run <id> high night/2026-10-02`).
+- 2026-10-01 ~22:40 briefs WP-11 (MRAC smoothing), WP-12 (stream slots, GS), WP-15 (thrust/RPM) committed; launch order when a slot frees: 11, 12, 15; WP-13 after 9+10.
