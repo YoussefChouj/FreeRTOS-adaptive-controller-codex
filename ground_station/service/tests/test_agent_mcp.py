@@ -191,16 +191,13 @@ def test_mcp_campaign_tools(service, api):
     proc = _connect(api_port, repo_root)
     try:
         resp = _request(proc, 30, "tools/call", {"name": "campaign_state", "arguments": {}})
-        assert "result" in resp
-        
-        resp = _request(proc, 31, "tools/call", {"name": "campaign_pause", "arguments": {}})
-        assert "result" in resp
-        
-        resp = _request(proc, 32, "tools/call", {"name": "campaign_land", "arguments": {}})
-        assert "result" in resp
-        
-        resp = _request(proc, 33, "tools/call", {"name": "campaign_abort", "arguments": {}})
-        assert "result" in resp
+        state = json.loads(resp["result"]["content"][0]["text"])
+        assert state["status"] == "idle"
+        assert state["flights"] == []
+        # No run is active, so each control tool reaches the route and gets its 409.
+        for req_id, name in ((31, "campaign_pause"), (32, "campaign_land"), (33, "campaign_abort")):
+            resp = _request(proc, req_id, "tools/call", {"name": name, "arguments": {}})
+            assert json.loads(resp["result"]["content"][0]["text"]) == {"error": "no active run"}
     finally:
         proc.stdin.close() if proc.stdin else None
         try:

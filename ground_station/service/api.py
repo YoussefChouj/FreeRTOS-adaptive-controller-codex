@@ -2349,6 +2349,7 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                 code, res = campaign.request(cmd)
                 self._json(code, res)
             # POST /replay/<session_id>/play — push stored telemetry onto the
+            # live bus (no storage write, nothing sent to the drone).
             elif route.startswith("/replay/") and route.endswith("/play"):
                 parts = route.split("/")
                 session_id = parts[2] if len(parts) >= 4 else None

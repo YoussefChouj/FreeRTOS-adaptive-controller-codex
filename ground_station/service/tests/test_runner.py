@@ -367,24 +367,39 @@ def test_o_two_flight_judging_and_revert(tmp_path):
     assert deps.flash.call_count == 2
     
     assert report.flights[1].reflash_hash == "abc"
+
+
 def test_p_landing_timeout_revert_flight(tmp_path):
-    c = tmp_path / "camp.yaml"; c.write_text(Path(YAML_PATH).read_text())
-    drone = FakeDrone(); drone.sbus_live = True
-    client = WfbClient(drone.send); clock = FakeClock()
+    c = tmp_path / "camp.yaml"
+    c.write_text(Path(YAML_PATH).read_text())
+    drone = FakeDrone()
+    drone.sbus_live = True
+    client = WfbClient(drone.send)
+    clock = FakeClock()
     deps = create_deps(drone, client, clock)
     deps.change_request = Mock(side_effect=[{"justification": "test"}] + [None] * 20)
     deps.gate.next_flight_must_hover.side_effect = [True] + [False] * 20
     deps.gate.on_flight_result.side_effect = ["pending", "revert"] + ["keep"] * 10
     deps.flight_timeout_s = 120.0
-    fc = [0]; orig_step = drone.step
-    def ms(dt):
-        if fc[0] >= 2: drone._z = 10.0; drone._prim_state = 1
+    lands = [0]
+    orig_step = drone.step
+
+    def stuck_airborne_step(dt):
+        # From the second land on, the drone never touches down.
+        if lands[0] >= 2:
+            drone._z = 10.0
+            drone._prim_state = 1
         orig_step(dt)
-        if fc[0] >= 2: drone._z = 10.0; drone._prim_state = 1
-    drone.step = ms
+        if lands[0] >= 2:
+            drone._z = 10.0
+            drone._prim_state = 1
+    drone.step = stuck_airborne_step
     orig_land = client.land
-    def ml(): orig_land(); fc[0] += 1
-    client.land = ml
+
+    def counting_land():
+        orig_land()
+        lands[0] += 1
+    client.land = counting_land
     r = run_campaign(str(c), deps)
     assert deps.flash.call_count == 1
     assert r.status == "operator_needed"
