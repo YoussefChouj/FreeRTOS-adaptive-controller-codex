@@ -1,8 +1,9 @@
 """Standalone VPN Monitor and Auto-Router for Clash Verge.
 
 Runs permanently in the background. Tests internet connectivity through the proxy.
-If it fails, it tests latency to Japan/Singapore nodes in the active selector group,
-switches to the fastest one, and drops stale connections.
+If it fails, or the active selector is not on a Japan/Singapore node, it tests latency to the
+Japan/Singapore nodes in the selector, pins the fastest one, and drops stale connections.
+If none is alive it re-downloads the subscriptions and keeps retrying until one is back.
 """
 import time
 import json
@@ -22,6 +23,9 @@ CHECK_INTERVAL_S = 60
 FAILS_BEFORE_HEAL = 2
 NODE_PAT = re.compile(r"JP|Japan|日本|Tokyo|东京|SG|Singapore|新加坡|狮城", re.I)
 DELAY_URL = "https://www.gstatic.com/generate_204"
+GROUP_TYPES = {"Selector", "URLTest", "Fallback", "LoadBalance", "Relay"}
+REFRESH_GAP_S = 120   # while every Japan/Singapore node is down, re-download subscriptions at most this often
+_last_refresh = 0.0
 
 def log(msg):
     line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
@@ -94,41 +98,52 @@ def node_delay(name):
     except Exception:
         return name, None
 
+def is_preferred_node(name, px):
+    """A real Japan/Singapore node, never a group such as 自动选择 (which could hold other regions)."""
+    return bool(NODE_PAT.search(name or "")) and px.get(name, {}).get("type") not in GROUP_TYPES
+
+def refresh_subscriptions():
+    """Re-download the subscriptions (http proxy providers VPN07 / 月神云 from the Clash Verge profile script)."""
+    global _last_refresh
+    if time.time() - _last_refresh < REFRESH_GAP_S:
+        return False
+    _last_refresh = time.time()
+    _, prov = clash("GET", "/providers/proxies")
+    for name, p in (prov or {}).get("providers", {}).items():
+        if p.get("vehicleType") == "HTTP":
+            st, body = clash("PUT", f"/providers/proxies/{urllib.parse.quote(name)}", timeout_s=60)
+            log(f"refresh: subscription {name} status={st} {(body or {}).get('message', '')}")
+    return True
+
+def test_candidates(group, px):
+    cands = [n for n in px[group].get("all", []) if is_preferred_node(n, px)]
+    with ThreadPoolExecutor(12) as ex:
+        res = dict(ex.map(node_delay, cands))
+    live = sorted((d, n) for n, d in res.items() if d)
+    log(f"heal: group={group} now={px[group].get('now')} live={len(live)}/{len(cands)} best={live[:3]}")
+    return live, res
+
 def heal(apply=True):
     try:
         group, px = active_group()
     except Exception as e:
         log(f"heal: failed to get active group: {e}")
         return False
-        
+
     now = px[group].get("now")
-    cands = [n for n in px[group].get("all", []) if NODE_PAT.search(n)]
-    
-    if not cands:
-        log(f"heal: no candidates found matching Japan/Singapore in group {group}")
-        return False
-        
-    with ThreadPoolExecutor(6) as ex:
-        res = dict(ex.map(node_delay, cands))
-        
-    live = sorted((d, n) for n, d in res.items() if d)
-    log(f"heal: group={group} now={now} live={len(live)}/{len(cands)} best={live[:3]}")
-    
+    live, res = test_candidates(group, px)
+    # Every Japan/Singapore node is down: re-download the subscriptions (servers may have moved) and retest.
+    # The main loop calls heal() every cycle while this fails, so this repeats until a node is back.
+    if not live and apply and refresh_subscriptions():
+        group, px = active_group()
+        live, res = test_candidates(group, px)
     if not live:
         return False
-        
+
     best_d, best = live[0]
     if res.get(now) and res[now] <= best_d * 1.3 + 50:
         log(f"heal: current node {now} alive ({res[now]} ms), keeping")
         best = now
-        
-    # Hand back to the url-test group (Japan/Singapore only, both subscriptions) instead of pinning a node,
-    # so it keeps switching on its own afterwards; re-test it first so it drops dead nodes right away.
-    auto = next((n for n in px[group].get("all", []) if px.get(n, {}).get("type") == "URLTest"), None)
-    if apply and auto:
-        q = urllib.parse.urlencode({"timeout": 3000, "url": DELAY_URL})
-        clash("GET", f"/group/{urllib.parse.quote(auto)}/delay?{q}", timeout_s=30)
-        best = auto
 
     if apply and best != now:
         st, _ = clash("PUT", f"/proxies/{urllib.parse.quote(group)}", {"name": best})
@@ -162,14 +177,14 @@ def main():
     fails = 0
     while True:
         try:
-            ok = net_ok()
-            if ok:
-                fails = 0
-            else:
-                fails += 1
-                
+            fails = 0 if net_ok() else fails + 1
+            group, px = active_group()
+            now = px[group].get("now")
             if fails >= FAILS_BEFORE_HEAL:
                 log(f"net: down x{fails}, healing proxy")
+            elif not is_preferred_node(now, px):
+                log(f"selector {group} is on {now}, not a Japan/Singapore node: healing")
+            if fails >= FAILS_BEFORE_HEAL or not is_preferred_node(now, px):
                 if heal(apply=True):
                     fails = 0
         except Exception as e:
