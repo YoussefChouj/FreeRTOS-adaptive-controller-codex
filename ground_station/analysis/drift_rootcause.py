@@ -17,7 +17,7 @@ def load_flight(meta_path):
         with open(meta_path) as f:
             meta = json.load(f)
     except (OSError, json.JSONDecodeError):
-        return None, None
+        return None, None, []
         
     slots = meta.get("preset", {}).get("slots", [])
     if not slots:
@@ -40,7 +40,7 @@ def load_flight(meta_path):
         except (OSError, pd.errors.EmptyDataError, KeyError, pd.errors.ParserError):
             pass
     if not dfs:
-        return None, meta
+        return None, meta, []
     
     df_merged = None
     for idx, df in dfs:
@@ -52,16 +52,18 @@ def load_flight(meta_path):
             cols_to_use = df.columns.difference(df_merged.columns)
             df_merged = df_merged.join(df[cols_to_use], how='outer')
     
-    df_merged = df_merged.ffill().bfill()
-    return df_merged, meta
+    df_merged = df_merged.ffill()
+    return df_merged, meta, dfs
 
 def hover_mask(df):
     if df is None or 'Ctrler.Z_posPID.FB' not in df.columns:
         return None
     z_pos = df['Ctrler.Z_posPID.FB']
-    if len(z_pos) == 0:
+    if len(z_pos.dropna()) == 0:
         return None
-    p95 = np.percentile(z_pos, 95)
+    p95 = np.nanpercentile(z_pos, 95)
+    if p95 < 0.5:
+        return None
     hover_thresh = 0.6 * p95
     mask = z_pos > hover_thresh
     n = len(mask)
@@ -74,9 +76,25 @@ def hover_mask(df):
 
 def mixer_decompose(m1, m2, m3, m4):
     roll = (m2 + m3 - m1 - m4) / 4.0
-    pitch = (m1 + m3 - m2 - m4) / 4.0 # Wait, the mixer is M1 = T-y-x, M2 = T+y+x, M3 = T-y+x, M4 = T+y-x. We want to extract u_y. u_y = (M2+M4-M1-M3)/4. Then pitch = -u_y. So pitch = (M1+M3-M2-M4)/4
+    pitch = (m2 + m4 - m1 - m3) / 4.0 # u_y
     yaw = (m3 + m4 - m1 - m2) / 4.0
     return roll, pitch, yaw
+
+
+def yaw_rotate(ux, uy, yaw_deg):
+    yaw_rad = np.radians(yaw_deg)
+    cos_yaw = np.cos(yaw_rad)
+    sin_yaw = np.sin(yaw_rad)
+    des_pitch = -uy * cos_yaw - ux * sin_yaw
+    des_roll = -ux * cos_yaw + uy * sin_yaw
+    return des_pitch, des_roll
+
+def accel_to_lean_angles(acc_tar_forward, acc_tar_right, pitch_fb=0.0, roll_fb=0.0):
+    my_Cos_Roll = np.cos(np.radians(roll_fb))
+    my_Cos_Pitch = np.cos(np.radians(pitch_fb))
+    tar_pitch = np.degrees(np.arctan(acc_tar_forward * my_Cos_Roll / 981.0))
+    tar_roll = np.degrees(np.arctan(acc_tar_right * my_Cos_Pitch / 981.0))
+    return np.clip(tar_pitch, -35.0, 35.0), np.clip(tar_roll, -35.0, 35.0)
 
 def pid_step(pPID, E, mode='legacy'):
     pPID['E'] = E
@@ -127,7 +145,7 @@ def get_col(df, cols, default=None):
 
 def process_flight(meta_path):
     flight_name = meta_path.name[:-len(".meta.json")]
-    df, meta = load_flight(meta_path)
+    df, meta, dfs = load_flight(meta_path)
     
     res = {"name": flight_name, "hover": False, "meta": meta, "duration": 0}
     if df is None:
@@ -140,13 +158,15 @@ def process_flight(meta_path):
     if res["cols_present"]:
         z = df['Ctrler.Z_posPID.FB']
         if len(z) > 0:
-            res["z_p95"] = np.percentile(z, 95)
+            res["z_p95"] = np.nanpercentile(z, 95) if len(z.dropna()) > 0 else 0
             res["z_max"] = z.max()
             skip = int(0.15 * len(z))
             z_after = z.iloc[skip:]
             res["samples_above_hover"] = (z_after > 0.6 * res["z_p95"]).sum()
         else:
-            res["z_p95"] = 0; res["z_max"] = 0; res["samples_above_hover"] = 0
+            res["z_p95"] = 0
+            res["z_max"] = 0
+            res["samples_above_hover"] = 0
             
     mask = hover_mask(df)
     if mask is None:
@@ -160,6 +180,7 @@ def process_flight(meta_path):
         return res
     
     df_hover = df[mask].copy()
+    df_hover = df_hover.dropna()
     
     is_3ae4a23 = any(x in flight_name for x in ["shadow10", "active12", "shadow13", "shadow14", "active15"])
     roll_ui_cap = 2.4 if is_3ae4a23 else 10.0
@@ -187,6 +208,19 @@ def process_flight(meta_path):
     roll_ang_ud = 8.0 * roll_ang_e.diff().fillna(0)
     res['roll_angUi'] = reconstruct_ui(df_hover['Ctrler.rollPID.U'], roll_ang_e, 3.0, roll_ang_ud).mean()
     
+    if "shadow10" in flight_name or "shadow14" in flight_name:
+        res['item6_a'] = roll_ang_e.mean()
+        for i, slot_df in dfs:
+            if 'Ctrler.rollPID.Des' in slot_df.columns and 'Ctrler.rollPID.FB' in slot_df.columns:
+                if len(df_hover) > 0:
+                    start_t = df_hover.index[0]
+                    end_t = df_hover.index[-1]
+                    slot_hover = slot_df[(slot_df['t_src_ms'] >= start_t) & (slot_df['t_src_ms'] <= end_t)].dropna(subset=['Ctrler.rollPID.Des', 'Ctrler.rollPID.FB'])
+                    res['item6_b'] = (slot_hover['Ctrler.rollPID.Des'] - slot_hover['Ctrler.rollPID.FB']).mean()
+                    res['item6_b_count'] = len(slot_hover)
+                    res['item6_b_span'] = (slot_hover['t_src_ms'].iloc[-1] - slot_hover['t_src_ms'].iloc[0])/1000.0 if len(slot_hover)>1 else 0.0
+                break
+
     roll_gyr_e = df_hover['Ctrler.gyroxPID.Des'] - df_hover['Ctrler.gyroxPID.FB']
     roll_gyr_ud = 10.0 * roll_gyr_e.diff().fillna(0)
     res['roll_gyrUi'] = reconstruct_ui(df_hover['Ctrler.gyroxPID.U'], roll_gyr_e, 5.0, roll_gyr_ud).mean()
@@ -249,6 +283,29 @@ def process_flight(meta_path):
     res['locys_U'] = df_hover['Ctrler.locysPID.U'].mean() if 'Ctrler.locysPID.U' in df_hover else 0
     res['locx_U'] = df_hover['Ctrler.locxPID.U'].mean() if 'Ctrler.locxPID.U' in df_hover else 0
     res['locy_U'] = df_hover['Ctrler.locyPID.U'].mean() if 'Ctrler.locyPID.U' in df_hover else 0
+    
+    yaw_col = 'imu_data.yaw'
+    has_yaw = yaw_col in df_hover.columns
+    yaw_series = df_hover[yaw_col] if has_yaw else pd.Series([0]*len(df_hover), index=df_hover.index)
+    res['yaw_used'] = yaw_col if has_yaw else "assumed 0"
+    res['yaw_mean'] = yaw_series.mean()
+    
+    pred_pitch_des = []
+    pred_roll_des = []
+    ux_series = df_hover['Ctrler.locxsPID.U'] if 'Ctrler.locxsPID.U' in df_hover else pd.Series([0]*len(df_hover), index=df_hover.index)
+    uy_series = df_hover['Ctrler.locysPID.U'] if 'Ctrler.locysPID.U' in df_hover else pd.Series([0]*len(df_hover), index=df_hover.index)
+    pitch_fb_series = df_hover[res['pitch_fb_col']] if res['pitch_fb_col'] in df_hover else pd.Series([0]*len(df_hover), index=df_hover.index)
+    roll_fb_series = df_hover[res['roll_fb_col']] if res['roll_fb_col'] in df_hover else pd.Series([0]*len(df_hover), index=df_hover.index)
+    
+    for ux, uy, yaw, p_fb, r_fb in zip(ux_series, uy_series, yaw_series, pitch_fb_series, roll_fb_series):
+        dp, dr = yaw_rotate(ux, uy, yaw)
+        ppd, prd = accel_to_lean_angles(dp, -dr, p_fb, r_fb)
+        pred_pitch_des.append(ppd)
+        pred_roll_des.append(prd)
+        
+    res['pred_pitch_Des'] = np.mean(pred_pitch_des) if pred_pitch_des else 0.0
+    res['pred_roll_Des'] = np.mean(pred_roll_des) if pred_roll_des else 0.0
+
     
     locx_e = df_hover['Ctrler.locxPID.Des'] - df_hover['Ctrler.locxPID.FB'] if ('Ctrler.locxPID.Des' in df_hover and 'Ctrler.locxPID.FB' in df_hover) else pd.Series([0]*len(df_hover), index=df_hover.index)
     locy_e = df_hover['Ctrler.locyPID.Des'] - df_hover['Ctrler.locyPID.FB'] if ('Ctrler.locyPID.Des' in df_hover and 'Ctrler.locyPID.FB' in df_hover) else pd.Series([0]*len(df_hover), index=df_hover.index)
@@ -315,8 +372,8 @@ def main(argv=None):
         res = process_flight(f)
         if not res['hover']:
             print(f"{res['name']} - skipped: {res['reason']}")
-            if res['name'] in ['pidonly7', 'shadow13']:
-                print(f"  {res['name']} evidence: duration={res['duration']:.1f}s, cols_present={res['cols_present']}, z_p95={res.get('z_p95',0):.1f}, z_max={res.get('z_max',0):.1f}, samples_above={res.get('samples_above_hover',0)}")
+            if 'f17' in res['name']:
+                print(f"  {res['name']} evidence: duration={res['duration']:.1f}s, cols_present={res.get('cols_present', False)}, z_p95={res.get('z_p95',0):.1f}, z_max={res.get('z_max',0):.1f}, samples_above={res.get('samples_above_hover',0)}")
         else:
             hover_results.append(res)
             
@@ -334,9 +391,12 @@ def main(argv=None):
               f"angUi={r['pitch_angUi']:.1f}, gyrUi={r['pitch_gyrUi']:.1f}, "
               f"caps(ang={r['roll_ui_cap']:.1f}, gyr={r['gyro_ui_cap']:.1f}), cap_time(ang={r['pitch_ang_cap_time']:.2f}, gyr={r['pitch_gyr_cap_time']:.2f}), emin_time(ang={r['pitch_ang_emin_time']:.2f}, gyr={r['pitch_gyr_emin_time']:.2f}), "
               f"err(Des-FB)={r['pitch_ang_e']:.2f}. MRAC={r['pitch_mrac']:.1f}, D-term={r['d_term_mean_pitch']:.1f}")
-        print(f"Yaw:   need={r['yaw_need']:.1f}")
+        print(f"Yaw:   need={r['yaw_need']:.1f} (yaw_used={r['yaw_used']}, mean={r['yaw_mean']:.1f})")
+        print(f"  Closure (Des): Roll pred={r['pred_roll_Des']:.2f} vs log={r['roll_Des']:.2f}, Pitch pred={r['pred_pitch_Des']:.2f} vs log={r['pitch_Des']:.2f}")
         if r['name'] == 'shadow10' or r['name'] == 'shadow14' or r['name'] == 'shadow4' or r['name'] == 'active15':
              print(f"  Pitch need specific: {r['pitch_need']:.1f}")
+        if 'item6_a' in r:
+             print(f"  Item 6 (Des-FB roll): (a) merged={r['item6_a']:.2f}, (b) native={r.get('item6_b', 0):.2f} (samples={r.get('item6_b_count', 0)}, span={r.get('item6_b_span', 0):.1f}s)")
 
     print("\n--- Cross-flight summary T1 ---")
     df_t1 = pd.DataFrame(hover_results)
@@ -369,16 +429,50 @@ def main(argv=None):
     for r in hover_results:
         print(f"[{r['name']}]")
         
-        # X axis maps to roll. a_A = 981 * sin(roll err), a_B = 981 * sin(roll FB)
-        push_A_X = 981.0 * np.sin(r['roll_ang_e'] * np.pi / 180.0)
-        push_B_X = 981.0 * np.sin(r['roll_FB'] * np.pi / 180.0)
+        # We need a_A (from Des-FB) and a_B (from FB lean) in body frame.
+        # body pitch push = 981 * sin(pitch), body roll push = 981 * sin(roll)
+        # pitch drives Y body push? Wait, no, we need to map back to world X/Y through the inverse chain.
+        # body_push_pitch = 981.0 * np.sin(np.radians(r['pitch_ang_e']))
+        # Wait, the instruction says: compute a_A and a_B in the body frame, map them back to world X/Y 
+        # through the inverse of the same chain, then predicted e = ...
+        
+        b_aA_pitch = 981.0 * np.sin(np.radians(r['pitch_ang_e']))
+        b_aA_roll = 981.0 * np.sin(np.radians(r['roll_ang_e']))
+        
+        b_aB_pitch = 981.0 * np.sin(np.radians(r['pitch_FB']))
+        b_aB_roll = 981.0 * np.sin(np.radians(r['roll_FB']))
+        
+        # We need to map body accelerations to world Uv_x, Uv_y.
+        # des_pitch = -uy * cos_yaw - ux * sin_yaw
+        # des_roll = -ux * cos_yaw + uy * sin_yaw
+        # To invert this:
+        # dp = -uy c - ux s
+        # dr = -ux c + uy s
+        # dp*s + dr*c = -uy s c - ux s^2 - ux c^2 + uy s c = -ux(s^2+c^2) = -ux => ux = -dp*s - dr*c
+        # dp*c - dr*s = -uy c^2 - ux s c + ux s c - uy s^2 = -uy(c^2+s^2) = -uy => uy = -dp*c + dr*s
+        yaw = r['yaw_mean']
+        yaw_rad = np.radians(yaw)
+        s, c = np.sin(yaw_rad), np.cos(yaw_rad)
+        
+        # For a_A
+        # Note the signs: accel_to_lean_angles is tar_pitch ~ atan(acc_tar_forward), tar_roll ~ atan(acc_tar_right).
+        # We used dp for tar_pitch, -dr for tar_roll. So b_aA_pitch maps to dp, -b_aA_roll maps to dr.
+        # Actually, dp = b_aA_pitch, dr = -b_aA_roll.
+        
+        dp_A = b_aA_pitch
+        dr_A = -b_aA_roll
+        push_A_X = -dp_A * s - dr_A * c
+        push_A_Y = -dp_A * c + dr_A * s
+        
+        dp_B = b_aB_pitch
+        dr_B = -b_aB_roll
+        push_B_X = -dp_B * s - dr_B * c
+        push_B_Y = -dp_B * c + dr_B * s
+
         pred_e_A_X = (r['vfb_x'] + push_A_X/3.0 - r['locx_Ui']) / 0.8
         pred_e_B_X = (r['vfb_x'] + push_B_X/3.0 - r['locx_Ui']) / 0.8
         pred_e_AB_X = (r['vfb_x'] + (push_A_X + push_B_X)/3.0 - r['locx_Ui']) / 0.8
         
-        # Y axis maps to pitch. a_A = 981 * sin(pitch err), a_B = 981 * sin(pitch FB)
-        push_A_Y = 981.0 * np.sin(r['pitch_ang_e'] * np.pi / 180.0)
-        push_B_Y = 981.0 * np.sin(r['pitch_FB'] * np.pi / 180.0)
         pred_e_A_Y = (r['vfb_y'] + push_A_Y/3.0 - r['locy_Ui']) / 0.8
         pred_e_B_Y = (r['vfb_y'] + push_B_Y/3.0 - r['locy_Ui']) / 0.8
         pred_e_AB_Y = (r['vfb_y'] + (push_A_Y + push_B_Y)/3.0 - r['locy_Ui']) / 0.8
@@ -405,8 +499,12 @@ def main(argv=None):
         print(f"Mean Pos err Y measured: {df_t4['locy_e'].mean():.1f}, predicted (A+B): {df_t4['pred_e_AB_Y'].mean():.1f}")
     
     print("\n================ T5 ===================")
-    print("Estimator: API/imu_update.c (line 20, 21) uses a Mahony filter with Kp=0.5 and Ki=0.001.")
-    print("It forces the attitude to align with the measured accelerometer vector over time.")
+    print("Estimator facts (API/imu_update.c):")
+    print("  :20-21 Kp = 0.5f, Ki = 0.001f")
+    print("  :106-107 kp_eff/ki_eff blend from IMU_KP_BOOST/IMU_KI_BOOST over a boost window")
+    print("  :112-134 accel is normalised, cross product with the estimated gravity gives ex/ey/ez, which is fed into the gyro. The attitude levels on the accelerometer.")
+    print("  :69-76, ~200 linear accel = measured - gravity direction.")
+    print("Lin_Acc ~ 0 is a tautology in hover because the filter forces the estimated gravity vector (which determines Lin_Acc) to align with the measured accelerometer vector over time.")
     for r in hover_results:
         pitch_asin = np.degrees(np.arcsin(np.clip(-r['Acc_X'] / 1000.0, -1, 1)))
         roll_asin = np.degrees(np.arcsin(np.clip(r['Acc_Y'] / 1000.0, -1, 1)))
@@ -419,8 +517,19 @@ def main(argv=None):
         worst_pitch_need = df_all['pitch_need'].abs().max()
         worst_need = max(worst_roll_need, worst_pitch_need)
         
-        req_ui_ang = 3 * worst_need
+        # gyro loop (ticks)
         req_ui_gyr = 3 * worst_need
+        
+        # angle loop (deg/s)
+        # steady rate setpoint = mean gyroxPID.FB / gyroyPID.FB in hover
+        worst_rate_setpoint = max(df_all['roll_gyrU'].abs().max(), df_all['pitch_gyrU'].abs().max()) # wait, it's gyroxPID.FB or gyroxPID.Des
+        # Actually, the angle loop needs Ui for the mean rate setpoint (which equals mean gyro FB in steady state)
+        # So we can just use the mean gyroU, because mean gyroU is the mean needed ticks, but wait.
+        # "mean rate setpoint the gyro loop needs" -> gyroxPID.Des. Since angle loop output is gyroxPID.Des,
+        # that is roll_angU.
+        # Let's compute worst |mean rate setpoint| from roll_angU / pitch_angU.
+        worst_rate_setpoint = max(df_all['roll_angU'].abs().max(), df_all['pitch_angU'].abs().max())
+        req_ui_ang = 3 * worst_rate_setpoint
         
         # Ki values: ang Ki=0.02, gyr Ki=0.01 (from API/pid.c)
         ki_ang = 0.02
@@ -429,9 +538,10 @@ def main(argv=None):
         sum_e_max_ang = req_ui_ang / ki_ang
         sum_e_max_gyr = req_ui_gyr / ki_gyr
         
-        print(f"Worst |need|: {worst_need:.1f}. Required Ui: {3*worst_need:.1f} (x3 headroom)")
-        print(f"Angle loop: Ki={ki_ang}, needs SumEMax >= {sum_e_max_ang:.0f} to reach Ui={req_ui_ang:.1f}")
-        print(f"Gyro loop: Ki={ki_gyr}, needs SumEMax >= {sum_e_max_gyr:.0f} to reach Ui={req_ui_gyr:.1f}")
+        print(f"Worst |need|: {worst_need:.1f}. Required gyro Ui (ticks): {req_ui_gyr:.1f} (x3 headroom)")
+        print(f"Worst rate setpoint needed by angle loop: {worst_rate_setpoint:.1f} deg/s (required ang Ui: {req_ui_ang:.1f})")
+        print(f"Angle loop: Ki={ki_ang}, needs SumEMax >= {sum_e_max_ang:.0f} to reach Ui={req_ui_ang:.1f}. Cap needed: min(UiMax, {ki_ang*sum_e_max_ang:.1f})")
+        print(f"Gyro loop: Ki={ki_gyr}, needs SumEMax >= {sum_e_max_gyr:.0f} to reach Ui={req_ui_gyr:.1f}. Cap needed: min(UiMax, {ki_gyr*sum_e_max_gyr:.1f})")
         
         print(f"Attitude Trim Roll: mean={df_all['roll_FB'].mean():.2f}, std={df_all['roll_FB'].std():.2f}, min={df_all['roll_FB'].min():.2f}, max={df_all['roll_FB'].max():.2f}")
         print(f"Attitude Trim Pitch: mean={df_all['pitch_FB'].mean():.2f}, std={df_all['pitch_FB'].std():.2f}, min={df_all['pitch_FB'].min():.2f}, max={df_all['pitch_FB'].max():.2f}")

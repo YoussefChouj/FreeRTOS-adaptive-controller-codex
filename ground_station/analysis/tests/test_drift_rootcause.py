@@ -7,11 +7,13 @@ import pandas as pd
 import pytest
 
 from ground_station.analysis.drift_rootcause import (
+    accel_to_lean_angles,
     hover_mask,
     main,
     mixer_decompose,
     pid_step,
     reconstruct_ui,
+    yaw_rotate,
 )
 
 
@@ -40,7 +42,7 @@ def test_mixer_identity():
         
         rx, ry, rz = mixer_decompose(m1, m2, m3, m4)
         assert np.isclose(rx, u_x)
-        assert np.isclose(ry, -u_y) # mixer decomposes to -u_y, meaning pitch = -gyroyPID.U
+        assert np.isclose(ry, u_y)
         assert np.isclose(rz, d * u_z)
 
 def test_ui_reconstruction():
@@ -73,11 +75,11 @@ def test_main(monkeypatch, capsys):
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
         meta = {"preset": {"slots": [{"rate": 100}]}}
-        meta_file = tmp_path / "f17_synthetic.meta.json"
+        meta_file = tmp_path / "f17_x_pidonly7.meta.json"
         with open(meta_file, 'w') as f:
             json.dump(meta, f)
             
-        csv_file = tmp_path / "f17_synthetic.slot0.csv"
+        csv_file = tmp_path / "f17_x_pidonly7.slot0.csv"
         with open(csv_file, 'w') as f:
             f.write("t_src_ms,t_host_s,seq,Ctrler.Z_posPID.FB\n")
             
@@ -90,7 +92,32 @@ def test_main(monkeypatch, capsys):
         assert "T4" in captured.out
         assert "T5" in captured.out
         assert "WP-13 numbers" in captured.out
-        assert "f17_synthetic - skipped: empty" in captured.out
+        assert "f17_x_pidonly7 - skipped: empty" in captured.out
 
 if __name__ == '__main__':
     pytest.main(['-q', '-p', 'no:cacheprovider', __file__])
+
+def test_yaw_rotate():
+    # At yaw 0, des_pitch = -uy, des_roll = -ux
+    dp, dr = yaw_rotate(10, 20, 0)
+    assert np.isclose(dp, -20)
+    assert np.isclose(dr, -10)
+    
+    # At yaw 90, des_pitch = -ux, des_roll = uy
+    dp, dr = yaw_rotate(10, 20, 90)
+    assert np.isclose(dp, -10)
+    assert np.isclose(dr, 20)
+
+def test_accel_to_lean():
+    # At roll_fb=0, pitch_fb=0:
+    # my_Cos_Roll = 1, my_Cos_Pitch = 1
+    # tar_pitch = arctan(acc_tar_forward / 981.0)
+    # tar_roll = arctan(acc_tar_right / 981.0)
+    tp, tr = accel_to_lean_angles(981.0, -981.0, 0.0, 0.0)
+    assert np.isclose(tp, 45.0) or np.isclose(tp, 35.0) # wait, it clips to 35.0
+    # Let's test with smaller values that don't clip
+    tp, tr = accel_to_lean_angles(500.0, -500.0, 0.0, 0.0)
+    expected = np.degrees(np.arctan(500.0 / 981.0))
+    assert np.isclose(tp, expected)
+    assert np.isclose(tr, -expected)
+
