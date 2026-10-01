@@ -20,7 +20,10 @@ branch `wp/<id>`). Pilot WP-1 (gate.py byte-safe shims) is merged at 208cc25: 1 
 armcc v0..6 0 err). S5a (deep inner layers, variants 7/8) = UNREVIEWED partial `vps/s5a` 948de17 (worker TIMEOUT).
 S3+ stays OFF main until the demo image is flashed and flown; main's `API/mrac*` stays at S2b.
 
-2026-10-01 20:55 NEXT CEO (overnight, no drone, build OK, no flash): read `docs/agent/handoffs/2026-10-01-overnight-context.md` (context + open hypotheses; CEO decides the plan). Evidence: `docs/agent/reports/2026-10-01-drift-investigation.md`.
+2026-10-02 07:00 NIGHT DONE (WP-17): branch `night/2026-10-02` @ WP-17 commit, pushed, NOT on main, NOT flashed.
+Merged WP-12/13/15/16 (drift fix F1x+F3+F5w+F6a, trim -1.24/-0.90). Keil build 0 errors (axf C:/tmp/wp17/JX_FLY-night-d211987.axf).
+WP-14 (EKF shadow) PARTIAL on `wp/14` f62a874, unmerged (agy quota). Start with `docs/agent/reports/2026-10-02-morning.md`
+(flights + what each decides) and `docs/agent/reports/WP-17.md`. Operator decides: flash `night`, merge into main.
 
 ## Goal now
 LAB DEMO (operator priority, 2026-09-30): PID vs PID+MRAC augmentation on (a) trajectory tracking (circle/figure8)
