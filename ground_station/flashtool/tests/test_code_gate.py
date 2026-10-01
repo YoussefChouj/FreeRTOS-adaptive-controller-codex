@@ -1,7 +1,5 @@
 import pytest
 import os
-import json
-from dataclasses import dataclass
 from ground_station.flashtool.code_gate import CodeGate, load_protected_set, ProtectedSet
 
 class FakeCustody:
@@ -64,46 +62,26 @@ def test_real_yaml_loads():
     assert "AutoflyTask_PathArbitrate" in ps.functions
     assert "TASK/RemoterTask.c" in ps.paths
 
-def test_step1_protected_path(base_kwargs):
+@pytest.mark.parametrize("diff, files, expect_ok, reason_sub", [
+    ("--- a/protected.c\n+++ b/protected.c\n@@ -1,1 +1,1 @@\n+foo\n", {"protected.c": "foo\n"}, False, "protected path"),
+    ("--- a/open.c\n+++ b/open.c\n@@ -2,1 +2,1 @@\n+foo\n", {"open.c": "line1\n/* PROTECTED BEGIN test_region */\nfoo\n/* PROTECTED END test_region */\n"}, False, "protected region"),
+    ("--- a/open.c\n+++ b/open.c\n@@ -3,1 +3,1 @@\n+foo\n", {"open.c": "void test_func() {\n  int x;\n  foo\n}\n"}, False, "protected function"),
+    ("--- a/open.c\n+++ b/open.c\n@@ -1,1 +1,1 @@\n+int x = test_param;\n", {"open.c": "int x = test_param;\n"}, False, "param ID"),
+    ("--- a/open.c\n+++ b/open.c\n@@ -10,1 +10,1 @@\n+foo\n", {"open.c": "void test_func() {\n}\n\n\n\n\n\n\n\nfoo\n"}, True, ""),
+    ("--- a/protected.c\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-foo\n", {}, False, "protected path"),
+    ("--- a/protected.c\n+++ b/x.c\n@@ -1,1 +1,1 @@\n-foo\n+foo\n", {"x.c": "foo\n"}, False, "protected path"),
+    ("--- a/open.c\n+++ b/open.c\n@@ -1,1 +1,0 @@\n-/* PROTECTED END test_region */\n", {"open.c": ""}, False, "PROTECTED marker"),
+    ("--- a/open.c\n+++ b/open.c\n@@ -1,1 +1,1 @@\n-foo\n+bar\n", {}, False, "Missing file text"),
+    ("--- a/open.c\n+++ b/open.c\n@@ -6,1 +6,1 @@\n-foo\n+bar\n", {"open.c": "1\n2\nstatic void test_func(void);\n4\n5\nfoo\n7\n8\n9\nvoid test_func(void) {\n11\nbar\n13\n14\n}\n"}, True, ""),
+    ("--- a/open.c\n+++ b/open.c\n@@ -12,1 +12,1 @@\n-foo\n+bar\n", {"open.c": "1\n2\nstatic void test_func(void);\n4\n5\nfoo\n7\n8\n9\nvoid test_func(void) {\n11\nbar\n13\n14\n}\n"}, False, "protected function"),
+])
+def test_step1(base_kwargs, diff, files, expect_ok, reason_sub):
     gate = CodeGate(**base_kwargs)
-    diff = "+++ b/protected.c\n@@ -1,1 +1,1 @@\n+foo\n"
-    res = gate.check_change(diff, {}, {})
-    assert not res.ok
-    assert res.step == 1
-    assert "Touched protected path: protected.c" in res.reasons[0]
-
-def test_step1_protected_region(base_kwargs):
-    gate = CodeGate(**base_kwargs)
-    diff = "+++ b/open.c\n@@ -2,1 +2,1 @@\n+foo\n"
-    files = {"open.c": "line1\n/* PROTECTED BEGIN test_region */\nfoo\n/* PROTECTED END test_region */\n"}
-    res = gate.check_change(diff, {}, files)
-    assert not res.ok
-    assert res.step == 1
-    assert "overlaps protected region test_region" in res.reasons[0]
-
-def test_step1_protected_function(base_kwargs):
-    gate = CodeGate(**base_kwargs)
-    diff = "+++ b/open.c\n@@ -3,1 +3,1 @@\n+foo\n"
-    files = {"open.c": "void test_func() {\n  int x;\n  foo\n}\n"}
-    res = gate.check_change(diff, {}, files)
-    assert not res.ok
-    assert res.step == 1
-    assert "overlaps protected function test_func" in res.reasons[0]
-
-def test_step1_param_id(base_kwargs):
-    gate = CodeGate(**base_kwargs)
-    diff = "+++ b/open.c\n@@ -1,1 +1,1 @@\n+int x = test_param;\n"
-    res = gate.check_change(diff, {}, {"open.c": "int x = test_param;\n"})
-    assert not res.ok
-    assert res.step == 1
-    assert "param ID test_param" in res.reasons[0]
-
-def test_step1_pass(base_kwargs):
-    gate = CodeGate(**base_kwargs)
-    diff = "+++ b/open.c\n@@ -10,1 +10,1 @@\n+foo\n"
-    files = {"open.c": "void test_func() {\n}\n\n\n\n\n\n\n\nfoo\n"}
     res = gate.check_change(diff, {"argument": "a", "predicted_effect": "b", "metric": "c"}, files)
-    assert res.ok
+    assert res.ok == expect_ok
+    if not expect_ok:
+        assert res.step == 1
+        assert any(reason_sub in r for r in res.reasons)
 
 def test_step2_fail(base_kwargs):
     gate = CodeGate(**base_kwargs)
@@ -136,9 +114,17 @@ def test_step3_fail_ram(base_kwargs):
     assert "RAM usage" in res.reasons[0]
 
 def test_step3_pass(base_kwargs):
+    def fake_build():
+        base_kwargs["custody"].calls.append(("build",))
+        return (0, "map_path")
+    base_kwargs["build"] = fake_build
     gate = CodeGate(**base_kwargs)
     res = gate.check_change("+++ b/open.c\n@@ -1,1 +1,1 @@\n+foo\n", {"argument": "a", "predicted_effect": "b", "metric": "c"}, {"open.c": "foo\n"})
     assert res.ok
+    calls = base_kwargs["custody"].calls
+    assert ("snapshot", base_kwargs["obj_dir"]) in calls
+    assert ("build",) in calls
+    assert calls.index(("snapshot", base_kwargs["obj_dir"])) < calls.index(("build",))
 
 def test_step4_fail_default_sil(base_kwargs):
     del base_kwargs["sil"]
@@ -235,4 +221,4 @@ def test_step9_record_flight(base_kwargs):
     gate = CodeGate(**base_kwargs)
     gate.record_flight("flight123", "hash123")
     lines = open(base_kwargs["ledger_path"]).readlines()
-    assert any("flight123" in l for l in lines)
+    assert any("flight123" in line for line in lines)

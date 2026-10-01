@@ -64,31 +64,42 @@ class CodeGate:
             return GateResult(ok=False, step=6, reasons=["A change is already pending and no flight was recorded since."])
 
         hunks = self._parse_diff(diff_text)
-        paths_touched = {h[0] for h in hunks}
+        paths_touched = set()
+        for h in hunks:
+            if h[0]: paths_touched.add(h[0])
+            if h[1]: paths_touched.add(h[1])
         
-        for h_path, h_start, h_len, added_lines, removed_lines in hunks:
-            if h_path in self.protected.paths:
-                return GateResult(ok=False, step=1, reasons=[f"Touched protected path: {h_path}"])
+        for pre_path, post_path, h_start, h_len, added_lines, removed_lines in hunks:
+            if pre_path in self.protected.paths or post_path in self.protected.paths:
+                return GateResult(ok=False, step=1, reasons=[f"Touched protected path"])
             
-            if h_path in files_after:
-                file_text = files_after[h_path]
+            if post_path and (post_path.endswith(".c") or post_path.endswith(".h")) and post_path not in files_after:
+                return GateResult(ok=False, step=1, reasons=[f"Missing file text for {post_path}"])
+            
+            if post_path and post_path in files_after:
+                file_text = files_after[post_path]
                 for reg in self.protected.regions:
                     if self._overlaps_region(file_text, reg, h_start, h_len):
-                        return GateResult(ok=False, step=1, reasons=[f"Hunk overlaps protected region {reg} in {h_path}"])
+                        return GateResult(ok=False, step=1, reasons=[f"Hunk overlaps protected region {reg} in {post_path}"])
                 for func in self.protected.functions:
                     if self._overlaps_function(file_text, func, h_start, h_len):
-                        return GateResult(ok=False, step=1, reasons=[f"Hunk overlaps protected function {func} in {h_path}"])
+                        return GateResult(ok=False, step=1, reasons=[f"Hunk overlaps protected function {func} in {post_path}"])
             
             for line in added_lines + removed_lines:
+                if "PROTECTED BEGIN" in line or "PROTECTED END" in line:
+                    return GateResult(ok=False, step=1, reasons=["Touched PROTECTED marker"])
                 for param in self.protected.param_ids:
                     if re.search(r'\b' + re.escape(param) + r'\b', line):
-                        return GateResult(ok=False, step=1, reasons=[f"Touched param ID {param} in {h_path}"])
+                        return GateResult(ok=False, step=1, reasons=[f"Touched param ID {param}"])
 
         if not justification.get("argument") or not justification.get("predicted_effect") or not justification.get("metric"):
             return GateResult(ok=False, step=2, reasons=["Missing or blank justification fields"])
         
         with open(self.ledger_path, "a", encoding="utf-8") as f:
             f.write(json.dumps({"ts": self.clock(), "event": "justification", "justification": justification}) + "\n")
+
+        if not self.custody.has_snapshot(self.obj_dir):
+            self.custody.snapshot(self.obj_dir)
 
         error_count, map_path = self.build()
         if error_count != 0:
@@ -98,7 +109,7 @@ class CodeGate:
         if used_ram > self.ram_limit_bytes:
             return GateResult(ok=False, step=3, reasons=[f"RAM usage {used_ram} exceeds limit {self.ram_limit_bytes}"])
 
-        changed_c_files = [p for p in paths_touched if p.endswith(".c")]
+        changed_c_files = [p for p in paths_touched if p and p.endswith(".c")]
         stable, j = self.sil(changed_c_files)
         if self.is_default_sil:
             return GateResult(ok=False, step=4, reasons=["SIL hook not wired"])
@@ -107,8 +118,6 @@ class CodeGate:
         if self.lkg_j is not None and j > self.lkg_j * (1 + self.tolerance_frac):
             return GateResult(ok=False, step=4, reasons=[f"SIL check failed: j {j} > lkg_j {self.lkg_j} * (1 + {self.tolerance_frac})"])
         
-        if not self.custody.has_snapshot(self.obj_dir):
-            self.custody.snapshot(self.obj_dir)
         if not self.custody.has_snapshot(self.obj_dir):
             return GateResult(ok=False, step=5, reasons=["Custody snapshot failed"])
 
@@ -162,18 +171,25 @@ class CodeGate:
 
     def _parse_diff(self, diff_text: str):
         hunks = []
-        current_path = None
+        pre_path = None
+        post_path = None
         lines = diff_text.splitlines()
         i = 0
         while i < len(lines):
             line = lines[i]
-            if line.startswith("+++ b/"):
-                current_path = line[6:].strip()
+            if line.startswith("--- "):
+                p = line[4:].strip()
+                pre_path = None if p == "/dev/null" else (p[2:] if p.startswith("a/") else p)
+                i += 1
+                continue
+            if line.startswith("+++ "):
+                p = line[4:].strip()
+                post_path = None if p == "/dev/null" else (p[2:] if p.startswith("b/") else p)
                 i += 1
                 continue
             
             m = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,(\d+))? @@", line)
-            if m and current_path:
+            if m and (pre_path or post_path):
                 h_start = int(m.group(2))
                 h_len = int(m.group(3)) if m.group(3) is not None else 1
                 if h_len == 0:
@@ -181,13 +197,13 @@ class CodeGate:
                 added = []
                 removed = []
                 i += 1
-                while i < len(lines) and not lines[i].startswith("@@") and not lines[i].startswith("+++ b/"):
+                while i < len(lines) and not lines[i].startswith("@@") and not lines[i].startswith("--- "):
                     if lines[i].startswith("+") and not lines[i].startswith("+++"):
                         added.append(lines[i][1:])
                     elif lines[i].startswith("-") and not lines[i].startswith("---"):
                         removed.append(lines[i][1:])
                     i += 1
-                hunks.append((current_path, h_start, h_len, added, removed))
+                hunks.append((pre_path, post_path, h_start, h_len, added, removed))
                 continue
                 
             i += 1
@@ -218,11 +234,24 @@ class CodeGate:
         in_func = False
         started_braces = False
         
-        for i, line in enumerate(lines):
+        i = 0
+        while i < len(lines):
+            line = lines[i]
             if not in_func:
                 if re.search(r'\b' + re.escape(func_name) + r'\s*\(', line):
-                    f_start = i + 1
-                    in_func = True
+                    j = i
+                    text_ahead = ""
+                    found_open = False
+                    while j < len(lines):
+                        text_ahead += lines[j]
+                        if '{' in text_ahead or ';' in text_ahead:
+                            if next(c for c in text_ahead if c in '{;') == '{':
+                                found_open = True
+                            break
+                        j += 1
+                    if found_open:
+                        f_start = i + 1
+                        in_func = True
             
             if in_func:
                 brace_count += line.count('{')
@@ -233,6 +262,7 @@ class CodeGate:
                 if started_braces and brace_count <= 0:
                     f_end = i + 1
                     break
+            i += 1
                     
         if f_start != -1 and f_end != -1:
             h_end = h_start + h_len - 1
