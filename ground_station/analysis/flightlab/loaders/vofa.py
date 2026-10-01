@@ -24,10 +24,15 @@ def load_vofa(meta_path: Path | str, gap_factor: float = 1.5) -> FlightLog:
     except (json.JSONDecodeError, OSError) as exc:
         raise LoadError(f"{meta_path.name}: failed to read JSON: {exc}") from exc
 
-    if not isinstance(meta, dict) or "preset" not in meta or not isinstance(meta["preset"], dict):
+    if not isinstance(meta, dict):
+        raise LoadError(f"{meta_path.name}: missing preset in meta")
+    if isinstance(meta.get("preset"), dict):            # VOFA Studio recorder
+        slots_meta = meta["preset"].get("slots")
+    elif isinstance(meta.get("slots"), dict):           # dashboard Streams logger: {"0": {...}, ...}
+        slots_meta = [meta["slots"][k] for k in sorted(meta["slots"], key=int)]
+    else:
         raise LoadError(f"{meta_path.name}: missing preset in meta")
 
-    slots_meta = meta["preset"].get("slots")
     if not isinstance(slots_meta, list) or len(slots_meta) == 0:
         raise LoadError(f"{meta_path.name}: no slots in preset")
 

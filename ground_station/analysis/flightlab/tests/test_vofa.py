@@ -103,6 +103,19 @@ def test_vofa_loader_contract(tmp_path):
     assert log.has("__t_host_s.slot1")
 
 
+def test_vofa_dashboard_streams_meta(tmp_path):
+    # The dashboard Streams logger (service/streams.py) keys slots by index at the top level.
+    meta_path = _create_synthetic_vofa(tmp_path)
+    slots = json.loads(meta_path.read_text(encoding="utf-8"))["preset"]["slots"]
+    meta = {"name": "flight_test", "source": "dashboard-streams",
+            "slots": {str(i): s for i, s in enumerate(slots)}}
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+    log = load_vofa(meta_path)
+    assert len(log.slots) == 2
+    assert log.t0_src_ms == pytest.approx(900.0)
+
+
 def test_vofa_missing_csv(tmp_path):
     meta = {
         "preset": {
