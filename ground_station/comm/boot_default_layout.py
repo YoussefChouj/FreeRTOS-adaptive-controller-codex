@@ -332,6 +332,7 @@ DASHBOARD_FLIGHT_POSITION_VARS: tuple[str, ...] = (
     "s_of_bias_x", "s_of_bias_y",
     "s_ekf_of.x[0]", "s_ekf_of.x[1]", "s_ekf_of.x[2]",
     "s_ekf_of.x[3]", "s_ekf_of.x[4]", "s_ekf_of.x[5]",
+    "s_ekf_of.x[6]", "s_ekf_of.x[7]",
     "g_of_hold_active",
     "DroneStatus.FlyMode",
 )

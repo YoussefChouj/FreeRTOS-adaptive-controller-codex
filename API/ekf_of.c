@@ -1,63 +1,58 @@
 /**
  * @file     ekf_of.c
- * @brief    6-state body-frame OF position + velocity-bias Kalman Filter.
+ * @brief    8-state body-frame OF position + velocity-bias + accel-bias Kalman Filter.
  *
- * State:   x[0]=pos_x  x[1]=vel_x  x[2]=bias_x
- *          x[3]=pos_y  x[4]=vel_y  x[5]=bias_y
+ * State:   x[0..3] = X axis: [pos_x, vel_x, bof_x, ba_x]
+ *          x[4..7] = Y axis: [pos_y, vel_y, bof_y, ba_y]
+ *          Actually, the struct uses:
+ *          x[0..7] = [px, vx, bof_x, py, vy, bof_y, ba_x, ba_y]
+ *          X axis indices: 0, 1, 2, 6
+ *          Y axis indices: 3, 4, 5, 7
  *
  * State transition (discrete, dt seconds):
- *   pos_x  += vel_x  * dt     (bias: random walk, x[2] += 0)
- *   vel_x  += w_vel         (zero-mean white noise, var = Q_vel)
- *   bias_x += w_bias        (random walk, var = Q_bias)
- *   (same for Y axis)
- *
- * Measurement model (two scalar measurements, sequential update):
- *   z_x = of_x = vel_x - bias_x + v_meas   (H_x = [0, 1, -1, 0, 0, 0])
- *   z_y = of_y = vel_y - bias_y + v_meas   (H_y = [0, 0, 0, 0, 1, -1])
- *
- * Innovation:
- *   innov_x = of_x - (vel_x - bias_x)
- *     = (true_vel + true_bias + n) - (vel_est - bias_est)
- *     = vel_innov - bias_innov
- *   At hover (true_vel=0): innov_x ≈ -bias_true → filter learns bias
- *   At motion (true_vel>>bias): innov_x ≈ vel_innov → filter learns velocity
- *   The Kalman gain distributes trust based on P covariance.
+ *   u = a - ba
+ *   p += v*dt + 0.5*u*dt^2
+ *   v += u*dt
+ *   bof, ba: random walks
  *
  * Pure C99, no malloc. Compatible with Keil ARMCC.
  */
 
 #include "ekf_of.h"
 
-/* Compiler macro: access P[row*6 + col] */
-#define P(r,c)  e->P[(r)*6+(c)]
+/* axis index table */
+static const uint8_t k_axis_idx[2][4] = {{0,1,2,6},{3,4,5,7}};
 
 /* ------------------------------------------------------------------ */
 /* Init                                                               */
 /* ------------------------------------------------------------------ */
 
+#define EKF_OF_NOISE_ROW(qp, qa, qbof, qba, rof, rzupt) \
+    do { \
+        e->q_pos  = (qp); \
+        e->q_acc  = (qa); \
+        e->q_bof  = (qbof); \
+        e->q_ba   = (qba); \
+        e->R_of   = (rof); \
+        e->R_zupt = (rzupt); \
+    } while(0)
+
 void EkfOf_Init(EkfOf_t *e)
 {
-    int i;
-    for (i = 0; i < 6; i++) e->x[i] = 0.0f;
+    int i, j;
+    for (i = 0; i < 8; i++) e->x[i] = 0.0f;
 
-    /* Initial covariance:
-     * pos: starts uncertain (1 m^2 — we don't know where we are)
-     * vel: medium uncertainty (0.1 (m/s)^2 — ~0.3 m/s RMS)
-     * bias: starts confident, will grow as filter learns
-     * Cross-axis covariance = 0 */
-    for (i = 0; i < 36; i++) e->P[i] = 0.0f;
-    P(0,0) = 1.0f;   /* pos_x var = 1 m^2 */
-    P(1,1) = 0.1f;   /* vel_x var = 0.1 (m/s)^2 */
-    P(2,2) = 0.01f;  /* bias_x var = 0.01 (m/s)^2 */
-    P(3,3) = 1.0f;
-    P(4,4) = 0.1f;
-    P(5,5) = 0.01f;
+    for (i = 0; i < 2; i++) {
+        for (j = 0; j < 16; j++) {
+            e->P[i][j] = 0.0f;
+        }
+        e->P[i][0*4+0] = 1.0f;    /* pos */
+        e->P[i][1*4+1] = 0.1f;    /* vel */
+        e->P[i][2*4+2] = 0.01f;   /* bof */
+        e->P[i][3*4+3] = 0.25f;   /* ba */
+    }
 
-    /* Process noise per second, discrete added as Q*dt */
-    e->Q_pos  = 1e-6f;   /* m^2/s  — position driven by vel only */
-    e->Q_vel  = 2e-4f;   /* (m/s)^2/s — ~0.014 m/s/sqrt(s) spectral density */
-    e->Q_bias = 5e-5f;   /* (m/s)^2/s — ~0.007 m/s/sqrt(s) spectral density */
-    e->R_of   = 6.16e-4f; /* (m/s)^2 — OF velocity noise (~2.5 cm/s RMS) */
+    EKF_OF_NOISE_ROW(1e-6f, 1e-2f, 1e-6f, 1e-5f, 6.16e-4f, 1e-4f);
 
     e->innov_x = 0.0f;
     e->innov_y = 0.0f;
@@ -68,136 +63,139 @@ void EkfOf_Init(EkfOf_t *e)
 /* Predict                                                            */
 /* ------------------------------------------------------------------ */
 
-/* Discrete F and Q:
- *   F = |1 dt 0 0  0  0|
- *       |0  1 0 0  0  0|
- *       |0  0 1 0  0  0|
- *       |0  0 0 1 dt 0|
- *       |0  0 0 0  1 0|
- *       |0  0 0 0  0 1|
- *
- *   Q_diag = [Q_pos*dt, Q_vel*dt, Q_bias*dt, Q_pos*dt, Q_vel*dt, Q_bias*dt]
- */
-void EkfOf_Predict(EkfOf_t *e, float dt)
+void EkfOf_Predict(EkfOf_t *e, float dt, float ax, float ay)
 {
-    float Qp = e->Q_pos  * dt;
-    float Qv = e->Q_vel  * dt;
-    float Qb = e->Q_bias * dt;
-    float P01, P11, P21;
+    if (!e->inited) return;
+    
+    float a_meas[2] = {ax, ay};
+    int axis;
 
-    /* State prediction */
-    e->x[0] += e->x[1] * dt;   /* pos_x += vel_x * dt */
-    e->x[3] += e->x[4] * dt;   /* pos_y += vel_y * dt */
+    for (axis = 0; axis < 2; axis++) {
+        uint8_t i_p = k_axis_idx[axis][0];
+        uint8_t i_v = k_axis_idx[axis][1];
+        
+        uint8_t i_ba = k_axis_idx[axis][3];
 
-    /* Covariance: P_pred = F * P * F' + Q
-     * F has: F[0,1]=dt, F[1,1]=1, F[2,2]=1, F[3,4]=dt, F[4,4]=1, F[5,5]=1
-     *
-     * X-axis (rows 0-2):
-     *   P00_new = P00 + 2*dt*P01 + dt^2*P11 + Qp
-     *   P01_new = P01 + dt*P11
-     *   P02_new = P02 + dt*P12
-     *   P11_new = P11 + Qv
-     *   P12_new = P12
-     *   P22_new = P22 + Qb
-     * Y-axis (rows 3-5): same pattern */
-    P01 = P(0,1); P11 = P(1,1); P21 = P(2,1);
+        float u = a_meas[axis] - e->x[i_ba];
+        e->x[i_p] += e->x[i_v] * dt + 0.5f * u * dt * dt;
+        e->x[i_v] += u * dt;
 
-    P(0,0) = P(0,0) + 2.0f * dt * P01 + dt * dt * P11 + Qp;
-    P(0,1) = P01 + dt * P11;
-    P(0,2) = P(0,2) + dt * P(1,2);
-    P(1,1) = P11 + Qv;
-    P(1,2) = P(1,2);
-    P(2,2) = P(2,2) + Qb;
+        float P00 = e->P[axis][0], P01 = e->P[axis][1], P02 = e->P[axis][2], P03 = e->P[axis][3];
+        float P10 = e->P[axis][4], P11 = e->P[axis][5], P12 = e->P[axis][6], P13 = e->P[axis][7];
+        float P20 = e->P[axis][8], P21 = e->P[axis][9], P22 = e->P[axis][10], P23 = e->P[axis][11];
+        float P30 = e->P[axis][12], P31 = e->P[axis][13], P32 = e->P[axis][14], P33 = e->P[axis][15];
 
-    /* Copy X cross-corr to symmetric positions */
-    P(1,0) = P(0,1);
-    P(2,0) = P(0,2);
-    P(2,1) = P(1,2);
+        float dt2 = dt * dt;
+        
+        
 
-    /* Y-axis (rows 3-5) */
-    P01 = P(3,4); P11 = P(4,4); P21 = P(5,4);
-    P(3,3) = P(3,3) + 2.0f * dt * P01 + dt * dt * P11 + Qp;
-    P(3,4) = P01 + dt * P11;
-    P(3,5) = P(3,5) + dt * P(4,5);
-    P(4,4) = P11 + Qv;
-    P(4,5) = P(4,5);
-    P(5,5) = P(5,5) + Qb;
+        /* F = 
+         * [1, dt, 0, -0.5*dt^2]
+         * [0, 1,  0, -dt]
+         * [0, 0,  1, 0]
+         * [0, 0,  0, 1]
+         */
+        float F[4][4] = {
+            {1.0f, dt, 0.0f, -0.5f * dt2},
+            {0.0f, 1.0f, 0.0f, -dt},
+            {0.0f, 0.0f, 1.0f, 0.0f},
+            {0.0f, 0.0f, 0.0f, 1.0f}
+        };
+        float P[4][4] = {
+            {P00, P01, P02, P03},
+            {P10, P11, P12, P13},
+            {P20, P21, P22, P23},
+            {P30, P31, P32, P33}
+        };
+        float FP[4][4];
+        float FPFt[4][4];
+        int i, j, k;
 
-    /* Symmetric Y positions */
-    P(4,3) = P(3,4);
-    P(5,3) = P(3,5);
-    P(5,4) = P(4,5);
+        for (i = 0; i < 4; i++) {
+            for (j = 0; j < 4; j++) {
+                FP[i][j] = 0.0f;
+                for (k = 0; k < 4; k++) {
+                    FP[i][j] += F[i][k] * P[k][j];
+                }
+            }
+        }
+        for (i = 0; i < 4; i++) {
+            for (j = 0; j < 4; j++) {
+                FPFt[i][j] = 0.0f;
+                for (k = 0; k < 4; k++) {
+                    FPFt[i][j] += FP[i][k] * F[j][k]; /* F' means transpose F[j][k] */
+                }
+            }
+        }
 
-    /* Cross-axis (X vs Y): no coupling in F, only Q cross-corr = 0 */
-    /* All P[0..2][3..5] and P[3..5][0..2] stay zero */
+        e->P[axis][0]  = FPFt[0][0] + e->q_pos * dt;
+        e->P[axis][1]  = FPFt[0][1];
+        e->P[axis][2]  = FPFt[0][2];
+        e->P[axis][3]  = FPFt[0][3];
+        e->P[axis][4]  = FPFt[1][0];
+        e->P[axis][5]  = FPFt[1][1] + e->q_acc * dt;
+        e->P[axis][6]  = FPFt[1][2];
+        e->P[axis][7]  = FPFt[1][3];
+        e->P[axis][8]  = FPFt[2][0];
+        e->P[axis][9]  = FPFt[2][1];
+        e->P[axis][10] = FPFt[2][2] + e->q_bof * dt;
+        e->P[axis][11] = FPFt[2][3];
+        e->P[axis][12] = FPFt[3][0];
+        e->P[axis][13] = FPFt[3][1];
+        e->P[axis][14] = FPFt[3][2];
+        e->P[axis][15] = FPFt[3][3] + e->q_ba * dt;
+    }
 }
 
 /* ------------------------------------------------------------------ */
-/* Update — scalar sequential (Joseph form, numerically stable)        */
+/* Update — scalar sequential                                         */
 /* ------------------------------------------------------------------ */
 
-/* For a scalar measurement z = H*x + v with H = [0, 1, -1, 0, 0, 0]:
- *   S   = H*P*H' + R = P11 - 2*P12 + P22 + R     (scalar)
- *   K   = P*H' / S                                 (6-vector)
- *   x   = x + K * (z - H*x)
- *   P   = (I - K*H) * P * (I - K*H)' + K*R*K'   (Joseph form)
- *
- * Joseph form for scalar H:
- *   P_new = P - K*[P11-P12, P12-P22, ...]*H*P - H'*[...] + K*R*K'
- *
- * For simplicity and correctness, use the standard symmetric update:
- *   P_new = P - K * H * P - P * H' * K' + K * S * K'
- *   where S = H*P*H' + R
- *
- * Expanded for H = [h0,h1,h2,h3,h4,h5]:
- *   P_new[i][j] = P[i][j] - K[i]*S_ij
- *   where S_ij = h0*P0j + h1*P1j + ... + h5*P5j = sum_k hk * P[k][j]
- *
- * For our H (all zeros except h1=1, h2=-1):
- *   S_ij = 1*P[1][j] - 1*P[2][j]
- *
- * Simplified Joseph update:
- *   P_new[i][j] = P[i][j] - K[i]*(P[1][j] - P[2][j]) - K[j]*(P[1][i] - P[2][i]) + K[i]*K[j]*S
- */
-
-static void ekf_of_update_one(EkfOf_t *e, uint8_t vel_idx, uint8_t bias_idx,
-                               float of_meas, float *innov_out)
+static void ekf_of_update_one(EkfOf_t *e, int axis, const float h[4], float z, float R, float *innov_out)
 {
-    float PHt[6];
-    float S, K[6];
+    float PHt[4];
+    float S = R;
+    float K[4];
     float y;
     int i, j;
 
-    /* PHt = P * H' where H[vel]=1, H[bias]=-1, rest=0 */
-    for (i = 0; i < 6; i++) {
-        PHt[i] = e->P[i*6 + vel_idx] - e->P[i*6 + bias_idx];
+    uint8_t idx[4];
+    idx[0] = k_axis_idx[axis][0];
+    idx[1] = k_axis_idx[axis][1];
+    idx[2] = k_axis_idx[axis][2];
+    idx[3] = k_axis_idx[axis][3];
+
+    for (i = 0; i < 4; i++) {
+        PHt[i] = 0.0f;
+        for (j = 0; j < 4; j++) {
+            PHt[i] += e->P[axis][i*4 + j] * h[j];
+        }
     }
 
-    /* S = H*PHt + R = (P[vel][vel] - P[vel][bias]) - (P[bias][vel] - P[bias][bias]) + R
-     *       = P[vel][vel] - 2*P[vel][bias] + P[bias][bias] + R */
-    S = e->P[vel_idx*6 + vel_idx]
-      - 2.0f * e->P[vel_idx*6 + bias_idx]
-      + e->P[bias_idx*6 + bias_idx]
-      + e->R_of;
-
+    for (i = 0; i < 4; i++) {
+        S += h[i] * PHt[i];
+    }
     if (S < 1e-8f) S = 1e-8f;
 
-    /* Innovation */
-    y = of_meas - (e->x[vel_idx] - e->x[bias_idx]);
-    if (innov_out) *innov_out = y;
+    float hx = 0.0f;
+    for (i = 0; i < 4; i++) {
+        hx += h[i] * e->x[idx[i]];
+    }
+    
+    y = z - hx;
+    if (innov_out) {
+        *innov_out = y;
+    }
 
-    /* K = PHt / S */
-    for (i = 0; i < 6; i++) K[i] = PHt[i] / S;
+    for (i = 0; i < 4; i++) K[i] = PHt[i] / S;
 
-    /* x += K*y */
-    for (i = 0; i < 6; i++) e->x[i] += K[i] * y;
+    for (i = 0; i < 4; i++) e->x[idx[i]] += K[i] * y;
 
-    /* P = (I - K*H) * P * (I - K*H)' + K*R*K'  (Joseph form)
-     * Using: P_new = P - K*PHt' - PHt*K' + K*S*K' */
-    for (i = 0; i < 6; i++) {
-        for (j = i; j < 6; j++) {
-            e->P[i*6+j] -= K[i]*PHt[j] + K[j]*PHt[i] - K[i]*K[j]*S;
-            e->P[j*6+i]  = e->P[i*6+j];  /* enforce symmetry */
+    /* P = P - K*PHt' - PHt*K' + K*S*K' */
+    for (i = 0; i < 4; i++) {
+        for (j = i; j < 4; j++) {
+            e->P[axis][i*4+j] -= K[i]*PHt[j] + K[j]*PHt[i] - K[i]*K[j]*S;
+            e->P[axis][j*4+i] = e->P[axis][i*4+j];  /* enforce symmetry */
         }
     }
 }
@@ -205,8 +203,17 @@ static void ekf_of_update_one(EkfOf_t *e, uint8_t vel_idx, uint8_t bias_idx,
 void EkfOf_Update(EkfOf_t *e, float of_x, float of_y)
 {
     if (!e->inited) return;
-    ekf_of_update_one(e, 1, 2, of_x, &e->innov_x);  /* vel_x, bias_x */
-    ekf_of_update_one(e, 4, 5, of_y, &e->innov_y);  /* vel_y, bias_y */
+    const float h[4] = {0.0f, 1.0f, 1.0f, 0.0f};
+    ekf_of_update_one(e, 0, h, of_x, e->R_of, &e->innov_x);
+    ekf_of_update_one(e, 1, h, of_y, e->R_of, &e->innov_y);
+}
+
+void EkfOf_UpdateZeroVel(EkfOf_t *e)
+{
+    if (!e->inited) return;
+    const float h[4] = {0.0f, 1.0f, 0.0f, 0.0f};
+    ekf_of_update_one(e, 0, h, 0.0f, e->R_zupt, 0);
+    ekf_of_update_one(e, 1, h, 0.0f, e->R_zupt, 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -216,9 +223,6 @@ void EkfOf_Update(EkfOf_t *e, float of_x, float of_y)
 void EkfOf_ResetPos(EkfOf_t *e)
 {
     if (!e->inited) return;
-    e->x[0] = 0.0f;  /* pos_x */
-    e->x[3] = 0.0f;  /* pos_y */
-    /* vel and bias states stay — only accumulated position resets */
+    e->x[k_axis_idx[0][0]] = 0.0f;  /* pos_x */
+    e->x[k_axis_idx[1][0]] = 0.0f;  /* pos_y */
 }
-
-#undef P
