@@ -18,6 +18,7 @@ from ground_station.service import streams
 from ground_station.service.streams import (
     StreamLogger, StreamsManager, TAB_NEEDS, VofaForward, default_slots,
 )
+from ground_station.service.telemetry_adapter import StreamMetadata
 from ground_station.vofa_studio import core as vcore
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -250,8 +251,9 @@ def test_second_apply_while_busy_is_refused(resolver, tmp_path):
 
 # ---------------------------------------------------------------- logging
 def _sample(vals, seq=1, t_ms=100):
+    # The live service passes a StreamMetadata dataclass; a dict here hid a crash in note().
     return SimpleNamespace(values=vals, received_ns=0,
-                           metadata={"sequence": seq, "source_time_ms": t_ms})
+                           metadata=StreamMetadata(sequence=seq, source_time_ms=t_ms))
 
 
 def _rows(path):
@@ -269,6 +271,7 @@ def test_unlimited_log_columns_and_lookup(tmp_path):
     assert st["rows"] == {1: 2} and not st["active"]
     rows = _rows(tmp_path / "run.slot1.csv")
     assert rows[0] == ["t_src_ms", "t_host_s", "seq", "a", "b.c", "d"]
+    assert rows[1][0] == "100" and rows[1][2] == "1"   # t_src_ms, seq from the metadata
     assert rows[1][3:] == ["1.5", "2.5", ""]
     assert rows[2][3:] == ["3", "", "9"]      # 2-element list is not a scalar
     meta = json.loads((tmp_path / "run.meta.json").read_text())

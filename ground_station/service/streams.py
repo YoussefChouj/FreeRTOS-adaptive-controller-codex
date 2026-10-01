@@ -241,9 +241,10 @@ class StreamLogger:
             values = sample.values
             mono = time.monotonic() if now is None else now
             t_host = mono - self.t0
-            meta = getattr(sample, "metadata", None) or {}
-            t_src = meta.get("source_time_ms", values.get("t_ms", ""))
-            seq = meta.get("sequence", values.get("seq", ""))
+            # telemetry_adapter.StreamMetadata, a dataclass (not a dict)
+            meta = getattr(sample, "metadata", None)
+            t_src = getattr(meta, "source_time_ms", values.get("t_ms", ""))
+            seq = getattr(meta, "sequence", values.get("seq", ""))
             row = [t_src, "%.4f" % t_host, seq]
             for var in self._cols[slot]:
                 v = _lookup(values, slot, var)
