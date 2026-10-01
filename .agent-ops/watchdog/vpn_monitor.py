@@ -14,7 +14,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 LOG_PATH = Path.home() / ".vpn_monitor.log"
-PIPE = "//./pipe/verge-mihomo"
+PIPE_DIR = "//./pipe/"
+PIPE_PREFIX = "verge-mihomo"   # name gets "-sidecar-release-<hash>" / "-production-<hash>" depending on how Verge started it
 PROXY = "http://127.0.0.1:7897"
 
 CHECK_INTERVAL_S = 60
@@ -31,11 +32,18 @@ def log(msg):
     with LOG_PATH.open("a", encoding="utf-8") as f:
         f.write(line + "\n")
 
+def find_pipe():
+    import os
+    names = sorted(n for n in os.listdir(PIPE_DIR) if n.startswith(PIPE_PREFIX))
+    if not names:
+        raise FileNotFoundError(f"no {PIPE_PREFIX}* controller pipe (is Clash Verge running?)")
+    return PIPE_DIR + names[0]
+
 def clash(method, path, body=None, timeout_s=15):
     data = json.dumps(body).encode() if body is not None else b""
     head = (f"{method} {path} HTTP/1.1\r\nHost: clash\r\nContent-Type: application/json\r\n"
             f"Content-Length: {len(data)}\r\nConnection: close\r\n\r\n").encode()
-    f = open(PIPE, "r+b", buffering=0)
+    f = open(find_pipe(), "r+b", buffering=0)
     try:
         f.write(head + data)
         raw = b""
@@ -114,6 +122,14 @@ def heal(apply=True):
         log(f"heal: current node {now} alive ({res[now]} ms), keeping")
         best = now
         
+    # Hand back to the url-test group (Japan/Singapore only, both subscriptions) instead of pinning a node,
+    # so it keeps switching on its own afterwards; re-test it first so it drops dead nodes right away.
+    auto = next((n for n in px[group].get("all", []) if px.get(n, {}).get("type") == "URLTest"), None)
+    if apply and auto:
+        q = urllib.parse.urlencode({"timeout": 3000, "url": DELAY_URL})
+        clash("GET", f"/group/{urllib.parse.quote(auto)}/delay?{q}", timeout_s=30)
+        best = auto
+
     if apply and best != now:
         st, _ = clash("PUT", f"/proxies/{urllib.parse.quote(group)}", {"name": best})
         log(f"heal: switched {group}: {now} -> {best} ({best_d} ms) status={st}")
