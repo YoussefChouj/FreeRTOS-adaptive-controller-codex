@@ -1,4 +1,5 @@
 #include "pid.h"
+#include "math.h"
 
 /* One row per loop, tunables only; the runtime fields (Des FB Up Ui Ud E PreE SumE U) start at 0.
    Kp Ki Kd           gains, U = Up + Ui + Ud
@@ -187,7 +188,9 @@ void ComputePID(PIDTypeDef *pPID)
 
 void ComputeYawPID(PIDTypeDef *pPID)
 {
-	pPID->E = pPID->Des - pPID->FB;//���㵱ǰƫ��
+	/* fmodf first: the two steps below fold one turn only, so a Des more than a turn and a half
+	 * from FB (e.g. a heading that keeps counting up) would otherwise leave |E| >= 180. */
+	pPID->E = fmodf(pPID->Des - pPID->FB, 360.0f);//���㵱ǰƫ��
 	
 	if(pPID->E>=180)pPID->E-=360;
 	if(pPID->E<=-180)pPID->E+=360;

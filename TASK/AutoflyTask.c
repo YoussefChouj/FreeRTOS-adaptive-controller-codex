@@ -120,7 +120,16 @@ void AutoflyTask_RunCircle(void)
 		circle_path.center_x + circle_path.radius * cosf(circle_path.theta),
 		circle_path.center_y + circle_path.radius * sinf(circle_path.theta),
 		circle_path.center_z);
-	Ctrler.yawPID.Des = circle_path.theta * RAD2DEG;
+	{
+		/* Heading follows theta, which keeps counting past one turn; keep Des in [-180, 180) like FB. */
+		float yaw_des = fmodf(circle_path.theta * RAD2DEG, 360.0f);
+		if (yaw_des >= 180.0f) {
+			yaw_des -= 360.0f;
+		} else if (yaw_des < -180.0f) {
+			yaw_des += 360.0f;
+		}
+		Ctrler.yawPID.Des = yaw_des;
+	}
 
 	if (circle_path.duration > 0.0f &&
 	    circle_path.t_elapsed >= circle_path.duration) {
