@@ -71,8 +71,6 @@ class CampaignService:
         try:
             report = run_campaign(campaign_path, deps)
         except Exception as exc:
-            import traceback
-            traceback.print_exc()
             report = CampaignReport(
                 campaign=None,
                 flights=self._live_flights,

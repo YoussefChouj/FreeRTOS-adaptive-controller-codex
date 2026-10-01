@@ -16,6 +16,7 @@ from ground_station.service.abort_monitor import AbortSample, AbortDecision
 from ground_station.service.campaign_runner import RunnerDeps
 from ground_station.service.campaign_api import CampaignService
 from ground_station.analysis.controller_descriptor import Knob
+from ground_station.service.campaign_deps import FakeClock
 
 CAMPAIGN = "ground_station/service/campaigns/example_circle.yaml"
 OPERATOR = {"mode": "autonomous", "allow_agent_arm": True, "source": "operator"}
@@ -59,7 +60,6 @@ def _wait_state(base: str, done, timeout_s: float = 10.0) -> dict:
         time.sleep(0.05)
 
 
-from ground_station.service.campaign_deps import FakeClock
 
 def create_deps(drone, client, clock):
     packs = Mock()

@@ -18,6 +18,8 @@ Follow these steps in order to execute an autonomous tuning campaign:
    - Oscillation RMS limit: `60.0` dps over `1.0` s window
    - Saturation fraction limit: `0.5` over `1.0` s window
    - Stale telemetry timeout: `0.5` s
+   - Minimum battery (soc_min_pct): `30.0`
+   - Max consecutive aborts (max_consecutive_aborts): `2`
 7. **Write a campaign** using the flight-campaign skill.
 8. **Open the Campaign panel** in the dashboard.
 9. **Set `allow_agent_arm`** to enable the agent to arm the drone.
@@ -27,15 +29,22 @@ Follow these steps in order to execute an autonomous tuning campaign:
 
 ## End Statuses and What to Do Next
 
-The campaign runner can finish in several states. Review the state to decide your next action:
+The campaign runner can finish in several states. The operator reads these from `GET /api/campaign/state` in the `status` and `reason` fields. Review the state to decide your next action:
 
 - **complete**: The campaign finished all its planned flights successfully. 
   - *Next Action*: Review tuning results and wrap up.
 - **arm_refused**: The agent tried to arm but `allow_agent_arm` was false.
   - *Next Action*: Enable `allow_agent_arm` and retry, or investigate why it was refused.
 - **operator_stop**: The operator manually clicked Pause or Land, or denied the `wait_for_go` prompt.
-  - *Next Action*: Resume if safe, or start a new campaign.
-- **operator_needed**: The runner encountered a condition requiring human intervention. This includes: operator clicking Abort, battery voltage/cooldown checks failing, param write refused, landing timeout, or hitting max consecutive flight aborts (level 3 abort).
+  - *Next Action*: Start a new Go after checking the drone, or start a new campaign.
+- **operator_needed**: The runner encountered a condition requiring human intervention. Reason strings include:
+  - `"operator abort"`
+  - `"cooldown_min_s not met"`
+  - `"battery not resting"`
+  - `"param write refused"`
+  - `"landing timeout; revert flash pending"`
+  - `"landing timeout"`
+  - `"abort level 3 or consecutive"`
   - *Next Action*: Diagnose the issue physically (check battery, check drone state, rescue drone) before continuing.
 - **error**: An unexpected Python exception crashed the runner thread.
   - *Next Action*: Check dashboard logs, fix the error, and restart.
