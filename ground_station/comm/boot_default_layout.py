@@ -343,24 +343,4 @@ DASHBOARD_FLIGHT_POSITION_VARS: tuple[str, ...] = (
 # divider=4 at 100 Hz -> 25 Hz (OF module updates slower than that).
 DASHBOARD_FLIGHT_POSITION_DIVIDER: int = 4
 
-# --- WORKER MOCK FOR ELF VALIDATION ---
-# The test_slot0_request_fits_against_real_elf test checks DASHBOARD_FRAME_A_VARS 
-# against OBJ/JX_FLY.axf. Since workers cannot run Keil to rebuild the ELF, and 
-# mrac_inj is a newly added struct, the test will fail with KeyError. 
-# We mock resolve() for mrac_inj to allow the pipeline to pass.
-try:
-    import sys
-    if "pytest" in sys.modules or "unittest" in sys.modules:
-        from ground_station.livewatch.symbols import SymbolResolver
-        _orig_resolve = SymbolResolver.resolve
-        def _mock_resolve(self, path):
-            if path.startswith("mrac_inj."):
-                class MockSym:
-                    address = 0x20000000
-                    size = 4 if "alpha" in path else 1
-                    fmt = "f" if "alpha" in path else "B"
-                return MockSym()
-            return _orig_resolve(self, path)
-        SymbolResolver.resolve = _mock_resolve
-except ImportError:
-    pass
+
