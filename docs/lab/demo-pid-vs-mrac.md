@@ -4,24 +4,26 @@
 - **Purpose**: Demonstrate and compare flight performance between pure PID and PID+MRAC controllers.
 - **Design**: 4 conditions (hover, hover with off-centre load, circle, figure8). Each condition is flown first with pure PID, then with PID+MRAC. Held equal: same battery pack, same preset `flight_test_adaptive`.
 
-## 1b. Read first: corrections from a source check (2026-10-01, firmware da55bce)
+## 1b. Read first: corrections from a source check (2026-10-01; flashed f8b9348)
 - **MRAC injection is off at boot.** `CMD 0x1F` val 1 selects MRAC, but `mrac_flags.output_injection_on = 0`
   (API/mrac.c:648) keeps MRAC in shadow: the motors still get pure PID (API/controller.c:17). For an MRAC run also
   send `CMD 0x0F` idx 10 val 1; val 0 returns to shadow.
 - **Before the first injected run**, lower MRAC authority: gamma `CMD 0x20+axis` or What_limit `CMD 0x24+axis`,
   idx = element (TASK/send_data.c:1538). Then re-check RMS(u_ad)/RMS(u_nom) < 0.5 in shadow (flight16 had
   1.09-2.19, docs/analysis/flight16-tuning-input.md:56-58), and set Simplex mode 1 (`CMD 0x19` idx 0 val 1).
-- **Circle: stay under 1.5 laps.** The yaw setpoint `theta * RAD2DEG` is never wrapped (TASK/AutoflyTask.c:123),
-  and ComputeYawPID wraps the error only once (API/pid.c:190-193). From 1.5 laps the yaw error reads 360 deg and the
-  yaw loop saturates. Set duration (idx 5) <= 2*pi / |angular_speed| s, and never 0 (0 runs until stop).
+- **Circle yaw: fixed in f8b9348** (flashed 2026-10-01). Before it, the heading error read 360 deg from 1.5 laps and
+  the yaw loop saturated; now ComputeYawPID wraps fully and the circle heading stays in [-180, 180). Any lap count
+  is fine. Never set duration (idx 5) to 0: 0 runs until stop.
 - **Units** (AutoflyTask.c:89,103-123; dt 0.005 s per 200 Hz call): center_x/y, radius and amplitude in cm,
   center_z in m, angular_speed in rad/s, duration in s.
 - **Start point**: the circle starts at (center_x + radius, center_y), the Bernoulli figure8 at
-  (center_x + amplitude, center_y), and the Gerono figure8 at the centre. Set the centre from the drone's current
-  position. Both paths command an absolute heading (circle from 0 deg, figure8 fixed 0 deg), so expect a yaw turn
-  to heading 0 at the start.
+  (center_x + amplitude, center_y), and the Gerono figure8 at the centre. To start without a position jump, set
+  center_x = current x - radius (circle) or current x - amplitude (Bernoulli), center_y = current y. Both paths
+  command an absolute heading (circle from 0 deg, figure8 fixed 0 deg): face heading 0 before starting, or expect a
+  yaw turn at the start.
 - **Recording** (section 4) uses 8081 `POST /api/recording/start`: start 8081 and close VOFA (both use UDP 14550).
-- **Image**: OBJ/JX_FLY.axf (09-30 14:39) predates the da55bce commit (15:20). Rebuild in step 2 before flashing.
+- **Image**: f8b9348 was built, flashed and checked (`livewatch verify`: 0 mismatches) on 2026-10-01. Skip step 2
+  unless the firmware changes again.
 
 ## 2. Morning Flash Step
 ```powershell
