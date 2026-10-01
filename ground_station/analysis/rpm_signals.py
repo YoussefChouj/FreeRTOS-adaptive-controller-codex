@@ -54,37 +54,74 @@ def period_cyc_to_rpm(period_cyc: np.ndarray) -> np.ndarray:
     return rpm
 
 
-def load_slots(log_dir: Path, prefix: str):
-    """Load slot0+slot1+slot2 CSVs for one flight prefix.
+def load_slots(log_dir: Path, prefix: str, slots=(0, 1, 2, 3)):
+    """Load slot CSVs for one flight prefix.
 
-    Returns concatenated DataFrame with all columns from all slots.
+    Returns merged DataFrame joined on the fastest slot's t_src_ms.
     """
-    dfs = []
-    for slot in range(3):
+    dfs_dict = {}
+    for slot in slots:
         f = log_dir / f"{prefix}.slot{slot}.csv"
         if f.exists():
-            dfs.append(pd.read_csv(f))
-    if not dfs:
+            try:
+                df = pd.read_csv(f)
+            except pd.errors.EmptyDataError:
+                continue  # zero-byte file: nothing to join
+            if not df.empty:
+                df.sort_values("t_src_ms", inplace=True)
+                dfs_dict[slot] = df
+
+    if not dfs_dict:
         return pd.DataFrame()
-    return pd.concat(dfs, axis=1, ignore_index=False)
+
+    seen_cols = set(["t_src_ms"])
+    for slot in sorted(dfs_dict.keys()):
+        df = dfs_dict[slot]
+        keep_cols = ["t_src_ms"]
+        for c in df.columns:
+            if c not in seen_cols:
+                keep_cols.append(c)
+                seen_cols.add(c)
+        dfs_dict[slot] = df[keep_cols]
+
+    fastest_slot = max(dfs_dict.keys(), key=lambda s: len(dfs_dict[s]))
+    base_df = dfs_dict[fastest_slot]
+
+    for slot in sorted(dfs_dict.keys()):
+        if slot == fastest_slot:
+            continue
+        df = dfs_dict[slot]
+        dt = df["t_src_ms"].diff().median()
+        tolerance = int(2 * dt) if pd.notna(dt) else 100
+
+        base_df = pd.merge_asof(
+            base_df,
+            df,
+            on="t_src_ms",
+            direction="nearest",
+            tolerance=tolerance
+        )
+
+    return base_df
 
 
 def hover_mask(df: pd.DataFrame) -> pd.Series:
     """Return True for frames where the drone is stably hovering.
 
-    Heuristic: ARMED, FLYING phase (phase==1), altitude between 0.1 and 2.0 m,
+    Heuristic: FLYING phase (flight_phase==1 or s_state==1), altitude between 0.1 and 2.0 m,
     and voltage > 14 V (battery not deeply discharged).
     """
-    armed = df.get("DroneStatus.ARM_Status")
     phase = df.get("flight_phase")
+    s_state = df.get("s_state")
     alt = df.get("ano_of.of_alt_cm")
     vbat = df.get("real_voltage")
 
     mask = pd.Series(True, index=df.index)
-    if armed is not None:
-        mask &= (armed == 1.0)
     if phase is not None:
         mask &= (phase == 1.0)
+    elif s_state is not None:
+        mask &= (s_state == 1.0)
+        
     if alt is not None:
         mask &= (alt >= 10.0) & (alt <= 200.0)
     if vbat is not None:
@@ -181,7 +218,7 @@ def hover_thrust_id(
     # Use median for robust statistics
     med_sum_w2 = np.median(sum_w2)
     med_cw_share = np.median(cw_w2 / (sum_w2 + 1e-12))
-    rpm_mean = np.median(rpm[:, 0:3], axis=0)  # use ch0-2 (ch3 may be bad)
+    rpm_mean = np.median(rpm, axis=0)
 
     # Calibrated k_T: k_T = m*g / sum_w2 at hover
     k_T = mass_kg * GRAVITY_MS2 / med_sum_w2  # N s^2 / rad^2
@@ -213,6 +250,7 @@ def hover_thrust_id(
         "torque_roll_Nm": float(med_torque_roll),
         "torque_pitch_Nm": float(med_torque_pitch),
         "n_hover_frames": int(n_frames),
+        "hover_seconds": float((hover["t_src_ms"].values[-1] - hover["t_src_ms"].values[0]) / 1000.0) if len(hover) > 1 else 0.0,
         "n_masked_ch3": int((~ch3_good).sum()),
     }
     return result
@@ -359,33 +397,44 @@ def asymmetry_index(motor_means: dict[int, float]) -> float | None:
     return (max(vals) - min(vals)) / overall_mean
 
 
-def print_kt_table(flight_dirs: list[Path], mass_kg: float) -> None:
-    """Print a k_T table for all f17 flight directories.
-
-    Scans each directory for slot CSVs and computes hover thrust parameters.
+def print_kt_table(flights: list[tuple[str, Path]], mass_kg: float) -> None:
+    """Print a k_T table for all f17 flights.
     """
+    print(f"mass is an ASSUMPTION (not weighed): {mass_kg} kg\n")
     rows = []
-    for d in flight_dirs:
-        prefix = d.name
-        if not prefix.startswith("f17"):
-            continue
-        df = load_slots(d, prefix)
+    for prefix, log_dir in flights:
+        df = load_slots(log_dir, prefix)
         if df.empty:
+            print(f"Skip {prefix}: no data", file=sys.stderr)
             continue
+            
+        rpm_cols = [c for c in df.columns if c.startswith("rpm_dbg_period_cyc")]
+        if not rpm_cols:
+            print(f"Skip {prefix}: no rpm columns", file=sys.stderr)
+            continue
+            
         result = hover_thrust_id(df, mass_kg=mass_kg)
         if "error" in result:
+            print(f"Skip {prefix}: {result['error']}", file=sys.stderr)
             continue
+            
+        if result["n_hover_frames"] < 200:
+            print(f"Skip {prefix}: fewer than 200 hover rows", file=sys.stderr)
+            continue
+            
+        short_prefix = prefix if len(prefix) <= 35 else prefix[:32] + "..."
+            
         rows.append(
             {
-                "flight": prefix,
+                "flight": short_prefix,
                 "k_T": f'{result["k_T"]:.2e}',
                 "mass_hat": f'{result["mass_hat_kg"]:.3f}',
-                "sum_w2": f'{result["sum_w2"]:.3e}',
-                "cw_share": f'{result["cw_share"]:.3f}',
-                "rpm_ch0": f'{result["rpm_mean"][0]:.0f}',
-                "rpm_ch1": f'{result["rpm_mean"][1]:.0f}',
-                "rpm_ch2": f'{result["rpm_mean"][2]:.0f}',
+                "rpm_m1": f'{result["rpm_mean"][0]:.0f}',
+                "rpm_m2": f'{result["rpm_mean"][1]:.0f}',
+                "rpm_m3": f'{result["rpm_mean"][2]:.0f}',
+                "rpm_m4": f'{result["rpm_mean"][3]:.0f}',
                 "frames": result["n_hover_frames"],
+                "hover_s": f'{result["hover_seconds"]:.1f}',
             }
         )
 
@@ -393,8 +442,8 @@ def print_kt_table(flight_dirs: list[Path], mass_kg: float) -> None:
         print("No hover data found.", file=sys.stderr)
         return
 
-    df_out = pd.DataFrame(rows)
     print()
+    df_out = pd.DataFrame(rows)
     print(df_out.to_string(index=False))
     print()
 
@@ -467,17 +516,22 @@ def main(argv: list[str] | None = None) -> None:
                 print(f"  {k}: {v}")
 
     else:
-        # k_T table mode: scan all f17 flights
-        flight_dirs = sorted(p for p in args.logs.iterdir() if p.is_dir())
-        if not flight_dirs:
-            # Maybe args.logs is the data dir containing flights directly
-            flight_dirs = sorted(
-                p for p in args.logs.parent.parent.glob("f17*") if p.is_dir()
-            )
-        if not flight_dirs:
-            flight_dirs = [args.logs]
+        # k_T table mode
+        flights = []
+        if args.logs.is_dir():
+            # Old per-directory path
+            for d in sorted(args.logs.iterdir()):
+                if d.is_dir() and d.name.startswith("f17"):
+                    flights.append((d.name, d))
+            # Flat layout discovery via .meta.json
+            for m in sorted(args.logs.glob("f17_*.meta.json")):
+                prefix = m.name[:-10]
+                flights.append((prefix, args.logs))
+                
+        if not flights and args.logs.is_dir() and args.logs.name.startswith("f17"):
+            flights.append((args.logs.name, args.logs))
 
-        print_kt_table(flight_dirs, mass_kg=args.mass)
+        print_kt_table(flights, mass_kg=args.mass)
 
 
 if __name__ == "__main__":
