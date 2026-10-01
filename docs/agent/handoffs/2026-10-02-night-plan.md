@@ -4,15 +4,18 @@ Read this after a compaction. Hard limits: `2026-10-01-overnight-context.md` (no
 building is OK, outside workers only, explicit-pathspec commits, never commit OBJ/* or the other session's files).
 
 ## Infra
-- Integration branch `night/2026-10-02` (from main 482b0eb), worktree `../wt-night`. Every WP uses Base = that branch.
+- Integration branch `night/2026-10-02` (from main 5d9d83f), worktree `../wt-night`. Every WP uses Base = that branch.
   Merge `wp/<id>` into it after verification. Do NOT build in the main tree: main-tree `OBJ/JX_FLY.axf` must keep
   matching the flashed 3ae4a23 image for the operator's livewatch/stream_log. Build in `../wt-night`.
 - VPS workers do not get untracked logs through git. The f17 logs were copied to the VPS:
   `/home/agent/data/logs/vofa/f17_*` (75 files, 106 MB, checked). Local path is `logs/vofa/` in the main tree.
 
 ## Measured this session (scratch scripts h1.py/h2.py; hover = Z_posPID.FB > 0.6 x p95, first 15% skipped)
-- Motor means in hover, every hovering flight: motor1/motor2 3070-3267, motor3/motor4 2744-2987.
-  That is a constant torque bias, flown by both PID and MRAC.
+- Motor means in hover: motor1/motor2 3070-3267, motor3/motor4 2744-2987. CORRECTED by the mixer
+  (~1109-1145, u_gyroy = -gyroyPID.U): per motor roll=(M2+M3-M1-M4)/4, pitch=(M2+M4-M1-M3)/4, yaw=(M3+M4-M1-M2)/4.
+  The M1/M2 vs M3/M4 split is YAW trim (115-157 ticks, yaw I cap 500, fine). Roll need 37-45 ticks/motor,
+  pitch 5-20 (shadow10/14/4, active15). Exact match to gyroxPID.U / -gyroyPID.U / -gyrozPID.U in shadow.
+  Model A then follows: gyro Ui cap 10 -> P term 30 -> 6 deg/s rate error -> angle Ui cap 2.4 -> 1.8 deg error.
 - Shadow flights (PID drives the motors): rollPID.U +6.2..+8.7 deg/s, gyroxPID.U +30.7..+45.6;
   pitchPID.U +1.3..+4.3, gyroyPID.U +6.1..+21.0.
   Active flights (MRAC injected): rollPID.U 0.0..+0.8, gyroxPID.U -0.8..+2.9. MRAC carries the torque bias.
@@ -54,3 +57,5 @@ building is OK, outside workers only, explicit-pathspec commits, never commit OB
 
 ## Status log (append one line per event)
 - 2026-10-01 ~21:30 plan written; logs on VPS; next: night branch + WP-9/WP-10 briefs.
+- ~22:10 night branch + ../wt-night @ 5d9d83f; mixer decomposition (yaw split, roll 40 ticks); WP-9/10 briefs committed;
+  managers launched from ../wt-night (`bash .agent-ops/manager.sh run <id> high night/2026-10-02`).
