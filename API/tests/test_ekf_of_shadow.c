@@ -45,7 +45,7 @@ static int g_fail = 0;
 } while (0)
 
 /* ---- Test 1: rebase sign ----
- * A rebase should leave the predicted OF measurement unchanged.
+ * A rebase should leave the OF innovation z - (v + bof) unchanged.
  * Measurement model: z = v + bof.
  * If s_of_bias shifts by +d counts, the raw measurement shifts by -d*0.01 m/s.
  * The KF bias bof must shift by -d*0.01 so that (v + bof) stays the same.
@@ -63,18 +63,19 @@ static void test_rebase_sign(void)
     e.x[1] = 0.5f;   /* vel_x = 0.5 m/s */
     e.x[2] = 0.02f;  /* bof_x = 0.02 m/s */
 
-    /* Predicted measurement = v + bof */
-    pred_before = e.x[1] + e.x[2];
+    /* CEO fix: the invariant is the innovation z - (v + bof), not v + bof.
+     * z = (raw - s_of_bias) * 0.01 with raw = 60 counts, s_of_bias = 0. */
+    pred_before = 0.60f - (e.x[1] + e.x[2]);
 
-    /* Simulate rebase: s_of_bias_x shifts by +10 counts.
+    /* Simulate rebase: s_of_bias_x shifts by +10 counts, so z drops by 0.1.
      * The -= fix means bof shifts by -(+10)*0.01 = -0.1 */
     dbx = 10.0f;
     e.x[2] -= dbx * 0.01f;   /* this is what Of_RebaseKfBias does after the fix */
 
-    pred_after = e.x[1] + e.x[2];
+    pred_after = (60.0f - dbx) * 0.01f - (e.x[1] + e.x[2]);
 
     ASSERT_CLOSE(pred_before, pred_after, 1e-6f,
-        "predicted OF measurement must be unchanged after rebase");
+        "OF innovation must be unchanged after rebase");
     printf("PASS: test_rebase_sign\n");
     g_pass++;
 }
