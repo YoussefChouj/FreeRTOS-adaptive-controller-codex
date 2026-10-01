@@ -50,3 +50,11 @@ Scope (worker may edit): `ground_station/flashtool/code_gate.py`, `ground_statio
 Allow globs: `ground_station/flashtool/code_gate.py` `ground_station/flashtool/protected_set.yaml` `ground_station/flashtool/tests/test_code_gate.py` `.agent-ops/out/*`
 Worker lane: agy-vps, chain `agy:gemini-3.1-pro-high,agy:gemini-3.8-flash-high`   Max worker rounds: 3
 Report to: `docs/agent/reports/WP-2.md`; add one line: any MANAGER.md rule that was unclear or a denied command.
+
+## CEO decision 2026-10-01, after the manager's BLOCKED report (for the CTE)
+- Size: accepted. Run the gate with `--max-lines 600` added; the 564-line total is fine.
+- Fix the residual hunk-parser hole: walk each hunk by the old/new line counts in its `@@ -a,b +c,d @@`
+  header, never by sniffing a `--- ` prefix. New test: a removed line `-- x;` (diff line `--- x;`) inside a
+  PROTECTED region must still be refused.
+- Keep all worker code that passes; touch only what this fix needs. Acceptance commands are unchanged
+  apart from `--max-lines 600`.
