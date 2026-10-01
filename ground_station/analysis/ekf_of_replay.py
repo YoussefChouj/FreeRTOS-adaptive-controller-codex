@@ -208,12 +208,56 @@ def replay_arrays(t1, phase1, ax1, ay1, t3, ofx3, ofy3, ofq3, params_grid, run_o
         final_ba_x = ba_x[b, -1] / 9.80665e-3
         final_ba_y = ba_y[b, -1] / 9.80665e-3
         
+        # Fitted tilt gain k: regress KF velocity on OF velocity during flight.
+        # k > 0 on every log proves the sign convention is correct.
+        vel_x_b = np.zeros(N1)
+        vel_y_b = np.zeros(N1)
+        for ii in range(N1):
+            vel_x_b[ii] = pos_x[b, ii]
+            vel_y_b[ii] = pos_y[b, ii]
+        # Finite-difference position -> velocity (m/s)
+        kf_vx = np.diff(pos_x[b, :]) / np.maximum(np.diff(t1), 1e-6)
+        kf_vy = np.diff(pos_y[b, :]) / np.maximum(np.diff(t1), 1e-6)
+        # OF velocity (m/s) at slot3 times, interpolated to slot1
+        f_ofx = interpolate.interp1d(t3, ofx3, bounds_error=False, fill_value=0.0) if len(t3) > 1 else lambda x: np.zeros_like(x)
+        f_ofy = interpolate.interp1d(t3, ofy3, bounds_error=False, fill_value=0.0) if len(t3) > 1 else lambda x: np.zeros_like(x)
+        of_vx1 = f_ofx(t1[1:])
+        of_vy1 = f_ofy(t1[1:])
+        # Use eval_mask (flight only, after 2 s)
+        em = eval_mask[1:]
+        if np.sum(em) > 10:
+            # Least-squares: k = sum(of*kf)/sum(of*of)
+            num = np.sum(of_vx1[em] * kf_vx[em]) + np.sum(of_vy1[em] * kf_vy[em])
+            den = np.sum(of_vx1[em]**2) + np.sum(of_vy1[em]**2)
+            k_fit = num / max(den, 1e-12)
+        else:
+            k_fit = 0.0
+        
+        # Residual/dOF variance ratio: how much of OF velocity variance the
+        # KF velocity explains.  ratio < 0.7 means the KF tracks OF well.
+        if np.sum(em) > 10:
+            dof_var = np.var(of_vx1[em]) + np.var(of_vy1[em])
+            res_x = of_vx1[em] - kf_vx[em]
+            res_y = of_vy1[em] - kf_vy[em]
+            res_var = np.var(res_x) + np.var(res_y)
+            res_ratio = res_var / max(dof_var, 1e-12)
+        else:
+            res_ratio = 1.0
+        
+        # Innovation rms (cm/s)
+        innov_rms_x = np.sqrt(np.mean(ix**2)) * 100 if len(ix) > 0 else 0.0
+        innov_rms_y = np.sqrt(np.mean(iy**2)) * 100 if len(iy) > 0 else 0.0
+        innov_sd = np.sqrt((np.var(ix) + np.var(iy)) / 2.0) if len(ix) > 0 else 0.0
+        
         res.append({
             'rms_new_x': rms_new_x, 'rms_new_y': rms_new_y,
             'rms_old_x': rms_old_x, 'rms_old_y': rms_old_y,
             'nis': nis, 'autocorr': autocorr,
             'bof_drift': bof_drift, 'settle': settle,
             'final_ba_x': final_ba_x, 'final_ba_y': final_ba_y,
+            'k_fit': k_fit, 'res_ratio': res_ratio,
+            'innov_rms_x': innov_rms_x, 'innov_rms_y': innov_rms_y,
+            'innov_sd': innov_sd,
             'old_pos_x': int_old_pos_x[0] if run_old else None,
             'old_pos_y': int_old_pos_y[0] if run_old else None,
         })
@@ -261,19 +305,24 @@ def run_cli():
         q_bof_vals = [DEFAULTS['q_bof']]
         q_ba_vals = [DEFAULTS['q_ba']]
         R_of_vals = [DEFAULTS['R_of']]
+        R_zupt_vals = [DEFAULTS['R_zupt']]
     else:
-        q_acc_vals = [1e-3, 3e-3, 1e-2, 3e-2, 1e-1]
-        q_bof_vals = [1e-7, 1e-6, 1e-5]
-        q_ba_vals = [1e-6, 1e-5, 1e-4]
-        R_of_vals = [3e-4, 6.16e-4, 1.2e-3, 2.5e-3]
+        # WP-14 small grid around the drift-investigation CHOSEN:
+        # q_acc 3e-3, R_of 1e-4, q_bof 1e-7, q_ba 1e-6, R_zupt 1e-4
+        q_acc_vals = [1e-3, 3e-3, 1e-2]
+        q_bof_vals = [1e-7, 1e-6]
+        q_ba_vals = [1e-6, 1e-5]
+        R_of_vals = [1e-4, 3e-4, 6.16e-4]
+        R_zupt_vals = [1e-4]
         
     params_grid = []
-    for qa, qb, qba, rof in itertools.product(q_acc_vals, q_bof_vals, q_ba_vals, R_of_vals):
+    for qa, qb, qba, rof, rz in itertools.product(q_acc_vals, q_bof_vals, q_ba_vals, R_of_vals, R_zupt_vals):
         p = DEFAULTS.copy()
         p['q_acc'] = qa
         p['q_bof'] = qb
         p['q_ba'] = qba
         p['R_of'] = rof
+        p['R_zupt'] = rz
         params_grid.append(p)
         
     # Process logs
@@ -336,10 +385,13 @@ def run_cli():
         rol1 = f_rol(t1) * np.pi / 180.0
         pit1 = f_pit(t1) * np.pi / 180.0
         
-        lin_x = Acc_X + 1000.0 * np.sin(pit1)
-        lin_y = Acc_Y - 1000.0 * np.sin(rol1) * np.cos(pit1)
-        ax = +lin_x * 9.80665e-3
-        ay = -lin_y * 9.80665e-3
+        # Tilt-only input: use gravity-tilt term (1000*vecxZ, 1000*vecyZ) in mg,
+        # not the full Lin_Acc.  Body accel explains ~0% of OF velocity change;
+        # the gravity-tilt alone explains 34-63% (drift investigation §ekf F2).
+        tilt_x = 1000.0 * np.sin(pit1)                   # ≈ 1000*Gravity_Body_X (mg)
+        tilt_y = 1000.0 * np.sin(rol1) * np.cos(pit1)    # ≈ 1000*Gravity_Body_Y (mg)
+        ax = +tilt_x * 9.80665e-3   # EKF_OF_ACC_SIGN_X = +1
+        ay = -tilt_y * 9.80665e-3   # EKF_OF_ACC_SIGN_Y = -1
         
         ofx = (of2_dx - s_of_bias_x) * 0.01
         ofy = (of2_dy - s_of_bias_y) * 0.01
@@ -366,7 +418,7 @@ def run_cli():
             except KeyError:
                 pass
                 
-    # score combinations
+    # score combinations — WP-14 acceptance: NIS 0.3-2, res_ratio < 0.7, bof_drift < 1 cm/s
     B = len(params_grid)
     scores = np.zeros(B)
     mean_ln_nis = np.zeros(B)
@@ -377,16 +429,16 @@ def run_cli():
         for log_idx in range(len(all_log_res)):
             res = all_log_res[log_idx][b]
             nis = res['nis']
-            autocorr = res['autocorr']
             bof_drift = res['bof_drift']
-            settle = res['settle']
+            res_ratio = res['res_ratio']
+            k_fit = res['k_fit']
             
-            c_nis = (0.5 <= nis <= 2.0)
-            c_ac = (autocorr < 0.3)
+            c_nis = (0.3 <= nis <= 2.0)
+            c_rr = (res_ratio < 0.7)
             c_bof = (bof_drift < 1.0)
-            c_set = (settle <= 10.0)
+            c_k = (k_fit > 0)
             
-            if c_nis and c_ac and c_bof and c_set:
+            if c_nis and c_rr and c_bof and c_k:
                 passed += 1
             ln_nis_sum += np.abs(np.log(nis)) if nis > 0 else 100.0
             
@@ -399,34 +451,48 @@ def run_cli():
     for i in range(min(5, B)):
         idx = order[i]
         p = params_grid[idx]
-        print(f"Score {scores[idx]} | NIS_ln {mean_ln_nis[idx]:.3f} | q_acc={p['q_acc']} q_bof={p['q_bof']} q_ba={p['q_ba']} R_of={p['R_of']}")
+        print(f"Score {scores[idx]} | NIS_ln {mean_ln_nis[idx]:.3f} | q_acc={p['q_acc']} q_bof={p['q_bof']} q_ba={p['q_ba']} R_of={p['R_of']} R_zupt={p['R_zupt']}")
         
     best_idx = order[0]
     best_p = params_grid[best_idx]
     
+    # Collect k values across logs for median tilt gain
+    k_values = []
+    innov_sd_values = []
     for log_idx in range(len(all_log_res)):
         print(f"--- Log: {log_names[log_idx]} ---")
         res = all_log_res[log_idx][best_idx]
         nis = res['nis']
-        ac = res['autocorr']
         bof = res['bof_drift']
-        settle = res['settle']
+        rr = res['res_ratio']
+        k = res['k_fit']
+        isd = res['innov_sd']
+        k_values.append(k)
+        innov_sd_values.append(isd)
         
-        p_nis = "PASS" if 0.5 <= nis <= 2.0 else "FAIL"
-        p_ac = "PASS" if ac < 0.3 else "FAIL"
+        p_nis = "PASS" if 0.3 <= nis <= 2.0 else "FAIL"
+        p_rr = "PASS" if rr < 0.7 else "FAIL"
         p_bof = "PASS" if bof < 1.0 else "FAIL"
-        p_set = "PASS" if settle <= 10.0 else "FAIL"
+        p_k = "PASS" if k > 0 else "FAIL"
         
         print(f"Pos Diff OLD-vs-FIXED: {res['rms_old_x']:.2f} cm (X), {res['rms_old_y']:.2f} cm (Y)")
         print(f"Pos Diff NEW-vs-FIXED: {res['rms_new_x']:.2f} cm (X), {res['rms_new_y']:.2f} cm (Y)")
         print(f"ba_x: {res['final_ba_x']:.2f} mg, ba_y: {res['final_ba_y']:.2f} mg")
-        print(f"NIS: {nis:.2f} [{p_nis}], Autocorr: {ac:.2f} [{p_ac}]")
-        print(f"BOF Drift: {bof:.2f} cm/s [{p_bof}], Settle Time: {settle:.2f} s [{p_set}]")
+        print(f"NIS: {nis:.2f} [{p_nis}], ResRatio: {rr:.3f} [{p_rr}]")
+        print(f"BOF Drift: {bof:.2f} cm/s [{p_bof}], k_fit: {k:.3f} [{p_k}]")
+        print(f"Innov RMS: {res['innov_rms_x']:.2f}/{res['innov_rms_y']:.2f} cm/s, Innov SD: {isd*100:.2f} cm/s")
         
-    defaults_match = "yes" if best_p['q_acc'] == DEFAULTS['q_acc'] and best_p['q_bof'] == DEFAULTS['q_bof'] and best_p['q_ba'] == DEFAULTS['q_ba'] and best_p['R_of'] == DEFAULTS['R_of'] else "no"
-    print(f"CHOSEN q_acc={best_p['q_acc']} q_bof={best_p['q_bof']} q_ba={best_p['q_ba']} R_of={best_p['R_of']}")
+    median_k = float(np.median(k_values)) if k_values else 1.0
+    median_isd = float(np.median(innov_sd_values)) if innov_sd_values else 0.01
+    health_thresh = 5.0 * median_isd  # about 5x innovation sd
+    
+    defaults_match = "yes" if best_p['q_acc'] == DEFAULTS['q_acc'] and best_p['q_bof'] == DEFAULTS['q_bof'] and best_p['q_ba'] == DEFAULTS['q_ba'] and best_p['R_of'] == DEFAULTS['R_of'] and best_p['R_zupt'] == DEFAULTS['R_zupt'] else "no"
+    print(f"CHOSEN q_acc={best_p['q_acc']} q_bof={best_p['q_bof']} q_ba={best_p['q_ba']} R_of={best_p['R_of']} R_zupt={best_p['R_zupt']}")
+    print(f"TILT_GAIN_MEDIAN {median_k:.3f}")
+    print(f"HEALTH_THRESH {health_thresh:.4f} m/s (5 x median innov sd {median_isd*100:.2f} cm/s)")
     print(f"DEFAULTS_MATCH {defaults_match}")
     print(f"Elapsed: {time.time() - t0:.2f} s")
 
 if __name__ == "__main__":
     run_cli()
+

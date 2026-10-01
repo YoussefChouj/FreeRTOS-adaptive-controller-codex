@@ -124,7 +124,7 @@ float g_of_bias_ema_tau_s = OF_BIAS_EMA_TAU_DEFAULT; /* EMA time constant (s) */
  * g_ekf_of_fallback: set to 1 once after any health-triggered mode fallback;
  *   sticky until the next ARM so the operator can see it on the dashboard.
  * Both are plain globals so they are DWARF-subscribable. */
-#define EKF_OF_INNOV_THRESH  2.0f  /* m/s — innovation > this → unhealthy */
+/* EKF_OF_INNOV_THRESH and EKF_OF_HEALTH_PERSIST are now in ekf_of.h (WP-14). */
 #define EKF_OF_ACC_SIGN_X (+1.0f)
 #define EKF_OF_ACC_SIGN_Y (-1.0f)
 #define EKF_OF_MG_TO_MPS2 (9.80665e-3f)
@@ -132,6 +132,16 @@ float g_of_bias_ema_tau_s = OF_BIAS_EMA_TAU_DEFAULT; /* EMA time constant (s) */
 #define EKF_OF_UPDATE_ON_NEW_FRAME 1U /* 1 = feed each OF frame once (detected by ano_of.of_update_cnt changing), 0 = legacy every tick */
 volatile uint8_t g_ekf_of_health   = 1U; /* 1=healthy 0=diverged  */
 volatile uint8_t g_ekf_of_fallback = 0U; /* 1=fell back to FIXED  */
+/* WP-14: shadow mode — KF runs every tick regardless of g_of_bias_mode.
+ * Default 1 (shadow on). A bad innovation in shadow only clears health,
+ * never changes g_of_bias_mode. Position feed stays on mode 2 only. */
+volatile uint8_t g_ekf_of_shadow   = 1U;
+/* WP-14: active velocity feedback. When 1 AND mode 2 AND healthy,
+ * locxsPID/locysPID.FB take KF velocity instead of raw OF. Default 0. */
+volatile uint8_t g_ekf_of_vel_fb   = 0U;
+/* WP-14: innovation persistence counter for the health gate.
+ * Trips only after EKF_OF_HEALTH_PERSIST consecutive bad ticks. */
+static uint16_t s_ekf_of_innov_bad_cnt = 0U;
 /* Handheld test (CMD 0x1E idx=3): integrate OF position on the ground so the
  * drone can be carried by hand (modes 0/2). Freezes the ground bias EMA, zeroes
  * the origin on enable, and self-clears once the drone is flying. */
@@ -204,9 +214,12 @@ uint16_t g_cal_health = 0U;   /* bitmask: 0x01 BOOT_OK | 0x02 COLD_OK | 0x04 COL
  * integrates into position. Every s_of_bias writer calls this with its delta. */
 static void Of_RebaseKfBias(float dbx, float dby)
 {
-	if (g_of_bias_mode == 2U && s_ekf_of_inited) {
-		s_ekf_of.x[2] += dbx * 0.01f;
-		s_ekf_of.x[5] += dby * 0.01f;
+	/* WP-14: run in shadow too (was guarded on mode==2). Sign fix: measurement
+	 * model z = v + bof, so a +d shift of the raw measurement = -d shift in
+	 * the KF bias state (was +=, should be -=). */
+	if (s_ekf_of_inited) {
+		s_ekf_of.x[2] -= dbx * 0.01f;
+		s_ekf_of.x[5] -= dby * 0.01f;
 	}
 }
 
@@ -227,9 +240,9 @@ void Reset_World_Origin(void)
 	Ctrler.locysPID.Des  = 0.0f;
 	s_of_bias_x          = 0.0f;
 	s_of_bias_y          = 0.0f;
-	/* Mode 2: also reset the OF KF position state.
+	/* WP-14: reset KF position in all modes (shadow included).
 	 * vel and bias states stay — only accumulated position resets to zero. */
-	if (g_of_bias_mode == 2U && s_ekf_of_inited) {
+	if (s_ekf_of_inited) {
 		EkfOf_ResetPos(&s_ekf_of);
 	}
 	s_ekf_pos_synced = 0U;
@@ -433,22 +446,38 @@ void Update_Data(void)
 						* ((float)ano_of.of2_dy_fix - s_of_bias_y);
 				}
 			}
-			/* ---- Mode 2 (EKF): tick the 8-state KF, check health ---- */
+			/* ---- Mode 2 (EKF) or shadow: tick the 8-state KF, check health ---- */
 			else if (g_of_bias_mode == 2U) {
+				/* placeholder: bias-mode-2-only work done after the shared block */
+			}
+			/* WP-14: KF ticks whenever mode==2 or shadow. Predict, ZUPT, OF update
+			 * and health gate run every 5 ms tick. Shadow mode only records health;
+			 * mode 2 feeds the position path and falls back on persistent divergence. */
+			if (g_of_bias_mode == 2U || g_ekf_of_shadow) {
 				float ofx;
 				float ofy;
 				float innov_mag;
+				float tilt_ax;
+				float tilt_ay;
 				uint8_t on_ground;
 				static u8 s_last_of_update_cnt = 0;
 				if (!s_ekf_of_inited) {
 					EkfOf_Init(&s_ekf_of);
 					s_ekf_of_inited = 1U;
 					g_ekf_of_health = 1U; /* healthy on init */
+					s_ekf_of_innov_bad_cnt = 0U;
 				}
 				on_ground = !g_of_handheld_test && !(DroneStatus.ARM_Status == Armed && (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING));
 				ofx = ((float)ano_of.of2_dx_fix - s_of_bias_x) * 0.01f; /* m/s */
 				ofy = ((float)ano_of.of2_dy_fix - s_of_bias_y) * 0.01f;
-				EkfOf_Predict(&s_ekf_of, 0.005f, EKF_OF_ACC_SIGN_X * Lin_Acc_X_body * EKF_OF_MG_TO_MPS2, EKF_OF_ACC_SIGN_Y * Lin_Acc_Y_body * EKF_OF_MG_TO_MPS2);
+				/* WP-14: tilt-only input — gravity-tilt term replaces Lin_Acc.
+				 * Body accel explains ~0% of OF velocity change; the gravity-tilt
+				 * alone explains 34-63% (drift investigation §ekf F2).
+				 * Gravity_Body_X/Y = vecxZ/vecyZ (body-frame gravity unit vector,
+				 * computed each tick in imu_update.c).  Multiply by 1000 to get mg. */
+				tilt_ax = EKF_OF_ACC_SIGN_X * 1000.0f * Gravity_Body_X * EKF_OF_TILT_GAIN * EKF_OF_MG_TO_MPS2;
+				tilt_ay = EKF_OF_ACC_SIGN_Y * 1000.0f * Gravity_Body_Y * EKF_OF_TILT_GAIN * EKF_OF_MG_TO_MPS2;
+				EkfOf_Predict(&s_ekf_of, 0.005f, tilt_ax, tilt_ay);
 				if (on_ground) EkfOf_UpdateZeroVel(&s_ekf_of);
 				if (of_ok) {
 					if (EKF_OF_UPDATE_ON_NEW_FRAME) {
@@ -460,19 +489,26 @@ void Update_Data(void)
 						EkfOf_Update(&s_ekf_of, ofx, ofy);
 					}
 				}
-				/* Innovation-based health monitor.
+				/* WP-14: innovation-based health gate with persistence.
 				 * innov_x/y are the post-update residuals set in EkfOf_Update.
-				 * Large innovations indicate KF divergence. On health failure:
-				 *   - force g_of_bias_mode back to 0 (FIXED)
-				 *   - set g_ekf_of_fallback sticky flag for dashboard
-				 *   - control path falls to Mode 0 this tick via the outer if. */
+				 * Trip only after EKF_OF_HEALTH_PERSIST consecutive ticks (0.5 s)
+				 * with innovation magnitude > EKF_OF_HEALTH_THRESH.
+				 * In shadow mode: only set health=0, never change g_of_bias_mode. */
 				innov_mag = s_ekf_of.innov_x * s_ekf_of.innov_x
 				          + s_ekf_of.innov_y * s_ekf_of.innov_y;
-				if (innov_mag > (EKF_OF_INNOV_THRESH * EKF_OF_INNOV_THRESH)) {
-					g_ekf_of_health = 0U;
-					g_of_bias_mode  = 0U; /* forced fallback to FIXED */
-					g_ekf_of_fallback = 1U;
+				if (innov_mag > (EKF_OF_HEALTH_THRESH * EKF_OF_HEALTH_THRESH)) {
+					if (s_ekf_of_innov_bad_cnt < 0xFFFFU) {
+						s_ekf_of_innov_bad_cnt++;
+					}
+					if (s_ekf_of_innov_bad_cnt >= EKF_OF_HEALTH_PERSIST) {
+						g_ekf_of_health = 0U;
+						if (g_of_bias_mode == 2U) {
+							g_of_bias_mode  = 0U; /* forced fallback to FIXED */
+							g_ekf_of_fallback = 1U;
+						}
+					}
 				} else {
+					s_ekf_of_innov_bad_cnt = 0U;
 					g_ekf_of_health = 1U;
 				}
 			}
@@ -511,9 +547,8 @@ void Update_Data(void)
 			Ctrler.locyPID.FB = ano_of.earth_y_ture;
 		} else {
 			s_ekf_pos_synced = 0U;
-			/* Re-init the KF on the next entry to mode 2: its vel/bias states
-			 * are stale (or diverged, after a health fallback). */
-			s_ekf_of_inited = 0U;
+			/* WP-14: removed s_ekf_of_inited = 0U. The KF runs in shadow
+			 * across all modes, so re-init would kill the shadow state. */
 			/* Modes 0 and 1: debias raw OF and integrate as before.
 			 * FIX 2026-09-26: hold position while on the ground (disarmed,
 			 * GROUND_IDLE or LANDED): OF zero wanders 1-3 counts at rest,
@@ -603,6 +638,13 @@ void Update_Data(void)
 			if (g_ekf_gate.ctrl_enable && g_ekf_gate.healthy) {
 				fb_dx = g_ekf_gate.vx_cms;
 				fb_dy = g_ekf_gate.vy_cms;
+			}
+			/* WP-14: OF EKF velocity feedback. When enabled AND mode 2 AND
+			 * healthy, KF body velocity (m/s, x[1]/x[4]) replaces raw OF.
+			 * Same frame and units as fb_dx/fb_dy after *100 → cm/s. */
+			if (g_ekf_of_vel_fb && g_of_bias_mode == 2U && g_ekf_of_health) {
+				fb_dx = s_ekf_of.x[1] * 100.0f;   /* vel_x body, cm/s */
+				fb_dy = s_ekf_of.x[4] * 100.0f;   /* vel_y body, cm/s */
 			}
 			Ctrler.locxsPID.FB= (fb_dy) *Cos_Yaw_01 +(-fb_dx)*Sin_Yaw_01;
 			Ctrler.locysPID.FB=  (-fb_dx) * Cos_Yaw_01 - (fb_dy)*Sin_Yaw_01;
@@ -1023,16 +1065,16 @@ void Compute_Motor(void)
 				}
 				s_of_bias_seeded = 1U;
 			}
-			/* Mode 2: Reset_World_Origin() rebased the KF to bias 0; rebase
-			 * to the snapped bias. On the ground at ARM velocity is zero. */
+			/* WP-14: rebase KF bias and zero velocity in all modes (shadow). */
 			Of_RebaseKfBias(s_of_bias_x, s_of_bias_y);
-			if (g_of_bias_mode == 2U && s_ekf_of_inited) {
+			if (s_ekf_of_inited) {
 				s_ekf_of.x[1] = 0.0f;
 				s_ekf_of.x[4] = 0.0f;
 			}
 			/* Clear EKF fallback sticky flag on ARM 0→1 edge so the
 			 * dashboard sees a clean state for each new flight. */
 			g_ekf_of_fallback = 0U;
+			s_ekf_of_innov_bad_cnt = 0U;
 		}
 		else if (armed_now && on_ground && !g_of_handheld_test && s_of_pre_ok && g_of_bias_mode == 0U) {
 			s_of_bias_x = s_of_pre_x;
@@ -1047,7 +1089,7 @@ void Compute_Motor(void)
 			s_of_bias_x = s_of_pre_ok ? s_of_pre_x : keep_bx;
 			s_of_bias_y = s_of_pre_ok ? s_of_pre_y : keep_by;
 			Of_RebaseKfBias(s_of_bias_x, s_of_bias_y);
-			if (g_of_bias_mode == 2U && s_ekf_of_inited) {
+			if (s_ekf_of_inited) {
 				s_ekf_of.x[1] = 0.0f;
 				s_ekf_of.x[4] = 0.0f;
 			}

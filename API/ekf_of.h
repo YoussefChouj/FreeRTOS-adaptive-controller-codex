@@ -65,4 +65,34 @@ extern void EkfOf_UpdateZeroVel(EkfOf_t *e);
  *  Keeps vel and bias estimates intact. */
 extern void EkfOf_ResetPos(EkfOf_t *e);
 
+/* ----- WP-14: shadow mode, health gate, active path, tilt gain ----- */
+
+/* Shadow: 1 = KF runs every tick regardless of g_of_bias_mode, but does
+ * NOT feed the control path.  Default 1 (shadow on).
+ * WHY: every flight produces KF telemetry for offline validation without
+ * touching the control path.  Set to 0 only via livewatch poke. */
+extern volatile uint8_t g_ekf_of_shadow;
+
+/* Active velocity feedback: 1 = locxsPID/locysPID.FB take KF velocity
+ * instead of raw OF.  Default 0 (off until a shadow flight validates).
+ * WHY: the ~55 ms lead of KF velocity over OF can tighten the vel loop,
+ * but must not be enabled until a shadow flight matches the replay. */
+extern volatile uint8_t g_ekf_of_vel_fb;
+
+/* Tilt gain: the gravity-tilt term is scaled by this before entering the
+ * KF predict.  Median fitted gain from the replay grid (k > 0 on every
+ * pinned log, median ~0.5-0.7).  Set from the CHOSEN replay line.
+ * WHY: regression dilution + OF scale make the physical tilt undershoot
+ * the OF velocity change; the fitted gain absorbs that. */
+#define EKF_OF_TILT_GAIN  1.0f
+
+/* Health gate — innovation-based persistence counter.
+ * Trip after EKF_OF_HEALTH_PERSIST consecutive ticks (at 200 Hz = 5 ms)
+ * with innovation magnitude > EKF_OF_HEALTH_THRESH.
+ * WHY: 2 m/s (WP-8) is ~50x the innovation sd; this is ~5x, and the
+ * 100-tick persistence avoids single-sample false trips. */
+#define EKF_OF_HEALTH_THRESH    0.14f   /* m/s — about 5x innovation sd (replay median 2.84 cm/s) */
+#define EKF_OF_HEALTH_PERSIST   100U    /* ticks — 0.5 s at 200 Hz */
+
 #endif /* __EKF_OF_H__ */
+

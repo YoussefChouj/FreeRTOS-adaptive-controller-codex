@@ -224,6 +224,9 @@ def test_boot_layout_contains_states():
         content = f.read()
     assert '"s_ekf_of.x[6]"' in content
     assert '"s_ekf_of.x[7]"' in content
+    assert '"s_ekf_of.innov_x"' in content
+    assert '"s_ekf_of.innov_y"' in content
+    assert '"g_ekf_of_health"' in content
 
 def test_replay_real_logs(capsys):
     import glob

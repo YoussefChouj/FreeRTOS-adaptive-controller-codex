@@ -47,15 +47,16 @@ void EkfOf_Init(EkfOf_t *e)
 
     /* q = random-walk/white-noise density per second, units per state; P0 = initial variance */
     EKF_OF_STATE(0, q_pos, 1e-6f, 1.0f);   /* p    position */
-    EKF_OF_STATE(1, q_acc, 1e-2f, 0.1f);   /* v    velocity */
-    EKF_OF_STATE(2, q_bof, 1e-6f, 0.01f);  /* bof  optical flow bias */
-    EKF_OF_STATE(3, q_ba,  1e-5f, 0.25f);  /* ba   accel bias */
+    EKF_OF_STATE(1, q_acc, 1e-3f, 0.1f);   /* v    velocity */
+    EKF_OF_STATE(2, q_bof, 1e-7f, 0.01f);  /* bof  optical flow bias */
+    EKF_OF_STATE(3, q_ba,  1e-6f, 0.25f);  /* ba   accel bias */
 
     /* Measurement noise variances */
     e->R_of   = 6.16e-4f;
     e->R_zupt = 1e-4f;
 
     /* Change history (newest first)
+     * 2026-10-02 WP-14: tilt-only input, q_acc 1e-3, q_bof 1e-7, q_ba 1e-6
      * 2026-10-01 WP-8: 8-state model, q_vel->q_acc, ZUPT; values provisional
      */
 
