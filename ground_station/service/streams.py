@@ -681,6 +681,10 @@ class StreamsManager:
 
 
     def preflight_check(self, window_s=2.0, min_ratio=0.8) -> tuple[bool, str]:
+        # The simulator has no radio link, so there is no slot to check;
+        # without this, sim campaigns stall here (test_campaign_api, test_workflow_b_e2e).
+        if getattr(self.service, "source", None) == "sim":
+            return (True, "")
         bridge = self.service.bridge
         if bridge is None or not hasattr(bridge, "_stream_stats"):
             return (True, "")
