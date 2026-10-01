@@ -1,5 +1,4 @@
 import subprocess
-import math
 from dataclasses import dataclass
 from typing import Callable, Any, Optional
 from pathlib import Path
@@ -90,8 +89,6 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
     has_flashed = False
     history = []
     
-    max_ticks = math.ceil(deps.flight_timeout_s / deps.dt_s)
-    
     for i in range(campaign.max_flights):
         exp = queue[i % len(queue)] if queue else None
         if not exp:
@@ -105,25 +102,18 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
             
         # 2. Cooldown
         target_elapsed = max(last_duration, deps.cooldown_min_s)
-        
-        ticks = 0
-        while deps.clock() - last_landing_t < target_elapsed and ticks < max_ticks:
+        while deps.clock() - last_landing_t < target_elapsed:
             deps.sleep(deps.dt_s)
-            ticks += 1
-            
-        ticks = 0
-        allowed = False
-        reason = ""
-        while ticks < max_ticks:
+        
+        wait_start = deps.clock()
+        while True:
             elapsed = deps.clock() - last_landing_t
             allowed, reason = deps.packs.next_flight_allowed(pack_id, deps.resting_v(pack_id), elapsed)
             if allowed:
                 break
+            if deps.clock() - wait_start > deps.flight_timeout_s:
+                return CampaignReport(campaign, flights, "operator_needed", reason)
             deps.sleep(deps.dt_s)
-            ticks += 1
-            
-        if not allowed:
-            return CampaignReport(campaign, flights, "operator_needed", reason)
             
         # 3. Code change
         just = deps.change_request()
@@ -158,56 +148,41 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
         aborted = False
         decision = None
         
-        class TimeoutDecision:
-            def __init__(self, reason):
-                self.level = 1
-                self.reason = reason
-        
-        def run_loop_until(cond, phase):
+        def run_loop_until(cond):
             nonlocal aborted, decision
-            ticks = 0
             while not cond():
-                if ticks >= max_ticks:
-                    aborted = True
-                    decision = TimeoutDecision(f"timeout: {phase}")
-                    return False
                 deps.client.heartbeat()
                 deps.step(deps.dt_s)
                 dec = deps.monitor.step(deps.sample(deps.clock()))
                 if dec.level >= 1:
                     aborted = True
                     decision = dec
-                    return False
-                ticks += 1
-            return True
+                    break
                     
-        run_loop_until(lambda: deps.status()["prim_state"] == 2, "takeoff")
+        run_loop_until(lambda: deps.status()["prim_state"] == 2)
         
         if not aborted:
             if not hover_only:
                 points = generate(exp.shape, exp.params, exp.profile)
                 upload(points, deps.client)
                 deps.client.traj_start()
-                run_loop_until(lambda: deps.status()["traj_state"] == 4, "trajectory")
+                run_loop_until(lambda: deps.status()["traj_state"] == 4)
             else:
                 hover_start = deps.clock()
-                run_loop_until(lambda: deps.clock() - hover_start >= deps.hover_s, "hover")
+                run_loop_until(lambda: deps.clock() - hover_start >= deps.hover_s)
                 
         # 7. Land
         if aborted:
             deps.client.traj_stop()
         deps.client.land()
         
-        ticks = 0
-        landed = False
-        while ticks < max_ticks:
+        start_landing = deps.clock()
+        while deps.status()["prim_state"] != 0:
             deps.client.heartbeat()
             deps.step(deps.dt_s)
-            if deps.status()["prim_state"] == 0:
-                landed = True
+            if deps.clock() - start_landing > deps.flight_timeout_s:
                 break
-            ticks += 1
-            
+                
         deps.monitor.end_flight()
         last_landing_t = deps.clock()
         last_duration = last_landing_t - flight_start_time
@@ -231,9 +206,6 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
             hover_only=hover_only,
             duration_s=last_duration
         ))
-        
-        if not landed:
-            return CampaignReport(campaign, flights, "operator_needed", "landing timeout")
         
         # 10. Abort limit
         if (aborted and decision and decision.level >= 3) or deps.monitor.consecutive_aborts >= 2:

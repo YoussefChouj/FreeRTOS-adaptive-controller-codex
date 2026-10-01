@@ -10,7 +10,7 @@ from ground_station.service.abort_monitor import AbortSample, AbortDecision
 
 YAML_PATH = "ground_station/service/campaigns/example_circle.yaml"
 
-class TestClock:
+class FakeClock:
     def __init__(self):
         self.t = 0.0
     def __call__(self):
@@ -64,7 +64,7 @@ def create_deps(drone, client, clock):
         arm_allowed=Mock(return_value=True),
         change_request=Mock(return_value=None),
         diff_source=Mock(return_value=""),
-        flight_timeout_s=3.0,
+        flight_timeout_s=120.0,
         hover_s=0.5
     )
 
@@ -82,7 +82,7 @@ def test_a_e2e_complete(tmp_path):
     drone = FakeDrone()
     drone.sbus_live = True
     client = WfbClient(drone.send)
-    clock = TestClock()
+    clock = FakeClock()
     deps = create_deps(drone, client, clock)
     
     report = run_campaign(str(campaign_yaml), deps)
@@ -99,7 +99,7 @@ def test_b_level_1_abort(tmp_path):
     drone = FakeDrone()
     drone.sbus_live = True
     client = WfbClient(drone.send)
-    clock = TestClock()
+    clock = FakeClock()
     deps = create_deps(drone, client, clock)
     
     client.kill = Mock(wraps=client.kill)
@@ -123,7 +123,7 @@ def test_c_level_2_abort_gate(tmp_path):
     drone = FakeDrone()
     drone.sbus_live = True
     client = WfbClient(drone.send)
-    clock = TestClock()
+    clock = FakeClock()
     deps = create_deps(drone, client, clock)
     
     def mock_step(sample):
@@ -142,7 +142,7 @@ def test_d_level_3_abort(tmp_path):
     drone = FakeDrone()
     drone.sbus_live = True
     client = WfbClient(drone.send)
-    clock = TestClock()
+    clock = FakeClock()
     deps = create_deps(drone, client, clock)
     
     def mock_step(sample):
@@ -162,7 +162,7 @@ def test_e_cooldown(tmp_path):
     drone = FakeDrone()
     drone.sbus_live = True
     client = WfbClient(drone.send)
-    clock = TestClock()
+    clock = FakeClock()
     deps = create_deps(drone, client, clock)
     
     takeoffs = []
@@ -186,7 +186,7 @@ def test_f_arm_allowed_false(tmp_path):
     drone = FakeDrone()
     drone.sbus_live = True
     client = WfbClient(drone.send)
-    clock = TestClock()
+    clock = FakeClock()
     deps = create_deps(drone, client, clock)
     deps.arm_allowed = Mock(return_value=False)
     
@@ -203,7 +203,7 @@ def test_g_hover_only(tmp_path):
     drone = FakeDrone()
     drone.sbus_live = True
     client = WfbClient(drone.send)
-    clock = TestClock()
+    clock = FakeClock()
     deps = create_deps(drone, client, clock)
     deps.change_request = Mock(return_value={"justification": "test"})
     deps.gate.next_flight_must_hover.return_value = True
@@ -222,7 +222,7 @@ def test_h_gate_check_change(tmp_path):
     drone = FakeDrone()
     drone.sbus_live = True
     client = WfbClient(drone.send)
-    clock = TestClock()
+    clock = FakeClock()
     deps = create_deps(drone, client, clock)
     deps.change_request = Mock(return_value={"justification": "test"})
     deps.diff_source = Mock(return_value="+++ b/foo.py\n")
@@ -234,3 +234,40 @@ def test_h_gate_check_change(tmp_path):
     report = run_campaign(str(campaign_yaml), deps)
     
     deps.gate.check_change.assert_called_with("+++ b/foo.py\n", {"justification": "test"}, {"foo.py": "code"})
+
+def test_i_never_reaches_hover(tmp_path):
+    campaign_yaml = tmp_path / "camp.yaml"
+    campaign_yaml.write_text(Path(YAML_PATH).read_text())
+    
+    drone = FakeDrone()
+    drone.sbus_live = True
+    client = WfbClient(drone.send)
+    clock = FakeClock()
+    deps = create_deps(drone, client, clock)
+    deps.flight_timeout_s = 1.0
+    
+    orig_step = drone.step
+    def mock_step(dt):
+        orig_step(dt)
+        if drone.status()["prim_state"] > 0:
+            drone._z = 0.0
+            drone._prim_state = 1
+    drone.step = mock_step
+    
+    client.land = Mock(wraps=client.land)
+    client.kill = Mock(wraps=client.kill)
+    
+    report = run_campaign(str(campaign_yaml), deps)
+    
+    # When timeout occurs in takeoff, it aborts. Then it tries to land.
+    # But wait, our mock_step forces prim_state = 1.
+    # The land command might change it to RETURN, but our mock forces it to CLIMB (1).
+    # This would cause the land wait loop to time out!
+    # Which would return "operator_needed", reason "landing timeout".
+    
+    assert len(report.flights) > 0
+    f = report.flights[0]
+    assert f.abort_level == 1
+    assert f.abort_reason.startswith("timeout")
+    assert client.land.called
+    assert not client.kill.called
