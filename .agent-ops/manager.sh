@@ -5,8 +5,10 @@
 #                                       branch wp/<id> from main; prompt = MANAGER.md + brief;
 #                                       raw output .agent-ops/wp-<id>.json, then a short summary
 #   manager.sh resume <id> <msg-file>   follow-up in the same B session (session_id from the json)
+#   manager.sh clean <id>               after the CEO merged wp/<id>: remove worktree + merged branch
 # Start it in the background from the CEO session and wait for its one notification.
 # The report lands on the branch: git show wp/<id>:docs/agent/reports/WP-<id>.md
+# Base context with these flags: 10.7k tokens (measured 2026-10-01; 34.6k without --tools/--setting-sources).
 set -eu
 root=$(git rev-parse --show-toplevel)
 id=$2
@@ -17,7 +19,8 @@ tools=(Read Edit Write Glob Grep
     "Bash(python .agent-ops/gate.py:*)" "Bash(python -m pytest:*)"
     "Bash(git status:*)" "Bash(git log:*)" "Bash(git diff:*)" "Bash(git show:*)"
     "Bash(git merge --ff-only:*)" "Bash(git add:*)" "Bash(git commit:*)")
-flags=(--model opus --disable-slash-commands --strict-mcp-config --output-format json
+flags=(--model opus --tools Bash,Read,Edit,Write,Glob,Grep --setting-sources project,local
+    --disable-slash-commands --strict-mcp-config --output-format json
     --permission-mode acceptEdits --allowedTools "${tools[@]}")
 case "${1:-}" in
 run)
@@ -30,7 +33,11 @@ resume)
     cd "$wt"
     claude -p --resume "$sid" "${flags[@]}" < "$3" > "$out.tmp" || echo "claude rc=$?"
     mv "$out.tmp" "$out" ;;
-*) sed -n 2,9p "$0"; exit 1 ;;
+clean)
+    git -C "$root" worktree remove "$wt"
+    git -C "$root" branch -d "wp/$id"
+    rm -f "$out"; exit 0 ;;
+*) sed -n 2,12p "$0"; exit 1 ;;
 esac
 python - "$out" <<'EOF'
 import json, sys
