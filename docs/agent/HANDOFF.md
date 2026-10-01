@@ -20,6 +20,8 @@ branch `wp/<id>`). Pilot WP-1 (gate.py byte-safe shims) is merged at 208cc25: 1 
 armcc v0..6 0 err). S5a (deep inner layers, variants 7/8) = UNREVIEWED partial `vps/s5a` 948de17 (worker TIMEOUT).
 S3+ stays OFF main until the demo image is flashed and flown; main's `API/mrac*` stays at S2b.
 
+2026-10-01 20:45 NEXT CEO: run `docs/agent/briefs/CAMPAIGN-2026-10-01-drift.md` (WP-9 drift, WP-10 MRAC ramp, WP-11 slot retry -> flash bundle with 5c7fac2; then WP-8 rework, WP-12, WP-13 log analysis). Evidence: `docs/agent/reports/2026-10-01-drift-investigation.md`.
+
 ## Goal now
 LAB DEMO (operator priority, 2026-09-30): PID vs PID+MRAC augmentation on (a) trajectory tracking (circle/figure8)
 and (b) an asymmetric (off-centre) load. Then workflow B build (wfb stream), flightlab WP4, MRAC GS follow-ups.
