@@ -7,6 +7,7 @@ This is the page of stream `main` (main tree: Keil build, flash, probe, 8081, me
 page in `.worktrees/<stream>/docs/agent/streams/<stream>.md`. Start every session with
 `python -m ground_station.agent_handoff start [stream] --as <harness>`; see all streams with `... board`.
 Overnight 2026-09-30 (session 013e8be7/14960682, claude-code): queue + results in `.claude_state.md` OVERNIGHT section.
+2026-10-01 10:15: wfb `workflow-b` @ 50ea9e7 pushed: F4, G3-G7, G9-G11 done (G5+G6 dc928e6). Resume at the `.claude_state.md` NEXT line: intake s5a2, then item-3 / S5b / item-7 briefs, then wfb G8, G12.
 `mrac/next` = b8e4a38: S4 (d260303) + controller.c wiring of `MRAC_GetOutput`/`MRAC_LayerSelectStep` (gates green,
 armcc v0..6 0 err). S5a (deep inner layers, variants 7/8) = UNREVIEWED partial `vps/s5a` 948de17 (worker TIMEOUT).
 S3+ stays OFF main until the demo image is flashed and flown; main's `API/mrac*` stays at S2b.

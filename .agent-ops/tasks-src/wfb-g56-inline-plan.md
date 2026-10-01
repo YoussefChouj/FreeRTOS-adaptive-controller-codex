@@ -112,3 +112,20 @@ Brief: `.agent-ops/tasks-src/wfb-g56.md` (allow-list, tests, acceptance command)
 2. Acceptance cmd from the brief with `-p no:cacheprovider`; mutants: optional-before-needed, divider round vs
    int, alignment gap tolerance, half-open segment end, guard 200 vs 100.
 3. Commit on workflow-b by pathspec, push, ledger line, DONE record here, state, `vps-worker.sh clean wfb-g56`.
+
+## DONE dc928e6 (pushed origin/workflow-b, 2026-10-01, supervisor inline)
+Files: ground_station/livewatch/campaign_capture.py (330), ground_station/analysis/workflow_b_adapter.py (148),
+tests test_campaign_capture.py (213) + analysis/tests/test_workflow_b_adapter.py (155).
+Acceptance: 46 passed (`-p no:cacheprovider`). Mutants killed (7): optional-before-needed, divider round vs int,
+guard 100 vs 200 Hz, alignment gap check off, closed segment end, MIN_SAMPLES `<=`, non-finite error not diverged.
+Plan numbers measured: 26 needed / 68 optional; 100 Hz -> slots 62+19 = 69600 B/s, last 13 optional dropped;
+50 Hz -> 62+32 = 40000 B/s, nothing dropped; 60 Hz -> divider 1 -> 100 Hz.
+
+Deviations from the brief (all deliberate):
+- CAMPAIGN_SET is a read-only MappingProxyType of tuples, not a dict of lists.
+- Extra public names: Axis, POSITION_AXES, MOTORS/ATTITUDE/RATE_LOOPS/STATUS/MRAC_SHADOW groups, PLANNING_BUDGET_BPS,
+  GUARD_SEND_HZ, CaptureError, ManifestError (the adapter imports its columns from here; holds no symbol names).
+- Manifest is stricter than the brief: exact top-level and slot keys, unique slot ids and csv names, csv is a bare
+  file name, no var recorded twice or both recorded and dropped, segments sorted + non-overlapping; atomic write.
+- Rows carry an extra `n` key; `sat` pools the finite samples of all four motors and is NaN when there are none.
+- The adapter raises ManifestError for an unrecorded scoring var, a missing CSV column, an empty CSV or a ragged row.
