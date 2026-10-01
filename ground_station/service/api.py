@@ -480,7 +480,7 @@ _ROUTE_MAP = {
         "/api/agent/state": "one agent-facing snapshot {control, ui, recording, layout, arm_state, stream_health, running_plan, pending_approvals, last_messages}",
         "/api/agent/history": "always-on activity journal ?since=&limit=&kind=&source= - {entries: [{seq,t,iso,kind,source,actor,data}]}",
         "/api/flight_tests": "list flight-test runs (GET ?date=YYYY-MM-DD)",
-        "/api/campaign/state": "campaign state",
+        "/api/campaign/state": "campaign runner state {status, waiting_pack, campaign_path, reason, flights, control}",
         # Both of these block; test_http_api_routes_endpoint cannot GET them,
         # which is why they sat undeclared -- an agent reading this map would
         # conclude the service had no push channel at all.
@@ -524,10 +524,10 @@ _ROUTE_MAP = {
         "/api/agent/ui-ack": "browser acks a ui_action {plan_id, step_id, ok, error?}",
         "/api/agent/ui-state": "browser shell reports UI state {active_tab, visible_panels, drawer_open, url}",
         "/api/agent/message": "agent -> operator message {text, source}",
-        "/api/campaign/go": "start campaign run {campaign_path, pack_id, checklist, source}",
-        "/api/campaign/pause": "pause campaign",
-        "/api/campaign/land": "land campaign",
-        "/api/campaign/abort": "abort campaign",
+        "/api/campaign/go": "operator-only per-battery go {campaign_path, pack_id, checklist, source} (403 agent: source, 409 unticked checklist or busy, 503 no runner deps)",
+        "/api/campaign/pause": "finish the current flight, then stop (operator_stop)",
+        "/api/campaign/land": "level-1 traj_stop + land now, then stop (operator_stop)",
+        "/api/campaign/abort": "level-1 traj_stop + land now, then status operator_needed",
     },
     "ui_testids": {
         "tab-<workspace>": "workspace tab button, e.g. tab-replay",
@@ -2325,23 +2325,30 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     self._json(200, {"aborted": name})
                 except Exception as exc:
                     self._json(400, {"error": str(exc)})
-            # POST /replay/<session_id>/play — push stored telemetry onto the
-            # live bus (no storage write, nothing sent to the drone).
             elif route == "/api/campaign/go":
                 if campaign is None:
+                    self._drain_body()
                     self._json(503, {"error": "campaign runner unavailable"})
                     return
-                length = self._content_length()
-                body = json.loads(self.rfile.read(length) or b"{}")
+                try:
+                    length = self._content_length()
+                    body = json.loads(self.rfile.read(length) or b"{}")
+                    if not isinstance(body, dict):
+                        raise ValueError("body must be a JSON object")
+                except Exception as exc:
+                    self._json(400, {"error": str(exc)})
+                    return
                 code, res = campaign.go(body.get("campaign_path"), body.get("pack_id"), body.get("checklist"), body.get("source"))
                 self._json(code, res)
             elif route in ("/api/campaign/pause", "/api/campaign/land", "/api/campaign/abort"):
+                self._drain_body()
                 if campaign is None:
                     self._json(503, {"error": "campaign runner unavailable"})
                     return
                 cmd = route.split("/")[-1]
                 code, res = campaign.request(cmd)
                 self._json(code, res)
+            # POST /replay/<session_id>/play — push stored telemetry onto the
             elif route.startswith("/replay/") and route.endswith("/play"):
                 parts = route.split("/")
                 session_id = parts[2] if len(parts) >= 4 else None

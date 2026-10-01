@@ -13,7 +13,8 @@ from ground_station.service.campaign_api import CampaignService
 from ground_station.analysis.controller_descriptor import Knob
 
 def _get(url: str, timeout: float = 5.0) -> tuple[int, dict]:
-    import http.client, json
+    import http.client
+    import json
     from urllib.parse import urlparse
     parsed = urlparse(url)
     conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=timeout)
@@ -26,7 +27,8 @@ def _get(url: str, timeout: float = 5.0) -> tuple[int, dict]:
         return resp.status, {"raw": body.decode(errors="replace")}
 
 def _post(url: str, body: dict, timeout: float = 5.0) -> tuple[int, dict]:
-    import http.client, json
+    import http.client
+    import json
     from urllib.parse import urlparse
     parsed = urlparse(url)
     data = json.dumps(body).encode()

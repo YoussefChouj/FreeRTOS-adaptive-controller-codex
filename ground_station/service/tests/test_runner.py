@@ -288,7 +288,6 @@ def test_l_runner_control_land(tmp_path):
     deps = create_deps(drone, client, clock)
     deps.flight_timeout_s = 120.0
     
-    manager = Mock()
     client.kill = Mock(wraps=client.kill)
     client.traj_stop = Mock(wraps=client.traj_stop)
     client.land = Mock(wraps=client.land)

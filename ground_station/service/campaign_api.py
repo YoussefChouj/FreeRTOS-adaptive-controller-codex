@@ -1,7 +1,7 @@
 import threading
 import time
 import dataclasses
-from ground_station.service.campaign_runner import RunnerControl, run_campaign
+from ground_station.service.campaign_runner import RunnerControl, run_campaign, CampaignReport
 from ground_station.service.agent import AgentDisabledError, PlanBusyError
 
 class CampaignService:
@@ -18,6 +18,7 @@ class CampaignService:
         self.campaign_path = None
         self.waiting_pack = None
         self.report = None
+        self._live_flights = []
         
         self.condition = threading.Condition(self.lock)
         self.go_grant = None
@@ -43,6 +44,7 @@ class CampaignService:
             self.campaign_path = campaign_path
             self.control = RunnerControl()
             self.report = None
+            self._live_flights = []
             self.waiting_pack = None
             self.go_grant = pack_id
             
@@ -52,7 +54,8 @@ class CampaignService:
                 wait_for_go=self.wait_for_go,
                 arm_allowed=self.arm_allowed,
                 control=self.control,
-                apply_params=self.apply_params
+                apply_params=self.apply_params,
+                on_flight=self.on_flight
             )
             
             self.runner_thread = threading.Thread(
@@ -65,9 +68,21 @@ class CampaignService:
             return 200, self.state()
 
     def _run_wrapper(self, campaign_path, deps):
-        report = run_campaign(campaign_path, deps)
+        try:
+            report = run_campaign(campaign_path, deps)
+        except Exception as exc:
+            report = CampaignReport(
+                campaign=None,
+                flights=self._live_flights,
+                status="error",
+                reason=f"{type(exc).__name__}: {exc}"
+            )
         with self.lock:
             self.report = report
+
+    def on_flight(self, rec):
+        with self.lock:
+            self._live_flights.append(rec)
 
     def wait_for_go(self, pack_id):
         with self.condition:
@@ -120,7 +135,7 @@ class CampaignService:
         except (AgentDisabledError, PlanBusyError, ValueError):
             return False
             
-        plan_id = getattr(plan, "id", None)
+        plan_id = getattr(plan, "plan_id", None)
                 
         if not plan_id:
             return False
@@ -130,7 +145,8 @@ class CampaignService:
             if self.control.get() in ("land", "abort"):
                 return False
                 
-            st = self.agent.get_plan(plan_id).get("status")
+            p = self.agent.get_plan(plan_id)
+            st = getattr(p, "status", None) if p else None
             if st == "done":
                 return True
             elif st in ("failed", "cancelled"):
@@ -162,6 +178,8 @@ class CampaignService:
             flights = []
             if self.report:
                 flights = [dataclasses.asdict(f) for f in self.report.flights]
+            elif self.runner_thread and self.runner_thread.is_alive():
+                flights = [dataclasses.asdict(f) for f in self._live_flights]
                 
             return {
                 "status": st,

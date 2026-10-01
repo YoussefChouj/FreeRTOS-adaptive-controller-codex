@@ -151,22 +151,22 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "campaign_state",
-        "description": "Get campaign runner state.",
+        "description": "campaign runner state {status, waiting_pack, campaign_path, reason, flights, control}",
         "inputSchema": {"type": "object"},
     },
     {
         "name": "campaign_pause",
-        "description": "Pause campaign run.",
+        "description": "finish the current flight, then stop (operator_stop)",
         "inputSchema": {"type": "object"},
     },
     {
         "name": "campaign_land",
-        "description": "Land campaign run.",
+        "description": "level-1 traj_stop + land now, then stop (operator_stop)",
         "inputSchema": {"type": "object"},
     },
     {
         "name": "campaign_abort",
-        "description": "Abort campaign run.",
+        "description": "level-1 traj_stop + land now, then status operator_needed",
         "inputSchema": {"type": "object"},
     },
 ]

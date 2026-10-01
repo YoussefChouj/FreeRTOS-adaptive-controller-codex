@@ -64,6 +64,7 @@ class RunnerDeps:
     cooldown_min_s: float = 0.0
     control: RunnerControl | None = None
     apply_params: Callable[[dict], bool] = lambda params: True
+    on_flight: Callable[['FlightRecord'], None] = lambda rec: None
 
 def default_diff_source(repo_root: str, lkg_commit: str, c_files: tuple[str, ...]) -> str:
     if not c_files:
@@ -106,6 +107,16 @@ class CampaignReport:
     status: str
     reason: str
 
+def _control_report(deps: RunnerDeps, campaign: Any, flights: list[FlightRecord]) -> CampaignReport | None:
+    req = deps.control.get() if deps.control else None
+    if req == "abort":
+        return CampaignReport(campaign, flights, "operator_needed", "operator abort")
+    elif req == "land":
+        return CampaignReport(campaign, flights, "operator_stop", "operator land")
+    elif req == "pause":
+        return CampaignReport(campaign, flights, "operator_stop", "operator pause")
+    return None
+
 def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
     campaign = load_campaign(yaml_path)
     queue = []
@@ -131,23 +142,15 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
         pack_id = campaign.packs[i % len(campaign.packs)]
         flight_id = f"{campaign.campaign}-{i+1:03d}"
         
-        req = deps.control.get() if deps.control else None
-        if req == "abort":
-            return CampaignReport(campaign, flights, "operator_needed", "operator abort")
-        elif req == "land":
-            return CampaignReport(campaign, flights, "operator_stop", "operator land")
-        elif req == "pause":
-            return CampaignReport(campaign, flights, "operator_stop", "operator pause")
+        report = _control_report(deps, campaign, flights)
+        if report:
+            return report
 
         # 1. wait_for_go
         if not deps.wait_for_go(pack_id):
-            req = deps.control.get() if deps.control else None
-            if req == "abort":
-                return CampaignReport(campaign, flights, "operator_needed", "operator abort")
-            elif req == "land":
-                return CampaignReport(campaign, flights, "operator_stop", "operator land")
-            elif req == "pause":
-                return CampaignReport(campaign, flights, "operator_stop", "operator pause")
+            report = _control_report(deps, campaign, flights)
+            if report:
+                return report
             return CampaignReport(campaign, flights, "operator_stop", "")
             
         # 2. Cooldown
@@ -293,7 +296,27 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
         deps.gate.record_flight(flight_id, fw_hash)
         
         reflash_hash = ""
-        if gate_decision == "revert":
+        decision_was_revert = (gate_decision == "revert")
+
+        if not landed:
+            flights.append(FlightRecord(
+                flight_id=flight_id,
+                pack_id=pack_id,
+                experiment=exp.name,
+                j=j,
+                abort_level=decision.level if aborted and decision else 0,
+                abort_reason=decision.reason if aborted and decision else "",
+                decision=gate_decision,
+                hover_only=hover_only,
+                duration_s=last_duration,
+                reflash_hash=""
+            ))
+            deps.on_flight(flights[-1])
+            if decision_was_revert:
+                return CampaignReport(campaign, flights, "operator_needed", "landing timeout; revert flash pending")
+            return CampaignReport(campaign, flights, "operator_needed", "landing timeout")
+
+        if decision_was_revert:
             reflash_hash = deps.flash()
             fw_hash = reflash_hash
             has_flashed = True
@@ -310,17 +333,11 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
             duration_s=last_duration,
             reflash_hash=reflash_hash
         ))
-        
-        if not landed:
-            return CampaignReport(campaign, flights, "operator_needed", "landing timeout")
+        deps.on_flight(flights[-1])
             
-        req = deps.control.get() if deps.control else None
-        if req == "abort":
-            return CampaignReport(campaign, flights, "operator_needed", "operator abort")
-        elif req == "land":
-            return CampaignReport(campaign, flights, "operator_stop", "operator land")
-        elif req == "pause":
-            return CampaignReport(campaign, flights, "operator_stop", "operator pause")
+        report = _control_report(deps, campaign, flights)
+        if report:
+            return report
         
         # 10. Abort limit
         if (aborted and decision and decision.level >= 3) or max(runner_consecutive_aborts, deps.monitor.consecutive_aborts) >= 2:
