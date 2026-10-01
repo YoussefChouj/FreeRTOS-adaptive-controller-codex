@@ -215,8 +215,8 @@ extern volatile uint8_t sbus_path_trigger;
  * WRITTEN BY: send_data.c CMD 0x0B handler (RemoterTask context).
  *   Config fields (center_x/y/z, amplitude, frequency, duration, axis): single
  *   float/uint8 writes — naturally atomic on Cortex-M4.
- *   Activation (active=1 + t_elapsed=0): taskENTER_CRITICAL guard required
- *   because AutoflyTask can preempt between the two stores.
+ *   Activation: AutoflyTask_StartSinusoid under taskENTER_CRITICAL, because AutoflyTask can
+ *   preempt between its stores. It overwrites center_x/y/z with the current position.
  * READ/MUTATED BY: AutoflyTask_RunSinusoid (t_elapsed, active), AutoflyTask_PathArbitrate (active).
  * READ FOR TELEMETRY BY: send_data.c Frame B path tail (active, t_elapsed, theta). */
 typedef struct {
@@ -235,8 +235,8 @@ extern volatile SinusoidPath_t sinusoid_path;
 
 /* Circle path parameters.
  * WRITTEN BY: send_data.c CMD 0x0C handler (RemoterTask context).
- *   Config fields: naturally atomic. Activation (active=1 + theta=0 + t_elapsed=0):
- *   taskENTER_CRITICAL guard required.
+ *   Config fields: naturally atomic. Activation: AutoflyTask_StartCircle under
+ *   taskENTER_CRITICAL; it overwrites center_x/y/z so the path starts at the current position.
  * READ/MUTATED BY: AutoflyTask_RunCircle (theta, t_elapsed, active), AutoflyTask_PathArbitrate (active).
  * READ FOR TELEMETRY BY: send_data.c Frame B path tail (active, theta, t_elapsed). */
 typedef struct {
@@ -255,7 +255,8 @@ extern volatile CirclePath_t circle_path;
 
 /* Figure-8 (lemniscate) path parameters. CMD 0x11. FlyMode_SDK only.
  * type: 0 = Bernoulli (lying infinity), 1 = Gerono (vertical figure-8).
- * Same concurrency rules as circle_path (taskENTER_CRITICAL on activation). */
+ * Same concurrency rules as circle_path: AutoflyTask_StartFigure8 under taskENTER_CRITICAL,
+ * which overwrites center_x/y/z so the path starts at the current position. */
 typedef struct {
 	float center_x;
 	float center_y;
@@ -276,6 +277,10 @@ extern volatile Figure8Path_t figure8_path;
  * arc-length accumulator in AutoflyTask (see AutoflyTask_CommitRef). */
 extern volatile float waypoint_spacing;
 extern void AutoflyTask_WaypointReset(void);
+/* Start a path at the current pose (AutoflyTask.c); call inside taskENTER_CRITICAL. */
+extern void AutoflyTask_StartSinusoid(void);
+extern void AutoflyTask_StartCircle(void);
+extern void AutoflyTask_StartFigure8(void);
 
 /* Ground station: parallel trigger for SDK state machine (see AutoflyTask, CMD 0x0E) */
 extern volatile uint8_t GS_KeySDKflag;

@@ -100,6 +100,65 @@ static void AutoflyTask_CommitRef(float cont_x, float cont_y, float cont_z)
 	}
 }
 
+/* ---- Path start: begin at the current pose ----
+ * A path starts where the drone is: its centre is moved so the first reference point is the current
+ * position (loc/Z_pos FB), overwriting the centre set by CMD idx 0-2. Its heading is the current
+ * heading plus the path's own turn (theta for the circle, none for the sinusoid and figure-8).
+ * The send_data.c start commands call these inside taskENTER_CRITICAL. One path runs at a time
+ * (AutoflyTask_PathArbitrate), so one start heading serves all three. */
+static volatile float path_yaw0 = 0.0f;
+
+static float AutoflyTask_WrapDeg(float deg)
+{
+	deg = fmodf(deg, 360.0f);
+	if (deg >= 180.0f) {
+		deg -= 360.0f;
+	} else if (deg < -180.0f) {
+		deg += 360.0f;
+	}
+	return deg;
+}
+
+void AutoflyTask_StartSinusoid(void)
+{
+	/* the offset is 0 at t = 0, so the first point is the centre */
+	sinusoid_path.center_x = Ctrler.locxPID.FB;
+	sinusoid_path.center_y = Ctrler.locyPID.FB;
+	sinusoid_path.center_z = Ctrler.Z_posPID.FB;
+	sinusoid_path.t_elapsed = 0.0f;
+	path_yaw0 = Ctrler.yawPID.FB;
+	AutoflyTask_WaypointReset();
+	sinusoid_path.active = 1U;
+}
+
+void AutoflyTask_StartCircle(void)
+{
+	/* theta 0 is (center_x + radius, center_y) */
+	circle_path.center_x = Ctrler.locxPID.FB - circle_path.radius;
+	circle_path.center_y = Ctrler.locyPID.FB;
+	circle_path.center_z = Ctrler.Z_posPID.FB;
+	circle_path.theta = 0.0f;
+	circle_path.t_elapsed = 0.0f;
+	path_yaw0 = Ctrler.yawPID.FB;
+	AutoflyTask_WaypointReset();
+	circle_path.active = 1U;
+}
+
+void AutoflyTask_StartFigure8(void)
+{
+	/* theta 0 is (center_x + amplitude, center_y) for Bernoulli and the centre for Gerono */
+	float start_dx = (figure8_path.type == 1U) ? 0.0f : figure8_path.amplitude;
+
+	figure8_path.center_x = Ctrler.locxPID.FB - start_dx;
+	figure8_path.center_y = Ctrler.locyPID.FB;
+	figure8_path.center_z = Ctrler.Z_posPID.FB;
+	figure8_path.theta = 0.0f;
+	figure8_path.t_elapsed = 0.0f;
+	path_yaw0 = Ctrler.yawPID.FB;
+	AutoflyTask_WaypointReset();
+	figure8_path.active = 1U;
+}
+
 void AutoflyTask_RunCircle(void)
 {
 	const float dt = 0.005f;
@@ -120,16 +179,8 @@ void AutoflyTask_RunCircle(void)
 		circle_path.center_x + circle_path.radius * cosf(circle_path.theta),
 		circle_path.center_y + circle_path.radius * sinf(circle_path.theta),
 		circle_path.center_z);
-	{
-		/* Heading follows theta, which keeps counting past one turn; keep Des in [-180, 180) like FB. */
-		float yaw_des = fmodf(circle_path.theta * RAD2DEG, 360.0f);
-		if (yaw_des >= 180.0f) {
-			yaw_des -= 360.0f;
-		} else if (yaw_des < -180.0f) {
-			yaw_des += 360.0f;
-		}
-		Ctrler.yawPID.Des = yaw_des;
-	}
+	/* One turn per lap from the start heading; theta keeps counting past a turn, Des stays in [-180, 180). */
+	Ctrler.yawPID.Des = AutoflyTask_WrapDeg(path_yaw0 + circle_path.theta * RAD2DEG);
 
 	if (circle_path.duration > 0.0f &&
 	    circle_path.t_elapsed >= circle_path.duration) {
@@ -170,7 +221,7 @@ void AutoflyTask_RunSinusoid(void)
 		}
 	}
 
-	Ctrler.yawPID.Des = 0.0f;
+	Ctrler.yawPID.Des = path_yaw0;
 
 	if (sinusoid_path.duration > 0.0f &&
 	    sinusoid_path.t_elapsed >= sinusoid_path.duration) {
@@ -211,7 +262,7 @@ void AutoflyTask_RunFigure8(void)
 	}
 
 	AutoflyTask_CommitRef(cx, cy, figure8_path.center_z);
-	Ctrler.yawPID.Des = 0.0f;
+	Ctrler.yawPID.Des = path_yaw0;
 
 	if (figure8_path.duration > 0.0f &&
 	    figure8_path.t_elapsed >= figure8_path.duration) {

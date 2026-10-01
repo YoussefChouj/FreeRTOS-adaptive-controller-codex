@@ -1646,9 +1646,7 @@ void Process_GroundStation_Command(void)
             } else if (idx == 7) {
                 if (((uint8_t)(val + 0.5f)) != 0) {
                     taskENTER_CRITICAL();
-                    sinusoid_path.active = 1U;
-                    sinusoid_path.t_elapsed = 0.0f;
-                    AutoflyTask_WaypointReset();
+                    AutoflyTask_StartSinusoid();
                     taskEXIT_CRITICAL();
                 } else {
                     sinusoid_path.active = 0U;
@@ -1675,10 +1673,7 @@ void Process_GroundStation_Command(void)
             } else if (idx == 6) {
                 if (((uint8_t)(val + 0.5f)) != 0) {
                     taskENTER_CRITICAL();
-                    circle_path.active = 1U;
-                    circle_path.theta = 0.0f;
-                    circle_path.t_elapsed = 0.0f;
-                    AutoflyTask_WaypointReset();
+                    AutoflyTask_StartCircle();
                     taskEXIT_CRITICAL();
                 } else {
                     circle_path.active = 0U;
@@ -1710,10 +1705,7 @@ void Process_GroundStation_Command(void)
             } else if (idx == 7) {
                 if (((uint8_t)(val + 0.5f)) != 0) {
                     taskENTER_CRITICAL();
-                    figure8_path.active = 1U;
-                    figure8_path.theta = 0.0f;
-                    figure8_path.t_elapsed = 0.0f;
-                    AutoflyTask_WaypointReset();
+                    AutoflyTask_StartFigure8();
                     taskEXIT_CRITICAL();
                 } else {
                     figure8_path.active = 0U;
