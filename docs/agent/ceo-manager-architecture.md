@@ -37,8 +37,12 @@ Why not `medium` for everything on B: the worker-verification memories show that
 **Transport (default): headless per package.** The CEO runs, in the background:
 
 ```bash
-claude -p --model opus --effort high --disable-slash-commands --strict-mcp-config --output-format json --permission-mode acceptEdits < docs/agent/briefs/WP-<id>.md > .agent-ops/wp-<id>.json
+bash .agent-ops/manager.sh run <id>          # follow-up: manager.sh resume <id> <msg-file>
 ```
+
+- `manager.sh` makes worktree `../wt-wp<id>` on branch `wp/<id>`. It pipes `docs/agent/MANAGER.md` (the manager loop and rules) plus the brief into `claude -p` with the trim flags and a fixed `--allowedTools` list: worker script, gate, pytest, read-only git, merge `--ff-only`, add and commit.
+- **Manager loop:** write a worker task → spawn on the VPS → bounded wait (`timeout 540`, re-run on exit 124) → `merge --ff-only` → `gate.py` → bounce or accept → report.
+- **Manager never rewrites:** it bounces with the gate output verbatim. Max 2 bounces (3 rounds), then Status BLOCKED to the CEO.
 
 - The CEO waits on one background notification, with zero polling, and only the report enters A's context.
 - Every package gets a fresh B context, so no bloat accumulates. Follow-ups use `claude -p --resume <session_id>`, taken from the JSON.
@@ -52,16 +56,19 @@ claude -p --model opus --effort high --disable-slash-commands --strict-mcp-confi
 Goal: <one sentence>
 Acceptance: <exact commands + expected output>
 Scope: <files/dirs>          Forbidden: <flash / 8081 / motors / main>
-Worker lane: <agy-vps | oc | ark>   Max worker rounds: <n>   Effort: <medium|high>
+Allow globs: <for gate.py --allow, include ".agent-ops/out/*" for the worker digest>
+Worker lane: <agy-vps chain | oc | ark>   Max worker rounds: 3   Effort: <medium|high>
 Report to: docs/agent/reports/WP-<id>.md (<= 40 lines)
 ```
+Example: `docs/agent/briefs/WP-1.md`.
 ### Report template (Manager → CEO)
 ```
 Status: DONE | PARTIAL | BLOCKED
 Commits: <sha — subject>
+Gate: <final GATE line, verbatim>
 Verification: <command> -> <raw pass/fail line>   (run by manager, not claimed by worker)
+Worker rounds: <n>/3; one line per bounce: why
 Deviations / open questions: ...
-B usage: <tokens from json usage>   Worker rounds used: <n>
 ```
 The CEO verifies by spot-check (`git show --stat <sha>`, re-run one acceptance command), not by re-reading.
 
