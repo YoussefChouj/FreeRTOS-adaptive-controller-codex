@@ -8,6 +8,11 @@ page in `.worktrees/<stream>/docs/agent/streams/<stream>.md`. Start every sessio
 `python -m ground_station.agent_handoff start [stream] --as <harness>`; see all streams with `... board`.
 Overnight 2026-09-30 (session 013e8be7/14960682, claude-code): queue + results in `.claude_state.md` OVERNIGHT section.
 2026-10-01 10:15: wfb `workflow-b` @ 50ea9e7 pushed: F4, G3-G7, G9-G11 done (G5+G6 dc928e6). Resume at the `.claude_state.md` NEXT line: intake s5a2, then item-3 / S5b / item-7 briefs, then wfb G8, G12.
+2026-10-01 late: wfb CODE COMPLETE. `workflow-b` @ 82b0eea pushed: G8 + G12-G16 via WP-2..WP-7 (briefs `docs/agent/briefs/`, reports
+on the merged commits). Sim dry run green: `python -m pytest -q -p no:cacheprovider ground_station/service/tests/test_workflow_b_e2e.py`
+-> 7 passed in 8.98 s (CEO run); mid-flight land/abort assert traj_stop then land, no kill. Live (non-sim) campaign wiring is
+NOT built (go -> 503 by design). NOT merged to main, nothing flashed: the operator approves both. Open notes in
+`.claude_state.md` line 28 (J=None tuner wrapper, sim service needs bridge=Mock, tier0_access full also sets allow_agent_arm).
 2026-10-01 10:40: CEO -> manager -> worker loop works end to end. Hand a work package to the manager (account B, headless)
 with `bash .agent-ops/manager.sh run <id>` (brief `docs/agent/briefs/WP-<id>.md`, rules `docs/agent/MANAGER.md`; report on
 branch `wp/<id>`). Pilot WP-1 (gate.py byte-safe shims) is merged at 208cc25: 1 worker round, 229 s, GATE PASS, 15 passed, 1 skipped.
