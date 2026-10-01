@@ -295,33 +295,9 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
 
         deps.gate.record_flight(flight_id, fw_hash)
         
-        reflash_hash = ""
         decision_was_revert = (gate_decision == "revert")
 
-        if not landed:
-            flights.append(FlightRecord(
-                flight_id=flight_id,
-                pack_id=pack_id,
-                experiment=exp.name,
-                j=j,
-                abort_level=decision.level if aborted and decision else 0,
-                abort_reason=decision.reason if aborted and decision else "",
-                decision=gate_decision,
-                hover_only=hover_only,
-                duration_s=last_duration,
-                reflash_hash=""
-            ))
-            deps.on_flight(flights[-1])
-            if decision_was_revert:
-                return CampaignReport(campaign, flights, "operator_needed", "landing timeout; revert flash pending")
-            return CampaignReport(campaign, flights, "operator_needed", "landing timeout")
-
-        if decision_was_revert:
-            reflash_hash = deps.flash()
-            fw_hash = reflash_hash
-            has_flashed = True
-
-        flights.append(FlightRecord(
+        rec = FlightRecord(
             flight_id=flight_id,
             pack_id=pack_id,
             experiment=exp.name,
@@ -331,9 +307,22 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
             decision=gate_decision,
             hover_only=hover_only,
             duration_s=last_duration,
-            reflash_hash=reflash_hash
-        ))
-        deps.on_flight(flights[-1])
+            reflash_hash=""
+        )
+
+        if not landed:
+            flights.append(rec)
+            deps.on_flight(rec)
+            if decision_was_revert:
+                return CampaignReport(campaign, flights, "operator_needed", "landing timeout; revert flash pending")
+            return CampaignReport(campaign, flights, "operator_needed", "landing timeout")
+
+        if decision_was_revert:
+            rec.reflash_hash = fw_hash = deps.flash()
+            has_flashed = True
+
+        flights.append(rec)
+        deps.on_flight(rec)
             
         report = _control_report(deps, campaign, flights)
         if report:

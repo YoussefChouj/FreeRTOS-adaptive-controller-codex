@@ -293,7 +293,6 @@ def test_l_runner_control_land(tmp_path):
     client.land = Mock(wraps=client.land)
     
     def mock_step(sample):
-        # Trigger land command when in traj state
         if drone.status()["traj_state"] == 3:
             deps.control.request("land")
         return AbortDecision(level=0, reason="")
@@ -355,20 +354,39 @@ def test_o_two_flight_judging_and_revert(tmp_path):
     
     deps.change_request = Mock(side_effect=[{"justification": "test"}] + [None] * 20)
     deps.gate.next_flight_must_hover.side_effect = [True] + [False] * 20
-    # "pending" on hover, "revert" on trajectory
     deps.gate.on_flight_result.side_effect = ["pending", "revert"] + ["keep"] * 10
     
     report = run_campaign(str(campaign_yaml), deps)
     
-    # Check that on_flight_result was called twice: once with hover=True, once without
     assert deps.gate.on_flight_result.call_count == 2
     deps.gate.on_flight_result.assert_has_calls([
         call(aborted=False, j=1.23, hover=True),
         call(aborted=False, j=1.23)
     ])
     
-    # Check that it flashed twice (initial + revert)
     assert deps.flash.call_count == 2
     
-    # Check that reflash_hash is set on the reverting flight
     assert report.flights[1].reflash_hash == "abc"
+def test_p_landing_timeout_revert_flight(tmp_path):
+    c = tmp_path / "camp.yaml"; c.write_text(Path(YAML_PATH).read_text())
+    drone = FakeDrone(); drone.sbus_live = True
+    client = WfbClient(drone.send); clock = FakeClock()
+    deps = create_deps(drone, client, clock)
+    deps.change_request = Mock(side_effect=[{"justification": "test"}] + [None] * 20)
+    deps.gate.next_flight_must_hover.side_effect = [True] + [False] * 20
+    deps.gate.on_flight_result.side_effect = ["pending", "revert"] + ["keep"] * 10
+    deps.flight_timeout_s = 120.0
+    fc = [0]; orig_step = drone.step
+    def ms(dt):
+        if fc[0] >= 2: drone._z = 10.0; drone._prim_state = 1
+        orig_step(dt)
+        if fc[0] >= 2: drone._z = 10.0; drone._prim_state = 1
+    drone.step = ms
+    orig_land = client.land
+    def ml(): orig_land(); fc[0] += 1
+    client.land = ml
+    r = run_campaign(str(c), deps)
+    assert deps.flash.call_count == 1
+    assert r.status == "operator_needed"
+    assert "landing timeout; revert flash pending" in r.reason
+    assert r.flights[-1].reflash_hash == ""

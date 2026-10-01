@@ -118,138 +118,84 @@ def api(service):
         server.stop()
 
 def test_go_agent_source(api):
-    server, base = api
-    code, body = _post(base + "/api/campaign/go", {
-        "campaign_path": "ground_station/service/campaigns/example_circle.yaml",
-        "pack_id": "P4000-1",
-        "checklist": {"item": True},
-        "source": "agent:x"
-    })
-    assert code == 403
+    server, base = api; code, body = _post(base + "/api/campaign/go", {"campaign_path": "ground_station/service/campaigns/example_circle.yaml", "pack_id": "P4000-1", "checklist": {"item": True}, "source": "agent:x"}); assert code == 403
 
 def test_go_unticked_checklist(api):
-    server, base = api
-    code, body = _post(base + "/api/campaign/go", {
-        "campaign_path": "ground_station/service/campaigns/example_circle.yaml",
-        "pack_id": "P4000-1",
-        "checklist": {"item": False},
-        "source": "operator"
-    })
-    assert code == 409
+    server, base = api; code, body = _post(base + "/api/campaign/go", {"campaign_path": "ground_station/service/campaigns/example_circle.yaml", "pack_id": "P4000-1", "checklist": {"item": False}, "source": "operator"}); assert code == 409
 
 def test_go_allow_agent_arm_true(api):
-    server, base = api
-    server.agent.set_control({"mode": "autonomous", "allow_agent_arm": True, "source": "operator"})
-    server.campaign.apply_params = Mock(return_value=True)
-    
-    code, body = _post(base + "/api/campaign/go", {
-        "campaign_path": "ground_station/service/campaigns/example_circle.yaml",
-        "pack_id": "P4000-1",
-        "checklist": {"item": True},
-        "source": "operator"
-    })
-    assert code == 200
-    
-    deadline = time.time() + 10.0
+    server, base = api; server.agent.set_control({"mode": "autonomous", "allow_agent_arm": True, "source": "operator"}); server.campaign.apply_params = Mock(return_value=True)
+    code, body = _post(base + "/api/campaign/go", {"campaign_path": "ground_station/service/campaigns/example_circle.yaml", "pack_id": "P4000-1", "checklist": {"item": True}, "source": "operator"}); assert code == 200
+    import time; deadline = time.time() + 10.0
     while time.time() < deadline:
         st, res = _get(base + "/api/campaign/state")
-        if res["status"] in ("complete", "operator_stop", "arm_refused"):
-            break
-        if res["status"] == "waiting_for_go":
-            _post(base + "/api/campaign/go", {
-                "campaign_path": "ground_station/service/campaigns/example_circle.yaml",
-                "pack_id": res["waiting_pack"],
-                "checklist": {"item": True},
-                "source": "operator"
-            })
+        if res["status"] in ("complete", "operator_stop", "arm_refused"): break
+        if res["status"] == "waiting_for_go": _post(base + "/api/campaign/go", {"campaign_path": "ground_station/service/campaigns/example_circle.yaml", "pack_id": res["waiting_pack"], "checklist": {"item": True}, "source": "operator"})
         time.sleep(0.1)
-    
-    assert res["status"] == "complete", f"Failed with reason: {res.get('reason')}"
-    assert len(res["flights"]) >= 1
+    assert res["status"] == "complete", f"Failed with reason: {res.get('reason')}"; assert len(res["flights"]) >= 1
 
 def test_go_allow_agent_arm_false(api):
-    server, base = api
-    server.agent.set_control({"mode": "autonomous", "allow_agent_arm": False, "source": "operator"})
-    server.campaign.apply_params = Mock(return_value=True)
-    
-    code, body = _post(base + "/api/campaign/go", {
-        "campaign_path": "ground_station/service/campaigns/example_circle.yaml",
-        "pack_id": "P4000-1",
-        "checklist": {"item": True},
-        "source": "operator"
-    })
-    assert code == 200
-    
-    deadline = time.time() + 10.0
+    server, base = api; server.agent.set_control({"mode": "autonomous", "allow_agent_arm": False, "source": "operator"}); server.campaign.apply_params = Mock(return_value=True)
+    code, body = _post(base + "/api/campaign/go", {"campaign_path": "ground_station/service/campaigns/example_circle.yaml", "pack_id": "P4000-1", "checklist": {"item": True}, "source": "operator"}); assert code == 200
+    import time; deadline = time.time() + 10.0
     while time.time() < deadline:
         st, res = _get(base + "/api/campaign/state")
-        if res["status"] == "arm_refused":
-            break
+        if res["status"] == "arm_refused": break
         time.sleep(0.1)
-    
     assert res["status"] == "arm_refused"
 
 def test_control_requests(api):
-    server, base = api
-    server.agent.set_control({"mode": "autonomous", "allow_agent_arm": True, "source": "operator"})
-    server.campaign.apply_params = Mock(return_value=True)
-    
-    # 409 if no run
-    code, body = _post(base + "/api/campaign/land", {})
-    assert code == 409
-    
-    code, body = _post(base + "/api/campaign/go", {
-        "campaign_path": "ground_station/service/campaigns/example_circle.yaml",
-        "pack_id": "P4000-1",
-        "checklist": {"item": True},
-        "source": "operator"
-    })
-    assert code == 200
-    
-    # Send abort request
-    code, body = _post(base + "/api/campaign/abort", {})
-    assert code == 200
-    
-    deadline = time.time() + 10.0
+    server, base = api; server.agent.set_control({"mode": "autonomous", "allow_agent_arm": True, "source": "operator"}); server.campaign.apply_params = Mock(return_value=True)
+    code, body = _post(base + "/api/campaign/land", {}); assert code == 409
+    code, body = _post(base + "/api/campaign/go", {"campaign_path": "ground_station/service/campaigns/example_circle.yaml", "pack_id": "P4000-1", "checklist": {"item": True}, "source": "operator"}); assert code == 200
+    code, body = _post(base + "/api/campaign/abort", {}); assert code == 200
+    import time; deadline = time.time() + 10.0
     while time.time() < deadline:
         st, res = _get(base + "/api/campaign/state")
-        if res["status"] == "operator_needed":
-            break
+        if res["status"] == "operator_needed": break
         time.sleep(0.1)
-    
     assert res["status"] == "operator_needed"
 
 def test_apply_params(api):
-    server, base = api
-    server.agent.set_control({"mode": "autonomous", "allow_agent_arm": True, "source": "operator"})
-    
-    assert not server.campaign.apply_params({"unknown": 1.0})
-    
-    # We mock agent plans, wait, there is real agent in api!
-    # Because apply_params requires an agent plan that is approved, and it takes time.
-    # To test apply_params creates a plan, we can patch agent.create_plan or test against the real agent.
-    # Real agent: we can approve the plan manually or fake the status.
-    
-    # create_plan creates a plan. To not block forever, we run it in a thread or check plan list.
-    import threading
-    res = {}
-    def run():
-        res["ret"] = server.campaign.apply_params({"param": 2.0})
-    t = threading.Thread(target=run)
-    t.start()
-    
-    deadline = time.time() + 5.0
+    server, base = api; server.agent.set_control({"mode": "autonomous", "allow_agent_arm": True, "source": "operator"}); assert not server.campaign.apply_params({"unknown": 1.0})
+    import threading, time; res = {}
+    def run(): res["ret"] = server.campaign.apply_params({"param": 2.0})
+    t = threading.Thread(target=run); t.start(); deadline = time.time() + 5.0
     while time.time() < deadline:
         plans = server.agent.list_plans()
-        if plans:
-            break
+        if plans: break
         time.sleep(0.1)
-        
-    assert plans
-    plan = server.agent.plan_detail(plans[0]["plan_id"])
-    assert plan["steps"][0]["args"]["value"] == 2.0
-    
-    # We can cancel the plan to stop it blocking
-    server.agent.cancel_plan(plan["plan_id"])
-    t.join()
-    assert not res["ret"]
+    assert plans; plan = server.agent.plan_detail(plans[0]["plan_id"]); assert plan["steps"][0]["args"]["value"] == 2.0
+    server.agent.cancel_plan(plan["plan_id"]); t.join(); assert not res["ret"]
+def test_all_api_new(api):
+    s, b = api
+    s.agent.set_control({"mode": "autonomous", "tier0_access": "full", "allow_agent_arm": True, "source": "operator"})
+    s.campaign.knobs = (__import__("ground_station.analysis.controller_descriptor", fromlist=["Knob"]).Knob("k", 1, 0, 5., 0., 10., 1.),)
+    res = {}; import threading, time
+    def run(): res["r"] = s.campaign.apply_params({"k": 3.14})
+    t = threading.Thread(target=run); t.start()
+    for _ in range(100):
+        if s.agent.list_plans() and s.agent.list_plans()[0]["status"] in ("done", "error", "cancelled", "failed"): break
+        time.sleep(0.1)
+    t.join(timeout=5.0)
+    p = s.agent.plan_detail(s.agent.list_plans()[0]["plan_id"])
+    assert p["steps"][0]["args"] == {"command_id": 1, "index": 0, "value": 3.14}; assert res["r"] is (p["status"] == "done")
+    s.campaign.apply_params = __import__("unittest.mock").mock.Mock(return_value=True)
+    _post(b + "/api/campaign/go", {"campaign_path": "ground_station/service/campaigns/example_circle.yaml", "pack_id": "P4000-1", "checklist": {"item": True}, "source": "operator"})
+    for _ in range(100):
+        _, r = _get(b + "/api/campaign/state")
+        if r["status"] == "waiting_for_go" and len(r.get("flights", [])) >= 1: break
+        time.sleep(0.1)
+    _post(b + "/api/campaign/abort", {})
+    orig = s.campaign.deps_factory
+    def boom(): d = orig(); d.status = __import__("unittest.mock").mock.Mock(side_effect=RuntimeError("boom")); return d
+    s.campaign.deps_factory = boom
+    _post(b + "/api/campaign/go", {"campaign_path": "ground_station/service/campaigns/example_circle.yaml", "pack_id": "P4000-1", "checklist": {"item": True}, "source": "operator"})
+    for _ in range(100):
+        _, r = _get(b + "/api/campaign/state")
+        if r["status"] == "error": break
+        time.sleep(0.1)
+    assert "RuntimeError: boom" in r["reason"]
+    import http.client; from urllib.parse import urlparse; p2 = urlparse(b + "/api/campaign/go")
+    c = http.client.HTTPConnection(p2.hostname, p2.port, timeout=5.0); c.request("POST", p2.path, b"{not json", {"Content-Type": "application/json"})
+    assert c.getresponse().status == 400
