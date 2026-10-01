@@ -33,7 +33,7 @@ class CampaignService:
             return 409, {"error": "checklist incomplete"}
             
         if self.deps_factory is None:
-            return 503, {"error": "deps_factory None"}
+            return 503, {"error": "live campaign wiring not built: hardware path needs operator approval"}
             
         with self.lock:
             if self.runner_thread and self.runner_thread.is_alive():
@@ -71,6 +71,8 @@ class CampaignService:
         try:
             report = run_campaign(campaign_path, deps)
         except Exception as exc:
+            import traceback
+            traceback.print_exc()
             report = CampaignReport(
                 campaign=None,
                 flights=self._live_flights,

@@ -2626,7 +2626,15 @@ class ApiServer:
         )
         if campaign_service is None:
             from ground_station.service.campaign_api import CampaignService
-            self.campaign = CampaignService(agent=self.agent)
+            if getattr(service, "source", None) == "sim":
+                from ground_station.service.campaign_deps import sim_deps_factory, sim_knobs
+                self.campaign = CampaignService(
+                    agent=self.agent,
+                    deps_factory=sim_deps_factory(),
+                    knobs=sim_knobs()
+                )
+            else:
+                self.campaign = CampaignService(agent=self.agent)
         else:
             self.campaign = campaign_service
             

@@ -59,16 +59,7 @@ def _wait_state(base: str, done, timeout_s: float = 10.0) -> dict:
         time.sleep(0.05)
 
 
-class FakeClock:
-    def __init__(self):
-        self.t = 0.0
-
-    def __call__(self):
-        return self.t
-
-    def sleep(self, dt):
-        self.t += dt
-
+from ground_station.service.campaign_deps import FakeClock
 
 def create_deps(drone, client, clock):
     packs = Mock()
