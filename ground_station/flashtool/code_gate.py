@@ -59,6 +59,14 @@ class CodeGate:
         self.pending_j = None
         self.flights_since_change = 0
 
+    def _log(self, record: dict):
+        record["ts"] = self.clock()
+        with open(self.ledger_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+
+    def _worse(self, j) -> bool:
+        return self.lkg_j is not None and j is not None and j > self.lkg_j * (1 + self.tolerance_frac)
+
     def check_change(self, diff_text: str, justification: dict, files_after: dict[str, str]) -> GateResult:
         if self.pending_change and self.flights_since_change == 0:
             return GateResult(ok=False, step=6, reasons=["A change is already pending and no flight was recorded since."])
@@ -66,12 +74,14 @@ class CodeGate:
         hunks = self._parse_diff(diff_text)
         paths_touched = set()
         for h in hunks:
-            if h[0]: paths_touched.add(h[0])
-            if h[1]: paths_touched.add(h[1])
+            if h[0]:
+                paths_touched.add(h[0])
+            if h[1]:
+                paths_touched.add(h[1])
         
         for pre_path, post_path, h_start, h_len, added_lines, removed_lines in hunks:
             if pre_path in self.protected.paths or post_path in self.protected.paths:
-                return GateResult(ok=False, step=1, reasons=[f"Touched protected path"])
+                return GateResult(ok=False, step=1, reasons=[f"Touched protected path: {pre_path or post_path}"])
             
             if post_path and (post_path.endswith(".c") or post_path.endswith(".h")) and post_path not in files_after:
                 return GateResult(ok=False, step=1, reasons=[f"Missing file text for {post_path}"])
@@ -95,8 +105,7 @@ class CodeGate:
         if not justification.get("argument") or not justification.get("predicted_effect") or not justification.get("metric"):
             return GateResult(ok=False, step=2, reasons=["Missing or blank justification fields"])
         
-        with open(self.ledger_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps({"ts": self.clock(), "event": "justification", "justification": justification}) + "\n")
+        self._log({"event": "justification", "justification": justification})
 
         if not self.custody.has_snapshot(self.obj_dir):
             self.custody.snapshot(self.obj_dir)
@@ -115,7 +124,7 @@ class CodeGate:
             return GateResult(ok=False, step=4, reasons=["SIL hook not wired"])
         if not stable:
             return GateResult(ok=False, step=4, reasons=["SIL check failed: not stable"])
-        if self.lkg_j is not None and j > self.lkg_j * (1 + self.tolerance_frac):
+        if self._worse(j):
             return GateResult(ok=False, step=4, reasons=[f"SIL check failed: j {j} > lkg_j {self.lkg_j} * (1 + {self.tolerance_frac})"])
         
         if not self.custody.has_snapshot(self.obj_dir):
@@ -129,8 +138,7 @@ class CodeGate:
         with open(hex_path, "rb") as f:
             lkg_hash = hashlib.sha256(f.read()).hexdigest()
         
-        with open(self.ledger_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps({"event": "lkg", "hash": lkg_hash, "ts": self.clock()}) + "\n")
+        self._log({"event": "lkg", "hash": lkg_hash})
         
         self.pending_change = True
         self.pending_j = j
@@ -145,7 +153,7 @@ class CodeGate:
         revert = False
         if aborted:
             revert = True
-        elif self.lkg_j is not None and j is not None and j > self.lkg_j * (1 + self.tolerance_frac):
+        elif self._worse(j):
             revert = True
             
         decision = "revert" if revert else "keep"
@@ -158,16 +166,14 @@ class CodeGate:
                 
         self.pending_change = False
         
-        with open(self.ledger_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps({"event": "flight_result", "decision": decision, "ts": self.clock()}) + "\n")
+        self._log({"event": "flight_result", "decision": decision})
             
         return decision
 
     def record_flight(self, flight_id: str, fw_hash: str):
         if self.pending_change:
             self.flights_since_change += 1
-        with open(self.ledger_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps({"event": "flight", "flight_id": flight_id, "fw_hash": fw_hash, "ts": self.clock()}) + "\n")
+        self._log({"event": "flight", "flight_id": flight_id, "fw_hash": fw_hash})
 
     def _parse_diff(self, diff_text: str):
         hunks = []
@@ -238,17 +244,19 @@ class CodeGate:
         while i < len(lines):
             line = lines[i]
             if not in_func:
-                if re.search(r'\b' + re.escape(func_name) + r'\s*\(', line):
+                m = re.search(r'\b' + re.escape(func_name) + r'\s*\(', line)
+                if m:
                     j = i
-                    text_ahead = ""
+                    text_ahead = line[m.end():]
                     found_open = False
                     while j < len(lines):
-                        text_ahead += lines[j]
                         if '{' in text_ahead or ';' in text_ahead:
                             if next(c for c in text_ahead if c in '{;') == '{':
                                 found_open = True
                             break
                         j += 1
+                        if j < len(lines):
+                            text_ahead += lines[j]
                     if found_open:
                         f_start = i + 1
                         in_func = True

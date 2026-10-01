@@ -83,6 +83,23 @@ def test_step1(base_kwargs, diff, files, expect_ok, reason_sub):
         assert res.step == 1
         assert any(reason_sub in r for r in res.reasons)
 
+def test_step1_f4b_bug(base_kwargs):
+    base_kwargs["protected"].functions.append("AutoflyTask_PathArbitrate")
+    gate = CodeGate(**base_kwargs)
+    
+    file_text = "1\nvoid f(void) { if (x) { AutoflyTask_PathArbitrate(); } }\n3\n4\nstatic void AutoflyTask_PathArbitrate(void)\n{\n7\n8\n}\n"
+    
+    # Hunk at line 2 (PASSES)
+    res_pass = gate.check_change("--- a/open.c\n+++ b/open.c\n@@ -2,1 +2,1 @@\n-foo\n+bar\n", {"argument": "a", "predicted_effect": "b", "metric": "c"}, {"open.c": file_text})
+    assert res_pass.ok
+
+    # Hunk at line 7 (FAILS)
+    gate2 = CodeGate(**base_kwargs)
+    res_fail = gate2.check_change("--- a/open.c\n+++ b/open.c\n@@ -7,1 +7,1 @@\n-foo\n+bar\n", {"argument": "a", "predicted_effect": "b", "metric": "c"}, {"open.c": file_text})
+    assert not res_fail.ok
+    assert res_fail.step == 1
+    assert any("protected function" in r for r in res_fail.reasons)
+
 def test_step2_fail(base_kwargs):
     gate = CodeGate(**base_kwargs)
     diff = "+++ b/open.c\n@@ -1,1 +1,1 @@\n+foo\n"
