@@ -1,4 +1,4 @@
-# HANDOFF - current state (overwrite at every task boundary, keep under 3 KB)
+﻿# HANDOFF - current state (overwrite at every task boundary, keep under 3 KB)
 
 Read order for a new agent: `AGENTS.md` -> this file -> `docs/agent/memory/rules.md` (+ `env.md` if you touch workers/hardware).
 History is in `docs/agent/ledger/` (grep it, never read it whole).
@@ -11,7 +11,7 @@ Overnight 2026-09-30 (session 013e8be7/14960682, claude-code): queue + results i
 2026-10-01 late: wfb CODE COMPLETE. `workflow-b` @ 82b0eea pushed: G8 + G12-G16 via WP-2..WP-7 (briefs `docs/agent/briefs/`, reports
 on the merged commits). Sim dry run green: `python -m pytest -q -p no:cacheprovider ground_station/service/tests/test_workflow_b_e2e.py`
 -> 7 passed in 8.98 s (CEO run); mid-flight land/abort assert traj_stop then land, no kill. Live (non-sim) campaign wiring is
-NOT built (go -> 503 by design). NOT merged to main, nothing flashed: the operator approves both. Open notes in
+NOT built (go -> 503 by design). Merged to main bfcbb89 (operator approved, pushed); nothing built or flashed: the next Keil build of main includes the wfb firmware. Open notes in
 `.claude_state.md` line 28 (J=None tuner wrapper, sim service needs bridge=Mock, tier0_access full also sets allow_agent_arm).
 2026-10-01 10:40: CEO -> manager -> worker loop works end to end. Hand a work package to the manager (account B, headless)
 with `bash .agent-ops/manager.sh run <id>` (brief `docs/agent/briefs/WP-<id>.md`, rules `docs/agent/MANAGER.md`; report on
