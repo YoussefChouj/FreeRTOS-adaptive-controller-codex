@@ -7,7 +7,7 @@
 #                                              itself in the same worktree (default effort xhigh)
 #   manager.sh research <id> [effort] [base]   RESEARCHER, after a CTE BLOCKED: web research on the CTE's question
 #   manager.sh resume <id> <msg-file> [role]   follow-up in the same B session (role run|cte|research, default run)
-#   manager.sh clean <id>                      after the CEO merged wp/<id>: remove worktree + merged branch
+#   manager.sh clean <id> [base]               after the CEO merged wp/<id> into <base>: remove worktree + merged branch
 # Start it in the background from the CEO session and wait for its one notification.
 # Reports land on the branch: git show wp/<id>:docs/agent/reports/WP-<id>[-cte].md, research/WP-<id>.md
 # Base context with these flags: 10.7k-12.8k tokens (measured 2026-10-01; 34.6k without --tools/--setting-sources).
@@ -54,8 +54,9 @@ resume)
     claude -p --resume "$sid" "${flags[@]}" < "$3" > "$out.tmp" || echo "claude rc=$?"
     mv "$out.tmp" "$out" ;;
 clean)
-    git -C "$root" worktree remove "$wt"
-    git -C "$root" branch -d "wp/$id"
+    [ -e "$wt" ] && git -C "$root" worktree remove "$wt"
+    git -C "$root" merge-base --is-ancestor "wp/$id" "${3:-main}" || { echo "wp/$id not merged into ${3:-main}"; exit 1; }
+    git -C "$root" branch -D "wp/$id"
     rm -f "$root/.agent-ops/wp-$id.json" "$root/.agent-ops/wp-$id-cte.json" "$root/.agent-ops/wp-$id-research.json"
     exit 0 ;;
 *) sed -n 2,13p "$0"; exit 1 ;;
