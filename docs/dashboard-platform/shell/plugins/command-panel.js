@@ -224,8 +224,9 @@
     { id: 'recover_sdk', label: 'Recover SDK', icon: '\u270E', cmdId: 0x04, index: 1, value: 1,   safetyClass: 'critical' },
     { id: 'sysid',       label: 'SysID',       icon: '\u25B6', cmdId: 0x14, index: 6, value: 1,   safetyClass: 'operational' },
     { id: 'abort',    label: 'Abort All',    icon: '\u25A0', cmdId: 0x0D, index: 0, value: 0,   safetyClass: 'critical' },
-    { id: 'mrac_on',  label: 'MRAC On',      icon: '\u2605', cmdId: 0x0F, index: 1, value: 1,   safetyClass: 'operational' },
-    { id: 'mrac_off', label: 'MRAC Off',     icon: '\u2606', cmdId: 0x0F, index: 1, value: 0,   safetyClass: 'operational' },
+    // MRAC On/Off = output_injection_on (0x0F idx 10): Off is shadow, the motors get pure PID.
+    { id: 'mrac_on',  label: 'MRAC On',      icon: '\u2605', cmdId: 0x0F, index: 10, value: 1,  safetyClass: 'operational' },
+    { id: 'mrac_off', label: 'MRAC Off',     icon: '\u2606', cmdId: 0x0F, index: 10, value: 0,  safetyClass: 'operational' },
     { id: 'ekf_reset', label: 'EKF Reset',   icon: '\u21BB', cmdId: 0x18, index: 0, value: 0,   safetyClass: 'diagnostic', needsDisarm: true },
   ];
 
