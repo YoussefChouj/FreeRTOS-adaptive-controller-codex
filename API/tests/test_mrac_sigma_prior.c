@@ -1,4 +1,4 @@
-﻿/* ============================================================================
+/* ============================================================================
  * API/tests/test_mrac_sigma_prior.c
  *
  * HOST-TEST RUNNER ONLY â€” see sil_gate/README.md for the contract.
@@ -19,7 +19,7 @@
  *                                    update stays bounded by What_limit and
  *                                    the projection operator is not violated.
  *
- * Built standalone by sil_gate/tests/test_mrac_sigma_prior.py using gcc. The
+ * cp ../mrac.c . && gcc -std=c99 -Wall -DMRAC_ENABLE_SIGMA_PRIOR -I../tests/stubs -I.. test_mrac_sigma_prior.c mrac.c -lm -o t && rm mrac.c && ./t
  * file does NOT include FreeRTOS â€” the sil_gate shim provides the CMSIS
  * intrinsics as no-ops (single-threaded host harness).
  *
@@ -32,6 +32,9 @@
 #include <math.h>
 
 #include "mrac.h"
+
+_imu_st imu_data = {0};
+float MRAC_VectorNormSquare(const float *v, int n) { return 0.0f; }
 
 /* A full-sized stand-in for CtrlerTypeDef. mrac.c's MRAC_Control reads:
  *   current_state->gyroyPID.FB / Des / U
@@ -102,7 +105,15 @@ static void reset_state(void)
     /* MRAC_Reset clears Theta and Whatf on every axis. Theta_prior is
      * file-scope zero-init and persists across resets; the tests set it
      * explicitly via MRAC_SetPrior. */
+
     MRAC_Reset();
+    mrac_in_armed = 1;
+    mrac_in_phase = 1;
+    mrac_inj.fly_ticks = 200;
+    mrac_inj.learn_gate = 1;
+    mrac_inj.inj_alpha = 1.0f;
+    mrac_flags.output_injection_on = 1;
+
 }
 
 static void set_prior_axis(uint8_t axis, const float *arr, int n)
@@ -321,6 +332,33 @@ int main(void)
                 sprintf(msg, "T5 oob-axis no-op[%d]", i);
                 okv_close(msg, after[i], before[i], 0.0);
             }
+        }
+    }
+
+    
+    /* Test 6: gate case: with mrac_in_phase = GROUND_IDLE (armed=1) and e = 0.5, 
+     * Theta stays bit-unchanged for 1000 MRAC_Control ticks. */
+    {
+        reset_state();
+        mrac_in_armed = 1;
+        mrac_in_phase = 0; // GROUND_IDLE
+        mrac_inj.fly_ticks = 200;
+        mrac_inj.learn_gate = 0; // Because it's on the ground, but let's let GateStep handle it.
+        // Wait, reset_state() opens the gate now! 
+        // I need to explicitly close it by doing the ground phase logic:
+        mrac_in_phase = 0;
+        
+        float theta_before[MAX_NUM_BASIS];
+        for (i = 0; i < MAX_NUM_BASIS; i++) {
+            theta_before[i] = mrac_state.pitch.Theta[i];
+        }
+        
+        drive_zero_steady_state(1000);
+        
+        for (i = 0; i < MAX_NUM_BASIS; i++) {
+            char msg[80];
+            sprintf(msg, "T6 gate closed Theta[%d]", i);
+            okv_close(msg, mrac_state.pitch.Theta[i], theta_before[i], 0.0);
         }
     }
 
