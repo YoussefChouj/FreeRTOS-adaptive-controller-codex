@@ -1,7 +1,9 @@
-import pytest
 import numpy as np
-from ground_station.research.sim.cascade import ROWS_3AE4A23, make_pid, PyPid, CPid
+import pytest
+
 from ground_station.research.sim._ccore import build
+from ground_station.research.sim.cascade import ROWS_3AE4A23, CPid, PyPid, make_pid
+
 
 def test_cpid_vs_pypid():
     lib = build.build_pid_lib()
@@ -90,3 +92,91 @@ def test_calibration_smoke(tmp_path):
 
 def test_f2_oscillation():
     pass # to do later
+
+def test_load_pid_lib_invalid(tmp_path, monkeypatch):
+    import pathlib
+    import sys
+    from ground_station.research.sim import cascade
+    
+    # Mock build_pid_lib to return a non-library file path
+    non_lib_file = tmp_path / "not_a_lib.so"
+    non_lib_file.write_text("this is not a valid library")
+    
+    def mock_build():
+        return non_lib_file
+        
+    monkeypatch.setattr("ground_station.research.sim._ccore.build.build_pid_lib", mock_build)
+    
+    # Reset lazy load state
+    monkeypatch.setattr(cascade, "_libpid_attempted", False)
+    monkeypatch.setattr(cascade, "_libpid", None)
+    
+    # Should catch OSError/ImportError and return None without raising
+    assert cascade.load_pid_lib() is None
+def test_log_targets():
+    from ground_station.research.sim.cascade import log_targets
+    import pandas as pd
+    
+    dt = 0.005
+    N = 4000
+    t = np.arange(N) * dt
+    
+    # 0.9 Hz sinusoid
+    freq = 0.9
+    roll_fb = 2.0 * np.sin(2 * np.pi * freq * t)
+    roll_des = 1.0 # constant Des-FB
+    
+    df = pd.DataFrame({
+        't_src_ms': t * 1000,
+        'Ctrler.Z_posPID.FB': np.ones(N) * 10.0, # hover active
+        'Ctrler.rollPID.FB': roll_fb,
+        'Ctrler.rollPID.Des': roll_des,
+        'Ctrler.pitchPID.FB': np.zeros(N),
+        'Ctrler.pitchPID.Des': np.zeros(N),
+        'Ctrler.rollPID.U': np.zeros(N),
+        'Ctrler.pitchPID.U': np.zeros(N),
+        'Ctrler.gyroxPID.U': np.zeros(N),
+        'Ctrler.gyroyPID.U': np.zeros(N),
+        'Ctrler.locxPID.Des': np.zeros(N),
+        'Ctrler.locxPID.FB': np.zeros(N),
+        'Ctrler.locyPID.Des': np.zeros(N),
+        'Ctrler.locyPID.FB': np.zeros(N),
+    })
+    
+    targets = log_targets(df)
+    assert targets is not None
+    assert np.isclose(targets["sway_freq"], freq, atol=0.05)
+    
+    expected_err = roll_des - np.mean(roll_fb[int(N * 0.15):-1])
+    assert np.isclose(targets["roll_err"], expected_err, atol=1e-3)
+
+def test_calibration_smoke(tmp_path):
+    import pandas as pd
+    from ground_station.research.sim.cascade import calibrate
+    
+    # Create synthetic tiny flights
+    df = pd.DataFrame({
+        't_src_ms': np.arange(100) * 5,
+        'Ctrler.Z_posPID.FB': np.ones(100) * 10.0,
+        'Ctrler.rollPID.FB': np.zeros(100),
+        'Ctrler.rollPID.Des': np.zeros(100),
+        'Ctrler.pitchPID.FB': np.zeros(100),
+        'Ctrler.pitchPID.Des': np.zeros(100),
+        'Ctrler.rollPID.U': np.zeros(100),
+        'Ctrler.pitchPID.U': np.zeros(100),
+        'Ctrler.gyroxPID.U': np.zeros(100),
+        'Ctrler.gyroyPID.U': np.zeros(100),
+        'Ctrler.locxPID.Des': np.zeros(100),
+        'Ctrler.locxPID.FB': np.zeros(100),
+        'Ctrler.locyPID.Des': np.zeros(100),
+        'Ctrler.locyPID.FB': np.zeros(100),
+    })
+    
+    for name in ["f17_hover_shadow14_removed_white_floor_covering_batery_type_2",
+                 "f17_hover_shadow4_removed_white_floor_covering_batery_type_2",
+                 "f17_hover_active15_removed_white_floor_covering_batery_type_2"]:
+        df.to_csv(tmp_path / f"{name}.slot0.csv", index=False)
+        
+    cfg = calibrate(tmp_path, quick=True)
+    assert np.isfinite(cfg["gain_roll"])
+    assert np.isfinite(cfg["tau_roll"])

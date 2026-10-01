@@ -1,7 +1,7 @@
-import subprocess
 import pathlib
-import os
+import subprocess
 import sys
+
 
 def build_pid_lib() -> pathlib.Path | None:
     ccore_dir = pathlib.Path(__file__).parent
@@ -34,13 +34,15 @@ float Cos_Roll = 1.0f;
 // Ctrler defined in pid.c
 """)
     
-    so_path = build_dir / "libpid.so"
+    if sys.platform == "win32":
+        so_path = build_dir / "libpid.dll"
+    else:
+        so_path = build_dir / "libpid.so"
     try:
         subprocess.run(
             ["gcc", "-O2", "-shared", "-fPIC", "-I", str(ccore_dir), str(pid_c_dst), str(stubs_c), "-o", str(so_path)],
             check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            capture_output=True
         )
     except FileNotFoundError:
         return None

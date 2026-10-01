@@ -1,20 +1,10 @@
 import copy
-import time
-
 import numpy as np
-
-from ground_station.research.sim.cascade import (
-    ROWS_3AE4A23,
-    PidRow,
-    gen_square_traj,
-    gen_circle_traj,
-    simulate,
-    calibrate
-)
+from ground_station.research.sim.cascade import gen_square_traj, gen_circle_traj, simulate, PidRow, ROWS_3AE4A23
 
 def calc_metrics(res, traj=None, duration=20.0):
     dt = 0.005
-    idx = int(0.5 * duration / dt) if traj is None else 0
+    idx = int(0.5 * duration / dt) if traj is None else 0 # for trajectory, evaluate all? No, for step, evaluate after step
     if traj is None:
         pos_err_x = res["pos_x"]
         pos_err_y = res["pos_y"]
@@ -26,11 +16,21 @@ def calc_metrics(res, traj=None, duration=20.0):
         pos_err_y = res["pos_y"][:n] - traj_y
         
     err_mag = np.sqrt(pos_err_x**2 + pos_err_y**2)
+    
+    # steady err
     steady_err = np.mean(err_mag[-int(2.0/dt):]) if len(err_mag) > int(2.0/dt) else np.mean(err_mag)
+    
+    # rms
     rms = np.sqrt(np.mean(err_mag[idx:]**2)) if len(err_mag[idx:]) > 0 else 0.0
+    
+    # max
     max_err = np.max(err_mag[idx:]) if len(err_mag[idx:]) > 0 else 0.0
+    
+    # overshoot (if step response, max beyond steady state?) Let's just use max_err as a proxy or max - steady
     overshoot = max_err - steady_err if max_err > steady_err else 0.0
     
+    # settling time (time to stay within 10% of max or 5cm)
+    # just an approx
     settled_idx = len(err_mag) - 1
     thresh = max(5.0, steady_err + 0.1 * (max_err - steady_err))
     for i in range(len(err_mag)-1, idx, -1):
@@ -39,22 +39,35 @@ def calc_metrics(res, traj=None, duration=20.0):
             break
     settling = (settled_idx - idx) * dt
     
+    # peak lean
     peak_lean = np.max(np.sqrt(res["roll"]**2 + res["pitch"]**2))
     
+    # osc amp and freq
+    # use roll or pitch? let's use pos_err_x
     osc_amp = np.std(pos_err_x[-int(5.0/dt):]) * np.sqrt(2) if len(pos_err_x) > int(5.0/dt) else 0.0
+    osc_freq = 0.0
+    # very simple freq approx: zero crossings of mean-subtracted signal
     sig = pos_err_x[-int(5.0/dt):] - np.mean(pos_err_x[-int(5.0/dt):])
     crossings = np.where(np.diff(np.sign(sig)))[0]
-    osc_freq = len(crossings) / (2.0 * 5.0) if len(crossings) > 2 else 0.0
+    if len(crossings) > 2:
+        osc_freq = len(crossings) / (2.0 * 5.0) # crossings per second / 2
         
     return {
-        "steady_err": steady_err, "rms": rms, "max": max_err,
-        "overshoot": overshoot, "settling": settling, "peak_lean": peak_lean,
-        "osc_amp": osc_amp, "osc_freq": osc_freq
+        "steady_err": steady_err,
+        "rms": rms,
+        "max": max_err,
+        "overshoot": overshoot,
+        "settling": settling,
+        "peak_lean": peak_lean,
+        "osc_amp": osc_amp,
+        "osc_freq": osc_freq
     }
 
 def get_candidates():
     base = dict(ROWS_3AE4A23)
-    cands = {"F0": {"rows": dict(base)}}
+    cands = {}
+    cands["F0"] = {"rows": dict(base)}
+    
     r1a = dict(base)
     r1a["rollPID"] = copy.deepcopy(r1a["rollPID"]); r1a["rollPID"].SumEMax = 600
     r1a["pitchPID"] = copy.deepcopy(r1a["pitchPID"]); r1a["pitchPID"].SumEMax = 600
@@ -64,8 +77,10 @@ def get_candidates():
     r1b["gyroyPID"] = copy.deepcopy(r1b["gyroyPID"]); r1b["gyroyPID"].SumEMax = 4000
     
     r1 = dict(base)
-    r1["rollPID"] = copy.deepcopy(r1a["rollPID"]); r1["pitchPID"] = copy.deepcopy(r1a["pitchPID"])
-    r1["gyroxPID"] = copy.deepcopy(r1b["gyroxPID"]); r1["gyroyPID"] = copy.deepcopy(r1b["gyroyPID"])
+    r1["rollPID"] = copy.deepcopy(r1a["rollPID"])
+    r1["pitchPID"] = copy.deepcopy(r1a["pitchPID"])
+    r1["gyroxPID"] = copy.deepcopy(r1b["gyroxPID"])
+    r1["gyroyPID"] = copy.deepcopy(r1b["gyroyPID"])
     cands["F1"] = {"rows": r1}
     
     r2 = dict(base)
@@ -94,6 +109,7 @@ def get_candidates():
     cands["F1+F4"] = {"rows": r14}
     cands["F1+F4+F5"] = {"rows": dict(r14), "trim_ff_roll": -1.30, "trim_ff_pitch": -0.87}
     cands["F1+F4+F5+F6"] = {"rows": dict(r14), "trim_ff_roll": -1.30, "trim_ff_pitch": -0.87, "vel_ff": True, "acc_ff": True}
+    
     return cands
 
 def get_corners(cfg):
@@ -113,6 +129,7 @@ def get_corners(cfg):
 
 def evaluate_candidates(calib_config):
     cands = get_candidates()
+    
     base_s1 = {
         "lean_offset_roll": -1.30, "lean_offset_pitch": -0.87,
         "torque_bias_roll": 37.36, "torque_bias_pitch": -14.78,
@@ -120,13 +137,13 @@ def evaluate_candidates(calib_config):
     }
     
     scenarios = {
-        "S1 Hover": (base_s1, 60.0),
-        "S2 Step Roll x2": ({**base_s1, "tb_mult_roll": 2.0, "torque_step_time": 10.0}, 30.0),
-        "S2 Step Roll x3": ({**base_s1, "tb_mult_roll": 3.0, "torque_step_time": 10.0}, 30.0),
-        "S2 Step Roll flip": ({**base_s1, "tb_mult_roll": -1.0, "torque_step_time": 10.0}, 30.0),
-        "S2 Step Pitch x3": ({**base_s1, "tb_mult_pitch": 3.0, "torque_step_time": 10.0}, 30.0),
-        "S3 Square": ({**base_s1, "trajectory": gen_square_traj()}, 20.0),
-        "S3 Circle": ({**base_s1, "trajectory": gen_circle_traj()}, 20.0)
+        "S1_Hover": (base_s1, 60.0),
+        "S2_Roll_x2": ({**base_s1, "tb_mult_roll": 2.0, "torque_step_time": 10.0}, 30.0),
+        "S2_Roll_x3": ({**base_s1, "tb_mult_roll": 3.0, "torque_step_time": 10.0}, 30.0),
+        "S2_Roll_flip": ({**base_s1, "tb_mult_roll": -1.0, "torque_step_time": 10.0}, 30.0),
+        "S2_Pitch_x3": ({**base_s1, "tb_mult_pitch": 3.0, "torque_step_time": 10.0}, 30.0),
+        "S3_Square": ({**base_s1, "trajectory": gen_square_traj()}, 20.0),
+        "S3_Circle": ({**base_s1, "trajectory": gen_circle_traj()}, 20.0)
     }
     
     for s_name, (scene, duration) in scenarios.items():
@@ -140,10 +157,13 @@ def evaluate_candidates(calib_config):
                 cfg.update(cand_cfg)
                 if mode == "MRAC":
                     cfg["mrac"] = True
+                    # if MRAC, use tau_mrac from calib
                 
+                # Nominal
                 res = simulate(cfg, scene, duration)
                 m = calc_metrics(res, scene.get("trajectory"), duration)
                 
+                # Corners
                 corners = get_corners(cfg)
                 robust_rms = 0.0
                 robust_osc = 0.0
@@ -154,24 +174,14 @@ def evaluate_candidates(calib_config):
                     robust_osc = max(robust_osc, cm["osc_amp"])
                     
                 score = m["rms"] + robust_rms + m["max"] * 0.5
+                
                 results.append({
                     "name": cand_name, "mode": mode, "score": score,
                     "m": m, "robust_rms": robust_rms, "robust_osc": robust_osc
                 })
                 
+        # Sort by score
         results.sort(key=lambda x: x["score"])
         for r in results:
             m = r["m"]
             print(f"{r['name']:12} | {r['mode']:4} | {m['steady_err']:6.2f} | {m['rms']:6.2f} | {m['max']:6.2f} | {m['overshoot']:6.2f} | {m['settling']:6.2f} | {m['peak_lean']:6.2f} | {m['osc_amp']:6.2f} | {m['osc_freq']:6.2f} | {r['robust_rms']:7.2f} | {r['robust_osc']:7.2f}")
-
-if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--logs", type=str, default="/home/agent/data/logs/vofa")
-    parser.add_argument("--quick", action="store_true")
-    args = parser.parse_args()
-    
-    t0 = time.time()
-    config = calibrate(args.logs, args.quick)
-    evaluate_candidates(config)
-    print(f"elapsed {time.time()-t0:.2f} s")
