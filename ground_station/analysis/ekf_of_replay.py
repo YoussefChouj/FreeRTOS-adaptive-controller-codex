@@ -220,6 +220,9 @@ def replay_arrays(t1, phase1, ax1, ay1, t3, ofx3, ofy3, ofq3, params_grid, run_o
         
     return res
 
+TUNING_LOGS = ('shadow3', 'shadow4', 'shadow5', 'active5', 'active6')
+
+
 def resolve_logs_dir(logs_dir=None):
     if not logs_dir:
         repo_dir = Path(__file__).resolve().parent.parent.parent
@@ -247,7 +250,8 @@ def run_cli():
         print(f"Log dir not found: {logs_dir}")
         sys.exit(2)
         
-    log_files = glob.glob(str(logs_dir / 'f17_hover_*.meta.json'))
+    # The WP-8 tuning set: the five floor-removed hovers. A bare f17_hover_* glob also picks up later or empty logs.
+    log_files = [f for tag in TUNING_LOGS for f in glob.glob(str(logs_dir / f'f17_hover_{tag}_*.meta.json'))]
     if not log_files:
         print(f"No logs found in {logs_dir}")
         sys.exit(2)
@@ -290,18 +294,9 @@ def run_cli():
                     
                 if 'preset' in meta and 'slots' in meta['preset']:
                     slots = meta['preset']['slots']
-                    new_slots = [s for s in slots if 'slot1' in s.get('path', '') or 'slot2' in s.get('path', '') or 'slot3' in s.get('path', '')]
-                    meta['preset']['slots'] = new_slots
+                    meta['preset']['slots'] = slots[1:4]  # slot0 is header-only; slots 1-3 become 0-2 below
                 elif 'slots' in meta:
-                    slots_dict = meta['slots']
-                    new_slots = {}
-                    idx = 0
-                    for k in sorted(slots_dict.keys(), key=int):
-                        s = slots_dict[k]
-                        if 'slot1' in s.get('path', '') or 'slot2' in s.get('path', '') or 'slot3' in s.get('path', ''):
-                            new_slots[str(idx)] = s
-                            idx += 1
-                    meta['slots'] = new_slots
+                    meta['slots'] = {str(i - 1): meta['slots'][str(i)] for i in range(1, 4)}  # same renumbering
                     
                 stem = log_path_obj.name[:-len(".meta.json")] if log_path_obj.name.endswith(".meta.json") else log_path_obj.stem
                 tmp_meta = tmp_path / f"{stem}.meta.json"
