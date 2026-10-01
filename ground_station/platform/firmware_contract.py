@@ -171,6 +171,9 @@ def link_budget_uart5(frame_bytes: int, divider: int) -> float:
 #   4  = unknown command
 #   6  = safety interlock
 
+# Path commands 0x0B/0x0C/0x11: the start command moves the centre (idx 0-2) to the current position.
+_PATH_CENTRE = "overwritten at start: the path begins at the current position (AutoflyTask_Start*)"
+
 COMMAND_TABLE: dict[int, CommandSpec] = {
     0x01: CommandSpec(
         id=0x01, name="PID_GAIN",
@@ -291,12 +294,13 @@ COMMAND_TABLE: dict[int, CommandSpec] = {
     ),
     0x0B: CommandSpec(
         id=0x0B, name="SINUSOID_PATH",
-        description="Configure and activate sinusoidal reference path. SDK mode only.",
+        description="Configure and activate sinusoidal reference path. SDK mode only. "
+                    "x/y in cm, z in m (the loc and Z_pos loop units).",
         params=(
-            CommandParam(0, "center_x", "m", None, None),
-            CommandParam(1, "center_y", "m", None, None),
-            CommandParam(2, "center_z", "m", None, None),
-            CommandParam(3, "amplitude", "m", None, None),
+            CommandParam(0, "center_x", "cm", None, None, _PATH_CENTRE),
+            CommandParam(1, "center_y", "cm", None, None, _PATH_CENTRE),
+            CommandParam(2, "center_z", "m", None, None, _PATH_CENTRE),
+            CommandParam(3, "amplitude", "cm", None, None, "cm for axis 0/1 (x, y), m for axis 2 (z)"),
             CommandParam(4, "frequency", "Hz", None, None),
             CommandParam(5, "duration", "s", None, None),
             CommandParam(6, "axis", "enum", 0, 2),
@@ -310,12 +314,13 @@ COMMAND_TABLE: dict[int, CommandSpec] = {
     ),
     0x0C: CommandSpec(
         id=0x0C, name="CIRCLE_PATH",
-        description="Configure and activate circular reference path. SDK mode only.",
+        description="Configure and activate circular reference path. SDK mode only. "
+                    "x/y in cm, z in m (the loc and Z_pos loop units).",
         params=(
-            CommandParam(0, "center_x", "m", None, None),
-            CommandParam(1, "center_y", "m", None, None),
-            CommandParam(2, "center_z", "m", None, None),
-            CommandParam(3, "radius", "m", None, None),
+            CommandParam(0, "center_x", "cm", None, None, _PATH_CENTRE),
+            CommandParam(1, "center_y", "cm", None, None, _PATH_CENTRE),
+            CommandParam(2, "center_z", "m", None, None, _PATH_CENTRE),
+            CommandParam(3, "radius", "cm", None, None, "the centre is one radius in -x of the start point"),
             CommandParam(4, "angular_speed", "rad/s", None, None),
             CommandParam(5, "duration", "s", None, None),
             CommandParam(6, "active", "bool", 0, 1),
@@ -391,12 +396,13 @@ COMMAND_TABLE: dict[int, CommandSpec] = {
     ),
     0x11: CommandSpec(
         id=0x11, name="FIGURE8_PATH",
-        description="Configure and activate figure-8 (lemniscate) path. SDK mode only.",
+        description="Configure and activate figure-8 (lemniscate) path. SDK mode only. "
+                    "x/y in cm, z in m (the loc and Z_pos loop units).",
         params=(
-            CommandParam(0, "center_x", "m", None, None),
-            CommandParam(1, "center_y", "m", None, None),
-            CommandParam(2, "center_z", "m", None, None),
-            CommandParam(3, "amplitude", "m", None, None),
+            CommandParam(0, "center_x", "cm", None, None, _PATH_CENTRE),
+            CommandParam(1, "center_y", "cm", None, None, _PATH_CENTRE),
+            CommandParam(2, "center_z", "m", None, None, _PATH_CENTRE),
+            CommandParam(3, "amplitude", "cm", None, None),
             CommandParam(4, "angular_speed", "rad/s", None, None),
             CommandParam(5, "duration", "s", None, None),
             CommandParam(6, "type", "enum", 0, 1),

@@ -33,10 +33,11 @@ except ImportError:  # pragma: no cover
 #   0x0A TWC (point target) — FlyMode_SDK only:
 #        idx 0=target_x  1=target_y  2=target_z  3=yaw_deg  4=execute (1=start, 0=stop)
 #   0x0B sinusoid path — FlyMode_SDK only:
-#        idx 0=center_x 1=center_y 2=center_z 3=amplitude_m 4=freq_Hz 5=duration_s
+#        idx 0=center_x(cm) 1=center_y(cm) 2=center_z(m) 3=amplitude(cm; m on axis 2) 4=freq_Hz 5=duration_s
 #            6=axis (0=X 1=Y 2=Z)  7=active (1=start path, 0=disable)
 #   0x0C circle path — FlyMode_SDK only:
-#        idx 0=center_x 1=center_y 2=center_z 3=radius_m 4=omega_rad_s 5=duration_s  6=active (1=start)
+#        idx 0=center_x(cm) 1=center_y(cm) 2=center_z(m) 3=radius(cm) 4=omega_rad_s 5=duration_s  6=active (1=start)
+#        Every path start overwrites idx 0-2 with the current position (AutoflyTask_Start*).
 #   0x0D abort all paths (GroundStation_AbortAllPaths) — idx 0 (value ignored; use 1.0)
 #   0x0E arm/disarm — idx 0: val>=0.5 = arm (GS_KeySDKflag=1, ARM_REQUEST, RCInput authority on),
 #                              val<0.5  = disarm (GS_KeySDKflag=0, DISARM_REQUEST, authority off)
