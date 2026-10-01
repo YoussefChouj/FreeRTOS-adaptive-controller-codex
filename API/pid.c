@@ -13,8 +13,11 @@
 
 CtrlerTypeDef Ctrler={
 /*          Kp    Ki     Kd    UMax  UpMax  UiMax  UdMax  SumEMax  EMin     member       loop */
-    PID_ROW(3.0,  0.1,   8,    200,  200,   10,    10,    120,     3     ), /* pitchPID     pitch angle */
-    PID_ROW(3.0,  0.1,   8,    200,  200,   10,    10,    120,     3     ), /* rollPID      roll angle */
+    /* Angle Ki 0.1 -> 0.02 (2026-10-01): at 200 Hz, Ki 0.1 with Kp 3 is an underdamped PI (wn 0.71 Hz, zeta 0.34);
+       active8 hover showed its I part (4.2 deg/s) above the P part (3.6) in 0.5-1.3 Hz, mean only 0.17 deg/s = the 0.9 Hz sway.
+       Ki 0.02 -> wn 0.32 Hz, zeta 0.75. */
+    PID_ROW(3.0,  0.02,  8,    200,  200,   10,    10,    120,     3     ), /* pitchPID     pitch angle */
+    PID_ROW(3.0,  0.02,  8,    200,  200,   10,    10,    120,     3     ), /* rollPID      roll angle */
     PID_ROW(6.0,  0.04,  0,    160,  160,   2,     10,    50,      2     ), /* yawPID       yaw angle */
 
     PID_ROW(5,    0.01,  10,   300,  300,   20,    100,   1000,    2     ), /* gyroxPID     roll rate  (inner) */
