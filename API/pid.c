@@ -16,27 +16,33 @@ CtrlerTypeDef Ctrler={
     /* Angle Ki 0.1 -> 0.02 (2026-10-01): at 200 Hz, Ki 0.1 with Kp 3 is an underdamped PI (wn 0.71 Hz, zeta 0.34);
        active8 hover showed its I part (4.2 deg/s) above the P part (3.6) in 0.5-1.3 Hz, mean only 0.17 deg/s = the 0.9 Hz sway.
        Ki 0.02 -> wn 0.32 Hz, zeta 0.75. */
-    PID_ROW(3.0,  0.02,  8,    200,  200,   10,    10,    120,     3     ), /* pitchPID     pitch angle */
-    PID_ROW(3.0,  0.02,  8,    200,  200,   10,    10,    120,     3     ), /* rollPID      roll angle */
+    PID_ROW(3.0,  0.02,   8,    200,  200,   26,    10,    1300,    10    ), /* pitchPID     pitch angle */ /* F1x: Ui 26 / SumE 1300 / EMin 10 so the lean is carried (WP-10) */
+    PID_ROW(3.0,  0.02,   8,    200,  200,   26,    10,    1300,    10    ), /* rollPID      roll angle */  /* F1x: Ui 26 / SumE 1300 / EMin 10 so the lean is carried (WP-10) */
     PID_ROW(6.0,  0.04,  0,    160,  160,   2,     10,    50,      2     ), /* yawPID       yaw angle */
 
-    PID_ROW(5,    0.01,  10,   300,  300,   20,    100,   1000,    2     ), /* gyroxPID     roll rate  (inner) */
-    PID_ROW(5,    0.01,  10,   300,  300,   20,    100,   1000,    2     ), /* gyroyPID     pitch rate (inner) */
+    PID_ROW(5,    0.01,   10,   300,  300,   160,   100,   16000,   50    ), /* gyroxPID     roll rate  (inner) */ /* F1x */
+    PID_ROW(5,    0.01,   10,   300,  300,   160,   100,   16000,   50    ), /* gyroyPID     pitch rate (inner) */ /* F1x */
     PID_ROW(8.0,  0.005, 0.02, 650,  650,   500,   10,    100000,  1000  ), /* gyrozPID     yaw rate   (inner) */
 
     PID_ROW(0.7,  0.005, 0.1,  1.0,  0.9,   0.3,   0.3,   30,      0.3   ), /* Z_posPID     altitude */
     PID_ROW(400,  0.435, 0,    300,  300,   100,   60,    250,     10    ), /* Z_ratePID    climb rate (inner) */
 
-    PID_ROW(0.8,  0.01,  4.0,  300,  300,   20,    50,    200,     30    ), /* locxPID      position x */
-    PID_ROW(0.8,  0.01,  4.0,  300,  300,   20,    50,    200,     30    ), /* locyPID      position y */
-    PID_ROW(3.0,  0,     6.00, 600,  600,   100,   100,   200,     10    ), /* locxsPID     velocity x (inner) */
-    PID_ROW(3.0,  0,     6.00, 600,  600,   100,   100,   200,     10    ), /* locysPID     velocity y (inner) */
+    PID_ROW(0.8,  0.0013, 4.0,  300,  300,   5,     50,    3850,    10    ), /* locxPID      position x */ /* F3 */
+    PID_ROW(0.8,  0.0013, 4.0,  300,  300,   5,     50,    3850,    10    ), /* locyPID      position y */ /* F3 */
+    PID_ROW(3.0,  0.008,  6.0,  600,  600,   100,   100,   12500,   10    ), /* locxsPID     velocity x (inner) */ /* F3 */
+    PID_ROW(3.0,  0.008,  6.0,  600,  600,   100,   100,   12500,   10    ), /* locysPID     velocity y (inner) */ /* F3 */
 
     PID_ROW(1.0,  0,     2.0,  40,   40,    0,     2,     2,       2     ), /* stree_yaw_speed */
     PID_ROW(0.6,  0,     0.0,  80,   70,    0,     5,     2,       2     )  /* stree_pitch_speed */
 };
 
 /* Change history (newest first)
+ * WP-13 F1x+F3+F5w+F6a integration (2026-10-01)
+ *   pitch, roll: UiMax 10->26, SumEMax 120->1300, EMin 3->10 (F1x carry lean)
+ *   gyrox, gyroy: UiMax 20->160, SumEMax 1000->16000, EMin 2->50 (F1x)
+ *   locx, locy: Ki 0.01->0.0013, UiMax 20->5, SumEMax 200->3850, EMin 30->10 (F3)
+ *   locxs, locys: Ki 0->0.008, SumEMax 200->12500 (F3)
+
  * pitch, roll angle
  *   2026-09-29 Kp 2.6->3.0, Kd 9.5->8: restored to FreeRTOS_original (operator: tuned on this drone);
  *              UiMax 10, SumEMax 120 kept (original UiMax 0 = no I term).
@@ -313,4 +319,86 @@ void Clear_Structure(void)
 //	Ctrler.pitchPID.Des=0;
 //	Ctrler.rollPID.Des=0;
 	Ctrler.yawPID.Des = Ctrler.yawPID.FB;
+}
+
+void ComputePID_Gated(PIDTypeDef *pPID, uint8_t integrate)
+{
+    if (integrate != 0) {
+        ComputePID(pPID);
+    } else {
+        pPID->SumE = 0;
+        ComputePID(pPID);
+        pPID->SumE = 0;
+        pPID->Ui = 0;
+        pPID->U = pPID->Up + pPID->Ud;
+        value_limit(pPID->U, -pPID->UMax, pPID->UMax);
+    }
+}
+
+float AttTrim_Apply(float des_deg, float trim_deg, float lim_deg, uint8_t flying)
+{
+    if (flying) {
+        float val = des_deg + trim_deg;
+        value_limit(val, -lim_deg, lim_deg);
+        return val;
+    }
+    return des_deg;
+}
+
+void TrajFF_Reset(TrajFF_t *s)
+{
+    s->prev_x = 0;
+    s->prev_y = 0;
+    s->vf_x = 0;
+    s->vf_y = 0;
+    s->primed = 0;
+}
+
+void TrajFF_Step(TrajFF_t *s, uint8_t active, float tx_cm, float ty_cm, float dt_s, float tau_s, float vmax_cms,
+                 float *vff_x, float *vff_y, float *aff_x, float *aff_y)
+{
+    float vx, vy, alpha, vf_x_new, vf_y_new;
+
+    if (active == 0) {
+        TrajFF_Reset(s);
+        *vff_x = 0.0f;
+        *vff_y = 0.0f;
+        *aff_x = 0.0f;
+        *aff_y = 0.0f;
+        return;
+    }
+
+    if (!s->primed) {
+        s->prev_x = tx_cm;
+        s->prev_y = ty_cm;
+        s->primed = 1;
+        s->vf_x = 0.0f;
+        s->vf_y = 0.0f;
+        *vff_x = 0.0f;
+        *vff_y = 0.0f;
+        *aff_x = 0.0f;
+        *aff_y = 0.0f;
+        return;
+    }
+
+    vx = (tx_cm - s->prev_x) / dt_s;
+    vy = (ty_cm - s->prev_y) / dt_s;
+    value_limit(vx, -vmax_cms, vmax_cms);
+    value_limit(vy, -vmax_cms, vmax_cms);
+    
+    s->prev_x = tx_cm;
+    s->prev_y = ty_cm;
+    
+    *vff_x = vx;
+    *vff_y = vy;
+    
+    alpha = 1.0f - expf(-dt_s / tau_s);
+    vf_x_new = s->vf_x + alpha * (vx - s->vf_x);
+    vf_y_new = s->vf_y + alpha * (vy - s->vf_y);
+    
+    *aff_x = (vf_x_new - s->vf_x) / dt_s;
+    *aff_y = (vf_y_new - s->vf_y) / dt_s;
+    
+    s->vf_x = vf_x_new;
+    s->vf_y = vf_y_new;
 }

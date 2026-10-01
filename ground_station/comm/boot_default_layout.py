@@ -276,6 +276,12 @@ DASHBOARD_PANEL_EXTRA_VARS: tuple[str, ...] = (
     "s_ekf.x[6]",
     "s_ekf.x[7]",
     "s_ekf.x[8]",
+    # WP-13 F1x+F3+F5w+F6a vars: +25 B, slot-1 frame 124 -> 149 B, ~2.5 -> 3.0 kB/s at nominal 20 Hz
+    # (div 5; ~16 Hz measured) on the 91.3 kB/s USART3 WiFi wire
+    "Ctrler.locxsPID.SumE", "Ctrler.locxsPID.Ui",
+    "Ctrler.locysPID.SumE", "Ctrler.locysPID.Ui",
+    "g_att_trim_roll_deg", "g_att_trim_pitch_deg",
+    "g_traj_ff_on",
 )
 
 # divider=5 at the MIXED-mode measured 80 Hz Send_Task cadence gives 16 Hz on
