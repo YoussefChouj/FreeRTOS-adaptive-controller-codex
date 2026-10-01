@@ -1,5 +1,5 @@
-#ifndef __SINS_H
-#define __SINS_H
+#ifndef SIM_STUB_SINS_H
+#define SIM_STUB_SINS_H
 
 extern float Sin_Yaw;
 extern float Cos_Yaw;

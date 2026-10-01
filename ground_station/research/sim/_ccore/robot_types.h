@@ -1,5 +1,5 @@
-#ifndef __ROBOT_TYPES_H
-#define __ROBOT_TYPES_H
+#ifndef SIM_STUB_ROBOT_TYPES_H
+#define SIM_STUB_ROBOT_TYPES_H
 
 typedef enum
 {

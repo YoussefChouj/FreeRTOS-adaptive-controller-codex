@@ -1,8 +1,8 @@
 /* Host stand-in for API/pid.h: the same declarations, with the stub headers in this directory instead of
  * the firmware chain (API/SINS.h pulls stm32f4xx.h, bmi088_driver.h, ...). build.py compiles a byte copy
  * of API/pid.c against it. */
-#ifndef __PID_H
-#define __PID_H
+#ifndef SIM_STUB_PID_H
+#define SIM_STUB_PID_H
 
 #include "robot_types.h"
 #include "global_declare.h"

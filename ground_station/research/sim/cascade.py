@@ -386,7 +386,7 @@ def flight_stats(slots) -> dict[str, float]:
     """Hover means and spectra in the controller frame (pitch = pitchPID frame, y' = -y)."""
     t0, t1 = hover_window(slots)
     win = {s: df[(df["t"] >= t0) & (df["t"] <= t1)] for s, df in slots.items()}
-    s1, s2, s3 = win[1], win[2], win[3]
+    s2, s3 = win[2], win[3]
     out = {"t0": t0, "t1": t1, "dur": t1 - t0}
     for ax, a_pid, r_pid, sign in (("roll", "rollPID", "gyroxPID", 1.0), ("pitch", "pitchPID", "gyroyPID", -1.0)):
         out[f"{ax}_e"] = float((s2[f"{a_pid}.Des"] - s2[f"{a_pid}.FB"]).mean())
