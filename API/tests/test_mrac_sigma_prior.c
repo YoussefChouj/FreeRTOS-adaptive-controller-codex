@@ -19,7 +19,7 @@
  *                                    update stays bounded by What_limit and
  *                                    the projection operator is not violated.
  *
- * cp ../mrac.c . && gcc -std=c99 -Wall -DMRAC_ENABLE_SIGMA_PRIOR -I../tests/stubs -I.. test_mrac_sigma_prior.c mrac.c -o t -lm && rm mrac.c && ./t The
+ * cp ../mrac.c . && gcc -std=c99 -Wall -DMRAC_ENABLE_SIGMA_PRIOR -I../tests/stubs -I.. test_mrac_sigma_prior.c mrac.c -lm -o t && rm mrac.c && ./t
  * file does NOT include FreeRTOS â€” the sil_gate shim provides the CMSIS
  * intrinsics as no-ops (single-threaded host harness).
  *

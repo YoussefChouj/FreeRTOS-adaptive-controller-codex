@@ -1,20 +1,20 @@
 /* Host test for API/controller.c: default == legacy MRAC injection, disarmed-only switching,
  * reserved slots refused, NaN/axis-mask fallback to u_nom.
- *   cp ../../API/mrac.c . && gcc -std=c99 -Wall -I../../API/tests/stubs -I../../API test_controller.c ../../API/controller.c mrac.c -o t -lm && rm mrac.c && ./t */
+ *   gcc -std=c99 -Wall -Werror -Istubs -I../../API test_controller.c ../../API/controller.c -lm -o t && ./t */
 #include <stdio.h>
 #include <assert.h>
 #include <math.h>
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#include "../../API/mrac.c"
+#pragma GCC diagnostic pop
+
 #include "controller.h"
-#include "mrac.h"
-
-
 
 _imu_st imu_data = {0};
 
-float MRAC_VectorNormSquare(const float *v, int n) { return 0.0f; }
-
-// We will hook MRAC_Reset using a macro or we just don't count n_reset
-// wait, we DO need to count n_reset. Let's just redefine it or check MRAC_State_t directly.
+float MRAC_VectorNormSquare(const float *v, uint8_t length) { return 0.0f; }
 
 static void setup(void)
 {
@@ -80,9 +80,19 @@ int main(void)
     /* (a) injection step with wound-up weights (fixed u) */
     mrac_in_armed = 1;
     mrac_in_phase = 1; // FLYING
-    mrac_inj.fly_ticks = 200;
+    mrac_inj.fly_ticks = 65535;
+    mrac_inj.not_flying_ticks = 0;
+    mrac_inj.prev_armed = 1;
     mrac_flags.output_injection_on = 0; // shadow mode
+    mrac_inj.prev_injection_on = 0;
+    mrac_inj.inj_alpha = 0.0f;
+    mrac_inj.ramp_p = 0.0f;
+    mrac_inj.freeze_shadow = 1;
+    mrac_inj.learn_gate = 0;
+    
     MRAC_GateStep(); // settle
+    
+    for (int i=0; i<MAX_NUM_BASIS; i++) { mrac_state.roll.Theta[i] = mrac_config_roll.What_limit[i]; } // wound-up weights before rising edge
     
     mrac_state.roll.u_ad = 2.0f;
     mrac_config_roll.mrac_to_mixer = 3.0f;
@@ -91,13 +101,17 @@ int main(void)
     
     mrac_flags.output_injection_on = 1; // rising edge
     MRAC_GateStep();
+    
+    // assert weights are zero after rising edge
+    for (int i=0; i<MAX_NUM_BASIS; i++) { assert(mrac_state.roll.Theta[i] == 0.0f); }
+    
     float prev_out = Controller_Update(CTRL_AXIS_ROLL, 10.0f);
-    float max_diff = 1.5f * u / (2.5f * 200.0f); // 1.5*u / (MRAC_INJ_T_UP*200)
-    for (int i=0; i<100; i++) {
+    float max_diff = 1.5f * u / (MRAC_INJ_T_UP / MRAC_DT);
+    for (int i=0; i<600; i++) {
         MRAC_GateStep();
         float current_out = Controller_Update(CTRL_AXIS_ROLL, 10.0f);
         float diff = current_out - prev_out;
-        assert(diff <= max_diff);
+        assert(fabsf(diff) <= max_diff * (1.0f + 1e-5f));
         prev_out = current_out;
     }
     
@@ -108,9 +122,9 @@ int main(void)
     
     /* (c) inj_alpha reaches 0 within 100 ticks after injection turns off */
     mrac_in_phase = 1; // FLYING
-    mrac_inj.fly_ticks = 200;
+    mrac_inj.fly_ticks = 65535;
     mrac_flags.output_injection_on = 1;
-    for(int i=0; i<550; i++) MRAC_GateStep(); // fully on
+    for(int i=0; i<600; i++) MRAC_GateStep(); // fully on
     assert(mrac_inj.inj_alpha == 1.0f);
     mrac_flags.output_injection_on = 0;
     for(int i=0; i<105; i++) MRAC_GateStep();
@@ -118,7 +132,7 @@ int main(void)
     
     /* (d) inj_alpha == 0 on the tick of disarm */
     mrac_flags.output_injection_on = 1;
-    for(int i=0; i<550; i++) MRAC_GateStep(); // fully on
+    for(int i=0; i<600; i++) MRAC_GateStep(); // fully on
     assert(mrac_inj.inj_alpha == 1.0f);
     mrac_in_armed = 0; // disarm
     MRAC_GateStep();

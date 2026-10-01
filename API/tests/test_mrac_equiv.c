@@ -297,13 +297,15 @@ int main(void) {
 
         g_lcg = 123456789U + (uint32_t)scn * 10007U;
 #ifdef MRAC_EQUIV_NEW_TREE
-    mrac_in_armed = 1;
-    mrac_in_phase = 1; // FLYING
-    mrac_inj.learn_gate = 1;
-    mrac_inj.inj_alpha = mrac_flags.output_injection_on ? 1.0f : 0.0f;
-    mrac_inj.ramp_p = 1.0f;
-    mrac_inj.fly_ticks = 200;
-    mrac_inj.prev_injection_on = mrac_flags.output_injection_on;
+        mrac_in_armed = 1;
+        mrac_in_phase = 1;
+        mrac_inj.fly_ticks = 65535;
+        mrac_inj.prev_armed = 1;
+        mrac_inj.prev_injection_on = mrac_flags.output_injection_on;
+        mrac_inj.ramp_p = mrac_flags.output_injection_on ? 1.0f : 0.0f;
+        mrac_inj.inj_alpha = mrac_flags.output_injection_on ? 1.0f : 0.0f;
+        mrac_inj.learn_gate = 1;
+        mrac_inj.freeze_shadow = 0;
 #endif
 
 

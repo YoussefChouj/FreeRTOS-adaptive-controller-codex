@@ -306,6 +306,11 @@ extern MRAC_Inj_t mrac_inj;
 extern volatile uint8_t mrac_in_armed;
 extern volatile uint8_t mrac_in_phase;
 
+/* WHY: host builds lack flight_fsm.h, but we need these phase values.
+ * See flight_fsm.h:18-21. */
+#define MRAC_PHASE_FLYING  1
+#define MRAC_PHASE_LANDING 2
+
 void MRAC_ResetWeights(void);
 void MRAC_GateStep(void);
 
