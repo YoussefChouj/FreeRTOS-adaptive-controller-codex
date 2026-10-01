@@ -8,7 +8,8 @@
 #   manager.sh clean <id>               after the CEO merged wp/<id>: remove worktree + merged branch
 # Start it in the background from the CEO session and wait for its one notification.
 # The report lands on the branch: git show wp/<id>:docs/agent/reports/WP-<id>.md
-# Base context with these flags: 10.7k tokens (measured 2026-10-01; 34.6k without --tools/--setting-sources).
+# Base context with these flags: 10.7k-12.8k tokens (measured 2026-10-01; 34.6k without --tools/--setting-sources).
+# Verified 2026-10-01: both CLAUDE.md files still load; no skills, MCP, web tools, subagents, or user hooks/plugins/allow rules.
 set -eu
 root=$(git rev-parse --show-toplevel)
 id=$2
