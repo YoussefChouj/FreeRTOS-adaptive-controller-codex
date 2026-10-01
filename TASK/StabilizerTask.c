@@ -1092,6 +1092,8 @@ void Compute_Motor(void)
 	// Execute MRAC after all PID controllers have computed their nominal outputs (u_nom)
 	// MRAC uses the current PID rates, references, and nominal outputs to learn and compute u_ad.
 	Controller_CheckSwitch(DroneStatus.ARM_Status == Armed);
+	mrac_in_armed = (DroneStatus.ARM_Status == Armed) ? 1U : 0U;
+	mrac_in_phase = (uint8_t)flight_phase;
 	MRAC_Control(&Ctrler);
 	
  
