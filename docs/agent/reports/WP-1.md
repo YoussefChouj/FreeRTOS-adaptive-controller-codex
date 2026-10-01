@@ -1,10 +1,10 @@
 Status: DONE
-Commits: 8071e17 (worker wp1-r1, fast-forwarded onto wp/1); report + task file in the commit after it
+Commits: 8071e17 - worker wp1-r1 (agy/gemini-3.1-pro-high, OK); d79a18f - agent-ops: WP-1 report and r1 task; + this fix-up (on wp/1)
 Gate: GATE PASS   (PASS size 20/200, PASS scope 3 files, SKIP clang-tidy no C changes, PASS ruff 2 files clean, PASS pytest 15 passed)
 Verification: python -m pytest -q -p no:cacheprovider tests/agent_ops -> 15 passed, 1 skipped in 10.71s
 Verification: python .agent-ops/gate.py --base main --allow .agent-ops/gate.py --allow tests/agent_ops/test_gate.py --allow ".agent-ops/out/*" -> GATE PASS
-Worker rounds: 1/3, lane agy-vps, chain agy:gemini-3.1-pro-high,agy:gemini-3.8-flash-high; digest says "SUBSTITUTIONS: none",
-  so presumably the first model ran (no model name in the digest or the wait output); no bounces
+Worker rounds: 1/3, lane agy-vps, model agy/gemini-3.1-pro-high (from the worker commit subject
+  "worker wp1-r1 (agy/gemini-3.1-pro-high, OK)"); no bounces
 Diff check (git diff main...HEAD): make_shims now read_bytes -> decode latin-1 -> re.sub (unchanged) ->
   encode latin-1 -> write_bytes. Nothing else in gate.py changed. New test test_make_shims_non_utf8 matches the brief
   (GBK comment + one __asm block -> returns 1, GBK bytes kept, no b"__asm").
@@ -16,5 +16,5 @@ Deviations / open questions:
 - wait calls per round: r1 = 1 (DONE inside the first 540 s window).
 - MANAGER.md gaps: (a) step 4 merges vps/wp<id>-r<n>, but no step says how that ref gets fetched. My
   `git fetch -q vps worker/wp1-r1:refs/remotes/vps/wp1-r1` was denied ("requires approval"), but the merge still worked,
-  so `wait` seems to fetch on DONE. MANAGER.md should say so. (b) The report template asks for "the model that ran", but neither
-  the wait output nor the digest names it; the task digest template should require a "Model:" line.
+  so `wait` seems to fetch on DONE. MANAGER.md should say so. (b) The report template asks for "the model that ran". Only the worker
+  commit subject has it (not the wait output or the digest), and MANAGER.md should point there.
