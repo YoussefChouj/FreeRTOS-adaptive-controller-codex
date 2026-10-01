@@ -75,3 +75,9 @@ Scope (worker may edit): the files in the gate line above, its digest `.agent-op
 Allow globs: as the gate line.
 Worker lane: agy-vps, chain `agy:gemini-3.1-pro-high,agy:gemini-3.8-flash-high`   Max worker rounds: 3
 Report to: `docs/agent/reports/WP-5.md`; add one line: any MANAGER.md rule that was unclear or a denied command.
+
+## CEO decision 2026-10-01, after BLOCKED (scope only)
+- Accepted the one-line panel-count change 18->19 in ground_station/platform/tests/test_capability_manifest.py (a new panel must change it).
+  CEO rerun on wp/5 @ 191b252: harness 12 checks a-l + ALL CHECKS PASSED rc 0; node_harness ALL GREEN rc 0; scoped pytest 17 passed;
+  gate with the extra --allow for that test file -> GATE PASS (732/1000, 14 files). Merged ff into workflow-b.
+- Pre-existing, not WP-5: test_all_panels_audit fails on Windows (subprocess.run without encoding=, cp1252 decode) on base too.
