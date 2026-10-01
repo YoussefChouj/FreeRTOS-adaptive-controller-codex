@@ -60,3 +60,12 @@ Scope (worker may edit): the files in the gate line above, its digest `.agent-op
 Allow globs: as the gate line.
 Worker lane: agy-vps, chain `agy:gemini-3.1-pro-high,agy:gemini-3.8-flash-high`   Max worker rounds: 3
 Report to: `docs/agent/reports/WP-4.md`; add one line: any MANAGER.md rule that was unclear or a denied command.
+
+## CEO decision 2026-10-01, after the manager's BLOCKED report (for the CTE)
+- Keep wp/4 at 2c658cf (do not reset). `git rm` the 10 root scratch scripts (compress*.py, manual_compress*.py,
+  patch*.py and any other new root file), then make ruff clean by hand: one statement per line, no `;`, no
+  duplicate imports. Do not reformat files you did not need to touch.
+- Split `test_all_api_new` into one named test per item: apply_params True path against the real agent layer,
+  live flights visible in /api/campaign/state, runner error status, bad JSON -> 400. Each must assert its own outcome.
+- Size: if the gate still exceeds 900 after the scratch removal, use `--max-lines 1100`; report the measured total.
+- Acceptance commands are otherwise unchanged. Report to `docs/agent/reports/WP-4-cte.md`.
