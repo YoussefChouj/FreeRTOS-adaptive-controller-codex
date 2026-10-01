@@ -107,6 +107,7 @@ def _make_hover_df(
         "ano_of.of_alt_cm": np.full(n, 100.0),
         "real_voltage": np.full(n, 15.5),
         "Lin_Acc_Z_body": np.full(n, 0.0 + acc_z_offset),
+        "t_src_ms": np.arange(n) * 10,
     }
 
     def make_period_series(base_rpm: float) -> np.ndarray:
@@ -220,3 +221,100 @@ def test_rpm_mean_reasonable():
     target = [5343, 5951, 5381]
     for i, t in enumerate(target):
         assert abs(result["rpm_mean"][i] - t) < t * 0.02
+
+# ---- WP-16 tests ----
+import tempfile
+import json
+from pathlib import Path
+from ground_station.analysis.rpm_signals import load_slots, hover_mask, main
+
+def test_load_slots_merge_by_time():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        
+        # 20 Hz slot (fastest) - 50ms interval
+        df1 = pd.DataFrame({
+            "t_src_ms": [100, 150, 200, 250, 300],
+            "val1": [1, 2, 3, 4, 5]
+        })
+        # 10 Hz slot (slower) - 100ms interval, offset by 10ms
+        df2 = pd.DataFrame({
+            "t_src_ms": [110, 210, 310],
+            "val2": [10, 20, 30]
+        })
+        
+        df1.to_csv(tmp / "test_merge.slot1.csv", index=False)
+        df2.to_csv(tmp / "test_merge.slot2.csv", index=False)
+        
+        res = load_slots(tmp, "test_merge")
+        
+        # Should have 5 rows (from fastest slot1)
+        assert len(res) == 5
+        # row at 100 merged with 110 (nearest) -> 10
+        # row at 200 merged with 210 -> 20
+        # row at 300 merged with 310 -> 30
+        assert res.loc[res["t_src_ms"] == 100, "val2"].iloc[0] == 10
+        assert res.loc[res["t_src_ms"] == 200, "val2"].iloc[0] == 20
+        assert res.loc[res["t_src_ms"] == 300, "val2"].iloc[0] == 30
+
+def test_load_slots_empty_slot0():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        
+        # Empty slot0 (header only)
+        pd.DataFrame(columns=["t_src_ms", "ARM_Status"]).to_csv(tmp / "test_empty.slot0.csv", index=False)
+        
+        # Populated slot1
+        df1 = pd.DataFrame({
+            "t_src_ms": [100, 200],
+            "val1": [1, 2]
+        })
+        df1.to_csv(tmp / "test_empty.slot1.csv", index=False)
+        
+        res = load_slots(tmp, "test_empty")
+        assert len(res) == 2
+        assert "val1" in res.columns
+        # Empty slot shouldn't cause merge error or empty result
+
+def test_flat_layout_discovery(capsys, monkeypatch):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        
+        # Create dummy meta json files for flat layout
+        (tmp / "f17_hover_abc.meta.json").write_text("{}")
+        (tmp / "f17_hover_xyz.meta.json").write_text("{}")
+        
+        # Need at least one populated log so it doesn't just error out immediately
+        df = pd.DataFrame({
+            "t_src_ms": [100]*250,
+            "rpm_dbg_period_cyc[0]": [1000]*250,
+            "flight_phase": [1.0]*250,
+            "ano_of.of_alt_cm": [50.0]*250,
+            "real_voltage": [15.0]*250,
+            "Lin_Acc_Z_body": [0.0]*250,
+        })
+        df.to_csv(tmp / "f17_hover_abc.slot1.csv", index=False)
+        
+        # Monkeypatch print_kt_table to capture its arguments
+        captured_flights = []
+        def mock_print_kt_table(flights, mass_kg):
+            captured_flights.extend(flights)
+        monkeypatch.setattr("ground_station.analysis.rpm_signals.print_kt_table", mock_print_kt_table)
+        
+        main(["--logs", str(tmp)])
+        
+        prefixes = [p[0] for p in captured_flights]
+        assert "f17_hover_abc" in prefixes
+        assert "f17_hover_xyz" in prefixes
+
+def test_hover_mask_without_arm_status():
+    df = pd.DataFrame({
+        "s_state": [1.0, 0.0, 1.0],
+        "ano_of.of_alt_cm": [50.0, 50.0, 50.0],
+        "real_voltage": [15.0, 15.0, 15.0]
+    })
+    # no ARM_Status, no flight_phase
+    mask = hover_mask(df)
+    assert mask.iloc[0] == True
+    assert mask.iloc[1] == False
+    assert mask.iloc[2] == True
