@@ -61,3 +61,12 @@ building is OK, outside workers only, explicit-pathspec commits, never commit OB
 - ~22:10 night branch + ../wt-night @ 5d9d83f; mixer decomposition (yaw split, roll 40 ticks); WP-9/10 briefs committed;
   managers launched from ../wt-night (`bash .agent-ops/manager.sh run <id> high night/2026-10-02`).
 - 2026-10-01 ~22:40 briefs WP-11 (MRAC smoothing), WP-12 (stream slots, GS), WP-15 (thrust/RPM) committed; launch order when a slot frees: 11, 12, 15; WP-13 after 9+10.
+- ~00:30 WP-9 PARTIAL -> CEO re-ran tests (6 pass) + CLI (12 hovering flights, 12.5 s) -> merged f63360d.
+  Verdicts (CEO read of T3-T5): B dominates the standing position error (X -6.5 / Y +4.3 cm measured, A+B -6.3 / +4.5
+  predicted; A alone small, opposite sign). A true but minor at today's need (worst 52 ticks). C NOT supported (T3 slopes
+  flip sign across flights). Lean = accel tilt in every flight (Mahony levels on accel, so Lin_Acc~0 is a tautology; the
+  1.7 deg pitch gap was a sign slip). Body-fixed vs room-fixed still open -> rotated-takeoff flight decides.
+  WP-13 sizing: gyro Ui 157 (UiMax 160, SumEMax 16000), angle Ui 25.4 (UiMax 26, SumEMax 1300), trim roll -1.24
+  (std 0.23) / pitch -0.90 (std 0.18). shadow13 skipped (p95 alt 0.1 m, brief hop only).
+- ~00:30 WP-10 BLOCKED (ranking never ran; scratch files; ruff) -> CTE round launched with decisions 0b6edc9.
+  WP-11 running. WP-12 pre-empted before any commit (slot given to WP-10 CTE); relaunch after 11 or 10.
