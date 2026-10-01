@@ -6,36 +6,69 @@
  * @subsystem  API
  * @depends  thrust_estimators.h, math.h (cosf, fabsf)
  * @owns  Shadow-mode thrust estimation for motor dynamics validation.
- *        Three estimators: empirical (PWM→thrust bench LUT), blade-element
- *        (RPM→thrust k_T·ω²), IMU-derived (vertical accel sanity check).
- * @caution  Placeholder LUT knots and k_T coefficients — populate from real bench data.
- *           Motor pairing: M0→M1 curve, M1→M1 curve, M2→M4 curve, M3→M4 curve.
+ *        Three estimators: empirical (PWM->thrust bench LUT), blade-element
+ *        (RPM->thrust k_T·w²), IMU-derived (vertical accel sanity check).
+ *        Derived telemetry: sum_w2, mass_hat, cw_share (all LPF 1 s).
+ * @caution  Telemetry only — no control-loop feedback.
+ *
+ * CCR (capture-compare register) unit proof from BSP/pwm.c:
+ *
+ *   BSP/pwm.c:60  TIM_Prescaler = 42-1          -- 84 MHz / 42 = 2 MHz
+ *   BSP/pwm.c:59  TIM_Period    = 10000-1       -- 2 MHz / 10000 = 200 Hz PWM
+ *
+ * Each timer tick = 1 / 2e6 s = 0.5 us.
+ * Motor CCR values are in 0.5 us ticks: 2000 = 1000 us = 1.0 ms pulse.
+ * The bench LUT below is stored in ticks (table knots * 2 from us).
+ *
+ * k_T calibrated from 6 hover flights (f17 logs):
+ *   k_T = m*g / sum(omega^2) = 0.9885*9.81 / 1.427e6 = 6.80e-6 N s^2 / rad^2
+ * Mass 0.9885 kg is the onboard assumed mass; verify by weighing.
  */
 
 ThrustEstimators_t g_thrust_est = {0};
 
-static const float DRONE_MASS_KG = 0.9885f;  /* 988.5 g measured */
-static const float GRAVITY_MS2 = 9.81f;
-static const float DEG_TO_RAD = 0.017453292519943295f;
+/* Motor mass assumed for k_T calibration. Must be verified by weighing. */
+static const float DRONE_MASS_KG = 0.9885f;  /* 988.5 g assumed, unverified */
+static const float GRAVITY_MS2   = 9.81f;
 
-/* M1 bench curve knots (PWM µs, thrust N) — 10 knots from ADR-0009.
- * PLACEHOLDER: fit from ground_station/logs/bench/*.csv */
-static const float m1_pwm[] = {1100.0f, 1200.0f, 1300.0f, 1400.0f, 1500.0f, 
-                                1600.0f, 1700.0f, 1800.0f, 1900.0f, 2000.0f};
-static const float m1_thrust[] = {0.0f, 0.5f, 1.2f, 2.1f, 3.3f, 
+/* Calibrated k_T (N·s²/rad²) from hover data at m = 0.9885 kg.
+ * WHY: sum(omega²) across 6 hover flights = 1.427e6 rad²/s².
+ *   k_T = m*g / sum_w2 = 0.9885*9.81 / 1.427e6 = 6.80e-6.
+ * Per-motor: CW pair (M1/M2) and CCW pair (M3/M4) may differ;
+ * single value is a first approximation. */
+#define K_T_CALIBRATED  (6.80e-6f)
+
+/* LPF alpha for 1 s time constant at 200 Hz call rate: dt/tau = 0.005/1.0 */
+#define THRUST_LPF_ALPHA  (0.005f)
+
+/* CW pair channels: ch0+ch1 are CW (M1/M2), ch2+ch3 are CCW (M3/M4).
+ * Verified by yaw-trim regression across 4 flights (ch1 positive, ch0/ch2 negative).
+ * Per-motor pairing (corner map) is unresolved — use channels directly. */
+#define CW_CH0  (0U)
+#define CW_CH1  (1U)
+#define CCW_CH0 (2U)
+#define CCW_CH1 (3U)
+
+/* Motor pairing: which bench curve each channel uses.
+ * M1/M4 curves from ADR-0009. ch0/ch1 use M1 (CW props), ch2/ch3 use M4 (CCW props).
+ * Table knots in 0.5 µs ticks (original µs values * 2).
+ * 1100 µs -> 2200 ticks, 2000 µs -> 4000 ticks. */
+static const float m1_pwm[] = {2200.0f, 2400.0f, 2600.0f, 2800.0f, 3000.0f,
+                                3200.0f, 3400.0f, 3600.0f, 3800.0f, 4000.0f};
+static const float m1_thrust[] = {0.0f, 0.5f, 1.2f, 2.1f, 3.3f,
                                    4.8f, 6.5f, 8.4f, 10.5f, 12.8f};
 
-/* M4 bench curve knots (PWM µs, thrust N) — 10 knots from ADR-0009.
- * PLACEHOLDER: fit from ground_station/logs/bench/*.csv */
-static const float m4_pwm[] = {1100.0f, 1200.0f, 1300.0f, 1400.0f, 1500.0f, 
-                                1600.0f, 1700.0f, 1800.0f, 1900.0f, 2000.0f};
-static const float m4_thrust[] = {0.0f, 0.6f, 1.3f, 2.2f, 3.4f, 
+static const float m4_pwm[] = {2200.0f, 2400.0f, 2600.0f, 2800.0f, 3000.0f,
+                                3200.0f, 3400.0f, 3600.0f, 3800.0f, 4000.0f};
+static const float m4_thrust[] = {0.0f, 0.6f, 1.3f, 2.2f, 3.4f,
                                    4.9f, 6.6f, 8.5f, 10.6f, 12.9f};
 
-/* Blade-element coefficients k_T (N·s²/rad²) — fitted from bench RPM vs thrust.
- * PLACEHOLDER: actual values need bench RPM→thrust fit per motor.
- * Motor pairing: M0/M1 use 1.5e-5, M2/M3 use 1.6e-5 (matches M1/M4 motor types). */
-static const float k_T_motors[4] = {1.5e-5f, 1.5e-5f, 1.6e-5f, 1.6e-5f};
+/* Per-channel motor curve selection (0 = M1, 1 = M4). */
+static const uint8_t motor_curve[4] = {0U, 0U, 1U, 1U};
+
+/* Per-channel k_T (CW/CCW may differ). Single calibrated value for now. */
+static const float k_T_motors[4] = {K_T_CALIBRATED, K_T_CALIBRATED,
+                                     K_T_CALIBRATED, K_T_CALIBRATED};
 
 void ThrustEst_Init(void)
 {
@@ -45,18 +78,28 @@ void ThrustEst_Init(void)
         g_thrust_est.blade_element[i] = 0.0f;
     }
     g_thrust_est.imu_total = 0.0f;
+    g_thrust_est.sum_w2 = 0.0f;
+    g_thrust_est.mass_hat = 0.0f;
+    g_thrust_est.cw_share = 0.0f;
 }
 
-/* Piecewise-linear interpolation (PWM → thrust) */
-static float interp_pwm_thrust(float pwm, const float* pwm_knots, 
-                                 const float* thrust_knots, uint8_t n)
+/* LPF: y[n] = alpha * x[n] + (1 - alpha) * y[n-1] */
+static float lpf_step(float prev, float new_val, float alpha)
+{
+    return alpha * new_val + (1.0f - alpha) * prev;
+}
+
+/* Piecewise-linear interpolation (PWM ticks -> thrust N).
+ * Table knots are in 0.5 µs ticks (same units as motor CCR). */
+static float interp_pwm_thrust(float pwm, const float* pwm_knots,
+                                const float* thrust_knots, uint8_t n)
 {
     uint8_t i;
     float alpha;
-    
+
     if (pwm <= pwm_knots[0]) return thrust_knots[0];
     if (pwm >= pwm_knots[n-1]) return thrust_knots[n-1];
-    
+
     for (i = 0; i < n-1; i++) {
         if (pwm >= pwm_knots[i] && pwm < pwm_knots[i+1]) {
             alpha = (pwm - pwm_knots[i]) / (pwm_knots[i+1] - pwm_knots[i]);
@@ -66,38 +109,76 @@ static float interp_pwm_thrust(float pwm, const float* pwm_knots,
     return 0.0f;
 }
 
-void ThrustEst_Update(const float pwm[4], const uint16_t rpm[4], 
-                       float acc_z, float pitch_deg, float roll_deg)
+void ThrustEst_Update(const float pwm[4], const uint16_t rpm[4],
+                        float acc_z, float pitch_deg, float roll_deg)
 {
     uint8_t i;
     float omega_rad_s;
     float cos_pitch, cos_roll, cos_tilt;
     float pitch_rad, roll_rad;
-    
-    /* 1. Empirical (PWM → thrust, bench LUT).
-     * Motor pairing: M0/M1 use M1 curve, M2/M3 use M4 curve. */
-    g_thrust_est.empirical[0] = interp_pwm_thrust(pwm[0], m1_pwm, m1_thrust, 10);
-    g_thrust_est.empirical[1] = interp_pwm_thrust(pwm[1], m1_pwm, m1_thrust, 10);
-    g_thrust_est.empirical[2] = interp_pwm_thrust(pwm[2], m4_pwm, m4_thrust, 10);
-    g_thrust_est.empirical[3] = interp_pwm_thrust(pwm[3], m4_pwm, m4_thrust, 10);
-    
-    /* 2. Blade-element (RPM → thrust, T = k_T · ω²) */
+    float sum_w2_raw;
+    float cw_w2_raw;
+
+    /* 1. Empirical (PWM -> thrust, bench LUT in ticks).
+     * Motor pairing: ch0/ch1 use M1 curve (CW), ch2/ch3 use M4 curve (CCW). */
     for (i = 0; i < 4; i++) {
-        omega_rad_s = (float)rpm[i] * 2.0f * 3.14159265359f / 60.0f;  /* RPM → rad/s */
-        g_thrust_est.blade_element[i] = k_T_motors[i] * omega_rad_s * omega_rad_s;
+        if (motor_curve[i] == 0U) {
+            g_thrust_est.empirical[i] = interp_pwm_thrust(pwm[i], m1_pwm, m1_thrust, 10);
+        } else {
+            g_thrust_est.empirical[i] = interp_pwm_thrust(pwm[i], m4_pwm, m4_thrust, 10);
+        }
     }
-    
-    /* 3. IMU-derived (vertical acceleration → total thrust).
+
+    /* 2. Blade-element (RPM -> thrust, T = k_T · w²) */
+    sum_w2_raw = 0.0f;
+    cw_w2_raw  = 0.0f;
+
+    for (i = 0; i < 4; i++) {
+        omega_rad_s = (float)rpm[i] * 2.0f * 3.14159265359f / 60.0f;  /* RPM -> rad/s */
+        g_thrust_est.blade_element[i] = k_T_motors[i] * omega_rad_s * omega_rad_s;
+
+        /* Accumulate for derived telemetry */
+        omega_rad_s *= omega_rad_s;  /* ω² */
+        sum_w2_raw += omega_rad_s;
+        if (i == CW_CH0 || i == CW_CH1) {
+            cw_w2_raw += omega_rad_s;
+        }
+    }
+
+    /* 3. IMU-derived (vertical acceleration -> total thrust).
      * T_total = m · (a_z / cos(pitch)cos(roll) + g) */
-    pitch_rad = pitch_deg * DEG_TO_RAD;
-    roll_rad = roll_deg * DEG_TO_RAD;
+    pitch_rad = pitch_deg * 0.017453292519943295f;  /* deg -> rad */
+    roll_rad  = roll_deg  * 0.017453292519943295f;
     cos_pitch = cosf(pitch_rad);
-    cos_roll = cosf(roll_rad);
-    cos_tilt = cos_pitch * cos_roll;
-    
+    cos_roll  = cosf(roll_rad);
+    cos_tilt  = cos_pitch * cos_roll;
+
     if (fabsf(cos_tilt) > 0.1f) {  /* Avoid divide-by-zero near 90° tilt */
         g_thrust_est.imu_total = DRONE_MASS_KG * (acc_z / cos_tilt + GRAVITY_MS2);
     } else {
         g_thrust_est.imu_total = 0.0f;  /* Invalid */
+    }
+
+    /* 4. Derived telemetry (LPF 1 s at 200 Hz -> alpha = 0.005). */
+
+    /* sum_w2: total rotational kinetic indicator */
+    g_thrust_est.sum_w2 = lpf_step(g_thrust_est.sum_w2, sum_w2_raw, THRUST_LPF_ALPHA);
+
+    /* mass_hat: estimated mass from thrust balance.
+     * m_hat = k_T * sum_w2 / (g + a_z).  When hovering, a_z ~ 0 so m_hat ~ k_T*sum_w2/g.
+     * Guard: only update if g + a_z is positive and non-negligible. */
+    {
+        float g_plus_az = GRAVITY_MS2 + acc_z;
+        if (g_plus_az > 1.0f) {
+            float mass_raw = K_T_CALIBRATED * sum_w2_raw / g_plus_az;
+            g_thrust_est.mass_hat = lpf_step(g_thrust_est.mass_hat, mass_raw, THRUST_LPF_ALPHA);
+        }
+    }
+
+    /* cw_share: fraction of total omega² carried by the CW pair (ch0+ch1).
+     * Deviation from 0.5 indicates thrust asymmetry (CG offset, prop mismatch, yaw trim). */
+    if (sum_w2_raw > 100.0f) {  /* Only when motors are actually turning */
+        float share_raw = cw_w2_raw / sum_w2_raw;
+        g_thrust_est.cw_share = lpf_step(g_thrust_est.cw_share, share_raw, THRUST_LPF_ALPHA);
     }
 }

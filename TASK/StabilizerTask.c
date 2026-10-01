@@ -1184,7 +1184,7 @@ void Compute_Motor(void)
 		motor_rpm[2] = RPM_Get(2);
 		motor_rpm[3] = RPM_Get(3);
 		
-		ThrustEst_Update(motor_pwm, motor_rpm, imu_data.a_acc[_Z], imu_data.pit, imu_data.rol);
+		ThrustEst_Update(motor_pwm, motor_rpm, Lin_Acc_Z_body * 9.80665f / 1000.0f, imu_data.pit, imu_data.rol);
 	}
 			
 }

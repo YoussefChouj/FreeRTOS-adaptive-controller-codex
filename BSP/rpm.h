@@ -64,8 +64,10 @@
  * NOTE: divide-first then multiply — SystemCoreClock * 60U overflows u32 above ~71.6 MHz. */
 #define RPM_MIN_PERIOD_CYCLES ((SystemCoreClock / 20000U) * 60U)
 
-/* Ring buffer depth for per-revolution periods (averaged for noise rejection). */
-#define RPM_RING_DEPTH        4U
+/* Ring buffer depth for per-revolution periods (median-of-5 for noise rejection).
+ * Replaced 4-revolution mean (2026-10-01, WP-15): one missed or extra edge
+ * cannot move a median-of-5 reading.  Insertion-sort of 5 in the ISR is bounded. */
+#define RPM_RING_DEPTH        5U
 
 void     RPM_Init(void);
 void     RPM_EdgeISR(uint8_t ch);   /* called from EXTI handlers; ch 0..RPM_NUM_CH-1 */
