@@ -6,36 +6,34 @@ Tree: `.worktrees/wfb` | Branch: `workflow-b`. Edit only this page, never anothe
 Build workflow B (autonomous tuning flight loop) end to end. Spec: `.agent-ops/grill-autonomous-flight-loop.md`
 (main tree). Contract: `docs/workflow-b/interfaces.md`. Plan: `docs/workflow-b/build-plan.md`.
 
-## Facts (measured this session, dated 2026-09-30)
-- Done and committed: F1 traj `eb57ebf` (host test PASS 271), F3 prim `d2b2306` (PASS 10), F2 safety `77d31cb`
-  (PASS 165), G1 battery model `772b4f2` (33 passed), G2 trajectory pipeline `e36e872` (8 passed).
-- In flight: task G3 (`platform/wfb_commands.py`, `service/fake_drone.py`) on VPS worker `wfb-g3`, base `77d31cb`.
+## Facts (measured, dated 2026-10-01; branch pushed to origin/workflow-b @ dc928e6)
+- Done: F1 `eb57ebf` (PASS 271), F2 `77d31cb` (PASS 165), F3 `d2b2306` (PASS 10), F4 `49f7df4` (glue wired into
+  the 200 Hz loop; 16 scenarios PASS 2821; Keil build OK; NOT flashed), G1 `772b4f2`, G2 `e36e872`, G3 `4120682`,
+  G4 `f10421e`, G9 `2e2f078`, G10 `33a595e`, G11 `5b8f329`, G7 `0f2732d` (61 passed), G5+G6 `dc928e6` (46 passed).
+- F4, G7 and G5+G6 were rewritten inline after the worker output was rejected; records + deviations in the main
+  tree `.agent-ops/tasks-src/wfb-{f4-v2,g7-inline,g56-inline}-plan.md` ("DONE <sha>" sections).
 - Progress ledger with every ruling: `.superpowers/sdd/build-plan/progress.md` (git-ignored, this tree).
 - Worker briefs: `.agent-ops/tasks-src/wfb-*.md` (main tree, untracked). Result branch `vps/<id>`; merge with
   `git checkout vps/<id> -- <paths>`, rerun the acceptance command, then `vps-worker.sh clean <id>`.
-- Nothing of workflow B is in the firmware image yet: F1-F3 are pure-C modules with gcc host tests only.
 
 ## Next actions (3 lines, most urgent first)
-1. Verify and merge `vps/wfb-g3`; then G4 (uploader), G5, G6, G7, G9, G10, G11; then G8, G12; then G13-G16.
-2. F4 integration brief (tier-0: `TASK/send_data.c`, `StabilizerTask.c`, `RemoterTask.c`, new `API/wfb_glue.*`,
-   uvprojx) on the high model; supervisor reviews line by line, Keil build 0 errors 0 warnings, map RAM check.
-3. Final whole-branch review (parked: yaw-rate limit, NaN dt in F3 timers, host double vs float32 edge), then merge.
+1. G8 (nine Q10c steps, refuses the protected set), then G12 (runner with injected deps, e2e on `fake_drone`).
+2. G13 (campaign API + MCP + `allow_agent_arm` gate), G14 (panel), G15, G16 (build-plan.md:308-316 binding).
+3. Whole-branch review (parked: yaw-rate limit, NaN dt in F3 timers, host double vs float32 edge, trajectory yaw
+   sign), then operator: flash F4 image, bench, flights, merge.
 
 ## Do not
-- No flight, arm, idle or flash from this stream during the build. No Claude Code subagents (operator, 14:20).
+- No flight, arm, idle or flash from this stream during the build. No Claude Code subagents (operator, 2026-09-30).
 - Do not trust a worker's `rc=0 status=OK`: check `git diff --stat HEAD...vps/<id>` first (qwen returned an empty branch).
 - Every constant marked PROPOSED in interfaces.md needs the operator's review before the first campaign.
 
 <!-- AUTO:BEGIN -->
-Refreshed: 2026-09-30 20:08 (mechanical, no LLM)
-- Tree: .worktrees/wfb; branch / HEAD: workflow-b @ 77d31cb; unpushed commits: no upstream (never pushed)
-- Dirty paths outside OBJ/: 2
-  - M .gitignore
-  - ?? docs/agent/
+Refreshed: 2026-10-01 10:15 (by hand; agent_handoff runs from the main tree only)
+- Tree: .worktrees/wfb; branch / HEAD: workflow-b @ dc928e6; pushed to origin/workflow-b
 - Last commits:
-  - 77d31cb wfb F2: firmware safety net module (tilt, fence, ceiling, low-V, heartbeat, airborne cap)
-  - e36e872 wfb G2: trajectory pipeline (shapes, tilt, resample, time profile, commit-check mirror, CRC)
-  - 772b4f2 wfb G1: battery model and pack registry (pre-flight SoC gate, sag check)
-  - d66dafd wfb interfaces: default-limit functions, defined behaviour, yaw range in COMMIT check 3
-  - eb57ebf wfb: trajectory buffer and executor (task F1) with host tests
+  - dc928e6 wfb G5+G6: campaign capture plan + flight scoring adapter
+  - 0f2732d wfb G7: controller descriptors (pid, mrac) and a controller-agnostic tuner
+  - 49f7df4 wfb F4: wire the Workflow B glue into the 200 Hz loop, RC and telemetry
+  - c889103 wfb F4 v2: integration glue (API/wfb_glue.[ch]), not yet wired
+  - 5b8f329 wfb G11: campaign YAML schema (all problems in one CampaignError) + example circle/figure8 campaign
 <!-- AUTO:END -->
