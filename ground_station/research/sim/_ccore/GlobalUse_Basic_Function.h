@@ -1,0 +1,3 @@
+#ifndef __GLOBAL_USE_BASIC_FUNCTION_H
+#define __GLOBAL_USE_BASIC_FUNCTION_H
+#endif
