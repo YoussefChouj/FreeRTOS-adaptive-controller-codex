@@ -1,5 +1,5 @@
 #include "StabilizerTask.h"
-#include "ekf_of.h"         /* 6-state OF position+bias KF (Mode 2 bias estimation) */
+#include "ekf_of.h"         /* 8-state OF position+velocity-bias+accel-bias KF (Mode 2 bias estimation) */
 #include "ekf.h"            /* g_ekf_gate: EKF body velocity for the x/y velocity loops */
 #include "math.h"
 #include "pid.h"
@@ -82,8 +82,8 @@ static float s_land_sink_bias = 0.0f;
  *   EMA converges to the translation, erasing the displacement from position.
  *   Use g_of_bias_ema_freeze=1 to lock the current estimate before maneuvers.
  *
- * Mode 2 (EKF): dedicated 6-state OF position+bias KF (API/ekf_of.c).
- *   Jointly estimates [pos_x, vel_x, bias_x, pos_y, vel_y, bias_y].
+ * Mode 2 (EKF): dedicated 8-state OF position+bias+accel bias KF (API/ekf_of.c).
+ *   Jointly estimates [pos_x, vel_x, bof_x, pos_y, vel_y, bof_y, ba_x, ba_y].
  *   The measurement model (z = vel - bias) lets the KF separate real motion
  *   from bias in the Kalman sense — no pull-back by construction.
  *   Its position state feeds Ctrler.locx/yPID.FB directly, bypassing the
@@ -94,7 +94,7 @@ static float s_land_sink_bias = 0.0f;
  *           ARM edge also re-snaps to current sample.
  * 1 = EMA:   continuous EMA tracking (OF_BIAS_EMA_ALPHA), with optional
  *            freeze via g_of_bias_ema_freeze (CMD 0x1E idx=1).
- * 2 = EKF:   dedicated 6-state OF position+bias KF (API/ekf_of.c).
+ * 2 = EKF:   dedicated 8-state OF position+bias KF (API/ekf_of.c).
  *            Runs in parallel with the existing 9-state IMU EKF (send_data.c).
  *            Mode 2 FEEDS the control loop (Ctrler.locx/yPID.FB) from the
  *            KF's debiased position state — bypasses the raw OF integration.
@@ -123,6 +123,11 @@ float g_of_bias_ema_tau_s = OF_BIAS_EMA_TAU_DEFAULT; /* EMA time constant (s) */
  *   sticky until the next ARM so the operator can see it on the dashboard.
  * Both are plain globals so they are DWARF-subscribable. */
 #define EKF_OF_INNOV_THRESH  2.0f  /* m/s — innovation > this → unhealthy */
+#define EKF_OF_ACC_SIGN_X (+1.0f)
+#define EKF_OF_ACC_SIGN_Y (-1.0f)
+#define EKF_OF_MG_TO_MPS2 (9.80665e-3f)
+/* X correlates with +Lin_Acc_X_body (r +0.27..+0.46), Y with -Lin_Acc_Y_body (r -0.25..-0.50) */
+#define EKF_OF_UPDATE_ON_NEW_FRAME 1U /* 1 = feed each OF frame once (detected by ano_of.of_update_cnt changing), 0 = legacy every tick */
 volatile uint8_t g_ekf_of_health   = 1U; /* 1=healthy 0=diverged  */
 volatile uint8_t g_ekf_of_fallback = 0U; /* 1=fell back to FIXED  */
 /* Handheld test (CMD 0x1E idx=3): integrate OF position on the ground so the
@@ -135,7 +140,7 @@ volatile uint8_t g_of_handheld_test = 0U;
 float s_of_bias_x = 0.0f, s_of_bias_y = 0.0f;
 static u8 s_of_bias_seeded = 0;
 
-/* Dedicated 6-state OF position+bias KF — used in Mode 2 (EKF).
+/* Dedicated 8-state OF position+bias KF — used in Mode 2 (EKF).
  * Initialised once at boot, ticked every control cycle in Update_Data.
  * Its position state (x[0], x[3]) feeds Ctrler.locx/yPID.FB in EKF mode. */
 EkfOf_t s_ekf_of;
@@ -426,20 +431,33 @@ void Update_Data(void)
 						* ((float)ano_of.of2_dy_fix - s_of_bias_y);
 				}
 			}
-			/* ---- Mode 2 (EKF): tick the 6-state KF, check health ---- */
+			/* ---- Mode 2 (EKF): tick the 8-state KF, check health ---- */
 			else if (g_of_bias_mode == 2U) {
 				float ofx;
 				float ofy;
 				float innov_mag;
+				uint8_t on_ground;
+				static u8 s_last_of_update_cnt = 0;
 				if (!s_ekf_of_inited) {
 					EkfOf_Init(&s_ekf_of);
 					s_ekf_of_inited = 1U;
 					g_ekf_of_health = 1U; /* healthy on init */
 				}
+				on_ground = !g_of_handheld_test && !(DroneStatus.ARM_Status == Armed && (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING));
 				ofx = ((float)ano_of.of2_dx_fix - s_of_bias_x) * 0.01f; /* m/s */
 				ofy = ((float)ano_of.of2_dy_fix - s_of_bias_y) * 0.01f;
-				EkfOf_Predict(&s_ekf_of, 0.005f);
-				if (of_ok) EkfOf_Update(&s_ekf_of, ofx, ofy);
+				EkfOf_Predict(&s_ekf_of, 0.005f, EKF_OF_ACC_SIGN_X * Lin_Acc_X_body * EKF_OF_MG_TO_MPS2, EKF_OF_ACC_SIGN_Y * Lin_Acc_Y_body * EKF_OF_MG_TO_MPS2);
+				if (on_ground) EkfOf_UpdateZeroVel(&s_ekf_of);
+				if (of_ok) {
+					if (EKF_OF_UPDATE_ON_NEW_FRAME) {
+						if (ano_of.of_update_cnt != s_last_of_update_cnt) {
+							EkfOf_Update(&s_ekf_of, ofx, ofy);
+							s_last_of_update_cnt = ano_of.of_update_cnt;
+						}
+					} else {
+						EkfOf_Update(&s_ekf_of, ofx, ofy);
+					}
+				}
 				/* Innovation-based health monitor.
 				 * innov_x/y are the post-update residuals set in EkfOf_Update.
 				 * Large innovations indicate KF divergence. On health failure:
