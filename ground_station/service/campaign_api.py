@@ -107,19 +107,20 @@ class CampaignService:
         agent_ok = bool(self.agent is not None and self.agent.allow_agent_arm)
         if not agent_ok:
             return False
-            
-        if self.stream_check is not None:
-            ok, reason = self.stream_check()
-        else:
-            try:
-                ok, reason = self.agent.service.streams.preflight_check()
-            except AttributeError:
-                ok, reason = True, ""
-                
+
+        check = self.stream_check or getattr(
+            getattr(getattr(self.agent, "service", None), "streams", None),
+            "preflight_check", None)
+        if check is None:
+            self.arm_refusal = None
+            return True
+
+        ok, reason = check()
         if not ok:
             self.arm_refusal = reason
             return False
-            
+
+        self.arm_refusal = None
         return True
 
     def apply_params(self, params):

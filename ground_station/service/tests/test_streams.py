@@ -46,6 +46,10 @@ class FakeBridge:
 
     def _request_stream_schema(self, slot, vars_, divider, label):
         self.requests.append((slot, tuple(vars_), divider, label))
+        if self.reply:
+            with self._stream_lock:
+                self._stream_schemas[slot] = SimpleNamespace(
+                    divider=divider, ranges=list(vars_))
 
 
 def _service(arm="disarmed", preset=None, bridge=True):
@@ -478,3 +482,226 @@ def test_vofa_studio_refuses_while_dashboard_answers():
     finally:
         srv.shutdown()
     assert vmain.dashboard_owns_link(port) is False
+
+
+# ---------------------------------------------------- test 2: _replay timing
+@needs_elf
+def test_replay_timing_and_retries(resolver, tmp_path):
+    """_replay: one slot at a time, >= 0.15s gap, retries on missing reply."""
+    clock = [0.0]
+    sleep_log = []
+
+    def fake_sleep(s):
+        sleep_log.append(s)
+        clock[0] += s
+
+    svc = _service()
+    m = StreamsManager(svc, resolver_factory=lambda: resolver,
+                       log_dir=tmp_path / "logs", sleep=fake_sleep)
+
+    # Set up: override slot 1, defaults for 0, 2, 3
+    m.apply([SMALL], background=False)
+    svc.bridge.calls.clear()
+    svc.bridge.requests.clear()
+
+    # Make slot 2 never reply by selectively suppressing
+    orig_request = svc.bridge._request_stream_schema
+    slot2_call_count = [0]
+
+    def patched_request(slot, vars_, divider, label):
+        orig_request(slot, vars_, divider, label)
+        if slot == 2:
+            slot2_call_count[0] += 1
+            # Remove the schema so it looks like no reply
+            with svc.bridge._stream_lock:
+                svc.bridge._stream_schemas.pop(slot, None)
+
+    svc.bridge._request_stream_schema = patched_request
+
+    failed = svc.bridge._resubscribe_fn()
+
+    # Slot 2 should be in the failed list
+    assert 2 in failed
+
+    # Defaults: slots 0, 2, 3 were requested (not 1 - it's overridden)
+    default_request_slots = [r[0] for r in svc.bridge.requests]
+    assert 0 in default_request_slots
+    assert 2 in default_request_slots
+    assert 3 in default_request_slots
+    assert 1 not in default_request_slots
+
+    # Slot 1 was re-sent via subscribe_slot
+    override_slots = [c[0] for c in svc.bridge.calls]
+    assert 1 in override_slots
+
+    # Slot 2 was sent 1 + 3 retries = 4 times (once initial + 3 retries in _await_schemas)
+    assert slot2_call_count[0] == 1 + m.REPLAY_RETRIES
+
+    # Sleep gaps >= 0.15s between slots
+    gap_sleeps = [s for s in sleep_log if s >= 0.14]
+    assert len(gap_sleeps) >= 3  # at least 3 inter-slot gaps (for 4 slots)
+
+
+# ---------------------------------------------------- test 3: logger faults
+def test_logger_empty_rows_dropped_and_faults(tmp_path):
+    """All-empty rows dropped; 0 rows 2 s after start -> slot_faults in meta."""
+    lg = StreamLogger(tmp_path)
+    lg.start("faults", "unlimited", {
+        1: {"vars": ["a", "b"], "rate": 10},
+        2: {"vars": ["c"], "rate": 10},
+    })
+    # Note: slot 1 gets real data; slot 2 gets nothing
+    lg.note(1, _sample({"a": 1.0, "b": 2.0}), now=lg.t0 + 0.1)
+    # All-empty row: both vars are None
+    lg.note(1, _sample({}), now=lg.t0 + 0.2)
+    # Another good row
+    lg.note(1, _sample({"a": 3.0}), now=lg.t0 + 0.3)
+
+    # Trigger fault check at 2+ seconds
+    lg.note(1, _sample({"a": 4.0}), now=lg.t0 + 2.1)
+
+    st = lg.stop()
+    # Slot 2 should be in faults (0 rows, rate > 0, 2s after start)
+    assert 2 in st["slot_faults"]
+    # Slot 1 should NOT be in faults
+    assert 1 not in st["slot_faults"]
+
+    # Verify rows: all-empty row was dropped
+    assert st["rows"][1] == 3  # 3 good rows (the empty one was dropped)
+
+    # Verify meta.json
+    meta = json.loads((tmp_path / "faults.meta.json").read_text())
+    assert meta["slot_status"]["2"] == "fault"
+    assert meta["slot_status"]["1"] == "ok"
+    assert 2 in meta["slot_faults"]
+    assert meta["rows"]["1"] == 3
+    assert meta["rows"]["2"] == 0
+
+
+# ------------------------------------------------ test 4: preflight check
+def test_preflight_all_growing(tmp_path):
+    """All slots growing -> (True, '')."""
+
+    class FakePrefBridge:
+        _stream_stats = {0: {"received": 0}, 1: {"received": 0},
+                         2: {"received": 0}, 3: {"received": 0}}
+        _stream_lock = threading.Lock()
+
+        def resend_slot(self, slot):
+            return True
+
+    bridge = FakePrefBridge()
+    svc = SimpleNamespace(bridge=bridge)
+    m = StreamsManager(svc, resolver_factory=lambda: None,
+                       log_dir=tmp_path / "logs",
+                       sleep=lambda s: _advance_bridge_stats(bridge, s))
+    ok, reason = m.preflight_check()
+    assert ok is True
+    assert reason == ""
+
+
+def _advance_bridge_stats(bridge, s):
+    """Simulate stream stats advancing during sleep."""
+    with bridge._stream_lock:
+        for slot in bridge._stream_stats:
+            bridge._stream_stats[slot]["received"] += 100
+
+
+def test_preflight_slot_frozen(tmp_path):
+    """Slot 3 frozen -> resend_slot(3) once and (False, 'slot 3 silent')."""
+    resend_calls = []
+
+    class FakePrefBridge:
+        _stream_stats = {0: {"received": 0}, 1: {"received": 0},
+                         2: {"received": 0}, 3: {"received": 0}}
+        _stream_lock = threading.Lock()
+
+        def resend_slot(self, slot):
+            resend_calls.append(slot)
+            return True
+
+    bridge = FakePrefBridge()
+    svc = SimpleNamespace(bridge=bridge)
+
+    def sleep_fn(s):
+        # Only advance slots 0-2, slot 3 stays frozen
+        with bridge._stream_lock:
+            for slot in (0, 1, 2):
+                bridge._stream_stats[slot]["received"] += 100
+
+    m = StreamsManager(svc, resolver_factory=lambda: None,
+                       log_dir=tmp_path / "logs", sleep=sleep_fn)
+    ok, reason = m.preflight_check()
+    assert ok is False
+    assert "slot 3 silent" in reason
+    assert 3 in resend_calls
+
+
+def test_preflight_no_bridge_or_no_stats_allowed(tmp_path):
+    """No bridge or no _stream_stats -> (True, '')."""
+    # No bridge
+    svc = SimpleNamespace(bridge=None)
+    m = StreamsManager(svc, resolver_factory=lambda: None,
+                       log_dir=tmp_path / "logs", sleep=lambda s: None)
+    ok, reason = m.preflight_check()
+    assert ok is True
+
+    # Bridge without _stream_stats
+    svc2 = SimpleNamespace(bridge=SimpleNamespace(_stream_lock=threading.Lock()))
+    m2 = StreamsManager(svc2, resolver_factory=lambda: None,
+                        log_dir=tmp_path / "logs2", sleep=lambda s: None)
+    ok2, reason2 = m2.preflight_check()
+    assert ok2 is True
+
+
+@needs_elf
+def test_log_start_preflight_failure(resolver, tmp_path):
+    """log/start -> 409 'slot 3 silent'; skip_preflight bypasses."""
+    class FakePrefBridge:
+        _stream_stats = {0: {"received": 0}, 1: {"received": 0},
+                         2: {"received": 0}, 3: {"received": 0}}
+        _stream_lock = threading.Lock()
+        _stream_schemas = {}
+        _slot_states = {}
+        _resubscribe_fn = None
+        _resubscribe_layout = "dashboard"
+
+        def subscribe_slot(self, **kw):
+            return 0
+
+        def _request_stream_schema(self, *a, **kw):
+            pass
+
+        def resend_slot(self, slot):
+            return True
+
+    bridge = FakePrefBridge()
+
+    def sleep_fn(s):
+        # Advance all slots except 3
+        with bridge._stream_lock:
+            for slot in (0, 1, 2):
+                bridge._stream_stats[slot]["received"] += 100
+
+    svc = SimpleNamespace(bridge=bridge, arm_state=lambda: "disarmed",
+                          active_preset=None)
+    m = StreamsManager(svc, resolver_factory=lambda: resolver,
+                       log_dir=tmp_path / "logs", sleep=sleep_fn)
+    m._overrides[3] = {"vars": ["y"], "rate": 10, "divider": 10,
+                        "source": "custom", "default": False, "name": "b"}
+    svc.streams = m
+
+    # preflight fails -> 409
+    code, body = streams.handle_post(svc, "/api/streams/log/start",
+                                     {"name": "pf", "mode": "unlimited", "slots": [3]})
+    assert code == 409
+    assert "slot 3 silent" in body["error"]
+
+    # skip_preflight bypasses
+    code, body = streams.handle_post(svc, "/api/streams/log/start",
+                                     {"name": "pf2", "mode": "unlimited", "slots": [3],
+                                      "skip_preflight": True})
+    assert code == 200
+    assert body["active"]
+    m.logger.stop()
+

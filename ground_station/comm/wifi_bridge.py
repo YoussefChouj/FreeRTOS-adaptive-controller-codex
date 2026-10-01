@@ -445,8 +445,9 @@ class WifiBridge:
                 if now - last_resend >= self._SLOT_RESEND_EVERY_S:
                     try:
                         self._wifi_send.sendto(req_bytes, (self._wifi_host, self._wifi_port))
-                    except OSError:
-                        pass
+                    except OSError as e:
+                        print(f"[wifi_bridge] Warning: slot {slot} re-send failed: {e}",
+                              file=sys.stderr, flush=True)
                     with self._stream_lock:
                         self._pending_schema_ranges[slot] = ranges
                     self._last_slot_resend[slot] = now
@@ -463,8 +464,10 @@ class WifiBridge:
             return False
         try:
             self._wifi_send.sendto(req_bytes, (self._wifi_host, self._wifi_port))
-        except OSError:
-            pass
+        except OSError as e:
+            print(f"[wifi_bridge] Warning: resend_slot({slot}) failed: {e}",
+                  file=sys.stderr, flush=True)
+            return False
         with self._stream_lock:
             self._pending_schema_ranges[slot] = ranges
         self._last_slot_resend[slot] = time.monotonic()

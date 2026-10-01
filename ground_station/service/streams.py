@@ -742,8 +742,10 @@ class StreamsManager:
         return (False, msg)
 
     def _await_schemas(self, bridge, sent: dict, specs: dict, timeout_s=None, retries=None, raise_on_fail=True):
-        if timeout_s is None: timeout_s = self.TIMEOUT_S
-        if retries is None: retries = self.MAX_RETRIES
+        if timeout_s is None:
+            timeout_s = self.TIMEOUT_S
+        if retries is None:
+            retries = self.MAX_RETRIES
         
         def _ok(slot):
             div, n = sent[slot]
@@ -811,20 +813,22 @@ class StreamsManager:
                 retries=self.REPLAY_RETRIES,
                 raise_on_fail=False
             )
-            if missing: failed_slots.extend(missing)
+            if missing:
+                failed_slots.extend(missing)
             self._sleep(self.REPLAY_GAP_S)
             
         for slot, ov in overrides.items():
             with bridge._stream_lock:
                 bridge._stream_schemas.pop(slot, None)
-            bridge.subscribe_slot(slot=slot, divider=ov["divider"], ranges=list(ov["vars"]))
+            n = bridge.subscribe_slot(slot=slot, divider=ov["divider"], ranges=list(ov["vars"]))
             missing = self._await_schemas(
-                bridge, {slot: (ov["divider"], len(ov["vars"]))}, {slot: {"vars": ov["vars"]}},
+                bridge, {slot: (ov["divider"], n)}, {slot: {"vars": ov["vars"]}},
                 timeout_s=self.REPLAY_TIMEOUT_S,
                 retries=self.REPLAY_RETRIES,
                 raise_on_fail=False
             )
-            if missing: failed_slots.extend(missing)
+            if missing:
+                failed_slots.extend(missing)
             self._sleep(self.REPLAY_GAP_S)
             
         if failed_slots:

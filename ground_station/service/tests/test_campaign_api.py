@@ -286,3 +286,31 @@ def test_apply_params_true_through_real_agent(service, api):
     plan = server.agent.plan_detail(plans[0]["plan_id"])
     assert plan["status"] == "done"
     assert plan["steps"][0]["args"] == {"command_id": 1, "index": 0, "value": 3.14}
+
+
+def test_campaign_stream_check_arm_refused():
+    """CampaignService(stream_check=lambda: (False, 'slot 0 silent'))
+    -> arm_allowed() False and state()['arm_refusal'] == 'slot 0 silent'."""
+    from types import SimpleNamespace
+    agent = SimpleNamespace(allow_agent_arm=True)
+    cs = CampaignService(
+        agent=agent,
+        stream_check=lambda: (False, "slot 0 silent"),
+    )
+    assert cs.arm_allowed() is False
+    st = cs.state()
+    assert st["arm_refusal"] == "slot 0 silent"
+
+
+def test_campaign_stream_check_passes_clears_refusal():
+    """When stream_check passes, arm_refusal is cleared."""
+    from types import SimpleNamespace
+    agent = SimpleNamespace(allow_agent_arm=True)
+    cs = CampaignService(
+        agent=agent,
+        stream_check=lambda: (True, ""),
+    )
+    cs.arm_refusal = "old refusal"
+    assert cs.arm_allowed() is True
+    assert cs.arm_refusal is None
+

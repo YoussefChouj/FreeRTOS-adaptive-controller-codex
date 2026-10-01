@@ -155,3 +155,85 @@ def test_vofa_slots_with_no_csvs(tmp_path):
     meta_path.write_text(json.dumps(meta), encoding="utf-8")
     with pytest.raises(LoadError, match="missing"):
         load_vofa(meta_path)
+
+
+def test_vofa_empty_slot_and_masking(tmp_path):
+    """Two slots: slot 1 header-only -> loads, n_rows 0, meta['empty_slots'] == [1].
+    of_alt_cm sentinel masked + counted; rpm_dbg_period_cyc[0] spike masked."""
+    meta = {
+        "preset": {
+            "name": "mask_test",
+            "slots": [
+                {"rate": 100, "vars": ["ano_of.of_alt_cm", "rpm_dbg_period_cyc[0]"]},
+                {"rate": 25, "vars": ["var_slow"]},
+            ],
+        }
+    }
+    meta_path = tmp_path / "mask_test.meta.json"
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+    # Slot 0: sentinel + spike data
+    slot0_lines = [
+        "t_src_ms,t_host_s,seq,ano_of.of_alt_cm,rpm_dbg_period_cyc[0]",
+        "1000,1.000,1,4294967295,1920000",     # sentinel
+        "1010,1.010,2,500,1920000",             # normal
+        "1020,1.020,3,600,1920000",             # normal
+        "1030,1.030,4,4294967295,1920000",      # sentinel
+        "1040,1.040,5,700,71900000",            # spike in rpm (> 5x median)
+        "1050,1.050,6,800,1920000",             # normal
+    ]
+    (tmp_path / "mask_test.slot0.csv").write_text(
+        "\n".join(slot0_lines) + "\n", encoding="utf-8")
+
+    # Slot 1: header-only
+    (tmp_path / "mask_test.slot1.csv").write_text(
+        "t_src_ms,t_host_s,seq,var_slow\n", encoding="utf-8")
+
+    log = load_vofa(meta_path)
+
+    # Basic checks
+    assert len(log.slots) == 2
+    assert log.slots[0].n_rows == 6
+    assert log.slots[1].n_rows == 0
+
+    # Empty slot
+    assert log.meta["empty_slots"] == [1]
+
+    # Sentinel masking: ano_of.of_alt_cm == 4294967295 -> NaN
+    alt = log.get("ano_of.of_alt_cm")
+    assert np.isnan(alt.v).sum() == 2  # two sentinels
+    assert log.meta["masked"]["ano_of.of_alt_cm"] == 2
+
+    # Spike masking: rpm_dbg_period_cyc[0] spike -> NaN
+    rpm = log.get("rpm_dbg_period_cyc[0]")
+    # Normal median is 1920000; spike 71900000 > 5 * 1920000 = 9600000
+    assert np.isnan(rpm.v).sum() == 1
+    assert log.meta["masked"]["rpm_dbg_period_cyc[0]"] == 1
+    # Non-spike values preserved
+    finite_rpm = rpm.v[np.isfinite(rpm.v)]
+    assert all(v == pytest.approx(1920000) for v in finite_rpm)
+
+    # Slot 1 has no signals
+    assert not log.has("var_slow")
+
+
+def test_vofa_all_slots_empty_raises(tmp_path):
+    """If EVERY slot is empty, still raise LoadError."""
+    meta = {
+        "preset": {
+            "name": "all_empty",
+            "slots": [
+                {"rate": 100, "vars": ["a"]},
+                {"rate": 25, "vars": ["b"]},
+            ],
+        }
+    }
+    meta_path = tmp_path / "all_empty.meta.json"
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+    (tmp_path / "all_empty.slot0.csv").write_text(
+        "t_src_ms,t_host_s,seq,a\n", encoding="utf-8")
+    (tmp_path / "all_empty.slot1.csv").write_text(
+        "t_src_ms,t_host_s,seq,b\n", encoding="utf-8")
+    with pytest.raises(LoadError, match="no data rows"):
+        load_vofa(meta_path)
+
