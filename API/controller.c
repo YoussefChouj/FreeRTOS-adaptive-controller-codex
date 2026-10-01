@@ -22,7 +22,7 @@ static float mrac_correction(uint8_t axis)
     case CTRL_AXIS_Z:     u = mrac_state.z_rate.u_ad * mrac_config_z.mrac_to_mixer;     break;
     default:              return 0.0f;
     }
-    return u * mrac_simplex.fade;
+    return u * mrac_simplex.fade * mrac_inj.inj_alpha;
 #else
     (void)axis;
     return 0.0f;
