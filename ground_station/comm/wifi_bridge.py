@@ -641,6 +641,12 @@ class WifiBridge:
                       file=sys.stderr, flush=True)
                 return
 
+            # Coalesce contiguous ranges (same size + fmt) to stay within the
+            # firmware MAX_STREAM_RANGES = 62 limit per slot, just like
+            # subscribe_slot does.
+            from ground_station.livewatch.stream import coalesce_ranges
+            ranges = coalesce_ranges(ranges)
+
             # Build 0x21 request. TRANSPORT_USART3 = 1.
             request = build_stream_request(
                 ranges=ranges,

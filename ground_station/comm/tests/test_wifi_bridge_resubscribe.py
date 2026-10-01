@@ -8,6 +8,7 @@ re-sends the subscribe when frames arrive but no subscribe data does.
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 from ground_station.comm import wifi_bridge as wb
 from ground_station.comm.wifi_bridge import WifiBridge
@@ -228,4 +229,48 @@ def test_slot_watchdog_stale_resend_and_recovery(monkeypatch):
     sendto_log.clear()
     b._check_resubscribe()
     assert len(sendto_log) == 0
+
+
+# ---------------------------------------------------- test C: coalesce byte-count
+needs_elf_c = pytest.mark.skipif(
+    not (Path(__file__).parents[2] / "OBJ" / "JX_FLY.axf").exists(),
+    reason="no ELF")
+
+
+@needs_elf_c
+def test_request_stream_schema_coalesces_byte_count():
+    """slot-0 boot default request bytes < 512 after coalescing."""
+    from ground_station.comm.wifi_bridge import WifiBridge
+    from ground_station.livewatch.stream import (
+        build_stream_request, coalesce_ranges, StreamRange,
+    )
+    from ground_station.livewatch.symbols import SymbolResolver
+    from ground_station.comm import boot_default_layout as bdl
+
+    elf_path = Path(__file__).parents[2] / "OBJ" / "JX_FLY.axf"
+    resolver = SymbolResolver(str(elf_path))
+
+    # Resolve vars without coalescing
+    uncoalesced = []
+    for var_name in bdl.BOOT_DEFAULT_VARS:
+        symbol = resolver.resolve(var_name)
+        uncoalesced.append(StreamRange(
+            address=symbol.address, size=symbol.size,
+            count=1, name=var_name, fmt=symbol.fmt,
+        ))
+    before = len(build_stream_request(
+        ranges=uncoalesced, divider=bdl.BOOT_DEFAULT_DIVIDER,
+        transport=1, usart3_baud=921600, slot=0, other_bps=0,
+    ))
+
+    # Resolve vars with coalescing
+    coalesced = coalesce_ranges(uncoalesced)
+    after = len(build_stream_request(
+        ranges=coalesced, divider=bdl.BOOT_DEFAULT_DIVIDER,
+        transport=1, usart3_baud=921600, slot=0, other_bps=0,
+    ))
+
+    print(f"BOOT_DEFAULT: before={before}, after={after}")
+    assert after < before, "coalescing should reduce range count"
+    assert after < 512, "coalesced request should be < 512 bytes"
 
