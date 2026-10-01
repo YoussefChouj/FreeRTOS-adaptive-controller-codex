@@ -16,6 +16,8 @@
 #include "rpm.h"
 /* WFB BEGIN glue */
 #include "wfb_glue.h"       /* Workflow B: GS takeoff/trajectory/land sequencer + safety net */
+#include "wfb_traj.h"
+#include "wfb_prim.h"
 /* WFB END glue */
 
 /**
@@ -912,8 +914,14 @@ void Update_Motor(void)
 �������ܣ�����PID����
 ��    ע��
 *************************************************************************/
+volatile float g_att_trim_roll_deg = -1.24f;
+volatile float g_att_trim_pitch_deg = -0.90f;
+volatile uint8_t g_traj_ff_on = 1U;
+static TrajFF_t s_traj_ff;
+/* WP-9 hover means in the controller frame (pitchPID frame = -imu_pit), operator zeroes them if the rotated-takeoff flight shows the lean is the room. Vmax for the FF clamp: the v_max_mps of wfb_traj_default_limits (API/wfb_traj.c) x 100 = 100.0f cm/s */
 void Compute_Motor(void)
 {
+	uint8_t airborne = (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING);
 ////////////////����߶�����//////////////////////////////////////////////////////////
 				
 	Update_Des(case_Update_height_Des);  
@@ -1056,22 +1064,35 @@ void Compute_Motor(void)
 	   every 256th tick on a uint8 wrap). */
 	if (DroneStatus.ARM_Status != 0U) {
 	Update_Des(case_Update_loc_Des);
-	ComputePID(&Ctrler.locxPID);
-	ComputePID(&Ctrler.locyPID);
+	ComputePID_Gated(&Ctrler.locxPID, airborne);
+	ComputePID_Gated(&Ctrler.locyPID, airborne);
 
   Update_Des(case_Update_v_loc_Des);
 	SDK_Set_V_Loc();//������
 
-	ComputePID(&Ctrler.locxsPID);
-	ComputePID(&Ctrler.locysPID);
+	{
+		uint8_t active = g_traj_ff_on && airborne && TWC.execute && g_wfb_status.traj_state == (float)WFB_TRAJ_EXECUTING && g_wfb_status.prim_state == (float)WFB_PRIM_TRAJ;
+		float vx, vy, ax, ay;
+		TrajFF_Step(&s_traj_ff, active, TWC.target_x, TWC.target_y, 0.01f, 0.2f, 100.0f, &vx, &vy, &ax, &ay);
+		Ctrler.locxsPID.Des += vx;
+		Ctrler.locysPID.Des += vy;
+		ComputePID_Gated(&Ctrler.locxsPID, airborne);
+		ComputePID_Gated(&Ctrler.locysPID, airborne);
+		Ctrler.locxsPID.U += ax;
+		Ctrler.locysPID.U += ay;
+	}
   }
+	else
+	{
+		TrajFF_Reset(&s_traj_ff);
+	}
 	}
 	
 //////////////////////������̬����////////////////////////////////////////////////////////////
 	
 	Update_Des(case_Update_pitrol_Des);  //����pit��roll�Ƕ�ֵ
-	ComputePID(&Ctrler.pitchPID);
-	ComputePID(&Ctrler.rollPID);
+	ComputePID_Gated(&Ctrler.pitchPID, airborne);
+	ComputePID_Gated(&Ctrler.rollPID, airborne);
 	
 	Update_Des(case_Update_yaw_Des);    //����yaw�ĽǶ�
 	ComputeYawPID(&Ctrler.yawPID);
@@ -1103,8 +1124,8 @@ void Compute_Motor(void)
 		Ctrler.yawPID.SumE   = 0.0f;
 	}
 
-	ComputePID(&Ctrler.gyroxPID);
-	ComputePID(&Ctrler.gyroyPID);
+	ComputePID_Gated(&Ctrler.gyroxPID, airborne);
+	ComputePID_Gated(&Ctrler.gyroyPID, airborne);
 	ComputePID(&Ctrler.gyrozPID);
 	
 	// Execute MRAC after all PID controllers have computed their nominal outputs (u_nom)
@@ -1375,6 +1396,7 @@ TWC.real_yaw = Ctrler.yawPID.FB; //�ṹ���Ա������ʼ��һ
 		
 		case case_Update_pitrol_Des://���� pitch roll����
 		{
+			uint8_t flying = (flight_phase == FLIGHT_PHASE_FLYING);
 			/* OF position-hold enable switch on ch6 (OFHOLD_CH = sbus_channel[5]).
 			 * HIGH (>1000, ~1694) = OF hold ON; LOW (~306) or signal-lost = ANGLE MODE.
 			 * Angle mode bypasses ALL optical-flow loops (position AND velocity): the
@@ -1407,6 +1429,8 @@ TWC.real_yaw = Ctrler.yawPID.FB; //�ṹ���Ա������ʼ��һ
 
 			accel_to_lean_angles( des_pitch,-des_roll,
 			  &Ctrler.pitchPID.Des,&Ctrler.rollPID.Des);
+			Ctrler.pitchPID.Des = AttTrim_Apply(Ctrler.pitchPID.Des, g_att_trim_pitch_deg, gs_max_pitch_deg, flying);
+			Ctrler.rollPID.Des  = AttTrim_Apply(Ctrler.rollPID.Des,  g_att_trim_roll_deg,  gs_max_roll_deg,  flying);
 		}
     break;
 			
