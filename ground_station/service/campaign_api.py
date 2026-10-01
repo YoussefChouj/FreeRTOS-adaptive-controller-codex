@@ -5,11 +5,12 @@ from ground_station.service.campaign_runner import RunnerControl, run_campaign, 
 from ground_station.service.agent import AgentDisabledError, PlanBusyError
 
 class CampaignService:
-    def __init__(self, agent=None, deps_factory=None, knobs=(), param_timeout_s=30.0):
+    def __init__(self, agent=None, deps_factory=None, knobs=(), param_timeout_s=30.0, stream_check=None):
         self.agent = agent
         self.deps_factory = deps_factory
         self.knobs = knobs
         self.param_timeout_s = param_timeout_s
+        self.stream_check = stream_check
         self.lock = threading.RLock()
         
         self.runner_thread = None
@@ -19,6 +20,7 @@ class CampaignService:
         self.waiting_pack = None
         self.report = None
         self._live_flights = []
+        self.arm_refusal = None
         
         self.condition = threading.Condition(self.lock)
         self.go_grant = None
@@ -102,7 +104,23 @@ class CampaignService:
                 self.condition.wait()
 
     def arm_allowed(self):
-        return bool(self.agent is not None and self.agent.allow_agent_arm)
+        agent_ok = bool(self.agent is not None and self.agent.allow_agent_arm)
+        if not agent_ok:
+            return False
+            
+        if self.stream_check is not None:
+            ok, reason = self.stream_check()
+        else:
+            try:
+                ok, reason = self.agent.service.streams.preflight_check()
+            except AttributeError:
+                ok, reason = True, ""
+                
+        if not ok:
+            self.arm_refusal = reason
+            return False
+            
+        return True
 
     def apply_params(self, params):
         if not params:
@@ -187,5 +205,6 @@ class CampaignService:
                 "campaign_path": self.campaign_path if (self.runner_thread and self.runner_thread.is_alive()) or self.report else None,
                 "reason": self.report.reason if self.report else "",
                 "flights": flights,
-                "control": self.control.get() if self.runner_thread and self.runner_thread.is_alive() else None
+                "control": self.control.get() if self.runner_thread and self.runner_thread.is_alive() else None,
+                "arm_refusal": self.arm_refusal
             }
