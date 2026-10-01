@@ -1,11 +1,11 @@
 import subprocess
 import math
 from dataclasses import dataclass
-from typing import Callable, Any, Optional
+from typing import Callable, Any
 from pathlib import Path
 
-from ground_station.service.campaign_schema import load_campaign, Campaign, Experiment
-from ground_station.service.abort_monitor import AbortSample, AbortMonitor
+from ground_station.service.campaign_schema import load_campaign
+from ground_station.service.abort_monitor import AbortSample, AbortDecision
 from ground_station.service.trajectory_pipeline import generate
 from ground_station.platform.trajectory_upload import upload
 
@@ -61,7 +61,7 @@ def files_after_from_diff(diff_text: str, repo_root: str) -> dict[str, str]:
 class FlightRecord:
     flight_id: str
     pack_id: str
-    experiment: Any
+    experiment: str
     j: float | None
     abort_level: int
     abort_reason: str
@@ -89,6 +89,7 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
     fw_hash = ""
     has_flashed = False
     history = []
+    runner_consecutive_aborts = 0
     
     max_ticks = math.ceil(deps.flight_timeout_s / deps.dt_s)
     
@@ -105,11 +106,15 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
             
         # 2. Cooldown
         target_elapsed = max(last_duration, deps.cooldown_min_s)
+        cooldown_max_ticks = math.ceil(target_elapsed / deps.dt_s) + max_ticks
         
         ticks = 0
-        while deps.clock() - last_landing_t < target_elapsed and ticks < max_ticks:
+        while deps.clock() - last_landing_t < target_elapsed and ticks < cooldown_max_ticks:
             deps.sleep(deps.dt_s)
             ticks += 1
+            
+        if deps.clock() - last_landing_t < target_elapsed:
+            return CampaignReport(campaign, flights, "operator_needed", "cooldown not reached")
             
         ticks = 0
         allowed = False
@@ -158,10 +163,7 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
         aborted = False
         decision = None
         
-        class TimeoutDecision:
-            def __init__(self, reason):
-                self.level = 1
-                self.reason = reason
+
         
         def run_loop_until(cond, phase):
             nonlocal aborted, decision
@@ -169,7 +171,7 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
             while not cond():
                 if ticks >= max_ticks:
                     aborted = True
-                    decision = TimeoutDecision(f"timeout: {phase}")
+                    decision = AbortDecision(level=1, reason=f"timeout: {phase}")
                     return False
                 deps.client.heartbeat()
                 deps.step(deps.dt_s)
@@ -215,7 +217,13 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
         # 8. Analyze
         j = deps.analyze(flight_id) if not aborted else None
         deps.tuner.record(params, j, valid=j is not None)
+        history.append({"params": params, "J": j, "valid": j is not None})
         
+        if aborted:
+            runner_consecutive_aborts += 1
+        else:
+            runner_consecutive_aborts = 0
+            
         # 9. Gate
         gate_decision = deps.gate.on_flight_result(aborted=aborted, j=j)
         deps.gate.record_flight(flight_id, fw_hash)
@@ -223,7 +231,7 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
         flights.append(FlightRecord(
             flight_id=flight_id,
             pack_id=pack_id,
-            experiment=exp,
+            experiment=exp.name,
             j=j,
             abort_level=decision.level if aborted and decision else 0,
             abort_reason=decision.reason if aborted and decision else "",
@@ -236,7 +244,7 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
             return CampaignReport(campaign, flights, "operator_needed", "landing timeout")
         
         # 10. Abort limit
-        if (aborted and decision and decision.level >= 3) or deps.monitor.consecutive_aborts >= 2:
+        if (aborted and decision and decision.level >= 3) or max(runner_consecutive_aborts, deps.monitor.consecutive_aborts) >= 2:
             return CampaignReport(campaign, flights, "operator_needed", "abort level 3 or consecutive")
             
     return CampaignReport(campaign, flights, "complete", "")
