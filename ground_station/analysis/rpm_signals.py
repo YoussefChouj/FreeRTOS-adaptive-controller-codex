@@ -65,11 +65,11 @@ def load_slots(log_dir: Path, prefix: str, slots=(0, 1, 2, 3)):
         if f.exists():
             try:
                 df = pd.read_csv(f)
-                if not df.empty:
-                    df.sort_values("t_src_ms", inplace=True)
-                    dfs_dict[slot] = df
-            except Exception:
-                pass
+            except pd.errors.EmptyDataError:
+                continue  # zero-byte file: nothing to join
+            if not df.empty:
+                df.sort_values("t_src_ms", inplace=True)
+                dfs_dict[slot] = df
 
     if not dfs_dict:
         return pd.DataFrame()
@@ -422,9 +422,6 @@ def print_kt_table(flights: list[tuple[str, Path]], mass_kg: float) -> None:
             print(f"Skip {prefix}: fewer than 200 hover rows", file=sys.stderr)
             continue
             
-        # Shorten prefix (e.g. keep first 25 chars or similar? The prompt just says "shortened")
-        # Let's just use prefix[:30] or so. Or "f17_hover_active15" etc.
-        # Actually, let's truncate to 30 chars.
         short_prefix = prefix if len(prefix) <= 35 else prefix[:32] + "..."
             
         rows.append(
@@ -435,7 +432,7 @@ def print_kt_table(flights: list[tuple[str, Path]], mass_kg: float) -> None:
                 "rpm_m1": f'{result["rpm_mean"][0]:.0f}',
                 "rpm_m2": f'{result["rpm_mean"][1]:.0f}',
                 "rpm_m3": f'{result["rpm_mean"][2]:.0f}',
-                "rpm_m4": f'{result.get("rpm_mean", [0,0,0,0])[3] if len(result.get("rpm_mean", [])) > 3 else 0:.0f}',
+                "rpm_m4": f'{result["rpm_mean"][3]:.0f}',
                 "frames": result["n_hover_frames"],
                 "hover_s": f'{result["hover_seconds"]:.1f}',
             }
