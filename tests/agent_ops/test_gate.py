@@ -255,3 +255,18 @@ def test_end_to_end_g_with_compile_errors(tmp_path, monkeypatch, capsys):
 
 def test_to_rel():
     assert gate.to_rel("./USER/main.c", "/root") == "USER/main.c"
+
+def test_make_shims_non_utf8(tmp_path):
+    (tmp_path / "FreeRTOS/portable/RVDS/ARM_CM4F").mkdir(parents=True)
+    content = b"/* " + "中文".encode("gbk") + b" */\n__asm { block }"
+    (tmp_path / "FreeRTOS/portable/RVDS/ARM_CM4F/portmacro.h").write_bytes(content)
+    
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    
+    written = gate.make_shims(str(tmp_path), str(dest))
+    assert written == 1
+    
+    out = (dest / "portmacro.h").read_bytes()
+    assert "中文".encode("gbk") in out
+    assert b"__asm" not in out

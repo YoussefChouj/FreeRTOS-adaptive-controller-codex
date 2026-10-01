@@ -36,10 +36,11 @@ def make_shims(root: str, dest: str) -> int:
     for path, pattern, repl in CLANG_SHIMS:
         src_path = pathlib.Path(root) / path
         if src_path.exists():
-            text = src_path.read_text(encoding="utf-8")
+            data = src_path.read_bytes()
+            text = data.decode("latin-1")
             text = re.sub(pattern, repl, text, flags=re.S)
             dest_path = pathlib.Path(dest) / src_path.name
-            dest_path.write_text(text, encoding="utf-8")
+            dest_path.write_bytes(text.encode("latin-1"))
             written += 1
     return written
 
