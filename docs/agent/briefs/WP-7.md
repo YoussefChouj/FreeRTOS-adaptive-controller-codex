@@ -64,3 +64,26 @@ Scope (worker may edit): the files in the gate line above, its digest `.agent-op
 Allow globs: as the gate line.
 Worker lane: agy-vps, chain `agy:gemini-3.1-pro-high,agy:gemini-3.8-flash-high`   Max worker rounds: 3
 Report to: `docs/agent/reports/WP-7.md`; add one line: any MANAGER.md rule that was unclear or a denied command.
+
+## CEO decision 2026-10-01, after PARTIAL (manager report wp/7 @ 2f9a2cc) -> CTE
+CEO review: wiring, 503 text, flash stub, CodeGate (build/ram_check/custody Mocks, ledger in a temp dir, OBJ untouched)
+and the read-only PackRegistry are accepted. Fix these in the existing wp/7 worktree, same gate line as above:
+1. RUNBOOK.md operator_needed list: replace the two invented strings with the real ones. `"cooldown not reached"`
+   (campaign_runner.py ~166) and the reason strings `PackRegistry.next_flight_allowed` returns (battery_model.py),
+   quoted exactly; one short "what to do" per reason.
+2. test_workflow_b_e2e.py item d is not tested today. `_wait_state` returns at the deadline without failing, and
+   pack 1 finishes before "running and flights>0" is ever seen, so land/abort/pause go out after the run (30 s of
+   timeouts). Required:
+   - `_wait_state` calls `pytest.fail` with the last state on timeout.
+   - Every go in the file asserts its HTTP code. Pause/land/abort POSTs send `{"source": "operator"}`.
+   - Each of pause, land and abort is sent while status is `running` and a flight is in progress, deterministically:
+     hold the sim mid-flight with a `threading.Event`, using monkeypatch on campaign_deps / FakeDrone from the test, so
+     ApiServer keeps its default wiring. No sleeps longer than needed.
+   - For land and abort, assert the FakeDrone's commands after the POST include traj_stop then land, and never a kill
+     or disarm-in-air. If the runner does not do that, STOP and report it as BLOCKED with the evidence: it is a
+     safety finding the CEO decides. Do not change campaign_runner.py.
+   - The whole file still has at least 5 tests and runs under 60 s. Note the time.
+3. Re-run the base 5-file set. Say whether the "Exception occurred during processing of request" stderr line also
+   appears on workflow-b @ 01a1e4b (run it there in full, no tail cut).
+Leave as open notes, not fixed here: J=None tuner wrapper, sim service bridge=Mock, decision "" when no change pending.
+Report to `docs/agent/reports/WP-7-cte.md`.
