@@ -1,31 +1,55 @@
-"""Standalone VPN Monitor and Auto-Router for Clash Verge.
+"""Standalone VPN monitor for Clash Verge (started at logon by StartVPNMonitor.bat).
 
-Runs permanently in the background. Tests internet connectivity through the proxy.
-If it fails, or the active selector is not on a Japan/Singapore node, it tests latency to the
-Japan/Singapore nodes in the selector, pins the fastest one, and drops stale connections.
-If none is alive it re-downloads the subscriptions and keeps retrying until one is back.
+Every 60 s it checks the internet through the proxy and keeps the main selector on a Japan/Singapore node.
+If the net is down twice in a row, or the selector is on another region or on a group such as 自动选择,
+it delay-tests the Japan/Singapore nodes (one controller request) and pins the fastest live one.
+
+Safety rules, because other Claude sessions share the proxy at 127.0.0.1:7897:
+- one instance only (named mutex): a second copy exits at once.
+- it never starts, stops or restarts any process, and never touches Clash Verge's files.
+- one controller request at a time, each with a hard deadline; the pipe handle is always closed.
+- it never closes connections on a working node. After switching away from a dead node it closes
+  only that node's connections, so their clients reconnect through the new node.
+- while the core is down, and for CORE_GRACE_S after it comes back, it only watches.
 """
-import time
+import ctypes
 import json
+import msvcrt
+import os
 import re
-import urllib.request
+import sys
+import time
 import urllib.error
 import urllib.parse
-from concurrent.futures import ThreadPoolExecutor
+import urllib.request
+from ctypes import wintypes
 from pathlib import Path
 
 LOG_PATH = Path.home() / ".vpn_monitor.log"
+LOG_MAX_BYTES = 1_000_000
 PIPE_DIR = "//./pipe/"
 PIPE_PREFIX = "verge-mihomo"   # name gets "-sidecar-release-<hash>" / "-production-<hash>" depending on how Verge started it
 PROXY = "http://127.0.0.1:7897"
 
 CHECK_INTERVAL_S = 60
 FAILS_BEFORE_HEAL = 2
+CORE_GRACE_S = 120        # after the core (re)starts, let Clash Verge restore its saved selections first
+PIPE_TIMEOUT_S = 10
+DELAY_TIMEOUT_MS = 5000
+HEARTBEAT_S = 3600
 NODE_PAT = re.compile(r"JP|Japan|日本|Tokyo|东京|SG|Singapore|新加坡|狮城", re.I)
 DELAY_URL = "https://www.gstatic.com/generate_204"
 GROUP_TYPES = {"Selector", "URLTest", "Fallback", "LoadBalance", "Relay"}
-REFRESH_GAP_S = 120   # while every Japan/Singapore node is down, re-download subscriptions at most this often
-_last_refresh = 0.0
+MUTEX_NAME = "Local\\vpn_monitor_clash_verge"
+ERROR_ALREADY_EXISTS = 183
+
+k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+k32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+k32.CreateMutexW.restype = wintypes.HANDLE
+k32.PeekNamedPipe.argtypes = [wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD, wintypes.LPVOID,
+                              ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID]
+k32.PeekNamedPipe.restype = wintypes.BOOL
+_mutex = None
 
 def log(msg):
     line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
@@ -33,37 +57,56 @@ def log(msg):
         print(line, flush=True)
     except Exception:
         pass
-    with LOG_PATH.open("a", encoding="utf-8") as f:
-        f.write(line + "\n")
+    try:
+        if LOG_PATH.exists() and LOG_PATH.stat().st_size > LOG_MAX_BYTES:
+            LOG_PATH.replace(LOG_PATH.with_suffix(".log.1"))
+        with LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+
+def single_instance():
+    """Hold a named mutex for the life of the process; False if another monitor already holds it."""
+    global _mutex
+    _mutex = k32.CreateMutexW(None, False, MUTEX_NAME)
+    return bool(_mutex) and ctypes.get_last_error() != ERROR_ALREADY_EXISTS
 
 def find_pipe():
-    import os
     names = sorted(n for n in os.listdir(PIPE_DIR) if n.startswith(PIPE_PREFIX))
     if not names:
-        raise FileNotFoundError(f"no {PIPE_PREFIX}* controller pipe (is Clash Verge running?)")
+        raise FileNotFoundError(f"no {PIPE_PREFIX}* controller pipe")
     return PIPE_DIR + names[0]
 
-def clash(method, path, body=None, timeout_s=15):
+def _complete(raw):
+    head, sep, rest = raw.partition(b"\r\n\r\n")
+    if not sep:
+        return False
+    m = re.search(rb"Content-Length: *(\d+)", head, re.I)
+    if m:
+        return len(rest) >= int(m.group(1))
+    return b"chunked" in head.lower() and (b"\r\n" + rest).endswith(b"\r\n0\r\n\r\n")
+
+def clash(method, path, body=None, timeout_s=PIPE_TIMEOUT_S):
+    """One HTTP request over the mihomo controller pipe, with a hard deadline. The handle is always closed."""
     data = json.dumps(body).encode() if body is not None else b""
     head = (f"{method} {path} HTTP/1.1\r\nHost: clash\r\nContent-Type: application/json\r\n"
             f"Content-Length: {len(data)}\r\nConnection: close\r\n\r\n").encode()
     f = open(find_pipe(), "r+b", buffering=0)
     try:
         f.write(head + data)
+        handle = msvcrt.get_osfhandle(f.fileno())
+        avail = wintypes.DWORD()
         raw = b""
-        deadline = time.time() + timeout_s
-        while time.time() < deadline:
-            chunk = f.read(65536)
-            if not chunk:
-                break
-            raw += chunk
-            h, sep, rest = raw.partition(b"\r\n\r\n")
-            if sep:
-                m = re.search(rb"Content-Length: (\d+)", h, re.I)
-                if m and len(rest) >= int(m.group(1)):
-                    break
-                if b"chunked" in h.lower() and rest.endswith(b"0\r\n\r\n"):
-                    break
+        deadline = time.monotonic() + timeout_s
+        while not _complete(raw):
+            if not k32.PeekNamedPipe(handle, None, 0, None, ctypes.byref(avail), None):
+                break                       # mihomo closed its end: nothing more is coming
+            if avail.value:
+                raw += f.read(avail.value)  # only what is already there, so this never blocks
+            elif time.monotonic() > deadline:
+                raise TimeoutError(f"{method} {path.split('?')[0]}: no reply in {timeout_s} s")
+            else:
+                time.sleep(0.05)
     finally:
         f.close()
     h, _, rest = raw.partition(b"\r\n\r\n")
@@ -90,67 +133,49 @@ def active_group():
     sel.sort(key=lambda k: -sum(bool(NODE_PAT.search(n)) for n in px[k].get("all", [])))
     return sel[0] if sel else "GLOBAL", px
 
-def node_delay(name):
-    q = urllib.parse.urlencode({"timeout": 3000, "url": DELAY_URL})
-    try:
-        st, d = clash("GET", f"/proxies/{urllib.parse.quote(name)}/delay?{q}", timeout_s=8)
-        return name, (d or {}).get("delay") if st == 200 else None
-    except Exception:
-        return name, None
-
 def is_preferred_node(name, px):
     """A real Japan/Singapore node, never a group such as 自动选择 (which could hold other regions)."""
     return bool(NODE_PAT.search(name or "")) and px.get(name, {}).get("type") not in GROUP_TYPES
 
-def refresh_subscriptions():
-    """Re-download the subscriptions (http proxy providers VPN07 / 月神云 from the Clash Verge profile script)."""
-    global _last_refresh
-    if time.time() - _last_refresh < REFRESH_GAP_S:
-        return False
-    _last_refresh = time.time()
-    _, prov = clash("GET", "/providers/proxies")
-    for name, p in (prov or {}).get("providers", {}).items():
-        if p.get("vehicleType") == "HTTP":
-            st, body = clash("PUT", f"/providers/proxies/{urllib.parse.quote(name)}", timeout_s=60)
-            log(f"refresh: subscription {name} status={st} {(body or {}).get('message', '')}")
-    return True
-
 def test_candidates(group, px):
+    """Delay-test the group's Japan/Singapore nodes. mihomo tests them in parallel: one controller request."""
     cands = [n for n in px[group].get("all", []) if is_preferred_node(n, px)]
-    with ThreadPoolExecutor(12) as ex:
-        res = dict(ex.map(node_delay, cands))
-    live = sorted((d, n) for n, d in res.items() if d)
+    q = urllib.parse.urlencode({"url": DELAY_URL, "timeout": DELAY_TIMEOUT_MS})
+    st, d = clash("GET", f"/group/{urllib.parse.quote(group)}/delay?{q}", timeout_s=DELAY_TIMEOUT_MS / 1000 + 10)
+    res = {n: (d or {}).get(n) for n in cands} if st == 200 else {}
+    live = sorted((v, n) for n, v in res.items() if v)
     log(f"heal: group={group} now={px[group].get('now')} live={len(live)}/{len(cands)} best={live[:3]}")
     return live, res
+
+def close_connections_on(node):
+    """Close only the connections routed through `node`; everything else keeps running."""
+    _, d = clash("GET", "/connections")
+    ids = [c["id"] for c in (d or {}).get("connections") or [] if node in c.get("chains", [])]
+    for cid in ids:
+        clash("DELETE", f"/connections/{cid}")
+    return len(ids)
 
 def heal(apply=True):
     try:
         group, px = active_group()
-    except Exception as e:
-        log(f"heal: failed to get active group: {e}")
-        return False
-
-    now = px[group].get("now")
-    live, res = test_candidates(group, px)
-    # Every Japan/Singapore node is down: re-download the subscriptions (servers may have moved) and retest.
-    # The main loop calls heal() every cycle while this fails, so this repeats until a node is back.
-    if not live and apply and refresh_subscriptions():
-        group, px = active_group()
+        now = px[group].get("now")
         live, res = test_candidates(group, px)
+    except Exception as e:
+        log(f"heal: {e}")
+        return False
     if not live:
+        log("heal: no Japan/Singapore node answers; will retry next cycle")
         return False
 
     best_d, best = live[0]
     if res.get(now) and res[now] <= best_d * 1.3 + 50:
         log(f"heal: current node {now} alive ({res[now]} ms), keeping")
-        best = now
-
-    if apply and best != now:
+        return True
+    if apply:
         st, _ = clash("PUT", f"/proxies/{urllib.parse.quote(group)}", {"name": best})
         log(f"heal: switched {group}: {now} -> {best} ({best_d} ms) status={st}")
-        
-    if apply:
-        clash("DELETE", "/connections")   # drop stale sockets so clients reconnect at once
+        if not res.get(now) and is_preferred_node(now, px):
+            log(f"heal: closed {close_connections_on(now)} connections on dead node {now}")
     return True
 
 def net_ok():
@@ -164,33 +189,48 @@ def net_ok():
         return False
 
 def main():
-    import sys
-    if "--dry-run" in sys.argv:
-        log(f"dry-run: checking net_ok...")
-        ok = net_ok()
-        log(f"dry-run: net_ok={ok}")
-        log("dry-run: testing heal (apply=False)...")
+    if "--dry-run" in sys.argv:          # read-only: no switching, no closing, no mutex
+        log(f"dry-run: net_ok={net_ok()}")
         heal(apply=False)
         return
+    if not single_instance():
+        log("another VPN monitor is already running; this copy exits")
+        return
 
-    log(f"VPN monitor started. Checking every {CHECK_INTERVAL_S}s.")
-    fails = 0
+    log(f"VPN monitor started (pid {os.getpid()}). Checking every {CHECK_INTERVAL_S}s.")
+    fails, core_since, last_beat, down_logged = 0, None, None, False
     while True:
         try:
+            try:
+                find_pipe()
+            except FileNotFoundError:
+                if not down_logged:
+                    log("Clash Verge core is down; only watching until it is back")
+                core_since, down_logged = None, True
+                continue
+            down_logged = False
+            if core_since is None:
+                core_since = time.monotonic()
+                log(f"core is up; leaving the selector alone for {CORE_GRACE_S}s")
             fails = 0 if net_ok() else fails + 1
+            if time.monotonic() - core_since < CORE_GRACE_S:
+                continue
             group, px = active_group()
             now = px[group].get("now")
             if fails >= FAILS_BEFORE_HEAL:
                 log(f"net: down x{fails}, healing proxy")
             elif not is_preferred_node(now, px):
                 log(f"selector {group} is on {now}, not a Japan/Singapore node: healing")
+            elif last_beat is None or time.monotonic() - last_beat > HEARTBEAT_S:
+                log(f"ok: {group} on {now}")
+                last_beat = time.monotonic()
             if fails >= FAILS_BEFORE_HEAL or not is_preferred_node(now, px):
                 if heal(apply=True):
                     fails = 0
         except Exception as e:
             log(f"monitor error: {e}")
-            
-        time.sleep(CHECK_INTERVAL_S)
+        finally:
+            time.sleep(CHECK_INTERVAL_S)
 
 if __name__ == "__main__":
     main()
