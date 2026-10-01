@@ -2,7 +2,7 @@ import argparse
 import glob
 import itertools
 import json
-import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -12,6 +12,7 @@ import numpy as np
 from scipy import interpolate
 
 from ground_station.analysis.ekf_of_model import DEFAULTS, EkfOfModel, OldEkfOf6
+from ground_station.analysis.flightlab.loaders import LoadError
 from ground_station.analysis.flightlab.loaders.vofa import load_vofa
 
 
@@ -77,10 +78,6 @@ def replay_arrays(t1, phase1, ax1, ay1, t3, ofx3, ofy3, ofq3, params_grid, run_o
         # Integration logic
         if phase1[i] in [1, 2]:
             # FIXED: debiased OF integrated during phases 1/2
-            # wait, how is fixed position integrated? "debiased OF integrated during phases 1/2"
-            # of_x, of_y? No, wait: "debiased OF" is ofx3, ofy3 but we need it at slot1 times or slot3 times?
-            # "FIXED: debiased OF integrated during phases 1/2" - let's interpolate or use closest?
-            # Actually, "ofx = (of2_dx_fix - s_of_bias_x) * 0.01 (m/s)". So debiased OF is ofx3.
             pass
         
         pos_x[:, i] = new_model.x[:, 0]
@@ -100,9 +97,7 @@ def replay_arrays(t1, phase1, ax1, ay1, t3, ofx3, ofy3, ofq3, params_grid, run_o
     for i in range(1, N1):
         if phase1[i] in [1, 2]:
             # find the most recent OF sample before or at t1[i]
-            # wait, simple Euler integration: pos += v * dt
-            # but which v? For FIXED it's ofx3, ofy3. Let's interpolate ofx3 to t1[i].
-            # Or just use the last seen OF sample. Let's use last seen.
+
             idx = np.searchsorted(t3, t1[i], side='right') - 1
             if idx >= 0:
                 vx = ofx3[idx]
@@ -283,27 +278,45 @@ def run_cli():
     
     for log_path in log_files:
         log_names.append(Path(log_path).name)
-        with open(log_path, 'r', encoding='utf-8') as f:
-            meta = json.load(f)
-            
-        # create temp meta with slots 1-3 only
-        if 'preset' in meta and 'slots' in meta['preset']:
-            slots = meta['preset']['slots']
-            new_slots = [s for s in slots if 'slot1' in s['path'] or 'slot2' in s['path'] or 'slot3' in s['path']]
-            meta['preset']['slots'] = new_slots
-            
-        with tempfile.NamedTemporaryFile('w', suffix='.meta.json', delete=False) as tf:
-            json.dump(meta, tf)
-            tf_name = tf.name
-            
-        # load
+        log_path_obj = Path(log_path)
+        
         try:
-            L = load_vofa(tf_name)
-        except (OSError, ValueError, KeyError, IndexError, RuntimeError) as e:
-            os.remove(tf_name)
-            raise RuntimeError(f"Failed to load log {log_names[-1]}: {e}")
-        else:
-            os.remove(tf_name)
+            L = load_vofa(log_path)
+        except LoadError:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmp_path = Path(tmpdir)
+                with open(log_path, 'r', encoding='utf-8') as f:
+                    meta = json.load(f)
+                    
+                if 'preset' in meta and 'slots' in meta['preset']:
+                    slots = meta['preset']['slots']
+                    new_slots = [s for s in slots if 'slot1' in s.get('path', '') or 'slot2' in s.get('path', '') or 'slot3' in s.get('path', '')]
+                    meta['preset']['slots'] = new_slots
+                elif 'slots' in meta:
+                    slots_dict = meta['slots']
+                    new_slots = {}
+                    idx = 0
+                    for k in sorted(slots_dict.keys(), key=int):
+                        s = slots_dict[k]
+                        if 'slot1' in s.get('path', '') or 'slot2' in s.get('path', '') or 'slot3' in s.get('path', ''):
+                            new_slots[str(idx)] = s
+                            idx += 1
+                    meta['slots'] = new_slots
+                    
+                stem = log_path_obj.name[:-len(".meta.json")] if log_path_obj.name.endswith(".meta.json") else log_path_obj.stem
+                tmp_meta = tmp_path / f"{stem}.meta.json"
+                with open(tmp_meta, 'w', encoding='utf-8') as f:
+                    json.dump(meta, f)
+                    
+                for i in range(1, 4):
+                    orig_csv = log_path_obj.parent / f"{stem}.slot{i}.csv"
+                    if orig_csv.exists():
+                        shutil.copyfile(orig_csv, tmp_path / f"{stem}.slot{i-1}.csv")
+                
+                try:
+                    L = load_vofa(tmp_meta)
+                except LoadError as e:
+                    raise LoadError(f"{log_names[-1]}: {e}")
             
         # signals
         t1 = L.signals['Acc_X_Real'].t

@@ -30,9 +30,14 @@ class EkfOf_t(ctypes.Structure):
 
 @pytest.fixture(scope="module")
 def gcc_lib(tmp_path_factory):
+    import tempfile
+    
     gcc_path = os.environ.get("EKF_OF_GCC", shutil.which('gcc'))
     if not gcc_path:
-        pytest.skip("gcc not found")
+        reason = "gcc not found"
+        with open(os.path.join(tempfile.gettempdir(), "wp8_gcc_skip.txt"), "w") as f:
+            f.write(reason)
+        pytest.skip(reason)
         
     src = Path("API/ekf_of.c").resolve()
     tmp_dir = tmp_path_factory.mktemp("gcc_lib")
@@ -54,7 +59,10 @@ def gcc_lib(tmp_path_factory):
             dump_out = subprocess.run([gcc_path, "-dumpmachine"], check=True, capture_output=True, text=True).stdout.strip()
         except (subprocess.CalledProcessError, OSError):
             dump_out = "unknown"
-        pytest.skip(f"gcc {gcc_path} ({dump_out}) cannot build a library for this Python: {e}")
+        reason = f"gcc {gcc_path} ({dump_out}) cannot build a library for this Python: {e}"
+        with open(os.path.join(tempfile.gettempdir(), "wp8_gcc_skip.txt"), "w") as f:
+            f.write(reason)
+        pytest.skip(reason)
         
     return lib_path
 
@@ -219,6 +227,7 @@ def test_boot_layout_contains_states():
 
 def test_replay_real_logs(capsys):
     import glob
+    import tempfile
 
     from ground_station.analysis.ekf_of_replay import resolve_logs_dir, run_cli
     
@@ -244,6 +253,10 @@ def test_replay_real_logs(capsys):
     captured = capsys.readouterr()
     out = captured.out
     
+    with open(os.path.join(tempfile.gettempdir(), "wp8_replay_last.txt"), "w") as f:
+        f.write(out)
+        f.write(captured.err)
+    
     assert out.count("--- Log: ") == 5, "Expected 5 per-log tables"
     assert ' nan' not in out.lower() and ' inf' not in out.lower(), "Metrics must be finite"
     
@@ -251,3 +264,68 @@ def test_replay_real_logs(capsys):
         idx = out.find("Top 5 combos:")
         tuning_result = out[idx:] if idx != -1 else out
         assert False, f"DEFAULTS_MATCH yes not found. Tuning result:\n{tuning_result}"
+
+def test_fake_log_loader(tmp_path):
+    import json
+    import shutil
+    import tempfile
+
+    from ground_station.analysis.ekf_of_replay import load_vofa
+    
+    stem = "fake_log"
+    meta = {
+        "preset": {
+            "slots": [
+                {"path": "slot0"},
+                {"path": "slot1"},
+                {"path": "slot2"},
+                {"path": "slot3"}
+            ]
+        }
+    }
+    
+    meta_path = tmp_path / f"{stem}.meta.json"
+    with open(meta_path, 'w', encoding='utf-8') as f:
+        json.dump(meta, f)
+        
+    for i in range(4):
+        csv_path = tmp_path / f"{stem}.slot{i}.csv"
+        with open(csv_path, 'w', encoding='utf-8') as f:
+            if i == 0:
+                f.write("t_src_ms,t_host_s,seq\n")
+            elif i == 1:
+                f.write("t_src_ms,t_host_s,seq,Acc_X_Real,Acc_Y_Real,flight_phase\n")
+                f.write("1000,1.0,1,0.1,0.2,1\n")
+                f.write("1005,1.005,2,0.11,0.21,1\n")
+            elif i == 2:
+                f.write("t_src_ms,t_host_s,seq,Ctrler.rollPID.FB,Ctrler.pitchPID.FB\n")
+                f.write("1000,1.0,1,0.5,0.6\n")
+            elif i == 3:
+                f.write("t_src_ms,t_host_s,seq,ano_of.of2_dx_fix,ano_of.of2_dy_fix,s_of_bias_x,s_of_bias_y,ano_of.of_quality,s_ekf_of.x[0],s_ekf_of.x[3]\n")
+                f.write("1000,1.0,1,10,20,1.0,2.0,200,0.5,0.6\n")
+                
+    # Use the same fallback logic from ekf_of_replay.py
+    try:
+        from ground_station.analysis.flightlab.loaders import LoadError
+        L = load_vofa(meta_path)
+    except LoadError:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpp = Path(tmpdir)
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+            slots = meta['preset']['slots']
+            new_slots = [s for s in slots if 'slot1' in s.get('path','') or 'slot2' in s.get('path','') or 'slot3' in s.get('path','')]
+            meta['preset']['slots'] = new_slots
+            
+            tmp_meta = tmpp / f"{stem}.meta.json"
+            with open(tmp_meta, 'w', encoding='utf-8') as f:
+                json.dump(meta, f)
+                
+            for i in range(1, 4):
+                orig_csv = tmp_path / f"{stem}.slot{i}.csv"
+                if orig_csv.exists():
+                    shutil.copyfile(orig_csv, tmpp / f"{stem}.slot{i-1}.csv")
+            L = load_vofa(tmp_meta)
+            
+    assert 'Acc_X_Real' in L.signals
+    assert len(L.signals['Acc_X_Real'].v) == 2
