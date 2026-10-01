@@ -37,15 +37,24 @@ The campaign runner can finish in several states. The operator reads these from 
   - *Next Action*: Enable `allow_agent_arm` and retry, or investigate why it was refused.
 - **operator_stop**: The operator manually clicked Pause or Land, or denied the `wait_for_go` prompt.
   - *Next Action*: Start a new Go after checking the drone, or start a new campaign.
-- **operator_needed**: The runner encountered a condition requiring human intervention. Reason strings include:
-  - `"operator abort"`
-  - `"cooldown_min_s not met"`
-  - `"battery not resting"`
-  - `"param write refused"`
-  - `"landing timeout; revert flash pending"`
-  - `"landing timeout"`
-  - `"abort level 3 or consecutive"`
-  - *Next Action*: Diagnose the issue physically (check battery, check drone state, rescue drone) before continuing.
+- **operator_needed**: The runner encountered a condition requiring human intervention. The `reason` is one of
+  (from `campaign_runner.py` and `PackRegistry.next_flight_allowed` in `battery_model.py`; `<...>` = filled-in value):
+  - `"operator abort"`: you pressed Abort. Check the drone and props, then start a new Go.
+  - `"cooldown not reached"`: the runner's cooldown wait ran out. Let the pack rest, then Go again.
+  - `"REST: cooldown <s>s < required <min_rest_s>s"`: the pack rested too briefly. Wait out the required rest, then Go.
+  - `"SOC: predicted post-flight SoC <p>% < required <gate>% (measured resting SoC <s>%, expected drop <d>%)"`:
+    the pack is too low for another flight. Swap to a charged pack (or charge this one), then Go.
+  - `"INPUT: unknown pack '<pack_id>'"`: the pack label is not in the pack registry. Fix the label in the campaign
+    YAML or register the pack.
+  - `"INPUT: non-finite resting_v: <v>"` / `"INPUT: non-finite cooldown_s: <v>"`: bad voltage or clock reading.
+    Check the battery telemetry link before flying.
+  - `"param write refused"`: the agent could not write the tuner's params. Check the agent mode, the link and the
+    plan log.
+  - `"landing timeout"`: the drone did not report landed. Go to the drone, land or kill it by hand (RC ch10).
+  - `"landing timeout; revert flash pending"`: as above, and the firmware revert was not flashed. Recover the drone,
+    then flash the last-known-good build before any new flight.
+  - `"abort level 3 or consecutive"`: a level-3 abort or two aborts in a row. Inspect the drone and review the
+    flight logs before continuing.
 - **error**: An unexpected Python exception crashed the runner thread.
   - *Next Action*: Check dashboard logs, fix the error, and restart.
 - **gate_refused**: A requested code change was rejected by CodeGate (e.g. touching protected files).
