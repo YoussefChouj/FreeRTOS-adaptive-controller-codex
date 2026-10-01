@@ -1,0 +1,45 @@
+paths:
+  - API/rc_input.c # API/rc_input.c:1
+  - TASK/RemoterTask.c # TASK/RemoterTask.c:1
+  - API/flight_fsm.c # API/flight_fsm.c:1
+  - BSP/pwm.c # BSP/pwm.c:1
+  - API/bmi088_driver.c # API/bmi088_driver.c:1
+  - USER/main.c # USER/main.c:1
+  - API/wfb_safety.c # API/wfb_safety.c:1
+  - API/wfb_safety.h # API/wfb_safety.h:1
+  - API/wfb_traj.c # API/wfb_traj.c:1
+  - API/wfb_traj.h # API/wfb_traj.h:1
+
+regions:
+  - rc_kill # TASK/RemoterTask.c:158
+  - rc_ch5_land # TASK/RemoterTask.c:179
+  - wfb_apply # TASK/StabilizerTask.c:264
+
+functions:
+  - AutoflyTask_PathArbitrate # TASK/AutoflyTask.c:17
+
+param_ids:
+  - fence_x_m # API/wfb_safety.h:28
+  - fence_y_m # API/wfb_safety.h:29
+  - ceiling_m # API/wfb_safety.h:30
+  - low_v # API/wfb_safety.h:31
+  - low_v_hold_s # API/wfb_safety.h:32
+  - tilt_deg # API/wfb_safety.h:33
+  - tilt_hold_s # API/wfb_safety.h:34
+  - airborne_cap_s # API/wfb_safety.h:35
+  - hb_timeout_s # API/wfb_safety.h:36
+  - RC_HEARTBEAT_TIMEOUT_MS # API/rc_input.h:33
+  - RC_IDLE_THR_THRESHOLD # API/rc_input.h:30
+  - Motor_PWM_ZERO # BSP/pwm.h:13
+  - Motor_PWM_MAX # BSP/pwm.h:15
+  - gs_max_horizontal_speed_mps # TASK/send_data.c:1572
+  - gs_max_vertical_speed_mps # TASK/send_data.c:1574
+  - gs_max_pitch_deg # TASK/send_data.c:1576
+  - gs_max_roll_deg # TASK/send_data.c:1578
+  - Stick_to_MAX_Angle # Global_file/global_declare.h:23
+  - Stick_to_MAX_Horizontal_Rate # Global_file/global_declare.h:24
+  - Stick_to_MAX_GyroZ # Global_file/global_declare.h:25
+  - Stick_to_MAX_V_height # Global_file/global_declare.h:26
+
+unresolved:
+  - "flash-when-armed block"

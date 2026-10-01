@@ -3,6 +3,9 @@
 #include "task.h"
 #include "rc_input.h"
 #include "flight_fsm.h"
+/* WFB BEGIN glue */
+#include "wfb_glue.h"
+/* WFB END glue */
 
 float channel[4];
 /*************************************************************************
@@ -152,6 +155,7 @@ void Check_Fly_Mode(void)
 	static int DangerousStop_cnt = 0;
 	Check_Stick_Motion();
 	
+	/* PROTECTED BEGIN rc_kill */
 		/* P0 Finding 1: RC link loss (sbus_lost) must drive the failsafe too, not just ch9. */
 		if( sbus_channel[9] <=500 || sbus_lost ) //���˲��������Ϸ�
 	{
@@ -170,7 +174,9 @@ void Check_Fly_Mode(void)
 	{
 		FlightFSM_Event(FLIGHT_EVENT_RECOVER_SDK);
 	}
+	/* PROTECTED END rc_kill */
 
+	/* PROTECTED BEGIN rc_ch5_land */
 	/* --- SBUS ch5 (MODE_CH): rising edge into LAND position triggers landing.
 	 * Only valid from FLYING phase — ignored when on ground (won't start ramp if not airborne).
 	 * ch5 no longer sets authority; authority is managed by CMD 0x0E only.       */
@@ -179,11 +185,24 @@ void Check_Fly_Mode(void)
 		uint8_t ch5_now = (MODE_CH > 1300) ? 1U : 0U;
 		if (ch5_now && !ch5_prev && flight_phase == FLIGHT_PHASE_FLYING)
 		{
+			/* WFB BEGIN glue */
+			/* A ground-station flight lands through the glue (return to hover, settle, descend,
+			 * the same function as CMD 0x1A idx 1); otherwise today's immediate LANDING. */
+			uint8_t wfb_handled;
+			taskENTER_CRITICAL();
+			wfb_handled = wfb_glue_rc_land((uint32_t)xTaskGetTickCount() * (uint32_t)portTICK_PERIOD_MS);
+			taskEXIT_CRITICAL();
+			if (wfb_handled == 0U) {
+			/* WFB END glue */
 			flight_phase = FLIGHT_PHASE_LANDING;
 			TWC.execute  = 0U;
+			/* WFB BEGIN glue */
+			}
+			/* WFB END glue */
 		}
 		ch5_prev = ch5_now;
 	}
+	/* PROTECTED END rc_ch5_land */
 
 	/* --- SBUS ch7 (FLYUP_CH): rising-edge fly-up to Z=0.5 m trigger -----------
 	 * Arms the drone if disarmed, then sets sbus_flyup_trigger.

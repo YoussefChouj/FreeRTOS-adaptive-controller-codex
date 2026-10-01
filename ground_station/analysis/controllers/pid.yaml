@@ -1,0 +1,23 @@
+# PID controller descriptor for Workflow B tuning campaigns (loaded by analysis/controller_descriptor.py).
+#
+# Each knob is written by CMD 0x01 PID_GAIN with idx = axis * 3 + gain (TASK/send_data.c:1474-1476);
+# axes 0..6 = pitchPID rollPID yawPID gyroxPID gyroyPID gyrozPID Z_ratePID, gains 0..2 = Kp Ki Kd.
+# The firmware accepts values 0..200 (ground_station/platform/firmware_contract.py:181).
+# Range: default x0.5 .. x2, searched on a log scale.
+#
+# Left out on purpose:
+#   - locxPID/locyPID/locxsPID/locysPID (position, velocity loops): CMD 0x01 has no axis for them.
+#   - Z_ratePID.Kp: its default 400 (API/pid.c:24) is above the 0x01 cap of 200.
+name: pid
+shadow_outputs: []
+knobs:
+  # attitude loop (outer)
+  - {symbol: pitchPID.Kp, cmd_id: 0x01, idx: 0,  default: 3.0, lo: 1.5, hi: 6.0,  scale: log}  # API/pid.c:15
+  - {symbol: rollPID.Kp,  cmd_id: 0x01, idx: 3,  default: 3.0, lo: 1.5, hi: 6.0,  scale: log}  # API/pid.c:16
+  - {symbol: pitchPID.Kd, cmd_id: 0x01, idx: 2,  default: 8,   lo: 4,   hi: 16,   scale: log}  # API/pid.c:15
+  - {symbol: rollPID.Kd,  cmd_id: 0x01, idx: 5,  default: 8,   lo: 4,   hi: 16,   scale: log}  # API/pid.c:16
+  # rate loop (inner)
+  - {symbol: gyroxPID.Kp, cmd_id: 0x01, idx: 9,  default: 5,   lo: 2.5, hi: 10,   scale: log}  # API/pid.c:19
+  - {symbol: gyroyPID.Kp, cmd_id: 0x01, idx: 12, default: 5,   lo: 2.5, hi: 10,   scale: log}  # API/pid.c:20
+  - {symbol: gyroxPID.Kd, cmd_id: 0x01, idx: 11, default: 10,  lo: 5,   hi: 20,   scale: log}  # API/pid.c:19
+  - {symbol: gyroyPID.Kd, cmd_id: 0x01, idx: 14, default: 10,  lo: 5,   hi: 20,   scale: log}  # API/pid.c:20

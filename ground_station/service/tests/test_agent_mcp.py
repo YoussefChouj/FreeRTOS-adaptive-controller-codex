@@ -43,7 +43,7 @@ SERVER_NAMES = [
     "get_state", "list_actions", "run_plan", "get_plan", "cancel_plan",
     "say", "wait_for_operator", "get_recording", "list_sessions",
     "analyze_session", "explain_symbol", "ui_navigate", "ui_highlight",
-    "file_finding",
+    "file_finding", "campaign_state", "campaign_pause", "campaign_land", "campaign_abort"
 ]
 
 
@@ -177,6 +177,27 @@ def test_mcp_explain_symbol(service, api):
         text = resp["result"]["content"][0]["text"]
         assert "s_ekf" in text
         assert "live value: (not streaming / unavailable)" in text
+    finally:
+        proc.stdin.close() if proc.stdin else None
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+
+def test_mcp_campaign_tools(service, api):
+    server, base = api
+    api_port = server.address[1]
+    repo_root = Path(__file__).resolve().parents[3]
+    proc = _connect(api_port, repo_root)
+    try:
+        resp = _request(proc, 30, "tools/call", {"name": "campaign_state", "arguments": {}})
+        state = json.loads(resp["result"]["content"][0]["text"])
+        assert state["status"] == "idle"
+        assert state["flights"] == []
+        # No run is active, so each control tool reaches the route and gets its 409.
+        for req_id, name in ((31, "campaign_pause"), (32, "campaign_land"), (33, "campaign_abort")):
+            resp = _request(proc, req_id, "tools/call", {"name": name, "arguments": {}})
+            assert json.loads(resp["result"]["content"][0]["text"]) == {"error": "no active run"}
     finally:
         proc.stdin.close() if proc.stdin else None
         try:
