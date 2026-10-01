@@ -1,4 +1,5 @@
 #include "rpm.h"
+#include "rpm_median.h"
 
 /**
  * @module  rpm.c

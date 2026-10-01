@@ -73,11 +73,6 @@ void     RPM_Init(void);
 void     RPM_EdgeISR(uint8_t ch);   /* called from EXTI handlers; ch 0..RPM_NUM_CH-1 */
 uint16_t RPM_Get(uint8_t ch);       /* averaged RPM, 0 if stopped or stale */
 
-/* ---- Median-of-5 helper (pure, testable) ----
- * Sorts p[0..4] by insertion sort and returns the median (p[2] after sort).
- * p[] must contain exactly 5 elements; copies into a local buffer first.
- * No division, no floats — ARMCC V5.06 C compatible. */
-uint32_t rpm_median5(const uint32_t p[5]);
 
 /* ---- Debug instrumentation: add these to the Keil Watch window ----
  * rpm_dbg_edges[ch]     : monotonic count of EVERY rising edge the ISR sees (never

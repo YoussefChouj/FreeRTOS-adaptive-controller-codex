@@ -1,14 +1,14 @@
 /*
- * Host test for rpm_median5 (BSP/rpm_median.c).
+ * Host test for rpm_median5 (BSP/rpm_median.h, header-inline).
  *
  * Build+run command:
- *   gcc -std=c99 -Wall -Wextra -IAPI/tests/stubs -IAPI -IBSP BSP/rpm_median.c API/tests/test_rpm_median.c -o /tmp/wp15/trm && /tmp/wp15/trm
+ *   gcc -std=c99 -Wall -Wextra -IBSP API/tests/test_rpm_median.c -o /tmp/wp15/trm && /tmp/wp15/trm
  */
 #include <stdio.h>
 #include <stdint.h>
 #include <assert.h>
 
-#include "rpm.h"
+#include "rpm_median.h"
 
 #define ABS(x) ((x) < 0 ? -(x) : (x))
 
