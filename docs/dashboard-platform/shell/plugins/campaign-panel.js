@@ -38,20 +38,20 @@
         if (!r.ok) {
           return r.json().catch(function() { return { error: 'HTTP ' + r.status }; })
             .then(function(data) {
-              showError(data.error || ('HTTP ' + r.status));
+              showPollError(data.error || ('HTTP ' + r.status));
               throw new Error('__HANDLED__');
             });
         }
         return r.json();
       })
       .then(function (data) {
-        showError('');
+        showPollError('');
         _state = data;
         renderState();
       })
       .catch(function (e) {
         if (e.message !== '__HANDLED__') {
-          showError(e.message);
+          showPollError(e.message);
         }
       });
   }
@@ -122,6 +122,14 @@
 
   function showError(msg) {
     var errEl = q('cp-error');
+    if (errEl) {
+      errEl.textContent = msg;
+      errEl.style.display = msg ? 'block' : 'none';
+    }
+  }
+
+  function showPollError(msg) {
+    var errEl = q('cp-poll-error');
     if (errEl) {
       errEl.textContent = msg;
       errEl.style.display = msg ? 'block' : 'none';
@@ -225,6 +233,7 @@
 
   function buildHTML() {
     var html = '<div id="cp-error" style="color:red;display:none;"></div>';
+    html += '<div id="cp-poll-error" style="color:red;display:none;"></div>';
 
     html += '<div>Campaign Path: <input type="text" id="cp-path" value=""></div>';
     html += '<div>Pack ID: <input type="text" id="cp-pack-id" value=""> <span id="cp-wait-msg"></span></div>';

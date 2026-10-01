@@ -105,6 +105,9 @@ function runHarness() {
       fetchCalls.push({ url, opts });
       
       if (url === '/api/campaign/state') {
+        if (ctx._stateFail) {
+          return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'Poll fail' }) });
+        }
         return Promise.resolve({
           ok: true, json: () => Promise.resolve(ctx._fakeState || { status: 'idle' })
         });
@@ -255,11 +258,23 @@ function runHarness() {
                     ctx._goFail = 503;
                     qGoBtn.dispatch('click');
                     setTimeout(() => {
-                      if (getEl('cp-error').style.display === 'block' && getEl('cp-error').textContent === 'Deps 503') passCheck('h', 'Errors shown');
-                      else throw new Error('Error not shown 503');
-                      
-                      // i. allow_agent_arm: confirm false -> no POST; confirm true -> POST
-                      fetchCalls = [];
+                      if (getEl('cp-error').style.display === 'block' && getEl('cp-error').textContent === 'Deps 503') {
+                        ctx._fakeState = { status: 'idle' };
+                        ctx._timerFn();
+                        setTimeout(() => {
+                          if (getEl('cp-error').style.display === 'block' && getEl('cp-error').textContent === 'Deps 503') {
+                            ctx._stateFail = true;
+                            ctx._timerFn();
+                            setTimeout(() => {
+                              if (getEl('cp-poll-error') && getEl('cp-poll-error').style.display === 'block' && getEl('cp-poll-error').textContent === 'Poll fail') {
+                                ctx._stateFail = false;
+                                ctx._timerFn();
+                                setTimeout(() => {
+                                  if (getEl('cp-poll-error').style.display === 'none') {
+                                    passCheck('h', 'Errors shown and separated');
+                                    
+                                    // i. allow_agent_arm: confirm false -> no POST; confirm true -> POST
+                                    fetchCalls = [];
                       confirmResult = false;
                       const armToggle = getEl('cp-allow-arm');
                       armToggle.checked = true;
@@ -304,6 +319,13 @@ function runHarness() {
                           }, 50);
                         }, 50);
                       }, 50);
+                                  } else throw new Error('Poll error not cleared');
+                                }, 50);
+                              } else throw new Error('Poll error not shown');
+                            }, 50);
+                          } else throw new Error('Action error cleared by poll');
+                        }, 50);
+                      } else throw new Error('Error not shown 503');
                     }, 50);
                   } else throw new Error('Error not shown 409');
                 }, 50);
