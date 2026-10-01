@@ -1,33 +1,47 @@
-import ctypes
-import subprocess
-import sys
+"""Lateral cascade sim of the f17 position hold, calibrated on the vofa logs (WP-10).
+
+One axis per run, at the firmware rates (TASK/StabilizerTask.c, yaw 0):
+  locxPID (position, cm) -> clamp +-120 -> locxsPID (velocity, cm/s)      100 Hz, cnt_loc >= 2 (~926, ~1346)
+  -> accel_to_lean_angles: Des = clamp(fast_atan(U/g) deg, +-15)          200 Hz (~1376-1389, ~1437)
+  -> rollPID (angle, deg) -> gyroxPID (rate, deg/s) -> torque ticks       200 Hz (~1055, ~1088, ~1404)
+Frames: x <-> roll, rollPID.Des = +atan(locxsPID.U/g), rollPID.FB = imu_rol (~672);
+y <-> pitch, pitchPID.Des = -atan(locysPID.U/g), pitchPID.FB = -imu_pit, mixer pitch = -gyroyPID.U.
+ComputePID is odd in (Des, FB, state), so the pitch axis runs as the roll axis on y' = -y; callers flip
+y-axis positions back to the log frame. Every array holds one column per run, so a whole ranking is
+one batched numpy loop.
+
+Plant per axis: torque ticks -> transport delay -> first-order motor lag -> rate = k * (torque - bias)
+integrated twice to angle; lateral accel = g * tan(angle - lean). `bias` is the torque the controllers
+must carry in hover, `lean` the controller-frame angle that gives zero lateral accel (the WP-9 trim).
+OF: the velocity feedback is the true velocity delayed and with white noise; the position feedback
+integrates that measured velocity (earth_x_ture), so the measured and true positions drift apart.
+MRAC is not mrac.c: it is a first-order offload, du_ad/dt = gyroxPID.U / tau_mrac, which moves the
+standing rate-loop output into u_ad (fitted to active15 by cascade_rank).
+"""
+from __future__ import annotations
+
+import dataclasses
+import pathlib
 from dataclasses import dataclass
 
 import numpy as np
+import pandas as pd
+from scipy import signal
 
-_libpid = None
-_libpid_attempted = False
+F32 = np.float32
+G = 980.665              # cm/s^2, GRAVITY_MSS*100 in accel_to_lean_angles
+RAD2DEG = 57.29578
+TICK = 0.005             # StabilizerTask period, 200 Hz (CalTrim_Init "10 s @ 200 Hz", ~327)
+LOC_DIV = 2              # position/velocity loops every 2nd tick (cnt_loc >= 2)
+SUB = 5                  # plant substeps per tick (1 ms)
+VEL_SP_MAX = 120.0       # cm/s, locxsPID.Des clamp
+LEAN_MAX = 15.0          # deg, gs_max_roll_deg / gs_max_pitch_deg in the f17 logs
+LOG_EVERY = 5            # sim outputs at 40 Hz (5-tick means)
 
-def load_pid_lib() -> ctypes.CDLL | None:
-    global _libpid, _libpid_attempted
-    if _libpid_attempted:
-        return _libpid
-    _libpid_attempted = True
-    try:
-        from ground_station.research.sim._ccore import build
-        lib_path = build.build_pid_lib()
-        if lib_path:
-            _libpid = ctypes.CDLL(str(lib_path))
-    except (OSError, subprocess.CalledProcessError, FileNotFoundError) as e:
-        print(f"cascade: C PID unavailable ({e}), using PyPid", file=sys.stderr)
-        _libpid = None
-    except ImportError as e:
-        print(f"cascade: C PID unavailable ({e}), using PyPid", file=sys.stderr)
-        _libpid = None
-    return _libpid
 
-@dataclass
+@dataclass(frozen=True)
 class PidRow:
+    """One API/pid.c PID_ROW, same column order."""
     Kp: float
     Ki: float
     Kd: float
@@ -38,703 +52,424 @@ class PidRow:
     SumEMax: float
     EMin: float
 
-ROWS_3AE4A23 = {
-    "pitchPID": PidRow(3.0, 0.02, 8, 200, 200, 10, 10, 120, 3),
-    "rollPID": PidRow(3.0, 0.02, 8, 200, 200, 10, 10, 120, 3),
-    "gyroxPID": PidRow(5, 0.01, 10, 300, 300, 20, 100, 1000, 2),
-    "gyroyPID": PidRow(5, 0.01, 10, 300, 300, 20, 100, 1000, 2),
-    "locxPID": PidRow(0.8, 0.01, 4.0, 300, 300, 20, 50, 200, 30),
-    "locyPID": PidRow(0.8, 0.01, 4.0, 300, 300, 20, 50, 200, 30),
-    "locxsPID": PidRow(3.0, 0, 6.0, 600, 600, 100, 100, 200, 10),
-    "locysPID": PidRow(3.0, 0, 6.0, 600, 600, 100, 100, 200, 10)
+    def with_(self, **kw) -> PidRow:
+        return dataclasses.replace(self, **kw)
+
+
+ROW_FIELDS = tuple(f.name for f in dataclasses.fields(PidRow))
+
+# API/pid.c on 3ae4a23 (lines ~19-33), roll axis; the pitch rows are identical.
+F0_ROWS = {
+    "pos": PidRow(0.8, 0.01, 4.0, 300, 300, 20, 50, 200, 30),   # locxPID
+    "vel": PidRow(3.0, 0.0, 6.0, 600, 600, 100, 100, 200, 10),  # locxsPID
+    "ang": PidRow(3.0, 0.02, 8, 200, 200, 10, 10, 120, 3),      # rollPID
+    "rate": PidRow(5, 0.01, 10, 300, 300, 20, 100, 1000, 2),    # gyroxPID
 }
 
-class CPidStruct(ctypes.Structure):
-    _fields_ = [
-        ("Des", ctypes.c_float),
-        ("FB", ctypes.c_float),
-        ("Kp", ctypes.c_float),
-        ("Ki", ctypes.c_float),
-        ("Kd", ctypes.c_float),
-        ("Up", ctypes.c_float),
-        ("Ui", ctypes.c_float),
-        ("Ud", ctypes.c_float),
-        ("E", ctypes.c_float),
-        ("PreE", ctypes.c_float),
-        ("SumE", ctypes.c_float),
-        ("U", ctypes.c_float),
-        ("UMax", ctypes.c_float),
-        ("UpMax", ctypes.c_float),
-        ("UiMax", ctypes.c_float),
-        ("UdMax", ctypes.c_float),
-        ("SumEMax", ctypes.c_float),
-        ("EMin", ctypes.c_float),
-        ("aw_mode", ctypes.c_int),
-        ("Kt", ctypes.c_float)
-    ]
 
-class CPid:
-    def __init__(self, row: PidRow):
-        self._struct = CPidStruct()
-        self._struct.Kp = row.Kp
-        self._struct.Ki = row.Ki
-        self._struct.Kd = row.Kd
-        self._struct.UMax = row.UMax
-        self._struct.UpMax = row.UpMax
-        self._struct.UiMax = row.UiMax
-        self._struct.UdMax = row.UdMax
-        self._struct.SumEMax = row.SumEMax
-        self._struct.EMin = row.EMin
-        self._struct.aw_mode = 0
-        self._struct.Kt = 0.0
-        
-    def step(self, des: float, fb: float) -> float:
-        self._struct.Des = des
-        self._struct.FB = fb
-        load_pid_lib().ComputePID(ctypes.byref(self._struct))
-        return self._struct.U
-        
-    @property
-    def Des(self) -> float: return self._struct.Des
-    @property
-    def FB(self) -> float: return self._struct.FB
-    @property
-    def E(self) -> float: return self._struct.E
-    @property
-    def SumE(self) -> float: return self._struct.SumE
-    @property
-    def U(self) -> float: return self._struct.U
-    @property
-    def Ui(self) -> float: return self._struct.Ui
-    @property
-    def Up(self) -> float: return self._struct.Up
-    @property
-    def Ud(self) -> float: return self._struct.Ud
-    @Des.setter
-    def Des(self, value): self._struct.Des = value
-    @FB.setter
-    def FB(self, value): self._struct.FB = value
-    @SumE.setter
-    def SumE(self, value): self._struct.SumE = value
+class Pid:
+    """ComputePID, AW_LEGACY branch (API/pid.c ~160-188), on float32 arrays with one column per run.
 
-def value_limit(x: float, small: float, big: float) -> float:
-    if x < small: return small
-    if x > big: return big
-    return x
+    The non-finite guards of ComputePID are left out: the sim never feeds NaN or |x| > 1e12.
+    `hold` (bool per run) freezes SumE, as an "integrate only while flying" gate would on the ground.
+    """
 
-class PyPid:
-    def __init__(self, row: PidRow):
-        self.Kp = row.Kp
-        self.Ki = row.Ki
-        self.Kd = row.Kd
-        self.UMax = row.UMax
-        self.UpMax = row.UpMax
-        self.UiMax = row.UiMax
-        self.UdMax = row.UdMax
-        self.SumEMax = row.SumEMax
-        self.EMin = row.EMin
-        
-        self.Des = 0.0
-        self.FB = 0.0
-        self.E = 0.0
-        self.PreE = 0.0
-        self.SumE = 0.0
-        self.U = 0.0
-        self.Up = 0.0
-        self.Ui = 0.0
-        self.Ud = 0.0
+    def __init__(self, rows: list[PidRow]):
+        p = np.array([[getattr(r, f) for f in ROW_FIELDS] for r in rows], dtype=F32).T
+        self.Kp, self.Ki, self.Kd, self.UMax, self.UpMax, self.UiMax, self.UdMax, self.SumEMax, self.EMin = p
+        z = np.zeros(len(rows), dtype=F32)
+        self.E, self.PreE, self.SumE, self.U, self.Up, self.Ui, self.Ud = (z.copy() for _ in range(7))
 
-    def step(self, des: float, fb: float) -> float:
-        self.Des = np.float32(des)
-        self.FB = np.float32(fb)
-        
-        if not np.isfinite(self.Des) or not np.isfinite(self.FB) or not np.isfinite(self.SumE) or not np.isfinite(self.PreE):
-            self.SumE = np.float32(0.0)
-            self.PreE = np.float32(0.0)
-            self.E = np.float32(0.0)
-            self.Up = np.float32(0.0)
-            self.Ui = np.float32(0.0)
-            self.Ud = np.float32(0.0)
-            self.U = np.float32(0.0)
-            return self.U
-            
-        self.E = np.float32(self.Des - self.FB)
-        if not np.isfinite(self.E):
-            self.SumE = np.float32(0.0)
-            self.PreE = np.float32(0.0)
-            self.E = np.float32(0.0)
-            self.Up = np.float32(0.0)
-            self.Ui = np.float32(0.0)
-            self.Ud = np.float32(0.0)
-            self.U = np.float32(0.0)
-            return self.U
-
-        if ((self.U <= self.UMax and self.E > 0) or (self.U >= -self.UMax and self.E < 0)) and abs(self.E) < self.EMin:
-            self.SumE = np.float32(self.SumE + self.E)
-            
-        self.SumE = np.float32(value_limit(self.SumE, -self.SumEMax, self.SumEMax))
-        self.Ui = np.float32(value_limit(np.float32(np.float32(self.Ki) * self.SumE), -self.UiMax, self.UiMax))
-        self.Up = np.float32(value_limit(np.float32(np.float32(self.Kp) * self.E), -self.UpMax, self.UpMax))
-        self.Ud = np.float32(value_limit(np.float32(np.float32(self.Kd) * np.float32(self.E - self.PreE)), -self.UdMax, self.UdMax))
-        
-        u_presat = np.float32(np.float32(self.Up + self.Ui) + self.Ud)
-        self.U = np.float32(value_limit(u_presat, -self.UMax, self.UMax))
-        
-        if not np.isfinite(self.U) or not np.isfinite(self.SumE):
-            self.SumE = np.float32(0.0)
-            self.U = np.float32(0.0)
-            
-        self.PreE = self.E
+    def step(self, des, fb, hold=None) -> np.ndarray:
+        e = np.asarray(des, dtype=F32) - np.asarray(fb, dtype=F32)
+        integ = (((self.U <= self.UMax) & (e > 0)) | ((self.U >= -self.UMax) & (e < 0))) & (np.abs(e) < self.EMin)
+        if hold is not None:
+            integ &= ~hold
+        sume = np.where(integ, self.SumE + e, self.SumE).astype(F32)
+        self.SumE = np.clip(sume, -self.SumEMax, self.SumEMax)
+        self.Ui = np.clip(self.Ki * self.SumE, -self.UiMax, self.UiMax)
+        self.Up = np.clip(self.Kp * e, -self.UpMax, self.UpMax)
+        self.Ud = np.clip(self.Kd * (e - self.PreE), -self.UdMax, self.UdMax)
+        self.U = np.clip(self.Up + self.Ui + self.Ud, -self.UMax, self.UMax)
+        self.E = e
+        self.PreE = e
         return self.U
 
-def make_pid(row: PidRow, prefer_c: bool = True):
-    if prefer_c and load_pid_lib() is not None:
-        return CPid(row)
-    return PyPid(row)
+
+def fast_atan(v):
+    """StabilizerTask.c fast_atan (~1430)."""
+    v2 = v * v
+    return v * (1.6867629106 + v2 * 0.4378497304) / (1.6867633134 + v2)
+
+
+@dataclass(frozen=True)
+class Plant:
+    k: float               # deg/s^2 per torque tick
+    tau_m: float           # s, motor/ESC first-order lag
+    delay: float           # s, torque command -> gyro transport delay
+    of_delay: float        # s, OF velocity delay
+    of_noise: float        # cm/s rms per 100 Hz OF sample
+    bias: float = 0.0      # torque ticks the controllers carry in hover
+    lean: float = 0.0      # deg, controller-frame angle with zero lateral accel
+    dist: float = 0.0      # cm/s^2 rms of a slow random lateral push (room air, battery sag)
+    dist_tau: float = 2.0  # s, its correlation time
+    gyro_lc: float = 0.0   # deg/s rms of a 25 Hz narrow-band dither on the gyro feedback (the logged rate limit cycle)
+
+    def with_(self, **kw) -> Plant:
+        return dataclasses.replace(self, **kw)
 
 
 @dataclass
-class AxisPlant:
-    gain: float      # rad/s^2 per tick
-    tau_m: float     # motor lag
-    delay: float     # pure delay in s
-    
-    # OF model
-    of_delay: float  # seconds
-    of_noise_std: float
-    
-    # disturbances
-    torque_bias: float = 0.0 # ticks
-    lean_offset: float = 0.0 # degrees
-    push_accel: float = 0.0  # cm/s^2 (constant or ramp)
-    
-class CascadeSim:
-    def __init__(self, config, dt=0.005, seed=42):
-        self.dt = dt
-        self.rng = np.random.RandomState(seed)
-        self.config = config
+class Run:
+    rows: dict[str, PidRow]
+    plant: Plant
+    axis: int = 0                    # 0 = x/roll, 1 = y/pitch
+    rep: int = 0                     # noise replicate; runs with the same (axis, rep) share the noise
+    sp: np.ndarray | None = None     # position setpoint per tick, cm (controller frame); None = hold 0
+    vff: np.ndarray | None = None    # velocity feed-forward per tick into locxsPID.Des, cm/s
+    aff: np.ndarray | None = None    # accel feed-forward per tick added to locxsPID.U, cm/s^2
+    trim_ff: float = 0.0             # deg added to the angle setpoint (attitude trim)
+    mrac_tau: float = 0.0            # s; 0 = PID only
+    mrac_t0: float = 0.0             # s, u_ad starts integrating (output_injection_on rise)
+    bias_step: tuple[float, float] | None = None   # (t s, bias after) torque step
 
-def gen_square_traj(dt=0.005, speed=0.2):
-    # 1 m square, 0.2 m/s. 
-    # Side 1: (0,0) -> (1,0) (5s)
-    # Side 2: (1,0) -> (1,1) (5s)
-    # Side 3: (1,1) -> (0,1) (5s)
-    # Side 4: (0,1) -> (0,0) (5s)
-    # total 20s. Waypoint every 0.1m doesn't matter for ideal continuous setpoint, 
-    # but let's just make it a continuous track.
-    T = int(20 / dt)
-    traj = []
-    for i in range(T):
-        t = i * dt
-        if t < 5.0:
-            x, y = t * speed, 0.0
-            vx, vy = speed, 0.0
-        elif t < 10.0:
-            x, y = 1.0, (t-5) * speed
-            vx, vy = 0.0, speed
-        elif t < 15.0:
-            x, y = 1.0 - (t-10) * speed, 1.0
-            vx, vy = -speed, 0.0
-        else:
-            x, y = 0.0, 1.0 - (t-15) * speed
-            vx, vy = 0.0, -speed
-        # x, y in meters. The PIDs operate in cm.
-        traj.append((x*100, y*100, vx*100, vy*100))
-    return traj
 
-def gen_circle_traj(dt=0.005, speed=0.3):
-    # 0.5 m radius circle at 0.3 m/s -> omega = speed / radius = 0.3 / 0.5 = 0.6 rad/s
-    omega = 0.6
-    r = 50.0 # cm
-    duration = 2 * np.pi / omega
-    T = int(duration / dt)
-    traj = []
-    for i in range(T):
-        t = i * dt
-        # start at (r, 0)
-        x = r * np.cos(omega * t)
-        y = r * np.sin(omega * t)
-        vx = -r * omega * np.sin(omega * t)
-        vy = r * omega * np.cos(omega * t)
-        # shift so it starts at 0,0? No, let it be. Or shift to (0,0) at t=0:
-        # x = r * np.cos(omega * t) - r
-        traj.append((x - r, y, vx, vy))
-    return traj
-
-class OFModel:
-    def __init__(self, rng, delay_s, noise_std, dt):
-        self.delay_steps = int(delay_s / dt)
-        self.noise_std = noise_std
-        self.rng = rng
-        self.buf_x = []
-        self.buf_y = []
-    def step(self, true_vx, true_vy):
-        noise_x = self.rng.normal(0, self.noise_std)
-        noise_y = self.rng.normal(0, self.noise_std)
-        self.buf_x.append(true_vx)
-        self.buf_y.append(true_vy)
-        if len(self.buf_x) > self.delay_steps:
-            return self.buf_x.pop(0) + noise_x, self.buf_y.pop(0) + noise_y
-        return self.buf_x[0] + noise_x, self.buf_y[0] + noise_y
-def simulate(config: dict, scenario: dict, duration_s: float, seed: int = 42) -> dict:
-    dt = 0.005 # 5 ms tick
-    rng = np.random.RandomState(seed)
-    
-    # Init PIDs
-    rows = config["rows"]
-    rollPID = make_pid(rows["rollPID"])
-    pitchPID = make_pid(rows["pitchPID"])
-    gyroxPID = make_pid(rows["gyroxPID"])
-    gyroyPID = make_pid(rows["gyroyPID"])
-    locxPID = make_pid(rows["locxPID"])
-    locyPID = make_pid(rows["locyPID"])
-    locxsPID = make_pid(rows["locxsPID"])
-    locysPID = make_pid(rows["locysPID"])
-    
-    # State
-    pos_x, pos_y = 0.0, 0.0
-    vel_x, vel_y = 0.0, 0.0
-    roll_ang, pitch_ang = 0.0, 0.0
-    roll_rate, pitch_rate = 0.0, 0.0
-    
-    # We will simulate using the K/(s(1+s/p)) plant. 
-    # Let's get the plant parameters from calibration or defaults.
-    # We will pass these via scenario or config. Let's use config.
-    gain_roll = config.get("gain_roll", 165.0 / 1170.0) # approx
-    tau_roll = config.get("tau_roll", 1.0 / 19.8)
-    delay_roll = config.get("delay_roll", 0.015)
-    gain_pitch = config.get("gain_pitch", 185.0 / 1170.0)
-    tau_pitch = config.get("tau_pitch", 1.0 / 16.3)
-    delay_pitch = config.get("delay_pitch", 0.012)
-    
-    of_delay = config.get("of_delay", 0.060)
-    of_noise = config.get("of_noise", 1.0)
-    of = OFModel(rng, of_delay, of_noise, dt)
-    
-    # Plant buffers for delay
-    roll_torque_buf = [0.0] * max(1, int(delay_roll / dt))
-    pitch_torque_buf = [0.0] * max(1, int(delay_pitch / dt))
-    
-    # MRAC
-    mrac = config.get("mrac", False)
-    tau_mrac = config.get("tau_mrac", 0.1)
-    mrac_u_roll = 0.0
-    mrac_u_pitch = 0.0
-    
-    # Disturbances
-    lean_offset_roll = scenario.get("lean_offset_roll", 0.0)
-    lean_offset_pitch = scenario.get("lean_offset_pitch", 0.0)
-    torque_bias_roll = scenario.get("torque_bias_roll", 0.0)
-    torque_bias_pitch = scenario.get("torque_bias_pitch", 0.0)
-    torque_step_time = scenario.get("torque_step_time", 999999.0)
-    push_ramp = scenario.get("push_ramp", (0.0, 0.0))
-    traj = scenario.get("trajectory", None)
-    
-    N = int(duration_s / dt)
-    if traj is not None:
-        N = min(N, len(traj))
-        
-    out = {
-        "t": np.zeros(N),
-        "pos_x": np.zeros(N), "pos_y": np.zeros(N),
-        "vel_x": np.zeros(N), "vel_y": np.zeros(N),
-        "roll": np.zeros(N), "pitch": np.zeros(N),
-        "roll_rate": np.zeros(N), "pitch_rate": np.zeros(N),
-        "roll_u": np.zeros(N), "pitch_u": np.zeros(N),
-        "gyrox_u": np.zeros(N), "gyroy_u": np.zeros(N),
-        "locx_u": np.zeros(N), "locy_u": np.zeros(N),
-        "locxs_u": np.zeros(N), "locys_u": np.zeros(N),
-        "tar_roll": np.zeros(N), "tar_pitch": np.zeros(N)
-    }
-    
-    for i in range(N):
-        t = i * dt
-        out["t"][i] = t
-        
-        # 1. Update setpoints from trajectory
-        if traj is not None:
-            sp_x, sp_y, sp_vx, sp_vy = traj[i]
-        else:
-            sp_x, sp_y, sp_vx, sp_vy = 0.0, 0.0, 0.0, 0.0
-            
-        # 2. Sensor reading
-        # of.step returns (vel_x, vel_y) delayed and noisy.
-        fb_of_vx, fb_of_vy = of.step(vel_x, vel_y)
-        
-        # locxPID tracks Right (Y). locyPID tracks -Forward (-X).
-        fb_x = pos_y
-        fb_y = -pos_x
-        fb_vx = fb_of_vy
-        fb_vy = -fb_of_vx
-        
-        # 3. Outer loops (100 Hz = every 2 ticks)
-        # We'll just run them at 100 Hz
-        if i % 2 == 0:
-            if config.get("freeze_outer", False):
-                pass
-                
-            # Setpoints in World frame. traj gives (sp_x, sp_y) which are Forward, Right.
-            # Convert to PID frame: sp_x_pid = Right, sp_y_pid = -Forward
-            sp_x_pid = sp_y
-            sp_y_pid = -sp_x
-            sp_vx_pid = sp_vy
-            sp_vy_pid = -sp_vx
-            
-            locx_u = locxPID.step(sp_x_pid, fb_x)
-            locy_u = locyPID.step(sp_y_pid, fb_y)
-            
-            locxs_sp = locx_u
-            locys_sp = locy_u
-            
-            if config.get("vel_ff", False):
-                locxs_sp += sp_vx_pid
-                locys_sp += sp_vy_pid
-                
-            locxs_u = locxsPID.step(locxs_sp, fb_vx)
-            locys_u = locysPID.step(locys_sp, fb_vy)
-            
-            if config.get("acc_ff", False) and i > 0 and traj is not None:
-                acc_x = (sp_vx - traj[i-1][2]) / (2*dt)
-                acc_y = (sp_vy - traj[i-1][3]) / (2*dt)
-                # Map to PID frame
-                acc_x_pid = acc_y
-                acc_y_pid = -acc_x
-                locxs_u += acc_x_pid
-                locys_u += acc_y_pid
-                
-            # accel to lean
-            des_pitch = -locys_u
-            des_roll = -locxs_u
-            
-            # tar_pitch = atan(des_pitch / 980) in degrees
-            tar_pitch = np.degrees(np.arctan(des_pitch / 980.0))
-            tar_roll = np.degrees(np.arctan(-des_roll / 980.0))
-            
-            tar_pitch = np.clip(tar_pitch, -15.0, 15.0)
-            tar_roll = np.clip(tar_roll, -15.0, 15.0)
-            
-            tar_pitch += config.get("trim_ff_pitch", 0.0)
-            tar_roll += config.get("trim_ff_roll", 0.0)
-            
-        # 4. Angle loops (200 Hz)
-        # Attitude FB includes lean offset (sensor misalignment)
-        fb_pitch = -pitch_ang + lean_offset_pitch
-        fb_roll = roll_ang + lean_offset_roll
-        
-        pitch_u = pitchPID.step(tar_pitch, fb_pitch)
-        roll_u = rollPID.step(tar_roll, fb_roll)
-        
-        # 5. Rate loops (200 Hz)
-        fb_pitch_rate = -pitch_rate
-        fb_roll_rate = roll_rate
-        gyroy_u = gyroyPID.step(pitch_u, fb_pitch_rate)
-        gyrox_u = gyroxPID.step(roll_u, fb_roll_rate)
-        
-        roll_torque = gyrox_u
-        pitch_torque = -gyroy_u
-        
-        if mrac:
-            roll_torque += mrac_u_roll
-            pitch_torque -= mrac_u_pitch # pitch torque mixer is -u
-            
-        # 6. Plant
-        tb_roll = torque_bias_roll
-        tb_pitch = torque_bias_pitch
-        if t >= torque_step_time:
-            tb_roll *= scenario.get("tb_mult_roll", 1.0)
-            tb_pitch *= scenario.get("tb_mult_pitch", 1.0)
-            
-        roll_torque_buf.append(roll_torque - tb_roll)
-        pitch_torque_buf.append(pitch_torque - tb_pitch)
-        
-        eff_roll_torque = roll_torque_buf.pop(0)
-        eff_pitch_torque = pitch_torque_buf.pop(0)
-        
-        # angular accel = K * torque. lag tau = 1/pole.
-        # So d(rate)/dt = (K * torque - rate) / tau
-        roll_accel = (gain_roll * eff_roll_torque - roll_rate) / tau_roll
-        pitch_accel = (gain_pitch * eff_pitch_torque - pitch_rate) / tau_pitch
-        
-        roll_rate += roll_accel * dt
-        pitch_rate += pitch_accel * dt
-        
-        roll_ang += roll_rate * dt
-        pitch_ang += pitch_rate * dt
-        
-        # Translational Plant
-        # Push ramp
-        push = push_ramp[0]
-        if push_ramp[1] != push_ramp[0]:
-            push += (push_ramp[1] - push_ramp[0]) * min(1.0, t / duration_s)
-            
-        # acc_x = -g * tan(pitch) + push
-        # acc_y = g * tan(roll)
-        acc_x = -980.0 * np.tan(np.radians(pitch_ang)) + push
-        acc_y = 980.0 * np.tan(np.radians(roll_ang))
-        
-        vel_x += acc_x * dt
-        vel_y += acc_y * dt
-        
-        pos_x += vel_x * dt
-        pos_y += vel_y * dt
-        
-        # MRAC update
-        if mrac:
-            # simple torque bias estimator
-            # true bias is tb_roll. estimator lags.
-            mrac_u_roll += (tb_roll - mrac_u_roll) * (dt / tau_mrac)
-            mrac_u_pitch += (tb_pitch - mrac_u_pitch) * (dt / tau_mrac)
-            
-        # 7. Record
-        out["pos_x"][i], out["pos_y"][i] = pos_x, pos_y
-        out["vel_x"][i], out["vel_y"][i] = vel_x, vel_y
-        out["roll"][i], out["pitch"][i] = roll_ang, pitch_ang
-        out["roll_rate"][i], out["pitch_rate"][i] = roll_rate, pitch_rate
-        out["roll_u"][i], out["pitch_u"][i] = roll_u, pitch_u
-        out["gyrox_u"][i], out["gyroy_u"][i] = gyrox_u, gyroy_u
-        out["locx_u"][i], out["locy_u"][i] = locx_u, locy_u
-        out["locxs_u"][i], out["locys_u"][i] = locxs_u, locys_u
-        out["tar_roll"][i], out["tar_pitch"][i] = tar_roll, tar_pitch
-        
+def _per_tick(arrs: list[np.ndarray | None], ticks: int) -> np.ndarray:
+    out = np.zeros((ticks, len(arrs)))
+    for j, a in enumerate(arrs):
+        if a is not None:
+            a = np.asarray(a, dtype=float)
+            out[:, j] = a[:ticks] if len(a) >= ticks else np.r_[a, np.full(ticks - len(a), a[-1])]
     return out
-import pathlib
-
-import pandas as pd
 
 
-def load_flight(logs_dir, name):
-    """
-    Load CSV logs and merge them onto a common 5 ms time base.
-    """
-    df_merged = None
-    for slot in range(4):
-        csv_path = pathlib.Path(logs_dir) / f"{name}.slot{slot}.csv"
-        if not csv_path.exists():
+SIM_OUT = ("p", "pfb", "sp", "th", "w", "ang_des", "ang_u", "rate_u", "u_ad", "vel_u", "vfb", "pos_ui", "ang_ui",
+           "rate_ui")
+
+
+def simulate(runs: list[Run], duration: float, seed: int = 0, log_every: int = LOG_EVERY,
+             keep: tuple[str, ...] = SIM_OUT) -> dict[str, np.ndarray]:
+    """Run all `runs` for `duration` s; returns arrays (samples, runs) of `log_every`-tick means, plus 't'.
+
+    Means, not point samples: the rate loop limit-cycles near the tick rate and point samples alias it."""
+    n = len(runs)
+    ticks = int(round(duration / TICK))
+    cols = np.arange(n)
+    pos, vel, ang, rate = (Pid([r.rows[k] for r in runs]) for k in ("pos", "vel", "ang", "rate"))
+    pp = {f: np.array([getattr(r.plant, f) for r in runs], dtype=float) for f in Plant.__dataclass_fields__}
+    h = TICK / SUB
+    a_m = 1.0 - np.exp(-h / pp["tau_m"])
+    d_sub = np.round(pp["delay"] / h).astype(int)
+    ubuf = np.zeros((d_sub.max() + 1, n))
+    d_of = np.round(pp["of_delay"] / (TICK * LOC_DIV)).astype(int)
+    vbuf = np.zeros((d_of.max() + 1, n))
+    rng = np.random.default_rng(seed)
+    streams = [2 * r.rep + r.axis for r in runs]
+    n_st = max(streams) + 1
+    noise = rng.standard_normal((ticks // LOC_DIV + 1, n_st))[:, streams] * pp["of_noise"]
+    # slow lateral push: Ornstein-Uhlenbeck accel, rms `dist`, time constant `dist_tau`, updated at 100 Hz
+    dt_loc = TICK * LOC_DIV
+    d_a = np.exp(-dt_loc / pp["dist_tau"])
+    d_kick = rng.standard_normal((ticks // LOC_DIV + 1, n_st))[:, streams] * pp["dist"] * np.sqrt(1.0 - d_a ** 2)
+    push = d_kick[0] / np.sqrt(1.0 - d_a ** 2)
+    lc_amp = pp["gyro_lc"] * np.sqrt(2.0)
+    lc_phase = rng.uniform(0, 2 * np.pi, n_st)[streams]
+    lc_walk = rng.standard_normal((ticks, n_st))[:, streams] * 0.3
+    sp = _per_tick([r.sp for r in runs], ticks)
+    vff = _per_tick([r.vff for r in runs], ticks)
+    aff = _per_tick([r.aff for r in runs], ticks)
+    trim = np.array([r.trim_ff for r in runs])
+    mtau = np.array([r.mrac_tau for r in runs])
+    m_gain = np.where(mtau > 0, TICK / np.where(mtau > 0, mtau, 1.0), 0.0)
+    m_t0 = np.array([r.mrac_t0 for r in runs])
+    t_step = np.array([r.bias_step[0] if r.bias_step else np.inf for r in runs])
+    b_after = np.array([r.bias_step[1] if r.bias_step else r.plant.bias for r in runs])
+
+    th = np.zeros(n)
+    w = np.zeros(n)
+    tm = pp["bias"].copy()            # start in torque balance: integrators empty, motors carrying the bias
+    v = np.zeros(n)
+    p = np.zeros(n)
+    pfb = np.zeros(n)
+    uad = np.zeros(n)
+    vfb = np.zeros(n)
+    vel_u = np.zeros(n)
+    ubuf[:] = pp["bias"]
+    th[:] = pp["lean"]
+    n_out = ticks // log_every
+    out = {k: np.zeros((n_out, n)) for k in keep}
+    acc = {k: np.zeros(n) for k in keep}
+    for i in range(ticks):
+        if i % LOC_DIV == 0:
+            j = i // LOC_DIV
+            push = push * d_a + d_kick[j]
+            vbuf[j % len(vbuf)] = v
+            vfb = vbuf[(j - d_of) % len(vbuf), cols] + noise[j]
+            pfb = pfb + vfb * dt_loc
+            pos.step(sp[i], pfb)
+            vel.step(np.clip(pos.U, -VEL_SP_MAX, VEL_SP_MAX) + vff[i], vfb)
+            vel_u = vel.U + aff[i]
+        des = np.clip(fast_atan(vel_u / G) * RAD2DEG, -LEAN_MAX, LEAN_MAX) + trim
+        ang.step(des, th)
+        lc_phase = lc_phase + 2 * np.pi * 25.0 * TICK + lc_walk[i]
+        rate.step(ang.U, w + lc_amp * np.sin(lc_phase))
+        u_cmd = rate.U + uad
+        uad = uad + np.where(i * TICK >= m_t0, m_gain, 0.0) * rate.U
+        bias = np.where(i * TICK >= t_step, b_after, pp["bias"])
+        for s in range(SUB):
+            q = i * SUB + s
+            ubuf[q % len(ubuf)] = u_cmd
+            tm += (ubuf[(q - d_sub) % len(ubuf), cols] - tm) * a_m
+            w += h * pp["k"] * (tm - bias)
+            th += h * w
+            v += h * (G * np.tan((th - pp["lean"]) / RAD2DEG) + push)
+            p += h * v
+        vals = {"p": p, "pfb": pfb, "sp": sp[i], "th": th, "w": w, "ang_des": des, "ang_u": ang.U, "rate_u": rate.U,
+                "u_ad": uad, "vel_u": vel_u, "vfb": vfb, "pos_ui": pos.Ui, "ang_ui": ang.Ui, "rate_ui": rate.Ui}
+        for k in keep:
+            acc[k] += vals[k]
+        if i % log_every == log_every - 1:
+            o = i // log_every
+            for k in keep:
+                out[k][o] = acc[k] / log_every
+                acc[k][:] = 0.0
+    out["t"] = (np.arange(n_out) * log_every + (log_every - 1) / 2.0) * TICK
+    return out
+
+
+# --------------------------------------------------------------------------- scenarios
+
+def waypoint_track(points_cm: np.ndarray, speed: float, hold_s: float) -> tuple[np.ndarray, np.ndarray]:
+    """Waypoints at constant speed, linearly interpolated in time per tick as API/wfb_traj.c does.
+
+    Returns (pos, vel) per tick, shape (ticks, 2), cm and cm/s, then `hold_s` at the last point."""
+    seg = np.linalg.norm(np.diff(points_cm, axis=0), axis=1)
+    t_pts = np.r_[0.0, np.cumsum(seg / (speed * 100.0))]
+    t = np.arange(int(round((t_pts[-1] + hold_s) / TICK))) * TICK
+    pos = np.stack([np.interp(t, t_pts, points_cm[:, a]) for a in range(2)], 1)
+    k = np.clip(np.searchsorted(t_pts, t, side="right") - 1, 0, len(seg) - 1)
+    vel = np.diff(points_cm, axis=0)[k] / (seg[k] / (speed * 100.0))[:, None]
+    vel[t >= t_pts[-1]] = 0.0
+    return pos, vel
+
+
+def square_points(side_m: float = 1.0, step_m: float = 0.1) -> np.ndarray:
+    m = int(round(side_m / step_m))
+    s = np.linspace(0.0, side_m, m + 1)[1:] * 100.0
+    e, z = np.full(m, side_m * 100.0), np.zeros(m)
+    legs = [np.stack(a, 1) for a in ((s, z), (e, s), (e - s, e), (z, e - s))]
+    return np.vstack([np.zeros((1, 2))] + legs)
+
+
+def circle_points(radius_m: float = 0.5, step_m: float = 0.1) -> np.ndarray:
+    m = int(np.ceil(2 * np.pi * radius_m / step_m))
+    a = np.linspace(0.0, 2 * np.pi, m + 1)
+    r = radius_m * 100.0
+    return np.stack([r * np.sin(a), r - r * np.cos(a)], 1)
+
+
+def accel_ff(vel: np.ndarray, tau: float = 0.2) -> np.ndarray:
+    """Accel feed-forward: derivative of the first-order-filtered velocity feed-forward."""
+    a = 1.0 - np.exp(-TICK / tau)
+    vf = signal.lfilter([a], [1.0, a - 1.0], vel, axis=0, zi=np.zeros((1, vel.shape[1])) if vel.ndim > 1 else [0.0])[0]
+    return np.gradient(vf, TICK, axis=0)
+
+
+# --------------------------------------------------------------------------- metrics
+
+def osc(x: np.ndarray, fs: float, fmin: float = 0.2, fmax: float = 3.0) -> tuple[float, float]:
+    """Dominant oscillation in [fmin, fmax] Hz: (frequency, amplitude = sqrt(2 * band power near the peak))."""
+    x = np.asarray(x, dtype=float)
+    x = x[np.isfinite(x)]
+    if len(x) < 64:
+        return np.nan, np.nan
+    f, pxx = signal.welch(x - x.mean(), fs, nperseg=min(len(x), int(20 * fs)), detrend="linear")
+    band = (f >= fmin) & (f <= fmax)
+    if not band.any():
+        return np.nan, np.nan
+    fpk = f[band][np.argmax(pxx[band])]
+    near = band & (np.abs(f - fpk) <= max(0.15, f[1] - f[0]))
+    return float(fpk), float(np.sqrt(2.0 * np.sum(pxx[near]) * (f[1] - f[0])))
+
+
+def att_lag_ms(des: np.ndarray, fb: np.ndarray, fs: float, fmin: float = 0.3, fmax: float = 1.5) -> float:
+    """Attitude lag Des -> FB: phase of the cross spectrum over [fmin, fmax] Hz as a time delay, ms."""
+    if not (np.all(np.isfinite(des)) and np.all(np.isfinite(fb))):
+        return np.nan
+    nper = min(len(des), int(20 * fs))
+    f, pxy = signal.csd(des - des.mean(), fb - fb.mean(), fs, nperseg=nper, detrend="linear")
+    band = (f >= fmin) & (f <= fmax)
+    wgt = np.abs(pxy[band])
+    if not wgt.sum() > 0:
+        return np.nan
+    lag = -np.angle(pxy[band]) / (2 * np.pi * f[band])
+    return float(1000.0 * np.average(lag, weights=wgt))
+
+
+def settle_time(err: np.ndarray, t: np.ndarray, t0: float, tol: float) -> float:
+    """Time after t0 until |err| stays below tol; nan if it never does."""
+    after = t >= t0
+    bad = np.flatnonzero(after & (np.abs(err) >= tol))
+    if len(bad) == 0:
+        return 0.0
+    last = bad[-1]
+    return float(t[last] - t0) if last + 1 < len(t) else np.nan
+
+
+def sim_stats(out: dict[str, np.ndarray], t_from: float = 10.0) -> dict[str, np.ndarray]:
+    """The flight_stats targets of every sim column (controller frame, position from the FB like the logs)."""
+    m = out["t"] >= t_from
+    fs = 1.0 / (TICK * LOG_EVERY)
+    e = (out["sp"] - out["pfb"])[m]
+    res = {"e": (out["ang_des"] - out["th"])[m].mean(0), "fb": out["th"][m].mean(0), "u": out["ang_u"][m].mean(0),
+           "rate_u": out["rate_u"][m].mean(0), "u_ad": out["u_ad"][m].mean(0), "pos_e": e.mean(0),
+           "pos_rms": e.std(0), "vel_u": out["vel_u"][m].mean(0)}
+    res["rate_ui"] = res["rate_u"] - F0_ROWS["rate"].Kp * res["u"]
+    sw = np.array([osc(out["th"][m, j], fs) for j in range(e.shape[1])])
+    res["sway_hz"], res["sway_amp"] = sw[:, 0], sw[:, 1]
+    res["lag_ms"] = np.array([att_lag_ms(out["ang_des"][m, j], out["th"][m, j], fs) for j in range(e.shape[1])])
+    return res
+
+
+# --------------------------------------------------------------------------- logs
+
+def load_flight(logs_dir, name: str) -> dict[int, pd.DataFrame]:
+    """Slot CSVs of one flight, keyed by slot, with t = t_src_ms / 1000; header-only CSVs skipped."""
+    slots = {}
+    for s in range(4):
+        path = pathlib.Path(logs_dir) / f"{name}.slot{s}.csv"
+        if not path.exists():
             continue
-        try:
-            df_slot = pd.read_csv(csv_path)
-            if len(df_slot) <= 1:
-                continue
-            df_slot = df_slot.drop_duplicates('t_src_ms', keep='last').sort_values('t_src_ms')
-            if df_merged is None:
-                df_slot['t_5ms'] = (df_slot['t_src_ms'] // 5) * 5
-                df_merged = df_slot.drop_duplicates('t_5ms', keep='last').drop(columns=['t_5ms'])
-            else:
-                df_merged = pd.merge_asof(df_merged, df_slot, on='t_src_ms', direction='nearest', tolerance=20, suffixes=('', '_dup'))
-                df_merged = df_merged.loc[:, ~df_merged.columns.str.endswith('_dup')]
-        except (pd.errors.EmptyDataError, FileNotFoundError, KeyError):
-            pass
-    if df_merged is not None:
-        df_merged.sort_values('t_src_ms', inplace=True)
-        df_merged.ffill(inplace=True)
-        df_merged.bfill(inplace=True)
-        df_merged.reset_index(drop=True, inplace=True)
-    return df_merged
+        df = pd.read_csv(path)
+        if len(df) < 2 or "t_src_ms" not in df:
+            continue
+        df.columns = [c.replace("Ctrler.", "") for c in df.columns]
+        df = df.drop_duplicates("t_src_ms").sort_values("t_src_ms").reset_index(drop=True)
+        df["t"] = df["t_src_ms"] / 1000.0
+        slots[s] = df
+    return slots
 
-def hover_mask(df):
-    if df is None or len(df) == 0: return slice(0, 0)
-    z_col = 'Ctrler.Z_posPID.FB'
-    if z_col not in df.columns: return df.index > -1
-    p95 = df[z_col].quantile(0.95)
-    mask = (df[z_col] > 0.6 * p95).values.copy()
-    valid_idx = np.where(mask)[0]
-    if len(valid_idx) == 0: return mask
-    first, last = valid_idx[0], valid_idx[-1]
-    skip = int((last - first) * 0.15)
-    mask[:first + skip] = False
-    mask[last + 1:] = False
-    return mask
 
-def log_targets(df):
-    mask = hover_mask(df)
-    df_hover = df[mask]
-    if len(df_hover) == 0: return {}
-    
-    roll_err = (df_hover['Ctrler.rollPID.Des'] - df_hover['Ctrler.rollPID.FB']).mean()
-    pitch_err = (df_hover['Ctrler.pitchPID.Des'] - df_hover['Ctrler.pitchPID.FB']).mean()
-    roll_u = df_hover['Ctrler.rollPID.U'].mean()
-    pitch_u = df_hover['Ctrler.pitchPID.U'].mean()
-    gyrox_u = df_hover['Ctrler.gyroxPID.U'].mean()
-    gyroy_u = df_hover['Ctrler.gyroyPID.U'].mean()
-    
-    pos_err_x = df_hover['Ctrler.locxPID.Des'] - df_hover['Ctrler.locxPID.FB']
-    pos_err_y = df_hover['Ctrler.locyPID.Des'] - df_hover['Ctrler.locyPID.FB']
-    pos_err_x_rms = np.sqrt((pos_err_x**2).mean())
-    pos_err_y_rms = np.sqrt((pos_err_y**2).mean())
-    
-    lean_roll = df_hover['Ctrler.rollPID.FB'].mean()
-    lean_pitch = df_hover['Ctrler.pitchPID.FB'].mean()
-    
-    roll_fb = df_hover['Ctrler.rollPID.FB'].values
-    sway_freq = np.nan
-    if len(roll_fb) > 100:
-        dt = (df_hover['t_src_ms'].iloc[-1] - df_hover['t_src_ms'].iloc[0]) / 1000.0 / len(roll_fb)
-        if dt > 0:
-            fs = 1.0 / dt
-            try:
-                from scipy import signal
-                f, pxx = signal.welch(roll_fb, fs, nperseg=min(len(roll_fb), 4096))
-            except ImportError:
-                n = min(len(roll_fb), 4096)
-                f = np.fft.rfftfreq(n, d=dt)
-                pxx = np.abs(np.fft.rfft(roll_fb[:n]))**2
-            mask_f = (f >= 0.2) & (f <= 3.0)
-            if np.any(mask_f):
-                sway_freq = f[mask_f][np.argmax(pxx[mask_f])]
-                
-    return {
-        "roll_err": roll_err, "pitch_err": pitch_err,
-        "roll_u": roll_u, "pitch_u": pitch_u,
-        "gyrox_u": gyrox_u, "gyroy_u": gyroy_u,
-        "pos_err_x_rms": pos_err_x_rms, "pos_err_y_rms": pos_err_y_rms,
-        "lean_roll": lean_roll, "lean_pitch": lean_pitch,
-        "sway_freq": sway_freq
-    }
-def calibrate(logs_dir, quick=False):
-    import copy
-    
-    print("=== Calibration ===")
-    
-    # 1. Load shadow14
-    df14 = load_flight(logs_dir, "f17_hover_shadow14_removed_white_floor_covering_batery_type_2")
-    if df14 is None:
-        print("missing f17_hover_shadow14_removed_white_floor_covering_batery_type_2")
-        return {"rows": ROWS_3AE4A23}
-    t14 = log_targets(df14)
-    
-    df4 = load_flight(logs_dir, "f17_hover_shadow4_removed_white_floor_covering_batery_type_2")
-    if df4 is None:
-        print("missing f17_hover_shadow4_removed_white_floor_covering_batery_type_2")
-        t4 = None
-    else:
-        t4 = log_targets(df4)
-        
-    config = {
-        "rows": dict(ROWS_3AE4A23),
-        "gain_roll": 165.0 / 1170.0,
-        "tau_roll": 1.0 / 19.8,
-        "delay_roll": 0.015,
-        "gain_pitch": 185.0 / 1170.0,
-        "tau_pitch": 1.0 / 16.3,
-        "delay_pitch": 0.012,
-        "of_delay": 0.060,
-        "of_noise": 0.2,
-        "mrac": False,
-        "tau_mrac": 0.5
-    }
-    
-    def sim_metrics(cfg, targets, duration=10.0):
-        scene = {
-            "lean_offset_roll": targets["lean_roll"],
-            "lean_offset_pitch": targets["lean_pitch"],
-            "torque_bias_roll": targets["gyrox_u"],
-            "torque_bias_pitch": -targets["gyroy_u"],
-        }
-        res = simulate(cfg, scene, duration)
-        idx = int(0.5 * duration / 0.005)
-        
-        sim_roll_err = np.mean(res["tar_roll"][idx:] - res["roll"][idx:])
-        sim_roll_u = np.mean(res["roll_u"][idx:])
-        sim_gyrox_u = np.mean(res["gyrox_u"][idx:])
-        sim_pitch_err = np.mean(res["tar_pitch"][idx:] - res["pitch"][idx:])
-        sim_pos_x_rms = np.sqrt(np.mean(res["pos_x"][idx:]**2))
-        sim_pos_y_rms = np.sqrt(np.mean(res["pos_y"][idx:]**2))
-        
-        roll_fb = res["roll"][idx:] + scene["lean_offset_roll"]
-        sway_freq = np.nan
-        dt = 0.005
-        fs = 1.0 / dt
-        try:
-            from scipy import signal
-            f, pxx = signal.welch(roll_fb, fs, nperseg=min(len(roll_fb), 1024))
-            mask_f = (f >= 0.2) & (f <= 3.0)
-            if np.any(mask_f):
-                sway_freq = f[mask_f][np.argmax(pxx[mask_f])]
-        except ImportError:
-            n = min(len(roll_fb), 1024)
-            f = np.fft.rfftfreq(n, d=dt)
-            pxx = np.abs(np.fft.rfft(roll_fb[:n]))**2
-            mask_f = (f >= 0.2) & (f <= 3.0)
-            if np.any(mask_f):
-                sway_freq = f[mask_f][np.argmax(pxx[mask_f])]
-                
-        return {
-            "roll_err": sim_roll_err, "pitch_err": sim_pitch_err,
-            "roll_u": sim_roll_u, "gyrox_u": sim_gyrox_u,
-            "pos_err_x_rms": sim_pos_x_rms, "pos_err_y_rms": sim_pos_y_rms,
-            "sway_freq": sway_freq
-        }
+def _at(df: pd.DataFrame, col: str, t: np.ndarray) -> np.ndarray:
+    """Nearest-earlier sample of df[col] at times t (zero-order hold)."""
+    k = np.clip(np.searchsorted(df["t"].to_numpy(), t, side="right") - 1, 0, len(df) - 1)
+    return df[col].to_numpy()[k]
 
-    def loss(x):
-        cfg = copy.deepcopy(config)
-        cfg["gain_roll"] = x[0]
-        cfg["tau_roll"] = x[1]
-        cfg["delay_roll"] = x[2]
-        cfg["gain_pitch"] = x[3]
-        cfg["tau_pitch"] = x[4]
-        cfg["delay_pitch"] = x[5]
-        cfg["of_delay"] = x[6]
-        cfg["of_noise"] = x[7]
-        
-        sim14 = sim_metrics(cfg, t14, duration=5.0 if quick else 10.0)
-        e = 0.0
-        e += (sim14["roll_err"] - t14["roll_err"])**2
-        e += (sim14["pos_err_y_rms"] - t14["pos_err_y_rms"])**2 * 0.1
-        if not np.isnan(sim14["sway_freq"]) and not np.isnan(t14["sway_freq"]):
-            e += (sim14["sway_freq"] - t14["sway_freq"])**2 * 10.0
-            
-        if t4 is not None:
-            sim4 = sim_metrics(cfg, t4, duration=5.0 if quick else 10.0)
-            e += (sim4["roll_err"] - t4["roll_err"])**2
-            e += (sim4["pos_err_y_rms"] - t4["pos_err_y_rms"])**2 * 0.1
-        return e
 
-    x0 = [config["gain_roll"], config["tau_roll"], config["delay_roll"],
-          config["gain_pitch"], config["tau_pitch"], config["delay_pitch"],
-          config["of_delay"], config["of_noise"]]
-    
-    try:
-        from scipy import optimize
-        res = optimize.minimize(loss, x0, method="Nelder-Mead", options={"maxiter": 10 if quick else 50})
-        xopt = res.x
-    except ImportError:
-        xopt = x0
-        
-    config["gain_roll"] = xopt[0]
-    config["tau_roll"] = max(0.001, xopt[1])
-    config["delay_roll"] = max(0.0, xopt[2])
-    config["gain_pitch"] = xopt[3]
-    config["tau_pitch"] = max(0.001, xopt[4])
-    config["delay_pitch"] = max(0.0, xopt[5])
-    config["of_delay"] = max(0.0, xopt[6])
-    config["of_noise"] = max(0.0, xopt[7])
-    
-    print("Target: shadow14")
-    sim14 = sim_metrics(config, t14, duration=10.0)
-    print("metric | sim | log | rel err")
-    print(f"roll_err | {sim14['roll_err']:.2f} | {t14['roll_err']:.2f} | {abs(sim14['roll_err'] - t14['roll_err'])/(abs(t14['roll_err'])+1e-6):.2f}")
-    print(f"pos_err_y_rms | {sim14['pos_err_y_rms']:.2f} | {t14['pos_err_y_rms']:.2f} | {abs(sim14['pos_err_y_rms'] - t14['pos_err_y_rms'])/(t14['pos_err_y_rms']+1e-6):.2f}")
-    print(f"sway_freq | {sim14['sway_freq']:.2f} | {t14['sway_freq']:.2f} | {abs(sim14['sway_freq'] - t14['sway_freq'])/(t14['sway_freq']+1e-6):.2f}")
-    
-    if t4 is not None:
-        print("Target: shadow4")
-        sim4 = sim_metrics(config, t4, duration=10.0)
-        print("metric | sim | log | rel err")
-        print(f"roll_err | {sim4['roll_err']:.2f} | {t4['roll_err']:.2f} | {abs(sim4['roll_err'] - t4['roll_err'])/(abs(t4['roll_err'])+1e-6):.2f}")
+def hover_window(slots, skip_s: float = 5.0, tail_s: float = 2.0) -> tuple[float, float]:
+    """Longest stretch with flight_phase FLYING and OF hold on, minus the takeoff and landing ends."""
+    s1 = slots[1]
+    t = s1["t"].to_numpy()
+    ok = s1["flight_phase"].to_numpy() == 1
+    if 3 in slots and "g_of_hold_active" in slots[3]:
+        ok &= _at(slots[3], "g_of_hold_active", t) == 1
+    best, start = (0.0, 0.0), None
+    for i in range(len(t) + 1):
+        on = i < len(t) and ok[i] and (start is None or t[i] - t[i - 1] < 0.5)
+        if on and start is None:
+            start = i
+        elif not on and start is not None:
+            if t[i - 1] - t[start] > best[1] - best[0]:
+                best = (t[start], t[i - 1])
+            start = i if i < len(t) and ok[i] else None
+    return best[0] + skip_s, best[1] - tail_s
 
-    # mrac
-    df15 = load_flight(logs_dir, "f17_hover_active15_removed_white_floor_covering_batery_type_2")
-    if df15 is None:
-        print("missing f17_hover_active15_removed_white_floor_covering_batery_type_2")
-    else:
-        t15 = log_targets(df15)
-        # fit tau_mrac
-        config["mrac"] = True
-        config["tau_mrac"] = 2.0
-        # ideally we could fit it, but for now just use a constant or minimal search
-        sim15 = sim_metrics(config, t15, duration=10.0)
-        print("Target: active15 (MRAC)")
-        print("metric | sim | log | rel err")
-        print(f"gyrox_u | {sim15['gyrox_u']:.2f} | {t15['gyrox_u']:.2f} | {abs(sim15['gyrox_u'] - t15['gyrox_u'])/(abs(t15['gyrox_u'])+1e-6):.2f}")
-        
-    return config
+
+def mixer_torque(s2: pd.DataFrame, axis: str) -> pd.Series:
+    """Controller-frame torque per motor from the slot2 motor outputs (mixer, StabilizerTask.c ~1125-1143):
+    roll = u_gyrox = (-m1 + m2 + m3 - m4)/4; pitch = gyroyPID.U + u_ad = (m1 - m2 + m3 - m4)/4."""
+    m1, m2, m3, m4 = (s2[f"mymotor.motor{i}"].astype(float) for i in range(1, 5))
+    return (-m1 + m2 + m3 - m4) / 4.0 if axis == "roll" else (m1 - m2 + m3 - m4) / 4.0
+
+
+def flight_stats(slots) -> dict[str, float]:
+    """Hover means and spectra in the controller frame (pitch = pitchPID frame, y' = -y)."""
+    t0, t1 = hover_window(slots)
+    win = {s: df[(df["t"] >= t0) & (df["t"] <= t1)] for s, df in slots.items()}
+    s1, s2, s3 = win[1], win[2], win[3]
+    out = {"t0": t0, "t1": t1, "dur": t1 - t0}
+    for ax, a_pid, r_pid, sign in (("roll", "rollPID", "gyroxPID", 1.0), ("pitch", "pitchPID", "gyroyPID", -1.0)):
+        out[f"{ax}_e"] = float((s2[f"{a_pid}.Des"] - s2[f"{a_pid}.FB"]).mean())
+        out[f"{ax}_fb"] = float(s2[f"{a_pid}.FB"].mean())
+        out[f"{ax}_u"] = float(s2[f"{a_pid}.U"].mean())
+        out[f"{ax}_rate_u"] = float(s2[f"{r_pid}.U"].mean())
+        out[f"{ax}_rate_ui"] = out[f"{ax}_rate_u"] - F0_ROWS["rate"].Kp * out[f"{ax}_u"]   # mean gyro FB ~ 0
+        out[f"{ax}_need"] = float(mixer_torque(s2, ax).mean())
+        out[f"{ax}_u_ad"] = out[f"{ax}_need"] - out[f"{ax}_rate_u"]
+        out[f"{ax}_sway_hz"], out[f"{ax}_sway_amp"] = osc(s2[f"{a_pid}.FB"].to_numpy(), 50.0)
+        out[f"{ax}_lag_ms"] = att_lag_ms(s2[f"{a_pid}.Des"].to_numpy(), s2[f"{a_pid}.FB"].to_numpy(), 50.0)
+        lp = "locxPID" if ax == "roll" else "locyPID"
+        e = sign * (s3[f"{lp}.Des"] - s3[f"{lp}.FB"]).to_numpy()
+        out[f"{ax}_pos_e"] = float(e.mean())
+        out[f"{ax}_pos_rms"] = float(np.sqrt(np.mean((e - e.mean()) ** 2)))
+        vl = "locxsPID" if ax == "roll" else "locysPID"
+        out[f"{ax}_vel_u"] = float(sign * s3[f"{vl}.U"].mean())
+        vf = s3[f"{vl}.FB"].to_numpy()
+        out[f"{ax}_vfb_hf"] = float(np.std(np.diff(vf)) / np.sqrt(2.0))
+        out[f"{ax}_pos_hz"], out[f"{ax}_pos_amp"] = osc(e, 50.0)
+    return out
+
+
+def rate_hf(u: np.ndarray, w: np.ndarray, fs: float, fmin: float = 5.0) -> dict[str, float]:
+    """Rate-loop limit cycle: peak frequency of the gyro rate above fmin Hz and the rms above fmin of rate and U."""
+    out = {}
+    for name, x in (("w", w), ("u", u)):
+        f, p = signal.welch(x - x.mean(), fs, nperseg=min(len(x), 1024))
+        hf = f > fmin
+        out[f"{name}_hf"] = float(np.sqrt(np.sum(p[hf]) * (f[1] - f[0])))
+        if name == "w":
+            out["hf_hz"] = float(f[hf][np.argmax(p[hf])])
+    return out
+
+
+def log_rate_hf(slots, axis: str) -> dict[str, float]:
+    t0, t1 = hover_window(slots)
+    s1 = slots[1][(slots[1]["t"] >= t0) & (slots[1]["t"] <= t1)]
+    r_pid = "gyroxPID" if axis == "roll" else "gyroyPID"
+    return rate_hf(s1[f"{r_pid}.U"].to_numpy(dtype=float), s1[f"{r_pid}.FB"].to_numpy(dtype=float), 100.0)
+
+
+def fit_rate_plant(slots, axis: str, delays=range(0, 9), taus=(0.01, 0.02, 0.03, 0.045, 0.06, 0.08, 0.1, 0.13)):
+    """Least squares on the 100 Hz slot1: d(rate)/dt = k * (lag(delay(U)) - bias), grid over delay and tau.
+
+    Returns dict(k, tau_m, delay, bias, r2). U = gyro?PID.U (+ u_ad when MRAC injects), rate = gyro?PID.FB."""
+    t0, t1 = hover_window(slots)
+    r_pid = "gyroxPID" if axis == "roll" else "gyroyPID"
+    s1 = slots[1]
+    s1 = s1[(s1["t"] >= t0) & (s1["t"] <= t1)]
+    t = s1["t"].to_numpy()
+    u = s1[f"{r_pid}.U"].to_numpy(dtype=float)
+    w = s1[f"{r_pid}.FB"].to_numpy(dtype=float)
+    dt = float(np.median(np.diff(t)))
+    good = np.abs(np.diff(t) - dt) < 0.25 * dt
+    best = None
+    for n in delays:
+        ud = np.r_[np.full(n, u[0]), u[: len(u) - n]]
+        for tau in taus:
+            a = 1.0 - np.exp(-dt / tau)
+            uf = signal.lfilter([a], [1.0, a - 1.0], ud, zi=[ud[0] * (1.0 - a)])[0]
+            x = np.c_[uf[:-1], np.ones(len(uf) - 1)][good] * dt
+            y = np.diff(w)[good]
+            coef, *_ = np.linalg.lstsq(x, y, rcond=None)
+            r2 = 1.0 - np.sum((y - x @ coef) ** 2) / np.sum((y - y.mean()) ** 2)
+            if best is None or r2 > best["r2"]:
+                best = {"k": float(coef[0]), "bias": float(-coef[1] / coef[0]), "tau_m": tau, "delay": n * dt,
+                        "r2": float(r2)}
+    return best
+
+
+def mrac_rise(slots, axis: str = "roll", fit_s: float = 10.0) -> tuple[np.ndarray, np.ndarray, float]:
+    """Applied u_ad (mixer torque - gyro?PID.U, 50 Hz slot2, 0.2 s mean) for `fit_s` s after
+    output_injection_on rises in flight. Returns (t from the rise, u_ad, final = mean from +5 s to hover end)."""
+    t0, t1 = hover_window(slots, skip_s=0.0)
+    s2 = slots[2]
+    s2 = s2[(s2["t"] >= t0) & (s2["t"] <= t1)]
+    t = s2["t"].to_numpy()
+    on = np.flatnonzero(s2["mrac_flags.output_injection_on"].to_numpy() > 0)
+    if len(on) == 0:
+        return np.zeros(0), np.zeros(0), np.nan
+    r_pid = "gyroxPID" if axis == "roll" else "gyroyPID"
+    uad = np.convolve((mixer_torque(s2, axis) - s2[f"{r_pid}.U"]).to_numpy(), np.ones(10) / 10.0, mode="same")
+    k0 = on[0]
+    m = (t >= t[k0]) & (t < t[k0] + fit_s)
+    return t[m] - t[k0], uad[m], float(np.mean(uad[t >= t[k0] + 5.0]))
