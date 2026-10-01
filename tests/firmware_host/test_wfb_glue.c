@@ -441,23 +441,24 @@ static void test_regular_heartbeat_never_trips(void)
     CHECK(out.land_req == 0u);
 }
 
-/* The safety net also guards RC flights: a fence breach asks for the existing LANDING, and
- * ch5 stays with today's code. */
-static void test_rc_flight_fence_lands(void)
+/* The safety net is workflow B only: a plain RC flight past the fence, the ceiling, the tilt
+ * limit and the low-V limit gets no landing and no motor stop, and ch5 stays with today's code. */
+static void test_rc_flight_has_no_safety_net(void)
 {
     wfb_glue_in_t in = ground_ready();
     wfb_glue_out_t out;
 
     wfb_glue_init();
     in.airborne = 1u;
-    in.z_m = HOVER_Z_DEFAULT;
-    step(&in, &out, 0);
+    in.x_m = 1.3f;       /* fence_x_m = 1.1 */
+    in.z_m = 2.0f;       /* ceiling_m = 1.5 */
+    in.roll_deg = 70.0f; /* tilt_deg = 60 for tilt_hold_s = 0.2 */
+    in.vbat_v = 13.0f;   /* low_v = 14 for low_v_hold_s = 3 */
+    run_ticks(&in, &out, 800, 0);
     CHECK(out.land_req == 0u);
-
-    in.x_m = 1.3f; /* fence_x_m = 1.1 */
-    step(&in, &out, 0);
-    CHECK(out.land_req == 1u);
+    CHECK(out.motor_stop_req == 0u);
     CHECK(out.setpoint_valid == 0u);
+    CHECK(g_wfb_status.safety_trip == 0.0f);
     CHECK(wfb_glue_rc_land(in.now_ms) == 0u);
 }
 
@@ -545,7 +546,7 @@ int main(void)
     RUN(test_rc_land_matches_gs_land);
     RUN(test_heartbeat_loss_lands);
     RUN(test_regular_heartbeat_never_trips);
-    RUN(test_rc_flight_fence_lands);
+    RUN(test_rc_flight_has_no_safety_net);
     RUN(test_pilot_takeover);
     RUN(test_future_heartbeat_clamps_to_zero);
     RUN(test_malformed_commands_rejected);

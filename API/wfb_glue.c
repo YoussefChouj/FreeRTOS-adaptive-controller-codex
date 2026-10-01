@@ -301,7 +301,10 @@ void wfb_glue_tick(const wfb_glue_in_t *in, wfb_glue_out_t *out)
         s_wfb.takeover = 1u;
     }
 
-    /* After a takeover the pilot flies: only the RC-flight checks remain (no heartbeat, no cap). */
+    /* The safety net belongs to workflow B: it arms with an accepted GS TAKEOFF and stays latched until
+     * disarm. A plain RC flight (bench and tuning experiments) has no fence, ceiling, tilt or low-V action:
+     * the safety module sees it as on the ground. After a takeover the pilot flies a GS flight: the fence,
+     * ceiling, tilt and low-V checks stay, the heartbeat and airborne cap go. */
     gs_flying = (s_wfb.gs_flight_active && !s_wfb.takeover) ? 1u : 0u;
     hb_age_s = gs_flying ? wfb_glue_age_s(in->now_ms, s_wfb.hb_ref_ms) : 0.0f;
     sin.x_m = in->x_m;
@@ -312,7 +315,7 @@ void wfb_glue_tick(const wfb_glue_in_t *in, wfb_glue_out_t *out)
     sin.vbat_v = in->vbat_v;
     sin.hb_age_s = hb_age_s;
     sin.dt_s = dt_s;
-    sin.airborne = in->airborne;
+    sin.airborne = s_wfb.gs_flight_active ? in->airborne : 0u;
     sin.gs_flight_active = gs_flying;
     action = (uint8_t)wfb_safety_step(&s_wfb.safety, &s_wfb.safety_lim, &sin);
     wfb_glue_apply_action(action, &pin);
