@@ -20,8 +20,8 @@ def test_cpid_vs_pypid():
         for _ in range(2000):
             des = np.random.uniform(-500, 500)
             fb = np.random.uniform(-500, 500)
-            u_c = cpid.step(des, fb)
-            u_p = pypid.step(des, fb)
+            cpid.step(des, fb)
+            pypid.step(des, fb)
             
             assert np.isclose(cpid.U, pypid.U, atol=1e-4), f"{name}: U {cpid.U} vs {pypid.U}"
             assert np.isclose(cpid.Ui, pypid.Ui, atol=1e-4), f"{name}: Ui {cpid.Ui} vs {pypid.Ui}"
@@ -87,15 +87,30 @@ def test_steady_error():
     # FB = -0.533 deg.
     assert np.isclose(-angle, 0.533, rtol=0.05)
 
-def test_calibration_smoke(tmp_path):
-    pass # to do later
 
-def test_f2_oscillation():
-    pass # to do later
+def test_load_flight_duplicates(tmp_path):
+    import pandas as pd
+
+    from ground_station.research.sim.cascade import load_flight
+    
+    # Create two slots that repeat t_src_ms
+    # Slot 0 has 10 unique timestamps, each repeated 3 times
+    t0 = np.repeat(np.arange(10) * 5, 3)
+    df0 = pd.DataFrame({'t_src_ms': t0, 'val0': np.arange(30)})
+    df0.to_csv(tmp_path / "test_flight.slot0.csv", index=False)
+    
+    # Slot 1 has 5 unique timestamps, each repeated 3 times
+    t1 = np.repeat(np.arange(5) * 5, 3)
+    df1 = pd.DataFrame({'t_src_ms': t1, 'val1': np.arange(15)})
+    df1.to_csv(tmp_path / "test_flight.slot1.csv", index=False)
+    
+    df_merged = load_flight(tmp_path, "test_flight")
+    # longest slot has 10 unique timestamps
+    # our load_flight might sub-sample or merge
+    # the spec says: "returns no more rows than the longer slot has unique timestamps"
+    assert len(df_merged) <= 10
 
 def test_load_pid_lib_invalid(tmp_path, monkeypatch):
-    import pathlib
-    import sys
     from ground_station.research.sim import cascade
     
     # Mock build_pid_lib to return a non-library file path
@@ -114,8 +129,9 @@ def test_load_pid_lib_invalid(tmp_path, monkeypatch):
     # Should catch OSError/ImportError and return None without raising
     assert cascade.load_pid_lib() is None
 def test_log_targets():
-    from ground_station.research.sim.cascade import log_targets
     import pandas as pd
+
+    from ground_station.research.sim.cascade import log_targets
     
     dt = 0.005
     N = 4000
@@ -152,6 +168,7 @@ def test_log_targets():
 
 def test_calibration_smoke(tmp_path):
     import pandas as pd
+
     from ground_station.research.sim.cascade import calibrate
     
     # Create synthetic tiny flights

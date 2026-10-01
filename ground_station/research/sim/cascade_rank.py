@@ -6,11 +6,12 @@ import numpy as np
 from ground_station.research.sim.cascade import (
     ROWS_3AE4A23,
     PidRow,
-    gen_square_traj,
+    calibrate,
     gen_circle_traj,
+    gen_square_traj,
     simulate,
-    calibrate
 )
+
 
 def calc_metrics(res, traj=None, duration=20.0):
     dt = 0.005

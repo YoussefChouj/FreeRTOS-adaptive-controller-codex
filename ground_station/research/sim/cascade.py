@@ -214,8 +214,6 @@ class CascadeSim:
         self.rng = np.random.RandomState(seed)
         self.config = config
 
-def simulate(config, scenario, duration_s, seed=42):
-    pass
 def gen_square_traj(dt=0.005, speed=0.2):
     # 1 m square, 0.2 m/s. 
     # Side 1: (0,0) -> (1,0) (5s)
@@ -500,10 +498,14 @@ def simulate(config: dict, scenario: dict, duration_s: float, seed: int = 42) ->
         
     return out
 import pathlib
+
 import pandas as pd
-import numpy as np
+
 
 def load_flight(logs_dir, name):
+    """
+    Load CSV logs and merge them onto a common 5 ms time base.
+    """
     df_merged = None
     for slot in range(4):
         csv_path = pathlib.Path(logs_dir) / f"{name}.slot{slot}.csv"
@@ -511,13 +513,16 @@ def load_flight(logs_dir, name):
             continue
         try:
             df_slot = pd.read_csv(csv_path)
-            if len(df_slot) <= 1: continue
+            if len(df_slot) <= 1:
+                continue
+            df_slot = df_slot.drop_duplicates('t_src_ms', keep='last').sort_values('t_src_ms')
             if df_merged is None:
-                df_merged = df_slot
+                df_slot['t_5ms'] = (df_slot['t_src_ms'] // 5) * 5
+                df_merged = df_slot.drop_duplicates('t_5ms', keep='last').drop(columns=['t_5ms'])
             else:
-                df_merged = pd.merge(df_merged, df_slot, on='t_src_ms', how='outer', suffixes=('', '_dup'))
+                df_merged = pd.merge_asof(df_merged, df_slot, on='t_src_ms', direction='nearest', tolerance=20, suffixes=('', '_dup'))
                 df_merged = df_merged.loc[:, ~df_merged.columns.str.endswith('_dup')]
-        except Exception:
+        except (pd.errors.EmptyDataError, FileNotFoundError, KeyError):
             pass
     if df_merged is not None:
         df_merged.sort_values('t_src_ms', inplace=True)
@@ -586,7 +591,6 @@ def log_targets(df):
         "sway_freq": sway_freq
     }
 def calibrate(logs_dir, quick=False):
-    import pathlib
     import copy
     
     print("=== Calibration ===")
@@ -705,7 +709,7 @@ def calibrate(logs_dir, quick=False):
     config["of_delay"] = max(0.0, xopt[6])
     config["of_noise"] = max(0.0, xopt[7])
     
-    print(f"Target: shadow14")
+    print("Target: shadow14")
     sim14 = sim_metrics(config, t14, duration=10.0)
     print("metric | sim | log | rel err")
     print(f"roll_err | {sim14['roll_err']:.2f} | {t14['roll_err']:.2f} | {abs(sim14['roll_err'] - t14['roll_err'])/(abs(t14['roll_err'])+1e-6):.2f}")
@@ -713,7 +717,7 @@ def calibrate(logs_dir, quick=False):
     print(f"sway_freq | {sim14['sway_freq']:.2f} | {t14['sway_freq']:.2f} | {abs(sim14['sway_freq'] - t14['sway_freq'])/(t14['sway_freq']+1e-6):.2f}")
     
     if t4 is not None:
-        print(f"Target: shadow4")
+        print("Target: shadow4")
         sim4 = sim_metrics(config, t4, duration=10.0)
         print("metric | sim | log | rel err")
         print(f"roll_err | {sim4['roll_err']:.2f} | {t4['roll_err']:.2f} | {abs(sim4['roll_err'] - t4['roll_err'])/(abs(t4['roll_err'])+1e-6):.2f}")
@@ -729,7 +733,7 @@ def calibrate(logs_dir, quick=False):
         config["tau_mrac"] = 2.0
         # ideally we could fit it, but for now just use a constant or minimal search
         sim15 = sim_metrics(config, t15, duration=10.0)
-        print(f"Target: active15 (MRAC)")
+        print("Target: active15 (MRAC)")
         print("metric | sim | log | rel err")
         print(f"gyrox_u | {sim15['gyrox_u']:.2f} | {t15['gyrox_u']:.2f} | {abs(sim15['gyrox_u'] - t15['gyrox_u'])/(abs(t15['gyrox_u'])+1e-6):.2f}")
         
