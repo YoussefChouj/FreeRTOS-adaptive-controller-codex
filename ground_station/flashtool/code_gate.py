@@ -71,7 +71,10 @@ class CodeGate:
         if self.pending_change and self.flights_since_change == 0:
             return GateResult(ok=False, step=6, reasons=["A change is already pending and no flight was recorded since."])
 
-        hunks = self._parse_diff(diff_text)
+        try:
+            hunks = self._parse_diff(diff_text)
+        except ValueError as e:
+            return GateResult(ok=False, step=1, reasons=[f"Malformed diff: {e}"])
         paths_touched = set()
         for h in hunks:
             if h[0]:
@@ -194,21 +197,32 @@ class CodeGate:
                 i += 1
                 continue
             
-            m = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,(\d+))? @@", line)
+            m = re.match(r"@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", line)
             if m and (pre_path or post_path):
+                # Walk the body by the header's old/new counts, so "--- x" inside a hunk is a removed line.
+                old_n = int(m.group(1) or 1)
+                new_n = int(m.group(3) or 1)
                 h_start = int(m.group(2))
-                h_len = int(m.group(3)) if m.group(3) is not None else 1
-                if h_len == 0:
-                    h_len = 1
+                h_len = max(new_n, 1)
                 added = []
                 removed = []
                 i += 1
-                while i < len(lines) and not lines[i].startswith("@@") and not lines[i].startswith("--- "):
-                    if lines[i].startswith("+") and not lines[i].startswith("+++"):
-                        added.append(lines[i][1:])
-                    elif lines[i].startswith("-") and not lines[i].startswith("---"):
-                        removed.append(lines[i][1:])
+                while (old_n > 0 or new_n > 0) and i < len(lines):
+                    tag, text = lines[i][:1], lines[i][1:]
                     i += 1
+                    if tag == "+":
+                        added.append(text)
+                        new_n -= 1
+                    elif tag == "-":
+                        removed.append(text)
+                        old_n -= 1
+                    elif tag in (" ", ""):
+                        old_n -= 1
+                        new_n -= 1
+                    elif tag != "\\":
+                        raise ValueError(f"unexpected hunk line {lines[i - 1]!r}")
+                if old_n < 0 or new_n < 0:
+                    raise ValueError(f"hunk at +{h_start} is longer than its header")
                 hunks.append((pre_path, post_path, h_start, h_len, added, removed))
                 continue
                 

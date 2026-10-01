@@ -74,6 +74,11 @@ def test_real_yaml_loads():
     ("--- a/open.c\n+++ b/open.c\n@@ -1,1 +1,1 @@\n-foo\n+bar\n", {}, False, "Missing file text"),
     ("--- a/open.c\n+++ b/open.c\n@@ -6,1 +6,1 @@\n-foo\n+bar\n", {"open.c": "1\n2\nstatic void test_func(void);\n4\n5\nfoo\n7\n8\n9\nvoid test_func(void) {\n11\nbar\n13\n14\n}\n"}, True, ""),
     ("--- a/open.c\n+++ b/open.c\n@@ -12,1 +12,1 @@\n-foo\n+bar\n", {"open.c": "1\n2\nstatic void test_func(void);\n4\n5\nfoo\n7\n8\n9\nvoid test_func(void) {\n11\nbar\n13\n14\n}\n"}, False, "protected function"),
+    # Removed C line "-- x;" is the diff line "--- x;": it must stay inside its hunk, not read as a file header.
+    ("--- a/open.c\n+++ b/open.c\n@@ -2,3 +2,2 @@\n /* PROTECTED BEGIN test_region */\n--- x;\n int b;\n", {"open.c": "int a;\n/* PROTECTED BEGIN test_region */\nint b;\n/* PROTECTED END test_region */\n"}, False, "protected region"),
+    ("--- a/open.c\n+++ b/open.c\n@@ -1,2 +1,2 @@\n--- x;\n+++ y;\n int a;\n@@ -7,1 +7,1 @@\n-int q;\n+int b;\n", {"open.c": "++ y;\nint a;\n\n\n\n/* PROTECTED BEGIN test_region */\nint b;\n/* PROTECTED END test_region */\n"}, False, "protected region"),
+    ("--- a/open.c\n+++ b/open.c\n@@ -1,2 +1,1 @@\n--- test_param;\n int a;\n", {"open.c": "int a;\n"}, False, "param ID"),
+    ("--- a/open.c\n+++ b/open.c\n@@ -1,2 +1,1 @@\n-a\n@@ -3,1 +3,1 @@\n+b\n", {"open.c": "x\n"}, False, "Malformed diff"),
 ])
 def test_step1(base_kwargs, diff, files, expect_ok, reason_sub):
     gate = CodeGate(**base_kwargs)
