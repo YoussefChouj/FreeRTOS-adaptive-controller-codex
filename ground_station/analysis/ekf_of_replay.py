@@ -1,23 +1,24 @@
 import argparse
 import glob
+import itertools
 import json
 import os
 import subprocess
-import tempfile
 import sys
+import tempfile
 from pathlib import Path
-import itertools
 
 import numpy as np
 from scipy import interpolate
 
+from ground_station.analysis.ekf_of_model import DEFAULTS, EkfOfModel, OldEkfOf6
 from ground_station.analysis.flightlab.loaders.vofa import load_vofa
-from ground_station.analysis.ekf_of_model import EkfOfModel, OldEkfOf6, DEFAULTS
+
 
 def replay_arrays(t1, phase1, ax1, ay1, t3, ofx3, ofy3, ofq3, params_grid, run_old=True):
     B = len(params_grid)
     kwargs = {}
-    for k in params_grid[0].keys():
+    for k in params_grid[0]:
         kwargs[k] = [p[k] for p in params_grid]
     new_model = EkfOfModel(B, **kwargs)
     
@@ -175,10 +176,12 @@ def replay_arrays(t1, phase1, ax1, ay1, t3, ofx3, ofy3, ofq3, params_grid, run_o
         iy = np.array(of_innov_y[b])
         
         def autocorr1(v):
-            if len(v) < 2: return 0.0
+            if len(v) < 2:
+                return 0.0
             vm = v - np.mean(v)
             var = np.sum(vm**2)
-            if var == 0: return 0.0
+            if var == 0:
+                return 0.0
             return np.sum(vm[:-1]*vm[1:]) / var
             
         ac_x = autocorr1(ix)
@@ -222,21 +225,30 @@ def replay_arrays(t1, phase1, ax1, ay1, t3, ofx3, ofy3, ofq3, params_grid, run_o
         
     return res
 
+def resolve_logs_dir(logs_dir=None):
+    if not logs_dir:
+        repo_dir = Path(__file__).resolve().parent.parent.parent
+        logs_dir = repo_dir / 'logs' / 'vofa'
+        if not Path(logs_dir).exists():
+            try:
+                git_common_dir = subprocess.check_output(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir']).decode().strip()
+                logs_dir = Path(git_common_dir).parent / 'logs' / 'vofa'
+            except subprocess.CalledProcessError:
+                pass
+    return Path(logs_dir) if logs_dir else None
+
 def run_cli():
+    import time
+    t0 = time.time()
+    
     parser = argparse.ArgumentParser()
     parser.add_argument('--logs-dir', type=str, default=None)
     parser.add_argument('--no-grid', action='store_true')
     args = parser.parse_args()
     
-    logs_dir = args.logs_dir
-    if not logs_dir:
-        repo_dir = Path(__file__).resolve().parent.parent.parent
-        logs_dir = repo_dir / 'logs' / 'vofa'
-        if not Path(logs_dir).exists():
-            git_common_dir = subprocess.check_output(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir']).decode().strip()
-            logs_dir = Path(git_common_dir).parent / 'logs' / 'vofa'
+    logs_dir = resolve_logs_dir(args.logs_dir)
             
-    if not Path(logs_dir).exists():
+    if not logs_dir or not logs_dir.exists():
         print(f"Log dir not found: {logs_dir}")
         sys.exit(2)
         
@@ -287,7 +299,10 @@ def run_cli():
         # load
         try:
             L = load_vofa(tf_name)
-        finally:
+        except (OSError, ValueError, KeyError, IndexError, RuntimeError) as e:
+            os.remove(tf_name)
+            raise RuntimeError(f"Failed to load log {log_names[-1]}: {e}")
+        else:
             os.remove(tf_name)
             
         # signals
@@ -351,8 +366,8 @@ def run_cli():
     for b in range(B):
         passed = 0
         ln_nis_sum = 0
-        for l in range(len(all_log_res)):
-            res = all_log_res[l][b]
+        for log_idx in range(len(all_log_res)):
+            res = all_log_res[log_idx][b]
             nis = res['nis']
             autocorr = res['autocorr']
             bof_drift = res['bof_drift']
@@ -381,9 +396,9 @@ def run_cli():
     best_idx = order[0]
     best_p = params_grid[best_idx]
     
-    for l in range(len(all_log_res)):
-        print(f"--- Log: {log_names[l]} ---")
-        res = all_log_res[l][best_idx]
+    for log_idx in range(len(all_log_res)):
+        print(f"--- Log: {log_names[log_idx]} ---")
+        res = all_log_res[log_idx][best_idx]
         nis = res['nis']
         ac = res['autocorr']
         bof = res['bof_drift']
@@ -403,6 +418,7 @@ def run_cli():
     defaults_match = "yes" if best_p['q_acc'] == DEFAULTS['q_acc'] and best_p['q_bof'] == DEFAULTS['q_bof'] and best_p['q_ba'] == DEFAULTS['q_ba'] and best_p['R_of'] == DEFAULTS['R_of'] else "no"
     print(f"CHOSEN q_acc={best_p['q_acc']} q_bof={best_p['q_bof']} q_ba={best_p['q_ba']} R_of={best_p['R_of']}")
     print(f"DEFAULTS_MATCH {defaults_match}")
+    print(f"Elapsed: {time.time() - t0:.2f} s")
 
 if __name__ == "__main__":
     run_cli()

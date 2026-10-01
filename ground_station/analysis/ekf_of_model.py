@@ -1,13 +1,13 @@
 import numpy as np
 
-DEFAULTS = dict(
-    q_pos=1e-6,
-    q_acc=1e-2,
-    q_bof=1e-6,
-    q_ba=1e-5,
-    R_of=6.16e-4,
-    R_zupt=1e-4
-)
+DEFAULTS = {
+    'q_pos': 1e-6,
+    'q_acc': 1e-2,
+    'q_bof': 1e-6,
+    'q_ba': 1e-5,
+    'R_of': 6.16e-4,
+    'R_zupt': 1e-4
+}
 
 class EkfOfModel:
     def __init__(self, batch_size, dtype=np.float64, **kwargs):
@@ -49,8 +49,11 @@ class EkfOfModel:
         
         dt2 = dt * dt
         F = np.zeros((self.B, 4, 4), dtype=self.dtype)
-        F[:, 0, 0] = 1.0; F[:, 0, 1] = dt; F[:, 0, 3] = -0.5 * dt2
-        F[:, 1, 1] = 1.0; F[:, 1, 3] = -dt
+        F[:, 0, 0] = 1.0
+        F[:, 0, 1] = dt
+        F[:, 0, 3] = -0.5 * dt2
+        F[:, 1, 1] = 1.0
+        F[:, 1, 3] = -dt
         F[:, 2, 2] = 1.0
         F[:, 3, 3] = 1.0
         

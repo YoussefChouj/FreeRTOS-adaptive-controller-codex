@@ -2,19 +2,24 @@
  * @file     ekf_of.c
  * @brief    8-state body-frame OF position + velocity-bias + accel-bias Kalman Filter.
  *
- * State:   x[0..3] = X axis: [pos_x, vel_x, bof_x, ba_x]
- *          x[4..7] = Y axis: [pos_y, vel_y, bof_y, ba_y]
- *          Actually, the struct uses:
- *          x[0..7] = [px, vx, bof_x, py, vy, bof_y, ba_x, ba_y]
- *          X axis indices: 0, 1, 2, 6
- *          Y axis indices: 3, 4, 5, 7
+ * State:
+ *   x[0..7] = [px, vx, bof_x, py, vy, bof_y, ba_x, ba_y]
  *
- * State transition (discrete, dt seconds):
+ * Axis index table:
+ *   X axis indices: 0, 1, 2, 6
+ *   Y axis indices: 3, 4, 5, 7
+ *
+ * Predict (discrete, dt seconds):
  *   u = a - ba
  *   p += v*dt + 0.5*u*dt^2
  *   v += u*dt
  *   bof, ba: random walks
  *
+ * Measurements:
+ *   OF:   h = [0, 1, 1, 0]
+ *   ZUPT: h = [0, 1, 0, 0]
+ *
+ * Units: meters, seconds
  * Pure C99, no malloc. Compatible with Keil ARMCC.
  */
 
@@ -27,15 +32,7 @@ static const uint8_t k_axis_idx[2][4] = {{0,1,2,6},{3,4,5,7}};
 /* Init                                                               */
 /* ------------------------------------------------------------------ */
 
-#define EKF_OF_NOISE_ROW(qp, qa, qbof, qba, rof, rzupt) \
-    do { \
-        e->q_pos  = (qp); \
-        e->q_acc  = (qa); \
-        e->q_bof  = (qbof); \
-        e->q_ba   = (qba); \
-        e->R_of   = (rof); \
-        e->R_zupt = (rzupt); \
-    } while(0)
+#define EKF_OF_STATE(i, q_field, q, P0)  e->q_field = (q); e->P[0][(i)*5] = (P0); e->P[1][(i)*5] = (P0)
 
 void EkfOf_Init(EkfOf_t *e)
 {
@@ -46,13 +43,21 @@ void EkfOf_Init(EkfOf_t *e)
         for (j = 0; j < 16; j++) {
             e->P[i][j] = 0.0f;
         }
-        e->P[i][0*4+0] = 1.0f;    /* pos */
-        e->P[i][1*4+1] = 0.1f;    /* vel */
-        e->P[i][2*4+2] = 0.01f;   /* bof */
-        e->P[i][3*4+3] = 0.25f;   /* ba */
     }
 
-    EKF_OF_NOISE_ROW(1e-6f, 1e-2f, 1e-6f, 1e-5f, 6.16e-4f, 1e-4f);
+    /* q = random-walk/white-noise density per second, units per state; P0 = initial variance */
+    EKF_OF_STATE(0, q_pos, 1e-6f, 1.0f);   /* p    position */
+    EKF_OF_STATE(1, q_acc, 1e-2f, 0.1f);   /* v    velocity */
+    EKF_OF_STATE(2, q_bof, 1e-6f, 0.01f);  /* bof  optical flow bias */
+    EKF_OF_STATE(3, q_ba,  1e-5f, 0.25f);  /* ba   accel bias */
+
+    /* Measurement noise variances */
+    e->R_of   = 6.16e-4f;
+    e->R_zupt = 1e-4f;
+
+    /* Change history (newest first)
+     * 2026-10-01 WP-8: 8-state model, q_vel->q_acc, ZUPT; values provisional
+     */
 
     e->innov_x = 0.0f;
     e->innov_y = 0.0f;
@@ -80,14 +85,7 @@ void EkfOf_Predict(EkfOf_t *e, float dt, float ax, float ay)
         e->x[i_p] += e->x[i_v] * dt + 0.5f * u * dt * dt;
         e->x[i_v] += u * dt;
 
-        float P00 = e->P[axis][0], P01 = e->P[axis][1], P02 = e->P[axis][2], P03 = e->P[axis][3];
-        float P10 = e->P[axis][4], P11 = e->P[axis][5], P12 = e->P[axis][6], P13 = e->P[axis][7];
-        float P20 = e->P[axis][8], P21 = e->P[axis][9], P22 = e->P[axis][10], P23 = e->P[axis][11];
-        float P30 = e->P[axis][12], P31 = e->P[axis][13], P32 = e->P[axis][14], P33 = e->P[axis][15];
-
         float dt2 = dt * dt;
-        
-        
 
         /* F = 
          * [1, dt, 0, -0.5*dt^2]
@@ -101,12 +99,6 @@ void EkfOf_Predict(EkfOf_t *e, float dt, float ax, float ay)
             {0.0f, 0.0f, 1.0f, 0.0f},
             {0.0f, 0.0f, 0.0f, 1.0f}
         };
-        float P[4][4] = {
-            {P00, P01, P02, P03},
-            {P10, P11, P12, P13},
-            {P20, P21, P22, P23},
-            {P30, P31, P32, P33}
-        };
         float FP[4][4];
         float FPFt[4][4];
         int i, j, k;
@@ -115,7 +107,7 @@ void EkfOf_Predict(EkfOf_t *e, float dt, float ax, float ay)
             for (j = 0; j < 4; j++) {
                 FP[i][j] = 0.0f;
                 for (k = 0; k < 4; k++) {
-                    FP[i][j] += F[i][k] * P[k][j];
+                    FP[i][j] += F[i][k] * e->P[axis][k*4 + j];
                 }
             }
         }

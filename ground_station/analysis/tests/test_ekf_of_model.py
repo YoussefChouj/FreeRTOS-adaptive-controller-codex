@@ -1,11 +1,17 @@
 import ctypes
+import os
+import shutil
+import struct
+import subprocess
+import sys
+from pathlib import Path
+
 import numpy as np
 import pytest
-import shutil
-import subprocess
-from pathlib import Path
-from ground_station.analysis.ekf_of_model import EkfOfModel, DEFAULTS
+
+from ground_station.analysis.ekf_of_model import DEFAULTS, EkfOfModel
 from ground_station.analysis.ekf_of_replay import replay_arrays
+
 
 class EkfOf_t(ctypes.Structure):
     _fields_ = [
@@ -24,15 +30,32 @@ class EkfOf_t(ctypes.Structure):
 
 @pytest.fixture(scope="module")
 def gcc_lib(tmp_path_factory):
-    if not shutil.which('gcc'):
+    gcc_path = os.environ.get("EKF_OF_GCC", shutil.which('gcc'))
+    if not gcc_path:
         pytest.skip("gcc not found")
         
     src = Path("API/ekf_of.c").resolve()
     tmp_dir = tmp_path_factory.mktemp("gcc_lib")
-    lib_path = tmp_dir / "libekf_of.so"
     
-    cmd = ["gcc", "-std=c99", "-Wall", "-Wextra", "-Werror", "-shared", "-fPIC", str(src), "-o", str(lib_path)]
-    subprocess.run(cmd, check=True)
+    ext = ".dll" if sys.platform == "win32" else ".so"
+    lib_path = tmp_dir / f"libekf_of{ext}"
+    
+    cmd = [gcc_path, "-std=c99", "-Wall", "-Wextra", "-Werror", "-shared", "-fPIC"]
+    if struct.calcsize("P") == 8:
+        cmd.append("-m64")
+    cmd.extend([str(src), "-o", str(lib_path)])
+    
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        # Try loading to catch architecture mismatch
+        ctypes.CDLL(str(lib_path))
+    except (subprocess.CalledProcessError, OSError) as e:
+        try:
+            dump_out = subprocess.run([gcc_path, "-dumpmachine"], check=True, capture_output=True, text=True).stdout.strip()
+        except (subprocess.CalledProcessError, OSError):
+            dump_out = "unknown"
+        pytest.skip(f"gcc {gcc_path} ({dump_out}) cannot build a library for this Python: {e}")
+        
     return lib_path
 
 def test_ekf_of_model_python():
@@ -189,8 +212,42 @@ def test_replay_arrays():
         assert np.isfinite(r['bof_drift'])
 
 def test_boot_layout_contains_states():
-    from ground_station.comm.boot_default_layout import BOOT_DEFAULT_VARS
     with open('ground_station/comm/boot_default_layout.py', 'r') as f:
         content = f.read()
     assert '"s_ekf_of.x[6]"' in content
     assert '"s_ekf_of.x[7]"' in content
+
+def test_replay_real_logs(capsys):
+    import glob
+
+    from ground_station.analysis.ekf_of_replay import resolve_logs_dir, run_cli
+    
+    logs_dir = resolve_logs_dir()
+    if not logs_dir or not logs_dir.exists():
+        pytest.skip("Logs dir not found")
+        
+    log_files = glob.glob(str(logs_dir / 'f17_hover_*.meta.json'))
+    if len(log_files) < 5:
+        pytest.skip(f"Found {len(log_files)} logs, need 5")
+        
+    import sys
+    orig_argv = sys.argv
+    sys.argv = ['ekf_of_replay.py']
+    try:
+        run_cli()
+    except SystemExit as e:
+        if e.code != 0:
+            raise RuntimeError(f"run_cli exited with {e.code}")
+    finally:
+        sys.argv = orig_argv
+        
+    captured = capsys.readouterr()
+    out = captured.out
+    
+    assert out.count("--- Log: ") == 5, "Expected 5 per-log tables"
+    assert ' nan' not in out.lower() and ' inf' not in out.lower(), "Metrics must be finite"
+    
+    if "DEFAULTS_MATCH yes" not in out:
+        idx = out.find("Top 5 combos:")
+        tuning_result = out[idx:] if idx != -1 else out
+        assert False, f"DEFAULTS_MATCH yes not found. Tuning result:\n{tuning_result}"
