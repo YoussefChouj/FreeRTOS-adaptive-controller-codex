@@ -1,5 +1,5 @@
-import pytest
-from unittest.mock import Mock, call; from pathlib import Path
+from unittest.mock import Mock, call
+from pathlib import Path
 from ground_station.service.campaign_runner import RunnerDeps, run_campaign, files_after_from_diff
 from ground_station.service.fake_drone import FakeDrone
 from ground_station.platform.wfb_commands import WfbClient
