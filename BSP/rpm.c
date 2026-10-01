@@ -1,4 +1,5 @@
 #include "rpm.h"
+#include "rpm_median.h"
 
 /**
  * @module  rpm.c
@@ -200,16 +201,22 @@ static uint16_t RPM_Compute(uint8_t ch)
 {
     /* Task-context read.  May cross an ISR mid-update — torn ring samples are
      * accepted because each ring slot is a u32 (atomic on M4), and a torn
-     * *average* can mix at most one adjacent-revolution sample (low impact at
-     * 100 Hz frame rate vs the kHz-scale ring turnover). */
+     * *median* is safer than a torn *average* (one bad slot shifts median by 1
+     * rank, but cannot create an out-of-range value if the stored values are ok).
+     *
+     * WP-15 (2026-10-01): replaced mean-of-4 with median-of-5.
+     * One missed or extra edge (0.5x or 2x period) moves the mean by ~25%
+     * but moves the median by at most 1 rank (insignificant at 200 Hz). */
     RPM_ChannelState_t* s;
-    uint32_t sum;
-    uint32_t avg_period;
+    uint32_t periods[RPM_RING_DEPTH];
+    uint32_t med_period;
     uint32_t now;
     uint32_t last_any;
     uint8_t  filled;
     uint8_t  i;
-    uint32_t  rpm32;
+    uint8_t  last_valid;
+    uint8_t  filled_copy;
+    uint32_t rpm32;
 
     if (ch >= RPM_NUM_CH) {
         return 0U;
@@ -235,20 +242,29 @@ static uint16_t RPM_Compute(uint8_t ch)
         return 0U;
     }
 
-    sum = 0U;
+    /* Copy ring into local array for median-of-5.
+     * rpm_median5 sorts a copy of 5 elements and returns the median.
+     * For partial fills (<5), pad with the last valid period value. */
+    last_valid = 0U;
     for (i = 0; i < filled; i++) {
-        sum += s->ring[i];
+        periods[i] = s->ring[i];
+        last_valid = i;
     }
-    /* filled is in [1..RPM_RING_DEPTH], sum > 0 because glitch-reject guarantees
-     * every stored period >= RPM_MIN_PERIOD_CYCLES. */
-    avg_period = sum / (uint32_t)filled;
+    /* Pad remaining slots with the last valid value. */
+    filled_copy = (uint8_t)((filled < 5) ? filled : 5U);
+    for (i = filled_copy; i < 5; i++) {
+        periods[i] = periods[last_valid];
+    }
+
+    /* Call the pure median-of-5 function. */
+    med_period = rpm_median5(periods);
 
     /* RPM = 60 * f_cpu / period (revolutions per minute from per-revolution
      * period).  Multiply first to preserve resolution.  The multiply MUST be
      * done in u64: 60U * SystemCoreClock overflows u32 above ~71.6 MHz and
      * wraps unconditionally on a 168 MHz target, which would make every
      * reported RPM ~6.8x too low. */
-    rpm32 = (uint32_t)((60ULL * (uint64_t)SystemCoreClock) / avg_period);
+    rpm32 = (uint32_t)((60ULL * (uint64_t)SystemCoreClock) / med_period);
     if (rpm32 > 65535U) {
         rpm32 = 65535U;
     }
