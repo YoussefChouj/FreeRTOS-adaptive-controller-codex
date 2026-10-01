@@ -458,6 +458,7 @@ def get_panels() -> list[dict[str, Any]]:
         "Bandwidth Manager": {"workspace": "telemetry", "gates": []},
         "FFT Spectrum": {"workspace": "telemetry", "gates": []},
         "Experiment Runtime": {"workspace": "experiments", "gates": []},
+        "Campaign": {"workspace": "experiments", "gates": []},
         "Path Planning": {"workspace": "paths", "gates": []},
         "Motor Bench": {"workspace": "bench", "gates": ["connected", "disarmed"]},
         "Session Replay": {"workspace": "replay", "gates": []},
@@ -476,6 +477,7 @@ def get_panels() -> list[dict[str, Any]]:
         ("telemetry-explorer-panel.js", "Telemetry Explorer", ["telemetry"], [], "Live key-value telemetry explorer and schema monitor"),
         ("command-panel.js", "Command Panel", ["control"], ["connected", "disarmed"], "Command dispatch gateway and parameter configuration"),
         ("experiment-panel.js", "Experiment Runtime", ["experiments"], [], "Experiment runner, lifecycle management, and abort control"),
+        ("campaign-panel.js", "Campaign", ["experiments"], [], "Autonomous campaign runner with safety checklist and state monitor"),
         ("motor-bench-panel.js", "Motor Bench", ["bench"], ["connected", "disarmed"], "Motor testing bench, RPM monitoring, and throttle safety interlock"),
         ("time-series-panel.js", "Time Series", ["telemetry"], [], "Real-time multi-variable time-series plot with bounded ring buffer"),
         ("fft-panel.js", "FFT Spectrum", ["telemetry"], [], "Fast Fourier Transform frequency spectrum visualization"),
@@ -500,6 +502,7 @@ def get_panels() -> list[dict[str, Any]]:
             "pid.gyrox.FB", "pid.gyrox.U", "pid.gyroy.FB", "pid.gyroy.U", "pid.gyroz.FB", "pid.gyroz.U",
             "status.arm", "status.estimator_ready", "status.flymode", "status.rc_authority", "status.sbus_lost", "status.vbat",
         ],
+        "campaign-panel.js": [],
         "status-panel.js": [
             "c.gyro_x", "c.gyro_y", "c.gyro_z",
             "rate.pitch", "rate.roll", "rate.yaw",

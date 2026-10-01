@@ -2263,6 +2263,17 @@
       ]
     },
     {
+      "description": "Autonomous campaign runner with safety checklist and state monitor",
+      "file": "docs/dashboard-platform/shell/plugins/campaign-panel.js",
+      "gates": [],
+      "keys_read": [],
+      "name": "Campaign",
+      "slug": "campaign",
+      "workspaces": [
+        "experiments"
+      ]
+    },
+    {
       "description": "Motor testing bench, RPM monitoring, and throttle safety interlock",
       "file": "docs/dashboard-platform/shell/plugins/motor-bench-panel.js",
       "gates": [
