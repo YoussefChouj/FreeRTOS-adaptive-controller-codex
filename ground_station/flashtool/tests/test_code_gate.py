@@ -244,3 +244,11 @@ def test_step9_record_flight(base_kwargs):
     gate.record_flight("flight123", "hash123")
     lines = open(base_kwargs["ledger_path"]).readlines()
     assert any("flight123" in line for line in lines)
+
+def test_step8_hover_pending(base_kwargs):
+    gate = CodeGate(**base_kwargs)
+    gate.check_change("+++ b/open.c\n@@ -1,1 +1,1 @@\n+foo\n", {"argument": "a", "predicted_effect": "b", "metric": "c"}, {"open.c": "foo\n"})
+    base_kwargs["custody"].calls = []
+    dec = gate.on_flight_result(aborted=False, j=None, hover=True)
+    assert dec == "pending"
+    assert len(base_kwargs["custody"].calls) == 0

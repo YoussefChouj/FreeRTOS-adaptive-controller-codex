@@ -43,7 +43,7 @@ SERVER_NAMES = [
     "get_state", "list_actions", "run_plan", "get_plan", "cancel_plan",
     "say", "wait_for_operator", "get_recording", "list_sessions",
     "analyze_session", "explain_symbol", "ui_navigate", "ui_highlight",
-    "file_finding",
+    "file_finding", "campaign_state", "campaign_pause", "campaign_land", "campaign_abort"
 ]
 
 
@@ -177,6 +177,30 @@ def test_mcp_explain_symbol(service, api):
         text = resp["result"]["content"][0]["text"]
         assert "s_ekf" in text
         assert "live value: (not streaming / unavailable)" in text
+    finally:
+        proc.stdin.close() if proc.stdin else None
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+
+def test_mcp_campaign_tools(service, api):
+    server, base = api
+    api_port = server.address[1]
+    repo_root = Path(__file__).resolve().parents[3]
+    proc = _connect(api_port, repo_root)
+    try:
+        resp = _request(proc, 30, "tools/call", {"name": "campaign_state", "arguments": {}})
+        assert "result" in resp
+        
+        resp = _request(proc, 31, "tools/call", {"name": "campaign_pause", "arguments": {}})
+        assert "result" in resp
+        
+        resp = _request(proc, 32, "tools/call", {"name": "campaign_land", "arguments": {}})
+        assert "result" in resp
+        
+        resp = _request(proc, 33, "tools/call", {"name": "campaign_abort", "arguments": {}})
+        assert "result" in resp
     finally:
         proc.stdin.close() if proc.stdin else None
         try:

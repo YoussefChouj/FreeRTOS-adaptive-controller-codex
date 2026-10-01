@@ -1,5 +1,6 @@
 import subprocess
 import math
+import threading
 from dataclasses import dataclass
 from typing import Callable, Any
 from pathlib import Path
@@ -8,6 +9,32 @@ from ground_station.service.campaign_schema import load_campaign
 from ground_station.service.abort_monitor import AbortSample, AbortDecision
 from ground_station.service.trajectory_pipeline import generate
 from ground_station.platform.trajectory_upload import upload
+
+class RunnerControl:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._req = None
+
+    def request(self, cmd: str):
+        if cmd not in {"pause", "land", "abort"}:
+            raise ValueError(f"invalid request {cmd!r}")
+        with self._lock:
+            if self._req == "abort":
+                pass
+            elif self._req == "land" and cmd == "abort":
+                self._req = cmd
+            elif self._req == "pause" and cmd in {"abort", "land"}:
+                self._req = cmd
+            elif self._req is None:
+                self._req = cmd
+
+    def get(self) -> str | None:
+        with self._lock:
+            return self._req
+
+    def clear(self):
+        with self._lock:
+            self._req = None
 
 @dataclass
 class RunnerDeps:
@@ -35,6 +62,8 @@ class RunnerDeps:
     flight_timeout_s: float = 120.0
     hover_s: float = 5.0
     cooldown_min_s: float = 0.0
+    control: RunnerControl | None = None
+    apply_params: Callable[[dict], bool] = lambda params: True
 
 def default_diff_source(repo_root: str, lkg_commit: str, c_files: tuple[str, ...]) -> str:
     if not c_files:
@@ -68,6 +97,7 @@ class FlightRecord:
     decision: str
     hover_only: bool
     duration_s: float
+    reflash_hash: str = ""
 
 @dataclass
 class CampaignReport:
@@ -90,6 +120,7 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
     has_flashed = False
     history = []
     runner_consecutive_aborts = 0
+    judge = None
     
     max_ticks = math.ceil(deps.flight_timeout_s / deps.dt_s)
     
@@ -100,8 +131,23 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
         pack_id = campaign.packs[i % len(campaign.packs)]
         flight_id = f"{campaign.campaign}-{i+1:03d}"
         
+        req = deps.control.get() if deps.control else None
+        if req == "abort":
+            return CampaignReport(campaign, flights, "operator_needed", "operator abort")
+        elif req == "land":
+            return CampaignReport(campaign, flights, "operator_stop", "operator land")
+        elif req == "pause":
+            return CampaignReport(campaign, flights, "operator_stop", "operator pause")
+
         # 1. wait_for_go
         if not deps.wait_for_go(pack_id):
+            req = deps.control.get() if deps.control else None
+            if req == "abort":
+                return CampaignReport(campaign, flights, "operator_needed", "operator abort")
+            elif req == "land":
+                return CampaignReport(campaign, flights, "operator_stop", "operator land")
+            elif req == "pause":
+                return CampaignReport(campaign, flights, "operator_stop", "operator pause")
             return CampaignReport(campaign, flights, "operator_stop", "")
             
         # 2. Cooldown
@@ -140,6 +186,7 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
                 return CampaignReport(campaign, flights, "gate_refused", "; ".join(res.reasons))
             fw_hash = deps.flash()
             has_flashed = True
+            judge = "hover"
         else:
             if not has_flashed:
                 fw_hash = ""
@@ -153,6 +200,9 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
             
         # 6. Flight
         params = deps.tuner.propose(history)
+        if not deps.apply_params(params):
+            return CampaignReport(campaign, flights, "operator_needed", "param write refused")
+
         deps.monitor.begin_flight()
         flight_start_time = deps.clock()
         deps.client.set_hover_z(exp.profile.hover_z_m)
@@ -163,12 +213,16 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
         aborted = False
         decision = None
         
-
-        
         def run_loop_until(cond, phase):
             nonlocal aborted, decision
             ticks = 0
             while not cond():
+                if deps.control:
+                    req = deps.control.get()
+                    if req in ("land", "abort"):
+                        aborted = True
+                        decision = AbortDecision(level=1, reason=f"operator {req}")
+                        return False
                 if ticks >= max_ticks:
                     aborted = True
                     decision = AbortDecision(level=1, reason=f"timeout: {phase}")
@@ -225,9 +279,25 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
             runner_consecutive_aborts = 0
             
         # 9. Gate
-        gate_decision = deps.gate.on_flight_result(aborted=aborted, j=j)
+        gate_decision = ""
+        if judge == "hover":
+            gate_decision = deps.gate.on_flight_result(aborted=aborted, j=j, hover=True)
+            if gate_decision == "revert":
+                judge = None
+            else:
+                judge = "traj"
+        elif judge == "traj":
+            gate_decision = deps.gate.on_flight_result(aborted=aborted, j=j)
+            judge = None
+
         deps.gate.record_flight(flight_id, fw_hash)
         
+        reflash_hash = ""
+        if gate_decision == "revert":
+            reflash_hash = deps.flash()
+            fw_hash = reflash_hash
+            has_flashed = True
+
         flights.append(FlightRecord(
             flight_id=flight_id,
             pack_id=pack_id,
@@ -237,11 +307,20 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
             abort_reason=decision.reason if aborted and decision else "",
             decision=gate_decision,
             hover_only=hover_only,
-            duration_s=last_duration
+            duration_s=last_duration,
+            reflash_hash=reflash_hash
         ))
         
         if not landed:
             return CampaignReport(campaign, flights, "operator_needed", "landing timeout")
+            
+        req = deps.control.get() if deps.control else None
+        if req == "abort":
+            return CampaignReport(campaign, flights, "operator_needed", "operator abort")
+        elif req == "land":
+            return CampaignReport(campaign, flights, "operator_stop", "operator land")
+        elif req == "pause":
+            return CampaignReport(campaign, flights, "operator_stop", "operator pause")
         
         # 10. Abort limit
         if (aborted and decision and decision.level >= 3) or max(runner_consecutive_aborts, deps.monitor.consecutive_aborts) >= 2:

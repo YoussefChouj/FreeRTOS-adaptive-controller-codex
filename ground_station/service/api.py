@@ -480,6 +480,7 @@ _ROUTE_MAP = {
         "/api/agent/state": "one agent-facing snapshot {control, ui, recording, layout, arm_state, stream_health, running_plan, pending_approvals, last_messages}",
         "/api/agent/history": "always-on activity journal ?since=&limit=&kind=&source= - {entries: [{seq,t,iso,kind,source,actor,data}]}",
         "/api/flight_tests": "list flight-test runs (GET ?date=YYYY-MM-DD)",
+        "/api/campaign/state": "campaign state",
         # Both of these block; test_http_api_routes_endpoint cannot GET them,
         # which is why they sat undeclared -- an agent reading this map would
         # conclude the service had no push channel at all.
@@ -523,6 +524,10 @@ _ROUTE_MAP = {
         "/api/agent/ui-ack": "browser acks a ui_action {plan_id, step_id, ok, error?}",
         "/api/agent/ui-state": "browser shell reports UI state {active_tab, visible_panels, drawer_open, url}",
         "/api/agent/message": "agent -> operator message {text, source}",
+        "/api/campaign/go": "start campaign run {campaign_path, pack_id, checklist, source}",
+        "/api/campaign/pause": "pause campaign",
+        "/api/campaign/land": "land campaign",
+        "/api/campaign/abort": "abort campaign",
     },
     "ui_testids": {
         "tab-<workspace>": "workspace tab button, e.g. tab-replay",
@@ -1104,7 +1109,8 @@ class StateHub:
 def make_handler(service, hub: StateHub | None = None, static_root: Path | None = None,
                   experiment_runtime=None, agent: AgentManager | None = None,
                   copilot: Copilot | None = None,
-                  terminal_manager=None):
+                  terminal_manager=None,
+                  campaign=None):
     hub = hub or StateHub()
     _AGENT = agent  # captured; may be None in legacy tests
     _COPILOT_SOURCE = "agent:copilot"  # shared constant so agent can check it
@@ -1403,6 +1409,11 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                 import ground_station.service.path_library as pl
                 self._json(200, {"paths": pl.list_paths()})
                 
+            elif route == "/api/campaign/state":
+                if campaign is None:
+                    self._json(503, {"error": "campaign runner unavailable"})
+                    return
+                self._json(200, campaign.state())
             elif route.startswith("/api/paths/"):
                 import ground_station.service.path_library as pl
                 path_id = route.split("/")[-1]
@@ -2316,6 +2327,21 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     self._json(400, {"error": str(exc)})
             # POST /replay/<session_id>/play — push stored telemetry onto the
             # live bus (no storage write, nothing sent to the drone).
+            elif route == "/api/campaign/go":
+                if campaign is None:
+                    self._json(503, {"error": "campaign runner unavailable"})
+                    return
+                length = self._content_length()
+                body = json.loads(self.rfile.read(length) or b"{}")
+                code, res = campaign.go(body.get("campaign_path"), body.get("pack_id"), body.get("checklist"), body.get("source"))
+                self._json(code, res)
+            elif route in ("/api/campaign/pause", "/api/campaign/land", "/api/campaign/abort"):
+                if campaign is None:
+                    self._json(503, {"error": "campaign runner unavailable"})
+                    return
+                cmd = route.split("/")[-1]
+                code, res = campaign.request(cmd)
+                self._json(code, res)
             elif route.startswith("/replay/") and route.endswith("/play"):
                 parts = route.split("/")
                 session_id = parts[2] if len(parts) >= 4 else None
@@ -2576,7 +2602,8 @@ class ApiServer:
                  static_root: Path | None = None, experiment_runtime=None,
                  shell_root: str | None = None,
                  copilot: Copilot | None = None,
-                 terminal_manager=None):
+                 terminal_manager=None,
+                 campaign_service=None):
         self.service = service
         self.static_root = static_root
         self.experiment_runtime = experiment_runtime
@@ -2589,6 +2616,12 @@ class ApiServer:
                       / "docs" / "dashboard-platform" / "shell"),
             copilot=copilot,
         )
+        if campaign_service is None:
+            from ground_station.service.campaign_api import CampaignService
+            self.campaign = CampaignService(agent=self.agent)
+        else:
+            self.campaign = campaign_service
+            
         # The co-pilot needs the agent manager's state and say hooks, so it can
         # only be built once the manager exists. Without this nothing ever
         # built it and operator messages went unanswered.
@@ -2611,7 +2644,8 @@ class ApiServer:
                          experiment_runtime=experiment_runtime,
                          agent=self.agent,
                          copilot=copilot,
-                         terminal_manager=self.terminal_manager),
+                         terminal_manager=self.terminal_manager,
+                         campaign=self.campaign),
         )
         self._poll_thread = None
         self.thread = threading.Thread(target=self.server.serve_forever,

@@ -152,7 +152,11 @@ class CodeGate:
     def next_flight_must_hover(self) -> bool:
         return self.pending_change and self.flights_since_change == 0
 
-    def on_flight_result(self, aborted: bool, j: float | None) -> str:
+    def on_flight_result(self, aborted: bool, j: float | None, hover: bool = False) -> str:
+        if hover and not aborted:
+            self._log({"event": "flight_result", "decision": "pending"})
+            return "pending"
+            
         revert = False
         if aborted:
             revert = True

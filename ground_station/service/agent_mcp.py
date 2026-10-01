@@ -149,6 +149,26 @@ TOOLS: list[dict[str, Any]] = [
                         },
                         "required": ["action"]},
     },
+    {
+        "name": "campaign_state",
+        "description": "Get campaign runner state.",
+        "inputSchema": {"type": "object"},
+    },
+    {
+        "name": "campaign_pause",
+        "description": "Pause campaign run.",
+        "inputSchema": {"type": "object"},
+    },
+    {
+        "name": "campaign_land",
+        "description": "Land campaign run.",
+        "inputSchema": {"type": "object"},
+    },
+    {
+        "name": "campaign_abort",
+        "description": "Abort campaign run.",
+        "inputSchema": {"type": "object"},
+    },
 ]
 
 SERVER_IDENTITY = {"name": "dashboard", "version": "1.0.0"}
@@ -276,6 +296,18 @@ class McpServer:
             return self._text(self._ui_highlight(args))
         if name == "file_finding":
             return self._text(self._file_finding(args))
+        if name == "campaign_state":
+            status, payload = _http("GET", "/api/campaign/state")
+            return self._text(self._wrap(payload, status))
+        if name == "campaign_pause":
+            status, payload = _http("POST", "/api/campaign/pause")
+            return self._text(self._wrap(payload, status))
+        if name == "campaign_land":
+            status, payload = _http("POST", "/api/campaign/land")
+            return self._text(self._wrap(payload, status))
+        if name == "campaign_abort":
+            status, payload = _http("POST", "/api/campaign/abort")
+            return self._text(self._wrap(payload, status))
         return {"content": [{"type": "text",
                              "text": json.dumps({"error": f"unknown tool {name}"})}]}
 

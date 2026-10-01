@@ -34,6 +34,7 @@ def create_deps(drone, client, clock):
     def step(dt):
         clock.sleep(dt)
         drone.step(dt)
+    from ground_station.service.campaign_runner import RunnerControl
     return RunnerDeps(
         client=client,
         step=step,
@@ -48,12 +49,15 @@ def create_deps(drone, client, clock):
         flash=Mock(return_value="abc"),
         analyze=Mock(return_value=1.23),
         wait_for_go=Mock(return_value=True),
-        resting_v=Mock(return_value=4.0),
+        resting_v=Mock(return_value=16.0),
         arm_allowed=Mock(return_value=True),
         change_request=Mock(return_value=None),
         diff_source=Mock(return_value=""),
         flight_timeout_s=120.0,
-        hover_s=0.5
+        hover_s=0.5,
+        control=RunnerControl(),
+        apply_params=Mock(return_value=True),
+        dt_s=0.1
     )
 def test_files_after_from_diff(tmp_path):
     f1 = tmp_path / "foo.py"
@@ -112,7 +116,7 @@ def test_c_level_2_abort_gate(tmp_path):
     deps.monitor.step = Mock(side_effect=mock_step)
     report = run_campaign(str(campaign_yaml), deps)
     assert report is not None
-    deps.gate.on_flight_result.assert_called_with(aborted=True, j=None)
+    deps.gate.on_flight_result.assert_not_called()
 def test_d_level_3_abort(tmp_path):
     campaign_yaml = tmp_path / "camp.yaml"
     campaign_yaml.write_text(Path(YAML_PATH).read_text())
@@ -274,3 +278,98 @@ def test_k_tuner_history(tmp_path):
     assert len(histories[1]) == 1
     assert histories[1][0]["J"] == 1.23
     assert len(histories[2]) == 2
+def test_l_runner_control_land(tmp_path):
+    campaign_yaml = tmp_path / "camp.yaml"
+    campaign_yaml.write_text(Path(YAML_PATH).read_text())
+    drone = FakeDrone()
+    drone.sbus_live = True
+    client = WfbClient(drone.send)
+    clock = FakeClock()
+    deps = create_deps(drone, client, clock)
+    deps.flight_timeout_s = 120.0
+    
+    manager = Mock()
+    client.kill = Mock(wraps=client.kill)
+    client.traj_stop = Mock(wraps=client.traj_stop)
+    client.land = Mock(wraps=client.land)
+    
+    def mock_step(sample):
+        # Trigger land command when in traj state
+        if drone.status()["traj_state"] == 3:
+            deps.control.request("land")
+        return AbortDecision(level=0, reason="")
+    deps.monitor.step = Mock(side_effect=mock_step)
+    report = run_campaign(str(campaign_yaml), deps)
+    
+    client.traj_stop.assert_called_once()
+    client.land.assert_called_once()
+    assert not client.kill.called
+    assert report.status == "operator_stop", f"Status was {report.status}, reason: {report.reason}"
+    assert report.flights[0].abort_reason == "operator land"
+
+def test_m_runner_control_abort(tmp_path):
+    campaign_yaml = tmp_path / "camp.yaml"
+    campaign_yaml.write_text(Path(YAML_PATH).read_text())
+    drone = FakeDrone()
+    drone.sbus_live = True
+    client = WfbClient(drone.send)
+    clock = FakeClock()
+    deps = create_deps(drone, client, clock)
+    
+    manager = Mock()
+    client.kill = manager.kill
+    
+    def mock_step(sample):
+        if drone.status()["traj_state"] == 3:
+            deps.control.request("abort")
+        return AbortDecision(level=0, reason="")
+    deps.monitor.step = Mock(side_effect=mock_step)
+    report = run_campaign(str(campaign_yaml), deps)
+    
+    assert report.status == "operator_needed"
+
+def test_n_apply_params_rejection(tmp_path):
+    campaign_yaml = tmp_path / "camp.yaml"
+    campaign_yaml.write_text(Path(YAML_PATH).read_text())
+    drone = FakeDrone()
+    drone.sbus_live = True
+    client = WfbClient(drone.send)
+    clock = FakeClock()
+    deps = create_deps(drone, client, clock)
+    
+    deps.apply_params = Mock(return_value=False)
+    
+    report = run_campaign(str(campaign_yaml), deps)
+    
+    assert len(report.flights) == 0
+    assert report.status == "operator_needed"
+    assert report.reason == "param write refused"
+
+def test_o_two_flight_judging_and_revert(tmp_path):
+    campaign_yaml = tmp_path / "camp.yaml"
+    campaign_yaml.write_text(Path(YAML_PATH).read_text())
+    drone = FakeDrone()
+    drone.sbus_live = True
+    client = WfbClient(drone.send)
+    clock = FakeClock()
+    deps = create_deps(drone, client, clock)
+    
+    deps.change_request = Mock(side_effect=[{"justification": "test"}] + [None] * 20)
+    deps.gate.next_flight_must_hover.side_effect = [True] + [False] * 20
+    # "pending" on hover, "revert" on trajectory
+    deps.gate.on_flight_result.side_effect = ["pending", "revert"] + ["keep"] * 10
+    
+    report = run_campaign(str(campaign_yaml), deps)
+    
+    # Check that on_flight_result was called twice: once with hover=True, once without
+    assert deps.gate.on_flight_result.call_count == 2
+    deps.gate.on_flight_result.assert_has_calls([
+        call(aborted=False, j=1.23, hover=True),
+        call(aborted=False, j=1.23)
+    ])
+    
+    # Check that it flashed twice (initial + revert)
+    assert deps.flash.call_count == 2
+    
+    # Check that reflash_hash is set on the reverting flight
+    assert report.flights[1].reflash_hash == "abc"
