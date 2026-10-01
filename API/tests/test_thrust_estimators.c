@@ -1,14 +1,8 @@
 /*
  * Host test for thrust_estimators.c (gcc).
  *
- * Build command:
- *   gcc -std=c99 -Wall -Wextra -fsyntax-only \
- *       -I API/tests/stubs -I API \
- *       -I Global_file -I BSP -I TASK -I USER \
- *       -I stm32_lib -I FreeRTOS/include \
- *       API/thrust_estimators.c API/tests/test_thrust_estimators.c -lm
- *
- * Run: gcc -o thrust_test API/tests/test_thrust_estimators.c -lm && ./thrust_test
+ * Build+run command:
+ *   gcc -std=c99 -Wall -Wextra -IAPI/tests/stubs -IAPI -IBSP -IGlobal_file -ITASK -IUSER API/thrust_estimators.c API/tests/test_thrust_estimators.c -lm -o /tmp/wp15/te && /tmp/wp15/te
  */
 #include <stdio.h>
 #include <stdint.h>
@@ -66,9 +60,7 @@ static void test_table_lookup(void)
         ThrustEst_Update(pwm, rpm, 0.0f, 0.0f, 0.0f);
 
         float t0 = g_thrust_est.empirical[0];
-        float t1 = g_thrust_est.empirical[1];
         float t2 = g_thrust_est.empirical[2];
-        float t3 = g_thrust_est.empirical[3];
 
         /* Unsaturated: must not hit the top of the table at every tick. */
         check("table not saturated at every tick", t0 < 12.85f);
@@ -208,6 +200,9 @@ static void test_cw_share(void)
         check("cw_share converges to ~0.5-0.65",
               g_thrust_est.cw_share > 0.45f && g_thrust_est.cw_share < 0.70f);
     }
+
+    /* Verify the CW share calculation is in a reasonable range. */
+    check("cw share computed correctly", share > 0.4f && share < 0.7f);
 }
 
 /* ---- Test 5: mass_hat with known acceleration ----
@@ -253,7 +248,6 @@ static void test_mass_hat_climb(void)
  * the table was in µs but PWM was in ticks (2x). Now fixed: table in ticks. */
 static void test_empirical_varies(void)
 {
-    float rpm[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     uint16_t rpm_u[4] = {0, 0, 0, 0};
 
     ThrustEst_Init();

@@ -208,13 +208,14 @@ static uint16_t RPM_Compute(uint8_t ch)
      * but moves the median by at most 1 rank (insignificant at 200 Hz). */
     RPM_ChannelState_t* s;
     uint32_t periods[RPM_RING_DEPTH];
-    uint32_t tmp;
     uint32_t med_period;
     uint32_t now;
     uint32_t last_any;
     uint8_t  filled;
-    uint8_t  i, j;
-    uint32_t  rpm32;
+    uint8_t  i;
+    uint8_t  last_valid;
+    uint8_t  filled_copy;
+    uint32_t rpm32;
 
     if (ch >= RPM_NUM_CH) {
         return 0U;
@@ -240,24 +241,22 @@ static uint16_t RPM_Compute(uint8_t ch)
         return 0U;
     }
 
-    /* Copy ring into local array for sorting. */
+    /* Copy ring into local array for median-of-5.
+     * rpm_median5 sorts a copy of 5 elements and returns the median.
+     * For partial fills (<5), pad with the last valid period value. */
+    last_valid = 0U;
     for (i = 0; i < filled; i++) {
         periods[i] = s->ring[i];
+        last_valid = i;
+    }
+    /* Pad remaining slots with the last valid value. */
+    filled_copy = (uint8_t)((filled < 5) ? filled : 5U);
+    for (i = filled_copy; i < 5; i++) {
+        periods[i] = periods[last_valid];
     }
 
-    /* Insertion sort of filled elements (filled <= RPM_RING_DEPTH = 5, small constant). */
-    for (i = 1; i < filled; i++) {
-        tmp = periods[i];
-        j = i - 1;
-        while (j >= 1 && periods[j-1] > tmp) {
-            periods[j] = periods[j-1];
-            j--;
-        }
-        periods[j] = tmp;
-    }
-
-    /* Median: middle element (or lower of two middle for even count). */
-    med_period = periods[filled / 2];
+    /* Call the pure median-of-5 function. */
+    med_period = rpm_median5(periods);
 
     /* RPM = 60 * f_cpu / period (revolutions per minute from per-revolution
      * period).  Multiply first to preserve resolution.  The multiply MUST be
