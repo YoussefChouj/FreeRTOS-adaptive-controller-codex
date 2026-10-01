@@ -71,3 +71,14 @@ building is OK, outside workers only, explicit-pathspec commits, never commit OB
 - ~00:30 WP-10 BLOCKED (ranking never ran; scratch files; ruff) -> CTE round launched with decisions 0b6edc9.
   WP-11 running. WP-12 pre-empted before any commit (slot given to WP-10 CTE); relaunch after 11 or 10.
 - 2026-10-02 ~01:00 wp/8 (8-state OF EKF, code complete) merged into night at e7b6b48 as the WP-14 base; WP-14 brief written (tilt-only input, real shadow, rebase sign, persistence gate, KF velocity FB behind g_ekf_of_vel_fb=0). Queue: 12, 15, 14.
+
+2026-10-02 ~02:00 WP-11 merged 17f08dc (MRAC smoothstep injection T_up 2.5 s, T_dn 0.5 s then freeze, learn gate
+armed+FLYING/LANDING+1 s, weights reset on disarm/injection edge). CEO re-ran: EQUIV OK 3728208+4120208 lines, test_controller
+pass, sigma-prior 56/0, mrac.c warnings = base, comm 258 pass. Known: slot0 real-ELF test fails until the Keil rebuild (mrac_inj
+not in the old axf). Risks: a 1-tick phase flicker out of FLYING zeroes alpha at once (no alpha hysteresis); panel bug
+command-panel.js:227-228 sends idx 1, should be 10 (not fixed, out of scope).
+2026-10-02 ~02:20 WP-10 merged a341125 (CTE round). CEO re-ran: sim tests 22 pass, cascade_rank 87 s, tables match
+docs/analysis/2026-10-02-fix-ranking.md. Verdict: PID F1x+F3+F5w+F6a beats F0 in all three scenarios (S1 steady/rms 1.2/3.8
+vs 4.7/5.6 cm; S2 load step 2.2/5.0 vs 36.3/37.0; S3 rms 4.3 vs 30.9). Overturned: WP-9's F1w caps alone fail the load step
+(EMin freezes the integrators), trim alone worsens hover, velocity Ki 0.005 (F4) adds nothing over F3. WP-13 brief 970756f
+launched (bqt3qh7io) beside WP-12. Queue: 14, 15.
