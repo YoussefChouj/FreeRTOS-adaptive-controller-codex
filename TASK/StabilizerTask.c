@@ -1,5 +1,5 @@
 #include "StabilizerTask.h"
-#include "ekf_of.h"         /* 6-state OF position+bias KF (Mode 2 bias estimation) */
+#include "ekf_of.h"         /* 8-state OF position+velocity-bias+accel-bias KF (Mode 2 bias estimation) */
 #include "ekf.h"            /* g_ekf_gate: EKF body velocity for the x/y velocity loops */
 #include "math.h"
 #include "pid.h"
@@ -16,6 +16,8 @@
 #include "rpm.h"
 /* WFB BEGIN glue */
 #include "wfb_glue.h"       /* Workflow B: GS takeoff/trajectory/land sequencer + safety net */
+#include "wfb_traj.h"
+#include "wfb_prim.h"
 /* WFB END glue */
 
 /**
@@ -82,8 +84,8 @@ static float s_land_sink_bias = 0.0f;
  *   EMA converges to the translation, erasing the displacement from position.
  *   Use g_of_bias_ema_freeze=1 to lock the current estimate before maneuvers.
  *
- * Mode 2 (EKF): dedicated 6-state OF position+bias KF (API/ekf_of.c).
- *   Jointly estimates [pos_x, vel_x, bias_x, pos_y, vel_y, bias_y].
+ * Mode 2 (EKF): dedicated 8-state OF position+bias+accel bias KF (API/ekf_of.c).
+ *   Jointly estimates [pos_x, vel_x, bof_x, pos_y, vel_y, bof_y, ba_x, ba_y].
  *   The measurement model (z = vel - bias) lets the KF separate real motion
  *   from bias in the Kalman sense — no pull-back by construction.
  *   Its position state feeds Ctrler.locx/yPID.FB directly, bypassing the
@@ -94,7 +96,7 @@ static float s_land_sink_bias = 0.0f;
  *           ARM edge also re-snaps to current sample.
  * 1 = EMA:   continuous EMA tracking (OF_BIAS_EMA_ALPHA), with optional
  *            freeze via g_of_bias_ema_freeze (CMD 0x1E idx=1).
- * 2 = EKF:   dedicated 6-state OF position+bias KF (API/ekf_of.c).
+ * 2 = EKF:   dedicated 8-state OF position+bias KF (API/ekf_of.c).
  *            Runs in parallel with the existing 9-state IMU EKF (send_data.c).
  *            Mode 2 FEEDS the control loop (Ctrler.locx/yPID.FB) from the
  *            KF's debiased position state — bypasses the raw OF integration.
@@ -123,6 +125,11 @@ float g_of_bias_ema_tau_s = OF_BIAS_EMA_TAU_DEFAULT; /* EMA time constant (s) */
  *   sticky until the next ARM so the operator can see it on the dashboard.
  * Both are plain globals so they are DWARF-subscribable. */
 #define EKF_OF_INNOV_THRESH  2.0f  /* m/s — innovation > this → unhealthy */
+#define EKF_OF_ACC_SIGN_X (+1.0f)
+#define EKF_OF_ACC_SIGN_Y (-1.0f)
+#define EKF_OF_MG_TO_MPS2 (9.80665e-3f)
+/* X correlates with +Lin_Acc_X_body (r +0.27..+0.46), Y with -Lin_Acc_Y_body (r -0.25..-0.50) */
+#define EKF_OF_UPDATE_ON_NEW_FRAME 1U /* 1 = feed each OF frame once (detected by ano_of.of_update_cnt changing), 0 = legacy every tick */
 volatile uint8_t g_ekf_of_health   = 1U; /* 1=healthy 0=diverged  */
 volatile uint8_t g_ekf_of_fallback = 0U; /* 1=fell back to FIXED  */
 /* Handheld test (CMD 0x1E idx=3): integrate OF position on the ground so the
@@ -135,7 +142,7 @@ volatile uint8_t g_of_handheld_test = 0U;
 float s_of_bias_x = 0.0f, s_of_bias_y = 0.0f;
 static u8 s_of_bias_seeded = 0;
 
-/* Dedicated 6-state OF position+bias KF — used in Mode 2 (EKF).
+/* Dedicated 8-state OF position+bias KF — used in Mode 2 (EKF).
  * Initialised once at boot, ticked every control cycle in Update_Data.
  * Its position state (x[0], x[3]) feeds Ctrler.locx/yPID.FB in EKF mode. */
 EkfOf_t s_ekf_of;
@@ -426,20 +433,33 @@ void Update_Data(void)
 						* ((float)ano_of.of2_dy_fix - s_of_bias_y);
 				}
 			}
-			/* ---- Mode 2 (EKF): tick the 6-state KF, check health ---- */
+			/* ---- Mode 2 (EKF): tick the 8-state KF, check health ---- */
 			else if (g_of_bias_mode == 2U) {
 				float ofx;
 				float ofy;
 				float innov_mag;
+				uint8_t on_ground;
+				static u8 s_last_of_update_cnt = 0;
 				if (!s_ekf_of_inited) {
 					EkfOf_Init(&s_ekf_of);
 					s_ekf_of_inited = 1U;
 					g_ekf_of_health = 1U; /* healthy on init */
 				}
+				on_ground = !g_of_handheld_test && !(DroneStatus.ARM_Status == Armed && (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING));
 				ofx = ((float)ano_of.of2_dx_fix - s_of_bias_x) * 0.01f; /* m/s */
 				ofy = ((float)ano_of.of2_dy_fix - s_of_bias_y) * 0.01f;
-				EkfOf_Predict(&s_ekf_of, 0.005f);
-				if (of_ok) EkfOf_Update(&s_ekf_of, ofx, ofy);
+				EkfOf_Predict(&s_ekf_of, 0.005f, EKF_OF_ACC_SIGN_X * Lin_Acc_X_body * EKF_OF_MG_TO_MPS2, EKF_OF_ACC_SIGN_Y * Lin_Acc_Y_body * EKF_OF_MG_TO_MPS2);
+				if (on_ground) EkfOf_UpdateZeroVel(&s_ekf_of);
+				if (of_ok) {
+					if (EKF_OF_UPDATE_ON_NEW_FRAME) {
+						if (ano_of.of_update_cnt != s_last_of_update_cnt) {
+							EkfOf_Update(&s_ekf_of, ofx, ofy);
+							s_last_of_update_cnt = ano_of.of_update_cnt;
+						}
+					} else {
+						EkfOf_Update(&s_ekf_of, ofx, ofy);
+					}
+				}
 				/* Innovation-based health monitor.
 				 * innov_x/y are the post-update residuals set in EkfOf_Update.
 				 * Large innovations indicate KF divergence. On health failure:
@@ -894,8 +914,14 @@ void Update_Motor(void)
 �������ܣ�����PID����
 ��    ע��
 *************************************************************************/
+volatile float g_att_trim_roll_deg = -1.24f;
+volatile float g_att_trim_pitch_deg = -0.90f;
+volatile uint8_t g_traj_ff_on = 1U;
+static TrajFF_t s_traj_ff;
+/* WP-9 hover means in the controller frame (pitchPID frame = -imu_pit), operator zeroes them if the rotated-takeoff flight shows the lean is the room. Vmax for the FF clamp: the v_max_mps of wfb_traj_default_limits (API/wfb_traj.c) x 100 = 100.0f cm/s */
 void Compute_Motor(void)
 {
+	uint8_t airborne = (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING);
 ////////////////����߶�����//////////////////////////////////////////////////////////
 				
 	Update_Des(case_Update_height_Des);  
@@ -1038,22 +1064,35 @@ void Compute_Motor(void)
 	   every 256th tick on a uint8 wrap). */
 	if (DroneStatus.ARM_Status != 0U) {
 	Update_Des(case_Update_loc_Des);
-	ComputePID(&Ctrler.locxPID);
-	ComputePID(&Ctrler.locyPID);
+	ComputePID_Gated(&Ctrler.locxPID, airborne);
+	ComputePID_Gated(&Ctrler.locyPID, airborne);
 
   Update_Des(case_Update_v_loc_Des);
 	SDK_Set_V_Loc();//������
 
-	ComputePID(&Ctrler.locxsPID);
-	ComputePID(&Ctrler.locysPID);
+	{
+		uint8_t active = g_traj_ff_on && airborne && TWC.execute && g_wfb_status.traj_state == (float)WFB_TRAJ_EXECUTING && g_wfb_status.prim_state == (float)WFB_PRIM_TRAJ;
+		float vx, vy, ax, ay;
+		TrajFF_Step(&s_traj_ff, active, TWC.target_x, TWC.target_y, 0.01f, 0.2f, 100.0f, &vx, &vy, &ax, &ay);
+		Ctrler.locxsPID.Des += vx;
+		Ctrler.locysPID.Des += vy;
+		ComputePID_Gated(&Ctrler.locxsPID, airborne);
+		ComputePID_Gated(&Ctrler.locysPID, airborne);
+		Ctrler.locxsPID.U += ax;
+		Ctrler.locysPID.U += ay;
+	}
   }
+	else
+	{
+		TrajFF_Reset(&s_traj_ff);
+	}
 	}
 	
 //////////////////////������̬����////////////////////////////////////////////////////////////
 	
 	Update_Des(case_Update_pitrol_Des);  //����pit��roll�Ƕ�ֵ
-	ComputePID(&Ctrler.pitchPID);
-	ComputePID(&Ctrler.rollPID);
+	ComputePID_Gated(&Ctrler.pitchPID, airborne);
+	ComputePID_Gated(&Ctrler.rollPID, airborne);
 	
 	Update_Des(case_Update_yaw_Des);    //����yaw�ĽǶ�
 	ComputeYawPID(&Ctrler.yawPID);
@@ -1085,13 +1124,15 @@ void Compute_Motor(void)
 		Ctrler.yawPID.SumE   = 0.0f;
 	}
 
-	ComputePID(&Ctrler.gyroxPID);
-	ComputePID(&Ctrler.gyroyPID);
+	ComputePID_Gated(&Ctrler.gyroxPID, airborne);
+	ComputePID_Gated(&Ctrler.gyroyPID, airborne);
 	ComputePID(&Ctrler.gyrozPID);
 	
 	// Execute MRAC after all PID controllers have computed their nominal outputs (u_nom)
 	// MRAC uses the current PID rates, references, and nominal outputs to learn and compute u_ad.
 	Controller_CheckSwitch(DroneStatus.ARM_Status == Armed);
+	mrac_in_armed = (DroneStatus.ARM_Status == Armed) ? 1U : 0U;
+	mrac_in_phase = (uint8_t)flight_phase;
 	MRAC_Control(&Ctrler);
 	
  
@@ -1164,7 +1205,7 @@ void Compute_Motor(void)
 		motor_rpm[2] = RPM_Get(2);
 		motor_rpm[3] = RPM_Get(3);
 		
-		ThrustEst_Update(motor_pwm, motor_rpm, imu_data.a_acc[_Z], imu_data.pit, imu_data.rol);
+		ThrustEst_Update(motor_pwm, motor_rpm, Lin_Acc_Z_body * 9.80665f / 1000.0f, imu_data.pit, imu_data.rol);
 	}
 			
 }
@@ -1355,6 +1396,7 @@ TWC.real_yaw = Ctrler.yawPID.FB; //�ṹ���Ա������ʼ��һ
 		
 		case case_Update_pitrol_Des://���� pitch roll����
 		{
+			uint8_t flying = (flight_phase == FLIGHT_PHASE_FLYING);
 			/* OF position-hold enable switch on ch6 (OFHOLD_CH = sbus_channel[5]).
 			 * HIGH (>1000, ~1694) = OF hold ON; LOW (~306) or signal-lost = ANGLE MODE.
 			 * Angle mode bypasses ALL optical-flow loops (position AND velocity): the
@@ -1387,6 +1429,8 @@ TWC.real_yaw = Ctrler.yawPID.FB; //�ṹ���Ա������ʼ��һ
 
 			accel_to_lean_angles( des_pitch,-des_roll,
 			  &Ctrler.pitchPID.Des,&Ctrler.rollPID.Des);
+			Ctrler.pitchPID.Des = AttTrim_Apply(Ctrler.pitchPID.Des, g_att_trim_pitch_deg, gs_max_pitch_deg, flying);
+			Ctrler.rollPID.Des  = AttTrim_Apply(Ctrler.rollPID.Des,  g_att_trim_roll_deg,  gs_max_roll_deg,  flying);
 		}
     break;
 			

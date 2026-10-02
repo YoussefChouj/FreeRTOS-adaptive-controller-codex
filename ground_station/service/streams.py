@@ -113,7 +113,7 @@ class _ResolverCache:
         self._factory = factory
         self._resolver = None
         self._mtime = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     def get(self):
         if self._factory is not None:
@@ -142,7 +142,7 @@ class StreamLogger:
 
     def __init__(self, log_dir: Path):
         self.log_dir = Path(log_dir)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._active = False
         self._reset()
 
@@ -161,6 +161,9 @@ class StreamLogger:
         self._base = None
         self._slots: dict[int, dict] = {}
         self._stop_at = None
+        self._first_rx: dict[int, float] = {}
+        self.slot_faults: list[int] = []
+        self._faults_checked = False
 
     @property
     def active(self) -> bool:
@@ -227,6 +230,22 @@ class StreamLogger:
                 self._open_slot(slot, spec)
             self._write_meta()
 
+
+    def check_faults(self, now=None) -> list[int]:
+        with self._lock:
+            if self._faults_checked or not self._active:
+                return self.slot_faults
+            t_now = time.monotonic() if now is None else now
+            if self.t0 is not None and t_now - self.t0 >= 2.0:
+                self._faults_checked = True
+                import logging
+                for slot, spec in self._slots.items():
+                    rate = spec.get("rate")
+                    if rate is not None and rate > 0 and self.rows.get(slot, 0) == 0:
+                        self.slot_faults.append(slot)
+                        logging.warning("slot %d: 0 rows 2 s after log start", slot)
+            return self.slot_faults
+
     def note(self, slot, sample, now: Optional[float] = None):
         if not self._active:
             return
@@ -246,11 +265,17 @@ class StreamLogger:
             t_src = getattr(meta, "source_time_ms", values.get("t_ms", ""))
             seq = getattr(meta, "sequence", values.get("seq", ""))
             row = [t_src, "%.4f" % t_host, seq]
+            all_empty = True
             for var in self._cols[slot]:
                 v = _lookup(values, slot, var)
                 row.append("" if v is None else v)
-            w.write(t_host, row)
-            self.rows[slot] = self.rows.get(slot, 0) + 1
+                if v is not None and v != "":
+                    all_empty = False
+            
+            self.check_faults(now=mono)
+            if not all_empty:
+                w.write(t_host, row)
+                self.rows[slot] = self.rows.get(slot, 0) + 1
             expired = self._stop_at is not None and mono >= self._stop_at
         if expired:
             self.stop()
@@ -259,6 +284,7 @@ class StreamLogger:
         with self._lock:
             if not self._active:
                 return self.status_locked()
+            self.check_faults()
             self._active = False
             for w in self._writers.values():
                 try:
@@ -272,11 +298,22 @@ class StreamLogger:
     def _write_meta(self, finished=False):
         if self._base is None:
             return
+        slot_status = {}
+        for k in self._slots.keys():
+            if k in self.slot_faults:
+                slot_status[str(k)] = "fault"
+            elif self.rows.get(k, 0) == 0:
+                slot_status[str(k)] = "empty"
+            else:
+                slot_status[str(k)] = "ok"
+
         meta = {"name": self.name, "mode": self.mode,
                 "seconds": self.seconds, "window_s": self.window_s,
                 "started": self.started, "finished": finished,
                 "slots": {str(k): v for k, v in self._slots.items()},
                 "rows": {str(k): v for k, v in self.rows.items()},
+                "slot_status": slot_status,
+                "slot_faults": self.slot_faults,
                 "files": self.files, "source": "dashboard-streams"}
         self._base.with_name(self._base.name + ".meta.json").write_text(
             json.dumps(meta, indent=2) + "\n", encoding="utf-8")
@@ -287,6 +324,7 @@ class StreamLogger:
         return {"active": self._active, "name": self.name, "mode": self.mode,
                 "seconds": self.seconds, "window_s": self.window_s,
                 "elapsed_s": elapsed, "rows": dict(self.rows),
+                "slot_faults": self.slot_faults,
                 "files": list(self.files)}
 
     def status(self) -> dict:
@@ -305,7 +343,7 @@ class VofaForward:
     def __init__(self, sock_factory: Optional[Callable[[], Any]] = None):
         self._sock_factory = sock_factory or (
             lambda: socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self.active = False
         self.addr = None
         self.channels: list[str] = []
@@ -405,6 +443,9 @@ class StreamsManager:
 
     MAX_RETRIES = 3
     TIMEOUT_S = 1.5
+    REPLAY_TIMEOUT_S = 0.5
+    REPLAY_RETRIES = 3
+    REPLAY_GAP_S = 0.15
 
     def __init__(self, service, resolver_factory=None, log_dir=None,
                  sleep: Callable[[float], None] = time.sleep):
@@ -412,7 +453,7 @@ class StreamsManager:
         self.service = service
         self._resolvers = _ResolverCache(resolver_factory)
         self._sleep = sleep
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._apply_lock = threading.Lock()
         self._overrides: dict[int, dict] = {}
         self.status = {"busy": False, "error": None, "finished_at": None,
@@ -638,27 +679,120 @@ class StreamsManager:
             self.logger.swap_slot(slot, specs[slot])
         self._await_schemas(bridge, sent, specs)
 
-    def _await_schemas(self, bridge, sent: dict, specs: dict):
+
+    def preflight_check(self, window_s=2.0, min_ratio=0.8) -> tuple[bool, str]:
+        # The simulator has no radio link, so there is no slot to check;
+        # without this, sim campaigns stall here (test_campaign_api, test_workflow_b_e2e).
+        if getattr(self.service, "source", None) == "sim":
+            return (True, "")
+        bridge = self.service.bridge
+        if bridge is None or not hasattr(bridge, "_stream_stats"):
+            return (True, "")
+        
+        specs = self.slot_specs()
+        configured = {slot: spec["rate"] for slot, spec in specs.items() if spec.get("rate", 0) > 0}
+        
+        if not configured:
+            return (True, "")
+            
+        def _get_counts():
+            with bridge._stream_lock:
+                return {s: bridge._stream_stats.get(s, {}).get("received", 0) for s in configured}
+                
+        before = _get_counts()
+        self._sleep(window_s)
+        after = _get_counts()
+        
+        silent_slots = []
+        for slot, rate in configured.items():
+            b = before.get(slot, 0)
+            a = after.get(slot, 0)
+            growth = a - b if a >= b else a
+            if growth < min_ratio * rate * window_s:
+                silent_slots.append(slot)
+                
+        if not silent_slots:
+            return (True, "")
+            
+        resent = False
+        for slot in silent_slots:
+            if hasattr(bridge, "resend_slot"):
+                bridge.resend_slot(slot)
+                resent = True
+                
+        if not resent:
+            silent_slots.sort()
+            msg = "slot %d silent" % silent_slots[0] if len(silent_slots) == 1 else "slots %s silent" % ",".join(map(str, silent_slots))
+            return (False, msg)
+            
+        before2 = _get_counts()
+        self._sleep(window_s)
+        after2 = _get_counts()
+        
+        silent_slots2 = []
+        for slot in silent_slots:
+            rate = configured[slot]
+            b = before2.get(slot, 0)
+            a = after2.get(slot, 0)
+            growth = a - b if a >= b else a
+            if growth < min_ratio * rate * window_s:
+                silent_slots2.append(slot)
+                
+        if not silent_slots2:
+            return (True, "")
+            
+        silent_slots2.sort()
+        msg = "slot %d silent" % silent_slots2[0] if len(silent_slots2) == 1 else "slots %s silent" % ",".join(map(str, silent_slots2))
+        return (False, msg)
+
+    def _await_schemas(self, bridge, sent: dict, specs: dict, timeout_s=None, retries=None, raise_on_fail=True):
+        if timeout_s is None:
+            timeout_s = self.TIMEOUT_S
+        if retries is None:
+            retries = self.MAX_RETRIES
+        
         def _ok(slot):
             div, n = sent[slot]
             with bridge._stream_lock:
                 sch = bridge._stream_schemas.get(slot)
-            return sch is not None and sch.divider == div and \
-                len(sch.ranges) == n
+            if n is None:
+                return sch is not None and sch.divider == div
+            return sch is not None and sch.divider == div and len(sch.ranges) == n
 
-        self._sleep(self.TIMEOUT_S)
-        for attempt in range(1, self.MAX_RETRIES + 1):
+        step_s = 0.05 if timeout_s < self.TIMEOUT_S else None
+
+        def _wait():
+            if step_s:
+                t = 0.0
+                while t < timeout_s:
+                    if not [s for s in sent if not _ok(s)]:
+                        break
+                    s_amt = min(step_s, timeout_s - t)
+                    self._sleep(s_amt)
+                    t += s_amt
+            else:
+                self._sleep(timeout_s)
+
+        _wait()
+        for attempt in range(1, retries + 1):
             missing = [s for s in sent if not _ok(s)]
             if not missing:
-                return
+                return []
             for slot in missing:
-                bridge.subscribe_slot(slot=slot, divider=sent[slot][0],
-                                      ranges=list(specs[slot]["vars"]))
-            self._sleep(self.TIMEOUT_S)
+                if sent[slot][1] is None:
+                    from ground_station.service.streams import default_slots
+                    d = next((x for x in default_slots() if x["slot"] == slot), None)
+                    if d:
+                        bridge._request_stream_schema(d["slot"], tuple(d["vars"]), d["divider"], d["name"])
+                else:
+                    bridge.subscribe_slot(slot=slot, divider=sent[slot][0], ranges=list(specs[slot]["vars"]))
+            _wait()
+        
         missing = [s for s in sent if not _ok(s)]
-        if missing:
+        if missing and raise_on_fail:
             raise RuntimeError("no schema reply for slot(s) %s after %d "
-                               "retries" % (missing, self.MAX_RETRIES))
+                               "retries" % (missing, retries))
+        return missing
 
     def _replay(self):
         """Watchdog replay after an FC reboot: defaults for untouched slots,
@@ -668,14 +802,43 @@ class StreamsManager:
         defaults = default_slots()
         with self._lock:
             overrides = {n: dict(o) for n, o in self._overrides.items()}
+            
+        failed_slots = []
         for d in defaults:
-            if d["slot"] in overrides:
+            slot = d["slot"]
+            if slot in overrides:
                 continue
-            bridge._request_stream_schema(d["slot"], tuple(d["vars"]),
-                                          d["divider"], d["name"])
+            with bridge._stream_lock:
+                bridge._stream_schemas.pop(slot, None)
+            bridge._request_stream_schema(slot, tuple(d["vars"]), d["divider"], d["name"])
+            missing = self._await_schemas(
+                bridge, {slot: (d["divider"], None)}, None,
+                timeout_s=self.REPLAY_TIMEOUT_S,
+                retries=self.REPLAY_RETRIES,
+                raise_on_fail=False
+            )
+            if missing:
+                failed_slots.extend(missing)
+            self._sleep(self.REPLAY_GAP_S)
+            
         for slot, ov in overrides.items():
-            bridge.subscribe_slot(slot=slot, divider=ov["divider"],
-                                  ranges=list(ov["vars"]))
+            with bridge._stream_lock:
+                bridge._stream_schemas.pop(slot, None)
+            n = bridge.subscribe_slot(slot=slot, divider=ov["divider"], ranges=list(ov["vars"]))
+            missing = self._await_schemas(
+                bridge, {slot: (ov["divider"], n)}, {slot: {"vars": ov["vars"]}},
+                timeout_s=self.REPLAY_TIMEOUT_S,
+                retries=self.REPLAY_RETRIES,
+                raise_on_fail=False
+            )
+            if missing:
+                failed_slots.extend(missing)
+            self._sleep(self.REPLAY_GAP_S)
+            
+        if failed_slots:
+            import sys
+            print("[streams] replay failed for slot(s): %s" % failed_slots, file=sys.stderr)
+        return failed_slots
 
     def reset(self):
         """A full preset or the dashboard layout was applied elsewhere: the
@@ -763,6 +926,10 @@ def handle_post(service, route: str, body: dict) -> tuple[int, dict]:
             return 404, {"error": "no such preset"}
     if route == "/api/streams/log/start":
         try:
+            if not body.get("skip_preflight", False):
+                ok, reason = mgr.preflight_check()
+                if not ok:
+                    return 409, {"error": reason}
             want = body.get("slots")
             specs = mgr.slot_specs()
             if isinstance(want, list) and want:

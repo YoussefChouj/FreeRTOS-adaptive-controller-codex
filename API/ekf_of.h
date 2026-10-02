@@ -1,59 +1,68 @@
 /**
  * @file     ekf_of.h
- * @brief    6-state body-frame OF position + velocity-bias Kalman Filter.
+ * @brief    8-state body-frame OF position + velocity-bias + accel-bias Kalman Filter.
  *
- * State vector: [pos_x, vel_x, bias_x, pos_y, vel_y, bias_y] — 6 states.
+ * State vector: [pos_x, vel_x, bof_x, pos_y, vel_y, bof_y, ba_x, ba_y] — 8 states.
  * All matrices stored as flat row-major float arrays.
  *
  * Model:
- *   - Constant-velocity motion model with small process noise on velocity
- *   - Bias is a random walk (random-walk process noise)
- *   - Measurement: debiased OF body-frame velocity (m/s) per axis
+ *   - Constant-velocity motion model with accelerometer input
+ *   - OF bias (bof) and accelerometer bias (ba) are random walks
+ *   - Measurements:
+ *       - OF: debiased OF body-frame velocity (m/s) per axis
+ *       - ZUPT: zero velocity update on the ground
  *
- * Unlike the 9-state IMU-centric EKF (ekf.h), this KF directly models
- * OF velocity bias as an explicit state, making the position output
- * (which feeds Ctrler.locx/yPID.FB) debiased by construction.
+ * Units:
+ *   - pos: m
+ *   - vel: m/s
+ *   - bof: m/s
+ *   - ba: m/s^2
  *
  * Pure C99, no malloc. Compatible with Keil ARMCC.
  */
 #ifndef __EKF_OF_H__
 #define __EKF_OF_H__
 
-#include "global_declare.h"
+#include <stdint.h>
 
-/** 6-state OF position+bias EKF. */
+/** 8-state OF position+bias EKF. */
 typedef struct {
-    /* state — 6 floats: [pos_x, vel_x, bias_x, pos_y, vel_y, bias_y] */
-    float x[6];
-    /* covariance — 6x6 row-major */
-    float P[36];
+    /* state — 8 floats: [pos_x, vel_x, bof_x, pos_y, vel_y, bof_y, ba_x, ba_y] */
+    float x[8];
+    /* covariance — two 4x4 row-major blocks: P[0] for X axis, P[1] for Y axis */
+    float P[2][16];
     /* Q diagonals */
-    float Q_pos;   /* position process noise (very small — position is driven by vel) */
-    float Q_vel;   /* velocity process noise (m/s^2 per sqrt(s)) */
-    float Q_bias;  /* bias random-walk process noise (bias/sqrt(s)) */
+    float q_pos;
+    float q_acc;
+    float q_bof;
+    float q_ba;
     /* R */
-    float R_of;    /* OF velocity measurement noise (m/s)^2 */
+    float R_of;
+    float R_zupt;
     /* Innovation */
-    float innov_x; /* last innovation x-axis */
-    float innov_y; /* last innovation y-axis */
+    float innov_x;
+    float innov_y;
     uint8_t inited;
 } EkfOf_t;
 
 /** Call once at boot or after Reset_World_Origin. */
 extern void EkfOf_Init(EkfOf_t *e);
 
-/** Predict step — constant-velocity model, bias is random walk.
- *  dt: step size, seconds. */
-extern void EkfOf_Predict(EkfOf_t *e, float dt);
+/** Predict step.
+ *  dt: step size, seconds.
+ *  ax, ay: body accel in OF frame, m/s^2. */
+extern void EkfOf_Predict(EkfOf_t *e, float dt, float ax, float ay);
 
 /** Optical-flow velocity measurement update (body XY).
  *  of_x, of_y: raw OF body-frame velocity, m/s.
- *  Subtracts the bias estimate internally (H selects vel - bias). */
+ *  Subtracts the OF bias estimate internally. */
 extern void EkfOf_Update(EkfOf_t *e, float of_x, float of_y);
 
+/** Zero velocity update (on ground). */
+extern void EkfOf_UpdateZeroVel(EkfOf_t *e);
+
 /** Reset position states to zero (call on Reset_World_Origin).
- *  Keeps vel and bias estimates intact — only the accumulated
- *  position jumps to zero. */
+ *  Keeps vel and bias estimates intact. */
 extern void EkfOf_ResetPos(EkfOf_t *e);
 
 #endif /* __EKF_OF_H__ */

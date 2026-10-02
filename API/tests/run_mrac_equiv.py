@@ -258,7 +258,7 @@ def main():
         new_dir.mkdir()
         copy_working_tree(new_dir, repo_root)
 
-        new_defs = ["-D" + d for d in args.define]
+        new_defs = ["-D" + d for d in args.define] + ["-DMRAC_EQUIV_NEW_TREE"]
 
         # 1. Plain build (without -DMRAC_ENABLE_SIGMA_PRIOR)
         ref_bin_plain = tmp_dir / "ref_plain"

@@ -283,6 +283,36 @@ typedef struct {
     uint8_t ref_model_type;         // Reference model: 0 = passthrough (xm=r), 1 = first-order, 2 = second-order
 } MRAC_FeatureFlags_t;
 
+// ------------------------------------------------------------------------------
+// Injection Ramp & Ground Safety
+// ------------------------------------------------------------------------------
+#define MRAC_INJ_T_UP      2.5f   /* WHY: >5x the measured 0.45 s unwind, matches 2-3 s settling */
+#define MRAC_INJ_T_DN      0.5f   /* WHY: fast enough to remove injection promptly on disable, slow enough to avoid a sharp kick */
+#define MRAC_LEARN_HOLD_S  1.0f   /* WHY: skip takeoff ground effect after phase turns FLYING (h > 0.2 m) */
+#define MRAC_FLY_HYST_TICKS 100   /* WHY: 0.5s hysteresis so a short phase flicker does not reset learning */
+
+typedef struct {
+    float inj_alpha;
+    uint8_t learn_gate;
+    uint16_t fly_ticks;
+    uint8_t prev_injection_on;
+    uint16_t not_flying_ticks;
+    float ramp_p;
+    uint8_t prev_armed;
+    uint8_t freeze_shadow;
+} MRAC_Inj_t;
+
+extern MRAC_Inj_t mrac_inj;
+extern volatile uint8_t mrac_in_armed;
+extern volatile uint8_t mrac_in_phase;
+
+/* WHY: host builds lack flight_fsm.h, but we need these phase values.
+ * See flight_fsm.h:18-21. */
+#define MRAC_PHASE_FLYING  1
+#define MRAC_PHASE_LANDING 2
+
+void MRAC_ResetWeights(void);
+void MRAC_GateStep(void);
 
 // ------------------------------------------------------------------------------
 // 6. Simplex fallback (mode-based freeze + fade of u_ad injection)

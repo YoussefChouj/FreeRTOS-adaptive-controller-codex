@@ -5,6 +5,7 @@ Reads <stem>.meta.json and its associated <stem>.slot<i>.csv files.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +13,9 @@ import pandas as pd
 
 from ..model import FlightLog, Signal, SlotInfo
 from . import LoadError
+
+
+_RPM_DBG_RE = re.compile(r"^rpm_dbg_period_cyc\[\d+\]$")
 
 
 def load_vofa(meta_path: Path | str, gap_factor: float = 1.5) -> FlightLog:
@@ -38,10 +42,12 @@ def load_vofa(meta_path: Path | str, gap_factor: float = 1.5) -> FlightLog:
 
     stem = meta_path.name[:-len(".meta.json")] if meta_path.name.endswith(".meta.json") else meta_path.stem
 
-    slot_dfs: list[pd.DataFrame] = []
+    slot_dfs: list[pd.DataFrame | None] = []
     slot_rates: list[float] = []
     csv_paths: list[Path] = []
     slots_info: list[SlotInfo] = []
+    empty_slots: list[int] = []
+    masked: dict[str, int] = {}
 
     for i, sm in enumerate(slots_meta):
         csv = meta_path.parent / f"{stem}.slot{i}.csv"
@@ -52,16 +58,44 @@ def load_vofa(meta_path: Path | str, gap_factor: float = 1.5) -> FlightLog:
         try:
             df = pd.read_csv(csv, dtype=str, keep_default_na=False)
         except pd.errors.EmptyDataError:
-            raise LoadError(f"{csv.name}: no data rows")
+            # Header-only or completely empty: treat as empty slot
+            df = pd.DataFrame()
         except OSError as exc:
             raise LoadError(f"{csv.name}: read error: {exc}") from exc
 
-        if len(df) == 0:
-            raise LoadError(f"{csv.name}: no data rows")
+        # Check required columns exist (if any rows)
+        if len(df) > 0:
+            for col in ("t_src_ms", "t_host_s", "seq"):
+                if col not in df.columns:
+                    raise LoadError(f"{csv.name}: missing required column {col}")
 
-        for col in ("t_src_ms", "t_host_s", "seq"):
-            if col not in df.columns:
-                raise LoadError(f"{csv.name}: missing required column {col}")
+        # Handle header-only / no-data case
+        if len(df) == 0:
+            var_cols = [v for v in sm.get("vars", [])]
+            rate_hz = float(sm.get("rate", 0.0))
+            slot_rates.append(rate_hz)
+            empty_df = pd.DataFrame(columns=["t_src_ms", "t_host_s", "seq"] + var_cols)
+            slot_dfs.append(None)  # mark as empty
+            empty_slots.append(i)
+            slots_info.append(
+                SlotInfo(
+                    index=i,
+                    rate_hz=rate_hz,
+                    n_rows=0,
+                    duration_s=0.0,
+                    rate_measured_hz=0.0,
+                    seq_drops=0,
+                    tsrc_gaps=0,
+                    drop_pct=0.0,
+                    dt_median_ms=float("nan"),
+                    dt_p99_ms=float("nan"),
+                    dt_max_ms=float("nan"),
+                    tsrc_backsteps=0,
+                    host_latency_std_ms=0.0,
+                    vars=var_cols,
+                )
+            )
+            continue
 
         # Coerce all columns to numeric, empty / unparseable -> NaN
         for col in df.columns:
@@ -70,7 +104,51 @@ def load_vofa(meta_path: Path | str, gap_factor: float = 1.5) -> FlightLog:
         # Drop rows whose t_src_ms is NaN
         df = df.dropna(subset=["t_src_ms"]).reset_index(drop=True)
         if len(df) == 0:
-            raise LoadError(f"{csv.name}: no data rows")
+            var_cols = [c for c in df.columns if c not in ("t_src_ms", "t_host_s", "seq")]
+            rate_hz = float(sm.get("rate", 0.0))
+            slot_rates.append(rate_hz)
+            slot_dfs.append(None)
+            empty_slots.append(i)
+            slots_info.append(
+                SlotInfo(
+                    index=i,
+                    rate_hz=rate_hz,
+                    n_rows=0,
+                    duration_s=0.0,
+                    rate_measured_hz=0.0,
+                    seq_drops=0,
+                    tsrc_gaps=0,
+                    drop_pct=0.0,
+                    dt_median_ms=float("nan"),
+                    dt_p99_ms=float("nan"),
+                    dt_max_ms=float("nan"),
+                    tsrc_backsteps=0,
+                    host_latency_std_ms=0.0,
+                    vars=var_cols,
+                )
+            )
+            continue
+
+        # Mask ano_of.of_alt_cm sentinel (4294967295 = 0xFFFFFFFF)
+        if "ano_of.of_alt_cm" in df.columns:
+            sentinel_mask = df["ano_of.of_alt_cm"] == 4294967295
+            count = int(sentinel_mask.sum())
+            if count > 0:
+                df.loc[sentinel_mask, "ano_of.of_alt_cm"] = np.nan
+                masked["ano_of.of_alt_cm"] = count
+
+        # Mask rpm_dbg_period_cyc[N] spikes (> 5x median of finite values)
+        for col in df.columns:
+            if _RPM_DBG_RE.match(col):
+                finite_vals = df[col].dropna()
+                if len(finite_vals) > 0:
+                    med = float(finite_vals.median())
+                    if med > 0:
+                        spike_mask = df[col] > 5.0 * med
+                        count = int(spike_mask.sum())
+                        if count > 0:
+                            df.loc[spike_mask, col] = np.nan
+                            masked[col] = count
 
         rate_hz = float(sm.get("rate", 0.0))
         slot_rates.append(rate_hz)
@@ -131,12 +209,20 @@ def load_vofa(meta_path: Path | str, gap_factor: float = 1.5) -> FlightLog:
         )
         slot_dfs.append(df)
 
-    t0_src_ms = float(min(float(np.min(df["t_src_ms"], axis=0)) for df in slot_dfs))
-    max_t_src_ms = float(max(float(np.max(df["t_src_ms"], axis=0)) for df in slot_dfs))
+    # All slots empty -> still raise
+    non_empty_dfs = [df for df in slot_dfs if df is not None]
+    if not non_empty_dfs:
+        raise LoadError(f"{stem}: no data rows")
+
+    t0_src_ms = float(min(float(np.min(df["t_src_ms"], axis=0)) for df in non_empty_dfs))
+    max_t_src_ms = float(max(float(np.max(df["t_src_ms"], axis=0)) for df in non_empty_dfs))
     total_duration_s = float((max_t_src_ms - t0_src_ms) / 1000.0)
 
     signals: dict[str, Signal] = {}
     for i, (df, rate_hz) in enumerate(zip(slot_dfs, slot_rates)):
+        if df is None:
+            continue  # skip empty slots for signal extraction
+
         t_src = df["t_src_ms"].to_numpy(dtype=np.float64)
         order = np.argsort(t_src, kind="stable")
         t_sig = (t_src[order] - t0_src_ms) / 1000.0
@@ -163,6 +249,10 @@ def load_vofa(meta_path: Path | str, gap_factor: float = 1.5) -> FlightLog:
                     signals[var] = sig
 
     source_paths = [str(meta_path)] + [str(p) for p in csv_paths]
+
+    # Enrich meta with masking and empty slot info
+    meta["masked"] = {k: v for k, v in masked.items() if v > 0}
+    meta["empty_slots"] = empty_slots
 
     return FlightLog(
         name=stem,

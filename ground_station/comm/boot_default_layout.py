@@ -169,10 +169,6 @@ DASHBOARD_FRAME_A_VARS: tuple[str, ...] = (
     "s_ekf.x[2]",  # ekf.vel_z          v_body[2]  (m/s)
     "s_ekf.x[3]",  # ekf.bias_accel_x   b_a_body[0] (m/s²)
     "s_ekf.x[4]",  # ekf.bias_accel_y   b_a_body[1] (m/s²)
-    "s_ekf.x[5]",  # ekf.bias_accel_z   b_a_body[2] (m/s²)
-    "s_ekf.x[6]",  # ekf.bias_gyro_x    b_g_body[0] (rad/s)
-    "s_ekf.x[7]",  # ekf.bias_gyro_y    b_g_body[1] (rad/s)
-    "s_ekf.x[8]",  # ekf.bias_gyro_z    b_g_body[2] (rad/s)
     # ---------------------------------------------------------------------
     # Fly-mode extras (3D panel flight UX spec, 2026-09-29). The Path panel's
     # Fly mode reads position, firmware setpoint and adaptation state from
@@ -203,6 +199,10 @@ DASHBOARD_FRAME_A_VARS: tuple[str, ...] = (
     # TODO(firmware): expose estimator.cov_* — currently in s_ekf.P[0..N];
     #                 the dashboard wants the 6 diagonal scalars as
     #                 estimator.cov_pxx, _pyy, _pzz, _vxvx, _vyvy, _vzvz.
+    "mrac_inj.inj_alpha",
+    "mrac_inj.learn_gate",
+    "mrac_simplex.fade",
+    "mrac_simplex.tripped",
 )
 
 # divider=4 at the MIXED-mode measured 80 Hz Send_Task cadence gives 20 Hz on
@@ -272,6 +272,16 @@ DASHBOARD_PANEL_EXTRA_VARS: tuple[str, ...] = (
     "gs_max_roll_deg",
     "gs_throttle_max_pct",
     "gs_throttle_min_pct",
+    "s_ekf.x[5]",
+    "s_ekf.x[6]",
+    "s_ekf.x[7]",
+    "s_ekf.x[8]",
+    # WP-13 F1x+F3+F5w+F6a vars: +25 B, slot-1 frame 124 -> 149 B, ~2.5 -> 3.0 kB/s at nominal 20 Hz
+    # (div 5; ~16 Hz measured) on the 91.3 kB/s USART3 WiFi wire
+    "Ctrler.locxsPID.SumE", "Ctrler.locxsPID.Ui",
+    "Ctrler.locysPID.SumE", "Ctrler.locysPID.Ui",
+    "g_att_trim_roll_deg", "g_att_trim_pitch_deg",
+    "g_traj_ff_on",
 )
 
 # divider=5 at the MIXED-mode measured 80 Hz Send_Task cadence gives 16 Hz on
@@ -332,9 +342,12 @@ DASHBOARD_FLIGHT_POSITION_VARS: tuple[str, ...] = (
     "s_of_bias_x", "s_of_bias_y",
     "s_ekf_of.x[0]", "s_ekf_of.x[1]", "s_ekf_of.x[2]",
     "s_ekf_of.x[3]", "s_ekf_of.x[4]", "s_ekf_of.x[5]",
+    "s_ekf_of.x[6]", "s_ekf_of.x[7]",
     "g_of_hold_active",
     "DroneStatus.FlyMode",
 )
 
 # divider=4 at 100 Hz -> 25 Hz (OF module updates slower than that).
 DASHBOARD_FLIGHT_POSITION_DIVIDER: int = 4
+
+
