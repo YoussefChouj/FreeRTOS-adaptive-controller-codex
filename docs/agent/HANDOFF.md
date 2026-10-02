@@ -28,8 +28,9 @@ Read `docs/agent/reports/WP-18.md`, then `docs/agent/reports/2026-10-02-morning.
 2026-10-02 evening, WP-20 (landing drift): main @ 710d293 = OF scale x1.25 + vertical gate `g_of_vgate` (vz LPF 0.25 s)
 + landing pause at 0.40 m. Built in wt-night (0 err), NOT flashed. Replay `python -m ground_station.research.of_gate_replay`:
 scale 48.1 cm PASS, hover gated 9.6% PASS, slow-lowering leak 2.5 cm FAIL (accepted trade-off). Report `docs/agent/reports/WP-20.md`.
-NEXT: operator flashes, second handheld test (preset `position_hold_of`, `g_of_handheld_test=1`): 50 cm tape moves should
-read 48-50 cm, fast lifts ~0 cm. Then a hover flight; watch the locs loop (gain +25%).
+FLASHED + handheld test 2 (`of_scale_test_2`): 8 tape moves mean 51.9 cm (PASS), fast lifts <=0.8 cm (PASS), below 0.40 m
+frozen (PASS), slow lowering leaks ~5 cm/m (known). NEXT: hover flight, preset `position_hold_of` (log `g_of_vgate`),
+tape-measure the landing offset, watch the locs loop (gain +25%).
 
 ## Goal now
 LAB DEMO (operator priority, 2026-09-30): PID vs PID+MRAC augmentation on (a) trajectory tracking (circle/figure8)
