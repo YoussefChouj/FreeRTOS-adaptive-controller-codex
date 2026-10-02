@@ -153,6 +153,12 @@ static uint8_t s_ekf_of_tripped = 0U;
  * drone can be carried by hand (modes 0/2). Freezes the ground bias EMA, zeroes
  * the origin on enable, and self-clears once the drone is flying. */
 volatile uint8_t g_of_handheld_test = 0U;
+/* Pre-arm OF warning (FIX 2026-10-02): 1 while the on-ground averaged OF
+ * velocity at rest exceeds OF_REST_WARN_CMS on either axis (2026-10-01 ~0,
+ * 2026-10-02 +3.3/+5.1). The ARM snap removes it, but a large rest reading
+ * means the module or floor is off: check it before flying. */
+#define OF_REST_WARN_CMS            3.0f
+volatile uint8_t g_of_rest_warn = 0U;
 
 /* OF velocity-bias EMA state. s_of_bias_seeded gates the seed-on-first-sample
  * logic (see comment above). g_of_bias_ema_freeze gates the continuous update. */
@@ -648,9 +654,14 @@ void Update_Data(void)
 //    Ctrler.locysPID.FB= -ano_of.of2_dx;   //��������ϵ��          |-->x(����)          
 
 		{
-			/* EKF velocity only when selected (on ground) and still healthy; else legacy raw OF. */
-			float fb_dx = ano_of.of2_dx;
-			float fb_dy = ano_of.of2_dy;
+			/* EKF velocity only when selected (on ground) and still healthy; else debiased OF.
+			 * FIX 2026-10-02: was raw of2_dx/dy, which no bias mode ever corrected. Same
+			 * motion as of2_*_fix (gain 1.0-1.1, corr 0.92-0.97, no lag, hover logs
+			 * 2026-10-01/02) but it read +8..+14 cm/s at rest on 2026-10-02, and the
+			 * loop flew that phantom away as a ~12 cm -x drift. Now it uses the same
+			 * debiased velocity the position loop integrates (modes 0/1/2). */
+			float fb_dx = (float)ano_of.of2_dx_fix - s_of_bias_x;
+			float fb_dy = (float)ano_of.of2_dy_fix - s_of_bias_y;
 			if (g_ekf_gate.ctrl_enable && g_ekf_gate.healthy) {
 				fb_dx = g_ekf_gate.vx_cms;
 				fb_dy = g_ekf_gate.vy_cms;
@@ -1053,6 +1064,8 @@ void Compute_Motor(void)
 				s_of_pre_x += 0.005f * ((float)ano_of.of2_dx_fix - s_of_pre_x);
 				s_of_pre_y += 0.005f * ((float)ano_of.of2_dy_fix - s_of_pre_y);
 			}
+			g_of_rest_warn = (fabsf(s_of_pre_x) > OF_REST_WARN_CMS
+			               || fabsf(s_of_pre_y) > OF_REST_WARN_CMS) ? 1U : 0U;
 		}
 		if (armed_now && !s_prev_armed) {
 			Reset_World_Origin();
