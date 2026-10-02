@@ -34,6 +34,12 @@ No firmware change shipped (it would fix about 3 cm and add ground-OF risk). The
 (OF said about 5 cm, tape 20/30 cm). Measured candidate: vertical motion leaks 5-15 cm into OF position (handheld
 test 2 table in WP-20.md). NEXT: ground truth first (top-down phone video of one hover, tape the landing), then
 fix the phase where OF and video disagree. Main StabilizerTask.c = hover_2 firmware, unchanged.
+hover_5 (2026-10-02, slot0/slot2 recorded 0 rows again, so no Z/yaw): tape 50 cm y. OF raw dy at rest (motors idle,
+8-18 s) 0.00; during ground spool-up 18.5-21.5 s -0.5..-1.0 cm/s; s_of_bias_y locked -0.66; airborne raw dy mean
+-0.61 for about 47 s, so the hold flew about 0.6 cm/s x 47 s = about 30 cm of fake y. Landing: OF saw only +8.5/+1.4 cm.
+After landing at rest raw reads -1.6/-3.1 cm/s (ground OF unreliable). hover_2 bias was 0 and still 20/30 cm.
+Proposed (not done): A freeze OF bias before spool-up, B short fast final descent with control ON, C textured
+floor mat; true zero needs an absolute reference (marker). Fix the slot0/slot2 0-row recorder fault first.
 
 ## Goal now
 LAB DEMO (operator priority, 2026-09-30): PID vs PID+MRAC augmentation on (a) trajectory tracking (circle/figure8)
