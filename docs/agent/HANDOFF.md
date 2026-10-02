@@ -46,6 +46,14 @@ re-registered the default slot 0/2 echoes with a stale name table ("0 named, N u
 recorder's var names, so every row was empty and dropped. Slots 1/3 (names in the preset) were fine. WORKAROUND: restart 8081
 (or re-apply the layout) after EVERY flash. Proper fix (worker): name echoes from the requested names or a resolver reloaded
 on axf mtime, and raise a visible fault on unnamed ranges.
+hover_6/7, hover_adaptation1, hover_ekf1, hover_ekf_adaptation_1 (fix A flashed; s_of_bias 0.00/0.00 in all): hold is
+good (mean locxPID.U ~0); the error is born in the DESCENT. Per descent segment (|vz|>0.12): OF dEx/dEy = h7 +1.2/+13.9,
+adapt1 -1.2/-0.5, ekf1 -1.5/-1.5, ekf_adapt +0.7/+5.3 cm, while mean locxPID.U = -8.6/-5.6/-4.9/-7.1 in every descent.
+ekf1 (bias mode 2, q_ekf_of_vel_fb 1) = best (tape -30 cm x, landing only); OF ends within ~2 cm of start, so the
+-30 cm is estimate error (fake +locx velocity during descent, consistent with -x truth if user x = locx; mapping unverified).
+Mature-stack answer (PX4 EKF2_OF_POS + precland, ArduPilot FLOW_FXSCALER + PLND, DJI takeoff-imagery match): calibrate
+flow, then an absolute marker for true zero. NEXT: (1) top-down video ground truth, (2) handheld vertical leak calibration
+over the landing spot (raw flow vs vz and height), (3) textured mat, (4) downward camera + AprilTag pad.
 
 ## Goal now
 LAB DEMO (operator priority, 2026-09-30): PID vs PID+MRAC augmentation on (a) trajectory tracking (circle/figure8)
