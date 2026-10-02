@@ -28,8 +28,12 @@ Read `docs/agent/reports/WP-18.md`, then `docs/agent/reports/2026-10-02-morning.
 2026-10-02 night, WP-20 REVERTED: hover_4 showed the vertical gate zeroed the position/velocity output 29% of
 airborne time (takeoff 100%, landing 79-100%), so the drone flew open-loop and drifted. Main now has the pre-WP-20
 StabilizerTask.c (= the hover_2 firmware, incl. bb2040c), built in wt-night 0 err / 5 warn, NOT flashed (operator flashes).
-NEXT WP: OF home point from lift-off (integrate from arm, controllers never zeroed, land toward home), tape-measured
-landing. Details: `docs/agent/reports/WP-20.md` last two sections.
+Lift-off hypothesis TESTED and REJECTED (2026-10-02 late): the unintegrated z 0.03->0.2 m window moved only
++0.4/-2.3 cm (hover_2, 0.16 s) and +0.9/-2.9 cm (hover_4, 0.28 s) by OF, vs a 20/30 cm tape offset in hover_2.
+No firmware change shipped (it would fix about 3 cm and add ground-OF risk). The gap is OF-estimate error vs truth
+(OF said about 5 cm, tape 20/30 cm). Measured candidate: vertical motion leaks 5-15 cm into OF position (handheld
+test 2 table in WP-20.md). NEXT: ground truth first (top-down phone video of one hover, tape the landing), then
+fix the phase where OF and video disagree. Main StabilizerTask.c = hover_2 firmware, unchanged.
 
 ## Goal now
 LAB DEMO (operator priority, 2026-09-30): PID vs PID+MRAC augmentation on (a) trajectory tracking (circle/figure8)
