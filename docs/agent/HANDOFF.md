@@ -20,10 +20,10 @@ branch `wp/<id>`). Pilot WP-1 (gate.py byte-safe shims) is merged at 208cc25: 1 
 armcc v0..6 0 err). S5a (deep inner layers, variants 7/8) = UNREVIEWED partial `vps/s5a` 948de17 (worker TIMEOUT).
 S3+ stays OFF main until the demo image is flashed and flown; main's `API/mrac*` stays at S2b.
 
-2026-10-02 07:00 NIGHT DONE (WP-17): branch `night/2026-10-02` @ WP-17 commit, pushed, NOT on main, NOT flashed.
-Merged WP-12/13/15/16 (drift fix F1x+F3+F5w+F6a, trim -1.24/-0.90). Keil build 0 errors (axf C:/tmp/wp17/JX_FLY-night-d211987.axf).
-WP-14 (EKF shadow) PARTIAL on `wp/14` f62a874, unmerged (agy quota). Start with `docs/agent/reports/2026-10-02-morning.md`
-(flights + what each decides) and `docs/agent/reports/WP-17.md`. Operator decides: flash `night`, merge into main.
+2026-10-02 16:30 LAB DAY (WP-18): `night/2026-10-02` merged into main twice (236ba13 = WP-12..16, 1acb811 = +WP-14).
+236ba13 is FLASHED (verify OK, 0 dropped). WP-14 (OF EKF tilt input k=0.242, shadow on, active path off) is on main but
+NOT flashed and NOT Keil-built: HOLD_FLASH (the operator runs `rebuild_and_flash --yes` from main).
+Read `docs/agent/reports/WP-18.md`, then `docs/agent/reports/2026-10-02-morning.md` (flights + what each decides).
 
 ## Goal now
 LAB DEMO (operator priority, 2026-09-30): PID vs PID+MRAC augmentation on (a) trajectory tracking (circle/figure8)
