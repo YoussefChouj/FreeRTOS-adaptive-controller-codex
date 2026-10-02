@@ -54,6 +54,16 @@ ekf1 (bias mode 2, q_ekf_of_vel_fb 1) = best (tape -30 cm x, landing only); OF e
 Mature-stack answer (PX4 EKF2_OF_POS + precland, ArduPilot FLOW_FXSCALER + PLND, DJI takeoff-imagery match): calibrate
 flow, then an absolute marker for true zero. NEXT: (1) top-down video ground truth, (2) handheld vertical leak calibration
 over the landing spot (raw flow vs vz and height), (3) textured mat, (4) downward camera + AprilTag pad.
+2026-10-02 last lab logs (unique_position1, hanheld_takeof_landing_1, rc_sticks_3): handheld leak fit (dz/dt, z>0.12,
+n=2225): fake locx vel = +0.058*vz (r 0.72), fake locy = +0.029*vz (r 0.43); EKF vel carries the same (0.056), so EKF
+does not remove it. Equals a ~3.3/1.7 deg OF tilt OR the hand arcing (confound; repeat wall-guided). A linear leak cancels
+over a symmetric climb+descent, so it cannot alone explain -30 cm at landing. RC log: operator used sticks only 0-16% of
+airborne time; raw RolCtrler>3000 -> locxsPID.Des<0 (corr -0.74) and rollDes<0; descent rollDes mean -0.5..-1.1 deg in
+all 7 landings; touchdown sink 0.4-0.9 m/s, z floor 0.05; ep4 operator kicked rollDes -15 deg at z 0.10. OF is blind and
+earth pos frozen at touchdown, so skid is unobserved; operator: faster descent = more drift (fits touchdown/wake, not leak).
+LANDING ramp = LAND_DES_STEP 0.30 m/s + sink bias up to 0.40 (StabilizerTask.c ~1356-1418); stick descent = THR*1.0 m/s.
+NEXT lab: T1 wall-guided handheld (leak real?), T2 A/B landing normal vs slow final 0.3 m (tape+video), T3 roll-right in
+hover -> user direction. Firmware after: F1 leak feed-forward of_v -= k*vz (GS-tunable), F2 two-stage land speed.
 
 ## Goal now
 LAB DEMO (operator priority, 2026-09-30): PID vs PID+MRAC augmentation on (a) trajectory tracking (circle/figure8)
