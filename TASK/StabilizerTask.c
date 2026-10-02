@@ -198,7 +198,8 @@ volatile uint8_t g_of_bias_capture_req = 0;
  *   name                       value      unit   meaning                                   */
 #define OF_VEL_SCALE                1.25f   /* -     multiplies debiased of2_*_fix (cm/s)       */
 #define OF_GATE_MIN_ALT_M           0.40f   /* m     Z_posPID.FB below this: gated              */
-#define OF_GATE_VZ_MPS              0.20f   /* m/s   |Z_ratePID.FB| above this: gated (20 cm/s) */
+#define OF_GATE_VZ_MPS              0.20f   /* m/s   |low-passed Z_ratePID.FB| above: gated     */
+#define OF_GATE_VZ_ALPHA            0.02f   /* -     vz LPF per 5 ms tick (tau 0.25 s, replay)  */
 #define OF_GATE_MAX_ALT_CM          500U    /* cm    of_alt_cm above this (0xFFFFFFFF): gated    */
 #define OF_GATE_RELEASE_TICKS       60U     /* 5 ms  clear this long before ungating (0.3 s)    */
 #define LAND_PAUSE_ALT_M            0.40f   /* m     landing ramp holds here before the gate    */
@@ -210,6 +211,7 @@ volatile uint8_t g_of_bias_capture_req = 0;
  * Global so the ground station can log it. */
 volatile uint8_t g_of_vgate = 1U;
 static uint16_t s_of_vgate_clear_ticks = 0U;
+static float    s_of_vz_f = 0.0f;       /* m/s, LPF of Z_ratePID.FB for the gate */
 static uint8_t  s_land_pause = 0U;        /* WP-20 C, see the LANDING ramp */
 static uint16_t s_land_pause_ticks = 0U;
 /* Debiased, scale-corrected OF body velocity in cm/s. The single source for the
@@ -580,10 +582,14 @@ void Update_Data(void)
 		/* WP-20 B: vertical gate. Low height and climb/sink both fake horizontal
 		 * flow, so stop integrating it. Z FB is last tick's (m, m/s; updated
 		 * further down in this function). Gates at once, releases after
-		 * OF_GATE_RELEASE_TICKS clear so hover noise does not chatter. */
+		 * OF_GATE_RELEASE_TICKS clear so hover noise does not chatter. vz is
+		 * low-passed: raw Z_ratePID.FB spikes past 0.2 m/s on 10% of hover
+		 * samples (hover_2), which gated 29% of the hold (of_gate_replay). */
 		{
-			u8 vgate_raw = (u8)(Ctrler.Z_posPID.FB < OF_GATE_MIN_ALT_M ||
-			    fabsf(Ctrler.Z_ratePID.FB) > OF_GATE_VZ_MPS ||
+			u8 vgate_raw;
+			s_of_vz_f += OF_GATE_VZ_ALPHA * (Ctrler.Z_ratePID.FB - s_of_vz_f);
+			vgate_raw = (u8)(Ctrler.Z_posPID.FB < OF_GATE_MIN_ALT_M ||
+			    fabsf(s_of_vz_f) > OF_GATE_VZ_MPS ||
 			    ano_of.of_alt_cm > OF_GATE_MAX_ALT_CM);
 			if (vgate_raw) {
 				s_of_vgate_clear_ticks = 0U;
