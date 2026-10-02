@@ -48,6 +48,15 @@ so the motors cut 4-8 cm up and it dropped. Touchdown now also needs `Z_posPID.D
 0.15 m/s below `LAND_SLOW_ALT` 0.40 m. `LAND_MAX_TICKS` is now 3000 (15 s). wt-night build: 0 err / 5 warn, Code 108692.
 REJECTED F1 (leak feed-forward): handheld leak not deterministic (UP +10.5 vs DOWN -7.3 cm, ratio 2.5-10%).
 FIRST FLIGHT WATCH: landing under 15 s, no cut above the ground, soft touchdown, skid during the powered ground phase (<= ~0.7 s).
+auto_landing_1 (21:07, db8c16f FLASHED 21:03, 6 flights, F6 = stick flight): Des slope 0.300 above, ~0.17-0.21 in the
+0.05-0.38 band, so the two-stage ramp is live. Disarm gate STILL fires in the air (F2-F5): Des leads FB by 13-19 cm, so
+Des<=0.01 already at FB 0.16-0.18 and disarm at FB 0.11-0.14 vs rest 0.05-0.10. Next fix: gate on FB near the pre-arm rest z
+(or thrust-low + no vertical motion, PX4-style), not on Des. Powered sink still spikes vz -0.64..-0.79 below 0.4 m (cause open).
+Truth by hand-carry back to the takeoff mark (OF at ~5 cm height, scale unverified): F2 26, F3 10, F4 13, F5 18 cm (F1 47, carried
+up to 0.84 m). Estimate at disarm was within 5 cm of 0 every time, so this is ESTIMATE error. Same side every flight: true
+landing = ly -6..-20, lx 0..+16 -> systematic. Voltage 15.7->14.7 V, hover motor mean 3029->3074, p99 max 3450-3634 (log max
+3938): no authority loss; F6 voltage = F5. Candidate upgrade: full roll/pitch/yaw rotation of OF (EKF2-style flow model);
+earlier tilt test removed most of the locy leak (k 0.029 -> 0.001).
 RECORDER 0-ROW ROOT CAUSE: 8081 kept running across the reflash. The new axf moved the RAM variables by 12 B, and the bridge
 re-registered the default slot 0/2 echoes with a stale name table ("0 named, N unnamed"). Positional names never matched the
 recorder's var names, so every row was empty and dropped. Slots 1/3 (names in the preset) were fine. WORKAROUND: restart 8081
