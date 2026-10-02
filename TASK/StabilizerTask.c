@@ -1053,7 +1053,12 @@ void Compute_Motor(void)
 		 * locked the lift-off velocity into the Mode 0 bias, and the position
 		 * loop held that velocity as "zero" for the whole flight (slow one-way
 		 * drift). Average only while motors are off or at idle (THR < 20%). */
-		if (armed_now && (TWC.execute || RCInput_Get(RC_AXIS_THR) >= 0.2f))
+		/* FIX 2026-10-02 (hover_5): props spinning at idle on the ground made the
+		 * OF read -1 cm/s y for 2.4 s with the drone still, and this average
+		 * locked -0.66 as the bias, so the hold flew that fake velocity all
+		 * flight. Average only while the motors are stopped. */
+		if (armed_now && (g_motor_idle_enabled || TWC.execute ||
+		                  RCInput_Get(RC_AXIS_THR) >= 0.2f))
 			on_ground = 0U;
 		if (on_ground && !g_of_handheld_test && ano_of.of_quality >= OF_MIN_QUALITY) {
 			if (!s_of_pre_ok) {
