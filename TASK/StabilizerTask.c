@@ -48,6 +48,17 @@ short Throttle_th = 2200;
  * rest height, or the sink bias saturated at LAND_SINK_BIAS_MAX (see Update_Motor). */
 #define LAND_REST_MARGIN     0.03f
 #define LAND_SINK_BIAS_MAX   0.40f
+/* WP-21 B: ground-contact stage (ArduPilot land_complete_maybe / soften_for_landing_xy idea).
+ * In LANDING with the Z ramp at the floor, FB below LAND_CONTACT_ALT and |vz| below
+ * LAND_CONTACT_VZ for LAND_CONTACT_TICKS, hold (not zero) the xy position and velocity
+ * integrators. With feet touching, friction stops the motion the I terms are pushing for,
+ * so they would wind up a tilt that skids or tips the drone at the cut. P and D stay
+ * active: position hold is NOT turned off. It can also latch while floating on the
+ * ground-effect cushion (0.11-0.14 m, vz ~0); holding I there is harmless. Does not fix
+ * the OF position-estimate error itself. */
+#define LAND_CONTACT_ALT     0.15f
+#define LAND_CONTACT_VZ      0.10f
+#define LAND_CONTACT_TICKS   60U   /* 0.3 s at 200 Hz */
 /* Motor bench-test dead-man: stabilizer runs at 200 Hz, so 100 ticks = 500 ms.
  * If the dashboard stops sending CMD 0x16 heartbeats, motors are zeroed. */
 #define MOTOR_TEST_DEADMAN_TICKS  100U
@@ -143,6 +154,43 @@ float g_of_bias_ema_tau_s = OF_BIAS_EMA_TAU_DEFAULT; /* EMA time constant (s) */
  * per axis on the 5 pinned logs and gets k_x 0.20..0.38, k_y 0.18..0.36 (all > 0) with these signs;
  * SIGN_Y = -1 gave k_y -0.18..-0.36 on every log. */
 #define EKF_OF_UPDATE_ON_NEW_FRAME 1U /* 1 = feed each OF frame once (detected by ano_of.of_update_cnt changing), 0 = legacy every tick */
+/* WP-21 A: full-tilt OF correction, default OFF.  OF deltas are body-frame (sensor plane);
+ * when tilted, climb/sink leaks into them (first order: v_level ~= v_body + SIGN*GB*v_up).
+ * 1 = rotate each body delta to the level frame before the yaw rotation:
+ *   n = (-SIGN_X*GBX, -SIGN_Y*GBY, n3) = up axis in OF axes, n3 = sqrt(1 - n1^2 - n2^2)
+ *   dz = (dh_up - n1*dx - n2*dy) / n3                      (body z from the height change)
+ *   level = minimal tilt rotation of (dx, dy, dz)          (yaw kept, so the yaw step is unchanged)
+ * dh_up = ano_of.of2_h_f2_v (m/s, + up, tilt-corrected height rate).  Skipped above 60 deg
+ * tilt (n3 < 0.5).  SIGN UNCONFIRMED: auto_landing_1 regression was inconclusive.  Before
+ * flying with it, handheld test (CMD 0x1E idx=3): tilt ~10 deg on one axis, move straight
+ * up/down ~50 cm; locx/locyPID.FB must stay flatter with the flag on than off. */
+volatile uint8_t g_of_full_tilt = 0U;
+/* Rotate one tick's body OF delta (*dx, *dy) to the level frame in place; dh_up is the same
+ * tick's height change in the same units (cm/tick here).  See g_of_full_tilt above. */
+static void of_full_tilt_delta(float *dx, float *dy, float dh_up)
+{
+	float n1 = -EKF_OF_ACC_SIGN_X * Gravity_Body_X;
+	float n2 = -EKF_OF_ACC_SIGN_Y * Gravity_Body_Y;
+	float n3sq = 1.0f - n1 * n1 - n2 * n2;
+	float n3, k, bx, by, bz;
+	if (n3sq < 0.25f) return;                 /* > 60 deg tilt: leave the delta raw */
+	n3 = sqrtf(n3sq);
+	k  = 1.0f / (1.0f + n3);
+	bx = *dx;
+	by = *dy;
+	bz = (dh_up - n1 * bx - n2 * by) / n3;
+	*dx = (1.0f - n1 * n1 * k) * bx - n1 * n2 * k * by - n1 * bz;
+	*dy = -n1 * n2 * k * bx + (1.0f - n2 * n2 * k) * by - n2 * bz;
+}
+/* WP-21 B: ComputePID_Gated, but hold == 1 keeps SumE/Ui at their previous value (the
+ * Z-loop P0 Finding 2 pattern) instead of zeroing them, so P/D still act. */
+static void ComputePID_Hold(PIDTypeDef *pPID, uint8_t integrate, uint8_t hold)
+{
+	float sumE = pPID->SumE;
+	float ui   = pPID->Ui;
+	ComputePID_Gated(pPID, integrate);
+	if (hold && integrate) { pPID->SumE = sumE; pPID->Ui = ui; }
+}
 volatile uint8_t g_ekf_of_health   = 1U; /* 1=healthy 0=diverged  */
 volatile uint8_t g_ekf_of_fallback = 0U; /* 1=fell back to FIXED  */
 /* WP-14: shadow mode — KF runs every tick regardless of g_of_bias_mode.
@@ -566,6 +614,8 @@ void Update_Data(void)
 			s_ekf_prev_px = s_ekf_of.x[0];
 			s_ekf_prev_py = s_ekf_of.x[3];
 			if (pos_integrate) {
+				/* WP-21 A: m/s * 100 * 0.005 s = cm/tick, same units as ekf_dx/dy */
+				if (g_of_full_tilt) of_full_tilt_delta(&ekf_dx, &ekf_dy, ano_of.of2_h_f2_v * 0.5f);
 				ano_of.earth_x += ekf_dx * Cos_Yaw_01 + ekf_dy * Sin_Yaw_01;
 				ano_of.earth_y += ekf_dy * Cos_Yaw_01 - ekf_dx * Sin_Yaw_01;
 			}
@@ -594,8 +644,13 @@ void Update_Data(void)
 				ano_of.DISTANCE_X = ano_of.DISTANCE_X+of_dx_deb*0.005f;
 				ano_of.DISTANCE_Y = ano_of.DISTANCE_Y+of_dy_deb*0.005f;
 
-				ano_of.earth_x = ano_of.earth_x + (of_dx_deb*0.005f*Cos_Yaw_01 + of_dy_deb*0.005f*Sin_Yaw_01 );
-				ano_of.earth_y = ano_of.earth_y + (of_dy_deb*0.005f*Cos_Yaw_01 - of_dx_deb*0.005f*Sin_Yaw_01 );
+				float of_dx_t = of_dx_deb*0.005f;   /* cm/tick */
+				float of_dy_t = of_dy_deb*0.005f;
+				/* WP-21 A: DISTANCE_X/Y above stay raw body-frame */
+				if (g_of_full_tilt) of_full_tilt_delta(&of_dx_t, &of_dy_t, ano_of.of2_h_f2_v * 0.5f);
+
+				ano_of.earth_x = ano_of.earth_x + (of_dx_t*Cos_Yaw_01 + of_dy_t*Sin_Yaw_01 );
+				ano_of.earth_y = ano_of.earth_y + (of_dy_t*Cos_Yaw_01 - of_dx_t*Sin_Yaw_01 );
 			}
 			ano_of.earth_x_ture  =  ano_of.earth_y;
 			ano_of.earth_y_ture  =  -ano_of.earth_x;
@@ -1024,6 +1079,15 @@ static TrajFF_t s_traj_ff;
 void Compute_Motor(void)
 {
 	uint8_t airborne = (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING);
+	static uint8_t s_land_contact_cnt = 0U;   /* WP-21 B, see LAND_CONTACT_* */
+	uint8_t land_contact;
+	if (flight_phase == FLIGHT_PHASE_LANDING && Ctrler.Z_posPID.Des <= 0.01f &&
+	    Ctrler.Z_posPID.FB < LAND_CONTACT_ALT && fabsf(Ctrler.Z_ratePID.FB) < LAND_CONTACT_VZ) {
+		if (s_land_contact_cnt < LAND_CONTACT_TICKS) s_land_contact_cnt++;
+	} else {
+		s_land_contact_cnt = 0U;
+	}
+	land_contact = (uint8_t)(s_land_contact_cnt >= LAND_CONTACT_TICKS);
 ////////////////����߶�����//////////////////////////////////////////////////////////
 				
 	Update_Des(case_Update_height_Des);  
@@ -1175,8 +1239,8 @@ void Compute_Motor(void)
 	   every 256th tick on a uint8 wrap). */
 	if (DroneStatus.ARM_Status != 0U) {
 	Update_Des(case_Update_loc_Des);
-	ComputePID_Gated(&Ctrler.locxPID, airborne);
-	ComputePID_Gated(&Ctrler.locyPID, airborne);
+	ComputePID_Hold(&Ctrler.locxPID, airborne, land_contact);
+	ComputePID_Hold(&Ctrler.locyPID, airborne, land_contact);
 
   Update_Des(case_Update_v_loc_Des);
 	SDK_Set_V_Loc();//������
@@ -1187,8 +1251,8 @@ void Compute_Motor(void)
 		TrajFF_Step(&s_traj_ff, active, TWC.target_x, TWC.target_y, 0.01f, 0.2f, 100.0f, &vx, &vy, &ax, &ay);
 		Ctrler.locxsPID.Des += vx;
 		Ctrler.locysPID.Des += vy;
-		ComputePID_Gated(&Ctrler.locxsPID, airborne);
-		ComputePID_Gated(&Ctrler.locysPID, airborne);
+		ComputePID_Hold(&Ctrler.locxsPID, airborne, land_contact);
+		ComputePID_Hold(&Ctrler.locysPID, airborne, land_contact);
 		Ctrler.locxsPID.U += ax;
 		Ctrler.locysPID.U += ay;
 	}
