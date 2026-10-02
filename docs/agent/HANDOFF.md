@@ -2,6 +2,7 @@
 
 Read order for a new agent: `AGENTS.md` -> this file -> `docs/agent/memory/rules.md` (+ `env.md` if you touch workers/hardware).
 History is in `docs/agent/ledger/` (grep it, never read it whole).
+2026-10-02 WP-21 (main, NOT flashed; HOLD_FLASH on): dd77482 EKF-OF 5-sigma OF innovation gate; 97b5a72 g_of_full_tilt (default 0, sign unconfirmed: handheld tilt+vertical test before enabling) + LANDING ground-contact xy I-hold (LAND_CONTACT_*). Keil 0 errors in wt-night. D (liftoff slide) refuted: <=1.5 cm.
 
 This is the page of stream `main` (main tree: Keil build, flash, probe, 8081, merges). Other streams have their own
 page in `.worktrees/<stream>/docs/agent/streams/<stream>.md`. Start every session with
