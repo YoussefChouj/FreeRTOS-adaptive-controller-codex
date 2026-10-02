@@ -41,6 +41,13 @@ After landing at rest raw reads -1.6/-3.1 cm/s (ground OF unreliable). hover_2 b
 FIX A DONE (2026-10-02, StabilizerTask.c ~1056): the OF rest average and the Mode 0 bias stop at
 `g_motor_idle_enabled` (props spinning), not at takeoff. Built in wt-night: 0 err / 5 warn, Code 108636. NOT flashed.
 Open: B short fast final descent with control ON, C textured mat; true zero needs an absolute reference (marker).
+LANDING FIX (2026-10-02 late, operator: no more flight tests, so this is log-justified only, NOT flown, NOT flashed):
+(1) auto-land disarmed in mid-air on the ground-effect cushion (hover_7 at z 0.14 vs rest 0.10, unique_position1 0.13 vs 0.05),
+so the motors cut 4-8 cm up and it dropped. Touchdown now also needs `Z_posPID.Des <= 0.01` (sink bias pushes through).
+(2) near-ground vz spiked -0.65/-1.05 on a -0.30 command, and the operator saw less drift at slower descent. Two-stage ramp:
+0.15 m/s below `LAND_SLOW_ALT` 0.40 m. `LAND_MAX_TICKS` is now 3000 (15 s). wt-night build: 0 err / 5 warn, Code 108692.
+REJECTED F1 (leak feed-forward): handheld leak not deterministic (UP +10.5 vs DOWN -7.3 cm, ratio 2.5-10%).
+FIRST FLIGHT WATCH: landing under 15 s, no cut above the ground, soft touchdown, skid during the powered ground phase (<= ~0.7 s).
 RECORDER 0-ROW ROOT CAUSE: 8081 kept running across the reflash. The new axf moved the RAM variables by 12 B, and the bridge
 re-registered the default slot 0/2 echoes with a stale name table ("0 named, N unnamed"). Positional names never matched the
 recorder's var names, so every row was empty and dropped. Slots 1/3 (names in the preset) were fine. WORKAROUND: restart 8081

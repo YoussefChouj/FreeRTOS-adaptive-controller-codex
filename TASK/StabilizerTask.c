@@ -35,8 +35,15 @@ short Throttle_th = 2200;
  * PID follows the setpoint to ground — no throttle ramp needed.
  * Touchdown detected by Z_ratePID.FB → 0 on frame contact. */
 #define LAND_DES_STEP   0.0015f
-/* Safety net: 2000 ticks at 200 Hz = 10 s max landing time before forced disarm. */
-#define LAND_MAX_TICKS  2000U
+/* Two-stage descent (2026-10-02): below LAND_SLOW_ALT the ramp halves to 0.15 m/s.
+ * Logs: sink spikes to 0.65-1.05 m/s in the last 30 cm on a 0.30 m/s command, and the
+ * operator saw less landing drift at slower descent. 0.15 m/s stays above the 0.08 m/s
+ * touchdown-rate threshold. */
+#define LAND_SLOW_ALT        0.40f
+#define LAND_DES_STEP_SLOW   0.00075f
+/* Safety net: 3000 ticks at 200 Hz = 15 s max landing time before forced disarm
+ * (was 10 s; the slow final stage adds about 1.3 s, keep margin from 2.5 m). */
+#define LAND_MAX_TICKS  3000U
 /* Motor bench-test dead-man: stabilizer runs at 200 Hz, so 100 ticks = 500 ms.
  * If the dashboard stops sending CMD 0x16 heartbeats, motors are zeroed. */
 #define MOTOR_TEST_DEADMAN_TICKS  100U
@@ -858,7 +865,11 @@ void Update_Motor(void)
              * Below 0.20 m a 0.15 m/s sink bias is active, so widen threshold to
              * 0.08 m/s — the drone decelerates through that on contact.
              * Above 0.20 m keep tight (0.02 m/s) to avoid false triggers mid-descent.
-             * Safety net: force disarm after LAND_MAX_TICKS (10 s) regardless. */
+             * FIX 2026-10-02: also require the Z setpoint ramp to have reached the floor.
+             * hover_7 and unique_position1 disarmed at 0.13-0.14 m while floating on the
+             * ground-effect cushion (vz ~0), then fell 4-8 cm with motors off. Gated, the
+             * existing sink bias pushes through the cushion and motors cut on the ground.
+             * Safety net: force disarm after LAND_MAX_TICKS (15 s) regardless. */
             {
                 float rate_thr = (Ctrler.Z_posPID.FB < 0.20f) ? 0.08f : 0.02f;
                 if (fabsf(Ctrler.Z_ratePID.FB) < rate_thr)
@@ -869,7 +880,8 @@ void Update_Motor(void)
 
             s_land_timeout++;
 
-            if ((s_stable_ticks >= 10 && Ctrler.Z_posPID.FB < 0.15f) ||
+            if ((s_stable_ticks >= 10 && Ctrler.Z_posPID.FB < 0.15f &&
+                 Ctrler.Z_posPID.Des <= 0.01f) ||
                 s_land_timeout >= LAND_MAX_TICKS)
             {
                 s_stable_ticks    = 0;
@@ -1361,7 +1373,8 @@ TWC.real_yaw = Ctrler.yawPID.FB; //�ṹ���Ա������ʼ��һ
 				TWC.execute = 0U;
 				if (Ctrler.Z_posPID.Des > Ctrler.Z_posPID.FB)
 					Ctrler.Z_posPID.Des = Ctrler.Z_posPID.FB;
-				Ctrler.Z_posPID.Des -= LAND_DES_STEP;
+				Ctrler.Z_posPID.Des -= (Ctrler.Z_posPID.FB < LAND_SLOW_ALT) ?
+				                       LAND_DES_STEP_SLOW : LAND_DES_STEP;
 				if (Ctrler.Z_posPID.Des < 0.0f) Ctrler.Z_posPID.Des = 0.0f;
 				break;
 			}
