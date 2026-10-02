@@ -343,6 +343,10 @@ DASHBOARD_FLIGHT_POSITION_VARS: tuple[str, ...] = (
     "s_ekf_of.x[0]", "s_ekf_of.x[1]", "s_ekf_of.x[2]",
     "s_ekf_of.x[3]", "s_ekf_of.x[4]", "s_ekf_of.x[5]",
     "s_ekf_of.x[6]", "s_ekf_of.x[7]",
+    # WP-14 shadow-flight telemetry: innovation and health. Slot-3 payload 120 -> 129 B
+    # (+2 float innov, +1 u8 health); at divider 4 that is (7+120)*25 = 3175 -> (7+129)*25 = 3400 B/s.
+    "s_ekf_of.innov_x", "s_ekf_of.innov_y",
+    "g_ekf_of_health",
     "g_of_hold_active",
     "DroneStatus.FlyMode",
 )
