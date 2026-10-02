@@ -1,17 +1,22 @@
 /*
- * test_ekf_of_shadow.c — Host C test for WP-14 shadow mode, rebase sign,
- *                         and persistence gate.
+ * test_ekf_of_shadow.c - Host C test for WP-14 shadow mode, rebase sign,
+ *                        persistence gate and gate-trip re-init.
  *
- * Build (MinGW gcc.exe from WSL, 32-bit):
- *   gcc.exe -std=c99 -Wall -Wextra -IAPI -IAPI/tests/stubs_wp14 \
- *       API/tests/test_ekf_of_shadow.c API/ekf_of.c -lm \
- *       -o C:/tmp/wp14/test_shadow.exe && /mnt/c/tmp/wp14/test_shadow.exe
+ * Build and run (from the repo root; gcc.exe on the Windows laptop, gcc on Linux):
+ *   gcc -std=c99 -Wall -Wextra -IAPI -IAPI/tests/stubs_wp14 API/tests/test_ekf_of_shadow.c API/ekf_of.c -lm \
+ *       -o /tmp/wp14/tes && /tmp/wp14/tes
+ *
+ * StabilizerTask.c cannot be built on the host (FreeRTOS/Keil headers), so the health-gate
+ * block is mirrored in gate_tick() below; keep the two in step.
  *
  * Tests:
- *   1. rebase_sign:     a rebase leaves the predicted OF measurement unchanged.
- *   2. persist_gate_99: 99 bad ticks → no trip (health stays 1).
- *   3. persist_gate_100: 100 bad ticks → trip (health goes to 0).
- *   4. shadow_no_mode:   shadow mode never changes g_of_bias_mode.
+ *   1. rebase_sign:       a rebase leaves the predicted OF measurement unchanged.
+ *   2. persist_gate_99:   99 bad ticks -> no trip (health stays 1).
+ *   3. persist_gate_100:  100 bad ticks -> trip (health goes to 0).
+ *   4. shadow_no_mode:    shadow mode never changes g_of_bias_mode.
+ *   5. trip_reinit:       a trip clears inited; the next tick re-inits to a clean state, health stays 0.
+ *   6. trip_reinit_mode2: same in mode 2, plus fallback to mode 0.
+ *   7. arm_edge_clears:   the ARM edge clears the latch and the health flag.
  */
 
 #include <stdio.h>
@@ -80,95 +85,197 @@ static void test_rebase_sign(void)
     g_pass++;
 }
 
-/* ---- Test 2 & 3: persistence gate ----
- * Simulate bad innovations and verify the persistence counter behaviour.
- * The gate uses EKF_OF_HEALTH_THRESH and EKF_OF_HEALTH_PERSIST from ekf_of.h. */
+/* ---- Tests 2-7: persistence gate and re-init ----
+ * Mirror of the health-gate block in StabilizerTask.c (EKF tick). State names match the firmware:
+ * inited = s_ekf_of_inited, bad_cnt = s_ekf_of_innov_bad_cnt, tripped = s_ekf_of_tripped. */
+typedef struct {
+    EkfOf_t  e;
+    uint8_t  inited;
+    uint16_t bad_cnt;
+    uint8_t  tripped;
+    uint8_t  health;
+    uint8_t  mode;
+    uint8_t  fallback;
+} GateSim;
 
-/* Simple simulation of the persistence gate logic from StabilizerTask.c */
-static void simulate_health_gate(uint16_t *bad_cnt, uint8_t *health,
-                                  float innov_x, float innov_y,
-                                  uint8_t *mode, uint8_t *fallback)
+static void gate_init(GateSim *g, uint8_t mode)
 {
-    float innov_mag = innov_x * innov_x + innov_y * innov_y;
+    g->inited   = 0U;
+    g->bad_cnt  = 0U;
+    g->tripped  = 0U;
+    g->health   = 1U;
+    g->mode     = mode;
+    g->fallback = 0U;
+}
 
+/* One 5 ms tick with the given OF innovation (already in e.innov_x/y after EkfOf_Update). */
+static void gate_tick(GateSim *g, float innov_x, float innov_y)
+{
+    float innov_mag;
+    if (!g->inited) {
+        EkfOf_Init(&g->e);
+        g->inited  = 1U;
+        g->health  = g->tripped ? 0U : 1U;
+        g->bad_cnt = 0U;
+    }
+    g->e.innov_x = innov_x;
+    g->e.innov_y = innov_y;
+    innov_mag = g->e.innov_x * g->e.innov_x + g->e.innov_y * g->e.innov_y;
     if (innov_mag > (EKF_OF_HEALTH_THRESH * EKF_OF_HEALTH_THRESH)) {
-        if (*bad_cnt < 0xFFFFU) {
-            (*bad_cnt)++;
+        if (g->bad_cnt < 0xFFFFU) {
+            g->bad_cnt++;
         }
-        if (*bad_cnt >= EKF_OF_HEALTH_PERSIST) {
-            *health = 0U;
-            if (*mode == 2U) {
-                *mode = 0U;
-                *fallback = 1U;
+        if (g->bad_cnt >= EKF_OF_HEALTH_PERSIST) {
+            g->health  = 0U;
+            g->tripped = 1U;
+            if (g->mode == 2U) {
+                g->mode = 0U;
+                g->fallback = 1U;
             }
+            g->inited  = 0U;
+            g->bad_cnt = 0U;
         }
     } else {
-        *bad_cnt = 0U;
-        *health = 1U;
+        g->bad_cnt = 0U;
+        if (!g->tripped) {
+            g->health = 1U;
+        }
     }
 }
 
 static void test_persist_gate_99(void)
 {
-    uint16_t bad_cnt = 0U;
-    uint8_t health = 1U;
-    uint8_t mode = 2U;
-    uint8_t fallback = 0U;
+    GateSim g;
     int i;
-    /* Big innovation — well above the threshold */
-    float bad_innov = EKF_OF_HEALTH_THRESH * 2.0f;
+    float bad_innov = EKF_OF_HEALTH_THRESH * 2.0f;   /* well above the threshold */
 
+    gate_init(&g, 2U);
     for (i = 0; i < 99; i++) {
-        simulate_health_gate(&bad_cnt, &health, bad_innov, 0.0f, &mode, &fallback);
+        gate_tick(&g, bad_innov, 0.0f);
     }
 
-    ASSERT_MSG(health == 1U, "99 bad ticks must not trip the gate");
-    ASSERT_MSG(mode == 2U, "mode must stay 2 after 99 bad ticks");
-    ASSERT_MSG(fallback == 0U, "fallback must stay 0 after 99 bad ticks");
+    ASSERT_MSG(g.health == 1U, "99 bad ticks must not trip the gate");
+    ASSERT_MSG(g.mode == 2U, "mode must stay 2 after 99 bad ticks");
+    ASSERT_MSG(g.fallback == 0U, "fallback must stay 0 after 99 bad ticks");
+    ASSERT_MSG(g.inited == 1U, "KF must not re-init before the trip");
     printf("PASS: test_persist_gate_99\n");
     g_pass++;
 }
 
 static void test_persist_gate_100(void)
 {
-    uint16_t bad_cnt = 0U;
-    uint8_t health = 1U;
-    uint8_t mode = 2U;
-    uint8_t fallback = 0U;
+    GateSim g;
     int i;
     float bad_innov = EKF_OF_HEALTH_THRESH * 2.0f;
 
+    gate_init(&g, 2U);
     for (i = 0; i < 100; i++) {
-        simulate_health_gate(&bad_cnt, &health, bad_innov, 0.0f, &mode, &fallback);
+        gate_tick(&g, bad_innov, 0.0f);
     }
 
-    ASSERT_MSG(health == 0U, "100 bad ticks must trip the gate");
-    ASSERT_MSG(mode == 0U, "mode must fall back to 0 after 100 bad ticks");
-    ASSERT_MSG(fallback == 1U, "fallback must be set after 100 bad ticks");
+    ASSERT_MSG(g.health == 0U, "100 bad ticks must trip the gate");
+    ASSERT_MSG(g.mode == 0U, "mode must fall back to 0 after 100 bad ticks");
+    ASSERT_MSG(g.fallback == 1U, "fallback must be set after 100 bad ticks");
     printf("PASS: test_persist_gate_100\n");
     g_pass++;
 }
 
-/* ---- Test 4: shadow never changes mode ----
- * In shadow (mode != 2), a tripped gate must set health=0 but must NOT
+/* In shadow (mode != 2), a tripped gate must set health=0 but must NOT
  * change g_of_bias_mode. */
 static void test_shadow_no_mode_change(void)
 {
-    uint16_t bad_cnt = 0U;
-    uint8_t health = 1U;
-    uint8_t mode = 0U;   /* shadow: mode is 0, not 2 */
-    uint8_t fallback = 0U;
+    GateSim g;
     int i;
     float bad_innov = EKF_OF_HEALTH_THRESH * 2.0f;
 
+    gate_init(&g, 0U);   /* shadow: mode is 0, not 2 */
     for (i = 0; i < 200; i++) {
-        simulate_health_gate(&bad_cnt, &health, bad_innov, 0.0f, &mode, &fallback);
+        gate_tick(&g, bad_innov, 0.0f);
     }
 
-    ASSERT_MSG(health == 0U, "shadow: health must be 0 after persistent divergence");
-    ASSERT_MSG(mode == 0U, "shadow: mode must stay 0 (never changed by health gate)");
-    ASSERT_MSG(fallback == 0U, "shadow: fallback must stay 0 (only set when mode was 2)");
+    ASSERT_MSG(g.health == 0U, "shadow: health must be 0 after persistent divergence");
+    ASSERT_MSG(g.mode == 0U, "shadow: mode must stay 0 (never changed by health gate)");
+    ASSERT_MSG(g.fallback == 0U, "shadow: fallback must stay 0 (only set when mode was 2)");
     printf("PASS: test_shadow_no_mode_change\n");
+    g_pass++;
+}
+
+/* A trip clears inited and the counter; the next tick re-inits to the clean Init state
+ * (a diverged velocity is gone), and health stays 0 across the re-init (latched). */
+static void test_trip_reinit(void)
+{
+    GateSim g;
+    EkfOf_t ref;
+    int i;
+    float bad_innov = EKF_OF_HEALTH_THRESH * 2.0f;
+
+    gate_init(&g, 0U);
+    gate_tick(&g, 0.0f, 0.0f);          /* first tick inits the KF */
+    g.e.x[1] = 5.0f;                    /* diverged velocity */
+    g.e.x[4] = -5.0f;
+    for (i = 0; i < 100; i++) {
+        gate_tick(&g, bad_innov, 0.0f);
+    }
+    ASSERT_MSG(g.inited == 0U, "trip must clear inited");
+    ASSERT_MSG(g.bad_cnt == 0U, "trip must reset the bad-tick counter");
+    ASSERT_MSG(g.health == 0U, "trip must clear health");
+
+    gate_tick(&g, 0.0f, 0.0f);          /* the next tick re-inits */
+    EkfOf_Init(&ref);
+    ASSERT_MSG(g.inited == 1U, "next tick must re-init");
+    ASSERT_CLOSE(g.e.x[1], ref.x[1], 1e-6f, "re-init must restore vx");
+    ASSERT_CLOSE(g.e.x[4], ref.x[4], 1e-6f, "re-init must restore vy");
+    ASSERT_CLOSE(g.e.P[0][5], ref.P[0][5], 1e-6f, "re-init must restore the covariance");
+    ASSERT_MSG(g.health == 0U, "health must stay 0 across the re-init");
+    for (i = 0; i < 50; i++) {
+        gate_tick(&g, 0.0f, 0.0f);
+    }
+    ASSERT_MSG(g.health == 0U, "health must stay latched at 0 on good ticks after a trip");
+    ASSERT_MSG(g.mode == 0U, "shadow: mode untouched by the re-init");
+    printf("PASS: test_trip_reinit\n");
+    g_pass++;
+}
+
+static void test_trip_reinit_mode2(void)
+{
+    GateSim g;
+    int i;
+    float bad_innov = EKF_OF_HEALTH_THRESH * 2.0f;
+
+    gate_init(&g, 2U);
+    gate_tick(&g, 0.0f, 0.0f);
+    g.e.x[1] = 5.0f;
+    for (i = 0; i < 100; i++) {
+        gate_tick(&g, bad_innov, 0.0f);
+    }
+    ASSERT_MSG(g.mode == 0U && g.fallback == 1U, "mode 2 trip must fall back to mode 0");
+    ASSERT_MSG(g.inited == 0U, "mode 2 trip must clear inited");
+    gate_tick(&g, 0.0f, 0.0f);
+    ASSERT_CLOSE(g.e.x[1], 0.0f, 1e-6f, "re-init must clear the diverged velocity");
+    ASSERT_MSG(g.health == 0U, "health must stay 0 after the fallback");
+    printf("PASS: test_trip_reinit_mode2\n");
+    g_pass++;
+}
+
+/* ARM edge (StabilizerTask.c): fallback, counter, latch cleared and health back to 1. */
+static void test_arm_edge_clears(void)
+{
+    GateSim g;
+    int i;
+    float bad_innov = EKF_OF_HEALTH_THRESH * 2.0f;
+
+    gate_init(&g, 2U);
+    for (i = 0; i < 100; i++) {
+        gate_tick(&g, bad_innov, 0.0f);
+    }
+    ASSERT_MSG(g.tripped == 1U && g.health == 0U, "precondition: tripped");
+    g.fallback = 0U;                    /* ARM edge block */
+    g.bad_cnt  = 0U;
+    g.tripped  = 0U;
+    g.health   = 1U;
+    gate_tick(&g, 0.0f, 0.0f);
+    ASSERT_MSG(g.health == 1U, "after the ARM edge a good tick keeps health at 1");
+    printf("PASS: test_arm_edge_clears\n");
     g_pass++;
 }
 
@@ -178,6 +285,9 @@ int main(void)
     test_persist_gate_99();
     test_persist_gate_100();
     test_shadow_no_mode_change();
+    test_trip_reinit();
+    test_trip_reinit_mode2();
+    test_arm_edge_clears();
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;

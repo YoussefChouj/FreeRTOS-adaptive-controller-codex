@@ -126,9 +126,11 @@ float g_of_bias_ema_tau_s = OF_BIAS_EMA_TAU_DEFAULT; /* EMA time constant (s) */
  * Both are plain globals so they are DWARF-subscribable. */
 /* EKF_OF_INNOV_THRESH and EKF_OF_HEALTH_PERSIST are now in ekf_of.h (WP-14). */
 #define EKF_OF_ACC_SIGN_X (+1.0f)
-#define EKF_OF_ACC_SIGN_Y (-1.0f)
+#define EKF_OF_ACC_SIGN_Y (+1.0f)
 #define EKF_OF_MG_TO_MPS2 (9.80665e-3f)
-/* X correlates with +Lin_Acc_X_body (r +0.27..+0.46), Y with -Lin_Acc_Y_body (r -0.25..-0.50) */
+/* WP-14 tilt input = SIGN * 1000*Gravity_Body_X/Y.  Both signs +1: ekf_of_replay fits k = d(OF vel)/(g*tilt*dt)
+ * per axis on the 5 pinned logs and gets k_x 0.20..0.38, k_y 0.18..0.36 (all > 0) with these signs;
+ * SIGN_Y = -1 gave k_y -0.18..-0.36 on every log. */
 #define EKF_OF_UPDATE_ON_NEW_FRAME 1U /* 1 = feed each OF frame once (detected by ano_of.of_update_cnt changing), 0 = legacy every tick */
 volatile uint8_t g_ekf_of_health   = 1U; /* 1=healthy 0=diverged  */
 volatile uint8_t g_ekf_of_fallback = 0U; /* 1=fell back to FIXED  */
@@ -142,6 +144,11 @@ volatile uint8_t g_ekf_of_vel_fb   = 0U;
 /* WP-14: innovation persistence counter for the health gate.
  * Trips only after EKF_OF_HEALTH_PERSIST consecutive bad ticks. */
 static uint16_t s_ekf_of_innov_bad_cnt = 0U;
+/* WP-14: 1 once the health gate has tripped; keeps g_ekf_of_health at 0 across the
+ * clean re-init that follows, until the next ARM edge or until the KF stops ticking.
+ * WHY: without the latch the re-init zeroes the innovation and health flips back
+ * to 1 within 5 ms, so a shadow flight would never show the trip. */
+static uint8_t s_ekf_of_tripped = 0U;
 /* Handheld test (CMD 0x1E idx=3): integrate OF position on the ground so the
  * drone can be carried by hand (modes 0/2). Freezes the ground bias EMA, zeroes
  * the origin on enable, and self-clears once the drone is flying. */
@@ -447,9 +454,6 @@ void Update_Data(void)
 				}
 			}
 			/* ---- Mode 2 (EKF) or shadow: tick the 8-state KF, check health ---- */
-			else if (g_of_bias_mode == 2U) {
-				/* placeholder: bias-mode-2-only work done after the shared block */
-			}
 			/* WP-14: KF ticks whenever mode==2 or shadow. Predict, ZUPT, OF update
 			 * and health gate run every 5 ms tick. Shadow mode only records health;
 			 * mode 2 feeds the position path and falls back on persistent divergence. */
@@ -464,7 +468,7 @@ void Update_Data(void)
 				if (!s_ekf_of_inited) {
 					EkfOf_Init(&s_ekf_of);
 					s_ekf_of_inited = 1U;
-					g_ekf_of_health = 1U; /* healthy on init */
+					g_ekf_of_health = s_ekf_of_tripped ? 0U : 1U; /* a gate trip stays visible across its re-init */
 					s_ekf_of_innov_bad_cnt = 0U;
 				}
 				on_ground = !g_of_handheld_test && !(DroneStatus.ARM_Status == Armed && (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING));
@@ -502,14 +506,21 @@ void Update_Data(void)
 					}
 					if (s_ekf_of_innov_bad_cnt >= EKF_OF_HEALTH_PERSIST) {
 						g_ekf_of_health = 0U;
+						s_ekf_of_tripped = 1U;
 						if (g_of_bias_mode == 2U) {
 							g_of_bias_mode  = 0U; /* forced fallback to FIXED */
 							g_ekf_of_fallback = 1U;
 						}
+						/* Re-init from a clean state on the next tick instead of
+						 * running on the diverged one (shadow and mode 2 alike). */
+						s_ekf_of_inited = 0U;
+						s_ekf_of_innov_bad_cnt = 0U;
 					}
 				} else {
 					s_ekf_of_innov_bad_cnt = 0U;
-					g_ekf_of_health = 1U;
+					if (!s_ekf_of_tripped) {
+						g_ekf_of_health = 1U;
+					}
 				}
 			}
 		}
@@ -547,8 +558,13 @@ void Update_Data(void)
 			Ctrler.locyPID.FB = ano_of.earth_y_ture;
 		} else {
 			s_ekf_pos_synced = 0U;
-			/* WP-14: removed s_ekf_of_inited = 0U. The KF runs in shadow
-			 * across all modes, so re-init would kill the shadow state. */
+			/* WP-14: reached only when mode != 2. Clear the init flag only if the KF
+			 * is not ticking either (shadow off), so a later start re-inits; in
+			 * shadow the KF keeps running across mode changes and keeps its state. */
+			if (!g_ekf_of_shadow) {
+				s_ekf_of_inited = 0U;
+				s_ekf_of_tripped = 0U;
+			}
 			/* Modes 0 and 1: debias raw OF and integrate as before.
 			 * FIX 2026-09-26: hold position while on the ground (disarmed,
 			 * GROUND_IDLE or LANDED): OF zero wanders 1-3 counts at rest,
@@ -1075,6 +1091,8 @@ void Compute_Motor(void)
 			 * dashboard sees a clean state for each new flight. */
 			g_ekf_of_fallback = 0U;
 			s_ekf_of_innov_bad_cnt = 0U;
+			s_ekf_of_tripped = 0U;
+			g_ekf_of_health = 1U;
 		}
 		else if (armed_now && on_ground && !g_of_handheld_test && s_of_pre_ok && g_of_bias_mode == 0U) {
 			s_of_bias_x = s_of_pre_x;

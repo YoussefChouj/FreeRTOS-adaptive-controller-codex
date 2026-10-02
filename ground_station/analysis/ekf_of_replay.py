@@ -2,6 +2,7 @@ import argparse
 import glob
 import itertools
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -183,9 +184,15 @@ def replay_arrays(t1, phase1, ax1, ay1, t3, ofx3, ofy3, ofq3, params_grid, run_o
         ac_y = autocorr1(iy)
         autocorr = max(abs(ac_x), abs(ac_y))
         
-        bof_drift_x = np.max(np.abs(bof_x[b, :] - bof_x[b, takeoff_idx])) * 100
-        bof_drift_y = np.max(np.abs(bof_y[b, :] - bof_y[b, takeoff_idx])) * 100
-        bof_drift = max(bof_drift_x, bof_drift_y)
+        # bias drift = max excursion of bof from its takeoff value; the acceptance number is in flight
+        # (phase 1), bof_drift_all also covers the ground time before takeoff and after landing.
+        flight_sel = (phase1 == 1)
+        if not np.any(flight_sel):
+            flight_sel = np.ones(N1, dtype=bool)
+        bof_drift_all = max(np.max(np.abs(bof_x[b, :] - bof_x[b, takeoff_idx])),
+                            np.max(np.abs(bof_y[b, :] - bof_y[b, takeoff_idx]))) * 100
+        bof_drift = max(np.max(np.abs(bof_x[b, flight_sel] - bof_x[b, takeoff_idx])),
+                        np.max(np.abs(bof_y[b, flight_sel] - bof_y[b, takeoff_idx]))) * 100
         
         def settle_time(ba):
             half_n = len(ba) // 2
@@ -208,8 +215,8 @@ def replay_arrays(t1, phase1, ax1, ay1, t3, ofx3, ofy3, ofq3, params_grid, run_o
         final_ba_x = ba_x[b, -1] / 9.80665e-3
         final_ba_y = ba_y[b, -1] / 9.80665e-3
         
-        # Fitted tilt gain k: regress KF velocity on OF velocity during flight.
-        # k > 0 on every log proves the sign convention is correct.
+        # k_fit: regress KF velocity on OF velocity during flight (tracking check only; ~1 when the KF
+        # follows OF). The tilt gain and the sign proof come from fit_tilt_gain, not from this number.
         vel_x_b = np.zeros(N1)
         vel_y_b = np.zeros(N1)
         for ii in range(N1):
@@ -253,7 +260,7 @@ def replay_arrays(t1, phase1, ax1, ay1, t3, ofx3, ofy3, ofq3, params_grid, run_o
             'rms_new_x': rms_new_x, 'rms_new_y': rms_new_y,
             'rms_old_x': rms_old_x, 'rms_old_y': rms_old_y,
             'nis': nis, 'autocorr': autocorr,
-            'bof_drift': bof_drift, 'settle': settle,
+            'bof_drift': bof_drift, 'bof_drift_all': bof_drift_all, 'settle': settle,
             'final_ba_x': final_ba_x, 'final_ba_y': final_ba_y,
             'k_fit': k_fit, 'res_ratio': res_ratio,
             'innov_rms_x': innov_rms_x, 'innov_rms_y': innov_rms_y,
@@ -267,17 +274,68 @@ def replay_arrays(t1, phase1, ax1, ay1, t3, ofx3, ofy3, ofq3, params_grid, run_o
 TUNING_LOGS = ('shadow3', 'shadow4', 'shadow5', 'active5', 'active6')
 
 
+VPS_LOGS_DIR = '/home/agent/data/logs/vofa'
+
+# Mirror of EKF_OF_ACC_SIGN_X/Y in TASK/StabilizerTask.c (proven by the per-axis k > 0 fit in run_cli).
+EKF_OF_ACC_SIGN_X = +1.0
+EKF_OF_ACC_SIGN_Y = +1.0
+
+
 def resolve_logs_dir(logs_dir=None):
-    if not logs_dir:
-        repo_dir = Path(__file__).resolve().parent.parent.parent
-        logs_dir = repo_dir / 'logs' / 'vofa'
-        if not Path(logs_dir).exists():
-            try:
-                git_common_dir = subprocess.check_output(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir']).decode().strip()
-                logs_dir = Path(git_common_dir).parent / 'logs' / 'vofa'
-            except subprocess.CalledProcessError:
-                pass
-    return Path(logs_dir) if logs_dir else None
+    """Explicit argument, then $EKF_OF_LOGS_DIR, then <repo>/logs/vofa, the VPS path, the git-common-dir sibling."""
+    if logs_dir:
+        return Path(logs_dir)
+    env_dir = os.environ.get('EKF_OF_LOGS_DIR')
+    if env_dir:
+        return Path(env_dir)
+    repo_dir = Path(__file__).resolve().parent.parent.parent
+    candidates = [repo_dir / 'logs' / 'vofa', Path(VPS_LOGS_DIR)]
+    try:
+        git_common_dir = subprocess.check_output(
+            ['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+            cwd=str(repo_dir), stderr=subprocess.DEVNULL).decode().strip()
+        candidates.append(Path(git_common_dir).parent / 'logs' / 'vofa')
+    except (subprocess.CalledProcessError, OSError):
+        pass
+    for cand in candidates:
+        if cand.exists():
+            return cand
+    return candidates[0]
+
+
+def fit_tilt_gain(t1, phase1, ax1, ay1, t3, ofx3, ofy3, ofq3, win=0.2):
+    """Fit k in  d(OF vel) = k * (tilt accel) * dt  per axis, flight only (phase 1, 2 s after takeoff).
+
+    ax1/ay1 are the signed tilt accelerations (m/s^2, gain 1) fed to the KF predict; ofx3/ofy3 are the
+    debiased OF velocities (m/s) at slot-3 times.  The change of OF velocity over `win` seconds is
+    regressed (through the origin) on the integral of the tilt accel over the same window.
+    k > 0 on an axis means the sign convention is right; k is the gain that EKF_OF_TILT_GAIN must carry.
+    Returns (k_x, k_y, n_windows)."""
+    takeoffs = np.where((phase1[:-1] == 0) & (phase1[1:] == 1))[0]
+    t_start = t1[takeoffs[0] + 1] + 2.0 if len(takeoffs) > 0 else t1[0] + 2.0
+    good = ofq3 >= 50
+    t3g, ofx_g, ofy_g = t3[good], ofx3[good], ofy3[good]
+    if len(t3g) < 4:
+        return 0.0, 0.0, 0
+    # cumulative integral of the tilt accel on the slot-1 grid
+    dt1 = np.diff(t1, prepend=t1[0])
+    cum_x = np.cumsum(ax1 * dt1)
+    cum_y = np.cumsum(ay1 * dt1)
+    t_a = np.arange(t_start, t3g[-1] - win, win)
+    in_flight = np.interp(t_a, t1, (phase1 == 1).astype(float)) > 0.999
+    t_a = t_a[in_flight]
+    t_b = t_a + win
+    ok = np.interp(t_b, t1, (phase1 == 1).astype(float)) > 0.999
+    t_a, t_b = t_a[ok], t_b[ok]
+    if len(t_a) < 10:
+        return 0.0, 0.0, 0
+    dofx = np.interp(t_b, t3g, ofx_g) - np.interp(t_a, t3g, ofx_g)
+    dofy = np.interp(t_b, t3g, ofy_g) - np.interp(t_a, t3g, ofy_g)
+    dax = np.interp(t_b, t1, cum_x) - np.interp(t_a, t1, cum_x)
+    day = np.interp(t_b, t1, cum_y) - np.interp(t_a, t1, cum_y)
+    k_x = float(np.sum(dofx * dax) / max(np.sum(dax * dax), 1e-12))
+    k_y = float(np.sum(dofy * day) / max(np.sum(day * day), 1e-12))
+    return k_x, k_y, int(len(t_a))
 
 def run_cli():
     import time
@@ -327,6 +385,7 @@ def run_cli():
         
     # Process logs
     all_log_res = []
+    prepared = []
     log_names = []
     
     for log_path in log_files:
@@ -385,20 +444,37 @@ def run_cli():
         rol1 = f_rol(t1) * np.pi / 180.0
         pit1 = f_pit(t1) * np.pi / 180.0
         
-        # Tilt-only input: use gravity-tilt term (1000*vecxZ, 1000*vecyZ) in mg,
-        # not the full Lin_Acc.  Body accel explains ~0% of OF velocity change;
-        # the gravity-tilt alone explains 34-63% (drift investigation §ekf F2).
-        tilt_x = 1000.0 * np.sin(pit1)                   # ≈ 1000*Gravity_Body_X (mg)
-        tilt_y = 1000.0 * np.sin(rol1) * np.cos(pit1)    # ≈ 1000*Gravity_Body_Y (mg)
-        ax = +tilt_x * 9.80665e-3   # EKF_OF_ACC_SIGN_X = +1
-        ay = -tilt_y * 9.80665e-3   # EKF_OF_ACC_SIGN_Y = -1
-        
+        # Tilt-only input: gravity-tilt term (1000*Gravity_Body_X/Y, mg) replaces Lin_Acc.
+        # Signs mirror EKF_OF_ACC_SIGN_X/Y in StabilizerTask.c; k_x, k_y > 0 below proves them.
+        tilt_x = 1000.0 * np.sin(pit1)                   # = 1000*Gravity_Body_X (mg), pitchPID.FB = asin(vecxZ)
+        tilt_y = 1000.0 * np.sin(rol1) * np.cos(pit1)    # = 1000*Gravity_Body_Y (mg), rollPID.FB = atan2(vecyZ, veczZ)
+        ax1 = EKF_OF_ACC_SIGN_X * tilt_x * 9.80665e-3    # m/s^2, gain 1
+        ay1 = EKF_OF_ACC_SIGN_Y * tilt_y * 9.80665e-3    # m/s^2, gain 1
+
         ofx = (of2_dx - s_of_bias_x) * 0.01
         ofy = (of2_dy - s_of_bias_y) * 0.01
-        
-        res = replay_arrays(t1, flight_phase, ax, ay, t3, ofx, ofy, of_quality, params_grid, run_old=True)
+
+        k_x, k_y, n_win = fit_tilt_gain(t1, flight_phase, ax1, ay1, t3, ofx, ofy, of_quality)
+        prepared.append({'path': log_path, 'L': L, 't1': t1, 'phase': flight_phase, 'ax1': ax1, 'ay1': ay1,
+                         't3': t3, 'ofx': ofx, 'ofy': ofy, 'q': of_quality,
+                         'k_x': k_x, 'k_y': k_y, 'n_win': n_win})
+
+    for pr, name in zip(prepared, log_names):
+        print(f"TILT_FIT {name}: k_x={pr['k_x']:.3f} k_y={pr['k_y']:.3f} windows={pr['n_win']}")
+    k_all = [pr['k_x'] for pr in prepared] + [pr['k_y'] for pr in prepared]
+    tilt_gain = float(np.median(k_all)) if (k_all and min(k_all) > 0) else 1.0
+    print(f"TILT_GAIN_USED {tilt_gain:.3f} (median of per-axis k; 1.0 if any k <= 0)")
+
+    for pr, log_path in zip(prepared, log_files):
+        L = pr['L']
+        t1 = pr['t1']
+        res = replay_arrays(t1, pr['phase'], tilt_gain * pr['ax1'], tilt_gain * pr['ay1'],
+                            pr['t3'], pr['ofx'], pr['ofy'], pr['q'], params_grid, run_old=True)
+        for r in res:
+            r['k_tilt_x'] = pr['k_x']
+            r['k_tilt_y'] = pr['k_y']
         all_log_res.append(res)
-        
+
         # For shadow3 and active5 print informational rms
         if 'shadow3' in log_path or 'active5' in log_path:
             # rms of replayed-old vs logged s_ekf_of.x[0]/x[3]
@@ -406,10 +482,10 @@ def run_cli():
                 log_old_x = L.signals['s_ekf_of.x[0]'].v
                 log_old_y = L.signals['s_ekf_of.x[3]'].v
                 log_old_t = L.signals['s_ekf_of.x[0]'].t
-                
+
                 f_old_x = interpolate.interp1d(t1, res[0]['old_pos_x'], bounds_error=False, fill_value="extrapolate")
                 f_old_y = interpolate.interp1d(t1, res[0]['old_pos_y'], bounds_error=False, fill_value="extrapolate")
-                
+
                 eval_mask = (log_old_t >= t1[0] + 2.0)
                 diff_x = (log_old_x[eval_mask] - f_old_x(log_old_t[eval_mask])) * 100
                 diff_y = (log_old_y[eval_mask] - f_old_y(log_old_t[eval_mask])) * 100
@@ -431,7 +507,7 @@ def run_cli():
             nis = res['nis']
             bof_drift = res['bof_drift']
             res_ratio = res['res_ratio']
-            k_fit = res['k_fit']
+            k_fit = min(res['k_tilt_x'], res['k_tilt_y'])
             
             c_nis = (0.3 <= nis <= 2.0)
             c_rr = (res_ratio < 0.7)
@@ -445,6 +521,14 @@ def run_cli():
         scores[b] = passed
         mean_ln_nis[b] = ln_nis_sum / len(all_log_res)
         
+    print("GRID q_acc q_bof q_ba R_of | passing logs | per log nis/res_ratio/bof_flight/bof_all (cm/s)")
+    for b in range(B):
+        p = params_grid[b]
+        cells = ' '.join(
+            '%.2f/%.2f/%.2f/%.2f' % (all_log_res[i][b]['nis'], all_log_res[i][b]['res_ratio'],
+                                     all_log_res[i][b]['bof_drift'], all_log_res[i][b]['bof_drift_all'])
+            for i in range(len(all_log_res)))
+        print("GRID %g %g %g %g | %d | %s" % (p['q_acc'], p['q_bof'], p['q_ba'], p['R_of'], int(scores[b]), cells))
     # top 5
     order = np.lexsort((mean_ln_nis, -scores))
     print("Top 5 combos:")
@@ -465,7 +549,7 @@ def run_cli():
         nis = res['nis']
         bof = res['bof_drift']
         rr = res['res_ratio']
-        k = res['k_fit']
+        k = min(res['k_tilt_x'], res['k_tilt_y'])
         isd = res['innov_sd']
         k_values.append(k)
         innov_sd_values.append(isd)
@@ -482,7 +566,7 @@ def run_cli():
         print(f"BOF Drift: {bof:.2f} cm/s [{p_bof}], k_fit: {k:.3f} [{p_k}]")
         print(f"Innov RMS: {res['innov_rms_x']:.2f}/{res['innov_rms_y']:.2f} cm/s, Innov SD: {isd*100:.2f} cm/s")
         
-    median_k = float(np.median(k_values)) if k_values else 1.0
+    median_k = tilt_gain
     median_isd = float(np.median(innov_sd_values)) if innov_sd_values else 0.01
     health_thresh = 5.0 * median_isd  # about 5x innovation sd
     
