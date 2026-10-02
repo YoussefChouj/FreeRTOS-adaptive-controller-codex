@@ -57,6 +57,14 @@ up to 0.84 m). Estimate at disarm was within 5 cm of 0 every time, so this is ES
 landing = ly -6..-20, lx 0..+16 -> systematic. Voltage 15.7->14.7 V, hover motor mean 3029->3074, p99 max 3450-3634 (log max
 3938): no authority loss; F6 voltage = F5. Candidate upgrade: full roll/pitch/yaw rotation of OF (EKF2-style flow model);
 earlier tilt test removed most of the locy leak (k 0.029 -> 0.001).
+2026-10-02b (NOT flashed, wt-night 0 err / 5 warn, Code 108812): touchdown now also needs ground evidence, PX4 land-detector
+style: FB <= rest z + 0.03 (rest sampled in GROUND_IDLE while idling, FB < 0.15) OR sink bias saturated at 0.40 (~2 s of
+commanded descent not achieved). Measured rest pre/post: 0.00/0.06, 0.05/0.05, 0.06/0.10, 0.07/0.048, 0.05/0.06; the mid-air
+cuts at 0.11-0.14 fail (a). (b) covers a shifted rest reading. REJECTED full-tilt OF rotation: replay of int(vz*sin(att))dt
+per flight = -1.8..+1.0 cm (climb and descent cancel), so it cannot explain 10-26 cm; the earlier "tilt test" was confounded
+by a constant -2 deg pitch. WATCH: powered ground phase may last ~2 s if rest z shifts -> skid with xy hold on ground OF.
+Next candidate: zero xy correction on ground contact (PX4 does this; verify in PX4 source first).
+Refs: docs.px4.io/main/en/advanced_config/land_detector.html, docs.px4.io/main/en/advanced_config/tuning_the_ecl_ekf.html
 RECORDER 0-ROW ROOT CAUSE: 8081 kept running across the reflash. The new axf moved the RAM variables by 12 B, and the bridge
 re-registered the default slot 0/2 echoes with a stale name table ("0 named, N unnamed"). Positional names never matched the
 recorder's var names, so every row was empty and dropped. Slots 1/3 (names in the preset) were fine. WORKAROUND: restart 8081

@@ -44,6 +44,10 @@ short Throttle_th = 2200;
 /* Safety net: 3000 ticks at 200 Hz = 15 s max landing time before forced disarm
  * (was 10 s; the slow final stage adds about 1.3 s, keep margin from 2.5 m). */
 #define LAND_MAX_TICKS  3000U
+/* Touchdown ground evidence (2026-10-02b): FB within LAND_REST_MARGIN of the pre-takeoff
+ * rest height, or the sink bias saturated at LAND_SINK_BIAS_MAX (see Update_Motor). */
+#define LAND_REST_MARGIN     0.03f
+#define LAND_SINK_BIAS_MAX   0.40f
 /* Motor bench-test dead-man: stabilizer runs at 200 Hz, so 100 ticks = 500 ms.
  * If the dashboard stops sending CMD 0x16 heartbeats, motors are zeroed. */
 #define MOTOR_TEST_DEADMAN_TICKS  100U
@@ -787,6 +791,7 @@ void Update_Motor(void)
     static uint8_t  s_land_init    = 0U;
     static int      s_stable_ticks = 0;
     static uint16_t s_land_timeout = 0U;
+    static float    s_land_rest_z  = 0.0f;   /* ground z sampled in GROUND_IDLE */
     /* Bench-mode height zero: captures the fixture resting height when bench mode
      * activates (0→1 transition). The Z position PID then sees (of2_h - offset),
      * so the drone treats its current height as zero — prop wash displaces it by
@@ -869,6 +874,13 @@ void Update_Motor(void)
              * hover_7 and unique_position1 disarmed at 0.13-0.14 m while floating on the
              * ground-effect cushion (vz ~0), then fell 4-8 cm with motors off. Gated, the
              * existing sink bias pushes through the cushion and motors cut on the ground.
+             * FIX 2026-10-02b: Des <= 0.01 did not stop it (auto_landing_1 F2-F5 still cut at
+             * 0.11-0.14 m: Des leads FB, so Des hits the floor while still airborne).
+             * Now also require ground evidence (PX4 land detector style), either:
+             *   (a) FB within 0.03 m of the rest height read before takeoff
+             *       (measured rest 0.00-0.07 m, so mid-air cuts at 0.11-0.14 m are blocked), or
+             *   (b) sink bias saturated: 0.40 m/s commanded descent not achieved for ~2 s.
+             * (b) covers a rest reading that shifts after touchdown (F3: 0.06 pre, 0.10 post).
              * Safety net: force disarm after LAND_MAX_TICKS (15 s) regardless. */
             {
                 float rate_thr = (Ctrler.Z_posPID.FB < 0.20f) ? 0.08f : 0.02f;
@@ -881,7 +893,9 @@ void Update_Motor(void)
             s_land_timeout++;
 
             if ((s_stable_ticks >= 10 && Ctrler.Z_posPID.FB < 0.15f &&
-                 Ctrler.Z_posPID.Des <= 0.01f) ||
+                 Ctrler.Z_posPID.Des <= 0.01f &&
+                 (Ctrler.Z_posPID.FB <= s_land_rest_z + LAND_REST_MARGIN ||
+                  s_land_sink_bias >= LAND_SINK_BIAS_MAX)) ||
                 s_land_timeout >= LAND_MAX_TICKS)
             {
                 s_stable_ticks    = 0;
@@ -905,6 +919,13 @@ void Update_Motor(void)
             }
             else
             {
+                /* Rest height for the touchdown gate: sample while motors idle on the ground.
+                 * FB < 0.15 keeps a hand-lifted reading out, so the gate is never looser
+                 * than the FB < 0.15 term above. */
+                if (!TWC.execute && RCInput_Get(RC_AXIS_THR) < 0.2f &&
+                    Ctrler.Z_posPID.FB < 0.15f)
+                    s_land_rest_z = Ctrler.Z_posPID.FB;
+
                 /* Auto-detect takeoff: transition to FLYING once the OF sensor reads > 0.2 m above
                  * the zeroed height. Bench mode (CMD 0x07) does NOT block this — the height
                  * offset is captured on bench activation so of2_h is already relative to the fixture
@@ -1427,7 +1448,7 @@ TWC.real_yaw = Ctrler.yawPID.FB; //�ṹ���Ա������ʼ��һ
 				{
 					if (fabsf(Ctrler.Z_ratePID.FB) < 0.10f)
 						s_land_sink_bias += 0.001f;
-					if (s_land_sink_bias > 0.40f) s_land_sink_bias = 0.40f;
+					if (s_land_sink_bias > LAND_SINK_BIAS_MAX) s_land_sink_bias = LAND_SINK_BIAS_MAX;
 					Ctrler.Z_ratePID.Des -= s_land_sink_bias;
 				}
 			}
