@@ -43,6 +43,10 @@ typedef struct {
     float innov_x;
     float innov_y;
     uint8_t inited;
+    /* OF innovation gate (PX4 EKF2_OF_GATE style): skip a sample when innov^2 > of_gate^2 * S */
+    float of_gate;      /* sigmas; 0 = gate off */
+    uint32_t rej_x;     /* rejected OF samples since init */
+    uint32_t rej_y;
 } EkfOf_t;
 
 /** Call once at boot or after Reset_World_Origin. */

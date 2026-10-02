@@ -16,7 +16,7 @@
  *   bof, ba: random walks
  *
  * Measurements:
- *   OF:   h = [0, 1, 1, 0]
+ *   OF:   h = [0, 1, 1, 0], gated at of_gate sigmas (innov^2 > gate^2*S -> skip, rej_x/rej_y++)
  *   ZUPT: h = [0, 1, 0, 0]
  *
  * Units: meters, seconds
@@ -54,14 +54,18 @@ void EkfOf_Init(EkfOf_t *e)
     /* Measurement noise variances */
     e->R_of   = 1e-4f;
     e->R_zupt = 1e-4f;
+    e->of_gate = 5.0f;   /* sigmas; armed flights auto_landing_1/hover_7/ekf1 peak at 4.5 sigma */
 
     /* Change history (newest first)
+     * 2026-10-02 WP-21: OF innovation gate 5 sigma (S_ss 1.56e-4 at 50 Hz OF, so ~6.2 cm/s)
      * 2026-10-02 WP-14: tilt-only input; replay CHOSEN q_acc 1e-3, q_bof 1e-6, q_ba 1e-6, R_of 1e-4, R_zupt 1e-4
      * 2026-10-01 WP-8: 8-state model, q_vel->q_acc, ZUPT; values provisional
      */
 
     e->innov_x = 0.0f;
     e->innov_y = 0.0f;
+    e->rej_x   = 0U;
+    e->rej_y   = 0U;
     e->inited  = 1U;
 }
 
@@ -144,7 +148,8 @@ void EkfOf_Predict(EkfOf_t *e, float dt, float ax, float ay)
 /* Update — scalar sequential                                         */
 /* ------------------------------------------------------------------ */
 
-static void ekf_of_update_one(EkfOf_t *e, int axis, const float h[4], float z, float R, float *innov_out)
+/* gate: sigmas, 0 = off. Returns 1 when the sample was rejected (state and P untouched). */
+static uint8_t ekf_of_update_one(EkfOf_t *e, int axis, const float h[4], float z, float R, float gate, float *innov_out)
 {
     float PHt[4];
     float S = R;
@@ -177,8 +182,9 @@ static void ekf_of_update_one(EkfOf_t *e, int axis, const float h[4], float z, f
     
     y = z - hx;
     if (innov_out) {
-        *innov_out = y;
+        *innov_out = y;   /* raw innovation, logged even when gated so the health monitor still sees it */
     }
+    if (gate > 0.0f && y * y > gate * gate * S) return 1U;
 
     for (i = 0; i < 4; i++) K[i] = PHt[i] / S;
 
@@ -191,22 +197,23 @@ static void ekf_of_update_one(EkfOf_t *e, int axis, const float h[4], float z, f
             e->P[axis][j*4+i] = e->P[axis][i*4+j];  /* enforce symmetry */
         }
     }
+    return 0U;
 }
 
 void EkfOf_Update(EkfOf_t *e, float of_x, float of_y)
 {
     if (!e->inited) return;
     const float h[4] = {0.0f, 1.0f, 1.0f, 0.0f};
-    ekf_of_update_one(e, 0, h, of_x, e->R_of, &e->innov_x);
-    ekf_of_update_one(e, 1, h, of_y, e->R_of, &e->innov_y);
+    if (ekf_of_update_one(e, 0, h, of_x, e->R_of, e->of_gate, &e->innov_x)) e->rej_x++;
+    if (ekf_of_update_one(e, 1, h, of_y, e->R_of, e->of_gate, &e->innov_y)) e->rej_y++;
 }
 
 void EkfOf_UpdateZeroVel(EkfOf_t *e)
 {
     if (!e->inited) return;
     const float h[4] = {0.0f, 1.0f, 0.0f, 0.0f};
-    ekf_of_update_one(e, 0, h, 0.0f, e->R_zupt, 0);
-    ekf_of_update_one(e, 1, h, 0.0f, e->R_zupt, 0);
+    (void)ekf_of_update_one(e, 0, h, 0.0f, e->R_zupt, 0.0f, 0);
+    (void)ekf_of_update_one(e, 1, h, 0.0f, e->R_zupt, 0.0f, 0);
 }
 
 /* ------------------------------------------------------------------ */

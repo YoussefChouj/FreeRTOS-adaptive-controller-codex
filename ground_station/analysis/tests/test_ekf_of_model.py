@@ -25,7 +25,10 @@ class EkfOf_t(ctypes.Structure):
         ("R_zupt", ctypes.c_float),
         ("innov_x", ctypes.c_float),
         ("innov_y", ctypes.c_float),
-        ("inited", ctypes.c_uint8)
+        ("inited", ctypes.c_uint8),
+        ("of_gate", ctypes.c_float),
+        ("rej_x", ctypes.c_uint32),
+        ("rej_y", ctypes.c_uint32),
     ]
 
 @pytest.fixture(scope="module")
@@ -139,7 +142,8 @@ def test_golden(gcc_lib):
     
     params = DEFAULTS.copy()
     params['q_acc'] = (0.2**2) * dt
-    
+    params['of_gate'] = 0.0  # ungated equivalence; gating is covered by test_gate_golden
+
     model = EkfOfModel(1, dtype=np.float32, **params)
     
     # C model
@@ -158,7 +162,8 @@ def test_golden(gcc_lib):
     c_model.q_ba = params['q_ba']
     c_model.R_of = params['R_of']
     c_model.R_zupt = params['R_zupt']
-    
+    c_model.of_gate = params['of_gate']
+
     for i in range(1, N):
         model.predict(dt, a_meas[i], a_meas[i])
         lib.EkfOf_Predict(ctypes.byref(c_model), dt, a_meas[i], a_meas[i])
@@ -189,10 +194,42 @@ def test_c_defaults(gcc_lib):
     assert np.isclose(c_model.q_ba, DEFAULTS['q_ba'], rtol=1e-5)
     assert np.isclose(c_model.R_of, DEFAULTS['R_of'], rtol=1e-5)
     assert np.isclose(c_model.R_zupt, DEFAULTS['R_zupt'], rtol=1e-5)
+    assert np.isclose(c_model.of_gate, DEFAULTS['of_gate'], rtol=1e-5)
+    assert c_model.rej_x == 0 and c_model.rej_y == 0
     
     py_model = EkfOfModel(1, dtype=np.float32)
     c_P = np.array(c_model.P).reshape(2, 4, 4)
     np.testing.assert_allclose(py_model.P[0], c_P, rtol=1e-5)
+
+def test_gate_golden(gcc_lib):
+    """Default 5-sigma gate: C and Python skip the same outliers and stay equal."""
+    rng = np.random.default_rng(7)
+    dt = 0.005
+    N = int(20.0 / dt)
+    of_meas = 0.02 + rng.normal(0, 0.01, N)
+    outliers = set(range(800, N, 400))  # every 2 s, on OF-update ticks (multiples of 8)
+    for i in outliers:
+        of_meas[i] += 0.5
+    model = EkfOfModel(1, dtype=np.float32)
+    lib = ctypes.CDLL(str(gcc_lib))
+    lib.EkfOf_Init.argtypes = [ctypes.POINTER(EkfOf_t)]
+    lib.EkfOf_Predict.argtypes = [ctypes.POINTER(EkfOf_t), ctypes.c_float, ctypes.c_float, ctypes.c_float]
+    lib.EkfOf_Update.argtypes = [ctypes.POINTER(EkfOf_t), ctypes.c_float, ctypes.c_float]
+    c_model = EkfOf_t()
+    lib.EkfOf_Init(ctypes.byref(c_model))
+    for i in range(1, N):
+        model.predict(dt, 0.0, 0.0)
+        lib.EkfOf_Predict(ctypes.byref(c_model), dt, 0.0, 0.0)
+        if i % 8 == 0:
+            x_before = c_model.x[1]
+            model.update_of(of_meas[i], of_meas[i])
+            lib.EkfOf_Update(ctypes.byref(c_model), of_meas[i], of_meas[i])
+            if i in outliers:
+                assert c_model.x[1] == x_before  # rejected: velocity untouched
+            np.testing.assert_allclose(model.x[0], np.array(c_model.x), rtol=1e-4, atol=1e-6)
+    assert c_model.rej_x == model.rej_x[0] == c_model.rej_y == model.rej_y[0]
+    assert c_model.rej_x >= len(outliers)
+
 
 def test_replay_arrays():
     N1 = 1000

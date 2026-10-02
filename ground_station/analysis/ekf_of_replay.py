@@ -265,6 +265,7 @@ def replay_arrays(t1, phase1, ax1, ay1, t3, ofx3, ofy3, ofq3, params_grid, run_o
             'k_fit': k_fit, 'res_ratio': res_ratio,
             'innov_rms_x': innov_rms_x, 'innov_rms_y': innov_rms_y,
             'innov_sd': innov_sd,
+            'rej_frac': float(new_model.rej_x[b] + new_model.rej_y[b]) / max(float(nis_count[b]), 1.0),
             'old_pos_x': int_old_pos_x[0] if run_old else None,
             'old_pos_y': int_old_pos_y[0] if run_old else None,
         })
@@ -381,6 +382,7 @@ def run_cli():
         p['q_ba'] = qba
         p['R_of'] = rof
         p['R_zupt'] = rz
+        p['of_gate'] = 0.0  # tune Q/R ungated; the 5-sigma gate is a separate outlier layer
         params_grid.append(p)
         
     # Process logs

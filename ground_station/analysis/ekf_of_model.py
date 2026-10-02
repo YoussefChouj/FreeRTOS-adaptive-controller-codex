@@ -6,7 +6,8 @@ DEFAULTS = {
     'q_bof': 1e-6,
     'q_ba': 1e-6,
     'R_of': 1e-4,
-    'R_zupt': 1e-4
+    'R_zupt': 1e-4,
+    'of_gate': 5.0,  # sigmas, mirrors EkfOf_t.of_gate (0 = off)
 }
 
 class EkfOfModel:
@@ -30,6 +31,9 @@ class EkfOfModel:
         self.q_ba  = np.asarray(params['q_ba'], dtype=dtype)
         self.R_of  = np.asarray(params['R_of'], dtype=dtype)
         self.R_zupt = np.asarray(params['R_zupt'], dtype=dtype)
+        self.of_gate = np.asarray(params['of_gate'], dtype=dtype)
+        self.rej_x = np.zeros(self.B, dtype=np.int64)
+        self.rej_y = np.zeros(self.B, dtype=np.int64)
 
     def predict(self, dt, ax, ay):
         ax = np.asarray(ax, dtype=self.dtype)
@@ -67,7 +71,7 @@ class EkfOfModel:
         for axis in range(2):
             self.P[:, axis] = np.matmul(F, np.matmul(self.P[:, axis], np.transpose(F, (0, 2, 1)))) + Q
 
-    def _update_one(self, axis, h, z, R, mask):
+    def _update_one(self, axis, h, z, R, mask, gate=0.0):
         # axis 0: indices [0, 1, 2, 6]
         # axis 1: indices [3, 4, 5, 7]
         idx = [0, 1, 2, 6] if axis == 0 else [3, 4, 5, 7]
@@ -85,7 +89,15 @@ class EkfOfModel:
         hx = (self.x[:, idx[0]]*h[0] + self.x[:, idx[1]]*h[1] + 
               self.x[:, idx[2]]*h[2] + self.x[:, idx[3]]*h[3]).reshape(-1)
         y = z - hx  # (B,)
-        
+
+        # innovation gate (firmware ekf_of_update_one): skip when y^2 > gate^2 * S
+        gate = np.broadcast_to(np.asarray(gate, dtype=self.dtype), y.shape)
+        rejected = (gate > 0) & (y * y > gate * gate * S)
+        if rejected.any():
+            keep = (~rejected).astype(self.dtype)
+            mask = keep if mask is None else mask * keep
+        self._last_rejected = rejected
+
         K = PHt / S[:, None, None]  # (B, 4, 1)
         
         if mask is not None:
@@ -115,8 +127,13 @@ class EkfOfModel:
 
     def update_of(self, of_x, of_y, mask=None):
         h = [0.0, 1.0, 1.0, 0.0]
-        y_x, S_x = self._update_one(0, h, of_x, self.R_of, mask)
-        y_y, S_y = self._update_one(1, h, of_y, self.R_of, mask)
+        y_x, S_x = self._update_one(0, h, of_x, self.R_of, mask, self.of_gate)
+        rx = self._last_rejected
+        y_y, S_y = self._update_one(1, h, of_y, self.R_of, mask, self.of_gate)
+        ry = self._last_rejected
+        live = np.ones(self.B, dtype=bool) if mask is None else np.asarray(mask) > 0
+        self.rej_x += rx & live
+        self.rej_y += ry & live
         self.innov_x = y_x
         self.innov_y = y_y
         return (y_x, y_y), (S_x, S_y)
