@@ -25,12 +25,11 @@ S3+ stays OFF main until the demo image is flashed and flown; main's `API/mrac*`
 NOT flashed and NOT Keil-built: HOLD_FLASH (the operator runs `rebuild_and_flash --yes` from main).
 Read `docs/agent/reports/WP-18.md`, then `docs/agent/reports/2026-10-02-morning.md` (flights + what each decides).
 
-2026-10-02 evening, WP-20 (landing drift): main @ 710d293 = OF scale x1.25 + vertical gate `g_of_vgate` (vz LPF 0.25 s)
-+ landing pause at 0.40 m. Built in wt-night (0 err), NOT flashed. Replay `python -m ground_station.research.of_gate_replay`:
-scale 48.1 cm PASS, hover gated 9.6% PASS, slow-lowering leak 2.5 cm FAIL (accepted trade-off). Report `docs/agent/reports/WP-20.md`.
-FLASHED + handheld test 2 (`of_scale_test_2`): 8 tape moves mean 51.9 cm (PASS), fast lifts <=0.8 cm (PASS), below 0.40 m
-frozen (PASS), slow lowering leaks ~5 cm/m (known). NEXT: hover flight, preset `position_hold_of` (log `g_of_vgate`),
-tape-measure the landing offset, watch the locs loop (gain +25%).
+2026-10-02 night, WP-20 REVERTED: hover_4 showed the vertical gate zeroed the position/velocity output 29% of
+airborne time (takeoff 100%, landing 79-100%), so the drone flew open-loop and drifted. Main now has the pre-WP-20
+StabilizerTask.c (= the hover_2 firmware, incl. bb2040c), built in wt-night 0 err / 5 warn, NOT flashed (operator flashes).
+NEXT WP: OF home point from lift-off (integrate from arm, controllers never zeroed, land toward home), tape-measured
+landing. Details: `docs/agent/reports/WP-20.md` last two sections.
 
 ## Goal now
 LAB DEMO (operator priority, 2026-09-30): PID vs PID+MRAC augmentation on (a) trajectory tracking (circle/figure8)

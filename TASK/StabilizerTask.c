@@ -36,7 +36,7 @@ short Throttle_th = 2200;
  * Touchdown detected by Z_ratePID.FB → 0 on frame contact. */
 #define LAND_DES_STEP   0.0015f
 /* Safety net: 2000 ticks at 200 Hz = 10 s max landing time before forced disarm. */
-#define LAND_MAX_TICKS  (2000U + LAND_PAUSE_MAX_TICKS)   /* WP-20: + the 0.40 m pause */
+#define LAND_MAX_TICKS  2000U
 /* Motor bench-test dead-man: stabilizer runs at 200 Hz, so 100 ticks = 500 ms.
  * If the dashboard stops sending CMD 0x16 heartbeats, motors are zeroed. */
 #define MOTOR_TEST_DEADMAN_TICKS  100U
@@ -191,46 +191,6 @@ volatile uint8_t g_of_bias_capture_req = 0;
  * still reports quality 255 but its velocity is not usable. */
 #define OF_HANDHELD_MIN_ALT_CM      10U
 
-/* WP-20 (2026-10-02): OF scale + vertical gate. of_scale_test_1 (handheld, 0.7-0.9 m):
- * eight 50 cm tape moves read 31-45 cm (OF ~80% of truth; tracking_baseline measured
- * 0.0124 m per raw*s, also x1.24), and pure vertical hand motion faked 3-8 cm of
- * horizontal travel. hover_2 landed 20/30 cm off while OF saw 5/-3 cm.
- *   name                       value      unit   meaning                                   */
-#define OF_VEL_SCALE                1.25f   /* -     multiplies debiased of2_*_fix (cm/s)       */
-#define OF_GATE_MIN_ALT_M           0.40f   /* m     Z_posPID.FB below this: gated              */
-#define OF_GATE_VZ_MPS              0.20f   /* m/s   |low-passed Z_ratePID.FB| above: gated     */
-#define OF_GATE_VZ_ALPHA            0.02f   /* -     vz LPF per 5 ms tick (tau 0.25 s, replay)  */
-#define OF_GATE_MAX_ALT_CM          500U    /* cm    of_alt_cm above this (0xFFFFFFFF): gated    */
-#define OF_GATE_RELEASE_TICKS       60U     /* 5 ms  clear this long before ungating (0.3 s)    */
-#define LAND_PAUSE_ALT_M            0.40f   /* m     landing ramp holds here before the gate    */
-#define LAND_PAUSE_POS_ERR_CM       3.0f    /* cm    |loc Des-FB| per axis to leave the pause   */
-#define LAND_PAUSE_VEL_CMS          5.0f    /* cm/s  |locs FB| per axis to leave the pause      */
-#define LAND_PAUSE_MIN_TICKS        200U    /* 5 ms  minimum pause (1 s: vz settles, gate opens) */
-#define LAND_PAUSE_MAX_TICKS        600U    /* 5 ms  timeout (3 s), then descend anyway         */
-/* 1 = OF gated (no OF position integration, horizontal loops command level).
- * Global so the ground station can log it. */
-volatile uint8_t g_of_vgate = 1U;
-static uint16_t s_of_vgate_clear_ticks = 0U;
-static float    s_of_vz_f = 0.0f;       /* m/s, LPF of Z_ratePID.FB for the gate */
-static uint8_t  s_land_pause = 0U;        /* WP-20 C, see the LANDING ramp */
-static uint16_t s_land_pause_ticks = 0U;
-/* Debiased, scale-corrected OF body velocity in cm/s. The single source for the
- * position integration, the velocity-loop FB and the OF EKF input. */
-static float Of_VelCms(s16 raw, float bias)
-{
-	return ((float)raw - bias) * OF_VEL_SCALE;
-}
-/* WP-20 B: undo this tick's integration (only airborne: on the ground
- * ComputePID_Gated already zeroed it) and command zero. */
-static void Of_VgateHold(PIDTypeDef *pPID, float sumE, float ui, uint8_t airborne)
-{
-	if (airborne) {
-		pPID->SumE = sumE;
-		pPID->Ui   = ui;
-	}
-	pPID->U = 0.0f;
-}
-
 /* P0 Finding 2 (docs/p0-verdicts.md): per-tick ToF validity flag. 1 = this tick's
  * sample passed the band+jump gates in Update_Data. While 0 (out of range, e.g.
  * above the 5 m band ceiling or a 0xFFFF no-reading) the Z loops hold their last
@@ -271,8 +231,8 @@ static void Of_RebaseKfBias(float dbx, float dby)
 	 * model z = v + bof, so a +d shift of the raw measurement = -d shift in
 	 * the KF bias state (was +=, should be -=). */
 	if (s_ekf_of_inited) {
-		s_ekf_of.x[2] -= dbx * 0.01f * OF_VEL_SCALE;   /* WP-20: KF sees scaled OF */
-		s_ekf_of.x[5] -= dby * 0.01f * OF_VEL_SCALE;
+		s_ekf_of.x[2] -= dbx * 0.01f;
+		s_ekf_of.x[5] -= dby * 0.01f;
 	}
 }
 
@@ -518,8 +478,8 @@ void Update_Data(void)
 					s_ekf_of_innov_bad_cnt = 0U;
 				}
 				on_ground = !g_of_handheld_test && !(DroneStatus.ARM_Status == Armed && (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING));
-				ofx = Of_VelCms(ano_of.of2_dx_fix, s_of_bias_x) * 0.01f; /* m/s */
-				ofy = Of_VelCms(ano_of.of2_dy_fix, s_of_bias_y) * 0.01f;
+				ofx = ((float)ano_of.of2_dx_fix - s_of_bias_x) * 0.01f; /* m/s */
+				ofy = ((float)ano_of.of2_dy_fix - s_of_bias_y) * 0.01f;
 				/* WP-14: tilt-only input — gravity-tilt term replaces Lin_Acc.
 				 * Body accel explains ~0% of OF velocity change; the gravity-tilt
 				 * alone explains 34-63% (drift investigation §ekf F2).
@@ -579,28 +539,6 @@ void Update_Data(void)
 		      ano_of.of_alt_cm <= 500U) ||
 		     (DroneStatus.ARM_Status == Armed &&
 		      (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING))));
-		/* WP-20 B: vertical gate. Low height and climb/sink both fake horizontal
-		 * flow, so stop integrating it. Z FB is last tick's (m, m/s; updated
-		 * further down in this function). Gates at once, releases after
-		 * OF_GATE_RELEASE_TICKS clear so hover noise does not chatter. vz is
-		 * low-passed: raw Z_ratePID.FB spikes past 0.2 m/s on 10% of hover
-		 * samples (hover_2), which gated 29% of the hold (of_gate_replay). */
-		{
-			u8 vgate_raw;
-			s_of_vz_f += OF_GATE_VZ_ALPHA * (Ctrler.Z_ratePID.FB - s_of_vz_f);
-			vgate_raw = (u8)(Ctrler.Z_posPID.FB < OF_GATE_MIN_ALT_M ||
-			    fabsf(s_of_vz_f) > OF_GATE_VZ_MPS ||
-			    ano_of.of_alt_cm > OF_GATE_MAX_ALT_CM);
-			if (vgate_raw) {
-				s_of_vgate_clear_ticks = 0U;
-				g_of_vgate = 1U;
-			} else if (s_of_vgate_clear_ticks < OF_GATE_RELEASE_TICKS) {
-				s_of_vgate_clear_ticks++;
-			} else {
-				g_of_vgate = 0U;
-			}
-		}
-		if (g_of_vgate) pos_integrate = 0U;
 		if (g_of_bias_mode == 2U) {
 			/* Mode 2: EKF state x[0]=pos_x, x[3]=pos_y is already debiased by
 			 * construction. Apply yaw rotation and feed directly to PID FB.
@@ -639,8 +577,8 @@ void Update_Data(void)
 			 * integrating to cm/s drift before takeoff. */
 			if (pos_integrate)
 			{
-				float of_dx_deb = Of_VelCms(ano_of.of2_dx_fix, s_of_bias_x);
-				float of_dy_deb = Of_VelCms(ano_of.of2_dy_fix, s_of_bias_y);
+				float of_dx_deb = ano_of.of2_dx_fix - s_of_bias_x;
+				float of_dy_deb = ano_of.of2_dy_fix - s_of_bias_y;
 
 				ano_of.DISTANCE_X = ano_of.DISTANCE_X+of_dx_deb*0.005f;
 				ano_of.DISTANCE_Y = ano_of.DISTANCE_Y+of_dy_deb*0.005f;
@@ -722,8 +660,8 @@ void Update_Data(void)
 			 * 2026-10-01/02) but it read +8..+14 cm/s at rest on 2026-10-02, and the
 			 * loop flew that phantom away as a ~12 cm -x drift. Now it uses the same
 			 * debiased velocity the position loop integrates (modes 0/1/2). */
-			float fb_dx = Of_VelCms(ano_of.of2_dx_fix, s_of_bias_x);
-			float fb_dy = Of_VelCms(ano_of.of2_dy_fix, s_of_bias_y);
+			float fb_dx = (float)ano_of.of2_dx_fix - s_of_bias_x;
+			float fb_dy = (float)ano_of.of2_dy_fix - s_of_bias_y;
 			if (g_ekf_gate.ctrl_enable && g_ekf_gate.healthy) {
 				fb_dx = g_ekf_gate.vx_cms;
 				fb_dy = g_ekf_gate.vy_cms;
@@ -1198,21 +1136,9 @@ void Compute_Motor(void)
 	   while disarmed (otherwise cnt_loc grows unbounded and the gate fires
 	   every 256th tick on a uint8 wrap). */
 	if (DroneStatus.ARM_Status != 0U) {
-	/* WP-20 B: while g_of_vgate the horizontal loops still run (D history stays
-	 * current), then their integrators are restored and U is zeroed: level
-	 * attitude plus trim, I frozen (not reset), loc Des untouched. */
-	float vg_sum[4], vg_ui[4];
-	vg_sum[0] = Ctrler.locxPID.SumE;  vg_ui[0] = Ctrler.locxPID.Ui;
-	vg_sum[1] = Ctrler.locyPID.SumE;  vg_ui[1] = Ctrler.locyPID.Ui;
-	vg_sum[2] = Ctrler.locxsPID.SumE; vg_ui[2] = Ctrler.locxsPID.Ui;
-	vg_sum[3] = Ctrler.locysPID.SumE; vg_ui[3] = Ctrler.locysPID.Ui;
 	Update_Des(case_Update_loc_Des);
 	ComputePID_Gated(&Ctrler.locxPID, airborne);
 	ComputePID_Gated(&Ctrler.locyPID, airborne);
-	if (g_of_vgate) {
-		Of_VgateHold(&Ctrler.locxPID, vg_sum[0], vg_ui[0], airborne);
-		Of_VgateHold(&Ctrler.locyPID, vg_sum[1], vg_ui[1], airborne);
-	}
 
   Update_Des(case_Update_v_loc_Des);
 	SDK_Set_V_Loc();//������
@@ -1227,10 +1153,6 @@ void Compute_Motor(void)
 		ComputePID_Gated(&Ctrler.locysPID, airborne);
 		Ctrler.locxsPID.U += ax;
 		Ctrler.locysPID.U += ay;
-		if (g_of_vgate) {
-			Of_VgateHold(&Ctrler.locxsPID, vg_sum[2], vg_ui[2], airborne);
-			Of_VgateHold(&Ctrler.locysPID, vg_sum[3], vg_ui[3], airborne);
-		}
 	}
   }
 	else
@@ -1429,35 +1351,9 @@ TWC.real_yaw = Ctrler.yawPID.FB; //�ṹ���Ա������ʼ��һ
 			/* LANDING: ramp Z setpoint down at 0.30 m/s (LAND_DES_STEP at 200 Hz).
 			 * Snap Des = min(Des, FB) so a setpoint above current altitude cannot
 			 * pull the drone upward at landing entry (case A fix). */
-			if (flight_phase != FLIGHT_PHASE_LANDING)
-				s_land_pause = 0U;
 			if (flight_phase == FLIGHT_PHASE_LANDING)
 			{
 				TWC.execute = 0U;
-				/* WP-20 C: the ramp would sink through 0.40 m with the OF gated the
-				 * whole way (|vz| 0.30 > 0.20 m/s). Pause at LAND_PAUSE_ALT_M so the
-				 * gate opens and OF hold re-centres, then descend gated and level.
-				 * s_land_pause: 0 = above, 1 = pausing, 2 = done or entered low. */
-				if (s_land_pause == 0U) {
-					if (Ctrler.Z_posPID.FB < LAND_PAUSE_ALT_M) {
-						s_land_pause = 2U;
-					} else if (Ctrler.Z_posPID.Des - LAND_DES_STEP <= LAND_PAUSE_ALT_M) {
-						s_land_pause = 1U;
-						s_land_pause_ticks = 0U;
-					}
-				}
-				if (s_land_pause == 1U) {
-					u8 settled = (u8)(fabsf(Ctrler.locxPID.Des - Ctrler.locxPID.FB) < LAND_PAUSE_POS_ERR_CM &&
-					    fabsf(Ctrler.locyPID.Des - Ctrler.locyPID.FB) < LAND_PAUSE_POS_ERR_CM &&
-					    fabsf(Ctrler.locxsPID.FB) < LAND_PAUSE_VEL_CMS &&
-					    fabsf(Ctrler.locysPID.FB) < LAND_PAUSE_VEL_CMS);
-					Ctrler.Z_posPID.Des = LAND_PAUSE_ALT_M;
-					s_land_pause_ticks++;
-					if ((s_land_pause_ticks >= LAND_PAUSE_MIN_TICKS && settled && !g_of_vgate) ||
-					    s_land_pause_ticks >= LAND_PAUSE_MAX_TICKS)
-						s_land_pause = 2U;
-					break;
-				}
 				if (Ctrler.Z_posPID.Des > Ctrler.Z_posPID.FB)
 					Ctrler.Z_posPID.Des = Ctrler.Z_posPID.FB;
 				Ctrler.Z_posPID.Des -= LAND_DES_STEP;
