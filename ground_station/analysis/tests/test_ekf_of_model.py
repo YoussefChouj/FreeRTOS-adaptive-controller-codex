@@ -219,11 +219,74 @@ def test_replay_arrays():
         assert np.isfinite(r['autocorr'])
         assert np.isfinite(r['bof_drift'])
 
+TILT_GAIN = 0.242  # EKF_OF_TILT_GAIN
+G = 9.80665
+
+
+def _tilt_scene(dt=0.005, T=4.0, k_true=TILT_GAIN):
+    """Body tilt oscillating +-0.1 rad at 0.5 Hz; the true velocity is driven only by k_true * g * tilt."""
+    t = np.arange(int(T / dt)) * dt
+    tilt = 0.1 * np.sin(2 * np.pi * 0.5 * t)
+    a_true = k_true * G * tilt
+    v_true = np.cumsum(a_true) * dt
+    return t, tilt, v_true
+
+
+def _run_tilt_filter(sign, dt=0.005, of_stop=1.0):
+    """Tilt input (gain TILT_GAIN, given sign) into the twin; OF at 25 Hz only until `of_stop` s, then coast."""
+    t, tilt, v_true = _tilt_scene(dt)
+    m = EkfOfModel(1, **{k: DEFAULTS[k] for k in DEFAULTS})
+    v_est = np.zeros(len(t))
+    for i in range(len(t)):
+        m.predict(dt, sign * TILT_GAIN * G * tilt[i], 0.0)
+        if t[i] < of_stop and i % 8 == 0:
+            m.update_of(v_true[i], 0.0)
+        v_est[i] = m.x[0, 1]
+    coast = t >= of_stop
+    return t, v_true, v_est, coast
+
+
+def test_tilt_input_tracks_velocity():
+    # With OF removed after 1 s the velocity estimate is driven by the tilt term alone.
+    # Tolerance: coasting rms error < 0.01 m/s on a +-0.07 m/s signal (the signal rms is ~0.05 m/s).
+    t, v_true, v_est, coast = _run_tilt_filter(+1.0)
+    rms_err = np.sqrt(np.mean((v_est[coast] - v_true[coast]) ** 2))
+    rms_sig = np.sqrt(np.mean(v_true[coast] ** 2))
+    assert rms_sig > 0.03
+    assert rms_err < 0.01, f"coast rms error {rms_err:.4f} m/s"
+
+
+def test_tilt_input_wrong_sign_fails():
+    # Same scene with the sign flipped: the coasting estimate moves against the true velocity.
+    t, v_true, v_est, coast = _run_tilt_filter(-1.0)
+    rms_err = np.sqrt(np.mean((v_est[coast] - v_true[coast]) ** 2))
+    assert rms_err > 0.03, f"coast rms error {rms_err:.4f} m/s (wrong sign must not track)"
+    assert np.corrcoef(v_est[coast], v_true[coast])[0, 1] < 0.0
+
+
+def test_fit_tilt_gain_recovers_k_and_sign():
+    from ground_station.analysis.ekf_of_replay import fit_tilt_gain
+    dt = 0.005
+    t, tilt, v_true = _tilt_scene(dt, T=12.0, k_true=0.25)
+    phase = np.where(t < 1.0, 0, 1)
+    ax1 = G * tilt            # sign +1, gain 1
+    t3 = t[::8]
+    of = v_true[::8]
+    q = np.full(len(t3), 255)
+    k_x, k_y, n = fit_tilt_gain(t, phase, ax1, -ax1, t3, of, of, q)
+    assert n > 10
+    assert abs(k_x - 0.25) < 0.03, k_x       # right sign: k > 0 and close to the true gain
+    assert abs(k_y + 0.25) < 0.03, k_y       # flipped sign: k < 0
+
+
 def test_boot_layout_contains_states():
     with open('ground_station/comm/boot_default_layout.py', 'r') as f:
         content = f.read()
     assert '"s_ekf_of.x[6]"' in content
     assert '"s_ekf_of.x[7]"' in content
+    assert '"s_ekf_of.innov_x"' in content
+    assert '"s_ekf_of.innov_y"' in content
+    assert '"g_ekf_of_health"' in content
 
 def test_replay_real_logs(capsys):
     import glob
@@ -231,13 +294,10 @@ def test_replay_real_logs(capsys):
 
     from ground_station.analysis.ekf_of_replay import resolve_logs_dir, run_cli
     
+    # resolve_logs_dir honours $EKF_OF_LOGS_DIR, then <repo>/logs/vofa, the VPS path, the git-common-dir sibling.
     logs_dir = resolve_logs_dir()
     if not logs_dir or not logs_dir.exists():
-        pytest.skip("Logs dir not found")
-        
-    log_files = glob.glob(str(logs_dir / 'f17_hover_*.meta.json'))
-    if len(log_files) < 5:
-        pytest.skip(f"Found {len(log_files)} logs, need 5")
+        pytest.skip("Logs dir not found (set EKF_OF_LOGS_DIR)")
         
     import sys
     orig_argv = sys.argv
@@ -258,7 +318,9 @@ def test_replay_real_logs(capsys):
         f.write(captured.err)
     
     assert out.count("--- Log: ") == 5, "Expected 5 per-log tables"
-    assert ' nan' not in out.lower() and ' inf' not in out.lower(), "Metrics must be finite"
+    # whole words only: the "Informational RMS" line would match a bare ' inf' substring
+    import re
+    assert not re.search(r'\b(nan|inf)\b', out.lower()), "Metrics must be finite"
     
     if "DEFAULTS_MATCH yes" not in out:
         idx = out.find("Top 5 combos:")

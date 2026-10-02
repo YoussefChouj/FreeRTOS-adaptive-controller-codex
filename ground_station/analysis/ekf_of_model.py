@@ -2,10 +2,10 @@ import numpy as np
 
 DEFAULTS = {
     'q_pos': 1e-6,
-    'q_acc': 1e-2,
+    'q_acc': 1e-3,
     'q_bof': 1e-6,
-    'q_ba': 1e-5,
-    'R_of': 6.16e-4,
+    'q_ba': 1e-6,
+    'R_of': 1e-4,
     'R_zupt': 1e-4
 }
 

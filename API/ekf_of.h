@@ -65,4 +65,39 @@ extern void EkfOf_UpdateZeroVel(EkfOf_t *e);
  *  Keeps vel and bias estimates intact. */
 extern void EkfOf_ResetPos(EkfOf_t *e);
 
+/* ----- WP-14: shadow mode, health gate, active path, tilt gain ----- */
+
+/* Shadow: 1 = KF runs every tick regardless of g_of_bias_mode, but does
+ * NOT feed the control path.  Default 1 (shadow on).
+ * WHY: every flight produces KF telemetry for offline validation without
+ * touching the control path.  Set to 0 only via livewatch poke. */
+extern volatile uint8_t g_ekf_of_shadow;
+
+/* Active velocity feedback: 1 = locxsPID/locysPID.FB take KF velocity
+ * instead of raw OF.  Default 0 (off until a shadow flight validates).
+ * WHY: the ~55 ms lead of KF velocity over OF can tighten the vel loop,
+ * but must not be enabled until a shadow flight matches the replay. */
+extern volatile uint8_t g_ekf_of_vel_fb;
+
+/* Tilt gain: the gravity-tilt term is scaled by this before entering the
+ * KF predict.  Median of the per-axis fits on the five pinned logs
+ * (ekf_of_replay TILT_FIT, 0.2 s windows, flight only):
+ *   shadow3 0.200/0.180  shadow4 0.307/0.223  shadow5 0.198/0.212
+ *   active5 0.260/0.317  active6 0.384/0.364   (k_x/k_y, all > 0)
+ * -> median 0.242.  Windows 0.1 s / 0.5 s give median 0.251 / 0.172, all k > 0.
+ * WHY: the OF velocity follows only ~1/4 of g*tilt (drag, OF scale, attitude
+ * loop), so unit gain would over-drive v; the fitted gain keeps the KF
+ * velocity in step with OF.  The signs EKF_OF_ACC_SIGN_X/Y in
+ * StabilizerTask.c are the ones that make every k positive. */
+#define EKF_OF_TILT_GAIN  0.242f
+
+/* Health gate — innovation-based persistence counter.
+ * Trip after EKF_OF_HEALTH_PERSIST consecutive ticks (at 200 Hz = 5 ms)
+ * with innovation magnitude > EKF_OF_HEALTH_THRESH.
+ * WHY: 2 m/s (WP-8) is ~50x the innovation sd; this is ~5x, and the
+ * 100-tick persistence avoids single-sample false trips. */
+#define EKF_OF_HEALTH_THRESH    0.061f  /* m/s — 5 x median per-axis innovation sd 1.22 cm/s (5 pinned logs, replay CHOSEN) */
+#define EKF_OF_HEALTH_PERSIST   100U    /* ticks — 0.5 s at 200 Hz */
+
 #endif /* __EKF_OF_H__ */
+
