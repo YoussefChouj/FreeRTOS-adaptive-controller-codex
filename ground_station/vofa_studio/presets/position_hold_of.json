@@ -34,11 +34,11 @@
         "ano_of.of_alt_cm",
         "s_of_bias_x",
         "s_of_bias_y",
-        "s_of_bias_seeded",
+        "g_of_vgate",
         "g_of_bias_mode",
         "g_ekf_gate.vx_cms",
         "g_ekf_gate.vy_cms",
-        "g_ekf_gate.ctrl_enable",
+        "Ctrler.Z_ratePID.FB",
         "imu_data.rol",
         "imu_data.pit",
         "imu_data.yaw"
@@ -54,7 +54,9 @@
         "flight_phase",
         "DroneStatus.ARM_Status",
         "DroneStatus.FlyMode",
-        "real_voltage"
+        "real_voltage",
+        "s_of_bias_seeded",
+        "g_ekf_gate.ctrl_enable"
       ]
     }
   ],
