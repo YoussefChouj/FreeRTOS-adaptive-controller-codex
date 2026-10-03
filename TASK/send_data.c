@@ -36,6 +36,8 @@ extern FP32 Gyro_Z_Real;
 extern volatile uint8_t g_of_bias_capture_req; /* CMD 0x17 one-shot OF bias capture req */
 extern volatile uint8_t g_of_bias_mode;        /* CMD 0x1E idx=0: 0=FIXED 1=EMA 2=EKF */
 extern volatile uint8_t g_of_handheld_test;    /* CMD 0x1E idx=3: 1=integrate OF on ground */
+extern volatile uint8_t g_of_full_tilt;        /* CMD 0x1E idx=4: 1=full-tilt OF correction */
+extern volatile uint8_t g_ekf_of_vel_fb;       /* CMD 0x1E idx=5: 1=KF velocity feedback */
 extern volatile uint8_t g_of_bias_ema_freeze;  /* CMD 0x1E idx=1: 1=freeze EMA update */
 extern float g_of_bias_ema_tau_s;              /* CMD 0x1E idx=2: EMA tau (s), [1,300] */
 extern volatile uint8_t g_ekf_of_health;       /* 1=EKF healthy, 0=diverged (fallback active) */
@@ -1917,6 +1919,8 @@ void Process_GroundStation_Command(void)
          *          Larger tau → slower tracking, less pull-back.
          *   idx=3: handheld test (val=0 off, val=1 on). Integrates OF
          *          position on the ground; firmware clears it in flight.
+ *   idx=4: g_of_full_tilt (0/1), full-tilt OF correction. DISARMED ONLY.
+         *   idx=5: g_ekf_of_vel_fb (0/1), KF velocity feedback. DISARMED ONLY.
          *
          * All globals are volatile and DWARF-subscribable. */
         else if (id == 0x1E) {
@@ -1938,6 +1942,10 @@ void Process_GroundStation_Command(void)
                 g_of_bias_ema_tau_s = val;
             } else if (idx == 3) {
                 g_of_handheld_test = (val >= 0.5f) ? 1U : 0U;
+            } else if (idx == 4 && DroneStatus.ARM_Status == DisArmed) {
+                g_of_full_tilt = (val >= 0.5f) ? 1U : 0U;
+            } else if (idx == 5 && DroneStatus.ARM_Status == DisArmed) {
+                g_ekf_of_vel_fb = (val >= 0.5f) ? 1U : 0U;
             }
         }
 

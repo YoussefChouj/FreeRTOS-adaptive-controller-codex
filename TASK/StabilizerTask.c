@@ -127,7 +127,7 @@ static float s_land_sink_bias = 0.0f;
  * EMA freeze is CMD 0x1E idx=1 (0=run, 1=frozen). Freeze persists across ARM.
  * Mode and freeze state are live-pokeable via g_of_bias_mode / g_of_bias_ema_freeze. */
 #ifndef OF_BIAS_MODE_DEFAULT
-#define OF_BIAS_MODE_DEFAULT  0   /* FIXED: bias captured at boot, never changes */
+#define OF_BIAS_MODE_DEFAULT  2   /* EKF (WP-21 default; was 0 FIXED). Bias re-snapped at every ARM edge in all modes */
 #endif
 volatile uint8_t g_of_bias_mode = OF_BIAS_MODE_DEFAULT; /* 0=FIXED 1=EMA 2=EKF */
 volatile uint8_t g_of_bias_ema_freeze = 0U;             /* 1=freeze EMA update */
@@ -183,13 +183,23 @@ static void of_full_tilt_delta(float *dx, float *dy, float dh_up)
 	*dy = -n1 * n2 * k * bx + (1.0f - n2 * n2 * k) * by - n2 * bz;
 }
 /* WP-21 B: ComputePID_Gated, but hold == 1 keeps SumE/Ui at their previous value (the
- * Z-loop P0 Finding 2 pattern) instead of zeroing them, so P/D still act. */
+ * Z-loop P0 Finding 2 pattern) instead of zeroing them, so P/D still act.  U is rebuilt
+ * from the held Ui (ComputePID already added this tick's increment to it).  A non-finite
+ * saved value is not restored: ComputePID's NaN/inf reset wins. */
 static void ComputePID_Hold(PIDTypeDef *pPID, uint8_t integrate, uint8_t hold)
 {
 	float sumE = pPID->SumE;
 	float ui   = pPID->Ui;
+	float u;
 	ComputePID_Gated(pPID, integrate);
-	if (hold && integrate) { pPID->SumE = sumE; pPID->Ui = ui; }
+	if (hold && integrate && fabsf(sumE) < 1e12f && fabsf(ui) < 1e12f) {
+		pPID->SumE = sumE;
+		pPID->Ui   = ui;
+		u = pPID->Up + ui + pPID->Ud;
+		if (u >  pPID->UMax) u =  pPID->UMax;
+		if (u < -pPID->UMax) u = -pPID->UMax;
+		pPID->U = u;
+	}
 }
 volatile uint8_t g_ekf_of_health   = 1U; /* 1=healthy 0=diverged  */
 volatile uint8_t g_ekf_of_fallback = 0U; /* 1=fell back to FIXED  */
@@ -198,8 +208,8 @@ volatile uint8_t g_ekf_of_fallback = 0U; /* 1=fell back to FIXED  */
  * never changes g_of_bias_mode. Position feed stays on mode 2 only. */
 volatile uint8_t g_ekf_of_shadow   = 1U;
 /* WP-14: active velocity feedback. When 1 AND mode 2 AND healthy,
- * locxsPID/locysPID.FB take KF velocity instead of raw OF. Default 0. */
-volatile uint8_t g_ekf_of_vel_fb   = 0U;
+ * locxsPID/locysPID.FB take KF velocity instead of raw OF. Default 1 (WP-21; was 0). */
+volatile uint8_t g_ekf_of_vel_fb   = 1U;
 /* WP-14: innovation persistence counter for the health gate.
  * Trips only after EKF_OF_HEALTH_PERSIST consecutive bad ticks. */
 static uint16_t s_ekf_of_innov_bad_cnt = 0U;
