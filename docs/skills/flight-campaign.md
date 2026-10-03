@@ -5,6 +5,10 @@ description: >
   and write a campaign YAML file. It safely creates and validates the campaign.
 ---
 
+> Fly-mode campaigns (operator arms by RC, the agent flies scenarios such as the hover ladder, auto-next,
+> summary and plots) launch through the `/workflow-b` skill: `.claude/skills/workflow-b/SKILL.md`.
+> This file covers tune-mode campaigns only.
+
 ## Interview
 
 Ask the operator one question at a time to gather the campaign details. Do not ask all at once. Offer the `example_circle.yaml` values as defaults for each.
