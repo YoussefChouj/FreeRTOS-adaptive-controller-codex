@@ -2637,11 +2637,14 @@ class ApiServer:
             else:
                 from ground_station.service.campaign_deps import sim_knobs
                 from ground_station.service.campaign_live import live_deps_factory
+                from ground_station.service.campaign_outputs import write_campaign_outputs
+                campaigns_dir = Path(__file__).parents[2] / "logs" / "campaigns"
                 self.campaign = CampaignService(
                     agent=self.agent,
                     deps_factory=live_deps_factory(service),
                     knobs=sim_knobs(),
-                    go_log_path=Path(__file__).parents[2] / "logs" / "campaigns" / "go_log.jsonl"
+                    go_log_path=campaigns_dir / "go_log.jsonl",
+                    outputs=lambda path, report: write_campaign_outputs(path, report, out_root=campaigns_dir),
                 )
         else:
             self.campaign = campaign_service

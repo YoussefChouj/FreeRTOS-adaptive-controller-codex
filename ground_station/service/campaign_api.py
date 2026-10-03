@@ -8,7 +8,7 @@ from ground_station.service.agent import AgentDisabledError, PlanBusyError
 
 class CampaignService:
     def __init__(self, agent=None, deps_factory=None, knobs=(), param_timeout_s=30.0, stream_check=None,
-                 go_log_path=None):
+                 go_log_path=None, outputs=None):
         self.agent = agent
         self.deps_factory = deps_factory
         self.knobs = knobs
@@ -30,6 +30,9 @@ class CampaignService:
         # every accepted Go, with who gave it; an agent Go carries the operator's chat confirmation quote
         self.go_log_path = Path(go_log_path) if go_log_path else None
         self.go_log = []
+        # outputs(campaign_path, report) -> folder: summary, plots, metrics after every run (live only)
+        self.outputs = outputs
+        self.outputs_dir = None
 
     def go(self, campaign_path, pack_id, checklist, source, confirmation=None):
         if not source:
@@ -54,6 +57,7 @@ class CampaignService:
             self.campaign_path = campaign_path
             self.control = RunnerControl()
             self.report = None
+            self.outputs_dir = None
             self._live_flights = []
             self.waiting_pack = None
             self.go_grant = pack_id
@@ -110,7 +114,16 @@ class CampaignService:
                 status="error",
                 reason=f"{type(exc).__name__}: {exc}"
             )
+        out_dir = None
+        if self.outputs is not None:
+            try:
+                out_dir = str(self.outputs(campaign_path, report))
+            except Exception as exc:
+                self.say(f"campaign outputs failed: {type(exc).__name__}: {exc}")
+            else:
+                self.say(f"campaign {report.status}: summary in {out_dir}/summary.md")
         with self.lock:
+            self.outputs_dir = out_dir
             self.report = report
 
     def on_flight(self, rec):
@@ -248,5 +261,6 @@ class CampaignService:
                 "flights": flights,
                 "control": self.control.get() if self.runner_thread and self.runner_thread.is_alive() else None,
                 "arm_refusal": self.arm_refusal,
-                "last_go": self.go_log[-1] if self.go_log else None
+                "last_go": self.go_log[-1] if self.go_log else None,
+                "outputs_dir": self.outputs_dir
             }

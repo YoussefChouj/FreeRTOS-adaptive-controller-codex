@@ -22,7 +22,8 @@ from typing import Any, Callable
 
 from ground_station.analysis.battery_model import PackRegistry
 from ground_station.livewatch.campaign_capture import (
-    ATTITUDE, KF_HEALTH, MOTORS, POSITION_AXES, RATE_LOOPS, WFB_STATUS_FIELDS,
+    ATTITUDE, KF_HEALTH, MAX_SLOTS, MOTORS, POSITION_AXES, RATE_LOOPS, WFB_STATUS_FIELDS, plan_capture,
+    subscribe_steps,
 )
 from ground_station.platform.wfb_commands import CMD_PRIM, PrimIdx, WfbClient
 from ground_station.service.abort_monitor import AbortLimits, AbortMonitor, AbortSample
@@ -175,6 +176,44 @@ def check_live_ready(service: Any, now_ns: Callable[[], int] = time.time_ns) -> 
         raise RuntimeError(f"g_wfb_status is stale ({age_s:.1f} s old)")
 
 
+def live_capture_hooks(service: Any, controller: str = "pid", max_rate_hz: float | None = None,
+                       ) -> tuple[Callable[[Any, str], Any], Callable[[Any], str]]:
+    """RunnerDeps begin_capture / end_capture for the live link (decision 8).
+
+    begin: put the experiment's log_plan on the stream slots (the first flight also stops every slot the
+    plan does not use, so an operator preset does not eat the link budget), then start a fresh recording
+    labelled ``<flight_id>_<experiment>``. end: stop it and return its session dir.
+    """
+    applied: dict[str, Any] = {"steps": None, "slots": MAX_SLOTS}
+
+    def begin(exp: Any, flight_id: str) -> str:
+        plan = plan_capture(exp.log_plan or None, max_rate_hz=max_rate_hz)
+        steps = subscribe_steps(plan)
+        if steps != applied["steps"]:
+            bridge = getattr(service, "bridge", None)
+            if bridge is None:
+                raise RuntimeError("bridge unavailable: cannot apply the log plan")
+            for step in steps:
+                bridge.subscribe_slot(**step["args"])
+            for slot in range(len(steps), applied["slots"]):
+                bridge.subscribe_slot(slot=slot, divider=0, ranges=[])
+            applied.update(steps=steps, slots=len(steps))
+        service.stop_recording()
+        st = service.start_recording(
+            label=f"{flight_id}_{exp.name}", requested_by="agent:campaign",
+            reason=f"workflow B {exp.name}", controller=controller,
+            notes=f"log_plan rate {plan['rate_hz']:g} Hz, groups {', '.join(plan['groups']) or 'core only'}")
+        if not st.get("recording"):
+            raise RuntimeError("recording did not start (recorder disabled?)")
+        return str(st.get("session_dir") or "")
+
+    def end(token: Any) -> str:
+        st = service.stop_recording()
+        return str(st.get("session_dir") or token or "")
+
+    return begin, end
+
+
 def live_deps_factory(service: Any, controller: str = "pid", dt_s: float = LIVE_DT_S,
                       workdir: str | None = None) -> Callable[[], RunnerDeps]:
     """Factory for CampaignService: checks the link, then builds RunnerDeps bound to the live service."""
@@ -186,6 +225,7 @@ def live_deps_factory(service: Any, controller: str = "pid", dt_s: float = LIVE_
         tuner, gate = tuner_and_gate(controller, 0, clock,
                                      workdir or tempfile.mkdtemp(prefix="wfb_live_"))
         sat = _sat_hi_lo()
+        begin_capture, end_capture = live_capture_hooks(service, controller)
 
         def no_flash() -> str:
             raise RuntimeError("reflash is not wired into live campaigns; use the flash skill between campaigns")
@@ -210,6 +250,8 @@ def live_deps_factory(service: Any, controller: str = "pid", dt_s: float = LIVE_
             agent_arms=False,
             health=lambda: live_health(service),
             ground_wait_s=GROUND_WAIT_S,
+            begin_capture=begin_capture,
+            end_capture=end_capture,
         )
 
     return factory

@@ -75,6 +75,10 @@ class RunnerDeps:
     say: Callable[[str], None] = lambda text: None               # chat line to the operator (live: agent message)
     health: Callable[[], tuple[bool, str]] = lambda: (True, "")  # live: RC-armed + g_ekf_of_health
     ground_wait_s: float = 0.0  # fly mode: time on the ground before the auto-next check
+    # per-flight capture (decision 8): live applies the experiment's log_plan and starts a recording;
+    # end_capture stops it and returns the session dir (FlightRecord.recording)
+    begin_capture: Callable[[Any, str], Any] = lambda exp, flight_id: None
+    end_capture: Callable[[Any], str] = lambda token: ""
 
 def default_diff_source(repo_root: str, lkg_commit: str, c_files: tuple[str, ...]) -> str:
     if not c_files:
@@ -111,6 +115,7 @@ class FlightRecord:
     reflash_hash: str = ""
     scenario: str = ""
     steps: list[dict] = field(default_factory=list)
+    recording: str = ""
 
 @dataclass
 class CampaignReport:
@@ -335,9 +340,16 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
         if params and not deps.apply_params(params):
             return CampaignReport(campaign, flights, "operator_needed", "param write refused")
 
+        try:
+            capture = deps.begin_capture(exp, flight_id)
+        except Exception as exc:  # no log plan on the stream: do not fly unlogged
+            return CampaignReport(campaign, flights, "operator_needed", f"capture: {exc}")
         deps.monitor.begin_flight()
         flight_start_time = deps.clock()
-        outcome = fly_scenario(exp.scenario, deps, hover_only)
+        try:
+            outcome = fly_scenario(exp.scenario, deps, hover_only)
+        finally:
+            recording = deps.end_capture(capture) or ""
         aborted, decision, landed = outcome.aborted, outcome.decision, outcome.landed
 
         deps.monitor.end_flight()
@@ -385,6 +397,7 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
             reflash_hash="",
             scenario=exp.scenario.name,
             steps=outcome.steps,
+            recording=str(recording),
         )
 
         if not landed:
