@@ -185,12 +185,14 @@ def test_go_source_and_checklist(api_server, campaign_yaml):
     assert code == 409
 
 def test_go_allow_agent_arm_false(api_server, campaign_yaml):
-    _, base = api_server
+    """Go is the operator's arm consent (90e1c83): allow_agent_arm False no longer refuses the campaign."""
+    server, base = api_server
     _allow_arm(base, False)
+    server.campaign.apply_params = Mock(return_value=True)  # tier-0 writes wait for approval without "full"
     assert _go(base, campaign_yaml, "P4000-1") == 200
-    state = _wait_state(base, lambda s: s.get("status") in ("arm_refused", "complete", "error"))
-    assert state.get("status") == "arm_refused"
-    assert len(state.get("flights", [])) == 0
+    state = _wait_state(base, lambda s: s.get("flights") or s.get("status") in ("arm_refused", "error"))
+    assert state.get("status") != "arm_refused" and len(state.get("flights", [])) >= 1, state
+    _post(base + "/api/campaign/abort", {})
 
 def test_go_e2e_two_packs(api_server, hold, campaign_yaml):
     _, base = api_server

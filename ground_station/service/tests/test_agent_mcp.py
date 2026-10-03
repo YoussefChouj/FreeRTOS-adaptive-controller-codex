@@ -43,7 +43,8 @@ SERVER_NAMES = [
     "get_state", "list_actions", "run_plan", "get_plan", "cancel_plan",
     "say", "wait_for_operator", "get_recording", "list_sessions",
     "analyze_session", "explain_symbol", "ui_navigate", "ui_highlight",
-    "file_finding", "campaign_state", "campaign_go", "campaign_pause", "campaign_land", "campaign_abort"
+    "file_finding", "campaign_state", "campaign_preflight", "campaign_go", "campaign_pause", "campaign_land",
+    "campaign_abort"
 ]
 
 
@@ -202,9 +203,37 @@ def test_mcp_campaign_tools(service, api):
         resp = _request(proc, 34, "tools/call", {"name": "campaign_go", "arguments": {
             "campaign_path": "x.yaml", "pack_id": "P", "checklist": {"ok": True}, "confirmation": ""}})
         assert "confirmation" in resp["result"]["content"][0]["text"]
+        # campaign_preflight: one call, every row named, ok false without a launch copy
+        resp = _request(proc, 35, "tools/call", {"name": "campaign_preflight", "arguments": {
+            "campaign_path": "", "pack_id": "P4000-1"}})
+        pre = json.loads(resp["result"]["content"][0]["text"])
+        assert [c["name"] for c in pre["checks"]] == [
+            "service", "link", "firmware", "wfb_status", "rc_link", "arm_state", "position", "battery", "runner",
+            "log_plan"]
+        assert pre["ok"] is False and pre["checks"][-1]["fix"].startswith("pass campaign=")
     finally:
         proc.stdin.close() if proc.stdin else None
         try:
             proc.terminate()
         except Exception:
             pass
+
+
+def test_http_reports_unreachable_8081_and_restart(monkeypatch):
+    """WP-23: a stopped / restarting 8081 is a plain 503 "retry" answer, and a new instance id is flagged."""
+    import socket
+    from ground_station.service import agent_mcp
+
+    with socket.socket() as s:  # a port nobody listens on
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    monkeypatch.setattr(agent_mcp, "GS_URL", f"http://127.0.0.1:{port}")
+    monkeypatch.setattr(agent_mcp, "RESTART_RETRY_S", 0.0)
+    code, payload = agent_mcp._http("GET", "/api/campaign/state")
+    assert code == 503 and payload["retry"] is True and "8081 unreachable" in payload["error"]
+
+    monkeypatch.setattr(agent_mcp, "_last_instance", None)
+    assert "notice" not in agent_mcp._note_instance({"X-GS-Instance": "1-1"}, {"status": "idle"})
+    assert "notice" not in agent_mcp._note_instance({"X-GS-Instance": "1-1"}, {"status": "idle"})
+    out = agent_mcp._note_instance({"X-GS-Instance": "2-2"}, {"status": "idle"})
+    assert "8081 restarted" in out["notice"] and out["status"] == "idle"

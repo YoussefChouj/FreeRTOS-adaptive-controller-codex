@@ -329,3 +329,53 @@ def test_campaign_stream_check_passes_clears_refusal():
     assert cs.arm_allowed() is True
     assert cs.arm_refusal is None
 
+
+
+def test_wp23_go_for_the_wrong_pack_is_refused(api):
+    """A Go for a pack the runner is not waiting for would never match: refuse it with the pack named."""
+    _, base = api
+    code, res = _go(base, pack_id="P5300-1")
+    assert code == 409 and "first flight uses pack P4000-1, not P5300-1" in res["error"]
+    assert _get(base + "/api/campaign/state")[1]["status"] == "idle"
+
+
+def test_wp23_go_while_flying_is_refused():
+    """A Go while the runner flies used to be kept as a grant for the next wait: after a failed auto-next check
+    the next flight would start without the operator's decision."""
+    stop = threading.Event()
+    cs = CampaignService(deps_factory=lambda: None)
+    cs.runner_thread = threading.Thread(target=stop.wait, daemon=True)
+    cs.runner_thread.start()
+    try:
+        code, res = cs.go(CAMPAIGN, "P4000-1", {"item": True}, "operator")
+        assert code == 409 and "not waiting for a go" in res["error"] and cs.go_grant is None
+        cs.waiting_pack = "P4000-1"
+        code, _ = cs.go(CAMPAIGN, "P4000-1", {"item": True}, "operator")
+        assert code == 200 and cs.go_grant == "P4000-1"
+    finally:
+        stop.set()
+
+
+def test_wp23_banner_phase_and_total(api):
+    server, base = api
+    server.agent.set_control(OPERATOR)
+    server.campaign.apply_params = Mock(return_value=True)
+    assert _get(base + "/api/campaign/state")[1]["banner"] == "idle"
+    assert _go(base)[0] == 200
+    res = _wait_state(base, lambda r: r["status"] == "waiting_for_go" and r["flights"])
+    assert res["banner"].startswith("waiting for go: pack ") and res["total_flights"]
+    assert res["banner"].endswith(f"/{res['total_flights']}") and res["phase"].startswith("waiting for go")
+    code, err = _go(base, pack_id="NOT-" + res["waiting_pack"])
+    assert code == 409 and f"waits for pack {res['waiting_pack']}" in err["error"]
+    _post(base + "/api/campaign/abort", {})
+    res = _wait_state(base, lambda r: r["status"] == "operator_needed")
+    assert res["banner"] == "paused (operator_needed): operator abort" and res["phase"] == ""
+
+
+def test_wp23_arm_refused_reason_names_the_stream_check(api):
+    server, base = api
+    server.campaign.stream_check = lambda: (False, "slot 2 silent")
+    server.campaign.apply_params = Mock(return_value=True)
+    assert _go(base)[0] == 200
+    res = _wait_state(base, lambda r: r["status"] == "arm_refused")
+    assert res["reason"] == "stream check failed before takeoff: slot 2 silent"

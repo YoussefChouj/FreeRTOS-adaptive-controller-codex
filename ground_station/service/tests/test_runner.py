@@ -482,3 +482,40 @@ def test_fly_mode_waits_on_ground_before_next(tmp_path):
     run_campaign(path, deps)
     assert len(starts) == 3
     assert starts[1] - t_land[0] >= 10.0 - 1e-9
+
+
+def _quick_deps():
+    drone = FakeDrone()
+    drone.sbus_live = True
+    return create_deps(drone, WfbClient(drone.send), FakeClock())
+
+
+def test_wp23_fresh_pack_is_rested_and_pack_failures_name_the_pack():
+    """A pack that has not flown in this campaign skips min_rest_s (before WP-23 the first flight waited
+    min_rest_s after Go with the drone RC-armed on the pad); a refusal names the pack."""
+    from ground_station.service.campaign_runner import PACK_RESTED_S
+    deps = _quick_deps()
+    deps.packs.next_flight_allowed.return_value = (False, "SOC: predicted post-flight SoC 12.0% < required 30.0%")
+    report = run_campaign(YAML_PATH, deps)
+    assert report.status == "operator_needed"
+    assert report.reason == "pack P4000-1: SOC: predicted post-flight SoC 12.0% < required 30.0%"
+    assert deps.packs.next_flight_allowed.call_args_list[0].args[2] == PACK_RESTED_S
+
+
+def test_wp23_battery_not_streaming_is_a_readable_reason():
+    deps = _quick_deps()
+    deps.resting_v = Mock(side_effect=RuntimeError("battery voltage is not streaming (real_voltage)"))
+    report = run_campaign(YAML_PATH, deps)
+    assert (report.status, report.reason) == ("operator_needed",
+                                              "battery: battery voltage is not streaming (real_voltage)")
+
+
+def test_wp23_phases_and_arm_refused_reason():
+    deps = _quick_deps()
+    phases = []
+    deps.on_phase = phases.append
+    deps.arm_allowed = Mock(return_value=False)
+    report = run_campaign(YAML_PATH, deps)
+    assert (report.status, report.reason) == ("arm_refused", "stream check failed before takeoff")
+    assert phases[0].startswith("waiting for go: pack P4000-1, flight 1/")
+    assert phases[-1].startswith("stream check before flight 1/")

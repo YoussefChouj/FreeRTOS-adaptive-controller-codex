@@ -1965,6 +1965,28 @@
     return null;
   }
 
+  // Two-click confirm (WP-23): a browser can block window.confirm, and then Execute / Del silently did
+  // nothing. The first click turns the button into "Confirm <action>?" for CONFIRM_MS and returns false;
+  // a second click inside that window returns true.
+  var CONFIRM_MS = 5000;
+  function confirmed(btn, action) {
+    if (!btn) return true;
+    if (btn._ppConfirmUntil && Date.now() < btn._ppConfirmUntil) {
+      clearTimeout(btn._ppConfirmTimer);
+      btn._ppConfirmUntil = 0;
+      btn.textContent = btn._ppConfirmLabel;
+      return true;
+    }
+    btn._ppConfirmLabel = btn.textContent;
+    btn._ppConfirmUntil = Date.now() + CONFIRM_MS;
+    btn.textContent = 'Confirm ' + action + '?';
+    btn._ppConfirmTimer = setTimeout(function () {
+      btn._ppConfirmUntil = 0;
+      btn.textContent = btn._ppConfirmLabel;
+    }, CONFIRM_MS);
+    return false;
+  }
+
   function executePath() {
     var sel = q('pp-preset-kind'), kind = sel ? sel.value : 'circle', plan;
     if (_exec) { setExecStatus('busy: ' + _exec.label + ' still sending', 'pp-exec-bad'); return; }
@@ -1974,9 +1996,9 @@
       { plane: _plane.kind, tilt: _plane.tilt, speed: readNum('pp-exec-speed', 0.2),
         duration: readNum('pp-exec-dur', 20), yaw: _holdYaw });
     if (plan.error) { setExecStatus(plan.error, 'pp-exec-bad'); return; }
-    if (typeof window.confirm !== 'function' ||
-        !window.confirm('Send ' + kind + ' to the drone?\n' + plan.steps.map(stepText).join('\n'))) {
-      setExecStatus('cancelled');
+    if (!confirmed(q('pp-exec-go'), 'execute ' + kind)) {
+      setExecStatus('Send ' + kind + ' to the drone? ' + plan.steps.map(stepText).join('; ')
+        + '. Click "Confirm execute ' + kind + '?" within 5 s.');
       return;
     }
     runSteps(plan.steps, 'Execute ' + kind);
@@ -2140,7 +2162,11 @@
 
   function libDeleteSelected() {
     var e = libSelected();
-    if (!e || !window.confirm('Remove saved path "' + e.name + '" from this browser?')) return;
+    if (!e) { setLibStatus('No saved path selected.'); return; }
+    if (!confirmed(q('pp-lib-delete'), 'delete')) {
+      setLibStatus('Remove saved path "' + e.name + '" from this browser? Click "Confirm delete?" within 5 s.');
+      return;
+    }
     librarySave(libraryLoad().filter(function (x) { return x.name !== e.name; }));
     renderLibrarySelect();
     setLibStatus('Removed "' + e.name + '".');

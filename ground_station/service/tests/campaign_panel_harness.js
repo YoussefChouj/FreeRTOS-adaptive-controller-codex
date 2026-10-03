@@ -1,13 +1,14 @@
 'use strict';
 /**
- * Offline verification harness for campaign-panel.js
+ * Offline verification harness for campaign-panel.js (checks a-l: Go/checklist/controls; m-r: WP-23 banner,
+ * preflight table, pickers, in-panel errors, no window.confirm on workflow-B panels).
  */
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const PANEL = path.join(__dirname, '..', '..', '..',
-  'docs', 'dashboard-platform', 'shell', 'plugins', 'campaign-panel.js');
+const PLUGINS = path.join(__dirname, '..', '..', '..', 'docs', 'dashboard-platform', 'shell', 'plugins');
+const PANEL = path.join(PLUGINS, 'campaign-panel.js');
 
 // ── Fake DOM ───────────────────────────────────────────────────────────────
 class Element {
@@ -40,8 +41,6 @@ class Element {
 class FakeDocument {
   constructor() {
     this.elements = {};
-    this.docHandlers = {};
-    this.hidden = false;
   }
   scan(html) {
     const tags = html.match(/<[a-zA-Z][^>]*>/g) || [];
@@ -56,18 +55,11 @@ class FakeDocument {
     }
   }
   getElementById(id) { return this.elements[id] || null; }
-  addEventListener(ev, fn) { (this.docHandlers[ev] = this.docHandlers[ev] || []).push(fn); }
-  dispatchDoc(ev) {
-    (this.docHandlers[ev] || []).forEach((fn) => fn.call(this, { type: ev }));
-  }
 }
 
 function makeApi() {
   const api = {
-    panelName: '',
-    renderFn: null,
-    gatedCount: 0,
-    submitCount: 0,
+    panelName: '', renderFn: null, gatedCount: 0, submitCount: 0,
     registerPanel(name, renderFn) { api.panelName = name; api.renderFn = renderFn; },
     gatedCommand() { api.gatedCount++; return Promise.resolve({ ok: true }); },
     submitCommand() { api.submitCount++; return Promise.resolve({ ok: true }); }
@@ -75,261 +67,248 @@ function makeApi() {
   return api;
 }
 
-const CHECK_PREFIX = 'a b c d e f g h i j k l'.split(' ');
-let checkIndex = 0;
-function passCheck(letter, msg) {
-  console.log(letter + ' ' + msg);
-}
+function pass(letter, msg) { console.log(letter + ' ' + msg); }
+function check(cond, msg) { if (!cond) throw new Error(msg); }
+const tick = () => new Promise((r) => setTimeout(r, 20));
+const reply = (ok, status, body) => Promise.resolve({ ok, status, json: () => Promise.resolve(body) });
 
-function runHarness() {
+const LIST = {
+  saved: [{ name: 'hover_ladder', path: 'ground_station/service/campaigns/hover_ladder.yaml', mode: 'fly' }],
+  launch: [{ name: 'hover_ladder_20261003-1821', path: 'logs/campaigns/launch/hover_ladder_20261003-1821.yaml', mode: 'fly' }],
+  packs: ['P5300-1', 'P4000-1']
+};
+const PREFLIGHT = {
+  ok: false,
+  checks: [
+    { name: 'service', value: 'pid 1', pass: true, fix: '' },
+    { name: 'arm_state', value: 'armed from DroneStatus.ARM_Status 1 (slot 0, 0.1 s)', pass: false, fix: 'disarm by RC' },
+    { name: 'rc_link', value: 'sbus_lost is not on the core stream', pass: null, fix: 'checklist item rc_ready' },
+    { name: 'position', value: '<b>x</b>', pass: true, fix: 'never shown' }
+  ]
+};
+
+async function runHarness() {
   const code = fs.readFileSync(PANEL, 'utf8');
-  
   const doc = new FakeDocument();
   let fetchCalls = [];
-  let confirmResult = false;
-  let confirmCalls = 0;
-  
   const ctx = {
     document: doc,
-    window: {
-      __PLUGIN_INIT__: null,
-      __PLUGIN_DESTROY__: null,
-      confirm: (msg) => { confirmCalls++; return confirmResult; }
-    },
-    console: console,
-    setTimeout: setTimeout,
-    clearTimeout: clearTimeout,
-    setInterval: (fn, t) => { ctx._timerFn = fn; return 999; },
+    window: { __PLUGIN_INIT__: null, __PLUGIN_DESTROY__: null },
+    console,
+    setTimeout,
+    clearTimeout,
+    setInterval: (fn) => { ctx._timerFn = fn; return 999; },
     clearInterval: (id) => { if (id === 999) ctx._timerFn = null; },
     fetch: (url, opts) => {
       fetchCalls.push({ url, opts });
-      
       if (url === '/api/campaign/state') {
-        if (ctx._stateFail) {
-          return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'Poll fail' }) });
-        }
-        return Promise.resolve({
-          ok: true, json: () => Promise.resolve(ctx._fakeState || { status: 'idle' })
-        });
+        if (ctx._stateFail) return reply(false, 500, { error: 'Poll fail' });
+        return reply(true, 200, ctx._fakeState || { status: 'idle', banner: 'idle' });
       }
-      if (url === '/api/agent/control') {
-        if (opts && opts.method === 'POST') {
-          if (ctx._armFail) return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'Fail' }) });
-          return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
-        }
-        return Promise.resolve({
-          ok: true, json: () => Promise.resolve({ allow_agent_arm: false })
-        });
+      if (url === '/api/campaign/list') return ctx._listFail ? reply(false, 503, { error: 'list down' }) : reply(true, 200, LIST);
+      if (url.startsWith('/api/campaign/preflight?')) {
+        return ctx._preflightFail ? reply(false, 500, { error: 'preflight failed: boom' }) : reply(true, 200, PREFLIGHT);
       }
+      if (url === '/api/agent/control') return reply(true, 200, { allow_agent_arm: false });
       if (url === '/api/campaign/go') {
-        if (ctx._goFail === 409) return Promise.resolve({ ok: false, status: 409, json: () => Promise.resolve({ error: 'Conflict 409' }) });
-        if (ctx._goFail === 503) return Promise.resolve({ ok: false, status: 503, json: () => Promise.resolve({ error: 'Deps 503' }) });
-        return Promise.resolve({ ok: true, json: () => Promise.resolve({ status: 'running' }) });
+        if (ctx._goFail === 409) return reply(false, 409, { error: 'Conflict 409' });
+        if (ctx._goFail === 503) return reply(false, 503, { error: 'Deps 503' });
+        return reply(true, 200, { status: 'running' });
       }
-      if (['pause', 'land', 'abort'].some(c => url.endsWith(c))) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true }) });
+      if (['pause', 'land', 'abort'].some((c) => url.endsWith(c))) {
+        return ctx._cmdFail ? reply(false, 409, { error: 'no active run' }) : reply(true, 200, { ok: true });
       }
-      return Promise.resolve({ ok: false, status: 404 });
+      return reply(false, 404, { error: 'not found' });
     }
   };
-  
   vm.createContext(ctx);
   vm.runInContext(code, ctx);
-  
+
   const api = makeApi();
   ctx.window.__PLUGIN_INIT__(api);
-  
+
   // a. registers as `Campaign`
-  if (api.panelName === 'Campaign') passCheck('a', 'registers as Campaign');
-  else throw new Error('Wrong panel name: ' + api.panelName);
-  
+  check(api.panelName === 'Campaign', 'Wrong panel name: ' + api.panelName);
+  pass('a', 'registers as Campaign');
+
   const container = new Element('container', 'div');
   container.doc = doc;
   api.renderFn(container);
-  
-  function getEl(id) { return doc.getElementById(id); }
-  
-  const qPath = getEl('cp-path');
-  const qPack = getEl('cp-pack-id');
-  const qGoBtn = getEl('cp-go-btn');
-  
-  // b. go disabled with empty pack ID, and with each one of the 6 boxes unticked in turn
-  qPath.value = 'path/to/camp';
-  qPath.dispatch('input');
-  qPack.value = '';
-  qPack.dispatch('input');
-  if (!qGoBtn.disabled) throw new Error('Go should be disabled on empty pack');
-  
-  qPack.value = 'p123';
-  qPack.dispatch('input');
+  await tick();
+  const el = (id) => doc.getElementById(id);
+  const qPath = el('cp-path'), qPack = el('cp-pack-id'), qGo = el('cp-go-btn');
   const checkIds = ['pack_swapped', 'drone_on_pad', 'powered_in_place', 'rc_ready', 'phone_recording', 'operator_present'];
-  
-  // check all
-  checkIds.forEach(id => {
-    getEl('cp-chk-' + id).checked = true;
-    getEl('cp-chk-' + id).dispatch('change');
+  const tickAll = (v) => checkIds.forEach((id) => { el('cp-chk-' + id).checked = v; el('cp-chk-' + id).dispatch('change'); });
+
+  // b. Go disabled with an empty pack ID, and with each one of the 6 boxes unticked in turn
+  qPath.value = 'path/to/camp'; qPath.dispatch('input');
+  qPack.value = ''; qPack.dispatch('input');
+  check(qGo.disabled, 'Go should be disabled on empty pack');
+  qPack.value = 'p123'; qPack.dispatch('input');
+  tickAll(true);
+  check(!qGo.disabled, 'Go should be enabled');
+  checkIds.forEach((id) => {
+    el('cp-chk-' + id).checked = false; el('cp-chk-' + id).dispatch('change');
+    check(qGo.disabled, 'Go enabled with ' + id + ' unticked');
+    el('cp-chk-' + id).checked = true; el('cp-chk-' + id).dispatch('change');
   });
-  if (qGoBtn.disabled) throw new Error('Go should be enabled');
-  
-  let bPass = true;
-  checkIds.forEach(id => {
-    getEl('cp-chk-' + id).checked = false;
-    getEl('cp-chk-' + id).dispatch('change');
-    if (!qGoBtn.disabled) bPass = false;
-    getEl('cp-chk-' + id).checked = true;
-    getEl('cp-chk-' + id).dispatch('change');
-  });
-  if (bPass) passCheck('b', 'Go disabled properly');
-  else throw new Error('Go disabled check failed');
-  
+  pass('b', 'Go disabled properly');
+
   // c. all set -> exactly one POST /api/campaign/go with the exact body
   fetchCalls = [];
-  qGoBtn.dispatch('click');
-  setTimeout(() => {
-    const goes = fetchCalls.filter(f => f.url === '/api/campaign/go');
-    if (goes.length === 1 && goes[0].opts.method === 'POST') {
-      const b = JSON.parse(goes[0].opts.body);
-      const expectedChecklist = { pack_swapped: true, drone_on_pad: true, powered_in_place: true, rc_ready: true, phone_recording: true, operator_present: true };
-      if (b.campaign_path === 'path/to/camp' && b.pack_id === 'p123' && b.source === 'operator' && JSON.stringify(b.checklist) === JSON.stringify(expectedChecklist) && fetchCalls.filter(f => f.url === '/api/campaign/go').length === 1) {
-        passCheck('c', 'Go exact POST');
-      } else throw new Error('Bad go body: ' + goes[0].opts.body);
-    } else throw new Error('Bad go fetch');
-    
-    // l. ticks reset after a successful go
-    if (checkIds.every(id => !getEl('cp-chk-' + id).checked)) passCheck('l', 'ticks reset');
-    else throw new Error('ticks not reset');
-    
-    // e. each of Pause/Land/Abort -> one POST to its own route with source operator
-    fetchCalls = [];
-    getEl('cp-pause-btn').dispatch('click');
-    getEl('cp-land-btn').dispatch('click');
-    getEl('cp-abort-btn').dispatch('click');
-    
-    setTimeout(() => {
-      const posts = fetchCalls.filter(f => f.opts && f.opts.method === 'POST');
-      if (posts.length === 3 &&
-          posts.filter(f => f.url === '/api/campaign/pause' && JSON.parse(f.opts.body).source === 'operator').length === 1 &&
-          posts.filter(f => f.url === '/api/campaign/land' && JSON.parse(f.opts.body).source === 'operator').length === 1 &&
-          posts.filter(f => f.url === '/api/campaign/abort' && JSON.parse(f.opts.body).source === 'operator').length === 1) {
-        passCheck('e', 'Commands sent');
-      } else throw new Error('Commands missing');
-      
-      // d. Pause/Land/Abort present in idle, running, waiting_for_go, operator_needed and error states
-      const statuses = ['idle', 'running', 'waiting_for_go', 'operator_needed', 'error'];
-      let dPass = true;
-      let dIndex = 0;
-      function nextStatus() {
-        if (dIndex >= statuses.length) {
-          if (dPass) passCheck('d', 'Buttons present');
-          else throw new Error('Buttons not present');
-          
-          // f. waiting_for_go shows the pack and prefills the pack ID
-          ctx._fakeState = { status: 'idle' };
-          ctx._timerFn();
-          setTimeout(() => {
-            ctx._fakeState = { status: 'waiting_for_go', waiting_pack: 'wp789' };
-            ctx._timerFn();
-            setTimeout(() => {
-              if (qPack.value === 'wp789' && getEl('cp-wait-msg').textContent.includes('wp789')) passCheck('f', 'Waiting prefilled');
-              else throw new Error('Waiting prefill failed');
-              
-              // g. flights render one row each, P1 check: HTML escaping
-              ctx._fakeState = {
-                status: 'running',
-                flights: [
-                  { flight_id: 'f1', pack_id: 'p1', experiment: 'e1', j: 1, decision: 'go', abort_level: 'none', abort_reason: '<b>x</b>', hover_only: false },
-                  { flight_id: 'f2', hover_only: true }
-                ]
-              };
-              ctx._timerFn();
-              setTimeout(() => {
-                const fb = getEl('cp-flights-body').innerHTML;
-                if (fb.includes('f1') && fb.includes('f2') && fb.includes('&lt;b&gt;x&lt;/b&gt;') && !fb.includes('<b>x</b>')) passCheck('g', 'Flights rendered');
-                else throw new Error('Flights missing or not escaped properly');
-                
-                // h. 409 and 503 error text shown
-                qPath.value = 'a'; qPack.value = 'b';
-                checkIds.forEach(id => getEl('cp-chk-' + id).checked = true);
-                qPath.dispatch('input'); // re-enable go
-                ctx._goFail = 409;
-                qGoBtn.dispatch('click');
-                setTimeout(() => {
-                  if (getEl('cp-error').style.display === 'block' && getEl('cp-error').textContent === 'Conflict 409') {
-                    ctx._goFail = 503;
-                    qGoBtn.dispatch('click');
-                    setTimeout(() => {
-                      if (getEl('cp-error').style.display === 'block' && getEl('cp-error').textContent === 'Deps 503') {
-                        ctx._fakeState = { status: 'idle' };
-                        ctx._timerFn();
-                        setTimeout(() => {
-                          if (getEl('cp-error').style.display === 'block' && getEl('cp-error').textContent === 'Deps 503') {
-                            ctx._stateFail = true;
-                            ctx._timerFn();
-                            setTimeout(() => {
-                              if (getEl('cp-poll-error') && getEl('cp-poll-error').style.display === 'block' && getEl('cp-poll-error').textContent === 'Poll fail') {
-                                ctx._stateFail = false;
-                                ctx._timerFn();
-                                setTimeout(() => {
-                                  if (getEl('cp-poll-error').style.display === 'none') {
-                                    passCheck('h', 'Errors shown and separated');
-                                    
-                                    // i. Go is the arm consent: no allow-arm toggle, a consent note, no /api/agent/control call
-                                    fetchCalls = [];
-                      if (getEl('cp-allow-arm')) throw new Error('allow-arm toggle should be gone');
-                      if (!getEl('cp-consent-note')) throw new Error('consent note missing');
-                      setTimeout(() => {
-                        if (fetchCalls.some(f => f.url === '/api/agent/control')) throw new Error('panel must not call /api/agent/control');
-                        setTimeout(() => {
-                          passCheck('i', 'Go is the arm consent');
-                          
-                          // k. zero submitCommand/gatedCommand calls over the whole run
-                          if (api.submitCount === 0 && api.gatedCount === 0) passCheck('k', 'Zero old API calls');
-                          else throw new Error('Called old API');
-                          
-                          // j. after teardown, advancing timers causes no further fetch
-                          const capturedTimer = ctx._timerFn;
-                          ctx.window.__PLUGIN_DESTROY__();
-                          fetchCalls = [];
-                          if (ctx._timerFn !== null) throw new Error('Timer not cleared');
-                          
-                          if (capturedTimer) {
-                            try { capturedTimer(); } catch(e) {}
-                          }
-                          setTimeout(() => {
-                            if (fetchCalls.length !== 0) throw new Error('Fetched after teardown');
-                            passCheck('j', 'No timer after teardown');
-                            
-                            console.log('ALL CHECKS PASSED');
-                            process.exit(0);
-                          }, 50);
-                        }, 50);
-                      }, 50);
-                                  } else throw new Error('Poll error not cleared');
-                                }, 50);
-                              } else throw new Error('Poll error not shown');
-                            }, 50);
-                          } else throw new Error('Action error cleared by poll');
-                        }, 50);
-                      } else throw new Error('Error not shown 503');
-                    }, 50);
-                  } else throw new Error('Error not shown 409');
-                }, 50);
-              }, 50);
-            }, 50);
-          }, 50);
-        } else {
-          ctx._fakeState = { status: statuses[dIndex++] };
-          ctx._timerFn();
-          setTimeout(() => {
-            if (!getEl('cp-pause-btn') || !getEl('cp-land-btn') || !getEl('cp-abort-btn')) dPass = false;
-            if (getEl('cp-pause-btn').style.display === 'none') dPass = false;
-            nextStatus();
-          }, 10);
-        }
-      }
-      nextStatus();
-    }, 50);
-  }, 50);
+  qGo.dispatch('click');
+  await tick();
+  const goes = fetchCalls.filter((f) => f.url === '/api/campaign/go');
+  check(goes.length === 1 && goes[0].opts.method === 'POST', 'Bad go fetch');
+  const b = JSON.parse(goes[0].opts.body);
+  const expectedChecklist = { pack_swapped: true, drone_on_pad: true, powered_in_place: true, rc_ready: true, phone_recording: true, operator_present: true };
+  check(b.campaign_path === 'path/to/camp' && b.pack_id === 'p123' && b.source === 'operator' &&
+        JSON.stringify(b.checklist) === JSON.stringify(expectedChecklist), 'Bad go body: ' + goes[0].opts.body);
+  pass('c', 'Go exact POST');
+
+  // l. ticks reset after a successful go
+  check(checkIds.every((id) => !el('cp-chk-' + id).checked), 'ticks not reset');
+  pass('l', 'ticks reset');
+
+  // e. each of Pause/Land/Abort -> one POST to its own route with source operator, single click (never delayed)
+  fetchCalls = [];
+  el('cp-pause-btn').dispatch('click');
+  el('cp-land-btn').dispatch('click');
+  el('cp-abort-btn').dispatch('click');
+  await tick();
+  const posts = fetchCalls.filter((f) => f.opts && f.opts.method === 'POST');
+  check(posts.length === 3 && ['pause', 'land', 'abort'].every((c) =>
+    posts.filter((f) => f.url === '/api/campaign/' + c && JSON.parse(f.opts.body).source === 'operator').length === 1),
+    'Commands missing');
+  pass('e', 'Commands sent');
+
+  // d. Pause/Land/Abort present and visible in every runner state
+  for (const status of ['idle', 'running', 'waiting_for_go', 'operator_needed', 'error']) {
+    ctx._fakeState = { status };
+    ctx._timerFn();
+    await tick();
+    check(el('cp-pause-btn') && el('cp-land-btn') && el('cp-abort-btn') && el('cp-pause-btn').style.display !== 'none',
+      'Buttons not present in ' + status);
+  }
+  pass('d', 'Buttons present');
+
+  // f. waiting_for_go shows the pack and prefills the pack ID
+  ctx._fakeState = { status: 'idle' }; ctx._timerFn(); await tick();
+  ctx._fakeState = { status: 'waiting_for_go', waiting_pack: 'wp789' }; ctx._timerFn(); await tick();
+  check(qPack.value === 'wp789' && el('cp-wait-msg').textContent.includes('wp789'), 'Waiting prefill failed');
+  pass('f', 'Waiting prefilled');
+
+  // g. flights render one row each, HTML escaped
+  ctx._fakeState = {
+    status: 'running',
+    flights: [
+      { flight_id: 'f1', pack_id: 'p1', experiment: 'e1', j: 1, decision: 'go', abort_level: 'none', abort_reason: '<b>x</b>', hover_only: false },
+      { flight_id: 'f2', hover_only: true }
+    ]
+  };
+  ctx._timerFn(); await tick();
+  const fb = el('cp-flights-body').innerHTML;
+  check(fb.includes('f1') && fb.includes('f2') && fb.includes('&lt;b&gt;x&lt;/b&gt;') && !fb.includes('<b>x</b>'),
+    'Flights missing or not escaped properly');
+  pass('g', 'Flights rendered');
+
+  // h. 409 and 503 error text shown; a poll never clears an action error; poll errors are separate
+  qPath.value = 'a'; qPack.value = 'b'; tickAll(true); qPath.dispatch('input');
+  ctx._goFail = 409; qGo.dispatch('click'); await tick();
+  check(el('cp-error').style.display === 'block' && el('cp-error').textContent === 'Go: Conflict 409', 'Error not shown 409');
+  ctx._goFail = 503; qGo.dispatch('click'); await tick();
+  check(el('cp-error').style.display === 'block' && el('cp-error').textContent === 'Go: Deps 503', 'Error not shown 503');
+  ctx._goFail = 0;
+  ctx._fakeState = { status: 'idle' }; ctx._timerFn(); await tick();
+  check(el('cp-error').textContent === 'Go: Deps 503', 'Action error cleared by poll');
+  ctx._stateFail = true; ctx._timerFn(); await tick();
+  check(el('cp-poll-error').style.display === 'block' && el('cp-poll-error').textContent === 'Poll fail', 'Poll error not shown');
+  ctx._stateFail = false; ctx._timerFn(); await tick();
+  check(el('cp-poll-error').style.display === 'none', 'Poll error not cleared');
+  pass('h', 'Errors shown and separated');
+
+  // i. Go is the arm consent: no allow-arm toggle, a consent note, no /api/agent/control call
+  check(!el('cp-allow-arm'), 'allow-arm toggle should be gone');
+  check(el('cp-consent-note'), 'consent note missing');
+  check(!fetchCalls.some((f) => f.url === '/api/agent/control'), 'panel must not call /api/agent/control');
+  pass('i', 'Go is the arm consent');
+
+  // m. the banner shows the service's one-line banner, coloured by status
+  const banner = el('cp-banner');
+  const cases = [
+    [{ status: 'idle', banner: 'idle' }, 'idle'],
+    [{ status: 'waiting_for_go', waiting_pack: 'P4000-1', banner: 'waiting for go: pack P4000-1, flight 1/3' }, 'waiting for go: pack P4000-1, flight 1/3'],
+    [{ status: 'running', banner: 'flying flight 2/3: hover_z070' }, 'flying flight 2/3: hover_z070'],
+    [{ status: 'operator_needed', banner: 'paused (operator_needed): battery: real_voltage not streaming' }, 'paused (operator_needed): battery: real_voltage not streaming'],
+    [{ status: 'complete', banner: 'done: logs/campaigns/hover_ladder_x' }, 'done: logs/campaigns/hover_ladder_x']
+  ];
+  const colors = new Set();
+  for (const [st, text] of cases) {
+    ctx._fakeState = st; ctx._timerFn(); await tick();
+    check(banner.textContent === text && banner.dataset.status === st.status, 'banner ' + banner.textContent);
+    colors.add(banner.style.background);
+  }
+  check(colors.size === 5, 'each status needs its own banner colour');
+  pass('m', 'Banner follows the runner');
+
+  // o. pickers: launch copies first, then templates; picking fills the path / pack inputs
+  const campOpts = el('cp-campaign-select').innerHTML;
+  check(campOpts.indexOf('launch: hover_ladder_20261003-1821') < campOpts.indexOf('template: hover_ladder (fly)') &&
+        campOpts.indexOf('launch:') > 0, 'campaign picker order: ' + campOpts);
+  check(el('cp-pack-select').innerHTML.includes('value="P4000-1"'), 'pack picker');
+  el('cp-campaign-select').value = LIST.launch[0].path; el('cp-campaign-select').dispatch('change');
+  el('cp-pack-select').value = 'P4000-1'; el('cp-pack-select').dispatch('change');
+  check(qPath.value === LIST.launch[0].path && qPack.value === 'P4000-1', 'picker did not fill the inputs');
+  tickAll(true);
+  check(!qGo.disabled, 'Go should be enabled after picking');
+  pass('o', 'Campaign and pack pickers');
+
+  // n. preflight: one GET with the encoded campaign and pack; red rows show their fix, green rows never do
+  fetchCalls = [];
+  el('cp-preflight-btn').dispatch('click');
+  await tick();
+  const pf = fetchCalls.filter((f) => f.url.startsWith('/api/campaign/preflight?'));
+  check(pf.length === 1 && pf[0].url === '/api/campaign/preflight?campaign=' + encodeURIComponent(LIST.launch[0].path) + '&pack=P4000-1',
+    'preflight url ' + (pf[0] && pf[0].url));
+  const rows = el('cp-preflight-body').innerHTML;
+  check((rows.match(/<tr /g) || []).length === 4, 'one row per check');
+  check(rows.includes('cp-pf-fail') && rows.includes('disarm by RC') && rows.includes('cp-pf-unknown') &&
+        rows.includes('checklist item rc_ready'), 'red / amber rows need their fix');
+  check(!rows.includes('never shown') && rows.includes('&lt;b&gt;x&lt;/b&gt;'), 'green rows hide fix; values escaped');
+  check(el('cp-preflight-summary').textContent.includes('1 red row'), 'summary: ' + el('cp-preflight-summary').textContent);
+  pass('n', 'Preflight table');
+
+  // p. every failed action shows its error in the panel
+  ctx._preflightFail = true; el('cp-preflight-btn').dispatch('click'); await tick();
+  check(el('cp-error').textContent === 'preflight: preflight failed: boom', 'preflight error: ' + el('cp-error').textContent);
+  ctx._cmdFail = true; el('cp-land-btn').dispatch('click'); await tick();
+  check(el('cp-error').textContent === 'land: no active run', 'command error: ' + el('cp-error').textContent);
+  ctx._listFail = true; el('cp-list-btn').dispatch('click'); await tick();
+  check(el('cp-error').textContent === 'campaign list: list down', 'list error: ' + el('cp-error').textContent);
+  pass('p', 'Failed actions show their error');
+
+  // r. no window.confirm / alert on the workflow-B panels (a browser can block them: the action silently did nothing)
+  for (const f of ['campaign-panel.js', 'approval-queue.js', 'command-panel.js', 'path-panel.js']) {
+    const src = fs.readFileSync(path.join(PLUGINS, f), 'utf8');
+    check(!/\b(window\.)?(confirm|alert)\(/.test(src), f + ' still calls confirm/alert');
+  }
+  pass('r', 'No browser dialogs on workflow-B panels');
+
+  // k. zero submitCommand/gatedCommand calls over the whole run
+  check(api.submitCount === 0 && api.gatedCount === 0, 'Called old API');
+  pass('k', 'Zero old API calls');
+
+  // j. after teardown, advancing timers causes no further fetch
+  const captured = ctx._timerFn;
+  ctx.window.__PLUGIN_DESTROY__();
+  fetchCalls = [];
+  check(ctx._timerFn === null, 'Timer not cleared');
+  try { captured(); } catch (e) { /* destroyed */ }
+  await tick();
+  check(fetchCalls.length === 0, 'Fetched after teardown');
+  pass('j', 'No timer after teardown');
+
+  console.log('ALL CHECKS PASSED');
 }
 
-runHarness();
+runHarness().catch((e) => { console.error('FAIL: ' + e.message); process.exit(1); });

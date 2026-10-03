@@ -151,8 +151,18 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "campaign_state",
-        "description": "campaign runner state {status, waiting_pack, campaign_path, reason, flights, control}",
+        "description": ("campaign runner state {status, banner, phase, total_flights, waiting_pack, campaign_path, "
+                        "reason, flights, control, arm_refusal, outputs_dir}; banner/phase say what it waits for"),
         "inputSchema": {"type": "object"},
+    },
+    {
+        "name": "campaign_preflight",
+        "description": ("every workflow B launch check in one call: {ok, checks: [{name, value, pass, fix}]}; "
+                        "pass false = red (tell the operator the fix, stop), null = covered by the checklist"),
+        "inputSchema": {"type": "object",
+                        "properties": {"campaign_path": {"type": "string"},
+                                       "pack_id": {"type": "string"}},
+                        "required": ["campaign_path", "pack_id"]},
     },
     {
         "name": "campaign_go",
@@ -185,9 +195,32 @@ TOOLS: list[dict[str, Any]] = [
 SERVER_IDENTITY = {"name": "dashboard", "version": "1.0.0"}
 
 
+RESTART_RETRY_S = 1.0  # one GET retry after this, so a call during an 8081 restart does not fail outright
+INSTANCE_HEADER = "X-GS-Instance"  # instance_guard.INSTANCE_HEADER; kept literal so this module stays stdlib-only
+_last_instance: str | None = None
+
+
+def _note_instance(headers: Any, payload: Any) -> Any:
+    """Flag an 8081 restart between two calls: the service's state (runner, plans) was reset."""
+    global _last_instance
+    inst = headers.get(INSTANCE_HEADER) if headers is not None else None
+    if inst and _last_instance and inst != _last_instance and isinstance(payload, dict):
+        payload = {**payload, "notice": f"8081 restarted since the last call (instance {_last_instance} -> {inst}): "
+                                        "its runner and plan state were reset; re-read campaign_state before acting"}
+    if inst:
+        _last_instance = inst
+    return payload
+
+
 def _http(method: str, route: str, body: dict | None = None,
           params: dict | None = None) -> tuple[int, Any]:
-    """One urllib call to the dashboard service (never proxied)."""
+    """One urllib call to the dashboard service (never proxied).
+
+    A fresh connection per call, so an 8081 restart never leaves this server holding a dead one. Unreachable
+    (restarting or stopped): a GET retries once, then the call returns 503 with a plain "retry" error instead of
+    raising.
+    """
+    import urllib.error
     import urllib.request
     from urllib.parse import urlencode
 
@@ -200,23 +233,35 @@ def _http(method: str, route: str, body: dict | None = None,
         headers={"Content-Type": "application/json"},
     )
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    try:
-        resp = opener.open(req, timeout=70)
-        raw = resp.read()
-    except urllib.error.HTTPError as e:  # noqa: F821
+    attempts = 2 if method == "GET" else 1
+    for attempt in range(attempts):
         try:
-            raw = e.read()
-        except Exception:
-            raw = b"{}"
-        try:
-            return e.code, json.loads(raw or b"{}")
-        except Exception:
-            return e.code, {"raw": raw.decode(errors="replace")}
+            resp = opener.open(req, timeout=70)
+            raw = resp.read()
+            break
+        except urllib.error.HTTPError as e:
+            try:
+                raw = e.read()
+            except Exception:
+                raw = b"{}"
+            try:
+                return e.code, _note_instance(e.headers, json.loads(raw or b"{}"))
+            except Exception:
+                return e.code, {"raw": raw.decode(errors="replace")}
+        except (urllib.error.URLError, OSError) as e:  # refused / reset / timed out: 8081 is down or restarting
+            if attempt + 1 < attempts:
+                import time
+                time.sleep(RESTART_RETRY_S)
+                continue
+            why = getattr(e, "reason", e)
+            return 503, {"error": f"8081 unreachable at {GS_URL} ({why}): it is restarting or stopped. "
+                                  "Retry in a few seconds; if it persists, check the service is running.",
+                         "retry": True}
     try:
         payload = json.loads(raw or b"{}")
     except Exception:
         payload = {"raw": raw.decode(errors="replace")}
-    return resp.status, payload
+    return resp.status, _note_instance(resp.headers, payload)
 
 
 class McpServer:
@@ -309,6 +354,11 @@ class McpServer:
             return self._text(self._file_finding(args))
         if name == "campaign_state":
             status, payload = _http("GET", "/api/campaign/state")
+            return self._text(self._wrap(payload, status))
+        if name == "campaign_preflight":
+            status, payload = _http("GET", "/api/campaign/preflight",
+                                    params={"campaign": args.get("campaign_path") or "",
+                                            "pack": args.get("pack_id") or ""})
             return self._text(self._wrap(payload, status))
         if name == "campaign_go":
             body = {k: args.get(k) for k in ("campaign_path", "pack_id", "checklist", "confirmation")}

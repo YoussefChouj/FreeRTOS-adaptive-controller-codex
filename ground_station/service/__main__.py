@@ -249,6 +249,14 @@ def main() -> None:
     parser = _build_argparser()
     args = parser.parse_args()
 
+    # ---- Single instance: refuse before the bridge touches the drone link ----
+    from ground_station.service.instance_guard import AlreadyRunning, ensure_single_instance
+    try:
+        ensure_single_instance(args.port)
+    except AlreadyRunning as exc:
+        print(f"[service] REFUSED: {exc}", file=sys.stderr, flush=True)
+        sys.exit(2)
+
     # ---- Build the service stack ----
     from ground_station.comm.wifi_bridge import WifiBridge
     from ground_station.platform.experiments import ExperimentRuntime

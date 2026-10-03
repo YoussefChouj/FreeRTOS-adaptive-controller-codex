@@ -22,6 +22,11 @@
   var decided = {}; // "plan_id:step_id" -> 'approved'|'rejected'
   var handle = null;
   var control = null; // last /api/agent/control state
+  // Two-click confirm for "Grant full access" (WP-23): a browser can block window.confirm, and then the
+  // click silently did nothing. The first click arms CONFIRM_MS; a second click inside it grants.
+  var CONFIRM_MS = 5000;
+  var confirmFullUntil = 0;
+  var lastError = ''; // shown in the panel: a failed decision or access change never fails silently
 
   function view() {
     return { pending: queue.slice(), decided: decided, oldest: queue[0] || null };
@@ -64,26 +69,40 @@
       }, { workspace: 'approvals', gates: [], description: 'Ordered pending approval queue' });
     } catch (e) { console.warn('[approvals] panel skip:', e && e.message); }
 
+    function showError(msg) {
+      lastError = msg || '';
+      render();
+    }
+
     function decide(a, result) {
       var key = itemKey(a);
       if (key && (key in decided)) return; // already decided
-      decideOne(api, a, result);
+      decideOne(api, a, result, function (msg) { showError(result + ' failed: ' + msg); });
     }
 
     function setAccess(next) {
-      if (next === 'full' && !window.confirm(
-          'Grant FULL tier-0 access? In autonomous mode the agent will write '
-          + 'flight-critical parameters (PID, MRAC, mixer, safety limits, gyro LPF) '
-          + 'and EKF-into-control changes without asking you, and may arm the drone.')) {
-        return;
-      }
       fetch('/api/agent/control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tier0_access: next, source: 'operator' }),
-      }).then(function (r) { return r.json(); })
-        .then(function (c) { if (c && c.mode) { control = c; render(); } })
-        .catch(function () {});
+      }).then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (c) {
+          if (!r.ok) throw new Error((c && c.error && (c.error.code || c.error)) || ('HTTP ' + r.status));
+          return c;
+        });
+      })
+        .then(function (c) { lastError = ''; if (c && c.mode) { control = c; } render(); })
+        .catch(function (e) { showError('access change failed: ' + (e && e.message ? e.message : e)); });
+    }
+
+    function onAccessClick(full) {
+      if (full) { setAccess('partial'); return; }
+      if (Date.now() < confirmFullUntil) { confirmFullUntil = 0; setAccess('full'); return; }
+      confirmFullUntil = Date.now() + CONFIRM_MS;
+      render();
+      setTimeout(function () {
+        if (confirmFullUntil && Date.now() >= confirmFullUntil) { confirmFullUntil = 0; render(); }
+      }, CONFIRM_MS + 50);
     }
 
     function renderControl() {
@@ -105,14 +124,29 @@
       if (full && auto) label.style.cssText = 'color:#f5a524;font-weight:600;';
       var btn = document.createElement('button');
       btn.setAttribute('data-testid', 'tier0-access-toggle');
-      btn.textContent = full ? 'Set partial access' : 'Grant full access';
+      var arming = !full && Date.now() < confirmFullUntil;
+      btn.textContent = full ? 'Set partial access' : (arming ? 'Confirm grant full access?' : 'Grant full access');
       btn.disabled = control.mode === 'off';
-      btn.addEventListener('click', function () {
-        setAccess(full ? 'partial' : 'full');
-      });
+      btn.addEventListener('click', function () { onAccessClick(full); });
       bar.appendChild(label);
       bar.appendChild(btn);
+      if (arming) {
+        var warn = document.createElement('div');
+        warn.setAttribute('data-testid', 'tier0-access-confirm');
+        warn.style.cssText = 'flex-basis:100%;color:#f5a524;';
+        warn.textContent = 'FULL tier-0 access: in autonomous mode the agent writes flight-critical parameters '
+          + '(PID, MRAC, mixer, safety limits, gyro LPF) and EKF-into-control changes without asking you, '
+          + 'and may arm the drone. Click again within 5 s to confirm.';
+        bar.appendChild(warn);
+      }
       container.appendChild(bar);
+      if (lastError) {
+        var err = document.createElement('div');
+        err.setAttribute('data-testid', 'approval-error');
+        err.style.cssText = 'color:#e94560;margin-bottom:6px;';
+        err.textContent = lastError;
+        container.appendChild(err);
+      }
     }
 
     function render() {
@@ -181,14 +215,21 @@
   }, { workspace: 'overview', gates: [], description: 'Ordered pending approval queue' });
 })();
 
-// decision POST helper (module-level so the harness can stub fetch)
-function decideOne(api, a, result) {
+// decision POST helper (module-level so the harness can stub fetch); onError(msg) gets every failure
+function decideOne(api, a, result, onError) {
   var plan_id = a.plan_id, step_id = a.step_id;
+  var fail = typeof onError === 'function' ? onError : function () {};
   if (!plan_id || !step_id) return;
   fetch('/api/agent/approvals/' + encodeURIComponent(plan_id) + '/'
         + encodeURIComponent(step_id) + '/' + (result === 'approved' ? 'approve' : 'reject'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ source: 'operator' }),
-  }).catch(function () {});
+  }).then(function (r) {
+    if (r && r.ok === false) {
+      return r.json().catch(function () { return {}; }).then(function (d) {
+        fail((d && d.error && (d.error.code || d.error)) || ('HTTP ' + r.status));
+      });
+    }
+  }).catch(function (e) { fail(e && e.message ? e.message : String(e)); });
 }

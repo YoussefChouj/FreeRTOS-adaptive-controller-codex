@@ -826,30 +826,43 @@ class GroundStationService:
         self._check_readback()
 
     ARM_STALE_NS = 2_000_000_000
+    # Most authoritative first: the firmware variable itself, then the sidebar alias (also fed by the legacy
+    # Frame A decoder), then a bare key. Before WP-23 the alias came first, so one stale or mis-decoded
+    # status.arm could report "armed" while DroneStatus.ARM_Status said 0.
+    ARM_KEYS = ("DroneStatus.ARM_Status", "status.arm", "arm")
+
+    def arm_sources(self) -> list[dict[str, Any]]:
+        """Every fresh arm sample: [{key, slot, value, age_s}], in ARM_KEYS order, then by slot."""
+        now = time.time_ns()
+        out: list[dict[str, Any]] = []
+        with self._state_lock:
+            for k in self.ARM_KEYS:
+                for slot, slot_data in self._streams.items():
+                    if not isinstance(slot_data, dict):
+                        continue
+                    vals = slot_data.get("values", {})
+                    if not isinstance(vals, dict) or k not in vals:
+                        continue
+                    ts = (slot_data.get("_key_ts") or {}).get(k, slot_data.get("last_update_ns", 0))
+                    if not ts or now - ts > self.ARM_STALE_NS:
+                        continue
+                    try:
+                        value = float(vals[k])
+                    except (TypeError, ValueError):
+                        continue
+                    out.append({"key": k, "slot": slot, "value": value, "age_s": round((now - ts) / 1e9, 3)})
+        return out
 
     def arm_state(self) -> str:
         """Return "armed", "disarmed" or "unknown" from the latest arm telemetry.
 
-        Reads status.arm / DroneStatus.ARM_Status across all streams. No arm
+        The first fresh source in ARM_KEYS order decides (arm_sources() lists them all). No arm
         sample, or one older than ARM_STALE_NS, is "unknown" (fail closed).
         """
-        now = time.time_ns()
-        with self._state_lock:
-            for slot_data in self._streams.values():
-                if isinstance(slot_data, dict):
-                    vals = slot_data.get("values", {})
-                    if isinstance(vals, dict):
-                        for k in ("status.arm", "DroneStatus.ARM_Status", "arm"):
-                            if k in vals:
-                                ts = (slot_data.get("_key_ts") or {}).get(
-                                    k, slot_data.get("last_update_ns", 0))
-                                if not ts or now - ts > self.ARM_STALE_NS:
-                                    continue
-                                try:
-                                    return "disarmed" if float(vals[k]) == 0.0 else "armed"
-                                except (TypeError, ValueError):
-                                    pass
-        return "unknown"
+        src = self.arm_sources()
+        if not src:
+            return "unknown"
+        return "disarmed" if src[0]["value"] == 0.0 else "armed"
 
     def is_disarmed(self) -> bool:
         """True only if fresh arm telemetry says disarmed (fails closed)."""

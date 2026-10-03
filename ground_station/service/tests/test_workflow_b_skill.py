@@ -8,11 +8,19 @@ from pathlib import Path
 from ground_station.service.campaign_schema import load_campaign
 
 ROOT = Path(__file__).resolve().parents[3]
+# WP-23: docs/skills/workflow-b.md is the tracked source; .claude/skills/workflow-b/SKILL.md is the installed copy
+SOURCE = ROOT / "docs" / "skills" / "workflow-b.md"
 SKILL = ROOT / ".claude" / "skills" / "workflow-b" / "SKILL.md"
 
 
 def _text() -> str:
-    return SKILL.read_text(encoding="utf-8")
+    return SOURCE.read_text(encoding="utf-8")
+
+
+def test_installed_skill_matches_the_source():
+    assert SKILL.read_text(encoding="utf-8") == _text(), (
+        "install the skill: cp docs/skills/workflow-b.md .claude/skills/workflow-b/SKILL.md "
+        "&& git add -f .claude/skills/workflow-b/SKILL.md")
 
 
 def test_frontmatter():
@@ -29,9 +37,33 @@ def test_fence_numbers_match_decision_2():
 
 def test_named_mcp_tools_exist():
     mcp = (ROOT / "ground_station" / "service" / "agent_mcp.py").read_text(encoding="utf-8")
-    for tool in ("campaign_state", "campaign_go", "campaign_pause", "campaign_land", "campaign_abort"):
+    for tool in ("campaign_preflight", "campaign_state", "campaign_go", "campaign_pause", "campaign_land",
+                 "campaign_abort"):
         assert f"`{tool}`" in _text()
         assert f'"{tool}"' in mcp or f"def {tool}(" in mcp, tool
+
+
+def test_minimal_path_in_order():
+    """WP-23: Q1 -> Q2 -> one launch command -> Q3 -> one preflight call -> Q4 -> arm by RC -> go -> state."""
+    text = _text()
+    steps = ["**Q1 Campaign.**", "**Q2 Pack.**", "python -m ground_station.service.campaign_launch",
+             "**Q3 Log plan.**", "**Preflight (one call).**", "**Q4 Checklist.**", "Arm by RC when ready",
+             "call\n`campaign_go`", "Call `campaign_state` once per flight"]
+    at = [text.find(s) for s in steps]
+    assert -1 not in at, [s for s, i in zip(steps, at) if i == -1]
+    assert at == sorted(at), steps
+
+
+def test_preflight_rows_and_launch_cli_match_the_code():
+    from ground_station.service import campaign_launch
+    from ground_station.service.campaign_preflight import run_preflight  # noqa: F401 - the module the skill names
+    text = _text()
+    for row in ("service", "link", "firmware", "wfb_status", "rc_link", "arm_state", "position", "battery",
+                "runner", "log_plan"):
+        assert row in text, row
+    assert "logs/campaigns/launch/<campaign>_<YYYYmmdd-HHMM>.yaml" in text
+    assert campaign_launch.LAUNCH_DIR.relative_to(ROOT).as_posix() == "logs/campaigns/launch"
+    assert "docs/workflow-b/failure-modes.md" in text and (ROOT / "docs/workflow-b/failure-modes.md").exists()
 
 
 def test_checklist_keys_match_the_campaign_panel():
