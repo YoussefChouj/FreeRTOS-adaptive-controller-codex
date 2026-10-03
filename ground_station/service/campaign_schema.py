@@ -24,7 +24,7 @@ from ground_station.service.trajectory_pipeline import SHAPES, Profile, TrajLimi
 # docs/workflow-b/interfaces.md section 1 constants table
 WFB_TRAJ_V_MAX: float = float(TrajLimits.v_max_mps)  # 1.0 m/s from TrajLimits
 WFB_HOVER_Z_MIN: float = 0.3  # interfaces.md section 1: WFB_HOVER_Z_MIN
-WFB_HOVER_Z_MAX: float = 1.2  # interfaces.md section 1: WFB_HOVER_Z_MAX
+WFB_HOVER_Z_MAX: float = 1.4  # interfaces.md section 1: WFB_HOVER_Z_MAX
 
 _CAMPAIGN_NAME_RE = re.compile(r"^[a-z0-9_-]{1,40}$")
 _CONTROLLER_NAME_RE = re.compile(r"^[a-z0-9_]+$")

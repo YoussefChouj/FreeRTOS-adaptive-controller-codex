@@ -99,13 +99,22 @@ class FakeParams:
     tilt_deg: float = 60.0
     tilt_hold_s: float = 0.2
     # Fence (from API/wfb_safety.c table)
-    fence_x_m: float = 1.1
-    fence_y_m: float = 1.6
+    fence_x_m: float = 1.6
+    fence_y_m: float = 2.0
     # Ceiling (from API/wfb_safety.c table)
-    ceiling_m: float = 1.5
+    ceiling_m: float = 1.7
+    # Fence push-back (from API/wfb_safety.c table): longest push outside, distance past the fence that
+    # lands at once, and the push target inside the fence/ceiling
+    fence_hold_s: float = 2.0
+    fence_over_m: float = 0.3
+    soft_margin_m: float = 0.3
     # Hover_z range (from docs/workflow-b/interfaces.md section 1)
     hover_z_min_m: float = 0.3
-    hover_z_max_m: float = 1.2
+    hover_z_max_m: float = 1.4
+
+
+# Fence push-back axis bits (WFB_PUSH_* in API/wfb_safety.h)
+PUSH_X, PUSH_Y, PUSH_Z = 1, 2, 4
 
 
 class FakeDrone:
@@ -153,6 +162,8 @@ class FakeDrone:
         # Internal safety timers
         self._low_v_t: float = 0.0
         self._tilt_t: float = 0.0
+        self._fence_t: float = 0.0
+        self._push: int = 0
 
         # Internal primitive FSM variables
         self._prim_land_after_return: int = 0
@@ -225,6 +236,8 @@ class FakeDrone:
                 self._safety_action = Action.NONE
                 self._low_v_t = 0.0
                 self._tilt_t = 0.0
+                self._fence_t = 0.0
+                self._push = 0
                 self._airborne_t = 0.0
                 return int(Outcome.APPLIED)
 
@@ -480,9 +493,11 @@ class FakeDrone:
             self._traj_t += dt
 
         # 2. Safety net
+        out = 0
         if not airborne:
             self._tilt_t = 0.0
             self._low_v_t = 0.0
+            self._fence_t = 0.0
         else:
             tilt_active = (not (abs(self.roll_deg) <= self.params.tilt_deg)
                            or not (abs(self.pitch_deg) <= self.params.tilt_deg))
@@ -496,15 +511,28 @@ class FakeDrone:
                     self._safety_action = Action.KILL
                     self._safety_trip = Trip.TILT
 
-            if not (abs(self._x) <= self.params.fence_x_m) or not (abs(self._y) <= self.params.fence_y_m):
-                if self._safety_action < Action.LAND_IN_PLACE:
-                    self._safety_action = Action.LAND_IN_PLACE
-                    self._safety_trip = Trip.FENCE
-
-            if not (self._z <= self.params.ceiling_m):
-                if self._safety_action < Action.LAND_IN_PLACE:
-                    self._safety_action = Action.LAND_IN_PLACE
-                    self._safety_trip = Trip.CEILING
+            # Fence / ceiling: push back first (mirror of wfb_safety_step), land after fence_hold_s,
+            # past fence_over_m, or with no GS flight to push with
+            p = self.params
+            far = 0
+            if not (abs(self._x) <= p.fence_x_m):
+                out |= PUSH_X
+            if not (abs(self._y) <= p.fence_y_m):
+                out |= PUSH_Y
+            if not (self._z <= p.ceiling_m):
+                out |= PUSH_Z
+            if not (abs(self._x) <= p.fence_x_m + p.fence_over_m):
+                far |= PUSH_X
+            if not (abs(self._y) <= p.fence_y_m + p.fence_over_m):
+                far |= PUSH_Y
+            if not (self._z <= p.ceiling_m + p.fence_over_m):
+                far |= PUSH_Z
+            self._fence_t = self._fence_t + dt if out else 0.0
+            land_now = out != 0 and (self._gs_flight_active == 0 or far != 0
+                                     or not (self._fence_t < p.fence_hold_s))
+            if land_now and self._safety_action < Action.LAND_IN_PLACE:
+                self._safety_action = Action.LAND_IN_PLACE
+                self._safety_trip = Trip.FENCE if (out & (PUSH_X | PUSH_Y)) else Trip.CEILING
 
             low_v_active = not (self.vbat_v >= self.params.low_v)
             if low_v_active:
@@ -526,6 +554,10 @@ class FakeDrone:
                 if self._safety_action < Action.LAND_VIA_HOVER:
                     self._safety_action = Action.LAND_VIA_HOVER
                     self._safety_trip = Trip.AIRBORNE_CAP
+
+        self._push = out if self._safety_action == Action.NONE else 0
+        if self._push and self._traj_state == TrajState.EXECUTING:
+            self._traj_t -= dt   # the trajectory clock waits while pushing (wfb_glue)
 
         if self._safety_action == Action.KILL:
             self._motors_idle = False
@@ -666,7 +698,7 @@ class FakeDrone:
             if self._traj_state == TrajState.EXECUTING:
                 running, pt = self._sample_traj(self._traj_t)
                 if running:
-                    sp = (pt.x, pt.y, pt.z)
+                    sp = self._push_sp(pt.x, pt.y, pt.z)
                     self._yaw_deg = pt.yaw_deg
                     vec = (sp[0] - self._x, sp[1] - self._y, sp[2] - self._z)
                     dist = math.sqrt(vec[0]**2 + vec[1]**2 + vec[2]**2)
@@ -736,12 +768,14 @@ class FakeDrone:
                 self._gs_flight_active = 0
                 self._low_v_t = 0.0
                 self._tilt_t = 0.0
+                self._fence_t = 0.0
+                self._push = 0
                 self._airborne_t = 0.0
                 self._safety_trip = Trip.NONE
                 self._safety_action = Action.NONE
 
         else:
-            sp = (out_x_sp, out_y_sp, out_z_sp)
+            sp = self._push_sp(out_x_sp, out_y_sp, out_z_sp)
             vec = (sp[0] - self._x, sp[1] - self._y, sp[2] - self._z)
             dist = math.sqrt(vec[0]**2 + vec[1]**2 + vec[2]**2)
             max_step = self.params.tracking_speed_mps * dt
@@ -751,6 +785,17 @@ class FakeDrone:
                 self._x += (vec[0] / dist) * max_step
                 self._y += (vec[1] / dist) * max_step
                 self._z += (vec[2] / dist) * max_step
+
+    def _push_sp(self, x: float, y: float, z: float) -> tuple[float, float, float]:
+        """Setpoint with each pushed axis moved to the soft boundary on the drone's side (wfb_safety_push_sp)."""
+        p = self.params
+        if self._push & PUSH_X:
+            x = math.copysign(p.fence_x_m - p.soft_margin_m, -1.0 if self._x < 0.0 else 1.0)
+        if self._push & PUSH_Y:
+            y = math.copysign(p.fence_y_m - p.soft_margin_m, -1.0 if self._y < 0.0 else 1.0)
+        if self._push & PUSH_Z:
+            z = p.ceiling_m - p.soft_margin_m
+        return x, y, z
 
     def _sample_traj(self, t_s: float) -> tuple[bool, TrajPoint]:
         n = len(self._traj_points)
@@ -794,7 +839,7 @@ class FakeDrone:
         return a
 
     def status(self) -> dict[str, float]:
-        """Telemetry status containing exactly the 13 fields from interfaces.md section 2."""
+        """Telemetry status containing exactly the 14 fields from interfaces.md section 2."""
         return {
             "prim_state": float(self._prim_state),
             "traj_state": float(self._traj_state),
@@ -809,4 +854,5 @@ class FakeDrone:
             "gs_flight_active": float(self._gs_flight_active),
             "hover_z": float(self._hover_z),
             "airborne_t": float(self._airborne_t),
+            "fence_push": float(self._push),
         }

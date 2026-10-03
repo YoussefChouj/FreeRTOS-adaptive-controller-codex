@@ -280,7 +280,7 @@ def test_validate() -> None:
     assert any(m.startswith("TIME") for m in errs_time_eq)
 
     # BOUNDS: x; z below; yaw 180.5
-    x_list = [TrajPoint(0.85, 0.0, hover_z, 0.0, 0.0), valid_list[1]]
+    x_list = [TrajPoint(1.35, 0.0, hover_z, 0.0, 0.0), valid_list[1]]
     errs_bounds_x = validate(x_list, limits, hover_z)
     assert any(m.startswith("BOUNDS") for m in errs_bounds_x)
 

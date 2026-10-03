@@ -116,13 +116,13 @@ def test_2_set_hover_z() -> None:
     assert client.set_hover_z(0.6) is False
     assert drone.status()["last_err"] == WfbErr.STATE
 
-    # 0.2, 1.3, and NaN rejected on the ground
+    # 0.2, 1.41, and NaN rejected on the ground
     drone_ground = FakeDrone()
     client_ground = WfbClient(drone_ground.send)
     assert client_ground.set_hover_z(0.2) is False
     assert drone_ground.status()["last_err"] == WfbErr.RANGE
 
-    assert client_ground.set_hover_z(1.3) is False
+    assert client_ground.set_hover_z(1.41) is False
     assert drone_ground.status()["last_err"] == WfbErr.RANGE
 
     assert client_ground.set_hover_z(float("nan")) is False
@@ -612,6 +612,7 @@ def test_15_status_fields_and_types() -> None:
     drone = FakeDrone()
     st = drone.status()
     expected_keys = {
+        "fence_push",
         "prim_state",
         "traj_state",
         "traj_n",
@@ -627,6 +628,52 @@ def test_15_status_fields_and_types() -> None:
         "airborne_t",
     }
     assert set(st.keys()) == expected_keys
-    assert len(st) == 13
+    assert len(st) == 14
     for k, v in st.items():
         assert isinstance(v, float), f"field {k} is not a float: {type(v)}"
+
+
+def test_fence_push_back() -> None:
+    """Just past the fence the drone is pushed back inside (no trip); held outside fence_hold_s or far past it, it lands."""
+    drone = FakeDrone()
+    client = WfbClient(drone.send)
+    assert client.arm() is True and client.idle() is True and client.takeoff() is True
+    run(drone, client, 3.0)
+    assert drone.status()["prim_state"] == PrimState.HOVER
+
+    # 1.7 > fence_x_m 1.6, within fence_over_m: pushed, no trip, then back to the hover point
+    drone._x = 1.7
+    run(drone, client, 0.02)
+    assert drone.status()["fence_push"] == 1.0
+    assert drone.status()["safety_trip"] == 0.0
+    run(drone, client, 1.0)
+    st = drone.status()
+    assert st["fence_push"] == 0.0 and st["safety_trip"] == 0.0 and st["prim_state"] == PrimState.HOVER
+    assert abs(drone.position[0]) < 1.6
+
+    # ceiling: z 1.8 > ceiling_m 1.7 pushes z only (bit 4)
+    drone._z = 1.8
+    run(drone, client, 0.02)
+    assert drone.status()["fence_push"] == 4.0
+    run(drone, client, 1.0)
+    assert drone.status()["fence_push"] == 0.0 and drone.status()["safety_trip"] == 0.0
+
+    # held just outside for fence_hold_s 2.0 s -> LAND_IN_PLACE, trip FENCE, push cleared
+    for i in range(110):
+        drone._y = -2.1
+        if i % 10 == 0:
+            client.heartbeat()
+        drone.step(0.02)
+    assert drone.status()["safety_trip"] == Trip.FENCE
+    assert drone.status()["fence_push"] == 0.0
+
+
+def test_fence_far_lands_at_once() -> None:
+    drone = FakeDrone()
+    client = WfbClient(drone.send)
+    assert client.arm() is True and client.idle() is True and client.takeoff() is True
+    run(drone, client, 3.0)
+    drone._z = 2.1   # past ceiling_m + fence_over_m (2.0)
+    run(drone, client, 0.02)
+    assert drone.status()["safety_trip"] == Trip.CEILING
+    assert drone.status()["prim_state"] == PrimState.DESCEND

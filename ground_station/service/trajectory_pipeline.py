@@ -24,10 +24,10 @@ class TrajPoint:
 
 @dataclass(frozen=True)
 class TrajLimits:
-    x_abs_m: float = 0.8
-    y_abs_m: float = 1.3
+    x_abs_m: float = 1.3   # WFB_TRAJ_LIMITS_ROW in API/wfb_traj.c: 0.3 m inside the fence/ceiling
+    y_abs_m: float = 1.7
     z_min_m: float = 0.3
-    z_max_m: float = 1.5
+    z_max_m: float = 1.4
     v_max_mps: float = 1.0
     endpoint_tol_m: float = 0.10
     yaw_abs_deg: float = 180.0
