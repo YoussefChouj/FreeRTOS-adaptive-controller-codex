@@ -5,8 +5,9 @@ from dataclasses import dataclass, field
 from typing import Callable, Any
 from pathlib import Path
 
+from ground_station.autotune import excitation as ex
 from ground_station.service.campaign_schema import load_campaign
-from ground_station.service.abort_monitor import AbortSample, AbortDecision
+from ground_station.service.abort_monitor import AbortMonitor, AbortSample, AbortDecision
 from ground_station.service.scenario_schema import TRAJ_KINDS, WFB_SETTLE_S, Scenario, Step
 from ground_station.platform.trajectory_upload import upload
 
@@ -15,6 +16,11 @@ PRIM_IDLE = 0
 PRIM_HOVER = 2
 PRIM_DESCEND = 6
 TRAJ_DONE = 4
+
+# excite: the drone must be this close to the hover point before the SysID start re-zeroes the origin, within
+# EXCITE_ORIGIN_WAIT_S of the step start. PROPOSED, not measured.
+EXCITE_ORIGIN_TOL_M = 0.15
+EXCITE_ORIGIN_WAIT_S = 5.0
 
 class RunnerControl:
     def __init__(self):
@@ -148,7 +154,7 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False)
     t_start = deps.clock()
     records: list[dict] = []
     ticks = 0
-    airborne = False
+    airborne = excite_sent = False
     decision: AbortDecision | None = None
 
     def prim() -> int:
@@ -180,7 +186,12 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False)
     for i, st in enumerate(steps[:-1]):
         t0 = deps.clock() - t_start
         if st.kind == "takeoff":
-            cmds = [("set_hover_z", lambda: deps.client.set_hover_z(scenario.hover_z_m))]
+            cmds = []
+            if "mrac_injection" in st.args:
+                inj = float(st.args["mrac_injection"])
+                cmds.append(("mrac_injection",
+                             lambda: deps.client._send_cmd(ex.CMD_MRAC_FLAGS, ex.MRAC_IDX_INJECTION, inj)))
+            cmds.append(("set_hover_z", lambda: deps.client.set_hover_z(scenario.hover_z_m)))
             if deps.agent_arms:
                 cmds.append(("arm", deps.client.arm))
             cmds += [("idle", deps.client.idle), ("takeoff", deps.client.takeoff)]
@@ -208,6 +219,32 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False)
                     ok = wait(
                         lambda: int(deps.status()["traj_state"]) == TRAJ_DONE and prim() == PRIM_HOVER, st.kind
                     )
+        elif st.kind == "excite":
+            # The start re-zeroes the OF origin: send it only while holding at the hover point (schema: after a hold).
+            t_ex = deps.clock()
+            ok = wait(lambda: deps.clock() - t_ex >= EXCITE_ORIGIN_WAIT_S or (
+                prim() == PRIM_HOVER and math.hypot(*deps.sample(deps.clock()).pos_m[:2]) <= EXCITE_ORIGIN_TOL_M),
+                "excite origin")
+            xy = deps.sample(deps.clock()).pos_m[:2]
+            if ok and (prim() != PRIM_HOVER or math.hypot(*xy) > EXCITE_ORIGIN_TOL_M):
+                decision = AbortDecision(level=1, reason=f"excite: not holding at the hover point (x {xy[0]:.2f}, "
+                                                         f"y {xy[1]:.2f} m, tol {EXCITE_ORIGIN_TOL_M} m)")
+                ok = False
+            if ok:
+                a = st.args
+                excite_sent = True
+                cmds = ex.start_commands(a["axis"], a["signal"], a["f0"], a["f1"], a["amp"], a["duration_s"])
+                if not all(deps.client._send_cmd(ex.CMD_SYSID, idx, val) for idx, val in cmds):
+                    why = getattr(deps.client, "last_error", "") or "not applied"
+                    decision = AbortDecision(level=1, reason=f"excite: sysid command refused: {why}")
+                    ok = False
+                else:
+                    # Abort after the window is a no-op if SysID already finished (sysid.c:226); then wait RECOVERY.
+                    t_on = deps.clock()
+                    ok = wait(lambda: deps.clock() - t_on >= ex.active_s(a["duration_s"]), "excite")
+                    if ok:
+                        deps.client._send_cmd(ex.CMD_SYSID, ex.IDX_START, 0.0)
+                        ok = wait(lambda: deps.clock() - t_on >= ex.step_s(a["duration_s"]), "excite recovery")
         else:
             raise ValueError(f"step {i}: unexpected kind {st.kind!r} before land")
         records.append({"step": i, "kind": st.kind, "t0_s": round(t0, 3),
@@ -217,6 +254,8 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False)
 
     aborted = decision is not None
     if aborted:
+        if excite_sent:
+            deps.client._send_cmd(ex.CMD_SYSID, ex.IDX_START, 0.0)  # SysID abort -> RECOVERY
         deps.client.traj_stop()
     t0 = deps.clock() - t_start
     land_sent = deps.client.land()
@@ -246,6 +285,8 @@ def _control_report(deps: RunnerDeps, campaign: Any, flights: list[FlightRecord]
 
 def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
     campaign = load_campaign(yaml_path)
+    if campaign.abort:  # the campaign's abort overrides (e.g. autotune tilt_deg 15) reach the live monitor
+        deps.monitor = AbortMonitor(limits=campaign.abort_limits)
     queue = []
     for exp in campaign.experiments:
         for _ in range(exp.repeats):

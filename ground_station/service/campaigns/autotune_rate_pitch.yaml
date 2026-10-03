@@ -1,0 +1,25 @@
+# Workflow B auto-tune, flight F2 (docs/workflow-b/autotune.md): pitch rate-loop identification.
+# Same as autotune_rate_roll.yaml on gyroyPID. Then: python -m ground_station.autotune.cli <session> --axis pitch
+# Excite values = excitation.ID_EXCITE. All PROPOSED (WP-25), not measured.
+campaign: autotune_rate_pitch
+objective: "identify the pitch rate plant for the autotune cli (WP-25 F2)"
+controller: pid
+mode: fly
+packs:
+  - P4000-1          # launch Q2 replaces this with the pack on the drone
+max_flights: 1
+experiments:
+  - name: id_pitch_rate
+    scenario:
+      scenario: autotune-id-pitch
+      description: hold 15 s (hover baseline), pitch rate multisine 30 s, hold, land
+      steps:
+        - takeoff: {z: 0.5, mrac_injection: 0}
+        - hold: {s: 15}
+        - excite: {axis: pitch, signal: multisine, f0: 0.5, f1: 15, amp: 60, duration_s: 30}
+        - hold: {s: 5}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: {rate_hz: 100, groups: []}
+abort: {tilt_deg: 15}
