@@ -129,10 +129,9 @@ def mixer_roundtrip(u, motors):
 def simulate(adaptive=True, ft=FT, perf_recovery=True, sigma_mod=False, proj=True):
     """Run the cell 24 loop. Returns dict of logs (rad, N·m) keyed like the notebook's `log`."""
     nb = 2 * N_RBF + 2
-    x = np.zeros((3, 2)); xm = np.zeros((3, 2)); xr = np.zeros((3, 2))   # rows: axis, cols: angle, rate
-    W = np.zeros((3, nb)); Wf = np.zeros((3, nb))
-    r_f = np.zeros(3); f = np.zeros((3, 2)); v = np.zeros(3)
-    un_prev = np.zeros(3); v_prev = np.zeros(3)
+    x, xm, xr, f = (np.zeros((3, 2)) for _ in range(4))   # rows: axis, cols: angle, rate
+    W, Wf = np.zeros((3, nb)), np.zeros((3, nb))
+    r_f, v, un_prev, v_prev = (np.zeros(3) for _ in range(4))
     motors = np.full(4, HOVER_THROTTLE)
     sig = SIGMA if sigma_mod else np.zeros(3)
     steps = np.arange(0, ft, DT)
@@ -215,7 +214,8 @@ def _plot(res):
             ax[i].plot(lg["t"], np.degrees(lg["x"][:, i]), label=key)
         ax[i].plot(lg["t"], np.degrees(lg["xr"][:, i]), "k--", label="ref model")
         ax[i].set_ylabel(f"{name} [deg]")
-    ax[0].legend(); ax[-1].set_xlabel("t [s]")
+    ax[0].legend()
+    ax[-1].set_xlabel("t [s]")
     plt.show()
 
 
