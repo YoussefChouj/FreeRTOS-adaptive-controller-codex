@@ -85,7 +85,9 @@ Tell the operator: "Arm by RC when ready, then say go." Wait for their go messag
 
 - Check `campaign_state` about once per flight instead of polling in a loop. The runner posts a 3-line
   result to the chat after each flight and starts the next one after 10 s on the ground.
-- `status` `waiting_for_go`: the runner wants a new Go for `waiting_pack`; repeat section 2 for it.
+- `status` `waiting_for_go` after the first flight: an auto-next check failed and the runner posted
+  "PAUSED before flight N/M: <reason>". Tell the operator the reason and ask (AskUserQuestion): continue
+  (they say go again, you repeat section 2 with their new quote) or land / abort. Never continue on your own.
 - The run stops (the runner pauses for the operator) with `operator_needed`, `arm_refused`,
   `operator_stop` or `error`: read `reason`, tell the operator, and ask (AskUserQuestion) whether to
   relaunch the remaining flights (a new launch copy without the flown experiments) or end here. Never
