@@ -1,0 +1,26 @@
+# Workflow B auto-tune, flight F1 (docs/workflow-b/autotune.md): roll rate-loop identification.
+# MRAC injection off from the ground (takeoff mrac_injection 0), hold at the hover point, multisine on
+# gyroxPID.Des, hold, land. Then: python -m ground_station.autotune.cli <session> --axis roll
+# Excite values = excitation.ID_EXCITE (the cli rebuilds the dither from them). All PROPOSED (WP-25), not measured.
+campaign: autotune_rate_roll
+objective: "identify the roll rate plant for the autotune cli (WP-25 F1)"
+controller: pid
+mode: fly
+packs:
+  - P4000-1          # launch Q2 replaces this with the pack on the drone
+max_flights: 1
+experiments:
+  - name: id_roll_rate
+    scenario:
+      scenario: autotune-id-roll
+      description: hold 15 s (hover baseline), roll rate multisine 30 s, hold, land
+      steps:
+        - takeoff: {z: 0.5, mrac_injection: 0}
+        - hold: {s: 15}
+        - excite: {axis: roll, signal: multisine, f0: 0.5, f1: 15, amp: 60, duration_s: 30}
+        - hold: {s: 5}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: {rate_hz: 100, groups: []}   # core set carries gyroxPID.Des/FB and xTickCount
+abort: {tilt_deg: 15}   # WP-25 tuning abort; the firmware sysid abort stays at 30 deg

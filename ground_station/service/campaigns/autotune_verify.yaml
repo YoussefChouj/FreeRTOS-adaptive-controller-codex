@@ -1,0 +1,31 @@
+# Workflow B auto-tune, flight F3 (docs/workflow-b/autotune.md): verify the proposed rate gains.
+# Before it the agent writes the proposal knobs (cli JSON "knobs"). Hover baseline hold, short roll then pitch
+# multisine to re-measure margins, an x and a y position doublet (out-and-back goto), land. Then per axis:
+#   python -m ground_station.autotune.cli <session> --axis roll --verify <roll proposal json>
+# exit 3 = revert: write the printed G_prev knobs back. Excite values = excitation.VERIFY_EXCITE. PROPOSED.
+campaign: autotune_verify
+objective: "verify proposed rate gains: re-measured margins and hover rate error vs G_prev (WP-25 F3)"
+controller: pid
+mode: fly
+packs:
+  - P4000-1          # launch Q2 replaces this with the pack on the drone
+max_flights: 1
+experiments:
+  - name: verify_rate
+    scenario:
+      scenario: autotune-verify
+      description: hold 15 s, roll and pitch multisine 12 s each, x and y doublet, land
+      steps:
+        - takeoff: {z: 0.5, mrac_injection: 0}
+        - hold: {s: 15}
+        - excite: {axis: roll, signal: multisine, f0: 0.5, f1: 15, amp: 40, duration_s: 12}
+        - hold: {s: 3}
+        - excite: {axis: pitch, signal: multisine, f0: 0.5, f1: 15, amp: 40, duration_s: 12}
+        - hold: {s: 3}
+        - goto: {x: 0.3, y: 0.0, z: 0.5, dwell_s: 1.0}
+        - goto: {x: 0.0, y: 0.3, z: 0.5, dwell_s: 1.0}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: {rate_hz: 100, groups: []}
+abort: {tilt_deg: 15}

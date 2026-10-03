@@ -11,6 +11,7 @@ import struct
 from dataclasses import dataclass
 from enum import IntEnum
 
+from ground_station.autotune import excitation as ex
 from ground_station.livewatch.transport import LiveTransportError
 from ground_station.platform.transactions import Command, Outcome, parse_command
 from ground_station.platform.wfb_commands import (
@@ -179,6 +180,13 @@ class FakeDrone:
         self._traj_crc_hi_set: bool = False
         self._traj_seg: int = 0
 
+        # SysID (CMD 0x14) and MRAC flags (CMD 0x0F); not in status(), the firmware streams them elsewhere
+        self.sysid_state: int = ex.STATE_IDLE
+        self.sysid_params: dict[int, float] = {}
+        self.sysid_starts: int = 0
+        self._sysid_t: float = 0.0
+        self.mrac_flags: dict[int, bool] = {}
+
     @property
     def armed(self) -> bool:
         """Whether the flight controller is currently armed."""
@@ -214,6 +222,11 @@ class FakeDrone:
             return self._handle_prim(cmd)
         elif cmd.command_id == CMD_TRAJ:
             return self._handle_traj(cmd)
+        elif cmd.command_id == ex.CMD_MRAC_FLAGS and cmd.index <= 12:
+            self.mrac_flags[int(cmd.index)] = int(round(cmd.value)) != 0
+            return int(Outcome.APPLIED)
+        elif cmd.command_id == ex.CMD_SYSID:
+            return self._handle_sysid(cmd)
         else:
             return int(Outcome.REJECTED)
 
@@ -252,6 +265,40 @@ class FakeDrone:
                 return int(Outcome.APPLIED)
 
         return int(Outcome.REJECTED)
+
+    def _handle_sysid(self, cmd: Command) -> int:
+        """CMD 0x14 as TASK/send_data.c:1838-1872: always applied; a start that fails SysID_Start's preconditions
+        (armed, airborne, altitude band) silently stays IDLE. Start zeroes the position origin first."""
+        if cmd.index <= 5:
+            self.sysid_params[int(cmd.index)] = float(cmd.value)
+        elif cmd.index == ex.IDX_START and cmd.value >= 0.5:
+            self._x = self._y = self._prim_x_sp = self._prim_y_sp = 0.0
+            z_ok = ex.ALT_BAND_M[0] <= self._z <= ex.ALT_BAND_M[1]
+            if self.sysid_state == ex.STATE_IDLE and self._armed and self._prim_state != PrimState.IDLE and z_ok:
+                self.sysid_state, self._sysid_t = ex.STATE_RAMP_IN, 0.0
+                self.sysid_starts += 1
+        elif cmd.index == ex.IDX_START:
+            if self.sysid_state != ex.STATE_IDLE:
+                self.sysid_state, self._sysid_t = ex.STATE_RECOVERY, 0.0
+        elif cmd.index != ex.IDX_GEOFENCE:
+            return int(Outcome.REJECTED)
+        return int(Outcome.APPLIED)
+
+    def _step_sysid(self, dt: float) -> None:
+        if self.sysid_state == ex.STATE_IDLE:
+            return
+        self._sysid_t += dt
+        if self.sysid_state == ex.STATE_RECOVERY:
+            if self._sysid_t >= ex.RECOVERY_T_S:
+                self.sysid_state = ex.STATE_IDLE
+            return
+        if self._prim_state == PrimState.IDLE or not self._armed:
+            self.sysid_state, self._sysid_t = ex.STATE_RECOVERY, 0.0
+            return
+        dur = min(max(self.sysid_params.get(5, 20.0), 1.0), 60.0)
+        t = self._sysid_t
+        self.sysid_state = (ex.STATE_RAMP_IN if t < ex.RAMP_T_S else ex.STATE_RUNNING if t < ex.RAMP_T_S + dur
+                            else ex.STATE_RAMP_OUT if t < ex.active_s(dur) else ex.STATE_IDLE)
 
     def _handle_kill(self, cmd: Command) -> int:
         if cmd.index != 0:
@@ -491,6 +538,7 @@ class FakeDrone:
             self._airborne_t += dt
         if self._traj_state == TrajState.EXECUTING:
             self._traj_t += dt
+        self._step_sysid(dt)
 
         # 2. Safety net
         out = 0

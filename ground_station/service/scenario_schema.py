@@ -5,7 +5,13 @@ Steps run in order:
   hold    {s}                    stay at the hover point with the heartbeat running
   goto    {x, y, z, dwell_s}     one out-and-back trajectory hover -> (x, y, z) -> dwell -> hover
   path    {shape, params}        trajectory_pipeline.generate around the hover point
+  excite  {axis, signal, f0, f1, amp, duration_s}
+                                 SysID run (CMD 0x14) on one rate loop; only right after a hold (see below)
   land    {}                     the last step, exactly once
+
+takeoff may also set mrac_injection (0/1): CMD 0x0F idx 10 sent on the ground before takeoff (autotune flies 0).
+An excite start zeroes the optical-flow origin and the loc PID setpoints (TASK/send_data.c:1848-1865), so it must
+follow a hold at the hover point; the runner also checks the position before it sends the start.
 
 Firmware facts (docs/workflow-b/interfaces.md CMD 0x1A / 0x1B): one hover point (0, 0, hover_z) per flight,
 SET_HOVER_Z only in prim IDLE, and every trajectory starts and ends at the hover point, so a goto cannot end
@@ -27,6 +33,7 @@ from typing import Any, Mapping
 
 import yaml
 
+from ground_station.autotune import excitation as ex
 from ground_station.service.trajectory_pipeline import (
     SHAPES,
     Profile,
@@ -40,8 +47,14 @@ from ground_station.service.trajectory_pipeline import (
 
 SCENARIO_DIR = Path(__file__).resolve().parents[2] / "docs" / "workflow-b" / "scenarios"
 
-STEP_KINDS = ("takeoff", "hold", "goto", "path", "land")
+STEP_KINDS = ("takeoff", "hold", "goto", "path", "excite", "land")
 TRAJ_KINDS = ("goto", "path")
+
+# excite limits, PROPOSED: band below the 100 Hz core-stream Nyquist; amp at most the WP-25 60 deg/s cap; hover at
+# least 0.1 m above the sysid altitude floor (ex.ALT_BAND_M) so the run is not aborted by altitude.
+EXCITE_F_MAX_HZ = 40.0
+EXCITE_AMP_MAX_DPS = 60.0
+EXCITE_Z_MIN_M = ex.ALT_BAND_M[0] + 0.1
 
 # Airborne budget. Cap = airborne_cap_s in API/wfb_safety.c WFB_SAFETY_LIMITS_ROW; settle = interfaces.md
 # "Settle ... 1.0 s" before each trajectory START; overhead covers climb, landing return and descent.
@@ -62,12 +75,39 @@ _ARG_RE = re.compile(r"^\$([a-z_][a-z0-9_]*)$")
 _TOP_KEYS = {"scenario", "description", "args", "motion", "steps"}
 _STEP_KEYS: Mapping[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     # kind: (required keys, optional keys)
-    "takeoff": (("z",), ()),
+    "takeoff": (("z",), ("mrac_injection",)),
     "hold": (("s",), ()),
     "goto": (("x", "y", "z"), ("dwell_s",) + tuple(DEFAULT_MOTION)),
     "path": (("shape", "params"), tuple(DEFAULT_MOTION)),
+    "excite": (("axis", "f0", "f1", "amp", "duration_s"), ("signal",)),
     "land": ((), ()),
 }
+
+
+def _compile_excite(body: dict, path: str, problems: list[str]) -> Step | None:
+    n_before = len(problems)
+    axis, sig = body.get("axis"), body.get("signal", "multisine")
+    if axis not in ex.AXES:
+        problems.append(f"{path}.axis: must be one of {sorted(ex.AXES)} (got {axis!r})")
+    if sig not in ex.SIGNALS:
+        problems.append(f"{path}.signal: must be one of {sorted(ex.SIGNALS)} (got {sig!r})")
+    for k in ("f0", "f1", "amp", "duration_s"):
+        if not _num(body.get(k)):
+            problems.append(f"{path}.{k}: must be a finite number")
+    if len(problems) > n_before:
+        return None
+    f0, f1, amp, dur = (float(body[k]) for k in ("f0", "f1", "amp", "duration_s"))
+    if not 0.1 <= f0 < f1 <= EXCITE_F_MAX_HZ:
+        problems.append(f"{path}: need 0.1 <= f0 < f1 <= {EXCITE_F_MAX_HZ} Hz (got f0 {f0}, f1 {f1})")
+    amp_max = min(EXCITE_AMP_MAX_DPS, ex.AMP_MAX_DPS.get(axis, 0.0))
+    if not 0.0 < amp <= amp_max:
+        problems.append(f"{path}.amp: must be in (0, {amp_max}] deg/s (got {amp})")
+    if not 1.0 <= dur <= 60.0:
+        problems.append(f"{path}.duration_s: must be in [1, 60] s, the firmware range (got {dur})")
+    if len(problems) > n_before:
+        return None
+    args = {"axis": axis, "signal": sig, "f0": f0, "f1": f1, "amp": amp, "duration_s": dur}
+    return Step("excite", args, (), ex.step_s(dur))
 
 
 @dataclass(frozen=True)
@@ -299,9 +339,21 @@ def parse_scenario(data: Any, args: Mapping[str, Any] | None = None) -> Scenario
         kind, body = item
         path = f"steps.{i}"
         if kind == "takeoff":
+            if body.get("mrac_injection", 0) not in (0, 1) or isinstance(body.get("mrac_injection"), bool):
+                problems.append(f"{path}.takeoff.mrac_injection: must be 0 or 1 (got {body['mrac_injection']!r})")
             steps.append(Step("takeoff", dict(body)))
         elif kind == "land":
             steps.append(Step("land", {}))
+        elif kind == "excite":
+            if kinds[i - 1] != "hold":
+                problems.append(f"{path}.excite: must follow a hold step (the start re-zeroes the position origin, "
+                                "so the drone must be holding at the hover point)")
+            if math.isfinite(hover_z) and hover_z < EXCITE_Z_MIN_M:
+                problems.append(f"{path}.excite: takeoff z {hover_z} is below {EXCITE_Z_MIN_M:.2f} m, too close to "
+                                f"the sysid altitude floor {ex.ALT_BAND_M[0]} m")
+            step = _compile_excite(body, f"{path}.excite", problems)
+            if step is not None:
+                steps.append(step)
         elif kind == "hold":
             s = body.get("s")
             if not _num(s) or not s > 0.0:
