@@ -218,6 +218,12 @@ static uint16_t s_ekf_of_innov_bad_cnt = 0U;
  * WHY: without the latch the re-init zeroes the innovation and health flips back
  * to 1 within 5 ms, so a shadow flight would never show the trip. */
 static uint8_t s_ekf_of_tripped = 0U;
+/* FIX 2026-10-03: a trip in flight drops mode 2 to FIXED for the rest of that
+ * flight; this latch puts mode 2 back on the next ARM 0->1 edge. Before, the
+ * ARM edge cleared health/fallback but left g_of_bias_mode at 0, so a trip
+ * during a handheld carry (test_flight_ekf_1, 167.6 s) silently flew the next
+ * flight on raw OF with health shown as 1. */
+static uint8_t s_ekf_of_mode_restore = 0U;
 /* Handheld test (CMD 0x1E idx=3): integrate OF position on the ground so the
  * drone can be carried by hand (modes 0/2). Freezes the ground bias EMA, zeroes
  * the origin on enable, and self-clears once the drone is flying. */
@@ -582,9 +588,13 @@ void Update_Data(void)
 					if (s_ekf_of_innov_bad_cnt >= EKF_OF_HEALTH_PERSIST) {
 						g_ekf_of_health = 0U;
 						s_ekf_of_tripped = 1U;
-						if (g_of_bias_mode == 2U) {
+						/* Fall back only when the KF drives the position loop (armed,
+						 * FLYING/LANDING). On the ground or in handheld the re-init
+						 * below is enough and mode 2 stays selected. */
+						if (g_of_bias_mode == 2U && !on_ground && !g_of_handheld_test) {
 							g_of_bias_mode  = 0U; /* forced fallback to FIXED */
 							g_ekf_of_fallback = 1U;
+							s_ekf_of_mode_restore = 1U;
 						}
 						/* Re-init from a clean state on the next tick instead of
 						 * running on the diverged one (shadow and mode 2 alike). */
@@ -1218,6 +1228,10 @@ void Compute_Motor(void)
 			s_ekf_of_innov_bad_cnt = 0U;
 			s_ekf_of_tripped = 0U;
 			g_ekf_of_health = 1U;
+			if (s_ekf_of_mode_restore) {
+				s_ekf_of_mode_restore = 0U;
+				g_of_bias_mode = 2U;   /* mode-2 tick re-inits the KF if shadow was off */
+			}
 		}
 		else if (armed_now && on_ground && !g_of_handheld_test && s_of_pre_ok && g_of_bias_mode == 0U) {
 			s_of_bias_x = s_of_pre_x;
