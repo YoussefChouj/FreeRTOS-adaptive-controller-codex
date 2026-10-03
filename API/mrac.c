@@ -38,6 +38,10 @@ MRAC_Simplex_t mrac_simplex = {0, 0, 0, 0, 0, 0, {0, 0, 0, 0}, 0, 200, 40,
 MRAC_Inj_t mrac_inj = {0};
 volatile uint8_t mrac_in_armed = 0;
 volatile uint8_t mrac_in_phase = 0;
+uint8_t mrac_var_id[AXES];
+int8_t mrac_ref_type_eff[AXES];
+
+static void MRAC_VariantSnap(MRAC_AxisState_t *st);
 
 void MRAC_GateStep(void)
 {
@@ -246,6 +250,21 @@ const MRAC_FeatureDesc_t mrac_feature_desc[MRAC_N_FEATURES] = {
     {3, "cross",     MRAC_BLK_STRUCT, MRAC_GRP_COUPLING},
     {4, "u_nom",     MRAC_BLK_STRUCT, MRAC_GRP_CTRL},
     {5, "xm",        MRAC_BLK_STRUCT, MRAC_GRP_REF}
+#if MRAC_VARIANT == MRAC_VARIANT_STRUCT6_RBF12
+    /* rbf_<rate centre>_<angle centre>: 4 rate x 3 angle Gaussians, rate-major (MRAC_GenRBF) */
+   ,{6,  "rbf_r0_a0", MRAC_BLK_RBF, MRAC_GRP_RBF},
+    {7,  "rbf_r0_a1", MRAC_BLK_RBF, MRAC_GRP_RBF},
+    {8,  "rbf_r0_a2", MRAC_BLK_RBF, MRAC_GRP_RBF},
+    {9,  "rbf_r1_a0", MRAC_BLK_RBF, MRAC_GRP_RBF},
+    {10, "rbf_r1_a1", MRAC_BLK_RBF, MRAC_GRP_RBF},
+    {11, "rbf_r1_a2", MRAC_BLK_RBF, MRAC_GRP_RBF},
+    {12, "rbf_r2_a0", MRAC_BLK_RBF, MRAC_GRP_RBF},
+    {13, "rbf_r2_a1", MRAC_BLK_RBF, MRAC_GRP_RBF},
+    {14, "rbf_r2_a2", MRAC_BLK_RBF, MRAC_GRP_RBF},
+    {15, "rbf_r3_a0", MRAC_BLK_RBF, MRAC_GRP_RBF},
+    {16, "rbf_r3_a1", MRAC_BLK_RBF, MRAC_GRP_RBF},
+    {17, "rbf_r3_a2", MRAC_BLK_RBF, MRAC_GRP_RBF}
+#endif
 };
 const uint8_t mrac_n_features = MRAC_N_FEATURES;
 
@@ -275,8 +294,47 @@ static void MRAC_GenStructured(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *p
 
 MRAC_Bus_t mrac_bus[AXES] MRAC_CCM;
 
+#if MRAC_VARIANT == MRAC_VARIANT_STRUCT6_RBF12
+/* V3 grid centres in normalised units (rate/rbf_rate_scale, angle/rbf_ang_scale), width 1.
+ * PROPOSED: evenly spread over +-1.5 (rate) and +-1 (angle = the 15 deg tilt limit at scale 0.26). */
+static const float mrac_rbf_rate_c[4] = {-1.5f, -0.5f, 0.5f, 1.5f};
+static const float mrac_rbf_ang_c[3]  = {-1.0f,  0.0f, 1.0f};
+
+/* V3 block: phi[k] = g_rate[k/3] * g_ang[k%3], separable (4 + 3 expf). Pitch and roll only; yaw, z,
+ * rbf_on 0 and a non-finite input give phi = 0, so the block adds nothing to Phi_sq or u_ad. */
+static void MRAC_GenRBF(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *phi)
+{
+    const MRAC_AxisConfig_t *cfg = (axis == MRAC_AXIS_PITCH) ? &mrac_config_pitch : &mrac_config_roll;
+    float gr[4];
+    float ga[3];
+    float xr;
+    float xa;
+    int i, j;
+
+    xr = 0.0f;
+    xa = 0.0f;
+    if (axis == MRAC_AXIS_PITCH || axis == MRAC_AXIS_ROLL) {
+        xr = bus->x / cfg->rbf_rate_scale;
+        xa = ((axis == MRAC_AXIS_PITCH) ? imu_data.pit : imu_data.rol) / cfg->rbf_ang_scale;
+    }
+    if ((axis != MRAC_AXIS_PITCH && axis != MRAC_AXIS_ROLL) || cfg->rbf_on < 0.5f ||
+        !(xr - xr == 0.0f) || !(xa - xa == 0.0f)) {
+        for (i = 0; i < MRAC_N_RBF; i++) phi[i] = 0.0f;
+        return;
+    }
+    for (i = 0; i < 4; i++) gr[i] = MRAC_Simple_RBF(xr, mrac_rbf_rate_c[i], 1.0f);
+    for (j = 0; j < 3; j++) ga[j] = MRAC_Simple_RBF(xa, mrac_rbf_ang_c[j], 1.0f);
+    for (i = 0; i < 4; i++) {
+        for (j = 0; j < 3; j++) phi[i * 3 + j] = gr[i] * ga[j];
+    }
+}
+#endif
+
 const MRAC_BlockDesc_t mrac_block_table[] = {
     {MRAC_BLK_STRUCT, 0, MRAC_N_STRUCT, MRAC_GenStructured}
+#if MRAC_VARIANT == MRAC_VARIANT_STRUCT6_RBF12
+   ,{MRAC_BLK_RBF, MRAC_N_STRUCT, MRAC_N_RBF, MRAC_GenRBF}
+#endif
 };
 #define MRAC_N_BLOCKS ((int)(sizeof(mrac_block_table) / sizeof(mrac_block_table[0])))
 
@@ -340,19 +398,53 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
     float raw_u_ad;
     int do_adaptation;
     int i;
+    int n;              // features in use: MRAC_N_STRUCT while V3 rbf_on is 0, else MRAC_N_FEATURES
+    int ref_type;       // reference-model type this axis runs (global flag unless V1 ref_type >= 0)
+    float r_m;          // command into the reference model (r, or r delayed by V1 ref_delay_s)
+    uint8_t vid;
     uint32_t t0, t1, t2, t3;
 
     t0 = MRAC_CYC_NOW();
+    ref_type = mrac_flags.ref_model_type;
+    r_m = r;
+    vid = 0U;
+    n = MRAC_N_FEATURES;
+#if MRAC_VARIANT == MRAC_VARIANT_STRUCT6_RBF12
+    if (config->rbf_on < 0.5f) {
+        n = MRAC_N_STRUCT;
+    } else {
+        vid |= MRAC_VID_RBF;
+    }
+#endif
+#if MRAC_ENABLE_REFMODEL_V2 == 1
+    // V1: per-axis type and command delay. The ring is written every tick so a delay switched on
+    // later starts from real history; delay 0 reads the slot just written, i.e. r itself.
+    {
+        int d = (int)(config->ref_delay_s / MRAC_DT + 0.5f);
+        if (d < 0) d = 0;
+        if (d > MRAC_REF_BUF - 1) d = MRAC_REF_BUF - 1;
+        state->r_buf[state->r_idx] = r;
+        r_m = state->r_buf[(state->r_idx + MRAC_REF_BUF - d) % MRAC_REF_BUF];
+        state->r_idx = (uint8_t)((state->r_idx + 1U) % MRAC_REF_BUF);
+        if (d > 0) vid |= MRAC_VID_DELAY;
+    }
+    if (config->ref_type > -0.5f) {
+        ref_type = (int)(config->ref_type + 0.5f);
+        vid |= MRAC_VID_REF_TYPE;
+    }
+#endif
+    mrac_ref_type_eff[axis_id] = (int8_t)ref_type;
+
     // 1. Update reference model dynamics (runtime-selectable via mrac_flags.ref_model_type)
     //    Adaptive-law gain: 1st-order/passthrough use the scalar heuristic P (ADR-0003);
     //    the 2nd-order case uses the FULL matrix-P state-space drive (ADR-0007, supersedes
     //    ADR-0003 for type 2) — see the s = e*Pe + e_dot*Pedot selection in step 5.
     state->r = r; // latch command for telemetry / system-ID frame
-    switch (mrac_flags.ref_model_type) {
+    switch (ref_type) {
         case 2: {
             // 2nd-order: xm_ddot = wn^2 (r - xm) - 2*zeta*wn*xm_dot  (semi-implicit Euler, stable for DT*wn < 2)
             float wn  = config->ref_model_bw;
-            float acc = wn * wn * (r - state->xm) - 2.0f * config->ref_model_zeta * wn * state->xm_dot;
+            float acc = wn * wn * (r_m - state->xm) - 2.0f * config->ref_model_zeta * wn * state->xm_dot;
             state->xm_dot += MRAC_DT * acc;
             state->xm     += MRAC_DT * state->xm_dot;
             // P unused for the drive here; matrix-P (Pe,Pedot) is formed in step 5.
@@ -363,7 +455,7 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
             float bw = config->ref_model_bw;
             float dx;
             if (bw < 0.1f) bw = 0.1f;   // P = 1/(2*bw): bw 0 divides by zero
-            dx = bw * (r - state->xm);
+            dx = bw * (r_m - state->xm);
             state->xm    += MRAC_DT * dx;
             state->xm_dot = dx;
             P = 1.0f / (2.0f * bw);
@@ -372,12 +464,20 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
         case 0:
         default:
             // Passthrough: instantaneous command, infinite-bandwidth reference. e = -(PID error).
-            state->xm = r;
+            state->xm = r_m;
             state->xm_dot = 0.0f;
             P = 1.0f;
             break;
     }
-    
+#if MRAC_ENABLE_PERF_RECOVERY == 1
+    // PR, closed-loop reference model (WP-29 [E5]): pull xm toward the plant, xm' += crm_ell*(x - xm).
+    // Types 1/2 only; passthrough has no model state. crm_ell*DT <= 0.25 (MRAC_VariantParamSet).
+    if (config->crm_ell > 0.0f && ref_type != 0) {
+        state->xm += MRAC_DT * config->crm_ell * (state->x - state->xm);
+        vid |= MRAC_VID_CRM;
+    }
+#endif
+
     // 2. Compute tracking error (e = x - xm)
     state->e = state->x - state->xm;
 
@@ -388,6 +488,17 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
     state->xdot_f += MRAC_DT * config->wc_edot * (raw_xdot - state->xdot_f);
     state->x_prev = state->x;
     state->e_dot  = state->xdot_f - state->xm_dot;
+
+#if MRAC_ENABLE_3L == 1
+    // 3L layer 1: leaky integral of e = attitude error against the model (1 s leak so a standing
+    // command offset cannot wind it up), bounded by e_sat. Kept warm every tick; used only if lam_ang > 0.
+    state->e_int += MRAC_DT * (state->e - state->e_int);
+    if (config->e_sat > 0.0f) {
+        if (state->e_int >  config->e_sat) state->e_int =  config->e_sat;
+        if (state->e_int < -config->e_sat) state->e_int = -config->e_sat;
+    }
+    if (!(state->e_int - state->e_int == 0.0f)) state->e_int = 0.0f;
+#endif
 
     // 3. Compute nominal control (done externally)
     
@@ -410,7 +521,7 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
     mrac_u_ff[axis_id] = MRAC_L3_Feedforward(axis_id, &mrac_bus[axis_id]);
     
     // 5. Update adaptive weights using Lyapunov gradient descent
-    Phi_sq = MRAC_VectorNormSquare(state->Phi, MRAC_N_FEATURES);
+    Phi_sq = MRAC_VectorNormSquare(state->Phi, (uint8_t)n);
     denom = 1.0f + Phi_sq;
 
     // Proceed with adaptation only if error is outside deadzone
@@ -441,7 +552,7 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
     // (ADR-0003); full state-space [e, e_dot]^T P [0;1] = e*Pe + e_dot*Pedot for the
     // 2nd-order matrix-P law (ADR-0007). e_dot is LPF-bounded and not separately
     // tanh-saturated in Phase 1 (e is, via PBe).
-    if (mrac_flags.ref_model_type == 2) {
+    if (ref_type == 2) {
         float wn = config->ref_model_bw;
         float zeta = config->ref_model_zeta;
         float a0;
@@ -456,6 +567,28 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
     } else {
         s = PBe * P;
     }
+#if MRAC_ENABLE_REFMODEL_V2 == 1
+    // V1 normalized drive (roadmap Q1 finding 4): P = 1/(2bw) and P_e = 1/(2wn^2) shrink the drive
+    // 88-3900x and the gamma-scaled leak keeps theta = grad/sigma put, so drop P: s = PBe (+ lam_edot*e_dot).
+    if (config->drive_norm > 0.5f) {
+        s = (ref_type == 2) ? (PBe + config->lam_edot * state->e_dot) : PBe;
+        vid |= MRAC_VID_DRIVE_NORM;
+    }
+#endif
+#if MRAC_ENABLE_3L == 1
+    // 3L layer 1 drive (sim ctrl_mrac3l.py:133): s = rate error + lam_ang * angle error.
+    if (config->lam_ang > 0.0f) {
+        s += config->lam_ang * state->e_int;
+        vid |= MRAC_VID_3L;
+    }
+#endif
+#if MRAC_ENABLE_PERF_RECOVERY == 1
+    if (config->kappa_pr > 0.0f) vid |= MRAC_VID_KAPPA_PR;
+#endif
+#if MRAC_ENABLE_SATAWARE == 1
+    if (config->mu_sat > 0.0f) vid |= MRAC_VID_SATAWARE;
+#endif
+    mrac_var_id[axis_id] = vid;
 
     if (mrac_flags.adaptation_on && do_adaptation && mrac_inj.learn_gate) {
         float theta_scale = mrac_flags.output_injection_on ? mrac_inj.inj_alpha : 1.0f;
@@ -466,7 +599,7 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
         sigma_eff = config->sigma + sigma_e;
         sigma_lf_active = mrac_flags.l1_filtering_on ? config->sigma_lf : 0.0f;
 
-        for (i = 0; i < MRAC_N_FEATURES; i++) {
+        for (i = 0; i < n; i++) {
             grad[i] = (-s * state->Phi[i]) / denom;
         }
 
@@ -476,18 +609,18 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
          * projection must bound the combined gradient — otherwise a large
          * sigma_prior pushes Theta past What_limit (prior-D-fix). */
         if (sigma_prior != 0.0f) {
-            for (i = 0; i < MRAC_N_FEATURES; i++) {
+            for (i = 0; i < n; i++) {
                 grad[i] -= sigma_prior * (state->Theta[i] - Theta_prior[axis_id][i]);
             }
         }
 #endif
 
         if (mrac_flags.projection_on) {
-            MRAC_ProjectGradient(grad, state->Theta, MRAC_N_FEATURES,
+            MRAC_ProjectGradient(grad, state->Theta, n,
                                  config->What_limit, config->What_tol, config->What_lower_limit);
         }
 
-        for (i = 0; i < MRAC_N_FEATURES; i++) {
+        for (i = 0; i < n; i++) {
 #if FIX_LEAKAGE_NORMALIZATION == 1
             y = config->gamma[i] * mrac_g_gamma[axis_id][mrac_feature_desc[i].group] * (grad[i]
                 - sigma_lf_active * (state->Theta[i] - state->Whatf[i])
@@ -498,6 +631,14 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
                 - sigma_lf_active * (state->Theta[i] - state->Whatf[i]) / denom
                 - sigma_eff * mrac_g_sigma[axis_id][mrac_feature_desc[i].group] * state->Theta[i] / denom
                 );
+#endif
+#if MRAC_ENABLE_SATAWARE == 1
+            // V2 saturation-aware leakage (sim ctrl_mrac_b.py:120), inside the gamma bracket like sigma:
+            // pulls Theta toward 0 while the mixer clips, so u_ad cannot wind up against a dead actuator.
+            if (config->mu_sat > 0.0f) {
+                y -= config->gamma[i] * mrac_g_gamma[axis_id][mrac_feature_desc[i].group]
+                     * config->mu_sat * fabsf(state->u_def) * state->Theta[i];
+            }
 #endif
 
             state->Theta[i] += MRAC_DT * y * theta_scale;
@@ -517,17 +658,44 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
             }
 #endif
 
-            // L1-style low-frequency leakage: pull fast weights toward filtered copy
+            // L1-style low-frequency leakage: pull fast weights toward filtered copy.
+            // PR (kappa_pr > 0) needs the filtered copy too, without the sigma_lf pull.
+#if MRAC_ENABLE_PERF_RECOVERY == 1
+            if (mrac_flags.l1_filtering_on || config->kappa_pr > 0.0f) {
+#else
             if (mrac_flags.l1_filtering_on) {
+#endif
                 state->Whatf[i] += MRAC_DT * config->gam_f * (state->Theta[i] - state->Whatf[i]);
             }
         }
     }
-    
+
     // 6. Compute adaptive control component (u_ad = Theta^T * Phi)
     raw_u_ad = 0.0f;
-    for (i = 0; i < MRAC_N_FEATURES; i++) {
+    for (i = 0; i < n; i++) {
         raw_u_ad += state->Theta[i] * (state->Phi[i] * mrac_g_phi[axis_id][mrac_feature_desc[i].group]);
+    }
+#if MRAC_ENABLE_PERF_RECOVERY == 1
+    // PR, Yucelen-Calise form in Theta = -W sign (roadmap Q2): u_ad += kappa_pr*(Theta - Whatf)'Phi,
+    // the high-frequency part of the weights. Bounded by the u_max clamp below like the rest of u_ad.
+    if (config->kappa_pr > 0.0f) {
+        float u_pr = 0.0f;
+        for (i = 0; i < n; i++) {
+            u_pr += (state->Theta[i] - state->Whatf[i]) * (state->Phi[i] * mrac_g_phi[axis_id][mrac_feature_desc[i].group]);
+        }
+        raw_u_ad += config->kappa_pr * u_pr;
+    }
+#endif
+    // Variant guard: with any variant on, a non-finite drive or output drops u_ad and the weights of
+    // this axis back to 0 instead of reaching the mixer. Inert when vid == 0 (today's law).
+    if (vid != 0U && (!(raw_u_ad - raw_u_ad == 0.0f) || !(state->u_ad - state->u_ad == 0.0f))) {
+        for (i = 0; i < MRAC_N_FEATURES; i++) {
+            state->Theta[i] = 0.0f;
+            state->Whatf[i] = 0.0f;
+        }
+        state->e_int = 0.0f;
+        raw_u_ad = 0.0f;
+        state->u_ad = 0.0f;
     }
 
 #if ENABLE_PERFORMANCE_RECOVERY == 1
@@ -657,6 +825,18 @@ void MRAC_Init(void)
     MRAC_SET(ref_Q1,          1.0f,                      1.0f,                      1.0f,                      1.0f);
     MRAC_SET(ref_Q2,          1.0f,                      1.0f,                      1.0f,                      1.0f);
     MRAC_SET(wc_edot,         30.0f,                     30.0f,                     30.0f,                     30.0f);
+    /* WP-27 variant rows: every value here is OFF (law == the rows above). Flight values: CMD 0x1D. */
+    MRAC_SET(ref_type,        -1.0f,                     -1.0f,                     -1.0f,                     -1.0f);
+    MRAC_SET(ref_delay_s,     0.0f,                      0.0f,                      0.0f,                      0.0f);
+    MRAC_SET(drive_norm,      0.0f,                      0.0f,                      0.0f,                      0.0f);
+    MRAC_SET(lam_edot,        0.0f,                      0.0f,                      0.0f,                      0.0f);
+    MRAC_SET(kappa_pr,        0.0f,                      0.0f,                      0.0f,                      0.0f);
+    MRAC_SET(crm_ell,         0.0f,                      0.0f,                      0.0f,                      0.0f);
+    MRAC_SET(mu_sat,          0.0f,                      0.0f,                      0.0f,                      0.0f);
+    MRAC_SET(lam_ang,         0.0f,                      0.0f,                      0.0f,                      0.0f);
+    MRAC_SET(rbf_on,          0.0f,                      0.0f,                      0.0f,                      0.0f);
+    MRAC_SET(rbf_rate_scale,  3.0f,                      3.0f,                      3.0f,                      3.0f);
+    MRAC_SET(rbf_ang_scale,   0.26f,                     0.26f,                     0.26f,                     0.26f);
 
     /* Basis weights: gamma = learning rate, limit/lower = weight bounds (projection),
      * tol = projection boundary layer. Yaw limit/tol = pitch/roll value * 0.6f. */
@@ -685,8 +865,44 @@ void MRAC_Init(void)
     MRAC_BASIS(z,     3, 0.10f, 0.05f,       0.01f,       0.0f);       /* cross */
     MRAC_BASIS(z,     4, 0.20f, 0.20f,       0.04f,       0.0f);       /* u_nom */
     MRAC_BASIS(z,     5, 0.20f, 0.20f,       0.04f,       0.0f);       /* xm */
+#if MRAC_VARIANT == MRAC_VARIANT_STRUCT6_RBF12
+    /* V3 RBF grid, pitch/roll only (MRAC_GenRBF gives phi = 0 on yaw/z). Symmetric bounds: the sign of
+     * a payload torque is unknown. PROPOSED: gamma = the rate row's 0.20 split over 12 features. */
+    MRAC_BASIS(pitch, 6,  0.10f, 0.05f,      0.01f,       -0.05f);     /* rbf_r0_a0 */
+    MRAC_BASIS(pitch, 7,  0.10f, 0.05f,      0.01f,       -0.05f);     /* rbf_r0_a1 */
+    MRAC_BASIS(pitch, 8,  0.10f, 0.05f,      0.01f,       -0.05f);     /* rbf_r0_a2 */
+    MRAC_BASIS(pitch, 9,  0.10f, 0.05f,      0.01f,       -0.05f);     /* rbf_r1_a0 */
+    MRAC_BASIS(pitch, 10, 0.10f, 0.05f,      0.01f,       -0.05f);     /* rbf_r1_a1 */
+    MRAC_BASIS(pitch, 11, 0.10f, 0.05f,      0.01f,       -0.05f);     /* rbf_r1_a2 */
+    MRAC_BASIS(pitch, 12, 0.10f, 0.05f,      0.01f,       -0.05f);     /* rbf_r2_a0 */
+    MRAC_BASIS(pitch, 13, 0.10f, 0.05f,      0.01f,       -0.05f);     /* rbf_r2_a1 */
+    MRAC_BASIS(pitch, 14, 0.10f, 0.05f,      0.01f,       -0.05f);     /* rbf_r2_a2 */
+    MRAC_BASIS(pitch, 15, 0.10f, 0.05f,      0.01f,       -0.05f);     /* rbf_r3_a0 */
+    MRAC_BASIS(pitch, 16, 0.10f, 0.05f,      0.01f,       -0.05f);     /* rbf_r3_a1 */
+    MRAC_BASIS(pitch, 17, 0.10f, 0.05f,      0.01f,       -0.05f);     /* rbf_r3_a2 */
+    MRAC_BASIS(roll,  6,  0.10f, 0.05f,      0.01f,       -0.05f);     /* rbf_r0_a0 */
+    MRAC_BASIS(roll,  7,  0.10f, 0.05f,      0.01f,       -0.05f);     /* rbf_r0_a1 */
+    MRAC_BASIS(roll,  8,  0.10f, 0.05f,      0.01f,       -0.05f);     /* rbf_r0_a2 */
+    MRAC_BASIS(roll,  9,  0.10f, 0.05f,      0.01f,       -0.05f);     /* rbf_r1_a0 */
+    MRAC_BASIS(roll,  10, 0.10f, 0.05f,      0.01f,       -0.05f);     /* rbf_r1_a1 */
+    MRAC_BASIS(roll,  11, 0.10f, 0.05f,      0.01f,       -0.05f);     /* rbf_r1_a2 */
+    MRAC_BASIS(roll,  12, 0.10f, 0.05f,      0.01f,       -0.05f);     /* rbf_r2_a0 */
+    MRAC_BASIS(roll,  13, 0.10f, 0.05f,      0.01f,       -0.05f);     /* rbf_r2_a1 */
+    MRAC_BASIS(roll,  14, 0.10f, 0.05f,      0.01f,       -0.05f);     /* rbf_r2_a2 */
+    MRAC_BASIS(roll,  15, 0.10f, 0.05f,      0.01f,       -0.05f);     /* rbf_r3_a0 */
+    MRAC_BASIS(roll,  16, 0.10f, 0.05f,      0.01f,       -0.05f);     /* rbf_r3_a1 */
+    MRAC_BASIS(roll,  17, 0.10f, 0.05f,      0.01f,       -0.05f);     /* rbf_r3_a2 */
+    for (i = MRAC_N_STRUCT; i < MRAC_N_FEATURES; i++) {   /* yaw / z: no RBF learning */
+        MRAC_BASIS(yaw, i, 0.0f, 0.0f, 0.0f, 0.0f);
+        MRAC_BASIS(z,   i, 0.0f, 0.0f, 0.0f, 0.0f);
+    }
+#endif
 
     /* History and provenance (newest first)
+     * 2026-10-04 WP-27  Variant rows (ref_type .. rbf_ang_scale), all OFF; ref_type -1 = follow the global
+     *                   CMD 0x13 type. Flight values are PROPOSED in docs/workflow-b/mrac-variants.md and
+     *                   are written by CMD 0x1D, not here. rbf scales 3.0 rad/s and 0.26 rad (15 deg tilt
+     *                   limit) from the roadmap V3; they matter only when rbf_on = 1.
      * 2026-09-29 S1b    Local arrays and per-axis assignments -> MRAC_SET / MRAC_BASIS tables, bit-exact
      *                   (API/tests/run_mrac_equiv.py EQUIV OK). Yaw cells stay the products x*0.6f so they
      *                   round exactly as the old PR_Wlim[i]*0.6f did.
@@ -773,6 +989,87 @@ void MRAC_ResetWeights(void)
     mrac_state.roll.x_prev  = mrac_state.roll.x;    mrac_state.roll.xdot_f   = 0.0f; mrac_state.roll.e_dot   = 0.0f;
     mrac_state.yaw.x_prev   = mrac_state.yaw.x;     mrac_state.yaw.xdot_f    = 0.0f; mrac_state.yaw.e_dot    = 0.0f;
     mrac_state.z_rate.x_prev= mrac_state.z_rate.x;  mrac_state.z_rate.xdot_f = 0.0f; mrac_state.z_rate.e_dot = 0.0f;
+
+    MRAC_VariantSnap(&mrac_state.pitch);
+    MRAC_VariantSnap(&mrac_state.roll);
+    MRAC_VariantSnap(&mrac_state.yaw);
+    MRAC_VariantSnap(&mrac_state.z_rate);
+}
+
+// V1 delay ring holds the plant state (bumpless) and the 3L integral restarts at 0.
+static void MRAC_VariantSnap(MRAC_AxisState_t *st)
+{
+    int k;
+    for (k = 0; k < MRAC_REF_BUF; k++) st->r_buf[k] = st->x;
+    st->e_int = 0.0f;
+}
+
+/* CMD 0x1D field table: one row per MRAC_VariantField_e, in enum order. Writes outside [lo, hi] or
+ * non-finite are refused. snap = 1: the write changes the reference model, so xm snaps to the plant.
+ * Bounds keep an enabled variant inside the existing u_max clamp and numerically stable:
+ *   ref_delay_s  <= (MRAC_REF_BUF-1)*DT;  crm_ell*DT <= 0.25;  rbf scales > 0 (they divide). */
+#define MRAC_VAR_FIELD(lo, hi, snap) { lo, hi, snap }
+static const struct { float lo; float hi; uint8_t snap; } mrac_var_field[MRAC_VF_COUNT] = {
+/*                  lo      hi      snap     field */
+    MRAC_VAR_FIELD(-1.0f,  2.0f,   1),   /* ref_type        -1 global, 0 pass, 1 first, 2 second */
+    MRAC_VAR_FIELD( 0.0f,  0.035f, 1),   /* ref_delay_s     s */
+    MRAC_VAR_FIELD( 0.0f,  1.0f,   0),   /* drive_norm      0/1 */
+    MRAC_VAR_FIELD( 0.0f,  0.1f,   0),   /* lam_edot        s */
+    MRAC_VAR_FIELD( 0.0f,  2.0f,   0),   /* kappa_pr        - */
+    MRAC_VAR_FIELD( 0.0f,  50.0f,  1),   /* crm_ell         1/s */
+    MRAC_VAR_FIELD( 0.0f,  10.0f,  0),   /* mu_sat          1/(N m s) */
+    MRAC_VAR_FIELD( 0.0f,  20.0f,  0),   /* lam_ang         1/s */
+    MRAC_VAR_FIELD( 0.0f,  1.0f,   0),   /* rbf_on          0/1 */
+    MRAC_VAR_FIELD( 0.1f,  20.0f,  0),   /* rbf_rate_scale  rad/s */
+    MRAC_VAR_FIELD( 0.05f, 1.0f,   0),   /* rbf_ang_scale   rad */
+    MRAC_VAR_FIELD( 0.0f,  2.0f,   0)    /* gamma_scale     mrac_g_gamma[axis][*] */
+};
+
+uint8_t MRAC_VariantParamSet(uint8_t axis, uint8_t field, float val)
+{
+    MRAC_AxisConfig_t *cfg[AXES];
+    MRAC_AxisState_t *st[AXES];
+    MRAC_AxisConfig_t *c;
+    int k;
+
+    cfg[0] = &mrac_config_pitch; st[0] = &mrac_state.pitch;
+    cfg[1] = &mrac_config_roll;  st[1] = &mrac_state.roll;
+    cfg[2] = &mrac_config_yaw;   st[2] = &mrac_state.yaw;
+    cfg[3] = &mrac_config_z;     st[3] = &mrac_state.z_rate;
+
+    if (axis >= (uint8_t)AXES || field >= (uint8_t)MRAC_VF_COUNT) return 0U;
+    if (!(val - val == 0.0f) || val < mrac_var_field[field].lo || val > mrac_var_field[field].hi) return 0U;
+    c = cfg[axis];
+    switch (field) {
+        case MRAC_VF_REF_TYPE:       c->ref_type = (float)(int)(val + ((val < 0.0f) ? -0.5f : 0.5f)); break;
+        case MRAC_VF_REF_DELAY_S:    c->ref_delay_s = val;    break;
+        case MRAC_VF_DRIVE_NORM:     c->drive_norm = (val >= 0.5f) ? 1.0f : 0.0f; break;
+        case MRAC_VF_LAM_EDOT:       c->lam_edot = val;       break;
+        case MRAC_VF_KAPPA_PR:       c->kappa_pr = val;       break;
+        case MRAC_VF_CRM_ELL:        c->crm_ell = val;        break;
+        case MRAC_VF_MU_SAT:         c->mu_sat = val;         break;
+        case MRAC_VF_LAM_ANG:        c->lam_ang = val;        break;
+        case MRAC_VF_RBF_ON:
+            c->rbf_on = (val >= 0.5f) ? 1.0f : 0.0f;
+            // fresh RBF weights on every switch, so stale ones never come back
+            for (k = MRAC_N_STRUCT; k < MRAC_N_FEATURES; k++) {
+                st[axis]->Theta[k] = 0.0f;
+                st[axis]->Whatf[k] = 0.0f;
+            }
+            break;
+        case MRAC_VF_RBF_RATE_SCALE: c->rbf_rate_scale = val; break;
+        case MRAC_VF_RBF_ANG_SCALE:  c->rbf_ang_scale = val;  break;
+        case MRAC_VF_GAMMA_SCALE:
+            for (k = 0; k < MRAC_N_GROUPS; k++) mrac_g_gamma[axis][k] = val;
+            break;
+        default: return 0U;
+    }
+    if (mrac_var_field[field].snap) {
+        st[axis]->xm = st[axis]->x;
+        st[axis]->xm_dot = 0.0f;
+        MRAC_VariantSnap(st[axis]);
+    }
+    return 1U;
 }
 
 void MRAC_Reset(void)

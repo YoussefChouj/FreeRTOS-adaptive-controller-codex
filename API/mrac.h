@@ -122,11 +122,13 @@ typedef enum {
     MRAC_GRP_AERO,
     MRAC_GRP_COUPLING,
     MRAC_GRP_CTRL,
-    MRAC_GRP_REF
+    MRAC_GRP_REF,
+    MRAC_GRP_RBF        // V3 Gaussian grid (used only when MRAC_VARIANT == MRAC_VARIANT_STRUCT6_RBF12)
 } MRAC_FeatureGroup_e;
 
 typedef enum {
-    MRAC_BLK_STRUCT
+    MRAC_BLK_STRUCT,
+    MRAC_BLK_RBF
 } MRAC_BlockKind_e;
 
 typedef struct {
@@ -220,7 +222,40 @@ typedef struct {
     float ref_Q2;               // [-] Lyapunov Q diagonal: rate-derivative weight
     float wc_edot;              // [rad/s] LPF cutoff for the finite-difference rate derivative
 
+    // WP-27 law variants (mrac_variant.h). Floats so CMD 0x1D writes them all the same way; every
+    // default is OFF (see MRAC_Init). Written at run time by MRAC_VariantParamSet only.
+    float ref_type;             // V1 [-]   -1 = global mrac_flags.ref_model_type, else 0/1/2 for this axis
+    float ref_delay_s;          // V1 [s]   pure delay on r before the reference model (ring of MRAC_REF_BUF)
+    float drive_norm;           // V1 [0/1] drive s = PBe (+ lam_edot*e_dot on type 2) instead of P*PBe / P_e
+    float lam_edot;             // V1 [s]   e_dot weight of the normalized type-2 drive
+    float kappa_pr;             // PR [-]   u_ad += kappa_pr*(Theta-Whatf)'Phi; runs Whatf while > 0
+    float crm_ell;              // PR [1/s] closed-loop reference model xm += DT*crm_ell*(x - xm), types 1/2
+    float mu_sat;               // V2 [1/(N m s)] leakage mu_sat*|u_def|*Theta inside the gamma bracket
+    float lam_ang;              // 3L [1/s] drive s += lam_ang*e_int (e_int = leaky integral of e, angle error)
+    float rbf_on;               // V3 [0/1] 0: phi[6..17] unused, law == STRUCT6
+    float rbf_rate_scale;       // V3 [rad/s] rate normalisation of the RBF grid
+    float rbf_ang_scale;        // V3 [rad]   angle normalisation of the RBF grid
+
 } MRAC_AxisConfig_t;
+
+// CMD 0x1D MRAC_VARIANT field ids: idx = (field << 2) | axis, value float32 (MRAC_VariantParamSet).
+typedef enum {
+    MRAC_VF_REF_TYPE = 0,
+    MRAC_VF_REF_DELAY_S,
+    MRAC_VF_DRIVE_NORM,
+    MRAC_VF_LAM_EDOT,
+    MRAC_VF_KAPPA_PR,
+    MRAC_VF_CRM_ELL,
+    MRAC_VF_MU_SAT,
+    MRAC_VF_LAM_ANG,
+    MRAC_VF_RBF_ON,
+    MRAC_VF_RBF_RATE_SCALE,
+    MRAC_VF_RBF_ANG_SCALE,
+    MRAC_VF_GAMMA_SCALE,        // writes mrac_g_gamma[axis][every group]
+    MRAC_VF_COUNT
+} MRAC_VariantField_e;
+
+#define MRAC_REF_BUF 8          // V1 delay ring: up to MRAC_REF_BUF-1 ticks = 35 ms at 200 Hz
 
 // State structure for an MRAC axis (mutable runtime data)
 typedef struct {
@@ -256,7 +291,25 @@ typedef struct {
     float x_prev;       // previous-tick plant rate (finite-difference derivative)
     float xdot_f;       // LPF'd plant-rate derivative (angular-accel estimate)
     float e_dot;        // tracking-error derivative (xdot_f - xm_dot)
+
+    // WP-27 variants
+    float r_buf[MRAC_REF_BUF];  // V1 command delay ring (written every tick)
+    float e_int;                // 3L leaky integral of e (angle error vs model), |e_int| <= e_sat
+    uint8_t r_idx;              // V1 next write slot in r_buf
 } MRAC_AxisState_t;
+
+// Variant id per axis, rewritten every MRAC_UpdateAxis call (0 = today's law). Bits:
+// 0 V1 ref_type set, 1 V1 drive_norm, 2 V1 delay, 3 PR kappa, 4 PR crm, 5 V2 mu_sat, 6 3L lam_ang, 7 V3 rbf_on.
+#define MRAC_VID_REF_TYPE   0x01U
+#define MRAC_VID_DRIVE_NORM 0x02U
+#define MRAC_VID_DELAY      0x04U
+#define MRAC_VID_KAPPA_PR   0x08U
+#define MRAC_VID_CRM        0x10U
+#define MRAC_VID_SATAWARE   0x20U
+#define MRAC_VID_3L         0x40U
+#define MRAC_VID_RBF        0x80U
+extern uint8_t mrac_var_id[AXES];
+extern int8_t mrac_ref_type_eff[AXES];   // reference-model type each axis actually ran last tick
 
 // Main MRAC structure holding all 4 axes
 typedef struct {
@@ -313,6 +366,10 @@ extern volatile uint8_t mrac_in_phase;
 
 void MRAC_ResetWeights(void);
 void MRAC_GateStep(void);
+
+// CMD 0x1D: set one variant field on one axis (0..3). Returns 1 if applied, 0 if the field, axis or
+// value is out of range (non-finite values included). Selector writes snap the reference state.
+uint8_t MRAC_VariantParamSet(uint8_t axis, uint8_t field, float val);
 
 // ------------------------------------------------------------------------------
 // 6. Simplex fallback (mode-based freeze + fade of u_ad injection)
