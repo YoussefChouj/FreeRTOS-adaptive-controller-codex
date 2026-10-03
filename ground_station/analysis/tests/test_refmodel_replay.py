@@ -127,7 +127,9 @@ def test_drive_norm_restores_bias_learning_that_gamma_scaling_cannot():
     x = np.full(n, -0.1)                                            # standing error, like the hover rate offset
     un, gate = np.zeros(n), np.ones(n, bool)
     cfg = replace(FW_CFG["roll"], sigma=1.0)                        # leak time constant < 1 s: both runs settle
-    th = lambda **kw: replay_axis("roll", x, r, un, np.zeros(n), gate, cfg=cfg, **kw)["theta"][-1, 0]
+    def th(**kw):
+        return replay_axis("roll", x, r, un, np.zeros(n), gate, cfg=cfg, **kw)["theta"][-1, 0]
+
     flown = th(kind=0)
     fw1, fw1_g = th(kind=1), th(kind=1, gamma_scale=88.0)
     assert fw1 < 0.2 * flown                                        # P = 1/(2 bw) starves the bias weight

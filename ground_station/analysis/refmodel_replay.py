@@ -205,7 +205,7 @@ def lag_ms(ref, y, fs, max_ms=150.0):
     b = np.asarray(y, float) - np.mean(y)
     m = int(max_ms * fs / 1000.0)
     lags = np.arange(-m, m + 1)
-    cc = [np.dot(a[max(0, -l):len(a) - max(0, l)], b[max(0, l):len(b) - max(0, -l)]) for l in lags]
+    cc = [np.dot(a[max(0, -k):len(a) - max(0, k)], b[max(0, k):len(b) - max(0, -k)]) for k in lags]
     return float(lags[int(np.argmax(cc))] * 1000.0 / fs)
 
 
