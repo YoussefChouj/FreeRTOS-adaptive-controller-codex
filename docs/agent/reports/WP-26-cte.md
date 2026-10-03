@@ -3,10 +3,9 @@ Commits: 614faee cte(wp26) autotune package, excite step, autotune campaigns, op
 Gate: GATE PASS (--base main --max-lines 3000, size 1600/3000; scope 19 files, ruff 15 clean, pytest 76 passed;
   clang-tidy skipped, no C). Default --max-lines 200 cannot hold briefs A-D (same as WP-10).
 Verification (laptop, this run):
-- pytest -q ground_station/autotune + service tests scenario_schema, excite_step (new), fly_scenario, runner, fake_drone,
-  campaign_schema/live/outputs, wfb_e2e -> all pass. test_workflow_b_e2e::test_go_allow_agent_arm_false FAILS (status stays
-  "running" after 10 s). Its campaign has no abort/excite, so my code cannot reach that path; I believe it predates this WP.
-  NOT proven: the main-baseline run (checkout / worktree) was denied.
+- pytest -q ground_station/autotune + service scenario_schema, excite_step (new), fly_scenario, runner, fake_drone,
+  campaign_schema/live/outputs, wfb_e2e -> 234 passed. FAILS: test_workflow_b_e2e::test_go_allow_agent_arm_false (stays
+  "running"); its campaign has no abort/excite, so likely pre-existing, NOT proven (main-baseline run was denied).
 - python -m ground_station.autotune.synth <dir>; python -m ground_station.autotune.cli <dir> --axis roll -> prints the proposal:
   synthetic plant k 8.5 / tau 30 ms / delay 10 ms fitted as 7.77 / 33.0 / 13.1 ms (residual 0.06). Proposes gyroxPID.Kp 5 -> 4,
   Kd 10 -> 12.5 (cmd 0x01 idx 9/11), PM 39.0 -> 50.6 deg. Writes autotune_roll_rate.json.
@@ -34,11 +33,8 @@ Firmware: none needed. MRAC injection is CMD 0x0F idx 10 (send_data.c:1779). Sys
 Risks to flag:
 - The start re-zeroes the OF origin and loc setpoints (send_data.c:1848-1865), so the fence shifts by the drift at start.
   Only the 0.15 m pre-check and the hold before it bound this.
-- The 0x03 frame cannot go in a log_plan (groups are subscribe symbols only). wifi_bridge.py:1918-1943 decodes 0x03 with an old
-  layout, so over WiFi id.* is wrong. The cli therefore uses the core streams at 100 Hz plus a rebuilt dither, aligned by
-  correlation. It uses id.* only when a serial-bridge log has it. Fix for the decoder (outside scope): reuse serial_bridge.
-- Any CMD 0x14 start is reported "applied", even when SysID_Start refuses it, so the runner cannot see the refusal. The cli
-  then reports "no multisine found".
-- MRAC injection stays off after these campaigns. The operator must re-enable it. The hover-RMS verify rule is noisy: a 6 s
-  synthetic window varied +-10 % by seed, so the holds are 15 s.
+- The 0x03 frame cannot go in a log_plan (groups are subscribe symbols only), and wifi_bridge.py:1918-1943 decodes it with an
+  old layout. So the cli uses the 100 Hz core streams plus a rebuilt dither; it uses id.* only from serial-bridge logs.
+- A CMD 0x14 start reads "applied" even if SysID_Start refuses it; the cli then says "no multisine found". MRAC injection
+  stays off after these campaigns (re-enable it). Hover-RMS verify is noisy (6 s window +-10 % by seed), hence 15 s holds.
 - All amplitudes, bands, thresholds and tolerances are PROPOSED. None were measured on the airframe.
