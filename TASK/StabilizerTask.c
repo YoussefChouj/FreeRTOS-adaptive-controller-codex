@@ -167,7 +167,7 @@ float g_of_bias_ema_tau_s = OF_BIAS_EMA_TAU_DEFAULT; /* EMA time constant (s) */
  * per axis on the 5 pinned logs and gets k_x 0.20..0.38, k_y 0.18..0.36 (all > 0) with these signs;
  * SIGN_Y = -1 gave k_y -0.18..-0.36 on every log. */
 #define EKF_OF_UPDATE_ON_NEW_FRAME 1U /* 1 = feed each OF frame once (detected by ano_of.of_update_cnt changing), 0 = legacy every tick */
-/* WP-21 A: full-tilt OF correction, default OFF.  OF deltas are body-frame (sensor plane);
+/* WP-21 A: full-tilt OF correction, default ON since 2026-10-03 (flown in flight_test_roaming_and_landing_2..4).  OF deltas are body-frame (sensor plane);
  * when tilted, climb/sink leaks into them (first order: v_level ~= v_body + SIGN*GB*v_up).
  * 1 = rotate each body delta to the level frame before the yaw rotation:
  *   n = (-SIGN_X*GBX, -SIGN_Y*GBY, n3) = up axis in OF axes, n3 = sqrt(1 - n1^2 - n2^2)
@@ -177,7 +177,7 @@ float g_of_bias_ema_tau_s = OF_BIAS_EMA_TAU_DEFAULT; /* EMA time constant (s) */
  * tilt (n3 < 0.5).  SIGN UNCONFIRMED: auto_landing_1 regression was inconclusive.  Before
  * flying with it, handheld test (CMD 0x1E idx=3): tilt ~10 deg on one axis, move straight
  * up/down ~50 cm; locx/locyPID.FB must stay flatter with the flag on than off. */
-volatile uint8_t g_of_full_tilt = 0U;
+volatile uint8_t g_of_full_tilt = 1U;
 /* Rotate one tick's body OF delta (*dx, *dy) to the level frame in place; dh_up is the same
  * tick's height change in the same units (cm/tick here).  See g_of_full_tilt above. */
 static void of_full_tilt_delta(float *dx, float *dy, float dh_up)
