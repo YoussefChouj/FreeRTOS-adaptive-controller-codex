@@ -15,6 +15,8 @@ PRIM_IDLE = 0
 PRIM_HOVER = 2
 PRIM_DESCEND = 6
 TRAJ_DONE = 4
+# cooldown passed to the pack gate for a pack that has not flown in this campaign: any min_rest_s passes
+PACK_RESTED_S = 1e6
 
 class RunnerControl:
     def __init__(self):
@@ -79,6 +81,8 @@ class RunnerDeps:
     # end_capture stops it and returns the session dir (FlightRecord.recording)
     begin_capture: Callable[[Any, str], Any] = lambda exp, flight_id: None
     end_capture: Callable[[Any], str] = lambda token: ""
+    # what the runner is doing right now, one line (campaign_state "phase"): the agent reads a wait from one call
+    on_phase: Callable[[str], None] = lambda text: None
 
 def default_diff_source(repo_root: str, lkg_commit: str, c_files: tuple[str, ...]) -> str:
     if not c_files:
@@ -253,6 +257,9 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
             
     flights = []
     last_landing_t = deps.clock()
+    # pack gate rest is per pack and only after that pack flew: a fresh pack is rested (before WP-23 the first
+    # flight waited min_rest_s after Go with the drone RC-armed on the pad)
+    pack_landed_t: dict[str, float] = {}
     last_duration = 0.0
     fw_hash = ""
     has_flashed = False
@@ -281,37 +288,48 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
         # 1. wait_for_go (fly mode: once per pack, again only after a failed auto-next check)
         need_go = need_go or not fly or pack_id != prev_pack
         prev_pack = pack_id
+        if need_go:
+            deps.on_phase(f"waiting for go: pack {pack_id}, flight {i + 1}/{n_flights}")
         if need_go and not deps.wait_for_go(pack_id):
             report = _control_report(deps, campaign, flights)
             if report:
                 return report
-            return CampaignReport(campaign, flights, "operator_stop", "")
-            
+            return CampaignReport(campaign, flights, "operator_stop", "go wait ended without a go")
+
         # 2. Cooldown
         target_elapsed = deps.cooldown_min_s if fly else max(last_duration, deps.cooldown_min_s)
         cooldown_max_ticks = math.ceil(target_elapsed / deps.dt_s) + max_ticks
-        
+
         ticks = 0
+        if deps.clock() - last_landing_t < target_elapsed:
+            deps.on_phase(f"motor cooldown {target_elapsed:.0f} s before flight {i + 1}/{n_flights}")
         while deps.clock() - last_landing_t < target_elapsed and ticks < cooldown_max_ticks:
             deps.sleep(deps.dt_s)
             ticks += 1
-            
+
         if deps.clock() - last_landing_t < target_elapsed:
-            return CampaignReport(campaign, flights, "operator_needed", "cooldown not reached")
-            
+            return CampaignReport(campaign, flights, "operator_needed",
+                                  f"cooldown: {deps.clock() - last_landing_t:.1f} s since landing < {target_elapsed:.1f} s")
+
         ticks = 0
         allowed = False
         reason = ""
         while ticks < max_ticks:
-            elapsed = deps.clock() - last_landing_t
-            allowed, reason = deps.packs.next_flight_allowed(pack_id, deps.resting_v(pack_id), elapsed)
+            elapsed = deps.clock() - pack_landed_t[pack_id] if pack_id in pack_landed_t else PACK_RESTED_S
+            try:
+                v = deps.resting_v(pack_id)
+            except Exception as exc:  # live: battery voltage not streaming
+                return CampaignReport(campaign, flights, "operator_needed", f"battery: {exc}")
+            allowed, reason = deps.packs.next_flight_allowed(pack_id, v, elapsed)
             if allowed:
                 break
+            shown_v = round(v, 2) if isinstance(v, (int, float)) else v
+            deps.on_phase(f"pack gate {pack_id} (resting {shown_v} V): {reason}; waiting")
             deps.sleep(deps.dt_s)
             ticks += 1
-            
+
         if not allowed:
-            return CampaignReport(campaign, flights, "operator_needed", reason)
+            return CampaignReport(campaign, flights, "operator_needed", f"pack {pack_id}: {reason}")
             
         # 3. Code change (tune mode only)
         just = deps.change_request() if not fly else None
@@ -332,8 +350,9 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
         hover_only = deps.gate.next_flight_must_hover() if not fly else False
         
         # 5. arm_allowed
+        deps.on_phase(f"stream check before flight {i + 1}/{n_flights}")
         if not deps.arm_allowed():
-            return CampaignReport(campaign, flights, "arm_refused", "")
+            return CampaignReport(campaign, flights, "arm_refused", "stream check failed before takeoff")
             
         # 6. Flight
         params = deps.tuner.propose(history) if not fly else {}
@@ -345,6 +364,7 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
         except Exception as exc:  # no log plan on the stream: do not fly unlogged
             return CampaignReport(campaign, flights, "operator_needed", f"capture: {exc}")
         deps.monitor.begin_flight()
+        deps.on_phase(f"flying flight {i + 1}/{n_flights}: {exp.name}")
         flight_start_time = deps.clock()
         try:
             outcome = fly_scenario(exp.scenario, deps, hover_only)
@@ -353,7 +373,7 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
         aborted, decision, landed = outcome.aborted, outcome.decision, outcome.landed
 
         deps.monitor.end_flight()
-        last_landing_t = deps.clock()
+        last_landing_t = pack_landed_t[pack_id] = deps.clock()
         last_duration = last_landing_t - flight_start_time
         
         # 8. Analyze
@@ -425,6 +445,7 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
         # 11. Auto-next (fly mode): wait on the ground, post a 3-line result, fly on only if every check passes
         if fly:
             nxt = queue[i + 1] if i + 1 < n_flights else None
+            deps.on_phase(f"on the ground after flight {i + 1}/{n_flights}: auto-next check")
             ok, why = _auto_next(deps, outcome)
             report = _control_report(deps, campaign, flights)
             if report:

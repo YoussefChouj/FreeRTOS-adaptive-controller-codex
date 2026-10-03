@@ -36,6 +36,7 @@ class TestAllPanelsAudit(unittest.TestCase):
             [node, str(HARNESS)],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=120,
             cwd=str(Path(__file__).resolve().parents[3]),
         )

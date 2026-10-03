@@ -11,10 +11,11 @@ import queue
 import threading
 import time
 import tracemalloc
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
 
+from .instance_guard import INSTANCE_HEADER, INSTANCE_ID, ExclusiveThreadingHTTPServer
 from .agent import (
     AgentDisabledError,
     AgentManager,
@@ -480,7 +481,10 @@ _ROUTE_MAP = {
         "/api/agent/state": "one agent-facing snapshot {control, ui, recording, layout, arm_state, stream_health, running_plan, pending_approvals, last_messages}",
         "/api/agent/history": "always-on activity journal ?since=&limit=&kind=&source= - {entries: [{seq,t,iso,kind,source,actor,data}]}",
         "/api/flight_tests": "list flight-test runs (GET ?date=YYYY-MM-DD)",
-        "/api/campaign/state": "campaign runner state {status, waiting_pack, campaign_path, reason, flights, control}",
+        "/api/campaign/state": "campaign runner state {status, banner, phase, total_flights, waiting_pack, campaign_path, reason, flights, control, arm_refusal, outputs_dir}",
+        "/api/campaign/preflight": "every workflow B launch check ?campaign=<launch yaml>&pack=<id> - {ok, instance, checks: [{name, value, pass, fix}]} (pass null = check by the operator checklist)",
+        "/api/campaign/vitals": "position, RC link + switches, arm sources, battery, g_wfb_status, build id and per-slot stream freshness in one read",
+        "/api/campaign/list": "saved campaigns, launch copies (newest first) and pack ids {saved, launch, packs}",
         # Both of these block; test_http_api_routes_endpoint cannot GET them,
         # which is why they sat undeclared -- an agent reading this map would
         # conclude the service had no push channel at all.
@@ -1201,6 +1205,7 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
+            self.send_header(INSTANCE_HEADER, INSTANCE_ID)  # lets the MCP server spot an 8081 restart
             self.end_headers()
             self.wfile.write(body)
         def _paging(self, default_limit: int) -> tuple[int | None, int]:
@@ -1225,6 +1230,8 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
+            # the browser revalidates every shell/plugin file, so a service change never runs stale plugin JS
+            self.send_header("Cache-Control", "no-cache, must-revalidate")
             self.end_headers()
             self.wfile.write(body)
 
@@ -1414,6 +1421,22 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     self._json(503, {"error": "campaign runner unavailable"})
                     return
                 self._json(200, campaign.state())
+            elif route == "/api/campaign/preflight":
+                from ground_station.service.campaign_preflight import run_preflight
+                qs = parse_qs(urlsplit(self.path).query)
+                try:
+                    res = run_preflight(service, campaign, qs.get("campaign", [None])[0] or None,
+                                        qs.get("pack", [None])[0] or None)
+                except Exception as exc:  # noqa: BLE001 - a broken check must still answer
+                    self._json(500, {"ok": False, "error": f"preflight failed: {type(exc).__name__}: {exc}"})
+                    return
+                self._json(200, res)
+            elif route == "/api/campaign/vitals":
+                from ground_station.service.campaign_preflight import vitals
+                self._json(200, vitals(service))
+            elif route == "/api/campaign/list":
+                from ground_station.service.campaign_launch import list_campaigns
+                self._json(200, list_campaigns())
             elif route.startswith("/api/paths/"):
                 import ground_station.service.path_library as pl
                 path_id = route.split("/")[-1]
@@ -2666,7 +2689,7 @@ class ApiServer:
         # tracks the live service state.
         service.add_listener(self.hub.publish)
         self._stop_event = threading.Event()
-        self.server = ThreadingHTTPServer(
+        self.server = ExclusiveThreadingHTTPServer(
             (host, port),
             make_handler(service, hub=self.hub, static_root=static_root,
                          experiment_runtime=experiment_runtime,

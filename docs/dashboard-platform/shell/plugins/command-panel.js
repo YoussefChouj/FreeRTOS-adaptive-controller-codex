@@ -430,6 +430,13 @@
       color = 'var(--red)'; bg = 'rgba(233,69,96,0.15)';
       icon = '\u26A0'; text = 'SAFETY INTERLOCK';
       if (detail) text += ': ' + detail;
+    } else if (status === 'pending_confirm') {
+      color = 'var(--amber)'; bg = 'rgba(245,166,35,0.1)';
+      icon = '?'; text = detail || 'Click again to confirm';
+    } else if (status === 'refused') {
+      color = 'var(--red)'; bg = 'rgba(233,69,96,0.1)';
+      icon = '\u2717'; text = 'NOT SENT';
+      if (detail) text += ': ' + detail;
     } else {
       color = 'var(--muted)'; bg = 'var(--bg)';
       icon = ''; text = '—';
@@ -468,6 +475,32 @@
         warnEl.innerHTML = '';
       }
     }
+  }
+
+  // ── Two-click confirm (WP-23) ────────────────────────────────────────────
+  // A browser can block window.confirm, and then the click silently did nothing. The first click turns the
+  // button into "Confirm <action>?" for CONFIRM_MS and says why in the result box; a second click inside
+  // that window runs the action. Refusals go to the result box too, never to an alert box.
+  var CONFIRM_MS = 5000;
+  function twoClick(btn, action, why, run, say) {
+    if (!btn) { run(); return; }
+    if (btn._cpConfirmUntil && Date.now() < btn._cpConfirmUntil) {
+      clearTimeout(btn._cpConfirmTimer);
+      btn._cpConfirmUntil = 0;
+      btn.innerHTML = btn._cpConfirmLabel;
+      run();
+      return;
+    }
+    btn._cpConfirmLabel = btn.innerHTML;
+    btn._cpConfirmUntil = Date.now() + CONFIRM_MS;
+    btn.textContent = 'Confirm ' + action + '?';
+    var text = why + ' Click "Confirm ' + action + '?" within 5 s.';
+    if (typeof say === 'function') say(text);
+    else setResultStatus('pending_confirm', text);
+    btn._cpConfirmTimer = setTimeout(function () {
+      btn._cpConfirmUntil = 0;
+      btn.innerHTML = btn._cpConfirmLabel;
+    }, CONFIRM_MS);
   }
 
   // ── Command Submission ───────────────────────────────────────────────────
@@ -854,10 +887,12 @@
         if (def && def.needsDisarm) {
           var arm = armStatusFromState(_state);
           if (arm.armed) {
-            alert('Cannot reset EKF while drone is ARMED. Disarm first.');
+            setResultStatus('refused', 'cannot reset EKF while the drone is ARMED. Disarm first.');
             return;
           }
-          if (!confirm('Reset EKF now? This will reinitialize attitude and position estimates.')) return;
+          twoClick(btn, 'EKF reset', 'Reset EKF now? This reinitializes attitude and position estimates.',
+                   function () { submitCommand(cmdId, idx, val); });
+          return;
         }
         submitCommand(cmdId, idx, val);
       });
@@ -1004,15 +1039,21 @@
     var offBtn = q('cp-bench-off');
     if (!onBtn) return;
     onBtn.addEventListener('click', function () {
-      if (!confirm('Enable Bench Mode?\n\nMotors will become controllable from the dashboard.\nMake sure propellers are REMOVED.')) return;
-      var arm = armStatusFromState(_state);
-      if (arm.armed) {
-        alert('Cannot enable Bench Mode while ARMED.');
+      if (armStatusFromState(_state).armed) {
+        setResultStatus('refused', 'cannot enable Bench Mode while ARMED.');
         return;
       }
-      submitCommand(0x07, 0, 1);
-      var pill = q('cp-bench-state');
-      if (pill) pill.innerHTML = '<span style="color:var(--amber)">\u25CF Bench Mode: REQUEST ON</span>';
+      twoClick(onBtn, 'Bench Mode',
+               'Enable Bench Mode? Motors become controllable from the dashboard. Make sure propellers are REMOVED.',
+               function () {
+                 if (armStatusFromState(_state).armed) {
+                   setResultStatus('refused', 'cannot enable Bench Mode while ARMED.');
+                   return;
+                 }
+                 submitCommand(0x07, 0, 1);
+                 var pill = q('cp-bench-state');
+                 if (pill) pill.innerHTML = '<span style="color:var(--amber)">\u25CF Bench Mode: REQUEST ON</span>';
+               });
     });
     offBtn.addEventListener('click', function () {
       submitCommand(0x07, 0, 0);
@@ -1071,11 +1112,13 @@
         var def = NAV_PATHS.filter(function (p) { return p.id === id; })[0];
         if (!def) return;
         var arm = armStatusFromState(_state);
-        if (!arm.sdk) {
-          if (!confirm('Drone is not in SDK mode. Issue this navigation command anyway?')) return;
-        }
         var idx = (act === 'start') ? def.startIndex : def.stopIndex;
         var val = (act === 'start') ? def.startValue : def.stopValue;
+        if (!arm.sdk) {
+          twoClick(btn, def.name + ' ' + act, 'Drone is not in SDK mode. Issue this navigation command anyway?',
+                   function () { submitCommand(def.cmdId, idx, val); });
+          return;
+        }
         submitCommand(def.cmdId, idx, val);
       });
     });
@@ -1255,13 +1298,6 @@
     el.style.display = isHidden ? '' : 'none';
     _els.historyToggle.textContent = isHidden ? 'Hide History' : 'Show History';
     try { localStorage.setItem('gs_cmd_hist_visible', isHidden ? '1' : '0'); } catch (_) {}
-  }
-
-  function clearHistory() {
-    if (!confirm('Clear command history?')) return;
-    _history = [];
-    saveHistory();
-    renderHistory();
   }
 
   // ── Build HTML ───────────────────────────────────────────────────────────
@@ -2148,18 +2184,21 @@
         var symbols = Object.keys(map).map(function (k) { return map[k]; });
         if (!resultEl) return;
         // Slot 3 is reused as-is: whatever it streams now is replaced.
-        if (!window.confirm('Subscribe ' + symbols.length + ' flag symbols on slot 3?\n' +
-                            'This replaces anything slot 3 is streaming now.')) return;
-        resultEl.innerHTML = 'Subscribing ' + symbols.length + ' flag symbols on slot 3...';
-        if (_api && typeof _api.subscribeSlot === 'function') {
-          _api.subscribeSlot(3, 20, symbols).then(function () {
-            resultEl.innerHTML = '<span style="color:var(--green)">Flag state published to slot 3 (subscribe sent).</span>';
-          }).catch(function (err) {
-            resultEl.innerHTML = '<span style="color:var(--red)">Publish failed: ' + escapeHtml(err && err.message ? err.message : String(err)) + '</span>';
-          });
-        } else {
-          resultEl.innerHTML = '<span style="color:var(--red)">shellApi.subscribeSlot unavailable.</span>';
-        }
+        twoClick(publishBtn, 'publish',
+          'Subscribe ' + symbols.length + ' flag symbols on slot 3? This replaces anything slot 3 is streaming now.',
+          function () {
+            resultEl.innerHTML = 'Subscribing ' + symbols.length + ' flag symbols on slot 3...';
+            if (_api && typeof _api.subscribeSlot === 'function') {
+              _api.subscribeSlot(3, 20, symbols).then(function () {
+                resultEl.innerHTML = '<span style="color:var(--green)">Flag state published to slot 3 (subscribe sent).</span>';
+              }).catch(function (err) {
+                resultEl.innerHTML = '<span style="color:var(--red)">Publish failed: ' + escapeHtml(err && err.message ? err.message : String(err)) + '</span>';
+              });
+            } else {
+              resultEl.innerHTML = '<span style="color:var(--red)">shellApi.subscribeSlot unavailable.</span>';
+            }
+          },
+          function (text) { resultEl.innerHTML = '<span style="color:var(--amber)">' + escapeHtml(text) + '</span>'; });
       });
     }
   }

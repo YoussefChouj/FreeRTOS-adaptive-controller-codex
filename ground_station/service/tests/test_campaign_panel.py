@@ -28,7 +28,7 @@ class TestCampaignPanel(unittest.TestCase):
         )
         self.assertIn("ALL CHECKS PASSED", proc.stdout)
 
-        tags = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l']
+        tags = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'r']
         lines = proc.stdout.splitlines()
         for tag in tags:
             self.assertTrue(any(line.startswith(tag + " ") for line in lines), "Missing check tag: " + tag)

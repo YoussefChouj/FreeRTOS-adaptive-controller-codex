@@ -831,11 +831,13 @@ function runChecks() {
 
     // Handler: sync thenable submit stub records calls.
     const sent = [];
-    let nextId = 1, confirms = 0;
+    let nextId = 1, dialogs = 0;
     env.api.submitCommand = (c, i, v) => { sent.push([c, i, v]); const id = nextId++; return { then(ok) { ok({ transaction_id: id }); } }; };
-    env.sandbox.confirm = () => { confirms++; return true; };
+    // WP-23: no browser dialog (a blocked window.confirm made Execute silently do nothing); two clicks instead
+    env.sandbox.confirm = () => { dialogs++; return true; };
     env.doc.getElementById('pp-preset-kind').value = 'circle';
     const status = () => env.doc.getElementById('pp-exec-status').textContent;
+    const goBtn = env.doc.getElementById('pp-exec-go');
     env.click('pp-exec-go');
     assert.strictEqual(sent.length, 0, 'no SDK -> nothing sent');
     assert.ok(/not SDK/.test(status()), 'status: ' + status());
@@ -843,7 +845,12 @@ function runChecks() {
     env.feed(sdk());
     assert.strictEqual(T.getSdk(), 1, 'sdk seen');
     env.click('pp-exec-go');
-    assert.strictEqual(confirms, 1, 'confirm asked');
+    assert.strictEqual(sent.length, 0, 'first click only asks');
+    assert.ok(/Confirm execute circle\?/.test(goBtn.textContent), 'button asks: ' + goBtn.textContent);
+    assert.ok(/Send circle to the drone\?/.test(status()), 'status explains: ' + status());
+    env.click('pp-exec-go');
+    assert.strictEqual(dialogs, 0, 'no window.confirm');
+    assert.ok(!/Confirm/.test(goBtn.textContent), 'label restored: ' + goBtn.textContent);
     assert.strictEqual(sent.length, 1, 'first step only before its result');
     for (let k = 1; k <= 7; k++) env.feed(sdk({ last_transaction_result: { transaction_id: k, status: 'applied' } }));
     assert.strictEqual(sent.length, 7, 'all 7 sent: ' + sent.length);
@@ -851,6 +858,7 @@ function runChecks() {
     assert.ok(/all 7 commands applied/.test(status()), status());
     // Reject mid-sequence: active=1 never sent.
     sent.length = 0;
+    env.click('pp-exec-go');
     env.click('pp-exec-go');
     env.feed(sdk({ command_results: [{ transaction_id: 8, status: 'applied' }] }));
     env.feed(sdk({ command_results: [{ transaction_id: 9, status: 'rejected', reason: 'interlock' }] }));

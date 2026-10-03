@@ -39,7 +39,7 @@ class TestVendorFiles(unittest.TestCase):
     def test_version_file_exists(self):
         f = VENDOR_THREE / 'VERSION.txt'
         self.assertTrue(f.exists(), 'VERSION.txt not found')
-        content = f.read_text()
+        content = f.read_text(encoding="utf-8")
         self.assertIn('0.160', content, 'VERSION.txt must mention v0.160.x')
 
     def test_vendor_is_clean_no_unsupported_addons(self):
@@ -65,14 +65,14 @@ class TestMimeTypes(unittest.TestCase):
         self.assertEqual(mime_oc, 'application/javascript')
 
     def test_three_module_valid_esm(self):
-        src = (VENDOR_THREE / 'three.module.min.js').read_text()
+        src = (VENDOR_THREE / 'three.module.min.js').read_text(encoding="utf-8")
         self.assertIn('export', src)
         self.assertIn('Scene', src)
         self.assertIn('Camera', src)
         self.assertIn('WebGLRenderer', src)
 
     def test_orbit_controls_exports(self):
-        src = (VENDOR_THREE / 'OrbitControls.js').read_text()
+        src = (VENDOR_THREE / 'OrbitControls.js').read_text(encoding="utf-8")
         self.assertIn('export { OrbitControls }', src)
         self.assertIn('three.module.min.js', src)
 
@@ -80,7 +80,7 @@ class TestMimeTypes(unittest.TestCase):
 class TestPathPanel3D(unittest.TestCase):
     def setUp(self):
         self.panel_path = SHELL_DIR / 'plugins' / 'path-panel.js'
-        self.content = self.panel_path.read_text()
+        self.content = self.panel_path.read_text(encoding="utf-8")
 
     def test_3d_toggle_exists(self):
         self.assertIn('pp-view-2d', self.content)
