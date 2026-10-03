@@ -115,6 +115,8 @@ class ServiceState:
     adapter_version: str = ADAPTER_PROTOCOL_VERSION
     telemetry_schema_id: str | None = None
     slot_freshness_ttl_ns: int = 30 * 1_000_000_000
+    # WP-22: {slot: reason} for subscribe slots whose data is not fully named (recorder would drop it).
+    stream_naming_faults: dict[str, str] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -422,6 +424,15 @@ class GroundStationService:
             "slots": slots,
             "slot_request_states": dict(slot_states),
         }
+
+    def stream_naming_faults(self) -> dict[str, str]:
+        """``{slot: reason}`` for subscribe slots whose data is not fully named (WP-22); empty when all are."""
+        status = getattr(getattr(self, "bridge", None), "stream_naming_status", None)
+        try:
+            faults = status() if callable(status) else {}
+        except Exception:
+            return {}
+        return {str(k): str(v) for k, v in faults.items()} if isinstance(faults, dict) else {}
 
     def _manifest_context(self) -> dict[str, Any]:
         """Static manifest context: service commit + firmware ELF info.
@@ -1211,6 +1222,7 @@ class GroundStationService:
 
     def snapshot(self) -> ServiceState:
         self._maybe_log_stream_health()
+        naming_faults = self.stream_naming_faults()   # bridge lock, taken outside _state_lock
         with self._state_lock:
             # Evict slots whose last_update_ns is older than the freshness
             # TTL. The TTL lives on the adapter so future callers that
@@ -1244,6 +1256,7 @@ class GroundStationService:
                 adapter_version=ADAPTER_PROTOCOL_VERSION,
                 telemetry_schema_id=self.schema.schema_id,
                 slot_freshness_ttl_ns=self.adapter.freshness_ttl_ns,
+                stream_naming_faults=naming_faults,
             )
 
     # ---- backwards-compat shims ----------------------------------------

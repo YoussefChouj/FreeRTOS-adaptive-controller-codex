@@ -112,7 +112,6 @@ class _ResolverCache:
     def __init__(self, factory: Optional[Callable[[], Any]] = None):
         self._factory = factory
         self._resolver = None
-        self._mtime = None
         self._lock = threading.RLock()
 
     def get(self):
@@ -121,14 +120,9 @@ class _ResolverCache:
                 if self._resolver is None:
                     self._resolver = self._factory()
                 return self._resolver
-        from ground_station.livewatch.symbols import SymbolResolver
+        from ground_station.livewatch.symbols import shared_resolver
         from ground_station.vofa_studio import core as vcore
-        mtime = vcore.ELF.stat().st_mtime
-        with self._lock:
-            if self._resolver is None or mtime != self._mtime:
-                self._resolver = SymbolResolver(str(vcore.ELF))
-                self._mtime = mtime
-            return self._resolver
+        return shared_resolver(vcore.ELF)       # one resolver for the whole service (WP-22)
 
 
 # ---------------------------------------------------------------- logger

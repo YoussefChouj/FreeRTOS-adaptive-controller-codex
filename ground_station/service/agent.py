@@ -1300,6 +1300,8 @@ class AgentManager:
             "layout": layout,
             "arm_state": service.arm_state(),
             "stream_health": (getattr(snap, "last_update_ns", None) is not None),
+            # WP-22: {slot: reason} for streams the recorder cannot name (empty = all named).
+            "stream_naming_faults": dict(getattr(snap, "stream_naming_faults", None) or {}),
             "running_plan": running_detail,
             "pending_approvals": approvals,
             "last_messages": self.notes.recent(NOTES_RECENT),

@@ -564,27 +564,27 @@ def _service_symbol_resolver(service):
     """
     global _own_symbol_resolver, _own_symbol_resolver_error
     bridge = getattr(service, "bridge", None)
+    if bridge is not None:
+        ensure = getattr(bridge, "_ensure_preset_resolver", None)
+        if callable(ensure):
+            try:
+                ensure()        # reloads after a reflash (WP-22)
+            except Exception:
+                pass
     resolver = getattr(bridge, "_preset_resolver", None) if bridge is not None else None
     if resolver is not None:
         return resolver, None
-        
+
     try:
         elf_path = Path(__file__).parents[2] / "OBJ" / "JX_FLY.axf"
         if not elf_path.exists():
             return None, f"firmware ELF not found at {elf_path}"
-            
-        current_mtime = elf_path.stat().st_mtime
-        last_mtime = globals().get("_own_symbol_resolver_mtime", 0)
-        
-        if _own_symbol_resolver is None or last_mtime != current_mtime:
-            from ground_station.livewatch.symbols import SymbolResolver
-            _own_symbol_resolver = SymbolResolver(str(elf_path))
-            globals()["_own_symbol_resolver_mtime"] = current_mtime
-            _own_symbol_resolver_error = None
-            
+        from ground_station.livewatch.symbols import shared_resolver
+        _own_symbol_resolver = shared_resolver(elf_path)
+        _own_symbol_resolver_error = None
     except Exception as exc:  # surfaced verbatim in the 503 payload
         _own_symbol_resolver_error = str(exc)
-        
+
     if _own_symbol_resolver is not None:
         return _own_symbol_resolver, None
     return None, _own_symbol_resolver_error
@@ -1887,6 +1887,7 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     "last_update_ns": snap.last_update_ns,
                     "slot_freshness_ttl_ns": getattr(snap, "slot_freshness_ttl_ns", ttl_ns),
                     "slots": slot_freshness,
+                    "stream_naming_faults": dict(getattr(snap, "stream_naming_faults", None) or {}),
                     "request_states": request_states,
                     "last_transaction_result": snap.last_transaction_result,
                     "command_results": list(snap.command_results) if snap.command_results else [],

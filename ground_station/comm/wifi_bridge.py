@@ -68,6 +68,7 @@ import struct
 import sys
 import threading
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -168,6 +169,33 @@ _FRAME_A_TAIL = b"\x00\x00\x80\x7f"
 
 def _rpm_scalar_keys(rpm_list: list) -> dict:
     return {f"motor.rpm_{i}": int(rpm_list[i]) for i in range(len(rpm_list))}
+
+
+_AXF_PATH = Path(__file__).parents[2] / "OBJ" / "JX_FLY.axf"
+
+
+def _axf_key() -> Optional[tuple]:
+    """(mtime_ns, size) of the current axf, or None: the firmware the GS resolves names against."""
+    from ground_station.livewatch.symbols import firmware_key
+    return firmware_key(_AXF_PATH)
+
+
+@dataclass
+class _SlotNaming:
+    """Per-slot state that lets a running bridge survive a reflash or FC reboot (WP-22).
+
+    The 0x08 reply carries only addresses, so a slot is named only if the GS asked for exactly those addresses.
+    Keeping the NAMES of each request (not just its bytes) lets the bridge rebuild it against the current axf.
+    """
+    rebuild: Dict[int, Any] = field(default_factory=dict)       # slot -> callable that re-sends the request by name
+    names: Dict[int, tuple] = field(default_factory=dict)       # slot -> DWARF names last requested
+    fw_key: Dict[int, Optional[tuple]] = field(default_factory=dict)  # slot -> axf key the request was built with
+    cleared: set = field(default_factory=set)                   # slots the GS stopped (divider 0) on purpose
+    faults: Dict[int, str] = field(default_factory=dict)        # slot -> why its stream is not fully named
+    heal_at: Dict[int, float] = field(default_factory=dict)
+    heal_count: Dict[int, int] = field(default_factory=dict)
+    axf_key: Optional[tuple] = None
+    axf_checked: float = float("-inf")
 
 
 class WifiBridge:
@@ -443,6 +471,13 @@ class WifiBridge:
                     self._slot_states[slot] = "stale"
                 last_resend = self._last_slot_resend.get(slot, float('-inf'))
                 if now - last_resend >= self._SLOT_RESEND_EVERY_S:
+                    if self._request_is_stale(slot):
+                        # The cached bytes point at the old firmware's addresses: re-sending them would stream
+                        # the wrong memory under the right names. Rebuild the request by name instead (WP-22).
+                        self._last_slot_resend[slot] = now
+                        if self._heal_slot(slot, f"silent {now - last_rx:.1f}s after an axf change"):
+                            resent.append(slot)
+                        continue
                     try:
                         self._wifi_send.sendto(req_bytes, (self._wifi_host, self._wifi_port))
                     except OSError as e:
@@ -462,6 +497,8 @@ class WifiBridge:
         rate_hz, req_bytes, ranges = self._slot_requests[slot]
         if rate_hz <= 0:
             return False
+        if self._request_is_stale(slot):
+            return self._heal_slot(slot, "resend asked for after an axf change")
         try:
             self._wifi_send.sendto(req_bytes, (self._wifi_host, self._wifi_port))
         except OSError as e:
@@ -479,6 +516,7 @@ class WifiBridge:
         Called on the RX thread for every non-subscribe frame. The request
         resolves DWARF symbols, so it runs on its own thread.
         """
+        self._note_axf_change()
         self._check_slot_watchdog()
         layout = self._resubscribe_layout
         if layout is None:
@@ -499,6 +537,149 @@ class WifiBridge:
             return
         threading.Thread(target=self._request_slot0_schema, args=(layout,),
                          name="wifi_bridge_resubscribe", daemon=True).start()
+
+    # -- WP-22: survive a reflash / FC reboot without restarting 8081 -------
+
+    _HEAL_EVERY_S = 5.0
+    _HEAL_MAX = 3
+
+    def _naming(self) -> _SlotNaming:
+        """Lazily created, so bridges built with ``__new__`` (unit tests) work too."""
+        nm = self.__dict__.get("_naming_state")
+        if nm is None:
+            nm = self.__dict__["_naming_state"] = _SlotNaming()
+        return nm
+
+    def _remember_request(self, slot: int, divider: int, names, rebuild) -> None:
+        """Record what the GS asked for on ``slot`` so it can be rebuilt by name later."""
+        nm = self._naming()
+        if divider and rebuild is not None:
+            nm.rebuild[slot] = rebuild
+            nm.names[slot] = tuple(names)
+            nm.fw_key[slot] = _axf_key()
+            nm.cleared.discard(slot)
+            return
+        for d in (nm.rebuild, nm.names, nm.fw_key, nm.faults, nm.heal_count):
+            d.pop(slot, None)
+        if divider:
+            nm.cleared.discard(slot)        # raw StreamRange request: nothing to rebuild from
+        else:
+            nm.cleared.add(slot)
+
+    def _request_is_stale(self, slot: int) -> bool:
+        """True when ``slot``'s cached request was built against an older axf and can be rebuilt by name."""
+        nm = self._naming()
+        return slot in nm.rebuild and nm.fw_key.get(slot) != _axf_key()
+
+    def _resolvable(self, names) -> list:
+        """The names the current axf still has; dropped ones are logged, not silently lost."""
+        self._ensure_preset_resolver()
+        resolver = getattr(self, "_preset_resolver", None)
+        if resolver is None:
+            return list(names)
+        keep, dropped = [], []
+        for name in names:
+            try:
+                resolver.resolve(name)
+                keep.append(name)
+            except Exception:
+                dropped.append(name)
+        if dropped:
+            print(f"[wifi_bridge] Warning: the current axf no longer has {dropped}; re-subscribing without them",
+                  file=sys.stderr, flush=True)
+        return keep
+
+    def _heal_slot(self, slot: int, reason: str) -> bool:
+        """Re-send ``slot``'s request by name on a thread; at most once per 5 s, 3 times until it comes back named."""
+        nm = self._naming()
+        fn = nm.rebuild.get(slot)
+        if fn is None:
+            return False
+        now = time.monotonic()
+        if now - nm.heal_at.get(slot, float("-inf")) < self._HEAL_EVERY_S:
+            return False
+        count = nm.heal_count.get(slot, 0)
+        if count >= self._HEAL_MAX:
+            return False
+        nm.heal_at[slot] = now
+        nm.heal_count[slot] = count + 1
+        print(f"[wifi_bridge] slot {slot}: {reason}; re-subscribing {len(nm.names.get(slot, ()))} names "
+              f"against the current axf (heal {count + 1}/{self._HEAL_MAX})", file=sys.stderr, flush=True)
+
+        def _run():
+            with self._stream_lock:
+                schema = self._stream_schemas.get(slot)
+            if schema is not None and all(r.name for r in schema.ranges) and not self._request_is_stale(slot):
+                return      # the real reply landed meanwhile
+            try:
+                fn()
+            except Exception as e:
+                print(f"[wifi_bridge] Warning: slot {slot} re-subscribe failed: {e}", file=sys.stderr, flush=True)
+
+        threading.Thread(target=_run, name=f"wifi_bridge_heal_{slot}", daemon=True).start()
+        return True
+
+    def _note_schema_naming(self, slot: int, divider: int, n_ranges: int, n_unnamed: int) -> None:
+        """React to a registered 0x08: clear the fault, heal a wanted slot, or re-stop a slot the GS cleared."""
+        nm = self._naming()
+        if not divider:
+            return
+        if n_unnamed == 0:
+            nm.faults.pop(slot, None)
+            nm.heal_count.pop(slot, None)
+            return
+        if slot in nm.cleared:
+            # An FC reboot brought back the firmware's boot default on a slot the GS had stopped.
+            now = time.monotonic()
+            if now - nm.heal_at.get(slot, float("-inf")) >= self._HEAL_EVERY_S:
+                nm.heal_at[slot] = now
+                print(f"[wifi_bridge] slot {slot} streams again after the GS stopped it (FC reboot?); "
+                      "re-sending the stop", file=sys.stderr, flush=True)
+                threading.Thread(target=self.subscribe_slot, args=(slot, 0, []),
+                                 name=f"wifi_bridge_restop_{slot}", daemon=True).start()
+            return
+        if slot not in nm.rebuild:
+            return
+        nm.faults[slot] = f"{n_unnamed} of {n_ranges} ranges unnamed"
+        self._heal_slot(slot, f"schema reply has {n_unnamed} of {n_ranges} ranges unnamed")
+
+    def _note_axf_change(self) -> None:
+        """Log once when a new build lands on disk. Nothing is re-sent here: the old firmware may still be running
+        until the flash, so the heal waits for the FC's own evidence (an unnamed reply or a silent slot)."""
+        nm = self._naming()
+        now = time.monotonic()
+        if now - nm.axf_checked < 1.0:
+            return
+        nm.axf_checked = now
+        key = _axf_key()
+        if nm.axf_key is None or key == nm.axf_key:
+            nm.axf_key = key
+            return
+        nm.axf_key = key
+        print(f"[wifi_bridge] new axf on disk; slots {sorted(nm.rebuild)} will be re-subscribed by name "
+              "once the FC runs it (no 8081 restart needed)", file=sys.stderr, flush=True)
+
+    def stream_naming_status(self, slots=None) -> Dict[int, str]:
+        """``{slot: reason}`` for streams that are not fully named; empty when every stream is named.
+
+        With ``slots`` given (a campaign's capture slots), a slot with no schema yet also counts as a problem.
+        """
+        nm = self._naming()
+        with self._stream_lock:
+            schemas = dict(self._stream_schemas)
+        out: Dict[int, str] = {}
+        for slot in sorted(set(nm.faults) if slots is None else {int(s) for s in slots}):
+            schema = schemas.get(slot)
+            if schema is None:
+                if slots is not None:
+                    out[slot] = "no schema yet"
+                elif slot in nm.faults:
+                    out[slot] = nm.faults[slot] + "; re-subscribed, awaiting the reply"
+                continue
+            unnamed = sum(1 for r in schema.ranges if not r.name)
+            if unnamed:
+                out[slot] = f"{unnamed} of {len(schema.ranges)} ranges unnamed"
+        return out
 
     def stop(self) -> None:
         """Stop all threads."""
@@ -609,7 +790,6 @@ class WifiBridge:
         """
         try:
             from ground_station.livewatch.stream import build_stream_request, StreamRange
-            from ground_station.livewatch.symbols import SymbolResolver
 
             # Resolve DWARF addresses for the chosen slot-0 variables
             elf_path = Path(__file__).parents[2] / "OBJ" / "JX_FLY.axf"
@@ -618,8 +798,8 @@ class WifiBridge:
                       file=sys.stderr, flush=True)
                 return
 
-            resolver = SymbolResolver(str(elf_path))
-            self._preset_resolver = resolver
+            self._ensure_preset_resolver()
+            resolver = self._preset_resolver
             ranges = []
             for var_name in vars_tuple:
                 try:
@@ -665,6 +845,9 @@ class WifiBridge:
             # every variable. See S15-audit.md §1.
             with self._stream_lock:
                 self._pending_schema_ranges[slot] = tuple(ranges)
+            self._remember_request(
+                slot, divider, vars_tuple,
+                lambda: self._request_stream_schema(slot, vars_tuple, divider, label))
 
             rate_hz = self._expected_rate_for_slot(slot, divider)
             if divider > 0:
@@ -840,19 +1023,12 @@ class WifiBridge:
         )
 
     def _ensure_preset_resolver(self) -> None:
-        """Build a SymbolResolver from the firmware ELF if we do not have one."""
-        from ground_station.livewatch.symbols import SymbolResolver
+        """Point _preset_resolver at the process-wide resolver, reloaded when the axf changes (WP-22)."""
+        from ground_station.livewatch.symbols import shared_resolver
         elf_path = Path(__file__).parents[2] / "OBJ" / "JX_FLY.axf"
-        
         if not elf_path.exists():
             return
-            
-        current_mtime = elf_path.stat().st_mtime
-        last_mtime = getattr(self, "_preset_resolver_mtime", None)
-        
-        if self._preset_resolver is None or last_mtime != current_mtime:
-            self._preset_resolver = SymbolResolver(str(elf_path))
-            self._preset_resolver_mtime = current_mtime
+        self._preset_resolver = shared_resolver(elf_path)
 
     def _subscribe_preset_single(
         self,
@@ -1104,6 +1280,14 @@ class WifiBridge:
                 self._pending_schema_ranges[slot] = tuple(stream_ranges)
             else:
                 self._pending_schema_ranges.pop(slot, None)
+
+        names = list(ranges or [])
+        by_name = bool(names) and all(isinstance(r, str) for r in names)
+
+        def _rebuild(slot=slot, divider=divider, names=tuple(names), transport=transport):
+            self.subscribe_slot(slot, divider, self._resolvable(names), transport)
+
+        self._remember_request(slot, divider, names, _rebuild if by_name else None)
 
         self._send_subscribe_bytes(
             slot, divider, stream_ranges, transport=transport,
@@ -2189,6 +2373,7 @@ class WifiBridge:
                 f"{total_bytes} bytes, divider={divider}",
                 flush=True,
             )
+            self._note_schema_naming(slot, divider, len(ranges), n_unnamed)
             if n_named != len(ranges):
                 print(
                     f"[wifi_bridge] [S15] Schema ranges:\n" + "\n".join(

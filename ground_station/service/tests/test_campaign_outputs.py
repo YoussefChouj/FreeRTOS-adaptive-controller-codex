@@ -212,6 +212,20 @@ def test_live_capture_raises_without_bridge_or_recording():
         begin(_exp(), "f1")
 
 
+def test_live_capture_refuses_to_fly_unnamed_streams(monkeypatch):
+    import ground_station.service.campaign_live as cl
+    monkeypatch.setattr(cl, "NAMING_WAIT_S", 0.0)
+    svc = FakeRecService()
+    svc.bridge.stream_naming_status = Mock(return_value={0: "5 of 5 ranges unnamed"})
+    begin, _ = live_capture_hooks(svc)
+    with pytest.raises(RuntimeError, match="stream not named: slot 0: 5 of 5 ranges unnamed"):
+        begin(_exp(), "f1")
+    assert not any(isinstance(c, tuple) and c[0] == "start" for c in svc.calls)   # no unlogged flight
+    svc.bridge.stream_naming_status = Mock(side_effect=[{0: "healing"}, {}])     # heal lands inside the wait
+    monkeypatch.setattr(cl, "NAMING_WAIT_S", 2.0)
+    assert begin(_exp(), "f2").endswith("f2_hover_z050")
+
+
 # --- CampaignService outputs ---------------------------------------------------------------------------
 
 

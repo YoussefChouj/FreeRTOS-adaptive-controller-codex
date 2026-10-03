@@ -11,7 +11,9 @@ automatically - no hand-maintained tables to drift.
 """
 from __future__ import annotations
 
+import io
 import struct
+import threading
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -60,12 +62,47 @@ class _Type:
         self.kind = kind    # 'scalar' | 'struct' | 'array' | 'pointer' | 'opaque'
 
 
+def firmware_key(elf_path: str | Path) -> tuple[int, int] | None:
+    """(mtime_ns, size) of the firmware ELF, or None when it is missing. It changes when the firmware is rebuilt."""
+    try:
+        st = Path(elf_path).stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+_SHARED: dict = {}
+_SHARED_LOCK = threading.Lock()
+
+
+def shared_resolver(elf_path: str | Path) -> "SymbolResolver":
+    """The one SymbolResolver of this process for `elf_path`, reloaded when its firmware_key changes.
+
+    The bridge, the stream manager and the API all name variables through it, so after a reflash they switch to
+    the new addresses together (WP-22). Keyed by the class too, so a test that patches SymbolResolver gets its fake.
+    """
+    path = Path(elf_path).resolve()
+    key = firmware_key(path)
+    if key is None:
+        raise FileNotFoundError(path)
+    cache_key = (path, SymbolResolver)
+    with _SHARED_LOCK:
+        hit = _SHARED.get(cache_key)
+        if hit is not None and hit[0] == key:
+            return hit[1]
+        resolver = SymbolResolver(str(path))
+        _SHARED[cache_key] = (key, resolver)
+        return resolver
+
+
 class SymbolResolver:
     """Resolves dotted/indexed variable paths against a firmware ELF's DWARF."""
 
     def __init__(self, elf_path: str | Path):
         self.elf_path = Path(elf_path)
-        self._f = open(self.elf_path, "rb")
+        # Read the whole ELF into memory (about 1 MB): an open handle on Windows blocks Keil from rewriting the axf,
+        # so a running 8081 would break the next build (WP-22).
+        self._f = io.BytesIO(self.elf_path.read_bytes())
         elf = ELFFile(self._f)
         if not elf.has_dwarf_info():
             raise ValueError(f"{elf_path} has no DWARF debug info")

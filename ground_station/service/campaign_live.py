@@ -176,12 +176,37 @@ def check_live_ready(service: Any, now_ns: Callable[[], int] = time.time_ns) -> 
         raise RuntimeError(f"g_wfb_status is stale ({age_s:.1f} s old)")
 
 
+NAMING_WAIT_S = 3.0
+
+
+def wait_streams_named(bridge: Any, slots: list[int], timeout_s: float | None = None) -> None:
+    """Raise ``RuntimeError("stream not named: ...")`` unless every capture slot streams fully named data.
+
+    The recorder drops samples it cannot name, so an unnamed slot (e.g. a stale name table after a reflash) would
+    fly a flight with an empty log (WP-22). Waits up to ``NAMING_WAIT_S`` for the bridge's own re-subscribe to land.
+    A bridge without ``stream_naming_status`` (older bridge, test double) is not checked.
+    """
+    status = getattr(bridge, "stream_naming_status", None)
+    if not callable(status):
+        return
+    deadline = time.monotonic() + (NAMING_WAIT_S if timeout_s is None else timeout_s)
+    while True:
+        problems = status(slots)
+        if not isinstance(problems, dict) or not problems:
+            return
+        if time.monotonic() >= deadline:
+            raise RuntimeError("stream not named: " + "; ".join(
+                f"slot {slot}: {why}" for slot, why in sorted(problems.items())))
+        time.sleep(0.1)
+
+
 def live_capture_hooks(service: Any, controller: str = "pid", max_rate_hz: float | None = None,
                        ) -> tuple[Callable[[Any, str], Any], Callable[[Any], str]]:
     """RunnerDeps begin_capture / end_capture for the live link (decision 8).
 
     begin: put the experiment's log_plan on the stream slots (the first flight also stops every slot the
-    plan does not use, so an operator preset does not eat the link budget), then start a fresh recording
+    plan does not use, so an operator preset does not eat the link budget), check every plan slot streams named
+    data (else raise "stream not named", so the runner refuses to fly unlogged), then start a fresh recording
     labelled ``<flight_id>_<experiment>``. end: stop it and return its session dir.
     """
     applied: dict[str, Any] = {"steps": None, "slots": MAX_SLOTS}
@@ -198,6 +223,7 @@ def live_capture_hooks(service: Any, controller: str = "pid", max_rate_hz: float
             for slot in range(len(steps), applied["slots"]):
                 bridge.subscribe_slot(slot=slot, divider=0, ranges=[])
             applied.update(steps=steps, slots=len(steps))
+        wait_streams_named(getattr(service, "bridge", None), [step["args"]["slot"] for step in steps])
         service.stop_recording()
         st = service.start_recording(
             label=f"{flight_id}_{exp.name}", requested_by="agent:campaign",
