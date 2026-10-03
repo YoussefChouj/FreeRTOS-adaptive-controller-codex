@@ -14,6 +14,10 @@
 
 #include "mrac.h"
 
+/* Repeated from mrac.h for tools that index this file against another tree's headers (gate clang-tidy). */
+extern uint8_t mrac_var_id[AXES];
+uint8_t MRAC_VariantParamSet(uint8_t axis, uint8_t field, float val);
+
 _imu_st imu_data = {0.0f, 0.0f};
 
 static uint32_t g_lcg = 123456789U;
