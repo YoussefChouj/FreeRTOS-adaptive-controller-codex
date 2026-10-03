@@ -32,6 +32,7 @@ static const uint8_t k_axis_idx[2][4] = {{0,1,2,6},{3,4,5,7}};
 /* Init                                                               */
 /* ------------------------------------------------------------------ */
 
+#define EKF_OF_VEL_P0  0.1f   /* velocity P0, (m/s)^2; also the gate-lockout release value */
 #define EKF_OF_STATE(i, q_field, q, P0)  e->q_field = (q); e->P[0][(i)*5] = (P0); e->P[1][(i)*5] = (P0)
 
 void EkfOf_Init(EkfOf_t *e)
@@ -47,7 +48,7 @@ void EkfOf_Init(EkfOf_t *e)
 
     /* q = random-walk/white-noise density per second, units per state; P0 = initial variance */
     EKF_OF_STATE(0, q_pos, 1e-6f, 1.0f);   /* p    position */
-    EKF_OF_STATE(1, q_acc, 1e-3f, 0.1f);   /* v    velocity */
+    EKF_OF_STATE(1, q_acc, 1e-3f, EKF_OF_VEL_P0);   /* v    velocity */
     EKF_OF_STATE(2, q_bof, 0.0f,  0.01f);  /* bof  optical flow bias: frozen, see change history */
     EKF_OF_STATE(3, q_ba,  1e-6f, 0.25f);  /* ba   accel bias */
 
@@ -57,6 +58,8 @@ void EkfOf_Init(EkfOf_t *e)
     e->of_gate = 5.0f;   /* sigmas; armed flights auto_landing_1/hover_7/ekf1 peak at 4.5 sigma */
 
     /* Change history (newest first)
+     * 2026-10-03 x_y_calibration_hitting_wall_1: gate-lockout recovery (EKF_OF_REJ_RELEASE in ekf_of.h);
+     *   5 consecutive rejected OF samples reset P_vv to EKF_OF_VEL_P0 and apply the sample.
      * 2026-10-03 flight_test_drift_fix_1: q_bof 0 and bof variance 0 at ARM (EKF_OF_BOF_ARM_VAR),
      *   so bof stays 0 in flight. Its only remaining learning was the first 0.1 s of OF at
      *   lift-off, where the real sideways slide (-4..-6 cm/s) was taken as bias (bof_y -1.6 cm/s
@@ -70,6 +73,8 @@ void EkfOf_Init(EkfOf_t *e)
     e->innov_y = 0.0f;
     e->rej_x   = 0U;
     e->rej_y   = 0U;
+    e->rej_run_x = 0U;
+    e->rej_run_y = 0U;
     e->inited  = 1U;
 }
 
@@ -204,12 +209,37 @@ static uint8_t ekf_of_update_one(EkfOf_t *e, int axis, const float h[4], float z
     return 0U;
 }
 
+/* Reset one axis's velocity variance to its P0 with no cross-covariance (gate-lockout recovery). */
+static void ekf_of_release_vel(EkfOf_t *e, int axis)
+{
+    int k;
+    for (k = 0; k < 4; k++) {              /* local index 1 = vel: clear its row and column */
+        e->P[axis][1*4 + k] = 0.0f;
+        e->P[axis][k*4 + 1] = 0.0f;
+    }
+    e->P[axis][1*4 + 1] = EKF_OF_VEL_P0;
+}
+
+/* One axis of the OF update with gate-lockout recovery (see EKF_OF_REJ_RELEASE). */
+static void ekf_of_update_axis(EkfOf_t *e, int axis, float z, float *innov, uint32_t *rej, uint8_t *run)
+{
+    const float h[4] = {0.0f, 1.0f, 1.0f, 0.0f};
+    if (!ekf_of_update_one(e, axis, h, z, e->R_of, e->of_gate, innov)) {
+        *run = 0U;
+        return;
+    }
+    (*rej)++;
+    if (++(*run) < EKF_OF_REJ_RELEASE) return;
+    *run = 0U;
+    ekf_of_release_vel(e, axis);
+    (void)ekf_of_update_one(e, axis, h, z, e->R_of, 0.0f, 0);
+}
+
 void EkfOf_Update(EkfOf_t *e, float of_x, float of_y)
 {
     if (!e->inited) return;
-    const float h[4] = {0.0f, 1.0f, 1.0f, 0.0f};
-    if (ekf_of_update_one(e, 0, h, of_x, e->R_of, e->of_gate, &e->innov_x)) e->rej_x++;
-    if (ekf_of_update_one(e, 1, h, of_y, e->R_of, e->of_gate, &e->innov_y)) e->rej_y++;
+    ekf_of_update_axis(e, 0, of_x, &e->innov_x, &e->rej_x, &e->rej_run_x);
+    ekf_of_update_axis(e, 1, of_y, &e->innov_y, &e->rej_y, &e->rej_run_y);
 }
 
 void EkfOf_UpdateZeroVel(EkfOf_t *e)

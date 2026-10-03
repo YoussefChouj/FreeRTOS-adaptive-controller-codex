@@ -3,12 +3,15 @@ import numpy as np
 DEFAULTS = {
     'q_pos': 1e-6,
     'q_acc': 1e-3,
-    'q_bof': 1e-6,
+    'q_bof': 0.0,   # firmware since 2026-10-03 flight_test_drift_fix_1 (bof frozen)
     'q_ba': 1e-6,
     'R_of': 1e-4,
     'R_zupt': 1e-4,
     'of_gate': 5.0,  # sigmas, mirrors EkfOf_t.of_gate (0 = off)
 }
+
+VEL_P0 = 0.1      # mirrors EKF_OF_VEL_P0 (ekf_of.c)
+REJ_RELEASE = 5   # mirrors EKF_OF_REJ_RELEASE (ekf_of.h): gate-lockout recovery
 
 class EkfOfModel:
     def __init__(self, batch_size, dtype=np.float64, **kwargs):
@@ -19,7 +22,7 @@ class EkfOfModel:
         
         # Initial P
         self.P[:, :, 0, 0] = 1.0
-        self.P[:, :, 1, 1] = 0.1
+        self.P[:, :, 1, 1] = VEL_P0
         self.P[:, :, 2, 2] = 0.01
         self.P[:, :, 3, 3] = 0.25
         
@@ -34,6 +37,7 @@ class EkfOfModel:
         self.of_gate = np.asarray(params['of_gate'], dtype=dtype)
         self.rej_x = np.zeros(self.B, dtype=np.int64)
         self.rej_y = np.zeros(self.B, dtype=np.int64)
+        self.rej_run = np.zeros((2, self.B), dtype=np.int64)  # consecutive rejections per axis
 
     def predict(self, dt, ax, ay):
         ax = np.asarray(ax, dtype=self.dtype)
@@ -125,13 +129,26 @@ class EkfOfModel:
         
         return y, S
 
-    def update_of(self, of_x, of_y, mask=None):
+    def _update_of_axis(self, axis, z, mask, live):
+        # firmware ekf_of_update_axis: REJ_RELEASE consecutive rejections reset P_vv and re-apply
         h = [0.0, 1.0, 1.0, 0.0]
-        y_x, S_x = self._update_one(0, h, of_x, self.R_of, mask, self.of_gate)
-        rx = self._last_rejected
-        y_y, S_y = self._update_one(1, h, of_y, self.R_of, mask, self.of_gate)
-        ry = self._last_rejected
+        y, S = self._update_one(axis, h, z, self.R_of, mask, self.of_gate)
+        rej = self._last_rejected & live
+        run = self.rej_run[axis]
+        run[:] = np.where(rej, run + 1, np.where(live, 0, run))
+        release = run >= REJ_RELEASE
+        if release.any():
+            run[release] = 0
+            self.P[release, axis, 1, :] = 0.0
+            self.P[release, axis, :, 1] = 0.0
+            self.P[release, axis, 1, 1] = VEL_P0
+            self._update_one(axis, h, z, self.R_of, release.astype(self.dtype), 0.0)
+        return y, S, rej
+
+    def update_of(self, of_x, of_y, mask=None):
         live = np.ones(self.B, dtype=bool) if mask is None else np.asarray(mask) > 0
+        y_x, S_x, rx = self._update_of_axis(0, of_x, mask, live)
+        y_y, S_y, ry = self._update_of_axis(1, of_y, mask, live)
         self.rej_x += rx & live
         self.rej_y += ry & live
         self.innov_x = y_x
@@ -146,6 +163,14 @@ class EkfOfModel:
     def reset_pos(self):
         self.x[:, 0] = 0.0
         self.x[:, 3] = 0.0
+
+    def reset_bias(self, var):
+        # firmware EkfOf_ResetBias: bof = 0, variance var, no cross-covariance
+        self.x[:, 2] = 0.0
+        self.x[:, 5] = 0.0
+        self.P[:, :, 2, :] = 0.0
+        self.P[:, :, :, 2] = 0.0
+        self.P[:, :, 2, 2] = var
 
 class OldEkfOf6:
     def __init__(self, batch_size, dtype=np.float64):

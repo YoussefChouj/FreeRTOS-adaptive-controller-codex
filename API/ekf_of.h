@@ -47,7 +47,20 @@ typedef struct {
     float of_gate;      /* sigmas; 0 = gate off */
     uint32_t rej_x;     /* rejected OF samples since init */
     uint32_t rej_y;
+    uint8_t rej_run_x;  /* consecutive rejected OF samples, see EKF_OF_REJ_RELEASE */
+    uint8_t rej_run_y;
 } EkfOf_t;
+
+/* Gate-lockout recovery: after this many consecutive rejected OF samples on one axis
+ * (0.1 s at the 50 Hz OF frame rate) that axis's velocity variance is reset to its P0
+ * and the same sample is applied, so the KF re-acquires the measured velocity.
+ * WHY (2026-10-03): all five logged flights (roaming_and_landing_1..4, x_y_calibration_
+ * hitting_wall_1) tripped the health gate this way. ZUPT on the ground (or a hover)
+ * shrinks P_vv until the 5-sigma gate is ~6 cm/s; a lift-off slide (+10..12 cm/s) or a
+ * hard stop (0.5 -> -0.7 m/s in 0.5 s) leaves the gate, every sample is rejected, the
+ * tilt-only predict cannot follow, and 0.5 s later the trip drops mode 2 to FIXED for
+ * the rest of the flight. A single glitch frame is still rejected. */
+#define EKF_OF_REJ_RELEASE      5U
 
 /** Call once at boot or after Reset_World_Origin. */
 extern void EkfOf_Init(EkfOf_t *e);

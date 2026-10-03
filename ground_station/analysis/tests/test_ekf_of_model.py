@@ -29,6 +29,8 @@ class EkfOf_t(ctypes.Structure):
         ("of_gate", ctypes.c_float),
         ("rej_x", ctypes.c_uint32),
         ("rej_y", ctypes.c_uint32),
+        ("rej_run_x", ctypes.c_uint8),
+        ("rej_run_y", ctypes.c_uint8),
     ]
 
 @pytest.fixture(scope="module")
@@ -229,6 +231,42 @@ def test_gate_golden(gcc_lib):
             np.testing.assert_allclose(model.x[0], np.array(c_model.x), rtol=1e-4, atol=1e-6)
     assert c_model.rej_x == model.rej_x[0] == c_model.rej_y == model.rej_y[0]
     assert c_model.rej_x >= len(outliers)
+
+
+def test_gate_lockout_release_golden(gcc_lib):
+    """Long ZUPT then a +0.12 m/s step (x_y_calibration_hitting_wall_1 lift-off): the 5-sigma
+    gate rejects it, and after REJ_RELEASE frames C and Python both re-acquire it identically."""
+    from ground_station.analysis.ekf_of_model import REJ_RELEASE
+    dt = 0.005
+    model = EkfOfModel(1, dtype=np.float32)
+    lib = ctypes.CDLL(str(gcc_lib))
+    lib.EkfOf_Init.argtypes = [ctypes.POINTER(EkfOf_t)]
+    lib.EkfOf_Predict.argtypes = [ctypes.POINTER(EkfOf_t), ctypes.c_float, ctypes.c_float, ctypes.c_float]
+    lib.EkfOf_Update.argtypes = [ctypes.POINTER(EkfOf_t), ctypes.c_float, ctypes.c_float]
+    lib.EkfOf_UpdateZeroVel.argtypes = [ctypes.POINTER(EkfOf_t)]
+    lib.EkfOf_ResetBias.argtypes = [ctypes.POINTER(EkfOf_t), ctypes.c_float]
+    c_model = EkfOf_t()
+    lib.EkfOf_Init(ctypes.byref(c_model))
+    for _ in range(2000):  # 10 s on the ground
+        model.predict(dt, 0.0, 0.0)
+        lib.EkfOf_Predict(ctypes.byref(c_model), dt, 0.0, 0.0)
+        model.update_zero_vel()
+        lib.EkfOf_UpdateZeroVel(ctypes.byref(c_model))
+    model.reset_bias(0.0)  # ARM: EKF_OF_BOF_ARM_VAR
+    lib.EkfOf_ResetBias(ctypes.byref(c_model), 0.0)
+    frames = []
+    for i in range(1, 20 * 8 + 1):  # 0.8 s airborne, OF frame every 8 ticks
+        model.predict(dt, 0.0, 0.0)
+        lib.EkfOf_Predict(ctypes.byref(c_model), dt, 0.0, 0.0)
+        if i % 8 == 0:
+            model.update_of(0.12, -0.12)
+            lib.EkfOf_Update(ctypes.byref(c_model), 0.12, -0.12)
+            frames.append((c_model.x[1], c_model.x[4], c_model.rej_x))
+            np.testing.assert_allclose(model.x[0], np.array(c_model.x), rtol=1e-4, atol=1e-6)
+    assert frames[0][2] == 1                        # the step is gated at first
+    assert c_model.rej_x == REJ_RELEASE == c_model.rej_y  # released once, then tracked
+    assert abs(frames[REJ_RELEASE - 1][0] - 0.12) < 0.01 and abs(frames[REJ_RELEASE - 1][1] + 0.12) < 0.01
+    assert abs(c_model.innov_x) < 0.061 and abs(c_model.innov_y) < 0.061  # under EKF_OF_HEALTH_THRESH
 
 
 def test_replay_arrays():

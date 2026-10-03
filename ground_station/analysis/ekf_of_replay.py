@@ -572,7 +572,9 @@ def run_cli():
     median_isd = float(np.median(innov_sd_values)) if innov_sd_values else 0.01
     health_thresh = 5.0 * median_isd  # about 5x innovation sd
     
-    defaults_match = "yes" if best_p['q_acc'] == DEFAULTS['q_acc'] and best_p['q_bof'] == DEFAULTS['q_bof'] and best_p['q_ba'] == DEFAULTS['q_ba'] and best_p['R_of'] == DEFAULTS['R_of'] and best_p['R_zupt'] == DEFAULTS['R_zupt'] else "no"
+    # q_bof is not compared: firmware freezes bof (q_bof 0, 2026-10-03 flight_test_drift_fix_1) on
+    # flight evidence the five pinned logs predate; this grid only searches 1e-7 / 1e-6.
+    defaults_match = "yes" if best_p['q_acc'] == DEFAULTS['q_acc'] and best_p['q_ba'] == DEFAULTS['q_ba'] and best_p['R_of'] == DEFAULTS['R_of'] and best_p['R_zupt'] == DEFAULTS['R_zupt'] else "no"
     print(f"CHOSEN q_acc={best_p['q_acc']} q_bof={best_p['q_bof']} q_ba={best_p['q_ba']} R_of={best_p['R_of']} R_zupt={best_p['R_zupt']}")
     print(f"TILT_GAIN_MEDIAN {median_k:.3f}")
     print(f"HEALTH_THRESH {health_thresh:.4f} m/s (5 x median innov sd {median_isd*100:.2f} cm/s)")

@@ -178,6 +178,12 @@ float g_of_bias_ema_tau_s = OF_BIAS_EMA_TAU_DEFAULT; /* EMA time constant (s) */
  * flying with it, handheld test (CMD 0x1E idx=3): tilt ~10 deg on one axis, move straight
  * up/down ~50 cm; locx/locyPID.FB must stay flatter with the flag on than off. */
 volatile uint8_t g_of_full_tilt = 1U;
+/* OF distance scale (2026-10-03, x_y_calibration_hitting_wall_1): wall-to-wall passes in a
+ * 400 cm room with a ~55 cm drone (true travel 345 cm) read 314.3 cm on body y and 316.4 cm on
+ * body x at ~0.9 m, so OF under-reads by the same ~9% on both axes (345 / 315.35).  Applied
+ * only where OF leaves for the loops (position deltas, velocity FB), so the KF tuning, bias
+ * logic and rest thresholds stay in raw OF units.  Measured at one height.  1.0 = off. */
+volatile float g_of_scale = 1.094f;
 /* Rotate one tick's body OF delta (*dx, *dy) to the level frame in place; dh_up is the same
  * tick's height change in the same units (cm/tick here).  See g_of_full_tilt above. */
 static void of_full_tilt_delta(float *dx, float *dy, float dh_up)
@@ -652,6 +658,8 @@ void Update_Data(void)
 			s_ekf_prev_px = s_ekf_of.x[0];
 			s_ekf_prev_py = s_ekf_of.x[3];
 			if (pos_integrate) {
+				ekf_dx *= g_of_scale;   /* to true cm before the tilt step mixes in height */
+				ekf_dy *= g_of_scale;
 				/* WP-21 A: m/s * 100 * 0.005 s = cm/tick, same units as ekf_dx/dy */
 				if (g_of_full_tilt) of_full_tilt_delta(&ekf_dx, &ekf_dy, ano_of.of2_h_f2_v * 0.5f);
 				ano_of.earth_x += ekf_dx * Cos_Yaw_01 + ekf_dy * Sin_Yaw_01;
@@ -682,8 +690,8 @@ void Update_Data(void)
 				ano_of.DISTANCE_X = ano_of.DISTANCE_X+of_dx_deb*0.005f;
 				ano_of.DISTANCE_Y = ano_of.DISTANCE_Y+of_dy_deb*0.005f;
 
-				float of_dx_t = of_dx_deb*0.005f;   /* cm/tick */
-				float of_dy_t = of_dy_deb*0.005f;
+				float of_dx_t = of_dx_deb*0.005f*g_of_scale;   /* cm/tick, true cm */
+				float of_dy_t = of_dy_deb*0.005f*g_of_scale;
 				/* WP-21 A: DISTANCE_X/Y above stay raw body-frame */
 				if (g_of_full_tilt) of_full_tilt_delta(&of_dx_t, &of_dy_t, ano_of.of2_h_f2_v * 0.5f);
 
@@ -777,6 +785,8 @@ void Update_Data(void)
 				fb_dx = s_ekf_of.x[1] * 100.0f;   /* vel_x body, cm/s */
 				fb_dy = s_ekf_of.x[4] * 100.0f;   /* vel_y body, cm/s */
 			}
+			fb_dx *= g_of_scale;   /* true cm/s, same scale as locx/locyPID.FB */
+			fb_dy *= g_of_scale;
 			Ctrler.locxsPID.FB= (fb_dy) *Cos_Yaw_01 +(-fb_dx)*Sin_Yaw_01;
 			Ctrler.locysPID.FB=  (-fb_dx) * Cos_Yaw_01 - (fb_dy)*Sin_Yaw_01;
 		}
