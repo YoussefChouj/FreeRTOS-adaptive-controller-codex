@@ -43,12 +43,15 @@ def _post(url: str, body: dict) -> tuple[int, dict]:
 
 
 def _go(base: str, pack_id: str = "P4000-1", checklist: dict | None = None,
-        source: str = "operator") -> tuple[int, dict]:
-    return _post(base + "/api/campaign/go", {
+        source: str = "operator", confirmation: str | None = None) -> tuple[int, dict]:
+    body = {
         "campaign_path": CAMPAIGN, "pack_id": pack_id,
         "checklist": {"item": True} if checklist is None else checklist,
         "source": source,
-    })
+    }
+    if confirmation is not None:
+        body["confirmation"] = confirmation
+    return _post(base + "/api/campaign/go", body)
 
 
 def _wait_state(base: str, done, timeout_s: float = 10.0) -> dict:
@@ -138,6 +141,16 @@ def test_go_refused_for_agent_source(api):
     _, base = api
     code, _ = _go(base, source="agent:x")
     assert code == 403
+    code, res = _go(base, source="agent:x", confirmation="   ")
+    assert code == 403 and "confirmation" in res["error"]
+
+
+def test_agent_go_with_confirmation_is_logged(api):
+    service, base = api
+    code, res = _go(base, source="agent:mcp", confirmation="yes, go pack P4000-1")
+    assert code == 200, res
+    assert res["last_go"]["source"] == "agent:mcp"
+    assert res["last_go"]["confirmation"] == "yes, go pack P4000-1"
 
 
 def test_go_refused_for_unticked_checklist(api):

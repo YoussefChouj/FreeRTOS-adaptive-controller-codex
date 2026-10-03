@@ -1,11 +1,14 @@
 import threading
 import time
 import dataclasses
+import json
+from pathlib import Path
 from ground_station.service.campaign_runner import RunnerControl, run_campaign, CampaignReport
 from ground_station.service.agent import AgentDisabledError, PlanBusyError
 
 class CampaignService:
-    def __init__(self, agent=None, deps_factory=None, knobs=(), param_timeout_s=30.0, stream_check=None):
+    def __init__(self, agent=None, deps_factory=None, knobs=(), param_timeout_s=30.0, stream_check=None,
+                 go_log_path=None):
         self.agent = agent
         self.deps_factory = deps_factory
         self.knobs = knobs
@@ -24,12 +27,16 @@ class CampaignService:
         
         self.condition = threading.Condition(self.lock)
         self.go_grant = None
+        # every accepted Go, with who gave it; an agent Go carries the operator's chat confirmation quote
+        self.go_log_path = Path(go_log_path) if go_log_path else None
+        self.go_log = []
 
-    def go(self, campaign_path, pack_id, checklist, source):
+    def go(self, campaign_path, pack_id, checklist, source, confirmation=None):
         if not source:
             return 400, {"error": "source missing"}
-        if source.startswith("agent:"):
-            return 403, {"error": "agent cannot start campaign"}
+        quote = confirmation.strip() if isinstance(confirmation, str) else ""
+        if source.startswith("agent:") and not quote:
+            return 403, {"error": "agent Go needs the operator's chat confirmation quote (confirmation)"}
             
         if not isinstance(checklist, dict) or not checklist or not all(v is True for v in checklist.values()):
             return 409, {"error": "checklist incomplete"}
@@ -41,6 +48,7 @@ class CampaignService:
             if self.runner_thread and self.runner_thread.is_alive():
                 self.go_grant = pack_id
                 self.condition.notify_all()
+                self._log_go(campaign_path, pack_id, source, quote)
                 return 200, self.state()
                 
             self.campaign_path = campaign_path
@@ -70,8 +78,26 @@ class CampaignService:
                 daemon=True
             )
             self.runner_thread.start()
-            
+            self._log_go(campaign_path, pack_id, source, quote)
             return 200, self.state()
+
+    def _log_go(self, campaign_path, pack_id, source, quote):
+        entry = {"time_ns": time.time_ns(), "source": source, "campaign_path": campaign_path,
+                 "pack_id": pack_id, "confirmation": quote}
+        self.go_log.append(entry)
+        if self.go_log_path is not None:
+            try:
+                self.go_log_path.parent.mkdir(parents=True, exist_ok=True)
+                with self.go_log_path.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(entry) + "\n")
+            except OSError:
+                pass
+        say = getattr(self.agent, "add_agent_message", None)
+        if callable(say) and source.startswith("agent:"):
+            try:
+                say(f"campaign Go ({pack_id}) on operator confirmation: \"{quote}\"", source=source)
+            except Exception:
+                pass
 
     def _run_wrapper(self, campaign_path, deps):
         try:
@@ -211,5 +237,6 @@ class CampaignService:
                 "reason": self.report.reason if self.report else "",
                 "flights": flights,
                 "control": self.control.get() if self.runner_thread and self.runner_thread.is_alive() else None,
-                "arm_refusal": self.arm_refusal
+                "arm_refusal": self.arm_refusal,
+                "last_go": self.go_log[-1] if self.go_log else None
             }

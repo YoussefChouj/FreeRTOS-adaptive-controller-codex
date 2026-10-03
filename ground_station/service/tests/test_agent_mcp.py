@@ -43,7 +43,7 @@ SERVER_NAMES = [
     "get_state", "list_actions", "run_plan", "get_plan", "cancel_plan",
     "say", "wait_for_operator", "get_recording", "list_sessions",
     "analyze_session", "explain_symbol", "ui_navigate", "ui_highlight",
-    "file_finding", "campaign_state", "campaign_pause", "campaign_land", "campaign_abort"
+    "file_finding", "campaign_state", "campaign_go", "campaign_pause", "campaign_land", "campaign_abort"
 ]
 
 
@@ -198,6 +198,10 @@ def test_mcp_campaign_tools(service, api):
         for req_id, name in ((31, "campaign_pause"), (32, "campaign_land"), (33, "campaign_abort")):
             resp = _request(proc, req_id, "tools/call", {"name": name, "arguments": {}})
             assert json.loads(resp["result"]["content"][0]["text"]) == {"error": "no active run"}
+        # campaign_go without the operator's quote is refused by the route (agent:mcp source)
+        resp = _request(proc, 34, "tools/call", {"name": "campaign_go", "arguments": {
+            "campaign_path": "x.yaml", "pack_id": "P", "checklist": {"ok": True}, "confirmation": ""}})
+        assert "confirmation" in resp["result"]["content"][0]["text"]
     finally:
         proc.stdin.close() if proc.stdin else None
         try:

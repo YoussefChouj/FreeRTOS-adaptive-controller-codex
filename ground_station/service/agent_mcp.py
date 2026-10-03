@@ -155,6 +155,17 @@ TOOLS: list[dict[str, Any]] = [
         "inputSchema": {"type": "object"},
     },
     {
+        "name": "campaign_go",
+        "description": ("start the campaign (or Go the next pack) after the operator confirmed in chat; "
+                        "confirmation = the operator's words, quoted verbatim, logged with the Go"),
+        "inputSchema": {"type": "object",
+                        "properties": {"campaign_path": {"type": "string"},
+                                       "pack_id": {"type": "string"},
+                                       "checklist": {"type": "object"},
+                                       "confirmation": {"type": "string"}},
+                        "required": ["campaign_path", "pack_id", "checklist", "confirmation"]},
+    },
+    {
         "name": "campaign_pause",
         "description": "finish the current flight, then stop (operator_stop)",
         "inputSchema": {"type": "object"},
@@ -298,6 +309,11 @@ class McpServer:
             return self._text(self._file_finding(args))
         if name == "campaign_state":
             status, payload = _http("GET", "/api/campaign/state")
+            return self._text(self._wrap(payload, status))
+        if name == "campaign_go":
+            body = {k: args.get(k) for k in ("campaign_path", "pack_id", "checklist", "confirmation")}
+            body["source"] = "agent:mcp"
+            status, payload = _http("POST", "/api/campaign/go", body)
             return self._text(self._wrap(payload, status))
         if name == "campaign_pause":
             status, payload = _http("POST", "/api/campaign/pause")

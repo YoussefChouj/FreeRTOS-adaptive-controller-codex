@@ -524,7 +524,7 @@ _ROUTE_MAP = {
         "/api/agent/ui-ack": "browser acks a ui_action {plan_id, step_id, ok, error?}",
         "/api/agent/ui-state": "browser shell reports UI state {active_tab, visible_panels, drawer_open, url}",
         "/api/agent/message": "agent -> operator message {text, source}",
-        "/api/campaign/go": "operator-only per-battery go {campaign_path, pack_id, checklist, source} (403 agent: source, 409 unticked checklist or busy, 503 no runner deps)",
+        "/api/campaign/go": "per-battery go {campaign_path, pack_id, checklist, source, confirmation} (403 agent: source without the operator's chat confirmation quote, 409 unticked checklist, busy or deps not ready, 503 no runner deps)",
         "/api/campaign/pause": "finish the current flight, then stop (operator_stop)",
         "/api/campaign/land": "level-1 traj_stop + land now, then stop (operator_stop)",
         "/api/campaign/abort": "level-1 traj_stop + land now, then status operator_needed",
@@ -2338,7 +2338,8 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                 except Exception as exc:
                     self._json(400, {"error": str(exc)})
                     return
-                code, res = campaign.go(body.get("campaign_path"), body.get("pack_id"), body.get("checklist"), body.get("source"))
+                code, res = campaign.go(body.get("campaign_path"), body.get("pack_id"), body.get("checklist"),
+                                        body.get("source"), body.get("confirmation"))
                 self._json(code, res)
             elif route in ("/api/campaign/pause", "/api/campaign/land", "/api/campaign/abort"):
                 self._drain_body()
@@ -2639,7 +2640,8 @@ class ApiServer:
                 self.campaign = CampaignService(
                     agent=self.agent,
                     deps_factory=live_deps_factory(service),
-                    knobs=sim_knobs()
+                    knobs=sim_knobs(),
+                    go_log_path=Path(__file__).parents[2] / "logs" / "campaigns" / "go_log.jsonl"
                 )
         else:
             self.campaign = campaign_service
