@@ -157,10 +157,8 @@ class CampaignService:
                 self.condition.wait()
 
     def arm_allowed(self):
-        agent_ok = bool(self.agent is not None and self.agent.allow_agent_arm)
-        if not agent_ok:
-            return False
-
+        # Go is the operator's consent to arm and disarm for this campaign (operator decision 2026-10-03):
+        # no separate allow_agent_arm tick. The stream preflight below still gates every flight.
         check = self.stream_check or getattr(
             getattr(getattr(self.agent, "service", None), "streams", None),
             "preflight_check", None)

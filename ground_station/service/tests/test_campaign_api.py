@@ -196,13 +196,15 @@ def test_live_flights_visible_while_running(api):
     _post(base + "/api/campaign/abort", {})
 
 
-def test_arm_refused_while_allow_agent_arm_false(api):
+def test_go_is_arm_consent_without_allow_agent_arm(api):
+    """Operator decision 2026-10-03: pressing Go consents to arming; allow_agent_arm is not a campaign gate."""
     server, base = api
     server.agent.set_control({**OPERATOR, "allow_agent_arm": False})
     server.campaign.apply_params = Mock(return_value=True)
     assert _go(base)[0] == 200
-    res = _wait_state(base, lambda r: r["status"] == "arm_refused")
-    assert res["status"] == "arm_refused"
+    res = _wait_state(base, lambda r: r["flights"] or r["status"] in ("operator_stop", "arm_refused", "error"))
+    assert res["status"] != "arm_refused" and res["flights"], res
+    _post(base + "/api/campaign/abort", {})
 
 
 def test_control_refused_without_active_run(api):
