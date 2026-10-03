@@ -55,6 +55,12 @@ short Throttle_th = 2200;
  * within LAND_REST_MARGIN of rest for LAND_REST_CUT_TICKS also lands (F2-F4 sat there
  * 0.26-0.40 s right before their normal cut, so they are unchanged). */
 #define LAND_REST_CUT_TICKS  40U   /* 0.2 s at 200 Hz */
+/* FIX 2026-10-03 (FLIGHT_TEST_DRIFT_FIX_1 F1, F3): floor for s_land_rest_z. Right after
+ * power-up the ground reads 0.00 m, but after a landing it reads 0.05 m, so the rest gate
+ * (0.03 m) never opened on the first flight per battery: props spun 1.5 s on the floor at
+ * ~94% hover throttle while the xy estimate ran 15 cm and the hold tilted up to 15 deg (skid).
+ * Gate is now 0.08 m minimum, still under the 0.11-0.14 m ground-effect float. */
+#define LAND_REST_MIN        0.05f
 /* WP-21 B: ground-contact stage (ArduPilot land_complete_maybe / soften_for_landing_xy idea).
  * In LANDING with the Z ramp at the floor, FB below LAND_CONTACT_ALT and |vz| below
  * LAND_CONTACT_VZ for LAND_CONTACT_TICKS, hold (not zero) the xy position and velocity
@@ -879,7 +885,7 @@ void Update_Motor(void)
     static int      s_stable_ticks = 0;
     static uint16_t s_land_rest_ticks = 0U;
     static uint16_t s_land_timeout = 0U;
-    static float    s_land_rest_z  = 0.0f;   /* ground z sampled in GROUND_IDLE */
+    static float    s_land_rest_z  = LAND_REST_MIN;   /* ground z sampled in GROUND_IDLE */
     /* Bench-mode height zero: captures the fixture resting height when bench mode
      * activates (0→1 transition). The Z position PID then sees (of2_h - offset),
      * so the drone treats its current height as zero — prop wash displaces it by
@@ -1021,7 +1027,8 @@ void Update_Motor(void)
                  * than the FB < 0.15 term above. */
                 if (!TWC.execute && RCInput_Get(RC_AXIS_THR) < 0.2f &&
                     Ctrler.Z_posPID.FB < 0.15f)
-                    s_land_rest_z = Ctrler.Z_posPID.FB;
+                    s_land_rest_z = (Ctrler.Z_posPID.FB > LAND_REST_MIN) ?
+                                    Ctrler.Z_posPID.FB : LAND_REST_MIN;
 
                 /* Auto-detect takeoff: transition to FLYING once the OF sensor reads > 0.2 m above
                  * the zeroed height. Bench mode (CMD 0x07) does NOT block this — the height
