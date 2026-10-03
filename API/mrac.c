@@ -406,7 +406,6 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
 
     t0 = MRAC_CYC_NOW();
     ref_type = mrac_flags.ref_model_type;
-    r_m = r;
     vid = 0U;
     n = MRAC_N_FEATURES;
 #if MRAC_VARIANT == MRAC_VARIANT_STRUCT6_RBF12
@@ -432,6 +431,8 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
         ref_type = (int)(config->ref_type + 0.5f);
         vid |= MRAC_VID_REF_TYPE;
     }
+#else
+    r_m = r;
 #endif
     mrac_ref_type_eff[axis_id] = (int8_t)ref_type;
 

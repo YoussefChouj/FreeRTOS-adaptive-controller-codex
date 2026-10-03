@@ -1819,7 +1819,7 @@ void Process_GroundStation_Command(void)
          *   MRAC_VariantParamSet bounds every field and refuses non-finite values; ignored while airborne. */
         else if (id == 0x1D) {
             if ((flight_phase != FLIGHT_PHASE_FLYING) && (flight_phase != FLIGHT_PHASE_LANDING)) {
-                (void)MRAC_VariantParamSet((uint8_t)(idx & 0x03U), (uint8_t)(idx >> 2), val);
+                (void)MRAC_VariantParamSet((uint8_t)((uint32_t)idx & 0x03U), (uint8_t)((uint32_t)idx >> 2U), val);
             }
         }
 

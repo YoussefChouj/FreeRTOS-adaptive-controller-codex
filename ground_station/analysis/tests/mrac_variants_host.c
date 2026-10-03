@@ -35,7 +35,7 @@ int main(int argc, char **argv)
     float udef = 0.0f;
 
     if (argc < 2) return 2;
-    steps = atoi(argv[1]);
+    steps = (int)strtol(argv[1], NULL, 10);
     MRAC_Init();
     mrac_flags.output_injection_on = 1;
     mrac_in_armed = 1;
@@ -48,16 +48,23 @@ int main(int argc, char **argv)
     mrac_inj.learn_gate = 1;
 
     for (i = 2; i < argc; i++) {
-        int x, y;
-        float v;
-        char s[32];
-        if (sscanf(argv[i], "nan_rate:%d:%d", &x, &y) == 2) { nan_rate_from = x; nan_rate_to = y; continue; }
-        if (sscanf(argv[i], "nan_ang:%d:%d", &x, &y) == 2) { nan_ang_from = x; nan_ang_to = y; continue; }
-        if (sscanf(argv[i], "udef:%f", &v) == 1) { udef = v; continue; }
-        if (sscanf(argv[i], "%d:%d:%31s", &x, &y, s) == 3) {
-            v = strstr(s, "nan") ? NAN : strtof(s, NULL);
-            printf("set %d\n", (int)MRAC_VariantParamSet((uint8_t)x, (uint8_t)y, v));
+        /* "<a>:<b>" after an optional "nan_rate:", "nan_ang:" prefix; "udef:<v>"; or "<axis>:<field>:<value>" */
+        const char *s = argv[i];
+        char *end;
+        long x, y;
+        if (strncmp(s, "udef:", 5) == 0) { udef = strtof(s + 5, NULL); continue; }
+        if (strncmp(s, "nan_rate:", 9) == 0 || strncmp(s, "nan_ang:", 8) == 0) {
+            int rate = (s[4] == 'r');
+            x = strtol(strchr(s, ':') + 1, &end, 10);
+            y = strtol(end + 1, NULL, 10);
+            if (rate) { nan_rate_from = (int)x; nan_rate_to = (int)y; }
+            else      { nan_ang_from = (int)x;  nan_ang_to = (int)y; }
+            continue;
         }
+        x = strtol(s, &end, 10);
+        y = strtol(end + 1, &end, 10);
+        printf("set %d\n", (int)MRAC_VariantParamSet((uint8_t)x, (uint8_t)y,
+                                                     strstr(end + 1, "nan") ? NAN : strtof(end + 1, NULL)));
     }
 
     st[0] = &mrac_state.pitch; st[1] = &mrac_state.roll; st[2] = &mrac_state.yaw; st[3] = &mrac_state.z_rate;
