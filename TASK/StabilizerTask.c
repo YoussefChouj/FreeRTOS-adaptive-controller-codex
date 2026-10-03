@@ -48,6 +48,13 @@ short Throttle_th = 2200;
  * rest height, or the sink bias saturated at LAND_SINK_BIAS_MAX (see Update_Motor). */
 #define LAND_REST_MARGIN     0.03f
 #define LAND_SINK_BIAS_MAX   0.40f
+/* FIX 2026-10-03 (flight_test_drift_fix_1 F5): sitting at rest height cuts on its own.
+ * F5 touched down at 0.05 m (rest 0.05) for 0.44 s, but the climb-rate reading swung
+ * +-0.3 m/s on the ground, the 0.08 m/s stable-rate test never passed, and the rate
+ * loop threw throttle at each impact: 5 bounces in 7 s. Now Des at the floor and FB
+ * within LAND_REST_MARGIN of rest for LAND_REST_CUT_TICKS also lands (F2-F4 sat there
+ * 0.26-0.40 s right before their normal cut, so they are unchanged). */
+#define LAND_REST_CUT_TICKS  40U   /* 0.2 s at 200 Hz */
 /* WP-21 B: ground-contact stage (ArduPilot land_complete_maybe / soften_for_landing_xy idea).
  * In LANDING with the Z ramp at the floor, FB below LAND_CONTACT_ALT and |vz| below
  * LAND_CONTACT_VZ for LAND_CONTACT_TICKS, hold (not zero) the xy position and velocity
@@ -870,6 +877,7 @@ void Update_Motor(void)
 {
     static uint8_t  s_land_init    = 0U;
     static int      s_stable_ticks = 0;
+    static uint16_t s_land_rest_ticks = 0U;
     static uint16_t s_land_timeout = 0U;
     static float    s_land_rest_z  = 0.0f;   /* ground z sampled in GROUND_IDLE */
     /* Bench-mode height zero: captures the fixture resting height when bench mode
@@ -936,6 +944,7 @@ void Update_Motor(void)
             if (!s_land_init)
             {
                 s_stable_ticks = 0;
+                s_land_rest_ticks = 0U;
                 s_land_timeout = 0U;
                 s_land_init    = 1U;
             }
@@ -970,15 +979,23 @@ void Update_Motor(void)
                     s_stable_ticks = 0;
             }
 
+            if (Ctrler.Z_posPID.Des <= 0.01f &&
+                Ctrler.Z_posPID.FB <= s_land_rest_z + LAND_REST_MARGIN)
+                s_land_rest_ticks++;
+            else
+                s_land_rest_ticks = 0U;
+
             s_land_timeout++;
 
-            if ((s_stable_ticks >= 10 && Ctrler.Z_posPID.FB < 0.15f &&
+            if (s_land_rest_ticks >= LAND_REST_CUT_TICKS ||
+                (s_stable_ticks >= 10 && Ctrler.Z_posPID.FB < 0.15f &&
                  Ctrler.Z_posPID.Des <= 0.01f &&
                  (Ctrler.Z_posPID.FB <= s_land_rest_z + LAND_REST_MARGIN ||
                   s_land_sink_bias >= LAND_SINK_BIAS_MAX)) ||
                 s_land_timeout >= LAND_MAX_TICKS)
             {
                 s_stable_ticks    = 0;
+                s_land_rest_ticks = 0U;
                 s_land_timeout    = 0U;
                 s_land_init       = 0U;
                 s_land_sink_bias  = 0.0f;

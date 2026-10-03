@@ -320,6 +320,7 @@ static void test_reset_bias(void)
     printf("  bof after 4 cm/s step: tight %.4f loose %.4f, vx tight %.4f\n",
            (double)b_tight, (double)b_loose, (double)e.x[1]);
     ASSERT_MSG(fabsf(b_tight) < 0.5f * fabsf(b_loose), "tight bof learns less than loose");
+    ASSERT_MSG(b_tight == 0.0f, "bof frozen at 0 after ARM reset (var 0, q_bof 0)");
     ASSERT_MSG(e.x[1] > fabsf(b_tight), "step goes mostly into velocity");
     printf("PASS: test_reset_bias\n");
     g_pass++;

@@ -73,10 +73,9 @@ extern void EkfOf_ResetPos(EkfOf_t *e);
  *  with no cross-covariance. Called on ARM and on the handheld-test edge. */
 extern void EkfOf_ResetBias(EkfOf_t *e, float var);
 
-/* bof variance at ARM, (m/s)^2. 2.5e-5 = (0.5 cm/s)^2: OF is integer cm/s and
- * good hovers read ~0-1 cm/s raw, so a stale resting value must not be learned
- * back into bof in the first seconds of flight. */
-#define EKF_OF_BOF_ARM_VAR      2.5e-5f
+/* bof variance at ARM, (m/s)^2. 0 with q_bof 0 = bof frozen at 0 in flight
+ * (2026-10-03: was 2.5e-5; the lift-off slide was still learned as bias). */
+#define EKF_OF_BOF_ARM_VAR      0.0f
 
 /* ----- WP-14: shadow mode, health gate, active path, tilt gain ----- */
 

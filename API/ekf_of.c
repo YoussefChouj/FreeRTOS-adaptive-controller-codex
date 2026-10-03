@@ -48,7 +48,7 @@ void EkfOf_Init(EkfOf_t *e)
     /* q = random-walk/white-noise density per second, units per state; P0 = initial variance */
     EKF_OF_STATE(0, q_pos, 1e-6f, 1.0f);   /* p    position */
     EKF_OF_STATE(1, q_acc, 1e-3f, 0.1f);   /* v    velocity */
-    EKF_OF_STATE(2, q_bof, 1e-6f, 0.01f);  /* bof  optical flow bias */
+    EKF_OF_STATE(2, q_bof, 0.0f,  0.01f);  /* bof  optical flow bias: frozen, see change history */
     EKF_OF_STATE(3, q_ba,  1e-6f, 0.25f);  /* ba   accel bias */
 
     /* Measurement noise variances */
@@ -57,6 +57,10 @@ void EkfOf_Init(EkfOf_t *e)
     e->of_gate = 5.0f;   /* sigmas; armed flights auto_landing_1/hover_7/ekf1 peak at 4.5 sigma */
 
     /* Change history (newest first)
+     * 2026-10-03 flight_test_drift_fix_1: q_bof 0 and bof variance 0 at ARM (EKF_OF_BOF_ARM_VAR),
+     *   so bof stays 0 in flight. Its only remaining learning was the first 0.1 s of OF at
+     *   lift-off, where the real sideways slide (-4..-6 cm/s) was taken as bias (bof_y -1.6 cm/s
+     *   in F4), then flown as zero for the whole hover: the later-flight +x drift.
      * 2026-10-02 WP-21: OF innovation gate 5 sigma (S_ss 1.56e-4 at 50 Hz OF, so ~6.2 cm/s)
      * 2026-10-02 WP-14: tilt-only input; replay CHOSEN q_acc 1e-3, q_bof 1e-6, q_ba 1e-6, R_of 1e-4, R_zupt 1e-4
      * 2026-10-01 WP-8: 8-state model, q_vel->q_acc, ZUPT; values provisional
