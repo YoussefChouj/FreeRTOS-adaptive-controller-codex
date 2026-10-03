@@ -1,0 +1,64 @@
+# WP-27 battery 4 (docs/workflow-b/mrac-variants.md): MRAC V3 RBF12 on top of V1, injected at gamma x0.25.
+# Needs the flash built with MRAC_VARIANT = MRAC_VARIANT_STRUCT6_RBF12 (API/mrac_variant.h).
+# Start: apply_params(presets.v3_rbf12) from controllers/mrac_v3.yaml on the ground; end: presets.restore.
+# Flights 3-4 carry a swinging payload (operator mounts it before that go).
+# Pass: no Theta-norm growth for > 5 s, figure-8 RMSE <= 1.1 x pid_ref. PROPOSED.
+campaign: v3_rbf12
+objective: "MRAC V3 (4x3 RBF grid on rate and angle) injected at gamma x0.25: hover, doublet; swinging payload hover, figure-8"
+controller: mrac_v3
+mode: fly
+packs:
+  - P4000-1
+max_flights: 4
+experiments:
+  - name: hover
+    scenario:
+      scenario: mrac-hover
+      description: takeoff 0.8, hold 40 s, land
+      steps:
+        - takeoff: {z: 0.8, mrac_injection: 1}
+        - hold: {s: 40}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: {rate_hz: 100, groups: [mrac_shadow]}
+  - name: doublet
+    scenario:
+      scenario: mrac-doublet
+      description: goto x +0.4 / -0.4 then y +0.4 / -0.4, dwell 3 s, back to the hover point each time
+      steps:
+        - takeoff: {z: 0.8, mrac_injection: 1}
+        - hold: {s: 3}
+        - goto: {x: 0.4, y: 0.0, z: 0.8, dwell_s: 3.0}
+        - goto: {x: -0.4, y: 0.0, z: 0.8, dwell_s: 3.0}
+        - goto: {x: 0.0, y: 0.4, z: 0.8, dwell_s: 3.0}
+        - goto: {x: 0.0, y: -0.4, z: 0.8, dwell_s: 3.0}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: {rate_hz: 100, groups: [mrac_shadow]}
+  - name: hover_swing_payload
+    scenario:
+      scenario: mrac-hover
+      description: hover 40 s with a swinging payload (operator, before the go)
+      steps:
+        - takeoff: {z: 0.8, mrac_injection: 1}
+        - hold: {s: 40}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: {rate_hz: 100, groups: [mrac_shadow]}
+  - name: figure8_swing_payload
+    scenario:
+      scenario: mrac-figure8
+      description: figure-8 width 1.0 height 0.5 at 0.3 m/s, 2 laps, swinging payload
+      steps:
+        - takeoff: {z: 0.8, mrac_injection: 1}
+        - hold: {s: 3}
+        - path: {shape: figure8, params: {width_m: 1.0, height_m: 0.5}, v_cruise_mps: 0.3}
+        - path: {shape: figure8, params: {width_m: 1.0, height_m: 0.5}, v_cruise_mps: 0.3}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: {rate_hz: 100, groups: [mrac_shadow]}
+abort: {tilt_deg: 12, pos_err_m: 0.5, sat_window_s: 0.5}

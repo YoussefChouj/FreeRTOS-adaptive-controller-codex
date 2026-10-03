@@ -6,7 +6,7 @@ CMD 0x1D MRAC_VARIANT writes one per-axis variant field: idx = (field << 2) | ax
 
 Campaign presets live in the controller descriptor (``presets:``). ``campaign_presets`` returns what the
 supervisor sends with ``apply_params`` before the campaign (preset named after the campaign) and after it
-(preset ``off``, every knob back to its firmware default).
+(preset ``restore``, every knob back to its firmware default).
 """
 from __future__ import annotations
 
@@ -32,8 +32,9 @@ VARIANT_FIELDS: tuple[tuple[str, float, float], ...] = (
     ("rbf_rate_scale", 0.1, 20.0),
     ("rbf_ang_scale", 0.05, 1.0),
     ("gamma_scale", 0.0, 2.0),
+    ("ref_model_bw", 0.5, 100.0),
 )
-GAMMA_SCALE_FIELD = len(VARIANT_FIELDS) - 1
+GAMMA_SCALE_FIELD = 11
 
 
 def variant_symbol(idx: int) -> str | None:
@@ -55,11 +56,11 @@ def variant_bounds(idx: int) -> tuple[float, float] | None:
 def campaign_presets(campaign_path: str | os.PathLike) -> tuple[dict[str, float], dict[str, float]]:
     """(start, restore) parameter dicts for a variant campaign, ready for ``apply_params``.
 
-    start = descriptor preset named after the campaign; restore = preset ``off``. Raises KeyError when the
+    start = descriptor preset named after the campaign; restore = preset ``restore``. Raises KeyError when the
     campaign's controller descriptor lacks either.
     """
     from ground_station.analysis.controller_descriptor import CONTROLLERS_DIR, load
 
     raw = yaml.safe_load(Path(campaign_path).read_text(encoding="utf-8"))
     descriptor = load(CONTROLLERS_DIR / f"{raw['controller']}.yaml")
-    return dict(descriptor.presets[raw["campaign"]]), dict(descriptor.presets["off"])
+    return dict(descriptor.presets[raw["campaign"]]), dict(descriptor.presets["restore"])

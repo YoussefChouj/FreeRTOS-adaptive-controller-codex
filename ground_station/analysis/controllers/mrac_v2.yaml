@@ -1,0 +1,52 @@
+# MRAC V2 "saturation-aware leakage" knobs (WP-27, docs/workflow-b/mrac-variants.md). CMD 0x1D, idx =
+# field << 2 | axis, ground only; see mrac_v1.yaml for the encoding and the presets protocol.
+# V2 builds on the V1 drive (roadmap test plan), so its preset also switches V1 on.
+# mu_sat 0.85: the sim knob at gamma 0.050 (sim/bench REPORT.md:185), PROPOSED; firmware units 1/(N m s) on
+# |u_def| = mixer clip back-projected per axis (API/controller.c), inside the gamma bracket.
+name: mrac_v2
+shadow_outputs:
+  - mrac_state.pitch.u_ad
+  - mrac_state.roll.u_ad
+  - mrac_state.yaw.u_ad
+  - mrac_state.pitch.u_def
+  - mrac_state.roll.u_def
+knobs:
+  - {symbol: "mrac_config_pitch.ref_type",     cmd_id: 0x1D, idx: 0,  default: -1.0, lo: -1.0, hi: 2.0,  scale: lin}
+  - {symbol: "mrac_config_roll.ref_type",      cmd_id: 0x1D, idx: 1,  default: -1.0, lo: -1.0, hi: 2.0,  scale: lin}
+  - {symbol: "mrac_config_yaw.ref_type",       cmd_id: 0x1D, idx: 2,  default: -1.0, lo: -1.0, hi: 2.0,  scale: lin}
+  - {symbol: "mrac_config_pitch.drive_norm",   cmd_id: 0x1D, idx: 8,  default: 0.0,  lo: 0.0,  hi: 1.0,  scale: lin}
+  - {symbol: "mrac_config_roll.drive_norm",    cmd_id: 0x1D, idx: 9,  default: 0.0,  lo: 0.0,  hi: 1.0,  scale: lin}
+  - {symbol: "mrac_config_yaw.drive_norm",     cmd_id: 0x1D, idx: 10, default: 0.0,  lo: 0.0,  hi: 1.0,  scale: lin}
+  - {symbol: "mrac_config_pitch.lam_edot",     cmd_id: 0x1D, idx: 12, default: 0.0,  lo: 0.0,  hi: 0.01, scale: lin}
+  - {symbol: "mrac_config_roll.lam_edot",      cmd_id: 0x1D, idx: 13, default: 0.0,  lo: 0.0,  hi: 0.01, scale: lin}
+  - {symbol: "mrac_config_yaw.ref_model_bw",   cmd_id: 0x1D, idx: 50, default: 30.0, lo: 1.0,  hi: 44.0, scale: log}
+  - {symbol: "mrac_config_pitch.mu_sat",       cmd_id: 0x1D, idx: 24, default: 0.0,  lo: 0.0,  hi: 2.0,  scale: lin}
+  - {symbol: "mrac_config_roll.mu_sat",        cmd_id: 0x1D, idx: 25, default: 0.0,  lo: 0.0,  hi: 2.0,  scale: lin}
+  - {symbol: "mrac_config_yaw.mu_sat",         cmd_id: 0x1D, idx: 26, default: 0.0,  lo: 0.0,  hi: 2.0,  scale: lin}
+presets:
+  v2_sataware:
+    mrac_config_pitch.ref_type: 2
+    mrac_config_roll.ref_type: 2
+    mrac_config_yaw.ref_type: 1
+    mrac_config_pitch.drive_norm: 1
+    mrac_config_roll.drive_norm: 1
+    mrac_config_yaw.drive_norm: 1
+    mrac_config_pitch.lam_edot: 0.0018
+    mrac_config_roll.lam_edot: 0.0018
+    mrac_config_yaw.ref_model_bw: 2.0
+    mrac_config_pitch.mu_sat: 0.85
+    mrac_config_roll.mu_sat: 0.85
+    mrac_config_yaw.mu_sat: 0.85
+  restore:
+    mrac_config_pitch.ref_type: -1
+    mrac_config_roll.ref_type: -1
+    mrac_config_yaw.ref_type: -1
+    mrac_config_pitch.drive_norm: 0
+    mrac_config_roll.drive_norm: 0
+    mrac_config_yaw.drive_norm: 0
+    mrac_config_pitch.lam_edot: 0
+    mrac_config_roll.lam_edot: 0
+    mrac_config_yaw.ref_model_bw: 30.0
+    mrac_config_pitch.mu_sat: 0
+    mrac_config_roll.mu_sat: 0
+    mrac_config_yaw.mu_sat: 0

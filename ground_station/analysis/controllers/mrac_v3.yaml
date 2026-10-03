@@ -1,0 +1,51 @@
+# MRAC V3 "RBF12" knobs (WP-27, docs/workflow-b/mrac-variants.md). CMD 0x1D, idx = field << 2 | axis, ground
+# only; see mrac_v1.yaml for the encoding and the presets protocol. Needs a build with
+# MRAC_VARIANT = MRAC_VARIANT_STRUCT6_RBF12 (API/mrac_variant.h); on the default STRUCT6 build rbf_on is
+# accepted but inert. V3 builds on the V1 drive, so its preset switches V1 on; gamma x0.25 per the roadmap.
+name: mrac_v3
+shadow_outputs:
+  - mrac_state.pitch.u_ad
+  - mrac_state.roll.u_ad
+knobs:
+  - {symbol: "mrac_config_pitch.ref_type",     cmd_id: 0x1D, idx: 0,  default: -1.0, lo: -1.0, hi: 2.0,  scale: lin}
+  - {symbol: "mrac_config_roll.ref_type",      cmd_id: 0x1D, idx: 1,  default: -1.0, lo: -1.0, hi: 2.0,  scale: lin}
+  - {symbol: "mrac_config_yaw.ref_type",       cmd_id: 0x1D, idx: 2,  default: -1.0, lo: -1.0, hi: 2.0,  scale: lin}
+  - {symbol: "mrac_config_pitch.drive_norm",   cmd_id: 0x1D, idx: 8,  default: 0.0,  lo: 0.0,  hi: 1.0,  scale: lin}
+  - {symbol: "mrac_config_roll.drive_norm",    cmd_id: 0x1D, idx: 9,  default: 0.0,  lo: 0.0,  hi: 1.0,  scale: lin}
+  - {symbol: "mrac_config_yaw.drive_norm",     cmd_id: 0x1D, idx: 10, default: 0.0,  lo: 0.0,  hi: 1.0,  scale: lin}
+  - {symbol: "mrac_config_pitch.lam_edot",     cmd_id: 0x1D, idx: 12, default: 0.0,  lo: 0.0,  hi: 0.01, scale: lin}
+  - {symbol: "mrac_config_roll.lam_edot",      cmd_id: 0x1D, idx: 13, default: 0.0,  lo: 0.0,  hi: 0.01, scale: lin}
+  - {symbol: "mrac_config_yaw.ref_model_bw",   cmd_id: 0x1D, idx: 50, default: 30.0, lo: 1.0,  hi: 44.0, scale: log}
+  - {symbol: "mrac_config_pitch.rbf_on",       cmd_id: 0x1D, idx: 32, default: 0.0,  lo: 0.0,  hi: 1.0,  scale: lin}
+  - {symbol: "mrac_config_roll.rbf_on",        cmd_id: 0x1D, idx: 33, default: 0.0,  lo: 0.0,  hi: 1.0,  scale: lin}
+  - {symbol: "mrac_g_gamma[0][*]",             cmd_id: 0x1D, idx: 44, default: 1.0,  lo: 0.25, hi: 1.0,  scale: log}
+  - {symbol: "mrac_g_gamma[1][*]",             cmd_id: 0x1D, idx: 45, default: 1.0,  lo: 0.25, hi: 1.0,  scale: log}
+presets:
+  v3_rbf12:
+    mrac_config_pitch.ref_type: 2
+    mrac_config_roll.ref_type: 2
+    mrac_config_yaw.ref_type: 1
+    mrac_config_pitch.drive_norm: 1
+    mrac_config_roll.drive_norm: 1
+    mrac_config_yaw.drive_norm: 1
+    mrac_config_pitch.lam_edot: 0.0018
+    mrac_config_roll.lam_edot: 0.0018
+    mrac_config_yaw.ref_model_bw: 2.0
+    mrac_config_pitch.rbf_on: 1
+    mrac_config_roll.rbf_on: 1
+    "mrac_g_gamma[0][*]": 0.25
+    "mrac_g_gamma[1][*]": 0.25
+  restore:
+    mrac_config_pitch.ref_type: -1
+    mrac_config_roll.ref_type: -1
+    mrac_config_yaw.ref_type: -1
+    mrac_config_pitch.drive_norm: 0
+    mrac_config_roll.drive_norm: 0
+    mrac_config_yaw.drive_norm: 0
+    mrac_config_pitch.lam_edot: 0
+    mrac_config_roll.lam_edot: 0
+    mrac_config_yaw.ref_model_bw: 30.0
+    mrac_config_pitch.rbf_on: 0
+    mrac_config_roll.rbf_on: 0
+    "mrac_g_gamma[0][*]": 1.0
+    "mrac_g_gamma[1][*]": 1.0

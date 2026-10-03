@@ -118,7 +118,7 @@ def test_variant_on_survives_nan_inputs(build, name):
 
 def test_variant_set_rejects_out_of_range(build):
     exe = build(1)
-    bad = ["4:0:1", "0:12:1", "0:0:3", "0:0:-2", "0:1:0.05", "0:5:51", "0:9:0", "0:4:nan", "0:6:-0.1"]
+    bad = ["4:0:1", "0:13:1", "2:12:0.4", "0:0:3", "0:0:-2", "0:1:0.05", "0:5:51", "0:9:0", "0:4:nan", "0:6:-0.1"]
     good = ["0:0:-1", "3:0:2", "0:1:0.035", "0:5:50", "0:11:0.25", "0:8:1"]
     r = run(exe, *bad, *good)
     assert r["set"] == [0] * len(bad) + [1] * len(good)

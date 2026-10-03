@@ -252,6 +252,7 @@ typedef enum {
     MRAC_VF_RBF_RATE_SCALE,
     MRAC_VF_RBF_ANG_SCALE,
     MRAC_VF_GAMMA_SCALE,        // writes mrac_g_gamma[axis][every group]
+    MRAC_VF_REF_MODEL_BW,       // writes ref_model_bw (V1 yaw flies type 1 at ~2 rad/s)
     MRAC_VF_COUNT
 } MRAC_VariantField_e;
 

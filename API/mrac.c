@@ -1022,7 +1022,8 @@ static const struct { float lo; float hi; uint8_t snap; } mrac_var_field[MRAC_VF
     MRAC_VAR_FIELD( 0.0f,  1.0f,   0),   /* rbf_on          0/1 */
     MRAC_VAR_FIELD( 0.1f,  20.0f,  0),   /* rbf_rate_scale  rad/s */
     MRAC_VAR_FIELD( 0.05f, 1.0f,   0),   /* rbf_ang_scale   rad */
-    MRAC_VAR_FIELD( 0.0f,  2.0f,   0)    /* gamma_scale     mrac_g_gamma[axis][*] */
+    MRAC_VAR_FIELD( 0.0f,  2.0f,   0),   /* gamma_scale     mrac_g_gamma[axis][*] */
+    MRAC_VAR_FIELD( 0.5f,  100.0f, 1)    /* ref_model_bw    rad/s, wn on type 2 (DT*wn < 2) */
 };
 
 uint8_t MRAC_VariantParamSet(uint8_t axis, uint8_t field, float val)
@@ -1062,6 +1063,7 @@ uint8_t MRAC_VariantParamSet(uint8_t axis, uint8_t field, float val)
         case MRAC_VF_GAMMA_SCALE:
             for (k = 0; k < MRAC_N_GROUPS; k++) mrac_g_gamma[axis][k] = val;
             break;
+        case MRAC_VF_REF_MODEL_BW:   c->ref_model_bw = val;   break;
         default: return 0U;
     }
     if (mrac_var_field[field].snap) {
