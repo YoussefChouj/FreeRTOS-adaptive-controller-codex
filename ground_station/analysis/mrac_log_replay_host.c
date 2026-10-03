@@ -53,8 +53,12 @@ int main(int argc, char **argv)
 
     st[0] = &mrac_state.pitch; st[1] = &mrac_state.roll; st[2] = &mrac_state.yaw; st[3] = &mrac_state.z_rate;
     fin = fopen(argv[1], "rb");
+    if (!fin) return 3;
     fout = fopen(argv[2], "wb");
-    if (!fin || !fout) return 3;
+    if (!fout) {
+        fclose(fin);
+        return 3;
+    }
 
     while (fread(in, sizeof(float), N_IN, fin) == N_IN) {
         CtrlerTypeDef c;
