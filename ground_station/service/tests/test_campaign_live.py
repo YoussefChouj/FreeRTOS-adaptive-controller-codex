@@ -147,6 +147,34 @@ def test_resting_v_and_readiness():
         check_live_ready(svc)
 
 
+def test_readiness_loads_the_core_plan_when_status_is_not_streaming():
+    """No operator preset streams g_wfb_status: Go puts the core log plan on slot 0 first, then checks."""
+    svc = FakeService()
+    calls = []
+
+    class Bridge:
+        def subscribe_slot(self, **args):
+            calls.append(args)
+            svc.stream(g_wfb_status__prim_state=0)   # the FC answers the new layout
+
+    svc.bridge = Bridge()
+    check_live_ready(svc, now_ns=lambda: NOW_NS)
+    assert [c["slot"] for c in calls] == [0]
+    assert any("g_wfb_status.prim_state" in str(r) for r in calls[0]["ranges"])
+    check_live_ready(svc, now_ns=lambda: NOW_NS)      # already streaming: no second subscribe
+    assert len(calls) == 1
+
+
+
+def test_readiness_still_refuses_when_the_fc_never_streams_status(monkeypatch):
+    from ground_station.service import campaign_live
+    monkeypatch.setattr(campaign_live, "STATUS_PRIME_S", 0.0)
+    svc = FakeService()
+    svc.bridge = type("SilentBridge", (), {"subscribe_slot": lambda self, **a: None})()
+    with pytest.raises(RuntimeError, match="g_wfb_status is not streaming"):
+        check_live_ready(svc, now_ns=lambda: NOW_NS)
+
+
 def test_factory_refuses_without_link():
     svc = FakeService()
     svc.gateway = None
