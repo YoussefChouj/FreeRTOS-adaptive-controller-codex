@@ -1470,6 +1470,10 @@ static void GroundStation_AbortAllPaths(void)
 
 void Process_GroundStation_Command(void)
 {
+    uint32_t lease_now_ms = (uint32_t)xTaskGetTickCount() * (uint32_t)portTICK_PERIOD_MS;
+    uint8_t lease_airborne = (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING) ? 1U : 0U;
+    PID_GainLeaseTick(lease_now_ms, lease_airborne); /* WP-28 gain lease: restores the snapshot when not renewed */
+
     while (gs_cmd_tail != gs_cmd_head)
     {
         uint8_t id = gs_cmd_queue[gs_cmd_tail].id;
@@ -1525,6 +1529,7 @@ void Process_GroundStation_Command(void)
             pids[6] = &Ctrler.Z_ratePID;
                                    
             if (axis < 7 && val >= 0.0f && val <= 200.0f) {
+                PID_GainLeaseRenew(lease_now_ms, lease_airborne);
                 if (gain == 0) pids[axis]->Kp = val;
                 else if (gain == 1) pids[axis]->Ki = val;
                 else if (gain == 2) pids[axis]->Kd = val;

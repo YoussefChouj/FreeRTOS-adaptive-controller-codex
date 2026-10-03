@@ -7,6 +7,7 @@ Steps run in order:
   path    {shape, params}        trajectory_pipeline.generate around the hover point
   excite  {axis, signal, f0, f1, amp, duration_s}
                                  SysID run (CMD 0x14) on one rate loop; only right after a hold (see below)
+  livetune {loop, axes, budget_s, ...}  hold the hover point while ground_station/livetune tunes gains for budget_s
   land    {}                     the last step, exactly once
 
 takeoff may also set mrac_injection (0/1): CMD 0x0F idx 10 sent on the ground before takeoff (autotune flies 0).
@@ -44,10 +45,13 @@ from ground_station.service.trajectory_pipeline import (
     time_profile,
     validate,
 )
+from ground_station.livetune.loop import STEP_OPTIONAL as LIVETUNE_OPTIONAL
+from ground_station.livetune.loop import STEP_REQUIRED as LIVETUNE_REQUIRED
+from ground_station.livetune.loop import parse_step as parse_livetune
 
 SCENARIO_DIR = Path(__file__).resolve().parents[2] / "docs" / "workflow-b" / "scenarios"
 
-STEP_KINDS = ("takeoff", "hold", "goto", "path", "excite", "land")
+STEP_KINDS = ("takeoff", "hold", "goto", "path", "excite", "livetune", "land")
 TRAJ_KINDS = ("goto", "path")
 
 # excite limits, PROPOSED: band below the 100 Hz core-stream Nyquist; amp at most the WP-25 60 deg/s cap; hover at
@@ -80,6 +84,7 @@ _STEP_KEYS: Mapping[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "goto": (("x", "y", "z"), ("dwell_s",) + tuple(DEFAULT_MOTION)),
     "path": (("shape", "params"), tuple(DEFAULT_MOTION)),
     "excite": (("axis", "f0", "f1", "amp", "duration_s"), ("signal",)),
+    "livetune": (LIVETUNE_REQUIRED, LIVETUNE_OPTIONAL),
     "land": ((), ()),
 }
 
@@ -360,6 +365,13 @@ def parse_scenario(data: Any, args: Mapping[str, Any] | None = None) -> Scenario
                 problems.append(f"{path}.hold.s: must be a finite number > 0 (got {s!r})")
             else:
                 steps.append(Step("hold", dict(body), (), float(s)))
+        elif kind == "livetune":
+            if math.isfinite(hover_z):
+                lim = TrajLimits()
+                _, errs = parse_livetune(body, (0.0, 0.0, hover_z), (lim.x_abs_m, lim.y_abs_m))
+                problems.extend(f"{path}.livetune.{e}" for e in errs)
+                if not errs:
+                    steps.append(Step("livetune", dict(body), (), float(body["budget_s"])))
         elif math.isfinite(hover_z):
             step = _compile_traj(kind, body, base_motion, hover_z, path, problems)
             if step is not None:

@@ -25,6 +25,8 @@ from ground_station.platform.wfb_commands import (
 )
 from ground_station.service.trajectory_pipeline import TrajLimits, TrajPoint, crc32, validate
 
+PARAM_CMDS = (0x01, 0x0F, 0x14)  # PID_GAIN, MRAC/telemetry flags, SysID control: the livetune step's writes
+
 
 class PrimState(IntEnum):
     IDLE = 0
@@ -174,6 +176,9 @@ class FakeDrone:
         self._prim_return_t: float = 0.0
         self._prim_descend_frozen: int = 0
 
+        # (cmd, idx, value) of every accepted PARAM_CMDS frame, in order
+        self.param_writes: list[tuple[int, int, float]] = []
+
         # Trajectory storage
         self._traj_raw_floats: list[float] = []
         self._traj_points: list[TrajPoint] = []
@@ -222,11 +227,15 @@ class FakeDrone:
             return self._handle_prim(cmd)
         elif cmd.command_id == CMD_TRAJ:
             return self._handle_traj(cmd)
-        elif cmd.command_id == ex.CMD_MRAC_FLAGS and cmd.index <= 12:
+        if cmd.command_id in PARAM_CMDS:  # no dynamics behind them: recorded for the livetune tests
+            self.param_writes.append((cmd.command_id, cmd.index, cmd.value))
+        if cmd.command_id == ex.CMD_MRAC_FLAGS and cmd.index <= 12:
             self.mrac_flags[int(cmd.index)] = int(round(cmd.value)) != 0
             return int(Outcome.APPLIED)
         elif cmd.command_id == ex.CMD_SYSID:
             return self._handle_sysid(cmd)
+        elif cmd.command_id in PARAM_CMDS:
+            return int(Outcome.APPLIED)
         else:
             return int(Outcome.REJECTED)
 

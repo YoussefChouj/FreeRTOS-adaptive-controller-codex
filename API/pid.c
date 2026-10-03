@@ -73,7 +73,48 @@ CtrlerTypeDef Ctrler={
  *   2026-09-29 Kp 0.6->0.8: restored to FreeRTOS_original.
  *   2026-09-29 Kp 0.8->0.6: flight15 0.5-0.8 Hz pendulum sway from pos-hold, drift +-13 cm.
  *   legacy: hui fei zhe 1.8 outKP, 1.8 0.45 inKP KI.
- */                  
+ */
+/* Gain lease (WP-28 livetune), default OFF. In flight, the first CMD 0x01 write snapshots Kp Ki Kd of the seven
+   0x01 axes and opens a lease; each later 0x01 write renews it. No 0x01 write for lease_ms, or the drone leaving the
+   air, restores the snapshot and closes the lease, so a candidate left by a lost link cannot outlive the link.
+   On the ground the lease is off: gains written there (a verify flight's) stay.
+   enable    1 = on, 0 = off (CMD 0x01 behaves as before)
+   lease_ms  renewal deadline, ms; the GS re-sends the active gains within it */
+#define GAIN_LEASE_ROW(enable, lease_ms) { (enable), (lease_ms) }
+static const struct { uint8_t enable; uint32_t lease_ms; } s_gain_lease_cfg = GAIN_LEASE_ROW(0, 2000);
+
+static PIDTypeDef *const s_lease_pid[7] = { &Ctrler.pitchPID, &Ctrler.rollPID, &Ctrler.yawPID,
+    &Ctrler.gyroxPID, &Ctrler.gyroyPID, &Ctrler.gyrozPID, &Ctrler.Z_ratePID };  /* CMD 0x01 axis order */
+static float s_lease_gain[7][3];
+static uint8_t s_lease_open = 0U;
+static uint32_t s_lease_ms = 0U;
+
+void PID_GainLeaseRenew(uint32_t now_ms, uint8_t airborne)
+{
+    uint8_t a;
+    if (!s_gain_lease_cfg.enable || !airborne) return;
+    if (!s_lease_open) {
+        for (a = 0U; a < 7U; a++) {
+            s_lease_gain[a][0] = s_lease_pid[a]->Kp;
+            s_lease_gain[a][1] = s_lease_pid[a]->Ki;
+            s_lease_gain[a][2] = s_lease_pid[a]->Kd;
+        }
+        s_lease_open = 1U;
+    }
+    s_lease_ms = now_ms;
+}
+
+void PID_GainLeaseTick(uint32_t now_ms, uint8_t airborne)
+{
+    uint8_t a;
+    if (!s_lease_open || (airborne && (uint32_t)(now_ms - s_lease_ms) <= s_gain_lease_cfg.lease_ms)) return;
+    for (a = 0U; a < 7U; a++) {
+        s_lease_pid[a]->Kp = s_lease_gain[a][0];
+        s_lease_pid[a]->Ki = s_lease_gain[a][1];
+        s_lease_pid[a]->Kd = s_lease_gain[a][2];
+    }
+    s_lease_open = 0U;
+}                  
 
 /******���ַ��롢�����޷���P I D ����޷���������޷�***********************/
 #define PID_IS_NONFINITE(x) (((x) != (x)) || ((x) > 1e12f) || ((x) < -1e12f))
