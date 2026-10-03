@@ -5,7 +5,6 @@
   var _pollingTimer = null;
   var _container = null;
   var _state = null;
-  var _agentControl = null;
 
   var CHECKLIST = [
     { id: 'pack_swapped', label: 'Pack swapped and labelled' },
@@ -200,37 +199,6 @@
     });
   }
 
-  function handleAllowArmChange(e) {
-    var target = e.target;
-    var next = target.checked;
-    var prev = !next;
-    if (next) {
-      if (!window.confirm('Allow agent arm?')) {
-        target.checked = false;
-        return;
-      }
-    }
-
-    fetch('/api/agent/control', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ allow_agent_arm: next, source: 'operator' })
-    })
-    .then(function(r) {
-      if (!r.ok) {
-        target.checked = prev;
-        return r.json().catch(function() { return { error: 'HTTP ' + r.status }; })
-          .then(function(data) { showError(data.error || ('HTTP ' + r.status)); });
-      } else {
-        showError('');
-      }
-    })
-    .catch(function(err) {
-      target.checked = prev;
-      showError(err.message);
-    });
-  }
-
   function buildHTML() {
     var html = '<div id="cp-error" style="color:red;display:none;"></div>';
     html += '<div id="cp-poll-error" style="color:red;display:none;"></div>';
@@ -252,7 +220,7 @@
     html += '<button id="cp-abort-btn" style="color:red;font-size:1.2em;">Abort</button>';
     html += '</div>';
 
-    html += '<div><label><input type="checkbox" id="cp-allow-arm"> Allow agent arm</label></div>';
+    html += '<div id="cp-consent-note">Pressing Go consents to the agent arming and disarming for this campaign.</div>';
 
     html += '<div id="cp-status-line"></div>';
 
@@ -287,19 +255,6 @@
       if (landBtn) landBtn.addEventListener('click', function() { sendCommand('land'); });
       if (abortBtn) abortBtn.addEventListener('click', function() { sendCommand('abort'); });
 
-      var allowArm = q('cp-allow-arm');
-      if (allowArm) allowArm.addEventListener('change', handleAllowArmChange);
-
-      fetch('/api/agent/control')
-        .then(function(r) { return r.ok ? r.json() : null; })
-        .then(function(d) {
-          if (d) {
-            _agentControl = d;
-            if (allowArm) allowArm.checked = !!d.allow_agent_arm;
-          }
-        })
-        .catch(function(){});
-
       if (_pollingTimer) {
         clearInterval(_pollingTimer);
       }
@@ -316,7 +271,6 @@
     _api = null;
     _container = null;
     _state = null;
-    _agentControl = null;
   };
 
   if (typeof window.__registerPlugin__ === 'function') {

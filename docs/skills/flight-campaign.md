@@ -36,7 +36,7 @@ Show the result to the operator. If it raises a `CampaignError`, fix the mistake
 
 ## Hand-off
 
-Tell the operator to open the Campaign panel in the dashboard, enter the path and pack ID, tick the checklist, and press Go themselves. Mention that agent arming needs the `allow_agent_arm` toggle in the same panel, and that the panel also has Pause / Land / Abort controls.
+Tell the operator to open the Campaign panel in the dashboard, enter the path and pack ID, tick the checklist, and press Go themselves. Pressing Go is their consent to agent arming and disarming for that campaign; the panel also has Pause / Land / Abort controls.
 
 ## Hard rules
 

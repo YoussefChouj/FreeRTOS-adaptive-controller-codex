@@ -273,29 +273,14 @@ function runHarness() {
                                   if (getEl('cp-poll-error').style.display === 'none') {
                                     passCheck('h', 'Errors shown and separated');
                                     
-                                    // i. allow_agent_arm: confirm false -> no POST; confirm true -> POST
+                                    // i. Go is the arm consent: no allow-arm toggle, a consent note, no /api/agent/control call
                                     fetchCalls = [];
-                      confirmResult = false;
-                      const armToggle = getEl('cp-allow-arm');
-                      armToggle.checked = true;
-                      armToggle.dispatch('change');
-                      let hasPost = fetchCalls.some(f => f.url === '/api/agent/control' && f.opts && f.opts.method === 'POST');
-                      if (hasPost) throw new Error('Should not POST on confirm false');
-                      
-                      confirmResult = true;
-                      armToggle.checked = true;
-                      armToggle.dispatch('change');
+                      if (getEl('cp-allow-arm')) throw new Error('allow-arm toggle should be gone');
+                      if (!getEl('cp-consent-note')) throw new Error('consent note missing');
                       setTimeout(() => {
-                        hasPost = fetchCalls.some(f => f.url === '/api/agent/control' && f.opts && f.opts.method === 'POST' && JSON.parse(f.opts.body).allow_agent_arm === true);
-                        if (!hasPost) throw new Error('Should POST on confirm true');
-                        
-                        // P4 check: network error reverts the toggle
-                        ctx._armFail = true;
-                        armToggle.checked = false; // it was true
-                        armToggle.dispatch('change');
+                        if (fetchCalls.some(f => f.url === '/api/agent/control')) throw new Error('panel must not call /api/agent/control');
                         setTimeout(() => {
-                          if (!armToggle.checked) throw new Error('Toggle should revert to true on POST failure');
-                          passCheck('i', 'allow_agent_arm confirm');
+                          passCheck('i', 'Go is the arm consent');
                           
                           // k. zero submitCommand/gatedCommand calls over the whole run
                           if (api.submitCount === 0 && api.gatedCount === 0) passCheck('k', 'Zero old API calls');
