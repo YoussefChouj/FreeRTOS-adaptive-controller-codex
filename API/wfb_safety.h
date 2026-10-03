@@ -33,7 +33,15 @@ typedef struct {
     float tilt_hold_s;
     float airborne_cap_s;
     float hb_timeout_s;
+    float fence_hold_s;   /* longest push-back outside the fence before LAND_IN_PLACE, s */
+    float fence_over_m;   /* this far beyond the fence (or ceiling) -> LAND_IN_PLACE at once, m */
+    float soft_margin_m;  /* push-back target: this far inside the fence (and ceiling), m */
 } wfb_safety_limits_t;
+
+/* wfb_safety_t.push bits: axes outside the fence that the setpoint is pushing back on. */
+#define WFB_PUSH_X 1u
+#define WFB_PUSH_Y 2u
+#define WFB_PUSH_Z 4u
 
 typedef struct {
     float x_m;
@@ -52,12 +60,17 @@ typedef struct {
     float low_v_t;
     float tilt_t;
     float airborne_t;
+    float fence_t;        /* time outside the fence or ceiling, s */
     uint8_t trip;
     uint8_t action;
+    uint8_t push;         /* WFB_PUSH_* bits, 0 unless a GS flight is outside the fence with no action */
 } wfb_safety_t;
 
 void         wfb_safety_init(wfb_safety_t *s);
 wfb_action_t wfb_safety_step(wfb_safety_t *s, const wfb_safety_limits_t *lim, const wfb_safety_in_t *in);
 void         wfb_safety_default_limits(wfb_safety_limits_t *out);
+/* Fence push-back: each pushed axis of the setpoint becomes the soft boundary on the drone's side. */
+void         wfb_safety_push_sp(const wfb_safety_t *s, const wfb_safety_limits_t *lim, const wfb_safety_in_t *in,
+                                float *x_sp_m, float *y_sp_m, float *z_sp_m);
 
 #endif /* WFB_SAFETY_H */

@@ -10,13 +10,14 @@
    z_min_m        minimum altitude, m
    z_max_m        maximum altitude (ceiling), m
    v_max_mps      maximum segment velocity, m/s
-   endpoint_tol_m 3-D tolerance to hover point at endpoints, m */
+   endpoint_tol_m 3-D tolerance to hover point at endpoints, m
+   x_abs/y_abs/z_max = the soft boundary, 0.3 m inside the wfb_safety fence and ceiling (2026-10-03 grill). */
 #define WFB_TRAJ_LIMITS_ROW(x_abs_m, y_abs_m, z_min_m, z_max_m, v_max_mps, endpoint_tol_m) \
     { (x_abs_m), (y_abs_m), (z_min_m), (z_max_m), (v_max_mps), (endpoint_tol_m) }
 
 static const wfb_traj_limits_t s_default_limits =
 /*                    x_abs  y_abs  z_min  z_max  v_max  tol */
-    WFB_TRAJ_LIMITS_ROW(0.8f,  1.3f,  0.3f,  1.5f,  1.0f,  0.10f); /* PROPOSED */
+    WFB_TRAJ_LIMITS_ROW(1.3f,  1.7f,  0.3f,  1.4f,  1.0f,  0.10f); /* PROPOSED */
 
 void wfb_traj_default_limits(wfb_traj_limits_t *out)
 {

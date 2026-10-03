@@ -12,15 +12,17 @@
    tilt_deg       tilt angle threshold (|roll| or |pitch|), deg
    tilt_hold_s    tilt angle continuous hold time, s
    airborne_cap_s maximum airborne duration, s
-   hb_timeout_s   heartbeat timeout, s */
-#define WFB_SAFETY_LIMITS_ROW(fence_x_m, fence_y_m, ceiling_m, low_v, low_v_hold_s, \
-                              tilt_deg, tilt_hold_s, airborne_cap_s, hb_timeout_s) \
-    { (fence_x_m), (fence_y_m), (ceiling_m), (low_v), (low_v_hold_s), \
-      (tilt_deg), (tilt_hold_s), (airborne_cap_s), (hb_timeout_s) }
+   hb_timeout_s   heartbeat timeout, s
+   fence_hold_s   longest push-back outside the fence or ceiling before LAND_IN_PLACE, s
+   fence_over_m   this far beyond the fence or ceiling -> LAND_IN_PLACE at once, m
+   soft_margin_m  push-back target this far inside the fence and ceiling, m
+   2026-10-03 workflow-B launch grill: fence 1.6/2.0 and ceiling 1.7 around the ground-centre origin (operator);
+   push-back instead of an immediate landing (operator: "too conservative"); hold/over/margin PROPOSED. */
+#define WFB_SAFETY_LIMITS_ROW(fence_x_m, fence_y_m, ceiling_m, low_v, low_v_hold_s,                               tilt_deg, tilt_hold_s, airborne_cap_s, hb_timeout_s,                               fence_hold_s, fence_over_m, soft_margin_m)     { (fence_x_m), (fence_y_m), (ceiling_m), (low_v), (low_v_hold_s),       (tilt_deg), (tilt_hold_s), (airborne_cap_s), (hb_timeout_s),       (fence_hold_s), (fence_over_m), (soft_margin_m) }
 
 static const wfb_safety_limits_t s_default_limits =
-/*                   fence_x fence_y ceiling low_v low_v_hold tilt tilt_hold cap    hb */
-    WFB_SAFETY_LIMITS_ROW(1.1f,   1.6f,   1.5f,   14.0f, 3.0f,     60.0f, 0.2f,    120.0f, 1.0f); /* PROPOSED */
+/*                   fence_x fence_y ceiling low_v low_v_hold tilt tilt_hold cap    hb    f_hold f_over soft */
+    WFB_SAFETY_LIMITS_ROW(1.6f,   2.0f,   1.7f,   14.0f, 3.0f,     60.0f, 0.2f,    120.0f, 1.0f, 2.0f,  0.3f,  0.3f); /* PROPOSED */
 
 void wfb_safety_default_limits(wfb_safety_limits_t *out)
 {
@@ -35,8 +37,31 @@ void wfb_safety_init(wfb_safety_t *s)
         s->low_v_t = 0.0f;
         s->tilt_t = 0.0f;
         s->airborne_t = 0.0f;
+        s->fence_t = 0.0f;
         s->trip = (uint8_t)WFB_TRIP_NONE;
         s->action = (uint8_t)WFB_ACT_NONE;
+        s->push = 0u;
+    }
+}
+
+void wfb_safety_push_sp(const wfb_safety_t *s, const wfb_safety_limits_t *lim, const wfb_safety_in_t *in,
+                        float *x_sp_m, float *y_sp_m, float *z_sp_m)
+{
+    float soft;
+
+    if (s == NULL || lim == NULL || in == NULL || x_sp_m == NULL || y_sp_m == NULL || z_sp_m == NULL) {
+        return;
+    }
+    if ((s->push & WFB_PUSH_X) != 0u) {
+        soft = lim->fence_x_m - lim->soft_margin_m;
+        *x_sp_m = (in->x_m < 0.0f) ? -soft : soft;
+    }
+    if ((s->push & WFB_PUSH_Y) != 0u) {
+        soft = lim->fence_y_m - lim->soft_margin_m;
+        *y_sp_m = (in->y_m < 0.0f) ? -soft : soft;
+    }
+    if ((s->push & WFB_PUSH_Z) != 0u) {
+        *z_sp_m = lim->ceiling_m - lim->soft_margin_m;
     }
 }
 
@@ -44,6 +69,8 @@ wfb_action_t wfb_safety_step(wfb_safety_t *s, const wfb_safety_limits_t *lim, co
 {
     int tilt_active;
     int low_v_active;
+    int land_now;
+    uint8_t out, far;
 
     if (s == NULL) {
         return WFB_ACT_NONE;
@@ -56,13 +83,15 @@ wfb_action_t wfb_safety_step(wfb_safety_t *s, const wfb_safety_limits_t *lim, co
     if (in->airborne == 0) {
         s->tilt_t = 0.0f;
         s->low_v_t = 0.0f;
+        s->fence_t = 0.0f;
+        s->push = 0u;
         return (wfb_action_t)s->action;
     }
 
     /* airborne_t accumulates dt_s while airborne */
     s->airborne_t += in->dt_s;
 
-    /* Check order: TILT, FENCE, CEILING, LOW_V, HEARTBEAT, AIRBORNE_CAP.
+    /* Check order: TILT, FENCE/CEILING, LOW_V, HEARTBEAT, AIRBORNE_CAP.
        All comparisons use negated form so NaN trips fail-safe. */
 
     /* 1. TILT: |roll| or |pitch| over tilt_deg continuously for tilt_hold_s -> KILL, trip TILT. */
@@ -80,20 +109,27 @@ wfb_action_t wfb_safety_step(wfb_safety_t *s, const wfb_safety_limits_t *lim, co
         }
     }
 
-    /* 2. FENCE: |x| > fence_x_m or |y| > fence_y_m -> LAND_IN_PLACE, trip FENCE. */
-    if (!(fabsf(in->x_m) <= lim->fence_x_m) || !(fabsf(in->y_m) <= lim->fence_y_m)) {
-        if (s->action < (uint8_t)WFB_ACT_LAND_IN_PLACE) {
-            s->action = (uint8_t)WFB_ACT_LAND_IN_PLACE;
-            s->trip = (uint8_t)WFB_TRIP_FENCE;
-        }
+    /* 2-3. FENCE / CEILING. Outside |x| fence_x_m, |y| fence_y_m or z ceiling_m on a GS flight with no action:
+       push back (s->push, see wfb_safety_push_sp) while fence_t counts. Still out after fence_hold_s, more than
+       fence_over_m beyond, or no GS setpoint to push with (pilot takeover) -> LAND_IN_PLACE, trip FENCE for x/y
+       else CEILING. Back inside clears fence_t and the push. */
+    out = 0u;
+    far = 0u;
+    if (!(fabsf(in->x_m) <= lim->fence_x_m)) { out |= WFB_PUSH_X; }
+    if (!(fabsf(in->y_m) <= lim->fence_y_m)) { out |= WFB_PUSH_Y; }
+    if (!(in->z_m <= lim->ceiling_m))        { out |= WFB_PUSH_Z; }
+    if (!(fabsf(in->x_m) <= lim->fence_x_m + lim->fence_over_m)) { far |= WFB_PUSH_X; }
+    if (!(fabsf(in->y_m) <= lim->fence_y_m + lim->fence_over_m)) { far |= WFB_PUSH_Y; }
+    if (!(in->z_m <= lim->ceiling_m + lim->fence_over_m))        { far |= WFB_PUSH_Z; }
+    if (out != 0u) {
+        s->fence_t += in->dt_s;
+    } else {
+        s->fence_t = 0.0f;
     }
-
-    /* 3. CEILING: z > ceiling_m -> LAND_IN_PLACE, trip CEILING. */
-    if (!(in->z_m <= lim->ceiling_m)) {
-        if (s->action < (uint8_t)WFB_ACT_LAND_IN_PLACE) {
-            s->action = (uint8_t)WFB_ACT_LAND_IN_PLACE;
-            s->trip = (uint8_t)WFB_TRIP_CEILING;
-        }
+    land_now = (out != 0u) && (in->gs_flight_active == 0 || far != 0u || !(s->fence_t < lim->fence_hold_s));
+    if (land_now && s->action < (uint8_t)WFB_ACT_LAND_IN_PLACE) {
+        s->action = (uint8_t)WFB_ACT_LAND_IN_PLACE;
+        s->trip = (uint8_t)(((out & (WFB_PUSH_X | WFB_PUSH_Y)) != 0u) ? WFB_TRIP_FENCE : WFB_TRIP_CEILING);
     }
 
     /* 4. LOW_V: vbat_v under low_v continuously for low_v_hold_s -> LAND_VIA_HOVER, trip LOW_V. */
@@ -126,5 +162,6 @@ wfb_action_t wfb_safety_step(wfb_safety_t *s, const wfb_safety_limits_t *lim, co
         }
     }
 
+    s->push = (s->action == (uint8_t)WFB_ACT_NONE) ? out : 0u;
     return (wfb_action_t)s->action;
 }

@@ -291,7 +291,7 @@ static void test_commit_check_order(void)
     CHECK(tr.state == (uint8_t)WFB_TRAJ_EMPTY);
 
     /* Check 3: |x| over x_abs_m -> BOUNDS */
-    pts[0].x_m = 0.9f; pts[0].y_m = 0.0f; pts[0].z_m = 0.5f; pts[0].yaw_deg = 0.0f; pts[0].t_s = 0.0f;
+    pts[0].x_m = 1.4f; pts[0].y_m = 0.0f; pts[0].z_m = 0.5f; pts[0].yaw_deg = 0.0f; pts[0].t_s = 0.0f;
     pts[1].x_m = 0.0f; pts[1].y_m = 0.0f; pts[1].z_m = 0.5f; pts[1].yaw_deg = 0.0f; pts[1].t_s = 1.0f;
     CHECK(load_and_commit(&tr, pts, 2u, &lim, 0.5f) == WFB_ERR_BOUNDS);
     CHECK(tr.state == (uint8_t)WFB_TRAJ_EMPTY);
@@ -322,13 +322,13 @@ static void test_commit_check_order(void)
 
     /* Failing two checks reports the earlier one:
        Case A: TIME and BOUNDS -> reports TIME */
-    pts[0].x_m = 0.9f; pts[0].y_m = 0.0f; pts[0].z_m = 0.5f; pts[0].yaw_deg = 0.0f; pts[0].t_s = 0.1f;
+    pts[0].x_m = 1.4f; pts[0].y_m = 0.0f; pts[0].z_m = 0.5f; pts[0].yaw_deg = 0.0f; pts[0].t_s = 0.1f;
     pts[1].x_m = 0.0f; pts[1].y_m = 0.0f; pts[1].z_m = 0.5f; pts[1].yaw_deg = 0.0f; pts[1].t_s = 1.0f;
     CHECK(load_and_commit(&tr, pts, 2u, &lim, 0.5f) == WFB_ERR_TIME);
     CHECK(tr.state == (uint8_t)WFB_TRAJ_EMPTY);
 
     /* Case B: BOUNDS and ENDPOINT -> reports BOUNDS */
-    pts[0].x_m = 0.9f; pts[0].y_m = 0.0f; pts[0].z_m = 0.5f; pts[0].yaw_deg = 0.0f; pts[0].t_s = 0.0f;
+    pts[0].x_m = 1.4f; pts[0].y_m = 0.0f; pts[0].z_m = 0.5f; pts[0].yaw_deg = 0.0f; pts[0].t_s = 0.0f;
     pts[1].x_m = 0.0f; pts[1].y_m = 0.0f; pts[1].z_m = 0.5f; pts[1].yaw_deg = 0.0f; pts[1].t_s = 1.0f;
     CHECK(load_and_commit(&tr, pts, 2u, &lim, 0.5f) == WFB_ERR_BOUNDS);
     CHECK(tr.state == (uint8_t)WFB_TRAJ_EMPTY);
@@ -492,10 +492,10 @@ static void test_default_limits(void)
     memset(&lim, 0, sizeof(lim));
     wfb_traj_default_limits(&lim);
 
-    CHECK_FLOAT_EQ(lim.x_abs_m, 0.8f, 1e-6f);
-    CHECK_FLOAT_EQ(lim.y_abs_m, 1.3f, 1e-6f);
+    CHECK_FLOAT_EQ(lim.x_abs_m, 1.3f, 1e-6f);
+    CHECK_FLOAT_EQ(lim.y_abs_m, 1.7f, 1e-6f);
     CHECK_FLOAT_EQ(lim.z_min_m, 0.3f, 1e-6f);
-    CHECK_FLOAT_EQ(lim.z_max_m, 1.5f, 1e-6f);
+    CHECK_FLOAT_EQ(lim.z_max_m, 1.4f, 1e-6f);
     CHECK_FLOAT_EQ(lim.v_max_mps, 1.0f, 1e-6f);
     CHECK_FLOAT_EQ(lim.endpoint_tol_m, 0.10f, 1e-6f);
 }

@@ -271,7 +271,7 @@ static void test_set_hover_z(void)
     wfb_glue_init();
     CHECK(prim_cmd(WFB_PRIM_CMD_SET_HOVER_Z, 0.29f, 0u) == WFB_RESULT_REJECTED);
     CHECK(last_err() == WFB_ERR_RANGE);
-    CHECK(prim_cmd(WFB_PRIM_CMD_SET_HOVER_Z, 1.21f, 0u) == WFB_RESULT_REJECTED);
+    CHECK(prim_cmd(WFB_PRIM_CMD_SET_HOVER_Z, 1.41f, 0u) == WFB_RESULT_REJECTED);
     CHECK(prim_cmd(WFB_PRIM_CMD_SET_HOVER_Z, NAN, 0u) == WFB_RESULT_REJECTED);
     CHECK(last_err() == WFB_ERR_RANGE);
     CHECK(prim_cmd(WFB_PRIM_CMD_SET_HOVER_Z, 0.8f, 0u) == WFB_RESULT_APPLIED);
@@ -450,8 +450,8 @@ static void test_rc_flight_has_no_safety_net(void)
 
     wfb_glue_init();
     in.airborne = 1u;
-    in.x_m = 1.3f;       /* fence_x_m = 1.1 */
-    in.z_m = 2.0f;       /* ceiling_m = 1.5 */
+    in.x_m = 1.7f;       /* fence_x_m = 1.6 */
+    in.z_m = 2.0f;       /* ceiling_m = 1.7 */
     in.roll_deg = 70.0f; /* tilt_deg = 60 for tilt_hold_s = 0.2 */
     in.vbat_v = 13.0f;   /* low_v = 14 for low_v_hold_s = 3 */
     run_ticks(&in, &out, 800, 0);
@@ -486,9 +486,37 @@ static void test_pilot_takeover(void)
     CHECK(last_err() == WFB_ERR_STATE);
 
     in.airborne = 1u;
-    in.x_m = 1.3f;
+    in.x_m = 1.7f; /* no GS setpoint to push with: lands at once */
     step(&in, &out, 0);
     CHECK(out.land_req == 1u);
+}
+
+/* Just outside the fence on a GS flight: the setpoint is pushed to the soft boundary, the
+ * trajectory clock stands still, and back inside the push clears with no landing. */
+static void test_fence_push_back(void)
+{
+    wfb_glue_in_t in;
+    wfb_glue_out_t out;
+
+    fly_to_hover(&in, &out);
+    in.x_m = 1.7f;
+    step(&in, &out, 1);
+    CHECK(out.land_req == 0u);
+    CHECK(out.setpoint_valid == 1u);
+    CHECK_NEAR(out.x_sp_m, 1.3f, 1e-6f);
+    CHECK(g_wfb_status.fence_push == 1.0f);
+    in.x_m = -1.7f;
+    in.z_m = 1.8f;
+    step(&in, &out, 1);
+    CHECK_NEAR(out.x_sp_m, -1.3f, 1e-6f);
+    CHECK_NEAR(out.z_sp_m, 1.4f, 1e-6f);
+    CHECK(g_wfb_status.fence_push == 5.0f);
+    in.x_m = 0.0f;
+    in.z_m = 0.8f;
+    step(&in, &out, 1);
+    CHECK(g_wfb_status.fence_push == 0.0f);
+    CHECK(out.land_req == 0u);
+    CHECK(g_wfb_status.safety_trip == 0.0f);
 }
 
 /* A heartbeat stamped after the tick time (task race) reads as age 0, not a wrapped age. */
@@ -548,6 +576,7 @@ int main(void)
     RUN(test_regular_heartbeat_never_trips);
     RUN(test_rc_flight_has_no_safety_net);
     RUN(test_pilot_takeover);
+    RUN(test_fence_push_back);
     RUN(test_future_heartbeat_clamps_to_zero);
     RUN(test_malformed_commands_rejected);
     RUN(test_tilt_kills_motors);

@@ -31,7 +31,7 @@ typedef struct {
     { (hover_z_min_m), (hover_z_max_m), (dt_max_s) }
 
 static const wfb_glue_cfg_t s_glue_cfg =
-    WFB_GLUE_CFG_ROW(0.3f,          1.2f,          0.05f); /* PROPOSED */
+    WFB_GLUE_CFG_ROW(0.3f,          1.4f,          0.05f); /* PROPOSED; max = ceiling 1.7 - soft margin 0.3 (2026-10-03 grill) */
 
 typedef struct {
     wfb_traj_point_t buf[WFB_TRAJ_MAX_POINTS];
@@ -193,6 +193,7 @@ static void wfb_glue_mirror(float hb_age_s, float traj_t_s)
     g_wfb_status.gs_flight_active = (float)s_wfb.gs_flight_active;
     g_wfb_status.hover_z = s_wfb.prim_cfg.hover_z_m;
     g_wfb_status.airborne_t = s_wfb.safety.airborne_t;
+    g_wfb_status.fence_push = (float)s_wfb.safety.push;
 }
 
 void wfb_glue_init(void)
@@ -277,12 +278,14 @@ void wfb_glue_tick(const wfb_glue_in_t *in, wfb_glue_out_t *out)
     wfb_traj_point_t pt;
     uint8_t action, st, sampled, gs_flying;
     float dt_s, hb_age_s, traj_t_s;
+    uint32_t tick_ms;
 
     memset(out, 0, sizeof(*out));
     memset(&pt, 0, sizeof(pt));
     sampled = 0u;
     traj_t_s = 0.0f;
 
+    tick_ms = s_wfb.have_tick ? (uint32_t)(in->now_ms - s_wfb.last_ms) : 0u;
     dt_s = s_wfb.have_tick ? wfb_glue_age_s(in->now_ms, s_wfb.last_ms) : 0.0f;
     if (dt_s > s_glue_cfg.dt_max_s) {
         dt_s = s_glue_cfg.dt_max_s;
@@ -319,6 +322,12 @@ void wfb_glue_tick(const wfb_glue_in_t *in, wfb_glue_out_t *out)
     sin.gs_flight_active = gs_flying;
     action = (uint8_t)wfb_safety_step(&s_wfb.safety, &s_wfb.safety_lim, &sin);
     wfb_glue_apply_action(action, &pin);
+
+    /* Fence push-back (safety.push, GS flights only): the trajectory clock stops so the path resumes where it
+       left off once the drone is back inside. */
+    if (s_wfb.safety.push != 0u && s_wfb.traj.state == (uint8_t)WFB_TRAJ_EXECUTING) {
+        s_wfb.traj_start_ms += tick_ms;
+    }
 
     /* Keep the trajectory executor and the sequencer in step. */
     if (s_wfb.traj.state == (uint8_t)WFB_TRAJ_EXECUTING) {
@@ -359,6 +368,10 @@ void wfb_glue_tick(const wfb_glue_in_t *in, wfb_glue_out_t *out)
                 out->z_sp_m = pout.z_sp_m;
             }
             out->yaw_sp_deg = s_wfb.yaw_hold_deg;
+            if (s_wfb.safety.push != 0u) {
+                wfb_safety_push_sp(&s_wfb.safety, &s_wfb.safety_lim, &sin,
+                                   &out->x_sp_m, &out->y_sp_m, &out->z_sp_m);
+            }
         }
         if (s_wfb.takeoff_pending && st == (uint8_t)WFB_PRIM_CLIMB) {
             out->takeoff_req = 1u;

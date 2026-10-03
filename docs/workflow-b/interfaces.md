@@ -70,9 +70,11 @@ CMD 0x1C and 0x1D stay unused.
 | `WFB_TRAJ_Z_MIN` | 0.3 m | PROPOSED |
 | `WFB_TRAJ_V_MAX` | 1.0 m/s | PROPOSED |
 | `WFB_TRAJ_ENDPOINT_TOL` | 0.10 m | PROPOSED |
-| `WFB_HOVER_Z_MIN` / `_MAX` | 0.3 / 1.2 m | PROPOSED |
-| Fence | +/-1.1 m x, +/-1.6 m y | spec Q6 |
-| Ceiling | 1.5 m | spec Q6 |
+| `WFB_HOVER_Z_MIN` / `_MAX` | 0.3 / 1.4 m (max = ceiling - soft margin) | PROPOSED |
+| Fence | +/-1.6 m x, +/-2.0 m y around the ground-centre origin | operator, 2026-10-03 launch grill |
+| Ceiling | 1.7 m | operator, 2026-10-03 launch grill |
+| Soft boundary (trajectory x_abs / y_abs / z_max) | 1.3 / 1.7 / 1.4 m = fence and ceiling - 0.3 m | PROPOSED |
+| Fence push-back | hold 2.0 s, over 0.3 m, target 0.3 m inside | PROPOSED |
 | Airborne cap | 120 s | spec Q5 |
 | Heartbeat timeout | 1.0 s (GS sends at 5 Hz) | PROPOSED |
 | Low-voltage backstop | 14.0 V held 3 s | PROPOSED, operator sets |
@@ -100,6 +102,7 @@ subscribe stream (float32 values, `facts-gs.md:12`). Every field is `float` so t
 | `gs_flight_active` | 1 from TAKEOFF accepted until disarm |
 | `hover_z` | current hover height, m |
 | `airborne_t` | seconds airborne this flight |
+| `fence_push` | `WFB_PUSH_*` bits being pushed back (1 x, 2 y, 4 z), 0 = none |
 
 ## 3. Pure-C firmware modules
 
@@ -159,14 +162,19 @@ typedef enum { WFB_ACT_NONE = 0, WFB_ACT_LAND_VIA_HOVER, WFB_ACT_LAND_IN_PLACE, 
 typedef enum { WFB_TRIP_NONE = 0, WFB_TRIP_HEARTBEAT, WFB_TRIP_LOW_V, WFB_TRIP_AIRBORNE_CAP,
                WFB_TRIP_FENCE, WFB_TRIP_CEILING, WFB_TRIP_TILT } wfb_trip_t;
 typedef struct { float fence_x_m, fence_y_m, ceiling_m, low_v, low_v_hold_s, tilt_deg, tilt_hold_s,
-                 airborne_cap_s, hb_timeout_s; } wfb_safety_limits_t;
+                 airborne_cap_s, hb_timeout_s, fence_hold_s, fence_over_m, soft_margin_m; } wfb_safety_limits_t;
 typedef struct { float x_m, y_m, z_m, roll_deg, pitch_deg, vbat_v, hb_age_s, dt_s;
                  uint8_t airborne, gs_flight_active; } wfb_safety_in_t;
-typedef struct { float low_v_t, tilt_t, airborne_t; uint8_t trip, action; } wfb_safety_t;
+typedef struct { float low_v_t, tilt_t, airborne_t, fence_t; uint8_t trip, action, push; } wfb_safety_t;
+#define WFB_PUSH_X 1u
+#define WFB_PUSH_Y 2u
+#define WFB_PUSH_Z 4u
 
 void         wfb_safety_init(wfb_safety_t *s);
 wfb_action_t wfb_safety_step(wfb_safety_t *s, const wfb_safety_limits_t *lim, const wfb_safety_in_t *in);
 void         wfb_safety_default_limits(wfb_safety_limits_t *out);   /* the section 1 constants */
+void         wfb_safety_push_sp(const wfb_safety_t *s, const wfb_safety_limits_t *lim, const wfb_safety_in_t *in,
+                                float *x_sp_m, float *y_sp_m, float *z_sp_m);  /* pushed axes -> soft boundary */
 ```
 
 Rules. Trip -> action: TILT -> KILL; FENCE, CEILING -> LAND_IN_PLACE; HEARTBEAT, LOW_V, AIRBORNE_CAP ->
@@ -174,6 +182,12 @@ LAND_VIA_HOVER. The action is latched and only escalates (KILL > LAND_IN_PLACE >
 `wfb_safety_init`. `trip` keeps the first cause of the current action level. Nothing trips while `airborne == 0`.
 HEARTBEAT and AIRBORNE_CAP apply only while `gs_flight_active == 1` (an RC-only flight is never landed by them).
 TILT, FENCE, CEILING and LOW_V apply to every flight.
+Fence push-back (2026-10-03): outside the fence or ceiling on a GS flight with action NONE, `push` holds the
+`WFB_PUSH_*` bits of the axes out, the glue overrides those setpoints with `wfb_safety_push_sp` (fence or ceiling
+minus `soft_margin_m`, on the drone's side) and freezes the trajectory clock, and `fence_t` counts. FENCE/CEILING
+latch LAND_IN_PLACE only when still out after `fence_hold_s`, more than `fence_over_m` beyond, or with
+`gs_flight_active == 0` (RC flight or pilot takeover: no GS setpoint to push with). Back inside clears `fence_t`
+and `push`; a recovered push-back is not a trip.
 Comparisons are in negated form, so a non-finite input trips its check. When several checks trip in the same
 step, `trip` is the first in this order: TILT, FENCE, CEILING, LOW_V, HEARTBEAT, AIRBORNE_CAP.
 

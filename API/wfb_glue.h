@@ -49,6 +49,7 @@ typedef struct {
     float gs_flight_active;
     float hover_z;
     float airborne_t;
+    float fence_push;   /* WFB_PUSH_* bits (1 x, 2 y, 4 z): axes the setpoint is pushing back inside the fence */
 } wfb_status_t;
 
 /* Snapshot taken by the 200 Hz loop before wfb_glue_tick. Position in METRES, world frame. */

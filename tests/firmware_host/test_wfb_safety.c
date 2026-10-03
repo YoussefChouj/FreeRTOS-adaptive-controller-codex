@@ -71,6 +71,8 @@ static void test_1_airborne_zero(void)
         CHECK_FLOAT_EQ(s.low_v_t, 0.0f, 1e-6f);
         CHECK_FLOAT_EQ(s.tilt_t, 0.0f, 1e-6f);
         CHECK_FLOAT_EQ(s.airborne_t, 0.0f, 1e-6f);
+        CHECK_FLOAT_EQ(s.fence_t, 0.0f, 1e-6f);
+        CHECK(s.push == 0u);
     }
 
     /* Negative violations */
@@ -149,69 +151,185 @@ static void test_2_tilt(void)
     CHECK(s.trip == (uint8_t)WFB_TRIP_TILT);
 }
 
-/* 3. Fence: |x| > fence_x_m or |y| > fence_y_m -> LAND_IN_PLACE, trip FENCE, on the first step.
-      z > ceiling_m -> LAND_IN_PLACE, trip CEILING. */
+/* 3. Fence and ceiling push-back on a GS flight (fence_x_m 1.6, fence_y_m 2.0, ceiling_m 1.7,
+      fence_hold_s 2.0, fence_over_m 0.3):
+      - just outside -> NONE, push bit set, fence_t counts;
+      - back inside -> push and fence_t clear;
+      - outside for fence_hold_s -> LAND_IN_PLACE, trip FENCE (x/y) or CEILING (z), push clears;
+      - more than fence_over_m beyond -> LAND_IN_PLACE on the first step;
+      - pilot takeover (gs_flight_active 0) -> LAND_IN_PLACE on the first step;
+      - exact boundaries do not count as outside. */
 static void test_3_fence_ceiling(void)
 {
     wfb_safety_t s;
     wfb_safety_limits_t lim;
     wfb_safety_in_t in;
     wfb_action_t act;
+    int i;
 
-    wfb_safety_default_limits(&lim); /* fence_x_m = 1.1f, fence_y_m = 1.6f, ceiling_m = 1.5f */
+    wfb_safety_default_limits(&lim);
 
-    /* x > fence_x_m on first step */
+    /* x just outside: push X, no action */
     wfb_safety_init(&s);
     init_nominal_in(&in);
-    in.x_m = 1.15f;
-    act = wfb_safety_step(&s, &lim, &in);
-    CHECK(act == WFB_ACT_LAND_IN_PLACE);
-    CHECK(s.action == (uint8_t)WFB_ACT_LAND_IN_PLACE);
-    CHECK(s.trip == (uint8_t)WFB_TRIP_FENCE);
-
-    /* x < -fence_x_m on first step */
-    wfb_safety_init(&s);
-    init_nominal_in(&in);
-    in.x_m = -1.15f;
-    act = wfb_safety_step(&s, &lim, &in);
-    CHECK(act == WFB_ACT_LAND_IN_PLACE);
-    CHECK(s.trip == (uint8_t)WFB_TRIP_FENCE);
-
-    /* y > fence_y_m on first step */
-    wfb_safety_init(&s);
-    init_nominal_in(&in);
-    in.y_m = 1.65f;
-    act = wfb_safety_step(&s, &lim, &in);
-    CHECK(act == WFB_ACT_LAND_IN_PLACE);
-    CHECK(s.trip == (uint8_t)WFB_TRIP_FENCE);
-
-    /* y < -fence_y_m on first step */
-    wfb_safety_init(&s);
-    init_nominal_in(&in);
-    in.y_m = -1.65f;
-    act = wfb_safety_step(&s, &lim, &in);
-    CHECK(act == WFB_ACT_LAND_IN_PLACE);
-    CHECK(s.trip == (uint8_t)WFB_TRIP_FENCE);
-
-    /* z > ceiling_m on first step */
-    wfb_safety_init(&s);
-    init_nominal_in(&in);
-    in.z_m = 1.55f;
-    act = wfb_safety_step(&s, &lim, &in);
-    CHECK(act == WFB_ACT_LAND_IN_PLACE);
-    CHECK(s.action == (uint8_t)WFB_ACT_LAND_IN_PLACE);
-    CHECK(s.trip == (uint8_t)WFB_TRIP_CEILING);
-
-    /* Exact boundaries do not trip */
-    wfb_safety_init(&s);
-    init_nominal_in(&in);
-    in.x_m = 1.1f;
-    in.y_m = 1.6f;
-    in.z_m = 1.5f;
+    in.x_m = 1.7f;
     act = wfb_safety_step(&s, &lim, &in);
     CHECK(act == WFB_ACT_NONE);
-    CHECK(s.action == (uint8_t)WFB_ACT_NONE);
     CHECK(s.trip == (uint8_t)WFB_TRIP_NONE);
+    CHECK(s.push == (uint8_t)WFB_PUSH_X);
+    CHECK_FLOAT_EQ(s.fence_t, 0.01f, 1e-6f);
+
+    /* back inside clears push and fence_t */
+    in.x_m = 1.5f;
+    act = wfb_safety_step(&s, &lim, &in);
+    CHECK(act == WFB_ACT_NONE);
+    CHECK(s.push == 0u);
+    CHECK_FLOAT_EQ(s.fence_t, 0.0f, 1e-6f);
+
+    /* -x, -y and z each set their own bit; all three together set all three */
+    wfb_safety_init(&s);
+    init_nominal_in(&in);
+    in.x_m = -1.7f;
+    in.y_m = -2.1f;
+    in.z_m = 1.8f;
+    act = wfb_safety_step(&s, &lim, &in);
+    CHECK(act == WFB_ACT_NONE);
+    CHECK(s.push == (uint8_t)(WFB_PUSH_X | WFB_PUSH_Y | WFB_PUSH_Z));
+
+    /* y outside for fence_hold_s -> LAND_IN_PLACE, trip FENCE, push clears */
+    wfb_safety_init(&s);
+    init_nominal_in(&in);
+    in.y_m = 2.1f;
+    in.dt_s = 0.5f;
+    for (i = 0; i < 3; i++) {
+        act = wfb_safety_step(&s, &lim, &in);
+        CHECK(act == WFB_ACT_NONE);
+        CHECK(s.push == (uint8_t)WFB_PUSH_Y);
+    }
+    act = wfb_safety_step(&s, &lim, &in);
+    CHECK(act == WFB_ACT_LAND_IN_PLACE);
+    CHECK(s.trip == (uint8_t)WFB_TRIP_FENCE);
+    CHECK(s.push == 0u);
+
+    /* z outside for fence_hold_s -> trip CEILING */
+    wfb_safety_init(&s);
+    init_nominal_in(&in);
+    in.z_m = 1.8f;
+    in.dt_s = 2.0f;
+    act = wfb_safety_step(&s, &lim, &in);
+    CHECK(act == WFB_ACT_LAND_IN_PLACE);
+    CHECK(s.trip == (uint8_t)WFB_TRIP_CEILING);
+
+    /* the hold timer restarts after a return inside */
+    wfb_safety_init(&s);
+    init_nominal_in(&in);
+    in.dt_s = 1.5f;
+    in.x_m = 1.7f;
+    CHECK(wfb_safety_step(&s, &lim, &in) == WFB_ACT_NONE);
+    in.x_m = 0.0f;
+    CHECK(wfb_safety_step(&s, &lim, &in) == WFB_ACT_NONE);
+    in.x_m = 1.7f;
+    CHECK(wfb_safety_step(&s, &lim, &in) == WFB_ACT_NONE);
+    CHECK_FLOAT_EQ(s.fence_t, 1.5f, 1e-6f);
+
+    /* more than fence_over_m beyond -> LAND_IN_PLACE on the first step, each axis */
+    wfb_safety_init(&s);
+    init_nominal_in(&in);
+    in.x_m = -1.95f;
+    act = wfb_safety_step(&s, &lim, &in);
+    CHECK(act == WFB_ACT_LAND_IN_PLACE);
+    CHECK(s.trip == (uint8_t)WFB_TRIP_FENCE);
+    CHECK(s.push == 0u);
+
+    wfb_safety_init(&s);
+    init_nominal_in(&in);
+    in.y_m = 2.35f;
+    CHECK(wfb_safety_step(&s, &lim, &in) == WFB_ACT_LAND_IN_PLACE);
+    CHECK(s.trip == (uint8_t)WFB_TRIP_FENCE);
+
+    wfb_safety_init(&s);
+    init_nominal_in(&in);
+    in.z_m = 2.05f;
+    CHECK(wfb_safety_step(&s, &lim, &in) == WFB_ACT_LAND_IN_PLACE);
+    CHECK(s.trip == (uint8_t)WFB_TRIP_CEILING);
+
+    /* pilot takeover (no GS setpoint to push with) -> LAND_IN_PLACE on the first step */
+    wfb_safety_init(&s);
+    init_nominal_in(&in);
+    in.gs_flight_active = 0;
+    in.x_m = 1.7f;
+    CHECK(wfb_safety_step(&s, &lim, &in) == WFB_ACT_LAND_IN_PLACE);
+    CHECK(s.trip == (uint8_t)WFB_TRIP_FENCE);
+    CHECK(s.push == 0u);
+
+    /* an earlier LAND_VIA_HOVER: no push, still escalates after fence_hold_s */
+    wfb_safety_init(&s);
+    init_nominal_in(&in);
+    in.vbat_v = 12.0f;
+    in.dt_s = 3.0f;
+    CHECK(wfb_safety_step(&s, &lim, &in) == WFB_ACT_LAND_VIA_HOVER);
+    in.vbat_v = 15.0f;
+    in.dt_s = 1.0f;
+    in.x_m = 1.7f;
+    CHECK(wfb_safety_step(&s, &lim, &in) == WFB_ACT_LAND_VIA_HOVER);
+    CHECK(s.push == 0u);
+    CHECK(wfb_safety_step(&s, &lim, &in) == WFB_ACT_LAND_IN_PLACE);
+    CHECK(s.trip == (uint8_t)WFB_TRIP_FENCE);
+
+    /* Exact boundaries are inside */
+    wfb_safety_init(&s);
+    init_nominal_in(&in);
+    in.x_m = 1.6f;
+    in.y_m = -2.0f;
+    in.z_m = 1.7f;
+    act = wfb_safety_step(&s, &lim, &in);
+    CHECK(act == WFB_ACT_NONE);
+    CHECK(s.trip == (uint8_t)WFB_TRIP_NONE);
+    CHECK(s.push == 0u);
+}
+
+/* 3b. wfb_safety_push_sp: each pushed axis moves to the soft boundary (fence - soft_margin_m) on the
+       drone's side; unpushed axes keep the setpoint. */
+static void test_3b_push_sp(void)
+{
+    wfb_safety_t s;
+    wfb_safety_limits_t lim;
+    wfb_safety_in_t in;
+    float x, y, z;
+
+    wfb_safety_default_limits(&lim);
+    wfb_safety_init(&s);
+    init_nominal_in(&in);
+
+    x = 0.4f; y = 0.5f; z = 0.6f;
+    wfb_safety_push_sp(&s, &lim, &in, &x, &y, &z);
+    CHECK_FLOAT_EQ(x, 0.4f, 1e-6f);
+    CHECK_FLOAT_EQ(y, 0.5f, 1e-6f);
+    CHECK_FLOAT_EQ(z, 0.6f, 1e-6f);
+
+    in.x_m = -1.7f;
+    in.y_m = 2.1f;
+    in.z_m = 1.8f;
+    (void)wfb_safety_step(&s, &lim, &in);
+    wfb_safety_push_sp(&s, &lim, &in, &x, &y, &z);
+    CHECK_FLOAT_EQ(x, -1.3f, 1e-6f);
+    CHECK_FLOAT_EQ(y, 1.7f, 1e-6f);
+    CHECK_FLOAT_EQ(z, 1.4f, 1e-6f);
+
+    /* only y pushed */
+    wfb_safety_init(&s);
+    init_nominal_in(&in);
+    in.y_m = -2.1f;
+    (void)wfb_safety_step(&s, &lim, &in);
+    x = 0.4f; y = 0.5f; z = 0.6f;
+    wfb_safety_push_sp(&s, &lim, &in, &x, &y, &z);
+    CHECK_FLOAT_EQ(x, 0.4f, 1e-6f);
+    CHECK_FLOAT_EQ(y, -1.7f, 1e-6f);
+    CHECK_FLOAT_EQ(z, 0.6f, 1e-6f);
+
+    /* Null pointers do not crash */
+    wfb_safety_push_sp(NULL, &lim, &in, &x, &y, &z);
+    wfb_safety_push_sp(&s, &lim, &in, NULL, &y, &z);
 }
 
 /* 4. Low voltage: vbat_v under low_v continuously for low_v_hold_s -> LAND_VIA_HOVER, trip LOW_V.
@@ -416,7 +534,7 @@ static void test_7_latch_and_escalation(void)
 }
 
 /* 8. wfb_safety_default_limits returns the interfaces.md values
-      (1.1, 1.6, 1.5, 14.0, 3.0, 60.0, 0.2, 120.0, 1.0). */
+      (1.6, 2.0, 1.7, 14.0, 3.0, 60.0, 0.2, 120.0, 1.0, 2.0, 0.3, 0.3). */
 static void test_8_default_limits(void)
 {
     wfb_safety_limits_t lim;
@@ -424,15 +542,18 @@ static void test_8_default_limits(void)
     memset(&lim, 0, sizeof(lim));
     wfb_safety_default_limits(&lim);
 
-    CHECK_FLOAT_EQ(lim.fence_x_m, 1.1f, 1e-6f);
-    CHECK_FLOAT_EQ(lim.fence_y_m, 1.6f, 1e-6f);
-    CHECK_FLOAT_EQ(lim.ceiling_m, 1.5f, 1e-6f);
+    CHECK_FLOAT_EQ(lim.fence_x_m, 1.6f, 1e-6f);
+    CHECK_FLOAT_EQ(lim.fence_y_m, 2.0f, 1e-6f);
+    CHECK_FLOAT_EQ(lim.ceiling_m, 1.7f, 1e-6f);
     CHECK_FLOAT_EQ(lim.low_v, 14.0f, 1e-6f);
     CHECK_FLOAT_EQ(lim.low_v_hold_s, 3.0f, 1e-6f);
     CHECK_FLOAT_EQ(lim.tilt_deg, 60.0f, 1e-6f);
     CHECK_FLOAT_EQ(lim.tilt_hold_s, 0.2f, 1e-6f);
     CHECK_FLOAT_EQ(lim.airborne_cap_s, 120.0f, 1e-6f);
     CHECK_FLOAT_EQ(lim.hb_timeout_s, 1.0f, 1e-6f);
+    CHECK_FLOAT_EQ(lim.fence_hold_s, 2.0f, 1e-6f);
+    CHECK_FLOAT_EQ(lim.fence_over_m, 0.3f, 1e-6f);
+    CHECK_FLOAT_EQ(lim.soft_margin_m, 0.3f, 1e-6f);
 
     /* Null pointer check does not crash */
     wfb_safety_default_limits(NULL);
@@ -522,7 +643,7 @@ static void test_9_fail_safe_on_bad_numbers(void)
     CHECK(s.trip == (uint8_t)WFB_TRIP_HEARTBEAT);
 }
 
-/* 10. Same-step ties: checks run in the order TILT, FENCE, CEILING, LOW_V, HEARTBEAT, AIRBORNE_CAP.
+/* 10. Same-step ties: checks run in the order TILT, FENCE/CEILING, LOW_V, HEARTBEAT, AIRBORNE_CAP.
        When two causes of the same action level first trip on the same step, trip records the earlier one. */
 static void test_10_same_step_ties(void)
 {
@@ -615,6 +736,7 @@ int main(void)
     test_1_airborne_zero();
     test_2_tilt();
     test_3_fence_ceiling();
+    test_3b_push_sp();
     test_4_low_v();
     test_5_heartbeat();
     test_6_airborne_cap();
