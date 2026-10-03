@@ -1432,6 +1432,10 @@ static uint8_t CommandSafetyReject(uint8_t id)
          (DroneStatus.ARM_Status != DisArmed))) {
         return 6U;
     }
+    if ((id == 0x1DU) &&
+        ((flight_phase == FLIGHT_PHASE_FLYING) || (flight_phase == FLIGHT_PHASE_LANDING))) {
+        return 6U; /* MRAC variants switch on the ground only */
+    }
     return 0U;
 }
 
@@ -1807,6 +1811,15 @@ void Process_GroundStation_Command(void)
                 mrac_state.roll.xm   = mrac_state.roll.x;    mrac_state.roll.xm_dot   = 0.0f;
                 mrac_state.yaw.xm    = mrac_state.yaw.x;     mrac_state.yaw.xm_dot    = 0.0f;
                 mrac_state.z_rate.xm = mrac_state.z_rate.x;  mrac_state.z_rate.xm_dot = 0.0f;
+            }
+        }
+
+        /* CMD 0x1D - MRAC law variant field (WP-27, docs/workflow-b/mrac-variants.md).
+         *   idx = (field << 2) | axis, field = MRAC_VariantField_e, axis 0 pitch 1 roll 2 yaw 3 z.
+         *   MRAC_VariantParamSet bounds every field and refuses non-finite values; ignored while airborne. */
+        else if (id == 0x1D) {
+            if ((flight_phase != FLIGHT_PHASE_FLYING) && (flight_phase != FLIGHT_PHASE_LANDING)) {
+                (void)MRAC_VariantParamSet((uint8_t)(idx & 0x03U), (uint8_t)(idx >> 2), val);
             }
         }
 
