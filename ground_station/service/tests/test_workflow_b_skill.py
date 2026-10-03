@@ -50,6 +50,14 @@ def test_named_paths_exist_and_the_ladder_validates():
     assert ladder.mode == "fly" and [e.name for e in ladder.experiments] == ["hover_z050", "hover_z070", "hover_z130"]
 
 
+def test_preflight_checks_the_operator_arm_permission():
+    panel = (ROOT / "docs" / "dashboard-platform" / "shell" / "plugins" / "campaign-panel.js").read_text(encoding="utf-8")
+    assert "Allow agent arm" in panel
+    text = _text()
+    assert "`control.allow_agent_arm`" in text and 'tick "Allow agent arm"' in text
+    assert "You never set it yourself" in text
+
+
 def test_no_direct_http_go():
     for line in _text().splitlines():
         if "/api/campaign" in line:

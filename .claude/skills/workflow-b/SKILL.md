@@ -66,6 +66,11 @@ edit `log_plan` in the launch copy, rerun the CLI, and ask again until the opera
 | RC | `get_state` RC fields | link present, not armed |
 | origin | `get_state` position | drone on the pad at about (0, 0, 0) |
 | runner idle | `campaign_state` | `idle` or a finished status |
+| arm permission | `get_state` `control.allow_agent_arm` | `true` |
+
+`allow_agent_arm` is operator-only and resets to false on every 8081 restart; without it the runner stops
+with `arm_refused` before the first takeoff. If it is false, ask the operator to tick "Allow agent arm" in
+the Campaign panel. You never set it yourself.
 
 Report the table, then ask the operator to confirm: pack swapped, drone on the pad, powered in place,
 RC ready, phone recording, operator present, area clear. Any "no" stops the launch.
