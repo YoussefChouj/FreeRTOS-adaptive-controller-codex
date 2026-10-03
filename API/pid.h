@@ -18,6 +18,10 @@ extern CtrlerTypeDef Ctrler;
 void ComputePID_Gated(PIDTypeDef *pPID, uint8_t integrate);
 float AttTrim_Apply(float des_deg, float trim_deg, float lim_deg, uint8_t flying);
 
+/* Gain lease (WP-28, default OFF, API/pid.c GAIN_LEASE_ROW): Renew before each CMD 0x01 write, Tick every loop. */
+void PID_GainLeaseRenew(uint32_t now_ms, uint8_t airborne);
+void PID_GainLeaseTick(uint32_t now_ms, uint8_t airborne);
+
 typedef struct {
     float prev_x, prev_y, vf_x, vf_y;
     uint8_t primed;

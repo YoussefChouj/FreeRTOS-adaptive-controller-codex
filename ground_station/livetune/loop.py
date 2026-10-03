@@ -81,6 +81,7 @@ class LiveTuneConfig:
     sigma_shrink: float = 0.7         # PROPOSED: sigma factor after a trip
     min_gain: float = 0.05            # PROPOSED: recommend only a best J_rel <= 1 - min_gain
     dt_s: float = 0.02                # runner tick in the step: 50 Hz, the log plan rate
+    keepalive_s: float = 1.0          # re-send the active Kp this often: renews the firmware gain lease (2.0 s)
     hover_m: tuple[float, float, float] = (0.0, 0.0, 0.8)
     fence_xy_m: tuple[float, float] = (1.3, 1.7)  # TrajLimits x/y_abs_m: 0.3 m inside the fence
     limits: SafetyLimits = SafetyLimits()
@@ -246,6 +247,8 @@ class LiveTuneSession:
         self._fails = 0
         self._walk = (0.0, 0.0)
         self._exciting = False
+        self._active: dict[str, float] = dict(cfg.baseline)
+        self._t_write = 0.0
 
     def gains_of(self, x) -> dict[str, float]:
         return {g: self.cfg.baseline[g] * math.exp(float(v)) for g, v in zip(GAINS, x)}
@@ -262,7 +265,9 @@ class LiveTuneSession:
                 self._next(now)
             return self.done
         v = self.sup.check(sample, prim_state, self._walk)
-        if v.kind == "stop":
+        if v.kind != "stop" and not self._keepalive(now):
+            self._finish("link_lost", "link lost: gain keep-alive not applied")
+        elif v.kind == "stop":
             self._finish(v.code, v.reason)
         elif self._phase == "recover":  # baseline back after a trip: it gets settle_s to bring the drone back
             if now - self._t_phase >= self.cfg.settle_s:
@@ -311,7 +316,16 @@ class LiveTuneSession:
                 k = self.knobs[axis][g]
                 if not self._send(k.cmd_id, k.idx, float(gains[g])):
                     return False
+        self._active, self._t_write = dict(gains), self._clock()
         return True
+
+    def _keepalive(self, now: float) -> bool:
+        """Re-send the active Kp (same value) so the firmware gain lease, when enabled, does not expire mid-window."""
+        if now - self._t_write < self.cfg.keepalive_s:
+            return True
+        k = self.knobs[self.cfg.axes[0]]["Kp"]
+        self._t_write = now
+        return self._send(k.cmd_id, k.idx, float(self._active["Kp"]))
 
     def _next(self, now: float) -> None:
         cfg, res = self.cfg, self.result

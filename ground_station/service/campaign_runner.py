@@ -8,6 +8,8 @@ from pathlib import Path
 from ground_station.service.campaign_schema import load_campaign
 from ground_station.service.abort_monitor import AbortSample, AbortDecision
 from ground_station.service.scenario_schema import TRAJ_KINDS, WFB_SETTLE_S, Scenario, Step
+from ground_station.livetune.loop import OK_STATUSES as LIVETUNE_OK, LiveTuneSession, parse_step as parse_livetune
+from ground_station.service.trajectory_pipeline import TrajLimits
 from ground_station.platform.trajectory_upload import upload
 
 # firmware enums (docs/workflow-b/interfaces.md): prim_state IDLE 0 / HOVER 2 / DESCEND 6, traj_state DONE 4
@@ -79,6 +81,7 @@ class RunnerDeps:
     # end_capture stops it and returns the session dir (FlightRecord.recording)
     begin_capture: Callable[[Any, str], Any] = lambda exp, flight_id: None
     end_capture: Callable[[Any], str] = lambda token: ""
+    on_livetune: Callable[[dict], None] = lambda result: None  # livetune step result (best gains, J history, CMA state)
 
 def default_diff_source(repo_root: str, lkg_commit: str, c_files: tuple[str, ...]) -> str:
     if not c_files:
@@ -137,6 +140,8 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False)
 
     takeoff: set_hover_z + arm/idle/takeoff, wait prim HOVER. hold: heartbeat for s.
     goto/path: settle WFB_SETTLE_S in HOVER, upload step.points, traj_start, wait traj DONE and prim back in HOVER.
+    livetune: hold HOVER while a livetune.loop session tunes gains (ticked every cfg.dt_s); it always ends on the
+    baseline gains, and an end other than budget / max_evals / walk_budget lands the drone.
     hover_only (first flight after a reflash) keeps takeoff and land and swaps the middle for hold deps.hover_s.
     The whole flight shares one deadline, deps.flight_timeout_s; a firmware landing (prim DESCEND/IDLE we did not
     command) aborts the step. Each step gets a record {step, kind, t0_s, t1_s, ok} relative to the takeoff command.
@@ -154,8 +159,9 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False)
     def prim() -> int:
         return int(deps.status()["prim_state"])
 
-    def wait(cond: Callable[[], bool], phase: str) -> bool:
+    def wait(cond: Callable[[], bool], phase: str, dt_s: float | None = None) -> bool:
         nonlocal ticks, decision
+        dt = dt_s or deps.dt_s
         while not cond():
             req = deps.control.get() if deps.control else None
             if req in ("land", "abort"):
@@ -169,16 +175,17 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False)
                 decision = AbortDecision(level=1, reason=f"firmware landing during {phase} (safety_trip {trip})")
                 return False
             deps.client.heartbeat()
-            deps.step(deps.dt_s)
+            deps.step(dt)
             dec = deps.monitor.step(deps.sample(deps.clock()))
             if dec.level >= 1:
                 decision = dec
                 return False
-            ticks += 1
+            ticks += dt / deps.dt_s
         return True
 
     for i, st in enumerate(steps[:-1]):
         t0 = deps.clock() - t_start
+        extra: dict = {}
         if st.kind == "takeoff":
             cmds = [("set_hover_z", lambda: deps.client.set_hover_z(scenario.hover_z_m))]
             if deps.agent_arms:
@@ -208,10 +215,24 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False)
                     ok = wait(
                         lambda: int(deps.status()["traj_state"]) == TRAJ_DONE and prim() == PRIM_HOVER, st.kind
                     )
+        elif st.kind == "livetune":
+            lim = TrajLimits()
+            cfg, errs = parse_livetune(st.args, (0.0, 0.0, scenario.hover_z_m), (lim.x_abs_m, lim.y_abs_m))
+            if errs:
+                raise ValueError(f"step {i}: livetune: {'; '.join(errs)}")
+            # CMD 0x01 / 0x0F / 0x14 go through the client's transaction path (WfbClient and LiveWfbClient)
+            session = LiveTuneSession(cfg, deps.client._send_cmd, deps.clock, deps.say)
+            try:
+                ok = wait(lambda: session.tick(deps.sample(deps.clock()), prim()), "livetune", cfg.dt_s)
+            finally:
+                session.close(decision.reason if decision else "")
+            ok = ok and session.result.status in LIVETUNE_OK
+            extra = {"livetune": session.result.summary()}
+            deps.on_livetune(extra["livetune"])
         else:
             raise ValueError(f"step {i}: unexpected kind {st.kind!r} before land")
         records.append({"step": i, "kind": st.kind, "t0_s": round(t0, 3),
-                        "t1_s": round(deps.clock() - t_start, 3), "ok": ok})
+                        "t1_s": round(deps.clock() - t_start, 3), "ok": ok, **extra})
         if not ok:
             break
 

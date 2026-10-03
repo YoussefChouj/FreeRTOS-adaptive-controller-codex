@@ -1,0 +1,37 @@
+# Workflow B campaign: live in-flight rate-loop tuning, roll + pitch sharing one (Kp, Ki, Kd) set (WP-28).
+# The operator arms by RC; the agent takes off to 0.8 m, holds, runs the livetune step (CMA-ES, one candidate per
+# 6.5 s window: write gains, settle, CMD 0x14 chirp, score), holds and lands. MRAC output injection goes off through
+# its knob (CMD 0x0F idx 10 = 0) before the first window. The step always ends on the baseline gains; the best gains
+# go to a verify flight (docs/workflow-b/livetune.md). Numbers are PROPOSED, not flown.
+campaign: livetune_rate_rp
+objective: "tune the roll/pitch rate-loop PID live in one hover flight (relative tracking error, saturation, oscillation)"
+controller: pid
+mode: fly
+packs:
+  - P4000-1          # launch Q2 replaces this with the pack on the drone
+max_flights: 1
+experiments:
+  # log_plan: the always-on core carries the rate loops (FB, Des), attitude, positions, motors and g_wfb_status;
+  # 50 Hz is the rate the livetune cost assumes (oscillation band 10-25 Hz).
+  - name: livetune_rate_rp
+    scenario:
+      scenario: livetune_rate_rp
+      description: take off, hold, tune the rate loop live, hold, land
+      steps:
+        - takeoff: {z: 0.8}
+        - hold: {s: 3}
+        - livetune:
+            loop: rate
+            axes: [roll, pitch]
+            budget_s: 70       # ~10 windows: 2 baselines + ~8 candidates (lambda 7 for n = 3)
+            max_evals: 40
+            trust: 0.3         # +-30 % of the baseline
+            sigma0: 0.1        # log-gain units
+            mrac_off: true
+            # baseline: {Kp: 5, Ki: 0.01, Kd: 10}   # default = API/pid.c:23-24; paste WP-26 FRF gains here
+        - hold: {s: 3}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: {rate_hz: 50, groups: []}
+abort: {}

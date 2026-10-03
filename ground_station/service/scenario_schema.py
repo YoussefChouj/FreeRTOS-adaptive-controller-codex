@@ -5,6 +5,7 @@ Steps run in order:
   hold    {s}                    stay at the hover point with the heartbeat running
   goto    {x, y, z, dwell_s}     one out-and-back trajectory hover -> (x, y, z) -> dwell -> hover
   path    {shape, params}        trajectory_pipeline.generate around the hover point
+  livetune {loop, axes, budget_s, ...}  hold the hover point while ground_station/livetune tunes gains for budget_s
   land    {}                     the last step, exactly once
 
 Firmware facts (docs/workflow-b/interfaces.md CMD 0x1A / 0x1B): one hover point (0, 0, hover_z) per flight,
@@ -37,10 +38,13 @@ from ground_station.service.trajectory_pipeline import (
     time_profile,
     validate,
 )
+from ground_station.livetune.loop import STEP_OPTIONAL as LIVETUNE_OPTIONAL
+from ground_station.livetune.loop import STEP_REQUIRED as LIVETUNE_REQUIRED
+from ground_station.livetune.loop import parse_step as parse_livetune
 
 SCENARIO_DIR = Path(__file__).resolve().parents[2] / "docs" / "workflow-b" / "scenarios"
 
-STEP_KINDS = ("takeoff", "hold", "goto", "path", "land")
+STEP_KINDS = ("takeoff", "hold", "goto", "path", "livetune", "land")
 TRAJ_KINDS = ("goto", "path")
 
 # Airborne budget. Cap = airborne_cap_s in API/wfb_safety.c WFB_SAFETY_LIMITS_ROW; settle = interfaces.md
@@ -66,6 +70,7 @@ _STEP_KEYS: Mapping[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "hold": (("s",), ()),
     "goto": (("x", "y", "z"), ("dwell_s",) + tuple(DEFAULT_MOTION)),
     "path": (("shape", "params"), tuple(DEFAULT_MOTION)),
+    "livetune": (LIVETUNE_REQUIRED, LIVETUNE_OPTIONAL),
     "land": ((), ()),
 }
 
@@ -308,6 +313,13 @@ def parse_scenario(data: Any, args: Mapping[str, Any] | None = None) -> Scenario
                 problems.append(f"{path}.hold.s: must be a finite number > 0 (got {s!r})")
             else:
                 steps.append(Step("hold", dict(body), (), float(s)))
+        elif kind == "livetune":
+            if math.isfinite(hover_z):
+                lim = TrajLimits()
+                _, errs = parse_livetune(body, (0.0, 0.0, hover_z), (lim.x_abs_m, lim.y_abs_m))
+                problems.extend(f"{path}.livetune.{e}" for e in errs)
+                if not errs:
+                    steps.append(Step("livetune", dict(body), (), float(body["budget_s"])))
         elif math.isfinite(hover_z):
             step = _compile_traj(kind, body, base_motion, hover_z, path, problems)
             if step is not None:
