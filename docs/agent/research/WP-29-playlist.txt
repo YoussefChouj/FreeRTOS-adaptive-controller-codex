@@ -1,0 +1,29 @@
+wJsWF9q3ARQ|An Introduction to Adaptive Control and Learning (Lectures on Adaptive Control and Learning)|1017
+rv8RBK43hGc|To Adapt or Not to Adapt (Lectures on Adaptive Control and Learning)|952
+EMAkx0A0vgk|To Adapt or Not to Adapt Example in Matlab (Lectures on Adaptive Control and Learning)|812
+0_zg1v14UaQ|Reference Point vs Reference Model (Lectures on Adaptive Control and Learning)|1168
+X_A0MDTHmW8|Reference Point vs Reference Model Example in Matlab (Lectures on Adaptive Control and Learning)|459
+vlOy1ZH79wU|Projection Operator (Lectures on Adaptive Control and Learning)|1543
+4dKtjL2yPzg|Leakage Modification (Lectures on Adaptive Control and Learning)|728
+j_OMOL-pQNA|Projection Operator vs Leakage Mod. Example in Matlab (Lectures on Adaptive Control and Learning)|829
+mVPbbtG7tTA|Neural Networks (Lectures on Adaptive Control and Learning)|1163
+W2wtbEJQvCw|Neuroadaptive Control (Lectures on Adaptive Control and Learning)|809
+ftld0UQyVKI|Neuroadaptive Control Example in Matlab (Lectures on Adaptive Control and Learning)|684
+ijqanI1k0uc|Performance Recovery (Lectures on Adaptive Control and Learning)|1395
+C74eIxSk09A|Performance Recovery Example in Matlab (Lectures on Adaptive Control and Learning)|564
+NuzA-VfJYwQ|Key Moments and What is Next (Lectures on Adaptive Control and Learning)|1225
+cgBezHS23as|Foundations of Stability Analysis in Adaptive Control (Lectures on Adaptive Control and Learning)|2211
+X56Ro7L2hu0|Adaptive Control: High-Order Case (Lectures on Adaptive Control and Learning)|1561
+KytO5TujUAQ|Adaptive Control Example in Matlab: High-Order Case (Lectures on Adaptive Control and Learning)|734
+MK_u1vfhG8o|Projection Operator and Leakage Mod.: High-Order Case (Lectures on Adaptive Control and Learning)|1032
+9vSmZcp_ItE|Neuroadaptive Control: High-Order Case (Lectures on Adaptive Control and Learning)|1199
+jPyKdWf8WBg|Neuroadaptive Control Example in Matlab: High-Order Case (Lectures on Adaptive Control and Learning)|877
+X2GABsl7OGo|Neuroadaptive Control Basis Selection: High-Order Case (Lectures on Adaptive Control and Learning)|531
+Ll9sIBfHRG8|Performance Recovery: High-Order Case (Lectures on Adaptive Control and Learning)|1208
+e8dcBN-SUTw|Performance Recovery Example in Matlab: High-Order Case (Lectures on Adaptive Control and Learning)|781
+qYiCyOItSNg|Integral Nominal Control: High-Order Case (Lectures on Adaptive Control and Learning)|1238
+BkHYNtzniaA|PID Nominal Control: High-Order Case (Lectures on Adaptive Control and Learning)|1447
+DAMOS-ZAqKs|Derivative-Free Adaptive Control (Lectures on Adaptive Control and Learning)|1059
+AqsaI4WLgzk|Adaptive Control with Barrier Functions (Lectures on Adaptive Control and Learning)|961
+CO6qpZzKwew|Neuroadaptive Control with Barrier Functions (Lectures on Adaptive Control and Learning)|1047
+ykEOToZDOSk|Low-Frequency Learning (Lectures on Adaptive Control and Learning)|1270
