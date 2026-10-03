@@ -49,7 +49,7 @@ COMMIT checks, in this order (first failure sets `last_err`):
 1. CRC32 (IEEE 802.3, reflected poly 0xEDB88320, init 0xFFFFFFFF, final xor 0xFFFFFFFF) over the 20 x N
    bytes of the buffer as stored little-endian. Host equivalent: `zlib.crc32(struct.pack('<%df' % (5*N), ...))`.
 2. `t[0] == 0` and t strictly increasing.
-3. Every point inside the envelope: |x| <= 0.8 m, |y| <= 1.3 m, `WFB_TRAJ_Z_MIN` <= z <= 1.5 m, and
+3. Every point inside the envelope: |x| <= 1.3 m, |y| <= 1.7 m, `WFB_TRAJ_Z_MIN` <= z <= 1.4 m (0.3 m inside the fence and ceiling), and
    |yaw_deg| <= 180 (a generator wraps headings to +/-180 deg before upload).
 4. First and last point within `WFB_TRAJ_ENDPOINT_TOL` of the hover point (uses the current `hover_z`).
 5. Every segment speed <= `WFB_TRAJ_V_MAX`.
