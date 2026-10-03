@@ -1,0 +1,38 @@
+# WP-27 battery 2a (docs/workflow-b/mrac-variants.md): MRAC V1 injected at gamma x0.25.
+# Start: apply_params(presets.v1_refmodel) from controllers/mrac_v1.yaml on the ground; end: presets.restore
+# (ground_station.analysis.mrac_variants.campaign_presets). Pass: no abort. Then fly v1_refmodel_g1. PROPOSED.
+campaign: v1_refmodel
+objective: "MRAC V1 (per-axis ref model, normalized drive) injected at gamma x0.25: hover and doublet"
+controller: mrac_v1
+mode: fly
+packs:
+  - P4000-1
+max_flights: 2
+experiments:
+  - name: hover
+    scenario:
+      scenario: mrac-hover
+      description: takeoff 0.8, hold 40 s, land
+      steps:
+        - takeoff: {z: 0.8, mrac_injection: 1}
+        - hold: {s: 40}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: {rate_hz: 100, groups: [mrac_shadow]}
+  - name: doublet
+    scenario:
+      scenario: mrac-doublet
+      description: goto x +0.4 / -0.4 then y +0.4 / -0.4, dwell 3 s, back to the hover point each time
+      steps:
+        - takeoff: {z: 0.8, mrac_injection: 1}
+        - hold: {s: 3}
+        - goto: {x: 0.4, y: 0.0, z: 0.8, dwell_s: 3.0}
+        - goto: {x: -0.4, y: 0.0, z: 0.8, dwell_s: 3.0}
+        - goto: {x: 0.0, y: 0.4, z: 0.8, dwell_s: 3.0}
+        - goto: {x: 0.0, y: -0.4, z: 0.8, dwell_s: 3.0}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: {rate_hz: 100, groups: [mrac_shadow]}
+abort: {tilt_deg: 12, pos_err_m: 0.5, sat_window_s: 0.5}

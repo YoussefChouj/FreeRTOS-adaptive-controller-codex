@@ -12,12 +12,13 @@ from __future__ import annotations
 
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import yaml
 
+from ground_station.analysis.mrac_variants import MRAC_VARIANT_CMD, variant_bounds, variant_symbol
 from ground_station.platform.firmware_contract import COMMAND_TABLE, CommandParam
 
 CONTROLLERS_DIR = Path(__file__).with_name("controllers")
@@ -32,9 +33,10 @@ PID_AXES = ("pitchPID", "rollPID", "yawPID", "gyroxPID", "gyroyPID", "gyrozPID",
 PID_GAINS = ("Kp", "Ki", "Kd")
 MRAC_ARRAY_CMDS = {0x02: "gamma", 0x05: "What_limit", 0x08: "What_tol"}  # idx = axis << 4 | elem
 MRAC_AXES = ("mrac_config_pitch", "mrac_config_roll", "mrac_config_yaw", "mrac_config_z")
-TUNING_CMDS = (PID_GAIN_CMD, *MRAC_ARRAY_CMDS)
+# 0x1D MRAC_VARIANT: idx = field << 2 | axis (ground_station/analysis/mrac_variants.py, WP-27)
+TUNING_CMDS = (PID_GAIN_CMD, *MRAC_ARRAY_CMDS, MRAC_VARIANT_CMD)
 
-_DESCRIPTOR_KEYS = ("name", "knobs", "shadow_outputs")
+_DESCRIPTOR_KEYS = ("name", "knobs", "shadow_outputs", "presets")
 _KNOB_KEYS = ("symbol", "cmd_id", "idx", "default", "lo", "hi", "scale")
 _KIND_TEXT = {"str": "a non-empty string", "int": "an integer", "number": "a finite number"}
 
@@ -59,6 +61,8 @@ class Descriptor:
     name: str
     knobs: tuple[Knob, ...]
     shadow_outputs: tuple[str, ...]
+    # Optional named knob settings ({preset: {symbol: value}}), e.g. a campaign's start values and "off".
+    presets: Mapping[str, Mapping[str, float]] = field(default_factory=dict)
 
 
 class DescriptorError(ValueError):
@@ -73,9 +77,11 @@ def wire_target(cmd_id: int, idx: int) -> str | None:
     """Return the firmware variable that command ``cmd_id`` writes for idx byte ``idx``.
 
     Decodes idx as the firmware does (TASK/send_data.c:1474-1519): 0x01 packs ``axis * 3 + gain``;
-    0x02/0x05/0x08 pack ``axis << 4 | elem``. Returns None for a non-tuning command or an idx whose
-    axis or element lies outside the contract's range.
+    0x02/0x05/0x08 pack ``axis << 4 | elem``; 0x1D packs ``field << 2 | axis``. Returns None for a
+    non-tuning command or an idx whose axis or element lies outside the contract's range.
     """
+    if cmd_id == MRAC_VARIANT_CMD:
+        return variant_symbol(idx)
     if cmd_id == PID_GAIN_CMD:
         axis, sub = divmod(idx, len(PID_GAINS))
     elif cmd_id in MRAC_ARRAY_CMDS:
@@ -126,7 +132,32 @@ def _parse_descriptor(raw: Any, problems: list[str]) -> Descriptor | None:
     knobs = _parse_knobs(raw, problems)
     if name is None or shadow_outputs is None or knobs is None:
         return None
-    return Descriptor(name, knobs, shadow_outputs)
+    presets = _parse_presets(raw.get("presets", {}), knobs, problems)
+    return Descriptor(name, knobs, shadow_outputs, presets)
+
+
+def _parse_presets(raw: Any, knobs: tuple[Knob, ...], problems: list[str]) -> dict[str, dict[str, float]]:
+    """Optional ``presets: {name: {symbol: value}}``: each symbol a knob, each value inside its [lo, hi]."""
+    if not isinstance(raw, dict):
+        problems.append(f"descriptor: 'presets' must be a mapping of name -> {{symbol: value}}, got {raw!r}")
+        return {}
+    by_symbol = {k.symbol: k for k in knobs}
+    out: dict[str, dict[str, float]] = {}
+    for pname, values in raw.items():
+        where = f"preset {pname!r}"
+        if not isinstance(pname, str) or not isinstance(values, dict) or not values:
+            problems.append(f"{where}: must be a non-empty mapping of knob symbol -> value")
+            continue
+        out[pname] = {}
+        for sym, val in values.items():
+            knob = by_symbol.get(sym)
+            if knob is None:
+                problems.append(f"{where}: {sym!r} is not a knob of this descriptor")
+            elif type(val) not in (int, float) or not math.isfinite(val) or not knob.lo <= val <= knob.hi:
+                problems.append(f"{where}: {sym} = {val!r} lies outside [lo, hi] = [{knob.lo}, {knob.hi}]")
+            else:
+                out[pname][sym] = float(val)
+    return out
 
 
 def _parse_shadow_outputs(raw: dict, problems: list[str]) -> tuple[str, ...] | None:
@@ -213,6 +244,10 @@ def _check_wire(where: str, symbol: str | None, cmd_id: int, idx: int,
             _in_param_range(lo, param) and _in_param_range(hi, param)):
         problems.append(f"{where}: [lo, hi] = [{lo}, {hi}] leaves the contract range of "
                         f"cmd 0x{cmd_id:02X} {param.name}: [{param.min_val}, {param.max_val}]")
+    bounds = variant_bounds(idx) if cmd_id == MRAC_VARIANT_CMD and target is not None else None
+    if bounds and lo is not None and hi is not None and not (bounds[0] <= lo and hi <= bounds[1]):
+        problems.append(f"{where}: [lo, hi] = [{lo}, {hi}] leaves the firmware range {list(bounds)} "
+                        f"of cmd 0x{cmd_id:02X} idx {idx}")
 
 
 def _check_duplicates(knobs: list[Knob], problems: list[str]) -> None:

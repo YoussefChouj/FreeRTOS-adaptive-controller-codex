@@ -43,9 +43,49 @@ void Controller_Init(void)
     MRAC_Init();
 }
 
+#if defined(__CC_ARM) && MRAC_ENABLE_SATAWARE == 1
+/* MRAC V2 saturation deficit (WP-27). Set_PWM_Motors clamps mymotor in place, so the commanded motors are
+ * rebuilt from the mixer inputs of the previous tick (TASK/StabilizerTask.c:1374-1409, same signs) and the
+ * part cut by the [2000, 4000] clamp (BSP/pwm.h Motor_PWM_ZERO/MAX) is projected back per axis, in the MRAC
+ * units of u_nom (mixer units / mrac_to_mixer). The law uses |u_def| only (API/mrac.c), so signs per axis
+ * do not matter, only which motors feed which axis. Firmware only: the host tests have no mixer. */
+extern float Throttle_out, u_gyrox, u_gyroy, u_gyroz;
+extern volatile float g_yaw_mix_dir;
+
+static float motor_cut(float m)
+{
+    if (m > 4000.0f) return m - 4000.0f;
+    if (m < 2000.0f) return m - 2000.0f;
+    return 0.0f;
+}
+
+static void mrac_mixer_deficit(void)
+{
+    float yz = g_yaw_mix_dir * u_gyroz;
+    float d1 = motor_cut(Throttle_out - u_gyroy - u_gyrox - yz);
+    float d2 = motor_cut(Throttle_out + u_gyroy + u_gyrox - yz);
+    float d3 = motor_cut(Throttle_out - u_gyroy + u_gyrox + yz);
+    float d4 = motor_cut(Throttle_out + u_gyroy - u_gyrox + yz);
+    float u;
+
+    u = 0.25f * (-d1 + d2 + d3 - d4) / mrac_config_roll.mrac_to_mixer;
+    mrac_state.roll.u_def = (u - u == 0.0f) ? u : 0.0f;
+    u = -0.25f * (-d1 + d2 - d3 + d4) / mrac_config_pitch.mrac_to_mixer;   /* u_gyroy = -pitch */
+    mrac_state.pitch.u_def = (u - u == 0.0f) ? u : 0.0f;
+    u = 0.25f * g_yaw_mix_dir * (-d1 - d2 + d3 + d4) / mrac_config_yaw.mrac_to_mixer;
+    mrac_state.yaw.u_def = (u - u == 0.0f) ? u : 0.0f;
+    u = 0.25f * (d1 + d2 + d3 + d4) / mrac_config_z.mrac_to_mixer;
+    mrac_state.z_rate.u_def = (u - u == 0.0f) ? u : 0.0f;
+}
+#endif
+
+/* Runs once per tick before MRAC_Control (TASK/StabilizerTask.c:1358). */
 void Controller_CheckSwitch(uint8_t armed)
 {
     uint8_t req = g_ctrl_select_req;
+#if defined(__CC_ARM) && MRAC_ENABLE_SATAWARE == 1
+    mrac_mixer_deficit();   /* V2 input; read by the law only while mu_sat > 0 */
+#endif
     if (req == g_ctrl_select || armed) return;      /* armed: request stays pending until disarm */
     if (req >= CTRL_MAX || !controllers[req].available) {
         g_ctrl_select_req = g_ctrl_select;          /* refuse, visibly */

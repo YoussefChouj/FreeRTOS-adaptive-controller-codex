@@ -1,0 +1,36 @@
+# WP-27 battery 5 (docs/workflow-b/mrac-variants.md): drift check, repeats pid_ref hover and figure-8.
+# Start: apply_params(presets.pid_ref_end) from controllers/mrac_v1.yaml (V1 in shadow); end: presets.restore.
+# Pass: hover and figure-8 metrics within the pid_ref spread. PROPOSED.
+campaign: pid_ref_end
+objective: "drift check: repeat the pid_ref hover and figure-8 (V1 in shadow)"
+controller: mrac_v1
+mode: fly
+packs:
+  - P4000-1
+max_flights: 2
+experiments:
+  - name: hover
+    scenario:
+      scenario: mrac-hover
+      description: takeoff 0.8, hold 40 s, land
+      steps:
+        - takeoff: {z: 0.8, mrac_injection: 0}
+        - hold: {s: 40}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: {rate_hz: 100, groups: [mrac_shadow]}
+  - name: figure8
+    scenario:
+      scenario: mrac-figure8
+      description: figure-8 width 1.0 height 0.5 at 0.3 m/s, 2 laps
+      steps:
+        - takeoff: {z: 0.8, mrac_injection: 0}
+        - hold: {s: 3}
+        - path: {shape: figure8, params: {width_m: 1.0, height_m: 0.5}, v_cruise_mps: 0.3}
+        - path: {shape: figure8, params: {width_m: 1.0, height_m: 0.5}, v_cruise_mps: 0.3}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: {rate_hz: 100, groups: [mrac_shadow]}
+abort: {tilt_deg: 12, pos_err_m: 0.5, sat_window_s: 0.5}

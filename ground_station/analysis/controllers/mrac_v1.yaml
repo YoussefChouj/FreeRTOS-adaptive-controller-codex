@@ -1,0 +1,65 @@
+# MRAC V1 "reference model v2" knobs (WP-27, docs/workflow-b/mrac-variants.md).
+#
+# All knobs are CMD 0x1D MRAC_VARIANT, idx = field << 2 | axis (axis 0 pitch 1 roll 2 yaw 3 z; fields in
+# ground_station/analysis/mrac_variants.py, firmware table mrac_var_field in API/mrac.c). The firmware refuses
+# 0x1D while airborne, so presets are written on the ground. Defaults = MRAC_Init rows (API/mrac.c), all OFF.
+#
+# presets: the supervisor sends presets[<campaign>] with apply_params before the campaign's first flight and
+# presets.restore after its last (ground_station/analysis/mrac_variants.py campaign_presets). Flight values are the
+# roadmap's PROPOSED ones (docs/analysis/controller-roadmap-2026-10-03.md, Q1 recommendation):
+#   pitch/roll type 2, wn 44 (unchanged row), normalized drive, lam_edot 0.0018 s (0.1 tau);
+#   yaw type 1, bw 2 rad/s (fit at the grid floor), normalized drive. gamma_scale 0.25 = "gamma x0.25".
+name: mrac_v1
+shadow_outputs:
+  - mrac_state.pitch.u_ad
+  - mrac_state.roll.u_ad
+  - mrac_state.yaw.u_ad
+knobs:
+  - {symbol: "mrac_config_pitch.ref_type",     cmd_id: 0x1D, idx: 0,  default: -1.0, lo: -1.0, hi: 2.0,  scale: lin}
+  - {symbol: "mrac_config_roll.ref_type",      cmd_id: 0x1D, idx: 1,  default: -1.0, lo: -1.0, hi: 2.0,  scale: lin}
+  - {symbol: "mrac_config_yaw.ref_type",       cmd_id: 0x1D, idx: 2,  default: -1.0, lo: -1.0, hi: 2.0,  scale: lin}
+  - {symbol: "mrac_config_pitch.drive_norm",   cmd_id: 0x1D, idx: 8,  default: 0.0,  lo: 0.0,  hi: 1.0,  scale: lin}
+  - {symbol: "mrac_config_roll.drive_norm",    cmd_id: 0x1D, idx: 9,  default: 0.0,  lo: 0.0,  hi: 1.0,  scale: lin}
+  - {symbol: "mrac_config_yaw.drive_norm",     cmd_id: 0x1D, idx: 10, default: 0.0,  lo: 0.0,  hi: 1.0,  scale: lin}
+  - {symbol: "mrac_config_pitch.lam_edot",     cmd_id: 0x1D, idx: 12, default: 0.0,  lo: 0.0,  hi: 0.01, scale: lin}
+  - {symbol: "mrac_config_roll.lam_edot",      cmd_id: 0x1D, idx: 13, default: 0.0,  lo: 0.0,  hi: 0.01, scale: lin}
+  - {symbol: "mrac_config_yaw.ref_model_bw",   cmd_id: 0x1D, idx: 50, default: 30.0, lo: 1.0,  hi: 44.0, scale: log}
+  - {symbol: "mrac_g_gamma[0][*]",             cmd_id: 0x1D, idx: 44, default: 1.0,  lo: 0.25, hi: 1.0,  scale: log}
+  - {symbol: "mrac_g_gamma[1][*]",             cmd_id: 0x1D, idx: 45, default: 1.0,  lo: 0.25, hi: 1.0,  scale: log}
+  - {symbol: "mrac_g_gamma[2][*]",             cmd_id: 0x1D, idx: 46, default: 1.0,  lo: 0.25, hi: 1.0,  scale: log}
+presets:
+  # battery 1 and 5: V1 on in shadow (the campaign's takeoff sets mrac_injection 0), gamma x1
+  pid_ref: &v1_g1
+    mrac_config_pitch.ref_type: 2
+    mrac_config_roll.ref_type: 2
+    mrac_config_yaw.ref_type: 1
+    mrac_config_pitch.drive_norm: 1
+    mrac_config_roll.drive_norm: 1
+    mrac_config_yaw.drive_norm: 1
+    mrac_config_pitch.lam_edot: 0.0018
+    mrac_config_roll.lam_edot: 0.0018
+    mrac_config_yaw.ref_model_bw: 2.0
+    "mrac_g_gamma[0][*]": 1.0
+    "mrac_g_gamma[1][*]": 1.0
+    "mrac_g_gamma[2][*]": 1.0
+  pid_ref_end: *v1_g1
+  v1_refmodel_g1: *v1_g1
+  # battery 2a: injected at gamma x0.25
+  v1_refmodel:
+    <<: *v1_g1
+    "mrac_g_gamma[0][*]": 0.25
+    "mrac_g_gamma[1][*]": 0.25
+    "mrac_g_gamma[2][*]": 0.25
+  restore:
+    mrac_config_pitch.ref_type: -1
+    mrac_config_roll.ref_type: -1
+    mrac_config_yaw.ref_type: -1
+    mrac_config_pitch.drive_norm: 0
+    mrac_config_roll.drive_norm: 0
+    mrac_config_yaw.drive_norm: 0
+    mrac_config_pitch.lam_edot: 0
+    mrac_config_roll.lam_edot: 0
+    mrac_config_yaw.ref_model_bw: 30.0
+    "mrac_g_gamma[0][*]": 1.0
+    "mrac_g_gamma[1][*]": 1.0
+    "mrac_g_gamma[2][*]": 1.0

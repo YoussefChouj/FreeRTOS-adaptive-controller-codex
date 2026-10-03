@@ -494,6 +494,21 @@ COMMAND_TABLE: dict[int, CommandSpec] = {
             danger_level="dangerous",
         ),
     ),
+    0x1D: CommandSpec(
+        id=0x1D, name="MRAC_VARIANT",
+        description="WP-27 MRAC variant field on one axis: idx = field << 2 | axis (fields in "
+                    "ground_station/analysis/mrac_variants.py VARIANT_FIELDS). Out-of-range values are refused.",
+        params=(
+            CommandParam(0, "axis", "axis", 0, 3),
+            CommandParam(1, "field", "enum", 0, 12),
+            CommandParam(2, "value", "float", None, None),
+        ),
+        safety=SafetyClass(
+            description="Refused while airborne (FLYING/LANDING); selector writes snap xm to the plant.",
+            danger_level="caution",
+        ),
+        notes="MRAC_VariantParamSet (API/mrac.c); defaults are OFF. Docs: docs/workflow-b/mrac-variants.md.",
+    ),
     0x1E: CommandSpec(
         id=0x1E, name="OF_BIAS_MODE",
         description="OF bias estimation mode: FIXED=0, EMA=1, EKF=2. EMA freeze flag idx=1. idx=2 EMA tau (s), idx=3 handheld test, idx=4 full-tilt, idx=5 KF vel feedback (disarmed only).",
