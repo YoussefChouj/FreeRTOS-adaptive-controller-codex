@@ -472,3 +472,31 @@ def test_6_non_mapping_top_level_and_invalid_yaml(tmp_path):
         load_campaign(bad_yaml_file)
     assert len(exc_info3.value.problems) == 1
     assert "yaml: syntax error:" in exc_info3.value.problems[0]
+
+
+def _fly_data() -> dict[str, Any]:
+    return {
+        "campaign": "hover_ladder_t", "objective": "hover ladder", "controller": "pid", "packs": ["P4000-1"],
+        "max_flights": 3, "mode": "fly",
+        "experiments": [{"name": "hover_z050", "scenario": "hover", "scenario_args": {"z": 0.5},
+                         "capture": "campaign", "repeats": 1}],
+    }
+
+
+def test_7_fly_mode_needs_no_envelope_and_round_trips():
+    campaign = parse_campaign(_fly_data())
+    assert campaign.mode == "fly" and campaign.envelope == {}
+    assert parse_campaign(campaign.to_dict()) == campaign
+    assert parse_campaign(_base_valid_data()).mode == "tune"
+
+
+def test_8_bad_mode_and_tune_without_envelope():
+    data = _fly_data()
+    data["mode"] = "cruise"
+    with pytest.raises(CampaignError) as exc_info:
+        parse_campaign(data)
+    assert any(p.startswith("mode: must be one of tune, fly") for p in exc_info.value.problems)
+    data["mode"] = "tune"
+    with pytest.raises(CampaignError) as exc_info:
+        parse_campaign(data)
+    assert "envelope: missing required key" in exc_info.value.problems

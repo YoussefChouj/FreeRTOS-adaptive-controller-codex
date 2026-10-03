@@ -49,6 +49,8 @@ ACK_TIMEOUT_S = 0.5        # PROPOSED: wait for one command result before callin
 HEARTBEAT_PERIOD_S = 0.2   # PROPOSED: 5 Hz, interfaces.md "GS sends at 5 Hz"; firmware hb_timeout_s 1.0
 STATUS_STALE_S = 1.0       # PROPOSED: factory refuses to start without g_wfb_status this fresh
 LIVE_DT_S = 0.1            # PROPOSED: runner tick
+GROUND_WAIT_S = 10.0       # decision 12: time on the ground after a fly-mode landing before the auto-next check
+KF_HEALTH_SYM = "g_ekf_of_health"  # 1 healthy, 0 diverged
 _RESULT_POLL_S = 0.01
 
 
@@ -150,6 +152,19 @@ def live_resting_v(service: Any) -> float:
     raise RuntimeError("battery voltage is not streaming (real_voltage)")
 
 
+def live_health(service: Any) -> tuple[bool, str]:
+    """Auto-next health: still RC-armed and the optical-flow KF healthy. Fails closed when either is not streaming."""
+    arm = service.arm_state()
+    if arm != "armed":
+        return False, f"drone is {arm}, not RC-armed"
+    vals = service.latest_values((KF_HEALTH_SYM,))
+    if KF_HEALTH_SYM not in vals:
+        return False, f"{KF_HEALTH_SYM} is not streaming"
+    if int(vals[KF_HEALTH_SYM][0]) != 1:
+        return False, f"{KF_HEALTH_SYM} = {int(vals[KF_HEALTH_SYM][0])} (KF diverged)"
+    return True, ""
+
+
 def check_live_ready(service: Any, now_ns: Callable[[], int] = time.time_ns) -> None:
     """Raise RuntimeError naming the first missing piece: gateway, or fresh g_wfb_status."""
     if getattr(service, "gateway", None) is None:
@@ -195,6 +210,8 @@ def live_deps_factory(service: Any, controller: str = "pid", dt_s: float = LIVE_
             change_request=lambda: None,
             dt_s=dt_s,
             agent_arms=False,
+            health=lambda: live_health(service),
+            ground_wait_s=GROUND_WAIT_S,
         )
 
     return factory

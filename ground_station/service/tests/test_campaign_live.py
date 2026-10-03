@@ -197,3 +197,16 @@ def test_core_command_result_by_txid():
     assert service.command_result(8) is None
     assert service.command_result(99) is None
     assert service.latest_values(("no.such.symbol",)) == {}
+
+
+def test_live_health_fails_closed():
+    from ground_station.service.campaign_live import live_health
+    svc = FakeService()
+    svc.arm_state = lambda: "unknown"
+    assert live_health(svc) == (False, "drone is unknown, not RC-armed")
+    svc.arm_state = lambda: "armed"
+    assert live_health(svc) == (False, "g_ekf_of_health is not streaming")
+    svc.stream(g_ekf_of_health=0)
+    assert live_health(svc) == (False, "g_ekf_of_health = 0 (KF diverged)")
+    svc.stream(g_ekf_of_health=1)
+    assert live_health(svc) == (True, "")

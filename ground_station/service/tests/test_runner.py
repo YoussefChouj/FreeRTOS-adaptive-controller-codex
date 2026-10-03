@@ -407,3 +407,78 @@ def test_p_landing_timeout_revert_flight(tmp_path):
     assert r.status == "operator_needed"
     assert "landing timeout; revert flash pending" in r.reason
     assert r.flights[-1].reflash_hash == ""
+
+
+FLY_YAML = """campaign: hover_ladder_t
+objective: "hover ladder"
+controller: pid
+packs: [P4000-1]
+max_flights: 9
+mode: fly
+experiments:
+  - {name: hover_z050, scenario: hover, scenario_args: {z: 0.5}, capture: campaign, repeats: 1}
+  - {name: hover_z070, scenario: hover, scenario_args: {z: 0.7}, capture: campaign, repeats: 1}
+  - {name: hover_z130, scenario: hover, scenario_args: {z: 1.3}, capture: campaign, repeats: 1}
+"""
+
+
+def _fly_rig(tmp_path, health=None):
+    path = tmp_path / "fly.yaml"
+    path.write_text(FLY_YAML)
+    drone = FakeDrone()
+    drone.sbus_live = True
+    clock = FakeClock()
+    deps = create_deps(drone, WfbClient(drone.send), clock)
+    deps.say = Mock()
+    deps.ground_wait_s = 10.0
+    if health is not None:
+        deps.health = health
+    return str(path), deps, clock
+
+
+def test_fly_mode_flies_queue_once_with_one_go_and_no_tuning(tmp_path):
+    path, deps, clock = _fly_rig(tmp_path)
+    report = run_campaign(path, deps)
+    assert report.status == "complete", report.reason
+    assert [f.experiment for f in report.flights] == ["hover_z050", "hover_z070", "hover_z130"]
+    assert deps.wait_for_go.call_count == 1          # operator Go once; auto-next covers flights 2 and 3
+    deps.tuner.propose.assert_not_called()
+    deps.tuner.record.assert_not_called()
+    deps.apply_params.assert_not_called()
+    deps.change_request.assert_not_called()
+    deps.gate.record_flight.assert_not_called()
+    lines = [c.args[0] for c in deps.say.call_args_list]
+    assert len(lines) == 3 and all(len(t.splitlines()) == 3 for t in lines)
+    assert "auto-next OK -> flight 2/3 (hover_z070)" in lines[0]
+    assert lines[2].endswith("campaign done")
+    assert all(f.j == 1.23 for f in report.flights)
+
+
+def test_fly_mode_failed_check_pauses_for_go(tmp_path):
+    verdicts = iter([(False, "g_ekf_of_health = 0 (KF diverged)"), (True, ""), (True, "")])
+    path, deps, clock = _fly_rig(tmp_path, health=lambda: next(verdicts))
+    report = run_campaign(path, deps)
+    assert report.status == "complete"
+    assert deps.wait_for_go.call_count == 2          # first flight + the pause after flight 1
+    first = deps.say.call_args_list[0].args[0]
+    assert "PAUSED before flight 2/3: g_ekf_of_health = 0 (KF diverged)" in first
+
+
+def test_fly_mode_pause_then_operator_stop(tmp_path):
+    path, deps, clock = _fly_rig(tmp_path, health=lambda: (False, "drone is disarmed, not RC-armed"))
+    deps.wait_for_go = Mock(side_effect=[True, False])
+    report = run_campaign(path, deps)
+    assert report.status == "operator_stop"
+    assert len(report.flights) == 1
+
+
+def test_fly_mode_waits_on_ground_before_next(tmp_path):
+    path, deps, clock = _fly_rig(tmp_path)
+    t_land = []
+    deps.on_flight = lambda rec: t_land.append(clock())
+    starts = []
+    real_takeoff = deps.client.takeoff
+    deps.client.takeoff = lambda: (starts.append(clock()), real_takeoff())[1]
+    run_campaign(path, deps)
+    assert len(starts) == 3
+    assert starts[1] - t_land[0] >= 10.0 - 1e-9

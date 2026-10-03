@@ -72,6 +72,9 @@ class RunnerDeps:
     control: RunnerControl | None = None
     apply_params: Callable[[dict], bool] = lambda params: True
     on_flight: Callable[['FlightRecord'], None] = lambda rec: None
+    say: Callable[[str], None] = lambda text: None               # chat line to the operator (live: agent message)
+    health: Callable[[], tuple[bool, str]] = lambda: (True, "")  # live: RC-armed + g_ekf_of_health
+    ground_wait_s: float = 0.0  # fly mode: time on the ground before the auto-next check
 
 def default_diff_source(repo_root: str, lkg_commit: str, c_files: tuple[str, ...]) -> str:
     if not c_files:
@@ -254,7 +257,12 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
     
     max_ticks = math.ceil(deps.flight_timeout_s / deps.dt_s)
     
-    for i in range(campaign.max_flights):
+    fly = campaign.mode == "fly"
+    n_flights = min(campaign.max_flights, len(queue)) if fly else campaign.max_flights
+    need_go = True
+    prev_pack = None
+
+    for i in range(n_flights):
         exp = queue[i % len(queue)] if queue else None
         if not exp:
             break
@@ -265,15 +273,17 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
         if report:
             return report
 
-        # 1. wait_for_go
-        if not deps.wait_for_go(pack_id):
+        # 1. wait_for_go (fly mode: once per pack, again only after a failed auto-next check)
+        need_go = need_go or not fly or pack_id != prev_pack
+        prev_pack = pack_id
+        if need_go and not deps.wait_for_go(pack_id):
             report = _control_report(deps, campaign, flights)
             if report:
                 return report
             return CampaignReport(campaign, flights, "operator_stop", "")
             
         # 2. Cooldown
-        target_elapsed = max(last_duration, deps.cooldown_min_s)
+        target_elapsed = deps.cooldown_min_s if fly else max(last_duration, deps.cooldown_min_s)
         cooldown_max_ticks = math.ceil(target_elapsed / deps.dt_s) + max_ticks
         
         ticks = 0
@@ -298,8 +308,8 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
         if not allowed:
             return CampaignReport(campaign, flights, "operator_needed", reason)
             
-        # 3. Code change
-        just = deps.change_request()
+        # 3. Code change (tune mode only)
+        just = deps.change_request() if not fly else None
         if just is not None:
             diff_text = deps.diff_source() if deps.diff_source else default_diff_source(deps.repo_root, deps.lkg_commit, deps.c_files)
             files = files_after_from_diff(diff_text, deps.repo_root)
@@ -314,15 +324,15 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
                 fw_hash = ""
                 
         # 4. hover_only
-        hover_only = deps.gate.next_flight_must_hover()
+        hover_only = deps.gate.next_flight_must_hover() if not fly else False
         
         # 5. arm_allowed
         if not deps.arm_allowed():
             return CampaignReport(campaign, flights, "arm_refused", "")
             
         # 6. Flight
-        params = deps.tuner.propose(history)
-        if not deps.apply_params(params):
+        params = deps.tuner.propose(history) if not fly else {}
+        if params and not deps.apply_params(params):
             return CampaignReport(campaign, flights, "operator_needed", "param write refused")
 
         deps.monitor.begin_flight()
@@ -336,7 +346,8 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
         
         # 8. Analyze
         j = deps.analyze(flight_id) if not aborted else None
-        deps.tuner.record(params, j, valid=j is not None)
+        if not fly:
+            deps.tuner.record(params, j, valid=j is not None)
         history.append({"params": params, "J": j, "valid": j is not None})
         
         if aborted:
@@ -356,7 +367,8 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
             gate_decision = deps.gate.on_flight_result(aborted=aborted, j=j)
             judge = None
 
-        deps.gate.record_flight(flight_id, fw_hash)
+        if not fly:
+            deps.gate.record_flight(flight_id, fw_hash)
         
         decision_was_revert = (gate_decision == "revert")
 
@@ -396,5 +408,51 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
         # 10. Abort limit
         if (aborted and decision and decision.level >= 3) or max(runner_consecutive_aborts, deps.monitor.consecutive_aborts) >= 2:
             return CampaignReport(campaign, flights, "operator_needed", "abort level 3 or consecutive")
-            
+
+        # 11. Auto-next (fly mode): wait on the ground, post a 3-line result, fly on only if every check passes
+        if fly:
+            nxt = queue[i + 1] if i + 1 < n_flights else None
+            ok, why = _auto_next(deps, outcome)
+            report = _control_report(deps, campaign, flights)
+            if report:
+                return report
+            deps.say(_result_lines(rec, i + 1, n_flights, nxt, ok, why))
+            need_go = not ok
+
     return CampaignReport(campaign, flights, "complete", "")
+
+
+def _auto_next(deps: RunnerDeps, outcome: FlightOutcome) -> tuple[bool, str]:
+    """Decision 12: landed, idle, no trip/abort, deps.health() (RC-armed, KF healthy). A recovered fence
+    push-back is not an abort; a firmware landing is (fly_scenario aborts on prim DESCEND/IDLE it did not command)."""
+    ticks = math.ceil(deps.ground_wait_s / deps.dt_s) if deps.ground_wait_s > 0 else 0
+    for _ in range(ticks):
+        req = deps.control.get() if deps.control else None
+        if req is not None:
+            return False, f"operator {req}"
+        deps.client.heartbeat()
+        deps.sleep(deps.dt_s)
+    if outcome.aborted:
+        return False, f"flight aborted: {outcome.decision.reason if outcome.decision else 'unknown'}"
+    st = deps.status()
+    prim = int(st.get("prim_state", -1))
+    if prim != PRIM_IDLE:
+        return False, f"not idle on the ground (prim_state {prim})"
+    if int(st.get("safety_trip", 0)):
+        return False, f"safety_trip {int(st['safety_trip'])}"
+    return deps.health()
+
+
+def _result_lines(rec: FlightRecord, n: int, total: int, nxt: Any, ok: bool, why: str) -> str:
+    """The 3-line chat result after each fly-mode flight: what flew, how each step went, what happens next."""
+    steps = ", ".join(f"{s.get('kind', '?')} {'ok' if s.get('ok') else 'FAIL'}" for s in rec.steps) or "none"
+    abort = f"abort L{rec.abort_level}: {rec.abort_reason}" if rec.abort_level else "landed, no abort"
+    if nxt is None:
+        tail = "campaign done" if ok else f"campaign done; post-flight check failed: {why}"
+    elif ok:
+        tail = f"auto-next OK -> flight {n + 1}/{total} ({nxt.name})"
+    else:
+        tail = f"PAUSED before flight {n + 1}/{total}: {why}. Say go to continue, or land/abort"
+    return (f"flight {n}/{total} {rec.experiment} ({rec.scenario}): {rec.duration_s:.1f} s, {abort}\n"
+            f"steps: {steps}\n"
+            f"{tail}")

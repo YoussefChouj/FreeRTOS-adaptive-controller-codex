@@ -69,7 +69,8 @@ class CampaignService:
                 arm_allowed=self.arm_allowed,
                 control=self.control,
                 apply_params=self.apply_params,
-                on_flight=self.on_flight
+                on_flight=self.on_flight,
+                say=self.say
             )
             
             self.runner_thread = threading.Thread(
@@ -115,6 +116,15 @@ class CampaignService:
     def on_flight(self, rec):
         with self.lock:
             self._live_flights.append(rec)
+
+    def say(self, text):
+        """Runner result lines to the operator chat (agent message); dropped when no agent is wired."""
+        add = getattr(self.agent, "add_agent_message", None)
+        if callable(add):
+            try:
+                add(text, source="agent:runner")
+            except Exception:
+                pass
 
     def wait_for_go(self, pack_id):
         with self.condition:

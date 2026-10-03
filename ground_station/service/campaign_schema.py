@@ -36,6 +36,9 @@ WFB_HOVER_Z_MAX: float = 1.4  # interfaces.md section 1: WFB_HOVER_Z_MAX
 _CAMPAIGN_NAME_RE = re.compile(r"^[a-z0-9_-]{1,40}$")
 _CONTROLLER_NAME_RE = re.compile(r"^[a-z0-9_]+$")
 
+CAMPAIGN_MODES = ("tune", "fly")
+
+
 @dataclass(frozen=True)
 class EnvelopeLimit:
     """Per-parameter gain envelope limits (Workflow B Q10)."""
@@ -78,6 +81,7 @@ class Campaign:
     envelope: dict[str, EnvelopeLimit]
     experiments: tuple[Experiment, ...]
     abort: dict[str, Any] = field(default_factory=dict)
+    mode: str = "tune"  # fly: scenarios only (no tuner/gate/flash, envelope optional), auto-next between flights
 
     @property
     def abort_limits(self) -> AbortLimits:
@@ -98,6 +102,7 @@ class Campaign:
             },
             "experiments": [_experiment_dict(exp) for exp in self.experiments],
             "abort": dict(self.abort),
+            "mode": self.mode,
         }
 
 
@@ -155,6 +160,7 @@ def parse_campaign(data: dict) -> Campaign:
         "envelope",
         "experiments",
         "abort",
+        "mode",
     }
     required_top_keys = [
         "campaign",
@@ -165,6 +171,12 @@ def parse_campaign(data: dict) -> Campaign:
         "envelope",
         "experiments",
     ]
+
+    mode = data.get("mode", "tune")
+    if mode not in CAMPAIGN_MODES:
+        problems.append(f"mode: must be one of {', '.join(CAMPAIGN_MODES)} (got {mode!r})")
+    elif mode == "fly":
+        required_top_keys.remove("envelope")
 
     # 1. Top-level unknown keys
     for k in data:
@@ -489,7 +501,7 @@ def parse_campaign(data: dict) -> Campaign:
             max=float(row["max"]),
             max_step=float(row["max_step"]),
         )
-        for sym, row in data["envelope"].items()
+        for sym, row in data.get("envelope", {}).items()
     }
 
     experiments_list: list[Experiment] = []
@@ -549,6 +561,7 @@ def parse_campaign(data: dict) -> Campaign:
         envelope=envelope_map,
         experiments=tuple(experiments_list),
         abort=abort_map,
+        mode=str(mode),
     )
 
 
