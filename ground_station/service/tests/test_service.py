@@ -879,7 +879,7 @@ def test_http_api_manifest_endpoint():
         assert "telemetry" in body
         assert body["telemetry"]["verified_published_keys_total"] > 100
         assert "panels" in body
-        assert len(body["panels"]) == 18
+        assert len(body["panels"]) == 19          # + campaign panel (wfb G14)
         assert "routes" in body
         assert "/api/manifest" in body["routes"]["GET"]
     finally:
