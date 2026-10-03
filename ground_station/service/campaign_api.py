@@ -50,7 +50,11 @@ class CampaignService:
             self.waiting_pack = None
             self.go_grant = pack_id
             
-            deps = self.deps_factory()
+            try:
+                deps = self.deps_factory()
+            except Exception as exc:  # live factory refuses without gateway / fresh g_wfb_status
+                self.go_grant = None
+                return 409, {"error": f"campaign deps not ready: {exc}"}
             self.deps = dataclasses.replace(
                 deps,
                 wait_for_go=self.wait_for_go,

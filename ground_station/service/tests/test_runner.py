@@ -257,7 +257,9 @@ def test_j_consecutive_timeout_aborts(tmp_path):
     assert len(report.flights) == 2
     for f in report.flights:
         assert f.abort_level == 1
-        assert "timeout" in f.abort_reason
+    assert "timeout" in report.flights[0].abort_reason
+    # the mock leaves z > 0, so the fake firmware refuses the next takeoff sequence: the runner says so
+    assert "takeoff refused" in report.flights[1].abort_reason
     assert report.status == "operator_needed"
 def test_k_tuner_history(tmp_path):
     campaign_yaml = tmp_path / "camp.yaml"

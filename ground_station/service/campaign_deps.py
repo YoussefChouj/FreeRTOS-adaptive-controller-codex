@@ -27,6 +27,40 @@ def sim_knobs(controller: str = "pid") -> tuple[Knob, ...]:
     descriptor = load_descriptor(CONTROLLERS_DIR / f"{controller}.yaml")
     return descriptor.knobs
 
+def tuner_and_gate(controller: str, seed: int, clock: Callable[[], float], workdir: str | None):
+    """Tuner (J=None mapped to inf) and a CodeGate with mock build/RAM/custody; shared by sim and live deps."""
+    descriptor = load_descriptor(CONTROLLERS_DIR / f"{controller}.yaml")
+    tuner = Tuner(descriptor, seed)
+    
+    _orig_record = tuner.record
+    # aborted flights pass J=None, so we map it to math.inf
+    def safe_record(params, J, valid):
+        _orig_record(params, J if J is not None else math.inf, valid)
+    tuner.record = safe_record
+    
+    _orig_propose = tuner.propose
+    def safe_propose(history):
+        safe_hist = [
+            {"params": h["params"], "J": h["J"] if h["J"] is not None else math.inf, "valid": h["valid"]}
+            for h in history
+        ]
+        return _orig_propose(safe_hist)
+    tuner.propose = safe_propose
+    
+    ledger_path = f"{workdir}/ledger.jsonl" if workdir else f"{tempfile.mkdtemp(prefix='ledger_')}/ledger.jsonl"
+    gate = CodeGate(
+        build=Mock(),
+        ram_check=Mock(),
+        ledger_path=ledger_path,
+        clock=clock,
+        obj_dir="OBJ",
+        ram_limit_bytes=256000,
+        tolerance_frac=0.1,
+        custody=Mock(),
+    )
+    return tuner, gate
+
+
 def sim_deps_factory(controller: str = "pid", seed: int = 0, dt_s: float = 0.1, workdir: str | None = None) -> Callable[[], RunnerDeps]:
     def factory() -> RunnerDeps:
         drone = FakeDrone()
@@ -35,36 +69,8 @@ def sim_deps_factory(controller: str = "pid", seed: int = 0, dt_s: float = 0.1, 
         
         packs = PackRegistry.load(None)
         
-        descriptor = load_descriptor(CONTROLLERS_DIR / f"{controller}.yaml")
-        tuner = Tuner(descriptor, seed)
-        
-        _orig_record = tuner.record
-        # aborted flights pass J=None, so we map it to math.inf
-        def safe_record(params, J, valid):
-            _orig_record(params, J if J is not None else math.inf, valid)
-        tuner.record = safe_record
-        
-        _orig_propose = tuner.propose
-        def safe_propose(history):
-            safe_hist = [
-                {"params": h["params"], "J": h["J"] if h["J"] is not None else math.inf, "valid": h["valid"]}
-                for h in history
-            ]
-            return _orig_propose(safe_hist)
-        tuner.propose = safe_propose
-        
-        ledger_path = f"{workdir}/ledger.jsonl" if workdir else f"{tempfile.mkdtemp(prefix='ledger_')}/ledger.jsonl"
-        gate = CodeGate(
-            build=Mock(),
-            ram_check=Mock(),
-            ledger_path=ledger_path,
-            clock=clock,
-            obj_dir="OBJ",
-            ram_limit_bytes=256000,
-            tolerance_frac=0.1,
-            custody=Mock(),
-        )
-        
+        tuner, gate = tuner_and_gate(controller, seed, clock, workdir)
+
         monitor = AbortMonitor(limits=AbortLimits())
         
         def sample(t_s):

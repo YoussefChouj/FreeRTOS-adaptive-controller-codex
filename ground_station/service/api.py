@@ -2634,7 +2634,13 @@ class ApiServer:
                     knobs=sim_knobs()
                 )
             else:
-                self.campaign = CampaignService(agent=self.agent)
+                from ground_station.service.campaign_deps import sim_knobs
+                from ground_station.service.campaign_live import live_deps_factory
+                self.campaign = CampaignService(
+                    agent=self.agent,
+                    deps_factory=live_deps_factory(service),
+                    knobs=sim_knobs()
+                )
         else:
             self.campaign = campaign_service
             

@@ -68,6 +68,7 @@ class RunnerDeps:
     flight_timeout_s: float = 120.0
     hover_s: float = 5.0
     cooldown_min_s: float = 0.0
+    agent_arms: bool = True  # False live: the operator arms by RC, takeoff sends IDLE + TAKEOFF only
     control: RunnerControl | None = None
     apply_params: Callable[[dict], bool] = lambda params: True
     on_flight: Callable[['FlightRecord'], None] = lambda rec: None
@@ -171,11 +172,18 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False)
     for i, st in enumerate(steps[:-1]):
         t0 = deps.clock() - t_start
         if st.kind == "takeoff":
-            deps.client.set_hover_z(scenario.hover_z_m)
-            deps.client.arm()
-            deps.client.idle()
-            deps.client.takeoff()
-            ok = airborne = wait(lambda: prim() == PRIM_HOVER, "takeoff")
+            cmds = [("set_hover_z", lambda: deps.client.set_hover_z(scenario.hover_z_m))]
+            if deps.agent_arms:
+                cmds.append(("arm", deps.client.arm))
+            cmds += [("idle", deps.client.idle), ("takeoff", deps.client.takeoff)]
+            refused = next((name for name, send in cmds if not send()), None)
+            if refused:
+                why = getattr(deps.client, "last_error", "") or "not applied"
+                hint = " (operator arms by RC first)" if refused == "idle" and not deps.agent_arms else ""
+                decision = AbortDecision(level=1, reason=f"takeoff refused at {refused}: {why}{hint}")
+                ok = False
+            else:
+                ok = airborne = wait(lambda: prim() == PRIM_HOVER, "takeoff")
         elif st.kind == "hold":
             t_hold = deps.clock()
             ok = wait(lambda: deps.clock() - t_hold >= st.duration_s, "hold")
@@ -203,7 +211,7 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False)
     if aborted:
         deps.client.traj_stop()
     t0 = deps.clock() - t_start
-    deps.client.land()
+    land_sent = deps.client.land()
     landed = False
     for _ in range(max_ticks):
         deps.client.heartbeat()
@@ -211,6 +219,8 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False)
         if prim() == PRIM_IDLE:
             landed = True
             break
+        if not land_sent and prim() == PRIM_HOVER:  # LAND lost or refused while still hovering: resend
+            land_sent = deps.client.land()
     records.append({"step": len(steps) - 1, "kind": "land", "t0_s": round(t0, 3),
                     "t1_s": round(deps.clock() - t_start, 3), "ok": landed})
     return FlightOutcome(aborted, decision, landed, records)

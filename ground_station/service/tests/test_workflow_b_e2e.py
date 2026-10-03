@@ -262,11 +262,12 @@ def test_operator_control_mid_flight(api_server, hold, campaign_yaml, cmd, statu
         assert (CMD_PRIM, PrimIdx.LAND) in keys[stop_at + 1:]
         assert flights[0]["abort_reason"] == reason
 
-def test_non_sim_returns_503(real_api_server, campaign_yaml):
+def test_non_sim_without_link_returns_409(real_api_server, campaign_yaml):
+    # live deps are wired, but with no bridge / no g_wfb_status stream the factory refuses before any command
     _, base = real_api_server
     code, res = _post(base + "/api/campaign/go", {
         "campaign_path": campaign_yaml, "pack_id": "P4000-1",
         "checklist": {"ok": True}, "source": "operator"
     })
-    assert code == 503
-    assert res.get("error") == "live campaign wiring not built: hardware path needs operator approval"
+    assert code == 409
+    assert res.get("error", "").startswith("campaign deps not ready: ")

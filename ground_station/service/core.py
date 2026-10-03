@@ -31,7 +31,7 @@ import os
 import subprocess
 import threading
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -45,6 +45,9 @@ from .telemetry_adapter import StreamMetadata, TelemetryAdapter
 
 # Maximum number of recent command results retained in the service snapshot.
 COMMAND_RESULTS_HISTORY = 10
+
+# Results kept by transaction id for command_result() (the campaign runner waits on its own txids).
+TXN_RESULTS_MAX = 256
 
 # Maximum number of command actions kept in the service's action journal.
 ACTION_JOURNAL_MAX = 64
@@ -280,6 +283,8 @@ class GroundStationService:
         # Bounded history of recent command results for the shell.
         self._command_results: deque[dict[str, Any]] = deque(maxlen=command_history)
         self._last_transaction_result: dict[str, Any] | None = None
+        self._txn_results: OrderedDict[int, dict[str, Any]] = OrderedDict()
+        self._txn_lock = threading.Lock()
         # Bounded action journal for /api/actions endpoint (WP6).
         self._action_journal: deque[CommandAction] = deque(maxlen=ACTION_JOURNAL_MAX)
         # Bounded fault log for /api/faults endpoint (WP6).
@@ -839,6 +844,29 @@ class GroundStationService:
         """True only if fresh arm telemetry says disarmed (fails closed)."""
         return self.arm_state() == "disarmed"
 
+    def latest_values(self, names) -> dict[str, tuple[float, int]]:
+        """Newest (value, time_ns) per requested symbol across all streams; names never seen are left out."""
+        want = set(names)
+        out: dict[str, tuple[float, int]] = {}
+        with self._state_lock:
+            for slot_data in self._streams.values():
+                if not isinstance(slot_data, dict):
+                    continue
+                vals = slot_data.get("values", {})
+                if not isinstance(vals, dict):
+                    continue
+                key_ts = slot_data.get("_key_ts") or {}
+                last_ns = slot_data.get("last_update_ns", 0) or 0
+                for k in want.intersection(vals):
+                    try:
+                        v = float(vals[k])
+                    except (TypeError, ValueError):
+                        continue
+                    ts = int(key_ts.get(k, last_ns) or 0)
+                    if k not in out or ts > out[k][1]:
+                        out[k] = (v, ts)
+        return out
+
     def submit_command(self, command_id: int, index: int = 0, value: float = 0.0,
                        flags: int = 0) -> int:
         if self.gateway is None:
@@ -915,6 +943,7 @@ class GroundStationService:
             entry = self._result_to_entry(result)
             self._last_transaction_result = entry
             self._command_results.append(entry)
+            self._note_txn_result(entry)
             self._update_action_journal(result)
             # Log faults so /api/faults surfaces them.
             from ground_station.platform.transactions import Outcome
@@ -929,6 +958,19 @@ class GroundStationService:
                     "time_ns": time.time_ns(),
                 })
         return result
+
+    def _note_txn_result(self, entry: dict[str, Any]) -> None:
+        with self._txn_lock:
+            self._txn_results[int(entry["transaction_id"])] = entry
+            while len(self._txn_results) > TXN_RESULTS_MAX:
+                self._txn_results.popitem(last=False)
+
+    def command_result(self, txid: int, pop: bool = False) -> dict[str, Any] | None:
+        """Result entry for one transaction id, or None until it arrives (last TXN_RESULTS_MAX kept)."""
+        with self._txn_lock:
+            if pop:
+                return self._txn_results.pop(int(txid), None)
+            return self._txn_results.get(int(txid))
 
     def record_command_result(self, result) -> None:
         """Insert a transaction result into the snapshot history.
@@ -945,6 +987,7 @@ class GroundStationService:
         entry = self._result_to_entry(result)
         self._last_transaction_result = entry
         self._command_results.append(entry)
+        self._note_txn_result(entry)
         self._update_action_journal(result)
         # Log rejected outcomes to the fault log (same policy as poll_command).
         from ground_station.platform.transactions import Outcome
