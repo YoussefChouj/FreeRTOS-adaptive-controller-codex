@@ -1,6 +1,6 @@
 {
   "name": "position_hold_of",
-  "notes": "Optical-flow position hold: loc/locs cascade, flow raw+fixed, bias, EKF velocity.",
+  "notes": "Optical-flow position hold: loc/locs cascade, flow raw+fixed, bias, EKF velocity. WP-21: OF-EKF states (s_ekf_of x/v/bias, gate rejects, health), full-tilt/vel-fb/handheld flags, climb rate.",
   "slots": [
     {
       "rate": 50.0,
@@ -20,7 +20,12 @@
         "ano_of.of2_dx_fix",
         "ano_of.of2_dy_fix",
         "ano_of.earth_x",
-        "ano_of.earth_y"
+        "ano_of.earth_y",
+        "ano_of.of2_h_f2_v",
+        "s_ekf_of.x[0]",
+        "s_ekf_of.x[1]",
+        "s_ekf_of.x[3]",
+        "s_ekf_of.x[4]"
       ]
     },
     {
@@ -41,7 +46,11 @@
         "g_ekf_gate.ctrl_enable",
         "imu_data.rol",
         "imu_data.pit",
-        "imu_data.yaw"
+        "imu_data.yaw",
+        "ano_of.of2_h",
+        "s_ekf_of.x[2]",
+        "s_ekf_of.x[5]",
+        "g_ekf_of_health"
       ]
     },
     {
@@ -54,7 +63,13 @@
         "flight_phase",
         "DroneStatus.ARM_Status",
         "DroneStatus.FlyMode",
-        "real_voltage"
+        "real_voltage",
+        "g_of_full_tilt",
+        "g_ekf_of_vel_fb",
+        "g_of_handheld_test",
+        "g_ekf_of_fallback",
+        "s_ekf_of.rej_x",
+        "s_ekf_of.rej_y"
       ]
     }
   ],
@@ -70,6 +85,9 @@
     "ano_of.of2_dx_fix",
     "ano_of.of2_dy_fix",
     "g_ekf_gate.vx_cms",
-    "g_ekf_gate.vy_cms"
+    "g_ekf_gate.vy_cms",
+    "s_ekf_of.x[1]",
+    "s_ekf_of.x[4]",
+    "ano_of.of2_h_f2_v"
   ]
 }
