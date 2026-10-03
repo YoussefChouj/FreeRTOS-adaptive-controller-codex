@@ -500,3 +500,16 @@ def test_8_bad_mode_and_tune_without_envelope():
     with pytest.raises(CampaignError) as exc_info:
         parse_campaign(data)
     assert "envelope: missing required key" in exc_info.value.problems
+
+
+def test_9_log_plan_is_checked_per_experiment():
+    data = _fly_data()
+    data["experiments"][0]["log_plan"] = {"rate_hz": 50, "groups": ["optical_flow"]}
+    campaign = parse_campaign(data)
+    assert campaign.experiments[0].log_plan == {"rate_hz": 50, "groups": ["optical_flow"]}
+    assert parse_campaign(campaign.to_dict()) == campaign
+    data["experiments"][0]["log_plan"] = {"rate_hz": 500, "groups": ["gyro"]}
+    with pytest.raises(CampaignError) as exc_info:
+        parse_campaign(data)
+    problems = [p for p in exc_info.value.problems if ".log_plan: " in p]
+    assert len(problems) == 2 and all(p.startswith("experiments.0.log_plan: ") for p in problems)

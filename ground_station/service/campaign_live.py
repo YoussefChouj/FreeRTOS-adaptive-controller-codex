@@ -21,16 +21,14 @@ import time
 from typing import Any, Callable
 
 from ground_station.analysis.battery_model import PackRegistry
-from ground_station.livewatch.campaign_capture import ATTITUDE, MOTORS, POSITION_AXES, RATE_LOOPS
+from ground_station.livewatch.campaign_capture import (
+    ATTITUDE, KF_HEALTH, MOTORS, POSITION_AXES, RATE_LOOPS, WFB_STATUS_FIELDS,
+)
 from ground_station.platform.wfb_commands import CMD_PRIM, PrimIdx, WfbClient
 from ground_station.service.abort_monitor import AbortLimits, AbortMonitor, AbortSample
 from ground_station.service.campaign_runner import RunnerDeps
 
-# g_wfb_status fields, same keys as FakeDrone.status() (docs/workflow-b/interfaces.md telemetry block)
-WFB_STATUS_FIELDS = (
-    "prim_state", "traj_state", "traj_n", "traj_rx", "traj_crc_hi", "traj_crc_lo", "traj_t", "last_err",
-    "safety_trip", "hb_age", "gs_flight_active", "hover_z", "airborne_t", "fence_push",
-)
+# WFB_STATUS_FIELDS: g_wfb_status fields, same keys as FakeDrone.status() (docs/workflow-b/interfaces.md)
 WFB_STATUS_SYMS = tuple(f"g_wfb_status.{f}" for f in WFB_STATUS_FIELDS)
 VBAT_SYMS = ("real_voltage", "status.vbat")
 # rate-loop error axes: roll, pitch, yaw (gyrox/y/z FB - Des), from campaign_capture.RATE_LOOPS
@@ -50,7 +48,7 @@ HEARTBEAT_PERIOD_S = 0.2   # PROPOSED: 5 Hz, interfaces.md "GS sends at 5 Hz"; f
 STATUS_STALE_S = 1.0       # PROPOSED: factory refuses to start without g_wfb_status this fresh
 LIVE_DT_S = 0.1            # PROPOSED: runner tick
 GROUND_WAIT_S = 10.0       # decision 12: time on the ground after a fly-mode landing before the auto-next check
-KF_HEALTH_SYM = "g_ekf_of_health"  # 1 healthy, 0 diverged
+KF_HEALTH_SYM = KF_HEALTH  # 1 healthy, 0 diverged
 _RESULT_POLL_S = 0.01
 
 

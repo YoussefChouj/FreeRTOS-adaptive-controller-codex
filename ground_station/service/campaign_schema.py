@@ -17,6 +17,7 @@ from typing import Any
 
 import yaml
 
+from ground_station.livewatch.campaign_capture import check_log_plan
 from ground_station.service.abort_monitor import AbortLimits
 from ground_station.service.scenario_schema import (
     Scenario,
@@ -339,8 +340,8 @@ def parse_campaign(data: dict) -> Campaign:
                 for req in required_exp_keys:
                     if req not in exp:
                         problems.append(f"{exp_path}.{req}: missing required key")
-                if "log_plan" in exp and not isinstance(exp["log_plan"], dict):
-                    problems.append(f"{exp_path}.log_plan: must be a mapping")
+                if "log_plan" in exp:
+                    problems += [f"{exp_path}.log_plan: {p}" for p in check_log_plan(exp["log_plan"])]
 
                 # Name
                 if "name" in exp:

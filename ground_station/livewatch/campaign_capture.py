@@ -73,6 +73,14 @@ RATE_LOOPS: tuple[str, ...] = (
 )
 # Abort monitor and clock sync, plus the airborne flag (FLYING|LANDING, TASK/StabilizerTask.c:252).
 STATUS: tuple[str, ...] = REQUIRED_SYNC_VARS + ("flight_phase",)
+# Workflow B primitive and safety status (API/wfb_glue.h wfb_status_t, all float) and the OF EKF health
+# flag (TASK/StabilizerTask.c, u8: 1 healthy, 0 diverged). The live runner and the auto-next check read them.
+WFB_STATUS_FIELDS: tuple[str, ...] = (
+    "prim_state", "traj_state", "traj_n", "traj_rx", "traj_crc_hi", "traj_crc_lo", "traj_t", "last_err",
+    "safety_trip", "hb_age", "gs_flight_active", "hover_z", "airborne_t", "fence_push",
+)
+WFB_STATUS: tuple[str, ...] = tuple(f"g_wfb_status.{f}" for f in WFB_STATUS_FIELDS)
+KF_HEALTH = "g_ekf_of_health"
 
 MRAC_AXES = ("pitch", "roll", "yaw", "z_rate")
 MRAC_N_FEATURES = 6  # API/mrac_variant.h:12
@@ -96,9 +104,27 @@ CAMPAIGN_SET: Mapping[str, tuple[str, ...]] = MappingProxyType({
         + ATTITUDE
         + RATE_LOOPS
         + MOTORS
+        + WFB_STATUS
+        + (KF_HEALTH,)
     ),
     "optional": MRAC_SHADOW,
 })
+
+# Agent-picked log groups (decision 8): an experiment's log_plan names groups recorded on top of the
+# always-on needed set. Inside a group the order is priority: the link budget trims from the end.
+VELOCITY_LOOPS: tuple[str, ...] = (
+    "Ctrler.locxsPID.FB", "Ctrler.locxsPID.Des", "Ctrler.locysPID.FB", "Ctrler.locysPID.Des",
+    "Ctrler.locxPID.U", "Ctrler.locyPID.U",
+)
+OPTICAL_FLOW: tuple[str, ...] = ("ano_of.of2_dx_fix", "ano_of.of2_dy_fix")
+LOG_GROUPS: Mapping[str, tuple[str, ...]] = MappingProxyType({
+    "mrac_shadow": MRAC_SHADOW,
+    "velocity_loops": VELOCITY_LOOPS,
+    "optical_flow": OPTICAL_FLOW,
+})
+LOG_PLAN_KEYS = ("rate_hz", "groups")
+# PROPOSED default: 50 Hz is the rate the 10 s stream_log check carried with 0 dropped after the last flash.
+DEFAULT_LOG_PLAN: Mapping[str, Any] = MappingProxyType({"rate_hz": 50, "groups": ()})
 
 
 class CaptureError(RuntimeError):
@@ -112,8 +138,15 @@ class ManifestError(ValueError):
 # --- slot plan and rate probe -------------------------------------------------------------------------
 
 
-def slots_for(rate_hz: float, *, budget_bps: float = PLANNING_BUDGET_BPS) -> tuple[list[dict], list[str]]:
+def slots_for(
+    rate_hz: float,
+    *,
+    budget_bps: float = PLANNING_BUDGET_BPS,
+    optional: Sequence[str] | None = None,
+) -> tuple[list[dict], list[str]]:
     """Pack CAMPAIGN_SET into stream slots for ``rate_hz``; returns ``(slots, dropped)``.
+
+    ``optional`` replaces CAMPAIGN_SET["optional"] (plan_capture passes the log_plan groups).
 
     Each slot is ``{"slot": id, "hz": rate the drone emits, "vars": [...]}``. Variables fill slot 0 up
     to VARS_PER_SLOT, then slot 1, and so on: needed first, then optional in CAMPAIGN_SET order until
@@ -127,7 +160,8 @@ def slots_for(rate_hz: float, *, budget_bps: float = PLANNING_BUDGET_BPS) -> tup
     def fits(n_vars: int) -> bool:
         return math.ceil(n_vars / VARS_PER_SLOT) <= MAX_SLOTS and _guard_bps(n_vars, divider) <= budget_bps
 
-    needed, optional = CAMPAIGN_SET["needed"], CAMPAIGN_SET["optional"]
+    needed = CAMPAIGN_SET["needed"]
+    optional = CAMPAIGN_SET["optional"] if optional is None else tuple(optional)
     if not fits(len(needed)):
         raise CaptureError(
             f"the {len(needed)} needed variables need {_guard_bps(len(needed), divider):.0f} B/s at "
@@ -168,6 +202,77 @@ def probe_max_rate(
         if losses[rate] == 0.0:
             return float(rate)
     raise CaptureError(f"every probed rate lost frames (rate Hz: loss fraction): {losses}")
+
+
+# --- per-experiment log plan (decision 8) -------------------------------------------------------------
+
+
+def check_log_plan(log_plan: Any) -> list[str]:
+    """Problems with an experiment's ``log_plan`` (``{rate_hz, groups}``, both optional); empty if valid."""
+    if not isinstance(log_plan, Mapping):
+        return ["must be a mapping"]
+    problems = [f"unknown key {k!r} (allowed: {', '.join(LOG_PLAN_KEYS)})" for k in log_plan if k not in LOG_PLAN_KEYS]
+    rate = log_plan.get("rate_hz", DEFAULT_LOG_PLAN["rate_hz"])
+    if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not 0 < rate <= SEND_TASK_HZ:
+        problems.append(f"rate_hz: must be a number in (0, {SEND_TASK_HZ}] (got {rate!r})")
+    groups = log_plan.get("groups", ())
+    if not isinstance(groups, (list, tuple)) or not all(isinstance(g, str) for g in groups):
+        problems.append("groups: must be a list of group names")
+    else:
+        problems += [f"groups: unknown group {g!r} (known: {', '.join(LOG_GROUPS)})"
+                     for g in groups if g not in LOG_GROUPS]
+        if len(set(groups)) != len(groups):
+            problems.append("groups: a group is listed twice")
+    return problems
+
+
+def plan_capture(
+    log_plan: Mapping[str, Any] | None = None,
+    *,
+    max_rate_hz: float | None = None,
+    budget_bps: float = PLANNING_BUDGET_BPS,
+) -> dict[str, Any]:
+    """One experiment's capture: the always-on needed set, then the log_plan groups in their order.
+
+    The rate is the log_plan ``rate_hz`` capped at ``max_rate_hz`` (probe_max_rate on the live link).
+    Returns ``{"rate_hz", "requested_hz", "groups", "slots", "dropped"}``; ``rate_hz`` is what the
+    drone emits after the Send_Task divider. Raises CaptureError on an invalid log_plan.
+    """
+    plan = {**DEFAULT_LOG_PLAN, **(log_plan or {})}
+    problems = check_log_plan(plan)
+    if problems:
+        raise CaptureError("log_plan: " + "; ".join(problems))
+    requested = float(plan["rate_hz"])
+    rate = min(requested, float(max_rate_hz)) if max_rate_hz else requested
+    groups = list(plan["groups"])
+    slots, dropped = slots_for(rate, budget_bps=budget_bps, optional=[v for g in groups for v in LOG_GROUPS[g]])
+    return {"rate_hz": slots[0]["hz"], "requested_hz": requested, "groups": groups, "slots": slots,
+            "dropped": dropped}
+
+
+def log_plan_table(plan: Mapping[str, Any]) -> str:
+    """Markdown table of a plan_capture() plan for the operator's launch approval (launch Q3)."""
+    recorded = {v for s in plan["slots"] for v in s["vars"]}
+    hz = plan["rate_hz"]
+    rows = [("core (always on)", CAMPAIGN_SET["needed"])] + [(g, LOG_GROUPS[g]) for g in plan["groups"]]
+    lines = ["| group | vars recorded | rate Hz | note |", "|---|---|---|---|"]
+    for name, group_vars in rows:
+        kept = sum(v in recorded for v in group_vars)
+        note = f"{len(group_vars) - kept} dropped (link budget)" if kept < len(group_vars) else ""
+        lines.append(f"| {name} | {kept}/{len(group_vars)} | {hz:g} | {note} |")
+    capped = f", requested {plan['requested_hz']:g} Hz" if plan["requested_hz"] != hz else ""
+    bps = _guard_bps(len(recorded), max(1, round(SEND_TASK_HZ / hz)))
+    lines.append(f"{len(plan['slots'])} slot(s){capped}, {bps:.0f} of {PLANNING_BUDGET_BPS:.0f} B/s planning budget")
+    return "\n".join(lines)
+
+
+def subscribe_steps(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Agent plan steps (action ``subscribe``, service/agent.py) that put ``plan`` on the stream slots."""
+    return [
+        {"action": "subscribe",
+         "args": {"slot": s["slot"], "divider": max(1, round(SEND_TASK_HZ / s["hz"])), "ranges": list(s["vars"])}}
+        for s in plan["slots"]
+    ]
 
 
 # --- session manifest ---------------------------------------------------------------------------------

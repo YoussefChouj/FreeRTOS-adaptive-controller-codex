@@ -1,0 +1,32 @@
+# Workflow B campaign 1: hover ladder. The operator arms by RC; the agent takes off, holds and lands three
+# times (0.5 / 0.7 / 1.3 m), with auto-next between flights. Template: the workflow-b skill writes a dated
+# copy with the operator's launch answers (pack, hold time, log plan) into logs/campaigns/<campaign>_<date>/.
+campaign: hover_ladder
+objective: "hover hold quality at 0.5 / 0.7 / 1.3 m (position error, attitude, motor headroom)"
+controller: pid
+mode: fly            # fly the queue once; no tuner, gate, flash or params
+packs:
+  - P4000-1          # launch Q2 replaces this with the pack on the drone
+max_flights: 3
+experiments:
+  # log_plan: always-on core (status, positions, attitude, rate loops, motors, g_wfb_status, KF health)
+  # plus the groups named here. Hover drift lives in the velocity loops and the optical flow.
+  - name: hover_z050
+    scenario: hover
+    scenario_args: {z: 0.5, hold_s: 20}
+    capture: campaign
+    repeats: 1
+    log_plan: {rate_hz: 50, groups: [velocity_loops, optical_flow]}
+  - name: hover_z070
+    scenario: hover
+    scenario_args: {z: 0.7, hold_s: 20}
+    capture: campaign
+    repeats: 1
+    log_plan: {rate_hz: 50, groups: [velocity_loops, optical_flow]}
+  - name: hover_z130
+    scenario: hover
+    scenario_args: {z: 1.3, hold_s: 20}
+    capture: campaign
+    repeats: 1
+    log_plan: {rate_hz: 50, groups: [velocity_loops, optical_flow]}
+abort: {}
