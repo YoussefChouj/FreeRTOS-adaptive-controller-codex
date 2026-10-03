@@ -69,6 +69,15 @@ extern void EkfOf_UpdateZeroVel(EkfOf_t *e);
  *  Keeps vel and bias estimates intact. */
 extern void EkfOf_ResetPos(EkfOf_t *e);
 
+/** Zero both OF-bias states (bof_x, bof_y) and set their variance to var
+ *  with no cross-covariance. Called on ARM and on the handheld-test edge. */
+extern void EkfOf_ResetBias(EkfOf_t *e, float var);
+
+/* bof variance at ARM, (m/s)^2. 2.5e-5 = (0.5 cm/s)^2: OF is integer cm/s and
+ * good hovers read ~0-1 cm/s raw, so a stale resting value must not be learned
+ * back into bof in the first seconds of flight. */
+#define EKF_OF_BOF_ARM_VAR      2.5e-5f
+
 /* ----- WP-14: shadow mode, health gate, active path, tilt gain ----- */
 
 /* Shadow: 1 = KF runs every tick regardless of g_of_bias_mode, but does

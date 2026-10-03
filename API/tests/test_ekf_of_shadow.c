@@ -279,6 +279,52 @@ static void test_arm_edge_clears(void)
     g_pass++;
 }
 
+/* ---- 2026-10-03: EkfOf_ResetBias ----
+ * Zeroes bof with a tight variance and no cross-covariance. A step in OF
+ * right after it must go mostly into v, not bof (the resting OF value is a
+ * stale repeat and must not be learned back as bias at lift-off). */
+static float run_of_step(EkfOf_t *e)
+{
+    int i;
+    for (i = 0; i < 200; i++) {                 /* 1 s at 200 Hz, OF at 50 Hz */
+        EkfOf_Predict(e, 0.005f, 0.0f, 0.0f);
+        if ((i & 3) == 0) EkfOf_Update(e, 0.04f, 0.0f);
+    }
+    return e->x[2];
+}
+
+static void test_reset_bias(void)
+{
+    EkfOf_t e, loose;
+    int a, k;
+    float b_tight, b_loose;
+
+    EkfOf_Init(&e);
+    for (k = 0; k < 400; k++) {                 /* build cross-covariances */
+        EkfOf_Predict(&e, 0.005f, 0.1f, -0.1f);
+        if ((k & 3) == 0) EkfOf_Update(&e, 0.03f, -0.02f);
+    }
+    EkfOf_ResetBias(&e, EKF_OF_BOF_ARM_VAR);
+    ASSERT_MSG(e.x[2] == 0.0f && e.x[5] == 0.0f, "bof zeroed");
+    for (a = 0; a < 2; a++) {
+        ASSERT_CLOSE(e.P[a][10], EKF_OF_BOF_ARM_VAR, 1e-12f, "bof variance");
+        for (k = 0; k < 4; k++) {
+            if (k == 2) continue;
+            ASSERT_MSG(e.P[a][8 + k] == 0.0f && e.P[a][k*4 + 2] == 0.0f, "bof cross-cov cleared");
+        }
+    }
+    e.x[1] = 0.0f; e.x[4] = 0.0f;
+    b_tight = run_of_step(&e);
+    EkfOf_Init(&loose);                          /* P0 bof 0.01: the old ARM state */
+    b_loose = run_of_step(&loose);
+    printf("  bof after 4 cm/s step: tight %.4f loose %.4f, vx tight %.4f\n",
+           (double)b_tight, (double)b_loose, (double)e.x[1]);
+    ASSERT_MSG(fabsf(b_tight) < 0.5f * fabsf(b_loose), "tight bof learns less than loose");
+    ASSERT_MSG(e.x[1] > fabsf(b_tight), "step goes mostly into velocity");
+    printf("PASS: test_reset_bias\n");
+    g_pass++;
+}
+
 int main(void)
 {
     test_rebase_sign();
@@ -288,6 +334,7 @@ int main(void)
     test_trip_reinit();
     test_trip_reinit_mode2();
     test_arm_edge_clears();
+    test_reset_bias();
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;

@@ -564,7 +564,12 @@ void Update_Data(void)
 				tilt_ay = EKF_OF_ACC_SIGN_Y * 1000.0f * Gravity_Body_Y * EKF_OF_TILT_GAIN * EKF_OF_MG_TO_MPS2;
 				EkfOf_Predict(&s_ekf_of, 0.005f, tilt_ax, tilt_ay);
 				if (on_ground) EkfOf_UpdateZeroVel(&s_ekf_of);
-				if (of_ok) {
+				/* FIX 2026-10-03 (flight_test_landing_x_drift_1): resting on the ground
+				 * the module repeats one stale velocity (exactly 3,5 and 2,3 cm/s, std 0,
+				 * quality 255). With ZUPT pinning v=0 these updates taught it to bof, and
+				 * the hover flew that fake bias as a steady +x drift. Use OF only when
+				 * not on the ground and above the range floor. */
+				if (of_ok && !on_ground && ano_of.of_alt_cm >= OF_HANDHELD_MIN_ALT_CM) {
 					if (EKF_OF_UPDATE_ON_NEW_FRAME) {
 						if (ano_of.of_update_cnt != s_last_of_update_cnt) {
 							EkfOf_Update(&s_ekf_of, ofx, ofy);
@@ -1206,19 +1211,14 @@ void Compute_Motor(void)
 			 * the current OF reading so the position estimate is warm
 			 * at ARM rather than cold-starting from (0,0,0,0).
 			 * Gated on OF quality. */
-			if (ano_of.of_quality >= OF_MIN_QUALITY) {
-				if (s_of_pre_ok) {
-					s_of_bias_x = s_of_pre_x;
-					s_of_bias_y = s_of_pre_y;
-				} else {
-					s_of_bias_x = (float)ano_of.of2_dx_fix;
-					s_of_bias_y = (float)ano_of.of2_dy_fix;
-				}
-				s_of_bias_seeded = 1U;
-			}
-			/* WP-14: rebase KF bias and zero velocity in all modes (shadow). */
-			Of_RebaseKfBias(s_of_bias_x, s_of_bias_y);
+			/* FIX 2026-10-03: no ground snap. The resting OF value is a stale
+			 * repeat, not a bias (good flights read 0 at rest and ~0-1 cm/s in
+			 * hover; the drift flights read 3,5 and 2,3 at rest). Start every
+			 * flight from zero total bias: s_of_bias = 0 (Reset_World_Origin) and
+			 * KF bof = 0 with a tight variance, so the hold flies true zero flow. */
+			s_of_bias_seeded = 1U;
 			if (s_ekf_of_inited) {
+				EkfOf_ResetBias(&s_ekf_of, EKF_OF_BOF_ARM_VAR);
 				s_ekf_of.x[1] = 0.0f;
 				s_ekf_of.x[4] = 0.0f;
 			}
@@ -1233,20 +1233,12 @@ void Compute_Motor(void)
 				g_of_bias_mode = 2U;   /* mode-2 tick re-inits the KF if shadow was off */
 			}
 		}
-		else if (armed_now && on_ground && !g_of_handheld_test && s_of_pre_ok && g_of_bias_mode == 0U) {
-			s_of_bias_x = s_of_pre_x;
-			s_of_bias_y = s_of_pre_y;
-		}
-		/* Handheld test enabled: zero the origin but keep the averaged bias
-		 * (Reset_World_Origin() zeroes it). Hold still when enabling. */
+		/* Handheld test enabled: zero the origin and the bias (same rule as ARM;
+		 * the resting OF value is stale, not a bias). Hold still when enabling. */
 		if (g_of_handheld_test && !s_prev_handheld) {
-			float keep_bx = s_of_bias_x;
-			float keep_by = s_of_bias_y;
 			Reset_World_Origin();
-			s_of_bias_x = s_of_pre_ok ? s_of_pre_x : keep_bx;
-			s_of_bias_y = s_of_pre_ok ? s_of_pre_y : keep_by;
-			Of_RebaseKfBias(s_of_bias_x, s_of_bias_y);
 			if (s_ekf_of_inited) {
+				EkfOf_ResetBias(&s_ekf_of, EKF_OF_BOF_ARM_VAR);
 				s_ekf_of.x[1] = 0.0f;
 				s_ekf_of.x[4] = 0.0f;
 			}

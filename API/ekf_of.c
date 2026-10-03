@@ -217,6 +217,24 @@ void EkfOf_UpdateZeroVel(EkfOf_t *e)
 }
 
 /* ------------------------------------------------------------------ */
+/* Reset OF bias to zero with variance var (on ARM / handheld edge)   */
+/* ------------------------------------------------------------------ */
+
+void EkfOf_ResetBias(EkfOf_t *e, float var)
+{
+    int axis, k;
+    if (!e->inited) return;
+    for (axis = 0; axis < 2; axis++) {
+        e->x[k_axis_idx[axis][2]] = 0.0f;
+        for (k = 0; k < 4; k++) {          /* local index 2 = bof: clear its row and column */
+            e->P[axis][2*4 + k] = 0.0f;
+            e->P[axis][k*4 + 2] = 0.0f;
+        }
+        e->P[axis][2*4 + 2] = var;
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Reset position (on Reset_World_Origin)                            */
 /* ------------------------------------------------------------------ */
 
