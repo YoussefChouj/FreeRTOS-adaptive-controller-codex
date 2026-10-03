@@ -1,14 +1,20 @@
 import subprocess
 import math
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Any
 from pathlib import Path
 
 from ground_station.service.campaign_schema import load_campaign
 from ground_station.service.abort_monitor import AbortSample, AbortDecision
-from ground_station.service.trajectory_pipeline import generate
+from ground_station.service.scenario_schema import TRAJ_KINDS, WFB_SETTLE_S, Scenario, Step
 from ground_station.platform.trajectory_upload import upload
+
+# firmware enums (docs/workflow-b/interfaces.md): prim_state IDLE 0 / HOVER 2 / DESCEND 6, traj_state DONE 4
+PRIM_IDLE = 0
+PRIM_HOVER = 2
+PRIM_DESCEND = 6
+TRAJ_DONE = 4
 
 class RunnerControl:
     def __init__(self):
@@ -99,6 +105,8 @@ class FlightRecord:
     hover_only: bool
     duration_s: float
     reflash_hash: str = ""
+    scenario: str = ""
+    steps: list[dict] = field(default_factory=list)
 
 @dataclass
 class CampaignReport:
@@ -106,6 +114,107 @@ class CampaignReport:
     flights: list[FlightRecord]
     status: str
     reason: str
+
+@dataclass
+class FlightOutcome:
+    aborted: bool
+    decision: AbortDecision | None
+    landed: bool
+    steps: list[dict]
+
+
+def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False) -> FlightOutcome:
+    """Fly one scenario: takeoff, each step in order, land. Any abort -> traj_stop + land.
+
+    takeoff: set_hover_z + arm/idle/takeoff, wait prim HOVER. hold: heartbeat for s.
+    goto/path: settle WFB_SETTLE_S in HOVER, upload step.points, traj_start, wait traj DONE and prim back in HOVER.
+    hover_only (first flight after a reflash) keeps takeoff and land and swaps the middle for hold deps.hover_s.
+    The whole flight shares one deadline, deps.flight_timeout_s; a firmware landing (prim DESCEND/IDLE we did not
+    command) aborts the step. Each step gets a record {step, kind, t0_s, t1_s, ok} relative to the takeoff command.
+    """
+    steps = list(scenario.steps)
+    if hover_only:
+        steps = [steps[0], Step("hold", {"s": deps.hover_s}, duration_s=deps.hover_s), steps[-1]]
+    max_ticks = math.ceil(deps.flight_timeout_s / deps.dt_s)
+    t_start = deps.clock()
+    records: list[dict] = []
+    ticks = 0
+    airborne = False
+    decision: AbortDecision | None = None
+
+    def prim() -> int:
+        return int(deps.status()["prim_state"])
+
+    def wait(cond: Callable[[], bool], phase: str) -> bool:
+        nonlocal ticks, decision
+        while not cond():
+            req = deps.control.get() if deps.control else None
+            if req in ("land", "abort"):
+                decision = AbortDecision(level=1, reason=f"operator {req}")
+                return False
+            if ticks >= max_ticks:
+                decision = AbortDecision(level=1, reason=f"timeout: {phase}")
+                return False
+            if airborne and prim() in (PRIM_DESCEND, PRIM_IDLE):
+                trip = int(deps.status().get("safety_trip", 0))
+                decision = AbortDecision(level=1, reason=f"firmware landing during {phase} (safety_trip {trip})")
+                return False
+            deps.client.heartbeat()
+            deps.step(deps.dt_s)
+            dec = deps.monitor.step(deps.sample(deps.clock()))
+            if dec.level >= 1:
+                decision = dec
+                return False
+            ticks += 1
+        return True
+
+    for i, st in enumerate(steps[:-1]):
+        t0 = deps.clock() - t_start
+        if st.kind == "takeoff":
+            deps.client.set_hover_z(scenario.hover_z_m)
+            deps.client.arm()
+            deps.client.idle()
+            deps.client.takeoff()
+            ok = airborne = wait(lambda: prim() == PRIM_HOVER, "takeoff")
+        elif st.kind == "hold":
+            t_hold = deps.clock()
+            ok = wait(lambda: deps.clock() - t_hold >= st.duration_s, "hold")
+        elif st.kind in TRAJ_KINDS:
+            t_settle = deps.clock()
+            ok = wait(lambda: deps.clock() - t_settle >= WFB_SETTLE_S and prim() == PRIM_HOVER, f"{st.kind} settle")
+            if ok:
+                res = upload(st.points, deps.client)
+                if not res.ok:
+                    decision = AbortDecision(level=1, reason=f"{st.kind} upload failed: {res.error}")
+                    ok = False
+                else:
+                    deps.client.traj_start()
+                    ok = wait(
+                        lambda: int(deps.status()["traj_state"]) == TRAJ_DONE and prim() == PRIM_HOVER, st.kind
+                    )
+        else:
+            raise ValueError(f"step {i}: unexpected kind {st.kind!r} before land")
+        records.append({"step": i, "kind": st.kind, "t0_s": round(t0, 3),
+                        "t1_s": round(deps.clock() - t_start, 3), "ok": ok})
+        if not ok:
+            break
+
+    aborted = decision is not None
+    if aborted:
+        deps.client.traj_stop()
+    t0 = deps.clock() - t_start
+    deps.client.land()
+    landed = False
+    for _ in range(max_ticks):
+        deps.client.heartbeat()
+        deps.step(deps.dt_s)
+        if prim() == PRIM_IDLE:
+            landed = True
+            break
+    records.append({"step": len(steps) - 1, "kind": "land", "t0_s": round(t0, 3),
+                    "t1_s": round(deps.clock() - t_start, 3), "ok": landed})
+    return FlightOutcome(aborted, decision, landed, records)
+
 
 def _control_report(deps: RunnerDeps, campaign: Any, flights: list[FlightRecord]) -> CampaignReport | None:
     req = deps.control.get() if deps.control else None
@@ -208,65 +317,9 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
 
         deps.monitor.begin_flight()
         flight_start_time = deps.clock()
-        deps.client.set_hover_z(exp.profile.hover_z_m)
-        deps.client.arm()
-        deps.client.idle()
-        deps.client.takeoff()
-        
-        aborted = False
-        decision = None
-        
-        def run_loop_until(cond, phase):
-            nonlocal aborted, decision
-            ticks = 0
-            while not cond():
-                if deps.control:
-                    req = deps.control.get()
-                    if req in ("land", "abort"):
-                        aborted = True
-                        decision = AbortDecision(level=1, reason=f"operator {req}")
-                        return False
-                if ticks >= max_ticks:
-                    aborted = True
-                    decision = AbortDecision(level=1, reason=f"timeout: {phase}")
-                    return False
-                deps.client.heartbeat()
-                deps.step(deps.dt_s)
-                dec = deps.monitor.step(deps.sample(deps.clock()))
-                if dec.level >= 1:
-                    aborted = True
-                    decision = dec
-                    return False
-                ticks += 1
-            return True
-                    
-        run_loop_until(lambda: deps.status()["prim_state"] == 2, "takeoff")
-        
-        if not aborted:
-            if not hover_only:
-                points = generate(exp.shape, exp.params, exp.profile)
-                upload(points, deps.client)
-                deps.client.traj_start()
-                run_loop_until(lambda: deps.status()["traj_state"] == 4, "trajectory")
-            else:
-                hover_start = deps.clock()
-                run_loop_until(lambda: deps.clock() - hover_start >= deps.hover_s, "hover")
-                
-        # 7. Land
-        if aborted:
-            deps.client.traj_stop()
-        deps.client.land()
-        
-        ticks = 0
-        landed = False
-        while ticks < max_ticks:
-            deps.client.heartbeat()
-            deps.step(deps.dt_s)
-            if deps.status()["prim_state"] == 0:
-                landed = True
-                break
-            ticks += 1
-            
+        outcome = fly_scenario(exp.scenario, deps, hover_only)
+        aborted, decision, landed = outcome.aborted, outcome.decision, outcome.landed
+
         deps.monitor.end_flight()
         last_landing_t = deps.clock()
         last_duration = last_landing_t - flight_start_time
@@ -307,7 +360,9 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
             decision=gate_decision,
             hover_only=hover_only,
             duration_s=last_duration,
-            reflash_hash=""
+            reflash_hash="",
+            scenario=exp.scenario.name,
+            steps=outcome.steps,
         )
 
         if not landed:
