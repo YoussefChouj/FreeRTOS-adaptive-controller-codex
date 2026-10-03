@@ -265,6 +265,43 @@ static void test_empirical_varies(void)
     check("empirical high reasonable", high >= 10.0f && high <= 14.0f);
 }
 
+/* ---- Test 7: tilted hover (WP-34 audit) ----
+ * Holding altitude at pitch 10, roll 20 deg (c = cos10 cos20 = 0.925) needs body-z thrust T = m g / c.
+ * The accelerometer then reads the specific force f_z = T / m = g / c along body z, and the call site passes
+ * acc_z = Lin_Acc_Z_body = f_z - g c (API/imu_update.c:204: measured minus gravity's body-z share).
+ * So T = m (acc_z + g c) and m = k_T sum_w2 / (acc_z + g c). The pre-WP-34 forms gave
+ * imu_total = m (acc_z / c + g) = T / c (8 % high here) and mass_hat = k_T sum_w2 / (g + acc_z) = m c (7.5 % low). */
+static void test_tilted_hover(void)
+{
+    const double m = 0.9885, g = 9.81, k_T = 6.80e-6;     /* the estimator's own constants */
+    const double c = cos(10.0 * 3.14159265358979 / 180.0) * cos(20.0 * 3.14159265358979 / 180.0);
+    const double T = m * g / c;
+    const double acc_z = g / c - g * c;
+    const double w = sqrt(T / (4.0 * k_T));               /* rad/s per motor */
+    uint16_t r = (uint16_t)(w * 60.0 / (2.0 * 3.14159265358979) + 0.5);
+    uint16_t rpm[4];
+    float pwm[4] = {3100.0f, 3100.0f, 3100.0f, 3100.0f};
+    int i;
+
+    rpm[0] = rpm[1] = rpm[2] = rpm[3] = r;
+    ThrustEst_Init();
+    for (i = 0; i < 2000; i++) {                         /* 10 s: the 1 s LPFs settle */
+        ThrustEst_Update(pwm, rpm, (float)acc_z, 10.0f, 20.0f);
+    }
+    check("tilted hover: imu_total = body-z thrust m g / cos(tilt)",
+          ABS(g_thrust_est.imu_total - (float)T) < 0.005f * (float)T);
+    check("tilted hover: mass_hat = mass",
+          ABS(g_thrust_est.mass_hat - (float)m) < 0.01f * (float)m);
+
+    /* Non-finite attitude or acceleration: imu_total reads 0 (invalid), mass_hat keeps its last value. */
+    ThrustEst_Update(pwm, rpm, NAN, 10.0f, 20.0f);
+    check("NaN acc_z: imu_total 0", g_thrust_est.imu_total == 0.0f);
+    check("NaN acc_z: mass_hat finite", g_thrust_est.mass_hat - g_thrust_est.mass_hat == 0.0f);
+    ThrustEst_Update(pwm, rpm, (float)acc_z, NAN, 20.0f);
+    check("NaN pitch: imu_total 0", g_thrust_est.imu_total == 0.0f);
+    check("NaN pitch: mass_hat finite", g_thrust_est.mass_hat - g_thrust_est.mass_hat == 0.0f);
+}
+
 int main(void)
 {
     test_table_lookup();
@@ -273,6 +310,7 @@ int main(void)
     test_cw_share();
     test_mass_hat_climb();
     test_empirical_varies();
+    test_tilted_hover();
 
     printf("Results: %d passed, %d failed\n", pass_count, fail_count);
     return fail_count > 0 ? 1 : 0;
