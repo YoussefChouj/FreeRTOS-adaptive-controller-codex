@@ -57,10 +57,10 @@ envelope:
     max: 1.0
     max_step: 0.1
 experiments:
-  - name: circle_r10
+  - name: circle_r08
     shape: circle
     params:
-      radius_m: 1.0
+      radius_m: 0.8
     profile:
       v_cruise_mps: 0.5
       a_max_mps2: 0.5

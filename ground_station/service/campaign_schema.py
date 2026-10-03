@@ -18,6 +18,13 @@ from typing import Any
 import yaml
 
 from ground_station.service.abort_monitor import AbortLimits
+from ground_station.service.scenario_schema import (
+    Scenario,
+    ScenarioError,
+    load_scenario,
+    parse_scenario,
+    scenario_from_shape,
+)
 from ground_station.service.trajectory_pipeline import SHAPES, Profile, TrajLimits
 
 # Numeric limits taken from trajectory_pipeline and interfaces.md:
@@ -40,14 +47,23 @@ class EnvelopeLimit:
 
 @dataclass(frozen=True)
 class Experiment:
-    """Single flight experiment definition within a campaign queue."""
+    """Single flight experiment definition within a campaign queue.
+
+    Either a scenario (file name or inline step blocks, see scenario_schema) or the legacy shape/params/profile
+    triple, which compiles to [takeoff hover_z_m, path, land]. Both forms carry the compiled `scenario`; a
+    scenario experiment has shape "", params {} and profile None.
+    """
 
     name: str
     shape: str
     params: dict[str, Any]
-    profile: Profile
+    profile: Profile | None
     capture: str
     repeats: int
+    scenario: Scenario | None = None
+    scenario_src: Any = None
+    scenario_args: dict[str, Any] = field(default_factory=dict)
+    log_plan: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -80,25 +96,33 @@ class Campaign:
                 k: {"min": v.min, "max": v.max, "max_step": v.max_step}
                 for k, v in self.envelope.items()
             },
-            "experiments": [
-                {
-                    "name": exp.name,
-                    "shape": exp.shape,
-                    "params": dict(exp.params),
-                    "profile": {
-                        "v_cruise_mps": exp.profile.v_cruise_mps,
-                        "a_max_mps2": exp.profile.a_max_mps2,
-                        "ds_m": exp.profile.ds_m,
-                        "hover_z_m": exp.profile.hover_z_m,
-                        "yaw_deg": exp.profile.yaw_deg,
-                    },
-                    "capture": exp.capture,
-                    "repeats": exp.repeats,
-                }
-                for exp in self.experiments
-            ],
+            "experiments": [_experiment_dict(exp) for exp in self.experiments],
             "abort": dict(self.abort),
         }
+
+
+def _experiment_dict(exp: Experiment) -> dict[str, Any]:
+    out: dict[str, Any] = {"name": exp.name}
+    if exp.scenario_src is not None:
+        out["scenario"] = exp.scenario_src
+        if exp.scenario_args:
+            out["scenario_args"] = dict(exp.scenario_args)
+    else:
+        assert exp.profile is not None
+        out["shape"] = exp.shape
+        out["params"] = dict(exp.params)
+        out["profile"] = {
+            "v_cruise_mps": exp.profile.v_cruise_mps,
+            "a_max_mps2": exp.profile.a_max_mps2,
+            "ds_m": exp.profile.ds_m,
+            "hover_z_m": exp.profile.hover_z_m,
+            "yaw_deg": exp.profile.yaw_deg,
+        }
+    if exp.log_plan:
+        out["log_plan"] = dict(exp.log_plan)
+    out["capture"] = exp.capture
+    out["repeats"] = exp.repeats
+    return out
 
 
 class CampaignError(ValueError):
@@ -262,9 +286,11 @@ def parse_campaign(data: dict) -> Campaign:
         elif len(exp_val) == 0:
             problems.append("experiments: must have at least 1 experiment")
         else:
-            allowed_exp_keys = {"name", "shape", "params", "profile", "capture", "repeats"}
-            required_exp_keys = ("name", "shape", "params", "profile", "capture", "repeats")
+            allowed_exp_keys = {
+                "name", "shape", "params", "profile", "capture", "repeats", "scenario", "scenario_args", "log_plan",
+            }
             seen_exp_names: set[str] = set()
+            scenarios: dict[int, Scenario] = {}
 
             for idx, exp in enumerate(exp_val):
                 exp_path = f"experiments.{idx}"
@@ -275,9 +301,34 @@ def parse_campaign(data: dict) -> Campaign:
                 for ek in exp:
                     if ek not in allowed_exp_keys:
                         problems.append(f"{exp_path}.{ek}: unknown key")
+                if "scenario" in exp:
+                    required_exp_keys: tuple[str, ...] = ("name", "capture", "repeats")
+                    for k in ("shape", "params", "profile"):
+                        if k in exp:
+                            problems.append(f"{exp_path}.{k}: not allowed with scenario (the scenario holds the motion)")
+                    sargs = exp.get("scenario_args", {})
+                    if not isinstance(sargs, dict):
+                        problems.append(f"{exp_path}.scenario_args: must be a mapping")
+                        sargs = {}
+                    try:
+                        ref = exp["scenario"]
+                        if isinstance(ref, str):
+                            scenarios[idx] = load_scenario(ref, sargs)
+                        elif isinstance(ref, dict):
+                            scenarios[idx] = parse_scenario(ref, sargs)
+                        else:
+                            problems.append(f"{exp_path}.scenario: must be a scenario file name or a mapping")
+                    except ScenarioError as exc:
+                        problems.extend(f"{exp_path}.scenario: {p}" for p in exc.problems)
+                else:
+                    required_exp_keys = ("name", "shape", "params", "profile", "capture", "repeats")
+                    if "scenario_args" in exp:
+                        problems.append(f"{exp_path}.scenario_args: only allowed with scenario")
                 for req in required_exp_keys:
                     if req not in exp:
                         problems.append(f"{exp_path}.{req}: missing required key")
+                if "log_plan" in exp and not isinstance(exp["log_plan"], dict):
+                    problems.append(f"{exp_path}.log_plan: must be a mapping")
 
                 # Name
                 if "name" in exp:
@@ -442,7 +493,26 @@ def parse_campaign(data: dict) -> Campaign:
     }
 
     experiments_list: list[Experiment] = []
-    for exp in data["experiments"]:
+    for idx, exp in enumerate(data["experiments"]):
+        common = {
+            "name": str(exp["name"]),
+            "capture": str(exp["capture"]),
+            "repeats": int(exp["repeats"]),
+            "log_plan": dict(exp.get("log_plan", {})),
+        }
+        if "scenario" in exp:
+            experiments_list.append(
+                Experiment(
+                    shape="",
+                    params={},
+                    profile=None,
+                    scenario=scenarios[idx],
+                    scenario_src=exp["scenario"],
+                    scenario_args=dict(exp.get("scenario_args", {})),
+                    **common,
+                )
+            )
+            continue
         prof_dict = exp["profile"]
         profile_obj = Profile(
             v_cruise_mps=float(prof_dict["v_cruise_mps"]),
@@ -451,16 +521,22 @@ def parse_campaign(data: dict) -> Campaign:
             hover_z_m=float(prof_dict["hover_z_m"]),
             yaw_deg=float(prof_dict.get("yaw_deg", 0.0)),
         )
+        try:
+            legacy = scenario_from_shape(str(exp["shape"]), str(exp["shape"]), dict(exp["params"]), profile_obj)
+        except ScenarioError as exc:
+            problems.extend(f"experiments.{idx}.shape: {p}" for p in exc.problems)
+            continue
         experiments_list.append(
             Experiment(
-                name=str(exp["name"]),
                 shape=str(exp["shape"]),
                 params=dict(exp["params"]),
                 profile=profile_obj,
-                capture=str(exp["capture"]),
-                repeats=int(exp["repeats"]),
+                scenario=legacy,
+                **common,
             )
         )
+    if problems:
+        raise CampaignError(problems)
 
     abort_map: dict[str, Any] = dict(data.get("abort", {}))
 

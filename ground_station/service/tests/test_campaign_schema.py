@@ -428,14 +428,21 @@ def test_5_type_handling_rules():
         parse_campaign(data2)
     assert any("max_flights: must be an integer" in p for p in exc_info.value.problems)
 
-    # 5c: 1 (int) for a float field (e.g. v_cruise_mps, min, max, a_max_mps2) is accepted
+    # 5c: 1 (int) for a float field (e.g. min, max, a_max_mps2) is accepted. v_cruise_mps 1 (= v_max) is a
+    # legal type but its circle fails the float32 SPEED check the firmware COMMIT also runs, so use 0.5.
+    data_vmax = _base_valid_data()
+    data_vmax["experiments"][0]["profile"]["v_cruise_mps"] = 1
+    with pytest.raises(CampaignError) as exc_info:
+        parse_campaign(data_vmax)
+    assert any("experiments.0.shape:" in p and "SPEED" in p for p in exc_info.value.problems)
+
     data3 = _base_valid_data()
-    data3["experiments"][0]["profile"]["v_cruise_mps"] = 1
+    data3["experiments"][0]["profile"]["v_cruise_mps"] = 0.5
     data3["experiments"][0]["profile"]["a_max_mps2"] = 1
     data3["experiments"][0]["profile"]["hover_z_m"] = 1
     data3["envelope"]["locxPID.Kp"]["max"] = 1
     campaign = parse_campaign(data3)
-    assert campaign.experiments[0].profile.v_cruise_mps == 1.0
+    assert campaign.experiments[0].profile.v_cruise_mps == 0.5
     assert isinstance(campaign.experiments[0].profile.v_cruise_mps, float)
     assert campaign.experiments[0].profile.a_max_mps2 == 1.0
     assert isinstance(campaign.experiments[0].profile.a_max_mps2, float)

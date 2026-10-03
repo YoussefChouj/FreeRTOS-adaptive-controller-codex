@@ -1,0 +1,10 @@
+# Hover ladder rung: take off to z, hold, land. Campaign experiments set z per flight (0.5 / 0.7 / 1.3).
+scenario: hover
+description: take off to z, hold hold_s at the hover point, land
+args:
+  z: 0.5        # m, hover point (0, 0, z); 0.3..1.4
+  hold_s: 20    # s at the hover point, PROPOSED
+steps:
+  - takeoff: {z: $z}
+  - hold: {s: $hold_s}
+  - land
