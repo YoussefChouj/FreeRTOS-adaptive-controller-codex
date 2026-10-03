@@ -137,8 +137,14 @@ def regressor(axis, x, cross, u_nom, xm):
 
 
 def replay_axis(axis, x, r, u_nom, cross, gate, kind=0, bw=None, zeta=None, delay_s=0.0,
-                gamma_scale=1.0, cfg: AxisCfg | None = None, dt=DT):
-    """Run the firmware law for one axis on firmware-rate arrays. Returns a dict of arrays."""
+                gamma_scale=1.0, cfg: AxisCfg | None = None, dt=DT, drive_norm=False, lam_edot=0.0):
+    """Run the firmware law for one axis on firmware-rate arrays. Returns a dict of arrays.
+
+    drive_norm=True is the PROPOSED WP-27 drive s = PBe + lam_edot*e_dot for every type (lam_edot used by
+    type 2 only), so a standing error drives the weights as hard as under passthrough. The firmware drive
+    (False) scales e by P = 1/(2 bw) or P_e = Q1/(2 wn^2); scaling gamma cannot undo that, because the sigma
+    leak scales with gamma too and the equilibrium Theta = grad / sigma does not move.
+    """
     cfg = replace(cfg or FW_CFG[axis])
     if zeta is not None:
         cfg.ref_model_zeta = zeta
@@ -153,7 +159,7 @@ def replay_axis(axis, x, r, u_nom, cross, gate, kind=0, bw=None, zeta=None, dela
     phi = regressor(axis, x, cross, u_nom, xm)
     denom = 1.0 + np.sum(phi * phi, axis=1)
     pbe = cfg.e_sat * np.tanh(e / cfg.e_sat) if cfg.e_sat > 0 else e
-    p_e, p_edot = drive_gains(cfg, kind, bw)
+    p_e, p_edot = (1.0, lam_edot if kind == 2 else 0.0) if drive_norm else drive_gains(cfg, kind, bw)
     s = pbe * p_e + e_dot * p_edot
     frozen = (cfg.e_freeze > 0) & (np.abs(e) > cfg.e_freeze)
     adapt = np.asarray(gate, bool) & (np.abs(e) >= cfg.e_deadzone) & ~frozen
@@ -318,7 +324,7 @@ def variants_for(cfg: AxisCfg, fit1, fit2):
     ]
 
 
-def analyze_log(meta_path, axes=("roll", "pitch", "yaw"), dt=DT, lp_hz=5.0):
+def analyze_log(meta_path, axes=("roll", "pitch", "yaw"), dt=DT, lp_hz=5.0, drive_norm=False, lam_tau=0.0):
     from .flightlab.loaders.vofa import load_vofa
 
     fl = load_vofa(meta_path)
@@ -353,6 +359,9 @@ def analyze_log(meta_path, axes=("roll", "pitch", "yaw"), dt=DT, lp_hz=5.0):
         rows = []
         base_rms_s = None
         for name, kw in variants_for(cfg, fit1, fit2):
+            if drive_norm:   # lam = lam_tau * the model time constant 1/(2 zeta wn)
+                kw = dict(kw, drive_norm=True, lam_edot=lam_tau / (2.0 * kw.get("zeta", cfg.ref_model_zeta)
+                                                                     * kw.get("bw", cfg.ref_model_bw)))
             res = replay_axis(a, x, r, un, cross[a], gate, cfg=cfg, dt=dt, **kw)
             met = replay_metrics(res, un, gate, cfg, 1.0 / dt, lp_hz)
             if kw["kind"] == 0:
@@ -405,8 +414,11 @@ def main(argv=None):
     ap.add_argument("--axes", nargs="+", default=["roll", "pitch", "yaw"], choices=list(FW_CFG))
     ap.add_argument("--lp-hz", type=float, default=5.0, help="low-pass for the *_lf metrics and the closed-loop fit")
     ap.add_argument("--json", help="write the full results here")
+    ap.add_argument("--drive-norm", action="store_true", help="PROPOSED drive s = PBe + lam*e_dot for every type")
+    ap.add_argument("--lam-tau", type=float, default=0.0, help="lam in units of 1/(2 zeta wn), type 2 only")
     args = ap.parse_args(argv)
-    results = [analyze_log(m, tuple(args.axes), lp_hz=args.lp_hz) for m in args.meta]
+    results = [analyze_log(m, tuple(args.axes), lp_hz=args.lp_hz, drive_norm=args.drive_norm, lam_tau=args.lam_tau)
+               for m in args.meta]
     print(to_markdown(results))
     if args.json:
         Path(args.json).write_text(json.dumps(results, indent=1, default=float), encoding="utf-8")

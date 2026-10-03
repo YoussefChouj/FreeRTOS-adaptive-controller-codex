@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -117,6 +119,21 @@ def test_matched_reference_model_shrinks_error_and_adaptation():
     assert m1["rms_e"] < 1e-6 < m0["rms_e"]
     assert 15.0 < m0["lag_ms"] < 15.0 + 1000.0 / 18.0                # plant lags passthrough: delay .. delay + 1/bw
     assert m1["rms_u_ad"] < 1e-6 < m0["rms_u_ad"]
+
+
+def test_drive_norm_restores_bias_learning_that_gamma_scaling_cannot():
+    n = 3000
+    r = np.zeros(n)
+    x = np.full(n, -0.1)                                            # standing error, like the hover rate offset
+    un, gate = np.zeros(n), np.ones(n, bool)
+    cfg = replace(FW_CFG["roll"], sigma=1.0)                        # leak time constant < 1 s: both runs settle
+    th = lambda **kw: replay_axis("roll", x, r, un, np.zeros(n), gate, cfg=cfg, **kw)["theta"][-1, 0]
+    flown = th(kind=0)
+    fw1, fw1_g = th(kind=1), th(kind=1, gamma_scale=88.0)
+    assert fw1 < 0.2 * flown                                        # P = 1/(2 bw) starves the bias weight
+    assert fw1_g == pytest.approx(fw1, rel=0.05)                    # sigma leak scales with gamma: same equilibrium
+    assert th(kind=1, drive_norm=True) == pytest.approx(flown, rel=1e-6)
+    assert th(kind=2, drive_norm=True, lam_edot=0.01) == pytest.approx(flown, rel=1e-6)   # e_dot = 0 here
 
 
 def test_replay_respects_projection_freeze_and_gate():
