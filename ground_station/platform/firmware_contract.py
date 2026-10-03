@@ -496,10 +496,12 @@ COMMAND_TABLE: dict[int, CommandSpec] = {
     ),
     0x1E: CommandSpec(
         id=0x1E, name="OF_BIAS_MODE",
-        description="OF bias estimation mode: FIXED=0, EMA=1, EKF=2. EMA freeze flag idx=1. idx=4 full-tilt, idx=5 KF vel feedback (disarmed only).",
+        description="OF bias estimation mode: FIXED=0, EMA=1, EKF=2. EMA freeze flag idx=1. idx=2 EMA tau (s), idx=3 handheld test, idx=4 full-tilt, idx=5 KF vel feedback (disarmed only).",
         params=(
             CommandParam(0, "bias_mode", "enum", 0, 2, symbol="g_of_bias_mode"),
             CommandParam(1, "ema_freeze", "bool", 0, 1, symbol="g_of_bias_ema_freeze"),
+            CommandParam(2, "ema_tau", "s", 1, 300, symbol="g_of_bias_ema_tau_s"),
+            CommandParam(3, "handheld_test", "bool", 0, 1, symbol="g_of_handheld_test"),
             CommandParam(4, "full_tilt", "bool", 0, 1, symbol="g_of_full_tilt"),
             CommandParam(5, "ekf_vel_fb", "bool", 0, 1, symbol="g_ekf_of_vel_fb"),
         ),

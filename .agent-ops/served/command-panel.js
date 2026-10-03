@@ -57,7 +57,7 @@
     0x16: { name: 'Motor Bench Output',     min: 0,        max: 4000,     unit: 'CCR',       safetyClass: 'critical',    precondition: 'Bench state + Disarmed',  indexDesc: '0=heartbeat, 1=motor idx (0–4), 2=CCR (2000–4000)',    indexMax: 2  },
     0x17: { name: 'OF Bias Capture',        min: 0,        max: 0,        unit: 'capture',   safetyClass: 'diagnostic',  precondition: 'none',                    indexDesc: 'index=0 triggers; nonzero=no-op',                       indexMax: 0  },
     0x18: { name: 'EKF Reset',              min: 0,        max: 0,        unit: 'reset',     safetyClass: 'diagnostic',  precondition: 'GROUND_IDLE or DisArmed', indexDesc: 'index=0 triggers; nonzero=no-op',                       indexMax: 0  },
-    0x1E: { name: 'OF Bias Estimator Mode', min: 0,        max: 2,        unit: 'mode',      safetyClass: 'operational', precondition: 'SDK auth',                indexDesc: '0=mode (0=FIXED,1=EMA,2=EKF), 1=freeze (≥0.5 freezes)', indexMax: 1 },
+    0x1E: { name: 'OF Bias Estimator Mode', min: 0,        max: 2,        unit: 'mode',      safetyClass: 'operational', precondition: 'SDK auth',                indexDesc: '0=mode (0=FIXED,1=EMA,2=EKF), 1=freeze, 2=EMA tau s, 3=handheld test, 4=full-tilt, 5=KF vel fb (4,5 disarmed only)', indexMax: 5 },
     // Legacy / extra commands not in spec but observed in current panel — kept for backward compat
     0x1A: { name: 'Filter Cutoff (legacy)', min: 1,        max: 200,      unit: 'Hz',        safetyClass: 'operational', precondition: 'SDK auth',                indexDesc: 'cutoff Hz',                                                indexMax: 0  },
     0x1C: { name: 'Calibration (legacy)',   min: 0,        max: 10,       unit: 'mode',      safetyClass: 'operational', precondition: 'Disarmed',                indexDesc: 'calibration mode index',                                  indexMax: 10 },
@@ -198,7 +198,11 @@
     ],
     0x1E: [
       { index: 0, name: 'bias_mode', unit: 'enum', min_val: 0, max_val: 2, symbol: 'g_of_bias_mode' },
-      { index: 1, name: 'ema_freeze', unit: 'bool', min_val: 0, max_val: 1, symbol: 'g_of_bias_ema_freeze' }
+      { index: 1, name: 'ema_freeze', unit: 'bool', min_val: 0, max_val: 1, symbol: 'g_of_bias_ema_freeze' },
+      { index: 2, name: 'ema_tau', unit: 's', min_val: 1, max_val: 300, symbol: 'g_of_bias_ema_tau_s' },
+      { index: 3, name: 'handheld_test', unit: 'bool', min_val: 0, max_val: 1, symbol: 'g_of_handheld_test' },
+      { index: 4, name: 'full_tilt', unit: 'bool', min_val: 0, max_val: 1, symbol: 'g_of_full_tilt' },
+      { index: 5, name: 'ekf_vel_fb', unit: 'bool', min_val: 0, max_val: 1, symbol: 'g_ekf_of_vel_fb' }
     ]
   };
 
@@ -255,7 +259,11 @@
   var _commandSymbols = {
     0x1E: {
       0: 'g_of_bias_mode',
-      1: 'g_of_bias_ema_freeze'
+      1: 'g_of_bias_ema_freeze',
+      2: 'g_of_bias_ema_tau_s',
+      3: 'g_of_handheld_test',
+      4: 'g_of_full_tilt',
+      5: 'g_ekf_of_vel_fb'
     }
   };
   var _rawModeForced = false;
