@@ -29,6 +29,13 @@ target allows it; the mapping is at the end.
     count against the type with `typedef char name[(cond) ? 1 : -1];` (the Keil project builds C99, `--C99`;
     `_Static_assert` is C11). It emits no code (`tools/fw_equiv.py` shows code and data `same`).
     Examples: `API/pid.c` (Ctrler), `USER/fault_capture.c`.
+8c. Interrupt and fault handlers: a handler with preemption priority below
+    `configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY` (5) calls no kernel code, and the nested worst case fits the
+    1,024 B MSP (both checked by `tools/stack_budget.py`, gate step `stack`). A fault handler makes the outputs
+    safe first (motors to `Motor_PWM_ZERO`), keeps no large locals (it may run on top of the deepest nesting), and
+    keeps anything that must survive a reset out of `.bss`/`.data`, which `__main` re-initialises on every reset.
+    Today `USER/fault_capture.c` breaks the last three (findings, fixes PROPOSED: `docs/firmware-safety.md`,
+    `docs/firmware-stack-budget.md`).
 
 ## Changing code
 
@@ -51,6 +58,8 @@ target allows it; the mapping is at the end.
 | `-Werror` builds | host `gcc -O2` FW-EQUIV build; Keil warnings tracked in `docs/firmware-quality.md` |
 | hardware-in-the-loop CI | `sil-smoke` (software in the loop) in `check.sh` |
 | `-Wdouble-promotion`, float-only maths | rule 8a, `fw_lint.py` rule `double` (allow-list shrinks only) |
+| stack checks (`top`, stack painting at run time) | static call-graph budget per task and for the MSP (rule 8c), `hlth.stack_min_words` at run time |
+| hardfault handler stops outputs, keeps the crash dump across reset | rule 8c (not met yet: PROPOSED fixes) |
 
 These are not adopted (PROPOSED, they change structure): C++ modules, a real publish/subscribe bus, and a
 work-queue scheduler instead of fixed FreeRTOS tasks.
