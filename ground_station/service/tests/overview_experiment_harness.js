@@ -22,6 +22,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const assert = require('assert');
+const { preloadAlarms } = require('./ui_kit_loader');
 
 const PANEL = path.join(__dirname, '..', '..', '..',
   'docs', 'dashboard-platform', 'shell', 'plugins', 'overview-panel.js');
@@ -117,6 +118,7 @@ function loadPanel(withClock) {
     sandbox.pluginDestroy = destroy;
   };
   vm.createContext(sandbox);
+  preloadAlarms(sandbox);   // index.html loads ui/alarms.js (the alarm registry) before any plugin
   vm.runInContext(fs.readFileSync(PANEL, 'utf8'), sandbox, { filename: PANEL });
   sandbox.pluginInit(api);
   api.renderFn(container);

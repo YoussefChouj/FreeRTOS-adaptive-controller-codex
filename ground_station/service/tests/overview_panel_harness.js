@@ -20,6 +20,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const assert = require('assert');
+const { preloadAlarms } = require('./ui_kit_loader');
 
 const PANEL = path.join(__dirname, '..', '..', '..',
   'docs', 'dashboard-platform', 'shell', 'plugins', 'overview-panel.js');
@@ -99,6 +100,7 @@ function loadPanel() {
     sandbox.pluginDestroy = destroy;
   };
   vm.createContext(sandbox);
+  preloadAlarms(sandbox);   // index.html loads ui/alarms.js (the alarm registry) before any plugin
   vm.runInContext(fs.readFileSync(PANEL, 'utf8'), sandbox, { filename: PANEL });
   sandbox.pluginInit(api);
   api.renderFn(container);
@@ -229,9 +231,13 @@ function runChecks() {
     assert.ok(/^age 3\.\d s$/.test(sub), 'age readout must be shown, got "' + sub + '"');
     assert.strictEqual(doc.getElementById('ov-stage-mrac').className, 'ov-stage ov-stage-ok',
       'slot-0 stage stays green — fault localises to slot 3 only');
-    assert.ok(doc.getElementById('ov-banner').textContent.indexOf('Telemetry slow') !== -1,
-      'banner raises the staleness warning');
-    console.log('  PASS: stale stage amber with readout "' + sub + '"; fresh stages stay green');
+    // WP-39 alert model: a slow slot is an ADVISORY (log only): the stage turns amber, the banner does not nag
+    assert.strictEqual(doc.getElementById('ov-banner').textContent, 'SYSTEM NORMAL — no active alarms',
+      'a slow slot is an advisory, not a banner alarm');
+    const log = env.sandbox.GSAlarms.shared().log();
+    assert.ok(log.some((ep) => ep.level === 'advisory' && ep.text.indexOf('Telemetry slow') === 0),
+      'the slow slot is logged as an advisory');
+    console.log('  PASS: stale stage amber with readout "' + sub + '"; fresh stages stay green; slow = advisory in the log');
 
     st = fullState();
     st.streams['3'].last_update_ns = nsAgo(35000);  // past the 30 s slot TTL
@@ -250,24 +256,29 @@ function runChecks() {
   {
     console.log('\n[CHECK 4: Alarm Banner, List and Recent-Cleared]');
     const env = loadPanel();
-    let st = fullState();
-    st.streams['0'].values['status.vbat'] = 14.2;
-    env.feed(st);
+    // the battery rule debounces over 3 samples (ui/alarms.js): one snapshot is one sample
+    const feedN = (make, n) => { for (let i = 0; i < n; i++) env.feed(make()); };
+    const low = () => { const s = fullState(); s.streams['0'].values['status.vbat'] = 14.2; return s; };
+    env.feed(low());
     const doc = env.doc;
+    assert.strictEqual(doc.getElementById('ov-banner').className, 'ov-banner ov-banner-ok',
+      'one low sample must not raise (debounce)');
+    feedN(low, 2);
 
     const banner = doc.getElementById('ov-banner');
     assert.strictEqual(banner.className, 'ov-banner ov-banner-alarm', 'banner must be red');
     assert.ok(banner.textContent.indexOf('BATTERY LOW') !== -1, 'banner names the condition');
     assert.ok(banner.textContent.indexOf('14.20 V') !== -1, 'banner shows the value with unit');
+    assert.ok(banner.textContent.indexOf('→ Land now and swap the pack') !== -1, 'banner names the required action');
     const list = doc.getElementById('ov-alarm-list').innerHTML;
     assert.ok(list.indexOf('ov-alarm-red') !== -1, 'alarm list contains the red entry');
+    assert.ok(list.indexOf('WARNING: BATTERY LOW') !== -1 && list.indexOf('ov-alarm-action') !== -1,
+      'the row names its level and its required action');
     assert.strictEqual(doc.getElementById('ov-vbat').style.color, 'var(--red)');
-    console.log('  PASS: banner red "' + banner.textContent + '"');
+    console.log('  PASS: 1 sample no alarm, 3 samples banner red "' + banner.textContent + '"');
 
-    // Condition clears → banner green, but the alarm stays visible as recent
-    st = fullState();
-    st.streams['0'].values['status.vbat'] = 16.0;
-    env.feed(st);
+    // Condition clears (3 samples) → banner green, but the alarm stays visible as recent
+    feedN(() => { const s = fullState(); s.streams['0'].values['status.vbat'] = 16.0; return s; }, 3);
     assert.strictEqual(doc.getElementById('ov-banner').textContent, 'SYSTEM NORMAL — no active alarms');
     const list2 = doc.getElementById('ov-alarm-list').innerHTML;
     assert.ok(list2.indexOf('RECENT (cleared') !== -1,
@@ -275,15 +286,13 @@ function runChecks() {
     assert.ok(list2.indexOf('BATTERY LOW') !== -1, 'recent entry keeps the alarm text');
     console.log('  PASS: cleared alarm remains listed as "RECENT (cleared … ago): BATTERY LOW …"');
 
-    // Packet loss > 5% → red stage + red banner
-    let st2 = fullState();
-    st2.streams['3'].loss_pct = 6.0;
-    env.feed(st2);
+    // Packet loss > 5% → red stage + CAUTION banner (act soon: move closer / antenna)
+    feedN(() => { const s = fullState(); s.streams['3'].loss_pct = 6.0; return s; }, 3);
     assert.strictEqual(doc.getElementById('ov-stage-motors').className, 'ov-stage ov-stage-alarm',
       'loss > 5% must mark the stage red');
     assert.strictEqual(doc.getElementById('ov-flag-motors').textContent, 'LOSS 6.0%');
-    assert.ok(doc.getElementById('ov-banner').textContent.indexOf('Packet loss 6.0%') !== -1);
-    console.log('  PASS: loss 6.0% → stage red "LOSS 6.0%", banner "Packet loss 6.0% on stream 3 …"');
+    assert.ok(doc.getElementById('ov-banner').textContent.indexOf('CAUTION — Packet loss 6.0% on slot 3') === 0);
+    console.log('  PASS: loss 6.0% → stage red "LOSS 6.0%", banner "' + doc.getElementById('ov-banner').textContent + '"');
     env.destroy();
   }
 

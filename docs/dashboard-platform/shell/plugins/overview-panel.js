@@ -68,13 +68,18 @@
 (function () {
   'use strict';
 
-  /* ── Thresholds (justified in HMI_DESIGN.md) ────────────────────────── */
-  var STALE_WARN_MS  = 2000;   // amber + age readout after 2 s without updates
-  var RECENT_MS      = 60000;  // a cleared alarm stays visible for 60 s
-  var VBAT_RED_V     = 15.0;   // firmware beep threshold, StabilizerTask.c:1329
-  var VBAT_AMBER_V   = 15.5;   // dashboard-only early warning (0.5 V above beep)
-  var LOSS_AMBER_PCT = 1.0;    // shell convention (plugin-api.md loss table)
-  var LOSS_RED_PCT   = 5.0;
+  /* ── Thresholds (justified in HMI_DESIGN.md) ──────────────────────────
+   * Alarms come from the one registry, ui/alarms.js (WP-39): its LIMITS are
+   * the source of these values too, so a stage colour and an alarm cannot
+   * disagree. The numbers after || only apply if alarms.js failed to load,
+   * and then the banner says the registry is missing. */
+  var LIM = (typeof window !== 'undefined' && window.GSAlarms && window.GSAlarms.LIMITS) || {};
+  var STALE_WARN_MS  = LIM.slowMs || 2000;           // amber + age readout after 2 s without updates
+  var RECENT_MS      = 60000;                        // a cleared alarm stays visible for 60 s
+  var VBAT_RED_V     = LIM.vbatLowV || 15.0;         // firmware beep threshold, StabilizerTask.c:1329
+  var VBAT_AMBER_V   = LIM.vbatCautionV || 15.5;     // dashboard-only early warning (0.5 V above beep)
+  var LOSS_AMBER_PCT = LIM.lossAdvisoryPct || 1.0;   // shell convention (plugin-api.md loss table)
+  var LOSS_RED_PCT   = LIM.lossCautionPct || 5.0;
 
   var SLOT_ORDER = ['0', '1', '3', '2'];
 
@@ -97,7 +102,7 @@
   var BAT_MIN_SPAN_MS    = 30000;
   var BAT_FALLING_V_PER_MIN = 0.02;
   var HIST_MAX           = 1200;  // session history bound (≈10 min at 2 Hz poll)
-  var ALARM_LOG_MAX      = 500;   // alarm history episodes
+  var ALARM_LOG_MAX      = (typeof window !== 'undefined' && window.GSAlarms && window.GSAlarms.LOG_MAX) || 500;  // episodes, kept by ui/alarms.js
 
   var FLY_MODE_LABELS = ['Stabilize', 'AltHold', 'PosHold', 'Auto', 'Manual', 'SDK'];
 
@@ -359,10 +364,8 @@
    * and the operator's display-local acknowledge / silence / export clicks. */
   var _hist = {};           // key → [{t: ns|null, v: number|null}] — null = gap, never interpolated
   var _trendKey = null;     // key whose sparkline is open, or null
-  var _alarmLog = [];       // episodes [{ref, id, sev, text, textEnd, raisedAt, clearedAt, ack, silenced}]
-  var _openEpisodes = {};   // id → open episode (alarm currently active)
-  var _episodeSeq = 0;      // stable per-episode button reference
-  var _alarmLogDropped = 0; // episodes evicted by the ALARM_LOG_MAX bound
+  // The alarm episode log (raise / clear / ack / silence) lives in the shared
+  // engine of ui/alarms.js, so the sidebar and this panel show one record.
 
   /* Every key a value cell can sparkline: mimic stages + shadow + battery +
    * the adaptation weights (task 20260921-103141). Weight history is stored
@@ -719,71 +722,33 @@
     if (!anyPacket) return V('unknown', 'subscribed but no packet yet');
     var alarms = computeAlarms(state, nowMs, ttlMs);
     if (!alarms.length) return V('pass', 'no active alarms');
-    var worst = alarms.slice().sort(function (a, b) { return sevRank(b.sev) - sevRank(a.sev); })[0];
-    return V('fail', worst.sev.toUpperCase() + ': ' + worst.text);
+    return V('fail', alarms[0].label + ': ' + alarms[0].text);   // worst first
   }
 
-  /* ── Alarm engine ────────────────────────────────────────────────────── */
+  /* ── Alarms: the one registry in ui/alarms.js (WP-39) ─────────────────
+   * The rules, levels (warning = act now, caution = act soon, advisory = log
+   * only), required actions and debounce live there; the sidebar Alarms card
+   * reads the same shared engine. update() takes one sample per /state
+   * snapshot, so the shell and this panel calling it on the same poll count
+   * once. Returns the shown alarms, worst first:
+   * [{id, ref, level, label, sev: 'red'|'amber', text, action, silenced}]. */
+  function alarmEngine() {
+    return (typeof window !== 'undefined' && window.GSAlarms) ? window.GSAlarms.shared() : null;
+  }
 
-  /* Returns [{id, sev: 'red'|'amber', text}] for the active conditions. */
-  function computeAlarms(state, nowMs, ttlMs) {
-    var out = [];
-    if (!state || !state.streams || Object.keys(state.streams).length === 0) {
-      out.push({ id: 'notelem', sev: 'amber', text: 'No telemetry received — aircraft state unknown' });
-      return out;
-    }
-
-    // Battery (status.vbat, slot 0 or 1)
-    var vb = findValue(state, 'status.vbat');
-    if (vb && vb.val != null && !isNaN(vb.val)) {
-      var v = Number(vb.val);
-      if (v < VBAT_RED_V) {
-        out.push({ id: 'vbat-low', sev: 'red',
-          text: 'BATTERY LOW — ' + v.toFixed(2) + ' V (firmware beep threshold ' + VBAT_RED_V.toFixed(1) + ' V)' });
-      } else if (v < VBAT_AMBER_V) {
-        out.push({ id: 'vbat-warn', sev: 'amber',
-          text: 'Battery ' + v.toFixed(2) + ' V — below early-warning ' + VBAT_AMBER_V.toFixed(1) + ' V' });
-      }
-    }
-
-    // Per-slot staleness + loss, localised to the affected stages.
-    var titlesBySlot = {};
-    STAGES.forEach(function (st) {
-      if (!titlesBySlot[st.slot]) titlesBySlot[st.slot] = [];
-      titlesBySlot[st.slot].push(st.title);
+  function escHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
-    Object.keys(titlesBySlot).forEach(function (slotName) {
-      var s = slotOf(state, slotName);
-      if (!s || !s.last_update_ns) return;
-      var names = titlesBySlot[slotName].join(', ');
-      var age = nowMs - s.last_update_ns / 1e6;
-      if (age > ttlMs) {
-        out.push({ id: 'stale-' + slotName, sev: 'amber',
-          text: 'Telemetry stale (' + fmtAge(age) + '): ' + names + ' — check link' });
-      } else if (age > STALE_WARN_MS) {
-        out.push({ id: 'stale-' + slotName, sev: 'amber',
-          text: 'Telemetry slow (' + fmtAge(age) + '): ' + names });
-      }
-      var loss = s.loss_pct || 0;
-      if (loss > LOSS_RED_PCT) {
-        out.push({ id: 'loss-' + slotName, sev: 'red',
-          text: 'Packet loss ' + loss.toFixed(1) + '% on stream ' + slotName + ' (' + names + ') — check antenna / range' });
-      } else if (loss > LOSS_AMBER_PCT) {
-        out.push({ id: 'loss-' + slotName, sev: 'amber',
-          text: 'Packet loss ' + loss.toFixed(1) + '% on stream ' + slotName + ' (' + names + ')' });
-      }
-    });
+  }
 
-    // Status flags
-    var est = findValue(state, 'status.estimator_ready');
-    if (est && Number(est.val) === 0) {
-      out.push({ id: 'estimator', sev: 'amber', text: 'Estimator not ready (status.estimator_ready = 0)' });
+  function computeAlarms(state, nowMs) {
+    var eng = alarmEngine();
+    if (!eng) {
+      return [{ id: 'registry', ref: 0, level: 'caution', label: 'CAUTION', sev: 'amber', silenced: false,
+        text: 'Alarm registry not loaded (ui/alarms.js): alarms unknown', action: 'Reload the page' }];
     }
-    var sbus = findValue(state, 'status.sbus_lost');
-    if (sbus && Number(sbus.val) !== 0) {
-      out.push({ id: 'sbus', sev: 'red', text: 'RC RECEIVER LINK LOST (status.sbus_lost = ' + Number(sbus.val) + ')' });
-    }
-    return out;
+    return eng.update(state, nowMs);
   }
 
   function updateRecentAlarms(active, nowMs) {
@@ -813,8 +778,6 @@
       return r.open || (nowMs - r.clearedAt) < RECENT_MS;
     });
   }
-
-  function sevRank(s) { return s === 'red' ? 2 : 1; }
 
   /* ── Session sample history (task 20260921-070956) ─────────────────────
    * One sample per /state snapshot, per key — the same per-snapshot ingestion
@@ -1132,64 +1095,26 @@
   }
 
   /* ── Alarm history (HMI_DESIGN.md §7 item 3) ───────────────────────────
-   * Session-scoped episode log: one episode per raise, closed by its clear.
-   * Raise and clear are both events the operator sees, timestamped. The
-   * PLC-standard operator actions live here too:
+   * Session-scoped episode log, kept by the shared engine (ui/alarms.js):
+   * one episode per raise, closed by its clear, advisories included. Raise
+   * and clear are both events the operator sees, timestamped. The
+   * PLC-standard operator actions:
    *   ACKNOWLEDGE — marks the episode as seen; it STAYS in the log and stays
-   *     visibly distinct (ACK tag) from one never acknowledged. Touches
-   *     nothing but the log entry.
+   *     visibly distinct (ACK tag) from one never acknowledged.
    *   SILENCE — suppresses the visual nag on the display (banner + active
-   *     list dim, SILENCED tag); the record is untouched and the condition
-   *     keeps logging. Touches nothing but the log entry.
+   *     list dim, SILENCED tag) and stops the episode's spoken warning; the
+   *     record is untouched and the condition keeps logging.
    * Neither action sends, arms or gates anything — see onContainerClick. */
-  function updateAlarmLog(active, nowMs) {
-    var activeIds = {};
-    active.forEach(function (a) {
-      if (a.id === 'notelem') return; // initial absent state is not a flight alarm episode
-      activeIds[a.id] = a;
-    });
-    Object.keys(activeIds).forEach(function (id) {
-      var a = activeIds[id];
-      if (!_openEpisodes[id]) {
-        var ep = { ref: ++_episodeSeq, id: id, sev: a.sev, text: a.text, textEnd: a.text,
-          raisedAt: nowMs, clearedAt: null, ack: false, silenced: false };
-        _alarmLog.push(ep);
-        _openEpisodes[id] = ep;
-        if (_alarmLog.length > ALARM_LOG_MAX) {
-          _alarmLog.shift();
-          _alarmLogDropped++;
-        }
-      } else {
-        _openEpisodes[id].textEnd = a.text;  // age-bearing texts keep their latest wording
-      }
-    });
-    Object.keys(_openEpisodes).forEach(function (id) {
-      if (!activeIds[id]) {
-        _openEpisodes[id].clearedAt = nowMs;
-        delete _openEpisodes[id];
-      }
-    });
-  }
+  function alarmLog() { var eng = alarmEngine(); return eng ? eng.log() : []; }
 
   /* Display-local operator action. No api call, no command, no gate. */
   function alarmAction(ref, action) {
-    for (var i = 0; i < _alarmLog.length; i++) {
-      if (_alarmLog[i].ref === ref) {
-        if (action === 'ack') _alarmLog[i].ack = true;
-        else if (action === 'silence') _alarmLog[i].silenced = !_alarmLog[i].silenced;
-        if (_lastState != null) render(_lastState);
-        return;
-      }
-    }
-  }
-
-  /* An active alarm id is silenced when its open episode was silenced. */
-  function silencedAlarmIds() {
-    var out = {};
-    Object.keys(_openEpisodes).forEach(function (id) {
-      if (_openEpisodes[id].silenced) out[id] = true;
-    });
-    return out;
+    var eng = alarmEngine();
+    if (!eng) return;
+    if (action === 'ack') eng.ack(ref);
+    else if (action === 'silence') eng.silence(ref);
+    else return;
+    if (_lastState != null) render(_lastState);
   }
 
   function fmtClock(ms) {
@@ -1198,20 +1123,11 @@
     return p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds());
   }
 
-  function iso(ms) { return ms == null ? '' : new Date(ms).toISOString(); }
-
-  function csvField(s) {
-    return '"' + String(s == null ? '' : s).replace(/"/g, '""') + '"';
-  }
-
-  /* Dependency-free CSV export of the whole session alarm log. */
+  /* Dependency-free CSV export of the whole session alarm log (severity is
+   * the level, the last column the required action). */
   function exportAlarmLogCsv() {
-    var rows = [['raised_at', 'cleared_at', 'id', 'severity', 'text_raised', 'text_last', 'acknowledged', 'silenced']];
-    _alarmLog.forEach(function (ep) {
-      rows.push([iso(ep.raisedAt), iso(ep.clearedAt), ep.id, ep.sev,
-        ep.text, ep.textEnd, ep.ack ? 'yes' : 'no', ep.silenced ? 'yes' : 'no']);
-    });
-    return rows.map(function (r) { return r.map(csvField).join(','); }).join('\r\n') + '\r\n';
+    var eng = alarmEngine();
+    return eng ? eng.csv() : '';
   }
 
   /* Browser download of the CSV. Guarded so the offline harness (no Blob /
@@ -1246,18 +1162,19 @@
       '.ov-strip-value { font-size:15px; font-weight:700; font-family:Consolas,monospace; }',
       '.ov-pill { display:inline-flex; align-items:center; gap:4px; padding:2px 8px;',
       '  border-radius:10px; font-size:10px; font-weight:600; letter-spacing:0.03em; text-transform:uppercase; }',
-      '.ov-pill-on  { background:rgba(78,204,163,0.15); color:var(--green); }',
-      '.ov-pill-off { background:rgba(136,136,170,0.10); color:var(--muted); }',
-      '.ov-pill-np  { background:rgba(245,166,35,0.15); color:var(--amber); }',
+      '.ov-pill-on  { background:var(--gs-ok-bg); color:var(--green); }',
+      '.ov-pill-off { background:var(--gs-stale-bg); color:var(--muted); }',
+      '.ov-pill-np  { background:var(--gs-warn-bg); color:var(--amber); }',
       '.ov-banner { padding:8px 12px; border-radius:4px; font-size:13px; font-weight:700; margin-bottom:6px; }',
-      '.ov-banner-ok    { background:rgba(78,204,163,0.15); color:var(--green); }',
-      '.ov-banner-warn  { background:rgba(245,166,35,0.18); color:var(--amber); }',
-      '.ov-banner-alarm { background:rgba(233,69,96,0.20);  color:var(--red); }',
+      '.ov-banner-ok    { background:var(--gs-ok-bg);   color:var(--green); }',
+      '.ov-banner-warn  { background:var(--gs-warn-bg); color:var(--amber); }',
+      '.ov-banner-alarm { background:var(--gs-fail-bg); color:var(--red); }',
       '.ov-alarm-list { margin:0 0 10px 0; }',
       '.ov-alarm-item { padding:3px 0 3px 12px; border-left:3px solid; margin:2px 0; font-size:11px; }',
       '.ov-alarm-red   { border-color:var(--red);   color:var(--red); }',
       '.ov-alarm-amber { border-color:var(--amber); color:var(--amber); }',
       '.ov-alarm-clear { border-color:var(--muted); color:var(--muted); font-style:italic; }',
+      '.ov-alarm-action { color:var(--text); font-weight:400; }',
       '.ov-chain { display:flex; align-items:stretch; gap:0; flex-wrap:wrap; margin-bottom:10px; }',
       '.ov-stage { flex:1 1 120px; min-width:120px; border:2px solid var(--muted); border-radius:6px;',
       '  padding:16px 8px 6px 8px; background:var(--card); position:relative; box-sizing:border-box; }',
@@ -1280,7 +1197,7 @@
       '.ov-row-val-nodata { color:var(--muted); font-weight:400; font-size:10px; }',
       '.ov-shadow { border:1px dashed var(--muted); border-radius:6px; padding:6px 10px; }',
       '.ov-shadow-badge { display:inline-block; padding:1px 6px; border-radius:3px; font-size:9px;',
-      '  font-weight:700; letter-spacing:0.05em; background:rgba(136,136,170,0.15); color:var(--muted); }',
+      '  font-weight:700; letter-spacing:0.05em; background:var(--gs-stale-bg); color:var(--muted); }',
       '.ov-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(110px,1fr)); gap:2px 14px; margin-top:4px; }',
       '.ov-instrow { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start; margin-bottom:10px; }',
       '.ov-ai-box { flex:0 1 210px; border:2px solid var(--muted); border-radius:6px;',
@@ -1303,9 +1220,9 @@
       '.ov-check-line { display:flex; align-items:center; gap:8px; }',
       '.ov-chk-verdict { display:inline-block; min-width:70px; text-align:center; padding:1px 6px;',
       '  border-radius:3px; font-size:9px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase; }',
-      '.ov-chk-pass    { background:rgba(78,204,163,0.15); color:var(--green); }',
-      '.ov-chk-fail    { background:rgba(233,69,96,0.20);  color:var(--red); }',
-      '.ov-chk-unknown { background:rgba(136,136,170,0.12); color:var(--muted); }',
+      '.ov-chk-pass    { background:var(--gs-ok-bg);    color:var(--green); }',
+      '.ov-chk-fail    { background:var(--gs-fail-bg);  color:var(--red); }',
+      '.ov-chk-unknown { background:var(--gs-stale-bg); color:var(--muted); }',
       '.ov-chk-plain { font-size:11px; font-weight:600; }',
       '.ov-chk-hint  { font-size:9px; color:var(--muted); }',
       '.ov-chk-detail { font-size:10px; color:var(--muted); font-family:Consolas,monospace; padding-left:78px; }',
@@ -1324,13 +1241,14 @@
       '.ov-hist-ev { font-weight:700; flex:0 0 58px; }',
       '.ov-hist-ev-raised-red { color:var(--red); }',
       '.ov-hist-ev-raised-amber { color:var(--amber); }',
+      '.ov-hist-ev-raised-info { color:var(--gs-info); }',
       '.ov-hist-ev-cleared { color:var(--muted); }',
       '.ov-hist-text { flex:1 1 auto; }',
       '.ov-hist-ep-acked .ov-hist-text { font-style:italic; opacity:0.75; }',
       '.ov-hist-tag { font-size:8px; font-weight:700; padding:0 4px; border-radius:2px;',
       '  letter-spacing:0.05em; text-transform:uppercase; }',
       '.ov-hist-tag-ack { border:1px solid var(--muted); color:var(--muted); }',
-      '.ov-hist-tag-sil { background:rgba(136,136,170,0.15); color:var(--muted); }',
+      '.ov-hist-tag-sil { background:var(--gs-stale-bg); color:var(--muted); }',
       '.ov-hist-silenced .ov-hist-text { opacity:0.55; }',
       '.ov-trendrow { display:flex; gap:12px; flex-wrap:wrap; align-items:stretch; margin-bottom:10px; }',
       '.ov-trend-box { flex:1 1 300px; border:2px solid var(--border); border-radius:6px;',
@@ -1346,7 +1264,7 @@
       '.ov-trend-box.ov-expanded .ov-sub { font-size:12px; }',
       '.ov-spark { display:block; width:100%; max-width:280px; height:44px; margin-top:4px; }',
       '.ov-spark-line { stroke:var(--text); stroke-width:2; }',
-      '.ov-spark-gap { fill:rgba(136,136,170,0.28); }',
+      '.ov-spark-gap { fill:var(--gs-stale); fill-opacity:0.28; }',
       '.ov-spark-last { fill:var(--text); }',
       '.ov-bat-tte { font-family:Consolas,monospace; font-size:14px; font-weight:700; }',
       '.ov-bat-none { font-size:11px; font-weight:600; }',
@@ -1358,8 +1276,8 @@
       '  font-size:10px; font-weight:700; letter-spacing:0.03em; color:var(--muted);',
       '  background:transparent; white-space:nowrap; }',
       '.ov-fsm-arrow { color:var(--muted); font-size:11px; }',
-      '.ov-fsm-cur-ok     { border-color:var(--green); color:var(--green); background:rgba(78,204,163,0.12); }',
-      '.ov-fsm-cur-warn   { border-color:var(--amber); color:var(--amber); background:rgba(245,166,35,0.12); }',
+      '.ov-fsm-cur-ok     { border-color:var(--green); color:var(--green); background:var(--gs-ok-bg); }',
+      '.ov-fsm-cur-warn   { border-color:var(--amber); color:var(--amber); background:var(--gs-warn-bg); }',
       '.ov-fsm-cur-nodata { border-color:var(--muted); color:var(--muted); border-style:dashed; }',
       '.ov-fsm-kindlabel { font-size:10px; color:var(--muted); min-width:46px; }',
       '.ov-fsm-meta { font-size:10px; color:var(--muted); font-family:Consolas,monospace;',
@@ -1375,10 +1293,10 @@
       '.ov-adapt-head { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }',
       '.ov-adapt-verdict { display:inline-block; min-width:104px; text-align:center; padding:2px 8px;',
       '  border-radius:3px; font-size:10px; font-weight:700; letter-spacing:0.04em; text-transform:uppercase; }',
-      '.ov-adapt-converging { background:rgba(78,204,163,0.15); color:var(--green); }',
-      '.ov-adapt-drifting   { background:rgba(245,166,35,0.18); color:var(--amber); }',
-      '.ov-adapt-frozen     { background:rgba(136,136,170,0.15); color:var(--muted); }',
-      '.ov-adapt-unknown    { background:rgba(136,136,170,0.12); color:var(--muted); }',
+      '.ov-adapt-converging { background:var(--gs-ok-bg);    color:var(--green); }',
+      '.ov-adapt-drifting   { background:var(--gs-warn-bg);  color:var(--amber); }',
+      '.ov-adapt-frozen     { background:var(--gs-stale-bg); color:var(--muted); }',
+      '.ov-adapt-unknown    { background:var(--gs-stale-bg); color:var(--muted); }',
       '.ov-adapt-evidence { font-size:9px; color:var(--muted); font-family:Consolas,monospace;',
       '  margin:3px 0 5px 0; }',
       '.ov-weight-grid { display:grid; grid-template-columns:repeat(3,minmax(120px,1fr)); gap:6px 10px; }',
@@ -1431,13 +1349,13 @@
       '<defs><clipPath id="ov-ai-clip"><circle cx="100" cy="100" r="84"/></clipPath></defs>',
       '<g id="ov-ai-world" clip-path="url(#ov-ai-clip)">',
       '  <g id="ov-ai-horizon" transform="rotate(0 100 100) translate(0 0)">',
-      '    <rect x="-140" y="-520" width="480" height="620" fill="#4a7ba6"/><!-- sky -->',
-      '    <rect x="-140" y="100"  width="480" height="620" fill="#7a6a50"/><!-- ground -->',
-      '    <line x1="-140" y1="100" x2="340" y2="100" stroke="#ffffff" stroke-width="2.5"/>',
-      '    <line x1="80" y1="80"  x2="120" y2="80"  stroke="#ffffff" stroke-width="1"/><!-- +10° -->',
-      '    <line x1="86" y1="60"  x2="114" y2="60"  stroke="#ffffff" stroke-width="1"/><!-- +20° -->',
-      '    <line x1="80" y1="120" x2="120" y2="120" stroke="#ffffff" stroke-width="1"/><!-- -10° -->',
-      '    <line x1="86" y1="140" x2="114" y2="140" stroke="#ffffff" stroke-width="1"/><!-- -20° -->',
+      '    <rect x="-140" y="-520" width="480" height="620" style="fill:var(--gs-ai-sky)"/><!-- sky -->',
+      '    <rect x="-140" y="100"  width="480" height="620" style="fill:var(--gs-ai-ground)"/><!-- ground -->',
+      '    <line x1="-140" y1="100" x2="340" y2="100" style="stroke:var(--gs-ai-line)" stroke-width="2.5"/>',
+      '    <line x1="80" y1="80"  x2="120" y2="80"  style="stroke:var(--gs-ai-line)" stroke-width="1"/><!-- +10° -->',
+      '    <line x1="86" y1="60"  x2="114" y2="60"  style="stroke:var(--gs-ai-line)" stroke-width="1"/><!-- +20° -->',
+      '    <line x1="80" y1="120" x2="120" y2="120" style="stroke:var(--gs-ai-line)" stroke-width="1"/><!-- -10° -->',
+      '    <line x1="86" y1="140" x2="114" y2="140" style="stroke:var(--gs-ai-line)" stroke-width="1"/><!-- -20° -->',
       '  </g>',
       '</g>',
       '<g id="ov-ai-fixed">',
@@ -1725,24 +1643,22 @@
       }
     });
 
-    /* Alarm banner + list */
+    /* Alarm banner + list: shown alarms of the shared engine, worst first.
+     * Every row names its level and its required action (WP-32 D2). */
     var alarms = computeAlarms(state, nowMs, ttlMs);
     updateRecentAlarms(alarms, nowMs);
-    updateAlarmLog(alarms, nowMs);
-    alarms.sort(function (a, b) { return sevRank(b.sev) - sevRank(a.sev); });
     // Silenced episodes (operator display action) drop out of the banner's
     // worst-of selection — the nag is suppressed, never the record.
-    var silenced = silencedAlarmIds();
-    var audible = alarms.filter(function (a) { return !silenced[a.id]; });
-    var worst = audible.length ? audible[0].sev : null;
+    var audible = alarms.filter(function (a) { return !a.silenced; });
+    var worst = audible.length ? audible[0] : null;
     var banner = q('ov-banner');
     if (banner) {
-      if (worst === 'red') {
+      if (worst && worst.level === 'warning') {
         banner.className = 'ov-banner ov-banner-alarm';
-        banner.textContent = '⚠ ALARM — ' + audible[0].text;
-      } else if (worst === 'amber') {
+        banner.textContent = '⚠ WARNING — ' + worst.text + ' → ' + worst.action;
+      } else if (worst) {
         banner.className = 'ov-banner ov-banner-warn';
-        banner.textContent = 'WARNING — ' + audible[0].text;
+        banner.textContent = worst.label + ' — ' + worst.text + ' → ' + worst.action;
       } else if (alarms.length) {
         banner.className = 'ov-banner ov-banner-warn';
         banner.textContent = 'ALARMS SILENCED BY OPERATOR — ' + alarms.length +
@@ -1757,8 +1673,9 @@
       var items = [];
       alarms.forEach(function (a) {
         items.push('<div class="ov-alarm-item ov-alarm-' + a.sev + '">' +
-                   (a.sev === 'red' ? '⚠ ' : '') + a.text +
-                   (silenced[a.id] ? ' [SILENCED]' : '') + '</div>');
+                   (a.sev === 'red' ? '⚠ ' : '') + a.label + ': ' + escHtml(a.text) +
+                   (a.silenced ? ' [SILENCED]' : '') +
+                   '<div class="ov-alarm-action">→ ' + escHtml(a.action) + '</div></div>');
       });
       _recentAlarms.forEach(function (r) {
         if (r.open) return;
@@ -1966,18 +1883,21 @@
   /* ── Alarm history render (task 20260921-070956) ─────────────────────── */
 
   function renderAlarmHistory(nowMs) {
+    var eng = alarmEngine();
+    var log = alarmLog();
+    var dropped = eng ? eng.dropped() : 0;
     var noteEl = q('ov-hist-note');
     if (noteEl) {
-      noteEl.textContent = 'session log — lost on page reload, not persisted' +
-        (_alarmLogDropped ? ' · ' + _alarmLogDropped + ' oldest episode(s) evicted by the ' + ALARM_LOG_MAX + '-episode bound' : '');
+      noteEl.textContent = 'session log — lost on page reload, not persisted; advisories are log only' +
+        (dropped ? ' · ' + dropped + ' oldest episode(s) evicted by the ' + ALARM_LOG_MAX + '-episode bound' : '');
     }
     var rowsEl = q('ov-hist-rows');
     if (!rowsEl) return;
     var rows = [];
     // Newest episode first; each episode is its RAISED event plus, once it
     // clears, its CLEARED event — both timestamped.
-    for (var i = _alarmLog.length - 1; i >= 0; i--) {
-      var ep = _alarmLog[i];
+    for (var i = log.length - 1; i >= 0; i--) {
+      var ep = log[i];
       var cls = 'ov-hist-row' + (ep.ack ? ' ov-hist-ep-acked' : '') + (ep.silenced ? ' ov-hist-silenced' : '');
       var tags = (ep.ack ? '<span class="ov-hist-tag ov-hist-tag-ack">ACK</span>' : '') +
                  (ep.silenced ? '<span class="ov-hist-tag ov-hist-tag-sil">SILENCED</span>' : '');
@@ -1985,15 +1905,16 @@
       rows.push('<div class="' + cls + '">',
         '<span class="ov-hist-ts">' + fmtClock(ep.raisedAt) + '</span>',
         '<span class="ov-hist-ev ov-hist-ev-raised-' + ep.sev + '">RAISED</span>',
-        '<span class="ov-hist-text">' + (ep.sev === 'red' ? '⚠ ' : '') + ep.text + ' ' + tags + '</span>',
+        '<span class="ov-hist-text">' + (ep.sev === 'red' ? '⚠ ' : '') + ep.level.toUpperCase() + ': ' +
+          escHtml(ep.text) + ' ' + tags + '</span>',
         '<button type="button" class="ov-hist-btn" id="ov-ack-' + ep.ref + '" title="Acknowledge — display only, stays in the log">' + (ep.ack ? 'ACKED' : 'ACK') + '</button>',
-        '<button type="button" class="ov-hist-btn" id="ov-sil-' + ep.ref + '" title="Silence the visual nag — display only, the record stays">' + (ep.silenced ? 'UNSILENCE' : 'SILENCE') + '</button>',
+        '<button type="button" class="ov-hist-btn" id="ov-sil-' + ep.ref + '" title="Silence the visual nag and its spoken warning — display only, the record stays">' + (ep.silenced ? 'UNSILENCE' : 'SILENCE') + '</button>',
         '</div>');
       if (!stillOpen) {
         rows.push('<div class="' + cls + '">',
           '<span class="ov-hist-ts">' + fmtClock(ep.clearedAt) + '</span>',
           '<span class="ov-hist-ev ov-hist-ev-cleared">CLEARED</span>',
-          '<span class="ov-hist-text">' + ep.textEnd + '</span>',
+          '<span class="ov-hist-text">' + escHtml(ep.textEnd) + '</span>',
           '</div>');
       }
     }
@@ -2162,12 +2083,10 @@
     _lastState = null;
     _recentAlarms = [];
     // Session-scoped follow-on state: a fresh panel starts from empty
-    // buffers and an empty log — this is the documented reload behaviour.
+    // buffers — this is the documented reload behaviour. The alarm log is the
+    // shell's (ui/alarms.js shared engine) and lives as long as the page.
     _hist = {};
     _trendKey = null;
-    _alarmLog = [];
-    _openEpisodes = {};
-    _alarmLogDropped = 0;
     _fsmTrans = { state: freshTrack(), phase: freshTrack() };
   };
 

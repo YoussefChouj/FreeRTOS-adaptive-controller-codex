@@ -35,6 +35,12 @@
   --gs-fail-bg: rgba(233, 69, 96, 0.15);
   --gs-stale-bg: rgba(136, 136, 170, 0.12);
   --gs-info-bg: rgba(78, 168, 222, 0.15);
+
+  /* plots and lists: grid lines, the zero line, row hover, inset plot background */
+  --gs-grid: rgba(255, 255, 255, 0.08);
+  --gs-grid-strong: rgba(255, 255, 255, 0.22);
+  --gs-hover-bg: rgba(255, 255, 255, 0.06);
+  --gs-inset-bg: rgba(0, 0, 0, 0.25);
 }
 
 :root[data-theme="light"] {
@@ -60,6 +66,33 @@
   --gs-fail-bg: rgba(196, 43, 69, 0.12);
   --gs-stale-bg: rgba(109, 115, 133, 0.12);
   --gs-info-bg: rgba(31, 111, 178, 0.12);
+
+  --gs-grid: rgba(0, 0, 0, 0.08);
+  --gs-grid-strong: rgba(0, 0, 0, 0.25);
+  --gs-hover-bg: rgba(0, 0, 0, 0.05);
+  --gs-inset-bg: rgba(0, 0, 0, 0.04);
+}
+
+/* Instruments, plot traces and the 2D / 3D flight views look the same in both themes (WP-39): a horizon is blue
+ * over brown and the fly view keeps its dark scene. Canvas and WebGL code reads these through GSUI.tokenColor. */
+:root {
+  --gs-ai-sky: #4a7ba6;
+  --gs-ai-ground: #7a6a50;
+  --gs-ai-line: #ffffff;
+
+  /* plot traces, assigned in order (time series, path replay runs) */
+  --gs-trace-1: #ff5964;
+  --gs-trace-2: #35a7ff;
+  --gs-trace-3: #38b000;
+  --gs-trace-4: #4a9eff;
+  --gs-trace-5: #4ecca3;
+  --gs-trace-6: #f5a623;
+  --gs-trace-7: #e94560;
+  --gs-trace-8: #9b59b6;
+  --gs-trace-9: #ff9f1c;
+  --gs-trace-10: #2ec4b6;
+  --gs-trace-11: #4cc9f0;
+  --gs-trace-12: #f72585;
 }
 
 :root {

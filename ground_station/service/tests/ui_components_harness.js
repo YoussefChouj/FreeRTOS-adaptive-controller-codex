@@ -8,12 +8,15 @@
  *   H  index.html: tokens / components / kit load before plugins, strip outside #app, no inline :root
  *   L  lint rules that need no npm: no confirm/alert, no empty catch, no hex colours / inline onclick in the
  *      converted files, components.css uses tokens only
+ *   B  ui/alarms.js (WP-39, WP-32 D2): one registry, three levels, every alarm names its action, debounce over
+ *      N samples, advisories log only, ack / silence / CSV, the shell sidebar and the Overview read it
+ *   C  voice (D3): speechSynthesis for warnings only, one utterance per episode, silence cancels it
  * Run: node ground_station/service/tests/ui_components_harness.js   (exit 0 = all pass)
  */
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
-const { KIT } = require('./ui_kit_loader');
+const { KIT, ALARMS } = require('./ui_kit_loader');
 
 const SHELL = path.join(__dirname, '..', '..', '..', 'docs', 'dashboard-platform', 'shell');
 const PLUGINS = path.join(SHELL, 'plugins');
@@ -70,7 +73,7 @@ function makeDoc() {
   return doc;
 }
 
-function makeEnv() {
+function makeEnv(extra) {
   const clock = { now: 1e6, timers: [], intervals: {}, seq: 0 };
   const warns = [];
   const fetches = [];
@@ -79,7 +82,8 @@ function makeEnv() {
   const ctx = {
     window: {}, document: doc, JSON, Math,
     console: { warn: (m) => warns.push(String(m)), error() {}, log() {} },
-    Date: { now: () => clock.now },
+    // new Date(ms) stays real (CSV timestamps); Date.now() is the fake clock
+    Date: Object.assign(function FakeDate(...a) { return new Date(...a); }, { now: () => clock.now }),
     setTimeout(fn, ms) { const id = ++clock.seq; clock.timers.push({ id, fn, at: clock.now + (ms || 0) }); return id; },
     clearTimeout(id) { clock.timers = clock.timers.filter((t) => t.id !== id); },
     setInterval(fn) { const id = ++clock.seq; clock.intervals[id] = fn; return id; },
@@ -89,8 +93,10 @@ function makeEnv() {
     _route: () => new Promise(() => {}),
   };
   ctx.window.document = doc;
+  Object.assign(ctx.window, extra || {});
   vm.createContext(ctx);
   vm.runInContext(read(KIT), ctx, { filename: KIT });
+  vm.runInContext(read(ALARMS), ctx, { filename: ALARMS });
   const advance = (ms) => {
     clock.now += ms;
     const due = clock.timers.filter((t) => t.at <= clock.now);
@@ -98,7 +104,7 @@ function makeEnv() {
     due.forEach((t) => t.fn());
   };
   const tickAll = () => Object.values(clock.intervals).forEach((fn) => fn());
-  return { ctx, doc, clock, warns, fetches, store, advance, tickAll, UI: ctx.window.GSUI };
+  return { ctx, doc, clock, warns, fetches, store, advance, tickAll, UI: ctx.window.GSUI, AL: ctx.window.GSAlarms };
 }
 
 const reply = (ok, status, body) => Promise.resolve({ ok, status, json: () => Promise.resolve(body) });
@@ -345,6 +351,169 @@ async function stripChecks() {
   pass('S7', 'teardown clears timers and the shortcut');
 }
 
+// ── B: alarm registry (ui/alarms.js) ─────────────────────────────────────────────────────────────────
+// a /state snapshot: slot 0 fresh (ageMs old) with the given values
+function snap(nowMs, values, opts) {
+  opts = opts || {};
+  const s = { slot_freshness_ttl_ns: 30e9, streams: { 0: { last_update_ns: (nowMs - (opts.ageMs || 100)) * 1e6,
+    loss_pct: opts.loss || 0, values: Object.assign({ 'status.arm': 1, 'status.vbat': 16.2, 'status.sbus_lost': 0,
+      'status.estimator_ready': 1 }, values) } } };
+  if (opts.slot3AgeMs !== undefined) s.streams[3] = { last_update_ns: (nowMs - opts.slot3AgeMs) * 1e6, values: {} };
+  return s;
+}
+
+function alarmChecks() {
+  const { AL } = makeEnv();
+  check(AL && AL.version === 1 && AL.RULES.length >= 10, 'window.GSAlarms missing');
+  check(AL.LEVELS.warning.status === 'fail' && AL.LEVELS.warning.sev === 'red' && AL.LEVELS.warning.speak &&
+        AL.LEVELS.caution.status === 'warn' && !AL.LEVELS.caution.speak &&
+        AL.LEVELS.advisory.status === 'info' && !AL.LEVELS.advisory.shown, 'level mapping');
+  AL.RULES.forEach((r) => check(AL.LEVELS[r.level].shown ? r.action.trim().length > 10 : true,
+    r.id + ' (' + r.level + ') must name its required action'));
+  const ok = { id: 'x', level: 'caution', n: 1, check: () => null, action: 'Do something' };
+  const refuse = (rule, why) => {
+    let err = null;
+    try { AL.validate([rule]); } catch (e) { err = e; }
+    check(err && why.test(err.message), 'validate must refuse: ' + JSON.stringify(rule) + ' -> ' + (err && err.message));
+  };
+  refuse(Object.assign({}, ok, { action: ' ' }), /must name its required action/);
+  refuse(Object.assign({}, ok, { level: 'red' }), /unknown level/);
+  refuse(Object.assign({}, ok, { n: 0 }), /debounce/);
+  check(AL.validate([Object.assign({}, ok, { level: 'advisory', action: '' })]).length === 1, 'advisory needs no action');
+  let dup = null;
+  try { AL.validate([ok, ok]); } catch (e) { dup = e; }
+  check(dup && /duplicate/.test(dup.message), 'duplicate id refused');
+  pass('B1', 'one registry: warning red / caution amber / advisory log only; every alarm names its action or validate() refuses it');
+
+  // debounce: vbat-low (n = 3) raises on the 3rd consecutive sample, clears after 3 good ones
+  const eng = new AL.Engine({ speaker: null });
+  let t = 1e9;
+  const low = () => snap(t, { 'status.vbat': 14.2 });
+  const good = () => snap(t, {});
+  check(eng.update(low(), t += 500).length === 0 && eng.update(low(), t += 500).length === 0, 'raised before 3 samples');
+  eng.update(good(), t += 500);
+  check(eng.update(low(), t += 500).length === 0 && eng.update(low(), t += 500).length === 0,
+    'a good sample in between must restart the count');
+  let a = eng.update(low(), t += 500);
+  check(a.length === 1 && a[0].id === 'vbat-low' && a[0].level === 'warning' && a[0].label === 'WARNING' &&
+        a[0].action === 'Land now and swap the pack' && /BATTERY LOW: 14\.20 V/.test(a[0].text), JSON.stringify(a));
+  const same = low();
+  eng.update(same, t += 500);
+  eng.update(same, t += 10);                         // same snapshot again inside SAMPLE_MS: not a new sample
+  eng.update(good(), t += 500); eng.update(good(), t += 500);
+  check(eng.alarms().length === 1, 'clears only after 3 good samples');
+  const batEp = () => eng.log().find((ep) => ep.id === 'vbat-low');
+  check(eng.update(good(), t += 500).length === 0 && batEp().clearedAt === t, 'cleared on the 3rd good sample');
+  check(eng.log().some((ep) => ep.id === 'armed' && ep.level === 'advisory'), 'armed is logged as an advisory');
+  const frozen = snap(t, {}, { ageMs: 100 });
+  eng.update(frozen, t += 100);
+  check(eng.update(frozen, t += AL.SAMPLE_MS + 4000).some((x) => x.id === 'link-lost'),
+    'a frozen snapshot is re-evaluated after SAMPLE_MS: link lost fires when the poll dies');
+  pass('B2', 'debounce over N samples (raise and clear); one sample per /state snapshot; frozen state still ages');
+
+  // same condition, level by context: may fly (armed or arm unknown) = warning, disarmed = caution
+  const lvl = (values, opts) => {
+    const e = new AL.Engine({ speaker: null });
+    let tt = 2e9, out = [];
+    for (let i = 0; i < 3; i++) out = e.update(snap(tt, values, opts), tt += 500);
+    return out.map((x) => x.id + ':' + x.level).sort().join(',');
+  };
+  check(lvl({ 'status.vbat': 14.2, 'status.arm': 0 }) === 'vbat-low-ground:caution', 'low battery on the ground');
+  check(lvl({ 'status.sbus_lost': 1 }) === 'rc-lost:warning' && lvl({ 'status.sbus_lost': 1, 'status.arm': 0 }) === 'rc-off:caution',
+    'RC lost: warning while it may fly, caution on the ground');
+  check(lvl({}, { ageMs: 5000 }) === 'link-lost:warning' && lvl({ 'status.arm': 0 }, { ageMs: 5000 }) === 'link-down:caution',
+    'link lost: warning while armed, caution disarmed');
+  check(lvl({ 'status.vbat': 15.3 }) === 'vbat-warn:caution' && lvl({ 'status.estimator_ready': 0 }) === 'estimator:caution',
+    'early battery warning and estimator are cautions');
+  check(lvl({}, { loss: 6 }) === 'loss-0:caution', 'loss above 5 % is a caution per slot');
+  pass('B3', 'act now vs act soon by context: armed / arm unknown = warning, known disarmed = caution');
+
+  // advisories: log only; notelem: shown, not logged
+  const e2 = new AL.Engine({ speaker: null });
+  let t2 = 3e9;
+  for (let i = 0; i < 3; i++) e2.update(snap(t2, {}, { slot3AgeMs: 2500, loss: 2 }), t2 += 500);
+  check(e2.alarms().length === 0, 'advisories must not be alarm rows: ' + JSON.stringify(e2.alarms()));
+  const adv = e2.advisories().map((x) => x.id).sort().join(',');
+  check(adv === 'armed,loss-minor-0,slow-3', 'advisories ' + adv);
+  check(e2.log().length === 3 && e2.log().every((ep) => ep.level === 'advisory'), 'advisories go to the log');
+  const e3 = new AL.Engine({ speaker: null });
+  const none = e3.update({ streams: {} }, 1);
+  check(none.length === 1 && none[0].id === 'notelem' && none[0].level === 'caution' && e3.log().length === 0,
+    'no telemetry is shown (caution) but is not a logged episode');
+  pass('B4', 'advisory = log only (slow slot, minor loss, armed); start-up "no telemetry" shown, not logged');
+
+  const ref = a[0].ref;
+  check(eng.ack(ref) && batEp().ack && eng.silence(ref) && batEp().silenced &&
+        eng.silence(ref) && !batEp().silenced && !eng.ack(999), 'ack / silence toggles');
+  const csv = eng.csv().split('\r\n');
+  check(/^"raised_at",.*"required_action"$/.test(csv[0]) &&
+        csv.some((l) => /"vbat-low","warning",.*"yes","no","Land now and swap the pack"$/.test(l)),
+    'csv ' + csv.join(' | '));
+  const small = new AL.Engine({ speaker: null, logMax: 2 });
+  let t4 = 4e9;
+  for (let i = 0; i < 3; i++) {
+    small.update(snap(t4, { 'status.estimator_ready': 0 }), t4 += 500);
+    small.update(snap(t4, { 'status.estimator_ready': 0 }), t4 += 500);
+    small.update(snap(t4, {}), t4 += 500); small.update(snap(t4, {}), t4 += 500);
+  }
+  check(small.log().filter((ep) => ep.id === 'estimator').length === 2 && small.dropped() >= 1, 'bounded log counts drops');
+  pass('B5', 'ack and silence are display-only flags; CSV keeps level + required action; bounded log counts drops');
+
+  const html = read(path.join(SHELL, 'index.html'));
+  const iKit = html.indexOf('<script src="/ui/ui-kit.js"></script>');
+  const iAl = html.indexOf('<script src="/ui/alarms.js"></script>');
+  check(iAl > iKit && iAl < html.indexOf('<script>'), 'alarms.js must load after ui-kit.js and before the shell script');
+  check(/GSAlarms\.shared\(\)/.test(html) && !/function buildAlarms/.test(html) && /alarm-action/.test(html) &&
+        /data-alarm-ref/.test(html), 'sidebar Alarms card must render the shared engine (level, action, Silence)');
+  const ov = read(path.join(PLUGINS, 'overview-panel.js'));
+  check(/GSAlarms\.shared\(\)/.test(ov) && !/VBAT_RED_V\s*=\s*15/.test(ov) && /eng\.silence\(ref\)/.test(ov),
+    'Overview must read the same engine and its LIMITS');
+  pass('B6', 'shell sidebar and Overview both read GSAlarms.shared(); no second rule set left');
+}
+
+// ── C: voice for warnings (speechSynthesis) ──────────────────────────────────────────────────────────
+function voiceChecks() {
+  const said = [], cancels = [];
+  const synth = { speak(u) { said.push(u.text); }, cancel() { cancels.push(said.length); } };
+  function Utt(text) { this.text = text; }
+  const { AL } = makeEnv({ speechSynthesis: synth, SpeechSynthesisUtterance: Utt });
+  const eng = AL.shared();
+  check(eng === AL.shared() && eng.speaker, 'shared engine with the browser speaker');
+  let t = 1e9;
+  for (let i = 0; i < 6; i++) eng.update(snap(t, { 'status.sbus_lost': 1 }), t += 500);
+  check(said.length === 1 && said[0] === 'Warning. R C link lost. Press Abort or Land, then check the RC transmitter is on and in range.',
+    'one utterance per warning episode: ' + JSON.stringify(said));
+  for (let i = 0; i < 3; i++) eng.update(snap(t, { 'status.estimator_ready': 0, 'status.arm': 0 }), t += 500);
+  check(said.length === 1, 'cautions and advisories never speak: ' + JSON.stringify(said));
+  pass('C1', 'speechSynthesis for warnings only, once per episode (6 samples active -> 1 utterance)');
+
+  for (let i = 0; i < 3; i++) eng.update(snap(t, { 'status.vbat': 14.0 }), t += 500);
+  check(said.length === 2 && /^Warning\. Battery low\. Land now/.test(said[1]), 'battery warning spoken');
+  const bat = eng.alarms().find((x) => x.id === 'vbat-low');
+  eng.silence(bat.ref);
+  check(cancels.length === 1 && cancels[0] === 2, 'silencing the speaking episode cancels its utterance');
+  eng.silence(bat.ref);
+  for (let i = 0; i < 3; i++) eng.update(snap(t, { 'status.vbat': 14.0 }), t += 500);
+  check(said.length === 2, 'un-silencing never repeats the utterance');
+  for (let i = 0; i < 3; i++) eng.update(snap(t, {}), t += 500);
+  for (let i = 0; i < 3; i++) eng.update(snap(t, { 'status.vbat': 14.0 }), t += 500);
+  check(said.length === 3, 'a new episode (after a clear) speaks again');
+  pass('C2', 'silence (the existing control) cancels the voice; a re-raise after a clear is a new episode');
+
+  const quiet = makeEnv().AL;
+  check(quiet.browserSpeaker() === null && quiet.shared().speaker === null, 'no speech API -> no speaker');
+  let q = 1e9;
+  for (let i = 0; i < 2; i++) quiet.shared().update(snap(q, { 'status.sbus_lost': 1 }), q += 500);
+  check(quiet.shared().alarms()[0].id === 'rc-lost', 'alarms work without speech');
+  const loud = makeEnv({ speechSynthesis: { speak() { throw new Error('not allowed'); }, cancel() {} },
+    SpeechSynthesisUtterance: Utt });
+  let r = 1e9;
+  loud.AL.shared().update(snap(r, { 'status.sbus_lost': 1 }), r += 500);
+  check(loud.AL.shared().alarms()[0].id === 'rc-lost' && loud.warns.some((w) => /alarm voice: not allowed/.test(w)),
+    'a refused utterance is reported and the alarm still shows');
+  pass('C3', 'no speech API or a refused utterance: the alarm still shows, the failure is reported once');
+}
+
 // ── H: shell wiring ──────────────────────────────────────────────────────────────────────────────────
 function shellChecks() {
   const html = read(path.join(SHELL, 'index.html'));
@@ -395,6 +564,8 @@ function lintChecks() {
 (async () => {
   await kitChecks();
   await stripChecks();
+  alarmChecks();
+  voiceChecks();
   shellChecks();
   lintChecks();
   console.log('ALL CHECKS PASSED');

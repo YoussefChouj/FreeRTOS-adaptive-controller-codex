@@ -79,16 +79,16 @@ function seedSidebar(doc, el) {
   const header = el('sidebar-header');
   header.appendChild(el('sidebar-collapse'));
   sidebar.appendChild(header);
-  // A representative set of sidebar children carrying testids (the Flight
-  // State / Session / Alarms cards and their value spans).
-  const cards = ['card-flight', 'card-state', 'card-alarms'];
+  // A representative set of sidebar children carrying testids (the Session /
+  // Alarms cards and their value spans; WP-39 removed the Flight Status card,
+  // the flight strip shows ARM / mode / battery).
+  const cards = ['card-state', 'card-alarms'];
   cards.forEach(function (cid, i) {
     const card = el(cid);
-    card.appendChild(el('sb-arm'));
     const sid = el('session-id');       // a data-testid-bearing value cell
     sid.setAttribute('data-testid', 'session-id');
     card.appendChild(sid);
-    if (i === cards.length - 1) card.appendChild(el('sb-vbat'));
+    if (i === cards.length - 1) card.appendChild(el('alarm-list'));
     sidebar.appendChild(card);
   });
   el('sidebar-reopen');
@@ -191,9 +191,11 @@ async function main() {
   // The testids must all still be present and in the same order (the
   // sidebar's own cards plus the data-testid value cell inside card-state).
   const testids = before.filter((x) => x);
-  if (testids.indexOf('card-flight') === -1 || testids.indexOf('card-state') === -1 ||
-      testids.indexOf('card-alarms') === -1) {
+  if (testids.indexOf('card-state') === -1 || testids.indexOf('card-alarms') === -1) {
     throw new Error('expected sidebar cards after round-trip, got: ' + JSON.stringify(testids));
+  }
+  if (/id="card-flight"|id="sb-arm"|id="card-cmd"|id="card-streams"/.test(html)) {
+    throw new Error('index.html still has a removed card (Flight Status, raw Command form or Telemetry Streams)');
   }
   const sessionCell = h.el('session-id');
   if (!sessionCell || sessionCell.getAttribute('data-testid') !== 'session-id') {
