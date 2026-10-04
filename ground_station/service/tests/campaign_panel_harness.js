@@ -6,6 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const { preloadKit } = require('./ui_kit_loader');
 
 const PLUGINS = path.join(__dirname, '..', '..', '..', 'docs', 'dashboard-platform', 'shell', 'plugins');
 const PANEL = path.join(PLUGINS, 'campaign-panel.js');
@@ -122,6 +123,7 @@ async function runHarness() {
     }
   };
   vm.createContext(ctx);
+  preloadKit(ctx);
   vm.runInContext(code, ctx);
 
   const api = makeApi();

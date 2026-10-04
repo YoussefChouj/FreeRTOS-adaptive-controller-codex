@@ -229,9 +229,7 @@
     updateEnableUI();
     return sendBench(api, IDX_CCR, CCR_OFF)
       .then(function () { return sendBench(api, IDX_ENABLE, 0); })
-      .catch(function (err) {
-        console.error('Motor bench disable failed:', err);
-      });
+      .catch(function (err) { window.GSUI.report('Motor bench disable', err); });
   }
 
   function forceShutdown(reason) {
@@ -251,14 +249,16 @@
     stopHeartbeat();
     _enabled = false;
     updateEnableUI();
+    // Outcome in the panel and a toast, never a browser dialog: a browser can block those (WP-35).
+    var result = q('mb-estop-result');
     api.submitCommand(CMD_ID_ABORT_ALL, 0, 0)
       .then(function () {
-        console.log('Abort all sent');
-        alert('Emergency stop executed. All motors zeroed.');
+        if (result) result.textContent = 'Emergency stop sent: all motors zeroed.';
+        window.GSUI.toast('Emergency stop sent: all motors zeroed.', 'ok');
       })
       .catch(function (err) {
-        console.error('Emergency stop failed:', err);
-        alert('Emergency stop executed (partial). Check system state.');
+        var text = window.GSUI.report('Emergency stop (partial, check system state)', err);
+        if (result) result.textContent = text;
       });
   }
 
@@ -491,6 +491,7 @@
       /* Abort */
       '<div class="mb-section">',
       '  <button id="mb-estop" class="mb-btn-danger">&#9632; ABORT ALL</button>',
+      '  <span id="mb-estop-result" class="gs-reason"></span>',
       '</div>',
     ].join('');
   }

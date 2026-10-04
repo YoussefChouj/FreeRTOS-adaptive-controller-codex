@@ -13,6 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const { preloadKit } = require('./ui_kit_loader');
 
 const PLUGINS_DIR = path.join(__dirname, '..', '..', '..', 'docs', 'dashboard-platform', 'shell', 'plugins');
 
@@ -221,8 +222,10 @@ function createInstance(filename) {
   };
 
   vm.createContext(sandbox);
+  preloadKit(sandbox);   // index.html loads ui/ui-kit.js before any plugin
   vm.runInContext(code, sandbox, { filename: filepath });
-  sandbox.pluginInit(api);
+  // Self-installing chrome (preset-picker.js) registers nothing: loading without a throw is its whole check.
+  if (typeof sandbox.pluginInit === 'function') sandbox.pluginInit(api);
   // Chrome-only plugins (co-pilot drawer, mode pill) register no panel.
   if (api.renderFn) api.renderFn(container, api);
 

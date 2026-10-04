@@ -12,19 +12,12 @@
   <link rel="agent-permissions" href="/.well-known/agent-permissions.json" />
   <link rel="llms-txt" type="text/markdown" href="/llms.txt" />
   <link rel="icon" href="data:,">
+  <!-- WP-35 design system: tokens (colour, spacing, type, radius; dark + light theme) in one file, shared
+       components, and window.GSUI (ui-kit.js) loaded before any plugin. See ../ux-guide.md. -->
+  <link rel="stylesheet" href="/ui/tokens.css" />
+  <link rel="stylesheet" href="/ui/components.css" />
+  <script src="/ui/ui-kit.js"></script>
   <style>
-    :root {
-      --bg: #1a1a2e;
-      --card: #16213e;
-      --accent: #0f3460;
-      --text: #e8e8e8;
-      --muted: #8888aa;
-      --red: #e94560;
-      --green: #4ecca3;
-      --amber: #f5a623;
-      --border: #2a2a4a;
-    }
-
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
@@ -74,19 +67,19 @@
     }
 
     .status-badge.connected {
-      background: rgba(78, 204, 163, 0.15);
+      background: var(--gs-ok-bg);
       color: var(--green);
     }
     .status-badge.connected::before { background: var(--green); }
 
     .status-badge.disconnected {
-      background: rgba(232, 232, 234, 0.1);
+      background: var(--gs-stale-bg);
       color: var(--muted);
     }
     .status-badge.disconnected::before { background: var(--muted); }
 
     .status-badge.error {
-      background: rgba(233, 69, 96, 0.15);
+      background: var(--gs-fail-bg);
       color: var(--red);
     }
     .status-badge.error::before { background: var(--red); }
@@ -174,8 +167,8 @@
     /* Pending-approvals count badge on the Approvals tab */
     .approval-badge {
       display: inline-block; margin-left: 6px; padding: 0 6px;
-      border-radius: 8px; background: var(--red, #e94560);
-      color: #fff; font-size: 10px; font-weight: 700; line-height: 15px;
+      border-radius: 8px; background: var(--gs-fail);
+      color: var(--gs-text-on-status); font-size: 10px; font-weight: 700; line-height: 15px;
     }
 
     /* ── Gate indicator bar ── */
@@ -197,9 +190,9 @@
       border-radius: 4px;
       border: 1px solid transparent;
     }
-    .gate-item.pass { color: var(--green); border-color: rgba(78,204,163,0.3); }
-    .gate-item.fail { color: var(--red); border-color: rgba(233,69,96,0.3); }
-    .gate-item.unknown { color: var(--muted); border-color: rgba(136,136,170,0.2); }
+    .gate-item.pass { color: var(--gs-ok); border-color: var(--gs-ok-bg); }
+    .gate-item.fail { color: var(--gs-fail); border-color: var(--gs-fail-bg); }
+    .gate-item.unknown { color: var(--gs-stale); border-color: var(--gs-stale-bg); }
     .gate-item::before { content: ''; width: 6px; height: 6px; border-radius: 50%; }
     .gate-item.pass::before { background: var(--green); }
     .gate-item.fail::before { background: var(--red); }
@@ -213,7 +206,7 @@
     .signal-degraded { color: var(--amber); }
     .signal-unknown { color: var(--muted); }
     .signal-unverified { color: var(--red); }
-    .signal-replay { color: #8888ff; }
+    .signal-replay { color: var(--gs-info); }
 
     /* ── Layout ── */
     #app {
@@ -341,7 +334,7 @@
       font-family: 'Consolas', monospace;
     }
 
-    .stream-table tr:hover td { background: rgba(255,255,255,0.03); }
+    .stream-table tr:hover td { background: var(--gs-stale-bg); }
 
     .loss-warn { color: var(--amber); }
     .loss-critical { color: var(--red); }
@@ -419,13 +412,13 @@
     }
 
     .alarm-item.warning {
-      background: rgba(245, 166, 35, 0.12);
-      color: var(--amber);
+      background: var(--gs-warn-bg);
+      color: var(--gs-warn);
     }
 
     .alarm-item.critical {
-      background: rgba(233, 69, 96, 0.12);
-      color: var(--red);
+      background: var(--gs-fail-bg);
+      color: var(--gs-fail);
     }
 
     .alarm-item .icon {
@@ -455,7 +448,12 @@
       border-top: 1px solid var(--border);
       flex: 0 0 auto;
     }
-    /* The banner's inline display:flex would otherwise win over the class. */
+    #reload-banner {
+      position: fixed; bottom: 0; left: 0; right: 0; z-index: 9999;
+      display: flex; gap: var(--gs-space-3); align-items: center; justify-content: space-between;
+      padding: var(--gs-space-3) var(--gs-space-4); font-size: var(--gs-text-md);
+      background: var(--gs-surface); border-top: 1px solid var(--gs-ok); color: var(--gs-text);
+    }
     #reload-banner.hidden { display: none !important; }
     /* Agent-mode strip is fixed at the bottom-centre of the viewport
        (header-mode-pill.js). On narrow/phone widths give the scrolled
@@ -467,6 +465,10 @@
   </style>
 </head>
 <body>
+
+<!-- Flight-critical state, always visible (plugins/flight-strip.js fills it): ARM, mode, battery, RC, link age,
+     campaign status, and Pause / Land / Abort. Outside #app so no workspace switch or sidebar collapse hides it. -->
+<div id="flight-strip" role="region" aria-label="Flight state and campaign actions" data-testid="flight-strip"></div>
 
 <div id="workspace-bar" role="tablist" aria-label="Workspace">
   <!-- Sidebar re-open control: visible only when the sidebar is collapsed. -->
@@ -628,14 +630,14 @@
 
 <!-- Phase 1B: code-reload banner (shown when index.html or shared shell
      files change; preserves sessionStorage state across reload). -->
-<div id="reload-banner" class="hidden" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:var(--card,#1f2430);border-top:1px solid var(--green,#4ECCA3);color:var(--fg,#e6e9ef);padding:12px 16px;font-size:13px;display:flex;gap:12px;align-items:center;justify-content:space-between;">
+<div id="reload-banner" class="hidden">
   <div>
-    <strong>What changed</strong> <span id="reload-files" style="opacity:.85">—</span>
-    <div id="reload-summary" style="opacity:.6;font-size:12px;margin-top:2px;"></div>
+    <strong>What changed</strong> <span id="reload-files">—</span>
+    <div id="reload-summary" class="gs-label"></div>
   </div>
-  <div style="display:flex;gap:8px;flex:0 0 auto;">
-    <button id="reload-stay" style="background:none;border:1px solid rgba(230,233,239,.4);color:inherit;padding:6px 12px;border-radius:4px;">Stay</button>
-    <button id="reload-now" style="background:var(--green,#4ECCA3);border:none;color:#0a0d12;padding:6px 14px;border-radius:4px;font-weight:600;">Reload</button>
+  <div class="gs-row">
+    <button id="reload-stay" class="gs-btn gs-btn--ghost">Stay</button>
+    <button id="reload-now" class="gs-btn gs-btn--ok">Reload</button>
   </div>
 </div>
 
@@ -652,6 +654,17 @@
    * with no diagnostic. Setting it here closes the gap so the documented
    * `if (window.__SHELL_API_VERSION__ !== 'v2')` check works. */
   window.__SHELL_API_VERSION__ = 'v2';
+
+  /* One error path for the shell itself (WP-35): GSUI.report when ui/ui-kit.js is loaded, else the console.
+   * Background failures (storage blocked, a bad SSE frame) are logged once per kind and never swallowed;
+   * toast=true also tells the operator. */
+  var _shellWarned = {};
+  function shellWarn(where, e, toast) {
+    if (window.GSUI) { window.GSUI.report(where, e, toast ? {} : { toast: false, once: where }); return; }
+    if (_shellWarned[where]) return;
+    _shellWarned[where] = true;
+    console.warn('[shell] ' + where + ':', e);
+  }
 
   /* ── Plugin registry with workspace metadata ── */
   /* Each plugin calls __registerPlugin__(name, init, destroy) OR
@@ -675,6 +688,7 @@
 
   /* ── Load all plugins (they call window.__registerPlugin__ on eval) ── */
   const PLUGIN_FILES = [
+    '/plugins/flight-strip.js',    // WP-35: flight-critical strip + Pause/Land/Abort on every workspace (first)
     '/plugins/overview-panel.js',  // 20260921-044235: PLC-style HMI overview — first/default tab
     '/plugins/status-panel.js',
     '/plugins/mrac-panel.js',
@@ -731,7 +745,7 @@
   function loadLayout() {
     try {
       return JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}');
-    } catch (_) { return {}; }
+    } catch (e) { shellWarn('saved layout', e); return {}; }
   }
 
   function saveLayout() {
@@ -786,9 +800,9 @@
     if (!collapsed && sidebar) sidebar.style.display = '';
     var rb = document.getElementById('sidebar-reopen');
     if (rb) rb.style.display = collapsed ? 'block' : 'none';
-    try { localStorage.setItem('gs_sidebar_collapsed', collapsed ? '1' : '0'); } catch (_) {}
+    try { localStorage.setItem('gs_sidebar_collapsed', collapsed ? '1' : '0'); } catch (e) { shellWarn('localStorage', e); }
     // Reflow canvas plots that listen for resize.
-    try { window.dispatchEvent(new Event('resize')); } catch (_) {}
+    try { window.dispatchEvent(new Event('resize')); } catch (e) { shellWarn('resize event', e); }
   }
   var cb = document.getElementById('sidebar-collapse');
   if (cb) cb.addEventListener('click', function () { setSidebarCollapsed(true); });
@@ -797,7 +811,7 @@
   // Restore persisted collapse state.
   try {
     if (localStorage.getItem('gs_sidebar_collapsed') === '1') setSidebarCollapsed(true);
-  } catch (_) {}
+  } catch (e) { shellWarn('localStorage', e); }
 
   /* ── Workspace switching ── */
   /* State model per signal:
@@ -973,7 +987,7 @@
       card.style.display = wsMatches(card.getAttribute('data-workspaces'), name) ? '' : 'none';
     });
     // Persist selected workspace
-    try { localStorage.setItem('gs_workspace', name); } catch (_) {}
+    try { localStorage.setItem('gs_workspace', name); } catch (e) { shellWarn('localStorage', e); }
     // Phase 1B: report the tab switch to the agent (observable UI state).
     if (typeof shellApi !== 'undefined' && typeof shellApi.reportUiState === 'function') {
       shellApi.reportUiState();
@@ -991,7 +1005,7 @@
   try {
     var saved = localStorage.getItem('gs_workspace');
     switchWorkspace(saved || 'overview');
-  } catch (_) { switchWorkspace('overview'); }
+  } catch (e) { shellWarn('localStorage', e); switchWorkspace('overview'); }
 
   /* ── Shell API exposed to plugins ── */
   var onStateChangeCallbacks = [];
@@ -1017,14 +1031,16 @@
         box = document.createElement('div');
         box.id = 'plugin-err-' + slug;
         box.setAttribute('data-testid', 'plugin-error-' + slug);
-        box.style.cssText = 'margin-top:6px;padding:6px 8px;border-radius:4px;' +
-          'background:rgba(233,69,96,0.12);border:1px solid var(--red);' +
-          'color:var(--red);font-size:11px;white-space:pre-wrap;';
+        box.className = 'gs-error';
+        box.style.marginTop = 'var(--gs-space-1)';
         body.appendChild(box);
       }
       box.textContent = 'Plugin error: ' +
         (err && err.message ? err.message : String(err));
-    } catch (_) { /* error reporting must never kill the poll loop */ }
+    } catch (e2) {
+      /* error reporting must never kill the poll loop: fall back to the console */
+      console.error('[shell] could not show plugin error:', panelName, err, e2);
+    }
   }
 
   /* Deliver state to every subscribed plugin. A callback that throws is
@@ -1116,7 +1132,8 @@
       if (gates.length > 0) {
         var badge = document.createElement('span');
         badge.className = 'gate-badge';
-        badge.style.cssText = 'font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(78,204,163,0.15);color:var(--green)';
+        badge.style.cssText = 'font-size:var(--gs-text-xs);padding:1px 5px;border-radius:var(--gs-radius-sm);' +
+          'background:var(--gs-ok-bg);color:var(--gs-ok)';
         badge.textContent = gates.join('+');
         badge.title = 'Required gates: ' + gates.join(', ');
         header.appendChild(badge);
@@ -1265,36 +1282,17 @@
     if (!window.EventSource || window.__gs_agent_es__) return;
     var es;
     try { es = new EventSource('/api/agent/stream'); }
-    catch (e) { return; }
+    catch (e) { shellWarn('agent stream', e); return; }
     window.__gs_agent_es__ = es;
-    es.addEventListener('control', function (e) {
-      try { dispatchAgentEvent('control', JSON.parse(e.data)); } catch (_) {}
-    });
-    es.addEventListener('approval', function (e) {
-      try { dispatchAgentEvent('approval', JSON.parse(e.data)); } catch (_) {}
-    });
-    es.addEventListener('plan', function (e) {
-      try { dispatchAgentEvent('plan', JSON.parse(e.data)); } catch (_) {}
-    });
-    es.addEventListener('step', function (e) {
-      try { dispatchAgentEvent('step', JSON.parse(e.data)); } catch (_) {}
-    });
-    es.addEventListener('message', function (e) {
-      try { dispatchAgentEvent('message', JSON.parse(e.data)); } catch (_) {}
-    });
-    es.addEventListener('ui_action', function (e) {
-      try { dispatchAgentEvent('ui_action', JSON.parse(e.data)); } catch (_) {}
-    });
-    es.addEventListener('shell_updated', function (e) {
-      try { dispatchAgentEvent('shell_updated', JSON.parse(e.data)); } catch (_) {}
-    });
-    es.addEventListener('activity', function (e) {
-      try { dispatchAgentEvent('activity', JSON.parse(e.data)); } catch (_) {}
+    ['control', 'approval', 'plan', 'step', 'message', 'ui_action', 'shell_updated', 'activity'].forEach(function (name) {
+      es.addEventListener(name, function (e) {
+        try { dispatchAgentEvent(name, JSON.parse(e.data)); } catch (err) { shellWarn('agent event ' + name, err); }
+      });
     });
     es.onerror = function () {
       // transient; EventSource auto-reconnects. Close on page unload only.
     };
-    window.addEventListener('beforeunload', function () { try { es.close(); } catch (_) {} });
+    window.addEventListener('beforeunload', function () { es.close(); });
   }
 
   /* ── Phase 1B: hot reload + what-changed banner ── */
@@ -1351,7 +1349,7 @@
     if (sharedChanged) {
       // Preserve sessionStorage state across the reload.
       try { sessionStorage.setItem('gs_sse_state', JSON.stringify({
-        control: _agentControl, at: at || Date.now() })); } catch (_) {}
+        control: _agentControl, at: at || Date.now() })); } catch (e) { shellWarn('sessionStorage', e); }
       backfillChangedCard(files, normalized, at ? 'shell updated' : null);
       showReloadBanner();
       return;
@@ -1742,18 +1740,15 @@
 
   /* ── Lifecycle: invoke registered destroy fns on tab close ── */
   window.addEventListener('beforeunload', function () {
-    try {
-      _destroyFns.forEach(function (fn) {
-        try { if (typeof fn === 'function') fn(); } catch (e) { /* ignore */ }
-      });
-    } catch (_) { /* ignore */ }
+    _destroyFns.forEach(function (fn) {
+      try { if (typeof fn === 'function') fn(); } catch (e) { shellWarn('plugin destroy', e); }
+    });
   });
 
-  /* Expose a refresh hook so plugins (e.g. bandwidth) can request a re-render after subscribe. */
+  /* Expose a refresh hook so plugins (e.g. bandwidth) can request a re-render after subscribe.
+   * dispatchState already isolates and reports each callback's error. */
   window.__gs_plugins_refresh__ = function () {
-    try {
-      dispatchState(currentState);
-    } catch (_) { /* ignore */ }
+    dispatchState(currentState);
   };
   /* Expose the shellApi so plugins can call subscribeSlot without re-defining it. */
   window.__gs_shell_api__ = shellApi;
@@ -1773,10 +1768,10 @@
       cache[key] = null;   // in-flight sentinel
       try {
         fetch('/api/preset-for-symbol?symbol=' + encodeURIComponent(key))
-          .then(function (r) { try { return r.json(); } catch (_) { return {}; } })
+          .then(function (r) { return r.json(); })
           .then(function (b) { cache[key] = (b && b.presets) || []; })
-          .catch(function () { cache[key] = []; });
-      } catch (_) { cache[key] = []; }
+          .catch(function (e) { cache[key] = []; shellWarn('preset-for-symbol', e); });
+      } catch (e) { cache[key] = []; shellWarn('preset-for-symbol', e); }
     }
     return function (symbol) {
       var key = String(symbol || '');

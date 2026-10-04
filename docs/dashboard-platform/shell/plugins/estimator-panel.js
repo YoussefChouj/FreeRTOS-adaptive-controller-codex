@@ -117,6 +117,7 @@
   var NOT_PUBLISHED_HINT = 'Not published by this build';
 
   /* ── DOM helpers ──────────────────────────────────────────────────── */
+  var UI = null;   /* window.GSUI (ui/ui-kit.js), set at init */
   function q(id) { return document.getElementById(id); }
   function fmtNum(v, dec) {
     if (v == null) return '—';
@@ -141,213 +142,120 @@
     }
     return null;
   }
+  /* value cell text + one modifier class (gs-value--np / --warn / --muted), never an inline colour */
+  function setValue(el, text, mod) {
+    if (!el) return;
+    el.textContent = text;
+    el.className = 'gs-metric__value' + (mod ? ' ' + mod : '');
+  }
 
-  /* ── Build panel HTML ─────────────────────────────────────────────── */
+  /* ── Build panel HTML (classes from ui/components.css) ────────────── */
+  function metric(label, id, text, mod, unit) {
+    return '<div class="gs-metric"><span class="gs-metric__label">' + label + '</span>' +
+      '<span id="' + id + '" class="gs-metric__value' + (mod ? ' ' + mod : '') + '">' + text + '</span>' +
+      (unit ? '<span class="gs-metric__unit">' + unit + '</span>' : '') + '</div>';
+  }
+  function group(label, cells, extra) {
+    return '<div class="est-group"><div class="gs-label">' + label + '</div>' +
+      '<div class="gs-metrics">' + cells + '</div>' + (extra || '') + '</div>';
+  }
+  function control(label, inner) {
+    return '<div><div class="gs-label">' + label + '</div><div class="gs-row">' + inner + '</div></div>';
+  }
+
   function buildHTML() {
-    /* EKF group rows */
+    var pill = function (id, text) { return UI.pill('stale', text, '', id); };
+
     var ekfHTML = EKF_GROUPS.map(function (g) {
       var cells = g.axisLabels.map(function (al, ai) {
-        var initText = g.unpublished ? NOT_PUBLISHED : 'AWAITING DATA';
-        var initColor = g.unpublished ? 'var(--amber)' : 'var(--muted)';
-        return '<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:54px">' +
-          '<span style="font-size:10px;color:var(--muted)">' + al + '</span>' +
-          '<span id="ekf-' + g.keys[ai].replace(/\./g, '-') + '" style="font-family:Consolas,monospace;font-size:13px;color:' + initColor + '">' + initText + '</span>' +
-          '<span style="font-size:9px;color:var(--muted)">' + g.unit + '</span>' +
-          '</div>';
+        return metric(al, 'ekf-' + g.keys[ai].replace(/\./g, '-'), g.unpublished ? NOT_PUBLISHED : 'AWAITING DATA',
+          g.unpublished ? 'gs-value--np' : 'gs-value--muted', g.unit);
       }).join('');
       var note = g.unpublished
-        ? '<div id="ekf-note-' + g.keys[0].split('.')[1] + '" class="ekf-unpublished-note">' + g.unpublishedNote + '</div>'
+        ? '<div id="ekf-note-' + g.keys[0].split('.')[1] + '" class="gs-reason">' + g.unpublishedNote + '</div>'
         : '';
-      return '<div style="margin-bottom:12px">' +
-        '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">' + g.label + '</div>' +
-        '<div style="display:flex;gap:8px">' + cells + '</div>' + note +
-        '</div>';
+      return group(g.label, cells, note);
     }).join('');
 
-    /* Raw IMU proxy rows */
     var rawHTML = RAW_GROUPS.map(function (g) {
-      var cells = g.axisLabels.map(function (al, ai) {
-        var key = g.keys[ai].replace(/\./g, '-');
-        return '<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:54px">' +
-          '<span style="font-size:10px;color:var(--muted)">' + al + '</span>' +
-          '<span id="raw-' + key + '" style="font-family:Consolas,monospace;font-size:13px;color:var(--muted)">AWAITING DATA</span>' +
-          '</div>';
-      }).join('');
-      return '<div style="margin-bottom:10px">' +
-        '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">' + g.label + '</div>' +
-        '<div style="display:flex;gap:8px">' + cells + '</div>' +
-        '</div>';
+      return group(g.label, g.axisLabels.map(function (al, ai) {
+        return metric(al, 'raw-' + g.keys[ai].replace(/\./g, '-'), 'AWAITING DATA', 'gs-value--muted');
+      }).join(''));
     }).join('');
 
-    /* Covariance cells */
     var covCells = COV_KEYS.map(function (k) {
-      var key = k.replace(/\./g, '-');
-      return '<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:64px">' +
-        '<span style="font-size:9px;color:var(--muted)">' + k.split('.').pop() + '</span>' +
-        '<span id="cov-' + key + '" style="font-family:Consolas,monospace;font-size:10px;color:var(--amber)">' + NOT_PUBLISHED + '</span>' +
-        '</div>';
+      return metric(k.split('.').pop(), 'cov-' + k.replace(/\./g, '-'), NOT_PUBLISHED, 'gs-value--np');
     }).join('');
 
     return [
-      '<style>',
-      '.est-mode-btn { padding:4px 14px; border-radius:4px; border:1px solid var(--border);',
-      '  background:transparent; color:var(--muted); cursor:pointer; font-size:11px;',
-      '  font-weight:600; letter-spacing:0.04em; transition:all 0.15s; }',
-      '.est-mode-btn:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }',
-      '.est-mode-btn.active { background:var(--accent); color:#fff; border-color:var(--accent); }',
-      '.est-mode-btn:disabled { opacity:0.45; cursor:not-allowed; }',
-      '.est-health-ok  { color:var(--green);  font-weight:700; }',
-      '.est-health-bad { color:var(--red);    font-weight:700; }',
-      '.est-health-unk { color:var(--amber);  font-weight:700; }',
-      '.ekf-no-data { color: var(--muted); font-size: 12px; text-align: center; padding: 20px; }',
-      '.ekf-filter { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px;',
-      '  border-radius: 12px; font-size: 11px; font-weight: 600; }',
-      '.ekf-filter-ok    { background: rgba(78,204,163,0.15); color: var(--green); }',
-      '.ekf-filter-warn  { background: rgba(245,166,35,0.15); color: var(--amber); }',
-      '.ekf-filter-err   { background: rgba(233,69,96,0.15);  color: var(--red); }',
-      '.ekf-filter-unknown { background: rgba(136,136,170,0.1); color: var(--muted); }',
-      '.ekf-disclaimer {',
-      '  padding: 10px 12px; background: rgba(245,166,35,0.10);',
-      '  border: 1px solid var(--amber); border-radius: 4px;',
-      '  color: var(--amber); font-size: 11px; margin-bottom: 12px; font-weight: 600;',
-      '}',
-      '.ekf-unpublished-note {',
-      '  margin-top: 4px; font-size: 10px; color: var(--amber); font-style: italic;',
-      '}',
-      '.ekf-section-title {',
-      '  font-size: 10px; font-weight: 700; color: var(--muted);',
-      '  letter-spacing: 0.06em; text-transform: uppercase;',
-      '  margin: 14px 0 8px 0; padding-bottom: 4px;',
-      '  border-bottom: 1px solid var(--border);',
-      '}',
-      '.est-tau-input { width:70px; padding:3px 6px; border:1px solid var(--border);',
-      '  border-radius:4px; background:var(--bg); color:var(--text); font-size:12px; }',
-      '</style>',
+      '<style>.est-group { margin-bottom: var(--gs-space-3); } .est-tau { width: 70px; }</style>',
 
-      /* ── Estimator mode selector ── */
-      '<div class="ekf-section-title">XY Bias Estimator Mode</div>',
-      '<div style="margin-bottom:10px">',
-      '  <div id="est-arm-warn" style="display:none;margin-bottom:6px;padding:6px 10px;',
-      '       background:rgba(233,69,96,0.10);border:1px solid var(--red);border-radius:4px;',
-      '       font-size:11px;color:var(--red);font-weight:600">',
-      '    ⚠ Mode switch requires drone to be DISARMED',
-      '  </div>',
-      '  <div id="est-unknown-warn" style="display:none;margin-bottom:6px;padding:6px 10px;',
-      '       background:rgba(245,166,35,0.10);border:1px solid var(--amber);border-radius:4px;',
-      '       font-size:11px;color:var(--amber);font-weight:600">',
-      '    ⚠ Arm state unknown — mode switch disabled (fail-closed)',
-      '  </div>',
-      '  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">',
-      '    <button id="est-btn-fixed" class="est-mode-btn" onclick="window._estSetMode(0)" title="Bias captured at boot, held fixed for entire flight">FIXED</button>',
-      '    <button id="est-btn-ema"   class="est-mode-btn" onclick="window._estSetMode(1)" title="Bias tracked by EMA — configurable tau">EMA</button>',
-      '    <button id="est-btn-ekf"   class="est-mode-btn" onclick="window._estSetMode(2)" title="6-state KF: joint position+bias estimation. Active mode.">EKF</button>',
-      '    <span style="font-size:11px;color:var(--muted);margin-left:8px">Active:',
-      '      <span id="est-mode-readback" style="font-family:Consolas,monospace;font-weight:600">?</span>',
-      '    </span>',
-      '  </div>',
+      /* ── Estimator mode selector: disabled unless known-disarmed, the reason is shown beside it ── */
+      '<div class="gs-section-title">XY Bias Estimator Mode</div>',
+      '<div id="est-error" class="gs-error" style="display:none"></div>',
+      '<div class="gs-row est-group">',
+      '  <button id="est-btn-fixed" class="gs-btn" title="Bias captured at boot, held fixed for entire flight">FIXED</button>',
+      '  <button id="est-btn-ema" class="gs-btn" title="Bias tracked by EMA — configurable tau">EMA</button>',
+      '  <button id="est-btn-ekf" class="gs-btn" title="6-state KF: joint position+bias estimation. Active mode.">EKF</button>',
+      '  <span class="gs-label">Active: <span id="est-mode-readback" class="gs-metric__value">?</span></span>',
+      '  <span id="est-mode-reason" class="gs-reason"></span>',
       '</div>',
 
-      /* ── EMA tau input ── */
-      '<div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">',
-      '  <div>',
-      '    <div style="font-size:11px;color:var(--muted);margin-bottom:4px">EMA tau (s)',
-      '      <span style="font-size:10px;font-style:italic">(larger = slower tracking, less XY pull-back; allowed any time)</span>',
-      '    </div>',
-      '    <div style="display:flex;gap:6px;align-items:center">',
-      '      <input id="est-tau-input" class="est-tau-input" type="number" min="1" max="300" step="1" value="20" title="EMA time constant (seconds). Firmware range: [1, 300] s." />',
-      '      <button style="padding:3px 10px;border-radius:4px;border:1px solid var(--border);',
-      '              background:transparent;color:var(--muted);cursor:pointer;font-size:11px"',
-      '              onclick="window._estSetTau()" title="Send tau to firmware">Set</button>',
-      '      <span style="font-size:11px;color:var(--muted)">Firmware: <span id="est-tau-readback" style="font-family:Consolas,monospace">?</span> s</span>',
-      '    </div>',
-      '  </div>',
-      '  <div style="margin-left:auto">',
-      '    <div style="font-size:11px;color:var(--muted);margin-bottom:4px">EMA Freeze</div>',
-      '    <div style="display:flex;gap:6px;align-items:center">',
-      '      <button id="est-btn-freeze" style="padding:3px 10px;border-radius:4px;border:1px solid var(--border);',
-      '              background:transparent;color:var(--muted);cursor:pointer;font-size:11px;font-weight:600"',
-      '              onclick="window._estToggleFreeze()" title="Toggle EMA freeze (locks bias estimate before maneuvers)">',
-      '        <span id="est-freeze-label">UNFREEZE</span>',
-      '      </button>',
-      '      <span id="est-freeze-state" class="est-health-unk">?</span>',
-      '    </div>',
-      '  </div>',
-      '  <div>',
-      '    <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Handheld Test</div>',
-      '    <div style="display:flex;gap:6px;align-items:center">',
-      '      <button id="est-btn-handheld" style="padding:3px 10px;border-radius:4px;border:1px solid var(--border);',
-      '              background:transparent;color:var(--muted);cursor:pointer;font-size:11px;font-weight:600"',
-      '              onclick="window._estToggleHandheld()" title="Integrate OF position on the ground so the drone can be moved by hand (modes 0 and 2). Hold still when enabling: position is zeroed and the bias frozen. Firmware clears it in flight.">',
-      '        <span id="est-handheld-label">ENABLE</span>',
-      '      </button>',
-      '      <span id="est-handheld-state" class="est-health-unk">?</span>',
-      '    </div>',
-      '  </div>',
+      /* ── EMA tau, freeze, handheld test (allowed any time) ── */
+      '<div class="gs-row est-group">',
+      control('EMA tau (s) <i>(larger = slower tracking, less XY pull-back; allowed any time)</i>',
+        '<input id="est-tau-input" class="gs-input est-tau" type="number" min="1" max="300" step="1" value="20" ' +
+        'title="EMA time constant (seconds). Firmware range: [1, 300] s." />' +
+        '<button id="est-btn-tau" class="gs-btn gs-btn--ghost" title="Send tau to firmware">Set</button>' +
+        '<span class="gs-label">Firmware: <span id="est-tau-readback" class="gs-metric__value">?</span> s</span>'),
+      control('EMA Freeze',
+        '<button id="est-btn-freeze" class="gs-btn gs-btn--ghost" title="Toggle EMA freeze (locks bias estimate before maneuvers)">' +
+        '<span id="est-freeze-label">UNFREEZE</span></button>' + pill('est-freeze-state', '?')),
+      control('Handheld Test',
+        '<button id="est-btn-handheld" class="gs-btn gs-btn--ghost" title="Integrate OF position on the ground so the drone can be moved ' +
+        'by hand (modes 0 and 2). Hold still when enabling: position is zeroed and the bias frozen. Firmware clears it in flight.">' +
+        '<span id="est-handheld-label">ENABLE</span></button>' + pill('est-handheld-state', '?')),
       '</div>',
 
-      /* ── EKF-OF health section ── */
-      '<div style="margin-bottom:12px;display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start">',
-      '  <div>',
-      '    <div style="font-size:11px;color:var(--muted);margin-bottom:4px">EKF-OF Health</div>',
-      '    <span id="est-ekf-of-health" class="ekf-filter ekf-filter-unknown">NOT PUBLISHED</span>',
-      '  </div>',
-      '  <div>',
-      '    <div style="font-size:11px;color:var(--muted);margin-bottom:4px">EKF Fallback</div>',
-      '    <span id="est-ekf-of-fallback" class="ekf-filter ekf-filter-unknown">NOT PUBLISHED</span>',
-      '  </div>',
+      /* ── EKF-OF health ── */
+      '<div class="gs-row est-group">',
+      control('EKF-OF Health', pill('est-ekf-of-health', 'NOT PUBLISHED')),
+      control('EKF Fallback', pill('est-ekf-of-fallback', 'NOT PUBLISHED')),
       '</div>',
 
       /* ── Bias estimates for all three modes ── */
-      '<div class="ekf-section-title">OF Bias Estimates (all modes, display only)</div>',
-      '<div style="margin-bottom:12px">',
-      '  <div style="font-size:11px;color:var(--muted);margin-bottom:6px">',
-      '    Current bias s_of_bias_x/y — active in Modes 0 (FIXED) and 1 (EMA).',
-      '    Not streamed in DASHBOARD_FRAME_A layout — shows NOT PUBLISHED if not received.',
-      '  </div>',
-      '  <div style="display:flex;gap:8px">',
-      '    <div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:54px">',
-      '      <span style="font-size:10px;color:var(--muted)">bias_x (raw)</span>',
-      '      <span id="est-bias-x" style="font-family:Consolas,monospace;font-size:13px;color:var(--amber)">NOT PUBLISHED</span>',
-      '    </div>',
-      '    <div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:54px">',
-      '      <span style="font-size:10px;color:var(--muted)">bias_y (raw)</span>',
-      '      <span id="est-bias-y" style="font-family:Consolas,monospace;font-size:13px;color:var(--amber)">NOT PUBLISHED</span>',
-      '    </div>',
-      '  </div>',
-      '</div>',
+      '<div class="gs-section-title">OF Bias Estimates (all modes, display only)</div>',
+      '<div class="est-group"><div class="gs-label">Current bias s_of_bias_x/y — active in Modes 0 (FIXED) and 1 (EMA). ',
+      'Not streamed in DASHBOARD_FRAME_A layout — shows NOT PUBLISHED if not received.</div>',
+      '<div class="gs-metrics">',
+      metric('bias_x (raw)', 'est-bias-x', 'NOT PUBLISHED', 'gs-value--np'),
+      metric('bias_y (raw)', 'est-bias-y', 'NOT PUBLISHED', 'gs-value--np'),
+      '</div></div>',
 
       /* ── 9-state body EKF section (shadow mode) ── */
-      '<div class="ekf-section-title">9-State Body EKF (s_ekf — shadow display only)</div>',
-
-      /* Filter status */
-      '<div id="ekf-filter-wrap" style="margin-bottom:12px;display:flex;align-items:center;gap:10px">',
-      '  <div>',
-      '    <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Filter Status</div>',
-      '    <span id="ekf-filter-status" class="ekf-filter ekf-filter-unknown">' + NOT_PUBLISHED_HINT + '</span>',
-      '  </div>',
-      '</div>',
+      '<div class="gs-section-title">9-State Body EKF (s_ekf — shadow display only)</div>',
+      '<div id="ekf-filter-wrap" class="gs-row est-group">', control('Filter Status', pill('ekf-filter-status', NOT_PUBLISHED_HINT)), '</div>',
 
       /* Honest disclaimer */
-      '<div id="ekf-disclaimer" class="ekf-disclaimer">',
+      '<div id="ekf-disclaimer" class="gs-note est-group">',
       '  ⚠ <strong>EKF telemetry not received yet</strong> — the firmware publishes ',
       '  <code>s_ekf</code> in slot 0; below is RAW IMU telemetry (gyro, accel, baro alt) ',
       '  until those frames arrive. Fields marked <code>n/p</code> are not published by this build.',
       '</div>',
 
       '<div id="ekf-ekf-section">',
-      '  <div class="ekf-section-title">Body EKF State (s_ekf, mode 2 = EKF is ACTIVE)</div>',
+      '  <div class="gs-section-title">Body EKF State (s_ekf, mode 2 = EKF is ACTIVE)</div>',
       ekfHTML,
       '</div>',
 
       /* Raw IMU section */
-      '<div class="ekf-section-title">Raw IMU (proxy until EKF available)</div>',
+      '<div class="gs-section-title">Raw IMU (proxy until EKF available)</div>',
       rawHTML,
 
       /* Covariance */
-      '<div style="margin-bottom:12px">',
-      '  <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Covariance — <em>' + NOT_PUBLISHED_HINT + ' — no covariance telemetry is streamed in this build</em></div>',
-      '  <div style="display:flex;gap:8px;flex-wrap:wrap">', covCells, '</div>',
-      '</div>',
+      '<div class="est-group"><div class="gs-label">Covariance — <em>' + NOT_PUBLISHED_HINT +
+      ' — no covariance telemetry is streamed in this build</em></div>',
+      '<div class="gs-metrics">', covCells, '</div></div>',
     ].join('');
   }
 
@@ -361,18 +269,31 @@
   var _freezeState = null;
   var _handheldState = null;    /* last known freeze from telemetry */
 
-  /* Expose mode/tau/freeze send functions on window so onclick="" works */
+  /* ── Commands: every outcome is shown in #est-error (and a toast on failure), never only in the console ── */
+  function showCmdError(text) {
+    var el = q('est-error');
+    if (!el) return;
+    el.textContent = text;
+    el.style.display = text ? 'block' : 'none';
+  }
+  function sendCmd(what, fn) {
+    fn().then(function (res) {
+      if (res && res.error) throw new Error(res.error);
+      showCmdError('');
+    }).catch(function (e) { showCmdError(UI ? UI.report(what, e) : what + ': ' + e.message); });
+  }
+
+  /* Exposed on window: the harness and the agent drive these; the buttons are bound at render */
   window._estSetMode = function (mode) {
     if (!_api) return;
     var arm = typeof _api.getArmState === 'function' ? _api.getArmState() : 'unknown';
     if (arm !== 'disarmed') {
-      console.warn('Estimator mode switch rejected: arm state is ' + arm);
+      showCmdError('mode switch not sent: arm state is ' + (typeof arm === 'string' ? arm : 'unknown'));
       return;
     }
-    var fn = typeof _api.gatedCommand === 'function'
+    sendCmd('mode switch', typeof _api.gatedCommand === 'function'
       ? function () { return _api.gatedCommand(CMD_ESTIMATOR, 0, mode, ['disarmed']); }
-      : function () { return _api.submitCommand(CMD_ESTIMATOR, 0, mode); };
-    fn().catch(function (e) { console.error('mode switch rejected:', e); });
+      : function () { return _api.submitCommand(CMD_ESTIMATOR, 0, mode); });
   };
 
   window._estSetTau = function () {
@@ -383,118 +304,97 @@
     if (isNaN(tau) || tau < 1) tau = 1;
     if (tau > 300) tau = 300;
     el.value = tau;
-    var fn = typeof _api.submitCommand === 'function'
-      ? function () { return _api.submitCommand(CMD_ESTIMATOR, 2, tau); }
-      : null;
-    if (fn) fn().catch(function (e) { console.error('tau set rejected:', e); });
+    if (typeof _api.submitCommand === 'function') {
+      sendCmd('tau set', function () { return _api.submitCommand(CMD_ESTIMATOR, 2, tau); });
+    }
   };
 
   window._estToggleFreeze = function () {
     if (!_api) return;
     var newFreeze = (_freezeState === 1) ? 0 : 1;
-    var fn = typeof _api.submitCommand === 'function'
-      ? function () { return _api.submitCommand(CMD_ESTIMATOR, 1, newFreeze); }
-      : null;
-    if (fn) fn().catch(function (e) { console.error('freeze toggle rejected:', e); });
+    if (typeof _api.submitCommand === 'function') {
+      sendCmd('freeze toggle', function () { return _api.submitCommand(CMD_ESTIMATOR, 1, newFreeze); });
+    }
   };
 
   window._estToggleHandheld = function () {
     if (!_api) return;
     var v = (_handheldState === 1) ? 0 : 1;
-    var fn = typeof _api.submitCommand === 'function'
-      ? function () { return _api.submitCommand(CMD_ESTIMATOR, 3, v); }
-      : null;
-    if (fn) fn().catch(function (e) { console.error('handheld toggle rejected:', e); });
+    if (typeof _api.submitCommand === 'function') {
+      sendCmd('handheld toggle', function () { return _api.submitCommand(CMD_ESTIMATOR, 3, v); });
+    }
   };
+
+  function bindControls() {
+    var binds = {
+      'est-btn-fixed': function () { window._estSetMode(0); },
+      'est-btn-ema': function () { window._estSetMode(1); },
+      'est-btn-ekf': function () { window._estSetMode(2); },
+      'est-btn-tau': function () { window._estSetTau(); },
+      'est-btn-freeze': function () { window._estToggleFreeze(); },
+      'est-btn-handheld': function () { window._estToggleHandheld(); }
+    };
+    Object.keys(binds).forEach(function (id) {
+      var el = q(id);
+      if (el && typeof el.addEventListener === 'function') el.addEventListener('click', binds[id]);
+    });
+  }
 
   /* ── Render helpers ─────────────────────────────────────────────────── */
   function updateModeButtons(mode, armState) {
-    var disabled = (armState !== 'disarmed');
-    var armWarn = q('est-arm-warn');
-    var unkWarn = q('est-unknown-warn');
-    if (armWarn) armWarn.style.display = (armState === 'armed') ? '' : 'none';
-    if (unkWarn) unkWarn.style.display = (armState === 'unknown') ? '' : 'none';
+    /* the shell returns null while the arm state is unknown: fail closed and say so */
+    if (armState !== 'armed' && armState !== 'disarmed') armState = 'unknown';
+    var reason = armState === 'armed' ? 'Mode switch requires drone to be DISARMED'
+      : (armState === 'unknown' ? 'Arm state unknown — mode switch disabled (fail-closed)' : '');
 
     var names = ['fixed', 'ema', 'ekf'];
-    var labels = ['FIXED (0)', 'EMA (1)', 'EKF (2)'];
     for (var i = 0; i < names.length; i++) {
       var btn = q('est-btn-' + names[i]);
       if (!btn) continue;
-      btn.disabled = disabled;
-      btn.className = 'est-mode-btn' + (mode === i ? ' active' : '');
+      UI.setDisabled(btn, reason);
+      btn.className = 'gs-btn' + (mode === i ? ' is-active' : '');
     }
+    var why = q('est-mode-reason');
+    if (why) why.textContent = reason;
     var rb = q('est-mode-readback');
     if (rb) {
-      if (mode === null) { rb.textContent = 'NOT PUBLISHED'; rb.style.color = 'var(--amber)'; }
-      else { rb.textContent = ['FIXED', 'EMA', 'EKF'][mode] || ('Mode ' + mode); rb.style.color = ''; }
+      if (mode === null) setValue(rb, 'NOT PUBLISHED', 'gs-value--np');
+      else setValue(rb, ['FIXED', 'EMA', 'EKF'][mode] || ('Mode ' + mode), '');
     }
   }
 
   function updateFreezeState(freeze) {
     _freezeState = freeze;
     var lbl = q('est-freeze-label');
-    var st  = q('est-freeze-state');
-    if (freeze === null) {
-      if (lbl) lbl.textContent = 'FREEZE';
-      if (st)  { st.textContent = 'NOT PUBLISHED'; st.className = 'est-health-unk'; }
-    } else if (freeze === 1) {
-      if (lbl) lbl.textContent = 'UNFREEZE';
-      if (st)  { st.textContent = 'FROZEN'; st.className = 'est-health-bad'; }
-    } else {
-      if (lbl) lbl.textContent = 'FREEZE';
-      if (st)  { st.textContent = 'RUNNING'; st.className = 'est-health-ok'; }
-    }
+    if (lbl) lbl.textContent = freeze === 1 ? 'UNFREEZE' : 'FREEZE';
+    UI.setPill(q('est-freeze-state'), freeze === null ? 'stale' : (freeze === 1 ? 'warn' : 'ok'),
+      freeze === null ? 'NOT PUBLISHED' : (freeze === 1 ? 'FROZEN' : 'RUNNING'));
   }
 
   function updateHandheldState(h) {
     _handheldState = h;
     var lbl = q('est-handheld-label');
-    var st  = q('est-handheld-state');
-    if (h === null) {
-      if (lbl) lbl.textContent = 'ENABLE';
-      if (st)  { st.textContent = 'NOT PUBLISHED'; st.className = 'est-health-unk'; }
-    } else if (h === 1) {
-      if (lbl) lbl.textContent = 'DISABLE';
-      if (st)  { st.textContent = 'ACTIVE'; st.className = 'est-health-bad'; }
-    } else {
-      if (lbl) lbl.textContent = 'ENABLE';
-      if (st)  { st.textContent = 'OFF'; st.className = 'est-health-ok'; }
-    }
+    if (lbl) lbl.textContent = h === 1 ? 'DISABLE' : 'ENABLE';
+    UI.setPill(q('est-handheld-state'), h === null ? 'stale' : (h === 1 ? 'warn' : 'ok'),
+      h === null ? 'NOT PUBLISHED' : (h === 1 ? 'ACTIVE' : 'OFF'));
   }
 
   function updateTauReadback(tau) {
     var el = q('est-tau-readback');
-    if (!el) return;
-    if (tau === null) { el.textContent = 'NOT PUBLISHED'; el.style.color = 'var(--amber)'; }
-    else              { el.textContent = parseFloat(tau).toFixed(1); el.style.color = ''; }
+    if (tau === null) setValue(el, 'NOT PUBLISHED', 'gs-value--np');
+    else setValue(el, parseFloat(tau).toFixed(1), '');
   }
 
   function updateEkfOfHealth(health, fallback) {
-    var hEl = q('est-ekf-of-health');
-    var fEl = q('est-ekf-of-fallback');
-    if (hEl) {
-      if (health === null) {
-        hEl.textContent = 'NOT PUBLISHED'; hEl.className = 'ekf-filter ekf-filter-unknown';
-      } else if (health >= 0.5) {
-        hEl.textContent = '✓ HEALTHY'; hEl.className = 'ekf-filter ekf-filter-ok';
-      } else {
-        hEl.textContent = '✗ DIVERGED'; hEl.className = 'ekf-filter ekf-filter-err';
-      }
-    }
-    if (fEl) {
-      if (fallback === null) {
-        fEl.textContent = 'NOT PUBLISHED'; fEl.className = 'ekf-filter ekf-filter-unknown';
-      } else if (fallback >= 0.5) {
-        fEl.textContent = '⚠ FELL BACK TO FIXED'; fEl.className = 'ekf-filter ekf-filter-warn';
-      } else {
-        fEl.textContent = '— none'; fEl.className = 'ekf-filter ekf-filter-ok';
-      }
-    }
+    UI.setPill(q('est-ekf-of-health'), health === null ? 'stale' : (health >= 0.5 ? 'ok' : 'fail'),
+      health === null ? 'NOT PUBLISHED' : (health >= 0.5 ? '✓ HEALTHY' : '✗ DIVERGED'));
+    UI.setPill(q('est-ekf-of-fallback'), fallback === null ? 'stale' : (fallback >= 0.5 ? 'warn' : 'ok'),
+      fallback === null ? 'NOT PUBLISHED' : (fallback >= 0.5 ? '⚠ FELL BACK TO FIXED' : '— none'));
   }
 
-  function ageColor(ageMs) {
-    if (ageMs > 30000) return 'var(--muted)';
-    if (ageMs > 2000)  return 'var(--amber)';
+  function ageMod(ageMs) {
+    if (ageMs > 30000) return 'gs-value--muted';
+    if (ageMs > 2000)  return 'gs-value--warn';
     return '';
   }
 
@@ -503,17 +403,14 @@
     var seen = _keyLastSeen[key];
     if (v != null) {
       _keyLastSeen[key] = now;
-      el.textContent = fmtNum(v, 4);
-      el.style.color = '';
+      setValue(el, fmtNum(v, 4), '');
     } else if (seen) {
       var age = now - seen;
-      el.textContent = age > 30000
+      setValue(el, age > 30000
         ? 'NO DATA (stale ' + (age / 1000).toFixed(0) + 's)'
-        : 'STALE (' + (age / 1000).toFixed(1) + 's)';
-      el.style.color = ageColor(age);
+        : 'STALE (' + (age / 1000).toFixed(1) + 's)', ageMod(age));
     } else {
-      el.textContent = 'NOT PUBLISHED';
-      el.style.color = 'var(--amber)';
+      setValue(el, 'NOT PUBLISHED', 'gs-value--np');
     }
   }
 
@@ -576,24 +473,17 @@
     /* fallback to legacy frame keys */
     if (biasX == null && values) biasX = slotLookup(values, 's_of_bias_x');
     if (biasY == null && values) biasY = slotLookup(values, 's_of_bias_y');
-    var bxEl = q('est-bias-x');
-    var byEl = q('est-bias-y');
-    if (biasX != null && bxEl) { bxEl.textContent = fmtNum(biasX, 2); bxEl.style.color = ''; anyUpdate = true; }
-    if (biasY != null && byEl) { byEl.textContent = fmtNum(biasY, 2); byEl.style.color = ''; anyUpdate = true; }
+    if (biasX != null) { setValue(q('est-bias-x'), fmtNum(biasX, 2), ''); anyUpdate = true; }
+    if (biasY != null) { setValue(q('est-bias-y'), fmtNum(biasY, 2), ''); anyUpdate = true; }
 
     /* EKF groups */
     EKF_GROUPS.forEach(function (g) {
       g.axisLabels.forEach(function (al, ai) {
         var k = g.keys[ai];
         var el = q('ekf-' + k.replace(/\./g, '-'));
-        if (g.unpublished) {
-          if (el) { el.textContent = NOT_PUBLISHED; el.style.color = 'var(--amber)'; }
-          return;
-        }
+        if (g.unpublished) { setValue(el, NOT_PUBLISHED, 'gs-value--np'); return; }
         if (!el) return;
-        if (!streamReceived) {
-          el.textContent = 'AWAITING DATA'; el.style.color = 'var(--muted)'; return;
-        }
+        if (!streamReceived) { setValue(el, 'AWAITING DATA', 'gs-value--muted'); return; }
         var v = values ? slotLookup(values, k) : null;
         if (v != null) { ekfAvailable = true; anyUpdate = true; }
         renderValue(el, v, k, now);
@@ -607,12 +497,9 @@
     RAW_GROUPS.forEach(function (g) {
       g.axisLabels.forEach(function (al, ai) {
         var slot0Key = g.keys[ai];
-        var idKey = 'raw-' + slot0Key.replace(/\./g, '-');
-        var el = q(idKey);
+        var el = q('raw-' + slot0Key.replace(/\./g, '-'));
         if (!el) return;
-        if (!streamReceived) {
-          el.textContent = 'AWAITING DATA'; el.style.color = 'var(--muted)'; return;
-        }
+        if (!streamReceived) { setValue(el, 'AWAITING DATA', 'gs-value--muted'); return; }
         var v = getValue(values, [slot0Key], g.fallback);
         if (v != null && g.scale) v = Number(v) * g.scale;
         if (v != null) anyUpdate = true;
@@ -623,34 +510,18 @@
     /* Covariance */
     COV_KEYS.forEach(function (k) {
       var v = values ? slotLookup(values, k) : null;
-      var el = q('cov-' + k.replace(/\./g, '-'));
-      if (el) {
-        el.textContent = (v != null) ? fmtCov(v) : NOT_PUBLISHED;
-        el.style.color = (v != null) ? '' : 'var(--amber)';
-        if (v != null) anyUpdate = true;
-      }
+      setValue(q('cov-' + k.replace(/\./g, '-')), (v != null) ? fmtCov(v) : NOT_PUBLISHED, (v != null) ? '' : 'gs-value--np');
+      if (v != null) anyUpdate = true;
     });
 
-    /* Filter status */
-    var fsEl = q('ekf-filter-status');
-    if (fsEl) {
-      var fsVal = values ? slotLookup(values, 'estimator.filter_status') : null;
-      if (fsVal != null) {
-        var label = FILTER_STATUS_LABELS[Math.floor(fsVal)] || ('Status ' + fsVal);
-        if (fsVal === 1) {
-          fsEl.textContent = label; fsEl.className = 'ekf-filter ekf-filter-ok';
-        } else if (fsVal === 2) {
-          fsEl.textContent = label; fsEl.className = 'ekf-filter ekf-filter-warn';
-        } else if (fsVal === 3) {
-          fsEl.textContent = label; fsEl.className = 'ekf-filter ekf-filter-err';
-        } else {
-          fsEl.textContent = label; fsEl.className = 'ekf-filter ekf-filter-unknown';
-        }
-        anyUpdate = true;
-      } else {
-        fsEl.textContent = NOT_PUBLISHED_HINT;
-        fsEl.className = 'ekf-filter ekf-filter-unknown';
-      }
+    /* Filter status: 1 Active ok, 2 Degraded warn, 3 Failed fail, anything else stale */
+    var fsVal = values ? slotLookup(values, 'estimator.filter_status') : null;
+    if (fsVal != null) {
+      UI.setPill(q('ekf-filter-status'), ({ 1: 'ok', 2: 'warn', 3: 'fail' })[fsVal] || 'stale',
+        FILTER_STATUS_LABELS[Math.floor(fsVal)] || ('Status ' + fsVal));
+      anyUpdate = true;
+    } else {
+      UI.setPill(q('ekf-filter-status'), 'stale', NOT_PUBLISHED_HINT);
     }
 
     if (anyUpdate) _hasData = true;
@@ -678,9 +549,11 @@
 
   /* ── Export ──────────────────────────────────────────────────────────── */
   window.__PLUGIN_INIT__ = function (api) {
+    UI = window.GSUI;
     _api = api;
     api.registerPanel('EKF Estimator', function (container) {
       container.innerHTML = buildHTML();
+      bindControls();
       renderEstimator();
       api.subscribe(onState);
       if (_tickTimer == null) {

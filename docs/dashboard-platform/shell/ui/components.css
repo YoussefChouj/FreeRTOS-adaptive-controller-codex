@@ -1,0 +1,127 @@
+/* Shared components (WP-35). Values come from tokens.css only. ui-kit.js (window.GSUI) emits this markup.
+ * Status modifiers everywhere: --ok --warn --fail --stale --info (see the scale in tokens.css). */
+
+/* ── status pill ── */
+.gs-pill {
+  display: inline-flex; align-items: center; gap: var(--gs-space-1);
+  padding: 1px var(--gs-space-2); border-radius: var(--gs-radius-pill);
+  font-size: var(--gs-text-sm); font-weight: var(--gs-weight-bold); white-space: nowrap;
+  background: var(--gs-stale-bg); color: var(--gs-stale);
+}
+.gs-pill::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.gs-pill--ok { background: var(--gs-ok-bg); color: var(--gs-ok); }
+.gs-pill--warn { background: var(--gs-warn-bg); color: var(--gs-warn); }
+.gs-pill--fail { background: var(--gs-fail-bg); color: var(--gs-fail); }
+.gs-pill--stale { background: var(--gs-stale-bg); color: var(--gs-stale); }
+.gs-pill--info { background: var(--gs-info-bg); color: var(--gs-info); }
+
+/* ── buttons ── */
+.gs-btn {
+  font: inherit; font-size: var(--gs-text-md); font-weight: 600;
+  padding: var(--gs-space-1) var(--gs-space-3); border-radius: var(--gs-radius-md);
+  border: 1px solid var(--gs-border); background: var(--gs-surface-2); color: var(--gs-text); cursor: pointer;
+}
+.gs-btn:hover:not(:disabled) { border-color: var(--gs-focus); }
+.gs-btn:focus-visible { outline: 2px solid var(--gs-focus); outline-offset: 1px; }
+.gs-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.gs-btn--primary { background: var(--gs-primary); }
+.gs-btn--ok { background: var(--gs-ok); border-color: var(--gs-ok); color: var(--gs-text-on-status); }
+.gs-btn--warn { background: var(--gs-warn); border-color: var(--gs-warn); color: var(--gs-text-on-status); }
+.gs-btn--danger { background: var(--gs-fail); border-color: var(--gs-fail); color: var(--gs-text-on-status); }
+.gs-btn--ghost { background: transparent; color: var(--gs-text-muted); }
+.gs-btn--big { font-size: var(--gs-text-lg); font-weight: var(--gs-weight-bold); padding: var(--gs-space-2) var(--gs-space-5); }
+.gs-btn.is-active { background: var(--gs-primary); border-color: var(--gs-focus); color: var(--gs-text); }
+/* two-click confirm: first click arms the button, a second click inside the window runs the action */
+.gs-btn.is-armed { background: var(--gs-warn); border-color: var(--gs-warn); color: var(--gs-text-on-status); animation: gs-pulse 0.9s infinite; }
+@keyframes gs-pulse { 50% { opacity: 0.65; } }
+.gs-kbd {
+  display: inline-block; margin-left: var(--gs-space-1); padding: 0 4px; border: 1px solid currentColor;
+  border-radius: var(--gs-radius-sm); font-family: var(--gs-font-mono); font-size: var(--gs-text-xs); opacity: 0.8;
+}
+/* why a control is disabled; always next to the control, never only in a tooltip */
+.gs-reason { font-size: var(--gs-text-sm); color: var(--gs-warn); }
+.gs-reason:empty { display: none; }
+
+/* ── banner, in-panel error, section title, metric cell ── */
+.gs-banner {
+  padding: var(--gs-space-2) var(--gs-space-3); border-radius: var(--gs-radius-md);
+  color: var(--gs-text-on-status); font-weight: var(--gs-weight-bold); font-size: var(--gs-text-lg);
+  background: var(--gs-stale);
+}
+.gs-error {
+  padding: var(--gs-space-1) var(--gs-space-2); border-radius: var(--gs-radius-sm);
+  border: 1px solid var(--gs-fail); background: var(--gs-fail-bg); color: var(--gs-fail);
+  font-size: var(--gs-text-sm); white-space: pre-wrap;
+}
+.gs-note {
+  padding: var(--gs-space-1) var(--gs-space-2); border-radius: var(--gs-radius-sm);
+  border: 1px solid var(--gs-warn); background: var(--gs-warn-bg); color: var(--gs-warn);
+  font-size: var(--gs-text-sm); font-weight: 600;
+}
+.gs-section-title {
+  margin: var(--gs-space-3) 0 var(--gs-space-2); padding-bottom: var(--gs-space-1);
+  border-bottom: 1px solid var(--gs-border); color: var(--gs-text-muted);
+  font-size: var(--gs-text-xs); font-weight: var(--gs-weight-bold); letter-spacing: 0.06em; text-transform: uppercase;
+}
+.gs-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--gs-space-2); margin: var(--gs-space-1) 0; }
+.gs-label { font-size: var(--gs-text-sm); color: var(--gs-text-muted); }
+.gs-input {
+  font: inherit; font-size: var(--gs-text-md); padding: 3px var(--gs-space-2); border-radius: var(--gs-radius-sm);
+  border: 1px solid var(--gs-border); background: var(--gs-bg); color: var(--gs-text);
+}
+.gs-metrics { display: flex; flex-wrap: wrap; gap: var(--gs-space-2); }
+.gs-metric { display: flex; flex-direction: column; align-items: center; flex: 1; min-width: 54px; }
+.gs-metric__label { font-size: var(--gs-text-xs); color: var(--gs-text-muted); }
+.gs-metric__value { font-family: var(--gs-font-mono); font-size: var(--gs-text-md); color: var(--gs-text); }
+.gs-metric__unit { font-size: 9px; color: var(--gs-text-muted); }
+.gs-value--stale, .gs-metric__value.gs-value--stale { color: var(--gs-stale); }
+.gs-value--warn, .gs-metric__value.gs-value--warn { color: var(--gs-warn); }
+.gs-value--np, .gs-metric__value.gs-value--np { color: var(--gs-warn); }
+.gs-value--muted, .gs-metric__value.gs-value--muted { color: var(--gs-text-muted); }
+
+/* ── data table ── */
+.gs-table { width: 100%; border-collapse: collapse; font-size: var(--gs-text-md); }
+.gs-table th {
+  text-align: left; padding: var(--gs-space-1) var(--gs-space-2); color: var(--gs-text-muted);
+  font-size: var(--gs-text-sm); font-weight: 600; border-bottom: 1px solid var(--gs-border);
+}
+.gs-table td { padding: var(--gs-space-1) var(--gs-space-2); border-bottom: 1px solid var(--gs-border); vertical-align: top; }
+.gs-table tr.gs-row--fail td:first-child { box-shadow: inset 3px 0 0 var(--gs-fail); }
+.gs-table tr.gs-row--warn td:first-child { box-shadow: inset 3px 0 0 var(--gs-warn); }
+.gs-table tr.gs-row--ok td:first-child { box-shadow: inset 3px 0 0 var(--gs-ok); }
+
+/* ── empty state ── */
+.gs-empty { padding: var(--gs-space-3); text-align: center; color: var(--gs-text-muted); font-size: var(--gs-text-md); }
+.gs-empty__hint { display: block; margin-top: var(--gs-space-1); font-size: var(--gs-text-sm); }
+
+/* ── stale-data mark: age of the last frame ── */
+.gs-age { font-family: var(--gs-font-mono); font-size: var(--gs-text-xs); color: var(--gs-text-muted); white-space: nowrap; }
+.gs-age--ok { color: var(--gs-ok); }
+.gs-age--warn { color: var(--gs-warn); }
+.gs-age--stale, .gs-age--fail { color: var(--gs-fail); font-weight: var(--gs-weight-bold); }
+
+/* ── toasts (bottom right; the agent strip owns bottom centre) ── */
+#gs-toasts {
+  position: fixed; right: var(--gs-space-4); bottom: var(--gs-space-4); z-index: 9500;
+  display: flex; flex-direction: column; gap: var(--gs-space-2); max-width: 360px; pointer-events: none;
+}
+.gs-toast {
+  pointer-events: auto; padding: var(--gs-space-2) var(--gs-space-3); border-radius: var(--gs-radius-md);
+  background: var(--gs-surface); color: var(--gs-text); border-left: 4px solid var(--gs-info);
+  box-shadow: var(--gs-shadow); font-size: var(--gs-text-md);
+}
+.gs-toast--ok { border-left-color: var(--gs-ok); }
+.gs-toast--warn { border-left-color: var(--gs-warn); }
+.gs-toast--fail { border-left-color: var(--gs-fail); }
+
+/* ── flight strip (plugins/flight-strip.js): flight-critical state, visible on every workspace ── */
+#flight-strip {
+  flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: var(--gs-space-2);
+  padding: var(--gs-space-1) var(--gs-space-3); background: var(--gs-surface); border-bottom: 1px solid var(--gs-border);
+  font-size: var(--gs-text-sm);
+}
+#flight-strip .fs-item { display: inline-flex; align-items: center; gap: var(--gs-space-1); }
+#flight-strip .fs-key { color: var(--gs-text-muted); font-size: var(--gs-text-xs); letter-spacing: 0.04em; }
+#flight-strip .fs-campaign { flex: 1 1 200px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#flight-strip .fs-actions { display: inline-flex; align-items: center; gap: var(--gs-space-1); margin-left: auto; }
+#flight-strip .fs-actions .gs-btn { padding: 3px var(--gs-space-3); }

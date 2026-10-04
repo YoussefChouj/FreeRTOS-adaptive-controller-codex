@@ -108,8 +108,7 @@
     function renderControl() {
       var bar = document.createElement('div');
       bar.setAttribute('data-testid', 'agent-control-strip');
-      bar.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;align-items:center;'
-        + 'margin-bottom:8px;';
+      bar.className = 'gs-row';
       if (!control) {
         bar.textContent = 'Agent control: unavailable';
         container.appendChild(bar);
@@ -121,19 +120,27 @@
       label.textContent = 'Mode: ' + control.mode + ' · Tier-0 params: '
         + (full ? 'FULL' : 'partial (approval)')
         + (auto ? '' : ' — applies in autonomous mode only');
-      if (full && auto) label.style.cssText = 'color:#f5a524;font-weight:600;';
+      if (full && auto) label.className = 'gs-pill gs-pill--warn';
       var btn = document.createElement('button');
       btn.setAttribute('data-testid', 'tier0-access-toggle');
       var arming = !full && Date.now() < confirmFullUntil;
       btn.textContent = full ? 'Set partial access' : (arming ? 'Confirm grant full access?' : 'Grant full access');
+      btn.className = 'gs-btn' + (arming ? ' is-armed' : '');
       btn.disabled = control.mode === 'off';
+      btn.title = btn.disabled ? 'Disabled: agent mode is off' : '';
       btn.addEventListener('click', function () { onAccessClick(full); });
       bar.appendChild(label);
       bar.appendChild(btn);
+      if (btn.disabled) {
+        var why = document.createElement('span');
+        why.className = 'gs-reason';
+        why.textContent = 'agent mode is off';
+        bar.appendChild(why);
+      }
       if (arming) {
         var warn = document.createElement('div');
         warn.setAttribute('data-testid', 'tier0-access-confirm');
-        warn.style.cssText = 'flex-basis:100%;color:#f5a524;';
+        warn.className = 'gs-note';
         warn.textContent = 'FULL tier-0 access: in autonomous mode the agent writes flight-critical parameters '
           + '(PID, MRAC, mixer, safety limits, gyro LPF) and EKF-into-control changes without asking you, '
           + 'and may arm the drone. Click again within 5 s to confirm.';
@@ -143,7 +150,7 @@
       if (lastError) {
         var err = document.createElement('div');
         err.setAttribute('data-testid', 'approval-error');
-        err.style.cssText = 'color:#e94560;margin-bottom:6px;';
+        err.className = 'gs-error';
         err.textContent = lastError;
         container.appendChild(err);
       }
@@ -160,7 +167,7 @@
       if (!queue.length) {
         var none = document.createElement('div');
         none.textContent = 'No pending approvals.';
-        none.style.cssText = 'opacity:.5;';
+        none.className = 'gs-empty';
         container.appendChild(none);
         return;
       }
@@ -168,17 +175,20 @@
         var isOldest = i === 0;
         var row = document.createElement('div');
         row.setAttribute('data-testid', 'approval-item');
-        row.style.cssText = 'padding:8px;margin:6px 0;border:1px solid rgba(230,233,239,.15);'
-          + 'border-radius:6px;' + (isOldest ? '' : 'opacity:.55;');
+        row.className = 'gs-row';
+        row.style.cssText = 'padding:var(--gs-space-2);border:1px solid var(--gs-border);' +
+          'border-radius:var(--gs-radius-md);' + (isOldest ? '' : 'opacity:.55;');
         row.textContent = (isOldest ? '▶ ' : '') + (a.label || a.action || a.step_id)
           + ' — ' + (a.plan_id || '') + ':' + (a.step_id || '');
         container.appendChild(row);
         if (isOldest) {
           var app = document.createElement('button');
           app.textContent = 'Approve';
+          app.className = 'gs-btn gs-btn--ok';
           app.addEventListener('click', function () { decide(a, 'approved'); });
           var rej = document.createElement('button');
           rej.textContent = 'Reject';
+          rej.className = 'gs-btn';
           rej.addEventListener('click', function () { decide(a, 'rejected'); });
           var rowBtns = document.createElement('span');
           rowBtns.appendChild(app); rowBtns.appendChild(rej);

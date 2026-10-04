@@ -1,0 +1,100 @@
+/* Design tokens for the ground-station dashboard (WP-35). The one file that holds colour, spacing, type and
+ * radius values. Components (components.css) and plugins use var(--gs-*) only; no hex values elsewhere.
+ * Theme: <html data-theme="dark|light">, dark is the default (ui-kit.js GSUI.setTheme stores the choice).
+ *
+ * Status scale, used the same way everywhere (pill, banner, table row, stale mark, flight strip):
+ *   ok    green  value is live and inside its limits
+ *   warn  amber  act soon: degraded, armed, waiting for the operator
+ *   fail  red    act now: link lost, trip, failed check, refused command
+ *   stale grey   no fresh data: never received, frozen, or older than its freshness limit
+ *   info  blue   neutral activity: running, sending
+ */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  /* surfaces */
+  --gs-bg: #1a1a2e;
+  --gs-surface: #16213e;
+  --gs-surface-2: #1d2a4d;
+  --gs-primary: #0f3460;
+  --gs-border: #2a2a4a;
+  --gs-text: #e8e8e8;
+  --gs-text-muted: #8888aa;
+  --gs-text-on-status: #ffffff;
+  --gs-focus: #4ea8de;
+  --gs-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+
+  /* status scale: foreground and tinted background */
+  --gs-ok: #4ecca3;
+  --gs-warn: #f5a623;
+  --gs-fail: #e94560;
+  --gs-stale: #8888aa;
+  --gs-info: #4ea8de;
+  --gs-ok-bg: rgba(78, 204, 163, 0.15);
+  --gs-warn-bg: rgba(245, 166, 35, 0.15);
+  --gs-fail-bg: rgba(233, 69, 96, 0.15);
+  --gs-stale-bg: rgba(136, 136, 170, 0.12);
+  --gs-info-bg: rgba(78, 168, 222, 0.15);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --gs-bg: #f3f4f7;
+  --gs-surface: #ffffff;
+  --gs-surface-2: #e9ecf3;
+  --gs-primary: #c9d8f0;
+  --gs-border: #cfd4de;
+  --gs-text: #1c2230;
+  --gs-text-muted: #5b6475;
+  --gs-text-on-status: #ffffff;
+  --gs-focus: #1f6fb2;
+  --gs-shadow: 0 4px 16px rgba(20, 30, 50, 0.18);
+
+  --gs-ok: #13875f;
+  --gs-warn: #b86e00;
+  --gs-fail: #c42b45;
+  --gs-stale: #6d7385;
+  --gs-info: #1f6fb2;
+  --gs-ok-bg: rgba(19, 135, 95, 0.12);
+  --gs-warn-bg: rgba(184, 110, 0, 0.12);
+  --gs-fail-bg: rgba(196, 43, 69, 0.12);
+  --gs-stale-bg: rgba(109, 115, 133, 0.12);
+  --gs-info-bg: rgba(31, 111, 178, 0.12);
+}
+
+:root {
+  /* spacing (4 px grid) */
+  --gs-space-1: 4px;
+  --gs-space-2: 8px;
+  --gs-space-3: 12px;
+  --gs-space-4: 16px;
+  --gs-space-5: 24px;
+
+  /* type scale */
+  --gs-font: 'Segoe UI', system-ui, sans-serif;
+  --gs-font-mono: Consolas, 'Cascadia Mono', monospace;
+  --gs-text-xs: 10px;
+  --gs-text-sm: 11px;
+  --gs-text-md: 13px;
+  --gs-text-lg: 15px;
+  --gs-text-xl: 18px;
+  --gs-weight-bold: 700;
+
+  /* radius */
+  --gs-radius-sm: 3px;
+  --gs-radius-md: 6px;
+  --gs-radius-pill: 999px;
+
+  /* legacy names: plugins written before WP-35 use these; they follow the theme through the tokens */
+  --bg: var(--gs-bg);
+  --card: var(--gs-surface);
+  --accent: var(--gs-primary);
+  --text: var(--gs-text);
+  --muted: var(--gs-text-muted);
+  --red: var(--gs-fail);
+  --green: var(--gs-ok);
+  --amber: var(--gs-warn);
+  --border: var(--gs-border);
+  --panel: var(--gs-surface);
+  --fg: var(--gs-text);
+}

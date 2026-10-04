@@ -24,7 +24,9 @@ Follow these steps in order to execute an autonomous tuning campaign:
 8. **Open the Campaign panel** in the dashboard.
 9. **Set `allow_agent_arm`** to enable the agent to arm the drone.
 10. **Per-battery Go**: For each battery pack, complete the checklist and approve Go.
-11. **Pause / Land / Abort**: Use these controls during the campaign if a manual override is needed.
+11. **Pause / Land / Abort**: Use these controls during the campaign if a manual override is needed. They are in the
+    Campaign panel and on the flight strip at the top of every tab (single click). **P** pauses while a campaign runs,
+    unless the cursor is in a text field or the terminal. They are greyed out, with the reason shown, only when no run is active.
 12. **RC ch10 kill**: Use the RC hardware switch as the ultimate fallback kill.
 
 ## End Statuses and What to Do Next
