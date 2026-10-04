@@ -18,7 +18,11 @@ Older entries (2026-09-30 .. 2026-10-03, incl. the landing/OF-drift investigatio
    speed not measured yet). Plan and numbers: `docs/firmware-compiler-optimisation.md` on that branch.
 4. After the demo: bench-run branch `float-math` (cos/sin -> cosf/sinf on the stabilizer tick: Code -2,548 B,
    RO -284 B measured; speed not measured: compare hlth.stab_cpu_pct, loop_max_us). Doc `docs/firmware-float-math.md`.
-5. Improvement backlog (CEO inline, one item per commit): `.claude_state.md` last entry.
+5. After the demo: merge branch `static-etag` (dashboard static files answer 304 when unchanged; restart 8081).
+6. Operator decision, `USER/fault_capture.c` (fixes PROPOSED, bench props off): motors to zero first in the fault
+   handler (`docs/firmware-safety.md` "Fault in flight"), record built in place (MSP), record in an `UNINIT`
+   region so it survives the reset (`docs/firmware-stack-budget.md`). Rule 8c of the coding standard.
+7. Improvement backlog (CEO inline, one item per commit): `.claude_state.md` last entry.
 
 ## Do not
 - Do not arm, idle or spin motors outside an operator-opened battery session (AGENTS.md > Authorizations).
