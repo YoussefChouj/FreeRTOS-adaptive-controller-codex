@@ -15,8 +15,8 @@
 
 #include "mrac.h"
 
-/* Repeated from mrac.h for tools that index this file against another tree's headers (gate clang-tidy). */
-extern uint16_t mrac_var_id[AXES];
+/* Repeated from mrac.h for tools that index this file against another tree's headers (gate clang-tidy).
+ * mrac_var_id is not repeated: WP-33 widened it to uint16_t, so a copy would clash with an older mrac.h. */
 uint8_t MRAC_VariantParamSet(uint8_t axis, uint8_t field, float val);
 
 _imu_st imu_data = {0.0f, 0.0f};
