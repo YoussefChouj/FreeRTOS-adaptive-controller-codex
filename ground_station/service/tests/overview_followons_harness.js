@@ -23,6 +23,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const assert = require('assert');
+const { preloadAlarms } = require('./ui_kit_loader');
 
 const PANEL = path.join(__dirname, '..', '..', '..',
   'docs', 'dashboard-platform', 'shell', 'plugins', 'overview-panel.js');
@@ -117,6 +118,7 @@ function loadPanel(withClock) {
     sandbox.pluginDestroy = destroy;
   };
   vm.createContext(sandbox);
+  preloadAlarms(sandbox);   // index.html loads ui/alarms.js (the alarm registry) before any plugin
   vm.runInContext(fs.readFileSync(PANEL, 'utf8'), sandbox, { filename: PANEL });
   sandbox.pluginInit(api);
   api.renderFn(container);
@@ -305,7 +307,7 @@ function runChecks() {
     assert.ok(byId.rc.d.indexOf('RC RECEIVER LINK LOST') !== -1);
     assert.strictEqual(byId.estimator.v, 'FAIL');
     assert.strictEqual(byId.faults.v, 'FAIL');
-    assert.ok(byId.faults.d.indexOf('RED:') === 0, 'faults row names the worst alarm');
+    assert.ok(byId.faults.d.indexOf('WARNING: RC RECEIVER LINK LOST') === 0, 'faults row names the worst alarm and its level');
     assert.strictEqual(byId.imu.v, 'PASS');
     assert.strictEqual(byId.attitude.v, 'PASS');
     assert.strictEqual(byId.link.v, 'PASS');
@@ -367,20 +369,22 @@ function runChecks() {
     const env = loadPanel();
     const doc = env.doc;
     const click = (el) => env.container.handlers['click'][0]({ target: el });
+    // ui/alarms.js debounces the battery rule over 3 samples; one snapshot object is one sample
+    const feedN = (make, n) => { for (let i = 0; i < n; i++) env.feed(make()); };
+    const lowState = () => { const s = flightReadyState(); s.streams['0'].values['status.vbat'] = 14.2; return s; };
+    const epRef = (i) => env.sandbox.GSAlarms.shared().log()[i].ref;
 
-    // Raise one red alarm (battery low), then clear it.
-    const low = flightReadyState();
-    low.streams['0'].values['status.vbat'] = 14.2;
-    env.feed(low);
+    // Raise one alarm (battery low, disarmed → CAUTION), then clear it.
+    feedN(lowState, 3);
     let hist = doc.getElementById('ov-hist-rows').innerHTML;
     assert.ok(hist.indexOf('RAISED') !== -1, 'raise must be logged');
     assert.ok(hist.indexOf('BATTERY LOW') !== -1, 'raise keeps the alarm text');
     assert.ok(/\d{2}:\d{2}:\d{2}/.test(hist), 'raise row carries a timestamp');
     assert.strictEqual((hist.match(/RAISED/g) || []).length, 1);
     assert.strictEqual((hist.match(/CLEARED/g) || []).length, 0, 'no clear yet');
-    console.log('  PASS: raised red alarm → history row "RAISED … BATTERY LOW" with hh:mm:ss timestamp');
+    console.log('  PASS: raised caution → history row "RAISED … BATTERY LOW" with hh:mm:ss timestamp');
 
-    env.feed(flightReadyState());   // battery back in range → clear
+    feedN(flightReadyState, 3);   // battery back in range → clear
     hist = doc.getElementById('ov-hist-rows').innerHTML;
     assert.strictEqual((hist.match(/RAISED/g) || []).length, 1);
     assert.strictEqual((hist.match(/CLEARED/g) || []).length, 1, 'clear must be logged');
@@ -391,21 +395,21 @@ function runChecks() {
       raisedTs[0] + ' (RAISED) and ' + raisedTs[1] + ' (CLEARED)');
 
     // ACKNOWLEDGE: stays in the log, visibly distinct, display-local.
-    const ackBtn = doc.getElementById('ov-ack-1');
+    const ackBtn = doc.getElementById('ov-ack-' + epRef(0));
     assert.ok(ackBtn, 'ack button exists for episode 1');
     click(ackBtn);
     hist = doc.getElementById('ov-hist-rows').innerHTML;
     assert.ok(hist.indexOf('BATTERY LOW') !== -1, 'acked alarm STAYS in the log');
     assert.ok(hist.indexOf('ov-hist-ep-acked') !== -1, 'acked episode is visibly distinct');
     assert.ok(hist.indexOf('>ACK<') !== -1, 'ACK tag shown');
-    assert.strictEqual(doc.getElementById('ov-ack-1').textContent, 'ACKED');
+    assert.strictEqual(doc.getElementById('ov-ack-' + epRef(0)).textContent, 'ACKED');
     console.log('  PASS: ACK → episode stays in log with ACK tag and ov-hist-ep-acked styling');
 
     // SILENCE: suppresses the banner nag, never the record; reversible.
-    env.feed(low);                   // re-raised → new episode (ref 2)
+    feedN(lowState, 3);              // re-raised → new episode
     assert.ok(doc.getElementById('ov-banner').textContent.indexOf('BATTERY LOW') !== -1,
       'banner shows the un-silenced alarm');
-    click(doc.getElementById('ov-sil-2'));
+    click(doc.getElementById('ov-sil-' + epRef(1)));
     assert.ok(doc.getElementById('ov-banner').textContent.indexOf('SILENCED BY OPERATOR') !== -1,
       'silenced alarm no longer drives the banner');
     assert.ok(doc.getElementById('ov-alarm-list').innerHTML.indexOf('[SILENCED]') !== -1,
@@ -414,7 +418,7 @@ function runChecks() {
     assert.strictEqual((hist.match(/RAISED/g) || []).length, 2,
       'the silenced alarm is STILL in the record');
     assert.ok(hist.indexOf('ov-hist-tag-sil') !== -1, 'silence tag on the episode');
-    click(doc.getElementById('ov-sil-2'));   // un-silence
+    click(doc.getElementById('ov-sil-' + epRef(1)));   // un-silence
     assert.ok(doc.getElementById('ov-banner').textContent.indexOf('BATTERY LOW') !== -1,
       'un-silencing restores the banner nag');
     console.log('  PASS: SILENCE → banner nag suppressed, record kept, reversible');
@@ -428,10 +432,12 @@ function runChecks() {
       .map((c) => c.replace(/^"|"$/g, '').replace(/""/g, '"'));
     const header = cells(lines[0]);
     assert.deepStrictEqual(header,
-      ['raised_at', 'cleared_at', 'id', 'severity', 'text_raised', 'text_last', 'acknowledged', 'silenced']);
+      ['raised_at', 'cleared_at', 'id', 'severity', 'text_raised', 'text_last', 'acknowledged', 'silenced',
+        'required_action']);
     const r1 = cells(lines[1]);
-    assert.strictEqual(r1[2], 'vbat-low');
-    assert.strictEqual(r1[3], 'red');
+    assert.strictEqual(r1[2], 'vbat-low-ground');
+    assert.strictEqual(r1[3], 'caution');
+    assert.strictEqual(r1[8], 'Swap the pack before the next flight', 'the log keeps the required action');
     assert.ok(r1[0].indexOf('T') !== -1, 'raised_at is an ISO timestamp');
     assert.ok(r1[1].length > 0, 'cleared_at set for the cleared episode');
     assert.strictEqual(r1[6], 'yes', 'episode 1 was acknowledged');

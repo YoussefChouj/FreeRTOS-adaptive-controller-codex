@@ -35,6 +35,12 @@
   --gs-fail-bg: rgba(233, 69, 96, 0.15);
   --gs-stale-bg: rgba(136, 136, 170, 0.12);
   --gs-info-bg: rgba(78, 168, 222, 0.15);
+
+  /* plots and lists: grid lines, the zero line, row hover, inset plot background */
+  --gs-grid: rgba(255, 255, 255, 0.08);
+  --gs-grid-strong: rgba(255, 255, 255, 0.22);
+  --gs-hover-bg: rgba(255, 255, 255, 0.06);
+  --gs-inset-bg: rgba(0, 0, 0, 0.25);
 }
 
 :root[data-theme="light"] {
@@ -60,6 +66,70 @@
   --gs-fail-bg: rgba(196, 43, 69, 0.12);
   --gs-stale-bg: rgba(109, 115, 133, 0.12);
   --gs-info-bg: rgba(31, 111, 178, 0.12);
+
+  --gs-grid: rgba(0, 0, 0, 0.08);
+  --gs-grid-strong: rgba(0, 0, 0, 0.25);
+  --gs-hover-bg: rgba(0, 0, 0, 0.05);
+  --gs-inset-bg: rgba(0, 0, 0, 0.04);
+}
+
+/* Instruments, plot traces and the 2D / 3D flight views look the same in both themes (WP-39): a horizon is blue
+ * over brown and the fly view keeps its dark scene. Canvas and WebGL code reads these through GSUI.tokenColor. */
+:root {
+  --gs-ai-sky: #4a7ba6;
+  --gs-ai-ground: #7a6a50;
+  --gs-ai-line: #ffffff;
+
+  /* plot traces, assigned in order (time series, path replay runs) */
+  --gs-trace-1: #ff5964;
+  --gs-trace-2: #35a7ff;
+  --gs-trace-3: #38b000;
+  --gs-trace-4: #4a9eff;
+  --gs-trace-5: #4ecca3;
+  --gs-trace-6: #f5a623;
+  --gs-trace-7: #e94560;
+  --gs-trace-8: #9b59b6;
+  --gs-trace-9: #ff9f1c;
+  --gs-trace-10: #2ec4b6;
+  --gs-trace-11: #4cc9f0;
+  --gs-trace-12: #f72585;
+
+  /* 2D / 3D flight views (plugins/path-panel.js) */
+  --gs-scene-bg: #0a0a1a;
+  --gs-scene-overlay: rgba(10, 10, 26, 0.85);
+  --gs-scene-grid: rgba(255, 255, 255, 0.2);
+  --gs-scene-label: rgba(255, 255, 255, 0.4);
+  --gs-scene-room: rgba(120, 140, 255, 0.55);
+  --gs-path-actual: #4a9eff;
+  --gs-path-actual-line: rgba(74, 158, 255, 0.6);
+  --gs-path-desired: #ffaa00;
+  --gs-path-desired-line: rgba(255, 170, 0, 0.85);
+  --gs-path-plan: #f5a623;
+  --gs-path-plan-line: rgba(245, 166, 35, 0.4);
+  --gs-path-waypoint: rgba(245, 166, 35, 0.8);
+  --gs-path-reached: rgba(78, 204, 163, 0.6);
+  --gs-path-in: #4ecca3;
+  --gs-path-out: #ff4040;
+  --gs-path-target: #e94560;
+  --gs-path-shadow: #8899bb;
+  --gs-path-room-edge: #6a8cff;
+  --gs-path-err-none: #738cbf;
+  --gs-path-err-ok: #33d973;
+  --gs-path-marker: #ffffff;
+  /* event markers and review-log runs */
+  --gs-event-adapt: #c77dff;
+  --gs-event-mode: #ffd166;
+  --gs-event-path: #4cc9f0;
+  --gs-event-note: #ffffff;
+  --gs-event-finding: #ff9f1c;
+  --gs-run-1: #4a9eff;
+  --gs-run-2: #ff9f43;
+  --gs-run-3: #c77dff;
+  --gs-run-4: #4ecca3;
+  --gs-run-5: #ff5c8a;
+  --gs-run-6: #f5e663;
+  --gs-run-7: #7bdff2;
+  --gs-run-8: #b8f2a0;
 }
 
 :root {

@@ -43,7 +43,10 @@
   var _bytesMeasurable = false; // true once >=2 bridge byte samples exist for an active slot
   var rafPending = false;
   var _apiRef = null;     // captured api ref for refresh actions
-  var _unsubscribedSlots = {}; // slot → boolean; tracks actively unsubscribed slots
+  var _unsubscribedSlots = {}; // slot → time (ns) this panel stopped it; hidden until fresh frames arrive
+  // frames still in flight after a stop must not re-show the slot; newer than this, it was subscribed again
+  // (Streams or Expert subscribe tab). PROPOSED value, not measured.
+  var RESUBSCRIBE_GRACE_NS = 2e9;
   var _tickTimer = null;
   // slot → { bytes, ts } — previous cumulative bytes_received for the rolling B/s
   var _prevBytes = {};
@@ -139,7 +142,7 @@
     var slots = Object.keys(streamStates);
     if (slots.length === 0) {
       svg.innerHTML = '<text x="' + (CHART_W / 2) + '" y="' + (CHART_H / 2) +
-        '" text-anchor="middle" fill="rgba(136,136,170,0.6)" font-size="11">No active streams</text>';
+        '" text-anchor="middle" style="fill:var(--gs-text-muted)" font-size="11">No active streams</text>';
       return;
     }
 
@@ -150,33 +153,33 @@
     var budgetY = PAD.top;
     var budgetW = innerW;
     svgContent += '<rect x="' + PAD.left + '" y="' + budgetY + '" width="' + budgetW +
-      '" height="' + budgetBarH + '" fill="rgba(255,255,255,0.05)" rx="3"/>';
+      '" height="' + budgetBarH + '" style="fill:var(--gs-hover-bg)" rx="3"/>';
 
     // Budget warning zones
     var warnX = PAD.left + budgetW * WARNING_THRESHOLD;
     var critX = PAD.left + budgetW * CRITICAL_THRESHOLD;
     svgContent += '<rect x="' + warnX + '" y="' + budgetY + '" width="' + (critX - warnX) +
-      '" height="' + budgetBarH + '" fill="rgba(245,166,35,0.2)" rx="0"/>';
+      '" height="' + budgetBarH + '" style="fill:var(--gs-warn-bg)" rx="0"/>';
     svgContent += '<rect x="' + critX + '" y="' + budgetY + '" width="' + (budgetW - (critX - PAD.left)) +
-      '" height="' + budgetBarH + '" fill="rgba(233,69,96,0.2)" rx="3"/>';
+      '" height="' + budgetBarH + '" style="fill:var(--gs-fail-bg)" rx="3"/>';
 
     // Budget markers
     svgContent += '<line x1="' + warnX + '" y1="' + (budgetY - 2) + '" x2="' + warnX + '" y2="' +
-      (budgetY + budgetBarH + 2) + '" stroke="rgba(245,166,35,0.6)" stroke-width="1" stroke-dasharray="2,2"/>';
+      (budgetY + budgetBarH + 2) + '" style="stroke:var(--gs-warn)" stroke-opacity="0.6" stroke-width="1" stroke-dasharray="2,2"/>';
     svgContent += '<line x1="' + critX + '" y1="' + (budgetY - 2) + '" x2="' + critX + '" y2="' +
-      (budgetY + budgetBarH + 2) + '" stroke="rgba(233,69,96,0.6)" stroke-width="1" stroke-dasharray="2,2"/>';
+      (budgetY + budgetBarH + 2) + '" style="stroke:var(--gs-fail)" stroke-opacity="0.6" stroke-width="1" stroke-dasharray="2,2"/>';
 
     // Used bandwidth bar
     var usedPct = Math.min(totalRate / MAX_BANDWIDTH_HZ, 1);
     var usedW = innerW * usedPct;
-    var usedColor = usedPct >= CRITICAL_THRESHOLD ? '#e94560' :
-      usedPct >= WARNING_THRESHOLD ? '#f5a623' : '#4ecca3';
+    var usedColor = usedPct >= CRITICAL_THRESHOLD ? 'var(--gs-fail)' :
+      usedPct >= WARNING_THRESHOLD ? 'var(--gs-warn)' : 'var(--gs-ok)';
     svgContent += '<rect x="' + PAD.left + '" y="' + budgetY + '" width="' + usedW +
-      '" height="' + budgetBarH + '" fill="' + usedColor + '" opacity="0.7" rx="3"/>';
+      '" height="' + budgetBarH + '" style="fill:' + usedColor + '" opacity="0.7" rx="3"/>';
 
     // Budget label
     svgContent += '<text x="' + (PAD.left + usedW / 2) + '" y="' + (budgetY + 12) +
-      '" text-anchor="middle" font-size="10" fill="#fff" font-weight="600" font-family="Segoe UI,sans-serif">' +
+      '" text-anchor="middle" font-size="10" style="fill:var(--gs-text)" font-weight="600" font-family="Segoe UI,sans-serif">' +
       totalRate.toFixed(1) + ' / ' + MAX_BANDWIDTH_HZ + ' Hz</text>';
 
     // Per-slot bars
@@ -192,13 +195,13 @@
       var barW = Math.max(2, (rate / MAX_BANDWIDTH_HZ) * innerW);
       var barY = barAreaY + i * (barH + barGap);
 
-      var barColor = (ss.loss_pct != null && ss.loss_pct > 5) ? '#e94560' :
-        ((ss.loss_pct != null && ss.loss_pct > 1) ? '#f5a623' : '#4a9eff');
+      var barColor = (ss.loss_pct != null && ss.loss_pct > 5) ? 'var(--gs-fail)' :
+        ((ss.loss_pct != null && ss.loss_pct > 1) ? 'var(--gs-warn)' : 'var(--gs-info)');
 
       svgContent += '<rect x="' + PAD.left + '" y="' + barY + '" width="' + barW +
-        '" height="' + barH + '" fill="' + barColor + '" opacity="0.6" rx="2"/>';
+        '" height="' + barH + '" style="fill:' + barColor + '" opacity="0.6" rx="2"/>';
       svgContent += '<text x="' + (PAD.left + barW + 4) + '" y="' + (barY + 10) +
-        '" font-size="9" fill="rgba(255,255,255,0.5)" font-family="Consolas,monospace">S' + slot + ': ' +
+        '" font-size="9" style="fill:var(--gs-text-muted)" font-family="Consolas,monospace">S' + slot + ': ' +
         rate.toFixed(1) + 'Hz</text>';
     });
 
@@ -207,7 +210,7 @@
     yLabels.forEach(function (val) {
       var yPx = barAreaY + (MAX_BANDWIDTH_HZ - val) * yScale;
       svgContent += '<text x="' + (PAD.left - 4) + '" y="' + (yPx + 4) +
-        '" text-anchor="end" font-size="9" fill="rgba(255,255,255,0.35)" font-family="Consolas,monospace">' +
+        '" text-anchor="end" font-size="9" style="fill:var(--gs-text-muted)" font-family="Consolas,monospace">' +
         val + '</text>';
     });
 
@@ -258,8 +261,8 @@
 
       var isSlot0 = String(slot) === '0';
       var actionCell = isSlot0 ?
-        '<td><button class="bw-remove-btn" data-slot="0" disabled title="Slot 0 is the protected boot layout (cannot be deleted)" style="background:rgba(255,255,255,0.05);border:none;color:var(--muted);padding:2px 6px;border-radius:3px;font-size:10px;cursor:not-allowed;opacity:0.4">🔒</button></td>' :
-        '<td><button class="bw-remove-btn" data-slot="' + slot + '" title="Unsubscribe slot ' + slot + '" style="background:rgba(233,69,96,0.2);border:none;color:var(--red);padding:2px 6px;border-radius:3px;font-size:10px;cursor:pointer">✕</button></td>';
+        '<td><button class="bw-remove-btn" data-slot="0" disabled title="Slot 0 is the protected boot layout (cannot be deleted)" style="background:var(--gs-hover-bg);border:none;color:var(--muted);padding:2px 6px;border-radius:3px;font-size:10px;cursor:not-allowed;opacity:0.4">🔒</button></td>' :
+        '<td><button class="bw-remove-btn" data-slot="' + slot + '" title="Unsubscribe slot ' + slot + '" style="background:var(--gs-fail-bg);border:none;color:var(--red);padding:2px 6px;border-radius:3px;font-size:10px;cursor:pointer">✕</button></td>';
 
       html += '<tr>' +
         '<td><input type="checkbox" id="bw-slot-' + slot + '" ' + (ss.enabled ? 'checked' : '') + ' style="accent-color:var(--green)"/></td>' +
@@ -277,7 +280,7 @@
     // Add total row
     var totalClass = totalRate >= MAX_BANDWIDTH_HZ * CRITICAL_THRESHOLD ? 'loss-critical' :
       totalRate >= MAX_BANDWIDTH_HZ * WARNING_THRESHOLD ? 'loss-warn' : '';
-    html += '<tr style="border-top:1px solid var(--border);background:rgba(255,255,255,0.02)">' +
+    html += '<tr style="border-top:1px solid var(--border);background:var(--gs-hover-bg)">' +
       '<td></td>' +
       '<td style="font-weight:600">TOTAL</td>' +
       '<td class="' + totalClass + '" style="font-family:Consolas,monospace;font-weight:600">' + totalRate.toFixed(2) + ' Hz</td>' +
@@ -338,7 +341,7 @@
         }
 
         p.then(function () {
-          _unsubscribedSlots[String(slot)] = true;
+          _unsubscribedSlots[String(slot)] = Date.now() * 1e6;   // ns, see RESUBSCRIBE_GRACE_NS
           delete streamStates[slot];
           delete _prevSample[slot];
           recalculateTotal();
@@ -404,30 +407,21 @@
       '<style>',
       '.bw-container { display:flex;flex-direction:column;gap:12px; }',
       '.bw-summary { display:flex;align-items:center;justify-content:space-between;padding:8px 12px;',
-      '  background:rgba(0,0,0,0.2);border-radius:6px; }',
+      '  background:var(--gs-inset-bg);border-radius:6px; }',
       '.bw-budget-bar { margin-top:8px; }',
-      '.bw-svg { display:block;width:100%;max-width:' + CHART_W + 'px;background:rgba(0,0,0,0.15);border-radius:6px; }',
-      '.bw-warning { font-size:12px;padding:8px 12px;border-radius:4px;background:rgba(245,166,35,0.1);',
+      '.bw-svg { display:block;width:100%;max-width:' + CHART_W + 'px;background:var(--gs-inset-bg);border-radius:6px; }',
+      '.bw-warning { font-size:12px;padding:8px 12px;border-radius:4px;background:var(--gs-warn-bg);',
       '  color:var(--amber);display:none; }',
       '.bw-table { width:100%;border-collapse:collapse;font-size:12px; }',
       '.bw-table th { text-align:left;font-size:10px;font-weight:600;color:var(--muted);',
       '  text-transform:uppercase;letter-spacing:0.06em;padding:4px 8px;',
       '  border-bottom:1px solid var(--border); }',
       '.bw-table td { padding:6px 8px; }',
-      '.bw-table tr:hover td { background:rgba(255,255,255,0.03); }',
+      '.bw-table tr:hover td { background:var(--gs-hover-bg); }',
       '.bw-actions { display:flex;gap:8px; }',
       '.bw-btn { padding:6px 12px;border:none;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer; }',
-      '.bw-btn-primary { background:var(--accent);color:var(--text); }',
-      '.bw-btn-primary:hover { opacity:0.85; }',
-      '.bw-btn-secondary { background:rgba(255,255,255,0.1);color:var(--text); }',
-      '.bw-btn-secondary:hover { background:rgba(255,255,255,0.15); }',
-      '.bw-request-form { display:none;margin-top:12px;padding:12px;background:rgba(0,0,0,0.2);',
-      '  border-radius:6px;border:1px solid var(--border); }',
-      '.bw-request-form.visible { display:block; }',
-      '.bw-request-form input { background:var(--bg);border:1px solid var(--border);color:var(--text);',
-      '  padding:4px 8px;border-radius:4px;font-size:12px;width:80px;margin-right:8px; }',
-      '.bw-request-form button { background:var(--green);border:none;color:var(--bg);padding:4px 12px;',
-      '  border-radius:4px;font-size:12px;font-weight:600;cursor:pointer; }',
+      '.bw-btn-secondary { background:var(--gs-surface-2);color:var(--text); }',
+      '.bw-btn-secondary:hover { filter:brightness(1.2); }',
       '.loss-warn { color:var(--amber); }',
       '.loss-critical { color:var(--red); }',
       '</style>',
@@ -449,25 +443,19 @@
       '    </div>',
       '    <div class="bw-actions">',
       '      <button id="bw-refresh-btn" class="bw-btn bw-btn-secondary">↻ Refresh</button>',
-      '      <button id="bw-request-btn" class="bw-btn bw-btn-primary">+ Request Slot</button>',
       '    </div>',
       '  </div>',
+      /* WP-39: this tab is link health only (rate, loss, budget, stop a slot). Its old "Request Slot" form sent a
+       * subscribe with no variable ranges, which the bridge refuses for slots 1-3 (wifi_bridge.py "requires explicit
+       * ranges"); subscribing lives in the Streams tab (presets) and Expert subscribe (DWARF ranges). */
+      '  <div class="gs-label">Link health only. To change what a slot carries use the <b>Streams</b> tab (presets, variables) ' +
+        'or <b>Expert subscribe</b> (DWARF ranges, rate ladder).</div>',
+      '  <div id="bw-request-result" class="gs-label" role="status"></div>',
 
       '  <div id="bw-budget-warning" class="bw-warning"></div>',
 
       '  <div class="bw-budget-bar">',
       '    <svg id="bw-chart-svg" class="bw-svg" viewBox="0 0 ' + CHART_W + ' ' + CHART_H + '"></svg>',
-      '  </div>',
-
-      '  <div class="bw-request-form" id="bw-request-form">',
-      '    <div style="font-size:11px;color:var(--muted);margin-bottom:8px">New Slot Request</div>',
-      '    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">',
-      '      <label style="font-size:11px;color:var(--text)">Rate (Hz): <input type="number" id="bw-new-rate" value="10" min="1" max="50" step="1"/></label>',
-      '      <label style="font-size:11px;color:var(--text)">Channel: <input type="number" id="bw-new-channel" value="1" min="1" max="3" step="1"/></label>',
-      '      <button id="bw-submit-request" style="background:var(--green);border:none;color:var(--bg);padding:4px 12px;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer">Submit</button>',
-      '      <button id="bw-cancel-request" style="background:rgba(255,255,255,0.1);border:none;color:var(--text);padding:4px 8px;border-radius:4px;font-size:12px;cursor:pointer">Cancel</button>',
-      '    </div>',
-      '    <div id="bw-request-result" style="margin-top:8px;font-size:11px;color:var(--muted)"></div>',
       '  </div>',
 
       '  <div>',
@@ -501,6 +489,11 @@
     _bytesMeasurable = false;
 
     Object.keys(state.streams).forEach(function (slot) {
+      var stoppedAt = _unsubscribedSlots[String(slot)];
+      // frames newer than the stop (plus in-flight grace) mean the slot was subscribed again elsewhere
+      if (stoppedAt && state.streams[slot] && state.streams[slot].last_update_ns > stoppedAt + RESUBSCRIBE_GRACE_NS) {
+        delete _unsubscribedSlots[String(slot)];
+      }
       if (_unsubscribedSlots[String(slot)]) return;
       var stream = state.streams[slot];
       var meta = readMeta(stream, slot);
@@ -572,22 +565,6 @@
   // ── Event bindings ──────────────────────────────────────────────────────
   function bindEvents(api) {
     _apiRef = api;
-    var requestBtn = q('bw-request-btn');
-    var requestForm = q('bw-request-form');
-    if (requestBtn && requestForm) {
-      requestBtn.addEventListener('click', function () {
-        requestForm.classList.add('visible');
-      });
-    }
-
-    var cancelBtn = q('bw-cancel-request');
-    if (cancelBtn && requestForm) {
-      cancelBtn.addEventListener('click', function () {
-        requestForm.classList.remove('visible');
-        q('bw-request-result').textContent = '';
-      });
-    }
-
     var refreshBtn = q('bw-refresh-btn');
     if (refreshBtn) {
       refreshBtn.addEventListener('click', function () {
@@ -602,46 +579,6 @@
             setTimeout(function () { if (hint) hint.textContent = ''; }, 1500);
           }
         }
-      });
-    }
-
-    var submitBtn = q('bw-submit-request');
-    if (submitBtn) {
-      submitBtn.addEventListener('click', function () {
-        var rate = parseFloat(q('bw-new-rate').value) || 10;
-        var channel = parseInt(q('bw-new-channel').value, 10) || 0;
-
-        var resultEl = q('bw-request-result');
-        resultEl.innerHTML = '<span style="color:var(--amber)">&#8987; Requesting slot…</span>';
-
-        // Translate UI inputs into a real subscribe request:
-        //   channel → slot id (1..3 are the typed-stream slots; the firmware
-        //     rejects 9..12 with "E:bad slot" since SUBSCRIBE_MAX_SLOTS = 4)
-        //   rate    → divider (Send_Task Hz ≈ 200, divider ≈ 200 / rate)
-        // Clamp to known slot range and divider bounds.
-        var slot = (channel >= 1 && channel <= 3) ? channel : 1;
-        delete _unsubscribedSlots[String(slot)];
-        var divider = Math.max(1, Math.min(255, Math.round(200 / rate)));
-        var apiRef = (typeof window !== 'undefined' && window.__gs_shell_api__) || null;
-        if (apiRef && typeof apiRef.subscribeSlot === 'function') {
-          apiRef.subscribeSlot(slot, divider, [])
-            .then(function (res) {
-              resultEl.innerHTML = '<span style="color:var(--green)">&#10003; Subscribed slot ' +
-                slot + ' divider=' + divider + ' via ' + escapeHtml(res && res.via ? res.via : '/subscribe') + '</span>';
-              if (typeof window.__gs_plugins_refresh__ === 'function') window.__gs_plugins_refresh__();
-            })
-            .catch(function (err) {
-              resultEl.innerHTML = '<span style="color:var(--red)">&#10007; Subscribe failed: ' +
-                escapeHtml(err && err.message ? err.message : err) + '</span>';
-            });
-        } else {
-          // Fallback: refresh local view even if /subscribe is unavailable.
-          resultEl.innerHTML = '<span style="color:var(--amber)">&#9888; subscribeSlot unavailable; refresh to see live data</span>';
-        }
-
-        setTimeout(function () {
-          requestForm.classList.remove('visible');
-        }, 1500);
       });
     }
   }

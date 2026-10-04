@@ -162,7 +162,7 @@
     // Check if we have enough samples
     if (sampleBuffer.length < FFT_SIZE) {
       svg.innerHTML = '<text x="' + (CHART_W / 2) + '" y="' + (CHART_H / 2) +
-        '" text-anchor="middle" fill="rgba(136,136,170,0.6)" font-size="12">' +
+        '" text-anchor="middle" style="fill:var(--gs-text-muted)" font-size="12">' +
         'Collecting samples… (' + sampleBuffer.length + '/' + FFT_SIZE + ')</text>';
       // Reset the peak readout so a stale peak from a previous variable
       // or window does not linger while the new buffer fills.
@@ -192,16 +192,16 @@
         var yPx = PAD.top + innerH * (1 - yPct);
         var dbVal = 0 - yPct * 60;  // 0 to -60 dB
         svgContent += '<line x1="' + PAD.left + '" y1="' + yPx + '" x2="' +
-          (CHART_W - PAD.right) + '" y2="' + yPx + '" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>';
+          (CHART_W - PAD.right) + '" y2="' + yPx + '" style="stroke:var(--gs-grid)" stroke-width="1"/>';
         svgContent += '<text x="' + (PAD.left - 4) + '" y="' + (yPx + 4) +
-          '" text-anchor="end" font-size="9" fill="rgba(255,255,255,0.35)" font-family="Consolas,monospace">' +
+          '" text-anchor="end" font-size="9" style="fill:var(--gs-text-muted)" font-family="Consolas,monospace">' +
           dbVal.toFixed(0) + 'dB</text>';
       }
 
       // Y=0 line (reference)
       var zeroY = PAD.top;
       svgContent += '<line x1="' + PAD.left + '" y1="' + zeroY + '" x2="' +
-        (CHART_W - PAD.right) + '" y2="' + zeroY + '" stroke="rgba(78,204,163,0.4)" stroke-width="1" stroke-dasharray="3,2"/>';
+        (CHART_W - PAD.right) + '" y2="' + zeroY + '" style="stroke:var(--gs-ok)" stroke-opacity="0.4" stroke-width="1" stroke-dasharray="3,2"/>';
 
       // Frequency resolution
       var freqResolution = SAMPLE_RATE_HZ / fftSize;
@@ -217,9 +217,9 @@
         var dbVal = mags.db[i + 1];  // Skip DC
         var barHeight = innerH * (1 - (dbVal / -60));
 
-        var barColor = i === peak.index - 1 ? '#e94560' : '#4a9eff';
+        var barColor = i === peak.index - 1 ? 'var(--gs-fail)' : 'var(--gs-info)';   // peak bin red
         svgContent += '<rect x="' + xPx + '" y="' + (PAD.top + innerH - barHeight) +
-          '" width="' + barWidth + '" height="' + barHeight + '" fill="' + barColor + '" opacity="0.7" rx="1"/>';
+          '" width="' + barWidth + '" height="' + barHeight + '" style="fill:' + barColor + '" opacity="0.7" rx="1"/>';
       }
 
       // Peak indicator
@@ -227,7 +227,7 @@
         var peakXPct = (peak.index - 1) / numBars;
         var peakXPx = PAD.left + innerW * peakXPct;
         svgContent += '<text x="' + peakXPx + '" y="' + (PAD.top - 2) +
-          '" text-anchor="middle" font-size="9" fill="#e94560" font-weight="600" font-family="Consolas,monospace">' +
+          '" text-anchor="middle" font-size="9" style="fill:var(--gs-fail)" font-weight="600" font-family="Consolas,monospace">' +
           peak.frequency.toFixed(1) + 'Hz</text>';
       }
 
@@ -237,17 +237,17 @@
         var xPct = freq / nyquist;
         var xPx = PAD.left + innerW * xPct;
         svgContent += '<text x="' + xPx + '" y="' + (CHART_H - 6) +
-          '" text-anchor="middle" font-size="9" fill="rgba(255,255,255,0.4)" font-family="Consolas,monospace">' +
+          '" text-anchor="middle" font-size="9" style="fill:var(--gs-text-muted)" font-family="Consolas,monospace">' +
           freq.toFixed(0) + 'Hz</text>';
       });
       svgContent += '<text x="' + (CHART_W / 2) + '" y="' + (CHART_H - 6) +
-        '" text-anchor="middle" font-size="9" fill="rgba(255,255,255,0.25)" font-family="Segoe UI,sans-serif">' +
+        '" text-anchor="middle" font-size="9" style="fill:var(--gs-text-muted)" fill-opacity="0.6" font-family="Segoe UI,sans-serif">' +
         'Frequency (fs=' + SAMPLE_RATE_HZ + 'Hz, N=' + fftSize + ')</text>';
 
       // Update peak info
       var peakInfo = q('fft-peak-info');
       if (peakInfo) {
-        peakInfo.innerHTML = 'Peak: <strong style="color:#e94560">' + peak.frequency.toFixed(1) + ' Hz</strong> | ' +
+        peakInfo.innerHTML = 'Peak: <strong style="color:var(--gs-fail)">' + peak.frequency.toFixed(1) + ' Hz</strong> | ' +
           'Mag: <strong>' + (20 * Math.log10(peak.magnitude + 1e-10)).toFixed(1) + ' dB</strong>';
       }
 
@@ -255,7 +255,7 @@
 
     } catch (e) {
       svg.innerHTML = '<text x="' + (CHART_W / 2) + '" y="' + (CHART_H / 2) +
-        '" text-anchor="middle" fill="#e94560" font-size="11">FFT Error: ' + e.message + '</text>';
+        '" text-anchor="middle" style="fill:var(--gs-fail)" font-size="11">FFT Error: ' + e.message + '</text>';
     }
   }
 
@@ -269,7 +269,7 @@
       '<style>',
       '.fft-container { display:flex;flex-direction:column;gap:12px; }',
       '.fft-controls { display:flex;align-items:center;gap:12px; }',
-      '.fft-svg { display:block;width:100%;max-width:' + CHART_W + 'px;background:rgba(0,0,0,0.2);border-radius:6px; }',
+      '.fft-svg { display:block;width:100%;max-width:' + CHART_W + 'px;background:var(--gs-inset-bg);border-radius:6px; }',
       '.fft-var-select { background:var(--bg);border:1px solid var(--border);color:var(--text);',
       '  padding:4px 8px;border-radius:4px;font-size:12px; }',
       '.fft-peak-info { font-size:12px;color:var(--muted);font-family:Consolas,monospace; }',

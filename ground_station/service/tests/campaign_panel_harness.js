@@ -1,7 +1,8 @@
 'use strict';
 /**
  * Offline verification harness for campaign-panel.js (checks a-l: Go/checklist/controls; m-r: WP-23 banner,
- * preflight table, pickers, in-panel errors, no window.confirm on workflow-B panels).
+ * preflight table, pickers, in-panel errors, no window.confirm on workflow-B panels; s: WP-39 preflight report with
+ * the firmware pre-arm mask as PREFLIGHT FAIL lines, red first, first cause on top).
  */
 const fs = require('fs');
 const path = require('path');
@@ -62,6 +63,7 @@ function makeApi() {
   const api = {
     panelName: '', renderFn: null, gatedCount: 0, submitCount: 0,
     registerPanel(name, renderFn) { api.panelName = name; api.renderFn = renderFn; },
+    getState() { return api.shellState || null; },
     gatedCommand() { api.gatedCount++; return Promise.resolve({ ok: true }); },
     submitCommand() { api.submitCount++; return Promise.resolve({ ok: true }); }
   };
@@ -109,6 +111,10 @@ async function runHarness() {
       if (url === '/api/campaign/list') return ctx._listFail ? reply(false, 503, { error: 'list down' }) : reply(true, 200, LIST);
       if (url.startsWith('/api/campaign/preflight?')) {
         return ctx._preflightFail ? reply(false, 500, { error: 'preflight failed: boom' }) : reply(true, 200, PREFLIGHT);
+      }
+      if (url === '/api/manifest') {
+        return ctx._manifestFail ? reply(false, 503, { error: 'capability manifest unavailable: x' })
+          : reply(true, 200, ctx._manifest || { firmware_symbols: { names: ['AHBPrescTable', 'g_tlm'] } });
       }
       if (url === '/api/agent/control') return reply(true, 200, { allow_agent_arm: false });
       if (url === '/api/campaign/go') {
@@ -273,12 +279,54 @@ async function runHarness() {
   check(pf.length === 1 && pf[0].url === '/api/campaign/preflight?campaign=' + encodeURIComponent(LIST.launch[0].path) + '&pack=P4000-1',
     'preflight url ' + (pf[0] && pf[0].url));
   const rows = el('cp-preflight-body').innerHTML;
-  check((rows.match(/<tr /g) || []).length === 4, 'one row per check');
+  check((rows.match(/<tr /g) || []).length === 5, 'one row per check + one firmware pre-arm row');
   check(rows.includes('cp-pf-fail') && rows.includes('disarm by RC') && rows.includes('cp-pf-unknown') &&
         rows.includes('checklist item rc_ready'), 'red / amber rows need their fix');
   check(!rows.includes('never shown') && rows.includes('&lt;b&gt;x&lt;/b&gt;'), 'green rows hide fix; values escaped');
   check(el('cp-preflight-summary').textContent.includes('1 red row'), 'summary: ' + el('cp-preflight-summary').textContent);
   pass('n', 'Preflight table');
+
+  // s. preflight report (WP-32 D4): firmware pre-arm mask as named PREFLIGHT FAIL lines, red first, first cause on top
+  const order = (html) => (html.match(/<tr class="[^"]*gs-row--(\w+)/g) || []).map((m) => m.replace(/.*gs-row--/, ''));
+  check(order(rows).join(',') === 'fail,warn,stale,ok,ok', 'red first, then amber, N/A, green: ' + order(rows));
+  check(rows.includes('not in this firmware') && rows.includes('N/A') && el('cp-first-cause').textContent ===
+        'First cause: arm_state: disarm by RC' && el('cp-first-cause').style.display === 'block', 'symbol absent: N/A row; first cause on top');
+  const pfx = ctx.window.__gs_ui_state__.campaignPreflight;
+  const withSym = { firmware_symbols: { names: ['g_prearm_fail_mask', 'g_prearm_first_fail'] } };
+  const st = (vals) => ({ streams: { 2: { values: vals } } });
+  check(pfx.firmwarePrearm({ _error: 'HTTP 503' }, null)[0].value.includes('manifest unavailable: HTTP 503'), 'manifest error');
+  check(/not in telemetry/.test(pfx.firmwarePrearm(withSym, st({}))[0].value), 'in firmware, not subscribed');
+  const okRow = pfx.firmwarePrearm(withSym, st({ 'slot2.g_prearm_fail_mask': 0 }))[0];
+  check(okRow.pass === true && okRow.value === 'all checks pass (mask 0x0000, slot 2)', 'mask 0 passes: ' + okRow.value);
+  const lines = pfx.firmwarePrearm(withSym, st({ 'g_prearm_fail_mask': 0x225, 'g_prearm_first_fail': 5 }));
+  check(lines.map((l) => l.name).join(' | ') === 'PREFLIGHT FAIL: task rate low (system monitor) | PREFLIGHT FAIL: estimator not ready | ' +
+        'PREFLIGHT FAIL: RC link lost | PREFLIGHT FAIL: bit 9', 'named lines, firmware first cause first: ' + lines.map((l) => l.name));
+  check(lines.every((l) => l.pass === false && /mask 0x0225/.test(l.value)), 'every set bit is a red line with the mask');
+
+  // through the panel: the service says OK, the firmware mask says no → summary, red lines, first cause
+  ctx._manifest = withSym;
+  api.shellState = st({ 'slot2.g_prearm_fail_mask': 4 });
+  const okPreflight = { ok: true, checks: [PREFLIGHT.checks[0], PREFLIGHT.checks[3]] };
+  const savedRoute = ctx.fetch;
+  ctx.fetch = (url, opts) => url.startsWith('/api/campaign/preflight?') ? reply(true, 200, okPreflight) : savedRoute(url, opts);
+  const goBefore = el('cp-go-btn').disabled;
+  el('cp-preflight-btn').dispatch('click');
+  await tick();
+  const rows2 = el('cp-preflight-body').innerHTML;
+  check(order(rows2).join(',') === 'fail,ok,ok' && rows2.includes('PREFLIGHT FAIL: RC link lost') && rows2.includes('cp-pf-firmware'),
+    'firmware line on top of the green rows: ' + order(rows2));
+  check(el('cp-preflight-summary').textContent === 'campaign preflight OK; the firmware refuses to arm: 1 PREFLIGHT FAIL line(s)',
+    'summary ' + el('cp-preflight-summary').textContent);
+  check(el('cp-first-cause').textContent === 'First cause: PREFLIGHT FAIL: RC link lost: the firmware refuses to arm until this check passes',
+    'first cause ' + el('cp-first-cause').textContent);
+  check(el('cp-go-btn').disabled === goBefore, 'the report never changes Go: the service still decides');
+  ctx._manifestFail = true;
+  el('cp-preflight-btn').dispatch('click');
+  await tick();
+  check(el('cp-preflight-body').innerHTML.includes('capability manifest unavailable') && el('cp-first-cause').style.display === 'none',
+    'a manifest failure never hides the campaign rows');
+  ctx.fetch = savedRoute; ctx._manifestFail = false; ctx._manifest = null; api.shellState = null;
+  pass('s', 'Preflight report: PREFLIGHT FAIL lines from g_prearm_fail_mask (or "not in this firmware"), red first, first cause on top');
 
   // p. every failed action shows its error in the panel
   ctx._preflightFail = true; el('cp-preflight-btn').dispatch('click'); await tick();

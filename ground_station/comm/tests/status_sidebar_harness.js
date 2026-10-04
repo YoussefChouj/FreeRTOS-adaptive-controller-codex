@@ -4,7 +4,8 @@
  *
  * Drives the Flight Status panel in a simulated DOM with a stubbed shell API.
  * Verifies:
- *   1. A1: Promotion of arm status, flight mode, battery voltage to persistent sidebar.
+ *   1. A1: Arm status, flight mode, battery voltage render once, in the panel (sp-*); the always-visible
+ *      copy is the flight strip, and WP-39 removed the duplicate sidebar card (sb-* ids, ensureSidebar).
  *   2. A1: Honest degradation on absent fields (renders 'NOT PUBLISHED', amber, not 0, not "—").
  *   3. A1: Live values render correctly when fields are published.
  *   4. A2: Active Streams table removed from the panel (redundant on Overview & Control).
@@ -125,7 +126,7 @@ function checkA2() {
 function checkAbsence() {
   console.log('\n[Check A1/A3] Honest degradation on absent fields:');
   const { doc, mod } = setupEnv();
-  mod.ensureSidebar();
+  assert.strictEqual(mod.ensureSidebar, undefined, 'the sidebar Flight Status copy was removed (WP-39)');
 
   const container = doc.createElement('div');
   container.innerHTML = mod.buildHTML();
@@ -133,18 +134,10 @@ function checkAbsence() {
   // Feed state with EMPTY values dictionary
   mod.onState({ streams: { '0': { values: {} } } });
 
-  // Sidebar indicators
-  const sbArm = doc.getElementById('sb-arm');
-  const sbFlymode = doc.getElementById('sb-flymode');
-  const sbVbat = doc.getElementById('sb-vbat');
-
-  assert(sbArm, 'Sidebar must contain #sb-arm');
-  assert(sbFlymode, 'Sidebar must contain #sb-flymode');
-  assert(sbVbat, 'Sidebar must contain #sb-vbat');
-
-  assert.strictEqual(sbArm.textContent, 'NOT PUBLISHED', 'Absent arm must render NOT PUBLISHED in sidebar');
-  assert.strictEqual(sbFlymode.textContent, 'NOT PUBLISHED', 'Absent flymode must render NOT PUBLISHED in sidebar');
-  assert.strictEqual(sbVbat.textContent, 'NOT PUBLISHED', 'Absent vbat must render NOT PUBLISHED in sidebar');
+  // No duplicate sidebar ids: the panel never builds or writes sb-*
+  ['sb-arm', 'sb-flymode', 'sb-vbat'].forEach(function (id) {
+    assert.strictEqual(doc.getElementById(id), null, '#' + id + ' must not exist (duplicate of the flight strip)');
+  });
 
   // Panel indicators
   const pArm = doc.getElementById('sp-arm-badge');
@@ -157,16 +150,13 @@ function checkAbsence() {
   assert.strictEqual(pVbat.textContent, 'NOT PUBLISHED', 'Absent vbat must render NOT PUBLISHED in panel');
   assert.strictEqual(pRollRate.textContent, 'NOT PUBLISHED', 'Absent rates must render NOT PUBLISHED in panel');
 
-  console.log('  ✓ Sidebar ARM:       ', sbArm.textContent);
-  console.log('  ✓ Sidebar FlightMode:', sbFlymode.textContent);
-  console.log('  ✓ Sidebar Battery:   ', sbVbat.textContent);
+  console.log('  ✓ No sidebar sb-* ids; panel ARM:', pArm.textContent);
   console.log('  ✓ Panel Rates:       ', pRollRate.textContent);
 }
 
 function checkLive() {
   console.log('\n[Check A1/A3] Live values render correctly:');
   const { doc, mod } = setupEnv();
-  mod.ensureSidebar();
 
   const container = doc.createElement('div');
   container.innerHTML = mod.buildHTML();
@@ -197,13 +187,7 @@ function checkLive() {
     }
   });
 
-  const sbArm = doc.getElementById('sb-arm');
-  const sbFlymode = doc.getElementById('sb-flymode');
-  const sbVbat = doc.getElementById('sb-vbat');
-
-  assert.strictEqual(sbArm.textContent, 'ARMED', 'Live armed=1 must render ARMED');
-  assert.strictEqual(sbFlymode.textContent, 'SDK', 'Live flymode=5 must render SDK');
-  assert.strictEqual(sbVbat.textContent, '16.25 V', 'Live vbat=16.25 must render 16.25 V');
+  assert.strictEqual(doc.getElementById('sb-arm'), null, 'no sidebar copy of ARM (flight strip owns it)');
 
   const pArm = doc.getElementById('sp-arm-badge');
   const pFlymode = doc.getElementById('sp-flymode');
@@ -232,14 +216,14 @@ function checkLive() {
     }
   });
 
-  assert.strictEqual(sbArm.textContent, 'DISARMED');
-  assert.strictEqual(sbFlymode.textContent, 'Stabilize');
-  assert.strictEqual(sbVbat.textContent, '14.80 V');
+  assert.strictEqual(pArm.textContent, 'DISARMED');
+  assert.strictEqual(pFlymode.textContent, 'Stabilize');
+  assert.strictEqual(pVbat.textContent, '14.80 V');
 
-  console.log('  ✓ Sidebar ARMED:     ', 'ARMED');
-  console.log('  ✓ Sidebar DISARMED:  ', sbArm.textContent);
-  console.log('  ✓ Sidebar FlightMode:', sbFlymode.textContent);
-  console.log('  ✓ Sidebar Battery:   ', sbVbat.textContent);
+  console.log('  ✓ Panel ARMED:       ', 'ARMED');
+  console.log('  ✓ Panel DISARMED:    ', pArm.textContent);
+  console.log('  ✓ Panel FlightMode:  ', pFlymode.textContent);
+  console.log('  ✓ Panel Battery:     ', pVbat.textContent);
 }
 
 function checkCommands() {

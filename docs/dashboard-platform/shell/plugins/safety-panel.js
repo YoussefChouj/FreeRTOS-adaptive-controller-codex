@@ -135,7 +135,7 @@
         if (badgeEl) {
           badgeEl.innerHTML = 'NOT PUBLISHED';
           badgeEl.style.color = 'var(--amber)';
-          badgeEl.style.background = 'rgba(245,166,35,0.1)';
+          badgeEl.style.background = 'var(--gs-warn-bg)';
         }
       }
     } else {
@@ -148,7 +148,7 @@
         if (badgeEl) {
           badgeEl.innerHTML = 'degraded';
           badgeEl.style.color = 'var(--muted)';
-          badgeEl.style.background = 'rgba(136,136,170,0.1)';
+          badgeEl.style.background = 'var(--gs-stale-bg)';
         }
       } else if (ageMs > 2000) {
         if (valEl) {
@@ -158,7 +158,7 @@
         if (badgeEl) {
           badgeEl.innerHTML = 'stale (' + (ageMs / 1000).toFixed(1) + 's)';
           badgeEl.style.color = 'var(--amber)';
-          badgeEl.style.background = 'rgba(245,166,35,0.1)';
+          badgeEl.style.background = 'var(--gs-warn-bg)';
         }
       } else {
         if (valEl) {
@@ -169,19 +169,19 @@
           if (st.status === 'idle') {
             badgeEl.innerHTML = '&#10003; current';
             badgeEl.style.color = 'var(--green)';
-            badgeEl.style.background = 'rgba(78,204,163,0.1)';
+            badgeEl.style.background = 'var(--gs-ok-bg)';
           } else if (st.status === 'pending') {
             badgeEl.innerHTML = '&#8987; pending';
             badgeEl.style.color = 'var(--amber)';
-            badgeEl.style.background = 'rgba(245,166,35,0.1)';
+            badgeEl.style.background = 'var(--gs-warn-bg)';
           } else if (st.status === 'applied') {
             badgeEl.innerHTML = '&#10003; applied';
             badgeEl.style.color = 'var(--green)';
-            badgeEl.style.background = 'rgba(78,204,163,0.1)';
+            badgeEl.style.background = 'var(--gs-ok-bg)';
           } else if (st.status === 'rejected') {
             badgeEl.innerHTML = '&#10007; rejected';
             badgeEl.style.color = 'var(--red)';
-            badgeEl.style.background = 'rgba(233,69,96,0.1)';
+            badgeEl.style.background = 'var(--gs-fail-bg)';
           }
         }
       }
@@ -262,11 +262,11 @@
       '.sf-section-title { font-size: 11px; color: var(--muted); margin-bottom: 8px; }',
       '.sf-interlock { display: flex; align-items: center; gap: 8px; padding: 6px 10px;',
       '  border-radius: 4px; font-size: 12px; font-weight: 600; }',
-      '.sf-interlock-warn { background: rgba(245,166,35,0.12); color: var(--amber); }',
-      '.sf-interlock-crit { background: rgba(233,69,96,0.12);  color: var(--red); }',
-      '.sf-interlock-ok   { background: rgba(78,204,163,0.1);  color: var(--green); }',
+      '.sf-interlock-warn { background: var(--gs-warn-bg); color: var(--amber); }',
+      '.sf-interlock-crit { background: var(--gs-fail-bg);  color: var(--red); }',
+      '.sf-interlock-ok   { background: var(--gs-ok-bg);  color: var(--green); }',
       '.sf-hint {',
-      '  padding: 8px 10px; background: rgba(136,136,170,0.08);',
+      '  padding: 8px 10px; background: var(--gs-stale-bg);',
       '  border: 1px dashed var(--muted); border-radius: 4px;',
       '  color: var(--muted); font-size: 11px; margin-bottom: 10px;',
       '}',

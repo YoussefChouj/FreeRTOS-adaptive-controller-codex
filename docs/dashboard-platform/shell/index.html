@@ -17,6 +17,8 @@
   <link rel="stylesheet" href="/ui/tokens.css" />
   <link rel="stylesheet" href="/ui/components.css" />
   <script src="/ui/ui-kit.js"></script>
+  <!-- WP-39: the one alarm registry (levels, required actions, debounce, voice), shared by the sidebar and Overview -->
+  <script src="/ui/alarms.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -311,90 +313,7 @@
       font-family: 'Consolas', monospace;
     }
 
-    /* ── Stream table ── */
-    .stream-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 13px;
-    }
-
-    .stream-table th {
-      text-align: left;
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--muted);
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      padding: 4px 8px;
-      border-bottom: 1px solid var(--border);
-    }
-
-    .stream-table td {
-      padding: 5px 8px;
-      font-family: 'Consolas', monospace;
-    }
-
-    .stream-table tr:hover td { background: var(--gs-stale-bg); }
-
-    .loss-warn { color: var(--amber); }
-    .loss-critical { color: var(--red); }
-
-    /* ── Command form ── */
-    .cmd-form {
-      display: grid;
-      grid-template-columns: auto 1fr;
-      gap: 8px 12px;
-      align-items: center;
-    }
-
-    .cmd-form label {
-      font-size: 12px;
-      color: var(--muted);
-    }
-
-    .cmd-form input {
-      background: var(--bg);
-      border: 1px solid var(--border);
-      color: var(--text);
-      border-radius: 4px;
-      padding: 5px 8px;
-      font-family: 'Consolas', monospace;
-      font-size: 13px;
-      width: 100%;
-    }
-    .cmd-form input:focus { outline: none; border-color: var(--accent); }
-
-    .cmd-form button {
-      grid-column: 1 / -1;
-      background: var(--accent);
-      color: var(--text);
-      border: none;
-      border-radius: 4px;
-      padding: 8px;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    .cmd-form button:hover { opacity: 0.85; }
-    .cmd-form button:active { opacity: 0.7; }
-
-    /* ── Result ── */
-    .result-box {
-      margin-top: 10px;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 10px 12px;
-      font-size: 12px;
-      font-family: 'Consolas', monospace;
-      white-space: pre-wrap;
-    }
-
-    .result-ack { border-left: 3px solid var(--green); }
-    .result-applied { border-left: 3px solid var(--green); }
-    .result-rejected { border-left: 3px solid var(--red); }
-
-    /* ── Alarms ── */
+    /* ── Alarms (rows from ui/alarms.js: level, condition, required action, Silence) ── */
     .alarm-list {
       display: flex;
       flex-direction: column;
@@ -403,27 +322,22 @@
 
     .alarm-item {
       display: flex;
-      align-items: center;
-      gap: 8px;
+      flex-direction: column;
+      gap: var(--gs-space-1);
       padding: 6px 10px;
-      border-radius: 4px;
+      border-radius: var(--gs-radius-sm);
       font-size: 12px;
       font-weight: 600;
     }
+    .alarm-item--caution { background: var(--gs-warn-bg); color: var(--gs-warn); }
+    .alarm-item--warning { background: var(--gs-fail-bg); color: var(--gs-fail); }
+    .alarm-item.is-silenced { opacity: 0.6; }
+    .alarm-item .alarm-head { display: flex; align-items: center; gap: var(--gs-space-2); }
+    .alarm-item .alarm-action { color: var(--gs-text); font-weight: 400; }
+    .alarm-item .alarm-silence { margin-left: auto; padding: 0 var(--gs-space-2); font-size: var(--gs-text-sm); }
 
-    .alarm-item.warning {
-      background: var(--gs-warn-bg);
-      color: var(--gs-warn);
-    }
-
-    .alarm-item.critical {
-      background: var(--gs-fail-bg);
-      color: var(--gs-fail);
-    }
-
-    .alarm-item .icon {
-      font-size: 14px;
-    }
+    /* ── Panel groups: one card, one tab per panel (PANEL_GROUPS) ── */
+    .panel-group-tabs { margin: 0 0 var(--gs-space-2); }
 
     .no-alarms {
       color: var(--muted);
@@ -523,28 +437,8 @@
       <span class="card-title" style="color:var(--muted)">Flight State</span>
       <button id="sidebar-collapse" class="toggle-btn" title="Collapse sidebar (free space for plots)">&larr; Hide</button>
     </div>
-    <!-- sidebar: state summary + alarms -->
-    <div class="card" id="card-flight">
-      <div class="card-header">
-        <span class="card-title">Flight Status</span>
-        <button class="toggle-btn" data-panel="flight">Hide</button>
-      </div>
-      <div class="stat-grid">
-        <div class="stat-item">
-          <span class="stat-label">ARM Status</span>
-          <span class="stat-value" id="sb-arm" style="color:var(--amber)">NOT PUBLISHED</span>
-        </div>
-        <div class="stat-item">
-          <span class="stat-label">Flight Mode</span>
-          <span class="stat-value" id="sb-flymode" style="color:var(--amber)">NOT PUBLISHED</span>
-        </div>
-        <div class="stat-item">
-          <span class="stat-label">Battery</span>
-          <span class="stat-value" id="sb-vbat" style="color:var(--amber)">NOT PUBLISHED</span>
-        </div>
-      </div>
-    </div>
-
+    <!-- sidebar: session + alarms. ARM, mode and battery live on the flight strip only (WP-39 removed the
+         duplicate Flight Status card; the Control tab's Flight Status panel keeps the detail). -->
     <div class="card" id="card-state">
       <div class="card-header">
         <span class="card-title">Session</span>
@@ -582,46 +476,9 @@
   </div>
 
   <div id="main">
-    <!-- The one .plugin-card written by hand rather than built by the plugin
-         host, which sets data-testid="panel-<slug>" on every card it creates.
-         Without it this card enumerated as null in browser_smoke, so the only
-         statically-authored panel was the one panel no check could name. -->
-    <div class="card plugin-card" id="card-streams" data-testid="panel-streams"
-         data-workspaces="telemetry">
-      <div class="card-header">
-        <span class="card-title">Telemetry Streams</span>
-        <button class="toggle-btn" data-panel="streams">Hide</button>
-      </div>
-      <table class="stream-table">
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>Seq</th>
-            <th>Loss %</th>
-            <th>Samples</th>
-          </tr>
-        </thead>
-        <tbody id="stream-body"></tbody>
-      </table>
-    </div>
-
-    <div class="card" id="card-cmd" style="display:none">
-      <div class="card-header">
-        <span class="card-title">Command</span>
-        <button class="toggle-btn" data-panel="cmd">Show</button>
-      </div>
-      <form class="cmd-form" id="cmd-form">
-        <label for="cmd_id">Command ID</label>
-        <input type="number" id="cmd_id" value="0" min="0" />
-        <label for="cmd_idx">Index</label>
-        <input type="number" id="cmd_idx" value="0" min="0" />
-        <label for="cmd_val">Value</label>
-        <input type="number" id="cmd_val" value="0" step="any" />
-        <button type="submit">Submit Command</button>
-      </form>
-      <div id="cmd-result"></div>
-    </div>
-
+    <!-- Every panel is a plugin card. WP-39 removed the two hand-written cards: Telemetry Streams (per-slot seq /
+         loss / samples, the same numbers as the Bandwidth Manager panel) and the hidden raw Command form (the
+         Command Panel on the Control tab replaces it). -->
     <div id="plugin-panels"></div>
   </div>
 </div>
@@ -736,7 +593,6 @@
 
   /* ── State ── */
   let currentState = null;
-  let alarms = [];
   let _destroyFns = [];
 
   /* ── Layout persistence ── */
@@ -966,6 +822,60 @@
     'Terminal':              { workspace: 'terminal' }
   };
 
+  /* Panels that share a group are tabs of one card (WP-39): Streams, Bandwidth Manager and Slot Manager were three
+   * cards with overlapping slot tables and three subscribe paths. Each tab keeps one job and its own ids / testid. */
+  var PANEL_GROUPS = {
+    'Streams':           { group: 'Telemetry Slots', tab: 'What slots carry' },
+    'Bandwidth Manager': { group: 'Telemetry Slots', tab: 'Link health' },
+    'Slot Manager':      { group: 'Telemetry Slots', tab: 'Expert subscribe' }
+  };
+
+  function slugOf(name) { return name.replace(/\s+/g, '-').toLowerCase(); }
+
+  // the group card (a .plugin-card, so workspace switching shows / hides it) with a tab row; created once
+  function groupCard(groupName, ws) {
+    var gslug = slugOf(groupName);
+    var card = document.getElementById('plugin-' + gslug);
+    if (card) return card;
+    card = document.createElement('div');
+    card.className = 'card plugin-card';
+    card.id = 'plugin-' + gslug;
+    card.setAttribute('data-workspaces', ws);
+    card.setAttribute('data-testid', 'panel-' + gslug);
+    card.setAttribute('role', 'region');
+    card.setAttribute('aria-label', groupName);
+    if (!wsMatches(ws, _activeWorkspace)) card.style.display = 'none';
+    var header = document.createElement('div');
+    header.className = 'card-header';
+    var title = document.createElement('span');
+    title.className = 'card-title';
+    title.textContent = groupName;
+    header.appendChild(title);
+    var tabs = document.createElement('div');
+    tabs.className = 'gs-row panel-group-tabs';
+    tabs.id = 'plugin-tabs-' + gslug;
+    tabs.setAttribute('role', 'tablist');
+    card.appendChild(header);
+    card.appendChild(tabs);
+    document.getElementById('plugin-panels').appendChild(card);
+    return card;
+  }
+
+  // shows one tab of a group; save = the operator clicked it (registration only shows, never overwrites the choice)
+  function showGroupTab(groupName, slug, save) {
+    var gslug = slugOf(groupName);
+    Object.keys(PANEL_GROUPS).forEach(function (n) {
+      if (PANEL_GROUPS[n].group !== groupName) return;
+      var s = slugOf(n), on = s === slug;
+      var sub = document.getElementById('plugin-' + s);
+      var btn = document.getElementById('plugin-tab-' + s);
+      if (sub) sub.style.display = on ? '' : 'none';
+      if (btn) { btn.className = 'gs-btn' + (on ? ' is-active' : ''); btn.setAttribute('aria-selected', on ? 'true' : 'false'); }
+    });
+    if (!save) return;
+    try { localStorage.setItem('gs_group_tab_' + gslug, slug); } catch (e) { shellWarn('localStorage', e); }
+  }
+
   /* data-workspaces is a space-separated token list; 'all' matches every tab. */
   function wsMatches(wsAttr, name) {
     var toks = String(wsAttr || '').split(/[\s,]+/);
@@ -1102,10 +1012,11 @@
       var dflt = PANEL_META[name] || {};
       var ws = String(meta.workspace || dflt.workspace || 'all').split(/[\s,]+/).join(' ');
       var gates = meta.gates || dflt.gates || [];
-      var slug = name.replace(/\s+/g, '-').toLowerCase();
-      var container = document.getElementById('plugin-panels');
+      var slug = slugOf(name);
+      var grp = PANEL_GROUPS[name];
+      var container = grp ? groupCard(grp.group, ws) : document.getElementById('plugin-panels');
       var card = document.createElement('div');
-      card.className = 'card plugin-card';
+      card.className = grp ? 'panel-group-tab' : 'card plugin-card';
       card.id = 'plugin-' + slug;
       card.setAttribute('data-workspaces', ws);
       card.setAttribute('data-testid', 'panel-' + slug);
@@ -1120,8 +1031,8 @@
       card.setAttribute('aria-label', gates.length
         ? name + ' (requires ' + gates.join(' and ') + ')'
         : name);
-      // Start hidden if not in the active workspace
-      if (!wsMatches(ws, _activeWorkspace)) card.style.display = 'none';
+      // Start hidden if not in the active workspace (a grouped panel follows its group card)
+      if (!grp && !wsMatches(ws, _activeWorkspace)) card.style.display = 'none';
       var header = document.createElement('div');
       header.className = 'card-header';
       var title = document.createElement('span');
@@ -1140,9 +1051,32 @@
       }
       var body = document.createElement('div');
       body.id = 'plugin-body-' + slug;
-      card.appendChild(header);
+      if (!grp) card.appendChild(header);
       card.appendChild(body);
       container.appendChild(card);
+      if (grp) {
+        // one tab button per grouped panel; the saved tab (or the first one registered) is shown
+        var gslug = slugOf(grp.group);
+        var tabBtn = document.createElement('button');
+        tabBtn.type = 'button';
+        tabBtn.id = 'plugin-tab-' + slug;
+        tabBtn.setAttribute('role', 'tab');
+        tabBtn.textContent = grp.tab;
+        tabBtn.title = name;
+        tabBtn.addEventListener('click', function () { showGroupTab(grp.group, slug, true); });
+        document.getElementById('plugin-tabs-' + gslug).appendChild(tabBtn);
+        var savedTab = null;
+        try { savedTab = localStorage.getItem('gs_group_tab_' + gslug); } catch (e) { shellWarn('localStorage', e); }
+        var shownTab = document.getElementById('plugin-tabs-' + gslug).getAttribute('data-shown');
+        if (!shownTab || savedTab === slug) {
+          document.getElementById('plugin-tabs-' + gslug).setAttribute('data-shown', slug);
+          showGroupTab(grp.group, slug);
+        } else {
+          card.style.display = 'none';
+          tabBtn.className = 'gs-btn';
+          tabBtn.setAttribute('aria-selected', 'false');
+        }
+      }
       // Bug 1 hardening: a plugin whose initial render throws gets an error
       // message inside its own card — the shell keeps running.
       _currentPanelName = name;
@@ -1404,101 +1338,6 @@
     return d.toLocaleTimeString();
   }
 
-  function lossClass(pct) {
-    if (pct > 5) return 'loss-critical';
-    if (pct > 1) return 'loss-warn';
-    return '';
-  }
-
-  /* Look a key up in whichever slot carries it. Which slot a key lands on is a
-   * subscribe layout, not a contract. */
-  function alarmValue(state, key) {
-    if (!state || !state.streams) return null;
-    var slots = Object.keys(state.streams);
-    for (var i = 0; i < slots.length; i++) {
-      var s = state.streams[slots[i]];
-      var v = s && s.values;
-      if (v && v[key] != null) return v[key];
-    }
-    return null;
-  }
-
-  /* Flight-state alarms.
-   *
-   * This card is the only alarm surface visible on every tab, but it used to
-   * report transport health alone — packet loss and staleness. So it read "No
-   * active alarms" while status.sbus_lost said the RC link was down, a condition the
-   * Overview panel raises as critical (overview-panel.js:760) but which is
-   * invisible from any other tab. These rules follow the same keys and the same
-   * sense as that panel so the two cannot disagree.
-   *
-   * Only conditions with a firmware-defined sense are listed. Nothing here
-   * invents a threshold: a low-battery alarm would need a pack cutoff voltage
-   * that is not recorded anywhere in this repo, so there is deliberately none. */
-  function buildFlightAlarms(state) {
-    var out = [];
-
-    /* status.sbus_lost mirrors the firmware field `sbus_lost`
-     * (schema_registry.py:227): 0 means the link is UP. */
-    var sbus = alarmValue(state, 'status.sbus_lost');
-    if (sbus != null && Number(sbus) !== 0) {
-      out.push({ level: 'critical', text: 'RC receiver link lost (status.sbus_lost = ' + Number(sbus) + ')' });
-    }
-
-    var est = alarmValue(state, 'status.estimator_ready');
-    if (est != null && Number(est) === 0) {
-      out.push({ level: 'warning', text: 'Attitude estimator not ready' });
-    }
-
-    var arm = alarmValue(state, 'status.arm');
-    if (arm != null && Number(arm) !== 0) {
-      out.push({ level: 'warning', text: 'Drone is ARMED' });
-    }
-
-    return out;
-  }
-
-  function buildAlarms(state) {
-    var result = buildFlightAlarms(state);
-    var now = Date.now() * 1e6;
-    if (state.streams) {
-      var seenStale = false;
-      var seenLossWarn = {};
-      Object.keys(state.streams).forEach(function (slot) {
-        var s = state.streams[slot];
-        if (s.loss_pct > 1 && !seenLossWarn[slot]) {
-          seenLossWarn[slot] = true;
-          result.push({
-            level: s.loss_pct > 5 ? 'critical' : 'warning',
-            text: 'Slot ' + slot + ': ' + s.loss_pct.toFixed(2) + '% packet loss'
-          });
-        }
-        // Per-slot freshness: surface "no data on slot X for 3+ s" once per slot,
-        // and a single global "no telemetry update" only if no slot has any data.
-        if (s.last_update_ns != null && (now - s.last_update_ns) > 3e9) {
-          result.push({
-            level: 'warning',
-            text: 'Slot ' + slot + ': no telemetry in 3+ s'
-          });
-        }
-      });
-      // Global stale alarm only if state.last_update_ns is set AND no slot has any values.
-      var anyValues = false;
-      Object.keys(state.streams).forEach(function (slot) {
-        var s = state.streams[slot];
-        if (s && s.values && Object.keys(s.values).length > 0) anyValues = true;
-      });
-      if (!anyValues && state.last_update_ns != null && (now - state.last_update_ns) > 3e9 && !seenStale) {
-        seenStale = true;
-        result.push({
-          level: 'critical',
-          text: 'No telemetry update in 3+ seconds'
-        });
-      }
-    }
-    return result;
-  }
-
   /* ── Rendering ── */
   let _lastSamplesRendered = null;
   let _lastUpdateRendered = null;
@@ -1519,25 +1358,6 @@
     }
   }
 
-  function renderStreams(state) {
-    var tbody = document.getElementById('stream-body');
-    if (!state.streams || Object.keys(state.streams).length === 0) {
-      tbody.innerHTML = '<tr><td colspan="4" style="color:var(--muted);text-align:center">No streams</td></tr>';
-      return;
-    }
-    var rows = Object.keys(state.streams).map(function (slot) {
-      var s = state.streams[slot];
-      var lc = lossClass(s.loss_pct || 0);
-      return '<tr>' +
-        '<td>' + slot + '</td>' +
-        '<td>' + (s.sequence != null ? s.sequence : '—') + '</td>' +
-        '<td class="' + lc + '">' + (s.loss_pct != null ? s.loss_pct.toFixed(2) + '%' : '—') + '</td>' +
-        '<td>' + ((s.received || 0) + (s.dropped || 0)).toLocaleString() + '</td>' +
-        '</tr>';
-    }).join('');
-    tbody.innerHTML = rows;
-  }
-
   // Every innerHTML sink in this file that takes a value from outside the file
   // goes through here.  Alarm text is locally generated today, but the shell is
   // the one place where firmware symbol names, service error bodies and
@@ -1548,18 +1368,50 @@
     });
   }
 
+  /* Sidebar Alarms card: the shown alarms (warning, caution) of the one shared engine in ui/alarms.js, worst
+   * first, the same list the Overview banner reads. Each row names its level, the condition and the required
+   * action. Silence is display only: the row dims, leaves the banner and its voice stops; the log keeps it. */
+  function alarmEngine() { return window.GSAlarms ? window.GSAlarms.shared() : null; }
+
   function renderAlarms(alarmList) {
     var el = document.getElementById('alarm-list');
-    if (!alarmList || alarmList.length === 0) {
+    if (!el) return;
+    if (!alarmList) {
+      el.innerHTML = '<div class="no-alarms">Alarm registry not loaded (ui/alarms.js): alarms unknown</div>';
+      return;
+    }
+    if (alarmList.length === 0) {
       el.innerHTML = '<div class="no-alarms">No active alarms</div>';
       return;
     }
     el.innerHTML = alarmList.map(function (a) {
-      return '<div class="alarm-item ' + escapeHtml(a.level) +
-        '"><span class="icon">&#9888;</span>' +
-        escapeHtml(a.text) + '</div>';
+      return '<div class="alarm-item alarm-item--' + escapeHtml(a.level) + (a.silenced ? ' is-silenced' : '') +
+        '" data-level="' + escapeHtml(a.level) + '"><div class="alarm-head">' +
+        '<span class="gs-pill gs-pill--' + escapeHtml(a.status) + '">' + escapeHtml(a.label) + '</span>' +
+        '<span>' + escapeHtml(a.text) + '</span>' +
+        '<button type="button" class="gs-btn gs-btn--ghost alarm-silence" data-alarm-ref="' + Number(a.ref) + '">' +
+        (a.silenced ? 'Unsilence' : 'Silence') + '</button></div>' +
+        '<div class="alarm-action">&rarr; ' + escapeHtml(a.action) + '</div></div>';
     }).join('');
   }
+
+  function updateAlarms(state) {
+    var eng = alarmEngine();
+    renderAlarms(eng ? eng.update(state, Date.now()) : null);
+  }
+
+  (function wireAlarmSilence() {
+    var el = document.getElementById('alarm-list');
+    if (!el || typeof el.addEventListener !== 'function') return;
+    el.addEventListener('click', function (ev) {
+      var t = ev && ev.target;
+      var ref = t && t.getAttribute ? t.getAttribute('data-alarm-ref') : null;
+      var eng = alarmEngine();
+      if (!ref || !eng) return;
+      eng.silence(Number(ref));
+      renderAlarms(eng.alarms());
+    });
+  })();
 
   /* ── Record control ── */
   let _lastRecRendered = null;
@@ -1649,23 +1501,6 @@
       .finally(function () { if (timer) clearTimeout(timer); });
   });
 
-  /* ── Command form ── */
-  document.getElementById('cmd-form').addEventListener('submit', function (e) {
-    e.preventDefault();
-    var cmdId = parseInt(document.getElementById('cmd_id').value, 10) || 0;
-    var idx = parseInt(document.getElementById('cmd_idx').value, 10) || 0;
-    var val = parseFloat(document.getElementById('cmd_val').value) || 0;
-    var resultEl = document.getElementById('cmd-result');
-    resultEl.innerHTML = '<div class="result-box">Submitting…</div>';
-    shellApi.submitCommand(cmdId, idx, val).then(function (data) {
-      resultEl.innerHTML = '<div class="result-box result-ack">Transaction ID: ' +
-        data.transaction_id + '</div>';
-    }).catch(function (err) {
-      resultEl.innerHTML = '<div class="result-box result-rejected">Error: ' +
-        escapeHtml(err.message) + '</div>';
-    });
-  });
-
   /* ── Polling ── */
   function setStatus(cls, text) {
     var el = document.getElementById('status');
@@ -1701,6 +1536,8 @@
 
       if (health === null || state === null) {
         setStatus('error', 'Error');
+        // the last good state keeps ageing, so "link lost" still raises while the service is unreachable
+        safeStep('alarms', function () { updateAlarms(currentState); });
         return;
       }
 
@@ -1710,8 +1547,7 @@
       // S5: evaluate gates and render them on every poll
       safeStep('gates', function () { evaluateGates(state); renderGates(); });
       safeStep('sidebar', function () { renderState(state); });
-      safeStep('streams', function () { renderStreams(state); });
-      safeStep('alarms', function () { alarms = buildAlarms(state); renderAlarms(alarms); });
+      safeStep('alarms', function () { updateAlarms(state); });
       safeStep('record', function () { renderRecord(rec); });
 
       dispatchState(state);

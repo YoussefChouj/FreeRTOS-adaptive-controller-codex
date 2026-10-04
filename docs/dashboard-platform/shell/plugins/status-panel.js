@@ -7,10 +7,11 @@
  *   2) raw positional keys (slot0.ch0.N / ch0..ch14 fallback for legacy)
  *   3) embedded stream metadata (slot0.seq / received / dropped / loss_pct)
  *
- * Promotes the critical few (ARM status, Flight mode, Battery voltage) to the
- * persistent dashboard sidebar, while consolidating operational status
- * (commands, angular rates, authority, state flags) into this panel.
- * Eliminates the redundant telemetry-stream widget.
+ * The critical few (ARM status, Flight mode, Battery voltage) are always visible
+ * on the flight strip (flight-strip.js); WP-39 removed the sidebar copy this
+ * panel used to write (#card-flight, ids sb-*), so every id here is sp-* and
+ * exists once. This panel keeps the detail: commands, angular rates, attitude,
+ * altitude, authority and state flags.
  */
 (function () {
   'use strict';
@@ -57,92 +58,6 @@
     return (typeof document !== 'undefined' && document.getElementById) ? document.getElementById(id) : null;
   }
 
-  // ── Sidebar management ──────────────────────────────────────────────────
-  function ensureSidebar() {
-    if (typeof document === 'undefined' || !document.getElementById) return;
-    var sidebar = document.getElementById('sidebar');
-    if (!sidebar) return;
-    if (document.getElementById('card-flight')) return;
-
-    var card = document.createElement('div');
-    card.className = 'card';
-    card.id = 'card-flight';
-    card.innerHTML = [
-      '<div class="card-header">',
-      '  <span class="card-title">Flight Status</span>',
-      '</div>',
-      '<div class="stat-grid">',
-      '  <div class="stat-item">',
-      '    <span class="stat-label">ARM Status</span>',
-      '    <span class="stat-value" id="sb-arm" style="color:var(--amber)">NOT PUBLISHED</span>',
-      '  </div>',
-      '  <div class="stat-item">',
-      '    <span class="stat-label">Flight Mode</span>',
-      '    <span class="stat-value" id="sb-flymode" style="color:var(--amber)">NOT PUBLISHED</span>',
-      '  </div>',
-      '  <div class="stat-item">',
-      '    <span class="stat-label">Battery</span>',
-      '    <span class="stat-value" id="sb-vbat" style="color:var(--amber)">NOT PUBLISHED</span>',
-      '  </div>',
-      '</div>',
-    ].join('');
-
-    sidebar.insertBefore(card, sidebar.firstChild);
-  }
-
-  /* Extra always-visible flight indicators.
-   *
-   * The three original rows (arm / flymode / vbat) are ALSO written statically
-   * in index.html, and that static copy is the one the browser uses: the shell
-   * binds each card's Hide button directly at load (index.html:728), so a card
-   * this plugin built afterwards would carry a dead button. ensureSidebar()
-   * above is therefore only a fallback for a DOM that has no card at all.
-   *
-   * These rows are appended to whichever card exists, so there is exactly one
-   * definition of them rather than a second copy to drift out of sync. */
-  var EXTRA_ROWS = [
-    { id: 'sb-attitude',  label: 'Attitude R/P/Y', style: 'font-size:11px' },
-    { id: 'sb-altitude',  label: 'Altitude' },
-    { id: 'sb-rclink',    label: 'RC Link' },
-    { id: 'sb-estimator', label: 'Estimator' },
-  ];
-
-  function ensureFlightRows() {
-    if (typeof document === 'undefined' || !document.getElementById) return;
-    if (typeof document.createElement !== 'function') return;
-    var card = document.getElementById('card-flight');
-    if (!card || typeof card.querySelector !== 'function') return;
-    var grid = card.querySelector('.stat-grid');
-    if (!grid) return;
-    for (var i = 0; i < EXTRA_ROWS.length; i++) {
-      var r = EXTRA_ROWS[i];
-      if (document.getElementById(r.id)) continue;
-      var item = document.createElement('div');
-      item.className = 'stat-item';
-      item.innerHTML =
-        '<span class="stat-label">' + r.label + '</span>' +
-        '<span class="stat-value" id="' + r.id + '"' +
-        ' style="color:var(--amber);' + (r.style || '') + '">NOT PUBLISHED</span>';
-      grid.appendChild(item);
-    }
-  }
-
-  function hideDuplicatedStreamCard() {
-    if (typeof document === 'undefined' || !document.getElementById) return;
-    var card = document.getElementById('card-streams');
-    if (!card) return;
-    if (!card.classList.contains('plugin-card')) {
-      card.classList.add('plugin-card');
-    }
-    if (!card.getAttribute('data-workspaces')) {
-      card.setAttribute('data-workspaces', 'telemetry diagnostics');
-    }
-    var ws = (typeof window !== 'undefined' && window.__gs_workspace__ && window.__gs_workspace__()) || 'overview';
-    if (ws === 'overview' || ws === 'control') {
-      card.style.display = 'none';
-    }
-  }
-
   // ── Build initial DOM ───────────────────────────────────────────────────
   function buildHTML() {
     return [
@@ -156,9 +71,9 @@
       '  display: inline-flex; align-items: center; gap: 5px;',
       '  padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 700;',
       '}',
-      '.sp-badge-armed  { background: rgba(78,204,163,0.15); color: var(--green); }',
-      '.sp-badge-disarm { background: rgba(233,69,96,0.15);  color: var(--red); }',
-      '.sp-badge-unpub  { background: rgba(245,166,35,0.15); color: var(--amber); }',
+      '.sp-badge-armed  { background: var(--gs-ok-bg);   color: var(--green); }',
+      '.sp-badge-disarm { background: var(--gs-fail-bg); color: var(--red); }',
+      '.sp-badge-unpub  { background: var(--gs-warn-bg); color: var(--amber); }',
       '.sp-big-value { font-size: 22px; font-weight: 600; font-family: Consolas, monospace; }',
       '.sp-rate-value { font-size: 14px; font-weight: 600; font-family: Consolas, monospace; }',
       '.sp-cmd-indicator {',
@@ -173,9 +88,9 @@
       '  padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 600;',
       '  letter-spacing: 0.03em; text-transform: uppercase;',
       '}',
-      '.sp-pill-on    { background: rgba(78,204,163,0.15); color: var(--green); }',
-      '.sp-pill-off   { background: rgba(136,136,170,0.1); color: var(--muted); }',
-      '.sp-pill-warn  { background: rgba(245,166,35,0.15); color: var(--amber); }',
+      '.sp-pill-on    { background: var(--gs-ok-bg);    color: var(--green); }',
+      '.sp-pill-off   { background: var(--gs-stale-bg); color: var(--muted); }',
+      '.sp-pill-warn  { background: var(--gs-warn-bg);  color: var(--amber); }',
       '.sp-source-hint { font-size: 10px; color: var(--muted); margin-top: 4px; font-style: italic; }',
       '</style>',
 
@@ -238,6 +153,20 @@
       '  <div id="sp-rates-source" class="sp-source-hint">rates not published by this build</div>',
       '</div>',
 
+      /* Attitude + altitude (were sidebar rows before WP-39) */
+      '<div class="sp-section">',
+      '  <div class="sp-row">',
+      '    <div>',
+      '      <div class="sp-label">Attitude R / P / Y</div>',
+      '      <div id="sp-attitude" class="sp-rate-value" style="color:var(--amber)">NOT PUBLISHED</div>',
+      '    </div>',
+      '    <div>',
+      '      <div class="sp-label">Altitude</div>',
+      '      <div id="sp-altitude" class="sp-rate-value" style="color:var(--amber)">NOT PUBLISHED</div>',
+      '    </div>',
+      '  </div>',
+      '</div>',
+
       /* Command status indicator */
       '<div class="sp-section">',
       '  <div class="sp-label">Last Command</div>',
@@ -268,21 +197,6 @@
     if (srcEl) {
       srcEl.textContent = source ? 'source: ' + source : (val == null ? 'field not published by this build' : '');
     }
-
-    // Update sidebar
-    var sbEl = q('sb-arm');
-    if (sbEl) {
-      if (val === 1) {
-        sbEl.textContent = 'ARMED';
-        sbEl.style.color = 'var(--green)';
-      } else if (val === 0) {
-        sbEl.textContent = 'DISARMED';
-        sbEl.style.color = 'var(--red)';
-      } else {
-        sbEl.textContent = 'NOT PUBLISHED';
-        sbEl.style.color = 'var(--amber)';
-      }
-    }
   }
 
   function updateFlyMode(v) {
@@ -303,12 +217,6 @@
       el.textContent = text;
       el.style.color = color;
     }
-
-    var sbEl = q('sb-flymode');
-    if (sbEl) {
-      sbEl.textContent = text;
-      sbEl.style.color = color;
-    }
   }
 
   function updateVbat(v) {
@@ -325,12 +233,6 @@
     if (el) {
       el.textContent = text;
       el.style.color = color;
-    }
-
-    var sbEl = q('sb-vbat');
-    if (sbEl) {
-      sbEl.textContent = text;
-      sbEl.style.color = color;
     }
   }
 
@@ -521,9 +423,9 @@
     };
   }
 
-  /* The sidebar spans every tab, so it must not care which slot a key arrived
-   * on: status.* lands on slot 0 today and c.altitude_cm on slot 1, but that is
-   * a subscribe layout, not a contract. Look in every slot. */
+  /* Attitude and altitude must not care which slot a key arrived on: status.*
+   * lands on slot 0 today and c.altitude_cm on slot 1, but that is a subscribe
+   * layout, not a contract. Look in every slot. */
   function readAcrossSlots(state, key) {
     if (!state || !state.streams) return null;
     var slots = Object.keys(state.streams);
@@ -535,22 +437,24 @@
     return null;
   }
 
-  function setSbRow(id, text, color) {
+  function setRow(id, text, color) {
     var el = q(id);
     if (!el) return;
     el.textContent = text;
     el.style.color = color || '';
   }
 
+  /* RC link and estimator state are the SBUS / ESTIMATOR pills above; the
+   * flight strip shows RC on every tab. */
   function updateFlightRows(state) {
     var r = readAcrossSlots(state, 'status.roll_deg');
     var p = readAcrossSlots(state, 'status.pitch_deg');
     var y = readAcrossSlots(state, 'status.yaw_deg');
     if (r != null && p != null && y != null) {
-      setSbRow('sb-attitude', Number(r).toFixed(1) + ' / ' + Number(p).toFixed(1) +
-                              ' / ' + Number(y).toFixed(1) + '°', '');
+      setRow('sp-attitude', Number(r).toFixed(1) + ' / ' + Number(p).toFixed(1) +
+                            ' / ' + Number(y).toFixed(1) + '°', '');
     } else {
-      setSbRow('sb-attitude', 'NOT PUBLISHED', 'var(--amber)');
+      setRow('sp-attitude', 'NOT PUBLISHED', 'var(--amber)');
     }
 
     /* c.altitude_cm is the Frame C altitude in centimetres. It is NOT
@@ -558,31 +462,17 @@
      * and wraps to ~4.3e7 on a negative reading, which is normal on the ground.
      * Do not substitute one for the other here. */
     var alt = readAcrossSlots(state, 'c.altitude_cm');
-    setSbRow('sb-altitude', alt != null ? (Number(alt) / 100).toFixed(2) + ' m' : 'NOT PUBLISHED',
-             alt != null ? '' : 'var(--amber)');
-
-    /* status.sbus_lost mirrors the firmware field `sbus_lost`
-     * (schema_registry.py:227): 0 means the link is UP. */
-    var sbus = readAcrossSlots(state, 'status.sbus_lost');
-    if (sbus == null) setSbRow('sb-rclink', 'NOT PUBLISHED', 'var(--amber)');
-    else if (Number(sbus) === 0) setSbRow('sb-rclink', 'UP', 'var(--green)');
-    else setSbRow('sb-rclink', 'LOST', 'var(--red)');
-
-    var est = readAcrossSlots(state, 'status.estimator_ready');
-    if (est == null) setSbRow('sb-estimator', 'NOT PUBLISHED', 'var(--amber)');
-    else if (Number(est) !== 0) setSbRow('sb-estimator', 'READY', 'var(--green)');
-    else setSbRow('sb-estimator', 'NOT READY', 'var(--amber)');
+    setRow('sp-altitude', alt != null ? (Number(alt) / 100).toFixed(2) + ' m' : 'NOT PUBLISHED',
+           alt != null ? '' : 'var(--amber)');
   }
 
   /* A value is only as good as its age. After an FC power cycle the subscribe
    * slots stop while the attitude fallback frame keeps the stream "alive", so
    * the last pre-reboot values would otherwise sit here looking live. */
   var STALE_AFTER_S = 5;
-  var SB_KEYS = {
-    'sb-arm': 'status.arm', 'sb-flymode': 'status.flymode', 'sb-vbat': 'status.vbat',
-    'sb-attitude': 'status.roll_deg', 'sb-altitude': 'c.altitude_cm',
-    'sb-rclink': 'status.sbus_lost', 'sb-estimator': 'status.estimator_ready',
-    'sp-arm-badge': 'status.arm', 'sp-flymode': 'status.flymode', 'sp-vbat': 'status.vbat'
+  var STALE_KEYS = {
+    'sp-arm-badge': 'status.arm', 'sp-flymode': 'status.flymode', 'sp-vbat': 'status.vbat',
+    'sp-attitude': 'status.roll_deg', 'sp-altitude': 'c.altitude_cm'
   };
 
   function keyAgeS(state, key) {
@@ -602,17 +492,17 @@
   }
 
   function markStaleRows(state) {
-    Object.keys(SB_KEYS).forEach(function (id) {
+    Object.keys(STALE_KEYS).forEach(function (id) {
       var el = q(id);
       if (!el) return;
-      var age = keyAgeS(state, SB_KEYS[id]);
+      var age = keyAgeS(state, STALE_KEYS[id]);
       var stale = age != null && age > STALE_AFTER_S;
       el.style.opacity = stale ? '0.5' : '';
       el.setAttribute('data-stale', stale ? 'true' : 'false');
       el.title = stale ? 'last received ' + fmtAge(age) + ' ago; not live' : '';
       if (stale && el.textContent.indexOf('(stale') < 0) {
         el.textContent += ' (stale ' + fmtAge(age) + ')';
-        el.style.color = 'var(--muted, #888)';
+        el.style.color = 'var(--gs-stale)';
       }
     });
   }
@@ -629,9 +519,6 @@
 
   // ── State change handler ─────────────────────────────────────────────────
   function onState(state) {
-    ensureSidebar();
-    ensureFlightRows();
-    hideDuplicatedStreamCard();
     updateFlightRows(state);
 
     if (!state) {
@@ -723,10 +610,6 @@
 
   // ── Export (shell uses window.__registerPlugin__) ────────────────────────
   window.__PLUGIN_INIT__ = function(api) {
-    ensureSidebar();
-    ensureFlightRows();
-    hideDuplicatedStreamCard();
-
     api.registerPanel('Flight Status', function (container) {
       container.innerHTML = buildHTML();
       api.subscribe(onState);
@@ -769,8 +652,6 @@
       updateFlyMode: updateFlyMode,
       updateVbat: updateVbat,
       updateRates: updateRates,
-      ensureSidebar: ensureSidebar,
-      ensureFlightRows: ensureFlightRows,
       readAcrossSlots: readAcrossSlots,
       updateFlightRows: updateFlightRows,
     };

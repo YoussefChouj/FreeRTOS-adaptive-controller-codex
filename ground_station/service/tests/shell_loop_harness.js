@@ -49,10 +49,14 @@ class El {
   set textContent(v) { this._text = String(v); this._html = String(v); }
   get innerHTML() { return this._html; }
   set innerHTML(v) { this._html = String(v); this._text = String(v); }
-  appendChild(child) { this.children.push(child); child.parentElement = this; return child; }
+  appendChild(child) {
+    this.children.push(child); child.parentElement = this;
+    if (child.id && El.registry) El.registry.set(child.id, child);   // findable by id, as in a real DOM
+    return child;
+  }
   setAttribute(name, val) { this.dataset[name] = String(val); }
   getAttribute(name) { return name in this.dataset ? this.dataset[name] : null; }
-  addEventListener() {}
+  addEventListener(type, fn) { ((this._handlers = this._handlers || {})[type] = this._handlers[type] || []).push(fn); }
 }
 
 // ── Harness ──────────────────────────────────────────────────────────────
@@ -60,12 +64,15 @@ function makeHarness() {
   const elements = new Map();
   const errors = [];
   const timers = [];
+  const stored = {};
+  El.registry = elements;
 
   const doc = {
     addEventListener() {},
     getElementById(id) {
-      if (!elements.has(id)) elements.set(id, new El(id));
-      return elements.get(id);
+      // static shell ids are created on demand; plugin-* cards only exist once registerPanel built them
+      if (!elements.has(id) && (id.indexOf('plugin-') !== 0 || id === 'plugin-panels')) elements.set(id, new El(id));
+      return elements.get(id) || null;
     },
     createElement() { return new El(''); },
     querySelectorAll() { return []; },
@@ -102,7 +109,7 @@ function makeHarness() {
       error(...args) { errors.push(args.map(String).join(' ')); },
     },
     document: doc,
-    localStorage: { getItem() { return null; }, setItem() {} },
+    localStorage: { getItem(k) { return k in stored ? stored[k] : null; }, setItem(k, v) { stored[k] = String(v); } },
     setTimeout(fn) { timers.push(fn); return timers.length; },
     clearTimeout() {},
     setInterval() { return 0; },
@@ -112,7 +119,7 @@ function makeHarness() {
   };
   sandbox.window = sandbox;
   vm.createContext(sandbox);
-  return { sandbox, doc, elements, errors, timers, responses,
+  return { sandbox, doc, elements, errors, timers, responses, stored,
            setStateFactory(f) { stateFactory = f; } };
 }
 
@@ -235,6 +242,35 @@ async function main() {
   if (goodRenders !== 4) {
     throw new Error('healthy plugin callback ran ' + goodRenders +
       ' times, expected 4');
+  }
+
+  // ── Phase 3 (WP-39): Streams / Bandwidth Manager / Slot Manager are tabs of one Telemetry Slots card ──
+  const rendered = [];
+  ['Streams', 'Bandwidth Manager', 'Slot Manager'].forEach(function (n) {
+    api.registerPanel(n, function (body) { rendered.push(body.id); }, { workspace: 'telemetry' });
+  });
+  const group = harness.elements.get('plugin-telemetry-slots');
+  if (!group || group.className !== 'card plugin-card' || group.getAttribute('data-workspaces') !== 'telemetry' ||
+      group.getAttribute('data-testid') !== 'panel-telemetry-slots') {
+    throw new Error('expected one Telemetry Slots plugin-card on the telemetry tab');
+  }
+  const tabRow = harness.elements.get('plugin-tabs-telemetry-slots');
+  const labels = tabRow.children.map((c) => c.textContent).join(' | ');
+  if (labels !== 'What slots carry | Link health | Expert subscribe') throw new Error('group tabs: ' + labels);
+  const subs = ['streams', 'bandwidth-manager', 'slot-manager'].map((s) => harness.elements.get('plugin-' + s));
+  subs.forEach(function (sub, i) {
+    const slug = ['streams', 'bandwidth-manager', 'slot-manager'][i];
+    if (!sub || sub.parentElement !== group || sub.className !== 'panel-group-tab' ||
+        sub.getAttribute('data-testid') !== 'panel-' + slug || rendered[i] !== 'plugin-body-' + slug) {
+      throw new Error('grouped panel ' + slug + ' must keep its ids and testid inside the group card');
+    }
+  });
+  const shown = () => subs.map((s) => (s.style.display === 'none' ? 0 : 1)).join('');
+  if (shown() !== '100') throw new Error('first tab only should show, got ' + shown());
+  tabRow.children[1]._handlers.click.forEach((fn) => fn());
+  if (shown() !== '010' || harness.stored['gs_group_tab_telemetry-slots'] !== 'bandwidth-manager' ||
+      tabRow.children[1].getAttribute('aria-selected') !== 'true') {
+    throw new Error('clicking Link health must show only that tab and remember it, got ' + shown());
   }
 
   console.log(JSON.stringify({

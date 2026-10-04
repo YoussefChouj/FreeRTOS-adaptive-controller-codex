@@ -126,7 +126,10 @@
     try { return window.localStorage ? window.localStorage.getItem(key) : null; } catch (e) { return null; }
   }
   function storageSet(key, val) {
-    try { if (window.localStorage) window.localStorage.setItem(key, val); } catch (e) { /* display prefs only */ }
+    // display prefs only: a refusal is reported once (console), the panel keeps working
+    try { if (window.localStorage) window.localStorage.setItem(key, val); } catch (e) {
+      if (window.GSUI) window.GSUI.report('path panel storage', e, { toast: false, once: 'path storage' });
+    }
   }
 
   function validRoom(r) {
@@ -221,11 +224,22 @@
   // Older segments fade to 35 % brightness so the newest part of the trail stands out.
   function actualSegColor(points, i, out) {
     var f = points.length > 2 ? 0.35 + 0.65 * i / (points.length - 2) : 1;
-    if (isOutOfRoom(points[i]) || isOutOfRoom(points[i + 1])) {
-      out[0] = 1.0 * f; out[1] = 0.25 * f; out[2] = 0.25 * f;
-    } else {
-      out[0] = 0.29 * f; out[1] = 0.62 * f; out[2] = 1.0 * f;
-    }
+    var c = rgb01(sc(isOutOfRoom(points[i]) || isOutOfRoom(points[i + 1]) ? 'path-out' : 'path-actual'));
+    out[0] = c[0] * f; out[1] = c[1] * f; out[2] = c[2] * f;
+  }
+
+  /* Scene colours (WP-39) are tokens in ui/tokens.css (--gs-scene-*, --gs-path-*, --gs-event-*, --gs-run-*).
+   * HTML uses var(--gs-...); canvas and WebGL need the resolved value, read at draw time through GSUI.tokenColor
+   * ('' when there is no computed style, e.g. an offline harness without tokens). */
+  function sc(name) { return window.GSUI ? window.GSUI.tokenColor('--gs-' + name) : ''; }
+  // a 'var(--gs-x)' string -> its resolved value; anything else unchanged
+  function resolved(c) { var m = /^var\(--gs-([\w-]+)\)$/.exec(String(c)); return m ? sc(m[1]) : String(c || ''); }
+  // '#rrggbb' or 'rgb[a](r, g, b, ...)' -> [r, g, b] in 0..1, the sRGB floats the vertex colours always used
+  function rgb01(css) {
+    var s = String(css || '').trim(), m = /^#([0-9a-f]{6})$/i.exec(s), n;
+    if (m) { n = parseInt(m[1], 16); return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]; }
+    m = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/i.exec(s);
+    return m ? [m[1] / 255, m[2] / 255, m[3] / 255] : [1, 1, 1];
   }
 
   function fmtNum(v, dec) {
@@ -574,12 +588,12 @@
     var H = _canvas.height;
 
     // Clear
-    _ctx.fillStyle = '#0a0a1a';
+    _ctx.fillStyle = sc('scene-bg');
     _ctx.fillRect(0, 0, W, H);
 
     if (!_currentPos && !_waypoints.length) {
       // With no data the panel draws nothing and says it has no position data
-      _ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+      _ctx.fillStyle = sc('scene-label');
       _ctx.font = '14px Consolas, monospace';
       _ctx.textAlign = 'center';
       _ctx.textBaseline = 'middle';
@@ -620,13 +634,13 @@
     drawWaypoints();
 
     // Home position
-    if (_homePos) drawMarker(_homePos.x, _homePos.y, 'H', '#4ecca3', 12);
+    if (_homePos) drawMarker(_homePos.x, _homePos.y, 'H', sc('path-in'), 12);
 
     // Target position
-    if (_targetPos) drawMarker(_targetPos.x, _targetPos.y, 'T', '#e94560', 12);
+    if (_targetPos) drawMarker(_targetPos.x, _targetPos.y, 'T', sc('path-target'), 12);
 
     // Axes labels
-    _ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    _ctx.fillStyle = sc('scene-label');
     _ctx.font = '10px Consolas, monospace';
     _ctx.fillText('X', W - 15, H - 8);
     _ctx.fillText('Y', 8, 15);
@@ -637,7 +651,7 @@
     var originX = W / 2 + _panX;
     var originY = H / 2 + _panY;
 
-    _ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+    _ctx.strokeStyle = sc('scene-grid');
     _ctx.lineWidth = 1;
     _ctx.setLineDash([4, 4]);
 
@@ -665,7 +679,7 @@
     var b = roomBounds();
     var a = worldToScreen(b.x0, b.y1, W, H);
     var c = worldToScreen(b.x1, b.y0, W, H);
-    _ctx.strokeStyle = 'rgba(120, 140, 255, 0.55)';
+    _ctx.strokeStyle = sc('scene-room');
     _ctx.lineWidth = 1.5;
     _ctx.beginPath();
     _ctx.moveTo(a.x, a.y);
@@ -706,7 +720,7 @@
     var H = _canvas.height;
 
     _ctx.beginPath();
-    _ctx.strokeStyle = 'rgba(74, 158, 255, 0.6)';
+    _ctx.strokeStyle = sc('path-actual-line');
     _ctx.lineWidth = 2;
 
     var first = worldToScreen(pts[0].x, pts[0].y, W, H);
@@ -721,14 +735,15 @@
     // Gradient fade for older points (only last 100 points to avoid lag)
     var startIdx = Math.max(1, pts.length - 100);
     var tailLen = pts.length - startIdx;
+    _ctx.fillStyle = sc('path-actual');
     for (var i = startIdx; i < pts.length; i++) {
-      var alpha = ((i - startIdx) / tailLen) * 0.5;
       var pt = worldToScreen(pts[i].x, pts[i].y, W, H);
+      _ctx.globalAlpha = ((i - startIdx) / tailLen) * 0.5;
       _ctx.beginPath();
-      _ctx.fillStyle = 'rgba(74, 158, 255, ' + alpha + ')';
       _ctx.arc(pt.x, pt.y, 2, 0, Math.PI * 2);
       _ctx.fill();
     }
+    _ctx.globalAlpha = 1;
   }
 
   function drawDesiredTrail() {
@@ -739,7 +754,7 @@
     var H = _canvas.height;
 
     _ctx.beginPath();
-    _ctx.strokeStyle = 'rgba(255, 170, 0, 0.85)';
+    _ctx.strokeStyle = sc('path-desired-line');
     _ctx.lineWidth = 1.5;
     _ctx.setLineDash([4, 4]);
 
@@ -762,7 +777,7 @@
     var H = _canvas.height;
 
     _ctx.beginPath();
-    _ctx.strokeStyle = 'rgba(245, 166, 35, 0.4)';
+    _ctx.strokeStyle = sc('path-plan-line');
     _ctx.lineWidth = 1;
     _ctx.setLineDash([6, 4]);
 
@@ -779,7 +794,7 @@
 
   function drawWaypoints() {
     _waypoints.forEach(function (wp, i) {
-      var color = wp.reached ? 'rgba(78, 204, 163, 0.6)' : 'rgba(245, 166, 35, 0.8)';
+      var color = sc(wp.reached ? 'path-reached' : 'path-waypoint');
       drawMarker(wp.x, wp.y, (i + 1).toString(), color, 10);
     });
   }
@@ -836,7 +851,7 @@
 
     // Label
     if (label) {
-      _ctx.fillStyle = '#0a0a1a';
+      _ctx.fillStyle = sc('scene-bg');
       _ctx.font = 'bold ' + (radius - 2) + 'px sans-serif';
       _ctx.textAlign = 'center';
       _ctx.textBaseline = 'middle';
@@ -1107,7 +1122,7 @@
     var h = canvas.clientHeight || 400;
 
     _threeScene = new THREE.Scene();
-    _threeScene.background = new THREE.Color(0x0a0a1a);
+    _threeScene.background = new THREE.Color(sc('scene-bg'));
 
     _THREE = THREE;
     _threeCamera = new THREE.PerspectiveCamera(60, w / h, 0.01, 100);
@@ -1139,7 +1154,7 @@
 
     // Desired path (thin dashed amber line)
     _threeLineDesired = new THREE.Line(buildLineGeometry(false), new THREE.LineDashedMaterial({
-      color: 0xffaa00, dashSize: 0.04, gapSize: 0.025, transparent: true, opacity: 0.9
+      color: sc('path-desired'), dashSize: 0.04, gapSize: 0.025, transparent: true, opacity: 0.9
     }));
     _threeLineDesired.frustumCulled = false;
     _threeScene.add(_threeLineDesired);
@@ -1156,7 +1171,7 @@
     shadowGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(_MAX_3D_POINTS * 3), 3));
     shadowGeo.setDrawRange(0, 0);
     _threeShadow = new THREE.Line(shadowGeo, new THREE.LineBasicMaterial({
-      color: 0x8899bb, transparent: true, opacity: 0.35, depthWrite: false
+      color: sc('path-shadow'), transparent: true, opacity: 0.35, depthWrite: false
     }));
     _threeShadow.frustumCulled = false;
     _threeScene.add(_threeShadow);
@@ -1167,7 +1182,7 @@
     planGeo.setAttribute('position', new THREE.BufferAttribute(planPositions, 3));
     planGeo.setDrawRange(0, 0);
     var planMat = new THREE.LineDashedMaterial({
-      color: 0xf5a623,
+      color: sc('path-plan'),
       dashSize: 0.05,
       gapSize: 0.03,
       transparent: true,
@@ -1178,7 +1193,7 @@
 
     // The drone is drawn as a point only (no body model).
     _threePoint = new THREE.Mesh(new THREE.SphereGeometry(0.022, 16, 12),
-      new THREE.MeshBasicMaterial({ color: 0x4a9eff }));
+      new THREE.MeshBasicMaterial({ color: sc('path-actual') }));
     _threePoint.visible = false;
     _threePoint.renderOrder = 9;
     _threeScene.add(_threePoint);
@@ -1222,8 +1237,8 @@
     _threePoint.position.set(p.x, p.z || 0, p.y);
     _threePoint.visible = true;
     e = p[errKey()];
-    col = e == null ? 0x4a9eff : (e > _fly.thr ? 0xff4040 : 0x4ecca3);
-    _threePoint.material.color.setHex(col);
+    col = e == null ? 'path-actual' : (e > _fly.thr ? 'path-out' : 'path-in');
+    _threePoint.material.color.set(sc(col));
   }
 
   function render3D() {
@@ -1296,7 +1311,7 @@
     if (oobEl) {
       var oob = countOutOfRoom(activeActual);
       oobEl.textContent = 'Outside room: ' + oob + ' / ' + activeActual.length + ' pts';
-      oobEl.style.color = oob > 0 ? '#ff5050' : '';
+      oobEl.style.color = oob > 0 ? 'var(--gs-path-out)' : '';
     }
 
     // Follow drone
@@ -1381,12 +1396,12 @@
     g = new THREE.Group();
     boxGeo = new THREE.BoxGeometry(_room.w, _room.h, _room.d);
     walls = new THREE.Mesh(boxGeo, new THREE.MeshBasicMaterial({
-      color: 0x4a9eff, transparent: true, opacity: 0.04, side: THREE.BackSide, depthWrite: false
+      color: sc('path-actual'), transparent: true, opacity: 0.04, side: THREE.BackSide, depthWrite: false
     }));
     walls.position.y = _room.h / 2;
     g.add(walls);
     edges = new THREE.LineSegments(new THREE.EdgesGeometry(boxGeo),
-      new THREE.LineBasicMaterial({ color: 0x6a8cff, transparent: true, opacity: 0.6 }));
+      new THREE.LineBasicMaterial({ color: sc('path-room-edge'), transparent: true, opacity: 0.6 }));
     edges.position.y = _room.h / 2;
     g.add(edges);
 
@@ -1396,7 +1411,7 @@
 
     _threeDrawPlane = new THREE.Mesh(
       new THREE.PlaneGeometry(Math.max(_room.w, _room.d, _room.h) * 1.5, Math.max(_room.w, _room.d, _room.h) * 1.5),
-      new THREE.MeshBasicMaterial({ color: 0x4ecca3, transparent: true, opacity: 0.12,
+      new THREE.MeshBasicMaterial({ color: sc('path-in'), transparent: true, opacity: 0.12,
                                     side: THREE.DoubleSide, depthWrite: false }));
     g.add(_threeDrawPlane);
     updateDrawPlane();
@@ -2372,11 +2387,11 @@
   var STAT_GAP_MS = 500;       // a gap longer than this is not carried across in time-weighted stats
 
   var EVENT_KINDS = {
-    adapt:   { label: 'Adaptation on/off', letter: 'A', color: 0xc77dff, css: '#c77dff' },
-    mode:    { label: 'Mode change',       letter: 'M', color: 0xffd166, css: '#ffd166' },
-    path:    { label: 'Path execute/stop', letter: 'P', color: 0x4cc9f0, css: '#4cc9f0' },
-    note:    { label: 'REC note',          letter: 'N', color: 0xffffff, css: '#ffffff' },
-    finding: { label: 'Agent finding',     letter: 'F', color: 0xff9f1c, css: '#ff9f1c' }
+    adapt:   { label: 'Adaptation on/off', letter: 'A', css: 'var(--gs-event-adapt)' },
+    mode:    { label: 'Mode change',       letter: 'M', css: 'var(--gs-event-mode)' },
+    path:    { label: 'Path execute/stop', letter: 'P', css: 'var(--gs-event-path)' },
+    note:    { label: 'REC note',          letter: 'N', css: 'var(--gs-event-note)' },
+    finding: { label: 'Agent finding',     letter: 'F', css: 'var(--gs-event-finding)' }
   };
   var EVENT_ORDER = ['adapt', 'mode', 'path', 'note', 'finding'];
   var FLY_VIEWS = ['top', 'side', 'front', 'iso'];   // keys 1-4, same order as the camera buttons
@@ -2637,14 +2652,14 @@
     s = flyStats(pts, _fly.thr, errKey(), t0);
     last = pts.length ? pts[pts.length - 1] : null;
     run = last ? last.t - (t0 != null ? t0 : pts[0].t) : null;
-    col = s.cur == null ? '' : (s.cur > _fly.thr ? '#ff5050' : '#4ecca3');
+    col = s.cur == null ? '' : (s.cur > _fly.thr ? 'var(--gs-path-out)' : 'var(--gs-path-in)');
     adapt = _flyStatus.adapt;
     el.innerHTML = [
       flyCell('Error ' + (_fly.metric === 'xy' ? 'xy' : '3D'), s.cur == null ? '—' : fmtNum(s.cur, 3) + ' m', col),
       flyCell('Run RMS', s.rms == null ? '—' : fmtNum(s.rms, 3) + ' m'),
       flyCell('Above ' + fmtNum(_fly.thr, 2) + ' m', s.pctAbove == null ? '—' : fmtNum(s.pctAbove, 0) + ' %'),
       flyCell('Flight mode', modeLabel(_flyStatus.mode)),
-      flyCell('Adaptation', adapt == null ? '—' : (adapt ? 'ON' : 'OFF'), adapt ? '#c77dff' : ''),
+      flyCell('Adaptation', adapt == null ? '—' : (adapt ? 'ON' : 'OFF'), adapt ? 'var(--gs-event-adapt)' : ''),
       flyCell('Vbat', _flyStatus.vbat == null ? '—' : fmtNum(_flyStatus.vbat, 2) + ' V'),
       flyCell(t0 != null ? 'Run time' : 'Trail time', fmtRunTime(run))
     ].join('');
@@ -2654,8 +2669,8 @@
   function renderFlyLegend(s) {
     var el = q('pp-fly-legend'), html = '', i, k;
     if (!el) return;
-    html += '<span class="pp-fly-key"><i style="background:#4ecca3"></i>&le; ' + fmtNum(_fly.thr, 2) + ' m</span>';
-    html += '<span class="pp-fly-key"><i style="background:#ff4040"></i>&gt; ' + fmtNum(_fly.thr, 2) + ' m</span>';
+    html += '<span class="pp-fly-key"><i style="background:var(--gs-path-in)"></i>&le; ' + fmtNum(_fly.thr, 2) + ' m</span>';
+    html += '<span class="pp-fly-key"><i style="background:var(--gs-path-out)"></i>&gt; ' + fmtNum(_fly.thr, 2) + ' m</span>';
     for (i = 0; i < EVENT_ORDER.length; i++) {
       k = EVENT_KINDS[EVENT_ORDER[i]];
       html += '<span class="pp-fly-key"><b style="color:' + k.css + '">' + k.letter + '</b> ' + k.label + '</span>';
@@ -2706,11 +2721,11 @@
     c.width = 64; c.height = 64;
     g = c.getContext('2d');
     if (!g) return null;
-    g.fillStyle = 'rgba(10,10,26,0.85)';
+    g.fillStyle = sc('scene-overlay');
     g.beginPath(); g.arc(32, 32, 28, 0, Math.PI * 2); g.fill();
-    g.strokeStyle = k.css; g.lineWidth = 5;
+    g.strokeStyle = resolved(k.css); g.lineWidth = 5;
     g.beginPath(); g.arc(32, 32, 28, 0, Math.PI * 2); g.stroke();
-    g.fillStyle = k.css; g.font = 'bold 34px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillStyle = resolved(k.css); g.font = 'bold 34px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
     g.fillText(k.letter, 32, 34);
     _eventTex[kind] = new _THREE.CanvasTexture(c);
     return _eventTex[kind];
@@ -2869,7 +2884,7 @@
   // one colour per log or coloured by error, against one scrubber whose t = 0
   // is the path execute of each log (REC start when a log has none).
   var RV_KEY = 'pp_rv_sel_v1';
-  var RV_COLORS = ['#4a9eff', '#ff9f43', '#c77dff', '#4ecca3', '#ff5c8a', '#f5e663', '#7bdff2', '#b8f2a0'];
+  var RV_COLORS = [1, 2, 3, 4, 5, 6, 7, 8].map(function (n) { return 'var(--gs-run-' + n + ')'; });
   var RV_MAX_POINTS = 6000;
   var _rvLogs = [];            // server list: { name, label, started_at, duration_s, rows, recording }
   var _rvSel = {};             // name -> loaded log (see rvBuild)
@@ -2879,10 +2894,6 @@
   var _rvStatus = '';
   var _rvGroup = null;         // THREE.Group holding every log's line / point / markers
 
-  function hexRgb(h) {
-    var n = parseInt(String(h).replace('#', ''), 16);
-    return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
-  }
 
   function rvColorFor(order) { return RV_COLORS[order % RV_COLORS.length]; }
 
@@ -3139,7 +3150,7 @@
     l.line = new THREE.Line(geo, new THREE.LineBasicMaterial({ vertexColors: true }));
     l.line.frustumCulled = false;
     _rvGroup.add(l.line);
-    l.point = new THREE.Mesh(new THREE.SphereGeometry(0.02, 14, 10), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+    l.point = new THREE.Mesh(new THREE.SphereGeometry(0.02, 14, 10), new THREE.MeshBasicMaterial({ color: sc('path-marker') }));
     l.point.renderOrder = 9;
     _rvGroup.add(l.point);
     l.markers = [];
@@ -3165,13 +3176,13 @@
     if (l.colorKey === key || !l.line) return;
     geo = l.line.geometry;
     pos = geo.getAttribute('position'); col = geo.getAttribute('color');
-    base = hexRgb(l.color); k = errKey();
+    base = rgb01(resolved(l.color)); k = errKey();
     for (i = 0; i < l.pts.length; i++) {
       p = l.pts[i];
       pos.setXYZ(i, p.x - _origin.x, p.z || 0, p.y - _origin.y);
       if (l.byError) {
         e = p[k];
-        rgb = e == null ? [0.45, 0.55, 0.75] : (e > _fly.thr ? [1, 0.25, 0.25] : [0.2, 0.85, 0.45]);
+        rgb = rgb01(sc(e == null ? 'path-err-none' : (e > _fly.thr ? 'path-out' : 'path-err-ok')));
       } else rgb = base;
       col.setXYZ(i, rgb[0], rgb[1], rgb[2]);
     }
@@ -3197,7 +3208,7 @@
         p = l.pts[idx];
         l.point.position.set(p.x - _origin.x, p.z || 0, p.y - _origin.y);
         e = p[errKey()];
-        l.point.material.color.setHex(l.byError && e != null ? (e > _fly.thr ? 0xff4040 : 0x4ecca3) : parseInt(l.color.slice(1), 16));
+        l.point.material.color.set(l.byError && e != null ? sc(e > _fly.thr ? 'path-out' : 'path-in') : resolved(l.color));
       }
       for (j = 0; j < (l.markers || []).length; j++) {
         mk = l.markers[j];
@@ -3229,7 +3240,7 @@
       '<style>',
       /* Scoped styles */
       '.pp-container { display: grid; grid-template-columns: 1fr 220px; gap: 12px; height: 100%; min-height: 0; }',
-      '.pp-canvas-wrap { position: relative; background: #0a0a1a; border-radius: 6px; overflow: hidden; }',
+      '.pp-canvas-wrap { position: relative; background: var(--gs-scene-bg); border-radius: 6px; overflow: hidden; }',
       '.pp-canvas { display: block; width: 100%; height: 100%; min-height: 400px; }',
       '.pp-controls { position: absolute; top: 8px; right: 8px; display: flex; flex-direction: column; gap: 4px; }',
       '.pp-btn { padding: 6px 12px; border-radius: 4px; border: none; cursor: pointer; font-size: 12px; font-weight: 600;',
@@ -3237,15 +3248,15 @@
       '.pp-btn-sm { padding: 4px 8px; font-size: 11px; }',
       '.pp-btn:hover { opacity: 0.85; }',
       '.pp-demo-badge { position: absolute; top: 8px; left: 8px; padding: 4px 8px; border-radius: 4px;',
-      '  background: rgba(233,69,96,0.2); color: var(--red); font-size: 10px; font-weight: 600; }',
+      '  background: var(--gs-fail-bg); color: var(--red); font-size: 10px; font-weight: 600; }',
       '.pp-sidebar { display: flex; flex-direction: column; gap: 10px; overflow-y: scroll; min-height: 0;',
       '  max-height: calc(100vh - 120px); padding-right: 6px; scrollbar-width: thin; scrollbar-color: var(--accent) transparent; }',
       '.pp-sidebar::-webkit-scrollbar { width: 8px; }',
       '.pp-sidebar::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 4px; }',
-      '.pp-sidebar::-webkit-scrollbar-track { background: rgba(255,255,255,0.04); border-radius: 4px; }',
+      '.pp-sidebar::-webkit-scrollbar-track { background: var(--gs-hover-bg); border-radius: 4px; }',
       '.pp-metric-wide { grid-column: 1 / -1; }',
-      '.pp-exec-ok { color: var(--ok, #3fb950); }',
-      '.pp-exec-bad { color: var(--bad, #f85149); }',
+      '.pp-exec-ok { color: var(--gs-ok); }',
+      '.pp-exec-bad { color: var(--gs-fail); }',
       '.pp-metric-hint { font-size: 10px; color: var(--muted); line-height: 1.35; }',
       '.pp-section-label { font-size: 10px; font-weight: 700; color: var(--muted); letter-spacing: 0.08em;',
       '  text-transform: uppercase; margin-bottom: 6px; }',
@@ -3281,22 +3292,22 @@
       '.pp-view-toggle { display: flex; gap: 2px; margin-bottom: 8px; }',
       '.pp-view-btn { flex: 1; padding: 5px 8px; border-radius: 4px; background: var(--bg); color: var(--muted); border: 1px solid var(--border); cursor: pointer; font-size: 11px; font-weight: 600; }',
       '.pp-view-btn.active { background: var(--accent); color: var(--text); }',
-      '.pp-3d-wrap { position: relative; background: #0a0a1a; border-radius: 6px; overflow: hidden; }',
+      '.pp-3d-wrap { position: relative; background: var(--gs-scene-bg); border-radius: 6px; overflow: hidden; }',
       '.pp-3d-canvas { display: block; width: 100%; height: 560px; }',
       '.pp-3d-controls { position: absolute; bottom: 8px; left: 8px; display: flex; gap: 4px; flex-wrap: wrap; }',
-      '.pp-3d-btn { padding: 4px 8px; border-radius: 4px; background: rgba(20,20,40,0.85); color: var(--text); border: 1px solid var(--border); cursor: pointer; font-size: 10px; }',
+      '.pp-3d-btn { padding: 4px 8px; border-radius: 4px; background: var(--gs-scene-overlay); color: var(--text); border: 1px solid var(--border); cursor: pointer; font-size: 10px; }',
       '.pp-3d-btn:hover { background: var(--accent); }',
       '.pp-3d-btn.active { background: var(--accent); }',
-      '.pp-3d-legend { position: absolute; top: 8px; left: 8px; padding: 6px 10px; border-radius: 4px; background: rgba(10,10,26,0.85); color: var(--text); font-size: 11px; }',
+      '.pp-3d-legend { position: absolute; top: 8px; left: 8px; padding: 6px 10px; border-radius: 4px; background: var(--gs-scene-overlay); color: var(--text); font-size: 11px; }',
       '.pp-3d-legend-item { display: flex; align-items: center; gap: 6px; margin: 2px 0; }',
       '.pp-3d-legend-line { width: 20px; height: 2px; }',
-      '.pp-3d-legend-dash { width: 20px; height: 0; border-top: 2px dashed #ffaa00; }',
+      '.pp-3d-legend-dash { width: 20px; height: 0; border-top: 2px dashed var(--gs-path-desired); }',
       '.pp-3d-follow-row { display: flex; align-items: center; gap: 4px; font-size: 10px; color: var(--muted); margin-top: 4px; }',
-      '.pp-3d-follow-toggle { width: 32px; height: 16px; border-radius: 8px; background: #333; border: 1px solid #555; cursor: pointer; position: relative; transition: background 0.2s; }',
+      '.pp-3d-follow-toggle { width: 32px; height: 16px; border-radius: 8px; background: var(--gs-surface-2); border: 1px solid var(--gs-border); cursor: pointer; position: relative; transition: background 0.2s; }',
       '.pp-3d-follow-toggle.on { background: var(--accent); }',
-      '.pp-3d-follow-toggle::after { content: \'\'; width: 12px; height: 12px; border-radius: 50%; background: #fff; position: absolute; top: 1px; left: 1px; transition: left 0.2s; }',
+      '.pp-3d-follow-toggle::after { content: \'\'; width: 12px; height: 12px; border-radius: 50%; background: var(--gs-text); position: absolute; top: 1px; left: 1px; transition: left 0.2s; }',
       '.pp-3d-follow-toggle.on::after { left: 17px; }',
-      '.pp-room-in { width: 44px; padding: 2px 3px; font-size: 10px; background: rgba(20,20,40,0.85); color: var(--text); border: 1px solid var(--border); border-radius: 3px; }',
+      '.pp-room-in { width: 44px; padding: 2px 3px; font-size: 10px; background: var(--gs-scene-overlay); color: var(--text); border: 1px solid var(--border); border-radius: 3px; }',
       '.pp-hint { font-size: 10px; color: var(--muted); margin-top: 4px; line-height: 1.4; }',
       /* Mode bar and Fly mode */
       '.pp-mode-bar { display: flex; gap: 2px; margin-bottom: 8px; align-items: center; }',
@@ -3383,10 +3394,10 @@
       '<button id="pp-3d-clear" class="pp-3d-btn" title="Clear the flown and desired trails">Clear trail</button>',
       '</div>',
       '<div id="pp-3d-legend" class="pp-3d-legend">',
-      '<div class="pp-3d-legend-item"><div class="pp-3d-legend-line" style="background:#4a9eff"></div>Actual path</div>',
+      '<div class="pp-3d-legend-item"><div class="pp-3d-legend-line" style="background:var(--gs-path-actual)"></div>Actual path</div>',
       '<div class="pp-3d-legend-item"><div class="pp-3d-legend-dash"></div>Desired path</div>',
-      '<div class="pp-3d-legend-item"><div class="pp-3d-legend-line" style="background:#ff4040"></div>Outside room</div>',
-      '<div id="pp-3d-error" class="pp-3d-legend-item" style="margin-top:4px;color:#4a9eff">Error: — m</div>',
+      '<div class="pp-3d-legend-item"><div class="pp-3d-legend-line" style="background:var(--gs-path-out)"></div>Outside room</div>',
+      '<div id="pp-3d-error" class="pp-3d-legend-item" style="margin-top:4px;color:var(--gs-path-actual)">Error: — m</div>',
       '<div id="pp-3d-oob" class="pp-3d-legend-item">Outside room: 0 / 0 pts</div>',
       '</div>',
       '<div id="pp-3d-topright" class="pp-3d-controls" style="bottom:auto;top:8px;left:auto;right:8px">',
@@ -3554,19 +3565,19 @@
        '<div class="pp-section-label">Playback &amp; Scrub</div>',
        '<div class="pp-entry-row" style="align-items:center;gap:8px">',
        '<input id="pp-replay-scrub" type="range" min="0" max="100" value="100" style="flex:1" title="Scrub recording / trail">',
-       '<span id="pp-replay-time" style="font-family:monospace;font-size:11px;min-width:45px;color:#aaa">Live</span>',
+       '<span id="pp-replay-time" style="font-family:monospace;font-size:11px;min-width:45px;color:var(--gs-text-muted)">Live</span>',
        '</div>',
        '</div>',
 
        '<div>',
        '<div class="pp-section-label">Legend</div>',
        '<div class="pp-legend">',
-       '<div class="pp-legend-item"><div class="pp-legend-dot" style="background:#4a9eff"></div>Current Position</div>',
-       '<div class="pp-legend-item"><div class="pp-legend-dot" style="background:#4ecca3"></div>Home</div>',
-       '<div class="pp-legend-item"><div class="pp-legend-dot" style="background:#e94560"></div>Target</div>',
-       '<div class="pp-legend-item"><div class="pp-legend-dot" style="background:#f5a623"></div>Waypoints</div>',
-       '<div class="pp-legend-item"><div class="pp-legend-line" style="background:rgba(74,158,255,0.6)"></div>Actual Trail</div>',
-       '<div class="pp-legend-item"><div class="pp-legend-line" style="background:#ff9f43;border-top:1px dashed #ff9f43"></div>Desired Trace</div>',
+       '<div class="pp-legend-item"><div class="pp-legend-dot" style="background:var(--gs-path-actual)"></div>Current Position</div>',
+       '<div class="pp-legend-item"><div class="pp-legend-dot" style="background:var(--gs-path-in)"></div>Home</div>',
+       '<div class="pp-legend-item"><div class="pp-legend-dot" style="background:var(--gs-path-target)"></div>Target</div>',
+       '<div class="pp-legend-item"><div class="pp-legend-dot" style="background:var(--gs-path-plan)"></div>Waypoints</div>',
+       '<div class="pp-legend-item"><div class="pp-legend-line" style="background:var(--gs-path-actual-line)"></div>Actual Trail</div>',
+       '<div class="pp-legend-item"><div class="pp-legend-line" style="background:var(--gs-path-desired);border-top:1px dashed var(--gs-path-desired)"></div>Desired Trace</div>',
        '</div>',
        '</div>',
       '</div>',   /* end #pp-tools-plan */
@@ -3586,7 +3597,7 @@
       '<div class="pp-entry-row" style="align-items:center;gap:8px">',
       '<button id="pp-rv-play" class="pp-btn pp-btn-sm" title="Play / pause">&#9654;</button>',
       '<input id="pp-rv-scrub" type="range" min="0" max="0" step="0.1" value="0" style="flex:1" title="Shared time: 0 = path execute (REC start when a log has none)">',
-      '<span id="pp-rv-time" style="font-family:monospace;font-size:11px;min-width:52px;color:#aaa">—</span>',
+      '<span id="pp-rv-time" style="font-family:monospace;font-size:11px;min-width:52px;color:var(--gs-text-muted)">—</span>',
       '</div>',
       '</div>',
       '<div>',

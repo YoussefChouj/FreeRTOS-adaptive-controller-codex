@@ -49,9 +49,8 @@ class TestBandwidthPanel(unittest.TestCase):
         self.assertIn("ALL CHECKS PASSED", proc.stdout)
         # Every required behavior must be evidenced in the output.
         self.assertIn('"No active streams"', proc.stdout)
-        self.assertIn("request form opens and cancels", proc.stdout)
-        self.assertIn("default submit -> POST body", proc.stdout)
-        self.assertIn("channel 9 clamps to slot 1", proc.stdout)
+        # WP-39: link health only; subscribing lives in the Streams / Expert tabs.
+        self.assertIn("no Request Slot form", proc.stdout)
         self.assertIn("BUDGET EXCEEDED", proc.stdout)
         self.assertIn("missing loss -> NOT PUBLISHED", proc.stdout)
         self.assertIn("remove slot -> POST body", proc.stdout)
