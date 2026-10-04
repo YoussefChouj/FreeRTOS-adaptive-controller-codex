@@ -10,6 +10,7 @@ passes when it builds and exits 0. Exit 1 if any test fails. Run from anywhere; 
     python tools/host_tests.py pid_guards # rows whose name contains the argument
     python tools/host_tests.py --tidy     # clang-tidy (.clang-tidy) on each API/*.c the rows build, same flags
     python tools/host_tests.py --arm      # arm-none-eabi-gcc -fsyntax-only on the same files (skips if absent)
+    python tools/host_tests.py --float    # gcc -Werror=double-promotion on the same files (single-precision FPU)
 """
 from __future__ import annotations
 
@@ -163,11 +164,25 @@ def arm() -> int:
     return over_firmware("arm-none-eabi-gcc", lambda path, flags: [exe, *ARM, *flags, path])
 
 
+def float_only() -> int:
+    """No implicit float -> double promotion: the M4 FPU is single precision, so each one is a software double
+    call (__aeabi_dmul, ...). Zero in every file today (2026-10-05); the step keeps it there. -mfpmath=sse: the
+    32-bit host gcc otherwise uses x87 excess precision under -std=c99, which hides the warning."""
+    gcc = shutil.which("gcc")
+    if gcc is None:
+        print("FAIL float: gcc not on PATH")
+        return 1
+    return over_firmware("double-promotion", lambda path, flags: [
+        gcc, "-fsyntax-only", "-msse2", "-mfpmath=sse", "-Werror=double-promotion", *flags, path])
+
+
 def main(argv: list[str]) -> int:
     if argv == ["--tidy"]:
         return tidy()
     if argv == ["--arm"]:
         return arm()
+    if argv == ["--float"]:
+        return float_only()
     gcc = shutil.which("gcc")
     if gcc is None:
         print("FAIL host tests: gcc not on PATH")

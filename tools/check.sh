@@ -7,6 +7,7 @@
 #   sil-smoke    sim/sil/test_sil.py, the firmware controllers in the closed-loop SIL (its EQUIV case is mrac-equiv), and
 #                sim/sil/test_faults.py, wfb_safety trips on SIL faults (about 20 s)
 #   clang-tidy   .clang-tidy on every firmware file the host tests build, with their flags
+#   float        no implicit float -> double promotion in those files (gcc -Werror=double-promotion)
 #   row-meta     units and [min, max] of every *_ROW tunable, every row value in range (tools/row_meta.py)
 #   fw-lint      firmware coding-standard ratchet (tools/fw_lint.py, allow-list shrinks only)
 #   stack        task and interrupt stack budget from the Keil call graph (tools/stack_budget.py)
@@ -22,9 +23,9 @@ PY=${PYTHON:-python}
 command -v "$PY" >/dev/null 2>&1 || PY=python3
 PYTEST=("$PY" -m pytest -q -p no:cacheprovider)
 
-ALL=" host-tests mrac-equiv c-pytest sil-smoke clang-tidy row-meta fw-lint stack doc-paths arm-syntax "
+ALL=" host-tests mrac-equiv c-pytest sil-smoke clang-tidy float row-meta fw-lint stack doc-paths arm-syntax "
 only=" $* "
-[ "$only" = " --fast " ] && only=" c-pytest clang-tidy row-meta fw-lint stack doc-paths arm-syntax "
+[ "$only" = " --fast " ] && only=" c-pytest clang-tidy float row-meta fw-lint stack doc-paths arm-syntax "
 for want in $only; do
     [[ "$ALL" == *" $want "* ]] || { echo "check.sh: unknown step '$want' (steps:$ALL)" >&2; exit 2; }
 done
@@ -49,6 +50,7 @@ step c-pytest   "${PYTEST[@]}" ground_station/livewatch/tests/test_subscribe_c.p
                 ground_station/analysis/tests/test_mrac_variants_host.py tools/test_row_meta.py tools/test_install_hooks.py
 step sil-smoke  "${PYTEST[@]}" sim/sil/test_sil.py sim/sil/test_faults.py --deselect sim/sil/test_sil.py::test_run_mrac_equiv_still_ok
 step clang-tidy "$PY" tools/host_tests.py --tidy
+step float      "$PY" tools/host_tests.py --float
 step row-meta   "$PY" tools/row_meta.py
 step fw-lint    "$PY" tools/fw_lint.py
 step stack      "$PY" tools/stack_budget.py
