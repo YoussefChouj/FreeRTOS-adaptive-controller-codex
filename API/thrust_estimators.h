@@ -18,9 +18,9 @@
 typedef struct {
     float empirical[4];      /* N, per motor (PWM-based, bench LUT) */
     float blade_element[4];  /* N, per motor (RPM-based, k_T·w²) */
-    float imu_total;         /* N, total vertical thrust (accel projection) */
+    float imu_total;         /* N, total thrust along body z = m (a_z + g cos_tilt); 0 on non-finite input */
     float sum_w2;            /* rad²/s², sum of all four motor ω², LPF 1 s */
-    float mass_hat;          /* kg, = k_T * sum_w2 / (g + a_z), LPF 1 s */
+    float mass_hat;          /* kg, = k_T * sum_w2 / (a_z + g cos_tilt), LPF 1 s */
     float cw_share;          /* ratio [0..1], CW pair (ch0+ch1) ω² share, LPF 1 s */
 } ThrustEstimators_t;
 

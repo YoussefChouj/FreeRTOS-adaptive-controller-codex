@@ -4,7 +4,7 @@
 /**
  * @module  thrust_estimators.c
  * @subsystem  API
- * @depends  thrust_estimators.h, math.h (cosf, fabsf)
+ * @depends  thrust_estimators.h, math.h (cosf)
  * @owns  Shadow-mode thrust estimation for motor dynamics validation.
  *        Three estimators: empirical (PWM->thrust bench LUT), blade-element
  *        (RPM->thrust k_T·w²), IMU-derived (vertical accel sanity check).
@@ -114,7 +114,7 @@ void ThrustEst_Update(const float pwm[4], const uint16_t rpm[4],
 {
     uint8_t i;
     float omega_rad_s;
-    float cos_pitch, cos_roll, cos_tilt;
+    float cos_pitch, cos_roll, cos_tilt, f_z;
     float pitch_rad, roll_rad;
     float sum_w2_raw;
     float cw_w2_raw;
@@ -145,18 +145,20 @@ void ThrustEst_Update(const float pwm[4], const uint16_t rpm[4],
         }
     }
 
-    /* 3. IMU-derived (vertical acceleration -> total thrust).
-     * T_total = m · (a_z / cos(pitch)cos(roll) + g) */
+    /* 3. IMU-derived total thrust along body z.
+     * acc_z is the body-z linear acceleration: specific force minus gravity's body-z share g cos(pitch)cos(roll)
+     * (API/imu_update.c:204). The specific force is thrust / m, so T = m (acc_z + g cos_tilt). WP-34: the old
+     * m (acc_z / cos_tilt + g) equals T / cos_tilt (+1.5 % at 10 deg tilt, +8 % at pitch 10 roll 20). */
     pitch_rad = pitch_deg * 0.017453292519943295f;  /* deg -> rad */
     roll_rad  = roll_deg  * 0.017453292519943295f;
     cos_pitch = cosf(pitch_rad);
     cos_roll  = cosf(roll_rad);
     cos_tilt  = cos_pitch * cos_roll;
+    f_z       = acc_z + GRAVITY_MS2 * cos_tilt;     /* specific force along body z, m/s^2 */
 
-    if (fabsf(cos_tilt) > 0.1f) {  /* Avoid divide-by-zero near 90° tilt */
-        g_thrust_est.imu_total = DRONE_MASS_KG * (acc_z / cos_tilt + GRAVITY_MS2);
-    } else {
-        g_thrust_est.imu_total = 0.0f;  /* Invalid */
+    g_thrust_est.imu_total = DRONE_MASS_KG * f_z;
+    if (!(f_z - f_z == 0.0f)) {
+        g_thrust_est.imu_total = 0.0f;  /* Invalid: non-finite acc_z or attitude */
     }
 
     /* 4. Derived telemetry (LPF 1 s at 200 Hz -> alpha = 0.005). */
@@ -164,15 +166,13 @@ void ThrustEst_Update(const float pwm[4], const uint16_t rpm[4],
     /* sum_w2: total rotational kinetic indicator */
     g_thrust_est.sum_w2 = lpf_step(g_thrust_est.sum_w2, sum_w2_raw, THRUST_LPF_ALPHA);
 
-    /* mass_hat: estimated mass from thrust balance.
-     * m_hat = k_T * sum_w2 / (g + a_z).  When hovering, a_z ~ 0 so m_hat ~ k_T*sum_w2/g.
-     * Guard: only update if g + a_z is positive and non-negligible. */
-    {
-        float g_plus_az = GRAVITY_MS2 + acc_z;
-        if (g_plus_az > 1.0f) {
-            float mass_raw = K_T_CALIBRATED * sum_w2_raw / g_plus_az;
-            g_thrust_est.mass_hat = lpf_step(g_thrust_est.mass_hat, mass_raw, THRUST_LPF_ALPHA);
-        }
+    /* mass_hat: estimated mass from thrust balance along body z.
+     * m_hat = k_T * sum_w2 / f_z, f_z = a_z + g cos_tilt.  When hovering level, m_hat ~ k_T*sum_w2/g.
+     * Guard: only update if f_z is positive and non-negligible (false for NaN). WP-34: was / (g + a_z),
+     * which reads m cos_tilt in a tilted hover. */
+    if (f_z > 1.0f) {
+        float mass_raw = K_T_CALIBRATED * sum_w2_raw / f_z;
+        g_thrust_est.mass_hat = lpf_step(g_thrust_est.mass_hat, mass_raw, THRUST_LPF_ALPHA);
     }
 
     /* cw_share: fraction of total omega² carried by the CW pair (ch0+ch1).
