@@ -46,6 +46,7 @@ from ground_station.livewatch.stream import (
     StreamSchema,
     subscribe,
 )
+from ground_station.platform.firmware_contract import SUBSCRIBE_MAX_SLOTS
 
 USART3_BAUD_DEFAULT = 921600   # mirrors USART3_BAUD in BSP/usart3.h
 
@@ -135,8 +136,8 @@ def validate_layout(layout: Layout) -> list[str]:
     slot_indices: set[int] = set()
 
     for slot_spec in layout.slots:
-        # Slot index range — the firmware accepts 0..3 only
-        # (API/subscribe.h: SUBSCRIBE_MAX_SLOTS = 4). Slots 9..12 were
+        # Slot index range — the firmware accepts 0..SUBSCRIBE_MAX_SLOTS-1 only
+        # (API/subscribe.h, mirrored in platform/firmware_contract.py). Slots 9..12 were
         # reserved in an earlier host-side design for "typed-stream
         # equivalents" but the firmware was never extended to support them;
         # a 0x21 with slot 9..12 is rejected with "E:bad slot" by
@@ -144,10 +145,10 @@ def validate_layout(layout: Layout) -> list[str]:
         # SUBSCRIBE_MAX_SLOTS, the host must mirror the firmware limit
         # verbatim -- otherwise the dashboard silently builds frames that
         # the drone will reject.
-        if slot_spec.slot not in (0, 1, 2, 3):
+        if not 0 <= slot_spec.slot < SUBSCRIBE_MAX_SLOTS:
             errors.append(
                 f"slot {slot_spec.slot} out of range "
-                f"(allowed 0..3, vofa_tab={slot_spec.vofa_tab!r})"
+                f"(allowed 0..{SUBSCRIBE_MAX_SLOTS - 1}, vofa_tab={slot_spec.vofa_tab!r})"
             )
         else:
             slot_indices.add(slot_spec.slot)

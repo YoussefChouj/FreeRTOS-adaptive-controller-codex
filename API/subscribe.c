@@ -86,7 +86,7 @@ static uint16_t Crc16Ccitt(const uint8_t* data, uint16_t len)
     for (i = 0U; i < len; i++) {
         crc ^= (uint16_t)((uint16_t)data[i] << 8);
         for (b = 0U; b < 8U; b++) {
-            crc = (uint16_t)((crc & 0x8000U) ? (uint16_t)((crc << 1) ^ 0x1021U)
+            crc = (uint16_t)((crc & 0x8000U) ? (uint16_t)(((uint32_t)crc << 1) ^ 0x1021U)
                                              : (uint16_t)(crc << 1));
         }
     }
@@ -192,7 +192,7 @@ uint8_t Subscribe_ParseRequest(const uint8_t* buf, uint16_t len,
         (void)CopyStr((uint8_t*)err_out, "E:bad cmd", err_cap);
         return 0U;
     }
-    payload_len = (uint16_t)(((uint16_t)buf[3] << 8) | (uint16_t)buf[4]);
+    payload_len = (uint16_t)(((uint32_t)buf[3] << 8) | (uint32_t)buf[4]);
     if ((payload_len % 6U) != 0U) {
         (void)CopyStr((uint8_t*)err_out, "E:bad len", err_cap);
         return 0U;
@@ -225,8 +225,8 @@ uint8_t Subscribe_ParseRequest(const uint8_t* buf, uint16_t len,
                   ((uint32_t)buf[base + 1U] << 8) |
                   ((uint32_t)buf[base + 2U] << 16) |
                   ((uint32_t)buf[base + 3U] << 24);
-        size     = ((uint16_t)buf[base + 4U]) |
-                   ((uint16_t)buf[base + 5U] << 8);
+        size     = (uint16_t)(((uint32_t)buf[base + 4U]) |
+                   ((uint32_t)buf[base + 5U] << 8));
         if (Subscribe_ValidateTuple(address, size, err_out, err_cap) == 0U) {
             return 0U;
         }
@@ -260,7 +260,7 @@ uint8_t Subscribe_BuildReply(const Subscribe_Request_t* req,
     out[0] = 0xAAU;
     out[1] = 0xBBU;
     out[2] = SUBSCRIBE_FRAME_TYPE_REPLY;
-    out[3] = (uint8_t)((payload_len >> 8) & 0xFFU);
+    out[3] = (uint8_t)(((uint32_t)payload_len >> 8) & 0xFFU);
     out[4] = (uint8_t)(payload_len & 0xFFU);
     out[5] = count;
     idx = 6U;
@@ -268,13 +268,13 @@ uint8_t Subscribe_BuildReply(const Subscribe_Request_t* req,
     for (i = 0U; i < count; i++) {
         uint32_t a = req->tuples[i].address;
         uint16_t s = req->tuples[i].size;
-        uint8_t k;
+        uint16_t k;
         out[idx]     = (uint8_t)(a & 0xFFU);
         out[idx + 1U] = (uint8_t)((a >> 8) & 0xFFU);
         out[idx + 2U] = (uint8_t)((a >> 16) & 0xFFU);
         out[idx + 3U] = (uint8_t)((a >> 24) & 0xFFU);
         out[idx + 4U] = (uint8_t)(s & 0xFFU);
-        out[idx + 5U] = (uint8_t)((s >> 8) & 0xFFU);
+        out[idx + 5U] = (uint8_t)(((uint32_t)s >> 8) & 0xFFU);
         idx = (uint16_t)(idx + 6U);
         /* Read `s` bytes from address `a`. Byte-by-byte read keeps us
          * unaligned-safe. Compiler ARMCC V5.06 may synthesise a multi-
@@ -316,7 +316,7 @@ uint8_t Subscribe_BuildError(const char* msg, uint8_t count,
     out[0] = 0xAAU;
     out[1] = 0xBBU;
     out[2] = SUBSCRIBE_FRAME_TYPE_ERROR;
-    out[3] = (uint8_t)((payload_len >> 8) & 0xFFU);
+    out[3] = (uint8_t)(((uint32_t)payload_len >> 8) & 0xFFU);
     out[4] = (uint8_t)(payload_len & 0xFFU);
     out[5] = count;
     idx = 6U;
@@ -369,9 +369,19 @@ static void Subscribe_TxReplyToTransport(const uint8_t* buf, uint16_t len)
  *  STREAMING SUBSCRIPTION (CMD 0x21)                                     *
  * ====================================================================== */
 
+/* The slot table and the parse staging slot are read and written by the CPU only (frames are built into
+ * stream_buf / tx_buf, which stay in SRAM), so they live in the 64 KB CCM next to the MRAC state:
+ * USER/JX_FLY.sct places every section named MRAC_CCM in RW_IRAM2 and __main zeroes it (zero_init), the same
+ * start state as .bss. (SUBSCRIBE_MAX_SLOTS + 1) x 508 B leave SRAM (WP-37). No DMA may touch them. */
+#ifdef __CC_ARM
+    #define SUBSCRIBE_CCM __attribute__((section("MRAC_CCM"), zero_init))
+#else
+    #define SUBSCRIBE_CCM
+#endif
+
 /* The live subscriptions, one per slot. Written only on an accepted 0x21
  * request; read every Send_Task cycle by Subscribe_StreamTick. */
-static Subscribe_Stream_t s_streams[SUBSCRIBE_MAX_SLOTS];
+static Subscribe_Stream_t s_streams[SUBSCRIBE_MAX_SLOTS] SUBSCRIBE_CCM;
 
 /* Round-robin cursor over the slots. Only ever advances, so a slot that is
  * repeatedly due cannot monopolise the wire and starve the others. */
@@ -380,7 +390,7 @@ static uint8_t s_rr;
 /* Parse target. A malformed request must NOT disturb a stream that is
  * already running, so parsing lands here and is copied into its slot only
  * after every range has validated. */
-static Subscribe_Stream_t s_stream_staging;
+static Subscribe_Stream_t s_stream_staging SUBSCRIBE_CCM;
 
 /* Data-frame buffer. Held by DMA between arming and completion, hence
  * file-scope: 6 header + 4 ts + 2032 payload + 2 CRC = 2044 B, far past what a
@@ -488,7 +498,7 @@ uint8_t Subscribe_ParseStreamRequest(const uint8_t* buf, uint16_t len,
         (void)CopyStr((uint8_t*)err_out, "E:bad cmd", err_cap);
         return 0U;
     }
-    payload_len = (uint16_t)(((uint16_t)buf[3] << 8) | (uint16_t)buf[4]);
+    payload_len = (uint16_t)(((uint32_t)buf[3] << 8) | (uint32_t)buf[4]);
     /* payload = 3 config bytes + N * 8 range bytes. */
     if ((payload_len < 3U) || (((payload_len - 3U) % 8U) != 0U)) {
         (void)CopyStr((uint8_t*)err_out, "E:bad len", err_cap);
@@ -560,10 +570,10 @@ uint8_t Subscribe_ParseStreamRequest(const uint8_t* buf, uint16_t len,
                   ((uint32_t)buf[base + 1U] << 8) |
                   ((uint32_t)buf[base + 2U] << 16) |
                   ((uint32_t)buf[base + 3U] << 24);
-        size    = ((uint16_t)buf[base + 4U]) |
-                  ((uint16_t)buf[base + 5U] << 8);
-        count   = ((uint16_t)buf[base + 6U]) |
-                  ((uint16_t)buf[base + 7U] << 8);
+        size    = (uint16_t)(((uint32_t)buf[base + 4U]) |
+                  ((uint32_t)buf[base + 5U] << 8));
+        count   = (uint16_t)(((uint32_t)buf[base + 6U]) |
+                  ((uint32_t)buf[base + 7U] << 8));
         if (Subscribe_ValidateRange(address, size, count,
                                     err_out, err_cap) == 0U) {
             return 0U;
@@ -629,13 +639,13 @@ uint8_t Subscribe_BuildSchema(const Subscribe_Stream_t* st,
     out[0] = 0xAAU;
     out[1] = 0xBBU;
     out[2] = SUBSCRIBE_FRAME_TYPE_SCHEMA;
-    out[3] = (uint8_t)((payload_len >> 8) & 0xFFU);
+    out[3] = (uint8_t)(((uint32_t)payload_len >> 8) & 0xFFU);
     out[4] = (uint8_t)(payload_len & 0xFFU);
     out[5] = st->n_ranges;
     out[6] = st->divider;
     out[7] = st->transport;
     out[8] = st->slot;
-    out[9]  = (uint8_t)((st->total_bytes >> 8) & 0xFFU);
+    out[9]  = (uint8_t)(((uint32_t)st->total_bytes >> 8) & 0xFFU);
     out[10] = (uint8_t)(st->total_bytes & 0xFFU);
     idx = 11U;
     for (i = 0U; i < st->n_ranges; i++) {
@@ -647,9 +657,9 @@ uint8_t Subscribe_BuildSchema(const Subscribe_Stream_t* st,
         out[idx + 2U] = (uint8_t)((a >> 16) & 0xFFU);
         out[idx + 3U] = (uint8_t)((a >> 24) & 0xFFU);
         out[idx + 4U] = (uint8_t)(s & 0xFFU);
-        out[idx + 5U] = (uint8_t)((s >> 8) & 0xFFU);
+        out[idx + 5U] = (uint8_t)(((uint32_t)s >> 8) & 0xFFU);
         out[idx + 6U] = (uint8_t)(c & 0xFFU);
-        out[idx + 7U] = (uint8_t)((c >> 8) & 0xFFU);
+        out[idx + 7U] = (uint8_t)(((uint32_t)c >> 8) & 0xFFU);
         idx = (uint16_t)(idx + 8U);
     }
     out[idx] = XorCrc(&out[2], (uint16_t)(idx - 2U));
@@ -678,7 +688,7 @@ uint8_t Subscribe_BuildStreamFrame(const Subscribe_Stream_t* st,
     /* Frame type carries the slot: 0x09/0x0A/0x0B/0x0C. The host then routes
      * each slot to its own decoder with no extra framing. */
     out[2] = (uint8_t)(SUBSCRIBE_FRAME_TYPE_DATA + st->slot);
-    out[3] = (uint8_t)((payload_len >> 8) & 0xFFU);
+    out[3] = (uint8_t)(((uint32_t)payload_len >> 8) & 0xFFU);
     out[4] = (uint8_t)(payload_len & 0xFFU);
     out[5] = st->seq;
     /* Sampled here, in the same cycle that copies the values below, so it
@@ -706,7 +716,7 @@ uint8_t Subscribe_BuildStreamFrame(const Subscribe_Stream_t* st,
     /* CRC16-CCITT, not the XOR used by the control-plane frames: these frames
      * are the recorded dataset, and XOR cannot see a byte transposition. */
     crc = Crc16Ccitt(&out[2], (uint16_t)(idx - 2U));
-    out[idx]      = (uint8_t)((crc >> 8) & 0xFFU);
+    out[idx]      = (uint8_t)(((uint32_t)crc >> 8) & 0xFFU);
     out[idx + 1U] = (uint8_t)(crc & 0xFFU);
     idx = (uint16_t)(idx + 2U);
     *out_len = idx;
