@@ -36,6 +36,7 @@ step c-pytest   "${PYTEST[@]}" ground_station/livewatch/tests/test_subscribe_c.p
 step sil-smoke  "${PYTEST[@]}" sim/sil/test_sil.py sim/sil/test_faults.py --deselect sim/sil/test_sil.py::test_run_mrac_equiv_still_ok
 step clang-tidy "$PY" tools/host_tests.py --tidy
 step row-meta   "$PY" tools/row_meta.py
+step fw-lint    "$PY" tools/fw_lint.py
 step arm-syntax "$PY" tools/host_tests.py --arm
 
 if [ ${#failed[@]} -gt 0 ]; then
