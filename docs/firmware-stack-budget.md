@@ -29,9 +29,9 @@ while the fault is being recorded, so the record that should explain the failure
 path is about 256 B (start_task 16 + xTaskCreate 72 + prvInitialiseNewTask 168), 460 B with the frame, so boot
 is fine today: the heap (20,480 B) has room for every task.
 
-Fix (PROPOSED, firmware change, its own branch after the demo): `START_STK_SIZE` 128 -> 256 words. start_task
-deletes itself after boot and heap_4 frees its stack, so the cost is 512 B of peak heap during boot only.
-Then remove `start_task` from `KNOWN_OVER` in the tool.
+Fix (PROPOSED, committed on branch `ram-savings` 6e7d192, not built, not flashed): `START_STK_SIZE` 128 -> 256
+words. start_task deletes itself after boot and heap_4 frees its stack, so the cost is 512 B of peak heap during
+boot only. When that branch merges, remove `start_task` from `KNOWN_OVER` in the tool.
 
 ## Headroom (PROPOSED, not measured)
 
