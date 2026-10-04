@@ -72,6 +72,7 @@ full turn per lap. A path with duration > 0 stops itself when `t_elapsed >= dura
 
 ## 5. Abort Criteria and How to Abort
 - **RC Ch10 Hard Kill**: Use transmitter channel 10 to instantly kill motors.
+- **Firmware fault**: kill and sticks both dead means the CPU is in the fault handler and the motors hold their last PWM. Cut battery power (docs/firmware-safety.md, "Fault in flight").
 - **RC Ch9 Loss**: `DANGEROUS_STOP` latch if channel 9 <= 500 (RC loss).
 - **Simplex Trips**: Mode 1 trips automatically on excessive roll (`roll_max`), pitch (`pitch_max`), MRAC weight norm (`w_norm_max`), or prolonged `u_ad` saturation (`sat_ticks_max`), safely falling back to PID.
 

@@ -48,6 +48,22 @@ All three ship **report only**: nothing here can refuse an arm or reset the boar
 The task snapshot is taken after `SystemErrorDetect`, so the budget always describes the **previous** second. The
 first `stab_cpu_pct` after boot is not valid (the previous counters start at 0).
 
+## Fault in flight: the motors keep the last throttle (finding 2026-10-05, read from code, not tested)
+
+`HardFault_Handler`, `MemManage_Handler`, `BusFault_Handler` and `UsageFault_Handler` (USER/fault_capture.c, the
+copies linked per `OBJ/JX_FLY.map`) all call `FaultCapture_Record`, which writes the record and spins in `for (;;)`.
+TIM3 keeps generating PWM from `CCR1..4` (`M1..M4`, BSP/pwm.h) without the CPU, so every motor holds its last
+command. The RC kill switch and ch5 land run in `Remoter_Task`, which no longer runs. With `iwdg_enable` = 0 nothing
+resets the board, so the motors run until the battery is unplugged.
+
+Operator rule for flights on the current image: if the drone stops answering the sticks and the kill switch, it
+has probably faulted; cut power (battery strap or tether) rather than waiting for a failsafe.
+
+Fix (PROPOSED, `USER/fault_capture.c`, branch after the demo, bench test props off): first statement of
+`FaultCapture_Record` is `Set_Zero_Motors();` (BSP/pwm.c, four register stores of `Motor_PWM_ZERO` = 2000 counts =
+1000 us, no kernel calls, legal in a fault handler). PX4 and ArduPilot do the same: a panic stops the outputs.
+The record then explains the fall. Related: the record does not survive a reset (docs/firmware-stack-budget.md).
+
 ## Telemetry
 
 Group `hlth` (`TlmHealth_t`, 8 floats, `g_tlm.hlth.*`): prearm_fail_mask, prearm_block_mask, reset_cause,
