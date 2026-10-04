@@ -4,6 +4,7 @@
  * into the shared helpers. Finite inputs must give the bit-identical state of the wp/33 code (the
  * reference copies below, comments dropped). A non-finite input or state must give U = 0 and a clean
  * integrator, and the next finite tick must continue from that clean state.
+ * WP-37: ComputePID_Hold moved (as ComputePID_GatedHold) from TASK/StabilizerTask.c into API/pid.c; it must match the old copy bit for bit.
  *
  *   gcc -std=c99 -Wall -Wextra -Wno-missing-field-initializers -DSTUBS_ROBOT_TYPES_H -IAPI/tests/stubs -IAPI \
  *       API/tests/test_pid_guards.c API/pid.c -lm -o tpg && ./tpg      (or: python tools/host_tests.py pid_guards)
@@ -118,6 +119,23 @@ static void ref_yaw(PIDTypeDef *pPID)
     pPID->U = pPID->Up + pPID->Ui + pPID->Ud;
     value_limit( pPID->U , -pPID->UMax , pPID->UMax );
     pPID->PreE = pPID->E ;
+}
+
+/* ---- reference: ComputePID_Hold as it was in TASK/StabilizerTask.c at wp/36 (static, verbatim) ---- */
+static void ref_hold(PIDTypeDef *pPID, uint8_t integrate, uint8_t hold)
+{
+	float sumE = pPID->SumE;
+	float ui   = pPID->Ui;
+	float u;
+	ComputePID_Gated(pPID, integrate);
+	if (hold && integrate && fabsf(sumE) < 1e12f && fabsf(ui) < 1e12f) {
+		pPID->SumE = sumE;
+		pPID->Ui   = ui;
+		u = pPID->Up + ui + pPID->Ud;
+		if (u >  pPID->UMax) u =  pPID->UMax;
+		if (u < -pPID->UMax) u = -pPID->UMax;
+		pPID->U = u;
+	}
 }
 
 /* ---- helpers ------------------------------------------------------------------------------------ */
@@ -248,11 +266,35 @@ static void test_yaw_guard(void)
     }
 }
 
+/* ComputePID_GatedHold (API/pid.c since WP-37) == ComputePID_Hold, the wp/36 StabilizerTask.c copy, all four
+ * (integrate, hold) combinations, the xy loops' rows, non-finite inputs and integrators injected. */
+static void test_hold_equiv(void)
+{
+    const PIDTypeDef rows[2] = { Ctrler.locxPID, Ctrler.locxsPID };
+    int r;
+    long k;
+    for (r = 0; r < 2; r++) {
+        PIDTypeDef a = rows[r], b = rows[r];
+        for (k = 0; k < 100000; k++) {
+            uint8_t integrate = (uint8_t)((k >> 1) & 1), hold = (uint8_t)(k & 1);
+            a.Des = b.Des = rnd(-300.0f, 300.0f);
+            a.FB = b.FB = rnd(-300.0f, 300.0f);
+            if (k % 89 == 0) a.Des = b.Des = BAD[k % 3];
+            if (k % 307 == 0) a.SumE = b.SumE = BAD[k % 3];
+            if (k % 401 == 0) a.Ui = b.Ui = (k % 2) ? 2e12f : BAD[k % 3];
+            ComputePID_GatedHold(&a, integrate, hold);
+            ref_hold(&b, integrate, hold);
+            check(same(&a, &b), "ComputePID_GatedHold == wp/36 StabilizerTask.c copy", k);
+        }
+    }
+}
+
 int main(void)
 {
     test_compute_pid_equiv();
     test_yaw_equiv_finite();
     test_yaw_guard();
+    test_hold_equiv();
     printf("%d checks, %d failure(s)\n", g_checks, g_fail);
     return g_fail ? 1 : 0;
 }
