@@ -68,7 +68,7 @@ an abort pid does not also trip (pid itself tilts > 12 deg on D from +5 ms). G =
 | V1 (ref) | 0.25-0.5 | gamma x0.25 | x4 | +0 ms (hard-freeze relay) | pass | T at G 1: tilt 13.4 vs pid 9.0 deg |
 | PR | 0.25-0.5 | gamma x0.25, kappa_pr 0.5, crm_ell 10 | x4 | +10 ms | pass | T at G 1 (13.2 deg); G 2-8: P, error > 0.5 m under delay |
 | ST | 0.25-0.5 | gamma x0.25, st_eps 2.0, st_phi_max 10, st_bar 0 | x4 | +10 ms | pass | T at G 1 (14.5 deg) |
-| LFHG | 0.25-0.5 | lf_gain 0.25 (gamma_scale 1), sigma_lf 0.8, gam_f 16 | x4 | +0 ms (hard-freeze relay) | fail (T, 2/3 seeds) | T at G 1 (13.1 deg) |
+| LFHG | 0.25-0.5 | lf_gain 0.25 (gamma_scale 1), sigma_lf 0.8, gam_f 16 | x4 | +0 ms (hard-freeze relay) | fail (T, majority of seeds) | T at G 1 (13.1 deg) |
 
 - No variant diverges up to G 128 (projection bounds the weights); every gain edge is the 12 deg tilt abort: the
   injected rate correction steepens the doublet's attitude transient.
