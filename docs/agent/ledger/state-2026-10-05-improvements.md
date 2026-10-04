@@ -1,0 +1,54 @@
+# Session state (stub)
+
+The live handoff page is `docs/agent/HANDOFF.md` (read that first, it is small).
+Full history up to 2026-09-30 14:19 is archived at `docs/agent/ledger/2026-09-30-full.md` (162 KB, do NOT read at session start; grep it).
+Entries 2026-09-30 .. 2026-10-05 05:00 are archived at `docs/agent/ledger/state-2026-10-01-to-10-05.md` (132 KB, grep it).
+Append new dated entries below only if a task needs a long note; keep this file under 4 KB.
+
+## 2026-10-05 05:35 RAM savings + continuous-improvement mandate
+- User (05:25): "dont stop working until i prompt you to stop" + find improvements: telemetry stream, workflows A/B/C streamlining,
+  control/driver compute savings (no compromise), agent compatibility, latest embedded standards. Keep going item by item.
+- main 31d93d1: nested-comment fix (3 Keil #9-D warnings) + lab doc measured full rebuild (0 err, 4 old harmless warnings).
+- ram-savings (worktree ../FreeRTOS-ram-savings) 1f43e89 R2: SRAM RW+ZI 139,272 -> 59,644 B (Keil map). NOT for demo; do not merge before 10-06 lab.
+- R1 3e79c8a (heap in CCM) + doc 2e588cf on ram-savings: SRAM 124,984 -> 22,048 B, CCM 14,288 -> 37,596 B (map 05:28).
+  GOTCHA: `flashtool build` (build-only) restores the old axf/map (artifact custody). For a fresh map call
+  `python -c "from ground_station.flashtool.safe_flash import build; print(build(rebuild=False))"` in the tree.
+- main: HANDOFF line added (ram-savings unmerged, merge after demo + bench run + manifest regen).
+- 144f349: HANDOFF trimmed 20.1 -> 6.8 KB (archive docs/agent/ledger/handoff-2026-10-05-archive.md); this file archived too.
+- Next: dashboard review (docs/dashboard-platform/shell), then backlog: telemetry, workflows A/B/C, compute, standards.
+- NEVER run unfiltered `git diff --stat`/`git status` (OBJ dumps): always add `-- . ':!OBJ' ':!USER'`.
+
+## 2026-10-05 06:00 continuous improvement (CEO inline), done so far
+- 27bfb40 this file archived (132 KB -> 2 KB). NOTE: ~/.claude/scripts/context_meter.py resume restores the FIRST 120 lines
+  of this file after a compact, so keep the newest entry near the top or the file short.
+- 9024272 dashboard: plugins fetched in parallel, eval in order (32 files load in 188 ms in the pane, was 1.5-2.2 s).
+- FINDING: running 8081 returns 404 for /api/campaign/list (route at HEAD): service runs old code; restart after flash
+  (noted in lab doc). /ui/alarms.js (17 KB, blocking <script>) took 1.8 s: server latency while streaming, not fixed.
+- IDEAS not done: ETag/304 for static files (api.py _static sends no-cache without validators, so three.js 670 KB
+  re-downloads each reload; needs service restart, do after demo); telemetry, workflows, compute (Keil -O level is
+  operator-only uvprojx: PROPOSE).
+- Next: pick the next backlog item (telemetry stream throughput first), one per commit.
+- 06:10 FINDING: whole firmware builds at -O0 (uvprojx <Optim>1, .dep flags "-O0"); Code=118300 at -O0 (build_log).
+  Started: branch o2-build, worktree ../FreeRTOS-o2-build, <Optim>3 (-O2) to MEASURE code size; audit delay loops
+  (BSP/delay.c) + ISR-shared volatiles. NOT merged, NOT flashed; uvprojx is operator-only (proposal only).
+- 06:40 o2-build 7177561 (branch only): -O2 full rebuild Code 118,300 -> 92,284 B, same 4 warnings, static stack
+  668 -> 656 B; delay_ms/us moved to DWT->CYCCNT (spin loop was 3 instr/pass at -O0, 2 at -O2). ISR-shared vars OK.
+  Doc docs/firmware-compiler-optimisation.md on the branch; HANDOFF Next item 3. Speed NOT measured (bench run).
+  Next backlog: ETag/304 static caching (post-demo), workflows A/B/C streamlining, standards mapping.
+- 07:10 o2-build 05fe642 doc: per-file `#pragma O2` option (PROPOSED, not built). main b4d4548: sim/bench/conftest always
+  ignores c_ref/test_equiv.py (script; local 32-bit c_ref.so aborted full-tree collection, WinError 193) -> full tree
+  collects 2430 tests, 0 errors. 6b27d0b: 34 root _*.py + AGENTS.md.bak-doctor -> scratch/root-scripts-2026-09/.
+  Telemetry checked: wire 16 % used (doc 2026-08-19); the old 3.7 ms UART4 spin is already non-blocking; the
+  send_data.c DMA waits are bounded EN-clear waits. IDEA (PROPOSED): 921600 is -0.93 % off on APB1 42 MHz (BRR 0x2E);
+  1.5 M / 2 M baud are exact, but need the MicoAir side changed. Next: workflows A/B/C streamlining, standards mapping.
+- 07:40 main 08cc121 AGENTS.md: /workflow-b, /workflow-c rows + workflow A flightlab line; flash cmd `--yes` only.
+  b2df2d0 fw_lint rule `double` (tools/docs only). FINDING (Keil call graph OBJ/JX_FLY.htm): soft-double trig on the
+  control path: StabilizerTask.c Att_UpdateTrig (6x cos/sin per Update_Data tick) + accel_to_lean_angles (2x cos);
+  AutoflyTask SDK_Set_V_Loc/SDK_Set_Gyroz (double literals); bmi088_driver.c (protected) sqrt; API/SINS.c not linked.
+  NEXT: branch `float-math` (worktree ../FreeRTOS-float-math): cos->cosf etc. in StabilizerTask/AutoflyTask (outside
+  protected regions), Keil build, Code size before/after; speed PROPOSED until bench (hlth.stab_cpu_pct, loop_max_us).
+  NOT for demo. Also aside: global_declare.h PI = 3.14159f (truncated) -> finding only, behaviour change.
+- float-math branch 443c6a1 (worktree ../FreeRTOS-float-math, NOT for demo): Keil full rebuild, same tree, same 4 old
+  warnings: base (main ff160cc files) Code 118,700 / RO 5,336 -> branch Code 116,152 / RO 5,052 (-2,548 / -284 B);
+  RW/ZI unchanged. Speed PROPOSED (bench: hlth.stab_cpu_pct, loop_max_us). Worktree OBJ currently holds the BASE build.
+  NEXT: doc on branch + HANDOFF line on main; then next backlog item (ETag post-demo / 2 M baud doc / A-B-C dedup).
