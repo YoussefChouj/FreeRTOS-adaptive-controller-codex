@@ -27,6 +27,12 @@ import pytest
 os.environ.pop("COPILOT_API_KEY", None)
 os.environ["COPILOT_KEY_FILE"] = ""
 
+# Tests name repo files by repo-relative path ("ground_station/service/campaigns/
+# hover_ladder.yaml", "API/ekf_of.c"). Run from a test folder, 12 lab-path tests
+# failed with FileNotFoundError (2026-10-05) while all 205 passed from the root.
+# Anchor the cwd here, at conftest import, before any test module body runs.
+os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 # Attributes whose replacement leaks across every later module. Each is one a
 # test has a plausible reason to fake, and a catastrophic one to keep faked.
 _GLOBALS = [
