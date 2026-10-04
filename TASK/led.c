@@ -1,51 +1,73 @@
-#include "led.h" 
-	    
-//LED IO初始化
-//  R: PC8  G:PA12  B:PA11
+/**
+ * @module     led.c
+ * @subsystem  bsp
+ * @owner      USER/main.c start-up (LED_Init, BEEP_Init); SystemErrorDetect (systemmonitor_task.c) drives the LED.
+ * @purpose    GPIO set-up for the RGB status LED and the buzzer pin.
+ * @inputs     none.
+ * @outputs    PA11/PA12/PC8 push-pull outputs, LED left red; PB9 push-pull output, buzzer off.
+ */
+
+#include "led.h"
+
+/* ------------------------------------------------------------------
+ * Private constants
+ * ------------------------------------------------------------------ */
+
+/* Status LED, one pin per colour, lit when the pin is low (SystemErrorDetect shows red with PC8 low). */
+#define LED_R_PORT   GPIOC
+#define LED_R_PIN    GPIO_Pin_8
+#define LED_G_PORT   GPIOA
+#define LED_G_PIN    GPIO_Pin_12
+#define LED_B_PORT   GPIOA
+#define LED_B_PIN    GPIO_Pin_11
+#define BEEP_PORT    GPIOB
+#define BEEP_PIN     GPIO_Pin_9      /* also TIM4 channel 4 */
+
+/* ------------------------------------------------------------------
+ * Public API
+ * ------------------------------------------------------------------ */
 
 void LED_Init(void)
-{    	 
-  GPIO_InitTypeDef  GPIO_InitStructure;
-
-  RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE);//使能GPIOF时钟
-	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOC, ENABLE);//使能GPIOF时钟
-
-  GPIO_InitStructure.GPIO_Pin = GPIO_Pin_11 | GPIO_Pin_12;
-  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;//普通输出模式
-  GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;//推挽输出
-  GPIO_InitStructure.GPIO_Speed = GPIO_Speed_100MHz;//100MHz
-  GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP;//上拉
-  GPIO_Init(GPIOA, &GPIO_InitStructure);//初始化GPIO
-	
-  GPIO_InitStructure.GPIO_Pin = GPIO_Pin_8 ;
-  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;//普通输出模式
-  GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;//推挽输出
-  GPIO_InitStructure.GPIO_Speed = GPIO_Speed_100MHz;//100MHz
-  GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP;//上拉
-  GPIO_Init(GPIOC, &GPIO_InitStructure);//初始化GPIO
-	
-	 	GPIO_SetBits(GPIOA,GPIO_Pin_11 ); //红色
-	  GPIO_SetBits(GPIOA,GPIO_Pin_12 );
-	  GPIO_ResetBits(GPIOC,GPIO_Pin_8 );
-
-}
-
-void BEEP_Init(void)  //PB9  TIM4-4
-{    	 
+{
 	GPIO_InitTypeDef  GPIO_InitStructure;
 
-	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOB, ENABLE);//使能GPIOB时钟
+	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE);
+	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOC, ENABLE);
 
-  //GPIOB8,B9初始化设置
-  GPIO_InitStructure.GPIO_Pin = GPIO_Pin_9 ;
-  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;//普通输出模式
-  GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;//推挽输出
-  GPIO_InitStructure.GPIO_Speed = GPIO_Speed_100MHz;//100MHz
-  GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP;//上拉
-  GPIO_Init(GPIOB, &GPIO_InitStructure);//初始化
-	   
-  GPIO_ResetBits(GPIOB,GPIO_Pin_9);
-	//GPIO_SetBits(GPIOB,GPIO_Pin_9 );
+	/* blue and green: push-pull outputs with pull-up */
+	GPIO_InitStructure.GPIO_Pin = LED_B_PIN | LED_G_PIN;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;
+	GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_100MHz;
+	GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP;
+	GPIO_Init(LED_B_PORT, &GPIO_InitStructure);
+
+	/* red */
+	GPIO_InitStructure.GPIO_Pin = LED_R_PIN;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;
+	GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_100MHz;
+	GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP;
+	GPIO_Init(LED_R_PORT, &GPIO_InitStructure);
+
+	/* start red */
+	GPIO_SetBits(LED_B_PORT, LED_B_PIN);
+	GPIO_SetBits(LED_G_PORT, LED_G_PIN);
+	GPIO_ResetBits(LED_R_PORT, LED_R_PIN);
 }
 
+void BEEP_Init(void)
+{
+	GPIO_InitTypeDef  GPIO_InitStructure;
 
+	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOB, ENABLE);
+
+	GPIO_InitStructure.GPIO_Pin = BEEP_PIN;
+	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;
+	GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_100MHz;
+	GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP;
+	GPIO_Init(BEEP_PORT, &GPIO_InitStructure);
+
+	GPIO_ResetBits(BEEP_PORT, BEEP_PIN);   /* buzzer off */
+}
