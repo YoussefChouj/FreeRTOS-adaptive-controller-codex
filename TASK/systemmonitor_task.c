@@ -1,60 +1,77 @@
+/**
+ * @module     systemmonitor_task.c
+ * @subsystem  health
+ * @owner      SystemMonitor_Task (USER/main.c) calls SystemErrorDetect() once a second; FlightFSM_Event() calls
+ *             PreArm_Refresh() on every ARM_REQUEST.
+ * @purpose    Latch the per-task loop counters into *_fps, show the worst fault on the status LED, then run the
+ *             WP-40 firmware health tick (watchdog, RTOS budget, pre-arm refresh; contract in docs/firmware-safety.md).
+ * @inputs     system_monitor.*_cnt, Ctrler.Z_posPID.FB, linux_data.t265pos*, the task snapshot from USER/main.c,
+ *             IMU/RC/battery/WFB state for the pre-arm checks.
+ * @outputs    system_monitor.*_fps, status LED pins (PA11, PA12, PC8), g_rtos_budget, the pre-arm verdict, IWDG.
+ */
+
 #include "systemmonitor_task.h"
 #include "prearm.h"
 #include "fw_health.h"
 #include "wfb_glue.h"
 
-/*--------------------------------------------------------
-功能：异常情况监测工具
-----------------------------------------------------------*/
+/* ------------------------------------------------------------------
+ * Private constants
+ * ------------------------------------------------------------------ */
 
-int beep_cnt = 0;
+#define SYSMON_LINK_MIN_FPS  10   /* USART4 (onboard computer) frames per second below which the link is faulty */
+
+/* Copy one task's loop counter into its per-second rate and restart the count. */
+#define SYSMON_LATCH(task)                                         \
+    do {                                                           \
+        system_monitor.task##_fps = system_monitor.task##_cnt;     \
+        system_monitor.task##_cnt = 0;                             \
+    } while (0)
+
+/* ------------------------------------------------------------------
+ * Public API
+ * ------------------------------------------------------------------ */
+
+/* Status LED, worst fault first (pin levels as written PA11 / PA12 / PC8):
+     no height feedback (Z_posPID.FB == 0)   set   / set   / reset   "red"
+     onboard-computer link below 10 fps      reset / reset / reset   "cyan"
+     T265 position all zero                  set   / reset / set     "blue"
+     everything healthy                      reset / set   / set     "green"  */
 void SystemErrorDetect(void)
 {
-	system_monitor.IMUSampleTask_fps =system_monitor.IMUSampleTask_cnt; 
-	system_monitor.IMUSampleTask_cnt = 0;
-	system_monitor.IMUUpdateTask_fps =system_monitor.IMUUpdateTask_cnt; 
-	system_monitor.IMUUpdateTask_cnt = 0;
-	system_monitor.stabilizerTask_fps =system_monitor.stabilizerTask_cnt; 
-	system_monitor.stabilizerTask_cnt = 0;
-	system_monitor.remoter_task_fps =system_monitor.remoter_task_cnt; 
-	system_monitor.remoter_task_cnt = 0;
-	system_monitor.USART1_task_fps =system_monitor.USART1_task_cnt; 
-	system_monitor.USART1_task_cnt = 0;
-	system_monitor.USART2_task_fps =system_monitor.USART2_task_cnt; 
-	system_monitor.USART2_task_cnt = 0;
-	system_monitor.USART4_task_fps =system_monitor.USART4_task_cnt; 
-	system_monitor.USART4_task_cnt = 0;
-	system_monitor.USART5_task_fps =system_monitor.USART5_task_cnt; 
-	system_monitor.USART5_task_cnt = 0;
-	system_monitor.AutoflyTask_fps =system_monitor.AutoflyTask_cnt; 
-	system_monitor.AutoflyTask_cnt = 0;
-   //GPIO_ResetBits(GPIOB,GPIO_Pin_9);
-	
-	  if(Ctrler.Z_posPID.FB == 0)  //高度没反馈是最严重的后果，显示红灯  system_monitor.USART4_task_cnt++;
-	{
-	 	GPIO_SetBits(GPIOA,GPIO_Pin_11 ); //红色
-	  GPIO_SetBits(GPIOA,GPIO_Pin_12 );
-	  GPIO_ResetBits(GPIOC,GPIO_Pin_8 );
-	}
+	SYSMON_LATCH(IMUSampleTask);
+	SYSMON_LATCH(IMUUpdateTask);
+	SYSMON_LATCH(stabilizerTask);
+	SYSMON_LATCH(remoter_task);
+	SYSMON_LATCH(USART1_task);
+	SYSMON_LATCH(USART2_task);
+	SYSMON_LATCH(USART4_task);
+	SYSMON_LATCH(USART5_task);
+	SYSMON_LATCH(AutoflyTask);
 
-		else if ( system_monitor.USART4_task_fps <10)  //linux电脑通讯不正常
+	if (Ctrler.Z_posPID.FB == 0)   /* no height feedback is the worst case */
 	{
-	  	GPIO_ResetBits(GPIOA,GPIO_Pin_11 ); //青色
-	    GPIO_ResetBits(GPIOA,GPIO_Pin_12 );
-	    GPIO_ResetBits(GPIOC,GPIO_Pin_8 );
+		GPIO_SetBits(GPIOA, GPIO_Pin_11);
+		GPIO_SetBits(GPIOA, GPIO_Pin_12);
+		GPIO_ResetBits(GPIOC, GPIO_Pin_8);
 	}
-			else if (linux_data.t265posy == 0 && linux_data.t265posx == 0  )  //t265 fali
+	else if (system_monitor.USART4_task_fps < SYSMON_LINK_MIN_FPS)   /* onboard-computer link faulty */
 	{
-	  	GPIO_SetBits(GPIOA,GPIO_Pin_11 ); //蓝色
-	    GPIO_ResetBits(GPIOA,GPIO_Pin_12 );
-	    GPIO_SetBits(GPIOC,GPIO_Pin_8 );
+		GPIO_ResetBits(GPIOA, GPIO_Pin_11);
+		GPIO_ResetBits(GPIOA, GPIO_Pin_12);
+		GPIO_ResetBits(GPIOC, GPIO_Pin_8);
 	}
-
-	else //一切正常绿色
-	{	  
-   	GPIO_ResetBits(GPIOA,GPIO_Pin_11 ); //绿色
-	  GPIO_SetBits(GPIOA,GPIO_Pin_12 );
-	  GPIO_SetBits(GPIOC,GPIO_Pin_8 );
+	else if (linux_data.t265posy == 0 && linux_data.t265posx == 0)   /* T265 position missing */
+	{
+		GPIO_SetBits(GPIOA, GPIO_Pin_11);
+		GPIO_ResetBits(GPIOA, GPIO_Pin_12);
+		GPIO_SetBits(GPIOC, GPIO_Pin_8);
+	}
+	else   /* healthy */
+	{
+		GPIO_ResetBits(GPIOA, GPIO_Pin_11);
+		GPIO_SetBits(GPIOA, GPIO_Pin_12);
+		GPIO_SetBits(GPIOC, GPIO_Pin_8);
 	}
 	FwHealth_Tick();   /* WP-40: watchdog, RTOS budget, pre-arm refresh */
 }
