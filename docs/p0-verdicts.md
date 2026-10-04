@@ -351,8 +351,8 @@ Verified by the supervisor 2026-09-21. This is the finding with the most in it.
 
 ### Confirmed, and understated
 
-**`AnoOF_Check_State()` is dead, and deader than the report says.** Defined at
-`API/Ano_OF.c:6`, declared at `API/Ano_OF.h:72`, called nowhere. But the two
+**`AnoOF_Check_State()` is dead, and deader than the report says.** Defined in
+`API/Ano_OF.c`, declared in `API/Ano_OF.h`, called nowhere. But the two
 flags it computes — `ano_of.link_sta` and `ano_of.work_sta` — are **written only
 inside it and read nowhere in the tree**. So the report's fix 1, "periodically
 call `AnoOF_Check_State(0.005f)`", would change nothing: it would set two flags
