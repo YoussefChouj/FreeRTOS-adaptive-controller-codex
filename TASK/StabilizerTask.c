@@ -14,6 +14,7 @@
 #include "RemoterTask.h"   /* OFHOLD_CH (ch6 OF-hold enable switch), sbus_channel[] */
 #include "thrust_estimators.h"
 #include "rpm.h"
+#include "flight_telemetry.h"   /* g_tlm telemetry groups, filled by Tlm_Snapshot */
 /* WFB BEGIN glue */
 #include "wfb_glue.h"       /* Workflow B: GS takeoff/trajectory/land sequencer + safety net */
 #include "wfb_traj.h"
@@ -39,6 +40,7 @@
  *   Compute_Motor()  landing contact, Z loops, ARM-edge rebase, position/velocity loops (every 2nd tick,
  *                    100 Hz), angle + rate loops, SysID, MRAC, controller layer, mixer, thrust estimators
  *   Update_Motor()   bench zero, motor-test/debug overrides, landing detector, ground idle, disarm
+ *   Tlm_Snapshot()   read-only copy of this tick's key state into g_tlm (API/flight_telemetry.h)
  * Units: position cm (locx/locy loops, TWC.target_x/y), height m (Z loops), angles deg, rates deg/s,
  * motor commands in TIM CCR counts (2000 = stop, 4000 = full, BSP/pwm.h).
  */
@@ -432,6 +434,86 @@ static void Wfb_Step(void)
 }
 /* WFB END glue */
 
+/* ==== Telemetry groups (API/flight_telemetry.h) =================================================== */
+#ifdef __CC_ARM
+    #define TLM_CCM __attribute__((section("MRAC_CCM"), zero_init))   /* CPU-only CCM, zeroed by __main */
+#else
+    #define TLM_CCM
+#endif
+FlightTelemetry_t g_tlm TLM_CCM;
+
+/* Copy the key flight state of this tick into g_tlm (the groups of API/flight_telemetry.h). Runs last in
+ * stabilizer_Task; reads the sources only, so the control path is unchanged. */
+static void Tlm_Snapshot(void)
+{
+	g_tlm.att.roll_deg   =  Ctrler.rollPID.FB;
+	g_tlm.att.pitch_deg  = -Ctrler.pitchPID.FB;
+	g_tlm.att.yaw_deg    = -Ctrler.yawPID.FB;
+	g_tlm.att.rate_x_dps =  Ctrler.gyroxPID.FB;
+	g_tlm.att.rate_y_dps =  Ctrler.gyroyPID.FB;
+	g_tlm.att.rate_z_dps =  Ctrler.gyrozPID.FB;
+
+	g_tlm.sp.roll_deg    = Ctrler.rollPID.Des;
+	g_tlm.sp.pitch_deg   = Ctrler.pitchPID.Des;
+	g_tlm.sp.yaw_deg     = Ctrler.yawPID.Des;
+	g_tlm.sp.rate_x_dps  = Ctrler.gyroxPID.Des;
+	g_tlm.sp.rate_y_dps  = Ctrler.gyroyPID.Des;
+	g_tlm.sp.rate_z_dps  = Ctrler.gyrozPID.Des;
+	g_tlm.sp.x_cm        = Ctrler.locxPID.Des;
+	g_tlm.sp.y_cm        = Ctrler.locyPID.Des;
+	g_tlm.sp.vx_cms      = Ctrler.locxsPID.Des;
+	g_tlm.sp.vy_cms      = Ctrler.locysPID.Des;
+	g_tlm.sp.z_m         = Ctrler.Z_posPID.Des;
+	g_tlm.sp.vz_mps      = Ctrler.Z_ratePID.Des;
+
+	g_tlm.pos.x_cm       = Ctrler.locxPID.FB;
+	g_tlm.pos.y_cm       = Ctrler.locyPID.FB;
+	g_tlm.pos.vx_cms     = Ctrler.locxsPID.FB;
+	g_tlm.pos.vy_cms     = Ctrler.locysPID.FB;
+	g_tlm.pos.z_m        = Ctrler.Z_posPID.FB;
+	g_tlm.pos.vz_mps     = Ctrler.Z_ratePID.FB;
+
+	g_tlm.mot.throttle   = Throttle_out;
+	g_tlm.mot.u_roll     = u_gyrox;
+	g_tlm.mot.u_pitch    = u_gyroy;
+	g_tlm.mot.u_yaw      = u_gyroz;
+	g_tlm.mot.m1         = (float)mymotor.motor1;
+	g_tlm.mot.m2         = (float)mymotor.motor2;
+	g_tlm.mot.m3         = (float)mymotor.motor3;
+	g_tlm.mot.m4         = (float)mymotor.motor4;
+
+	g_tlm.mrac.e[0]      = mrac_state.pitch.e;
+	g_tlm.mrac.e[1]      = mrac_state.roll.e;
+	g_tlm.mrac.e[2]      = mrac_state.yaw.e;
+	g_tlm.mrac.e[3]      = mrac_state.z_rate.e;
+	g_tlm.mrac.u_nom[0]  = mrac_state.pitch.u_nom;
+	g_tlm.mrac.u_nom[1]  = mrac_state.roll.u_nom;
+	g_tlm.mrac.u_nom[2]  = mrac_state.yaw.u_nom;
+	g_tlm.mrac.u_nom[3]  = mrac_state.z_rate.u_nom;
+	g_tlm.mrac.u_ad[0]   = mrac_state.pitch.u_ad;
+	g_tlm.mrac.u_ad[1]   = mrac_state.roll.u_ad;
+	g_tlm.mrac.u_ad[2]   = mrac_state.yaw.u_ad;
+	g_tlm.mrac.u_ad[3]   = mrac_state.z_rate.u_ad;
+	g_tlm.mrac.fade      = mrac_simplex.fade;
+
+	g_tlm.est.kf_x_m       = s_ekf_of.x[0];
+	g_tlm.est.kf_y_m       = s_ekf_of.x[3];
+	g_tlm.est.kf_vx_mps    = s_ekf_of.x[1];
+	g_tlm.est.kf_vy_mps    = s_ekf_of.x[4];
+	g_tlm.est.kf_bof_x_mps = s_ekf_of.x[2];
+	g_tlm.est.kf_bof_y_mps = s_ekf_of.x[5];
+	g_tlm.est.of_bias_x    = s_of_bias_x;
+	g_tlm.est.of_bias_y    = s_of_bias_y;
+
+	g_tlm.pwr.vbat_v         = real_voltage;
+	g_tlm.pwr.thrust_imu_n   = g_thrust_est.imu_total;
+	g_tlm.pwr.thrust_be_n[0] = g_thrust_est.blade_element[0];
+	g_tlm.pwr.thrust_be_n[1] = g_thrust_est.blade_element[1];
+	g_tlm.pwr.thrust_be_n[2] = g_thrust_est.blade_element[2];
+	g_tlm.pwr.thrust_be_n[3] = g_thrust_est.blade_element[3];
+	g_tlm.pwr.mass_hat_kg    = g_thrust_est.mass_hat;
+}
+
 /* ==== The control tick ========================================================================== */
 
 /* Bug 2 (audit 2026-09-21 §1 row 2): published arm state must track the
@@ -516,6 +598,8 @@ void stabilizer_Task(void)
 	Compute_Motor();
 
 	Update_Motor();
+
+	Tlm_Snapshot();   /* telemetry groups: read-only copy of this tick's state, last */
 }
 
 /* ==== Update_Data: sensors -> loop feedback ======================================================= */

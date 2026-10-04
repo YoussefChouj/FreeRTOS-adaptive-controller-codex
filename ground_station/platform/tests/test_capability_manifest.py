@@ -70,6 +70,13 @@ def test_capability_manifest_structure():
     assert "c.gyro_x" in telem["verified_published_keys"]
     assert len(telem["unverified_keys_in_panels"]) > 0
 
+    # Telemetry groups (WP-37): the g_tlm block, one subscribe range per group
+    groups = manifest["telemetry_groups"]
+    assert groups["symbol"] == "g_tlm"
+    assert groups["total_floats"] == sum(g["floats"] for g in groups["groups"])
+    assert [g["name"] for g in groups["groups"]][:2] == ["att", "sp"]
+    assert "g_tlm.mrac.u_ad[3]" in groups["groups"][4]["symbols"]
+
     # Panels
     panels = manifest["panels"]
     assert len(panels) == 19

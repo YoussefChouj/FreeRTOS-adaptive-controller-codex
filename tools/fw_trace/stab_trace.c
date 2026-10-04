@@ -55,7 +55,7 @@ DEF(TWC_arrived);
 float Cos_Yaw = 1.0f, Sin_Yaw = 0.0f;   /* API/SINS.c, read by API/pid.c */
 /* API/controller.c (linked for the mixer table) refers to these; its renamed entry points never run here */
 DEF(mrac_state); DEF(mrac_flags); DEF(mrac_config_pitch); DEF(mrac_config_roll); DEF(mrac_config_yaw);
-DEF(mrac_config_z); DEF(mrac_simplex); DEF(mrac_inj);
+DEF(mrac_config_z); DEF(mrac_simplex); DEF(mrac_inj); DEF(g_thrust_est);
 void MRAC_Reset(void) { call(41); }
 void MRAC_Init(void) { call(42); }
 
@@ -291,6 +291,38 @@ static void mix_state(void)
     MIXV(sbus_path_trigger); MIXV(mrac_in_armed); MIXV(mrac_in_phase); MIXV(g_fsm);
 }
 
+#ifdef FLIGHT_TELEMETRY_H
+/* WP-37 telemetry groups: g_tlm must equal its sources after every tick. Checked here, not hashed, so a
+ * version without g_tlm still prints the same hashes; a mismatch exits 3. */
+static void check_tlm(void)
+{
+    const float want[] = {
+        Ctrler.rollPID.FB, -Ctrler.pitchPID.FB, -Ctrler.yawPID.FB, Ctrler.gyroxPID.FB, Ctrler.gyroyPID.FB,
+        Ctrler.gyrozPID.FB,
+        Ctrler.rollPID.Des, Ctrler.pitchPID.Des, Ctrler.yawPID.Des, Ctrler.gyroxPID.Des, Ctrler.gyroyPID.Des,
+        Ctrler.gyrozPID.Des, Ctrler.locxPID.Des, Ctrler.locyPID.Des, Ctrler.locxsPID.Des, Ctrler.locysPID.Des,
+        Ctrler.Z_posPID.Des, Ctrler.Z_ratePID.Des,
+        Ctrler.locxPID.FB, Ctrler.locyPID.FB, Ctrler.locxsPID.FB, Ctrler.locysPID.FB, Ctrler.Z_posPID.FB,
+        Ctrler.Z_ratePID.FB,
+        Throttle_out, u_gyrox, u_gyroy, u_gyroz, (float)mymotor.motor1, (float)mymotor.motor2,
+        (float)mymotor.motor3, (float)mymotor.motor4,
+        mrac_state.pitch.e, mrac_state.roll.e, mrac_state.yaw.e, mrac_state.z_rate.e,
+        mrac_state.pitch.u_nom, mrac_state.roll.u_nom, mrac_state.yaw.u_nom, mrac_state.z_rate.u_nom,
+        mrac_state.pitch.u_ad, mrac_state.roll.u_ad, mrac_state.yaw.u_ad, mrac_state.z_rate.u_ad, mrac_simplex.fade,
+        s_ekf_of.x[0], s_ekf_of.x[3], s_ekf_of.x[1], s_ekf_of.x[4], s_ekf_of.x[2], s_ekf_of.x[5], s_of_bias_x,
+        s_of_bias_y,
+        real_voltage, g_thrust_est.imu_total, g_thrust_est.blade_element[0], g_thrust_est.blade_element[1],
+        g_thrust_est.blade_element[2], g_thrust_est.blade_element[3], g_thrust_est.mass_hat,
+    };
+    if (sizeof want != sizeof g_tlm || memcmp(want, &g_tlm, sizeof want) != 0) {
+        fprintf(stderr, "g_tlm differs from its sources at tick %lu\n", g_tick);
+        exit(3);
+    }
+}
+#else
+static void check_tlm(void) { }
+#endif
+
 int main(int argc, char **argv)
 {
     unsigned long ticks = argc > 1 ? strtoul(argv[1], 0, 10) : 100000ul;
@@ -303,6 +335,7 @@ int main(int argc, char **argv)
     for (g_tick = 1; g_tick <= ticks; g_tick++) {
         script_inputs();
         stabilizer_Task();
+        check_tlm();
         if (g_tick % 200u == 0u) Get_Voltage();
         mix_state();
         if (g_tick % every == 0u || g_tick == ticks) printf("tick %lu hash %016llx calls %lu\n", g_tick, g_h, g_calls);

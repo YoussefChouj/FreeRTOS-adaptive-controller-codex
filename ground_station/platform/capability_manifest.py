@@ -607,6 +607,22 @@ def get_api_routes() -> dict[str, Any]:
     return dict(_ROUTE_MAP)
 
 
+def get_telemetry_groups() -> dict[str, Any]:
+    """The g_tlm telemetry groups (API/flight_telemetry.h, platform/telemetry_groups.py): one subscribe range each."""
+    from ground_station.platform.telemetry_groups import GROUPS, SYMBOL, TOTAL_FLOATS, VALUE_SIZE, offset_floats
+    return {
+        "source": "API/flight_telemetry.h (written by Tlm_Snapshot, TASK/StabilizerTask.c, 200 Hz)",
+        "symbol": SYMBOL,
+        "value_size": VALUE_SIZE,
+        "total_floats": TOTAL_FLOATS,
+        "groups": [
+            {"name": g.name, "offset_floats": offset_floats(g.name), "floats": g.float_count, "doc": g.doc,
+             "symbols": g.symbols()}
+            for g in GROUPS
+        ],
+    }
+
+
 def generate_manifest() -> dict[str, Any]:
     """Generate the complete system capability manifest."""
     elf_identity = get_elf_identity()
@@ -623,6 +639,7 @@ def generate_manifest() -> dict[str, Any]:
         "firmware_symbols": firmware_symbols,
         "commands": commands,
         "telemetry": telemetry,
+        "telemetry_groups": get_telemetry_groups(),
         "panels": panels,
         "routes": routes,
     }
