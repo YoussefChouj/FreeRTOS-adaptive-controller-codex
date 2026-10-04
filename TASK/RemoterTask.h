@@ -32,7 +32,6 @@
 
 void remoter_task(void);
 void Check_Fly_Mode(void);
-void ANO_Report_UserData1(void);
 void send_to_linux(void);
 
 #endif

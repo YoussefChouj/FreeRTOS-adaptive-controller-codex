@@ -11,7 +11,6 @@
 #include "StabilizerTask.h"
 #include "usart3.h"
 
-void ANO_Report_UserData1(void);
 void send_to_linux(void);
 void Send_Groundstation_Telemetry_UART4(void);
 void Process_GroundStation_Command(void);

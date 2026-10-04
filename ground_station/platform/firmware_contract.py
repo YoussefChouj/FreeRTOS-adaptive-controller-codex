@@ -163,10 +163,10 @@ def link_budget_uart5(frame_bytes: int, divider: int) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Complete command table (from TASK/send_data.c dispatch table)
+# Complete command table (TASK/send_data.c k_gs_cmds; tests/test_firmware_command_table.py checks the ids)
 # ---------------------------------------------------------------------------
 
-# Safety interlock reasons returned by CommandSafetyReject (send_data.c:1324):
+# Safety interlock reasons returned by CommandSafetyReject (TASK/send_data.c, CMD_REJECT_*):
 #   0  = pass
 #   4  = unknown command
 #   6  = safety interlock

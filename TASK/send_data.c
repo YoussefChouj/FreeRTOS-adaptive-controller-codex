@@ -1,4 +1,18 @@
 #pragma diag_suppress 1267
+/**
+ * @module     send_data.c
+ * @subsystem  comm
+ * @owner      Send_Task (USER/main.c:269): Send_Groundstation_Telemetry_UART4, Process_GroundStation_Command,
+ *             send_to_linux, usart3_send each cycle; 200 Hz nominal, about 80 Hz in MIXED telemetry mode
+ *             (API/subscribe.h: the UART4 DMA wait paces it).
+ * @purpose    Ground-station telemetry frames (legacy A/B/C, the 0x03 system-ID and 0x05 OF frames), the 9-state
+ *             EKF step (s_ekf, g_ekf_gate), and the ground-station command handlers (k_gs_cmds table, one handler
+ *             per command id).
+ * @inputs     gs_cmd_queue (filled by the UART RX interrupt, firmware/gs_command.h), Ctrler, mrac_*, imu_data, ano_of.
+ * @outputs    UART4 / UART5 / USART3 frames; the tunables and mode flags the command handlers write.
+ * @caution    command and telemetry byte layouts are shared contracts with ground_station/comm/serial_bridge.py
+ *             and ground_station/platform/firmware_contract.py (COMMAND_TABLE ids = k_gs_cmds ids).
+ */
 
 #include "send_data.h"
 #include "mrac.h"
@@ -68,14 +82,6 @@ static uint8_t s_ekf_inited = 0U;
 /* Positional: bias_mode FIXED, reqs 0, healthy 1, bias_frozen 0xFF (apply on first step). */
 volatile Ekf9Gate_t g_ekf_gate = { EKF_BIAS_GATED, EKF_BIAS_GATED, 0U, 0U, 0U, 1U, 0xFFU, 0U, 0.0f, 0.0f };  /* GATED default: grounded test 2026-09-26, FIXED(b_a=0) crept 121 cm/120 s vs GATED 0.6 cm */
 
-/**
- * @module  send_data.c
- * @subsystem  comm
- * @depends  send_data.h, mrac.h, pid.h, robot_types.h, global_declare.h
- * @owns  telemetry frame serialization and ground-station command dispatch
- * @caution  command and telemetry byte layouts are shared contracts with ground_station/comm/serial_bridge.py
- */
-
 _linux_flag stm32_to_linux_flag;
 
 /* CRC16-CCITT (XModem) — used for Frame C checksum. */
@@ -103,135 +109,6 @@ static uint16_t crc16_xmodem(const uint8_t* data, uint16_t len)
  * SerialBridge ignores 0x06 on firmware older than GS_PROTO_VERSION v13. */
 static uint8_t  s_frame_c_buf[60] = {0};
 static uint16_t s_frame_c_seq      = 0U;
-
-/*************************************************************************
-�� �� ����void ANO_Report_UserData1(void)
-�������ܣ����ߴ��ڷ�������
-��    ע��PA10(USART1_RX)
-*************************************************************************/
-void ANO_Report_UserData1(void)  //����5
-{
-	Get_Voltage();
-	float senddata[16];
-
-	senddata[0] =	 real_voltage ;
-  senddata[1] =  Ctrler.Z_ratePID.U ; 
-	senddata[2] =  Ctrler.locxPID.FB;    
-	senddata[3] =  Ctrler.locyPID.FB ;
-  senddata[4] =  Ctrler.Z_posPID.FB ; 
-	senddata[5] =  imu_data.pit; 
-	senddata[6] =  1;  
-	senddata[7] =  8 ;  
-	senddata[8] =  9;  
-	senddata[9] = 10 ;  
-	senddata[10]=  11 ;
-	senddata[11] = 12;
-	senddata[12] = 13 ;
-	senddata[13] = 14;
-	senddata[14] = 15;
-	senddata[15] = 16 ;
-
-	Custom_DataBuf[0]= BYTE0(senddata[0]) ;//   
-	Custom_DataBuf[1]= BYTE1(senddata[0]) ;//   
-	Custom_DataBuf[2]= BYTE2(senddata[0]) ;//    
-	Custom_DataBuf[3]= BYTE3(senddata[0]) ;// 
-	
-	Custom_DataBuf[4]= BYTE0(senddata[1]) ;//    
-	Custom_DataBuf[5]= BYTE1(senddata[1]) ;//    
-	Custom_DataBuf[6]= BYTE2(senddata[1]) ;//   
-	Custom_DataBuf[7]= BYTE3(senddata[1]) ;//  
-	
-	Custom_DataBuf[8]= BYTE0(senddata[2]) ;//    
-	Custom_DataBuf[9]= BYTE1(senddata[2]) ;//    
-	Custom_DataBuf[10]= BYTE2(senddata[2]) ;//    
-	Custom_DataBuf[11]= BYTE3(senddata[2]) ;//   
-	
-	Custom_DataBuf[12]= BYTE0(senddata[3]) ;//   
-	Custom_DataBuf[13]= BYTE1(senddata[3]) ;//   
-	Custom_DataBuf[14]= BYTE2(senddata[3]) ;//    
-	Custom_DataBuf[15]= BYTE3(senddata[3]) ;//  
-	
-	Custom_DataBuf[16]= BYTE0(senddata[4]) ;//   
-	Custom_DataBuf[17]= BYTE1(senddata[4]) ;//   
-	Custom_DataBuf[18]= BYTE2(senddata[4]) ;//    
-	Custom_DataBuf[19]= BYTE3(senddata[4]) ;//  
-	
-	Custom_DataBuf[20]= BYTE0(senddata[5]) ;//   
-	Custom_DataBuf[21]= BYTE1(senddata[5]) ;//   
-	Custom_DataBuf[22]= BYTE2(senddata[5]) ;//    
-	Custom_DataBuf[23]= BYTE3(senddata[5]) ;//  
-	
-	Custom_DataBuf[24]= BYTE0(senddata[6]) ;//   
-	Custom_DataBuf[25]= BYTE1(senddata[6]) ;//   
-	Custom_DataBuf[26]= BYTE2(senddata[6]) ;//    
-	Custom_DataBuf[27]= BYTE3(senddata[6]) ;//  
-	
-	Custom_DataBuf[28]= BYTE0(senddata[7]) ;//   
-	Custom_DataBuf[29]= BYTE1(senddata[7]) ;//   
-	Custom_DataBuf[30]= BYTE2(senddata[7]) ;//    
-	Custom_DataBuf[31]= BYTE3(senddata[7]) ;//  
-	
-	Custom_DataBuf[32]= BYTE0(senddata[8]) ;//   
-	Custom_DataBuf[33]= BYTE1(senddata[8]) ;//   
-	Custom_DataBuf[34]= BYTE2(senddata[8]) ;//    
-	Custom_DataBuf[35]= BYTE3(senddata[8]) ;// 
-	
-	Custom_DataBuf[36]= BYTE0(senddata[9]) ;//   
-	Custom_DataBuf[37]= BYTE1(senddata[9]) ;//   
-	Custom_DataBuf[38]= BYTE2(senddata[9]) ;//    
-	Custom_DataBuf[39]= BYTE3(senddata[9]) ;// 
-	
-	Custom_DataBuf[40]= BYTE0(senddata[10]) ;//   
-	Custom_DataBuf[41]= BYTE1(senddata[10]) ;//   
-	Custom_DataBuf[42]= BYTE2(senddata[10]) ;//    
-	Custom_DataBuf[43]= BYTE3(senddata[10]) ;// 
-	
-	Custom_DataBuf[44]= BYTE0(senddata[11]) ;//   
-	Custom_DataBuf[45]= BYTE1(senddata[11]) ;//   
-	Custom_DataBuf[46]= BYTE2(senddata[11]) ;//    
-	Custom_DataBuf[47]= BYTE3(senddata[11]) ;// 
-	
-	Custom_DataBuf[48]= BYTE0(senddata[12]) ;//   
-	Custom_DataBuf[49]= BYTE1(senddata[12]) ;//   
-	Custom_DataBuf[50]= BYTE2(senddata[12]) ;//    
-	Custom_DataBuf[51]= BYTE3(senddata[12]) ;// 
-	
-	Custom_DataBuf[52]= BYTE0(senddata[13]) ;//   
-	Custom_DataBuf[53]= BYTE1(senddata[13]) ;//   
-	Custom_DataBuf[54]= BYTE2(senddata[13]) ;//    
-	Custom_DataBuf[55]= BYTE3(senddata[13]) ;// 
-	
-	Custom_DataBuf[56]= BYTE0(senddata[14]) ;//   
-	Custom_DataBuf[57]= BYTE1(senddata[14]) ;//   
-	Custom_DataBuf[58]= BYTE2(senddata[14]) ;//    
-	Custom_DataBuf[59]= BYTE3(senddata[14]) ;// 
-	
-	Custom_DataBuf[60]= BYTE0(senddata[15]) ;//   
-	Custom_DataBuf[61]= BYTE1(senddata[15]) ;//   
-	Custom_DataBuf[62]= BYTE2(senddata[15]) ;//    
-	Custom_DataBuf[63]= BYTE3(senddata[15]) ;// 
-	
-	Custom_DataBuf[64]=  0x00 ;//    
-	Custom_DataBuf[65]=  0x00 ;//  
-	Custom_DataBuf[66]=  0x80 ;//    
-	Custom_DataBuf[67]=  0x7f ;// 
-	
-	/*--------------------------����DMA����---------------------------*/
-	
-  /* Non-blocking check: skip if previous DMA1_Stream7 transfer is still active */
-  if (DMA_GetCurrDataCounter(DMA1_Stream7) != 0U) {
-      return;
-  }
-  //��֮ǰ�ķ���
-  DMA_ClearITPendingBit(DMA1_Stream7, DMA_IT_TCIF7); //����DMA_Mode_Normal,����û��ʹ������ж�ҲҪ�������������ֻ��һ��
-    
-  DMA_Cmd(DMA1_Stream7, DISABLE);				             //���õ�ǰ����ֵǰ�Ƚ���DMA
-  DMA1_Stream7->M0AR = (uint32_t)&Custom_DataBuf;  //���õ�ǰ�������ݻ���ַ:Memory0 tARget
-  DMA1_Stream7->NDTR = 68;     //���õ�ǰ���������ݵ�����:Number of Data units to be TRansferred
-  DMA_Cmd(DMA1_Stream7, ENABLE);		
-                                        //����DMA���� 
-                                        //����DMA���� 		
-}
 
 UCHAR8 DataBuf_to_linux[52] = {0}; 
 void send_to_linux(void)    //����4
@@ -1356,14 +1233,20 @@ extern volatile GS_Cmd_t gs_cmd_queue[16];
 extern volatile uint8_t gs_cmd_head;
 extern volatile uint8_t gs_cmd_tail;
 
+/* Transaction ids seen recently (duplicate suppression, a ring of TXN_HISTORY_LEN). */
+#define TXN_HISTORY_LEN         16U
+#define CMD_REJECT_UNKNOWN      4U   /* reason byte of a REJECTED transaction result (firmware_contract.py: 4 unknown, 6 interlock) */
+#define CMD_REJECT_INTERLOCK    6U
+#define CMD_ID_LAST_PLAIN       0x1EU  /* ids above this are unknown, except the MRAC element block */
+
 static uint8_t s_transaction_result_buf[64];
-static uint16_t s_transaction_history[16];
+static uint16_t s_transaction_history[TXN_HISTORY_LEN];
 static uint8_t s_transaction_history_head = 0U;
 
 static uint8_t TransactionWasSeen(uint16_t transaction_id)
 {
     uint8_t i;
-    for (i = 0U; i < 16U; i++) {
+    for (i = 0U; i < TXN_HISTORY_LEN; i++) {
         if (s_transaction_history[i] == transaction_id) {
             return 1U;
         }
@@ -1374,7 +1257,7 @@ static uint8_t TransactionWasSeen(uint16_t transaction_id)
 static void RememberTransaction(uint16_t transaction_id)
 {
     s_transaction_history[s_transaction_history_head] = transaction_id;
-    s_transaction_history_head = (uint8_t)((s_transaction_history_head + 1U) % 16U);
+    s_transaction_history_head = (uint8_t)((s_transaction_history_head + 1U) % TXN_HISTORY_LEN);
 }
 
 /* MRAC per-element parameter commands. Two encodings share one applier:
@@ -1417,24 +1300,24 @@ static void MracElemParamApply(uint8_t axis, uint8_t field, uint8_t elem, float 
 
 static uint8_t CommandSafetyReject(uint8_t id)
 {
-    if ((id == 0U) || ((id > 0x1EU) && !MRAC_ELEM_CMD_IS(id))) {
-        return 4U; /* unknown command */
+    if ((id == 0U) || ((id > CMD_ID_LAST_PLAIN) && !MRAC_ELEM_CMD_IS(id))) {
+        return CMD_REJECT_UNKNOWN;
     }
     if ((id == 0x06U) && (DroneStatus.FlyMode != FlyMode_SDK)) {
-        return 6U; /* safety interlock */
+        return CMD_REJECT_INTERLOCK;   /* wrong fly mode for this command */
     }
     if (((id == 0x0AU) || (id == 0x0BU) || (id == 0x0CU) ||
          (id == 0x11U)) && (DroneStatus.FlyMode != FlyMode_SDK)) {
-        return 6U;
+        return CMD_REJECT_INTERLOCK;
     }
     if ((id == 0x18U) &&
         ((flight_phase != FLIGHT_PHASE_GROUND_IDLE) ||
          (DroneStatus.ARM_Status != DisArmed))) {
-        return 6U;
+        return CMD_REJECT_INTERLOCK;   /* recalibrate: ground idle and disarmed only */
     }
     if ((id == 0x1DU) &&
         ((flight_phase == FLIGHT_PHASE_FLYING) || (flight_phase == FLIGHT_PHASE_LANDING))) {
-        return 6U; /* MRAC variants switch on the ground only */
+        return CMD_REJECT_INTERLOCK;   /* MRAC variants switch on the ground only */
     }
     return 0U;
 }
@@ -1472,6 +1355,681 @@ static void GroundStation_AbortAllPaths(void)
     FlightFSM_Event(FLIGHT_EVENT_DANGEROUS_STOP);
 }
 
+/* ==== Ground-station command handlers ==============================================================
+ * One handler per command id (names as in ground_station/platform/firmware_contract.py COMMAND_TABLE),
+ * looked up in k_gs_cmds by Process_GroundStation_Command after the safety and transaction checks.
+ * Wire format and the full parameter list: docs/telemetry-protocol.md. */
+typedef struct {
+    uint8_t  id;
+    uint8_t  idx;
+    float    val;
+    uint32_t lease_now_ms;    /* WP-28 gain lease clock, ms */
+    uint8_t  lease_airborne;
+    uint8_t  wfb_res;         /* WFB_RESULT_* of a 0x1A/0x1B; APPLIED for every other command */
+} GsCmd_t;
+
+typedef void (*GsCmdHandler_t)(GsCmd_t *c);
+
+#define PID_GAIN_CMD_MAX       200.0f   /* CMD 0x01 accepts gains in [0, 200] */
+#define MOTOR_TEST_CCR_MIN     2000.0f  /* CMD 0x16 CCR clamp */
+#define MOTOR_TEST_CCR_MAX     4000.0f
+#define OF_BIAS_EMA_TAU_MIN_S  1.0f     /* CMD 0x1E idx 2 clamp; same range as OF_BIAS_EMA_TAU_* in StabilizerTask.c */
+#define OF_BIAS_EMA_TAU_MAX_S  300.0f
+#define ARM_AIRBORNE_MIN_Z_M   0.35f    /* CMD 0x0E arm while above this: throttle stick to mid, not the floor */
+
+// CMD 0x01 — PID gain update
+// INDEX encodes axis+gain: (axis 0-6). (gain 0=Kp, 1=Ki, 2=Kd)
+static void Cmd_PidGain(GsCmd_t *c)
+{
+    uint8_t axis = c->idx / 3;
+    uint8_t gain = c->idx % 3;
+
+    PIDTypeDef* pids[7];
+    pids[0] = &Ctrler.pitchPID;
+    pids[1] = &Ctrler.rollPID;
+    pids[2] = &Ctrler.yawPID;
+    pids[3] = &Ctrler.gyroxPID;
+    pids[4] = &Ctrler.gyroyPID;
+    pids[5] = &Ctrler.gyrozPID;
+    pids[6] = &Ctrler.Z_ratePID;
+
+    if (axis < 7 && c->val >= 0.0f && c->val <= PID_GAIN_CMD_MAX) {
+        PID_GainLeaseRenew(c->lease_now_ms, c->lease_airborne);
+        if (gain == 0) pids[axis]->Kp = c->val;
+        else if (gain == 1) pids[axis]->Ki = c->val;
+        else if (gain == 2) pids[axis]->Kd = c->val;
+    }
+}
+
+// CMD 0x02 / 0x05 / 0x08 — MRAC array element update (What_tol moved from 0x06 to 0x08; 0x06 = virtual RC)
+// High nibble: axis (0-3). Low nibble: element index.
+static void Cmd_MracElem4(GsCmd_t *c)
+{
+    uint8_t axis = (c->idx >> 4) & 0x0F;
+    uint8_t elem = c->idx & 0x0F;
+    uint8_t field = (c->id == 0x02) ? MRAC_ELEM_FIELD_GAMMA :
+                    (c->id == 0x05) ? MRAC_ELEM_FIELD_LIMIT : MRAC_ELEM_FIELD_TOL;
+
+    MracElemParamApply(axis, field, elem, c->val);
+}
+
+// CMD 0x20..0x2B - MRAC element update with an 8-bit element index (for N_FEATURES > 16).
+// id = 0x20 + (field << 2) + axis; field 0 = gamma, 1 = What_limit, 2 = What_tol; INDEX = element.
+static void Cmd_MracElem8(GsCmd_t *c)
+{
+    uint8_t sel = (uint8_t)(c->id - MRAC_ELEM_CMD_BASE);
+
+    MracElemParamApply((uint8_t)(sel & 0x03U), (uint8_t)(sel >> 2), c->idx, c->val);
+}
+
+// CMD 0x06 — virtual stick injection. val is normalised [-1.0, +1.0]. idx: [0]=thr,[1]=pitch,[2]=roll,[3]=yaw.
+// Gate: FlyMode_SDK only (physical RC mode switch is still the hard kill via Check_Fly_Mode).
+// sbus_lost is NOT checked: RC stays ON as emergency fallback; authority flag in RCInput routes the signal.
+static void Cmd_VirtualStick(GsCmd_t *c)
+{
+    if (DroneStatus.FlyMode == FlyMode_SDK && c->idx < 4) {
+        float v = c->val;
+        if (v >  1.0f) v =  1.0f;
+        if (v < -1.0f) v = -1.0f;
+        RCInput_SetVirtualStick((RC_Axis_t)c->idx, v);
+    }
+}
+
+// CMD 0x07 — bench test mode (prop-wash safety): index 0 value > 0 enables.
+// This flag BLOCKS the automatic FLYING transition (4DOF fixture prop wash guard).
+// Does NOT cap throttle — use CMD 0x08 for independent throttle capping.
+static void Cmd_BenchMode(GsCmd_t *c)
+{
+    if (c->idx == 0) {
+        bench_mode_active = (c->val > 0.0f) ? 1U : 0U;
+    }
+}
+
+// CMD 0x03 — Mixer/saturation update: idx 0-3 mrac_to_mixer, 4-7 u_max (pitch, roll, yaw, z),
+// 8 gs_throttle_min_pct, 9 gs_throttle_max_pct
+static void Cmd_MixerSaturation(GsCmd_t *c)
+{
+    MRAC_AxisConfig_t* configs[4];
+    configs[0] = &mrac_config_pitch;
+    configs[1] = &mrac_config_roll;
+    configs[2] = &mrac_config_yaw;
+    configs[3] = &mrac_config_z;
+    if (c->idx < 4) {
+        if (c->val > 1.0f) configs[c->idx]->mrac_to_mixer = c->val;
+    } else if (c->idx < 8) {
+        configs[c->idx - 4]->u_max = c->val;
+    } else if (c->idx == 8) {
+        if (c->val >= 0.0f && c->val <= 1.0f) gs_throttle_min_pct = c->val;
+    } else if (c->idx == 9) {
+        if (c->val >= 0.50f && c->val <= 1.0f) gs_throttle_max_pct = c->val;
+    }
+}
+
+/* WFB BEGIN glue */
+/* CMD 0x1A primitives / 0x1B trajectory upload (docs/workflow-b/interfaces.md sec 1) */
+static void Cmd_Wfb(GsCmd_t *c)
+{
+    taskENTER_CRITICAL();
+    c->wfb_res = wfb_glue_on_cmd(c->id, c->idx, c->val, (uint32_t)xTaskGetTickCount() * (uint32_t)portTICK_PERIOD_MS);
+    taskEXIT_CRITICAL();
+}
+/* WFB END glue */
+
+// CMD 0x09 — velocity / angle safety limits (ground station)
+static void Cmd_SafetyLimits(GsCmd_t *c)
+{
+    if (c->idx == 0) {
+        if (c->val > 0.05f && c->val < 20.0f) gs_max_horizontal_speed_mps = c->val;
+    } else if (c->idx == 1) {
+        if (c->val > 0.05f && c->val < 10.0f) gs_max_vertical_speed_mps = c->val;
+    } else if (c->idx == 2) {
+        if (c->val >= 3.0f && c->val <= 60.0f) gs_max_pitch_deg = c->val;
+    } else if (c->idx == 3) {
+        if (c->val >= 3.0f && c->val <= 60.0f) gs_max_roll_deg = c->val;
+    }
+}
+
+// CMD 0x04 — Flight mode (idx 0 = dangerous stop + path abort, idx 1 = recover to SDK)
+static void Cmd_FlightModeAbort(GsCmd_t *c)
+{
+    if (c->idx == 0) {
+        GroundStation_AbortAllPaths();
+        GS_KeySDKflag = 0U;
+    } else if (c->idx == 1) {
+        FlightFSM_Event(FLIGHT_EVENT_RECOVER_SDK);
+    }
+}
+
+/* CMD 0x0A — TWC target (point-to-point); only in SDK mode */
+static void Cmd_TwcTarget(GsCmd_t *c)
+{
+    if (DroneStatus.FlyMode != FlyMode_SDK) {
+        /* ignore */
+    } else if (c->idx == 0) {
+        TWC.target_x = c->val;
+    } else if (c->idx == 1) {
+        TWC.target_y = c->val;
+    } else if (c->idx == 2) {
+        TWC.target_z = c->val;
+    } else if (c->idx == 3) {
+        TWC.set_yaw = c->val;
+    } else if (c->idx == 4) {
+        TWC.execute = ((uint8_t)(c->val + 0.5f) != 0) ? 1 : 0;
+    }
+}
+
+/* CMD 0x0B — sinusoidal path parameters (FlyMode_SDK only) */
+static void Cmd_SinusoidPath(GsCmd_t *c)
+{
+    if (DroneStatus.FlyMode != FlyMode_SDK) {
+        /* ignore */
+    } else if (c->idx == 0) {
+        sinusoid_path.center_x = c->val;
+    } else if (c->idx == 1) {
+        sinusoid_path.center_y = c->val;
+    } else if (c->idx == 2) {
+        sinusoid_path.center_z = c->val;
+    } else if (c->idx == 3) {
+        sinusoid_path.amplitude = c->val;
+    } else if (c->idx == 4) {
+        sinusoid_path.frequency = c->val;
+    } else if (c->idx == 5) {
+        sinusoid_path.duration = c->val;
+    } else if (c->idx == 6) {
+        sinusoid_path.axis = (uint8_t)(c->val + 0.5f);
+        if (sinusoid_path.axis > 2U) {
+            sinusoid_path.axis = 2U;
+        }
+    } else if (c->idx == 7) {
+        if (((uint8_t)(c->val + 0.5f)) != 0) {
+            taskENTER_CRITICAL();
+            AutoflyTask_StartSinusoid();
+            taskEXIT_CRITICAL();
+        } else {
+            sinusoid_path.active = 0U;
+        }
+    }
+}
+
+/* CMD 0x0C — circle path (FlyMode_SDK only) */
+static void Cmd_CirclePath(GsCmd_t *c)
+{
+    if (DroneStatus.FlyMode != FlyMode_SDK) {
+        /* ignore */
+    } else if (c->idx == 0) {
+        circle_path.center_x = c->val;
+    } else if (c->idx == 1) {
+        circle_path.center_y = c->val;
+    } else if (c->idx == 2) {
+        circle_path.center_z = c->val;
+    } else if (c->idx == 3) {
+        circle_path.radius = c->val;
+    } else if (c->idx == 4) {
+        circle_path.angular_speed = c->val;
+    } else if (c->idx == 5) {
+        circle_path.duration = c->val;
+    } else if (c->idx == 6) {
+        if (((uint8_t)(c->val + 0.5f)) != 0) {
+            taskENTER_CRITICAL();
+            AutoflyTask_StartCircle();
+            taskEXIT_CRITICAL();
+        } else {
+            circle_path.active = 0U;
+        }
+    }
+}
+
+/* CMD 0x11 - figure-8 (lemniscate) path (FlyMode_SDK only) */
+static void Cmd_Figure8Path(GsCmd_t *c)
+{
+    if (DroneStatus.FlyMode != FlyMode_SDK) {
+        /* ignore */
+    } else if (c->idx == 0) {
+        figure8_path.center_x = c->val;
+    } else if (c->idx == 1) {
+        figure8_path.center_y = c->val;
+    } else if (c->idx == 2) {
+        figure8_path.center_z = c->val;
+    } else if (c->idx == 3) {
+        figure8_path.amplitude = c->val;
+    } else if (c->idx == 4) {
+        figure8_path.angular_speed = c->val;
+    } else if (c->idx == 5) {
+        figure8_path.duration = c->val;
+    } else if (c->idx == 6) {
+        figure8_path.type = (uint8_t)(c->val + 0.5f);
+        if (figure8_path.type > 1U) {
+            figure8_path.type = 1U;
+        }
+    } else if (c->idx == 7) {
+        if (((uint8_t)(c->val + 0.5f)) != 0) {
+            taskENTER_CRITICAL();
+            AutoflyTask_StartFigure8();
+            taskEXIT_CRITICAL();
+        } else {
+            figure8_path.active = 0U;
+        }
+    }
+}
+
+/* CMD 0x12 - shared waypoint-density spacing (loc-PID units = cm; GUI sends Δs_m*100); 0 = continuous */
+static void Cmd_WaypointSpacing(GsCmd_t *c)
+{
+    if (c->idx == 0) {
+        waypoint_spacing = (c->val < 0.0f) ? 0.0f : c->val;
+        AutoflyTask_WaypointReset();
+    }
+}
+
+/* CMD 0x0D — abort all paths + neutral sticks + dangerous stop */
+static void Cmd_AbortAllPaths(GsCmd_t *c)
+{
+    if (c->idx == 0) {
+        GroundStation_AbortAllPaths();
+    }
+}
+
+/* CMD 0x0F — multiplexed ground-station command (telemetry-throughput-2026-09-08).
+ *
+ * Two uses live behind this id, disambiguated by idx:
+ *   idx 0..12    MRAC feature-flag runtime toggle (val >= 0.5 = ON, else OFF).
+ *                0=adaptation_on  1=projection_on  2=deadzone_on  3=hard_freeze_on
+ *                4=tanh_saturation_on  5=e_modification_on  6=l1_filtering_on
+ *                7=axis_enable_pitch  8=axis_enable_roll  9=axis_enable_yaw
+ *                10=output_injection_on (shadow-mode gate: 0=motors see pure PID)
+ *                11=id_frame_on (high-rate system-ID frame 0x03 @100Hz, replaces A/B)
+ *                12=of_frame_on (OF calibration/fusion frame 0x05 @200Hz, replaces A/B)
+ *   idx 100..102 Telemetry mode switch (val ignored). idx 100=LEGACY 101=MIXED
+ *                102=SUBSCRIBE_ONLY. idx 13..99 and idx > 102 reserved.
+ *
+ * The previous implementation had two parallel `else if (id == 0x0F)` branches
+ * in this dispatch chain; the MRAC branch sat earlier in the file and shadowed
+ * the telemetry branch, making the telemetry-mode switch dead code. The sentinel
+ * split keeps the wire shape (9 B, idx+val+CRC8) unchanged and is backward
+ * compatible with any host that was only sending idx 0..12. */
+#define CMD_0F_TELEM_MODE_BASE  100U
+static void Cmd_MultiplexFlags(GsCmd_t *c)
+{
+    if (c->idx <= 12U) {
+        uint8_t on = ((uint8_t)(c->val + 0.5f)) != 0U ? 1U : 0U;
+        switch (c->idx) {
+            case 0:  mrac_flags.adaptation_on      = on; break;
+            case 1:  mrac_flags.projection_on      = on; break;
+            case 2:  mrac_flags.deadzone_on        = on; break;
+            case 3:  mrac_flags.hard_freeze_on     = on; break;
+            case 4:  mrac_flags.tanh_saturation_on = on; break;
+            case 5:  mrac_flags.e_modification_on  = on; break;
+            case 6:  mrac_flags.l1_filtering_on    = on; break;
+            case 7:  mrac_flags.axis_enable_pitch  = on; break;
+            case 8:  mrac_flags.axis_enable_roll   = on; break;
+            case 9:  mrac_flags.axis_enable_yaw    = on; break;
+            case 10: mrac_flags.output_injection_on = on; break;
+            case 11: mrac_flags.id_frame_on         = on; break;
+            case 12: mrac_flags.of_frame_on         = on; break;
+            default: break;  /* unreachable; idx <= 12 already gated */
+        }
+    } else if ((c->idx >= CMD_0F_TELEM_MODE_BASE) && (c->idx <= 102U)) {
+        /* idx 100=LEGACY 101=MIXED 102=SUBSCRIBE_ONLY. Val ignored.
+         * Default at boot is MIXED (SUBSCRIBE_DEFAULT_TELEMETRY_MODE).
+         * SUBSCRIBE_ONLY skips the UART4 DMA busy-wait so Send_Task runs at
+         * nominal 200 Hz instead of being paced to ~80 Hz by the 3.7 ms wait. */
+        SetTelemetryMode((uint8_t)(c->idx - CMD_0F_TELEM_MODE_BASE));
+    }
+}
+
+/* CMD 0x13 — reference model type selector (idx 0, val = 0/1/2).
+ *   0 = passthrough (xm = r), 1 = first-order, 2 = second-order.
+ * Snaps all reference states to plant on change for bumpless switching. */
+static void Cmd_RefModelType(GsCmd_t *c)
+{
+    if (c->idx == 0) {
+        uint8_t t = (uint8_t)(c->val + 0.5f);
+        if (t > 2U) t = 2U;
+        mrac_flags.ref_model_type = t;
+        mrac_state.pitch.xm  = mrac_state.pitch.x;   mrac_state.pitch.xm_dot  = 0.0f;
+        mrac_state.roll.xm   = mrac_state.roll.x;    mrac_state.roll.xm_dot   = 0.0f;
+        mrac_state.yaw.xm    = mrac_state.yaw.x;     mrac_state.yaw.xm_dot    = 0.0f;
+        mrac_state.z_rate.xm = mrac_state.z_rate.x;  mrac_state.z_rate.xm_dot = 0.0f;
+    }
+}
+
+/* CMD 0x1D - MRAC law variant field (WP-27, docs/workflow-b/mrac-variants.md).
+ *   idx = (field << 2) | axis, field = MRAC_VariantField_e, axis 0 pitch 1 roll 2 yaw 3 z.
+ *   Fields 0-12 WP-27; 13-18 WP-33 (st_eps, st_phi_max, st_bar, lf_gain, sigma_lf, gam_f), idx <= 75.
+ *   MRAC_VariantParamSet bounds every field and refuses non-finite values; ignored while airborne. */
+static void Cmd_MracVariant(GsCmd_t *c)
+{
+    if ((flight_phase != FLIGHT_PHASE_FLYING) && (flight_phase != FLIGHT_PHASE_LANDING)) {
+        (void)MRAC_VariantParamSet((uint8_t)((uint32_t)c->idx & 0x03U), (uint8_t)((uint32_t)c->idx >> 2U), c->val);
+    }
+}
+
+/* CMD 0x19 - Simplex run-time assurance (docs/research-platform/SIMPLEX.md).
+ * idx 0 mode, 1 variant, 2 roll_max, 3 pitch_max, 4 w_norm_max,
+ * 5 sat_ticks_max, 6 hold_ticks, 7 reset counters. Out-of-range writes are ignored. */
+static void Cmd_Simplex(GsCmd_t *c)
+{
+    if (c->idx == 0 && c->val >= 0.0f && c->val <= 2.0f) {
+        mrac_simplex.mode = (uint8_t)(c->val + 0.5f);
+    } else if (c->idx == 1 && c->val >= 0.0f && c->val <= 1.0f) {
+        mrac_simplex.variant = (uint8_t)(c->val + 0.5f);
+    } else if (c->idx == 2 && c->val > 0.0f) {
+        mrac_simplex.roll_max = c->val;
+    } else if (c->idx == 3 && c->val > 0.0f) {
+        mrac_simplex.pitch_max = c->val;
+    } else if (c->idx == 4 && c->val > 0.0f) {
+        mrac_simplex.w_norm_max = c->val;
+    } else if (c->idx == 5 && c->val >= 1.0f && c->val <= 65535.0f) {
+        mrac_simplex.sat_ticks_max = (uint16_t)(c->val + 0.5f);
+    } else if (c->idx == 6 && c->val >= 0.0f && c->val <= 65535.0f) {
+        mrac_simplex.hold_ticks = (uint16_t)(c->val + 0.5f);
+    } else if (c->idx == 7) {
+        mrac_simplex.trip_count       = 0;
+        mrac_simplex.would_trip_count = 0;
+        mrac_simplex.tripped          = 0;
+        mrac_simplex.reason           = 0;
+    }
+}
+
+/* CMD 0x14 — SysID excitation control (ADR-0004). Set params (idx 0-5) then start/abort (idx 6).
+ *   idx 0=axis(0 pitch,1 roll,2 yaw,3 Z)  1=signal(0 chirp,1 multisine)  2=f0 Hz  3=f1 Hz
+ *       4=amplitude (deg/s; Z in m/s)  5=duration s  6=start(>=0.5)/abort(<0.5)
+ *       7=geofence enable (>=0.5 ON default, <0.5 OFF — pilot-watch override)
+ * Dashboard sends CMD 0x10 (OF-origin reset) immediately before idx 6 start. */
+static void Cmd_SysIdControl(GsCmd_t *c)
+{
+    static uint8_t sx_axis = 0U, sx_sig = 0U;
+    static float sx_f0 = 1.0f, sx_f1 = 12.0f, sx_amp = 30.0f, sx_dur = 20.0f;
+    switch (c->idx) {
+        case 0: sx_axis = (uint8_t)(c->val + 0.5f); break;
+        case 1: sx_sig  = (uint8_t)(c->val + 0.5f); break;
+        case 2: sx_f0 = c->val; break;
+        case 3: sx_f1 = c->val; break;
+        case 4: sx_amp = c->val; break;
+        case 5: sx_dur = c->val; break;
+        case 6:
+            if (((uint8_t)(c->val + 0.5f)) != 0U) {
+                /* Self-sufficient OF-origin reset (ADR-0004 dec.6/finding #13): do not rely
+                 * on the GS having sent CMD 0x10 first, so the green-zone centre is always
+                 * captured at a fresh (0,0) origin. Mirrors the 0x10 handler below. */
+                ano_of.earth_x       = 0.0f;
+                ano_of.earth_y       = 0.0f;
+                ano_of.earth_x_ture  = 0.0f;
+                ano_of.earth_y_ture  = 0.0f;
+                ano_of.DISTANCE_X    = 0.0f;
+                ano_of.DISTANCE_Y    = 0.0f;
+                Ctrler.locxPID.FB    = 0.0f;
+                Ctrler.locyPID.FB    = 0.0f;
+                Ctrler.locxPID.Des   = 0.0f;
+                Ctrler.locyPID.Des   = 0.0f;
+                Ctrler.locxsPID.Des  = 0.0f;
+                Ctrler.locysPID.Des  = 0.0f;
+                SysID_Start((SysID_Axis_e)sx_axis, (SysID_Signal_e)sx_sig, sx_f0, sx_f1, sx_amp, sx_dur);
+            } else {
+                SysID_Abort();
+            }
+            break;
+        case 7: SysID_SetGeofence(((uint8_t)(c->val + 0.5f)) != 0U ? 1U : 0U); break;
+        default: break;
+    }
+}
+
+/* CMD 0x15 — gyro low-pass filter (Phase 1, ADR-0004).
+ *   idx 0 = enable (val>=0.5 ON, else pass-through)
+ *   idx 1 = cutoff Hz (applied to pitch/roll/yaw)  */
+static void Cmd_GyroLpf(GsCmd_t *c)
+{
+    if (c->idx == 0) {
+        GyroFilter_SetEnabled(((uint8_t)(c->val + 0.5f)) != 0U ? 1U : 0U);
+    } else if (c->idx == 1) {
+        GyroFilter_SetCutoff(GYRO_FILT_PITCH, c->val);
+        GyroFilter_SetCutoff(GYRO_FILT_ROLL,  c->val);
+        GyroFilter_SetCutoff(GYRO_FILT_YAW,   c->val);
+    }
+}
+
+/* CMD 0x10 — reset world-frame optical flow origin.
+ * Zeros accumulated earth_x/y position so the drone's current location
+ * becomes the new (0, 0) world origin.  Also syncs position setpoints
+ * to avoid a sudden jump on the next control tick. */
+static void Cmd_ResetOrigin(GsCmd_t *c)
+{
+    if (c->idx == 0) {
+        Reset_World_Origin();
+    }
+}
+
+/* CMD 0x17 — one-shot optical-flow velocity-bias capture.
+ * Pilot places the drone level and still, then triggers this; the stabilizer
+ * task averages of2_dx_fix/dy_fix over ~2 s and stores the bias (streamed back
+ * as of.bias_x/y in the 0x05 frame so the capture can be confirmed). Fixes the
+ * unbounded earth_x/y drift (~25 m/200 s) caused by the un-subtracted DC bias. */
+static void Cmd_OfBiasCapture(GsCmd_t *c)
+{
+    if (c->idx == 0) {
+        g_of_bias_capture_req = 1U;
+    }
+}
+
+/* CMD 0x1E — OF bias estimation mode selector.
+ *   idx=0: set mode (val=0 FIXED, val=1 EMA, val=2 EKF)
+ *          DISARMED ONLY: mode switch is rejected when armed
+ *          (safety gate mirrors CMD 0x18 and motor bench gate).
+ *          Firmware falls back to FIXED automatically on EKF
+ *          health failure (g_ekf_of_fallback set sticky).
+ *   idx=1: set EMA freeze flag (val=0 run, val=1 freeze)
+ *          Allowed any time (freeze = safe, no control impact).
+ *   idx=2: set EMA time constant tau (seconds).
+ *          Clamped to [1.0, 300.0] s. Allowed any time.
+ *          Larger tau → slower tracking, less pull-back.
+ *   idx=3: handheld test (val=0 off, val=1 on). Integrates OF
+ *          position on the ground; firmware clears it in flight.
+ *   idx=4: g_of_full_tilt (0/1), full-tilt OF correction. DISARMED ONLY.
+ *   idx=5: g_ekf_of_vel_fb (0/1), KF velocity feedback. DISARMED ONLY.
+ *
+ * All globals are volatile and DWARF-subscribable. */
+static void Cmd_OfBiasMode(GsCmd_t *c)
+{
+    if (c->idx == 0) {
+        /* Mode change — DISARMED ONLY */
+        if (DroneStatus.ARM_Status != DisArmed) {
+            /* reject: drone is armed — do not change estimator mid-flight */
+        } else {
+            if (c->val >= 2.0f)       g_of_bias_mode = OF_BIAS_EKF;
+            else if (c->val >= 1.0f)  g_of_bias_mode = OF_BIAS_EMA;
+            else                      g_of_bias_mode = OF_BIAS_FIXED;
+        }
+    } else if (c->idx == 1) {
+        g_of_bias_ema_freeze = (c->val >= 0.5f) ? 1U : 0U;
+    } else if (c->idx == 2) {
+        /* Tau clamp: [1.0, 300.0] s */
+        if (c->val < OF_BIAS_EMA_TAU_MIN_S) c->val = OF_BIAS_EMA_TAU_MIN_S;
+        if (c->val > OF_BIAS_EMA_TAU_MAX_S) c->val = OF_BIAS_EMA_TAU_MAX_S;
+        g_of_bias_ema_tau_s = c->val;
+    } else if (c->idx == 3) {
+        g_of_handheld_test = (c->val >= 0.5f) ? 1U : 0U;
+    } else if (c->idx == 4 && DroneStatus.ARM_Status == DisArmed) {
+        g_of_full_tilt = (c->val >= 0.5f) ? 1U : 0U;
+    } else if (c->idx == 5 && DroneStatus.ARM_Status == DisArmed) {
+        g_ekf_of_vel_fb = (c->val >= 0.5f) ? 1U : 0U;
+    }
+}
+
+/* CMD 0x18 — force recalibration (ADR-0011).
+ * Re-enters cold-cal from the top. Accepted only in GROUND_IDLE and DisArmed.
+ * Resets: s_cal_trim, s_cal_hot, g_cal_health, g_estimator_ready, EKF. */
+#define CAL_HEALTH_MANUAL_ORIGIN_RESET  0x80U
+static void Cmd_ForceRecalibrate(GsCmd_t *c)
+{
+    if (c->idx == 0) {
+        if (flight_phase != FLIGHT_PHASE_GROUND_IDLE ||
+            DroneStatus.ARM_Status != DisArmed) {
+            /* refused: not in pre-flight ground-idle state */
+        } else {
+            /* Reset accel bias to zero */
+            s_cal_trim.b_a[0] = 0.0f;
+            s_cal_trim.b_a[1] = 0.0f;
+            s_cal_trim.b_a[2] = 0.0f;
+            s_cal_trim.state = CAL_TRIM_STATE_WAIT_TAKEOFF;
+            s_cal_trim.run_ticks = 0U;
+            s_cal_trim.settled_ticks = 0U;
+            /* Reset gyro bias to zero */
+            s_cal_hot.b_g[0] = 0.0f;
+            s_cal_hot.b_g[1] = 0.0f;
+            s_cal_hot.b_g[2] = 0.0f;
+            s_cal_hot.state = CAL_HOT_STATE_WAIT_STILL;
+            s_cal_hot.still_tick = 0U;
+            s_cal_hot.acc_tick = 0U;
+            s_cal_hot.rejected = 0U;
+            s_cal_hot.cleared = 1U;
+            /* Clear health flags but preserve MANUAL_ORIGIN_RESET (0x80) */
+            g_cal_health = CAL_HEALTH_MANUAL_ORIGIN_RESET;   /* MANUAL_ORIGIN_RESET sticky */
+            /* Force cold cal to re-run from top */
+            g_estimator_ready = 0U;
+            /* Re-init EKF */
+            if (s_ekf_inited) {
+                Ekf9_Init(&s_ekf, EKF_RUN_ENABLED);
+                Ekf9_SetBiasFrozen(&s_ekf, 1U);
+                g_ekf_gate.bias_frozen = 1U;
+            }
+        }
+    }
+}
+
+/* CMD 0x0E - ground-station SDK arm switch (idx 0) and motor idle (idx 1) */
+static void Cmd_SdkArmAuthority(GsCmd_t *c)
+{
+    if (c->idx == 0) {
+        if (((uint8_t)(c->val + 0.5f)) != 0) {
+            FlightFSM_Event(FLIGHT_EVENT_ARM_REQUEST);
+            if (FlightFSM_GetState() == FLIGHT_STATE_ARMED) {
+                GS_KeySDKflag = 1U;
+                RCInput_SetAuthority(1U);
+                /* If already airborne, override the -1.0f throttle floor that
+                 * SetAuthority just set.  Without this, the motor-idle guard
+                 * (Z_pos.FB < 0.3 && THR < -0.85) fires immediately and cuts
+                 * motors mid-flight.  On the ground the floor stays at -1.0f
+                 * so the pilot must raise the throttle slider deliberately. */
+                if (Ctrler.Z_posPID.FB > ARM_AIRBORNE_MIN_Z_M) {
+                    RCInput_SetVirtualStick(RC_AXIS_THR, 0.0f);
+                }
+            }
+        } else {
+            /* ARM REQ OFF: relinquish PC authority only — drone stays ARMED.
+             * Physical RC resumes immediately so the pilot can land safely.
+             * DISARM_REQUEST is intentionally omitted: firing it mid-air cuts
+             * motors. Pilot disarms via RC stick gesture after landing. */
+            GS_KeySDKflag = 0U;
+            RCInput_SetAuthority(0U);
+        }
+    }
+    /* idx 1: motor idle enable/disable (same guards as RC gesture) */
+    else if (c->idx == 1) {
+        if (((uint8_t)(c->val + 0.5f)) != 0) {
+            if (FlightFSM_GetState() == FLIGHT_STATE_ARMED &&
+                (flight_phase == FLIGHT_PHASE_GROUND_IDLE ||
+                 flight_phase == FLIGHT_PHASE_LANDED) &&
+                RCInput_Get(RC_AXIS_THR) < RC_IDLE_THR_THRESHOLD &&
+                !g_motor_idle_enabled)
+            {
+                flight_phase = FLIGHT_PHASE_GROUND_IDLE; /* LANDED -> re-idle */
+                g_motor_idle_enabled = 1U;
+            }
+        } else {
+            /* idle disable without disarming: return to zero-motors */
+            if (FlightFSM_GetState() == FLIGHT_STATE_ARMED &&
+                flight_phase == FLIGHT_PHASE_GROUND_IDLE)
+            {
+                g_motor_idle_enabled = 0U;
+            }
+        }
+    }
+}
+
+/* CMD 0x16 — motor bench test (DISARMED-only; thrust-stand experiment).
+ *   idx 0 = enable / heartbeat (val>=0.5 ON; each send pets the dead-man)
+ *   idx 1 = motor select (1..4 = M1..M4; 0 = none)
+ *   idx 2 = commanded CCR (clamped to [2000,4000])
+ * The stabilizer drives only the selected motor and zeroes everything if no
+ * heartbeat arrives within MOTOR_TEST_DEADMAN_TICKS or the FSM leaves DISARMED.
+ * See docs/bench_characterization.md. */
+static void Cmd_MotorBench(GsCmd_t *c)
+{
+    if (c->idx == 0) {
+        if (((uint8_t)(c->val + 0.5f)) != 0U) {
+            motor_test_active   = 1U;
+            motor_test_watchdog = 0U;   /* heartbeat: pet the dead-man */
+        } else {
+            motor_test_active = 0U;
+        }
+    } else if (c->idx == 1) {
+        uint8_t m = (uint8_t)(c->val + 0.5f);
+        motor_test_id = (m <= 4U) ? m : 0U;
+    } else if (c->idx == 2) {
+        float v = c->val;
+        if (v < MOTOR_TEST_CCR_MIN) v = MOTOR_TEST_CCR_MIN;
+        if (v > MOTOR_TEST_CCR_MAX) v = MOTOR_TEST_CCR_MAX;
+        motor_test_ccr = (uint16_t)(v + 0.5f);
+    }
+}
+
+/* The dispatch table: one entry per command id, or per id range [first, last]. Ids are unique, so
+ * the order does not matter; kept in id order. Ids missing here are refused by CommandSafetyReject. */
+typedef struct {
+    uint8_t        first;
+    uint8_t        last;
+    GsCmdHandler_t handler;
+} GsCmdEntry_t;
+#define GS_CMD_ENTRY(first, last, handler) { first, last, handler }
+
+static const GsCmdEntry_t k_gs_cmds[] = {
+/*               first                 last                  handler                  name (firmware_contract.py) */
+    GS_CMD_ENTRY(0x01,                 0x01,                 Cmd_PidGain),            /* PID_GAIN */
+    GS_CMD_ENTRY(0x02,                 0x02,                 Cmd_MracElem4),          /* MRAC_GAMMA */
+    GS_CMD_ENTRY(0x03,                 0x03,                 Cmd_MixerSaturation),    /* MIXER_SATURATION */
+    GS_CMD_ENTRY(0x04,                 0x04,                 Cmd_FlightModeAbort),    /* FLIGHT_MODE_ABORT */
+    GS_CMD_ENTRY(0x05,                 0x05,                 Cmd_MracElem4),          /* MRAC_WEIGHT_LIMIT */
+    GS_CMD_ENTRY(0x06,                 0x06,                 Cmd_VirtualStick),       /* VIRTUAL_STICK */
+    GS_CMD_ENTRY(0x07,                 0x07,                 Cmd_BenchMode),          /* BENCH_MODE */
+    GS_CMD_ENTRY(0x08,                 0x08,                 Cmd_MracElem4),          /* MRAC_TOLERANCE */
+    GS_CMD_ENTRY(0x09,                 0x09,                 Cmd_SafetyLimits),       /* SAFETY_LIMITS */
+    GS_CMD_ENTRY(0x0A,                 0x0A,                 Cmd_TwcTarget),          /* TWC_TARGET */
+    GS_CMD_ENTRY(0x0B,                 0x0B,                 Cmd_SinusoidPath),       /* SINUSOID_PATH */
+    GS_CMD_ENTRY(0x0C,                 0x0C,                 Cmd_CirclePath),         /* CIRCLE_PATH */
+    GS_CMD_ENTRY(0x0D,                 0x0D,                 Cmd_AbortAllPaths),      /* ABORT_ALL_PATHS */
+    GS_CMD_ENTRY(0x0E,                 0x0E,                 Cmd_SdkArmAuthority),    /* SDK_ARM_AUTHORITY */
+    GS_CMD_ENTRY(0x0F,                 0x0F,                 Cmd_MultiplexFlags),     /* MULTIPLEX_FLAGS */
+    GS_CMD_ENTRY(0x10,                 0x10,                 Cmd_ResetOrigin),        /* RESET_ORIGIN */
+    GS_CMD_ENTRY(0x11,                 0x11,                 Cmd_Figure8Path),        /* FIGURE8_PATH */
+    GS_CMD_ENTRY(0x12,                 0x12,                 Cmd_WaypointSpacing),    /* WAYPOINT_SPACING */
+    GS_CMD_ENTRY(0x13,                 0x13,                 Cmd_RefModelType),       /* REF_MODEL_TYPE */
+    GS_CMD_ENTRY(0x14,                 0x14,                 Cmd_SysIdControl),       /* SYSID_CONTROL */
+    GS_CMD_ENTRY(0x15,                 0x15,                 Cmd_GyroLpf),            /* GYRO_LPF */
+    GS_CMD_ENTRY(0x16,                 0x16,                 Cmd_MotorBench),         /* MOTOR_BENCH */
+    GS_CMD_ENTRY(0x17,                 0x17,                 Cmd_OfBiasCapture),      /* OF_BIAS_CAPTURE */
+    GS_CMD_ENTRY(0x18,                 0x18,                 Cmd_ForceRecalibrate),   /* FORCE_RECALIBRATE */
+    GS_CMD_ENTRY(0x19,                 0x19,                 Cmd_Simplex),            /* SIMPLEX */
+    /* WFB BEGIN glue */
+    GS_CMD_ENTRY(WFB_CMD_PRIM,         WFB_CMD_TRAJ,         Cmd_Wfb),                /* WFB_PRIM, WFB_TRAJ */
+    /* WFB END glue */
+    GS_CMD_ENTRY(0x1D,                 0x1D,                 Cmd_MracVariant),        /* MRAC_VARIANT */
+    GS_CMD_ENTRY(0x1E,                 0x1E,                 Cmd_OfBiasMode),         /* OF_BIAS_MODE */
+    GS_CMD_ENTRY(MRAC_ELEM_CMD_BASE,   MRAC_ELEM_CMD_LAST,   Cmd_MracElem8)           /* MRAC element, 8-bit index */
+};
+
+static void GsCmd_Dispatch(GsCmd_t *c)
+{
+    uint8_t i;
+    for (i = 0U; i < (uint8_t)(sizeof(k_gs_cmds) / sizeof(k_gs_cmds[0])); i++) {
+        if ((c->id >= k_gs_cmds[i].first) && (c->id <= k_gs_cmds[i].last)) {
+            k_gs_cmds[i].handler(c);
+            return;
+        }
+    }
+}
+
+/* Drain the GS command queue (BSP/usart4.c fills gs_cmd_queue): gain-lease tick, safety reject,
+ * transaction de-duplication and ACK, the handler, then the APPLIED / REJECTED result. */
 void Process_GroundStation_Command(void)
 {
     uint32_t lease_now_ms = (uint32_t)xTaskGetTickCount() * (uint32_t)portTICK_PERIOD_MS;
@@ -1480,21 +2038,30 @@ void Process_GroundStation_Command(void)
 
     while (gs_cmd_tail != gs_cmd_head)
     {
-        uint8_t id = gs_cmd_queue[gs_cmd_tail].id;
-        uint8_t idx = gs_cmd_queue[gs_cmd_tail].index;
-        float val = gs_cmd_queue[gs_cmd_tail].value;
-        uint16_t transaction_id = gs_cmd_queue[gs_cmd_tail].transaction_id;
-        uint8_t transaction_flags = gs_cmd_queue[gs_cmd_tail].transaction_flags;
-        uint8_t transaction_transport = gs_cmd_queue[gs_cmd_tail].transaction_transport;
-        uint8_t reject_reason = CommandSafetyReject(id);
+        GsCmd_t cmd;
+        uint16_t transaction_id;
+        uint8_t transaction_flags;
+        uint8_t transaction_transport;
+        uint8_t reject_reason;
+
+        /* fields read in the pre-WP-37 order: the queue is shared with the RX interrupt */
+        cmd.id = gs_cmd_queue[gs_cmd_tail].id;
+        cmd.idx = gs_cmd_queue[gs_cmd_tail].index;
+        cmd.val = gs_cmd_queue[gs_cmd_tail].value;
+        transaction_id = gs_cmd_queue[gs_cmd_tail].transaction_id;
+        transaction_flags = gs_cmd_queue[gs_cmd_tail].transaction_flags;
+        transaction_transport = gs_cmd_queue[gs_cmd_tail].transaction_transport;
+        cmd.lease_now_ms = lease_now_ms;
+        cmd.lease_airborne = lease_airborne;
+        reject_reason = CommandSafetyReject(cmd.id);
         /* WFB BEGIN glue */
-        uint8_t wfb_res = WFB_RESULT_APPLIED;
+        cmd.wfb_res = WFB_RESULT_APPLIED;
         /* WFB END glue */
 
         /* CMD 0x1E idx=0 (estimator mode switch) is disarmed-only */
-        if ((reject_reason == 0U) && (id == 0x1EU) && (idx == 0U) &&
+        if ((reject_reason == 0U) && (cmd.id == 0x1EU) && (cmd.idx == 0U) &&
             (DroneStatus.ARM_Status != DisArmed)) {
-            reject_reason = 6U;
+            reject_reason = CMD_REJECT_INTERLOCK;
         }
         gs_cmd_tail = (gs_cmd_tail + 1) % 16;
 
@@ -1502,605 +2069,41 @@ void Process_GroundStation_Command(void)
         if (transaction_id != 0U) {
             if (TransactionWasSeen(transaction_id) != 0U) {
                 SendTransactionResult(transaction_id, transaction_transport,
-                                      PLATFORM_RESULT_APPLIED, id, idx, 0U,
+                                      PLATFORM_RESULT_APPLIED, cmd.id, cmd.idx, 0U,
                                       "duplicate");
                 continue;
             }
             if (reject_reason != 0U) {
                 SendTransactionResult(transaction_id, transaction_transport,
-                                      PLATFORM_RESULT_REJECTED, id, idx,
+                                      PLATFORM_RESULT_REJECTED, cmd.id, cmd.idx,
                                       reject_reason, "command rejected");
                 continue;
             }
             SendTransactionResult(transaction_id, transaction_transport,
-                                  PLATFORM_RESULT_ACK, id, idx, 0U, "queued");
+                                  PLATFORM_RESULT_ACK, cmd.id, cmd.idx, 0U, "queued");
             RememberTransaction(transaction_id);
         }
-        
-        // CMD 0x01 �� PID gain update
-        // INDEX encodes axis+gain: (axis 0-6). (gain 0=Kp, 1=Ki, 2=Kd)
-        if (id == 0x01) {
-            uint8_t axis = idx / 3;
-            uint8_t gain = idx % 3;
-            
-            PIDTypeDef* pids[7];
-            pids[0] = &Ctrler.pitchPID;
-            pids[1] = &Ctrler.rollPID;
-            pids[2] = &Ctrler.yawPID;
-            pids[3] = &Ctrler.gyroxPID;
-            pids[4] = &Ctrler.gyroyPID;
-            pids[5] = &Ctrler.gyrozPID;
-            pids[6] = &Ctrler.Z_ratePID;
-                                   
-            if (axis < 7 && val >= 0.0f && val <= 200.0f) {
-                PID_GainLeaseRenew(lease_now_ms, lease_airborne);
-                if (gain == 0) pids[axis]->Kp = val;
-                else if (gain == 1) pids[axis]->Ki = val;
-                else if (gain == 2) pids[axis]->Kd = val;
-            }
-        }
-        
-        // CMD 0x02 / 0x05 / 0x08 �� MRAC array element update (What_tol moved from 0x06 to 0x08; 0x06 = virtual RC)
-        // High nibble: axis (0-3). Low nibble: element index.
-        else if (id == 0x02 || id == 0x05 || id == 0x08) {
-            uint8_t axis = (idx >> 4) & 0x0F;
-            uint8_t elem = idx & 0x0F;
-            uint8_t field = (id == 0x02) ? MRAC_ELEM_FIELD_GAMMA :
-                            (id == 0x05) ? MRAC_ELEM_FIELD_LIMIT : MRAC_ELEM_FIELD_TOL;
 
-            MracElemParamApply(axis, field, elem, val);
-        }
-
-        // CMD 0x20..0x2B - MRAC element update with an 8-bit element index (for N_FEATURES > 16).
-        // id = 0x20 + (field << 2) + axis; field 0 = gamma, 1 = What_limit, 2 = What_tol; INDEX = element.
-        else if (MRAC_ELEM_CMD_IS(id)) {
-            uint8_t sel = (uint8_t)(id - MRAC_ELEM_CMD_BASE);
-
-            MracElemParamApply((uint8_t)(sel & 0x03U), (uint8_t)(sel >> 2), idx, val);
-        }
-
-        // CMD 0x06 — virtual stick injection. val is normalised [-1.0, +1.0]. idx: [0]=thr,[1]=pitch,[2]=roll,[3]=yaw.
-        // Gate: FlyMode_SDK only (physical RC mode switch is still the hard kill via Check_Fly_Mode).
-        // sbus_lost is NOT checked: RC stays ON as emergency fallback; authority flag in RCInput routes the signal.
-        else if (id == 0x06) {
-            if (DroneStatus.FlyMode == FlyMode_SDK && idx < 4) {
-                float v = val;
-                if (v >  1.0f) v =  1.0f;
-                if (v < -1.0f) v = -1.0f;
-                RCInput_SetVirtualStick((RC_Axis_t)idx, v);
-            }
-        }
-
-        // CMD 0x07 — bench test mode (prop-wash safety): index 0 value > 0 enables.
-        // This flag BLOCKS the automatic FLYING transition (4DOF fixture prop wash guard).
-        // Does NOT cap throttle — use CMD 0x08 for independent throttle capping.
-        else if (id == 0x07) {
-            if (idx == 0) {
-                bench_mode_active = (val > 0.0f) ? 1U : 0U;
-            }
-        }
-
-        
-        // CMD 0x03 �� Mixer/saturation update
-        else if (id == 0x03) {
-            MRAC_AxisConfig_t* configs[4];
-            configs[0] = &mrac_config_pitch;
-            configs[1] = &mrac_config_roll;
-            configs[2] = &mrac_config_yaw;
-            configs[3] = &mrac_config_z;
-            if (idx < 4) {
-                if (val > 1.0f) configs[idx]->mrac_to_mixer = val;
-            } else if (idx < 8) {
-                configs[idx - 4]->u_max = val;
-            } else if (idx == 8) {
-                if (val >= 0.0f && val <= 1.0f) gs_throttle_min_pct = val;
-            } else if (idx == 9) {
-                if (val >= 0.50f && val <= 1.0f) gs_throttle_max_pct = val;
-            }
-        }
+        GsCmd_Dispatch(&cmd);
 
         /* WFB BEGIN glue */
-        /* CMD 0x1A primitives / 0x1B trajectory upload (docs/workflow-b/interfaces.md sec 1) */
-        else if ((id == WFB_CMD_PRIM) || (id == WFB_CMD_TRAJ)) {
-            taskENTER_CRITICAL();
-            wfb_res = wfb_glue_on_cmd(id, idx, val, (uint32_t)xTaskGetTickCount() * (uint32_t)portTICK_PERIOD_MS);
-            taskEXIT_CRITICAL();
-        }
-        /* WFB END glue */
-        // CMD 0x09 �� velocity / angle safety limits (ground station)
-        else if (id == 0x09) {
-            if (idx == 0) {
-                if (val > 0.05f && val < 20.0f) gs_max_horizontal_speed_mps = val;
-            } else if (idx == 1) {
-                if (val > 0.05f && val < 10.0f) gs_max_vertical_speed_mps = val;
-            } else if (idx == 2) {
-                if (val >= 3.0f && val <= 60.0f) gs_max_pitch_deg = val;
-            } else if (idx == 3) {
-                if (val >= 3.0f && val <= 60.0f) gs_max_roll_deg = val;
-            }
-        }
-        
-        // CMD 0x04 �� Flight mode (idx 0 = dangerous stop + path abort)
-        else if (id == 0x04) {
-            if (idx == 0) {
-                GroundStation_AbortAllPaths();
-                GS_KeySDKflag = 0U;
-            } else if (idx == 1) {
-                FlightFSM_Event(FLIGHT_EVENT_RECOVER_SDK);
-            }
-        }
-
-        /* CMD 0x0A �� TWC target (point-to-point); only in SDK mode */
-        else if (id == 0x0A) {
-            if (DroneStatus.FlyMode != FlyMode_SDK) {
-                /* ignore */
-            } else if (idx == 0) {
-                TWC.target_x = val;
-            } else if (idx == 1) {
-                TWC.target_y = val;
-            } else if (idx == 2) {
-                TWC.target_z = val;
-            } else if (idx == 3) {
-                TWC.set_yaw = val;
-            } else if (idx == 4) {
-                TWC.execute = ((uint8_t)(val + 0.5f) != 0) ? 1 : 0;
-            }
-        }
-
-        /* CMD 0x0B �� sinusoidal path parameters (FlyMode_SDK only) */
-        else if (id == 0x0B) {
-            if (DroneStatus.FlyMode != FlyMode_SDK) {
-                /* ignore */
-            } else if (idx == 0) {
-                sinusoid_path.center_x = val;
-            } else if (idx == 1) {
-                sinusoid_path.center_y = val;
-            } else if (idx == 2) {
-                sinusoid_path.center_z = val;
-            } else if (idx == 3) {
-                sinusoid_path.amplitude = val;
-            } else if (idx == 4) {
-                sinusoid_path.frequency = val;
-            } else if (idx == 5) {
-                sinusoid_path.duration = val;
-            } else if (idx == 6) {
-                sinusoid_path.axis = (uint8_t)(val + 0.5f);
-                if (sinusoid_path.axis > 2U) {
-                    sinusoid_path.axis = 2U;
-                }
-            } else if (idx == 7) {
-                if (((uint8_t)(val + 0.5f)) != 0) {
-                    taskENTER_CRITICAL();
-                    AutoflyTask_StartSinusoid();
-                    taskEXIT_CRITICAL();
-                } else {
-                    sinusoid_path.active = 0U;
-                }
-            }
-        }
-
-        /* CMD 0x0C �� circle path (FlyMode_SDK only) */
-        else if (id == 0x0C) {
-            if (DroneStatus.FlyMode != FlyMode_SDK) {
-                /* ignore */
-            } else if (idx == 0) {
-                circle_path.center_x = val;
-            } else if (idx == 1) {
-                circle_path.center_y = val;
-            } else if (idx == 2) {
-                circle_path.center_z = val;
-            } else if (idx == 3) {
-                circle_path.radius = val;
-            } else if (idx == 4) {
-                circle_path.angular_speed = val;
-            } else if (idx == 5) {
-                circle_path.duration = val;
-            } else if (idx == 6) {
-                if (((uint8_t)(val + 0.5f)) != 0) {
-                    taskENTER_CRITICAL();
-                    AutoflyTask_StartCircle();
-                    taskEXIT_CRITICAL();
-                } else {
-                    circle_path.active = 0U;
-                }
-            }
-        }
-
-        /* CMD 0x11 - figure-8 (lemniscate) path (FlyMode_SDK only) */
-        else if (id == 0x11) {
-            if (DroneStatus.FlyMode != FlyMode_SDK) {
-                /* ignore */
-            } else if (idx == 0) {
-                figure8_path.center_x = val;
-            } else if (idx == 1) {
-                figure8_path.center_y = val;
-            } else if (idx == 2) {
-                figure8_path.center_z = val;
-            } else if (idx == 3) {
-                figure8_path.amplitude = val;
-            } else if (idx == 4) {
-                figure8_path.angular_speed = val;
-            } else if (idx == 5) {
-                figure8_path.duration = val;
-            } else if (idx == 6) {
-                figure8_path.type = (uint8_t)(val + 0.5f);
-                if (figure8_path.type > 1U) {
-                    figure8_path.type = 1U;
-                }
-            } else if (idx == 7) {
-                if (((uint8_t)(val + 0.5f)) != 0) {
-                    taskENTER_CRITICAL();
-                    AutoflyTask_StartFigure8();
-                    taskEXIT_CRITICAL();
-                } else {
-                    figure8_path.active = 0U;
-                }
-            }
-        }
-
-        /* CMD 0x12 - shared waypoint-density spacing (loc-PID units = cm; GUI sends Δs_m*100); 0 = continuous */
-        else if (id == 0x12) {
-            if (idx == 0) {
-                waypoint_spacing = (val < 0.0f) ? 0.0f : val;
-                AutoflyTask_WaypointReset();
-            }
-        }
-
-        /* CMD 0x0D �� abort all paths + neutral sticks + dangerous stop */
-        else if (id == 0x0D) {
-            if (idx == 0) {
-                GroundStation_AbortAllPaths();
-            }
-        }
-
-        /* CMD 0x0F — multiplexed ground-station command (telemetry-throughput-2026-09-08).
-         *
-         * Two uses live behind this id, disambiguated by idx:
-         *   idx 0..12    MRAC feature-flag runtime toggle (val >= 0.5 = ON, else OFF).
-         *                0=adaptation_on  1=projection_on  2=deadzone_on  3=hard_freeze_on
-         *                4=tanh_saturation_on  5=e_modification_on  6=l1_filtering_on
-         *                7=axis_enable_pitch  8=axis_enable_roll  9=axis_enable_yaw
-         *                10=output_injection_on (shadow-mode gate: 0=motors see pure PID)
-         *                11=id_frame_on (high-rate system-ID frame 0x03 @100Hz, replaces A/B)
-         *                12=of_frame_on (OF calibration/fusion frame 0x05 @200Hz, replaces A/B)
-         *   idx 100..102 Telemetry mode switch (val ignored). idx 100=LEGACY 101=MIXED
-         *                102=SUBSCRIBE_ONLY. idx 13..99 and idx > 102 reserved.
-         *
-         * The previous implementation had two parallel `else if (id == 0x0F)` branches
-         * in this dispatch chain; the MRAC branch sat earlier in the file and shadowed
-         * the telemetry branch, making the telemetry-mode switch dead code. The sentinel
-         * split keeps the wire shape (9 B, idx+val+CRC8) unchanged and is backward
-         * compatible with any host that was only sending idx 0..12. */
-        else if (id == 0x0F) {
-            if (idx <= 12U) {
-                uint8_t on = ((uint8_t)(val + 0.5f)) != 0U ? 1U : 0U;
-                switch (idx) {
-                    case 0:  mrac_flags.adaptation_on      = on; break;
-                    case 1:  mrac_flags.projection_on      = on; break;
-                    case 2:  mrac_flags.deadzone_on        = on; break;
-                    case 3:  mrac_flags.hard_freeze_on     = on; break;
-                    case 4:  mrac_flags.tanh_saturation_on = on; break;
-                    case 5:  mrac_flags.e_modification_on  = on; break;
-                    case 6:  mrac_flags.l1_filtering_on    = on; break;
-                    case 7:  mrac_flags.axis_enable_pitch  = on; break;
-                    case 8:  mrac_flags.axis_enable_roll   = on; break;
-                    case 9:  mrac_flags.axis_enable_yaw    = on; break;
-                    case 10: mrac_flags.output_injection_on = on; break;
-                    case 11: mrac_flags.id_frame_on         = on; break;
-                    case 12: mrac_flags.of_frame_on         = on; break;
-                    default: break;  /* unreachable; idx <= 12 already gated */
-                }
-            } else if ((idx >= 100U) && (idx <= 102U)) {
-                /* idx 100=LEGACY 101=MIXED 102=SUBSCRIBE_ONLY. Val ignored.
-                 * Default at boot is MIXED (SUBSCRIBE_DEFAULT_TELEMETRY_MODE).
-                 * SUBSCRIBE_ONLY skips the UART4 DMA busy-wait so Send_Task runs at
-                 * nominal 200 Hz instead of being paced to ~80 Hz by the 3.7 ms wait. */
-                SetTelemetryMode((uint8_t)(idx - 100U));
-            }
-        }
-
-        /* CMD 0x13 — reference model type selector (idx 0, val = 0/1/2).
-         *   0 = passthrough (xm = r), 1 = first-order, 2 = second-order.
-         * Snaps all reference states to plant on change for bumpless switching. */
-        else if (id == 0x13) {
-            if (idx == 0) {
-                uint8_t t = (uint8_t)(val + 0.5f);
-                if (t > 2U) t = 2U;
-                mrac_flags.ref_model_type = t;
-                mrac_state.pitch.xm  = mrac_state.pitch.x;   mrac_state.pitch.xm_dot  = 0.0f;
-                mrac_state.roll.xm   = mrac_state.roll.x;    mrac_state.roll.xm_dot   = 0.0f;
-                mrac_state.yaw.xm    = mrac_state.yaw.x;     mrac_state.yaw.xm_dot    = 0.0f;
-                mrac_state.z_rate.xm = mrac_state.z_rate.x;  mrac_state.z_rate.xm_dot = 0.0f;
-            }
-        }
-
-        /* CMD 0x1D - MRAC law variant field (WP-27, docs/workflow-b/mrac-variants.md).
-         *   idx = (field << 2) | axis, field = MRAC_VariantField_e, axis 0 pitch 1 roll 2 yaw 3 z.
-         *   Fields 0-12 WP-27; 13-18 WP-33 (st_eps, st_phi_max, st_bar, lf_gain, sigma_lf, gam_f), idx <= 75.
-         *   MRAC_VariantParamSet bounds every field and refuses non-finite values; ignored while airborne. */
-        else if (id == 0x1D) {
-            if ((flight_phase != FLIGHT_PHASE_FLYING) && (flight_phase != FLIGHT_PHASE_LANDING)) {
-                (void)MRAC_VariantParamSet((uint8_t)((uint32_t)idx & 0x03U), (uint8_t)((uint32_t)idx >> 2U), val);
-            }
-        }
-
-        /* CMD 0x19 - Simplex run-time assurance (docs/research-platform/SIMPLEX.md).
-         * idx 0 mode, 1 variant, 2 roll_max, 3 pitch_max, 4 w_norm_max,
-         * 5 sat_ticks_max, 6 hold_ticks, 7 reset counters. Out-of-range writes are ignored. */
-        else if (id == 0x19) {
-            if (idx == 0 && val >= 0.0f && val <= 2.0f) {
-                mrac_simplex.mode = (uint8_t)(val + 0.5f);
-            } else if (idx == 1 && val >= 0.0f && val <= 1.0f) {
-                mrac_simplex.variant = (uint8_t)(val + 0.5f);
-            } else if (idx == 2 && val > 0.0f) {
-                mrac_simplex.roll_max = val;
-            } else if (idx == 3 && val > 0.0f) {
-                mrac_simplex.pitch_max = val;
-            } else if (idx == 4 && val > 0.0f) {
-                mrac_simplex.w_norm_max = val;
-            } else if (idx == 5 && val >= 1.0f && val <= 65535.0f) {
-                mrac_simplex.sat_ticks_max = (uint16_t)(val + 0.5f);
-            } else if (idx == 6 && val >= 0.0f && val <= 65535.0f) {
-                mrac_simplex.hold_ticks = (uint16_t)(val + 0.5f);
-            } else if (idx == 7) {
-                mrac_simplex.trip_count       = 0;
-                mrac_simplex.would_trip_count = 0;
-                mrac_simplex.tripped          = 0;
-                mrac_simplex.reason           = 0;
-            }
-        }
-        /* CMD 0x14 — SysID excitation control (ADR-0004). Set params (idx 0-5) then start/abort (idx 6).
-         *   idx 0=axis(0 pitch,1 roll,2 yaw,3 Z)  1=signal(0 chirp,1 multisine)  2=f0 Hz  3=f1 Hz
-         *       4=amplitude (deg/s; Z in m/s)  5=duration s  6=start(>=0.5)/abort(<0.5)
-         *       7=geofence enable (>=0.5 ON default, <0.5 OFF — pilot-watch override)
-         * Dashboard sends CMD 0x10 (OF-origin reset) immediately before idx 6 start. */
-        else if (id == 0x14) {
-            static uint8_t sx_axis = 0U, sx_sig = 0U;
-            static float sx_f0 = 1.0f, sx_f1 = 12.0f, sx_amp = 30.0f, sx_dur = 20.0f;
-            switch (idx) {
-                case 0: sx_axis = (uint8_t)(val + 0.5f); break;
-                case 1: sx_sig  = (uint8_t)(val + 0.5f); break;
-                case 2: sx_f0 = val; break;
-                case 3: sx_f1 = val; break;
-                case 4: sx_amp = val; break;
-                case 5: sx_dur = val; break;
-                case 6:
-                    if (((uint8_t)(val + 0.5f)) != 0U) {
-                        /* Self-sufficient OF-origin reset (ADR-0004 dec.6/finding #13): do not rely
-                         * on the GS having sent CMD 0x10 first, so the green-zone centre is always
-                         * captured at a fresh (0,0) origin. Mirrors the 0x10 handler below. */
-                        ano_of.earth_x       = 0.0f;
-                        ano_of.earth_y       = 0.0f;
-                        ano_of.earth_x_ture  = 0.0f;
-                        ano_of.earth_y_ture  = 0.0f;
-                        ano_of.DISTANCE_X    = 0.0f;
-                        ano_of.DISTANCE_Y    = 0.0f;
-                        Ctrler.locxPID.FB    = 0.0f;
-                        Ctrler.locyPID.FB    = 0.0f;
-                        Ctrler.locxPID.Des   = 0.0f;
-                        Ctrler.locyPID.Des   = 0.0f;
-                        Ctrler.locxsPID.Des  = 0.0f;
-                        Ctrler.locysPID.Des  = 0.0f;
-                        SysID_Start((SysID_Axis_e)sx_axis, (SysID_Signal_e)sx_sig, sx_f0, sx_f1, sx_amp, sx_dur);
-                    } else {
-                        SysID_Abort();
-                    }
-                    break;
-                case 7: SysID_SetGeofence(((uint8_t)(val + 0.5f)) != 0U ? 1U : 0U); break;
-                default: break;
-            }
-        }
-
-        /* CMD 0x15 — gyro low-pass filter (Phase 1, ADR-0004).
-         *   idx 0 = enable (val>=0.5 ON, else pass-through)
-         *   idx 1 = cutoff Hz (applied to pitch/roll/yaw)  */
-        else if (id == 0x15) {
-            if (idx == 0) {
-                GyroFilter_SetEnabled(((uint8_t)(val + 0.5f)) != 0U ? 1U : 0U);
-            } else if (idx == 1) {
-                GyroFilter_SetCutoff(GYRO_FILT_PITCH, val);
-                GyroFilter_SetCutoff(GYRO_FILT_ROLL,  val);
-                GyroFilter_SetCutoff(GYRO_FILT_YAW,   val);
-            }
-        }
-
-        /* CMD 0x10 — reset world-frame optical flow origin.
-         * Zeros accumulated earth_x/y position so the drone's current location
-         * becomes the new (0, 0) world origin.  Also syncs position setpoints
-         * to avoid a sudden jump on the next control tick. */
-        else if (id == 0x10) {
-            if (idx == 0) {
-                Reset_World_Origin();
-            }
-        }
-
-        /* CMD 0x17 — one-shot optical-flow velocity-bias capture.
-         * Pilot places the drone level and still, then triggers this; the stabilizer
-         * task averages of2_dx_fix/dy_fix over ~2 s and stores the bias (streamed back
-         * as of.bias_x/y in the 0x05 frame so the capture can be confirmed). Fixes the
-         * unbounded earth_x/y drift (~25 m/200 s) caused by the un-subtracted DC bias. */
-        else if (id == 0x17) {
-            if (idx == 0) {
-                g_of_bias_capture_req = 1U;
-            }
-        }
-
-        /* CMD 0x1E — OF bias estimation mode selector.
-         *   idx=0: set mode (val=0 FIXED, val=1 EMA, val=2 EKF)
-         *          DISARMED ONLY: mode switch is rejected when armed
-         *          (safety gate mirrors CMD 0x18 and motor bench gate).
-         *          Firmware falls back to FIXED automatically on EKF
-         *          health failure (g_ekf_of_fallback set sticky).
-         *   idx=1: set EMA freeze flag (val=0 run, val=1 freeze)
-         *          Allowed any time (freeze = safe, no control impact).
-         *   idx=2: set EMA time constant tau (seconds).
-         *          Clamped to [1.0, 300.0] s. Allowed any time.
-         *          Larger tau → slower tracking, less pull-back.
-         *   idx=3: handheld test (val=0 off, val=1 on). Integrates OF
-         *          position on the ground; firmware clears it in flight.
- *   idx=4: g_of_full_tilt (0/1), full-tilt OF correction. DISARMED ONLY.
-         *   idx=5: g_ekf_of_vel_fb (0/1), KF velocity feedback. DISARMED ONLY.
-         *
-         * All globals are volatile and DWARF-subscribable. */
-        else if (id == 0x1E) {
-            if (idx == 0) {
-                /* Mode change — DISARMED ONLY */
-                if (DroneStatus.ARM_Status != DisArmed) {
-                    /* reject: drone is armed — do not change estimator mid-flight */
-                } else {
-                    if (val >= 2.0f)       g_of_bias_mode = 2U;
-                    else if (val >= 1.0f)  g_of_bias_mode = 1U;
-                    else                   g_of_bias_mode = 0U;
-                }
-            } else if (idx == 1) {
-                g_of_bias_ema_freeze = (val >= 0.5f) ? 1U : 0U;
-            } else if (idx == 2) {
-                /* Tau clamp: [1.0, 300.0] s */
-                if (val < 1.0f)   val = 1.0f;
-                if (val > 300.0f) val = 300.0f;
-                g_of_bias_ema_tau_s = val;
-            } else if (idx == 3) {
-                g_of_handheld_test = (val >= 0.5f) ? 1U : 0U;
-            } else if (idx == 4 && DroneStatus.ARM_Status == DisArmed) {
-                g_of_full_tilt = (val >= 0.5f) ? 1U : 0U;
-            } else if (idx == 5 && DroneStatus.ARM_Status == DisArmed) {
-                g_ekf_of_vel_fb = (val >= 0.5f) ? 1U : 0U;
-            }
-        }
-
-        /* CMD 0x18 — force recalibration (ADR-0011).
-         * Re-enters cold-cal from the top. Accepted only in GROUND_IDLE and DisArmed.
-         * Resets: s_cal_trim, s_cal_hot, g_cal_health, g_estimator_ready, EKF. */
-        else if (id == 0x18) {
-            if (idx == 0) {
-                if (flight_phase != FLIGHT_PHASE_GROUND_IDLE ||
-                    DroneStatus.ARM_Status != DisArmed) {
-                    /* refused: not in pre-flight ground-idle state */
-                } else {
-                    /* Reset accel bias to zero */
-                    s_cal_trim.b_a[0] = 0.0f;
-                    s_cal_trim.b_a[1] = 0.0f;
-                    s_cal_trim.b_a[2] = 0.0f;
-                    s_cal_trim.state = CAL_TRIM_STATE_WAIT_TAKEOFF;
-                    s_cal_trim.run_ticks = 0U;
-                    s_cal_trim.settled_ticks = 0U;
-                    /* Reset gyro bias to zero */
-                    s_cal_hot.b_g[0] = 0.0f;
-                    s_cal_hot.b_g[1] = 0.0f;
-                    s_cal_hot.b_g[2] = 0.0f;
-                    s_cal_hot.state = CAL_HOT_STATE_WAIT_STILL;
-                    s_cal_hot.still_tick = 0U;
-                    s_cal_hot.acc_tick = 0U;
-                    s_cal_hot.rejected = 0U;
-                    s_cal_hot.cleared = 1U;
-                    /* Clear health flags but preserve MANUAL_ORIGIN_RESET (0x80) */
-                    g_cal_health = 0x80U;   /* MANUAL_ORIGIN_RESET sticky */
-                    /* Force cold cal to re-run from top */
-                    g_estimator_ready = 0U;
-                    /* Re-init EKF */
-                    if (s_ekf_inited) {
-                        Ekf9_Init(&s_ekf, EKF_RUN_ENABLED);
-                        Ekf9_SetBiasFrozen(&s_ekf, 1U);
-                        g_ekf_gate.bias_frozen = 1U;
-                    }
-                }
-            }
-        }
-
-        /* CMD 0x0E - ground-station SDK arm switch */
-        else if (id == 0x0E) {
-            if (idx == 0) {
-                if (((uint8_t)(val + 0.5f)) != 0) {
-                    FlightFSM_Event(FLIGHT_EVENT_ARM_REQUEST);
-                    if (FlightFSM_GetState() == FLIGHT_STATE_ARMED) {
-                        GS_KeySDKflag = 1U;
-                        RCInput_SetAuthority(1U);
-                        /* If already airborne, override the -1.0f throttle floor that
-                         * SetAuthority just set.  Without this, the motor-idle guard
-                         * (Z_pos.FB < 0.3 && THR < -0.85) fires immediately and cuts
-                         * motors mid-flight.  On the ground the floor stays at -1.0f
-                         * so the pilot must raise the throttle slider deliberately. */
-                        if (Ctrler.Z_posPID.FB > 0.35f) {
-                            RCInput_SetVirtualStick(RC_AXIS_THR, 0.0f);
-                        }
-                    }
-                } else {
-                    /* ARM REQ OFF: relinquish PC authority only — drone stays ARMED.
-                     * Physical RC resumes immediately so the pilot can land safely.
-                     * DISARM_REQUEST is intentionally omitted: firing it mid-air cuts
-                     * motors. Pilot disarms via RC stick gesture after landing. */
-                    GS_KeySDKflag = 0U;
-                    RCInput_SetAuthority(0U);
-                }
-            }
-            /* idx 1: motor idle enable/disable (same guards as RC gesture) */
-            else if (idx == 1) {
-                if (((uint8_t)(val + 0.5f)) != 0) {
-                    if (FlightFSM_GetState() == FLIGHT_STATE_ARMED &&
-                        (flight_phase == FLIGHT_PHASE_GROUND_IDLE ||
-                         flight_phase == FLIGHT_PHASE_LANDED) &&
-                        RCInput_Get(RC_AXIS_THR) < RC_IDLE_THR_THRESHOLD &&
-                        !g_motor_idle_enabled)
-                    {
-                        flight_phase = FLIGHT_PHASE_GROUND_IDLE; /* LANDED -> re-idle */
-                        g_motor_idle_enabled = 1U;
-                    }
-                } else {
-                    /* idle disable without disarming: return to zero-motors */
-                    if (FlightFSM_GetState() == FLIGHT_STATE_ARMED &&
-                        flight_phase == FLIGHT_PHASE_GROUND_IDLE)
-                    {
-                        g_motor_idle_enabled = 0U;
-                    }
-                }
-            }
-        }
-
-        /* CMD 0x16 — motor bench test (DISARMED-only; thrust-stand experiment).
-         *   idx 0 = enable / heartbeat (val>=0.5 ON; each send pets the dead-man)
-         *   idx 1 = motor select (1..4 = M1..M4; 0 = none)
-         *   idx 2 = commanded CCR (clamped to [2000,4000])
-         * The stabilizer drives only the selected motor and zeroes everything if no
-         * heartbeat arrives within MOTOR_TEST_DEADMAN_TICKS or the FSM leaves DISARMED.
-         * See docs/bench_characterization.md. */
-        else if (id == 0x16) {
-            if (idx == 0) {
-                if (((uint8_t)(val + 0.5f)) != 0U) {
-                    motor_test_active   = 1U;
-                    motor_test_watchdog = 0U;   /* heartbeat: pet the dead-man */
-                } else {
-                    motor_test_active = 0U;
-                }
-            } else if (idx == 1) {
-                uint8_t m = (uint8_t)(val + 0.5f);
-                motor_test_id = (m <= 4U) ? m : 0U;
-            } else if (idx == 2) {
-                float c = val;
-                if (c < 2000.0f) c = 2000.0f;
-                if (c > 4000.0f) c = 4000.0f;
-                motor_test_ccr = (uint16_t)(c + 0.5f);
-            }
-        }
-
-        /* WFB BEGIN glue */
-        if ((wfb_res == WFB_RESULT_REJECTED) && (transaction_id != 0U)) {
+        if ((cmd.wfb_res == WFB_RESULT_REJECTED) && (transaction_id != 0U)) {
             /* A rejected 0x1A/0x1B must execute again when retried with the same txid, so it
              * leaves the duplicate history (it was the last one remembered above). */
-            uint8_t last_slot = (uint8_t)((s_transaction_history_head + 15U) % 16U);
+            uint8_t last_slot = (uint8_t)((s_transaction_history_head + (TXN_HISTORY_LEN - 1U)) % TXN_HISTORY_LEN);
             if (s_transaction_history[last_slot] == transaction_id) {
                 s_transaction_history[last_slot] = 0U;
             }
             SendTransactionResult(transaction_id, transaction_transport,
-                                  PLATFORM_RESULT_REJECTED, id, idx,
+                                  PLATFORM_RESULT_REJECTED, cmd.id, cmd.idx,
                                   (uint8_t)g_wfb_status.last_err, "wfb rejected");
             continue;
         }
         /* WFB END glue */
         if (transaction_id != 0U) {
             SendTransactionResult(transaction_id, transaction_transport,
-                                  PLATFORM_RESULT_APPLIED, id, idx, 0U,
+                                  PLATFORM_RESULT_APPLIED, cmd.id, cmd.idx, 0U,
                                   "applied");
         }
     }
 }
-

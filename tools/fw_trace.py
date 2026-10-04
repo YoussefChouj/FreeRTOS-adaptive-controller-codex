@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""Differential trace of TASK/StabilizerTask.c: the file at a git ref vs the working tree (WP-37).
+"""Differential trace of a firmware file: the version at a git ref vs the working tree (WP-37).
 
-Builds tools/fw_trace/stab_trace.c twice with host gcc, once around each version of the file (and that tree's
-API/pid.c), runs both on the same seeded random ticks and compares the hash checkpoints. Equal hashes mean the two
-versions made the same external calls with the same arguments in the same order and left the same state on every
-tick. `--cov` also builds the new version with gcov and prints the line coverage of TASK/StabilizerTask.c, so a pass
-says how much of the file the random ticks reached. Never touches OBJ/.
+Builds a harness of tools/fw_trace/ twice with host gcc, once around each version of the file (and that tree's
+API/pid.c and API/controller.c), runs both on the same seeded random ticks and compares the hash checkpoints. Equal
+hashes mean the two versions made the same external calls with the same arguments in the same order and left the
+same state on every tick. Targets:
+  stab  TASK/StabilizerTask.c, one control tick (tools/fw_trace/stab_trace.c)
+  cmd   TASK/send_data.c, the ground-station command path (tools/fw_trace/cmd_trace.c)
+Functions a file references but its harness never runs are linked as empty dummies (generated from the linker's
+undefined-reference list). `--cov` also builds the new version with gcov and prints the line coverage of the code
+the target exercises. Never touches OBJ/.
 
-    python tools/fw_trace.py                       # vs HEAD, 4 seeds x 200000 ticks
-    python tools/fw_trace.py --base wp/36 --cov
+    python tools/fw_trace.py                          # stab vs HEAD, 4 seeds x 200000 ticks
+    python tools/fw_trace.py cmd --base wp/36 --cov
 """
 from __future__ import annotations
 
@@ -26,28 +30,45 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fw_equiv  # noqa: E402  (include path, defines, git archive list)
 
 REPO = fw_equiv.REPO
-HARNESS = REPO / "tools" / "fw_trace" / "stab_trace.c"
 CFLAGS = ["-std=gnu99", "-O0", "-msse2", "-mfpmath=sse", "-ffp-contract=off", "-fno-strict-aliasing", "-w"]
-
-
 # API/controller.c is linked for the mixer table (Mix_Motor); its entry points are renamed so the harness's
-# recording stubs of Controller_Update/CheckSwitch/Init stay the ones StabilizerTask.c calls.
+# recording stubs of Controller_Update/CheckSwitch/Init stay the ones the file under test calls.
 RENAME = ["-DController_Update=real_Controller_Update", "-DController_CheckSwitch=real_Controller_CheckSwitch",
           "-DController_Init=real_Controller_Init"]
 
+#        harness                 macro        file under test           functions --cov reports (regex)
+TARGETS = {
+    "stab": ("stab_trace.c", "STAB_SRC", "TASK/StabilizerTask.c", None),   # the whole file runs
+    "cmd":  ("cmd_trace.c",  "SEND_SRC", "TASK/send_data.c",
+             r"Cmd_\w+|GsCmd_Dispatch|Process_GroundStation_Command|MracElemParamApply|CommandSafetyReject|"
+             r"SendTransactionResult|TransactionWasSeen|RememberTransaction|GroundStation_AbortAllPaths"),
+}
 
-def build(gcc: str, root: Path, exe: Path, cov: bool) -> None:
-    src = (root / "TASK" / "StabilizerTask.c").as_posix()
-    ctrl = exe.parent / "controller.o"
-    steps = [
-        [gcc, *CFLAGS, "-c", *fw_equiv.flags(root), *RENAME, str(root / "API" / "controller.c"), "-o", str(ctrl)],
-        [gcc, *CFLAGS, *(["--coverage"] if cov else []), *fw_equiv.flags(root), f'-DSTAB_SRC="{src}"',
-         str(HARNESS), str(root / "API" / "pid.c"), str(ctrl), "-lm", "-o", str(exe)],
-    ]
-    for args in steps:
-        res = subprocess.run(args, cwd=exe.parent, capture_output=True, text=True, errors="replace")
-        if res.returncode != 0:
-            raise SystemExit(f"build {root}:\n{res.stderr[-3000:]}")
+
+def run_ok(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(args, cwd=cwd, capture_output=True, text=True, errors="replace")
+
+
+def build(gcc: str, target: str, root: Path, exe: Path, cov: bool) -> None:
+    harness, macro, rel, _ = TARGETS[target]
+    out = exe.parent
+    ctrl, dummy_c, dummy_o = out / "controller.o", out / "dummies.c", out / "dummies.o"
+    res = run_ok([gcc, *CFLAGS, "-c", *fw_equiv.flags(root), *RENAME, str(root / "API" / "controller.c"), "-o",
+                  str(ctrl)], out)
+    if res.returncode != 0:
+        raise SystemExit(f"build {root} controller.c:\n{res.stderr[-3000:]}")
+    link = [gcc, *CFLAGS, *(["--coverage"] if cov else []), *fw_equiv.flags(root),
+            f'-D{macro}="{(root / rel).as_posix()}"', str(REPO / "tools" / "fw_trace" / harness),
+            str(root / "API" / "pid.c"), str(ctrl)]
+    res = run_ok([*link, "-lm", "-o", str(exe)], out)
+    missing = sorted(set(re.findall(r"undefined reference to `_?(\w+)'", res.stderr)))
+    if res.returncode != 0 and missing:
+        dummy_c.write_text("".join(f"void {m}(void) {{ }}\n" for m in missing))
+        res = run_ok([gcc, *CFLAGS, "-c", str(dummy_c), "-o", str(dummy_o)], out)
+        if res.returncode == 0:
+            res = run_ok([*link, str(dummy_o), "-lm", "-o", str(exe)], out)
+    if res.returncode != 0:
+        raise SystemExit(f"build {root}:\n{res.stderr[-3000:]}")
 
 
 def run(exe: Path, ticks: int, seed: int, every: int) -> list[str]:
@@ -58,16 +79,26 @@ def run(exe: Path, ticks: int, seed: int, every: int) -> list[str]:
     return res.stdout.splitlines()
 
 
-def coverage(gcov: str, out: Path) -> str:
-    res = subprocess.run([gcov, "-n", "-o", str(out), str(out / "stab_trace.c")], cwd=out, capture_output=True,
-                         text=True, errors="replace")
-    text = res.stdout
-    m = re.search(r"File '[^']*StabilizerTask\.c'\s*\nLines executed:([\d.]+)% of (\d+)", text)
-    return f"{m.group(1)}% of {m.group(2)} lines" if m else "not found:\n" + text[-1500:]
+def coverage(gcov: str, out: Path, harness: str, rel: str, funcs: str | None) -> str:
+    """Line coverage of the functions of `rel` matching `funcs` (gcov -f per-function summaries)."""
+    text = run_ok([gcov, "-n", "-f", "-o", str(out), str(out / harness)], out).stdout
+    name = Path(rel).name
+    done = total = nfun = 0
+    for m in re.finditer(r"Function '([^']+)'\nLines executed:([\d.]+)% of (\d+)", text):
+        fn = m.group(1).lstrip("_")
+        if funcs and re.fullmatch(funcs, fn):
+            n = int(m.group(3))
+            done += round(float(m.group(2)) * n / 100.0)
+            total += n
+            nfun += 1
+    whole = re.search(r"File '[^']*%s'\s*\nLines executed:([\d.]+)%% of (\d+)" % re.escape(name), text)
+    part = f"{100.0 * done / total:.2f}% of {total} lines in {nfun} functions; " if total else ""
+    return part + (f"whole file {whole.group(1)}% of {whole.group(2)} lines" if whole else "file not in the gcov output")
 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("target", nargs="?", default="stab", choices=sorted(TARGETS))
     ap.add_argument("--base", default="HEAD")
     ap.add_argument("--ticks", type=int, default=200000)
     ap.add_argument("--seeds", default="1,2,3,4")
@@ -78,6 +109,7 @@ def main(argv: list[str]) -> int:
     if gcc is None:
         print("FAIL fw_trace: gcc not on PATH")
         return 1
+    harness, _, rel, funcs = TARGETS[args.target]
     ok = True
     with tempfile.TemporaryDirectory() as tmp:
         t = Path(tmp)
@@ -87,8 +119,8 @@ def main(argv: list[str]) -> int:
         (t / "a").mkdir()
         (t / "b").mkdir()
         exe_a, exe_b = t / "a" / "trace.exe", t / "b" / "trace.exe"
-        build(gcc, base, exe_a, False)
-        build(gcc, REPO, exe_b, args.cov)
+        build(gcc, args.target, base, exe_a, False)
+        build(gcc, args.target, REPO, exe_b, args.cov)
         for seed in (int(s) for s in args.seeds.split(",")):
             a = run(exe_a, args.ticks, seed, args.every)
             b = run(exe_b, args.ticks, seed, args.every)
@@ -101,8 +133,8 @@ def main(argv: list[str]) -> int:
                 print(f"seed {seed}: DIFFER at checkpoint {first}: base '{where}' new '{b[first] if first is not None else ''}'")
         if args.cov:
             gcov = shutil.which("gcov")
-            print("coverage TASK/StabilizerTask.c (new):", coverage(gcov, t / "b") if gcov else "gcov not on PATH")
-    print("FW-TRACE OK" if ok else "FW-TRACE DIFFER")
+            print(f"coverage {rel} (new):", coverage(gcov, t / "b", harness, rel, funcs) if gcov else "gcov not on PATH")
+    print(f"FW-TRACE {args.target} OK" if ok else f"FW-TRACE {args.target} DIFFER")
     return 0 if ok else 1
 
 
