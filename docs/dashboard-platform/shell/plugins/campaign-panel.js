@@ -148,8 +148,9 @@
   // (campaign_api.py refuses Go on a red preflight) exactly as before: this view only explains why.
   var PREARM_SYMBOL = 'g_prearm_fail_mask';
   var PREARM_FIRST = 'g_prearm_first_fail';
-  // Bit order PROPOSED from the WP-40 brief (check list order); it must match the PREARM_ROW table in
-  // API/prearm.h once WP-40 lands. A set bit outside this list shows as "bit N".
+  // fail & PREARM_ENABLE_ROW (API/prearm.c): a failed bit blocks the arm only when it is set here
+  var PREARM_BLOCK = 'g_prearm_block_mask';
+  // Bit order of prearm_bit_t in API/prearm.h (WP-40). A set bit outside this list shows as "bit N".
   var PREARM_BITS = ['estimator not ready', 'battery low at rest', 'RC link lost', 'not level on the pad (roll / pitch)',
     'wfb_safety trip latched', 'task rate low (system monitor)'];
 
@@ -218,10 +219,21 @@
     for (var b = 0; b < 16; b++) if (mask & (1 << b)) bits.push(b);
     // the firmware's own first cause goes first when it publishes one
     if (first && bits.indexOf(first.value) > 0) bits = [first.value].concat(bits.filter(function (x) { return x !== first.value; }));
+    // without the block mask in telemetry a failed bit stays red: whether it blocks the arm is unknown
+    var block = liveValue(state, PREARM_BLOCK);
+    var blockMask = block ? (block.value >>> 0) : null;
     return bits.map(function (b) {
-      return { name: 'PREFLIGHT FAIL: ' + (PREARM_BITS[b] || 'bit ' + b), source: 'firmware', pass: false,
+      var line = { name: 'PREFLIGHT FAIL: ' + (PREARM_BITS[b] || 'bit ' + b), source: 'firmware', pass: false,
         value: PREARM_SYMBOL + ' bit ' + b + ' (mask ' + hex4(mask) + ', slot ' + live.slot + ')',
         fix: 'the firmware refuses to arm until this check passes' };
+      if (blockMask === null) {
+        line.fix = 'blocks the arm only if its PREARM_ENABLE_ROW bit is on; subscribe ' + PREARM_BLOCK + ' to know';
+      } else if (!(blockMask & (1 << b))) {
+        line.name = 'PREFLIGHT WARN: ' + (PREARM_BITS[b] || 'bit ' + b);
+        line.pass = null;
+        line.fix = 'report only (PREARM_ENABLE_ROW bit off): the firmware still arms; clear it before flight';
+      }
+      return line;
     });
   }
 
@@ -253,7 +265,7 @@
     var amber = report.rows.filter(function (c) { return pfStatus(c) === 'warn'; }).length;
     if (summary) {
       summary.textContent = !res.ok ? ('preflight: ' + red + ' red row(s), fix them before Go')
-        : (fwRed ? 'campaign preflight OK; the firmware refuses to arm: ' + fwRed + ' PREFLIGHT FAIL line(s)'
+        : (fwRed ? 'campaign preflight OK; firmware pre-arm: ' + fwRed + ' PREFLIGHT FAIL line(s)'
           : 'preflight OK' + (amber ? ' (' + amber + ' to confirm by the checklist)' : ''));
       summary.style.color = UI.color(res.ok && !fwRed ? 'ok' : 'fail');
     }

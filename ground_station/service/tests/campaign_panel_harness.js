@@ -301,7 +301,12 @@ async function runHarness() {
   const lines = pfx.firmwarePrearm(withSym, st({ 'g_prearm_fail_mask': 0x225, 'g_prearm_first_fail': 5 }));
   check(lines.map((l) => l.name).join(' | ') === 'PREFLIGHT FAIL: task rate low (system monitor) | PREFLIGHT FAIL: estimator not ready | ' +
         'PREFLIGHT FAIL: RC link lost | PREFLIGHT FAIL: bit 9', 'named lines, firmware first cause first: ' + lines.map((l) => l.name));
-  check(lines.every((l) => l.pass === false && /mask 0x0225/.test(l.value)), 'every set bit is a red line with the mask');
+  check(lines.every((l) => l.pass === false && /mask 0x0225/.test(l.value) && /subscribe g_prearm_block_mask/.test(l.fix)),
+        'block mask unknown: every set bit is a red line with the mask');
+  const mixed = pfx.firmwarePrearm(withSym, st({ 'g_prearm_fail_mask': 0x06, 'g_prearm_block_mask': 0x04 }));
+  check(mixed.map((l) => l.name + '=' + l.pass).join(' | ') === 'PREFLIGHT WARN: battery low at rest=null | PREFLIGHT FAIL: RC link lost=false' &&
+        /report only/.test(mixed[0].fix) && /refuses to arm/.test(mixed[1].fix), 'block mask: blocking bit red, report-only bit amber: ' +
+        mixed.map((l) => l.name + '=' + l.pass));
 
   // through the panel: the service says OK, the firmware mask says no → summary, red lines, first cause
   ctx._manifest = withSym;
@@ -315,9 +320,9 @@ async function runHarness() {
   const rows2 = el('cp-preflight-body').innerHTML;
   check(order(rows2).join(',') === 'fail,ok,ok' && rows2.includes('PREFLIGHT FAIL: RC link lost') && rows2.includes('cp-pf-firmware'),
     'firmware line on top of the green rows: ' + order(rows2));
-  check(el('cp-preflight-summary').textContent === 'campaign preflight OK; the firmware refuses to arm: 1 PREFLIGHT FAIL line(s)',
+  check(el('cp-preflight-summary').textContent === 'campaign preflight OK; firmware pre-arm: 1 PREFLIGHT FAIL line(s)',
     'summary ' + el('cp-preflight-summary').textContent);
-  check(el('cp-first-cause').textContent === 'First cause: PREFLIGHT FAIL: RC link lost: the firmware refuses to arm until this check passes',
+  check(el('cp-first-cause').textContent === 'First cause: PREFLIGHT FAIL: RC link lost: blocks the arm only if its PREARM_ENABLE_ROW bit is on; subscribe g_prearm_block_mask to know',
     'first cause ' + el('cp-first-cause').textContent);
   check(el('cp-go-btn').disabled === goBefore, 'the report never changes Go: the service still decides');
   ctx._manifestFail = true;
