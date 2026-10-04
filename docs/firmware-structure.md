@@ -20,9 +20,9 @@ and what a subscribe slot costs. The style reference is `API/pid.c`; the table r
 Other tasks (`USER/main.c`): SystemMonitor_Task, IMU_DataDeal_Task, IMUSample_Task, Remoter_Task, Autofly_Task,
 dbg_report_task. Every refactored file starts with a header: module, owner task and rate, purpose, inputs, outputs.
 
-Not yet at the pid.c standard (no header or tables yet): `API/` Ano_OF, GPS, bmi088_driver, delay, fw_identity,
-sys, tf_mini_plus; `TASK/` AutoflyTask, RemoterTask, led, stm32f4xx_it, systemmonitor_task. WP-41 brought the other
-`API/` files listed there before to the standard (report: `docs/agent/reports/WP-41-cte.md`).
+The live list of files without an `@module` header is `tools/fw_lint_allow.txt` (rule `header`, 19 files on
+2026-10-05). Most of them (pid.c, mrac.c, wfb_*.c, BSP usarts) have an older header format; bmi088_driver.c,
+wfb_safety.c and wfb_traj.c are protected. Reports: `docs/agent/reports/WP-41-cte.md`, `WP-43-cte.md`.
 
 ## How to add a tunable
 1. Put it in the module's `*_ROW` table (one row per loop or object, aligned columns), never as a loose literal.
