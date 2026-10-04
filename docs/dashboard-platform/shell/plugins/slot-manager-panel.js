@@ -274,25 +274,25 @@
       '<style>',
       '.sm-container { display:flex; flex-direction:column; gap:12px; }',
       '.sm-summary { display:flex; align-items:center; justify-content:space-between; padding:8px 12px;',
-      '  background:rgba(0,0,0,0.2); border-radius:6px; }',
+      '  background:var(--gs-inset-bg); border-radius:6px; }',
       '.sm-subscribe { display:flex; gap:6px; align-items:center; flex-wrap:wrap;',
       '  padding:8px 10px; background:var(--bg); border:1px solid var(--border); border-radius:4px; }',
       '.sm-slot-btn { padding:5px 10px; border-radius:4px; font-size:11px; font-weight:600; cursor:pointer;',
       '  background:var(--bg); color:var(--text); border:1px solid var(--border); }',
       '.sm-slot-btn:hover { border-color:var(--accent); }',
       '.sm-slot-btn.active { background:var(--accent); color:var(--text); }',
-      '.sm-preview { padding:6px 10px; border-radius:4px; font-size:11px; background:rgba(0,0,0,0.18);',
+      '.sm-preview { padding:6px 10px; border-radius:4px; font-size:11px; background:var(--gs-inset-bg);',
       '  border:1px solid var(--border); }',
       '.sm-table { width:100%; border-collapse:collapse; font-size:12px; }',
       '.sm-table th { text-align:left; font-size:10px; font-weight:600; color:var(--muted);',
       '  text-transform:uppercase; letter-spacing:0.06em; padding:4px 8px;',
       '  border-bottom:1px solid var(--border); }',
       '.sm-table td { padding:5px 8px; font-family:Consolas, monospace; }',
-      '.sm-table tr:hover td { background:rgba(255,255,255,0.03); }',
+      '.sm-table tr:hover td { background:var(--gs-hover-bg); }',
       '.sm-row-clickable { cursor:pointer; }',
-      '.sm-channels-list { padding:6px 12px; background:rgba(0,0,0,0.15); border-top:1px solid var(--border); }',
+      '.sm-channels-list { padding:6px 12px; background:var(--gs-inset-bg); border-top:1px solid var(--border); }',
       '.sm-channel-row { display:flex; justify-content:space-between; padding:2px 0; font-family:Consolas, monospace; font-size:11px; }',
-      '.sm-channel-row:hover { background:rgba(255,255,255,0.03); }',
+      '.sm-channel-row:hover { background:var(--gs-hover-bg); }',
       '.sm-channel-key { color:var(--amber); }',
       '.sm-channel-val { color:var(--green); }',
       '.sm-channel-unit { color:var(--muted); margin-left:4px; }',
@@ -311,21 +311,21 @@
       '.loss-critical { color:var(--red); }',
       '.sm-fresh { display:inline-block; margin-left:6px; padding:1px 6px;',
       '  border-radius:8px; font-size:10px; font-weight:600; font-family:Consolas,monospace; }',
-      '.fresh-ok    { background:rgba(78,204,163,0.15); color:var(--green); }',
-      '.fresh-mixed { background:rgba(245,166,35,0.15); color:var(--amber); }',
-      '.fresh-bad   { background:rgba(233,69,96,0.15); color:var(--red); }',
+      '.fresh-ok    { background:var(--gs-ok-bg);   color:var(--green); }',
+      '.fresh-mixed { background:var(--gs-warn-bg); color:var(--amber); }',
+      '.fresh-bad   { background:var(--gs-fail-bg); color:var(--red); }',
       // Row-status colors ? driven by /health/slots status field.
       // live = all keys fresh (green), mixed = some stale (amber),
       // stale = all stale (red), dead = no data (dark/muted).
-      '.sm-row-live  td { background:rgba(78,204,163,0.04); }',
-      '.sm-row-mixed td { background:rgba(245,166,35,0.04); }',
-      '.sm-row-stale td { background:rgba(233,69,96,0.06); }',
+      '.sm-row-live  td:first-child { box-shadow:inset 3px 0 0 var(--gs-ok); }',
+      '.sm-row-mixed td:first-child { box-shadow:inset 3px 0 0 var(--gs-warn); }',
+      '.sm-row-stale td:first-child { box-shadow:inset 3px 0 0 var(--gs-fail); }',
       '.sm-row-dead  td { opacity:0.45; }',
       // Symbol picker
       '.sm-picker { padding:8px 10px; background:var(--bg); border:1px solid var(--border); border-radius:4px; }',
       '.sm-picker-result { display:flex; align-items:center; gap:6px; padding:2px 6px;',
       '  font-family:Consolas,monospace; font-size:11px; }',
-      '.sm-picker-result:hover { background:rgba(255,255,255,0.04); }',
+      '.sm-picker-result:hover { background:var(--gs-hover-bg); }',
       '.sm-picker-name { flex:1; color:var(--amber); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }',
       '.sm-picker-add, .sm-picker-drill { padding:1px 7px; font-size:11px; line-height:1.4; }',
       '.sm-picker-drill { color:var(--accent); }',
@@ -381,7 +381,7 @@
       '    <input id="sm-picker-filter" type="text" placeholder="Type to filter, e.g. mrac, ekf, imu..." autocomplete="off"',
       '      style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:3px;padding:5px 8px;font-family:Consolas,monospace;font-size:11px"/>',
       '    <div id="sm-picker-breadcrumb" style="margin-top:4px;font-size:10px"></div>',
-      '    <div id="sm-picker-results" style="margin-top:4px;max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:3px;background:rgba(0,0,0,0.15)"></div>',
+      '    <div id="sm-picker-results" style="margin-top:4px;max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:3px;background:var(--gs-inset-bg)"></div>',
       '    <div id="sm-picker-status" style="margin-top:4px;font-size:10px;color:var(--muted)"></div>',
       '  </div>',
 
@@ -508,7 +508,7 @@
       projectedBps = projectedBps * (achievedHz / _previewResult.expected_rate_hz);
     }
     if (typeof projectedBps === 'number' && projectedBps >= 0) {
-      html += '<span class="sm-fresh" style="background:rgba(0,0,0,0.25);color:var(--text)" title="Shared WiFi telemetry link budget. Capacity and used are shown live in the Bandwidth panel (WIFI_LINK_CAPACITY_BPS = 91304 B/s from docs/telemetry-protocol.md).">' +
+      html += '<span class="sm-fresh" style="background:var(--gs-inset-bg);color:var(--text)" title="Shared WiFi telemetry link budget. Capacity and used are shown live in the Bandwidth panel (WIFI_LINK_CAPACITY_BPS = 91304 B/s from docs/telemetry-protocol.md).">' +
               '&#8645; ' + projectedBps.toFixed(0) + ' B/s of 91,304 B/s (' + Math.min(100, projectedBps / 91304 * 100).toFixed(1) + '%)</span>';
     }
     html += '</div>';

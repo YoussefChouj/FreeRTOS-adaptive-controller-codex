@@ -336,6 +336,9 @@
     .alarm-item .alarm-action { color: var(--gs-text); font-weight: 400; }
     .alarm-item .alarm-silence { margin-left: auto; padding: 0 var(--gs-space-2); font-size: var(--gs-text-sm); }
 
+    /* ── Panel groups: one card, one tab per panel (PANEL_GROUPS) ── */
+    .panel-group-tabs { margin: 0 0 var(--gs-space-2); }
+
     .no-alarms {
       color: var(--muted);
       font-size: 12px;
@@ -819,6 +822,60 @@
     'Terminal':              { workspace: 'terminal' }
   };
 
+  /* Panels that share a group are tabs of one card (WP-39): Streams, Bandwidth Manager and Slot Manager were three
+   * cards with overlapping slot tables and three subscribe paths. Each tab keeps one job and its own ids / testid. */
+  var PANEL_GROUPS = {
+    'Streams':           { group: 'Telemetry Slots', tab: 'What slots carry' },
+    'Bandwidth Manager': { group: 'Telemetry Slots', tab: 'Link health' },
+    'Slot Manager':      { group: 'Telemetry Slots', tab: 'Expert subscribe' }
+  };
+
+  function slugOf(name) { return name.replace(/\s+/g, '-').toLowerCase(); }
+
+  // the group card (a .plugin-card, so workspace switching shows / hides it) with a tab row; created once
+  function groupCard(groupName, ws) {
+    var gslug = slugOf(groupName);
+    var card = document.getElementById('plugin-' + gslug);
+    if (card) return card;
+    card = document.createElement('div');
+    card.className = 'card plugin-card';
+    card.id = 'plugin-' + gslug;
+    card.setAttribute('data-workspaces', ws);
+    card.setAttribute('data-testid', 'panel-' + gslug);
+    card.setAttribute('role', 'region');
+    card.setAttribute('aria-label', groupName);
+    if (!wsMatches(ws, _activeWorkspace)) card.style.display = 'none';
+    var header = document.createElement('div');
+    header.className = 'card-header';
+    var title = document.createElement('span');
+    title.className = 'card-title';
+    title.textContent = groupName;
+    header.appendChild(title);
+    var tabs = document.createElement('div');
+    tabs.className = 'gs-row panel-group-tabs';
+    tabs.id = 'plugin-tabs-' + gslug;
+    tabs.setAttribute('role', 'tablist');
+    card.appendChild(header);
+    card.appendChild(tabs);
+    document.getElementById('plugin-panels').appendChild(card);
+    return card;
+  }
+
+  // shows one tab of a group; save = the operator clicked it (registration only shows, never overwrites the choice)
+  function showGroupTab(groupName, slug, save) {
+    var gslug = slugOf(groupName);
+    Object.keys(PANEL_GROUPS).forEach(function (n) {
+      if (PANEL_GROUPS[n].group !== groupName) return;
+      var s = slugOf(n), on = s === slug;
+      var sub = document.getElementById('plugin-' + s);
+      var btn = document.getElementById('plugin-tab-' + s);
+      if (sub) sub.style.display = on ? '' : 'none';
+      if (btn) { btn.className = 'gs-btn' + (on ? ' is-active' : ''); btn.setAttribute('aria-selected', on ? 'true' : 'false'); }
+    });
+    if (!save) return;
+    try { localStorage.setItem('gs_group_tab_' + gslug, slug); } catch (e) { shellWarn('localStorage', e); }
+  }
+
   /* data-workspaces is a space-separated token list; 'all' matches every tab. */
   function wsMatches(wsAttr, name) {
     var toks = String(wsAttr || '').split(/[\s,]+/);
@@ -955,10 +1012,11 @@
       var dflt = PANEL_META[name] || {};
       var ws = String(meta.workspace || dflt.workspace || 'all').split(/[\s,]+/).join(' ');
       var gates = meta.gates || dflt.gates || [];
-      var slug = name.replace(/\s+/g, '-').toLowerCase();
-      var container = document.getElementById('plugin-panels');
+      var slug = slugOf(name);
+      var grp = PANEL_GROUPS[name];
+      var container = grp ? groupCard(grp.group, ws) : document.getElementById('plugin-panels');
       var card = document.createElement('div');
-      card.className = 'card plugin-card';
+      card.className = grp ? 'panel-group-tab' : 'card plugin-card';
       card.id = 'plugin-' + slug;
       card.setAttribute('data-workspaces', ws);
       card.setAttribute('data-testid', 'panel-' + slug);
@@ -973,8 +1031,8 @@
       card.setAttribute('aria-label', gates.length
         ? name + ' (requires ' + gates.join(' and ') + ')'
         : name);
-      // Start hidden if not in the active workspace
-      if (!wsMatches(ws, _activeWorkspace)) card.style.display = 'none';
+      // Start hidden if not in the active workspace (a grouped panel follows its group card)
+      if (!grp && !wsMatches(ws, _activeWorkspace)) card.style.display = 'none';
       var header = document.createElement('div');
       header.className = 'card-header';
       var title = document.createElement('span');
@@ -993,9 +1051,32 @@
       }
       var body = document.createElement('div');
       body.id = 'plugin-body-' + slug;
-      card.appendChild(header);
+      if (!grp) card.appendChild(header);
       card.appendChild(body);
       container.appendChild(card);
+      if (grp) {
+        // one tab button per grouped panel; the saved tab (or the first one registered) is shown
+        var gslug = slugOf(grp.group);
+        var tabBtn = document.createElement('button');
+        tabBtn.type = 'button';
+        tabBtn.id = 'plugin-tab-' + slug;
+        tabBtn.setAttribute('role', 'tab');
+        tabBtn.textContent = grp.tab;
+        tabBtn.title = name;
+        tabBtn.addEventListener('click', function () { showGroupTab(grp.group, slug, true); });
+        document.getElementById('plugin-tabs-' + gslug).appendChild(tabBtn);
+        var savedTab = null;
+        try { savedTab = localStorage.getItem('gs_group_tab_' + gslug); } catch (e) { shellWarn('localStorage', e); }
+        var shownTab = document.getElementById('plugin-tabs-' + gslug).getAttribute('data-shown');
+        if (!shownTab || savedTab === slug) {
+          document.getElementById('plugin-tabs-' + gslug).setAttribute('data-shown', slug);
+          showGroupTab(grp.group, slug);
+        } else {
+          card.style.display = 'none';
+          tabBtn.className = 'gs-btn';
+          tabBtn.setAttribute('aria-selected', 'false');
+        }
+      }
       // Bug 1 hardening: a plugin whose initial render throws gets an error
       // message inside its own card — the shell keeps running.
       _currentPanelName = name;

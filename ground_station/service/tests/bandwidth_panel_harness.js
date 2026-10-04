@@ -247,67 +247,21 @@ async function runChecks() {
     env.destroy();
   }
 
-  // 2. Form open / cancel
+  // 2-4. Link health only (WP-39). The old "Request Slot" form subscribed slots 1-3 with no variable ranges,
+  // which the bridge refuses (wifi_bridge.py "requires explicit ranges"); subscribing lives in the Streams and
+  // Expert subscribe tabs of the same Telemetry Slots card.
   {
-    console.log('\n[CHECK 2: request form opens and cancels]');
+    console.log('\n[CHECK 2: link health only: no subscribe form, points to Streams / Expert subscribe]');
     const env = loadPanel();
-    env.click('bw-request-btn');
-    const form = env.doc.getElementById('bw-request-form');
-    assert.ok(form.classList.contains('visible'), 'form shown');
-    env.doc.getElementById('bw-request-result').textContent = 'stale';
-    env.click('bw-cancel-request');
-    assert.ok(!form.classList.contains('visible'), 'form hidden after cancel');
-    assert.strictEqual(env.doc.getElementById('bw-request-result').textContent,
-      '');
-    console.log('  PASS: form visible then hidden, result cleared');
-    env.destroy();
-  }
-
-  // 3. Submit defaults — captured body
-  {
-    console.log('\n[CHECK 3: default submit -> POST body {slot:1,divider:20}]');
-    const env = loadPanel();
-    env.click('bw-request-btn');
-    env.click('bw-submit-request');
-    await tick(); await tick();
-    const recs = env.fetchRecords();
-    assert.strictEqual(recs.length, 1);
-    assert.strictEqual(recs[0].url, '/subscribe');
-    assert.strictEqual(recs[0].opts.method, 'POST');
-    assert.deepStrictEqual(env.lastBody(),
-      { slot: 1, divider: 20, ranges: [] });
-    assert.ok(env.doc.getElementById('bw-request-result').innerHTML
-      .includes('Subscribed slot 1'));
-    env.flushTimers();   // form auto-hide after 1.5s
-    assert.ok(!env.doc.getElementById('bw-request-form').classList
-      .contains('visible'));
-    console.log('  PASS: body captured exactly; success shown; form auto-hides');
-    env.destroy();
-  }
-
-  // 4. Validation
-  {
-    console.log('\n[CHECK 4: channel 9 clamps to slot 1; bad rate defaults 10]');
-    const env = loadPanel();
-    env.click('bw-request-btn');
-    env.doc.getElementById('bw-new-rate').value = '50';
-    env.doc.getElementById('bw-new-channel').value = '9';
-    env.click('bw-submit-request');
-    await tick(); await tick();
-    assert.deepStrictEqual(env.lastBody(),
-      { slot: 1, divider: 4, ranges: [] }, 'rate 50 -> divider 4');
-    env.flushTimers();
-    console.log('  PASS: channel 9 clamped slot 1, divider round(200/50)=4');
-
-    env.click('bw-request-btn');
-    env.doc.getElementById('bw-new-rate').value = 'abc';
-    env.doc.getElementById('bw-new-channel').value = '2';
-    env.click('bw-submit-request');
-    await tick(); await tick();
-    assert.deepStrictEqual(env.lastBody(),
-      { slot: 2, divider: 20, ranges: [] }, 'NaN rate -> 10 Hz -> divider 20');
-    env.flushTimers();
-    console.log('  PASS: non-numeric rate defaults 10Hz, slot 2 used');
+    for (const id of ['bw-request-btn', 'bw-request-form', 'bw-submit-request', 'bw-new-rate', 'bw-new-channel']) {
+      assert.strictEqual(env.doc.getElementById(id), null, '#' + id + ' must be gone');
+    }
+    const html = env.api.container ? env.api.container.innerHTML : fs.readFileSync(PANEL, 'utf8');
+    assert.ok(/Link health only/.test(html) && /<b>Streams<\/b>/.test(html) && /<b>Expert subscribe<\/b>/.test(html),
+      'the tab says where subscribing lives');
+    assert.ok(env.doc.getElementById('bw-request-result'), 'one message line stays for refresh / stop results');
+    assert.strictEqual(env.fetchRecords().length, 0, 'opening the tab sends nothing');
+    console.log('  PASS: no Request Slot form; message line kept; tab names the subscribe tabs');
     env.destroy();
   }
 
@@ -359,6 +313,15 @@ async function runChecks() {
     assert.ok(env.doc.getElementById('bw-stream-tbody').innerHTML
       .includes('No active streams'), 'slot removed after unsubscribe');
     console.log('  PASS: unsubscribe body captured; slot row gone');
+
+    // frames in flight right after the stop keep it hidden; fresh frames later (re-subscribed from the Streams
+    // or Expert subscribe tab) bring the row back
+    const nowNs = Date.now() * 1e6;
+    env.feed(slot1Sample(21, 200, { last_update_ns: nowNs + 0.5e9 }));
+    assert.ok(env.doc.getElementById('bw-stream-tbody').innerHTML.includes('No active streams'), 'in-flight frames ignored');
+    env.feed(slot1Sample(31, 300, { last_update_ns: nowNs + 3e9 }));
+    assert.ok(env.doc.getElementById('bw-stream-tbody').innerHTML.includes('Slot 1'), 're-subscribed slot shows again');
+    console.log('  PASS: a stopped slot stays hidden for in-flight frames and returns when it streams again');
     env.destroy();
   }
 

@@ -208,7 +208,7 @@ function runChecks() {
     const svg = env.doc.getElementById('fft-chart-svg').innerHTML;
     assert.strictEqual(countTags(svg, 'rect'), 31, 'numBars = halfN-1 = 31');
     assert.ok(svg.includes('>12.5Hz<'), 'peak frequency label: ' + svg);
-    const red = (svg.match(/<rect[^>]*fill="#e94560"/g) || []).length;
+    const red = (svg.match(/<rect[^>]*style="fill:var\(--gs-fail\)"/g) || []).length;   // WP-39: colours are tokens
     assert.strictEqual(red, 1, 'exactly one red (peak) bar');
     const info = env.doc.getElementById('fft-peak-info').innerHTML;
     assert.ok(info.includes('12.5 Hz'), 'peak info: ' + info);
