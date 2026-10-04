@@ -10,9 +10,6 @@ void ComputePID(PIDTypeDef *pPID);
 void ComputeYawPID(PIDTypeDef *pPID);
 void Clear_Structure(void);
 
-void ComputePID_locx(PIDTypeDef *pPID);
-void ComputePID_locy(PIDTypeDef *pPID);
-
 extern CtrlerTypeDef Ctrler;
 
 void ComputePID_Gated(PIDTypeDef *pPID, uint8_t integrate);

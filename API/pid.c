@@ -325,65 +325,6 @@ void ComputeYawPID(PIDTypeDef *pPID)
 }
 
 
-//����x��yλ�÷���pid����������ϵת������������ϵ
-void ComputePID_locx(PIDTypeDef *pPID)
-{
-	//pPID->E = pPID->Des - pPID->FB;//���㵱ǰƫ��
-
-	Ctrler.locxPID.E = (Ctrler.locxPID.Des-Ctrler.locxPID.FB)*Cos_Yaw - (Ctrler.locyPID.Des-Ctrler.locyPID.FB)*Sin_Yaw ;
-	
-	pPID->E = 	Ctrler.locxPID.E ;
-	
-	if(((pPID->U <= pPID->UMax && pPID->E > 0) || (pPID->U >= -pPID->UMax && pPID->E < 0)) \
-		    && ABS(pPID->E) < pPID->EMin)//���ַ���
-	{
-		pPID->SumE += pPID->E;//����ƫ�����
-	}
-	value_limit( pPID->SumE , -pPID->SumEMax , pPID->SumEMax );//�����޷�
-	pPID->Ui = pPID->Ki * pPID->SumE;
-	value_limit( pPID->Ui , -pPID->UiMax , pPID->UiMax );
-	
-	pPID->Up = pPID->Kp * pPID->E;
-	value_limit( pPID->Up , -pPID->UpMax , pPID->UpMax );
-	
-	pPID->Ud = pPID->Kd * ( pPID->E - pPID->PreE );
-	value_limit( pPID->Ud , -pPID->UdMax , pPID->UdMax );
-	
-	pPID->U = pPID->Up + pPID->Ui + pPID->Ud;/*λ��ʽPID���㹫ʽ*/
-  value_limit( pPID->U , -pPID->UMax , pPID->UMax );  /*PID��������޷�*/	
-	
-	pPID->PreE = pPID->E ;//���汾��ƫ��
-}
-
-void ComputePID_locy(PIDTypeDef *pPID)
-{
-	//pPID->E = pPID->Des - pPID->FB;//���㵱ǰƫ��
-
-	Ctrler.locyPID.E = (Ctrler.locyPID.Des-Ctrler.locyPID.FB)*Cos_Yaw + (Ctrler.locxPID.Des-Ctrler.locxPID.FB)*Sin_Yaw ;
-	
-	pPID->E = Ctrler.locyPID.E ;
-	
-	if(((pPID->U <= pPID->UMax && pPID->E > 0) || (pPID->U >= -pPID->UMax && pPID->E < 0)) \
-		    && ABS(pPID->E) < pPID->EMin)//���ַ���
-	{
-		pPID->SumE += pPID->E;//����ƫ�����
-	}
-	value_limit( pPID->SumE , -pPID->SumEMax , pPID->SumEMax );//�����޷�
-	pPID->Ui = pPID->Ki * pPID->SumE;
-	value_limit( pPID->Ui , -pPID->UiMax , pPID->UiMax );
-	
-	pPID->Up = pPID->Kp * pPID->E;
-	value_limit( pPID->Up , -pPID->UpMax , pPID->UpMax );
-	
-	pPID->Ud = pPID->Kd * ( pPID->E - pPID->PreE );
-	value_limit( pPID->Ud , -pPID->UdMax , pPID->UdMax );
-	
-	pPID->U = pPID->Up + pPID->Ui + pPID->Ud;/*λ��ʽPID���㹫ʽ*/
-  value_limit( pPID->U , -pPID->UMax , pPID->UMax );  /*PID��������޷�*/	
-	
-	pPID->PreE = pPID->E ;//���汾��ƫ��
-}
-
 void Clear_Structure(void)
 {
 	Ctrler.pitchPID.SumE=0;
