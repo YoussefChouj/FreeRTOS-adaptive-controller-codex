@@ -39,9 +39,38 @@ The seven 2000 B task stacks are 14,000 B of the 20,480 B heap. The call graph n
 Before shrinking any of them, read `hlth.stack_min_words` (minimum `usStackHighWaterMark` over the tasks, from
 `TASK/systemmonitor_task.c`) on the bench through a full flight profile: no session log has it yet.
 
-## Interrupt stack (MSP, partial)
+## Interrupt stack (MSP)
 
-MSP is 1,024 B (`stm32_lib/startup_stm32f40_41xxx.s`, `Stack_Size`). The deepest handlers in the call graph are
-USART1 184+U, SysTick 168+U, PendSV 144+U, USART3 136 B; `HardFault_Handler` is 524 B. Handlers at different
-preemption priorities nest, and the BSP uses at least four levels (kernel 15, 6, 5, 0). A nesting bound needs
-the full priority map of every `NVIC_Init` call: PROPOSED as a second check in the same tool.
+The same tool parses every `NVIC_Init` in `BSP/*.c` (priority group 4: 16 preemption levels, no sub-priority).
+Handlers at one level do not nest, so the worst case stacks the deepest handler of each level, plus one exception
+frame (27 words with FP state and the alignment word) per nested level; the first frame lands on the task's PSP.
+
+| Level | Handlers (depth B) | Deepest |
+|---|---|---|
+| 0 | DMA1_Stream3 32, UART4 40, USART2 28 | 40 |
+| 5 (syscall ceiling) | UART5 24, USART1 184+U, USART3 136 | 184+U |
+| 6 | EXTI0, EXTI1, EXTI9_5 28 each | 28 |
+| 15 (kernel) | PendSV 144+U, SysTick 168+U | 168+U |
+
+Nested worst case: 4 levels, 744 B of the 1,024 B MSP (73 %, computed). USART1 and SysTick reach 184/168 B only
+through `configASSERT` -> `vAssertCalled` -> `printf`; their normal path is shallower.
+
+Rule check (FreeRTOS "interrupt priorities" rule, gate fails on it): a handler above the syscall ceiling
+(priority 0 here) must not call any kernel function. Today none does: the three level-0 handlers reach no code
+from tasks.c, queue.c, list.c, timers.c, event_groups.c, port.c or heap_4.c. A negative test (USART2 calling
+`xTaskGetTickCountFromISR`) makes the gate fail.
+
+### Finding: a fault inside the deepest nesting overflows the MSP
+
+`HardFault_Handler` -> `FaultCapture_Record` is 524 B deep because the record (`FaultRecord rec`, 512 B) is a
+local that is then copied byte by byte into the static `fault_backup[512]`. On top of the 744 B nesting that is
+1,376 B, over the 1,024 B MSP. A fault from task code (PSP) needs only 524 + 108 B and is fine.
+
+Fix (PROPOSED, `USER/fault_capture.c`, branch after the demo): build the record in place,
+`FaultRecord *rec = (FaultRecord *)fault_backup;` with `fault_backup` 4-byte aligned (`__align(4)` or a
+`uint32_t[128]` array), and drop the copy loop. RAM cost 0, MSP need about -512 B, flash a little less. The same
+fix shrinks the start_task malloc-failed path (above) from 636 B to about 124 B.
+
+Related, not verified: the comment on `fault_backup` says it survives a warm reset, but it is a plain `.bss`
+array and armcc's `__main` zero-fills ZI on every reset. Check on the bench (trigger a fault, reset, read
+`fault_captured`) before relying on it; the usual fix is a `UNINIT` scatter region.
