@@ -580,9 +580,14 @@
     '/plugins/terminal-panel.js',       // Terminal PTY session via WebSocket (xterm.js)
   ];
 
-  for (const src of PLUGIN_FILES) {
+  // Fetch every plugin at once (32 files: 1.5-2.2 s one by one, 0.1-0.9 s in parallel, measured 2026-10-05 on 8081),
+  // then eval in list order, so registration and tab order stay as listed.
+  const pending = PLUGIN_FILES.map(src => fetch(src).catch(e => e));
+  for (let i = 0; i < PLUGIN_FILES.length; i++) {
+    const src = PLUGIN_FILES[i];
     try {
-      const res = await fetch(src);
+      const res = await pending[i];
+      if (res instanceof Error) throw res;
       if (!res.ok) { console.warn('[shell] plugin not found:', src); continue; }
       const text = await res.text();
       eval(text);  // plugins call window.__registerPlugin__()
