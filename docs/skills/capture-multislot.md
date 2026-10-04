@@ -201,8 +201,8 @@ writes, so any existing analysis scripts work as-is.
 | What | Where |
 |---|---|
 | This skill's script | `ground_station/livewatch/capture_preset.py` |
-| Skill doc | `.cursor/skills/capture-multislot/SKILL.md` |
-| Purpose | `.cursor/skills/capture-multislot/PURPOSE.md` |
+| Skill doc | `docs/skills/capture-multislot.md` (this file) |
+| Purpose | `docs/skills/capture-multislot-purpose.md` |
 | Preset definitions | `ground_station/livewatch/multi_slot_presets.yaml` |
 | Manifest definitions | `ground_station/livewatch/manifests.yaml` |
 | Wire-format protocol | `docs/telemetry-protocol.md` |

@@ -70,7 +70,7 @@ flash and ~100 Hz after it, at `divider=1`.
 | UART wire | 921600 baud, ~91500 B/s |
 | UDP payload | ~90363 B/s |
 | Efficiency | **98.8 % of wire** |
-| Loss | **0.00 %** (alphabet ladder, `scratchpad/micoair_ladder.py`) |
+| Loss | **0.00 %** (alphabet ladder, a session scratchpad script, not in the repo) |
 
 The module adds ~1 % overhead over the raw wire. This is 55× the UART5 CMSIS-DAP path
 (~1600 B/s real ceiling).
@@ -86,8 +86,8 @@ The module adds ~1 % overhead over the raw wire. This is 55× the UART5 CMSIS-DA
 
 ## Telemetry frames (FC → PC)
 
-The machine-readable contract is `docs/telemetry_protocol_schema.json`. The test-time gate
-`tests/test_protocol_schema.py` checks its envelope, frame lengths, CRC families, and command
+The machine-readable contract is the `_SCHEMA` table in `scripts/validate_protocol_schema.py`. The test-time gate
+`ground_station/comm/tests/test_protocol_schema.py` checks its envelope, frame lengths, CRC families, and command
 sync constants against the Python parser assumptions. It does not alter runtime transport
 behavior. Firmware changes still require updating the registry and the corresponding parser
 tests together.
@@ -307,16 +307,18 @@ VOFA+ is launched and managed by the dashboard (`Dashboard.open_vofa()`). Standa
 
 | Tool | Transport | What it does |
 |---|---|---|
-| `ground_station.livewatch.stream_log --transport usart3` | UDP 14550 | Subscribe + log named variables to CSV |
-| `ground_station.livewatch.watch --transport usart3` | UDP 14550 | Live frame display |
-| `ground_station.livewatch.log --transport usart3` | UDP 14550 | Continuous CSV capture |
-| `ground_station.gui.dashboard` | UART5 + UDP 1347/1348 | Full GUI + VOFA+ plots |
-| `scratchpad/micoair_ladder.py` | UDP 14550 | Throughput/quality benchmark |
-| `scratchpad/verify_attitude_frame.py` | UDP 14550 | Frame sanity check |
+| `python -m ground_station.livewatch.stream_log --transport usart3` | UDP 14550 | Subscribe + log named variables to CSV |
+| `python -m ground_station.livewatch watch --transport wifi` | UDP 14550 | Live values at N Hz |
+| `python -m ground_station.livewatch log --transport wifi` | UDP 14550 | Manifest capture to CSV |
+| `python -m ground_station.service --port 8081` | UDP 14550 | Dashboard (workflows B/C) |
 
-**No com0com.** All tools speak UDP natively. `scratchpad/micoair_vcom_bridge.py` is retired.
+**No com0com.** All tools speak UDP natively. The 2026-08 ladder, attitude-frame and VCOM-bridge scripts were
+session scratchpad files and are not in the repo (checked 2026-10-05).
 
-## Measured capacity — updated 2026-08-19
+## MAVLink design study (2026-08-19, not on the main firmware)
+
+History: `TASK/send_data.c` on main sends no MAVLink (checked 2026-10-05). The tables below size a MAVLink
+design from August; the downlink measurements are of the JustFloat and subscribe streams that main still sends.
 
 ### Wire budget (USART3 @ 921600 actual)
 
@@ -367,9 +369,10 @@ The MicoAir bridges USART3 (921600 baud) to WiFi UDP. USART3 baud is not exactly
 
 **Key conclusion:** Wire is at 3.1 % utilisation at 10 Hz all3. There is **32× headroom** — the WiFi link will never saturate during normal telemetry or PID sweeps.
 
-### No MAVLink from real FC yet
+### MAVLink was never merged
 
-The new MAVLink telemetry (`BSP/mavlink_custom.h`, `TASK/send_data.c`) has not been flashed to the FC. A `0xFE` frame was captured with `msg_id=56526` — the MicoAir is translating the byte stream. Flash the firmware to get 10001/10002/10003 MAVLink frames.
+The MAVLink encoder (`mavlink_custom`) lived on 2026-09 worktree branches only and is not in the main tree. A
+`0xFE` frame once captured with `msg_id=56526` was the MicoAir translating the byte stream, not FC MAVLink.
 
 ## Network topology and IP addresses
 

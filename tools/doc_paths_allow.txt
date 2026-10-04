@@ -1,0 +1,5 @@
+# doc_paths.py allow-list: "<doc> <path>  reason". Shrink only.
+docs/agent/HANDOFF.md docs/firmware-compiler-optimisation.md  on branch o2-build until it merges
+docs/agent/HANDOFF.md docs/firmware-float-math.md  on branch float-math until it merges
+docs/firmware-quality.md API/rtos_budget.c  PROPOSED file, not written
+docs/vofa-studio-spec.md docs/vofa_manual_setup_checklist.md  in the sibling repo (the doc says so)

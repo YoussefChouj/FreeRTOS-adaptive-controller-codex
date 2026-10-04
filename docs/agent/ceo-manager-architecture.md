@@ -94,7 +94,7 @@ Shared `~/.claude`: A and B share settings, hooks, skills and auto-memory. That 
 
 - Burn per window: read `plan-usage-history.json` samples per org, where `fh` is the 5 h % and `sd` the weekly %. Compare %/hour at CEO `max` vs `high`, and B's weekly points per work package.
 - Base context: the first assistant `usage` per transcript (`input + cache_creation + cache_read`) in `~/.claude/projects/<proj>/*.jsonl`.
-- Candidate manager task WP-0: `tools/usage_report.py`, which prints both of these per account.
+- Candidate manager task WP-0 (not written): a tools/usage_report.py that prints both of these per account.
 
 ## 6. Research findings (account-B manager run)
 
