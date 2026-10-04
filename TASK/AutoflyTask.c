@@ -1,7 +1,68 @@
+/**
+ * @module     AutoflyTask.c
+ * @subsystem  guidance
+ * @owner      AutoflyTask() runs every 5 ms from USER/main.c. Stabilizer_Task calls SDK_StateMachine_Init at
+ *             start-up and SDK_Set_V_Loc / SDK_Set_Gyroz each cycle; the path Start and Run functions are also
+ *             called by the GS path commands.
+ * @purpose    Onboard reference generators (circle, sinusoid, figure-8) with a shared waypoint-density quantizer,
+ *             path arbitration (PROTECTED AutoflyTask_PathArbitrate, kept byte for byte), and the legacy SDK
+ *             script state machine (entered by holding raw ch4 and ch5 at AFLY_KEY_SBUS_HIGH for AFLY_KEY_HOLD_MS).
+ * @inputs     sbus_channel[], sbus_lost, Ctrler loc/yaw/Z PID feedback, the *_path parameter blocks, temp_V_* overrides.
+ * @outputs    Ctrler loc/yaw/Z PID Des setpoints, locxs/locys/gyroz rate setpoints, KeySDKflag, SDK_* flags.
+ */
 #include "AutoflyTask.h"
 #include "math.h"
 #include "flight_fsm.h"
 #include "rc_input.h"
+
+/* ------------------------------------------------------------------
+ * Private constants
+ * ------------------------------------------------------------------ */
+
+#define AFLY_TICK_MS        5U        /* AutoflyTask period [ms]                                  */
+#define AFLY_DT_S           0.005f    /* the same period in seconds, used by the path generators  */
+#define AFLY_KEY_SBUS_HIGH  1800      /* raw SBUS value both ch4 and ch5 must hold to arm the SDK */
+#define AFLY_KEY_HOLD_MS    2000      /* hold time before KeySDKflag is set [ms]                  */
+
+/* SDK script commands. A script is (command, duration) pairs in SDK_StateMachine[]; the duration counts down by
+   5 per tick. Only DelayWake, TakeOff, PosHold, Pos1 and Land have a case in SDK_StateMachine_Loop; the others
+   only select the velocity / yaw-rate override in SDK_Set_V_Loc and SDK_Set_Gyroz. */
+#define SDK_Cmd_TakeOff        0  /* climb to SDK_Height                      */
+#define SDK_Cmd_Land           1  /* descend; at SDK_LAND_DONE_Z stop motors  */
+#define SDK_Cmd_Search0        2  /* rotate in place while searching          */
+#define SDK_Cmd_Search1        3  /* move while searching                     */
+#define SDK_Cmd_PosHold        4  /* hold the current position                */
+#define SDK_Cmd_Circle         5  /* fly a circle                             */
+#define SDK_Cmd_FollowLine     6  /* follow a line                            */
+#define SDK_Cmd_PowerLine      7  /* follow a power line (competition task)   */
+#define SDK_Cmd_Surround       8  /* orbit a target (competition task)        */
+#define SDK_Cmd_GetLine        9  /* acquire a line (competition task)        */
+#define SDK_Cmd_GetClose       10 /* approach a target (competition task)     */
+#define SDK_Cmd_DelayWake      11 /* wait, holding the current pose           */
+#define SDK_Cmd_Pos1           12 /* go to point 1                            */
+#define SDK_Cmd_Pos2           13 /* go to point 2                            */
+#define SDK_Cmd_Pos3           14 /* go to point 3                            */
+#define SDK_Cmd_Pos4           15 /* go to point 4                            */
+#define SDK_Cmd_SearchLand     16 /* search for the landing pad               */
+#define SDK_Cmd_SearchLand_down 17 /* descend over the landing pad            */
+#define SDK_Cmd_Searchgan      18 /* search for a pole                        */
+#define SDK_Cmd_Pos5           19 /* go to point 5                            */
+#define SDK_Cmd_Pos6           20 /* go to point 6                            */
+#define SDK_Cmd_Pos7           21 /* go to point 7                            */
+#define SDK_Cmd_Pos8           22 /* go to point 8                            */
+#define SDK_Cmd_Pos9           23 /* go to point 9                            */
+#define SDK_Cmd_Pos10          24 /* go to point 10                           */
+#define SDK_Cmd_go_to_land     25 /* fly to the landing point                 */
+
+#define SDK_Height       0.7f                  /* take-off target height [m]          */
+#define SDK_Height_H     (SDK_Height + 0.05f)  /* take-off done band, upper edge [m]  */
+#define SDK_Height_L     (SDK_Height - 0.05f)  /* take-off done band, lower edge [m]  */
+#define SDK_LAND_DONE_Z  0.2f                  /* height that ends SDK_Cmd_Land [m]   */
+
+/* ------------------------------------------------------------------
+ * Public state  (extern in AutoflyTask.h; read by Stabilizer_Task and Send_Task)
+ * ------------------------------------------------------------------ */
+
 
 float x_test = 1;
 float y_test = 1;
@@ -13,6 +74,10 @@ unsigned char KeySDKflag=0,SDK_StateChangeFlag=0,SDK_DelayWakeFlag=0,SDKLandFlag
 float temp_V_x=-1,temp_V_y=-1,temp_Gyroz=0,temp_V_h=0,temp_Yaw;
 int take_off_flag=0;
 int SearchLand_down_cnt = 0;
+
+/* ------------------------------------------------------------------
+ * Private helpers: path arbitration (PROTECTED) and waypoint quantizer
+ * ------------------------------------------------------------------ */
 
 static void AutoflyTask_PathArbitrate(void)
 {
@@ -100,6 +165,10 @@ static void AutoflyTask_CommitRef(float cont_x, float cont_y, float cont_z)
 	}
 }
 
+/* ------------------------------------------------------------------
+ * Public API: path generators (start at the current pose, then step every tick)
+ * ------------------------------------------------------------------ */
+
 /* ---- Path start: begin at the current pose ----
  * A path starts where the drone is: its centre is moved so the first reference point is the current
  * position (loc/Z_pos FB), overwriting the centre set by CMD idx 0-2. Its heading is the current
@@ -161,7 +230,7 @@ void AutoflyTask_StartFigure8(void)
 
 void AutoflyTask_RunCircle(void)
 {
-	const float dt = 0.005f;
+	const float dt = AFLY_DT_S;
 
 	if (DroneStatus.FlyMode != FlyMode_SDK) {
 		circle_path.active = 0U;
@@ -191,7 +260,7 @@ void AutoflyTask_RunCircle(void)
 
 void AutoflyTask_RunSinusoid(void)
 {
-	const float dt = 0.005f;
+	const float dt = AFLY_DT_S;
 
 	if (DroneStatus.FlyMode != FlyMode_SDK) {
 		sinusoid_path.active = 0;
@@ -232,7 +301,7 @@ void AutoflyTask_RunSinusoid(void)
 
 void AutoflyTask_RunFigure8(void)
 {
-	const float dt = 0.005f;
+	const float dt = AFLY_DT_S;
 	float th, cx, cy;
 
 	if (DroneStatus.FlyMode != FlyMode_SDK) {
@@ -271,6 +340,10 @@ void AutoflyTask_RunFigure8(void)
 	}
 }
 
+/* ------------------------------------------------------------------
+ * Public API: 5 ms entry point
+ * ------------------------------------------------------------------ */
+
 void AutoflyTask(void)
 {
 	AutoflyTask_PathArbitrate();
@@ -283,13 +356,13 @@ void AutoflyTask(void)
 		AutoflyTask_RunFigure8();
 	}
 
-	if (((sbus_channel[5] == 1800) && (sbus_channel[4] == 1800) && (sbus_lost == 0)) ) {
-		KeyPressedTimeMS += 5U;
+	if (((sbus_channel[5] == AFLY_KEY_SBUS_HIGH) && (sbus_channel[4] == AFLY_KEY_SBUS_HIGH) && (sbus_lost == 0)) ) {
+		KeyPressedTimeMS += AFLY_TICK_MS;
 	} else {
 		KeyPressedTimeMS = 0U;
 	}
 
-		if(KeyPressedTimeMS >=2000 )
+		if(KeyPressedTimeMS >=AFLY_KEY_HOLD_MS )
 		{
 			KeySDKflag =1;
 		}
@@ -307,61 +380,18 @@ void AutoflyTask(void)
 			SDK_StateMachine_Reset();
 		}
 }
-#define SDK_Cmd_TakeOff        0  //���
-#define SDK_Cmd_Land           1  //����
-#define SDK_Cmd_Search0        2  //ԭ��תȦ����
-#define SDK_Cmd_Search1        3  //�����ƶ�����
-#define SDK_Cmd_PosHold        4  //����
-#define SDK_Cmd_Circle         5  //��ɵ��Բ
-#define SDK_Cmd_FollowLine     6  //ѭ��
-#define SDK_Cmd_PowerLine      7  //ѭ����    ����ר��
-#define SDK_Cmd_Surround       8  //�Ʒ�      ����ר��
-#define SDK_Cmd_GetLine        9  //����    ����ר��
-#define SDK_Cmd_GetClose       10 //����    ����ר��
-#define SDK_Cmd_DelayWake      11  //��ʱ����
-#define SDK_Cmd_Pos1           12  //����1
-#define SDK_Cmd_Pos2           13  //����2
-#define SDK_Cmd_Pos3           14  //����3   
-#define SDK_Cmd_Pos4           15  //����4
-#define SDK_Cmd_SearchLand     16  //����4
-#define SDK_Cmd_SearchLand_down 17  //����4
-#define SDK_Cmd_Searchgan      18  //����4
-#define SDK_Cmd_Pos5           19  //����4
-#define SDK_Cmd_Pos6           20  //����4
-#define SDK_Cmd_Pos7           21  //����4
-#define SDK_Cmd_Pos8           22  //����4
-#define SDK_Cmd_Pos9           23  //����4
-#define SDK_Cmd_Pos10          24  //����4
-#define  SDK_Cmd_go_to_land    25  //����4
-#define V_max `10
+
+/* ------------------------------------------------------------------
+ * Public API: legacy SDK script state machine
+ * ------------------------------------------------------------------ */
 
 void SDK_StateMachine_Init(void)
 {
 	CurrentSDKState = 0;
-	
-//	SDK_StateMachine[CurrentSDKState++] = SDK_Cmd_DelayWake;
-//	SDK_StateMachine[CurrentSDKState++] = 3000;
-//	
-//	SDK_StateMachine[CurrentSDKState++] = SDK_Cmd_TakeOff;
-//	SDK_StateMachine[CurrentSDKState++] = 3000;
-
-//	SDK_StateMachine[CurrentSDKState++] = SDK_Cmd_PosHold;
-//	SDK_StateMachine[CurrentSDKState++] = 500;
-
-//	SDK_StateMachine[CurrentSDKState++] = SDK_Cmd_Pos1;
-//	SDK_StateMachine[CurrentSDKState++] = 5000000;
-
-
-//	SDK_StateMachine[CurrentSDKState++] = SDK_Cmd_Land;
-//	SDK_StateMachine[CurrentSDKState++] = 5000;
-	
+	/* The script table is empty (the old program was removed), so SDKStateMAX wraps to 0xFFFFFFFE. */
 	SDKStateMAX = CurrentSDKState-2;
 	CurrentSDKState=0;
 }
-
-#define  SDK_Height     0.7f
-#define  SDK_Height_H   (SDK_Height+0.05f)
-#define  SDK_Height_L   (SDK_Height-0.05f)
 
 
 void SDK_StateMachine_Loop(void)
@@ -370,7 +400,6 @@ void SDK_StateMachine_Loop(void)
 	switch ( SDK_StateMachine[ CurrentSDKState ] )
 	{
 		
-/*************************************************************************************/	
 		case SDK_Cmd_DelayWake:
 			if(LastSDKState!=SDK_Cmd_DelayWake)
 			{
@@ -389,7 +418,6 @@ void SDK_StateMachine_Loop(void)
 
 			break;
 			
-/*************************************************************************************/
 		
 		case SDK_Cmd_TakeOff:
     
@@ -400,7 +428,6 @@ void SDK_StateMachine_Loop(void)
 			break;
 			
 
-/*************************************************************************************/
 		case SDK_Cmd_PosHold:
 			if(LastSDKState!=SDK_Cmd_PosHold)
 			{		
@@ -417,20 +444,18 @@ void SDK_StateMachine_Loop(void)
 			break;
 			
 			
-/*************************************************************************************/
 		case SDK_Cmd_Pos1:
 			
 
 			break;				
 
-/*************************************************************************************/					
 		
 		case SDK_Cmd_Land:
 			
         Ctrler.Z_posPID.Des =  0.0;
 				SDKLandFlag = 1;
 
-			if(Ctrler.Z_posPID.FB <=0.2f)
+			if(Ctrler.Z_posPID.FB <=SDK_LAND_DONE_Z)
 			{
 					SDK_StateMachine[ CurrentSDKState +1 ]=0;
 					KeySDKflag=0;
@@ -455,7 +480,7 @@ void SDK_StateMachine_Loop(void)
 void SDK_Set_V_Loc(void)
 {
 	
-/*********************************�����ٶȷ���**********************************************/		
+	/* Horizontal velocity setpoint while the script is in a position or search state */
 	if(
 		   SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Search0
 	       || SDK_StateMachine[ CurrentSDKState ]==  SDK_Cmd_PosHold
@@ -473,11 +498,11 @@ void SDK_Set_V_Loc(void)
 													|| SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_SearchLand_down 
 		)
 	{
-		if(SBUS_CH_VALID(PITCH_CH))//��˶�Ӧ����ˮƽ�ٶ�
+		if(SBUS_CH_VALID(PITCH_CH)) /* stick outside its dead band: the pilot sets the horizontal rate */
 				Ctrler.locysPID.Des = -((Remoter.PitCtrler-3000)/1000.0)*Stick_to_MAX_Horizontal_Rate;
 		else if(temp_V_y== -1) 
 		{  
-			if(y_test ==0) //ֻ����һ��
+			if(y_test ==0) /* first tick: hold the current position */
 			{
 				Ctrler.locyPID.Des =Ctrler.locyPID.FB;
 				y_test=1;
@@ -515,11 +540,11 @@ void SDK_Set_V_Loc(void)
 			}
 		}
 		
-		if(SBUS_CH_VALID(ROLL_CH))//��˶�Ӧ����ˮƽ�ٶ�
+		if(SBUS_CH_VALID(ROLL_CH)) /* stick outside its dead band: the pilot sets the horizontal rate */
 				Ctrler.locxsPID.Des = -((Remoter.RolCtrler-3000)/1000.0)*Stick_to_MAX_Horizontal_Rate;  
 		else if(temp_V_x == -1)
 		{ 
-			if(x_test ==0) //ֻ����һ��
+			if(x_test ==0) /* first tick: hold the current position */
 			{
 				Ctrler.locxPID.Des =Ctrler.locxPID.FB;
 				x_test=1;	
@@ -582,7 +607,7 @@ void SDK_Set_Gyroz(void)
 			Ctrler.gyrozPID.Des =  ((Remoter.YawCtrler-3000)/1000.0)*Stick_to_MAX_GyroZ ;
 		else if(temp_Gyroz == 0)
 		{
-			if(yaw_test==0) //��־λ��ֻ����һ��
+			if(yaw_test==0) /* first tick: hold the current heading */
 			{
 				Ctrler.yawPID.Des = Ctrler.yawPID.FB;
 				yaw_test =1;
@@ -606,10 +631,8 @@ void SDK_Set_Gyroz(void)
 }
 
 
-
 void SDK_StateMachine_Reset(void)
 {
-	//if( CurrentSDKState !=0 ) KeySDKflag=0;
 	CurrentSDKState = 0;
 	SDK_StateMachine_Init();
 }
