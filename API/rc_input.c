@@ -1,3 +1,13 @@
+/**
+ * @module     rc_input.c
+ * @subsystem  input
+ * @owner      Remoter_Task, 100 Hz (10 ms tick): RCInput_Update, RCInput_UpdateNeutral. RCInput_Get/IsActive are read
+ *             by Stabilizer_Task and Autofly_Task; Send_Task writes the virtual sticks and authority (GS CMD 0x06).
+ * @purpose    One stick source for the controllers: the physical RC (SBUS, minus the boot-captured neutral) or the
+ *             ground station's virtual sticks while it holds authority; pilot takeover and heartbeat watchdog.
+ * @inputs     Remoter.*Ctrler (SBUS, raw [2000, 4000], centre 3000), sbus_lost, RCInput_SetVirtualStick/SetAuthority.
+ * @outputs    normalised sticks [-1, 1], s_authority, s_heartbeat_lost, GS_KeySDKflag (cleared on pilot takeover).
+ */
 #include "rc_input.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -7,25 +17,30 @@
  * Private constants
  * ------------------------------------------------------------------ */
 
-/* Stick dead-zone thresholds in normalised units.
- * Derived from former SBUS macros: SBUS_OFFSET=100 and SBUS_THR_OFFSET=50,
- * both relative to a 1000-unit half-range, so 100/1000 = 0.10, 50/1000 = 0.05. */
-#define RC_ACTIVE_THRESHOLD      0.10f
-#define RC_THR_ACTIVE_THRESHOLD  0.05f
+#define RC_RAW_CENTER      3000.0f   /* SBUS-scaled stick centre; raw range [2000, 4000] */
+#define RC_RAW_HALF_RANGE  1000.0f   /* raw units from centre to full deflection          */
 
-/* Bench-mode height zero (CMD 0x07): when active, the OF height is offset so the drone
- * treats its resting position as z=0. Prop wash displaces it by ±Δ and the position
- * controller does not fight to return to a virtual ground. Safe on 4DOF fixture. */
+/* RC input tunables; sticks are normalised to [-1, 1], a tick is one 10 ms Remoter_Task call.
+   @active          -     [0, 0.5]     pitch/roll/yaw stick counts as deflected past this
+   @thr_active      -     [0, 0.5]     throttle stick counts as deflected past this
+   @takeover_delta  -     [0.01, 0.5]  physical stick change in one tick that hands authority back to the pilot
+   @grace_ticks     tick  [0, 100]     ticks after an authority grant before the takeover check runs
+   @neutral_window  raw   [50, 500]    max |raw - centre| accepted as "at rest" by the neutral capture
+   @neutral_frames  tick  [10, 200]    stable frames averaged by the neutral capture
+   active/thr_active are the former SBUS_OFFSET 100 and SBUS_THR_OFFSET 50 over the 1000-unit half range.
+   takeover_delta 0.05 = 5 % of full range per tick: a full deflection trips it in ~0.4 s, RC noise (< 0.005/tick)
+   and slow drift do not. grace 10 ticks = 100 ms for SBUS to settle. neutral_frames 50 = ~0.5 s. */
+typedef struct {
+    float    active, thr_active, takeover_delta;
+    uint32_t grace_ticks;
+    float    neutral_window;
+    uint32_t neutral_frames;
+} rc_tune_t;
+#define RC_TUNE_ROW(active, thr_active, takeover_delta, grace_ticks, neutral_window, neutral_frames)     { (active), (thr_active), (takeover_delta), (grace_ticks), (neutral_window), (neutral_frames) }
 
-/* Physical RC takeover rate threshold (per 10 ms RemoterTask tick).
- * Compares consecutive tick values, not a fixed snapshot.
- * 0.05 = 5 % of full range per tick → catches a full-range deflection
- * in ~0.4 s while ignoring RC noise (< 0.005/tick) and slow drift. */
-#define RC_PHYSICAL_RATE_DELTA  0.05f
-
-/* Ticks after authority grant before takeover check activates.
- * 10 × 10 ms = 100 ms for SBUS and Remoter values to settle. */
-#define RC_AUTHORITY_GRACE_TICKS 10U
+static const rc_tune_t s_tune =
+/*           active thr_active takeover_delta grace_ticks neutral_window neutral_frames */
+    RC_TUNE_ROW(0.10f, 0.05f,     0.05f,         10U,        200.0f,        50U);
 
 /* ------------------------------------------------------------------
  * Module state  (all private to this translation unit)
@@ -46,8 +61,7 @@ static uint16_t   s_authority_grace  = 0U;
  * zero. Throttle is never offset (its rest position is stick-down, not centre).
  * Capture is gated on a valid SBUS link and every axis sitting within a small
  * window of 3000, so a stick held off-centre during boot cannot poison it. */
-#define RC_NEUTRAL_WINDOW   200.0f   /* max |raw-3000| accepted as "at rest"      */
-#define RC_NEUTRAL_FRAMES   50U      /* ~0.5 s of stable frames averaged (10 ms)  */
+/* Window and frame count: s_tune.neutral_window, s_tune.neutral_frames. */
 
 static float      s_neutral[4]   = {0.0f, 0.0f, 0.0f, 0.0f}; /* raw-unit centre offset; [thr,pit,rol,yaw] */
 static uint8_t    s_neutral_done = 0U;
@@ -61,7 +75,7 @@ static float      s_neutral_acc[3] = {0.0f, 0.0f, 0.0f};     /* pit,rol,yaw sums
 /* Convert from SBUS-scaled [2000, 4000] (centre 3000) to [-1, 1]. */
 static float s_normalize(float raw)
 {
-    return (raw - 3000.0f) / 1000.0f;
+    return (raw - RC_RAW_CENTER) / RC_RAW_HALF_RANGE;
 }
 
 static float s_clamp(float v, float lo, float hi)
@@ -118,15 +132,15 @@ int RCInput_IsActive(RC_Axis_t axis)
     if (s_authority) {
         if ((unsigned int)axis < 4U) {
             v = s_virtual[(unsigned int)axis];
-            threshold = (axis == RC_AXIS_THR) ? RC_THR_ACTIVE_THRESHOLD
-                                               : RC_ACTIVE_THRESHOLD;
+            threshold = (axis == RC_AXIS_THR) ? s_tune.thr_active
+                                               : s_tune.active;
             return (v > threshold || v < -threshold) ? 1 : 0;
         }
         return 0;
     }
 
     v         = RCInput_Get(axis);
-    threshold = (axis == RC_AXIS_THR) ? RC_THR_ACTIVE_THRESHOLD : RC_ACTIVE_THRESHOLD;
+    threshold = (axis == RC_AXIS_THR) ? s_tune.thr_active : s_tune.active;
 
     return (v > threshold || v < -threshold) ? 1 : 0;
 }
@@ -155,7 +169,7 @@ void RCInput_SetAuthority(uint8_t has_authority)
         s_physical_snap[1] = s_normalize((float)Remoter.PitCtrler);
         s_physical_snap[2] = s_normalize((float)Remoter.RolCtrler);
         s_physical_snap[3] = s_normalize((float)Remoter.YawCtrler);
-        s_authority_grace = RC_AUTHORITY_GRACE_TICKS;
+        s_authority_grace = s_tune.grace_ticks;
         s_authority  = 1U;
     } else {
         /* Relinquish: reset all virtual sticks to centre so the drone
@@ -176,64 +190,63 @@ uint8_t RCInput_GetAuthority(void)
     return s_authority;
 }
 
-void RCInput_Update(void)
+/* --- Physical RC takeover check (emergency manual override) ---
+ * Rate-of-change detection: fires when the pilot actively moves a stick.
+ * This is the pilot's emergency override and MUST work even during a GS-
+ * controlled flight (path presets / VRC), so it is intentionally NOT
+ * suppressed by GS_KeySDKflag or by an active GS keepalive heartbeat.
+ * Only gated on a valid SBUS link: if sbus_lost, physical stick readings
+ * are stale/invalid and cannot be trusted to detect motion.
+ * On trigger, authority is dropped → RCInput_Get() returns physical sticks
+ * and AutoflyTask_PathArbitrate() stops all presets (clean handoff to
+ * manual alt/position-hold). The ch10 DANGEROUS_STOP remains the hard kill.
+ * The heartbeat watchdog below is the separate failsafe for GS disconnect. */
+static uint8_t s_pilot_took_over(void)
 {
-    if (!s_authority) {
-        return;
+    float cur0 = s_normalize((float)Remoter.ThrCtrler);
+    float cur1 = s_normalize((float)Remoter.PitCtrler);
+    float cur2 = s_normalize((float)Remoter.RolCtrler);
+    float cur3 = s_normalize((float)Remoter.YawCtrler);
+
+    if (s_authority_grace > 0U) {
+        /* Keep snap rolling during grace — no takeover check.
+         * Lets SBUS settle before rate-of-change detection starts. */
+        s_authority_grace--;
+        s_physical_snap[0] = cur0;
+        s_physical_snap[1] = cur1;
+        s_physical_snap[2] = cur2;
+        s_physical_snap[3] = cur3;
+        return 0U;
     }
 
-    /* --- Physical RC takeover check (emergency manual override) ---
-     * Rate-of-change detection: fires when the pilot actively moves a stick.
-     * This is the pilot's emergency override and MUST work even during a GS-
-     * controlled flight (path presets / VRC), so it is intentionally NOT
-     * suppressed by GS_KeySDKflag or by an active GS keepalive heartbeat.
-     * Only gated on a valid SBUS link: if sbus_lost, physical stick readings
-     * are stale/invalid and cannot be trusted to detect motion.
-     * On trigger, authority is dropped → RCInput_Get() returns physical sticks
-     * and AutoflyTask_PathArbitrate() stops all presets (clean handoff to
-     * manual alt/position-hold). The ch10 DANGEROUS_STOP remains the hard kill.
-     * The heartbeat watchdog below is the separate failsafe for GS disconnect. */
-    if (!sbus_lost) {
-        float cur0 = s_normalize((float)Remoter.ThrCtrler);
-        float cur1 = s_normalize((float)Remoter.PitCtrler);
-        float cur2 = s_normalize((float)Remoter.RolCtrler);
-        float cur3 = s_normalize((float)Remoter.YawCtrler);
+    float d0 = cur0 - s_physical_snap[0]; if (d0 < 0.0f) d0 = -d0;
+    float d1 = cur1 - s_physical_snap[1]; if (d1 < 0.0f) d1 = -d1;
+    float d2 = cur2 - s_physical_snap[2]; if (d2 < 0.0f) d2 = -d2;
+    float d3 = cur3 - s_physical_snap[3]; if (d3 < 0.0f) d3 = -d3;
+    s_physical_snap[0] = cur0;
+    s_physical_snap[1] = cur1;
+    s_physical_snap[2] = cur2;
+    s_physical_snap[3] = cur3;
 
-        if (s_authority_grace > 0U) {
-            /* Keep snap rolling during grace — no takeover check.
-             * Lets SBUS settle before rate-of-change detection starts. */
-            s_authority_grace--;
-            s_physical_snap[0] = cur0;
-            s_physical_snap[1] = cur1;
-            s_physical_snap[2] = cur2;
-            s_physical_snap[3] = cur3;
-        } else {
-            float d0 = cur0 - s_physical_snap[0]; if (d0 < 0.0f) d0 = -d0;
-            float d1 = cur1 - s_physical_snap[1]; if (d1 < 0.0f) d1 = -d1;
-            float d2 = cur2 - s_physical_snap[2]; if (d2 < 0.0f) d2 = -d2;
-            float d3 = cur3 - s_physical_snap[3]; if (d3 < 0.0f) d3 = -d3;
-            s_physical_snap[0] = cur0;
-            s_physical_snap[1] = cur1;
-            s_physical_snap[2] = cur2;
-            s_physical_snap[3] = cur3;
-
-            if (d0 > RC_PHYSICAL_RATE_DELTA || d1 > RC_PHYSICAL_RATE_DELTA ||
-                d2 > RC_PHYSICAL_RATE_DELTA || d3 > RC_PHYSICAL_RATE_DELTA) {
-                s_authority        = 0U;
-                s_heartbeat_active = 0U;
-                s_heartbeat_lost   = 0U;
-                GS_KeySDKflag      = 0U; /* GS no longer holds SDK authority after manual takeover */
-                return;
-            }
-        }
+    if (d0 > s_tune.takeover_delta || d1 > s_tune.takeover_delta ||
+        d2 > s_tune.takeover_delta || d3 > s_tune.takeover_delta) {
+        s_authority        = 0U;
+        s_heartbeat_active = 0U;
+        s_heartbeat_lost   = 0U;
+        GS_KeySDKflag      = 0U; /* GS no longer holds SDK authority after manual takeover */
+        return 1U;
     }
+    return 0U;
+}
 
-    /* --- Heartbeat watchdog ---
-     * Fires only after the first CMD 0x06 has arrived (s_heartbeat_active=1).
-     * The GS keepalive sends CMD 0x06 at 50 Hz, so this never fires in normal
-     * operation.  If the GS process crashes or the cable is pulled, the
-     * keepalive stops and after RC_HEARTBEAT_TIMEOUT_MS authority is revoked
-     * so the physical RC pilot can take over safely. */
+/* --- Heartbeat watchdog ---
+ * Fires only after the first CMD 0x06 has arrived (s_heartbeat_active=1).
+ * The GS keepalive sends CMD 0x06 at 50 Hz, so this never fires in normal
+ * operation.  If the GS process crashes or the cable is pulled, the
+ * keepalive stops and after RC_HEARTBEAT_TIMEOUT_MS authority is revoked
+ * so the physical RC pilot can take over safely. */
+static void s_heartbeat_watchdog(void)
+{
     if (!s_heartbeat_active) {
         return;
     }
@@ -249,6 +262,18 @@ void RCInput_Update(void)
         s_virtual[3]       = 0.0f;
         s_heartbeat_lost   = 1U;
     }
+}
+
+/* Takeover check (only with a live SBUS link: stale sticks cannot show motion), then the heartbeat watchdog. */
+void RCInput_Update(void)
+{
+    if (!s_authority) {
+        return;
+    }
+    if (!sbus_lost && s_pilot_took_over()) {
+        return;
+    }
+    s_heartbeat_watchdog();
 }
 
 void RCInput_UpdateNeutral(void)
@@ -268,14 +293,14 @@ void RCInput_UpdateNeutral(void)
         return;
     }
 
-    pit = (float)Remoter.PitCtrler - 3000.0f;
-    rol = (float)Remoter.RolCtrler - 3000.0f;
-    yaw = (float)Remoter.YawCtrler - 3000.0f;
+    pit = (float)Remoter.PitCtrler - RC_RAW_CENTER;
+    rol = (float)Remoter.RolCtrler - RC_RAW_CENTER;
+    yaw = (float)Remoter.YawCtrler - RC_RAW_CENTER;
 
     /* Any axis deflected past the rest window => a stick is being held; restart. */
-    if (pit >  RC_NEUTRAL_WINDOW || pit < -RC_NEUTRAL_WINDOW ||
-        rol >  RC_NEUTRAL_WINDOW || rol < -RC_NEUTRAL_WINDOW ||
-        yaw >  RC_NEUTRAL_WINDOW || yaw < -RC_NEUTRAL_WINDOW) {
+    if (pit >  s_tune.neutral_window || pit < -s_tune.neutral_window ||
+        rol >  s_tune.neutral_window || rol < -s_tune.neutral_window ||
+        yaw >  s_tune.neutral_window || yaw < -s_tune.neutral_window) {
         s_neutral_cnt    = 0U;
         s_neutral_acc[0] = 0.0f;
         s_neutral_acc[1] = 0.0f;
@@ -288,10 +313,10 @@ void RCInput_UpdateNeutral(void)
     s_neutral_acc[2] += yaw;
     s_neutral_cnt++;
 
-    if (s_neutral_cnt >= RC_NEUTRAL_FRAMES) {
-        s_neutral[1] = s_neutral_acc[0] / (float)RC_NEUTRAL_FRAMES; /* pitch */
-        s_neutral[2] = s_neutral_acc[1] / (float)RC_NEUTRAL_FRAMES; /* roll  */
-        s_neutral[3] = s_neutral_acc[2] / (float)RC_NEUTRAL_FRAMES; /* yaw   */
+    if (s_neutral_cnt >= s_tune.neutral_frames) {
+        s_neutral[1] = s_neutral_acc[0] / (float)s_tune.neutral_frames; /* pitch */
+        s_neutral[2] = s_neutral_acc[1] / (float)s_tune.neutral_frames; /* roll  */
+        s_neutral[3] = s_neutral_acc[2] / (float)s_tune.neutral_frames; /* yaw   */
         s_neutral_done = 1U;
     }
 }
