@@ -14,7 +14,7 @@
 #   doc-paths    every repo path and file:line in the agent-facing docs exists (tools/doc_paths.py)
 #   arm-syntax   arm-none-eabi-gcc -fsyntax-only on the same files; skipped with a message if not installed
 # Subset while iterating: bash tools/check.sh doc-paths fw-lint (step names as above), or --fast for every step
-# except host-tests, mrac-equiv and sil-smoke (433 s of the gate, measured 2026-10-05). A subset ends with
+# except host-tests, mrac-equiv and sil-smoke (each prints its time). A subset ends with
 # "CHECK SUBSET PASS"; only a run with no arguments prints CHECK PASS, and that is the one a commit needs.
 # Opt-in pre-commit hook that runs this script: bash tools/install-hooks.sh (WP-38).
 set -u

@@ -3,8 +3,8 @@
 ## The gate: `bash tools/check.sh`
 One command, no Keil, no hardware. Every step runs; exit 1 if any fails. `.github/workflows/check.yml` runs the
 same script on push/PR (ubuntu, apt gcc + gcc-multilib + clang-tidy + gcc-arm-none-eabi). Not yet run on GitHub.
-While iterating, `bash tools/check.sh --fast` skips host-tests, mrac-equiv and sil-smoke (433 s, measured
-2026-10-05) and named steps run alone (`bash tools/check.sh fw-lint stack`); both end in CHECK SUBSET PASS.
+While iterating, `bash tools/check.sh --fast` skips the three slow steps (host-tests, mrac-equiv, sil-smoke;
+each step prints its time) and named steps run alone (`bash tools/check.sh fw-lint stack`); both end in CHECK SUBSET PASS.
 
 | Step | What | Command |
 |---|---|---|

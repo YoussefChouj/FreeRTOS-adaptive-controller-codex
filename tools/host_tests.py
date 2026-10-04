@@ -14,13 +14,18 @@ passes when it builds and exits 0. Exit 1 if any test fails. Run from anywhere; 
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+# Rows build and run in parallel (gcc and the test exe are separate processes). Capped at 4: the lab laptop's
+# AC adapter drops under full load. HOST_TESTS_JOBS=1 gives the old serial run.
+JOBS = int(os.environ.get("HOST_TESTS_JOBS", min(4, os.cpu_count() or 1)))
 
 W = ["-Wall", "-Wextra"]
 STUBS = ["-IAPI/tests/stubs", "-IAPI"]
@@ -59,29 +64,22 @@ def _tail(text: str, n: int = 12) -> str:
     return "\n".join("    " + line for line in text.strip().splitlines()[-n:])
 
 
-def run_one(gcc: str, name: str, sources: list[str], flags: list[str], out_dir: Path) -> bool:
+def run_one(gcc: str, name: str, sources: list[str], flags: list[str], out_dir: Path) -> tuple[bool, str]:
+    """Build and run one row; return (passed, report line). Rows share only the read-only {src} copy."""
     exe = out_dir / f"{name}.exe"
     src = out_dir / "src"
-    if not src.exists():
-        src.mkdir()
-        for f in (REPO / "API").glob("mrac*.[ch]"):
-            shutil.copy2(f, src / f.name)
     args = [a.replace("{src}", src.as_posix()) for a in [*flags, *sources]]
     build = subprocess.run([gcc, *args, "-lm", "-o", str(exe)], cwd=REPO, capture_output=True, text=True)
     if build.returncode != 0:
-        print(f"FAIL {name}: build\n{_tail(build.stderr)}")
-        return False
+        return False, f"FAIL {name}: build\n{_tail(build.stderr)}"
     try:
         res = subprocess.run([str(exe)], cwd=REPO, capture_output=True, text=True, timeout=300)
     except subprocess.TimeoutExpired:
-        print(f"FAIL {name}: timeout")
-        return False
+        return False, f"FAIL {name}: timeout"
     if res.returncode != 0:
-        print(f"FAIL {name}: exit {res.returncode}\n{_tail(res.stdout + res.stderr)}")
-        return False
+        return False, f"FAIL {name}: exit {res.returncode}\n{_tail(res.stdout + res.stderr)}"
     last = (res.stdout.strip().splitlines() or [""])[-1]
-    print(f"PASS {name}: {last[:100]}")
-    return True
+    return True, f"PASS {name}: {last[:100]}"
 
 
 def find_tidy() -> str | None:
@@ -188,8 +186,16 @@ def main(argv: list[str]) -> int:
         print("FAIL host tests: gcc not on PATH")
         return 1
     rows = [r for r in HOST_TESTS if not argv or any(a in r[0] for a in argv)]
-    with tempfile.TemporaryDirectory() as tmp:
-        failed = [name for name, src, flags in rows if not run_one(gcc, name, src, flags, Path(tmp))]
+    failed = []
+    with tempfile.TemporaryDirectory() as tmp, ThreadPoolExecutor(JOBS) as pool:
+        (Path(tmp) / "src").mkdir()
+        for f in (REPO / "API").glob("mrac*.[ch]"):
+            shutil.copy2(f, Path(tmp) / "src" / f.name)
+        # map() yields in row order, so the report reads the same as a serial run
+        for (name, _, _), (ok, line) in zip(rows, pool.map(lambda r: run_one(gcc, *r, Path(tmp)), rows)):
+            print(line, flush=True)
+            if not ok:
+                failed.append(name)
     print(f"host tests: {len(rows) - len(failed)}/{len(rows)} passed" + (f"; failed: {' '.join(failed)}" if failed else ""))
     return 1 if failed else 0
 
