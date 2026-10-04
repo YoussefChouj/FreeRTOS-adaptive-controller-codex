@@ -37,6 +37,7 @@ step sil-smoke  "${PYTEST[@]}" sim/sil/test_sil.py sim/sil/test_faults.py --dese
 step clang-tidy "$PY" tools/host_tests.py --tidy
 step row-meta   "$PY" tools/row_meta.py
 step fw-lint    "$PY" tools/fw_lint.py
+step stack      "$PY" tools/stack_budget.py
 step arm-syntax "$PY" tools/host_tests.py --arm
 
 if [ ${#failed[@]} -gt 0 ]; then
