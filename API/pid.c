@@ -117,33 +117,55 @@ void PID_GainLeaseTick(uint32_t now_ms, uint8_t airborne)
 }                  
 
 /******���ַ��롢�����޷���P I D ����޷���������޷�***********************/
-#define PID_IS_NONFINITE(x) (((x) != (x)) || ((x) > 1e12f) || ((x) < -1e12f))
+#define PID_FINITE_LIMIT      1e12f    /* |x| above this counts as non-finite; no loop signal comes near it */
+#define PID_IS_NONFINITE(x) (((x) != (x)) || ((x) > PID_FINITE_LIMIT) || ((x) < -PID_FINITE_LIMIT))
+#define PID_YAW_TURN_DEG      360.0f   /* yaw error is folded into one turn ... */
+#define PID_YAW_HALF_TURN_DEG 180.0f   /* ... centred on 0: |E| <= 180 */
+
+/* NaN guards. A non-finite input or state zeroes the loop for this tick instead of reaching the next
+   stage or the mixer; the next finite tick starts from a clean integrator. */
+static void PID_Zero(PIDTypeDef *pPID)
+{
+	pPID->SumE = 0.0f;
+	pPID->PreE = 0.0f;
+	pPID->E    = 0.0f;
+	pPID->Up   = 0.0f;
+	pPID->Ui   = 0.0f;
+	pPID->Ud   = 0.0f;
+	pPID->U    = 0.0f;
+}
+
+/* Loops that form E themselves: 1 (loop zeroed) if E, SumE or PreE is non-finite. */
+static int PID_BadState(PIDTypeDef *pPID)
+{
+	if (!PID_IS_NONFINITE(pPID->E) && !PID_IS_NONFINITE(pPID->SumE) && !PID_IS_NONFINITE(pPID->PreE)) return 0;
+	PID_Zero(pPID);
+	return 1;
+}
+
+/* Output: a non-finite U or SumE leaves U and the integrator at 0. */
+static void PID_GuardOut(PIDTypeDef *pPID)
+{
+	if (PID_IS_NONFINITE(pPID->U) || PID_IS_NONFINITE(pPID->SumE))
+	{
+		pPID->SumE = 0.0f;
+		pPID->U    = 0.0f;
+	}
+}
 
 void ComputePID(PIDTypeDef *pPID)
 {
 	if (PID_IS_NONFINITE(pPID->Des) || PID_IS_NONFINITE(pPID->FB) ||
 	    PID_IS_NONFINITE(pPID->SumE) || PID_IS_NONFINITE(pPID->PreE))
 	{
-		pPID->SumE = 0.0f;
-		pPID->PreE = 0.0f;
-		pPID->E    = 0.0f;
-		pPID->Up   = 0.0f;
-		pPID->Ui   = 0.0f;
-		pPID->Ud   = 0.0f;
-		pPID->U    = 0.0f;
+		PID_Zero(pPID);
 		return;
 	}
 
 	pPID->E = pPID->Des - pPID->FB;
 	if (PID_IS_NONFINITE(pPID->E))
 	{
-		pPID->SumE = 0.0f;
-		pPID->PreE = 0.0f;
-		pPID->E    = 0.0f;
-		pPID->Up   = 0.0f;
-		pPID->Ui   = 0.0f;
-		pPID->Ud   = 0.0f;
-		pPID->U    = 0.0f;
+		PID_Zero(pPID);
 		return;
 	}//���㵱ǰƫ��
 
@@ -226,11 +248,7 @@ void ComputePID(PIDTypeDef *pPID)
 		value_limit( pPID->U , -pPID->UMax , pPID->UMax );  /*PID��������޷�*/
 	}
 
-	if (PID_IS_NONFINITE(pPID->U) || PID_IS_NONFINITE(pPID->SumE))
-	{
-		pPID->SumE = 0.0f;
-		pPID->U    = 0.0f;
-	}
+	PID_GuardOut(pPID);
 
 	pPID->PreE = pPID->E ;//���汾��ƫ��
 }
@@ -240,10 +258,11 @@ void ComputeYawPID(PIDTypeDef *pPID)
 {
 	/* fmodf first: the two steps below fold one turn only, so a Des more than a turn and a half
 	 * from FB (e.g. a heading that keeps counting up) would otherwise leave |E| >= 180. */
-	pPID->E = fmodf(pPID->Des - pPID->FB, 360.0f);//���㵱ǰƫ��
+	pPID->E = fmodf(pPID->Des - pPID->FB, PID_YAW_TURN_DEG);//���㵱ǰƫ��
+	if (PID_BadState(pPID)) return;   /* NaN/Inf Des or FB, or a poisoned integrator */
 	
-	if(pPID->E>=180)pPID->E-=360;
-	if(pPID->E<=-180)pPID->E+=360;
+	if(pPID->E>=PID_YAW_HALF_TURN_DEG)pPID->E-=PID_YAW_TURN_DEG;
+	if(pPID->E<=-PID_YAW_HALF_TURN_DEG)pPID->E+=PID_YAW_TURN_DEG;
 
 	if(((pPID->U <= pPID->UMax && pPID->E > 0) || (pPID->U >= -pPID->UMax && pPID->E < 0)) \
 		    && ABS(pPID->E) < pPID->EMin)//���ַ���
@@ -265,6 +284,7 @@ void ComputeYawPID(PIDTypeDef *pPID)
   
 	
 	
+	PID_GuardOut(pPID);
 	pPID->PreE = pPID->E ;//���汾��ƫ��
 }
 

@@ -138,10 +138,7 @@ void wfb_prim_step(wfb_prim_t *p, const wfb_prim_cfg_t *cfg, const wfb_prim_in_t
         } else {
             p->settle_t = 0.0f;
         }
-    } else if (p->state == WFB_PRIM_HOVER) {
-        out->x_sp_m = 0.0f;
-        out->y_sp_m = 0.0f;
-    } else if (p->state == WFB_PRIM_TRAJ) {
+    } else if (p->state == WFB_PRIM_HOVER || p->state == WFB_PRIM_TRAJ) {
         out->x_sp_m = 0.0f;
         out->y_sp_m = 0.0f;
     } else if (p->state == WFB_PRIM_RETURN) {
