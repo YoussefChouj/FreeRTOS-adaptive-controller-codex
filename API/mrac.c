@@ -958,14 +958,55 @@ void MRAC_SimplexStep(void)
 // Public API Operations
 // ------------------------------------------------------------------------------
 
-/* MRAC_SET legend: one @line per field (row); every axis value of the row must lie in [min, max]. PROPOSED bounds.
-   @nan_rearm       ticks   [0, 2000]   finite ticks after a non-finite input before u_ad reaches the mixer (200 = 1 s) */
+/* MRAC_SET legend: one @line per field (row); all four axis values of the row must lie in [min, max]
+   (tools/row_meta.py). Units are per axis: pitch/roll/yaw in rad, rad/s, N m; z in m/s, N. Bounds are PROPOSED
+   plausibility ranges; where CMD 0x1D writes the field they are its MRAC_VAR_FIELD range, widened to 0 (off).
+   @sigma_lf        1/s        [0, 5]       low-frequency leakage of Theta toward Whatf (L1-style)
+   @sigma           1/s        [0, 1]       sigma-modification leakage
+   @gam_f           rad/s      [0, 100]     Whatf low-pass bandwidth
+   @omega_u         rad/s      [0, 100]     u_ad low-pass cutoff (ENABLE_PERFORMANCE_RECOVERY)
+   @lambda_perf     rad/s      [0, 100]     unused (mrac.h)
+   @tau_v           s          [0, 10]      unused (mrac.h)
+   @u_max           Nm|N       [0, 50]      clamp on |u_ad|
+   @mrac_to_mixer   mixer/Nm|N [10, 5000]   mixer units per N m (per N on z); DEFAULT_MRAC_TO_MIXER_* both payloads
+   @J               kgm2|kg    [0, 5]       inertia (z: mass)
+   @e_deadzone      rad/s|m/s  [0, 1]       no adaptation while |e| is below
+   @e_freeze        rad/s|m/s  [0, 10]      hard freeze (u_ad 0, Theta held) while |e| is above
+   @e_sat           rad/s|m/s  [0, 5]       tanh scale of the PBe drive
+   @k_e             -          [0, 1]       e-modification gain
+   @ref_model_bw    rad/s      [0.5, 100]   reference model bandwidth (wn on type 2)
+   @ref_model_zeta  -          [0.1, 2]     reference model damping (type 2)
+   @P_lyap          -          [0, 100]     unused legacy (ADR-0007)
+   @ref_Q1          -          [0, 100]     Lyapunov Q diagonal, rate error (type 2)
+   @ref_Q2          -          [0, 100]     Lyapunov Q diagonal, rate-error derivative (type 2)
+   @wc_edot         rad/s      [0, 200]     low-pass cutoff of the finite-difference e_dot
+   @ref_type        -          [-1, 2]      V1: -1 = global ref_model_type, else 0/1/2 for this axis
+   @ref_delay_s     s          [0, 0.035]   V1: delay on r before the reference model
+   @drive_norm      -          [0, 1]       V1: normalized drive on/off
+   @lam_edot        s          [0, 0.1]     V1: e_dot weight of the normalized type-2 drive
+   @kappa_pr        -          [0, 2]       PR: performance-recovery gain
+   @crm_ell         1/s        [0, 50]      PR: closed-loop reference model gain
+   @mu_sat          1/(Nms)    [0, 10]      V2: saturation-aware leakage
+   @lam_ang         1/s        [0, 20]      3L: angle-error drive weight
+   @rbf_on          -          [0, 1]       V3: RBF grid on/off
+   @rbf_rate_scale  rad/s      [0.1, 20]    V3: rate normalisation of the grid
+   @rbf_ang_scale   rad        [0.05, 1]    V3: angle normalisation of the grid
+   @st_eps          rad/s      [0, 2]       ST: |e| bound of the restricted potential, 0 = off
+   @st_phi_max      -          [1, 50]      ST: cap of the gradient gain
+   @st_bar          -          [0, 1]       ST: log-barrier drive gain, 0 = off
+   @lf_gain         -          [0, 10]      LFHG: 0 = off, else LF learning and gamma x lf_gain
+   @nan_rearm       ticks      [0, 2000]    finite ticks after a non-finite input before u_ad reaches the mixer (200 = 1 s) */
 #define MRAC_SET(f, p, r, y, z) \
     mrac_config_pitch.f = (p); \
     mrac_config_roll.f = (r); \
     mrac_config_yaw.f = (y); \
     mrac_config_z.f = (z)
 
+/* MRAC_BASIS legend: one row per (axis, basis i); Theta_i * Phi_i is a part of u_ad (N m, z: N). PROPOSED bounds.
+   @g    1/s    [0, 10]   learning rate gamma[i] (diagonal Gamma), 0 = this basis does not learn
+   @lim  u/phi  [0, 2]    What_limit[i]: projection bound on Theta_i
+   @t    u/phi  [0, 1]    What_tol[i]: projection boundary layer below lim
+   @low  u/phi  [-2, 0]   What_lower_limit[i]: lower bound on Theta_i (0 keeps u_nom's weight from going negative) */
 #define MRAC_BASIS(ax, i, g, lim, t, low) \
     mrac_config_##ax.gamma[i] = (g); \
     mrac_config_##ax.What_limit[i] = (lim); \

@@ -9,6 +9,11 @@ and every literal in every `FOO_ROW(...)` row must lie in [min, max]. Exit 1 on 
 misnamed line, or on a value out of range. `--json` prints every cell (file, table, param, unit, min, max,
 value, description): the machine-readable parameter list for a ground station.
 
+Assignment-form tables (ASSIGN, statements in an init function) work the same, with leading key arguments that
+are not values: MRAC_BASIS(axis, i, g, lim, t, low) has a legend line per value parameter (@g ... @low), and
+MRAC_SET(field, p, r, y, z) one per row (@<field>) that bounds all four axis values. A value may be an object-like
+#define of the file or of a header it includes; with several definitions (#if branches) each one is checked.
+
     python tools/row_meta.py [--json] [files...]      default: API/*.c TASK/*.c
 """
 from __future__ import annotations
@@ -21,7 +26,10 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-DEFINE = re.compile(r"#define\s+(\w+_ROW)\(([^)]*)\)")
+# assignment-form table -> (leading key arguments, legend per row named by the first argument)
+ASSIGN = {"MRAC_SET": (1, True), "MRAC_BASIS": (2, False)}
+DEFINE = re.compile(r"#define\s+(\w+_ROW|%s)\(([^)]*)\)" % "|".join(ASSIGN))
+CONST = re.compile(r"^[ \t]*#define[ \t]+(\w+)[ \t]+([-+.\w*/() \t]+?)[ \t]*(?://.*|/\*.*)?$", re.M)
 COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
 META = re.compile(r"^[ \t*]*@(\w+)\s+(\S+)\s+\[\s*([^,\]]+?)\s*,\s*([^\]]+?)\s*\]\s*(.*?)\s*(?:\*/)?$", re.M)
 SUFFIX = re.compile(r"(\d(?:\.\d*)?(?:[eE][-+]?\d+)?|\.\d+(?:[eE][-+]?\d+)?)[fFuUlL]+\b")
@@ -64,41 +72,65 @@ def split_args(text: str, start: int) -> tuple[list[str], int]:
     raise ValueError("unbalanced parentheses")
 
 
+def read(path: Path) -> str:
+    return path.read_bytes().decode("latin-1").replace("\r", "")
+
+
+def constants(path: Path, text: str) -> dict[str, list[str]]:
+    """Object-like #defines of the file and of the local headers it includes: name -> every definition."""
+    out: dict[str, list[str]] = {}
+    headers = [path.parent / h for h in re.findall(r'#include\s+"([^"]+)"', text)]
+    for src in [text] + [read(h) for h in headers if h.exists()]:
+        for name, expr in CONST.findall(src):
+            out.setdefault(name, []).append(expr)
+    return out
+
+
 def check_file(path: Path, cells: list[dict]) -> list[str]:
-    raw = path.read_bytes().decode("latin-1").replace("\r", "")
+    raw = read(path)
     text = re.sub(r"\\\n", "  ", raw)                                   # join macro continuation lines
     code = COMMENT.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)  # same offsets, comments blanked
     rel = path.relative_to(REPO).as_posix()
+    consts = constants(path, raw)
     errors = []
     for d in DEFINE.finditer(code):
         name, params = d.group(1), [p.strip() for p in d.group(2).split(",")]
+        keys, per_row = ASSIGN.get(name, (0, False))
         meta = {}
         for c in reversed([c for c in COMMENT.finditer(text) if c.end() <= d.start()]):
             found = META.findall(c.group(0))
             if found:
                 meta = {m[0]: m for m in found}
                 break
-        if set(meta) != set(params):
-            errors.append(f"{rel}: {name}: legend @lines {sorted(meta)} do not match the parameters {params}")
+        rows = [split_args(code, call.end() - 1)[0] for call in re.finditer(r"\b%s\s*\(" % name, code)
+                if call.start() != d.start() + len("#define ")]
+        expect = {r[0] for r in rows} if per_row else set(params[keys:])
+        if set(meta) != expect:
+            what = "the rows" if per_row else "the parameters"
+            errors.append(f"{rel}: {name}: legend @lines {sorted(meta)} do not match {what} {sorted(expect)}")
             continue
-        for call in re.finditer(r"\b%s\s*\(" % name, code):
-            if call.start() == d.start() + len("#define "):
-                continue
-            args, _ = split_args(code, call.end() - 1)
+        for args in rows:
             if len(args) != len(params):
                 errors.append(f"{rel}: {name}: row with {len(args)} values, {len(params)} parameters")
                 continue
-            for p, a in zip(params, args):
-                _, unit, lo, hi, desc = meta[p]
+            for p, a in zip(params[keys:], args[keys:]):
+                param = args[0] if per_row else p
+                _, unit, lo, hi, desc = meta[param]
                 try:
-                    v, lo_v, hi_v = number(a), number(lo), number(hi)
+                    lo_v, hi_v = number(lo), number(hi)
+                    vals = [number(e) for e in consts[a]] if a in consts else [number(a)]
                 except (ValueError, SyntaxError):
-                    errors.append(f"{rel}: {name}.{p}: not a constant: {a!r}")
+                    errors.append(f"{rel}: {name}.{param}: not a constant: {a!r}")
                     continue
-                cells.append({"file": rel, "table": name, "param": p, "unit": unit, "min": lo_v, "max": hi_v,
-                              "value": v, "description": desc})
-                if not lo_v <= v <= hi_v:
-                    errors.append(f"{rel}: {name}.{p} = {a} outside [{lo}, {hi}]")
+                for v in vals:
+                    cell = {"file": rel, "table": name, "param": param, "unit": unit, "min": lo_v, "max": hi_v,
+                            "value": v, "description": desc}
+                    if keys:
+                        cell["row"] = ",".join(args[:keys]) if not per_row else p
+                    cells.append(cell)
+                    if not lo_v <= v <= hi_v:
+                        shown = f"{a} ({v:g})" if a in consts else a
+                        errors.append(f"{rel}: {name}.{param} = {shown} outside [{lo}, {hi}]")
     return errors
 
 
