@@ -19,7 +19,6 @@
 
 #include "mrac.h"
 
-extern uint8_t mrac_var_id[AXES];
 uint8_t MRAC_VariantParamSet(uint8_t axis, uint8_t field, float val);
 
 _imu_st imu_data = {0.0f, 0.0f};
