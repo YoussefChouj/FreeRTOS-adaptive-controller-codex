@@ -9,6 +9,7 @@
  *       API/tests/test_pid_guards.c API/pid.c -lm -o tpg && ./tpg      (or: python tools/host_tests.py pid_guards)
  */
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 #include <math.h>
 #include "pid.h"
@@ -128,7 +129,26 @@ static float rnd(float lo, float hi)
     return lo + (hi - lo) * (float)(g_lcg >> 8) / 16777216.0f;
 }
 
-static int same(const PIDTypeDef *a, const PIDTypeDef *b) { return memcmp(a, b, sizeof *a) == 0; }
+static uint32_t bits(float f)
+{
+    uint32_t u;
+    memcpy(&u, &f, sizeof u);
+    return u;
+}
+
+/* Bit-exact, NaN payloads and the sign of zero included. */
+static int same(const PIDTypeDef *a, const PIDTypeDef *b)
+{
+    const float fa[] = { a->FB, a->Des, a->Kp, a->Ki, a->Kd, a->Up, a->Ui, a->Ud, a->E, a->PreE,
+                         a->SumE, a->U, a->UMax, a->UpMax, a->UiMax, a->UdMax, a->SumEMax, a->EMin, a->Kt };
+    const float fb[] = { b->FB, b->Des, b->Kp, b->Ki, b->Kd, b->Up, b->Ui, b->Ud, b->E, b->PreE,
+                         b->SumE, b->U, b->UMax, b->UpMax, b->UiMax, b->UdMax, b->SumEMax, b->EMin, b->Kt };
+    unsigned i;
+    for (i = 0; i < sizeof fa / sizeof fa[0]; i++) {
+        if (bits(fa[i]) != bits(fb[i])) return 0;
+    }
+    return a->aw_mode == b->aw_mode;
+}
 
 static int zeroed(const PIDTypeDef *p)
 {

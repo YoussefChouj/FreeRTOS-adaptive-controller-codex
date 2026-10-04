@@ -18,9 +18,9 @@
 #endif
 
 /* Glue tunables (docs/firmware-table-pattern.md). Columns:
-   hover_z_min_m   lowest SET_HOVER_Z accepted, m
-   hover_z_max_m   highest SET_HOVER_Z accepted, m
-   dt_max_s        longest tick interval fed to the timers (a stalled loop is not a hold), s */
+   @hover_z_min_m  m    [0.1, 2]     lowest SET_HOVER_Z accepted
+   @hover_z_max_m  m    [0.3, 3]     highest SET_HOVER_Z accepted
+   @dt_max_s       s    [0.005, 0.5] longest tick interval fed to the timers (a stalled loop is not a hold) */
 typedef struct {
     float hover_z_min_m;
     float hover_z_max_m;

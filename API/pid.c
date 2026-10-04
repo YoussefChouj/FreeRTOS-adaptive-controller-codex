@@ -2,11 +2,17 @@
 #include "math.h"
 
 /* One row per loop, tunables only; the runtime fields (Des FB Up Ui Ud E PreE SumE U) start at 0.
-   Kp Ki Kd           gains, U = Up + Ui + Ud
-   UMax               limit on the total output U
-   UpMax UiMax UdMax  limits on the P, I and D terms
-   SumEMax            limit on the summed error, so |Ui| <= Ki*SumEMax as well as UiMax
-   EMin               integral separation: error is summed only while |E| < EMin
+   E is the loop error and U its output, in the units of the loop (row label); a tick is one call.
+   Bounds are plausibility ranges (PROPOSED); CMD 0x01 accepts Kp Ki Kd in 0..200 only.
+   @Kp      U/E        [0, 500]   gains, U = Up + Ui + Ud
+   @Ki      U/(E*tick) [0, 200]   Ui = Ki*SumE
+   @Kd      U*tick/E   [0, 200]   Ud = Kd*(E - PreE)
+   @UMax    U          [0, 1000]  limit on the total output U
+   @UpMax   U          [0, 1000]  limit on the P term
+   @UiMax   U          [0, 1000]  limit on the I term
+   @UdMax   U          [0, 1000]  limit on the D term
+   @SumEMax E*tick     [0, 1e6]   limit on the summed error, so |Ui| <= Ki*SumEMax as well as UiMax
+   @EMin    E          [0, 1e4]   integral separation: error is summed only while |E| < EMin
    Change history per loop is below the table. */
 #define PID_ROW(Kp, Ki, Kd, UMax, UpMax, UiMax, UdMax, SumEMax, EMin) \
     { 0, 0, Kp, Ki, Kd, 0, 0, 0, 0, 0, 0, 0, UMax, UpMax, UiMax, UdMax, SumEMax, EMin }
@@ -78,8 +84,8 @@ CtrlerTypeDef Ctrler={
    0x01 axes and opens a lease; each later 0x01 write renews it. No 0x01 write for lease_ms, or the drone leaving the
    air, restores the snapshot and closes the lease, so a candidate left by a lost link cannot outlive the link.
    On the ground the lease is off: gains written there (a verify flight's) stay.
-   enable    1 = on, 0 = off (CMD 0x01 behaves as before)
-   lease_ms  renewal deadline, ms; the GS re-sends the active gains within it */
+   @enable   -   [0, 1]          1 = on, 0 = off (CMD 0x01 behaves as before)
+   @lease_ms ms  [100, 60000]    renewal deadline; the GS re-sends the active gains within it */
 #define GAIN_LEASE_ROW(enable, lease_ms) { (enable), (lease_ms) }
 static const struct { uint8_t enable; uint32_t lease_ms; } s_gain_lease_cfg = GAIN_LEASE_ROW(0, 2000);
 
