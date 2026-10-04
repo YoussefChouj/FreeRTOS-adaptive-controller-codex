@@ -1,0 +1,34 @@
+     23 ..\Global_file\global_declare.h(354): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+     23 ..\Global_file\global_declare.h(334): warning:  #1267-D: Implicit physical register R0 should be defined as a variable
+      4 ..\BSP\rpm.h(90): warning:  #1-D: last line of file ends without a newline
+      3 ..\API\thrust_estimators.h(33): warning:  #1-D: last line of file ends without a newline
+      1 main.c: 2 warnings, 0 errors
+      1 ..\firmware\platform_registry.c: 2 warnings, 0 errors
+      1 ..\TASK\systemmonitor_task.c: 2 warnings, 0 errors
+      1 ..\TASK\stm32f4xx_it.c: 3 warnings, 0 errors
+      1 ..\TASK\send_data.c: 1 warning, 0 errors
+      1 ..\TASK\StabilizerTask.c: 4 warnings, 0 errors
+      1 ..\TASK\RemoterTask.c: 2 warnings, 0 errors
+      1 ..\TASK\AutoflyTask.c: 2 warnings, 0 errors
+      1 ..\Global_file\algorithm.c: 2 warnings, 0 errors
+      1 ..\BSP\usart5.c: 2 warnings, 0 errors
+      1 ..\BSP\usart4.c: 2 warnings, 0 errors
+      1 ..\BSP\usart3.c: 2 warnings, 0 errors
+      1 ..\BSP\usart2.c: 2 warnings, 0 errors
+      1 ..\BSP\spi.c: 2 warnings, 0 errors
+      1 ..\BSP\BSP.c: 4 warnings, 0 errors
+      1 ..\API\thrust_estimators.c: 2 warnings, 0 errors
+      1 ..\API\thrust_estimators.c(187): warning:  #1-D: last line of file ends without a newline
+      1 ..\API\sysid.c: 4 warnings, 0 errors
+      1 ..\API\sysid.c(66): warning:  #177-D: function "attitude_deg" was declared but never referenced
+      1 ..\API\sysid.c(163): warning:  #186-D: pointless comparison of unsigned integer with zero
+      1 ..\API\subscribe.c: 2 warnings, 0 errors
+      1 ..\API\pid.c: 2 warnings, 0 errors
+      1 ..\API\mrac_math.h(53): warning:  #1-D: last line of file ends without a newline
+      1 ..\API\mrac.c: 4 warnings, 0 errors
+      1 ..\API\mrac.c(190): warning:  #177-D: function "MRAC_InverseMixer" was declared but never referenced
+      1 ..\API\imu_update.c: 2 warnings, 0 errors
+      1 ..\API\flight_fsm.c: 2 warnings, 0 errors
+      1 ..\API\bmi088_driver.c: 2 warnings, 0 errors
+      1 ..\API\SINS.c: 2 warnings, 0 errors
+      1 ..\API\Accel_Calibartion.c: 2 warnings, 0 errors
