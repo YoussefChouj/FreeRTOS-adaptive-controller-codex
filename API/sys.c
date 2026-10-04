@@ -1,29 +1,40 @@
+/**
+ * @module     sys.c
+ * @subsystem  bsp
+ * @owner      nothing: no caller in the firmware (prototypes in sys.h).
+ * @purpose    Keil embedded-assembler helpers: WFI, global interrupt disable/enable, main stack pointer set.
+ *             Thumb code has no inline assembler, so each instruction sequence is an __asm function.
+ * @inputs     MSR_MSP: new main stack pointer in r0.
+ * @outputs    PRIMASK (INTX_*), MSP (MSR_MSP).
+ */
+
 #include "sys.h"
 
+/* ------------------------------------------------------------------
+ * Public API
+ * ------------------------------------------------------------------ */
 
-//THUMB指令不支持汇编内联
-//采用如下方法实现执行汇编指令WFI
+/* Wait for interrupt. */
 __asm void WFI_SET(void)
 {
     WFI;
 }
 
-//关闭所有中断(但是不包括fault和NMI中断)
+/* Disable all interrupts (fault handlers and NMI still run). */
 __asm void INTX_DISABLE(void)
 {
     CPSID   I
     BX      LR
 }
 
-//开启所有中断
+/* Enable all interrupts. */
 __asm void INTX_ENABLE(void)
 {
     CPSIE   I
     BX      LR
 }
 
-//设置栈顶地址
-//addr:栈顶地址
+/* Set the main stack pointer to addr. */
 __asm void MSR_MSP(u32 addr)
 {
     MSR MSP, r0 			//set Main Stack value
