@@ -3,7 +3,7 @@
  * @subsystem  sensors
  * @owner      none: no function or global here has a caller outside this file (git grep over *.c *.h *.s, WP-41).
  *             API/pid.c read Cos_Yaw/Sin_Yaw until ac782ba; the yaw rotation now lives in StabilizerTask.c
- *             (Cos_Yaw_01/Sin_Yaw_01). Kept because USER/*.uvprojx lists the file and SINS.h declares these symbols;
+ *             (Cos_Yaw_01/Sin_Yaw_01). Kept because USER/JX_FLY.uvprojx lists the file and SINS.h declares these symbols;
  *             deleting the module is a separate decision (PROPOSED in the WP-41 report).
  * @purpose    Legacy strapdown inertial navigation: rotates the body-frame accelerometer into the earth frame and runs a
  *             third-order complementary filter per axis that corrects the integrated acceleration, velocity and position
