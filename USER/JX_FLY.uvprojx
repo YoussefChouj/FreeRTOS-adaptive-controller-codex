@@ -500,6 +500,16 @@
               <FilePath>..\API\wfb_safety.c</FilePath>
             </File>
             <File>
+              <FileName>prearm.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\API\prearm.c</FilePath>
+            </File>
+            <File>
+              <FileName>fw_health.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\API\fw_health.c</FilePath>
+            </File>
+            <File>
               <FileName>wfb_prim.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\API\wfb_prim.c</FilePath>

@@ -89,6 +89,17 @@ typedef struct {            /* battery and thrust */
     float mass_hat_kg;      /* g_thrust_est.mass_hat */
 } TlmPower_t;
 
+typedef struct {            /* pre-arm and RTOS health (WP-40), refreshed 1 Hz by SystemMonitor_Task */
+    float prearm_fail_mask; /* g_prearm_fail_mask (API/prearm.h bits) */
+    float prearm_block_mask;/* g_prearm_block_mask: fail & enable, refuses ARM_REQUEST */
+    float reset_cause;      /* g_rtos_budget.reset_cause (FW_RESET_* bits) */
+    float stack_min_words;  /* g_rtos_budget.stack_min_words: lowest stack high-water mark */
+    float stack_min_task;   /* g_rtos_budget.stack_min_task: its FreeRTOS task number */
+    float stab_cpu_pct;     /* g_rtos_budget.stab_cpu_pct: stabilizer share of the last second */
+    float loop_max_us;      /* g_rtos_budget.loop_max_us: longest stabilizer period */
+    float iwdg_on;          /* g_rtos_budget.iwdg_on */
+} TlmHealth_t;
+
 typedef struct {
     TlmAttitude_t  att;
     TlmSetpoint_t  sp;
@@ -97,9 +108,10 @@ typedef struct {
     TlmMrac_t      mrac;
     TlmEstimator_t est;
     TlmPower_t     pwr;
+    TlmHealth_t    hlth;
 } FlightTelemetry_t;
 
-#define FLIGHT_TLM_FLOATS ((unsigned)(sizeof(FlightTelemetry_t) / sizeof(float)))   /* 60 */
+#define FLIGHT_TLM_FLOATS ((unsigned)(sizeof(FlightTelemetry_t) / sizeof(float)))   /* 68 */
 
 extern FlightTelemetry_t g_tlm;
 

@@ -65,6 +65,10 @@ GROUPS: tuple[TlmGroup, ...] = (
     TlmGroup("pwr", "TlmPower_t",
              (("vbat_v", 1), ("thrust_imu_n", 1), ("thrust_be_n", 4), ("mass_hat_kg", 1)),
              "battery voltage and thrust estimates"),
+    TlmGroup("hlth", "TlmHealth_t",
+             (("prearm_fail_mask", 1), ("prearm_block_mask", 1), ("reset_cause", 1), ("stack_min_words", 1),
+              ("stack_min_task", 1), ("stab_cpu_pct", 1), ("loop_max_us", 1), ("iwdg_on", 1)),
+             "pre-arm masks, reset cause, RTOS budget (1 Hz, API/prearm.h, API/fw_health.h)"),
 )
 
 TOTAL_FLOATS = sum(g.float_count for g in GROUPS)

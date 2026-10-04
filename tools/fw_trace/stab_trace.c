@@ -313,6 +313,11 @@ static void check_tlm(void)
         s_of_bias_y,
         real_voltage, g_thrust_est.imu_total, g_thrust_est.blade_element[0], g_thrust_est.blade_element[1],
         g_thrust_est.blade_element[2], g_thrust_est.blade_element[3], g_thrust_est.mass_hat,
+#ifdef PREARM_H
+        (float)g_prearm_fail_mask, (float)g_prearm_block_mask, (float)g_rtos_budget.reset_cause,
+        (float)g_rtos_budget.stack_min_words, (float)g_rtos_budget.stack_min_task, g_rtos_budget.stab_cpu_pct,
+        g_rtos_budget.loop_max_us, (float)g_rtos_budget.iwdg_on,
+#endif
     };
     if (sizeof want != sizeof g_tlm || memcmp(want, &g_tlm, sizeof want) != 0) {
         fprintf(stderr, "g_tlm differs from its sources at tick %lu\n", g_tick);

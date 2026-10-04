@@ -15,6 +15,8 @@
 #include "thrust_estimators.h"
 #include "rpm.h"
 #include "flight_telemetry.h"   /* g_tlm telemetry groups, filled by Tlm_Snapshot */
+#include "prearm.h"             /* g_prearm_* masks (hlth group) */
+#include "fw_health.h"          /* g_rtos_budget (hlth group) */
 /* WFB BEGIN glue */
 #include "wfb_glue.h"       /* Workflow B: GS takeoff/trajectory/land sequencer + safety net */
 #include "wfb_traj.h"
@@ -512,6 +514,15 @@ static void Tlm_Snapshot(void)
 	g_tlm.pwr.thrust_be_n[2] = g_thrust_est.blade_element[2];
 	g_tlm.pwr.thrust_be_n[3] = g_thrust_est.blade_element[3];
 	g_tlm.pwr.mass_hat_kg    = g_thrust_est.mass_hat;
+
+	g_tlm.hlth.prearm_fail_mask  = (float)g_prearm_fail_mask;
+	g_tlm.hlth.prearm_block_mask = (float)g_prearm_block_mask;
+	g_tlm.hlth.reset_cause       = (float)g_rtos_budget.reset_cause;
+	g_tlm.hlth.stack_min_words   = (float)g_rtos_budget.stack_min_words;
+	g_tlm.hlth.stack_min_task    = (float)g_rtos_budget.stack_min_task;
+	g_tlm.hlth.stab_cpu_pct      = g_rtos_budget.stab_cpu_pct;
+	g_tlm.hlth.loop_max_us       = g_rtos_budget.loop_max_us;
+	g_tlm.hlth.iwdg_on           = (float)g_rtos_budget.iwdg_on;
 }
 
 /* ==== The control tick ========================================================================== */

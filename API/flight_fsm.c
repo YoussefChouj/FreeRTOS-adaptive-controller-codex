@@ -3,6 +3,7 @@
 #include "task.h"
 #include "global_declare.h"
 #include "imu_update.h"   /* IMU_EstimatorReady() pre-arm gate */
+#include "prearm.h"       /* PreArm_Refresh()/PreArm_Allows(): enabled pre-arm checks, docs/firmware-safety.md */
 
 static FlightState_t s_state = FLIGHT_STATE_DISARMED;
 volatile FlightPhase_t flight_phase = FLIGHT_PHASE_GROUND_IDLE;
@@ -33,13 +34,16 @@ void FlightFSM_Init(void)
 
 void FlightFSM_Event(FlightEvent_t event)
 {
+    if (event == FLIGHT_EVENT_ARM_REQUEST) {
+        PreArm_Refresh();   /* fresh inputs for every arm attempt, RC and ground station alike */
+    }
     taskENTER_CRITICAL();
     switch (s_state) {
     case FLIGHT_STATE_DISARMED:
         /* Pre-arm gate: refuse to arm until the attitude estimator has converged
          * (A2). IMU_EstimatorReady() has a hard timeout fallback so this can
          * never lock the pilot out. DANGEROUS_STOP is never gated. */
-        if (event == FLIGHT_EVENT_ARM_REQUEST && IMU_EstimatorReady()) { g_motor_idle_enabled = 0U; s_state = FLIGHT_STATE_ARMED;     s_sync(s_state); }
+        if (event == FLIGHT_EVENT_ARM_REQUEST && IMU_EstimatorReady() && PreArm_Allows()) { g_motor_idle_enabled = 0U; s_state = FLIGHT_STATE_ARMED;     s_sync(s_state); }
         if (event == FLIGHT_EVENT_DANGEROUS_STOP)                      { g_motor_idle_enabled = 0U; s_state = FLIGHT_STATE_EMERGENCY; s_sync(s_state); }
         break;
     case FLIGHT_STATE_ARMED:

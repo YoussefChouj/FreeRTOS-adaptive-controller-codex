@@ -36,14 +36,14 @@
             "unit": "enum"
           },
           {
-            "description": "",
+            "description": "bound per axis and gain (API/pid.c PID_CMD_ROW): 200, Z_ratePID Kp 800",
             "index": 2,
-            "max_val": 200.0,
+            "max_val": 800.0,
             "min_val": 0.0,
             "name": "Kp_or_Ki_or_Kd",
             "range": [
               0.0,
-              200.0
+              800.0
             ],
             "symbol": null,
             "unit": "gain"
@@ -1526,6 +1526,188 @@
           "description": "Re-enters cold-cal. Clears all bias and EKF state."
         }
       },
+      "0x19": {
+        "applied_async": true,
+        "description": "MRAC simplex run-time assurance (mrac_simplex): one knob per idx, out-of-range writes ignored. Trips on tilt (rad; imu_data degrees are converted since WP-38), weight norm or u_ad saturation.",
+        "id": 25,
+        "id_hex": "0x19",
+        "name": "SIMPLEX",
+        "notes": "Handler Cmd_Simplex (TASK/send_data.c); encoder ground_station/comm/simplex_encoder.py; docs/research-platform/SIMPLEX.md.",
+        "parameters": [
+          {
+            "description": "0 off, 1 enforce, 2 observe only",
+            "index": 0,
+            "max_val": 2,
+            "min_val": 0,
+            "name": "mode",
+            "range": [
+              0,
+              2
+            ],
+            "symbol": null,
+            "unit": "enum"
+          },
+          {
+            "description": "0 PID+MRAC, 1 PID only",
+            "index": 1,
+            "max_val": 1,
+            "min_val": 0,
+            "name": "variant",
+            "range": [
+              0,
+              1
+            ],
+            "symbol": null,
+            "unit": "enum"
+          },
+          {
+            "description": "> 0; default 3.14 (never)",
+            "index": 2,
+            "max_val": null,
+            "min_val": 0.0,
+            "name": "roll_max",
+            "range": [
+              0.0,
+              null
+            ],
+            "symbol": null,
+            "unit": "rad"
+          },
+          {
+            "description": "> 0; default 3.14 (never)",
+            "index": 3,
+            "max_val": null,
+            "min_val": 0.0,
+            "name": "pitch_max",
+            "range": [
+              0.0,
+              null
+            ],
+            "symbol": null,
+            "unit": "rad"
+          },
+          {
+            "description": "> 0; ||Theta||_2 per axis, default 1e6",
+            "index": 4,
+            "max_val": null,
+            "min_val": 0.0,
+            "name": "w_norm_max",
+            "range": [
+              0.0,
+              null
+            ],
+            "symbol": null,
+            "unit": "-"
+          },
+          {
+            "description": "u_ad saturation trigger, default 40",
+            "index": 5,
+            "max_val": 65535,
+            "min_val": 1,
+            "name": "sat_ticks_max",
+            "range": [
+              1,
+              65535
+            ],
+            "symbol": null,
+            "unit": "ticks"
+          },
+          {
+            "description": "hold inside the envelope before resuming, default 200",
+            "index": 6,
+            "max_val": 65535,
+            "min_val": 0,
+            "name": "hold_ticks",
+            "range": [
+              0,
+              65535
+            ],
+            "symbol": null,
+            "unit": "ticks"
+          },
+          {
+            "description": "clears trip counts, tripped and reason",
+            "index": 7,
+            "max_val": 0,
+            "min_val": 0,
+            "name": "reset_counters",
+            "range": [
+              0,
+              0
+            ],
+            "symbol": null,
+            "unit": "trigger"
+          }
+        ],
+        "preconditions": {
+          "requires_armed": false,
+          "requires_disarmed": false,
+          "requires_ground_idle": false,
+          "requires_sdk_mode": false
+        },
+        "returns_ack": true,
+        "safety_class": {
+          "danger_level": "caution",
+          "description": "Safe at runtime; enforce mode fades u_ad to 0 while tripped."
+        }
+      },
+      "0x1D": {
+        "applied_async": true,
+        "description": "WP-27 MRAC variant field on one axis: idx = field << 2 | axis (fields in ground_station/analysis/mrac_variants.py VARIANT_FIELDS). Out-of-range values are refused.",
+        "id": 29,
+        "id_hex": "0x1D",
+        "name": "MRAC_VARIANT",
+        "notes": "MRAC_VariantParamSet (API/mrac.c); defaults are OFF. Docs: docs/workflow-b/mrac-variants.md.",
+        "parameters": [
+          {
+            "description": "",
+            "index": 0,
+            "max_val": 3,
+            "min_val": 0,
+            "name": "axis",
+            "range": [
+              0,
+              3
+            ],
+            "symbol": null,
+            "unit": "axis"
+          },
+          {
+            "description": "",
+            "index": 1,
+            "max_val": 18,
+            "min_val": 0,
+            "name": "field",
+            "range": [
+              0,
+              18
+            ],
+            "symbol": null,
+            "unit": "enum"
+          },
+          {
+            "description": "",
+            "index": 2,
+            "max_val": null,
+            "min_val": null,
+            "name": "value",
+            "range": null,
+            "symbol": null,
+            "unit": "float"
+          }
+        ],
+        "preconditions": {
+          "requires_armed": false,
+          "requires_disarmed": false,
+          "requires_ground_idle": false,
+          "requires_sdk_mode": false
+        },
+        "returns_ack": true,
+        "safety_class": {
+          "danger_level": "caution",
+          "description": "Refused while airborne (FLYING/LANDING); selector writes snap xm to the plant."
+        }
+      },
       "0x1E": {
         "applied_async": true,
         "description": "OF bias estimation mode: FIXED=0, EMA=1, EKF=2. EMA freeze flag idx=1. idx=2 EMA tau (s), idx=3 handheld test, idx=4 full-tilt, idx=5 KF vel feedback (disarmed only).",
@@ -1631,7 +1813,7 @@
         "id": 31,
         "id_hex": "0x1F",
         "name": "CTRL_SELECT",
-        "notes": "",
+        "notes": "Handler Cmd_CtrlSelect (TASK/send_data.c, WP-38). Out-of-range writes are ignored.",
         "parameters": [
           {
             "description": "",
@@ -1669,24 +1851,24 @@
         "returns_ack": true,
         "safety_class": {
           "danger_level": "safe",
-          "description": "Changes controller structure. Safe to request anytime, applied on disarm."
+          "description": "Changes controller structure. Refused while airborne (FLYING/LANDING), like 0x1D; ctrl_id applies at the next disarmed tick (Controller_CheckSwitch), axis_mask at once."
         }
       }
     },
-    "count": 26,
+    "count": 28,
     "source": "ground_station/platform/firmware_contract.py"
   },
   "elf_identity": {
     "caveat": "OBJ/ holds both current and stale build artifacts. A symbol in the ELF reflects the last build, which may not match what is currently flashed on the hardware. This manifest describes build artifacts and host decoder contracts; it does not assert that this build is currently running on the aircraft.",
     "elf_path": "OBJ/JX_FLY.axf",
-    "elf_sha256": "568a3b6054a5f7a0fd7ebf5ab62f97c0800296c2aae569ab915ac6e9001bf2eb",
+    "elf_sha256": "ff454adcc922f919244459dd2b33545e4d6c6965dc5bb8f8bb04d5d515fdfe6c",
     "exists": true,
-    "size_bytes": 1116700
+    "size_bytes": 1136776
   },
   "firmware_symbols": {
-    "count": 407,
+    "count": 417,
     "elf_path": "OBJ/JX_FLY.axf",
-    "elf_sha256": "568a3b6054a5f7a0fd7ebf5ab62f97c0800296c2aae569ab915ac6e9001bf2eb",
+    "elf_sha256": "ff454adcc922f919244459dd2b33545e4d6c6965dc5bb8f8bb04d5d515fdfe6c",
     "names": [
       "AHBPrescTable",
       "APBAHBPrescTable",
@@ -1867,6 +2049,7 @@
       "g_of_handheld_test",
       "g_of_hold_active",
       "g_of_rest_warn",
+      "g_of_scale",
       "g_platform_descriptors",
       "g_platform_kind_summaries",
       "g_reset_csr",
@@ -1925,9 +2108,12 @@
       "mrac_in_phase",
       "mrac_inj",
       "mrac_n_features",
+      "mrac_ref_type_eff",
       "mrac_simplex",
       "mrac_state",
       "mrac_u_ff",
+      "mrac_var_field",
+      "mrac_var_id",
       "mymotor",
       "path_yaw0",
       "platform_obs_cmd_queue_depth",
@@ -1973,6 +2159,7 @@
       "s_ekf_of",
       "s_ekf_of_inited",
       "s_ekf_of_innov_bad_cnt",
+      "s_ekf_of_mode_restore",
       "s_ekf_of_tripped",
       "s_ekf_pos_synced",
       "s_ekf_prev_px",
@@ -1984,6 +2171,7 @@
       "s_frame_c_buf",
       "s_frame_c_seq",
       "s_fs",
+      "s_gain_lease_cfg",
       "s_geofence_en",
       "s_glue_cfg",
       "s_heartbeat_active",
@@ -1991,6 +2179,10 @@
       "s_innov_lpf",
       "s_land_sink_bias",
       "s_last_update_tick",
+      "s_lease_gain",
+      "s_lease_ms",
+      "s_lease_open",
+      "s_lease_pid",
       "s_ms_amp",
       "s_ms_f",
       "s_ms_norm",
@@ -2552,7 +2744,10 @@
       "/api/agent/plans/<id>": "one plan with per-step status/result/error",
       "/api/agent/state": "one agent-facing snapshot {control, ui, recording, layout, arm_state, stream_health, running_plan, pending_approvals, last_messages}",
       "/api/agent/stream": "server-sent events; the push channel (blocks, heartbeat comment every SSE_HEARTBEAT_S)",
-      "/api/campaign/state": "campaign runner state {status, waiting_pack, campaign_path, reason, flights, control}",
+      "/api/campaign/list": "saved campaigns, launch copies (newest first) and pack ids {saved, launch, packs}",
+      "/api/campaign/preflight": "every workflow B launch check ?campaign=<launch yaml>&pack=<id> - {ok, instance, checks: [{name, value, pass, fix}]} (pass null = check by the operator checklist)",
+      "/api/campaign/state": "campaign runner state {status, banner, phase, total_flights, waiting_pack, campaign_path, reason, flights, control, arm_refusal, outputs_dir}",
+      "/api/campaign/vitals": "position, RC link + switches, arm sources, battery, g_wfb_status, build id and per-slot stream freshness in one read",
       "/api/contract": "firmware command/subscribe contract",
       "/api/debug/memory": "tracemalloc snapshot, psutil stats, gc counts, top object types",
       "/api/diagnostics/bundle": "frames, commands, faults for bug reports",
@@ -2599,7 +2794,7 @@
       "/api/agent/ui-ack": "browser acks a ui_action {plan_id, step_id, ok, error?}",
       "/api/agent/ui-state": "browser shell reports UI state {active_tab, visible_panels, drawer_open, url}",
       "/api/campaign/abort": "level-1 traj_stop + land now, then status operator_needed",
-      "/api/campaign/go": "operator-only per-battery go {campaign_path, pack_id, checklist, source} (403 agent: source, 409 unticked checklist or busy, 503 no runner deps)",
+      "/api/campaign/go": "per-battery go {campaign_path, pack_id, checklist, source, confirmation} (403 agent: source without the operator's chat confirmation quote, 409 unticked checklist, busy or deps not ready, 503 no runner deps)",
       "/api/campaign/land": "level-1 traj_stop + land now, then stop (operator_stop)",
       "/api/campaign/pause": "finish the current flight, then stop (operator_stop)",
       "/api/presets/apply": "{name}: switch the live subscription to a preset (disarmed only; background, ~6-10 s telemetry gap)",
@@ -3289,5 +3484,145 @@
       "xTickCount"
     ],
     "verified_published_keys_total": 218
+  },
+  "telemetry_groups": {
+    "groups": [
+      {
+        "doc": "attitude (deg) and body rates (deg/s, controller frame)",
+        "floats": 6,
+        "name": "att",
+        "offset_floats": 0,
+        "symbols": [
+          "g_tlm.att.roll_deg",
+          "g_tlm.att.pitch_deg",
+          "g_tlm.att.yaw_deg",
+          "g_tlm.att.rate_x_dps",
+          "g_tlm.att.rate_y_dps",
+          "g_tlm.att.rate_z_dps"
+        ]
+      },
+      {
+        "doc": "setpoints of every loop (Ctrler.*PID.Des)",
+        "floats": 12,
+        "name": "sp",
+        "offset_floats": 6,
+        "symbols": [
+          "g_tlm.sp.roll_deg",
+          "g_tlm.sp.pitch_deg",
+          "g_tlm.sp.yaw_deg",
+          "g_tlm.sp.rate_x_dps",
+          "g_tlm.sp.rate_y_dps",
+          "g_tlm.sp.rate_z_dps",
+          "g_tlm.sp.x_cm",
+          "g_tlm.sp.y_cm",
+          "g_tlm.sp.vx_cms",
+          "g_tlm.sp.vy_cms",
+          "g_tlm.sp.z_m",
+          "g_tlm.sp.vz_mps"
+        ]
+      },
+      {
+        "doc": "position and velocity feedback (OF world frame, ToF height)",
+        "floats": 6,
+        "name": "pos",
+        "offset_floats": 18,
+        "symbols": [
+          "g_tlm.pos.x_cm",
+          "g_tlm.pos.y_cm",
+          "g_tlm.pos.vx_cms",
+          "g_tlm.pos.vy_cms",
+          "g_tlm.pos.z_m",
+          "g_tlm.pos.vz_mps"
+        ]
+      },
+      {
+        "doc": "controller outputs and motor commands, CCR",
+        "floats": 8,
+        "name": "mot",
+        "offset_floats": 24,
+        "symbols": [
+          "g_tlm.mot.throttle",
+          "g_tlm.mot.u_roll",
+          "g_tlm.mot.u_pitch",
+          "g_tlm.mot.u_yaw",
+          "g_tlm.mot.m1",
+          "g_tlm.mot.m2",
+          "g_tlm.mot.m3",
+          "g_tlm.mot.m4"
+        ]
+      },
+      {
+        "doc": "MRAC per axis (pitch, roll, yaw, z): error, PID output, adaptive correction; simplex fade",
+        "floats": 13,
+        "name": "mrac",
+        "offset_floats": 32,
+        "symbols": [
+          "g_tlm.mrac.e[0]",
+          "g_tlm.mrac.e[1]",
+          "g_tlm.mrac.e[2]",
+          "g_tlm.mrac.e[3]",
+          "g_tlm.mrac.u_nom[0]",
+          "g_tlm.mrac.u_nom[1]",
+          "g_tlm.mrac.u_nom[2]",
+          "g_tlm.mrac.u_nom[3]",
+          "g_tlm.mrac.u_ad[0]",
+          "g_tlm.mrac.u_ad[1]",
+          "g_tlm.mrac.u_ad[2]",
+          "g_tlm.mrac.u_ad[3]",
+          "g_tlm.mrac.fade"
+        ]
+      },
+      {
+        "doc": "optical-flow KF state and the OF bias",
+        "floats": 8,
+        "name": "est",
+        "offset_floats": 45,
+        "symbols": [
+          "g_tlm.est.kf_x_m",
+          "g_tlm.est.kf_y_m",
+          "g_tlm.est.kf_vx_mps",
+          "g_tlm.est.kf_vy_mps",
+          "g_tlm.est.kf_bof_x_mps",
+          "g_tlm.est.kf_bof_y_mps",
+          "g_tlm.est.of_bias_x",
+          "g_tlm.est.of_bias_y"
+        ]
+      },
+      {
+        "doc": "battery voltage and thrust estimates",
+        "floats": 7,
+        "name": "pwr",
+        "offset_floats": 53,
+        "symbols": [
+          "g_tlm.pwr.vbat_v",
+          "g_tlm.pwr.thrust_imu_n",
+          "g_tlm.pwr.thrust_be_n[0]",
+          "g_tlm.pwr.thrust_be_n[1]",
+          "g_tlm.pwr.thrust_be_n[2]",
+          "g_tlm.pwr.thrust_be_n[3]",
+          "g_tlm.pwr.mass_hat_kg"
+        ]
+      },
+      {
+        "doc": "pre-arm masks, reset cause, RTOS budget (1 Hz, API/prearm.h, API/fw_health.h)",
+        "floats": 8,
+        "name": "hlth",
+        "offset_floats": 60,
+        "symbols": [
+          "g_tlm.hlth.prearm_fail_mask",
+          "g_tlm.hlth.prearm_block_mask",
+          "g_tlm.hlth.reset_cause",
+          "g_tlm.hlth.stack_min_words",
+          "g_tlm.hlth.stack_min_task",
+          "g_tlm.hlth.stab_cpu_pct",
+          "g_tlm.hlth.loop_max_us",
+          "g_tlm.hlth.iwdg_on"
+        ]
+      }
+    ],
+    "source": "API/flight_telemetry.h (written by Tlm_Snapshot, TASK/StabilizerTask.c, 200 Hz)",
+    "symbol": "g_tlm",
+    "total_floats": 68,
+    "value_size": 4
   }
 }
