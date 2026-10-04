@@ -143,47 +143,133 @@
     checkGoReady();
   }
 
-  // ── preflight: one GET, one row per check; red rows show their fix ───────────────────────────────────
+  // ── preflight report (WP-32 D4): one checklist of the campaign_preflight rows plus the firmware pre-arm mask
+  // as named PREFLIGHT FAIL lines; red rows first, the first red cause on top. Go stays blocked by the service
+  // (campaign_api.py refuses Go on a red preflight) exactly as before: this view only explains why.
+  var PREARM_SYMBOL = 'g_prearm_fail_mask';
+  var PREARM_FIRST = 'g_prearm_first_fail';
+  // Bit order PROPOSED from the WP-40 brief (check list order); it must match the PREARM_ROW table in
+  // API/prearm.h once WP-40 lands. A set bit outside this list shows as "bit N".
+  var PREARM_BITS = ['estimator not ready', 'battery low at rest', 'RC link lost', 'not level on the pad (roll / pitch)',
+    'wfb_safety trip latched', 'task rate low (system monitor)'];
+
   function runPreflight() {
     var path = (q('cp-path') || {}).value || '';
     var pack = (q('cp-pack-id') || {}).value || '';
     var summary = q('cp-preflight-summary');
     if (summary) summary.textContent = 'running preflight...';
+    // the manifest answers "is the pre-arm mask in this firmware"; its failure must not hide the campaign rows
+    var manifest = UI.fetchJson('/api/manifest', { timeoutMs: 15000 })
+      .catch(function (e) { return { _error: e.message }; });
     UI.fetchJson('/api/campaign/preflight?campaign=' + encodeURIComponent(path.trim()) +
                  '&pack=' + encodeURIComponent(pack.trim()), { timeoutMs: 15000 })
-      .then(function (res) { showError(''); renderPreflight(res); })
+      .then(function (res) {
+        return manifest.then(function (m) {
+          showError('');
+          renderPreflight(res, firmwarePrearm(m, _api && _api.getState ? _api.getState() : null));
+        });
+      })
       .catch(function (e) {
         if (summary) summary.textContent = 'preflight failed';
         showError(UI.report('preflight', e));
       });
   }
 
-  function pfStatus(c) { return c.pass === true ? 'ok' : (c.pass === false ? 'fail' : 'warn'); }
+  // the live value of a symbol in whichever slot carries it (key `sym` or `<prefix>.sym`)
+  function liveValue(state, sym) {
+    var streams = (state && state.streams) || {};
+    var slots = Object.keys(streams);
+    for (var i = 0; i < slots.length; i++) {
+      var vals = (streams[slots[i]] && streams[slots[i]].values) || {};
+      var keys = Object.keys(vals);
+      for (var j = 0; j < keys.length; j++) {
+        var k = keys[j];
+        if ((k === sym || k.slice(-sym.length - 1) === '.' + sym) && vals[k] !== null && !isNaN(Number(vals[k]))) {
+          return { value: Number(vals[k]), slot: slots[i] };
+        }
+      }
+    }
+    return null;
+  }
+
+  function hex4(n) { return '0x' + ('0000' + n.toString(16)).slice(-4); }
+
+  // firmwarePrearm(manifest, shellState) -> preflight rows for the firmware pre-arm mask
+  function firmwarePrearm(manifest, state) {
+    var row = { name: 'firmware pre-arm', source: 'firmware' };
+    if (!manifest || manifest._error) {
+      return [Object.assign(row, { pass: null, value: 'capability manifest unavailable: ' +
+        ((manifest && manifest._error) || 'no reply'), fix: 'check GET /api/manifest, then Refresh' })];
+    }
+    var names = (manifest.firmware_symbols && manifest.firmware_symbols.names) || [];
+    if (names.indexOf(PREARM_SYMBOL) < 0) {
+      return [Object.assign(row, { pass: null, status: 'stale', value: 'not in this firmware (' + PREARM_SYMBOL +
+        ' is not in the capability manifest)', fix: 'needs the pre-arm firmware (WP-40); the campaign rows still apply' })];
+    }
+    var live = liveValue(state, PREARM_SYMBOL);
+    if (!live) {
+      return [Object.assign(row, { pass: null, value: 'in this firmware, not in telemetry',
+        fix: 'subscribe ' + PREARM_SYMBOL + ' to a slot (Streams panel), then Refresh' })];
+    }
+    var mask = live.value >>> 0;
+    if (mask === 0) return [Object.assign(row, { pass: true, value: 'all checks pass (mask ' + hex4(mask) + ', slot ' + live.slot + ')' })];
+    var first = liveValue(state, PREARM_FIRST);
+    var bits = [];
+    for (var b = 0; b < 16; b++) if (mask & (1 << b)) bits.push(b);
+    // the firmware's own first cause goes first when it publishes one
+    if (first && bits.indexOf(first.value) > 0) bits = [first.value].concat(bits.filter(function (x) { return x !== first.value; }));
+    return bits.map(function (b) {
+      return { name: 'PREFLIGHT FAIL: ' + (PREARM_BITS[b] || 'bit ' + b), source: 'firmware', pass: false,
+        value: PREARM_SYMBOL + ' bit ' + b + ' (mask ' + hex4(mask) + ', slot ' + live.slot + ')',
+        fix: 'the firmware refuses to arm until this check passes' };
+    });
+  }
+
+  function pfStatus(c) { return c.status || (c.pass === true ? 'ok' : (c.pass === false ? 'fail' : 'warn')); }
+  var PF_ORDER = { fail: 0, warn: 1, stale: 2, ok: 3 };
+  var PF_LABEL = { ok: 'PASS', fail: 'FAIL', warn: 'CHECK', stale: 'N/A' };
 
   var PREFLIGHT_COLUMNS = [
     { key: 'name', label: 'Check' },
-    { label: 'Result', render: function (c) { return UI.pill(pfStatus(c), c.pass === true ? 'PASS' : (c.pass === false ? 'FAIL' : 'CHECK')); } },
+    { label: 'Result', render: function (c) { return UI.pill(pfStatus(c), PF_LABEL[pfStatus(c)]); } },
     { key: 'value', label: 'Value' },
     { label: 'Fix', render: function (c) { return c.pass === true ? '' : esc(c.fix); } }
   ];
 
-  function renderPreflight(res) {
+  // buildPreflightReport(serviceRows, firmwareRows) -> {rows: red first (stable), firstCause: the top red row}
+  function buildPreflightReport(checks, fwRows) {
+    var all = (checks || []).concat(fwRows || []).map(function (c, i) { return { c: c, i: i }; });
+    all.sort(function (a, b) { return (PF_ORDER[pfStatus(a.c)] - PF_ORDER[pfStatus(b.c)]) || (a.i - b.i); });
+    var rows = all.map(function (x) { return x.c; });
+    return { rows: rows, firstCause: rows.length && pfStatus(rows[0]) === 'fail' ? rows[0] : null };
+  }
+
+  function renderPreflight(res, fwRows) {
     var body = q('cp-preflight-body');
     var summary = q('cp-preflight-summary');
-    var checks = (res && res.checks) || [];
-    var red = checks.filter(function (c) { return c.pass === false; }).length;
-    var amber = checks.filter(function (c) { return c.pass !== true && c.pass !== false; }).length;
+    var report = buildPreflightReport((res && res.checks) || [], fwRows);
+    var red = report.rows.filter(function (c) { return pfStatus(c) === 'fail'; }).length;
+    var fwRed = (fwRows || []).filter(function (c) { return pfStatus(c) === 'fail'; }).length;
+    var amber = report.rows.filter(function (c) { return pfStatus(c) === 'warn'; }).length;
     if (summary) {
-      summary.textContent = res.ok ? ('preflight OK' + (amber ? ' (' + amber + ' to confirm by the checklist)' : ''))
-                                   : ('preflight: ' + red + ' red row(s), fix them before Go');
-      summary.style.color = UI.color(res.ok ? 'ok' : 'fail');
+      summary.textContent = !res.ok ? ('preflight: ' + red + ' red row(s), fix them before Go')
+        : (fwRed ? 'campaign preflight OK; the firmware refuses to arm: ' + fwRed + ' PREFLIGHT FAIL line(s)'
+          : 'preflight OK' + (amber ? ' (' + amber + ' to confirm by the checklist)' : ''));
+      summary.style.color = UI.color(res.ok && !fwRed ? 'ok' : 'fail');
+    }
+    var cause = q('cp-first-cause');
+    if (cause) {
+      var fc = report.firstCause;
+      cause.textContent = fc ? 'First cause: ' + fc.name + (fc.fix ? ': ' + fc.fix : '') : '';
+      cause.style.display = fc ? 'block' : 'none';
     }
     if (!body) return;
-    body.innerHTML = UI.tableRows(PREFLIGHT_COLUMNS, checks, {
+    body.innerHTML = UI.tableRows(PREFLIGHT_COLUMNS, report.rows, {
       empty: 'No checks returned',
       rowClass: function (c) {
         var s = pfStatus(c);
-        return (s === 'ok' ? 'cp-pf-pass' : (s === 'fail' ? 'cp-pf-fail' : 'cp-pf-unknown')) + ' gs-row--' + s;
+        return (s === 'ok' ? 'cp-pf-pass' : (s === 'fail' ? 'cp-pf-fail' : 'cp-pf-unknown')) + ' gs-row--' + s +
+          (c.source === 'firmware' ? ' cp-pf-firmware' : '');
       }
     });
   }
@@ -276,9 +362,10 @@
             '<span class="gs-label">Pack ID</span><input type="text" id="cp-pack-id" class="gs-input" value="">' +
             '<span id="cp-wait-msg" class="gs-reason"></span></div>';
 
-    html += '<div class="gs-section-title">Preflight</div>';
+    html += '<div class="gs-section-title">Preflight report</div>';
     html += '<div class="gs-row"><button id="cp-preflight-btn" class="gs-btn">Refresh preflight</button>' +
             '<span id="cp-preflight-summary" class="gs-label">preflight not run</span></div>';
+    html += '<div id="cp-first-cause" class="gs-error" role="alert" style="display:none"></div>';
     html += '<table class="gs-table"><thead><tr><th>Check</th><th>Result</th><th>Value</th><th>Fix</th></tr></thead>' +
             '<tbody id="cp-preflight-body"></tbody></table>';
 
@@ -366,5 +453,11 @@
   if (typeof window.__registerPlugin__ === 'function') {
     window.__registerPlugin__('Campaign', window.__PLUGIN_INIT__, window.__PLUGIN_DESTROY__);
   }
+
+  // pure helpers of the preflight report, for the offline harness
+  window.__gs_ui_state__ = window.__gs_ui_state__ || {};
+  window.__gs_ui_state__.campaignPreflight = {
+    firmwarePrearm: firmwarePrearm, buildPreflightReport: buildPreflightReport, PREARM_BITS: PREARM_BITS
+  };
 
 })();

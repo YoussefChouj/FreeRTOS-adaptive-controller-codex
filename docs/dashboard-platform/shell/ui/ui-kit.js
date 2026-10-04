@@ -325,6 +325,37 @@
   }
   function initTheme() { var h = htmlEl(); if (h) h.setAttribute('data-theme', store(THEME_KEY) === 'light' ? 'light' : 'dark'); }
 
+  // tokenColor('--gs-scene-bg') -> the computed value of a token, for canvas / WebGL code that cannot use var();
+  // '' when there is no computed style (offline harness): canvas ignores it, callers keep their last colour
+  function tokenColor(name) {
+    var d = doc();
+    if (!d || !d.documentElement || typeof root.getComputedStyle !== 'function') return '';
+    return String(root.getComputedStyle(d.documentElement).getPropertyValue(name) || '').trim();
+  }
+
+  // ── drag a telemetry key onto a plot (WP-39, WP-32 D5): sources call dragKey, plots call droppedKey ─────
+  var KEY_MIME = 'application/x-gs-telemetry-key';
+  var KEY_RE = /^[A-Za-z_][\w.[\]-]{0,127}$/;
+  function dragKey(ev, key) {
+    var dt = ev && ev.dataTransfer;
+    if (!dt || !key) return false;
+    dt.setData(KEY_MIME, key);
+    dt.setData('text/plain', key);
+    dt.effectAllowed = 'copy';
+    return true;
+  }
+  // while dragging only the types are readable (browser rule), so dragover asks carriesKey, drop asks droppedKey
+  function carriesKey(ev) {
+    var types = ev && ev.dataTransfer && ev.dataTransfer.types ? Array.prototype.slice.call(ev.dataTransfer.types) : [];
+    return types.indexOf(KEY_MIME) >= 0 || types.indexOf('text/plain') >= 0;
+  }
+  function droppedKey(ev) {
+    var dt = ev && ev.dataTransfer;
+    if (!dt) return '';
+    var k = String(dt.getData(KEY_MIME) || dt.getData('text/plain') || '').trim();
+    return KEY_RE.test(k) ? k : '';
+  }
+
   // ── campaign safety actions, shared by the flight strip and the Campaign panel ───────────────────────
   // A run accepts pause / land / abort only while its runner thread lives (campaign_api.py state()).
   var CAMPAIGN_ACTIVE = ['running', 'waiting_for_go'];
@@ -343,7 +374,8 @@
     toast: toast, report: report, store: store,
     fetchJson: fetchJson, poller: poller,
     isTypingTarget: isTypingTarget, shortcut: shortcut,
-    getTheme: getTheme, setTheme: setTheme, initTheme: initTheme,
+    getTheme: getTheme, setTheme: setTheme, initTheme: initTheme, tokenColor: tokenColor,
+    KEY_MIME: KEY_MIME, dragKey: dragKey, carriesKey: carriesKey, droppedKey: droppedKey,
     campaignActive: campaignActive, campaignCommand: campaignCommand
   };
   initTheme();

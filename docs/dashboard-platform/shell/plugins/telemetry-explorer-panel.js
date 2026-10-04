@@ -4,6 +4,8 @@
  * Auto-discovers all available keys across all active stream slots.
  * Renders a searchable, scrollable key-value table that updates every poll.
  * Shows schema_id, active slots, and a live key-count indicator.
+ * Every row is a drag source: drop it on the Time Series plot to add that key
+ * (GSUI.dragKey, WP-39 / WP-32 D5).
  */
 (function () {
   'use strict';
@@ -74,14 +76,15 @@
       '  letter-spacing: 0.06em; text-transform: uppercase;',
       '  padding: 5px 8px; border-bottom: 1px solid var(--border);',
       '}',
-      '.te-table td { padding: 4px 8px; border-bottom: 1px solid rgba(42,42,74,0.5); }',
-      '.te-table tr:hover td { background: rgba(255,255,255,0.03); }',
+      '.te-table td { padding: 4px 8px; border-bottom: 1px solid var(--gs-border); }',
+      '.te-table tr:hover td { background: var(--gs-hover-bg); }',
+      '.te-table tr[draggable="true"] { cursor: grab; }',
       '.te-key { font-family: Consolas, monospace; font-size: 11px; color: var(--amber); word-break: break-all; }',
       '.te-value { font-family: Consolas, monospace; font-size: 11px; color: var(--green); }',
       '.te-slot { font-family: Consolas, monospace; font-size: 10px; color: var(--muted); }',
       '.te-type { font-size: 10px; color: var(--muted); }',
       '.te-no-data { color: var(--muted); font-size: 12px; text-align: center; padding: 30px; }',
-      '.te-highlight { background: rgba(245,166,35,0.08); }',
+      '.te-highlight { background: var(--gs-warn-bg); }',
       '.te-scroll-hint { font-size: 10px; color: var(--muted); margin-top: 4px; text-align: right; }',
       '</style>',
 
@@ -115,7 +118,7 @@
           '<tbody id="te-tbody"><tr><td colspan="4" class="te-no-data">Waiting for telemetry…</td></tr></tbody>',
         '</table>',
       '</div>',
-      '<div class="te-scroll-hint">Scroll to explore</div>',
+      '<div class="te-scroll-hint">Drag a row onto the Time Series plot to add it · scroll to explore</div>',
     ].join('');
   }
 
@@ -175,7 +178,7 @@
 
     tbody.innerHTML = entries.map(function (e) {
       var type = typeof e.value;
-      return '<tr>' +
+      return '<tr draggable="true" data-gs-key="' + escapeHtml(e.key) + '">' +
         '<td class="te-key" title="' + escapeHtml(e.key) + '">' +
           escapeHtml(shortKey(e.key)) + '</td>' +
         '<td class="te-value">' + fmtVal(e.value) + '</td>' +
@@ -220,11 +223,24 @@
     });
   }
 
+  // ── Drag a row onto a plot: one delegated listener, the row carries its full key ──
+  function onDragStart(ev) {
+    var t = ev && ev.target;
+    var key = t && t.getAttribute ? t.getAttribute('data-gs-key') : null;
+    if (key && window.GSUI) window.GSUI.dragKey(ev, key);
+  }
+
+  function wireDrag() {
+    var tbody = q('te-tbody');
+    if (tbody && tbody.addEventListener) tbody.addEventListener('dragstart', onDragStart);
+  }
+
   // ── Export (shell uses window.__registerPlugin__) ────────────────────────
   window.__PLUGIN_INIT__ = function(api) {
     api.registerPanel('Telemetry Explorer', function (container) {
       container.innerHTML = buildHTML();
       wireFilter();
+      wireDrag();
       api.subscribe(function (state) {
         window.__te_last_state = state; // for re-render on filter change
         onState(state);
@@ -236,5 +252,7 @@
     if (_debounceTimer) clearTimeout(_debounceTimer);
   };
   window.__registerPlugin__('Telemetry Explorer', window.__PLUGIN_INIT__, window.__PLUGIN_DESTROY__);
+  window.__gs_ui_state__ = window.__gs_ui_state__ || {};
+  window.__gs_ui_state__.telemetryExplorer = { onDragStart: onDragStart };
 
 })();

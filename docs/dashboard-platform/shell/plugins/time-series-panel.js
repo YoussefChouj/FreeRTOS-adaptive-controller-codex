@@ -25,29 +25,28 @@
   var DEFAULT_DISPLAY_SAMPLES = 200; // Number of samples visible in live viewport
   var THROTTLE_MS = 40;              // Max 25 Hz update cadence for chart rendering
   var STORAGE_KEY = 'ts_panel_selected_vars_v2';
+  // named plot layouts, per viewer (this browser's localStorage): { name: { keys, viewMode, savedAt } }
+  var LAYOUTS_KEY = 'gs_ts_layouts_v1';
+  var LAYOUT_NAME_MAX = 40;
 
   var CHART_W = 600;
   var CHART_H = 220;
   var PAD = { left: 56, right: 16, top: 26, bottom: 28 };
 
-  // Distinct color palette for auto-assigning to discovered variables
-  var COLOR_PALETTE = [
-    '#ff5964', '#35a7ff', '#38b000', '#f5a623', '#9b59b6',
-    '#4ecca3', '#e94560', '#ff9f1c', '#2ec4b6', '#4cc9f0',
-    '#f72585', '#7209b7', '#4361ee', '#06d6a0', '#ffd166',
-    '#a8dadc', '#1d3557', '#e63946', '#457b9d', '#2a9d8f'
-  ];
+  // Trace colours, assigned in order to discovered variables (tokens.css --gs-trace-*)
+  var COLOR_PALETTE = [];
+  for (var ci = 1; ci <= 12; ci++) COLOR_PALETTE.push('var(--gs-trace-' + ci + ')');
 
   // Default known flight variables with physical units & display metadata
   var DEFAULT_DEFS = {
-    'c.earth_x':       { key: 'c.earth_x',       label: 'Pos X',        unit: 'cm',  color: '#ff5964', defaultEnabled: true },
-    'c.earth_y':       { key: 'c.earth_y',       label: 'Pos Y',        unit: 'cm',  color: '#35a7ff', defaultEnabled: true },
-    'c.altitude':      { key: 'c.altitude',      label: 'Pos Z (Alt)',  unit: 'm',   color: '#38b000', defaultEnabled: true },
-    'status.roll_deg':  { key: 'status.roll_deg',  label: 'Roll',         unit: 'deg', color: '#4a9eff', defaultEnabled: true },
-    'status.pitch_deg': { key: 'status.pitch_deg', label: 'Pitch',        unit: 'deg', color: '#4ecca3', defaultEnabled: true },
-    'status.yaw_deg':   { key: 'status.yaw_deg',   label: 'Yaw',          unit: 'deg', color: '#f5a623', defaultEnabled: false },
-    'mrac.roll.e':      { key: 'mrac.roll.e',      label: 'Roll Err',     unit: 'rad', color: '#e94560', defaultEnabled: false },
-    'status.vbat':      { key: 'status.vbat',      label: 'Battery',      unit: 'V',   color: '#9b59b6', defaultEnabled: false },
+    'c.earth_x':       { key: 'c.earth_x',       label: 'Pos X',        unit: 'cm',  color: COLOR_PALETTE[0], defaultEnabled: true },
+    'c.earth_y':       { key: 'c.earth_y',       label: 'Pos Y',        unit: 'cm',  color: COLOR_PALETTE[1], defaultEnabled: true },
+    'c.altitude':      { key: 'c.altitude',      label: 'Pos Z (Alt)',  unit: 'm',   color: COLOR_PALETTE[2], defaultEnabled: true },
+    'status.roll_deg':  { key: 'status.roll_deg',  label: 'Roll',         unit: 'deg', color: COLOR_PALETTE[3], defaultEnabled: true },
+    'status.pitch_deg': { key: 'status.pitch_deg', label: 'Pitch',        unit: 'deg', color: COLOR_PALETTE[4], defaultEnabled: true },
+    'status.yaw_deg':   { key: 'status.yaw_deg',   label: 'Yaw',          unit: 'deg', color: COLOR_PALETTE[5], defaultEnabled: false },
+    'mrac.roll.e':      { key: 'mrac.roll.e',      label: 'Roll Err',     unit: 'rad', color: COLOR_PALETTE[6], defaultEnabled: false },
+    'status.vbat':      { key: 'status.vbat',      label: 'Battery',      unit: 'V',   color: COLOR_PALETTE[7], defaultEnabled: false },
   };
 
   // Known channel aliases for legacy or alternate streaming formats
@@ -90,17 +89,34 @@
   var viewMode = 'separate';
 
   // ── Persistence Helpers ────────────────────────────────────────────────
+  // a blocked or corrupt localStorage is reported once (console, no toast) and the defaults are used
+  function storageWarn(where, e) {
+    if (typeof window !== 'undefined' && window.GSUI) window.GSUI.report(where, e, { toast: false, once: 'ts ' + where });
+    else if (typeof console !== 'undefined' && console.warn) console.warn('[gs] ' + where + ': ' + (e && e.message));
+  }
+
+  function storageGet(key) {
+    try {
+      return (typeof localStorage !== 'undefined' && localStorage.getItem) ? localStorage.getItem(key) : null;
+    } catch (e) { storageWarn('time series storage', e); return null; }
+  }
+
+  function storageSet(key, value) {
+    try {
+      if (typeof localStorage !== 'undefined' && localStorage.setItem) { localStorage.setItem(key, value); return true; }
+    } catch (e) { storageWarn('time series storage', e); }
+    return false;
+  }
+
   function loadSavedSelection() {
     if (selectedKeysCache) return selectedKeysCache;
     try {
-      if (typeof localStorage !== 'undefined' && localStorage.getItem) {
-        var raw = localStorage.getItem(STORAGE_KEY);
-        if (raw) {
-          selectedKeysCache = JSON.parse(raw);
-          return selectedKeysCache;
-        }
+      var raw = storageGet(STORAGE_KEY);
+      if (raw) {
+        selectedKeysCache = JSON.parse(raw);
+        return selectedKeysCache;
       }
-    } catch (e) {}
+    } catch (e) { storageWarn('saved selection', e); }
     // Defaults if nothing stored
     selectedKeysCache = {};
     Object.keys(DEFAULT_DEFS).forEach(function (k) {
@@ -118,11 +134,7 @@
         selectedKeysCache[k] = true;
       }
     });
-    try {
-      if (typeof localStorage !== 'undefined' && localStorage.setItem) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(selectedKeysCache));
-      }
-    } catch (e) {}
+    storageSet(STORAGE_KEY, JSON.stringify(selectedKeysCache));
   }
 
   // Initialize known variables with defaults
@@ -206,6 +218,29 @@
     return null;
   }
 
+  /* A key that joins mid-session gets a buffer padded with gaps (null = never
+   * received) up to the current sample count, so its index i stays the
+   * sample at sampleTimestamps[i]; an empty buffer would draw its first value
+   * at the oldest timestamp. */
+  function ensureVar(key, enabled) {
+    if (!knownVars[key]) {
+      var def = DEFAULT_DEFS[key];
+      knownVars[key] = {
+        key: key,
+        label: def ? def.label : key,
+        unit: def ? def.unit : '',
+        color: def ? def.color : COLOR_PALETTE[Object.keys(knownVars).length % COLOR_PALETTE.length],
+        enabled: !!enabled,
+        slot: null,
+      };
+    }
+    if (!ringBuffers[key]) {
+      ringBuffers[key] = [];
+      for (var i = 0; i < sampleTimestamps.length; i++) ringBuffers[key].push(null);
+    }
+    return knownVars[key];
+  }
+
   function discoverStreamingVariables(state) {
     if (!state || !state.streams) return false;
     var saved = loadSavedSelection();
@@ -227,17 +262,7 @@
         if (typeof rawVal === 'object' && rawVal !== null) continue;
 
         if (!knownVars[key]) {
-          var def = DEFAULT_DEFS[key];
-          var nextColor = COLOR_PALETTE[Object.keys(knownVars).length % COLOR_PALETTE.length];
-          knownVars[key] = {
-            key: key,
-            label: def ? def.label : key,
-            unit: def ? def.unit : '',
-            color: def ? def.color : nextColor,
-            enabled: saved[key] !== undefined ? Boolean(saved[key]) : false,
-            slot: slotId,
-          };
-          if (!ringBuffers[key]) ringBuffers[key] = [];
+          ensureVar(key, saved[key] !== undefined ? Boolean(saved[key]) : false).slot = slotId;
           newDiscovered = true;
         } else {
           knownVars[key].slot = slotId;
@@ -376,14 +401,14 @@
         var yPct = g / gridLines;
         var yPx = ROW_PAD_TOP + plotH * (1 - yPct);
         var gVal = vMin + vSpan * yPct;
-        svgRow += '<line x1="' + PAD.left + '" y1="' + yPx + '" x2="' + (CHART_W - PAD.right) + '" y2="' + yPx + '" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>';
-        svgRow += '<text x="' + (PAD.left - 6) + '" y="' + (yPx + 3) + '" text-anchor="end" font-size="8" fill="rgba(255,255,255,0.4)" font-family="Consolas,monospace">' + gVal.toFixed(2) + '</text>';
+        svgRow += '<line x1="' + PAD.left + '" y1="' + yPx + '" x2="' + (CHART_W - PAD.right) + '" y2="' + yPx + '" style="stroke:var(--gs-grid)" stroke-width="1"/>';
+        svgRow += '<text x="' + (PAD.left - 6) + '" y="' + (yPx + 3) + '" text-anchor="end" font-size="8" style="fill:var(--gs-text-muted)" font-family="Consolas,monospace">' + gVal.toFixed(2) + '</text>';
       }
 
       // Zero reference
       if (vMin < 0 && vMax > 0) {
         var zeroY = ROW_PAD_TOP + plotH * (1 - (0 - vMin) / vSpan);
-        svgRow += '<line x1="' + PAD.left + '" y1="' + zeroY + '" x2="' + (CHART_W - PAD.right) + '" y2="' + zeroY + '" stroke="rgba(255,255,255,0.22)" stroke-width="1" stroke-dasharray="4,3"/>';
+        svgRow += '<line x1="' + PAD.left + '" y1="' + zeroY + '" x2="' + (CHART_W - PAD.right) + '" y2="' + zeroY + '" style="stroke:var(--gs-grid-strong)" stroke-width="1" stroke-dasharray="4,3"/>';
       }
 
       // Trace segments
@@ -407,16 +432,16 @@
 
       segments.forEach(function (pts) {
         if (pts.length >= 2) {
-          svgRow += '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' + meta.color + '" stroke-width="1.8" opacity="0.9"/>';
+          svgRow += '<polyline points="' + pts.join(' ') + '" fill="none" style="stroke:' + meta.color + '" stroke-width="1.8" opacity="0.9"/>';
         } else if (pts.length === 1) {
           var coord = pts[0].split(',');
-          svgRow += '<circle cx="' + coord[0] + '" cy="' + coord[1] + '" r="2" fill="' + meta.color + '"/>';
+          svgRow += '<circle cx="' + coord[0] + '" cy="' + coord[1] + '" r="2" style="fill:' + meta.color + '"/>';
         }
       });
 
       // Latest marker
       if (lastPt) {
-        svgRow += '<circle cx="' + lastPt.x.toFixed(1) + '" cy="' + lastPt.y.toFixed(1) + '" r="3.5" fill="' + meta.color + '"/>';
+        svgRow += '<circle cx="' + lastPt.x.toFixed(1) + '" cy="' + lastPt.y.toFixed(1) + '" r="3.5" style="fill:' + meta.color + '"/>';
       }
 
       /* No zoom-region overlay here. In separate mode every row is already
@@ -449,14 +474,14 @@
 
     if (rangeInfo.total === 0) {
       svg.innerHTML = '<text x="' + (CHART_W / 2) + '" y="' + (CHART_H / 2) +
-        '" text-anchor="middle" fill="rgba(136,136,170,0.6)" font-size="12">Waiting for telemetry data…</text>';
+        '" text-anchor="middle" style="fill:var(--gs-text-muted)" font-size="12">Waiting for telemetry data…</text>';
       return;
     }
 
     var enabledKeys = Object.keys(knownVars).filter(function (k) { return knownVars[k].enabled; });
     if (enabledKeys.length === 0) {
       svg.innerHTML = '<text x="' + (CHART_W / 2) + '" y="' + (CHART_H / 2) +
-        '" text-anchor="middle" fill="rgba(136,136,170,0.6)" font-size="12">No variables selected — open Variables menu to choose</text>';
+        '" text-anchor="middle" style="fill:var(--gs-text-muted)" font-size="12">No variables selected — open Variables menu to choose</text>';
       return;
     }
 
@@ -474,7 +499,7 @@
 
     if (allValues.length === 0) {
       svg.innerHTML = '<text x="' + (CHART_W / 2) + '" y="' + (CHART_H / 2) +
-        '" text-anchor="middle" fill="rgba(136,136,170,0.6)" font-size="12">Waiting for data on selected variables…</text>';
+        '" text-anchor="middle" style="fill:var(--gs-text-muted)" font-size="12">Waiting for data on selected variables…</text>';
       return;
     }
 
@@ -495,9 +520,9 @@
       var yPx = PAD.top + innerH * (1 - yPct);
       var val = minY + ySpan * yPct;
       svgContent += '<line x1="' + PAD.left + '" y1="' + yPx + '" x2="' +
-        (CHART_W - PAD.right) + '" y2="' + yPx + '" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>';
+        (CHART_W - PAD.right) + '" y2="' + yPx + '" style="stroke:var(--gs-grid)" stroke-width="1"/>';
       svgContent += '<text x="' + (PAD.left - 6) + '" y="' + (yPx + 3) +
-        '" text-anchor="end" font-size="9" fill="rgba(255,255,255,0.4)" font-family="Consolas,monospace">' +
+        '" text-anchor="end" font-size="9" style="fill:var(--gs-text-muted)" font-family="Consolas,monospace">' +
         val.toFixed(2) + '</text>';
     }
 
@@ -505,7 +530,7 @@
     if (minY < 0 && maxY > 0) {
       var zeroY = PAD.top + innerH * (1 - (0 - minY) / ySpan);
       svgContent += '<line x1="' + PAD.left + '" y1="' + zeroY + '" x2="' +
-        (CHART_W - PAD.right) + '" y2="' + zeroY + '" stroke="rgba(255,255,255,0.22)" stroke-width="1" stroke-dasharray="4,3"/>';
+        (CHART_W - PAD.right) + '" y2="' + zeroY + '" style="stroke:var(--gs-grid-strong)" stroke-width="1" stroke-dasharray="4,3"/>';
     }
 
     // Plot traces for each enabled variable
@@ -540,18 +565,18 @@
       // Draw non-synthetic polyline segments (honest gap handling)
       segments.forEach(function (pts) {
         if (pts.length >= 2) {
-          svgContent += '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' +
+          svgContent += '<polyline points="' + pts.join(' ') + '" fill="none" style="stroke:' +
             meta.color + '" stroke-width="1.8" opacity="0.9"/>';
         } else if (pts.length === 1) {
           var coord = pts[0].split(',');
-          svgContent += '<circle cx="' + coord[0] + '" cy="' + coord[1] + '" r="2" fill="' + meta.color + '"/>';
+          svgContent += '<circle cx="' + coord[0] + '" cy="' + coord[1] + '" r="2" style="fill:' + meta.color + '"/>';
         }
       });
 
       // Marker on latest visible value
       if (lastValidPt) {
         svgContent += '<circle cx="' + lastValidPt.x.toFixed(1) + '" cy="' + lastValidPt.y.toFixed(1) +
-          '" r="3.5" fill="' + meta.color + '"/>';
+          '" r="3.5" style="fill:' + meta.color + '"/>';
       }
     });
 
@@ -571,14 +596,14 @@
         timeText = '#' + sampleIdx;
       }
       svgContent += '<text x="' + xPx.toFixed(1) + '" y="' + (CHART_H - 8) +
-        '" text-anchor="middle" font-size="9" fill="rgba(255,255,255,0.4)" font-family="Consolas,monospace">' +
+        '" text-anchor="middle" font-size="9" style="fill:var(--gs-text-muted)" font-family="Consolas,monospace">' +
         timeText + '</text>';
     }
 
     // Zoom Indicator Header
     if (zoomWindow) {
-      svgContent += '<rect x="' + PAD.left + '" y="4" width="' + innerW + '" height="18" fill="rgba(78,204,163,0.15)" rx="3"/>';
-      svgContent += '<text x="' + (CHART_W / 2) + '" y="16" text-anchor="middle" font-size="10" fill="#4ecca3" font-family="Segoe UI,sans-serif" font-weight="600">' +
+      svgContent += '<rect x="' + PAD.left + '" y="4" width="' + innerW + '" height="18" style="fill:var(--gs-ok-bg)" rx="3"/>';
+      svgContent += '<text x="' + (CHART_W / 2) + '" y="16" text-anchor="middle" font-size="10" style="fill:var(--gs-ok)" font-family="Segoe UI,sans-serif" font-weight="600">' +
         'Zoomed Region: ' + (rangeInfo.end - rangeInfo.start + 1) + ' samples (' +
         ((sampleTimestamps[rangeInfo.end] - sampleTimestamps[rangeInfo.start]) / 1000).toFixed(2) + 's)' +
         '</text>';
@@ -591,7 +616,7 @@
       var boxW = rightX - leftX;
       if (boxW > 2) {
         svgContent += '<rect x="' + leftX + '" y="' + PAD.top + '" width="' + boxW + '" height="' + innerH +
-          '" fill="rgba(78,204,163,0.25)" stroke="#4ecca3" stroke-width="1.5" stroke-dasharray="4,3"/>';
+          '" style="fill:var(--gs-ok-bg);stroke:var(--gs-ok)" stroke-width="1.5" stroke-dasharray="4,3"/>';
       }
     }
 
@@ -887,57 +912,60 @@
     return [
       '<style>',
       '.ts-panel-root { display:flex;flex-direction:column;gap:10px;font-family:"Segoe UI",system-ui,sans-serif;color:var(--text);position:relative; }',
-      '.ts-panel-root.is-paused { border:3px solid #f5a623 !important;border-radius:6px;box-shadow:0 0 22px rgba(245,166,35,0.45) !important; }',
-      '.ts-paused-banner { background:repeating-linear-gradient(-45deg,#2a1f00,#2a1f00 12px,#4a3600 12px,#4a3600 24px);border:2px solid #f5a623;border-radius:4px;color:#ffcc00;font-weight:700;font-size:12px;letter-spacing:0.04em;padding:8px 14px;display:flex;justify-content:space-between;align-items:center;animation:ts-pulse 2s infinite ease-in-out; }',
-      '@keyframes ts-pulse { 0%,100% { box-shadow:0 0 10px rgba(245,166,35,0.5); } 50% { box-shadow:0 0 25px rgba(245,166,35,0.9); } }',
+      '.ts-panel-root.is-paused { border:3px solid var(--gs-warn) !important;border-radius:6px;box-shadow:0 0 22px var(--gs-warn-bg) !important; }',
+      '.ts-paused-banner { background:repeating-linear-gradient(-45deg,var(--gs-warn-bg),var(--gs-warn-bg) 12px,transparent 12px,transparent 24px);border:2px solid var(--gs-warn);border-radius:4px;color:var(--gs-warn);font-weight:700;font-size:12px;letter-spacing:0.04em;padding:8px 14px;display:flex;justify-content:space-between;align-items:center;animation:ts-pulse 2s infinite ease-in-out; }',
+      '@keyframes ts-pulse { 0%,100% { box-shadow:0 0 10px var(--gs-warn-bg); } 50% { box-shadow:0 0 25px var(--gs-warn); } }',
       '.ts-paused-title { display:flex;align-items:center;gap:6px; }',
-      '.ts-paused-age { font-family:Consolas,monospace;background:rgba(0,0,0,0.5);padding:2px 8px;border-radius:3px; }',
+      '.ts-paused-age { font-family:Consolas,monospace;background:var(--gs-bg);padding:2px 8px;border-radius:3px; }',
       '.ts-top-bar { display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;padding:4px 0; }',
       '.ts-bar-section { display:flex;align-items:center;gap:6px;flex-wrap:wrap; }',
-      '.ts-btn { background:var(--accent,#0f3460);color:var(--text,#e8e8e8);border:1px solid var(--border,#2a2a4a);border-radius:4px;padding:4px 10px;font-size:12px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:4px;transition:all 0.15s; }',
+      '.ts-btn { background:var(--accent);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 10px;font-size:12px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:4px;transition:all 0.15s; }',
       '.ts-btn:hover { filter:brightness(1.2); }',
-      '.ts-btn-pause { background:#d35400;color:#fff;border-color:#e67e22; }',
-      '.ts-btn-resume { background:#27ae60;color:#fff;border-color:#2ecc71;font-weight:700;animation:ts-pulse-green 1.5s infinite; }',
-      '@keyframes ts-pulse-green { 0%,100% { box-shadow:0 0 6px rgba(46,204,113,0.4); } 50% { box-shadow:0 0 16px rgba(46,204,113,0.85); } }',
+      '.ts-btn-pause { background:var(--gs-warn);color:var(--gs-text-on-status);border-color:var(--gs-warn); }',
+      '.ts-btn-resume { background:var(--gs-ok);color:var(--gs-text-on-status);border-color:var(--gs-ok);font-weight:700;animation:ts-pulse-green 1.5s infinite; }',
+      '@keyframes ts-pulse-green { 0%,100% { box-shadow:0 0 6px var(--gs-ok-bg); } 50% { box-shadow:0 0 16px var(--gs-ok); } }',
       '.ts-btn-step { font-family:Consolas,monospace;padding:3px 7px;font-size:11px; }',
       '.ts-live-badge { font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;letter-spacing:0.04em; }',
-      '.ts-live-badge.live { background:rgba(78,204,163,0.18);color:#4ecca3;border:1px solid rgba(78,204,163,0.4); }',
-      '.ts-live-badge.paused { background:rgba(245,166,35,0.22);color:#f5a623;border:1px solid #f5a623; }',
+      '.ts-live-badge.live { background:var(--gs-ok-bg);color:var(--gs-ok);border:1px solid var(--gs-ok); }',
+      '.ts-live-badge.paused { background:var(--gs-warn-bg);color:var(--gs-warn);border:1px solid var(--gs-warn); }',
       '.ts-dropdown-wrap { position:relative; }',
-      '.ts-picker-menu { position:absolute;right:0;top:100%;z-index:100;background:var(--card,#16213e);border:1px solid var(--border,#2a2a4a);border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,0.6);width:320px;max-height:360px;display:flex;flex-direction:column;margin-top:4px; }',
-      '.ts-picker-header { padding:8px;border-bottom:1px solid var(--border,#2a2a4a);display:flex;flex-direction:column;gap:6px; }',
-      '.ts-picker-search { width:100%;box-sizing:border-box;background:rgba(0,0,0,0.3);border:1px solid var(--border,#2a2a4a);color:var(--text);padding:4px 8px;border-radius:4px;font-size:11px; }',
+      '.ts-picker-menu { position:absolute;right:0;top:100%;z-index:100;background:var(--card);border:1px solid var(--border);border-radius:6px;box-shadow:var(--gs-shadow);width:320px;max-height:360px;display:flex;flex-direction:column;margin-top:4px; }',
+      '.ts-picker-header { padding:8px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:6px; }',
+      '.ts-picker-search { width:100%;box-sizing:border-box;background:var(--gs-bg);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px;font-size:11px; }',
       '.ts-picker-actions { display:flex;gap:6px;justify-content:flex-end; }',
-      '.ts-link-btn { background:none;border:none;color:#4a9eff;font-size:10px;cursor:pointer;padding:0;text-decoration:underline; }',
+      '.ts-link-btn { background:none;border:none;color:var(--gs-info);font-size:10px;cursor:pointer;padding:0;text-decoration:underline; }',
       '.ts-picker-list { overflow-y:auto;max-height:260px;padding:4px 0;display:flex;flex-direction:column; }',
       '.ts-picker-item { display:flex;align-items:center;gap:6px;padding:5px 8px;cursor:pointer;font-size:11px; }',
-      '.ts-picker-item:hover { background:rgba(255,255,255,0.06); }',
+      '.ts-picker-item:hover { background:var(--gs-hover-bg); }',
       '.ts-swatch { width:10px;height:10px;border-radius:2px;flex-shrink:0; }',
       '.ts-picker-label { font-weight:600;min-width:70px; }',
       '.ts-picker-key { color:var(--muted);font-size:10px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }',
       '.ts-picker-cur { font-family:Consolas,monospace;color:var(--muted);font-size:10px; }',
       '.ts-scrubber-bar { display:flex;align-items:center;gap:8px;padding:2px 0; }',
-      '.ts-scrubber { flex:1;accent-color:#f5a623;cursor:pointer;height:4px; }',
+      '.ts-scrubber { flex:1;accent-color:var(--gs-warn);cursor:pointer;height:4px; }',
       '.ts-time-label { font-family:Consolas,monospace;font-size:10px;color:var(--muted);white-space:nowrap; }',
-      '.ts-chart-wrap { display:flex;flex-direction:column;gap:6px; }',
-      '.ts-svg { display:block;width:100%;max-width:' + CHART_W + 'px;background:rgba(0,0,0,0.25);border-radius:6px;cursor:crosshair;user-select:none; }',
+      '.ts-chart-wrap { display:flex;flex-direction:column;gap:6px;border-radius:6px; }',
+      /* drop target for telemetry keys dragged from the Telemetry Explorer (WP-32 D5) */
+      '.ts-chart-wrap.ts-drop-active { outline:2px dashed var(--gs-info);outline-offset:2px;background:var(--gs-info-bg); }',
+      '.ts-svg { display:block;width:100%;max-width:' + CHART_W + 'px;background:var(--gs-inset-bg);border-radius:6px;cursor:crosshair;user-select:none; }',
       '.ts-legend { display:flex;flex-wrap:wrap;gap:12px;padding:4px 2px; }',
       '.ts-legend-item { display:flex;align-items:center;gap:6px; }',
       '.ts-legend-dot { width:10px;height:3px;border-radius:2px; }',
       '.ts-legend-name { font-size:11px;font-weight:600;color:var(--text); }',
       '.ts-legend-val { font-size:11px;font-family:Consolas,monospace;color:var(--muted); }',
       /* Small multiples: one row per variable with independent Y scale */
-      '.ts-mode-toggle { display:inline-flex;border:1px solid var(--border,#2a2a4a);border-radius:4px;overflow:hidden; }',
-      '.ts-mode-btn { background:var(--card,#16213e);color:var(--text);border:none;padding:3px 10px;font-size:11px;cursor:pointer;transition:all 0.15s; }',
+      '.ts-mode-toggle { display:inline-flex;border:1px solid var(--border);border-radius:4px;overflow:hidden; }',
+      '.ts-mode-btn { background:var(--card);color:var(--text);border:none;padding:3px 10px;font-size:11px;cursor:pointer;transition:all 0.15s; }',
       '.ts-mode-btn:hover { filter:brightness(1.2); }',
-      '.ts-mode-btn.ts-active { background:var(--accent,#0f3460);color:#fff;font-weight:700; }',
+      '.ts-mode-btn.ts-active { background:var(--accent);color:var(--text);font-weight:700; }',
       '.ts-variable-rows { display:flex;flex-direction:column;gap:2px; }',
-      '.ts-vrow { display:flex;flex-direction:column;background:rgba(0,0,0,0.15);border-radius:4px;overflow:hidden; }',
+      '.ts-vrow { display:flex;flex-direction:column;background:var(--gs-inset-bg);border-radius:4px;overflow:hidden; }',
       '.ts-vrow-header { display:flex;align-items:baseline;gap:8px;padding:3px 8px; }',
       '.ts-vrow-label { font-size:11px;font-weight:700; }',
       '.ts-vrow-value { font-size:11px;font-family:Consolas,monospace;color:var(--muted); }',
       '.ts-vrow-svg { display:block;width:100%; }',
-      '.ts-vrow-xaxis { padding:0 8px 0 56px;font-size:9px;color:rgba(255,255,255,0.4);font-family:Consolas,monospace;min-height:16px; }',
+      '.ts-vrow-xaxis { padding:0 8px 0 56px;font-size:9px;color:var(--gs-text-muted);font-family:Consolas,monospace;min-height:16px; }',
+      '.ts-layout-name { width:140px; }',
       '</style>',
 
       '<div class="ts-panel-root" id="ts-panel-root">',
@@ -987,14 +1015,21 @@
       '    <span class="ts-time-label" id="ts-time-end">Live (0.0s)</span>',
       '  </div>',
 
-      '  <div class="ts-chart-wrap">',
+      '  <div class="ts-chart-wrap" id="ts-chart-wrap">',
       '    <div class="ts-bar-section">',
       '      <span style="font-size:11px;color:var(--muted);margin-right:4px;">View:</span>',
       '      <span class="ts-mode-toggle">',
       '        <button id="ts-mode-overlay" class="ts-mode-btn" type="button" title="Overlay: all variables on shared Y axis">Overlay</button>',
       '        <button id="ts-mode-separate" class="ts-mode-btn ts-active" type="button" title="Separate: each variable on its own Y axis">Separate</button>',
       '      </span>',
+      '      <span class="gs-label">Layout</span>',
+      '      <select id="ts-layout-select" class="gs-input" title="Restore a saved layout (this browser only)"></select>',
+      '      <input id="ts-layout-name" class="gs-input ts-layout-name" type="text" maxlength="' + LAYOUT_NAME_MAX + '" placeholder="layout name"/>',
+      '      <button id="ts-layout-save" class="ts-btn" type="button" title="Save the plotted keys and the view mode under this name, in this browser">Save</button>',
+      '      <button id="ts-layout-delete" class="ts-btn" type="button" title="Delete the selected layout (click twice)">Delete</button>',
+      '      <span id="ts-layout-msg" class="gs-label" role="status"></span>',
       '    </div>',
+      '    <div class="gs-label">Drop a key here from the Telemetry Explorer to plot it.</div>',
       '    <div id="ts-variable-rows" class="ts-variable-rows"></div>',
       '    <div id="ts-vrow-xaxis" class="ts-vrow-xaxis" style="display:none;"></div>',
       '    <svg id="ts-chart-svg" class="ts-svg" style="display:none;" viewBox="0 0 ' + CHART_W + ' ' + CHART_H + '"></svg>',
@@ -1002,6 +1037,173 @@
       '  </div>',
       '</div>'
     ].join('');
+  }
+
+  // ── View mode ──────────────────────────────────────────────────────────
+  function setViewMode(mode) {
+    viewMode = mode === 'overlay' ? 'overlay' : 'separate';
+    var overlay = viewMode === 'overlay';
+    var btnOverlay = q('ts-mode-overlay');
+    var btnSeparate = q('ts-mode-separate');
+    if (btnOverlay) btnOverlay.className = 'ts-mode-btn' + (overlay ? ' ts-active' : '');
+    if (btnSeparate) btnSeparate.className = 'ts-mode-btn' + (overlay ? '' : ' ts-active');
+    var overlaySvg = q('ts-chart-svg');
+    if (overlaySvg) overlaySvg.style.display = overlay ? 'block' : 'none';
+    /* '' restores the stylesheet rule, which is display:flex/column. Setting
+     * 'block' here would leave the rows stacked without the 2px gap and
+     * silently override .ts-variable-rows for the rest of the session.
+     * renderChart() re-shows the shared x-axis, which overlay mode hid. */
+    var rowsEl = q('ts-variable-rows');
+    if (rowsEl) rowsEl.style.display = overlay ? 'none' : '';
+    var xaxisEl = q('ts-vrow-xaxis');
+    if (xaxisEl && overlay) xaxisEl.style.display = 'none';
+    renderChart();
+  }
+
+  function refreshAll() {
+    updatePickerUI();
+    renderChart();
+    updateLegend();
+  }
+
+  function showLayoutMsg(text, ok) {
+    var el = q('ts-layout-msg');
+    if (!el) return;
+    el.textContent = text;
+    el.className = ok ? 'gs-label' : 'gs-reason';
+  }
+
+  // ── Drag a telemetry key onto the plot (WP-32 D5) ──────────────────────
+  // addKey(key) -> 'added' | 'already' | 'invalid'. A key that is not streaming
+  // yet is plotted as a gap ("no data") until it arrives; nothing is invented.
+  function addKey(key) {
+    if (!key) return 'invalid';
+    var v = ensureVar(key, false);
+    if (v.enabled) return 'already';
+    v.enabled = true;
+    saveSelection();
+    refreshAll();
+    return 'added';
+  }
+
+  function bindDrop() {
+    var wrap = q('ts-chart-wrap');
+    var UI = typeof window !== 'undefined' ? window.GSUI : null;
+    if (!wrap || !wrap.addEventListener || !UI) return;
+    var depth = 0;   // dragenter / dragleave also fire over child elements
+    function setActive(on) { wrap.className = 'ts-chart-wrap' + (on ? ' ts-drop-active' : ''); }
+    wrap.addEventListener('dragenter', function (e) { if (UI.carriesKey(e)) { depth++; setActive(true); } });
+    wrap.addEventListener('dragleave', function () { depth = Math.max(0, depth - 1); if (!depth) setActive(false); });
+    wrap.addEventListener('dragover', function (e) {
+      if (!UI.carriesKey(e)) return;
+      e.preventDefault();   // allows the drop
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    });
+    wrap.addEventListener('drop', function (e) {
+      depth = 0;
+      setActive(false);
+      if (e.preventDefault) e.preventDefault();
+      var key = UI.droppedKey(e);
+      var r = addKey(key);
+      showLayoutMsg(r === 'added' ? 'plotting ' + key : (r === 'already' ? key + ' is already plotted' :
+        'not a telemetry key: drag a row from the Telemetry Explorer'), r !== 'invalid');
+    });
+  }
+
+  // ── Named layouts (WP-32 D5): plotted keys + view mode, per viewer ─────
+  // Stored in this browser's localStorage under LAYOUTS_KEY; nothing goes to
+  // the service, so each operator machine keeps its own set.
+  function readLayouts() {
+    var raw = storageGet(LAYOUTS_KEY);
+    if (!raw) return {};
+    try {
+      var all = JSON.parse(raw);
+      return all && typeof all === 'object' && !Array.isArray(all) ? all : {};
+    } catch (e) { storageWarn('saved layouts', e); return {}; }
+  }
+
+  function enabledKeys() {
+    return Object.keys(knownVars).filter(function (k) { return knownVars[k].enabled; }).sort();
+  }
+
+  // saveLayout / restoreLayout / deleteLayout -> { ok, msg }
+  function saveLayout(name) {
+    name = String(name || '').trim();
+    if (!name) return { ok: false, msg: 'type a layout name first' };
+    if (name.length > LAYOUT_NAME_MAX) return { ok: false, msg: 'name longer than ' + LAYOUT_NAME_MAX + ' characters' };
+    var keys = enabledKeys();
+    if (!keys.length) return { ok: false, msg: 'nothing plotted: add a key first' };
+    var all = readLayouts();
+    var existed = Object.prototype.hasOwnProperty.call(all, name);
+    all[name] = { keys: keys, viewMode: viewMode, savedAt: new Date().toISOString() };
+    if (!storageSet(LAYOUTS_KEY, JSON.stringify(all))) return { ok: false, msg: 'browser storage refused the layout' };
+    return { ok: true, msg: (existed ? 'updated "' : 'saved "') + name + '": ' + keys.length + ' keys, ' + viewMode };
+  }
+
+  function restoreLayout(name) {
+    var all = readLayouts();
+    var lay = Object.prototype.hasOwnProperty.call(all, name) ? all[name] : null;
+    if (!lay || !Array.isArray(lay.keys)) return { ok: false, msg: 'no layout named "' + name + '"' };
+    var want = lay.keys.filter(function (k) { return typeof k === 'string' && k.length > 0 && k.length <= 128; });
+    Object.keys(knownVars).forEach(function (k) { knownVars[k].enabled = false; });
+    want.forEach(function (k) { ensureVar(k, true).enabled = true; });
+    var waiting = want.filter(function (k) { return knownVars[k].slot === null; }).length;
+    saveSelection();
+    setViewMode(lay.viewMode);
+    refreshAll();
+    return { ok: true, msg: 'restored "' + name + '": ' + want.length + ' keys' +
+      (waiting ? ', ' + waiting + ' not streaming yet (shown as no data)' : '') };
+  }
+
+  function deleteLayout(name) {
+    var all = readLayouts();
+    if (!Object.prototype.hasOwnProperty.call(all, name)) return { ok: false, msg: 'no layout named "' + name + '"' };
+    delete all[name];
+    if (!storageSet(LAYOUTS_KEY, JSON.stringify(all))) return { ok: false, msg: 'browser storage refused the change' };
+    return { ok: true, msg: 'deleted "' + name + '"' };
+  }
+
+  function renderLayoutSelect(selected) {
+    var sel = q('ts-layout-select');
+    if (!sel) return;
+    var names = Object.keys(readLayouts()).sort();
+    var esc = function (s) {
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    };
+    sel.innerHTML = '<option value="">' + (names.length ? '-- ' + names.length + ' saved layout(s) --' : '-- no saved layouts --') +
+      '</option>' + names.map(function (n) { return '<option value="' + esc(n) + '">' + esc(n) + '</option>'; }).join('');
+    sel.value = selected && names.indexOf(selected) >= 0 ? selected : '';
+  }
+
+  function bindLayouts() {
+    renderLayoutSelect('');
+    var sel = q('ts-layout-select');
+    var nameEl = q('ts-layout-name');
+    var saveBtn = q('ts-layout-save');
+    var delBtn = q('ts-layout-delete');
+    if (saveBtn) saveBtn.addEventListener('click', function () {
+      var name = nameEl ? nameEl.value : '';
+      var r = saveLayout(name);
+      showLayoutMsg(r.msg, r.ok);
+      if (r.ok) renderLayoutSelect(String(name).trim());
+    });
+    if (sel) sel.addEventListener('change', function () {
+      if (!sel.value) return;
+      var r = restoreLayout(sel.value);
+      if (nameEl && r.ok) nameEl.value = sel.value;
+      showLayoutMsg(r.msg, r.ok);
+    });
+    if (delBtn) delBtn.addEventListener('click', function () {
+      var name = sel ? sel.value : '';
+      if (!name) { showLayoutMsg('pick a saved layout to delete', false); return; }
+      // deleting loses the operator's saved set: second click inside 5 s confirms
+      if (window.GSUI && !window.GSUI.confirmClick(delBtn, { armedLabel: 'Delete "' + name + '"?' })) return;
+      var r = deleteLayout(name);
+      showLayoutMsg(r.msg, r.ok);
+      renderLayoutSelect('');
+    });
   }
 
   // ── Event Bindings ─────────────────────────────────────────────────────
@@ -1053,34 +1255,12 @@
     // Mode Toggle: Separate vs Overlay
     var btnOverlay = q('ts-mode-overlay');
     var btnSeparate = q('ts-mode-separate');
-    if (btnOverlay && btnSeparate) {
-      btnOverlay.addEventListener('click', function () {
-        viewMode = 'overlay';
-        btnOverlay.className = 'ts-mode-btn ts-active';
-        btnSeparate.className = 'ts-mode-btn';
-        var overlaySvg = q('ts-chart-svg');
-        if (overlaySvg) overlaySvg.style.display = 'block';
-        var rowsEl = q('ts-variable-rows');
-        if (rowsEl) rowsEl.style.display = 'none';
-        var xaxisEl = q('ts-vrow-xaxis');
-        if (xaxisEl) xaxisEl.style.display = 'none';
-        renderChart();
-      });
-      btnSeparate.addEventListener('click', function () {
-        viewMode = 'separate';
-        btnSeparate.className = 'ts-mode-btn ts-active';
-        btnOverlay.className = 'ts-mode-btn';
-        var overlaySvg = q('ts-chart-svg');
-        if (overlaySvg) overlaySvg.style.display = 'none';
-        /* '' restores the stylesheet rule, which is display:flex/column. Setting
-         * 'block' here would leave the rows stacked without the 2px gap and
-         * silently override .ts-variable-rows for the rest of the session.
-         * renderChart() re-shows the shared x-axis, which overlay mode hid. */
-        var rowsEl = q('ts-variable-rows');
-        if (rowsEl) rowsEl.style.display = '';
-        renderChart();
-      });
-    }
+    if (btnOverlay) btnOverlay.addEventListener('click', function () { setViewMode('overlay'); });
+    if (btnSeparate) btnSeparate.addEventListener('click', function () { setViewMode('separate'); });
+
+    // Drop a telemetry key onto the plot; named layouts
+    bindDrop();
+    bindLayouts();
 
     // Dropdown Variable Picker Toggle
     var pickerToggle = q('ts-picker-toggle');
@@ -1266,5 +1446,13 @@
       description: 'Real-time multi-variable time-series plot'
     });
   }
+
+  // drag-to-plot and named layouts, for the offline harness
+  window.__gs_ui_state__ = window.__gs_ui_state__ || {};
+  window.__gs_ui_state__.timeSeries = {
+    addKey: addKey, saveLayout: saveLayout, restoreLayout: restoreLayout, deleteLayout: deleteLayout,
+    readLayouts: readLayouts, enabledKeys: enabledKeys, viewMode: function () { return viewMode; },
+    bufferLength: function (k) { return (ringBuffers[k] || []).length; }, sampleCount: function () { return sampleTimestamps.length; }
+  };
 
 })();

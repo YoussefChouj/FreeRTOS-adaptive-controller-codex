@@ -43,6 +43,16 @@ class El {
   removeEventListener(t, fn) { this.handlers[t] = (this.handlers[t] || []).filter((f) => f !== fn); }
   click() { if (this.disabled) return; (this.handlers.click || []).forEach((fn) => fn({ type: 'click', target: this })); }
   closest() { return this._closest; }
+  contains() { return false; }
+  get classList() {
+    const el = this;
+    const list = () => String(el.className || '').split(/\s+/).filter(Boolean);
+    return {
+      add(c) { const l = list(); if (!l.includes(c)) l.push(c); el.className = l.join(' '); },
+      remove(c) { el.className = list().filter((x) => x !== c).join(' '); },
+      contains(c) { return list().includes(c); },
+    };
+  }
   get innerHTML() { return this._html; }
   set innerHTML(h) { this._html = h; this.doc.scan(h); }
 }
@@ -73,11 +83,11 @@ function makeDoc() {
   return doc;
 }
 
-function makeEnv(extra) {
+function makeEnv(extra, sharedStore) {
   const clock = { now: 1e6, timers: [], intervals: {}, seq: 0 };
   const warns = [];
   const fetches = [];
-  const store = {};
+  const store = sharedStore || {};
   const doc = makeDoc();
   const ctx = {
     window: {}, document: doc, JSON, Math,
@@ -514,6 +524,102 @@ function voiceChecks() {
   pass('C3', 'no speech API or a refused utterance: the alarm still shows, the failure is reported once');
 }
 
+// ── E: drag a telemetry key onto a plot; named plot layouts (WP-32 D5) ───────────────────────────────
+function fire(el, type, ev) { (el.handlers[type] || []).forEach((fn) => fn(ev)); return ev; }
+function dragEvent(type, data, types) {
+  return { type, prevented: false, preventDefault() { this.prevented = true; },
+    dataTransfer: { types: types || Object.keys(data || {}), dropEffect: 'none', effectAllowed: 'all', _d: Object.assign({}, data),
+      getData(t) { return this._d[t] || ''; }, setData(t, v) { this._d[t] = v; this.types = Object.keys(this._d); } } };
+}
+
+function loadTimeSeries(env) {
+  let reg = null, render = null, stateCb = null;
+  env.ctx.window.__registerPlugin__ = (name, init, destroy) => { reg = { name, init, destroy }; };
+  env.ctx.requestAnimationFrame = (cb) => { cb(); return 1; };
+  vm.runInContext(read(path.join(PLUGINS, 'time-series-panel.js')), env.ctx, { filename: 'time-series-panel.js' });
+  reg.init({ registerPanel(n, fn) { render = fn; }, subscribe(cb) { stateCb = cb; } });
+  render(new El('div', env.doc));
+  return { feed: (s) => stateCb(s), TS: env.ctx.window.__gs_ui_state__.timeSeries, el: (id) => env.doc.getElementById(id) };
+}
+
+function plotChecks() {
+  const env = makeEnv();
+  const { UI, ctx, doc } = env;
+  ctx.window.__registerPlugin__ = () => {};
+  vm.runInContext(read(path.join(PLUGINS, 'telemetry-explorer-panel.js')), ctx, { filename: 'telemetry-explorer-panel.js' });
+  const src = read(path.join(PLUGINS, 'telemetry-explorer-panel.js'));
+  check(/<tr draggable="true" data-gs-key="' \+ escapeHtml\(e\.key\)/.test(src) && /addEventListener\('dragstart'/.test(src),
+    'explorer rows must be drag sources carrying the full key');
+  const row = new El('tr', doc); row.setAttribute('data-gs-key', 'mrac.pitch.theta[2]');
+  const ds = dragEvent('dragstart', {});
+  ctx.window.__gs_ui_state__.telemetryExplorer.onDragStart(Object.assign(ds, { target: row }));
+  check(ds.dataTransfer._d[UI.KEY_MIME] === 'mrac.pitch.theta[2]' && ds.dataTransfer._d['text/plain'] === 'mrac.pitch.theta[2]' &&
+        ds.dataTransfer.effectAllowed === 'copy', 'dragstart sets the key');
+  check(UI.droppedKey(dragEvent('drop', { 'text/plain': '<img src=x>' })) === '' &&
+        UI.droppedKey(dragEvent('drop', { 'text/plain': '  ekf.vel_x ' })) === 'ekf.vel_x' &&
+        !UI.carriesKey(dragEvent('dragover', {}, ['Files'])), 'drop accepts telemetry keys only');
+  pass('E1', 'Telemetry Explorer rows are drag sources (key in a private MIME type + text/plain); junk is refused on drop');
+
+  const ts = loadTimeSeries(env);
+  const sample = () => ({ streams: { 0: { values: { 'c.altitude': 2.0, 'ekf.vel_x': 1.5 } } } });
+  for (let i = 0; i < 3; i++) ts.feed(sample());
+  const wrap = ts.el('ts-chart-wrap');
+  check(wrap && wrap.handlers.drop, 'plot area must be a drop target');
+  const over = fire(wrap, 'dragover', dragEvent('dragover', {}, [UI.KEY_MIME]));
+  const foreign = fire(wrap, 'dragover', dragEvent('dragover', {}, ['Files']));
+  check(over.prevented && over.dataTransfer.dropEffect === 'copy' && !foreign.prevented, 'dragover accepts only telemetry keys');
+  fire(wrap, 'dragenter', dragEvent('dragenter', {}, [UI.KEY_MIME]));
+  check(/ts-drop-active/.test(wrap.className), 'drop zone highlights while a key is over it');
+  check(ts.TS.enabledKeys().indexOf('ekf.vel_x') < 0, 'ekf.vel_x starts unplotted');
+  fire(wrap, 'drop', dragEvent('drop', { [UI.KEY_MIME]: 'ekf.vel_x' }));
+  check(ts.TS.enabledKeys().indexOf('ekf.vel_x') >= 0 && !/ts-drop-active/.test(wrap.className) &&
+        ts.el('ts-layout-msg').textContent === 'plotting ekf.vel_x', 'drop plots the key: ' + ts.el('ts-layout-msg').textContent);
+  fire(wrap, 'drop', dragEvent('drop', { [UI.KEY_MIME]: 'ekf.vel_x' }));
+  check(ts.el('ts-layout-msg').textContent === 'ekf.vel_x is already plotted', 'second drop is a no-op');
+  fire(wrap, 'drop', dragEvent('drop', { 'text/plain': 'rm -rf /' }));
+  check(/not a telemetry key/.test(ts.el('ts-layout-msg').textContent) && ts.el('ts-layout-msg').className === 'gs-reason', 'junk drop refused');
+  fire(wrap, 'drop', dragEvent('drop', { [UI.KEY_MIME]: 'mrac.yaw.e' }));
+  check(ts.TS.bufferLength('mrac.yaw.e') === ts.TS.sampleCount() && ts.TS.sampleCount() === 3,
+    'a key that is not streaming yet is padded with gaps, aligned to the sample clock');
+  pass('E2', 'drop a key on the plot: plotted at once, highlighted while over, duplicates and junk refused, gaps never invented');
+
+  const save = ts.el('ts-layout-save'), name = ts.el('ts-layout-name'), sel = ts.el('ts-layout-select'), del = ts.el('ts-layout-delete');
+  name.value = '  '; save.click();
+  check(ts.el('ts-layout-msg').textContent === 'type a layout name first', 'empty name refused');
+  name.value = 'hover tuning'; save.click();
+  const stored = JSON.parse(env.store.gs_ts_layouts_v1);
+  const hoverKeys = ts.TS.enabledKeys();
+  check(JSON.stringify(stored['hover tuning'].keys) === JSON.stringify(hoverKeys) && stored['hover tuning'].viewMode === 'separate' &&
+        /^saved "hover tuning": \d+ keys, separate$/.test(ts.el('ts-layout-msg').textContent), 'save: ' + env.store.gs_ts_layouts_v1);
+  check(/<option value="hover tuning">hover tuning<\/option>/.test(sel.innerHTML) && sel.value === 'hover tuning', 'select lists the saved layout');
+  ts.el('ts-mode-overlay').click();
+  ts.TS.addKey('c.earth_x');
+  name.value = 'overlay set'; save.click();
+  check(JSON.parse(env.store.gs_ts_layouts_v1)['overlay set'].viewMode === 'overlay', 'view mode is part of the layout');
+  ts.el('ts-btn-preset-clear').click();
+  check(ts.TS.enabledKeys().length === 0, 'cleared');
+  sel.value = 'hover tuning'; fire(sel, 'change', { target: sel });
+  check(JSON.stringify(ts.TS.enabledKeys()) === JSON.stringify(hoverKeys) && ts.TS.viewMode() === 'separate' &&
+        new RegExp('^restored "hover tuning": ' + hoverKeys.length + ' keys, 5 not streaming yet \\(shown as no data\\)$')
+          .test(ts.el('ts-layout-msg').textContent),   // 4 unstreamed defaults + the dropped mrac.yaw.e
+    'restore: ' + ts.el('ts-layout-msg').textContent);
+  check(env.fetches.length === 0, 'layouts never touch the service');
+  del.click();
+  check(JSON.parse(env.store.gs_ts_layouts_v1)['hover tuning'] && /is-armed/.test(del.className), 'first Delete click only arms');
+  del.click();
+  check(!JSON.parse(env.store.gs_ts_layouts_v1)['hover tuning'] && ts.el('ts-layout-msg').textContent === 'deleted "hover tuning"',
+    'second click deletes');
+  pass('E3', 'named layouts: save (keys + view mode), list, restore, two-click delete; no request to the service');
+
+  const env2 = makeEnv(null, env.store);   // a page reload in the same browser
+  const ts2 = loadTimeSeries(env2);
+  check(Object.keys(ts2.TS.readLayouts()).join() === 'overlay set' && ts2.TS.restoreLayout('overlay set').ok &&
+        ts2.TS.viewMode() === 'overlay' && ts2.TS.enabledKeys().indexOf('c.earth_x') >= 0, 'layouts survive a reload');
+  env2.store.gs_ts_layouts_v1 = '{not json';
+  check(Object.keys(ts2.TS.readLayouts()).length === 0 && env2.warns.some((w) => /saved layouts/.test(w)), 'corrupt storage reported, not thrown');
+  pass('E4', 'per-viewer storage (this browser): layouts survive a reload; corrupt storage is reported and ignored');
+}
+
 // ── H: shell wiring ──────────────────────────────────────────────────────────────────────────────────
 function shellChecks() {
   const html = read(path.join(SHELL, 'index.html'));
@@ -566,6 +672,7 @@ function lintChecks() {
   await stripChecks();
   alarmChecks();
   voiceChecks();
+  plotChecks();
   shellChecks();
   lintChecks();
   console.log('ALL CHECKS PASSED');
