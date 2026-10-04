@@ -52,10 +52,14 @@ void Controller_Init(void)
 extern float Throttle_out, u_gyrox, u_gyroy, u_gyroz;
 extern volatile float g_yaw_mix_dir;
 
+#define MIX_PWM_MIN   2000.0f   /* BSP/pwm.h Motor_PWM_ZERO */
+#define MIX_PWM_MAX   4000.0f   /* BSP/pwm.h Motor_PWM_MAX */
+#define MIX_PER_MOTOR 0.25f     /* deficit per axis = mean over the 4 motors */
+
 static float motor_cut(float m)
 {
-    if (m > 4000.0f) return m - 4000.0f;
-    if (m < 2000.0f) return m - 2000.0f;
+    if (m > MIX_PWM_MAX) return m - MIX_PWM_MAX;
+    if (m < MIX_PWM_MIN) return m - MIX_PWM_MIN;
     return 0.0f;
 }
 
@@ -68,13 +72,13 @@ static void mrac_mixer_deficit(void)
     float d4 = motor_cut(Throttle_out + u_gyroy - u_gyrox + yz);
     float u;
 
-    u = 0.25f * (-d1 + d2 + d3 - d4) / mrac_config_roll.mrac_to_mixer;
+    u = MIX_PER_MOTOR * (-d1 + d2 + d3 - d4) / mrac_config_roll.mrac_to_mixer;
     mrac_state.roll.u_def = (u - u == 0.0f) ? u : 0.0f;
-    u = -0.25f * (-d1 + d2 - d3 + d4) / mrac_config_pitch.mrac_to_mixer;   /* u_gyroy = -pitch */
+    u = -MIX_PER_MOTOR * (-d1 + d2 - d3 + d4) / mrac_config_pitch.mrac_to_mixer;   /* u_gyroy = -pitch */
     mrac_state.pitch.u_def = (u - u == 0.0f) ? u : 0.0f;
-    u = 0.25f * g_yaw_mix_dir * (-d1 - d2 + d3 + d4) / mrac_config_yaw.mrac_to_mixer;
+    u = MIX_PER_MOTOR * g_yaw_mix_dir * (-d1 - d2 + d3 + d4) / mrac_config_yaw.mrac_to_mixer;
     mrac_state.yaw.u_def = (u - u == 0.0f) ? u : 0.0f;
-    u = 0.25f * (d1 + d2 + d3 + d4) / mrac_config_z.mrac_to_mixer;
+    u = MIX_PER_MOTOR * (d1 + d2 + d3 + d4) / mrac_config_z.mrac_to_mixer;
     mrac_state.z_rate.u_def = (u - u == 0.0f) ? u : 0.0f;
 }
 #endif

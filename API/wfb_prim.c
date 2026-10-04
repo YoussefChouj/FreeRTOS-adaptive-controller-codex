@@ -3,11 +3,11 @@
 #include <string.h>
 
 /* One row per config, tunables only; runtime fields start at 0.
-   hover_z_m        default hover height
-   xy_rate_mps      return leg XY rate
-   settle_radius_m  settle arrival distance
-   settle_time_s    settle hold time
-   return_timeout_s return phase timeout before forced descent */
+   @hover_z_m         m    [0.2, 2]     default hover height
+   @xy_rate_mps       m/s  [0.05, 2]    return leg XY rate
+   @settle_radius_m   m    [0.02, 1]    settle arrival distance
+   @settle_time_s     s    [0, 10]      settle hold time
+   @return_timeout_s  s    [1, 60]      return phase timeout before forced descent */
 #define WFB_PRIM_CFG_ROW(hover_z_m, xy_rate_mps, settle_radius_m, settle_time_s, return_timeout_s) \
     { hover_z_m, xy_rate_mps, settle_radius_m, settle_time_s, return_timeout_s }
 
@@ -138,10 +138,7 @@ void wfb_prim_step(wfb_prim_t *p, const wfb_prim_cfg_t *cfg, const wfb_prim_in_t
         } else {
             p->settle_t = 0.0f;
         }
-    } else if (p->state == WFB_PRIM_HOVER) {
-        out->x_sp_m = 0.0f;
-        out->y_sp_m = 0.0f;
-    } else if (p->state == WFB_PRIM_TRAJ) {
+    } else if (p->state == WFB_PRIM_HOVER || p->state == WFB_PRIM_TRAJ) {
         out->x_sp_m = 0.0f;
         out->y_sp_m = 0.0f;
     } else if (p->state == WFB_PRIM_RETURN) {

@@ -24,6 +24,9 @@ Not for a single small struct, or for values computed at runtime.
    above the table.
 3. **A column legend** in a comment above the macro: what each column is, its units,
    and interactions between columns (e.g. `|Ui| <= Ki*SumEMax as well as UiMax`).
+   One machine-readable line per macro parameter (WP-36): `@name unit [min, max] description`
+   (`-` for no unit). `python tools/row_meta.py` (part of `tools/check.sh`) fails on a missing or
+   misnamed line and on any row value outside [min, max]; `--json` lists every cell.
 4. **A label at the end of each row**: struct member name plus a plain-language name
    (`/* gyroxPID     roll rate  (inner) */`).
 5. **Group rows with blank lines** by cascade level or subsystem (angle, rate,
@@ -43,8 +46,10 @@ Not for a single small struct, or for values computed at runtime.
 
 ```c
 /* One row per axis, tunables only; runtime fields start at 0.
-   Kp Ki Kd   gains
-   UMax       limit on the total output */
+   @Kp    U/E         [0, 50]    proportional gain
+   @Ki    U/(E*tick)  [0, 5]     integral gain
+   @Kd    U*tick/E    [0, 50]    derivative gain
+   @UMax  U           [0, 1000]  limit on the total output */
 #define FOO_ROW(Kp, Ki, Kd, UMax) \
     { 0, 0, Kp, Ki, Kd, 0, 0, UMax }
 

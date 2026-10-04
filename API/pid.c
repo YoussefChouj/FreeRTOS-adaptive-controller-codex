@@ -2,11 +2,17 @@
 #include "math.h"
 
 /* One row per loop, tunables only; the runtime fields (Des FB Up Ui Ud E PreE SumE U) start at 0.
-   Kp Ki Kd           gains, U = Up + Ui + Ud
-   UMax               limit on the total output U
-   UpMax UiMax UdMax  limits on the P, I and D terms
-   SumEMax            limit on the summed error, so |Ui| <= Ki*SumEMax as well as UiMax
-   EMin               integral separation: error is summed only while |E| < EMin
+   E is the loop error and U its output, in the units of the loop (row label); a tick is one call.
+   Bounds are plausibility ranges (PROPOSED); CMD 0x01 accepts Kp Ki Kd in 0..200 only.
+   @Kp      U/E        [0, 500]   gains, U = Up + Ui + Ud
+   @Ki      U/(E*tick) [0, 200]   Ui = Ki*SumE
+   @Kd      U*tick/E   [0, 200]   Ud = Kd*(E - PreE)
+   @UMax    U          [0, 1000]  limit on the total output U
+   @UpMax   U          [0, 1000]  limit on the P term
+   @UiMax   U          [0, 1000]  limit on the I term
+   @UdMax   U          [0, 1000]  limit on the D term
+   @SumEMax E*tick     [0, 1e6]   limit on the summed error, so |Ui| <= Ki*SumEMax as well as UiMax
+   @EMin    E          [0, 1e4]   integral separation: error is summed only while |E| < EMin
    Change history per loop is below the table. */
 #define PID_ROW(Kp, Ki, Kd, UMax, UpMax, UiMax, UdMax, SumEMax, EMin) \
     { 0, 0, Kp, Ki, Kd, 0, 0, 0, 0, 0, 0, 0, UMax, UpMax, UiMax, UdMax, SumEMax, EMin }
@@ -78,8 +84,8 @@ CtrlerTypeDef Ctrler={
    0x01 axes and opens a lease; each later 0x01 write renews it. No 0x01 write for lease_ms, or the drone leaving the
    air, restores the snapshot and closes the lease, so a candidate left by a lost link cannot outlive the link.
    On the ground the lease is off: gains written there (a verify flight's) stay.
-   enable    1 = on, 0 = off (CMD 0x01 behaves as before)
-   lease_ms  renewal deadline, ms; the GS re-sends the active gains within it */
+   @enable   -   [0, 1]          1 = on, 0 = off (CMD 0x01 behaves as before)
+   @lease_ms ms  [100, 60000]    renewal deadline; the GS re-sends the active gains within it */
 #define GAIN_LEASE_ROW(enable, lease_ms) { (enable), (lease_ms) }
 static const struct { uint8_t enable; uint32_t lease_ms; } s_gain_lease_cfg = GAIN_LEASE_ROW(0, 2000);
 
@@ -117,33 +123,55 @@ void PID_GainLeaseTick(uint32_t now_ms, uint8_t airborne)
 }                  
 
 /******���ַ��롢�����޷���P I D ����޷���������޷�***********************/
-#define PID_IS_NONFINITE(x) (((x) != (x)) || ((x) > 1e12f) || ((x) < -1e12f))
+#define PID_FINITE_LIMIT      1e12f    /* |x| above this counts as non-finite; no loop signal comes near it */
+#define PID_IS_NONFINITE(x) (((x) != (x)) || ((x) > PID_FINITE_LIMIT) || ((x) < -PID_FINITE_LIMIT))
+#define PID_YAW_TURN_DEG      360.0f   /* yaw error is folded into one turn ... */
+#define PID_YAW_HALF_TURN_DEG 180.0f   /* ... centred on 0: |E| <= 180 */
+
+/* NaN guards. A non-finite input or state zeroes the loop for this tick instead of reaching the next
+   stage or the mixer; the next finite tick starts from a clean integrator. */
+static void PID_Zero(PIDTypeDef *pPID)
+{
+	pPID->SumE = 0.0f;
+	pPID->PreE = 0.0f;
+	pPID->E    = 0.0f;
+	pPID->Up   = 0.0f;
+	pPID->Ui   = 0.0f;
+	pPID->Ud   = 0.0f;
+	pPID->U    = 0.0f;
+}
+
+/* Loops that form E themselves: 1 (loop zeroed) if E, SumE or PreE is non-finite. */
+static int PID_BadState(PIDTypeDef *pPID)
+{
+	if (!PID_IS_NONFINITE(pPID->E) && !PID_IS_NONFINITE(pPID->SumE) && !PID_IS_NONFINITE(pPID->PreE)) return 0;
+	PID_Zero(pPID);
+	return 1;
+}
+
+/* Output: a non-finite U or SumE leaves U and the integrator at 0. */
+static void PID_GuardOut(PIDTypeDef *pPID)
+{
+	if (PID_IS_NONFINITE(pPID->U) || PID_IS_NONFINITE(pPID->SumE))
+	{
+		pPID->SumE = 0.0f;
+		pPID->U    = 0.0f;
+	}
+}
 
 void ComputePID(PIDTypeDef *pPID)
 {
 	if (PID_IS_NONFINITE(pPID->Des) || PID_IS_NONFINITE(pPID->FB) ||
 	    PID_IS_NONFINITE(pPID->SumE) || PID_IS_NONFINITE(pPID->PreE))
 	{
-		pPID->SumE = 0.0f;
-		pPID->PreE = 0.0f;
-		pPID->E    = 0.0f;
-		pPID->Up   = 0.0f;
-		pPID->Ui   = 0.0f;
-		pPID->Ud   = 0.0f;
-		pPID->U    = 0.0f;
+		PID_Zero(pPID);
 		return;
 	}
 
 	pPID->E = pPID->Des - pPID->FB;
 	if (PID_IS_NONFINITE(pPID->E))
 	{
-		pPID->SumE = 0.0f;
-		pPID->PreE = 0.0f;
-		pPID->E    = 0.0f;
-		pPID->Up   = 0.0f;
-		pPID->Ui   = 0.0f;
-		pPID->Ud   = 0.0f;
-		pPID->U    = 0.0f;
+		PID_Zero(pPID);
 		return;
 	}//���㵱ǰƫ��
 
@@ -226,11 +254,7 @@ void ComputePID(PIDTypeDef *pPID)
 		value_limit( pPID->U , -pPID->UMax , pPID->UMax );  /*PID��������޷�*/
 	}
 
-	if (PID_IS_NONFINITE(pPID->U) || PID_IS_NONFINITE(pPID->SumE))
-	{
-		pPID->SumE = 0.0f;
-		pPID->U    = 0.0f;
-	}
+	PID_GuardOut(pPID);
 
 	pPID->PreE = pPID->E ;//���汾��ƫ��
 }
@@ -240,10 +264,11 @@ void ComputeYawPID(PIDTypeDef *pPID)
 {
 	/* fmodf first: the two steps below fold one turn only, so a Des more than a turn and a half
 	 * from FB (e.g. a heading that keeps counting up) would otherwise leave |E| >= 180. */
-	pPID->E = fmodf(pPID->Des - pPID->FB, 360.0f);//���㵱ǰƫ��
+	pPID->E = fmodf(pPID->Des - pPID->FB, PID_YAW_TURN_DEG);//���㵱ǰƫ��
+	if (PID_BadState(pPID)) return;   /* NaN/Inf Des or FB, or a poisoned integrator */
 	
-	if(pPID->E>=180)pPID->E-=360;
-	if(pPID->E<=-180)pPID->E+=360;
+	if(pPID->E>=PID_YAW_HALF_TURN_DEG)pPID->E-=PID_YAW_TURN_DEG;
+	if(pPID->E<=-PID_YAW_HALF_TURN_DEG)pPID->E+=PID_YAW_TURN_DEG;
 
 	if(((pPID->U <= pPID->UMax && pPID->E > 0) || (pPID->U >= -pPID->UMax && pPID->E < 0)) \
 		    && ABS(pPID->E) < pPID->EMin)//���ַ���
@@ -265,6 +290,7 @@ void ComputeYawPID(PIDTypeDef *pPID)
   
 	
 	
+	PID_GuardOut(pPID);
 	pPID->PreE = pPID->E ;//���汾��ƫ��
 }
 

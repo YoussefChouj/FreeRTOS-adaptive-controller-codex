@@ -4,18 +4,18 @@
 #include <math.h>
 
 /* Safety limits default configuration table.
-   fence_x_m      maximum |x| in world frame, m
-   fence_y_m      maximum |y| in world frame, m
-   ceiling_m      maximum altitude (ceiling), m
-   low_v          low voltage threshold, V
-   low_v_hold_s   low voltage continuous hold time, s
-   tilt_deg       tilt angle threshold (|roll| or |pitch|), deg
-   tilt_hold_s    tilt angle continuous hold time, s
-   airborne_cap_s maximum airborne duration, s
-   hb_timeout_s   heartbeat timeout, s
-   fence_hold_s   longest push-back outside the fence or ceiling before LAND_IN_PLACE, s
-   fence_over_m   this far beyond the fence or ceiling -> LAND_IN_PLACE at once, m
-   soft_margin_m  push-back target this far inside the fence and ceiling, m
+   @fence_x_m       m    [0.5, 10]    maximum |x| in world frame
+   @fence_y_m       m    [0.5, 10]    maximum |y| in world frame
+   @ceiling_m       m    [0.5, 5]     maximum altitude (ceiling)
+   @low_v           V    [10, 17]     low voltage threshold
+   @low_v_hold_s    s    [0, 10]      low voltage continuous hold time
+   @tilt_deg        deg  [10, 90]     tilt angle threshold (|roll| or |pitch|)
+   @tilt_hold_s     s    [0, 2]       tilt angle continuous hold time
+   @airborne_cap_s  s    [10, 900]    maximum airborne duration
+   @hb_timeout_s    s    [0.2, 10]    heartbeat timeout
+   @fence_hold_s    s    [0, 10]      longest push-back outside the fence or ceiling before LAND_IN_PLACE
+   @fence_over_m    m    [0, 2]       this far beyond the fence or ceiling -> LAND_IN_PLACE at once
+   @soft_margin_m   m    [0, 1]       push-back target this far inside the fence and ceiling
    2026-10-03 workflow-B launch grill: fence 1.6/2.0 and ceiling 1.7 around the ground-centre origin (operator);
    push-back instead of an immediate landing (operator: "too conservative"); hold/over/margin PROPOSED. */
 #define WFB_SAFETY_LIMITS_ROW(fence_x_m, fence_y_m, ceiling_m, low_v, low_v_hold_s,                               tilt_deg, tilt_hold_s, airborne_cap_s, hb_timeout_s,                               fence_hold_s, fence_over_m, soft_margin_m)     { (fence_x_m), (fence_y_m), (ceiling_m), (low_v), (low_v_hold_s),       (tilt_deg), (tilt_hold_s), (airborne_cap_s), (hb_timeout_s),       (fence_hold_s), (fence_over_m), (soft_margin_m) }

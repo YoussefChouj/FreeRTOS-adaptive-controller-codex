@@ -5,12 +5,12 @@
 #include <string.h>
 
 /* Trajectory limits default configuration.
-   x_abs_m        maximum |x| in world frame, m
-   y_abs_m        maximum |y| in world frame, m
-   z_min_m        minimum altitude, m
-   z_max_m        maximum altitude (ceiling), m
-   v_max_mps      maximum segment velocity, m/s
-   endpoint_tol_m 3-D tolerance to hover point at endpoints, m
+   @x_abs_m         m    [0.2, 5]     maximum |x| in world frame
+   @y_abs_m         m    [0.2, 5]     maximum |y| in world frame
+   @z_min_m         m    [0.1, 2]     minimum altitude
+   @z_max_m         m    [0.3, 3]     maximum altitude (ceiling)
+   @v_max_mps       m/s  [0.1, 3]     maximum segment velocity
+   @endpoint_tol_m  m    [0.02, 0.5]  3-D tolerance to hover point at endpoints
    x_abs/y_abs/z_max = the soft boundary, 0.3 m inside the wfb_safety fence and ceiling (2026-10-03 grill). */
 #define WFB_TRAJ_LIMITS_ROW(x_abs_m, y_abs_m, z_min_m, z_max_m, v_max_mps, endpoint_tol_m) \
     { (x_abs_m), (y_abs_m), (z_min_m), (z_max_m), (v_max_mps), (endpoint_tol_m) }

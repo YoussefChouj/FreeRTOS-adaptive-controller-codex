@@ -1159,6 +1159,8 @@ void MRAC_Reset(void)
     MRAC_ResetWeights();
 }
 
+#define MRAC_DEG2RAD 0.0174533f   /* PID FB/Des are deg/s, the MRAC regressors rad/s */
+
 void MRAC_Control(const CtrlerTypeDef* current_state)
 {
     float p_rate, q_rate, r_rate;
@@ -1179,9 +1181,9 @@ void MRAC_Control(const CtrlerTypeDef* current_state)
     
     // 1. Acquire current Gyro Rates (p, q, r) and Z-velocity from inner-loop cascade
     // Convert PID FB (degrees/s) to rad/s for regressor bounds alignment
-    p_rate = current_state->gyroyPID.FB * 0.0174533f; // Y-axis gyro represents Pitch
-    q_rate = current_state->gyroxPID.FB * 0.0174533f; // X-axis gyro represents Roll
-    r_rate = current_state->gyrozPID.FB * 0.0174533f; // Z-axis gyro represents Yaw
+    p_rate = current_state->gyroyPID.FB * MRAC_DEG2RAD; // Y-axis gyro represents Pitch
+    q_rate = current_state->gyroxPID.FB * MRAC_DEG2RAD; // X-axis gyro represents Roll
+    r_rate = current_state->gyrozPID.FB * MRAC_DEG2RAD; // Z-axis gyro represents Yaw
     
     // Assign measured states
     mrac_state.pitch.x = p_rate;
@@ -1195,9 +1197,9 @@ void MRAC_Control(const CtrlerTypeDef* current_state)
     
     // 2. Read current commanded targets streaming from outer loops
     // Degrees/s to Radians/s (for gyro references)
-    r_pitch = current_state->gyroyPID.Des * 0.0174533f;
-    r_roll  = current_state->gyroxPID.Des * 0.0174533f;
-    r_yaw   = current_state->gyrozPID.Des * 0.0174533f;
+    r_pitch = current_state->gyroyPID.Des * MRAC_DEG2RAD;
+    r_roll  = current_state->gyroxPID.Des * MRAC_DEG2RAD;
+    r_yaw   = current_state->gyrozPID.Des * MRAC_DEG2RAD;
     r_z     = current_state->Z_ratePID.Des; // Pull desired vertical rate directly
     
     // 3. Assign Nominal Control (U) computed by PID controllers
