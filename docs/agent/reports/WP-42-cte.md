@@ -19,24 +19,16 @@ that is already lost. PROPOSED for operator review: tilt_deg 45 or a shorter til
 The SIL does not port LANDING or DANGEROUS_STOP (StabilizerTask.c, flight_fsm.c). A run ends at the request, and nothing after it is simulated.
 
 ## P3 self-describing session (`ground_station/service/session_schema.py`, storage.py, core.py)
-manifest.json gains a `session_schema` block (gs-session v2) holding:
-- the git commit and dirty flag, plus the firmware ELF (path, size, sha256);
-- the firmware_contract versions;
-- every *_ROW tunable cell;
-- one entry per subscribed variable (slot, type, unit, rate, divider, address).
-
+manifest.json gains a `session_schema` block (gs-session v2): git commit + dirty flag, firmware ELF (path, size, sha256),
+firmware_contract versions, every *_ROW tunable cell, one entry per subscribed variable (slot, type, unit, rate, divider, address).
 Parameter commands were already in events.jsonl; `session_schema.read()` returns the schema, the params and the events.
 Format: ULog-like on the existing CSV + manifest layout rather than MCAP. MCAP would bring an uninstalled dependency and a
 binary container, while every current loader reads the CSV. The block is additive, so an MCAP exporter can come later.
 
 ## P5 flight review (`ground_station/analysis/flight_review.py`)
-`python -m ground_station.analysis.flight_review <session> [--out x.html] [--no-sat]` writes one self-contained HTML page with:
-- a P3 header and a timeline;
-- setpoint vs actual for every Des/FB pair (position in m first);
-- spectra with per-stream peaks;
-- motor saturation over the flight span (ground idle excluded);
-- a per-slot sample-interval histogram with gap count.
-
+`python -m ground_station.analysis.flight_review <session> [--out x.html] [--no-sat]` writes one self-contained HTML page:
+P3 header + timeline, setpoint vs actual per Des/FB pair (position first), spectra with peaks, motor saturation over the
+flight span (ground idle excluded), per-slot sample-interval histogram with gap count.
 The numbers are embedded as JSON (`page_data`), and the tests use a session written by the real CsvRecorder. A hand check
 on logs/sessions/20260927-005647-flight_test_12 (6.3 MB) took 14 s, gave 4 plots and showed a 98 s stall on slots 2 and 3.
 WP-34 pairing: the tracking errors are the per-loop Des/FB inputs that mrac_log_replay and refmodel_replay replay; no code is shared yet.
