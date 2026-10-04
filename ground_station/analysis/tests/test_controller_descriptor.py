@@ -15,6 +15,7 @@ from ground_station.platform.firmware_contract import COMMAND_TABLE
 DROP = object()  # a change value that removes the key
 GOOD_KNOB = {"symbol": "gyroxPID.Kd", "cmd_id": 0x01, "idx": 11,
              "default": 10, "lo": 5, "hi": 20, "scale": "log"}
+BEYOND = cd.value_param(0x01).max_val + 1   # past the cmd 0x01 contract range (pid.c PID_CMD_ROW bounds move)
 
 
 def knob(**changes: object) -> dict:
@@ -114,7 +115,7 @@ SINGLE_MISTAKES = [
     ("not a tuning command", descriptor([knob(cmd_id=0x03)]), "0x03 is not a tuning command"),
     ("idx outside decode", descriptor([knob(idx=21)]), "idx 21 decodes outside"),
     ("idx writes another gain", descriptor([knob(idx=9)]), "writes gyroxPID.Kp, not gyroxPID.Kd"),
-    ("range beyond contract", descriptor([knob(hi=250)]), "leaves the contract range"),
+    ("range beyond contract", descriptor([knob(hi=BEYOND)]), "leaves the contract range"),
     ("same variable twice", descriptor([knob(), knob()]), "#0 and #1 both write gyroxPID.Kd"),
     ("no knobs", descriptor([]), "0 knobs, need 1..14"),
     ("too many knobs", descriptor(FIFTEEN_KNOBS), "15 knobs, need 1..14"),
@@ -135,7 +136,7 @@ def test_each_mistake_is_reported_once(tmp_path: Path, doc: object, expected: st
 
 
 def test_every_mistake_in_a_file_is_listed(tmp_path: Path) -> None:
-    doc = descriptor([knob(scale="exp"), knob(symbol="rollPID.Kd", idx=5, hi=250)], name=DROP)
+    doc = descriptor([knob(scale="exp"), knob(symbol="rollPID.Kd", idx=5, hi=BEYOND)], name=DROP)
     path = tmp_path / "three.yaml"
     path.write_text(yaml.safe_dump(doc), encoding="utf-8")
     with pytest.raises(DescriptorError) as err:
