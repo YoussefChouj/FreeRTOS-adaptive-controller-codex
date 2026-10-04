@@ -185,7 +185,8 @@ COMMAND_TABLE: dict[int, CommandSpec] = {
         params=(
             CommandParam(0, "axis", "axis", 0, 6),
             CommandParam(1, "gain_type", "enum", 0, 2),
-            CommandParam(2, "Kp_or_Ki_or_Kd", "gain", 0.0, 200.0),
+            CommandParam(2, "Kp_or_Ki_or_Kd", "gain", 0.0, 800.0,
+                         "bound per axis and gain (API/pid.c PID_CMD_ROW): 200, Z_ratePID Kp 800"),
         ),
         safety=SafetyClass(description="Safe at runtime; changes control response immediately."),
     ),
@@ -498,6 +499,25 @@ COMMAND_TABLE: dict[int, CommandSpec] = {
             danger_level="dangerous",
         ),
     ),
+    0x19: CommandSpec(
+        id=0x19, name="SIMPLEX",
+        description="MRAC simplex run-time assurance (mrac_simplex): one knob per idx, out-of-range writes ignored. "
+                    "Trips on tilt (rad; imu_data degrees are converted since WP-38), weight norm or u_ad saturation.",
+        params=(
+            CommandParam(0, "mode", "enum", 0, 2, "0 off, 1 enforce, 2 observe only"),
+            CommandParam(1, "variant", "enum", 0, 1, "0 PID+MRAC, 1 PID only"),
+            CommandParam(2, "roll_max", "rad", 0.0, None, "> 0; default 3.14 (never)"),
+            CommandParam(3, "pitch_max", "rad", 0.0, None, "> 0; default 3.14 (never)"),
+            CommandParam(4, "w_norm_max", "-", 0.0, None, "> 0; ||Theta||_2 per axis, default 1e6"),
+            CommandParam(5, "sat_ticks_max", "ticks", 1, 65535, "u_ad saturation trigger, default 40"),
+            CommandParam(6, "hold_ticks", "ticks", 0, 65535, "hold inside the envelope before resuming, default 200"),
+            CommandParam(7, "reset_counters", "trigger", 0, 0, "clears trip counts, tripped and reason"),
+        ),
+        safety=SafetyClass(description="Safe at runtime; enforce mode fades u_ad to 0 while tripped.",
+                           danger_level="caution"),
+        notes="Handler Cmd_Simplex (TASK/send_data.c); encoder ground_station/comm/simplex_encoder.py; "
+              "docs/research-platform/SIMPLEX.md.",
+    ),
     0x1D: CommandSpec(
         id=0x1D, name="MRAC_VARIANT",
         description="WP-27 MRAC variant field on one axis: idx = field << 2 | axis (fields in "
@@ -535,8 +555,10 @@ COMMAND_TABLE: dict[int, CommandSpec] = {
         ),
         safety=SafetyClass(
             requires_disarmed=True,
-            description="Changes controller structure. Safe to request anytime, applied on disarm.",
+            description="Changes controller structure. Refused while airborne (FLYING/LANDING), like 0x1D; "
+                        "ctrl_id applies at the next disarmed tick (Controller_CheckSwitch), axis_mask at once.",
         ),
+        notes="Handler Cmd_CtrlSelect (TASK/send_data.c, WP-38). Out-of-range writes are ignored.",
     ),
 }
 

@@ -9,6 +9,7 @@
  * half of send_data.c needs but this harness never runs are linked as empty dummies by tools/fw_trace.py.
  */
 #include SEND_SRC
+#include "controller.h"   /* g_ctrl_* (CMD 0x1F, WP-38); API/controller.c is linked */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -152,6 +153,7 @@ static void mix_state(void)
     MIXV(g_of_bias_capture_req); MIXV(g_of_bias_mode); MIXV(g_of_handheld_test); MIXV(g_of_full_tilt);
     MIXV(g_ekf_of_vel_fb); MIXV(g_of_bias_ema_freeze); MIXV(g_of_bias_ema_tau_s); MIXV(s_cal_trim); MIXV(s_cal_hot);
     MIXV(g_cal_health); MIXV(g_estimator_ready); MIXV(g_ekf_gate); MIXV(s_ekf); MIXV(s_transaction_history);
+    MIXV(g_ctrl_select_req); MIXV(g_ctrl_axis_mask);
     MIXV(s_transaction_history_head); MIXV(s_transaction_result_buf); MIXV(GS_KeySDKflag); MIXV(flight_phase);
     MIXV(g_motor_idle_enabled); MIXV(waypoint_spacing); MIXV(ano_of); MIXV(gs_cmd_tail); MIXV(g_fsm);
 }

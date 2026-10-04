@@ -33,6 +33,8 @@ HOST_TESTS = [
     ("rpm_median",       ["API/tests/test_rpm_median.c"],                                        ["-std=c99", *W, "-IBSP"]),
     ("thrust_estimators", ["API/thrust_estimators.c", "API/tests/test_thrust_estimators.c"],     ["-std=c99", *W, *STUBS, "-IBSP", "-IGlobal_file", "-ITASK", "-IUSER"]),
     ("mrac_sigma_prior", ["API/tests/test_mrac_sigma_prior.c", "{src}/mrac.c"],                  ["-std=c99", "-Wall", "-DMRAC_ENABLE_SIGMA_PRIOR", "-I{src}", "-IAPI/tests/stubs"]),
+    ("mrac_inputs",      ["API/tests/test_mrac_inputs.c", "{src}/mrac.c", "{src}/mrac_math.c"], ["-std=c99", *W, "-I{src}", "-IAPI/tests/stubs"]),
+    ("mrac_inputs_rbf",  ["API/tests/test_mrac_inputs.c", "{src}/mrac.c", "{src}/mrac_math.c"], ["-std=c99", *W, "-DMRAC_VARIANT=1", "-I{src}", "-IAPI/tests/stubs"]),
     ("mrac_sizeof",      ["API/tests/mrac_sizeof.c"],                                            ["-std=c99", *STUBS]),
     ("fw_controller",    ["tests/firmware_host/test_controller.c", "API/controller.c"],          ["-std=c99", "-Wall", "-Werror", *FWH]),
     ("mixer",            ["API/tests/test_mixer.c", "API/controller.c"],                         ["-std=c99", *W, "-msse2", "-mfpmath=sse", *FWH]),

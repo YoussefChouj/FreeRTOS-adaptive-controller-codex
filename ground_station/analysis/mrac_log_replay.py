@@ -64,7 +64,8 @@ def knob_args(params: dict[str, float]) -> list[str]:
 
 
 def variants() -> dict[str, dict]:
-    """name -> {args, rbf (build), angle_rad (feed angles in rad)}. V1/V2/V3 = the WP-27 campaign presets."""
+    """name -> {args, rbf (build)}. V1/V2/V3 = the WP-27 campaign presets. Angles go in as logged (degrees):
+    since WP-38 the firmware converts them (the 'V3 rad*' variant that pre-converted them is gone)."""
     v1 = preset("mrac_v1", "pid_ref")
     p_r = ("mrac_config_pitch", "mrac_config_roll")
     pr = {**v1, **{f"{m}.{k}": v for m in p_r + ("mrac_config_yaw",) for k, v in PR_KNOBS.items()}}
@@ -78,7 +79,6 @@ def variants() -> dict[str, dict]:
         "PR*": dict(args=knob_args(pr), rbf=False),
         "3L*": dict(args=knob_args(l3), rbf=False),
         "V3": dict(args=knob_args(v3), rbf=True),
-        "V3 rad*": dict(args=knob_args(v3), rbf=True, angle_rad=True),
     }
 
 
@@ -214,8 +214,6 @@ def replay_log(series: lc.Series, work: Path, which: dict | None = None) -> dict
     inj_flown = int((res["inj_flown"] or 0) > 0.5)
     for name, v in (which or variants()).items():
         x = ins.copy()
-        if v.get("angle_rad"):
-            x[:, 14:16] = np.radians(x[:, 14:16])
         # OFF replays the flown injection flag, so its u_ad can be checked against the logged one
         out = run_driver(build(work, v["rbf"]), x, v["args"], work, inj_flown if name == "OFF" else 1)
         row = {a: axis_metrics(out, ins[:, 16 + i], air, i) for i, a in enumerate(AXES) if a != "z" or info["has_z"]}

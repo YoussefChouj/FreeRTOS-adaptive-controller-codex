@@ -289,8 +289,37 @@ static void test_hold_equiv(void)
     }
 }
 
+/* WP-38: CMD 0x01 bounds. Every target's boot gain fits its write bound twice over (the pid_cmd_max rule), the
+   boot gain can be written back, and the check refuses < 0, NaN and anything above the bound. */
+static void test_cmd_bounds(void)
+{
+    PIDTypeDef *const order[PID_CMD_AXES] = { &Ctrler.pitchPID, &Ctrler.rollPID, &Ctrler.yawPID,
+        &Ctrler.gyroxPID, &Ctrler.gyroyPID, &Ctrler.gyrozPID, &Ctrler.Z_ratePID };   /* TASK/send_data.c 0x01 */
+    float boot[3], max;
+    uint8_t a, g;
+
+    check(PID_CmdLoop((uint8_t)PID_CMD_AXES) == 0, "0x01 axis 7 has no target", 7);
+    for (a = 0U; a < PID_CMD_AXES; a++) {
+        check(PID_CmdLoop(a) == order[a], "0x01 axis order", a);
+        boot[0] = order[a]->Kp;
+        boot[1] = order[a]->Ki;
+        boot[2] = order[a]->Kd;
+        for (g = 0U; g < 3U; g++) {
+            max = pid_cmd_max[a][g];
+            check(2.0f * boot[g] <= max, "0x01 bound >= 2 x the boot gain", a * 3 + g);
+            check(PID_CmdGainOk(a, g, boot[g]) && PID_CmdGainOk(a, g, max) && PID_CmdGainOk(a, g, 0.0f),
+                  "0x01 accepts the boot gain, 0 and the bound", a * 3 + g);
+            check(!PID_CmdGainOk(a, g, -1e-6f) && !PID_CmdGainOk(a, g, NAN) && !PID_CmdGainOk(a, g, INFINITY) &&
+                  !PID_CmdGainOk(a, g, nextafterf(max, INFINITY)), "0x01 refuses < 0, NaN, Inf, > bound", a * 3 + g);
+        }
+        check(!PID_CmdGainOk(a, 3U, 1.0f), "0x01 gain 3 has no target", a);
+    }
+    check(PID_CmdGainOk(6U, 0U, 400.0f) && !PID_CmdGainOk(4U, 0U, 400.0f), "Z_ratePID Kp 400 writable, gyroy Kp 400 not", 0);
+}
+
 int main(void)
 {
+    test_cmd_bounds();
     test_compute_pid_equiv();
     test_yaw_equiv_finite();
     test_yaw_guard();

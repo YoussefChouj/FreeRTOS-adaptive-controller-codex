@@ -323,24 +323,20 @@ typedef enum {
 #define IRSensorMotor_ReadRaw(pin) \
     GPIO_ReadInputDataBit(GPIOC, (pin))
 
-/* Voted read — 5 samples spread ~5us apart; majority wins. Rejects contention
+/* Gap between two votes: 10 NOPs, nominally 60 ns at 168 MHz (the GPIO read itself is slower). __NOP() is the
+ * CMSIS intrinsic, an instruction the compiler keeps. It replaces a GNU-style __asm("mov r0, r0" x10) that armcc
+ * compiled with r0 as an implicit C variable: warning #1267-D twice per file that includes this header (WP-38). */
+#define IRSENSOR_VOTE_GAP() do { __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); \
+                                 __NOP(); __NOP(); __NOP(); __NOP(); __NOP(); } while (0)
+
+/* Voted read — 5 samples a few cycles apart; majority wins. Rejects contention
  * transients where one module's OUT briefly drives the bus the wrong way. */
 static inline uint8_t IRSensorMotor_IsDetected(IRSensorMotor_e pin)
 {
     uint8_t count = 0;
     for (uint8_t i = 0; i < 5; i++) {
         if (GPIO_ReadInputDataBit(GPIOC, (uint16_t)pin) == Bit_SET) count++;
-        /* ~5us @ 168MHz Cortex-M4 — tight loop, no need for SysTick */
-        __asm volatile("mov r0, r0\n" \
-                       "mov r0, r0\n" \
-                       "mov r0, r0\n" \
-                       "mov r0, r0\n" \
-                       "mov r0, r0\n" \
-                       "mov r0, r0\n" \
-                       "mov r0, r0\n" \
-                       "mov r0, r0\n" \
-                       "mov r0, r0\n" \
-                       "mov r0, r0");
+        IRSENSOR_VOTE_GAP();
     }
     return (count >= 3) ? Bit_SET : Bit_RESET;
 }
@@ -351,16 +347,7 @@ static inline uint8_t IRSensor_IsDetected(GPIO_TypeDef* port, uint16_t pin)
     uint8_t count = 0;
     for (uint8_t i = 0; i < 5; i++) {
         if (GPIO_ReadInputDataBit(port, pin) == Bit_SET) count++;
-        __asm volatile("mov r0, r0\n" \
-                       "mov r0, r0\n" \
-                       "mov r0, r0\n" \
-                       "mov r0, r0\n" \
-                       "mov r0, r0\n" \
-                       "mov r0, r0\n" \
-                       "mov r0, r0\n" \
-                       "mov r0, r0\n" \
-                       "mov r0, r0\n" \
-                       "mov r0, r0");
+        IRSENSOR_VOTE_GAP();
     }
     return (count >= 3) ? Bit_SET : Bit_RESET;
 }

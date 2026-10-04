@@ -240,6 +240,8 @@ typedef struct {
     float st_phi_max;           // ST [-]     cap of the gradient gain k_st (1 at e = 0)
     float st_bar;               // ST [-]     log-barrier drive gain, active for |e| > 0.75 st_eps; 0 = OFF
     float lf_gain;              // LFHG [-]   0 = OFF; > 0: LF learning on this axis and gamma x lf_gain
+    // WP-38 input guard (MRAC_Control): finite ticks after a non-finite input before u_ad reaches the mixer again
+    float nan_rearm;            // [ticks] MRAC_Init only, no command writes it
 
 } MRAC_AxisConfig_t;
 
@@ -308,6 +310,7 @@ typedef struct {
     float r_buf[MRAC_REF_BUF];  // V1 command delay ring (written every tick)
     float e_int;                // 3L leaky integral of e (angle error vs model), |e_int| <= e_sat
     uint8_t r_idx;              // V1 next write slot in r_buf
+    uint16_t nan_hold;          // WP-38 input guard: finite ticks left before u_ad is let out again (0 = engaged)
 } MRAC_AxisState_t;
 
 // Variant id per axis, rewritten every MRAC_UpdateAxis call (0 = today's law). Bits:

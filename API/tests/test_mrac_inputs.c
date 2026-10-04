@@ -1,0 +1,249 @@
+/* API/tests/test_mrac_inputs.c - host test of the inputs MRAC_Control reads (WP-38).
+ *
+ * A. Units. imu_data.pit/rol are degrees (API/imu_update.c:196-197). MRAC converts them with MRAC_DEG2RAD where
+ *    it reads them: the simplex envelope (roll_max/pitch_max, rad) and, in the V3 build, the RBF angle input
+ *    (rad / rbf_ang_scale). Before WP-38 the degrees were used as rad: a 3.2 deg tilt passed the 3.14 "rad" limit.
+ * B. Input guard. A non-finite x, r, u_nom or cross skips that axis (Theta untouched, u_ad 0); the next nan_rearm
+ *    finite ticks keep u_ad at 0 with learning frozen; then MRAC re-engages. Before WP-38 one NaN poisoned Theta.
+ *
+ * Built by tools/host_tests.py, rows mrac_inputs (STRUCT6) and mrac_inputs_rbf (-DMRAC_VARIANT=1), on a copy of
+ * API/mrac*.[ch] so the stubs win:
+ *   gcc -std=c99 -Wall -Wextra -I<copy> -IAPI/tests/stubs API/tests/test_mrac_inputs.c <copy>/mrac.c <copy>/mrac_math.c -lm
+ */
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "mrac.h"
+#include "mrac_math.h"
+
+_imu_st imu_data;
+
+#define DEG2RAD 0.0174533f       /* MRAC_DEG2RAD, API/mrac.c */
+
+static int checks, fails;
+static void ok(const char *what, int cond)
+{
+    checks++;
+    if (!cond) {
+        fails++;
+        printf("FAIL  %s\n", what);
+    }
+}
+
+static CtrlerTypeDef ctrl;
+
+/* Flying, learn-gated, injected: the state the equivalence driver also starts from (API/tests/test_mrac_equiv.c). */
+static void fly(void)
+{
+    MRAC_Init();
+    memset(&mrac_state, 0, sizeof(mrac_state));
+    memset(&mrac_flags, 0, sizeof(mrac_flags));
+    mrac_flags.adaptation_on = 1;
+    mrac_flags.axis_enable_pitch = 1;
+    mrac_flags.axis_enable_roll = 1;
+    mrac_flags.axis_enable_yaw = 1;
+    mrac_flags.output_injection_on = 1;
+    mrac_in_armed = 1;
+    mrac_in_phase = MRAC_PHASE_FLYING;
+    mrac_inj.fly_ticks = 65535;
+    mrac_inj.prev_armed = 1;
+    mrac_inj.prev_injection_on = 1;
+    mrac_inj.ramp_p = 1.0f;
+    mrac_inj.inj_alpha = 1.0f;
+    mrac_inj.learn_gate = 1;
+    mrac_simplex.mode = 0;
+    mrac_simplex.tripped = 0;
+    mrac_simplex.reason = 0;
+    mrac_simplex.would_trip_count = 0;
+    mrac_simplex.roll_max = 3.14f;
+    mrac_simplex.pitch_max = 3.14f;
+    memset(&ctrl, 0, sizeof(ctrl));
+    ctrl.gyroyPID.FB = 30.0f;            /* deg/s */
+    ctrl.gyroyPID.Des = 30.0f;
+    ctrl.gyroxPID.FB = -20.0f;
+    ctrl.gyroxPID.Des = -20.0f;
+}
+
+static void tick(float pit_deg, float rol_deg)
+{
+    imu_data.pit = pit_deg;
+    imu_data.rol = rol_deg;
+    MRAC_Control(&ctrl);
+}
+
+/* A: the simplex compares the tilt in rad. Observe mode counts would-be trips without acting. */
+static void test_simplex_envelope_in_rad(void)
+{
+    fly();
+    mrac_simplex.mode = 2;
+    mrac_simplex.pitch_max = 0.1f;       /* rad = 5.73 deg */
+    mrac_simplex.roll_max = 0.1f;
+    tick(5.0f, 0.0f);
+    ok("A simplex: 5 deg pitch is inside 0.1 rad", mrac_simplex.would_trip_count == 0 && mrac_simplex.reason == 0);
+    tick(6.0f, 0.0f);
+    ok("A simplex: 6 deg pitch is outside 0.1 rad (reason 2)", mrac_simplex.would_trip_count == 1 && mrac_simplex.reason == 2);
+    tick(0.0f, 0.0f);
+    tick(0.0f, -6.0f);
+    ok("A simplex: -6 deg roll is outside 0.1 rad (reason 1)", mrac_simplex.would_trip_count == 2 && mrac_simplex.reason == 1);
+
+    fly();
+    mrac_simplex.mode = 2;               /* default limits 3.14 rad: no attitude can reach them */
+    tick(10.0f, -10.0f);
+    tick(3.2f, 3.2f);
+    tick(170.0f, -170.0f);
+    ok("A simplex: 3.2..170 deg stay inside the default 3.14 rad (tripped as 'rad' before WP-38)",
+       mrac_simplex.would_trip_count == 0);
+    tick(181.0f, 0.0f);
+    ok("A simplex: 181 deg = 3.159 rad is outside 3.14 rad", mrac_simplex.would_trip_count == 1);
+}
+
+#if MRAC_VARIANT == MRAC_VARIANT_STRUCT6_RBF12
+/* A: the V3 grid sees the angle in rad / rbf_ang_scale. Centres as in API/mrac.c mrac_rbf_rate_c / mrac_rbf_ang_c. */
+static void test_rbf_angle_in_rad(void)
+{
+    static const float rc[4] = {-1.5f, -0.5f, 0.5f, 1.5f};
+    static const float ac[3] = {-1.0f, 0.0f, 1.0f};
+    const float *phi = mrac_state.pitch.Phi + MRAC_N_STRUCT;
+    float xr, xa, d, dmax = 0.0f;
+    int i, j;
+
+    fly();
+    mrac_config_pitch.rbf_on = 1.0f;
+    tick(15.0f, 0.0f);                   /* 15 deg = 0.2618 rad = 1.007 x rbf_ang_scale 0.26 */
+    xr = (30.0f * DEG2RAD) / mrac_config_pitch.rbf_rate_scale;
+    xa = 15.0f * DEG2RAD / mrac_config_pitch.rbf_ang_scale;
+    for (i = 0; i < 4; i++) {
+        for (j = 0; j < 3; j++) {
+            d = fabsf(phi[i * 3 + j] - MRAC_Simple_RBF(xr, rc[i], 1.0f) * MRAC_Simple_RBF(xa, ac[j], 1.0f));
+            if (d > dmax) dmax = d;
+        }
+    }
+    ok("A rbf: phi = g(rate rad/s / scale) * g(angle rad / scale)", dmax <= 1e-6f);
+    ok("A rbf: 15 deg lands on the +1 angle centre", phi[1 * 3 + 2] > phi[1 * 3 + 1] && phi[1 * 3 + 2] > 0.1f);
+}
+#endif
+
+/* Finite ticks with a steady tracking error on every axis (inside the deadzone/freeze band), so Theta learns. */
+static int g_k;
+static void excite(int n)
+{
+    int k;
+    float t;
+
+    for (k = 0; k < n; k++, g_k++) {
+        t = (float)g_k * MRAC_DT;
+        ctrl.gyroyPID.Des = 30.0f + 20.0f * sinf(3.0f * t);
+        ctrl.gyroyPID.FB = ctrl.gyroyPID.Des - 10.0f;
+        ctrl.gyroyPID.U = 100.0f * sinf(2.0f * t);
+        ctrl.gyroxPID.Des = -20.0f + 15.0f * sinf(2.5f * t);
+        ctrl.gyroxPID.FB = ctrl.gyroxPID.Des + 8.0f;
+        ctrl.gyroxPID.U = 80.0f * sinf(1.7f * t);
+        ctrl.gyrozPID.Des = 10.0f * sinf(1.1f * t);
+        ctrl.gyrozPID.FB = ctrl.gyrozPID.Des - 6.0f;
+        ctrl.gyrozPID.U = 60.0f * sinf(1.3f * t);
+        ctrl.Z_ratePID.Des = 0.3f * sinf(0.9f * t);
+        ctrl.Z_ratePID.FB = ctrl.Z_ratePID.Des - 0.15f;
+        ctrl.Z_ratePID.U = 40.0f * sinf(0.7f * t);
+        tick(2.0f, -1.0f);
+    }
+}
+
+static int all_finite(const MRAC_AxisState_t *s)
+{
+    int i;
+    for (i = 0; i < MRAC_N_FEATURES; i++) {
+        if (!(s->Theta[i] - s->Theta[i] == 0.0f) || !(s->Whatf[i] - s->Whatf[i] == 0.0f)) return 0;
+    }
+    return s->u_ad - s->u_ad == 0.0f;
+}
+
+/* Hold-off ticks: u_ad stays 0 and Theta does not move; returns 1 if that held on every tick. */
+static int hold_off(MRAC_AxisState_t *s, int n)
+{
+    float th[MAX_NUM_BASIS];
+    int k, good = 1;
+
+    memcpy(th, s->Theta, sizeof(th));
+    for (k = 0; k < n; k++) {
+        excite(1);
+        good &= (s->u_ad == 0.0f) && (memcmp(th, s->Theta, sizeof(th)) == 0);
+    }
+    return good;
+}
+
+static void test_nan_guard(void)
+{
+    float th[MAX_NUM_BASIS];
+    uint16_t n;
+
+    fly();
+    g_k = 0;
+    excite(400);
+    n = (uint16_t)mrac_config_pitch.nan_rearm;
+    ok("B setup: pitch learns and u_ad != 0", mrac_state.pitch.u_ad != 0.0f && mrac_state.pitch.Theta[0] != 0.0f);
+    ok("B setup: nan_rearm default 200 ticks (1 s) on every axis", n == 200U && mrac_config_roll.nan_rearm == 200.0f &&
+       mrac_config_yaw.nan_rearm == 200.0f && mrac_config_z.nan_rearm == 200.0f);
+
+    /* NaN pitch rate: pitch skipped; roll too (its cross term p*r); yaw and z do not read it */
+    memcpy(th, mrac_state.pitch.Theta, sizeof(th));
+    ctrl.gyroyPID.FB = NAN;
+    tick(2.0f, -1.0f);
+    ok("B NaN rate: pitch u_ad 0, Theta untouched, hold armed",
+       mrac_state.pitch.u_ad == 0.0f && memcmp(th, mrac_state.pitch.Theta, sizeof(th)) == 0 && mrac_state.pitch.nan_hold == n);
+    ok("B NaN rate: roll (cross p*r) held, yaw and z running",
+       mrac_state.roll.nan_hold == n && mrac_state.roll.u_ad == 0.0f && mrac_state.yaw.nan_hold == 0U &&
+       mrac_state.yaw.u_ad != 0.0f && mrac_state.z_rate.nan_hold == 0U);
+    ok("B NaN rate: every weight and u_ad still finite", all_finite(&mrac_state.pitch) && all_finite(&mrac_state.roll) &&
+       all_finite(&mrac_state.yaw) && all_finite(&mrac_state.z_rate));
+
+    ok("B hold-off: 200 finite ticks with u_ad 0 and Theta frozen", hold_off(&mrac_state.pitch, (int)n));
+    ok("B hold-off: counter back to 0", mrac_state.pitch.nan_hold == 0U && mrac_state.roll.nan_hold == 0U);
+    excite(1);
+    ok("B re-engaged: pitch and roll u_ad != 0 and finite on the next tick", mrac_state.pitch.u_ad != 0.0f &&
+       mrac_state.roll.u_ad != 0.0f && all_finite(&mrac_state.pitch) && all_finite(&mrac_state.roll));
+    memcpy(th, mrac_state.pitch.Theta, sizeof(th));
+    excite(50);
+    ok("B re-engaged: pitch learns again", memcmp(th, mrac_state.pitch.Theta, sizeof(th)) != 0);
+
+    /* Inf nominal control on yaw, NaN command on z: each held alone */
+    excite(1);
+    ctrl.gyrozPID.U = INFINITY;
+    tick(2.0f, -1.0f);
+    ok("B Inf yaw U: yaw held, pitch running", mrac_state.yaw.nan_hold == n && mrac_state.yaw.u_ad == 0.0f &&
+       mrac_state.pitch.nan_hold == 0U && mrac_state.pitch.u_ad != 0.0f);
+    excite(1);
+    ctrl.Z_ratePID.Des = NAN;
+    tick(2.0f, -1.0f);
+    ok("B NaN z command: z held", mrac_state.z_rate.nan_hold == n && mrac_state.z_rate.u_ad == 0.0f &&
+       all_finite(&mrac_state.z_rate));
+
+    /* A second NaN inside the hold-off restarts it */
+    excite(300);
+    ctrl.gyroyPID.FB = NAN;
+    tick(2.0f, -1.0f);
+    excite(100);
+    ctrl.gyroyPID.FB = -NAN;
+    tick(2.0f, -1.0f);
+    ok("B NaN in the hold-off restarts it", mrac_state.pitch.nan_hold == n);
+    ok("B ...and the full hold-off follows", hold_off(&mrac_state.pitch, (int)n) && mrac_state.pitch.nan_hold == 0U);
+
+    /* nan_rearm 0: back on the next finite tick */
+    mrac_config_pitch.nan_rearm = 0.0f;
+    ctrl.gyroyPID.FB = NAN;
+    tick(2.0f, -1.0f);
+    ok("B nan_rearm 0: no hold", mrac_state.pitch.nan_hold == 0U && mrac_state.pitch.u_ad == 0.0f);
+    excite(1);
+    ok("B nan_rearm 0: engaged on the next finite tick", mrac_state.pitch.u_ad != 0.0f);
+}
+
+int main(void)
+{
+    test_simplex_envelope_in_rad();
+    test_nan_guard();
+#if MRAC_VARIANT == MRAC_VARIANT_STRUCT6_RBF12
+    test_rbf_angle_in_rad();
+#endif
+    printf("mrac_inputs (variant %d): %d checks, %d failure(s)\n", MRAC_VARIANT, checks, fails);
+    return fails != 0;
+}

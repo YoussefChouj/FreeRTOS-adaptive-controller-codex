@@ -63,15 +63,6 @@ static float s_ms_norm = 1.0f;  // peak-normalization so multisine peak ~= amp (
 static uint8_t s_geofence_en = 1U; // green-zone XY geofence enable (CMD 0x14 idx 7; default ON)
 
 // ---- Helpers ------------------------------------------------------------------------
-static float attitude_deg(SysID_Axis_e a)
-{
-    switch (a) {
-        case SYSID_AXIS_PITCH: return Ctrler.pitchPID.FB;
-        case SYSID_AXIS_ROLL:  return Ctrler.rollPID.FB;
-        default:               return 0.0f; // yaw/Z: not angle-limited the same way
-    }
-}
-
 static void sysid_finish(void)
 {
     s_state = SYSID_IDLE;
@@ -160,7 +151,7 @@ uint8_t SysID_Start(SysID_Axis_e axis, SysID_Signal_e sig, float f0, float f1, f
     int k;
 
     if (s_state != SYSID_IDLE) return 0;          // a run is already active
-    if (axis < SYSID_AXIS_PITCH || axis > SYSID_AXIS_Z) return 0;
+    if ((uint32_t)axis > (uint32_t)SYSID_AXIS_Z) return 0;    // also a "negative" id (PITCH is 0)
     // Z-axis excitation is not yet wired: Compute_Motor only overrides the P/R/Y rate
     // setpoints (StabilizerTask.c), there is no Z_ratePID.Des injection, and Z lacks its
     // own altitude/ground-effect abort guards. Reject Z so a run can't report "active"

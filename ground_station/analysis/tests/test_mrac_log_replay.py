@@ -12,7 +12,7 @@ from ground_station.analysis import mrac_log_replay as mr
 def test_knob_args_from_v1_preset():
     args = mr.knob_args(mr.preset("mrac_v1", "pid_ref"))
     assert {"0:0:2.0", "1:0:2.0", "2:0:1.0", "0:2:1.0", "2:12:2.0", "0:3:0.0018", "0:11:1.0", "2:11:1.0"} <= set(args)
-    assert set(mr.variants()) >= {"OFF", "V1 g1", "V2", "PR*", "3L*", "V3", "V3 rad*"}
+    assert set(mr.variants()) >= {"OFF", "V1 g1", "V2", "PR*", "3L*", "V3"}
 
 
 def test_mixer_deficit_signs_and_zero_inside():
@@ -51,7 +51,7 @@ def _hover(seconds=40.0, fs=50.0, throttle=3000.0):
 @pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not on PATH")
 def test_replay_synthetic_hover(tmp_path):
     allv = mr.variants()
-    which = {k: allv[k] for k in ("OFF", "V2", "V3", "V3 rad*")}
+    which = {k: allv[k] for k in ("OFF", "V2", "V3")}
     res = mr.replay_log(_hover(throttle=3960.0), tmp_path, which)     # throttle near the ceiling: the mixer clips
     assert res["airborne_s"] == pytest.approx(38.0, abs=0.1) and res["has_throttle"]
     for name, row in res["variants"].items():
@@ -60,7 +60,6 @@ def test_replay_synthetic_hover(tmp_path):
             assert m["n"] > 0 and m["finite"]
             assert m["rms_u_ad"] <= 6.74 and np.isfinite(m["th_max"])
         assert row["roll"]["udef_frac"] > 0.1                          # V2's u_def drive is present
-        assert row["would_trips"] >= (0 if name == "V3 rad*" else 1)   # deg-fed tilt > 3.14 'rad' trips
-    v3, v3r = res["variants"]["V3"]["rbf"]["pitch"], res["variants"]["V3 rad*"]["rbf"]["pitch"]
-    assert v3r["mean_sum"] > v3["mean_sum"]                            # degrees push the grid off-centre
-    assert res["variants"]["V3 rad*"]["would_trips"] == 0
+        assert row["would_trips"] == 0      # 5 deg tilt fed in degrees: inside the 3.14 rad envelope (WP-38 A)
+    # fed degrees as rad (before WP-38) the grid sat off-centre, mean sum phi 0.38-0.66; in rad it is near 3.07
+    assert res["variants"]["V3"]["rbf"]["pitch"]["mean_sum"] > 2.0
