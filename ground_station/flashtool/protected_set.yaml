@@ -11,12 +11,12 @@ paths:
   - API/wfb_traj.h # API/wfb_traj.h:1
 
 regions:
-  - rc_kill # TASK/RemoterTask.c:158
-  - rc_ch5_land # TASK/RemoterTask.c:179
-  - wfb_apply # TASK/StabilizerTask.c:264
+  - rc_kill # TASK/RemoterTask.c:185
+  - rc_ch5_land # TASK/RemoterTask.c:206
+  - wfb_apply # TASK/StabilizerTask.c:418
 
 functions:
-  - AutoflyTask_PathArbitrate # TASK/AutoflyTask.c:17
+  - AutoflyTask_PathArbitrate # TASK/AutoflyTask.c:82
 
 param_ids:
   - fence_x_m # API/wfb_safety.h:28
