@@ -307,6 +307,27 @@ int main(void)
     okv("and resumes once drained", cap_n, 1);
     ok("the skipped frames show up as a SEQ gap, not silence", cap_seq[0] >= 10);
 
+    /* ---- 8. every slot streams under its own frame type (WP-37) ---------- */
+    /* Built with the default SUBSCRIBE_MAX_SLOTS by ground_station/livewatch/tests/test_subscribe_c.py and
+     * with -DSUBSCRIBE_MAX_SLOTS=8U by tools/host_tests.py (row subscribe_8_slots). Every slot due on the
+     * same tick is served in that tick (quota SUBSCRIBE_MAX_FRAMES_PER_TICK), each as 0x09 + slot. */
+    stop_all();
+    a[0] = (uint32_t)(uintptr_t)g_rpm; s[0] = 2; c[0] = 1;
+    for (i = 0; i < (int)SUBSCRIBE_MAX_SLOTS; i++) {
+        subscribe((uint8_t)i, 2, SUBSCRIBE_TRANSPORT_USART3, a, s, c, 1);   /* 14 B every 2nd tick */
+    }
+    okv("every slot 0..MAX_SLOTS-1 accepted", count_type(SUBSCRIBE_FRAME_TYPE_SCHEMA), (int)SUBSCRIBE_MAX_SLOTS);
+    cap_n = 0;
+    for (i = 0; i < 4; i++) { Subscribe_StreamTick(); }
+    for (i = 0; i < (int)SUBSCRIBE_MAX_SLOTS; i++) {
+        okv("two data frames per slot, frame type 0x09 + slot",
+            count_type((uint8_t)(SUBSCRIBE_FRAME_TYPE_DATA + i)), 2);
+    }
+    okv("nothing else on the wire", cap_n, 2 * (int)SUBSCRIBE_MAX_SLOTS);
+    printf("slots %u, sizeof(Subscribe_Stream_t) %u B, slot table + staging %u B\n",
+           (unsigned)SUBSCRIBE_MAX_SLOTS, (unsigned)sizeof(Subscribe_Stream_t),
+           (unsigned)((SUBSCRIBE_MAX_SLOTS + 1U) * sizeof(Subscribe_Stream_t)));
+
     printf("\n%d checks, %d failure(s)\n", checks, fails);
     return fails ? 1 : 0;
 }

@@ -133,5 +133,9 @@ and compare.
 
 | Where | What | Note |
 | --- | --- | --- |
-| `API/mrac.c:35` | `mrac_simplex` positional initializer with unnamed `200, 40, 3.14f, 1.0e6f` | Single instance: a named-field legend comment is enough. |
 | `BSP/usart3.c`, `usart4.c`, `usart5.c` | `USART_RX_TypeDef` positional initializers | Low value, not tunables. |
+
+Done in WP-37: `mrac_simplex` got a per-field comment (single instance, so no row macro); the quad-X mixer
+became `MIX_ROW` in `API/controller.c` (third reference: a `const` 2-D table read by `Mix_Motor`, every cell +-1).
+Dispatch tables that are not tunables (`k_gs_cmds` in `TASK/send_data.c`) use `GS_CMD_ENTRY`, not a `_ROW`
+name, so `tools/row_meta.py` does not ask them for unit and range lines.

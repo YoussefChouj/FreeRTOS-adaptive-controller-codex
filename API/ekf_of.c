@@ -21,12 +21,20 @@
  *
  * Units: meters, seconds
  * Pure C99, no malloc. Compatible with Keil ARMCC.
+ *
+ * Owner: Stabilizer_Task, 200 Hz: TASK/StabilizerTask.c Of_TickKf runs Predict, ZUPT, Update and the
+ *        health gate each tick (mode 2 or shadow); ResetPos / ResetBias on origin reset, ARM and handheld edges.
+ * Input: OF velocity minus s_of_bias (m/s), gravity-tilt accel (m/s^2). Output: x[] (s_ekf_of in the task),
+ *        innov_x/y (health gate), rej_x/y (gated samples).
  */
 
 #include "ekf_of.h"
 
-/* axis index table */
+/* axis index table: state index of each local index (EKF_OF_L_*) on the X and Y axis */
 static const uint8_t k_axis_idx[2][4] = {{0,1,2,6},{3,4,5,7}};
+enum { EKF_OF_L_POS = 0, EKF_OF_L_VEL = 1, EKF_OF_L_BOF = 2, EKF_OF_L_BA = 3 };   /* local index per axis */
+
+#define EKF_OF_S_MIN   1e-8f   /* floor on the innovation variance S (divides) */
 
 /* ------------------------------------------------------------------ */
 /* Init                                                               */
@@ -90,10 +98,10 @@ void EkfOf_Predict(EkfOf_t *e, float dt, float ax, float ay)
     int axis;
 
     for (axis = 0; axis < 2; axis++) {
-        uint8_t i_p = k_axis_idx[axis][0];
-        uint8_t i_v = k_axis_idx[axis][1];
+        uint8_t i_p = k_axis_idx[axis][EKF_OF_L_POS];
+        uint8_t i_v = k_axis_idx[axis][EKF_OF_L_VEL];
         
-        uint8_t i_ba = k_axis_idx[axis][3];
+        uint8_t i_ba = k_axis_idx[axis][EKF_OF_L_BA];
 
         float u = a_meas[axis] - e->x[i_ba];
         e->x[i_p] += e->x[i_v] * dt + 0.5f * u * dt * dt;
@@ -182,7 +190,7 @@ static uint8_t ekf_of_update_one(EkfOf_t *e, int axis, const float h[4], float z
     for (i = 0; i < 4; i++) {
         S += h[i] * PHt[i];
     }
-    if (S < 1e-8f) S = 1e-8f;
+    if (S < EKF_OF_S_MIN) S = EKF_OF_S_MIN;
 
     float hx = 0.0f;
     for (i = 0; i < 4; i++) {
@@ -213,11 +221,11 @@ static uint8_t ekf_of_update_one(EkfOf_t *e, int axis, const float h[4], float z
 static void ekf_of_release_vel(EkfOf_t *e, int axis)
 {
     int k;
-    for (k = 0; k < 4; k++) {              /* local index 1 = vel: clear its row and column */
-        e->P[axis][1*4 + k] = 0.0f;
-        e->P[axis][k*4 + 1] = 0.0f;
+    for (k = 0; k < 4; k++) {              /* vel: clear its row and column */
+        e->P[axis][EKF_OF_L_VEL*4 + k] = 0.0f;
+        e->P[axis][k*4 + EKF_OF_L_VEL] = 0.0f;
     }
-    e->P[axis][1*4 + 1] = EKF_OF_VEL_P0;
+    e->P[axis][EKF_OF_L_VEL*4 + EKF_OF_L_VEL] = EKF_OF_VEL_P0;
 }
 
 /* One axis of the OF update with gate-lockout recovery (see EKF_OF_REJ_RELEASE). */
@@ -259,12 +267,12 @@ void EkfOf_ResetBias(EkfOf_t *e, float var)
     int axis, k;
     if (!e->inited) return;
     for (axis = 0; axis < 2; axis++) {
-        e->x[k_axis_idx[axis][2]] = 0.0f;
-        for (k = 0; k < 4; k++) {          /* local index 2 = bof: clear its row and column */
-            e->P[axis][2*4 + k] = 0.0f;
-            e->P[axis][k*4 + 2] = 0.0f;
+        e->x[k_axis_idx[axis][EKF_OF_L_BOF]] = 0.0f;
+        for (k = 0; k < 4; k++) {          /* bof: clear its row and column */
+            e->P[axis][EKF_OF_L_BOF*4 + k] = 0.0f;
+            e->P[axis][k*4 + EKF_OF_L_BOF] = 0.0f;
         }
-        e->P[axis][2*4 + 2] = var;
+        e->P[axis][EKF_OF_L_BOF*4 + EKF_OF_L_BOF] = var;
     }
 }
 
@@ -275,6 +283,6 @@ void EkfOf_ResetBias(EkfOf_t *e, float var)
 void EkfOf_ResetPos(EkfOf_t *e)
 {
     if (!e->inited) return;
-    e->x[k_axis_idx[0][0]] = 0.0f;  /* pos_x */
-    e->x[k_axis_idx[1][0]] = 0.0f;  /* pos_y */
+    e->x[k_axis_idx[0][EKF_OF_L_POS]] = 0.0f;  /* pos_x */
+    e->x[k_axis_idx[1][EKF_OF_L_POS]] = 0.0f;  /* pos_y */
 }

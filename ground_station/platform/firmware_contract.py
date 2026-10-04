@@ -97,7 +97,11 @@ class CommandSpec:
 # Subscribe protocol limits (from subscribe.h)
 # ---------------------------------------------------------------------------
 
-SUBSCRIBE_MAX_SLOTS = 4          # slots 0..3
+SUBSCRIBE_MAX_SLOTS = 4          # slots 0..3; = API/subscribe.h SUBSCRIBE_MAX_SLOTS and livewatch/stream.py MAX_SLOTS
+SUBSCRIBE_DATA_FRAME_BASE = 0x09  # data frame type of slot 0 (API/subscribe.h SUBSCRIBE_FRAME_TYPE_DATA)
+# Data frame types on the wire, one per slot (0x09 + slot). The ground-station decoders use this range, so a
+# firmware with more slots needs only the SUBSCRIBE_MAX_SLOTS change (tests/test_subscribe_contract.py).
+SUBSCRIBE_DATA_FRAMES = range(SUBSCRIBE_DATA_FRAME_BASE, SUBSCRIBE_DATA_FRAME_BASE + SUBSCRIBE_MAX_SLOTS)
 SUBSCRIBE_MAX_RANGES = 62        # per-slot range tuple limit
 SUBSCRIBE_STREAM_MAX_BYTES = 2032  # max data-frame payload (API/subscribe.h)
 SUBSCRIBE_STREAM_FRAME_OVERHEAD = 12  # non-value bytes in a data frame
@@ -163,10 +167,10 @@ def link_budget_uart5(frame_bytes: int, divider: int) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Complete command table (from TASK/send_data.c dispatch table)
+# Complete command table (TASK/send_data.c k_gs_cmds; tests/test_firmware_command_table.py checks the ids)
 # ---------------------------------------------------------------------------
 
-# Safety interlock reasons returned by CommandSafetyReject (send_data.c:1324):
+# Safety interlock reasons returned by CommandSafetyReject (TASK/send_data.c, CMD_REJECT_*):
 #   0  = pass
 #   4  = unknown command
 #   6  = safety interlock

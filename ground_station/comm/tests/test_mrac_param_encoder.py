@@ -352,12 +352,15 @@ def test_drift_wide_block_constants(send_data):
 
 
 def test_drift_legacy_decode(send_data):
+    # WP-37: the command if/else chain became the k_gs_cmds table; the legacy ids route to Cmd_MracElem4.
+    for cmd_id in LEGACY_CMD_IDS:
+        assert f"GS_CMD_ENTRY(0x{cmd_id:02X}, 0x{cmd_id:02X}, Cmd_MracElem4)" in send_data, cmd_id
     for fragment in (
-        "else if (id == 0x02 || id == 0x05 || id == 0x08) {",
-        "uint8_t axis = (idx >> 4) & 0x0F;",
-        "uint8_t elem = idx & 0x0F;",
-        "uint8_t field = (id == 0x02) ? MRAC_ELEM_FIELD_GAMMA : (id == 0x05) ? MRAC_ELEM_FIELD_LIMIT : MRAC_ELEM_FIELD_TOL;",
-        "MracElemParamApply(axis, field, elem, val);",
+        "static void Cmd_MracElem4(GsCmd_t *c)",
+        "uint8_t axis = (c->idx >> 4) & 0x0F;",
+        "uint8_t elem = c->idx & 0x0F;",
+        "uint8_t field = (c->id == 0x02) ? MRAC_ELEM_FIELD_GAMMA : (c->id == 0x05) ? MRAC_ELEM_FIELD_LIMIT : MRAC_ELEM_FIELD_TOL;",
+        "MracElemParamApply(axis, field, elem, c->val);",
     ):
         assert fragment in send_data, fragment
     assert LEGACY_CMD_IDS == (0x02, 0x05, 0x08)
@@ -365,15 +368,16 @@ def test_drift_legacy_decode(send_data):
 
 def test_drift_wide_decode(send_data):
     for fragment in (
-        "else if (MRAC_ELEM_CMD_IS(id)) {",
-        "uint8_t sel = (uint8_t)(id - MRAC_ELEM_CMD_BASE);",
-        "MracElemParamApply((uint8_t)(sel & 0x03U), (uint8_t)(sel >> 2), idx, val);",
+        "GS_CMD_ENTRY(MRAC_ELEM_CMD_BASE, MRAC_ELEM_CMD_LAST, Cmd_MracElem8)",
+        "uint8_t sel = (uint8_t)(c->id - MRAC_ELEM_CMD_BASE);",
+        "MracElemParamApply((uint8_t)(sel & 0x03U), (uint8_t)(sel >> 2), c->idx, c->val);",
     ):
         assert fragment in send_data, fragment
 
 
 def test_drift_command_gate_admits_the_wide_block(send_data):
-    assert "if ((id == 0U) || ((id > 0x1EU) && !MRAC_ELEM_CMD_IS(id))) {" in send_data
+    assert "if ((id == 0U) || ((id > CMD_ID_LAST_PLAIN) && !MRAC_ELEM_CMD_IS(id))) {" in send_data
+    assert _c_int(_defines(send_data)["CMD_ID_LAST_PLAIN"], {}) == 0x1E
 
 
 def test_drift_applier_validation(send_data):

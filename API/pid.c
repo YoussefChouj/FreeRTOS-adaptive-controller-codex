@@ -402,6 +402,28 @@ void ComputePID_Gated(PIDTypeDef *pPID, uint8_t integrate)
     }
 }
 
+/* WP-21 B: ComputePID_Gated, but hold == 1 keeps SumE/Ui at their previous value (the
+ * Z-loop P0 Finding 2 pattern) instead of zeroing them, so P/D still act.  U is rebuilt
+ * from the held Ui (ComputePID already added this tick's increment to it).  A non-finite
+ * saved value is not restored: ComputePID's NaN/inf reset wins.  WP-37: moved here from
+ * TASK/StabilizerTask.c (the static ComputePID_Hold of the xy position and velocity loops);
+ * sim/sil/csrc/sil_server.c still carries its own static copy under the old name. */
+void ComputePID_GatedHold(PIDTypeDef *pPID, uint8_t integrate, uint8_t hold)
+{
+    float sumE = pPID->SumE;
+    float ui   = pPID->Ui;
+    float u;
+    ComputePID_Gated(pPID, integrate);
+    if (hold && integrate && fabsf(sumE) < PID_FINITE_LIMIT && fabsf(ui) < PID_FINITE_LIMIT) {
+        pPID->SumE = sumE;
+        pPID->Ui   = ui;
+        u = pPID->Up + ui + pPID->Ud;
+        if (u >  pPID->UMax) u =  pPID->UMax;
+        if (u < -pPID->UMax) u = -pPID->UMax;
+        pPID->U = u;
+    }
+}
+
 float AttTrim_Apply(float des_deg, float trim_deg, float lim_deg, uint8_t flying)
 {
     if (flying) {

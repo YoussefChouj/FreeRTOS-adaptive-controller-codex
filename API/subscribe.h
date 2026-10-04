@@ -188,11 +188,23 @@ uint32_t Subscribe_TimeMs(void);
  * already covers a whole contiguous weight vector. */
 #define SUBSCRIBE_MAX_STREAM_RANGES  62U
 
-/* Concurrent subscriptions, each with its own variables, rate and transport.
- * Four because the data frame type is 0x09 + slot and 0x0D is where the next
- * frame-type block would start; also 4 * sizeof(Subscribe_Stream_t) = 816 B of
- * the ~19 kB free SRAM, which is affordable, and 8 would not obviously be. */
+/* Concurrent subscriptions, each with its own variables, rate and transport. The one switch for the slot
+ * count (WP-37); the cost of a slot, measured on the host build (same layout on the M4: uint8/16/32 only):
+ *   RAM   sizeof(Subscribe_Stream_t) = 508 B (12 B header + 62 ranges x 8 B). s_streams[] and the parse
+ *         staging slot live in CCM (subscribe.c SUBSCRIBE_CCM), so slots cost no SRAM:
+ *         4 slots + staging = 2540 B of CCM, 8 = 4572 B (CCM 13 888 B of 64 KiB used before WP-37).
+ *   CPU   Subscribe_StreamTick visits every slot twice per Send_Task cycle (phase advance, then the
+ *         round-robin sweep), a compare and a branch each for an idle slot.
+ *   Wire  unchanged: the budget guard sums ALL slots per transport, and the per-tick quota
+ *         SUBSCRIBE_MAX_FRAMES_PER_TICK is a service quota, not a wire cap.
+ *   Type  data frames are 0x09 + slot: 0x09..0x0C for 4 slots, 0x09..0x10 for 8. The FC sends no other
+ *         frame type in 0x0D..0x21 (in use: 0x01-0x08, 0x22-0x25, 0x30-0x32, 0x7F).
+ * Raising it is one commit: this line, ground_station/platform/firmware_contract.py SUBSCRIBE_MAX_SLOTS and
+ * ground_station/livewatch/stream.py MAX_SLOTS (tests on both sides compare them with this line). The
+ * firmware code is generic; tools/host_tests.py runs the subscribe harness with 8. */
+#ifndef SUBSCRIBE_MAX_SLOTS
 #define SUBSCRIBE_MAX_SLOTS          4U
+#endif
 
 /* Per-Send_Task-cycle emission quota. Before telemetry-throughput-2026-09-08
  * Subscribe_StreamTick emitted AT MOST one frame per tick (round-robin), so

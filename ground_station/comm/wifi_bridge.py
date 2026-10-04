@@ -27,7 +27,7 @@ Subscribe control plane
 ~~~~~~~~~~~~~~~~~~~~~~~
 The 0xCC 0xDE 0x21 subscribe request is accepted on USART3 (WiFi) and
 optionally on UART5 (CMSIS-DAP) when SUBSCRIBE_UART5_ENABLED=1. The default
-is USART3-only (production). The 0x08 schema reply and 0x09..0x0C data frames
+is USART3-only (production). The 0x08 schema reply and 0x09+slot data frames
 are sent back on the same transport the request arrived on.
 
 This bridge can both REQUEST subscriptions (via `--manifest` mode) and DECODE
@@ -45,7 +45,7 @@ Wire protocol
   Bridge WiFi RX <- FC sends raw USART3 bytes:
     Decodes Frame A (legacy 0xAA 0xAA 0x01) -- if present in this build
     Decodes Frame B / ID / C (0xAA 0xBB TYPE) when the mirror is up
-    Decodes subscribe data frames (0xAA 0xBB 0x09..0x0C)
+    Decodes subscribe data frames (0xAA 0xBB 0x09+slot, SUBSCRIBE_DATA_FRAMES)
     Decodes the 16-byte JustFloat fallback
     -> JSON to dashboard UDP 1350
     -> JustFloat to VoFA+ UDP 1347 (Frame A, slot 1) and 1348 (Frame B, slot 2)
@@ -89,6 +89,7 @@ from .boot_default_layout import (
 # in API/subscribe.h; the payload is the sum of resolved DWARF symbol sizes.
 from ground_station.livewatch.stream import FRAME_OVERHEAD  # noqa: E402
 
+from ground_station.platform.firmware_contract import SUBSCRIBE_DATA_FRAMES, SUBSCRIBE_MAX_SLOTS
 from ground_station.platform.transactions import Command as TransactionCommand
 from ground_station.platform.transactions import build_command as build_transaction_command
 from ground_station.platform.transactions import Result as TransactionResult
@@ -347,7 +348,7 @@ class WifiBridge:
         # (0x09+slot data frames flowing). "error" holds a machine-readable
         # reason. The service exposes these to the dashboard so the Slot
         # Manager can render pending / acked / live / error per slot.
-        # Keyed by slot 0..3 (SUBSCRIBE_MAX_SLOTS = 4).
+        # Keyed by slot 0..SUBSCRIBE_MAX_SLOTS-1 (platform/firmware_contract.py).
         self._slot_states: Dict[int, str] = {}
 
         # Rate-limiting for the S15 decode-line: tracks the last-named-count
@@ -1346,9 +1347,9 @@ class WifiBridge:
         build. Returns ``slot``, ``divider``, resolved ``ranges``,
         ``unresolved`` names, ``var_count``, ``expected_rate_hz``.
         """
-        if slot not in (0, 1, 2, 3):
+        if not 0 <= slot < SUBSCRIBE_MAX_SLOTS:
             raise ValueError(
-                f"slot {slot} outside known slot set (allowed: 0..3)"
+                f"slot {slot} outside known slot set (allowed: 0..{SUBSCRIBE_MAX_SLOTS - 1})"
             )
         if not 0 <= divider <= 255:
             raise ValueError(f"divider {divider} outside 0..255")
@@ -1523,7 +1524,7 @@ class WifiBridge:
             # 2-byte CRC16; 0x08 schema and legacy frames carry 1 XOR byte;
             # transaction results (0x30..0x32) carry 1 XOR byte but their
             # length field excludes it (len = 6 + payload_len).
-            if 0x09 <= frame_type <= 0x0C or frame_type == 0x06:
+            if frame_type in SUBSCRIBE_DATA_FRAMES or frame_type == 0x06:
                 total_len = 6 + payload_len + 2
             elif frame_type in (0x30, 0x31, 0x32):
                 total_len = 6 + payload_len
@@ -1532,7 +1533,7 @@ class WifiBridge:
             if len(buf) >= total_len:
                 frame = bytes(buf[:total_len])
                 del buf[:total_len]
-                if not 0x08 <= frame_type <= 0x0C:
+                if frame_type != 0x08 and frame_type not in SUBSCRIBE_DATA_FRAMES:
                     self._check_resubscribe()
                 if frame_type == 0x01:
                     return "a", self._decode_frame_a_uart4(frame)
@@ -1569,9 +1570,9 @@ class WifiBridge:
                 # Subscribe data frames: TYPE = 0x09 + slot.
                 # Slot 0 is reserved for livewatch's auto-subscribe; the
                 # data frame type would be 0x09 but the FC emits only 0x0A
-                # onwards here. We accept all four.
-                elif 0x09 <= frame_type <= 0x0C:
-                    slot = frame_type - 0x09
+                # onwards here. We accept every slot the firmware has (SUBSCRIBE_DATA_FRAMES).
+                elif frame_type in SUBSCRIBE_DATA_FRAMES:
+                    slot = frame_type - SUBSCRIBE_DATA_FRAMES.start
                     decoded = self._decode_stream_frame(slot, frame)
                     if decoded is not None:
                         self._last_stream_rx = time.monotonic()

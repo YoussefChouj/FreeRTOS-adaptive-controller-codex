@@ -59,6 +59,7 @@ from ground_station.livewatch.stream import (
     stream_bps,
 )
 from ground_station.livewatch.symbols import SymbolResolver
+from ground_station.platform.firmware_contract import SUBSCRIBE_MAX_SLOTS
 # LiveTransportError is what build_stream_request() actually raises via the
 # host-side _validate() mirror; merge()'s docstring promises ValueError to its
 # callers (notably build_burst_request's overflow fallback) so we convert
@@ -129,8 +130,8 @@ def build_preset_request(
     """
     if preset_id == 0 or preset_id > 15:
         raise ValueError(f"preset_id must be 1-15, got {preset_id:#04x}")
-    if slot >= 4:
-        raise ValueError(f"slot must be 0-3, got {slot}")
+    if slot >= SUBSCRIBE_MAX_SLOTS:
+        raise ValueError(f"slot must be 0-{SUBSCRIBE_MAX_SLOTS - 1}, got {slot}")
     if divider is None:
         divider = PRESET_DIVIDERS.get(preset_id, 20)
 
@@ -343,8 +344,8 @@ class PresetManager:
         if not preset_ids:
             raise ValueError("preset_ids cannot be empty")
 
-        if slot >= 4:
-            raise ValueError(f"slot must be 0-3, got {slot}")
+        if slot >= SUBSCRIBE_MAX_SLOTS:
+            raise ValueError(f"slot must be 0-{SUBSCRIBE_MAX_SLOTS - 1}, got {slot}")
 
         # Deduplicate IDs while preserving order
         seen: set[int] = set()
