@@ -3,8 +3,8 @@
 
 /* One row per loop, tunables only; the runtime fields (Des FB Up Ui Ud E PreE SumE U) start at 0.
    E is the loop error and U its output, in the units of the loop (row label); a tick is one call.
-   Bounds are plausibility ranges (PROPOSED); CMD 0x01 accepts Kp Ki Kd in 0..200 only.
-   @Kp      U/E        [0, 500]   gains, U = Up + Ui + Ud
+   Bounds are plausibility ranges (PROPOSED); what CMD 0x01 may write is PID_CMD_ROW below.
+   @Kp      U/E        [0, 1000]  gains, U = Up + Ui + Ud
    @Ki      U/(E*tick) [0, 200]   Ui = Ki*SumE
    @Kd      U*tick/E   [0, 200]   Ud = Kd*(E - PreE)
    @UMax    U          [0, 1000]  limit on the total output U
@@ -120,7 +120,37 @@ void PID_GainLeaseTick(uint32_t now_ms, uint8_t airborne)
         s_lease_pid[a]->Kd = s_lease_gain[a][2];
     }
     s_lease_open = 0U;
-}                  
+}
+
+/* CMD 0x01 write bounds (TASK/send_data.c Cmd_PidGain), one row per 0x01 axis in s_lease_pid order; the minimum
+   is 0. Rule: max(200, 2 x the PID_ROW default), so every boot gain can be written back and doubled
+   (API/tests/test_pid_guards.c checks it). Before WP-38 one bound of 200 covered every gain, so Z_ratePID Kp 400
+   could not be written back. Plausibility limits against a garbled write, not stability limits (PROPOSED).
+   @Kp  U/E        [0, 1000]  largest Kp the command accepts
+   @Ki  U/(E*tick) [0, 200]   largest Ki
+   @Kd  U*tick/E   [0, 200]   largest Kd */
+#define PID_CMD_ROW(Kp, Ki, Kd) { (Kp), (Ki), (Kd) }
+const float pid_cmd_max[PID_CMD_AXES][3] = {
+/*              Kp    Ki    Kd       axis  loop       default Kp / Ki / Kd */
+    PID_CMD_ROW(200,  200,  200), /* 0     pitchPID   3 / 0.02 / 8 */
+    PID_CMD_ROW(200,  200,  200), /* 1     rollPID    3 / 0.02 / 8 */
+    PID_CMD_ROW(200,  200,  200), /* 2     yawPID     6 / 0.04 / 0 */
+    PID_CMD_ROW(200,  200,  200), /* 3     gyroxPID   5 / 0.01 / 10 */
+    PID_CMD_ROW(200,  200,  200), /* 4     gyroyPID   5 / 0.01 / 10 */
+    PID_CMD_ROW(200,  200,  200), /* 5     gyrozPID   8 / 0.005 / 0.02 */
+    PID_CMD_ROW(800,  200,  200)  /* 6     Z_ratePID  400 / 0.435 / 0 */
+};
+
+PIDTypeDef *PID_CmdLoop(uint8_t axis)
+{
+    return (axis < PID_CMD_AXES) ? s_lease_pid[axis] : (PIDTypeDef *)0;
+}
+
+/* 1 if CMD 0x01 may write val to (axis, gain): known target, finite, in [0, pid_cmd_max]. NaN fails both tests. */
+uint8_t PID_CmdGainOk(uint8_t axis, uint8_t gain, float val)
+{
+    return (uint8_t)((axis < PID_CMD_AXES) && (gain < 3U) && (val >= 0.0f) && (val <= pid_cmd_max[axis][gain]));
+}
 
 /******���ַ��롢�����޷���P I D ����޷���������޷�***********************/
 #define PID_FINITE_LIMIT      1e12f    /* |x| above this counts as non-finite; no loop signal comes near it */

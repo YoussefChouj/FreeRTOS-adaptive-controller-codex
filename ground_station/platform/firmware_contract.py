@@ -185,7 +185,8 @@ COMMAND_TABLE: dict[int, CommandSpec] = {
         params=(
             CommandParam(0, "axis", "axis", 0, 6),
             CommandParam(1, "gain_type", "enum", 0, 2),
-            CommandParam(2, "Kp_or_Ki_or_Kd", "gain", 0.0, 200.0),
+            CommandParam(2, "Kp_or_Ki_or_Kd", "gain", 0.0, 800.0,
+                         "bound per axis and gain (API/pid.c PID_CMD_ROW): 200, Z_ratePID Kp 800"),
         ),
         safety=SafetyClass(description="Safe at runtime; changes control response immediately."),
     ),

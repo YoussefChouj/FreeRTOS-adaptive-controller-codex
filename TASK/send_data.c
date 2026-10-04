@@ -1370,7 +1370,6 @@ typedef struct {
 
 typedef void (*GsCmdHandler_t)(GsCmd_t *c);
 
-#define PID_GAIN_CMD_MAX       200.0f   /* CMD 0x01 accepts gains in [0, 200] */
 #define MOTOR_TEST_CCR_MIN     2000.0f  /* CMD 0x16 CCR clamp */
 #define MOTOR_TEST_CCR_MAX     4000.0f
 #define OF_BIAS_EMA_TAU_MIN_S  1.0f     /* CMD 0x1E idx 2 clamp; same range as OF_BIAS_EMA_TAU_* in StabilizerTask.c */
@@ -1378,26 +1377,19 @@ typedef void (*GsCmdHandler_t)(GsCmd_t *c);
 #define ARM_AIRBORNE_MIN_Z_M   0.35f    /* CMD 0x0E arm while above this: throttle stick to mid, not the floor */
 
 // CMD 0x01 — PID gain update
-// INDEX encodes axis+gain: (axis 0-6). (gain 0=Kp, 1=Ki, 2=Kd)
+// INDEX encodes axis+gain: (axis 0-6: pitch roll yaw gyrox gyroy gyroz Z_rate). (gain 0=Kp, 1=Ki, 2=Kd)
+// Bounds per axis and gain: API/pid.c PID_CMD_ROW (200, Z_ratePID Kp 800).
 static void Cmd_PidGain(GsCmd_t *c)
 {
     uint8_t axis = c->idx / 3;
     uint8_t gain = c->idx % 3;
+    PIDTypeDef *pid = PID_CmdLoop(axis);
 
-    PIDTypeDef* pids[7];
-    pids[0] = &Ctrler.pitchPID;
-    pids[1] = &Ctrler.rollPID;
-    pids[2] = &Ctrler.yawPID;
-    pids[3] = &Ctrler.gyroxPID;
-    pids[4] = &Ctrler.gyroyPID;
-    pids[5] = &Ctrler.gyrozPID;
-    pids[6] = &Ctrler.Z_ratePID;
-
-    if (axis < 7 && c->val >= 0.0f && c->val <= PID_GAIN_CMD_MAX) {
+    if (pid != 0 && PID_CmdGainOk(axis, gain, c->val)) {
         PID_GainLeaseRenew(c->lease_now_ms, c->lease_airborne);
-        if (gain == 0) pids[axis]->Kp = c->val;
-        else if (gain == 1) pids[axis]->Ki = c->val;
-        else if (gain == 2) pids[axis]->Kd = c->val;
+        if (gain == 0) pid->Kp = c->val;
+        else if (gain == 1) pid->Ki = c->val;
+        else pid->Kd = c->val;
     }
 }
 

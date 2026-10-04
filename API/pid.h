@@ -23,6 +23,12 @@ float AttTrim_Apply(float des_deg, float trim_deg, float lim_deg, uint8_t flying
 void PID_GainLeaseRenew(uint32_t now_ms, uint8_t airborne);
 void PID_GainLeaseTick(uint32_t now_ms, uint8_t airborne);
 
+/* CMD 0x01 targets (API/pid.c PID_CMD_ROW): axis 0..6 in the command's order, gain 0 Kp 1 Ki 2 Kd. */
+#define PID_CMD_AXES 7U
+extern const float pid_cmd_max[PID_CMD_AXES][3];
+PIDTypeDef *PID_CmdLoop(uint8_t axis);
+uint8_t PID_CmdGainOk(uint8_t axis, uint8_t gain, float val);
+
 typedef struct {
     float prev_x, prev_y, vf_x, vf_y;
     uint8_t primed;
