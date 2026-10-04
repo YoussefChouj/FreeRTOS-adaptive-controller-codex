@@ -30,13 +30,24 @@ HARNESS = REPO / "tools" / "fw_trace" / "stab_trace.c"
 CFLAGS = ["-std=gnu99", "-O0", "-msse2", "-mfpmath=sse", "-ffp-contract=off", "-fno-strict-aliasing", "-w"]
 
 
+# API/controller.c is linked for the mixer table (Mix_Motor); its entry points are renamed so the harness's
+# recording stubs of Controller_Update/CheckSwitch/Init stay the ones StabilizerTask.c calls.
+RENAME = ["-DController_Update=real_Controller_Update", "-DController_CheckSwitch=real_Controller_CheckSwitch",
+          "-DController_Init=real_Controller_Init"]
+
+
 def build(gcc: str, root: Path, exe: Path, cov: bool) -> None:
     src = (root / "TASK" / "StabilizerTask.c").as_posix()
-    args = [gcc, *CFLAGS, *(["--coverage"] if cov else []), *fw_equiv.flags(root), f'-DSTAB_SRC="{src}"',
-            str(HARNESS), str(root / "API" / "pid.c"), "-lm", "-o", str(exe)]
-    res = subprocess.run(args, cwd=exe.parent, capture_output=True, text=True, errors="replace")
-    if res.returncode != 0:
-        raise SystemExit(f"build {root}:\n{res.stderr[-3000:]}")
+    ctrl = exe.parent / "controller.o"
+    steps = [
+        [gcc, *CFLAGS, "-c", *fw_equiv.flags(root), *RENAME, str(root / "API" / "controller.c"), "-o", str(ctrl)],
+        [gcc, *CFLAGS, *(["--coverage"] if cov else []), *fw_equiv.flags(root), f'-DSTAB_SRC="{src}"',
+         str(HARNESS), str(root / "API" / "pid.c"), str(ctrl), "-lm", "-o", str(exe)],
+    ]
+    for args in steps:
+        res = subprocess.run(args, cwd=exe.parent, capture_output=True, text=True, errors="replace")
+        if res.returncode != 0:
+            raise SystemExit(f"build {root}:\n{res.stderr[-3000:]}")
 
 
 def run(exe: Path, ticks: int, seed: int, every: int) -> list[str]:

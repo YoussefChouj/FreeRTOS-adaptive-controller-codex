@@ -1464,32 +1464,14 @@ static void Mix_Compute(void)
 		Throttle_out = Constrain_Float(Throttle_out, pwm_lo, pwm_hi);
 	}
 
-	// CONSTRAINT: Keep these mixer signs in sync with the physical motor map and pwm.h channel mapping.
+	// CONSTRAINT: the motor signs live in one place, the MIX_ROW table in API/controller.c (also used by the
+	// MRAC V2 saturation deficit). Keep it in sync with the physical motor map and pwm.h channel mapping.
 	// WHY: Sign or channel drift here can invert closed-loop attitude response.
-	mymotor.motor1= Throttle_out
-									-u_gyroy//pitch
-									-u_gyrox//
-									-g_yaw_mix_dir*u_gyroz;//yaw  M1 CW prop
-
-	mymotor.motor2= Throttle_out
-									+u_gyroy//pitch
-									+u_gyrox//roll
-									-g_yaw_mix_dir*u_gyroz;//yaw  M2 CW prop
-
-	mymotor.motor3= Throttle_out
-									-u_gyroy//pitch
-									+u_gyrox//roll
-									+g_yaw_mix_dir*u_gyroz;//yaw  M3 CCW prop
-
-	mymotor.motor4= Throttle_out
-									+u_gyroy//pitch
-									-u_gyrox//roll
-									+g_yaw_mix_dir*u_gyroz;//yaw  M4 CCW prop
-									// 2026-09-27: motor dirs measured on the bench (M1/M2 CW, M3/M4 CCW). In flight1/3 with
-									// the old signs (M3/M4 +u) gyrozU pinned +350, M3/M4 high, drone spun CW: CCW props sped
-									// up -> CW reaction torque -> positive feedback. Default +1 = fixed signs; set
-									// g_yaw_mix_dir = -1 to get the old 09-10 signs back without reflashing.
-									// Flight4 (+1): gz -150 -> -770 deg/s in 3 s vs -220 with -1 -> default back to -1.
+	// g_yaw_mix_dir (+-1) is read once per motor, as before.
+	mymotor.motor1 = Mix_Motor(0U, Throttle_out, u_gyroy, u_gyrox, g_yaw_mix_dir*u_gyroz);   /* M1 CW  */
+	mymotor.motor2 = Mix_Motor(1U, Throttle_out, u_gyroy, u_gyrox, g_yaw_mix_dir*u_gyroz);   /* M2 CW  */
+	mymotor.motor3 = Mix_Motor(2U, Throttle_out, u_gyroy, u_gyrox, g_yaw_mix_dir*u_gyroz);   /* M3 CCW */
+	mymotor.motor4 = Mix_Motor(3U, Throttle_out, u_gyroy, u_gyrox, g_yaw_mix_dir*u_gyroz);   /* M4 CCW */
 }
 
 /* Shadow thrust estimators (200 Hz, after motor mixer, before Set_PWM_Motors).

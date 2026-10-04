@@ -26,6 +26,8 @@ typedef struct {
     uint8_t available;
 } ctrl_ops_t;
 
+#define CTRL_AXIS_MASK_ALL 0x0F
+
 extern volatile uint8_t g_ctrl_select;      /* active controller (ctrl_id_e) */
 extern volatile uint8_t g_ctrl_select_req;  /* requested controller; refused requests are reverted */
 extern volatile uint8_t g_ctrl_axis_mask;   /* bit per ctrl_axis_e; a cleared bit sends pure PID on that axis */
@@ -33,5 +35,20 @@ extern volatile uint8_t g_ctrl_axis_mask;   /* bit per ctrl_axis_e; a cleared bi
 void  Controller_Init(void);
 void  Controller_CheckSwitch(uint8_t armed);
 float Controller_Update(uint8_t axis, float u_nom);
+
+/* Quad-X mixer (API/controller.c MIX_ROW table): one row per motor M1..M4, one column per mixer input. */
+#define MIX_MOTORS  4
+#define MIX_INPUTS  4
+enum { MIX_THR = 0, MIX_PITCH = 1, MIX_ROLL = 2, MIX_YAW = 3 };   /* column index */
+extern const float g_mix[MIX_MOTORS][MIX_INPUTS];
+
+/* Motor command (CCR, before the Set_PWM_Motors clamp) of motor 0..3 from the four mixer inputs:
+ * u_pitch = u_gyroy, u_roll = u_gyrox, u_yaw = g_yaw_mix_dir*u_gyroz. */
+float Mix_Motor(uint8_t motor, float thr, float u_pitch, float u_roll, float u_yaw);
+/* Sum over the motors of g_mix[m][input] * v[m] (the per-axis projection of a per-motor quantity). */
+float Mix_Column(const float v[MIX_MOTORS], uint8_t input);
+/* MRAC V2 saturation deficit in mixer units, def[ctrl_axis_e]: the part of each motor command outside
+ * [2000, 4000] projected back per axis, mean over the motors (yaw scaled by yaw_dir = g_yaw_mix_dir). */
+void  Mix_SatDeficit(float thr, float u_pitch, float u_roll, float u_yaw, float yaw_dir, float def[4]);
 
 #endif /* CONTROLLER_H */

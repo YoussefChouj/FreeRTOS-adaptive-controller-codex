@@ -53,6 +53,11 @@ DEF(motor_test_id); DEF(motor_test_watchdog); DEF(mrac_in_armed); DEF(mrac_in_ph
 DEF(sbus_channel); DEF(sbus_flyup_trigger); DEF(sbus_lost); DEF(sbus_path_trigger); DEF(SDK_DelayWakeFlag);
 DEF(TWC_arrived);
 float Cos_Yaw = 1.0f, Sin_Yaw = 0.0f;   /* API/SINS.c, read by API/pid.c */
+/* API/controller.c (linked for the mixer table) refers to these; its renamed entry points never run here */
+DEF(mrac_state); DEF(mrac_flags); DEF(mrac_config_pitch); DEF(mrac_config_roll); DEF(mrac_config_yaw);
+DEF(mrac_config_z); DEF(mrac_simplex); DEF(mrac_inj);
+void MRAC_Reset(void) { call(41); }
+void MRAC_Init(void) { call(42); }
 
 /* ---- scripted state behind the stubs -------------------------------------------------------------- */
 static FlightState_t g_fsm = FLIGHT_STATE_DISARMED;

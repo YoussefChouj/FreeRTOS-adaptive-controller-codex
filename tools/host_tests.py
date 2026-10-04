@@ -35,6 +35,7 @@ HOST_TESTS = [
     ("mrac_sigma_prior", ["API/tests/test_mrac_sigma_prior.c", "{src}/mrac.c"],                  ["-std=c99", "-Wall", "-DMRAC_ENABLE_SIGMA_PRIOR", "-I{src}", "-IAPI/tests/stubs"]),
     ("mrac_sizeof",      ["API/tests/mrac_sizeof.c"],                                            ["-std=c99", *STUBS]),
     ("fw_controller",    ["tests/firmware_host/test_controller.c", "API/controller.c"],          ["-std=c99", "-Wall", "-Werror", *FWH]),
+    ("mixer",            ["API/tests/test_mixer.c", "API/controller.c"],                         ["-std=c99", *W, "-msse2", "-mfpmath=sse", *FWH]),
     ("fw_ekf_gate",      ["tests/firmware_host/test_ekf_gate.c", "API/ekf.c"],                   ["-std=c89", "-pedantic", "-Wall", "-Werror", *FWH]),
     ("fw_idle_decouple", ["tests/firmware_host/test_idle_decouple.c"],                           ["-std=c89", "-Wall", *FWH]),
     ("fw_wfb_traj",      ["tests/firmware_host/test_wfb_traj.c", "API/wfb_traj.c"],              ["-std=c99", *W, "-IAPI"]),
