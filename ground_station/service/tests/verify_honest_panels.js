@@ -320,13 +320,14 @@ function createInstance(filename) {
   sandbox.window = sandbox;
   sandbox.addEventListener = (ev, fn) => {};
   sandbox.removeEventListener = (ev, fn) => {};
+  vm.createContext(sandbox);
+  require('./ui_kit_loader').preloadKit(sandbox);   // index.html loads ui/ui-kit.js before any plugin
   sandbox.__registerPlugin__ = function (name, init, destroy) {
     sandbox.pluginName = name;
     sandbox.pluginInit = init;
     sandbox.pluginDestroy = destroy;
   };
 
-  vm.createContext(sandbox);
   vm.runInContext(code, sandbox, { filename: filepath });
   sandbox.pluginInit(api);
   api.renderFn(container, api);

@@ -15,6 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const { preloadKit } = require('./ui_kit_loader');
 
 const PANEL = path.join(__dirname, '..', '..', '..',
   'docs', 'dashboard-platform', 'shell', 'plugins', 'estimator-panel.js');
@@ -99,6 +100,7 @@ function loadPanel(fakeDoc, fakeWindow) {
     parseFloat, isNaN, isFinite,
     Object, Array, Math, String, Number, Date,
   });
+  preloadKit(sandbox);
   vm.runInContext(code, sandbox);
   return sandbox;
 }

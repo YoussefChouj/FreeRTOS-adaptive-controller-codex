@@ -477,30 +477,20 @@
     }
   }
 
-  // ── Two-click confirm (WP-23) ────────────────────────────────────────────
+  // ── Two-click confirm (WP-23; shared GSUI.confirmClick since WP-35) ──────
   // A browser can block window.confirm, and then the click silently did nothing. The first click turns the
   // button into "Confirm <action>?" for CONFIRM_MS and says why in the result box; a second click inside
   // that window runs the action. Refusals go to the result box too, never to an alert box.
   var CONFIRM_MS = 5000;
   function twoClick(btn, action, why, run, say) {
     if (!btn) { run(); return; }
-    if (btn._cpConfirmUntil && Date.now() < btn._cpConfirmUntil) {
-      clearTimeout(btn._cpConfirmTimer);
-      btn._cpConfirmUntil = 0;
-      btn.innerHTML = btn._cpConfirmLabel;
+    if (window.GSUI.confirmClick(btn, { windowMs: CONFIRM_MS, armedLabel: 'Confirm ' + action + '?' })) {
       run();
       return;
     }
-    btn._cpConfirmLabel = btn.innerHTML;
-    btn._cpConfirmUntil = Date.now() + CONFIRM_MS;
-    btn.textContent = 'Confirm ' + action + '?';
     var text = why + ' Click "Confirm ' + action + '?" within 5 s.';
     if (typeof say === 'function') say(text);
     else setResultStatus('pending_confirm', text);
-    btn._cpConfirmTimer = setTimeout(function () {
-      btn._cpConfirmUntil = 0;
-      btn.innerHTML = btn._cpConfirmLabel;
-    }, CONFIRM_MS);
   }
 
   // ── Command Submission ───────────────────────────────────────────────────

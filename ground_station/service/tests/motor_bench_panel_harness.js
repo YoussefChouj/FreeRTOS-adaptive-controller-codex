@@ -12,6 +12,7 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const { preloadKit } = require('./ui_kit_loader');
 
 const PANEL = path.join(__dirname, '..', '..', '..',
   'docs', 'dashboard-platform', 'shell', 'plugins', 'motor-bench-panel.js');
@@ -116,6 +117,7 @@ function loadPanel(api) {
     sandbox.pluginDestroy = destroy;
   };
   vm.createContext(sandbox);
+  preloadKit(sandbox);
   vm.runInContext(fs.readFileSync(PANEL, 'utf8'), sandbox, { filename: PANEL });
   sandbox.pluginInit(api);
   api.renderFn(container);
