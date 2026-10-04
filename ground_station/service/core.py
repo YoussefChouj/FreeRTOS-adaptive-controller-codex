@@ -38,6 +38,7 @@ from typing import Any, Callable
 from ground_station.livewatch.stream import MultiStreamDecoder, StreamSchema
 from ground_station.platform.telemetry import TelemetrySchema, load_telemetry_schema
 
+from . import session_schema
 from .gateway import CommandGateway
 from .schema_registry import SchemaRegistry
 from .storage import CsvRecorder, SessionStore
@@ -365,6 +366,7 @@ class GroundStationService:
                     requested_by="operator", reason="GS_RECORD=1 auto-start",
                     subscribe_layout=self._subscribe_layout_snapshot(),
                     context=self._manifest_context(),
+                    session_schema=self._session_schema(),
                 )
             except Exception:
                 pass
@@ -463,6 +465,19 @@ class GroundStationService:
             ctx["g_ctrl_select"] = int(ctrl_select)
         return ctx
 
+    def _session_schema(self) -> dict[str, Any] | None:
+        """Self-describing block for a new recording (session_schema.py): build, contracts, tunables and the
+        variables of the accepted subscriptions. None when it cannot be built; recording never fails on it."""
+        try:
+            bridge = getattr(self, "bridge", None)
+            schemas = dict(getattr(bridge, "_stream_schemas", {}) or {}) if bridge else {}
+            return session_schema.describe(
+                build=session_schema.git_build(),
+                elf=session_schema.firmware_elf(session_schema.REPO / "OBJ" / "JX_FLY.axf"),
+                variables=session_schema.variables(schemas), tunables=session_schema.tunables())
+        except Exception:
+            return None
+
     def recording_status(self) -> dict[str, Any]:
         """State block for GET /api/recording / POST /api/recording/stop."""
         rec = self.recorder
@@ -516,6 +531,7 @@ class GroundStationService:
                 label=label, requested_by=requested_by, reason=reason,
                 subscribe_layout=self._subscribe_layout_snapshot(),
                 context=self._manifest_context(),
+                session_schema=self._session_schema(),
             )
             preset_name = ""
             bridge = getattr(self, "bridge", None)

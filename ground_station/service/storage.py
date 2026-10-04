@@ -243,6 +243,8 @@ class CsvRecorder:
         self.subscribe_layout: dict[str, Any] = {}
         # Extra manifest context passed at start (service commit, firmware ELF).
         self.context: dict[str, Any] = {}
+        # Self-describing block (session_schema.describe): build, contracts, tunables, variables.
+        self.session_schema: dict[str, Any] | None = None
         # Operator notes buffered while recording is STOPPED (bounded), so they
         # are not lost and can be flushed into events.jsonl at the next start.
         self._buffered_notes: deque[dict[str, Any]] = deque(maxlen=NOTES_BUFFER_MAX)
@@ -258,7 +260,8 @@ class CsvRecorder:
     def start(self, *, label: str | None = None,
               requested_by: str = "operator", reason: str | None = None,
               subscribe_layout: dict[str, Any] | None = None,
-              context: dict[str, Any] | None = None) -> bool:
+              context: dict[str, Any] | None = None,
+              session_schema: dict[str, Any] | None = None) -> bool:
         """Begin a fresh recording: create a new directory and writer thread.
 
         Creates ``<root>/<YYYYmmdd-HHMMSS>[-label]/`` with ``telemetry.csv``,
@@ -287,6 +290,7 @@ class CsvRecorder:
         self.label = label
         self.subscribe_layout = dict(subscribe_layout or {})
         self.context = dict(context or {})
+        self.session_schema = session_schema
         self.started_at = time.time()
         self.stopped_at = None
         self.rows = 0
@@ -455,6 +459,7 @@ class CsvRecorder:
             "label": self.label,
             "subscribe_layout": self.subscribe_layout,
             "context": self.context,
+            "session_schema": self.session_schema,
             "rows": self.rows,
             "files": self.files,
             "errors": self.errors,
