@@ -53,7 +53,7 @@ Tree: `{rel}` | Branch: `{branch}`. Edit only this page, never another stream's 
 def run(cmd, cwd=None, timeout=20):
     try:
         return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout,
-                              encoding="utf-8", errors="replace").stdout.strip()
+                              encoding="utf-8", errors="replace").stdout.rstrip()   # rstrip: keep the leading space of a porcelain " M path" line
     except (OSError, subprocess.SubprocessError):
         return ""
 
