@@ -1,22 +1,45 @@
 /**
- * @file     ekf.c
- * @brief    9-state body-frame EKF — pure C99 firmware port.
- *
- * Reference: sim/ekf.py (golden, 108 tests) + ADR-0011 §"Parallel estimator".
- *
- * Math summary:
- *  State    : x = [v_body(3), b_a_body(3), b_g_body(3)]  — 9 floats
- *  Covar    : P = diag([Q_v, Q_v, Q_v, Q_ba, Q_ba, Q_ba, Q_bg, Q_bg, Q_bg])
- *  Predict  : v += (a_body - b_a) * dt;  P_vv += dt^2*Q_v;  P_ba += Q_ba; P_bg += Q_bg
- *  UpdateOF : H = [[1,0,0,...],[0,1,0,...]]; y = z - Hx; S = HPH^T + R*I2
- *             K = P H^T S^-1;  x += K y;  P = (I-KH)P(I-KH)^T + KRK^T
- *  UpdateAccXY: same H/R as OF, R=R_acc
- *  UpdateZRate: scalar H=[0,0,1,...]; y = z - x[2]; K = P[:,2]/s; x += K*y; P -= K*P[2,:]
- *
- * Keil ARMCC compatible — no designated initializers, no compound literals.
+ * @module     ekf.c
+ * @subsystem  sensors
+ * @owner      Send_Task (TASK/send_data.c): Ekf9_Init/SetBiasFrozen at boot and on reinit, Ekf9_Predict each frame,
+ *             Ekf9_UpdateOf on fresh optical flow, Ekf9_UpdateZRate on the OF height rate, Ekf9_GateStep each frame.
+ *             Single instance, single task: the file-scope scratch below relies on that.
+ * @purpose    9-state body-frame EKF, pure C99 port of sim/ekf.py (golden, 108 tests), ADR-0011 "Parallel estimator".
+ *             State x = [v_body(3), b_a_body(3), b_g_body(3)]; P0 = diag(Q).
+ *             Predict    : v += (a_body - b_a) * dt;  P = F P F^T + Q (F = I except F[0,3]=F[1,4]=F[2,5] = -dt).
+ *             UpdateOF   : H = [I2 0]; y = z - Hx; S = H P H^T + R I2; K = P H^T S^-1; x += K y;
+ *                          Joseph form P = (I-KH) P (I-KH)^T + K R K^T.  UpdateAccXY: same with R_acc.
+ *             UpdateZRate: scalar H = e3; K = P[:,2]/s; x += K y; P -= K P[2,:].
+ *             Keil ARMCC compatible: no designated initializers, no compound literals.
+ * @inputs     body-frame specific force [m/s^2] and gyro [rad/s], dt [s]; OF velocity [m/s]; lin. accel XY; Z rate.
+ * @outputs    Ekf9_t state/covariance/NIS/gains; Ekf9Gate_t health, fallback count and vx/vy [cm/s] for control.
  */
 #include "ekf.h"
 #include <math.h>
+
+/* ------------------------------------------------------------------
+ * Private constants
+ * ------------------------------------------------------------------ */
+
+/* Noise defaults (ADR-0011 table), loaded by Ekf9_Init; SetBiasFrozen restores q_ba/q_bg on unfreeze.
+   @q_v    (m/s^2)^2  [1e-5, 1e-1]   velocity process noise, scaled by dt^2 in Predict
+   @q_ba   (m/s^2)^2  [0, 1e-4]      accel-bias random walk per Predict
+   @q_bg   (rad/s)^2  [0, 1e-6]      gyro-bias random walk per Predict
+   @r_of   (m/s)^2    [1e-5, 1e-1]   optical-flow velocity measurement noise
+   @r_acc  (m/s)^2    [1e-4, 1]      accel-XY pseudo-measurement noise
+   @r_z    (m/s)^2    [1e-3, 1]      Z-rate measurement noise */
+typedef struct {
+    float q_v, q_ba, q_bg, r_of, r_acc, r_z;
+} ekf_noise_t;
+#define EKF_NOISE_ROW(q_v, q_ba, q_bg, r_of, r_acc, r_z)     { (q_v), (q_ba), (q_bg), (r_of), (r_acc), (r_z) }
+
+static const ekf_noise_t s_noise =
+/*            q_v    q_ba   q_bg   r_of     r_acc   r_z   */
+    EKF_NOISE_ROW(1e-3f, 1e-6f, 5e-9f, 6.16e-4f, 0.005f, 0.04f);
+
+/* ------------------------------------------------------------------
+ * Module state
+ * ------------------------------------------------------------------ */
 
 /* Scratch covariance snapshots. These are file-scope (BSS) rather than stack
  * locals on purpose: Send_Task's stack is SENDTASK_STK_SIZE = 500 words = 2 kB
@@ -27,116 +50,11 @@
 static float s_Po[81];   /* predict:  pre-update P snapshot */
 static float s_AP[81];   /* update:   (I - K H) P intermediate */
 
-#define EKF_Q_BA 1e-6f   /* ADR-0011 Q_ba */
-#define EKF_Q_BG 5e-9f   /* ADR-0011 Q_bg */
+/* ------------------------------------------------------------------
+ * Private helpers
+ * ------------------------------------------------------------------ */
 
-/* ------------------------------------------------------------------ */
-/* Init                                                                 */
-/* ------------------------------------------------------------------ */
-void Ekf9_Init(Ekf9_t *e, uint8_t active)
-{
-    uint8_t i;
-    for (i = 0U; i < 9U; i++) {
-        e->x[i]      = 0.0f;
-        e->Q_diag[i] = 0.0f;
-    }
-    /* Q defaults from ADR-0011 table: Q_v=1e-3, Q_ba=1e-6, Q_bg=5e-9 */
-    e->Q_diag[0] = 1e-3f;  e->Q_diag[1] = 1e-3f;  e->Q_diag[2] = 1e-3f;
-    e->Q_diag[3] = EKF_Q_BA;  e->Q_diag[4] = EKF_Q_BA;  e->Q_diag[5] = EKF_Q_BA;
-    e->Q_diag[6] = EKF_Q_BG;  e->Q_diag[7] = EKF_Q_BG;  e->Q_diag[8] = EKF_Q_BG;
-
-    /* P initial = diag(Q) */
-    for (i = 0U; i < 9U; i++) {
-        uint8_t j;
-        for (j = 0U; j < 9U; j++) {
-            e->P[i * 9U + j] = (i == j) ? e->Q_diag[i] : 0.0f;
-        }
-    }
-
-    e->R_of  = 6.16e-4f;
-    e->R_acc = 0.005f;
-    e->R_z   = 0.04f;
-
-    e->nis      = 0.0f;
-    e->k_last[0] = 0.0f;
-    e->k_last[1] = 0.0f;
-    e->k_last[2] = 0.0f;
-
-    e->active = active;
-
-    /* Zero working buffers */
-    for (i = 0U; i < 9U;  i++) e->S[i] = 0.0f;
-    for (i = 0U; i < 27U; i++) e->K[i] = 0.0f;
-}
-
-/* ------------------------------------------------------------------ */
-/* Predict                                                               */
-/* ------------------------------------------------------------------ */
-void Ekf9_Predict(Ekf9_t *e,
-                   float a_body_x, float a_body_y, float a_body_z,
-                   float gyro_x,   float gyro_y,   float gyro_z,
-                   float dt)
-{
-    if (!e->active) return;
-
-    /* State: v_body += (a_body - b_a_body) * dt */
-    e->x[0] += (a_body_x - e->x[3]) * dt;
-    e->x[1] += (a_body_y - e->x[4]) * dt;
-    e->x[2] += (a_body_z - e->x[5]) * dt;
-    /* b_a_body and b_g_body are random-walk — x[3..8] unchanged */
-
-    /* Covariance: P = F P F^T + Q, with F = I except F[0,3]=F[1,4]=F[2,5]=-dt.
-     * Writing F = I + N (N sparse), F P F^T = P + N P + P N^T + N P N^T.
-     * These cross terms are NOT negligible: F[0,3]=-dt is the ONLY path that
-     * builds the v-b_a cross-covariance P[0,3], and that off-diagonal is what
-     * makes accel bias observable through the OF/acc velocity update
-     * (K = P H^T S^-1 has zero rows 3..5 without it). Dropping it pins b_a at
-     * its init value forever. Matches sim/ekf.py F @ P @ F.T exactly.
-     * Snapshot P first so every term reads the pre-update covariance. */
-    {
-        uint8_t a;
-        for (a = 0U; a < 81U; a++) s_Po[a] = e->P[a];
-
-        {
-            uint8_t i, j;
-            /* N P : rows 0..2, all cols.  (N P)[i,j] = -dt * Po[i+3, j] */
-            for (i = 0U; i < 3U; i++) {
-                for (j = 0U; j < 9U; j++) {
-                    e->P[i * 9U + j] += -dt * s_Po[(i + 3U) * 9U + j];
-                }
-            }
-            /* P N^T : all rows, cols 0..2.  (P N^T)[i,j] = -dt * Po[i, j+3] */
-            for (i = 0U; i < 9U; i++) {
-                for (j = 0U; j < 3U; j++) {
-                    e->P[i * 9U + j] += -dt * s_Po[i * 9U + (j + 3U)];
-                }
-            }
-            /* N P N^T : 3x3 corner.  = dt^2 * Po[i+3, j+3] */
-            for (i = 0U; i < 3U; i++) {
-                for (j = 0U; j < 3U; j++) {
-                    e->P[i * 9U + j] += dt * dt * s_Po[(i + 3U) * 9U + (j + 3U)];
-                }
-            }
-        }
-
-        /* + Q : Q_v scaled by dt^2 (velocity), Q_ba/Q_bg as random-walk. */
-        e->P[0 * 9U + 0U] += dt * dt * e->Q_diag[0];
-        e->P[1 * 9U + 1U] += dt * dt * e->Q_diag[1];
-        e->P[2 * 9U + 2U] += dt * dt * e->Q_diag[2];
-        e->P[3 * 9U + 3U] += e->Q_diag[3];
-        e->P[4 * 9U + 4U] += e->Q_diag[4];
-        e->P[5 * 9U + 5U] += e->Q_diag[5];
-        e->P[6 * 9U + 6U] += e->Q_diag[6];
-        e->P[7 * 9U + 7U] += e->Q_diag[7];
-        e->P[8 * 9U + 8U] += e->Q_diag[8];
-    }
-
-    e->nis = 0.0f;
-}
-
-/* ------------------------------------------------------------------ */
-/* Shared 2x2 update logic (used by UpdateOf and UpdateAccXY)          */
-/* ------------------------------------------------------------------ */
+/* Shared 2x2 update logic (used by UpdateOf and UpdateAccXY). */
 static void s_Update2x2(Ekf9_t *e,
                          float y0, float y1,
                          float R,
@@ -218,6 +136,111 @@ static void s_Update2x2(Ekf9_t *e,
     e->k_last[0] = e->K[0U * 3U + 0U];
     e->k_last[1] = e->K[1U * 3U + 0U];
     e->k_last[2] = e->K[2U * 3U + 0U];
+}
+
+/* ------------------------------------------------------------------
+ * Public API
+ * ------------------------------------------------------------------ */
+
+/* ---- Init ---- */
+void Ekf9_Init(Ekf9_t *e, uint8_t active)
+{
+    uint8_t i;
+    for (i = 0U; i < 9U; i++) {
+        e->x[i]      = 0.0f;
+        e->Q_diag[i] = 0.0f;
+    }
+    e->Q_diag[0] = s_noise.q_v;   e->Q_diag[1] = s_noise.q_v;   e->Q_diag[2] = s_noise.q_v;
+    e->Q_diag[3] = s_noise.q_ba;  e->Q_diag[4] = s_noise.q_ba;  e->Q_diag[5] = s_noise.q_ba;
+    e->Q_diag[6] = s_noise.q_bg;  e->Q_diag[7] = s_noise.q_bg;  e->Q_diag[8] = s_noise.q_bg;
+
+    /* P initial = diag(Q) */
+    for (i = 0U; i < 9U; i++) {
+        uint8_t j;
+        for (j = 0U; j < 9U; j++) {
+            e->P[i * 9U + j] = (i == j) ? e->Q_diag[i] : 0.0f;
+        }
+    }
+
+    e->R_of  = s_noise.r_of;
+    e->R_acc = s_noise.r_acc;
+    e->R_z   = s_noise.r_z;
+
+    e->nis      = 0.0f;
+    e->k_last[0] = 0.0f;
+    e->k_last[1] = 0.0f;
+    e->k_last[2] = 0.0f;
+
+    e->active = active;
+
+    /* Zero working buffers */
+    for (i = 0U; i < 9U;  i++) e->S[i] = 0.0f;
+    for (i = 0U; i < 27U; i++) e->K[i] = 0.0f;
+}
+
+/* ------------------------------------------------------------------ */
+/* Predict                                                               */
+/* ------------------------------------------------------------------ */
+void Ekf9_Predict(Ekf9_t *e,
+                   float a_body_x, float a_body_y, float a_body_z,
+                   float gyro_x,   float gyro_y,   float gyro_z,
+                   float dt)
+{
+    if (!e->active) return;
+
+    /* State: v_body += (a_body - b_a_body) * dt */
+    e->x[0] += (a_body_x - e->x[3]) * dt;
+    e->x[1] += (a_body_y - e->x[4]) * dt;
+    e->x[2] += (a_body_z - e->x[5]) * dt;
+    /* b_a_body and b_g_body are random-walk — x[3..8] unchanged */
+
+    /* Covariance: P = F P F^T + Q, with F = I except F[0,3]=F[1,4]=F[2,5]=-dt.
+     * Writing F = I + N (N sparse), F P F^T = P + N P + P N^T + N P N^T.
+     * These cross terms are NOT negligible: F[0,3]=-dt is the ONLY path that
+     * builds the v-b_a cross-covariance P[0,3], and that off-diagonal is what
+     * makes accel bias observable through the OF/acc velocity update
+     * (K = P H^T S^-1 has zero rows 3..5 without it). Dropping it pins b_a at
+     * its init value forever. Matches sim/ekf.py F @ P @ F.T exactly.
+     * Snapshot P first so every term reads the pre-update covariance. */
+    {
+        uint8_t a;
+        for (a = 0U; a < 81U; a++) s_Po[a] = e->P[a];
+
+        {
+            uint8_t i, j;
+            /* N P : rows 0..2, all cols.  (N P)[i,j] = -dt * Po[i+3, j] */
+            for (i = 0U; i < 3U; i++) {
+                for (j = 0U; j < 9U; j++) {
+                    e->P[i * 9U + j] += -dt * s_Po[(i + 3U) * 9U + j];
+                }
+            }
+            /* P N^T : all rows, cols 0..2.  (P N^T)[i,j] = -dt * Po[i, j+3] */
+            for (i = 0U; i < 9U; i++) {
+                for (j = 0U; j < 3U; j++) {
+                    e->P[i * 9U + j] += -dt * s_Po[i * 9U + (j + 3U)];
+                }
+            }
+            /* N P N^T : 3x3 corner.  = dt^2 * Po[i+3, j+3] */
+            for (i = 0U; i < 3U; i++) {
+                for (j = 0U; j < 3U; j++) {
+                    e->P[i * 9U + j] += dt * dt * s_Po[(i + 3U) * 9U + (j + 3U)];
+                }
+            }
+        }
+
+        /* + Q : Q_v scaled by dt^2 (velocity), Q_ba/Q_bg as random-walk. */
+        e->P[0 * 9U + 0U] += dt * dt * e->Q_diag[0];
+        e->P[1 * 9U + 1U] += dt * dt * e->Q_diag[1];
+        e->P[2 * 9U + 2U] += dt * dt * e->Q_diag[2];
+        e->P[3 * 9U + 3U] += e->Q_diag[3];
+        e->P[4 * 9U + 4U] += e->Q_diag[4];
+        e->P[5 * 9U + 5U] += e->Q_diag[5];
+        e->P[6 * 9U + 6U] += e->Q_diag[6];
+        e->P[7 * 9U + 7U] += e->Q_diag[7];
+        e->P[8 * 9U + 8U] += e->Q_diag[8];
+    }
+
+    e->nis = 0.0f;
 }
 
 /* ------------------------------------------------------------------ */
@@ -318,7 +341,7 @@ void Ekf9_SetBiasFrozen(Ekf9_t *e, uint8_t frozen)
 {
     uint8_t i, j;
     for (i = 3U; i < 9U; i++) {
-        e->Q_diag[i] = frozen ? 0.0f : ((i < 6U) ? EKF_Q_BA : EKF_Q_BG);
+        e->Q_diag[i] = frozen ? 0.0f : ((i < 6U) ? s_noise.q_ba : s_noise.q_bg);
         for (j = 0U; j < 9U; j++) {
             e->P[i * 9U + j] = 0.0f;
             e->P[j * 9U + i] = 0.0f;
