@@ -14,7 +14,9 @@ Older entries (2026-09-30 .. 2026-10-03, incl. the landing/OF-drift investigatio
 ## Next actions (most urgent first)
 1. Lab 2026-10-06: follow `docs/agent/lab-2026-10-06.md` (flash HEAD of main, shakedown, payload_waypoints).
 2. After the demo: bench-run branch `ram-savings`, then merge it and regenerate `capability_manifest.json`.
-3. Improvement backlog (CEO inline, one item per commit): `.claude_state.md` last entry.
+3. After the demo: bench-run branch `o2-build` (Keil -O0 -> -O2: Code 118,300 -> 92,284 B measured, DWT delays;
+   speed not measured yet). Plan and numbers: `docs/firmware-compiler-optimisation.md` on that branch.
+4. Improvement backlog (CEO inline, one item per commit): `.claude_state.md` last entry.
 
 ## Do not
 - Do not arm, idle or spin motors outside an operator-opened battery session (AGENTS.md > Authorizations).
