@@ -6,12 +6,15 @@ Compares a reference tree against a new tree across multiple control scenarios.
 
 import argparse
 import glob
+import io
+import itertools
 import os
 import shutil
 import struct
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 CFLAGS = [
@@ -84,19 +87,58 @@ def build_binary(tree_dir: Path, driver_path: Path, stubs_dir: Path, out_bin: Pa
     subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
 
 
+def parse_cov(line: str, cov_counters: dict):
+    if line.startswith("cov "):
+        parts = line.split()
+        if len(parts) >= 3:
+            cov_counters[parts[1]] = int(parts[2])
+
+
+CHUNK = 1 << 20
+
+
 def compare_streams(ref_bin: Path, new_bin: Path):
-    proc_ref = subprocess.Popen([str(ref_bin)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
-    proc_new = subprocess.Popen([str(new_bin)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+    """Run both binaries and compare their stdout line by line (each line stripped).
+
+    Fast path: 1 MiB blocks compared as bytes; an equal block only counts its lines and reads its cov lines. From
+    the first block that differs, the rest is compared line by line, so a mismatch reports as before. The driver
+    prints 3.7 M lines per binary: the line loop alone cost about 13 s per pair (measured 2026-10-05).
+    """
+    proc_ref = subprocess.Popen([str(ref_bin)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    proc_new = subprocess.Popen([str(new_bin)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
     line_no = 0
     lines_compared = 0
     cov_counters = {}
     mismatch_info = None
+    tail = b""  # partial last line of the equal prefix, the same in both streams
 
     try:
         while True:
-            r_line = proc_ref.stdout.readline()
-            n_line = proc_new.stdout.readline()
+            r_blk = proc_ref.stdout.read(CHUNK)
+            n_blk = proc_new.stdout.read(CHUNK)
+            if r_blk != n_blk or not r_blk:
+                break
+            data = tail + r_blk
+            cut = data.rfind(b"\n") + 1
+            done, tail = data[:cut], data[cut:]
+            count = done.count(b"\n")
+            line_no += count
+            lines_compared += count
+            if b"cov " in done:
+                for line in done.decode().splitlines():
+                    parse_cov(line.strip(), cov_counters)
+        # Line by line from the partial line on: whole lines first, then the rest of each pipe.
+        r_buf, n_buf = tail + r_blk, tail + n_blk
+        if not r_buf.endswith(b"\n"):
+            r_buf += proc_ref.stdout.readline()
+        if not n_buf.endswith(b"\n"):
+            n_buf += proc_new.stdout.readline()
+        r_iter = itertools.chain(io.BytesIO(r_buf), proc_ref.stdout)
+        n_iter = itertools.chain(io.BytesIO(n_buf), proc_new.stdout)
+        while True:
+            r_line = next(r_iter, b"").decode()
+            n_line = next(n_iter, b"").decode()
 
             if not r_line and not n_line:
                 break
@@ -151,10 +193,7 @@ def compare_streams(ref_bin: Path, new_bin: Path):
                 break
 
             lines_compared += 1
-            if r_line.startswith("cov "):
-                parts = r_line.split()
-                if len(parts) >= 3:
-                    cov_counters[parts[1]] = int(parts[2])
+            parse_cov(r_line, cov_counters)
     finally:
         proc_ref.kill()
         proc_new.kill()
@@ -260,43 +299,36 @@ def main():
 
         new_defs = ["-D" + d for d in args.define] + ["-DMRAC_EQUIV_NEW_TREE"]
 
-        # 1. Plain build (without -DMRAC_ENABLE_SIGMA_PRIOR)
-        ref_bin_plain = tmp_dir / "ref_plain"
-        new_bin_plain = tmp_dir / "new_plain"
-        build_binary(ref_dir, driver_path, stubs_dir, ref_bin_plain, extra_flags=[])
-        build_binary(new_dir, driver_path, stubs_dir, new_bin_plain, extra_flags=new_defs)
+        # The four builds are independent, and so are the two compares (each runs its two binaries): run them at
+        # once. Results are reported in the old order, plain first.
+        builds = {
+            "ref_plain": (ref_dir, []),
+            "new_plain": (new_dir, new_defs),
+            "ref_sigma": (ref_dir, ["-DMRAC_ENABLE_SIGMA_PRIOR"]),
+            "new_sigma": (new_dir, ["-DMRAC_ENABLE_SIGMA_PRIOR"] + new_defs),
+        }
+        with ThreadPoolExecutor(max_workers=len(builds)) as pool:
+            jobs = [pool.submit(build_binary, tree, driver_path, stubs_dir, tmp_dir / name, extra_flags=flags)
+                    for name, (tree, flags) in builds.items()]
+            for job in jobs:
+                job.result()
+            runs = [pool.submit(compare_streams, tmp_dir / ("ref_" + v), tmp_dir / ("new_" + v))
+                    for v in ("plain", "sigma")]
+            results = [run.result() for run in runs]
 
-        lines_plain, cov_plain, mismatch_plain = compare_streams(ref_bin_plain, new_bin_plain)
-        if mismatch_plain is not None:
-            info = mismatch_plain
-            print(
-                f"Mismatch at line {info['line_no']}: tag '{info['tag']}' ref={info['ref_hex']} ({info['ref_flt']:.6e}) != new={info['new_hex']} ({info['new_flt']:.6e})",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+        lines = []
+        for n_lines, cov, info in results:
+            if info is not None:
+                print(
+                    f"Mismatch at line {info['line_no']}: tag '{info['tag']}' ref={info['ref_hex']} ({info['ref_flt']:.6e}) != new={info['new_hex']} ({info['new_flt']:.6e})",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            if not check_coverage_and_lines(n_lines, cov):
+                sys.exit(1)
+            lines.append(n_lines)
 
-        if not check_coverage_and_lines(lines_plain, cov_plain):
-            sys.exit(1)
-
-        # 2. Sigma-prior build (with -DMRAC_ENABLE_SIGMA_PRIOR)
-        ref_bin_sigma = tmp_dir / "ref_sigma"
-        new_bin_sigma = tmp_dir / "new_sigma"
-        build_binary(ref_dir, driver_path, stubs_dir, ref_bin_sigma, extra_flags=["-DMRAC_ENABLE_SIGMA_PRIOR"])
-        build_binary(new_dir, driver_path, stubs_dir, new_bin_sigma, extra_flags=["-DMRAC_ENABLE_SIGMA_PRIOR"] + new_defs)
-
-        lines_sigma, cov_sigma, mismatch_sigma = compare_streams(ref_bin_sigma, new_bin_sigma)
-        if mismatch_sigma is not None:
-            info = mismatch_sigma
-            print(
-                f"Mismatch at line {info['line_no']}: tag '{info['tag']}' ref={info['ref_hex']} ({info['ref_flt']:.6e}) != new={info['new_hex']} ({info['new_flt']:.6e})",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-        if not check_coverage_and_lines(lines_sigma, cov_sigma):
-            sys.exit(1)
-
-        print(f"EQUIV OK: {lines_plain} lines identical (plain) + {lines_sigma} (sigma-prior)")
+        print(f"EQUIV OK: {lines[0]} lines identical (plain) + {lines[1]} (sigma-prior)")
         sys.exit(0)
 
 

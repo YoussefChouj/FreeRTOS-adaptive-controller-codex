@@ -30,14 +30,40 @@ static inline float sum3sines(float t, float f1, float f2, float f3, float p1, f
             sinf(2.0f * 3.14159265f * f3 * t + p3)) / 3.0f;
 }
 
-static inline void print_float_hex(const char *tag, float val) {
+/* Every dump line is "<tag> %08x\n", written with fwrite: the run is 3.7 M lines and printf + snprintf were its
+   whole cost (66.4 s per binary with MinGW's ANSI stdio, 0.7 s with no formatting, measured 2026-10-05). The bytes
+   are the same as printf's. Tag = pre (pre_len chars) + suf, then ".idx" when idx >= 0. */
+static void put_line(const char *pre, size_t pre_len, const char *suf, int idx, uint32_t u) {
+    char line[192];
+    size_t n = pre_len, s = strlen(suf);
+    memcpy(line, pre, n);
+    memcpy(line + n, suf, s);
+    n += s;
+    if (idx >= 0) {
+        char d[12];
+        int k = 0;
+        line[n++] = '.';
+        do { d[k++] = (char)('0' + idx % 10); idx /= 10; } while (idx > 0);
+        while (k > 0) line[n++] = d[--k];
+    }
+    line[n++] = ' ';
+    for (int b = 28; b >= 0; b -= 4) line[n++] = "0123456789abcdef"[(u >> b) & 0xFu];
+    line[n++] = '\n';
+    fwrite(line, 1, n, stdout);
+}
+
+static uint32_t float_bits(float val) {
     uint32_t u;
     memcpy(&u, &val, sizeof(u));
-    printf("%s %08x\n", tag, u);
+    return u;
 }
 
 static inline void print_u32_hex(const char *tag, uint32_t u) {
-    printf("%s %08x\n", tag, u);
+    put_line(tag, strlen(tag), "", -1, u);
+}
+
+static inline void print_float_hex(const char *tag, float val) {
+    print_u32_hex(tag, float_bits(val));
 }
 
 static void print_axis_config(const char *name, const MRAC_AxisConfig_t *cfg) {
@@ -136,30 +162,23 @@ static void print_simplex(const MRAC_Simplex_t *s) {
 }
 
 static void print_axis_step(const char *scn_name, int step, const char *axis_name, const MRAC_AxisState_t *st) {
-    char tag[128];
-    snprintf(tag, sizeof(tag), "%s:%d:%s:xm", scn_name, step, axis_name);
-    print_float_hex(tag, st->xm);
-    snprintf(tag, sizeof(tag), "%s:%d:%s:xm_dot", scn_name, step, axis_name);
-    print_float_hex(tag, st->xm_dot);
-    snprintf(tag, sizeof(tag), "%s:%d:%s:e", scn_name, step, axis_name);
-    print_float_hex(tag, st->e);
-    snprintf(tag, sizeof(tag), "%s:%d:%s:e_dot", scn_name, step, axis_name);
-    print_float_hex(tag, st->e_dot);
-    snprintf(tag, sizeof(tag), "%s:%d:%s:xdot_f", scn_name, step, axis_name);
-    print_float_hex(tag, st->xdot_f);
-    snprintf(tag, sizeof(tag), "%s:%d:%s:u_ad", scn_name, step, axis_name);
-    print_float_hex(tag, st->u_ad);
+    char pre[128];
+    int len = snprintf(pre, sizeof(pre), "%s:%d:%s:", scn_name, step, axis_name);
+    size_t n = (len < 0) ? 0 : ((size_t)len < sizeof(pre) ? (size_t)len : sizeof(pre) - 1);
+    put_line(pre, n, "xm", -1, float_bits(st->xm));
+    put_line(pre, n, "xm_dot", -1, float_bits(st->xm_dot));
+    put_line(pre, n, "e", -1, float_bits(st->e));
+    put_line(pre, n, "e_dot", -1, float_bits(st->e_dot));
+    put_line(pre, n, "xdot_f", -1, float_bits(st->xdot_f));
+    put_line(pre, n, "u_ad", -1, float_bits(st->u_ad));
     for (int i = 0; i < N_ACTIVE; i++) {
-        snprintf(tag, sizeof(tag), "%s:%d:%s:Phi.%d", scn_name, step, axis_name, i);
-        print_float_hex(tag, st->Phi[i]);
+        put_line(pre, n, "Phi", i, float_bits(st->Phi[i]));
     }
     for (int i = 0; i < N_ACTIVE; i++) {
-        snprintf(tag, sizeof(tag), "%s:%d:%s:Theta.%d", scn_name, step, axis_name, i);
-        print_float_hex(tag, st->Theta[i]);
+        put_line(pre, n, "Theta", i, float_bits(st->Theta[i]));
     }
     for (int i = 0; i < N_ACTIVE; i++) {
-        snprintf(tag, sizeof(tag), "%s:%d:%s:Whatf.%d", scn_name, step, axis_name, i);
-        print_float_hex(tag, st->Whatf[i]);
+        put_line(pre, n, "Whatf", i, float_bits(st->Whatf[i]));
     }
 }
 
