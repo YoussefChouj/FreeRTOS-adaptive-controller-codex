@@ -1,150 +1,78 @@
+/**
+ * @module     delay.c
+ * @subsystem  bsp
+ * @owner      bmi088_driver.c uses delay_ms() during sensor bring-up; the vector table calls SysTick_Handler.
+ *             delay_init() has no caller today (the FreeRTOS port configures SysTick when the scheduler starts).
+ * @purpose    SysTick set-up for the FreeRTOS tick, the SysTick interrupt that forwards to the kernel, and two
+ *             blocking busy-wait delays for code that runs before the scheduler (or must not yield).
+ * @inputs     SYSCLK in MHz (delay_init), configTICK_RATE_HZ from FreeRTOSConfig.h.
+ * @outputs    SysTick clocked from HCLK, reloading every 1/configTICK_RATE_HZ s with its interrupt enabled.
+ */
+
 #include "delay.h"
 #include "sys.h"
-////////////////////////////////////////////////////////////////////////////////// 	 
-//如果使用OS,则包括下面的头文件即可
-//#if SYSTEM_SUPPORT_OS
-#include "FreeRTOS.h"					//FreeRTOS使用		  
+#include "FreeRTOS.h"
 #include "task.h"
-//#endif
 
-//static u8  fac_us=0;							//us延时倍乘数			   
-//static u16 fac_ms=0;							//ms延时倍乘数,在os下,代表每个节拍的ms数
+/* ------------------------------------------------------------------
+ * Private constants
+ * ------------------------------------------------------------------ */
 
- 
-extern void xPortSysTickHandler(void);
- 
-//systick中断服务函数,使用OS时用到
+/* Busy-wait loop counts. Not calibrated against a timer: the real delay depends on the compiler and the flash
+   wait states, so treat delay_ms / delay_us as "at least roughly" and never use them for timing. */
+#define DELAY_SPIN_PER_MS  42000
+#define DELAY_SPIN_PER_US  40
+
+/* ------------------------------------------------------------------
+ * External symbols
+ * ------------------------------------------------------------------ */
+
+extern void xPortSysTickHandler(void);   /* FreeRTOS port.c */
+
+/* ------------------------------------------------------------------
+ * Public API
+ * ------------------------------------------------------------------ */
+
+/* SysTick interrupt: hand the tick to FreeRTOS once the scheduler is running. */
 void SysTick_Handler(void)
-{	
-    if(xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)//系统已经运行
-    {
-        xPortSysTickHandler();	
-    }
+{
+	if (xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED)
+	{
+		xPortSysTickHandler();
+	}
 }
-			   
-//初始化延迟函数
-//SYSTICK的时钟固定为AHB时钟，基础例程里面SYSTICK时钟频率为AHB/8
-//这里为了兼容FreeRTOS，所以将SYSTICK的时钟频率改为AHB的频率！
-//SYSCLK:系统时钟频率
+
+/* Clock SysTick from HCLK (not HCLK/8) so FreeRTOS gets an exact tick, and fire it at configTICK_RATE_HZ.
+   SYSCLK is in MHz. LOAD is 24 bits wide: at 168 MHz the longest period is about 0.0998 s. */
 void delay_init(u8 SYSCLK)
 {
 	u32 reload;
- 	SysTick_CLKSourceConfig(SysTick_CLKSource_HCLK); 
-	//fac_us=SYSCLK;							//不论是否使用OS,fac_us都需要使用
-	reload=SYSCLK;							//每秒钟的计数次数 单位为M	   
-	reload*=1000000/configTICK_RATE_HZ;		//根据configTICK_RATE_HZ设定溢出时间
-											//reload为24位寄存器,最大值:16777216,在168M下,约合0.0998s左右	
-	//fac_ms=1000/configTICK_RATE_HZ;			//代表OS可以延时的最少单位	   
-	SysTick->CTRL|=SysTick_CTRL_TICKINT_Msk;//开启SYSTICK中断
-	SysTick->LOAD=reload; 					//每1/configTICK_RATE_HZ断一次	
-	SysTick->CTRL|=SysTick_CTRL_ENABLE_Msk; //开启SYSTICK     
-}								    
+	SysTick_CLKSourceConfig(SysTick_CLKSource_HCLK);
+	reload = SYSCLK;                              /* counts per microsecond */
+	reload *= 1000000 / configTICK_RATE_HZ;       /* counts per tick        */
+	SysTick->CTRL |= SysTick_CTRL_TICKINT_Msk;    /* enable the interrupt   */
+	SysTick->LOAD = reload;
+	SysTick->CTRL |= SysTick_CTRL_ENABLE_Msk;     /* start the counter      */
+}
 
-////延时nus
-////nus:要延时的us数.	
-////nus:0~204522252(最大值即2^32/fac_us@fac_us=168)	    								   
-//void delay_us(u32 nus)
-//{		
-//	u32 ticks;
-//	u32 told,tnow,tcnt=0;
-//	u32 reload=SysTick->LOAD;				//LOAD的值	    	 
-//	ticks=nus*fac_us; 						//需要的节拍数 
-//	told=SysTick->VAL;        				//刚进入时的计数器值
-//	while(1)
-//	{
-//		tnow=SysTick->VAL;	
-//		if(tnow!=told)
-//		{	    
-//			if(tnow<told)tcnt+=told-tnow;	//这里注意一下SYSTICK是一个递减的计数器就可以了.
-//			else tcnt+=reload-tnow+told;	    
-//			told=tnow;
-//			if(tcnt>=ticks)break;			//时间超过/等于要延迟的时间,则退出.
-//		}  
-//	};										    
-//}  
-////延时nms
-////nms:要延时的ms数
-////nms:0~65535
-//void delay_ms(u32 nms)
-//{	
-//	if(xTaskGetSchedulerState()!=taskSCHEDULER_NOT_STARTED)//系统已经运行
-//	{		
-//		if(nms>=fac_ms)						//延时的时间大于OS的最少时间周期 
-//		{ 
-//   			vTaskDelay(nms/fac_ms);	 		//FreeRTOS延时
-//		}
-//		nms%=fac_ms;						//OS已经无法提供这么小的延时了,采用普通方式延时    
-//	}
-//	delay_us((u32)(nms*1000));				//普通方式延时
-//}
-
-////延时nms,不会引起任务调度
-////nms:要延时的ms数
-//void delay_xms(u32 nms)
-//{
-//	u32 i;
-//	for(i=0;i<nms;i++) delay_us(1000);
-//}
-
-			 
-
-
-
-
-/*************************************************************************
-函 数 名：delay_ms
-函数功能：不精确延时t ms
-*************************************************************************/
+/* Blocking delay of roughly t milliseconds (busy-wait, does not yield). */
 void delay_ms(u32 t)
 {
 	int i;
 	for( i=0;i<t;i++)
 	{
-		int a=42000;
+		int a=DELAY_SPIN_PER_MS;
 		while(a--);
 	}
 }
 
-/*************************************************************************
-函 数 名：delay_us
-函数功能：不精确延时t us
-*************************************************************************/
+/* Blocking delay of roughly t microseconds (busy-wait, does not yield). */
 void delay_us(u32 t)
 {
 	int i;
 	for( i=0;i<t;i++)
 	{
-		int a=40;
+		int a=DELAY_SPIN_PER_US;
 		while(a--);
 	}
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
