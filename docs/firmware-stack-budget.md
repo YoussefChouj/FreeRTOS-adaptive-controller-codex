@@ -71,6 +71,9 @@ Fix (PROPOSED, `USER/fault_capture.c`, branch after the demo): build the record 
 `uint32_t[128]` array), and drop the copy loop. RAM cost 0, MSP need about -512 B, flash a little less. The same
 fix shrinks the start_task malloc-failed path (above) from 636 B to about 124 B.
 
-Related, not verified: the comment on `fault_backup` says it survives a warm reset, but it is a plain `.bss`
-array and armcc's `__main` zero-fills ZI on every reset. Check on the bench (trigger a fault, reset, read
-`fault_captured`) before relying on it; the usual fix is a `UNINIT` scatter region.
+Related finding (static, from `OBJ/JX_FLY.map`): the comment on `fault_backup` says the record survives a warm
+reset, but `fault_backup` is in `fault_capture.o(.bss)` and `fault_captured` in `fault_capture.o(.data)`
+(0x20000054). armcc's `__main` zero-fills ZI and re-copies RW on every reset, so after any reset
+`fault_captured` is back to `FAULT_STATE_EMPTY` and `FaultRecord_Persist` never sees `FAULT_STATE_SAVED`. Today the
+record is readable only over SWD while the handler spins (`for (;;)`). Fix (PROPOSED, needs the scatter file, so
+operator-owned): put both in an `UNINIT` execution region and validate them by `magic` + `crc16` at boot.
