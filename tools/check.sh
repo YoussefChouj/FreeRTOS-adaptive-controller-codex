@@ -8,6 +8,7 @@
 #   clang-tidy   .clang-tidy on every firmware file the host tests build, with their flags
 #   row-meta     units and [min, max] of every *_ROW tunable, every row value in range (tools/row_meta.py)
 #   arm-syntax   arm-none-eabi-gcc -fsyntax-only on the same files; skipped with a message if not installed
+# Opt-in pre-commit hook that runs this script: bash tools/install-hooks.sh (WP-38).
 set -u
 cd "$(dirname "$0")/.."
 PY=${PYTHON:-python}
@@ -30,7 +31,7 @@ step() {
 step host-tests "$PY" tools/host_tests.py
 step mrac-equiv "$PY" API/tests/run_mrac_equiv.py
 step c-pytest   "${PYTEST[@]}" ground_station/livewatch/tests/test_subscribe_c.py \
-                ground_station/analysis/tests/test_mrac_variants_host.py tools/test_row_meta.py
+                ground_station/analysis/tests/test_mrac_variants_host.py tools/test_row_meta.py tools/test_install_hooks.py
 step sil-smoke  "${PYTEST[@]}" sim/sil/test_sil.py --deselect sim/sil/test_sil.py::test_run_mrac_equiv_still_ok
 step clang-tidy "$PY" tools/host_tests.py --tidy
 step row-meta   "$PY" tools/row_meta.py
