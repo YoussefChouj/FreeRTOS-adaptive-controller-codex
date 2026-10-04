@@ -34,6 +34,7 @@
 #define MRAC_ZETA_MIN  0.1f     // floor on ref_model_zeta (a1 = 2 zeta wn divides)
 #define MRAC_FADE_S    0.1f     // simplex: time for the u_ad fade to go 1 -> 0 or back, s
 #define MRAC_SAT_FRAC  0.999f   // simplex: |u_ad| at or above this fraction of u_max counts as saturated
+#define MRAC_DEG2RAD   0.0174533f   // PID FB/Des (deg/s) and imu_data.pit/rol (deg) -> the rad(/s) MRAC works in
 
 // Global instance of the MRAC runtime states
 MRAC_State_t mrac_state MRAC_CCM;
@@ -341,7 +342,7 @@ static void MRAC_GenRBF(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *phi)
     xa = 0.0f;
     if (axis == MRAC_AXIS_PITCH || axis == MRAC_AXIS_ROLL) {
         xr = bus->x / cfg->rbf_rate_scale;
-        xa = ((axis == MRAC_AXIS_PITCH) ? imu_data.pit : imu_data.rol) / cfg->rbf_ang_scale;
+        xa = ((axis == MRAC_AXIS_PITCH) ? imu_data.pit : imu_data.rol) * MRAC_DEG2RAD / cfg->rbf_ang_scale;
     }
     if ((axis != MRAC_AXIS_PITCH && axis != MRAC_AXIS_ROLL) || cfg->rbf_on < 0.5f ||
         !(xr - xr == 0.0f) || !(xa - xa == 0.0f)) {
@@ -889,8 +890,9 @@ void MRAC_SimplexStep(void)
         for (i = 0; i < MRAC_N_FEATURES; i++) sum_w2 += axes[a]->Theta[i] * axes[a]->Theta[i];
         if (sqrtf(sum_w2) > mrac_simplex.w_norm_max) r = 3;
     }
-    if (fabsf(imu_data.pit) > mrac_simplex.pitch_max) r = 2;
-    if (fabsf(imu_data.rol) > mrac_simplex.roll_max)   r = 1;
+    /* imu_data is in degrees (API/imu_update.c), the envelope in rad. Before WP-38 the degrees were compared as rad. */
+    if (fabsf(imu_data.pit * MRAC_DEG2RAD) > mrac_simplex.pitch_max) r = 2;
+    if (fabsf(imu_data.rol * MRAC_DEG2RAD) > mrac_simplex.roll_max)   r = 1;
     trigger = (uint8_t)(r != 0);
 
     if (mrac_simplex.mode == 0) {
@@ -1247,8 +1249,6 @@ void MRAC_Reset(void)
 {
     MRAC_ResetWeights();
 }
-
-#define MRAC_DEG2RAD 0.0174533f   /* PID FB/Des are deg/s, the MRAC regressors rad/s */
 
 void MRAC_Control(const CtrlerTypeDef* current_state)
 {
