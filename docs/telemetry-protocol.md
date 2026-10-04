@@ -75,6 +75,15 @@ flash and ~100 Hz after it, at `divider=1`.
 The module adds ~1 % overhead over the raw wire. This is 55× the UART5 CMSIS-DAP path
 (~1600 B/s real ceiling).
 
+### Headroom: the baud is not the limit (2026-10-05)
+
+- The subscribe guard (`API/subscribe.c`) admits slots up to `SUBSCRIBE_BUDGET_PCT_USART3` 95 % of
+  `USART3_BAUD / 10` = 87,552 B/s. The stream rate is set by the Send_Task tick (`divider=1` gives ~100 Hz
+  measured 2026-09-19), so more data per second means more values per frame, not a faster wire.
+- If the wire ever binds: APB1 is 42 MHz, so 1,500,000 baud (BRR 0x1C) and 2,000,000 baud (BRR 0x15) are exact
+  (computed, OVER8=0), while 921600 runs at 913,043 (-0.93 %). Both ends must change together, the MicoAir
+  panel first; whether the module accepts these rates is NOT checked. PROPOSED, not built.
+
 ## Telemetry frames (FC → PC)
 
 The machine-readable contract is `docs/telemetry_protocol_schema.json`. The test-time gate
