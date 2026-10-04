@@ -1,6 +1,7 @@
 /* Host driver for the WP-27 MRAC variants (built by test_mrac_variants_host.py with gcc).
  *
  *   mrac_variants_host <steps> [axis:field:value ...] [nan_rate:<from>:<to>] [nan_ang:<from>:<to>] [udef:<value>]
+ *                      [learn_off:<step>]   (adaptation_on = 0 from that step; "wf <ax> <max|Theta - Whatf|>" at the end)
  *
  * Writes each axis:field:value through MRAC_VariantParamSet (prints "set <ok>"), then runs <steps> ticks of
  * a synthetic rate-tracking signal with the learn gate open and injection on (as API/tests/test_mrac_equiv.c).
@@ -15,7 +16,7 @@
 #include "mrac.h"
 
 /* Repeated from mrac.h for tools that index this file against another tree's headers (gate clang-tidy). */
-extern uint8_t mrac_var_id[AXES];
+extern uint16_t mrac_var_id[AXES];
 uint8_t MRAC_VariantParamSet(uint8_t axis, uint8_t field, float val);
 
 _imu_st imu_data = {0.0f, 0.0f};
@@ -31,7 +32,7 @@ int main(int argc, char **argv)
     MRAC_AxisConfig_t *cf[4];
     float maxabs[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     int steps, step, a, i, nonfinite = 0;
-    int nan_rate_from = -1, nan_rate_to = -1, nan_ang_from = -1, nan_ang_to = -1;
+    int nan_rate_from = -1, nan_rate_to = -1, nan_ang_from = -1, nan_ang_to = -1, learn_off = -1;
     float udef = 0.0f;
 
     if (argc < 2) return 2;
@@ -53,6 +54,7 @@ int main(int argc, char **argv)
         char *end;
         long x, y;
         if (strncmp(s, "udef:", 5) == 0) { udef = strtof(s + 5, NULL); continue; }
+        if (strncmp(s, "learn_off:", 10) == 0) { learn_off = (int)strtol(s + 10, NULL, 10); continue; }
         if (strncmp(s, "nan_rate:", 9) == 0 || strncmp(s, "nan_ang:", 8) == 0) {
             int rate = (s[4] == 'r');
             x = strtol(strchr(s, ':') + 1, &end, 10);
@@ -94,6 +96,7 @@ int main(int argc, char **argv)
         imu_data.rol = -0.15f * sinf(2.0f * 3.14159265f * 0.25f * t);
         if (step >= nan_ang_from && step < nan_ang_to) imu_data.pit = NAN;
         for (a = 0; a < 4; a++) st[a]->u_def = udef;
+        if (step == learn_off) mrac_flags.adaptation_on = 0;
 
         MRAC_Control(&c);
 
@@ -111,6 +114,11 @@ int main(int argc, char **argv)
         printf("max %d %.9g\n", a, (double)maxabs[a]);
         printf("umax %d %.9g\n", a, (double)cf[a]->u_max);
         printf("vid %d %d\n", a, (int)mrac_var_id[a]);
+        for (i = 0, maxabs[a] = 0.0f; i < MRAC_N_FEATURES; i++) {
+            float d = fabsf(st[a]->Theta[i] - st[a]->Whatf[i]);
+            if (d > maxabs[a]) maxabs[a] = d;
+        }
+        printf("wf %d %.9g\n", a, (double)maxabs[a]);
     }
     printf("nonfinite %d\n", nonfinite);
     return 0;

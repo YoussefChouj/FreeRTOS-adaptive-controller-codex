@@ -33,7 +33,10 @@
  *   MRAC_ENABLE_REFMODEL_V2    V1: per-axis ref type, command delay, normalized drive
  *   MRAC_ENABLE_SATAWARE       V2: leakage mu_sat*|u_def|*Theta (u_def from API/controller.c)
  *   MRAC_ENABLE_PERF_RECOVERY  kappa_pr*(Theta-Whatf)'Phi on u_ad, closed-loop ref model crm_ell
- *   MRAC_ENABLE_3L             3-layer layer 1: lam_ang * integral of e in the drive (L2/L3 not built) */
+ *   MRAC_ENABLE_3L             3-layer layer 1: lam_ang * integral of e in the drive (L2/L3 not built)
+ * WP-33, same rules:
+ *   MRAC_ENABLE_SET_THEORETIC  ST: restricted-potential gain on the gradient (st_eps) + log barrier (st_bar)
+ *   MRAC_ENABLE_LF_HIGHGAIN    LFHG: per-axis low-frequency learning (sigma_lf, gam_f) with gamma x lf_gain */
 #ifndef MRAC_ENABLE_REFMODEL_V2
 #define MRAC_ENABLE_REFMODEL_V2 1
 #endif
@@ -45,6 +48,12 @@
 #endif
 #ifndef MRAC_ENABLE_3L
 #define MRAC_ENABLE_3L 1
+#endif
+#ifndef MRAC_ENABLE_SET_THEORETIC
+#define MRAC_ENABLE_SET_THEORETIC 1
+#endif
+#ifndef MRAC_ENABLE_LF_HIGHGAIN
+#define MRAC_ENABLE_LF_HIGHGAIN 1
 #endif
 
 #endif // MRAC_VARIANT_H

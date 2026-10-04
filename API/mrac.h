@@ -76,7 +76,7 @@ typedef char MRAC_Assert_Window[ (MRAC_TELEM_WINDOW <= MRAC_N_FEATURES) ? 1 : -1
 #define INCLUDE_CONTROL_IN_REGRESSOR   1    // Add [un, v] to regressor (important for actuator modeling)
 
 // Future features (disabled for now)
-#define ENABLE_LYAPUNOV_BARRIER        0    // Barrier Lyapunov function (Layer 8)
+#define ENABLE_LYAPUNOV_BARRIER        0    // Unused: no code reads it (WP-33 grep). The log barrier is the ST variant's st_bar.
 #define ENABLE_DEADZONE                1
 #define ENABLE_PSEUDO_CONTROL_HEDGING  1    // PCH to prevent windup    // Gradient deadzone near zero error
 
@@ -235,6 +235,11 @@ typedef struct {
     float rbf_on;               // V3 [0/1] 0: phi[6..17] unused, law == STRUCT6
     float rbf_rate_scale;       // V3 [rad/s] rate normalisation of the RBF grid
     float rbf_ang_scale;        // V3 [rad]   angle normalisation of the RBF grid
+    // WP-33 variants (CMD 0x1D fields 13-18; sigma_lf and gam_f above are written by fields 17-18)
+    float st_eps;               // ST [rad/s] |e| bound of the restricted potential; 0 = OFF
+    float st_phi_max;           // ST [-]     cap of the gradient gain k_st (1 at e = 0)
+    float st_bar;               // ST [-]     log-barrier drive gain, active for |e| > 0.75 st_eps; 0 = OFF
+    float lf_gain;              // LFHG [-]   0 = OFF; > 0: LF learning on this axis and gamma x lf_gain
 
 } MRAC_AxisConfig_t;
 
@@ -253,6 +258,12 @@ typedef enum {
     MRAC_VF_RBF_ANG_SCALE,
     MRAC_VF_GAMMA_SCALE,        // writes mrac_g_gamma[axis][every group]
     MRAC_VF_REF_MODEL_BW,       // writes ref_model_bw (V1 yaw flies type 1 at ~2 rad/s)
+    MRAC_VF_ST_EPS,             // WP-33 from here; append only, never renumber
+    MRAC_VF_ST_PHI_MAX,
+    MRAC_VF_ST_BAR,
+    MRAC_VF_LF_GAIN,
+    MRAC_VF_SIGMA_LF,           // writes the existing sigma_lf row
+    MRAC_VF_GAM_F,              // writes the existing gam_f row (Whatf bandwidth, also PR's filter)
     MRAC_VF_COUNT
 } MRAC_VariantField_e;
 
@@ -300,7 +311,8 @@ typedef struct {
 } MRAC_AxisState_t;
 
 // Variant id per axis, rewritten every MRAC_UpdateAxis call (0 = today's law). Bits:
-// 0 V1 ref_type set, 1 V1 drive_norm, 2 V1 delay, 3 PR kappa, 4 PR crm, 5 V2 mu_sat, 6 3L lam_ang, 7 V3 rbf_on.
+// 0 V1 ref_type set, 1 V1 drive_norm, 2 V1 delay, 3 PR kappa, 4 PR crm, 5 V2 mu_sat, 6 3L lam_ang, 7 V3 rbf_on,
+// 8 ST st_eps, 9 ST st_bar, 10 LFHG lf_gain (WP-33 widened the id to 16 bits).
 #define MRAC_VID_REF_TYPE   0x01U
 #define MRAC_VID_DRIVE_NORM 0x02U
 #define MRAC_VID_DELAY      0x04U
@@ -309,7 +321,10 @@ typedef struct {
 #define MRAC_VID_SATAWARE   0x20U
 #define MRAC_VID_3L         0x40U
 #define MRAC_VID_RBF        0x80U
-extern uint8_t mrac_var_id[AXES];
+#define MRAC_VID_ST         0x100U
+#define MRAC_VID_ST_BAR     0x200U
+#define MRAC_VID_LFHG       0x400U
+extern uint16_t mrac_var_id[AXES];
 extern int8_t mrac_ref_type_eff[AXES];   // reference-model type each axis actually ran last tick
 
 // Main MRAC structure holding all 4 axes

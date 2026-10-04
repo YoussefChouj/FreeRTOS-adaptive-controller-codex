@@ -33,6 +33,13 @@ VARIANT_FIELDS: tuple[tuple[str, float, float], ...] = (
     ("rbf_ang_scale", 0.05, 1.0),
     ("gamma_scale", 0.0, 2.0),
     ("ref_model_bw", 0.5, 100.0),
+    # WP-33: set-theoretic (ST) and low-frequency high-gain (LFHG); sigma_lf / gam_f write existing config rows
+    ("st_eps", 0.0, 2.0),
+    ("st_phi_max", 1.0, 50.0),
+    ("st_bar", 0.0, 1.0),
+    ("lf_gain", 0.0, 10.0),
+    ("sigma_lf", 0.0, 5.0),
+    ("gam_f", 0.5, 100.0),
 )
 GAMMA_SCALE_FIELD = 11
 

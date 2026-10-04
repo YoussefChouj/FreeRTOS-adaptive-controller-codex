@@ -1816,6 +1816,7 @@ void Process_GroundStation_Command(void)
 
         /* CMD 0x1D - MRAC law variant field (WP-27, docs/workflow-b/mrac-variants.md).
          *   idx = (field << 2) | axis, field = MRAC_VariantField_e, axis 0 pitch 1 roll 2 yaw 3 z.
+         *   Fields 0-12 WP-27; 13-18 WP-33 (st_eps, st_phi_max, st_bar, lf_gain, sigma_lf, gam_f), idx <= 75.
          *   MRAC_VariantParamSet bounds every field and refuses non-finite values; ignored while airborne. */
         else if (id == 0x1D) {
             if ((flight_phase != FLIGHT_PHASE_FLYING) && (flight_phase != FLIGHT_PHASE_LANDING)) {

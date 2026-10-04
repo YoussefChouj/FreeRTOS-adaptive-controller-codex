@@ -54,14 +54,14 @@ def build(tmp_path_factory):
 
 def run(exe: Path, *args: str) -> dict:
     res = subprocess.run([str(exe), str(STEPS), *args], capture_output=True, text=True, check=True)
-    out = {"ticks": [], "set": [], "max": {}, "umax": {}, "vid": {}, "nonfinite": None}
+    out = {"ticks": [], "set": [], "max": {}, "umax": {}, "vid": {}, "wf": {}, "nonfinite": None}
     for line in res.stdout.splitlines():
         head, *rest = line.split()
         if head == "t":
             out["ticks"].append(tuple(rest))
         elif head == "set":
             out["set"].append(int(rest[0]))
-        elif head in ("max", "umax"):
+        elif head in ("max", "umax", "wf"):
             out[head][int(rest[0])] = float(rest[1])
         elif head == "vid":
             out["vid"][int(rest[0])] = int(rest[1])
@@ -95,6 +95,11 @@ CASES = {
     "v2_sataware": (0, V1_PR + sets((0, 1, 2), mu_sat=0.85) + ["udef:0.3"], 0x01 | 0x02 | 0x04 | 0x20),
     "3l_layer1": (0, V1_PR + sets((0, 1), lam_ang=4), 0x01 | 0x02 | 0x04 | 0x40),
     "v3_rbf12": (1, V1_PR + sets((0, 1), rbf_on=1), 0x01 | 0x02 | 0x04 | 0x80),
+    # WP-33. The synthetic signal's |e| (~0.2-0.3 rad/s, bursts to 15) crosses 0.75 x st_eps 0.3, so the barrier acts.
+    "st": (0, V1_PR + sets((0, 1), st_eps=0.3, st_phi_max=10), 0x01 | 0x02 | 0x04 | 0x100),
+    "st_barrier": (0, V1_PR + sets((0, 1), st_eps=0.3, st_phi_max=10, st_bar=0.2),
+                   0x01 | 0x02 | 0x04 | 0x100 | 0x200),
+    "lfhg": (0, V1_PR + sets((0, 1), lf_gain=10, sigma_lf=5, gam_f=100), 0x01 | 0x02 | 0x04 | 0x400),
 }
 
 
@@ -116,10 +121,20 @@ def test_variant_on_survives_nan_inputs(build, name):
     assert_bounded(r)
 
 
+def test_pr_filter_runs_when_learning_stops(build):
+    """WP-33 PR fix: the sim filters Whatf every tick (ctrl_p2_yucelen.py:197), so with Theta held the PR term
+    kappa_pr*(Theta - Whatf) decays to 0 instead of staying as an offset. Axes without kappa keep Whatf at 0."""
+    r = run(build(0), *V1_PR, *sets((0, 1), kappa_pr=0.5), f"learn_off:{STEPS // 2}")
+    assert r["wf"][0] < 1e-6 and r["wf"][1] < 1e-6   # float32 floor: the step 0.08*diff stalls below 1 ULP of Theta
+    assert r["wf"][2] > 1e-6                     # yaw: no kappa, l1 filtering off, Whatf stays 0 while Theta moved
+
+
 def test_variant_set_rejects_out_of_range(build):
     exe = build(1)
-    bad = ["4:0:1", "0:13:1", "2:12:0.4", "0:0:3", "0:0:-2", "0:1:0.05", "0:5:51", "0:9:0", "0:4:nan", "0:6:-0.1"]
-    good = ["0:0:-1", "3:0:2", "0:1:0.035", "0:5:50", "0:11:0.25", "0:8:1"]
+    bad = ["4:0:1", "0:19:1", "2:12:0.4", "0:0:3", "0:0:-2", "0:1:0.05", "0:5:51", "0:9:0", "0:4:nan", "0:6:-0.1",
+           "0:13:2.5", "0:14:0.5", "0:15:1.5", "0:16:11", "0:17:-1", "0:18:0.1"]
+    good = ["0:0:-1", "3:0:2", "0:1:0.035", "0:5:50", "0:11:0.25", "0:8:1",
+            "0:13:2", "0:14:1", "0:15:1", "0:16:10", "0:17:5", "0:18:100"]
     r = run(exe, *bad, *good)
     assert r["set"] == [0] * len(bad) + [1] * len(good)
 

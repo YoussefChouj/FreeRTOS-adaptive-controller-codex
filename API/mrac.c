@@ -38,8 +38,12 @@ MRAC_Simplex_t mrac_simplex = {0, 0, 0, 0, 0, 0, {0, 0, 0, 0}, 0, 200, 40,
 MRAC_Inj_t mrac_inj = {0};
 volatile uint8_t mrac_in_armed = 0;
 volatile uint8_t mrac_in_phase = 0;
-uint8_t mrac_var_id[AXES];
+uint16_t mrac_var_id[AXES];
 int8_t mrac_ref_type_eff[AXES];
+
+/* ST log barrier (sim/bench ctrl_p2_yucelen.py:86-93 log_bar_deriv): on above ALPHA*st_eps, SMOOTH caps 1/rem. */
+#define MRAC_ST_BAR_ALPHA  0.75f
+#define MRAC_ST_BAR_SMOOTH 0.02f
 
 static void MRAC_VariantSnap(MRAC_AxisState_t *st);
 
@@ -397,11 +401,12 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
     float sigma_lf_active;
     float raw_u_ad;
     int do_adaptation;
+    int adapted = 0;
     int i;
     int n;              // features in use: MRAC_N_STRUCT while V3 rbf_on is 0, else MRAC_N_FEATURES
     int ref_type;       // reference-model type this axis runs (global flag unless V1 ref_type >= 0)
     float r_m;          // command into the reference model (r, or r delayed by V1 ref_delay_s)
-    uint8_t vid;
+    uint16_t vid;
     uint32_t t0, t1, t2, t3;
 
     t0 = MRAC_CYC_NOW();
@@ -583,6 +588,36 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
         vid |= MRAC_VID_3L;
     }
 #endif
+#if MRAC_ENABLE_SET_THEORETIC == 1
+    // ST (Arabi, Gruenwald, Yucelen, Nguyen 2018, IJC; notebook P2 c6): restricted potential phi(mu) = mu^2/(eps - mu)
+    // on mu = |e|. Gradient gain k_st = eps * dphi/d(mu^2) = eps (eps - mu/2)/(eps - mu)^2: 1 at e = 0, grows toward
+    // the bound, capped at st_phi_max (also past the bound). The sim (ctrl_p2_yucelen.py:20-24) used 1/(eps^2 - s^2),
+    // not normalised. st_bar adds the log-barrier drive of the sim's MRAC_ST_Barrier, minus its value at the switch-on
+    // point so it starts at 0. Both scale the gradient only (projection and leakage unchanged).
+    if (config->st_eps > 0.0f) {
+        float mu = fabsf(state->e);
+        float k_st = config->st_phi_max;
+        float s_bar = 0.0f;
+        if (mu < config->st_eps) {
+            float g = config->st_eps - mu;
+            float k = config->st_eps * (config->st_eps - 0.5f * mu) / (g * g);
+            if (k < k_st) k_st = k;
+        }
+        if (config->st_bar > 0.0f && mu > MRAC_ST_BAR_ALPHA * config->st_eps) {
+            float rem = 1.0f - mu / config->st_eps + MRAC_ST_BAR_SMOOTH;
+            if (rem < MRAC_ST_BAR_SMOOTH) rem = MRAC_ST_BAR_SMOOTH;
+            s_bar = config->st_bar * config->st_eps
+                    * (1.0f / rem - 1.0f / (1.0f - MRAC_ST_BAR_ALPHA + MRAC_ST_BAR_SMOOTH));
+            if (state->e < 0.0f) s_bar = -s_bar;
+            vid |= MRAC_VID_ST_BAR;
+        }
+        s = k_st * s + s_bar;
+        vid |= MRAC_VID_ST;
+    }
+#endif
+#if MRAC_ENABLE_LF_HIGHGAIN == 1
+    if (config->lf_gain > 0.0f) vid |= MRAC_VID_LFHG;
+#endif
 #if MRAC_ENABLE_PERF_RECOVERY == 1
     if (config->kappa_pr > 0.0f) vid |= MRAC_VID_KAPPA_PR;
 #endif
@@ -599,6 +634,10 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
         }
         sigma_eff = config->sigma + sigma_e;
         sigma_lf_active = mrac_flags.l1_filtering_on ? config->sigma_lf : 0.0f;
+#if MRAC_ENABLE_LF_HIGHGAIN == 1
+        if (config->lf_gain > 0.0f) sigma_lf_active = config->sigma_lf;   // LFHG: LF learning on this axis
+#endif
+        adapted = 1;
 
         for (i = 0; i < n; i++) {
             grad[i] = (-s * state->Phi[i]) / denom;
@@ -641,6 +680,11 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
                      * config->mu_sat * fabsf(state->u_def) * state->Theta[i];
             }
 #endif
+#if MRAC_ENABLE_LF_HIGHGAIN == 1
+            // LFHG (Yucelen & Calise, low-frequency learning): the high gain applies only with the sigma_lf pull
+            // toward Whatf on, which keeps the high-frequency part of Theta out of u_ad.
+            if (config->lf_gain > 0.0f) y *= config->lf_gain;
+#endif
 
             state->Theta[i] += MRAC_DT * y * theta_scale;
 
@@ -661,8 +705,8 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
 
             // L1-style low-frequency leakage: pull fast weights toward filtered copy.
             // PR (kappa_pr > 0) needs the filtered copy too, without the sigma_lf pull.
-#if MRAC_ENABLE_PERF_RECOVERY == 1
-            if (mrac_flags.l1_filtering_on || config->kappa_pr > 0.0f) {
+#if MRAC_ENABLE_PERF_RECOVERY == 1 || MRAC_ENABLE_LF_HIGHGAIN == 1
+            if (mrac_flags.l1_filtering_on || config->kappa_pr > 0.0f || config->lf_gain > 0.0f) {
 #else
             if (mrac_flags.l1_filtering_on) {
 #endif
@@ -670,6 +714,16 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
             }
         }
     }
+#if MRAC_ENABLE_PERF_RECOVERY == 1
+    // PR fix (WP-33): the sim filters every tick (ctrl_p2_yucelen.py:197). Before, Whatf held in the deadzone or with
+    // learning off, so kappa_pr*(Theta - Whatf) stayed as a standing offset; now it decays as Theta holds.
+    // The simplex freeze still holds Whatf.
+    if (!adapted && config->kappa_pr > 0.0f && !(mrac_simplex.tripped || mrac_simplex.variant == 1)) {
+        for (i = 0; i < n; i++) {
+            state->Whatf[i] += MRAC_DT * config->gam_f * (state->Theta[i] - state->Whatf[i]);
+        }
+    }
+#endif
 
     // 6. Compute adaptive control component (u_ad = Theta^T * Phi)
     raw_u_ad = 0.0f;
@@ -838,6 +892,10 @@ void MRAC_Init(void)
     MRAC_SET(rbf_on,          0.0f,                      0.0f,                      0.0f,                      0.0f);
     MRAC_SET(rbf_rate_scale,  3.0f,                      3.0f,                      3.0f,                      3.0f);
     MRAC_SET(rbf_ang_scale,   0.26f,                     0.26f,                     0.26f,                     0.26f);
+    MRAC_SET(st_eps,          0.0f,                      0.0f,                      0.0f,                      0.0f);
+    MRAC_SET(st_phi_max,      10.0f,                     10.0f,                     10.0f,                     10.0f);
+    MRAC_SET(st_bar,          0.0f,                      0.0f,                      0.0f,                      0.0f);
+    MRAC_SET(lf_gain,         0.0f,                      0.0f,                      0.0f,                      0.0f);
 
     /* Basis weights: gamma = learning rate, limit/lower = weight bounds (projection),
      * tol = projection boundary layer. Yaw limit/tol = pitch/roll value * 0.6f. */
@@ -900,7 +958,10 @@ void MRAC_Init(void)
 #endif
 
     /* History and provenance (newest first)
-     * 2026-10-04 WP-27  Variant rows (ref_type .. rbf_ang_scale), all OFF; ref_type -1 = follow the global
+     * 2026-10-04 WP-33  ST and LFHG rows, OFF (st_eps 0, lf_gain 0). st_phi_max 10 = the sim default
+     *                   (ctrl_p2_yucelen.py:46); it matters only when st_eps > 0. Flight values: CMD 0x1D,
+     *                   docs/workflow-b/mrac-variants.md (SIL limit tests, PROPOSED).
+     * 2026-10-04 WP-27 Variant rows (ref_type .. rbf_ang_scale), all OFF; ref_type -1 = follow the global
      *                   CMD 0x13 type. Flight values are PROPOSED in docs/workflow-b/mrac-variants.md and
      *                   are written by CMD 0x1D, not here. rbf scales 3.0 rad/s and 0.26 rad (15 deg tilt
      *                   limit) from the roadmap V3; they matter only when rbf_on = 1.
@@ -1008,7 +1069,9 @@ static void MRAC_VariantSnap(MRAC_AxisState_t *st)
 /* CMD 0x1D field table: one row per MRAC_VariantField_e, in enum order. Writes outside [lo, hi] or
  * non-finite are refused. snap = 1: the write changes the reference model, so xm snaps to the plant.
  * Bounds keep an enabled variant inside the existing u_max clamp and numerically stable:
- *   ref_delay_s  <= (MRAC_REF_BUF-1)*DT;  crm_ell*DT <= 0.25;  rbf scales > 0 (they divide). */
+ *   ref_delay_s  <= (MRAC_REF_BUF-1)*DT;  crm_ell*DT <= 0.25;  rbf scales > 0 (they divide).
+ *   st_phi_max >= 1 (k_st is 1 at e = 0);  gam_f*DT <= 0.5;  DT*gamma(2)*gamma_scale(2)*lf_gain*sigma_lf <= 1
+ *   keeps the sigma_lf pull a stable Euler step. */
 #define MRAC_VAR_FIELD(lo, hi, snap) { lo, hi, snap }
 static const struct { float lo; float hi; uint8_t snap; } mrac_var_field[MRAC_VF_COUNT] = {
 /*                  lo      hi      snap     field */
@@ -1024,7 +1087,13 @@ static const struct { float lo; float hi; uint8_t snap; } mrac_var_field[MRAC_VF
     MRAC_VAR_FIELD( 0.1f,  20.0f,  0),   /* rbf_rate_scale  rad/s */
     MRAC_VAR_FIELD( 0.05f, 1.0f,   0),   /* rbf_ang_scale   rad */
     MRAC_VAR_FIELD( 0.0f,  2.0f,   0),   /* gamma_scale     mrac_g_gamma[axis][*] */
-    MRAC_VAR_FIELD( 0.5f,  100.0f, 1)    /* ref_model_bw    rad/s, wn on type 2 (DT*wn < 2) */
+    MRAC_VAR_FIELD( 0.5f,  100.0f, 1),   /* ref_model_bw    rad/s, wn on type 2 (DT*wn < 2) */
+    MRAC_VAR_FIELD( 0.0f,  2.0f,   0),   /* st_eps          rad/s */
+    MRAC_VAR_FIELD( 1.0f,  50.0f,  0),   /* st_phi_max      - */
+    MRAC_VAR_FIELD( 0.0f,  1.0f,   0),   /* st_bar          - */
+    MRAC_VAR_FIELD( 0.0f,  10.0f,  0),   /* lf_gain         - */
+    MRAC_VAR_FIELD( 0.0f,  5.0f,   0),   /* sigma_lf        1/s */
+    MRAC_VAR_FIELD( 0.5f,  100.0f, 0)    /* gam_f           rad/s */
 };
 
 uint8_t MRAC_VariantParamSet(uint8_t axis, uint8_t field, float val)
@@ -1065,6 +1134,16 @@ uint8_t MRAC_VariantParamSet(uint8_t axis, uint8_t field, float val)
             for (k = 0; k < MRAC_N_GROUPS; k++) mrac_g_gamma[axis][k] = val;
             break;
         case MRAC_VF_REF_MODEL_BW:   c->ref_model_bw = val;   break;
+        case MRAC_VF_ST_EPS:         c->st_eps = val;         break;
+        case MRAC_VF_ST_PHI_MAX:     c->st_phi_max = val;     break;
+        case MRAC_VF_ST_BAR:         c->st_bar = val;         break;
+        case MRAC_VF_LF_GAIN:
+            c->lf_gain = val;
+            // bumpless: the filtered copy starts at the weights, so the sigma_lf pull starts at 0
+            for (k = 0; k < MRAC_N_FEATURES; k++) st[axis]->Whatf[k] = st[axis]->Theta[k];
+            break;
+        case MRAC_VF_SIGMA_LF:       c->sigma_lf = val;       break;
+        case MRAC_VF_GAM_F:          c->gam_f = val;          break;
         default: return 0U;
     }
     if (mrac_var_field[field].snap) {
