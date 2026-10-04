@@ -12,6 +12,9 @@ same script on push/PR (ubuntu, apt gcc + gcc-multilib + clang-tidy + gcc-arm-no
 | sil-smoke | `sim/sil/test_sil.py` (firmware controllers closed-loop), minus its EQUIV case | pytest |
 | clang-tidy | `.clang-tidy` on the 11 firmware files the host tests build, with their flags | `python tools/host_tests.py --tidy` |
 | row-meta | unit and [min, max] of every `*_ROW` tunable; every row value in range | `python tools/row_meta.py [--json]` |
+| fw-lint | ASCII-only, file header, no new double libm call; allow-list shrinks only | `python tools/fw_lint.py` |
+| stack | task stacks and nested MSP from the Keil call graph; ISR above the syscall ceiling calls no kernel code | `python tools/stack_budget.py` |
+| doc-paths | every repo path named in an agent-facing doc exists; allow-list shrinks only | `python tools/doc_paths.py` |
 | arm-syntax | `arm-none-eabi-gcc -fsyntax-only`, Cortex-M4F flags, same files; SKIP if absent | `python tools/host_tests.py --arm` |
 
 clang-tidy checks: `bugprone-*`, `clang-analyzer-*`, `readability-non-const-parameter`, warnings are errors. Off:

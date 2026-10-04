@@ -155,7 +155,9 @@ to `env.md`, behavior rules to `rules.md`.
 
 ## Conventions
 
-- C for Keil ARMCC V5.06. Declarations at block top, no VLAs, no C99-only constructs.
+- C for Keil ARMCC V5.06, project built with `--C99` (no C11: compile-time checks use the typedef form, coding
+  standard rule 8b). Declarations at block top, no VLAs.
+- Before a commit: `bash tools/check.sh` (steps: `docs/firmware-quality.md`), no Keil or hardware needed.
 - Match surrounding style over personal preference.
 - Minimum code that solves the problem. Nothing speculative.
 - Touch only what the task requires.
