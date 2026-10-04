@@ -1,0 +1,58 @@
+# MRAC LFHG "low-frequency learning, high gain" knobs (WP-33, docs/workflow-b/mrac-variants.md). CMD 0x1D,
+# idx = field << 2 | axis, ground only; see mrac_v1.yaml for the encoding and the presets protocol. LFHG builds on
+# the V1 drive. lf_gain > 0 turns the sigma_lf (Theta - Whatf) pull on for the axis and multiplies its gamma by lf_gain;
+# gam_f is the Whatf filter bandwidth (rad/s). Writing lf_gain copies Theta into Whatf (bumpless). API/mrac.c.
+# Preset = the SIL flight point of docs/analysis/sil-limits-2026-10-04.md (python -m sim.sil.limits), PROPOSED.
+# Pitch/roll only (MAX_KNOBS 14): yaw keeps its firmware law. The SIL envelope was measured with only pitch/roll
+# injected (g_ctrl_axis_mask 0x03); see docs/workflow-b/mrac-variants.md for the flight setup.
+name: mrac_lfhg
+shadow_outputs:
+  - mrac_state.pitch.u_ad
+  - mrac_state.roll.u_ad
+  - mrac_state.yaw.u_ad
+knobs:
+  - {symbol: "mrac_config_pitch.ref_type",     cmd_id: 0x1D, idx: 0,  default: -1.0, lo: -1.0, hi: 2.0,  scale: lin}
+  - {symbol: "mrac_config_roll.ref_type",      cmd_id: 0x1D, idx: 1,  default: -1.0, lo: -1.0, hi: 2.0,  scale: lin}
+  - {symbol: "mrac_config_pitch.drive_norm",   cmd_id: 0x1D, idx: 8,  default: 0.0,  lo: 0.0,  hi: 1.0,  scale: lin}
+  - {symbol: "mrac_config_roll.drive_norm",    cmd_id: 0x1D, idx: 9,  default: 0.0,  lo: 0.0,  hi: 1.0,  scale: lin}
+  - {symbol: "mrac_config_pitch.lam_edot",     cmd_id: 0x1D, idx: 12, default: 0.0,  lo: 0.0,  hi: 0.01, scale: lin}
+  - {symbol: "mrac_config_roll.lam_edot",      cmd_id: 0x1D, idx: 13, default: 0.0,  lo: 0.0,  hi: 0.01, scale: lin}
+  - {symbol: "mrac_g_gamma[0][*]",             cmd_id: 0x1D, idx: 44, default: 1.0,  lo: 0.25, hi: 2.0,  scale: log}
+  - {symbol: "mrac_g_gamma[1][*]",             cmd_id: 0x1D, idx: 45, default: 1.0,  lo: 0.25, hi: 2.0,  scale: log}
+  - {symbol: "mrac_config_pitch.lf_gain",      cmd_id: 0x1D, idx: 64, default: 0.0,  lo: 0.0,  hi: 10.0, scale: lin}
+  - {symbol: "mrac_config_roll.lf_gain",       cmd_id: 0x1D, idx: 65, default: 0.0,  lo: 0.0,  hi: 10.0, scale: lin}
+  - {symbol: "mrac_config_pitch.sigma_lf",     cmd_id: 0x1D, idx: 68, default: 0.8,  lo: 0.0,  hi: 5.0,  scale: lin}
+  - {symbol: "mrac_config_roll.sigma_lf",      cmd_id: 0x1D, idx: 69, default: 0.8,  lo: 0.0,  hi: 5.0,  scale: lin}
+  - {symbol: "mrac_config_pitch.gam_f",        cmd_id: 0x1D, idx: 72, default: 16.0, lo: 0.5,  hi: 100.0, scale: log}
+  - {symbol: "mrac_config_roll.gam_f",         cmd_id: 0x1D, idx: 73, default: 16.0, lo: 0.5,  hi: 100.0, scale: log}
+presets:
+  lfhg_mrac:
+    mrac_config_pitch.ref_type: 2
+    mrac_config_roll.ref_type: 2
+    mrac_config_pitch.drive_norm: 1
+    mrac_config_roll.drive_norm: 1
+    mrac_config_pitch.lam_edot: 0.0018
+    mrac_config_roll.lam_edot: 0.0018
+    "mrac_g_gamma[0][*]": 1.0
+    "mrac_g_gamma[1][*]": 1.0
+    mrac_config_pitch.lf_gain: 0.25
+    mrac_config_roll.lf_gain: 0.25
+    mrac_config_pitch.sigma_lf: 0.8
+    mrac_config_roll.sigma_lf: 0.8
+    mrac_config_pitch.gam_f: 16.0
+    mrac_config_roll.gam_f: 16.0
+  restore:
+    mrac_config_pitch.ref_type: -1
+    mrac_config_roll.ref_type: -1
+    mrac_config_pitch.drive_norm: 0
+    mrac_config_roll.drive_norm: 0
+    mrac_config_pitch.lam_edot: 0
+    mrac_config_roll.lam_edot: 0
+    "mrac_g_gamma[0][*]": 1.0
+    "mrac_g_gamma[1][*]": 1.0
+    mrac_config_pitch.lf_gain: 0
+    mrac_config_roll.lf_gain: 0
+    mrac_config_pitch.sigma_lf: 0.8
+    mrac_config_roll.sigma_lf: 0.8
+    mrac_config_pitch.gam_f: 16.0
+    mrac_config_roll.gam_f: 16.0

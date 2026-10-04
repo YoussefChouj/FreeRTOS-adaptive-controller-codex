@@ -84,6 +84,9 @@ def compute(lg) -> dict:
         uad_ratio=max(ratio.values()),
         uad_ratio_axis=max(ratio, key=ratio.get),
         uad_rms_ratio=max(ratio_rms.values()),
+        # high-frequency content of the injected correction: RMS tick-to-tick change on p/r, mixer units per tick
+        uad_hf=max(float(np.sqrt(np.mean(np.diff(lg.out[f"corr_{a}"][s].astype(float)) ** 2))) if s.sum() > 1 else 0.0
+                   for a in ("p", "r")),
         theta_end=float(th[-1]) if len(th) else 0.0,
         theta_rise_s=float(_longest(rising) * WIN * DT_C),
         heading_drift_deg=float(np.abs(lg.hdg[s]).max()),

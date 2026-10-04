@@ -1,0 +1,56 @@
+# MRAC PR "performance recovery" knobs (WP-27 law, WP-33 limits; docs/workflow-b/mrac-variants.md). CMD 0x1D,
+# idx = field << 2 | axis, ground only; see mrac_v1.yaml for the encoding and the presets protocol.
+# PR builds on the V1 drive, so its preset also switches V1 on. kappa_pr: u_ad += kappa_pr (Theta - Whatf)'Phi
+# (Yucelen-Calise); crm_ell: xm += DT crm_ell (x - xm); gam_f: the Whatf filter bandwidth (shared with LF learning).
+# Preset = the SIL flight point of docs/analysis/sil-limits-2026-10-04.md (python -m sim.sil.limits), PROPOSED.
+# Pitch/roll only (MAX_KNOBS 14): yaw keeps its firmware law. The SIL envelope was measured with only pitch/roll
+# injected (g_ctrl_axis_mask 0x03); see docs/workflow-b/mrac-variants.md for the flight setup.
+name: mrac_pr
+shadow_outputs:
+  - mrac_state.pitch.u_ad
+  - mrac_state.roll.u_ad
+  - mrac_state.yaw.u_ad
+knobs:
+  - {symbol: "mrac_config_pitch.ref_type",     cmd_id: 0x1D, idx: 0,  default: -1.0, lo: -1.0, hi: 2.0,  scale: lin}
+  - {symbol: "mrac_config_roll.ref_type",      cmd_id: 0x1D, idx: 1,  default: -1.0, lo: -1.0, hi: 2.0,  scale: lin}
+  - {symbol: "mrac_config_pitch.drive_norm",   cmd_id: 0x1D, idx: 8,  default: 0.0,  lo: 0.0,  hi: 1.0,  scale: lin}
+  - {symbol: "mrac_config_roll.drive_norm",    cmd_id: 0x1D, idx: 9,  default: 0.0,  lo: 0.0,  hi: 1.0,  scale: lin}
+  - {symbol: "mrac_config_pitch.lam_edot",     cmd_id: 0x1D, idx: 12, default: 0.0,  lo: 0.0,  hi: 0.01, scale: lin}
+  - {symbol: "mrac_config_roll.lam_edot",      cmd_id: 0x1D, idx: 13, default: 0.0,  lo: 0.0,  hi: 0.01, scale: lin}
+  - {symbol: "mrac_g_gamma[0][*]",             cmd_id: 0x1D, idx: 44, default: 1.0,  lo: 0.25, hi: 2.0,  scale: log}
+  - {symbol: "mrac_g_gamma[1][*]",             cmd_id: 0x1D, idx: 45, default: 1.0,  lo: 0.25, hi: 2.0,  scale: log}
+  - {symbol: "mrac_config_pitch.kappa_pr",     cmd_id: 0x1D, idx: 16, default: 0.0,  lo: 0.0,  hi: 2.0,  scale: lin}
+  - {symbol: "mrac_config_roll.kappa_pr",      cmd_id: 0x1D, idx: 17, default: 0.0,  lo: 0.0,  hi: 2.0,  scale: lin}
+  - {symbol: "mrac_config_pitch.crm_ell",      cmd_id: 0x1D, idx: 20, default: 0.0,  lo: 0.0,  hi: 50.0, scale: lin}
+  - {symbol: "mrac_config_roll.crm_ell",       cmd_id: 0x1D, idx: 21, default: 0.0,  lo: 0.0,  hi: 50.0, scale: lin}
+  - {symbol: "mrac_config_pitch.gam_f",        cmd_id: 0x1D, idx: 72, default: 16.0, lo: 0.5,  hi: 100.0, scale: log}
+  - {symbol: "mrac_config_roll.gam_f",         cmd_id: 0x1D, idx: 73, default: 16.0, lo: 0.5,  hi: 100.0, scale: log}
+presets:
+  pr_refmodel:
+    mrac_config_pitch.ref_type: 2
+    mrac_config_roll.ref_type: 2
+    mrac_config_pitch.drive_norm: 1
+    mrac_config_roll.drive_norm: 1
+    mrac_config_pitch.lam_edot: 0.0018
+    mrac_config_roll.lam_edot: 0.0018
+    "mrac_g_gamma[0][*]": 0.25
+    "mrac_g_gamma[1][*]": 0.25
+    mrac_config_pitch.kappa_pr: 0.5
+    mrac_config_roll.kappa_pr: 0.5
+    mrac_config_pitch.crm_ell: 10.0
+    mrac_config_roll.crm_ell: 10.0
+  restore:
+    mrac_config_pitch.ref_type: -1
+    mrac_config_roll.ref_type: -1
+    mrac_config_pitch.drive_norm: 0
+    mrac_config_roll.drive_norm: 0
+    mrac_config_pitch.lam_edot: 0
+    mrac_config_roll.lam_edot: 0
+    "mrac_g_gamma[0][*]": 1.0
+    "mrac_g_gamma[1][*]": 1.0
+    mrac_config_pitch.kappa_pr: 0
+    mrac_config_roll.kappa_pr: 0
+    mrac_config_pitch.crm_ell: 0
+    mrac_config_roll.crm_ell: 0
+    mrac_config_pitch.gam_f: 16.0
+    mrac_config_roll.gam_f: 16.0
