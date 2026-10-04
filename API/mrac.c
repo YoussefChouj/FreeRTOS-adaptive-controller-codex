@@ -3,6 +3,15 @@
 // ------------------------------------------------------------------------------
 // Contains the core adaptive control logic for the 4 axes of a free-flying
 // quadcopter (Pitch, Roll, Yaw, Z-Axis).
+//
+// Owner:   Stabilizer_Task, 200 Hz (MRAC_DT): MRAC_Control once per tick from TASK/StabilizerTask.c
+//          Compute_Motor, after the PID loops; MRAC_Init once at boot (Controller_Init).
+// Inputs:  Ctrler (PID FB/Des/U per loop), imu_data (simplex envelope), mrac_flags / mrac_config_* /
+//          mrac_simplex / mrac_inj (ground-station commands), mrac_in_armed / mrac_in_phase.
+// Outputs: mrac_state.<axis>.u_ad (the correction API/controller.c adds to u_nom), Theta / Whatf weights,
+//          mrac_bus, mrac_var_id, mrac_cyc (cycle counts), mrac_simplex.fade.
+// Tunables: MRAC_SET / MRAC_BASIS tables in MRAC_Init, MRAC_VAR_FIELD bounds (CMD 0x1D).
+// Proof of a refactor: python API/tests/run_mrac_equiv.py (bit-exact) and python tools/fw_trace.py mrac.
 // ------------------------------------------------------------------------------
 
 #include "mrac.h"
@@ -21,6 +30,11 @@
     #define MRAC_CYC_NOW() 0U
 #endif
 
+#define MRAC_BW_MIN    0.1f     // rad/s, floor on ref_model_bw where it divides (P = 1/(2 bw), a0, a1)
+#define MRAC_ZETA_MIN  0.1f     // floor on ref_model_zeta (a1 = 2 zeta wn divides)
+#define MRAC_FADE_S    0.1f     // simplex: time for the u_ad fade to go 1 -> 0 or back, s
+#define MRAC_SAT_FRAC  0.999f   // simplex: |u_ad| at or above this fraction of u_max counts as saturated
+
 // Global instance of the MRAC runtime states
 MRAC_State_t mrac_state MRAC_CCM;
 MRAC_FeatureFlags_t mrac_flags = {0};
@@ -31,9 +45,17 @@ MRAC_AxisConfig_t mrac_config_roll MRAC_CCM;
 MRAC_AxisConfig_t mrac_config_yaw MRAC_CCM;
 MRAC_AxisConfig_t mrac_config_z MRAC_CCM;
 
-/* Simplex fallback. Defaults are inert: mode 0, variant 0, fade 1. */
-MRAC_Simplex_t mrac_simplex = {0, 0, 0, 0, 0, 0, {0, 0, 0, 0}, 0, 200, 40,
-                               3.14f, 3.14f, 1.0e6f, 1.0f};
+/* Simplex fallback (MRAC_SimplexStep, CMD 0x19). Defaults are inert: mode 0, variant 0, fade 1. */
+MRAC_Simplex_t mrac_simplex = {
+    0, 0, 0, 0,          /* mode (0 off), variant (0 PID+MRAC), tripped, reason */
+    0, 0,                /* trip_count, would_trip_count */
+    {0, 0, 0, 0}, 0,     /* sat_ticks[4], clear_ticks */
+    200,                 /* hold_ticks: 1 s at 200 Hz back inside the envelope before resuming */
+    40,                  /* sat_ticks_max: 200 ms of |u_ad| at u_max trips (reason 4) */
+    3.14f, 3.14f,        /* roll_max, pitch_max, rad (pi: never) */
+    1.0e6f,              /* w_norm_max, ||Theta||_2 per axis (1e6: never) */
+    1.0f                 /* fade, u_ad multiplier (1 = full) */
+};
 
 MRAC_Inj_t mrac_inj = {0};
 volatile uint8_t mrac_in_armed = 0;
@@ -381,45 +403,39 @@ static void MRAC_CycEnd(MRAC_Axis_e axis_id, uint32_t t0, uint32_t t1, uint32_t 
 
 // ------------------------------------------------------------------------------
 // Helper: Axis Update Core
-
+// One control tick of one axis, MRAC_UpdateAxis, in these steps:
+//   MRAC_FeatureCount   features in use (V3 RBF block on/off)
+//   MRAC_RefModelStep   1. command delay (V1), reference model, closed-loop reference pull (PR)
+//   MRAC_ErrorStep      2. e = x - xm, filtered e_dot, 3L leaky error integral
+//   (inline)            4. bus fill and basis vector Phi, L3 feedforward; hard freeze; simplex freeze
+//   MRAC_DriveSignal    5a. Lyapunov drive s (+ V1 normalized drive, 3L angle term, ST gain and barrier)
+//   MRAC_AdaptWeights   5b. projected, leaked gradient step on Theta (+ Whatf low-frequency copy)
+//   MRAC_AdaptiveOutput 6. u_ad = Theta'Phi (+ PR), variant guard, low-pass, u_max clamp
 // ------------------------------------------------------------------------------
-// Runs the core MRAC algorithm for a single axis.
-static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const MRAC_AxisConfig_t* config, float cross_coupling, float r)
-{
-    float P = 1.0f;
-    float P_e = 0.0f;
-    float P_edot = 0.0f;
-    float s;
-    float raw_xdot;
-    float Phi_sq;
-    float denom;
-    static float grad[MAX_NUM_BASIS] MRAC_CCM;
-    float y;
-    float PBe;
-    float sigma_e;
-    float sigma_eff;
-    float sigma_lf_active;
-    float raw_u_ad;
-    int do_adaptation;
-    int adapted = 0;
-    int i;
-    int n;              // features in use: MRAC_N_STRUCT while V3 rbf_on is 0, else MRAC_N_FEATURES
-    int ref_type;       // reference-model type this axis runs (global flag unless V1 ref_type >= 0)
-    float r_m;          // command into the reference model (r, or r delayed by V1 ref_delay_s)
-    uint16_t vid;
-    uint32_t t0, t1, t2, t3;
 
-    t0 = MRAC_CYC_NOW();
-    ref_type = mrac_flags.ref_model_type;
-    vid = 0U;
-    n = MRAC_N_FEATURES;
+// *n = features in use: MRAC_N_STRUCT while V3 rbf_on is 0, else MRAC_N_FEATURES. Returns the RBF variant
+// bit when the RBF block runs, else 0.
+static uint16_t MRAC_FeatureCount(const MRAC_AxisConfig_t* config, int* n)
+{
+    *n = MRAC_N_FEATURES;
 #if MRAC_VARIANT == MRAC_VARIANT_STRUCT6_RBF12
     if (config->rbf_on < 0.5f) {
-        n = MRAC_N_STRUCT;
-    } else {
-        vid |= MRAC_VID_RBF;
+        *n = MRAC_N_STRUCT;
+        return 0U;
     }
+    return MRAC_VID_RBF;
+#else
+    (void)config;
+    return 0U;
 #endif
+}
+
+// Step 1. ref_type is the global flag on entry; returns the reference-model type this axis runs (V1 per-axis
+// override). *P is the scalar Lyapunov P of types 0 and 1 (type 2 forms its matrix P in MRAC_DriveSignal).
+static int MRAC_RefModelStep(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const MRAC_AxisConfig_t* config,
+                             float r, int ref_type, float* P, uint16_t* vid)
+{
+    float r_m;          // command into the reference model (r, or r delayed by V1 ref_delay_s)
 #if MRAC_ENABLE_REFMODEL_V2 == 1
     // V1: per-axis type and command delay. The ring is written every tick so a delay switched on
     // later starts from real history; delay 0 reads the slot just written, i.e. r itself.
@@ -430,11 +446,11 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
         state->r_buf[state->r_idx] = r;
         r_m = state->r_buf[(state->r_idx + MRAC_REF_BUF - d) % MRAC_REF_BUF];
         state->r_idx = (uint8_t)((state->r_idx + 1U) % MRAC_REF_BUF);
-        if (d > 0) vid |= MRAC_VID_DELAY;
+        if (d > 0) *vid |= MRAC_VID_DELAY;
     }
     if (config->ref_type > -0.5f) {
         ref_type = (int)(config->ref_type + 0.5f);
-        vid |= MRAC_VID_REF_TYPE;
+        *vid |= MRAC_VID_REF_TYPE;
     }
 #else
     r_m = r;
@@ -460,11 +476,11 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
             // 1st-order: xm_dot = bw*(r - xm), unity DC gain. P solves 2*Am*P = 1.
             float bw = config->ref_model_bw;
             float dx;
-            if (bw < 0.1f) bw = 0.1f;   // P = 1/(2*bw): bw 0 divides by zero
+            if (bw < MRAC_BW_MIN) bw = MRAC_BW_MIN;   // P = 1/(2*bw): bw 0 divides by zero
             dx = bw * (r_m - state->xm);
             state->xm    += MRAC_DT * dx;
             state->xm_dot = dx;
-            P = 1.0f / (2.0f * bw);
+            *P = 1.0f / (2.0f * bw);
             break;
         }
         case 0:
@@ -472,7 +488,7 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
             // Passthrough: instantaneous command, infinite-bandwidth reference. e = -(PID error).
             state->xm = r_m;
             state->xm_dot = 0.0f;
-            P = 1.0f;
+            *P = 1.0f;
             break;
     }
 #if MRAC_ENABLE_PERF_RECOVERY == 1
@@ -480,9 +496,16 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
     // Types 1/2 only; passthrough has no model state. crm_ell*DT <= 0.25 (MRAC_VariantParamSet).
     if (config->crm_ell > 0.0f && ref_type != 0) {
         state->xm += MRAC_DT * config->crm_ell * (state->x - state->xm);
-        vid |= MRAC_VID_CRM;
+        *vid |= MRAC_VID_CRM;
     }
 #endif
+    return ref_type;
+}
+
+// Step 2. Tracking error and its filtered derivative; the 3L leaky error integral.
+static void MRAC_ErrorStep(MRAC_AxisState_t* state, const MRAC_AxisConfig_t* config)
+{
+    float raw_xdot;
 
     // 2. Compute tracking error (e = x - xm)
     state->e = state->x - state->xm;
@@ -505,47 +528,17 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
     }
     if (!(state->e_int - state->e_int == 0.0f)) state->e_int = 0.0f;
 #endif
+}
 
-    // 3. Compute nominal control (done externally)
-    
-    // 4. Generate Basis/Regressor vector (Phi)
-    t1 = MRAC_CYC_NOW();
-    mrac_bus[axis_id].x = state->x;
-    mrac_bus[axis_id].xm = state->xm;
-    mrac_bus[axis_id].xm_dot = state->xm_dot;
-    mrac_bus[axis_id].e = state->e;
-    mrac_bus[axis_id].e_dot = state->e_dot;
-    mrac_bus[axis_id].u_nom = state->u_nom;
-    mrac_bus[axis_id].cross = cross_coupling;
-    mrac_bus[axis_id].r = r;
-    t2 = MRAC_CYC_NOW();
-
-    for (i = 0; i < MRAC_N_BLOCKS; i++) {
-        mrac_block_table[i].generator(axis_id, &mrac_bus[axis_id], state->Phi + mrac_block_table[i].first);
-    }
-    t3 = MRAC_CYC_NOW();
-    mrac_u_ff[axis_id] = MRAC_L3_Feedforward(axis_id, &mrac_bus[axis_id]);
-    
-    // 5. Update adaptive weights using Lyapunov gradient descent
-    Phi_sq = MRAC_VectorNormSquare(state->Phi, (uint8_t)n);
-    denom = 1.0f + Phi_sq;
-
-    // Proceed with adaptation only if error is outside deadzone
-    do_adaptation = (!mrac_flags.deadzone_on) || (fabsf(state->e) >= config->e_deadzone);
-
-    // Hard freeze: zero adaptive output and skip updates during large error spikes
-    if (mrac_flags.hard_freeze_on && config->e_freeze > 0.0f && fabsf(state->e) > config->e_freeze) {
-        // Freeze pauses adaptation/output only; Theta is intentionally preserved.
-        state->u_ad = 0.0f;
-        MRAC_CycEnd(axis_id, t0, t1, t2, t3);
-        return;
-    }
-
-    /* Simplex: freeze Theta/Whatf (never reset) while tripped or in the PID-only
-     * variant; u_ad is still computed and faded at the injection point. */
-    if (mrac_simplex.tripped || mrac_simplex.variant == 1) {
-        do_adaptation = 0;
-    }
+// Step 5a. The drive signal s of the adaptive law, from the (tanh-bounded) error; sets the variant bits of
+// the drive variants and of the variants that act later in the law.
+static float MRAC_DriveSignal(MRAC_AxisState_t* state, const MRAC_AxisConfig_t* config, int ref_type, float P,
+                              uint16_t* vid)
+{
+    float P_e = 0.0f;
+    float P_edot = 0.0f;
+    float s;
+    float PBe;
 
     PBe = state->e;
 
@@ -563,8 +556,8 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
         float zeta = config->ref_model_zeta;
         float a0;
         float a1;
-        if (wn < 0.1f) wn = 0.1f;       // a0 and a1 are denominators below
-        if (zeta < 0.1f) zeta = 0.1f;
+        if (wn < MRAC_BW_MIN) wn = MRAC_BW_MIN;       // a0 and a1 are denominators below
+        if (zeta < MRAC_ZETA_MIN) zeta = MRAC_ZETA_MIN;
         a0 = wn * wn;
         a1 = 2.0f * zeta * wn;
         P_e    = config->ref_Q1 / (2.0f * a0);
@@ -578,14 +571,14 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
     // 88-3900x and the gamma-scaled leak keeps theta = grad/sigma put, so drop P: s = PBe (+ lam_edot*e_dot).
     if (config->drive_norm > 0.5f) {
         s = (ref_type == 2) ? (PBe + config->lam_edot * state->e_dot) : PBe;
-        vid |= MRAC_VID_DRIVE_NORM;
+        *vid |= MRAC_VID_DRIVE_NORM;
     }
 #endif
 #if MRAC_ENABLE_3L == 1
     // 3L layer 1 drive (sim ctrl_mrac3l.py:133): s = rate error + lam_ang * angle error.
     if (config->lam_ang > 0.0f) {
         s += config->lam_ang * state->e_int;
-        vid |= MRAC_VID_3L;
+        *vid |= MRAC_VID_3L;
     }
 #endif
 #if MRAC_ENABLE_SET_THEORETIC == 1
@@ -609,22 +602,36 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
             s_bar = config->st_bar * config->st_eps
                     * (1.0f / rem - 1.0f / (1.0f - MRAC_ST_BAR_ALPHA + MRAC_ST_BAR_SMOOTH));
             if (state->e < 0.0f) s_bar = -s_bar;
-            vid |= MRAC_VID_ST_BAR;
+            *vid |= MRAC_VID_ST_BAR;
         }
         s = k_st * s + s_bar;
-        vid |= MRAC_VID_ST;
+        *vid |= MRAC_VID_ST;
     }
 #endif
 #if MRAC_ENABLE_LF_HIGHGAIN == 1
-    if (config->lf_gain > 0.0f) vid |= MRAC_VID_LFHG;
+    if (config->lf_gain > 0.0f) *vid |= MRAC_VID_LFHG;
 #endif
 #if MRAC_ENABLE_PERF_RECOVERY == 1
-    if (config->kappa_pr > 0.0f) vid |= MRAC_VID_KAPPA_PR;
+    if (config->kappa_pr > 0.0f) *vid |= MRAC_VID_KAPPA_PR;
 #endif
 #if MRAC_ENABLE_SATAWARE == 1
-    if (config->mu_sat > 0.0f) vid |= MRAC_VID_SATAWARE;
+    if (config->mu_sat > 0.0f) *vid |= MRAC_VID_SATAWARE;
 #endif
-    mrac_var_id[axis_id] = vid;
+    return s;
+}
+
+// Step 5b. Update adaptive weights using Lyapunov gradient descent: normalized gradient (+ sigma prior),
+// projection, sigma / e-modification / low-frequency / V2 saturation leakage, LFHG gain, Whatf filter.
+static void MRAC_AdaptWeights(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const MRAC_AxisConfig_t* config,
+                              int n, float s, float denom, int do_adaptation)
+{
+    static float grad[MAX_NUM_BASIS] MRAC_CCM;
+    float y;
+    float sigma_e;
+    float sigma_eff;
+    float sigma_lf_active;
+    int adapted = 0;
+    int i;
 
     if (mrac_flags.adaptation_on && do_adaptation && mrac_inj.learn_gate) {
         float theta_scale = mrac_flags.output_injection_on ? mrac_inj.inj_alpha : 1.0f;
@@ -723,9 +730,19 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
             state->Whatf[i] += MRAC_DT * config->gam_f * (state->Theta[i] - state->Whatf[i]);
         }
     }
+#else
+    (void)adapted;
 #endif
+}
 
-    // 6. Compute adaptive control component (u_ad = Theta^T * Phi)
+// Step 6. Compute adaptive control component (u_ad = Theta^T * Phi), then the variant guard, the low-pass and
+// the u_max clamp.
+static void MRAC_AdaptiveOutput(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const MRAC_AxisConfig_t* config,
+                                int n, uint16_t vid)
+{
+    float raw_u_ad;
+    int i;
+
     raw_u_ad = 0.0f;
     for (i = 0; i < n; i++) {
         raw_u_ad += state->Theta[i] * (state->Phi[i] * mrac_g_phi[axis_id][mrac_feature_desc[i].group]);
@@ -768,6 +785,78 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
             state->u_ad = -config->u_max;
         }
     }
+}
+
+// ------------------------------------------------------------------------------
+// Runs the core MRAC algorithm for a single axis (steps listed above).
+static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const MRAC_AxisConfig_t* config, float cross_coupling, float r)
+{
+    float P = 1.0f;
+    float s;
+    float Phi_sq;
+    float denom;
+    int do_adaptation;
+    int i;
+    int n;              // features in use: MRAC_N_STRUCT while V3 rbf_on is 0, else MRAC_N_FEATURES
+    int ref_type;       // reference-model type this axis runs (global flag unless V1 ref_type >= 0)
+    uint16_t vid;
+    uint32_t t0, t1, t2, t3;
+
+    t0 = MRAC_CYC_NOW();
+    ref_type = mrac_flags.ref_model_type;
+    vid = MRAC_FeatureCount(config, &n);
+    ref_type = MRAC_RefModelStep(axis_id, state, config, r, ref_type, &P, &vid);
+
+    MRAC_ErrorStep(state, config);
+
+    // 3. Compute nominal control (done externally)
+
+    // 4. Generate Basis/Regressor vector (Phi)
+    t1 = MRAC_CYC_NOW();
+    mrac_bus[axis_id].x = state->x;
+    mrac_bus[axis_id].xm = state->xm;
+    mrac_bus[axis_id].xm_dot = state->xm_dot;
+    mrac_bus[axis_id].e = state->e;
+    mrac_bus[axis_id].e_dot = state->e_dot;
+    mrac_bus[axis_id].u_nom = state->u_nom;
+    mrac_bus[axis_id].cross = cross_coupling;
+    mrac_bus[axis_id].r = r;
+    t2 = MRAC_CYC_NOW();
+
+    for (i = 0; i < MRAC_N_BLOCKS; i++) {
+        mrac_block_table[i].generator(axis_id, &mrac_bus[axis_id], state->Phi + mrac_block_table[i].first);
+    }
+    t3 = MRAC_CYC_NOW();
+    mrac_u_ff[axis_id] = MRAC_L3_Feedforward(axis_id, &mrac_bus[axis_id]);
+
+    // 5. Update adaptive weights using Lyapunov gradient descent
+    Phi_sq = MRAC_VectorNormSquare(state->Phi, (uint8_t)n);
+    denom = 1.0f + Phi_sq;
+
+    // Proceed with adaptation only if error is outside deadzone
+    do_adaptation = (!mrac_flags.deadzone_on) || (fabsf(state->e) >= config->e_deadzone);
+
+    // Hard freeze: zero adaptive output and skip updates during large error spikes
+    if (mrac_flags.hard_freeze_on && config->e_freeze > 0.0f && fabsf(state->e) > config->e_freeze) {
+        // Freeze pauses adaptation/output only; Theta is intentionally preserved.
+        state->u_ad = 0.0f;
+        MRAC_CycEnd(axis_id, t0, t1, t2, t3);
+        return;
+    }
+
+    /* Simplex: freeze Theta/Whatf (never reset) while tripped or in the PID-only
+     * variant; u_ad is still computed and faded at the injection point. */
+    if (mrac_simplex.tripped || mrac_simplex.variant == 1) {
+        do_adaptation = 0;
+    }
+
+    s = MRAC_DriveSignal(state, config, ref_type, P, &vid);
+    mrac_var_id[axis_id] = vid;
+
+    MRAC_AdaptWeights(axis_id, state, config, n, s, denom, do_adaptation);
+
+    MRAC_AdaptiveOutput(axis_id, state, config, n, vid);
+
     MRAC_CycEnd(axis_id, t0, t1, t2, t3);
 }
 
@@ -790,7 +879,7 @@ void MRAC_SimplexStep(void)
 
     r = 0;
     for (a = 0; a < 4; a++) {
-        if (fabsf(axes[a]->u_ad) >= configs[a]->u_max * 0.999f) {
+        if (fabsf(axes[a]->u_ad) >= configs[a]->u_max * MRAC_SAT_FRAC) {
             if (mrac_simplex.sat_ticks[a] < 0xFFFFU) mrac_simplex.sat_ticks[a]++;
         } else {
             mrac_simplex.sat_ticks[a] = 0;
@@ -830,10 +919,10 @@ void MRAC_SimplexStep(void)
     /* Fade u_ad over ~100 ms toward 0 (tripped or PID-only) or back to 1. */
     target = (mrac_simplex.tripped || mrac_simplex.variant == 1) ? 0.0f : 1.0f;
     if (mrac_simplex.fade > target) {
-        mrac_simplex.fade -= MRAC_DT / 0.1f;
+        mrac_simplex.fade -= MRAC_DT / MRAC_FADE_S;
         if (mrac_simplex.fade < target) mrac_simplex.fade = target;
     } else if (mrac_simplex.fade < target) {
-        mrac_simplex.fade += MRAC_DT / 0.1f;
+        mrac_simplex.fade += MRAC_DT / MRAC_FADE_S;
         if (mrac_simplex.fade > target) mrac_simplex.fade = target;
     }
 }

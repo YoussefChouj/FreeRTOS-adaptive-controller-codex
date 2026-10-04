@@ -7,6 +7,7 @@ hashes mean the two versions made the same external calls with the same argument
 same state on every tick. Targets:
   stab  TASK/StabilizerTask.c, one control tick (tools/fw_trace/stab_trace.c)
   cmd   TASK/send_data.c, the ground-station command path (tools/fw_trace/cmd_trace.c)
+  mrac  API/mrac.c, MRAC_Control with random flags and variant fields (tools/fw_trace/mrac_trace.c)
 Functions a file references but its harness never runs are linked as empty dummies (generated from the linker's
 undefined-reference list). `--cov` also builds the new version with gcov and prints the line coverage of the code
 the target exercises. Never touches OBJ/.
@@ -36,12 +37,13 @@ CFLAGS = ["-std=gnu99", "-O0", "-msse2", "-mfpmath=sse", "-ffp-contract=off", "-
 RENAME = ["-DController_Update=real_Controller_Update", "-DController_CheckSwitch=real_Controller_CheckSwitch",
           "-DController_Init=real_Controller_Init"]
 
-#        harness                 macro        file under test           functions --cov reports (regex)
+#        harness          macro       file under test          also linked (tree)   functions --cov reports (regex)
 TARGETS = {
-    "stab": ("stab_trace.c", "STAB_SRC", "TASK/StabilizerTask.c", None),   # the whole file runs
-    "cmd":  ("cmd_trace.c",  "SEND_SRC", "TASK/send_data.c",
+    "stab": ("stab_trace.c", "STAB_SRC", "TASK/StabilizerTask.c", ["API/pid.c", "ctrl"], None),  # whole file runs
+    "cmd":  ("cmd_trace.c",  "SEND_SRC", "TASK/send_data.c",      ["API/pid.c", "ctrl"],
              r"Cmd_\w+|GsCmd_Dispatch|Process_GroundStation_Command|MracElemParamApply|CommandSafetyReject|"
              r"SendTransactionResult|TransactionWasSeen|RememberTransaction|GroundStation_AbortAllPaths"),
+    "mrac": ("mrac_trace.c", "MRAC_SRC", "API/mrac.c",            ["API/mrac_math.c"], None),
 }
 
 
@@ -50,16 +52,17 @@ def run_ok(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
 
 
 def build(gcc: str, target: str, root: Path, exe: Path, cov: bool) -> None:
-    harness, macro, rel, _ = TARGETS[target]
+    harness, macro, rel, extra, _ = TARGETS[target]
     out = exe.parent
     ctrl, dummy_c, dummy_o = out / "controller.o", out / "dummies.c", out / "dummies.o"
-    res = run_ok([gcc, *CFLAGS, "-c", *fw_equiv.flags(root), *RENAME, str(root / "API" / "controller.c"), "-o",
-                  str(ctrl)], out)
-    if res.returncode != 0:
-        raise SystemExit(f"build {root} controller.c:\n{res.stderr[-3000:]}")
+    if "ctrl" in extra:
+        res = run_ok([gcc, *CFLAGS, "-c", *fw_equiv.flags(root), *RENAME, str(root / "API" / "controller.c"), "-o",
+                      str(ctrl)], out)
+        if res.returncode != 0:
+            raise SystemExit(f"build {root} controller.c:\n{res.stderr[-3000:]}")
     link = [gcc, *CFLAGS, *(["--coverage"] if cov else []), *fw_equiv.flags(root),
             f'-D{macro}="{(root / rel).as_posix()}"', str(REPO / "tools" / "fw_trace" / harness),
-            str(root / "API" / "pid.c"), str(ctrl)]
+            *(str(ctrl) if e == "ctrl" else str(root / e) for e in extra)]
     res = run_ok([*link, "-lm", "-o", str(exe)], out)
     missing = sorted(set(re.findall(r"undefined reference to `_?(\w+)'", res.stderr)))
     if res.returncode != 0 and missing:
@@ -109,7 +112,7 @@ def main(argv: list[str]) -> int:
     if gcc is None:
         print("FAIL fw_trace: gcc not on PATH")
         return 1
-    harness, _, rel, funcs = TARGETS[args.target]
+    harness, _, rel, _, funcs = TARGETS[args.target]
     ok = True
     with tempfile.TemporaryDirectory() as tmp:
         t = Path(tmp)
