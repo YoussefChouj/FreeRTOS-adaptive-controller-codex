@@ -1,11 +1,23 @@
+/**
+ * @module     stm32f4xx_it.c
+ * @subsystem  bsp
+ * @owner      the vector table in stm32_lib/startup_stm32f40_41xxx.s; every handler here runs in interrupt context.
+ * @purpose    Interrupt handlers for the serial links (USART1 SBUS, USART2 optical flow, USART3 radio, UART4 onboard
+ *             computer, UART5 ground station), the TX-complete DMA streams and the RPM edge inputs, plus
+ *             USART_Receive, the DMA-ring-to-mailbox copier shared by the IDLE-line handlers.
+ * @inputs     USART data/status registers, the RX DMA rings (USART3_Rcr, UART4_Rcr, UART5_Rcr), EXTI lines 0, 1, 5-9.
+ * @outputs    SBUS and optical-flow byte parsers, the GS command handlers, RPM_EdgeISR, system_monitor.*_task_cnt,
+ *             UA3RxFrameCnt / UA3RxLastLen, U4_RX_Data.
+ */
+
 #include "stm32f4xx_it.h"
 #include "rpm.h"
 
 /* ====================================================================
  * DEBUG-telemetry-bisect: fault reporting over UART5 (polling, no DMA/RTOS).
- * Kept for future use — flip to `#if 1` to override the silent startup-file
+ * Kept for future use - flip to `#if 1` to override the silent startup-file
  * HardFault_Handler so a fault ANNOUNCES itself on COM6 instead of looking like
- * a dead link. Format: "HARDFAULT PSP_PC=... PSP_LR=... MSP_PC=..." — look up
+ * a dead link. Format: "HARDFAULT PSP_PC=... PSP_LR=... MSP_PC=..." - look up
  * the PC address in the Keil .map / disassembly to find the faulting line.
  * ==================================================================== */
 #if 0
@@ -46,78 +58,102 @@ void HardFault_Handler(void)
 }
 #endif /* DEBUG-telemetry-bisect */
 
-USHORT16 Clear_IT = 0;
-/*************************************************************************
-中断处理函数名称：USART1_IRQHandler
-*************************************************************************/
+/* ------------------------------------------------------------------
+ * Private constants
+ * ------------------------------------------------------------------ */
 
-extern USART_RX_TypeDef USART1_Rcr;
-extern UCHAR8 UA1RxDMAbuf[USART1_RXDMA_LEN];
+#define U4_T265_SYNC   0xAA         /* both of the first two bytes of a T265 frame on UART4    */
+#define U4_WIDE_LIM    1000000.0f   /* accept band (-lim, lim) for fields 1-6 and 10-12        */
+#define U4_NARROW_LIM  5.0f         /* accept band (-lim, lim) for fields 7-9                  */
+#define U4_SCALE       100.0f       /* factor applied to fields 1-6                            */
+
+/* Assemble the float that starts at mailbox byte k in data_to_float (byte order as received). */
+#define U4_LOAD_FLOAT(k)                                   \
+    do {                                                   \
+        data_to_float.cdata[0] = UA4RxMailbox[(k)];        \
+        data_to_float.cdata[1] = UA4RxMailbox[(k) + 1];    \
+        data_to_float.cdata[2] = UA4RxMailbox[(k) + 2];    \
+        data_to_float.cdata[3] = UA4RxMailbox[(k) + 3];    \
+    } while (0)
+
+/* The float just loaded lies strictly inside (-lim, lim). */
+#define U4_IN_BAND(lim)  (data_to_float.data_float > -(lim) && data_to_float.data_float < (lim))
+
+/* ------------------------------------------------------------------
+ * External symbols (BSP serial drivers and the GS command layer)
+ * ------------------------------------------------------------------ */
+
+extern USART_RX_TypeDef USART3_Rcr;
+extern USART_RX_TypeDef UART4_Rcr;
+extern USART_RX_TypeDef UART5_Rcr;
+extern volatile uint32_t UA3RxFrameCnt;
+extern volatile uint16_t UA3RxLastLen;
+extern void Handle_USART3_GroundStation_Command(const uint8_t*, USHORT16);
+extern void Handle_UART4_GroundStation_Command(void);
+extern void Handle_UART5_GroundStation_Command(void);
+extern void Usart3_Tx_DmaIsr(void);
+
+USHORT16 USART_Receive(USART_RX_TypeDef* USARTx);
+
+/* ------------------------------------------------------------------
+ * Public state  (watchable by symbol through the capability manifest)
+ * ------------------------------------------------------------------ */
+
+USHORT16 Clear_IT = 0;   /* sink for the SR-then-DR reads that clear an IDLE flag */
+
+/* ------------------------------------------------------------------
+ * Interrupt handlers: SBUS, optical flow, radio, TX DMA, RPM
+ * ------------------------------------------------------------------ */
+
+/* USART1: SBUS receiver, one byte per interrupt. */
 void USART1_IRQHandler(void)
 {
- 	u8 com_data;
+	u8 com_data;
 
 	if (USART_GetITStatus(USART1, USART_IT_RXNE))
 	{
 		USART_ClearITPendingBit(USART1, USART_IT_RXNE);
-		//==
 		com_data = USART1->DR;
-		//
 		DrvSbusGetOneByte(com_data);
-		
+
 		system_monitor.USART1_task_cnt++;
 	}
 }
 
-///*************************************************************************
-//中断处理函数名称：USART2_IRQHandler
-//中断产生机制：USART2接收到一个空字节后触发中断
-//*************************************************************************/
-//extern USART_RX_TypeDef USART2_Rcr;
+/* USART2: optical-flow module, one byte per interrupt. */
 void USART2_IRQHandler(void)
-{ 
-    u8 com_data;
+{
+	u8 com_data;
 
-	if ( USART2->SR & USART_SR_ORE ) //ORE中断
-        com_data = USART2->DR;
-    //接收中断
-    if ( USART_GetITStatus ( USART2, USART_IT_RXNE ) )
-    {
-        USART_ClearITPendingBit ( USART2, USART_IT_RXNE ); //清除中断标志
+	if (USART2->SR & USART_SR_ORE)   /* overrun: reading DR after SR clears it */
+		com_data = USART2->DR;
+	if (USART_GetITStatus(USART2, USART_IT_RXNE))
+	{
+		USART_ClearITPendingBit(USART2, USART_IT_RXNE);
 
-        com_data = USART2->DR;
-				//====
-				//匿名光流解析
-					AnoOF_GetOneByte(com_data);		
-       	system_monitor.USART2_task_cnt ++;			
-    }
+		com_data = USART2->DR;
+		AnoOF_GetOneByte(com_data);   /* optical-flow frame parser */
+		system_monitor.USART2_task_cnt++;
+	}
 }
 
-/***********************************************************************************
-中断处理函数名称：DMA1_Stream6_IRQHandler
-中断产生机制：串口2发送完成中断
-函数功能：
-************************************************************************************/
+/* DMA1 stream 6: USART2 TX complete, park the stream. */
 void DMA1_Stream6_IRQHandler(void)
 {
-   if(DMA_GetITStatus(DMA1_Stream6, DMA_IT_TCIF6))
-   {
-      DMA_ClearFlag(DMA1_Stream6, DMA_FLAG_TCIF6);//清除标志位
-    	DMA_Cmd(DMA1_Stream6, DISABLE);             //关闭DMA传输 
-   }
+	if (DMA_GetITStatus(DMA1_Stream6, DMA_IT_TCIF6))
+	{
+		DMA_ClearFlag(DMA1_Stream6, DMA_FLAG_TCIF6);
+		DMA_Cmd(DMA1_Stream6, DISABLE);
+	}
 }
 
-/***********************************************************************************
-中断处理函数名称：USART3_IRQHandler
-中断产生机制：串口3接收完成中断
-函数功能：
-************************************************************************************/
+/* USART3: radio link, IDLE line marks the end of a burst. */
 void USART3_IRQHandler(void)
 {
-  	if(USART_GetITStatus(USART3, USART_IT_IDLE)!= RESET)
+	if (USART_GetITStatus(USART3, USART_IT_IDLE) != RESET)
 	{
 		Clear_IT = USART3->SR;
-		Clear_IT = USART3->DR;//先读SR后读DR清楚中断标志位
+		Clear_IT = USART3->DR;   /* reading SR then DR clears the IDLE flag */
 
 		/* Drain the RX DMA ring into UA3RxMailbox (was: drained and counted,
 		 * never parsed). USART3 is now a command ingress: dispatch the bytes
@@ -125,14 +161,9 @@ void USART3_IRQHandler(void)
 		 * carry every dashboard command (CMD 0x01..0x18). Mirrors the UART5
 		 * path below. UA3RxFrameCnt / UA3RxLastLen stay as livewatch-visible
 		 * proof the radio downlink is alive when driven in full duplex. */
-		extern USHORT16 USART_Receive(USART_RX_TypeDef* USARTx);
-		extern USART_RX_TypeDef USART3_Rcr;
-		extern volatile uint32_t UA3RxFrameCnt;
-		extern volatile uint16_t UA3RxLastLen;
-		extern void Handle_USART3_GroundStation_Command(const uint8_t*, USHORT16);
 		{
 			uint16_t rx_len = USART_Receive(&USART3_Rcr);
-			if(rx_len > 0)
+			if (rx_len > 0)
 			{
 				UA3RxLastLen = rx_len;
 				UA3RxFrameCnt++;
@@ -141,34 +172,18 @@ void USART3_IRQHandler(void)
 		}
 	}
 }
-/***********************************************************************************
-中断处理函数名称：USART3_IRQHandler1
-中断产生机制：串口3发送完成中断
-函数功能：
-************************************************************************************/
-//void USART3_IRQHandler1(void)
-//{
-//    // 检查是否是发送完成中断
-//    if (USART_GetITStatus(USART3, USART_IT_TC) != RESET)
-//    {
-//        // 清除发送完成中断标志位
-//        USART_ClearITPendingBit(USART3, USART_IT_TC);
 
-//        // 在这里可以添加发送完成后的处理逻辑
-//        // 例如：启动下一次发送、通知主程序发送完成等
-//    }
-//}
-
-void DMA1_Stream3_IRQHandler(void)//串口3发送完成中断，这个一定不能删除，否则系统会卡死
+/* DMA1 stream 3: USART3 TX complete. Must stay installed: without it the system hangs. */
+void DMA1_Stream3_IRQHandler(void)
 {
-   /* Body moved into BSP/usart3.c so the ring's tail pointer stays private to
-    * the driver. It no longer just parks the stream: it advances the ring and
-    * immediately arms the next chunk, which is what keeps USART3 transmitting
-    * back to back instead of one frame per Send_Task tick. Calls no FreeRTOS
-    * API, so running at preemption priority 0 is safe. */
-   extern void Usart3_Tx_DmaIsr(void);
-   Usart3_Tx_DmaIsr();
+	/* Body moved into BSP/usart3.c so the ring's tail pointer stays private to
+	 * the driver. It no longer just parks the stream: it advances the ring and
+	 * immediately arms the next chunk, which is what keeps USART3 transmitting
+	 * back to back instead of one frame per Send_Task tick. Calls no FreeRTOS
+	 * API, so running at preemption priority 0 is safe. */
+	Usart3_Tx_DmaIsr();
 }
+
 /* ADR-0010: RPM acquisition - EXTI handlers for PA0/PA1/PC6/PC7.
  * Re-targeted 2026-07-21 from PA5/PB3/PB10/PB11; the new pins are
  * UART4 TX/RX and UART6 TX/RX (physically unused on this custom FC). */
@@ -203,241 +218,129 @@ void EXTI9_5_IRQHandler(void)
 		EXTI_ClearITPendingBit(RPM_CH3_EXTI_LINE);
 	}
 }
-//void DMA1_Stream1_IRQHandler(void)//串口3发送完成中断
-//{
-//   if(DMA_GetITStatus(DMA1_Stream1, DMA_IT_TCIF3))
-//   {
-//      DMA_ClearFlag(DMA1_Stream1, DMA_FLAG_TCIF1);//清除标志位
-//    	DMA_Cmd(DMA1_Stream1, DISABLE);             //关闭DMA传输 
-//   }
-//}
+
+/* ------------------------------------------------------------------
+ * Public API: DMA ring to mailbox
+ * ------------------------------------------------------------------ */
+
+/* Copy the bytes the RX DMA wrote since the last call into the mailbox and return how many there were (0 when
+   nothing new arrived). The copy is skipped, but the count still returned, when the burst exceeds MbLen. */
 USHORT16 USART_Receive(USART_RX_TypeDef* USARTx)
-{ 
-	USARTx->rxConter = USARTx->DMALen - DMA_GetCurrDataCounter(USARTx->DMAy_Streamx);  //本次DMA缓冲区填充到的位置
+{
+	USARTx->rxConter = USARTx->DMALen - DMA_GetCurrDataCounter(USARTx->DMAy_Streamx);   /* where the DMA is now */
 
-	USARTx->rxBufferPtr += USARTx->rxSize;  //上次DMA缓冲区填充到的位置
+	USARTx->rxBufferPtr += USARTx->rxSize;   /* where the previous burst ended */
 
-	if(USARTx->rxBufferPtr >= USARTx->DMALen)//说明DMA缓冲区已经满了一次
+	if (USARTx->rxBufferPtr >= USARTx->DMALen)   /* the ring wrapped */
 	{
 		USARTx->rxBufferPtr %= USARTx->DMALen;
 	}
 
-	if(USARTx->rxBufferPtr == USARTx->rxConter)
+	if (USARTx->rxBufferPtr == USARTx->rxConter)
 	{
 		USARTx->rxSize = 0;
 		return 0U;
 	}
 
-	if(USARTx->rxBufferPtr < USARTx->rxConter)
+	if (USARTx->rxBufferPtr < USARTx->rxConter)
 	{
-		USARTx->rxSize = USARTx->rxConter - USARTx->rxBufferPtr; //计算本次接收数据的长度
-		if(USARTx->rxSize <= USARTx->MbLen) 
+		USARTx->rxSize = USARTx->rxConter - USARTx->rxBufferPtr;
+		if (USARTx->rxSize <= USARTx->MbLen)
 		{
-			for(u16 i=0;i<USARTx->rxSize;i++)  *(USARTx->pMailbox + i) = *(USARTx->pDMAbuf + USARTx->rxBufferPtr + i);
+			for (u16 i = 0; i < USARTx->rxSize; i++)  *(USARTx->pMailbox + i) = *(USARTx->pDMAbuf + USARTx->rxBufferPtr + i);
 		}
 	}
-	else
+	else   /* the burst straddles the end of the ring */
 	{
-		USARTx->rxSize = USARTx->rxConter + USARTx->DMALen - USARTx->rxBufferPtr;//计算本次接收数据的长度
-		if(USARTx->rxSize <= USARTx->MbLen) //接收的数据长度不超过期望数据长度，把数据写进邮箱，防止数组越界
-		
+		USARTx->rxSize = USARTx->rxConter + USARTx->DMALen - USARTx->rxBufferPtr;
+		if (USARTx->rxSize <= USARTx->MbLen)   /* only copy what fits the mailbox */
 		{
-			for(u16 i=0;i<USARTx->rxSize-USARTx->rxConter;i++) *(USARTx->pMailbox + i) = *(USARTx->pDMAbuf + USARTx->rxBufferPtr + i);
-			for(u16 i=0;i<USARTx->rxConter;i++) *(USARTx->pMailbox + USARTx->rxSize-USARTx->rxConter + i) = *(USARTx->pDMAbuf + i);
+			for (u16 i = 0; i < USARTx->rxSize - USARTx->rxConter; i++) *(USARTx->pMailbox + i) = *(USARTx->pDMAbuf + USARTx->rxBufferPtr + i);
+			for (u16 i = 0; i < USARTx->rxConter; i++) *(USARTx->pMailbox + USARTx->rxSize - USARTx->rxConter + i) = *(USARTx->pDMAbuf + i);
 		}
 	}
-	return USARTx->rxSize;  //返回本次空闲中断一共接收多少字节
+	return USARTx->rxSize;
 }
 
+/* ------------------------------------------------------------------
+ * Interrupt handlers: onboard computer (UART4)
+ * ------------------------------------------------------------------ */
 
-/***********************************************************************************
-中断处理函数名称：UART4_IRQHandler
-中断产生机制：视觉通讯
-函数功能：
-************************************************************************************/
-extern USART_RX_TypeDef UART4_Rcr;
+/* UART4: onboard computer, IDLE line marks the end of a frame. */
 void UART4_IRQHandler(void)
 {
-	if(USART_GetITStatus(UART4, USART_IT_IDLE)!= RESET)
+	if (USART_GetITStatus(UART4, USART_IT_IDLE) != RESET)
 	{
 		Clear_IT = UART4->SR;
-		Clear_IT = UART4->DR;//先读SR后读DR清楚中断标志位
-		
+		Clear_IT = UART4->DR;   /* reading SR then DR clears the IDLE flag */
+
 		uint16_t rx_len = USART_Receive(&UART4_Rcr);
-		if(rx_len > 0)
+		if (rx_len > 0)
 		{
-             extern void Handle_UART4_GroundStation_Command(void);
-             Handle_UART4_GroundStation_Command();
-             
-             if (rx_len == UART4_RXMB_LEN) {
-			     Decode_RX_Data_t265();	
-             }
-			system_monitor.USART4_task_cnt++;		
-		}		
+			Handle_UART4_GroundStation_Command();
+
+			if (rx_len == UART4_RXMB_LEN) {
+				Decode_RX_Data_t265();
+			}
+			system_monitor.USART4_task_cnt++;
+		}
 	}
-	  
 }
 
-union 
+union
 {
-   float data_float;
-	 char  cdata[4];
-}data_to_float;
+	float data_float;
+	char  cdata[4];
+} data_to_float;
 
 float U4_RX_Data = 0;
 
-void Decode_RX_Data_t265(void) //改成自己接收的数据
+/* Legacy T265 frame: two U4_T265_SYNC bytes, then 12 floats. Every field lands in U4_RX_Data, so after a frame it
+   holds the last field that passed its accept band; the per-field stores were removed earlier. */
+void Decode_RX_Data_t265(void)
 {
-    if (UA4RxMailbox[0] == 0xAA && UA4RxMailbox[1] == 0xAA)
-   {
-    data_to_float.cdata[0]  =  UA4RxMailbox[2];
-		data_to_float.cdata[1]  =  UA4RxMailbox[3];
-    data_to_float.cdata[2]  =  UA4RxMailbox[4];
-    data_to_float.cdata[3]  =  UA4RxMailbox[5];	
-
-		if(data_to_float.data_float>-1000000.0f && data_to_float.data_float<1000000.0f)  //范围限幅
-		{
-		  U4_RX_Data = data_to_float.data_float*100.0f  ;
-		}
-		data_to_float.cdata[0]  =  UA4RxMailbox[6];
-		data_to_float.cdata[1]  =  UA4RxMailbox[7];
-    data_to_float.cdata[2]  =  UA4RxMailbox[8];
-    data_to_float.cdata[3]  =  UA4RxMailbox[9];
-		
-    if(data_to_float.data_float>-1000000.0f && data_to_float.data_float< 1000000.0f)
-	  {		 
-		 U4_RX_Data  = data_to_float.data_float*100.0f ;
-	  }
-		 
-		data_to_float.cdata[0]  =  UA4RxMailbox[10];
-		data_to_float.cdata[1]  =  UA4RxMailbox[11];
-    data_to_float.cdata[2]  =  UA4RxMailbox[12];
-    data_to_float.cdata[3]  =  UA4RxMailbox[13];	
-		
-	  if(data_to_float.data_float>-1000000.0f && data_to_float.data_float<1000000.0f)
-	  {		 
-			 U4_RX_Data  = data_to_float.data_float*100.0f ;
-	  }
-
-		 
-		data_to_float.cdata[0]  =  UA4RxMailbox[14];
-		data_to_float.cdata[1]  =  UA4RxMailbox[15];
-    data_to_float.cdata[2]  =  UA4RxMailbox[16];
-    data_to_float.cdata[3]  =  UA4RxMailbox[17];	
-			
-		if(data_to_float.data_float>-1000000.0f && data_to_float.data_float< 1000000.0f)
-	  {		 
-			U4_RX_Data  = data_to_float.data_float*100.0f ;
-	  }
-	
-		data_to_float.cdata[0]  =  UA4RxMailbox[18];
-		data_to_float.cdata[1]  =  UA4RxMailbox[19];
-    data_to_float.cdata[2]  =  UA4RxMailbox[20];
-    data_to_float.cdata[3]  =  UA4RxMailbox[21];	
-		
-		if(data_to_float.data_float>-1000000.0f && data_to_float.data_float< 1000000.0f)
-	  {
-			U4_RX_Data = data_to_float.data_float *100.0f;
-		}
-	  data_to_float.cdata[0]  =  UA4RxMailbox[22];
-		data_to_float.cdata[1]  =  UA4RxMailbox[23];
-    data_to_float.cdata[2]  =  UA4RxMailbox[24];
-    data_to_float.cdata[3]  =  UA4RxMailbox[25];	
-		if(data_to_float.data_float>-1000000.0f && data_to_float.data_float< 1000000.0f)
-	  {
-			U4_RX_Data = data_to_float.data_float *100.0f;
-		}
-		
-		
-		data_to_float.cdata[0]  =  UA4RxMailbox[26];
-		data_to_float.cdata[1]  =  UA4RxMailbox[27];
-    data_to_float.cdata[2]  =  UA4RxMailbox[28];
-    data_to_float.cdata[3]  =  UA4RxMailbox[29];	
-		if(data_to_float.data_float>-5.0f && data_to_float.data_float< 5.0f)
-	  {
-			U4_RX_Data = data_to_float.data_float ;
-		}
-
-		
-		data_to_float.cdata[0]  =  UA4RxMailbox[30];
-		data_to_float.cdata[1]  =  UA4RxMailbox[31];
-    data_to_float.cdata[2]  =  UA4RxMailbox[32];
-    data_to_float.cdata[3]  =  UA4RxMailbox[33];	
-		if(data_to_float.data_float>-5.0f && data_to_float.data_float< 5.0f)
-	  {
-			U4_RX_Data = data_to_float.data_float ;
-		}
-		
-/////////////////////////////////////////////////////////////////////////////////////////		
-		data_to_float.cdata[0]  =  UA4RxMailbox[34];
-		data_to_float.cdata[1]  =  UA4RxMailbox[35];
-    data_to_float.cdata[2]  =  UA4RxMailbox[36];
-    data_to_float.cdata[3]  =  UA4RxMailbox[37];	
-		if(data_to_float.data_float>-5.0f && data_to_float.data_float< 5.0f)
-	  {
-			U4_RX_Data = data_to_float.data_float ;
-		}
-		
-		data_to_float.cdata[0]  =  UA4RxMailbox[38];
-		data_to_float.cdata[1]  =  UA4RxMailbox[39];
-    data_to_float.cdata[2]  =  UA4RxMailbox[40];
-    data_to_float.cdata[3]  =  UA4RxMailbox[41];	
-		if(data_to_float.data_float>-1000000.0f && data_to_float.data_float< 1000000.0f)
-	  {
-		  U4_RX_Data = data_to_float.data_float ;
-		}
-		
-		data_to_float.cdata[0]  =  UA4RxMailbox[42];
-		data_to_float.cdata[1]  =  UA4RxMailbox[43];
-    data_to_float.cdata[2]  =  UA4RxMailbox[44];
-    data_to_float.cdata[3]  =  UA4RxMailbox[45];	
-		if(data_to_float.data_float>-1000000.0f && data_to_float.data_float< 1000000.0f)
-	  {
-			U4_RX_Data = data_to_float.data_float ;
-		}
-		
-		data_to_float.cdata[0]  =  UA4RxMailbox[46];
-		data_to_float.cdata[1]  =  UA4RxMailbox[47];
-    data_to_float.cdata[2]  =  UA4RxMailbox[48];
-    data_to_float.cdata[3]  =  UA4RxMailbox[49];	
-		if(data_to_float.data_float>-1000000.0f && data_to_float.data_float< 1000000.0f)
-	  {
-			U4_RX_Data = data_to_float.data_float ;
-		}
-   }
+	if (UA4RxMailbox[0] == U4_T265_SYNC && UA4RxMailbox[1] == U4_T265_SYNC)
+	{
+		U4_LOAD_FLOAT(2);   if (U4_IN_BAND(U4_WIDE_LIM))   U4_RX_Data = data_to_float.data_float * U4_SCALE;
+		U4_LOAD_FLOAT(6);   if (U4_IN_BAND(U4_WIDE_LIM))   U4_RX_Data = data_to_float.data_float * U4_SCALE;
+		U4_LOAD_FLOAT(10);  if (U4_IN_BAND(U4_WIDE_LIM))   U4_RX_Data = data_to_float.data_float * U4_SCALE;
+		U4_LOAD_FLOAT(14);  if (U4_IN_BAND(U4_WIDE_LIM))   U4_RX_Data = data_to_float.data_float * U4_SCALE;
+		U4_LOAD_FLOAT(18);  if (U4_IN_BAND(U4_WIDE_LIM))   U4_RX_Data = data_to_float.data_float * U4_SCALE;
+		U4_LOAD_FLOAT(22);  if (U4_IN_BAND(U4_WIDE_LIM))   U4_RX_Data = data_to_float.data_float * U4_SCALE;
+		U4_LOAD_FLOAT(26);  if (U4_IN_BAND(U4_NARROW_LIM)) U4_RX_Data = data_to_float.data_float;
+		U4_LOAD_FLOAT(30);  if (U4_IN_BAND(U4_NARROW_LIM)) U4_RX_Data = data_to_float.data_float;
+		U4_LOAD_FLOAT(34);  if (U4_IN_BAND(U4_NARROW_LIM)) U4_RX_Data = data_to_float.data_float;
+		U4_LOAD_FLOAT(38);  if (U4_IN_BAND(U4_WIDE_LIM))   U4_RX_Data = data_to_float.data_float;
+		U4_LOAD_FLOAT(42);  if (U4_IN_BAND(U4_WIDE_LIM))   U4_RX_Data = data_to_float.data_float;
+		U4_LOAD_FLOAT(46);  if (U4_IN_BAND(U4_WIDE_LIM))   U4_RX_Data = data_to_float.data_float;
+	}
 }
-/***********************************************************************************
-中断处理函数名称：UART5_IRQHandler
-中断产生机制：洞捕摄像头通讯
-函数功能：
-************************************************************************************/
 
-float x_pos = 0; // 机头像电脑，x为前后，向前减小，向后增加
-float y_pos = 0;  // y为高度，向上增加  ，初始高度164--170
-float z_pos = 0;  //横向，向左增加
-float des_x = 0; 
+/* ------------------------------------------------------------------
+ * Interrupt handlers: ground station (UART5), TX DMA, unused USART6
+ * ------------------------------------------------------------------ */
+
+/* Legacy motion-capture fields. Nothing in the firmware writes them now; they stay because the capability manifest
+   lists them. Axes as the old capture setup defined them: */
+float x_pos = 0;   /* nose toward the PC: fore-aft, decreasing forward */
+float y_pos = 0;   /* height, increasing upward */
+float z_pos = 0;   /* lateral, increasing to the left */
+float des_x = 0;
 float des_y = 0;
 float des_z = 0;
 
-
-/***********************************************************************************
-中断处理函数名称：UART5_IRQHandler
-中断产生机制：
-函数功能：
-************************************************************************************/
+/* UART5: ground-station / debug link, IDLE line marks the end of a frame. */
 void UART5_IRQHandler(void)
 {
-  	if(USART_GetITStatus(UART5, USART_IT_IDLE)!= RESET)
+	if (USART_GetITStatus(UART5, USART_IT_IDLE) != RESET)
 	{
 		Clear_IT = UART5->SR;
-		Clear_IT = UART5->DR;//先读SR后读DR清楚中断标志位
+		Clear_IT = UART5->DR;   /* reading SR then DR clears the IDLE flag */
 
-		extern USART_RX_TypeDef UART5_Rcr;
 		{
 			uint16_t rx_len = USART_Receive(&UART5_Rcr);
-			if(rx_len > 0)
+			if (rx_len > 0)
 			{
-				extern void Handle_UART5_GroundStation_Command(void);
 				Handle_UART5_GroundStation_Command();
 				system_monitor.USART5_task_cnt++;
 			}
@@ -445,28 +348,20 @@ void UART5_IRQHandler(void)
 	}
 }
 
-void DMA1_Stream7_IRQHandler(void)  //串口5 流7
+/* DMA1 stream 7: UART5 TX complete, park the stream. */
+void DMA1_Stream7_IRQHandler(void)
 {
-   if(DMA_GetITStatus(DMA1_Stream7, DMA_IT_TCIF7))
-   {
-      DMA_ClearFlag(DMA1_Stream7, DMA_FLAG_TCIF7);//清除标志位
-    	DMA_Cmd(DMA1_Stream7, DISABLE);             //关闭DMA传输 
-   }
+	if (DMA_GetITStatus(DMA1_Stream7, DMA_IT_TCIF7))
+	{
+		DMA_ClearFlag(DMA1_Stream7, DMA_FLAG_TCIF7);
+		DMA_Cmd(DMA1_Stream7, DISABLE);
+	}
 }
-////////////////////////////////////////////////////////
-void Decode_RX_Data(void)
-{
 
-}
-/***********************************************************************************
-中断处理函数名称：UART6_IRQHandler
-中断产生机制：视觉通讯
-函数功能：
-************************************************************************************/
-
+/* USART6 is not used (PC6/PC7 are RPM inputs). The empty handler replaces the startup file's spin-forever default,
+   so a stray USART6 interrupt returns instead of hanging. */
 void USART6_IRQHandler(void)
 {
-   
+
 }
 /************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
-

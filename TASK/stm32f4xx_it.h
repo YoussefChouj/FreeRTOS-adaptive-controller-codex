@@ -14,7 +14,6 @@
 #include "tf_mini_plus.h"
 #include "AutoflyTask.h"
 #include "GPS.h"
-void Decode_RX_Data(void);
 void Decode_RX_Data_t265(void);
 extern float x_pos;
 extern float y_pos;
@@ -23,9 +22,6 @@ extern float des_x ;
 extern float des_y ;
 extern float des_z ;
 
-extern float target_x_pos;
-extern float target_y_pos;
-extern float target_z_pos;
 #ifdef __cplusplus
 }
 #endif
