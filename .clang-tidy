@@ -1,0 +1,18 @@
+# clang-tidy for the host-buildable firmware: tools/check.sh runs it on every API/*.c a host test builds,
+# with that test's flags (python tools/host_tests.py --tidy). Bug-prone code, the static analyzer, and
+# pointer parameters that could be const; no style checks. Off on purpose:
+#   easily-swappable-parameters          every (float, float) controller signature
+#   reserved-identifier                  __FOO_H guards and _foo_st types of the vendor-era headers
+#   implicit-widening-of-multiplication  int -> ptrdiff_t widening; both are 32-bit on the Cortex-M4
+Checks: >-
+  -*,
+  bugprone-*,
+  clang-analyzer-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-reserved-identifier,
+  -bugprone-implicit-widening-of-multiplication-result,
+  readability-non-const-parameter
+CheckOptions:
+  bugprone-signed-bitwise.IgnorePositiveIntegerLiterals: true   # x << 16, crc >> 1
+WarningsAsErrors: '*'
+HeaderFilterRegex: 'API[/\\][A-Za-z0-9_]+\.h$'

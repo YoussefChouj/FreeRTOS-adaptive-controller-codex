@@ -1,0 +1,18 @@
+# The firmware gate (tools/check.sh) on every push and pull request. Not run yet: the repo has no remote CI history.
+name: check
+on: [push, pull_request]
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Toolchains
+        # gcc-multilib: the subscribe harness builds with -m32 (the firmware assumes 32-bit pointers)
+        run: sudo apt-get update && sudo apt-get install -y gcc gcc-multilib clang-tidy gcc-arm-none-eabi
+      - name: Python packages
+        run: pip install pytest numpy scipy pandas pyyaml
+      - name: Gate
+        run: bash tools/check.sh
