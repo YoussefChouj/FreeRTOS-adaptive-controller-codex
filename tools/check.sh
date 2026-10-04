@@ -8,7 +8,13 @@
 #                sim/sil/test_faults.py, wfb_safety trips on SIL faults (about 20 s)
 #   clang-tidy   .clang-tidy on every firmware file the host tests build, with their flags
 #   row-meta     units and [min, max] of every *_ROW tunable, every row value in range (tools/row_meta.py)
+#   fw-lint      firmware coding-standard ratchet (tools/fw_lint.py, allow-list shrinks only)
+#   stack        task and interrupt stack budget from the Keil call graph (tools/stack_budget.py)
+#   doc-paths    every repo path and file:line in the agent-facing docs exists (tools/doc_paths.py)
 #   arm-syntax   arm-none-eabi-gcc -fsyntax-only on the same files; skipped with a message if not installed
+# Subset while iterating: bash tools/check.sh doc-paths fw-lint (step names as above), or --fast for every step
+# except host-tests, mrac-equiv and sil-smoke (433 s of the gate, measured 2026-10-05). A subset ends with
+# "CHECK SUBSET PASS"; only a run with no arguments prints CHECK PASS, and that is the one a commit needs.
 # Opt-in pre-commit hook that runs this script: bash tools/install-hooks.sh (WP-38).
 set -u
 cd "$(dirname "$0")/.."
@@ -16,10 +22,18 @@ PY=${PYTHON:-python}
 command -v "$PY" >/dev/null 2>&1 || PY=python3
 PYTEST=("$PY" -m pytest -q -p no:cacheprovider)
 
+ALL=" host-tests mrac-equiv c-pytest sil-smoke clang-tidy row-meta fw-lint stack doc-paths arm-syntax "
+only=" $* "
+[ "$only" = " --fast " ] && only=" c-pytest clang-tidy row-meta fw-lint stack doc-paths arm-syntax "
+for want in $only; do
+    [[ "$ALL" == *" $want "* ]] || { echo "check.sh: unknown step '$want' (steps:$ALL)" >&2; exit 2; }
+done
+
 failed=()
 step() {
     local name=$1 t0=$SECONDS
     shift
+    [ "$only" = "  " ] || [[ "$only" == *" $name "* ]] || return 0
     echo "== $name"
     if "$@"; then
         echo "-- $name OK ($((SECONDS - t0)) s)"
@@ -45,4 +59,4 @@ if [ ${#failed[@]} -gt 0 ]; then
     echo "CHECK FAIL: ${failed[*]}"
     exit 1
 fi
-echo "CHECK PASS"
+if [ "$only" = "  " ]; then echo "CHECK PASS"; else echo "CHECK SUBSET PASS:$only(not the full gate)"; fi

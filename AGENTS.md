@@ -157,7 +157,8 @@ to `env.md`, behavior rules to `rules.md`.
 
 - C for Keil ARMCC V5.06, project built with `--C99` (no C11: compile-time checks use the typedef form, coding
   standard rule 8b). Declarations at block top, no VLAs.
-- Before a commit: `bash tools/check.sh` (steps: `docs/firmware-quality.md`), no Keil or hardware needed.
+- Before a commit: `bash tools/check.sh` (steps: `docs/firmware-quality.md`), no Keil or hardware needed. While
+  iterating: `bash tools/check.sh --fast` or named steps (`bash tools/check.sh doc-paths`); a commit needs CHECK PASS.
 - Match surrounding style over personal preference.
 - Minimum code that solves the problem. Nothing speculative.
 - Touch only what the task requires.
