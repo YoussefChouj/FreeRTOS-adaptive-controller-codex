@@ -43,9 +43,8 @@ def build(tmp_path_factory):
                    "-I", str(src), "-I", str(API / "tests" / "stubs"), "-lm", "-o", str(exe)]
             res = subprocess.run(cmd, capture_output=True, text=True)
             assert res.returncode == 0, res.stderr
-            # the only warnings allowed are the pre-existing unused MRAC_InverseMixer stub
-            warnings = [ln for ln in res.stderr.splitlines() if "warning:" in ln and "InverseMixer" not in ln
-                        and "current_vbatt" not in ln and "pwm" not in ln]
+            # no warnings at all (WP-38 deleted the unused MRAC_InverseMixer stub, the one exception before)
+            warnings = [ln for ln in res.stderr.splitlines() if "warning:" in ln]
             assert not warnings, "\n".join(warnings)
             bins[variant] = exe
         return bins[variant]

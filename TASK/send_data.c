@@ -1,4 +1,3 @@
-#pragma diag_suppress 1267
 /**
  * @module     send_data.c
  * @subsystem  comm
