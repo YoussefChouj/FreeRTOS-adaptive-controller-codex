@@ -14,6 +14,11 @@
  *                                                                   0x7E idx axis = gamma scale, SIL only (no bound)
  *   'P' pid      (member, Des, FB)               -> (E, SumE, Up, Ui, Ud, U)   one ComputePID on a Ctrler member
  *   'K' gains    (member)                        -> (Kp, Ki, Kd)
+ *   'G' wfb tick (now_ms, x_m, y_m, z_m, roll, pitch, vbat, yaw, armed, motors_idle, sbus_live, airborne,
+ *                 rc_override)                   -> (setpoint_valid, x_sp, y_sp, z_sp, yaw_sp, takeoff_req, land_req,
+ *                                                    motor_stop_req, prim_state, safety_trip, hb_age,
+ *                                                    gs_flight_active, fence_push)   one API/wfb_glue.c tick
+ *   'H' wfb cmd  (cmd, idx, val, now_ms)         -> (WFB_RESULT_*)  wfb_glue_on_cmd (0x1A prim, 0x1B traj)
  *   'Q' quit
  */
 #include <stdio.h>
@@ -26,6 +31,7 @@
 #include "mrac.h"
 #include "controller.h"
 #include "imu_update.h"
+#include "wfb_glue.h"
 
 enum { I_PIT, I_ROL, I_YAW, I_GX, I_GY, I_GZ, I_X, I_Y, I_Z, I_VX, I_VY, I_VZ, I_TX, I_TY, I_TZ, I_SETYAW,
        I_FF, I_DP, I_DR, I_DY, I_TRIM_P, I_TRIM_R, SIL_NIN };
@@ -316,6 +322,7 @@ int main(void)
 	_setmode(_fileno(stdout), _O_BINARY);
 	QueryPerformanceFrequency(&f);
 	Controller_Init();
+	wfb_glue_init();
 	for (;;) {
 		int op = getchar();
 		if (op == EOF || op == 'Q') return 0;
@@ -350,6 +357,27 @@ int main(void)
 			p = member((int)c);
 			if (p) { r[0] = p->Kp; r[1] = p->Ki; r[2] = p->Kd; }
 			write_f(r, 3);
+		} else if (op == 'G') {
+			float c[13], r[13];
+			wfb_glue_in_t gi;
+			wfb_glue_out_t go;
+			if (!read_f(c, 13)) return 1;
+			gi.now_ms = (uint32_t)c[0];
+			gi.x_m = c[1]; gi.y_m = c[2]; gi.z_m = c[3];
+			gi.roll_deg = c[4]; gi.pitch_deg = c[5]; gi.vbat_v = c[6]; gi.yaw_deg = c[7];
+			gi.armed = (uint8_t)c[8]; gi.motors_idle = (uint8_t)c[9]; gi.sbus_live = (uint8_t)c[10];
+			gi.airborne = (uint8_t)c[11]; gi.rc_override = (uint8_t)c[12];
+			wfb_glue_tick(&gi, &go);
+			r[0] = go.setpoint_valid; r[1] = go.x_sp_m; r[2] = go.y_sp_m; r[3] = go.z_sp_m; r[4] = go.yaw_sp_deg;
+			r[5] = go.takeoff_req; r[6] = go.land_req; r[7] = go.motor_stop_req;
+			r[8] = g_wfb_status.prim_state; r[9] = g_wfb_status.safety_trip; r[10] = g_wfb_status.hb_age;
+			r[11] = g_wfb_status.gs_flight_active; r[12] = g_wfb_status.fence_push;
+			write_f(r, 13);
+		} else if (op == 'H') {
+			float c[4], r;
+			if (!read_f(c, 4)) return 1;
+			r = (float)wfb_glue_on_cmd((uint8_t)c[0], (uint8_t)c[1], c[2], (uint32_t)c[3]);
+			write_f(&r, 1);
 		} else {
 			return 2;
 		}

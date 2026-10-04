@@ -1,4 +1,5 @@
-"""Host build of the firmware controller code for the SIL: API/pid.c, API/mrac*.c, API/controller.c + csrc/sil_server.c.
+"""Host build of the firmware controller code for the SIL: API/pid.c, API/mrac*.c, API/controller.c, API/wfb_*.c +
+csrc/sil_server.c.
 
 Not a ctypes shared library: the only gcc here is 32-bit MinGW (`gcc -dumpmachine` = mingw32) and Python is 64-bit,
 so a DLL from it cannot be loaded (the same reason ground_station/research/sim/_ccore/build.py builds an executable).
@@ -24,7 +25,11 @@ API = REPO / "API"
 CSRC = SIL / "csrc"
 BUILD = SIL / "build"
 FIRMWARE = ["pid.c", "pid.h", "mrac.c", "mrac.h", "mrac_math.c", "mrac_math.h", "mrac_variant.h",
-            "controller.c", "controller.h"]
+            "controller.c", "controller.h",
+            # Workflow B safety glue (pure C, no firmware headers), driven by sim/sil/faults.py
+            "wfb_glue.c", "wfb_glue.h", "wfb_traj.c", "wfb_traj.h", "wfb_safety.c", "wfb_safety.h", "wfb_prim.c",
+            "wfb_prim.h", "wfb_types.h"]
+WFB_C = ["wfb_glue.c", "wfb_traj.c", "wfb_safety.c", "wfb_prim.c"]
 CFLAGS = ["-std=gnu99", "-O2", "-msse2", "-mfpmath=sse", "-ffp-contract=off", "-fno-fast-math", "-Wall", "-Wextra"]
 # pre-existing firmware warnings (PID_ROW leaves aw_mode/Kt to zero-init; the unused MRAC_InverseMixer stub)
 FW_QUIET = ["-Wno-missing-field-initializers", "-Wno-unused-parameter", "-Wno-unused-function"]
@@ -67,7 +72,8 @@ def build(variant: int = 0) -> Path:
     dfl = [f"-DMRAC_VARIANT={variant}"]
     objs = []
     for src, extra in ((work / "pid.c", FW_QUIET), (work / "mrac.c", FW_QUIET), (work / "mrac_math.c", FW_QUIET),
-                       (work / "controller.c", FW_QUIET + ["-D__CC_ARM"]), (CSRC / "sil_server.c", [])):
+                       (work / "controller.c", FW_QUIET + ["-D__CC_ARM"]), *((work / w, []) for w in WFB_C),
+                       (CSRC / "sil_server.c", [])):
         obj = work / (src.stem + ".o")
         _gcc([gcc, *CFLAGS, *dfl, *extra, *inc, "-c", str(src), "-o", str(obj)])
         objs.append(str(obj))

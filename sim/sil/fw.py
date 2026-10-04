@@ -23,6 +23,11 @@ OUT_IDX = {k: i for i, k in enumerate(OUT)}
 MEMBERS = ("pitchPID", "rollPID", "yawPID", "gyroxPID", "gyroyPID", "gyrozPID", "Z_posPID", "Z_ratePID",
            "locxPID", "locyPID", "locxsPID", "locysPID", "stree_yaw_speed", "stree_pitch_speed")
 _NOUT_BYTES = 4 * len(OUT)
+# 'G' op (API/wfb_glue.h wfb_glue_in_t / wfb_glue_out_t + g_wfb_status fields), sil_server.c order
+GLUE_IN = ("now_ms", "x_m", "y_m", "z_m", "roll_deg", "pitch_deg", "vbat_v", "yaw_deg", "armed", "motors_idle",
+           "sbus_live", "airborne", "rc_override")
+GLUE_OUT = ("setpoint_valid", "x_sp_m", "y_sp_m", "z_sp_m", "yaw_sp_deg", "takeoff_req", "land_req", "motor_stop_req",
+            "prim_state", "safety_trip", "hb_age", "gs_flight_active", "fence_push")
 
 
 class Firmware:
@@ -55,6 +60,15 @@ class Firmware:
 
     def gains(self, member: str) -> np.ndarray:
         return self._call(b"K", (MEMBERS.index(member),), 3)
+
+    def glue_tick(self, **gin: float) -> dict[str, float]:
+        """One API/wfb_glue.c tick; fields of GLUE_IN by name (all required)."""
+        r = self._call(b"G", [float(gin[k]) for k in GLUE_IN], len(GLUE_OUT))
+        return {k: float(v) for k, v in zip(GLUE_OUT, r)}
+
+    def glue_cmd(self, cmd: int, idx: int, val: float, now_ms: int) -> int:
+        """wfb_glue_on_cmd (0x1A prim, 0x1B traj): WFB_RESULT_* (0 ACK, 1 REJECTED, 2 APPLIED)."""
+        return int(self._call(b"H", (cmd, idx, val, now_ms), 1)[0])
 
     def send_step(self, row: np.ndarray) -> None:
         self.p.stdin.write(b"S" + np.asarray(row, "<f4").tobytes())
