@@ -126,7 +126,10 @@ def _default_pyocd_attempt() -> tuple[bool, str]:
         return False, "pyocd not on PATH (cannot probe CMSIS-DAP holder)"
     try:
         from pyocd.core.helpers import ConnectHelper
+        # blocking=False: with no probe enumerated pyOCD returns None instead of
+        # waiting forever ("Waiting for a debug probe to be connected...").
         session = ConnectHelper.session_with_chosen_probe(
+            blocking=False,
             options={
                 "target_override": "cortex_m",
                 "connect_mode": "attach",
