@@ -16,6 +16,7 @@
 
 #include "send_data.h"
 #include "mrac.h"
+#include "controller.h"  /* g_ctrl_select_req, g_ctrl_axis_mask (CMD 0x1F) */
 #include "gyro_filter.h"
 #include "sysid.h"
 #include "pid.h"
@@ -1237,7 +1238,7 @@ extern volatile uint8_t gs_cmd_tail;
 #define TXN_HISTORY_LEN         16U
 #define CMD_REJECT_UNKNOWN      4U   /* reason byte of a REJECTED transaction result (firmware_contract.py: 4 unknown, 6 interlock) */
 #define CMD_REJECT_INTERLOCK    6U
-#define CMD_ID_LAST_PLAIN       0x1EU  /* ids above this are unknown, except the MRAC element block */
+#define CMD_ID_LAST_PLAIN       0x1FU  /* ids above this are unknown, except the MRAC element block */
 
 static uint8_t s_transaction_result_buf[64];
 static uint16_t s_transaction_history[TXN_HISTORY_LEN];
@@ -1315,9 +1316,9 @@ static uint8_t CommandSafetyReject(uint8_t id)
          (DroneStatus.ARM_Status != DisArmed))) {
         return CMD_REJECT_INTERLOCK;   /* recalibrate: ground idle and disarmed only */
     }
-    if ((id == 0x1DU) &&
+    if (((id == 0x1DU) || (id == 0x1FU)) &&
         ((flight_phase == FLIGHT_PHASE_FLYING) || (flight_phase == FLIGHT_PHASE_LANDING))) {
-        return CMD_REJECT_INTERLOCK;   /* MRAC variants switch on the ground only */
+        return CMD_REJECT_INTERLOCK;   /* MRAC variants and the controller select switch on the ground only */
     }
     return 0U;
 }
@@ -1847,6 +1848,23 @@ static void Cmd_OfBiasMode(GsCmd_t *c)
     }
 }
 
+/* CMD 0x1F - Controller select (API/controller.h), WP-38. Refused while airborne (FLYING/LANDING), like 0x1D.
+ *   idx 0: controller id (ctrl_id_e, 0..CTRL_MAX-1) into g_ctrl_select_req; Controller_CheckSwitch applies it at
+ *          the next disarmed tick and reverts an id that is not available.
+ *   idx 1: g_ctrl_axis_mask, one bit per axis (0..CTRL_AXIS_MASK_ALL); a cleared bit flies that axis on pure PID.
+ *   Out-of-range writes are ignored. */
+static void Cmd_CtrlSelect(GsCmd_t *c)
+{
+    if ((flight_phase == FLIGHT_PHASE_FLYING) || (flight_phase == FLIGHT_PHASE_LANDING)) {
+        return;
+    }
+    if (c->idx == 0 && c->val >= 0.0f && c->val <= (float)(CTRL_MAX - 1)) {
+        g_ctrl_select_req = (uint8_t)(c->val + 0.5f);
+    } else if (c->idx == 1 && c->val >= 0.0f && c->val <= (float)CTRL_AXIS_MASK_ALL) {
+        g_ctrl_axis_mask = (uint8_t)(c->val + 0.5f);
+    }
+}
+
 /* CMD 0x18 — force recalibration (ADR-0011).
  * Re-enters cold-cal from the top. Accepted only in GROUND_IDLE and DisArmed.
  * Resets: s_cal_trim, s_cal_hot, g_cal_health, g_estimator_ready, EKF. */
@@ -2006,6 +2024,7 @@ static const GsCmdEntry_t k_gs_cmds[] = {
     /* WFB END glue */
     GS_CMD_ENTRY(0x1D,                 0x1D,                 Cmd_MracVariant),        /* MRAC_VARIANT */
     GS_CMD_ENTRY(0x1E,                 0x1E,                 Cmd_OfBiasMode),         /* OF_BIAS_MODE */
+    GS_CMD_ENTRY(0x1F,                 0x1F,                 Cmd_CtrlSelect),         /* CTRL_SELECT */
     GS_CMD_ENTRY(MRAC_ELEM_CMD_BASE,   MRAC_ELEM_CMD_LAST,   Cmd_MracElem8)           /* MRAC element, 8-bit index */
 };
 
