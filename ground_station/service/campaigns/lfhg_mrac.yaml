@@ -1,0 +1,52 @@
+# WP-33 (docs/workflow-b/mrac-variants.md): low-frequency learning with high gain (lf_gain, sigma_lf, gam_f on pitch/roll)
+# on the V1 drive, injected. Start: apply_params(presets.lfhg_mrac) from controllers/mrac_lfhg.yaml on the ground; end:
+# presets.restore (ground_station.analysis.mrac_variants.campaign_presets). Preset = the SIL flight point of
+# docs/analysis/sil-limits-2026-10-04.md. Pass: no abort; F RMSE <= 1.1 x pid_ref. PROPOSED. Fly after v1_refmodel.
+campaign: lfhg_mrac
+objective: "MRAC LFHG (low-frequency learning, gamma x lf_gain) injected on the V1 drive: H, D, F"
+controller: mrac_lfhg
+mode: fly
+packs:
+  - P4000-1
+max_flights: 3
+experiments:
+  - name: hover
+    scenario:
+      scenario: mrac-hover
+      description: takeoff 0.8, hold 40 s, land
+      steps:
+        - takeoff: {z: 0.8, mrac_injection: 1}
+        - hold: {s: 40}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: {rate_hz: 100, groups: [mrac_shadow]}
+  - name: doublet
+    scenario:
+      scenario: mrac-doublet
+      description: goto x +0.4 / -0.4 then y +0.4 / -0.4, dwell 3 s, back to the hover point each time
+      steps:
+        - takeoff: {z: 0.8, mrac_injection: 1}
+        - hold: {s: 3}
+        - goto: {x: 0.4, y: 0.0, z: 0.8, dwell_s: 3.0}
+        - goto: {x: -0.4, y: 0.0, z: 0.8, dwell_s: 3.0}
+        - goto: {x: 0.0, y: 0.4, z: 0.8, dwell_s: 3.0}
+        - goto: {x: 0.0, y: -0.4, z: 0.8, dwell_s: 3.0}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: {rate_hz: 100, groups: [mrac_shadow]}
+  - name: figure8
+    scenario:
+      scenario: mrac-figure8
+      description: figure-8 width 1.0 height 0.5 at 0.3 m/s, 2 laps
+      steps:
+        - takeoff: {z: 0.8, mrac_injection: 1}
+        - hold: {s: 3}
+        - path: {shape: figure8, params: {width_m: 1.0, height_m: 0.5}, v_cruise_mps: 0.3}
+        - path: {shape: figure8, params: {width_m: 1.0, height_m: 0.5}, v_cruise_mps: 0.3}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: {rate_hz: 100, groups: [mrac_shadow]}
+abort: {tilt_deg: 12, pos_err_m: 0.5, sat_window_s: 0.5}
