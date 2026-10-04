@@ -41,6 +41,11 @@ CtrlerTypeDef Ctrler={
     PID_ROW(1.0,  0,     2.0,  40,   40,    0,     2,     2,       2     ), /* stree_yaw_speed */
     PID_ROW(0.6,  0,     0.0,  80,   70,    0,     5,     2,       2     )  /* stree_pitch_speed */
 };
+/* Compile-time guard (standard rule 8b): the table above fills Ctrler by position, one PID_ROW per
+   CtrlerTypeDef member (Global_file/robot_types.h). A member added there without a row here would start
+   with zero gains and no error, so the build fails instead. A typedef emits no code or data. */
+#define PID_TABLE_ROWS 14
+typedef char pid_table_rows_match_ctrler[(sizeof(CtrlerTypeDef) == PID_TABLE_ROWS * sizeof(PIDTypeDef)) ? 1 : -1];
 
 /* Change history (newest first)
  * WP-13 F1x+F3+F5w+F6a integration (2026-10-01)

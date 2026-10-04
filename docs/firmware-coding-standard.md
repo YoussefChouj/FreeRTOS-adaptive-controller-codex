@@ -25,6 +25,10 @@ target allows it; the mapping is at the end.
     so armcc runs `sin`/`cos`/`sqrt` and double literals in software. The Keil call graph (`OBJ/JX_FLY.htm`, "Called By"
     of `__aeabi_dmul`, `__hardfp_sin`) lists every function that still does. Changing one is a behaviour change
     (last-bit rounding): rule 10.
+8b. Compile-time guards for positional tables: when a table fills a struct or array by position, check the row
+    count against the type with `typedef char name[(cond) ? 1 : -1];` (the Keil project builds C99, `--C99`;
+    `_Static_assert` is C11). It emits no code (`tools/fw_equiv.py` shows code and data `same`).
+    Examples: `API/pid.c` (Ctrler), `USER/fault_capture.c`.
 
 ## Changing code
 
