@@ -35,6 +35,7 @@
 #define MRAC_FADE_S    0.1f     // simplex: time for the u_ad fade to go 1 -> 0 or back, s
 #define MRAC_SAT_FRAC  0.999f   // simplex: |u_ad| at or above this fraction of u_max counts as saturated
 #define MRAC_DEG2RAD   0.0174533f   // PID FB/Des (deg/s) and imu_data.pit/rol (deg) -> the rad(/s) MRAC works in
+#define MRAC_FINITE(v) ((v) - (v) == 0.0f)  // false for NaN and +-Inf (the control path's finite test)
 
 // Global instance of the MRAC runtime states
 MRAC_State_t mrac_state MRAC_CCM;
@@ -846,8 +847,9 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
     }
 
     /* Simplex: freeze Theta/Whatf (never reset) while tripped or in the PID-only
-     * variant; u_ad is still computed and faded at the injection point. */
-    if (mrac_simplex.tripped || mrac_simplex.variant == 1) {
+     * variant; u_ad is still computed and faded at the injection point.
+     * Input-guard hold-off (MRAC_GuardedUpdate): Theta frozen too, the caller zeroes u_ad. */
+    if (mrac_simplex.tripped || mrac_simplex.variant == 1 || state->nan_hold != 0U) {
         do_adaptation = 0;
     }
 
@@ -859,6 +861,29 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
     MRAC_AdaptiveOutput(axis_id, state, config, n, vid);
 
     MRAC_CycEnd(axis_id, t0, t1, t2, t3);
+}
+
+/* Input guard (WP-38). A non-finite x, r, u_nom or cross skips the axis for this tick: Theta, Whatf and the
+ * reference model stay as they were, u_ad is 0 (PID only), and the hold-off restarts at nan_rearm. The next
+ * nan_rearm finite ticks run the law with learning frozen and u_ad zeroed, so the model and filters resync;
+ * then u_ad reaches the mixer again, from 0 through the omega_u filter. Before WP-38 one NaN poisoned Theta
+ * and Controller_Update fell back to PID for the rest of the flight. */
+static void MRAC_GuardedUpdate(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const MRAC_AxisConfig_t* config,
+                               float cross_coupling, float r)
+{
+    float hold;
+
+    if (!MRAC_FINITE(state->x) || !MRAC_FINITE(state->u_nom) || !MRAC_FINITE(cross_coupling) || !MRAC_FINITE(r)) {
+        hold = config->nan_rearm;
+        state->nan_hold = (hold >= 65535.0f) ? 65535U : ((hold > 0.0f) ? (uint16_t)hold : 0U);
+        state->u_ad = 0.0f;
+        return;
+    }
+    MRAC_UpdateAxis(axis_id, state, config, cross_coupling, r);
+    if (state->nan_hold != 0U) {
+        state->nan_hold--;
+        state->u_ad = 0.0f;
+    }
 }
 
 void MRAC_SimplexStep(void)
@@ -933,6 +958,8 @@ void MRAC_SimplexStep(void)
 // Public API Operations
 // ------------------------------------------------------------------------------
 
+/* MRAC_SET legend: one @line per field (row); every axis value of the row must lie in [min, max]. PROPOSED bounds.
+   @nan_rearm       ticks   [0, 2000]   finite ticks after a non-finite input before u_ad reaches the mixer (200 = 1 s) */
 #define MRAC_SET(f, p, r, y, z) \
     mrac_config_pitch.f = (p); \
     mrac_config_roll.f = (r); \
@@ -987,6 +1014,7 @@ void MRAC_Init(void)
     MRAC_SET(st_phi_max,      10.0f,                     10.0f,                     10.0f,                     10.0f);
     MRAC_SET(st_bar,          0.0f,                      0.0f,                      0.0f,                      0.0f);
     MRAC_SET(lf_gain,         0.0f,                      0.0f,                      0.0f,                      0.0f);
+    MRAC_SET(nan_rearm,       200.0f,                    200.0f,                    200.0f,                    200.0f);
 
     /* Basis weights: gamma = learning rate, limit/lower = weight bounds (projection),
      * tol = projection boundary layer. Yaw limit/tol = pitch/roll value * 0.6f. */
@@ -1302,23 +1330,23 @@ void MRAC_Control(const CtrlerTypeDef* current_state)
     // 4. Perform inverse mixing to measure actual actuation capabilities
     // (Omitted in early dev, rely on basic limits)
     
-    // 5-8. Update core MRAC algorithms for all axes
+    // 5-8. Update core MRAC algorithms for all axes (behind the input guard)
     if (mrac_flags.axis_enable_pitch) {
-        MRAC_UpdateAxis(MRAC_AXIS_PITCH, &mrac_state.pitch, &mrac_config_pitch, cross_pitch, r_pitch);
+        MRAC_GuardedUpdate(MRAC_AXIS_PITCH, &mrac_state.pitch, &mrac_config_pitch, cross_pitch, r_pitch);
     } else {
         mrac_state.pitch.u_ad = 0.0f;
     }
     if (mrac_flags.axis_enable_roll) {
-        MRAC_UpdateAxis(MRAC_AXIS_ROLL,  &mrac_state.roll,  &mrac_config_roll,  cross_roll,  r_roll);
+        MRAC_GuardedUpdate(MRAC_AXIS_ROLL,  &mrac_state.roll,  &mrac_config_roll,  cross_roll,  r_roll);
     } else {
         mrac_state.roll.u_ad = 0.0f;
     }
     if (mrac_flags.axis_enable_yaw) {
-        MRAC_UpdateAxis(MRAC_AXIS_YAW,   &mrac_state.yaw,   &mrac_config_yaw,   0.0f,        r_yaw);
+        MRAC_GuardedUpdate(MRAC_AXIS_YAW,   &mrac_state.yaw,   &mrac_config_yaw,   0.0f,        r_yaw);
     } else {
         mrac_state.yaw.u_ad = 0.0f;
     }
-    MRAC_UpdateAxis(MRAC_AXIS_Z,     &mrac_state.z_rate,&mrac_config_z,     0.0f,        r_z);
+    MRAC_GuardedUpdate(MRAC_AXIS_Z,     &mrac_state.z_rate,&mrac_config_z,     0.0f,        r_z);
 
 
 }
