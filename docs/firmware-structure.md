@@ -20,9 +20,9 @@ and what a subscribe slot costs. The style reference is `API/pid.c`; the table r
 Other tasks (`USER/main.c`): SystemMonitor_Task, IMU_DataDeal_Task, IMUSample_Task, Remoter_Task, Autofly_Task,
 dbg_report_task. Every refactored file starts with a header: module, owner task and rate, purpose, inputs, outputs.
 
-Not yet at the pid.c standard (no header or tables yet): `API/` Accel_Calibartion, Ano_OF, Filter, GPS, SINS,
-bmi088_driver, calib, delay, ekf, flight_fsm, fw_identity, gyro_filter, imu_update, mrac_math, rc_input, send_prof,
-sys, sysid, tf_mini_plus, time_estimate; `TASK/` AutoflyTask, RemoterTask, led, stm32f4xx_it, systemmonitor_task.
+Not yet at the pid.c standard (no header or tables yet): `API/` Ano_OF, GPS, bmi088_driver, delay, fw_identity,
+sys, tf_mini_plus; `TASK/` AutoflyTask, RemoterTask, led, stm32f4xx_it, systemmonitor_task. WP-41 brought the other
+`API/` files listed there before to the standard (report: `docs/agent/reports/WP-41-cte.md`).
 
 ## How to add a tunable
 1. Put it in the module's `*_ROW` table (one row per loop or object, aligned columns), never as a loose literal.
