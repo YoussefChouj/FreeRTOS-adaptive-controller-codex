@@ -173,12 +173,55 @@ def _shape_library(params: dict) -> list[tuple[float, float]]:
     return points
 
 
+WAYPOINTS_MAX = 100          # waypoints per path; the resampled path still has to fit TrajLimits.max_points
+WAYPOINTS_CORNER_CUT_MAX = 3  # Chaikin passes; each one cuts every corner at 1/4 and 3/4 of its segments
+
+
+def _shape_waypoints(params: dict) -> list[tuple[float, float]]:
+    """Explicit waypoints in metres, in the ground-centre frame (the hover point is (0, 0)).
+
+    params: points_m = [[x, y], ...] (1..WAYPOINTS_MAX), corner_cut = 0..3 (optional, default 0).
+    The path starts and ends at the hover point: (0, 0) is added in front and at the back when missing.
+    corner_cut > 0 rounds the corners (Chaikin), so the reference velocity does not jump at a corner; the
+    rounded path passes near the waypoints, not through them.
+    """
+    if not isinstance(params, dict):
+        raise ValueError("params must be a dict")
+    raw = params.get("points_m")
+    if not isinstance(raw, list) or not 1 <= len(raw) <= WAYPOINTS_MAX:
+        raise ValueError(f"points_m must be a list of 1..{WAYPOINTS_MAX} [x, y] pairs")
+    cut = params.get("corner_cut", 0)
+    if not isinstance(cut, int) or isinstance(cut, bool) or not 0 <= cut <= WAYPOINTS_CORNER_CUT_MAX:
+        raise ValueError(f"corner_cut must be an int 0..{WAYPOINTS_CORNER_CUT_MAX}")
+
+    points: list[tuple[float, float]] = []
+    for i, pt in enumerate(raw):
+        if (not isinstance(pt, (list, tuple)) or len(pt) != 2
+                or not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in pt)):
+            raise ValueError(f"points_m[{i}] must be a finite [x, y] pair")
+        points.append((float(pt[0]), float(pt[1])))
+    if math.hypot(*points[0]) > 1e-6:
+        points.insert(0, (0.0, 0.0))
+    if math.hypot(*points[-1]) > 1e-6:
+        points.append((0.0, 0.0))
+
+    for _ in range(cut):
+        cut_pts = [points[0]]
+        for (x1, y1), (x2, y2) in zip(points, points[1:]):
+            cut_pts.append((0.75 * x1 + 0.25 * x2, 0.75 * y1 + 0.25 * y2))
+            cut_pts.append((0.25 * x1 + 0.75 * x2, 0.25 * y1 + 0.75 * y2))
+        cut_pts.append(points[-1])
+        points = cut_pts
+    return points
+
+
 SHAPES: dict[str, Callable[[dict], list[tuple[float, float]]]] = {
     "line": _shape_line,
     "circle": _shape_circle,
     "figure8": _shape_figure8,
     "square": _shape_square,
     "library": _shape_library,
+    "waypoints": _shape_waypoints,
 }
 
 

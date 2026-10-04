@@ -340,3 +340,25 @@ def test_validate_float32_overflow_is_range() -> None:
     pts = [TrajPoint(0.0, 0.0, 0.5, 0.0, 0.0), TrajPoint(1e39, 0.0, 0.5, 0.0, 1.0)]
     errs = validate(pts, TrajLimits(), 0.5)
     assert any(e.startswith("RANGE: point 1") for e in errs)
+
+def test_waypoints_shape() -> None:
+    """Explicit waypoints: closed at the hover point, validated, optional corner rounding."""
+    wp = SHAPES["waypoints"]
+    assert wp({"points_m": [[0.5, 0.0], [0.5, 0.5]]}) == [(0.0, 0.0), (0.5, 0.0), (0.5, 0.5), (0.0, 0.0)]
+    assert wp({"points_m": [[0, 0], [0.4, 0.0], [0, 0]]}) == [(0.0, 0.0), (0.4, 0.0), (0.0, 0.0)]
+    for bad in ({}, {"points_m": []}, {"points_m": [[1.0]]}, {"points_m": [[math.nan, 0.0]]},
+                {"points_m": [[True, 0.0]]}, {"points_m": [[0.1, 0.1]] * 101},
+                {"points_m": [[0.1, 0.1]], "corner_cut": 4}, {"points_m": [[0.1, 0.1]], "corner_cut": 1.0}):
+        with pytest.raises(ValueError):
+            wp(bad)
+
+    # Chaikin keeps both ends and stays inside the hull of the waypoints.
+    cut = wp({"points_m": [[0.5, 0.0], [0.5, 0.5]], "corner_cut": 2})
+    assert cut[0] == (0.0, 0.0) and cut[-1] == (0.0, 0.0)
+    assert all(-1e-9 <= x <= 0.5 + 1e-9 and -1e-9 <= y <= 0.5 + 1e-9 for x, y in cut)
+
+    # A dense zig-zag inside the cage generates and validates.
+    rows = [[-0.8, y] if i % 2 == 0 else [0.8, y] for i, y in enumerate([-0.9, -0.6, -0.3, 0.0, 0.3, 0.6, 0.9])]
+    pts = generate("waypoints", {"points_m": rows, "corner_cut": 2},
+                   Profile(v_cruise_mps=0.3, a_max_mps2=0.5, ds_m=0.05, hover_z_m=0.8))
+    assert 0 < len(pts) <= 600
