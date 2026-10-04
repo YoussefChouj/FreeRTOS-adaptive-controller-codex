@@ -1,6 +1,8 @@
 # fw_lint.py allow-list: existing violations. Shrink only.
+API/SINS.c double
 API/SINS.h ascii
 API/bmi088_driver.c ascii
+API/bmi088_driver.c double
 API/bmi088_driver.c header
 API/bmi088_driver.h ascii
 API/calib.c ascii
@@ -59,6 +61,7 @@ BSP/usart6.c header
 TASK/RemoterTask.c ascii
 TASK/RemoterTask.h ascii
 TASK/StabilizerTask.c ascii
+TASK/StabilizerTask.c double
 TASK/StabilizerTask.c header
 TASK/led.h ascii
 TASK/send_data.c ascii

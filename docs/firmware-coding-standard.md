@@ -21,6 +21,10 @@ target allows it; the mapping is at the end.
 6. A tunable lives in one `*_ROW` table (see `docs/firmware-table-pattern.md`), never in scattered literals.
 7. A symbol nothing outside the file uses is `static`. A shared symbol has exactly one `extern` in one header.
 8. Use the units in the name or in the comment (`_cm`, `_ms`, `[m/s]`). If two files disagree on a unit, record it as a finding.
+8a. [lint] Single precision only: `sinf`/`cosf`/`sqrtf`, literals with `f`. The Cortex-M4 FPU has no double unit,
+    so armcc runs `sin`/`cos`/`sqrt` and double literals in software. The Keil call graph (`OBJ/JX_FLY.htm`, "Called By"
+    of `__aeabi_dmul`, `__hardfp_sin`) lists every function that still does. Changing one is a behaviour change
+    (last-bit rounding): rule 10.
 
 ## Changing code
 
@@ -42,6 +46,7 @@ target allows it; the mapping is at the end.
 | astyle / clang-format in CI | `fw_lint.py` ratchet + clang-tidy in `check.sh` |
 | `-Werror` builds | host `gcc -O2` FW-EQUIV build; Keil warnings tracked in `docs/firmware-quality.md` |
 | hardware-in-the-loop CI | `sil-smoke` (software in the loop) in `check.sh` |
+| `-Wdouble-promotion`, float-only maths | rule 8a, `fw_lint.py` rule `double` (allow-list shrinks only) |
 
 These are not adopted (PROPOSED, they change structure): C++ modules, a real publish/subscribe bus, and a
 work-queue scheduler instead of fixed FreeRTOS tasks.

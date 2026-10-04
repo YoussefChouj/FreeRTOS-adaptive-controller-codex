@@ -3,6 +3,8 @@
 Checks every .c/.h under the firmware source dirs:
   ascii   - no byte above 0x7F (untranslated GBK comments)
   header  - a .c file carries the `@module` header block near the top
+  double  - no double-precision libm call (sin, cos, sqrt, ...) in code: the Cortex-M4 FPU is single precision,
+            so armcc runs these in software (the `f` forms run on the FPU). Comments are ignored.
 
 Existing violations are listed in tools/fw_lint_allow.txt. The gate fails on a new violation, and also on an
 allow-list entry that no longer fails (so the list can only shrink). Regenerate with --write-allow after fixing
@@ -10,12 +12,16 @@ files.
 """
 import argparse
 import pathlib
+import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DIRS = ('API', 'TASK', 'BSP')
 ALLOW = ROOT / 'tools' / 'fw_lint_allow.txt'
 HEADER_WINDOW = 400   # bytes from the start of the file in which `@module` must appear
+COMMENT = re.compile(rb'/\*.*?\*/|//[^\n]*', re.S)
+DOUBLE_CALL = re.compile(rb'(?<![A-Za-z0-9_.>])(sin|cos|tan|asin|acos|atan|atan2|sqrt|pow|exp|log|log10|floor|ceil'
+                         rb'|fmod|fabs|round)\s*\(')
 
 
 def violations():
@@ -28,6 +34,8 @@ def violations():
                 out.add((rel, 'ascii'))
             if p.suffix == '.c' and b'@module' not in raw[:HEADER_WINDOW]:
                 out.add((rel, 'header'))
+            if DOUBLE_CALL.search(COMMENT.sub(b' ', raw)):
+                out.add((rel, 'double'))
     return out
 
 
