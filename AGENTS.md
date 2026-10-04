@@ -68,8 +68,8 @@ python -m ground_station.livewatch.stream_log --seconds 30 --out logs/run.csv
 # Keil uVision CLI build (from USER/ directory)
 UV4 -b -t JX_FLY -j0 JX_FLY.uvprojx
 
-# Then flash
-python -m ground_station.flashtool.rebuild_and_flash --force --yes
+# Then flash (never --force; stop on a non-zero exit)
+python -m ground_station.flashtool.rebuild_and_flash --yes
 ```
 
 ## Hardware notes
@@ -188,6 +188,11 @@ Spec: `docs/dashboard-platform/AGENT_MAP_SPEC.md`. No vector RAG, no LLM-written
 | `/session-end` | Wrap up — summarize, verify, update session state |
 | `/stream-log` | Reference: variable-rate CSV logging + rebuild/flash pipeline |
 | `/agy-delegate` | Hand a task to an Antigravity worker in WSL tmux and supervise it |
+| `/workflow-b` | Workflow B: launch a fly campaign (operator arms by RC, agent flies scenarios via dashboard MCP) |
+| `/workflow-c` | Workflow C: fly one flight at a time, debrief each (`ground_station.analysis.flight_debrief`), propose the next |
+
+Workflow A (manual flight, offline analysis) has no skill: `python -m ground_station.analysis.flightlab analyze
+<log dir>` (spec `docs/analysis/flightlab-spec.md`). Campaigns for B/C: `ground_station/service/campaigns/*.yaml`.
 
 Probe and capture references: `docs/skills/livewatch.md`, `docs/skills/capture-multislot.md`.
 
