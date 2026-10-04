@@ -4,7 +4,8 @@
   python -m sim.sil.run --matrix [--seed 0] [--controllers pid,mrac] [--out docs/analysis/sil-matrix-2026-10-04.md]
 
 Controllers: sim/sil/controllers.py (pid_autotune runs ground_station/autotune on the SIL first, cached in build/;
-a `_noz` suffix = the same controller with Z not injected). Scenarios: sim/sil/scenarios.py (a trajectory and any
+a `_noz` suffix = the same controller with Z not injected, `_pr` = only pitch/roll injected). Scenarios:
+sim/sil/scenarios.py (a trajectory and any
 disturbances joined by '+'). Deterministic for a seed; --workers does not change results.
 """
 from __future__ import annotations
@@ -22,7 +23,8 @@ from sim.sil.build import REPO
 DOC = REPO / "docs" / "analysis" / "sil-matrix-2026-10-04.md"
 FLAG = {"crash": "X", "uad": "U", "tilt12": "T", "clamp4000": "C", "simplex": "S", "pos05": "P"}
 SHORT = {"pid": "pid", "pid_autotune": "pid_at", "mrac": "mrac", "v1_g025": "v1 x.25", "v1_g1": "v1 x1", "v2": "v2",
-         "pr": "pr", "l3": "3l", "v3": "v3"}
+         "pr": "pr", "l3": "3l", "v3": "v3", "st": "st", "lfhg": "lfhg", "pr_st_lf": "pr+st+lf"}
+SUFFIX = {"_noz": " noZ", "_pr": " p/r"}
 THRUST = ("hover", "hover+mass_p15", "hover+mass_m15", "hover+battery", "hover+motor80")
 
 
@@ -36,7 +38,10 @@ def registry(seed: int, names=None) -> tuple[dict, list]:
 
 
 def short(n: str) -> str:
-    return SHORT.get(n, SHORT.get(n[:-4], n) + " noZ" if n.endswith("_noz") else n)
+    for suf, txt in SUFFIX.items():
+        if n.endswith(suf) and n not in SHORT:
+            return SHORT.get(n[:-len(suf)], n[:-len(suf)]) + txt
+    return SHORT.get(n, n)
 
 
 def flags(m: dict) -> str:
@@ -99,7 +104,7 @@ def findings(res: dict, groups: dict, names: list, rounds: list) -> list[str]:
     out[-1] += (f"pid z RMSE {zs['pid'][0]:.1f} cm at mass +15 %, {zs['pid'][1]:.1f} cm under battery sag "
                 f"(Z_ratePID Ui cap Ki x SumEMax = 0.435 x 250 = 109 < the extra hover PWM); mrac {zs.get('mrac', (0, 0))[0]:.1f} / "
                 f"{zs.get('mrac', (0, 0))[1]:.1f} cm because its z u_ad carries it.")
-    inj = [n for n in names if n not in ("pid", "pid_autotune") and not n.endswith("_noz")]
+    inj = [n for n in names if n not in ("pid", "pid_autotune") and not n.endswith(tuple(SUFFIX))]
     combos: dict[str, int] = {}
     for n in inj:
         for g in groups.values():
@@ -132,12 +137,13 @@ def findings(res: dict, groups: dict, names: list, rounds: list) -> list[str]:
 
 def write_doc(path: Path, reg: dict, groups: dict, res: dict, val: list, wall: float, seed: int, n_rows: int,
               rounds: list) -> None:
-    names = [n for n in reg if not n.endswith("_noz")]
+    names = [n for n in reg if not n.endswith(tuple(SUFFIX))]
     noz = [n for n in reg if n.endswith("_noz")]
+    pr_only = [n for n in reg if n.endswith("_pr")]
     hdr = "| " + " | ".join(short(n) for n in names) + " |"
     sep = "|" + "---|" * (len(names) + 1)
     allsc = [s.name for g in groups.values() for s in g]
-    L = ["# SIL scenario matrix, 2026-10-04 (WP-31)", "",
+    L = ["# SIL scenario matrix, 2026-10-04 (WP-31; WP-33 added st, lfhg, pr+st+lf and the p/r-only rows)", "",
          f"`python -m sim.sil.run --matrix --seed {seed}`: {n_rows} runs, wall {wall:.0f} s. Generated; do not edit.",
          "**Validation: " + ("see the replay section below.**" if val else
                              "UNVALIDATED.** No usable session under `logs/sessions` or `logs/campaigns` in this tree "
@@ -187,10 +193,14 @@ def write_doc(path: Path, reg: dict, groups: dict, res: dict, val: list, wall: f
     for n in names:
         v, why = verdict(n, res, groups)
         L.append(f"| {short(n)} | {v} | {why} |")
-    if noz:
-        L += ["", "## Same MRAC laws with Z not injected (g_ctrl_axis_mask 0x07)", "",
+    for sub, title in ((noz, "Same MRAC laws with Z not injected (g_ctrl_axis_mask 0x07)"),
+                       (pr_only, "MRAC laws injected on pitch/roll only (g_ctrl_axis_mask 0x03, the WP-33 limit-test "
+                                 "setup: docs/analysis/sil-limits-2026-10-04.md)")):
+        if not sub:
+            continue
+        L += ["", f"## {title}", "",
               "| ctrl | H / D / F rmse | max u_ad/u_nom | runs with aborts | verdict | reason |", "|---|---|---|---|---|---|"]
-        for n in noz:
+        for n in sub:
             ms = [res[(n, s)] for s in allsc]
             v, why = verdict(n, res, groups)
             hdf = " / ".join("%.1f" % res[(n, s)]["rmse_cm"] for s in ("hover", "doublet", "figure8"))
@@ -221,11 +231,12 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     t0 = time.perf_counter()
     if not a.matrix:
-        base = a.controller[:-4] if a.controller.endswith("_noz") else a.controller
+        suf = next((s for s in SUFFIX if a.controller.endswith(s)), "")
+        base = a.controller[:-len(suf)] if suf else a.controller
         reg, _ = registry(a.seed, [base])
         if base not in reg:
-            ap.error(f"unknown controller {a.controller!r}; one of {', '.join(controllers.NAMES)} (+ _noz)")
-        spec = controllers.no_z(reg[base]) if a.controller.endswith("_noz") else reg[base]
+            ap.error(f"unknown controller {a.controller!r}; one of {', '.join(controllers.NAMES)} (+ _noz, _pr)")
+        spec = {"_noz": controllers.no_z, "_pr": controllers.pr_only}.get(suf, lambda s: s)(reg[base])
         lg = engine.run([engine.Case(spec, scenarios.parse(a.scenario), a.seed)])[0]
         for k, v in metrics.compute(lg).items():
             print(f"{k:18s} {v:.3f}" if isinstance(v, float) else f"{k:18s} {v}")
@@ -234,7 +245,9 @@ def main(argv=None) -> int:
     reg, rounds = registry(a.seed, a.controllers.split(",") if a.controllers else None)
     if "pid" not in reg:
         ap.error("--matrix needs pid in --controllers (the verdicts compare against it)")
-    reg.update({controllers.no_z(c).name: controllers.no_z(c) for c in list(reg.values()) if c.inject})
+    base = list(reg.values())
+    reg.update({controllers.no_z(c).name: controllers.no_z(c) for c in base if c.inject})
+    reg.update({controllers.pr_only(c).name: controllers.pr_only(c) for c in base if c.name in controllers.PR_ONLY})
     groups = scenarios.matrix()
     jobs = [(c, s.name, a.seed) for c in reg.values() for g in groups.values() for s in g]
     res = {(c.name, s): m for (c, s, _), m in zip(jobs, engine.run_metrics(jobs, a.workers))}

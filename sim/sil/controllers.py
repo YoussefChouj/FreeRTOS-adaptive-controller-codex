@@ -2,9 +2,11 @@
 
 Presets come from ground_station/analysis/controllers/mrac_v*.yaml through the ground station's own descriptor loader
 (symbol -> CMD 0x1D idx), so a sim preset sends the same (cmd, idx, value) list as the flight preset. MRAC injection
-is CMD 0x0F idx 10 (TASK/send_data.c:1788); every MRAC entry flies injected. PR and 3L have no descriptor preset:
-their values are the WP-27 host-test cases (ground_station/analysis/tests/test_mrac_variants_host.py:94-96) on the
-V1 x0.25 preset, PROPOSED. pid_autotune's gains come from autotune.py (ground_station/autotune on the SIL FRF).
+is CMD 0x0F idx 10 (TASK/send_data.c:1788); every MRAC entry flies injected. 3L has no descriptor preset: its value
+is the WP-27 host-test case (ground_station/analysis/tests/test_mrac_variants_host.py:96) on the V1 x0.25 preset,
+PROPOSED. PR, ST and LFHG (WP-33) use their descriptor presets, the flight points of sim/sil/limits.py; those set
+pitch/roll only (yaw keeps the firmware law). pid_autotune's gains come from autotune.py (ground_station/autotune on
+the SIL FRF).
 """
 from __future__ import annotations
 
@@ -30,9 +32,18 @@ class ControllerSpec:
 
 
 def preset_cmds(descriptor: str, preset: str) -> tuple[tuple[int, int, float], ...]:
-    d = load(CONTROLLERS_DIR / f"{descriptor}.yaml")
-    knob = {k.symbol: k for k in d.knobs}
-    return tuple((knob[s].cmd_id, knob[s].idx, float(v)) for s, v in d.presets[preset].items())
+    return merged_cmds((descriptor, preset))
+
+
+def merged_cmds(*pairs: tuple[str, str]) -> tuple[tuple[int, int, float], ...]:
+    """The (cmd, idx, value) list of one or more (descriptor, preset) pairs; a later pair wins on a shared knob."""
+    vals: dict = {}
+    for descriptor, preset in pairs:
+        d = load(CONTROLLERS_DIR / f"{descriptor}.yaml")
+        knob = {k.symbol: k for k in d.knobs}
+        for s, v in d.presets[preset].items():
+            vals[(knob[s].cmd_id, knob[s].idx)] = float(v)
+    return tuple((c, i, v) for (c, i), v in vals.items())
 
 
 def variant_cmds(axes: tuple[int, ...], **fields: float) -> tuple[tuple[int, int, float], ...]:
@@ -49,12 +60,19 @@ def registry(autotune_cmds: tuple[tuple[int, int, float], ...] | None = None) ->
                        cmds=preset_cmds("mrac_v1", "v1_refmodel_g1"), inject=True),
         ControllerSpec("v2", "V2 sataware, mrac_v2.yaml preset v2_sataware (mu_sat 0.85)",
                        cmds=preset_cmds("mrac_v2", "v2_sataware"), inject=True),
-        ControllerSpec("pr", "PR: V1 x0.25 + kappa_pr 0.5, crm_ell 10 on pitch/roll (PROPOSED)",
-                       cmds=v1_q + variant_cmds((0, 1), kappa_pr=0.5, crm_ell=10.0), inject=True),
+        ControllerSpec("pr", "PR, mrac_pr.yaml preset pr_refmodel (p/r: V1 drive, kappa_pr, crm_ell; WP-33 limits)",
+                       cmds=preset_cmds("mrac_pr", "pr_refmodel"), inject=True),
         ControllerSpec("l3", "3L layer 1: V1 x0.25 + lam_ang 4 on pitch/roll (PROPOSED)",
                        cmds=v1_q + variant_cmds((0, 1), lam_ang=4.0), inject=True),
         ControllerSpec("v3", "V3 RBF12 build (-DMRAC_VARIANT=1), mrac_v3.yaml preset v3_rbf12 (gamma x0.25)",
                        variant=1, cmds=preset_cmds("mrac_v3", "v3_rbf12"), inject=True),
+        ControllerSpec("st", "ST set-theoretic, mrac_st.yaml preset st_mrac (p/r; WP-33 limits)",
+                       cmds=preset_cmds("mrac_st", "st_mrac"), inject=True),
+        ControllerSpec("lfhg", "LFHG low-frequency learning, mrac_lfhg.yaml preset lfhg_mrac (p/r; WP-33 limits)",
+                       cmds=preset_cmds("mrac_lfhg", "lfhg_mrac"), inject=True),
+        ControllerSpec("pr_st_lf", "PR + ST + LFHG together: the three presets merged (LFHG's gamma and lf_gain win)",
+                       cmds=merged_cmds(("mrac_pr", "pr_refmodel"), ("mrac_st", "st_mrac"), ("mrac_lfhg", "lfhg_mrac")),
+                       inject=True),
     ]
     if autotune_cmds is not None:
         specs.insert(1, ControllerSpec("pid_autotune", "PID rows from ground_station/autotune on the SIL FRF (CMD 0x01)",
@@ -62,7 +80,8 @@ def registry(autotune_cmds: tuple[tuple[int, int, float], ...] | None = None) ->
     return {s.name: s for s in specs}
 
 
-NAMES = ("pid", "pid_autotune", "mrac", "v1_g025", "v1_g1", "v2", "pr", "l3", "v3")
+NAMES = ("pid", "pid_autotune", "mrac", "v1_g025", "v1_g1", "v2", "pr", "l3", "v3", "st", "lfhg", "pr_st_lf")
+PR_ONLY = ("v1_g025", "v2", "pr", "st", "lfhg", "pr_st_lf")    # also run with only pitch/roll injected (run.py --matrix)
 CMD_CTRL_SELECT, AXIS_MASK_IDX = 0x1F, 1      # g_ctrl_axis_mask, firmware_contract.py:525-531 (a probe write in flight)
 
 
@@ -70,3 +89,9 @@ def no_z(spec: ControllerSpec) -> ControllerSpec:
     """The same controller with the Z axis not injected (g_ctrl_axis_mask 0x07: pitch, roll, yaw)."""
     return ControllerSpec(spec.name + "_noz", spec.doc + ", Z not injected (axis mask 0x07)", spec.variant,
                           spec.cmds + ((CMD_CTRL_SELECT, AXIS_MASK_IDX, 7.0),), spec.inject)
+
+
+def pr_only(spec: ControllerSpec) -> ControllerSpec:
+    """The same controller with only pitch and roll injected (g_ctrl_axis_mask 0x03), the WP-33 limit-test setup."""
+    return ControllerSpec(spec.name + "_pr", spec.doc + ", only pitch/roll injected (axis mask 0x03)", spec.variant,
+                          spec.cmds + ((CMD_CTRL_SELECT, AXIS_MASK_IDX, 3.0),), spec.inject)

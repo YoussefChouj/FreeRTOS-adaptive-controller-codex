@@ -10,7 +10,8 @@
  * Ops: one byte, then float32 fields; the reply is float32 fields.
  *   'S' step     SIL_NIN fields                  -> SIL_NOUT fields
  *   'C' command  (cmd_id, idx, val)              -> (applied 0/1)   CMD 0x01, 0x0F idx <= 12, 0x1D as send_data.c;
- *                                                                   0x1F idx 1 = g_ctrl_axis_mask (a probe write)
+ *                                                                   0x1F idx 1 = g_ctrl_axis_mask (a probe write);
+ *                                                                   0x7E idx axis = gamma scale, SIL only (no bound)
  *   'P' pid      (member, Des, FB)               -> (E, SumE, Up, Ui, Ud, U)   one ComputePID on a Ctrler member
  *   'K' gains    (member)                        -> (Kp, Ki, Kd)
  *   'Q' quit
@@ -292,6 +293,13 @@ static float sil_cmd(int id, int idx, float val)
 	 * ground_station/platform/firmware_contract.py:525-531 map (send_data.c has no 0x1F handler). */
 	if (id == 0x1F && idx == 1 && val >= 0.0f && val <= 15.0f) {
 		g_ctrl_axis_mask = (uint8_t)(val + 0.5f);
+		return 1.0f;
+	}
+	/* SIL only, not a flight command (sim/sil/limits.py): mrac_g_gamma[idx][*] = val without the 0x1D bound
+	 * gamma_scale <= 2, so a gain sweep can reach the instability point. */
+	if (id == 0x7E && idx >= 0 && idx < AXES && val >= 0.0f && val <= 1000.0f) {
+		int k;
+		for (k = 0; k < MRAC_N_GROUPS; k++) mrac_g_gamma[idx][k] = val;
 		return 1.0f;
 	}
 	return 0.0f;

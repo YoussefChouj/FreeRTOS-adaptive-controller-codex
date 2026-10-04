@@ -1,0 +1,57 @@
+# MRAC ST "set-theoretic" knobs (WP-33, docs/workflow-b/mrac-variants.md). CMD 0x1D, idx = field << 2 | axis,
+# ground only; see mrac_v1.yaml for the encoding and the presets protocol. ST builds on the V1 drive.
+# st_eps: |e| bound (rad/s) of the restricted potential; the gradient gain k_st = eps (eps - |e|/2)/(eps - |e|)^2 is 1 at
+# e = 0 and capped at st_phi_max; st_bar: log-barrier drive near the bound (0 = off). API/mrac.c MRAC_UpdateAxis.
+# Preset = the SIL flight point of docs/analysis/sil-limits-2026-10-04.md (python -m sim.sil.limits), PROPOSED:
+# setting st_e2 (eps 2.0 > e_freeze 1.2, so k_st <= 4.4 before the freeze), gamma x0.25.
+# Pitch/roll only (MAX_KNOBS 14): yaw keeps its firmware law. The SIL envelope was measured with only pitch/roll
+# injected (g_ctrl_axis_mask 0x03); see docs/workflow-b/mrac-variants.md for the flight setup.
+name: mrac_st
+shadow_outputs:
+  - mrac_state.pitch.u_ad
+  - mrac_state.roll.u_ad
+  - mrac_state.yaw.u_ad
+knobs:
+  - {symbol: "mrac_config_pitch.ref_type",     cmd_id: 0x1D, idx: 0,  default: -1.0, lo: -1.0, hi: 2.0,  scale: lin}
+  - {symbol: "mrac_config_roll.ref_type",      cmd_id: 0x1D, idx: 1,  default: -1.0, lo: -1.0, hi: 2.0,  scale: lin}
+  - {symbol: "mrac_config_pitch.drive_norm",   cmd_id: 0x1D, idx: 8,  default: 0.0,  lo: 0.0,  hi: 1.0,  scale: lin}
+  - {symbol: "mrac_config_roll.drive_norm",    cmd_id: 0x1D, idx: 9,  default: 0.0,  lo: 0.0,  hi: 1.0,  scale: lin}
+  - {symbol: "mrac_config_pitch.lam_edot",     cmd_id: 0x1D, idx: 12, default: 0.0,  lo: 0.0,  hi: 0.01, scale: lin}
+  - {symbol: "mrac_config_roll.lam_edot",      cmd_id: 0x1D, idx: 13, default: 0.0,  lo: 0.0,  hi: 0.01, scale: lin}
+  - {symbol: "mrac_g_gamma[0][*]",             cmd_id: 0x1D, idx: 44, default: 1.0,  lo: 0.25, hi: 2.0,  scale: log}
+  - {symbol: "mrac_g_gamma[1][*]",             cmd_id: 0x1D, idx: 45, default: 1.0,  lo: 0.25, hi: 2.0,  scale: log}
+  - {symbol: "mrac_config_pitch.st_eps",       cmd_id: 0x1D, idx: 52, default: 0.0,  lo: 0.0,  hi: 2.0,  scale: lin}
+  - {symbol: "mrac_config_roll.st_eps",        cmd_id: 0x1D, idx: 53, default: 0.0,  lo: 0.0,  hi: 2.0,  scale: lin}
+  - {symbol: "mrac_config_pitch.st_phi_max",   cmd_id: 0x1D, idx: 56, default: 10.0, lo: 1.0,  hi: 50.0, scale: log}
+  - {symbol: "mrac_config_roll.st_phi_max",    cmd_id: 0x1D, idx: 57, default: 10.0, lo: 1.0,  hi: 50.0, scale: log}
+  - {symbol: "mrac_config_pitch.st_bar",       cmd_id: 0x1D, idx: 60, default: 0.0,  lo: 0.0,  hi: 1.0,  scale: lin}
+  - {symbol: "mrac_config_roll.st_bar",        cmd_id: 0x1D, idx: 61, default: 0.0,  lo: 0.0,  hi: 1.0,  scale: lin}
+presets:
+  st_mrac:
+    mrac_config_pitch.ref_type: 2
+    mrac_config_roll.ref_type: 2
+    mrac_config_pitch.drive_norm: 1
+    mrac_config_roll.drive_norm: 1
+    mrac_config_pitch.lam_edot: 0.0018
+    mrac_config_roll.lam_edot: 0.0018
+    "mrac_g_gamma[0][*]": 0.25
+    "mrac_g_gamma[1][*]": 0.25
+    mrac_config_pitch.st_eps: 2.0
+    mrac_config_roll.st_eps: 2.0
+    mrac_config_pitch.st_phi_max: 10.0
+    mrac_config_roll.st_phi_max: 10.0
+  restore:
+    mrac_config_pitch.ref_type: -1
+    mrac_config_roll.ref_type: -1
+    mrac_config_pitch.drive_norm: 0
+    mrac_config_roll.drive_norm: 0
+    mrac_config_pitch.lam_edot: 0
+    mrac_config_roll.lam_edot: 0
+    "mrac_g_gamma[0][*]": 1.0
+    "mrac_g_gamma[1][*]": 1.0
+    mrac_config_pitch.st_eps: 0
+    mrac_config_roll.st_eps: 0
+    mrac_config_pitch.st_phi_max: 10.0
+    mrac_config_roll.st_phi_max: 10.0
+    mrac_config_pitch.st_bar: 0
+    mrac_config_roll.st_bar: 0

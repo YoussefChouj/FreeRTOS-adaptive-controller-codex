@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 
 from ground_station.autotune.design import read_pid_rows
-from sim.sil import controllers, fw, metrics, engine, scenarios, validate
+from sim.sil import controllers, fw, limits, metrics, engine, scenarios, validate
 from sim.sil.build import REPO
 from sim.sil.plant import DT_C, Plant, plant_to_fw_xy
 
@@ -144,18 +144,37 @@ def test_scenarios_compose():
 def test_presets_are_the_flight_presets_and_the_firmware_takes_them():
     v1 = controllers.preset_cmds("mrac_v1", "v1_refmodel")
     assert (0x1D, 44, 0.25) in v1 and (0x1D, 50, 2.0) in v1 and (0x1D, 0, 2.0) in v1     # mrac_v1.yaml idx map
-    expect = {"mrac": 0x00, "v1_g025": 0x03, "v1_g1": 0x03, "v2": 0x23, "pr": 0x1B, "l3": 0x43, "v3": 0x83}
+    expect = {"mrac": 0x00, "v1_g025": 0x03, "v1_g1": 0x03, "v2": 0x23, "pr": 0x1B, "l3": 0x43, "v3": 0x83,
+              "st": 0x103, "lfhg": 0x403, "pr_st_lf": 0x51B}
     jobs = [engine.Case(REG[n], scenarios.Scenario(scenarios.Traj("h", "", 0.5, scenarios.TRAJS["hover"].path)), 0)
             for n in expect]
     jobs.append(engine.Case(controllers.no_z(REG["mrac"]), scenarios.parse("hover"), 0))
     logs = engine.run(jobs)
     for lg in logs[:-1]:
         assert all(lg.applied), lg.case.ctrl.name
-        assert int(lg.out["vid_p"][-1]) == expect[lg.case.ctrl.name], lg.case.ctrl.name     # mrac_var_id bits
+        vid = int(lg.out["vid_p"][-1]) & ~0x200                     # 0x200: ST barrier active this tick only
+        assert vid == expect[lg.case.ctrl.name], lg.case.ctrl.name     # mrac_var_id bits
     full, noz = logs[0], logs[-1]                     # mrac injected on 4 axes vs the 0x07 axis mask
     assert all(noz.applied) and noz.out["inj"][-1] > 0.99
     assert np.abs(full.out["corr_z"]).max() > 0 and np.abs(noz.out["corr_z"]).max() == 0
     assert np.abs(noz.out["corr_p"]).max() > 0
+
+
+def test_limit_rules_and_the_sil_gain_command():
+    """WP-33 limits: aborts count against a variant only when pid does not have them; a point fails by majority;
+    the SIL-only CMD 0x7E sets gamma past the 0x1D bound of 2 and the firmware takes every limit-test command."""
+    pid_t = {"aborts": ["tilt12"], "max_tilt_deg": 12.5}
+    assert limits.failing({"aborts": ["tilt12"], "max_tilt_deg": 14.0}, pid_t) == []            # within pid + 2 deg
+    assert limits.failing({"aborts": ["tilt12", "uad"], "max_tilt_deg": 15.0}, pid_t) == ["tilt12", "uad"]
+    assert limits.failing({"aborts": ["tilt12"], "max_tilt_deg": 12.1}, {"aborts": [], "max_tilt_deg": 9.0}) == ["tilt12"]
+    bad, ok = {"aborts": ["uad"], "max_tilt_deg": 5.0}, {"aborts": [], "max_tilt_deg": 5.0}
+    assert limits.point([bad, ok, ok], [ok] * 3)[0] is False and limits.point([bad, bad, ok], [ok] * 3)[0] is True
+    sp = limits.spec("lfhg", 8.0)
+    assert (0x7E, 0, 8.0) in sp.cmds and (0x1F, 1, 3.0) in sp.cmds and (0x1D, 64, 1.0) in sp.cmds    # lf_gain p
+    lg = engine.run([engine.Case(limits.spec("st_bar", 8.0), scenarios.Scenario(
+        scenarios.Traj("h", "", 0.5, scenarios.TRAJS["hover"].path)), 0)])[0]
+    assert all(lg.applied) and int(lg.out["vid_p"][-1]) & 0x103 == 0x103
+    assert np.abs(lg.out["corr_y"]).max() == 0 and np.abs(lg.out["corr_z"]).max() == 0      # p/r injected only
 
 
 def test_deterministic_for_a_seed():

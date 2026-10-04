@@ -500,7 +500,7 @@ COMMAND_TABLE: dict[int, CommandSpec] = {
                     "ground_station/analysis/mrac_variants.py VARIANT_FIELDS). Out-of-range values are refused.",
         params=(
             CommandParam(0, "axis", "axis", 0, 3),
-            CommandParam(1, "field", "enum", 0, 12),
+            CommandParam(1, "field", "enum", 0, 18),
             CommandParam(2, "value", "float", None, None),
         ),
         safety=SafetyClass(
