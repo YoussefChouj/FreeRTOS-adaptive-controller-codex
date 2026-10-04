@@ -23,6 +23,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const assert = require('assert');
+const { preloadKit, tokenStyle } = require('./ui_kit_loader');
 
 const PANEL = path.join(__dirname, '..', '..', '..',
   'docs', 'dashboard-platform', 'shell', 'plugins', 'path-panel.js');
@@ -184,7 +185,11 @@ function loadPanel() {
     sandbox.pluginInit = init;
     sandbox.pluginDestroy = destroy;
   };
+  // WP-39: scene colours are tokens; resolve them the way a browser does (kit + computed style from tokens.css)
+  if (!doc.documentElement) doc.documentElement = { setAttribute() {}, getAttribute() { return null; } };
+  sandbox.getComputedStyle = tokenStyle();
   vm.createContext(sandbox);
+  preloadKit(sandbox);
   vm.runInContext(fs.readFileSync(PANEL, 'utf8'), sandbox, { filename: PANEL });
   sandbox.pluginInit(api);
   api.renderFn(container);

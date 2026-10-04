@@ -22,4 +22,13 @@ function preloadKit(ctx) {
   return preloadAlarms(ctx);
 }
 
-module.exports = { KIT, ALARMS, preloadKit, preloadAlarms };
+// A getComputedStyle stand-in that resolves --gs-* tokens from ui/tokens.css (first definition = dark theme), so
+// canvas / WebGL code that reads tokens through GSUI.tokenColor sees the values a browser would.
+function tokenStyle() {
+  const css = fs.readFileSync(path.join(UI_DIR, 'tokens.css'), 'utf8');
+  const vals = {};
+  for (const m of css.matchAll(/(--gs-[\w-]+)\s*:\s*([^;]+);/g)) if (!(m[1] in vals)) vals[m[1]] = m[2].trim();
+  return () => ({ getPropertyValue: (name) => vals[name] || '' });
+}
+
+module.exports = { KIT, ALARMS, preloadKit, preloadAlarms, tokenStyle };

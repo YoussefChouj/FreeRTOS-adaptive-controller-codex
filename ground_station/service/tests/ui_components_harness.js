@@ -652,9 +652,12 @@ function lintChecks() {
     check(!/\b(window\.)?(confirm|alert)\(/.test(read(path.join(PLUGINS, f))), f + ' calls confirm/alert');
   }
   pass('L1', 'no window.confirm / alert in any plugin (' + all.length + ' files)');
-  const converted = ['campaign-panel.js', 'estimator-panel.js', 'flight-strip.js', 'approval-queue.js'];
+  const converted = ['campaign-panel.js', 'estimator-panel.js', 'flight-strip.js', 'approval-queue.js',
+    // WP-39
+    'overview-panel.js', 'status-panel.js', 'safety-panel.js', 'path-panel.js', 'time-series-panel.js',
+    'telemetry-explorer-panel.js', 'streams-panel.js', 'slot-manager-panel.js', 'bandwidth-panel.js', 'fft-panel.js'];
   const sources = converted.map((f) => [f, read(path.join(PLUGINS, f))]).concat([['ui-kit.js', read(KIT)],
-    ['index.html', read(path.join(SHELL, 'index.html'))]]);
+    ['alarms.js', read(ALARMS)], ['index.html', read(path.join(SHELL, 'index.html'))]]);
   for (const [f, src] of sources) {
     check(!/catch\s*(\(\s*\w*\s*\))?\s*\{\s*(\/\*[^*]*\*\/\s*)?\}/.test(src), f + ' has an empty catch');
   }
