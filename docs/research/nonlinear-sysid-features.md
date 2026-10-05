@@ -256,6 +256,45 @@ Every non-physical term had inclusion 0.00. What it took, and what carries over 
    the thrust enough to tell them apart. The identification campaign needs altitude steps, not only
    level waypoints.
 
+### 7.2 Real logs (measured 2026-10-05)
+
+`sim/bench/sysid/reallog.py` reads the wide per-slot CSVs (`logs/vofa/<stem>.slotN.csv`, device clock,
+20/40 ms slots) into the same residuals: position rotated to the plant frame (`fw_x = -plant_y`,
+`fw_y = plant_x`), pitch and pitch rate negated (`PITCH_SIGN`; on f17 the fw_y acceleration against
+sin(pitch) T/m has gain -0.59, R2 0.46), the gyro as w, the mean balance reported apart by `trim()` and the
+target and candidates centred. `python -m sim.bench.sysid.reallog <stem>` prints both.
+
+**Round trip** (`test_reallog.py`: bench flight written as firmware-format CSVs, read back):
+
+| Row | Readout | 20 ms snapshots | 5 ms log | Truth |
+|---|---|---|---|---|
+| payload | thrust ratio | 1.1022 | 1.1008 | 1.10 |
+| CoM offset | cog x / y (mm) | -14.3 / -12.1 | -14.7 / -12.8 | -14.9 / -12.9 |
+| CoM offset | yaw torque (N m, plant units) | -0.894 | -0.897 | -0.896 |
+| payload | x / y `thrust` | -0.095 / -0.095 | | -0.091 |
+
+Negative probes: no frame rotation, or the reader's pitch sign dropped, fail the translational check.
+
+**Rotational terms need more than 50 Hz snapshots.** Same bench rows, ranked at 2 Hz cutoff:
+
+| Motor log | CoM row roll / pitch `thrust` | roll `tau_nom` |
+|---|---|---|
+| 5 ms (every control tick) | +0.0129 / -0.0149 (truth) | +0.000 (truth 0) |
+| 10 ms snapshots | +0.0095 / -0.0111 | -0.467 |
+| 20 ms snapshots | lost | -0.916 |
+
+A snapshot of a 200 Hz motor command aliases the torque, and `tau_nom` near -1 says the
+measured w_dot does not follow it. f17_hover_shadow2 shows the same signature: roll / pitch `tau_nom`
+-0.89 / -0.86 (seg 0, 36.7 s) and -0.78 / -0.86 (seg 1, 16.8 s). `calib_v1` ARX gave 0.03-0.25 dps2/U
+against the replay-calibrated 8, which fits the same cause. 100 Hz alone does not fix it. What would
+(PROPOSED, post-demo branch): log the motor or rate-loop U averaged over the slot, then rate dither for
+excitation.
+
+**f17 trims** (seg 0 / seg 1): thrust ratio 0.804 / 0.811 (the nominal thrust map and vbat give 20 %
+more thrust than MASS g needs: a lighter airframe or a different battery), CoM offset x +1.2 / +1.0 mm,
+y +6.5 / +5.0 mm, yaw torque +312 / +386 mN m (sign not checked against the plant). A CoM offset from
+one flight mixes motor mismatch and frame asymmetry, so compare a load flight with a baseline flight.
+
 ## 8. Roadmap
 
 | Step | Status |
@@ -264,5 +303,5 @@ Every non-physical term had inclusion 0.00. What it took, and what carries over 
 | FROLS/ERR ranking next to STLSQ | done (`frols.py`) |
 | translational residual target, load/drag features | done (`loads.py`); frequency features in `bands.py` |
 | sim recovery test (sym, asym, drag, dense waypoints) | done (`test_loads.py`, sec. 7.1) |
-| real-log path (replace the `run_real_protocol` stub) | planned |
+| real-log path | done (`reallog.py`, `test_reallog.py`, sec. 7.2); rotational needs slot-averaged motor logging |
 | identification campaign file and log plan | planned, operator decides |

@@ -27,15 +27,20 @@ from sim.bench.sysid.sindy import bootstrap_ensemble  # noqa: E402
 GRAVITY = np.array([0.0, 0.0, plant.G])
 
 
-def motor_thrust(mot, dt=plant.DT_C, v_ratio=1.0, sub=plant.SUB):
+def motor_thrust(mot, dt=plant.DT_C, v_ratio=1.0, sub=plant.SUB, delay_s=None):
     """Thrust (N,4) in N at each sample k from the commanded PWM, as the second difference over steps k and k+1
     sees it: the plant's transport delay (DELAY_TICKS control ticks, rounded to steps of dt), the first-order lag
     TAU_M integrated at dt/sub, the nominal map A1 x + A2 x^2, weighted j/sub^2 over step k's sub-steps and
     (sub-j)/sub^2 over step k+1's (j = 0..sub-1; the plant's semi-implicit Euler), times v_ratio^2 (battery V /
-    V_NOM; leave 1 when the log has no vbat, the thrust coefficient then carries it)."""
+    V_NOM, scalar or one per sample; leave 1 when the log has no vbat, the thrust coefficient then carries it).
+    delay_s: a real log's actuator delay instead of the plant's, as a fractional shift (linear interpolation)."""
     mot = np.asarray(mot, float)
-    delay = int(round(plant.DELAY_TICKS * plant.DT_C / dt))
-    hist = np.concatenate([np.repeat(mot[:1], delay, 0), mot], 0)
+    if delay_s is None:
+        delay = int(round(plant.DELAY_TICKS * plant.DT_C / dt))
+        hist = np.concatenate([np.repeat(mot[:1], delay, 0), mot], 0)
+    else:
+        k = np.arange(len(mot)) - delay_s / dt
+        hist = np.stack([np.interp(k, np.arange(len(mot)), mot[:, i]) for i in range(4)], 1)
     m = mot[0].copy()
     ts = np.zeros((len(mot) + 1, sub, 4))
     h = dt / sub
@@ -47,7 +52,15 @@ def motor_thrust(mot, dt=plant.DT_C, v_ratio=1.0, sub=plant.SUB):
     ts[-1] = ts[-2]
     j = np.arange(sub)[:, None]
     out = (ts[:-1] * j).sum(1) / sub ** 2 + (ts[1:] * (sub - j)).sum(1) / sub ** 2
-    return out * v_ratio ** 2
+    v_ratio = np.asarray(v_ratio, float)
+    return out * (v_ratio[:, None] if v_ratio.ndim else v_ratio) ** 2
+
+
+def body_torque(T):
+    """Roll, pitch, yaw torque (N,3) N m from motor thrusts (N,4) M1..M4: plant.run's rows, the firmware MIX_ROW signs."""
+    return np.stack([plant.ARM * (T[:, 1] + T[:, 2] - T[:, 0] - T[:, 3]),
+                     plant.ARM * (T[:, 1] + T[:, 3] - T[:, 0] - T[:, 2]),
+                     plant.KAPPA * (T[:, 2] + T[:, 3] - T[:, 0] - T[:, 1])], 1)
 
 
 def _pair(x):
@@ -63,7 +76,8 @@ def _body_rates(e, ed):
                      -ed[:, 1] * sf + ed[:, 2] * ct * cf], 1)
 
 
-def residuals(p, e, mot, dt=plant.DT_C, v_ratio=1.0, mass=plant.MASS, j0=plant.J0, cutoff_hz=10.0):
+def residuals(p, e, mot, dt=plant.DT_C, v_ratio=1.0, mass=plant.MASS, j0=plant.J0, cutoff_hz=10.0, w_meas=None,
+              sub=plant.SUB, delay_s=None):
     """Residual targets and candidate libraries per axis: {axis: (y (N,), Theta (N,K), names)}.
 
     x, y, z: a - (T b3 / mass - g). Truth in the bench plant: thrust coef = (mass / m) gain - 1, v coef =
@@ -71,13 +85,14 @@ def residuals(p, e, mot, dt=plant.DT_C, v_ratio=1.0, mass=plant.MASS, j0=plant.J
     thrust (Ts / j0) coef = -cog_y (roll) and +cog_x (pitch) times j0 / J, w coef = -DRAG_ROT / J, gyro coef =
     (J_b - J_c) / J_a, 1 = constant torque (motor mismatch, yaw imbalance). The rest are candidates with a physical
     reading that the plant does not model (zero truth): v|v| quadratic drag, vh2 the Faessler k_h v_h^2 thrust term,
-    cross-axis velocity."""
+    cross-axis velocity.
+
+    w_meas: measured body rates (N,3) rad/s (a log's gyro) instead of rates from Euler differences; wdot is then the
+    central difference. sub, delay_s: passed to motor_thrust."""
     p, e = np.asarray(p, float), np.unwrap(np.asarray(e, float), axis=0)
-    T = motor_thrust(mot, dt, v_ratio)
+    T = motor_thrust(mot, dt, v_ratio, sub, delay_s)
     Ts = T.sum(1)
-    tau = np.stack([plant.ARM * (T[:, 1] + T[:, 2] - T[:, 0] - T[:, 3]),
-                    plant.ARM * (T[:, 1] + T[:, 3] - T[:, 0] - T[:, 2]),
-                    plant.KAPPA * (T[:, 2] + T[:, 3] - T[:, 0] - T[:, 1])], 1)
+    tau = body_torque(T)
     v = np.gradient(p, dt, axis=0)
     a = np.zeros_like(p)
     a[1:-1] = (p[2:] - 2 * p[1:-1] + p[:-2]) / dt ** 2
@@ -88,6 +103,9 @@ def residuals(p, e, mot, dt=plant.DT_C, v_ratio=1.0, mass=plant.MASS, j0=plant.J
     wd = np.zeros_like(w_mid)
     wd[:-1] = np.diff(w_mid, axis=0) / dt
     w = _pair(w_mid)
+    if w_meas is not None:
+        w = np.asarray(w_meas, float)
+        wd = np.gradient(w, dt, axis=0)
     thrust = Ts[:, None] * b3 / mass
     vh = (v * (b1 + b2)).sum(1)
     r_acc = a - (thrust - GRAVITY)
