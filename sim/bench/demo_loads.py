@@ -17,6 +17,9 @@ not in the firmware; it replaces the x/y loops, so the F1x rows do not apply to 
 
     python demo_loads.py [--seeds 10] [--yaw 1003|logged] [--sweep] [--out results/demo_loads.json]
     python demo_loads.py --tables results/demo_loads.json      # reprint the tables of a stored run
+    python demo_loads.py --stress-tags pid_nom h0g_nom --out results/demo_loads_h0g.json
+'--stress-tags' builds the controllers with stress.make (stress.CTRLS tags, their parameter sources and F1x flags)
+instead of CTRLS; paired differences are then against the first tag.
 '--sweep' runs the arm masses between the 250 g that holds and the 500 g that diverges (SWEEP) instead of CASES.
 """
 import argparse
@@ -90,12 +93,17 @@ def run(tag, f1x, rowlist, ref, sp):
     return bench.metrics(plant.run(ctrl, ref, sp, seed=3000), ref, rowlist)
 
 
+def run_stress(tag, rowlist, ref, sp):
+    import stress   # stress imports this module at load time
+    return bench.metrics(plant.run(stress.make(tag, len(rowlist)), ref, sp, seed=3000), ref, rowlist)
+
+
 def med(rows, key='rmse'):
     a = np.array([r[key] for r in rows if not r['diverged']])
     return float(np.median(a)) if len(a) else float('nan')
 
 
-def tables(res, cases, n_seeds):
+def tables(res, cases, n_seeds, base_lb=BASE):
     labels = list(res)
     print('\nmedian RMSE over the non-diverged seeds [m] (n div = diverged seeds of ' + str(n_seeds) + ')\n')
     print('| case | traj | ' + ' | '.join(labels) + ' |\n' + '|---' * (len(labels) + 2) + '|')
@@ -107,14 +115,14 @@ def tables(res, cases, n_seeds):
                 div = sum(r['diverged'] for r in sel[lb])
                 cells.append(f'{med(sel[lb]):.4f}' + (f' ({div} div)' if div else ''))
             print(f'| {case} | {tr} | ' + ' | '.join(cells) + ' |')
-    others = [lb for lb in labels if lb != BASE]
-    if BASE in res and others:
-        print(f'\npaired median RMSE difference vs {BASE} [m], 95% bootstrap CI, seeds where neither diverged '
-              '(negative = better than the flashed PID)\n')
+    others = [lb for lb in labels if lb != base_lb]
+    if base_lb in res and others:
+        print(f'\npaired median RMSE difference vs {base_lb} [m], 95% bootstrap CI, seeds where neither diverged '
+              f'(negative = better than {base_lb})\n')
         print('| case | traj | ' + ' | '.join(others) + ' |\n' + '|---' * (len(others) + 2) + '|')
         for case in cases:
             for tr in TRAJS:
-                base = {r['seed']: r for r in res[BASE] if r['fam'] == case and r['traj'] == tr}
+                base = {r['seed']: r for r in res[base_lb] if r['fam'] == case and r['traj'] == tr}
                 cells = []
                 for lb in others:
                     pr = [(r['rmse'], base[r['seed']]['rmse']) for r in res[lb] if r['fam'] == case and
@@ -136,21 +144,23 @@ def tables(res, cases, n_seeds):
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument('--seeds', type=int, default=10)
     ap.add_argument('--yaw', choices=['1003', 'logged'], default='1003')
-    ap.add_argument('--sweep', action='store_true'); ap.add_argument('--tables')
+    ap.add_argument('--sweep', action='store_true'); ap.add_argument('--tables'); ap.add_argument('--stress-tags', nargs='+')
     ap.add_argument('--out', default='results/demo_loads.json'); a = ap.parse_args()
     if a.tables:
         d = json.load(open(a.tables)); res = d['rows']
-        tables(res, d['cases'], len({r['seed'] for r in next(iter(res.values()))}))
+        tables(res, d['cases'], len({r['seed'] for r in next(iter(res.values()))}), d.get('base', BASE))
         return
     cases = SWEEP if a.sweep else CASES
     rowlist, ref, sp = build(cases, list(range(2000, 2000 + a.seeds)), a.yaw)
     res = {}
-    for tag, f1x in CTRLS:
-        t0 = time.time(); res[label(tag, f1x)] = run(tag, f1x, rowlist, ref, sp)
-        print(f'{label(tag, f1x)}: {time.time() - t0:.0f} s', flush=True)
+    jobs = [(t, lambda t=t: run_stress(t, rowlist, ref, sp)) for t in a.stress_tags or []] or            [(label(t, f), lambda t=t, f=f: run(t, f, rowlist, ref, sp)) for t, f in CTRLS]
+    for lb, job in jobs:
+        t0 = time.time(); res[lb] = job()
+        print(f'{lb}: {time.time() - t0:.0f} s', flush=True)
+    base_lb = a.stress_tags[0] if a.stress_tags else BASE
     json.dump({'cases': {k: list(v) for k, v in cases.items()}, 'h_pad': H_PAD, 'f1x': [F1X_ANG, F1X_RATE],
-               'yaw': a.yaw, 'u_imb_1003': U_IMB_1003, 'rows': res}, open(a.out, 'w'), indent=1)
-    tables(res, cases, a.seeds)
+               'yaw': a.yaw, 'u_imb_1003': U_IMB_1003, 'base': base_lb, 'rows': res}, open(a.out, 'w'), indent=1)
+    tables(res, cases, a.seeds, base_lb)
 
 
 if __name__ == '__main__':
