@@ -45,13 +45,13 @@ step() {
 }
 
 # sil-smoke as 4 pytest processes at once, one per -k group; each group excludes the earlier ones, so together they
-# run every test once (an empty group fails, rc 5). The slowest group, the replay round trip, sets the time.
+# run every test once (an empty group fails, rc 5). Balanced on measured call times (about 30 s each, 2026-10-05).
 # The SIL binaries are built first so the groups only read them. SIL_SMOKE_SERIAL=1 = one process.
 SIL=(sim/sil/test_sil.py sim/sil/test_faults.py --deselect sim/sil/test_sil.py::test_run_mrac_equiv_still_ok)
 sil_smoke() {
     [ "${SIL_SMOKE_SERIAL:-0}" = 1 ] && { "${PYTEST[@]}" "${SIL[@]}"; return; }
     "$PY" -m sim.sil.build > /dev/null || return 1
-    local groups=("replay_round_trip" "presets or limit_rules" "cascade or abort_rules or deterministic")
+    local groups=("replay_round_trip or deterministic" "presets" "cascade or abort_rules")
     local d prev="" k i rc=0 pids=()
     d=$(mktemp -d)
     for i in 0 1 2 3; do

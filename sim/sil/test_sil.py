@@ -196,9 +196,20 @@ def test_abort_rules_fire():
     assert set(metrics.compute(lg)["aborts"]) == {"tilt12", "pos05", "clamp4000"}
 
 
+def _xy_goto(t):
+    """The doublet's first goto on each axis: +0.4 m in x, then +0.4 m in y, 3 s dwells (13 s, the doublet is 40 s)."""
+    T = 1.875 * 0.4 / scenarios.V_PATH
+    ty = 2.0 + T + 3.0
+    ff = ((t >= 2.0) & (t < 2.0 + T)) | ((t >= ty) & (t < ty + T))
+    return scenarios._minjerk(t, 2.0, 0.0, 0.4, T), scenarios._minjerk(t, ty, 0.0, 0.4, T), ff
+
+
 def test_replay_round_trip(tmp_path):
-    """A session written from a SIL doublet replays onto itself: the replay plumbing, not flight validation."""
-    lg = engine.run([engine.Case(REG["pid"], scenarios.parse("doublet"), 0)])[0]
+    """A session written from a SIL doublet replays onto itself: the replay plumbing, not flight validation. Both
+    axes move, so a swapped or sign-flipped axis fails; the shortened doublet halves the run (the sil-smoke floor)."""
+    T = 1.875 * 0.4 / scenarios.V_PATH
+    scen = scenarios.Scenario(scenarios.Traj("doublet_xy", "first x and y goto of the doublet", 8.0 + 2 * T, _xy_goto))
+    lg = engine.run([engine.Case(REG["pid"], scen, 0)])[0]
     s = (lg.t >= 0) & (np.arange(len(lg.t)) % 2 == 0)                          # 100 Hz core streams
     t = lg.t[s]
     cols = {"Ctrler.locxPID.Des": lg.ref[s, 0] * 100, "Ctrler.locxPID.FB": lg.p[s, 0] * 100,
