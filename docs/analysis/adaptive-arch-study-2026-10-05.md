@@ -356,6 +356,11 @@ Flight reading (PROPOSED, for the operator):
   (`API/controller.c`, CTRL_AXIS_Z adds mrac_state.z_rate.u_ad); confirm it is adapting (z_rate u_ad moving in the
   telemetry of the no-load hover) before reading the 500 g result as a controller comparison. RC hand on land.
 - 500 g on an arm: every controller diverges in the sim (near motor at about 82 % of T_MAX static). Do not fly it.
+- Arm-mass sweep (`demo_loads.py --sweep`, results/demo_loads_sweep.json, 10 seeds, motors m0 and m2): 300 and
+  350 g fly for all three (one MRAC5 zigzag seed diverged at 350 g m0; paired CIs span 0). At 400 g the adaptive
+  variants fail first: diverged seeds on m0 hover PID 1, SatAware 7, MRAC5 9; m2 hover 0 / 1 / 4. At 450 g
+  PID 5-9, SatAware 9-10, MRAC5 10. So on an arm, keep the load at or below 350 g, and expect no adaptive
+  advantage there in the sim: the arm case is a PID-vs-MRAC safety check, the pads 500 g case is the comparison.
 
 Caveats: rigid load (a hung load's swing is not modelled); H_PAD 0.10 m is PROPOSED; the arm CoG shift (up to 56 mm at
 500 g) lies outside the cog range the controllers were tuned on; batch noise moves a case's median by 10-20 % between
