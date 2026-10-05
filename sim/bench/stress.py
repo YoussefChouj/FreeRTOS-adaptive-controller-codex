@@ -44,10 +44,14 @@ import scen
 from plant import (A1, A2, G, V_NOM, PWM_MIN, PWM_MAX, DELAY_TICKS, IIR, BG_B, BG_A, BA_B, BA_A, TOF_DELAY, B_YAW,
                    J0, DT_C, DT, SUB, TAU_M, R_PROP, ARM, KAPPA, DRAG_LIN, DRAG_ROT, SIG_GYRO, SIG_ACC, KP_MAHONY,
                    TOF_EVERY, OF_EVERY, SIG_TOF, SIG_OF, K_TOF, K_OF, rot, euler_rates)
-from demo_loads import F1X_ANG, F1X_RATE, MOTOR_XY
+from demo_loads import F1X_ANG, F1X_RATE, MOTOR_XY, U_IMB_1003
 
 LOAD_K, LOAD_ZETA, LOAD_DRAG = 5000.0, 0.7, 0.02      # N/m (1.4 mm stretch at 0.7 kg), -, N/(m/s)
 ARM_TIP = ARM * np.sqrt(2.0)                           # plant.ARM is the x / y moment arm; the tip sits at ARM, ARM
+# Yaw mixer imbalance per row.  '1003': the flashed 10-03 mixer, pairs within 1-66 U (demo_loads.U_IMB_1003), which is
+# the image that flies.  '0927': scen's own draw (350-500 U, the 09-27 spin flights); the first stress run (089ad55)
+# used it and the large imbalance plus an arm load saturated yaw (doc sec K.3).
+YAW_IMB = '1003'
 
 
 def run_ext(ctrl, ref, sp, seed=0, div_err=2.0, tile=1):
@@ -238,6 +242,8 @@ def lem_a(v, A=1.5, z0=scen.Z0):
 
 def base_q(seed, ti):
     q = scen.row_params('nominal', 0, ti, seed)
+    if YAW_IMB == '1003':
+        q['u_imb'] = np.random.default_rng([seed, 1003]).uniform(*U_IMB_1003)
     q.update(tau_m=TAU_M, delay=DELAY_TICKS, load_m=0.0, load_r=np.zeros(3), load_l=0.0, load_cable=False,
              load_t_on=0.0, load_t_off=1e9)
     return q
@@ -307,6 +313,10 @@ CTRLS = {
     'mrac_sataware': (None, 'mrac_sataware', True),
     'mrac5_xyz': (None, 'mrac5_xyz', False),
     'h0_sep_fw': ('ctrl_h0:H0_Sep', None, True),         # no-tuning adaptive layer on the firmware gains
+    # tune_nominal.py: the same 2 x 64 CMA budget on nominal rows only (no oracle), read from <src>_tune.json
+    'pid_nom': (None, 'pid_tuned2_nom', True),
+    'mrac_sataware_nom': (None, 'mrac_sataware_nom', True),
+    'mrac5_xyz_nom': (None, 'mrac5_xyz_nom', False),
 }
 
 
@@ -314,7 +324,7 @@ def make(tag, B):
     spec, src, f1x = CTRLS[tag]
     params = None
     if src:
-        st = json.load(open(f'results/{src}_test.json'))
+        st = json.load(open(f'results/{src}_tune.json' if src.endswith('_nom') else f'results/{src}_test.json'))
         spec, params = st['ctrl'], {k: float(v) for k, v in st['params'].items()}
     ang, rate = fwpid.ANG_PR, fwpid.RATE_PR
     try:
@@ -343,8 +353,10 @@ def summarise(met):
         lv = sorted({int(m['fam'].split(':L')[1]) for m in met if m['fam'].split(':')[0] == axis})
         for l in lv:
             r = np.array([m['rmse'] for m in met if m['fam'] == f'{axis}:L{l}'])
-            out.setdefault(axis, []).append((l, len(r), float(np.mean(~np.isfinite(r))), float(np.median(r)),
-                                             float(np.percentile(r, 90))))
+            ok = np.isfinite(r)
+            rr = np.where(ok, r, 1e9)                       # diverged = 1e9 so nearest-rank never interpolates
+            pct = [float(x) if x < 1e8 else np.inf for x in np.percentile(rr, [50, 90], method='inverted_cdf')]
+            out.setdefault(axis, []).append((l, len(r), float(np.mean(~ok)), *pct))
     return out
 
 
@@ -366,7 +378,7 @@ def cmd_report(tags):
             lv = S[t][axis] if axis == 'speed' else [nom[t]] + S[t][axis]
             cells += [' '.join(f'{100 * d:.0f}' for _, _, d, *_ in lv), str(break_point(lv) or '>4')]
         lines.append(f'| {axis} | ' + ' | '.join(cells) + ' |')
-    lines += ['', 'p90 RMSE [m] per level (div = more than 10 % of the cell diverged)', '',
+    lines += ['', 'p90 RMSE [m] per level, nearest rank (div = the p90 row diverged)', '',
               '| axis | ' + ' | '.join(tags) + ' |', '|---|' + '---|' * len(tags)]
     for axis in AXES:
         cells = []

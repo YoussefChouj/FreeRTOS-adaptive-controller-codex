@@ -406,3 +406,164 @@ means it learns during the sag transient only: expect a dip on load-up, then `mr
 stays. Check on the no-load MRAC hover that `u_ad_z` (flight_signals.yaml) is near 0 and finite before loading. Not
 verified on the drone. Both asym_load twins log it: their `mrac_shadow` group (ground_station/livewatch/
 campaign_capture.py, MRAC_AXES includes z_rate) carries z u_ad, u_nom, u_def, e and the Theta/Whatf weights at 50 Hz.
+
+## K. Stress ladder: disturbances, model mismatch and speed from moderate to extreme (`sim/bench/stress.py`)
+
+Why (user, 2026-10-05 evening): the comparisons in A, D, H and J were made on a bench with assumptions that favour
+the PID. Audit of `scen.py` / `plant.py` against that critique:
+
+| Flaw in the frozen bench | Effect on the verdicts above |
+|---|---|
+| each disturbance family exists at ONE moderate level (wind 2-4 m/s, payload +15-30 %, motor loss 15-25 %) | nobody is pushed to where controllers come apart; differences are a few mm |
+| payload is a mass/inertia change present from t=0 | no load pickup, no swinging load, no off-centre pull; the asymmetric-load demo is not modelled |
+| `pid_tuned2` was CMA-tuned on the same families it is scored on | the baseline is an oracle for the test disturbances |
+| headline = median RMSE | rows that diverge barely move a median |
+| the adaptive laws use the plant's exact constants (mass, tau, hover PWM) | no structural model mismatch |
+| motor tau, command delay and thrust coefficient are exact | the classic adaptive-control failure modes (unmodelled lag) are never exercised |
+| trajectories <= 1.5 m/s | no aggressive flight |
+| the nominal yaw mixer imbalance is the 09-27 one (350-500 U); the flashed 10-03 mixer measures 1-66 U | any case that needs a motor differential (arm load, motor loss) starts with the yaw channel half spent (found by this ladder, sec K.3) |
+
+So the verdicts of A, D, H0 and J are conditional on that bench: true for mild disturbances against a PID tuned for
+them, silent about the rest.
+
+Protocol here (state-of-the-art practice, e.g. Neural-Fly O'Connell 2022 winds to ~12 m/s, Sun 2022 T-RO
+NMPC vs INDI at speed, L1-adaptive payload studies; figures from memory, unverified):
+- every axis is a ladder L0 nominal, L1 moderate .. L4 extreme; one axis at a time, plus a combo axis with four at once;
+- loads are a separate body (point mass on a stiff spring, rigid or on a cable): picked up mid-flight, swinging under
+  the pads, or hanging off one arm tip; nothing in any controller knows about them;
+- model mismatch: thrust coefficient +-10..40 %, motor time constant x1.5..4 with delay 4..10 ticks, inertia x1.2..2;
+- speed: lemniscate 1.5 m half-width at 1.0 .. 3.0 m/s peak;
+- rows: 4 trajectories (hover, circle_1.0, zigzag_1.0, lemniscate A=1.5 m at 1.5 m/s) x 3 seeds per cell, the same rows
+  and noise for every controller (paired); 459 rows per controller;
+- headline: divergence rate per level and the break point (first level with >= 25 % of rows diverged), then p90 RMSE;
+- baselines: `fw_pid` = the flashed firmware gains, untuned; `pid_tuned2` = the oracle PID; adaptive = `mrac_sataware`,
+  `mrac5_xyz`, `h0_sep_fw` (H0_Sep on the firmware gains: no tuned parameter anywhere).
+
+`python stress.py check` proves `run_ext` (the extended plant) equals the frozen `plant.run` bit for bit when no
+extension key is set (PASS, 2026-10-05).
+
+| Axis | L1 | L2 | L3 | L4 |
+|---|---|---|---|---|
+| wind_gust: mean / Dryden sigma / 2 gusts [m/s] | 2 / 0.5 / 3 | 4 / 1 / 5 | 6 / 1.5 / 7 | 8 / 2 / 10 |
+| mass_step: rigid load picked up at t = 8 s, 5 cm below CoG [kg] | 0.15 | 0.30 | 0.50 | 0.70 |
+| swing_load: 0.3 m cable from the pads, from t = 0 [kg] | 0.10 | 0.25 | 0.40 | 0.55 |
+| arm_load: 0.1 m cable from motor 0's arm tip [kg] | 0.10 | 0.20 | 0.30 | 0.40 |
+| motor_loss: one motor's efficiency from t = 8 s | 0.85 | 0.70 | 0.60 | 0.50 |
+| kt_mismatch: all motors, random sign | +-10 % | +-20 % | +-30 % | +-40 % |
+| actuator: motor tau x / delay [5 ms ticks] (nominal 3) | 1.5 / 4 | 2 / 6 | 3 / 8 | 4 / 10 |
+| inertia: J x | 1.2 | 1.4 | 1.7 | 2.0 |
+| combo: wind_gust + arm_load + kt_mismatch + actuator at the same level | | | | |
+| speed: lemniscate peak [m/s] (L0 = 1.0) | 1.5 | 2.0 | 2.5 | 3.0 |
+
+### K.1 Results (measured 2026-10-05, `results/stress_<tag>.json`, `python stress.py report fw_pid pid_tuned2 mrac_sataware mrac5_xyz h0_sep_fw`)
+
+Yaw imbalance drawn in the measured 10-03 range (`YAW_IMB = '1003'`, sec K.3). Overall share of the 459 rows that
+diverged: fw_pid 47.1 %, pid_tuned2 34.6 %, mrac_sataware 31.6 %, mrac5_xyz 25.1 %, h0_sep_fw 27.0 %. (The first
+run, with the 09-27 imbalance: 41.6 / 34.4 / 31.8 / 27.9 / 29.0 %; the per-axis picture moved more than the totals.)
+
+Divergence % per level (rows: 4 trajs x 3 seeds = 12 per cell; speed: 3 per cell); break = first level with >= 25 % diverged.
+
+| axis | fw_pid L0..L4 div % | fw_pid break | pid_tuned2 L0..L4 div % | pid_tuned2 break | mrac_sataware L0..L4 div % | mrac_sataware break | mrac5_xyz L0..L4 div % | mrac5_xyz break | h0_sep_fw L0..L4 div % | h0_sep_fw break |
+|---|---|---|---|---|---|---|---|---|---|---|
+| wind_gust | 0 0 0 17 50 | 4 | 0 0 0 8 25 | 4 | 0 0 0 0 17 | >4 | 0 0 0 0 17 | >4 | 0 0 0 0 0 | >4 |
+| mass_step | 0 0 50 100 100 | 2 | 0 0 0 67 100 | 3 | 0 0 0 17 92 | 4 | 0 0 0 0 8 | >4 | 0 0 0 8 83 | 4 |
+| swing_load | 0 8 67 100 100 | 2 | 0 0 0 8 67 | 4 | 0 0 0 0 33 | 4 | 0 0 0 0 0 | >4 | 0 0 0 8 67 | 4 |
+| arm_load | 0 0 33 75 100 | 2 | 0 0 0 50 100 | 3 | 0 0 0 92 100 | 3 | 0 0 0 58 100 | 3 | 0 0 0 0 42 | 4 |
+| motor_loss | 0 0 0 17 75 | 4 | 0 0 0 0 0 | >4 | 0 0 0 0 8 | >4 | 0 0 0 0 17 | >4 | 0 0 0 0 8 | >4 |
+| kt_mismatch | 0 0 58 67 100 | 2 | 0 0 0 33 100 | 3 | 0 0 0 8 100 | 4 | 0 0 0 0 17 | >4 | 0 0 0 33 100 | 3 |
+| actuator | 0 0 83 100 100 | 2 | 0 0 100 100 100 | 2 | 0 0 83 100 100 | 2 | 0 0 67 100 100 | 2 | 0 8 75 100 100 | 2 |
+| inertia | 0 0 0 0 0 | >4 | 0 0 0 0 0 | >4 | 0 0 0 0 0 | >4 | 0 0 0 0 0 | >4 | 0 0 0 0 0 | >4 |
+| combo | 0 42 100 100 100 | 1 | 0 92 100 100 100 | 1 | 0 92 100 100 100 | 1 | 0 100 100 100 100 | 1 | 0 50 100 100 100 | 1 |
+| speed | 0 0 33 100 100 | 2 | 0 0 100 100 100 | 2 | 0 0 67 100 100 | 2 | 0 0 100 100 100 | 2 | 0 0 0 100 100 | 3 |
+
+p90 RMSE [m] per level, nearest rank (div = the p90 row diverged)
+
+| axis | fw_pid | pid_tuned2 | mrac_sataware | mrac5_xyz | h0_sep_fw |
+|---|---|---|---|---|---|
+| wind_gust | 0.991 1.024 1.018 div div | 0.092 0.128 0.124 0.512 div | 0.081 0.101 0.127 0.284 div | 0.095 0.095 0.099 0.233 div | 0.818 0.872 0.849 0.886 0.982 |
+| mass_step | 0.991 1.117 div div div | 0.092 0.090 0.085 div div | 0.081 0.078 0.080 div div | 0.095 0.088 0.085 0.093 0.301 | 0.818 0.887 0.942 1.094 div |
+| swing_load | 0.991 1.114 div div div | 0.092 0.085 0.080 0.696 div | 0.081 0.085 0.077 0.113 div | 0.095 0.092 0.107 0.130 0.143 | 0.818 0.835 1.010 1.180 div |
+| arm_load | 0.991 1.112 div div div | 0.092 0.085 0.217 div div | 0.081 0.081 0.228 div div | 0.095 0.090 0.188 div div | 0.818 0.890 1.063 1.224 div |
+| motor_loss | 0.991 1.058 1.137 div div | 0.092 0.096 0.085 0.145 0.212 | 0.081 0.073 0.076 0.122 0.470 | 0.095 0.094 0.097 0.285 div | 0.818 0.843 0.875 0.945 1.030 |
+| kt_mismatch | 0.991 0.819 div div div | 0.092 0.083 0.079 div div | 0.081 0.072 0.072 0.897 div | 0.095 0.084 0.082 0.088 div | 0.818 0.830 1.044 div div |
+| actuator | 0.991 0.992 div div div | 0.092 0.090 div div div | 0.081 0.091 div div div | 0.095 0.094 div div div | 0.818 0.845 div div div |
+| inertia | 0.991 1.074 1.053 1.064 1.062 | 0.092 0.099 0.097 0.197 0.245 | 0.081 0.074 0.076 0.091 0.094 | 0.095 0.082 0.087 0.084 0.096 | 0.818 0.852 0.832 0.870 0.858 |
+| combo | 0.991 div div div div | 0.092 div div div div | 0.081 div div div div | 0.095 div div div div | 0.818 div div div div |
+| speed | 0.969 1.079 div div div | 0.079 0.085 div div div | 0.086 0.085 div div div | 0.079 0.088 div div div | 0.670 0.839 1.121 div div |
+
+### K.2 What the ladder shows that the old bench hid
+
+1. Every controller breaks somewhere: actuator lag at L2 and the combo at L1 break all five. The question is which
+   axis breaks first and why.
+2. Loads separate the controllers, as the user expected. `mrac5_xyz` never diverges on the swinging load (up to
+   0.55 kg on a 0.3 m cable, p90 0.09-0.14 m) and holds the mid-flight pickup to L3 (0.5 kg, 0 %; 8 % at 0.7 kg,
+   p90 0.30 m). The oracle PID breaks at L3 on the pickup (67 % at 0.5 kg) and at L4 on the swing (67 %);
+   `mrac_sataware` breaks at L4 on both. The old bench (payload +15-30 %, present from t = 0) put them all within a
+   few mm of each other.
+3. Inertia mismatch (J x 2) diverges nobody, but the tuned PID's p90 grows 0.092 -> 0.245 m while `mrac5_xyz` stays
+   0.095 -> 0.096 m and `mrac_sataware` 0.081 -> 0.094 m.
+4. Thrust-coefficient mismatch: the tuned PID breaks at +-30 % (33 %), `mrac_sataware` at +-40 %, `mrac5_xyz` holds
+   to +-40 % (17 % there).
+5. Motor loss (one motor down to 50 % from t = 8 s) is survivable for the tuned controllers (pid_tuned2 0 %,
+   sataware 8 %, mrac5_xyz 17 % at L4). In the first run it broke everyone at L3: that was the yaw imbalance (K.3).
+6. Actuator lag is the binding constraint for everyone: motor tau x 2 with a 30 ms command delay (L2) diverges 67 %
+   (mrac5_xyz) to 100 % (pid_tuned2) of rows. The untuned firmware gains do no better here (fw_pid 83 %, h0_sep_fw
+   75 %) even though they fly with p90 0.82-0.99 m at L0 against 0.08-0.10 m for the tuned ones. So the real motor
+   lag must be measured before any gain goes up, and it is not an adaptive-versus-PID question.
+7. Combo (wind + arm load + kT + lag, all at L1) breaks every controller (42-100 %) although each ingredient alone at
+   L1 diverges at most 8 % (h0_sep_fw on actuator). Open question, next on the list: which pair interacts.
+8. Speed: only `h0_sep_fw` holds the 2.0 m/s lemniscate (0 %; it breaks at 2.5); `mrac_sataware` loses 67 %, the
+   tuned PID and `mrac5_xyz` all rows there.
+9. Arm load: the tuned controllers break at L3 (0.3 kg), the slow h0_sep_fw only at L4 (42 % at 0.4 kg). See K.3.
+
+### K.3 Arm load: why 0.3 kg on one arm broke everyone in the first run, and what it means for 10-06
+
+The first ladder run (089ad55, scen's yaw imbalance) had every controller diverging on 12 of 12 rows at arm_load L3
+(0.3 kg on a 0.1 m cable from motor 0's tip), about 1.1-1.2 s into the flight, with yaw running away (max |yaw error|
+79-95 deg). That contradicted sec J (demo_loads: arm loads up to 350 g fly for all controllers). Diagnosis on those
+12 rows (pid_tuned2 and mrac5_xyz, measured 2026-10-05, scratchpad scripts):
+
+| Variant on the 12 L3 rows | pid_tuned2 diverged | mrac5_xyz diverged |
+|---|---|---|
+| as run (cable, attached at t = 0) | 12 | 12 |
+| rigid mount instead of cable | 11 | 12 |
+| load attached at t = 2 s (cable or rigid) | 12 | 12 |
+| demo_loads' own model (CoG + inertia shift, no load body) | 11 | 12 |
+| as run, yaw imbalance redrawn in the measured 10-03 range (1-66 U) | 6 (at ~5.7 s) | 8 (at ~7.4 s) |
+
+So the load model was not the cause. The cause was a baked-in assumption the bench inherited: scen draws the yaw
+mixer imbalance at 350-500 U, the value from the 09-27 spin flights. The flashed 10-03 mixer measures 1-66 U, and
+demo_loads already used that. An arm load needs a large roll + pitch differential (computed static balance at
+0.3 kg: motor thrusts 5.38 / 2.44 / 3.91 / 3.91 N, PWM 1566 / 993 / 1306 / 1306); because thrust is convex in PWM
+that differential also makes a yaw torque, and on top of a 350-500 U imbalance the yaw channel runs out of authority.
+Like a car that already pulls hard to one side and is then loaded on one corner: the steering runs out.
+
+With the measured imbalance the remaining L3 failures are mostly the fast trajectories:
+
+| 0.3 kg arm, 10-03 imbalance (diag draw) | hover | circle 1.0 | zigzag 1.0 | lemniscate 1.5 |
+|---|---|---|---|---|
+| pid_tuned2 diverged / 3 | 1 | 1 | 2 | 2 |
+| mrac5_xyz diverged / 3 | 0 | 3 | 2 | 3 |
+
+`stress.py` now uses the 10-03 imbalance by default (`YAW_IMB = '1003'`); the tables in K.1 are the rerun with it.
+The first run is kept only as this finding.
+
+What it means for the 10-06 arm-load runs (250 g):
+- Fly the arm load in hover and at slow speed first (sec J's 0.2 m/s zigzag); 0.3 kg on one arm at 1.0-1.5 m/s
+  diverges in the sim for both controllers.
+- Before the arm-load runs, check that the yaw trim is the 10-03 one (pairs within 1-66 U). A 09-27-sized imbalance
+  plus a one-arm load is the measured failure above.
+- Expect a steady tilt of about 5-6 deg with the f1x gains (computed: the rate / angle integrator caps 20 / 10 leave the
+  steady roll + pitch effort, about 143 PWM units each at 0.3 kg, to the P terms). That is not a fault.
+- Signature to watch live: a growing yaw error. Over the 12 diag rows the largest |yaw error| was 20-29 deg with the
+  10-03 imbalance against 79-95 deg with the old one.
+
+### K.4 What changes in the verdicts above
+
+- A, D, H0, J: their numbers stand, but only as statements about mild disturbances against a PID tuned for them.
+- The adaptive case is strongest exactly where the user tested it in flight: loads that change the plant (pickup,
+  swing, inertia, thrust coefficient). It does not buy margin on unmodelled actuator lag, which the adaptive
+  literature also names as its classic failure mode (Rohrs-type unmodelled dynamics; from memory, unverified).
+- Next (one item per commit): a fair re-tune of PID and MRAC on nominal rows only (no oracle, `tune_nominal.py`),
+  then the ladder again; the combo-L1 interaction; measure motor tau and delay from the 10-03 / 10-06 logs and set
+  the actuator ladder's L0 from the measurement.
