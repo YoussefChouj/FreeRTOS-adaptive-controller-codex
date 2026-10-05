@@ -84,6 +84,10 @@ same path and pack. A reply with `notice: 8081 restarted` means the runner state
 - `status` `waiting_for_go` after a flight: an auto-next check failed ("PAUSED before flight N/M: <reason>").
   Tell the operator the reason and ask: continue (they say go, you repeat section 2 with the new quote) or
   land / abort. Never continue on your own.
+- "PAUSED ... re-seat": the drone stayed RC-armed, so the optical-flow origin (and the fence) has walked with
+  the estimate (worst measured 1.35 cm/s airborne, closures up to 2.1 m on 10-03). Ask the operator to disarm,
+  set the drone on the pad marker nose to the marked wall, note how far it had landed from the marker, and
+  re-arm by RC (arming re-zeroes the origin); then the go as above.
 - `operator_needed`, `arm_refused`, `operator_stop`, `gate_refused` or `error`: read `reason` (the same text is
   in `banner`), find it in the failure-mode table, tell the operator, and ask whether to relaunch the remaining
   flights (a new launch copy without the flown experiments) or end here. Never relaunch on your own.

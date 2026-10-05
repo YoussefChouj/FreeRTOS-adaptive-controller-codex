@@ -25,6 +25,10 @@ PACK_RESTED_S = 1e6
 # EXCITE_ORIGIN_WAIT_S of the step start. PROPOSED, not measured.
 EXCITE_ORIGIN_TOL_M = 0.15
 EXCITE_ORIGIN_WAIT_S = 5.0
+# Pad re-seat gate: the optical-flow position walks at up to this rate (worst body-y bias, 10-03 roam-and-return
+# flights, docs/analysis/adaptive-arch-study-2026-10-05.md sec I). The drone stays RC-armed between flights, so the
+# origin (and the fence around it) walks with the estimate until the operator re-seats and re-arms on the pad.
+OF_DRIFT_CM_S = 1.35
 
 class RunnerControl:
     def __init__(self):
@@ -85,6 +89,7 @@ class RunnerDeps:
     say: Callable[[str], None] = lambda text: None               # chat line to the operator (live: agent message)
     health: Callable[[], tuple[bool, str]] = lambda: (True, "")  # live: RC-armed + g_ekf_of_health
     ground_wait_s: float = 0.0  # fly mode: time on the ground before the auto-next check
+    drift_budget_m: float = 0.0  # fly mode: pause for a pad re-seat once airborne s x OF_DRIFT_CM_S since go exceeds it
     # per-flight capture (decision 8): live applies the experiment's log_plan and starts a recording;
     # end_capture stops it and returns the session dir (FlightRecord.recording)
     begin_capture: Callable[[Any, str], Any] = lambda exp, flight_id: None
@@ -335,6 +340,7 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
     n_flights = min(campaign.max_flights, len(queue)) if fly else campaign.max_flights
     need_go = True
     prev_pack = None
+    drift_m = 0.0  # worst-case origin walk since the last go (the operator re-seats before a go)
 
     for i in range(n_flights):
         exp = queue[i % len(queue)] if queue else None
@@ -357,6 +363,8 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
             if report:
                 return report
             return CampaignReport(campaign, flights, "operator_stop", "go wait ended without a go")
+        if need_go:
+            drift_m = 0.0
 
         # 2. Cooldown
         target_elapsed = deps.cooldown_min_s if fly else max(last_duration, deps.cooldown_min_s)
@@ -437,6 +445,7 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
         deps.monitor.end_flight()
         last_landing_t = pack_landed_t[pack_id] = deps.clock()
         last_duration = last_landing_t - flight_start_time
+        drift_m += last_duration * OF_DRIFT_CM_S / 100.0
         
         # 8. Analyze
         j = deps.analyze(flight_id) if not aborted else None
@@ -509,6 +518,10 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
             nxt = queue[i + 1] if i + 1 < n_flights else None
             deps.on_phase(f"on the ground after flight {i + 1}/{n_flights}: auto-next check")
             ok, why = _auto_next(deps, outcome)
+            if ok and nxt is not None and 0.0 < deps.drift_budget_m < drift_m:
+                ok, why = False, (f"re-seat: origin may have walked {drift_m:.2f} m (budget {deps.drift_budget_m:.2f} m, "
+                                  f"{OF_DRIFT_CM_S} cm/s worst flow bias). Disarm, put the drone on the pad marker, "
+                                  f"re-arm by RC (arming re-zeroes the origin)")
             report = _control_report(deps, campaign, flights)
             if report:
                 return report

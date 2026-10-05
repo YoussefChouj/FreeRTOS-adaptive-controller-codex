@@ -215,8 +215,8 @@ def _position_row(v: dict[str, Any]) -> dict[str, Any]:
     value = (f"x {p['x']:+.2f} y {p['y']:+.2f} z {p['z']:+.2f} m, {d:.2f} m from the origin "
              f"(tolerance {ORIGIN_TOL_M} m)")
     return _row("position", value, d <= ORIGIN_TOL_M,
-                "put the drone at pad centre, nose to the marked wall, and power-cycle it in place "
-                "(the optical-flow origin is set at power-on)")
+                "put the drone at pad centre, nose to the marked wall: arming re-zeroes the optical-flow origin "
+                "where the drone sits, so the pad marker (not this reading) anchors the fence")
 
 
 def _battery_row(v: dict[str, Any], pack_id: str | None, registry: Any = None) -> dict[str, Any]:

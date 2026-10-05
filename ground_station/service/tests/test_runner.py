@@ -484,6 +484,39 @@ def test_fly_mode_waits_on_ground_before_next(tmp_path):
     assert starts[1] - t_land[0] >= 10.0 - 1e-9
 
 
+def _flight_drifts(tmp_path):
+    """Per-flight worst-case origin walk (m) in the fly rig, from the runner's own start/landing clock."""
+    from ground_station.service.campaign_runner import OF_DRIFT_CM_S
+    path, deps, clock = _fly_rig(tmp_path)
+    marks = []
+    real_takeoff = deps.client.takeoff
+    deps.client.takeoff = lambda: (marks.append(clock()), real_takeoff())[1]
+    deps.on_flight = lambda rec: marks.append(clock())
+    run_campaign(path, deps)
+    return [(marks[i + 1] - marks[i]) * OF_DRIFT_CM_S / 100.0 for i in range(0, len(marks), 2)]
+
+
+def test_fly_mode_drift_budget_pauses_for_pad_reseat(tmp_path):
+    """The drone stays RC-armed between flights, so the optical-flow origin is not re-zeroed and the walk adds up:
+    one flight's walk fits the budget, two do not, so the runner pauses for a re-seat before flight 3."""
+    d = _flight_drifts(tmp_path)
+    path, deps, clock = _fly_rig(tmp_path)
+    deps.drift_budget_m = (max(d[0], d[1]) + d[0] + d[1]) / 2.0
+    report = run_campaign(path, deps)
+    assert report.status == "complete", report.reason
+    assert deps.wait_for_go.call_count == 2          # first flight + the re-seat pause before flight 3
+    lines = [c.args[0] for c in deps.say.call_args_list]
+    assert "auto-next OK -> flight 2/3" in lines[0]
+    assert "PAUSED before flight 3/3: re-seat" in lines[1] and "arming re-zeroes the origin" in lines[1]
+
+
+def test_fly_mode_drift_budget_off_by_default(tmp_path):
+    path, deps, clock = _fly_rig(tmp_path)
+    assert deps.drift_budget_m == 0.0
+    run_campaign(path, deps)
+    assert deps.wait_for_go.call_count == 1
+
+
 def _quick_deps():
     drone = FakeDrone()
     drone.sbus_live = True

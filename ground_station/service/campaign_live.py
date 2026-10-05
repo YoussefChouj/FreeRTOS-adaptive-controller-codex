@@ -49,6 +49,7 @@ HEARTBEAT_PERIOD_S = 0.2   # PROPOSED: 5 Hz, interfaces.md "GS sends at 5 Hz"; f
 STATUS_STALE_S = 1.0       # PROPOSED: factory refuses to start without g_wfb_status this fresh
 LIVE_DT_S = 0.1            # PROPOSED: runner tick
 GROUND_WAIT_S = 10.0       # decision 12: time on the ground after a fly-mode landing before the auto-next check
+DRIFT_BUDGET_M = 0.5       # PROPOSED: worst-case origin walk before the runner pauses for a pad re-seat
 KF_HEALTH_SYM = KF_HEALTH  # 1 healthy, 0 diverged
 _RESULT_POLL_S = 0.01
 
@@ -300,6 +301,7 @@ def live_deps_factory(service: Any, controller: str = "pid", dt_s: float = LIVE_
             agent_arms=False,
             health=lambda: live_health(service),
             ground_wait_s=GROUND_WAIT_S,
+            drift_budget_m=DRIFT_BUDGET_M,
             begin_capture=begin_capture,
             end_capture=end_capture,
         )
