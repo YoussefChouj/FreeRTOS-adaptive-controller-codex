@@ -54,7 +54,7 @@ experiments:
     log_plan: *log
   # ---- load case 2: load under the body, hung between the landing pads (nearly symmetric, can swing) ----
   - name: pad_hover
-    go_before: "disarm, hang the load between the landing pads under the centre (note mass, 250 or 500 g), set the drone on the pad marker, re-arm by RC"
+    go_before: "disarm, hang the load between the landing pads under the centre (note mass; 250 g first, then 500 g, doc sec J), set the drone on the pad marker, re-arm by RC"
     scenario: *hover
     capture: campaign
     repeats: 1
@@ -62,7 +62,7 @@ experiments:
   - {name: pad_zigzag, scenario: *zigzag, capture: campaign, repeats: 1, log_plan: *log}
   # ---- load case 3: the same load on one arm (asymmetric: a constant roll/pitch torque) ----
   - name: arm_hover
-    go_before: "disarm, move the same load to one arm next to the motor (note which motor), set the drone on the pad marker, re-arm by RC; land with RC if it tilts or drifts on take-off"
+    go_before: "disarm, move a 250 g load (never 500 g: every controller diverged in the bench, doc sec J) to one arm next to a motor (note which motor), set the drone on the pad marker, re-arm by RC; land with RC if it tilts or drifts on take-off"
     scenario: *hover
     capture: campaign
     repeats: 1
