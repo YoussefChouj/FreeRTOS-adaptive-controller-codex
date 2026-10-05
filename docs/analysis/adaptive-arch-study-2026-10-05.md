@@ -216,6 +216,25 @@ frame carries 6 fixed values, `API/mrac.h:55`). PROPOSED branch (post-demo, not 
 MRAC_AXIS_X and MRAC_AXIS_Y as velocity-level add-ons to the LOCXS output, the `MRAC5_XYZ` structure from D, with
 the yaw axis bias term off.
 
+## H. No-tuning adaptation, step 1 (`sim/bench/ctrl_h0.py`; frozen bench; test split; `heldout.py`)
+
+Tuned PID (pid_tuned2 parameters, unchanged) plus the x, y, z layers of `MRAC5_XYZ`; attitude stays on the PID. The
+one tuned knob, gamma_o, is replaced by a rate read off the wrapped loop: gamma_i = 1 / (SEP tau_i), tau_v 0.139 s
+(x, y velocity loop), tau_z 0.055 s (z rate loop), computed from the pid_tuned2 gains. No parameter is tuned.
+
+| Controller | gamma xy / z [1/s] | All rows | Diverged | Diff vs PID [CI] | Held-out fam | Fam diff [CI] | Held-out traj diff [CI] |
+|---|---|---|---|---|---|---|---|
+| h0 (SEP 1) | 7.19 / 18.3 | 0.3459 | 29.7 % | +0.2685 [+0.2484, +0.2855] | 0.4059 | +0.3246 [+0.2606, +0.5834] | +0.2365 [+0.2227, +0.2570] |
+| h0_sep (SEP 10) | 0.72 / 1.83 | 0.0819 | 6.7 % | +0.0045 [-0.0009, +0.0082] | 0.0873 | +0.0060 [-0.0201, +0.0228] | +0.0043 [-0.0030, +0.0084] |
+| mrac5_xyz (tuned) | 0.28 / 0.28 | 0.0631 | 5.1 % | -0.0143 [-0.0201, -0.0105] | 0.0654 | -0.0159 [-0.0643, -0.0005] | -0.0093 [-0.0181, -0.0063] |
+
+Measured: adapting at the loop's own bandwidth destabilises (30 % of rows diverge); the textbook decade of time-scale
+separation is safe but buys nothing over PID (CIs span zero). The tuned rate sits 26x (xy) and 66x (z) below 1/tau,
+and MRAC5_XYZ also keeps the sat-aware attitude base (alone -0.0049 in sec D). So "tau of the wrapped loop" does not
+by itself fix the rate. Next candidates (not run): gamma from the excitation bound (normalised-gradient stability
+margin, gamma dt < 2 per step is far looser than this), or from the slowest loop in the cascade (position, tau of
+LOCX); and the h0_sep base swapped to the sat-aware attitude loop to split the two sources of MRAC5's gain.
+
 ## I. Position from optical flow + IMU: the roam-and-return bias
 
 Today's x/y position is dead reckoning. The ANO module sends `of2_dx_fix/of2_dy_fix` (body velocity, cm/s, already
