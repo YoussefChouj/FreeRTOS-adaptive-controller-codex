@@ -309,3 +309,55 @@ Data cleaning that applies offline today:
 | P4 | Online scale from the tilt fit (flow acceleration vs g tan tilt) | estimator | `g_of_scale` 1.094 |
 | P5 | ZUPT and position reset when landed on the known pad, or an operator "at origin" event | estimator | - |
 | P6 | Drag and RPM aiding as a fallback when flow is lost (after accel x/y logging) | estimator | - |
+
+## J. Asymmetric-load demo prediction (`sim/bench/demo_loads.py`)
+
+Bench prediction for the 10-06 campaigns `asym_load_pid` / `asym_load_mrac`. Nominal family, 10 seeds, rigid load (no
+pendulum swing), controllers with the flashed F1x angle/rate integrator rows. `results/demo_loads.json` (yaw imbalance
+as measured on 10-03, default) and `results/demo_loads_yaw430.json` (the bench's old draw). Reprint with
+`python demo_loads.py --tables results/demo_loads.json`.
+
+**Yaw imbalance prior was stale.** The bench draws u_imb 350-500 U (09-27 spin flights): one diagonal pair runs that
+much hotter, which leaves bench m0+m1 near the PWM floor. The 10-03 flights on the flashed mixer (logs/vofa
+`*drift_fix*_1.slot2.csv`, airborne rows, Throttle_out > 2600) measure (M1+M2-M3-M4)/4 = +66 U (drift_fix_1) and +1 U
+(roaming_and_returning_1). Bench k = firmware M(k+1) for roll and pitch (`API/controller.c` g_mix). This is a caveat on
+every bench result in sections A-I: they were tuned and compared under a yaw imbalance the flashed drone no longer has.
+
+Median RMSE [m] over non-diverged seeds (diverged seeds of 10 in brackets):
+
+| case | traj | PID+F1x | MRAC V2 sat-aware+F1x | MRAC5_XYZ (bench only) |
+|---|---|---|---|---|
+| no load | hover | 0.0289 | 0.0288 | 0.0299 |
+| pads 250 g | hover | 0.0335 | 0.0335 | 0.0282 |
+| pads 500 g | hover | 0.0421 (3) | 0.0556 | 0.0391 |
+| pads 500 g | zigzag 0.2 | 0.0593 (3) | 0.0696 | 0.0444 |
+| arm 250 g, each of 4 motors | hover | 0.034-0.044 | 0.035-0.046 | 0.032-0.044 |
+| arm 500 g, m0 or m2 | both | (10) | (10) | (10) |
+
+With the old u_imb 430 draw, arm 250 g next to bench m0 or m1 (the cool pair) diverges 6-10/10 for every controller and
+next to m2/m3 holds: the corner effect was the stale imbalance, not the load.
+
+Paired difference vs PID+F1x (95 % bootstrap CI, seeds where neither diverged): MRAC V2 sat-aware has no case whose CI
+excludes zero in its favour; pads 500 g hover it is worse, +0.0048 [+0.0038, +0.0091]. MRAC5_XYZ is better on pads
+500 g: hover -0.0036 [-0.0085, -0.0026], zigzag -0.0150 [-0.0423, -0.0031].
+
+**Pads 500 g fails on altitude, not attitude.** The 3 PID seeds flagged diverged (2000, 2002, 2008) have tilt <= 1.4 deg
+and rmse_z 0.99 m: the drone cannot hold height. MRAC V2 sat-aware on the same 3 seeds is not flagged but has rmse_z
+0.73-0.80 m, so it fails the same way. Only MRAC5_XYZ, which adapts z, holds (rmse_z <= 0.016). Throttle authority in
+the firmware (`TASK/StabilizerTask.c` Mix_Compute): HOVER_THR_FREE 3050 + Z_ratePID U (Umax 300, Uimax 100). Computed,
+not measured: scaling the bench thrust curve to the 10-03 hover (motor mean about 3035), +250 g needs about 3147 PWM
+and +500 g about 3251, i.e. +100 and +200 above the base, against an integrator room of 100 in Z_rate.
+
+Flight reading (PROPOSED, for the operator):
+- 250 g on the pads or on any arm: the sim predicts it flies with every controller and no measurable PID/MRAC
+  difference. It is a safe first step, but not a demonstration of the adaptive advantage.
+- 500 g on the pads: expect altitude sag with PID. This is the case where adaptation can show, but only z
+  adaptation: the bench sat-aware model adapts attitude only and sags like PID. The firmware has a z path
+  (`API/controller.c`, CTRL_AXIS_Z adds mrac_state.z_rate.u_ad); confirm it is adapting (z_rate u_ad moving in the
+  telemetry of the no-load hover) before reading the 500 g result as a controller comparison. RC hand on land.
+- 500 g on an arm: every controller diverges in the sim (near motor at about 82 % of T_MAX static). Do not fly it.
+
+Caveats: rigid load (a hung load's swing is not modelled); H_PAD 0.10 m is PROPOSED; the arm CoG shift (up to 56 mm at
+500 g) lies outside the cog range the controllers were tuned on; batch noise moves a case's median by 10-20 % between
+runs; F1x covers only the angle and rate integrator rows (not locx F3 or the z rows); the measured u_imb comes from 2
+flights; the bench hover calibration X2_H assumes U_IMB_NOM 430.
