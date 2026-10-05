@@ -1,0 +1,98 @@
+# Workflow B campaign: identification flights for the load and drag feature library (docs/research/
+# nonlinear-sysid-features.md sec. 7). Not the 2026-10-06 demo (payload_waypoints.yaml); the operator picks one.
+# Three load cases in order, the same three flights each: no load (baseline), symmetric load (centred under the CG),
+# asymmetric load (same mass, off-centre on one arm). The operator mounts or moves the payload on the ground before
+# each switch, then arms by RC as usual.
+#   zsteps  hover trim, then z steps 0.8 -> 1.2 and 0.8 -> 0.5 m: the thrust change separates the thrust (mass)
+#           coefficient from a constant z bias, and a CoM offset (torque scales with thrust) from a constant
+#           torque bias. The trim of a load flight minus the baseline trim is the load's CoM offset.
+#   speeds  one zig-zag at 0.2 m/s, then the same at 0.4 m/s: two speeds separate the linear and quadratic drag
+#           terms (v, v|v|) and the Faessler vh2 thrust term.
+#   dither  roll and pitch rate multisine (autotune excite) at 100 Hz: the rate plant per load case for
+#           ground_station.autotune.cli (its gain moves with the inertia). Skip it if the tilt margin looks thin.
+# Analysis: python -m sim.bench.sysid.reallog <session stem> (trim + term ranking per airborne segment).
+# Measured on the bench round trip (doc sec. 7.2): trim and the translational terms (x, y, z) are usable from the
+# 50 Hz core set; rotational terms are not, because 20 ms snapshots of the 200 Hz motor command alias the torque.
+# They need slot-averaged motor (or rate-loop U) logging, a post-demo firmware branch, PROPOSED.
+# Waypoints are metres in the ground-centre frame inside x +-1.0 / y +-1.0; goto z inside TrajLimits 0.3-1.4 m.
+# Speeds, accelerations, excite amplitude and hold times are PROPOSED, not measured.
+campaign: sysid_loads
+objective: "identification data for the load and drag feature library: trim, z steps, two-speed zig-zag, rate dither per load case"
+controller: pid
+mode: fly
+packs:
+  - P4000-1          # launch Q2 replaces this with the packs on hand
+  - P4000-2
+max_flights: 9
+experiments:
+  # log_plan: always-on core (status incl. real_voltage, positions, attitude, rate loops, motors, g_wfb_status,
+  # KF health) plus velocity_loops; the dither flight logs the core set alone at 100 Hz like autotune_rate_roll.
+  # ---- load case 1: no load (baseline) ----
+  - name: noload_zsteps
+    scenario: &zsteps
+      scenario: sysid-zsteps
+      description: hover 15 s at 0.8 m (trim), goto z 1.2 and back, goto z 0.5 and back, hold, land
+      steps:
+        - takeoff: {z: 0.8}
+        - hold: {s: 15}
+        - goto: {x: 0.0, y: 0.0, z: 1.2, dwell_s: 5, v_cruise_mps: 0.4, a_max_mps2: 1.0}
+        - hold: {s: 3}
+        - goto: {x: 0.0, y: 0.0, z: 0.5, dwell_s: 5, v_cruise_mps: 0.4, a_max_mps2: 1.0}
+        - hold: {s: 5}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: &log {rate_hz: 50, groups: [velocity_loops]}
+  - name: noload_speeds
+    scenario: &speeds
+      scenario: sysid-speeds
+      description: 6 waypoints 0.4 m apart in x, y +-0.6, flown at 0.2 m/s then at 0.4 m/s, 0.8 m
+      steps:
+        - takeoff: {z: 0.8}
+        - hold: {s: 3}
+        - path:
+            shape: waypoints
+            params:
+              corner_cut: 2
+              points_m: [[-1.0, -0.6], [-0.6, 0.6], [-0.2, -0.6], [0.2, 0.6], [0.6, -0.6], [1.0, 0.6]]
+            v_cruise_mps: 0.2
+            a_max_mps2: 0.5
+            ds_m: 0.05
+        - hold: {s: 3}
+        - path:
+            shape: waypoints
+            params:
+              corner_cut: 2
+              points_m: [[-1.0, -0.6], [-0.6, 0.6], [-0.2, -0.6], [0.2, 0.6], [0.6, -0.6], [1.0, 0.6]]
+            v_cruise_mps: 0.4
+            a_max_mps2: 1.0
+            ds_m: 0.05
+        - hold: {s: 3}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: *log
+  - name: noload_dither
+    scenario: &dither
+      scenario: sysid-dither
+      description: hold 10 s, roll rate multisine 20 s, hold, pitch rate multisine 20 s, hold, land
+      steps:
+        - takeoff: {z: 0.8, mrac_injection: 0}
+        - hold: {s: 10}
+        - excite: {axis: roll, signal: multisine, f0: 0.5, f1: 15, amp: 40, duration_s: 20}
+        - hold: {s: 5}
+        - excite: {axis: pitch, signal: multisine, f0: 0.5, f1: 15, amp: 40, duration_s: 20}
+        - hold: {s: 5}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: &log100 {rate_hz: 100, groups: []}
+  # ---- load case 2: symmetric payload (operator mounts it centred before this go) ----
+  - {name: sym_zsteps, scenario: *zsteps, capture: campaign, repeats: 1, log_plan: *log}
+  - {name: sym_speeds, scenario: *speeds, capture: campaign, repeats: 1, log_plan: *log}
+  - {name: sym_dither, scenario: *dither, capture: campaign, repeats: 1, log_plan: *log100}
+  # ---- load case 3: asymmetric payload (operator moves it off-centre before this go) ----
+  - {name: asym_zsteps, scenario: *zsteps, capture: campaign, repeats: 1, log_plan: *log}
+  - {name: asym_speeds, scenario: *speeds, capture: campaign, repeats: 1, log_plan: *log}
+  - {name: asym_dither, scenario: *dither, capture: campaign, repeats: 1, log_plan: *log100}
+abort: {tilt_deg: 15}   # the autotune tuning abort; the firmware sysid abort stays at 30 deg

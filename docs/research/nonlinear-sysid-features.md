@@ -295,6 +295,17 @@ more thrust than MASS g needs: a lighter airframe or a different battery), CoM o
 y +6.5 / +5.0 mm, yaw torque +312 / +386 mN m (sign not checked against the plant). A CoM offset from
 one flight mixes motor mismatch and frame asymmetry, so compare a load flight with a baseline flight.
 
+### 7.3 Lab campaign
+
+`ground_station/service/campaigns/sysid_loads.yaml` (not the demo campaign): no load, symmetric, asymmetric,
+three flights each. `zsteps` (15 s trim hover at 0.8 m, goto z 1.2 and z 0.5 m and back) varies thrust so the
+thrust coefficient separates from a z bias and a CoM offset from a torque bias. `speeds` flies one zig-zag at
+0.2 then 0.4 m/s to separate `v`, `v|v|` and `vh2`. `dither` is the autotune roll and pitch multisine at
+100 Hz, for the rate plant per load case. Compiled step times 38.1 / 53.1 / 70.0 s against the 120 s airborne
+cap; the log plan fits one slot (20 000 B/s at 50 Hz, 35 200 B/s at 100 Hz, budget 70 042 B/s). After a
+flight: `python -m sim.bench.sysid.reallog <session stem>`. Read the CoM offset as load trim minus baseline
+trim. Speeds, amplitudes and holds are PROPOSED.
+
 ## 8. Roadmap
 
 | Step | Status |
@@ -304,4 +315,5 @@ one flight mixes motor mismatch and frame asymmetry, so compare a load flight wi
 | translational residual target, load/drag features | done (`loads.py`); frequency features in `bands.py` |
 | sim recovery test (sym, asym, drag, dense waypoints) | done (`test_loads.py`, sec. 7.1) |
 | real-log path | done (`reallog.py`, `test_reallog.py`, sec. 7.2); rotational needs slot-averaged motor logging |
-| identification campaign file and log plan | planned, operator decides |
+| identification campaign file and log plan | done (`ground_station/service/campaigns/sysid_loads.yaml`, sec. 7.3); operator decides whether to fly it |
+| slot-averaged motor / rate-loop U logging | PROPOSED, post-demo firmware branch; unlocks the rotational terms |
