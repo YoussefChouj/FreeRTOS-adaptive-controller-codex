@@ -629,3 +629,43 @@ What it means for 10-06:
 - If it hangs, watch for a roll / pitch oscillation that grows over about 10 s and land early. That is this mode.
 - The motor lag is now the deciding unknown for every controller (K.2, and here). Measure it from the 10-03 / 10-06
   step logs before any gain change.
+
+### K.6 Motor lag from the flight logs: not measurable yet, and the RPM sensors drop out in flight
+
+The actuator ladder's L0 is the bench's motor model, a 3-tick (15 ms) dead time plus a first-order lag of 1/19.8 s
+(about 50 ms, `sim/bench/plant.py:36`). Neither number has a recorded measurement, and K.5 found actuator lag is half of
+the one combination that breaks every controller. So I tried to measure it from the slot-2 logs, which carry the motor
+command (`mymotor.motor1..4`) and the raw per-revolution RPM period (`rpm_dbg_period_cyc[i]`, `rpm_dbg_edges[i]`) in the
+same 50 Hz frame. Tool: `ground_station/analysis/motor_lag.py` (instrumental-variable ARX fit; unit test recovers a
+known 50 ms lag under RPM noise). Measured 2026-10-05:
+
+| Check | Result |
+|---|---|
+| 10-03 logs (drift_fix_1, landing_x_drift_1, roaming-return) | all four RPM channels freeze **together** while `mymotor` keeps updating: channels agree on fresh/frozen in 99 % of frames; fresh edges in 48 % / 30 % / 0 % of airborne frames; longest frozen run 1738 and 4609 frames (35 s, 92 s) |
+| Logs with live RPM (roaming_and_landing_1, hover_3, hover_active_1) | hover RPM about 5100 (ch1, ch3) and 6050-6100 (ch2, ch4; ch4 only where live) at mean commands within 10 % of each other |
+| ARX fit (roaming_and_landing_1/3, hover_3) | tau 47-760 ms depending on motor, dead time (0-3 frames) and estimator (OLS vs IV): no consistent answer |
+| Cross-spectrum command -> RPM, 0.4-8 Hz | coherence mostly < 0.5; at 3.1 Hz ch3 has RPM *leading* the command by 92-108 deg in 4 flights (roaming 1/2/3, hover_3; coherence 0.40-0.67), which a causal lag cannot produce |
+| Band-passed (0.2-2 Hz) correlation, command i vs RPM j | no diagonal: the largest entries (0.42, 0.44) are command 3 vs RPM channel 1 |
+
+Reading: the existing logs cannot give the motor lag. A 50 Hz snapshot of a 200 Hz command aliases the command noise, and
+the RPM-leads-command phase says the closed loop (RPM -> attitude -> gyro -> command) dominates the correlation (both
+likely, not proven). Two findings come out of it anyway:
+- **RPM dropout.** All four channels stop counting edges at the same moment, for tens of seconds, while the rest of
+  the frame is live. One shared cause, either the four EXTI interrupts stop or the shared sensor connector loses
+  contact in flight. Logs can't tell which. Any RPM-based k_T or thrust estimate from a 10-03 flight is built on frozen
+  values.
+- **Channel mapping is unconfirmed.** ch2/ch4 read about 19 % more RPM than ch1/ch3 at similar commands, and the
+  correlation matrix doesn't pick out motor i <-> channel i. That's a prop/motor difference, a sensor-mark
+  difference, or a swapped mapping; it needs a one-motor-at-a-time check.
+- **Operator report (2026-10-05, after this analysis):** one RPM sensor is not mounted well and will be fixed on
+  10-06. Until then RPM data from every existing log is ignored (no k_T, thrust or lag estimate from it). Re-run the
+  steps below after the fix.
+
+For 10-06 (operator steps; agents never spin motors):
+1. Before flight, with props off and motors spun by the operator one at a time: confirm `rpm_dbg_edges[i]` counts on
+   channel i only (fixes the mapping) and keeps counting through a 30 s run (connector check).
+2. During the first hover, watch `rpm_dbg_edges` on the dashboard. If all four stop together, note the time: that's
+   the dropout above.
+3. To measure the lag: one 30 s hover with slot 2 at 100 Hz (`mymotor` + `rpm_dbg_*`), a few small roll/pitch stick
+   doublets, then `python -m ground_station.analysis.motor_lag <log prefix>`. Until then the actuator L0 stays the
+   unmeasured 1/19.8 s + 15 ms, and K.5's advice holds: rigid arm mount, watch for a slowly growing roll/pitch oscillation.
