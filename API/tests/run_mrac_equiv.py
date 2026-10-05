@@ -17,6 +17,9 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from tools import exe_cache  # noqa: E402  (the antivirus holds the first run of each new exe: reuse unchanged builds)
+
 CFLAGS = [
     "-std=c99",
     "-O2",
@@ -70,21 +73,19 @@ def copy_working_tree(target_dir: Path, repo_root: Path):
     return copied
 
 
-def build_binary(tree_dir: Path, driver_path: Path, stubs_dir: Path, out_bin: Path, extra_flags=None):
+def build_binary(tree_dir: Path, driver_path: Path, stubs_dir: Path, out_bin: Path, extra_flags=None) -> Path:
+    """Build (or reuse the cached identical build of) out_bin.name; return the exe to run. tree_dir is a temp copy."""
     if extra_flags is None:
         extra_flags = []
     c_files = sorted(glob.glob(str(tree_dir / "mrac*.c")))
     if not c_files:
         raise RuntimeError(f"No mrac*.c files found in {tree_dir}")
-    cmd = (
-        ["gcc"]
-        + CFLAGS
-        + extra_flags
-        + [str(driver_path)]
-        + c_files
-        + ["-I", str(tree_dir), "-I", str(stubs_dir), "-lm", "-o", str(out_bin)]
-    )
-    subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+    args = CFLAGS + extra_flags + [str(driver_path)] + c_files + ["-I", str(tree_dir), "-I", str(stubs_dir)]
+    ok, exe, _built, stderr = exe_cache.build("gcc", "mrac_equiv_" + out_bin.name, args, out_bin.parent,
+                                              {tree_dir.parent: "{tmp}"})
+    if not ok:
+        raise RuntimeError(f"gcc failed for {out_bin.name}:\n{stderr}")
+    return exe
 
 
 def parse_cov(line: str, cov_counters: dict):
@@ -223,7 +224,7 @@ def run_self_test(base_rev: str, repo_root: Path, driver_path: Path, stubs_dir: 
         extract_base_tree(base_rev, base_dir, repo_root)
 
         bin_base = tmp_dir / "bin_base"
-        build_binary(base_dir, driver_path, stubs_dir, bin_base)
+        bin_base = build_binary(base_dir, driver_path, stubs_dir, bin_base)
 
         # Perturbation (a): replace first 0.0174533f with 0.0174534f in mrac.c
         pert_a_dir = tmp_dir / "pert_a"
@@ -240,7 +241,7 @@ def run_self_test(base_rev: str, repo_root: Path, driver_path: Path, stubs_dir: 
             f.write(code_a)
 
         bin_pert_a = tmp_dir / "bin_pert_a"
-        build_binary(pert_a_dir, driver_path, stubs_dir, bin_pert_a)
+        bin_pert_a = build_binary(pert_a_dir, driver_path, stubs_dir, bin_pert_a)
         _, _, mismatch_a = compare_streams(bin_base, bin_pert_a)
         if mismatch_a is None:
             print("Self-test failed: perturbation (a) did not fail comparison against base", file=sys.stderr)
@@ -261,7 +262,7 @@ def run_self_test(base_rev: str, repo_root: Path, driver_path: Path, stubs_dir: 
             f.write(code_b)
 
         bin_pert_b = tmp_dir / "bin_pert_b"
-        build_binary(pert_b_dir, driver_path, stubs_dir, bin_pert_b)
+        bin_pert_b = build_binary(pert_b_dir, driver_path, stubs_dir, bin_pert_b)
         _, _, mismatch_b = compare_streams(bin_base, bin_pert_b)
         if mismatch_b is None:
             print("Self-test failed: perturbation (b) did not fail comparison against base", file=sys.stderr)
@@ -310,9 +311,8 @@ def main():
         with ThreadPoolExecutor(max_workers=len(builds)) as pool:
             jobs = [pool.submit(build_binary, tree, driver_path, stubs_dir, tmp_dir / name, extra_flags=flags)
                     for name, (tree, flags) in builds.items()]
-            for job in jobs:
-                job.result()
-            runs = [pool.submit(compare_streams, tmp_dir / ("ref_" + v), tmp_dir / ("new_" + v))
+            exes = {name: job.result() for name, job in zip(builds, jobs)}
+            runs = [pool.submit(compare_streams, exes["ref_" + v], exes["new_" + v])
                     for v in ("plain", "sigma")]
             results = [run.result() for run in runs]
 
