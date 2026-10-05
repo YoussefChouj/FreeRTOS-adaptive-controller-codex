@@ -211,17 +211,58 @@ the motors differ.
 
 **Sim before lab:** the bench plant already injects every scenario term with a known value (payload `mass`,
 CoM offset `cog`, linear and rotational drag, ground effect, battery sag, wind). A recovery test runs dense
-waypoints with each injection and requires the fit to recover it. Pass criteria (PROPOSED): the injected
+waypoints with each injection and requires the fit to recover it. Pass criteria: the injected
 term is selected with inclusion >= 0.8, its coefficient within 20 % of the truth, no spurious term above 5 %
-ERR.
+ERR. `sim/bench/sysid/test_loads.py` applies them (not in the gate, run `python -m pytest sim/bench/sysid`).
+
+### 7.1 Bench results (measured 2026-10-05)
+
+`sim/bench/sysid/loads.py` builds the residuals (translational `a - (T b3/m - g)`, rotational
+`w_dot - tau/J`) from position, attitude and motor PWM only, which is what the demo logs carry, and ranks
+each axis with FROLS + bootstrap. One FwPID run, V0 16.6 V, no sag, 200 Hz, 4 s start transient dropped:
+
+| Row | Term | Recovered | Truth |
+|---|---|---|---|
+| zigzag 1 m/s, nominal | x / y / z drag `v` | -0.1928 / -0.1928 / -0.1929 | -0.1929 |
+| | roll `gyro`, `w` | +0.2943, -0.1099 | +0.2929, -0.1099 |
+| | pitch `gyro`, `w` | -0.1676, -0.0985 | -0.1660, -0.0991 |
+| steps, payload m x1.10, J x1.05 | x / y / z `thrust` | -0.0907 / -0.0908 / -0.0907 | -0.0909 |
+| | roll / pitch `tau_nom` | -0.0472 / -0.0472 | -0.0476 |
+| steps, CoM offset (-14.9, -12.9) mm | roll / pitch `thrust` | +0.0129 / -0.0149 | +0.0129 / -0.0149 |
+
+Every non-physical term had inclusion 0.00. What it took, and what carries over to real logs:
+
+1. **Align the thrust with the second difference.** The acceleration from a second difference of
+   position sees the in-step force through a triangular kernel over steps k and k+1. A plain two-step
+   mean of the thrust is half a sub-step off it, and the attitude loop turns that lag into a fake
+   damping term: roll `w` came out -0.44 (truth -0.11), and nominal z drag -0.43 (truth -0.19).
+   `motor_thrust` integrates the motor lag on sub-steps and applies the kernel. On real logs, use the
+   log rate's own kernel, or differentiate a smoothed spline and keep the same filter on both sides.
+2. **Ground effect biases the thrust term below about 0.5 m.** The bench uses
+   `1/(1-(R/4z)^2)` (Cheeseman-Bennett): +2.6 % thrust at z = 0.10 m, 0.10 % at 0.5 m (computed). A payload
+   row that sagged to about 0.1 m recovered `thrust` -0.179 for a truth of -0.184. Drop the take-off and landing segments, or add
+   `thrust (R/4z)^2` to the library.
+3. **The bench altitude loop sags under payload** (FwPID, mean z over 4-11 s on the steps reference):
+
+   | Payload k | 1.00 | 1.10 | 1.15 | 1.20 | 1.25 |
+   |---|---|---|---|---|---|
+   | z (m), V0 16.6 V | 1.02 | 0.80 | 0.61 | 0.43 | 0.32 |
+   | z (m), V0 16.0 V | 0.87 | 0.52 | 0.37 | 0.24 | 0.14 |
+
+   None of these runs diverged. A heavy payload on a low battery therefore puts the bench drone into
+   ground effect (point 2). The test uses k = 1.10 at 16.6 V.
+4. **Thrust variation separates the loads.** At a steady hover a CoM offset looks the same as a constant
+   torque bias, and a mass change looks the same as a z-force bias. The z steps (1.0 -> 1.3 m) move
+   the thrust enough to tell them apart. The identification campaign needs altitude steps, not only
+   level waypoints.
 
 ## 8. Roadmap
 
 | Step | Status |
 |---|---|
 | survey (this doc) | done |
-| FROLS/ERR ranking next to STLSQ | planned |
-| translational residual target, load/drag/frequency features | planned |
-| sim recovery test (sym, asym, drag, dense waypoints) | planned |
+| FROLS/ERR ranking next to STLSQ | done (`frols.py`) |
+| translational residual target, load/drag features | done (`loads.py`); frequency features in `bands.py` |
+| sim recovery test (sym, asym, drag, dense waypoints) | done (`test_loads.py`, sec. 7.1) |
 | real-log path (replace the `run_real_protocol` stub) | planned |
 | identification campaign file and log plan | planned, operator decides |
