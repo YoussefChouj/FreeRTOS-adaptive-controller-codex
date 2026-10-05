@@ -317,6 +317,11 @@ CTRLS = {
     'pid_nom': (None, 'pid_tuned2_nom', True),
     'mrac_sataware_nom': (None, 'mrac_sataware_nom', True),
     'mrac5_xyz_nom': (None, 'mrac5_xyz_nom', False),
+    # ctrl_nn2.py (doc sec L): coupled RBF / 2-layer NN features on MRAC5_XYZ's x/y layers; class defaults, then _nom
+    'rbf2_xyz': ('ctrl_nn2:RBF2_XYZ', None, False),
+    'nn2_xyz': ('ctrl_nn2:NN2_XYZ', None, False),
+    'rbf2_xyz_nom': (None, 'rbf2_xyz_nom', False),
+    'nn2_xyz_nom': (None, 'nn2_xyz_nom', False),
 }
 
 

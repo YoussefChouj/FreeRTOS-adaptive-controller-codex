@@ -669,3 +669,60 @@ For 10-06 (operator steps; agents never spin motors):
 3. To measure the lag: one 30 s hover with slot 2 at 100 Hz (`mymotor` + `rpm_dbg_*`), a few small roll/pitch stick
    doublets, then `python -m ground_station.analysis.motor_lag <log prefix>`. Until then the actuator L0 stays the
    unmeasured 1/19.8 s + 15 ms, and K.5's advice holds: rigid arm mount, watch for a slowly growing roll/pitch oscillation.
+
+## L. Coupled RBF and 2-layer NN features on MRAC5_XYZ's x/y layers (`sim/bench/ctrl_nn2.py`, item 7)
+
+**Question.** MRAC5_XYZ adapts x and y separately on [1, v_i, v_i|v_i|]. A load on one arm tilts both axes, and
+drag can depend on the other axis's speed. Does a richer basis that couples x and y learn that, and so hold where
+MRAC5 breaks (arm load, motor loss)?
+
+**Design.** Both keep MRAC5_XYZ's z layer, reference model (pole from the wrapped velocity loop), normalised update and
+box projection |th| <= tan(TILT_MAX). Both add e-modification (weights leak in proportion to |e|, rate kappa). The plan
+said "+PR"; it was read as projection, so both use projection and e-modification together.
+- **RBF2_XYZ**: [1, v_i, v_i|v_i|] plus 9 Gaussians on a 3x3 grid over (v_x, v_y)/VXY_MAX, width rbf_w. Linear in the
+  weights. With no Gaussians and kappa = 0 it reproduces MRAC5_XYZ to < 1e-4 m (unit test).
+- **NN2_XYZ**: one hidden layer, 8 tanh units on [1, v_x, v_y, vd_x, vd_y]/VXY_MAX, outputs x and y. Outer weights by
+  the same normalised law; inner weights by the back-propagated term, the two-layer NN tuning law of Lewis, Yesildirek
+  and Liu (IEEE TNN 1996, cited from memory, unverified). Inner weights start at a fixed random draw (seed 0), leak back
+  toward it, and are boxed to +-3 around it.
+
+**Protocol.** Same as K.5: `tune_nominal.py` (2 x 64 CMA evals on nominal rows only, from class defaults), then the same
+459-row ladder. Measured 2026-10-05 21:xx.
+
+| Controller | tune J (nominal) | ladder div % | nominal-row (L0) p90 RMSE [m] |
+|---|---|---|---|
+| pid_nom (K.5) | 0.0775 | 33.1 | 0.086 |
+| mrac5_xyz_nom (K.5) | 0.0687 | 30.7 | 0.082 |
+| rbf2_xyz_nom | 0.0798 | 37.7 | 0.189 |
+| nn2_xyz_nom | 0.1215 | 55.1 | 0.308 |
+
+| axis, div % L0..L4 [break] | mrac5_xyz_nom | rbf2_xyz_nom | nn2_xyz_nom |
+|---|---|---|---|
+| wind_gust | 0 0 0 0 25 [4] | 8 0 17 17 25 [4] | 0 33 8 33 33 [1] |
+| mass_step | 0 0 0 0 0 [>4] | 8 17 8 17 75 [4] | 0 33 42 92 100 [1] |
+| swing_load | 0 0 0 0 0 [>4] | 8 17 0 17 17 [>4] | 0 25 50 92 100 [1] |
+| arm_load | 0 0 50 100 100 [2] | 8 0 50 100 100 [2] | 0 17 92 100 100 [2] |
+| motor_loss | 0 0 0 42 83 [3] | 8 0 0 33 67 [3] | 0 8 17 58 75 [3] |
+| kt_mismatch | 0 0 0 0 8 [>4] | 8 0 0 0 67 [4] | 0 8 33 67 100 [2] |
+| actuator | 0 0 100 100 100 [2] | 8 17 100 100 100 [2] | 0 25 100 100 100 [1] |
+| inertia | all 0 | 8 0 0 0 0 | all 0 |
+| combo | 0 100 ... [1] | 8 100 ... [1] | 0 92 100 100 100 [1] |
+| speed | 0 0 67 100 100 [2] | 0 0 100 100 100 [2] | 0 0 100 100 100 [2] |
+
+(L0 is the nominal row of every axis, so RBF2's "8" there is the same 1 of 12 nominal rows diverging each time.)
+
+Findings:
+1. **Neither richer basis helps.** RBF2 is worse than MRAC5 overall (37.7 vs 30.7 %) and loses MRAC5's clean load
+   record (mass_step and swing_load go from 0 % at every level to 17 % at L3). The arm load, the case the coupling was
+   meant for, breaks at the same level (L2, 50 %). Motor loss improves by 1 and 2 rows of 12 at L3 and L4 (33 / 67 vs 42 / 83 %).
+   NN2 is the worst controller measured on the ladder (55.1 %), breaking at L1 on wind, mass and swing.
+2. **The failures are not missing features.** The cells that break everyone (actuator L2, combo L1, speed L2, arm-tip
+   cable L2) are phase or lag problems (K.3, K.5). A velocity-loop add-on of any shape cannot fix them, and a richer one
+   adds its own lag and drift. Nominal p90 RMSE rises with basis size: 0.082 -> 0.189 -> 0.308 m.
+3. **Tuning caveat.** Same 128-eval budget as K.5, and RBF2 and NN2 have 2 more parameters each. RBF2's J (0.0798) did
+   not reach MRAC5's (0.0687), although the search space nearly contains MRAC5, so RBF2 may be under-tuned. This cannot
+   rescue NN2 (J 0.1215), and it would not change finding 2.
+
+**Verdict.** Drop richer x/y bases from the roadmap. MRAC5_XYZ's 3-term basis stays the adaptive candidate. The next
+gains are in the inner loop and in the actuator: items F (PID tune), G (PID-specific MRAC) and H (no-tuning
+architecture), and measuring motor lag after the 10-06 RPM sensor fix (K.6).
