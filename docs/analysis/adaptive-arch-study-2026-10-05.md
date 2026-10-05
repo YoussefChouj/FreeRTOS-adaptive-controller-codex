@@ -1010,3 +1010,29 @@ Caveats: rigid load, no pendulum mode (sec J); pid_nom is the tuned nominal set,
 J's 350 g / 500 g figures used; h0g_nom is NOT in the firmware. For 10-06 the flashed controllers and sec J stand;
 h0g_nom's firmware port (three outer layers + one attitude layer, sec E RAM budget) is PROPOSED on a branch after the
 demo, and its demo 2 (load + trajectory vs PID) would follow that port.
+
+## R. h0g firmware port, step 1: x/y/z outer layers (branch `h0g-port`, NOT merged, NOT flashed)
+
+What is on the branch (worktree `../FreeRTOS-h0g`):
+- `API/h0g.c`, `API/h0g.h`: the `_Layer` law of `sim/bench/ctrl_mrac6.py` (sec O), one `H0G_ROW` per layer in the
+  pid.c table style. Runtime switch `g_h0g_on`, default 0: with it off the hooks never call `H0G_Step` and the
+  flight path is unchanged.
+- Hooks in `TASK/StabilizerTask.c`: x/y in `Pos_Compute` (100 Hz) after the trajectory feed-forward, subtracted from
+  `locxsPID.U`, `locysPID.U` in cm/s2; z at the end of `Z_Compute` (200 Hz), subtracted from `Z_ratePID.U` in CCR.
+  While the ToF reading is invalid the z add-on and its weights are held, so the add-on cannot drop out as a throttle
+  step. `H0G_Init` runs at the arm edge (`Pos_ArmEdge`) from the gains in force then, so a param write between flights
+  changes the derived rates without a rebuild.
+- `tests/firmware_host/test_h0g.c` (row `fw_h0g` in `tools/host_tests.py`): 25 checks, all pass, against a 400-step
+  float64 trace of the Python law (relative tolerance 1e-4), plus the inactive path, the NaN/INF guard, re-seeding and
+  the weight bound over 200 000 steps.
+
+Derived rates with the flashed pid.c gains (locxsPID Kp 3, Kd 6; Z_ratePID Kp 400; hover throttle 1050 CCR above the
+floor), checked by the host test: gamma_xy 0.283 1/s (tau_v 0.353 s), gamma_z 0.747 1/s (tau_z 0.134 s). These are
+NOT the sim's pid_nom gammas (secs O, P, Q used the tuned nominal set), so the sec O/Q numbers are not a prediction for
+this build.
+
+Cost: RAM about 101 B (3 x 32 B layer state + 1 B switch + 4 B held z add-on) and 60 B of const table, computed from
+the struct layout, not read from a map. Cycles per step are NOT measured (bench: `hlth.stab_cpu_pct`, `loop_max_us`).
+
+Not in step 1: the attitude layer of sec P (step 2, needs a reference-model choice), a telemetry slot for the weights,
+and a param or dashboard switch for `g_h0g_on`. All PROPOSED, after the 10-06 demo.
