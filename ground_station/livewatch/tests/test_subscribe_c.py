@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from tools import exe_cache
+
 ROOT = Path(__file__).resolve().parents[3]
 HARNESS = ROOT / "API" / "tests" / "test_subscribe_harness.c"
 STUBS = ROOT / "API" / "tests" / "stubs"
@@ -54,11 +56,13 @@ def test_firmware_c_passes_its_own_harness():
 
 
 def _build_and_run(gcc, label, extra_defines):
+    # Through the exe cache: the antivirus holds the first run of each new exe, so an unchanged build reruns its exe.
+    name = "subscribe_harness_uart5" if extra_defines else "subscribe_harness"
     with tempfile.TemporaryDirectory() as tmp:
-        exe = Path(tmp) / "harness.exe"
-        build = subprocess.run(
+        ok, exe, _built, stderr = exe_cache.build(
+            gcc, name,
             [
-                gcc, "-m32", "-std=c99", "-Wall", "-Wextra",
+                "-m32", "-std=c99", "-Wall", "-Wextra",
                 "-Wno-unused-parameter", "-Wno-type-limits",
                 "-I", str(STUBS), "-I", str(ROOT / "API"),
                 "-I", str(ROOT / "firmware"),
@@ -69,12 +73,11 @@ def _build_and_run(gcc, label, extra_defines):
                 "-DSUBSCRIBE_ADDR_SRAM_LO=0x00000000U",
                 "-DSUBSCRIBE_ADDR_SRAM_HI=0xFFFFFFFEU",
             ] + extra_defines + [
-                str(HARNESS), str(SOURCE), "-o", str(exe),
+                str(HARNESS), str(SOURCE),
             ],
-            capture_output=True, text=True,
+            Path(tmp), link=(),
         )
-        assert build.returncode == 0, (
-            "subscribe.c failed to compile [%s]:\n%s" % (label, build.stderr))
+        assert ok, "subscribe.c failed to compile [%s]:\n%s" % (label, stderr)
 
         run = subprocess.run([str(exe)], capture_output=True, text=True)
         assert run.returncode == 0, (
