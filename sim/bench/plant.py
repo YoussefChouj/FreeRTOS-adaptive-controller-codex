@@ -13,7 +13,6 @@ b_yaw 7.55 dps2/U from sim_coupled; filters, gains and rates from fw_inventory.m
 Frame: ZYX Euler, z up; +U_roll -> +p, +U_pitch -> +q (+x accel), +U_yaw -> +r.
 """
 import numpy as np
-from scipy.signal import butter
 
 G = 9.81
 MASS = 1.2961
@@ -80,8 +79,12 @@ def ss_gain(n_pred, R, H, periods=4000):
 
 K_TOF = ss_gain(TOF_EVERY, SIG_TOF ** 2, np.array([[1.0, 0, 0]]))
 K_OF = ss_gain(OF_EVERY, SIG_OF ** 2, np.array([[0, 1.0, 0]]))
-BG_B, BG_A = butter(3, 50.0 / 500.0)           # gyro 3rd-order 50 Hz @ 1 kHz
-BA_B, BA_A = butter(2, 30.0 / 500.0)           # accel 30 Hz @ 1 kHz
+# Butterworth IIRs as exact float64 literals of scipy.signal.butter (test_plant_filters checks every bit): importing
+# scipy.signal costs ~3 s, paid by every SIL/bench process when this module called butter at import.
+BG_B = np.array([0.0028981946337214297, 0.00869458390116429, 0.00869458390116429, 0.0028981946337214297])
+BG_A = np.array([1.0, -2.374094743709352, 1.929355669091215, -0.5320753683120918])  # butter(3, 50 / 500): gyro 50 Hz @ 1 kHz
+BA_B = np.array([0.007820208033497191, 0.015640416066994383, 0.007820208033497191])
+BA_A = np.array([1.0, -1.734725768809275, 0.7660066009432638])                       # butter(2, 30 / 500): accel 30 Hz @ 1 kHz
 
 
 class IIR:

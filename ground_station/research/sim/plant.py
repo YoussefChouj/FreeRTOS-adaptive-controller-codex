@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
-from scipy.signal import cont2discrete
 
 from .constants import (
     ROLL_K, ROLL_POLE, ROLL_DELAY,
@@ -77,6 +76,7 @@ class _AxisSim:
             B = np.array([[0.0], [1.0]])
             C = np.array([[Kp, 0.0]])
         D = np.zeros((1, 1))
+        from scipy.signal import cont2discrete  # local: scipy.signal takes ~3 s to import, the sim package re-exports this module
         Ad, Bd, Cd, _, _ = cont2discrete((A, B, C, D), dt, method="zoh")
         self.Ad = Ad
         self.Bd = Bd

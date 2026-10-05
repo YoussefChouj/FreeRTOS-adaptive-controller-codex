@@ -14,7 +14,6 @@ from pathlib import Path
 
 import numpy as np
 
-from ground_station.autotune.frf import load_series
 from sim.sil import engine
 from sim.sil.controllers import ControllerSpec
 from sim.sil.plant import DT_C
@@ -35,6 +34,7 @@ def find_sessions(root: Path = REPO) -> list[Path]:
 
 def load(session: Path) -> dict | None:
     """Uniform 200 Hz series of the airborne window, metres, or None when the streams are missing."""
+    from ground_station.autotune.frf import load_series  # local: frf loads scipy.signal (~3 s) at import
     s = load_series(session)
     if not all(k in s for des, fb, _ in KEYS.values() for k in (des, fb)):
         return None
