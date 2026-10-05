@@ -5,7 +5,7 @@ for post-demo branches, nothing here is flashed or merged into firmware behaviou
 
 | Item | Question | Status |
 |---|---|---|
-| A | Equal-budget tune of PR (Yucelen) and RBF layers against PID on payload / cog / zigzag | partial, measured median test rmse: mrac_pr 0.0903, mrac_physrbf 0.1231 vs pid_tuned2 0.0775; rbf48 running |
+| A | Equal-budget tune of PR (Yucelen) and RBF layers against PID on payload / cog / zigzag | done, measured, below |
 | B | Per-axis reference model from flight replay (f14, f16) | measured, below |
 | C | Public data (NeuroBEM, Neural-Fly) | files and sizes listed below; download waits for the operator's yes |
 | D | x/y adaptation: 6 decoupled layers plus coupling terms | planned |
@@ -20,6 +20,35 @@ architecture. Every gain has to come from a measured or derived quantity: physic
 sysID, frequency gates from measured loop bandwidths (item B), task priors from the campaign definition, and adaptation
 rates normalised and bounded by physical limits. The equal-budget bench tune in A is a benchmark against PID, not a
 deployment step. Item I applies the same rule to the estimator (scale and bias measured in flight, not tuned).
+
+## A. Equal-budget bench tune (frozen bench; new rows `tune2.py` 128 evaluations each; test split; `heldout.py`)
+
+Median test RMSE, with the difference to pid_tuned2 and its bootstrap 95 % CI:
+
+| Controller | All rows | Diff vs PID [CI] | Held-out families (ground effect, motor loss, unseen combo) | Diff [CI] |
+|---|---|---|---|---|
+| mrac_sataware | 0.0726 | -0.0049 [-0.0107, -0.0013] | 0.0754 | -0.0059 [-0.0336, 0.0082] |
+| mrac3l_unrouted | 0.0729 | -0.0046 [-0.0106, -0.0005] | 0.0709 | -0.0104 [-0.0563, 0.0056] |
+| mrac_rbf12 | 0.0742 | -0.0032 [-0.0089, -0.0001] | 0.0740 | -0.0073 [-0.0384, 0.0085] |
+| pid_tuned2 | 0.0775 | 0 | 0.0813 | 0 |
+| mrac_rbf24 | 0.0784 | +0.0010 [-0.0053, 0.0046] | 0.0798 | -0.0015 [-0.0250, 0.0154] |
+| mrac_pr (new) | 0.0903 | +0.0128 [0.0066, 0.0189] | 0.0940 | +0.0127 [-0.0198, 0.0265] |
+| mrac_rbf48 (new) | 0.0923 | +0.0148 [0.0098, 0.0191] | 0.1002 | +0.0188 [0.0061, 0.0554] |
+| mrac_physrbf (new) | 0.1231 | +0.0456 [0.0344, 0.0589] | 0.1426 | +0.0613 [0.0152, 0.1276] |
+
+Findings:
+
+1. **Small RBF banks beat large ones.** At the same budget, rmse rises from 12 to 24 to 48 centres:
+   0.0742, 0.0784, 0.0923. Every extra centre adds a weight that has to adapt from the same error signal.
+2. **Neither new layer beats PID.**
+   - The Yucelen PR modification is +0.0128 worse than PID.
+   - The physics-feature RBF is the worst MRAC: div 12.7 % and sat 5.8 %. Its features (thrust, v, v|v|) are large
+     and unnormalised, so one learning rate cannot suit all of them.
+3. **On held-out families every CI crosses 0 except two, both worse than PID: rbf48 and physrbf.** The bench cannot
+   yet tell the best three apart from PID outside the training families.
+
+Meaning for H (no tuning): the feature library must be small and normalised by physical scale, e.g. thrust / (m g)
+and v / v_max. A larger library adds parameters that must adapt, which works against the no-tuning goal.
 
 ## B. Per-axis reference model (flight replay)
 
