@@ -58,24 +58,28 @@ class Controller:
         raise NotImplementedError
 
 
-def ss_gain(n_pred, R):
-    """Periodic steady-state Kalman gain for x=[p,v,b], input accel, meas p or v."""
+def ss_gain(n_pred, R, H, periods=4000):
+    """Periodic steady-state Kalman gain for x=[p,v,b], input accel, measurement row H: the gain after `periods`
+    Riccati periods. A period is a pure function of P, so once P repeats exactly (an ulp-level cycle, ~840 periods for
+    the ToF gain) the last gain is read off the cycle: bit-identical to running every period, ~4x less import time."""
     F = np.array([[1, DT_C, -0.5 * DT_C ** 2], [0, 1, -DT_C], [0, 0, 1]])
-    out = {}
-    for name, H in (('pos', np.array([[1.0, 0, 0]])), ('vel', np.array([[0, 1.0, 0]]))):
-        P = np.eye(3) * 1e-2
-        for _ in range(4000):
-            for _ in range(n_pred):
-                P = F @ P @ F.T + Q_KF
-            S = H @ P @ H.T + R
-            K = P @ H.T / S
-            P = (np.eye(3) - K @ H) @ P
-        out[name] = K[:, 0]
-    return out
+    P = np.eye(3) * 1e-2
+    seen, gains = {}, []
+    for i in range(periods):
+        for _ in range(n_pred):
+            P = F @ P @ F.T + Q_KF
+        S = H @ P @ H.T + R
+        K = P @ H.T / S
+        P = (np.eye(3) - K @ H) @ P
+        gains.append(K[:, 0])
+        j = seen.setdefault(P.tobytes(), i)
+        if j != i:      # P_i == P_j: gains from j + 1 on repeat with period i - j
+            return gains[j + 1 + (periods - 2 - j) % (i - j)]
+    return gains[-1]
 
 
-K_TOF = ss_gain(TOF_EVERY, SIG_TOF ** 2)['pos']
-K_OF = ss_gain(OF_EVERY, SIG_OF ** 2)['vel']
+K_TOF = ss_gain(TOF_EVERY, SIG_TOF ** 2, np.array([[1.0, 0, 0]]))
+K_OF = ss_gain(OF_EVERY, SIG_OF ** 2, np.array([[0, 1.0, 0]]))
 BG_B, BG_A = butter(3, 50.0 / 500.0)           # gyro 3rd-order 50 Hz @ 1 kHz
 BA_B, BA_A = butter(2, 30.0 / 500.0)           # accel 30 Hz @ 1 kHz
 
