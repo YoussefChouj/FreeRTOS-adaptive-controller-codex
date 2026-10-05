@@ -12,3 +12,10 @@ def test_make_overrides_one_param_and_restores_fwpid():
     assert stress.fwpid.ANG_PR is ang and stress.fwpid.RATE_PR is rate
     assert float(c.p['gamma_g']) == 7.0
     assert all(float(c.p[k]) == float(v) for k, v in st['params'].items() if k != 'gamma_g')
+
+
+def test_scaled_multiplies_the_derived_value():
+    base = stress.make('h0g_nom', 2)
+    c = ablate.scaled('h0g_nom', 2, 'gamma_g', 0.5)
+    assert abs(float(c.p['gamma_g']) - 0.5 * float(base.p['gamma_g'])) < 1e-12
+    assert float(c.p['gamma_o']) == float(base.p['gamma_o'])

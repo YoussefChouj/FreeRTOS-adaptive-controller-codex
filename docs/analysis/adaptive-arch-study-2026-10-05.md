@@ -12,7 +12,7 @@ for post-demo branches, nothing here is flashed or merged into firmware behaviou
 | E | Fully coupled 6-axis MRAC: RAM budget, firmware copy on a branch | RAM budget measured, below; branch PROPOSED |
 | F | Systematic cascaded-PID tuning | measured, sec M: robust tune does not help PID (35.3 % div); helps MRAC5 (30.7 -> 22.0 %) |
 | G | MRAC derived for (augmenting) the PID loop | measured, sec N: PID-term MRAC on the tuned-PID reference is nearly inert (29.6-30.7 % div for gamma_g 0-10) |
-| H | Thesis three-layer design: physics features, frequency gating, task priors | steps 1-2 measured, secs O-P: no-knob layers on pid_nom: ladder div 33.1 -> 24.2 % (x/y/z) -> 19.6 % (+ derived attitude layer), nominal p90 0.083 m |
+| H | Thesis three-layer design: physics features, frequency gating, task priors | steps 1-2 measured, secs O-P: no-knob layers on pid_nom: ladder div 33.1 -> 24.2 % (x/y/z) -> 19.6 % (+ derived attitude layer; 19.2-20.9 % for its rate x0.25-x4, P.1), nominal p90 0.083 m |
 | I | Position estimate from optical flow + IMU: roam-and-return bias, state of the art | measured, below |
 | K | Stress ladder (wind, loads, motor loss, mismatch, actuator, speed; L1-L4) after the operator's critique | measured, below |
 | L | Richer coupled x/y bases (RBF, 2-layer NN) on MRAC5_XYZ | measured, below: no gain, dropped |
@@ -958,3 +958,19 @@ Verdict: h0g_nom is the best ladder result so far (19.6 %) at the PID's nominal 
 Pending the sensitivity sweep it replaces h0_sep_nom as the demo-2 adaptive candidate in simulation. Sec J's
 350 g / 500 g figures were measured on other controllers and are not re-run here. Firmware port: PROPOSED, branch only,
 after the demo.
+
+### P.1 Sensitivity of the derived attitude rate (`python sim/bench/ablate.py --scale h0g_nom gamma_g 0.25 0.5 2 4`)
+
+The x, y, z rates stay at their derived values; only gamma_g is multiplied (x1 = 0.601 is the sec P run).
+
+| gamma_g scale | 0 (= h0_sep_nom) | 0.25 | 0.5 | 1 | 2 | 4 |
+|---|---|---|---|---|---|---|
+| ladder div | 24.2 % | 20.7 % | 19.2 % | 19.6 % | 19.6 % | 20.9 % |
+| nominal p90 [m] | 0.083 | 0.083 | 0.083 | 0.083 | 0.084 | 0.086 |
+| arm_load L4 div | 100 % | 58 % | 17 % | 25 % | 25 % | 50 % |
+
+Every non-zero scale beats h0_sep_nom and mrac5_xyz_rob (22.0 %); over a 16x range the ladder moves 1.7 points. The
+sensitive cell is the demo axis at L4 (arm_load), best between x0.5 and x2, which brackets the derived value. Other
+L4 cells that move: speed 100 -> 67 % at x4, mass_step 8 -> 17 % at x4, motor_loss 8 % only at x0.25. So the derived
+gamma_g is not a lucky point: "no tuning" holds on this ladder within a factor of 2. h0g_nom stays the demo-2 adaptive
+candidate in simulation.
