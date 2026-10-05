@@ -41,7 +41,7 @@ PAYLOAD_DRAG = 0.01                   # WP-31 PROPOSED: N/(m/s) air drag on the 
 
 
 GVEC = np.array([0.0, 0.0, G])
-_P1, _P2 = [1, 2, 0], [2, 0, 1]
+_P1, _P2 = np.array([1, 2, 0]), np.array([2, 0, 1])   # index arrays, not lists: numpy converts a list on every call
 
 
 def _cross(a, b):
@@ -53,10 +53,11 @@ def _rotm(e):
     sf, cf = np.sin(e[:, 0]), np.cos(e[:, 0])
     st, ct = np.sin(e[:, 1]), np.cos(e[:, 1])
     sp, cp = np.sin(e[:, 2]), np.cos(e[:, 2])
+    cpst, spst = cp * st, sp * st                  # cp * st * sf == (cp * st) * sf: shared, same bits
     R = np.empty((len(e), 3, 3))
     R[:, 0, 0], R[:, 1, 0], R[:, 2, 0] = cp * ct, sp * ct, -st
-    R[:, 0, 1], R[:, 1, 1], R[:, 2, 1] = cp * st * sf - sp * cf, sp * st * sf + cp * cf, ct * sf
-    R[:, 0, 2], R[:, 1, 2], R[:, 2, 2] = cp * st * cf + sp * sf, sp * st * cf - cp * sf, ct * cf
+    R[:, 0, 1], R[:, 1, 1], R[:, 2, 1] = cpst * sf - sp * cf, spst * sf + cp * cf, ct * sf
+    R[:, 0, 2], R[:, 1, 2], R[:, 2, 2] = cpst * cf + sp * sf, spst * cf - cp * sf, ct * cf
     return R, sf, cf, ct, st / ct
 
 
@@ -97,6 +98,7 @@ class Plant:
         self.tz_imb = -q["u_imb"] * np.deg2rad(B_DPS[2]) * J_SIL[2]   # plant.run: u_imb yaw U of imbalance
         self.turb = np.zeros((B, 3))
         self.alive = np.ones(B, bool)
+        self._rows = np.arange(B)
         self.g_meas = np.zeros((B, 3))
         self.a_meas = f0 + q["acc_bias"]
         # WP-31 swinging payload: point mass on a cable from a hook below the CoG, hanging at rest, then given the
@@ -141,7 +143,7 @@ class Plant:
         ns = q["noise_scale"]
         R = self.ring.shape[1]
         self.ring[:, k % R] = np.clip(np.nan_to_num(M, nan=bp.PWM_MIN), bp.PWM_MIN, bp.PWM_MAX)
-        Md = self.ring[np.arange(B), (k - self.delay) % R]
+        Md = self.ring[self._rows, (k - self.delay) % R]
         # ---- per-tick environment ----
         V = q["V0"] - q["vsag"] * t
         drift = 1.0 - q["thrust_drift"] * np.clip((t - q["drift_t0"]) / q["drift_T"], 0.0, 1.0)   # WP-31 battery sag
@@ -149,7 +151,7 @@ class Plant:
         self.pv[:, 0] += q["pend_kick"] * kick
         gain = q["mgain"] * ((V / bp.V_NOM) ** 2 * drift)[:, None]
         lost = t >= q["mloss_t"]
-        gain[np.arange(B), q["mloss_idx"]] *= np.where(lost, q["mloss_eff"], 1.0)
+        gain[self._rows, q["mloss_idx"]] *= np.where(lost, q["mloss_eff"], 1.0)
         ge = 1.0 / (1.0 - np.minimum((bp.R_PROP / (4 * np.maximum(self.p[:, 2], 0.03))) ** 2, 0.25))
         gain *= ge[:, None]
         self.turb += DT_C / 1.0 * (-self.turb) + q["dryden_sigma"][:, None] * np.sqrt(2 * DT_C / 1.0) * self._noise["turb"][:, nb]
@@ -158,17 +160,25 @@ class Plant:
         hook_b, L = q["hook"], q["pend_L"]
         kc, cc = self.mp * CABLE_W ** 2, 2 * CABLE_ZETA * self.mp * CABLE_W
         # ---- 1 kHz plant + IMU (plant.run; rot / euler_rates / cross inlined for speed) ----
+        # The substep loop is numpy call overhead at small B, so its invariants are hoisted: the same operands in the
+        # same order, so the result is bit-identical (golden Logs compared with np.array_equal).
         fc = np.zeros((B, 3))
         tau = np.empty((B, 3))
         live = alive[:, None]
+        mot, k_mot, a1, a2, arm, pwm_min = self.mot, DT / bp.TAU_M, bp.A1, bp.A2, bp.ARM, bp.PWM_MIN
+        cog_x, cog_y, tz_imb = q["cog"][:, 0], q["cog"][:, 1], self.tz_imb
+        m_col, drag_lin, drag_rot = m[:, None], bp.DRAG_LIN, bp.DRAG_ROT
+        g_bias, g_sig, g_noise = q["gyro_bias"], bp.SIG_GYRO * ns[:, None], self._noise["g"][:, nb]
+        a_bias, a_sig, a_noise = q["acc_bias"], bp.SIG_ACC * ns[:, None], self._noise["a"][:, nb]
         for s in range(SUB):
-            self.mot += DT / bp.TAU_M * (Md - self.mot)
-            x = self.mot - bp.PWM_MIN
-            T = (bp.A1 * x + bp.A2 * x * x) * gain
+            mot += k_mot * (Md - mot)
+            x = mot - pwm_min
+            T = (a1 * x + a2 * x * x) * gain
             Ts = T.sum(1)
-            tau[:, 0] = bp.ARM * (T[:, 1] + T[:, 2] - T[:, 0] - T[:, 3]) - q["cog"][:, 1] * Ts
-            tau[:, 1] = bp.ARM * (T[:, 1] + T[:, 3] - T[:, 0] - T[:, 2]) + q["cog"][:, 0] * Ts
-            tau[:, 2] = KAPPA * (T[:, 2] + T[:, 3] - T[:, 0] - T[:, 1]) + self.tz_imb
+            T0, T1, T2, T3 = T[:, 0], T[:, 1], T[:, 2], T[:, 3]
+            tau[:, 0] = arm * (T1 + T2 - T0 - T3) - cog_y * Ts
+            tau[:, 1] = arm * (T1 + T3 - T0 - T2) + cog_x * Ts
+            tau[:, 2] = KAPPA * (T2 + T3 - T0 - T1) + tz_imb
             Rm, sf, cf, ct, tt = _rotm(e)                              # columns b1 b2 b3 = plant.rot(e)
             if self.any_pend:
                 # WP-31 cable: tension only, at the hook (body point hook_b)
@@ -184,18 +194,18 @@ class Plant:
                 self.pv += DT * fp / self.mp[:, None] * self.has_pend[:, None]
                 self.pp += DT * self.pv
                 tau += _cross(hook_b, np.einsum("bij,bi->bj", Rm, fc))
-            fw = (Ts[:, None] * Rm[:, :, 2] - bp.DRAG_LIN * (v - wind) + fc) / m[:, None]
+            fw = (Ts[:, None] * Rm[:, :, 2] - drag_lin * (v - wind) + fc) / m_col
             v += DT * (fw - GVEC) * live
             p += DT * v
-            wd = (tau - bp.DRAG_ROT * w - _cross(w, J * w)) / J
+            wd = (tau - drag_rot * w - _cross(w, J * w)) / J
             w += DT * wd * live
             a = w[:, 1] * sf + w[:, 2] * cf                            # plant.euler_rates(e, w)
             e[:, 0] += DT * (w[:, 0] + a * tt)
             e[:, 1] += DT * (w[:, 1] * cf - w[:, 2] * sf)
             e[:, 2] += DT * (a / ct)
             fb = np.einsum("bij,bi->bj", Rm, fw)
-            g_raw = np.rad2deg(w) + q["gyro_bias"] + bp.SIG_GYRO * ns[:, None] * self._noise["g"][:, nb, s]
-            a_raw = fb + q["acc_bias"] + bp.SIG_ACC * ns[:, None] * self._noise["a"][:, nb, s]
+            g_raw = np.rad2deg(w) + g_bias + g_sig * g_noise[:, s]
+            a_raw = fb + a_bias + a_sig * a_noise[:, s]
             self.g_meas = self.gyro_f(g_raw)
             self.a_meas = self.acc_f(a_raw)
         self.cable_f = fc

@@ -84,18 +84,23 @@ class IIR:
     """Direct-form-II-transposed IIR over the last axis of a (B, C) signal."""
     def __init__(self, b, a, shape, x0=0.0):
         self.b, self.a = b, a
+        self._bf, self._af = [float(v) for v in b], [float(v) for v in a]   # same products, no numpy-scalar indexing
         self.z = np.zeros((len(b) - 1,) + shape)
         if np.any(x0):                              # start at steady state for input x0
             for _ in range(400):
                 self(np.broadcast_to(x0, shape))
 
     def __call__(self, x):
-        b, a, z = self.b, self.a, self.z
+        b, a, z = self._bf, self._af, self.z
         y = b[0] * x + z[0]
         n = len(z)
-        for i in range(n - 1):
-            z[i] = b[i + 1] * x + z[i + 1] - a[i + 1] * y
-        z[n - 1] = b[n] * x - a[n] * y
+        for i in range(n - 1):                      # z[i] = b[i+1]*x + z[i+1] - a[i+1]*y, in place (same operations)
+            zi = z[i]
+            np.multiply(x, b[i + 1], out=zi)
+            zi += z[i + 1]
+            zi -= a[i + 1] * y
+        np.multiply(x, b[n], out=z[n - 1])
+        z[n - 1] -= a[n] * y
         return y
 
 
