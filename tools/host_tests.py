@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import exe_cache  # noqa: E402  (tools/exe_cache.py: built exes are cached by content)
 
 REPO = Path(__file__).resolve().parents[1]
+PASSES = REPO / ".cache" / "lint"      # clang-tidy pass markers (over_firmware with an ident)
 # Rows build and run in parallel (gcc and the test exe are separate processes). Capped at 4: the lab laptop's
 # AC adapter drops under full load. HOST_TESTS_JOBS=1 gives the old serial run.
 JOBS = int(os.environ.get("HOST_TESTS_JOBS", min(4, os.cpu_count() or 1)))
@@ -124,21 +125,48 @@ def firmware_jobs(src: Path) -> dict[str, list[str]]:
     return jobs
 
 
-def over_firmware(tool: str, cmd) -> int:
-    """Run cmd(path, flags) on every firmware file; PASS/FAIL per file, exit 1 if any fails."""
+def _pass_key(ident: str, cmd: list[str], path: str, flags: list[str], src: Path) -> str:
+    """Hash of the tool ident, its command and every file the path includes (gcc -MM); "" = do not cache."""
+    gcc = shutil.which("gcc")
+    if not ident or gcc is None or not exe_cache.ON:
+        return ""
+    return exe_cache.key(gcc, [*flags, path], [ident, *cmd], {src.as_posix(): "{src}"})
+
+
+def _remember(mark: Path) -> None:
+    """Record a pass and drop the older pass markers of the same tool and file."""
+    mark.parent.mkdir(parents=True, exist_ok=True)
+    mark.touch()
+    for old in mark.parent.glob(mark.stem[:-17] + "_*.ok"):
+        if old != mark and len(old.stem) == len(mark.stem):
+            old.unlink(missing_ok=True)
+
+
+def over_firmware(tool: str, cmd, ident: str = "") -> int:
+    """Run cmd(path, flags) on every firmware file; PASS/FAIL per file, exit 1 if any fails. With an ident (the
+    tool's version and config) a pass is remembered under a content key, so an unchanged file is not run again;
+    a failure is never cached. EXE_CACHE=0 = run every file."""
     with tempfile.TemporaryDirectory() as tmp:
         src = Path(tmp)
         jobs = firmware_jobs(src)
-        failed = []
+        failed, cached = [], 0
         for path, flags in jobs.items():
-            res = subprocess.run(cmd(path, flags), cwd=REPO, capture_output=True, text=True)
             label = Path(path).name if path.startswith(src.as_posix()) else path
+            key = _pass_key(ident, cmd(path, flags), path, flags, src)
+            mark = PASSES / f"{tool}_{label.replace('/', '-')}_{key}.ok"
+            if key and mark.exists():
+                cached += 1
+                print(f"PASS {tool} {label} (cached)")
+                continue
+            res = subprocess.run(cmd(path, flags), cwd=REPO, capture_output=True, text=True)
             if res.returncode != 0:
                 failed.append(label)
                 print(f"FAIL {tool} {label}\n{_tail(res.stdout + res.stderr, 40)}")
             else:
                 print(f"PASS {tool} {label}")
-    print(f"{tool}: {len(jobs) - len(failed)}/{len(jobs)} files clean")
+                if key:
+                    _remember(mark)
+    print(f"{tool}: {len(jobs) - len(failed)}/{len(jobs)} files clean" + (f" ({cached} cached)" if ident else ""))
     return 1 if failed else 0
 
 
@@ -148,8 +176,10 @@ def tidy() -> int:
         print("FAIL clang-tidy: not installed")
         return 1
     sys_args = gcc_system_args()
+    version = subprocess.run([exe, "--version"], capture_output=True, text=True).stdout
+    ident = "\0".join([exe, version, (REPO / ".clang-tidy").read_text()])
     return over_firmware("clang-tidy", lambda path, flags: [
-        exe, "--quiet", f"--config-file={REPO / '.clang-tidy'}", path, "--", *sys_args, *flags])
+        exe, "--quiet", f"--config-file={REPO / '.clang-tidy'}", path, "--", *sys_args, *flags], ident)
 
 
 ARM = ["-mcpu=cortex-m4", "-mthumb", "-mfloat-abi=hard", "-mfpu=fpv4-sp-d16", "-fsyntax-only", "-Wall"]
