@@ -19,6 +19,7 @@ from sim.bench.sysid.bands import split_bands
 from sim.bench.sysid.data import check_split_safety, FORBIDDEN_SEEDS, FORBIDDEN_FAMS
 from sim.bench.sysid.hscale import run_real_protocol
 from sim.bench.sysid.features import load_library
+from sim.bench.sysid.frols import frols, err_table
 
 
 def test_stlsq_sparse_3state_recovery():
@@ -307,3 +308,26 @@ def test_row_bootstrap_resamples_whole_groups(monkeypatch):
             g_counts = counts[g_indices]
             assert np.all(g_counts == g_counts[0]), f"Group {g} had unequal sample counts: {g_counts}"
 
+
+def test_frols_ranks_and_recovers_sparse_terms():
+    """FROLS picks the true terms in order of their share of y'y, stops at esr_tol, never picks an exact copy of a
+    chosen column, and its ERRs add up to the R^2 (about y'y) of the least-squares fit on the chosen columns."""
+    rng = np.random.default_rng(7)
+    N = 2000
+    x1, x2, x3, x4 = rng.standard_normal((4, N))
+    names = ["1", "x1", "x2", "x3", "x4", "x1*x2", "x1^2", "x3*x4", "x1_copy"]
+    Theta = np.stack([np.ones(N), x1, x2, x3, x4, x1 * x2, x1 ** 2, x3 * x4, x1], 1)
+    y = 0.3 + 2.0 * x1 + 0.5 * x1 * x2 - 1.0 * x3 + 0.01 * rng.standard_normal(N)
+    res = frols(Theta, y, esr_tol=1e-3)
+    assert set(res["order"]) == {0, 1, 3, 5}
+    assert res["order"][0] == 1 and 8 not in res["order"]
+    truth = np.array([0.3, 2.0, 0.0, -1.0, 0.0, 0.5, 0.0, 0.0, 0.0])
+    assert np.abs(res["coef"] - truth).max() < 0.01
+    sel = res["order"]
+    c_ls = np.linalg.lstsq(Theta[:, sel], y, rcond=None)[0]
+    assert np.allclose(res["coef"][sel], c_ls, atol=1e-9)
+    r = y - Theta @ res["coef"]
+    assert abs(res["err"].sum() - (1 - (r @ r) / (y @ y))) < 1e-10
+    assert abs(res["esr"] - (r @ r) / (y @ y)) < 1e-10
+    rows = err_table(res, names)
+    assert rows[0][0] == "x1" and [n for n, _, _ in rows].count("x1_copy") == 0
