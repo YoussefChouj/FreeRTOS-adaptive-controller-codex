@@ -12,7 +12,7 @@ for post-demo branches, nothing here is flashed or merged into firmware behaviou
 | E | Fully coupled 6-axis MRAC: RAM budget, firmware copy on a branch | RAM budget measured, below; branch PROPOSED |
 | F | Systematic cascaded-PID tuning | measured, sec M: robust tune does not help PID (35.3 % div); helps MRAC5 (30.7 -> 22.0 %) |
 | G | MRAC derived for (augmenting) the PID loop | measured, sec N: PID-term MRAC on the tuned-PID reference is nearly inert (29.6-30.7 % div for gamma_g 0-10) |
-| H | Thesis three-layer design: physics features, frequency gating, task priors | planned; design constraint below |
+| H | Thesis three-layer design: physics features, frequency gating, task priors | step 1 measured, sec O: no-knob x/y/z layers on pid_nom: ladder div 33.1 -> 24.2 %, nominal p90 0.086 -> 0.083 m |
 | I | Position estimate from optical flow + IMU: roam-and-return bias, state of the art | measured, below |
 | K | Stress ladder (wind, loads, motor loss, mismatch, actuator, speed; L1-L4) after the operator's critique | measured, below |
 | L | Richer coupled x/y bases (RBF, 2-layer NN) on MRAC5_XYZ | measured, below: no gain, dropped |
@@ -856,4 +856,59 @@ leaves the ladder unchanged except for motor loss, so the inner-loop adaptation 
 model. Keep MRAC5_XYZ's x, y, z layers (the part that measurably helps) and treat actuator lag and saturation as the
 remaining limit (allocation / rate limits, not adaptation). H should build on the x, y, z layers with gamma_o derived,
 not tuned.
+
+## O. Item H on the stress ladder: no-tuning layers on the nominally tuned PID (`stress.py` tag `h0_sep_nom`)
+
+Question: sec N showed the x, y, z layers carry the adaptive robustness, but the robust tune trades them away
+(gamma_o -> floor) and running them at mrac5_xyz_rob's gamma_o costs 66 mm of nominal p90. Sec H's H0_Sep sets each
+layer's rate from the loop it wraps (gamma_i = 1 / (10 tau_i)), with no knob. On the ladder (K.1) it ran only on the
+firmware gains (h0_sep_fw). Does it help a tuned PID?
+
+Protocol: `h0_sep_nom` = ctrl_h0.H0_Sep with every parameter taken from pid_nom (`results/pid_tuned2_nom_tune.json`),
+F1X patch as pid_nom; nothing tuned for the layers. `stress.make` now takes a class spec together with a params source.
+Derived rates (computed from the pid_nom gains): x, y 0.626 /s (tau_v 0.160 s), z 2.457 /s (tau_z 0.041 s). On the
+firmware gains they are 0.283 / 0.826 /s; mrac5_xyz_rob's one tuned gamma_o is 1.155 /s.
+
+| Tag | Tuned knobs beyond the PID | Ladder divergence | Nominal p90 RMSE | Wall time (ladder) |
+|---|---|---|---|---|
+| pid_nom (K.5) | - | 33.1 % | 0.086 m | - |
+| h0_sep_fw (K.1) | none, firmware PID | 27.0 % | 0.818 m | - |
+| **h0_sep_nom** | **none** | **24.2 %** | **0.083 m** | 45 s |
+| mrac5_xyz_rob (M) | 6 (CMA, disturbed rows) | 22.0 % | 0.131 m | - |
+
+Divergence % L0..L4 (break level):
+
+| axis | pid_nom | h0_sep_nom | mrac5_xyz_rob |
+|---|---|---|---|
+| wind_gust | 0 0 0 0 8 (>4) | 0 0 0 0 17 (>4) | 0 0 0 0 8 (>4) |
+| mass_step | 0 0 0 67 100 (3) | 0 0 0 0 8 (>4) | 0 0 0 0 0 (>4) |
+| swing_load | 0 0 0 17 75 (4) | 0 0 0 0 0 (>4) | 0 0 0 0 0 (>4) |
+| arm_load | 0 0 0 25 100 (3) | 0 0 0 42 100 (3) | 0 0 0 58 100 (3) |
+| motor_loss | 0 0 0 0 0 (>4) | 0 0 0 0 8 (>4) | 0 0 0 0 25 (4) |
+| kt_mismatch | 0 0 0 50 100 (3) | 0 0 0 0 8 (>4) | 0 0 0 0 8 (>4) |
+| actuator | 0 0 92 100 100 (2) | 0 0 92 100 100 (2) | 0 0 8 100 100 (3) |
+| combo | 0 75 100 100 100 (1) | 0 92 100 100 100 (1) | 0 75 100 100 100 (1) |
+| speed | 0 0 33 100 100 (2) | 0 0 33 100 100 (2) | 0 0 33 100 100 (2) |
+
+inertia is 0 % at every level for all three. p90 RMSE (L0..L4, m), h0_sep_nom: mass_step 0.083 0.073 0.067 0.088 0.726,
+kt_mismatch 0.083 0.069 0.074 0.073 0.952, inertia 0.083 0.073 0.071 0.090 0.109; pid_nom diverges at mass_step and
+kt_mismatch L3.
+
+Findings (all measured in this run):
+
+1. With no added knob, the layers cut ladder divergence from 33.1 % to 24.2 % and do not cost nominal accuracy
+   (p90 0.083 vs 0.086 m). mrac5_xyz_rob is 2.2 points better on divergence but 48 mm worse nominally, after a
+   tune on disturbed rows. On this ladder the derived rule is the best trade measured so far.
+2. The gain is where an adaptive outer layer should help: mass_step, kt_mismatch and swing_load move from breaking at
+   L3-L4 to holding through L4 (<= 8 %).
+3. It does not help on arm_load (L3 42 % vs 25 %), actuator (L2) or combo (L1), and wind_gust L4 rises from 8 to
+   17 % (1 row of 12). These are the attitude and actuator cases, which no outer layer measured here fixes (sec N).
+4. h0_sep_fw's arm_load L4 42 % (K.1 item 9) came with 0.818 m nominal p90: the firmware gains hold the load
+   because they barely track. That cell is not evidence for that configuration.
+
+Verdict: adopt H0_Sep's derived-rate x, y, z layers on the tuned PID as the adaptive candidate for the trajectory
+comparison (demo 2). It needs no tuning beyond the PID's own. The arm-load demo (demo 1) still depends on the attitude
+loop. All controllers break at L3 (0.3 kg at the arm tip in this model). Sec J's simulated limit (<= 350 g held, 500 g diverged) stands, and
+the rigid mount for 10-06 (K) stands. Firmware port: PROPOSED, on a branch after the demo, with sec E's RAM budget
+(three layers, no attitude MRAC).
 
