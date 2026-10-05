@@ -13,7 +13,7 @@ import bench, fwpid, scen, stress, tune2
 SEEDS = [0, 1, 2, 3]
 
 
-def tune_one(tag):
+def tune_one(tag, suffix='nom'):
     spec, src, f1x = stress.CTRLS[tag]
     spec = json.load(open(f'results/{src}_test.json'))['ctrl'] if src else spec
     cls = bench.load_cls(spec); t0 = time.time()
@@ -25,11 +25,11 @@ def tune_one(tag):
         (J, bp), h2 = bench.tune(tune2.restarted(cls, p1))
     finally:
         fwpid.ANG_PR, fwpid.RATE_PR = ang, rate
-    out = dict(bench=bench.BENCH_VERSION, ctrl=spec, tag=f'{tag}_nom', split=dict(scen.SPLITS['tune']),
+    out = dict(bench=bench.BENCH_VERSION, ctrl=spec, tag=f'{tag}_{suffix}', split=dict(scen.SPLITS['tune']),
                f1x=f1x, evals=len(h1) + len(h2), J_stage1=J1, J=J, default_J=h1[0]['J'], params=bp,
                config_hash=bench.cfg_hash(cls, bp), hist=h1 + h2, wall_s=time.time() - t0)
-    json.dump(out, open(f'results/{tag}_nom_tune.json', 'w'), indent=1)
-    print(f"{tag}_nom: J {J:.4f} (defaults {h1[0]['J']:.4f}, stage 1 {J1:.4f}) {out['evals']} evals "
+    json.dump(out, open(f'results/{tag}_{suffix}_tune.json', 'w'), indent=1)
+    print(f"{tag}_{suffix}: J {J:.4f} (defaults {h1[0]['J']:.4f}, stage 1 {J1:.4f}) {out['evals']} evals "
           f"{out['wall_s']:.0f}s", flush=True)
 
 

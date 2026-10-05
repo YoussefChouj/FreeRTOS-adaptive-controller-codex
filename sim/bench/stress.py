@@ -322,6 +322,9 @@ CTRLS = {
     'nn2_xyz': ('ctrl_nn2:NN2_XYZ', None, False),
     'rbf2_xyz_nom': (None, 'rbf2_xyz_nom', False),
     'nn2_xyz_nom': (None, 'nn2_xyz_nom', False),
+    # tune_robust.py (doc sec M, item F): same budget on disturbed training rows (L1-L2, seed 300), read from <src>_tune.json
+    'pid_rob': (None, 'pid_tuned2_rob', True),
+    'mrac5_xyz_rob': (None, 'mrac5_xyz_rob', False),
 }
 
 
@@ -329,7 +332,7 @@ def make(tag, B):
     spec, src, f1x = CTRLS[tag]
     params = None
     if src:
-        st = json.load(open(f'results/{src}_tune.json' if src.endswith('_nom') else f'results/{src}_test.json'))
+        st = json.load(open(f'results/{src}_tune.json' if src.endswith(('_nom', '_rob')) else f'results/{src}_test.json'))
         spec, params = st['ctrl'], {k: float(v) for k, v in st['params'].items()}
     ang, rate = fwpid.ANG_PR, fwpid.RATE_PR
     try:

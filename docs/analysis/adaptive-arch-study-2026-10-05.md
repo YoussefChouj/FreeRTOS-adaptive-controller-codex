@@ -10,10 +10,12 @@ for post-demo branches, nothing here is flashed or merged into firmware behaviou
 | C | Public data (NeuroBEM, Neural-Fly) | files and sizes listed below; download waits for the operator's yes |
 | D | x/y adaptation: 6 decoupled layers plus coupling terms | measured, below: yaw layer harmful; x, y + z layers best so far (0.0631 vs PID 0.0775) |
 | E | Fully coupled 6-axis MRAC: RAM budget, firmware copy on a branch | RAM budget measured, below; branch PROPOSED |
-| F | Systematic cascaded-PID tuning | planned |
+| F | Systematic cascaded-PID tuning | measured, sec M: robust tune does not help PID (35.3 % div); helps MRAC5 (30.7 -> 22.0 %) |
 | G | MRAC derived for (augmenting) the PID loop | planned |
 | H | Thesis three-layer design: physics features, frequency gating, task priors | planned; design constraint below |
 | I | Position estimate from optical flow + IMU: roam-and-return bias, state of the art | measured, below |
+| K | Stress ladder (wind, loads, motor loss, mismatch, actuator, speed; L1-L4) after the operator's critique | measured, below |
+| L | Richer coupled x/y bases (RBF, 2-layer NN) on MRAC5_XYZ | measured, below: no gain, dropped |
 
 Design constraint for H (operator, 2026-10-05): the three-layer design must need no parameter tuning, by its
 architecture. Every gain has to come from a measured or derived quantity: physics features from the plant model and
@@ -726,3 +728,52 @@ Findings:
 **Verdict.** Drop richer x/y bases from the roadmap. MRAC5_XYZ's 3-term basis stays the adaptive candidate. The next
 gains are in the inner loop and in the actuator: items F (PID tune), G (PID-specific MRAC) and H (no-tuning
 architecture), and measuring motor lag after the 10-06 RPM sensor fix (K.6).
+
+## M. Robust tune on disturbed rows (`sim/bench/tune_robust.py`, item F)
+
+Question: is the PID baseline weak only because it was tuned on calm rows? This also answers the operator's critique
+from the other side: a fair comparison needs a baseline tuned for the same disturbances.
+
+Protocol: same tuner and budget as K.5 (`bench.tune`, CMA-ES, 2 x 64 evaluations from the class defaults, objective
+unchanged). The only change is the training rows: the 4 ladder trajectories x (nominal + the 8 LAD axes at L1 and L2),
+seed 300 (the ladder uses 200-202), 68 rows, built exactly as `stress.build` builds them (`test_tune_robust.py`).
+combo, speed and L3-L4 are held out. PID keeps the F1X firmware patch, as pid_nom does. Then the full 459-row ladder.
+
+| Tag | Train J | Ladder divergence | Nominal p90 RMSE | Wall time (tune) |
+|---|---|---|---|---|
+| pid_nom (K.5) | - | 33.1 % | 0.086 m | - |
+| pid_rob | 0.1044 | 35.3 % | 0.094 m | 717 s |
+| mrac5_xyz_nom (K.5) | - | 30.7 % | 0.082 m | - |
+| mrac5_xyz_rob | 0.1368 | **22.0 %** | 0.131 m | 882 s |
+
+Break level (first level with >= 25 % diverged; 12 rows per cell, speed 3):
+
+| Axis | pid_nom | pid_rob | mrac5_nom | mrac5_rob |
+|---|---|---|---|---|
+| wind_gust | >4 | >4 | 4 | >4 |
+| mass_step | 3 | 3 | >4 | >4 |
+| swing_load | 4 | 3 | >4 | >4 |
+| arm_load | 3 | 3 | 2 | 3 |
+| motor_loss | >4 | >4 | 3 | 4 |
+| kt_mismatch | 3 | 3 | >4 | >4 |
+| actuator | 2 | 2 | 2 | 3 |
+| inertia | >4 | >4 | >4 | >4 |
+| combo | 1 | 1 | 1 | 1 |
+| speed | 2 | 3 | 2 | 2 |
+
+Findings (all measured in this run):
+1. Robust training does not rescue PID: divergence 33.1 % -> 35.3 %, no axis breaks later except speed (2 -> 3).
+   PID's breaks on mass_step, kt_mismatch and swing_load at L3 are structural: fixed gains cannot follow a large change in
+   effective plant gain, and no fixed setting found by this tuner does better.
+2. Robust training does help MRAC5_XYZ: 30.7 % -> 22.0 %. arm_load (2 -> 3), motor_loss (3 -> 4), actuator (2 -> 3)
+   and wind_gust (4 -> >4) all break later, and mass_step, swing_load and kt_mismatch stay at 0-8 % through L4.
+   Against the fairest PID baseline (pid_nom; pid_rob is worse), the MRAC margin grows from 2.4 to 11.1 points.
+3. The price is calm-air tracking: mrac5_rob's nominal p90 RMSE is 0.131 m (0.082 m for mrac5_nom). The tuner picks
+   slower, safer gains. On speed, mrac5_rob does not gain (break 2).
+4. combo still breaks at L1 for all four, and actuator L3 is 100 % for all four. That is the actuator lag and delay
+   ladder (K.6): no outer-loop tuning moves it, which points again at G and the inner loop.
+5. One training seed: each (axis, level) has one random draw. A second seed doubles the cost (computed: about
+   2 x 1600 s here); not run.
+
+Verdict: keep mrac5_xyz_rob as the stress-ladder MRAC reference and pid_nom as the PID reference (the better of the two).
+For the demo the trade is explicit: rob gains survive more but track calm hover about 5 cm worse at p90.
