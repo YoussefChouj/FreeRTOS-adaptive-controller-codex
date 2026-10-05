@@ -567,3 +567,65 @@ What it means for the 10-06 arm-load runs (250 g):
 - Next (one item per commit): a fair re-tune of PID and MRAC on nominal rows only (no oracle, `tune_nominal.py`),
   then the ladder again; the combo-L1 interaction; measure motor tau and delay from the 10-03 / 10-06 logs and set
   the actuator ladder's L0 from the measurement.
+
+### K.5 Fair re-tune (no oracle) and the combo-L1 interaction (measured 2026-10-05 20:3x)
+
+**Fair re-tune.** `tune_nominal.py` gives pid_tuned2, mrac_sataware and mrac5_xyz the same CMA budget as `bench.tune`
+(2 stages x 64 evals, from each class's defaults) on scen 'nominal' rows only (seeds 0-3), so no controller has seen
+any stress axis. Tune objective J: PID 0.0775, sataware 0.1277, MRAC5 0.0687 (both MRAC classes' first evaluation, the starting point, scored inf;
+PID's 0.626). Then the same 459-row ladder:
+
+| Controller | oracle tune (sec K.1) div % | nominal-only tune div % |
+|---|---|---|
+| PID (pid_tuned2 / pid_nom) | 34.6 | 33.1 |
+| mrac_sataware / _nom | 31.6 | 52.9 |
+| mrac5_xyz / _nom | 25.1 | 30.7 |
+
+| axis, nominal-only tunes | pid_nom L0..L4 [break] | mrac_sataware_nom | mrac5_xyz_nom |
+|---|---|---|---|
+| wind_gust | 0 0 0 0 8 [>4] | 8 8 8 25 33 [3] | 0 0 0 0 25 [4] |
+| mass_step | 0 0 0 67 100 [3] | 8 25 42 92 100 [1] | 0 0 0 0 0 [>4] |
+| swing_load | 0 0 0 17 75 [4] | 8 25 25 92 100 [1] | 0 0 0 0 0 [>4] |
+| arm_load | 0 0 0 25 100 [3] | 8 25 83 100 100 [1] | 0 0 50 100 100 [2] |
+| motor_loss | all 0 [>4] | 8 8 8 17 83 [4] | 0 0 0 42 83 [3] |
+| kt_mismatch | 0 0 0 50 100 [3] | 8 25 8 75 100 [1] | 0 0 0 0 8 [>4] |
+| actuator | 0 0 92 100 100 [2] | 8 42 100 100 100 [1] | 0 0 100 100 100 [2] |
+| inertia | all 0 | 8 0 0 0 0 | all 0 |
+| combo | 0 75 100 100 100 [1] | 8 100 ... [1] | 0 100 ... [1] |
+| speed | 0 0 33 100 100 [2] | 0 0 67 100 100 [2] | 0 0 67 100 100 [2] |
+
+Findings:
+1. The oracle was worth little to PID (34.6 -> 33.1 %, within one or two rows per cell). The sec K.1 PID numbers are
+   a fair baseline after all.
+2. MRAC5 keeps its load advantage without the oracle: mass pickup and swinging load diverge 0 % at every level (PID
+   67 / 17 % at L3), kT mismatch 0 % to L3 (PID 50 %). It loses where PID's fixed gains are stiffer: the arm load
+   (MRAC5_nom 50 % at 0.2 kg on the arm-tip cable, PID 0 %) and motor loss L3 (42 % vs 0 %). Its p90 RMSE on
+   nominal rows is 0.082 m vs PID 0.086 m.
+3. mrac_sataware_nom is under-tuned (J 0.128, 1 of 12 nominal rows diverged, p90 0.170 m); 128 evals from diverging
+   defaults were not enough. Its row says nothing about the architecture.
+
+**Combo L1 interaction** (`combo_ablate.py 1`, `results/combo_ablate_L1.json`): every subset of the four L1 ingredients
+on the same 12 rows (W wind 2 m/s + gusts, A 0.1 kg on a 0.1 m cable at motor 0's arm tip, K kT +-10 %, D motor
+tau 1.5x and 4-tick delay), diverged rows of 12, pid_tuned2 / mrac_sataware / mrac5_xyz:
+
+| subsets | diverged |
+|---|---|
+| W, A, K, D alone; WA, WK, WD, AK, KD, WAK, WKD | 0 / 0 / 0 for every one |
+| AD | 10 / 12 / 12 |
+| WAD, AKD, WAKD | 10-11 / 10-11 / 9-12 |
+
+So the whole combo effect is one pair: the arm-tip load and the slower actuator. `combo_ad_diag.py` splits it
+(pid_tuned2 / mrac5_xyz, diverged of 12): AD on the cable 9 / 11 (median divergence at 10.7 / 11.8 s, hover included);
+the same 0.1 kg rigidly mounted 0 / 0; the cable load at the body centre 0 / 0; tau 1.5x alone with the arm load 0 / 1;
+delay 4 alone with it 0 / 0; 0.05 kg on the arm-tip cable 0 / 0. It is a slow-growing oscillation (about 11 s to
+diverge): the arm-tip pendulum (0.1 m cable, about 1.6 Hz, computed) couples into roll / pitch, and the extra lag
+removes the phase margin that held it. Caveat: the sim damps the swing only by air drag (`LOAD_DRAG` 0.02 N/(m/s),
+about 1 % of critical at 0.1 kg, computed), so a real string with knot friction is likely better damped; this is a
+worst case.
+
+What it means for 10-06:
+- Mount the arm load rigidly (tape or a bolt to the arm), not hanging on a string, unless the swinging load is the
+  test itself. Rigid 0.1 kg + the slower actuator: 0 of 12 diverged; hanging: 9-11 of 12.
+- If it hangs, watch for a roll / pitch oscillation that grows over about 10 s and land early. That is this mode.
+- The motor lag is now the deciding unknown for every controller (K.2, and here). Measure it from the 10-03 / 10-06
+  step logs before any gain change.

@@ -1,0 +1,292 @@
+{
+ "level": 1,
+ "seeds": [
+  200,
+  201,
+  202
+ ],
+ "trajs": [
+  "hover",
+  "circle_1.0",
+  "zigzag_1.0",
+  "lemA_1.5"
+ ],
+ "div": {
+  "pid_tuned2": {
+   "W": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "A": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "K": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "D": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "WA": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "WK": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "WD": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "AK": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "AD": {
+    "hover": 2,
+    "circle_1.0": 3,
+    "zigzag_1.0": 3,
+    "lemA_1.5": 2
+   },
+   "KD": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "WAK": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "WAD": {
+    "hover": 3,
+    "circle_1.0": 3,
+    "zigzag_1.0": 3,
+    "lemA_1.5": 2
+   },
+   "WKD": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "AKD": {
+    "hover": 2,
+    "circle_1.0": 3,
+    "zigzag_1.0": 2,
+    "lemA_1.5": 3
+   },
+   "WAKD": {
+    "hover": 2,
+    "circle_1.0": 2,
+    "zigzag_1.0": 3,
+    "lemA_1.5": 3
+   }
+  },
+  "mrac_sataware": {
+   "W": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "A": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "K": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "D": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "WA": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "WK": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "WD": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "AK": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "AD": {
+    "hover": 3,
+    "circle_1.0": 3,
+    "zigzag_1.0": 3,
+    "lemA_1.5": 3
+   },
+   "KD": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "WAK": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "WAD": {
+    "hover": 3,
+    "circle_1.0": 3,
+    "zigzag_1.0": 2,
+    "lemA_1.5": 2
+   },
+   "WKD": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "AKD": {
+    "hover": 2,
+    "circle_1.0": 3,
+    "zigzag_1.0": 3,
+    "lemA_1.5": 3
+   },
+   "WAKD": {
+    "hover": 2,
+    "circle_1.0": 3,
+    "zigzag_1.0": 3,
+    "lemA_1.5": 3
+   }
+  },
+  "mrac5_xyz": {
+   "W": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "A": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "K": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "D": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "WA": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "WK": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "WD": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "AK": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "AD": {
+    "hover": 3,
+    "circle_1.0": 3,
+    "zigzag_1.0": 3,
+    "lemA_1.5": 3
+   },
+   "KD": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "WAK": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "WAD": {
+    "hover": 3,
+    "circle_1.0": 3,
+    "zigzag_1.0": 3,
+    "lemA_1.5": 3
+   },
+   "WKD": {
+    "hover": 0,
+    "circle_1.0": 0,
+    "zigzag_1.0": 0,
+    "lemA_1.5": 0
+   },
+   "AKD": {
+    "hover": 3,
+    "circle_1.0": 2,
+    "zigzag_1.0": 3,
+    "lemA_1.5": 2
+   },
+   "WAKD": {
+    "hover": 1,
+    "circle_1.0": 3,
+    "zigzag_1.0": 2,
+    "lemA_1.5": 3
+   }
+  }
+ }
+}
