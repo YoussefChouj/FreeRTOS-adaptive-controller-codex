@@ -331,6 +331,8 @@ CTRLS = {
     'pidg_xyz_rob': (None, 'pidg_xyz_rob', False),
     # item H (doc sec O): the no-tuning layers of ctrl_h0 on the nominally tuned PID (every parameter is pid_nom's)
     'h0_sep_nom': ('ctrl_h0:H0_Sep', 'pid_tuned2_nom', True),
+    # item H step 2 (doc sec P): h0_sep_nom plus ctrl_g's attitude layer at a derived rate (still no tuned knob)
+    'h0g_nom': ('ctrl_h0g:H0G', 'pid_tuned2_nom', True),
 }
 
 

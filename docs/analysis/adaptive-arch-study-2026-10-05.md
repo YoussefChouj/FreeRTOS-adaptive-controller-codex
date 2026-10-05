@@ -12,7 +12,7 @@ for post-demo branches, nothing here is flashed or merged into firmware behaviou
 | E | Fully coupled 6-axis MRAC: RAM budget, firmware copy on a branch | RAM budget measured, below; branch PROPOSED |
 | F | Systematic cascaded-PID tuning | measured, sec M: robust tune does not help PID (35.3 % div); helps MRAC5 (30.7 -> 22.0 %) |
 | G | MRAC derived for (augmenting) the PID loop | measured, sec N: PID-term MRAC on the tuned-PID reference is nearly inert (29.6-30.7 % div for gamma_g 0-10) |
-| H | Thesis three-layer design: physics features, frequency gating, task priors | step 1 measured, sec O: no-knob x/y/z layers on pid_nom: ladder div 33.1 -> 24.2 %, nominal p90 0.086 -> 0.083 m |
+| H | Thesis three-layer design: physics features, frequency gating, task priors | steps 1-2 measured, secs O-P: no-knob layers on pid_nom: ladder div 33.1 -> 24.2 % (x/y/z) -> 19.6 % (+ derived attitude layer), nominal p90 0.083 m |
 | I | Position estimate from optical flow + IMU: roam-and-return bias, state of the art | measured, below |
 | K | Stress ladder (wind, loads, motor loss, mismatch, actuator, speed; L1-L4) after the operator's critique | measured, below |
 | L | Richer coupled x/y bases (RBF, 2-layer NN) on MRAC5_XYZ | measured, below: no gain, dropped |
@@ -912,3 +912,49 @@ loop. All controllers break at L3 (0.3 kg at the arm tip in this model). Sec J's
 the rigid mount for 10-06 (K) stands. Firmware port: PROPOSED, on a branch after the demo, with sec E's RAM budget
 (three layers, no attitude MRAC).
 
+## P. Item H step 2: derived-rate attitude layer on top of sec O (`sim/bench/ctrl_h0g.py`, `stress.py` tag `h0g_nom`)
+
+Question: sec O left arm_load, actuator and combo on the attitude loop. Does ctrl_g's PID-term roll / pitch layer
+(sec N) help once its rate is derived like the outer ones instead of tuned?
+
+Design (no tuned parameter; every parameter is pid_nom's): H0G = sec O's x, y, z layers (rates 0.626 / 2.457 /s) plus
+ctrl_g's attitude layer with gamma_g = 1 / (SEP tau_r S_r), SEP 10, tau_r = (1 + B_RP Kd DT_IN) / (B_RP Kp) = 0.0477 s
+(B_RP 8.0 dps2/U, tuned rate PID; actuator lag ignored), S_r = ANG_PR Umax = 200 dps = 3.49 rad/s, so
+gamma_g = 0.601. `test_ctrl_h0g.py`: with gamma_g zeroed H0G reproduces H0_Sep (max position difference < 1e-9 m).
+
+Same ladder, 459 rows (57 s):
+
+| Controller | Tuned knobs | Ladder div | Nominal p90 [m] |
+|---|---|---|---|
+| pid_nom | PID set | 33.1 % | 0.086 |
+| mrac5_xyz_rob (sec M) | PID set + gamma, mu, gamma_o | 22.0 % | 0.131 |
+| h0_sep_nom (sec O) | PID set only | 24.2 % | 0.083 |
+| h0g_nom | PID set only | 19.6 % | 0.083 |
+
+Divergence % per level L0..L4 where the two differ (break = first level >= 25 %):
+
+| axis | h0_sep_nom | h0g_nom |
+|---|---|---|
+| arm_load | 0 0 0 42 100 (break 3) | 0 0 0 0 25 (break 4) |
+| combo | 0 92 100 100 100 | 0 33 100 100 100 |
+| speed | 0 0 33 100 100 (break 2) | 0 0 0 100 100 (break 3) |
+| motor_loss | 0 0 0 0 8 | 0 0 0 0 0 |
+| actuator | 0 0 92 100 100 | 0 8 100 100 100 |
+
+p90 RMSE where it moved: arm_load L3 div -> 0.318 m; motor_loss L3 / L4 0.127 / 0.475 -> 0.099 / 0.195 m; actuator
+L1 0.080 -> 0.331 m (one row of 12 diverged); all other cells within 0.015 m.
+
+Findings:
+1. The attitude layer earns its place here, unlike on sec N's base: arm_load L3 is now held (0 % diverged, p90 0.318 m)
+   and its break moves from L3 to L4; combo L1 drops 92 -> 33 %. Sec N's sweep ran with gamma_o 0.0277 (x/y/z layers
+   nearly off) and without the F1X patch, so the two results are not in conflict; which of the two differences matters
+   is not measured.
+2. Cost: actuator L1 gets worse (0 -> 8 %, p90 0.331 m). Adapting against a lagging actuator is the known failure mode;
+   SatAware's mu term is the candidate fix (PROPOSED, not run).
+3. Sensitivity of the result to gamma_g (x0.5, x2) is not measured: one point only, so "no tuning" is not yet
+   "insensitive". NEXT: sweep gamma_g around 0.601 on this base before calling it the demo-2 candidate.
+
+Verdict: h0g_nom is the best ladder result so far (19.6 %) at the PID's nominal accuracy, with no knob beyond the PID's.
+Pending the sensitivity sweep it replaces h0_sep_nom as the demo-2 adaptive candidate in simulation. Sec J's
+350 g / 500 g figures were measured on other controllers and are not re-run here. Firmware port: PROPOSED, branch only,
+after the demo.
