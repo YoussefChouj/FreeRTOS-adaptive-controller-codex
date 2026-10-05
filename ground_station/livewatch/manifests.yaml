@@ -512,6 +512,7 @@ manifests:
       velocity the EKF uses (of2_*_fix, send_data.c) should stay ~0; raw pixel flow (of0_*) should follow the gyro.
       Fit raw = k * gyro per axis for the module gyro (gyr_data_*) and the FC gyro (Gyro_*_Real): gain, lag, offset and
       axis mapping say whether a PX4-style FC-gyro compensation (EKF2_OF_GYR_SRC = vehicle IMU) would remove the bias.
+      Fit the CSV: python -m ground_station.analysis.ofcal <csv>.
     hz: 20
     vars:
       - ano_of.of0_dx
