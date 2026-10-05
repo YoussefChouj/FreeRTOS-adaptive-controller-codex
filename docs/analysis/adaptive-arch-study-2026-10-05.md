@@ -12,7 +12,7 @@ for post-demo branches, nothing here is flashed or merged into firmware behaviou
 | E | Fully coupled 6-axis MRAC: RAM budget, firmware copy on a branch | RAM budget measured, below; branch PROPOSED |
 | F | Systematic cascaded-PID tuning | measured, sec M: robust tune does not help PID (35.3 % div); helps MRAC5 (30.7 -> 22.0 %) |
 | G | MRAC derived for (augmenting) the PID loop | measured, sec N: PID-term MRAC on the tuned-PID reference is nearly inert (29.6-30.7 % div for gamma_g 0-10) |
-| H | Thesis three-layer design: physics features, frequency gating, task priors | steps 1-2 measured, secs O-P: no-knob layers on pid_nom: ladder div 33.1 -> 24.2 % (x/y/z) -> 19.6 % (+ derived attitude layer; 19.2-20.9 % for its rate x0.25-x4, P.1), nominal p90 0.083 m |
+| H | Thesis three-layer design: physics features, frequency gating, task priors | steps 1-2 measured, secs O-P: no-knob layers on pid_nom: ladder div 33.1 -> 24.2 % (x/y/z) -> 19.6 % (+ derived attitude layer; 19.2-20.9 % for its rate x0.25-x4, P.1), nominal p90 0.083 m + sec Q: arm-load limit ~350 -> ~450 g vs pid_nom |
 | I | Position estimate from optical flow + IMU: roam-and-return bias, state of the art | measured, below |
 | K | Stress ladder (wind, loads, motor loss, mismatch, actuator, speed; L1-L4) after the operator's critique | measured, below |
 | L | Richer coupled x/y bases (RBF, 2-layer NN) on MRAC5_XYZ | measured, below: no gain, dropped |
@@ -974,3 +974,39 @@ sensitive cell is the demo axis at L4 (arm_load), best between x0.5 and x2, whic
 L4 cells that move: speed 100 -> 67 % at x4, mass_step 8 -> 17 % at x4, motor_loss 8 % only at x0.25. So the derived
 gamma_g is not a lucky point: "no tuning" holds on this ladder within a factor of 2. h0g_nom stays the demo-2 adaptive
 candidate in simulation.
+
+## Q. Demo load cases on pid_nom vs h0g_nom (`python sim/bench/demo_loads.py [--sweep] --stress-tags pid_nom h0g_nom`)
+
+Sec J's rigid-load cases (yaw 1003, 10 seeds 2000-2009, hover and zig-zag 0.2 m/s), now on the two stress-ladder
+controllers: pid_nom (pid_tuned2_nom set + F1x rows) and h0g_nom (same set, plus the sec P layers; no other knob).
+Results: `sim/bench/results/demo_loads_h0g.json`, `demo_loads_h0g_sweep.json`.
+
+Median RMSE over non-diverged seeds [m] / diverged seeds of 10 (hover | zig-zag):
+
+| case | pid_nom | h0g_nom |
+|---|---|---|
+| noload | 0.031/0 \| 0.041/0 | 0.027/0 \| 0.041/0 |
+| pad500 | 0.045/4 \| 0.051/4 | 0.038/0 \| 0.041/0 |
+| arm250 (m0..m3, range) | 0.039-0.048/0 \| 0.045-0.061/0 | 0.028-0.038/0 \| 0.033-0.047/0 |
+| arm350 m0 / m2 | 0.050 / 0.047, 0 div \| 0.062 / 0.066 | 0.039 / 0.037, 0 div \| 0.038 / 0.049 |
+| arm400 m0 | 0.129/1 \| 0.118/2 | 0.057/0 \| 0.059/0 |
+| arm400 m2 | 0.052/1 \| 0.067/1 | 0.040/0 \| 0.051/0 |
+| arm450 m0 | -/10 \| 0.375/9 | 0.099/0 \| 0.117/0 |
+| arm450 m2 | 0.244/7 \| 0.269/7 | 0.069/0 \| 0.088/0 |
+| arm500 m0 | -/10 \| -/10 | 0.133/4 \| 0.155/4 |
+| arm500 m2 | -/10 \| -/10 | 0.104/2 \| 0.122/2 |
+
+Max tilt at arm500 (hover): pid_nom 41.9 / 6.7 deg (m0 / m2), h0g_nom 17.7 / 30.2 deg.
+
+Findings:
+1. The simulated arm-load limit moves from about 350 g (pid_nom: first divergences at 400 g, 7-10 of 10 at 450 g) to
+   about 450 g (h0g_nom: 0 of 10 at 450 g, 2-4 of 10 at 500 g). For the 250-500 g demo this is the asymmetric-load
+   result the demo is meant to show, in simulation.
+2. Below the limit h0g_nom tracks better on every arm case: median RMSE 7-39 % lower at 250-350 g (most cells
+   20-35 %), while noload is close (0.027 vs 0.031 m hover, equal on zig-zag).
+3. pad500 (centred load) costs pid_nom 4 of 10 seeds; h0g_nom none.
+
+Caveats: rigid load, no pendulum mode (sec J); pid_nom is the tuned nominal set, not the flashed test-split set that sec
+J's 350 g / 500 g figures used; h0g_nom is NOT in the firmware. For 10-06 the flashed controllers and sec J stand;
+h0g_nom's firmware port (three outer layers + one attitude layer, sec E RAM budget) is PROPOSED on a branch after the
+demo, and its demo 2 (load + trajectory vs PID) would follow that port.
