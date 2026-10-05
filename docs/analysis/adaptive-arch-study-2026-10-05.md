@@ -11,7 +11,7 @@ for post-demo branches, nothing here is flashed or merged into firmware behaviou
 | D | x/y adaptation: 6 decoupled layers plus coupling terms | measured, below: yaw layer harmful; x, y + z layers best so far (0.0631 vs PID 0.0775) |
 | E | Fully coupled 6-axis MRAC: RAM budget, firmware copy on a branch | RAM budget measured, below; branch PROPOSED |
 | F | Systematic cascaded-PID tuning | measured, sec M: robust tune does not help PID (35.3 % div); helps MRAC5 (30.7 -> 22.0 %) |
-| G | MRAC derived for (augmenting) the PID loop | planned |
+| G | MRAC derived for (augmenting) the PID loop | measured, sec N: PID-term MRAC on the tuned-PID reference is nearly inert (29.6-30.7 % div for gamma_g 0-10) |
 | H | Thesis three-layer design: physics features, frequency gating, task priors | planned; design constraint below |
 | I | Position estimate from optical flow + IMU: roam-and-return bias, state of the art | measured, below |
 | K | Stress ladder (wind, loads, motor loss, mismatch, actuator, speed; L1-L4) after the operator's critique | measured, below |
@@ -777,3 +777,83 @@ Findings (all measured in this run):
 
 Verdict: keep mrac5_xyz_rob as the stress-ladder MRAC reference and pid_nom as the PID reference (the better of the two).
 For the demo the trade is explicit: rob gains survive more but track calm hover about 5 cm worse at p90.
+
+## N. MRAC derived for the PID loop (`sim/bench/ctrl_g.py`, item G)
+
+Question: the robust tune (sec M) drove MRAC5_XYZ's inner attitude gamma to its lower bound (0.0316, mu 0), so the
+inner MRAC was switched off. Two read-off causes: `ctrl_mrac.RefModel` builds its reference from sim_coupled's default
+PID gains, not the tuned ones, so the reference is wrong even on the nominal plant; and the S6 features already carry
+the total PID output (un = U_pid / UN_N), so "adapt a gain on the PID output" is not new. G fixes both:
+
+- reference model = the rate and angle PIDs as tuned (the reference model's roll / pitch PIDs share the tuned gain dicts);
+- the adapted parameters are the rate PID's own terms, per roll / pitch axis th = [bias, P, I, D]:
+  U = U_pid - UN_N th'phi, phi = [1, Up, Ui, Ud] / UN_N. The result is always the firmware PID with gains (1 - th)
+  x tuned plus a torque bias, boxed to [0.5, 2] x tuned and +-0.3 UN. An effectiveness loss (kt_mismatch,
+  motor_loss) has an exact match th_P = th_I = th_D; an arm load has the bias.
+- law, error s and leakage are MRAC_SatAware's; gamma_g replaces the dead inner gamma, so the knob count is unchanged.
+  x, y, z layers are MRAC5_XYZ's. `test_ctrl_g.py`: gamma_g = 0 reproduces MRAC5_XYZ with gamma = 0 to 1e-9; the
+  recorded terms rebuild the rate PID output to 1e-9 where the output clip is inactive; per-row parameters stay boxed.
+
+Protocol: `tune_robust.py pidg_xyz` (sec M's rows, tuner and budget), then the 459-row ladder. Then `ablate.py`: hold
+every other tuned parameter fixed and sweep gamma_g alone over 4 decades, so "the tuner switched it off" and "it
+cannot help" are told apart.
+
+| Tag | Train J | Ladder divergence | Nominal p90 RMSE | Wall time (tune) |
+|---|---|---|---|---|
+| pid_nom (K.5) | - | 33.1 % | 0.086 m | - |
+| mrac5_xyz_rob (M) | 0.1368 | **22.0 %** | 0.131 m | 882 s |
+| pidg_xyz_rob | **0.1290** | 29.6 % | 0.130 m | 900 s |
+
+Break level (first level with >= 25 % diverged; L0..L4 divergence %):
+
+| axis | pid_nom | mrac5_xyz_rob | pidg_xyz_rob |
+|---|---|---|---|
+| mass_step | 0 0 0 67 100 (3) | 0 0 0 0 0 (>4) | 0 0 0 8 92 (4) |
+| swing_load | 0 0 0 17 75 (4) | 0 0 0 0 0 (>4) | 0 0 0 0 8 (>4) |
+| arm_load | 0 0 0 25 100 (3) | 0 0 0 58 100 (3) | 0 0 8 92 100 (3) |
+| motor_loss | 0 0 0 0 0 (>4) | 0 0 0 0 25 (4) | 0 0 0 8 50 (4) |
+| kt_mismatch | 0 0 0 50 100 (3) | 0 0 0 0 8 (>4) | 0 0 0 0 92 (4) |
+| actuator | 0 0 92 100 100 (2) | 0 0 8 100 100 (3) | 0 0 25 100 100 (2) |
+| combo | 0 75 100 100 100 (1) | 0 75 100 100 100 (1) | 0 67 100 100 100 (1) |
+| speed | 0 0 33 100 100 (2) | 0 0 33 100 100 (2) | 0 0 100 100 100 (2) |
+
+wind_gust (all 0 0 0 0 8) and inertia (all 0) are the same for the three.
+
+gamma_g sweep, the other pidg_xyz_rob parameters fixed (`results/ablate_pidg_xyz_rob_gamma_g.json`):
+
+| gamma_g | 0 | 0.0034 (tuned) | 0.1 | 1 | 10 |
+|---|---|---|---|---|---|
+| Ladder divergence | 30.5 % | 29.8 % | 30.3 % | 30.7 % | 29.6 % |
+| Nominal p90 RMSE | 0.138 m | 0.131 m | 0.135 m | 0.134 m | 0.133 m |
+| motor_loss L4 div | 75 % | 50 % | 67 % | 58 % | 25 % |
+
+Findings (all measured in this run):
+
+1. The tuner again drove the adaptation rates near their floors: gamma_g 0.0034 (range 1e-3..100) and gamma_o 0.0277
+   (range 0.01..10; mrac5_xyz_rob kept 1.155). With the right reference model the attitude layer is still not used.
+2. The sweep shows why: over four decades of gamma_g the ladder divergence moves by 1.1 points (5 of 459 rows) and
+   nominal p90 by 7 mm. Every L4 cell except motor_loss is identical across the sweep. The only axis that responds is
+   motor_loss L4 (75 % -> 25 % at gamma_g 10), the one case the parameterisation matches exactly (an effectiveness loss).
+3. The cells that break everyone (arm_load L3, actuator L2-L3, combo L1, speed L2) do not move with gamma_g.
+   Rescheduling the rate PID's gains or adding a torque bias does not fix them; the limits there are actuator lag and
+   saturation, which sec K.6 and sec L already pointed to.
+4. pidg_xyz_rob has the lowest train J of the robust tunes (0.1290 vs 0.1368) but a worse ladder (29.6 % vs 22.0 %).
+   The difference is the outer layers, not the attitude layer. Sweeping gamma_o alone on pidg_xyz_rob
+   (`results/ablate_pidg_xyz_rob_gamma_o.json`, other parameters fixed):
+
+   | gamma_o | 0.0277 (tuned) | 0.3 | 1.155 (mrac5_xyz_rob's) |
+   |---|---|---|---|
+   | Ladder divergence | 30.3 % | 28.8 % | 26.6 % |
+   | Nominal p90 RMSE | 0.132 m | 0.151 m | 0.198 m |
+   | mass_step / kt_mismatch / motor_loss L4 div | 92 / 92 / 42 % | 67 / 67 / 58 % | 0 / 0 / 67 % |
+
+   The x, y, z layers carry the mass and thrust-coefficient robustness, at a nominal cost (p90 +66 mm). The training
+   rows (L1-L2) never reach the L4 cases where the layers pay off, so the tuner trades them away for nominal accuracy.
+   A single-seed train J does not rank the controllers the way the held-out ladder does.
+
+Verdict: G is implemented and tested, and it does not earn a place. Augmenting the cascaded PID's rate-loop terms
+leaves the ladder unchanged except for motor loss, so the inner-loop adaptation question is closed for this plant
+model. Keep MRAC5_XYZ's x, y, z layers (the part that measurably helps) and treat actuator lag and saturation as the
+remaining limit (allocation / rate limits, not adaptation). H should build on the x, y, z layers with gamma_o derived,
+not tuned.
+

@@ -306,7 +306,8 @@ def build():
 
 
 # ------------------------------------------------------------------ controllers
-# tag: (class spec or None = from results/<src>_test.json, params source, firmware F1X integral patch)
+# tag: (class spec, params source or None = class defaults, firmware F1X integral patch); spec None = the class in the
+# source file (results/<src>_test.json, or <src>_tune.json for _nom / _rob sources)
 CTRLS = {
     'fw_pid': ('fwpid:FwPID', None, True),               # firmware gains as flashed: no tuning at all
     'pid_tuned2': (None, 'pid_tuned2', True),            # CMA-tuned on the scen families (oracle for them)
@@ -325,6 +326,11 @@ CTRLS = {
     # tune_robust.py (doc sec M, item F): same budget on disturbed training rows (L1-L2, seed 300), read from <src>_tune.json
     'pid_rob': (None, 'pid_tuned2_rob', True),
     'mrac5_xyz_rob': (None, 'mrac5_xyz_rob', False),
+    # ctrl_g.py (doc sec N, item G): PID-term MRAC on the tuned-PID reference model; tuned as above
+    'pidg_xyz': ('ctrl_g:PIDG_XYZ', None, False),
+    'pidg_xyz_rob': (None, 'pidg_xyz_rob', False),
+    # item H (doc sec O): the no-tuning layers of ctrl_h0 on the nominally tuned PID (every parameter is pid_nom's)
+    'h0_sep_nom': ('ctrl_h0:H0_Sep', 'pid_tuned2_nom', True),
 }
 
 
@@ -333,7 +339,7 @@ def make(tag, B):
     params = None
     if src:
         st = json.load(open(f'results/{src}_tune.json' if src.endswith(('_nom', '_rob')) else f'results/{src}_test.json'))
-        spec, params = st['ctrl'], {k: float(v) for k, v in st['params'].items()}
+        spec, params = spec or st['ctrl'], {k: float(v) for k, v in st['params'].items()}   # spec given: that class, src's params
     ang, rate = fwpid.ANG_PR, fwpid.RATE_PR
     try:
         if f1x:
