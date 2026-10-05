@@ -14,9 +14,7 @@ passes when it builds and exits 0. Exit 1 if any test fails. Run from anywhere; 
 """
 from __future__ import annotations
 
-import hashlib
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -24,15 +22,13 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import exe_cache  # noqa: E402  (tools/exe_cache.py: built exes are cached by content)
+
 REPO = Path(__file__).resolve().parents[1]
 # Rows build and run in parallel (gcc and the test exe are separate processes). Capped at 4: the lab laptop's
 # AC adapter drops under full load. HOST_TESTS_JOBS=1 gives the old serial run.
 JOBS = int(os.environ.get("HOST_TESTS_JOBS", min(4, os.cpu_count() or 1)))
-# Built exes are kept here, named by a hash of gcc, the flags and the content of every source and header the row
-# compiles (gcc -MM). On this host the first run of a new .exe is held by the antivirus scan (measured: pid_guards
-# 27-50 s first run, 0.47 s after), so an unchanged row reruns its scanned exe. HOST_TESTS_CACHE=0 = fresh temp build.
-CACHE = REPO / ".cache" / "host_tests"
-CACHE_ON = os.environ.get("HOST_TESTS_CACHE", "1") != "0"
 
 W = ["-Wall", "-Wextra"]
 STUBS = ["-IAPI/tests/stubs", "-IAPI"]
@@ -71,37 +67,13 @@ def _tail(text: str, n: int = 12) -> str:
     return "\n".join("    " + line for line in text.strip().splitlines()[-n:])
 
 
-def _key(gcc: str, ident: str, row: list[str], args: list[str], src: Path) -> str:
-    """Hash of gcc, the row as written and every file it compiles; "" if gcc -MM fails (the build reports it)."""
-    dep = subprocess.run([gcc, *args, "-MM"], cwd=REPO, capture_output=True, text=True)
-    if dep.returncode != 0:
-        return ""
-    h = hashlib.sha256((ident + "\0" + "\0".join(row)).encode())
-    for tok in re.split(r"(?<!\\)\s+", dep.stdout.replace("\\\n", " ")):
-        if tok and not tok.endswith(":"):
-            path = tok.replace("\\ ", " ")
-            h.update(("\0" + path.replace(src.as_posix(), "{src}") + "\0").encode())
-            h.update((REPO / path).read_bytes())
-    return h.hexdigest()[:16]
-
-
-def run_one(gcc: str, ident: str, name: str, sources: list[str], flags: list[str], out_dir: Path) -> tuple[bool, bool, str]:
+def run_one(gcc: str, name: str, sources: list[str], flags: list[str], out_dir: Path) -> tuple[bool, bool, str]:
     """Build (unless cached) and run one row; return (passed, built, report line). Rows share only the {src} copy."""
     src = out_dir / "src"
     args = [a.replace("{src}", src.as_posix()) for a in [*flags, *sources]]
-    key = _key(gcc, ident, [*flags, *sources], args, src) if CACHE_ON else ""
-    exe = CACHE / f"{name}_{key}.exe" if key else out_dir / f"{name}.exe"
-    built = not exe.exists()
-    if built:
-        tmp = exe.with_name(f"{name}_{os.getpid()}.tmp.exe") if key else exe
-        build = subprocess.run([gcc, *args, "-lm", "-o", str(tmp)], cwd=REPO, capture_output=True, text=True)
-        if build.returncode != 0:
-            return False, True, f"FAIL {name}: build\n{_tail(build.stderr)}"
-        if key:
-            os.replace(tmp, exe)
-            for old in CACHE.glob(f"{name}_*.exe"):     # this row's older builds (exact name: mrac_inputs != _rbf)
-                if old != exe and re.fullmatch(re.escape(name) + r"_[0-9a-f]{16}\.exe", old.name):
-                    old.unlink(missing_ok=True)
+    ok, exe, built, stderr = exe_cache.build(gcc, name, args, out_dir, {src: "{src}"})
+    if not ok:
+        return False, True, f"FAIL {name}: build\n{_tail(stderr)}"
     try:
         res = subprocess.run([str(exe)], cwd=REPO, capture_output=True, text=True, timeout=300)
     except subprocess.TimeoutExpired:
@@ -217,14 +189,12 @@ def main(argv: list[str]) -> int:
         return 1
     rows = [r for r in HOST_TESTS if not argv or any(a in r[0] for a in argv)]
     failed, n_built = [], 0
-    ident = gcc + "\0" + subprocess.run([gcc, "--version"], capture_output=True, text=True).stdout
-    CACHE.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp, ThreadPoolExecutor(JOBS) as pool:
         (Path(tmp) / "src").mkdir()
         for f in (REPO / "API").glob("mrac*.[ch]"):
             shutil.copy2(f, Path(tmp) / "src" / f.name)
         # map() yields in row order, so the report reads the same as a serial run
-        for (name, _, _), (ok, built, line) in zip(rows, pool.map(lambda r: run_one(gcc, ident, *r, Path(tmp)), rows)):
+        for (name, _, _), (ok, built, line) in zip(rows, pool.map(lambda r: run_one(gcc, *r, Path(tmp)), rows)):
             print(line, flush=True)
             n_built += built
             if not ok:

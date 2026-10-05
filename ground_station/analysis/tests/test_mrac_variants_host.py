@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from ground_station.analysis.mrac_variants import VARIANT_FIELDS
+from tools import exe_cache
 
 REPO = Path(__file__).resolve().parents[3]
 API = REPO / "API"
@@ -37,14 +38,14 @@ def build(tmp_path_factory):
 
     def get(variant: int) -> Path:
         if variant not in bins:
-            exe = out / f"host_v{variant}.exe"
-            cmd = ["gcc", "-std=c99", "-O1", "-ffp-contract=off", "-Wall", "-Wextra",
-                   f"-DMRAC_VARIANT={variant}", str(DRIVER), *map(str, sorted(src.glob("mrac*.c"))),
-                   "-I", str(src), "-I", str(API / "tests" / "stubs"), "-lm", "-o", str(exe)]
-            res = subprocess.run(cmd, capture_output=True, text=True)
-            assert res.returncode == 0, res.stderr
+            args = ["-std=c99", "-O1", "-ffp-contract=off", "-Wall", "-Wextra",
+                    f"-DMRAC_VARIANT={variant}", str(DRIVER), *map(str, sorted(src.glob("mrac*.c"))),
+                    "-I", str(src), "-I", str(API / "tests" / "stubs")]
+            # cached by content (tools/exe_cache.py); a hit returns the build's stderr, so the check below still runs
+            ok, exe, _built, stderr = exe_cache.build("gcc", f"mrac_variants_v{variant}", args, out, {src: "{src}"})
+            assert ok, stderr
             # no warnings at all (WP-38 deleted the unused MRAC_InverseMixer stub, the one exception before)
-            warnings = [ln for ln in res.stderr.splitlines() if "warning:" in ln]
+            warnings = [ln for ln in stderr.splitlines() if "warning:" in ln]
             assert not warnings, "\n".join(warnings)
             bins[variant] = exe
         return bins[variant]
