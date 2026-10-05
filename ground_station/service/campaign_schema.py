@@ -68,6 +68,7 @@ class Experiment:
     scenario_src: Any = None
     scenario_args: dict[str, Any] = field(default_factory=dict)
     log_plan: dict[str, Any] = field(default_factory=dict)
+    go_before: str = ""  # fly mode: stop for an operator go before this experiment, with this instruction
 
 
 @dataclass(frozen=True)
@@ -128,6 +129,8 @@ def _experiment_dict(exp: Experiment) -> dict[str, Any]:
         out["log_plan"] = dict(exp.log_plan)
     out["capture"] = exp.capture
     out["repeats"] = exp.repeats
+    if exp.go_before:
+        out["go_before"] = exp.go_before
     return out
 
 
@@ -301,6 +304,7 @@ def parse_campaign(data: dict) -> Campaign:
         else:
             allowed_exp_keys = {
                 "name", "shape", "params", "profile", "capture", "repeats", "scenario", "scenario_args", "log_plan",
+                "go_before",
             }
             seen_exp_names: set[str] = set()
             scenarios: dict[int, Scenario] = {}
@@ -342,6 +346,8 @@ def parse_campaign(data: dict) -> Campaign:
                         problems.append(f"{exp_path}.{req}: missing required key")
                 if "log_plan" in exp:
                     problems += [f"{exp_path}.log_plan: {p}" for p in check_log_plan(exp["log_plan"])]
+                if "go_before" in exp and not (isinstance(exp["go_before"], str) and exp["go_before"].strip()):
+                    problems.append(f"{exp_path}.go_before: must be a non-empty string (the operator instruction)")
 
                 # Name
                 if "name" in exp:
@@ -512,6 +518,7 @@ def parse_campaign(data: dict) -> Campaign:
             "capture": str(exp["capture"]),
             "repeats": int(exp["repeats"]),
             "log_plan": dict(exp.get("log_plan", {})),
+            "go_before": str(exp.get("go_before", "")).strip(),
         }
         if "scenario" in exp:
             experiments_list.append(

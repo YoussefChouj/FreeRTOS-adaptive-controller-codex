@@ -88,6 +88,9 @@ same path and pack. A reply with `notice: 8081 restarted` means the runner state
   the estimate (worst measured 1.35 cm/s airborne, closures up to 2.1 m on 10-03). Ask the operator to disarm,
   set the drone on the pad marker nose to the marked wall, note how far it had landed from the marker, and
   re-arm by RC (arming re-zeroes the origin); then the go as above.
+- PAUSED with an experiment's `go_before` text (e.g. a load change in `asym_load_*.yaml`): read the text to
+  the operator word for word, wait until they say it is done (note the load mass and arm they report), then
+  the go as above. It stops once, before the first repeat of that experiment.
 - `operator_needed`, `arm_refused`, `operator_stop`, `gate_refused` or `error`: read `reason` (the same text is
   in `banner`), find it in the failure-mode table, tell the operator, and ask whether to relaunch the remaining
   flights (a new launch copy without the flown experiments) or end here. Never relaunch on your own.

@@ -522,6 +522,8 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
                 ok, why = False, (f"re-seat: origin may have walked {drift_m:.2f} m (budget {deps.drift_budget_m:.2f} m, "
                                   f"{OF_DRIFT_CM_S} cm/s worst flow bias). Disarm, put the drone on the pad marker, "
                                   f"re-arm by RC (arming re-zeroes the origin)")
+            if nxt is not None and nxt is not exp and nxt.go_before:
+                ok, why = False, (nxt.go_before if ok else f"{why}; also: {nxt.go_before}")
             report = _control_report(deps, campaign, flights)
             if report:
                 return report

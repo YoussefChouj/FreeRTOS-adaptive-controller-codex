@@ -1,0 +1,67 @@
+# Asymmetric-load demo (user, 2026-10-05): can adaptive control hold a 250-500 g load that is off-centre or swinging?
+# Twin campaigns, identical flights: asym_load_pid.yaml (cascaded PID) and asym_load_mrac.yaml (MRAC V2
+# saturation-aware on roll/pitch/yaw, the best firmware variant on the bench: test median 0.0726 vs PID 0.0775).
+# Fly PID first with one load mass, then MRAC with the same mass on the same packs; repeat with the next mass.
+# go_before stops for an operator go before each load change (disarm, mount, note mass and arm, re-arm).
+# Closure: at every pause, note how far the drone landed from the pad marker (the origin walk, doc sec I).
+# The runner also pauses for a pad re-seat when the estimated walk passes 0.5 m (campaign_live DRIFT_BUDGET_M).
+# Zig-zag copied from payload_waypoints.yaml (not changed). Hover and path times are PROPOSED, not measured.
+campaign: asym_load_pid
+objective: "cascaded PID under no / pad-hung / one-arm load: 25 s hover then zig-zag per case"
+controller: pid
+mode: fly
+packs:
+  - P4000-1          # launch Q2 replaces this with the packs on hand
+  - P4000-2
+max_flights: 6
+experiments:
+  # log_plan: core set + velocity loops + MRAC shadow outputs (zero under PID) so both controllers log the same rows.
+  # ---- load case 1: no load (baseline for both controllers) ----
+  - name: noload_hover
+    scenario: &hover
+      scenario: asym-hover
+      description: take off to 0.8 m, hold 25 s (trim, integrator and adaptive settle), land
+      steps:
+        - takeoff: {z: 0.8}
+        - hold: {s: 25}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: &log {rate_hz: 50, groups: [velocity_loops, mrac_shadow]}
+  - name: noload_zigzag
+    scenario: &zigzag
+      scenario: asym-zigzag
+      description: 11 waypoints 0.2 m apart in x, alternating y +-0.6, corners rounded twice, 0.2 m/s at 0.8 m
+      steps:
+        - takeoff: {z: 0.8}
+        - hold: {s: 5}
+        - path:
+            shape: waypoints
+            params:
+              corner_cut: 2
+              points_m: [[-1.0, -0.6], [-0.8, 0.6], [-0.6, -0.6], [-0.4, 0.6], [-0.2, -0.6], [0.0, 0.6],
+                         [0.2, -0.6], [0.4, 0.6], [0.6, -0.6], [0.8, 0.6], [1.0, -0.6]]
+            v_cruise_mps: 0.2
+            a_max_mps2: 0.5
+            ds_m: 0.05
+        - hold: {s: 3}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: *log
+  # ---- load case 2: load under the body, hung between the landing pads (nearly symmetric, can swing) ----
+  - name: pad_hover
+    go_before: "disarm, hang the load between the landing pads under the centre (note mass, 250 or 500 g), set the drone on the pad marker, re-arm by RC"
+    scenario: *hover
+    capture: campaign
+    repeats: 1
+    log_plan: *log
+  - {name: pad_zigzag, scenario: *zigzag, capture: campaign, repeats: 1, log_plan: *log}
+  # ---- load case 3: the same load on one arm (asymmetric: a constant roll/pitch torque) ----
+  - name: arm_hover
+    go_before: "disarm, move the same load to one arm next to the motor (note which motor), set the drone on the pad marker, re-arm by RC; land with RC if it tilts or drifts on take-off"
+    scenario: *hover
+    capture: campaign
+    repeats: 1
+    log_plan: *log
+  - {name: arm_zigzag, scenario: *zigzag, capture: campaign, repeats: 1, log_plan: *log}

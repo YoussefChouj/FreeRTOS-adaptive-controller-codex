@@ -510,6 +510,19 @@ def test_fly_mode_drift_budget_pauses_for_pad_reseat(tmp_path):
     assert "PAUSED before flight 3/3: re-seat" in lines[1] and "arming re-zeroes the origin" in lines[1]
 
 
+def test_fly_mode_go_before_stops_for_the_operator_step(tmp_path):
+    """A load swap needs the drone on the ground and an operator go: go_before turns auto-next into a pause."""
+    path, deps, clock = _fly_rig(tmp_path)
+    p = tmp_path / "fly.yaml"
+    p.write_text(p.read_text().replace("{name: hover_z130,", "{name: hover_z130, go_before: mount the 250 g load on arm 1,"))
+    report = run_campaign(path, deps)
+    assert report.status == "complete", report.reason
+    assert deps.wait_for_go.call_count == 2
+    lines = [c.args[0] for c in deps.say.call_args_list]
+    assert "auto-next OK -> flight 2/3" in lines[0]
+    assert "PAUSED before flight 3/3: mount the 250 g load on arm 1" in lines[1]
+
+
 def test_fly_mode_drift_budget_off_by_default(tmp_path):
     path, deps, clock = _fly_rig(tmp_path)
     assert deps.drift_budget_m == 0.0

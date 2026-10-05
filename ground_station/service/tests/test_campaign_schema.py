@@ -513,3 +513,13 @@ def test_9_log_plan_is_checked_per_experiment():
         parse_campaign(data)
     problems = [p for p in exc_info.value.problems if ".log_plan: " in p]
     assert len(problems) == 2 and all(p.startswith("experiments.0.log_plan: ") for p in problems)
+
+
+def test_10_asym_load_twins_fly_the_same_flights():
+    # PID vs MRAC demo: only the label and header differ; go_before stops for each load change and round-trips.
+    root = Path(__file__).resolve().parent.parent / "campaigns"
+    pid, mrac = (load_campaign(root / f"asym_load_{t}.yaml") for t in ("pid", "mrac"))
+    assert (pid.controller, mrac.controller) == ("pid", "mrac_v2")
+    assert pid.experiments == mrac.experiments
+    assert [e.name for e in pid.experiments if e.go_before] == ["pad_hover", "arm_hover"]
+    assert parse_campaign(pid.to_dict()) == pid
