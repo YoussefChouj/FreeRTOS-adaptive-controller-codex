@@ -6,7 +6,10 @@ from pathlib import Path
 import pytest
 
 SCRIPT = Path(__file__).resolve().parent / "install-hooks.sh"
-pytestmark = pytest.mark.skipif(shutil.which("git") is None or shutil.which("bash") is None, reason="git/bash missing")
+# The PATH bash (Git Bash on Windows). A bare "bash" goes through CreateProcess, which searches System32 first and
+# starts WSL bash there: a Linux git, and 5-20 s to boot WSL after it idles (measured 2026-10-05).
+BASH = shutil.which("bash")
+pytestmark = pytest.mark.skipif(shutil.which("git") is None or BASH is None, reason="git/bash missing")
 
 
 def _repo(tmp_path: Path) -> Path:
@@ -17,7 +20,7 @@ def _repo(tmp_path: Path) -> Path:
 
 
 def _run(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["bash", "tools/install-hooks.sh", *args], cwd=repo, capture_output=True, text=True)
+    return subprocess.run([BASH, "tools/install-hooks.sh", *args], cwd=repo, capture_output=True, text=True)
 
 
 def test_install_is_idempotent_and_removable(tmp_path):
