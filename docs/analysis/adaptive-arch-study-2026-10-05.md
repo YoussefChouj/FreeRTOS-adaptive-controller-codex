@@ -361,3 +361,24 @@ Caveats: rigid load (a hung load's swing is not modelled); H_PAD 0.10 m is PROPO
 500 g) lies outside the cog range the controllers were tuned on; batch noise moves a case's median by 10-20 % between
 runs; F1x covers only the angle and rate integrator rows (not locx F3 or the z rows); the measured u_imb comes from 2
 flights; the bench hover calibration X2_H assumes U_IMB_NOM 430.
+
+**J addendum: the firmware's altitude adaptation (read from the code, not flown).** The bench's `mrac_sataware`
+adapts attitude only, but the firmware's MRAC also runs a z-rate axis on every tick (API/mrac.c MRAC_Control: z has
+no axis-enable flag) and adds it to the throttle under `CTRL_MRAC` (API/controller.c `mrac_correction`, times fade and
+inj_alpha). The `v2_sataware` preset does not touch z, so z flies on the MRAC_Init rows:
+
+| Row (API/mrac.c) | Value | Consequence |
+|---|---|---|
+| e = x - xm (z velocity minus reference model), grad = -e phi | load sinks the drone -> e < 0 -> bias weight grows | right sign: adds thrust |
+| bias basis gamma / limit / lower | 2.0 / 1.0 / 0.0 | bias weight in [0, 1]: thrust can only be added |
+| mrac_to_mixer (PAYLOAD_LIGHT) | 222 mixer units per unit u_ad | bias alone reaches +222 units (computed) |
+| u_max | 13.48 | not the binding limit (13.48 x 222 >> 222) |
+| e_deadzone | 0.05 m/s | no learning while the z-velocity error is under 5 cm/s |
+
+Computed reading: +500 g on the pads needs about +200 PWM over the 3050 base (sec J), the PID's Z_rate integrator gives
+at most 100, and the z bias weight can give up to +222 more. So the flight test of "MRAC handles the 500 g pad load"
+does exercise an adaptive path that exists in the firmware, unlike the bench's attitude-only model. The 5 cm/s deadzone
+means it learns during the sag transient only: expect a dip on load-up, then `mrac_state.z_rate.u_ad` settles and
+stays. Check on the no-load MRAC hover that `u_ad_z` (flight_signals.yaml) is near 0 and finite before loading. Not
+verified on the drone. Both asym_load twins log it: their `mrac_shadow` group (ground_station/livewatch/
+campaign_capture.py, MRAC_AXES includes z_rate) carries z u_ad, u_nom, u_def, e and the Theta/Whatf weights at 50 Hz.
