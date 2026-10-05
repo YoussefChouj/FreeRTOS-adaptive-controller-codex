@@ -14,6 +14,7 @@ mrac_mixer_deficit feeds V2 from the ported mixer's previous-tick values.
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import subprocess
 import sys
@@ -64,7 +65,9 @@ def build(variant: int = 0) -> Path:
     out = BUILD / f"sil_v{variant}_{tag}.exe"
     if out.exists():
         return out
-    work = BUILD / f"src_v{variant}_{tag}"
+    # Safe when several processes build at once (parallel pytest): each compiles in its own work dir and links to its
+    # own temp name, then moves it into place; a loser of the race keeps the winner's identical binary.
+    work = BUILD / f"src_v{variant}_{tag}_{os.getpid()}"
     work.mkdir(parents=True, exist_ok=True)
     for f in FIRMWARE:
         shutil.copy2(API / f, work / f)
@@ -77,7 +80,13 @@ def build(variant: int = 0) -> Path:
         obj = work / (src.stem + ".o")
         _gcc([gcc, *CFLAGS, *dfl, *extra, *inc, "-c", str(src), "-o", str(obj)])
         objs.append(str(obj))
-    _gcc([gcc, *objs, "-lm", "-o", str(out)])
+    tmp = BUILD / f"sil_v{variant}_{tag}_{os.getpid()}.exe"
+    _gcc([gcc, *objs, "-lm", "-o", str(tmp)])
+    try:
+        os.replace(tmp, out)
+    except PermissionError:                     # Windows: the winner's binary is already running
+        tmp.unlink()
+    shutil.rmtree(work, ignore_errors=True)
     return out
 
 
