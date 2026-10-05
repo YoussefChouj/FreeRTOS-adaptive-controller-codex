@@ -79,8 +79,9 @@ def ss_gain(n_pred, R, H, periods=4000):
 
 K_TOF = ss_gain(TOF_EVERY, SIG_TOF ** 2, np.array([[1.0, 0, 0]]))
 K_OF = ss_gain(OF_EVERY, SIG_OF ** 2, np.array([[0, 1.0, 0]]))
-# Butterworth IIRs as exact float64 literals of scipy.signal.butter (test_plant_filters checks every bit): importing
-# scipy.signal costs ~3 s, paid by every SIL/bench process when this module called butter at import.
+# Butterworth IIRs as exact float64 literals of scipy.signal.butter (every bit checked by test_plant_filters_are_scipy_butter
+# in sim/sil/test_sil.py): importing scipy.signal costs ~3 s, paid by every SIL/bench process when this module called
+# butter at import.
 BG_B = np.array([0.0028981946337214297, 0.00869458390116429, 0.00869458390116429, 0.0028981946337214297])
 BG_A = np.array([1.0, -2.374094743709352, 1.929355669091215, -0.5320753683120918])  # butter(3, 50 / 500): gyro 50 Hz @ 1 kHz
 BA_B = np.array([0.007820208033497191, 0.015640416066994383, 0.007820208033497191])

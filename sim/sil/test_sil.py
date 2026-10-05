@@ -14,6 +14,7 @@ import pytest
 from ground_station.autotune.design import read_pid_rows
 from sim.sil import controllers, fw, limits, metrics, engine, scenarios, validate
 from sim.sil.build import REPO
+from sim.sil import plant as sim_plant
 from sim.sil.plant import DT_C, Plant, plant_to_fw_xy
 
 pytestmark = pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not on PATH")
@@ -194,6 +195,17 @@ def test_abort_rules_fire():
     lg.p[lg.t >= 2.0, 0] += 0.6
     lg.mot[(lg.t >= 0.5) & (lg.t < 1.2), 2] = 4000
     assert set(metrics.compute(lg)["aborts"]) == {"tilt12", "pos05", "clamp4000"}
+
+
+def test_plant_filters_are_scipy_butter():
+    """sim/bench/plant.py writes its sensor IIRs as float64 literals so importing it skips scipy.signal: every bit must
+    still be the butter() design."""
+    from scipy.signal import butter
+    bp = sim_plant.bp
+    for (b, a), (order, wn) in (((bp.BG_B, bp.BG_A), (3, 50.0 / 500.0)), ((bp.BA_B, bp.BA_A), (2, 30.0 / 500.0))):
+        rb, ra = butter(order, wn)
+        assert b.dtype == rb.dtype and a.dtype == ra.dtype
+        assert np.array_equal(b, rb) and np.array_equal(a, ra)
 
 
 def _xy_goto(t):
