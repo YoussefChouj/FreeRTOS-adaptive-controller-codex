@@ -508,12 +508,16 @@ manifests:
     doc: >
       Item I calibration (docs/analysis/adaptive-arch-study-2026-10-05.md sec I, P1): is the body-y flow bias the
       module's own gyro compensation? Hand-rock test, motors off: hold the drone ~0.5 m over the textured floor and rock
-      it in roll, then pitch, keeping the flow camera over one spot. Rotation-only motion -> compensated flow (of2_*_fix)
-      should stay ~0; raw flow (of2_dx/dy) should follow the gyro. Fit raw = k * gyro per axis for the module gyro
-      (gyr_data_*) and the FC gyro (Gyro_*_Real): gain, lag, offset and axis mapping say which gyro the module trusts
-      and whether a PX4-style FC-gyro compensation (EKF2_OF_GYR_SRC = vehicle IMU) would remove the bias.
+      it in roll, then pitch, keeping the flow camera over one spot. Rotation-only motion -> the module-compensated
+      velocity the EKF uses (of2_*_fix, send_data.c) should stay ~0; raw pixel flow (of0_*) should follow the gyro.
+      Fit raw = k * gyro per axis for the module gyro (gyr_data_*) and the FC gyro (Gyro_*_Real): gain, lag, offset and
+      axis mapping say whether a PX4-style FC-gyro compensation (EKF2_OF_GYR_SRC = vehicle IMU) would remove the bias.
     hz: 20
     vars:
+      - ano_of.of0_dx
+      - ano_of.of0_dy
+      - ano_of.of1_dx
+      - ano_of.of1_dy
       - ano_of.of2_dx
       - ano_of.of2_dy
       - ano_of.of2_dx_fix
