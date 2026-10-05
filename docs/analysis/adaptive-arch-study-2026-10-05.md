@@ -8,8 +8,8 @@ for post-demo branches, nothing here is flashed or merged into firmware behaviou
 | A | Equal-budget tune of PR (Yucelen) and RBF layers against PID on payload / cog / zigzag | done, measured, below |
 | B | Per-axis reference model from flight replay (f14, f16) | measured, below |
 | C | Public data (NeuroBEM, Neural-Fly) | files and sizes listed below; download waits for the operator's yes |
-| D | x/y adaptation: 6 decoupled layers plus coupling terms | planned |
-| E | Fully coupled 6-axis MRAC: RAM budget, firmware copy on a branch | planned |
+| D | x/y adaptation: 6 decoupled layers plus coupling terms | measured, below: yaw layer harmful; x, y + z layers best so far (0.0631 vs PID 0.0775) |
+| E | Fully coupled 6-axis MRAC: RAM budget, firmware copy on a branch | RAM budget measured, below; branch PROPOSED |
 | F | Systematic cascaded-PID tuning | planned |
 | G | MRAC derived for (augmenting) the PID loop | planned |
 | H | Thesis three-layer design: physics features, frequency gating, task priors | planned; design constraint below |
@@ -130,6 +130,91 @@ Items D and F state results against both, or add a non-frozen `ctrl_fwpid_f3.py`
 
 The Neural-Fly repository has no license file (GitHub API license: null); use it for research comparison only and cite
 the paper. Minimum useful set: NeuroBEM processed_data.zip plus the Neural-Fly data folders, about 800 MB.
+
+## D. Adaptive layers on x, y, z and yaw (`sim/bench/ctrl_mrac6.py`; frozen bench; same protocol as A)
+
+The bench MRAC adapts roll and pitch only; x/y velocity, z velocity and yaw rate stay PID. `MRAC6_Dec` keeps
+`MRAC_SatAware` and adds one normalised layer per remaining loop, all with the same law in dimensionless units so a
+single knob `gamma_o` drives them:
+
+| Layer | Add-on | Regressor phi (divided by the loop's command limit) | Reference model tau | Bound |
+|---|---|---|---|---|
+| x, y velocity | acceleration, earth frame, before the yaw rotation | [1, v_i, v_i abs(v_i)]; `MRAC6_Cpl` adds v_j (x/y coupling) | (1 + Kd DT) / Kp of LOCXS | tan(15 deg) g |
+| z velocity | throttle | [1, vz] | 1 / loop gain of RATE_Z at hover | 0.3 g |
+| yaw rate | U_yaw | [1, r] | 0.5 s (yaw bandwidth from B) | 0.3 of the RATE_Y range |
+
+Update th' = gamma_o phi e / (1 + phi'phi), e = v - v_ref, clipped to the bound. Tuned with `tune2.py`, starting from
+the sat-aware stage 1 (64 + 64 = 128 evaluations).
+
+### Full layer set (test split, median RMSE, diff vs pid_tuned2 with bootstrap 95 % CI)
+
+| Controller | All rows | Diverged | Diff [CI] | Held-out families | Diverged | Diff [CI] |
+|---|---|---|---|---|---|---|
+| mrac_sataware | 0.0726 | 5.5 % | -0.0049 [-0.0107, -0.0013] | 0.0754 | 16.2 % | -0.0059 [-0.0336, 0.0082] |
+| pid_tuned2 | 0.0775 | 6.7 % | 0 | 0.0813 | 18.2 % | 0 |
+| mrac6_dec | 0.0945 | 2.0 % | +0.0171 [0.0103, 0.0236] | 0.1086 | 10.1 % | +0.0273 [0.0035, 0.0860] |
+| mrac6_cpl | 0.0952 | 2.0 % | +0.0177 [0.0104, 0.0237] | 0.1086 | 10.1 % | +0.0272 [0.0040, 0.0865] |
+
+The tune drove gamma_o to its floor (0.01) and the tune J stayed at 0.141 against 0.1012 for sat-aware: the layers
+lowered divergence but cost accuracy, and the x/y coupling term changed nothing.
+
+### Ablation (tune split J, sat-aware tuned parameters, one layer group at a time)
+
+| Layers | gamma_o 0.01 | 0.03 | 0.1 | 0.3 | 1.0 | 3.0 |
+|---|---|---|---|---|---|---|
+| none (sat-aware) | 0.1012 | | | | | |
+| x, y, z, yaw | 0.1188 | 0.2601 | 0.9873 | 1.4072 | | |
+| yaw only | | 0.2611 | | 1.4201 | | |
+| yaw only, add-on sign flipped | | 0.1743 | | | | |
+| z only | | 0.1009 | | 0.1000 | | |
+| x, y only | | 0.0966 | | 0.0931 | 0.1096 | 0.1878 |
+| x, y, z | | | | 0.0910 | 0.1080 | |
+
+The yaw layer is what broke the full set; neither sign works. Likely cause (PROPOSED, not tested): its bias term
+is a second integrator in parallel with the RATE_Y integral, and the 0.5 s reference model is the flight yaw
+bandwidth, not the bench rate loop's, so the layer drags every fast yaw response back toward a slower model.
+The x, y layer alone gives -8 %, and x, y + z gives -10 % at gamma_o 0.3. `MRAC5_XYZ` keeps those two and drops yaw.
+
+### x, y + z only (`MRAC5_XYZ`, same 128-evaluation protocol, test split)
+
+Tune J 0.0905 (start 0.0910 at gamma_o 0.3; tuned gamma_o 0.2765, attitude gamma 0.0316).
+
+| Controller | All rows | Diverged | Diff vs PID [CI] | Held-out families | Diverged | Diff [CI] | Held-out traj | Diff [CI] |
+|---|---|---|---|---|---|---|---|---|
+| mrac5_xyz | 0.0631 | 5.1 % | -0.0143 [-0.0201, -0.0105] | 0.0654 | 15.2 % | -0.0159 [-0.0643, -0.0005] | 0.0587 | -0.0093 [-0.0181, -0.0063] |
+| mrac_sataware | 0.0726 | 5.5 % | -0.0049 [-0.0107, -0.0013] | 0.0754 | 16.2 % | -0.0059 [-0.0336, 0.0082] | 0.0659 | -0.0021 [-0.0096, 0.0020] |
+| pid_tuned2 | 0.0775 | 6.7 % | 0 | 0.0813 | 18.2 % | 0 | 0.0680 | 0 |
+
+`MRAC5_XYZ` is the best bench controller so far: -18 % median RMSE against tuned PID on all rows, and the first one
+whose held-out-family CI clears zero (just: upper bound -0.0005). It still carries the tuned knobs of the sat-aware
+base, so it is not yet the no-tuning design H asks for.
+
+Implication for H: adapt at the velocity level where PID leaves a steady disturbance (drag, payload, CoM offset),
+not inside a loop that already integrates; take tau from the loop that is wrapped, measured on the same plant.
+
+## E. 6-axis MRAC in firmware: RAM budget (sizes from `OBJ/JX_FLY.map`, HEAD build)
+
+The firmware MRAC already runs 4 axes (`API/mrac.h:104`, `AXES 4`: pitch, roll, yaw, z). Going to 6 adds x and y
+velocity. Every per-axis object is sized by `AXES`:
+
+| Object | Region | Size now (4 axes) | Per axis |
+|---|---|---|---|
+| mrac_state | CCM | 624 B | 156 B |
+| mrac_config_{pitch,roll,yaw,z} | CCM | 4 x 232 B | 232 B |
+| mrac_bus | CCM | 128 B | 32 B |
+| mrac_g_gamma, g_sigma, g_phi ([AXES][6] float) | CCM | 3 x 96 B | 72 B |
+| mrac_u_ff | CCM | 16 B | 4 B |
+| mrac_cyc (cycle profile, last + max per axis) | SRAM .bss | 136 B | 32 B (2 x 16 B MRAC_CycSet_t; l2_last, l2_max 8 B fixed) |
+| mrac_var_id, mrac_ref_type_eff | SRAM .data | 8 + 4 B | 3 B |
+
+Computed: two more axes cost about 2 x 496 = 992 B of CCM and about 70 B of SRAM. CCM use is 14,288 of 65,536 B
+(RW_IRAM2 0x37d0), so about 51 KB stays free. SRAM is the tight one at HEAD: 125,000 of 131,072 B (RW_IRAM1 0x1e838),
+6,072 B free, which covers the 70 B; the ram-savings branch moves SRAM to 22,048 B. RAM does not block 6 axes.
+
+Not measured: CPU cost per axis (read `mrac_cyc` on hardware), and the telemetry slots for the two new axes (the MRAC
+frame carries 6 fixed values, `API/mrac.h:55`). PROPOSED branch (post-demo, not merged or flashed): add
+MRAC_AXIS_X and MRAC_AXIS_Y as velocity-level add-ons to the LOCXS output, the `MRAC5_XYZ` structure from D, with
+the yaw axis bias term off.
 
 ## I. Position from optical flow + IMU: the roam-and-return bias
 
