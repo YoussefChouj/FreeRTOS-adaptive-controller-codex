@@ -16,12 +16,12 @@ from ground_station.service.campaign_preflight import run_preflight, vitals
 ROOT = Path(__file__).resolve().parents[3]
 LADDER = "ground_station/service/campaigns/hover_ladder.yaml"
 NOW = 1_800_000_000_000_000_000
-ROWS = ["service", "link", "firmware", "wfb_status", "rc_link", "arm_state", "position", "battery", "runner",
+ROWS = ["service", "link", "firmware", "wfb_status", "rc_link", "of_hold", "arm_state", "position", "battery", "runner",
         "log_plan"]
 
 READY = {
     "Ctrler.locxPID.FB": 2.0, "Ctrler.locyPID.FB": -3.0, "Ctrler.Z_posPID.FB": 0.01,  # cm, cm, m
-    "status.sbus_lost": 0.0, "DroneStatus.FlyMode": 1.0, "real_voltage": 16.4,
+    "status.sbus_lost": 0.0, "status.of_hold": 1.0, "DroneStatus.FlyMode": 1.0, "real_voltage": 16.4,
     "g_wfb_status.prim_state": 0.0, "g_wfb_status.safety_trip": 0.0,
 }
 DISARMED = [{"key": "DroneStatus.ARM_Status", "slot": 0, "value": 0.0, "age_s": 0.1}]
@@ -138,6 +138,15 @@ def test_rc_rows(elf):
     res = _run(FakeService(values=values), elf)
     row = _row(res, "rc_link")
     assert row["pass"] is None and "rc_ready" in row["fix"] and res["ok"] is True  # amber, not red
+
+
+def test_of_hold_rows(elf):
+    assert "ch6" in _only_red(_run(FakeService(values={**READY, "status.of_hold": 0.0}), elf), "of_hold")["fix"]
+    values = dict(READY)
+    del values["status.of_hold"]
+    res = _run(FakeService(values=values), elf)
+    row = _row(res, "of_hold")
+    assert row["pass"] is None and "ch6" in row["fix"] and res["ok"] is True  # amber, not red
 
 
 def test_arm_rows(elf):

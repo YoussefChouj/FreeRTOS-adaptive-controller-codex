@@ -60,7 +60,7 @@ position, battery, runner, log_plan. Show the table.
 - `pass: null` (amber, e.g. rc_link when `sbus_lost` is not streamed): covered by the Q4 checklist.
 - The drone must be disarmed here; the operator arms only after Q4.
 
-**Q4 Checklist.** Ask the operator to confirm: pack swapped, drone on the pad, powered in place, RC ready,
+**Q4 Checklist.** Ask the operator to confirm: pack swapped, drone on the pad, powered in place, RC ready with ch6 (OF hold) HIGH (ch6 LOW = angle mode: nothing holds position, 10-06 f01 drifted away),
 phone recording, operator present, area clear. Any "no" stops the launch.
 
 ## 2. Go

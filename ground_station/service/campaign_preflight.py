@@ -32,6 +32,7 @@ ORIGIN_TOL_M = 0.30    # PROPOSED: horizontal distance from the pad origin that 
 RC_LOST_SYMS = ("status.sbus_lost", "sbus_lost")
 FLYMODE_SYMS = ("DroneStatus.FlyMode", "status.flymode")
 AUTHORITY_SYMS = ("status.rc_authority", "s_authority")
+OF_HOLD_SYMS = ("status.of_hold", "g_of_hold_active")   # ch6 HIGH: velocity loops drive tilt (Des_Att)
 WFB_SYMS = ("g_wfb_status.prim_state", "g_wfb_status.safety_trip")
 BUILD_ID_SYMS = tuple(f"build_id[{i}]" for i in range(4))
 
@@ -51,7 +52,7 @@ def vitals(service: Any, now_ns: Callable[[], int] = time.time_ns) -> dict[str, 
     streams it.
     """
     names = (tuple(a.feedback for a in POSITION_AXES) + RC_LOST_SYMS + FLYMODE_SYMS + AUTHORITY_SYMS
-             + VBAT_SYMS + WFB_SYMS + BUILD_ID_SYMS)
+             + OF_HOLD_SYMS + VBAT_SYMS + WFB_SYMS + BUILD_ID_SYMS)
     now = now_ns()
     fresh: dict[str, dict[str, Any]] = {}
     for name, (value, ts) in service.latest_values(names).items():
@@ -78,7 +79,7 @@ def vitals(service: Any, now_ns: Callable[[], int] = time.time_ns) -> dict[str, 
         "connected": bool(getattr(snap, "connected", False)),
         "position_m": pos,
         "rc": {"sbus_lost": _pick(fresh, RC_LOST_SYMS), "flymode": _pick(fresh, FLYMODE_SYMS),
-               "rc_authority": _pick(fresh, AUTHORITY_SYMS)},
+               "rc_authority": _pick(fresh, AUTHORITY_SYMS), "of_hold": _pick(fresh, OF_HOLD_SYMS)},
         "arm": {"state": service.arm_state(), "sources": sources() if callable(sources) else []},
         "battery": _pick(fresh, VBAT_SYMS),
         "wfb": {"prim_state": fresh.get(WFB_SYMS[0]), "safety_trip": fresh.get(WFB_SYMS[1])},
@@ -188,6 +189,20 @@ def _rc_row(v: dict[str, Any]) -> dict[str, Any]:
     return _row("rc_link", value, True)
 
 
+def _of_hold_row(v: dict[str, Any]) -> dict[str, Any]:
+    """ch6 LOW = angle mode: Des_Att (StabilizerTask.c) drops the velocity-loop output and flies level, so a GS
+    flight holds no position and drifts (flight 2026-10-06 f01: vx demand +91 vs -43 cm/s, roll/pitch +-1.6 deg)."""
+    hold = v["rc"].get("of_hold")
+    if hold is None:
+        return _row("of_hold", "status.of_hold not streaming", None,
+                    "cannot check from the stream: the operator confirms ch6 (OF hold) is HIGH")
+    value = f"{hold['key']} {_num(hold['value'])}"
+    if int(hold["value"]) == 0:
+        return _row("of_hold", value, False,
+                    "flip RC ch6 HIGH (OF hold): in angle mode the position and velocity loops never reach tilt")
+    return _row("of_hold", value, True)
+
+
 def _arm_row(v: dict[str, Any]) -> dict[str, Any]:
     state, srcs = v["arm"]["state"], v["arm"]["sources"]
     raw = "; ".join(f"{s['key']} {_num(s['value'])} (slot {s['slot']}, {s['age_s']} s)" for s in srcs)
@@ -287,6 +302,7 @@ def run_preflight(service: Any, campaign: Any = None, campaign_path: str | None 
         _firmware_row(service, v, elf_path),
         _wfb_row(service, v, ready_check),
         _rc_row(v),
+        _of_hold_row(v),
         _arm_row(v),
         _position_row(v),
         _battery_row(v, pack_id, registry),
