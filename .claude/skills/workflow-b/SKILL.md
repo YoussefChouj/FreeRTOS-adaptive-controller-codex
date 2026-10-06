@@ -5,8 +5,8 @@ description: Launch a workflow B flight campaign on the live drone. The operator
 
 # Workflow B: launch a fly campaign
 
-The minimal deterministic path. The operator answers four questions, says go, and keeps hands on the RC
-sticks. You run one command and two MCP calls to launch (`campaign_preflight`, `campaign_go`), then one
+The minimal deterministic path. The operator answers four questions, arms by RC in flymode 1 (SDK), says go,
+and keeps hands off the sticks (a fast stick move is a takeover, ch10 kills). You run one command and two MCP calls to launch (`campaign_preflight`, `campaign_go`), then one
 `campaign_state` per flight.
 
 ```
@@ -60,7 +60,9 @@ position, battery, runner, log_plan. Show the table.
 - `pass: null` (amber, e.g. rc_link when `sbus_lost` is not streamed): covered by the Q4 checklist.
 - The drone must be disarmed here; the operator arms only after Q4.
 
-**Q4 Checklist.** Ask the operator to confirm: pack swapped, drone on the pad, powered in place, RC ready with ch6 (OF hold) HIGH (ch6 LOW = angle mode: nothing holds position, 10-06 f01 drifted away),
+**Q4 Checklist.** Ask the operator to confirm: pack swapped, drone on the pad, powered in place, RC ready with ch6 (OF hold) HIGH (ch6 LOW = angle mode: nothing holds position, 10-06 f01 drifted away)
+and flymode 1 (SDK) selected; after the RC arm, hands off the sticks: idle, takeoff and climb need no stick
+(firmware 0e5beae; a fast stick move is a pilot takeover, ch10 is the kill),
 phone recording, operator present, area clear. Any "no" stops the launch.
 
 ## 2. Go

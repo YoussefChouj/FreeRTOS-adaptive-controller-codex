@@ -114,12 +114,12 @@ def _with_gate(deps, motor_idle):
 
 
 def test_idle_not_engaged_aborts_in_seconds_without_takeoff():
-    """10-06 f02: IDLE acked but ignored (throttle stick up), TAKEOFF refused as STATE after 10 s. Now: ~1.5 s."""
+    """10-06 f02: IDLE acked but ignored (old firmware: throttle stick up), TAKEOFF refused as STATE after 10 s. Now: ~1.5 s."""
     drone, clock, deps = _rig()
     _with_gate(deps, lambda: 0)
     out = fly_scenario(load_scenario("hover", {"z": 0.5, "hold_s": 2}), deps)
     assert out.aborted and "takeoff refused at idle: motors did not go to idle" in out.decision.reason
-    assert "throttle stick fully down" in out.decision.reason
+    assert "flymode 1 (SDK)" in out.decision.reason
     assert out.steps[0]["t1_s"] < 2.0
     assert int(drone.status()["prim_state"]) == PRIM_IDLE
 
