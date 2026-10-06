@@ -89,7 +89,14 @@ static void GsIdle_ReleaseOnDisarm(void);    /* below Des_Height: GS idle author
  * loop threw throttle at each impact: 5 bounces in 7 s. Now Des at the floor and FB
  * within LAND_REST_MARGIN of rest for LAND_REST_CUT_TICKS also lands (F2-F4 sat there
  * 0.26-0.40 s right before their normal cut, so they are unchanged). */
-#define LAND_REST_CUT_TICKS  40U   /* 0.2 s at 200 Hz */
+#define LAND_REST_CUT_TICKS  10U   /* 50 ms at 200 Hz, then the spool-down below (was 40: 0.2 s) */
+/* FIX 2026-10-06 (logs/livewatch/touchdown_20261006.csv): touchdown spool-down. The cut was one
+ * step from ~90% of hover to Motor_PWM_ZERO after 0.19 s on the skids with the attitude loop live:
+ * the skids slid (drift), then the gear took the full weight at once and the drone hopped +5 cm
+ * and rocked -4.5/-5.2 deg. Now every touchdown gate starts a spool-down instead: vz command 0 and
+ * each motor's command above ZERO scaled by k = 1 -> 0 over LAND_SPOOL_TICKS, then LANDED + disarm
+ * (PX4 maybe_landed -> landed). Once started it always finishes. PROPOSED values, not flown. */
+#define LAND_SPOOL_TICKS     60U   /* 0.3 s, about one gear bounce period (~0.26 s, from the hop) */
 /* FIX 2026-10-03 (FLIGHT_TEST_DRIFT_FIX_1 F1, F3): floor for s_land_rest_z. Right after
  * power-up the ground reads 0.00 m, but after a landing it reads 0.05 m, so the rest gate
  * (0.03 m) never opened on the first flight per battery: props spun 1.5 s on the floor at
@@ -1061,6 +1068,7 @@ static uint8_t  s_land_init    = 0U;
 static int      s_stable_ticks = 0;
 static uint16_t s_land_rest_ticks = 0U;
 static uint16_t s_land_timeout = 0U;
+static uint16_t s_land_spool   = 0U;              /* spool-down ticks done, 0 = not started */
 static float    s_land_rest_z  = LAND_REST_MIN;   /* ground z sampled in GROUND_IDLE */
 
 /* Bench-mode height zero: captures the fixture resting height when bench mode
@@ -1132,7 +1140,14 @@ static uint8_t Motor_DebugOverride(FlightState_t state)
 	return 0U;
 }
 
-/* ARMED + LANDING: drive the motors, then the touchdown detector; on touchdown LANDED + disarm. */
+/* Spool-down scale: the part of a motor command above ZERO times k (Set_PWM_Motors clamps). */
+static short Land_SpoolScale(short m, float k)
+{
+	return (short)((float)Motor_PWM_ZERO + k * (float)(m - Motor_PWM_ZERO));
+}
+
+/* ARMED + LANDING: drive the motors, then the touchdown detector; on touchdown the spool-down
+ * (LAND_SPOOL_TICKS), then LANDED + disarm. */
 static void Land_Step(void)
 {
 	if (!s_land_init)
@@ -1140,14 +1155,41 @@ static void Land_Step(void)
 		s_stable_ticks = 0;
 		s_land_rest_ticks = 0U;
 		s_land_timeout = 0U;
+		s_land_spool   = 0U;
 		s_land_init    = 1U;
 	}
 
-	/* PID-controlled descent: Z_posPID.Des ramps down in Des_Height
-	 * with the rate-mode LAND command (LAND_VZ_MPS / LAND_VZ_FAST_MPS);
-	 * Throttle_out drives motors to ground.
-	 * Integrator winds negative during descent so Throttle_out is already below
-	 * hover at touchdown — no motor spike when LANDED fires. */
+	/* Spool-down: Mix_Compute rewrote mymotor this tick, so scaling in place does not compound.
+	 * Des_VHeight holds the vz command at 0 meanwhile, and the attitude terms shrink with thrust.
+	 * (The old note here, "no motor spike when LANDED fires", was wrong: the 10-06 capture shows
+	 * ~90% of hover on the skids right up to the cut.) */
+	if (s_land_spool != 0U)
+	{
+		float k = 1.0f - (float)s_land_spool / (float)LAND_SPOOL_TICKS;
+		mymotor.motor1 = Land_SpoolScale(mymotor.motor1, k);
+		mymotor.motor2 = Land_SpoolScale(mymotor.motor2, k);
+		mymotor.motor3 = Land_SpoolScale(mymotor.motor3, k);
+		mymotor.motor4 = Land_SpoolScale(mymotor.motor4, k);
+		if (s_land_spool < LAND_SPOOL_TICKS)
+		{
+			s_land_spool++;
+			Set_PWM_Motors();
+			return;
+		}
+		s_stable_ticks    = 0;
+		s_land_rest_ticks = 0U;
+		s_land_timeout    = 0U;
+		s_land_spool      = 0U;
+		s_land_init       = 0U;
+		s_land_sink_bias  = 0.0f;
+		flight_phase      = FLIGHT_PHASE_LANDED;
+		FlightFSM_Event(FLIGHT_EVENT_DISARM_REQUEST);
+		Set_Zero_Motors();
+		return;
+	}
+
+	/* Rate-mode descent (LAND_VZ_MPS / LAND_VZ_FAST_MPS in Des_VHeight); Throttle_out drives the
+	 * motors to the ground. */
 	Set_PWM_Motors();
 
 	/* Touchdown detection: rate stable for 0.25 s AND near ground.
@@ -1165,7 +1207,8 @@ static void Land_Step(void)
 	 *       (measured rest 0.00-0.07 m, so mid-air cuts at 0.11-0.14 m are blocked), or
 	 *   (b) sink bias saturated: 0.40 m/s commanded descent not achieved for ~2 s.
 	 * (b) covers a rest reading that shifts after touchdown (F3: 0.06 pre, 0.10 post).
-	 * Safety net: force disarm after LAND_MAX_TICKS (15 s) regardless. */
+	 * Safety net: force disarm after LAND_MAX_TICKS (15 s) regardless.
+	 * FIX 2026-10-06: every gate starts the spool-down; the cut happens at its end. */
 	{
 		float rate_thr = (Ctrler.Z_posPID.FB < LAND_RATE_SLOW_ALT_M) ? LAND_RATE_THR_LOW : LAND_RATE_THR_HIGH;
 		if (fabsf(Ctrler.Z_ratePID.FB) < rate_thr)
@@ -1188,16 +1231,7 @@ static void Land_Step(void)
 	     (Ctrler.Z_posPID.FB <= s_land_rest_z + LAND_REST_MARGIN ||
 	      s_land_sink_bias >= LAND_SINK_BIAS_MAX)) ||
 	    s_land_timeout >= LAND_MAX_TICKS)
-	{
-		s_stable_ticks    = 0;
-		s_land_rest_ticks = 0U;
-		s_land_timeout    = 0U;
-		s_land_init       = 0U;
-		s_land_sink_bias  = 0.0f;
-		flight_phase      = FLIGHT_PHASE_LANDED;
-		FlightFSM_Event(FLIGHT_EVENT_DISARM_REQUEST);
-		Set_Zero_Motors();
-	}
+		s_land_spool = 1U;   /* this tick ran unscaled; the ramp starts next tick */
 }
 
 /* ARMED + GROUND_IDLE: zero until the idle gesture, then rest-height sampling, takeoff detection
@@ -1250,6 +1284,7 @@ static void Land_ResetDetector(void)
 	s_land_init      = 0U;
 	s_stable_ticks   = 0;
 	s_land_timeout   = 0U;
+	s_land_spool     = 0U;
 	s_land_sink_bias = 0.0f;
 }
 
@@ -1809,6 +1844,10 @@ static void Des_VHeight(void)
 			if (s_land_sink_bias > LAND_SINK_BIAS_MAX) s_land_sink_bias = LAND_SINK_BIAS_MAX;
 			Ctrler.Z_ratePID.Des -= s_land_sink_bias;
 		}
+		/* Touchdown spool-down (LAND_SPOOL_TICKS): stop pushing down into the ground. The
+		 * 10-06 capture held -0.70 m/s on the skids until the cut. */
+		if (s_land_spool != 0U)
+			Ctrler.Z_ratePID.Des = 0.0f;
 	}
 	else if (flight_phase == FLIGHT_PHASE_GROUND_IDLE &&
 	         (!g_motor_idle_enabled || (!TWC.execute && RCInput_Get(RC_AXIS_THR) < THR_IDLE_MAX)))
