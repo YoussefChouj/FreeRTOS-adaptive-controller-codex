@@ -18,6 +18,8 @@ PRIM_IDLE = 0
 PRIM_HOVER = 2
 PRIM_DESCEND = 6
 TRAJ_DONE = 4
+# PROPOSED: time for status.motor_idle to read 1 after the IDLE command (stream at >= 10 Hz plus the ack)
+IDLE_CONFIRM_S = 1.5
 # cooldown passed to the pack gate for a pack that has not flown in this campaign: any min_rest_s passes
 PACK_RESTED_S = 1e6
 
@@ -97,6 +99,15 @@ class RunnerDeps:
     # what the runner is doing right now, one line (campaign_state "phase"): the agent reads a wait from one call
     on_phase: Callable[[str], None] = lambda text: None
     on_livetune: Callable[[dict], None] = lambda result: None  # livetune step result (best gains, J history, CMA state)
+
+
+def _gate_problem(status: dict) -> str:
+    """Why the firmware TAKEOFF gate (API/wfb_glue.c:109) would refuse, from the streamed inputs; "" if none seen."""
+    if "motor_idle" in status and status["motor_idle"] != 1:
+        return "motors left idle before TAKEOFF (status.motor_idle 0: throttle stick up, or the FSM changed state)"
+    if status.get("sbus_lost") == 1:
+        return "RC link lost (status.sbus_lost 1)"
+    return ""
 
 def default_diff_source(repo_root: str, lkg_commit: str, c_files: tuple[str, ...]) -> str:
     if not c_files:
@@ -212,15 +223,24 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False)
                 cmds.append(("arm", deps.client.arm))
             cmds.append(("idle", deps.client.idle))
             refused = next((name for name, send in cmds if not send()), None)
+            # IDLE is acked even when the firmware ignores it (send_data.c CMD_ARM idx 1 needs ARMED, on the ground,
+            # throttle stick below RC_IDLE_THR_THRESHOLD); TAKEOFF then fails the wfb gate as STATE. Fail now instead.
+            gate_why = ""
+            t_idle = deps.clock()
+            if not refused and "motor_idle" in deps.status():
+                while deps.status().get("motor_idle") != 1 and deps.clock() - t_idle < IDLE_CONFIRM_S:
+                    deps.sleep(deps.dt_s)
+                if deps.status().get("motor_idle") != 1:
+                    refused, gate_why = "idle", "motors did not go to idle (status.motor_idle 0): throttle stick fully down at go"
             # idle_s: props spin at idle on the ground before TAKEOFF (operator 10-06: spool-up too short)
             idle_s = float(st.args.get("idle_s", 0.0))
             t_idle = deps.clock()
             if not refused and idle_s > 0 and not wait(lambda: deps.clock() - t_idle >= idle_s, "idle"):
                 ok = False
-            elif refused or not deps.client.takeoff():
+            elif refused or (gate_why := _gate_problem(deps.status())) or not deps.client.takeoff():
                 refused = refused or "takeoff"
-                why = getattr(deps.client, "last_error", "") or "not applied"
-                hint = " (operator arms by RC first)" if refused == "idle" and not deps.agent_arms else ""
+                why = gate_why or getattr(deps.client, "last_error", "") or "not applied"
+                hint = " (operator: arm by RC, throttle stick fully down)" if refused == "idle" and not deps.agent_arms else ""
                 decision = AbortDecision(level=1, reason=f"takeoff refused at {refused}: {why}{hint}")
                 ok = False
             else:

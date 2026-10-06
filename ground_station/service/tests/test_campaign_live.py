@@ -221,7 +221,7 @@ def test_live_takeoff_without_rc_arm_is_refused():
     out = fly_scenario(load_scenario("hover", {"z": 0.5}), deps)
     assert out.aborted
     assert "takeoff refused at idle" in out.decision.reason
-    assert "operator arms by RC" in out.decision.reason
+    assert "arm by RC" in out.decision.reason
     assert (CMD_PRIM, PrimIdx.TAKEOFF) not in _non_hb(svc)
     assert drone.position[2] <= 0.0
 
@@ -250,3 +250,11 @@ def test_live_health_fails_closed():
     assert live_health(svc) == (False, "g_ekf_of_health = 0 (KF diverged)")
     svc.stream(g_ekf_of_health=1)
     assert live_health(svc) == (True, "")
+
+
+def test_wfb_reject_reads_as_wfb_err_name():
+    """10-06 f02: the wfb reason byte 1 is WFB_ERR_STATE; the transaction enum labelled it BAD_VERSION."""
+    from ground_station.service.campaign_live import wfb_reason
+    assert wfb_reason({"reason": "BAD_VERSION", "detail": "wfb rejected"}) == "STATE"
+    assert wfb_reason({"reason": "SAFETY_INTERLOCK", "detail": "wfb rejected"}) == "BOUNDS"
+    assert wfb_reason({"reason": "BAD_VERSION", "detail": "frame"}) == "BAD_VERSION"

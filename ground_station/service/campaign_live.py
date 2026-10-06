@@ -32,6 +32,12 @@ from ground_station.service.campaign_runner import RunnerDeps
 
 # WFB_STATUS_FIELDS: g_wfb_status fields, same keys as FakeDrone.status() (docs/workflow-b/interfaces.md)
 WFB_STATUS_SYMS = tuple(f"g_wfb_status.{f}" for f in WFB_STATUS_FIELDS)
+# TAKEOFF gate inputs (API/wfb_glue.c:109) the dashboard streams; live_status adds them when present
+GATE_SYMS = {"motor_idle": "status.motor_idle", "sbus_lost": "status.sbus_lost"}
+# wfb_err_t (API/wfb_types.h). A wfb reject carries this number in the reason byte, which the transaction
+# layer labels with its own RejectReason names (1 reads as BAD_VERSION): relabel it here.
+WFB_ERR_NAMES = {1: "STATE", 2: "RANGE", 3: "COUNT", 4: "CRC", 5: "TIME", 6: "BOUNDS", 7: "ENDPOINT",
+                 8: "SPEED", 9: "SAFETY"}
 VBAT_SYMS = ("real_voltage", "status.vbat")
 # rate-loop error axes: roll, pitch, yaw (gyrox/y/z FB - Des), from campaign_capture.RATE_LOOPS
 _RATE_PAIRS = tuple((RATE_LOOPS[i], RATE_LOOPS[i + 1]) for i in (0, 2, 4))
@@ -98,7 +104,7 @@ class LiveWfbClient(WfbClient):
                     return True
                 if status == "rejected":
                     self.last_error = (f"cmd 0x{cmd:02X} idx {idx} rejected: "
-                                       f"{res.get('reason', '')} {res.get('detail', '')}".strip())
+                                       f"{wfb_reason(res)} {res.get('detail', '')}".strip())
                     return False
                 acked = acked or status == "ack"
             if self._clock() >= deadline:
@@ -110,12 +116,28 @@ class LiveWfbClient(WfbClient):
             self._sleep(_RESULT_POLL_S)
 
 
+def wfb_reason(res: dict) -> str:
+    """The reject reason name; a wfb reject ("wfb" in detail) by its wfb_err_t name, e.g. STATE."""
+    name = str(res.get("reason", ""))
+    if "wfb" not in str(res.get("detail", "")):
+        return name
+    from ground_station.platform.transactions import RejectReason
+    try:
+        code = RejectReason[name].value
+    except KeyError:
+        return name
+    return WFB_ERR_NAMES.get(code, name)
+
+
 def live_status(service: Any) -> dict[str, float]:
-    """Last-known g_wfb_status fields (FakeDrone.status() keys). Raises if prim_state was never streamed."""
-    vals = service.latest_values(WFB_STATUS_SYMS)
+    """Last-known g_wfb_status fields (FakeDrone.status() keys), plus the GATE_SYMS fields when streamed.
+    Raises if prim_state was never streamed."""
+    vals = service.latest_values(WFB_STATUS_SYMS + tuple(GATE_SYMS.values()))
     if "g_wfb_status.prim_state" not in vals:
         raise RuntimeError("g_wfb_status is not streaming (add g_wfb_status.* to the subscribe set)")
-    return {f: vals[s][0] for f, s in zip(WFB_STATUS_FIELDS, WFB_STATUS_SYMS) if s in vals}
+    out = {f: vals[s][0] for f, s in zip(WFB_STATUS_FIELDS, WFB_STATUS_SYMS) if s in vals}
+    out.update({f: vals[s][0] for f, s in GATE_SYMS.items() if s in vals})
+    return out
 
 
 def _sat_hi_lo() -> tuple[float, float]:

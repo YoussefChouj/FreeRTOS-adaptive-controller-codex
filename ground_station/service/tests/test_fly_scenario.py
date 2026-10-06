@@ -105,3 +105,28 @@ def test_idle_s_out_of_range_is_rejected():
     data = {"scenario": "x", "steps": [{"takeoff": {"z": 0.5, "idle_s": 45}}, {"hold": {"s": 2}}, "land"]}
     with pytest.raises(Exception, match="idle_s: must be in"):
         parse_scenario(data)
+
+
+def _with_gate(deps, motor_idle):
+    """deps.status plus the streamed TAKEOFF gate input status.motor_idle (live_status adds it on the real link)."""
+    inner = deps.status
+    deps.status = lambda: {**inner(), "motor_idle": motor_idle()}
+
+
+def test_idle_not_engaged_aborts_in_seconds_without_takeoff():
+    """10-06 f02: IDLE acked but ignored (throttle stick up), TAKEOFF refused as STATE after 10 s. Now: ~1.5 s."""
+    drone, clock, deps = _rig()
+    _with_gate(deps, lambda: 0)
+    out = fly_scenario(load_scenario("hover", {"z": 0.5, "hold_s": 2}), deps)
+    assert out.aborted and "takeoff refused at idle: motors did not go to idle" in out.decision.reason
+    assert "throttle stick fully down" in out.decision.reason
+    assert out.steps[0]["t1_s"] < 2.0
+    assert int(drone.status()["prim_state"]) == PRIM_IDLE
+
+
+def test_idle_dropped_during_idle_wait_refuses_takeoff_with_reason():
+    drone, clock, deps = _rig()
+    _with_gate(deps, lambda: 1 if clock() < 5.0 else 0)
+    out = fly_scenario(load_scenario("hover", {"z": 0.5, "hold_s": 2}), deps)
+    assert out.aborted and "takeoff refused at takeoff: motors left idle" in out.decision.reason
+    assert int(drone.status()["prim_state"]) == PRIM_IDLE
