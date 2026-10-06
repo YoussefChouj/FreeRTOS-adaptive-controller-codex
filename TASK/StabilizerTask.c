@@ -266,7 +266,15 @@ volatile uint8_t g_of_rest_warn = 0U;
 
 /* OF velocity-bias EMA state. s_of_bias_seeded gates the seed-on-first-sample
  * logic (see comment above). g_of_bias_ema_freeze gates the continuous update. */
-float s_of_bias_x = 0.0f, s_of_bias_y = 0.0f;
+/* OF offset trim (cm/s of raw of2_d*_fix): the flow the module reads while the drone
+ * does not move. Every flight starts from this total bias (Reset_World_Origin at ARM);
+ * the EKF bof stays frozen at 0 on top of it. Measured 2026-10-06 roam (operator
+ * flew a 91 s loop back to the origin, logs/livewatch/roam_bias_20261006b.csv):
+ * estimate ended -98 / -27 cm (locx / locy) from where the operator saw it land ->
+ * offset = error / (91.36 s * g_of_scale 1.094). One flight; re-roam to confirm. */
+#define OF_BIAS_TRIM_X_CMS   0.27f    /* of2_dx_fix -> earth_x -> locy */
+#define OF_BIAS_TRIM_Y_CMS  -0.98f    /* of2_dy_fix -> earth_y -> locx */
+float s_of_bias_x = OF_BIAS_TRIM_X_CMS, s_of_bias_y = OF_BIAS_TRIM_Y_CMS;
 static u8 s_of_bias_seeded = 0;
 
 /* Dedicated 8-state OF position+bias KF — used in Mode 2 (EKF).
@@ -374,7 +382,7 @@ static void Of_RebaseKfBias(float dbx, float dby)
  * accumulating again from the new (zero) state on the next tick. */
 void Reset_World_Origin(void)
 {
-	Of_RebaseKfBias(-s_of_bias_x, -s_of_bias_y);
+	Of_RebaseKfBias(OF_BIAS_TRIM_X_CMS - s_of_bias_x, OF_BIAS_TRIM_Y_CMS - s_of_bias_y);
 	ano_of.earth_x       = 0.0f;
 	ano_of.earth_y       = 0.0f;
 	ano_of.earth_x_ture  = 0.0f;
@@ -387,8 +395,8 @@ void Reset_World_Origin(void)
 	Ctrler.locyPID.Des   = 0.0f;
 	Ctrler.locxsPID.Des  = 0.0f;
 	Ctrler.locysPID.Des  = 0.0f;
-	s_of_bias_x          = 0.0f;
-	s_of_bias_y          = 0.0f;
+	s_of_bias_x          = OF_BIAS_TRIM_X_CMS;   /* trim, not 0 (2026-10-06 roam) */
+	s_of_bias_y          = OF_BIAS_TRIM_Y_CMS;
 	/* WP-14: reset KF position in all modes (shadow included).
 	 * vel and bias states stay — only accumulated position resets to zero. */
 	if (s_ekf_of_inited) {
@@ -1488,7 +1496,7 @@ static void Pos_ArmEdge(void)
 		/* FIX 2026-10-03: no ground snap. The resting OF value is a stale
 		 * repeat, not a bias (good flights read 0 at rest and ~0-1 cm/s in
 		 * hover; the drift flights read 3,5 and 2,3 at rest). Start every
-		 * flight from zero total bias: s_of_bias = 0 (Reset_World_Origin) and
+		 * flight from the trim: s_of_bias = OF_BIAS_TRIM_* (Reset_World_Origin) and
 		 * KF bof = 0 with a tight variance, so the hold flies true zero flow. */
 		s_of_bias_seeded = 1U;
 		if (s_ekf_of_inited) {
