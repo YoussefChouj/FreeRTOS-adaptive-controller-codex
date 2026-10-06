@@ -42,7 +42,10 @@ Z_posPID (Kp 0.7) turns height error into a sink rate. So once the ramp reaches 
 is about 0.7 × height, and it shrinks as the drone gets lower. The sink bias then grows by only 0.2 m/s per second.
 The result is that the drone slows down in the ground-effect band. The operator does the opposite.
 
-## PROPOSED (not flown): rate-mode two-stage landing from M8
+## IMPLEMENTED 2026-10-06, not flown: rate-mode two-stage landing from M8
+
+Operator chose "Rate-mode land 0.4/0.7". Code: `LAND_VZ_MPS`, `LAND_FAST_ALT`, `LAND_VZ_FAST_MPS` in
+`TASK/StabilizerTask.c` (`Des_Height` and `Des_VHeight` LANDING branches). Needs the operator's flash and an A/B flight.
 
 In LANDING, command the climb-rate loop directly instead of ramping the position setpoint. PX4's LAND works the
 same way (MPC_LAND_SPEED is a velocity setpoint).

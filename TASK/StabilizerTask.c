@@ -64,18 +64,20 @@ static void GsIdle_ReleaseOnDisarm(void);    /* below Des_Height: GS idle author
 #define HOVER_THR_BENCH      3100     /* Throttle_th, CCR, on the 4DOF fixture (bench_mode_active) */
 #define HOVER_THR_FREE       3050     /* Throttle_th, CCR, free flight; see the history at Compute_Motor */
 
-/* LAND setpoint ramp: 0.0015 m/tick at 200 Hz = 0.30 m/s descent rate.
- * PID follows the setpoint to ground — no throttle ramp needed.
- * Touchdown detected by Z_ratePID.FB → 0 on frame contact. */
-#define LAND_DES_STEP   0.0015f
-/* Two-stage descent (2026-10-02): below LAND_SLOW_ALT the ramp halves to 0.15 m/s.
- * Logs: sink spikes to 0.65-1.05 m/s in the last 30 cm on a 0.30 m/s command, and the
- * operator saw less landing drift at slower descent. 0.15 m/s stays above the 0.08 m/s
- * touchdown-rate threshold. */
-#define LAND_SLOW_ALT        0.40f
-#define LAND_DES_STEP_SLOW   0.00075f
+/* LAND is rate mode (2026-10-06): Des_VHeight commands the climb-rate loop directly,
+ * -LAND_VZ_MPS down to LAND_FAST_ALT, then -LAND_VZ_FAST_MPS to contact (PX4 MPC_LAND_SPEED
+ * style). It replaces the position ramp + Z_posPID (Kp 0.7 -> sink ~0.7*z, slowest in ground
+ * effect) and reverses the 2026-10-02 0.15 m/s slow stage. Source: operator manual landing M8
+ * (docs/workflow-b/manual-landing-reference.md): 0.37 m/s from 1.41 to 1.0 m, 0.61-0.87 m/s
+ * below 0.5 m, 0.3 -> 0.13 m in 0.28 s vs 0.86 s auto (F6). Des_Height still lowers
+ * Z_posPID.Des at the same rate so the Des-at-floor touchdown gates keep working.
+ * Touchdown detected by Z_ratePID.FB -> 0 on frame contact. */
+#define LAND_VZ_MPS        0.40f
+#define LAND_FAST_ALT      0.50f
+#define LAND_VZ_FAST_MPS   0.70f
+#define LAND_TICK_S        0.005f   /* Des_Height runs every 200 Hz tick */
 /* Safety net: 3000 ticks at 200 Hz = 15 s max landing time before forced disarm
- * (was 10 s; the slow final stage adds about 1.3 s, keep margin from 2.5 m). */
+ * (was 10 s; kept for margin: rate-mode LAND from 2.5 m is about 5.7 s, arithmetic). */
 #define LAND_MAX_TICKS  3000U
 /* Touchdown ground evidence (2026-10-02b): FB within LAND_REST_MARGIN of the pre-takeoff
  * rest height, or the sink bias saturated at LAND_SINK_BIAS_MAX (see Update_Motor). */
@@ -1142,7 +1144,8 @@ static void Land_Step(void)
 	}
 
 	/* PID-controlled descent: Z_posPID.Des ramps down in Des_Height
-	 * at 0.30 m/s; rate cascade follows; Throttle_out drives motors to ground.
+	 * with the rate-mode LAND command (LAND_VZ_MPS / LAND_VZ_FAST_MPS);
+	 * Throttle_out drives motors to ground.
 	 * Integrator winds negative during descent so Throttle_out is already below
 	 * hover at touchdown — no motor spike when LANDED fires. */
 	Set_PWM_Motors();
@@ -1733,7 +1736,8 @@ static void Des_Height(void)
 		TWC.execute  = 1U;
 	}
 
-	/* LANDING: ramp Z setpoint down at 0.30 m/s (LAND_DES_STEP at 200 Hz).
+	/* LANDING: lower Z setpoint at the rate-mode LAND speed (Des_VHeight owns the rate
+	 * command; Des only feeds the Des-at-floor touchdown gates).
 	 * Snap Des = min(Des, FB) so a setpoint above current altitude cannot
 	 * pull the drone upward at landing entry (case A fix). */
 	if (flight_phase == FLIGHT_PHASE_LANDING)
@@ -1741,8 +1745,8 @@ static void Des_Height(void)
 		TWC.execute = 0U;
 		if (Ctrler.Z_posPID.Des > Ctrler.Z_posPID.FB)
 			Ctrler.Z_posPID.Des = Ctrler.Z_posPID.FB;
-		Ctrler.Z_posPID.Des -= (Ctrler.Z_posPID.FB < LAND_SLOW_ALT) ?
-		                       LAND_DES_STEP_SLOW : LAND_DES_STEP;
+		Ctrler.Z_posPID.Des -= ((Ctrler.Z_posPID.FB < LAND_FAST_ALT) ?
+		                        LAND_VZ_FAST_MPS : LAND_VZ_MPS) * LAND_TICK_S;
 		if (Ctrler.Z_posPID.Des < 0.0f) Ctrler.Z_posPID.Des = 0.0f;
 		return;
 	}
@@ -1784,11 +1788,16 @@ static void Des_Height(void)
 /* Climb-rate setpoint: Z position loop output, the LANDING sink bias, or the throttle stick. */
 static void Des_VHeight(void)
 {
-	/* Landing: THR stick must not override PID cascade — rate setpoint
-	 * comes exclusively from Z_posPID.U throughout the descent. */
+	/* Landing: THR stick must not override the cascade. LANDING is rate mode: a fixed
+	 * sink command, faster below LAND_FAST_ALT so the drone crosses ground effect quickly
+	 * (operator M8). LANDED keeps Z_posPID.U. */
 	if (flight_phase == FLIGHT_PHASE_LANDING || flight_phase == FLIGHT_PHASE_LANDED)
 	{
-		Ctrler.Z_ratePID.Des = Ctrler.Z_posPID.U;
+		if (flight_phase == FLIGHT_PHASE_LANDING)
+			Ctrler.Z_ratePID.Des = -((Ctrler.Z_posPID.FB < LAND_FAST_ALT) ?
+			                         LAND_VZ_FAST_MPS : LAND_VZ_MPS);
+		else
+			Ctrler.Z_ratePID.Des = Ctrler.Z_posPID.U;
 		/* Progressive sink bias: once setpoint has reached the floor, ramp up
 		 * commanded sink rate while the drone is slow (stuck in ground effect).
 		 * 0.001 m/s per tick at 200 Hz → reaches 0.15 m/s in 0.75 s, max 0.40 m/s.

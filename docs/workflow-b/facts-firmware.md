@@ -105,8 +105,8 @@ Stabilizer loop (`TASK/StabilizerTask.c:228-306`): 200 Hz (5 ms). While `!g_esti
 - Fly-up consumer (1166-1176): `RCInput_SetAuthority(0)`, `TWC.target_x/y = TWC.world_x/y`, `target_z = 0.5f` m, `execute = 1`. The Z setpoint ramps 0.005 m per `Update_Des` call (1213-1221); `Update_Des` is called once per `Compute_Motor` (842), so at 200 Hz that is about 1.0 m/s (derived). The code comment claims 0.5 m/s at about 100 Hz. UNCONFIRMED which is true on hardware. Z position PID itself runs every 2nd tick (844-855).
 
 LANDING (`TASK/StabilizerTask.c:694-735`):
-- Z setpoint decrements `LAND_DES_STEP` = 0.0015 m per tick (about 0.30 m/s at 200 Hz, derived) (29-32); setpoint snapped to min(Des, FB), floored at 0 (1178-1189).
-- Rate setpoint `Z_ratePID.Des = Z_posPID.U` plus a sink bias: `s_land_sink_bias += 0.001` per tick while |Zrate FB| < 0.10 and Des <= 0.01, capped 0.40 m/s (1226-1242).
+- Rate mode since 2026-10-06 (from the operator's manual landing M8, `docs/workflow-b/manual-landing-reference.md`): `Des_VHeight` sets `Z_ratePID.Des` = -`LAND_VZ_MPS` (0.40 m/s) above `LAND_FAST_ALT` (0.50 m) and -`LAND_VZ_FAST_MPS` (0.70 m/s) below. `Des_Height` lowers `Z_posPID.Des` at the same rate (x 0.005 s per tick), snapped to min(Des, FB) and floored at 0, so the Des-at-floor gates still work. Replaces the 0.30 / 0.15 m/s position ramp (`LAND_DES_STEP`, `LAND_SLOW_ALT`). Not flown yet.
+- Plus a sink bias (LANDED keeps `Z_ratePID.Des = Z_posPID.U`): `s_land_sink_bias += 0.001` per tick while |Zrate FB| < 0.10 and Des <= 0.01, capped 0.40 m/s (1226-1242).
 - Touchdown: |`Z_ratePID.FB`| < rate_thr (0.08 if `Z_posPID.FB < 0.20`, else 0.02) for 10 consecutive ticks and `Z_posPID.FB < 0.15` (714-725).
 - Timeout `LAND_MAX_TICKS` = 2000 (10 s at 200 Hz, derived) forces disarm (33-34).
 - Result: phase LANDED, `FlightFSM_Event(DISARM_REQUEST)`, `Set_Zero_Motors` (731-733). The FSM then resets the phase to GROUND_IDLE, so LANDED is transient (`flight_fsm.c:46`). CMD 0x0E idx1 can re-idle from LANDED (`send_data.c:1977-1982`).
