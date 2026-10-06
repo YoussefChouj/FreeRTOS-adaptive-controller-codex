@@ -1935,12 +1935,21 @@ static void Cmd_SdkArmAuthority(GsCmd_t *c)
     /* idx 1: motor idle enable/disable (same guards as RC gesture) */
     else if (c->idx == 1) {
         if (((uint8_t)(c->val + 0.5f)) != 0) {
+            /* FIX 2026-10-06 (workflow C, operator): in FlyMode_SDK the RC arm is the operator's only input; the GS
+             * idle must not need the throttle stick at the bottom (10-06 f02: IDLE acked but ignored, TAKEOFF
+             * refused). It takes the stick authority instead: virtual THR -1 holds GroundIdle_Step, a fast stick
+             * move is a takeover (rc_input.c), ch10 kills. Outside FlyMode_SDK the RC gesture guard still applies. */
+            uint8_t gs_idle = (DroneStatus.FlyMode == FlyMode_SDK) ? 1U : 0U;
             if (FlightFSM_GetState() == FLIGHT_STATE_ARMED &&
                 (flight_phase == FLIGHT_PHASE_GROUND_IDLE ||
                  flight_phase == FLIGHT_PHASE_LANDED) &&
-                RCInput_Get(RC_AXIS_THR) < RC_IDLE_THR_THRESHOLD &&
+                (gs_idle || RCInput_Get(RC_AXIS_THR) < RC_IDLE_THR_THRESHOLD) &&
                 !g_motor_idle_enabled)
             {
+                if (gs_idle) {
+                    GS_KeySDKflag = 1U;
+                    RCInput_SetAuthority(1U);   /* released at flyup (Des_Height) or on disarm (StabilizerTask) */
+                }
                 flight_phase = FLIGHT_PHASE_GROUND_IDLE; /* LANDED -> re-idle */
                 g_motor_idle_enabled = 1U;
             }

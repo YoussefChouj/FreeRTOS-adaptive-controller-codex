@@ -55,6 +55,9 @@ short Throttle_th = 2200;
 #define CM_PER_M             100.0f
 #define M_PER_CM             0.01f
 #define THR_IDLE_MAX         0.2f     /* RC throttle below this (0..1) = "motors idle" for every ground gate */
+#define THR_TAKEOVER_DELTA   0.15f    /* GS flight: throttle moved this far from its take-off spot = pilot takeover (chosen, not measured) */
+static int  Thr_StickActive(void);          /* below Des_Height: GS flight ignores the throttle until takeover */
+static void GsIdle_ReleaseOnDisarm(void);    /* below Des_Height: GS idle authority back on disarm */
 #define TAKEOFF_ALT_M        0.2f     /* GROUND_IDLE -> FLYING once Z FB is above this (with THR or TWC) */
 #define POS_LOOP_DIV         2U       /* height and position loops run every 2nd tick (100 Hz) */
 #define DES_FLOOR_M          0.01f    /* Z setpoint at or below this = the landing ramp reached the floor */
@@ -605,6 +608,7 @@ void stabilizer_Task(void)
 	Update_Data();
 
 	Wfb_Step();   /* WFB glue: after Update_Data() so the FB values are this tick's */
+	GsIdle_ReleaseOnDisarm();
 
 	Compute_Motor();
 
@@ -871,7 +875,7 @@ static void Cal_Step(void)
 	/* ADR-0011 Phase 4 (CAL_HOT_HOVER) — gyro hot-bias FSM. Always ticked so the
 	 * quiescence gate can detect a still-window anywhere in the flight. */
 	{
-		uint8_t rc_q = !RCInput_IsActive(RC_AXIS_THR) &&
+		uint8_t rc_q = !Thr_StickActive() &&
 		               !RCInput_IsActive(RC_AXIS_PITCH) &&
 		               !RCInput_IsActive(RC_AXIS_ROLL) &&
 		               !RCInput_IsActive(RC_AXIS_YAW);
@@ -1646,6 +1650,52 @@ void Compute_Motor(void)
 float des_pitch = 0;
 float	des_roll = 0;
 
+/* FIX 2026-10-06 (workflow C, operator): a GS (wfb) flight must not depend on where the throttle stick sits. The
+ * throttle does not self-centre and stays at the bottom after the RC arm; read as an active stick it is a full-rate
+ * descent command at lift-off (f03 climbed only because the operator centred it by hand). During a GS flight the
+ * throttle stick is ignored until the pilot takes over: roll/pitch moved (the wfb takeover condition) or the
+ * throttle moved more than THR_TAKEOVER_DELTA from where it sat when the GS flight took off. The takeover holds
+ * until the next take-off. Outside GS flights the stick works as before. Idempotent within a tick. */
+static uint8_t s_thr_pilot = 1U;   /* 1: the throttle stick drives z */
+static uint8_t s_thr_ref_ok;
+static float   s_thr_ref;          /* physical throttle when the take-off released the stick authority */
+
+static void Thr_GsTakeoff(void)
+{
+	if (g_wfb_status.gs_flight_active > 0.5f) {
+		s_thr_pilot  = 0U;
+		s_thr_ref_ok = 0U;
+	}
+}
+
+static int Thr_StickActive(void)
+{
+	if (g_wfb_status.gs_flight_active < 0.5f)
+		s_thr_pilot = 1U;
+	else if (!s_thr_pilot && !RCInput_GetAuthority())
+	{
+		float thr = RCInput_Get(RC_AXIS_THR);
+		if (!s_thr_ref_ok) { s_thr_ref = thr; s_thr_ref_ok = 1U; }
+		if (fabsf(thr - s_thr_ref) > THR_TAKEOVER_DELTA ||
+		    RCInput_IsActive(RC_AXIS_ROLL) || RCInput_IsActive(RC_AXIS_PITCH))
+			s_thr_pilot = 1U;
+	}
+	return s_thr_pilot && RCInput_IsActive(RC_AXIS_THR);
+}
+
+/* FIX 2026-10-06: the GS idle (send_data.c CMD 0x0E idx 1 in FlyMode_SDK) takes the stick authority; give it back
+ * on disarm so a manual flight after a campaign reads the physical sticks. */
+static void GsIdle_ReleaseOnDisarm(void)
+{
+	static uint8_t s_was_armed;
+	uint8_t armed = (FlightFSM_GetState() == FLIGHT_STATE_ARMED) ? 1U : 0U;
+	if (s_was_armed && !armed && RCInput_GetAuthority()) {
+		RCInput_SetAuthority(0U);
+		GS_KeySDKflag = 0U;
+	}
+	s_was_armed = armed;
+}
+
 /* Z position setpoint: ch8/ch7 triggers, LANDING ramp, LANDED/GROUND_IDLE pins, stick capture,
  * TWC slew. */
 static void Des_Height(void)
@@ -1676,6 +1726,7 @@ static void Des_Height(void)
 	{
 		sbus_flyup_trigger = 0U;
 		RCInput_SetAuthority(0U);   /* release IDLE throttle lock */
+		Thr_GsTakeoff();            /* GS flight: z ignores the throttle stick until a takeover */
 		TWC.target_x = TWC.world_x;
 		TWC.target_y = TWC.world_y;
 		TWC.target_z = FLYUP_TARGET_Z_M;
@@ -1713,10 +1764,10 @@ static void Des_Height(void)
 	}
 
 	/* FLY mode (normal) */
-	if (is_last_thr_valid && (!RCInput_IsActive(RC_AXIS_THR)))
+	if (is_last_thr_valid && (!Thr_StickActive()))
 		Ctrler.Z_posPID.Des = Ctrler.Z_posPID.FB;
 
-	is_last_thr_valid = RCInput_IsActive(RC_AXIS_THR);
+	is_last_thr_valid = Thr_StickActive();
 
 	if (TWC.execute == 1)
 	{
@@ -1753,7 +1804,7 @@ static void Des_VHeight(void)
 	else if (flight_phase == FLIGHT_PHASE_GROUND_IDLE &&
 	         (!g_motor_idle_enabled || (!TWC.execute && RCInput_Get(RC_AXIS_THR) < THR_IDLE_MAX)))
 		Ctrler.Z_ratePID.Des = 0.0f;
-	else if(RCInput_IsActive(RC_AXIS_THR))
+	else if(Thr_StickActive())
 		Ctrler.Z_ratePID.Des = RCInput_Get(RC_AXIS_THR) * gs_max_vertical_speed_mps ;
 	else
 		Ctrler.Z_ratePID.Des = Ctrler.Z_posPID.U;
