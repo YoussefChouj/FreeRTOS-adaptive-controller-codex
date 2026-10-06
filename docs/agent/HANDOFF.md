@@ -30,6 +30,8 @@ Older entries (2026-09-30 .. 2026-10-03, incl. the landing/OF-drift investigatio
    (ground-station commands written at prio 2, read at prio 4). Spec `docs/architecture/task-data-sharing.md`.
 10. OPEN feature (with or after 9): event-driven IMU -> Mahony -> stabilizer chain (task notifications instead of
    three separate timers). Measure sample age first; close if steady. Spec `docs/architecture/event-driven-imu-chain.md`.
+11. OPEN feature: axis-priority mixer (yaw gives way first), low-throttle airmode, authority-aware MRAC (alpha,
+   PCH: `ENABLE_PSEUDO_CONTROL_HEDGING` is a dead macro). Measure clip events first. Spec `docs/architecture/axis-priority-mixer.md`.
 
 ## Do not
 - Do not arm, idle or spin motors outside an operator-opened battery session (AGENTS.md > Authorizations).
