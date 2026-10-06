@@ -1653,9 +1653,10 @@ float	des_roll = 0;
 /* FIX 2026-10-06 (workflow C, operator): a GS (wfb) flight must not depend on where the throttle stick sits. The
  * throttle does not self-centre and stays at the bottom after the RC arm; read as an active stick it is a full-rate
  * descent command at lift-off (f03 climbed only because the operator centred it by hand). During a GS flight the
- * throttle stick is ignored until the pilot takes over: roll/pitch moved (the wfb takeover condition) or the
- * throttle moved more than THR_TAKEOVER_DELTA from where it sat when the GS flight took off. The takeover holds
- * until the next take-off. Outside GS flights the stick works as before. Idempotent within a tick. */
+ * throttle stick is ignored until the pilot moves it more than THR_TAKEOVER_DELTA from where it sat when the GS
+ * flight took off. A roll/pitch takeover alone keeps the altitude hold: a drift correction with the throttle still
+ * at the bottom must not become a full-rate descent. The takeover holds until the next take-off. Outside GS flights
+ * the stick works as before. Idempotent within a tick. */
 static uint8_t s_thr_pilot = 1U;   /* 1: the throttle stick drives z */
 static uint8_t s_thr_ref_ok;
 static float   s_thr_ref;          /* physical throttle when the take-off released the stick authority */
@@ -1676,8 +1677,7 @@ static int Thr_StickActive(void)
 	{
 		float thr = RCInput_Get(RC_AXIS_THR);
 		if (!s_thr_ref_ok) { s_thr_ref = thr; s_thr_ref_ok = 1U; }
-		if (fabsf(thr - s_thr_ref) > THR_TAKEOVER_DELTA ||
-		    RCInput_IsActive(RC_AXIS_ROLL) || RCInput_IsActive(RC_AXIS_PITCH))
+		if (fabsf(thr - s_thr_ref) > THR_TAKEOVER_DELTA)
 			s_thr_pilot = 1U;
 	}
 	return s_thr_pilot && RCInput_IsActive(RC_AXIS_THR);
