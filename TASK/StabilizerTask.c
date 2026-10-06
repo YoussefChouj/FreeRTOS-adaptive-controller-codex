@@ -72,9 +72,9 @@ static void GsIdle_ReleaseOnDisarm(void);    /* below Des_Height: GS idle author
  * below 0.5 m, 0.3 -> 0.13 m in 0.28 s vs 0.86 s auto (F6). Des_Height still lowers
  * Z_posPID.Des at the same rate so the Des-at-floor touchdown gates keep working.
  * Touchdown detected by Z_ratePID.FB -> 0 on frame contact. */
-#define LAND_VZ_MPS        0.40f
+#define LAND_VZ_MPS        0.60f    /* F8 2026-10-06: was 0.40 (F7 1.0->0.5 m took 1.34 s vs M8 0.69 s) */
 #define LAND_FAST_ALT      0.50f
-#define LAND_VZ_FAST_MPS   0.70f
+#define LAND_VZ_FAST_MPS   0.50f    /* F8: was 0.70; touchdown speed, impact energy goes with speed^2 */
 #define LAND_TICK_S        0.005f   /* Des_Height runs every 200 Hz tick */
 /* Safety net: 3000 ticks at 200 Hz = 15 s max landing time before forced disarm
  * (was 10 s; kept for margin: rate-mode LAND from 2.5 m is about 5.7 s, arithmetic). */
@@ -96,7 +96,7 @@ static void GsIdle_ReleaseOnDisarm(void);    /* below Des_Height: GS idle author
  * and rocked -4.5/-5.2 deg. Now every touchdown gate starts a spool-down instead: vz command 0 and
  * each motor's command above ZERO scaled by k = 1 -> 0 over LAND_SPOOL_TICKS, then LANDED + disarm
  * (PX4 maybe_landed -> landed). Once started it always finishes. PROPOSED values, not flown. */
-#define LAND_SPOOL_TICKS     60U   /* 0.3 s, about one gear bounce period (~0.26 s, from the hop) */
+#define LAND_SPOOL_TICKS    100U   /* 0.5 s (F8; was 60 = 0.3 s, F7 still bounced a little) */
 /* FIX 2026-10-03 (FLIGHT_TEST_DRIFT_FIX_1 F1, F3): floor for s_land_rest_z. Right after
  * power-up the ground reads 0.00 m, but after a landing it reads 0.05 m, so the rest gate
  * (0.03 m) never opened on the first flight per battery: props spun 1.5 s on the floor at
@@ -110,7 +110,10 @@ static void GsIdle_ReleaseOnDisarm(void);    /* below Des_Height: GS idle author
  * so they would wind up a tilt that skids or tips the drone at the cut. P and D stay
  * active: position hold is NOT turned off. It can also latch while floating on the
  * ground-effect cushion (0.11-0.14 m, vz ~0); holding I there is harmless. Does not fix
- * the OF position-estimate error itself. */
+ * the OF position-estimate error itself.
+ * F8 2026-10-06: in contact (or once the spool-down started) the xy lean command is now zero
+ * and the xy integrators are cleared (PX4 style, see the end of Pos_Compute). F7 never latched
+ * this stage: the rest gate started the spool 0.05 s after contact, before 60 ticks. */
 #define LAND_CONTACT_ALT     0.15f
 #define LAND_CONTACT_VZ      0.10f
 #define LAND_CONTACT_TICKS   60U   /* 0.3 s at 200 Hz */
@@ -1531,6 +1534,21 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact)
 		Ctrler.locxsPID.U += ax;
 		Ctrler.locysPID.U += ay;
 	}
+
+	/* F8 2026-10-06, PX4 style (MulticopterPositionControl: on ground contact the xy setpoint is
+	 * cleared and the integrators reset): with the gear on the floor, stop correcting xy. Zero
+	 * lean command, so the angle loop holds level instead of tilting the drone to chase an
+	 * estimate that drifts on the ground (F7: P and D kept tilting the skids), and clear every
+	 * xy integrator so nothing is wound up for the next takeoff. */
+	if (land_contact)
+	{
+		Ctrler.locxPID.SumE  = 0.0f;
+		Ctrler.locyPID.SumE  = 0.0f;
+		Ctrler.locxsPID.SumE = 0.0f;
+		Ctrler.locysPID.SumE = 0.0f;
+		Ctrler.locxsPID.U    = 0.0f;
+		Ctrler.locysPID.U    = 0.0f;
+	}
 }
 
 /* Angle loops (pitch/roll gated on airborne, yaw), rate setpoints + SysID dither, rate loops. */
@@ -1635,7 +1653,7 @@ static void ThrustEst_Step(void)
 void Compute_Motor(void)
 {
 	uint8_t airborne = (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING);
-	uint8_t land_contact = Land_ContactStep();
+	uint8_t land_contact = (uint8_t)(Land_ContactStep() | (s_land_spool != 0U));   /* spool = touchdown too */
 
 	Z_Compute();
 

@@ -1,7 +1,7 @@
 # Landing protocol parameters
 
 All landing parameters are `#define`s in `TASK/StabilizerTask.c` (not protected). They are compile-time values:
-none of them can be written at runtime with CMD 0x01. Line numbers are as of f81da19.
+none of them can be written at runtime with CMD 0x01. Line numbers are as of f81da19; values as of F8 (2026-10-06).
 
 ## How the landing runs
 
@@ -10,7 +10,7 @@ WFB: HOVER -> RETURN -> SETTLE 1 s -> DESCEND          (API/wfb_prim.c, protecte
 Stabilizer: LANDING
   stage 1  sink LAND_VZ_MPS        down to LAND_FAST_ALT
   stage 2  sink LAND_VZ_FAST_MPS   down to contact
-  contact  LAND_CONTACT_*          freezes the xy integrators (P and D stay on)
+  contact  LAND_CONTACT_* or spool  zero xy lean, xy integrators cleared (PX4 style, F8)
   gate     rest | stable-rate | sink-bias saturation | timeout   -> touchdown
   spool    LAND_SPOOL_TICKS        motors fade linearly to ZERO, vzDes 0
   LANDED   disarm, motors zero
@@ -20,14 +20,14 @@ Stabilizer: LANDING
 
 | parameter | line | now | what it does | to land faster | less bounce | less drift |
 |---|---|---|---|---|---|---|
-| `LAND_VZ_MPS` | 75 | 0.40 m/s | stage-1 sink speed, from hover height down to `LAND_FAST_ALT` | raise (0.6) | - | - |
+| `LAND_VZ_MPS` | 75 | 0.60 m/s (F7 0.40) | stage-1 sink speed, from hover height down to `LAND_FAST_ALT` | raise (0.6) | - | - |
 | `LAND_FAST_ALT` | 76 | 0.50 m | height where stage 2 starts | lower | raise (longer stage 2 if stage 2 is the slower one) | - |
-| `LAND_VZ_FAST_MPS` | 77 | 0.70 m/s | stage-2 sink speed: this is the speed at which the gear hits the floor | raise | **lower** (impact energy goes with speed squared) | lower |
+| `LAND_VZ_FAST_MPS` | 77 | 0.50 m/s (F7 0.70) | stage-2 sink speed: this is the speed at which the gear hits the floor | raise | **lower** (impact energy goes with speed squared) | lower |
 | `LAND_MAX_TICKS` | 81 | 3000 (15 s) | safety net: forced disarm if no gate fires | - | - | - |
 | `LAND_REST_MARGIN` | 84 | 0.03 m | "on the ground" = height within this of the pre-takeoff rest height | raise (fires earlier) | - | raise (less time sliding) |
 | `LAND_SINK_BIAS_MAX` | 85 | 0.40 m/s | ground-effect sink bias at saturation also counts as ground | - | - | - |
 | `LAND_REST_CUT_TICKS` | 92 | 10 (50 ms) | how long the rest condition must hold before the spool starts | lower | - | lower |
-| `LAND_SPOOL_TICKS` | 99 | 60 (0.3 s) | motor fade time after touchdown, then disarm | lower | **raise** (0.5 s = 100) | lower |
+| `LAND_SPOOL_TICKS` | 99 | 100 (0.5 s; F7 60) | motor fade time after touchdown, then disarm | lower | **raise** (0.5 s = 100) | lower |
 | `LAND_REST_MIN` | 105 | 0.05 m | floor for the rest height (the first flight per battery reads 0.00) | - | - | - |
 | `LAND_CONTACT_ALT` / `_VZ` / `_TICKS` | 114-116 | 0.15 m / 0.10 m/s / 60 | ground-contact stage: freezes the xy integrators | - | - | see "drift" below |
 | `LAND_RATE_SLOW_ALT_M` | 1058 | 0.20 m | below this height the stable-rate threshold widens (LOW applies) | - | - | - |
@@ -71,3 +71,7 @@ The difference that matters for drift: once PX4 sees ground contact it stops cor
 xy setpoint and resets the integrators, so the attitude loop does not tilt the drone to chase an estimate that drifts
 while the gear touches. Our contact stage only freezes the integrators, and the xy P and D terms keep tilting the
 drone while it is on the ground. That is a code change, not a `#define`.
+
+F8 (2026-10-06) adds that: in contact, or once the spool-down starts, the xy lean command is zero and every xy
+integrator is cleared (end of `Pos_Compute`). Before F8 the contact stage never latched in practice: the rest gate
+started the spool 0.05 s after contact, before the 60-tick contact debounce.
