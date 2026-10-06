@@ -1,6 +1,6 @@
 """Video ground truth for optical-flow roams: a fixed phone films the drone, the orange prop guards give its floor xy.
 
-    python -m ground_station.analysis.video_truth calib <board.mp4> --board 9x6 --square 0.025 --out cam.json
+    python -m ground_station.analysis.video_truth calib <board.mp4> --board 8x5 --square 0.026 [--until 60] --out cam.json   # prints lens spread
     python -m ground_station.analysis.video_truth floor <roam.mp4> --board 8x5 --square 0.026 --out marks.json
     python -m ground_station.analysis.video_truth click <roam.mp4> --world "0,0 1.5,0 0,1.5 1.5,1.5" --out marks.json
     python -m ground_station.analysis.video_truth frame <roam.mp4> --t 2.0 --out frame.png      # check the colour mask
@@ -39,14 +39,39 @@ def _cv2():
 
 
 # ---------------------------------------------------------------- geometry
-def calibrate(video: str, board: tuple[int, int], square: float, step: int = 10) -> dict:
-    """Lens model from a checkerboard video: every `step`-th frame with a full board is used."""
+def _spread_cm(objs, imgs, size, dist_m=4.0) -> dict | None:
+    """Lens-model repeatability: calibrate 3 interleaved thirds of the views and compare their rays, scaled to `dist_m`
+    (common offset removed: the floor pose absorbs it), inside the region the board covered. Outside it the polynomial
+    distortion is extrapolated and unbounded: that part is what coverage_6x6 reports."""
+    if len(objs) < 30:
+        return None
+    cv2 = _cv2()
+    hull = cv2.convexHull(np.concatenate(imgs).reshape(-1, 1, 2).astype(np.float32))
+    u, v = np.meshgrid(np.linspace(0, size[0] - 1, 24), np.linspace(0, size[1] - 1, 24))
+    grid = np.array([p for p in np.c_[u.ravel(), v.ravel()] if cv2.pointPolygonTest(hull, (float(p[0]), float(p[1])), False) >= 0],
+                    np.float32).reshape(-1, 1, 2)
+    rays = []
+    for s in range(3):
+        _, K, d, _, _ = cv2.calibrateCamera(objs[s::3], imgs[s::3], size, None, None)
+        rays.append(cv2.undistortPoints(grid, K, d).reshape(-1, 2))
+    e = np.concatenate([np.linalg.norm((a - b) - (a - b).mean(0), axis=1)
+                        for a, b in ((rays[0], rays[1]), (rays[0], rays[2]), (rays[1], rays[2]))]) * dist_m * 100
+    return {"rms": float(np.sqrt(np.mean(e ** 2))), "max": float(e.max()), "at_m": dist_m}
+
+
+def calibrate(video: str, board: tuple[int, int], square: float, step: int = 10, t_end: float | None = None,
+              max_frames: int = 45) -> dict:
+    """Lens model from a checkerboard video: every `step`-th frame with a full board, up to `t_end` s (lens part of a
+    clip that goes on to film the roam), thinned evenly to `max_frames` (calibrateCamera time grows steeply with
+    views: measured 0.5 s for 10, 10 s for 30 views of 40 corners at 4K)."""
     cv2 = _cv2()
     obj = np.zeros((board[0] * board[1], 3), np.float32)
     obj[:, :2] = np.mgrid[0:board[0], 0:board[1]].T.reshape(-1, 2) * square
     cap, objs, imgs, size, i = cv2.VideoCapture(video), [], [], None, 0
     while cap.grab():
         i += 1
+        if t_end is not None and cap.get(cv2.CAP_PROP_POS_MSEC) > t_end * 1000:
+            break
         if i % step:
             continue
         g = cv2.cvtColor(cap.retrieve()[1], cv2.COLOR_BGR2GRAY)
@@ -57,13 +82,18 @@ def calibrate(video: str, board: tuple[int, int], square: float, step: int = 10)
             imgs.append(c)
     if len(objs) < 5:
         raise SystemExit(f"only {len(objs)} frames with a full {board[0]}x{board[1]} board; need >= 5")
+    found = len(objs)
+    if found > max_frames:
+        keep = np.linspace(0, found - 1, max_frames).round().astype(int)
+        objs, imgs = [objs[k] for k in keep], [imgs[k] for k in keep]
     rms, K, dist, rv, tv = cv2.calibrateCamera(objs, imgs, size, None, None)
     per = [float(np.sqrt(np.mean(np.sum((cv2.projectPoints(o, r, t, K, dist)[0] - c) ** 2, axis=2))))
            for o, c, r, t in zip(objs, imgs, rv, tv)]
     pts = np.concatenate(imgs).reshape(-1, 2) / size * 6
     cells = len({(int(u), int(v)) for u, v in pts})       # 6x6 image grid cells a corner landed in
     return {"K": K.tolist(), "dist": dist.ravel().tolist(), "rms_px": float(rms), "frames": len(objs),
-            "size": list(size), "worst_frame_px": max(per), "coverage_6x6": cells / 36}
+            "frames_found": found, "size": list(size), "worst_frame_px": max(per), "coverage_6x6": cells / 36,
+            "spread_cm": _spread_cm(objs, imgs, size)}
 
 
 def floor_pose(K, dist, world_xy, pixel) -> tuple[np.ndarray, np.ndarray, float]:
@@ -440,7 +470,8 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("calib"); c.add_argument("video"); c.add_argument("--board", required=True)
     c.add_argument("--square", type=float, required=True); c.add_argument("--step", type=int, default=10)
-    c.add_argument("--out", required=True)
+    c.add_argument("--until", type=float, help="s; use only the lens part of a clip that then films the roam")
+    c.add_argument("--max-frames", type=int, default=45); c.add_argument("--out", required=True)
     k = sub.add_parser("click"); k.add_argument("video"); k.add_argument("--t", type=float, default=1.0)
     k.add_argument("--world", required=True, help='"x,y x,y ..." metres'); k.add_argument("--out", required=True)
     b = sub.add_parser("floor"); b.add_argument("video"); b.add_argument("--board", required=True)
@@ -462,9 +493,13 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.cmd == "calib":
         cols, rows = (int(v) for v in a.board.lower().split("x"))
-        cam = calibrate(a.video, (cols, rows), a.square, a.step)
+        cam = calibrate(a.video, (cols, rows), a.square, a.step, a.until, a.max_frames)
         Path(a.out).write_text(json.dumps(cam, indent=2))
-        print(f"rms {cam['rms_px']:.3f} px from {cam['frames']} frames -> {a.out}")
+        sp = cam["spread_cm"]
+        print(f"rms {cam['rms_px']:.3f} px from {cam['frames']} of {cam['frames_found']} frames, corner coverage "
+              f"{cam['coverage_6x6']:.0%} -> {a.out}")
+        if sp:   # PROPOSED target: max < 2 cm keeps the lens model well under the guard-blob noise
+            print(f"lens spread at {sp['at_m']:.0f} m: rms {sp['rms']:.1f} cm, max {sp['max']:.1f} cm (target max < 2 cm)")
     elif a.cmd == "floor":
         cols, rows = (int(v) for v in a.board.lower().split("x"))
         m = floor_board(a.video, (cols, rows), a.square)

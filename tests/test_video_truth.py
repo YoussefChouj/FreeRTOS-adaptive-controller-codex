@@ -176,12 +176,12 @@ def test_floor_board_pose(tmp_path):
 
 
 def test_calibrate_recovers_intrinsics(tmp_path):
-    """Board shown at 12 oblique poses: SB corners + calibrateCamera give back f, centre and distortion."""
+    """Board shown at 30 oblique poses: SB corners + calibrateCamera give back f, centre and distortion."""
     k2, d2, s = np.array([[900.0, 0, 640], [0, 900.0, 360], [0, 0, 1]]), np.array([0.08, -0.05, 0, 0, 0]), 0.026
     video = str(tmp_path / "lens.avi")
     w = cv2.VideoWriter(video, cv2.VideoWriter_fourcc(*"MJPG"), 30, (1280, 720))
     mid = np.array([4.5 * s, 3 * s, 0])
-    for a in np.radians(np.arange(0, 360, 30)):
+    for a in np.radians(np.arange(0, 360, 12)):
         c = mid + [0.25 * np.cos(a), 0.18 * np.sin(a), 0.45]
         R, t = _lookat(c, mid + [0.06 * np.cos(2 * a), 0.04 * np.sin(a), 0])
         rvec = cv2.Rodrigues(R)[0]
@@ -199,8 +199,11 @@ def test_calibrate_recovers_intrinsics(tmp_path):
         w.write(img)
     w.release()
     cam = vt.calibrate(video, (8, 5), s, step=1)
-    assert cam["frames"] == 12 and cam["rms_px"] < 0.3 and cam["worst_frame_px"] < 0.5
+    part = vt.calibrate(video, (8, 5), s, step=1, t_end=0.28, max_frames=6)
+    assert (part["frames"], part["frames_found"], part["spread_cm"]) == (6, 9, None)   # 9 frames by 0.28 s, thinned to 6
+    assert cam["frames"] == 30 and cam["rms_px"] < 0.3 and cam["worst_frame_px"] < 0.5
     K = np.array(cam["K"])
-    assert abs(K[0, 0] - 900) < 5 and abs(K[1, 1] - 900) < 5      # measured 901.4 / 901.2, rms 0.05 px
-    assert abs(K[0, 2] - 640) < 3 and abs(K[1, 2] - 360) < 3      # measured 640.1 / 359.2
-    assert cam["coverage_6x6"] == pytest.approx(16 / 36)          # centre-heavy views: k2/k3 trade off (-0.22/+0.87)
+    assert abs(K[0, 0] - 900) < 5 and abs(K[1, 1] - 900) < 5      # measured 897.4 / 898.0, rms 0.05 px
+    assert abs(K[0, 2] - 640) < 3 and abs(K[1, 2] - 360) < 3      # measured 640.0 / 362.4
+    assert cam["coverage_6x6"] == pytest.approx(18 / 36)          # centre-heavy views
+    assert cam["spread_cm"]["rms"] < 1.5 and cam["spread_cm"]["max"] < 3   # measured 0.58 / 1.27 cm at 4 m
