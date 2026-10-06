@@ -118,10 +118,13 @@ VELOCITY_LOOPS: tuple[str, ...] = (
     "Ctrler.locxPID.U", "Ctrler.locyPID.U", "Ctrler.pitchPID.Des", "Ctrler.rollPID.Des",
 )
 OPTICAL_FLOW: tuple[str, ...] = ("ano_of.of2_dx_fix", "ano_of.of2_dy_fix")
+# wfb_glue.c TAKEOFF gate inputs not already in core (10-06 f02: TAKEOFF refused STATE, gate not logged)
+TAKEOFF_GATE: tuple[str, ...] = ("g_motor_idle_enabled", "sbus_lost")
 LOG_GROUPS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "mrac_shadow": MRAC_SHADOW,
     "velocity_loops": VELOCITY_LOOPS,
     "optical_flow": OPTICAL_FLOW,
+    "takeoff_gate": TAKEOFF_GATE,
 })
 LOG_PLAN_KEYS = ("rate_hz", "groups")
 # PROPOSED default: 50 Hz is the rate the 10 s stream_log check carried with 0 dropped after the last flash.
