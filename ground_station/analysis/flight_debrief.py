@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from ground_station.analysis.controller_descriptor import PID_AXES, PID_GAIN_CMD, PID_GAINS
+from ground_station.analysis import landing_report
 from ground_station.livewatch.campaign_capture import ATTITUDE, KF_HEALTH, MOTORS
 from ground_station.service.campaign_outputs import (
     PRIM_STATE, SAFETY_TRIP, Series, flight_metrics, hold_window, plot_flight, read_telemetry,
@@ -434,6 +435,8 @@ def render(d: Mapping[str, Any]) -> str:
                      f"(run_plan step `{json.dumps(c['step']['args'])}`, operator approves)")
     for name in nxt.get("campaigns", []):
         lines.append(f"- campaign: `{name}`")
+    if "landing" in d:
+        lines += ["", landing_report.render(d["landing"]).rstrip("\n")]
     lines += ["", "Plots: [tracking](plots/tracking.png), [spectra / timing / motors](plots/analysis.png)"]
     return "\n".join(lines) + "\n"
 
@@ -507,7 +510,8 @@ def debrief(session_dir: str | Path, run_dir: str | Path, *, flight_id: str | No
     out.mkdir(parents=True, exist_ok=True)
     d = {"n": n, "flight_id": flight_id, "session": str(session_dir), "scenario": scenario, "scenario_args": args,
          "metrics": m, "findings": found, "verdicts": verdicts, "not_applied": not_applied, "next": nxt, "gains": gains,
-         "previous": {"flight_id": prev["flight_id"], "metrics": prev["metrics"]} if prev else None}
+         "previous": {"flight_id": prev["flight_id"], "metrics": prev["metrics"]} if prev else None,
+         "landing": landing_report.landing(series)}
     if plots:
         plot_flight(series, out / "plots" / "tracking.png", f"{flight_id} {scenario}", hold_window(series))
         plot_analysis(series, m, out / "plots" / "analysis.png", sat)

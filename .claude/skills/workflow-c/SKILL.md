@@ -46,6 +46,9 @@ once; its hard rules, checklist and failure handling apply unchanged.
    flight. Without it the debrief credits no proposed change (a proposal is not a write).
    It writes `<run>/<NN>_<flight_id>/` with `debrief.md`, `debrief.json`, `plots/tracking.png`,
    `plots/analysis.png`, `next.yaml`, and appends `<run>/history.jsonl`.
+   `debrief.md` has a Landing section (segment times vs the manual M8 landing, contact, spool, tilt, drift). For
+   the landing alone, on any recorder session: `python -m ground_station.analysis.landing_report <session dir>`.
+   Never write a one-off analysis script: extend these tools instead.
 5. **Brief the operator**: send `debrief.md` and both PNGs with SendUserFile, then a short reply:
    bottom line first, then a small table (this flight vs the previous one), then the top 1 to 3 findings with
    their recommendation, and whether the last change helped (the "Did the last change help?" table).
