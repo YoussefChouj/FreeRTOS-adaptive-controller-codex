@@ -29,6 +29,7 @@ HSV_LO, HSV_HI = (5, 120, 100), (22, 255, 255)   # orange, OpenCV H 0-180 (tune 
 MIN_AREA = 30                                      # px, smallest blob kept
 DETECTOR_PX = 0.15                                 # px per axis, SB corner error on a perfect render (measured 0.12-0.14 mean)
 X_CM, Y_CM, Z_M = "Ctrler.locxPID.FB", "Ctrler.locyPID.FB", "Ctrler.Z_posPID.FB"
+X_SP, Y_SP = "Ctrler.locxPID.Des", "Ctrler.locyPID.Des"   # position setpoints, estimator frame (cm)
 PHASE, ARM = "flight_phase", "DroneStatus.ARM_Status"
 
 
@@ -44,25 +45,25 @@ def calibrate(video: str, board: tuple[int, int], square: float, step: int = 10)
     obj = np.zeros((board[0] * board[1], 3), np.float32)
     obj[:, :2] = np.mgrid[0:board[0], 0:board[1]].T.reshape(-1, 2) * square
     cap, objs, imgs, size, i = cv2.VideoCapture(video), [], [], None, 0
-    while True:
-        ok, frame = cap.read()
-        if not ok:
-            break
+    while cap.grab():
         i += 1
         if i % step:
             continue
-        g = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        g = cv2.cvtColor(cap.retrieve()[1], cv2.COLOR_BGR2GRAY)
         size = g.shape[::-1]
-        found, c = cv2.findChessboardCorners(g, board)
-        if found:
-            c = cv2.cornerSubPix(g, c, (11, 11), (-1, -1), (3, 30, 1e-3))
+        found, c = cv2.findChessboardCornersSB(g, board)    # classic detector misses the board in 4K frames
+        if found:                                          # a mirrored grid is a rigid flip of a plane: harmless
             objs.append(obj)
             imgs.append(c)
     if len(objs) < 5:
         raise SystemExit(f"only {len(objs)} frames with a full {board[0]}x{board[1]} board; need >= 5")
-    rms, K, dist, _, _ = cv2.calibrateCamera(objs, imgs, size, None, None)
+    rms, K, dist, rv, tv = cv2.calibrateCamera(objs, imgs, size, None, None)
+    per = [float(np.sqrt(np.mean(np.sum((cv2.projectPoints(o, r, t, K, dist)[0] - c) ** 2, axis=2))))
+           for o, c, r, t in zip(objs, imgs, rv, tv)]
+    pts = np.concatenate(imgs).reshape(-1, 2) / size * 6
+    cells = len({(int(u), int(v)) for u, v in pts})       # 6x6 image grid cells a corner landed in
     return {"K": K.tolist(), "dist": dist.ravel().tolist(), "rms_px": float(rms), "frames": len(objs),
-            "size": list(size)}
+            "size": list(size), "worst_frame_px": max(per), "coverage_6x6": cells / 36}
 
 
 def floor_pose(K, dist, world_xy, pixel) -> tuple[np.ndarray, np.ndarray, float]:
@@ -313,6 +314,9 @@ def run(video, cam, marks, csv_path, out, guard_offset=0.0, align_s=10.0, stride
         "path_truth_m": round(path_t, 2), "path_est_m": round(path_e, 2),
         # least-squares truth ~ s * est over the flight; path lengths are inflated by tracking jitter
         "scale_truth_over_est": round(float(np.nansum(t_rel * e_al) / np.nansum(e_al * e_al)), 4),
+        # estimator -> floor frame for `overlay`: floor_xy = truth0 + (est_m - est0) @ q.T
+        "frame": {"q": q.tolist(), "est0": est[i_to].tolist(), "truth0": tr[i_to].tolist(), "z_off": guard_offset,
+                  "t_to": float(te[i_to]), "t_end": float(te[i_end])},
     }
     with open(out / "truth.csv", "w", newline="") as f:
         w = csv.writer(f)
@@ -322,6 +326,66 @@ def run(video, cam, marks, csv_path, out, guard_offset=0.0, align_s=10.0, stride
     (out / "report.json").write_text(json.dumps(rep, indent=2))
     _plot(te[seg], t_rel, e_al, out / "truth.png")
     return rep
+
+
+def overlay(video, cam, marks, csv_path, run_dir, out_mp4, width=1920) -> int:
+    """Demo video: planned path (setpoints), the drone's own estimate and the video truth drawn on the roam video."""
+    cv2 = _cv2()
+    run_dir = Path(run_dir)
+    rep = json.loads((run_dir / "report.json").read_text())
+    fr, off = rep["frame"], rep["sync_offset_s"]
+    q, e0, t0 = np.array(fr["q"]), np.array(fr["est0"]), np.array(fr["truth0"])
+    K, dist = np.array(cam["K"], float), np.array(cam["dist"], float)
+    R, t, _ = floor_pose(K, dist, marks["world"], marks["pixel"])
+    rvec = cv2.Rodrigues(R)[0]
+    tel = read_livewatch(csv_path, [X_CM, Y_CM, Z_M, X_SP, Y_SP])
+    te = tel["t"] - tel["t"][0]
+    seg = (te >= fr["t_to"]) & (te <= fr["t_end"])
+    te, z = te[seg], np.nan_to_num(tel[Z_M][seg]) + fr["z_off"]
+
+    def px(xy, zz):                                   # floor-frame metres at height zz -> pixels (fixed camera)
+        return cv2.projectPoints(np.c_[xy, zz].astype(float), rvec, t, K, dist)[0].reshape(-1, 2)
+
+    def floor(xc, yc):
+        return t0 + (np.c_[xc[seg], yc[seg]] / 100.0 - e0) @ q.T
+
+    tr = np.loadtxt(run_dir / "truth.csv", delimiter=",", skiprows=1, ndmin=2)
+    lines = {"plan": (te, px(floor(tel[X_SP], tel[Y_SP]), z), (0, 215, 255)),       # BGR: yellow
+             "estimate": (te, px(floor(tel[X_CM], tel[Y_CM]), z), (255, 160, 40)),   # blue
+             "video truth": (tr[:, 0], px(t0 + tr[:, 1:3], np.interp(tr[:, 0], te, z)), (60, 220, 60))}  # green
+    cap = cv2.VideoCapture(video)
+    W, H = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    sc = width / W
+    size = (width, int(round(H * sc)))
+    w = cv2.VideoWriter(str(out_mp4), cv2.VideoWriter_fourcc(*"mp4v"), cap.get(cv2.CAP_PROP_FPS) or 30, size)
+    lw = max(2, width // 640)
+    n = 0
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        now = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0 + off                         # telemetry clock
+        img = cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
+        tp, pp, _ = lines["plan"]
+        cv2.polylines(img, [np.int32(pp[np.isfinite(pp).all(1)] * sc * 16)], False, (90, 90, 90), lw, cv2.LINE_AA, 4)
+        heads = {}
+        for y, (name, (tl, pl, col)) in enumerate(lines.items()):
+            k = int(np.searchsorted(tl, now))
+            seen = pl[:k][np.isfinite(pl[:k]).all(1)] * sc
+            if len(seen) > 1:
+                cv2.polylines(img, [np.int32(seen * 16)], False, col, lw, cv2.LINE_AA, 4)
+                cv2.circle(img, tuple(np.int32(seen[-1])), 3 * lw, col, -1, cv2.LINE_AA)
+                heads[name] = k
+            cv2.putText(img, name, (20, 40 + 36 * y), cv2.FONT_HERSHEY_SIMPLEX, 1.0, col, 2, cv2.LINE_AA)
+        if "estimate" in heads and "video truth" in heads:                           # estimator error, live
+            ke, kt = min(heads["estimate"], len(te)) - 1, min(heads["video truth"], len(tr)) - 1
+            d = np.hypot(*(floor(tel[X_CM], tel[Y_CM])[ke] - (t0 + tr[kt, 1:3])))
+            cv2.putText(img, f"estimate error {100 * d:.0f} cm", (20, 40 + 36 * 3), cv2.FONT_HERSHEY_SIMPLEX, 1.0,
+                        (255, 255, 255), 2, cv2.LINE_AA)
+        w.write(img)
+        n += 1
+    w.release()
+    return n
 
 
 def _plot(t, truth, est, path):
@@ -391,6 +455,10 @@ def main(argv=None):
         p.add_argument("--hsv-lo", default=",".join(map(str, HSV_LO)))
         p.add_argument("--hsv-hi", default=",".join(map(str, HSV_HI)))
         p.add_argument("--min-area", type=int, default=MIN_AREA)
+    o = sub.add_parser("overlay"); o.add_argument("video"); o.add_argument("--cam", required=True)
+    o.add_argument("--marks", required=True); o.add_argument("--csv", required=True)
+    o.add_argument("--run", required=True, help="output folder of `run`"); o.add_argument("--out", required=True)
+    o.add_argument("--width", type=int, default=1920)
     a = ap.parse_args(argv)
     if a.cmd == "calib":
         cols, rows = (int(v) for v in a.board.lower().split("x"))
@@ -406,6 +474,10 @@ def main(argv=None):
         world = [[float(v) for v in p.split(",")] for p in a.world.split()]
         _click(a.video, a.t, world, a.out)
         print("wrote", a.out)
+    elif a.cmd == "overlay":
+        n = overlay(a.video, json.loads(Path(a.cam).read_text()), json.loads(Path(a.marks).read_text()), a.csv, a.run,
+                    a.out, a.width)
+        print(f"wrote {n} frames -> {a.out}")
     elif a.cmd == "frame":
         cv2 = _cv2()
         frame = _grab(a.video, a.t)

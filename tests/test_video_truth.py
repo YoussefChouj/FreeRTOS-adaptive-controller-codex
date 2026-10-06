@@ -116,9 +116,10 @@ def test_run_end_to_end(tmp_path):
     path = tmp_path / "roam.csv"
     with open(path, "w", newline="") as f:
         cw = csv.writer(f)
-        cw.writerow(["t", vt.X_CM, vt.Y_CM, vt.Z_M, vt.PHASE, vt.ARM])
+        cw.writerow(["t", vt.X_CM, vt.Y_CM, vt.Z_M, vt.PHASE, vt.ARM, vt.X_SP, vt.Y_SP])
         for i, ti in enumerate(te):
-            cw.writerow([100 + ti, est[i, 0], est[i, 1], h, 1 if 2 <= ti <= 22 else 0, 1 if 1 <= ti <= 23 else 0])
+            cw.writerow([100 + ti, est[i, 0], est[i, 1], h, 1 if 2 <= ti <= 22 else 0, 1 if 1 <= ti <= 23 else 0,
+                         est[i, 0], est[i, 1]])
 
     marks = [[0, 0], [1.5, 0], [0, 1.5], [1.5, 1.5]]
     pix = cv2.projectPoints(np.c_[marks, np.zeros(4)].astype(float), rvec, t, k2, d0)[0].reshape(-1, 2)
@@ -129,6 +130,14 @@ def test_run_end_to_end(tmp_path):
     assert rep["err_rms_m"] < 0.02 and rep["err_max_m"] < 0.06
     assert abs(rep["scale_truth_over_est"] - 1) < 0.03
     assert (tmp_path / "out" / "truth.png").exists()
+    mp4 = tmp_path / "overlay.mp4"
+    assert vt.overlay(video, cam, {"world": marks, "pixel": pix.tolist()}, str(path), tmp_path / "out", mp4, 640) == 690
+    cap = cv2.VideoCapture(str(mp4))
+    cap.set(cv2.CAP_PROP_POS_FRAMES, 600)                        # 20 s in: trails drawn, plan and truth overlap
+    img = cap.read()[1]
+    assert img.shape == (360, 640, 3)
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    assert (cv2.inRange(hsv, (50, 120, 120), (70, 255, 255)) > 0).sum() > 200     # green truth trail present
 
 
 def test_floor_board_pose(tmp_path):
@@ -164,3 +173,34 @@ def test_floor_board_pose(tmp_path):
     assert d_err < 0.03                                          # measured 1.6 cm: 23 cm board, 9 px squares
     assert m["sigma_px"] == pytest.approx(vt.DETECTOR_PX, abs=1e-3)                   # identical frames: floor only
     assert d_err / 2 < vt.pose_noise(k2, d0, m["world"], m["pixel"], m["sigma_px"], 0.7, n=50) < 0.05
+
+
+def test_calibrate_recovers_intrinsics(tmp_path):
+    """Board shown at 12 oblique poses: SB corners + calibrateCamera give back f, centre and distortion."""
+    k2, d2, s = np.array([[900.0, 0, 640], [0, 900.0, 360], [0, 0, 1]]), np.array([0.08, -0.05, 0, 0, 0]), 0.026
+    video = str(tmp_path / "lens.avi")
+    w = cv2.VideoWriter(video, cv2.VideoWriter_fourcc(*"MJPG"), 30, (1280, 720))
+    mid = np.array([4.5 * s, 3 * s, 0])
+    for a in np.radians(np.arange(0, 360, 30)):
+        c = mid + [0.25 * np.cos(a), 0.18 * np.sin(a), 0.45]
+        R, t = _lookat(c, mid + [0.06 * np.cos(2 * a), 0.04 * np.sin(a), 0])
+        rvec = cv2.Rodrigues(R)[0]
+
+        def poly(x0, y0, x1, y1):
+            p = cv2.projectPoints(np.array([[x0, y0, 0], [x1, y0, 0], [x1, y1, 0], [x0, y1, 0]], float), rvec, t, k2, d2)[0]
+            return np.round(p.reshape(-1, 2) * 16).astype(np.int32)
+
+        img = np.full((720, 1280, 3), 110, np.uint8)
+        cv2.fillConvexPoly(img, poly(-s, -s, 10 * s, 7 * s), (230, 230, 230), cv2.LINE_AA, 4)
+        for r in range(6):
+            for col in range(9):
+                if (r + col) % 2:
+                    cv2.fillConvexPoly(img, poly(col * s, r * s, (col + 1) * s, (r + 1) * s), (30, 30, 30), cv2.LINE_AA, 4)
+        w.write(img)
+    w.release()
+    cam = vt.calibrate(video, (8, 5), s, step=1)
+    assert cam["frames"] == 12 and cam["rms_px"] < 0.3 and cam["worst_frame_px"] < 0.5
+    K = np.array(cam["K"])
+    assert abs(K[0, 0] - 900) < 5 and abs(K[1, 1] - 900) < 5      # measured 901.4 / 901.2, rms 0.05 px
+    assert abs(K[0, 2] - 640) < 3 and abs(K[1, 2] - 360) < 3      # measured 640.1 / 359.2
+    assert cam["coverage_6x6"] == pytest.approx(16 / 36)          # centre-heavy views: k2/k3 trade off (-0.22/+0.87)
