@@ -193,3 +193,17 @@ OPEN: no host test for Thr_StickActive; LAND in CLIMB (runner resends at HOVER; 
 flight_debrief --launch; propose_next keeps args; debrief f01/f02.
 F3 13:25: idle 10 s, TAKEOFF ok, GS false L1 position_error (z ref ramp) fixed 6ca93b1. Debrief in 01_wfc-...-03-001.
 
+
+## Moved from .claude_state.md 17:5x (14:50 OF, 16:40 manual landing, 16:05 F7 launch)
+14:50 KF-bias/idle hypothesis REFUTED: raw of2_dx_fix (pre-bias) summed over f05 hold = +0.07 m (TO -0.05, f04 same) ->
+the OF sensor itself never saw the ~1 m; estimate followed it. OF alive in air (std 2 cm/s). Suspect OF scale at z 0.5 m
+(module height scales flow) vs manual hover height. dc5d381: optical_flow group + of_quality, of_alt_cm, of_update_cnt
+(81 vars still fit @100 Hz). NEXT: restart 8081, ask f06 = hover z 1.0 (A/B height) with new OF fields; compare of_alt_cm.
+16:40 MANUAL LANDING CAPTURE done (8 landings, operator: last = best) -> docs/workflow-b/manual-landing-reference.md.
+M8 0.3->0.13 m in 0.28 s vs F6 auto 0.86 s (3x); auto slows near ground (pos ramp + Z_posPID Kp 0.7 -> sink ~0.7*z,
+10-02 slow stage 0.15 m/s <0.40 m). Operator chose rate-mode land -> 23a0c9c: LAND_VZ_MPS 0.40 to LAND_FAST_ALT 0.50,
+LAND_VZ_FAST_MPS 0.70 below (Des_VHeight LANDING; Des_Height lowers Des at same rate for floor gates). armcc rc 0,
+CHECK PASS, NOT FLOWN. NEXT: operator flashes (rebuild_and_flash --yes; resets Kp 340/Kd 8.5 to pid.c 400/10), then hover
+A/B + tape-measured landing drift. fake_drone descend_rate 0.3 not updated (sim). 8081 pid 1480.
+16:05 F7 launched (launch copy logs/campaigns/launch/wfc-20261006-1155-07_20261006-1556.yaml) NOT flown. gyroyPID Kd
+10->8.5 applied (plan-1, live until power cycle) WITHOUT a fresh arm check (my miss: read status.arm right before every write).
