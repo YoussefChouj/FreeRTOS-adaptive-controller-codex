@@ -31,7 +31,10 @@ once; its hard rules, checklist and failure handling apply unchanged.
 ## The loop (one pass per flight)
 
 1. **Launch**: `python -m ground_station.service.campaign_launch <run>/<NN>/next.yaml --pack <id>` (first flight:
-   the yaml from step 3). Show the log plan line it prints and keep the `launch copy: <path>` it prints.
+   the yaml from step 3). Keep the `launch copy: <path>` it prints. Then
+   ask workflow B's **Q3 log plan** every flight (operator 10-06): one AskUserQuestion with the printed table's
+   B/s against the 70,042 B/s budget; options: approve (Recommended), other rate (`--rate N`, show its B/s),
+   other groups (`velocity_loops`, `optical_flow`, `takeoff_gate`, `mrac_shadow`). Rerun launch with the answer.
 2. **Preflight and go**: `campaign_preflight` with that launch copy as `campaign_path`, the workflow B checklist, "Arm by RC when ready,
    then say go", then `mcp__dashboard__campaign_go` with the operator's words verbatim as `confirmation`.
 3. **Watch**: `mcp__dashboard__campaign_state` once per flight phase; no polling loops.
