@@ -28,7 +28,7 @@ import re
 import statistics
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from ground_station.analysis.controller_descriptor import PID_AXES, PID_GAIN_CMD, PID_GAINS
 from ground_station.livewatch.campaign_capture import ATTITUDE, KF_HEALTH, MOTORS
@@ -279,10 +279,28 @@ def _get(m: Mapping[str, Any], path: str | None) -> float | None:
     return abs(cur) if isinstance(cur, (int, float)) else None
 
 
-def judge_changes(prev: Mapping[str, Any] | None, m: Mapping[str, Any]) -> list[dict[str, Any]]:
+def flown_changes(prev: Mapping[str, Any] | None, applied: Sequence[str] | None,
+                  gains: Mapping[str, Mapping[str, float]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """(flown, not_applied). A proposed change counts as flown only when `applied` names it ("loop.gain", or
+    "loop.gain=value" when a different value went in): a proposal is not a write (F6 credited Kd 10->8.5 unflown)."""
+    proposed = list((prev or {}).get("next_changes", []))
+    flown = []
+    for spec in applied or []:
+        key, _, val = spec.partition("=")
+        loop, _, gain = key.partition(".")
+        ch = next((c for c in proposed if c["loop"] == loop and c["gain"] == gain), None)
+        if ch is None:
+            ch = {"loop": loop, "gain": gain, "from": gains.get(loop, {}).get(gain), "to": None, "metric": None}
+        else:
+            proposed.remove(ch)
+        flown.append({**ch, "to": float(val) if val else ch["to"]})
+    return flown, proposed
+
+
+def judge_changes(flown: list[dict[str, Any]], m: Mapping[str, Any]) -> list[dict[str, Any]]:
     """For each gain change flown since the previous flight: better / worse / no clear effect on its metric."""
     out = []
-    for ch in (prev or {}).get("next_changes", []):
+    for ch in flown:
         before, after = ch.get("before"), _get(m, ch.get("metric"))
         if before is None or after is None:
             verdict = "not measured"
@@ -401,6 +419,9 @@ def render(d: Mapping[str, Any]) -> str:
                   "|---|---|---|---|---|"]
         lines += [f"| {v['loop']}.{v['gain']} {v['from']} -> {v['to']} | {v['metric']} | {_fmt(v['before'])} "
                   f"| {_fmt(v['after'])} | **{v['verdict']}** |" for v in d["verdicts"]]
+    if d.get("not_applied"):
+        lines += ["", "Proposed but NOT applied before this flight (no verdict): " + ", ".join(
+            f"{c['loop']}.{c['gain']} {c['from']} -> {c['to']}" for c in d["not_applied"])]
     lines += ["", "## Findings (thresholds PROPOSED)", "", "| level | finding | evidence | recommendation |",
               "|---|---|---|---|"]
     lines += [f"| {f['level']} | {f['id']} | {f['evidence']} | {f['recommend']} |" for f in found] or \
@@ -453,14 +474,16 @@ def current_gains(history: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
     gains = {loop: dict(rows[loop].gains()) for loop in PID_AXES if loop in rows}
     for h in history:
         for c in h.get("flown_changes", []):
-            gains.setdefault(c["loop"], {})[c["gain"]] = c["to"]
+            if c.get("to") is not None:
+                gains.setdefault(c["loop"], {})[c["gain"]] = c["to"]
     return gains
 
 
 def debrief(session_dir: str | Path, run_dir: str | Path, *, flight_id: str | None = None, scenario: str = "hover",
             scenario_args: Mapping[str, Any] | None = None, pack: str = "P4000-1",
             sat: tuple[float, float] | None = None, gains: Mapping[str, Mapping[str, float]] | None = None,
-            plots: bool = True, log_plan: Mapping[str, Any] | None = None) -> Path:
+            plots: bool = True, log_plan: Mapping[str, Any] | None = None,
+            applied: Sequence[str] | None = None) -> Path:
     """Write one flight's debrief folder and its history line; returns the folder.
 
     log_plan: the plan this flight flew; next.yaml keeps it (operator picks rate and groups per flight)."""
@@ -470,11 +493,12 @@ def debrief(session_dir: str | Path, run_dir: str | Path, *, flight_id: str | No
     flight_id = flight_id or Path(session_dir).name
     n = flight_number(flight_id, history)
     args = dict(scenario_args or {})
-    gains = gains if gains is not None else current_gains(history)
+    flown, not_applied = flown_changes(prev, applied, current_gains(history) if gains is None else gains)
+    gains = gains if gains is not None else current_gains(history + [{"flown_changes": flown}])
     series = read_telemetry(session_dir)
     m = measure(series, args.get("z"), sat)
     found = findings(m, gains)
-    verdicts = judge_changes(prev, m)
+    verdicts = judge_changes(flown, m)
     nxt = propose_next(args, found, verdicts)
     for c in nxt["changes"]:
         c.setdefault("metric", next((f["metric"] for f in found if f["change"] and f["change"]["loop"] == c["loop"]
@@ -482,7 +506,7 @@ def debrief(session_dir: str | Path, run_dir: str | Path, *, flight_id: str | No
     out = run_dir / f"{n:02d}_{flight_id}"
     out.mkdir(parents=True, exist_ok=True)
     d = {"n": n, "flight_id": flight_id, "session": str(session_dir), "scenario": scenario, "scenario_args": args,
-         "metrics": m, "findings": found, "verdicts": verdicts, "next": nxt, "gains": gains,
+         "metrics": m, "findings": found, "verdicts": verdicts, "not_applied": not_applied, "next": nxt, "gains": gains,
          "previous": {"flight_id": prev["flight_id"], "metrics": prev["metrics"]} if prev else None}
     if plots:
         plot_flight(series, out / "plots" / "tracking.png", f"{flight_id} {scenario}", hold_window(series))
@@ -497,7 +521,7 @@ def debrief(session_dir: str | Path, run_dir: str | Path, *, flight_id: str | No
     line = {"n": n, "flight_id": flight_id, "session": str(session_dir), "scenario_args": args,
             "metrics": {k: v for k, v in m.items() if k not in ("timeline",)},
             "findings": [f["id"] for f in found],
-            "flown_changes": [{k: c[k] for k in ("loop", "gain", "from", "to")} for c in (prev or {}).get("next_changes", [])],
+            "flown_changes": [{k: c[k] for k in ("loop", "gain", "from", "to")} for c in flown],
             "next_changes": [{**{k: c[k] for k in ("loop", "gain", "from", "to")}, "metric": c.get("metric"),
                               "before": _get(m, c.get("metric"))} for c in nxt["changes"]]}
     with (run_dir / "history.jsonl").open("a", encoding="utf-8") as f:
@@ -525,6 +549,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--args", default="{}", help='scenario args as JSON, e.g. \'{"z": 0.5, "hold_s": 20}\'')
     p.add_argument("--pack", default="P4000-1")
     p.add_argument("--no-sat", action="store_true", help="skip the bench saturation limits")
+    p.add_argument("--applied", action="append", default=[], metavar="LOOP.GAIN[=VALUE]",
+                   help="a gain change actually written (run_plan finished) before this flight; repeatable. "
+                        "Without it no proposed change is credited")
     a = p.parse_args(argv)
     src = Path(a.source)
     flight_id, scen, args, plan = None, a.scenario, json.loads(a.args), None
@@ -540,7 +567,7 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             sat = None
     out = debrief(src, a.run, flight_id=flight_id, scenario=scen, scenario_args=args, pack=a.pack, sat=sat,
-                  log_plan=plan)
+                  log_plan=plan, applied=a.applied)
     print(f"debrief: {out / 'debrief.md'}")
     return 0
 

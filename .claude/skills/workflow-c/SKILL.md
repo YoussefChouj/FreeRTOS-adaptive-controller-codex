@@ -42,6 +42,8 @@ once; its hard rules, checklist and failure handling apply unchanged.
    ```
    python -m ground_station.analysis.flight_debrief logs/campaigns/<campaign>_<stamp> --run logs/workflow-c/<run>
    ```
+   Add `--applied LOOP.GAIN` (or `LOOP.GAIN=VALUE`) for each gain write whose run_plan finished before this
+   flight. Without it the debrief credits no proposed change (a proposal is not a write).
    It writes `<run>/<NN>_<flight_id>/` with `debrief.md`, `debrief.json`, `plots/tracking.png`,
    `plots/analysis.png`, `next.yaml`, and appends `<run>/history.jsonl`.
 5. **Brief the operator**: send `debrief.md` and both PNGs with SendUserFile, then a short reply:

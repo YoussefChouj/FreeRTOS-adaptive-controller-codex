@@ -100,7 +100,8 @@ def test_no_hover_and_trip_block_the_ladder(tmp_path):
 def test_history_judges_the_change_and_reverts_when_worse(tmp_path):
     _run(tmp_path, _session(tmp_path, "s1", z_bias=-0.12), {"z": 0.5, "hold_s": 20})
     flown = dict(GAINS, Z_ratePID={"Kp": 400.0, "Ki": round(0.435 * 1.15, 4), "Kd": 0.0})
-    out = _run(tmp_path, _session(tmp_path, "s2", z_bias=-0.20), {"z": 0.5, "hold_s": 20}, gains=flown)
+    out = _run(tmp_path, _session(tmp_path, "s2", z_bias=-0.20), {"z": 0.5, "hold_s": 20}, gains=flown,
+               applied=["Z_ratePID.Ki"])
     d = json.loads((out / "debrief.json").read_text())
     assert d["n"] == 2 and d["previous"]["flight_id"] == "s1"
     v = d["verdicts"][0]
@@ -113,7 +114,7 @@ def test_history_judges_the_change_and_reverts_when_worse(tmp_path):
 
 def test_history_better_verdict(tmp_path):
     _run(tmp_path, _session(tmp_path, "s1", z_bias=-0.12), {"z": 0.5, "hold_s": 20})
-    out = _run(tmp_path, _session(tmp_path, "s2", z_bias=-0.02), {"z": 0.5, "hold_s": 20})
+    out = _run(tmp_path, _session(tmp_path, "s2", z_bias=-0.02), {"z": 0.5, "hold_s": 20}, applied=["Z_ratePID.Ki"])
     d = json.loads((out / "debrief.json").read_text())
     assert d["verdicts"][0]["verdict"] == "better" and d["findings"] == []
     assert d["next"]["args"] == {"z": 0.7, "hold_s": 20}
@@ -147,3 +148,21 @@ def test_flight_number_comes_from_the_flight_id_not_the_debrief_count():
     """10-06: f01/f02 were never debriefed, so f03 was filed as folder 01 and "flight 2"."""
     assert fd.flight_number("wfc-20261006-1155-03-001", [{}]) == 3
     assert fd.flight_number("hover_ladder_20261006-1155", [{}, {}]) == 3  # no wfc id: count the debriefs
+
+
+def test_unapplied_proposal_gets_no_verdict(tmp_path):
+    # F6 2026-10-06: the debrief credited gyroyPID Kd 10->8.5 that was proposed but never written.
+    _run(tmp_path, _session(tmp_path, "s1", z_bias=-0.12), {"z": 0.5, "hold_s": 20})
+    out = _run(tmp_path, _session(tmp_path, "s2", z_bias=-0.02), {"z": 0.5, "hold_s": 20})
+    d = json.loads((out / "debrief.json").read_text())
+    assert d["verdicts"] == [] and d["not_applied"][0]["loop"] == "Z_ratePID"
+    assert "NOT applied" in (out / "debrief.md").read_text()
+    assert fd.read_history(tmp_path / "run")[1]["flown_changes"] == []
+
+
+def test_applied_with_other_value(tmp_path):
+    _run(tmp_path, _session(tmp_path, "s1", z_bias=-0.12), {"z": 0.5, "hold_s": 20})
+    out = _run(tmp_path, _session(tmp_path, "s2", z_bias=-0.02), {"z": 0.5, "hold_s": 20},
+               applied=["Z_ratePID.Ki=0.47"])
+    d = json.loads((out / "debrief.json").read_text())
+    assert d["verdicts"][0]["to"] == 0.47 and d["not_applied"] == []
