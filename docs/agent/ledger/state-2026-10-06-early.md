@@ -207,3 +207,23 @@ CHECK PASS, NOT FLOWN. NEXT: operator flashes (rebuild_and_flash --yes; resets K
 A/B + tape-measured landing drift. fake_drone descend_rate 0.3 not updated (sim). 8081 pid 1480.
 16:05 F7 launched (launch copy logs/campaigns/launch/wfc-20261006-1155-07_20261006-1556.yaml) NOT flown. gyroyPID Kd
 10->8.5 applied (plan-1, live until power cycle) WITHOUT a fresh arm check (my miss: read status.arm right before every write).
+
+## Archived from .claude_state.md 18:58 (touchdown F7-F9)
+17:xx TOUCHDOWN CAPTURE DONE (1 landing, logs/livewatch/touchdown_20261006.csv). 23a0c9c IS flashed (-0.40/-0.70 seen).
+Contact 77.08 s z 0.07, rest gate cut 0.19 s later (40 ticks) at motor avg ~2974 (hover ~3082, ZERO 2000) = ~90% hover
+on ground, attitude loop live (motors 2400-3650) -> skid slide = drift; then 1-tick step cut -> +5 cm hop at 77.40,
+tip -4.5/-5.2 deg. vzDes stayed -0.70 on ground; Z loop frozen 77.11-77.26 (s_alt_valid_tick? unverified).
+FIX f81da19 (armcc rc 0, CHECK PASS, NOT FLOWN): every land gate -> 0.3 s spool-down (mymotor above ZERO x k 1->0,
+vzDes 0), then LANDED+disarm; rest debounce 40->10 ticks. Operator flashed it via Keil (axf 17:22; SWD verify failed
+"no cores", skipped). 17:28 F7 FLOWN (hover 1.0, pid.c gains, Kd 8.5 NOT live): spool 37.34->37.61 avg 3139->2096 linear,
+disarm 37.64; tilt peak 2.0/2.1 deg (was 4.5/5.2); 1.0->0.5 1.34 s, 0.5->0.3 0.35 s, 0.3->0.13 0.23 s (M8 0.69/0.23/0.28).
+z/vzFB frozen on ground (vzFB -0.33 const) -> hop not visible in z; need operator eyes. Debrief 07_*: act pitch_rate_osc
+10 deg/s @26 Hz -> Kd 10->8.5 again. After disarm mymotor shows mix 3159 (telemetry only). 8081 pid 19012.
+Recorder fix = cbdd473. 17:40 operator: "small bounce, still drifts, needs faster; stop ad-hoc analysis, use reusable
+scripts; give landing params + PX4 reference". Param guide + PX4/ArduPilot DONE 9af19c0 (docs/workflow-b/landing-parameters.md).
+landing_report DONE 0eeb27b (+ Landing section in debrief.md, workflow-c skill note). F7 via tool: 1.34/0.35/0.30 s
+(scratch said 0.23; z steps ~15 Hz). FINDING: bare alias X is rounded to 0.01, slot0.X full precision -> reader audit: prefer slot0.
+F8 8d9ef22 (LAND_VZ 0.60, FAST 0.50, SPOOL 100, contact->xy lean 0 + SumE 0) flown by operator (axf 17:54), NOT
+recorded; "small bounce at the end". F9 c5380e4 (armcc rc 0, CHECK PASS, NOT FLASHED): spool latches collective
+(min(Throttle_out, Throttle_th)) in Land_Step, Mix_Compute uses it while s_land_spool!=0 (fix for F7 3085->3139 push).
+18:2x operator: F9 flown, "landing is perfect" (operator eyes, not recorded). LANDING CLOSED.
