@@ -27,6 +27,7 @@ from ground_station.livewatch.campaign_capture import (
 )
 from ground_station.platform.wfb_commands import CMD_PRIM, PrimIdx, WfbClient
 from ground_station.service.abort_monitor import AbortLimits, AbortMonitor, AbortSample
+from ground_station.service.schema_registry import SchemaRegistry
 from ground_station.service.campaign_runner import RunnerDeps
 
 # WFB_STATUS_FIELDS: g_wfb_status fields, same keys as FakeDrone.status() (docs/workflow-b/interfaces.md)
@@ -43,6 +44,10 @@ SAMPLE_SYMS = (
 )
 # the abort sample is only as fresh as the oldest of these
 _FRESHNESS_SYMS = ("g_wfb_status.prim_state",) + tuple(a.feedback for a in POSITION_AXES) + ATTITUDE[:2]
+# the service files some typed-stream symbols under their dashboard spelling only (schema_registry builtin_dashboard:
+# imu_data.rol -> status.roll_deg, Ctrler.gyroxPID.FB -> pid.gyrox.FB); 10-06 f01 aborted at 0.8 s on the raw names
+_REGISTRY = SchemaRegistry.builtin_dashboard()
+_ALIASES = {s: a for s in SAMPLE_SYMS if (a := _REGISTRY.resolve(s)) and a != s}
 
 ACK_TIMEOUT_S = 0.5        # PROPOSED: wait for one command result before calling it lost
 HEARTBEAT_PERIOD_S = 0.2   # PROPOSED: 5 Hz, interfaces.md "GS sends at 5 Hz"; firmware hb_timeout_s 1.0
@@ -122,7 +127,10 @@ def _sat_hi_lo() -> tuple[float, float]:
 def live_sample(service: Any, t_s: float, sat: tuple[float, float] | None = None,
                 now_ns: Callable[[], int] = time.time_ns) -> AbortSample:
     """One AbortSample from the newest streamed values; any missing freshness symbol makes it stale (inf)."""
-    vals = service.latest_values(SAMPLE_SYMS)
+    vals = service.latest_values(SAMPLE_SYMS + tuple(_ALIASES.values()))
+    for raw, alias in _ALIASES.items():
+        if raw not in vals and alias in vals:
+            vals[raw] = vals[alias]
     now = now_ns()
     ages = [(now - vals[s][1]) / 1e9 if s in vals else math.inf for s in _FRESHNESS_SYMS]
 

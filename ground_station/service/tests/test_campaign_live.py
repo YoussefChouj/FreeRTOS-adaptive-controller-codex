@@ -113,6 +113,18 @@ def test_live_sample_values():
     assert s.safety_trip == 0 and s.soc_pct is None
 
 
+def test_live_sample_reads_dashboard_spellings():
+    """10-06 f01: imu_data.rol/pit and Ctrler.gyro*PID.FB arrive only as status.*_deg / pid.gyro*.FB."""
+    svc = FakeService()
+    svc.stream(g_wfb_status__prim_state=2, Ctrler__locxPID__FB=0.0, Ctrler__locyPID__FB=0.0,
+               Ctrler__Z_posPID__FB=0.5, status__roll_deg=1.5, status__pitch_deg=-2.0,
+               pid__gyrox__FB=10.0, Ctrler__gyroxPID__Des=4.0)
+    s = live_sample(svc, 1.0, sat=(3995.0, 2005.0), now_ns=lambda: NOW_NS + 100_000_000)
+    assert s.age_s == pytest.approx(0.1)
+    assert (s.roll_deg, s.pitch_deg) == (1.5, -2.0)
+    assert s.rate_err_dps[0] == 6.0
+
+
 def test_live_sample_symbols_and_saturation():
     from ground_station.livewatch.campaign_capture import MOTORS, POSITION_AXES
     svc = FakeService()

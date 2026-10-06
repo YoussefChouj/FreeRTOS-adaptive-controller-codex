@@ -114,7 +114,8 @@ CAMPAIGN_SET: Mapping[str, tuple[str, ...]] = MappingProxyType({
 # always-on needed set. Inside a group the order is priority: the link budget trims from the end.
 VELOCITY_LOOPS: tuple[str, ...] = (
     "Ctrler.locxsPID.FB", "Ctrler.locxsPID.Des", "Ctrler.locysPID.FB", "Ctrler.locysPID.Des",
-    "Ctrler.locxPID.U", "Ctrler.locyPID.U",
+    "g_of_hold_active",   # RC ch6: 0 = angle mode, the loops above never reach tilt (10-06 f01)
+    "Ctrler.locxPID.U", "Ctrler.locyPID.U", "Ctrler.pitchPID.Des", "Ctrler.rollPID.Des",
 )
 OPTICAL_FLOW: tuple[str, ...] = ("ano_of.of2_dx_fix", "ano_of.of2_dy_fix")
 LOG_GROUPS: Mapping[str, tuple[str, ...]] = MappingProxyType({
