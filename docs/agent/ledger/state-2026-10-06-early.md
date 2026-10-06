@@ -154,3 +154,42 @@ test_live_sample_reads_dashboard_spellings). velocity_loops log group += g_of_ho
 22000/70042 B/s). OPEN: LAND ignored in CLIMB (wfb protected, propose), yaw kick -36 deg at spool-up.
 f01 flyaway + root cause (ch6 LOW) archived to state-2026-10-06-early.md.
 
+
+## Archived from .claude_state.md 2026-10-06 17:00
+16:00 F6 (hover 1.0, 8081 pid 19272, campaign out logs/campaigns/wfc-20261006-1155-06_20261006-155243, session
+logs/sessions/20261006-155152-*_f06, debrief 06_*) clean. OPERATOR: ~30 cm -x drift, "mostly at landing" (F4 12 cm y
+also at landing). Data: descent 35.5-40 s 1.0->0.1 m, OF dx within +-6 cm/s mean ~0, xFB 1->7.8->3.9 cm: OF never saw
+it. of_alt_cm tracks z (101 hold), of_quality constant 255 (useless). Hold 20 s fine (x RMS 3 cm). Hypothesis: OF blind
+to lateral motion during vertical motion (descent ~0.2 m/s; texture/pad asymmetry -> expansion flow bias?).
+BUG: debrief "Did the last change help?" credits gyroyPID Kd 10->8.5 that was NEVER applied (proposal treated as flown).
+Scripts: scratchpad d0468d51.../phase.py (per-prim OF integral), live.py (hold OF liveness).
+14:25 F5 done, debrief 05_*: z std 0.042->0.036 (Kp 340 better). Debrief "ACT telemetry gap 703 s" is FALSE: session csv
+starts with 4 stale rows (received_ns from F4 13:57:41) AND every row is written twice (zero-dt 3671/7341 in f04+f05 ->
+median dt 0 -> "gaps" counts all). TODO fix: recorder double-write (core.py _note_recorder paths / storage.note) + debrief
+dedupe/drop stale lead. OPERATOR: F5 drifted ~1 m +x (RC manual only 20-30 cm). Data: locxPID.FB stays within +-4 cm,
+locxsPID.FB ~0 -> the ESTIMATE never saw the drift (controller held a wrong estimate). Suspect OF bias: g_of_bias_mode=2 EKF
+(StabilizerTask.c:139-260) bias state can absorb slow real drift; ground OF reads frozen 3/4 raw before TO. Bias states
+not in log plan. NEXT: log s_of_bias_x/y + KF bias, tape-measure drift, consider mode 0 vs 2 A/B (CMD 0x1E idx0, ground only).
+14:35 Operator: "nothing to measure", manual RC hover in flymode 1 = no drift. Manual and GS share Des_Loc/Des_VLoc
+(StabilizerTask.c:1813-1856) + same KF -> difference is GS-only: LEADING HYPOTHESIS the 10 s ground IDLE (props spinning,
+OF at 5 cm reads frozen 3/4 raw) lets mode-2 KF learn a wrong OF bias before TO; manual pilots take off within seconds.
+Also z 0.5 m (low for OF laser?) vs manual height. KF bias fields exist: telemetry_groups.py:61 TlmGroup "est"
+(kf_bof_x/y_mps, of_bias_x/y) - check if campaign log plan can select it. Hold-mean raw ofx ~0.4 vs ground 3.0.
+NEXT: tell operator hypothesis; propose f06 = same hover + "est" group logged (+ maybe idle_s 3 to A/B the idle).
+14:10 OPERATOR FLASHED (axf 13:50); 8081 restarted -> pid 13332. F4 (wfc-...-04) FIRST STICK-FREE FLIGHT: idle 10 s, TO,
+hold 20 s, land, no abort. Hold: z std 0.042, x/y RMS 0.024/0.022, pitch rate line 8.2 deg/s @26 Hz, motor2 +0.065.
+Operator: landed ~12 cm off in y (hold was 2 cm -> drift is in descent/touchdown; CHECK in f04/f05 data). Debrief 04_*.
+Gain plan-1 Z_ratePID Kp 400->340 applied (approved via POST with operator chat words, memory chat-approval-for-gain-writes;
+resets on power cycle). F5 (wfc-...-05, launch copy logs/campaigns/launch/wfc-20261006-1155-05_20261006-1402.yaml) GO 14:09.
+14:30 STICK-FREE GS FLIGHT (operator 13:30: flymode 1 + RC arm = only input; operator FLASHES on return, I do not).
+0e5beae firmware: send_data IDLE in FlyMode_SDK takes stick authority (no THR<-0.85 gate); StabilizerTask Thr_StickActive
+latch: GS flight ignores THR in Des_Height/Des_VHeight/CalHot until |THR-flyup spot|>0.15 (chosen; 42ffacc: roll/pitch
+takeover alone keeps the alt hold); authority released on disarm edge. b2cd094 runner refuses TAKEOFF if rc_authority 1->0
+during the idle wait (pilot takeover; wfb_apply is protected) + failure-modes 27c. armcc compile rc 0 both files (uVision GUI open -> no full Keil link; the
+operator's flash builds it). CHECK PASS. c6242ff runner reason + test + workflow-b SKILL checklist + failure-modes 27b.
+F4 ready: logs/workflow-c/20261006-1155/01_wfc-20261006-1155-03-001/next.yaml (wfc-...-04, f04, hover .5/20/idle 10,
+100 Hz 3 groups). 8081 pid 18404 (restarted with b2cd094). NEXT on return: operator flashes (rebuild_and_flash --yes), then launch f04.
+OPEN: no host test for Thr_StickActive; LAND in CLIMB (runner resends at HOVER; proposal docs/agent/proposals/2026-10-06-protected-gs-flight.md); yaw kick at spool-up; debrief
+flight_debrief --launch; propose_next keeps args; debrief f01/f02.
+F3 13:25: idle 10 s, TAKEOFF ok, GS false L1 position_error (z ref ramp) fixed 6ca93b1. Debrief in 01_wfc-...-03-001.
+
