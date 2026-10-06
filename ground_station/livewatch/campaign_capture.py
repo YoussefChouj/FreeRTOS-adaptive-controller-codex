@@ -117,7 +117,10 @@ VELOCITY_LOOPS: tuple[str, ...] = (
     "g_of_hold_active",   # RC ch6: 0 = angle mode, the loops above never reach tilt (10-06 f01)
     "Ctrler.locxPID.U", "Ctrler.locyPID.U", "Ctrler.pitchPID.Des", "Ctrler.rollPID.Des",
 )
-OPTICAL_FLOW: tuple[str, ...] = ("ano_of.of2_dx_fix", "ano_of.of2_dy_fix")
+# Quality, the module's own height (it scales flow to velocity) and the frame counter (stale vs live): 10-06 f05
+# drifted ~1 m +x while the logged flow summed to ~7 cm, and these were missing to tell why.
+OPTICAL_FLOW: tuple[str, ...] = ("ano_of.of2_dx_fix", "ano_of.of2_dy_fix", "ano_of.of_quality", "ano_of.of_alt_cm",
+                                 "ano_of.of_update_cnt")
 # wfb_glue.c TAKEOFF gate inputs not already in core (10-06 f02: TAKEOFF refused STATE, gate not logged)
 TAKEOFF_GATE: tuple[str, ...] = ("g_motor_idle_enabled", "sbus_lost")
 LOG_GROUPS: Mapping[str, tuple[str, ...]] = MappingProxyType({

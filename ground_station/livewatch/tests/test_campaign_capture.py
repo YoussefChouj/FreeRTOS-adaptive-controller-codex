@@ -261,11 +261,11 @@ def test_plan_capture_keeps_group_order_and_caps_at_the_probed_rate():
 
 def test_plan_capture_drops_group_tail_at_100hz():
     plan = cc.plan_capture({"rate_hz": 100, "groups": ["optical_flow", "mrac_shadow"]})
-    assert plan["dropped"] == list(OPTIONAL[38:])  # 81 vars fit at 100 Hz: 41 core + 2 flow + 38 shadow
+    assert plan["dropped"] == list(OPTIONAL[35:])  # 81 vars fit at 100 Hz: 41 core + 5 flow + 35 shadow
     table = cc.log_plan_table(plan)
     assert "| core (always on) | 41/41 | 100 |  |" in table
-    assert "| optical_flow | 2/2 | 100 |  |" in table
-    assert "| mrac_shadow | 38/68 | 100 | 30 dropped (link budget) |" in table
+    assert "| optical_flow | 5/5 | 100 |  |" in table
+    assert "| mrac_shadow | 35/68 | 100 | 33 dropped (link budget) |" in table
     assert table.splitlines()[-1].startswith("2 slot(s), 69600 of 70042 B/s")
 
 
