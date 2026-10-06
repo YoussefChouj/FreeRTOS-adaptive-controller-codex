@@ -141,3 +141,9 @@ def test_next_yaml_keeps_the_flown_log_plan(tmp_path):
                      gains=GAINS, plots=False, log_plan=plan)
     text = (out / "next.yaml").read_text(encoding="utf-8")
     assert "log_plan: {rate_hz: 100, groups: [velocity_loops, optical_flow, takeoff_gate]}" in text
+
+
+def test_flight_number_comes_from_the_flight_id_not_the_debrief_count():
+    """10-06: f01/f02 were never debriefed, so f03 was filed as folder 01 and "flight 2"."""
+    assert fd.flight_number("wfc-20261006-1155-03-001", [{}]) == 3
+    assert fd.flight_number("hover_ladder_20261006-1155", [{}, {}]) == 3  # no wfc id: count the debriefs

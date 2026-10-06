@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import statistics
 from dataclasses import dataclass
 from pathlib import Path
@@ -430,6 +431,13 @@ def next_campaign_yaml(run_name: str, n: int, nxt: Mapping[str, Any], pack: str,
             f"    log_plan: {{rate_hz: {rate_hz:g}, groups: [{', '.join(groups)}]}}\nabort: {{}}\n")
 
 
+def flight_number(flight_id: str, history: list[dict[str, Any]]) -> int:
+    """The flight's own number from its id (wfc-<run>-NN-<seq>); counting debriefs breaks when a flight was never
+    debriefed (10-06: f01/f02 skipped, f03 became folder 01 and "flight 2")."""
+    m = re.match(r"wfc-.+-(\d{2})-\d{3}$", flight_id)
+    return int(m.group(1)) if m else len(history) + 1
+
+
 def read_history(run_dir: Path) -> list[dict[str, Any]]:
     path = run_dir / "history.jsonl"
     if not path.is_file():
@@ -459,8 +467,8 @@ def debrief(session_dir: str | Path, run_dir: str | Path, *, flight_id: str | No
     run_dir = Path(run_dir)
     history = read_history(run_dir)
     prev = history[-1] if history else None
-    n = len(history) + 1
     flight_id = flight_id or Path(session_dir).name
+    n = flight_number(flight_id, history)
     args = dict(scenario_args or {})
     gains = gains if gains is not None else current_gains(history)
     series = read_telemetry(session_dir)
