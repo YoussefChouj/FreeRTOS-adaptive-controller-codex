@@ -30,6 +30,8 @@ from ground_station.service.abort_monitor import AbortLimits, AbortMonitor, Abor
 from ground_station.service.schema_registry import SchemaRegistry
 from ground_station.service.campaign_runner import RunnerDeps
 
+PRIM_TAKEOFF = 1   # wfb prim_state: the z reference ramps to the target ahead of the climb by design
+
 # WFB_STATUS_FIELDS: g_wfb_status fields, same keys as FakeDrone.status() (docs/workflow-b/interfaces.md)
 WFB_STATUS_SYMS = tuple(f"g_wfb_status.{f}" for f in WFB_STATUS_FIELDS)
 # TAKEOFF gate inputs (API/wfb_glue.c:109) the dashboard streams; live_status adds them when present
@@ -163,6 +165,8 @@ def live_sample(service: Any, t_s: float, sat: tuple[float, float] | None = None
     pos = tuple(v(a.feedback) * a.to_m for a in POSITION_AXES)
     have_ref = all(a.reference in vals for a in POSITION_AXES)
     ref = tuple(v(a.reference) * a.to_m for a in POSITION_AXES) if have_ref else None
+    if ref is not None and prim == PRIM_TAKEOFF:
+        ref = (*ref[:2], pos[2])   # 10-06 f03: z ref 0.5 m vs drone 0.05 m on lift-off tripped position_error
     rate_err = tuple(v(fb) - v(des) for fb, des in _RATE_PAIRS)
     hi, lo = sat if sat is not None else _sat_hi_lo()
     motors = [vals[m][0] for m in MOTORS if m in vals]

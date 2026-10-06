@@ -258,3 +258,16 @@ def test_wfb_reject_reads_as_wfb_err_name():
     assert wfb_reason({"reason": "BAD_VERSION", "detail": "wfb rejected"}) == "STATE"
     assert wfb_reason({"reason": "SAFETY_INTERLOCK", "detail": "wfb rejected"}) == "BOUNDS"
     assert wfb_reason({"reason": "BAD_VERSION", "detail": "frame"}) == "BAD_VERSION"
+
+
+def test_takeoff_z_ramp_does_not_count_as_position_error():
+    """10-06 f03: during TAKEOFF the z ref sits at 0.5 m while the drone lifts off at 0.05 m; only xy counts."""
+    svc = FakeService()
+    svc.stream(g_wfb_status__prim_state=1, Ctrler__locxPID__FB=3.0, Ctrler__locyPID__FB=0.0,
+               Ctrler__Z_posPID__FB=0.05, Ctrler__locxPID__Des=0.0, Ctrler__locyPID__Des=0.0,
+               Ctrler__Z_posPID__Des=0.5)
+    s = live_sample(svc, 1.0, sat=(3995.0, 2005.0), now_ns=lambda: NOW_NS)
+    assert math.dist(s.pos_m, s.ref_m) == pytest.approx(0.03)
+    svc.stream(g_wfb_status__prim_state=2)
+    s = live_sample(svc, 1.0, sat=(3995.0, 2005.0), now_ns=lambda: NOW_NS)
+    assert s.ref_m[2] == pytest.approx(0.5)   # HOVER: z error counts again
