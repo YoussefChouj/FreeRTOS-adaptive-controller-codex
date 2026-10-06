@@ -10,7 +10,8 @@ Steps run in order:
   livetune {loop, axes, budget_s, ...}  hold the hover point while ground_station/livetune tunes gains for budget_s
   land    {}                     the last step, exactly once
 
-takeoff may also set mrac_injection (0/1): CMD 0x0F idx 10 sent on the ground before takeoff (autotune flies 0).
+takeoff may also set mrac_injection (0/1): CMD 0x0F idx 10 sent on the ground before takeoff (autotune flies 0),
+and idle_s (0..IDLE_S_MAX): seconds the props spin at idle on the ground between IDLE and TAKEOFF.
 An excite start zeroes the optical-flow origin and the loc PID setpoints (TASK/send_data.c:1848-1865), so it must
 follow a hold at the hover point; the runner also checks the position before it sends the start.
 
@@ -74,12 +75,13 @@ DEFAULT_MOTION: Mapping[str, float] = {
     "yaw_deg": 0.0,
 }
 
+IDLE_S_MAX = 30.0  # s on the ground at idle before TAKEOFF, PROPOSED cap
 _NAME_RE = re.compile(r"^[a-z0-9_-]{1,40}$")
 _ARG_RE = re.compile(r"^\$([a-z_][a-z0-9_]*)$")
 _TOP_KEYS = {"scenario", "description", "args", "motion", "steps"}
 _STEP_KEYS: Mapping[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     # kind: (required keys, optional keys)
-    "takeoff": (("z",), ("mrac_injection",)),
+    "takeoff": (("z",), ("mrac_injection", "idle_s")),
     "hold": (("s",), ()),
     "goto": (("x", "y", "z"), ("dwell_s",) + tuple(DEFAULT_MOTION)),
     "path": (("shape", "params"), tuple(DEFAULT_MOTION)),
@@ -346,6 +348,9 @@ def parse_scenario(data: Any, args: Mapping[str, Any] | None = None) -> Scenario
         if kind == "takeoff":
             if body.get("mrac_injection", 0) not in (0, 1) or isinstance(body.get("mrac_injection"), bool):
                 problems.append(f"{path}.takeoff.mrac_injection: must be 0 or 1 (got {body['mrac_injection']!r})")
+            idle_s = body.get("idle_s", 0)
+            if isinstance(idle_s, bool) or not isinstance(idle_s, (int, float)) or not 0 <= idle_s <= IDLE_S_MAX:
+                problems.append(f"{path}.takeoff.idle_s: must be in [0, {IDLE_S_MAX}] s (got {idle_s!r})")
             steps.append(Step("takeoff", dict(body)))
         elif kind == "land":
             steps.append(Step("land", {}))

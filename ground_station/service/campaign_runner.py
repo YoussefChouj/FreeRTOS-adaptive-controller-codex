@@ -210,14 +210,21 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False)
             cmds.append(("set_hover_z", lambda: deps.client.set_hover_z(scenario.hover_z_m)))
             if deps.agent_arms:
                 cmds.append(("arm", deps.client.arm))
-            cmds += [("idle", deps.client.idle), ("takeoff", deps.client.takeoff)]
+            cmds.append(("idle", deps.client.idle))
             refused = next((name for name, send in cmds if not send()), None)
-            if refused:
+            # idle_s: props spin at idle on the ground before TAKEOFF (operator 10-06: spool-up too short)
+            idle_s = float(st.args.get("idle_s", 0.0))
+            t_idle = deps.clock()
+            if not refused and idle_s > 0 and not wait(lambda: deps.clock() - t_idle >= idle_s, "idle"):
+                ok = False
+            elif refused or not deps.client.takeoff():
+                refused = refused or "takeoff"
                 why = getattr(deps.client, "last_error", "") or "not applied"
                 hint = " (operator arms by RC first)" if refused == "idle" and not deps.agent_arms else ""
                 decision = AbortDecision(level=1, reason=f"takeoff refused at {refused}: {why}{hint}")
                 ok = False
             else:
+                extra = {"idle_s": idle_s} if idle_s > 0 else {}
                 ok = airborne = wait(lambda: prim() == PRIM_HOVER, "takeoff")
         elif st.kind == "hold":
             t_hold = deps.clock()

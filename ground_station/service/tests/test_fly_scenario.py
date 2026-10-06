@@ -39,7 +39,7 @@ def test_hover_rung_takes_off_holds_and_lands():
     assert [r["kind"] for r in out.steps] == ["takeoff", "hold", "land"]
     assert all(r["ok"] for r in out.steps)
     hold = out.steps[1]
-    assert hold["t1_s"] - hold["t0_s"] >= 20.0
+    assert hold["t1_s"] - hold["t0_s"] >= 20.0 - 1e-6  # records round to ms
     st = drone.status()
     assert st["hover_z"] == pytest.approx(0.7)  # firmware stores float32
     assert int(st["prim_state"]) == PRIM_IDLE
@@ -88,3 +88,20 @@ def test_firmware_landing_mid_hold_is_reported():
     out = fly_scenario(load_scenario("hover", {"z": 0.5}), deps)
     assert out.aborted and out.landed
     assert out.decision.reason.startswith("firmware landing during hold")
+
+
+def test_takeoff_idles_on_the_ground_for_idle_s_first():
+    """10-06: the operator wants the props at idle 10 s before TAKEOFF (hover.yaml idle_s default)."""
+    drone, clock, deps = _rig()
+    seen = []
+    _hook_step(deps, clock, 9.5, lambda: seen.append(int(drone.status()["prim_state"])))
+    out = fly_scenario(load_scenario("hover", {"z": 0.5, "hold_s": 2}), deps)
+    assert not out.aborted and out.landed, out.decision
+    assert seen == [PRIM_IDLE]                      # still on the ground at 9.5 s
+    assert out.steps[0]["idle_s"] == 10.0 and out.steps[0]["t1_s"] >= 10.0
+
+
+def test_idle_s_out_of_range_is_rejected():
+    data = {"scenario": "x", "steps": [{"takeoff": {"z": 0.5, "idle_s": 45}}, {"hold": {"s": 2}}, "land"]}
+    with pytest.raises(Exception, match="idle_s: must be in"):
+        parse_scenario(data)
