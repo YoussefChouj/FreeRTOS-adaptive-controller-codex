@@ -12,7 +12,7 @@ Stabilizer: LANDING
   stage 2  sink LAND_VZ_FAST_MPS   down to contact
   contact  LAND_CONTACT_* or spool  zero xy lean, xy integrators cleared (PX4 style, F8)
   gate     rest | stable-rate | sink-bias saturation | timeout   -> touchdown
-  spool    LAND_SPOOL_TICKS        motors fade linearly to ZERO, vzDes 0
+  spool    LAND_SPOOL_TICKS        collective held (capped at hover), motors fade linearly to ZERO (F9)
   LANDED   disarm, motors zero
 ```
 
@@ -75,3 +75,9 @@ drone while it is on the ground. That is a code change, not a `#define`.
 F8 (2026-10-06) adds that: in contact, or once the spool-down starts, the xy lean command is zero and every xy
 integrator is cleared (end of `Pos_Compute`). Before F8 the contact stage never latched in practice: the rest gate
 started the spool 0.05 s after contact, before the 60-tick contact debounce.
+
+F9 (2026-10-06) holds the collective during the spool. Before F9 the climb loop kept running with vzDes 0 while
+the height estimate sat frozen on the ground at vz -0.33 m/s, so it added thrust just as the skids touched (F7:
+motor avg 3085 at contact, 3139 at spool start). Now the spool latches that tick's collective, capped at
+`HOVER_THR_FREE`, and only the fade lowers it (PX4 also commands zero thrust on ground contact). Check with
+`landing_report`: motor avg at spool start should be no higher than at contact.

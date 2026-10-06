@@ -1072,6 +1072,7 @@ static int      s_stable_ticks = 0;
 static uint16_t s_land_rest_ticks = 0U;
 static uint16_t s_land_timeout = 0U;
 static uint16_t s_land_spool   = 0U;              /* spool-down ticks done, 0 = not started */
+static float    s_land_spool_thr = 0.0f;          /* collective held during the spool (Mix_Compute) */
 static float    s_land_rest_z  = LAND_REST_MIN;   /* ground z sampled in GROUND_IDLE */
 
 /* Bench-mode height zero: captures the fixture resting height when bench mode
@@ -1234,7 +1235,14 @@ static void Land_Step(void)
 	     (Ctrler.Z_posPID.FB <= s_land_rest_z + LAND_REST_MARGIN ||
 	      s_land_sink_bias >= LAND_SINK_BIAS_MAX)) ||
 	    s_land_timeout >= LAND_MAX_TICKS)
+	{
 		s_land_spool = 1U;   /* this tick ran unscaled; the ramp starts next tick */
+		/* F9 2026-10-06, PX4 style (on ground contact the thrust command goes to zero instead of
+		 * coming from the climb loop): hold this tick's collective, capped at hover, for the whole
+		 * spool; the ramp above fades it to ZERO. F7 motor avg rose 3085 -> 3139 at spool start:
+		 * vzDes 0 against the vzFB frozen on the ground at -0.33 m/s made the Z loop add thrust. */
+		s_land_spool_thr = (Throttle_out < (float)Throttle_th) ? Throttle_out : (float)Throttle_th;
+	}
 }
 
 /* ARMED + GROUND_IDLE: zero until the idle gesture, then rest-height sampling, takeoff detection
@@ -1605,6 +1613,8 @@ static void Mix_Compute(void)
 	// Controller layer (API/controller.c): u = u_nom + correction of the selected controller.
 	// CTRL_MRAC (default) == PID + MRAC u_ad gated by output_injection_on and simplex fade; CTRL_PID == pure PID.
 	Throttle_out = Controller_Update(CTRL_AXIS_Z, Ctrler.Z_ratePID.U) + Throttle_th;
+	if (s_land_spool != 0U)
+		Throttle_out = s_land_spool_thr;   /* touchdown spool: collective held, see Land_Step */
 	u_gyrox      = Controller_Update(CTRL_AXIS_ROLL, Ctrler.gyroxPID.U);
 	u_gyroy      = -Controller_Update(CTRL_AXIS_PITCH, Ctrler.gyroyPID.U); // Motor mixer needs gyroy reversed
 	u_gyroz      = Controller_Update(CTRL_AXIS_YAW, Ctrler.gyrozPID.U);
