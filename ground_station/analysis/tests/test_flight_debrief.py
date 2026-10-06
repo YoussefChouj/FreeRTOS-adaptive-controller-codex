@@ -132,3 +132,12 @@ def test_plots_written_and_current_gains_read_pid_c(tmp_path):
     assert (out / "plots" / "analysis.png").stat().st_size > 0
     gains = fd.current_gains([])
     assert set(gains) == set(fd.PID_AXES) and gains["Z_ratePID"]["Kp"] > 0
+
+
+def test_next_yaml_keeps_the_flown_log_plan(tmp_path):
+    """10-06 f03 flew 100 Hz + takeoff_gate (operator pick); next.yaml fell back to 50 Hz, 2 groups."""
+    plan = {"rate_hz": 100, "groups": ["velocity_loops", "optical_flow", "takeoff_gate"]}
+    out = fd.debrief(_session(tmp_path, "s1"), tmp_path / "run", scenario_args={"z": 0.5, "hold_s": 20},
+                     gains=GAINS, plots=False, log_plan=plan)
+    text = (out / "next.yaml").read_text(encoding="utf-8")
+    assert "log_plan: {rate_hz: 100, groups: [velocity_loops, optical_flow, takeoff_gate]}" in text

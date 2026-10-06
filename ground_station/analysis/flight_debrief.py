@@ -417,7 +417,7 @@ def render(d: Mapping[str, Any]) -> str:
 
 
 def next_campaign_yaml(run_name: str, n: int, nxt: Mapping[str, Any], pack: str,
-                       groups: tuple[str, ...] = DEFAULT_LOG_GROUPS) -> str | None:
+                       groups: tuple[str, ...] = DEFAULT_LOG_GROUPS, rate_hz: float = 50) -> str | None:
     if not nxt.get("scenario"):
         return None
     name = f"wfc-{run_name}-{n:02d}"[:40].lower()
@@ -427,7 +427,7 @@ def next_campaign_yaml(run_name: str, n: int, nxt: Mapping[str, Any], pack: str,
             f"packs:\n  - {pack}\nmax_flights: 1\nexperiments:\n"
             f"  - name: f{n:02d}\n    scenario: {nxt['scenario']}\n    scenario_args: {{{args}}}\n"
             f"    capture: campaign\n    repeats: 1\n"
-            f"    log_plan: {{rate_hz: 50, groups: [{', '.join(groups)}]}}\nabort: {{}}\n")
+            f"    log_plan: {{rate_hz: {rate_hz:g}, groups: [{', '.join(groups)}]}}\nabort: {{}}\n")
 
 
 def read_history(run_dir: Path) -> list[dict[str, Any]]:
@@ -452,8 +452,10 @@ def current_gains(history: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
 def debrief(session_dir: str | Path, run_dir: str | Path, *, flight_id: str | None = None, scenario: str = "hover",
             scenario_args: Mapping[str, Any] | None = None, pack: str = "P4000-1",
             sat: tuple[float, float] | None = None, gains: Mapping[str, Mapping[str, float]] | None = None,
-            plots: bool = True) -> Path:
-    """Write one flight's debrief folder and its history line; returns the folder."""
+            plots: bool = True, log_plan: Mapping[str, Any] | None = None) -> Path:
+    """Write one flight's debrief folder and its history line; returns the folder.
+
+    log_plan: the plan this flight flew; next.yaml keeps it (operator picks rate and groups per flight)."""
     run_dir = Path(run_dir)
     history = read_history(run_dir)
     prev = history[-1] if history else None
@@ -477,7 +479,9 @@ def debrief(session_dir: str | Path, run_dir: str | Path, *, flight_id: str | No
     if plots:
         plot_flight(series, out / "plots" / "tracking.png", f"{flight_id} {scenario}", hold_window(series))
         plot_analysis(series, m, out / "plots" / "analysis.png", sat)
-    yaml_text = next_campaign_yaml(run_dir.name, n + 1, nxt, pack)
+    plan = dict(log_plan or {})
+    yaml_text = next_campaign_yaml(run_dir.name, n + 1, nxt, pack, tuple(plan.get("groups") or DEFAULT_LOG_GROUPS),
+                                   plan.get("rate_hz") or 50)
     if yaml_text:
         (out / "next.yaml").write_text(yaml_text, encoding="utf-8")
     (out / "debrief.json").write_text(json.dumps(d, indent=2, default=str), encoding="utf-8")
@@ -493,8 +497,8 @@ def debrief(session_dir: str | Path, run_dir: str | Path, *, flight_id: str | No
     return out
 
 
-def _from_outputs(outputs_dir: Path) -> tuple[str, str, str, dict[str, Any]]:
-    """(session, flight_id, scenario, args) of the last flight in a workflow B campaign outputs folder."""
+def _from_outputs(outputs_dir: Path) -> tuple[str, str, str, dict[str, Any], dict[str, Any]]:
+    """(session, flight_id, scenario, args, log_plan) of the last flight in a workflow B campaign outputs folder."""
     from ground_station.service.campaign_schema import load_campaign
 
     metrics = json.loads((outputs_dir / "metrics.json").read_text(encoding="utf-8"))
@@ -502,7 +506,7 @@ def _from_outputs(outputs_dir: Path) -> tuple[str, str, str, dict[str, Any]]:
     camp = load_campaign(outputs_dir / "campaign.yaml")
     exp = next(e for e in camp.experiments if e.name == flight["experiment"])
     scen = exp.scenario.name if exp.scenario else "hover"
-    return flight["recording"], flight["flight_id"], scen, dict(exp.scenario_args or {})
+    return flight["recording"], flight["flight_id"], scen, dict(exp.scenario_args or {}), dict(exp.log_plan or {})
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -515,9 +519,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-sat", action="store_true", help="skip the bench saturation limits")
     a = p.parse_args(argv)
     src = Path(a.source)
-    flight_id, scen, args = None, a.scenario, json.loads(a.args)
+    flight_id, scen, args, plan = None, a.scenario, json.loads(a.args), None
     if (src / "metrics.json").is_file():
-        session, flight_id, scen, from_camp = _from_outputs(src)
+        session, flight_id, scen, from_camp, plan = _from_outputs(src)
         args = args or from_camp
         src = Path(session)
     sat = None
@@ -527,7 +531,8 @@ def main(argv: list[str] | None = None) -> int:
             sat = _sat_hi_lo()
         except Exception:
             sat = None
-    out = debrief(src, a.run, flight_id=flight_id, scenario=scen, scenario_args=args, pack=a.pack, sat=sat)
+    out = debrief(src, a.run, flight_id=flight_id, scenario=scen, scenario_args=args, pack=a.pack, sat=sat,
+                  log_plan=plan)
     print(f"debrief: {out / 'debrief.md'}")
     return 0
 
