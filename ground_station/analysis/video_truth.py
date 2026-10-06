@@ -1,13 +1,15 @@
 """Video ground truth for optical-flow roams: a fixed phone films the drone, the orange prop guards give its floor xy.
 
     python -m ground_station.analysis.video_truth calib <board.mp4> --board 9x6 --square 0.025 --out cam.json
+    python -m ground_station.analysis.video_truth floor <roam.mp4> --board 8x5 --square 0.026 --out marks.json
     python -m ground_station.analysis.video_truth click <roam.mp4> --world "0,0 1.5,0 0,1.5 1.5,1.5" --out marks.json
     python -m ground_station.analysis.video_truth frame <roam.mp4> --t 2.0 --out frame.png      # check the colour mask
     python -m ground_station.analysis.video_truth run <roam.mp4> --cam cam.json --marks marks.json \
         --csv logs/livewatch/<roam>.csv --out logs/video_truth/<roam>
 
-Pipeline: lens model from a checkerboard video (calib) -> camera pose from >= 4 measured floor tape marks (marks.json,
-metres, floor frame x = drone nose, y = drone left at take-off) -> per frame, orange blobs -> each guard centroid is cast
+Pipeline: lens model from a checkerboard video (calib) -> camera pose from a checkerboard lying on the floor (floor:
+found automatically, origin = its first inner corner) or >= 4 measured floor tape marks (click; metres, x = drone
+nose, y = drone left at take-off); report.json gives the 95% floor-pose error 1.5 m out from mark noise -> per frame, orange blobs -> each guard centroid is cast
 as a ray onto the plane z = h(t) + guard offset -> drone centre from the guards (see drone_centre: merged and hidden
 guards are handled by blob area). Video and telemetry are synced by cross-correlating horizontal speed; the estimator path (locx/locy FB, cm) is
 rotated onto the truth with an orthogonal fit over the first seconds of flight only, so later drift is not absorbed.
@@ -25,6 +27,7 @@ import numpy as np
 
 HSV_LO, HSV_HI = (5, 120, 100), (22, 255, 255)   # orange, OpenCV H 0-180 (tune with `frame`)
 MIN_AREA = 30                                      # px, smallest blob kept
+DETECTOR_PX = 0.15                                 # px per axis, SB corner error on a perfect render (measured 0.12-0.14 mean)
 X_CM, Y_CM, Z_M = "Ctrler.locxPID.FB", "Ctrler.locyPID.FB", "Ctrler.Z_posPID.FB"
 PHASE, ARM = "flight_phase", "DroneStatus.ARM_Status"
 
@@ -73,7 +76,58 @@ def floor_pose(K, dist, world_xy, pixel) -> tuple[np.ndarray, np.ndarray, float]
         raise SystemExit("solvePnP failed on the floor marks")
     proj, _ = cv2.projectPoints(w, rvec, tvec, K, dist)
     err = float(np.mean(np.linalg.norm(proj.reshape(-1, 2) - p, axis=1)))
-    return cv2.Rodrigues(rvec)[0], tvec.ravel(), err
+    R, t = cv2.Rodrigues(rvec)[0], tvec.ravel()
+    if (-R.T @ t)[2] < 0:                                # marks left-handed seen from above: mirror y so z points up
+        R = R @ np.diag([1.0, -1.0, -1.0])
+    return R, t, err
+
+
+def floor_board(video: str, board: tuple[int, int], square: float, every_s: float = 0.5, max_frames: int = 60) -> dict:
+    """Floor marks from a checkerboard lying flat on the floor (the phone is fixed, so every detection sees the same
+    corners): per-corner median pixel over the frames where the whole board is found. Origin = first inner corner."""
+    cv2 = _cv2()
+    cap = cv2.VideoCapture(video)
+    step = max(1, int(round(every_s * (cap.get(cv2.CAP_PROP_FPS) or 30.0))))
+    flags = cv2.CALIB_CB_EXHAUSTIVE | cv2.CALIB_CB_ACCURACY
+    ref, found, i = None, [], 0
+    while len(found) < max_frames and cap.grab():
+        i += 1
+        if (i - 1) % step:
+            continue
+        ok, c = cv2.findChessboardCornersSB(cv2.cvtColor(cap.retrieve()[1], cv2.COLOR_BGR2GRAY), board, flags=flags)
+        if not ok:
+            continue
+        c = c.reshape(-1, 2)
+        if ref is None:
+            ref = c
+        elif np.linalg.norm(c[0] - ref[-1]) < np.linalg.norm(c[0] - ref[0]):
+            c = c[::-1]                                  # same board read from the other end
+        found.append(c)
+    if len(found) < 3:
+        raise SystemExit(f"floor board {board[0]}x{board[1]} found in {len(found)} frames; need >= 3")
+    P = np.array(found)
+    pixel = np.median(P, axis=0)
+    spread = float(np.median(np.linalg.norm(P - pixel, axis=2)))
+    sigma = 1.2533 * (spread / 1.1774) / np.sqrt(len(found))   # per-axis sd of a median of n (median radius = 1.18 sd)
+    sigma = float(np.hypot(sigma, DETECTOR_PX))                 # a static board repeats the detector's own error every frame
+    world = np.mgrid[0:board[0], 0:board[1]].T.reshape(-1, 2) * square
+    return {"world": world.tolist(), "pixel": pixel.tolist(), "frames": len(found),
+            "corner_spread_px": round(spread, 3), "sigma_px": round(float(sigma), 4)}
+
+
+def pose_noise(K, dist, world_xy, pixel, sigma_px, z, reach=1.5, n=200, seed=0) -> float:
+    """95th-percentile xy error, from mark pixel noise alone (Monte Carlo), at `reach` m around the origin, height z."""
+    cv2 = _cv2()
+    K, dist, pixel = np.asarray(K, float), np.asarray(dist, float), np.asarray(pixel, float)
+    R, t, _ = floor_pose(K, dist, world_xy, pixel)
+    a = np.arange(8) * np.pi / 4
+    ring = np.c_[reach * np.cos(a), reach * np.sin(a), np.full(8, z)]     # mirror-symmetric: unaffected by the y flip
+    uv = cv2.projectPoints(ring, cv2.Rodrigues(R)[0], t, K, dist)[0].reshape(-1, 2)
+    rng, errs = np.random.default_rng(seed), []
+    for _ in range(n):
+        R2, t2, _ = floor_pose(K, dist, world_xy, pixel + rng.normal(0, sigma_px, pixel.shape))
+        errs.append(np.linalg.norm(pixel_to_plane(uv, K, dist, R2, t2, z)[:, :2] - ring[:, :2], axis=1))
+    return float(np.percentile(errs, 95))
 
 
 def pixel_to_plane(uv, K, dist, R, t, z) -> np.ndarray:
@@ -245,7 +299,10 @@ def run(video, cam, marks, csv_path, out, guard_offset=0.0, align_s=10.0, stride
     path_t = float(np.nansum(np.hypot(*np.diff(t_rel, axis=0).T)))
     path_e = float(np.nansum(np.hypot(*np.diff(e_al, axis=0).T)))
     rep = {
-        "floor_reproj_px": round(reproj, 2), "sync_offset_s": round(off, 3), "frames": int(len(tv)),
+        "floor_reproj_px": round(reproj, 2),
+        "floor_noise_err_1p5m_m": round(pose_noise(K, dist, marks["world"], marks["pixel"],
+                                                   marks.get("sigma_px", 1.0), h_med + guard_offset), 4),
+        "sync_offset_s": round(off, 3), "frames": int(len(tv)),
         "frames_tracked": int(ok.sum()), "align_rot_deg": round(float(np.degrees(np.arctan2(q[1, 0], q[0, 0]))), 1),
         "align_reflection": refl, "flight_s": round(float(te[i_end] - te[i_to]), 2),
         "truth_at_disarm_m": [round(float(v), 3) for v in t_rel[-1]],
@@ -322,6 +379,8 @@ def main(argv=None):
     c.add_argument("--out", required=True)
     k = sub.add_parser("click"); k.add_argument("video"); k.add_argument("--t", type=float, default=1.0)
     k.add_argument("--world", required=True, help='"x,y x,y ..." metres'); k.add_argument("--out", required=True)
+    b = sub.add_parser("floor"); b.add_argument("video"); b.add_argument("--board", required=True)
+    b.add_argument("--square", type=float, required=True); b.add_argument("--out", required=True)
     f = sub.add_parser("frame"); f.add_argument("video"); f.add_argument("--t", type=float, default=1.0)
     f.add_argument("--out", required=True)
     r = sub.add_parser("run"); r.add_argument("video"); r.add_argument("--cam", required=True)
@@ -338,6 +397,11 @@ def main(argv=None):
         cam = calibrate(a.video, (cols, rows), a.square, a.step)
         Path(a.out).write_text(json.dumps(cam, indent=2))
         print(f"rms {cam['rms_px']:.3f} px from {cam['frames']} frames -> {a.out}")
+    elif a.cmd == "floor":
+        cols, rows = (int(v) for v in a.board.lower().split("x"))
+        m = floor_board(a.video, (cols, rows), a.square)
+        Path(a.out).write_text(json.dumps(m, indent=2))
+        print(f"board in {m['frames']} frames, corner spread {m['corner_spread_px']} px -> {a.out}")
     elif a.cmd == "click":
         world = [[float(v) for v in p.split(",")] for p in a.world.split()]
         _click(a.video, a.t, world, a.out)

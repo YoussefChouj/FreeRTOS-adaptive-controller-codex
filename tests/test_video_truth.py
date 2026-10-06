@@ -129,3 +129,38 @@ def test_run_end_to_end(tmp_path):
     assert rep["err_rms_m"] < 0.02 and rep["err_max_m"] < 0.06
     assert abs(rep["scale_truth_over_est"] - 1) < 0.03
     assert (tmp_path / "out" / "truth.png").exists()
+
+
+def test_floor_board_pose(tmp_path):
+    """Board flat on the floor, seen obliquely: recovered camera height and a 1.5 m floor distance."""
+    k2, d0 = np.array([[900.0, 0, 640], [0, 900.0, 360], [0, 0, 1]]), np.zeros(5)
+    R, t = _lookat(np.array([-1.2, 0.2, 1.4]), np.array([0.1, 0.07, 0.0]))
+    rvec, s = cv2.Rodrigues(R)[0], 0.026
+
+    def poly(x0, y0, x1, y1):
+        p = cv2.projectPoints(np.array([[x0, y0, 0], [x1, y0, 0], [x1, y1, 0], [x0, y1, 0]], float), rvec, t, k2, d0)[0]
+        return np.round(p.reshape(-1, 2) * 16).astype(np.int32)
+
+    img = np.full((720, 1280, 3), 110, np.uint8)
+    cv2.fillConvexPoly(img, poly(-s, -s, 10 * s, 7 * s), (230, 230, 230), cv2.LINE_AA, 4)      # paper
+    for r in range(6):
+        for c in range(9):
+            if (r + c) % 2:
+                cv2.fillConvexPoly(img, poly(c * s, r * s, (c + 1) * s, (r + 1) * s), (30, 30, 30), cv2.LINE_AA, 4)
+    video = str(tmp_path / "floor.avi")
+    w = cv2.VideoWriter(video, cv2.VideoWriter_fourcc(*"MJPG"), 30, (1280, 720))
+    for _ in range(45):
+        w.write(img)
+    w.release()
+
+    m = vt.floor_board(video, (8, 5), s)
+    assert m["frames"] == 3
+    R2, t2, err = vt.floor_pose(k2, d0, m["world"], m["pixel"])
+    assert err < 0.3
+    assert abs((-R2.T @ t2)[2] - 1.4) < 0.02                    # z up (grid comes back mirrored), height ~1%
+    pts = cv2.projectPoints(np.array([[-0.6, -0.5, 0.7], [0.9, -0.5, 0.7]]), rvec, t, k2, d0)[0]
+    a, b = vt.pixel_to_plane(pts.reshape(-1, 2), k2, d0, R2, t2, 0.7)
+    d_err = abs(np.linalg.norm(a[:2] - b[:2]) - 1.5)
+    assert d_err < 0.03                                          # measured 1.6 cm: 23 cm board, 9 px squares
+    assert m["sigma_px"] == pytest.approx(vt.DETECTOR_PX, abs=1e-3)                   # identical frames: floor only
+    assert d_err / 2 < vt.pose_noise(k2, d0, m["world"], m["pixel"], m["sigma_px"], 0.7, n=50) < 0.05
