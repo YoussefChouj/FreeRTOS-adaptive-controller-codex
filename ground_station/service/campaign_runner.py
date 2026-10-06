@@ -109,6 +109,14 @@ def _gate_problem(status: dict) -> str:
         return "RC link lost (status.sbus_lost 1)"
     return ""
 
+
+def _takeover_problem(auth_at_idle, status: dict) -> str:
+    """The flymode 1 IDLE takes the stick authority (firmware 0e5beae); losing it before TAKEOFF is a pilot takeover.
+    The wfb TAKEOFF gate does not see it (the protected wfb_apply flies the setpoints anyway), so refuse here."""
+    if auth_at_idle == 1 and status.get("rc_authority") == 0:
+        return "pilot took the sticks during idle (status.rc_authority 1 -> 0: a fast stick move)"
+    return ""
+
 def default_diff_source(repo_root: str, lkg_commit: str, c_files: tuple[str, ...]) -> str:
     if not c_files:
         return ""
@@ -233,12 +241,14 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False)
                     deps.sleep(deps.dt_s)
                 if deps.status().get("motor_idle") != 1:
                     refused, gate_why = "idle", "motors did not go to idle (status.motor_idle 0): flymode 1 (SDK) and firmware 0e5beae or later"
+            auth_idle = deps.status().get("rc_authority")
             # idle_s: props spin at idle on the ground before TAKEOFF (operator 10-06: spool-up too short)
             idle_s = float(st.args.get("idle_s", 0.0))
             t_idle = deps.clock()
             if not refused and idle_s > 0 and not wait(lambda: deps.clock() - t_idle >= idle_s, "idle"):
                 ok = False
-            elif refused or (gate_why := _gate_problem(deps.status())) or not deps.client.takeoff():
+            elif (refused or (gate_why := _gate_problem(deps.status()) or _takeover_problem(auth_idle, deps.status()))
+                  or not deps.client.takeoff()):
                 refused = refused or "takeoff"
                 why = gate_why or getattr(deps.client, "last_error", "") or "not applied"
                 hint = " (operator: flymode 1, arm by RC, hands off the sticks)" if refused == "idle" and not deps.agent_arms else ""

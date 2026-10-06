@@ -35,7 +35,7 @@ PRIM_TAKEOFF = 1   # wfb prim_state: the z reference ramps to the target ahead o
 # WFB_STATUS_FIELDS: g_wfb_status fields, same keys as FakeDrone.status() (docs/workflow-b/interfaces.md)
 WFB_STATUS_SYMS = tuple(f"g_wfb_status.{f}" for f in WFB_STATUS_FIELDS)
 # TAKEOFF gate inputs (API/wfb_glue.c:109) the dashboard streams; live_status adds them when present
-GATE_SYMS = {"motor_idle": "status.motor_idle", "sbus_lost": "status.sbus_lost"}
+GATE_SYMS = {"motor_idle": "status.motor_idle", "sbus_lost": "status.sbus_lost", "rc_authority": "status.rc_authority"}
 # wfb_err_t (API/wfb_types.h). A wfb reject carries this number in the reason byte, which the transaction
 # layer labels with its own RejectReason names (1 reads as BAD_VERSION): relabel it here.
 WFB_ERR_NAMES = {1: "STATE", 2: "RANGE", 3: "COUNT", 4: "CRC", 5: "TIME", 6: "BOUNDS", 7: "ENDPOINT",

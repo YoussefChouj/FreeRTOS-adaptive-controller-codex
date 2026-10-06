@@ -130,3 +130,24 @@ def test_idle_dropped_during_idle_wait_refuses_takeoff_with_reason():
     out = fly_scenario(load_scenario("hover", {"z": 0.5, "hold_s": 2}), deps)
     assert out.aborted and "takeoff refused at takeoff: motors left idle" in out.decision.reason
     assert int(drone.status()["prim_state"]) == PRIM_IDLE
+
+
+def test_pilot_takeover_during_idle_refuses_takeoff():
+    """flymode 1 IDLE takes the stick authority; a fast stick move during the idle wait drops it (rc_authority 1 -> 0).
+    The protected wfb_apply would still fly the TAKEOFF setpoints, so the runner refuses TAKEOFF instead."""
+    drone, clock, deps = _rig()
+    inner = deps.status
+    deps.status = lambda: {**inner(), "motor_idle": 1, "rc_authority": 1 if clock() < 5.0 else 0}
+    out = fly_scenario(load_scenario("hover", {"z": 0.5, "hold_s": 2}), deps)
+    assert out.aborted and "pilot took the sticks during idle" in out.decision.reason
+    assert int(drone.status()["prim_state"]) == PRIM_IDLE
+
+
+def test_no_authority_streamed_or_never_taken_does_not_gate():
+    """Older firmware (no rc_authority) or a non-SDK flymode (authority never 1): the takeover gate stays quiet."""
+    for auth in (None, 0):
+        _, _, deps = _rig()
+        inner = deps.status
+        deps.status = lambda a=auth: {**inner(), "motor_idle": 1, **({} if a is None else {"rc_authority": a})}
+        out = fly_scenario(load_scenario("hover", {"z": 0.5, "hold_s": 2}), deps)
+        assert not out.aborted and out.landed, (auth, out.decision)
