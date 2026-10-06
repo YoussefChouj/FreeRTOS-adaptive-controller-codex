@@ -503,8 +503,9 @@ def decode_schema(n_ranges: int, payload: bytes, requested=()) -> StreamSchema:
             address, size, count,
             name=hint.name if hint else "",
             fmt=hint.fmt if hint else None,
-            _names=hint._names if hint else None,
-            _fmts=hint._fmts if hint else None,
+            # `watch` passes plain Symbols (no coalesced names) as hints.
+            _names=getattr(hint, "_names", None),
+            _fmts=getattr(hint, "_fmts", None),
         ))
     schema = StreamSchema(divider, transport, total_bytes, tuple(ranges), slot)
     if sum(r.nbytes for r in ranges) != total_bytes:
