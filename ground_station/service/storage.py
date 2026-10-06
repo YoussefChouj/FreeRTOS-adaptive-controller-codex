@@ -249,6 +249,7 @@ class CsvRecorder:
         # are not lost and can be flushed into events.jsonl at the next start.
         self._buffered_notes: deque[dict[str, Any]] = deque(maxlen=NOTES_BUFFER_MAX)
         self._q: queue.Queue[tuple[Any, int, dict[str, Any]] | object] = queue.Queue()
+        self._draining = False   # stop() in progress: note() drops samples (they belong to no session)
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._events_lock = threading.Lock()
@@ -295,6 +296,13 @@ class CsvRecorder:
         self.stopped_at = None
         self.rows = 0
         self._open_events()
+        # Drop samples left queued behind the previous stop's _STOP: they were the stale lead rows of the
+        # next session's telemetry.csv (2026-10-06 f05).
+        while True:
+            try:
+                self._q.get_nowait()
+            except queue.Empty:
+                break
         self.recording = True
         self._write_manifest()
         # Recording-start event, then any notes buffered while stopped.
@@ -319,6 +327,7 @@ class CsvRecorder:
         """
         was_recording = self.recording
         if was_recording:
+            self._draining = True
             self._q.put(self._STOP)
             if self._thread is not None:
                 self._thread.join(timeout=5.0)
@@ -328,6 +337,7 @@ class CsvRecorder:
             })
             self.stopped_at = time.time()
             self.recording = False
+            self._draining = False
             self._write_manifest()
             self._close_events()
         return was_recording
@@ -340,7 +350,7 @@ class CsvRecorder:
 
     def note(self, slot: Any, values: dict[str, Any], received_ns: int) -> None:
         """Enqueue one sample's key/value pairs (never blocks, never raises)."""
-        if not self.recording or self._closed:
+        if not self.recording or self._closed or self._draining:
             return
         try:
             self._q.put((slot, received_ns, values))

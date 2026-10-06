@@ -230,3 +230,20 @@ def test_health_recorder_block_reports_status_not_recording(tmp_path):
     status = _recorder_status(svc)
     assert status["recording"] is False
     assert status["rows"] == 1
+
+def test_samples_queued_after_stop_do_not_lead_the_next_session(tmp_path):
+    # 2026-10-06 f05: samples noted while stop() joined the writer stayed queued and became the first
+    # rows of the next session's telemetry.csv.
+    rec = CsvRecorder(tmp_path, enabled=True)
+    assert rec.start()
+    rec.stop()
+    rec._q.put((0, 1, {"stale": 1.0}))       # what a racing note() left behind
+    rec._draining = True
+    rec.note(0, {"during_stop": 2.0}, 2)     # dropped while a stop is in progress
+    rec._draining = False
+    assert rec.start(label="next")
+    rec.note(0, {"fresh": 3.0}, 3)
+    rec.stop()
+    with open(rec.session_dir / "telemetry.csv", encoding="utf-8") as f:
+        keys = [r["key"] for r in csv.DictReader(f)]
+    assert keys == ["fresh"]
