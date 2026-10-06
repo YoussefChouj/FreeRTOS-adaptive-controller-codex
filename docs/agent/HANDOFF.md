@@ -25,6 +25,8 @@ Older entries (2026-09-30 .. 2026-10-03, incl. the landing/OF-drift investigatio
    handler (`docs/firmware-safety.md` "Fault in flight"), record built in place (MSP), record in an `UNINIT`
    region so it survives the reset (`docs/firmware-stack-budget.md`). Rule 8c of the coding standard.
 8. Improvement backlog (CEO inline, one item per commit): `.claude_state.md` last entry.
+9. OPEN feature (after the demo + branch merges): task data sharing, torn reads/writes between tasks
+   (ground-station commands written at prio 2, read at prio 4). Spec `docs/architecture/task-data-sharing.md`.
 
 ## Do not
 - Do not arm, idle or spin motors outside an operator-opened battery session (AGENTS.md > Authorizations).
