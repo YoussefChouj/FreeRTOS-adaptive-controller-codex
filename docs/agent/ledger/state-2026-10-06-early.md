@@ -86,3 +86,71 @@ hand drift vs fix-channel bias; warm-up-from-reset log; then 8081 + workflow C.
 ## 2026-10-06 06:2x NN-denoising study DONE: docs/analysis/imu-nn-denoising.md (Brossard 2002.10718, TinyGC-Net
 2403.02618, Cioffi 2210.15287; NN needs a reference, yaw unobservable; offline-first plan on Gyro_X_Real/Acc_X_Real
 logs; nothing built). NEXT after lab: h0g step 2 (paused), C waits download yes.
+
+## 10-06 lab workflow C f01 (moved from .claude_state.md 12:55)
+11:55 pack P4000-1; 8081 UP (pid 12476). Run logs/workflow-c/20261006-1155/flight01.yaml, launch copy
+logs/campaigns/launch/wfc-20261006-1155-01_20261006-1153.yaml. Preflight ok (2nd call primes core): 16.02 V SoC 78%,
+pos 0, disarmed.
+12:00 FLIGHT 1 FLYAWAY, operator RC-killed at ~5.5 s ("drifting, did not happen in last flight experiments").
+Rec logs/sessions/20261006-115832-wfc-20261006-1155-01-001_f01 (scratchpad f01.py/f01b.py pivot). Facts:
+(a) GS abort L1 "nonfinite:age_s" at t .8 s = a _FRESHNESS_SYMS symbol (campaign_live.py:45) never arrived ->
+LAND sent t .94, ACKed, IGNORED: prim stayed 1, z climbed to .58 m. (b) spool-up on ground (z 0) of2_dx/dy_fix
+jumped +17..20/+15 counts. (c) airborne t 1.9: EKF vx -> -42 cm/s, vy +30, x -115 cm y +60 by 5.4 s; position loop
+correct sign (locxs.Des +94) but drift velocity CONSTANT, roll ~-1 pit ~+.8 deg: vel-loop demand never reaches
+attitude (roll/pitch Des not on log plan). Suspects: 10-05 firmware refactors since last flown build (WP-41 ekf.c
+EKF_NOISE_ROW, WP-43 AutoflyTask "V_max/dead code removed", stm32f4xx_it, RemoterTask...); or takeoff state gates
+horizontal loop. NEXT: tell operator (drone disarmed? keep it on ground); diff firmware last-flown-build..HEAD for
+velocity->attitude chain + prim TAKEOFF/LAND handling; fix GS freshness symbol. No more flights until found.
+12:35 ROOT CAUSE (confirmed 13:05): RC ch6 (OF hold) LOW = angle mode. Des_Att (StabilizerTask.c:1820, same gate in 1220a7d)
+is the ONLY writer of pitch/roll Des; ch6 LOW drops locxs/ys.U -> flies level, drifts at takeoff velocity. f01:
+flight_phase FLYING from 1.9 s (vel loop integrating), vx err 134 cm/s x Kp 3 = clamp, yet rol/pit +-1.6 deg. 10-03
+flights were stick-flown with ch6 HIGH. Bias zero-at-arm fix (1850b03) intact at :1432. status.of_hold not on log
+plan -> unconfirmed; ask operator ch6 position. FIXED GS side: preflight row of_hold (red if 0), workflow-b checklist
+"RC ready with ch6 HIGH". OPEN: GS freshness abort (campaign_live _FRESHNESS_SYMS), LAND ignored in CLIMB (wfb_*
+protected, propose), yaw kick -36 deg at spool-up, add status.of_hold to log plan.
+
+
+
+## Archived from .claude_state.md at 14:30 (LAB workflow C 12:33-14:00)
+13:25 F3 FLEW, GS FALSE ABORT. Idle fix worked (idle 10 s, TAKEOFF, xy <10 cm, z climbing) but L1 position_error at
+11.2 s: z ref 0.5 vs drone 0.05 during TAKEOFF. Fixed 6ca93b1 (TAKEOFF: xy only). afe7510 takeoff_gate group, c54d8fb skill
+Q3, 094a582 debrief next.yaml keeps flown log plan. 8081 restarted pid 8464. Debrief logs/workflow-c/20261006-1155/
+01_wfc-20261006-1155-03-001 (next.yaml patched 100 Hz+takeoff_gate; campaign name still -02: rename -04). 100 Hz max gap .029 s.
+OPERATOR (13:30, away 40 min, will FLASH on return): IDLE must NOT need throttle stick down. Armed by RC in flymode 1 at
+campaign start = enough; agent idles + lifts off alone. Fix firmware (send_data.c:1945 RC_IDLE_THR_THRESHOLD gate + whatever
+clears g_motor_idle_enabled on stick) + runner reason text + skill checklist text; hunt similar stick-dependent gates.
+  14:00 NEW: Des_VHeight (StabilizerTask ~1754) turns |THR|>0.05 into a z-rate cmd, so after flyup releases authority a
+  non-centred stick (throttle sits at bottom after RC arm) commands descent; f03 flew only because operator centred it.
+  FIX PLAN: send_data IDLE in FlyMode_SDK takes authority; StabilizerTask latches "GS flight owns z" ignoring THR until
+  the stick moves > delta from its flyup snapshot (= pilot takeover). Build only, operator flashes.
+  FOUND: only stick gate = send_data.c:1941 (GS CMD 0x14 idx1 IDLE needs RCInput_Get(THR) < -0.85). Nothing else clears
+  idle. But StabilizerTask.c:1231 GroundIdle_Step: idle held only while !TWC.execute && RCInput_Get(THR) < THR_IDLE_MAX,
+  else Set_PWM_Motors -> so a raised stick must NOT reach it. PLAN: in send_data.c IDLE enable, take GS authority
+  (RCInput_SetAuthority(1) = virtual THR -1.0, physical ignored; stick motion = takeover) when physical stick not down.
+  CHECK FIRST: rc_input.c heartbeat-loss with authority (does it revert to physical THR on the ground?), wfb gate
+  sbus_live/takeover (wfb_glue.c:109,300), host test tests/firmware_host/test_idle_decouple.c. rc_input.c/wfb_* protected
+  (propose only); send_data.c + StabilizerTask.c editable. Then runner reason text (campaign_runner "throttle stick fully
+  down"), workflow-b/c skill checklist, failure-modes.md; build (no flash: operator flashes on return).
+12:55 F3 GO. e04fd31 runner: IDLE confirm (status.motor_idle within 1.5 s) + gate re-check before TAKEOFF; wfb rejects
+named by wfb_err_t. Uncommitted: log group takeoff_gate (g_motor_idle_enabled, sbus_lost) in livewatch/campaign_capture.py;
+workflow-c SKILL asks Q3 log plan every flight (operator asked). 8081 pid 18524. F3: flight03.yaml (f03, hover .5/20/idle 10),
+launch copy logs/campaigns/launch/wfc-20261006-1155-03_20261006-1252.yaml, 100 Hz 4 groups 45600/70042 B/s (operator pick),
+15.70 V 67%. NEXT: campaign_state, debrief f03, commit takeoff_gate+skill, flight_debrief --launch, propose_next keeps args.
+13:40 F2 NO TAKEOFF. campaign wfc-20261006-1155-02-001 (outputs logs/campaigns/wfc-20261006-1155-02_20261006-123751,
+rec logs/sessions/20261006-123729-wfc-20261006-1155-02-001_f02): IDLE (14,1) "applied" .5 s, 10 s idle, TAKEOFF (26,0)
+rejected reason 1 at 10.66 s. GS labels it BAD_VERSION (transactions.RejectReason) but wfb reason 1 = WFB_ERR_STATE
+(wfb_types.h). prim_state 0 (IDLE) so gate is wfb_glue.c:109 (have_tick/armed/motors_idle/sbus_live/airborne/takeover/
+safety.action). Telemetry: ARM 1, phase 0, gs_flight_active 0, safety_trip 0. Suspect motors_idle=0 (send_data.c:1945 IDLE
+silently no-ops unless throttle < RC_IDLE_THR_THRESHOLD) or cleared during 10 s. NEXT: find failing gate (f01 vs f02), fix
+GS wfb reason decode, flight_debrief --launch + propose_next keeps idle_s ({**args,**rung}), debrief f01 then f02.
+12:33 e068a77 takeoff idle_s (hover.yaml default 10 s; operator: spool-up too short). 8081 restarted pid 20340
+(abort alias + idle live). F2: logs/workflow-c/20261006-1155/flight02.yaml, launch copy
+logs/campaigns/launch/wfc-20261006-1155-02_20261006-1233.yaml, P4000-1 15.75 V SoC 68%. Preflight red: ARMED
+-> operator disarms, refresh, checklist (ch6 HIGH), arm, go. Operator: runs too slow -> streamline (one-command next flight).
+13:05 CONFIRMED: operator flew again with ch6 (sbus_channel[5]) HIGH -> no drift. f01 root cause = ch6 LOW (angle
+mode). GS abort at .8 s FIXED: live_sample asked imu_data.rol/pit + Ctrler.gyro*PID.FB, service files them only as
+status.*_deg / pid.gyro*.FB (schema_registry builtin_dashboard) -> age inf; now reads the alias (campaign_live _ALIASES,
+test_live_sample_reads_dashboard_spellings). velocity_loops log group += g_of_hold_active, pitch/rollPID.Des (9 vars,
+22000/70042 B/s). OPEN: LAND ignored in CLIMB (wfb protected, propose), yaw kick -36 deg at spool-up.
+f01 flyaway + root cause (ch6 LOW) archived to state-2026-10-06-early.md.
+
