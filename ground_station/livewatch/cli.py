@@ -14,6 +14,7 @@ from .rtos import cmd_rtos
 
 import argparse
 import csv
+import struct
 import sys
 import time
 from pathlib import Path
@@ -104,24 +105,63 @@ def cmd_read(args):
             print(f"{n:22s} {_fmt(v)}")
 
 
+def _wifi_cmd(transport, idx: int, val: float) -> None:
+    """Send one 0xCC 0xDD CMD 0x0F frame on the WiFi socket (TASK/send_data.c Cmd_MultiplexFlags).
+
+    Sent twice: the flag writes are idempotent and a UDP datagram can drop."""
+    body = bytes([0xCC, 0xDD, 0x0F, idx]) + struct.pack("<f", val)
+    crc = 0
+    for b in body[2:]:
+        crc ^= b
+    for _ in range(2):
+        transport._port()._sock.sendto(body + bytes([crc]), (transport.module_ip, transport.port))
+        time.sleep(0.02)
+
+
+# CMD 0x0F: idx 102 = SUBSCRIBE_ONLY, 101 = mixed (boot default), idx 12 = mrac_flags.of_frame_on.
+# Send_Task drops to its 5 ms floor only while of_frame_on (or id_frame_on) is set (USER/main.c), and
+# SUBSCRIBE_ONLY stops the legacy UART frame, so both are needed for 200 Hz on the 0x0A stream.
+_FAST_ON = ((102, 0.0), (12, 1.0))
+_FAST_OFF = ((12, 0.0), (101, 0.0))
+
+
 def cmd_watch(args):
     names = _expand(args)
     writer = None
     fh = None
+    stop = Path(args.stop_file) if args.stop_file else None
+    if stop:
+        stop.unlink(missing_ok=True)
     with _live_reader(args) as lr:
+        fast = args.fast and isinstance(lr.transport, Usart3WifiSubscribeTransport)
+        if args.fast and not fast:
+            print("# --fast needs --transport wifi; streaming at the normal rate", file=sys.stderr)
         try:
-            for row in lr.stream(names, hz=args.hz, duration=args.secs):
+            for n, row in enumerate(lr.stream(names, hz=args.hz, duration=args.secs)):
+                if n == 0 and fast:
+                    for idx, val in _FAST_ON:
+                        _wifi_cmd(lr.transport, idx, val)
+                    print("# fast on (CMD 0x0F idx 102 + of_frame_on)", file=sys.stderr)
                 if args.csv and writer is None:
                     fh = open(args.csv, "w", newline="")
                     writer = csv.DictWriter(fh, fieldnames=list(row))
                     writer.writeheader()
                 if writer:
                     writer.writerow(row)
-                line = "  ".join(f"{k}={_fmt(v)}" for k, v in row.items())
-                print(line)
+                    if n % 200 == 0:
+                        fh.flush()
+                if not args.quiet:
+                    print("  ".join(f"{k}={_fmt(v)}" for k, v in row.items()))
+                if stop and n % 20 == 0 and stop.exists():
+                    stop.unlink(missing_ok=True)
+                    break
         except KeyboardInterrupt:
             print("\n# stopped", file=sys.stderr)
         finally:
+            if fast:
+                for idx, val in _FAST_OFF:
+                    _wifi_cmd(lr.transport, idx, val)
+                print("# fast off (of_frame_on 0, mixed mode)", file=sys.stderr)
             if fh:
                 fh.close()
                 print(f"# wrote {args.csv}", file=sys.stderr)
@@ -810,6 +850,10 @@ def build_parser():
     sp.add_argument("--hz", type=float, default=20.0)
     sp.add_argument("--secs", type=float, default=None, help="stop after S seconds")
     sp.add_argument("--csv", help="also log samples to CSV")
+    sp.add_argument("--fast", action="store_true",
+                    help="wifi: switch the FC to the 200 Hz stream (CMD 0x0F) after the first row, restore on exit")
+    sp.add_argument("--stop-file", help="stop cleanly when this file appears (open-ended background capture)")
+    sp.add_argument("--quiet", action="store_true", help="do not print rows (CSV only)")
     _transport_args(sp)
     sp.set_defaults(func=cmd_watch)
 
