@@ -8,6 +8,8 @@ DEFAULTS = {
     'R_of': 1e-4,
     'R_zupt': 1e-4,
     'of_gate': 5.0,  # sigmas, mirrors EkfOf_t.of_gate (0 = off)
+    'R_of1': 0.0,    # of1 (raw FLOW_HEIGHT cm/s) 2nd velocity meas, h=[0,1,0,0]; 0 = channel off (2026-10-07)
+    'of1_gate': 5.0,
 }
 
 VEL_P0 = 0.1      # mirrors EKF_OF_VEL_P0 (ekf_of.c)
@@ -35,6 +37,8 @@ class EkfOfModel:
         self.R_of  = np.asarray(params['R_of'], dtype=dtype)
         self.R_zupt = np.asarray(params['R_zupt'], dtype=dtype)
         self.of_gate = np.asarray(params['of_gate'], dtype=dtype)
+        self.R_of1 = np.asarray(params['R_of1'], dtype=dtype)
+        self.of1_gate = np.asarray(params['of1_gate'], dtype=dtype)
         self.rej_x = np.zeros(self.B, dtype=np.int64)
         self.rej_y = np.zeros(self.B, dtype=np.int64)
         self.rej_run = np.zeros((2, self.B), dtype=np.int64)  # consecutive rejections per axis
@@ -155,6 +159,17 @@ class EkfOfModel:
         self.innov_y = y_y
         return (y_x, y_y), (S_x, S_y)
 
+    def update_raw(self, of1_x, of1_y, mask=None):
+        # firmware EkfOf_UpdateRaw: of1 is bias-free velocity, h=[0,1,0,0], gated; R_of1 <= 0 skips it
+        on = (np.broadcast_to(self.R_of1, (self.B,)) > 0).astype(self.dtype)
+        mask = on if mask is None else np.asarray(mask, dtype=self.dtype) * on
+        if not mask.any():
+            return
+        R = np.where(self.R_of1 > 0, self.R_of1, 1.0)
+        h = [0.0, 1.0, 0.0, 0.0]
+        self._update_one(0, h, of1_x, R, mask, self.of1_gate)
+        self._update_one(1, h, of1_y, R, mask, self.of1_gate)
+
     def update_zero_vel(self, mask=None):
         h = [0.0, 1.0, 0.0, 0.0]
         self._update_one(0, h, 0.0, self.R_zupt, mask)
@@ -252,6 +267,17 @@ class OldEkfOf6:
         self.innov_x = y_x
         self.innov_y = y_y
         return (y_x, y_y), (S_x, S_y)
+
+    def update_raw(self, of1_x, of1_y, mask=None):
+        # firmware EkfOf_UpdateRaw: of1 is bias-free velocity, h=[0,1,0,0], gated; R_of1 <= 0 skips it
+        on = (np.broadcast_to(self.R_of1, (self.B,)) > 0).astype(self.dtype)
+        mask = on if mask is None else np.asarray(mask, dtype=self.dtype) * on
+        if not mask.any():
+            return
+        R = np.where(self.R_of1 > 0, self.R_of1, 1.0)
+        h = [0.0, 1.0, 0.0, 0.0]
+        self._update_one(0, h, of1_x, R, mask, self.of1_gate)
+        self._update_one(1, h, of1_y, R, mask, self.of1_gate)
 
     def update_zero_vel(self, mask=None):
         pass

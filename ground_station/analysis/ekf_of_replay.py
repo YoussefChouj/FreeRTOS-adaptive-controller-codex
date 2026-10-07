@@ -581,6 +581,152 @@ def run_cli():
     print(f"DEFAULTS_MATCH {defaults_match}")
     print(f"Elapsed: {time.time() - t0:.2f} s")
 
+# ---- Truth mode (2026-10-07): replay the firmware Of_TickKf on a recorder session, score vs video truth ----
+# Mirrors TASK/StabilizerTask.c Of_TickKf (mode 2): tilt-only predict from imu_data.pit/rol, ZUPT unless armed and
+# flight_phase FLYING/LANDING, one OF update per new of_update_cnt (quality >= 50, alt >= 10 cm), bof reset at ARM.
+TRUTH_NAMES = ['imu_data.pit', 'imu_data.rol', 'flight_phase', 'DroneStatus.ARM_Status', 'ano_of.of_update_cnt',
+               'ano_of.of_quality', 'ano_of.of_alt_cm', 'ano_of.of2_dx_fix', 'ano_of.of2_dy_fix',
+               'ano_of.of1_dx', 'ano_of.of1_dy', 'Ctrler.locxPID.FB', 'Ctrler.locyPID.FB']
+OF_TRIM_CMS = (0.27, -0.98)      # OF_BIAS_TRIM_X/Y_CMS (StabilizerTask.c), mode 2 bias
+FW_TILT_GAIN = 0.242             # EKF_OF_TILT_GAIN (ekf_of.h)
+
+
+def load_truth_session(session_dir, truth_csv):
+    from ground_station.analysis.video_truth import read_livewatch
+    d = read_livewatch(str(Path(session_dir) / 'telemetry.csv'), TRUTH_NAMES)
+    tr = np.genfromtxt(truth_csv, delimiter=',', names=True)
+    return d, tr
+
+
+def replay_truth(d, grid, tilt_gain=FW_TILT_GAIN, bof_arm_var=None):
+    """Batched firmware replay. grid: list of EkfOfModel kwargs (+ optional 'bof_arm_var'). Returns (t, px, py)
+    as (B, N) arrays in EKF axes: px <- of2_dx_fix (locy side), py <- of2_dy_fix (locx side)."""
+    B = len(grid)
+    keys = sorted({k for g in grid for k in g if k not in ('bof_arm_var', 'flow_scale')})
+    m = EkfOfModel(B, **{k: [g.get(k, DEFAULTS[k]) for g in grid] for k in keys})
+    arm_var = np.array([g.get('bof_arm_var', 0.0) for g in grid])
+    fs = np.array([g.get('flow_scale', 1.0) for g in grid]) * 0.01   # cm/s -> m/s times a flow scale gain
+    t = d['t']
+    pit = np.radians(d['imu_data.pit']); rol = np.radians(d['imu_data.rol'])
+    ax = EKF_OF_ACC_SIGN_X * 1000.0 * np.sin(pit) * tilt_gain * 9.80665e-3
+    ay = EKF_OF_ACC_SIGN_Y * 1000.0 * np.sin(rol) * np.cos(pit) * tilt_gain * 9.80665e-3
+    armed = d['DroneStatus.ARM_Status'] > 0.5
+    ph = d['flight_phase']
+    cnt = d['ano_of.of_update_cnt']
+    of_ok = (d['ano_of.of_quality'] >= 50) & (d['ano_of.of_alt_cm'] >= 10)
+    N = len(t)
+    px = np.zeros((B, N)); py = np.zeros((B, N))
+    for _ in range(400):                       # 2 s on the pad before the log: ZUPT settles v and P
+        m.predict(0.005, 0.0, 0.0)
+        m.update_zero_vel()
+    if armed[0]:                               # recorder starts after the ARM edge: apply its bof reset now
+        m.reset_bias(arm_var[:, None])
+    for i in range(1, N):
+        dt = t[i] - t[i - 1]
+        if armed[i] and not armed[i - 1]:
+            m.reset_bias(arm_var[:, None])
+        m.predict(dt, ax[i], ay[i])
+        on_ground = not (armed[i] and ph[i] in (1, 2))
+        if on_ground:
+            m.update_zero_vel()
+        elif of_ok[i] and cnt[i] != cnt[i - 1]:
+            m.update_of((d['ano_of.of2_dx_fix'][i] - OF_TRIM_CMS[0]) * fs,
+                        (d['ano_of.of2_dy_fix'][i] - OF_TRIM_CMS[1]) * fs)
+            m.update_raw(d['ano_of.of1_dx'][i] * fs, d['ano_of.of1_dy'][i] * fs)
+        px[:, i] = m.x[:, 0]; py[:, i] = m.x[:, 3]
+    return t, px, py
+
+
+def fit_rotation(d, tr, t, px, py, mapping, win_s=1.0):
+    """Fixed yaw between estimator axes and the truth frame, from 1 s displacement vectors of the baseline (px[0],
+    py[0]) vs truth over flight: drift-insensitive. Returns (angle rad, scale truth/est)."""
+    ph = np.interp(tr['t_tel'], t, d['flight_phase'])
+    tt = tr['t_tel'][np.abs(ph - 1) < 1e-6]
+    k = np.arange(tt[0], tt[-1] - win_s, 0.1)
+    ex = np.interp(k + win_s, t, mapping[0] * py[0]) - np.interp(k, t, mapping[0] * py[0])
+    ey = np.interp(k + win_s, t, mapping[1] * px[0]) - np.interp(k, t, mapping[1] * px[0])
+    gx = np.interp(k + win_s, tr['t_tel'], tr['truth_x_m']) - np.interp(k, tr['t_tel'], tr['truth_x_m'])
+    gy = np.interp(k + win_s, tr['t_tel'], tr['truth_y_m']) - np.interp(k, tr['t_tel'], tr['truth_y_m'])
+    ang = np.arctan2(np.sum(ex * gy - ey * gx), np.sum(ex * gx + ey * gy))
+    rx = np.cos(ang) * ex - np.sin(ang) * ey; ry = np.sin(ang) * ex + np.cos(ang) * ey
+    return ang, float(np.sum(rx * gx + ry * gy) / max(np.sum(rx * rx + ry * ry), 1e-12))
+
+
+def score_truth(d, tr, t, px, py, mapping, rot=0.0):
+    """Position error vs truth over flight_phase==1, both re-zeroed at the first flying truth sample.
+    mapping = (sx, sy): est_x(locx) = sx*py, est_y(locy) = sy*px; rot (rad) turns est into the truth frame.
+    Returns dict of (B,) arrays."""
+    ph = np.interp(tr['t_tel'], t, d['flight_phase'])
+    fly = np.abs(ph - 1) < 1e-6
+    tt = tr['t_tel'][fly]
+    ex = np.array([np.interp(tt, t, mapping[0] * py[b]) for b in range(len(px))])
+    ey = np.array([np.interp(tt, t, mapping[1] * px[b]) for b in range(len(px))])
+    ex, ey = np.cos(rot) * ex - np.sin(rot) * ey, np.sin(rot) * ex + np.cos(rot) * ey
+    gx = tr['truth_x_m'][fly]; gy = tr['truth_y_m'][fly]
+    errx = (ex - ex[:, :1]) - (gx - gx[0]); erry = (ey - ey[:, :1]) - (gy - gy[0])
+    tail = tt >= tt[-1] - 2.0
+    e = np.hypot(errx, erry)
+    return {'rms': np.sqrt(np.mean(e * e, axis=1)), 'p50': np.median(e, axis=1),
+            'end_x': np.median(errx[:, tail], axis=1), 'end_y': np.median(erry[:, tail], axis=1),
+            'dur': tt[-1] - tt[0]}
+
+
+def fit_mapping(d, tr, t, px, py):
+    """Signs mapping EKF axes onto locx/locyPID.FB, from the logged FB (proves the replay mirrors the firmware)."""
+    fx = d['Ctrler.locxPID.FB'] * 0.01; fy = d['Ctrler.locyPID.FB'] * 0.01
+    ph = d['flight_phase'] == 1
+    dx = np.diff(fx[ph]); dy = np.diff(fy[ph]); dpx = np.diff(px[0][ph]); dpy = np.diff(py[0][ph])
+    sx = np.sign(np.dot(dx, dpy)) or 1.0; sy = np.sign(np.dot(dy, dpx)) or 1.0
+    cx = np.corrcoef(np.cumsum(dx), np.cumsum(sx * dpy))[0, 1]; cy = np.corrcoef(np.cumsum(dy), np.cumsum(sy * dpx))[0, 1]
+    return (sx, sy), (cx, cy)
+
+
+def run_truth_cli(argv):
+    ap = argparse.ArgumentParser(prog='ekf_of_replay truth')
+    ap.add_argument('--pair', nargs=2, action='append', required=True, metavar=('SESSION', 'TRUTH_CSV'))
+    ap.add_argument('--q-bof', type=float, nargs='+', default=[0.0, 1e-7, 1e-6, 1e-5])
+    ap.add_argument('--r-of1', type=float, nargs='+', default=[0.0, 1e-4, 3e-4, 1e-3, 3e-3])
+    ap.add_argument('--arm-var', type=float, nargs='+', default=[0.0, 1e-4])
+    ap.add_argument('--of1-gate', type=float, nargs='+', default=[5.0])
+    ap.add_argument('--r-of', type=float, nargs='+', default=[1e-4], help='of2_fix R (1e3 = of2 off)')
+    ap.add_argument('--flow-scale', type=float, nargs='+', default=[1.0])
+    ap.add_argument('--no-rot', action='store_true', help='score in the truth frame as is (no fitted yaw)')
+    ap.add_argument('--out', default=None, help='json with every config score')
+    a = ap.parse_args(argv)
+    base_cfg = {'q_bof': 0.0, 'R_of1': 0.0, 'bof_arm_var': 0.0, 'of1_gate': 5.0, 'R_of': 1e-4, 'flow_scale': 1.0}
+    grid = [base_cfg] + [{'q_bof': q, 'R_of1': r, 'bof_arm_var': v, 'of1_gate': g, 'R_of': ro, 'flow_scale': f}
+                         for q in a.q_bof for r in a.r_of1 for v in a.arm_var for g in a.of1_gate
+                         for ro in a.r_of for f in a.flow_scale]   # grid[0] = firmware as flown
+    rows = [dict(g) for g in grid]
+    for sess, tcsv in a.pair:
+        d, tr = load_truth_session(sess, tcsv)
+        t, px, py = replay_truth(d, grid)
+        mp, cc = fit_mapping(d, tr, t, px, py)
+        rot, k = (0.0, 1.0) if a.no_rot else fit_rotation(d, tr, t, px, py, mp)
+        sc = score_truth(d, tr, t, px, py, mp, rot)
+        name = Path(sess).name[:24]
+        print(f"{name}: mapping locx={mp[0]:+.0f}*py locy={mp[1]:+.0f}*px, baseline-vs-FB corr ({cc[0]:.3f},{cc[1]:.3f}), "
+              f"flying {sc['dur']:.0f} s, yaw est->truth {np.degrees(rot):+.1f} deg, scale truth/est {k:.2f}")
+        for b, r in enumerate(rows):
+            r[name] = {k: float(sc[k][b]) for k in ('rms', 'p50', 'end_x', 'end_y')}
+    names = [Path(s).name[:24] for s, _ in a.pair]
+    for r in rows:
+        r['score'] = float(np.mean([r[n]['rms'] for n in names]))
+    rows.sort(key=lambda r: r['score'])
+    base = next(r for r in rows if r == {**r, **base_cfg})
+    for r in [base] + rows[:8]:
+        cells = '  '.join(f"rms {r[n]['rms']*100:5.1f} end ({r[n]['end_x']*100:+5.0f},{r[n]['end_y']*100:+5.0f})"
+                          for n in names)
+        tag = 'BASE' if r is base else '    '
+        print(f"{tag} q_bof {r['q_bof']:.0e} R_of1 {r['R_of1']:.0e} R_of {r['R_of']:.0e} k {r['flow_scale']:.2f} "
+              f"arm {r['bof_arm_var']:.0e} g1 {r['of1_gate']:.0f} | {cells} cm")
+    if a.out:
+        Path(a.out).write_text(json.dumps(rows, indent=1))
+
+
 if __name__ == "__main__":
-    run_cli()
+    if len(sys.argv) > 1 and sys.argv[1] == 'truth':
+        run_truth_cli(sys.argv[2:])
+    else:
+        run_cli()
 
