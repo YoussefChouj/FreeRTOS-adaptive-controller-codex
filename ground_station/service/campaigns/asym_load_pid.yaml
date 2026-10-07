@@ -1,4 +1,5 @@
 # Asymmetric-load demo (user, 2026-10-05): can adaptive control hold a 250-500 g load that is off-centre or swinging?
+# MRAC injection: the runner sends 0 before every takeoff (controller pid); RC ch8 overrides it in the air.
 # Twin campaigns, identical flights: asym_load_pid.yaml (cascaded PID) and asym_load_mrac.yaml (MRAC V2
 # saturation-aware on roll/pitch/yaw, the best firmware variant on the bench: test median 0.0726 vs PID 0.0775).
 # Fly PID first with one load mass, then MRAC with the same mass on the same packs; repeat with the next mass.

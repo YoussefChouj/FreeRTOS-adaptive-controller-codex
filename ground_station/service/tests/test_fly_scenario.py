@@ -181,3 +181,29 @@ def test_fake_rejects_a_program_at_commit_and_names_the_segment():
     assert not r.ok and r.error.startswith("commit")
     st = drone.status()
     assert st["prog_err_seg"] == 2.0 and st["traj_state"] == 0.0  # endpoint is reported past the last segment
+
+
+def _injections(deps):
+    """Record every CMD 0x0F idx 10 (MRAC output injection) value the runner sends."""
+    sent, inner = [], deps.client._send_cmd
+    def send(cmd, idx, value):
+        if (cmd, idx) == (0x0F, 10):
+            sent.append(value)
+        return inner(cmd, idx, value)
+    deps.client._send_cmd = send
+    return sent
+
+
+@pytest.mark.parametrize("injection, step_args, expect", [
+    (1.0, {"z": 0.7}, [1.0]),                          # mrac_* campaign default
+    (0.0, {"z": 0.7}, [0.0]),                          # pid campaign default
+    (1.0, {"z": 0.7, "mrac_injection": 0}, [0.0]),     # the step's explicit value wins
+    (None, {"z": 0.7}, []),                            # no campaign default: injection untouched
+])
+def test_takeoff_sets_injection_once_on_the_ground(injection, step_args, expect):
+    _, _, deps = _rig()
+    sent = _injections(deps)
+    data = {"scenario": "inj", "steps": [{"takeoff": step_args}, {"hold": {"s": 2.0}}, "land"]}
+    out = fly_scenario(parse_scenario(data), deps, injection=injection)
+    assert not out.aborted and out.landed
+    assert sent == expect  # once, before IDLE; never again in the air, so an RC ch8 flip keeps primacy

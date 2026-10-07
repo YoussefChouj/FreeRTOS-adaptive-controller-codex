@@ -6,6 +6,7 @@
 # Closure: at every pause, note how far the drone landed from the pad marker (the origin walk, doc sec I).
 # The runner also pauses for a pad re-seat when the estimated walk passes 0.5 m (campaign_live DRIFT_BUDGET_M).
 # Zig-zag copied from payload_waypoints.yaml (not changed). Hover and path times are PROPOSED, not measured.
+# MRAC injection: the runner sends 1 before every takeoff (controller mrac_*); RC ch8 overrides it in the air.
 # Start: apply_params(presets.v2_sataware) from ground_station/analysis/controllers/mrac_v2.yaml on the ground
 # (operator approves the param write); end: presets.restore. Fly no-load first: if the no-load hover is not
 # steady, stop and land; do not mount the load under MRAC.

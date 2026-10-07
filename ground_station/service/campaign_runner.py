@@ -170,7 +170,8 @@ class FlightOutcome:
     steps: list[dict]
 
 
-def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False) -> FlightOutcome:
+def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
+                 injection: float | None = None) -> FlightOutcome:
     """Fly one scenario: takeoff, each step in order, land. Any abort -> traj_stop + land.
 
     takeoff: set_hover_z + arm/idle/takeoff, wait prim HOVER. hold: heartbeat for s.
@@ -223,8 +224,12 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False)
         extra: dict = {}
         if st.kind == "takeoff":
             cmds = []
-            if "mrac_injection" in st.args:
-                inj = float(st.args["mrac_injection"])
+            # MRAC injection: the step's mrac_injection, else the campaign default (run_campaign: mrac_* -> 1, else 0).
+            # Sent once, on the ground, before IDLE. The RC ch8 switch has primacy: a flip in the air wins, and the
+            # campaign never writes it again until the next takeoff (TASK/RemoterTask.c, edge-driven).
+            inj_arg = st.args.get("mrac_injection", injection)
+            if inj_arg is not None:
+                inj = float(inj_arg)
                 cmds.append(("mrac_injection",
                              lambda: deps.client._send_cmd(ex.CMD_MRAC_FLAGS, ex.MRAC_IDX_INJECTION, inj)))
             cmds.append(("set_hover_z", lambda: deps.client.set_hover_z(scenario.hover_z_m)))
@@ -361,6 +366,7 @@ def _control_report(deps: RunnerDeps, campaign: Any, flights: list[FlightRecord]
 
 def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
     campaign = load_campaign(yaml_path)
+    injection = 1.0 if str(campaign.controller).startswith("mrac") else 0.0  # campaign-owned, per takeoff
     if campaign.abort:  # the campaign's abort overrides (e.g. autotune tilt_deg 15) reach the live monitor
         deps.monitor = AbortMonitor(limits=campaign.abort_limits)
     queue = []
@@ -483,7 +489,7 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
         deps.on_phase(f"flying flight {i + 1}/{n_flights}: {exp.name}")
         flight_start_time = deps.clock()
         try:
-            outcome = fly_scenario(exp.scenario, deps, hover_only)
+            outcome = fly_scenario(exp.scenario, deps, hover_only, injection)
         finally:
             recording = deps.end_capture(capture) or ""
         aborted, decision, landed = outcome.aborted, outcome.decision, outcome.landed
