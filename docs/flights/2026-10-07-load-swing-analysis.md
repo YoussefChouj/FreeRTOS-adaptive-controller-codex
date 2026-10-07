@@ -36,16 +36,7 @@ Pendulum: L ~0.33 m rope + ~0.10 m to bottle centre -> ~0.43 m -> ~0.76 Hz (PROP
    so the missing term is a thrust bias the PID integral does not supply (check Z_ratePID I limit).
 3. MRAC holds altitude via z u_ad, but pushes the motors to both rails, which leaves no differential authority.
    The pitch swing then grows. The pitch/roll adaptive terms stay small, so the growth is not pitch Theta drift.
-</content>
-</invoke>
-<invoke name="Bash">
-<parameter name="command">cd /d/Projects/UAV_lab/FreeRTOS-adaptive-controller-codex && python - <<'EOF'
-import re
-s=open('.claude_state.md',encoding='utf-8').read()
-s=s.replace("  Do NOT flash. Build-only check OK. Report = docs + plots via SendUserFile at the end.\n",
-"  Do NOT flash. Build-only check OK. Report = docs + plots via SendUserFile at the end.\n- 23:58 progress: flown variant = STRUCT6 (no Keil defines), variants OFF, ref type 0. Findings in\n  docs/flights/2026-10-07-load-swing-analysis.md (motors at 4000 always; MRAC z u_ad fixes sink; pitch swing grows).\n  NEXT: u_def/sat fractions, energy-injection check, Z_ratePID I limit, then replay + sim.\n",1)
-open('.claude_state.md','w',encoding='utf-8').write(s); print(len(s.encode()))
-EOF
+
 ## Z loop budget and saturation (measured windows)
 
 | window | z err (m) | Z_ratePID.U | z u_ad x54 | motor 2 at 4000 | u_def p/r, z |
@@ -87,3 +78,68 @@ at the rail (no differential headroom), the pendulum mode becomes unstable. A re
 (R2 0.2-0.5) gives a positive rate weight (~+0.03) and negative command weight (~-0.025), i.e. u_ad ~ +0.03 e.
 Candidate fixes to test in sim: raise omega_u (less lag), lam_edot or a rate-damping term in the drive, a notch or
 band-stop on the drive at the pendulum band, sigma/e-mod leakage, and a thrust cap so motor 2 keeps headroom.
+
+## Overnight bench results (sim/bench, fw-matched gains, 0.5 kg sling L 0.43 m, 2 seeds, 20 s)
+
+Every number below is a simulation result and PROPOSED. None is a flight measurement.
+
+**Retraction.** An earlier draft proposed vel_kp x0.5. That run used `pid_tuned2` gains, not the flown
+`API/pid.c` table. On fw-matched gains (`sim/bench/fwpid.py`), the bench reproduces both flight signatures: PID sinks
+to z 0.48 m (setpoint 1.0), and STRUCT6 holds z 1.01 m.
+
+**Lead: of1 rotation leak.** In the swing band, the velocity feedback over the FC gyro is 85-103 cm/rad (flight
+logs). That matches the slope of the raw of1 flow, about 3x the physical g/w^2 (31 cm/rad at 0.9 Hz). The flown
+EKF (41c9dea, two-channel) fuses of1 raw with no gyro compensation (R_of1 1e-3), so body rotation reads as
+velocity. Bench model: `sp['of_rot_leak'] = k` (velocity error = k * height * body rate). From the logs, k is about
+-0.6. At k -1 the STRUCT6 swing grows (pitch sd 2.1 -> 5.2 deg, load 31 -> 56 deg), which is the flight signature.
+
+**Keil presets in the bench** (probe9; sd = std per 4 s window, deg; load = max swing angle per 4 s window):
+
+| run | of1 leak | pitch sd | roll sd | load max (deg) | z (m) |
+|---|---|---|---|---|---|
+| PID | -0.6 | 1.2-1.4 | 3.6 -> 1.2 | 29 -> 20 | 0.47 (sinks) |
+| p0 flown (STRUCT6, of1 on) | -0.6 | 1.1 -> 2.7 -> 2.0 | 3.7, 2.0, 3.2, 3.7, 3.5 | 29, 22, 23, 27, 27 | 1.01 |
+| p1 of1 off | 0 | 0.9-1.2 | 2.9 -> 0.7 | ~16 | 1.01 |
+| p2 of1 off + p/r gamma x0.1 | 0 | 0.9-1.2 | 2.9 -> 0.7 | ~16 | 1.01 |
+| p3 of1 off + MRAC z only | 0 | 0.9-1.2 | 2.9 -> 0.7 | ~16 | 1.01 |
+| p4 MRAC z only, of1 on | -0.6 | - | 2.7-3.0 | 20-24 | - |
+| p2 gamma x0.1 with of1 on | -0.6 | - | 2.6-3.1 | 25 | - |
+
+Reading (PROPOSED): with the load hanging at z 1.0, the of1 leak keeps the swing alive even with pitch/roll MRAC
+off (p4) or slowed (gamma x0.1). Turning of1 off removes it. PID only looks calm in flight because it sank and the
+bottle rested on the ground.
+
+**PID sink: Z_ratePID clamps** (probe10, PID only, leak -0.6; z mean per 4 s window):
+
+| Z_ratePID UMax / UiMax / SumEMax | z (m) per 4 s | pitch sd end |
+|---|---|---|
+| 300 / 100 / 250 (flown) | 0.53 -> 0.46 | 1.4 |
+| 300 / 300 / 700 | 0.53 -> 0.73 | 1.4 |
+| 500 / 100 / 250 | 0.54 -> 0.46 | 1.4 |
+| 500 / 300 / 700 | 0.54 -> 0.98-1.00 | 1.7 |
+| 600 / 400 / 920 | 0.54 -> 1.01 | 1.9 |
+
+Both clamps bind: Up ~268 + Ui 100 clips at UMax 300, and raising UMax alone changes nothing. Firmware presets 5 and
+6 (c2e1f96) set 500 / 300 / 700 (column zhd). Presets 0-4 restore the boot values.
+
+**Headroom with of1 off** (probe11, leak 0, sling 0.5 kg, 2 seeds; roll sd and load max per 4 s window, start -> end):
+
+| Z_ratePID clamps | controller | roll sd (deg) | load max (deg) | z (m) |
+|---|---|---|---|---|
+| flown 300 / 100 / 250 | PID | 2.8 -> 0.9 | 21 -> 15 | 0.48 |
+| flown | p1 (MRAC all axes) | 2.9 -> 0.7 | 21 -> 17 | 1.01 |
+| flown | p3 (MRAC z only) | 2.8 -> 0.7 | 21 -> 15 | 1.01 |
+| zhd 500 / 300 / 700 | PID | 2.4 -> 0.8 | 20 -> 16 | 1.01 |
+| zhd | p1 | 2.4 -> 0.8 | 20 -> 17 | 1.01 |
+| zhd | p3 | 2.4 -> 0.9 | 20 -> 16 | 1.01 |
+
+Reading (PROPOSED): the headroom removes the PID sink in the bench (0.48 -> 1.01 m) and changes nothing for MRAC,
+which already held height. With of1 off and headroom on, PID and MRAC look alike in the bench; the flight is the test.
+
+## Morning plan (PROPOSED, bench only, not flown)
+
+1. Flash branch `overnight-2026-10-08` (build checked, 0 errors). Fallback: tag `fw-flown-2026-10-07` or the archived
+   `OBJ/archive/JX_FLY_834c8564.axf`; preset 0 is the flown configuration and is the boot default.
+2. Disarmed, in the Keil watch window: `kp_id = 1` (or 3), `kp_go = 1`, check `kp_active`. Then fly the load manually.
+3. If the swing is gone, try preset 5 (PID vs MRAC without the sink) and 6.
+4. If the swing persists with of1 off, the leak is not the driver: stop and go back to preset 0 or the flown axf.
