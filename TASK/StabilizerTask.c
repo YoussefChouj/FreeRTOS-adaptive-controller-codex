@@ -1142,21 +1142,33 @@ static uint8_t Motor_TestOverride(FlightState_t state)
 }
 
 /* Keil presets: of1 = g_ekf_of1_on, axis mask = g_ctrl_axis_mask (bit per ctrl_axis_e, clear = pure PID),
- * p/r gamma = mrac_g_gamma scale on every pitch and roll group (learning rate). */
-typedef struct { uint8_t of1; uint8_t axis_mask; float g_pr; } KeilPreset_t;
-#define KP_ROW(of1, mask, g_pr)  { (of1), (mask), (g_pr) }
+ * p/r gamma = mrac_g_gamma scale on every pitch and roll group (learning rate), zhd = Z_ratePID headroom
+ * (1 = UMax/UiMax/SumEMax from s_zhd, 0 = the API/pid.c boot values). Ctrler persists to reboot. */
+typedef struct { uint8_t of1; uint8_t axis_mask; float g_pr; uint8_t zhd; } KeilPreset_t;
+#define KP_ROW(of1, mask, g_pr, zhd)  { (of1), (mask), (g_pr), (zhd) }
 static const KeilPreset_t s_kp[] = {
-	/*        of1  axis mask  p/r gamma */
-	KP_ROW(   1U,     0x0FU,     1.0f ),  /* 0 10-07 flown: two-channel EKF, MRAC on every axis       */
-	KP_ROW(   0U,     0x0FU,     1.0f ),  /* 1 of1 off (load swing fix candidate)                     */
-	KP_ROW(   0U,     0x0FU,     0.1f ),  /* 2 of1 off + MRAC pitch/roll learning x0.1                 */
-	KP_ROW(   0U,     0x08U,     1.0f ),  /* 3 of1 off + MRAC on z only (sink fix, no p/r adaptation)  */
-	KP_ROW(   1U,     0x08U,     1.0f ),  /* 4 MRAC on z only, EKF as flown                            */
+	/*        of1  axis mask  p/r gamma  zhd */
+	KP_ROW(   1U,     0x0FU,     1.0f,   0U ),  /* 0 10-07 flown: two-channel EKF, MRAC on every axis       */
+	KP_ROW(   0U,     0x0FU,     1.0f,   0U ),  /* 1 of1 off (load swing fix candidate)                     */
+	KP_ROW(   0U,     0x0FU,     0.1f,   0U ),  /* 2 of1 off + MRAC pitch/roll learning x0.1                 */
+	KP_ROW(   0U,     0x08U,     1.0f,   0U ),  /* 3 of1 off + MRAC on z only (sink fix, no p/r adaptation)  */
+	KP_ROW(   1U,     0x08U,     1.0f,   0U ),  /* 4 MRAC on z only, EKF as flown                            */
+	KP_ROW(   0U,     0x0FU,     1.0f,   1U ),  /* 5 preset 1 + z headroom (PID no longer sinks, 0.5 kg)    */
+	KP_ROW(   0U,     0x08U,     1.0f,   1U ),  /* 6 preset 3 + z headroom                                   */
 };
+/* zhd 1: Z_ratePID UMax, UiMax, SumEMax (Ki 0.435 * 700 = 305 > UiMax). Bench 2026-10-08 (PROPOSED): flown
+ * 300/100/250 holds the 0.5 kg sling at z 0.47 of 1.0 (Up+Ui clip at 300); 500/300/700 holds 1.00. */
+static const float s_zhd[3] = { 500.0f, 300.0f, 700.0f };
+static float s_zboot[3];
+static uint8_t s_zboot_ok = 0U;
 
 static void Keil_PresetPoll(FlightState_t state)
 {
 	uint8_t k, id = kp_id;
+	if (!s_zboot_ok) {             /* first tick: the API/pid.c values, so zhd 0 restores them */
+		s_zboot[0] = Ctrler.Z_ratePID.UMax; s_zboot[1] = Ctrler.Z_ratePID.UiMax; s_zboot[2] = Ctrler.Z_ratePID.SumEMax;
+		s_zboot_ok = 1U;
+	}
 	if (!kp_go) return;
 	kp_go = 0U;
 	if (state != FLIGHT_STATE_DISARMED || id >= (uint8_t)(sizeof(s_kp) / sizeof(s_kp[0]))) return;
@@ -1165,6 +1177,10 @@ static void Keil_PresetPoll(FlightState_t state)
 	for (k = 0U; k < MRAC_N_GROUPS; k++) {
 		mrac_g_gamma[MRAC_AXIS_PITCH][k] = s_kp[id].g_pr;
 		mrac_g_gamma[MRAC_AXIS_ROLL][k] = s_kp[id].g_pr;
+	}
+	{
+		const float *z = s_kp[id].zhd ? s_zhd : s_zboot;
+		Ctrler.Z_ratePID.UMax = z[0]; Ctrler.Z_ratePID.UiMax = z[1]; Ctrler.Z_ratePID.SumEMax = z[2];
 	}
 	kp_active = id;
 }
