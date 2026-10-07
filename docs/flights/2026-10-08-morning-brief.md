@@ -42,7 +42,7 @@ Set `kp_id`, then `kp_go = 1`; `kp_active` shows the applied preset. A reboot re
 |---|---|---|---|
 | 1 | of1 rotation leak into the velocity loop | bench: leak k -0.6 reproduces the growing swing; of1 off removes it | presets 1-3; a gyro-compensated of1 is the real fix (future) |
 | 2 | Z_ratePID headroom too small for +0.5 kg | bench: 0.48 m flown clamps vs 1.01 m with 500 / 300 / 700 | presets 5-6 |
-| 3 | RPM channel 2 reads 2100-2700 while the others read 5300-8500, in all three flights; channel 0 reads 2500 in exp5 but 5300-5500 in exp1/exp2; channel 2 is 0 in 4-7 % of flying frames | logs/exp*-500g.slot2.csv, `rpm_dbg_rpm[]` | debug only (no control code reads it); bench-check the RPM wiring and pole count before using RPM |
+| 3 | RPM ch2 (PC6) reads 0.31-0.39 of the other channels' mean in every flight; ch0 (PA0) degraded through the day, median 5435 / 4436 / 4353 / 2311 RPM in exp1 / exp2 / exp4 / exp5; ch2 is 0 in 4-7 % of flying frames. Same ISR for all four channels, 2 pulses per rev: a missed edge makes one period span more than one revolution, so missed edges read low, never high. Hardware, not firmware | logs/exp*-500g.slot2.csv, `rpm_dbg_rpm[]`, `BSP/rpm.c` `RPM_EdgeISR` | debug only (no control code reads it). Bench, props off: check the ch2 and ch0 sensor alignment, marks and wiring; watch `rpm_dbg_edges[]` rise at 2 per rev on all four |
 | 4 | of2_h (ToF) reads the floor, not the bottle | 10-07 logs | no change needed for height; an outlier gate is still open |
 | 5 | fence / Simplex did not trip during the swing | pilot report | not checked overnight; check the trip thresholds against the logged angles |
 
