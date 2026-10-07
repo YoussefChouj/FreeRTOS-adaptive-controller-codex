@@ -264,6 +264,8 @@ def run(ctrl, ref, sp, seed=0, div_err=2.0, tile=1):
             ok = ~sp['of_drop'][:, i]
             vd = np.stack(vhist, 0)[-1 - sp['of_delay'], np.arange(B)]
             vm = vd * (1 + sp['of_scale'])[:, None] + SIG_OF * ns[:, None] * nrm(2)
+            if sp.get('of_rot_leak'):   # flow not gyro-compensated: k * height * body rate (2026-10-07 of1 channel)
+                vm += sp['of_rot_leak'] * p[:, 2:3] * np.stack([w[:, 1], -w[:, 0]], 1)
             for ax in range(2):
                 inn = (vm[:, ax] - xkf[:, ax, 1]) * ok
                 xkf[:, ax] += inn[:, None] * K_OF
