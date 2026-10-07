@@ -159,6 +159,11 @@ def run(ctrl, ref, sp, seed=0, div_err=2.0, tile=1):
              mot=np.zeros((B, N, 4), np.float32), phat=np.zeros((B, N, 3), np.float32),
              div_k=np.full(B, -1))
     g_meas = np.zeros((B, 3)); a_meas = f0 + sp['acc_bias']
+    # optional slung load (sp['sling'] dict: m kg, L m, r (3,) body attach point m, k N/m, c N s/m, th0/ph0 rad
+    # initial swing in the x/y plane).  Rope = tension-only spring-damper; absent key = the old model unchanged.
+    sl = sp.get('sling'); pl = vl = None
+    if sl is not None:
+        L['load'] = np.zeros((B, N, 3), np.float32)
     for k in range(N):
         t = k * DT_C
         # ---- observation (estimated only) and control at 200 Hz ----
@@ -201,6 +206,25 @@ def run(ctrl, ref, sp, seed=0, div_err=2.0, tile=1):
                             KAPPA * (T[:, 2] + T[:, 3] - T[:, 0] - T[:, 1]) + tz_imb], 1)
             b1, b2, b3 = rot(e)
             fw = (Ts[:, None] * b3 - DRAG_LIN * (v - wind)) / m[:, None]
+            if sl is not None:
+                r_w = sl['r'][0] * b1 + sl['r'][1] * b2 + sl['r'][2] * b3
+                pa = p + r_w
+                if pl is None:
+                    pl = pa + sl['L'] * np.array([np.sin(sl['th0']), np.sin(sl['ph0']),
+                                                  -np.sqrt(1 - np.sin(sl['th0']) ** 2 - np.sin(sl['ph0']) ** 2)])
+                    vl = v.copy()
+                w_w = w[:, :1] * b1 + w[:, 1:2] * b2 + w[:, 2:] * b3
+                d = pl - pa; dist = np.linalg.norm(d, axis=1); u = d / dist[:, None]
+                rdot = ((vl - v - np.cross(w_w, r_w)) * u).sum(1)
+                Tn = np.where(dist > sl['L'], np.maximum(sl['k'] * (dist - sl['L']) + sl['c'] * rdot, 0.0), 0.0)
+                F = Tn[:, None] * u
+                fw = fw + F / m[:, None]
+                Fb = np.stack([(b1 * F).sum(1), (b2 * F).sum(1), (b3 * F).sum(1)], 1)
+                tau = tau + np.cross(sl['r'], Fb)
+                vl += DT * (-F / sl['m'] - np.array([0, 0, G]))
+                pl += DT * vl
+                gnd = pl[:, 2] < 0.0
+                pl[gnd, 2] = 0.0; vl[gnd] *= 0.0
             v += DT * (fw - np.array([0, 0, G])) * alive[:, None]
             p += DT * v
             Jw = J * w
@@ -251,5 +275,7 @@ def run(ctrl, ref, sp, seed=0, div_err=2.0, tile=1):
         alive &= ~bad
         v[~alive] = 0; w[~alive] = 0
         L['p'][:, k] = p; L['e'][:, k] = e; L['mot'][:, k] = M; L['phat'][:, k] = obs['pos']
+        if sl is not None:
+            L['load'][:, k] = pl - p
     L['diverged'] = L['div_k'] >= 0
     return L
