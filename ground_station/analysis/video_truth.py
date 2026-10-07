@@ -202,11 +202,32 @@ def pixel_to_plane(uv, K, dist, R, t, z) -> np.ndarray:
 
 
 # ---------------------------------------------------------------- detection
-def detect_guards(frame_bgr, lo=HSV_LO, hi=HSV_HI, min_area=MIN_AREA, keep=4) -> np.ndarray:
-    """(u, v, area) of the `keep` largest orange blobs, largest first."""
+def colour_mask(frame_bgr, lo=HSV_LO, hi=HSV_HI):
+    """HSV band mask; lo H > hi H wraps through 180/0 (red guards: --hsv-lo 170,120,100 --hsv-hi 6,255,255)."""
     cv2 = _cv2()
     hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv, np.array(lo), np.array(hi))
+    if lo[0] <= hi[0]:
+        return cv2.inRange(hsv, np.array(lo), np.array(hi))
+    return cv2.inRange(hsv, np.array(lo), np.array((180, *hi[1:]))) | cv2.inRange(hsv, np.array((0, *lo[1:])), np.array(hi))
+
+
+def static_mask(video, times, lo=HSV_LO, hi=HSV_HI, grow_px=15):
+    """Colour pixels present at every one of `times` (s): scenery in the guard colour (net poles, mat prints).
+    Pick times with the drone in different places so it is never in all of them."""
+    cv2 = _cv2()
+    m = None
+    for ts in times:
+        c = colour_mask(_grab(video, ts), lo, hi)
+        m = c if m is None else m & c
+    return cv2.dilate(m, np.ones((grow_px, grow_px), np.uint8))
+
+
+def detect_guards(frame_bgr, lo=HSV_LO, hi=HSV_HI, min_area=MIN_AREA, keep=4, static=None) -> np.ndarray:
+    """(u, v, area) of the `keep` largest guard-colour blobs, largest first; `static` pixels are ignored."""
+    cv2 = _cv2()
+    mask = colour_mask(frame_bgr, lo, hi)
+    if static is not None:
+        mask &= ~static
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     n, _, stats, cent = cv2.connectedComponentsWithStats(mask)
     idx = [i for i in range(1, n) if stats[i, cv2.CC_STAT_AREA] >= min_area]
@@ -236,7 +257,7 @@ def drone_centre(guards_xy: np.ndarray, areas=None):
     return None
 
 
-def track(video: str, lo=HSV_LO, hi=HSV_HI, min_area=MIN_AREA, stride: int = 1):
+def track(video: str, lo=HSV_LO, hi=HSV_HI, min_area=MIN_AREA, stride: int = 1, static=None):
     """Video time (s) and guard pixels (list of arrays) per kept frame."""
     cv2 = _cv2()
     cap, ts, blobs, i = cv2.VideoCapture(video), [], [], 0
@@ -246,7 +267,7 @@ def track(video: str, lo=HSV_LO, hi=HSV_HI, min_area=MIN_AREA, stride: int = 1):
             break
         if i % stride == 0:
             ts.append(cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0)
-            blobs.append(detect_guards(frame, lo, hi, min_area))
+            blobs.append(detect_guards(frame, lo, hi, min_area, static=static))
         i += 1
     return np.array(ts), blobs
 
@@ -292,6 +313,15 @@ def align(est_xy, truth_xy, n_fit: int) -> tuple[np.ndarray, bool]:
 # ---------------------------------------------------------------- telemetry
 def read_livewatch(path: str, names) -> dict:
     with open(path, newline="") as f:
+        first = f.readline()
+    if first.startswith("received_ns"):        # session telemetry.csv (long rows): hold every key on names[0]'s ticks
+        from ground_station.analysis.log_corpus import _load_session, hold
+        series = _load_session(Path(path))
+        if names[0] not in series:
+            raise SystemExit(f"{path}: no column for {names[0]}")
+        t = np.unique(series[names[0]][0])
+        return {"t": t, **{n: hold(series, n, t) for n in names}}
+    with open(path, newline="") as f:
         rows = list(csv.reader(f))
     hdr, body = rows[0], rows[1:]
     out = {"t": np.array([float(r[0]) for r in body])}
@@ -306,7 +336,7 @@ def read_livewatch(path: str, names) -> dict:
 
 # ---------------------------------------------------------------- run
 def run(video, cam, marks, csv_path, out, guard_offset=0.0, align_s=10.0, stride=1, lo=HSV_LO, hi=HSV_HI,
-        min_area=MIN_AREA) -> dict:
+        min_area=MIN_AREA, static_t=()) -> dict:
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     K, dist = cam["K"], cam["dist"]
@@ -324,7 +354,7 @@ def run(video, cam, marks, csv_path, out, guard_offset=0.0, align_s=10.0, stride
         z = np.load(cache, allow_pickle=True)
         tv, blobs = z["t"], list(z["blobs"])
     else:
-        tv, blobs = track(video, lo, hi, min_area, stride)
+        tv, blobs = track(video, lo, hi, min_area, stride, static_mask(video, static_t, lo, hi) if static_t else None)
         arr = np.empty(len(blobs), dtype=object)      # ragged: np.array() would stack equal-shape frames
         for k, b in enumerate(blobs):
             arr[k] = b
@@ -516,6 +546,7 @@ def main(argv=None):
         p.add_argument("--hsv-lo", default=",".join(map(str, HSV_LO)))
         p.add_argument("--hsv-hi", default=",".join(map(str, HSV_HI)))
         p.add_argument("--min-area", type=int, default=MIN_AREA)
+        p.add_argument("--static-t", default="", help='"5,30": ignore guard-colour pixels present at all these times (s)')
     o = sub.add_parser("overlay"); o.add_argument("video"); o.add_argument("--cam", required=True)
     o.add_argument("--marks", required=True); o.add_argument("--csv", required=True)
     o.add_argument("--run", required=True, help="output folder of `run`"); o.add_argument("--out", required=True)
@@ -553,14 +584,16 @@ def main(argv=None):
         cv2 = _cv2()
         frame = _grab(a.video, a.t)
         lo, hi = tuple(map(int, a.hsv_lo.split(","))), tuple(map(int, a.hsv_hi.split(",")))
-        for u, v, _ in detect_guards(frame, lo, hi, a.min_area):
+        st = [float(s) for s in a.static_t.split(",") if s]
+        for u, v, _ in detect_guards(frame, lo, hi, a.min_area, static=static_mask(a.video, st, lo, hi) if st else None):
             cv2.circle(frame, (int(u), int(v)), 12, (255, 0, 255), 2)
         cv2.imwrite(a.out, frame)
         print("wrote", a.out)
     else:
         lo, hi = tuple(map(int, a.hsv_lo.split(","))), tuple(map(int, a.hsv_hi.split(",")))
         rep = run(a.video, json.loads(Path(a.cam).read_text()), json.loads(Path(a.marks).read_text()), a.csv, a.out,
-                  a.guard_offset, a.align_s, a.stride, lo, hi, a.min_area)
+                  a.guard_offset, a.align_s, a.stride, lo, hi, a.min_area,
+                  tuple(float(s) for s in a.static_t.split(",") if s))
         print(json.dumps(rep, indent=2))
 
 
