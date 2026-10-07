@@ -626,9 +626,11 @@ def test_15_status_fields_and_types() -> None:
         "gs_flight_active",
         "hover_z",
         "airborne_t",
+        "prog_mode",
+        "prog_err_seg",
     }
     assert set(st.keys()) == expected_keys
-    assert len(st) == 14
+    assert len(st) == 16
     for k, v in st.items():
         assert isinstance(v, float), f"field {k} is not a float: {type(v)}"
 

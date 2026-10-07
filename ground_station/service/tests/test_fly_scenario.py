@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import shutil
+
 import pytest
 
+from ground_station.platform import wfb_program as wp
 from ground_station.platform.wfb_commands import WfbClient
 from ground_station.service.campaign_runner import PRIM_IDLE, TRAJ_DONE, fly_scenario
 from ground_station.service.fake_drone import FakeDrone
@@ -151,3 +154,30 @@ def test_no_authority_streamed_or_never_taken_does_not_gate():
         deps.status = lambda a=auth: {**inner(), "motor_idle": 1, **({} if a is None else {"rc_authority": a})}
         out = fly_scenario(load_scenario("hover", {"z": 0.5, "hold_s": 2}), deps)
         assert not out.aborted and out.landed, (auth, out.decision)
+
+
+@pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not on PATH")
+def test_program_step_uploads_parameters_and_flies_the_onboard_path():
+    data = {"scenario": "prog", "steps": [{"takeoff": {"z": 0.5}},
+                                          {"program": {"ops": [{"circle": {"r": 0.3}}], "profile": "scurve"}}, "land"]}
+    drone, _, deps = _rig()
+    sent = []
+    inner = deps.client.prog
+    deps.client.prog = lambda idx, val: sent.append(idx) or inner(idx, val)
+    out = fly_scenario(parse_scenario(data), deps)
+    assert not out.aborted and out.landed, out.decision
+    assert [r["kind"] for r in out.steps] == ["takeoff", "program", "land"]
+    assert all(r["ok"] for r in out.steps)
+    st = drone.status()
+    assert int(st["traj_state"]) == TRAJ_DONE and st["prog_mode"] == 1.0 and st["prog_err_seg"] == -1.0
+    assert len(sent) < 25  # parameters only: one ARC record, not a dense waypoint list
+
+
+@pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not on PATH")
+def test_fake_rejects_a_program_at_commit_and_names_the_segment():
+    drone = FakeDrone()
+    one_way = [wp.Segment(wp.Atom.HOLD, p=(1.0,)), wp.Segment(wp.Atom.LINE, v=0.3, a=1.0, j=4.0, p=(0.0, -0.3, 0.5))]
+    r = wp.upload(one_way, WfbClient(drone.send), attempts=1)
+    assert not r.ok and r.error.startswith("commit")
+    st = drone.status()
+    assert st["prog_err_seg"] == 2.0 and st["traj_state"] == 0.0  # endpoint is reported past the last segment

@@ -8,10 +8,11 @@ from pathlib import Path
 from ground_station.autotune import excitation as ex
 from ground_station.service.campaign_schema import load_campaign
 from ground_station.service.abort_monitor import AbortMonitor, AbortSample, AbortDecision
-from ground_station.service.scenario_schema import TRAJ_KINDS, WFB_SETTLE_S, Scenario, Step
+from ground_station.service.scenario_schema import PROG_KINDS, TRAJ_KINDS, WFB_SETTLE_S, Scenario, Step
 from ground_station.livetune.loop import OK_STATUSES as LIVETUNE_OK, LiveTuneSession, parse_step as parse_livetune
 from ground_station.service.trajectory_pipeline import TrajLimits
 from ground_station.platform.trajectory_upload import upload
+from ground_station.platform import wfb_program
 
 # firmware enums (docs/workflow-b/interfaces.md): prim_state IDLE 0 / HOVER 2 / DESCEND 6, traj_state DONE 4
 PRIM_IDLE = 0
@@ -260,13 +261,20 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False)
         elif st.kind == "hold":
             t_hold = deps.clock()
             ok = wait(lambda: deps.clock() - t_hold >= st.duration_s, "hold")
-        elif st.kind in TRAJ_KINDS:
+        elif st.kind in TRAJ_KINDS + PROG_KINDS:
+            # A program (CMD 0x1C) runs like a trajectory: same START, same traj_state DONE, generated onboard.
             t_settle = deps.clock()
             ok = wait(lambda: deps.clock() - t_settle >= WFB_SETTLE_S and prim() == PRIM_HOVER, f"{st.kind} settle")
             if ok:
-                res = upload(st.points, deps.client)
+                seg = ""
+                if st.kind in PROG_KINDS:
+                    res = wfb_program.upload(st.program, deps.client)
+                    if not res.ok:  # a rejected COMMIT names the failing segment
+                        seg = f" (prog_err_seg {deps.status().get('prog_err_seg', 'n/a')})"
+                else:
+                    res = upload(st.points, deps.client)
                 if not res.ok:
-                    decision = AbortDecision(level=1, reason=f"{st.kind} upload failed: {res.error}")
+                    decision = AbortDecision(level=1, reason=f"{st.kind} upload failed: {res.error}{seg}")
                     ok = False
                 else:
                     deps.client.traj_start()

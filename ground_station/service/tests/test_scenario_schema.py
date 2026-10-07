@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import shutil
 from typing import Any
 
 import pytest
@@ -147,3 +148,53 @@ def test_campaign_scenario_errors_are_prefixed():
     with pytest.raises(CampaignError) as exc_info:
         parse_campaign(_campaign(exp))
     assert any(p.startswith("experiments.0.scenario: steps.0.takeoff.z") for p in exc_info.value.problems)
+
+
+def _program(**kw: Any) -> dict[str, Any]:
+    body: dict[str, Any] = {"ops": [{"circle": {"r": 0.3}}, {"hold": {"s": 1.0}}]}
+    body.update(kw)
+    return {"scenario": "program_test", "steps": [{"takeoff": {"z": 0.5}}, {"program": body}, "land"]}
+
+
+@pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not on PATH")
+def test_program_step_takes_duration_from_the_firmware_evaluator():
+    from ground_station.platform import wfb_presets
+    from ground_station.platform.wfb_program import preview
+
+    s = parse_scenario(_program(profile="quintic", v=0.25))
+    st = s.steps[1]
+    assert st.kind == "program" and st.points == ()
+    expect = wfb_presets.build(_program()["steps"][1]["program"]["ops"], 0.5,
+                               wfb_presets.Motion(profile=wfb_presets.profile_of("quintic"), v=0.25))
+    assert list(st.program) == expect
+    assert st.duration_s == pytest.approx(preview(expect, 0.5).t_total_s)
+    assert s.summary()[1]["n_segments"] == len(expect) == 2  # circle, hold (the circle ends home: no closing line)
+    assert s.budget_s == pytest.approx(st.duration_s + 1.0 + 30.0)  # one settle + overhead
+
+
+@pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not on PATH")
+@pytest.mark.parametrize(
+    "body, needle",
+    [
+        ({"ops": []}, "non-empty list"),
+        ({"ops": ["spiral"]}, "unknown op 'spiral'"),
+        ({"ops": [{"hold": {}}]}, "op 0: hold"),
+        ({"ops": [{"circle": {"r": 0.3}}], "profile": "bezier"}, "unknown profile"),
+        ({"ops": [{"circle": {"r": 1.0}}]}, "reject it at COMMIT: bounds at segment 0"),
+        ({"ops": [{"circle": {"r": 0.3}}], "speed": 1}, "speed"),
+    ],
+)
+def test_program_step_rejects(body, needle):
+    data = _program()
+    data["steps"][1] = {"program": body}
+    assert any(needle in p for p in _problems(data)), _problems(data)
+
+
+def test_program_step_fails_closed_without_preview(monkeypatch):
+    from ground_station.service import scenario_schema
+
+    def no_gcc(*_a: Any, **_k: Any) -> None:
+        raise RuntimeError("program preview needs gcc on PATH")
+
+    monkeypatch.setattr(scenario_schema, "preview", no_gcc)
+    assert any("preview unavailable" in p for p in _problems(_program()))

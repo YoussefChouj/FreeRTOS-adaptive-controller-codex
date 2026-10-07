@@ -18,11 +18,14 @@ from ground_station.platform.wfb_commands import (
     CMD_ARM,
     CMD_KILL,
     CMD_PRIM,
+    CMD_PROG,
     CMD_TRAJ,
     ArmIdx,
     PrimIdx,
+    ProgIdx,
     TrajIdx,
 )
+from ground_station.platform import wfb_program
 from ground_station.service.trajectory_pipeline import TrajLimits, TrajPoint, crc32, validate
 
 PARAM_CMDS = (0x01, 0x0F, 0x14)  # PID_GAIN, MRAC/telemetry flags, SysID control: the livetune step's writes
@@ -155,6 +158,10 @@ class FakeDrone:
         self._traj_crc_hi: int = 0
         self._traj_crc_lo: int = 0
         self._traj_t: float = 0.0
+        self._prog_mode: int = 0
+        self._prog_err_seg: int = -1
+        self._prog_stage: list[float] = [0.0] * wfb_program.F_COUNT
+        self._prog_recs: list[tuple[float, ...]] = []
         self._last_err: WfbErr = WfbErr.NONE
         self._safety_trip: Trip = Trip.NONE
         self._safety_action: Action = Action.NONE
@@ -227,6 +234,8 @@ class FakeDrone:
             return self._handle_prim(cmd)
         elif cmd.command_id == CMD_TRAJ:
             return self._handle_traj(cmd)
+        elif cmd.command_id == CMD_PROG:
+            return self._handle_prog(cmd)
         if cmd.command_id in PARAM_CMDS:  # no dynamics behind them: recorded for the livetune tests
             self.param_writes.append((cmd.command_id, cmd.index, cmd.value))
         if cmd.command_id == ex.CMD_MRAC_FLAGS and cmd.index <= 12:
@@ -381,6 +390,57 @@ class FakeDrone:
         else:
             return int(Outcome.REJECTED)
 
+    def _prog_reject(self, err: WfbErr, seg: int = -1) -> int:
+        self._last_err, self._prog_err_seg = err, seg
+        if self._traj_state == TrajState.LOADING:
+            self._traj_state = TrajState.EMPTY
+        return int(Outcome.REJECTED)
+
+    def _handle_prog(self, cmd: Command) -> int:
+        """CMD 0x1C program upload. COMMIT runs the firmware evaluator (wfb_program.preview, gcc) and loads its
+        dense path as the trajectory, so START (0x1B), the executor and traj_state DONE are the trajectory ones."""
+        idx, val = int(cmd.index), cmd.value
+        if self._traj_state == TrajState.EXECUTING:
+            return self._prog_reject(WfbErr.STATE)
+        if idx == ProgIdx.BEGIN:
+            if not math.isfinite(val) or math.floor(val) != val or not 1.0 <= val <= wfb_program.PROG_MAX_SEGS:
+                return self._prog_reject(WfbErr.RANGE)
+            self._traj_state, self._traj_n, self._prog_mode = TrajState.LOADING, int(val), 1
+            self._prog_stage, self._prog_recs, self._traj_crc_hi_set = [0.0] * wfb_program.F_COUNT, [], False
+            self._traj_points, self._prog_err_seg, self._last_err = [], -1, WfbErr.NONE
+            return int(Outcome.APPLIED)
+        if idx == ProgIdx.CLEAR:
+            self._traj_state, self._traj_n, self._prog_recs, self._traj_points = TrajState.EMPTY, 0, [], []
+            return int(Outcome.APPLIED)
+        if self._traj_state != TrajState.LOADING:
+            return self._prog_reject(WfbErr.STATE)
+        if idx < wfb_program.F_COUNT:
+            self._prog_stage[idx] = val
+        elif idx == ProgIdx.PUSH:
+            if int(val) != len(self._prog_recs) or len(self._prog_recs) >= self._traj_n:
+                return self._prog_reject(WfbErr.COUNT)
+            self._prog_recs.append(tuple(self._prog_stage))
+        elif idx == ProgIdx.CRC_HI:
+            self._traj_crc_hi, self._traj_crc_hi_set = int(val), True
+        elif idx == ProgIdx.COMMIT:
+            if not self._traj_crc_hi_set or len(self._prog_recs) != self._traj_n:
+                return self._prog_reject(WfbErr.COUNT)
+            segs = [wfb_program.Segment(wfb_program.Atom(int(r[0])), wfb_program.Profile(int(r[1])), *r[2:7],
+                                        p=r[7:]) for r in self._prog_recs]
+            if wfb_program.crc32(segs) != (self._traj_crc_hi << 16) | int(val):
+                return self._prog_reject(WfbErr.CRC)
+            try:
+                pv = wfb_program.preview(segs, self._hover_z)
+            except RuntimeError:
+                return self._prog_reject(WfbErr.STATE)
+            if not pv.ok:
+                return self._prog_reject(WfbErr(pv.err), pv.err_seg)
+            self._traj_points = [TrajPoint(x, y, z, yaw, t) for t, x, y, z, yaw in pv.points]
+            self._traj_state, self._traj_seg, self._traj_t, self._last_err = TrajState.READY, 0, 0.0, WfbErr.NONE
+        else:
+            return self._prog_reject(WfbErr.RANGE)
+        return int(Outcome.APPLIED)
+
     def _handle_traj(self, cmd: Command) -> int:
         val = cmd.value
 
@@ -388,6 +448,7 @@ class FakeDrone:
             if self._traj_state == TrajState.EXECUTING:
                 self._last_err = WfbErr.STATE
                 return int(Outcome.REJECTED)
+            self._prog_mode = 0
             if not math.isfinite(val) or math.floor(val) != val or not (2.0 <= val <= float(self.limits.max_points)):
                 self._last_err = WfbErr.RANGE
                 return int(Outcome.REJECTED)
@@ -896,7 +957,7 @@ class FakeDrone:
         return a
 
     def status(self) -> dict[str, float]:
-        """Telemetry status containing exactly the 14 fields from interfaces.md section 2."""
+        """Telemetry status containing the 14 fields from interfaces.md section 2 plus prog_mode/prog_err_seg."""
         return {
             "prim_state": float(self._prim_state),
             "traj_state": float(self._traj_state),
@@ -912,4 +973,6 @@ class FakeDrone:
             "hover_z": float(self._hover_z),
             "airborne_t": float(self._airborne_t),
             "fence_push": float(self._push),
+            "prog_mode": float(self._prog_mode),
+            "prog_err_seg": float(self._prog_err_seg),
         }
