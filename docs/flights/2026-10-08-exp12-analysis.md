@@ -40,3 +40,39 @@ Dominant sway 0.25-0.9 Hz in both modes (load pendulum band).
    with battery sag later in the log mixed in).
 4. **Next.** Fly MRAC on z only with PID p/r (z win kept, p/r swing removed) or lower the p/r adaptation gain
    (SIL: stable at gamma 0.25-0.5); keep the load at 500 g so motor2 has headroom.
+
+## Adaptive layer (tool `ground_station/analysis/adaptive_review.py`, stats `plots/2026-10-08-exp12/adaptive_stats.md`)
+
+Plots: `adaptive_pitch_features.png`, `adaptive_roll_features.png`, `adaptive_yaw_features.png`,
+`adaptive_z_rate_features.png` (weights Theta[0..5], basis phi, per-feature torque Theta_i*phi_i),
+`adaptive_contrib_zoom.png`, `adaptive_contrib_rms.png`, `adaptive_spectra.png`, `adaptive_scatter.png`,
+`adaptive_drift.png`. The S6 basis is rebuilt from the logged signals and checked against the logged u_ad.
+
+| finding (measured) | value |
+|---|---|
+| what u_ad is made of, pitch / roll / yaw | ~100 % bias Theta[0]; Theta[1..5] stay within 0.006 of zero (the load features never learn in 10-75 s) |
+| what u_ad is made of, z | 89 % bias, 11 % u_nom feature |
+| u_ad against the body rate in the sway band (0.25-0.9 Hz) | phase -27 to -57 deg in 7 of 8 segment-axes; Re H ratio -0.13 to -0.67 (u_ad removes 13-67 % of the PID's damping); F3 roll is the one exception (+0.13) |
+| replay with a faster u_ad filter (same weights) | omega_u 10 / 15 / 20 rad/s makes it worse: Re H ratio -0.16 to -1.03 (less lag, the in-phase bias motion reaches the motors) |
+| MRAC p/r when u_ad stays small (F3, F5: u_ad/u_nom 0.14-0.21) | attitude sd equal to PID (1.01 / 1.55 and 1.49 / 1.53 deg) |
+
+## Drift (stats table "Static offsets per segment")
+
+| finding (measured, estimate frame) | value |
+|---|---|
+| attitude tracking, pitch / roll Des - FB mean | -0.06 to +0.23 deg / -0.02 to -0.12 deg (the angle loops hold the setpoint) |
+| x velocity with the stick centred | +0.55 to +1.58 cm/s, same under PID and MRAC |
+| roll stick (x) active | 6-20 % of each segment; median velocity command +24 to +51 cm/s, always +x |
+
+## Reading (PROPOSED)
+
+1. **Why MRAC p/r swings more.** Only the bias weight moves. It is a slow integrator whose in-band motion is in
+   phase with the body rate, so it pumps the pendulum. More basis features (S10, RBF) add weights that also do not
+   learn in a flight this short. A faster u_ad filter makes it worse (replay). The lever is the adaptation gain:
+   lower p/r gamma keeps u_ad in the 0.14-0.21 range where MRAC p/r matched PID.
+2. **Demo config.** `kp_id 5` (MRAC on all four axes) + `vp_user` = the vp 6 law with `g = 0.10` (was 0.25),
+   omega_u unchanged. z MRAC keeps its height win. Fallback: MRAC z only with PID p/r.
+3. **Drift.** The estimator sees at most a 1.6 cm/s creep with the stick centred, and every stick input in the
+   log commanded +x. Either the operator steered +x, or the drone moves in the room in a way the optical-flow
+   estimate does not see (then the position loop cannot correct it, PID or MRAC). Check on the next take-off:
+   20 s hands off, watch the drone against the floor while `locxPID.FB` stays within a few cm.

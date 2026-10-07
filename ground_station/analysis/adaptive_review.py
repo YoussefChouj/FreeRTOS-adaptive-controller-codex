@@ -1,0 +1,369 @@
+"""Adaptive-layer review of a stream_log flight (S6 basis): weights, basis, per-feature torque, damping, drift.
+
+    python -m ground_station.analysis.adaptive_review logs/<stem> --out docs/flights/plots/<dir>
+
+Reads <stem>.slot0..3.csv (exp8 frame layout: pitch Theta[0] in slot 0, the other weights in slot 1). The basis
+is not logged, so it is rebuilt the way API/mrac.c builds it (INCLUDE_CONTROL_IN_REGRESSOR == 1):
+    phi = [1, x, x*tanh(x), cross, u_nom, xm],  xm = x - e
+    pitch x = gyroy FB, cross = gyrox*gyroz;  roll x = gyrox FB, cross = gyroy*gyroz  (rad/s)
+    yaw x = gyroz FB, z x = Z_ratePID FB, cross = 0
+u_ad = clamp(LPF_omega_u(sum Theta_i*phi_i)); the rebuilt sum is checked against the logged u_ad.
+Writes adaptive_*.png (160 dpi) and adaptive_stats.md into --out.
+"""
+import argparse
+import os
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from scipy import signal
+
+D2R = np.pi / 180.0
+FS = 100.0
+AXES = ("pitch", "roll", "yaw", "z_rate")
+OMEGA_U = {"pitch": 4.0, "roll": 5.0, "yaw": 4.0, "z_rate": 20.0}      # API/mrac.c MRAC_Init
+VXY_DES_MAX = 120.0                                                   # cm/s, TASK/StabilizerTask.c
+U_MAX = {"pitch": 6.73863, "roll": 6.73863, "yaw": 2.027, "z_rate": 13.47726}
+FEAT = ("bias 1", "x", "x tanh x", "cross", "u_nom", "xm")
+BAND = (0.25, 0.9)                                                     # load-sway band, exp12
+MOTORS = ["mymotor.motor%d" % i for i in range(1, 5)]
+
+
+def load(stem):
+    s = [pd.read_csv("%s.slot%d.csv" % (stem, k)) for k in range(4)]
+    for d in s:
+        d.drop(columns=[c for c in ("t_host_s", "seq") if c in d.columns], inplace=True)
+        d.sort_values("t_src_ms", inplace=True)
+    df = s[0]
+    for d in s[1:]:
+        df = pd.merge_asof(df, d, on="t_src_ms", direction="nearest")
+    df["t"] = (df.t_src_ms - df.t_src_ms.iloc[0]) / 1000.0
+    return df.reset_index(drop=True)
+
+
+def rebuild(df):
+    gx, gy, gz = (df["Ctrler.gyro%sPID.FB" % a] * D2R for a in "xyz")
+    bus = {"pitch": (gy, gx * gz), "roll": (gx, gy * gz), "yaw": (gz, 0.0 * gz),
+           "z_rate": (df["Ctrler.Z_ratePID.FB"], 0.0 * gz)}
+    for ax in AXES:
+        x, cross = bus[ax]
+        p = "mrac_state.%s." % ax
+        phi = [np.ones(len(df)), x, x * np.tanh(x), cross, df[p + "u_nom"], x - df[p + "e"]]
+        raw = np.zeros(len(df))
+        for i in range(6):
+            df["%s_phi%d" % (ax, i)] = np.asarray(phi[i], float)
+            df["%s_c%d" % (ax, i)] = df["%s_phi%d" % (ax, i)] * df[p + "Theta[%d]" % i]
+            raw += df["%s_c%d" % (ax, i)].to_numpy()
+        df[ax + "_raw"] = raw
+        df[ax + "_x"] = np.asarray(x, float)
+
+
+def lpf_seg(raw, u0, ax, w=None):
+    a = (w or OMEGA_U[ax]) / FS
+    y = np.empty_like(raw)
+    v = u0
+    for k, r in enumerate(raw):
+        v += a * (r - v)
+        y[k] = v
+    return np.clip(y, -U_MAX[ax], U_MAX[ax])
+
+
+def segments(df):
+    air = (df["Ctrler.Z_posPID.FB"] > 0.25) & (df[MOTORS].min(axis=1) > 1500)
+    inj = df["mrac_flags.output_injection_on"].fillna(0).astype(int)
+    fl = (air != air.shift()).cumsum()
+    out, n = [], 0
+    for _, g in df[air].groupby(fl[air]):
+        if g.t.iloc[-1] - g.t.iloc[0] < 5.0:
+            continue
+        n += 1
+        sub = (inj[g.index] != inj[g.index].shift()).cumsum()
+        for _, h in g.groupby(sub):
+            h = h[(h.t > h.t.iloc[0] + 1.0) & (h.t < h.t.iloc[-1] - 1.0)]
+            if len(h) and h.t.iloc[-1] - h.t.iloc[0] >= 3.0:
+                out.append(("F%d %s" % (n, "MRAC" if inj[h.index[0]] else "PID"), h.index[0], h.index[-1]))
+    return out, air, inj
+
+
+def band_tf(x, y):
+    nper = int(min(512, len(x) // 2))
+    f, pxy = signal.csd(x, y, fs=FS, nperseg=nper)
+    _, pxx = signal.welch(x, fs=FS, nperseg=nper)
+    _, coh = signal.coherence(x, y, fs=FS, nperseg=nper)
+    m = (f >= BAND[0]) & (f <= BAND[1])
+    h = pxy[m] / pxx[m]
+    w = coh[m]
+    hm = np.sum(h * w) / max(np.sum(w), 1e-12)
+    return np.degrees(np.angle(hm)), hm.real, float(np.mean(w))
+
+
+def shade(ax_, df, segs):
+    for name, i0, i1 in segs:
+        ax_.axvspan(df.t[i0], df.t[i1], color="tab:orange" if "MRAC" in name else "tab:blue", alpha=0.08, lw=0)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("stem")
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--load-g", type=float, default=570.0)
+    ap.add_argument("--rope-x-cm", type=float, default=2.0)
+    ap.add_argument("--rope-y-cm", type=float, default=7.0)
+    a = ap.parse_args()
+    os.makedirs(a.out, exist_ok=True)
+    df = load(a.stem)
+    rebuild(df)
+    df = df.copy()
+    segs, air, inj = segments(df)
+    mseg = [s for s in segs if "MRAC" in s[0]]
+    md = ["# Adaptive-layer stats: `%s`" % os.path.basename(a.stem), "",
+          "Measured from the log. Basis rebuilt from logged signals (see the tool docstring). "
+          "Shaded: blue PID, orange MRAC injected.", ""]
+
+    # 1. rebuild check + per-feature RMS share + damping, per MRAC segment and axis
+    md += ["## Per MRAC segment and axis", "",
+           "| seg | axis | rebuild r | u_ad RMS | u_nom RMS | ratio | r(u_ad,u_nom) | r(u_ad,x) | "
+           "band phase u_ad/x (deg) | band phase u_nom/x | Re H u_ad / Re H u_nom | coh | top feature (RMS share) |",
+           "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    rms_tab, whatif = {}, []
+    for name, i0, i1 in mseg:
+        g = df.loc[i0:i1]
+        for ax in AXES:
+            p = "mrac_state.%s." % ax
+            rec = lpf_seg(g[ax + "_raw"].to_numpy(), g[p + "u_ad"].iloc[0], ax)
+            df.loc[i0:i1, ax + "_rec"] = rec
+            uad, un, x = g[p + "u_ad"].to_numpy(), g[p + "u_nom"].to_numpy(), g[ax + "_x"].to_numpy()
+            r_rec = np.corrcoef(rec, uad)[0, 1]
+            cr = np.array([np.sqrt(np.mean(g["%s_c%d" % (ax, i)] ** 2)) for i in range(6)])
+            rms_tab[(name, ax)] = cr
+            share = cr ** 2 / max(np.sum(cr ** 2), 1e-12)
+            top = np.argsort(share)[::-1][:2]
+            ph_a, re_a, coh = band_tf(x - x.mean(), uad - uad.mean())
+            ph_n, re_n, _ = band_tf(x - x.mean(), un - un.mean())
+            if ax in ("pitch", "roll"):
+                row = []
+                for w in (OMEGA_U[ax], 10.0, 15.0, 20.0):
+                    v = lpf_seg(g[ax + "_raw"].to_numpy(), g[p + "u_ad"].iloc[0], ax, w)
+                    ph_w, re_w, _ = band_tf(x - x.mean(), v - v.mean())
+                    row.append("%+.0f / %+.2f" % (ph_w, re_w / re_n if abs(re_n) > 1e-9 else np.nan))
+                whatif.append("| %s | %s | %s |" % (name, ax, " | ".join(row)))
+            rms = lambda v: np.sqrt(np.mean(np.square(v)))
+            md.append("| %s | %s | %.2f | %.4f | %.4f | %.2f | %+.2f | %+.2f | %+.0f | %+.0f | %.2f | %.2f | %s |" % (
+                name, ax, r_rec, rms(uad), rms(un), rms(uad) / max(rms(un), 1e-9),
+                np.corrcoef(uad, un)[0, 1], np.corrcoef(uad, x)[0, 1], ph_a, ph_n,
+                re_a / re_n if abs(re_n) > 1e-9 else np.nan, coh,
+                ", ".join("%s %.0f%%" % (FEAT[i], 100 * share[i]) for i in top)))
+    md.append("")
+    md.append("Phase of a torque against the body rate x in %.2f-%.2f Hz: +/-180 = pure damping, 0 = anti-damping, "
+              "+/-90 = no energy. Re H u_ad / Re H u_nom > 0: u_ad adds damping like the PID; < 0: removes it." % BAND)
+    md.append("")
+    md += ["## What-if: same weights, other omega_u (open-loop replay of the logged raw sum)", "",
+           "Band phase u_ad/x (deg) / Re H ratio, as above. Closed loop would differ (the weights would evolve "
+           "differently); this isolates the filter lag.", "",
+           "| seg | axis | flown | 10 rad/s | 15 rad/s | 20 rad/s |", "|---|---|---|---|---|---|"] + whatif + [""]
+
+    # 2. weights: start/end per MRAC segment
+    md += ["## Weights Theta (start -> end of each MRAC segment)", "",
+           "| seg | axis | " + " | ".join("Theta[%d] %s" % (i, FEAT[i]) for i in range(6)) + " | |Theta| growth |",
+           "|---|---|" + "---|" * 7]
+    for name, i0, i1 in mseg:
+        for ax in AXES:
+            th = ["mrac_state.%s.Theta[%d]" % (ax, i) for i in range(6)]
+            t0, t1 = df.loc[i0, th].to_numpy(float), df.loc[i1, th].to_numpy(float)
+            md.append("| %s | %s | %s | %.3f -> %.3f |" % (name, ax, " | ".join(
+                "%+.3f -> %+.3f" % (u, v) for u, v in zip(t0, t1)), np.linalg.norm(t0), np.linalg.norm(t1)))
+    md.append("")
+
+    # 3. static torque, angle and position offsets per segment (drift)
+    g9 = 9.81 * a.load_g / 1000.0
+    md += ["## Static offsets per segment (drift)", "",
+           "Expected static torque of the load at the rope point: pitch %.3f N m (x %.0f cm), roll %.3f N m "
+           "(y %.0f cm), mg = %.2f N." % (g9 * a.rope_x_cm / 100, a.rope_x_cm, g9 * a.rope_y_cm / 100, a.rope_y_cm, g9), "",
+           "| seg | mean u_nom p / r | mean u_ad p / r | mean Theta[0] p / r | pitch Des - FB (deg) | roll Des - FB | "
+           "locx Des-FB (cm) | locy Des-FB | locx/y PID U mean | x FB slope (cm/s) | y FB slope | "
+           "x stick on (%) | x stick vel Des median (cm/s) | x vel FB mean, no stick (cm/s) |",
+           "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    for name, i0, i1 in segs:
+        g = df.loc[i0:i1]
+        sl = lambda c: np.polyfit(g.t, g[c], 1)[0]
+        # stick active: the velocity setpoint is not the clamped position-loop output (StabilizerTask.c Des_VLoc)
+        stk = (g["Ctrler.locxsPID.Des"] - g["Ctrler.locxPID.U"].clip(-VXY_DES_MAX, VXY_DES_MAX)).abs() > 0.5
+        md.append("| %s | %+.4f / %+.4f | %+.4f / %+.4f | %+.4f / %+.4f | %+.2f | %+.2f | %+.1f | %+.1f | %+.1f / %+.1f | %+.2f | %+.2f | %.0f | %+.0f | %+.2f |" % (
+            name, g["mrac_state.pitch.u_nom"].mean(), g["mrac_state.roll.u_nom"].mean(),
+            g["mrac_state.pitch.u_ad"].mean(), g["mrac_state.roll.u_ad"].mean(),
+            g["mrac_state.pitch.Theta[0]"].mean(), g["mrac_state.roll.Theta[0]"].mean(),
+            (g["Ctrler.pitchPID.Des"] + g["imu_data.pit"]).mean(), (g["Ctrler.rollPID.Des"] - g["imu_data.rol"]).mean(),
+            (g["Ctrler.locxPID.Des"] - g["Ctrler.locxPID.FB"]).mean(), (g["Ctrler.locyPID.Des"] - g["Ctrler.locyPID.FB"]).mean(),
+            g["Ctrler.locxPID.U"].mean(), g["Ctrler.locyPID.U"].mean(), sl("Ctrler.locxPID.FB"), sl("Ctrler.locyPID.FB"),
+            100 * stk.mean(), g["Ctrler.locxsPID.Des"][stk].median() if stk.any() else np.nan,
+            g["Ctrler.locxsPID.FB"][~stk].mean()))
+    md.append("")
+
+    # 4. basic per-segment table: attitude, height, motors, battery
+    md += ["## Per segment: attitude, height, motors, battery", "",
+           "| seg | s | pitch sd | roll sd | rate sd p / r (deg/s) | band PSD p / r | z - z_des | motor at 4000 (%) | "
+           "max motor spread | V mean |", "|---|---|---|---|---|---|---|---|---|---|"]
+    for name, i0, i1 in segs:
+        g = df.loc[i0:i1]
+        bp = []
+        for c in ("Ctrler.gyroyPID.FB", "Ctrler.gyroxPID.FB"):
+            f, pxx = signal.welch((g[c] - g[c].mean()).to_numpy(), fs=FS, nperseg=int(min(512, len(g) // 2)))
+            m = (f >= BAND[0]) & (f <= BAND[1])
+            bp.append(np.trapezoid(pxx[m], f[m]))
+        mm = g[MOTORS]
+        md.append("| %s | %.0f | %.2f | %.2f | %.1f / %.1f | %.1f / %.1f | %+.3f | %.1f | %.0f | %.2f |" % (
+            name, g.t.iloc[-1] - g.t.iloc[0], g["imu_data.pit"].std(), g["imu_data.rol"].std(),
+            g["Ctrler.gyroyPID.FB"].std(), g["Ctrler.gyroxPID.FB"].std(), bp[0], bp[1],
+            (g["Ctrler.Z_posPID.FB"] - g["Ctrler.Z_posPID.Des"]).mean(), 100 * (mm.max(axis=1) >= 3999).mean(),
+            (mm.max(axis=1) - mm.min(axis=1)).max(), g["real_voltage"].mean()))
+    md.append("")
+    with open(os.path.join(a.out, "adaptive_stats.md"), "w", encoding="utf-8") as fh:
+        fh.write("\n".join(md) + "\n")
+
+    # ---- plots ----
+    fl = air.astype(bool)
+    for ax in AXES:
+        fig, axs = plt.subplots(6, 3, figsize=(16, 15), sharex=True)
+        for i in range(6):
+            th = "mrac_state.%s.Theta[%d]" % (ax, i)
+            wf = "mrac_state.%s.Whatf[%d]" % (ax, i)
+            for j in range(3):
+                shade(axs[i, j], df, segs)
+            axs[i, 0].plot(df.t[fl], df["%s_phi%d" % (ax, i)][fl], ".", ms=0.6, color="tab:gray")
+            axs[i, 0].set_ylabel("phi[%d]\n%s" % (i, FEAT[i]))
+            axs[i, 1].plot(df.t, df[th], lw=0.8, label="Theta")
+            axs[i, 1].plot(df.t, df[wf], lw=0.8, ls="--", label="Whatf")
+            axs[i, 2].plot(df.t[fl], df["%s_c%d" % (ax, i)][fl], ".", ms=0.6, color="tab:red")
+        axs[0, 0].set_title("basis phi_i (airborne)")
+        axs[0, 1].set_title("weight Theta_i (solid), Whatf_i (dashed)")
+        axs[0, 2].set_title("contribution Theta_i * phi_i (airborne)")
+        axs[0, 1].legend(loc="upper left", fontsize=7)
+        for j in range(3):
+            axs[-1, j].set_xlabel("t (s)")
+        fig.suptitle("%s: basis, weights, per-feature contribution (orange = MRAC injected, blue = PID)" % ax)
+        fig.tight_layout()
+        fig.savefig(os.path.join(a.out, "adaptive_%s_features.png" % ax), dpi=160)
+        plt.close(fig)
+
+    # contribution zoom: longest MRAC segment, 20 s window
+    if mseg:
+        name, i0, i1 = max(mseg, key=lambda s: s[2] - s[1])
+        j0 = i0 + max(0, (i1 - i0) // 2 - 1000)
+        j1 = min(i1, j0 + 2000)
+        g = df.loc[j0:j1]
+        fig, axs = plt.subplots(4, 1, figsize=(15, 13), sharex=True)
+        for k, ax in enumerate(AXES):
+            p = "mrac_state.%s." % ax
+            for i in range(6):
+                axs[k].plot(g.t, g["%s_c%d" % (ax, i)], lw=0.7, label="Theta%d*phi%d %s" % (i, i, FEAT[i]))
+            axs[k].plot(g.t, g[ax + "_rec"], "k--", lw=1.0, label="rebuilt u_ad (LPF of sum)")
+            axs[k].plot(g.t, g[p + "u_ad"], "k", lw=1.4, label="logged u_ad")
+            axs[k].plot(g.t, g[p + "u_nom"], color="tab:cyan", lw=1.0, label="u_nom (PID)")
+            axs[k].set_ylabel(ax)
+            axs[k].legend(fontsize=7, ncol=5, loc="upper left")
+        axs[-1].set_xlabel("t (s)")
+        fig.suptitle("%s, 20 s: per-feature torque vs u_ad vs PID u_nom" % name)
+        fig.tight_layout()
+        fig.savefig(os.path.join(a.out, "adaptive_contrib_zoom.png"), dpi=160)
+        plt.close(fig)
+
+        # RMS bars
+        fig, axs = plt.subplots(1, 4, figsize=(18, 4.5))
+        w = 0.8 / len(mseg)
+        for k, ax in enumerate(AXES):
+            for s, (name, _, _) in enumerate(mseg):
+                axs[k].bar(np.arange(6) + s * w, rms_tab[(name, ax)], w, label=name)
+            axs[k].set_xticks(np.arange(6) + 0.4 - w / 2)
+            axs[k].set_xticklabels(FEAT, rotation=30, fontsize=8)
+            axs[k].set_title("%s: RMS of Theta_i*phi_i" % ax)
+        axs[0].legend(fontsize=7)
+        fig.tight_layout()
+        fig.savefig(os.path.join(a.out, "adaptive_contrib_rms.png"), dpi=160)
+        plt.close(fig)
+
+    # spectra: rate PSD PID vs MRAC, u_ad/x and u_nom/x phase
+    fig, axs = plt.subplots(3, 2, figsize=(15, 11))
+    for k, (ax, c) in enumerate((("pitch", "Ctrler.gyroyPID.FB"), ("roll", "Ctrler.gyroxPID.FB"))):
+        for name, i0, i1 in segs:
+            g = df.loc[i0:i1]
+            nper = int(min(512, len(g) // 2))
+            f, pxx = signal.welch((g[c] - g[c].mean()).to_numpy(), fs=FS, nperseg=nper)
+            axs[0, k].semilogy(f, pxx, lw=0.9, ls="-" if "MRAC" in name else ":", label=name)
+            if "MRAC" in name:
+                x = (g[ax + "_x"] - g[ax + "_x"].mean()).to_numpy()
+                for row, col in ((1, "u_ad"), (2, "u_nom")):
+                    y = g["mrac_state.%s.%s" % (ax, col)].to_numpy()
+                    f2, pxy = signal.csd(x, y - y.mean(), fs=FS, nperseg=nper)
+                    axs[row, k].plot(f2, np.degrees(np.angle(pxy)), lw=0.9, label=name)
+        axs[0, k].set_xlim(0, 5)
+        axs[0, k].axvspan(*BAND, color="tab:green", alpha=0.1)
+        axs[0, k].set_title("%s body-rate PSD (dotted PID, solid MRAC)" % ax)
+        axs[0, k].legend(fontsize=7)
+        for row, col in ((1, "u_ad"), (2, "u_nom")):
+            axs[row, k].set_xlim(0, 5)
+            axs[row, k].set_ylim(-180, 180)
+            axs[row, k].axvspan(*BAND, color="tab:green", alpha=0.1)
+            axs[row, k].axhline(0, color="k", lw=0.5)
+            axs[row, k].set_title("%s: phase of %s against body rate (+/-180 damping, 0 anti-damping)" % (ax, col))
+            axs[row, k].set_xlabel("Hz")
+    fig.tight_layout()
+    fig.savefig(os.path.join(a.out, "adaptive_spectra.png"), dpi=160)
+    plt.close(fig)
+
+    # scatter u_ad vs u_nom and vs rate
+    fig, axs = plt.subplots(2, 4, figsize=(18, 8))
+    for k, ax in enumerate(AXES):
+        p = "mrac_state.%s." % ax
+        for name, i0, i1 in mseg:
+            g = df.loc[i0:i1]
+            axs[0, k].plot(g[p + "u_nom"], g[p + "u_ad"], ".", ms=1, label=name)
+            axs[1, k].plot(g[ax + "_x"], g[p + "u_ad"], ".", ms=1, label=name)
+        axs[0, k].set_xlabel("u_nom")
+        axs[0, k].set_ylabel("u_ad")
+        axs[0, k].set_title(ax)
+        axs[1, k].set_xlabel("x (rate)")
+        axs[1, k].set_ylabel("u_ad")
+    axs[0, 0].legend(fontsize=7, markerscale=8)
+    fig.tight_layout()
+    fig.savefig(os.path.join(a.out, "adaptive_scatter.png"), dpi=160)
+    plt.close(fig)
+
+    # drift: position, position-loop output, angle setpoint vs angle, static torque split
+    fig, axs = plt.subplots(5, 1, figsize=(15, 15), sharex=True)
+    for ax_ in axs:
+        shade(ax_, df, segs)
+    t = df.t
+    axs[0].plot(t[fl], df["Ctrler.locxPID.FB"][fl], ".", ms=0.6, label="x FB")
+    axs[0].plot(t[fl], df["Ctrler.locxPID.Des"][fl], ".", ms=0.6, label="x Des")
+    axs[0].plot(t[fl], df["Ctrler.locyPID.FB"][fl], ".", ms=0.6, label="y FB")
+    axs[0].plot(t[fl], df["Ctrler.locyPID.Des"][fl], ".", ms=0.6, label="y Des")
+    axs[0].set_ylabel("position (cm)")
+    axs[1].plot(t[fl], df["Ctrler.locxPID.U"][fl], ".", ms=0.6, label="locxPID.U")
+    axs[1].plot(t[fl], df["Ctrler.locyPID.U"][fl], ".", ms=0.6, label="locyPID.U")
+    axs[1].set_ylabel("position loop out")
+    axs[2].plot(t[fl], df["Ctrler.pitchPID.Des"][fl].rolling(100).mean(), lw=0.9, label="pitch Des (1 s mean)")
+    axs[2].plot(t[fl], df["imu_data.pit"][fl].rolling(100).mean(), lw=0.9, label="pitch (1 s mean)")
+    axs[2].plot(t[fl], df["Ctrler.rollPID.Des"][fl].rolling(100).mean(), lw=0.9, label="roll Des (1 s mean)")
+    axs[2].plot(t[fl], df["imu_data.rol"][fl].rolling(100).mean(), lw=0.9, label="roll (1 s mean)")
+    axs[2].set_ylabel("deg")
+    for ax, c in (("pitch", "tab:blue"), ("roll", "tab:red")):
+        p = "mrac_state.%s." % ax
+        axs[3].plot(t[fl], df[p + "u_nom"][fl].rolling(200).mean(), color=c, lw=0.9, label="%s u_nom (2 s mean)" % ax)
+        axs[3].plot(t[fl], df[p + "u_ad"][fl].rolling(200).mean(), color=c, ls="--", lw=0.9, label="%s u_ad (2 s mean)" % ax)
+        axs[4].plot(t, df[p + "Theta[0]"], color=c, lw=0.9, label="%s Theta[0] (bias weight)" % ax)
+    axs[3].set_ylabel("static torque cmd")
+    axs[4].set_ylabel("bias weight")
+    axs[4].set_xlabel("t (s)")
+    for ax_ in axs:
+        ax_.legend(fontsize=7, loc="upper left", ncol=4)
+    fig.suptitle("Drift: position, position-loop output, angle tracking, static torque split PID vs MRAC")
+    fig.tight_layout()
+    fig.savefig(os.path.join(a.out, "adaptive_drift.png"), dpi=160)
+    plt.close(fig)
+    print("wrote", a.out, "segments:", [s[0] for s in segs])
+
+
+if __name__ == "__main__":
+    main()
