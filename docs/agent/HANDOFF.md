@@ -10,6 +10,9 @@ Tool: `ground_station/analysis/video_truth.py` (`board`, `calib`, `floor`, `fram
 `tests/test_video_truth.py` (8 pass). Commits 2317ade..f255496. Usage is in the module docstring.
 Status (10-07): best lens clip = 9x6 board on the laptop screen, rms 1.05 px, spread 1.1 / 2.5 cm max at 4 m.
 Close paper clip: 2.31 px, fx +2.2% (focus breathing). Checkerboards cut by the frame edge are dropped.
+ChArUco clip `D:\Downloads\VID_20261007_090845.mp4` (landscape, board only): 45 frames rms 1.09 px, spread 1.8 / 4.4 cm
+max, coverage 0.75 (board stayed mid-frame, frame corners empty) -> no better than the screen 9x6. Square size 0.025 m
+ASSUMED (operator to measure). Research for the estimator: `docs/agent/research-state-estimation-2026-10-07.md`.
 Re-shoot plan, one clip: ChArUco `docs/video-truth/charuco_13x7.png` (1920x1080, DICT_5X5_100) full-screen on the
 laptop, measure one square. Phone fixed, focus+exposure locked at flight distance (~4 m), 1x, 4K 30, stabilisation off.
 First ~60 s: move the screen at 1-2 m through every frame corner and edge (cut-off views count), tilted ~45 deg, 1 s
