@@ -19,6 +19,7 @@ Keil: open the project, F7 (build), then Download. Expect 0 errors. If ARMCC com
 | `traj_stop` | write 1 | end the move now and fly back (status 4) |
 | `traj_status` | read | 1 running, 2 done and back, 3 aborted (stick takeover, landing, disarm), 4 stopped and back |
 | | | refused, nothing moved: `0xE0` not flying, `0xE1` busy (a GS path or GS authority), `0xE2` bad `traj_id`, `0xEE` a field out of range or too fast, `0xEF` the shape leaves the soft fence |
+| `traj_id_seen` | read | `traj_id` as the firmware read it at the last `traj_go`; if `traj_status` is `0xE2`, this shows why |
 | `traj_phase` | read | 0 idle, 1 move, 2 return, 3 hold at the start point |
 | `traj_active`, `traj_t` | read | running id, seconds since `traj_go` |
 | `traj_home_x/y/z/yaw` | read | the start point (cm, cm, m, deg), taken from the setpoint at `traj_go` |
@@ -51,7 +52,7 @@ x >= -0.3 m (figure-8 50).
 | # | step | check |
 |---|---|---|
 | 1 | Take off, hover still, ch8 as wanted (off = PID, on = MRAC). Hands off the sticks | |
-| 2 | Edit `traj_p`, set `traj_id` | |
+| 2 | Edit `traj_p`, set `traj_id` (type the number 1-4, not the character '1') | the watch shows `traj_id` 1-4 before you write `traj_go` |
 | 3 | `traj_go = 1` | `traj_status == 1`, `traj_phase` 1 → 2 → 3 |
 | 4 | Wait for `traj_status == 2` (back at the start point, sticks yours again) | |
 | 5 | Repeat (`traj_go = 1`), next preset, or land | |

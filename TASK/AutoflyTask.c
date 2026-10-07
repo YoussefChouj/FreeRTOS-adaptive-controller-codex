@@ -385,6 +385,7 @@ volatile uint8_t traj_phase  = 0U;  /* 0 idle, 1 move, 2 return, 3 hold at the s
 volatile uint8_t traj_status = 0U;  /* 1 running, 2 done, 3 aborted (takeover/landing), 4 stopped and back,
                                        0xE0 not flying, 0xE1 busy (GS path or GS authority), 0xE2 bad traj_id,
                                        0xEE a traj_p field out of range or too fast, 0xEF outside the soft fence */
+volatile uint8_t traj_id_seen = 0U; /* traj_id as read at the last traj_go (explains a 0xE2)                */
 volatile float   traj_t      = 0.0f; /* time since traj_go [s]                                              */
 volatile float   traj_home_x = 0.0f, traj_home_y = 0.0f, traj_home_z = 0.0f, traj_home_yaw = 0.0f; /* start point */
 TrajParams_t traj_p = {                 /* watch-window struct, latched at traj_go (same pattern as vp_user) */
@@ -670,6 +671,10 @@ static void Traj_Tick(void)
 
 	if (traj_go != 0U) {
 		traj_go = 0U;
+		traj_id_seen = traj_id;
+		if (traj_id >= (uint8_t)'1' && traj_id <= (uint8_t)'4') {
+			traj_id = (uint8_t)(traj_id - (uint8_t)'0');    /* typed as the character '1'..'4' */
+		}
 		if (traj_active == 0U) {
 			Traj_Start();
 		}
