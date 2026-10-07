@@ -131,6 +131,13 @@ volatile uint8_t  dbg_motor_manual = 0U;
 volatile uint16_t dbg_motor_ccr[4] = {2000U, 2000U, 2000U, 2000U};
 /* Yaw mixer sign: -1 = 09-10 signs (M3/M4 get +u_gyroz), +1 = flipped. Flight4 (+1) spun 3.5x faster. */
 volatile float g_yaw_mix_dir = -1.0f;
+/* 0: the OF EKF ignores raw flow of1 (single of2 channel, as before 41c9dea). 1 = 10-07 flown behaviour.
+ * 10-07 load flights: swing-band velocity FB tracked body rate at 85-103 cm/rad, the of1 slope, ~3x the
+ * physical g/w^2 (docs/flights/2026-10-07-load-swing-analysis.md, PROPOSED cause of the growing MRAC swing). */
+volatile uint8_t g_ekf_of1_on = 1U;
+/* Keil watch-window presets. Disarmed: set kp_id, then kp_go = 1; kp_active shows the applied id (kp_go is
+ * cleared either way; an armed request is dropped). Reboot = preset 0. Table: s_kp before Keil_PresetPoll. */
+volatile uint8_t kp_id = 0U, kp_go = 0U, kp_active = 0U;
 
 float Sin_roll_01= 0;
 float Cos_roll_01= 0;
@@ -749,12 +756,12 @@ static void Of_TickKf(u8 of_ok)
 		if (EKF_OF_UPDATE_ON_NEW_FRAME) {
 			if (ano_of.of_update_cnt != s_last_of_update_cnt) {
 				EkfOf_Update(&s_ekf_of, ofx, ofy);
-				EkfOf_UpdateRaw(&s_ekf_of, (float)ano_of.of1_dx * M_PER_CM, (float)ano_of.of1_dy * M_PER_CM);
+				if (g_ekf_of1_on) EkfOf_UpdateRaw(&s_ekf_of, (float)ano_of.of1_dx * M_PER_CM, (float)ano_of.of1_dy * M_PER_CM);
 				s_last_of_update_cnt = ano_of.of_update_cnt;
 			}
 		} else {
 			EkfOf_Update(&s_ekf_of, ofx, ofy);
-			EkfOf_UpdateRaw(&s_ekf_of, (float)ano_of.of1_dx * M_PER_CM, (float)ano_of.of1_dy * M_PER_CM);
+			if (g_ekf_of1_on) EkfOf_UpdateRaw(&s_ekf_of, (float)ano_of.of1_dx * M_PER_CM, (float)ano_of.of1_dy * M_PER_CM);
 		}
 	}
 	/* WP-14: innovation-based health gate with persistence.
@@ -1134,6 +1141,34 @@ static uint8_t Motor_TestOverride(FlightState_t state)
 	return 0U;
 }
 
+/* Keil presets: of1 = g_ekf_of1_on, axis mask = g_ctrl_axis_mask (bit per ctrl_axis_e, clear = pure PID),
+ * p/r gamma = mrac_g_gamma scale on every pitch and roll group (learning rate). */
+typedef struct { uint8_t of1; uint8_t axis_mask; float g_pr; } KeilPreset_t;
+#define KP_ROW(of1, mask, g_pr)  { (of1), (mask), (g_pr) }
+static const KeilPreset_t s_kp[] = {
+	/*        of1  axis mask  p/r gamma */
+	KP_ROW(   1U,     0x0FU,     1.0f ),  /* 0 10-07 flown: two-channel EKF, MRAC on every axis       */
+	KP_ROW(   0U,     0x0FU,     1.0f ),  /* 1 of1 off (load swing fix candidate)                     */
+	KP_ROW(   0U,     0x0FU,     0.1f ),  /* 2 of1 off + MRAC pitch/roll learning x0.1                 */
+	KP_ROW(   0U,     0x08U,     1.0f ),  /* 3 of1 off + MRAC on z only (sink fix, no p/r adaptation)  */
+	KP_ROW(   1U,     0x08U,     1.0f ),  /* 4 MRAC on z only, EKF as flown                            */
+};
+
+static void Keil_PresetPoll(FlightState_t state)
+{
+	uint8_t k, id = kp_id;
+	if (!kp_go) return;
+	kp_go = 0U;
+	if (state != FLIGHT_STATE_DISARMED || id >= (uint8_t)(sizeof(s_kp) / sizeof(s_kp[0]))) return;
+	g_ekf_of1_on = s_kp[id].of1;
+	g_ctrl_axis_mask = s_kp[id].axis_mask;
+	for (k = 0U; k < MRAC_N_GROUPS; k++) {
+		mrac_g_gamma[MRAC_AXIS_PITCH][k] = s_kp[id].g_pr;
+		mrac_g_gamma[MRAC_AXIS_ROLL][k] = s_kp[id].g_pr;
+	}
+	kp_active = id;
+}
+
 /* Keil debug manual motor override (dbg_motor_manual / dbg_motor_ccr, see their definition).
  * DISARMED-only. Returns 1 when it owned the motors this tick. */
 static uint8_t Motor_DebugOverride(FlightState_t state)
@@ -1321,6 +1356,7 @@ void Update_Motor(void)
 
 	if (Motor_TestOverride(state)) return;
 
+	Keil_PresetPoll(state);
 	if (Motor_DebugOverride(state)) return;
 
 	if (state == FLIGHT_STATE_ARMED)
