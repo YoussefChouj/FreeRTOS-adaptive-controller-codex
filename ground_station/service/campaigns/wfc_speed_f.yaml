@@ -43,5 +43,5 @@ experiments:
         - land
     capture: campaign
     repeats: 1
-    log_plan: {rate_hz: 50, groups: [estimator_truth, optical_flow, velocity_loops, takeoff_gate, thrust_model, ekf_states]}
+    log_plan: {rate_hz: 33, groups: [estimator_truth, optical_flow, velocity_loops, takeoff_gate, thrust_model, ekf_states, mrac_shadow]}
 abort: {}

@@ -11,6 +11,30 @@ after each so Claude can debrief it.
 the dense path. The firmware on the drone today has no CMD 0x1C, so these fly only after
 `rebuild_and_flash --yes` (that build also carries ch8 = MRAC injection switch, 64b69cd).
 
+## Tonight (2026-10-07, last lab hour): demos, then G, D-PID, D-PR
+
+1. Flash: close uVision, stop 8081, `python -m ground_station.flashtool.rebuild_and_flash --yes`, restart the service.
+2. Supervisor demos, pack P4000-2, flown by RC. On the ground: PR preset (12 CMD 0x1D writes, gamma 0.25) and
+   Simplex mode 1 (CMD 0x19) via run_plan. Recording 50 Hz, core + mrac_shadow + thrust_model + estimator_truth
+   (RPM) + velocity_loops, 66,000 of 70,042 B/s. 500 g symmetric: PID, then ch8 up (MRAC injected); then 250 g on
+   one arm: PID, then ch8 up. ch8 back down before the campaigns.
+3. Pack swap to P4000-1 (power cycle): write the PR preset and Simplex again before G.
+4. G, D (PID), D-PR (MRAC PR injected, abort tilt 12 deg, pos err 0.5 m, sat 0.5 s; PROPOSED) with the commands
+   below. C, E, F and H move to tomorrow.
+
+```bash
+python -m ground_station.service.campaign_fly logs/campaigns/launch/wfc-alt-g_20261007-2028.yaml --pack P4000-1 --run logs/workflow-c/20261007-1546
+```
+```bash
+python -m ground_station.service.campaign_fly logs/campaigns/launch/wfc-circle-d_20261007-2028.yaml --pack P4000-1 --run logs/workflow-c/20261007-1546
+```
+```bash
+python -m ground_station.service.campaign_fly logs/campaigns/launch/wfc-circle-d-pr_20261007-2028.yaml --pack P4000-1 --run logs/workflow-c/20261007-1546
+```
+
+Video for every flight, camera not moved since step C, started before arming: the overnight run draws the
+preset path (locx/locyPID.Des) and the drone estimate over it with `video_truth` overlay.
+
 | order | flight | what it flies (all S-curve ramps) | what it tells us | program (measured) | schedule (measured) | uploads |
 |---|---|---|---|---|---|---|
 | 1 | C steps | 0.8 m; line to (0, -0.5), then 0.5 m steps out-and-back +x, -x, +y, -y with 3 s dwells | step response per axis, overshoot, settling, braking | 50.2 s | 99.2 s | 1 |
@@ -30,7 +54,7 @@ the dense path. The firmware on the drone today has no CMD 0x1C, so these fly on
   video saw x -1.12 .. 1.54). Check G's 1.1 m is still in frame vertically.
 - H is the most aggressive flight. Fly it last, only if C-G were clean. It is the sysid_loads multisine at a
   lower amplitude (30 instead of 40 deg/s).
-- Log plan: C-G 50 Hz, 47,600 of 70,042 B/s. H 100 Hz, core + RPM + full thrust model (79 vars), 68,000 of
+- Log plan: C-G and D-PR 33 Hz, all 7 groups incl. mrac_shadow (68/68 MRAC vars), 50,667 of 70,042 B/s. H 100 Hz, core + RPM + full thrust model (79 vars), 68,000 of
   70,042 B/s.
 
 ## Commands (pack P4000-1)

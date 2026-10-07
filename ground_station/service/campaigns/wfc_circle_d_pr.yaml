@@ -1,3 +1,6 @@
+# D-PR (2026-10-08): wfc_circle_d flown with MRAC PR injected, to compare against D with PID on the same pack.
+# Before it, on the ground: the PR preset (pr_refmodel presets in controllers/mrac_pr.yaml, gamma 0.25) and
+# Simplex mode 1, written via run_plan; a pack swap power-cycles them away. Abort as pr_refmodel (PROPOSED).
 # Workflow-C flight series D-H (2026-10-07), flown by hand after step C, one campaign per flight:
 # Onboard program (2026-10-08): ONE `program` step, uploaded as atom parameters (CMD 0x1C); the firmware generates
 # the dense path, ramps with the chosen profile (trap|scurve|sine|quintic, per program or per op) and returns home.
@@ -8,9 +11,9 @@
 # D circle: r 0.5 m centred on (0, -0.5) (rotate_deg 180), one lap each at 0.2, 0.3, 0.4 m/s.
 # Reads: x and y move 90 deg apart, so a frame/yaw error turns the circle and a scale error makes an ellipse;
 # lag and radius shrink vs speed; steady centripetal tilt for the thrust model.
-campaign: wfc-circle-d
-objective: "circle r 0.5 m centred on (0, -0.5), one lap each at 0.2, 0.3, 0.4 m/s, 0.8 m"
-controller: pid
+campaign: wfc-circle-d-pr
+objective: "MRAC PR injected: circle r 0.5 m centred on (0, -0.5), one lap each at 0.2, 0.3, 0.4 m/s, 0.8 m"
+controller: mrac_pr
 mode: fly
 packs:
   - P4000-1
@@ -22,7 +25,7 @@ experiments:
       description: "circle r 0.5 m centred on (0, -0.5), one lap each at 0.2, 0.3, 0.4 m/s, 0.8 m"
       motion: {v_cruise_mps: 0.3, a_max_mps2: 0.5, ds_m: 0.05}
       steps:
-        - takeoff: {z: 0.8}
+        - takeoff: {z: 0.8, mrac_injection: 1}
         - hold: {s: 3}
         - hold: {s: 5}
         - program:
@@ -37,4 +40,4 @@ experiments:
     capture: campaign
     repeats: 1
     log_plan: {rate_hz: 33, groups: [estimator_truth, optical_flow, velocity_loops, takeoff_gate, thrust_model, ekf_states, mrac_shadow]}
-abort: {}
+abort: {tilt_deg: 12, pos_err_m: 0.5, sat_window_s: 0.5}
