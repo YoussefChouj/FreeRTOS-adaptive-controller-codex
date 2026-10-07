@@ -15,16 +15,18 @@ log everything for offline analysis. Every value below is PROPOSED unless a sour
 ## Switching: one Keil write
 
 - `vp_id = N` in the watch window. Applied when not flying (DISARMED, or EMERGENCY on the ground: the same fix
-  for `kp_id`). Sets every field of the row, resets the weights, sets `vp_active = N`. Refused in flight.
+  for `kp_id`). Sets every field of the row, resets the weights, sets `vp_active = N`. In flight it applies
+  only while ch8 is off (MRAC in shadow); with ch8 on it waits.
+- In-flight preset: edit `vp_user` field by field, then `vp_user_go = 1` (`vp_active = 100`). Same ch8-off rule.
 - Row = feature set, ref type p/r/y, gamma scale p/r/y, add-on knobs. Aligned `VP_ROW` table
   (`docs/firmware-table-pattern.md`). Rows copy the WP-33 flight presets (`mrac_pr.yaml`, `mrac_st.yaml`, ...).
 - Reboot = vp 0 = the flown law.
 
 ## Logging
 
-`ground_station/livewatch/exp8_frames.md`: exp1 slots 0-2 at 80 Hz + slot 3 (10 Hz) `vp_active`, `vp_id`,
-`kp_active`, `kp_id`, `mrac_var_id[0..3]`, `g_ekf_of1_on`, `g_ctrl_axis_mask`, Z_ratePID UMax. Measured plan: 60,900 B/s
-of the 70,042 budget. u_ad/u_nom/u_def/e/e_dot/Theta/Whatf are
+`ground_station/livewatch/exp8_frames.md`: exp1 slots 0-2 (100/50/50 Hz nominal) + slot 3 (10 Hz) `vp_active`, `vp_id`,
+`kp_active`, `kp_id`, `mrac_var_id[0..3]`, `g_ekf_of1_on`, `g_ctrl_axis_mask`, Z_ratePID UMax. 85,200 of the 87,552 B/s
+firmware budget (it assumes a 200 Hz send task); exp8 flew with 0 drops. u_ad/u_nom/u_def/e/e_dot/Theta/Whatf are
 already logged. FW-B adds one weight norm per axis instead of 24 weights.
 
 ## Variant table
@@ -59,9 +61,9 @@ the soft fence.
 
 | pack | segments | log |
 |---|---|---|
-| 1 | vp 0, 1, 2, 3, 4, 5, 6 (as far as the pack goes) | `exp8_vpA_noload` |
-| 2 | vp 7-11 (after FW-B) | `exp9_vpB_noload` |
-| 3 | 500 g: PID, then ch8 with the best 2 | `exp10_vpbest-500g` |
+| 1 | vp 0-6 (flown 10-08, analysis `2026-10-08-exp8-analysis.md`) | `exp8_vpA_noload` |
+| 2 | 500 g: PID, then ch8 with vp 6 (then vp 3) | `exp9_vp6-500g` (runbook `2026-10-08-load-test-runbook.md`) |
+| 3 | vp 7+ (after FW-B) | `exp10_vpB_noload` |
 
 ## Offline analysis
 

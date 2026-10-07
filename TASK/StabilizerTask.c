@@ -137,7 +137,8 @@ volatile float g_yaw_mix_dir = -1.0f;
 volatile uint8_t g_ekf_of1_on = 1U;
 /* Keil watch-window presets, one write each, applied on the ground (DISARMED or EMERGENCY, not flying/landing):
  * kp_id = N (kp_go = 1 re-applies), vp_id = N (MRAC variant row). kp_active/vp_active show the applied id
- * (vp 0xEE = a field was refused). A request made in flight waits for the ground. Reboot = 0/0.
+ * (vp 0xEE = a field was refused). A kp request made in flight waits for the ground; a vp request (vp_id, or
+ * vp_user + vp_user_go = 1) also applies in flight while ch8 is off. Reboot = 0/0.
  * Tables: s_kp before Keil_PresetPoll, s_vp before Keil_VariantPoll. */
 volatile uint8_t kp_id = 0U, kp_go = 0U, kp_active = 0U;
 volatile uint8_t vp_id = 0U, vp_active = 0U;
@@ -1229,14 +1230,25 @@ static uint8_t Vp_Set(uint8_t axes, uint8_t field, float v)
 	return ok;
 }
 
+/* In-flight preset: edit vp_user field by field in the Keil watch window, then vp_user_go = 1 (or vp_id = 100).
+ * Like vp_id it applies on the ground, and also in flight while ch8 is off (MRAC shadow: u_ad is not on the
+ * motors, the weights restart from zero and learn until ch8 goes on). With ch8 on the write waits.
+ * vp_active = 100 shows the user row is live; vp_id = N goes back to a table row. Starts as row 6. */
+#define VP_USER_ID 100U
+VariantPreset_t vp_user = VP_ROW(2, 1, 1U, 0.0018f, 2.0f, 0.0f, 0.0f, 0.0f, 0.0f, 4.0f, 0.25f);
+volatile uint8_t vp_user_go = 0U;
+
 static void Keil_VariantPoll(FlightState_t state)
 {
 	uint8_t ok = 1U, id = vp_id;
 	const VariantPreset_t *r;
-	if (id == s_vp_last || !Keil_OnGround(state)) return;
+	if (!Keil_OnGround(state) && mrac_flags.output_injection_on) return;
+	if (vp_user_go) { vp_user_go = 0U; vp_id = id = VP_USER_ID; s_vp_last = 0xFFU; }
+	if (id == s_vp_last) return;
 	s_vp_last = id;
-	if (id >= (uint8_t)(sizeof(s_vp) / sizeof(s_vp[0]))) { vp_active = 0xEEU; return; }
-	r = &s_vp[id];
+	if (id == VP_USER_ID) r = &vp_user;
+	else if (id < (uint8_t)(sizeof(s_vp) / sizeof(s_vp[0]))) r = &s_vp[id];
+	else { vp_active = 0xEEU; return; }
 	ok &= Vp_Set(VP_PR,  MRAC_VF_REF_TYPE,     (float)r->ref_pr);
 	ok &= Vp_Set(VP_Y,   MRAC_VF_REF_TYPE,     (float)r->ref_y);
 	ok &= Vp_Set(VP_PRY, MRAC_VF_DRIVE_NORM,   (float)r->dn);
