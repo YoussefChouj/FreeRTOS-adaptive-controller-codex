@@ -135,9 +135,12 @@ volatile float g_yaw_mix_dir = -1.0f;
  * 10-07 load flights: swing-band velocity FB tracked body rate at 85-103 cm/rad, the of1 slope, ~3x the
  * physical g/w^2 (docs/flights/2026-10-07-load-swing-analysis.md, PROPOSED cause of the growing MRAC swing). */
 volatile uint8_t g_ekf_of1_on = 1U;
-/* Keil watch-window presets. Disarmed: set kp_id, then kp_go = 1; kp_active shows the applied id (kp_go is
- * cleared either way; an armed request is dropped). Reboot = preset 0. Table: s_kp before Keil_PresetPoll. */
+/* Keil watch-window presets, one write each, applied on the ground (DISARMED or EMERGENCY, not flying/landing):
+ * kp_id = N (kp_go = 1 re-applies), vp_id = N (MRAC variant row). kp_active/vp_active show the applied id
+ * (vp 0xEE = a field was refused). A request made in flight waits for the ground. Reboot = 0/0.
+ * Tables: s_kp before Keil_PresetPoll, s_vp before Keil_VariantPoll. */
 volatile uint8_t kp_id = 0U, kp_go = 0U, kp_active = 0U;
+volatile uint8_t vp_id = 0U, vp_active = 0U;
 
 float Sin_roll_01= 0;
 float Cos_roll_01= 0;
@@ -1161,6 +1164,14 @@ static const KeilPreset_t s_kp[] = {
 static const float s_zhd[3] = { 500.0f, 300.0f, 700.0f };
 static float s_zboot[3];
 static uint8_t s_zboot_ok = 0U;
+static uint8_t s_vp_last = 0U;      /* last vp_id handled; 0xFF forces a re-apply */
+
+/* Same rule as CMD 0x1D (send_data.c): not armed, and not flying or landing. EMERGENCY on the ground passes. */
+static uint8_t Keil_OnGround(FlightState_t state)
+{
+	return (uint8_t)((state != FLIGHT_STATE_ARMED) && (flight_phase != FLIGHT_PHASE_FLYING) &&
+	                 (flight_phase != FLIGHT_PHASE_LANDING));
+}
 
 static void Keil_PresetPoll(FlightState_t state)
 {
@@ -1169,9 +1180,10 @@ static void Keil_PresetPoll(FlightState_t state)
 		s_zboot[0] = Ctrler.Z_ratePID.UMax; s_zboot[1] = Ctrler.Z_ratePID.UiMax; s_zboot[2] = Ctrler.Z_ratePID.SumEMax;
 		s_zboot_ok = 1U;
 	}
-	if (!kp_go) return;
+	if (!kp_go && id == kp_active) return;
+	if (!Keil_OnGround(state)) return;
 	kp_go = 0U;
-	if (state != FLIGHT_STATE_DISARMED || id >= (uint8_t)(sizeof(s_kp) / sizeof(s_kp[0]))) return;
+	if (id >= (uint8_t)(sizeof(s_kp) / sizeof(s_kp[0]))) { kp_id = kp_active; return; }
 	g_ekf_of1_on = s_kp[id].of1;
 	g_ctrl_axis_mask = s_kp[id].axis_mask;
 	for (k = 0U; k < MRAC_N_GROUPS; k++) {
@@ -1183,6 +1195,65 @@ static void Keil_PresetPoll(FlightState_t state)
 		Ctrler.Z_ratePID.UMax = z[0]; Ctrler.Z_ratePID.UiMax = z[1]; Ctrler.Z_ratePID.SumEMax = z[2];
 	}
 	kp_active = id;
+	s_vp_last = 0xFFU;             /* the kp row wrote p/r gamma: re-apply the variant row on top */
+}
+
+/* MRAC variant rows (docs/flights/2026-10-08-variant-sweep-plan.md). Every row writes every column, so any
+ * row restores the others. Axes: p/r = pitch+roll, y = yaw, pry = all three; z is never touched. Values
+ * copy the WP-33 SIL presets (ground_station/analysis/controllers/mrac_v1/v2/pr/st.yaml); the SIL injected
+ * p/r only and was stable at gamma 0.25-0.5, every variant tipped at gamma 1 (PROPOSED for flight). */
+typedef struct {
+	int8_t ref_pr, ref_y; uint8_t dn; float lam_edot, bw_y, mu_sat, kappa, crm_ell, st_eps, lam_ang, g;
+} VariantPreset_t;
+#define VP_ROW(ref_pr, ref_y, dn, lam_edot, bw_y, mu_sat, kappa, crm, st_eps, lam_ang, g) \
+	{ (ref_pr), (ref_y), (dn), (lam_edot), (bw_y), (mu_sat), (kappa), (crm), (st_eps), (lam_ang), (g) }
+static const VariantPreset_t s_vp[] = {
+	/*     ref p/r  ref y  drive_norm pry  lam_edot p/r  bw y   mu_sat pry  kappa p/r  crm_ell p/r  st_eps p/r  lam_ang p/r  gamma pry */
+	VP_ROW(   -1,     -1,       0U,          0.0f,     30.0f,   0.0f,      0.0f,       0.0f,      0.0f,       0.0f,      1.0f  ),  /* 0 flown S6   */
+	VP_ROW(   -1,     -1,       0U,          0.0f,     30.0f,   0.0f,      0.0f,       0.0f,      0.0f,       0.0f,      0.25f ),  /* 1 S6 x0.25   */
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       0.0f,      0.25f ),  /* 2 V1         */
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,  0.85f,      0.0f,       0.0f,      0.0f,       0.0f,      0.25f ),  /* 3 V2 mu_sat  */
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.5f,      10.0f,      0.0f,       0.0f,      0.25f ),  /* 4 PR         */
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      2.0f,       0.0f,      0.25f ),  /* 5 ST         */
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f ),  /* 6 3L lam_ang */
+};
+#define VP_PR   0x03U
+#define VP_Y    0x04U
+#define VP_PRY  0x07U
+
+static uint8_t Vp_Set(uint8_t axes, uint8_t field, float v)
+{
+	uint8_t a, ok = 1U;
+	for (a = 0U; a < 3U; a++)
+		if (axes & (1U << a)) ok &= MRAC_VariantParamSet(a, field, v);
+	return ok;
+}
+
+static void Keil_VariantPoll(FlightState_t state)
+{
+	uint8_t ok = 1U, id = vp_id;
+	const VariantPreset_t *r;
+	if (id == s_vp_last || !Keil_OnGround(state)) return;
+	s_vp_last = id;
+	if (id >= (uint8_t)(sizeof(s_vp) / sizeof(s_vp[0]))) { vp_active = 0xEEU; return; }
+	r = &s_vp[id];
+	ok &= Vp_Set(VP_PR,  MRAC_VF_REF_TYPE,     (float)r->ref_pr);
+	ok &= Vp_Set(VP_Y,   MRAC_VF_REF_TYPE,     (float)r->ref_y);
+	ok &= Vp_Set(VP_PRY, MRAC_VF_DRIVE_NORM,   (float)r->dn);
+	ok &= Vp_Set(VP_PR,  MRAC_VF_LAM_EDOT,     r->lam_edot);
+	ok &= Vp_Set(VP_Y,   MRAC_VF_REF_MODEL_BW, r->bw_y);
+	ok &= Vp_Set(VP_PRY, MRAC_VF_MU_SAT,       r->mu_sat);
+	ok &= Vp_Set(VP_PR,  MRAC_VF_KAPPA_PR,     r->kappa);
+	ok &= Vp_Set(VP_PR,  MRAC_VF_CRM_ELL,      r->crm_ell);
+	ok &= Vp_Set(VP_PR,  MRAC_VF_ST_EPS,       r->st_eps);
+	ok &= Vp_Set(VP_PR,  MRAC_VF_ST_PHI_MAX,   10.0f);
+	ok &= Vp_Set(VP_PR,  MRAC_VF_ST_BAR,       0.0f);
+	ok &= Vp_Set(VP_PR,  MRAC_VF_LAM_ANG,      r->lam_ang);
+	ok &= Vp_Set(VP_PRY, MRAC_VF_RBF_ON,       0.0f);
+	ok &= Vp_Set(VP_PRY, MRAC_VF_LF_GAIN,      0.0f);
+	ok &= Vp_Set(VP_PRY, MRAC_VF_GAMMA_SCALE,  r->g);
+	MRAC_ResetWeights();
+	vp_active = ok ? id : 0xEEU;
 }
 
 /* Keil debug manual motor override (dbg_motor_manual / dbg_motor_ccr, see their definition).
@@ -1373,6 +1444,7 @@ void Update_Motor(void)
 	if (Motor_TestOverride(state)) return;
 
 	Keil_PresetPoll(state);
+	Keil_VariantPoll(state);
 	if (Motor_DebugOverride(state)) return;
 
 	if (state == FLIGHT_STATE_ARMED)
