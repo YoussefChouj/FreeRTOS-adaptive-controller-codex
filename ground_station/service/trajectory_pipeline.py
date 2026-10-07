@@ -538,6 +538,14 @@ def generate(
 ) -> list[TrajPoint]:
     """Generates trajectory points through steps 1-4 and validates them."""
     pts_xy = shape_xy(shape, params)
+    # rotate_deg (any shape): turns the shape about the hover point, counter-clockwise seen from above, e.g. 180
+    # puts the circle's centre at (0, -r) instead of (0, r). The path still starts and ends at the hover point.
+    rot = params.get("rotate_deg", 0.0)
+    if not isinstance(rot, (int, float)) or isinstance(rot, bool) or not math.isfinite(rot):
+        raise ValueError("rotate_deg must be a finite number")
+    if rot:
+        c, s = math.cos(math.radians(rot)), math.sin(math.radians(rot))
+        pts_xy = [(c * x - s * y, s * x + c * y) for x, y in pts_xy]
     tilt_deg = float(params.get("tilt_deg", 0.0))
     axis_deg = float(params.get("axis_deg", 0.0))
     pts_xyz = tilt(pts_xy, hover_z_m=profile.hover_z_m, tilt_deg=tilt_deg, axis_deg=axis_deg)

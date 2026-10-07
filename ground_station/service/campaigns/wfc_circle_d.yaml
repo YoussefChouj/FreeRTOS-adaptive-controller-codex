@@ -1,0 +1,35 @@
+# Workflow-C flight series D-H (2026-10-07), flown by hand after step C, one campaign per flight:
+#   python -m ground_station.service.campaign_fly <launch copy> --pack <id> --run <run folder>
+# Camera sees only about +0.4-0.5 m of +y from the pad, so every shape stays at y <= +0.35 (most at y <= 0).
+# Every trajectory starts and ends at the pad hover (firmware). Airborne cap 120 s (API/wfb_safety.c); each upload
+# cost about 5.3 s of hover in step B. Timings in the comments are schedule estimates; projections are PROPOSED.
+# D circle: r 0.5 m centred on (0, -0.5) (rotate_deg 180), one lap each at 0.2, 0.3, 0.4 m/s.
+# Reads: x and y move 90 deg apart, so a frame/yaw error turns the circle and a scale error makes an ellipse;
+# lag and radius shrink vs speed; steady centripetal tilt for the thrust model.
+campaign: wfc-circle-d
+objective: "circle r 0.5 m centred on (0, -0.5), one lap each at 0.2, 0.3, 0.4 m/s, 0.8 m"
+controller: pid
+mode: fly
+packs:
+  - P4000-1
+max_flights: 1
+experiments:
+  - name: f01_circle
+    scenario:
+      scenario: circle-d
+      description: "circle r 0.5 m centred on (0, -0.5), one lap each at 0.2, 0.3, 0.4 m/s, 0.8 m"
+      motion: {v_cruise_mps: 0.3, a_max_mps2: 0.5, ds_m: 0.05}
+      steps:
+        - takeoff: {z: 0.8}
+        - hold: {s: 3}
+        - hold: {s: 5}
+        - path: {shape: circle, params: {radius_m: 0.5, rotate_deg: 180}, v_cruise_mps: 0.2}
+        - hold: {s: 2}
+        - path: {shape: circle, params: {radius_m: 0.5, rotate_deg: 180}, v_cruise_mps: 0.3}
+        - hold: {s: 2}
+        - path: {shape: circle, params: {radius_m: 0.5, rotate_deg: 180}, v_cruise_mps: 0.4}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: {rate_hz: 50, groups: [estimator_truth, optical_flow, velocity_loops, takeoff_gate, thrust_model, ekf_states]}
+abort: {}

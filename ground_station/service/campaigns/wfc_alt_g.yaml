@@ -1,0 +1,34 @@
+# Workflow-C flight series D-H (2026-10-07), flown by hand after step C, one campaign per flight:
+#   python -m ground_station.service.campaign_fly <launch copy> --pack <id> --run <run folder>
+# Camera sees only about +0.4-0.5 m of +y from the pad, so every shape stays at y <= +0.35 (most at y <= 0).
+# Every trajectory starts and ends at the pad hover (firmware). Airborne cap 120 s (API/wfb_safety.c); each upload
+# cost about 5.3 s of hover in step B. Timings in the comments are schedule estimates; projections are PROPOSED.
+# G height ladder over the pad: down to 0.5 m (6 s), up to 1.1 m (6 s), then a 0.5 m x step at 1.1 m.
+# Reads: thrust vs height (ground effect), optical-flow height and flow scale vs height (flow ~ v / h), EKF z.
+campaign: wfc-alt-g
+objective: "height ladder over the pad 0.5 and 1.1 m (6 s each), then a 0.5 m x step at 1.1 m"
+controller: pid
+mode: fly
+packs:
+  - P4000-1
+max_flights: 1
+experiments:
+  - name: f01_alt
+    scenario:
+      scenario: alt-g
+      description: "height ladder over the pad 0.5 and 1.1 m (6 s each), then a 0.5 m x step at 1.1 m"
+      motion: {v_cruise_mps: 0.3, a_max_mps2: 0.5, ds_m: 0.05}
+      steps:
+        - takeoff: {z: 0.8}
+        - hold: {s: 3}
+        - hold: {s: 5}
+        - goto: {x: 0.0, y: 0.0, z: 0.5, dwell_s: 6}
+        - hold: {s: 2}
+        - goto: {x: 0.0, y: 0.0, z: 1.1, dwell_s: 6}
+        - hold: {s: 2}
+        - goto: {x: 0.5, y: 0.0, z: 1.1, dwell_s: 3}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: {rate_hz: 50, groups: [estimator_truth, optical_flow, velocity_loops, takeoff_gate, thrust_model, ekf_states]}
+abort: {}

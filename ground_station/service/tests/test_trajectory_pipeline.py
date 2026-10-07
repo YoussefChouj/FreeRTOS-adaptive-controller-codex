@@ -384,3 +384,17 @@ def test_waypoints_stop_and_go() -> None:
                 {"points_m": [c], "dwell_s": True}, {"points_m": [c], "dwell_s": 1, "corner_cut": 1}):
         with pytest.raises(ValueError):
             generate("waypoints", bad, prof)
+
+
+def test_rotate_deg() -> None:
+    """rotate_deg turns any shape about the hover point: circle 180 deg has its centre at (0, -r)."""
+    prof = Profile(v_cruise_mps=0.3, a_max_mps2=0.5, ds_m=0.05, hover_z_m=0.8)
+    pts = generate("circle", {"radius_m": 0.5, "rotate_deg": 180}, prof)
+    assert max(p.y for p in pts) <= 1e-6 and min(p.y for p in pts) == pytest.approx(-1.0, abs=1e-3)
+    assert pts[0].x == pytest.approx(0.0) and pts[-1].y == pytest.approx(0.0, abs=1e-6)
+    sq = generate("square", {"side_m": 0.5, "rotate_deg": 90}, prof)
+    plain = generate("square", {"side_m": 0.5}, prof)
+    assert sq[-1].t == pytest.approx(plain[-1].t)
+    for bad in ("x", math.inf, True):
+        with pytest.raises(ValueError):
+            generate("circle", {"radius_m": 0.5, "rotate_deg": bad}, prof)
