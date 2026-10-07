@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import shutil
 
 import pytest
 
@@ -91,3 +92,14 @@ def test_client_prog_encodes_cmd_0x1c():
     assert len(frames) == 1 and CMD_PROG == 0x1C
     with pytest.raises(ValueError):
         cl.prog(37, 0.0)
+
+
+@pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not on PATH")
+def test_preview_runs_the_firmware_evaluator():
+    r = wp.preview(OUT_AND_BACK, 0.5, dt_s=0.05)
+    assert r.ok and r.error is None and len(r.segs) == 2
+    assert math.isclose(r.t_total_s, 2.6, abs_tol=1e-5)  # 2 x (0.3 m / 0.3 m/s + 0.3 m/s / 1 m/s2)
+    assert math.isclose(max(p[1] for p in r.points), 0.3, abs_tol=1e-6)
+    assert r.points[-1][1:] == (0.0, 0.0, 0.5, 0.0) and r.points[-1][0] >= r.t_total_s
+    bad = wp.preview(OUT_AND_BACK[:1], 0.5)  # never returns home
+    assert not bad.ok and bad.error.startswith("endpoint") and bad.points == ()
