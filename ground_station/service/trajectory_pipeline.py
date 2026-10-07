@@ -184,6 +184,9 @@ def _shape_waypoints(params: dict) -> list[tuple[float, float]]:
     The path starts and ends at the hover point: (0, 0) is added in front and at the back when missing.
     corner_cut > 0 rounds the corners (Chaikin), so the reference velocity does not jump at a corner; the
     rounded path passes near the waypoints, not through them.
+    dwell_s (optional, number or one number per waypoint, >= 0) makes it stop-and-go instead: generate() gives
+    every leg its own speed profile, so the drone stops on each waypoint and holds it dwell_s seconds
+    (see _stop_and_go). It needs corner_cut 0.
     """
     if not isinstance(params, dict):
         raise ValueError("params must be a dict")
@@ -490,6 +493,43 @@ def validate(
     return errors
 
 
+def _waypoint_dwells(params: dict, pts_xy: list[tuple[float, float]]) -> list[float]:
+    """Dwell per leg end of a stop-and-go waypoints path: dwell_s of the waypoint the leg ends on, 0 for the
+    closing hover point that _shape_waypoints adds."""
+    raw = params["points_m"]
+    dwell = params["dwell_s"]
+    if params.get("corner_cut", 0) != 0:
+        raise ValueError("dwell_s needs corner_cut 0 (a rounded corner has no waypoint to stop on)")
+    if isinstance(dwell, (int, float)) and not isinstance(dwell, bool):
+        dwell = [dwell] * len(raw)
+    if (not isinstance(dwell, list) or len(dwell) != len(raw)
+            or not all(isinstance(d, (int, float)) and not isinstance(d, bool) and math.isfinite(d) and d >= 0.0
+                       for d in dwell)):
+        raise ValueError(f"dwell_s must be a number >= 0 or a list of {len(raw)} numbers >= 0 (one per waypoint)")
+    front = 0 if math.hypot(raw[0][0], raw[0][1]) <= 1e-6 else 1  # hover point added in front of points_m
+    out = []
+    for i in range(len(pts_xy) - 1):
+        j = i + 1 - front
+        out.append(float(dwell[j]) if 0 <= j < len(raw) else 0.0)
+    return out
+
+
+def _stop_and_go(points_xyz: list[tuple[float, float, float]], dwells: list[float],
+                 profile: Profile) -> list[TrajPoint]:
+    """Step 4 for stop-and-go waypoints: one trapezoid per leg (speed 0 at both ends), then a hold of
+    dwells[i] seconds on the point leg i ends on. Same pattern as scenario_schema.goto_points."""
+    x0, y0, z0 = points_xyz[0]
+    out = [TrajPoint(float(x0), float(y0), float(z0), float(profile.yaw_deg), 0.0)]
+    for (a, b, dwell) in zip(points_xyz, points_xyz[1:], dwells):
+        if math.dist(a, b) > 1e-6:
+            t0 = out[-1].t
+            leg = time_profile(resample([a, b], ds_m=profile.ds_m), profile=profile)
+            out.extend(TrajPoint(p.x, p.y, p.z, p.yaw_deg, t0 + p.t) for p in leg[1:])
+        if dwell > 0.0:
+            out.append(TrajPoint(float(b[0]), float(b[1]), float(b[2]), float(profile.yaw_deg), out[-1].t + dwell))
+    return out
+
+
 def generate(
     shape: str,
     params: dict,
@@ -501,8 +541,11 @@ def generate(
     tilt_deg = float(params.get("tilt_deg", 0.0))
     axis_deg = float(params.get("axis_deg", 0.0))
     pts_xyz = tilt(pts_xy, hover_z_m=profile.hover_z_m, tilt_deg=tilt_deg, axis_deg=axis_deg)
-    resampled_xyz = resample(pts_xyz, ds_m=profile.ds_m)
-    points = time_profile(resampled_xyz, profile=profile)
+    if shape == "waypoints" and "dwell_s" in params:
+        points = _stop_and_go(pts_xyz, _waypoint_dwells(params, pts_xy), profile)
+    else:
+        resampled_xyz = resample(pts_xyz, ds_m=profile.ds_m)
+        points = time_profile(resampled_xyz, profile=profile)
 
     errs = validate(points, limits=limits, hover_z=profile.hover_z_m)
     if errs:

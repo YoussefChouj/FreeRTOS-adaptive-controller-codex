@@ -32,8 +32,8 @@ Read `.claude/skills/workflow-b/SKILL.md` once; its hard rules, checklist and fa
 
 1. Run folder: `logs/workflow-c/<YYYYMMDD-HHMM>/` (one per session; the debrief creates it).
 2. Ask the pack (Q2 of workflow B). Default first flight (operator 10-07): the step C campaign
-   `ground_station/service/campaigns/wfc_step_c.yaml` (15 s still hold, then step B's four 0.5 m cardinal steps,
-   filmed for video truth; sized under the 120 s firmware airborne cap), unless the operator names another (any
+   `ground_station/service/campaigns/wfc_step_c.yaml` (15 s still hold over the pad, then 0.5 m cardinal steps around
+   (0, -0.5) as one stop-and-go waypoints path, filmed for video truth; sized under the 120 s firmware airborne cap), unless the operator names another (any
    `docs/workflow-b/scenarios/*.yaml` or a campaign from `ground_station/service/campaigns/`). The manual prompts
    for the whole loop are in `docs/workflow-c/step-flight-runbook.md`.
 3. Copy it into the run folder as `01/step_c.yaml` (fly mode, `max_flights: 1`, `capture: campaign`, log plan

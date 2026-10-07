@@ -362,3 +362,25 @@ def test_waypoints_shape() -> None:
     pts = generate("waypoints", {"points_m": rows, "corner_cut": 2},
                    Profile(v_cruise_mps=0.3, a_max_mps2=0.5, ds_m=0.05, hover_z_m=0.8))
     assert 0 < len(pts) <= 600
+
+
+def test_waypoints_stop_and_go() -> None:
+    """dwell_s: speed 0 on every waypoint, then a hold there; per-waypoint dwells; corner_cut rejected."""
+    prof = Profile(v_cruise_mps=0.3, a_max_mps2=0.5, ds_m=0.25, hover_z_m=0.8)
+    c = [0.0, -0.5]
+    pts = generate("waypoints", {"points_m": [c, [0.5, -0.5], c], "dwell_s": [1.0, 3.0, 1.0]}, prof)
+    xyt = [(round(p.x, 6), round(p.y, 6), p.t) for p in pts]
+    assert xyt[0][:2] == (0.0, 0.0) and xyt[-1][:2] == (0.0, 0.0)
+    assert all(b[2] > a[2] for a, b in zip(xyt, xyt[1:]))
+    # each 0.5 m leg is its own trapezoid: T = L/v + v/a = 0.5/0.3 + 0.3/0.5
+    leg = 0.5 / 0.3 + 0.3 / 0.5
+    holds = [(a[:2], round(b[2] - a[2], 6)) for a, b in zip(xyt, xyt[1:]) if a[:2] == b[:2]]
+    assert holds == [((0.0, -0.5), 1.0), ((0.5, -0.5), 3.0), ((0.0, -0.5), 1.0)]
+    assert pts[-1].t == pytest.approx(4 * leg + 5.0)
+    # a scalar dwell holds on every waypoint but not on the closing hover point
+    one = generate("waypoints", {"points_m": [[0.5, 0.0]], "dwell_s": 2}, prof)
+    assert one[-1].t == pytest.approx(2 * leg + 2.0)
+    for bad in ({"points_m": [c], "dwell_s": -1}, {"points_m": [c], "dwell_s": [1, 2]},
+                {"points_m": [c], "dwell_s": True}, {"points_m": [c], "dwell_s": 1, "corner_cut": 1}):
+        with pytest.raises(ValueError):
+            generate("waypoints", bad, prof)

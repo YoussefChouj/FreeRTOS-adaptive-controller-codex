@@ -1,13 +1,16 @@
 # Step C: the default workflow-C test flight from 2026-10-07 (replaces the 20 s hover as the first flight).
-# A 15 s still hold right after takeoff (the "drifts when it sits still" observation, against video truth), then
-# step B's four 0.5 m cardinal steps (estimator scale, lag and frame vs video), then land (offset vs the pad).
+# A 15 s still hold over the pad right after takeoff (the "drifts when it sits still" observation, against video
+# truth), then 0.5 m steps +x, -x, +y, -y around c = (0, -0.5) (estimator scale, lag and frame vs video), then land
+# (offset vs the pad). The steps are centred on y = -0.5 because the camera only sees about +0.4-0.5 m of +y from
+# the pad (operator 10-07). Firmware trajectories start and end at the pad, so the steps are ONE stop-and-go
+# waypoints path (dwell_s): pad -> c -> step -> c -> ... -> pad, a full stop and a hold on every waypoint.
 # Airborne cap: firmware AIRBORNE_CAP lands via hover at 120 s (API/wfb_safety.c). Step B measured 94.3 s airborne
-# against a 73.1 s schedule estimate (+21.2 s, about 5.3 s of upload hover per goto), so this flight is sized to an
-# 82.1 s estimate, about 103-106 s projected (PROPOSED). Diagonals and a climb do not fit: a later flight.
+# against a 73.1 s schedule estimate (+21.2 s, about 5.3 s of upload hover per goto); this flight has one upload
+# instead of four. Schedule estimate and projection: see the launch table (PROPOSED). Diagonals and a climb: later.
 # Video: landscape, same focus as the ChArUco calibration, the whole fence in frame, started before takeoff.
 # Launch it by hand: python -m ground_station.service.campaign_fly <launch copy> --pack <id> --run <run folder>.
 campaign: wfc-stepc-steps
-objective: "step C: 15 s still hold + cardinal steps, for stationary drift and estimator scale/lag/frame vs video truth; thrust model; landing offset vs pad"
+objective: "step C: 15 s still hold + cardinal steps around (0, -0.5), for stationary drift and estimator scale/lag/frame vs video truth; thrust model; landing offset vs pad"
 controller: pid
 mode: fly
 packs:
@@ -17,16 +20,17 @@ experiments:
   - name: f01_steps
     scenario:
       scenario: truth-steps-c
-      description: 15 s still hold after takeoff, then 0.5 m steps +x, -x, +y, -y at 0.8 m, 3 s dwell, 0.3 m/s
+      description: 15 s still hold over the pad, then 0.5 m stop-and-go steps +x, -x, +y, -y around (0, -0.5) at 0.8 m, 3 s dwell, 0.3 m/s, back to the pad
       motion: {v_cruise_mps: 0.3, a_max_mps2: 0.5, ds_m: 0.25}
       steps:
         - takeoff: {z: 0.8}
         - hold: {s: 3}
         - hold: {s: 15}
-        - goto: {x: 0.5, y: 0.0, z: 0.8, dwell_s: 3}
-        - goto: {x: -0.5, y: 0.0, z: 0.8, dwell_s: 3}
-        - goto: {x: 0.0, y: 0.5, z: 0.8, dwell_s: 3}
-        - goto: {x: 0.0, y: -0.5, z: 0.8, dwell_s: 3}
+        - path:
+            shape: waypoints
+            params:
+              points_m: [[0, -0.5], [0.5, -0.5], [0, -0.5], [-0.5, -0.5], [0, -0.5], [0, 0], [0, -0.5], [0, -1.0], [0, -0.5]]
+              dwell_s: [1, 3, 1, 3, 1, 3, 1, 3, 1]
         - land
     capture: campaign
     repeats: 1

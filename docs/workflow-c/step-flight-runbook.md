@@ -13,14 +13,16 @@ prompt to paste into the desktop Claude session; fill in the `<...>` parts.
 |---|---|---|
 | 1 | take off to 0.8 m, 3 s settle | settle |
 | 2 | 15 s still hold, sticks untouched | the "drifts when it sits still" observation, against video |
-| 3 | 0.5 m steps +x, -x, +y, -y (3 s dwell) | estimator scale, lag and frame vs video (same as step B) |
+| 3 | one stop-and-go path: pad -> c = (0, -0.5), then 0.5 m steps +x, -x, +y, -y around c (3 s dwell, 1 s at c), back to the pad | estimator scale, lag and frame vs video; centred on y = -0.5 because the camera sees only about +0.4-0.5 m of +y from the pad |
 | 4 | land | landing offset vs the pad |
 
-- Every goto returns to the hover point. Each upload costs about 6-9 s of hover (step B).
+- Firmware trajectories start and end at the pad hover, so the steps are one `waypoints` path with `dwell_s`
+  (a full stop and a hold on every waypoint): one upload instead of four. Each upload cost about 6-9 s of hover
+  in step B. The -y step goes to (0, -1.0): check it is in the video frame; if not, use (0, -0.8).
 - Airborne cap: the firmware lands via hover at 120 s. Step B flew 94.3 s against a 73.1 s schedule estimate;
-  step C's schedule is 82.1 s, so about 103-106 s projected (PROPOSED). Diagonals and a climb did not fit: a
+  step C's schedule is 88.7 s (path 39.7 s), so about 94-110 s projected (PROPOSED). Diagonals and a climb did not fit: a
   later flight.
-- Max |x|, |y| 0.5 m and z 0.8 m, all inside the soft fence (z 1.4, |x| 1.3, |y| 1.7).
+- Max |x| 0.5 m, |y| 1.0 m and z 0.8 m, all inside the soft fence (z 1.4, |x| 1.3, |y| 1.7).
 
 The log runs at 50 Hz with 113 variables in 2 slots: 47,600 of 70,042 B/s (68 %), computed by `log_plan_table`.
 
