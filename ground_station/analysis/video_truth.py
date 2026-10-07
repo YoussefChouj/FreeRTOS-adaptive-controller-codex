@@ -125,6 +125,24 @@ def calibrate(video: str, board: tuple[int, int], square: float, step: int = 10,
             "spread_cm": _spread_cm(objs, imgs, size)}
 
 
+def load_cam(path, size=None) -> dict:
+    """Lens model from `calib`; size (w, h) of the video it is used on rescales K (same sensor crop and aspect assumed:
+    a phone 1080p clip of a 4K-calibrated lens). Distortion is in normalised coordinates, so it does not change."""
+    cam = json.loads(Path(path).read_text())
+    if size and cam.get("size") and tuple(size) != tuple(cam["size"]):
+        sx, sy = size[0] / cam["size"][0], size[1] / cam["size"][1]
+        if abs(sx - sy) > 0.01:
+            raise SystemExit(f"video {size} has another aspect than the lens model {cam['size']}: recalibrate")
+        cam["K"] = (np.diag([sx, sy, 1.0]) @ np.array(cam["K"], float)).tolist()
+        cam["size"] = list(size)
+    return cam
+
+
+def video_size(video: str) -> tuple[int, int]:
+    cap = _cv2().VideoCapture(video)
+    return int(cap.get(3)), int(cap.get(4))
+
+
 def floor_pose(K, dist, world_xy, pixel) -> tuple[np.ndarray, np.ndarray, float]:
     """Camera pose from floor marks (z = 0). Returns R, t (world -> camera) and the mean reprojection error in px."""
     cv2 = _cv2()
@@ -143,10 +161,11 @@ def floor_pose(K, dist, world_xy, pixel) -> tuple[np.ndarray, np.ndarray, float]
 
 
 def floor_board(video: str, board: tuple[int, int], square: float, every_s: float = 0.5, max_frames: int = 60,
-                roi=None) -> dict:
+                roi=None, zoom: float = 1.0) -> dict:
     """Floor marks from a checkerboard lying flat on the floor (the phone is fixed, so every detection sees the same
     corners): per-corner median pixel over the frames where the whole board is found. Origin = first inner corner.
-    roi (x0, y0, x1, y1) px limits the search: boards of the same size on a wall would give a wall plane."""
+    roi (x0, y0, x1, y1) px limits the search: boards of the same size on a wall would give a wall plane.
+    zoom upscales the roi before the search: 2.6 cm squares are ~10 px at 1080p, too small for the detector."""
     cv2 = _cv2()
     cap = cv2.VideoCapture(video)
     step = max(1, int(round(every_s * (cap.get(cv2.CAP_PROP_FPS) or 30.0))))
@@ -158,10 +177,13 @@ def floor_board(video: str, board: tuple[int, int], square: float, every_s: floa
             continue
         img = cap.retrieve()[1]
         x0, y0, x1, y1 = roi or (0, 0, img.shape[1], img.shape[0])
-        ok, c = cv2.findChessboardCornersSB(cv2.cvtColor(img[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY), board, flags=flags)
+        gray = cv2.cvtColor(img[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+        if zoom != 1.0:
+            gray = cv2.resize(gray, None, fx=zoom, fy=zoom, interpolation=cv2.INTER_CUBIC)
+        ok, c = cv2.findChessboardCornersSB(gray, board, flags=flags)
         if not ok:
             continue
-        c = c.reshape(-1, 2) + (x0, y0)
+        c = (c.reshape(-1, 2) + 0.5) / zoom - 0.5 + (x0, y0)    # pixel-centre convention survives the resize
         if ref is None:
             ref = c
         elif np.linalg.norm(c[0] - ref[-1]) < np.linalg.norm(c[0] - ref[0]):
@@ -175,7 +197,7 @@ def floor_board(video: str, board: tuple[int, int], square: float, every_s: floa
     sigma = 1.2533 * (spread / 1.1774) / np.sqrt(len(found))   # per-axis sd of a median of n (median radius = 1.18 sd)
     sigma = float(np.hypot(sigma, DETECTOR_PX))                 # a static board repeats the detector's own error every frame
     world = np.mgrid[0:board[0], 0:board[1]].T.reshape(-1, 2) * square
-    return {"world": world.tolist(), "pixel": pixel.tolist(), "frames": len(found),
+    return {"world": world.tolist(), "pixel": pixel.tolist(), "frames": len(found), "size": list(img.shape[1::-1]),
             "corner_spread_px": round(spread, 3), "sigma_px": round(float(sigma), 4)}
 
 
@@ -566,6 +588,14 @@ def read_livewatch(path: str, names) -> dict:
 
 
 # ---------------------------------------------------------------- run
+def flight_window(fly, armed, h, lift: float = 0.3):
+    """Flight mask, armed mask, take-off and disarm sample indices. A disarmed hand carry has no flight phase: the
+    samples held more than `lift` m above the pad stand in for both (sync it with sync="speed")."""
+    if not fly.any():
+        fly = armed = h > lift
+    return fly, armed, int(np.argmax(fly)), int(len(armed) - 1 - np.argmax(armed[::-1]))
+
+
 def run(video, cam, marks, csv_path, out, guard_offset=0.0, align_s=None, stride=1, lo=HSV_LO, hi=HSV_HI,
         min_area=MIN_AREA, static_t=(), sync="takeoff", survey=None) -> dict:
     """sync: "takeoff" (lift-off in both clocks; video and campaign started by hand), "speed" (speed
@@ -579,11 +609,9 @@ def run(video, cam, marks, csv_path, out, guard_offset=0.0, align_s=None, stride
     R, t, reproj = floor_pose(K, dist, marks["world"], marks["pixel"])
     tel = read_livewatch(csv_path, [X_CM, Y_CM, Z_M, PHASE, ARM])
     te = tel["t"] - tel["t"][0]
-    fly = tel[PHASE] == 1
-    armed = tel[ARM] > 0
-    i_to, i_end = int(np.argmax(fly)), int(len(armed) - 1 - np.argmax(armed[::-1]))
     est = np.c_[tel[X_CM], tel[Y_CM]] / 100.0
     h_tel = np.nan_to_num(tel[Z_M])
+    fly, armed, i_to, i_end = flight_window(tel[PHASE] == 1, tel[ARM] > 0, h_tel)
 
     cache = out / "track.npz"
     if cache.exists():
@@ -808,6 +836,7 @@ def main(argv=None):
     b = sub.add_parser("floor"); b.add_argument("video"); b.add_argument("--board", required=True)
     b.add_argument("--square", type=float, required=True); b.add_argument("--out", required=True)
     b.add_argument("--roi", help="x0,y0,x1,y1 px search box (keep wall boards out)")
+    b.add_argument("--zoom", type=float, default=1.0, help="upscale the roi first (2-3 for 1080p video)")
     f = sub.add_parser("frame"); f.add_argument("video"); f.add_argument("--t", type=float, default=1.0)
     f.add_argument("--out", required=True)
     r = sub.add_parser("run"); r.add_argument("video"); r.add_argument("--cam", required=True)
@@ -853,7 +882,7 @@ def main(argv=None):
     elif a.cmd == "floor":
         cols, rows = (int(v) for v in a.board.lower().split("x"))
         m = floor_board(a.video, (cols, rows), a.square,
-                        roi=tuple(int(v) for v in a.roi.split(",")) if a.roi else None)
+                        roi=tuple(int(v) for v in a.roi.split(",")) if a.roi else None, zoom=a.zoom)
         Path(a.out).write_text(json.dumps(m, indent=2))
         print(f"board in {m['frames']} frames, corner spread {m['corner_spread_px']} px -> {a.out}")
     elif a.cmd == "click":
@@ -861,11 +890,12 @@ def main(argv=None):
         _click(a.video, a.t, world, a.out)
         print("wrote", a.out)
     elif a.cmd == "overlay":
-        n = overlay(a.video, json.loads(Path(a.cam).read_text()), json.loads(Path(a.marks).read_text()), a.csv, a.run,
+        n = overlay(a.video, load_cam(a.cam, video_size(a.video)), json.loads(Path(a.marks).read_text()), a.csv, a.run,
                     a.out, a.width)
         print(f"wrote {n} frames -> {a.out}")
     elif a.cmd == "survey":
-        cam, marks = json.loads(Path(a.cam).read_text()), json.loads(Path(a.marks).read_text())
+        marks = json.loads(Path(a.marks).read_text())
+        cam = load_cam(a.cam, marks.get("size"))
         R, t, _ = floor_pose(cam["K"], cam["dist"], marks["world"], marks["pixel"])
         refs = [tuple([float(v) for v in p.split(",")] for p in r.split(":")) for r in a.ref]
         sv = survey(cam["K"], cam["dist"], R, t, np.mean(marks["world"], axis=0),
@@ -877,7 +907,8 @@ def main(argv=None):
             (Path(a.run) / "survey.json").write_text(json.dumps(sv, indent=2))
         print(json.dumps(sv, indent=2))
     elif a.cmd == "walls":
-        cv2, cam, marks = _cv2(), json.loads(Path(a.cam).read_text()), json.loads(Path(a.marks).read_text())
+        cv2, marks = _cv2(), json.loads(Path(a.marks).read_text())
+        cam = load_cam(a.cam, video_size(a.video))
         R, t, _ = floor_pose(cam["K"], cam["dist"], marks["world"], marks["pixel"])
         frame = _grab(a.video, a.t)
         tg = wall_targets(frame, cam["K"], cam["dist"], R, t, a.qr_side, tuple(int(v) for v in a.board.lower().split("x")),
@@ -905,7 +936,7 @@ def main(argv=None):
         print("wrote", a.out)
     else:
         lo, hi = tuple(map(int, a.hsv_lo.split(","))), tuple(map(int, a.hsv_hi.split(",")))
-        rep = run(a.video, json.loads(Path(a.cam).read_text()), json.loads(Path(a.marks).read_text()), a.csv, a.out,
+        rep = run(a.video, load_cam(a.cam, video_size(a.video)), json.loads(Path(a.marks).read_text()), a.csv, a.out,
                   a.guard_offset, a.align_s, a.stride, lo, hi, a.min_area,
                   tuple(float(s) for s in a.static_t.split(",") if s),
                   a.sync if a.sync in ("takeoff", "speed") else float(a.sync),

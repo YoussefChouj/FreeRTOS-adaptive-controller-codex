@@ -182,6 +182,24 @@ def test_floor_board_pose(tmp_path):
     assert d_err < 0.03                                          # measured 1.6 cm: 23 cm board, 9 px squares
     assert m["sigma_px"] == pytest.approx(vt.DETECTOR_PX, abs=1e-3)                   # identical frames: floor only
     assert d_err / 2 < vt.pose_noise(k2, d0, m["world"], m["pixel"], m["sigma_px"], 0.7, n=50) < 0.05
+    z = vt.floor_board(video, (8, 5), s, roi=(300, 200, 1100, 650), zoom=3)  # upscaled roi -> same full-frame pixels
+    assert m["size"] == [1280, 720]
+    zp, mp = np.array(z["pixel"]), np.array(m["pixel"])
+    err = min(np.abs(zp - mp).max(), np.abs(zp[::-1] - mp).max())   # the board may come back read from the other end
+    assert err < 0.5, err                                       # measured 0.42 px: 9 px squares, detector noise
+
+
+def test_load_cam_rescales_k_to_the_video(tmp_path):
+    """A 4K lens model on a 1080p clip: K halves, distortion stays; another aspect is refused."""
+    path = tmp_path / "cam.json"
+    path.write_text('{"K": [[3000, 0, 1920], [0, 3000, 1080], [0, 0, 1]], "dist": [0.1, -0.2, 0, 0, 0], '
+                    '"size": [3840, 2160]}')
+    cam = vt.load_cam(path, (1920, 1080))
+    assert np.allclose(cam["K"], [[1500, 0, 960], [0, 1500, 540], [0, 0, 1]])
+    assert cam["dist"] == [0.1, -0.2, 0, 0, 0] and cam["size"] == [1920, 1080]
+    assert vt.load_cam(path)["K"][0][0] == 3000
+    with pytest.raises(SystemExit):
+        vt.load_cam(path, (1440, 1080))
 
 
 def test_calibrate_recovers_intrinsics(tmp_path):
@@ -321,3 +339,14 @@ def test_velocity_fit_recovers_lag_scale_and_frame():
     r = vt.velocity_fit(t, truth, est_v, np.cumsum(est_v, 0) * 0.02)
     assert abs(r["lag_s"] - 0.1) < 0.021 and abs(r["scale_x"] - 2) < 0.05 and abs(r["scale_y"] - 2) < 0.05
     assert abs(r["rot_deg"]) < 1 and r["corr_x"] > 0.99 and abs(r["est_pos_slope_over_v"] - 1) < 0.05
+
+
+def test_flight_window_uses_the_lift_for_a_disarmed_carry():
+    """A flight keeps its phase/arm window; a disarmed carry (no phase, never armed) uses the samples held up."""
+    h = np.array([0.05, 0.05, 0.6, 0.8, 0.7, 0.1, 0.05])
+    on = np.array([0, 1, 1, 1, 1, 1, 0], bool)
+    fly, armed, i_to, i_end = vt.flight_window(on & (h > 0.5), on, h)
+    assert (i_to, i_end) == (2, 5) and armed is on
+    off = np.zeros(len(h), bool)
+    fly, armed, i_to, i_end = vt.flight_window(off, off, h)
+    assert (i_to, i_end) == (2, 4) and fly.sum() == 3
