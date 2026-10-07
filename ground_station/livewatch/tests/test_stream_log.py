@@ -368,6 +368,26 @@ def test_run_groups_usart3_stops_each_subscribed_slot():
     assert len(stops) == 2, "one stop per subscribed slot"
 
 
+
+def test_run_groups_usart3_ctrl_c_returns_summary_and_stops_slots():
+    """Ctrl+C ends an open-ended capture: no traceback, a summary per slot, one stop per slot."""
+    plans = [(0, [_TEST_RANGE], 1, b"\xCC\xDE\x21"), (1, [_TEST_RANGE], 1, b"\xCC\xDE\x21")]
+    fake = FakeUsart3WifiTransport()
+    calls = []
+
+    def _boom():
+        calls.append(1)
+        if len(calls) == 2:
+            raise KeyboardInterrupt()
+        return 0.0
+
+    with _patched_transport(fake),             mock.patch("ground_station.livewatch.stream_log.time.monotonic", side_effect=_boom):
+        result = _run_groups_usart3("udp:14550", plans, 30.0, None, True, 921600, TRANSPORT_USART3)
+    assert [r["slot"] for r in result] == [0, 1]
+    sent = [s for s, _ in fake._udp._sent]
+    stops = [s for s in sent if s[:2] == b"\xCC\xDE" and len(s) >= 10 and s[5] == 0]
+    assert len(stops) == 2
+
 # ---------------------------------------------------------------------------
 # Tests: CLI defaults and uart5 warning
 # ---------------------------------------------------------------------------

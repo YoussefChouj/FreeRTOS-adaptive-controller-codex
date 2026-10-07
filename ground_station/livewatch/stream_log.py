@@ -373,6 +373,36 @@ def load_frames(path=DEFAULT_FRAMES):
     return parse_frames_markdown(path.read_text(encoding="utf-8"))
 
 
+def _usart3_loop(wifi, decoder, writers, rows, schemas, t0, seconds, stop_event, on_row, vofa_sock, vofa_addr):
+    """Read and write frames until `seconds` pass or stop_event is set (the _run_groups_usart3 body)."""
+    while time.monotonic() - t0 < seconds and not (
+            stop_event is not None and stop_event.is_set()):
+        waiting = wifi._udp.in_waiting
+        if not waiting:
+            time.sleep(0.002)
+            continue
+        for slot, seq, t_ms, values in decoder.feed(wifi._udp.read(waiting)):
+            writer, schema = writers[slot]
+            flat = []
+            for rng in schema.ranges:
+                if rng._names is not None:
+                    for en in rng._names:
+                        flat.append(values.get(en, 0))
+                else:
+                    got = values.get(rng.name or "r%d" % len(flat), 0)
+                    flat.extend(got if isinstance(got, list) else [got])
+            t_host = time.monotonic() - t0
+            if writer is not None:
+                writer.writerow([t_ms, "%.4f" % t_host, seq] + flat)
+            rows[slot] += 1
+            if on_row is not None:
+                on_row(slot, seq, t_ms, t_host, flat)
+            if vofa_sock is not None and slot == schemas[0].slot:
+                # VOFA+ FireWater: "v0,v1,...\n", channel order = CSV column order
+                vofa_sock.sendto((",".join("%g" % v for v in flat) + "\n").encode(),
+                                 vofa_addr)
+
+
 def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
                        usart3_baud, transport, vofa=None, stop_event=None,
                        on_start=None, on_row=None):
@@ -426,32 +456,12 @@ def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
             on_start(schemas, decoder)
         wifi._udp.reset_input_buffer()
         t0 = time.monotonic()
-        while time.monotonic() - t0 < seconds and not (
-                stop_event is not None and stop_event.is_set()):
-            waiting = wifi._udp.in_waiting
-            if not waiting:
-                time.sleep(0.002)
-                continue
-            for slot, seq, t_ms, values in decoder.feed(wifi._udp.read(waiting)):
-                writer, schema = writers[slot]
-                flat = []
-                for rng in schema.ranges:
-                    if rng._names is not None:
-                        for en in rng._names:
-                            flat.append(values.get(en, 0))
-                    else:
-                        got = values.get(rng.name or "r%d" % len(flat), 0)
-                        flat.extend(got if isinstance(got, list) else [got])
-                t_host = time.monotonic() - t0
-                if writer is not None:
-                    writer.writerow([t_ms, "%.4f" % t_host, seq] + flat)
-                rows[slot] += 1
-                if on_row is not None:
-                    on_row(slot, seq, t_ms, t_host, flat)
-                if vofa_sock is not None and slot == schemas[0].slot:
-                    # VOFA+ FireWater: "v0,v1,...\n", channel order = CSV column order
-                    vofa_sock.sendto((",".join("%g" % v for v in flat) + "\n").encode(),
-                                     vofa_addr)
+        try:
+            _usart3_loop(wifi, decoder, writers, rows, schemas, t0, seconds, stop_event, on_row,
+                         vofa_sock, vofa_addr)
+        except KeyboardInterrupt:     # Ctrl+C ends an open-ended capture: keep the rows, stop the slots
+            if not quiet:
+                print("stream-log: stopped by Ctrl+C")
         elapsed = time.monotonic() - t0
     finally:
         if vofa_sock is not None:
