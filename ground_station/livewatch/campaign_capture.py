@@ -123,11 +123,23 @@ OPTICAL_FLOW: tuple[str, ...] = ("ano_of.of2_dx_fix", "ano_of.of2_dy_fix", "ano_
                                  "ano_of.of_update_cnt")
 # wfb_glue.c TAKEOFF gate inputs not already in core (10-06 f02: TAKEOFF refused STATE, gate not logged)
 TAKEOFF_GATE: tuple[str, ...] = ("g_motor_idle_enabled", "sbus_lost")
+# Estimator truth roam (research-state-estimation-2026-10-07.md step A): raw flow, the module gyro, RPM and the FC
+# IMU for the offline fits (flow scale/lag, drag k_d, thrust k_T). Names as the 10-06 livewatch roam logged them.
+ESTIMATOR_TRUTH: tuple[str, ...] = (
+    "ano_of.of0_dx", "ano_of.of0_dy",
+    "ano_of.gyr_data_x", "ano_of.gyr_data_y", "ano_of.gyr_data_z",
+    "rpm_dbg_rpm[0]", "rpm_dbg_rpm[1]", "rpm_dbg_rpm[2]", "rpm_dbg_rpm[3]",
+    "Gyro_X_Real", "Gyro_Y_Real", "Gyro_Z_Real",
+    "Acc_X_Real", "Acc_Y_Real", "Acc_Z_Real",
+    "ano_of.of1_dx", "ano_of.of1_dy", "ano_of.of2_h", "ano_of.of2_h_f2_v",
+    "ano_of.acc_data_x", "ano_of.acc_data_y", "ano_of.acc_data_z",
+)
 LOG_GROUPS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "mrac_shadow": MRAC_SHADOW,
     "velocity_loops": VELOCITY_LOOPS,
     "optical_flow": OPTICAL_FLOW,
     "takeoff_gate": TAKEOFF_GATE,
+    "estimator_truth": ESTIMATOR_TRUTH,
 })
 LOG_PLAN_KEYS = ("rate_hz", "groups")
 # PROPOSED default: 50 Hz is the rate the 10 s stream_log check carried with 0 dropped after the last flash.
