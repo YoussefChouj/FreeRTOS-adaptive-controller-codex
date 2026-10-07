@@ -13,8 +13,9 @@ Authorizations and their expiry live in `AGENTS.md` > Authorizations, not here.
   fixture/conftest changed or the operator asks. A full tree can hang on probe routes with the drone off.
 
 ## Delegation
-- Default: hand investigation and bulk coding to a worker, then verify. Inline only for edits of 3 lines or
-  fewer at a known location, safety-critical judgment, or after a failed worker on a big UI task.
+- Default since 2026-10-04 (operator order): the desktop session (CEO) does every item itself, inline, one at a
+  time. No Claude Code subagents, no manager, no outside workers unless the operator asks again.
+  The worker rules below are kept for when that changes.
 - Routing: Gemini models on agy first; Claude/GPT pools only when the Gemini pools are spent. Free `oc` workers
   (Hetzner Qwen, OpenRouter :free) for parallel work. Details: `env.md`.
 - Laptop power is fragile (battery 3.5% health, AC drops under load): at most 1-2 parallel workers, commit before heavy jobs.
