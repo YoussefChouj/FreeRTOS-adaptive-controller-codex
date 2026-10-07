@@ -57,7 +57,7 @@ _FRESHNESS_SYMS = ("g_wfb_status.prim_state",) + tuple(a.feedback for a in POSIT
 _REGISTRY = SchemaRegistry.builtin_dashboard()
 _ALIASES = {s: a for s in SAMPLE_SYMS if (a := _REGISTRY.resolve(s)) and a != s}
 
-ACK_TIMEOUT_S = 0.5        # PROPOSED: wait for one command result before calling it lost
+ACK_TIMEOUT_S = 1.0        # PROPOSED: step A 10-07 ack latency max 0.72 s at a 97 % full link; 0.5 s restarted every upload
 HEARTBEAT_PERIOD_S = 0.2   # PROPOSED: 5 Hz, interfaces.md "GS sends at 5 Hz"; firmware hb_timeout_s 1.0
 STATUS_STALE_S = 1.0       # PROPOSED: factory refuses to start without g_wfb_status this fresh
 LIVE_DT_S = 0.1            # PROPOSED: runner tick

@@ -3,6 +3,7 @@ wait for the operator to arm by RC and type go, go, watch the phases, then debri
 the telemetry, so flight and logging start together.
 
     python -m ground_station.service.campaign_fly <launch copy> --pack P4000-1 --run logs/workflow-c/<run>
+    python -m ground_station.service.campaign_fly <launch copy> --pack P4000-1 --record-only carry --rate 100
 
 The service runs in its own console window, so Ctrl+C or a crash here never stops it mid-flight.
 Ctrl+C while flying: first = land, second = abort. The RC kill switch stays the primary stop.
@@ -90,12 +91,54 @@ def watch(base, poll_s=1.0):
             print("state unreachable:", e)
 
 
+def record_only(base, campaign, rate_hz=None, label="handheld", settle_s=3.0, wait=input):
+    """Disarmed handheld carry: the launch copy's log plan on the stream slots, record until Enter or Ctrl+C.
+
+    Sends no drone command (no go, no arm, no takeoff): only /subscribe and /api/recording. Returns the session dir.
+    """
+    from ground_station.livewatch.campaign_capture import MAX_SLOTS, log_plan_table, plan_capture, subscribe_steps
+    from ground_station.service.campaign_schema import load_campaign
+
+    log_plan = dict(load_campaign(Path(campaign)).experiments[0].log_plan or {})
+    if rate_hz:
+        log_plan["rate_hz"] = rate_hz
+    plan = plan_capture(log_plan or None)
+    print(log_plan_table(plan))
+    steps = subscribe_steps(plan)
+    for args in [s["args"] for s in steps] + [{"slot": k, "divider": 0, "ranges": []}
+                                               for k in range(len(steps), MAX_SLOTS)]:
+        code, res = call(base, "/subscribe", args)
+        if code != 202:
+            sys.exit(f"subscribe slot {args['slot']} refused ({code}): {res.get('error', res)}")
+    time.sleep(settle_s)
+    streams = call(base, "/api/campaign/vitals")[1].get("streams", {})
+    for s in steps:
+        age = (streams.get(str(s["args"]["slot"])) or {}).get("age_s")
+        print(f"  slot {s['args']['slot']}: {'NOT STREAMING' if age is None or age > 1.0 else f'fresh ({age} s)'}")
+    code, st = call(base, "/api/recording/start", {
+        "requested_by": "operator", "label": label, "reason": "workflow C handheld carry (disarmed)",
+        "notes": f"log_plan rate {plan['rate_hz']:g} Hz, groups {', '.join(plan['groups']) or 'core only'}"})
+    if not st.get("recording"):
+        sys.exit(f"recording did not start ({code}): {st.get('error', st)}")
+    print(f"RECORDING -> {st.get('session_dir')}")
+    try:
+        wait("Carry the drone now (DISARMED). Enter or Ctrl+C stops the log: ")
+    except (KeyboardInterrupt, EOFError):
+        print()
+    st = call(base, "/api/recording/stop", {})[1]
+    print(f"stopped: {st.get('session_dir')}")
+    return str(st.get("session_dir") or "")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("campaign", help="launch copy printed by campaign_launch")
     ap.add_argument("--pack", required=True)
     ap.add_argument("--run", help="workflow-c run folder: debrief after landing")
     ap.add_argument("--port", type=int, default=8081)
+    ap.add_argument("--record-only", metavar="LABEL", help="no flight: record the log plan (drone disarmed, carried "
+                                                            "by hand) until Enter; sends no drone command")
+    ap.add_argument("--rate", type=float, help="--record-only: override the log plan rate, Hz")
     a = ap.parse_args(argv)
     base = f"http://127.0.0.1:{a.port}"
     campaign = str(Path(a.campaign).resolve())
@@ -103,6 +146,10 @@ def main(argv=None):
         sys.exit(f"no such launch copy: {campaign}")
 
     ensure_service(base, a.port)
+    if a.record_only:
+        record_only(base, campaign, a.rate, a.record_only)
+        print("Stop the video. The service window stays open; close it when you are done.")
+        return 0
     while not preflight(base, campaign, a.pack):
         if input("Preflight FAIL. Fix it, then Enter to re-check (q quits): ").strip().lower() == "q":
             return 1

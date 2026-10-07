@@ -1,0 +1,34 @@
+# Workflow C step B: setpoint steps graded against phone-video truth (LANDSCAPE, same focus as the ChArUco calib).
+# A hold flight cannot grade the estimator (truth ~ -L est); a commanded step can. Four 0.5 m out-and-back gotos
+# (+x, -x, +y, -y), 3 s dwell each, 1 s holds (each upload is already a 6-9 s hover); every goto returns to the hover point (firmware rule), then land on the pad.
+# Step A lesson: a 346-point path = 1730 one-at-a-time uploads on a 97 % full link never finished. Here ds_m 0.25
+# keeps each goto to ~6 points (30 floats) and the log runs at 50 Hz so command acks get through. PROPOSED numbers.
+campaign: wfc-stepb-steps
+objective: "step B: 0.5 m setpoint steps for estimator scale/lag/frame vs video truth; landing offset vs pad"
+controller: pid
+mode: fly
+packs:
+  - P4000-1
+max_flights: 1
+experiments:
+  - name: f01_steps
+    scenario:
+      scenario: truth-steps
+      description: 0.5 m out-and-back steps +x, -x, +y, -y at 0.8 m, 3 s dwell, 0.3 m/s
+      motion: {v_cruise_mps: 0.3, a_max_mps2: 0.5, ds_m: 0.25}
+      steps:
+        - takeoff: {z: 0.8}
+        - hold: {s: 3}
+        - goto: {x: 0.5, y: 0.0, z: 0.8, dwell_s: 3}
+        - hold: {s: 1}
+        - goto: {x: -0.5, y: 0.0, z: 0.8, dwell_s: 3}
+        - hold: {s: 1}
+        - goto: {x: 0.0, y: 0.5, z: 0.8, dwell_s: 3}
+        - hold: {s: 1}
+        - goto: {x: 0.0, y: -0.5, z: 0.8, dwell_s: 3}
+        - hold: {s: 3}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: {rate_hz: 50, groups: [estimator_truth, optical_flow, velocity_loops, takeoff_gate]}
+abort: {}
