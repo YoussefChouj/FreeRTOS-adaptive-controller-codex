@@ -143,3 +143,18 @@ which already held height. With of1 off and headroom on, PID and MRAC look alike
 2. Disarmed, in the Keil watch window: `kp_id = 1` (or 3), `kp_go = 1`, check `kp_active`. Then fly the load manually.
 3. If the swing is gone, try preset 5 (PID vs MRAC without the sink) and 6.
 4. If the swing persists with of1 off, the leak is not the driver: stop and go back to preset 0 or the flown axf.
+
+## Plots
+
+`python -m ground_station.analysis.flight_review logs/<stem>.slot0.csv --no-sat --out <page>` now reads stream_log
+captures. Pages (setpoint vs actual, spectra, sample intervals): `docs/flights/plots/2026-10-07-<stem>.review.html`
+for exp1-500g, exp2_mrac-500g, exp5_pid_then_mrac_active-500g. Whole-log spectral peaks (measured):
+
+| flight | pitch angle | roll angle | gyroy FB | gyrox FB |
+|---|---|---|---|---|
+| exp1 PID | 0.56 Hz | 0.54 Hz | 0.84 Hz | 0.90 Hz |
+| exp2 MRAC | 0.77 Hz (amp 1.13) | 0.56 Hz | 1.69 Hz (amp 11.8) | 1.69 Hz |
+| exp5 PID then MRAC | 0.93 Hz (amp 1.32) | 0.81 Hz | 0.93 Hz (amp 8.3) | 0.85 Hz |
+
+A simple pendulum of L 0.43 m (33 cm rope + half the bottle) swings at 0.76 Hz, which matches the exp2 pitch line.
+The MRAC flights carry the large pitch-rate lines, in line with the swing the pilot saw.

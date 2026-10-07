@@ -79,3 +79,16 @@ def test_without_prim_state_the_span_is_the_whole_recording(tmp_path):
     assert d["hold_window_s"] is None
     assert d["flight_span_s"][0] == 0.0 and abs(d["flight_span_s"][1] - 9.98) < 1e-6
     assert d["saturation"]["motor1"]["frac_lo"] > 0          # ground idle now counts
+
+
+def test_stream_log_capture(tmp_path):
+    rows = "\n".join(f"{1000 + 20 * i},0,{i},{0.1 * i},{-0.1 * i}" for i in range(50))
+    (tmp_path / "cap.slot0.csv").write_text("t_src_ms,t_host_s,seq,Ctrler.Z_ratePID.Des,Ctrler.Z_ratePID.FB\n" + rows,
+                                           encoding="utf-8")
+    (tmp_path / "cap.slot1.csv").write_text("t_src_ms,t_host_s,seq,imu_data.pit\n" + "\n".join(
+        f"{1000 + 40 * i},0,{i},{i % 3}" for i in range(25)), encoding="utf-8")
+    out = fr.review(tmp_path / "cap.slot0.csv")
+    assert out == tmp_path / "cap.flight_review.html"
+    d = fr.page_data(out)
+    assert [r["label"] for r in d["tracking"]] == ["Ctrler.Z_ratePID"]
+    assert d["intervals"]["0"]["frames"] == 50 and d["intervals"]["1"]["median_ms"] == 40.0

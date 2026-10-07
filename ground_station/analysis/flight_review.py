@@ -36,8 +36,27 @@ GAP_FACTOR = 3.0        # an interval above GAP_FACTOR x the slot median counts 
 SPECTRUM_SYMS = (ATTITUDE[0], ATTITUDE[1], fd.RATE_FB["roll"], fd.RATE_FB["pitch"])
 
 
+def read_stream(slot0: Path) -> tuple[Series, dict[int, list[float]]]:
+    """A stream_log --frames capture (``<stem>.slot0.csv`` plus its sibling slots) as ``read_session`` returns it,
+    loaded by log_corpus (board clock, t = 0 at the first slot-0 frame)."""
+    from ground_station.analysis import log_corpus as lc
+    raw = lc._load_stream(slot0)
+    series: Series = {k: (t.tolist(), v.tolist()) for k, (t, v) in raw.items()}
+    frames: dict[int, list[float]] = {}
+    for i, f in enumerate(lc._stream_slots(slot0)):
+        with f.open(newline="", encoding="utf-8") as fh:
+            cols = [c for c in next(csv.reader(fh), []) if c not in ("t_src_ms", "t_host_s", "seq")]
+        hit = next((series[c][0] for c in cols if c in series), None)
+        if hit:
+            frames[i] = hit
+    return series, frames
+
+
 def read_session(session_dir: str | Path) -> tuple[Series, dict[int, list[float]]]:
-    """``campaign_outputs.read_telemetry``'s series plus the frame times (s) per slot, in one pass over the CSV."""
+    """``campaign_outputs.read_telemetry``'s series plus the frame times (s) per slot, in one pass over the CSV.
+    A ``<stem>.slot0.csv`` path reads a stream_log capture instead (``read_stream``)."""
+    if str(session_dir).endswith(".slot0.csv"):
+        return read_stream(Path(session_dir))
     series: Series = {}
     frames: dict[int, list[float]] = {}
     t0 = None
@@ -249,7 +268,7 @@ def plot_intervals(frames: Mapping[int, list[float]]) -> str | None:
     fig, axes = plt.subplots(1, len(slots), figsize=(10, 3.0), squeeze=False)
     for ax, s in zip(axes[0], slots):
         ts = frames[s]
-        ax.hist([1e3 * (b - a) for a, b in zip(ts, ts[1:])], bins=60, log=True)
+        ax.hist([round(1e3 * (b - a), 3) for a, b in zip(ts, ts[1:])], bins=60, log=True)  # float-eps spread breaks bins
         ax.set_title(f"slot {s}", fontsize=8)
         ax.set_xlabel("frame interval ms", fontsize=8)
     axes[0][0].set_ylabel("count")
@@ -334,7 +353,8 @@ def review(session_dir: str | Path, out: str | Path | None = None,
 <script type="application/json" id="review-data">{blob}</script>
 </body></html>
 """
-    path = Path(out) if out else d / "flight_review.html"
+    path = Path(out) if out else (d.parent / (d.name[: -len(".slot0.csv")] + ".flight_review.html") if d.is_file()
+                                  else d / "flight_review.html")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(page, encoding="utf-8")
     return path
@@ -350,7 +370,7 @@ def page_data(path: str | Path) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("session", help="a recorder session dir (telemetry.csv)")
+    p.add_argument("session", help="a recorder session dir (telemetry.csv) or a stream_log <stem>.slot0.csv")
     p.add_argument("--out", help="output HTML (default <session>/flight_review.html)")
     p.add_argument("--no-sat", action="store_true", help="skip the bench saturation limits")
     a = p.parse_args(argv)
