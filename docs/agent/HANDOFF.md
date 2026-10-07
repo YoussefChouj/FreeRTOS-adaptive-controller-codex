@@ -6,14 +6,15 @@ Working mode: the desktop session is the CEO and does every item inline. No suba
 
 ## Now: state estimation ground truth from phone video (2026-10-06/07)
 Why: the operator wants proof the drone tracked a dense preset path; the optical-flow estimate drifts.
-Tool: `ground_station/analysis/video_truth.py` (`calib`, `floor`, `frame`, `run`, `overlay`), tests
-`tests/test_video_truth.py` (7 pass). Commits 2317ade..f255496. Usage is in the module docstring.
-Status: the first lens clip was not good enough (rms 2.40 px, lens spread 2.7 cm rms / 6.8 cm max at 4 m).
-Cause: board not flat, frame edges not covered. Not shake (it was filmed on a DJI OM5).
-Re-shoot plan, one clip: phone fixed, focus and exposure locked, 1x lens, 4K 30, stabilisation off. First ~60 s:
-walk a FLAT 9x6 board (`docs/video-truth/lens_board_9x6.png`) through every frame corner and edge, tilted, 1 s still at
-each spot. Then fly. Process: `calib --board 9x6 --until <s>`, then `floor` (8x5 sheet, 2.6 cm squares, on the
-landing area), `frame`, `run`, `overlay`. Target lens spread max < 2 cm (PROPOSED).
+Tool: `ground_station/analysis/video_truth.py` (`board`, `calib`, `floor`, `frame`, `run`, `overlay`), tests
+`tests/test_video_truth.py` (8 pass). Commits 2317ade..f255496. Usage is in the module docstring.
+Status (10-07): best lens clip = 9x6 board on the laptop screen, rms 1.05 px, spread 1.1 / 2.5 cm max at 4 m.
+Close paper clip: 2.31 px, fx +2.2% (focus breathing). Checkerboards cut by the frame edge are dropped.
+Re-shoot plan, one clip: ChArUco `docs/video-truth/charuco_13x7.png` (1920x1080, DICT_5X5_100) full-screen on the
+laptop, measure one square. Phone fixed, focus+exposure locked at flight distance (~4 m), 1x, 4K 30, stabilisation off.
+First ~60 s: move the screen at 1-2 m through every frame corner and edge (cut-off views count), tilted ~45 deg, 1 s
+still at each spot. Then fly. Process: `calib --board charuco:13x7 --square <m> --until <s>`, then `floor`, `frame`,
+`run`, `overlay`. Target lens spread max < 2 cm (PROPOSED).
 
 ## Next actions
 1. Operator re-shoots the clip, then the truth roam recording, but only when the operator asks.

@@ -1,13 +1,15 @@
 """Video ground truth for optical-flow roams: a fixed phone films the drone, the orange prop guards give its floor xy.
 
     python -m ground_station.analysis.video_truth calib <board.mp4> --board 8x5 --square 0.026 [--until 60] --out cam.json   # prints lens spread
+    python -m ground_station.analysis.video_truth board --squares 13x7 --out docs/video-truth/charuco_13x7.png   # ChArUco target
+    python -m ground_station.analysis.video_truth calib <board.mp4> --board charuco:13x7 --square <measured m> --out cam.json
     python -m ground_station.analysis.video_truth floor <roam.mp4> --board 8x5 --square 0.026 --out marks.json
     python -m ground_station.analysis.video_truth click <roam.mp4> --world "0,0 1.5,0 0,1.5 1.5,1.5" --out marks.json
     python -m ground_station.analysis.video_truth frame <roam.mp4> --t 2.0 --out frame.png      # check the colour mask
     python -m ground_station.analysis.video_truth run <roam.mp4> --cam cam.json --marks marks.json \
         --csv logs/livewatch/<roam>.csv --out logs/video_truth/<roam>
 
-Pipeline: lens model from a checkerboard video (calib) -> camera pose from a checkerboard lying on the floor (floor:
+Pipeline: lens model from a checkerboard or ChArUco video (calib; ChArUco also uses boards cut off by the frame edge) -> camera pose from a checkerboard lying on the floor (floor:
 found automatically, origin = its first inner corner) or >= 4 measured floor tape marks (click; metres, x = drone
 nose, y = drone left at take-off); report.json gives the 95% floor-pose error 1.5 m out from mark noise -> per frame, orange blobs -> each guard centroid is cast
 as a ray onto the plane z = h(t) + guard offset -> drone centre from the guards (see drone_centre: merged and hidden
@@ -28,6 +30,8 @@ import numpy as np
 HSV_LO, HSV_HI = (5, 120, 100), (22, 255, 255)   # orange, OpenCV H 0-180 (tune with `frame`)
 MIN_AREA = 30                                      # px, smallest blob kept
 DETECTOR_PX = 0.15                                 # px per axis, SB corner error on a perfect render (measured 0.12-0.14 mean)
+CHARUCO_DICT, CHARUCO_MARKER = "DICT_5X5_100", 0.75   # marker side / square side
+CHARUCO_MIN = 12                                   # corners a partial ChArUco view needs to be used
 X_CM, Y_CM, Z_M = "Ctrler.locxPID.FB", "Ctrler.locyPID.FB", "Ctrler.Z_posPID.FB"
 X_SP, Y_SP = "Ctrler.locxPID.Des", "Ctrler.locyPID.Des"   # position setpoints, estimator frame (cm)
 PHASE, ARM = "flight_phase", "DroneStatus.ARM_Status"
@@ -36,6 +40,18 @@ PHASE, ARM = "flight_phase", "DroneStatus.ARM_Status"
 def _cv2():
     import cv2
     return cv2
+
+
+def charuco_board(squares: tuple[int, int], square: float = 1.0):
+    """ChArUco board of `squares` (cols, rows) squares; corner ids and layout follow OpenCV >= 4.6 (non-legacy)."""
+    a = _cv2().aruco
+    return a.CharucoBoard(squares, square, square * CHARUCO_MARKER, a.getPredefinedDictionary(getattr(a, CHARUCO_DICT)))
+
+
+def board_image(squares: tuple[int, int], square_px: int = 140, margin_px: int = 50) -> np.ndarray:
+    """Printable / full-screen ChArUco image: 13x7 squares at 140 px + 50 px margin = 1920x1080."""
+    size = (squares[0] * square_px + 2 * margin_px, squares[1] * square_px + 2 * margin_px)
+    return charuco_board(squares).generateImage(size, marginSize=margin_px)
 
 
 # ---------------------------------------------------------------- geometry
@@ -60,13 +76,18 @@ def _spread_cm(objs, imgs, size, dist_m=4.0) -> dict | None:
 
 
 def calibrate(video: str, board: tuple[int, int], square: float, step: int = 10, t_end: float | None = None,
-              max_frames: int = 45) -> dict:
-    """Lens model from a checkerboard video: every `step`-th frame with a full board, up to `t_end` s (lens part of a
-    clip that goes on to film the roam), thinned evenly to `max_frames` (calibrateCamera time grows steeply with
-    views: measured 0.5 s for 10, 10 s for 30 views of 40 corners at 4K)."""
+              max_frames: int = 45, charuco: bool = False) -> dict:
+    """Lens model from a board video: every `step`-th frame with a full checkerboard (`board` = inner corners) or, with
+    `charuco`, >= CHARUCO_MIN ChArUco corners spanning 3+ rows and columns (`board` = squares; partial boards count, so
+    the frame edges get covered), up to `t_end` s (lens part of a clip that goes on to film the roam), thinned evenly
+    to `max_frames` (calibrateCamera time grows steeply with views: measured 0.5 s for 10, 10 s for 30 views of 40
+    corners at 4K)."""
     cv2 = _cv2()
     obj = np.zeros((board[0] * board[1], 3), np.float32)
     obj[:, :2] = np.mgrid[0:board[0], 0:board[1]].T.reshape(-1, 2) * square
+    if charuco:
+        cb = charuco_board(board, square)
+        det, all_obj = cv2.aruco.CharucoDetector(cb), cb.getChessboardCorners().astype(np.float32)
     cap, objs, imgs, size, i = cv2.VideoCapture(video), [], [], None, 0
     while cap.grab():
         i += 1
@@ -76,12 +97,19 @@ def calibrate(video: str, board: tuple[int, int], square: float, step: int = 10,
             continue
         g = cv2.cvtColor(cap.retrieve()[1], cv2.COLOR_BGR2GRAY)
         size = g.shape[::-1]
+        if charuco:
+            c, ids, _, _ = det.detectBoard(g)
+            o = all_obj[ids.ravel()] if ids is not None else np.zeros((0, 3), np.float32)
+            if len(o) >= CHARUCO_MIN and len(np.unique(o[:, 0])) >= 3 and len(np.unique(o[:, 1])) >= 3:   # not a line
+                objs.append(o)
+                imgs.append(c.astype(np.float32))
+            continue
         found, c = cv2.findChessboardCornersSB(g, board)    # classic detector misses the board in 4K frames
         if found:                                          # a mirrored grid is a rigid flip of a plane: harmless
             objs.append(obj)
             imgs.append(c)
     if len(objs) < 5:
-        raise SystemExit(f"only {len(objs)} frames with a full {board[0]}x{board[1]} board; need >= 5")
+        raise SystemExit(f"only {len(objs)} frames with a usable {board[0]}x{board[1]} board; need >= 5")
     found = len(objs)
     if found > max_frames:
         keep = np.linspace(0, found - 1, max_frames).round().astype(int)
@@ -472,6 +500,8 @@ def main(argv=None):
     c.add_argument("--square", type=float, required=True); c.add_argument("--step", type=int, default=10)
     c.add_argument("--until", type=float, help="s; use only the lens part of a clip that then films the roam")
     c.add_argument("--max-frames", type=int, default=45); c.add_argument("--out", required=True)
+    g = sub.add_parser("board"); g.add_argument("--squares", default="13x7"); g.add_argument("--square-px", type=int, default=140)
+    g.add_argument("--margin-px", type=int, default=50); g.add_argument("--out", required=True)
     k = sub.add_parser("click"); k.add_argument("video"); k.add_argument("--t", type=float, default=1.0)
     k.add_argument("--world", required=True, help='"x,y x,y ..." metres'); k.add_argument("--out", required=True)
     b = sub.add_parser("floor"); b.add_argument("video"); b.add_argument("--board", required=True)
@@ -491,9 +521,15 @@ def main(argv=None):
     o.add_argument("--run", required=True, help="output folder of `run`"); o.add_argument("--out", required=True)
     o.add_argument("--width", type=int, default=1920)
     a = ap.parse_args(argv)
-    if a.cmd == "calib":
-        cols, rows = (int(v) for v in a.board.lower().split("x"))
-        cam = calibrate(a.video, (cols, rows), a.square, a.step, a.until, a.max_frames)
+    if a.cmd == "board":
+        cols, rows = (int(v) for v in a.squares.lower().split("x"))
+        _cv2().imwrite(a.out, board_image((cols, rows), a.square_px, a.margin_px))
+        print(f"wrote {a.out}: {cols}x{rows} squares, {CHARUCO_DICT}; show it full-screen (or print it flat) and measure "
+              f"one square in metres for --square (scale only: the lens model does not depend on it)")
+    elif a.cmd == "calib":
+        charuco = a.board.lower().startswith("charuco:")
+        cols, rows = (int(v) for v in a.board.lower().removeprefix("charuco:").split("x"))
+        cam = calibrate(a.video, (cols, rows), a.square, a.step, a.until, a.max_frames, charuco)
         Path(a.out).write_text(json.dumps(cam, indent=2))
         sp = cam["spread_cm"]
         print(f"rms {cam['rms_px']:.3f} px from {cam['frames']} of {cam['frames_found']} frames, corner coverage "

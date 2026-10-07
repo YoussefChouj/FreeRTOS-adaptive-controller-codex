@@ -207,3 +207,34 @@ def test_calibrate_recovers_intrinsics(tmp_path):
     assert abs(K[0, 2] - 640) < 3 and abs(K[1, 2] - 360) < 3      # measured 640.0 / 362.4
     assert cam["coverage_6x6"] == pytest.approx(18 / 36)          # centre-heavy views
     assert cam["spread_cm"]["rms"] < 1.5 and cam["spread_cm"]["max"] < 3   # measured 0.58 / 1.27 cm at 4 m
+
+
+def test_calibrate_charuco_uses_cut_off_boards(tmp_path):
+    """ChArUco board rendered through the lens by ray casting, half the views cut by the frame edge: they still count."""
+    k2, d2, s, sq, mg = np.array([[900.0, 0, 640], [0, 900.0, 360], [0, 0, 1]]), np.array([0.08, -0.05, 0, 0, 0]), 0.026, 60, 20
+    board = vt.board_image((13, 7), sq, mg)
+    assert vt.board_image((13, 7)).shape == (1080, 1920)                       # full-screen target
+    uv = np.stack(np.meshgrid(np.arange(1280.0), np.arange(720.0)), -1).reshape(-1, 1, 2)
+    ray = np.c_[cv2.undistortPoints(uv, k2, d2).reshape(-1, 2), np.ones(len(uv))]
+    video = str(tmp_path / "charuco.avi")
+    w = cv2.VideoWriter(video, cv2.VideoWriter_fourcc(*"MJPG"), 30, (1280, 720))
+    mid, cut = np.array([6.5 * s, 3.5 * s, 0]), 0
+    for i, a in enumerate(np.radians(np.arange(0, 360, 12))):
+        near = i % 2                                   # odd views: close and aimed off-centre, so the board leaves the frame
+        c = mid + [0.25 * np.cos(a), 0.18 * np.sin(a), -(0.30 if near else 0.55)]   # -z side: board seen as printed
+        aim = [0.12 * np.cos(a + 2), 0.06 * np.sin(a + 2), 0] if near else [0.03 * np.cos(2 * a), 0.02 * np.sin(a), 0]
+        R, t = _lookat(c, mid + aim)
+        d, C = ray @ R, -R.T @ t                       # board-frame rays from the camera centre
+        X = C + (-C[2] / d[:, 2])[:, None] * d
+        m = (mg + X[:, :2] / s * sq - 0.5).astype(np.float32).reshape(720, 1280, 2)
+        img = cv2.remap(board, m[..., 0], m[..., 1], cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=110)
+        cut += bool(img[0].min() < 50 or img[-1].min() < 50 or img[:, 0].min() < 50 or img[:, -1].min() < 50)
+        w.write(cv2.cvtColor(img, cv2.COLOR_GRAY2BGR))
+    w.release()
+    cam = vt.calibrate(video, (13, 7), s, step=1, charuco=True)
+    assert cut == 15 and cam["frames"] == 30                                   # all 15 cut-off views used
+    assert cam["rms_px"] < 0.3 and cam["worst_frame_px"] < 0.5
+    K = np.array(cam["K"])
+    assert abs(K[0, 0] - 900) < 5 and abs(K[1, 1] - 900) < 5      # measured 902.4 / 901.4, rms 0.15 px
+    assert abs(K[0, 2] - 640) < 3 and abs(K[1, 2] - 360) < 5      # measured 639.9 / 363.4
+    assert cam["coverage_6x6"] == pytest.approx(24 / 36)                       # full-board checkerboard test: 18 / 36
