@@ -60,3 +60,23 @@ Refreshed: 2026-10-05 05:33 (mechanical, no LLM)
   - 20ce10e WP-43 report (6 file commits, 5 PROPOSED findings) + firmware-structure not-yet list
   - c3b4780 docs: firmware RAM budget (map-measured) + PROPOSED savings R1 heap->CCM (DMA audit), R2/R3 calibration arrays (protected)
 <!-- AUTO:END -->
+
+## Video truth section moved from HANDOFF on 2026-10-08
+
+Why: the operator wants proof the drone tracked a dense preset path; the optical-flow estimate drifts.
+Tool: `ground_station/analysis/video_truth.py` (`board`, `calib`, `floor`, `frame`, `run`, `overlay`), tests
+`tests/test_video_truth.py` (8 pass). Commits 2317ade..f255496. Usage is in the module docstring.
+Status (10-07): best lens clip = 9x6 board on the laptop screen, rms 1.05 px, spread 1.1 / 2.5 cm max at 4 m.
+Close paper clip: 2.31 px, fx +2.2% (focus breathing). Checkerboards cut by the frame edge are dropped.
+ChArUco clip `D:\Downloads\VID_20261007_090845.mp4` (landscape, board only): 45 frames -> spread 4.4 cm max (fail);
+`--max-frames 120` -> rms 1.185 px, coverage 86%, spread 0.8 / 1.8 cm max at 4 m = PASSES the < 2 cm target.
+Saved: `docs/video-truth/cam_charuco_landscape_2026-10-07.json` (landscape only; flight must be filmed landscape, same
+focus) and `cam_screen9x6_portrait_2026-10-07.json` (portrait fallback). Square 0.025 m ASSUMED (operator to measure).
+Research for the estimator: `docs/agent/research-state-estimation-2026-10-07.md` (section 5 = firmware plan A-G).
+Operator films LANDSCAPE from now on (2026-10-07).
+Re-shoot plan, one clip: ChArUco `docs/video-truth/charuco_13x7.png` (1920x1080, DICT_5X5_100) full-screen on the
+laptop, measure one square. Phone fixed, focus+exposure locked at flight distance (~4 m), 1x, 4K 30, stabilisation off.
+First ~60 s: move the screen at 1-2 m through every frame corner and edge (cut-off views count), tilted ~45 deg, 1 s
+still at each spot. Then fly. Process: `calib --board charuco:13x7 --square <m> --until <s>`, then `floor`, `frame`,
+`run`, `overlay`. Target lens spread max < 2 cm (PROPOSED).
+
