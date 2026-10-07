@@ -221,6 +221,61 @@ def uncertainty(df, segs, inj, a):
     return md, fits
 
 
+ACC = ("Acc_X_Real", "Acc_Y_Real")                                     # body-frame specific force, mg (bmi088_driver.c)
+
+
+def lagcorr(y, x, k):
+    """corr(y(t), x(t - k)); k > 0 = x leads y by k samples."""
+    if k > 0:
+        y, x = y[k:], x[:-k]
+    elif k < 0:
+        y, x = y[:k], x[-k:]
+    return np.corrcoef(y, x)[0, 1]
+
+
+def r2(y, cols):
+    X = np.column_stack(cols + [np.ones(len(y))])
+    res = y - X @ np.linalg.lstsq(X, y, rcond=None)[0]
+    return 1.0 - np.var(res) / max(np.var(y), 1e-15)
+
+
+def force_feature(df, segs):
+    """Can ONE constant weight on the measured outside force (body accel x/y) explain -Delta_hat? Compared with S6."""
+    md = ["## Outside-force feature: body accel x/y vs the disturbance", "",
+          "Body-frame accel x/y sees only non-thrust forces (rope pull, slosh, wind, walls): thrust is along body z. "
+          "If the torque is lever arm x force, -Delta_hat = w * a_xy with ONE constant w for any load. Per segment, "
+          "means removed, both LPF 3 Hz. r = correlation at lag 0; cancel = r^2 = share of the dynamic disturbance "
+          "a constant weight removes; w in control units per g. Lead = lag (+-300 ms) with the best |r|, positive = "
+          "accel leads the disturbance. S6 = best single feature of x, x tanh x, cross, xm (u_nom left out: "
+          "-Delta_hat contains u_nom by construction), then those four together, then together + accel x/y (offline least squares, constant weights). The S6 columns are an UPPER BOUND, partly circular: x and xm together rebuild the PID P term that sits inside -Delta_hat. Accel is an independent sensor, so its columns are clean. "
+          "Caveat: an IMU off the centre of gravity adds (angular accel x offset), a few mg here.", "",
+          "| seg | axis | acc X r / cancel / w | acc Y r / cancel / w | lead X / Y (ms) | best S6 one | S6 four | "
+          "S6 four + acc |", "|---|---|---|---|---|---|---|---|"]
+    for ax in ("pitch", "roll"):
+        for name, i0, i1 in segs:
+            g = df.loc[i0:i1]
+            y = g[ax + "_negd"].to_numpy()
+            y = y - y.mean()
+            acc = [filt(g[c].to_numpy() / 1000.0, hi=3.0) for c in ACC]
+            acc = [v - v.mean() for v in acc]
+            s6 = [filt(g["%s_phi%d" % (ax, i)].to_numpy(), hi=3.0) for i in (1, 2, 3, 5)]
+            s6 = [v - v.mean() for v in s6]
+            cells, leads = [], []
+            for v in acc:
+                r = np.corrcoef(y, v)[0, 1]
+                cells.append("%+.2f / %.2f / %+.3f" % (r, r * r, np.cov(y, v)[0, 1] / max(np.var(v), 1e-15)))
+                rk = [lagcorr(y, v, k) for k in range(-30, 31)]
+                kb = int(np.argmax(np.abs(rk)))
+                leads.append("%+d (r %+.2f)" % (10 * (kb - 30), rk[kb]))
+            one = max(r2(y, [v]) for v in s6 if v.std() > 1e-12) if any(v.std() > 1e-12 for v in s6) else 0.0
+            four = r2(y, [v for v in s6 if v.std() > 1e-12])
+            md.append("| %s | %s | %s | %s | %s | %.2f | %.2f | %.2f |" % (
+                name, ax, cells[0], cells[1], " / ".join(leads), one, four,
+                r2(y, [v for v in s6 if v.std() > 1e-12] + acc)))
+    md.append("")
+    return md
+
+
 def capability(df, mseg):
     """Per-feature learning drive gamma_i*E[phi_i^2/(1+|phi|^2)] (mrac.c grad = -s*phi_i/(1+|phi|^2)) and reach."""
     md = ["## Feature capability (all MRAC segments pooled)", "",
@@ -374,7 +429,7 @@ def main():
     md.append("")
     umd, fits = uncertainty(df, segs, inj, a)
     cmd_, caps = capability(df, mseg) if mseg else ([], {})
-    md += umd + cmd_
+    md += umd + force_feature(df, segs) + cmd_
     with open(os.path.join(a.out, "adaptive_stats.md"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(md) + "\n")
 
@@ -553,6 +608,26 @@ def main():
         fig.tight_layout()
         fig.savefig(os.path.join(a.out, "adaptive_uncertainty.png"), dpi=160)
         plt.close(fig)
+    # outside force: -Delta_hat vs the best constant weight on body accel x/y (longest segment, 30 s)
+    name, i0, i1 = max(segs, key=lambda s: s[2] - s[1])
+    j0 = i0 + max(0, (i1 - i0) // 2 - 1500)
+    g = df.loc[j0:min(i1, j0 + 3000)]
+    fig, axs = plt.subplots(2, 1, figsize=(16, 8), sharex=True)
+    for k, ax in enumerate(("pitch", "roll")):
+        y = g[ax + "_negd"].to_numpy()
+        axs[k].plot(g.t, y - y.mean(), color="k", lw=1.0, label="-Delta_hat (needed, LPF 3 Hz, mean removed)")
+        for c, col in zip(ACC, ("tab:red", "tab:blue")):
+            v = filt(g[c].to_numpy() / 1000.0, hi=3.0)
+            v = v - v.mean()
+            w = np.cov(y, v)[0, 1] / max(np.var(v), 1e-15)
+            axs[k].plot(g.t, w * v, color=col, lw=1.0, label="%+.3f x %s (g, LPF 3 Hz)" % (w, c))
+        axs[k].set_ylabel(ax)
+        axs[k].legend(fontsize=8, ncol=3, loc="upper left")
+    axs[-1].set_xlabel("t (s)")
+    fig.suptitle("%s: can one constant weight on the measured outside force (body accel) explain the disturbance?" % name)
+    fig.tight_layout()
+    fig.savefig(os.path.join(a.out, "adaptive_force_feature.png"), dpi=160)
+    plt.close(fig)
     print("wrote", a.out, "segments:", [s[0] for s in segs])
 
 

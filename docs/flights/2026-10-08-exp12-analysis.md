@@ -141,3 +141,16 @@ learns (speed 0.19, reach 0.29, actual 0.18). Bias 63 % settle time: pitch 1-21 
    feature mask to one MRAC log preset so every segment labels itself.
 6. **Drift.** MRAC has no x/y channel (mask 0x0F); drift is the same under PID and MRAC. Options: locxs/ys Ki
    0.008 -> ~0.02, or an adaptive x/y bias (firmware). First the 20 s hands-off check.
+
+## Outside-force feature test (measured, offline, `adaptive_stats.md` "Outside-force feature")
+
+Idea (grilling 2026-10-08): body-frame accel x/y sees only non-thrust forces (rope pull, slosh, wind, walls), so
+-Delta_hat = w * a_xy with one constant weight (lever arm) for any load. Plot `adaptive_force_feature.png`.
+
+- pitch vs acc X: r -0.09 to -0.37 at lag 0 (constant-weight cancel 0.01-0.14), w -0.03 to -0.14 per g, same
+  sign in all 7 segments; best with acc X leading by 60-120 ms (r up to -0.47, cancel ~0.22).
+- roll vs acc Y: r -0.02 to -0.23 (cancel 0.00-0.05). Cross pairs (pitch-Y, roll-X) are weaker still.
+- adding acc x/y to the S6 four (x, x tanh x, cross, xm) adds 0.00-0.08 cancel.
+- Verdict: right axis pairing and sign, causal lead, but it explains only a small share of the 0-3 Hz
+  disturbance. Open checks (PROPOSED): restrict to the 0.25-0.9 Hz swing band (the 1-3 Hz part of -Delta_hat may
+  be motor/PID noise), add acc Z (vertical rope force x knot offset), and log the knot position.

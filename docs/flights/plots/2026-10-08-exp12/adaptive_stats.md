@@ -147,6 +147,27 @@ Pendulum: L = rope 33 cm + half bottle 10 cm = 0.43 m. Simple sqrt(g/L)/2pi = 0.
 | F5 PID | 0.68 | 0.59 |
 | F5 MRAC | 0.88 | 0.49 |
 
+## Outside-force feature: body accel x/y vs the disturbance
+
+Body-frame accel x/y sees only non-thrust forces (rope pull, slosh, wind, walls): thrust is along body z. If the torque is lever arm x force, -Delta_hat = w * a_xy with ONE constant w for any load. Per segment, means removed, both LPF 3 Hz. r = correlation at lag 0; cancel = r^2 = share of the dynamic disturbance a constant weight removes; w in control units per g. Lead = lag (+-300 ms) with the best |r|, positive = accel leads the disturbance. S6 = best single feature of x, x tanh x, cross, xm (u_nom left out: -Delta_hat contains u_nom by construction), then those four together, then together + accel x/y (offline least squares, constant weights). The S6 columns are an UPPER BOUND, partly circular: x and xm together rebuild the PID P term that sits inside -Delta_hat. Accel is an independent sensor, so its columns are clean. Caveat: an IMU off the centre of gravity adds (angular accel x offset), a few mg here.
+
+| seg | axis | acc X r / cancel / w | acc Y r / cancel / w | lead X / Y (ms) | best S6 one | S6 four | S6 four + acc |
+|---|---|---|---|---|---|---|---|
+| F1 PID | pitch | -0.36 / 0.13 / -0.141 | -0.05 / 0.00 / -0.022 | +90 (r -0.44) / -100 (r -0.08) | 0.08 | 0.30 | 0.38 |
+| F2 MRAC | pitch | -0.19 / 0.03 / -0.063 | -0.10 / 0.01 / -0.033 | +60 (r -0.19) / +300 (r +0.14) | 0.05 | 0.32 | 0.34 |
+| F3 PID | pitch | -0.32 / 0.10 / -0.095 | -0.12 / 0.01 / -0.038 | +60 (r -0.35) / +60 (r -0.13) | 0.07 | 0.36 | 0.42 |
+| F3 MRAC | pitch | -0.09 / 0.01 / -0.029 | -0.04 / 0.00 / -0.014 | -240 (r -0.21) / +140 (r -0.14) | 0.45 | 0.67 | 0.67 |
+| F4 MRAC | pitch | -0.26 / 0.07 / -0.079 | -0.04 / 0.00 / -0.013 | +100 (r -0.33) / +270 (r -0.17) | 0.06 | 0.29 | 0.33 |
+| F5 PID | pitch | -0.35 / 0.12 / -0.143 | -0.08 / 0.01 / -0.036 | +70 (r -0.37) / +300 (r +0.15) | 0.27 | 0.52 | 0.55 |
+| F5 MRAC | pitch | -0.37 / 0.14 / -0.117 | +0.15 / 0.02 / +0.061 | +120 (r -0.47) / -70 (r +0.17) | 0.07 | 0.60 | 0.64 |
+| F1 PID | roll | -0.00 / 0.00 / -0.001 | -0.15 / 0.02 / -0.049 | +180 (r -0.05) / +80 (r -0.19) | 0.03 | 0.33 | 0.35 |
+| F2 MRAC | roll | -0.11 / 0.01 / -0.034 | -0.23 / 0.05 / -0.066 | +40 (r -0.12) / +70 (r -0.25) | 0.01 | 0.16 | 0.18 |
+| F3 PID | roll | -0.08 / 0.01 / -0.031 | -0.10 / 0.01 / -0.041 | -300 (r -0.12) / -300 (r +0.14) | 0.02 | 0.23 | 0.23 |
+| F3 MRAC | roll | -0.10 / 0.01 / -0.037 | -0.21 / 0.05 / -0.070 | -90 (r -0.12) / +0 (r -0.21) | 0.06 | 0.13 | 0.17 |
+| F4 MRAC | roll | -0.07 / 0.00 / -0.018 | -0.06 / 0.00 / -0.018 | -260 (r -0.22) / -300 (r +0.17) | 0.03 | 0.19 | 0.19 |
+| F5 PID | roll | -0.00 / 0.00 / -0.000 | -0.02 / 0.00 / -0.006 | -280 (r -0.15) / -300 (r -0.20) | 0.03 | 0.25 | 0.26 |
+| F5 MRAC | roll | -0.15 / 0.02 / -0.043 | -0.05 / 0.00 / -0.021 | -120 (r -0.20) / +120 (r -0.13) | 0.05 | 0.15 | 0.17 |
+
 ## Feature capability (all MRAC segments pooled)
 
 Theta_i moves at gamma_i * s * phi_i / (1 + |phi|^2) (API/mrac.c:748, denom :932), so a feature's learning drive is gamma_i * E[phi_i^2 / (1 + |phi|^2)] (speed, shown relative to the bias). Its reach is lim_i * RMS(phi_i): the largest torque it can make with Theta_i at its projection bound. gamma_i, lim_i from the MRAC_BASIS rows (pitch/roll/yaw/z), mrac_g_phi and the preset g assumed 1.
