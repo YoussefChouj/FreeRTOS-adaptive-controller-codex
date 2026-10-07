@@ -191,11 +191,14 @@ Spec: `docs/dashboard-platform/AGENT_MAP_SPEC.md`. No vector RAG, no LLM-written
 | `/session-end` | Wrap up — summarize, verify, update session state |
 | `/stream-log` | Reference: variable-rate CSV logging + rebuild/flash pipeline |
 | `/agy-delegate` | Hand a task to an Antigravity worker in WSL tmux and supervise it |
-| `/workflow-b` | Workflow B: launch a fly campaign (operator arms by RC, agent flies scenarios via dashboard MCP) |
+| `/workflow-a` | Workflow A: manual RC flight, WiFi `stream_log` capture, Keil preset, offline `flight_review` |
+| `/workflow-b` | Workflow B: launch a fly campaign; the operator runs `campaign_fly` in a terminal (MCP only if agent-flown) |
 | `/workflow-c` | Workflow C: fly one flight at a time, debrief each (`ground_station.analysis.flight_debrief`), propose the next |
 
-Workflow A (manual flight, offline analysis) has no skill: `python -m ground_station.analysis.flightlab analyze
-<log dir>` (spec `docs/analysis/flightlab-spec.md`). Campaigns for B/C: `ground_station/service/campaigns/*.yaml`.
+All three are terminal and chat only (operator 2026-10-07): confirmations are QA in chat, gain and preset writes
+go through the Keil watch window, no dashboard approvals. Offline analysis of a recorder session:
+`python -m ground_station.analysis.flightlab analyze <log dir>` (spec `docs/analysis/flightlab-spec.md`).
+Campaigns for B/C: `ground_station/service/campaigns/*.yaml`.
 
 Probe and capture references: `docs/skills/livewatch.md`, `docs/skills/capture-multislot.md`.
 

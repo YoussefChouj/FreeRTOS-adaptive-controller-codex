@@ -14,11 +14,19 @@ Q1 campaign ─> Q2 pack ─> campaign_launch (1 command) ─> Q3 log plan ─> 
   ─> Q4 checklist ─> "arm by RC, say go" ─> campaign_go ─> campaign_state once per flight ─> send outputs
 ```
 
+**Default is the terminal (operator 2026-10-07): no dashboard approvals.** After Q1-Q3 and `campaign_launch`,
+give the operator one command in a `bash` block and let them run it:
+`python -m ground_station.service.campaign_fly <launch copy> --pack <id>`. It starts the service if 8081 is down,
+prints the preflight (they fix any FAIL), waits for the RC arm and a typed `go`, flies, and writes the same
+outputs as section 4. Ctrl+C once lands, twice aborts, RC ch10 kills. The MCP path below (sections 1 Preflight,
+2, 3) is used only when the operator asks for an agent-flown campaign.
+
 ## Hard rules
 
 - You never arm, never spin motors, never flash, never edit firmware. The operator arms by RC.
-- You never POST to the 8081 HTTP API yourself. Use only the dashboard MCP tools: `campaign_preflight`,
+- You never POST to the 8081 HTTP API yourself. Agent-flown only: the dashboard MCP tools `campaign_preflight`,
   `campaign_state`, `campaign_go`, `campaign_pause`, `campaign_land`, `campaign_abort`, `say`.
+- Confirmations are QA in chat, never the dashboard queue.
 - Fence (firmware, decision 2-4): hard z 1.7 m, |x| 1.6 m, |y| 2.0 m from the ground-center origin.
   Soft boundary 0.3 m inside (z 1.4, |x| 1.3, |y| 1.7). Every scenario point must be inside the soft
   boundary; `load_campaign` rejects anything else. Never widen these numbers.

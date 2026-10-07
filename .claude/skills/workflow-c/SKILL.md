@@ -20,12 +20,13 @@ Read `.claude/skills/workflow-b/SKILL.md` once; its hard rules, checklist and fa
 ## Hard rules (same as workflow B, plus two)
 
 - Never arm, spin motors, flash or edit firmware. The operator arms by RC.
-- Dashboard only through the MCP tools (`mcp__dashboard__*`). Never POST to 8081 by hand.
-- One question per AskUserQuestion, recommended option first.
+- Terminal and chat only (operator 2026-10-07): no dashboard approvals, no `mcp__dashboard__run_plan`, no queue.
+  Confirmations are QA in chat: one question per AskUserQuestion, recommended option first.
 - **Gains change only on the ground, disarmed, between flights**, and only after the operator picks the change in
-  chat. Apply it with `mcp__dashboard__run_plan` (CMD 0x01 steps); the operator approves it in the dashboard queue.
-  Gains written on the ground persist until reboot; a reboot or pack swap with a power cycle resets them to
-  `API/pid.c`. Say so when it matters.
+  chat. The operator applies it in the Keil watch window: a preset (`kp_id`, then `kp_go = 1`, check `kp_active`;
+  table in `docs/flights/2026-10-08-morning-brief.md`) or one field (e.g. `Ctrler.Z_ratePID.Kp`). Watch-window
+  writes persist until reboot; a reboot or pack swap with a power cycle resets them to `API/pid.c` and preset 0.
+  Say so when it matters.
 - Every threshold and step in the debrief is PROPOSED. Present it as a suggestion, never as a measured fact.
 
 ## Session start
@@ -58,7 +59,7 @@ Read `.claude/skills/workflow-b/SKILL.md` once; its hard rules, checklist and fa
    ```
    python -m ground_station.analysis.flight_debrief logs/campaigns/<campaign>_<stamp> --run logs/workflow-c/<run>
    ```
-   Add `--applied LOOP.GAIN` (or `LOOP.GAIN=VALUE`) for each gain write whose run_plan finished before this
+   Add `--applied LOOP.GAIN` (or `LOOP.GAIN=VALUE`) for each gain the operator confirmed written before this
    flight. Without it the debrief credits no proposed change (a proposal is not a write).
    It writes `<run>/<NN>_<flight_id>/` with `debrief.md`, `debrief.json`, `plots/tracking.png`,
    `plots/analysis.png`, `next.yaml`, and appends `<run>/history.jsonl`.
@@ -73,16 +74,17 @@ Read `.claude/skills/workflow-b/SKILL.md` once; its hard rules, checklist and fa
    - repeat the same flight unchanged (to check repeatability);
    - a different change or flight the operator names ("Other");
    - stop for tonight.
-7. **Apply** an accepted gain change: `mcp__dashboard__run_plan` with the `step` from `debrief.json`
-   (`{"action": "command", "args": {"command_id": 1, "index": axis*3+gain, "value": v}}`), drone on the ground and
-   disarmed. Wait for the operator to approve it in the queue; check the plan finished with `get_plan`.
+7. **Apply** an accepted gain change: give the operator the Keil watch-window line (expression and value, from
+   the `step` in `debrief.json`), drone on the ground and disarmed. Wait until they say it is written and the
+   watch window reads it back.
 8. Back to 1 with the new `next.yaml` (edit its `scenario_args` first if the operator chose something else).
 
 ## What the debrief can and cannot change
 
-| loop | CMD 0x01 writable | how |
+| loop | ground write | how |
 |---|---|---|
-| pitch/roll/yaw angle, gyrox/y/z rate, Z_ratePID | yes (bounds: 200, Z_ratePID Kp 800) | run_plan, on the ground |
+| pitch/roll/yaw angle, gyrox/y/z rate, Z_ratePID | yes (bounds: 200, Z_ratePID Kp 800) | Keil watch window `Ctrler.<loop>.Kp/Ki/Kd`, disarmed |
+| Keil presets 0-6 (of1, MRAC axis mask, p/r gamma, Z_ratePID headroom) | yes | `kp_id`, then `kp_go = 1`, disarmed |
 | Z_posPID, locx/locyPID, locxs/locysPID | no | firmware table edit + flash: lab only, operator decides |
 | CG, props, motors, floor texture, light | no | the operator, on the bench |
 
