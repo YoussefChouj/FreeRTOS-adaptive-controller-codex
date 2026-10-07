@@ -311,3 +311,13 @@ def test_survey_recovers_yaw_handedness_and_scale():
     assert abs(sv["yaw_board_to_drone_deg"] - 30) < 0.1 and abs(sv["scale_tape_over_board"] - 0.95) < 1e-4
     assert abs(sv["cam_height_tape_over_board"] - 0.95) < 1e-6
     assert np.allclose(vt.to_drone([[0.3, 0.0]], sv), [[0.285 * np.cos(np.radians(30)), 0.285 * np.sin(np.radians(30))]])
+
+
+def test_velocity_fit_recovers_lag_scale_and_frame():
+    t = np.arange(0, 20, 0.02)
+    truth = np.c_[0.3 * np.sin(1.3 * t), 0.2 * np.sin(0.7 * t + 1)]
+    v = np.c_[0.3 * 1.3 * np.cos(1.3 * t), 0.2 * 0.7 * np.cos(0.7 * t + 1)]
+    est_v = np.c_[[np.interp(t - 0.1, t, v[:, i]) for i in (0, 1)]].T * 0.5   # reads half, 0.1 s late
+    r = vt.velocity_fit(t, truth, est_v, np.cumsum(est_v, 0) * 0.02)
+    assert abs(r["lag_s"] - 0.1) < 0.021 and abs(r["scale_x"] - 2) < 0.05 and abs(r["scale_y"] - 2) < 0.05
+    assert abs(r["rot_deg"]) < 1 and r["corr_x"] > 0.99 and abs(r["est_pos_slope_over_v"] - 1) < 0.05

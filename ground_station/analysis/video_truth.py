@@ -34,6 +34,7 @@ CHARUCO_DICT, CHARUCO_MARKER = "DICT_5X5_100", 0.75   # marker side / square sid
 CHARUCO_MIN = 12                                   # corners a partial ChArUco view needs to be used
 X_CM, Y_CM, Z_M = "Ctrler.locxPID.FB", "Ctrler.locyPID.FB", "Ctrler.Z_posPID.FB"
 X_SP, Y_SP = "Ctrler.locxPID.Des", "Ctrler.locyPID.Des"   # position setpoints, estimator frame (cm)
+X_V, Y_V = "Ctrler.locxsPID.FB", "Ctrler.locysPID.FB"     # velocity estimate, estimator frame (cm/s)
 PHASE, ARM = "flight_phase", "DroneStatus.ARM_Status"
 
 
@@ -469,6 +470,68 @@ def despike(xy, n: int = 9, k: float = 3.0) -> tuple[np.ndarray, int]:
     return out, n_bad
 
 
+def slope(x, dt: float, half: int) -> np.ndarray:
+    """Zero-phase least-squares slope over +-half samples (Savitzky-Golay first derivative); edges NaN."""
+    k = np.arange(-half, half + 1, dtype=float)
+    v = np.convolve(x, k[::-1] / (k @ k * dt), mode="same")
+    v[:half] = v[len(v) - half:] = np.nan
+    return v
+
+
+def fit_2d(a, b) -> dict:
+    """truth a ~ k * est b as complex numbers: rotation, scale and rotation-free coherence (1 = same shape)."""
+    za, zb = a @ np.array([1, 1j]), b @ np.array([1, 1j])
+    k, n = np.vdot(zb, za) / np.vdot(zb, zb), np.sqrt(np.vdot(za, za).real * np.vdot(zb, zb).real)
+    return {"rot_deg": round(float(np.degrees(np.angle(k))), 1), "scale_2d": round(float(abs(k)), 3),
+            "coherence": round(float(abs(np.vdot(zb, za)) / n), 3)}
+
+
+def velocity_fit(t, truth_xy, est_v, est_xy=None, lags=np.arange(-0.2, 0.61, 0.02), dt=0.02, half=10,
+                 band_s=2.5, scan_s=2.0) -> dict:
+    """Truth velocity (zero-phase slope of the video track) against the estimator's velocity, same frame: lag of
+    the estimate (positive = late, picked by rotation-free coherence), per-axis scale and correlation, the 2-D fit
+    truth ~ k * est, and that fit split into slow drift (band_s moving average) and fast wobble (the rest).
+    Only a flight driven by the setpoint (steps) or an open-loop carry grades the estimator. In a hold the loop is
+    driven by estimator error n: est = S n, truth = -T n, so truth ~ -L est (L the loop gain) and the fit reads
+    ~180 deg with |k| ~ |L| whatever the estimator; err_rms_mps (raw est - truth) is the only fair number there.
+    In a driven test, slow right but fast reversed points at the flow's gyro (tilt-rate) compensation, not the frame.
+    est_xy: also report the slope of the estimated position against est_v (a units and lag self-check).
+    sync_scan: [lag, coherence, rot_deg] every 0.1 s over +-scan_s, to catch a video/telemetry sync error (a peak
+    far outside the physical lag range, or rot flipping with lag, means the clocks are off, not the estimator)."""
+    g = np.arange(t[0], t[-1], dt)
+    tv = np.c_[[slope(np.interp(g, t, truth_xy[:, i]), dt, half) for i in (0, 1)]].T
+
+    def at(lag):
+        ev = np.c_[[np.interp(g + lag, t, est_v[:, i], left=np.nan, right=np.nan) for i in (0, 1)]].T
+        ok = np.isfinite(tv).all(1) & np.isfinite(ev).all(1)
+        return fit_2d(tv[ok], ev[ok]), tv[ok], ev[ok]
+    best = None
+    for lag in lags:
+        f, a, b = at(lag)
+        if best is None or f["coherence"] > best[0]["coherence"]:
+            best = (f, float(lag), a, b)
+    f, lag, a, b = best
+    s = [float(a[:, i] @ b[:, i] / (b[:, i] @ b[:, i])) for i in (0, 1)]
+    c = [float(np.corrcoef(a[:, i], b[:, i])[0, 1]) for i in (0, 1)]
+    m = int(round(band_s / dt / 2))
+    lo = lambda x: np.c_[[np.convolve(x[:, i], np.ones(2 * m + 1) / (2 * m + 1), mode="same") for i in (0, 1)]].T[m:-m]
+    out = {"lag_s": round(lag, 2), "scale_x": round(s[0], 3), "scale_y": round(s[1], 3),
+           "corr_x": round(c[0], 3), "corr_y": round(c[1], 3), **f,
+           "slow": fit_2d(lo(a), lo(b)), "fast": fit_2d(a[m:-m] - lo(a), b[m:-m] - lo(b)),
+           "truth_v_rms_mps": round(float(np.sqrt(np.mean(np.sum(a ** 2, 1)))), 3),
+           "resid_rms_mps": round(float(np.sqrt(np.mean(np.sum((a - b * s) ** 2, 1)))), 3),
+           "err_rms_mps": round(float(np.sqrt(np.mean(np.sum((b - a) ** 2, 1)))), 3)}
+    if scan_s:
+        out["sync_scan"] = [[round(float(L), 1), (f := at(L)[0])["coherence"], f["rot_deg"]]
+                            for L in np.arange(-scan_s, scan_s + 1e-9, 0.1)]
+    if est_xy is not None:
+        dv = np.c_[[slope(np.interp(g, t, est_xy[:, i]), dt, half) for i in (0, 1)]].T
+        ev = np.c_[[np.interp(g, t, est_v[:, i]) for i in (0, 1)]].T
+        ok = np.isfinite(dv).all(1)
+        out["est_pos_slope_over_v"] = round(float(np.sum(dv[ok] * ev[ok]) / np.sum(ev[ok] ** 2)), 3)
+    return out
+
+
 def align(est_xy, truth_xy, n_fit: int) -> tuple[np.ndarray, bool]:
     """Orthogonal Q (rotation or reflection) with truth ~ est @ Q.T, fitted on the first n_fit samples.
     Both inputs are already relative to the take-off point."""
@@ -579,6 +642,12 @@ def run(video, cam, marks, csv_path, out, guard_offset=0.0, align_s=None, stride
     def path(xy_):
         return float(np.sum(np.hypot(np.diff(np.interp(g, te[seg], xy_[:, 0])), np.diff(np.interp(g, te[seg], xy_[:, 1])))))
     path_t, path_e = path(t_c), path(e_c)
+    try:                                               # velocity estimate: older logs lack it
+        vl = read_livewatch(csv_path, [X_V, Y_V])
+        ev = np.c_[[np.interp(te, vl["t"] - tel["t"][0], vl[n]) for n in (X_V, Y_V)]].T / 100.0 @ (A @ q).T
+        vel = velocity_fit(te[seg], t_c, ev[seg], e_c)
+    except SystemExit:
+        vel = None
     rep = {
         "floor_reproj_px": round(reproj, 2),
         "floor_noise_err_1p5m_m": round(pose_noise(K, dist, marks["world"], marks["pixel"],
@@ -594,6 +663,7 @@ def run(video, cam, marks, csv_path, out, guard_offset=0.0, align_s=None, stride
         **({} if survey is None else {"after_yaw_fit": {
             "scale_truth_over_est": round(float(np.nansum(t_c * e_f) / np.nansum(e_f * e_f)), 4),
             "err_rms_m": round(float(np.sqrt(np.nanmean(np.sum((e_f - t_c) ** 2, axis=1)))), 3)}}),
+        **({} if vel is None else {"velocity": vel}),
         "truth_at_disarm_m": [round(float(v), 3) for v in t_c[-1]],
         "est_at_disarm_m": [round(float(v), 3) for v in e_c[-1]],
         "err_at_disarm_m": [round(float(v), 3) for v in err[-1]],
