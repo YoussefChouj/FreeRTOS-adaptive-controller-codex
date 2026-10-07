@@ -14,7 +14,8 @@ ChArUco clip `D:\Downloads\VID_20261007_090845.mp4` (landscape, board only): 45 
 `--max-frames 120` -> rms 1.185 px, coverage 86%, spread 0.8 / 1.8 cm max at 4 m = PASSES the < 2 cm target.
 Saved: `docs/video-truth/cam_charuco_landscape_2026-10-07.json` (landscape only; flight must be filmed landscape, same
 focus) and `cam_screen9x6_portrait_2026-10-07.json` (portrait fallback). Square 0.025 m ASSUMED (operator to measure).
-Research for the estimator: `docs/agent/research-state-estimation-2026-10-07.md`.
+Research for the estimator: `docs/agent/research-state-estimation-2026-10-07.md` (section 5 = firmware plan A-G).
+Operator films LANDSCAPE from now on (2026-10-07).
 Re-shoot plan, one clip: ChArUco `docs/video-truth/charuco_13x7.png` (1920x1080, DICT_5X5_100) full-screen on the
 laptop, measure one square. Phone fixed, focus+exposure locked at flight distance (~4 m), 1x, 4K 30, stabilisation off.
 First ~60 s: move the screen at 1-2 m through every frame corner and edge (cut-off views count), tilted ~45 deg, 1 s

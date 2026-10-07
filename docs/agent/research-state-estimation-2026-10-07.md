@@ -36,6 +36,24 @@ Attitude stays in `imu_update.c`.
 3. Replay candidate filters offline (`sim/ekf.py` is the golden model) and pick by truth error.
 4. Port the winner in shadow mode, review, `tools/check.sh`, flash, validation roam.
 
+## 5. Mapping onto the current firmware (code read 2026-10-07; all gains PROPOSED, none measured)
+Today: IMU read at 1 kHz (`USER/main.c:396` Sensor_Data_Prepare; gyro ODR 2 kHz / BW 532 Hz, accel ODR 1600 Hz), fixed
+Butterworth 50/30 Hz LPF (`API/bmi088_driver.c:486/503`), consumed at 200 Hz. Horizontal = `ekf_of.c` fed the module's
+mode-2 inertial-fused velocity `of2_d*_fix` minus fixed trims (`StabilizerTask.c:275`), gated on `of_quality`, ZUPT on
+ground. Vertical = module height `of_alt_cm` + LP height rate `of2_h_f2_v`. RPM = telemetry + shadow thrust estimator only.
+Parser already decodes mode 0 raw (s8), mode 1 height-fused, module gyro 0x01 (`Ano_OF.c:178-217`); whether the module
+streams modes 0/1 is UNKNOWN until logged.
+
+| Step | Change | Where | Fixes | Check |
+|---|---|---|---|---|
+| A | Truth roam log (landscape video) with of0/of1/of2, quality, module gyro, of_alt_cm, RPM x4, FC gyro/accel @200 Hz | livewatch, no flash | data for B-F | operator asks first |
+| B | Offline fits vs truth: flow scale + lag, drag k_d (a_xy vs v*sum w), k_T (a_z vs sum w^2) | `sim/ekf.py` replay | numbers for C-F | fit residuals |
+| C | Drag-aided velocity update in `ekf_of.c`: z = a_xy (body), h_v = -k_d*sum(w)/m, no new states | `ekf_of.c` + Of_TickKf | drift when flow quality drops (today: predict-only) | replay, then shadow |
+| D | Replace mode-2 input with mode-1 or mode-0 + own derotation (FC gyro) + range; add flow-scale state; delay buffer | `ekf_of.c`, StabilizerTask 730 | double fusion, fixed trims, lag | replay vs truth |
+| E | RPM notch per motor on the 1 kHz IMU path, before the Butterworth | `bmi088_driver.c` | vibration in accel (feeds C); lets LPF cutoffs rise (less control lag) | hover spectrum first |
+| F | Thrust z-update (k_T sum w^2 / m vs a_z), promote `thrust_estimators.c` mass/force | height channel | height-rate lag, payload, ground effect | replay |
+| G | Module IMU as cross-check / time-offset; learned IO later | - | faults, sync | low priority |
+
 ## Sources
 - Leishman, Macdonald, Beard 2014, Quadrotors & Accelerometers: http://www.et.byu.edu/~beard/papers/preprints/LeishmanMacdonaldBeard__.pdf
 - Abeywardena et al., drift-free velocity estimator: https://arxiv.org/pdf/1509.03388
