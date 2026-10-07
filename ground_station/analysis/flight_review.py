@@ -7,6 +7,8 @@ Sections:
                    (WP-42 P3), the HOVER hold window, and the prim_state / safety_trip timeline
   setpoint/actual  x / y / z position (campaign_capture.POSITION_AXES) and every logged ``<loop>.Des`` / ``<loop>.FB``
                    pair, with error RMS and max over the hold (the whole flight span without one)
+  injection        per change of mrac_flags.output_injection_on while armed: 4 s bins before / after (z, x/y and
+                   attitude spread, u_ad / u_nom vs rate correlation, motor share at the high limit) and a +-10 s plot
   spectra          attitude and rate feedback (Hann rFFT on a uniform resample) with the largest line of each
   saturation       motor commands against the bench limits; share of flight-span samples at the high / low limit
   sample interval  histogram of the frame interval per telemetry slot, with median / p99 / max and the gap count
@@ -172,6 +174,106 @@ def interval_stats(frames: Mapping[int, list[float]]) -> dict[int, dict[str, Any
     return out
 
 
+# ---- MRAC injection switch -------------------------------------------------------------------------------------
+
+INJECTION = "mrac_flags.output_injection_on"
+ARMED = "DroneStatus.ARM_Status"
+U_AD = {"pitch": "mrac_state.pitch.u_ad", "roll": "mrac_state.roll.u_ad"}
+U_NOM = {"pitch": "mrac_state.pitch.u_nom", "roll": "mrac_state.roll.u_nom"}
+SWITCH_PAD_S = 10.0     # plot window either side of an injection switch
+SWITCH_BIN_S = 4.0      # stats bin length
+SWITCH_BINS = (2, 4)    # bins before / after a switch (cut at the next switch and at disarm)
+
+
+def armed_span(series: Series) -> tuple[float, float] | None:
+    ts, vs = series.get(ARMED, ([], []))
+    on = [t for t, v in zip(ts, vs) if int(round(v)) != 0]
+    return (on[0], on[-1]) if on else None
+
+
+def switch_events(series: Series) -> list[dict[str, Any]]:
+    """Every change of the MRAC output-injection flag while armed (the whole recording without an arm stream)."""
+    ts, vs = series.get(INJECTION, ([], []))
+    arm = armed_span(series)
+    out, prev = [], None
+    for t, v in zip(ts, vs):
+        on = int(round(v)) != 0
+        if prev is not None and on != prev and (arm is None or arm[0] <= t <= arm[1]):
+            out.append({"t_s": round(t, 2), "to": "on" if on else "off"})
+        prev = on
+    return out
+
+
+def _corr(series: Series, a: str, b: str, w: tuple[float, float]) -> float | None:
+    import numpy as np
+    ta, va = _in(*series.get(a, ([], [])), w)
+    tb, vb = series.get(b, ([], []))
+    if len(ta) < 8 or len(tb) < 2:
+        return None
+    x, y = np.asarray(va), np.interp(ta, tb, vb)
+    if x.std() == 0 or y.std() == 0:
+        return None
+    return round(float(np.corrcoef(x, y)[0, 1]), 2)
+
+
+def _sd(series: Series, sym: str, w: tuple[float, float], scale: float = 1.0) -> float | None:
+    _, vs = _in(*series.get(sym, ([], [])), w)
+    return round(scale * statistics.pstdev(vs), 3) if len(vs) > 2 else None
+
+
+def _mean(series: Series, sym: str, w: tuple[float, float], scale: float = 1.0) -> float | None:
+    _, vs = _in(*series.get(sym, ([], [])), w)
+    return round(scale * sum(vs) / len(vs), 3) if vs else None
+
+
+MOTOR_PWM_MAX = 4000.0  # BSP/pwm.h Motor_PWM_MAX: pwm.c clamps the CCR there, the logged mymotor.* can exceed it
+
+
+def motor_top(series: Series, sat: tuple[float, float] | None) -> float | None:
+    """The high limit: the bench one when given, else the firmware rail (logged commands at or past it are clipped)."""
+    return sat[0] if sat is not None else MOTOR_PWM_MAX
+
+
+def bin_stats(series: Series, w: tuple[float, float], top: float | None) -> dict[str, Any]:
+    """One window: injection share, z vs setpoint, x/y spread, attitude spread and peak, the u_ad-rate correlation
+    (positive = u_ad pushes with the rate, i.e. it removes damping) and the motor share at the high limit."""
+    z, x, y = POSITION_AXES[2], POSITION_AXES[0], POSITION_AXES[1]
+    row: dict[str, Any] = {"t0": round(w[0], 1), "t1": round(w[1], 1), "inj": _mean(series, INJECTION, w),
+                           "z": _mean(series, z.feedback, w, z.to_m), "z_des": _mean(series, z.reference, w, z.to_m),
+                           "x_sd": _sd(series, x.feedback, w, x.to_m), "y_sd": _sd(series, y.feedback, w, y.to_m),
+                           "pit_sd": _sd(series, ATTITUDE[1], w), "rol_sd": _sd(series, ATTITUDE[0], w)}
+    _, pv = _in(*series.get(ATTITUDE[1], ([], [])), w)
+    row["pit_pk"] = round(max(abs(v - sum(pv) / len(pv)) for v in pv), 2) if pv else None
+    for ax in ("pitch", "roll"):
+        row[f"{ax[:3]}_ad_r"] = _corr(series, U_AD[ax], fd.RATE_FB[ax], w)
+        row[f"{ax[:3]}_nom_r"] = _corr(series, U_NOM[ax], fd.RATE_FB[ax], w)
+    if top is not None:
+        fr = {s.split(".")[-1]: sum(v >= top for v in vs) / len(vs)
+              for s in MOTORS if (vs := _in(*series.get(s, ([], [])), w)[1])}
+        if fr:
+            m = max(fr, key=fr.get)
+            row["top_motor"], row["top_frac"] = m, round(fr[m], 2)
+    return row
+
+
+def switch_stats(series: Series, top: float | None) -> list[dict[str, Any]]:
+    """Per injection switch: SWITCH_BINS bins of SWITCH_BIN_S before and after it, cut at the neighbouring switches
+    and at the armed span (a bin shorter than half a bin is dropped)."""
+    evs, arm = switch_events(series), armed_span(series)
+    lo_all, hi_all = arm or (-math.inf, math.inf)
+    out = []
+    for i, ev in enumerate(evs):
+        t = ev["t_s"]
+        lo = max(lo_all, evs[i - 1]["t_s"] if i else -math.inf)
+        hi = min(hi_all, evs[i + 1]["t_s"] if i + 1 < len(evs) else math.inf)
+        wins = [(max(lo, t - k * SWITCH_BIN_S), t - (k - 1) * SWITCH_BIN_S) for k in range(SWITCH_BINS[0], 0, -1)]
+        wins += [(t + (k - 1) * SWITCH_BIN_S, min(hi, t + k * SWITCH_BIN_S)) for k in range(1, SWITCH_BINS[1] + 1)]
+        rows = [{"side": "before" if b <= t else "after", **bin_stats(series, (a, b), top)}
+                for a, b in wins if b - a >= SWITCH_BIN_S / 2]
+        out.append({**ev, "bins": rows})
+    return out
+
+
 # ---- plots -----------------------------------------------------------------------------------------------------
 
 def _png(fig) -> str:
@@ -258,6 +360,43 @@ def plot_motors(series: Series, sat: tuple[float, float] | None, span: tuple[flo
     return _png(fig)
 
 
+def plot_switch(series: Series, t_sw: float, top: float | None) -> str | None:
+    """SWITCH_PAD_S either side of one injection switch: z, x/y, attitude, u_ad against the rate (pitch, roll), motors."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    w = (t_sw - SWITCH_PAD_S, t_sw + SWITCH_PAD_S)
+    fig, axes = plt.subplots(6, 1, figsize=(10, 11), sharex=True)
+    for ax, i in ((axes[0], 2), (axes[1], 0), (axes[1], 1)):
+        a = POSITION_AXES[i]
+        name = "xyz"[i]
+        for sym, style in ((a.reference, "--"), (a.feedback, "-")):
+            ts, vs = _in(*series.get(sym, ([], [])), w)
+            ax.plot(ts, [v * a.to_m for v in vs], style, linewidth=0.8, label=f"{name} {'set' if style == '--' else ''}")
+    axes[0].set_ylabel("z m")
+    axes[1].set_ylabel("x / y m")
+    for sym, lab in ((ATTITUDE[1], "pitch"), (ATTITUDE[0], "roll")):
+        axes[2].plot(*_in(*series.get(sym, ([], [])), w), linewidth=0.8, label=lab)
+    axes[2].set_ylabel("attitude deg")
+    for ax, k in ((axes[3], "pitch"), (axes[4], "roll")):
+        ax.plot(*_in(*series.get(U_AD[k], ([], [])), w), linewidth=0.9, label=f"{k} u_ad")
+        ax.plot(*_in(*series.get(U_NOM[k], ([], [])), w), linewidth=0.6, alpha=0.6, label=f"{k} u_nom")
+        ax.set_ylabel(f"{k} cmd")
+        tw = ax.twinx()
+        tw.plot(*_in(*series.get(fd.RATE_FB[k], ([], [])), w), color="0.55", linewidth=0.6, label="rate")
+        tw.set_ylabel("rate deg/s", fontsize=8)
+    for sym in MOTORS:
+        axes[5].plot(*_in(*series.get(sym, ([], [])), w), linewidth=0.7, label=sym.split(".")[-1])
+    if top is not None:
+        axes[5].axhline(top, color="r", linestyle="--", linewidth=0.8)
+    axes[5].set_ylabel("motor cmd")
+    axes[5].set_xlabel("t s (red line: injection switch; motors: red dashed = high limit)")
+    for ax in axes:
+        ax.axvline(t_sw, color="r", linewidth=1.0)
+        ax.legend(loc="upper left", fontsize=7, ncol=4)
+    return _png(fig)
+
+
 def plot_intervals(frames: Mapping[int, list[float]]) -> str | None:
     import matplotlib
     matplotlib.use("Agg")
@@ -309,6 +448,8 @@ def review(session_dir: str | Path, out: str | Path | None = None,
     w = hold or span
     pairs = tracking_pairs(series)
     spec_src, peaks = plot_spectra(series, w)
+    top = motor_top(series, sat)
+    switches = switch_stats(series, top) if INJECTION in series else []
     data = {
         "session": d.name, "hold_window_s": hold, "flight_span_s": span, "sat_limits": sat,
         "timeline": fd.timeline(series),
@@ -316,6 +457,7 @@ def review(session_dir: str | Path, out: str | Path | None = None,
         "spectral_peaks": peaks,
         "saturation": saturation(series, sat, span),
         "intervals": interval_stats(frames),
+        "injection_switches": switches, "motor_top": top,
         "build": schema.get("build"), "contracts": schema.get("contracts"),
     }
     win_txt = (f"HOVER hold {hold[0]:.1f}-{hold[1]:.1f} s" if hold else
@@ -330,6 +472,16 @@ def review(session_dir: str | Path, out: str | Path | None = None,
                                                        f"{len(schema.get('tunables') or [])}" if schema else None}]
     sat_rows = [{"motor": k, **v} for k, v in data["saturation"].items()]
     iv_rows = [{"slot": k, **v} for k, v in data["intervals"].items()]
+    sw_cols = ["side", "t0", "t1", "inj", "z", "z_des", "x_sd", "y_sd", "pit_sd", "pit_pk", "rol_sd",
+               "pit_ad_r", "pit_nom_r", "rol_ad_r", "rol_nom_r", "top_motor", "top_frac"]
+    sw_html = "".join(f"<h3>{html.escape(s['to'])} at {s['t_s']:.1f} s</h3>{_table(s['bins'], sw_cols)}"
+                      f"{_img(plot_switch(series, s['t_s'], top), 'injection switch')}" for s in switches)
+    if INJECTION in series:
+        sw_html = f"""<h2>MRAC injection switches</h2>
+<p class=dim>{SWITCH_BIN_S:g} s bins around each change of <code>{INJECTION}</code> while armed. z in m, sd and pk
+(peak from the bin mean) in m / deg. *_ad_r / *_nom_r: correlation of u_ad / u_nom with the body rate; negative damps,
+positive pushes with the motion. top_frac: share of samples at the motor high limit ({top}).</p>
+{sw_html or "<p class=dim>no switch while armed</p>"}"""
     blob = json.dumps(data).replace("</", "<\\/")
     page = f"""<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1"><title>Flight review {html.escape(d.name)}</title>
@@ -341,6 +493,7 @@ def review(session_dir: str | Path, out: str | Path | None = None,
 <p class=dim>Error = actual - setpoint over the {"HOVER hold" if hold else "flight span"}.</p>
 {_table(data["tracking"], ["label", "unit", "n", "err_rms", "err_max"])}
 {_img(plot_tracking(series, pairs, hold), "setpoint vs actual")}
+{sw_html}
 <h2>Spectra</h2>{_table(peaks, ["symbol", "f_hz", "amp", "fs_hz"])}{_img(spec_src, "spectra")}
 <h2>Motor saturation</h2>
 <p class=dim>Over the flight span; limits {html.escape(str(sat)) if sat else "not given (--no-sat)"}.</p>
