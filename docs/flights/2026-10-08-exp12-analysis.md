@@ -76,3 +76,68 @@ Plots: `adaptive_pitch_features.png`, `adaptive_roll_features.png`, `adaptive_ya
    log commanded +x. Either the operator steered +x, or the drone moves in the room in a way the optical-flow
    estimate does not see (then the position loop cannot correct it, PID or MRAC). Check on the next take-off:
    20 s hands off, watch the drone against the floor while `locxPID.FB` stays within a few cm.
+
+## Uncertainty estimate (stats sections "Uncertainty estimate", "Load swing frequency"; plot `adaptive_uncertainty.png`)
+
+The disturbance each axis had to cancel is rebuilt from the log: fit `xdot = b * u(t - k) / ...` on 2-8 Hz content
+(outside the swing band), then `-Delta_hat = u_injected(t - k) - xdot / b`, low-passed at 3 Hz. Same for PID and
+MRAC segments, so the needed trim is measured independently of who supplied it.
+
+| axis | b | delay | fit r (2-8 Hz) |
+|---|---|---|---|
+| pitch | 51.5 | 50 ms | 0.73 |
+| roll | 45.3 | 50 ms | 0.65 |
+| yaw | 38.4 | 20 ms | 0.64 |
+| z | 22.5 | 40 ms | 0.34 |
+
+| finding (measured) | value |
+|---|---|
+| static disturbance (needed trim), same under PID and MRAC | pitch -0.049 to -0.080, roll +0.051 to +0.060, yaw +0.018 to +0.032, z +1.6 to +2.3 |
+| share of that trim supplied by u_ad, MRAC from take-off (F2, F4) | pitch 0.67-0.69, roll 0.54-0.59, z 0.31-0.32 (mid-flight switch: pitch 0.13-0.20) |
+| dynamic disturbance in the swing band, RMS | pitch 0.020-0.027, roll 0.018-0.027; u_ad dynamic RMS 0.008-0.016 |
+| u_ad against -Delta_hat in the band | gain 0.12-0.27, phase -66 to -142 deg (u_ad lags ~100 deg) |
+| fraction of the swing disturbance cancelled by u_ad | pitch -0.04 to +0.31, roll +0.02 to +0.30, yaw 0.00-0.14, z -0.12 to +0.32; unchanged with b x0.7 / x1.4 |
+| an ideal estimator (true -Delta_hat through a first-order lag w) | w 4 rad/s: pitch 0.45-0.73, roll 0.23-0.54; w 16: ~0.9; w <= 1: can be negative (roll F3 -8.45) |
+| swing frequency, Welch peak of gyro 0.15-1.5 Hz | roll 0.44-0.59 Hz (mostly 0.49), pitch 0.49-0.88 Hz |
+| predicted pendulum (rope 33 cm + half bottle) | 0.76 Hz (fixed pivot, L 0.43 m) to 0.95 Hz (free drone 988.5 g + 570 g) |
+
+The MRAC static trim is right; the dynamic part is not followed. The limit is the estimator (bias weight only,
+slow and lagging), not the u_ad output filter (an ideal learner behind the same kind of lag would cancel half).
+The 0.49 Hz peak fits a 1 m pendulum, not 0.43 m: either the rope is longer than noted or the peak is the
+position loop wobbling. Check by measuring the rope (PROPOSED).
+
+## Feature capability (stats section "Feature capability", all MRAC segments pooled)
+
+Each weight learns at a rate `gamma_i * E[phi_i^2 / (1 + |phi|^2)]` (normalized gradient, `API/mrac.c`) and can
+contribute at most `lim_i * RMS(phi_i)`.
+
+| pitch feature | RMS phi | speed vs bias | reach lim * RMS phi | actual RMS Theta*phi |
+|---|---|---|---|---|
+| bias | 1 | 1 | 0.15 | 0.046 |
+| x | 0.143 | 0.0026 | 0.0071 | 0.00015 |
+| x tanh x | 0.043 | 5.1e-5 | 0.00085 | 1e-5 |
+| cross | 0.019 | 1.2e-5 | 0.00096 | 1.5e-6 |
+| u_nom | 0.074 | 3.6e-4 | 0.015 | 1.4e-4 |
+| xm | 0.127 | 1.0e-3 | 0.019 | 3.4e-4 |
+
+Roll and yaw look the same. Every non-bias feature learns 400x to 80,000x slower than the bias and its limit
+caps it below the swing disturbance it should cancel (RMS 0.020-0.027). z is the exception: the u_nom feature
+learns (speed 0.19, reach 0.29, actual 0.18). Bias 63 % settle time: pitch 1-21 s, roll 1-2 s, yaw 1-3 s, z 2-6 s.
+
+## Runtime variants and next config (PROPOSED)
+
+1. **vp rows are not cumulative.** vp 4 is the only row with performance recovery (kappa 0.5, crm 10); vp 6 is
+   V1 + lam_ang 4 without PR. Combinations go through `vp_user` fields then `vp_user_go = 1`.
+2. **Live switching.** vp 0-6 switch in one session (ch8 off, write `vp_id`, ch8 on). vp 7-11 (basis 1-5)
+   need the MULTI build (`MRAC_VARIANT 2`); the default and the current working-tree build refuse them (0xEE).
+   Next: MULTI as the one default build (one line + Keil build), then a per-axis feature mask in `vp_user`.
+3. **Gamma.** Keep the bias bandwidth about a decade below the 0.5 Hz swing: g 0.10 (time constant ~10-20 s,
+   still learns the trim in one flight) is a reasonable first try. The swing itself is the job of LFHG
+   (`mrac_config_pitch/roll.lf_gain` 2, then 4, sigma_lf 0.8, from the Keil watch window), which targets the
+   estimator gap above.
+4. **Features.** Per-feature normalization (gamma_i scaled by 1 / E[phi_i^2]) and higher x / xm limits would let
+   the features learn in a flight; firmware change, approval first.
+5. **Logging.** The current command covers vp 0-6. Add `u_pr`, `Theta[6..11]` (RBF bases), `vp_active` and the
+   feature mask to one MRAC log preset so every segment labels itself.
+6. **Drift.** MRAC has no x/y channel (mask 0x0F); drift is the same under PID and MRAC. Options: locxs/ys Ki
+   0.008 -> ~0.02, or an adaptive x/y bias (firmware). First the 20 s hands-off check.

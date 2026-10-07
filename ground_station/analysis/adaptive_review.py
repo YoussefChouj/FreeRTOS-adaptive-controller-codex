@@ -104,6 +104,156 @@ def shade(ax_, df, segs):
         ax_.axvspan(df.t[i0], df.t[i1], color="tab:orange" if "MRAC" in name else "tab:blue", alpha=0.08, lw=0)
 
 
+GAMMA = {"pitch": (1.5, .2, .05, .05, .1, .1), "roll": (1.5, .2, .05, .05, .1, .1),       # API/mrac.c MRAC_BASIS
+         "yaw": (1.0, .1, .05, .05, .1, .1), "z_rate": (2.0, .5, .1, .1, .2, .2)}
+LIM = {"pitch": (.15, .05, .02, .05, .2, .15), "roll": (.15, .05, .02, .05, .2, .15),
+       "yaw": (.09, .03, .012, .03, .12, .09), "z_rate": (1.0, .1, .05, .05, .2, .2)}
+
+
+def filt(x, lo=None, hi=None):
+    """Zero-phase 2nd-order Butterworth: band lo-hi, low-pass hi or high-pass lo (Hz)."""
+    if lo and hi:
+        b, a_ = signal.butter(2, (lo, hi), "bandpass", fs=FS)
+    elif hi:
+        b, a_ = signal.butter(2, hi, "lowpass", fs=FS)
+    else:
+        b, a_ = signal.butter(2, lo, "highpass", fs=FS)
+    return signal.filtfilt(b, a_, x)
+
+
+def delay(u, k):
+    return np.concatenate([np.full(k, u[0]), u[:len(u) - k]]) if k else u
+
+
+def lpf1(x, w):
+    """Causal first-order LPF at w rad/s (the firmware u_ad filter)."""
+    a = w / FS
+    return signal.lfilter([a], [1.0, a - 1.0], x, zi=[(1.0 - a) * x[0]])[0]
+
+
+def fit_b(pairs):
+    """Control effectiveness b (xdot = b*(u + Delta)) and delay tau from 2-8 Hz content, above the sway band."""
+    xs = np.concatenate([filt(xd, 2.0, 8.0) for xd, _ in pairs])
+    best = None
+    for k in range(11):
+        us = np.concatenate([filt(delay(u, k), 2.0, 8.0) for _, u in pairs])
+        r = np.corrcoef(xs, us)[0, 1]
+        if best is None or abs(r) > abs(best[2]):
+            best = (np.dot(xs, us) / np.dot(us, us), k, r)
+    return best
+
+
+def uncertainty(df, segs, inj, a):
+    """Delta_hat = LPF3(xdot)/b - LPF3(u_inj(t - tau)); the ideal u_ad is -Delta_hat. Scores u_ad against it."""
+    gr, L = 9.81, (a.rope_cm + a.bottle_cm / 2) / 100.0
+    M, m = a.drone_g / 1000.0, a.load_g / 1000.0
+    md = ["## Uncertainty estimate: does u_ad match the disturbance?", "",
+          "Plant per axis: xdot = b (u_inj + Delta), u_inj = u_nom + (injected) u_ad. b and the delay tau are fitted "
+          "on 2-8 Hz content of all airborne segments (above the load band; closed-loop fit, so b is biased: the "
+          "cancel fraction is also given for b x0.7 and x1.4). Delta_hat = LPF3Hz(xdot)/b - LPF3Hz(u_inj(t - tau)) "
+          "is everything the nominal model does not explain (load torque and swing, CG offset, motor mismatch, "
+          "drag), in control units. A perfect adaptive layer gives u_ad = -Delta_hat.", "",
+          "- static: mean(-Delta_hat) is the trim the drone needs; u_ad share = mean(u_ad) / mean(-Delta_hat) "
+          "(the PID integrator carries the rest)",
+          "- dynamic (means removed): cancel = 1 - var(u_ad + Delta_hat) / var(Delta_hat); 1 = cancels all, "
+          "0 = no help, < 0 = adds disturbance. Band gain / phase of u_ad against -Delta_hat in %.2f-%.2f Hz "
+          "(ideal 1 / 0 deg)." % BAND,
+          "- ideal learner: cancel of -LPF_w(Delta_hat), what a perfect estimator behind the firmware u_ad filter "
+          "at w rad/s could do. PID segments: u_ad is the shadow (computed, not injected).", ""]
+    fits, pairs_ax = {}, {}
+    for ax in AXES:
+        p = "mrac_state.%s." % ax
+        pairs = []
+        for name, i0, i1 in segs:
+            g = df.loc[i0:i1]
+            u = (g[p + "u_nom"] + inj[g.index] * g[p + "u_ad"]).to_numpy()
+            pairs.append((np.gradient(g[ax + "_x"].to_numpy()) * FS, u))
+        fits[ax], pairs_ax[ax] = fit_b(pairs), pairs
+    md += ["| axis | b | tau (ms) | r (2-8 Hz) |", "|---|---|---|---|"]
+    md += ["| %s | %.1f | %d | %.2f |" % (ax, b, 10 * k, r) for ax, (b, k, r) in fits.items()] + [""]
+    md += ["| seg | axis | -Delta static | u_ad mean | u_nom mean | u_ad share | -Delta dyn RMS | u_ad dyn RMS | "
+           "band gain / phase / coh | cancel b x0.7 / x1 / x1.4 | ideal w 0.5 / 1 / 2 / 4 / 8 / 16 |",
+           "|---|---|---|---|---|---|---|---|---|---|---|"]
+    for ax in AXES:
+        b, k, _ = fits[ax]
+        p = "mrac_state.%s." % ax
+        for (name, i0, i1), (xd, u) in zip(segs, pairs_ax[ax]):
+            g = df.loc[i0:i1]
+            uad, un = g[p + "u_ad"].to_numpy(), g[p + "u_nom"].to_numpy()
+            nd = {s: filt(delay(u, k), hi=3.0) - filt(xd, hi=3.0) / (b * s) for s in (0.7, 1.0, 1.4)}
+            df.loc[i0:i1, ax + "_negd"] = nd[1.0]
+            cf = lambda v, s=1.0: 1.0 - np.var(v - nd[s]) / max(np.var(nd[s]), 1e-15)
+            if uad.std() < 1e-9:                          # ch8 off: u_ad logged as 0 (no shadow)
+                md.append("| %s | %s | %+.4f | 0 | %+.4f | - | %.4f | 0 | - | - | %s |" % (
+                    name, ax, nd[1.0].mean(), un.mean(), nd[1.0].std(),
+                    " / ".join("%+.2f" % cf(lpf1(nd[1.0], w)) for w in (0.5, 1, 2, 4, 8, 16))))
+                continue
+            coh = band_tf(nd[1.0] - nd[1.0].mean(), uad - uad.mean())[2]
+            nper = int(min(512, len(uad) // 2))
+            f, pxy = signal.csd(nd[1.0] - nd[1.0].mean(), uad - uad.mean(), fs=FS, nperseg=nper)
+            _, pxx = signal.welch(nd[1.0] - nd[1.0].mean(), fs=FS, nperseg=nper)
+            msk = (f >= BAND[0]) & (f <= BAND[1])
+            hm = np.mean(pxy[msk] / pxx[msk])
+            md.append("| %s | %s | %+.4f | %+.4f | %+.4f | %.2f | %.4f | %.4f | %.2f / %+.0f / %.2f | "
+                      "%+.2f / %+.2f / %+.2f | %s |" % (
+                          name, ax, nd[1.0].mean(), uad.mean(), un.mean(),
+                          uad.mean() / nd[1.0].mean() if abs(nd[1.0].mean()) > 1e-9 else np.nan,
+                          nd[1.0].std(), uad.std(), abs(hm), np.degrees(np.angle(hm)), coh,
+                          cf(uad, 0.7), cf(uad), cf(uad, 1.4),
+                          " / ".join("%+.2f" % cf(lpf1(nd[1.0], w)) for w in (0.5, 1, 2, 4, 8, 16))))
+    md.append("")
+    f1 = np.sqrt(gr / L) / (2 * np.pi)
+    f2 = np.sqrt(gr * (M + m) / (M * L)) / (2 * np.pi)
+    md += ["## Load swing frequency", "",
+           "Pendulum: L = rope %.0f cm + half bottle %.0f cm = %.2f m. Simple sqrt(g/L)/2pi = %.2f Hz; drone free to "
+           "move, sqrt(g (M+m) / (M L))/2pi = %.2f Hz (M %.0f g, m %.0f g). Measured: peak of the body-rate PSD "
+           "in 0.15-1.5 Hz." % (a.rope_cm, a.bottle_cm / 2, L, f1, f2, a.drone_g, a.load_g), "",
+           "| seg | pitch peak (Hz) | roll peak (Hz) |", "|---|---|---|"]
+    for name, i0, i1 in segs:
+        g = df.loc[i0:i1]
+        pk = []
+        for c in ("Ctrler.gyroyPID.FB", "Ctrler.gyroxPID.FB"):
+            f, pxx = signal.welch((g[c] - g[c].mean()).to_numpy(), fs=FS, nperseg=int(min(1024, len(g) // 2)))
+            msk = (f >= 0.15) & (f <= 1.5)
+            pk.append(f[msk][np.argmax(pxx[msk])])
+        md.append("| %s | %.2f | %.2f |" % (name, pk[0], pk[1]))
+    md.append("")
+    return md, fits
+
+
+def capability(df, mseg):
+    """Per-feature learning drive gamma_i*E[phi_i^2/(1+|phi|^2)] (mrac.c grad = -s*phi_i/(1+|phi|^2)) and reach."""
+    md = ["## Feature capability (all MRAC segments pooled)", "",
+          "Theta_i moves at gamma_i * s * phi_i / (1 + |phi|^2) (API/mrac.c:748, denom :932), so a feature's "
+          "learning drive is gamma_i * E[phi_i^2 / (1 + |phi|^2)] (speed, shown relative to the bias). Its reach "
+          "is lim_i * RMS(phi_i): the largest torque it can make with Theta_i at its projection bound. gamma_i, lim_i "
+          "from the MRAC_BASIS rows (pitch/roll/yaw/z), mrac_g_phi and the preset g assumed 1.", "",
+          "| axis | feature | RMS phi | gamma | drive E[phi^2/(1+|phi|^2)] | speed vs bias | lim | reach lim*RMS phi | "
+          "actual RMS Theta*phi | Theta0 63% time (s) per seg |", "|---|---|---|---|---|---|---|---|---|---|"]
+    caps = {}
+    for ax in AXES:
+        idx = np.concatenate([np.arange(i0, i1 + 1) for _, i0, i1 in mseg])
+        P = np.column_stack([df["%s_phi%d" % (ax, i)].to_numpy()[idx] for i in range(6)])
+        C = np.column_stack([df["%s_c%d" % (ax, i)].to_numpy()[idx] for i in range(6)])
+        drive = np.mean(P ** 2 / (1.0 + np.sum(P ** 2, axis=1))[:, None], axis=0)
+        spd = np.array(GAMMA[ax]) * drive
+        rp = np.sqrt(np.mean(P ** 2, axis=0))
+        reach, act = np.array(LIM[ax]) * rp, np.sqrt(np.mean(C ** 2, axis=0))
+        t63 = []
+        for name, i0, i1 in mseg:
+            th = df["mrac_state.%s.Theta[0]" % ax].to_numpy()[i0:i1 + 1]
+            d = np.abs(th - th[0])
+            j = np.argmax(d >= 0.63 * d[-1]) if d[-1] > 1e-6 else -1
+            t63.append("%s %.0f" % (name.split()[0], j / FS) if j >= 0 else "%s -" % name.split()[0])
+        caps[ax] = (spd / spd[0], reach, act)
+        for i in range(6):
+            md.append("| %s | %s | %.3g | %.2f | %.3g | %.2g | %.3f | %.3g | %.3g | %s |" % (
+                ax, FEAT[i], rp[i], GAMMA[ax][i], drive[i], spd[i] / spd[0], LIM[ax][i], reach[i], act[i],
+                ", ".join(t63) if i == 0 else ""))
+    md.append("")
+    return md, caps
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("stem")
@@ -111,6 +261,9 @@ def main():
     ap.add_argument("--load-g", type=float, default=570.0)
     ap.add_argument("--rope-x-cm", type=float, default=2.0)
     ap.add_argument("--rope-y-cm", type=float, default=7.0)
+    ap.add_argument("--rope-cm", type=float, default=33.0)
+    ap.add_argument("--bottle-cm", type=float, default=20.0)
+    ap.add_argument("--drone-g", type=float, default=988.5)              # API/thrust_estimators.c DRONE_MASS_KG
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     df = load(a.stem)
@@ -219,6 +372,9 @@ def main():
             (g["Ctrler.Z_posPID.FB"] - g["Ctrler.Z_posPID.Des"]).mean(), 100 * (mm.max(axis=1) >= 3999).mean(),
             (mm.max(axis=1) - mm.min(axis=1)).max(), g["real_voltage"].mean()))
     md.append("")
+    umd, fits = uncertainty(df, segs, inj, a)
+    cmd_, caps = capability(df, mseg) if mseg else ([], {})
+    md += umd + cmd_
     with open(os.path.join(a.out, "adaptive_stats.md"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(md) + "\n")
 
@@ -362,6 +518,41 @@ def main():
     fig.tight_layout()
     fig.savefig(os.path.join(a.out, "adaptive_drift.png"), dpi=160)
     plt.close(fig)
+
+    # uncertainty: -Delta_hat vs u_ad (longest MRAC segment, 30 s) + feature speed / reach bars
+    if mseg:
+        name, i0, i1 = max(mseg, key=lambda s: s[2] - s[1])
+        j0 = i0 + max(0, (i1 - i0) // 2 - 1500)
+        g = df.loc[j0:min(i1, j0 + 3000)]
+        fig, axs = plt.subplots(4, 3, figsize=(19, 14), gridspec_kw={"width_ratios": [3, 1, 1]})
+        for k, ax in enumerate(AXES):
+            p = "mrac_state.%s." % ax
+            nd = df.loc[i0:i1, ax + "_negd"].to_numpy()
+            ideal = pd.Series(lpf1(nd, OMEGA_U[ax]), index=df.loc[i0:i1].index)[g.index]
+            axs[k, 0].plot(g.t, filt(g[p + "u_nom"].to_numpy(), hi=3.0), color="tab:cyan", lw=0.8, alpha=0.6,
+                           label="u_nom (PID, LPF 3 Hz)")
+            axs[k, 0].plot(g.t, g[ax + "_negd"], color="k", lw=1.0, label="-Delta_hat (needed, LPF 3 Hz)")
+            axs[k, 0].plot(g.t, ideal, color="tab:green", lw=1.0, label="ideal u_ad (LPF omega_u of -Delta_hat)")
+            axs[k, 0].plot(g.t, g[p + "u_ad"], color="tab:orange", lw=1.2, label="u_ad (flown)")
+            axs[k, 0].set_ylabel("%s (b %.1f, tau %d ms)" % (ax, fits[ax][0], 10 * fits[ax][1]))
+            axs[k, 0].legend(fontsize=7, ncol=4, loc="upper left")
+            spd, reach, act = caps[ax]
+            axs[k, 1].bar(range(6), spd, color="tab:purple")
+            axs[k, 1].set_yscale("log")
+            axs[k, 1].set_title("%s: learning speed vs bias" % ax, fontsize=9)
+            axs[k, 2].bar(np.arange(6) - 0.2, reach, 0.4, label="reach lim*RMS phi")
+            axs[k, 2].bar(np.arange(6) + 0.2, act, 0.4, label="actual RMS Theta*phi")
+            axs[k, 2].set_yscale("log")
+            axs[k, 2].set_title("%s: reach vs actual" % ax, fontsize=9)
+            for j in (1, 2):
+                axs[k, j].set_xticks(range(6))
+                axs[k, j].set_xticklabels(FEAT, rotation=30, fontsize=7)
+        axs[0, 2].legend(fontsize=7)
+        axs[-1, 0].set_xlabel("t (s)")
+        fig.suptitle("%s: what the adaptive layer should output (-Delta_hat) vs what it did; per-feature capability" % name)
+        fig.tight_layout()
+        fig.savefig(os.path.join(a.out, "adaptive_uncertainty.png"), dpi=160)
+        plt.close(fig)
     print("wrote", a.out, "segments:", [s[0] for s in segs])
 
 
