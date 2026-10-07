@@ -124,7 +124,8 @@ def test_run_end_to_end(tmp_path):
     marks = [[0, 0], [1.5, 0], [0, 1.5], [1.5, 1.5]]
     pix = cv2.projectPoints(np.c_[marks, np.zeros(4)].astype(float), rvec, t, k2, d0)[0].reshape(-1, 2)
     cam = {"K": k2.tolist(), "dist": d0.tolist()}
-    rep = vt.run(video, cam, {"world": marks, "pixel": pix.tolist()}, str(path), tmp_path / "out")
+    rep = vt.run(video, cam, {"world": marks, "pixel": pix.tolist()}, str(path), tmp_path / "out",
+                 sync="speed")      # synthetic video starts airborne: no lift-off to sync on
     assert abs(rep["sync_offset_s"] - off) <= 0.04
     assert abs(rep["align_rot_deg"] - 30) < 1 and not rep["align_reflection"]
     assert rep["err_rms_m"] < 0.02 and rep["err_max_m"] < 0.06
@@ -238,3 +239,13 @@ def test_calibrate_charuco_uses_cut_off_boards(tmp_path):
     assert abs(K[0, 0] - 900) < 5 and abs(K[1, 1] - 900) < 5      # measured 902.4 / 901.4, rms 0.15 px
     assert abs(K[0, 2] - 640) < 3 and abs(K[1, 2] - 360) < 5      # measured 639.9 / 363.4
     assert cam["coverage_6x6"] == pytest.approx(24 / 36)                       # full-board checkerboard test: 18 / 36
+
+
+def test_takeoff_sync():
+    tv = np.arange(0, 30, 1 / 30)
+    xy = np.zeros((len(tv), 2)) + np.random.default_rng(0).normal(0, 0.005, (len(tv), 2))
+    xy[tv >= 18.5, 0] += 0.3                              # lifts off (moves away from the pad spot) at 18.5 s
+    te = np.arange(0, 12, 0.02)
+    z = np.where(te >= 0.9, 0.5, 0.0)
+    off = vt.takeoff_tel(te, z, np.ones(len(te), bool)) - vt.takeoff_video(tv, xy)
+    assert abs(off - (0.9 - 18.5)) < 0.05

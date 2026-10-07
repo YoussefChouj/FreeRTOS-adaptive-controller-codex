@@ -305,6 +305,25 @@ def sync_offset(t_v, xy_v, t_e, xy_e, max_lag: float = 30.0, dt: float = 0.02, m
     return best[1]
 
 
+def takeoff_video(t, xy, pre_s: float = 2.0, thresh: float = 0.05, hold_s: float = 0.5) -> float:
+    """Video take-off: first time the pad-height centre stays more than thresh m from its pre-roll spot for hold_s.
+    A climb also moves the pad-height projection (away from the camera), so this fires on lift-off or slide."""
+    pad = np.nanmedian(xy[t < t[0] + pre_s], axis=0)
+    out = np.hypot(*(xy - pad).T) > thresh
+    n = max(1, int(round(hold_s / np.median(np.diff(t)))))
+    run_ = np.convolve(out.astype(int), np.ones(n, int), mode="valid") == n
+    if not run_.any():
+        raise SystemExit("no take-off in the video: the drone never left its pre-roll spot")
+    return float(t[int(np.argmax(run_))])
+
+
+def takeoff_tel(te, z, armed, rise: float = 0.05) -> float:
+    """Telemetry lift-off: first armed sample with the height more than `rise` m above its armed pad value."""
+    z = np.nan_to_num(np.asarray(z, float))
+    z0 = float(np.median(z[armed][:25]))
+    return float(te[int(np.argmax(armed & (z > z0 + rise)))])
+
+
 def align(est_xy, truth_xy, n_fit: int) -> tuple[np.ndarray, bool]:
     """Orthogonal Q (rotation or reflection) with truth ~ est @ Q.T, fitted on the first n_fit samples.
     Both inputs are already relative to the take-off point."""
@@ -339,8 +358,11 @@ def read_livewatch(path: str, names) -> dict:
 
 
 # ---------------------------------------------------------------- run
-def run(video, cam, marks, csv_path, out, guard_offset=0.0, align_s=10.0, stride=1, lo=HSV_LO, hi=HSV_HI,
-        min_area=MIN_AREA, static_t=()) -> dict:
+def run(video, cam, marks, csv_path, out, guard_offset=0.0, align_s=None, stride=1, lo=HSV_LO, hi=HSV_HI,
+        min_area=MIN_AREA, static_t=(), sync="takeoff") -> dict:
+    """sync: "takeoff" (lift-off in both clocks; video and campaign started by hand), "speed" (speed
+    cross-correlation) or a number of seconds (telemetry time = video time + sync).
+    align_s None fits the estimator rotation over the whole flight (a hover-only window is ill-conditioned)."""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     K, dist = cam["K"], cam["dist"]
@@ -374,10 +396,16 @@ def run(video, cam, marks, csv_path, out, guard_offset=0.0, align_s=10.0, stride
             pts.append(c if c is not None else (np.nan, np.nan))
         return np.array(pts), np.array(ok)
 
-    # pass 1: constant flight height -> sync; pass 2: synced per-frame height
+    # pass 1: constant height -> sync; pass 2: synced per-frame height
     h_med = float(np.nanmedian(h_tel[fly]))
-    xy1, ok1 = centres(np.full(len(tv), h_med))
-    off = sync_offset(tv[ok1], xy1[ok1], te[fly], est[fly])
+    if sync == "speed":
+        xy1, ok1 = centres(np.full(len(tv), h_med))
+        off = sync_offset(tv[ok1], xy1[ok1], te[fly], est[fly])
+    elif sync == "takeoff":
+        xy1, ok1 = centres(np.zeros(len(tv)))
+        off = takeoff_tel(te, h_tel, armed) - takeoff_video(tv[ok1], xy1[ok1])
+    else:
+        off = float(sync)
     xy, ok = centres(np.interp(tv + off, te, h_tel))
     tvs, xy = tv[ok] + off, xy[ok]
 
@@ -385,12 +413,14 @@ def run(video, cam, marks, csv_path, out, guard_offset=0.0, align_s=10.0, stride
     tr = np.c_[np.interp(te, tvs, xy[:, 0]), np.interp(te, tvs, xy[:, 1])]
     seg = slice(i_to, i_end + 1)
     e_rel, t_rel = est[seg] - est[i_to], tr[seg] - tr[i_to]
-    n_fit = int(np.searchsorted(te[seg], te[i_to] + align_s))
+    n_fit = len(e_rel) if align_s is None else int(np.searchsorted(te[seg], te[i_to] + align_s))
     q, refl = align(e_rel, t_rel, max(n_fit, 10))
     e_al = e_rel @ q.T
     err = e_al - t_rel
-    path_t = float(np.nansum(np.hypot(*np.diff(t_rel, axis=0).T)))
-    path_e = float(np.nansum(np.hypot(*np.diff(e_al, axis=0).T)))
+    g = np.arange(te[i_to], te[i_end], 0.2)            # path on a 0.2 s grid: per-frame jitter would inflate it
+    def path(xy_):
+        return float(np.sum(np.hypot(np.diff(np.interp(g, te[seg], xy_[:, 0])), np.diff(np.interp(g, te[seg], xy_[:, 1])))))
+    path_t, path_e = path(t_rel), path(e_al)
     rep = {
         "floor_reproj_px": round(reproj, 2),
         "floor_noise_err_1p5m_m": round(pose_noise(K, dist, marks["world"], marks["pixel"],
@@ -404,7 +434,8 @@ def run(video, cam, marks, csv_path, out, guard_offset=0.0, align_s=10.0, stride
         "err_max_m": round(float(np.nanmax(np.hypot(*err.T))), 3),
         "err_rms_m": round(float(np.sqrt(np.nanmean(np.sum(err ** 2, axis=1)))), 3),
         "path_truth_m": round(path_t, 2), "path_est_m": round(path_e, 2),
-        # least-squares truth ~ s * est over the flight; path lengths are inflated by tracking jitter
+        "sync": sync if isinstance(sync, str) else "manual",
+        # least-squares truth ~ s * est over the flight
         "scale_truth_over_est": round(float(np.nansum(t_rel * e_al) / np.nansum(e_al * e_al)), 4),
         # estimator -> floor frame for `overlay`: floor_xy = truth0 + (est_m - est0) @ q.T
         "frame": {"q": q.tolist(), "est0": est[i_to].tolist(), "truth0": tr[i_to].tolist(), "z_off": guard_offset,
@@ -546,7 +577,8 @@ def main(argv=None):
     r = sub.add_parser("run"); r.add_argument("video"); r.add_argument("--cam", required=True)
     r.add_argument("--marks", required=True); r.add_argument("--csv", required=True); r.add_argument("--out", required=True)
     r.add_argument("--guard-offset", type=float, default=0.0, help="guard plane above the height sensor, m")
-    r.add_argument("--align-s", type=float, default=10.0); r.add_argument("--stride", type=int, default=1)
+    r.add_argument("--align-s", type=float, default=None, help="fit window after take-off, s (default: whole flight)")
+    r.add_argument("--sync", default="takeoff", help="takeoff | speed | seconds (telemetry t = video t + sync)"); r.add_argument("--stride", type=int, default=1)
     for p in (f, r):
         p.add_argument("--hsv-lo", default=",".join(map(str, HSV_LO)))
         p.add_argument("--hsv-hi", default=",".join(map(str, HSV_HI)))
@@ -599,7 +631,8 @@ def main(argv=None):
         lo, hi = tuple(map(int, a.hsv_lo.split(","))), tuple(map(int, a.hsv_hi.split(",")))
         rep = run(a.video, json.loads(Path(a.cam).read_text()), json.loads(Path(a.marks).read_text()), a.csv, a.out,
                   a.guard_offset, a.align_s, a.stride, lo, hi, a.min_area,
-                  tuple(float(s) for s in a.static_t.split(",") if s))
+                  tuple(float(s) for s in a.static_t.split(",") if s),
+                  a.sync if a.sync in ("takeoff", "speed") else float(a.sync))
         print(json.dumps(rep, indent=2))
 
 
