@@ -20,6 +20,7 @@ WFB_GLUE_H = REPO / "API" / "wfb_glue.h"
 FIRMWARE_ONLY = {
     0x1A: "WFB_CMD_PRIM, described in ground_station/platform/wfb_commands.py",
     0x1B: "WFB_CMD_TRAJ, described in ground_station/platform/wfb_commands.py",
+    0x1C: "WFB_CMD_PROG (onboard preset program), described in docs/workflow-c/onboard-preset-program.md",
     **{i: "MRAC element update, 8-bit index (0x20 + field*4 + axis)" for i in range(0x20, 0x2C)},
 }
 # Described in COMMAND_TABLE without a firmware handler. Empty since WP-38 (0x19 SIMPLEX got its COMMAND_TABLE
@@ -47,6 +48,7 @@ def firmware_entries() -> list[tuple[int, int, str]]:
     consts = {
         "WFB_CMD_PRIM": _hex_define(wfb, "WFB_CMD_PRIM"),
         "WFB_CMD_TRAJ": _hex_define(wfb, "WFB_CMD_TRAJ"),
+        "WFB_CMD_PROG": _hex_define(wfb, "WFB_CMD_PROG"),
         "MRAC_ELEM_CMD_BASE": base,
         "MRAC_ELEM_CMD_LAST": base + (tol << 2) + 3,
     }

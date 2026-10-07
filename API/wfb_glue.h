@@ -18,6 +18,7 @@
 
 #define WFB_CMD_PRIM 0x1Au
 #define WFB_CMD_TRAJ 0x1Bu
+#define WFB_CMD_PROG 0x1Cu  /* onboard preset program upload, idx = WFB_PROG_F_* / WFB_PROG_IDX_* (wfb_prog.h) */
 
 /* CMD 0x1A idx: flight primitives (interfaces.md section 1) */
 #define WFB_PRIM_CMD_TAKEOFF     0u
@@ -33,6 +34,8 @@
 #define WFB_TRAJ_CMD_START  4u
 #define WFB_TRAJ_CMD_STOP   5u
 #define WFB_TRAJ_CMD_CLEAR  6u
+/* The point buffer and the program segments share one buffer: the last BEGIN (0x1B or 0x1C) picks which one
+ * START, STOP and the tick run. A program BEGIN clears the trajectory and a trajectory BEGIN clears the program. */
 
 /* interfaces.md section 2; every field float so the telemetry decoder needs one type. */
 typedef struct {
@@ -50,6 +53,8 @@ typedef struct {
     float hover_z;
     float airborne_t;
     float fence_push;   /* WFB_PUSH_* bits (1 x, 2 y, 4 z): axes the setpoint is pushing back inside the fence */
+    float prog_mode;    /* 1: the buffer holds a 0x1C program and traj_state/n/rx/crc_* mirror it */
+    float prog_err_seg; /* segment that failed the last program COMMIT, -1 none */
 } wfb_status_t;
 
 /* Snapshot taken by the 200 Hz loop before wfb_glue_tick. Position in METRES, world frame. */

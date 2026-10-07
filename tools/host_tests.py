@@ -57,7 +57,7 @@ HOST_TESTS = [
     ("fw_wfb_traj",      ["tests/firmware_host/test_wfb_traj.c", "API/wfb_traj.c"],              ["-std=c99", *W, "-IAPI"]),
     ("fw_wfb_safety",    ["tests/firmware_host/test_wfb_safety.c", "API/wfb_safety.c"],          ["-std=c99", *W, "-IAPI"]),
     ("fw_wfb_prim",      ["tests/firmware_host/test_wfb_prim.c", "API/wfb_prim.c"],              ["-std=c99", *W, "-IAPI"]),
-    ("fw_wfb_glue",      ["tests/firmware_host/test_wfb_glue.c", "API/wfb_glue.c", "API/wfb_traj.c", "API/wfb_safety.c", "API/wfb_prim.c"],
+    ("fw_wfb_glue",      ["tests/firmware_host/test_wfb_glue.c", "API/wfb_glue.c", "API/wfb_traj.c", "API/wfb_safety.c", "API/wfb_prim.c", "API/wfb_prog.c"],
                                                                                                  ["-std=c99", *W, "-Werror", "-Wdeclaration-after-statement", "-Wvla", "-IAPI"]),
     ("fw_wfb_prog",      ["tests/firmware_host/test_wfb_prog.c", "API/wfb_prog.c", "API/wfb_traj.c"],
                                                                                                  ["-std=c99", *W, "-Werror", "-Wdeclaration-after-statement", "-Wvla", "-IAPI"]),

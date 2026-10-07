@@ -14,6 +14,7 @@
 
 #include "wfb_glue.h"
 #include "wfb_prim.h"
+#include "wfb_prog.h"
 #include "wfb_safety.h"
 #include "wfb_traj.h"
 
@@ -365,6 +366,212 @@ static void test_bad_crc_rejected_then_reupload(void)
     CHECK(traj_state() == WFB_TRAJ_READY);
 }
 
+/* ---- onboard program (CMD 0x1C) ---- */
+#define PROG_N 2u
+typedef struct { float f[WFB_PROG_F_COUNT]; } prog_rec_t;
+static prog_rec_t s_prog[PROG_N];
+
+/* Out to x = 0.3 m and back home at the default hover height, trapezoid ramps, heading held. */
+static void make_out_and_back(void)
+{
+    uint16_t k;
+
+    memset(s_prog, 0, sizeof(s_prog));
+    for (k = 0u; k < PROG_N; k++) {
+        s_prog[k].f[WFB_PROG_F_ATOM] = (float)WFB_ATOM_LINE;
+        s_prog[k].f[WFB_PROG_F_PROFILE] = (float)WFB_PROF_TRAP;
+        s_prog[k].f[WFB_PROG_F_V] = 0.3f;
+        s_prog[k].f[WFB_PROG_F_A] = 1.0f;
+        s_prog[k].f[WFB_PROG_F_J] = 4.0f;
+        s_prog[k].f[WFB_PROG_F_P0 + 2] = HOVER_Z_DEFAULT;
+    }
+    s_prog[0].f[WFB_PROG_F_P0] = 0.3f;
+}
+
+static uint8_t prog_cmd(uint8_t idx, float val)
+{
+    return wfb_glue_on_cmd(WFB_CMD_PROG, idx, val, 0u);
+}
+
+/* The GS CRCs the raw field records; crc_flip != 0 corrupts the checksum it sends. */
+static uint32_t prog_crc(uint32_t crc_flip)
+{
+    return wfb_crc32((const uint8_t *)s_prog, (uint32_t)sizeof(s_prog)) ^ crc_flip;
+}
+
+/* BEGIN, the fields that differ from the staged record, PUSH per segment, CRC_HI, COMMIT.
+ * Returns the COMMIT result. */
+static uint8_t upload_prog(uint32_t crc_flip)
+{
+    static const prog_rec_t zero;
+    const prog_rec_t *prev = &zero;
+    uint32_t crc = prog_crc(crc_flip);
+    uint16_t k;
+    int i;
+
+    CHECK(prog_cmd(WFB_PROG_IDX_BEGIN, (float)PROG_N) == WFB_RESULT_APPLIED);
+    for (k = 0u; k < PROG_N; k++) {
+        for (i = 0; i < WFB_PROG_F_COUNT; i++) {
+            if (s_prog[k].f[i] != prev->f[i]) {
+                CHECK(prog_cmd((uint8_t)i, s_prog[k].f[i]) == WFB_RESULT_APPLIED);
+            }
+        }
+        CHECK(prog_cmd(WFB_PROG_IDX_PUSH, (float)k) == WFB_RESULT_APPLIED);
+        prev = &s_prog[k];
+    }
+    CHECK(prog_cmd(WFB_PROG_IDX_CRC_HI, (float)(crc >> 16)) == WFB_RESULT_APPLIED);
+    return prog_cmd(WFB_PROG_IDX_COMMIT, (float)(crc & 0xFFFFu));
+}
+
+static wfb_err_t oracle_cmd(wfb_prog_t *pr, uint8_t idx, float val)
+{
+    wfb_traj_limits_t lim;
+    wfb_prog_caps_t caps;
+
+    wfb_traj_default_limits(&lim);
+    wfb_prog_default_caps(&caps);
+    return wfb_prog_on_cmd(pr, idx, val, &lim, &caps, HOVER_Z_DEFAULT);
+}
+
+/* The same program committed straight into a host-side evaluator with the glue's default limits. */
+static void load_prog_oracle(wfb_prog_t *pr, wfb_prog_seg_t *buf, float yaw_ref)
+{
+    uint32_t crc = prog_crc(0u);
+    uint16_t k;
+    int i;
+
+    wfb_prog_init(pr, buf, PROG_N);
+    CHECK(oracle_cmd(pr, WFB_PROG_IDX_BEGIN, (float)PROG_N) == WFB_ERR_NONE);
+    for (k = 0u; k < PROG_N; k++) {
+        for (i = 0; i < WFB_PROG_F_COUNT; i++) {
+            CHECK(oracle_cmd(pr, (uint8_t)i, s_prog[k].f[i]) == WFB_ERR_NONE);
+        }
+        CHECK(oracle_cmd(pr, WFB_PROG_IDX_PUSH, (float)k) == WFB_ERR_NONE);
+    }
+    CHECK(oracle_cmd(pr, WFB_PROG_IDX_CRC_HI, (float)(crc >> 16)) == WFB_ERR_NONE);
+    CHECK(oracle_cmd(pr, WFB_PROG_IDX_COMMIT, (float)(crc & 0xFFFFu)) == WFB_ERR_NONE);
+    CHECK(wfb_prog_start(pr, yaw_ref) == WFB_ERR_NONE);
+}
+
+/* A 0x1C program runs from hover through the 0x1B START, mirrors its state into the status block,
+ * holds the hover heading and hands back to hover when DONE. */
+static void test_program_executes_from_hover(void)
+{
+    wfb_glue_in_t in;
+    wfb_glue_out_t out;
+    wfb_prog_t oracle;
+    wfb_prog_seg_t oracle_buf[PROG_N];
+    wfb_traj_point_t want;
+    float yaw_ref;
+    float x_max = 0.0f;
+    int i;
+
+    make_out_and_back();
+    fly_to_hover(&in, &out);
+    CHECK(g_wfb_status.prog_mode == 0.0f);
+    CHECK(upload_prog(0u) == WFB_RESULT_APPLIED);
+    CHECK(g_wfb_status.prog_mode == 1.0f);
+    CHECK(traj_state() == WFB_TRAJ_READY);
+    CHECK(g_wfb_status.traj_n == (float)PROG_N);
+    CHECK(g_wfb_status.traj_rx == (float)PROG_N);
+    CHECK(g_wfb_status.prog_err_seg == -1.0f);
+    yaw_ref = out.yaw_sp_deg;
+    CHECK(wfb_glue_on_cmd(WFB_CMD_TRAJ, WFB_TRAJ_CMD_START, 0.0f, in.now_ms) == WFB_RESULT_APPLIED);
+    CHECK(prim_state() == WFB_PRIM_TRAJ);
+    load_prog_oracle(&oracle, oracle_buf, yaw_ref);
+
+    for (i = 0; i < 20000; i++) {
+        step(&in, &out, 1);
+        if (traj_state() != WFB_TRAJ_EXECUTING) {
+            break;
+        }
+        (void)wfb_prog_sample(&oracle, g_wfb_status.traj_t, &want);
+        CHECK(out.setpoint_valid == 1u);
+        CHECK_NEAR(out.x_sp_m, want.x_m, 1e-4f);
+        CHECK_NEAR(out.y_sp_m, want.y_m, 1e-4f);
+        CHECK_NEAR(out.z_sp_m, want.z_m, 1e-4f);
+        CHECK_NEAR(out.yaw_sp_deg, yaw_ref, 1e-3f);
+        if (out.x_sp_m > x_max) {
+            x_max = out.x_sp_m;
+        }
+    }
+    CHECK(i > 400); /* 0.6 m at 0.3 m/s is more than 2 s */
+    CHECK_NEAR(x_max, 0.3f, 1e-3f);
+    CHECK(traj_state() == WFB_TRAJ_DONE);
+    CHECK(prim_state() != WFB_PRIM_TRAJ);
+    run_ticks(&in, &out, 2, 1);
+    CHECK(out.setpoint_valid == 1u);
+    CHECK_NEAR(out.x_sp_m, 0.0f, 1e-3f);
+    CHECK_NEAR(out.z_sp_m, HOVER_Z_DEFAULT, 1e-3f);
+    CHECK_NEAR(out.yaw_sp_deg, yaw_ref, 1e-3f);
+}
+
+/* A refused program COMMIT names the failing segment; a corrupted checksum names none. */
+static void test_program_commit_errors(void)
+{
+    make_out_and_back();
+    wfb_glue_init();
+    CHECK(upload_prog(0x1u) == WFB_RESULT_REJECTED);
+    CHECK(last_err() == WFB_ERR_CRC);
+    CHECK(g_wfb_status.prog_err_seg == -1.0f);
+    CHECK(traj_state() != WFB_TRAJ_READY);
+
+    s_prog[0].f[WFB_PROG_F_P0] = 5.0f; /* outside the fence */
+    CHECK(upload_prog(0u) == WFB_RESULT_REJECTED);
+    CHECK(g_wfb_status.prog_err_seg == 0.0f);
+    CHECK(traj_state() != WFB_TRAJ_READY);
+
+    make_out_and_back();
+    CHECK(upload_prog(0u) == WFB_RESULT_APPLIED);
+    CHECK(g_wfb_status.prog_err_seg == -1.0f);
+}
+
+/* The last BEGIN owns the shared buffer: a program BEGIN drops a READY trajectory and the other way
+ * round, and neither BEGIN may overwrite the buffer while the other kind executes. 0x1B STOP and
+ * CLEAR act on the program. */
+static void test_program_and_trajectory_share_the_buffer(void)
+{
+    wfb_glue_in_t in;
+    wfb_glue_out_t out;
+
+    make_out_and_back();
+    wfb_glue_init();
+    CHECK(upload_trip(0u) == WFB_RESULT_APPLIED);
+    CHECK(upload_prog(0u) == WFB_RESULT_APPLIED);
+    CHECK(g_wfb_status.prog_mode == 1.0f);
+    CHECK(g_wfb_status.traj_n == (float)PROG_N);
+    CHECK(upload_trip(0u) == WFB_RESULT_APPLIED);
+    CHECK(g_wfb_status.prog_mode == 0.0f);
+    CHECK(g_wfb_status.traj_n == (float)TRIP_N);
+    CHECK(traj_state() == WFB_TRAJ_READY);
+
+    fly_to_hover(&in, &out);
+    CHECK(upload_trip(0u) == WFB_RESULT_APPLIED);
+    CHECK(wfb_glue_on_cmd(WFB_CMD_TRAJ, WFB_TRAJ_CMD_START, 0.0f, in.now_ms) == WFB_RESULT_APPLIED);
+    run_ticks(&in, &out, 50, 1);
+    CHECK(prog_cmd(WFB_PROG_IDX_BEGIN, (float)PROG_N) == WFB_RESULT_REJECTED);
+    CHECK(last_err() == WFB_ERR_STATE);
+    run_ticks(&in, &out, 1, 1);
+    CHECK(traj_state() == WFB_TRAJ_EXECUTING);
+    CHECK(g_wfb_status.prog_mode == 0.0f);
+
+    fly_to_hover(&in, &out);
+    CHECK(upload_prog(0u) == WFB_RESULT_APPLIED);
+    CHECK(wfb_glue_on_cmd(WFB_CMD_TRAJ, WFB_TRAJ_CMD_START, 0.0f, in.now_ms) == WFB_RESULT_APPLIED);
+    run_ticks(&in, &out, 100, 1);
+    CHECK(traj_state() == WFB_TRAJ_EXECUTING);
+    CHECK(traj_cmd(WFB_TRAJ_CMD_BEGIN, (float)TRIP_N) == WFB_RESULT_REJECTED);
+    CHECK(last_err() == WFB_ERR_STATE);
+    CHECK(traj_cmd(WFB_TRAJ_CMD_CLEAR, 0.0f) == WFB_RESULT_REJECTED);
+    CHECK(last_err() == WFB_ERR_STATE);
+    CHECK(g_wfb_status.prog_mode == 1.0f);
+    CHECK(traj_cmd(WFB_TRAJ_CMD_STOP, 0.0f) == WFB_RESULT_APPLIED);
+    CHECK(traj_state() == WFB_TRAJ_READY);
+    CHECK(prim_state() == WFB_PRIM_RETURN);
+    CHECK(traj_cmd(WFB_TRAJ_CMD_CLEAR, 0.0f) == WFB_RESULT_APPLIED);
+    CHECK(traj_state() == WFB_TRAJ_EMPTY);
+}
+
 /* STOP ends the trajectory and returns to the hover point; CLEAR is refused mid-execution. */
 static void test_stop_and_clear_while_executing(void)
 {
@@ -571,6 +778,9 @@ int main(void)
     RUN(test_yaw_is_held_between_phases);
     RUN(test_bad_crc_rejected_then_reupload);
     RUN(test_stop_and_clear_while_executing);
+    RUN(test_program_executes_from_hover);
+    RUN(test_program_commit_errors);
+    RUN(test_program_and_trajectory_share_the_buffer);
     RUN(test_rc_land_matches_gs_land);
     RUN(test_heartbeat_loss_lands);
     RUN(test_regular_heartbeat_never_trips);

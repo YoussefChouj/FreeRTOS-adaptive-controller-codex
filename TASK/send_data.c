@@ -1365,7 +1365,7 @@ typedef struct {
     float    val;
     uint32_t lease_now_ms;    /* WP-28 gain lease clock, ms */
     uint8_t  lease_airborne;
-    uint8_t  wfb_res;         /* WFB_RESULT_* of a 0x1A/0x1B; APPLIED for every other command */
+    uint8_t  wfb_res;         /* WFB_RESULT_* of a 0x1A/0x1B/0x1C; APPLIED for every other command */
 } GsCmd_t;
 
 typedef void (*GsCmdHandler_t)(GsCmd_t *c);
@@ -1458,7 +1458,7 @@ static void Cmd_MixerSaturation(GsCmd_t *c)
 }
 
 /* WFB BEGIN glue */
-/* CMD 0x1A primitives / 0x1B trajectory upload (docs/workflow-b/interfaces.md sec 1) */
+/* CMD 0x1A primitives / 0x1B trajectory upload / 0x1C onboard program upload (docs/workflow-b/interfaces.md sec 1) */
 static void Cmd_Wfb(GsCmd_t *c)
 {
     taskENTER_CRITICAL();
@@ -2028,7 +2028,7 @@ static const GsCmdEntry_t k_gs_cmds[] = {
     GS_CMD_ENTRY(0x18,                 0x18,                 Cmd_ForceRecalibrate),   /* FORCE_RECALIBRATE */
     GS_CMD_ENTRY(0x19,                 0x19,                 Cmd_Simplex),            /* SIMPLEX */
     /* WFB BEGIN glue */
-    GS_CMD_ENTRY(WFB_CMD_PRIM,         WFB_CMD_TRAJ,         Cmd_Wfb),                /* WFB_PRIM, WFB_TRAJ */
+    GS_CMD_ENTRY(WFB_CMD_PRIM,         WFB_CMD_PROG,         Cmd_Wfb),                /* WFB_PRIM, WFB_TRAJ, WFB_PROG */
     /* WFB END glue */
     GS_CMD_ENTRY(0x1D,                 0x1D,                 Cmd_MracVariant),        /* MRAC_VARIANT */
     GS_CMD_ENTRY(0x1E,                 0x1E,                 Cmd_OfBiasMode),         /* OF_BIAS_MODE */
@@ -2107,7 +2107,7 @@ void Process_GroundStation_Command(void)
 
         /* WFB BEGIN glue */
         if ((cmd.wfb_res == WFB_RESULT_REJECTED) && (transaction_id != 0U)) {
-            /* A rejected 0x1A/0x1B must execute again when retried with the same txid, so it
+            /* A rejected 0x1A/0x1B/0x1C must execute again when retried with the same txid, so it
              * leaves the duplicate history (it was the last one remembered above). */
             uint8_t last_slot = (uint8_t)((s_transaction_history_head + (TXN_HISTORY_LEN - 1U)) % TXN_HISTORY_LEN);
             if (s_transaction_history[last_slot] == transaction_id) {
