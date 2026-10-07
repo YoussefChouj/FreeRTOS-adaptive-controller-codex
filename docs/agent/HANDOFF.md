@@ -4,24 +4,20 @@ Read order: `AGENTS.md` -> this file -> `docs/agent/memory/rules.md` -> `.claude
 History: `docs/agent/ledger/` (grep, never read whole); the previous HANDOFF is `ledger/handoff-2026-10-07-archive.md`.
 Working mode: the desktop session is the CEO and does every item inline. No subagents, no workers.
 
-## Now: load-swing lab day, manual mode only (2026-10-08)
-Read `docs/flights/2026-10-08-morning-brief.md` first (presets, lab order, review findings, lessons).
-Branch `overnight-2026-10-08` (8daf95c), built 0 err / 0 warn, NOT flashed. Operator flashes with
-`python -m ground_station.flashtool.rebuild_and_flash --yes`. Fallback: reboot = preset 0 (as flown), tag
-`fw-flown-2026-10-07`, or `OBJ/archive/JX_FLY_834c8564.axf`.
-Keil presets: set `kp_id`, then `kp_go = 1`, disarmed; `kp_active` reads back. 1 = of1 off, 3 = of1 off + MRAC
-z only, 5/6 = 1/3 + Z_ratePID 500/300/700. Bench (PROPOSED): of1 leak drives the MRAC swing; Z_ratePID clamps
-cause the PID sink. Analysis: `docs/flights/2026-10-07-load-swing-analysis.md`.
-Flights: `/workflow-a` (manual RC flight, WiFi `stream_log --frames ground_station/livewatch/exp1_frames.md`,
-`flight_review <stem>.slot0.csv`). Name logs `exp<N>_p<preset>-<load>`.
-Video truth (paused): `ground_station/analysis/video_truth.py`; ChArUco landscape calib saved in
-`docs/video-truth/`; re-shoot plan in `ledger/handoff-2026-10-07-archive.md`.
+## Now: load test + variant sweep, manual mode only (2026-10-08 ~04:05)
+Branch `overnight-2026-10-08`. Flown: exp8 `logs/exp8_vpA_noload` (vp 0-6, no load), analysis
+`docs/flights/2026-10-08-exp8-analysis.md`: vp 6 best attitude, vp 3 landed on the pad (operator trim). Drift
+with of1 off = unobserved EKF bias, +x/-y 2.4-6.5 cm/s.
+Firmware NOT built since exp8: in-flight preset `vp_user` + `vp_user_go` (vp_active 100), FW-B rows 7-11
+(S10, RBF12, RBF6, RBF24, S6+RBF12 via runtime `basis`; need Keil Define `MRAC_VARIANT=2`). Operator builds
+and flashes in Keil.
+Runbook: `docs/flights/2026-10-08-load-test-runbook.md` (exp9, kp_id 5, vp_id 6 then 3). Sweep plan:
+`docs/flights/2026-10-08-variant-sweep-plan.md`. Flights: `/workflow-a`, logs `exp<N>_<vp>-<load>`.
 
 ## Next actions
-1. Operator flashes, flies preset 1 then 3, 5, 6 with the bottle; agent logs and reviews (workflow A).
-2. Open (behind flags, default = flown): of2_h outlier gate; RPM ch2/ch0 low readings (`BSP/rpm.c`);
-   gyro-compensated of1 (the real leak fix); Keil-startable demo programs.
-3. Later: video-truth roam, flow scale / gyro-bias fit, asym_load demos with overlay videos.
+1. Operator: default build -> exp9 load test (vp 6, vp 3). Agent: flight_review + debrief.
+2. MULTI build -> exp10 no-load sweep vp 7-11; check CPU/CCM, vp_active 7-11 on the ground first.
+3. Open: of1 on with R_of1 0.01 for drift; gyro-compensated of1; of2_h gate; RPM ch2/ch0 (`BSP/rpm.c`).
 
 ## Recording rules (operator, verbatim spirit)
 - Start only when the operator asks, after one AskUserQuestion confirming the var list and the rate.

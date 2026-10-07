@@ -40,11 +40,17 @@ already logged. FW-B adds one weight norm per axis instead of 24 weights.
 | 4 | PR | as V1 | as V1 | kappa 0.5, crm_ell 10 | x0.25 | FW-A |
 | 5 | ST | as V1 | as V1 | st_eps 2, phi_max 10 | x0.25 | FW-A |
 | 6 | 3L | as V1 | as V1 | lam_ang 4 | x0.25 | FW-A |
-| 7 | S10 | passthrough | sim 0.18 | lowest sim saturation | FW-B |
-| 8 | RBF12 | passthrough | sim 0.32 | unstructured | FW-B |
-| 9 | RBF6 | passthrough | sim 0.32 | | FW-B |
-| 10 | RBF24 | passthrough | sim 0.32 | | FW-B |
-| 11 | S6+RBF12 | passthrough | x0.25 | V3 | FW-B |
+| 7 | S10 (basis 1) | as V1 | as V1 | lam_ang 4 | x0.25 | FW-B |
+| 8 | RBF12 (basis 3) | as V1 | as V1 | lam_ang 4 | x0.25 | FW-B |
+| 9 | RBF6 (basis 2) | as V1 | as V1 | lam_ang 4 | x0.25 | FW-B |
+| 10 | RBF24 (basis 4) | as V1 | as V1 | lam_ang 4 | x0.25 | FW-B |
+| 11 | S6+RBF12 (basis 5) | as V1 | as V1 | lam_ang 4 | x0.25 | FW-B |
+
+Rows 7-11 = the vp 6 law with a different feature set on pitch/roll (yaw/z stay S6). They need the MULTI build:
+Keil Options for Target, C/C++, Define: add `MRAC_VARIANT=2`, F7, flash. A default build refuses basis > 0
+(`vp_active == 0xEE`). RBF sets zero phi[0..3] and keep u_nom/xm, as `sim_core.py features()`. Ext gamma
+0.10 (the V3 RBF row) x0.25: PROPOSED, the sim gammas use another normalization. Host test
+`tools/host_tests.py mrac_inputs` (row mrac_inputs_multi, 28 checks). CPU/CCM on target not measured.
 
 LFHG left out: failed the SIL noise test on most seeds. Sim saturation medians (`sim/adaptive_compare/
 results_coupled.json`, mc_medians sat_pct): PID 1.75 %, S6 8.59, S10 5.20, RBF6 5.73, RBF12 5.34, RBF24 7.73.
@@ -76,5 +82,5 @@ one ranking table.
 1. FW-A: VP table + `vp_id` poll (also in EMERGENCY on the ground), `kp_id` same fix, frame vars. Build 0/0,
    scoped tests. Operator flashes.
 2. flight_review variant-segments section.
-3. FW-B: features from `sim/adaptive_compare/sim_core.py` `features()` behind a runtime mask; CPU and CCM check;
-   parity test against the sim; build-only; operator flashes.
+3. FW-B: done 10-08 (runtime `basis`, rows 7-11, MULTI build). Open: Keil build 0/0, CPU and CCM check, parity
+   test against the sim; operator flashes.

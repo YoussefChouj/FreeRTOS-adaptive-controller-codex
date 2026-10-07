@@ -255,9 +255,46 @@ const MRAC_FeatureDesc_t mrac_feature_desc[MRAC_N_FEATURES] = {
     {15, "rbf_r3_a0", MRAC_BLK_RBF, MRAC_GRP_RBF},
     {16, "rbf_r3_a1", MRAC_BLK_RBF, MRAC_GRP_RBF},
     {17, "rbf_r3_a2", MRAC_BLK_RBF, MRAC_GRP_RBF}
+#elif MRAC_VARIANT == MRAC_VARIANT_MULTI
+    /* ext_<slot>: meaning depends on cfg->basis, see MRAC_GenExt */
+   ,{6, "ext_0", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{7, "ext_1", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{8, "ext_2", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{9, "ext_3", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{10, "ext_4", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{11, "ext_5", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{12, "ext_6", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{13, "ext_7", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{14, "ext_8", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{15, "ext_9", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{16, "ext_10", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{17, "ext_11", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{18, "ext_12", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{19, "ext_13", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{20, "ext_14", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{21, "ext_15", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{22, "ext_16", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{23, "ext_17", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{24, "ext_18", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{25, "ext_19", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{26, "ext_20", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{27, "ext_21", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{28, "ext_22", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{29, "ext_23", MRAC_BLK_RBF, MRAC_GRP_RBF}
 #endif
 };
 const uint8_t mrac_n_features = MRAC_N_FEATURES;
+
+#if MRAC_VARIANT == MRAC_VARIANT_MULTI
+/* FW-B runtime feature set of an axis (MRAC_BASIS_*); yaw and z are always S6 */
+static int MRAC_BasisOf(MRAC_Axis_e axis)
+{
+    float b = 0.0f;
+    if (axis == MRAC_AXIS_PITCH) b = mrac_config_pitch.basis;
+    else if (axis == MRAC_AXIS_ROLL) b = mrac_config_roll.basis;
+    return (int)(b + 0.5f);
+}
+#endif
 
 static void MRAC_GenStructured(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *phi)
 {
@@ -279,6 +316,15 @@ static void MRAC_GenStructured(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *p
         phi[3] = bus->u_nom;
     } else {
         phi[3] = bus->cross;
+    }
+#endif
+#if MRAC_VARIANT == MRAC_VARIANT_MULTI
+    /* sim RBF sets keep only u_nom and xm of S6 (features(): Gaussians + [un, pmr]) */
+    if (MRAC_BasisOf(axis) >= MRAC_BASIS_RBF6 && MRAC_BasisOf(axis) <= MRAC_BASIS_RBF24) {
+        phi[0] = 0.0f;
+        phi[1] = 0.0f;
+        phi[2] = 0.0f;
+        phi[3] = 0.0f;
     }
 #endif
 }
@@ -319,12 +365,88 @@ static void MRAC_GenRBF(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *phi)
         for (j = 0; j < 3; j++) phi[i * 3 + j] = gr[i] * ga[j];
     }
 }
+#elif MRAC_VARIANT == MRAC_VARIANT_MULTI
+/* FW-B ext block: slots 0..23 hold the sim set picked by cfg->basis (sim_core.py features(): rate / 5 rad/s,
+ * angle / 0.5 rad, accel / 50; RBF grids linspace(-1, 1), width = spacing, index i*b + j as meshgrid 'ij').
+ * un = u_nom / u_max: the firmware u_nom is a torque in Nm, the sim's is PID units / 300 (PROPOSED scale).
+ * Unused slots, yaw, z, basis 0 and a non-finite input give 0, so they add nothing to Phi_sq or u_ad. */
+static const float mrac_rbf_rate_c[4] = {-1.5f, -0.5f, 0.5f, 1.5f};
+static const float mrac_rbf_ang_c[3]  = {-1.0f,  0.0f, 1.0f};
+static float mrac_acc_f[AXES];
+static float mrac_x_prev[AXES];
+
+/* a x b separable Gaussian grid on (pr, ph), centres linspace(-1, 1), width = spacing (a <= 6, b <= 4) */
+static void MRAC_ExtGrid(float pr, float ph, int a, int b, float *phi)
+{
+    float gr[6];
+    float ga[4];
+    float wr = 2.0f / (float)(a - 1);
+    float wa = 2.0f / (float)(b - 1);
+    float d;
+    int i, j;
+
+    for (i = 0; i < a; i++) { d = (pr + 1.0f - wr * (float)i) / wr; gr[i] = expf(-0.5f * d * d); }
+    for (j = 0; j < b; j++) { d = (ph + 1.0f - wa * (float)j) / wa; ga[j] = expf(-0.5f * d * d); }
+    for (i = 0; i < a; i++) {
+        for (j = 0; j < b; j++) phi[i * b + j] = gr[i] * ga[j];
+    }
+}
+
+static void MRAC_GenExt(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *phi)
+{
+    const MRAC_AxisConfig_t *cfg = (axis == MRAC_AXIS_PITCH) ? &mrac_config_pitch : &mrac_config_roll;
+    float ang;
+    float pr;
+    float un;
+    int basis;
+    int i, j;
+
+    for (i = 0; i < MRAC_N_EXT; i++) phi[i] = 0.0f;
+    if (axis != MRAC_AXIS_PITCH && axis != MRAC_AXIS_ROLL) return;
+    if (!(bus->x - bus->x == 0.0f)) return;
+    /* 10 Hz filtered rate derivative, run every tick so a basis switch starts from a settled value */
+    mrac_acc_f[axis] += MRAC_DT * 62.831853f * ((bus->x - mrac_x_prev[axis]) / MRAC_DT - mrac_acc_f[axis]);
+    mrac_x_prev[axis] = bus->x;
+    if (!(mrac_acc_f[axis] - mrac_acc_f[axis] == 0.0f)) mrac_acc_f[axis] = 0.0f;
+
+    basis = MRAC_BasisOf(axis);
+    ang = ((axis == MRAC_AXIS_PITCH) ? imu_data.pit : imu_data.rol) * MRAC_DEG2RAD;
+    un = (cfg->u_max > 0.0f) ? bus->u_nom / cfg->u_max : 0.0f;
+    if (!(ang - ang == 0.0f) || !(un - un == 0.0f)) return;
+    pr = bus->x / 5.0f;
+    switch (basis) {
+        case MRAC_BASIS_S10:
+            phi[0] = sinf(ang);
+            phi[1] = fabsf(pr) * un;
+            phi[2] = un * fabsf(un);
+            phi[3] = mrac_acc_f[axis] / 50.0f;
+            break;
+        case MRAC_BASIS_RBF6:  MRAC_ExtGrid(pr, ang / 0.5f, 3, 2, phi); break;
+        case MRAC_BASIS_RBF12: MRAC_ExtGrid(pr, ang / 0.5f, 4, 3, phi); break;
+        case MRAC_BASIS_RBF24: MRAC_ExtGrid(pr, ang / 0.5f, 6, 4, phi); break;
+        case MRAC_BASIS_S6RBF12: {
+            float gr[4];
+            float ga[3];
+            float xr = bus->x / cfg->rbf_rate_scale;
+            float xa = ang / cfg->rbf_ang_scale;
+            for (i = 0; i < 4; i++) gr[i] = MRAC_Simple_RBF(xr, mrac_rbf_rate_c[i], 1.0f);
+            for (j = 0; j < 3; j++) ga[j] = MRAC_Simple_RBF(xa, mrac_rbf_ang_c[j], 1.0f);
+            for (i = 0; i < 4; i++) {
+                for (j = 0; j < 3; j++) phi[i * 3 + j] = gr[i] * ga[j];
+            }
+            break;
+        }
+        default: break;
+    }
+}
 #endif
 
 const MRAC_BlockDesc_t mrac_block_table[] = {
     {MRAC_BLK_STRUCT, 0, MRAC_N_STRUCT, MRAC_GenStructured}
 #if MRAC_VARIANT == MRAC_VARIANT_STRUCT6_RBF12
    ,{MRAC_BLK_RBF, MRAC_N_STRUCT, MRAC_N_RBF, MRAC_GenRBF}
+#elif MRAC_VARIANT == MRAC_VARIANT_MULTI
+   ,{MRAC_BLK_RBF, MRAC_N_STRUCT, MRAC_N_EXT, MRAC_GenExt}
 #endif
 };
 #define MRAC_N_BLOCKS ((int)(sizeof(mrac_block_table) / sizeof(mrac_block_table[0])))
@@ -389,6 +511,17 @@ static uint16_t MRAC_FeatureCount(const MRAC_AxisConfig_t* config, int* n)
         return 0U;
     }
     return MRAC_VID_RBF;
+#elif MRAC_VARIANT == MRAC_VARIANT_MULTI
+    {   /* features in use per basis: S6 6, S10 10, RBF6 12, RBF12 18, RBF24 30, S6+RBF12 18 */
+        static const uint8_t n_of[MRAC_BASIS_COUNT] = {6U, 10U, 12U, 18U, 30U, 18U};
+        int b = (int)(config->basis + 0.5f);
+        if (b <= 0 || b >= MRAC_BASIS_COUNT) {
+            *n = MRAC_N_STRUCT;
+            return 0U;
+        }
+        *n = n_of[b];
+        return MRAC_VID_RBF;
+    }
 #else
     (void)config;
     return 0U;
@@ -1014,6 +1147,7 @@ void MRAC_Init(void)
     MRAC_SET(rbf_on,          0.0f,                      0.0f,                      0.0f,                      0.0f);
     MRAC_SET(rbf_rate_scale,  3.0f,                      3.0f,                      3.0f,                      3.0f);
     MRAC_SET(rbf_ang_scale,   0.26f,                     0.26f,                     0.26f,                     0.26f);
+    MRAC_SET(basis,           0.0f,                      0.0f,                      0.0f,                      0.0f);
     MRAC_SET(st_eps,          0.0f,                      0.0f,                      0.0f,                      0.0f);
     MRAC_SET(st_phi_max,      10.0f,                     10.0f,                     10.0f,                     10.0f);
     MRAC_SET(st_bar,          0.0f,                      0.0f,                      0.0f,                      0.0f);
@@ -1077,6 +1211,13 @@ void MRAC_Init(void)
     for (i = MRAC_N_STRUCT; i < MRAC_N_FEATURES; i++) {   /* yaw / z: no RBF learning */
         MRAC_BASIS(yaw, i, 0.0f, 0.0f, 0.0f, 0.0f);
         MRAC_BASIS(z,   i, 0.0f, 0.0f, 0.0f, 0.0f);
+    }
+#elif MRAC_VARIANT == MRAC_VARIANT_MULTI
+    for (i = MRAC_N_STRUCT; i < MRAC_N_FEATURES; i++) {   /* FW-B ext slots: V3 RBF row (PROPOSED); yaw / z off */
+        MRAC_BASIS(pitch, i, 0.10f, 0.05f, 0.01f, -0.05f);
+        MRAC_BASIS(roll,  i, 0.10f, 0.05f, 0.01f, -0.05f);
+        MRAC_BASIS(yaw,   i, 0.0f, 0.0f, 0.0f, 0.0f);
+        MRAC_BASIS(z,     i, 0.0f, 0.0f, 0.0f, 0.0f);
     }
 #endif
 
@@ -1216,7 +1357,8 @@ static const struct { float lo; float hi; uint8_t snap; } mrac_var_field[MRAC_VF
     MRAC_VAR_FIELD( 0.0f,  1.0f,   0),   /* st_bar          - */
     MRAC_VAR_FIELD( 0.0f,  10.0f,  0),   /* lf_gain         - */
     MRAC_VAR_FIELD( 0.0f,  5.0f,   0),   /* sigma_lf        1/s */
-    MRAC_VAR_FIELD( 0.5f,  100.0f, 0)    /* gam_f           rad/s */
+    MRAC_VAR_FIELD( 0.5f,  100.0f, 0),   /* gam_f           rad/s */
+    MRAC_VAR_FIELD( 0.0f,  MRAC_BASIS_HI, 0)  /* basis    MRAC_BASIS_* id */
 };
 
 uint8_t MRAC_VariantParamSet(uint8_t axis, uint8_t field, float val)
@@ -1267,6 +1409,14 @@ uint8_t MRAC_VariantParamSet(uint8_t axis, uint8_t field, float val)
             break;
         case MRAC_VF_SIGMA_LF:       c->sigma_lf = val;       break;
         case MRAC_VF_GAM_F:          c->gam_f = val;          break;
+        case MRAC_VF_BASIS:
+            c->basis = (float)(int)(val + 0.5f);
+            // fresh ext weights on every switch, as for rbf_on
+            for (k = MRAC_N_STRUCT; k < MRAC_N_FEATURES; k++) {
+                st[axis]->Theta[k] = 0.0f;
+                st[axis]->Whatf[k] = 0.0f;
+            }
+            break;
         default: return 0U;
     }
     if (mrac_var_field[field].snap) {

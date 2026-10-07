@@ -242,6 +242,7 @@ typedef struct {
     float lf_gain;              // LFHG [-]   0 = OFF; > 0: LF learning on this axis and gamma x lf_gain
     // WP-38 input guard (MRAC_Control): finite ticks after a non-finite input before u_ad reaches the mixer again
     float nan_rearm;            // [ticks] MRAC_Init only, no command writes it
+    float basis;                // FW-B MRAC_BASIS_* id (MULTI build, pitch/roll); 0 = S6
 
 } MRAC_AxisConfig_t;
 
@@ -266,6 +267,7 @@ typedef enum {
     MRAC_VF_LF_GAIN,
     MRAC_VF_SIGMA_LF,           // writes the existing sigma_lf row
     MRAC_VF_GAM_F,              // writes the existing gam_f row (Whatf bandwidth, also PR's filter)
+    MRAC_VF_BASIS,              // FW-B feature set id, MRAC_BASIS_*; > 0 only in the MULTI build
     MRAC_VF_COUNT
 } MRAC_VariantField_e;
 

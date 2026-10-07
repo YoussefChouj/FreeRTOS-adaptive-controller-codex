@@ -45,6 +45,7 @@ HOST_TESTS = [
     ("mrac_sigma_prior", ["API/tests/test_mrac_sigma_prior.c", "{src}/mrac.c"],                  ["-std=c99", "-Wall", "-DMRAC_ENABLE_SIGMA_PRIOR", "-I{src}", "-IAPI/tests/stubs"]),
     ("mrac_inputs",      ["API/tests/test_mrac_inputs.c", "{src}/mrac.c", "{src}/mrac_math.c"], ["-std=c99", *W, "-I{src}", "-IAPI/tests/stubs"]),
     ("mrac_inputs_rbf",  ["API/tests/test_mrac_inputs.c", "{src}/mrac.c", "{src}/mrac_math.c"], ["-std=c99", *W, "-DMRAC_VARIANT=1", "-I{src}", "-IAPI/tests/stubs"]),
+    ("mrac_inputs_multi", ["API/tests/test_mrac_inputs.c", "{src}/mrac.c", "{src}/mrac_math.c"], ["-std=c99", *W, "-DMRAC_VARIANT=2", "-I{src}", "-IAPI/tests/stubs"]),
     ("mrac_sizeof",      ["API/tests/mrac_sizeof.c"],                                            ["-std=c99", *STUBS]),
     ("fw_controller",    ["tests/firmware_host/test_controller.c", "API/controller.c"],          ["-std=c99", "-Wall", "-Werror", *FWH]),
     ("mixer",            ["API/tests/test_mixer.c", "API/controller.c"],                         ["-std=c99", *W, "-msse2", "-mfpmath=sse", *FWH]),

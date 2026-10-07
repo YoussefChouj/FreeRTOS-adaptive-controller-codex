@@ -64,6 +64,7 @@ in flight: watch for the 10-07 swing.
 | `st_eps` | ST add-on p/r (0 off) | 0 |
 | `lam_ang` | 3L add-on p/r (0 off) | 4 |
 | `g` | gamma scale p/r/y | 0.25 |
+| `basis` | feature set p/r: 0 S6, 1 S10, 2 RBF6, 3 RBF12, 4 RBF24, 5 S6+RBF12 (1-5 need the `MRAC_VARIANT=2` build) | 0 |
 
 It applies only with ch8 off: on the ground, or in hover while PID flies (MRAC in shadow). With ch8 on the
 request waits until ch8 goes off. Applying resets the weights; ch8 on after that starts from zero weights.

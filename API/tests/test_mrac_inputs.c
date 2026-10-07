@@ -237,12 +237,45 @@ static void test_nan_guard(void)
     ok("B nan_rearm 0: engaged on the next finite tick", mrac_state.pitch.u_ad != 0.0f);
 }
 
+#if MRAC_VARIANT == MRAC_VARIANT_MULTI
+/* FW-B: cfg basis picks the feature set at run time. 0 = S6 (ext slots stay 0), 3 = RBF12 (12 ext slots,
+ * phi[0..3] zeroed, u_nom / xm kept), > MRAC_BASIS_HI refused. */
+static int ext_nonzero(const float *phi)
+{
+    int k, n = 0;
+    for (k = MRAC_N_STRUCT; k < MRAC_N_FEATURES; k++) n += (phi[k] != 0.0f);
+    return n;
+}
+
+static void test_multi_basis(void)
+{
+    const float *phi = mrac_state.pitch.Phi;
+    fly();
+    tick(5.0f, -3.0f);
+    ok("M basis 0: ext slots stay 0", ext_nonzero(phi) == 0 && phi[1] != 0.0f);
+    ok("M basis 3 accepted", MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 3.0f) == 1U);
+    tick(5.0f, -3.0f);
+    ok("M RBF12: 12 ext slots live, the rest 0", ext_nonzero(phi) == 12 && phi[MRAC_N_STRUCT + 12] == 0.0f);
+    ok("M RBF12: phi[0..3] zeroed", phi[0] == 0.0f && phi[1] == 0.0f && phi[2] == 0.0f && phi[3] == 0.0f);
+    ok("M basis 4 (RBF24) fills all 24", MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 4.0f) == 1U);
+    tick(5.0f, -3.0f);
+    ok("M RBF24: 24 ext slots live", ext_nonzero(phi) == 24);
+    ok("M basis 6 refused", MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 6.0f) == 0U);
+    MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 0.0f);
+    tick(5.0f, -3.0f);
+    ok("M back to basis 0: ext slots 0 again", ext_nonzero(phi) == 0);
+}
+#endif
+
 int main(void)
 {
     test_simplex_envelope_in_rad();
     test_nan_guard();
 #if MRAC_VARIANT == MRAC_VARIANT_STRUCT6_RBF12
     test_rbf_angle_in_rad();
+#endif
+#if MRAC_VARIANT == MRAC_VARIANT_MULTI
+    test_multi_basis();
 #endif
     printf("mrac_inputs (variant %d): %d checks, %d failure(s)\n", MRAC_VARIANT, checks, fails);
     return fails != 0;
