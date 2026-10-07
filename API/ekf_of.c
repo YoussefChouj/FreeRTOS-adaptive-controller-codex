@@ -17,6 +17,7 @@
  *
  * Measurements:
  *   OF:   h = [0, 1, 1, 0], gated at of_gate sigmas (innov^2 > gate^2*S -> skip, rej_x/rej_y++)
+ *   OF1:  h = [0, 1, 0, 0], raw flow (no gyro fix, no bias state), gated at of1_gate sigmas
  *   ZUPT: h = [0, 1, 0, 0]
  *
  * Units: meters, seconds
@@ -57,15 +58,21 @@ void EkfOf_Init(EkfOf_t *e)
     /* q = random-walk/white-noise density per second, units per state; P0 = initial variance */
     EKF_OF_STATE(0, q_pos, 1e-6f, 1.0f);   /* p    position */
     EKF_OF_STATE(1, q_acc, 1e-3f, EKF_OF_VEL_P0);   /* v    velocity */
-    EKF_OF_STATE(2, q_bof, 0.0f,  0.01f);  /* bof  optical flow bias: frozen, see change history */
+    EKF_OF_STATE(2, q_bof, 1e-5f, 0.01f);  /* bof  optical flow bias: learned vs of1, see change history */
     EKF_OF_STATE(3, q_ba,  1e-6f, 0.25f);  /* ba   accel bias */
 
     /* Measurement noise variances */
     e->R_of   = 1e-4f;
+    e->R_of1  = 1e-3f;
     e->R_zupt = 1e-4f;
     e->of_gate = 5.0f;   /* sigmas; armed flights auto_landing_1/hover_7/ekf1 peak at 4.5 sigma */
+    e->of1_gate = 5.0f;
 
     /* Change history (newest first)
+     * 2026-10-07 two-channel EKF: of1 (raw flow) as a 2nd velocity measurement (EkfOf_UpdateRaw,
+     *   h = [0,1,0,0], R_of1 1e-3, gate 5) and q_bof 0 -> 1e-5, so bof learns the gyro-fixed of2
+     *   bias against of1. Replay vs video truth (ekf_of_replay truth, yaw-fixed): step B rms
+     *   69.9 -> 20.8 cm, end (-123,-48) -> (+2,+2) cm; step A rms 31.2 -> 22.0 cm.
      * 2026-10-03 x_y_calibration_hitting_wall_1: gate-lockout recovery (EKF_OF_REJ_RELEASE in ekf_of.h);
      *   5 consecutive rejected OF samples reset P_vv to EKF_OF_VEL_P0 and apply the sample.
      * 2026-10-03 flight_test_drift_fix_1: q_bof 0 and bof variance 0 at ARM (EKF_OF_BOF_ARM_VAR),
@@ -248,6 +255,14 @@ void EkfOf_Update(EkfOf_t *e, float of_x, float of_y)
     if (!e->inited) return;
     ekf_of_update_axis(e, 0, of_x, &e->innov_x, &e->rej_x, &e->rej_run_x);
     ekf_of_update_axis(e, 1, of_y, &e->innov_y, &e->rej_y, &e->rej_run_y);
+}
+
+void EkfOf_UpdateRaw(EkfOf_t *e, float of1_x, float of1_y)
+{
+    const float h[4] = {0.0f, 1.0f, 0.0f, 0.0f};
+    if (!e->inited || e->R_of1 <= 0.0f) return;
+    (void)ekf_of_update_one(e, 0, h, of1_x, e->R_of1, e->of1_gate, 0);
+    (void)ekf_of_update_one(e, 1, h, of1_y, e->R_of1, e->of1_gate, 0);
 }
 
 void EkfOf_UpdateZeroVel(EkfOf_t *e)

@@ -72,13 +72,13 @@ static void GsIdle_ReleaseOnDisarm(void);    /* below Des_Height: GS idle author
  * below 0.5 m, 0.3 -> 0.13 m in 0.28 s vs 0.86 s auto (F6). Des_Height still lowers
  * Z_posPID.Des at the same rate so the Des-at-floor touchdown gates keep working.
  * Touchdown detected by Z_ratePID.FB -> 0 on frame contact. */
-#define LAND_VZ_MPS        0.60f    /* F8 2026-10-06: was 0.40 (F7 1.0->0.5 m took 1.34 s vs M8 0.69 s) */
-#define LAND_FAST_ALT      0.50f
+#define LAND_VZ_MPS        0.65f    /* F8 2026-10-06: was 0.40 (F7 1.0->0.5 m took 1.34 s vs M8 0.69 s) */
+#define LAND_FAST_ALT      0.40f
 #define LAND_VZ_FAST_MPS   0.50f    /* F8: was 0.70; touchdown speed, impact energy goes with speed^2 */
 #define LAND_TICK_S        0.005f   /* Des_Height runs every 200 Hz tick */
 /* Safety net: 3000 ticks at 200 Hz = 15 s max landing time before forced disarm
  * (was 10 s; kept for margin: rate-mode LAND from 2.5 m is about 5.7 s, arithmetic). */
-#define LAND_MAX_TICKS  3000U
+#define LAND_MAX_TICKS  500U
 /* Touchdown ground evidence (2026-10-02b): FB within LAND_REST_MARGIN of the pre-takeoff
  * rest height, or the sink bias saturated at LAND_SINK_BIAS_MAX (see Update_Motor). */
 #define LAND_REST_MARGIN     0.03f
@@ -89,7 +89,7 @@ static void GsIdle_ReleaseOnDisarm(void);    /* below Des_Height: GS idle author
  * loop threw throttle at each impact: 5 bounces in 7 s. Now Des at the floor and FB
  * within LAND_REST_MARGIN of rest for LAND_REST_CUT_TICKS also lands (F2-F4 sat there
  * 0.26-0.40 s right before their normal cut, so they are unchanged). */
-#define LAND_REST_CUT_TICKS  10U   /* 50 ms at 200 Hz, then the spool-down below (was 40: 0.2 s) */
+#define LAND_REST_CUT_TICKS  5U   /* 25 ms at 200 Hz, then the spool-down below (was 40: 0.2 s) */
 /* FIX 2026-10-06 (logs/livewatch/touchdown_20261006.csv): touchdown spool-down. The cut was one
  * step from ~90% of hover to Motor_PWM_ZERO after 0.19 s on the skids with the attitude loop live:
  * the skids slid (drift), then the gear took the full weight at once and the drone hopped +5 cm
@@ -742,15 +742,19 @@ static void Of_TickKf(u8 of_ok)
 	 * the module repeats one stale velocity (exactly 3,5 and 2,3 cm/s, std 0,
 	 * quality 255). With ZUPT pinning v=0 these updates taught it to bof, and
 	 * the hover flew that fake bias as a steady +x drift. Use OF only when
-	 * not on the ground and above the range floor. */
+	 * not on the ground and above the range floor.
+	 * 2026-10-07: each OF frame also feeds of1 (raw flow, same axes as of2, no trim) as the
+	 * bias-free 2nd channel that lets bof learn the of2 gyro-fix bias (EkfOf_UpdateRaw). */
 	if (of_ok && !on_ground && ano_of.of_alt_cm >= OF_HANDHELD_MIN_ALT_CM) {
 		if (EKF_OF_UPDATE_ON_NEW_FRAME) {
 			if (ano_of.of_update_cnt != s_last_of_update_cnt) {
 				EkfOf_Update(&s_ekf_of, ofx, ofy);
+				EkfOf_UpdateRaw(&s_ekf_of, (float)ano_of.of1_dx * M_PER_CM, (float)ano_of.of1_dy * M_PER_CM);
 				s_last_of_update_cnt = ano_of.of_update_cnt;
 			}
 		} else {
 			EkfOf_Update(&s_ekf_of, ofx, ofy);
+			EkfOf_UpdateRaw(&s_ekf_of, (float)ano_of.of1_dx * M_PER_CM, (float)ano_of.of1_dy * M_PER_CM);
 		}
 	}
 	/* WP-14: innovation-based health gate with persistence.

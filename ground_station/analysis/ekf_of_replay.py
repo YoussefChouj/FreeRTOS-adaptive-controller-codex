@@ -652,10 +652,10 @@ def fit_rotation(d, tr, t, px, py, mapping, win_s=1.0):
     return ang, float(np.sum(rx * gx + ry * gy) / max(np.sum(rx * rx + ry * ry), 1e-12))
 
 
-def score_truth(d, tr, t, px, py, mapping, rot=0.0):
-    """Position error vs truth over flight_phase==1, both re-zeroed at the first flying truth sample.
+def truth_xy(d, tr, t, px, py, mapping, rot=0.0):
+    """Estimates and truth over flight_phase==1 in the truth frame, both re-zeroed at the first flying truth sample.
     mapping = (sx, sy): est_x(locx) = sx*py, est_y(locy) = sy*px; rot (rad) turns est into the truth frame.
-    Returns dict of (B,) arrays."""
+    Returns tt (N,), ex, ey (B, N), gx, gy (N,)."""
     ph = np.interp(tr['t_tel'], t, d['flight_phase'])
     fly = np.abs(ph - 1) < 1e-6
     tt = tr['t_tel'][fly]
@@ -663,7 +663,13 @@ def score_truth(d, tr, t, px, py, mapping, rot=0.0):
     ey = np.array([np.interp(tt, t, mapping[1] * px[b]) for b in range(len(px))])
     ex, ey = np.cos(rot) * ex - np.sin(rot) * ey, np.sin(rot) * ex + np.cos(rot) * ey
     gx = tr['truth_x_m'][fly]; gy = tr['truth_y_m'][fly]
-    errx = (ex - ex[:, :1]) - (gx - gx[0]); erry = (ey - ey[:, :1]) - (gy - gy[0])
+    return tt, ex - ex[:, :1], ey - ey[:, :1], gx - gx[0], gy - gy[0]
+
+
+def score_truth(d, tr, t, px, py, mapping, rot=0.0):
+    """Position error vs truth over flight_phase==1 (truth_xy). Returns dict of (B,) arrays."""
+    tt, ex, ey, gx, gy = truth_xy(d, tr, t, px, py, mapping, rot)
+    errx = ex - gx; erry = ey - gy
     tail = tt >= tt[-1] - 2.0
     e = np.hypot(errx, erry)
     return {'rms': np.sqrt(np.mean(e * e, axis=1)), 'p50': np.median(e, axis=1),
@@ -692,18 +698,21 @@ def run_truth_cli(argv):
     ap.add_argument('--flow-scale', type=float, nargs='+', default=[1.0])
     ap.add_argument('--no-rot', action='store_true', help='score in the truth frame as is (no fitted yaw)')
     ap.add_argument('--out', default=None, help='json with every config score')
+    ap.add_argument('--plot', default=None, help='png: truth vs firmware-as-flown vs best config, XY per pair')
     a = ap.parse_args(argv)
     base_cfg = {'q_bof': 0.0, 'R_of1': 0.0, 'bof_arm_var': 0.0, 'of1_gate': 5.0, 'R_of': 1e-4, 'flow_scale': 1.0}
     grid = [base_cfg] + [{'q_bof': q, 'R_of1': r, 'bof_arm_var': v, 'of1_gate': g, 'R_of': ro, 'flow_scale': f}
                          for q in a.q_bof for r in a.r_of1 for v in a.arm_var for g in a.of1_gate
                          for ro in a.r_of for f in a.flow_scale]   # grid[0] = firmware as flown
-    rows = [dict(g) for g in grid]
+    rows = [dict(g, idx=i) for i, g in enumerate(grid)]
+    xy = {}
     for sess, tcsv in a.pair:
         d, tr = load_truth_session(sess, tcsv)
         t, px, py = replay_truth(d, grid)
         mp, cc = fit_mapping(d, tr, t, px, py)
         rot, k = (0.0, 1.0) if a.no_rot else fit_rotation(d, tr, t, px, py, mp)
         sc = score_truth(d, tr, t, px, py, mp, rot)
+        xy[Path(sess).name[:24]] = truth_xy(d, tr, t, px, py, mp, rot)
         name = Path(sess).name[:24]
         print(f"{name}: mapping locx={mp[0]:+.0f}*py locy={mp[1]:+.0f}*px, baseline-vs-FB corr ({cc[0]:.3f},{cc[1]:.3f}), "
               f"flying {sc['dur']:.0f} s, yaw est->truth {np.degrees(rot):+.1f} deg, scale truth/est {k:.2f}")
@@ -722,6 +731,34 @@ def run_truth_cli(argv):
               f"arm {r['bof_arm_var']:.0e} g1 {r['of1_gate']:.0f} | {cells} cm")
     if a.out:
         Path(a.out).write_text(json.dumps(rows, indent=1))
+    if a.plot:
+        plot_truth(xy, base, rows[0], a.plot)
+
+
+def plot_truth(xy, base, best, path):
+    """One XY panel per pair: video truth, the firmware as flown (base) and the best config, in the truth frame."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    fig, axs = plt.subplots(1, len(xy), figsize=(6.5 * len(xy), 6.2), squeeze=False)
+    lab = lambda r: f"q_bof {r['q_bof']:.0e} R_of1 {r['R_of1']:.0e}" if r['R_of1'] > 0 else 'of2 only, q_bof 0'
+    for ax, (name, (tt, ex, ey, gx, gy)) in zip(axs[0], xy.items()):
+        ax.plot(gx * 100, gy * 100, 'k-', lw=2.2, label='video truth')
+        for r, c, tag in ((base, 'tab:red', 'firmware as flown'), (best, 'tab:blue', 'best')):
+            s = r[name]
+            ax.plot(ex[r['idx']] * 100, ey[r['idx']] * 100, '-', color=c, lw=1.3,
+                    label=f"{tag}: {lab(r)}\n  rms {s['rms']*100:.1f} cm, end ({s['end_x']*100:+.0f}, {s['end_y']*100:+.0f}) cm")
+            ax.plot(ex[r['idx'], -1] * 100, ey[r['idx'], -1] * 100, 'o', color=c)
+        ax.plot(gx[-1] * 100, gy[-1] * 100, 'ko')
+        ax.plot(0, 0, 'k^', ms=9, label='start')
+        ax.set_title(f"{name}  ({tt[-1] - tt[0]:.0f} s flying)")
+        ax.set_xlabel('x, truth frame (cm)'); ax.set_ylabel('y, truth frame (cm)')
+        ax.set_aspect('equal', 'datalim'); ax.grid(alpha=0.3); ax.legend(fontsize=8, loc='best')
+    fig.suptitle('EKF position replay vs video truth (fixed yaw fit per flight; dots = end)')
+    fig.tight_layout()
+    fig.savefig(path, dpi=110)
+    plt.close(fig)
+    print(f"plot: {path}")
 
 
 if __name__ == "__main__":

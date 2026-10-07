@@ -3,12 +3,12 @@ import numpy as np
 DEFAULTS = {
     'q_pos': 1e-6,
     'q_acc': 1e-3,
-    'q_bof': 0.0,   # firmware since 2026-10-03 flight_test_drift_fix_1 (bof frozen)
+    'q_bof': 1e-5,  # firmware since 2026-10-07 two-channel EKF (0 from 2026-10-03 to 10-07: bof frozen)
     'q_ba': 1e-6,
     'R_of': 1e-4,
     'R_zupt': 1e-4,
     'of_gate': 5.0,  # sigmas, mirrors EkfOf_t.of_gate (0 = off)
-    'R_of1': 0.0,    # of1 (raw FLOW_HEIGHT cm/s) 2nd velocity meas, h=[0,1,0,0]; 0 = channel off (2026-10-07)
+    'R_of1': 1e-3,   # of1 (raw FLOW_HEIGHT) 2nd velocity meas, h=[0,1,0,0]; 0 = channel off (2026-10-07)
     'of1_gate': 5.0,
 }
 
@@ -267,17 +267,6 @@ class OldEkfOf6:
         self.innov_x = y_x
         self.innov_y = y_y
         return (y_x, y_y), (S_x, S_y)
-
-    def update_raw(self, of1_x, of1_y, mask=None):
-        # firmware EkfOf_UpdateRaw: of1 is bias-free velocity, h=[0,1,0,0], gated; R_of1 <= 0 skips it
-        on = (np.broadcast_to(self.R_of1, (self.B,)) > 0).astype(self.dtype)
-        mask = on if mask is None else np.asarray(mask, dtype=self.dtype) * on
-        if not mask.any():
-            return
-        R = np.where(self.R_of1 > 0, self.R_of1, 1.0)
-        h = [0.0, 1.0, 0.0, 0.0]
-        self._update_one(0, h, of1_x, R, mask, self.of1_gate)
-        self._update_one(1, h, of1_y, R, mask, self.of1_gate)
 
     def update_zero_vel(self, mask=None):
         pass

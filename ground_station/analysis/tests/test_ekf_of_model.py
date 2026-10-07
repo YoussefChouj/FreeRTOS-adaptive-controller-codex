@@ -22,11 +22,13 @@ class EkfOf_t(ctypes.Structure):
         ("q_bof", ctypes.c_float),
         ("q_ba", ctypes.c_float),
         ("R_of", ctypes.c_float),
+        ("R_of1", ctypes.c_float),
         ("R_zupt", ctypes.c_float),
         ("innov_x", ctypes.c_float),
         ("innov_y", ctypes.c_float),
         ("inited", ctypes.c_uint8),
         ("of_gate", ctypes.c_float),
+        ("of1_gate", ctypes.c_float),
         ("rej_x", ctypes.c_uint32),
         ("rej_y", ctypes.c_uint32),
         ("rej_run_x", ctypes.c_uint8),
@@ -56,9 +58,24 @@ def gcc_lib(tmp_path_factory):
     cmd.extend([str(src), "-o", str(lib_path)])
     
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
-        # Try loading to catch architecture mismatch
-        ctypes.CDLL(str(lib_path))
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            # Try loading to catch architecture mismatch
+            ctypes.CDLL(str(lib_path))
+        except (subprocess.CalledProcessError, OSError):
+            # 2026-10-07: the lab PC has only 32-bit MinGW gcc (skips every C golden on 64-bit Python) and
+            # LLVM clang with no MSVC CRT; build a CRT-free DLL (_fltused shim, explicit exports) instead.
+            clang = shutil.which("clang") or r"C:\Program Files\LLVM\bin\clang.exe"
+            if sys.platform != "win32" or not os.path.exists(clang):
+                raise
+            shim = tmp_dir / "fltused.c"
+            shim.write_text("int _fltused = 0;\n")
+            exports = [f"-Wl,-export:{n}" for n in ("EkfOf_Init", "EkfOf_Predict", "EkfOf_Update",
+                       "EkfOf_UpdateRaw", "EkfOf_UpdateZeroVel", "EkfOf_ResetPos", "EkfOf_ResetBias")]
+            subprocess.run([clang, "-std=c99", "-Wall", "-Wextra", "-Werror", "-fno-math-errno", "-shared",
+                            "-nostdlib", "-Wl,-noentry", *exports, str(src), str(shim), "-o", str(lib_path)],
+                           check=True, capture_output=True, text=True)
+            ctypes.CDLL(str(lib_path))
     except (subprocess.CalledProcessError, OSError) as e:
         try:
             dump_out = subprocess.run([gcc_path, "-dumpmachine"], check=True, capture_output=True, text=True).stdout.strip()
@@ -93,6 +110,7 @@ def test_ekf_of_model_python():
     
     params = DEFAULTS.copy()
     params['q_acc'] = (0.2**2) * dt
+    params['q_bof'] = 0.0  # single channel: bof learned on ZUPT, then frozen (q_bof > 0 needs of1: test_raw_channel_golden)
     
     model = EkfOfModel(1, **params)
     
@@ -197,6 +215,8 @@ def test_c_defaults(gcc_lib):
     assert np.isclose(c_model.R_of, DEFAULTS['R_of'], rtol=1e-5)
     assert np.isclose(c_model.R_zupt, DEFAULTS['R_zupt'], rtol=1e-5)
     assert np.isclose(c_model.of_gate, DEFAULTS['of_gate'], rtol=1e-5)
+    assert np.isclose(c_model.R_of1, DEFAULTS['R_of1'], rtol=1e-5)
+    assert np.isclose(c_model.of1_gate, DEFAULTS['of1_gate'], rtol=1e-5)
     assert c_model.rej_x == 0 and c_model.rej_y == 0
     
     py_model = EkfOfModel(1, dtype=np.float32)
@@ -267,6 +287,68 @@ def test_gate_lockout_release_golden(gcc_lib):
     assert c_model.rej_x == REJ_RELEASE == c_model.rej_y  # released once, then tracked
     assert abs(frames[REJ_RELEASE - 1][0] - 0.12) < 0.01 and abs(frames[REJ_RELEASE - 1][1] + 0.12) < 0.01
     assert abs(c_model.innov_x) < 0.061 and abs(c_model.innov_y) < 0.061  # under EKF_OF_HEALTH_THRESH
+
+
+def _run_two_channel(model, lib, c_model, of2, of1, ticks, dt=0.005):
+    for i in range(1, ticks):
+        model.predict(dt, 0.0, 0.0)
+        lib.EkfOf_Predict(ctypes.byref(c_model), dt, 0.0, 0.0)
+        if i % 8 == 0:
+            model.update_of(of2[i], -of2[i])
+            lib.EkfOf_Update(ctypes.byref(c_model), of2[i], -of2[i])
+            model.update_raw(of1[i], -of1[i])
+            lib.EkfOf_UpdateRaw(ctypes.byref(c_model), of1[i], -of1[i])
+            np.testing.assert_allclose(model.x[0], np.array(c_model.x), rtol=1e-4, atol=1e-6)
+
+
+def _two_channel_lib(gcc_lib):
+    lib = ctypes.CDLL(str(gcc_lib))
+    lib.EkfOf_Init.argtypes = [ctypes.POINTER(EkfOf_t)]
+    lib.EkfOf_Predict.argtypes = [ctypes.POINTER(EkfOf_t), ctypes.c_float, ctypes.c_float, ctypes.c_float]
+    lib.EkfOf_Update.argtypes = [ctypes.POINTER(EkfOf_t), ctypes.c_float, ctypes.c_float]
+    lib.EkfOf_UpdateRaw.argtypes = [ctypes.POINTER(EkfOf_t), ctypes.c_float, ctypes.c_float]
+    lib.EkfOf_ResetBias.argtypes = [ctypes.POINTER(EkfOf_t), ctypes.c_float]
+    return lib
+
+
+def test_raw_channel_golden(gcc_lib):
+    """Defaults (q_bof 1e-5, R_of1 1e-3): of2 = v + 0.05, of1 = v. C and Python stay equal, bof learns
+    the of2 bias (the 2026-10-07 fix), and a 0.5 m/s of1 glitch is gated without touching the state."""
+    rng = np.random.default_rng(11)
+    N = int(30.0 / 0.005)
+    v = 0.1 * np.sin(np.arange(N) * 0.005)
+    of2 = v + 0.05 + rng.normal(0, 0.01, N)
+    of1 = v + rng.normal(0, 0.02, N)
+    of1[2400] += 0.5   # an OF-update tick (multiple of 8)
+    model = EkfOfModel(1, dtype=np.float32)
+    lib = _two_channel_lib(gcc_lib)
+    c_model = EkfOf_t()
+    lib.EkfOf_Init(ctypes.byref(c_model))
+    model.reset_bias(0.0)
+    lib.EkfOf_ResetBias(ctypes.byref(c_model), 0.0)
+    _run_two_channel(model, lib, c_model, of2, of1, 2400)
+    x_before = np.array(c_model.x)
+    lib.EkfOf_UpdateRaw(ctypes.byref(c_model), of1[2400], -of1[2400])
+    np.testing.assert_array_equal(np.array(c_model.x), x_before)  # gated
+    lib.EkfOf_Init(ctypes.byref(c_model))
+    model = EkfOfModel(1, dtype=np.float32)
+    _run_two_channel(model, lib, c_model, of2, of1, N)
+    assert abs(c_model.x[2] - 0.05) < 0.01 and abs(c_model.x[5] + 0.05) < 0.01
+
+
+def test_raw_channel_off(gcc_lib):
+    """R_of1 0 = channel off: EkfOf_UpdateRaw and update_raw leave the state untouched."""
+    model = EkfOfModel(1, dtype=np.float32, R_of1=0.0)
+    lib = _two_channel_lib(gcc_lib)
+    c_model = EkfOf_t()
+    lib.EkfOf_Init(ctypes.byref(c_model))
+    c_model.R_of1 = 0.0
+    x0, P0 = model.x.copy(), model.P.copy()
+    model.update_raw(0.3, 0.3)
+    lib.EkfOf_UpdateRaw(ctypes.byref(c_model), 0.3, 0.3)
+    np.testing.assert_array_equal(model.x, x0)
+    np.testing.assert_array_equal(model.P, P0)
+    assert list(c_model.x) == [0.0] * 8
 
 
 def test_replay_arrays():

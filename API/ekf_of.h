@@ -38,6 +38,7 @@ typedef struct {
     float q_ba;
     /* R */
     float R_of;
+    float R_of1;        /* of1 raw-flow channel (EkfOf_UpdateRaw); <= 0 = channel off */
     float R_zupt;
     /* Innovation */
     float innov_x;
@@ -45,6 +46,7 @@ typedef struct {
     uint8_t inited;
     /* OF innovation gate (PX4 EKF2_OF_GATE style): skip a sample when innov^2 > of_gate^2 * S */
     float of_gate;      /* sigmas; 0 = gate off */
+    float of1_gate;     /* same, for the of1 channel; no gate-lockout release (of2's release re-opens P_vv) */
     uint32_t rej_x;     /* rejected OF samples since init */
     uint32_t rej_y;
     uint8_t rej_run_x;  /* consecutive rejected OF samples, see EKF_OF_REJ_RELEASE */
@@ -75,6 +77,12 @@ extern void EkfOf_Predict(EkfOf_t *e, float dt, float ax, float ay);
  *  Subtracts the OF bias estimate internally. */
 extern void EkfOf_Update(EkfOf_t *e, float of_x, float of_y);
 
+/** Second velocity measurement: the module's raw flow (of1, no gyro fix), m/s, same axes as
+ *  EkfOf_Update. h = [0, 1, 0, 0] (no OF bias), gated at of1_gate. Call right after EkfOf_Update.
+ *  WHY (2026-10-07): on video truth the gyro-fixed of2 carries a slow bias that bof cannot learn
+ *  without a second, bias-free reference; of1 gives that reference (replay ekf_of_replay truth). */
+extern void EkfOf_UpdateRaw(EkfOf_t *e, float of1_x, float of1_y);
+
 /** Zero velocity update (on ground). */
 extern void EkfOf_UpdateZeroVel(EkfOf_t *e);
 
@@ -86,8 +94,8 @@ extern void EkfOf_ResetPos(EkfOf_t *e);
  *  with no cross-covariance. Called on ARM and on the handheld-test edge. */
 extern void EkfOf_ResetBias(EkfOf_t *e, float var);
 
-/* bof variance at ARM, (m/s)^2. 0 with q_bof 0 = bof frozen at 0 in flight
- * (2026-10-03: was 2.5e-5; the lift-off slide was still learned as bias). */
+/* bof variance at ARM, (m/s)^2. Since 2026-10-07 bof starts at 0 and is learned through q_bof
+ * against the of1 channel (2026-10-03: was 2.5e-5; the lift-off slide was still learned as bias). */
 #define EKF_OF_BOF_ARM_VAR      0.0f
 
 /* ----- WP-14: shadow mode, health gate, active path, tilt gain ----- */
