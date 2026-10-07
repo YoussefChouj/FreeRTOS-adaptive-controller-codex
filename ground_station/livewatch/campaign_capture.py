@@ -134,12 +134,33 @@ ESTIMATOR_TRUTH: tuple[str, ...] = (
     "ano_of.of1_dx", "ano_of.of1_dy", "ano_of.of2_h", "ano_of.of2_h_f2_v",
     "ano_of.acc_data_x", "ano_of.acc_data_y", "ano_of.acc_data_z",
 )
+# Thrust and residual-moment fits (10-07 investigation trail): the collective and torque commands and the hover
+# base (pack voltage real_voltage is already in the core set). With RPM and Acc_Z_Real from estimator_truth
+# they give k_T (m*(g+a_z)/cos tilt vs sum rpm^2) and the commanded-vs-achieved moment residual. g_thrust_est.*
+# are the onboard per-motor thrust estimates thrust_replay scores against the weight.
+THRUST_MODEL: tuple[str, ...] = (
+    ("Throttle_out", "Throttle_th", "Ctrler.Z_posPID.U", "Ctrler.Z_ratePID.U", "u_gyrox", "u_gyroy", "u_gyroz")
+    + tuple(f"g_thrust_est.empirical[{i}]" for i in range(4))
+    + tuple(f"g_thrust_est.blade_element[{i}]" for i in range(4))
+    + ("g_thrust_est.imu_total",)
+)
+# The two-channel OF EKF from the inside (build 0b0c2b0b): state [px vx bof_x py vy bof_y ba_x ba_y], innovations,
+# rejected-sample counters and the P_vv / P_bof variances (block row*4+col: [5] = vv, [10] = bof), so a drift
+# can be pinned on the state that carried it.
+EKF_STATES: tuple[str, ...] = (
+    tuple(f"s_ekf_of.x[{i}]" for i in range(8))
+    + ("s_ekf_of.innov_x", "s_ekf_of.innov_y", "s_ekf_of.rej_x", "s_ekf_of.rej_y",
+       "g_ekf_of_fallback", "g_of_bias_mode",
+       "s_ekf_of.P[0][5]", "s_ekf_of.P[1][5]", "s_ekf_of.P[0][10]", "s_ekf_of.P[1][10]")
+)
 LOG_GROUPS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "mrac_shadow": MRAC_SHADOW,
     "velocity_loops": VELOCITY_LOOPS,
     "optical_flow": OPTICAL_FLOW,
     "takeoff_gate": TAKEOFF_GATE,
     "estimator_truth": ESTIMATOR_TRUTH,
+    "thrust_model": THRUST_MODEL,
+    "ekf_states": EKF_STATES,
 })
 LOG_PLAN_KEYS = ("rate_hz", "groups")
 # PROPOSED default: 50 Hz is the rate the 10 s stream_log check carried with 0 dropped after the last flash.

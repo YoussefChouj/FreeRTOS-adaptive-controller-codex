@@ -47,7 +47,7 @@ CMD_BOUND_DEFAULT = 200.0
 # Hover ladder for clean flights, all inside the soft fence (z <= 1.4). After the last rung: a campaign.
 LADDER = ({"z": 0.5, "hold_s": 20}, {"z": 0.7, "hold_s": 20}, {"z": 1.0, "hold_s": 30}, {"z": 1.3, "hold_s": 40})
 AFTER_LADDER = ("pid_ref", "livetune_rate_rp")
-DEFAULT_LOG_GROUPS = ("velocity_loops", "optical_flow")
+DEFAULT_LOG_GROUPS = ("estimator_truth", "optical_flow", "velocity_loops", "takeoff_gate", "thrust_model", "ekf_states")
 
 
 @dataclass(frozen=True)

@@ -23,10 +23,13 @@ once; its hard rules, checklist and failure handling apply unchanged.
 ## Session start
 
 1. Run folder: `logs/workflow-c/<YYYYMMDD-HHMM>/` (one per session; the debrief creates it).
-2. Ask the pack (Q2 of workflow B). Default first flight: `hover` `{"z": 0.5, "hold_s": 20}`, unless the operator
-   names another (any `docs/workflow-b/scenarios/*.yaml` or a campaign from `ground_station/service/campaigns/`).
-3. Write the first one-flight campaign the same way the debrief writes `next.yaml` (fly mode, `max_flights: 1`,
-   `capture: campaign`, log plan 50 Hz `velocity_loops` + `optical_flow`) into the run folder.
+2. Ask the pack (Q2 of workflow B). Default first flight (operator 10-07): the step C campaign
+   `ground_station/service/campaigns/wfc_step_c.yaml` (0.5 m cardinal steps, two diagonals, a climb to 1.1 m and a
+   20 s still hold, filmed for video truth), unless the operator names another (any
+   `docs/workflow-b/scenarios/*.yaml` or a campaign from `ground_station/service/campaigns/`). The manual prompts
+   for the whole loop are in `docs/workflow-c/step-flight-runbook.md`.
+3. Copy it into the run folder as `01/step_c.yaml` (fly mode, `max_flights: 1`, `capture: campaign`, log plan
+   50 Hz `estimator_truth` + `optical_flow` + `velocity_loops` + `takeoff_gate` + `thrust_model` + `ekf_states`).
 
 ## The loop (one pass per flight)
 
@@ -34,7 +37,8 @@ once; its hard rules, checklist and failure handling apply unchanged.
    the yaml from step 3). Keep the `launch copy: <path>` it prints. Then
    ask workflow B's **Q3 log plan** every flight (operator 10-06): one AskUserQuestion with the printed table's
    B/s against the 70,042 B/s budget; options: approve (Recommended), other rate (`--rate N`, show its B/s),
-   other groups (`velocity_loops`, `optical_flow`, `takeoff_gate`, `mrac_shadow`). Rerun launch with the answer.
+   other groups (`estimator_truth`, `optical_flow`, `velocity_loops`, `takeoff_gate`, `thrust_model`,
+   `ekf_states`, `mrac_shadow`). Rerun launch with the answer.
 2. **Preflight and go**: `campaign_preflight` with that launch copy as `campaign_path`, the workflow B checklist, "Arm by RC when ready,
    then say go", then `mcp__dashboard__campaign_go` with the operator's words verbatim as `confirmation`.
 3. **Watch**: `mcp__dashboard__campaign_state` once per flight phase; no polling loops.

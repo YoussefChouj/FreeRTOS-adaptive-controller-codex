@@ -1,0 +1,42 @@
+# Step C: the default workflow-C test flight from 2026-10-07 (replaces the 20 s hover as the first flight).
+# Step B's four 0.5 m cardinal steps, plus two diagonals (axis sign / yaw offset / cross-coupling), one 0.3 m
+# climb (flow scale vs height, k_T during a thrust change) and a 20 s stationary hold before landing (the
+# "drifts when it sits still" observation, against video truth).
+# Video: landscape, same focus as the ChArUco calibration, the whole fence in frame, started before takeoff.
+# ds_m 0.25 keeps each goto to about 6 points; 50 Hz leaves room for the command acks and trajectory uploads.
+# Every goto returns to the hover point; each upload costs about 6-9 s of hover (step B).
+campaign: wfc-stepc-steps
+objective: "step C: cardinal + diagonal + climb steps and a 20 s still hold, for estimator scale/lag/frame and stationary drift vs video truth; thrust model; landing offset vs pad"
+controller: pid
+mode: fly
+packs:
+  - P4000-1
+max_flights: 1
+experiments:
+  - name: f01_steps
+    scenario:
+      scenario: truth-steps-c
+      description: 0.5 m steps +x, -x, +y, -y, diagonals (+0.35,+0.35) and (-0.35,-0.35), climb to 1.1 m, 20 s hold, at 0.8 m, 3 s dwell, 0.3 m/s
+      motion: {v_cruise_mps: 0.3, a_max_mps2: 0.5, ds_m: 0.25}
+      steps:
+        - takeoff: {z: 0.8}
+        - hold: {s: 3}
+        - goto: {x: 0.5, y: 0.0, z: 0.8, dwell_s: 3}
+        - hold: {s: 1}
+        - goto: {x: -0.5, y: 0.0, z: 0.8, dwell_s: 3}
+        - hold: {s: 1}
+        - goto: {x: 0.0, y: 0.5, z: 0.8, dwell_s: 3}
+        - hold: {s: 1}
+        - goto: {x: 0.0, y: -0.5, z: 0.8, dwell_s: 3}
+        - hold: {s: 1}
+        - goto: {x: 0.35, y: 0.35, z: 0.8, dwell_s: 3}
+        - hold: {s: 1}
+        - goto: {x: -0.35, y: -0.35, z: 0.8, dwell_s: 3}
+        - hold: {s: 1}
+        - goto: {x: 0.0, y: 0.0, z: 1.1, dwell_s: 3}
+        - hold: {s: 20}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: {rate_hz: 50, groups: [estimator_truth, optical_flow, velocity_loops, takeoff_gate, thrust_model, ekf_states]}
+abort: {}
