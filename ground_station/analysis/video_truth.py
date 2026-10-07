@@ -302,6 +302,38 @@ def pixel_to_plane(uv, K, dist, R, t, z) -> np.ndarray:
     return c + s[:, None] * d
 
 
+def survey(K, dist, R, t, pad_xy, cam_tape, refs=()) -> dict:
+    """Check the floor frame against tape measured in the drone frame (drone on the pad facing forward, origin = pad
+    centre). cam_tape: lens (x, y, z); refs: (pixel, drone xy) floor points. Fits drone = a * board (complex, or a *
+    mirrored board) over the camera foot point and the refs: |a| = tape / board scale, arg(a) = board -> drone yaw.
+    With the camera alone both handednesses fit exactly; one floor ref decides it."""
+    C = -R.T @ t
+    zb, zd = [complex(*(C[:2] - pad_xy))], [complex(*cam_tape[:2])]
+    for uv, xy in refs:
+        zb.append(complex(*(pixel_to_plane(uv, K, dist, R, t, 0.0)[0][:2] - pad_xy))); zd.append(complex(*xy))
+    zb, zd = np.array(zb), np.array(zd)
+    fits = []
+    for mirror in (False, True):
+        b = zb.conj() if mirror else zb
+        a = np.vdot(b, zd) / np.vdot(b, b)                     # least squares: sum(conj(b) zd) / sum |b|^2
+        fits.append((float(np.sqrt(np.mean(np.abs(zd - a * b) ** 2))), mirror, complex(a)))
+    fits.sort(key=lambda f: f[0])
+    rms, mirror, a = fits[0]
+    return {"cam_board_m": np.round(C, 3).tolist(), "cam_height_tape_over_board": round(cam_tape[2] / C[2], 4),
+            "refs_board_m": [[round(z.real, 3), round(z.imag, 3)] for z in zb[1:]],
+            "scale_tape_over_board": round(abs(a), 4), "yaw_board_to_drone_deg": round(float(np.degrees(np.angle(a))), 1),
+            "mirror": mirror, "fit_rms_m": round(rms, 3), "other_handedness_rms_m": round(fits[1][0], 3),
+            "handedness_decided": len(zb) > 1, "a": [a.real, a.imag]}
+
+
+def to_drone(v_board, sv: dict) -> np.ndarray:
+    """Board-frame horizontal vector(s) -> drone frame with a survey() fit."""
+    v = np.atleast_2d(np.asarray(v_board, float))[:, :2]
+    z = v[:, 0] + 1j * v[:, 1]
+    z = (z.conj() if sv["mirror"] else z) * complex(*sv["a"])
+    return np.c_[z.real, z.imag]
+
+
 # ---------------------------------------------------------------- detection
 def colour_mask(frame_bgr, lo=HSV_LO, hi=HSV_HI):
     """HSV band mask; lo H > hi H wraps through 180/0 (red guards: --hsv-lo 170,120,100 --hsv-hi 6,255,255)."""
@@ -714,6 +746,10 @@ def main(argv=None):
     o.add_argument("--marks", required=True); o.add_argument("--csv", required=True)
     o.add_argument("--run", required=True, help="output folder of `run`"); o.add_argument("--out", required=True)
     o.add_argument("--width", type=int, default=1920)
+    s = sub.add_parser("survey"); s.add_argument("--cam", required=True); s.add_argument("--marks", required=True)
+    s.add_argument("--cam-tape", required=True, help="x,y,z lens in the drone frame (on the pad, facing forward), m")
+    s.add_argument("--ref", action="append", default=[], help='"u,v:x,y" floor pixel and its taped drone-frame xy')
+    s.add_argument("--run", help="output folder of `run`: also convert its landing offset, write survey.json")
     a = ap.parse_args(argv)
     if a.cmd == "board":
         cols, rows = (int(v) for v in a.squares.lower().split("x"))
@@ -744,6 +780,18 @@ def main(argv=None):
         n = overlay(a.video, json.loads(Path(a.cam).read_text()), json.loads(Path(a.marks).read_text()), a.csv, a.run,
                     a.out, a.width)
         print(f"wrote {n} frames -> {a.out}")
+    elif a.cmd == "survey":
+        cam, marks = json.loads(Path(a.cam).read_text()), json.loads(Path(a.marks).read_text())
+        R, t, _ = floor_pose(cam["K"], cam["dist"], marks["world"], marks["pixel"])
+        refs = [tuple([float(v) for v in p.split(",")] for p in r.split(":")) for r in a.ref]
+        sv = survey(cam["K"], cam["dist"], R, t, np.mean(marks["world"], axis=0),
+                    [float(v) for v in a.cam_tape.split(",")], refs)
+        if a.run:
+            rep = json.loads((Path(a.run) / "report.json").read_text())
+            if "landing_vs_start_spot_m" in rep:
+                sv["landing_vs_start_drone_m"] = np.round(to_drone(rep["landing_vs_start_spot_m"], sv)[0], 3).tolist()
+            (Path(a.run) / "survey.json").write_text(json.dumps(sv, indent=2))
+        print(json.dumps(sv, indent=2))
     elif a.cmd == "walls":
         cv2, cam, marks = _cv2(), json.loads(Path(a.cam).read_text()), json.loads(Path(a.marks).read_text())
         R, t, _ = floor_pose(cam["K"], cam["dist"], marks["world"], marks["pixel"])

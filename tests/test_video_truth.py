@@ -289,3 +289,17 @@ def test_wall_report_spacing_and_angles():
     assert rep["qr_top_height_m"] == [1.3, 1.3, 1.3]
     assert rep["front_vs_right_wall_deg"] == pytest.approx(90.0, abs=0.1)
     assert rep["boards_tilt_from_vertical_deg"] == [pytest.approx(1.15, abs=0.01)] * 2
+
+
+def test_survey_recovers_yaw_handedness_and_scale():
+    K, dist = np.array([[1000.0, 0, 960], [0, 1000.0, 540], [0, 0, 1]]), np.zeros(5)
+    C = np.array([2.0, -1.0, 1.9]); f = -C / np.linalg.norm(C)                 # camera looks at the board origin
+    r = np.cross(f, [0, 0, 1.0]); r /= np.linalg.norm(r); R = np.array([r, np.cross(f, r), f]); t = -R @ C
+    pad, a = np.array([0.1, 0.05]), 0.95 * np.exp(1j * np.radians(30))        # tape = 0.95 x board, yawed 30 deg
+    drone = lambda p: (lambda z: [z.real, z.imag])(a * complex(*(np.asarray(p) - pad)))
+    q = np.array([0.4, 0.3, 0.0]); uv = K @ (R @ q + t); uv = uv[:2] / uv[2]
+    sv = vt.survey(K, dist, R, t, pad, drone(C[:2]) + [1.9 * 0.95], [(uv, drone(q[:2]))])
+    assert not sv["mirror"] and sv["handedness_decided"] and sv["fit_rms_m"] < 1e-6 and sv["other_handedness_rms_m"] > 0.1
+    assert abs(sv["yaw_board_to_drone_deg"] - 30) < 0.1 and abs(sv["scale_tape_over_board"] - 0.95) < 1e-4
+    assert abs(sv["cam_height_tape_over_board"] - 0.95) < 1e-6
+    assert np.allclose(vt.to_drone([[0.3, 0.0]], sv), [[0.285 * np.cos(np.radians(30)), 0.285 * np.sin(np.radians(30))]])
