@@ -3,23 +3,24 @@
 The default workflow-C test flight is the step C campaign `ground_station/service/campaigns/wfc_step_c.yaml`
 (operator 2026-10-07).
 
-Each stage below has a prompt to paste into the desktop Claude session. Paste them in order and fill in the
-`<...>` parts. Claude runs the commands; you only arm, film and answer questions.
+You fly it yourself from a terminal: one `campaign_fly` command, the preflight, arm by RC, type `go` (operator
+2026-10-07). Claude only prepares the launch copy and the command, then does the analysis. The other stages have a
+prompt to paste into the desktop Claude session; fill in the `<...>` parts.
 
 ## The flight (PROPOSED timings)
 
 | # | step | why |
 |---|---|---|
-| 1 | take off to 0.8 m, hold 3 s | settle |
-| 2 | 0.5 m steps +x, -x, +y, -y (3 s dwell, 1 s holds) | estimator scale, lag and frame vs video (same as step B) |
-| 3 | diagonals (+0.35, +0.35) and (-0.35, -0.35) | axis sign, yaw offset, x/y cross-coupling |
-| 4 | climb to 1.1 m, 3 s dwell | flow scale vs height; k_T during a thrust change |
-| 5 | 20 s still hold at 0.8 m | the "drifts when it sits still" observation, against video |
-| 6 | land | landing offset vs the pad |
+| 1 | take off to 0.8 m, 3 s settle | settle |
+| 2 | 15 s still hold, sticks untouched | the "drifts when it sits still" observation, against video |
+| 3 | 0.5 m steps +x, -x, +y, -y (3 s dwell) | estimator scale, lag and frame vs video (same as step B) |
+| 4 | land | landing offset vs the pad |
 
 - Every goto returns to the hover point. Each upload costs about 6-9 s of hover (step B).
-- Flight time is roughly 2.5 min (PROPOSED, not measured).
-- Max |x|, |y| 0.5 m and z 1.1 m, all inside the soft fence (z 1.4, |x| 1.3, |y| 1.7).
+- Airborne cap: the firmware lands via hover at 120 s. Step B flew 94.3 s against a 73.1 s schedule estimate;
+  step C's schedule is 82.1 s, so about 103-106 s projected (PROPOSED). Diagonals and a climb did not fit: a
+  later flight.
+- Max |x|, |y| 0.5 m and z 0.8 m, all inside the soft fence (z 1.4, |x| 1.3, |y| 1.7).
 
 The log runs at 50 Hz with 113 variables in 2 slots: 47,600 of 70,042 B/s (68 %), computed by `log_plan_table`.
 
@@ -42,29 +43,30 @@ If trajectory uploads lag, choose 40 Hz at the Q3 question (about 38,100 B/s, 54
 - Start filming **before** takeoff (the video is synced on takeoff).
 - If the camera moved since step B, say so in prompt 5: the floor marks and survey must be redone.
 
-## 1. Start the session
+## 1. Get the command
 
 ```text
-/workflow-c Step C flight, pack <P4000-1>. Use ground_station/service/campaigns/wfc_step_c.yaml as flight 01.
-Show me the log plan table and ask Q3; I am filming in landscape from the calibration spot.
+Prepare the next step C flight for me to launch by hand, pack <P4000-1>: launch copy, MANUAL.md, the command.
 ```
 
-At Q3, pick **Approve (Recommended)**, or 40 Hz if the last flight's uploads were slow.
-
-## 2. Preflight, arm, go
-
-Claude runs the preflight and says "Arm by RC when ready, then say go". Arm by RC, then type exactly:
+Claude runs `campaign_launch` on `wfc_step_c.yaml`, writes `logs/workflow-c/<run>/01/MANUAL.md` and gives you:
 
 ```text
-go
+python -m ground_station.service.campaign_fly logs/campaigns/launch/wfc-stepc-steps_<stamp>.yaml --pack P4000-1 --run logs/workflow-c/<run>
 ```
 
-During the flight, say `land` to land now, or `abort` to abort. Claude never arms or spins the motors.
+## 2. Fly it (your terminal)
+
+1. Run the command. Preflight prints; fix any FAIL, press Enter.
+2. Start the video. Arm by RC. Type `go`.
+3. Stops: Ctrl+C once = land, twice = abort; RC ch10 = kill (primary).
+4. After landing it runs the debrief into the run folder. Stop the video.
 
 ## 3. After landing: debrief
 
 ```text
-Landed. Run the flight debrief on this campaign and send me debrief.md and both plots. Bottom line first.
+Landed. Read the debrief campaign_fly wrote into logs/workflow-c/<run> and send me debrief.md and both plots.
+Bottom line first.
 ```
 
 ## 4. Hand over the video
@@ -89,8 +91,8 @@ python -m ground_station.analysis.video_truth run <video> --cam docs/video-truth
 ```text
 Validate build 0b0c2b0b against the step C video truth:
 1. ekf_of_replay truth on this pair at the flashed config (q_bof 1e-5, r_of1 1e-3, arm-var 0) with a plot;
-2. compare the logged s_ekf_of.x (px, py) with truth: rms, end error, the 20 s still-hold drift rate (cm/s);
-3. settle the axis sign and yaw offset from the diagonals (B gave +90.9 deg, A +108.6 deg), and say what the
+2. compare the logged s_ekf_of.x (px, py) with truth: rms, end error, the 15 s still-hold drift rate (cm/s);
+3. settle the axis sign and yaw offset from the four steps (B gave +90.9 deg, A +108.6 deg), and say what the
    presets need. Every proposed number PROPOSED. Send the plots.
 ```
 
@@ -104,8 +106,8 @@ python -m ground_station.analysis.ekf_of_replay truth --pair logs/sessions/<sess
 ## 6. Thrust model
 
 ```text
-Fit the thrust model on the step C log: k_T from m(g+a_z)/cos(tilt) vs sum rpm^2 over the hover, holds and the
-climb; how g_thrust_est (empirical, blade element, imu_total) tracks the weight vs real_voltage; and the residual
+Fit the thrust model on the step C log: k_T from m(g+a_z)/cos(tilt) vs sum rpm^2 over the hover, holds,
+takeoff and landing; how g_thrust_est (empirical, blade element, imu_total) tracks the weight vs real_voltage; and the residual
 between the commanded moments (u_gyro x/y/z) and the achieved angular acceleration. Extend thrust_replay rather
 than writing a script.
 ```
@@ -119,7 +121,7 @@ sources (paper, section, number). Confirm every worker is running (WSL/VPS proce
 before I go. Trails:
 1. Stationary drift: which EKF states (flow bias, accel bias, velocity) are unobservable at zero velocity; persistent
    excitation; an onboard sub-centimetre dither (amplitude, frequency, axis) that keeps them observable without
-   being visible; zero-velocity updates; what the step C 20 s hold shows.
+   being visible; zero-velocity updates; what the step C 15 s hold shows.
 2. Learned inertial odometry from IMU + RPM/PWM: TLIO, RoNIN, AI-IMU, Cioffi 2023 learned inertial odometry for
    drone racing, NeuroBEM, DIDO and newer; accuracy numbers, model size, whether any fits an STM32F4 (or the
    ground station in the loop).

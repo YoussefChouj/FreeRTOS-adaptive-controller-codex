@@ -1,13 +1,21 @@
 ---
 name: workflow-c
-description: Fly an iterative flight-test session on the live drone, one flight at a time. Like workflow B (the operator arms by RC, the agent flies deterministic scenarios through the dashboard MCP tools), but after every flight the agent debriefs what happened, sends plots, recommends what to tune, try or modify, and proposes the next flight. Use when the user says /workflow-c, "workflow c", "fly and tune", "debrief each flight", or wants a guided flight-by-flight test night.
+description: Fly an iterative flight-test session on the live drone, one flight at a time. The operator launches each flight by hand from a terminal (one campaign_fly command, preflight, arm by RC, type go); the agent prepares the launch copy and the command, and after every flight the agent debriefs what happened, sends plots, recommends what to tune, try or modify, and proposes the next flight. Use when the user says /workflow-c, "workflow c", "fly and tune", "debrief each flight", or wants a guided flight-by-flight test night.
 ---
 
 # Workflow C: fly, debrief, recommend, repeat
 
 Workflow B with a loop around it. Every launch is a **one-flight** fly campaign, so after each landing there is
-a stop: what happened, plots, what to change, and the next flight. Read `.claude/skills/workflow-b/SKILL.md`
-once; its hard rules, checklist and failure handling apply unchanged.
+a stop: what happened, plots, what to change, and the next flight.
+
+**The operator flies, not the agent (operator 2026-10-07).** Each flight is one terminal command the operator runs:
+`python -m ground_station.service.campaign_fly <launch copy> --pack <id> --run <run folder>`. It prints the
+preflight; they fix any FAIL, press Enter, arm by RC and type `go`; Ctrl+C once lands, twice aborts, RC ch10 kills;
+after landing it runs the debrief into the run folder. The agent writes `<run>/<NN>/MANUAL.md` with that exact
+command (template: `logs/workflow-c/20261007-1546/01/MANUAL.md`), gives it in a `bash` block, and does not call
+`campaign_preflight` / `campaign_go` unless the operator asks for an agent-flown flight.
+
+Read `.claude/skills/workflow-b/SKILL.md` once; its hard rules, checklist and failure handling apply unchanged.
 
 ## Hard rules (same as workflow B, plus two)
 
@@ -24,8 +32,8 @@ once; its hard rules, checklist and failure handling apply unchanged.
 
 1. Run folder: `logs/workflow-c/<YYYYMMDD-HHMM>/` (one per session; the debrief creates it).
 2. Ask the pack (Q2 of workflow B). Default first flight (operator 10-07): the step C campaign
-   `ground_station/service/campaigns/wfc_step_c.yaml` (0.5 m cardinal steps, two diagonals, a climb to 1.1 m and a
-   20 s still hold, filmed for video truth), unless the operator names another (any
+   `ground_station/service/campaigns/wfc_step_c.yaml` (15 s still hold, then step B's four 0.5 m cardinal steps,
+   filmed for video truth; sized under the 120 s firmware airborne cap), unless the operator names another (any
    `docs/workflow-b/scenarios/*.yaml` or a campaign from `ground_station/service/campaigns/`). The manual prompts
    for the whole loop are in `docs/workflow-c/step-flight-runbook.md`.
 3. Copy it into the run folder as `01/step_c.yaml` (fly mode, `max_flights: 1`, `capture: campaign`, log plan
@@ -39,9 +47,13 @@ once; its hard rules, checklist and failure handling apply unchanged.
    B/s against the 70,042 B/s budget; options: approve (Recommended), other rate (`--rate N`, show its B/s),
    other groups (`estimator_truth`, `optical_flow`, `velocity_loops`, `takeoff_gate`, `thrust_model`,
    `ekf_states`, `mrac_shadow`). Rerun launch with the answer.
-2. **Preflight and go**: `campaign_preflight` with that launch copy as `campaign_path`, the workflow B checklist, "Arm by RC when ready,
-   then say go", then `mcp__dashboard__campaign_go` with the operator's words verbatim as `confirmation`.
-3. **Watch**: `mcp__dashboard__campaign_state` once per flight phase; no polling loops.
+   Check the airborne time first: the scenario's `budget_s` (scenario_schema) is a schedule estimate; step B flew
+   94.3 s airborne against 73.1 s (about 5.3 s of upload hover per goto). Keep the projection well under the 120 s
+   firmware cap, or the flight lands via hover early.
+2. **Hand over**: write `<run>/<NN>/MANUAL.md` and give the operator the `campaign_fly` command in its own `bash`
+   block. They run it, arm by RC and type `go` in their terminal. Wait for "landed"; do not poll.
+3. **Check**: read the command's debrief output (it runs `flight_debrief --run <run>` itself). Run step 4 by hand
+   only if that failed or the operator stopped it.
 4. **Debrief** on the outputs folder the campaign wrote:
    ```
    python -m ground_station.analysis.flight_debrief logs/campaigns/<campaign>_<stamp> --run logs/workflow-c/<run>
