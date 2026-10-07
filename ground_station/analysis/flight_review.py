@@ -26,6 +26,7 @@ import html
 import io
 import json
 import math
+import re
 import statistics
 from pathlib import Path
 from typing import Any, Mapping
@@ -480,13 +481,25 @@ def _flat(seg: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
+_PNG_DIR: Path | None = None   # --png-dir: every plot also saved as a full-resolution PNG file
+_HI: dict[str, bytes] = {}      # page data URI -> the same figure at _PNG_DPI
+
+
+_PNG_DPI = 160
+
+
 def _png(fig) -> str:
     import matplotlib.pyplot as plt
     buf = io.BytesIO()
     fig.tight_layout()
     fig.savefig(buf, format="png", dpi=80)
+    src = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    if _PNG_DIR is not None:
+        hi = io.BytesIO()
+        fig.savefig(hi, format="png", dpi=_PNG_DPI)
+        _HI[src] = hi.getvalue()
     plt.close(fig)
-    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    return src
 
 
 def _shade(axes, w: tuple[float, float] | None) -> None:
@@ -717,6 +730,10 @@ def _table(rows: list[Mapping[str, Any]], cols: list[str]) -> str:
 
 
 def _img(src: str | None, alt: str) -> str:
+    if src and _PNG_DIR is not None and src in _HI:
+        _PNG_DIR.mkdir(parents=True, exist_ok=True)
+        slug = re.sub(r"[^a-z0-9]+", "_", alt.lower()).strip("_")
+        (_PNG_DIR / f"{len(list(_PNG_DIR.glob('*.png'))):02d}_{slug}.png").write_bytes(_HI.pop(src))
     return f'<img alt="{html.escape(alt)}" src="{src}">' if src else f"<p class=dim>no data for {html.escape(alt)}</p>"
 
 
@@ -837,7 +854,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("session", help="a recorder session dir (telemetry.csv) or a stream_log <stem>.slot0.csv")
     p.add_argument("--out", help="output HTML (default <session>/flight_review.html)")
     p.add_argument("--no-sat", action="store_true", help="skip the bench saturation limits")
+    p.add_argument("--png-dir", help=f"also save every plot as a separate {_PNG_DPI} dpi PNG here (zoom, share)")
     a = p.parse_args(argv)
+    global _PNG_DIR
+    _PNG_DIR = Path(a.png_dir) if a.png_dir else None
     sat = None
     if not a.no_sat:
         try:
