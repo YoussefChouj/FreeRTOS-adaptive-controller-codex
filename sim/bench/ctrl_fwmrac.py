@@ -5,7 +5,9 @@ Per 5 ms tick the driver gets the firmware inputs (armed, FLYING, gyroy/gyrox/gy
 the previous tick's mixer deficit) and returns u_ad * mrac_to_mixer * fade * inj_alpha per axis, which is added to
 the PID output the way API/controller.c Controller_Update adds it (before StabilizerTask negates gyroy):
 mix pitch -> U[:, 1], roll -> U[:, 0], yaw -> U[:, 2], z -> throttle. Bench pitch/roll/yaw/z units are the
-firmware's (deg/s, m/s, PWM), so no scaling.  cfg = extra driver args, e.g. ['cfg:pitch:omega_u:20'].
+firmware's (deg/s, m/s, PWM), so no scaling.  cfg = extra driver args, e.g. ['cfg:0:omega_u:20'] (axis 0 pitch,
+1 roll, 2 yaw, 3 z; 'gamma' scales every rate). mask = g_ctrl_axis_mask (bit per axis, clear = pure PID there,
+the law still learns in shadow).
 
     ctrl = with_mrac(fwpid.FwPID, inj=1, cfg=[...])(B, params)
 """
@@ -24,7 +26,7 @@ EXE_DIR = Path('C:/tmp/mrac_x')
 N_IN = 20
 
 
-def with_mrac(base, inj=1, cfg=(), simplex=2):
+def with_mrac(base, inj=1, cfg=(), simplex=2, mask=0x0F):
     class FwMRAC(base):
         name = base.__name__.lower() + '+fw_mrac'
 
@@ -52,7 +54,7 @@ def with_mrac(base, inj=1, cfg=(), simplex=2):
                 pr.stdin.flush()
             out = np.stack([np.frombuffer(pr.stdout.read(4 * self.n_out), np.float32) for pr in self.procs])
             self.trace.append(out)
-            return out[:, -4:].astype(float)
+            return out[:, -4:].astype(float) * [(mask >> i) & 1 for i in range(4)]
 
         def step(self, o):
             if o['k'] % 2 == 0:
