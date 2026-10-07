@@ -5,11 +5,11 @@
  *             rc_input layer. Stabilizer_Task (TASK/StabilizerTask.c, 5 ms) calls Check_Fly_Mode once per tick.
  * @purpose    RC receiver front end: raw SBUS sticks to the legacy 3000 +/- 1000 stick scale (Remoter.*Ctrler),
  *             link-loss detection, stick gestures (arm, disarm, idle enable) and the switch channels (ch9 kill,
- *             ch5 land, ch7 fly-up, ch8 preset path) turned into flight-FSM events and trigger flags.
+ *             ch5 land, ch7 fly-up, ch8 MRAC inject) turned into flight-FSM events and trigger flags.
  * @inputs     sbus_channel[] and sbus_last_valid_tick (SBUS UART driver), FSM state, flight_phase,
  *             g_motor_idle_enabled.
  * @outputs    Remoter.{Pit,Rol,Thr,Yaw}Ctrler, sbus_lost, StickMotion counters, FlightFSM_Event calls,
- *             flight_phase / TWC.execute (ch5 land), sbus_flyup_trigger, sbus_path_trigger, RC authority (ch8).
+ *             flight_phase / TWC.execute (ch5 land), sbus_flyup_trigger, mrac_flags.output_injection_on (ch8).
  * The PROTECTED rc_kill / rc_ch5_land regions are listed in ground_station/flashtool/protected_set.yaml; the code
  * gate refuses agent diffs that touch them, so they are kept byte for byte.
  */
@@ -21,6 +21,7 @@
 #include "flight_fsm.h"
 /* WFB BEGIN glue */
 #include "wfb_glue.h"
+#include "mrac.h"
 /* WFB END glue */
 
 /* ------------------------------------------------------------------
@@ -252,26 +253,22 @@ void Check_Fly_Mode(void)
         ch6_prev = ch6_now;
     }
 
-    /* --- SBUS ch8 (PATH_EXEC_CH): rising-edge preset-path trigger --------------
-     * Arms the drone (if needed) and sets sbus_path_trigger so the path
-     * execution handler can launch the preset path loaded from the GS.
-     * Trigger is DROPPED when idle is not enabled (same as ch7). */
+    /* --- SBUS ch8 (INJECT_CH): MRAC output-injection switch -------------------
+     * Edge-driven, so the dashboard toggle (CMD 0x0F idx 10) still works between flips:
+     * a rising edge (> RC_AUX_HIGH) sets mrac_flags.output_injection_on, a falling edge clears it.
+     * The MRAC gate (API/mrac.c) resets the weights on the on-edge, ramps u_ad in over MRAC_INJ_T_UP once
+     * flying, and out over MRAC_INJ_T_DN. No arming, no RC authority. A switch already high at boot turns
+     * injection on with the first frame. Held while sbus_lost, so a dropout cannot flip it. */
     {
         static uint8_t ch8_prev = 0U;
-        uint8_t ch8_now = (PATH_EXEC_CH > RC_AUX_HIGH) ? 1U : 0U;
-        if (ch8_now && !ch8_prev)
+        if (!sbus_lost)
         {
-            if (FlightFSM_GetState() == FLIGHT_STATE_DISARMED)
+            uint8_t ch8_now = (INJECT_CH > RC_AUX_HIGH) ? 1U : 0U;
+            if (ch8_now != ch8_prev)
             {
-                FlightFSM_Event(FLIGHT_EVENT_ARM_REQUEST);
+                mrac_flags.output_injection_on = ch8_now;
             }
-            if (FlightFSM_GetState() == FLIGHT_STATE_ARMED &&
-                g_motor_idle_enabled)
-            {
-                RCInput_SetAuthority(1U);
-                sbus_path_trigger = 1U;
-            }
+            ch8_prev = ch8_now;
         }
-        ch8_prev = ch8_now;
     }
 }

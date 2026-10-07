@@ -19,7 +19,7 @@
 /* Auxiliary SBUS channels (0-indexed, raw 0-2000 range) */
 #define  MODE_CH      sbus_channel[4]  /* ch5: 2-state — mid(≈1000)=IDLE, high(≈1600)=LAND; low treated as IDLE */
 #define  FLYUP_CH     sbus_channel[6]  /* ch7: momentary — rising edge >500 commands fly-up to Z=0.5 m */
-#define  PATH_EXEC_CH sbus_channel[7]  /* ch8: momentary — rising edge >500 triggers preset path */
+#define  INJECT_CH    sbus_channel[7]  /* ch8: 2-state - high(~1000)=MRAC u_ad injected, low(~300)=shadow (edge-driven) */
 #define  OFHOLD_CH    sbus_channel[5]  /* ch6: 2-state - high(~1694)=OF position-hold ON, low(~306)/lost=angle mode (default) */
 
 /////////////////////////////////////////////////////////////////////////////////////
