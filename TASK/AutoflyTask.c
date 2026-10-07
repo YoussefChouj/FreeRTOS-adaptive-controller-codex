@@ -14,6 +14,9 @@
 #include "math.h"
 #include "flight_fsm.h"
 #include "rc_input.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include "wfb_safety.h"
 
 /* ------------------------------------------------------------------
  * Private constants
@@ -341,6 +344,394 @@ void AutoflyTask_RunFigure8(void)
 }
 
 /* ------------------------------------------------------------------
+ * Keil trajectory presets (traj_id / traj_go), docs/flights/2026-10-08-trajectory-presets.md
+ * ------------------------------------------------------------------
+ * While hovering: edit traj_p and traj_id in the watch window, then traj_go = 1. The block takes the stick
+ * authority (all four virtual sticks centred), flies the preset from the hover setpoint for move_s, flies back
+ * to that point over ret_s, holds it for hold_s and hands the sticks back (traj_status 2). traj_go = 1 again
+ * repeats it without landing. traj_stop = 1 ends the move early and flies back. Any stick move is a pilot
+ * takeover and ends it at once, without the return (traj_status 3). The parameters are latched at traj_go.
+ * Units: loc x/y cm, Z_pos m, yaw deg; the traj_p fields are cm, Hz and s. Numbers are PROPOSED, untested. */
+
+#define TRAJ_TOTAL_MAX_S   25.0f        /* move_s + ret_s + hold_s ceiling (motor 2 runs hot with the load) [s] */
+#define TRAJ_V_MAX_CMS     80.0f        /* peak reference speed above this is refused [cm/s]                    */
+#define TRAJ_Z_OFF_MAX_CM  40.0f        /* largest z step or zigzag amplitude [cm]                              */
+#define TRAJ_Z_MIN_M       0.4f         /* lowest z reference [m]                                               */
+#define TRAJ_PI            3.14159265f
+
+typedef struct {
+	uint8_t profile;    /* 0 constant speed and hard steps, 1 smooth: cosine ramps of ramp_s at both ends */
+	uint8_t axis;       /* step and zigzag axis: 0 x, 1 y, 2 z                                         */
+	uint8_t zz_shape;   /* zigzag: 0 triangle (constant speed, sharp turns), 1 sine                    */
+	uint8_t f8_type;    /* figure-8: 0 Bernoulli (wide in x), 1 Gerono (tall in y)                     */
+	float   move_s;     /* preset time [s]                                                             */
+	float   ret_s;      /* fly back to the start point [s], 3-10                                       */
+	float   hold_s;     /* hold the start point before the sticks go back [s], 0-5                     */
+	float   ramp_s;     /* profile 1 ramp time [s], 0.5 to move_s / 4                                  */
+	float   step_cm;    /* step: out for move_s / 2, then back [cm], +-100 (z +-40)                    */
+	float   zz_amp_cm;  /* zigzag amplitude [cm], up to 80 (z 40)                                      */
+	float   zz_hz;      /* zigzag frequency [Hz], up to 1                                              */
+	float   circ_r_cm;  /* circle radius [cm], 10-80; the start point is on the circle, centre at -x   */
+	float   circ_laps;  /* circle laps in move_s, up to 3                                              */
+	float   f8_a_cm;    /* figure-8 size [cm], 10-80                                                   */
+	float   f8_laps;    /* figure-8 laps in move_s, up to 3                                            */
+} TrajParams_t;
+
+volatile uint8_t traj_id     = 0U;  /* 1 step, 2 zigzag, 3 circle, 4 figure-8                                */
+volatile uint8_t traj_go     = 0U;  /* write 1 to start traj_id (ignored while one runs); the firmware clears it */
+volatile uint8_t traj_stop   = 0U;  /* write 1 to end the move early and fly back                           */
+volatile uint8_t traj_active = 0U;  /* id of the running preset, 0 idle                                     */
+volatile uint8_t traj_phase  = 0U;  /* 0 idle, 1 move, 2 return, 3 hold at the start point                 */
+volatile uint8_t traj_status = 0U;  /* 1 running, 2 done, 3 aborted (takeover/landing), 4 stopped and back,
+                                       0xE0 not flying, 0xE1 busy (GS path or GS authority), 0xE2 bad traj_id,
+                                       0xEE a traj_p field out of range or too fast, 0xEF outside the soft fence */
+volatile float   traj_t      = 0.0f; /* time since traj_go [s]                                              */
+volatile float   traj_home_x = 0.0f, traj_home_y = 0.0f, traj_home_z = 0.0f, traj_home_yaw = 0.0f; /* start point */
+TrajParams_t traj_p = {                 /* watch-window struct, latched at traj_go (same pattern as vp_user) */
+	1U, 0U, 0U, 0U,                 /* profile smooth, axis x, zigzag triangle, figure-8 Bernoulli */
+	18.0f, 5.0f, 2.0f, 3.0f,        /* move, return, hold, ramp [s]: 25 s in total                 */
+	40.0f,                          /* step [cm]                                                   */
+	30.0f, 0.2f,                    /* zigzag amplitude [cm], frequency [Hz]                       */
+	40.0f, 1.0f,                    /* circle radius [cm], laps                                    */
+	50.0f, 1.0f                     /* figure-8 size [cm], laps                                    */
+};
+
+static TrajParams_t s_tp;                         /* traj_p latched at traj_go                    */
+static float s_tph = 0.0f;                        /* time in the current phase [s]                */
+static float s_om = 0.0f;                         /* circle / figure-8 rate [rad per path second] */
+static float s_ref_x = 0.0f, s_ref_y = 0.0f, s_ref_z = 0.0f; /* last move reference (return start) */
+static uint8_t s_stopped = 0U;                    /* traj_stop ended the move                     */
+
+static float Traj_Ramp01(float u)
+{
+	if (u <= 0.0f) {
+		return 0.0f;
+	}
+	if (u >= 1.0f) {
+		return 1.0f;
+	}
+	return 0.5f - 0.5f * cosf(TRAJ_PI * u);
+}
+
+/* Path time for the circle and figure-8. Profile 1: the path speed rises from 0 over ramp_s and falls back to 0
+   over the last ramp_s, so the path time reaches move_s - ramp_s at move_s. Profile 0: the path time is t. */
+static float Traj_Warp(float t)
+{
+	float T = s_tp.move_s;
+	float R = s_tp.ramp_s;
+
+	if (s_tp.profile == 0U) {
+		return t;
+	}
+	if (t <= 0.0f) {
+		return 0.0f;
+	}
+	if (t >= T) {
+		return T - R;
+	}
+	if (t < R) {
+		return 0.5f * t - R / (2.0f * TRAJ_PI) * sinf(TRAJ_PI * t / R);
+	}
+	if (t > T - R) {
+		float u = T - t;
+		return (T - R) - (0.5f * u - R / (2.0f * TRAJ_PI) * sinf(TRAJ_PI * u / R));
+	}
+	return 0.5f * R + (t - R);
+}
+
+/* Offset from the start point at move time t: x/y/z all in cm. */
+static void Traj_Offset(float t, float *dx, float *dy, float *dz)
+{
+	float a = 0.0f;   /* step / zigzag offset along s_tp.axis [cm] */
+
+	*dx = 0.0f;
+	*dy = 0.0f;
+	*dz = 0.0f;
+	if (traj_active == 1U) {
+		/* step: out for the first half of move_s, back for the second half */
+		if (s_tp.profile == 0U) {
+			a = (t < 0.5f * s_tp.move_s) ? s_tp.step_cm : 0.0f;
+		} else {
+			a = s_tp.step_cm * (Traj_Ramp01(t / s_tp.ramp_s) -
+			                    Traj_Ramp01((t - 0.5f * s_tp.move_s) / s_tp.ramp_s));
+		}
+	} else if (traj_active == 2U) {
+		/* zigzag from 0, + side first; profile 1 ramps the amplitude in and out */
+		float p = s_tp.zz_hz * t;
+		p -= floorf(p);
+		if (s_tp.zz_shape == 0U) {
+			a = (p < 0.25f) ? 4.0f * p : ((p < 0.75f) ? 2.0f - 4.0f * p : 4.0f * p - 4.0f);
+		} else {
+			a = sinf(2.0f * TRAJ_PI * p);
+		}
+		a *= s_tp.zz_amp_cm;
+		if (s_tp.profile != 0U) {
+			a *= Traj_Ramp01(t / s_tp.ramp_s) * Traj_Ramp01((s_tp.move_s - t) / s_tp.ramp_s);
+		}
+	} else if (traj_active == 3U) {
+		/* circle through the start point, centre circ_r_cm toward -x, leaves toward +y */
+		float th = s_om * Traj_Warp(t);
+		*dx = s_tp.circ_r_cm * (cosf(th) - 1.0f);
+		*dy = s_tp.circ_r_cm * sinf(th);
+		return;
+	} else if (traj_active == 4U) {
+		/* figure-8 from the start point, leaves toward +y */
+		float th = s_om * Traj_Warp(t);
+		float s = sinf(th);
+		float c = cosf(th);
+		if (s_tp.f8_type == 1U) {
+			*dx = 0.5f * s_tp.f8_a_cm * sinf(2.0f * th);   /* Gerono: crosses at the start point */
+			*dy = s_tp.f8_a_cm * s;
+		} else {
+			*dx = s_tp.f8_a_cm * (c / (1.0f + s * s) - 1.0f); /* Bernoulli: starts at the +x tip */
+			*dy = s_tp.f8_a_cm * s * c / (1.0f + s * s);
+		}
+		return;
+	}
+	if (s_tp.axis == 0U) {
+		*dx = a;
+	} else if (s_tp.axis == 1U) {
+		*dy = a;
+	} else {
+		*dz = a;
+	}
+}
+
+/* Range, peak speed and soft-fence check of s_tp around traj_home_*; sets s_om. 0 = OK, else the refusal code. */
+static uint8_t Traj_Check(void)
+{
+	float lo = 0.0f, hi = 0.0f;                          /* step / zigzag offset range on the axis [cm] */
+	float x0 = 0.0f, x1 = 0.0f, y0 = 0.0f, y1 = 0.0f, z0 = 0.0f, z1 = 0.0f; /* offset box [cm]     */
+	float v = 0.0f;                                      /* peak reference speed [cm/s]                 */
+	float path_s = s_tp.move_s - ((s_tp.profile == 1U) ? s_tp.ramp_s : 0.0f);
+	float xm, ym, zt;
+	wfb_safety_limits_t lim;
+
+	if (traj_id < 1U || traj_id > 4U) {
+		return 0xE2U;
+	}
+	if (s_tp.move_s < 5.0f || s_tp.ret_s < 3.0f || s_tp.ret_s > 10.0f || s_tp.hold_s < 0.0f ||
+	    s_tp.hold_s > 5.0f || s_tp.move_s + s_tp.ret_s + s_tp.hold_s > TRAJ_TOTAL_MAX_S + 0.001f ||
+	    s_tp.profile > 1U || s_tp.axis > 2U ||
+	    (s_tp.profile == 1U && (s_tp.ramp_s < 0.5f || s_tp.ramp_s > 0.25f * s_tp.move_s))) {
+		return 0xEEU;
+	}
+	s_om = 0.0f;
+	if (traj_id == 1U) {
+		if (s_tp.step_cm == 0.0f || fabsf(s_tp.step_cm) > ((s_tp.profile == 0U) ? 50.0f : 100.0f)) {
+			return 0xEEU;   /* a hard step (profile 0) is limited to 50 cm */
+		}
+		if (s_tp.profile == 1U) {
+			v = 0.5f * TRAJ_PI * fabsf(s_tp.step_cm) / s_tp.ramp_s;
+		}
+		lo = (s_tp.step_cm < 0.0f) ? s_tp.step_cm : 0.0f;
+		hi = (s_tp.step_cm > 0.0f) ? s_tp.step_cm : 0.0f;
+	} else if (traj_id == 2U) {
+		if (s_tp.zz_amp_cm <= 0.0f || s_tp.zz_amp_cm > 80.0f || s_tp.zz_hz <= 0.0f || s_tp.zz_hz > 1.0f ||
+		    s_tp.zz_shape > 1U) {
+			return 0xEEU;
+		}
+		v = ((s_tp.zz_shape == 0U) ? 4.0f : 2.0f * TRAJ_PI) * s_tp.zz_amp_cm * s_tp.zz_hz;
+		lo = -s_tp.zz_amp_cm;
+		hi = s_tp.zz_amp_cm;
+	} else if (traj_id == 3U) {
+		if (s_tp.circ_r_cm < 10.0f || s_tp.circ_r_cm > 80.0f || s_tp.circ_laps <= 0.0f || s_tp.circ_laps > 3.0f) {
+			return 0xEEU;
+		}
+		s_om = 2.0f * TRAJ_PI * s_tp.circ_laps / path_s;
+		v = s_om * s_tp.circ_r_cm;
+		x0 = -2.0f * s_tp.circ_r_cm;
+		y0 = -s_tp.circ_r_cm;
+		y1 = s_tp.circ_r_cm;
+	} else {
+		if (s_tp.f8_a_cm < 10.0f || s_tp.f8_a_cm > 80.0f || s_tp.f8_laps <= 0.0f || s_tp.f8_laps > 3.0f ||
+		    s_tp.f8_type > 1U) {
+			return 0xEEU;
+		}
+		s_om = 2.0f * TRAJ_PI * s_tp.f8_laps / path_s;
+		if (s_tp.f8_type == 1U) {
+			v = 1.42f * s_om * s_tp.f8_a_cm;
+			x0 = -0.5f * s_tp.f8_a_cm;
+			x1 = 0.5f * s_tp.f8_a_cm;
+			y0 = -s_tp.f8_a_cm;
+			y1 = s_tp.f8_a_cm;
+		} else {
+			v = s_om * s_tp.f8_a_cm;
+			x0 = -2.0f * s_tp.f8_a_cm;
+			y0 = -0.36f * s_tp.f8_a_cm;
+			y1 = 0.36f * s_tp.f8_a_cm;
+		}
+	}
+	if (traj_id <= 2U) {
+		if (s_tp.axis == 0U) {
+			x0 = lo;
+			x1 = hi;
+		} else if (s_tp.axis == 1U) {
+			y0 = lo;
+			y1 = hi;
+		} else {
+			if (-lo > TRAJ_Z_OFF_MAX_CM || hi > TRAJ_Z_OFF_MAX_CM) {
+				return 0xEEU;
+			}
+			z0 = lo;
+			z1 = hi;
+		}
+	}
+	/* the return flies at most the farthest box corner back in ret_s, cosine peak = pi/2 x the mean speed */
+	xm = (-x0 > x1) ? -x0 : x1;
+	ym = (-y0 > y1) ? -y0 : y1;
+	zt = (-z0 > z1) ? -z0 : z1;
+	if (v > TRAJ_V_MAX_CMS ||
+	    0.5f * TRAJ_PI * sqrtf(xm * xm + ym * ym + zt * zt) / s_tp.ret_s > TRAJ_V_MAX_CMS) {
+		return 0xEEU;
+	}
+
+	wfb_safety_default_limits(&lim);
+	xm = lim.fence_x_m - lim.soft_margin_m;
+	ym = lim.fence_y_m - lim.soft_margin_m;
+	zt = lim.ceiling_m - lim.soft_margin_m;
+	if ((traj_home_x + x0) * 0.01f < -xm || (traj_home_x + x1) * 0.01f > xm ||
+	    (traj_home_y + y0) * 0.01f < -ym || (traj_home_y + y1) * 0.01f > ym ||
+	    traj_home_z + z0 * 0.01f < TRAJ_Z_MIN_M || traj_home_z + z1 * 0.01f > zt) {
+		return 0xEFU;
+	}
+	return 0U;
+}
+
+/* All four virtual sticks centred: hold, and the RC heartbeat stays fresh (call inside a critical section). */
+static void Traj_SticksCentred(void)
+{
+	RCInput_SetVirtualStick(RC_AXIS_THR, 0.0f);
+	RCInput_SetVirtualStick(RC_AXIS_PITCH, 0.0f);
+	RCInput_SetVirtualStick(RC_AXIS_ROLL, 0.0f);
+	RCInput_SetVirtualStick(RC_AXIS_YAW, 0.0f);
+}
+
+static void Traj_End(uint8_t status)
+{
+	if (RCInput_GetAuthority()) {
+		taskENTER_CRITICAL();
+		RCInput_SetAuthority(0U);
+		taskEXIT_CRITICAL();
+	}
+	traj_active = 0U;
+	traj_phase = 0U;
+	traj_stop = 0U;
+	traj_status = status;
+}
+
+static void Traj_Start(void)
+{
+	uint8_t code;
+
+	if (FlightFSM_GetState() != FLIGHT_STATE_ARMED || flight_phase != FLIGHT_PHASE_FLYING ||
+	    DroneStatus.FlyMode != FlyMode_SDK) {
+		traj_status = 0xE0U;
+		return;
+	}
+	if (RCInput_GetAuthority() || TWC.execute != 0 ||
+	    sinusoid_path.active || circle_path.active || figure8_path.active) {
+		traj_status = 0xE1U;
+		return;
+	}
+	s_tp = traj_p;
+	traj_home_x = Ctrler.locxPID.Des;
+	traj_home_y = Ctrler.locyPID.Des;
+	traj_home_z = Ctrler.Z_posPID.Des;
+	traj_home_yaw = Ctrler.yawPID.Des;
+	code = Traj_Check();
+	if (code != 0U) {
+		traj_status = code;
+		return;
+	}
+
+	/* SetAuthority(1) leaves the virtual throttle at -1: centre it before any other task can run */
+	taskENTER_CRITICAL();
+	RCInput_SetAuthority(1U);
+	Traj_SticksCentred();
+	taskEXIT_CRITICAL();
+
+	AutoflyTask_WaypointReset();
+	s_tph = 0.0f;
+	s_stopped = 0U;
+	s_ref_x = traj_home_x;
+	s_ref_y = traj_home_y;
+	s_ref_z = traj_home_z;
+	traj_t = 0.0f;
+	traj_stop = 0U;
+	traj_active = traj_id;
+	traj_phase = 1U;
+	traj_status = 1U;
+}
+
+static void Traj_Tick(void)
+{
+	float dx, dy, dz;
+
+	if (traj_go != 0U) {
+		traj_go = 0U;
+		if (traj_active == 0U) {
+			Traj_Start();
+		}
+	}
+	if (traj_active == 0U) {
+		traj_stop = 0U;
+		return;
+	}
+
+	/* takeover (any stick move drops the authority), disarm, landing, or a GS path: stop here, no return */
+	if (!RCInput_GetAuthority() || FlightFSM_GetState() != FLIGHT_STATE_ARMED ||
+	    flight_phase != FLIGHT_PHASE_FLYING || DroneStatus.FlyMode != FlyMode_SDK ||
+	    TWC.execute != 0 || sinusoid_path.active || circle_path.active || figure8_path.active) {
+		Traj_End(3U);
+		return;
+	}
+
+	taskENTER_CRITICAL();
+	Traj_SticksCentred();
+	taskEXIT_CRITICAL();
+
+	s_tph += AFLY_DT_S;
+	traj_t += AFLY_DT_S;
+
+	if (traj_phase == 1U) {
+		if (traj_stop != 0U || s_tph >= s_tp.move_s) {
+			s_stopped = traj_stop;
+			traj_stop = 0U;
+			traj_phase = 2U;
+			s_tph = 0.0f;
+		} else {
+			Traj_Offset(s_tph, &dx, &dy, &dz);
+			s_ref_x = traj_home_x + dx;
+			s_ref_y = traj_home_y + dy;
+			s_ref_z = traj_home_z + 0.01f * dz;
+			AutoflyTask_CommitRef(s_ref_x, s_ref_y, s_ref_z);
+		}
+	}
+	if (traj_phase == 2U) {
+		/* fly back from the last move reference to the start point, cosine blend over ret_s */
+		float k = Traj_Ramp01(s_tph / s_tp.ret_s);
+		AutoflyTask_CommitRef(s_ref_x + (traj_home_x - s_ref_x) * k,
+		                      s_ref_y + (traj_home_y - s_ref_y) * k,
+		                      s_ref_z + (traj_home_z - s_ref_z) * k);
+		if (s_tph >= s_tp.ret_s) {
+			/* commit the start point exactly (the quantizer may hold up to waypoint_spacing short of it) */
+			AutoflyTask_WaypointReset();
+			AutoflyTask_CommitRef(traj_home_x, traj_home_y, traj_home_z);
+			traj_phase = 3U;
+			s_tph = 0.0f;
+		}
+	} else if (traj_phase == 3U) {
+		AutoflyTask_CommitRef(traj_home_x, traj_home_y, traj_home_z);
+		if (s_tph >= s_tp.hold_s) {
+			Traj_End(s_stopped ? 4U : 2U);
+			return;
+		}
+	}
+	Ctrler.yawPID.Des = traj_home_yaw;
+}
+
+/* ------------------------------------------------------------------
  * Public API: 5 ms entry point
  * ------------------------------------------------------------------ */
 
@@ -355,6 +746,8 @@ void AutoflyTask(void)
 	} else if (figure8_path.active) {
 		AutoflyTask_RunFigure8();
 	}
+
+	Traj_Tick();
 
 	if (((sbus_channel[5] == AFLY_KEY_SBUS_HIGH) && (sbus_channel[4] == AFLY_KEY_SBUS_HIGH) && (sbus_lost == 0)) ) {
 		KeyPressedTimeMS += AFLY_TICK_MS;

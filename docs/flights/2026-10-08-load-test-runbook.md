@@ -73,3 +73,8 @@ goes back to a table row (same ch8-off rule).
 
 In-flight sequence: hover with ch8 on → ch8 off (PID) → edit `vp_user` → `vp_user_go = 1` → `vp_active == 100`
 → hover 5-10 s in shadow → ch8 on.
+
+## 5. Trajectory presets (needs the trajectory build)
+
+Step, zigzag, circle and figure-8 from the watch window (`traj_id`, `traj_p`, `traj_go`), each at most 25 s
+including the fly-back to the start point: `2026-10-08-trajectory-presets.md`.
