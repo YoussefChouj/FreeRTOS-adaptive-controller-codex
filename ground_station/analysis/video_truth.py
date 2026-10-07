@@ -178,6 +178,103 @@ def floor_board(video: str, board: tuple[int, int], square: float, every_s: floa
             "corner_spread_px": round(spread, 3), "sigma_px": round(float(sigma), 4)}
 
 
+def _plane_pose(cv2, obj, img_pts, K, dist, flag):
+    ok, rvec, tvec = cv2.solvePnP(np.asarray(obj, float), np.asarray(img_pts, float), K, dist, flags=flag)
+    proj = cv2.projectPoints(np.asarray(obj, float), rvec, tvec, K, dist)[0].reshape(-1, 2)
+    return cv2.Rodrigues(rvec)[0], tvec.ravel(), float(np.mean(np.linalg.norm(proj - img_pts, axis=1)))
+
+
+def wall_targets(frame, K, dist, R, t, qr_side=0.19, board=(8, 5), square=0.026, roi=None, max_boards=8) -> dict:
+    """Wall targets in the floor frame, each sized by its own print (QR side, board square), so they check the floor
+    pose without trusting it: code / board normals must be horizontal (floor tilt), the two walls perpendicular,
+    and the code spacing comes out in metres. R, t: floor pose (world -> camera)."""
+    cv2 = _cv2()
+    K, dist = np.asarray(K, float), np.asarray(dist, float)
+    to_w = lambda Xc: (R.T @ (np.asarray(Xc, float).T - t[:, None])).T     # camera -> floor frame (points)
+    out = {"qr": [], "boards": [], "cam_xy": (-R.T @ t)[:2]}
+    ok, pts = cv2.QRCodeDetectorAruco().detectMulti(frame)
+    h = qr_side / 2
+    sq = np.array([[-h, h, 0], [h, h, 0], [h, -h, 0], [-h, -h, 0]])   # TL TR BR BL, y up
+    for c in (pts if ok else []):
+        Rc, tc, err = _plane_pose(cv2, sq, c.reshape(4, 2), K, dist, cv2.SOLVEPNP_IPPE_SQUARE)
+        out["qr"].append({"centre": to_w(tc[None])[0], "normal": R.T @ Rc[:, 2], "px": c.reshape(4, 2).mean(0),
+                          "side_px": float(np.mean(np.linalg.norm(np.diff(np.r_[c.reshape(4, 2), c[:1].reshape(1, 2)], axis=0), axis=1))),
+                          "reproj_px": err, "cam": (Rc, tc)})
+    grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    x0, y0, x1, y1 = roi or (0, 0, grey.shape[1], grey.shape[0])
+    obj = np.c_[np.mgrid[0:board[0], 0:board[1]].T.reshape(-1, 2) * square, np.zeros(board[0] * board[1])]
+    for _ in range(max_boards):
+        ok, c = cv2.findChessboardCornersSB(grey[y0:y1, x0:x1], board, flags=cv2.CALIB_CB_EXHAUSTIVE | cv2.CALIB_CB_ACCURACY)
+        if not ok:
+            break
+        c = c.reshape(-1, 2) + (x0, y0)
+        Rc, tc, err = _plane_pose(cv2, obj, c, K, dist, cv2.SOLVEPNP_IPPE)
+        n = R.T @ Rc[:, 2]
+        out["boards"].append({"centre": to_w((Rc @ obj.mean(0) + tc)[None])[0], "normal": n, "px": c.mean(0),
+                              "reproj_px": err, "cam": (Rc, tc)})
+        cv2.fillConvexPoly(grey, cv2.convexHull(c.astype(np.int32)), 128)    # hide it, look for the next one
+    return out
+
+
+def wall_report(tg: dict) -> dict:
+    """Numbers from wall_targets: tilt of each target from vertical, wall-to-wall angle, QR centre spacing."""
+    tilt = lambda n: round(float(np.degrees(np.arcsin(min(1.0, abs(n[2]) / np.linalg.norm(n))))), 2)
+    rep = {"qr_found": len(tg["qr"]), "boards_found": len(tg["boards"])}
+    for key in ("qr", "boards"):
+        if tg[key]:
+            rep[f"{key}_tilt_from_vertical_deg"] = [tilt(d["normal"]) for d in tg[key]]
+            rep[f"{key}_reproj_px"] = [round(d["reproj_px"], 2) for d in tg[key]]
+    if tg["qr"] and tg["boards"]:
+        nq, nb = (_mean_normal([d["normal"] for d in tg[k]]) for k in ("qr", "boards"))
+        a = float(np.degrees(np.arccos(abs(nq[:2] @ nb[:2]) / np.linalg.norm(nq[:2]) / np.linalg.norm(nb[:2]))))
+        rep["front_vs_right_wall_deg"] = round(a, 2)
+    q = tg["qr"]
+    if len(q) >= 2:
+        C = np.array([d["centre"] for d in q])
+        top = C[:, 2] > np.median(C[:, 2]) if len(q) == 6 else np.ones(len(q), bool)
+        along = np.cross([0, 0, 1], _mean_normal([d["normal"] for d in q]))[:2]   # horizontal axis in the wall
+        rows = {}
+        for name, m in (("top", top), ("bottom", ~top)):
+            r = C[m][np.argsort(C[m][:, :2] @ along)]
+            rows[name] = r
+            rep[f"qr_{name}_centre_spacing_m"] = [round(float(np.linalg.norm(b - a)), 3) for a, b in zip(r[:-1], r[1:])]
+            rep[f"qr_{name}_height_m"] = [round(float(z), 3) for z in r[:, 2]]
+        if len(rows["top"]) == len(rows["bottom"]) > 0:
+            rep["qr_row_centre_spacing_m"] = [round(float(np.linalg.norm(a - b)), 3) for a, b in zip(rows["top"], rows["bottom"])]
+        rep["qr_wall_distance_m"] = round(float(np.median(np.linalg.norm(C[:, :2] - tg["cam_xy"], axis=1))), 3)
+    return rep
+
+
+def _mean_normal(ns) -> np.ndarray:
+    ns = np.array([n / np.linalg.norm(n) for n in ns])
+    ns *= np.sign(ns @ ns[0])[:, None]                   # one side of the plane
+    m = ns.sum(0)
+    return m / np.linalg.norm(m)
+
+
+def junction_lines(tg: dict, K, dist, R, t, scales=(0.8, 0.9, 1.0, 1.1, 1.2), reach=4.0) -> dict:
+    """Where each wall meets the floor, projected into the image, for the floor pose scaled by each factor. The wall
+    planes come from the targets' own print size; the floor height from the floor board. The scale whose line lies
+    on the visible wall/floor corner is the true one (a 10 % floor scale error moves the line ~100 px at 4K)."""
+    cv2 = _cv2()
+    K, dist = np.asarray(K, float), np.asarray(dist, float)
+    nf = R[:, 2]                                         # floor normal, camera frame; floor: nf.X = s * nf.t
+    lines = {}
+    for key in ("qr", "boards"):
+        if not tg[key]:
+            continue
+        nw = _mean_normal([d["cam"][0][:, 2] for d in tg[key]])
+        dw = float(np.median([nw @ d["cam"][1] for d in tg[key]]))
+        u = np.cross(nf, nw); u /= np.linalg.norm(u)
+        for s in scales:
+            A = np.array([nf, nw, u]); p0 = np.linalg.solve(A, [s * (nf @ t), dw, 0.0])
+            P = p0 + np.linspace(-reach, reach, 81)[:, None] * u
+            P = P[P[:, 2] > 0.2]                         # in front of the camera
+            if len(P) >= 2:
+                lines[(key, s)] = cv2.projectPoints(P, np.zeros(3), np.zeros(3), K, dist)[0].reshape(-1, 2)
+    return lines
+
+
 def pose_noise(K, dist, world_xy, pixel, sigma_px, z, reach=1.5, n=200, seed=0) -> float:
     """95th-percentile xy error, from mark pixel noise alone (Monte Carlo), at `reach` m around the origin, height z."""
     cv2 = _cv2()
@@ -324,6 +421,22 @@ def takeoff_tel(te, z, armed, rise: float = 0.05) -> float:
     return float(te[int(np.argmax(armed & (z > z0 + rise)))])
 
 
+def despike(xy, n: int = 9, k: float = 3.0) -> tuple[np.ndarray, int]:
+    """Hampel filter (k scaled MADs), then a running median, over n samples per axis. One-frame spikes come from the
+    guard count changing (merged or hidden guards, see drone_centre), not from the drone; a centred median adds no
+    lag. Returns the cleaned copy and the number of samples the Hampel step replaced."""
+    from numpy.lib.stride_tricks import sliding_window_view as win
+    h, out, n_bad = n // 2, np.array(xy, float), 0
+    for j in range(out.shape[1]):
+        w = win(np.pad(out[:, j], h, mode="edge"), n)
+        med = np.median(w, axis=1)
+        mad = 1.4826 * np.median(np.abs(w - med[:, None]), axis=1)
+        bad = np.abs(out[:, j] - med) > k * np.maximum(mad, 1e-3)
+        out[bad, j], n_bad = med[bad], n_bad + int(bad.sum())
+        out[:, j] = np.median(win(np.pad(out[:, j], h, mode="edge"), n), axis=1)
+    return out, n_bad
+
+
 def align(est_xy, truth_xy, n_fit: int) -> tuple[np.ndarray, bool]:
     """Orthogonal Q (rotation or reflection) with truth ~ est @ Q.T, fitted on the first n_fit samples.
     Both inputs are already relative to the take-off point."""
@@ -407,7 +520,13 @@ def run(video, cam, marks, csv_path, out, guard_offset=0.0, align_s=None, stride
     else:
         off = float(sync)
     xy, ok = centres(np.interp(tv + off, te, h_tel))
-    tvs, xy = tv[ok] + off, xy[ok]
+    tvs, (xy, n_spikes) = tv[ok] + off, despike(xy[ok])
+
+    # landing spot vs take-off spot at pad level, before and after the flight (what a tape on the floor measures)
+    xy0, ok0 = (xy1, ok1) if sync == "takeoff" else centres(np.zeros(len(tv)))
+    t0v, p0 = tv[ok0] + off, despike(xy0[ok0])[0]
+    after = (t0v > te[i_end] + 1.0) & (t0v < te[i_end] + 3.0)
+    land = (np.median(p0[after], axis=0) if after.any() else np.full(2, np.nan)) - np.median(p0[t0v < t0v[0] + 2.0], axis=0)
 
     # truth on the telemetry clock, take-off-relative; est rotated onto it
     tr = np.c_[np.interp(te, tvs, xy[:, 0]), np.interp(te, tvs, xy[:, 1])]
@@ -426,7 +545,9 @@ def run(video, cam, marks, csv_path, out, guard_offset=0.0, align_s=None, stride
         "floor_noise_err_1p5m_m": round(pose_noise(K, dist, marks["world"], marks["pixel"],
                                                    marks.get("sigma_px", 1.0), h_med + guard_offset), 4),
         "sync_offset_s": round(off, 3), "frames": int(len(tv)),
-        "frames_tracked": int(ok.sum()), "align_rot_deg": round(float(np.degrees(np.arctan2(q[1, 0], q[0, 0]))), 1),
+        "frames_tracked": int(ok.sum()), "spikes_replaced": n_spikes,
+        "landing_vs_start_spot_m": [round(float(v), 3) for v in (*land, np.hypot(*land))],
+        "est_landing_vs_start_m": round(float(np.hypot(*(est[i_end] - est[i_to]))), 3), "align_rot_deg": round(float(np.degrees(np.arctan2(q[1, 0], q[0, 0]))), 1),
         "align_reflection": refl, "flight_s": round(float(te[i_end] - te[i_to]), 2),
         "truth_at_disarm_m": [round(float(v), 3) for v in t_rel[-1]],
         "est_at_disarm_m": [round(float(v), 3) for v in e_al[-1]],
@@ -584,6 +705,11 @@ def main(argv=None):
         p.add_argument("--hsv-hi", default=",".join(map(str, HSV_HI)))
         p.add_argument("--min-area", type=int, default=MIN_AREA)
         p.add_argument("--static-t", default="", help='"5,30": ignore guard-colour pixels present at all these times (s)')
+    w = sub.add_parser("walls"); w.add_argument("video"); w.add_argument("--cam", required=True)
+    w.add_argument("--marks", required=True); w.add_argument("--t", type=float, default=1.0)
+    w.add_argument("--qr-side", type=float, default=0.19); w.add_argument("--board", default="8x5")
+    w.add_argument("--square", type=float, default=0.026); w.add_argument("--roi", help="x0,y0,x1,y1 px for wall boards")
+    w.add_argument("--out", required=True)
     o = sub.add_parser("overlay"); o.add_argument("video"); o.add_argument("--cam", required=True)
     o.add_argument("--marks", required=True); o.add_argument("--csv", required=True)
     o.add_argument("--run", required=True, help="output folder of `run`"); o.add_argument("--out", required=True)
@@ -618,6 +744,24 @@ def main(argv=None):
         n = overlay(a.video, json.loads(Path(a.cam).read_text()), json.loads(Path(a.marks).read_text()), a.csv, a.run,
                     a.out, a.width)
         print(f"wrote {n} frames -> {a.out}")
+    elif a.cmd == "walls":
+        cv2, cam, marks = _cv2(), json.loads(Path(a.cam).read_text()), json.loads(Path(a.marks).read_text())
+        R, t, _ = floor_pose(cam["K"], cam["dist"], marks["world"], marks["pixel"])
+        frame = _grab(a.video, a.t)
+        tg = wall_targets(frame, cam["K"], cam["dist"], R, t, a.qr_side, tuple(int(v) for v in a.board.lower().split("x")),
+                          a.square, tuple(int(v) for v in a.roi.split(",")) if a.roi else None)
+        rep = wall_report(tg)
+        out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
+        (out / "walls.json").write_text(json.dumps(rep, indent=2))
+        colours = {0.8: (255, 0, 255), 0.9: (255, 160, 40), 1.0: (60, 220, 60), 1.1: (0, 215, 255), 1.2: (40, 40, 255)}
+        for (key, s), uv in junction_lines(tg, cam["K"], cam["dist"], R, t).items():
+            cv2.polylines(frame, [uv.astype(np.int32)], False, colours[s], 3 if s == 1.0 else 2)
+            u, v = uv[len(uv) // 2]
+            cv2.putText(frame, f"x{s:.1f}", (int(u) + 8, int(v) - 8), cv2.FONT_HERSHEY_SIMPLEX, 1.2, colours[s], 3)
+        for d in tg["qr"] + tg["boards"]:
+            cv2.circle(frame, tuple(int(v) for v in d["px"]), 14, (0, 0, 255), 3)
+        cv2.imwrite(str(out / "walls.png"), frame)
+        print(json.dumps(rep, indent=2))
     elif a.cmd == "frame":
         cv2 = _cv2()
         frame = _grab(a.video, a.t)

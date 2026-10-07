@@ -249,3 +249,43 @@ def test_takeoff_sync():
     z = np.where(te >= 0.9, 0.5, 0.0)
     off = vt.takeoff_tel(te, z, np.ones(len(te), bool)) - vt.takeoff_video(tv, xy)
     assert abs(off - (0.9 - 18.5)) < 0.05
+
+
+def test_despike_removes_frame_spikes_without_lag():
+    t = np.linspace(0, 10, 500)
+    clean = np.c_[np.sin(t), np.where(t > 5, 0.5, 0.0)]          # smooth path + a real step
+    noisy = clean.copy()
+    noisy[np.arange(20, 480, 46), 0] += 0.6                       # one-frame jumps (guard count changes)
+    out, n_bad = vt.despike(noisy)
+    assert n_bad >= 10
+    assert np.abs(out[5:-5, 0] - clean[5:-5, 0]).max() < 0.025    # within one sample step of the ramp; ends: edge padding
+    assert np.abs(out[:, 1] - clean[:, 1]).max() < 1e-9           # the step stays where it is
+
+
+def _seg_dist(p, poly):
+    a, ab = poly[:-1], np.diff(poly, axis=0)
+    w = np.clip(((p - a) * ab).sum(1) / (ab * ab).sum(1), 0, 1)
+    return float(np.min(np.linalg.norm(a + w[:, None] * ab - p, axis=1)))
+
+
+def test_junction_line_sits_on_the_wall_base_at_true_scale():
+    rvec, R, t = _pose()
+    n_w = np.array([1.0, 0, 0])                                   # wall x = 1.5 m, facing the camera side
+    Rc = np.eye(3); Rc[:, 2] = R @ n_w
+    tg = {"qr": [], "boards": [{"cam": (Rc, R @ [1.5, 0.3, 0.5] + t)}]}
+    lines = vt.junction_lines(tg, K, DIST, R, t, scales=(1.0, 1.2))
+    base = _project([[1.5, y, 0.0] for y in (-0.5, 0.0, 0.5)], rvec, t)
+    assert max(_seg_dist(p, lines[("boards", 1.0)]) for p in base) < 1.0
+    assert min(_seg_dist(p, lines[("boards", 1.2)]) for p in base) > 20.0
+
+
+def test_wall_report_spacing_and_angles():
+    qr = [{"centre": np.array([x, 3.0, z]), "normal": np.array([0, -1.0, 0]), "reproj_px": 0.3}
+          for z in (1.3, 0.9) for x in (-0.5, 0.0, 0.5)]
+    boards = [{"centre": np.array([2.0, y, 0.5]), "normal": np.array([1.0, 0, 0.02]), "reproj_px": 0.4} for y in (0, 1)]
+    rep = vt.wall_report({"qr": qr, "boards": boards, "cam_xy": np.zeros(2)})
+    assert rep["qr_top_centre_spacing_m"] == [0.5, 0.5] and rep["qr_bottom_centre_spacing_m"] == [0.5, 0.5]
+    assert rep["qr_row_centre_spacing_m"] == [0.4, 0.4, 0.4]
+    assert rep["qr_top_height_m"] == [1.3, 1.3, 1.3]
+    assert rep["front_vs_right_wall_deg"] == pytest.approx(90.0, abs=0.1)
+    assert rep["boards_tilt_from_vertical_deg"] == [pytest.approx(1.15, abs=0.01)] * 2
