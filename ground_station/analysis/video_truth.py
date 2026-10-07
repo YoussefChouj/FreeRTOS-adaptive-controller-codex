@@ -504,10 +504,12 @@ def read_livewatch(path: str, names) -> dict:
 
 # ---------------------------------------------------------------- run
 def run(video, cam, marks, csv_path, out, guard_offset=0.0, align_s=None, stride=1, lo=HSV_LO, hi=HSV_HI,
-        min_area=MIN_AREA, static_t=(), sync="takeoff") -> dict:
+        min_area=MIN_AREA, static_t=(), sync="takeoff", survey=None) -> dict:
     """sync: "takeoff" (lift-off in both clocks; video and campaign started by hand), "speed" (speed
     cross-correlation) or a number of seconds (telemetry time = video time + sync).
-    align_s None fits the estimator rotation over the whole flight (a hover-only window is ill-conditioned)."""
+    align_s None fits the estimator rotation over the whole flight (a hover-only window is ill-conditioned).
+    survey (a survey() dict): compare in the drone frame at tape scale with that fixed board -> drone map, the raw
+    estimate against it; the free fit then only reports the estimator's own yaw offset (align_rot_deg)."""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     K, dist = cam["K"], cam["dist"]
@@ -565,13 +567,18 @@ def run(video, cam, marks, csv_path, out, guard_offset=0.0, align_s=None, stride
     seg = slice(i_to, i_end + 1)
     e_rel, t_rel = est[seg] - est[i_to], tr[seg] - tr[i_to]
     n_fit = len(e_rel) if align_s is None else int(np.searchsorted(te[seg], te[i_to] + align_s))
-    q, refl = align(e_rel, t_rel, max(n_fit, 10))
+    A = np.eye(2) if survey is None else to_drone(np.eye(2), survey).T   # board -> compare frame (drone, tape m)
+    t_c = t_rel @ A.T
+    qf, refl = align(e_rel, t_c, max(n_fit, 10))
+    q = qf if survey is None else np.linalg.inv(A)     # est -> board, for truth.csv and `overlay`
     e_al = e_rel @ q.T
-    err = e_al - t_rel
+    e_c = e_al @ A.T                                   # the raw estimate with a survey, e_rel @ qf.T without
+    err = e_c - t_c
+    e_f = e_rel @ qf.T                                 # est after its own best yaw fit
     g = np.arange(te[i_to], te[i_end], 0.2)            # path on a 0.2 s grid: per-frame jitter would inflate it
     def path(xy_):
         return float(np.sum(np.hypot(np.diff(np.interp(g, te[seg], xy_[:, 0])), np.diff(np.interp(g, te[seg], xy_[:, 1])))))
-    path_t, path_e = path(t_rel), path(e_al)
+    path_t, path_e = path(t_c), path(e_c)
     rep = {
         "floor_reproj_px": round(reproj, 2),
         "floor_noise_err_1p5m_m": round(pose_noise(K, dist, marks["world"], marks["pixel"],
@@ -579,17 +586,23 @@ def run(video, cam, marks, csv_path, out, guard_offset=0.0, align_s=None, stride
         "sync_offset_s": round(off, 3), "frames": int(len(tv)),
         "frames_tracked": int(ok.sum()), "spikes_replaced": n_spikes,
         "landing_vs_start_spot_m": [round(float(v), 3) for v in (*land, np.hypot(*land))],
-        "est_landing_vs_start_m": round(float(np.hypot(*(est[i_end] - est[i_to]))), 3), "align_rot_deg": round(float(np.degrees(np.arctan2(q[1, 0], q[0, 0]))), 1),
+        "est_landing_vs_start_m": round(float(np.hypot(*(est[i_end] - est[i_to]))), 3), "align_rot_deg": round(float(np.degrees(np.arctan2(qf[1, 0], qf[0, 0]))), 1),
         "align_reflection": refl, "flight_s": round(float(te[i_end] - te[i_to]), 2),
-        "truth_at_disarm_m": [round(float(v), 3) for v in t_rel[-1]],
-        "est_at_disarm_m": [round(float(v), 3) for v in e_al[-1]],
+        "compare_frame": "board, free fit" if survey is None else "drone (survey), tape scale",
+        **({} if survey is None else {"landing_vs_start_drone_m": [round(float(v), 3) for v in (*(A @ land), np.hypot(*(A @ land)))]}),
+        # with a survey: the same numbers once the estimator's own yaw offset (align_rot_deg) is taken out
+        **({} if survey is None else {"after_yaw_fit": {
+            "scale_truth_over_est": round(float(np.nansum(t_c * e_f) / np.nansum(e_f * e_f)), 4),
+            "err_rms_m": round(float(np.sqrt(np.nanmean(np.sum((e_f - t_c) ** 2, axis=1)))), 3)}}),
+        "truth_at_disarm_m": [round(float(v), 3) for v in t_c[-1]],
+        "est_at_disarm_m": [round(float(v), 3) for v in e_c[-1]],
         "err_at_disarm_m": [round(float(v), 3) for v in err[-1]],
         "err_max_m": round(float(np.nanmax(np.hypot(*err.T))), 3),
         "err_rms_m": round(float(np.sqrt(np.nanmean(np.sum(err ** 2, axis=1)))), 3),
         "path_truth_m": round(path_t, 2), "path_est_m": round(path_e, 2),
         "sync": sync if isinstance(sync, str) else "manual",
         # least-squares truth ~ s * est over the flight
-        "scale_truth_over_est": round(float(np.nansum(t_rel * e_al) / np.nansum(e_al * e_al)), 4),
+        "scale_truth_over_est": round(float(np.nansum(t_c * e_c) / np.nansum(e_c * e_c)), 4),
         # estimator -> floor frame for `overlay`: floor_xy = truth0 + (est_m - est0) @ q.T
         "frame": {"q": q.tolist(), "est0": est[i_to].tolist(), "truth0": tr[i_to].tolist(), "z_off": guard_offset,
                   "t_to": float(te[i_to]), "t_end": float(te[i_end])},
@@ -600,7 +613,7 @@ def run(video, cam, marks, csv_path, out, guard_offset=0.0, align_s=None, stride
         for k in range(len(t_rel)):
             w.writerow([f"{te[i_to + k]:.3f}", *(f"{v:.4f}" for v in t_rel[k]), *(f"{v:.4f}" for v in e_al[k])])
     (out / "report.json").write_text(json.dumps(rep, indent=2))
-    _plot(te[seg], t_rel, e_al, out / "truth.png")
+    _plot(te[seg], t_c, e_c, out / "truth.png")
     return rep
 
 
@@ -732,6 +745,7 @@ def main(argv=None):
     r.add_argument("--guard-offset", type=float, default=0.0, help="guard plane above the height sensor, m")
     r.add_argument("--align-s", type=float, default=None, help="fit window after take-off, s (default: whole flight)")
     r.add_argument("--sync", default="takeoff", help="takeoff | speed | seconds (telemetry t = video t + sync)"); r.add_argument("--stride", type=int, default=1)
+    r.add_argument("--survey", help="survey.json from `survey`: fixed board -> drone frame instead of the free fit")
     for p in (f, r):
         p.add_argument("--hsv-lo", default=",".join(map(str, HSV_LO)))
         p.add_argument("--hsv-hi", default=",".join(map(str, HSV_HI)))
@@ -824,7 +838,8 @@ def main(argv=None):
         rep = run(a.video, json.loads(Path(a.cam).read_text()), json.loads(Path(a.marks).read_text()), a.csv, a.out,
                   a.guard_offset, a.align_s, a.stride, lo, hi, a.min_area,
                   tuple(float(s) for s in a.static_t.split(",") if s),
-                  a.sync if a.sync in ("takeoff", "speed") else float(a.sync))
+                  a.sync if a.sync in ("takeoff", "speed") else float(a.sync),
+                  json.loads(Path(a.survey).read_text()) if a.survey else None)
         print(json.dumps(rep, indent=2))
 
 

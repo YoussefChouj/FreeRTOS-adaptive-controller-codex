@@ -140,6 +140,14 @@ def test_run_end_to_end(tmp_path):
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     assert (cv2.inRange(hsv, (50, 120, 120), (70, 255, 255)) > 0).sum() > 200     # green truth trail present
 
+    # surveyed frame: drone = 0.9 * e^{-30 deg i} * board (tape says the board reads 11% long), est is that frame
+    sv = {"a": [0.9 * np.cos(a), 0.9 * np.sin(a)], "mirror": False}
+    rep = vt.run(video, cam, {"world": marks, "pixel": pix.tolist()}, str(path), tmp_path / "out", sync="speed", survey=sv)
+    assert abs(rep["align_rot_deg"]) < 1 and rep["compare_frame"].startswith("drone")
+    assert abs(rep["scale_truth_over_est"] - 0.9) < 0.03 and rep["err_rms_m"] < 0.12
+    assert abs(rep["after_yaw_fit"]["scale_truth_over_est"] - 0.9) < 0.03
+    assert vt.overlay(video, cam, {"world": marks, "pixel": pix.tolist()}, str(path), tmp_path / "out", mp4, 640) == 690
+
 
 def test_floor_board_pose(tmp_path):
     """Board flat on the floor, seen obliquely: recovered camera height and a 1.5 m floor distance."""
