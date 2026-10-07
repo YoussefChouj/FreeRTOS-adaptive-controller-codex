@@ -16,6 +16,7 @@ CMD_KILL: int = 0x0D
 CMD_ARM: int = 0x0E
 CMD_PRIM: int = 0x1A
 CMD_TRAJ: int = 0x1B
+CMD_PROG: int = 0x1C
 
 
 class PrimIdx(IntEnum):
@@ -33,6 +34,16 @@ class TrajIdx(IntEnum):
     START = 4
     STOP = 5
     CLEAR = 6
+
+
+class ProgIdx(IntEnum):
+    """CMD 0x1C control slots; idx 0..18 are the sticky segment fields (API/wfb_prog.h WFB_PROG_F_*)."""
+
+    BEGIN = 32
+    PUSH = 33
+    CRC_HI = 34
+    COMMIT = 35
+    CLEAR = 36
 
 
 class ArmIdx(IntEnum):
@@ -137,3 +148,12 @@ class WfbClient:
     def traj_clear(self) -> bool:
         """Clear the trajectory buffer."""
         return self._send_cmd(CMD_TRAJ, TrajIdx.CLEAR, 0.0)
+
+    def prog(self, idx: int, value: float) -> bool:
+        """Send one CMD 0x1C frame: a segment field (0..18) or a ProgIdx control slot.
+
+        START, STOP and CLEAR of a committed program go through traj_start/traj_stop/traj_clear (CMD 0x1B).
+        """
+        if isinstance(idx, bool) or not isinstance(idx, int) or not (0 <= idx <= ProgIdx.CLEAR):
+            raise ValueError(f"idx must be an integer in 0..{int(ProgIdx.CLEAR)}, got {idx!r}")
+        return self._send_cmd(CMD_PROG, idx, float(value))
