@@ -73,3 +73,19 @@ def with_mrac(base, inj=1, cfg=(), simplex=2):
                 pr.stdin.close(); pr.wait()
 
     return FwMRAC
+
+
+def with_desat(base, hi=4000.0):
+    """Mixer desaturation candidate (firmware Mix_Compute clips each motor alone): when the top motor would pass hi,
+    lower the collective by the overshoot so the pitch/roll/yaw differential survives. Bench mixer rows as plant.py."""
+    class Desat(base):
+        name = getattr(base, 'name', base.__name__.lower()) + '+desat'
+
+        def step(self, o):
+            out = super().step(o)
+            U, thr = out['U'], out['thr']
+            gx, gy, gz = U[:, 0], U[:, 1], U[:, 2]
+            top = np.stack([-gy - gx - gz, gy + gx - gz, -gy + gx + gz, gy - gx + gz], 1).max(1)
+            return dict(out, thr=thr - np.maximum(thr + top - hi, 0.0))
+
+    return Desat
