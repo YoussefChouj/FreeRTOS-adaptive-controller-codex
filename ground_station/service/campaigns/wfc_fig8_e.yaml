@@ -1,12 +1,14 @@
 # Workflow-C flight series D-H (2026-10-07), flown by hand after step C, one campaign per flight:
+# Onboard program (2026-10-08): ONE `program` step, uploaded as atom parameters (CMD 0x1C); the firmware generates
+# the dense path, ramps with the chosen profile (trap|scurve|sine|quintic, per program or per op) and returns home.
 #   python -m ground_station.service.campaign_fly <launch copy> --pack <id> --run <run folder>
 # Camera sees only about +0.4-0.5 m of +y from the pad, so every shape stays at y <= +0.35 (most at y <= 0).
 # Every trajectory starts and ends at the pad hover (firmware). Airborne cap 120 s (API/wfb_safety.c); each upload
 # cost about 5.3 s of hover in step B. Timings in the comments are schedule estimates; projections are PROPOSED.
-# E figure-8: 1.2 m wide (x +-0.6), 0.7 m tall (y +-0.35), crossing over the pad, at 0.25 and 0.4 m/s.
+# E figure-8: 1.2 m wide (x +-0.6), 0.7 m tall (y 0 to -0.7, lobes in -y for the camera), crossing at (0, -0.35), at 0.25 and 0.4 m/s.
 # Reads: x moves at twice the y frequency, so one flight gives two frequencies per axis; direction reversals.
 campaign: wfc-fig8-e
-objective: "figure-8 1.2 x 0.7 m over the pad at 0.25 and 0.4 m/s, 0.8 m"
+objective: "figure-8 1.2 x 0.7 m in -y (crossing 0, -0.35) at 0.25 and 0.4 m/s, 0.8 m"
 controller: pid
 mode: fly
 packs:
@@ -16,15 +18,18 @@ experiments:
   - name: f01_fig8
     scenario:
       scenario: fig8-e
-      description: "figure-8 1.2 x 0.7 m over the pad at 0.25 and 0.4 m/s, 0.8 m"
+      description: "figure-8 1.2 x 0.7 m in -y (crossing 0, -0.35) at 0.25 and 0.4 m/s, 0.8 m"
       motion: {v_cruise_mps: 0.3, a_max_mps2: 0.5, ds_m: 0.05}
       steps:
         - takeoff: {z: 0.8}
         - hold: {s: 3}
         - hold: {s: 5}
-        - path: {shape: figure8, params: {width_m: 1.2, height_m: 0.7}, v_cruise_mps: 0.25}
-        - hold: {s: 2}
-        - path: {shape: figure8, params: {width_m: 1.2, height_m: 0.7}, v_cruise_mps: 0.4}
+        - program:
+            profile: scurve
+            ops:
+              - {fig8: {a: 0.6, b: 0.35, v: 0.25}}
+              - {hold: {s: 2}}
+              - {fig8: {a: 0.6, b: 0.35, v: 0.4}}
         - land
     capture: campaign
     repeats: 1

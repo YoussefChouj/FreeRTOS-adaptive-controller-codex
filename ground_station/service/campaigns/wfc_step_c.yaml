@@ -1,4 +1,6 @@
 # Step C: the default workflow-C test flight from 2026-10-07 (replaces the 20 s hover as the first flight).
+# Onboard program (2026-10-08): ONE `program` step, uploaded as atom parameters (CMD 0x1C); the firmware generates
+# the dense path, ramps with the chosen profile (trap|scurve|sine|quintic, per program or per op) and returns home.
 # A 15 s still hold over the pad right after takeoff (the "drifts when it sits still" observation, against video
 # truth), then 0.5 m steps +x, -x, +y, -y around c = (0, -0.5) (estimator scale, lag and frame vs video), then land
 # (offset vs the pad). The steps are centred on y = -0.5 because the camera only sees about +0.4-0.5 m of +y from
@@ -26,11 +28,17 @@ experiments:
         - takeoff: {z: 0.8}
         - hold: {s: 3}
         - hold: {s: 15}
-        - path:
-            shape: waypoints
-            params:
-              points_m: [[0, -0.5], [0.5, -0.5], [0, -0.5], [-0.5, -0.5], [0, -0.5], [0, 0], [0, -0.5], [0, -1.0], [0, -0.5]]
-              dwell_s: [1, 3, 1, 3, 1, 3, 1, 3, 1]
+        - program:
+            profile: scurve
+            v: 0.3
+            a: 0.5
+            ops:
+              - {line: {y: -0.5}}
+              - {hold: {s: 1}}
+              - {goto: {x: 0.5, dwell: 3}}
+              - {goto: {x: -0.5, dwell: 3}}
+              - {goto: {y: 0.0, dwell: 3}}
+              - {goto: {y: -1.0, dwell: 3}}
         - land
     capture: campaign
     repeats: 1

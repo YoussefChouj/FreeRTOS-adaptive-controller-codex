@@ -1,4 +1,6 @@
 # Workflow-C flight series D-H (2026-10-07), flown by hand after step C, one campaign per flight:
+# Onboard program (2026-10-08): ONE `program` step, uploaded as atom parameters (CMD 0x1C); the firmware generates
+# the dense path, ramps with the chosen profile (trap|scurve|sine|quintic, per program or per op) and returns home.
 #   python -m ground_station.service.campaign_fly <launch copy> --pack <id> --run <run folder>
 # Camera sees only about +0.4-0.5 m of +y from the pad, so every shape stays at y <= +0.35 (most at y <= 0).
 # Every trajectory starts and ends at the pad hover (firmware). Airborne cap 120 s (API/wfb_safety.c); each upload
@@ -22,11 +24,15 @@ experiments:
         - takeoff: {z: 0.8}
         - hold: {s: 3}
         - hold: {s: 5}
-        - goto: {x: 0.0, y: 0.0, z: 0.5, dwell_s: 6}
-        - hold: {s: 2}
-        - goto: {x: 0.0, y: 0.0, z: 1.1, dwell_s: 6}
-        - hold: {s: 2}
-        - goto: {x: 0.5, y: 0.0, z: 1.1, dwell_s: 3}
+        - program:
+            profile: scurve
+            ops:
+              - {line: {z: 0.5}}
+              - {hold: {s: 6}}
+              - {line: {z: 1.1}}
+              - {hold: {s: 6}}
+              - {line: {x: 0.5}}
+              - {hold: {s: 3}}
         - land
     capture: campaign
     repeats: 1
