@@ -141,9 +141,11 @@ def floor_pose(K, dist, world_xy, pixel) -> tuple[np.ndarray, np.ndarray, float]
     return R, t, err
 
 
-def floor_board(video: str, board: tuple[int, int], square: float, every_s: float = 0.5, max_frames: int = 60) -> dict:
+def floor_board(video: str, board: tuple[int, int], square: float, every_s: float = 0.5, max_frames: int = 60,
+                roi=None) -> dict:
     """Floor marks from a checkerboard lying flat on the floor (the phone is fixed, so every detection sees the same
-    corners): per-corner median pixel over the frames where the whole board is found. Origin = first inner corner."""
+    corners): per-corner median pixel over the frames where the whole board is found. Origin = first inner corner.
+    roi (x0, y0, x1, y1) px limits the search: boards of the same size on a wall would give a wall plane."""
     cv2 = _cv2()
     cap = cv2.VideoCapture(video)
     step = max(1, int(round(every_s * (cap.get(cv2.CAP_PROP_FPS) or 30.0))))
@@ -153,10 +155,12 @@ def floor_board(video: str, board: tuple[int, int], square: float, every_s: floa
         i += 1
         if (i - 1) % step:
             continue
-        ok, c = cv2.findChessboardCornersSB(cv2.cvtColor(cap.retrieve()[1], cv2.COLOR_BGR2GRAY), board, flags=flags)
+        img = cap.retrieve()[1]
+        x0, y0, x1, y1 = roi or (0, 0, img.shape[1], img.shape[0])
+        ok, c = cv2.findChessboardCornersSB(cv2.cvtColor(img[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY), board, flags=flags)
         if not ok:
             continue
-        c = c.reshape(-1, 2)
+        c = c.reshape(-1, 2) + (x0, y0)
         if ref is None:
             ref = c
         elif np.linalg.norm(c[0] - ref[-1]) < np.linalg.norm(c[0] - ref[0]):
@@ -536,6 +540,7 @@ def main(argv=None):
     k.add_argument("--world", required=True, help='"x,y x,y ..." metres'); k.add_argument("--out", required=True)
     b = sub.add_parser("floor"); b.add_argument("video"); b.add_argument("--board", required=True)
     b.add_argument("--square", type=float, required=True); b.add_argument("--out", required=True)
+    b.add_argument("--roi", help="x0,y0,x1,y1 px search box (keep wall boards out)")
     f = sub.add_parser("frame"); f.add_argument("video"); f.add_argument("--t", type=float, default=1.0)
     f.add_argument("--out", required=True)
     r = sub.add_parser("run"); r.add_argument("video"); r.add_argument("--cam", required=True)
@@ -569,7 +574,8 @@ def main(argv=None):
             print(f"lens spread at {sp['at_m']:.0f} m: rms {sp['rms']:.1f} cm, max {sp['max']:.1f} cm (target max < 2 cm)")
     elif a.cmd == "floor":
         cols, rows = (int(v) for v in a.board.lower().split("x"))
-        m = floor_board(a.video, (cols, rows), a.square)
+        m = floor_board(a.video, (cols, rows), a.square,
+                        roi=tuple(int(v) for v in a.roi.split(",")) if a.roi else None)
         Path(a.out).write_text(json.dumps(m, indent=2))
         print(f"board in {m['frames']} frames, corner spread {m['corner_spread_px']} px -> {a.out}")
     elif a.cmd == "click":
