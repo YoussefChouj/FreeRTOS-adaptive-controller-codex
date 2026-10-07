@@ -271,6 +271,15 @@ def summarize(results: dict) -> str:
     return "\n".join(lines)
 
 
+def fill_pid_u(series: lc.Series) -> None:
+    """stream_log presets log mrac_state.<ax>.u_nom, not Ctrler.<rate>PID.U: rebuild U exactly (mrac.c:1329-1332)."""
+    for a, st in (("pitch", "pitch"), ("roll", "roll"), ("yaw", "yaw"), ("z", "z_rate")):
+        k, src = f"Ctrler.{RATE[a]}.U", f"mrac_state.{st}.u_nom"
+        if k not in series and src in series:
+            t, v = series[src]
+            series[k] = (t, v * TO_MIXER[a])
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--root", default=str(REPO), help="checkout whose logs/ to scan")
@@ -285,6 +294,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.only and ref.name not in args.only:
                 continue
             s = lc.load(ref)
+            fill_pid_u(s)
             if not all(k in s for k in REQUIRED + ["flight_phase"]):
                 continue
             r = replay_log(s, work)

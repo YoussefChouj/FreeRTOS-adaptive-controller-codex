@@ -32,7 +32,7 @@ MIN_AIRBORNE_S = 3.0                     # shorter airborne spans are hops / han
 class LogRef:
     name: str
     path: Path          # session dir or <stem>.meta.json
-    kind: str           # "session" | "vofa"
+    kind: str           # "session" | "vofa" | "stream"
 
 
 def find_logs(root: str | Path = REPO) -> list[LogRef]:
@@ -42,11 +42,25 @@ def find_logs(root: str | Path = REPO) -> list[LogRef]:
            if (d / "telemetry.csv").is_file()]
     out += [LogRef("vofa/" + m.name[: -len(".meta.json")], m, "vofa")
             for m in sorted((root / "logs" / "vofa").glob("*.meta.json"))]
+    out += [LogRef("stream/" + c.name[: -len(".slot0.csv")], c, "stream")
+            for c in sorted((root / "logs").glob("*.slot0.csv"))]
     return out
 
 
+def _stream_slots(slot0: Path) -> list[Path]:
+    stem = slot0.name[: -len(".slot0.csv")]
+    return sorted(slot0.parent.glob(f"{stem}.slot[0-9].csv"))
+
+
 def keys(ref: LogRef) -> set[str]:
-    """Symbols in the log without loading values: VOFA meta vars, or the session key column only."""
+    """Symbols in the log without loading values: VOFA meta vars, stream_log slot headers, or the session key
+    column only."""
+    if ref.kind == "stream":
+        out = set()
+        for f in _stream_slots(ref.path):
+            with open(f, encoding="utf-8") as fh:
+                out |= set(fh.readline().strip().split(",")[2:])
+        return out
     if ref.kind == "vofa":
         try:
             meta = json.loads(ref.path.read_text(encoding="utf-8"))
@@ -72,6 +86,8 @@ def load(ref: LogRef) -> Series:
         except LoadError:
             return {}
         return {k: (s.t, s.v) for k, s in fl.signals.items() if len(s)}
+    if ref.kind == "stream":
+        return _load_stream(ref.path)
     raw = _load_session(ref.path / "telemetry.csv")
     tb = _timebase(raw)
     out = {}
@@ -99,6 +115,31 @@ def _timebase(series: Series):
         t = np.asarray(t, float)
         return np.interp(t, th, tick_s) + np.minimum(t - th[0], 0.0) + np.maximum(t - th[-1], 0.0)
     return tb
+
+
+def _load_stream(slot0: Path) -> Series:
+    """stream_log --frames output (<stem>.slot<N>.csv, one row per frame, t_src_ms = board xTickCount): every
+    column on the board clock, t = 0 at the first slot-0 frame. Torn rows (non-numeric t_src_ms) are dropped."""
+    import pandas as pd
+    out, t0 = {}, None
+    for f in _stream_slots(slot0):
+        try:
+            df = pd.read_csv(f, on_bad_lines="skip")
+        except (ValueError, OSError):
+            continue
+        ts = pd.to_numeric(df.pop("t_src_ms"), errors="coerce")
+        df = df.drop(columns=["t_host_s"], errors="ignore")[ts.notna()]
+        ts = ts[ts.notna()].to_numpy(float) / 1000.0
+        if not len(ts):
+            continue
+        t0 = ts[0] if t0 is None else t0
+        o = np.argsort(ts, kind="stable")
+        for k in df.columns:
+            v = pd.to_numeric(df[k], errors="coerce").to_numpy(float)[o]
+            ok = np.isfinite(v)
+            if ok.any():
+                out[str(k)] = ((ts[o] - t0)[ok], v[ok])
+    return out
 
 
 def _load_session(csv: Path) -> Series:
