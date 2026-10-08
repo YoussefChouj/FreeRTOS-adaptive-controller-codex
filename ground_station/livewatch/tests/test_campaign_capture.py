@@ -24,13 +24,15 @@ CATALOG = Path(cc.__file__).with_name("symbol_catalog.json")
 NEEDED, OPTIONAL = CAMPAIGN_SET["needed"], CAMPAIGN_SET["optional"]
 ALL_VARS = NEEDED + OPTIONAL
 # Resolved by the host from DWARF, not in the firmware's on-board symbol table.
+# Slot and drop counts below are sized for the STRUCT6 build (6 features); a MULTI ELF (30) grows mrac_shadow to 260.
+STRUCT6_ONLY = pytest.mark.skipif(cc.MRAC_N_FEATURES != 6, reason="sized for the STRUCT6 build; local ELF has %d features" % cc.MRAC_N_FEATURES)
 DWARF_ONLY = {"real_voltage", "flight_phase", cc.KF_HEALTH, *cc.WFB_STATUS}
 
 
 # ---- the campaign set ---------------------------------------------------------------------------------
 
 def test_set_sizes_and_order():
-    assert len(NEEDED) == 41 and len(OPTIONAL) == 68
+    assert len(NEEDED) == 41 and len(OPTIONAL) == 20 + 8 * cc.MRAC_N_FEATURES   # 68 STRUCT6, 260 MULTI
     assert NEEDED[:len(REQUIRED_SYNC_VARS)] == REQUIRED_SYNC_VARS
     scoring = [n for a in cc.POSITION_AXES for n in (a.feedback, a.reference)] + list(cc.MOTORS)
     assert set(scoring) <= set(NEEDED)
@@ -78,6 +80,7 @@ def test_plan_respects_slot_limits_and_budget(rate):
     assert recorded + dropped == list(ALL_VARS)  # needed first; drops come off the end
 
 
+@STRUCT6_ONLY
 def test_50hz_records_everything():
     slots, dropped = slots_for(50)
     assert [(s["hz"], len(s["vars"])) for s in slots] == [(50.0, 62), (50.0, 47)]
@@ -259,6 +262,7 @@ def test_plan_capture_keeps_group_order_and_caps_at_the_probed_rate():
     assert recorded == list(NEEDED + cc.OPTICAL_FLOW + cc.VELOCITY_LOOPS)
 
 
+@STRUCT6_ONLY
 def test_plan_capture_drops_group_tail_at_100hz():
     plan = cc.plan_capture({"rate_hz": 100, "groups": ["optical_flow", "mrac_shadow"]})
     assert plan["dropped"] == list(OPTIONAL[35:])  # 81 vars fit at 100 Hz: 41 core + 5 flow + 35 shadow
@@ -275,6 +279,7 @@ def test_log_plan_table_notes_a_capped_rate():
     assert "requested 100 Hz" in table.splitlines()[-1]
 
 
+@STRUCT6_ONLY
 def test_subscribe_steps_match_the_agent_subscribe_action():
     plan = cc.plan_capture({"rate_hz": 50, "groups": ["mrac_shadow"]})
     steps = cc.subscribe_steps(plan)
