@@ -95,3 +95,16 @@ Body-frame accel x/y sees only non-thrust forces (rope pull, slosh, wind, walls)
 | F1 PID | pitch | 0.24 / 0.15 | 0.12 | 0.08 | 0.07 | 0.03 / 0.03 |
 | F1 PID | roll | 0.22 / -0.02 | -0.04 | -0.07 | -0.13 | -0.29 / -0.41 |
 
+## vp16 grid inputs: where the drone sits (centre placement, gamma T rule)
+
+Each vp16 grid input in its normalised unit, p1 / p50 / p99 per segment. pitch/roll: rate / 200 deg/s, tilt / 15 deg, cross = other tilt / 15 deg. yaw: rate / 160 deg/s, heading error ~ gyrozPID.Des / 162 (= Des / Kp 6 / 27 deg, yawPID not logged), cross = Z thrust share. Z: climb rate / 1.0 m/s, thrust share u_nom / u_max, cross = tilt size / 15 deg. x/y: velocity / 300 cm/s, position error / 375 cm, cross = other velocity / 300. |e| = MRAC error (x/y: locxs/locys Des - FB, cm/s) against e_sat; > e_sat = share of time the tanh cap saturates.
+
+| seg | axis | in1 p1 / p50 / p99 | in2 p1 / p50 / p99 | cross p1 / p50 / p99 | abs e p50 / p95 / p99 | e_sat | > e_sat (%) |
+|---|---|---|---|---|---|---|---|
+| F1 PID | pitch | -0.13 / +0.00 / +0.15 | -0.75 / -0.09 / +0.53 | -0.83 / -0.05 / +0.71 | 0.075 / 0.251 / 0.374 | 0.5 | 0.2 |
+| F1 PID | roll | -0.18 / -0.00 / +0.17 | -0.83 / -0.05 / +0.71 | -0.75 / -0.09 / +0.53 | 0.063 / 0.205 / 0.293 | 0.5 | 0.0 |
+| F1 PID | yaw | -0.11 / +0.00 / +0.11 | -0.13 / +0.00 / +0.13 | -0.01 / +0.13 / +0.17 | 0.066 / 0.209 / 0.301 | 0.7 | 0.0 |
+| F1 PID | z_rate | -3.79 / +0.00 / +1.43 | -0.01 / +0.13 / +0.17 | +0.03 / +0.21 / +0.88 | 0.234 / 0.771 / 5.903 | 0.4 | 16.7 |
+| F1 PID | x | -0.26 / +0.00 / +0.33 | -0.29 / -0.00 / +0.07 | -0.29 / +0.00 / +0.35 | 7.708 / 59.781 / 87.494 | 45 | 8.5 |
+| F1 PID | y | -0.29 / +0.00 / +0.35 | -0.17 / -0.03 / +0.14 | -0.26 / +0.00 / +0.33 | 14.985 / 50.899 / 92.879 | 45 | 6.3 |
+

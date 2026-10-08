@@ -106,3 +106,22 @@ Body-frame accel x/y sees only non-thrust forces (rope pull, slosh, wind, walls)
 | F1 PID | roll | 0.48 / 0.32 | 0.33 | 0.28 | 0.32 | 0.32 / 0.51 |
 | F2 PID | roll | 0.63 / 0.20 | 0.12 | 0.18 | -0.17 | -0.96 / -2.51 |
 
+## vp16 grid inputs: where the drone sits (centre placement, gamma T rule)
+
+Each vp16 grid input in its normalised unit, p1 / p50 / p99 per segment. pitch/roll: rate / 200 deg/s, tilt / 15 deg, cross = other tilt / 15 deg. yaw: rate / 160 deg/s, heading error ~ gyrozPID.Des / 162 (= Des / Kp 6 / 27 deg, yawPID not logged), cross = Z thrust share. Z: climb rate / 1.0 m/s, thrust share u_nom / u_max, cross = tilt size / 15 deg. x/y: velocity / 300 cm/s, position error / 375 cm, cross = other velocity / 300. |e| = MRAC error (x/y: locxs/locys Des - FB, cm/s) against e_sat; > e_sat = share of time the tanh cap saturates.
+
+| seg | axis | in1 p1 / p50 / p99 | in2 p1 / p50 / p99 | cross p1 / p50 / p99 | abs e p50 / p95 / p99 | e_sat | > e_sat (%) |
+|---|---|---|---|---|---|---|---|
+| F1 PID | pitch | -0.17 / -0.00 / +0.19 | -0.77 / -0.10 / +0.49 | -0.74 / -0.08 / +0.65 | 0.083 / 0.308 / 0.451 | 0.5 | 0.6 |
+| F1 PID | roll | -0.17 / -0.01 / +0.20 | -0.74 / -0.08 / +0.65 | -0.77 / -0.10 / +0.49 | 0.085 / 0.269 / 0.404 | 0.5 | 0.4 |
+| F1 PID | yaw | -0.17 / +0.00 / +0.12 | -0.22 / +0.01 / +0.14 | -0.03 / +0.07 / +0.12 | 0.077 / 0.223 / 0.327 | 0.7 | 0.0 |
+| F1 PID | z_rate | -0.62 / +0.00 / +0.61 | -0.03 / +0.07 / +0.12 | +0.04 / +0.23 / +0.83 | 0.083 / 0.411 / 0.676 | 0.4 | 5.3 |
+| F1 PID | x | -0.31 / +0.00 / +0.26 | -0.17 / +0.00 / +0.13 | -0.33 / -0.00 / +0.31 | 11.556 / 61.017 / 96.590 | 45 | 9.2 |
+| F1 PID | y | -0.33 / -0.00 / +0.31 | -0.16 / -0.04 / +0.44 | -0.31 / +0.00 / +0.26 | 16.018 / 49.623 / 117.963 | 45 | 7.4 |
+| F2 PID | pitch | -0.14 / +0.00 / +0.11 | -0.36 / -0.02 / +0.31 | -0.31 / -0.04 / +0.16 | 0.073 / 0.220 / 0.278 | 0.5 | 0.0 |
+| F2 PID | roll | -0.09 / -0.01 / +0.11 | -0.31 / -0.04 / +0.16 | -0.36 / -0.02 / +0.31 | 0.069 / 0.191 / 0.249 | 0.5 | 0.0 |
+| F2 PID | yaw | -0.10 / +0.00 / +0.12 | -0.13 / -0.04 / +0.11 | -0.01 / +0.08 / +0.15 | 0.117 / 0.262 / 0.326 | 0.7 | 0.0 |
+| F2 PID | z_rate | -1.11 / -0.00 / +0.25 | -0.01 / +0.08 / +0.15 | +0.01 / +0.15 / +0.43 | 0.062 / 0.292 / 0.785 | 0.4 | 3.9 |
+| F2 PID | x | -0.07 / +0.00 / +0.07 | -0.01 / +0.01 / +0.03 | -0.10 / +0.01 / +0.14 | 9.415 / 23.845 / 29.455 | 45 | 0.0 |
+| F2 PID | y | -0.10 / +0.01 / +0.14 | -0.13 / +0.00 / +0.03 | -0.07 / +0.00 / +0.07 | 8.894 / 26.581 / 30.480 | 45 | 0.0 |
+

@@ -398,6 +398,49 @@ def cross_feature(df, segs):
     return md
 
 
+E_SAT = {"pitch": 0.5, "roll": 0.5, "yaw": 0.7, "z_rate": 0.4, "x": 45.0, "y": 45.0}   # API/mrac.c e_sat; x/y PROPOSED cm/s
+
+
+def grid_inputs(df, segs):
+    md = ["## vp16 grid inputs: where the drone sits (centre placement, gamma T rule)", "",
+          "Each vp16 grid input in its normalised unit, p1 / p50 / p99 per segment. pitch/roll: rate / 200 deg/s, "
+          "tilt / 15 deg, cross = other tilt / 15 deg. yaw: rate / 160 deg/s, heading error ~ gyrozPID.Des / 162 "
+          "(= Des / Kp 6 / 27 deg, yawPID not logged), cross = Z thrust share. Z: climb rate / 1.0 m/s, thrust share "
+          "u_nom / u_max, cross = tilt size / 15 deg. x/y: velocity / 300 cm/s, position error / 375 cm, cross = "
+          "other velocity / 300. |e| = MRAC error (x/y: locxs/locys Des - FB, cm/s) against e_sat; > e_sat = share of "
+          "time the tanh cap saturates.", "",
+          "| seg | axis | in1 p1 / p50 / p99 | in2 p1 / p50 / p99 | cross p1 / p50 / p99 | abs e p50 / p95 / p99 | e_sat | > e_sat (%) |",
+          "|---|---|---|---|---|---|---|---|"]
+    col = lambda n: df[n] if n in df.columns else None
+    dv = lambda a, b: None if a is None or b is None else a - b
+    sc = lambda s, k: None if s is None else s / k
+    pit, rol = col("imu_data.pit"), col("imu_data.rol")
+    tilt = None if pit is None or rol is None else np.hypot(pit, rol) / 15.0
+    share = sc(col("mrac_state.z_rate.u_nom"), U_MAX["z_rate"])
+    rows = {
+        "pitch": (sc(col("pitch_x"), FLIGHT_LIM[0]), sc(pit, 15.0), sc(rol, 15.0), col("mrac_state.pitch.e")),
+        "roll": (sc(col("roll_x"), FLIGHT_LIM[0]), sc(rol, 15.0), sc(pit, 15.0), col("mrac_state.roll.e")),
+        "yaw": (sc(col("Ctrler.gyrozPID.FB"), 160.0), sc(col("Ctrler.gyrozPID.Des"), 162.0), share,
+                col("mrac_state.yaw.e")),
+        "z_rate": (col("Ctrler.Z_ratePID.FB"), share, tilt, col("mrac_state.z_rate.e")),
+        "x": (sc(col("Ctrler.locxsPID.FB"), 300.0), sc(dv(col("Ctrler.locxPID.Des"), col("Ctrler.locxPID.FB")), 375.0),
+              sc(col("Ctrler.locysPID.FB"), 300.0), dv(col("Ctrler.locxsPID.Des"), col("Ctrler.locxsPID.FB"))),
+        "y": (sc(col("Ctrler.locysPID.FB"), 300.0), sc(dv(col("Ctrler.locyPID.Des"), col("Ctrler.locyPID.FB")), 375.0),
+              sc(col("Ctrler.locxsPID.FB"), 300.0), dv(col("Ctrler.locysPID.Des"), col("Ctrler.locysPID.FB"))),
+    }
+    def pct(s, i0, i1):
+        v = None if s is None else s.loc[i0:i1].dropna().to_numpy()
+        return "n/a" if v is None or len(v) < 100 else "%+.2f / %+.2f / %+.2f" % tuple(np.percentile(v, (1, 50, 99)))
+    for name, i0, i1 in segs:
+        for ax, (a, b, c, e) in rows.items():
+            ev = None if e is None else np.abs(e.loc[i0:i1].dropna().to_numpy())
+            es = "n/a | %g | n/a" % E_SAT[ax] if ev is None or len(ev) < 100 else "%.3f / %.3f / %.3f | %g | %.1f" % (
+                tuple(np.percentile(ev, (50, 95, 99))) + (E_SAT[ax], 100.0 * np.mean(ev > E_SAT[ax])))
+            md.append("| %s | %s | %s | %s | %s | %s |" % (name, ax, pct(a, i0, i1), pct(b, i0, i1), pct(c, i0, i1), es))
+    md.append("")
+    return md
+
+
 def capability(df, mseg):
     """Per-feature learning drive gamma_i*E[phi_i^2/(1+|phi|^2)] (mrac.c grad = -s*phi_i/(1+|phi|^2)) and reach."""
     md = ["## Feature capability (all MRAC segments pooled)", "",
@@ -601,7 +644,7 @@ def main():
     md.append("")
     umd, fits = uncertainty(df, segs, inj, a)
     cmd_, caps = capability(df, mseg) if mseg else ([], {})
-    md += umd + force_feature(df, segs) + cross_feature(df, segs) + cmd_
+    md += umd + force_feature(df, segs) + cross_feature(df, segs) + grid_inputs(df, segs) + cmd_
     with open(os.path.join(a.out, "adaptive_stats.md"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(md) + "\n")
 
