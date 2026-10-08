@@ -29,9 +29,11 @@ U_MAX = {"pitch": 6.73863, "roll": 6.73863, "yaw": 2.027, "z_rate": 13.47726}
 FEAT = ("bias 1", "x", "x tanh x", "cross", "u_nom", "xm")
 BAND = (0.25, 0.9)                                                     # load-sway band, exp12
 MOTORS = ["mymotor.motor%d" % i for i in range(1, 5)]
-VP_BASIS = {7: 1, 8: 3, 9: 2, 10: 4, 11: 5, 12: 6}   # TASK/StabilizerTask.c s_vp[] basis column; vp 0-6 S6 (0)
+VP_BASIS = {7: 1, 8: 3, 9: 2, 10: 4, 11: 5, 12: 6, 13: 7, 14: 8}   # TASK/StabilizerTask.c s_vp[] basis column; vp 0-6 S6 (0)
 EXT_GRID = {2: (3, 2), 3: (4, 3), 4: (6, 4)}        # API/mrac.c MRAC_GenExt: a x b Gaussians on rate/5 rad/s, angle/0.5 rad
 S6RBF_SCALE = (3.0, 0.26)                            # API/mrac.c MRAC_Init rbf_rate_scale (rad/s), rbf_ang_scale (rad)
+FLIGHT_LIM = (np.deg2rad(200.0), np.deg2rad(15.0))          # API/mrac.c MRAC_LIM_RATE / MRAC_LIM_TILT (vp 13/14 inputs)
+GAP_C = ((-0.7, -0.3, -0.1, 0.1, 0.3, 0.7), (-0.6, -0.2, 0.2, 0.6))   # mrac_t_rate_c / mrac_t_ang_c
 
 
 def load(stem):
@@ -46,6 +48,12 @@ def load(stem):
     return df.reset_index(drop=True)
 
 
+def _gap1d(v, c):
+    """Gaussians at centres c, width = mean gap to the neighbours (API/mrac.c MRAC_Gap1D)."""
+    w = [c[1] - c[0]] + [(c[n + 1] - c[n - 1]) / 2 for n in range(1, len(c) - 1)] + [c[-1] - c[-2]]
+    return [np.exp(-0.5 * ((v - cn) / wn) ** 2) for cn, wn in zip(c, w)]
+
+
 def ext_phi(basis, x, ang):
     """MULTI ext block of pitch/roll (API/mrac.c MRAC_GenExt), RBF bases only: (Gaussians, grid units) or None."""
     if basis in EXT_GRID:
@@ -58,6 +66,17 @@ def ext_phi(basis, x, ang):
         pr, ph = x / S6RBF_SCALE[0], ang / S6RBF_SCALE[1]
         gr = [np.exp(-(pr - c) ** 2) for c in (-1.5, -0.5, 0.5, 1.5)]
         ga = [np.exp(-(ph - c) ** 2) for c in (-1.0, 0.0, 1.0)]
+    elif basis == 7:
+        pr, ph = x / FLIGHT_LIM[0], ang / FLIGHT_LIM[1]
+        gr, ga = _gap1d(pr, GAP_C[0]), _gap1d(ph, GAP_C[1])
+    elif basis == 8:
+        pr, ph = x / FLIGHT_LIM[0], ang / FLIGHT_LIM[1]
+        out = []
+        for s in (1.0, 0.5, 0.25, 0.125):     # Russian doll: four 3x2 grids, phi[l * 6 + i * 2 + j]
+            gr = [np.exp(-0.5 * ((pr - s * i) / s) ** 2) for i in (-1, 0, 1)]
+            ga = [np.exp(-0.5 * ((ph - s * j) / (2 * s)) ** 2) for j in (-1, 1)]
+            out += [g * h for g in gr for h in ga]
+        return out, pr, ph
     else:
         return None
     return [g * h for g in gr for h in ga], pr, ph

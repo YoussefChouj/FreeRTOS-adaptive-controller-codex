@@ -247,6 +247,56 @@ static int ext_nonzero(const float *phi)
     return n;
 }
 
+/* vp 13 / 14: pitch at 30 deg/s and 5 deg = 0.15 of the 200 deg/s limit and 1/3 of the 15 deg limit. The 24
+ * ext slots must match the closed form: RBF24T gap widths (rate 0.4 0.3 0.2 0.2 0.3 0.4, tilt 0.4) and RBF24D
+ * four 3x2 dolls at s = 1, 1/2, 1/4, 1/8 (rate width s, tilt width 2s). */
+static double gauss(double x, double c, double w) { return exp(-0.5 * ((x - c) / w) * ((x - c) / w)); }
+
+static void test_retuned_rbf(void)
+{
+    static const double rc[6] = {-0.7, -0.3, -0.1, 0.1, 0.3, 0.7}, rw[6] = {0.4, 0.3, 0.2, 0.2, 0.3, 0.4};
+    static const double ac[4] = {-0.6, -0.2, 0.2, 0.6};
+    const float *phi = mrac_state.pitch.Phi;
+    double xr = 30.0 / 200.0, xa = 5.0 / 15.0, e, err;
+    int i, j, l, good;
+
+    fly();
+    ok("R basis 7 (RBF24T) accepted", MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 7.0f) == 1U);
+    tick(5.0f, -3.0f);
+    err = 0.0;
+    for (i = 0; i < 6; i++) {
+        for (j = 0; j < 4; j++) {
+            e = gauss(xr, rc[i], rw[i]) * gauss(xa, ac[j], 0.4);
+            err = fmax(err, fabs((double)phi[MRAC_N_STRUCT + i * 4 + j] - e));
+        }
+    }
+    ok("R RBF24T: 24 slots match the gap-width closed form", err < 1e-4);
+    ok("R RBF24T: phi[0..3] zeroed", phi[0] == 0.0f && phi[1] == 0.0f && phi[2] == 0.0f && phi[3] == 0.0f);
+    ok("R RBF24T: nearest bump (0.1, 0.2) is the largest", phi[MRAC_N_STRUCT + 3 * 4 + 2] > 0.8f);
+    ok("R basis 8 (RBF24D) accepted", MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 8.0f) == 1U);
+    tick(5.0f, -3.0f);
+    err = 0.0;
+    for (l = 0; l < 4; l++) {
+        double sc = ldexp(1.0, -l);
+        for (i = 0; i < 3; i++) {
+            for (j = 0; j < 2; j++) {
+                e = gauss(xr, sc * (i - 1), sc) * gauss(xa, sc * (2 * j - 1), 2.0 * sc);
+                err = fmax(err, fabs((double)phi[MRAC_N_STRUCT + l * 6 + i * 2 + j] - e));
+            }
+        }
+    }
+    ok("R RBF24D: 24 slots match the doll closed form", err < 1e-4);
+    ok("R RBF24D: phi[0..3] zeroed", phi[0] == 0.0f && phi[1] == 0.0f && phi[2] == 0.0f && phi[3] == 0.0f);
+    /* every slot finite and inside [0, 1] at the limits too */
+    good = 1;
+    tick(15.0f, -15.0f);
+    ctrl.gyroyPID.FB = 200.0f;
+    tick(15.0f, -15.0f);
+    for (i = MRAC_N_STRUCT; i < MRAC_N_FEATURES; i++) good &= (phi[i] >= 0.0f && phi[i] <= 1.0f);
+    ok("R RBF24D at the limits: slots finite in [0, 1]", good);
+    MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 0.0f);
+}
+
 static void test_multi_basis(void)
 {
     const float *phi = mrac_state.pitch.Phi;
@@ -272,7 +322,7 @@ static void test_multi_basis(void)
     mrac_in_acc[0] = 0.0f; mrac_in_vbat = 0.0f; mrac_vp12.v_arm = 0.0f;
     MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 1.0f);
     ok("M leaving S10X restores the ext 4 row", fabsf(mrac_config_pitch.What_limit[MRAC_N_STRUCT + 4] - 0.05f) < 1e-6f);
-    ok("M basis 7 refused", MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 7.0f) == 0U);
+    ok("M basis 9 refused", MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 9.0f) == 0U);
     MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 0.0f);
     tick(5.0f, -3.0f);
     ok("M back to basis 0: ext slots 0 again", ext_nonzero(phi) == 0);
@@ -288,6 +338,7 @@ int main(void)
 #endif
 #if MRAC_VARIANT == MRAC_VARIANT_MULTI
     test_multi_basis();
+    test_retuned_rbf();
 #endif
     printf("mrac_inputs (variant %d): %d checks, %d failure(s)\n", MRAC_VARIANT, checks, fails);
     return fails != 0;

@@ -488,9 +488,14 @@ extern volatile float mrac_in_acc[2];
  * Every default below is PROPOSED. mask: 24-bit ext-slot mask per axis in one float (bit k = ext slot k on),
  * applied on the ground or while ch8 is off (the vp rule); mask_act is the applied readback. */
 #define MRAC_BASIS_S10X 6
-#define MRAC_BASIS_N_X  (MRAC_BASIS_S10X + 1)
+/* vp 13 / 14 (docs/workflow-b/vp13-14-rbf-retune.md): RBF24 retuned to the flight limits (200 deg/s, 15 deg).
+ * RBF24T: 6 rate x 4 tilt centres dense near 0, width = mean gap to the neighbours. RBF24D: Russian doll, four
+ * nested 3 rate x 2 tilt grids at 1, 1/2, 1/4, 1/8 of the limits. Both keep u_nom and xm of S6, like RBF24. */
+#define MRAC_BASIS_RBF24T 7
+#define MRAC_BASIS_RBF24D 8
+#define MRAC_BASIS_N_X  (MRAC_BASIS_RBF24D + 1)
 #if MRAC_VARIANT == MRAC_VARIANT_MULTI
-#define MRAC_BASIS_HI_X ((float)MRAC_BASIS_S10X)
+#define MRAC_BASIS_HI_X ((float)MRAC_BASIS_RBF24D)
 #else
 #define MRAC_BASIS_HI_X MRAC_BASIS_HI
 #endif

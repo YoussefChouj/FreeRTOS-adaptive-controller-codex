@@ -343,7 +343,8 @@ static void MRAC_GenStructured(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *p
 #endif
 #if MRAC_VARIANT == MRAC_VARIANT_MULTI
     /* sim RBF sets keep only u_nom and xm of S6 (features(): Gaussians + [un, pmr]) */
-    if (MRAC_BasisOf(axis) >= MRAC_BASIS_RBF6 && MRAC_BasisOf(axis) <= MRAC_BASIS_RBF24) {
+    if ((MRAC_BasisOf(axis) >= MRAC_BASIS_RBF6 && MRAC_BasisOf(axis) <= MRAC_BASIS_RBF24) ||
+        MRAC_BasisOf(axis) == MRAC_BASIS_RBF24T || MRAC_BasisOf(axis) == MRAC_BASIS_RBF24D) {
         phi[0] = 0.0f;
         phi[1] = 0.0f;
         phi[2] = 0.0f;
@@ -412,6 +413,60 @@ static void MRAC_ExtGrid(float pr, float ph, int a, int b, float *phi)
     for (j = 0; j < b; j++) { d = (ph + 1.0f - wa * (float)j) / wa; ga[j] = expf(-0.5f * d * d); }
     for (i = 0; i < a; i++) {
         for (j = 0; j < b; j++) phi[i * b + j] = gr[i] * ga[j];
+    }
+}
+
+/* vp 13 / 14 inputs: rate and tilt as shares of their limits (200 deg/s commanded rate, 15 deg tilt) */
+#define MRAC_LIM_RATE 3.4906585f
+#define MRAC_LIM_TILT 0.2617994f
+static const float mrac_t_rate_c[6] = {-0.7f, -0.3f, -0.1f, 0.1f, 0.3f, 0.7f};
+static const float mrac_t_ang_c[4]  = {-0.6f, -0.2f, 0.2f, 0.6f};
+
+/* n Gaussians at centres c, each width = mean gap to its neighbours (an edge centre: its one gap) */
+static void MRAC_Gap1D(float x, const float *c, int n, float *g)
+{
+    float w, d;
+    int k;
+
+    for (k = 0; k < n; k++) {
+        if (k == 0) w = c[1] - c[0];
+        else if (k == n - 1) w = c[n - 1] - c[n - 2];
+        else w = 0.5f * (c[k + 1] - c[k - 1]);
+        d = (x - c[k]) / w;
+        g[k] = expf(-0.5f * d * d);
+    }
+}
+
+/* RBF24T: 6 x 4 gap-width grid, phi[i * 4 + j] */
+static void MRAC_ExtGap(float pr, float ph, float *phi)
+{
+    float gr[6];
+    float ga[4];
+    int i, j;
+
+    MRAC_Gap1D(pr, mrac_t_rate_c, 6, gr);
+    MRAC_Gap1D(ph, mrac_t_ang_c, 4, ga);
+    for (i = 0; i < 6; i++) {
+        for (j = 0; j < 4; j++) phi[i * 4 + j] = gr[i] * ga[j];
+    }
+}
+
+/* RBF24D: level l at scale s = 2^-l: rate centres {-s, 0, s} width s, tilt {-s, s} width 2s, phi[l * 6 + i * 2 + j] */
+static void MRAC_ExtDoll(float pr, float ph, float *phi)
+{
+    float s = 1.0f;
+    float gr[3];
+    float ga[2];
+    float d;
+    int l, i, j;
+
+    for (l = 0; l < 4; l++) {
+        for (i = 0; i < 3; i++) { d = (pr - s * (float)(i - 1)) / s; gr[i] = expf(-0.5f * d * d); }
+        for (j = 0; j < 2; j++) { d = (ph - s * (float)(2 * j - 1)) / (2.0f * s); ga[j] = expf(-0.5f * d * d); }
+        for (i = 0; i < 3; i++) {
+            for (j = 0; j < 2; j++) phi[l * 6 + i * 2 + j] = gr[i] * ga[j];
+        }
+        s *= 0.5f;
     }
 }
 
@@ -561,6 +616,8 @@ static void MRAC_GenExt(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *phi)
         case MRAC_BASIS_RBF6:  MRAC_ExtGrid(pr, ang / 0.5f, 3, 2, phi); break;
         case MRAC_BASIS_RBF12: MRAC_ExtGrid(pr, ang / 0.5f, 4, 3, phi); break;
         case MRAC_BASIS_RBF24: MRAC_ExtGrid(pr, ang / 0.5f, 6, 4, phi); break;
+        case MRAC_BASIS_RBF24T: MRAC_ExtGap(bus->x / MRAC_LIM_RATE, ang / MRAC_LIM_TILT, phi); break;
+        case MRAC_BASIS_RBF24D: MRAC_ExtDoll(bus->x / MRAC_LIM_RATE, ang / MRAC_LIM_TILT, phi); break;
         case MRAC_BASIS_S6RBF12: {
             float gr[4];
             float ga[3];
@@ -650,8 +707,9 @@ static uint16_t MRAC_FeatureCount(const MRAC_AxisConfig_t* config, int* n)
     }
     return MRAC_VID_RBF;
 #elif MRAC_VARIANT == MRAC_VARIANT_MULTI
-    {   /* features in use per basis: S6 6, S10 10, RBF6 12, RBF12 18, RBF24 30, S6+RBF12 18, S10X 14 */
-        static const uint8_t n_of[MRAC_BASIS_N_X] = {6U, 10U, 12U, 18U, 30U, 18U, 14U};
+    {   /* features in use per basis: S6 6, S10 10, RBF6 12, RBF12 18, RBF24 30, S6+RBF12 18, S10X 14, RBF24T 30,
+         * RBF24D 30 */
+        static const uint8_t n_of[MRAC_BASIS_N_X] = {6U, 10U, 12U, 18U, 30U, 18U, 14U, 30U, 30U};
         int b = (int)(config->basis + 0.5f);
         if (b <= 0 || b >= MRAC_BASIS_N_X) {
             *n = MRAC_N_STRUCT;
@@ -1496,7 +1554,7 @@ static const struct { float lo; float hi; uint8_t snap; } mrac_var_field[MRAC_VF
     MRAC_VAR_FIELD( 0.0f,  10.0f,  0),   /* lf_gain         - */
     MRAC_VAR_FIELD( 0.0f,  5.0f,   0),   /* sigma_lf        1/s */
     MRAC_VAR_FIELD( 0.5f,  100.0f, 0),   /* gam_f           rad/s */
-    MRAC_VAR_FIELD( 0.0f,  MRAC_BASIS_HI_X, 0)  /* basis    MRAC_BASIS_* id (6 = vp 12 S10X) */
+    MRAC_VAR_FIELD( 0.0f,  MRAC_BASIS_HI_X, 0)  /* basis    MRAC_BASIS_* id (6 = vp 12 S10X, 7/8 = vp 13/14) */
 };
 
 #if MRAC_VARIANT == MRAC_VARIANT_MULTI
