@@ -128,7 +128,20 @@ def variants_s10x() -> dict[str, dict]:
     return out
 
 
-VARIANT_SETS = {"wp27": variants, "3l": variants_3l, "s10x": variants_s10x}
+def variants_d() -> dict[str, dict]:
+    """D part 2: the self-tuning gain P (Pdot = p_forget*P - P^2*m^2, P in [0.05, p_max]) lets the effective L2 gain
+    gamma_c*P go far above the var-table bound of 20. If the cancel ratio climbs with P the gain is the limit; if it
+    stays flat the regressor is. p_forget sets where P rests (p_forget/m^2), p_max caps it."""
+    v3 = variants_3l()
+    out = {k: v3[k] for k in ("OFF", "L2only g8", "L2only g20")}
+    s = v3["L2only g20"]
+    for pmax, pf in ((4.0, 0.5), (10.0, 0.5), (20.0, 0.5), (20.0, 2.0), (20.0, 5.0)):
+        out[f"L2only g20+D p{pmax:g} f{pf:g}"] = dict(s, args=s["args"] + knob_args(
+            {f"{m}.{k}": v for m in ("mrac_config_pitch", "mrac_config_roll") for k, v in (("p_max", pmax), ("p_forget", pf))}))
+    return out
+
+
+VARIANT_SETS = {"wp27": variants, "3l": variants_3l, "s10x": variants_s10x, "d": variants_d}
 
 
 # ----------------------------------------------------------------------------- host build
@@ -393,7 +406,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--json", help="write the full results here")
     ap.add_argument("--only", nargs="*", help="log names to replay (default: every log with the MRAC inputs)")
     ap.add_argument("--per-log", action="store_true", help="print one row per log instead of the summary")
-    ap.add_argument("--set", choices=sorted(VARIANT_SETS), default="wp27", help="variant set (3l = 3L-v2 vs vp6, s10x = S10X feature ablation)")
+    ap.add_argument("--set", choices=sorted(VARIANT_SETS), default="wp27", help="variant set (3l = 3L-v2 vs vp6, s10x = S10X feature ablation, d = self-tuning gain range)")
     ap.add_argument("--shadow", action="store_true",
                     help="no variant injects (exact on PID logs: the composite law sees the u that was flown)")
     args = ap.parse_args(argv)
