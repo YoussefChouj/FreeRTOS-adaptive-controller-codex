@@ -29,7 +29,7 @@ U_MAX = {"pitch": 6.73863, "roll": 6.73863, "yaw": 2.027, "z_rate": 13.47726}
 FEAT = ("bias 1", "x", "x tanh x", "cross", "u_nom", "xm")
 BAND = (0.25, 0.9)                                                     # load-sway band, exp12
 MOTORS = ["mymotor.motor%d" % i for i in range(1, 5)]
-VP_BASIS = {7: 1, 8: 3, 9: 2, 10: 4, 11: 5, 12: 6, 13: 7, 14: 8}   # TASK/StabilizerTask.c s_vp[] basis column; vp 0-6 S6 (0)
+VP_BASIS = {7: 1, 8: 3, 9: 2, 10: 4, 11: 5, 12: 6, 13: 7, 14: 8, 15: 9}   # TASK/StabilizerTask.c s_vp[] basis column; vp 0-6 S6 (0)
 EXT_GRID = {2: (3, 2), 3: (4, 3), 4: (6, 4)}        # API/mrac.c MRAC_GenExt: a x b Gaussians on rate/5 rad/s, angle/0.5 rad
 S6RBF_SCALE = (3.0, 0.26)                            # API/mrac.c MRAC_Init rbf_rate_scale (rad/s), rbf_ang_scale (rad)
 FLIGHT_LIM = (np.deg2rad(200.0), np.deg2rad(15.0))          # API/mrac.c MRAC_LIM_RATE / MRAC_LIM_TILT (vp 13/14 inputs)
@@ -66,9 +66,12 @@ def ext_phi(basis, x, ang):
         pr, ph = x / S6RBF_SCALE[0], ang / S6RBF_SCALE[1]
         gr = [np.exp(-(pr - c) ** 2) for c in (-1.5, -0.5, 0.5, 1.5)]
         ga = [np.exp(-(ph - c) ** 2) for c in (-1.0, 0.0, 1.0)]
-    elif basis == 7:
+    elif basis in (7, 9):
         pr, ph = x / FLIGHT_LIM[0], ang / FLIGHT_LIM[1]
         gr, ga = _gap1d(pr, GAP_C[0]), _gap1d(ph, GAP_C[1])
+        if basis == 9:                            # vp 15: S10X ext 0..7 (swing tracker / lag state, not rebuilt
+            g24 = [g * h for g in gr for h in ga]  # offline: left at 0) + RBF24T cells 4..19 in ext 8..23
+            return [0.0 * pr] * 8 + g24[4:20], pr, ph
     elif basis == 8:
         pr, ph = x / FLIGHT_LIM[0], ang / FLIGHT_LIM[1]
         out = []
@@ -475,8 +478,10 @@ def main():
                     ", ".join("e%d %.0f%%" % (k, 100 * er[k] ** 2 / max(np.sum(er ** 2), 1e-12)) for k in top)))
         md.append("")
         # full ranking: every Gaussian's RMS^2 share, per axis and the pitch+roll mean (RBF24T: grid centre in brackets)
-        cell = lambda k: (" (r%+.1f a%+.1f)" % (GAP_C[0][k // 4], GAP_C[1][k % 4])
-                          if df.attrs["basis"] == 7 and nx == 24 else "")
+        gk = lambda k: k if df.attrs["basis"] == 7 else k - 4      # basis 9: ext 8..23 = RBF24T cells 4..19
+        cell = lambda k: ((" (S10X, not rebuilt)" if df.attrs["basis"] == 9 and k < 8 else
+                           " (r%+.1f a%+.1f)" % (GAP_C[0][gk(k) // 4], GAP_C[1][gk(k) % 4]))
+                          if df.attrs["basis"] in (7, 9) and nx == 24 else "")
         md += ["### Ext ranking (every Gaussian, RMS^2 share of the ext block, cumulative in brackets)", "",
                "| seg | axis | ranked |", "|---|---|---|"]
         for name, _, _ in mseg:

@@ -344,7 +344,8 @@ static void MRAC_GenStructured(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *p
 #if MRAC_VARIANT == MRAC_VARIANT_MULTI
     /* sim RBF sets keep only u_nom and xm of S6 (features(): Gaussians + [un, pmr]) */
     if ((MRAC_BasisOf(axis) >= MRAC_BASIS_RBF6 && MRAC_BasisOf(axis) <= MRAC_BASIS_RBF24) ||
-        MRAC_BasisOf(axis) == MRAC_BASIS_RBF24T || MRAC_BasisOf(axis) == MRAC_BASIS_RBF24D) {
+        MRAC_BasisOf(axis) == MRAC_BASIS_RBF24T || MRAC_BasisOf(axis) == MRAC_BASIS_RBF24D ||
+        MRAC_BasisOf(axis) == MRAC_BASIS_S10XR16) {
         phi[0] = 0.0f;
         phi[1] = 0.0f;
         phi[2] = 0.0f;
@@ -603,15 +604,21 @@ static void MRAC_GenExt(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *phi)
     switch (basis) {
         case MRAC_BASIS_S10:
         case MRAC_BASIS_S10X:
+        case MRAC_BASIS_S10XR16:
             phi[0] = sinf(ang);
             phi[1] = fabsf(pr) * un;
             phi[2] = un * fabsf(un);
             phi[3] = mrac_acc_f[axis] / 50.0f;
-            if (basis == MRAC_BASIS_S10X && mrac_vp12.swing_ref > 0.0f) {
+            if (basis != MRAC_BASIS_S10 && mrac_vp12.swing_ref > 0.0f) {
                 phi[4] = sw_ip / mrac_vp12.swing_ref;
                 phi[5] = sw_qd / mrac_vp12.swing_ref;
                 phi[6] = MRAC_SagPhi(un);
                 phi[7] = un - mrac_lag_l[axis];
+            }
+            if (basis == MRAC_BASIS_S10XR16) {
+                float g24[24];
+                MRAC_ExtGap(bus->x / MRAC_LIM_RATE, ang / MRAC_LIM_TILT, g24);
+                for (i = 0; i < 16; i++) phi[8 + i] = g24[4 + i];
             }
             break;
         case MRAC_BASIS_RBF6:  MRAC_ExtGrid(pr, ang / 0.5f, 3, 2, phi); break;
@@ -709,8 +716,8 @@ static uint16_t MRAC_FeatureCount(const MRAC_AxisConfig_t* config, int* n)
     return MRAC_VID_RBF;
 #elif MRAC_VARIANT == MRAC_VARIANT_MULTI
     {   /* features in use per basis: S6 6, S10 10, RBF6 12, RBF12 18, RBF24 30, S6+RBF12 18, S10X 14, RBF24T 30,
-         * RBF24D 30 */
-        static const uint8_t n_of[MRAC_BASIS_N_X] = {6U, 10U, 12U, 18U, 30U, 18U, 14U, 30U, 30U};
+         * RBF24D 30, S10X+RBF16 30 */
+        static const uint8_t n_of[MRAC_BASIS_N_X] = {6U, 10U, 12U, 18U, 30U, 18U, 14U, 30U, 30U, 30U};
         int b = (int)(config->basis + 0.5f);
         if (b <= 0 || b >= MRAC_BASIS_N_X) {
             *n = MRAC_N_STRUCT;
@@ -1555,7 +1562,7 @@ static const struct { float lo; float hi; uint8_t snap; } mrac_var_field[MRAC_VF
     MRAC_VAR_FIELD( 0.0f,  10.0f,  0),   /* lf_gain         - */
     MRAC_VAR_FIELD( 0.0f,  5.0f,   0),   /* sigma_lf        1/s */
     MRAC_VAR_FIELD( 0.5f,  100.0f, 0),   /* gam_f           rad/s */
-    MRAC_VAR_FIELD( 0.0f,  MRAC_BASIS_HI_X, 0)  /* basis    MRAC_BASIS_* id (6 = vp 12 S10X, 7/8 = vp 13/14) */
+    MRAC_VAR_FIELD( 0.0f,  MRAC_BASIS_HI_X, 0)  /* basis    MRAC_BASIS_* id (6 = vp 12 S10X, 7/8 = vp 13/14, 9 = vp 15) */
 };
 
 #if MRAC_VARIANT == MRAC_VARIANT_MULTI
@@ -1571,7 +1578,8 @@ static void MRAC_SetRow(MRAC_AxisConfig_t *c, int i, float g, float lim)
  * MRAC_Init defaults restored on a switch away (the rows are shared by every basis). */
 static void MRAC_Vp12Lims(uint8_t axis, MRAC_AxisConfig_t *c)
 {
-    int on = ((int)(c->basis + 0.5f) == MRAC_BASIS_S10X);
+    int b = (int)(c->basis + 0.5f);
+    int on = (b == MRAC_BASIS_S10X);
     float u = c->u_max;
     int k;
 
@@ -1582,9 +1590,19 @@ static void MRAC_Vp12Lims(uint8_t axis, MRAC_AxisConfig_t *c)
             MRAC_SetRow(c, MRAC_N_STRUCT + 5, 1.5f, 0.02f * u);    /* swing quadrature 2 % */
             MRAC_SetRow(c, MRAC_N_STRUCT + 6, 1.5f, 0.05f * u);    /* battery sag 5 % */
             MRAC_SetRow(c, MRAC_N_STRUCT + 7, 1.5f, 0.10f * u);    /* motor lag 10 % */
+        } else if (b == MRAC_BASIS_S10XR16) {
+            /* vp 15 (row ext_g 4, so config = effective): S10X rows 4-7 at 1/4 of vp 12's effective 0.375 (vp 12
+             * diverged in flight 2026-10-08), rows 0-3 at vp 12's effective 0.025, same lims; the Gaussians keep
+             * the MRAC_Init 0.10 / 0.05 (vp 13); bias row unused (phi[0] = 0, as RBF24T) */
+            MRAC_SetRow(c, 0, 1.50f, 0.15f);
+            for (k = 0; k < 4; k++) MRAC_SetRow(c, MRAC_N_STRUCT + k, 0.025f, 0.05f);
+            MRAC_SetRow(c, MRAC_N_STRUCT + 4, 0.094f, 0.02f * u);
+            MRAC_SetRow(c, MRAC_N_STRUCT + 5, 0.094f, 0.02f * u);
+            MRAC_SetRow(c, MRAC_N_STRUCT + 6, 0.094f, 0.05f * u);
+            MRAC_SetRow(c, MRAC_N_STRUCT + 7, 0.094f, 0.10f * u);
         } else {
             MRAC_SetRow(c, 0, 1.50f, 0.15f);
-            for (k = 4; k < 8; k++) MRAC_SetRow(c, MRAC_N_STRUCT + k, 0.10f, 0.05f);
+            for (k = 0; k < 8; k++) MRAC_SetRow(c, MRAC_N_STRUCT + k, 0.10f, 0.05f);
         }
     } else if (axis == (uint8_t)MRAC_AXIS_Z) {
         if (on) MRAC_SetRow(c, MRAC_N_STRUCT + 6, 2.0f, 0.15f * u); /* battery sag 15 % */

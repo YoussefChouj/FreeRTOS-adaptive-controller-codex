@@ -287,6 +287,21 @@ static void test_retuned_rbf(void)
     }
     ok("R RBF24D: 24 slots match the doll closed form", err < 1e-4);
     ok("R RBF24D: phi[0..3] zeroed", phi[0] == 0.0f && phi[1] == 0.0f && phi[2] == 0.0f && phi[3] == 0.0f);
+    /* vp 15: ext 8..23 = the RBF24T rate +-0.1 / +-0.3 cells (slots 4..19), ext 0 = sin(tilt) of S10X */
+    ok("R basis 9 (S10X+RBF16) accepted", MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 9.0f) == 1U);
+    tick(5.0f, -3.0f);
+    err = 0.0;
+    for (i = 1; i < 5; i++) {
+        for (j = 0; j < 4; j++) {
+            e = gauss(xr, rc[i], rw[i]) * gauss(xa, ac[j], 0.4);
+            err = fmax(err, fabs((double)phi[MRAC_N_STRUCT + 8 + (i - 1) * 4 + j] - e));
+        }
+    }
+    ok("R S10X+RBF16: ext 8..23 match RBF24T cells 4..19", err < 1e-4);
+    ok("R S10X+RBF16: phi[0..3] zeroed, ext 0 = sin(5 deg)",
+       phi[0] == 0.0f && phi[1] == 0.0f && phi[2] == 0.0f && phi[3] == 0.0f
+       && fabsf(phi[MRAC_N_STRUCT] - sinf(5.0f * 0.017453293f)) < 1e-4f);
+    MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 8.0f);   /* the limits check below is RBF24D's */
     /* every slot finite and inside [0, 1] at the limits too */
     good = 1;
     tick(15.0f, -15.0f);
@@ -330,7 +345,18 @@ static void test_multi_basis(void)
     mrac_in_acc[0] = 0.0f; mrac_in_vbat = 0.0f; mrac_vp12.v_arm = 0.0f;
     MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 1.0f);
     ok("M leaving S10X restores the ext 4 row", fabsf(mrac_config_pitch.What_limit[MRAC_N_STRUCT + 4] - 0.05f) < 1e-6f);
-    ok("M basis 9 refused", MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 9.0f) == 0U);
+    ok("M basis 9 (S10X+RBF16) accepted", MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 9.0f) == 1U);
+    ok("M S10X+RBF16 rows: ext 4 gamma 0.094 lim 2 %, ext 0 gamma 0.025, Gaussian ext 8 gamma 0.10",
+       fabsf(mrac_config_pitch.gamma[MRAC_N_STRUCT + 4] - 0.094f) < 1e-6f
+       && fabsf(mrac_config_pitch.What_limit[MRAC_N_STRUCT + 4] - 0.02f * mrac_config_pitch.u_max) < 1e-6f
+       && fabsf(mrac_config_pitch.gamma[MRAC_N_STRUCT] - 0.025f) < 1e-6f
+       && fabsf(mrac_config_pitch.gamma[MRAC_N_STRUCT + 8] - 0.10f) < 1e-6f);
+    MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 7.0f);
+    ok("M leaving S10X+RBF16 restores the ext 0 and 4 rows",
+       fabsf(mrac_config_pitch.gamma[MRAC_N_STRUCT] - 0.10f) < 1e-6f
+       && fabsf(mrac_config_pitch.gamma[MRAC_N_STRUCT + 4] - 0.10f) < 1e-6f
+       && fabsf(mrac_config_pitch.What_limit[MRAC_N_STRUCT + 4] - 0.05f) < 1e-6f);
+    ok("M basis 10 refused", MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 10.0f) == 0U);
     MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 0.0f);
     tick(5.0f, -3.0f);
     ok("M back to basis 0: ext slots 0 again", ext_nonzero(phi) == 0);

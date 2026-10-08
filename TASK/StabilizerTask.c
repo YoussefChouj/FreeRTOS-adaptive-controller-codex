@@ -1227,6 +1227,7 @@ static const VariantPreset_t s_vp[] = {
 	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.5f,      10.0f,      0.0f,       4.0f,      0.25f,   6U,  1.0f ),  /* 12 S10X+PR (vp 12, Z battery slot) */
 	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   7U,  4.0f ),  /* 13 RBF24T  (vp 10 retuned, gap width) */
 	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   8U,  4.0f ),  /* 14 RBF24D  (vp 10 retuned, Russian doll) */
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,  0.85f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   9U,  4.0f ),  /* 15 S10X+RBF16 (vp 12 physics at 1/4 gamma + vp 13 inner 16 Gaussians, mu_sat, no PR) */
 };
 #define VP_PR   0x03U
 #define VP_Y    0x04U

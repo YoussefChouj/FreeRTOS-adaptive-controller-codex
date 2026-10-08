@@ -493,9 +493,12 @@ extern volatile float mrac_in_acc[2];
  * nested 3 rate x 2 tilt grids at 1, 1/2, 1/4, 1/8 of the limits. Both keep u_nom and xm of S6, like RBF24. */
 #define MRAC_BASIS_RBF24T 7
 #define MRAC_BASIS_RBF24D 8
-#define MRAC_BASIS_N_X  (MRAC_BASIS_RBF24D + 1)
+/* vp 15: S10X in ext 0-7 (as vp 12) + the 16 inner RBF24T Gaussians in ext 8-23 (rate centres +-0.1, +-0.3 x all
+ * four tilt centres = RBF24T slots 4-19, 99 % of the vp 13 ext output in exp16). S6 keeps u_nom and xm only. */
+#define MRAC_BASIS_S10XR16 9
+#define MRAC_BASIS_N_X  (MRAC_BASIS_S10XR16 + 1)
 #if MRAC_VARIANT == MRAC_VARIANT_MULTI
-#define MRAC_BASIS_HI_X ((float)MRAC_BASIS_RBF24D)
+#define MRAC_BASIS_HI_X ((float)MRAC_BASIS_S10XR16)
 #else
 #define MRAC_BASIS_HI_X MRAC_BASIS_HI
 #endif
