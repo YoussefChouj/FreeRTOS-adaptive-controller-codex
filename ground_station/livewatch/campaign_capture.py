@@ -163,8 +163,18 @@ EKF_STATES: tuple[str, ...] = (
        "g_ekf_of_fallback", "g_of_bias_mode",
        "s_ekf_of.P[0][5]", "s_ekf_of.P[1][5]", "s_ekf_of.P[0][10]", "s_ekf_of.P[1][10]")
 )
+# 3L-v2 (f00412a, vp rows 16-18, pitch/roll only): the row that ran, the L2 prediction error pe, the leaky angle
+# integral, the filtered regressor Phi_f and the D gain P. With Theta from mrac_shadow, adaptive_review rebuilds
+# negd_f = pe + Theta'Phi_f (what u_ad has to cancel), so u_f and xd_f need not be logged.
+MRAC_3L: tuple[str, ...] = (
+    ("vp_active", "mrac_var_id[0]", "mrac_var_id[1]")
+    + tuple(f"mrac_state.{axis}.{m}" for m in ("pe", "e_int") for axis in ("pitch", "roll"))
+    + tuple(f"mrac_state.{axis}.Phi_f[{i}]" for i in range(6) for axis in ("pitch", "roll"))
+    + tuple(f"mrac_state.{axis}.p_gain" for axis in ("pitch", "roll"))
+)
 LOG_GROUPS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "mrac_shadow": MRAC_SHADOW,
+    "mrac_3l": MRAC_3L,
     "velocity_loops": VELOCITY_LOOPS,
     "optical_flow": OPTICAL_FLOW,
     "takeoff_gate": TAKEOFF_GATE,

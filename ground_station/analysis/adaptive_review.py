@@ -485,6 +485,39 @@ def capability(df, mseg):
     return md, caps
 
 
+def l2_health(df, mseg, summ):
+    """3L-v2 L2 law (vp rows 16-18, log group mrac_3l): how much of negd_f = pe + Theta'Phi_f the weights predict."""
+    if not mseg or "mrac_state.pitch.pe" not in df:
+        return []
+    md = ["## 3L-v2 prediction error (L2, pitch/roll)", "",
+          "negd_f = pe + Theta'Phi_f is the filtered disturbance u_ad must cancel (API/mrac.c L2 block); "
+          "fit = 1 - var(pe)/var(negd_f) is the share the weights predict (1 = all, <= 0 = none). pe RMS early/late: "
+          "first vs last third of the segment (falling = learning). P: the D gain (1 when D is off).", "",
+          "| seg | axis | fit | pe RMS early | pe RMS late | negd_f RMS | P min / med / max | max abs Theta |",
+          "|---|---|---|---|---|---|---|---|"]
+    out = summ.setdefault("l2", {})
+    for name, i0, i1 in mseg:
+        g = df.loc[i0:i1].ffill()
+        for ax in ("pitch", "roll"):
+            p = "mrac_state.%s." % ax
+            th = np.column_stack([g[p + "Theta[%d]" % i].fillna(0).to_numpy() for i in range(6)])
+            pf = np.column_stack([g[p + "Phi_f[%d]" % i].fillna(0).to_numpy() for i in range(6)])
+            pe = g[p + "pe"].fillna(0).to_numpy()
+            negd = pe + np.sum(th * pf, axis=1)
+            fit = 1.0 - np.var(pe) / np.var(negd) if np.var(negd) > 0 else float("nan")
+            n3 = max(len(pe) // 3, 1)
+            early, late = float(np.sqrt(np.mean(pe[:n3] ** 2))), float(np.sqrt(np.mean(pe[-n3:] ** 2)))
+            pg = g[p + "p_gain"].dropna().to_numpy() if p + "p_gain" in g else np.array([1.0])
+            pq = [float(v) for v in np.percentile(pg, [0, 50, 100])] if len(pg) else [float("nan")] * 3
+            out["%s %s" % (name, ax)] = dict(fit=float(fit), pe_early=early, pe_late=late,
+                                             negd_rms=float(np.sqrt(np.mean(negd ** 2))), p_gain=pq,
+                                             theta_max=float(np.abs(th).max()))
+            md.append("| %s | %s | %+.2f | %.4f | %.4f | %.4f | %.2f / %.2f / %.2f | %.3f |" % (
+                name, ax, fit, early, late, np.sqrt(np.mean(negd ** 2)), pq[0], pq[1], pq[2], np.abs(th).max()))
+    md.append("")
+    return md
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("stem")
@@ -672,7 +705,7 @@ def main():
     md.append("")
     umd, fits = uncertainty(df, segs, inj, a, summ)
     cmd_, caps = capability(df, mseg) if mseg else ([], {})
-    md += umd + force_feature(df, segs) + cross_feature(df, segs) + grid_inputs(df, segs) + cmd_
+    md += umd + force_feature(df, segs) + cross_feature(df, segs) + grid_inputs(df, segs) + cmd_ + l2_health(df, mseg, summ)
     with open(os.path.join(a.out, "adaptive_stats.md"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(md) + "\n")
 
