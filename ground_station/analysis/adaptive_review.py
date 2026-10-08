@@ -521,7 +521,8 @@ def main():
     # 4. basic per-segment table: attitude, height, motors, battery
     md += ["## Per segment: attitude, height, motors, battery", "",
            "| seg | s | pitch sd | roll sd | rate sd p / r (deg/s) | band PSD p / r | z - z_des | motor at 4000 (%) | "
-           "max motor spread | V mean |", "|---|---|---|---|---|---|---|---|---|---|"]
+           "max motor spread | V mean | stab CPU % mean / max |", "|---|---|---|---|---|---|---|---|---|---|---|"]
+    cpu = "g_rtos_budget.stab_cpu_pct"   # Stabilizer_Task share of the last second (systemmonitor_task.c)
     for name, i0, i1 in segs:
         g = df.loc[i0:i1]
         bp = []
@@ -530,11 +531,12 @@ def main():
             m = (f >= BAND[0]) & (f <= BAND[1])
             bp.append(np.trapezoid(pxx[m], f[m]))
         mm = g[MOTORS]
-        md.append("| %s | %.0f | %.2f | %.2f | %.1f / %.1f | %.1f / %.1f | %+.3f | %.1f | %.0f | %.2f |" % (
+        md.append("| %s | %.0f | %.2f | %.2f | %.1f / %.1f | %.1f / %.1f | %+.3f | %.1f | %.0f | %.2f | %s |" % (
             name, g.t.iloc[-1] - g.t.iloc[0], g["imu_data.pit"].std(), g["imu_data.rol"].std(),
             g["Ctrler.gyroyPID.FB"].std(), g["Ctrler.gyroxPID.FB"].std(), bp[0], bp[1],
             (g["Ctrler.Z_posPID.FB"] - g["Ctrler.Z_posPID.Des"]).mean(), 100 * (mm.max(axis=1) >= 3999).mean(),
-            (mm.max(axis=1) - mm.min(axis=1)).max(), g["real_voltage"].mean()))
+            (mm.max(axis=1) - mm.min(axis=1)).max(), g["real_voltage"].mean(),
+            "%.1f / %.1f" % (g[cpu].mean(), g[cpu].max()) if cpu in g else "not logged"))
     md.append("")
     umd, fits = uncertainty(df, segs, inj, a)
     cmd_, caps = capability(df, mseg) if mseg else ([], {})
