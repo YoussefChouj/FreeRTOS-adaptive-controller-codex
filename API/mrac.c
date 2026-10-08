@@ -62,6 +62,21 @@ MRAC_Simplex_t mrac_simplex = {
 MRAC_Inj_t mrac_inj = {0};
 volatile uint8_t mrac_in_armed = 0;
 volatile uint8_t mrac_in_phase = 0;
+volatile float mrac_in_vbat = 0.0f;
+volatile float mrac_in_acc[2] = {0.0f, 0.0f};
+MRAC_Vp12_t mrac_vp12 = {
+    0.5f, 0.3f, 2.5f,       /* anf_f0, anf_fmin, anf_fmax Hz (exp12 swing 0.44-0.88 Hz, mostly 0.49) */
+    0.3f,                   /* anf_zeta */
+    0.05f,                  /* anf_amin m/s^2 */
+    2.0f,                   /* anf_gamma rad/s^2 */
+    0.5f,                   /* swing_ref m/s^2: ~1 N on the drone at a 10 deg swing of 570 g (physics, not measured) */
+    0.2f,                   /* sag_ref */
+    0.0505f,                /* lag_tau s = 1/19.8 (roll sysid) */
+    {16777215.0f, 16777215.0f, 16777215.0f, 16777215.0f},
+    {16777215.0f, 16777215.0f, 16777215.0f, 16777215.0f},
+    {0.5f, 0.5f},
+    0.0f
+};
 uint16_t mrac_var_id[AXES];
 int8_t mrac_ref_type_eff[AXES];
 
@@ -70,6 +85,9 @@ int8_t mrac_ref_type_eff[AXES];
 #define MRAC_ST_BAR_SMOOTH 0.02f
 
 static void MRAC_VariantSnap(MRAC_AxisState_t *st);
+#if MRAC_VARIANT == MRAC_VARIANT_MULTI
+static void MRAC_Vp12Step(uint8_t hold, uint8_t arm_edge);
+#endif
 
 void MRAC_GateStep(void)
 {
@@ -110,6 +128,10 @@ void MRAC_GateStep(void)
             mrac_inj.freeze_shadow = 0; // reset freeze on disarm
         }
     }
+#if MRAC_VARIANT == MRAC_VARIANT_MULTI
+    MRAC_Vp12Step((uint8_t)(mrac_flags.output_injection_on && is_flying),
+                  (uint8_t)(!mrac_inj.prev_armed && mrac_in_armed));
+#endif
     mrac_inj.prev_armed = mrac_in_armed;
     
     inj_on = mrac_flags.output_injection_on;
@@ -292,6 +314,7 @@ static int MRAC_BasisOf(MRAC_Axis_e axis)
     float b = 0.0f;
     if (axis == MRAC_AXIS_PITCH) b = mrac_config_pitch.basis;
     else if (axis == MRAC_AXIS_ROLL) b = mrac_config_roll.basis;
+    else if (axis == MRAC_AXIS_Z) b = mrac_config_z.basis;    /* vp 12: 0 or S10X (battery slot only) */
     return (int)(b + 0.5f);
 }
 #endif
@@ -392,17 +415,120 @@ static void MRAC_ExtGrid(float pr, float ph, int a, int b, float *phi)
     }
 }
 
+/* vp 12 state: swing tracker (pitch / roll), motor lag filter (per axis) */
+static float mrac_anf_x[2], mrac_anf_v[2], mrac_anf_th[2], mrac_anf_lp[2];
+static float mrac_lag_l[AXES];
+
+/* vp 12 swing tracker: Hsu-Ortega-Damm adaptive notch on high-passed body accel (m/s^2). Writes the swing
+ * in-phase / quadrature (m/s^2, unit gain once locked) and the tracked frequency (mrac_vp12.anf_hz). */
+static void MRAC_AnfStep(int a, float y_raw, float *ip, float *qd)
+{
+    const MRAC_Vp12_t *p = &mrac_vp12;
+    float th = mrac_anf_th[a];
+    float x = mrac_anf_x[a];
+    float v = mrac_anf_v[a];
+    float y, amp;
+
+    /* 0.1 Hz low-pass removed, so a steady tilt does not bias the quadrature output */
+    mrac_anf_lp[a] += MRAC_DT * 0.62831853f * (y_raw - mrac_anf_lp[a]);
+    y = y_raw - mrac_anf_lp[a];
+    if (!(th > 0.0f)) th = 6.2831853f * p->anf_f0;
+    v += MRAC_DT * (th * th * (y - x) - 2.0f * p->anf_zeta * th * v);
+    x += MRAC_DT * v;
+    amp = 2.0f * p->anf_zeta * sqrtf(x * x + v * v / (th * th));
+    /* frequency frozen while the swing is too small to track */
+    if (amp > p->anf_amin) {
+        th -= MRAC_DT * p->anf_gamma * x * (th * th * y - 2.0f * p->anf_zeta * th * v)
+              / (th * th * x * x + v * v + 1e-6f);
+    }
+    if (th < 6.2831853f * p->anf_fmin) th = 6.2831853f * p->anf_fmin;
+    if (th > 6.2831853f * p->anf_fmax) th = 6.2831853f * p->anf_fmax;
+    if (!(x - x == 0.0f) || !(v - v == 0.0f) || !(th - th == 0.0f) || !(mrac_anf_lp[a] - mrac_anf_lp[a] == 0.0f)) {
+        x = 0.0f; v = 0.0f; mrac_anf_lp[a] = 0.0f;
+        th = 6.2831853f * p->anf_f0;
+    }
+    mrac_anf_x[a] = x;
+    mrac_anf_v[a] = v;
+    mrac_anf_th[a] = th;
+    mrac_vp12.anf_hz[a] = th / 6.2831853f;
+    *ip = 2.0f * p->anf_zeta * v / th;
+    *qd = -2.0f * p->anf_zeta * x;
+}
+
+/* vp 12 battery sag feature: u * (V_arm / V - 1) / sag_ref, 0 until V_arm and V are valid */
+static float MRAC_SagPhi(float un)
+{
+    float vb = mrac_in_vbat;
+    if (!(mrac_vp12.v_arm > 1.0f) || !(vb > 1.0f) || !(mrac_vp12.sag_ref > 0.0f)) return 0.0f;
+    return un * (mrac_vp12.v_arm / vb - 1.0f) / mrac_vp12.sag_ref;
+}
+
+/* 24-bit ext-slot mask held in one float: NaN / negative = all on */
+static uint32_t MRAC_MaskOf(float m)
+{
+    if (!(m >= 0.0f)) return 0xFFFFFFUL;
+    if (m > 16777215.0f) m = 16777215.0f;
+    return (uint32_t)(m + 0.5f);
+}
+
+static void MRAC_ApplyMask(MRAC_Axis_e axis, float *phi)
+{
+    uint32_t m = MRAC_MaskOf(mrac_vp12.mask_act[axis]);
+    int k;
+    for (k = 0; k < MRAC_N_EXT; k++) {
+        if (!(m & (1UL << k))) phi[k] = 0.0f;
+    }
+}
+
+/* vp 12, once per tick from MRAC_GateStep: latch V_arm on the arm edge; move the requested masks to the applied
+ * ones unless held (ch8 on in flight, the vp rule), zeroing the weights of slots turned off. */
+static void MRAC_Vp12Step(uint8_t hold, uint8_t arm_edge)
+{
+    MRAC_AxisState_t *st[AXES];
+    uint32_t req, off;
+    int a, k;
+
+    st[0] = &mrac_state.pitch; st[1] = &mrac_state.roll; st[2] = &mrac_state.yaw; st[3] = &mrac_state.z_rate;
+    if (arm_edge) mrac_vp12.v_arm = mrac_in_vbat;
+    if (hold) return;
+    for (a = 0; a < AXES; a++) {
+        req = MRAC_MaskOf(mrac_vp12.mask[a]);
+        off = MRAC_MaskOf(mrac_vp12.mask_act[a]) & ~req;
+        for (k = 0; k < MRAC_N_EXT; k++) {
+            if (off & (1UL << k)) {
+                st[a]->Theta[MRAC_N_STRUCT + k] = 0.0f;
+                st[a]->Whatf[MRAC_N_STRUCT + k] = 0.0f;
+            }
+        }
+        mrac_vp12.mask_act[a] = (float)req;
+    }
+}
+
 static void MRAC_GenExt(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *phi)
 {
-    const MRAC_AxisConfig_t *cfg = (axis == MRAC_AXIS_PITCH) ? &mrac_config_pitch : &mrac_config_roll;
+    const MRAC_AxisConfig_t *cfg = (axis == MRAC_AXIS_PITCH) ? &mrac_config_pitch
+                                 : (axis == MRAC_AXIS_ROLL) ? &mrac_config_roll : &mrac_config_z;
     float ang;
     float pr;
     float un;
+    float sw_ip = 0.0f, sw_qd = 0.0f;
     int basis;
     int i, j;
 
     for (i = 0; i < MRAC_N_EXT; i++) phi[i] = 0.0f;
+    if (axis == MRAC_AXIS_Z) {
+        /* vp 12: Z gets the battery slot (ext 6) only */
+        un = (cfg->u_max > 0.0f) ? bus->u_nom / cfg->u_max : 0.0f;
+        if (MRAC_BasisOf(axis) == MRAC_BASIS_S10X && un - un == 0.0f) phi[6] = MRAC_SagPhi(un);
+        MRAC_ApplyMask(axis, phi);
+        return;
+    }
     if (axis != MRAC_AXIS_PITCH && axis != MRAC_AXIS_ROLL) return;
+    /* swing tracker runs every tick, so a basis switch starts from a locked tracker */
+    {
+        float acc = mrac_in_acc[axis];
+        if (acc - acc == 0.0f) MRAC_AnfStep((int)axis, acc, &sw_ip, &sw_qd);
+    }
     if (!(bus->x - bus->x == 0.0f)) return;
     /* 10 Hz filtered rate derivative, run every tick so a basis switch starts from a settled value */
     mrac_acc_f[axis] += MRAC_DT * 62.831853f * ((bus->x - mrac_x_prev[axis]) / MRAC_DT - mrac_acc_f[axis]);
@@ -413,13 +539,24 @@ static void MRAC_GenExt(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *phi)
     ang = ((axis == MRAC_AXIS_PITCH) ? imu_data.pit : imu_data.rol) * MRAC_DEG2RAD;
     un = (cfg->u_max > 0.0f) ? bus->u_nom / cfg->u_max : 0.0f;
     if (!(ang - ang == 0.0f) || !(un - un == 0.0f)) return;
+    /* motor lag: first-order copy of u_nom through tau, run every tick */
+    if (mrac_vp12.lag_tau > MRAC_DT) mrac_lag_l[axis] += MRAC_DT / mrac_vp12.lag_tau * (un - mrac_lag_l[axis]);
+    else mrac_lag_l[axis] = un;
+    if (!(mrac_lag_l[axis] - mrac_lag_l[axis] == 0.0f)) mrac_lag_l[axis] = un;
     pr = bus->x / 5.0f;
     switch (basis) {
         case MRAC_BASIS_S10:
+        case MRAC_BASIS_S10X:
             phi[0] = sinf(ang);
             phi[1] = fabsf(pr) * un;
             phi[2] = un * fabsf(un);
             phi[3] = mrac_acc_f[axis] / 50.0f;
+            if (basis == MRAC_BASIS_S10X && mrac_vp12.swing_ref > 0.0f) {
+                phi[4] = sw_ip / mrac_vp12.swing_ref;
+                phi[5] = sw_qd / mrac_vp12.swing_ref;
+                phi[6] = MRAC_SagPhi(un);
+                phi[7] = un - mrac_lag_l[axis];
+            }
             break;
         case MRAC_BASIS_RBF6:  MRAC_ExtGrid(pr, ang / 0.5f, 3, 2, phi); break;
         case MRAC_BASIS_RBF12: MRAC_ExtGrid(pr, ang / 0.5f, 4, 3, phi); break;
@@ -438,6 +575,7 @@ static void MRAC_GenExt(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *phi)
         }
         default: break;
     }
+    MRAC_ApplyMask(axis, phi);
 }
 #endif
 
@@ -512,10 +650,10 @@ static uint16_t MRAC_FeatureCount(const MRAC_AxisConfig_t* config, int* n)
     }
     return MRAC_VID_RBF;
 #elif MRAC_VARIANT == MRAC_VARIANT_MULTI
-    {   /* features in use per basis: S6 6, S10 10, RBF6 12, RBF12 18, RBF24 30, S6+RBF12 18 */
-        static const uint8_t n_of[MRAC_BASIS_COUNT] = {6U, 10U, 12U, 18U, 30U, 18U};
+    {   /* features in use per basis: S6 6, S10 10, RBF6 12, RBF12 18, RBF24 30, S6+RBF12 18, S10X 14 */
+        static const uint8_t n_of[MRAC_BASIS_N_X] = {6U, 10U, 12U, 18U, 30U, 18U, 14U};
         int b = (int)(config->basis + 0.5f);
-        if (b <= 0 || b >= MRAC_BASIS_COUNT) {
+        if (b <= 0 || b >= MRAC_BASIS_N_X) {
             *n = MRAC_N_STRUCT;
             return 0U;
         }
@@ -1358,8 +1496,43 @@ static const struct { float lo; float hi; uint8_t snap; } mrac_var_field[MRAC_VF
     MRAC_VAR_FIELD( 0.0f,  10.0f,  0),   /* lf_gain         - */
     MRAC_VAR_FIELD( 0.0f,  5.0f,   0),   /* sigma_lf        1/s */
     MRAC_VAR_FIELD( 0.5f,  100.0f, 0),   /* gam_f           rad/s */
-    MRAC_VAR_FIELD( 0.0f,  MRAC_BASIS_HI, 0)  /* basis    MRAC_BASIS_* id */
+    MRAC_VAR_FIELD( 0.0f,  MRAC_BASIS_HI_X, 0)  /* basis    MRAC_BASIS_* id (6 = vp 12 S10X) */
 };
+
+#if MRAC_VARIANT == MRAC_VARIANT_MULTI
+static void MRAC_SetRow(MRAC_AxisConfig_t *c, int i, float g, float lim)
+{
+    c->gamma[i] = g;
+    c->What_limit[i] = lim;
+    c->What_tol[i] = 0.2f * lim;
+    c->What_lower_limit[i] = -lim;
+}
+
+/* vp 12 rows (PROPOSED, lim = share of u_max, docs/workflow-b/vp12-design.md): set on a switch to S10X, the
+ * MRAC_Init defaults restored on a switch away (the rows are shared by every basis). */
+static void MRAC_Vp12Lims(uint8_t axis, MRAC_AxisConfig_t *c)
+{
+    int on = ((int)(c->basis + 0.5f) == MRAC_BASIS_S10X);
+    float u = c->u_max;
+    int k;
+
+    if (axis == (uint8_t)MRAC_AXIS_PITCH || axis == (uint8_t)MRAC_AXIS_ROLL) {
+        if (on) {
+            MRAC_SetRow(c, 0, 1.5f, 0.10f * u);                    /* bias 10 % */
+            MRAC_SetRow(c, MRAC_N_STRUCT + 4, 1.5f, 0.02f * u);    /* swing in-phase 2 % */
+            MRAC_SetRow(c, MRAC_N_STRUCT + 5, 1.5f, 0.02f * u);    /* swing quadrature 2 % */
+            MRAC_SetRow(c, MRAC_N_STRUCT + 6, 1.5f, 0.05f * u);    /* battery sag 5 % */
+            MRAC_SetRow(c, MRAC_N_STRUCT + 7, 1.5f, 0.10f * u);    /* motor lag 10 % */
+        } else {
+            MRAC_SetRow(c, 0, 1.50f, 0.15f);
+            for (k = 4; k < 8; k++) MRAC_SetRow(c, MRAC_N_STRUCT + k, 0.10f, 0.05f);
+        }
+    } else if (axis == (uint8_t)MRAC_AXIS_Z) {
+        if (on) MRAC_SetRow(c, MRAC_N_STRUCT + 6, 2.0f, 0.15f * u); /* battery sag 15 % */
+        else MRAC_SetRow(c, MRAC_N_STRUCT + 6, 0.0f, 0.0f);
+    }
+}
+#endif
 
 uint8_t MRAC_VariantParamSet(uint8_t axis, uint8_t field, float val)
 {
@@ -1416,6 +1589,9 @@ uint8_t MRAC_VariantParamSet(uint8_t axis, uint8_t field, float val)
                 st[axis]->Theta[k] = 0.0f;
                 st[axis]->Whatf[k] = 0.0f;
             }
+#if MRAC_VARIANT == MRAC_VARIANT_MULTI
+            MRAC_Vp12Lims(axis, c);
+#endif
             break;
         default: return 0U;
     }

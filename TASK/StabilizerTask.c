@@ -1224,6 +1224,7 @@ static const VariantPreset_t s_vp[] = {
 	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   2U ),  /* 9 RBF6     */
 	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   4U ),  /* 10 RBF24   */
 	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   5U ),  /* 11 S6+RBF12*/
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.5f,      10.0f,      0.0f,       4.0f,      0.25f,   6U ),  /* 12 S10X+PR (vp 12, Z battery slot) */
 };
 #define VP_PR   0x03U
 #define VP_Y    0x04U
@@ -1271,6 +1272,9 @@ static void Keil_VariantPoll(FlightState_t state)
 	ok &= Vp_Set(VP_PRY, MRAC_VF_RBF_ON,       0.0f);
 	ok &= Vp_Set(VP_PRY, MRAC_VF_LF_GAIN,      0.0f);
 	ok &= Vp_Set(VP_PR,  MRAC_VF_BASIS,        (float)r->basis);
+	/* vp 12: Z runs the battery slot only with S10X, S6 otherwise (the setter restores the Z rows) */
+	ok &= MRAC_VariantParamSet((uint8_t)MRAC_AXIS_Z, MRAC_VF_BASIS,
+	                           (r->basis == MRAC_BASIS_S10X) ? (float)MRAC_BASIS_S10X : 0.0f);
 	ok &= Vp_Set(VP_PRY, MRAC_VF_GAMMA_SCALE,  r->g);
 	MRAC_ResetWeights();
 	vp_active = ok ? id : 0xEEU;
@@ -1850,6 +1854,9 @@ void Compute_Motor(void)
 	// MRAC uses the current PID rates, references, and nominal outputs to learn and compute u_ad.
 	Controller_CheckSwitch(DroneStatus.ARM_Status == Armed);
 	mrac_in_armed = (DroneStatus.ARM_Status == Armed) ? 1U : 0U;
+	mrac_in_vbat = real_voltage;                 /* vp 12 battery sag, V */
+	mrac_in_acc[0] = Acc_X_Real * 0.00980665f;   /* vp 12 swing tracker: body accel mg -> m/s^2 */
+	mrac_in_acc[1] = Acc_Y_Real * 0.00980665f;
 	mrac_in_phase = (uint8_t)flight_phase;
 	MRAC_Control(&Ctrler);
 

@@ -260,7 +260,19 @@ static void test_multi_basis(void)
     ok("M basis 4 (RBF24) fills all 24", MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 4.0f) == 1U);
     tick(5.0f, -3.0f);
     ok("M RBF24: 24 ext slots live", ext_nonzero(phi) == 24);
-    ok("M basis 6 refused", MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 6.0f) == 0U);
+    mrac_in_acc[0] = 0.5f; mrac_in_vbat = 15.0f; mrac_vp12.v_arm = 16.0f;
+    ok("M basis 6 (S10X) accepted", MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 6.0f) == 1U);
+    ok("M S10X lims: swing 2 % vs lag 10 %, bias = lag",
+       fabsf(mrac_config_pitch.What_limit[MRAC_N_STRUCT + 4] / mrac_config_pitch.What_limit[MRAC_N_STRUCT + 7] - 0.2f) < 1e-4f
+       && fabsf(mrac_config_pitch.What_limit[0] - mrac_config_pitch.What_limit[MRAC_N_STRUCT + 7]) < 1e-4f);
+    tick(5.0f, -3.0f); tick(5.0f, -3.0f);
+    ok("M S10X: swing/lag slots live, sag finite (0 at u_nom 0), ext 8+ zero",
+       phi[MRAC_N_STRUCT + 4] != 0.0f && phi[MRAC_N_STRUCT + 7] != 0.0f && isfinite(phi[MRAC_N_STRUCT + 6]) && isfinite(phi[MRAC_N_STRUCT + 5])
+       && isfinite(phi[MRAC_N_STRUCT + 7]) && phi[MRAC_N_STRUCT + 8] == 0.0f);
+    mrac_in_acc[0] = 0.0f; mrac_in_vbat = 0.0f; mrac_vp12.v_arm = 0.0f;
+    MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 1.0f);
+    ok("M leaving S10X restores the ext 4 row", fabsf(mrac_config_pitch.What_limit[MRAC_N_STRUCT + 4] - 0.05f) < 1e-6f);
+    ok("M basis 7 refused", MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 7.0f) == 0U);
     MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 0.0f);
     tick(5.0f, -3.0f);
     ok("M back to basis 0: ext slots 0 again", ext_nonzero(phi) == 0);

@@ -479,4 +479,34 @@ void MRAC_Reset(void);
 // Main periodic MRAC controller computation (Called deeply from StabilizerTask)
 void MRAC_Control(const CtrlerTypeDef* current_state);
 
+/* vp 12 inputs, written by StabilizerTask before MRAC_Control: pack voltage (V), body accel x / y (m/s^2) */
+extern volatile float mrac_in_vbat;
+extern volatile float mrac_in_acc[2];
+
+/* vp 12 (docs/workflow-b/vp12-design.md): basis 6 = S10 + swing in-phase / quadrature (per-axis adaptive notch
+ * on body accel) + battery sag + motor lag in ext slots 4-7; Z gets the battery slot (ext 6). MULTI build only.
+ * Every default below is PROPOSED. mask: 24-bit ext-slot mask per axis in one float (bit k = ext slot k on),
+ * applied on the ground or while ch8 is off (the vp rule); mask_act is the applied readback. */
+#define MRAC_BASIS_S10X 6
+#define MRAC_BASIS_N_X  (MRAC_BASIS_S10X + 1)
+#if MRAC_VARIANT == MRAC_VARIANT_MULTI
+#define MRAC_BASIS_HI_X ((float)MRAC_BASIS_S10X)
+#else
+#define MRAC_BASIS_HI_X MRAC_BASIS_HI
+#endif
+typedef struct {
+    float anf_f0, anf_fmin, anf_fmax;   /* swing tracker start / clamp, Hz */
+    float anf_zeta;                     /* notch damping */
+    float anf_amin;                     /* frequency frozen below this swing amplitude, m/s^2 */
+    float anf_gamma;                    /* frequency adaptation gain, rad/s^2 */
+    float swing_ref;                    /* swing phase normaliser, m/s^2 */
+    float sag_ref;                      /* battery normaliser on (V_arm / V - 1) */
+    float lag_tau;                      /* motor lag time constant, s */
+    float mask[AXES];                   /* requested ext-slot mask per axis */
+    float mask_act[AXES];               /* applied mask (readback) */
+    float anf_hz[2];                    /* tracked swing frequency, pitch / roll, Hz (readback) */
+    float v_arm;                        /* pack voltage latched at the arm edge, V (readback) */
+} MRAC_Vp12_t;
+extern MRAC_Vp12_t mrac_vp12;
+
 #endif // MRAC_H

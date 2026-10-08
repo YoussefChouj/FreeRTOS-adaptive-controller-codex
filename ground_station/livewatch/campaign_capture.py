@@ -83,7 +83,17 @@ WFB_STATUS: tuple[str, ...] = tuple(f"g_wfb_status.{f}" for f in WFB_STATUS_FIEL
 KF_HEALTH = "g_ekf_of_health"
 
 MRAC_AXES = ("pitch", "roll", "yaw", "z_rate")
-MRAC_N_FEATURES = 6  # API/mrac_variant.h:12
+def _mrac_n_features() -> int:
+    """Live feature count from the flashed ELF (`mrac_n_features`: 6 STRUCT6, 30 MULTI); 6 if unreadable."""
+    try:
+        from ground_station.livewatch.mrac_features import read_mrac_n_features
+
+        return int(read_mrac_n_features())
+    except Exception:  # no ELF on this machine: fall back to the STRUCT6 count
+        return 6
+
+
+MRAC_N_FEATURES = _mrac_n_features()
 # Priority order (dropping takes from the end): the control split first, then the tracking error, then
 # the weights Theta and the filtered features Whatf. Arrays go index-major, so every axis keeps its
 # leading features when the tail is dropped.
