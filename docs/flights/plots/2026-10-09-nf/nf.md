@@ -5,6 +5,8 @@ licence file, so the CSVs stay outside the repo (`C:/tmp/nf_data`) and only thes
 Tool: `python -m ground_station.analysis.feature_id --nf <csv...>` (loader `nf_load`, target `fa` = measured
 aerodynamic residual force, world x/y/z; one segment per file, LOSO = leave one file out).
 
+Terms: the README says the data and code are for personal and educational use only; written permission is needed for further use. This is offline research use, and the data is kept out of the repo.
+
 Full outputs: [feature_id_nf_training.md](feature_id_nf_training.md), [feature_id_nf_experiment.md](feature_id_nf_experiment.md) (+ `.json`).
 
 ## 1. Tracking RMSE |p - p_d| [m], measured from the 30 experiment files

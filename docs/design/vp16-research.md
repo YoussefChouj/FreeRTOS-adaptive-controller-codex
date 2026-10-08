@@ -59,3 +59,16 @@ What this means for us (PROPOSED):
 - None of the checked abstracts flew MRAC against a swinging rope load with a % gain over PID. A rope-570 result is
   new ground, which also means there is no published number to aim at.
 - Still open: the 5 rows R8 could not source. Respawn only with a "URL per row or drop it" rule.
+
+## R9 (VPS agy, 2026-10-09 night): swing damping, SINDy, composite, PCH, datasets, after the link gate
+
+| question | source (opened) | what the abstract / page says | for us | gate |
+|---|---|---|---|---|
+| swing damping with no load sensor | [arXiv:2608.18625](https://arxiv.org/abs/2608.18625) Taki, Umemoto 2026 | IMU + throttle only; an EKF estimates the swing with the unknown pendulum frequency as a state; an attitude correction angle dissipates the swing energy; flown across cable lengths and masses | the missing piece in rows 17/19 (sag fixed, swing not damped): a separate swing observer + damping angle, not more MRAC features | PASS |
+| SINDy on UAV flight data | [arXiv:2410.11791](https://arxiv.org/abs/2410.11791) Guevara et al. 2024 | SINDy model from experimental UAV data, used inside MPC | supports feature_id's SINDy ranking as a method; no payload | PASS (sample counts R9 quoted not checked, dropped) |
+| concurrent learning, flown | Chowdhary & Johnson 2011 (AIAA), R9 gave no link | - | - | DROPPED (no URL) |
+| PCH / freeze on saturation | R9 cited arXiv:2404.09217 | that ID is a maths-physics paper (CKP tau function), not flight control | - | FAILED (wrong ID) |
+| public dataset | [neural-fly README](https://github.com/aerorobotics/neural-fly) | data "for personal and educational use only", written permission for further use | our use is offline research; only derived tables committed ([nf.md](../flights/plots/2026-10-09-nf/nf.md)), data kept out | PASS |
+
+Bottom line: one new design lead, the IMU-only swing observer (Taki 2026). It is a separate layer from row 17, so it
+needs its own design, sim and host tests before any flight: not in tomorrow's pack.

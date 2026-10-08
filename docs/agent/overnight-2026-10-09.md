@@ -76,7 +76,7 @@ against the opened link before it goes into a doc. Numbers stay PROPOSED unless 
   rows 17 and 19 cut hover RMSE 0.24 -> 0.08 m, almost all altitude (PID sags 0.22 m); swing not damped (tilt +1-2 deg);
   rope cut at 10 s: no gain, row 19 tilts 20 vs 14 deg. CIs cross zero. Arm offset not simulated here) **Closed-loop simulation** with the rope pendulum and the arm offset. Test and iterate your 3-layer design
   (layer 1 is built, layers 2 and 3 are not) against vp13 and PID.
-- [ ] 7. **Research meta-analysis** by VPS workers, gated by link checks: slung-load adaptive control that was
+- [x] 7. ([vp16-research.md](../design/vp16-research.md) R9 section: 2 of 4 papers pass the link gate; lead = IMU-only swing EKF + damping angle, Taki 2026, a separate layer, not in the pack; PCH ID wrong, concurrent-learning no URL, both dropped) **Research meta-analysis** by VPS workers, gated by link checks: slung-load adaptive control that was
   flown, SINDy for drones, composite adaptation, saturation hedging, swing damping from IMU only.
 - [x] 8. ([nf.md](../flights/plots/2026-10-09-nf/nf.md): Neural-Fly 36 files; measured tracking: every adaptive law beats PID in every wind, L1 -19..-60 %, a physics-matched learned basis another 24-44 %; residual force x/z LOSO R^2 0.8 from velocity + 0.1-0.5 s lagged velocity; force not torque, no payload, so vp rows not replayed on it) **Public datasets** (for example Neural-Fly): download and run the variants and the feature ranking on them.
 - [x] 9. ([final-boss-2026-10-10.md](../design/final-boss-2026-10-10.md): row 17 stays, no new row beat it; Q20 no (omega_u 16 worse on every sim case), Q21/Q22 not tested, keep current) **Final boss variant**: design doc, firmware, host tests, Q20-Q22 decided from the data above.
