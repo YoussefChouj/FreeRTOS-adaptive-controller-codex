@@ -14,4 +14,19 @@ Every claim below cites a page that was opened; abstract-only reads are marked "
 
 ## Worker findings (merged after the URL and quote gate)
 
-(pending: R1-R4)
+Gate (supervisor, 2026-10-09): 34 unique URLs curled. 28 open (200, some only without the proxy); 6 refuse bots
+(IEEE x2, Wiley, Hindawi, MathWorks, mdpi: 403/418), 3 dead (kzyjc 502, eeworld, arxiv-vanity). Quotes not re-grepped
+against the pages: treat every row as the worker's reading. R2 (gemini) is thin (40 lines); R1 (opus), R3, R4 (ark) are full.
+
+| # | Finding | From | Proposed change to vp16 | Status |
+|---|---|---|---|---|
+| W1 | Width = 1.0-1.5 x gap to the nearest centre is the usual rule; aim for ~50% overlap | R1, R4 | Keep Q15 (1.0 x gap); check the overlap in the host test | confirm |
+| W2 | Raw Gaussians + bias row (not normalised RBF) is right; projection is the main safeguard | R1 | none | confirm |
+| W3 | A sigma leak of 0.01 on the bias row slowly unlearns the static trim | R1 | No leak (or 0.001) on bias rows; keep it on bumps | ask |
+| W4 | Tracking-error learning integrates the error, so the weights lag a swing by up to 90 deg (matches exp17/exp18: -90 deg). A static map of drone state cannot see the hidden load state | R1, R2 | Add features that move with the swing (body accel, rate) so the weights stay still and Phi carries the oscillation | ask |
+| W5 | The u_ad low-pass adds lag (about 16 deg at 0.45 Hz with omega_u 10) | R1, R2 | omega_u 15-20 (exp18 what-if: Re ratio 0.29 -> 0.51) | ask |
+| W6 | Adapting while a motor or the lean clamp is saturated teaches the weights the limit, not the load | R3 | Per-axis freeze of Theta_dot while saturated; X/Y: clamp the accel command before the reference model (PCH-lite) | ask |
+| W7 | Adaptive bias and PID integrator are two integrators that can fight | R2, R3 | Keep the bias lim at 15%; log both and check for drift | confirm |
+| W8 | First flights: shadow mode, reset on arm, gamma ramp, per-axis masks | R3 | Runtime per-axis inject mask (default all on, Q18), Theta reset on arm | confirm |
+| W9 | Composite (prediction-error) adaptation and concurrent learning fix the lag and excitation problems, but cost CPU and RAM | R1, R2, R4 | Defer to vp17 | defer |
+| W10 | Flown STM32 RBF nets are small (about 5 neurons per axis, no cross terms); an RBF-vs-PID rope-load flight is unpublished | R4 | 288 Gaussians per cycle: measure mrac_cyc; use a shared-width table or a cheap exp if the cost is high | measure |
