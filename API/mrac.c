@@ -521,9 +521,10 @@ static float MRAC_SagPhi(float un)
 /* 24-bit ext-slot mask held in one float: NaN / negative = all on */
 static uint32_t MRAC_MaskOf(float m)
 {
-    if (!(m >= 0.0f)) return 0xFFFFFFUL;
-    if (m > 16777215.0f) m = 16777215.0f;
-    return (uint32_t)(m + 0.5f);
+    if (!(m >= 0.0f) || m >= 16777215.0f) return 0xFFFFFFUL;
+    /* from 2^23 up every float is an integer and m + 0.5f rounds to even: 16777215 + 0.5f = 16777216 = bit 24
+     * only, every ext slot off (2026-10-08 exp15: vp 12/13/14 flew with the ext block dead) */
+    return (m < 8388608.0f) ? (uint32_t)(m + 0.5f) : (uint32_t)m;
 }
 
 static void MRAC_ApplyMask(MRAC_Axis_e axis, float *phi)
