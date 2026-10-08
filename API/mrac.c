@@ -1158,13 +1158,13 @@ void MRAC_Init(void)
      * tol = projection boundary layer. Yaw limit/tol = pitch/roll value * 0.6f. */
     /*         axis   i  gamma  limit        tol          lower           feature */
     MRAC_BASIS(pitch, 0, 1.50f, 0.15f,       0.03f,       -0.15f);     /* bias */
-    MRAC_BASIS(pitch, 1, 0.20f, 0.05f,       0.01f,       0.0f);       /* rate */
+    MRAC_BASIS(pitch, 1, 0.20f, 0.05f,       0.01f,       -0.05f);     /* rate: both signs, damping (2026-10-08) */
     MRAC_BASIS(pitch, 2, 0.05f, 0.02f,       0.005f,      0.0f);       /* rate_tanh */
     MRAC_BASIS(pitch, 3, 0.05f, 0.05f,       0.01f,       0.0f);       /* cross */
     MRAC_BASIS(pitch, 4, 0.10f, 0.20f,       0.04f,       0.0f);       /* u_nom */
     MRAC_BASIS(pitch, 5, 0.10f, 0.15f,       0.03f,       0.0f);       /* xm */
     MRAC_BASIS(roll,  0, 1.50f, 0.15f,       0.03f,       -0.15f);     /* bias */
-    MRAC_BASIS(roll,  1, 0.20f, 0.05f,       0.01f,       0.0f);       /* rate */
+    MRAC_BASIS(roll,  1, 0.20f, 0.05f,       0.01f,       -0.05f);     /* rate: both signs, damping (2026-10-08) */
     MRAC_BASIS(roll,  2, 0.05f, 0.02f,       0.005f,      0.0f);       /* rate_tanh */
     MRAC_BASIS(roll,  3, 0.05f, 0.05f,       0.01f,       0.0f);       /* cross */
     MRAC_BASIS(roll,  4, 0.10f, 0.20f,       0.04f,       0.0f);       /* u_nom */
