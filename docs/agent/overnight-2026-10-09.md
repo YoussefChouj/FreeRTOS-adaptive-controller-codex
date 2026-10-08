@@ -65,9 +65,16 @@ against the opened link before it goes into a doc. Numbers stay PROPOSED unless 
 - [x] 3. **Replay all of today's logs** through adaptive_review. DONE (20 logs, commit 653288e): [meta.md](../flights/plots/2026-10-08-meta/meta.md). Measured: no variant cancels the swing (pitch/roll cancel -0.15..+0.15, phase -80..-157 deg) while a perfect estimator behind a 16 rad/s filter would cancel 84-91%. The gap is the lag of tracking-error learning, not the features. Static trim is the drone's own CG plus load (pitch -0.09..-0.11 u_max on every load, roll flips sign rope +0.05 vs arm -0.06).
 - [x] 4. (feature_id.py + test committed; rankings above) **Feature identification**: SINDy plus the other methods on the disturbance estimate of each axis. Which
   features (rate, tilt, accel, delayed states, swing phase) explain it, for the rope and the arm load?
-- [ ] 5. **Offline replay of the adaptive laws** (vp13, vp16 candidates, accel features, higher omega_u, composite).
+- [x] 5. (covered by the item 3/B/D replays on every log: [meta.md](../flights/plots/2026-10-08-meta/meta.md)
+  vp13 and the 2026-10-08 variants cancel nothing, tracking-error lag; [d_gamma_sweep.md](../flights/plots/2026-10-09-features/d_gamma_sweep.md)
+  composite L2 gamma 2..20; [d_gain_range.md](../flights/plots/2026-10-09-features/d_gain_range.md) L2 + D self-tuning
+  gain, the first positive median cancel; [b_s10x_replay.md](../flights/plots/2026-10-09-features/b_s10x_replay.md)
+  swing/accel feature row blows up on injected logs. Q19 (accel features): not with the basis != 0 path; Q20 (omega_u):
+  not replayed separately, the L2 gain is the lever that moved) **Offline replay of the adaptive laws** (vp13, vp16 candidates, accel features, higher omega_u, composite).
   Score cancel ratio and swing phase. This answers Q19 (accel features) and Q20 (omega_u) with data.
-- [ ] 6. **Closed-loop simulation** with the rope pendulum and the arm offset. Test and iterate your 3-layer design
+- [x] 6. ([sim_rope.md](../flights/plots/2026-10-09-features/sim_rope.md), sim, 5 seeds: on the 570 g / 0.43 m rope,
+  rows 17 and 19 cut hover RMSE 0.24 -> 0.08 m, almost all altitude (PID sags 0.22 m); swing not damped (tilt +1-2 deg);
+  rope cut at 10 s: no gain, row 19 tilts 20 vs 14 deg. CIs cross zero. Arm offset not simulated here) **Closed-loop simulation** with the rope pendulum and the arm offset. Test and iterate your 3-layer design
   (layer 1 is built, layers 2 and 3 are not) against vp13 and PID.
 - [ ] 7. **Research meta-analysis** by VPS workers, gated by link checks: slung-load adaptive control that was
   flown, SINDy for drones, composite adaptation, saturation hedging, swing damping from IMU only.

@@ -47,6 +47,9 @@ CTRLS = [('pid_tuned2', True), ('mrac_sataware', True), ('mrac5_xyz', False)]
 BASE = 'pid_tuned2+f1x'               # paired differences are against the flashed PID
 F1X_ANG = dict(Ki=0.02, Uimax=26, SumEmax=1300, EMin=10)
 F1X_RATE = dict(Uimax=160, SumEmax=16000, EMin=50)
+ROPE = dict(m=0.57, L=0.43, r=(0.015, 0.0, -0.03), k=2000.0, c=5.0, th0=0.1, ph0=0.0)   # m, L measured (rope 33 cm +
+# half bottle 10 cm, swing 0.76 Hz), x offset measured 1-2 cm; attach z, rope k/c and the initial swing PROPOSED
+ROPE_CASES = {'rope570': {}, 'rope570_drop': dict(t_rel=10.0)}   # drop: the rope is cut at 10 s (load removal)
 
 
 def label(tag, f1x):
@@ -67,10 +70,10 @@ def load_q(q, m, where):
     return q
 
 
-def build(cases, seeds, yaw):
+def build(cases, seeds, yaw, trajs=TRAJS):
     rowlist, refs, qs = [], [], []
     for case, (m, where) in cases.items():
-        for tr in TRAJS:
+        for tr in trajs:
             for sd in seeds:
                 q = load_q(scen.row_params('nominal', scen.FAMS.index('nominal'), 0, sd), m, where)
                 if yaw == '1003':
@@ -81,16 +84,42 @@ def build(cases, seeds, yaw):
     return rowlist, ref, sp
 
 
-def run(tag, f1x, rowlist, ref, sp):
+def run(tag, f1x, rowlist, ref, sp, wrap=None):
     st = json.load(open(f'results/{tag}_test.json'))
+    cls = bench.load_cls(st['ctrl'])
     ang, rate = fwpid.ANG_PR, fwpid.RATE_PR
     if f1x:
         fwpid.ANG_PR, fwpid.RATE_PR = dict(ang, **F1X_ANG), dict(rate, **F1X_RATE)
     try:
-        ctrl = bench.load_cls(st['ctrl'])(len(rowlist), {k: float(v) for k, v in st['params'].items()})
+        ctrl = (wrap(cls) if wrap else cls)(len(rowlist), {k: float(v) for k, v in st['params'].items()})
     finally:
         fwpid.ANG_PR, fwpid.RATE_PR = ang, rate
-    return bench.metrics(plant.run(ctrl, ref, sp, seed=3000), ref, rowlist)
+    try:
+        return bench.metrics(plant.run(ctrl, ref, sp, seed=3000), ref, rowlist)
+    finally:
+        if hasattr(ctrl, 'close'):
+            ctrl.close()
+
+
+def rope_ctrls():
+    """The flashed PID alone and with the flown 3L-v2 rows on top: vp row 17 (L2 only g8), row 19 (L2 g20 + D)."""
+    import ctrl_fwmrac
+    rp = ctrl_fwmrac.rp
+    rows = {'row17': rp.variants_3l()['L2only g8']['args'], 'row19': rp.variants_d()['L2only g20+D p20 f5']['args']}
+    return [(BASE, None)] + [(f'{BASE}+{k}', lambda c, a=a: ctrl_fwmrac.with_mrac(c, inj=1, cfg=a))
+                             for k, a in rows.items()]
+
+
+def run_rope(seeds, yaw):
+    """570 g bottle on the measured rope (plant.py sling), hover; each case is its own batch (sp['sling'] is shared)."""
+    res = {}
+    for case, extra in ROPE_CASES.items():
+        rowlist, ref, sp = build({case: (0.0, None)}, seeds, yaw, ['hover'])
+        sp['sling'] = dict(ROPE, r=np.array(ROPE['r']), **extra)
+        for lb, wrap in rope_ctrls():
+            t0 = time.time(); res.setdefault(lb, []).extend(run('pid_tuned2', True, rowlist, ref, sp, wrap))
+            print(f'{case} {lb}: {time.time() - t0:.0f} s', flush=True)
+    return res
 
 
 def run_stress(tag, rowlist, ref, sp):
@@ -103,12 +132,12 @@ def med(rows, key='rmse'):
     return float(np.median(a)) if len(a) else float('nan')
 
 
-def tables(res, cases, n_seeds, base_lb=BASE):
+def tables(res, cases, n_seeds, base_lb=BASE, trajs=TRAJS):
     labels = list(res)
     print('\nmedian RMSE over the non-diverged seeds [m] (n div = diverged seeds of ' + str(n_seeds) + ')\n')
     print('| case | traj | ' + ' | '.join(labels) + ' |\n' + '|---' * (len(labels) + 2) + '|')
     for case in cases:
-        for tr in TRAJS:
+        for tr in trajs:
             sel = {lb: [r for r in res[lb] if r['fam'] == case and r['traj'] == tr] for lb in labels}
             cells = []
             for lb in labels:
@@ -121,7 +150,7 @@ def tables(res, cases, n_seeds, base_lb=BASE):
               f'(negative = better than {base_lb})\n')
         print('| case | traj | ' + ' | '.join(others) + ' |\n' + '|---' * (len(others) + 2) + '|')
         for case in cases:
-            for tr in TRAJS:
+            for tr in trajs:
                 base = {r['seed']: r for r in res[base_lb] if r['fam'] == case and r['traj'] == tr}
                 cells = []
                 for lb in others:
@@ -145,10 +174,18 @@ def main():
     ap = argparse.ArgumentParser(); ap.add_argument('--seeds', type=int, default=10)
     ap.add_argument('--yaw', choices=['1003', 'logged'], default='1003')
     ap.add_argument('--sweep', action='store_true'); ap.add_argument('--tables'); ap.add_argument('--stress-tags', nargs='+')
+    ap.add_argument('--rope', action='store_true')
     ap.add_argument('--out', default='results/demo_loads.json'); a = ap.parse_args()
     if a.tables:
         d = json.load(open(a.tables)); res = d['rows']
-        tables(res, d['cases'], len({r['seed'] for r in next(iter(res.values()))}), d.get('base', BASE))
+        tables(res, d['cases'], len({r['seed'] for r in next(iter(res.values()))}), d.get('base', BASE),
+               d.get('trajs', TRAJS))
+        return
+    if a.rope:
+        res = run_rope(list(range(2000, 2000 + a.seeds)), a.yaw)
+        json.dump({'cases': ROPE_CASES, 'rope': ROPE, 'trajs': ['hover'], 'f1x': [F1X_ANG, F1X_RATE], 'yaw': a.yaw,
+                   'base': BASE, 'rows': res}, open(a.out, 'w'), indent=1)
+        tables(res, ROPE_CASES, a.seeds, BASE, ['hover'])
         return
     cases = SWEEP if a.sweep else CASES
     rowlist, ref, sp = build(cases, list(range(2000, 2000 + a.seeds)), a.yaw)

@@ -160,7 +160,8 @@ def run(ctrl, ref, sp, seed=0, div_err=2.0, tile=1):
              div_k=np.full(B, -1))
     g_meas = np.zeros((B, 3)); a_meas = f0 + sp['acc_bias']
     # optional slung load (sp['sling'] dict: m kg, L m, r (3,) body attach point m, k N/m, c N s/m, th0/ph0 rad
-    # initial swing in the x/y plane).  Rope = tension-only spring-damper; absent key = the old model unchanged.
+    # initial swing in the x/y plane, optional t_rel s: the rope is cut then, a load drop).  Rope = tension-only
+    # spring-damper; absent key = the old model unchanged.
     sl = sp.get('sling'); pl = vl = None
     if sl is not None:
         L['load'] = np.zeros((B, N, 3), np.float32)
@@ -217,6 +218,8 @@ def run(ctrl, ref, sp, seed=0, div_err=2.0, tile=1):
                 d = pl - pa; dist = np.linalg.norm(d, axis=1); u = d / dist[:, None]
                 rdot = ((vl - v - np.cross(w_w, r_w)) * u).sum(1)
                 Tn = np.where(dist > sl['L'], np.maximum(sl['k'] * (dist - sl['L']) + sl['c'] * rdot, 0.0), 0.0)
+                if t >= sl.get('t_rel', np.inf):
+                    Tn = 0.0 * Tn
                 F = Tn[:, None] * u
                 fw = fw + F / m[:, None]
                 Fb = np.stack([(b1 * F).sum(1), (b2 * F).sum(1), (b3 * F).sum(1)], 1)

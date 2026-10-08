@@ -152,7 +152,8 @@ def build(out_dir: Path, rbf: bool) -> Path:
     for f in (REPO / "API").glob("mrac*.[ch]"):
         shutil.copy2(f, src / f.name)
     exe = out_dir / f"mrac_log_replay_{int(rbf)}.exe"
-    if not exe.exists():
+    newest = max(f.stat().st_mtime for f in [DRIVER, *src.glob("mrac*.[ch]")])   # out_dir may persist (ctrl_fwmrac)
+    if not exe.exists() or exe.stat().st_mtime < newest:
         cmd = ["gcc", "-std=c99", "-O2", "-ffp-contract=off", f"-DMRAC_VARIANT={int(rbf)}", str(DRIVER),
                *map(str, sorted(src.glob("mrac*.c"))), "-I", str(src), "-I", str(REPO / "API" / "tests" / "stubs"),
                "-lm", "-o", str(exe)]
