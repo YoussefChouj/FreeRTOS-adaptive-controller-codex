@@ -1,9 +1,11 @@
-# 3L-v2 morning test (overnight 2026-10-09): 570 g rope load, pitch/roll MRAC rows 17 -> 16 -> 18, one hover each.
-# Needs a flash built from 18ec159 or later (vp rows 16-18 + Phi_f/pe/p_gain); rows 16-18 run in STRUCT6 and MULTI.
-# Row order is from the overnight replay of the 5 PID logs (p/r cancel score, higher is better, none positive yet):
-#   17 = L2 prediction-error law only, gamma_c 8, tracking-error learning off on p/r  (-0.03 / -0.05, best)
-#   16 = vp6 + L2, gamma_c 20                                                         (-0.11 / -0.15)
-#   18 = row 16 + D self-tuning gain                                                  (D had no effect in replay)
+# 3L-v2 morning test (overnight 2026-10-09): 570 g rope load, pitch/roll MRAC rows 17 -> 19 -> 16, one hover each.
+# Needs a flash built from the vp row 19 commit or later (vp rows 16-19 + Phi_f/pe/p_gain); rows 16-19 run in STRUCT6 and MULTI.
+# Row order is from the overnight replay (p/r median cancel score over 59 logs, higher is better; > 0 cancels):
+#   17 = L2 prediction-error law only, gamma_c 8, tracking-error learning off on p/r  (-0.07 / -0.09)
+#   19 = row 17 at gamma_c 20 + D self-tuning gain p_max 20 p_forget 5                 (+0.04 / +0.02, worst on load drops)
+#   16 = vp6 + L2, gamma_c 20                                                         (5 PID logs: -0.11 / -0.15)
+# Row 18 (row 16 + D at p_forget 0.5) replayed the same as row 16, so it is left out; it stays in the vp table.
+# Row 19 is hover only: do not release or swap the load with row 19 active (replay: worst case on the load-drop logs).
 # The variant is picked by the operator in the Keil watch window before each go: vp_id = N, then check
 # vp_active = N (0xEE = a field was refused: do not fly that row). A vp request in the air waits for the ground.
 # Fly the PID baseline on the same rope first (asym_load_pid.yaml pad_hover, or pid_ref.yaml).
@@ -11,7 +13,7 @@
 # Hover times are PROPOSED (presets <= 25 s). Logging: campaign groups below, or by hand with
 # ground_station/livewatch/vp16_frames.md. Debrief: adaptive_review adds the "3L-v2 prediction error" section.
 campaign: rope570_3l
-objective: "3L-v2 rows 17, 16, 18 on the 570 g rope: 20 s hover each, compare with the PID hover on the same rope"
+objective: "3L-v2 rows 17, 19, 16 on the 570 g rope: 20 s hover each, compare with the PID hover on the same rope"
 controller: mrac
 mode: fly
 packs:
@@ -30,14 +32,14 @@ experiments:
     capture: campaign
     repeats: 1
     log_plan: &log {rate_hz: 50, groups: [velocity_loops, mrac_3l, mrac_shadow]}  # mrac_3l before mrac_shadow: in a MULTI build the planner drops the tail (mrac_shadow is 260 vars), and rows 16-18 only need Theta[0..5]
-  - name: row16_3lv2_hover
-    go_before: "disarm; Keil watch: vp_id = 16, check vp_active = 16; re-arm by RC"
+  - name: row19_l2only_d_hover
+    go_before: "disarm; Keil watch: vp_id = 19, check vp_active = 19; rope load hanging free, no load release this flight; re-arm by RC"
     scenario: *hover
     capture: campaign
     repeats: 1
     log_plan: *log
-  - name: row18_3lv2_d_hover
-    go_before: "disarm; Keil watch: vp_id = 18, check vp_active = 18; re-arm by RC"
+  - name: row16_3lv2_hover
+    go_before: "disarm; Keil watch: vp_id = 16, check vp_active = 16; re-arm by RC"
     scenario: *hover
     capture: campaign
     repeats: 1

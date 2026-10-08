@@ -1242,6 +1242,10 @@ static const VariantPreset_t s_vp[] = {
 	VP_ROW3(  4.0f,   0.25f,   0U,    20.0f,  49.0f,    7.0f,   20.0f,  0.0f,  0.0f ),  /* 16 3Lv2: vp 6 + L2 composite */
 	VP_ROW3(  4.0f,   0.25f,   1U,     8.0f,  49.0f,    7.0f,   20.0f,  0.0f,  0.0f ),  /* 17 L2 only (tracking learning off p/r) */
 	VP_ROW3(  4.0f,   0.25f,   0U,    20.0f,  49.0f,    7.0f,   20.0f,  4.0f,  0.5f ),  /* 18 3Lv2 + D self-tuning gain */
+	/* 19: replay of every log (mrac_log_replay --set d, 59 logs, d_gain_range.md): p_forget sets the D gain (P rests near
+	 * p_forget/m^2), p_max barely matters; L2only g20 + D p_max 20 p_forget 5 gives median p/r cancel +0.04/+0.02 vs
+	 * row 17 -0.07/-0.09, but is worst on load-drop logs (f17 *_remov, -8.75). Fly after row 17, hover only. PROPOSED. */
+	VP_ROW3(  4.0f,   0.25f,   1U,    20.0f,  49.0f,    7.0f,   20.0f, 20.0f,  5.0f ),  /* 19 L2 only g20 + D self-tuning gain */
 };
 #define VP_PR   0x03U
 #define VP_Y    0x04U

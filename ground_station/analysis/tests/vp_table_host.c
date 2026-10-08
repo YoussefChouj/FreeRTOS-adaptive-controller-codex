@@ -27,9 +27,10 @@ int main(void)
 #if MRAC_VARIANT == MRAC_VARIANT_MULTI
 		g_rbf = mrac_g_gamma[0][MRAC_GRP_RBF];
 #endif
-		printf("row %u %u %u %g %g %g %g %g %g %g %g %u\n", (unsigned)vp_id, (unsigned)vp_active, (unsigned)r->basis,
+		printf("row %u %u %u %g %g %g %g %g %g %g %g %u %g\n", (unsigned)vp_id, (unsigned)vp_active, (unsigned)r->basis,
 		       mrac_config_pitch.gamma_c, mrac_config_pitch.b_axis, mrac_config_pitch.pe_delay, mrac_config_pitch.wc_pe,
-		       mrac_config_pitch.p_max, mrac_g_gamma[0][0], mrac_g_gamma[2][0], g_rbf, (unsigned)r->te_off);
+		       mrac_config_pitch.p_max, mrac_g_gamma[0][0], mrac_g_gamma[2][0], g_rbf, (unsigned)r->te_off,
+		       mrac_config_pitch.p_forget);
 	}
 	return 0;
 }

@@ -18,7 +18,7 @@ API = REPO / "API"
 DRIVER = Path(__file__).with_name("vp_table_host.c")
 START = "/* MRAC variant rows"
 END = "\tvp_active = ok ? id : 0xEEU;\n}\n"
-COLS = ("id", "active", "basis", "gamma_c", "b_axis", "pe_delay", "wc_pe", "p_max", "g_p", "g_y", "g_rbf", "te_off")
+COLS = ("id", "active", "basis", "gamma_c", "b_axis", "pe_delay", "wc_pe", "p_max", "g_p", "g_y", "g_rbf", "te_off", "p_forget")
 
 pytestmark = pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not on PATH")
 
@@ -66,5 +66,9 @@ def test_3l_v2_rows_land_their_fields(rows):
             if r["te_off"]:                         # tracking-error learning off on p/r, yaw keeps it
                 assert r["g_p"] == 0 and r["g_y"] > 0, (vid, r)
                 assert r["g_rbf"] in (-1, 0), (vid, r)   # MULTI ext block stays off too
+            if r["p_max"] > 0:                      # a D row: the self-tuning gain has its forgetting rate
+                assert r["p_forget"] > 0, (vid, r)
+    r19 = rows(0)[19]
+    assert (r19["te_off"], r19["gamma_c"], r19["p_max"], r19["p_forget"]) == (1, 20, 20, 5)   # replay winner, d_gain_range.md
     user = rows(0)[100]
     assert (user["gamma_c"], user["b_axis"], user["pe_delay"]) == (20, 49, 7)   # vp_user starts as row 16
