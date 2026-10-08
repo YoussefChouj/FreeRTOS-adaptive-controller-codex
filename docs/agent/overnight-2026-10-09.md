@@ -35,7 +35,7 @@ against the opened link before it goes into a doc. Numbers stay PROPOSED unless 
   least-squares / covariance gain with bounds, so you do not hand-pick gamma; the PID gains stay fixed). Tested
   offline on today's logs and in the sim before it goes into the firmware.
 
-- [ ] E. **Physics-structured cross-coupling features** (your 2nd mid-run message): build the regressor from the
+- [x] E. (14 rope logs, docs/flights/plots/2026-10-09-features: tilt-driven pendulum observer, tension x swing, omega x v and Euler p*r add <= +0.005 LOSO R^2; the MEASURED swing phase acc_bpq is #1 on pitch (5/5 methods) and top-5 on roll; all-feature R^2 pitch 0.39 / roll 0.31, so most of the disturbance is not linear in these signals. Next: acc_bpq + angacc + thrust row = item B) **Physics-structured cross-coupling features** (your 2nd mid-run message): build the regressor from the
   rigid-body laws (Newton-Euler momentum balance) instead of generic bumps. Candidates, each with its physical
   cause: gyroscopic rate products p*q, q*r, p*r (omega x J omega); offset-CG torque r x m(f - g) = accelerometer
   specific force f_x, f_y, f_z and gravity-in-body sin(theta), cos(theta)sin(phi); thrust x CG offset
@@ -58,7 +58,7 @@ against the opened link before it goes into a doc. Numbers stay PROPOSED unless 
 - [ ] 2. **Bug hunt on the test pipeline.** Look for bugs that could block tomorrow: presets, vp switching,
   inject mask, logging var lists, dashboard, flash tool. Fix them or list them.
 - [x] 3. **Replay all of today's logs** through adaptive_review. DONE (20 logs, commit 653288e): [meta.md](../flights/plots/2026-10-08-meta/meta.md). Measured: no variant cancels the swing (pitch/roll cancel -0.15..+0.15, phase -80..-157 deg) while a perfect estimator behind a 16 rad/s filter would cancel 84-91%. The gap is the lag of tracking-error learning, not the features. Static trim is the drone's own CG plus load (pitch -0.09..-0.11 u_max on every load, roll flips sign rope +0.05 vs arm -0.06).
-- [ ] 4. **Feature identification**: SINDy plus the other methods on the disturbance estimate of each axis. Which
+- [x] 4. (feature_id.py + test committed; rankings above) **Feature identification**: SINDy plus the other methods on the disturbance estimate of each axis. Which
   features (rate, tilt, accel, delayed states, swing phase) explain it, for the rope and the arm load?
 - [ ] 5. **Offline replay of the adaptive laws** (vp13, vp16 candidates, accel features, higher omega_u, composite).
   Score cancel ratio and swing phase. This answers Q19 (accel features) and Q20 (omega_u) with data.
