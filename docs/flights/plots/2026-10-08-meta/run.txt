@@ -1,0 +1,20 @@
+ok exp14_vp8-rbf12-load
+ok exp14_vp9-rbf6-load
+ok exp14_vp10-rbf24-load
+ok exp14_vp11-s6rbf12-load
+ok vp14_doll
+ok vp12_flight
+ok vp13_gap
+ok vp14_doll2
+ok vp14_g4
+ok vp13_g4
+ok vp12_fixed
+ok vp14_g4_FRESH_BATTERY
+ok pid_ref
+ok pid_ref_ARM_LOAD_293g
+ok pid_ref_ARM_LOAD_293g_2
+ok vp13_g4_arm_load_293g_1
+ok pid_ref_2
+ok vp13_g4_last
+ok pid_ref_2_circle
+ok vp13_g4_last_circle (no airborne segment >= 3 s: the circle never flew, fence refusal fixed in 28c1978)

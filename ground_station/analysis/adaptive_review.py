@@ -11,6 +11,7 @@ u_ad = clamp(LPF_omega_u(sum Theta_i*phi_i)); the rebuilt sum is checked against
 Writes adaptive_*.png (160 dpi) and adaptive_stats.md into --out.
 """
 import argparse
+import json
 import os
 
 import matplotlib
@@ -204,7 +205,7 @@ def fit_b(pairs):
     return best
 
 
-def uncertainty(df, segs, inj, a):
+def uncertainty(df, segs, inj, a, summ=None):
     """Delta_hat = LPF3(xdot)/b - LPF3(u_inj(t - tau)); the ideal u_ad is -Delta_hat. Scores u_ad against it."""
     gr, L = 9.81, (a.rope_cm + a.bottle_cm / 2) / 100.0
     M, m = a.drone_g / 1000.0, a.load_g / 1000.0
@@ -230,6 +231,9 @@ def uncertainty(df, segs, inj, a):
             u = (g[p + "u_nom"] + inj[g.index] * g[p + "u_ad"]).to_numpy()
             pairs.append((np.gradient(g[ax + "_x"].to_numpy()) * FS, u))
         fits[ax], pairs_ax[ax] = fit_b(pairs), pairs
+    sg = lambda name, ax: summ["segs"].setdefault(name, {}).setdefault(ax, {}) if summ is not None else {}
+    if summ is not None:
+        summ["fits"] = {ax: [float(b), int(k), float(r)] for ax, (b, k, r) in fits.items()}
     md += ["| axis | b | tau (ms) | r (2-8 Hz) |", "|---|---|---|---|"]
     md += ["| %s | %.1f | %d | %.2f |" % (ax, b, 10 * k, r) for ax, (b, k, r) in fits.items()] + [""]
     md += ["| seg | axis | -Delta static | u_ad mean | u_nom mean | u_ad share | -Delta dyn RMS | u_ad dyn RMS | "
@@ -244,6 +248,9 @@ def uncertainty(df, segs, inj, a):
             nd = {s: filt(delay(u, k), hi=3.0) - filt(xd, hi=3.0) / (b * s) for s in (0.7, 1.0, 1.4)}
             df.loc[i0:i1, ax + "_negd"] = nd[1.0]
             cf = lambda v, s=1.0: 1.0 - np.var(v - nd[s]) / max(np.var(nd[s]), 1e-15)
+            ideal = {w: float(cf(lpf1(nd[1.0], w))) for w in (0.5, 1, 2, 4, 8, 16)}
+            sg(name, ax).update(delta_static=float(nd[1.0].mean()), delta_dyn=float(nd[1.0].std()),
+                                uad_mean=float(uad.mean()), unom_mean=float(un.mean()), ideal=ideal)
             if uad.std() < 1e-9:                          # ch8 off: u_ad logged as 0 (no shadow)
                 md.append("| %s | %s | %+.4f | 0 | %+.4f | - | %.4f | 0 | - | - | %s |" % (
                     name, ax, nd[1.0].mean(), un.mean(), nd[1.0].std(),
@@ -255,6 +262,8 @@ def uncertainty(df, segs, inj, a):
             _, pxx = signal.welch(nd[1.0] - nd[1.0].mean(), fs=FS, nperseg=nper)
             msk = (f >= BAND[0]) & (f <= BAND[1])
             hm = np.mean(pxy[msk] / pxx[msk])
+            sg(name, ax).update(uad_dyn=float(uad.std()), gain=float(abs(hm)), phase=float(np.degrees(np.angle(hm))),
+                                coh=float(coh), cancel=[float(cf(uad, 0.7)), float(cf(uad)), float(cf(uad, 1.4))])
             md.append("| %s | %s | %+.4f | %+.4f | %+.4f | %.2f | %.4f | %.4f | %.2f / %+.0f / %.2f | "
                       "%+.2f / %+.2f / %+.2f | %s |" % (
                           name, ax, nd[1.0].mean(), uad.mean(), un.mean(),
@@ -278,6 +287,8 @@ def uncertainty(df, segs, inj, a):
             msk = (f >= 0.15) & (f <= 1.5)
             pk.append(f[msk][np.argmax(pxx[msk])])
         md.append("| %s | %.2f | %.2f |" % (name, pk[0], pk[1]))
+        if summ is not None:
+            summ["segs"].setdefault(name, {})["peak_hz"] = [float(pk[0]), float(pk[1])]
     md.append("")
     return md, fits
 
@@ -484,12 +495,22 @@ def main():
     ap.add_argument("--rope-cm", type=float, default=33.0)
     ap.add_argument("--bottle-cm", type=float, default=20.0)
     ap.add_argument("--drone-g", type=float, default=988.5)              # API/thrust_estimators.c DRONE_MASS_KG
+    ap.add_argument("--no-plots", action="store_true", help="stats and adaptive_summary.json only (meta replays)")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
+    summ = {"stem": os.path.basename(a.stem), "load_g": a.load_g, "segs": {}}
     df = load(a.stem)
     rebuild(df)
     df = df.copy()
     segs, air, inj = segments(df)
+    if not segs:
+        with open(os.path.join(a.out, "adaptive_summary.json"), "w", encoding="utf-8") as fh:
+            json.dump(summ, fh, indent=1)
+        with open(os.path.join(a.out, "adaptive_stats.md"), "w", encoding="utf-8") as fh:
+            fh.write("# Adaptive-layer stats: `%s`\n\nNo airborne segment of 3 s or more (Z FB > 0.25 m, motors "
+                     "> 1500): nothing to review.\n" % os.path.basename(a.stem))
+        print("no airborne segment in %s" % a.stem)
+        return
     mseg = [s for s in segs if "MRAC" in s[0]]
     md = ["# Adaptive-layer stats: `%s`" % os.path.basename(a.stem), "",
           "Measured from the log. Basis rebuilt from logged signals (see the tool docstring). "
@@ -635,6 +656,13 @@ def main():
             m = (f >= BAND[0]) & (f <= BAND[1])
             bp.append(np.trapezoid(pxx[m], f[m]))
         mm = g[MOTORS]
+        summ["segs"].setdefault(name, {}).update(
+            dur_s=float(g.t.iloc[-1] - g.t.iloc[0]), pitch_sd=float(g["imu_data.pit"].std()),
+            roll_sd=float(g["imu_data.rol"].std()), rate_sd=[float(g["Ctrler.gyroyPID.FB"].std()),
+            float(g["Ctrler.gyroxPID.FB"].std())], band_psd=[float(v) for v in bp],
+            z_err=float((g["Ctrler.Z_posPID.FB"] - g["Ctrler.Z_posPID.Des"]).mean()),
+            z_err_sd=float((g["Ctrler.Z_posPID.FB"] - g["Ctrler.Z_posPID.Des"]).std()),
+            motor_sat_pct=float(100 * (mm.max(axis=1) >= 3999).mean()), v_mean=float(g["real_voltage"].mean()))
         md.append("| %s | %.0f | %.2f | %.2f | %.1f / %.1f | %.1f / %.1f | %+.3f | %.1f | %.0f | %.2f | %s |" % (
             name, g.t.iloc[-1] - g.t.iloc[0], g["imu_data.pit"].std(), g["imu_data.rol"].std(),
             g["Ctrler.gyroyPID.FB"].std(), g["Ctrler.gyroxPID.FB"].std(), bp[0], bp[1],
@@ -642,11 +670,16 @@ def main():
             (mm.max(axis=1) - mm.min(axis=1)).max(), g["real_voltage"].mean(),
             "%.1f / %.1f" % (g[cpu].mean(), g[cpu].max()) if cpu in g else "not logged"))
     md.append("")
-    umd, fits = uncertainty(df, segs, inj, a)
+    umd, fits = uncertainty(df, segs, inj, a, summ)
     cmd_, caps = capability(df, mseg) if mseg else ([], {})
     md += umd + force_feature(df, segs) + cross_feature(df, segs) + grid_inputs(df, segs) + cmd_
     with open(os.path.join(a.out, "adaptive_stats.md"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(md) + "\n")
+
+    with open(os.path.join(a.out, "adaptive_summary.json"), "w", encoding="utf-8") as fh:
+        json.dump(summ, fh, indent=1)
+    if a.no_plots:
+        return
 
     # ---- plots ----
     fl = air.astype(bool)
