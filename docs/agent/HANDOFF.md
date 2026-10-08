@@ -4,20 +4,16 @@ Read order: `AGENTS.md` -> this file -> `docs/agent/memory/rules.md` -> `.claude
 History: `docs/agent/ledger/` (grep, never read whole); the previous HANDOFF is `ledger/handoff-2026-10-07-archive.md`.
 Working mode: the desktop session is the CEO and does every item inline. No subagents, no workers.
 
-## Now: load test + variant sweep, manual mode only (2026-10-08 ~04:05)
-Branch `overnight-2026-10-08`. Flown: exp8 `logs/exp8_vpA_noload` (vp 0-6, no load), analysis
-`docs/flights/2026-10-08-exp8-analysis.md`: vp 6 best attitude, vp 3 landed on the pad (operator trim). Drift
-with of1 off = unobserved EKF bias, +x/-y 2.4-6.5 cm/s.
-Firmware NOT built since exp8: in-flight preset `vp_user` + `vp_user_go` (vp_active 100), FW-B rows 7-11
-(S10, RBF12, RBF6, RBF24, S6+RBF12 via runtime `basis`; need Keil Define `MRAC_VARIANT=2`). Operator builds
-and flashes in Keil.
-Runbook: `docs/flights/2026-10-08-load-test-runbook.md` (exp9, kp_id 5, vp_id 6 then 3). Sweep plan:
-`docs/flights/2026-10-08-variant-sweep-plan.md`. Flights: `/workflow-a`, logs `exp<N>_<vp>-<load>`.
+## Now: overnight 2026-10-09 run done through item 6; morning = 3-layer flight on the 570 g rope
+Branch `overnight-2026-10-08`. Checklist `docs/agent/overnight-2026-10-09.md` (A-E, 1-6 ticked).
+Morning pack: `docs/agent/morning-2026-10-10.md` (flash, vp 17 -> 19 -> 16 on rope570_3l.yaml, debrief commands).
+3L-v2 law in API/mrac.c (f00412a), vp rows 16-19 (19 = L2 g20 + D, 30a2a3f). Local axf predates f00412a: flash first.
+Sim (sim_rope.md): rows 17/19 fix altitude sag on the rope, do not damp the swing, no gain on a load drop. PROPOSED.
 
 ## Next actions
-1. Operator: default build -> exp9 load test (vp 6, vp 3). Agent: flight_review + debrief.
-2. MULTI build -> exp10 no-load sweep vp 7-11; check CPU/CCM, vp_active 7-11 on the ground first.
-3. Open: of1 on with R_of1 0.01 for drift; gyro-compensated of1; of2_h gate; RPM ch2/ch0 (`BSP/rpm.c`).
+1. Operator: flash, PID rope hover, then the rope570_3l campaign. Agent: flight_debrief + adaptive_review.
+2. Open items 7 (research meta), 8 (Neural-Fly dataset), 9 (final boss variant) in the overnight checklist.
+3. Arm-offset (293 g) sim not run yet: demo_loads arm cases exist, rows 17/19 not wired there.
 
 ## Recording rules (operator, verbatim spirit)
 - Start only when the operator asks, after one AskUserQuestion confirming the var list and the rate.
