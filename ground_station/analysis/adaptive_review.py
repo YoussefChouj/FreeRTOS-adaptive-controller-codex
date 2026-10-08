@@ -13,6 +13,7 @@ Writes adaptive_*.png (160 dpi) and adaptive_stats.md into --out.
 import argparse
 import json
 import os
+from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
@@ -38,6 +39,8 @@ GAP_C = ((-0.7, -0.3, -0.1, 0.1, 0.3, 0.7), (-0.6, -0.2, 0.2, 0.6))   # mrac_t_r
 
 
 def load(stem):
+    if os.path.isdir(stem):                         # dashboard / campaign session dir (telemetry.csv)
+        return load_session(stem)
     s = [pd.read_csv("%s.slot%d.csv" % (stem, k)) for k in range(4)]
     for d in s:
         d.drop(columns=[c for c in ("t_host_s", "seq") if c in d.columns], inplace=True)
@@ -47,6 +50,23 @@ def load(stem):
         df = pd.merge_asof(df, d, on="t_src_ms", direction="nearest")
     df["t"] = (df.t_src_ms - df.t_src_ms.iloc[0]) / 1000.0
     return df.reset_index(drop=True)
+
+
+
+def load_session(d, dt=1.0 / FS):
+    """A dashboard or campaign session dir (logs/sessions/<stamp>, telemetry.csv) as the same frame as load():
+    every logged symbol held (zero-order) on a dt grid over the whole session, t from 0. The symbols are the
+    stream_log ones, so the sections run on whatever groups the campaign recorded."""
+    from ground_station.analysis import log_corpus as lc
+    ser = lc.load(lc.LogRef(os.path.basename(os.path.normpath(d)), Path(d), "session"))
+    if not ser:
+        raise SystemExit("no telemetry rows in %s" % d)
+    t0 = min(float(v[0][0]) for v in ser.values())
+    t = np.arange(t0, max(float(v[0][-1]) for v in ser.values()), dt)
+    df = pd.DataFrame({k: lc.hold(ser, k, t) for k in sorted(ser)})
+    df.insert(0, "t_src_ms", (t - t0) * 1000.0)
+    df["t"] = t - t0
+    return df
 
 
 def _gap1d(v, c):
@@ -134,7 +154,8 @@ def lpf_seg(raw, u0, ax, w=None):
 
 def segments(df):
     air = (df["Ctrler.Z_posPID.FB"] > 0.25) & (df[MOTORS].min(axis=1) > 1500)
-    inj = df["mrac_flags.output_injection_on"].fillna(0).astype(int)
+    known = "mrac_flags.output_injection_on" in df    # older sessions lack it: u_ad is then read as shadow, label "?"
+    inj = df["mrac_flags.output_injection_on"].fillna(0).astype(int) if known else pd.Series(0, index=df.index)
     fl = (air != air.shift()).cumsum()
     out, n = [], 0
     for _, g in df[air].groupby(fl[air]):
@@ -145,7 +166,7 @@ def segments(df):
         for _, h in g.groupby(sub):
             h = h[(h.t > h.t.iloc[0] + 1.0) & (h.t < h.t.iloc[-1] - 1.0)]
             if len(h) and h.t.iloc[-1] - h.t.iloc[0] >= 3.0:
-                out.append(("F%d %s" % (n, "MRAC" if inj[h.index[0]] else "PID"), h.index[0], h.index[-1]))
+                out.append(("F%d %s" % (n, ("MRAC" if inj[h.index[0]] else "PID") if known else "?"), h.index[0], h.index[-1]))
     return out, air, inj
 
 
@@ -533,6 +554,8 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     summ = {"stem": os.path.basename(a.stem), "load_g": a.load_g, "segs": {}}
     df = load(a.stem)
+    if "mrac_state.pitch.u_nom" not in df:
+        raise SystemExit("%s has no MRAC signals: record it with log_plan groups mrac_3l + mrac_shadow" % a.stem)
     rebuild(df)
     df = df.copy()
     segs, air, inj = segments(df)

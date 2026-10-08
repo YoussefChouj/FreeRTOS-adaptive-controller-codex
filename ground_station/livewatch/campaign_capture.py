@@ -165,9 +165,10 @@ EKF_STATES: tuple[str, ...] = (
 )
 # 3L-v2 (f00412a, vp rows 16-18, pitch/roll only): the row that ran, the L2 prediction error pe, the leaky angle
 # integral, the filtered regressor Phi_f and the D gain P. With Theta from mrac_shadow, adaptive_review rebuilds
-# negd_f = pe + Theta'Phi_f (what u_ad has to cancel), so u_f and xd_f need not be logged.
+# negd_f = pe + Theta'Phi_f (what u_ad has to cancel), so u_f and xd_f need not be logged. The injection flag splits
+# a session into MRAC and PID segments for adaptive_review (the core set does not carry it).
 MRAC_3L: tuple[str, ...] = (
-    ("vp_active", "mrac_var_id[0]", "mrac_var_id[1]")
+    ("vp_active", "mrac_flags.output_injection_on", "mrac_var_id[0]", "mrac_var_id[1]")
     + tuple(f"mrac_state.{axis}.{m}" for m in ("pe", "e_int") for axis in ("pitch", "roll"))
     + tuple(f"mrac_state.{axis}.Phi_f[{i}]" for i in range(6) for axis in ("pitch", "roll"))
     + tuple(f"mrac_state.{axis}.p_gain" for axis in ("pitch", "roll"))
