@@ -122,6 +122,60 @@ def log_segments(stem, axes):
     return [(os.path.basename(stem), n, v) for n, v in out.items()]
 
 
+NF_AX = {"x": 0, "y": 1, "z": 2}
+
+
+def nf_load(path):
+    """One Neural-Fly CSV (github.com/aerorobotics/neural-fly, data/*): list-valued columns parsed with json (never
+    eval), resampled onto the ar.FS grid so the lags and lag_scan mean the same seconds as on our logs."""
+    import pandas as pd
+    raw = pd.read_csv(path)
+    t = raw["t"].to_numpy(float)
+    tt = np.arange(t[0], t[-1], 1.0 / ar.FS)
+    out = {"t": tt}
+    for c in ("p", "p_d", "v", "w", "fa", "pwm", "R", "T_sp", "hover_throttle"):
+        a = np.array([np.ravel(json.loads(s) if isinstance(s, str) else s) for s in raw[c]], float)
+        out[c] = np.column_stack([np.interp(tt, t, a[:, j]) for j in range(a.shape[1])])
+    for c in ("T_sp", "hover_throttle"):
+        out[c] = out[c][:, 0]
+    return out
+
+
+def nf_segments(path, axes):
+    """[(file, 'all', {ax: (y, feats)})]: target y = the measured residual force fa on world axis ax (one segment per
+    file, i.e. LOSO = leave one wind condition out). Features: velocity, |v|v drag, thrust direction (R[:, 2]), body
+    rates, per-motor pwm about their mean, T_sp, lags. dv/dt is left out: fa is computed from it."""
+    g = nf_load(path)
+    v, w, pwm = g["v"], g["w"], g["pwm"]
+    sp = np.linalg.norm(v, axis=1)
+    f = {"T_sp": g["T_sp"], "pwm_sum": (pwm.sum(1) - pwm.sum(1).mean()) / (pwm.std() + 1e-9)}
+    for i, n in enumerate("xyz"):
+        f["v" + n] = v[:, i]
+        f["|v|v" + n] = sp * v[:, i]
+        f["thr" + n] = g["R"][:, 3 * i + 2]
+        f["w" + "pqr"[i]] = w[:, i]
+    for i in range(pwm.shape[1]):
+        f["pwm%d" % i] = (pwm[:, i] - pwm.mean(1)) / (pwm.std() + 1e-9)
+    for k in LAGS:
+        for n in ("vx", "vy", "vz", "thrx", "thry"):
+            f["%s@-%.2fs" % (n, k / ar.FS)] = lag(f[n], k)
+    return [(os.path.basename(path), "all", {ax: (g["fa"][:, NF_AX[ax]], f) for ax in axes})]
+
+
+def nf_tracking(paths):
+    """Measured position-tracking RMSE |p - p_d| (m) per method and wind condition, from the file names."""
+    rows = {}
+    for p in paths:
+        parts = os.path.basename(p)[:-4].split("_")
+        g = nf_load(p)
+        rows.setdefault(parts[3], {})[parts[2]] = float(np.sqrt(np.mean(np.sum((g["p"] - g["p_d"]) ** 2, 1))))
+    meths = sorted({m for r in rows.values() for m in r})
+    md = ["## Tracking RMSE |p - p_d| [m] by method (columns) and wind condition (rows), measured from the files", "",
+          "| condition | " + " | ".join(meths) + " |", "|---" * (len(meths) + 1) + "|"]
+    md += ["| %s | %s |" % (c, " | ".join("%.3f" % r[m] if m in r else "-" for m in meths)) for c, r in sorted(rows.items())]
+    return md + [""], rows
+
+
 class Data:
     """Stacked, per-segment-demeaned, standardised design; Grams per segment for fast leave-one-segment-out fits."""
 
@@ -244,9 +298,12 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--axes", default="pitch,roll")
     ap.add_argument("--exclude", default="", help="regex: drop matching candidates (e.g. a feature family baseline)")
+    ap.add_argument("--nf", action="store_true", help="stems are Neural-Fly CSVs: target fa on world x,y,z")
     a = ap.parse_args()
+    if a.nf and a.axes == "pitch,roll":
+        a.axes = "x,y,z"
     axes = a.axes.split(",")
-    items = [it for s in a.stems for it in log_segments(s, axes)]
+    items = [it for s in a.stems for it in (nf_segments(s, axes) if a.nf else log_segments(s, axes))]
     if a.exclude:
         for _, _, v in items:
             for ax in v:
@@ -259,6 +316,13 @@ def main():
           "_bp = causal 0.25-0.9 Hz band-pass, _bpq = its quadrature (derivative / w0), @-T = delayed by T, "
           "_o = the other axis). Method details: module docstring.", ""]
     res = {"tag": a.tag, "stems": a.stems, "axes": {}}
+    if a.nf:
+        md[4] = ("Target y = fa, the measured aerodynamic residual force on world axis x/y/z (Neural-Fly data), one "
+                 "segment per file, so LOSO = leave one wind condition out; file means removed. Features: v (m/s), "
+                 "|v|v drag, thr = thrust direction R[:, 2], body rates w, per-motor pwm about the motor mean, T_sp, "
+                 "lags. Resampled to %d Hz." % ar.FS)
+        tr, res["tracking"] = nf_tracking(a.stems)
+        md += tr
     for ax in axes:
         d = Data(items, ax)
         full = d.loso(range(len(d.names)))
