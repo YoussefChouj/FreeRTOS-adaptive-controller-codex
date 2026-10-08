@@ -86,3 +86,12 @@ Body-frame accel x/y sees only non-thrust forces (rope pull, slosh, wind, walls)
 | F1 PID | pitch | -0.27 / 0.08 / -0.102 | +0.05 / 0.00 / +0.022 | +60 (r -0.30) / +300 (r +0.09) | 0.07 | 0.38 | 0.40 |
 | F1 PID | roll | -0.04 / 0.00 / -0.014 | -0.09 / 0.01 / -0.034 | +130 (r -0.18) / -300 (r +0.28) | 0.06 | 0.26 | 0.26 |
 
+## Cross-coupling: does the other axis help? (vp16 48-bump split)
+
+-Delta_hat (as above, LPF 3 Hz) fitted with constant weights on Gaussian grids, scored on held-out data (interleaved 5 s blocks: fit even, score odd, and back). Inputs in firmware units: rate / 200 deg/s, tilt / 15 deg. own24 = RBF24T (6 rate x 4 tilt, mrac_t_*_c); own48 = 8 rate x 6 tilt; own32 = 8 rate x 4 tilt; cross16 = own tilt x OTHER tilt (4 x 4); lin = other tilt + other rate as two plain features. Fair split test at 48 bumps: own48 vs own32 + cross16. Swing = same fit on 0.25-0.90 Hz band-passed signals. Upper bound for the own grids (they partly rebuild the PID term inside -Delta_hat), so a cross gain here is the conservative signal. Grid centres of own48/own32 are a test choice, not firmware.
+
+| seg | axis | own24 in / held-out | own24 + lin | own48 | own32 + cross16 | swing own48 / own32 + cross16 |
+|---|---|---|---|---|---|---|
+| F1 PID | pitch | 0.24 / 0.15 | 0.12 | 0.08 | 0.07 | 0.03 / 0.03 |
+| F1 PID | roll | 0.22 / -0.02 | -0.04 | -0.07 | -0.13 | -0.29 / -0.41 |
+

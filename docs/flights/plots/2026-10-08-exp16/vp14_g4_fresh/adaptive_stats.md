@@ -101,6 +101,15 @@ Body-frame accel x/y sees only non-thrust forces (rope pull, slosh, wind, walls)
 | F1 MRAC | pitch | -0.07 / 0.00 / -0.022 | +0.02 / 0.00 / +0.007 | -300 (r +0.23) / +270 (r -0.07) | 0.09 | 0.41 | 0.41 |
 | F1 MRAC | roll | +0.02 / 0.00 / +0.005 | -0.18 / 0.03 / -0.054 | -180 (r +0.06) / +70 (r -0.24) | 0.08 | 0.31 | 0.32 |
 
+## Cross-coupling: does the other axis help? (vp16 48-bump split)
+
+-Delta_hat (as above, LPF 3 Hz) fitted with constant weights on Gaussian grids, scored on held-out data (interleaved 5 s blocks: fit even, score odd, and back). Inputs in firmware units: rate / 200 deg/s, tilt / 15 deg. own24 = RBF24T (6 rate x 4 tilt, mrac_t_*_c); own48 = 8 rate x 6 tilt; own32 = 8 rate x 4 tilt; cross16 = own tilt x OTHER tilt (4 x 4); lin = other tilt + other rate as two plain features. Fair split test at 48 bumps: own48 vs own32 + cross16. Swing = same fit on 0.25-0.90 Hz band-passed signals. Upper bound for the own grids (they partly rebuild the PID term inside -Delta_hat), so a cross gain here is the conservative signal. Grid centres of own48/own32 are a test choice, not firmware.
+
+| seg | axis | own24 in / held-out | own24 + lin | own48 | own32 + cross16 | swing own48 / own32 + cross16 |
+|---|---|---|---|---|---|---|
+| F1 MRAC | pitch | 0.23 / 0.11 | 0.13 | -0.06 | -0.04 | 0.23 / 0.22 |
+| F1 MRAC | roll | 0.25 / 0.12 | 0.02 | 0.10 | -0.14 | -0.12 / -0.33 |
+
 ## Feature capability (all MRAC segments pooled)
 
 Theta_i moves at gamma_i * s * phi_i / (1 + |phi|^2) (API/mrac.c:748, denom :932), so a feature's learning drive is gamma_i * E[phi_i^2 / (1 + |phi|^2)] (speed, shown relative to the bias). Its reach is lim_i * RMS(phi_i): the largest torque it can make with Theta_i at its projection bound. gamma_i, lim_i from the MRAC_BASIS rows (pitch/roll/yaw/z), mrac_g_phi and the preset g assumed 1.

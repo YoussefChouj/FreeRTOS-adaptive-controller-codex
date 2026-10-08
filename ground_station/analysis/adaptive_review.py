@@ -337,6 +337,67 @@ def force_feature(df, segs):
     return md
 
 
+CROSS_C = ((-0.7, -0.45, -0.25, -0.08, 0.08, 0.25, 0.45, 0.7), (-0.6, -0.35, -0.12, 0.12, 0.35, 0.6))  # test grid
+
+
+def grid(u, cu, v, cv):
+    """Products of 1-D Gaussians (API/mrac.c MRAC_Gap1D) on two normalised inputs."""
+    return [g * h for g in _gap1d(u, cu) for h in _gap1d(v, cv)]
+
+
+def heldout(y, cols, lam=1e-2, blk=5.0):
+    """Constant-weight least squares, two-fold on interleaved blk-second blocks (even blocks fit, odd score, then
+    swapped; halves would make the grid extrapolate to tilts one half never visited); mean cancel of both.
+    Ridge (lam x mean diag) so near-dead Gaussians stay at 0 instead of fitting noise."""
+    X, out = np.column_stack(cols), []
+    ev = (np.arange(len(y)) // int(blk * FS)) % 2 == 0
+    for tr, te in ((ev, ~ev), (~ev, ev)):
+        A, b = X[tr] - X[tr].mean(0), y[tr] - y[tr].mean()
+        G = A.T @ A
+        w = np.linalg.solve(G + lam * np.trace(G) / len(G) * np.eye(len(G)), A.T @ b)
+        B, c = X[te] - X[te].mean(0), y[te] - y[te].mean()
+        out.append(1.0 - np.var(c - B @ w) / max(np.var(c), 1e-15))
+    return np.mean(out)
+
+
+def cross_feature(df, segs):
+    """vp16 sizing: does the OTHER axis's tilt/rate explain -Delta_hat beyond an own-axis grid? Held-out LS."""
+    md = ["## Cross-coupling: does the other axis help? (vp16 48-bump split)", "",
+          "-Delta_hat (as above, LPF 3 Hz) fitted with constant weights on Gaussian grids, scored on held-out data "
+          "(interleaved 5 s blocks: fit even, score odd, and back). Inputs in firmware units: rate / 200 deg/s, tilt / 15 deg. "
+          "own24 = RBF24T (6 rate x 4 tilt, mrac_t_*_c); own48 = 8 rate x 6 tilt; own32 = 8 rate x 4 tilt; "
+          "cross16 = own tilt x OTHER tilt (4 x 4); lin = other tilt + other rate as two plain features. "
+          "Fair split test at 48 bumps: own48 vs own32 + cross16. Swing = same fit on 0.25-0.90 Hz band-passed "
+          "signals. Upper bound for the own grids (they partly rebuild the PID term inside -Delta_hat), so a cross "
+          "gain here is the conservative signal. Grid centres of own48/own32 are a test choice, not firmware.", "",
+          "| seg | axis | own24 in / held-out | own24 + lin | own48 | own32 + cross16 | swing own48 / own32 + cross16 |",
+          "|---|---|---|---|---|---|---|"]
+    other = {"pitch": "roll", "roll": "pitch"}
+    tilt = {"pitch": "imu_data.pit", "roll": "imu_data.rol"}
+    for ax in ("pitch", "roll"):
+        for name, i0, i1 in segs:
+            g = df.loc[i0:i1]
+            y = g[ax + "_negd"].to_numpy()
+            if len(y) < 400 or np.isnan(y).any():
+                continue
+            pr, ph = g[ax + "_x"].to_numpy() / FLIGHT_LIM[0], g[tilt[ax]].to_numpy() * D2R / FLIGHT_LIM[1]
+            qr = g[other[ax] + "_x"].to_numpy() / FLIGHT_LIM[0]
+            qh = g[tilt[other[ax]]].to_numpy() * D2R / FLIGHT_LIM[1]
+            sets = {"own24": grid(pr, GAP_C[0], ph, GAP_C[1]), "lin": [qr, qh],
+                    "own48": grid(pr, CROSS_C[0], ph, CROSS_C[1]), "own32": grid(pr, CROSS_C[0], ph, GAP_C[1]),
+                    "cross16": grid(ph, GAP_C[1], qh, GAP_C[1])}
+            lp = {k: [filt(v, hi=3.0) for v in vs] for k, vs in sets.items()}
+            bp = {k: [filt(v, lo=BAND[0], hi=BAND[1]) for v in vs] for k, vs in sets.items()}
+            yb = filt(y, lo=BAND[0], hi=BAND[1])
+            md.append("| %s | %s | %.2f / %.2f | %.2f | %.2f | %.2f | %.2f / %.2f |" % (
+                name, ax, r2(y - y.mean(), [v - v.mean() for v in lp["own24"]]), heldout(y, lp["own24"]),
+                heldout(y, lp["own24"] + lp["lin"]), heldout(y, lp["own48"]),
+                heldout(y, lp["own32"] + lp["cross16"]),
+                heldout(yb, bp["own48"]), heldout(yb, bp["own32"] + bp["cross16"])))
+    md.append("")
+    return md
+
+
 def capability(df, mseg):
     """Per-feature learning drive gamma_i*E[phi_i^2/(1+|phi|^2)] (mrac.c grad = -s*phi_i/(1+|phi|^2)) and reach."""
     md = ["## Feature capability (all MRAC segments pooled)", "",
@@ -540,7 +601,7 @@ def main():
     md.append("")
     umd, fits = uncertainty(df, segs, inj, a)
     cmd_, caps = capability(df, mseg) if mseg else ([], {})
-    md += umd + force_feature(df, segs) + cmd_
+    md += umd + force_feature(df, segs) + cross_feature(df, segs) + cmd_
     with open(os.path.join(a.out, "adaptive_stats.md"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(md) + "\n")
 
