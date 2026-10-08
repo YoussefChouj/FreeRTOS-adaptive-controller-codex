@@ -25,7 +25,7 @@ against the opened link before it goes into a doc. Numbers stay PROPOSED unless 
 - [ ] B. **Not limited to the current variants**: new variants are allowed where the data says so (for example a
   prediction-error / composite law, or a swing-phase feature row). Each new one gets a vp id, host tests and
   an offline replay score before it goes into the morning pack.
-- [ ] C. **Research: MRAC flown in real systems**, especially multirotors carrying fixed or changing payloads
+- [x] C. (ead6bd0: 7 sources link-checked in docs/design/vp16-research.md; R8 had no URLs, rows dropped; no flown MRAC-vs-PID rope result found) **Research: MRAC flown in real systems**, especially multirotors carrying fixed or changing payloads
   (pick-up, drop, slung, offset). What was built, on what hardware, against which baseline, with what gain.
   VPS workers, every claim checked against its link.
 
