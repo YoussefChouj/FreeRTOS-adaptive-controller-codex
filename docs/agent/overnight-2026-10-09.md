@@ -80,4 +80,4 @@ against the opened link before it goes into a doc. Numbers stay PROPOSED unless 
   flown, SINDy for drones, composite adaptation, saturation hedging, swing damping from IMU only.
 - [ ] 8. **Public datasets** (for example Neural-Fly): download and run the variants and the feature ranking on them.
 - [ ] 9. **Final boss variant**: design doc, firmware, host tests, Q20-Q22 decided from the data above.
-- [ ] 10. **Morning pack**: test plan for tomorrow (flight order, var list, flash command) and a short report.
+- [x] 10. ([morning-2026-10-10.md](morning-2026-10-10.md), 5e979d6) **Morning pack**: test plan for tomorrow (flight order, var list, flash command) and a short report.

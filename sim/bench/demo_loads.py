@@ -50,6 +50,7 @@ F1X_RATE = dict(Uimax=160, SumEmax=16000, EMin=50)
 ROPE = dict(m=0.57, L=0.43, r=(0.015, 0.0, -0.03), k=2000.0, c=5.0, th0=0.1, ph0=0.0)   # m, L measured (rope 33 cm +
 # half bottle 10 cm, swing 0.76 Hz), x offset measured 1-2 cm; attach z, rope k/c and the initial swing PROPOSED
 ROPE_CASES = {'rope570': {}, 'rope570_drop': dict(t_rel=10.0)}   # drop: the rope is cut at 10 s (load removal)
+ARM_CASES = {f'arm293_m{k}': (0.293, k) for k in range(4)}   # the flown 293 g arm load; mount motor not known, so all 4
 
 
 def label(tag, f1x):
@@ -122,6 +123,16 @@ def run_rope(seeds, yaw):
     return res
 
 
+def run_arm(seeds, yaw):
+    """293 g rigid offset at each motor mount, hover, PID alone and with rows 17 / 19 (one batch: no shared sling)."""
+    rowlist, ref, sp = build(ARM_CASES, seeds, yaw, ['hover'])
+    res = {}
+    for lb, wrap in rope_ctrls():
+        t0 = time.time(); res[lb] = run('pid_tuned2', True, rowlist, ref, sp, wrap)
+        print(f'{lb}: {time.time() - t0:.0f} s', flush=True)
+    return res
+
+
 def run_stress(tag, rowlist, ref, sp):
     import stress   # stress imports this module at load time
     return bench.metrics(plant.run(stress.make(tag, len(rowlist)), ref, sp, seed=3000), ref, rowlist)
@@ -174,7 +185,7 @@ def main():
     ap = argparse.ArgumentParser(); ap.add_argument('--seeds', type=int, default=10)
     ap.add_argument('--yaw', choices=['1003', 'logged'], default='1003')
     ap.add_argument('--sweep', action='store_true'); ap.add_argument('--tables'); ap.add_argument('--stress-tags', nargs='+')
-    ap.add_argument('--rope', action='store_true')
+    ap.add_argument('--rope', action='store_true'); ap.add_argument('--arm', action='store_true')
     ap.add_argument('--out', default='results/demo_loads.json'); a = ap.parse_args()
     if a.tables:
         d = json.load(open(a.tables)); res = d['rows']
@@ -186,6 +197,12 @@ def main():
         json.dump({'cases': ROPE_CASES, 'rope': ROPE, 'trajs': ['hover'], 'f1x': [F1X_ANG, F1X_RATE], 'yaw': a.yaw,
                    'base': BASE, 'rows': res}, open(a.out, 'w'), indent=1)
         tables(res, ROPE_CASES, a.seeds, BASE, ['hover'])
+        return
+    if a.arm:
+        res = run_arm(list(range(2000, 2000 + a.seeds)), a.yaw)
+        json.dump({'cases': {k: list(v) for k, v in ARM_CASES.items()}, 'h_pad': H_PAD, 'trajs': ['hover'],
+                   'f1x': [F1X_ANG, F1X_RATE], 'yaw': a.yaw, 'base': BASE, 'rows': res}, open(a.out, 'w'), indent=1)
+        tables(res, ARM_CASES, a.seeds, BASE, ['hover'])
         return
     cases = SWEEP if a.sweep else CASES
     rowlist, ref, sp = build(cases, list(range(2000, 2000 + a.seeds)), a.yaw)
