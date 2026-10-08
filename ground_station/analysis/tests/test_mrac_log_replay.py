@@ -63,3 +63,31 @@ def test_replay_synthetic_hover(tmp_path):
         assert row["would_trips"] == 0      # 5 deg tilt fed in degrees: inside the 3.14 rad envelope (WP-38 A)
     # fed degrees as rad (before WP-38) the grid sat off-centre, mean sum phi 0.38-0.66; in rad it is near 3.07
     assert res["variants"]["V3"]["rbf"]["pitch"]["mean_sum"] > 2.0
+
+
+def test_air_runs_trims_and_drops_short():
+    air = np.zeros(4000, bool)
+    air[100:1500] = True                         # 7 s at 200 Hz: kept, 1 s trimmed each end
+    air[2000:2600] = True                        # 3 s: dropped
+    assert mr.air_runs(air, min_s=5.0, trim_s=1.0, dt=0.005) == [(300, 1300)]
+
+
+def test_cancel_metrics_ideal_and_inverted():
+    n = 6000
+    t = np.arange(n) * 0.005
+    need = np.sin(2 * np.pi * 0.5 * t) + 0.3 * np.random.default_rng(0).standard_normal(n)
+    runs, nd = [(0, n)], [need[0:n:2]]           # the needed signal lives on the 100 Hz grid, as in needed()
+    ideal = mr.cancel_metrics(need, runs, nd)
+    assert ideal["cancel"] == pytest.approx(1.0) and ideal["rms_ratio"] == pytest.approx(1.0)
+    assert abs(ideal["band_phase"]) < 1.0
+    wrong = mr.cancel_metrics(-need, runs, nd)    # u_ad adds the disturbance: var(2n)/var(n) = 4
+    assert wrong["cancel"] == pytest.approx(-3.0) and abs(wrong["band_phase"]) > 179.0
+
+
+def test_variants_3l_knobs():
+    v = mr.variants_3l()
+    assert {"OFF", "vp6", "vp6+D", "vp6+L2 g8", "vp6+L2 g8+D"} <= set(v)
+    l2, d = set(v["vp6+L2 g8"]["args"]), v["vp6+D"]["args"]
+    assert {"0:20:8.0", "1:20:8.0", "0:21:49.0", "1:23:20.0"} <= l2 and not any(a.startswith("2:20:") for a in l2)
+    assert {"0:24:4.0", "1:25:0.5"} <= set(d) and not any(a.split(":")[1] == "20" for a in d)
+    assert set(v["vp6"]["args"]) <= l2

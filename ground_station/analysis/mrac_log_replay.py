@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
+from ground_station.analysis import adaptive_review as ar
 from ground_station.analysis import log_corpus as lc
 from ground_station.analysis.mrac_variants import AXES as VAR_AXES
 from ground_station.analysis.mrac_variants import GAMMA_SCALE_FIELD, VARIANT_FIELDS
@@ -37,6 +38,8 @@ GROWTH_MAX_S = 5.0                          # V3 pass rule "no Theta-norm growth
 WARMUP_S = 10.0                             # PROPOSED: gated time before growth counts (Theta starts at 0)
 REQUIRED = [f"Ctrler.{RATE[a]}.{f}" for a in ("pitch", "roll", "yaw") for f in ("Des", "FB", "U")]
 
+FB_COL = {"pitch": 3, "roll": 6}           # driver_inputs layout: armed, phase, (Des, FB, U) x pitch roll yaw ...
+DEG2RAD = 0.0174533                         # MRAC_DEG2RAD, API/mrac.c: rate FB enters the law in rad/s
 REPO = Path(__file__).resolve().parents[2]
 DRIVER = Path(__file__).with_name("mrac_log_replay_host.c")
 
@@ -80,6 +83,27 @@ def variants() -> dict[str, dict]:
         "3L*": dict(args=knob_args(l3), rbf=False),
         "V3": dict(args=knob_args(v3), rbf=True),
     }
+
+
+def variants_3l() -> dict[str, dict]:
+    """3L-v2 (overnight 2026-10-09) against its base vp6 = V1 refmodel (gamma x0.25) + layer 1 lam_ang 4 on pitch/roll.
+    L2 = composite prediction-error law, D = self-tuning gain. b_axis 49 rad/s^2 per u = median fit_b on the
+    2026-10-08 logs (pitch 46-51, roll 46-60); pe_delay 7 ticks = 35 ms, the buffer max (fit 40-50 ms).
+    gamma_c, wc_pe, p_max, p_forget are PROPOSED: this replay is what ranks them."""
+    base = {**preset("mrac_v1", "v1_refmodel"), **{f"{m}.lam_ang": 4.0 for m in ("mrac_config_pitch", "mrac_config_roll")}}
+    pr = lambda **kw: {f"{m}.{k}": v for m in ("mrac_config_pitch", "mrac_config_roll") for k, v in kw.items()}
+    l2 = lambda g, wc=20.0: pr(gamma_c=g, b_axis=49.0, pe_delay=7, wc_pe=wc)
+    d = pr(p_max=4.0, p_forget=0.5)
+    out = {"OFF": dict(args=[], rbf=False), "vp6": dict(args=knob_args(base), rbf=False),
+           "vp6+D": dict(args=knob_args({**base, **d}), rbf=False)}
+    for g in (2.0, 8.0, 20.0):
+        out[f"vp6+L2 g{g:g}"] = dict(args=knob_args({**base, **l2(g)}), rbf=False)
+    out["vp6+L2 g8 wc8"] = dict(args=knob_args({**base, **l2(8.0, 8.0)}), rbf=False)
+    out["vp6+L2 g8+D"] = dict(args=knob_args({**base, **l2(8.0), **d}), rbf=False)
+    return out
+
+
+VARIANT_SETS = {"wp27": variants, "3l": variants_3l}
 
 
 # ----------------------------------------------------------------------------- host build
@@ -202,7 +226,35 @@ def rbf_spread(out: np.ndarray, mask: np.ndarray, ax: int) -> dict:
                 mean_sum=float(phi.sum(axis=1).mean()))
 
 
-def replay_log(series: lc.Series, work: Path, which: dict | None = None) -> dict:
+def air_runs(air: np.ndarray, min_s: float = 5.0, trim_s: float = 1.0, dt: float = DT) -> list[tuple[int, int]]:
+    """Airborne runs of at least min_s, trim_s cut at both ends (take-off and landing transients)."""
+    e = np.flatnonzero(np.diff(np.r_[False, air, False].astype(int)))
+    k = int(round(trim_s / dt))
+    return [(a + k, b - k) for a, b in zip(e[::2], e[1::2]) if (b - a) * dt >= min_s]
+
+
+def needed(ins: np.ndarray, u_applied: np.ndarray, runs: list, ax: str):
+    """-Delta_hat per run on the 100 Hz grid, as adaptive_review.uncertainty: fit b and tau on 2-8 Hz, then
+    negd = LPF3(u(t - tau)) - LPF3(xdot)/b. The ideal u_ad equals it."""
+    x = ins[:, FB_COL[ax]] * DEG2RAD
+    pairs = [(np.gradient(x[a:b:2]) * ar.FS, u_applied[a:b:2]) for a, b in runs]
+    b, k, r = ar.fit_b(pairs)
+    return (float(b), int(k), float(r)), [ar.filt(ar.delay(u, k), hi=3.0) - ar.filt(xd, hi=3.0) / b for xd, u in pairs]
+
+
+def cancel_metrics(u_ad: np.ndarray, runs: list, nd: list) -> dict:
+    """cancel = 1 - var(u_ad - negd) / var(negd) over all runs (per-run means removed: the dynamic part);
+    1 = cancels all, 0 = no help, < 0 adds disturbance. Band phase of u_ad against negd in ar.BAND (ideal 0)."""
+    v = np.concatenate([u_ad[a:b:2] - u_ad[a:b:2].mean() for a, b in runs])
+    n = np.concatenate([x - x.mean() for x in nd])
+    if not np.isfinite(v).all() or np.var(n) < 1e-15:
+        return {}
+    ph, gain, coh = ar.band_tf(n, v)
+    return dict(cancel=float(1.0 - np.var(v - n) / np.var(n)), band_phase=float(ph), band_gain=float(gain),
+                band_coh=float(coh), rms_ratio=float(np.std(v) / np.std(n)))
+
+
+def replay_log(series: lc.Series, work: Path, which: dict | None = None, shadow: bool = False) -> dict:
     t, ins, info = driver_inputs(series)
     air = info["airborne"]
     inj = info["inj"][air]
@@ -212,15 +264,25 @@ def replay_log(series: lc.Series, work: Path, which: dict | None = None) -> dict
     if not air.any():
         return res
     inj_flown = int((res["inj_flown"] or 0) > 0.5)
+    runs, nd = air_runs(air), {}
+    res["cancel_runs_s"] = float(sum(b - a for a, b in runs) * DT)
     for name, v in (which or variants()).items():
         x = ins.copy()
-        # OFF replays the flown injection flag, so its u_ad can be checked against the logged one
-        out = run_driver(build(work, v["rbf"]), x, v["args"], work, inj_flown if name == "OFF" else 1)
+        # OFF replays the flown injection flag, so its u_ad can be checked against the logged one. --shadow: every
+        # variant computes u_ad without injecting it, exact on PID logs (the replayed u_ad never reached the drone)
+        out = run_driver(build(work, v["rbf"]), x, v["args"], work, inj_flown if name == "OFF" or shadow else 1)
+        if name == "OFF" and runs:
+            for i, a in enumerate(("pitch", "roll")):     # applied u = u_nom + the flown u_ad when it was injected
+                lu = np.nan_to_num(info["logged_u_ad"][a]) * inj_flown
+                res.setdefault("fit", {})[a], nd[a] = needed(ins, out[:, 4 + i] + lu, runs, a)
         row = {a: axis_metrics(out, ins[:, 16 + i], air, i) for i, a in enumerate(AXES) if a != "z" or info["has_z"]}
         row["would_trips"] = int(out[-1, 18])
         row["trip_reasons"] = sorted({int(r) for r in out[air, 17] if r})
         if v["rbf"]:
             row["rbf"] = {a: rbf_spread(out, air, i) for i, a in enumerate(("pitch", "roll"))}
+        for i, a in enumerate(("pitch", "roll")):
+            if a in nd and a in row:
+                row[a].update(cancel_metrics(out[:, i], runs, nd[a]))
         if name == "OFF":
             for i, a in enumerate(AXES):
                 lu = info["logged_u_ad"][a]
@@ -271,6 +333,22 @@ def summarize(results: dict) -> str:
     return "\n".join(lines)
 
 
+def cancel_table(results: dict) -> str:
+    """Pitch/roll swing cancellation per variant: median and range of cancel over logs, median band phase."""
+    lines = ["| variant | axis | logs | cancel med (min..max) | band phase med deg | rms u_ad / rms needed |",
+             "|---|---|---|---|---|---|"]
+    names = list(next((r["variants"] for r in results.values() if r.get("variants")), {}))
+    for name in names:
+        for a in ("pitch", "roll"):
+            ms = [r["variants"][name][a] for r in results.values() if "cancel" in r["variants"].get(name, {}).get(a, {})]
+            if ms:
+                c = [m["cancel"] for m in ms]
+                lines.append(f"| {name} | {a} | {len(ms)} | {np.median(c):+.2f} ({min(c):+.2f}..{max(c):+.2f}) | "
+                             f"{np.median([m['band_phase'] for m in ms]):+.0f} | "
+                             f"{np.median([m['rms_ratio'] for m in ms]):.2f} |")
+    return "\n".join(lines)
+
+
 def fill_pid_u(series: lc.Series) -> None:
     """stream_log presets log mrac_state.<ax>.u_nom, not Ctrler.<rate>PID.U: rebuild U exactly (mrac.c:1329-1332)."""
     for a, st in (("pitch", "pitch"), ("roll", "roll"), ("yaw", "yaw"), ("z", "z_rate")):
@@ -286,22 +364,26 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--json", help="write the full results here")
     ap.add_argument("--only", nargs="*", help="log names to replay (default: every log with the MRAC inputs)")
     ap.add_argument("--per-log", action="store_true", help="print one row per log instead of the summary")
+    ap.add_argument("--set", choices=sorted(VARIANT_SETS), default="wp27", help="variant set (3l = 3L-v2 vs vp6)")
+    ap.add_argument("--shadow", action="store_true",
+                    help="no variant injects (exact on PID logs: the composite law sees the u that was flown)")
     args = ap.parse_args(argv)
     results = {}
     with tempfile.TemporaryDirectory() as d:
         work = Path(d)
         for ref in lc.find_logs(args.root):
-            if args.only and ref.name not in args.only:
+            if args.only and not {ref.name, ref.name.rsplit("/", 1)[-1]} & set(args.only):
                 continue
             s = lc.load(ref)
             fill_pid_u(s)
             if not all(k in s for k in REQUIRED + ["flight_phase"]):
                 continue
-            r = replay_log(s, work)
+            r = replay_log(s, work, VARIANT_SETS[args.set](), args.shadow)
             if r["variants"]:
                 results[ref.name] = r
                 print(f"{ref.name}: airborne {r['airborne_s']:.1f} s, log {r['fs_log']:.0f} Hz", flush=True)
     print(to_markdown(results) if args.per_log else summarize(results))
+    print(cancel_table(results))
     if args.json:
         Path(args.json).write_text(json.dumps(results, indent=1, default=float), encoding="utf-8")
     return 0

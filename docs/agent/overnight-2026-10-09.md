@@ -17,6 +17,34 @@ against the opened link before it goes into a doc. Numbers stay PROPOSED unless 
 | "TIPAC" | not found in the repo: I read it as the whole test pipeline (presets, vp switch, logging, dashboard) |
 | "reset trajectory" | the trajectory presets (traj_id / traj_go) |
 
+## Added 2026-10-09 (your mid-run message), now on top
+
+- [ ] A. **3-layer controller flight-ready tomorrow**: built in the firmware (vp id, host tests pass), a logging
+  preset that records its signals, an analysis script for its flight, and the flash + fly commands in the
+  morning pack. This outranks items 4-9.
+- [ ] B. **Not limited to the current variants**: new variants are allowed where the data says so (for example a
+  prediction-error / composite law, or a swing-phase feature row). Each new one gets a vp id, host tests and
+  an offline replay score before it goes into the morning pack.
+- [ ] C. **Research: MRAC flown in real systems**, especially multirotors carrying fixed or changing payloads
+  (pick-up, drop, slung, offset). What was built, on what hardware, against which baseline, with what gain.
+  VPS workers, every claim checked against its link.
+
+- [ ] D. **Tune gains, weight limits and parameters** of the 3-layer stack and the final variant from the replay
+  and the simulations (not by guess), and **add a real-time gain-finding mechanism**: adaptation gains that
+  tune themselves in flight (I read this as a time-varying, self-scaling adaptation gain such as a
+  least-squares / covariance gain with bounds, so you do not hand-pick gamma; the PID gains stay fixed). Tested
+  offline on today's logs and in the sim before it goes into the firmware.
+
+- [ ] E. **Physics-structured cross-coupling features** (your 2nd mid-run message): build the regressor from the
+  rigid-body laws (Newton-Euler momentum balance) instead of generic bumps. Candidates, each with its physical
+  cause: gyroscopic rate products p*q, q*r, p*r (omega x J omega); offset-CG torque r x m(f - g) = accelerometer
+  specific force f_x, f_y, f_z and gravity-in-body sin(theta), cos(theta)sin(phi); thrust x CG offset
+  (collective u_z times a constant); slung-load cable torque (swing angle and rate, pendulum momentum exchange).
+  Test: rank them with feature_id (SINDy with a physics library) on the rope and arm Delta_hat, then replay the
+  winners as a new feature row (vp id) against vp13. Literature check (physics-informed / Lagrangian regressors
+  in adaptive control) by a VPS worker.
+- [x] A1. 3L-v2 law in firmware: L2 composite + D self-tuning gain, off by default, host tests 28/28 (f00412a).
+
 ## Checklist, priority order
 
 - [x] 1. **Circle preset stays in place.** DONE: x/y fence removed from Traj_Check (floor, ceiling, speed and range checks kept); scratch harness: circle and figure-8 from x=-64, y=116 cm now accepted, floor/ceiling/speed still refused. Needs a flash. Likely cause: the preset soft-fence check refuses (0xEF). The circle reaches
@@ -24,7 +52,7 @@ against the opened link before it goes into a doc. Numbers stay PROPOSED unless 
   check as you asked; keep the speed, range and floor checks. Add host tests.
 - [ ] 2. **Bug hunt on the test pipeline.** Look for bugs that could block tomorrow: presets, vp switching,
   inject mask, logging var lists, dashboard, flash tool. Fix them or list them.
-- [ ] 3. **Replay all of today's 22 logs** through adaptive_review. Build one meta table: load x variant x PID.
+- [x] 3. **Replay all of today's logs** through adaptive_review. DONE (20 logs, commit 653288e): [meta.md](../flights/plots/2026-10-08-meta/meta.md). Measured: no variant cancels the swing (pitch/roll cancel -0.15..+0.15, phase -80..-157 deg) while a perfect estimator behind a 16 rad/s filter would cancel 84-91%. The gap is the lag of tracking-error learning, not the features. Static trim is the drone's own CG plus load (pitch -0.09..-0.11 u_max on every load, roll flips sign rope +0.05 vs arm -0.06).
 - [ ] 4. **Feature identification**: SINDy plus the other methods on the disturbance estimate of each axis. Which
   features (rate, tilt, accel, delayed states, swing phase) explain it, for the rope and the arm load?
 - [ ] 5. **Offline replay of the adaptive laws** (vp13, vp16 candidates, accel features, higher omega_u, composite).
