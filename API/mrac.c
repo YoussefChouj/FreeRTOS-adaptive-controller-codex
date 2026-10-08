@@ -85,6 +85,7 @@ int8_t mrac_ref_type_eff[AXES];
 #define MRAC_ST_BAR_SMOOTH 0.02f
 
 static void MRAC_VariantSnap(MRAC_AxisState_t *st);
+static void MRAC_L2Snap(MRAC_AxisState_t *st);
 #if MRAC_VARIANT == MRAC_VARIANT_MULTI
 static void MRAC_Vp12Step(uint8_t hold, uint8_t arm_edge);
 #endif
@@ -937,6 +938,9 @@ static void MRAC_AdaptWeights(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, cons
 
     if (mrac_flags.adaptation_on && do_adaptation && mrac_inj.learn_gate) {
         float theta_scale = mrac_flags.output_injection_on ? mrac_inj.inj_alpha : 1.0f;
+#if MRAC_ENABLE_3L == 1
+        if (config->p_max > 0.0f) theta_scale *= state->p_gain;    // 3L-v2 D self-tuning gain
+#endif
         sigma_e = 0.0f;
         if (mrac_flags.e_modification_on) {
             sigma_e = config->k_e * fabsf(state->e);
@@ -1089,6 +1093,66 @@ static void MRAC_AdaptiveOutput(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, co
     }
 }
 
+#if MRAC_ENABLE_3L == 1
+#define MRAC_P_MIN 0.05f
+// 3L-v2 L2 + D (see MRAC_AxisConfig_t). Runs after MRAC_AdaptWeights, before MRAC_AdaptiveOutput, so state->u_ad
+// is still last tick's output: u applied = u_nom + injected u_ad (the 1-tick skew is inside pe_delay).
+// m2 = |Phi|^2/(1+|Phi|^2) of this tick. No-op while gamma_c, b_axis and p_max are 0.
+static void MRAC_CompositeStep(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const MRAC_AxisConfig_t* config,
+                               int n, float m2, int do_adaptation)
+{
+    int learn = mrac_flags.adaptation_on && do_adaptation && mrac_inj.learn_gate;
+    float a, u_app, nd, yhat, pf_sq, g, ph;
+    int i, k;
+
+    if (config->p_max > 0.0f) {
+        if (learn) state->p_gain += MRAC_DT * (config->p_forget * state->p_gain - state->p_gain * state->p_gain * m2);
+        if (!(state->p_gain >= MRAC_P_MIN)) state->p_gain = MRAC_P_MIN;   // also catches NaN
+        if (state->p_gain > config->p_max) state->p_gain = config->p_max;
+    } else {
+        state->p_gain = 1.0f;
+    }
+    if (!(config->gamma_c > 0.0f) || !(config->b_axis > 0.0f)) return;
+
+    u_app = state->u_nom + (mrac_flags.output_injection_on ? mrac_simplex.fade * mrac_inj.inj_alpha : 0.0f) * state->u_ad;
+    k = (int)config->pe_delay;
+    if (k < 0) k = 0;
+    if (k > MRAC_REF_BUF - 1) k = MRAC_REF_BUF - 1;
+    state->u_buf[state->u_idx] = u_app;
+    a = MRAC_DT * config->wc_pe;
+    if (!(a > 0.0f)) a = 0.0f;
+    if (a > 1.0f) a = 1.0f;
+    state->u_f += a * (state->u_buf[(state->u_idx + MRAC_REF_BUF - k) % MRAC_REF_BUF] - state->u_f);
+    state->u_idx = (uint8_t)((state->u_idx + 1U) % MRAC_REF_BUF);
+    state->xd_f += a * (state->xdot_f - state->xd_f);
+    nd = state->u_f - state->xd_f / config->b_axis;       // -Delta, filtered: what u_ad = +Theta'Phi must equal
+
+    yhat = 0.0f;
+    pf_sq = 0.0f;
+    for (i = 0; i < n; i++) {
+        ph = state->Phi[i] * mrac_g_phi[axis_id][mrac_feature_desc[i].group];
+        state->Phi_f[i] += a * (ph - state->Phi_f[i]);
+        yhat += state->Theta[i] * state->Phi_f[i];
+        pf_sq += state->Phi_f[i] * state->Phi_f[i];
+    }
+    state->pe = nd - yhat;
+    if (!(state->pe - state->pe == 0.0f)) {                  // non-finite: restart the filters, skip the step
+        MRAC_L2Snap(state);
+        return;
+    }
+    if (!learn || mrac_simplex.tripped || mrac_simplex.variant == 1 || state->nan_hold != 0U) return;
+    g = MRAC_DT * config->gamma_c * state->p_gain * state->pe / (1.0f + pf_sq);
+    for (i = 0; i < n; i++) {
+        state->Theta[i] += g * state->Phi_f[i];
+        if (state->Theta[i] > config->What_limit[i]) {
+            state->Theta[i] = config->What_limit[i];
+        } else if (state->Theta[i] < config->What_lower_limit[i]) {
+            state->Theta[i] = config->What_lower_limit[i];
+        }
+    }
+}
+#endif
+
 // ------------------------------------------------------------------------------
 // Runs the core MRAC algorithm for a single axis (steps listed above).
 static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const MRAC_AxisConfig_t* config, float cross_coupling, float r)
@@ -1154,9 +1218,15 @@ static void MRAC_UpdateAxis(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, const 
     }
 
     s = MRAC_DriveSignal(state, config, ref_type, P, &vid);
+#if MRAC_ENABLE_3L == 1
+    if (config->gamma_c > 0.0f || config->p_max > 0.0f) vid |= MRAC_VID_3LV2;
+#endif
     mrac_var_id[axis_id] = vid;
 
     MRAC_AdaptWeights(axis_id, state, config, n, s, denom, do_adaptation);
+#if MRAC_ENABLE_3L == 1
+    MRAC_CompositeStep(axis_id, state, config, n, Phi_sq / denom, do_adaptation);
+#endif
 
     MRAC_AdaptiveOutput(axis_id, state, config, n, vid);
 
@@ -1532,6 +1602,19 @@ static void MRAC_VariantSnap(MRAC_AxisState_t *st)
     int k;
     for (k = 0; k < MRAC_REF_BUF; k++) st->r_buf[k] = st->x;
     st->e_int = 0.0f;
+    MRAC_L2Snap(st);
+    st->p_gain = 1.0f;
+}
+
+// 3L-v2 L2 filters restart bumpless: u ring and u_f at u_nom, xdot and Phi filters at 0.
+static void MRAC_L2Snap(MRAC_AxisState_t *st)
+{
+    int k;
+    for (k = 0; k < MRAC_REF_BUF; k++) st->u_buf[k] = st->u_nom;
+    for (k = 0; k < MAX_NUM_BASIS; k++) st->Phi_f[k] = 0.0f;
+    st->u_f = st->u_nom;
+    st->xd_f = 0.0f;
+    st->pe = 0.0f;
 }
 
 /* CMD 0x1D field table: one row per MRAC_VariantField_e, in enum order. Writes outside [lo, hi] or
@@ -1562,7 +1645,13 @@ static const struct { float lo; float hi; uint8_t snap; } mrac_var_field[MRAC_VF
     MRAC_VAR_FIELD( 0.0f,  10.0f,  0),   /* lf_gain         - */
     MRAC_VAR_FIELD( 0.0f,  5.0f,   0),   /* sigma_lf        1/s */
     MRAC_VAR_FIELD( 0.5f,  100.0f, 0),   /* gam_f           rad/s */
-    MRAC_VAR_FIELD( 0.0f,  MRAC_BASIS_HI_X, 0)  /* basis    MRAC_BASIS_* id (6 = vp 12 S10X, 7/8 = vp 13/14, 9 = vp 15) */
+    MRAC_VAR_FIELD( 0.0f,  MRAC_BASIS_HI_X, 0), /* basis    MRAC_BASIS_* id (6 = vp 12 S10X, 7/8 = vp 13/14, 9 = vp 15) */
+    MRAC_VAR_FIELD( 0.0f,  20.0f,  0),   /* gamma_c         1/s (3L-v2 L2) */
+    MRAC_VAR_FIELD( 0.0f,  2000.0f, 0),  /* b_axis          rad/s^2 per u (fit_b) */
+    MRAC_VAR_FIELD( 0.0f,  7.0f,   0),   /* pe_delay        ticks, < MRAC_REF_BUF */
+    MRAC_VAR_FIELD( 1.0f,  100.0f, 0),   /* wc_pe           rad/s */
+    MRAC_VAR_FIELD( 0.0f,  20.0f,  0),   /* p_max           - (3L-v2 D) */
+    MRAC_VAR_FIELD( 0.0f,  5.0f,   0)    /* p_forget        1/s */
 };
 
 #if MRAC_VARIANT == MRAC_VARIANT_MULTI
@@ -1670,6 +1759,14 @@ uint8_t MRAC_VariantParamSet(uint8_t axis, uint8_t field, float val)
             MRAC_Vp12Lims(axis, c);
 #endif
             break;
+#if MRAC_ENABLE_3L == 1
+        case MRAC_VF_GAMMA_C:  c->gamma_c = val;  MRAC_L2Snap(st[axis]); break;
+        case MRAC_VF_B_AXIS:   c->b_axis = val;   MRAC_L2Snap(st[axis]); break;
+        case MRAC_VF_PE_DELAY: c->pe_delay = (float)(int)(val + 0.5f); MRAC_L2Snap(st[axis]); break;
+        case MRAC_VF_WC_PE:    c->wc_pe = val;    MRAC_L2Snap(st[axis]); break;
+        case MRAC_VF_P_MAX:    c->p_max = val;    st[axis]->p_gain = 1.0f; break;
+        case MRAC_VF_P_FORGET: c->p_forget = val; break;
+#endif
         default: return 0U;
     }
     if (mrac_var_field[field].snap) {

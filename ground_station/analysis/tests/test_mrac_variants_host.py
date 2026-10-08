@@ -100,6 +100,10 @@ CASES = {
     "st_barrier": (0, V1_PR + sets((0, 1), st_eps=0.3, st_phi_max=10, st_bar=0.2),
                    0x01 | 0x02 | 0x04 | 0x100 | 0x200),
     "lfhg": (0, V1_PR + sets((0, 1), lf_gain=10, sigma_lf=5, gam_f=100), 0x01 | 0x02 | 0x04 | 0x400),
+    # 3L-v2 (overnight 2026-10-09): layer 1 + L2 composite prediction-error law + D self-tuning gain; D alone.
+    "3l_v2": (0, V1_PR + sets((0, 1), lam_ang=4, gamma_c=2, b_axis=300, pe_delay=2, wc_pe=20, p_max=4, p_forget=0.5),
+              0x01 | 0x02 | 0x04 | 0x40 | 0x800),
+    "3l_v2_d_only": (0, V1_PR + sets((0, 1), p_max=4, p_forget=0.5), 0x01 | 0x02 | 0x04 | 0x800),
 }
 
 
@@ -140,8 +144,10 @@ def test_variant_set_rejects_out_of_range(build):
 
 
 def test_python_field_table_matches_firmware():
-    rows = re.findall(r"MRAC_VAR_FIELD\(\s*([-\d.]+)f,\s*([-\d.]+)f,\s*\d\s*\),?\s*/\*\s*(\w+)",
+    rows = re.findall(r"MRAC_VAR_FIELD\(\s*([-\d.]+)f,\s*([-\d.]+f|\w+),\s*\d\s*\),?\s*/\*\s*(\w+)",
                       (API / "mrac.c").read_text(encoding="utf-8", errors="replace"))
-    assert [(n, float(lo), float(hi)) for lo, hi, n in rows] == [(n, float(lo), float(hi)) for n, lo, hi in VARIANT_FIELDS]
+    num = lambda hi, py: float(hi[:-1]) if hi.endswith("f") and hi[0] not in "M" else py   # macro hi: Python value
+    assert [(n, float(lo), num(hi, py[2])) for (lo, hi, n), py in zip(rows, VARIANT_FIELDS)] ==         [(n, float(lo), float(hi)) for n, lo, hi in VARIANT_FIELDS]
+    assert len(rows) == len(VARIANT_FIELDS)
     enum = re.findall(r"MRAC_VF_(\w+)", (API / "mrac.h").read_text(encoding="utf-8", errors="replace"))
     assert [e.lower() for e in enum if e != "COUNT"][:len(VARIANT_FIELDS)] == [n for n, _, _ in VARIANT_FIELDS]

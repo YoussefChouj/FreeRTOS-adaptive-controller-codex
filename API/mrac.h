@@ -243,6 +243,16 @@ typedef struct {
     // WP-38 input guard (MRAC_Control): finite ticks after a non-finite input before u_ad reaches the mixer again
     float nan_rearm;            // [ticks] MRAC_Init only, no command writes it
     float basis;                // FW-B MRAC_BASIS_* id (MULTI build, pitch/roll); 0 = S6
+    // 3L-v2 (overnight 2026-10-09, PROPOSED): L2 composite prediction-error learning and D self-tuning gain.
+    // L2 adds Theta += DT*gamma_c*P*phi_f*(negd_f - Theta'phi_f)/(1+|phi_f|^2), phi_f = LPF(Phi*g_phi),
+    // negd_f = LPF(u applied, k ticks back) - LPF(xdot)/b_axis (the -Delta that u_ad = +Theta'Phi must cancel).
+    // D scales both learning terms by P: Pdot = p_forget*P - P^2*m^2, m^2 = |Phi|^2/(1+|Phi|^2), P in [0.05, p_max].
+    float gamma_c;              // L2 [1/s]   composite gain; 0 = OFF
+    float b_axis;               // L2 [rad/s^2 per u] plant gain b of xdot = b (u + Delta); <= 0 = OFF
+    float pe_delay;             // L2 [ticks] u -> xdot delay k, 0..MRAC_REF_BUF-1
+    float wc_pe;                // L2 [rad/s] LPF on u, xdot and Phi before the prediction error
+    float p_max;                // D  [-]     upper bound of the self-tuning gain P; 0 = D OFF (P = 1)
+    float p_forget;             // D  [1/s]   forgetting rate of P (pulls P back up while excitation is low)
 
 } MRAC_AxisConfig_t;
 
@@ -268,6 +278,12 @@ typedef enum {
     MRAC_VF_SIGMA_LF,           // writes the existing sigma_lf row
     MRAC_VF_GAM_F,              // writes the existing gam_f row (Whatf bandwidth, also PR's filter)
     MRAC_VF_BASIS,              // FW-B feature set id, MRAC_BASIS_*; > 0 only in the MULTI build
+    MRAC_VF_GAMMA_C,            // 3L-v2 L2 from here (MRAC_ENABLE_3L builds; ignored otherwise)
+    MRAC_VF_B_AXIS,
+    MRAC_VF_PE_DELAY,
+    MRAC_VF_WC_PE,
+    MRAC_VF_P_MAX,              // 3L-v2 D
+    MRAC_VF_P_FORGET,
     MRAC_VF_COUNT
 } MRAC_VariantField_e;
 
@@ -313,11 +329,19 @@ typedef struct {
     float e_int;                // 3L leaky integral of e (angle error vs model), |e_int| <= e_sat
     uint8_t r_idx;              // V1 next write slot in r_buf
     uint16_t nan_hold;          // WP-38 input guard: finite ticks left before u_ad is let out again (0 = engaged)
+    // 3L-v2 L2/D (zero after MRAC_Reset except p_gain = 1)
+    float Phi_f[MAX_NUM_BASIS]; // L2 LPF of Phi*g_phi
+    float u_buf[MRAC_REF_BUF];  // L2 applied-u delay ring
+    float u_f;                  // L2 LPF of the delayed applied u
+    float xd_f;                 // L2 LPF of xdot_f
+    float pe;                   // L2 prediction error negd_f - Theta'phi_f (telemetry)
+    float p_gain;               // D  self-tuning gain P
+    uint8_t u_idx;              // L2 next write slot in u_buf
 } MRAC_AxisState_t;
 
 // Variant id per axis, rewritten every MRAC_UpdateAxis call (0 = today's law). Bits:
 // 0 V1 ref_type set, 1 V1 drive_norm, 2 V1 delay, 3 PR kappa, 4 PR crm, 5 V2 mu_sat, 6 3L lam_ang, 7 V3 rbf_on,
-// 8 ST st_eps, 9 ST st_bar, 10 LFHG lf_gain (WP-33 widened the id to 16 bits).
+// 8 ST st_eps, 9 ST st_bar, 10 LFHG lf_gain (WP-33 widened the id to 16 bits), 11 3L-v2 gamma_c / p_max.
 #define MRAC_VID_REF_TYPE   0x01U
 #define MRAC_VID_DRIVE_NORM 0x02U
 #define MRAC_VID_DELAY      0x04U
@@ -329,6 +353,7 @@ typedef struct {
 #define MRAC_VID_ST         0x100U
 #define MRAC_VID_ST_BAR     0x200U
 #define MRAC_VID_LFHG       0x400U
+#define MRAC_VID_3LV2       0x800U      // 3L-v2 L2 composite (gamma_c) or D self-tuning gain (p_max)
 extern uint16_t mrac_var_id[AXES];
 extern int8_t mrac_ref_type_eff[AXES];   // reference-model type each axis actually ran last tick
 

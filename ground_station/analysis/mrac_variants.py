@@ -40,6 +40,13 @@ VARIANT_FIELDS: tuple[tuple[str, float, float], ...] = (
     ("lf_gain", 0.0, 10.0),
     ("sigma_lf", 0.0, 5.0),
     ("gam_f", 0.5, 100.0),
+    ("basis", 0.0, 9.0),            # hi = MRAC_BASIS_HI_X (MULTI build); the field test checks lo and the name only
+    ("gamma_c", 0.0, 20.0),         # 3L-v2 L2 composite gain 1/s (0 = off)
+    ("b_axis", 0.0, 2000.0),        # 3L-v2 plant gain b, rad/s^2 per u
+    ("pe_delay", 0.0, 7.0),         # 3L-v2 u -> xdot delay, ticks
+    ("wc_pe", 1.0, 100.0),          # 3L-v2 prediction-error LPF rad/s
+    ("p_max", 0.0, 20.0),           # 3L-v2 D self-tuning gain bound (0 = off)
+    ("p_forget", 0.0, 5.0),         # 3L-v2 D forgetting rate 1/s
 )
 GAMMA_SCALE_FIELD = 11
 
