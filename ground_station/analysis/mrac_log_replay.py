@@ -100,6 +100,10 @@ def variants_3l() -> dict[str, dict]:
         out[f"vp6+L2 g{g:g}"] = dict(args=knob_args({**base, **l2(g)}), rbf=False)
     out["vp6+L2 g8 wc8"] = dict(args=knob_args({**base, **l2(8.0, 8.0)}), rbf=False)
     out["vp6+L2 g8+D"] = dict(args=knob_args({**base, **l2(8.0), **d}), rbf=False)
+    te_off = {f"mrac_g_gamma[{i}][*]": 0.0 for i in (0, 1)}   # tracking-error learning off on pitch/roll
+    for g in (8.0, 20.0):
+        out[f"L2only g{g:g}"] = dict(args=knob_args({**base, **te_off, **l2(g)}), rbf=False)
+    out["vp6+L2 g20 d4"] = dict(args=knob_args({**base, **l2(20.0), **pr(pe_delay=4)}), rbf=False)  # delay mismatch
     return out
 
 

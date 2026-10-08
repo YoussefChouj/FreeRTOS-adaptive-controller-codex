@@ -1205,9 +1205,16 @@ static void Keil_PresetPoll(FlightState_t state)
  * p/r only and was stable at gamma 0.25-0.5, every variant tipped at gamma 1 (PROPOSED for flight). */
 typedef struct {
 	int8_t ref_pr, ref_y; uint8_t dn; float lam_edot, bw_y, mu_sat, kappa, crm_ell, st_eps, lam_ang, g; uint8_t basis; float ext_g;
+	/* 3L-v2 p/r (f00412a): te_off 1 = tracking-error learning off on p/r (gamma 0, yaw keeps g); L2 composite
+	 * gamma_c, b_axis, pe_delay, wc_pe; D self-tuning gain p_max, p_forget. VP_ROW leaves them 0 = off. */
+	uint8_t te_off; float gamma_c, b_axis, pe_delay, wc_pe, p_max, p_forget;
 } VariantPreset_t;
 #define VP_ROW(ref_pr, ref_y, dn, lam_edot, bw_y, mu_sat, kappa, crm, st_eps, lam_ang, g, basis, ext_g) \
-	{ (ref_pr), (ref_y), (dn), (lam_edot), (bw_y), (mu_sat), (kappa), (crm), (st_eps), (lam_ang), (g), (basis), (ext_g) }
+	{ (ref_pr), (ref_y), (dn), (lam_edot), (bw_y), (mu_sat), (kappa), (crm), (st_eps), (lam_ang), (g), (basis), (ext_g), \
+	  0U, 0.0f, 0.0f, 0.0f, 20.0f, 0.0f, 0.0f }   /* wc_pe 20: the setter refuses 0 (range 1-100) */
+#define VP_ROW3(lam_ang, g, te_off, gamma_c, b_axis, pe_delay, wc_pe, p_max, p_forget) \
+	{ 2, 1, 1U, 0.0018f, 2.0f, 0.0f, 0.0f, 0.0f, 0.0f, (lam_ang), (g), 0U, 1.0f, \
+	  (te_off), (gamma_c), (b_axis), (pe_delay), (wc_pe), (p_max), (p_forget) }
 static const VariantPreset_t s_vp[] = {
 	/*     ref p/r  ref y  drive_norm pry  lam_edot p/r  bw y   mu_sat pry  kappa p/r  crm_ell p/r  st_eps p/r  lam_ang p/r  gamma pry  basis p/r  ext_g pry */
 	VP_ROW(   -1,     -1,       0U,          0.0f,     30.0f,   0.0f,      0.0f,       0.0f,      0.0f,       0.0f,      1.0f,   0U,  1.0f ),  /* 0 flown S6   */
@@ -1228,6 +1235,13 @@ static const VariantPreset_t s_vp[] = {
 	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   7U,  4.0f ),  /* 13 RBF24T  (vp 10 retuned, gap width) */
 	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   8U,  4.0f ),  /* 14 RBF24D  (vp 10 retuned, Russian doll) */
 	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,  0.85f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   9U,  4.0f ),  /* 15 S10X+RBF16 (vp 12 physics at 1/4 gamma + vp 13 inner 16 Gaussians, mu_sat, no PR) */
+	/* 3L-v2 on the vp 6 law, S6 basis, default build. b_axis 49 rad/s^2 per u measured and pe_delay 7 ticks = 35 ms (the cap; measured delay 40-50 ms)
+	 * on the 2026-10-08 PID logs; replay pitch/roll cancel (mrac_log_replay --set 3l --shadow, 5 PID logs):
+	 * vp 6 -1.16/-1.59, row 16 -0.11/-0.15, row 17 -0.03/-0.05. Gains PROPOSED until flown.
+	 *       lam_ang  gamma  te_off  gamma_c  b_axis  pe_delay  wc_pe  p_max  p_forget */
+	VP_ROW3(  4.0f,   0.25f,   0U,    20.0f,  49.0f,    7.0f,   20.0f,  0.0f,  0.0f ),  /* 16 3Lv2: vp 6 + L2 composite */
+	VP_ROW3(  4.0f,   0.25f,   1U,     8.0f,  49.0f,    7.0f,   20.0f,  0.0f,  0.0f ),  /* 17 L2 only (tracking learning off p/r) */
+	VP_ROW3(  4.0f,   0.25f,   0U,    20.0f,  49.0f,    7.0f,   20.0f,  4.0f,  0.5f ),  /* 18 3Lv2 + D self-tuning gain */
 };
 #define VP_PR   0x03U
 #define VP_Y    0x04U
@@ -1244,9 +1258,9 @@ static uint8_t Vp_Set(uint8_t axes, uint8_t field, float v)
 /* In-flight preset: edit vp_user field by field in the Keil watch window, then vp_user_go = 1 (or vp_id = 100).
  * Like vp_id it applies on the ground, and also in flight while ch8 is off (MRAC shadow: u_ad is not on the
  * motors, the weights restart from zero and learn until ch8 goes on). With ch8 on the write waits.
- * vp_active = 100 shows the user row is live; vp_id = N goes back to a table row. Starts as row 6. */
+ * vp_active = 100 shows the user row is live; vp_id = N goes back to a table row. Starts as row 16. */
 #define VP_USER_ID 100U
-VariantPreset_t vp_user = VP_ROW(2, 1, 1U, 0.0018f, 2.0f, 0.0f, 0.0f, 0.0f, 0.0f, 4.0f, 0.25f, 0U, 1.0f);
+VariantPreset_t vp_user = VP_ROW3(4.0f, 0.25f, 0U, 20.0f, 49.0f, 7.0f, 20.0f, 0.0f, 0.0f);   /* row 16 */
 volatile uint8_t vp_user_go = 0U;
 
 static void Keil_VariantPoll(FlightState_t state)
@@ -1279,10 +1293,18 @@ static void Keil_VariantPoll(FlightState_t state)
 	ok &= MRAC_VariantParamSet((uint8_t)MRAC_AXIS_Z, MRAC_VF_BASIS,
 	                           (r->basis == MRAC_BASIS_S10X) ? (float)MRAC_BASIS_S10X : 0.0f);
 	ok &= Vp_Set(VP_PRY, MRAC_VF_GAMMA_SCALE,  r->g);
+	if (r->te_off) ok &= Vp_Set(VP_PR, MRAC_VF_GAMMA_SCALE, 0.0f);
+	ok &= Vp_Set(VP_PR,  MRAC_VF_GAMMA_C,      r->gamma_c);
+	ok &= Vp_Set(VP_PR,  MRAC_VF_B_AXIS,       r->b_axis);
+	ok &= Vp_Set(VP_PR,  MRAC_VF_PE_DELAY,     r->pe_delay);
+	ok &= Vp_Set(VP_PR,  MRAC_VF_WC_PE,        r->wc_pe);
+	ok &= Vp_Set(VP_PR,  MRAC_VF_P_MAX,        r->p_max);
+	ok &= Vp_Set(VP_PR,  MRAC_VF_P_FORGET,     r->p_forget);
 #if MRAC_VARIANT == MRAC_VARIANT_MULTI
-	{	/* ext block (RBF / S10X slots) learns at g * ext_g, u_nom and xm stay at g (exp15b: |Theta_ext| 0.008 of 0.05 lim) */
+	{	/* ext block (RBF / S10X slots) learns at g * ext_g, u_nom and xm stay at g (exp15b: |Theta_ext| 0.008 of 0.05 lim);
+		 * te_off keeps p/r tracking-error learning off here too */
 		uint8_t a;
-		for (a = 0U; a < 3U; a++) mrac_g_gamma[a][MRAC_GRP_RBF] = r->g * r->ext_g;
+		for (a = 0U; a < 3U; a++) mrac_g_gamma[a][MRAC_GRP_RBF] = (r->te_off && a < 2U) ? 0.0f : r->g * r->ext_g;
 	}
 #endif
 	MRAC_ResetWeights();
