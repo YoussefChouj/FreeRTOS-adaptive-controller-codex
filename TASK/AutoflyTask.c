@@ -505,7 +505,7 @@ static uint8_t Traj_Check(void)
 	float x0 = 0.0f, x1 = 0.0f, y0 = 0.0f, y1 = 0.0f, z0 = 0.0f, z1 = 0.0f; /* offset box [cm]     */
 	float v = 0.0f;                                      /* peak reference speed [cm/s]                 */
 	float path_s = s_tp.move_s - ((s_tp.profile == 1U) ? s_tp.ramp_s : 0.0f);
-	float xm, ym, zt;
+	float zt;
 	wfb_safety_limits_t lim;
 
 	if (traj_id < 1U || traj_id > 4U) {
