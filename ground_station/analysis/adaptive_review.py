@@ -29,6 +29,9 @@ U_MAX = {"pitch": 6.73863, "roll": 6.73863, "yaw": 2.027, "z_rate": 13.47726}
 FEAT = ("bias 1", "x", "x tanh x", "cross", "u_nom", "xm")
 BAND = (0.25, 0.9)                                                     # load-sway band, exp12
 MOTORS = ["mymotor.motor%d" % i for i in range(1, 5)]
+VP_BASIS = {7: 1, 8: 3, 9: 2, 10: 4, 11: 5, 12: 6}   # TASK/StabilizerTask.c s_vp[] basis column; vp 0-6 S6 (0)
+EXT_GRID = {2: (3, 2), 3: (4, 3), 4: (6, 4)}        # API/mrac.c MRAC_GenExt: a x b Gaussians on rate/5 rad/s, angle/0.5 rad
+S6RBF_SCALE = (3.0, 0.26)                            # API/mrac.c MRAC_Init rbf_rate_scale (rad/s), rbf_ang_scale (rad)
 
 
 def load(stem):
@@ -43,7 +46,27 @@ def load(stem):
     return df.reset_index(drop=True)
 
 
+def ext_phi(basis, x, ang):
+    """MULTI ext block of pitch/roll (API/mrac.c MRAC_GenExt), RBF bases only: (Gaussians, grid units) or None."""
+    if basis in EXT_GRID:
+        a, b = EXT_GRID[basis]
+        pr, ph = x / 5.0, ang / 0.5
+        wr, wa = 2.0 / (a - 1), 2.0 / (b - 1)
+        gr = [np.exp(-0.5 * ((pr + 1 - wr * i) / wr) ** 2) for i in range(a)]
+        ga = [np.exp(-0.5 * ((ph + 1 - wa * j) / wa) ** 2) for j in range(b)]
+    elif basis == 5:
+        pr, ph = x / S6RBF_SCALE[0], ang / S6RBF_SCALE[1]
+        gr = [np.exp(-(pr - c) ** 2) for c in (-1.5, -0.5, 0.5, 1.5)]
+        ga = [np.exp(-(ph - c) ** 2) for c in (-1.0, 0.0, 1.0)]
+    else:
+        return None
+    return [g * h for g in gr for h in ga], pr, ph
+
+
 def rebuild(df):
+    vp = df["vp_active"].dropna() if "vp_active" in df else []
+    basis = VP_BASIS.get(int(vp.mode()[0]), 0) if len(vp) and "mrac_state.pitch.Theta[6]" in df else 0
+    df.attrs["basis"], df.attrs["n_ext"] = basis, 0
     gx, gy, gz = (df["Ctrler.gyro%sPID.FB" % a] * D2R for a in "xyz")
     bus = {"pitch": (gy, gx * gz), "roll": (gx, gy * gz), "yaw": (gz, 0.0 * gz),
            "z_rate": (df["Ctrler.Z_ratePID.FB"], 0.0 * gz)}
@@ -56,6 +79,22 @@ def rebuild(df):
             df["%s_phi%d" % (ax, i)] = np.asarray(phi[i], float)
             df["%s_c%d" % (ax, i)] = df["%s_phi%d" % (ax, i)] * df[p + "Theta[%d]" % i]
             raw += df["%s_c%d" % (ax, i)].to_numpy()
+        ang = df["imu_data.pit" if ax == "pitch" else "imu_data.rol"] * D2R
+        ext = ext_phi(basis, np.asarray(x, float), ang.to_numpy()) if ax in ("pitch", "roll") else None
+        if ext is not None:
+            if 2 <= basis <= 4:                       # mrac.c: RBF6/12/24 zero S6 phi 0..3 (keep u_nom, xm)
+                for i in range(4):
+                    raw -= df["%s_c%d" % (ax, i)].to_numpy()
+                    df["%s_c%d" % (ax, i)] = 0.0
+            phis, pr, ph = ext
+            cols = {"%s_gr" % ax: pr, "%s_ga" % ax: ph}
+            for k, f in enumerate(phis):
+                cols["%s_ephi%d" % (ax, k)] = f
+                cols["%s_e%d" % (ax, k)] = f * df["mrac_state.%s.Theta[%d]" % (ax, 6 + k)].ffill().fillna(0).to_numpy()
+                raw += cols["%s_e%d" % (ax, k)]
+            df.attrs["n_ext"] = len(phis)
+            for c, v in cols.items():
+                df[c] = v
         df[ax + "_raw"] = raw
         df[ax + "_x"] = np.asarray(x, float)
 
@@ -383,6 +422,37 @@ def main():
             md.append("| %s | %s | %s | %.3f -> %.3f |" % (name, ax, " | ".join(
                 "%+.3f -> %+.3f" % (u, v) for u, v in zip(t0, t1)), np.linalg.norm(t0), np.linalg.norm(t1)))
     md.append("")
+
+    # 2b. MULTI ext block (RBF bases): grid coverage, activity, contribution, weight growth
+    nx = df.attrs["n_ext"]
+    if nx:
+        md += ["## Ext block (vp basis %d, %d Gaussians per axis, pitch/roll)" % (df.attrs["basis"], nx), "",
+               "Grid inputs in the firmware's normalised units (rate, angle); the Gaussian centres span -1..1 "
+               "(basis 5: -1.5..1.5 rate, -1..1 angle). Activity = sd / mean of the most varying Gaussian over the "
+               "segment: near 0 the grid acts as one constant (a bias), not as a function of the state. Ext share = "
+               "ext RMS^2 / (ext RMS^2 + S6-part RMS^2). Slope = d|Theta_ext|/dt over the last third (> 0: still learning).", "",
+               "| seg | axis | rate p1 / p50 / p99 | angle p1 / p50 / p99 | activity | ext RMS | S6 part RMS | ext share | "
+               "|Theta_ext| start -> end | slope (/s) | top ext (RMS share) |", "|---|---|---|---|---|---|---|---|---|---|---|"]
+        for name, i0, i1 in mseg:
+            g = df.loc[i0:i1]
+            for ax in ("pitch", "roll"):
+                ec = np.array([g["%s_e%d" % (ax, k)].to_numpy() for k in range(nx)])
+                ext = ec.sum(axis=0)
+                s6 = sum(g["%s_c%d" % (ax, i)].to_numpy() for i in range(6))
+                act = max(g["%s_ephi%d" % (ax, k)].std() / max(g["%s_ephi%d" % (ax, k)].mean(), 1e-9) for k in range(nx))
+                th = g[["mrac_state.%s.Theta[%d]" % (ax, 6 + k) for k in range(nx)]].ffill().fillna(0).to_numpy()
+                nrm = np.linalg.norm(th, axis=1)
+                k0 = 2 * len(g) // 3
+                slope = np.polyfit(g.t.iloc[k0:], nrm[k0:], 1)[0] if len(g) - k0 > 10 else np.nan
+                er = np.sqrt(np.mean(ec ** 2, axis=1))
+                top = np.argsort(er)[::-1][:2]
+                rms = lambda v: np.sqrt(np.mean(np.square(v)))
+                pct = lambda c: " / ".join("%+.3f" % v for v in np.percentile(g[c], (1, 50, 99)))
+                md.append("| %s | %s | %s | %s | %.3f | %.4f | %.4f | %.0f%% | %.3f -> %.3f | %+.4f | %s |" % (
+                    name, ax, pct(ax + "_gr"), pct(ax + "_ga"), act, rms(ext), rms(s6),
+                    100 * rms(ext) ** 2 / max(rms(ext) ** 2 + rms(s6) ** 2, 1e-12), nrm[0], nrm[-1], slope,
+                    ", ".join("e%d %.0f%%" % (k, 100 * er[k] ** 2 / max(np.sum(er ** 2), 1e-12)) for k in top)))
+        md.append("")
 
     # 3. static torque, angle and position offsets per segment (drift)
     g9 = 9.81 * a.load_g / 1000.0
