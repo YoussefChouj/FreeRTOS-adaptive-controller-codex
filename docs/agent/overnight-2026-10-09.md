@@ -55,7 +55,12 @@ against the opened link before it goes into a doc. Numbers stay PROPOSED unless 
 - [x] 1. **Circle preset stays in place.** DONE: x/y fence removed from Traj_Check (floor, ceiling, speed and range checks kept); scratch harness: circle and figure-8 from x=-64, y=116 cm now accepted, floor/ceiling/speed still refused. Needs a flash. Likely cause: the preset soft-fence check refuses (0xEF). The circle reaches
   2 x radius toward -x, and the drone started at x = -64 cm (limit -130 cm). Remove the x/y fence from the preset
   check as you asked; keep the speed, range and floor checks. Add host tests.
-- [ ] 2. **Bug hunt on the test pipeline.** Look for bugs that could block tomorrow: presets, vp switching,
+- [x] 2. DONE (6fbf00a, ea809a8): campaign_capture's 4 failures were the test (set sized for STRUCT6; now from the built
+  feature count, 0 fail); Traj_Check unused xm/ym removed. Checked OK: rope570_3l injects (controller mrac -> 1), vp table
+  host test in both builds, flashtool 140 pass, mrac_3l / vp16_frames names all in source. Watch: (a) the local axf
+  (10-08 18:08) predates f00412a, so mrac_3l symbols resolve only after the morning flash rebuilds it; (b) the in-flight
+  safety fence (|x| 1.6 m, |y| 2.0 m: push back, land after 2 s or 0.3 m over) still applies to presets, so start
+  circles near the origin. **Bug hunt on the test pipeline.** Look for bugs that could block tomorrow: presets, vp switching,
   inject mask, logging var lists, dashboard, flash tool. Fix them or list them.
 - [x] 3. **Replay all of today's logs** through adaptive_review. DONE (20 logs, commit 653288e): [meta.md](../flights/plots/2026-10-08-meta/meta.md). Measured: no variant cancels the swing (pitch/roll cancel -0.15..+0.15, phase -80..-157 deg) while a perfect estimator behind a 16 rad/s filter would cancel 84-91%. The gap is the lag of tracking-error learning, not the features. Static trim is the drone's own CG plus load (pitch -0.09..-0.11 u_max on every load, roll flips sign rope +0.05 vs arm -0.06).
 - [x] 4. (feature_id.py + test committed; rankings above) **Feature identification**: SINDy plus the other methods on the disturbance estimate of each axis. Which
