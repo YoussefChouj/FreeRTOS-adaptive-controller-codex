@@ -452,6 +452,7 @@ def main():
                "ext RMS^2 / (ext RMS^2 + S6-part RMS^2). Slope = d|Theta_ext|/dt over the last third (> 0: still learning).", "",
                "| seg | axis | rate p1 / p50 / p99 | angle p1 / p50 / p99 | activity | ext RMS | S6 part RMS | ext share | "
                "|Theta_ext| start -> end | slope (/s) | top ext (RMS share) |", "|---|---|---|---|---|---|---|---|---|---|---|"]
+        shares = {}
         for name, i0, i1 in mseg:
             g = df.loc[i0:i1]
             for ax in ("pitch", "roll"):
@@ -464,6 +465,7 @@ def main():
                 k0 = 2 * len(g) // 3
                 slope = np.polyfit(g.t.iloc[k0:], nrm[k0:], 1)[0] if len(g) - k0 > 10 else np.nan
                 er = np.sqrt(np.mean(ec ** 2, axis=1))
+                shares[(name, ax)] = er ** 2 / max(np.sum(er ** 2), 1e-12)
                 top = np.argsort(er)[::-1][:2]
                 rms = lambda v: np.sqrt(np.mean(np.square(v)))
                 pct = lambda c: " / ".join("%+.3f" % v for v in np.percentile(g[c], (1, 50, 99)))
@@ -471,6 +473,19 @@ def main():
                     name, ax, pct(ax + "_gr"), pct(ax + "_ga"), act, rms(ext), rms(s6),
                     100 * rms(ext) ** 2 / max(rms(ext) ** 2 + rms(s6) ** 2, 1e-12), nrm[0], nrm[-1], slope,
                     ", ".join("e%d %.0f%%" % (k, 100 * er[k] ** 2 / max(np.sum(er ** 2), 1e-12)) for k in top)))
+        md.append("")
+        # full ranking: every Gaussian's RMS^2 share, per axis and the pitch+roll mean (RBF24T: grid centre in brackets)
+        cell = lambda k: (" (r%+.1f a%+.1f)" % (GAP_C[0][k // 4], GAP_C[1][k % 4])
+                          if df.attrs["basis"] == 7 and nx == 24 else "")
+        md += ["### Ext ranking (every Gaussian, RMS^2 share of the ext block, cumulative in brackets)", "",
+               "| seg | axis | ranked |", "|---|---|---|"]
+        for name, _, _ in mseg:
+            rows = [(ax, shares[(name, ax)]) for ax in ("pitch", "roll")]
+            rows.append(("p+r mean", 0.5 * (rows[0][1] + rows[1][1])))
+            for ax, s in rows:
+                order, cum = np.argsort(s)[::-1], np.cumsum(np.sort(s)[::-1])
+                md.append("| %s | %s | %s |" % (name, ax, ", ".join(
+                    "e%d%s %.1f%% [%.0f%%]" % (k, cell(k), 100 * s[k], 100 * c) for k, c in zip(order, cum))))
         md.append("")
 
     # 3. static torque, angle and position offsets per segment (drift)
