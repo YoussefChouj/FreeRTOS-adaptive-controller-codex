@@ -29,7 +29,7 @@ against the opened link before it goes into a doc. Numbers stay PROPOSED unless 
   (pick-up, drop, slung, offset). What was built, on what hardware, against which baseline, with what gain.
   VPS workers, every claim checked against its link.
 
-- [ ] D. (part 1 ccecde4: gamma_c 2..20 replayed on every log, L2only pitch cancel flat -0.07..-0.09, roll best g20 -0.04, phase -99 -> -69 deg; the gain is not the limit, row 17 keeps g8; D self-tuning gain: no effect. Part 2 open: a gain that actually moves) **Tune gains, weight limits and parameters** of the 3-layer stack and the final variant from the replay
+- [x] D. (part 2 9016355, d_gain_range.md: the D gain only moves with p_forget; g20 + D p_max 20 p_forget 5 gives median cancel +0.04/+0.02, phase -69 -> -50 deg, better than row 17 on 44/59 pitch and 50/59 roll logs, but worst on the f17 load-removal logs (-8.75); next: vp row 19 with these values, flown after row 17. part 1 ccecde4: gamma_c 2..20 replayed on every log, L2only pitch cancel flat -0.07..-0.09, roll best g20 -0.04, phase -99 -> -69 deg; the gain is not the limit, row 17 keeps g8; D self-tuning gain: no effect. Part 2 open: a gain that actually moves) **Tune gains, weight limits and parameters** of the 3-layer stack and the final variant from the replay
   and the simulations (not by guess), and **add a real-time gain-finding mechanism**: adaptation gains that
   tune themselves in flight (I read this as a time-varying, self-scaling adaptation gain such as a
   least-squares / covariance gain with bounds, so you do not hand-pick gamma; the PID gains stay fixed). Tested
