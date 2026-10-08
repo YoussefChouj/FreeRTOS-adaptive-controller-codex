@@ -22,7 +22,7 @@ against the opened link before it goes into a doc. Numbers stay PROPOSED unless 
 - [x] A. **3-layer controller flight-ready tomorrow**: built in the firmware (vp id, host tests pass), a logging
   preset that records its signals, an analysis script for its flight, and the flash + fly commands in the
   morning pack. This outranks items 4-9.
-- [ ] B. **Not limited to the current variants**: new variants are allowed where the data says so (for example a
+- [x] B. (S10X swing row replayed, docs/flights/plots/2026-10-09-features/b_s10x_replay.md: beats row 17 on 32/59 logs but blows up on every injected log even with all ext slots masked, so the basis != 0 path is the cause, not the features; NOT in the pack, row 17 stays) **Not limited to the current variants**: new variants are allowed where the data says so (for example a
   prediction-error / composite law, or a swing-phase feature row). Each new one gets a vp id, host tests and
   an offline replay score before it goes into the morning pack.
 - [x] C. (ead6bd0: 7 sources link-checked in docs/design/vp16-research.md; R8 had no URLs, rows dropped; no flown MRAC-vs-PID rope result found) **Research: MRAC flown in real systems**, especially multirotors carrying fixed or changing payloads
