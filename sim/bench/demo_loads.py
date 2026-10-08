@@ -102,32 +102,35 @@ def run(tag, f1x, rowlist, ref, sp, wrap=None):
             ctrl.close()
 
 
-def rope_ctrls():
-    """The flashed PID alone and with the flown 3L-v2 rows on top: vp row 17 (L2 only g8), row 19 (L2 g20 + D)."""
+def rope_ctrls(wu=()):
+    """The flashed PID alone and with the flown 3L-v2 rows on top: vp row 17 (L2 only g8), row 19 (L2 g20 + D).
+    wu: extra row 17 copies with the u_ad low-pass omega_u [rad/s] on pitch/roll raised from the firmware 4/5 (Q20)."""
     import ctrl_fwmrac
     rp = ctrl_fwmrac.rp
-    rows = {'row17': rp.variants_3l()['L2only g8']['args'], 'row19': rp.variants_d()['L2only g20+D p20 f5']['args']}
+    r17 = rp.variants_3l()['L2only g8']['args']
+    rows = {'row17': r17, 'row19': rp.variants_d()['L2only g20+D p20 f5']['args'],
+            **{f'row17wu{w:g}': [*r17, f'cfg:0:omega_u:{w}', f'cfg:1:omega_u:{w}'] for w in wu}}
     return [(BASE, None)] + [(f'{BASE}+{k}', lambda c, a=a: ctrl_fwmrac.with_mrac(c, inj=1, cfg=a))
                              for k, a in rows.items()]
 
 
-def run_rope(seeds, yaw):
+def run_rope(seeds, yaw, wu=()):
     """570 g bottle on the measured rope (plant.py sling), hover; each case is its own batch (sp['sling'] is shared)."""
     res = {}
     for case, extra in ROPE_CASES.items():
         rowlist, ref, sp = build({case: (0.0, None)}, seeds, yaw, ['hover'])
         sp['sling'] = dict(ROPE, r=np.array(ROPE['r']), **extra)
-        for lb, wrap in rope_ctrls():
+        for lb, wrap in rope_ctrls(wu):
             t0 = time.time(); res.setdefault(lb, []).extend(run('pid_tuned2', True, rowlist, ref, sp, wrap))
             print(f'{case} {lb}: {time.time() - t0:.0f} s', flush=True)
     return res
 
 
-def run_arm(seeds, yaw):
+def run_arm(seeds, yaw, wu=()):
     """293 g rigid offset at each motor mount, hover, PID alone and with rows 17 / 19 (one batch: no shared sling)."""
     rowlist, ref, sp = build(ARM_CASES, seeds, yaw, ['hover'])
     res = {}
-    for lb, wrap in rope_ctrls():
+    for lb, wrap in rope_ctrls(wu):
         t0 = time.time(); res[lb] = run('pid_tuned2', True, rowlist, ref, sp, wrap)
         print(f'{lb}: {time.time() - t0:.0f} s', flush=True)
     return res
@@ -186,6 +189,7 @@ def main():
     ap.add_argument('--yaw', choices=['1003', 'logged'], default='1003')
     ap.add_argument('--sweep', action='store_true'); ap.add_argument('--tables'); ap.add_argument('--stress-tags', nargs='+')
     ap.add_argument('--rope', action='store_true'); ap.add_argument('--arm', action='store_true')
+    ap.add_argument('--wu', type=float, nargs='*', default=[])
     ap.add_argument('--out', default='results/demo_loads.json'); a = ap.parse_args()
     if a.tables:
         d = json.load(open(a.tables)); res = d['rows']
@@ -193,13 +197,13 @@ def main():
                d.get('trajs', TRAJS))
         return
     if a.rope:
-        res = run_rope(list(range(2000, 2000 + a.seeds)), a.yaw)
+        res = run_rope(list(range(2000, 2000 + a.seeds)), a.yaw, a.wu)
         json.dump({'cases': ROPE_CASES, 'rope': ROPE, 'trajs': ['hover'], 'f1x': [F1X_ANG, F1X_RATE], 'yaw': a.yaw,
                    'base': BASE, 'rows': res}, open(a.out, 'w'), indent=1)
         tables(res, ROPE_CASES, a.seeds, BASE, ['hover'])
         return
     if a.arm:
-        res = run_arm(list(range(2000, 2000 + a.seeds)), a.yaw)
+        res = run_arm(list(range(2000, 2000 + a.seeds)), a.yaw, a.wu)
         json.dump({'cases': {k: list(v) for k, v in ARM_CASES.items()}, 'h_pad': H_PAD, 'trajs': ['hover'],
                    'f1x': [F1X_ANG, F1X_RATE], 'yaw': a.yaw, 'base': BASE, 'rows': res}, open(a.out, 'w'), indent=1)
         tables(res, ARM_CASES, a.seeds, BASE, ['hover'])
