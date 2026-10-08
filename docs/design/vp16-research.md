@@ -30,3 +30,32 @@ against the pages: treat every row as the worker's reading. R2 (gemini) is thin 
 | W8 | First flights: shadow mode, reset on arm, gamma ramp, per-axis masks | R3 | Runtime per-axis inject mask (default all on, Q18), Theta reset on arm | confirm |
 | W9 | Composite (prediction-error) adaptation and concurrent learning fix the lag and excitation problems, but cost CPU and RAM | R1, R2, R4 | Defer to vp17 | defer |
 | W10 | Flown STM32 RBF nets are small (about 5 neurons per axis, no cross terms); an RBF-vs-PID rope-load flight is unpublished | R4 | 288 Gaussians per cycle: measure mrac_cyc; use a shared-width table or a cheap exp if the cost is high | measure |
+
+## Flown adaptive control on payload multirotors (R8 + inline check, 2026-10-09)
+
+R8 (VPS worker) returned 5 of 12 rows and **no URLs**, so it failed the source gate. Its rows (Invernizzi, Nascimento,
+"Crazyflie L1", PCAC) and its history notes (X-15 MH-96, AirSTAR, X-36) are dropped until a source is found. Hanover
+is kept, but R8 called it a suspended load and the abstract does not say that. The rows below were checked inline against
+the abstract or metadata at the link. "Not stated" means the abstract does not say.
+
+| Source | Load | Law | Rig | Payload change in flight | Result (abstract) |
+|---|---|---|---|---|---|
+| Maki et al., ICRA 2020, [doi:10.1109/icra40945.2020.9196861](https://doi.org/10.1109/icra40945.2020.9196861) | payloads that move CG and inertia | nonlinear MIMO MRAC, attitude loop | quadrotor + transformable multirotor, flown | yes (title) | stability and robustness confirmed in experiments; no % given |
+| Hanover et al. 2021, [arXiv:2109.04210](https://arxiv.org/abs/2109.04210) | unknown payloads, wind | L1 adaptive + NMPC | quadrotor, flown | not stated | >90% tracking-error reduction vs non-adaptive NMPC, no gain retuning |
+| Mohammadi & Shahri, ICROM 2013, [doi:10.1109/icrom.2013.6510121](https://doi.org/10.1109/icrom.2013.6510121) | variable payload, battery sag | PD + Lyapunov MRAC auxiliary term, decentralized | quadrotor, experiments | not stated | "efficiency and robustness" validated; no % given |
+| Xian, Wang & Yang, Nonlinear Dyn 2019, [doi:10.1007/s11071-019-05283-0](https://doi.org/10.1007/s11071-019-05283-0) | aerial payload transport | nonlinear adaptive | experimental validation (title) | not stated | abstract not retrieved |
+| Chen et al., RCAE 2025, [doi:10.1109/rcae66389.2025.11355352](https://doi.org/10.1109/rcae66389.2025.11355352) | payload handling | MRAC vs PID on Pixhawk | 1-DOF gyroscope rig, HIL then hardware | not stated | PID vs MRAC compared experimentally; no % in abstract |
+| Sierra-Garcia & Santos 2019, [doi:10.1155/2019/6460156](https://doi.org/10.1155/2019/6460156) | mass tripled, wind | PID + neural mass/disturbance estimators | **simulation only** | yes | not flown, pattern reference only |
+| Chen, Li & Meng 2025, [arXiv:2507.15261](https://arxiv.org/abs/2507.15261) | object capture, impact + payload | dual-channel adaptive NMPC | not verified from snippet | yes (capture) | not verified |
+
+Reviews for the swinging-load (rope) case: Estevez et al. 2024, [doi:10.3390/drones8020035](https://doi.org/10.3390/drones8020035);
+Omar et al. 2022, [doi:10.1016/j.aej.2022.08.001](https://doi.org/10.1016/j.aej.2022.08.001).
+
+What this means for us (PROPOSED):
+- Our layout matches the flown pattern: a fixed baseline (PID/PD) plus an adaptive auxiliary term on the attitude loop
+  (Mohammadi 2013, Chen 2025).
+- The 293 g asymmetric arm is a CG-offset load, the case Maki 2020 flew. Their MRAC compensates CG position and inertia,
+  which supports keeping the bias row and the structured features for that load.
+- None of the checked abstracts flew MRAC against a swinging rope load with a % gain over PID. A rope-570 result is
+  new ground, which also means there is no published number to aim at.
+- Still open: the 5 rows R8 could not source. Respawn only with a "URL per row or drop it" rule.
