@@ -1204,29 +1204,29 @@ static void Keil_PresetPoll(FlightState_t state)
  * copy the WP-33 SIL presets (ground_station/analysis/controllers/mrac_v1/v2/pr/st.yaml); the SIL injected
  * p/r only and was stable at gamma 0.25-0.5, every variant tipped at gamma 1 (PROPOSED for flight). */
 typedef struct {
-	int8_t ref_pr, ref_y; uint8_t dn; float lam_edot, bw_y, mu_sat, kappa, crm_ell, st_eps, lam_ang, g; uint8_t basis;
+	int8_t ref_pr, ref_y; uint8_t dn; float lam_edot, bw_y, mu_sat, kappa, crm_ell, st_eps, lam_ang, g; uint8_t basis; float ext_g;
 } VariantPreset_t;
-#define VP_ROW(ref_pr, ref_y, dn, lam_edot, bw_y, mu_sat, kappa, crm, st_eps, lam_ang, g, basis) \
-	{ (ref_pr), (ref_y), (dn), (lam_edot), (bw_y), (mu_sat), (kappa), (crm), (st_eps), (lam_ang), (g), (basis) }
+#define VP_ROW(ref_pr, ref_y, dn, lam_edot, bw_y, mu_sat, kappa, crm, st_eps, lam_ang, g, basis, ext_g) \
+	{ (ref_pr), (ref_y), (dn), (lam_edot), (bw_y), (mu_sat), (kappa), (crm), (st_eps), (lam_ang), (g), (basis), (ext_g) }
 static const VariantPreset_t s_vp[] = {
-	/*     ref p/r  ref y  drive_norm pry  lam_edot p/r  bw y   mu_sat pry  kappa p/r  crm_ell p/r  st_eps p/r  lam_ang p/r  gamma pry  basis p/r */
-	VP_ROW(   -1,     -1,       0U,          0.0f,     30.0f,   0.0f,      0.0f,       0.0f,      0.0f,       0.0f,      1.0f,   0U ),  /* 0 flown S6   */
-	VP_ROW(   -1,     -1,       0U,          0.0f,     30.0f,   0.0f,      0.0f,       0.0f,      0.0f,       0.0f,      0.25f,   0U ),  /* 1 S6 x0.25   */
-	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       0.0f,      0.25f,   0U ),  /* 2 V1         */
-	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,  0.85f,      0.0f,       0.0f,      0.0f,       0.0f,      0.25f,   0U ),  /* 3 V2 mu_sat  */
-	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.5f,      10.0f,      0.0f,       0.0f,      0.25f,   0U ),  /* 4 PR         */
-	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      2.0f,       0.0f,      0.25f,   0U ),  /* 5 ST         */
-	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   0U ),  /* 6 3L lam_ang */
+	/*     ref p/r  ref y  drive_norm pry  lam_edot p/r  bw y   mu_sat pry  kappa p/r  crm_ell p/r  st_eps p/r  lam_ang p/r  gamma pry  basis p/r  ext_g pry */
+	VP_ROW(   -1,     -1,       0U,          0.0f,     30.0f,   0.0f,      0.0f,       0.0f,      0.0f,       0.0f,      1.0f,   0U,  1.0f ),  /* 0 flown S6   */
+	VP_ROW(   -1,     -1,       0U,          0.0f,     30.0f,   0.0f,      0.0f,       0.0f,      0.0f,       0.0f,      0.25f,   0U,  1.0f ),  /* 1 S6 x0.25   */
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       0.0f,      0.25f,   0U,  1.0f ),  /* 2 V1         */
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,  0.85f,      0.0f,       0.0f,      0.0f,       0.0f,      0.25f,   0U,  1.0f ),  /* 3 V2 mu_sat  */
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.5f,      10.0f,      0.0f,       0.0f,      0.25f,   0U,  1.0f ),  /* 4 PR         */
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      2.0f,       0.0f,      0.25f,   0U,  1.0f ),  /* 5 ST         */
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   0U,  1.0f ),  /* 6 3L lam_ang */
 	/* FW-B sim feature sets on the vp 6 law (basis = MRAC_BASIS_*, sim_core.py features()). Need the MULTI build
 	 * (Keil Define MRAC_VARIANT=2); a default build refuses basis > 0 and shows vp_active 0xEE. Gamma PROPOSED. */
-	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   1U ),  /* 7 S10      */
-	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   3U ),  /* 8 RBF12    */
-	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   2U ),  /* 9 RBF6     */
-	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   4U ),  /* 10 RBF24   */
-	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   5U ),  /* 11 S6+RBF12*/
-	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.5f,      10.0f,      0.0f,       4.0f,      0.25f,   6U ),  /* 12 S10X+PR (vp 12, Z battery slot) */
-	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   7U ),  /* 13 RBF24T  (vp 10 retuned, gap width) */
-	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   8U ),  /* 14 RBF24D  (vp 10 retuned, Russian doll) */
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   1U,  1.0f ),  /* 7 S10      */
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   3U,  1.0f ),  /* 8 RBF12    */
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   2U,  1.0f ),  /* 9 RBF6     */
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   4U,  1.0f ),  /* 10 RBF24   */
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   5U,  1.0f ),  /* 11 S6+RBF12*/
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.5f,      10.0f,      0.0f,       4.0f,      0.25f,   6U,  1.0f ),  /* 12 S10X+PR (vp 12, Z battery slot) */
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   7U,  4.0f ),  /* 13 RBF24T  (vp 10 retuned, gap width) */
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,   8U,  4.0f ),  /* 14 RBF24D  (vp 10 retuned, Russian doll) */
 };
 #define VP_PR   0x03U
 #define VP_Y    0x04U
@@ -1245,7 +1245,7 @@ static uint8_t Vp_Set(uint8_t axes, uint8_t field, float v)
  * motors, the weights restart from zero and learn until ch8 goes on). With ch8 on the write waits.
  * vp_active = 100 shows the user row is live; vp_id = N goes back to a table row. Starts as row 6. */
 #define VP_USER_ID 100U
-VariantPreset_t vp_user = VP_ROW(2, 1, 1U, 0.0018f, 2.0f, 0.0f, 0.0f, 0.0f, 0.0f, 4.0f, 0.25f, 0U);
+VariantPreset_t vp_user = VP_ROW(2, 1, 1U, 0.0018f, 2.0f, 0.0f, 0.0f, 0.0f, 0.0f, 4.0f, 0.25f, 0U, 1.0f);
 volatile uint8_t vp_user_go = 0U;
 
 static void Keil_VariantPoll(FlightState_t state)
@@ -1278,6 +1278,12 @@ static void Keil_VariantPoll(FlightState_t state)
 	ok &= MRAC_VariantParamSet((uint8_t)MRAC_AXIS_Z, MRAC_VF_BASIS,
 	                           (r->basis == MRAC_BASIS_S10X) ? (float)MRAC_BASIS_S10X : 0.0f);
 	ok &= Vp_Set(VP_PRY, MRAC_VF_GAMMA_SCALE,  r->g);
+#if MRAC_VARIANT == MRAC_VARIANT_MULTI
+	{	/* ext block (RBF / S10X slots) learns at g * ext_g, u_nom and xm stay at g (exp15b: |Theta_ext| 0.008 of 0.05 lim) */
+		uint8_t a;
+		for (a = 0U; a < 3U; a++) mrac_g_gamma[a][MRAC_GRP_RBF] = r->g * r->ext_g;
+	}
+#endif
 	MRAC_ResetWeights();
 	vp_active = ok ? id : 0xEEU;
 }
