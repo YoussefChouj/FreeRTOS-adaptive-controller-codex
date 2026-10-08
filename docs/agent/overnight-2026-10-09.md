@@ -29,7 +29,7 @@ against the opened link before it goes into a doc. Numbers stay PROPOSED unless 
   (pick-up, drop, slung, offset). What was built, on what hardware, against which baseline, with what gain.
   VPS workers, every claim checked against its link.
 
-- [ ] D. **Tune gains, weight limits and parameters** of the 3-layer stack and the final variant from the replay
+- [ ] D. (part 1 ccecde4: gamma_c 2..20 replayed on every log, L2only pitch cancel flat -0.07..-0.09, roll best g20 -0.04, phase -99 -> -69 deg; the gain is not the limit, row 17 keeps g8; D self-tuning gain: no effect. Part 2 open: a gain that actually moves) **Tune gains, weight limits and parameters** of the 3-layer stack and the final variant from the replay
   and the simulations (not by guess), and **add a real-time gain-finding mechanism**: adaptation gains that
   tune themselves in flight (I read this as a time-varying, self-scaling adaptation gain such as a
   least-squares / covariance gain with bounds, so you do not hand-pick gamma; the PID gains stay fixed). Tested
