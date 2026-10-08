@@ -104,15 +104,36 @@ def variants_3l() -> dict[str, dict]:
     for g in (2.0, 4.0, 8.0, 12.0, 20.0):                       # gamma_c var-table bound is 20 (mrac.c)
         out[f"L2only g{g:g}"] = dict(args=knob_args({**base, **te_off, **l2(g)}), rbf=False)
     out["vp6+L2 g20 d4"] = dict(args=knob_args({**base, **l2(20.0), **pr(pe_delay=4)}), rbf=False)  # delay mismatch
+    s10x = pr(basis=6)            # MULTI S10X: + angacc, ANF accel swing in-phase/quadrature, sag, motor lag
+    for g in (8.0, 20.0):
+        out[f"S10X L2only g{g:g}"] = dict(args=knob_args({**base, **s10x, **te_off, **l2(g)}), rbf=2, acc=True)
+    for sr in (2.0, 5.0):         # swing_ref 0.5 m/s^2 default vs measured rope swings of 4-6 m/s^2 (p99 |acc| 450-590 mg)
+        out[f"S10X L2only g8 sr{sr:g}"] = dict(args=knob_args({**base, **s10x, **te_off, **l2(8.0)}) + [f"swref:{sr}"],
+                                              rbf=2, acc=True)
+    out["S10X+L2 g8"] = dict(args=knob_args({**base, **s10x, **l2(8.0)}), rbf=2, acc=True)
+    out["S10X vp6"] = dict(args=knob_args({**base, **s10x}), rbf=2, acc=True)
+    out["MULTI L2only g8"] = dict(args=knob_args({**base, **te_off, **l2(8.0)}), rbf=2, acc=True)  # build control
     return out
 
 
-VARIANT_SETS = {"wp27": variants, "3l": variants_3l}
+def variants_s10x() -> dict[str, dict]:
+    """Feature ablation of "S10X L2only g8": the MULTI ext-slot mask (bit k = S10X phi[k]) turns one group off
+    at a time. mask 0 must equal "L2only g8" (the struct features alone), which checks the mask path."""
+    v3 = variants_3l()
+    out = {k: v3[k] for k in ("OFF", "L2only g8", "S10X L2only g8")}
+    s = v3["S10X L2only g8"]
+    for name, m in (("core sin|pr|un|un|", 0x07), ("no angacc", 0xF7), ("no swing", 0xCF), ("no sag", 0xBF),
+                    ("no lag", 0x7F), ("mask0", 0x00)):
+        out[f"S10X L2only g8 {name}"] = dict(s, args=s["args"] + [f"mask:{m}"])
+    return out
+
+
+VARIANT_SETS = {"wp27": variants, "3l": variants_3l, "s10x": variants_s10x}
 
 
 # ----------------------------------------------------------------------------- host build
 def build(out_dir: Path, rbf: bool) -> Path:
-    """gcc the driver with only the API/mrac* sources (so the test stubs win), STRUCT6 or RBF12 build."""
+    """gcc the driver with only the API/mrac* sources (so the test stubs win); rbf 0/1/2 = STRUCT6, RBF12, MULTI."""
     src = out_dir / "src"
     src.mkdir(exist_ok=True)
     for f in (REPO / "API").glob("mrac*.[ch]"):
@@ -156,7 +177,8 @@ def mixer_deficit(throttle, u_gx, u_gy, u_gz, yaw_dir=YAW_MIX_DIR):
 def driver_inputs(series: lc.Series, dt: float = DT) -> tuple[np.ndarray, np.ndarray, dict]:
     """(t, inputs[N, 20], info) on a dt grid; info has the airborne mask, flown injection flag and logged u_ad."""
     keys = REQUIRED + [k for k in (f"Ctrler.Z_ratePID.{f}" for f in ("Des", "FB", "U")) if k in series]
-    t, g = lc.grid(series, keys + [k for k in ("imu_data.pit", "imu_data.rol", "Throttle_out") if k in series], dt)
+    t, g = lc.grid(series, keys + [k for k in ("imu_data.pit", "imu_data.rol", "Throttle_out", "Acc_X_Real",
+                                               "Acc_Y_Real") if k in series], dt)
     z = np.zeros(len(t))
     col = {k: g.get(k, z) for k in keys}
     zr = [g.get(f"Ctrler.Z_ratePID.{f}", z) for f in ("Des", "FB", "U")]
@@ -175,7 +197,8 @@ def driver_inputs(series: lc.Series, dt: float = DT) -> tuple[np.ndarray, np.nda
     logged = {a: lc.hold(series, f"mrac_state.{a if a != 'z' else 'z_rate'}.u_ad", t) for a in AXES}
     info = dict(airborne=lc.airborne(series, t), inj=lc.hold(series, "mrac_flags.output_injection_on", t, np.nan),
                 logged_u_ad=logged, has_z="Ctrler.Z_ratePID.U" in series, has_throttle="Throttle_out" in g,
-                fs_log=_rate(series, "Ctrler.gyroxPID.FB"))
+                fs_log=_rate(series, "Ctrler.gyroxPID.FB"),
+                acc=np.column_stack([g.get(k, z) * 0.00980665 for k in ("Acc_X_Real", "Acc_Y_Real")]))  # mg -> m/s^2
     return t, ins, info
 
 
@@ -271,10 +294,12 @@ def replay_log(series: lc.Series, work: Path, which: dict | None = None, shadow:
     runs, nd = air_runs(air), {}
     res["cancel_runs_s"] = float(sum(b - a for a, b in runs) * DT)
     for name, v in (which or variants()).items():
-        x = ins.copy()
+        x, args = ins.copy(), v["args"]
+        if v.get("acc"):                # mrac_in_acc for the MULTI S10X swing tracker (StabilizerTask.c:1889)
+            x, args = np.column_stack([x, info["acc"]]), args + ["acc:1"]
         # OFF replays the flown injection flag, so its u_ad can be checked against the logged one. --shadow: every
         # variant computes u_ad without injecting it, exact on PID logs (the replayed u_ad never reached the drone)
-        out = run_driver(build(work, v["rbf"]), x, v["args"], work, inj_flown if name == "OFF" or shadow else 1)
+        out = run_driver(build(work, v["rbf"]), x, args, work, inj_flown if name == "OFF" or shadow else 1)
         if name == "OFF" and runs:
             for i, a in enumerate(("pitch", "roll")):     # applied u = u_nom + the flown u_ad when it was injected
                 lu = np.nan_to_num(info["logged_u_ad"][a]) * inj_flown
@@ -368,7 +393,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--json", help="write the full results here")
     ap.add_argument("--only", nargs="*", help="log names to replay (default: every log with the MRAC inputs)")
     ap.add_argument("--per-log", action="store_true", help="print one row per log instead of the summary")
-    ap.add_argument("--set", choices=sorted(VARIANT_SETS), default="wp27", help="variant set (3l = 3L-v2 vs vp6)")
+    ap.add_argument("--set", choices=sorted(VARIANT_SETS), default="wp27", help="variant set (3l = 3L-v2 vs vp6, s10x = S10X feature ablation)")
     ap.add_argument("--shadow", action="store_true",
                     help="no variant injects (exact on PID logs: the composite law sees the u that was flown)")
     args = ap.parse_args(argv)

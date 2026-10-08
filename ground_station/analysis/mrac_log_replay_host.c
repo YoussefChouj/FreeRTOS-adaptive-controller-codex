@@ -8,7 +8,11 @@
  * Theta ramp as injected, no rising-edge reset); simplex:2 counts would-be trips without acting on them.
  *
  * in.f32: N_IN float32 per 5 ms tick (layout IN_* below). imu_data.pit / .rol are passed as given: the
- * firmware feeds degrees (API/imu_update.c:196-197).
+ * firmware feeds degrees (API/imu_update.c:196-197). acc:1 appends two floats per tick, mrac_in_acc pitch roll
+ * in m/s^2 (the ANF swing tracker input of the MULTI S10X basis, TASK/StabilizerTask.c:1889); swref:<v> sets
+ * mrac_vp12.swing_ref, the S10X swing feature normaliser (not in the var table); mask:<v> sets the MULTI ext-slot mask
+ * mrac_vp12.mask (bit k = ext slot k on) on pitch and roll, applied from tick 0 (MRAC_Vp12Step holds the mask
+ * in flight while injecting, and the injected logs start airborne).
  * out.f32: N_OUT float32 per tick: u_ad[4] u_nom[4] |Theta|[4] e[4] learn_gate simplex_reason
  * would_trip_count rbf_phi_pitch[12] rbf_phi_roll[12] (zeros in the STRUCT6 build). Axis order pitch roll yaw z.
  *
@@ -34,6 +38,8 @@ enum { IN_ARMED, IN_PHASE, IN_GY_DES, IN_GY_FB, IN_GY_U, IN_GX_DES, IN_GX_FB, IN
 #define N_OUT (19 + 2 * N_RBF)
 
 static MRAC_AxisState_t *const st[4] = {&mrac_state.pitch, &mrac_state.roll, &mrac_state.yaw, &mrac_state.z_rate};
+
+static int n_in = N_IN;                  /* N_IN, or N_IN + 2 with acc:1 */
 
 /* One driver argument: inj:<0|1>, simplex:<mode> or axis:field:value (MRAC_VariantParamSet). Returns its ok. */
 static int apply_arg(const char *s)
@@ -64,6 +70,7 @@ static void step(const float *in, float *out)
     c.Z_ratePID.Des = in[IN_Z_DES]; c.Z_ratePID.FB = in[IN_Z_FB]; c.Z_ratePID.U = in[IN_Z_U];
     imu_data.pit = in[IN_PIT];
     imu_data.rol = in[IN_ROL];
+    if (n_in > N_IN) { mrac_in_acc[0] = in[N_IN]; mrac_in_acc[1] = in[N_IN + 1]; }
     for (a = 0; a < 4; a++) st[a]->u_def = in[IN_UDEF_P + a];
     mrac_in_armed = (uint8_t)(in[IN_ARMED] > 0.5f);
     mrac_in_phase = (uint8_t)lrintf(in[IN_PHASE]);
@@ -131,7 +138,7 @@ static int apply_cfg(const char *s)
 int main(int argc, char **argv)
 {
     FILE *fin, *fout;
-    float in[N_IN], out[N_OUT + 4];
+    float in[N_IN + 2], out[N_OUT + 4];
     int i, inj = 0, stream;
 
     if (argc < 2) return 2;
@@ -141,6 +148,10 @@ int main(int argc, char **argv)
     for (i = stream ? 2 : 3; i < argc; i++) {
         if (strncmp(argv[i], "inj:", 4) == 0) { inj = (int)strtol(argv[i] + 4, NULL, 10); continue; }
         if (strncmp(argv[i], "simplex:", 8) == 0) { apply_arg(argv[i]); continue; }
+        if (strncmp(argv[i], "acc:", 4) == 0) { n_in = strtol(argv[i] + 4, NULL, 10) ? N_IN + 2 : N_IN; continue; }
+        if (strncmp(argv[i], "swref:", 6) == 0) { mrac_vp12.swing_ref = strtof(argv[i] + 6, NULL); continue; }
+        if (strncmp(argv[i], "mask:", 5) == 0) { mrac_vp12.mask[0] = mrac_vp12.mask[1] = mrac_vp12.mask_act[0] = mrac_vp12.mask_act[1]
+                = strtof(argv[i] + 5, NULL); continue; }
         if (strncmp(argv[i], "cfg:", 4) == 0) { fprintf(stderr, "set %d\n", apply_cfg(argv[i])); continue; }
         fprintf(stream ? stderr : stdout, "set %d\n", apply_arg(argv[i]));
     }
@@ -161,7 +172,7 @@ int main(int argc, char **argv)
             return 3;
         }
     }
-    while (fread(in, sizeof(float), N_IN, fin) == N_IN) {
+    while (fread(in, sizeof(float), (size_t)n_in, fin) == (size_t)n_in) {
         step(in, out);
         if (stream) {
             for (i = 0; i < 4; i++) out[N_OUT + i] = mix(i);
