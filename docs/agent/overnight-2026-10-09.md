@@ -19,7 +19,7 @@ against the opened link before it goes into a doc. Numbers stay PROPOSED unless 
 
 ## Added 2026-10-09 (your mid-run message), now on top
 
-- [ ] A. **3-layer controller flight-ready tomorrow**: built in the firmware (vp id, host tests pass), a logging
+- [x] A. **3-layer controller flight-ready tomorrow**: built in the firmware (vp id, host tests pass), a logging
   preset that records its signals, an analysis script for its flight, and the flash + fly commands in the
   morning pack. This outranks items 4-9.
 - [ ] B. **Not limited to the current variants**: new variants are allowed where the data says so (for example a
@@ -44,6 +44,11 @@ against the opened link before it goes into a doc. Numbers stay PROPOSED unless 
   winners as a new feature row (vp id) against vp13. Literature check (physics-informed / Lagrangian regressors
   in adaptive control) by a VPS worker.
 - [x] A1. 3L-v2 law in firmware: L2 composite + D self-tuning gain, off by default, host tests 28/28 (f00412a).
+
+- [x] A2. vp rows 16-18 + host table test (daf790b); log group mrac_3l + adaptive_review "3L-v2 prediction error"
+  section (18ec159); stream_log frame vp16_frames.md (2aa54c6); campaign rope570_3l.yaml, rows 17 -> 16 -> 18, 20 s
+  hover each (910bbb8). Morning: flash (`python -m ground_station.flashtool.rebuild_and_flash --yes`), Keil watch
+  vp_id = 17 and check vp_active = 17, PID hover on the rope first, then the campaign. Not flown, numbers PROPOSED.
 
 ## Checklist, priority order
 
