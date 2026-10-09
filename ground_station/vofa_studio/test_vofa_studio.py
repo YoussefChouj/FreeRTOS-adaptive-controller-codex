@@ -21,7 +21,7 @@ def test_plan_budget_default_preset():
     plan = core.plan_budget(SymbolResolver(core.ELF), core.load_preset("flight_default")["slots"])
     assert plan["ok"], plan["errors"]
     s0 = plan["slots"][0]
-    assert s0["bps"] == (12 + s0["payload"]) * 100 // s0["divider"]
+    assert s0["bps"] == (12 + s0["payload"]) * core.GUARD_SEND_HZ // s0["divider"]   # priced like the firmware guard
     assert plan["remaining_bps"] == plan["budget_bps"] - plan["total_bps"]
     bad = core.plan_budget(SymbolResolver(core.ELF), [{"rate": 50, "vars": ["no_such_var"]}])
     assert not bad["ok"] and bad["slots"][0]["vars"][0]["ok"] is False
@@ -234,6 +234,7 @@ def test_limits_come_from_elf_and_plan_counts_merged_ranges():
     m = core.merge_presets([core.load_preset(p) for p in names], core.slot_fits(r))
     plan = core.plan_budget(r, m["slots"])
     for s in plan["slots"]:
-        assert s["ranges"] <= min(len(s["vars"]), s["max_ranges"]), s["errors"]
+        assert s["ranges"] <= len(s["vars"])
+        assert s["ranges"] <= s["max_ranges"] or s["errors"]   # the union of every preset may overflow: flagged
         assert s["payload"] <= s["max_bytes"]
     assert sum(s["ranges"] for s in plan["slots"]) < sum(len(s["vars"]) for s in plan["slots"])

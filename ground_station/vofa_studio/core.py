@@ -20,7 +20,7 @@ from pathlib import Path
 from ground_station.livewatch import stream
 from ground_station.livewatch.stream import (
     BUDGET_PCT, MAX_SLOTS, SEND_TASK_MEASURED_HZ, TRANSPORT_USART3,
-    _validate, apply_firmware_limits, coalesce_ranges, stream_bps,
+    _validate, apply_firmware_limits, coalesce_ranges,
 )
 from ground_station.livewatch.stream_log import (
     columns_for, resolve_ranges, run_groups,
@@ -32,6 +32,9 @@ PRESETS_DIR = Path(__file__).with_name("presets")
 LOG_DIR = ROOT / "logs" / "vofa"
 USART3_BAUD = 921600
 BUDGET_BPS = (USART3_BAUD // 10) * BUDGET_PCT[TRANSPORT_USART3] // 100
+# The firmware guard prices a slot as if Send_Task ran at 200 Hz (API/subscribe.h SUBSCRIBE_SEND_TASK_HZ,
+# subscribe.c) although it runs at 100 Hz, so a plan priced at 100 Hz is refused with E:over link budget.
+GUARD_SEND_HZ = 200
 SEGMENT_S = 10.0
 STATUS_VARS = ("DroneStatus.ARM_Status", "real_voltage", "flight_phase")
 _NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
@@ -218,7 +221,7 @@ def plan_budget(resolver, slots):
             divider = divider_for(rate)
         merged = coalesce_ranges(ranges)
         payload = sum(r.nbytes for r in ranges)
-        bps = stream_bps(payload, divider) if divider and ranges else 0
+        bps = (payload + 12) * GUARD_SEND_HZ // divider if divider and ranges else 0
         if ranges and divider:
             try:
                 _validate(merged, divider, TRANSPORT_USART3, USART3_BAUD, idx,

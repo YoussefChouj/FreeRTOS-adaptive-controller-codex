@@ -1,6 +1,6 @@
 {
   "name": "vp24_rbf24_phys_g6",
-  "notes": "Set Keil vp_id = 24, check vp_active = 24. RBF40T_BPQ (basis 10): 24 RBF + 4 physics, ext_g 6 (faster learning for the arm). The row ships its mask; mask_act readback is in slot 3. Theta[6..41] = RBF cells, Theta[42..45] = physics (Phi[42..45] logged). Log + VOFA per experiment; CSV = adaptive_review stem. All 4 slots at 100 Hz (send-task max).",
+  "notes": "Set Keil vp_id = 24, check vp_active = 24. RBF40T_BPQ (basis 10): 24 RBF + 4 physics, ext_g 6 (faster learning for the arm). The row ships its mask; mask_act readback is in slot 3. Theta[6..41] = RBF cells, Theta[42..45] = physics (Phi[42..45] logged). Log + VOFA per experiment; CSV = adaptive_review stem. Rates: core 100 Hz, weights 25 Hz, drift 50 Hz, status 25 Hz (fits the firmware link guard).",
   "slots": [
     {
       "rate": 100.0,
@@ -50,7 +50,7 @@
       ]
     },
     {
-      "rate": 100.0,
+      "rate": 25.0,
       "vars": [
         "mrac_state.pitch.Theta[0]",
         "mrac_state.pitch.Theta[1]",
@@ -161,7 +161,7 @@
       ]
     },
     {
-      "rate": 100.0,
+      "rate": 50.0,
       "vars": [
         "Ctrler.locxPID.Des",
         "Ctrler.locxPID.FB",
@@ -189,7 +189,7 @@
       ]
     },
     {
-      "rate": 100.0,
+      "rate": 25.0,
       "vars": [
         "vp_active",
         "mrac_var_id[0]",
