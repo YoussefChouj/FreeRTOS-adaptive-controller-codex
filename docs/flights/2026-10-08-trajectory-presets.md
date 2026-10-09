@@ -33,18 +33,18 @@ Keil: open the project, F7 (build), then Download. Expect 0 errors. If ARMCC com
 | `axis` | 0 | 0 x, 1 y, 2 z | step and zigzag axis |
 | `zz_shape` | 0 | 0, 1 | zigzag 0 triangle, 1 sine |
 | `f8_type` | 1 | 0, 1 | figure-8 0 Bernoulli (lies along x), 1 Gerono (lies along y) |
-| `move_s` | 18 | >= 5 | preset time, s |
-| `ret_s` | 5 | 3-10 | fly back to the start point, s |
+| `move_s` | 20 | >= 5 | preset time, s |
+| `ret_s` | 3 | 3-10 | fly back to the start point, s |
 | `hold_s` | 2 | 0-5 | hold the start point, s |
-| `ramp_s` | 3 | 0.5 to `move_s`/4 | profile 1 ramp, s |
+| `ramp_s` | 2 | 0.5 to `move_s`/4 | profile 1 ramp, s |
 | `step_cm` | 40 | ±100 smooth, ±50 hard, z ±40 | out for `move_s`/2, then back |
 | `zz_amp_cm`, `zz_hz` | 30, 0.2 | up to 80 (z 40), up to 1 Hz | zigzag amplitude and frequency |
 | `circ_r_cm`, `circ_laps` | 40, 1 | 10-80, up to 3 | circle; the start point is on the circle, centre at -x |
-| `f8_a_cm`, `f8_laps` | 40, 2 | 10-80, up to 3 | figure-8 size and laps |
+| `f8_a_cm`, `f8_laps` | 70, 2 | 10-80, up to 3 | figure-8 size and laps |
 
 Refused at `traj_go` (status `0xEE`): `move_s + ret_s + hold_s > 25`, a peak reference speed above 80 cm/s, or
-a return faster than 80 cm/s. Peak speeds with the defaults (computed): step 21, zigzag 24, circle 17,
-figure-8 48 cm/s (Gerono 40 cm, 2 laps: the standard test path, 2026-10-09). Refused with `0xEF`: any part of the shape outside the soft fence (|x| 1.3 m, |y| 1.7 m, z 0.4-1.4 m),
+a return faster than 80 cm/s. Peak speeds with the defaults (computed): step 31, zigzag 24, circle 14,
+figure-8 69 cm/s (Gerono 70 cm, 2 laps, x ±35 cm, y ±70 cm: the standard test path, 2026-10-09). Refused with `0xEF`: any part of the shape outside the soft fence (|x| 1.3 m, |y| 1.7 m, z 0.4-1.4 m),
 unless `traj_fence_off = 1` (then only the range/peak-speed checks apply).
 The circle and the Bernoulli figure-8 reach 2 × size toward -x, so start them at x >= -0.5 m (circle 40) or
 x >= -0.3 m (figure-8 50).

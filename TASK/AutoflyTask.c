@@ -392,11 +392,12 @@ volatile float   traj_t      = 0.0f; /* time since traj_go [s]                  
 volatile float   traj_home_x = 0.0f, traj_home_y = 0.0f, traj_home_z = 0.0f, traj_home_yaw = 0.0f; /* start point */
 TrajParams_t traj_p = {                 /* watch-window struct, latched at traj_go (same pattern as vp_user) */
 	1U, 0U, 0U, 1U,                 /* profile smooth, axis x, zigzag triangle, figure-8 Gerono    */
-	18.0f, 5.0f, 2.0f, 3.0f,        /* move, return, hold, ramp [s]: 25 s in total                 */
+	20.0f, 3.0f, 2.0f, 2.0f,        /* move, return, hold, ramp [s]: 25 s in total                 */
 	40.0f,                          /* step [cm]                                                   */
 	30.0f, 0.2f,                    /* zigzag amplitude [cm], frequency [Hz]                       */
 	40.0f, 1.0f,                    /* circle radius [cm], laps                                    */
-	40.0f, 2.0f                     /* figure-8 size [cm], laps: standard test path, peak 48 cm/s  */
+	70.0f, 2.0f                     /* figure-8 size [cm], laps: standard test path, x +-35 cm,
+	                                   y +-70 cm, peak 69 cm/s (limit 80)                          */
 };
 
 static TrajParams_t s_tp;                         /* traj_p latched at traj_go                    */
