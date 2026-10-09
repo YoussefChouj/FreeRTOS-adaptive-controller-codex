@@ -164,7 +164,11 @@
         "mrac_vp12.anf_hz[1]",
         "mrac_state.pitch.nan_hold",
         "mrac_state.roll.nan_hold",
-        "mrac_state.yaw.nan_hold"
+        "mrac_state.yaw.nan_hold",
+        "traj_active",
+        "traj_phase",
+        "traj_status",
+        "traj_t"
       ]
     }
   ]

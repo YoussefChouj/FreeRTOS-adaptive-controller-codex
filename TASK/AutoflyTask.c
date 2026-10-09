@@ -378,7 +378,7 @@ typedef struct {
 	float   f8_laps;    /* figure-8 laps in move_s, up to 3                                            */
 } TrajParams_t;
 
-volatile uint8_t traj_id        = 0U;  /* 1 step, 2 zigzag, 3 circle, 4 figure-8                                */
+volatile uint8_t traj_id        = 4U;  /* 1 step, 2 zigzag, 3 circle, 4 figure-8 (default: the standard test path) */
 volatile uint8_t traj_go        = 0U;  /* write 1 to start traj_id (ignored while one runs); the firmware clears it */
 volatile uint8_t traj_stop      = 0U;  /* write 1 to end the move early and fly back                           */
 volatile uint8_t traj_fence_off = 0U;  /* 0 fence on (x/y/z checks); 1 fence off (x/y/z checks bypassed)         */
@@ -391,12 +391,12 @@ volatile uint8_t traj_id_seen = 0U; /* traj_id as read at the last traj_go (expl
 volatile float   traj_t      = 0.0f; /* time since traj_go [s]                                              */
 volatile float   traj_home_x = 0.0f, traj_home_y = 0.0f, traj_home_z = 0.0f, traj_home_yaw = 0.0f; /* start point */
 TrajParams_t traj_p = {                 /* watch-window struct, latched at traj_go (same pattern as vp_user) */
-	1U, 0U, 0U, 0U,                 /* profile smooth, axis x, zigzag triangle, figure-8 Bernoulli */
+	1U, 0U, 0U, 1U,                 /* profile smooth, axis x, zigzag triangle, figure-8 Gerono    */
 	18.0f, 5.0f, 2.0f, 3.0f,        /* move, return, hold, ramp [s]: 25 s in total                 */
 	40.0f,                          /* step [cm]                                                   */
 	30.0f, 0.2f,                    /* zigzag amplitude [cm], frequency [Hz]                       */
 	40.0f, 1.0f,                    /* circle radius [cm], laps                                    */
-	50.0f, 1.0f                     /* figure-8 size [cm], laps                                    */
+	40.0f, 2.0f                     /* figure-8 size [cm], laps: standard test path, peak 48 cm/s  */
 };
 
 static TrajParams_t s_tp;                         /* traj_p latched at traj_go                    */
@@ -506,8 +506,9 @@ static uint8_t Traj_Check(void)
 	float lo = 0.0f, hi = 0.0f;                          /* step / zigzag offset range on the axis [cm] */
 	float x0 = 0.0f, x1 = 0.0f, y0 = 0.0f, y1 = 0.0f, z0 = 0.0f, z1 = 0.0f; /* offset box [cm]     */
 	float v = 0.0f;                                      /* peak reference speed [cm/s]                 */
+	float xm = 0.0f, ym = 0.0f;                          /* farthest |corner| of the box on x, y [cm]  */
 	float path_s = s_tp.move_s - ((s_tp.profile == 1U) ? s_tp.ramp_s : 0.0f);
-	float zt;
+	float zt;                                            /* ceiling of the box on z [cm]               */
 	wfb_safety_limits_t lim;
 
 	if (traj_id < 1U || traj_id > 4U) {
