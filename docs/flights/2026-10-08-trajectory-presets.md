@@ -17,6 +17,7 @@ Keil: open the project, F7 (build), then Download. Expect 0 errors. If ARMCC com
 | `traj_id` | write | 1 step, 2 zigzag, 3 circle, 4 figure-8 |
 | `traj_go` | write 1 | start `traj_id` with the current `traj_p`; the firmware clears it |
 | `traj_stop` | write 1 | end the move now and fly back (status 4) |
+| `traj_fence_off` | write | 0 fence on (x/y/z checks); 1 fence off (checks bypassed, trajectory may leave the box) |
 | `traj_status` | read | 1 running, 2 done and back, 3 aborted (stick takeover, landing, disarm), 4 stopped and back |
 | | | refused, nothing moved: `0xE0` not flying, `0xE1` busy (a GS path or GS authority), `0xE2` bad `traj_id`, `0xEE` a field out of range or too fast, `0xEF` the shape leaves the soft fence |
 | `traj_id_seen` | read | `traj_id` as the firmware read it at the last `traj_go`; if `traj_status` is `0xE2`, this shows why |
@@ -43,7 +44,8 @@ Keil: open the project, F7 (build), then Download. Expect 0 errors. If ARMCC com
 
 Refused at `traj_go` (status `0xEE`): `move_s + ret_s + hold_s > 25`, a peak reference speed above 80 cm/s, or
 a return faster than 80 cm/s. Peak speeds with the defaults (computed): step 21, zigzag 24, circle 17,
-figure-8 21 cm/s. Refused with `0xEF`: any part of the shape outside the soft fence (|x| 1.3, |y| 1.7 m, z 0.4-1.4 m).
+figure-8 21 cm/s. Refused with `0xEF`: any part of the shape outside the soft fence (|x| 1.3 m, |y| 1.7 m, z 0.4-1.4 m),
+unless `traj_fence_off = 1` (then only the range/peak-speed checks apply).
 The circle and the Bernoulli figure-8 reach 2 × size toward -x, so start them at x >= -0.5 m (circle 40) or
 x >= -0.3 m (figure-8 50).
 

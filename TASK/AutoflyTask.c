@@ -17,6 +17,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "wfb_safety.h"
+#include "wfb_traj.h"
 
 /* ------------------------------------------------------------------
  * Private constants
@@ -377,9 +378,10 @@ typedef struct {
 	float   f8_laps;    /* figure-8 laps in move_s, up to 3                                            */
 } TrajParams_t;
 
-volatile uint8_t traj_id     = 0U;  /* 1 step, 2 zigzag, 3 circle, 4 figure-8                                */
-volatile uint8_t traj_go     = 0U;  /* write 1 to start traj_id (ignored while one runs); the firmware clears it */
-volatile uint8_t traj_stop   = 0U;  /* write 1 to end the move early and fly back                           */
+volatile uint8_t traj_id        = 0U;  /* 1 step, 2 zigzag, 3 circle, 4 figure-8                                */
+volatile uint8_t traj_go        = 0U;  /* write 1 to start traj_id (ignored while one runs); the firmware clears it */
+volatile uint8_t traj_stop      = 0U;  /* write 1 to end the move early and fly back                           */
+volatile uint8_t traj_fence_off = 0U;  /* 0 fence on (x/y/z checks); 1 fence off (x/y/z checks bypassed)         */
 volatile uint8_t traj_active = 0U;  /* id of the running preset, 0 idle                                     */
 volatile uint8_t traj_phase  = 0U;  /* 0 idle, 1 move, 2 return, 3 hold at the start point                 */
 volatile uint8_t traj_status = 0U;  /* 1 running, 2 done, 3 aborted (takeover/landing), 4 stopped and back,
@@ -587,12 +589,18 @@ static uint8_t Traj_Check(void)
 		return 0xEEU;
 	}
 
-	/* No x/y fence check here (operator 2026-10-09: it refused the circle and figure-8 from an off-centre start,
-	 * the drone just held). Only the floor and the ceiling are checked; the pilot keeps the RC override. */
-	wfb_safety_default_limits(&lim);
-	zt = lim.ceiling_m - lim.soft_margin_m;
-	if (traj_home_z + z0 * 0.01f < TRAJ_Z_MIN_M || traj_home_z + z1 * 0.01f > zt) {
-		return 0xEFU;
+	if (traj_fence_off == 0U) {
+		wfb_traj_limits_t tlim;
+		wfb_traj_default_limits(&tlim);
+		if (traj_home_x + x0 * 0.01f < -tlim.x_abs_m || traj_home_x + x1 * 0.01f > tlim.x_abs_m ||
+		    traj_home_y + y0 * 0.01f < -tlim.y_abs_m || traj_home_y + y1 * 0.01f > tlim.y_abs_m) {
+			return 0xEFU;
+		}
+		wfb_safety_default_limits(&lim);
+		zt = lim.ceiling_m - lim.soft_margin_m;
+		if (traj_home_z + z0 * 0.01f < TRAJ_Z_MIN_M || traj_home_z + z1 * 0.01f > zt) {
+			return 0xEFU;
+		}
 	}
 	return 0U;
 }
