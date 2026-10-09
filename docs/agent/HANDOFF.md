@@ -4,15 +4,17 @@ Read order: `AGENTS.md` -> this file -> `docs/agent/memory/rules.md` -> `.claude
 History: `docs/agent/ledger/` (grep, never read whole); the previous HANDOFF is `ledger/handoff-2026-10-07-archive.md`.
 Working mode: the desktop session is the CEO and does every item inline. No subagents, no workers.
 
-## Now: overnight 2026-10-09 run DONE (all items ticked); morning = row 17 on the 570 g rope
-Branch `overnight-2026-10-08`. Checklist `docs/agent/overnight-2026-10-09.md` (all ticked).
-Morning pack: `docs/agent/morning-2026-10-10.md` (flash, PID rope hover, vp 17 -> 19 -> 16 on rope570_3l.yaml, debrief).
-Final boss = row 17 (L2 only g8, te_off): `docs/design/final-boss-2026-10-10.md`. Row 19 = rope hover only, never the arm.
-Sim: rows 17/19 fix the rope altitude sag (0.24 -> 0.08 m), do not damp the swing; arm: PID holds, row 19 tilts 32 deg.
-Neural-Fly (nf.md): every adaptive law beats PID in every wind; data is force, no payload. All numbers PROPOSED.
+## Now: 2026-10-09 day = operator flies row 16 (their 3L-v2) + row 17 on the 570 g rope vs PID
+Branch `overnight-2026-10-08`. Operator guide (beginner, step by step, all commands, vp table, manual tuning):
+`docs/lab/today-2026-10-09.md`. VOFA Studio presets vp00..vp19 (`ground_station/vofa_studio/presets/vp*.json`):
+log CSV + live VOFA+, session name `vpNN_rope_01` / `pid_rope_01` = adaptive_review stem `logs/vofa/<name>`.
+2 studio tests (budget, merge) stay RED until the 3L flash: the local axf predates f00412a (rows 16-19 vars unresolved).
+Green after flash = proof the flash built 3L. Layer 3 (task priors) of the user's design is NOT built.
+Campaign alternative: `docs/agent/morning-2026-10-10.md` (rope570_3l.yaml, no VOFA). Final boss = row 17.
+Sim: rows 17/19 fix the rope altitude sag (0.24 -> 0.08 m), do not damp the swing; arm: row 19 tilts 32 deg.
 
 ## Next actions
-1. Operator: flash, PID rope hover, then the rope570_3l campaign. Agent: flight_debrief + adaptive_review.
+1. Operator flies (guide above). Agent: adaptive_review per log, adaptive_meta table, mrac_log_replay --set 3l.
 2. Design lead (not flown): IMU-only swing EKF + damping angle (Taki 2026, vp16-research.md R9) as a layer beside row 17.
 3. VPS oc-run chains use `agy/<model>` / `ark/<model>` (slash); `ark:` with a colon is refused (rc 2, no .out).
 

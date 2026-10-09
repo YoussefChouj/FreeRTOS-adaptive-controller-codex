@@ -1,0 +1,108 @@
+{
+  "name": "vp13_rbf24t",
+  "notes": "Set Keil vp_id = 13, check vp_active = 13. RBF24T ext_g 4 (MULTI). Log + VOFA per experiment; CSV = adaptive_review stem.",
+  "slots": [
+    {
+      "rate": 50.0,
+      "vars": [
+        "Ctrler.pitchPID.Des",
+        "Ctrler.pitchPID.FB",
+        "Ctrler.rollPID.Des",
+        "Ctrler.rollPID.FB",
+        "imu_data.rol",
+        "imu_data.pit",
+        "imu_data.yaw",
+        "Ctrler.gyroxPID.FB",
+        "Ctrler.gyroyPID.FB",
+        "Ctrler.gyrozPID.FB",
+        "mrac_state.pitch.u_nom",
+        "mrac_state.pitch.u_ad",
+        "mrac_state.roll.u_nom",
+        "mrac_state.roll.u_ad",
+        "mrac_state.yaw.u_nom",
+        "mrac_state.yaw.u_ad",
+        "mrac_state.pitch.e",
+        "mrac_state.roll.e",
+        "mymotor.motor1",
+        "mymotor.motor2",
+        "mymotor.motor3",
+        "mymotor.motor4",
+        "mrac_flags.output_injection_on",
+        "flight_phase"
+      ]
+    },
+    {
+      "rate": 25.0,
+      "vars": [
+        "mrac_state.pitch.Theta[0]",
+        "mrac_state.roll.Theta[0]",
+        "mrac_state.pitch.Theta[1]",
+        "mrac_state.roll.Theta[1]",
+        "mrac_state.pitch.Theta[2]",
+        "mrac_state.roll.Theta[2]",
+        "mrac_state.pitch.Theta[3]",
+        "mrac_state.roll.Theta[3]",
+        "mrac_state.pitch.Theta[4]",
+        "mrac_state.roll.Theta[4]",
+        "mrac_state.pitch.Theta[5]",
+        "mrac_state.roll.Theta[5]",
+        "mrac_state.pitch.Theta[6]",
+        "mrac_state.roll.Theta[6]",
+        "mrac_state.pitch.Theta[7]",
+        "mrac_state.roll.Theta[7]",
+        "mrac_state.pitch.Theta[8]",
+        "mrac_state.roll.Theta[8]",
+        "mrac_state.pitch.Theta[9]",
+        "mrac_state.roll.Theta[9]",
+        "mrac_state.pitch.Theta[10]",
+        "mrac_state.roll.Theta[10]",
+        "mrac_state.pitch.Theta[11]",
+        "mrac_state.roll.Theta[11]"
+      ]
+    },
+    {
+      "rate": 25.0,
+      "vars": [
+        "mrac_state.pitch.x",
+        "mrac_state.pitch.r",
+        "mrac_state.pitch.e_dot",
+        "mrac_state.roll.x",
+        "mrac_state.roll.r",
+        "mrac_state.roll.e_dot"
+      ]
+    },
+    {
+      "rate": 10.0,
+      "vars": [
+        "Ctrler.Z_posPID.Des",
+        "Ctrler.Z_posPID.FB",
+        "Ctrler.Z_ratePID.FB",
+        "ano_of.earth_x",
+        "ano_of.earth_y",
+        "ano_of.of_alt_cm",
+        "vp_active",
+        "mrac_var_id[0]",
+        "mrac_var_id[1]",
+        "g_ctrl_select",
+        "DroneStatus.ARM_Status",
+        "DroneStatus.FlyMode",
+        "real_voltage"
+      ]
+    }
+  ],
+  "vofa": [
+    "Ctrler.pitchPID.Des",
+    "Ctrler.pitchPID.FB",
+    "Ctrler.rollPID.Des",
+    "Ctrler.rollPID.FB",
+    "mrac_state.pitch.u_nom",
+    "mrac_state.pitch.u_ad",
+    "mrac_state.roll.u_nom",
+    "mrac_state.roll.u_ad",
+    "mymotor.motor1",
+    "mymotor.motor2",
+    "mymotor.motor3",
+    "mymotor.motor4",
+    "Ctrler.Z_posPID.FB"
+  ]
+}
