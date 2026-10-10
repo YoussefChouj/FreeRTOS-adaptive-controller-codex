@@ -48,7 +48,7 @@ int main(void)
     int at = -1;
 
     LandGate_DefaultLimits(&s_lim);
-    CHECK(g_land_gate_enable == all);   /* on by default */
+    CHECK(g_land_gate_enable == LAND_GATE_EN_SAT);   /* LOW_V off by default (2026-10-10) */
 
     /* healthy flight: nothing for a minute */
     LandGate_Reset(&s);

@@ -397,7 +397,7 @@ typedef struct {
 volatile uint8_t traj_id        = 4U;  /* 1 step, 2 zigzag, 3 circle, 4 figure-8 (default: the standard test path) */
 volatile uint8_t traj_go        = 0U;  /* write 1 to start traj_id (ignored while one runs); the firmware clears it */
 volatile uint8_t traj_stop      = 0U;  /* write 1 to end the move early and fly back                           */
-volatile uint8_t traj_fence_off = 0U;  /* 0 fence on (x/y/z checks); 1 fence off (x/y/z checks bypassed)         */
+volatile uint8_t traj_fence_off = 1U;  /* 0 fence on (x/y/z checks); 1 fence off (bypassed). Default 1 (2026-10-10 operator); floor check always holds */
 volatile uint8_t traj_active = 0U;  /* id of the running preset, 0 idle                                     */
 volatile uint8_t traj_phase  = 0U;  /* 0 idle, 1 move, 2 return, 3 hold at the start point,
                                        4 fly to the fixed start point, 5 settle there (start_fixed 1)   */

@@ -17,7 +17,7 @@ static const land_gate_limits_t s_limits =
 /*                     land_v land_v_hold vbat_valid sat_ccr  sat_hold */
     LAND_GATE_LIMITS_ROW(14.3f,  1.5f,       10.0f,     3990.0f, 0.35f);  /* PROPOSED */
 
-volatile uint8_t g_land_gate_enable = LAND_GATE_EN_LOW_V | LAND_GATE_EN_SAT;
+volatile uint8_t g_land_gate_enable = LAND_GATE_EN_SAT;   /* LOW_V off by default (2026-10-10 operator: pack sags under traj load); write 3 to re-arm */
 volatile uint8_t g_land_gate_trip   = LAND_GATE_NONE;
 volatile uint8_t g_land_gate_sat_n  = 0U;
 volatile float   g_land_gate_sat_max_s = 0.0f;
