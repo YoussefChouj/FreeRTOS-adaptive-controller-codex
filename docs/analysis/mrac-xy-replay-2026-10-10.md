@@ -11,7 +11,7 @@ Persistent errors are overstated: in closed loop u_ad would shrink them.
 
 ## Bottom line
 
-| check | limit | passthrough reference (boot default) | verdict |
+| check | limit | passthrough reference (old default, before 75710e9) | verdict |
 |---|---|---|---|
 | finite outputs | all | all finite, 45 logs, 3978 s gated | pass |
 | abs u_ad | u_max 1.0 m/s^2 | never above 1.00 (clamp holds) | pass |
@@ -52,12 +52,13 @@ steady one-sided bias (`flight_test_landing_x_drift_1` 37 %, `flight_test_drift_
 `f17_hover_shadow2` 28 %). Open loop, the bias never closes, so Theta integrates it up to the clamp. This is the
 layer trying to cancel the known x drift; in closed loop the error would shrink. The clamp held in every case.
 
-## PROPOSED (needs operator OK, config change)
+## APPROVED and committed (operator: "go ahead", 2026-10-10, commit 75710e9)
 
 Run x/y with a first-order reference model instead of passthrough: `ref_type = 1` on mrac_config_x/y only
 (per-axis V1 field, other axes unchanged), `ref_model_bw = 2` rad/s (best fit above, replacing the unmeasured 4).
 Then e measures departure from the velocity loop's own response, not its lag. Result of the full C replay at
-bw 2 on the 45 logs: see the next section.
+bw 2 on the 45 logs: see the next section. This is now the firmware default; rerunning the tool without
+`--ref-bw` gives the same result (worst e p99 1.03 m/s, max u_ad 0.80, all finite).
 
 ## C replay with first-order reference model, bw 2 (`--ref-bw 2`)
 

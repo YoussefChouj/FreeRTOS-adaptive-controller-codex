@@ -16,10 +16,10 @@ Rank by position error vs the planned path (50 Hz).
 
 ## Next 3 actions
 1. Operator at the lab: `python -m ground_station.flashtool.rebuild_and_flash --yes`, check `kp_active == 7`.
-2. **6-axis MRAC** (operator: "i want all 6 axes to adaptaion layers"). Wiring 7d83471 (off at boot, built,
-   not flashed). Log replay d8bd1a4, `docs/analysis/mrac-xy-replay-2026-10-10.md`: safe numerically; boot passthrough
-   ref model learns the PID lag (freeze/clamp). PROPOSED, awaiting operator OK: x/y ref_type 1, ref_model_bw 2
-   (fitted). Then telemetry arrays 4 -> 6. Do not fly x/y before the operator answers.
+2. **6-axis MRAC** (operator: "i want all 6 axes to adaptaion layers"). Wiring 7d83471, replay d8bd1a4
+   (`docs/analysis/mrac-xy-replay-2026-10-10.md`), x/y ref model 75710e9 (ref_type 1, bw 2 measured, operator OK):
+   45 logs 0 freeze, 0 clamp, max u_ad 0.80. Off at boot, built (Keil 0/0), NOT flashed, unflown.
+   Next: telemetry arrays g_tlm.mrac e/u_nom/u_ad [4] -> [6] + decoders.
 3. Logging option f: add estimator internal error signals plus other meta-analysis variables to the preset
    logs (check the slot budget). Confirm the variable list and rate with the operator before any capture.
 
