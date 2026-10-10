@@ -510,6 +510,11 @@
               <FilePath>..\API\land_gate.c</FilePath>
             </File>
             <File>
+              <FileName>traj_shape.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\API\traj_shape.c</FilePath>
+            </File>
+            <File>
               <FileName>fw_health.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\API\fw_health.c</FilePath>

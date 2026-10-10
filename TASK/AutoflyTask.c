@@ -18,6 +18,7 @@
 #include "task.h"
 #include "wfb_safety.h"
 #include "wfb_traj.h"
+#include "traj_shape.h"
 
 /* ------------------------------------------------------------------
  * Private constants
@@ -376,6 +377,13 @@ typedef struct {
 	float   circ_laps;  /* circle laps in move_s, up to 3                                              */
 	float   f8_a_cm;    /* figure-8 size [cm], 10-80                                                   */
 	float   f8_laps;    /* figure-8 laps in move_s, up to 3                                            */
+	float   f8_tilt_deg;  /* figure-8 plane tilted about x: y lobes climb/sink, z = y * sin(tilt) [deg],
+	                         +-60 and |z| up to 40 cm (Gerono a 70: up to 34 deg)                      */
+	uint8_t yaw_follow;   /* circle and figure-8: 1 nose faces the direction of travel, 0 hold heading  */
+	float   yaw_rate_dps; /* yaw follow slew limit [deg/s], 10-180; corners sharper than this lag       */
+	float   yaw_nose_deg; /* where the nose points in the loc x/y frame at yaw 0 [deg, x toward y].
+	                         x is the roll axis at yaw 0, so the nose is +90 or -90: check it on the
+	                         first slow run (nose must lead) and flip the sign if the tail leads        */
 } TrajParams_t;
 
 volatile uint8_t traj_id        = 4U;  /* 1 step, 2 zigzag, 3 circle, 4 figure-8 (default: the standard test path) */
@@ -396,8 +404,10 @@ TrajParams_t traj_p = {                 /* watch-window struct, latched at traj_
 	40.0f,                          /* step [cm]                                                   */
 	30.0f, 0.2f,                    /* zigzag amplitude [cm], frequency [Hz]                       */
 	40.0f, 1.0f,                    /* circle radius [cm], laps                                    */
-	70.0f, 2.0f                     /* figure-8 size [cm], laps: standard test path, x +-35 cm,
+	70.0f, 2.0f,                    /* figure-8 size [cm], laps: standard test path, x +-35 cm,
 	                                   y +-70 cm, peak 69 cm/s (limit 80)                          */
+	0.0f,                           /* figure-8 tilt [deg]: flat (30 gives z +-35 cm)              */
+	1U, 90.0f, 90.0f                /* yaw follow on, 90 deg/s, nose +y at yaw 0 (PROPOSED)        */
 };
 
 static TrajParams_t s_tp;                         /* traj_p latched at traj_go                    */
@@ -405,6 +415,8 @@ static float s_tph = 0.0f;                        /* time in the current phase [
 static float s_om = 0.0f;                         /* circle / figure-8 rate [rad per path second] */
 static float s_ref_x = 0.0f, s_ref_y = 0.0f, s_ref_z = 0.0f; /* last move reference (return start) */
 static uint8_t s_stopped = 0U;                    /* traj_stop ended the move                     */
+static traj_shape_t s_shape = { 0U, 0.0f, 0U, 0.0f, 0.0f, 1.0f }; /* circle / figure-8 shape, set by Traj_Check */
+static float s_yaw_cmd = 0.0f;                    /* slewed yaw reference [deg]                   */
 
 static float Traj_Ramp01(float u)
 {
@@ -443,6 +455,13 @@ static float Traj_Warp(float t)
 	return 0.5f * R + (t - R);
 }
 
+/* Nose along the circle / figure-8 at move time t [deg]: the x/y path tangent minus where the nose sits at yaw 0
+   (taken in path angle, so it stays defined where the profile-1 ramps stop the path). */
+static float Traj_FollowYaw(float t)
+{
+	return AutoflyTask_WrapDeg(TrajShape_TangentDeg(&s_shape, s_om * Traj_Warp(t), s_om) - s_tp.yaw_nose_deg);
+}
+
 /* Offset from the start point at move time t: x/y/z all in cm. */
 static void Traj_Offset(float t, float *dx, float *dy, float *dz)
 {
@@ -472,24 +491,8 @@ static void Traj_Offset(float t, float *dx, float *dy, float *dz)
 		if (s_tp.profile != 0U) {
 			a *= Traj_Ramp01(t / s_tp.ramp_s) * Traj_Ramp01((s_tp.move_s - t) / s_tp.ramp_s);
 		}
-	} else if (traj_active == 3U) {
-		/* circle through the start point, centre circ_r_cm toward -x, leaves toward +y */
-		float th = s_om * Traj_Warp(t);
-		*dx = s_tp.circ_r_cm * (cosf(th) - 1.0f);
-		*dy = s_tp.circ_r_cm * sinf(th);
-		return;
-	} else if (traj_active == 4U) {
-		/* figure-8 from the start point, leaves toward +y */
-		float th = s_om * Traj_Warp(t);
-		float s = sinf(th);
-		float c = cosf(th);
-		if (s_tp.f8_type == 1U) {
-			*dx = 0.5f * s_tp.f8_a_cm * sinf(2.0f * th);   /* Gerono: crosses at the start point */
-			*dy = s_tp.f8_a_cm * s;
-		} else {
-			*dx = s_tp.f8_a_cm * (c / (1.0f + s * s) - 1.0f); /* Bernoulli: starts at the +x tip */
-			*dy = s_tp.f8_a_cm * s * c / (1.0f + s * s);
-		}
+	} else if (traj_active == 3U || traj_active == 4U) {
+		TrajShape_Offset(&s_shape, s_om * Traj_Warp(t), dx, dy, dz);
 		return;
 	}
 	if (s_tp.axis == 0U) {
@@ -521,7 +524,18 @@ static uint8_t Traj_Check(void)
 	    (s_tp.profile == 1U && (s_tp.ramp_s < 0.5f || s_tp.ramp_s > 0.25f * s_tp.move_s))) {
 		return 0xEEU;
 	}
+	if (s_tp.yaw_follow > 1U || s_tp.yaw_rate_dps < 10.0f || s_tp.yaw_rate_dps > 180.0f ||
+	    s_tp.yaw_nose_deg < -180.0f || s_tp.yaw_nose_deg > 180.0f ||
+	    (s_tp.yaw_follow == 1U && s_tp.ret_s + s_tp.hold_s < 180.0f / s_tp.yaw_rate_dps)) {
+		return 0xEEU;   /* the yaw must be able to swing back to the start heading before the end */
+	}
 	s_om = 0.0f;
+	s_shape.id = traj_id;
+	s_shape.circ_r_cm = s_tp.circ_r_cm;
+	s_shape.f8_type = s_tp.f8_type;
+	s_shape.f8_a_cm = s_tp.f8_a_cm;
+	s_shape.tilt_s = 0.0f;
+	s_shape.tilt_c = 1.0f;
 	if (traj_id == 1U) {
 		if (s_tp.step_cm == 0.0f || fabsf(s_tp.step_cm) > ((s_tp.profile == 0U) ? 50.0f : 100.0f)) {
 			return 0xEEU;   /* a hard step (profile 0) is limited to 50 cm */
@@ -550,9 +564,11 @@ static uint8_t Traj_Check(void)
 		y1 = s_tp.circ_r_cm;
 	} else {
 		if (s_tp.f8_a_cm < 10.0f || s_tp.f8_a_cm > 80.0f || s_tp.f8_laps <= 0.0f || s_tp.f8_laps > 3.0f ||
-		    s_tp.f8_type > 1U) {
+		    s_tp.f8_type > 1U || s_tp.f8_tilt_deg < -60.0f || s_tp.f8_tilt_deg > 60.0f) {
 			return 0xEEU;
 		}
+		s_shape.tilt_s = sinf(s_tp.f8_tilt_deg * (TRAJ_PI / 180.0f));
+		s_shape.tilt_c = cosf(s_tp.f8_tilt_deg * (TRAJ_PI / 180.0f));
 		s_om = 2.0f * TRAJ_PI * s_tp.f8_laps / path_s;
 		if (s_tp.f8_type == 1U) {
 			v = 1.42f * s_om * s_tp.f8_a_cm;
@@ -565,6 +581,15 @@ static uint8_t Traj_Check(void)
 			x0 = -2.0f * s_tp.f8_a_cm;
 			y0 = -0.36f * s_tp.f8_a_cm;
 			y1 = 0.36f * s_tp.f8_a_cm;
+		}
+		/* tilted plane: the y lobes (symmetric, -y0 = y1) shrink by cos and climb / sink by sin; rotation
+		   keeps the speed */
+		z1 = fabsf(y1 * s_shape.tilt_s);
+		z0 = -z1;
+		y0 *= s_shape.tilt_c;
+		y1 *= s_shape.tilt_c;
+		if (z1 > TRAJ_Z_OFF_MAX_CM) {
+			return 0xEEU;
 		}
 	}
 	if (traj_id <= 2U) {
@@ -600,9 +625,12 @@ static uint8_t Traj_Check(void)
 		}
 		wfb_safety_default_limits(&lim);
 		zt = lim.ceiling_m - lim.soft_margin_m;
-		if (traj_home_z + z0 * 0.01f < TRAJ_Z_MIN_M || traj_home_z + z1 * 0.01f > zt) {
+		if (traj_home_z + z1 * 0.01f > zt) {
 			return 0xEFU;
 		}
+	}
+	if (traj_home_z + z0 * 0.01f < TRAJ_Z_MIN_M) {
+		return 0xEFU;   /* the floor holds even with the fence off (a tilted figure-8 dips up to 40 cm) */
 	}
 	return 0U;
 }
@@ -648,6 +676,7 @@ static void Traj_Start(void)
 	traj_home_y = Ctrler.locyPID.Des;
 	traj_home_z = Ctrler.Z_posPID.Des;
 	traj_home_yaw = Ctrler.yawPID.Des;
+	s_yaw_cmd = traj_home_yaw;
 	code = Traj_Check();
 	if (code != 0U) {
 		traj_status = code;
@@ -741,7 +770,15 @@ static void Traj_Tick(void)
 			return;
 		}
 	}
-	Ctrler.yawPID.Des = traj_home_yaw;
+
+	/* yaw: nose along the path while a circle / figure-8 moves, back to the start heading after; slewed */
+	if (s_tp.yaw_follow == 1U && (traj_active == 3U || traj_active == 4U)) {
+		float target = (traj_phase == 1U) ? Traj_FollowYaw(s_tph) : traj_home_yaw;
+		s_yaw_cmd = TrajShape_YawStep(s_yaw_cmd, target, s_tp.yaw_rate_dps * AFLY_DT_S);
+	} else {
+		s_yaw_cmd = traj_home_yaw;
+	}
+	Ctrler.yawPID.Des = s_yaw_cmd;
 }
 
 /* ------------------------------------------------------------------
