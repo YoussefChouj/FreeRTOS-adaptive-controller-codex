@@ -1,7 +1,8 @@
 # Offline video ground truth: review and upgrade path (2026-10-10)
 
 This review covers `ground_station/analysis/video_truth.py`. It builds on `research-video-truth-sota-2026-10-07.md`
-(sources are cited there). Everything below is PROPOSED; none of it is built yet.
+(sources are cited there). Items 1-5 of the build order are **built** (2026-10-10, `ground_station/analysis/guard_pose.py`
+plus `video_truth.py`) and pass synthetic tests (`tests/test_guard_pose.py`). None of it has run on real flight video yet.
 
 **Bottom line.** The biggest upgrade is to stop treating the drone as one dot. Its 4 guards sit at known places on
 the frame, so a single phone can solve the drone's full pose (x, y, z, roll, pitch and yaw) from them with PnP. That
@@ -27,7 +28,7 @@ f the focal length in pixels and B the guard spacing. The error grows with the s
 camera should be as close as the full figure-8 allows. The value can be computed once B is taped (f is in the
 `docs/video-truth` calib JSON).
 
-## What mature pipelines do (from prior knowledge, not web-checked on 2026-10-10)
+## What mature pipelines do (Argus, evo, CoTracker3, SAM 2 web-checked 2026-10-10; see below)
 
 | pipeline | used for | how it works | what we can borrow |
 |---|---|---|---|
@@ -47,6 +48,36 @@ Ours works like a single-camera Argus. The gaps are a rigid-body pose (PnP), aud
 4. `evo` export (TUM format) for ATE and RPE.
 5. Overlay heading arrows and the side-by-side comparison clip.
 6. Second phone, only if step 1 is not good enough.
+
+## Built (2026-10-10)
+
+| item | where | how to run |
+|---|---|---|
+| 1 white guard + PnP 6-DoF | `guard_pose.detect_frame`, `guard_pose.guard_pose` (IPPE via `solvePnPGeneric`, both candidates, upright filter, nearest-to-previous when ambiguous) | `python -m ground_station.analysis.guard_pose pose VIDEO --cam CALIB.json --marks MARKS.json --csv SESSION.csv --run RUN_DIR --spacing B_m --odd-deg D` |
+| 2 audio sync | `guard_pose.audio_offset` (motor band 200-4000 Hz, onset held ≥ 0.5 s so a clap is ignored) vs the `mymotor.motor1-4` rise | `video_truth run ... --sync audio`, or `guard_pose audio VIDEO --csv SESSION.csv`. In `pose --sync audio` the sound delay range/343 m/s is added (about 9 ms at 3 m, computed) |
+| 3 RTS + truth velocity | `guard_pose.rts_ca` (constant acceleration, irregular dt, gaps) | written to `RUN_DIR/pose.csv` (`vx_ms, vy_ms, vz_ms` and 1σ) |
+| 4 ATE / RPE | `guard_pose.ate_rpe` (Umeyama SE(3) and Sim(3), RPE over 1 s), TUM export | `pose_report.json`; `truth.tum` / `est.tum` work with `evo_ape tum truth.tum est.tum -a` if evo is installed (not installed here) |
+| 5 overlay | plan tangent (yellow) and truth heading (green) arrows, bottom error strip; side-by-side clip | `video_truth overlay` (arrows need `pose.csv`); `guard_pose sbs A.mp4 tA B.mp4 tB --out sbs.mp4 --labels PID,vp20` |
+
+`pose_report.json` also reports the height bias vs telemetry, velocity rms vs the estimator, yaw vs `imu_data.yaw`
+(sign and offset fitted), the predicted depth σ, and `frame_dt_ms` (frame spacing, to catch variable frame rate).
+`--guard-offset` subtracts the guard plane's height above the point the drone reports as z.
+
+## Web check (2026-10-10): what else applies to this setup
+
+| finding | source | what it means here | action |
+|---|---|---|---|
+| IPPE gives two candidate poses for planar points; they mirror about a plane through the line of sight, so a single-answer solver can return the mirrored pose | [OpenCV solvePnP docs](https://docs.opencv.org/4.x/d5/d1f/calib3d_solvePnP.html), [IPPE README](https://gitblind.noratr.app/tobycollins/IPPE) | the 4 guards are coplanar, so this applies directly | built: both candidates, upright filter, temporal choice. **Mount the phone high, looking down ≥ 30°**, so the guard plane is never seen edge-on |
+| consumer CMOS rolling-shutter readout is typically 15-30 ms | [arXiv 2606.26863](https://arxiv.org/pdf/2606.26863) | each image row is captured at a different time. At 69 cm/s (laps 2) a 15-30 ms skew is 1.0-2.1 cm (computed) between frame top and bottom | not built (readout not measured). Keep the figure-8 in the middle band of the frame |
+| phones halve the frame rate in dim light; OpenCV seeks can land 0-4 frames off | [OpenCV forum VFR](https://forum.opencv.org/t/vfr-variable-frame-rate-check/20612), [OpenCV bug 4081](https://code.opencv.org/issues/4081) | the tracks read frames in order with per-frame `POS_MSEC`, so they are safe; only the `sbs` clip seeks once at its start | built: `frame_dt_ms` in the report. If `frac_gt_1p5x` > 0, add light |
+| Android camera clocks drift below 1.2 ms per minute on most of 47 tested phones | [arXiv 2107.00987](https://arxiv.org/pdf/2107.00987v1) | for one sync per flight of a few minutes, drift is a few ms | none |
+| Argus syncs consumer cameras by matching their audio | [Argus docs](https://argus.readthedocs.io/en/latest/README.html), [Jackson et al. 2016](https://pmc.ncbi.nlm.nih.gov/articles/PMC5051647) | confirms audio sync; it is also how a second phone would be synced | built (item 2) |
+| evo: `evo_ape` / `evo_rpe`, TUM `t x y z qx qy qz qw`, alignment and scale options | [evo on PyPI](https://pypi.org/project/evo) | our TUM files load into it | optional `pip install evo` (ask first); `ate_rpe` covers ATE/RPE without it |
+| CoTracker3 (Oct 2024): offline mode tracks points through occlusions | [co-tracker repo](https://github.com/facebookresearch/co-tracker) | could fill frames where a guard is hidden | not built: needs a GPU and PyTorch. Fallback only |
+| SAM 2: memory-based video segmentation that picks an object back up after it disappears | [Meta SAM 2](https://ai.meta.com/SAM2) | same use: a fallback for frames where the guard count is not 4 | not built, same reason |
+
+Not checked online and still open: the lag from motor command to audible spin-up (ESC plus rotor). It biases audio sync by
+an unknown amount. The speed cross-correlation in `video_truth run` stays the cross-check.
 
 ## The white guard
 

@@ -599,7 +599,8 @@ def flight_window(fly, armed, h, lift: float = 0.3):
 def run(video, cam, marks, csv_path, out, guard_offset=0.0, align_s=None, stride=1, lo=HSV_LO, hi=HSV_HI,
         min_area=MIN_AREA, static_t=(), sync="takeoff", survey=None) -> dict:
     """sync: "takeoff" (lift-off in both clocks; video and campaign started by hand), "speed" (speed
-    cross-correlation) or a number of seconds (telemetry time = video time + sync).
+    cross-correlation), "audio" (motor spool-up sound vs the motor command rise) or a number of seconds
+    (telemetry time = video time + sync).
     align_s None fits the estimator rotation over the whole flight (a hover-only window is ill-conditioned).
     survey (a survey() dict): compare in the drone frame at tape scale with that fixed board -> drone map, the raw
     estimate against it; the free fit then only reports the estimator's own yaw offset (align_rot_deg)."""
@@ -642,6 +643,9 @@ def run(video, cam, marks, csv_path, out, guard_offset=0.0, align_s=None, stride
     elif sync == "takeoff":
         xy1, ok1 = centres(np.zeros(len(tv)))
         off = takeoff_tel(te, h_tel, armed) - takeoff_video(tv[ok1], xy1[ok1])
+    elif sync == "audio":                                # motor sound vs motor command (guard_pose.audio_offset)
+        from ground_station.analysis.guard_pose import audio_offset
+        off = audio_offset(video, csv_path, tel["t"][0])
     else:
         off = float(sync)
     xy, ok = centres(np.interp(tv + off, te, h_tel))
@@ -716,7 +720,9 @@ def run(video, cam, marks, csv_path, out, guard_offset=0.0, align_s=None, stride
 
 
 def overlay(video, cam, marks, csv_path, run_dir, out_mp4, width=1920) -> int:
-    """Demo video: planned path (setpoints), the drone's own estimate and the video truth drawn on the roam video."""
+    """Demo video: planned path (setpoints), the drone's own estimate and the video truth drawn on the roam video,
+    a heading arrow for the plan (path tangent) and, when `guard_pose pose` has written pose.csv, the truth heading,
+    plus an estimate-error-vs-time strip along the bottom."""
     cv2 = _cv2()
     run_dir = Path(run_dir)
     rep = json.loads((run_dir / "report.json").read_text())
@@ -740,10 +746,23 @@ def overlay(video, cam, marks, csv_path, run_dir, out_mp4, width=1920) -> int:
     lines = {"plan": (te, px(floor(tel[X_SP], tel[Y_SP]), z), (0, 215, 255)),       # BGR: yellow
              "estimate": (te, px(floor(tel[X_CM], tel[Y_CM]), z), (255, 160, 40)),   # blue
              "video truth": (tr[:, 0], px(t0 + tr[:, 1:3], np.interp(tr[:, 0], te, z)), (60, 220, 60))}  # green
+    plan_f, est_f = floor(tel[X_SP], tel[Y_SP]), floor(tel[X_CM], tel[Y_CM])
+    err = np.hypot(*(np.c_[np.interp(tr[:, 0], te, est_f[:, 0]), np.interp(tr[:, 0], te, est_f[:, 1])]
+                     - (t0 + tr[:, 1:3])).T)
+    pose = np.genfromtxt(run_dir / "pose.csv", delimiter=",", names=True) if (run_dir / "pose.csv").exists() else None
     cap = cv2.VideoCapture(video)
     W, H = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     sc = width / W
     size = (width, int(round(H * sc)))
+    sh, emax = size[1] // 8, max(float(np.nanmax(err)) if len(err) else 0.0, 0.05)       # error strip, bottom 1/8
+    sx = lambda tt: 20 + (np.asarray(tt) - fr["t_to"]) / max(fr["t_end"] - fr["t_to"], 1e-3) * (size[0] - 40)
+    strip = np.c_[sx(tr[:, 0]), size[1] - 8 - (size[1] - 8 - (size[1] - sh)) * np.clip(err / emax, 0, 1)]
+
+    def arrow(img, xy, zz, yaw, col):                 # 0.25 m heading arrow at floor-frame xy, height zz
+        a = px(np.array([xy, xy + 0.25 * np.r_[np.cos(yaw), np.sin(yaw)]]), np.r_[zz, zz]) * sc
+        if np.isfinite(a).all():
+            cv2.arrowedLine(img, tuple(np.int32(a[0])), tuple(np.int32(a[1])), col, lw, cv2.LINE_AA, tipLength=0.3)
+
     w = cv2.VideoWriter(str(out_mp4), cv2.VideoWriter_fourcc(*"mp4v"), cap.get(cv2.CAP_PROP_FPS) or 30, size)
     lw = max(2, width // 640)
     n = 0
@@ -769,6 +788,23 @@ def overlay(video, cam, marks, csv_path, run_dir, out_mp4, width=1920) -> int:
             d = np.hypot(*(floor(tel[X_CM], tel[Y_CM])[ke] - (t0 + tr[kt, 1:3])))
             cv2.putText(img, f"estimate error {100 * d:.0f} cm", (20, 40 + 36 * 3), cv2.FONT_HERSHEY_SIMPLEX, 1.0,
                         (255, 255, 255), 2, cv2.LINE_AA)
+        if te[0] <= now <= te[-1] and len(te) > 8:                                   # plan heading: path tangent
+            k = int(np.clip(np.searchsorted(te, now), 3, len(te) - 4))
+            d = plan_f[k + 3] - plan_f[k - 3]
+            if np.hypot(*d) > 1e-3:
+                arrow(img, plan_f[k], z[k], np.arctan2(d[1], d[0]), (0, 215, 255))
+        if pose is not None and pose["t_tel"][0] <= now <= pose["t_tel"][-1]:        # truth heading from PnP yaw
+            g = {c: np.interp(now, pose["t_tel"], pose[c]) for c in ("x_m", "y_m", "z_m", "yaw_deg")}
+            arrow(img, np.r_[g["x_m"], g["y_m"]], g["z_m"], np.radians(g["yaw_deg"]), (60, 220, 60))
+        if len(strip) > 1:                                                           # error vs time strip
+            roi = img[size[1] - sh:]
+            roi[:] = (roi * 0.45).astype(img.dtype)
+            cv2.polylines(img, [np.int32(strip[np.isfinite(strip).all(1)])], False, (255, 255, 255), max(1, lw // 2),
+                          cv2.LINE_AA)
+            cx = int(sx(now))
+            cv2.line(img, (cx, size[1] - sh), (cx, size[1]), (0, 215, 255), max(1, lw // 2))
+            cv2.putText(img, f"estimate error, max {100 * emax:.0f} cm", (20, size[1] - sh + 28),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
         w.write(img)
         n += 1
     w.release()
@@ -843,7 +879,7 @@ def main(argv=None):
     r.add_argument("--marks", required=True); r.add_argument("--csv", required=True); r.add_argument("--out", required=True)
     r.add_argument("--guard-offset", type=float, default=0.0, help="guard plane above the height sensor, m")
     r.add_argument("--align-s", type=float, default=None, help="fit window after take-off, s (default: whole flight)")
-    r.add_argument("--sync", default="takeoff", help="takeoff | speed | seconds (telemetry t = video t + sync)"); r.add_argument("--stride", type=int, default=1)
+    r.add_argument("--sync", default="takeoff", help="takeoff | speed | audio | seconds (telemetry t = video t + sync)"); r.add_argument("--stride", type=int, default=1)
     r.add_argument("--survey", help="survey.json from `survey`: fixed board -> drone frame instead of the free fit")
     for p in (f, r):
         p.add_argument("--hsv-lo", default=",".join(map(str, HSV_LO)))
@@ -939,7 +975,7 @@ def main(argv=None):
         rep = run(a.video, load_cam(a.cam, video_size(a.video)), json.loads(Path(a.marks).read_text()), a.csv, a.out,
                   a.guard_offset, a.align_s, a.stride, lo, hi, a.min_area,
                   tuple(float(s) for s in a.static_t.split(",") if s),
-                  a.sync if a.sync in ("takeoff", "speed") else float(a.sync),
+                  a.sync if a.sync in ("takeoff", "speed", "audio") else float(a.sync),
                   json.loads(Path(a.survey).read_text()) if a.survey else None)
         print(json.dumps(rep, indent=2))
 
