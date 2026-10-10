@@ -18,7 +18,8 @@ typedef enum {
     CTRL_MAX
 } ctrl_id_e;
 
-typedef enum { CTRL_AXIS_PITCH = 0, CTRL_AXIS_ROLL = 1, CTRL_AXIS_YAW = 2, CTRL_AXIS_Z = 3 } ctrl_axis_e;
+typedef enum { CTRL_AXIS_PITCH = 0, CTRL_AXIS_ROLL = 1, CTRL_AXIS_YAW = 2, CTRL_AXIS_Z = 3,
+               CTRL_AXIS_X = 4, CTRL_AXIS_Y = 5 } ctrl_axis_e;   /* x/y: velocity-loop accel, Pos_Compute */
 
 typedef struct {
     void  (*reset)(void);
@@ -26,7 +27,8 @@ typedef struct {
     uint8_t available;
 } ctrl_ops_t;
 
-#define CTRL_AXIS_MASK_ALL 0x0F
+#define CTRL_AXIS_MASK_ALL 0x0F   /* boot default: pitch/roll/yaw/z; x/y (bits 4/5) stay pure PID */
+#define CTRL_AXIS_MASK_MAX 0x3F   /* highest mask the GS may write (CMD 0x1E idx 1): all 6 axes */
 
 extern volatile uint8_t g_ctrl_select;      /* active controller (ctrl_id_e) */
 extern volatile uint8_t g_ctrl_select_req;  /* requested controller; refused requests are reverted */

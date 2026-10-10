@@ -17,7 +17,7 @@
 /* controller.c's MRAC dependencies; only the mixer functions run here */
 __typeof__(mrac_state) mrac_state;
 __typeof__(mrac_flags) mrac_flags;
-__typeof__(mrac_config_pitch) mrac_config_pitch, mrac_config_roll, mrac_config_yaw, mrac_config_z;
+__typeof__(mrac_config_pitch) mrac_config_pitch, mrac_config_roll, mrac_config_yaw, mrac_config_z, mrac_config_x, mrac_config_y;
 __typeof__(mrac_simplex) mrac_simplex;
 __typeof__(mrac_inj) mrac_inj;
 void MRAC_Reset(void) { }

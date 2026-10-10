@@ -92,16 +92,20 @@ typedef char MRAC_Assert_Window[ (MRAC_TELEM_WINDOW <= MRAC_N_FEATURES) ? 1 : -1
 // 3. Definitions and Types
 // ------------------------------------------------------------------------------
 
-// Enum for the 4 MRAC axes
+// Enum for the 6 MRAC axes. X/Y (2026-10-10) adapt the world-frame velocity loop (locxs/locysPID, u in m/s^2).
 typedef enum {
     MRAC_AXIS_PITCH = 0,
     MRAC_AXIS_ROLL  = 1,
     MRAC_AXIS_YAW   = 2,
-    MRAC_AXIS_Z     = 3
+    MRAC_AXIS_Z     = 3,
+    MRAC_AXIS_X     = 4,
+    MRAC_AXIS_Y     = 5
 } MRAC_Axis_e;
 
 // Number of MRAC axes. Equal to the number of distinct enum values above.
-#define AXES 4
+#define AXES 6
+// Axes whose regressor has no cross-coupling term (yaw, z, x, y); only pitch/roll carry the other rate.
+#define MRAC_AXIS_NO_CROSS(a) ((a) >= MRAC_AXIS_YAW)
 
 // Control limits (defaults applied in MRAC_Init)
 // Refactored to mutable float fields in MRAC_AxisConfig_t
@@ -364,6 +368,8 @@ typedef struct {
     MRAC_AxisState_t roll;
     MRAC_AxisState_t yaw;
     MRAC_AxisState_t z_rate;
+    MRAC_AxisState_t x_vel;         // world x velocity loop (locxsPID), m/s
+    MRAC_AxisState_t y_vel;         // world y velocity loop (locysPID), m/s
 } MRAC_State_t;
 
 typedef struct {
@@ -381,6 +387,8 @@ typedef struct {
     uint8_t id_frame_on;            // High-rate system-ID telemetry frame (0x03 @ 100Hz, replaces A/B while set)
     uint8_t of_frame_on;            // OF calibration/fusion raw telemetry frame (0x05 @ 200Hz, replaces A/B while set)
     uint8_t ref_model_type;         // Reference model: 0 = passthrough (xm=r), 1 = first-order, 2 = second-order
+    uint8_t axis_enable_x;          // x velocity-loop adaptation (CMD 0x0F idx 13), default 0: not flight-tested
+    uint8_t axis_enable_y;          // y velocity-loop adaptation (CMD 0x0F idx 14), default 0: not flight-tested
 } MRAC_FeatureFlags_t;
 
 // ------------------------------------------------------------------------------
@@ -428,7 +436,7 @@ typedef struct {
     uint8_t  reason;            /* last trigger: 0 none, 1 roll, 2 pitch, 3 W norm, 4 u_ad sat */
     uint16_t trip_count;        /* enforce trips */
     uint16_t would_trip_count;  /* observe_only would-be trips */
-    uint16_t sat_ticks[4];      /* consecutive ticks |u_ad| >= u_max per axis */
+    uint16_t sat_ticks[AXES];      /* consecutive ticks |u_ad| >= u_max per axis */
     uint16_t clear_ticks;       /* ticks back inside the envelope while tripped */
     uint16_t hold_ticks;        /* hysteresis hold before resuming (default 200 = 1 s) */
     uint16_t sat_ticks_max;     /* u_ad saturation trigger (default 40 = 200 ms) */
@@ -449,6 +457,8 @@ extern MRAC_AxisConfig_t mrac_config_pitch;
 extern MRAC_AxisConfig_t mrac_config_roll;
 extern MRAC_AxisConfig_t mrac_config_yaw;
 extern MRAC_AxisConfig_t mrac_config_z;
+extern MRAC_AxisConfig_t mrac_config_x;
+extern MRAC_AxisConfig_t mrac_config_y;
 
 // ------------------------------------------------------------------------------
 // 5. Opt-in sigma-prior attractor (prior-D / ADR-0013 D5, D10)
@@ -508,6 +518,7 @@ void MRAC_Control(const CtrlerTypeDef* current_state);
 /* vp 12 inputs, written by StabilizerTask before MRAC_Control: pack voltage (V), body accel x / y (m/s^2) */
 extern volatile float mrac_in_vbat;
 extern volatile float mrac_in_acc[2];
+extern volatile float mrac_xy_unom[2];   /* x/y PID accel (cm/s^2) before u_ad, set in Pos_Compute */
 
 /* vp 12 (docs/workflow-b/vp12-design.md): basis 6 = S10 + swing in-phase / quadrature (per-axis adaptive notch
  * on body accel) + battery sag + motor lag in ext slots 4-7; Z gets the battery slot (ext 6). MULTI build only.

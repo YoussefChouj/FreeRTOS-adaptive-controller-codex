@@ -1824,6 +1824,12 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact)
 		ComputePID_GatedHold(&Ctrler.locysPID, airborne, land_contact);
 		Ctrler.locxsPID.U += ax;
 		Ctrler.locysPID.U += ay;
+		/* 6-axis MRAC (2026-10-10): keep the PID-only accel for the x/y layers' u_nom, then add u_ad. Off unless
+		 * axis_enable_x/y learns and g_ctrl_axis_mask bits 4/5 inject (both 0 at boot). */
+		mrac_xy_unom[0] = Ctrler.locxsPID.U;
+		mrac_xy_unom[1] = Ctrler.locysPID.U;
+		Ctrler.locxsPID.U = Controller_Update(CTRL_AXIS_X, Ctrler.locxsPID.U);
+		Ctrler.locysPID.U = Controller_Update(CTRL_AXIS_Y, Ctrler.locysPID.U);
 	}
 
 	/* F8 2026-10-06, PX4 style (MulticopterPositionControl: on ground contact the xy setpoint is
@@ -1839,6 +1845,8 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact)
 		Ctrler.locysPID.SumE = 0.0f;
 		Ctrler.locxsPID.U    = 0.0f;
 		Ctrler.locysPID.U    = 0.0f;
+		mrac_xy_unom[0]      = 0.0f;
+		mrac_xy_unom[1]      = 0.0f;
 	}
 }
 

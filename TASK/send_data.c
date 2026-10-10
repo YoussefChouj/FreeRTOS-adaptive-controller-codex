@@ -1638,11 +1638,11 @@ static void Cmd_AbortAllPaths(GsCmd_t *c)
  * in this dispatch chain; the MRAC branch sat earlier in the file and shadowed
  * the telemetry branch, making the telemetry-mode switch dead code. The sentinel
  * split keeps the wire shape (9 B, idx+val+CRC8) unchanged and is backward
- * compatible with any host that was only sending idx 0..12. */
+ * compatible with any host that was only sending idx 0..12 (13/14 = axis_enable_x/y, 2026-10-10). */
 #define CMD_0F_TELEM_MODE_BASE  100U
 static void Cmd_MultiplexFlags(GsCmd_t *c)
 {
-    if (c->idx <= 12U) {
+    if (c->idx <= 14U) {
         uint8_t on = ((uint8_t)(c->val + 0.5f)) != 0U ? 1U : 0U;
         switch (c->idx) {
             case 0:  mrac_flags.adaptation_on      = on; break;
@@ -1658,7 +1658,9 @@ static void Cmd_MultiplexFlags(GsCmd_t *c)
             case 10: mrac_flags.output_injection_on = on; break;
             case 11: mrac_flags.id_frame_on         = on; break;
             case 12: mrac_flags.of_frame_on         = on; break;
-            default: break;  /* unreachable; idx <= 12 already gated */
+            case 13: mrac_flags.axis_enable_x       = on; break;   /* 6-axis 2026-10-10, unflown */
+            case 14: mrac_flags.axis_enable_y       = on; break;
+            default: break;  /* unreachable; idx <= 14 already gated */
         }
     } else if ((c->idx >= CMD_0F_TELEM_MODE_BASE) && (c->idx <= 102U)) {
         /* idx 100=LEGACY 101=MIXED 102=SUBSCRIBE_ONLY. Val ignored.
@@ -1859,7 +1861,7 @@ static void Cmd_CtrlSelect(GsCmd_t *c)
     }
     if (c->idx == 0 && c->val >= 0.0f && c->val <= (float)(CTRL_MAX - 1)) {
         g_ctrl_select_req = (uint8_t)(c->val + 0.5f);
-    } else if (c->idx == 1 && c->val >= 0.0f && c->val <= (float)CTRL_AXIS_MASK_ALL) {
+    } else if (c->idx == 1 && c->val >= 0.0f && c->val <= (float)CTRL_AXIS_MASK_MAX) {
         g_ctrl_axis_mask = (uint8_t)(c->val + 0.5f);
     }
 }

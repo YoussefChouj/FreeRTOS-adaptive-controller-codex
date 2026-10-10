@@ -145,6 +145,12 @@ static void excite(int n)
         ctrl.Z_ratePID.Des = 0.3f * sinf(0.9f * t);
         ctrl.Z_ratePID.FB = ctrl.Z_ratePID.Des - 0.15f;
         ctrl.Z_ratePID.U = 40.0f * sinf(0.7f * t);
+        ctrl.locxsPID.Des = 40.0f * sinf(0.8f * t);          /* cm/s */
+        ctrl.locxsPID.FB = ctrl.locxsPID.Des - 15.0f;
+        ctrl.locysPID.Des = -30.0f * sinf(0.6f * t);
+        ctrl.locysPID.FB = ctrl.locysPID.Des + 12.0f;
+        mrac_xy_unom[0] = 50.0f * sinf(0.5f * t);              /* cm/s^2 */
+        mrac_xy_unom[1] = -40.0f * sinf(0.4f * t);
         tick(2.0f, -1.0f);
     }
 }
@@ -363,10 +369,56 @@ static void test_multi_basis(void)
 }
 #endif
 
+/* 6-axis (2026-10-10): x/y velocity layers. Off at boot; units cm/s -> m/s and cm/s^2 -> m/s^2; when on, u_ad stays
+ * finite and inside u_max; turning x/y on leaves pitch/roll/yaw/z bit-identical (no cross coupling). */
+static void test_xy_axes(void)
+{
+    float pit_off, rol_off, yaw_off, z_off, umax_x = 0.0f, umax_y = 0.0f;
+    int k;
+
+    MRAC_Init();
+    ok("xy: axis_enable_x off at boot", mrac_flags.axis_enable_x == 0);
+    ok("xy: axis_enable_y off at boot", mrac_flags.axis_enable_y == 0);
+    ok("xy: mrac_to_mixer x = 100 (cm per m)", mrac_config_x.mrac_to_mixer == 100.0f);
+    ok("xy: u_max x = 1 m/s^2", mrac_config_x.u_max == 1.0f);
+    ok("xy: y config = x config", memcmp(&mrac_config_x, &mrac_config_y, sizeof(mrac_config_x)) == 0);
+
+    fly(); g_k = 0;
+    excite(400);
+    ok("xy: off -> u_ad x = 0", mrac_state.x_vel.u_ad == 0.0f);
+    ok("xy: off -> u_ad y = 0", mrac_state.y_vel.u_ad == 0.0f);
+    ok("xy: x signal in m/s", fabsf(mrac_state.x_vel.x - ctrl.locxsPID.FB * 0.01f) < 1e-6f);
+    ok("xy: y signal in m/s", fabsf(mrac_state.y_vel.x - ctrl.locysPID.FB * 0.01f) < 1e-6f);
+    ok("xy: x u_nom in m/s^2", fabsf(mrac_state.x_vel.u_nom - mrac_xy_unom[0] * 0.01f) < 1e-6f);
+    pit_off = mrac_state.pitch.u_ad; rol_off = mrac_state.roll.u_ad;
+    yaw_off = mrac_state.yaw.u_ad;   z_off = mrac_state.z_rate.u_ad;
+
+    fly(); g_k = 0;
+    mrac_flags.axis_enable_x = 1;
+    mrac_flags.axis_enable_y = 1;
+    for (k = 0; k < 400; k++) {
+        excite(1);
+        if (fabsf(mrac_state.x_vel.u_ad) > umax_x) umax_x = fabsf(mrac_state.x_vel.u_ad);
+        if (fabsf(mrac_state.y_vel.u_ad) > umax_y) umax_y = fabsf(mrac_state.y_vel.u_ad);
+    }
+    ok("xy: on -> x learns (u_ad != 0)", umax_x > 0.0f);
+    ok("xy: on -> y learns (u_ad != 0)", umax_y > 0.0f);
+    ok("xy: |u_ad x| <= u_max", umax_x <= mrac_config_x.u_max + 1e-6f);
+    ok("xy: |u_ad y| <= u_max", umax_y <= mrac_config_y.u_max + 1e-6f);
+    ok("xy: x state finite", all_finite(&mrac_state.x_vel));
+    ok("xy: y state finite", all_finite(&mrac_state.y_vel));
+    ok("xy: pitch unchanged by x/y", mrac_state.pitch.u_ad == pit_off);
+    ok("xy: roll unchanged by x/y", mrac_state.roll.u_ad == rol_off);
+    ok("xy: yaw unchanged by x/y", mrac_state.yaw.u_ad == yaw_off);
+    ok("xy: z unchanged by x/y", mrac_state.z_rate.u_ad == z_off);
+    printf("xy: max |u_ad| x %.4f y %.4f m/s^2 over 2 s\n", umax_x, umax_y);
+}
+
 int main(void)
 {
     test_simplex_envelope_in_rad();
     test_nan_guard();
+    test_xy_axes();
 #if MRAC_VARIANT == MRAC_VARIANT_STRUCT6_RBF12
     test_rbf_angle_in_rad();
 #endif

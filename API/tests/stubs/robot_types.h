@@ -15,6 +15,8 @@ typedef struct {
     StubPID_t gyroyPID;
     StubPID_t gyrozPID;
     StubPID_t Z_ratePID;
+    StubPID_t locxsPID;   /* x/y velocity loops, cm/s (6-axis MRAC 2026-10-10) */
+    StubPID_t locysPID;
 } CtrlerTypeDef;
 
 /* Host stubs for CMSIS intrinsics when MRAC_ENABLE_SIGMA_PRIOR is enabled */

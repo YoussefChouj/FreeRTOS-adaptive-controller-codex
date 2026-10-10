@@ -41,11 +41,21 @@
 MRAC_State_t mrac_state MRAC_CCM;
 MRAC_FeatureFlags_t mrac_flags = {0};
 
-// Global configurations for the 4 axes
+// Global configurations for the 6 axes
 MRAC_AxisConfig_t mrac_config_pitch MRAC_CCM;
 MRAC_AxisConfig_t mrac_config_roll MRAC_CCM;
 MRAC_AxisConfig_t mrac_config_yaw MRAC_CCM;
 MRAC_AxisConfig_t mrac_config_z MRAC_CCM;
+MRAC_AxisConfig_t mrac_config_x MRAC_CCM;
+MRAC_AxisConfig_t mrac_config_y MRAC_CCM;
+
+/* Per-axis lookups, indexed by MRAC_Axis_e (AXES entries). */
+static MRAC_AxisConfig_t *const mrac_cfg_of[AXES] = {
+    &mrac_config_pitch, &mrac_config_roll, &mrac_config_yaw, &mrac_config_z, &mrac_config_x, &mrac_config_y
+};
+static MRAC_AxisState_t *const mrac_st_of[AXES] = {
+    &mrac_state.pitch, &mrac_state.roll, &mrac_state.yaw, &mrac_state.z_rate, &mrac_state.x_vel, &mrac_state.y_vel
+};
 
 /* Simplex fallback (MRAC_SimplexStep, CMD 0x19). Defaults are inert: mode 0, variant 0, fade 1. */
 MRAC_Simplex_t mrac_simplex = {
@@ -64,6 +74,7 @@ volatile uint8_t mrac_in_armed = 0;
 volatile uint8_t mrac_in_phase = 0;
 volatile float mrac_in_vbat = 0.0f;
 volatile float mrac_in_acc[2] = {0.0f, 0.0f};
+volatile float mrac_xy_unom[2] = {0.0f, 0.0f};   /* x/y PID accel cm/s^2 before u_ad (Pos_Compute, 100 Hz) */
 MRAC_Vp12_t mrac_vp12 = {
     0.5f, 0.3f, 2.5f,       /* anf_f0, anf_fmin, anf_fmax Hz (exp12 swing 0.44-0.88 Hz, mostly 0.49) */
     0.3f,                   /* anf_zeta */
@@ -332,6 +343,8 @@ static int MRAC_BasisOf(MRAC_Axis_e axis)
     if (axis == MRAC_AXIS_PITCH) b = mrac_config_pitch.basis;
     else if (axis == MRAC_AXIS_ROLL) b = mrac_config_roll.basis;
     else if (axis == MRAC_AXIS_Z) b = mrac_config_z.basis;    /* vp 12: 0 or S10X (battery slot only) */
+    else if (axis == MRAC_AXIS_X) b = mrac_config_x.basis;    /* x/y: S6 only (GenExt adds nothing) */
+    else if (axis == MRAC_AXIS_Y) b = mrac_config_y.basis;
     return (int)(b + 0.5f);
 }
 #endif
@@ -344,7 +357,7 @@ static void MRAC_GenStructured(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *p
      
     phi[2] = bus->x * tanhf(bus->x);
 #if INCLUDE_CONTROL_IN_REGRESSOR == 1
-    if (axis == MRAC_AXIS_Z || axis == MRAC_AXIS_YAW) {
+    if (MRAC_AXIS_NO_CROSS(axis)) {
         phi[3] = 0.0f;
     } else {
         phi[3] = bus->cross;
@@ -352,7 +365,7 @@ static void MRAC_GenStructured(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *p
     phi[4] = bus->u_nom;
     phi[5] = bus->xm;
 #else
-    if (axis == MRAC_AXIS_Z || axis == MRAC_AXIS_YAW) {
+    if (MRAC_AXIS_NO_CROSS(axis)) {
         phi[3] = bus->u_nom;
     } else {
         phi[3] = bus->cross;
@@ -602,7 +615,7 @@ static void MRAC_Vp12Step(uint8_t hold, uint8_t arm_edge)
     uint64_t req, off;
     int a, k;
 
-    st[0] = &mrac_state.pitch; st[1] = &mrac_state.roll; st[2] = &mrac_state.yaw; st[3] = &mrac_state.z_rate;
+    for (a = 0; a < AXES; a++) st[a] = mrac_st_of[a];
     if (arm_edge) mrac_vp12.v_arm = mrac_in_vbat;
     if (hold) return;
     for (a = 0; a < AXES; a++) {
@@ -622,7 +635,7 @@ static void MRAC_Vp12Step(uint8_t hold, uint8_t arm_edge)
 static void MRAC_GenExt(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *phi)
 {
     const MRAC_AxisConfig_t *cfg = (axis == MRAC_AXIS_PITCH) ? &mrac_config_pitch
-                                 : (axis == MRAC_AXIS_ROLL) ? &mrac_config_roll : &mrac_config_z;
+                                 : (axis == MRAC_AXIS_ROLL) ? &mrac_config_roll : &mrac_config_z;  /* yaw/x/y return below */
     float ang;
     float pr;
     float un;
@@ -1325,8 +1338,8 @@ static void MRAC_GuardedUpdate(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, con
 void MRAC_SimplexStep(void)
 {
     static uint8_t prev_trigger = 0;
-    const MRAC_AxisConfig_t *configs[4];
-    MRAC_AxisState_t *axes[4];
+    const MRAC_AxisConfig_t *configs[AXES];
+    MRAC_AxisState_t *axes[AXES];
     float   sum_w2;
     float   target;
     uint8_t trigger;
@@ -1334,13 +1347,10 @@ void MRAC_SimplexStep(void)
     uint8_t i;
     uint8_t a;
 
-    configs[0] = &mrac_config_pitch; axes[0] = &mrac_state.pitch;
-    configs[1] = &mrac_config_roll;  axes[1] = &mrac_state.roll;
-    configs[2] = &mrac_config_yaw;   axes[2] = &mrac_state.yaw;
-    configs[3] = &mrac_config_z;     axes[3] = &mrac_state.z_rate;
+    for (a = 0; a < AXES; a++) { configs[a] = mrac_cfg_of[a]; axes[a] = mrac_st_of[a]; }
 
     r = 0;
-    for (a = 0; a < 4; a++) {
+    for (a = 0; a < AXES; a++) {
         if (fabsf(axes[a]->u_ad) >= configs[a]->u_max * MRAC_SAT_FRAC) {
             if (mrac_simplex.sat_ticks[a] < 0xFFFFU) mrac_simplex.sat_ticks[a]++;
         } else {
@@ -1599,6 +1609,19 @@ void MRAC_Init(void)
      * u_max             U_MAX_PITCH / U_MAX_ROLL / U_MAX_YAW / U_MAX_Z.
      */
 
+    /* x / y velocity layers (6-axis, 2026-10-10, operator: "i want all 6 axes"). Start from the z column (same
+     * translational structure, no cross term), then override. x = velocity m/s, u = world accel m/s^2;
+     * mrac_to_mixer 100 = cm/s^2 per m/s^2 (locxsPID.U feeds accel_to_lean_angles in cm/s^2). Unflown: every
+     * value below is PROPOSED until log replay; axis_enable_x/y = 0 and g_ctrl_axis_mask bits 4/5 = 0 at boot. */
+    mrac_config_x = mrac_config_z;
+    mrac_config_x.u_max         = 1.0f;     /* PROPOSED: about 5.8 deg of extra lean (computed atan(1/9.81)) */
+    mrac_config_x.mrac_to_mixer = 100.0f;   /* exact: cm per m */
+    mrac_config_x.J             = 1.0f;     /* unit mass: u is an acceleration */
+    mrac_config_x.ref_model_bw  = 4.0f;     /* PROPOSED: velocity-loop bandwidth not measured */
+    mrac_config_x.omega_u       = 4.0f;     /* PROPOSED: same as pitch */
+    mrac_config_x.What_lower_limit[0] = -mrac_config_x.What_limit[0];   /* bias: wind / payload sign unknown */
+    mrac_config_y = mrac_config_x;
+
     for (i = 0; i < (int)AXES; i++) {
         mrac_u_ff[i] = 0.0f;
         for (j = 0; j < MRAC_N_GROUPS; j++) {
@@ -1618,6 +1641,8 @@ void MRAC_Init(void)
     mrac_flags.axis_enable_pitch  = 1;
     mrac_flags.axis_enable_roll   = 1;
     mrac_flags.axis_enable_yaw    = 1;
+    mrac_flags.axis_enable_x      = 0;   /* x/y adaptation off until host tests + log replay + operator approval */
+    mrac_flags.axis_enable_y      = 0;
     // Shadow mode by default: MRAC learns and computes u_ad but motors see pure PID
     // until the operator explicitly enables injection from the dashboard (CMD 0x0F idx 10).
     mrac_flags.output_injection_on = 0;
@@ -1642,6 +1667,10 @@ void MRAC_ResetWeights(void)
         mrac_state.roll.Whatf[i]  = 0.0f;
         mrac_state.yaw.Whatf[i]   = 0.0f;
         mrac_state.z_rate.Whatf[i]= 0.0f;
+        mrac_state.x_vel.Theta[i] = 0.0f;
+        mrac_state.y_vel.Theta[i] = 0.0f;
+        mrac_state.x_vel.Whatf[i] = 0.0f;
+        mrac_state.y_vel.Whatf[i] = 0.0f;
     }
     
     // Snap references to plant state (bumpless) and zero 2nd-order velocity states
@@ -1649,17 +1678,23 @@ void MRAC_ResetWeights(void)
     mrac_state.roll.xm  = mrac_state.roll.x;    mrac_state.roll.xm_dot   = 0.0f;
     mrac_state.yaw.xm   = mrac_state.yaw.x;     mrac_state.yaw.xm_dot    = 0.0f;
     mrac_state.z_rate.xm= mrac_state.z_rate.x;  mrac_state.z_rate.xm_dot = 0.0f;
+    mrac_state.x_vel.xm = mrac_state.x_vel.x;   mrac_state.x_vel.xm_dot  = 0.0f;
+    mrac_state.y_vel.xm = mrac_state.y_vel.x;   mrac_state.y_vel.xm_dot  = 0.0f;
 
     // Zero the rate-derivative estimator (ADR-0007) so e_dot starts clean post-reset.
     mrac_state.pitch.x_prev = mrac_state.pitch.x;   mrac_state.pitch.xdot_f  = 0.0f; mrac_state.pitch.e_dot  = 0.0f;
     mrac_state.roll.x_prev  = mrac_state.roll.x;    mrac_state.roll.xdot_f   = 0.0f; mrac_state.roll.e_dot   = 0.0f;
     mrac_state.yaw.x_prev   = mrac_state.yaw.x;     mrac_state.yaw.xdot_f    = 0.0f; mrac_state.yaw.e_dot    = 0.0f;
     mrac_state.z_rate.x_prev= mrac_state.z_rate.x;  mrac_state.z_rate.xdot_f = 0.0f; mrac_state.z_rate.e_dot = 0.0f;
+    mrac_state.x_vel.x_prev = mrac_state.x_vel.x;   mrac_state.x_vel.xdot_f  = 0.0f; mrac_state.x_vel.e_dot  = 0.0f;
+    mrac_state.y_vel.x_prev = mrac_state.y_vel.x;   mrac_state.y_vel.xdot_f  = 0.0f; mrac_state.y_vel.e_dot  = 0.0f;
 
     MRAC_VariantSnap(&mrac_state.pitch);
     MRAC_VariantSnap(&mrac_state.roll);
     MRAC_VariantSnap(&mrac_state.yaw);
     MRAC_VariantSnap(&mrac_state.z_rate);
+    MRAC_VariantSnap(&mrac_state.x_vel);
+    MRAC_VariantSnap(&mrac_state.y_vel);
 }
 
 // V1 delay ring holds the plant state (bumpless) and the 3L integral restarts at 0.
@@ -1786,10 +1821,7 @@ uint8_t MRAC_VariantParamSet(uint8_t axis, uint8_t field, float val)
     MRAC_AxisConfig_t *c;
     int k;
 
-    cfg[0] = &mrac_config_pitch; st[0] = &mrac_state.pitch;
-    cfg[1] = &mrac_config_roll;  st[1] = &mrac_state.roll;
-    cfg[2] = &mrac_config_yaw;   st[2] = &mrac_state.yaw;
-    cfg[3] = &mrac_config_z;     st[3] = &mrac_state.z_rate;
+    for (k = 0; k < AXES; k++) { cfg[k] = mrac_cfg_of[k]; st[k] = mrac_st_of[k]; }
 
     if (axis >= (uint8_t)AXES || field >= (uint8_t)MRAC_VF_COUNT) return 0U;
     if (!(val - val == 0.0f) || val < mrac_var_field[field].lo || val > mrac_var_field[field].hi) return 0U;
@@ -1865,7 +1897,7 @@ void MRAC_Control(const CtrlerTypeDef* current_state)
 {
     float p_rate, q_rate, r_rate;
     float cross_pitch, cross_roll;
-    float r_pitch, r_roll, r_yaw, r_z;
+    float r_pitch, r_roll, r_yaw, r_z, r_x, r_y;
     uint32_t t_l2;
     
 
@@ -1890,6 +1922,8 @@ void MRAC_Control(const CtrlerTypeDef* current_state)
     mrac_state.roll.x  = q_rate;
     mrac_state.yaw.x   = r_rate;
     mrac_state.z_rate.x = current_state->Z_ratePID.FB; // Z-axis velocity measurement from cascade
+    mrac_state.x_vel.x  = current_state->locxsPID.FB * 0.01f;  /* cm/s -> m/s (100 Hz signal) */
+    mrac_state.y_vel.x  = current_state->locysPID.FB * 0.01f;
     
     // Compute cross-coupling terms
     cross_pitch = q_rate * r_rate;
@@ -1901,6 +1935,8 @@ void MRAC_Control(const CtrlerTypeDef* current_state)
     r_roll  = current_state->gyroxPID.Des * MRAC_DEG2RAD;
     r_yaw   = current_state->gyrozPID.Des * MRAC_DEG2RAD;
     r_z     = current_state->Z_ratePID.Des; // Pull desired vertical rate directly
+    r_x     = current_state->locxsPID.Des * 0.01f;
+    r_y     = current_state->locysPID.Des * 0.01f;
     
     // 3. Assign Nominal Control (U) computed by PID controllers
     // Convert from PWM/Mixer units down to physical torque/thrust SI Units 
@@ -1909,6 +1945,8 @@ void MRAC_Control(const CtrlerTypeDef* current_state)
     mrac_state.roll.u_nom   = current_state->gyroxPID.U / mrac_config_roll.mrac_to_mixer;
     mrac_state.yaw.u_nom    = current_state->gyrozPID.U / mrac_config_yaw.mrac_to_mixer;
     mrac_state.z_rate.u_nom = current_state->Z_ratePID.U / mrac_config_z.mrac_to_mixer;
+    mrac_state.x_vel.u_nom  = mrac_xy_unom[0] / mrac_config_x.mrac_to_mixer;   /* PID only, u_ad excluded */
+    mrac_state.y_vel.u_nom  = mrac_xy_unom[1] / mrac_config_y.mrac_to_mixer;
     
     // 4. Perform inverse mixing to measure actual actuation capabilities
     // (Omitted in early dev, rely on basic limits)
@@ -1930,6 +1968,16 @@ void MRAC_Control(const CtrlerTypeDef* current_state)
         mrac_state.yaw.u_ad = 0.0f;
     }
     MRAC_GuardedUpdate(MRAC_AXIS_Z,     &mrac_state.z_rate,&mrac_config_z,     0.0f,        r_z);
+    if (mrac_flags.axis_enable_x) {
+        MRAC_GuardedUpdate(MRAC_AXIS_X,   &mrac_state.x_vel, &mrac_config_x,     0.0f,        r_x);
+    } else {
+        mrac_state.x_vel.u_ad = 0.0f;
+    }
+    if (mrac_flags.axis_enable_y) {
+        MRAC_GuardedUpdate(MRAC_AXIS_Y,   &mrac_state.y_vel, &mrac_config_y,     0.0f,        r_y);
+    } else {
+        mrac_state.y_vel.u_ad = 0.0f;
+    }
 
 
 }

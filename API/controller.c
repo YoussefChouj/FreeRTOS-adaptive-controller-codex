@@ -92,6 +92,8 @@ static float mrac_correction(uint8_t axis)
     case CTRL_AXIS_ROLL:  u = mrac_state.roll.u_ad   * mrac_config_roll.mrac_to_mixer;  break;
     case CTRL_AXIS_YAW:   u = mrac_state.yaw.u_ad    * mrac_config_yaw.mrac_to_mixer;   break;
     case CTRL_AXIS_Z:     u = mrac_state.z_rate.u_ad * mrac_config_z.mrac_to_mixer;     break;
+    case CTRL_AXIS_X:     u = mrac_state.x_vel.u_ad  * mrac_config_x.mrac_to_mixer;     break;
+    case CTRL_AXIS_Y:     u = mrac_state.y_vel.u_ad  * mrac_config_y.mrac_to_mixer;     break;
     default:              return 0.0f;
     }
     return u * mrac_simplex.fade * mrac_inj.inj_alpha;
@@ -162,7 +164,7 @@ float Controller_Update(uint8_t axis, float u_nom)
 {
     uint8_t sel = g_ctrl_select;
     float c;
-    if (axis > CTRL_AXIS_Z || sel >= CTRL_MAX || !(g_ctrl_axis_mask & (1U << axis))) return u_nom;
+    if (axis > CTRL_AXIS_Y || sel >= CTRL_MAX || !(g_ctrl_axis_mask & (1U << axis))) return u_nom;
     c = controllers[sel].correction(axis);
     if (!(c - c == 0.0f)) return u_nom;             /* NaN/Inf correction: PID baseline only */
     return u_nom + c;

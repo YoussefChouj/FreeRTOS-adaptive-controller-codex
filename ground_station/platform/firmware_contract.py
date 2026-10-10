@@ -379,6 +379,8 @@ COMMAND_TABLE: dict[int, CommandSpec] = {
             CommandParam(10, "output_injection_on",   "bool", 0, 1),
             CommandParam(11, "id_frame_on",           "bool", 0, 1),
             CommandParam(12, "of_frame_on",           "bool", 0, 1),
+            CommandParam(13, "axis_enable_x",         "bool", 0, 1),
+            CommandParam(14, "axis_enable_y",         "bool", 0, 1),
             # Telemetry mode switch
             CommandParam(100, "telemetry_legacy",       "enum", 0, 0),
             CommandParam(101, "telemetry_mixed",         "enum", 0, 0),
@@ -551,7 +553,7 @@ COMMAND_TABLE: dict[int, CommandSpec] = {
         description="Active controller: PID=0, MRAC=1, MRAC_STRUCT=2, MRAC_RBF=3, 3LAYER=4. Switched when disarmed.",
         params=(
             CommandParam(0, "ctrl_id", "enum", 0, 4, symbol="g_ctrl_select_req"),
-            CommandParam(1, "axis_mask", "int", 0, 15, symbol="g_ctrl_axis_mask"),
+            CommandParam(1, "axis_mask", "int", 0, 63, symbol="g_ctrl_axis_mask"),
         ),
         safety=SafetyClass(
             requires_disarmed=True,
