@@ -610,7 +610,8 @@ def replay_truth(d, grid, tilt_gain=FW_TILT_GAIN, bof_arm_var=None, vel=False):
     fs = np.array([g.get('flow_scale', 1.0) for g in grid]) * 0.01   # cm/s -> m/s times a flow scale gain
     t = d['t']
     pit = np.radians(d['imu_data.pit']); rol = np.radians(d['imu_data.rol'])
-    ax = EKF_OF_ACC_SIGN_X * 1000.0 * np.sin(pit) * tilt_gain * 9.80665e-3
+    # Gravity_Body_X = vecxZ = -sin(imu_data.pit) (imu_update.c: pit = -asin(vecxZ)); Gravity_Body_Y = vecyZ = sin(rol)cos(pit).
+    ax = EKF_OF_ACC_SIGN_X * 1000.0 * -np.sin(pit) * tilt_gain * 9.80665e-3
     ay = EKF_OF_ACC_SIGN_Y * 1000.0 * np.sin(rol) * np.cos(pit) * tilt_gain * 9.80665e-3
     armed = d['DroneStatus.ARM_Status'] > 0.5
     ph = d['flight_phase']
