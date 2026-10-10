@@ -75,6 +75,12 @@ Gates 8 to 12 are a broad optimum. 10 sits in the middle of it.
   The cause is UNVERIFIED. It is likely a flow bias (for example module gyro bias x height). The EKF cannot see
   this bias without an absolute reference: bof and ba are not separable in still hover
   (`docs/research/drift-of-sota-2026-10-11.md` section 2).
+- **Is the hover drift a constant flow bias?** Not clearly (computed, `o4s.py`, gate-10 replay, IMU yaw ~0 deg so body ~ earth).
+  Error slope per 13 s hover segment: 0.09 / 0.29 / 0.51 / 0.32 cm/s at -10 / -87 / -63 / -25 deg. As a body flow bias
+  (of2_fix units): x +0.02 / +0.26 / +0.43 / +0.14, y +0.08 / -0.01 / +0.17 / +0.25 cm/s; whole window x +0.34, y +0.21.
+  The sign is mostly steady but the size wanders, so one flight does not justify a trim change. PROPOSED: if R4's 90 s
+  hover gives the same sign, move `OF_BIAS_TRIM_X/Y_CMS` (0.27 / -0.98) by the mean of R3 and R4. A trim only removes
+  the repeatable part.
 - **Absolute fix (proposed).** Fuse a camera position into the EKF: a ground-station ArUco/ring tracker, a WiFi
   uplink, and a delayed-measurement update with a short state history. This bounds drift by construction.
   It is a bigger change. Not started.
