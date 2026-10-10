@@ -17,6 +17,7 @@
 #include "flight_telemetry.h"   /* g_tlm telemetry groups, filled by Tlm_Snapshot */
 #include "prearm.h"             /* g_prearm_* masks (hlth group) */
 #include "fw_health.h"          /* g_rtos_budget (hlth group) */
+#include "land_gate.h"           /* always-on low-V / motor-pin auto-land, g_land_gate_enable */
 /* WFB BEGIN glue */
 #include "wfb_glue.h"       /* Workflow B: GS takeoff/trajectory/land sequencer + safety net */
 #include "wfb_traj.h"
@@ -469,6 +470,36 @@ static void Wfb_Step(void)
 	/* PROTECTED END wfb_apply */
 }
 /* WFB END glue */
+
+/* Always-on auto-land (API/land_gate.c): pack sag or a motor pinned at the cap while FLYING lands like RC ch5.
+ * Runs after Mix_Compute so it sees this tick's motor commands. Off: g_land_gate_enable = 0 in the watch window. */
+static void LandGate_Tick(void)
+{
+	static land_gate_state_t  s_gate;
+	static land_gate_limits_t s_lim;
+	static uint8_t            s_init = 0U;
+	land_gate_in_t in;
+	short m;
+
+	if (!s_init) {
+		LandGate_Reset(&s_gate);
+		LandGate_DefaultLimits(&s_lim);
+		s_init = 1U;
+	}
+	m = mymotor.motor1;
+	if (mymotor.motor2 > m) { m = mymotor.motor2; }
+	if (mymotor.motor3 > m) { m = mymotor.motor3; }
+	if (mymotor.motor4 > m) { m = mymotor.motor4; }
+	in.vbat_v    = real_voltage;
+	in.motor_max = (float)m;
+	in.dt_s      = STAB_DT_S;
+	in.flying    = (flight_phase == FLIGHT_PHASE_FLYING) ? 1U : 0U;
+	if (LandGate_Step(&s_gate, &s_lim, g_land_gate_enable, &in) != LAND_GATE_NONE &&
+	    flight_phase == FLIGHT_PHASE_FLYING) {   /* same two lines as the RC ch5 land */
+		flight_phase = FLIGHT_PHASE_LANDING;
+		TWC.execute  = 0U;
+	}
+}
 
 /* ==== Telemetry groups (API/flight_telemetry.h) =================================================== */
 #ifdef __CC_ARM
@@ -1905,6 +1936,7 @@ void Compute_Motor(void)
 	MRAC_Control(&Ctrler);
 
 	Mix_Compute();
+	LandGate_Tick();
 
 	ThrustEst_Step();
 }

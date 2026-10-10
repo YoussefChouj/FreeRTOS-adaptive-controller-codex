@@ -505,6 +505,11 @@
               <FilePath>..\API\prearm.c</FilePath>
             </File>
             <File>
+              <FileName>land_gate.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\API\land_gate.c</FilePath>
+            </File>
+            <File>
               <FileName>fw_health.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\API\fw_health.c</FilePath>
