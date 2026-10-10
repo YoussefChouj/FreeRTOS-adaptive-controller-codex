@@ -786,8 +786,10 @@ static void Of_TickKf(u8 of_ok)
 	 * the hover flew that fake bias as a steady +x drift. Use OF only when
 	 * not on the ground and above the range floor.
 	 * 2026-10-07: each OF frame also feeds of1 (raw flow, same axes as of2, no trim) as the
-	 * bias-free 2nd channel that lets bof learn the of2 gyro-fix bias (EkfOf_UpdateRaw). */
-	if (of_ok && !on_ground && ano_of.of_alt_cm >= OF_HANDHELD_MIN_ALT_CM) {
+	 * bias-free 2nd channel that lets bof learn the of2 gyro-fix bias (EkfOf_UpdateRaw).
+	 * 2026-10-10: upper bound too: no-range height reads 0xFFFFFFFF with quality still >= 50 (10-07 step B 0.1%).
+	 * No extra gyro de-rotation: replay vs video truth, K 72 cm/s per m*rad/s worsens velocity (module compensates). */
+	if (of_ok && !on_ground && ano_of.of_alt_cm >= OF_HANDHELD_MIN_ALT_CM && ano_of.of_alt_cm <= ALT_BAND_MAX_CM) {
 		if (EKF_OF_UPDATE_ON_NEW_FRAME) {
 			if (ano_of.of_update_cnt != s_last_of_update_cnt) {
 				EkfOf_Update(&s_ekf_of, ofx, ofy);
@@ -1190,6 +1192,7 @@ static const KeilPreset_t s_kp[] = {
 	KP_ROW(   1U,     0x08U,     1.0f,   0U ),  /* 4 MRAC on z only, EKF as flown                            */
 	KP_ROW(   0U,     0x0FU,     1.0f,   1U ),  /* 5 preset 1 + z headroom (PID no longer sinks, 0.5 kg)    */
 	KP_ROW(   0U,     0x08U,     1.0f,   1U ),  /* 6 preset 3 + z headroom                                   */
+	KP_ROW(   1U,     0x0FU,     1.0f,   1U ),  /* 7 preset 5 with of1 on (replay vs truth 22/21 vs 32/45 cm) */
 };
 /* zhd 1: Z_ratePID UMax, UiMax, SumEMax (Ki 0.435 * 700 = 305 > UiMax). Bench 2026-10-08 (PROPOSED): flown
  * 300/100/250 holds the 0.5 kg sling at z 0.47 of 1.0 (Up+Ui clip at 300); 500/300/700 holds 1.00. */

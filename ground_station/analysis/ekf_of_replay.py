@@ -586,7 +586,8 @@ def run_cli():
 # flight_phase FLYING/LANDING, one OF update per new of_update_cnt (quality >= 50, alt >= 10 cm), bof reset at ARM.
 TRUTH_NAMES = ['imu_data.pit', 'imu_data.rol', 'flight_phase', 'DroneStatus.ARM_Status', 'ano_of.of_update_cnt',
                'ano_of.of_quality', 'ano_of.of_alt_cm', 'ano_of.of2_dx_fix', 'ano_of.of2_dy_fix',
-               'ano_of.of1_dx', 'ano_of.of1_dy', 'Ctrler.locxPID.FB', 'Ctrler.locyPID.FB']
+               'ano_of.of1_dx', 'ano_of.of1_dy', 'Ctrler.locxPID.FB', 'Ctrler.locyPID.FB', 'Gyro_X_Real', 'Gyro_Y_Real']
+OF_ALT_VALID_MAX_CM = 400   # ano_of.of_alt_cm reads 0xFFFFFFFF (4294967295) when the module has no range: invalid
 OF_TRIM_CMS = (0.27, -0.98)      # OF_BIAS_TRIM_X/Y_CMS (StabilizerTask.c), mode 2 bias
 FW_TILT_GAIN = 0.242             # EKF_OF_TILT_GAIN (ekf_of.h)
 
@@ -598,11 +599,12 @@ def load_truth_session(session_dir, truth_csv):
     return d, tr
 
 
-def replay_truth(d, grid, tilt_gain=FW_TILT_GAIN, bof_arm_var=None):
+def replay_truth(d, grid, tilt_gain=FW_TILT_GAIN, bof_arm_var=None, vel=False):
     """Batched firmware replay. grid: list of EkfOfModel kwargs (+ optional 'bof_arm_var'). Returns (t, px, py)
-    as (B, N) arrays in EKF axes: px <- of2_dx_fix (locy side), py <- of2_dy_fix (locx side)."""
+    as (B, N) arrays in EKF axes: px <- of2_dx_fix (locy side), py <- of2_dy_fix (locx side). vel=True also returns
+    (vx, vy)."""
     B = len(grid)
-    keys = sorted({k for g in grid for k in g if k not in ('bof_arm_var', 'flow_scale')})
+    keys = sorted({k for g in grid for k in g if k not in ('bof_arm_var', 'flow_scale', 'rot1', 'rot2')})
     m = EkfOfModel(B, **{k: [g.get(k, DEFAULTS[k]) for g in grid] for k in keys})
     arm_var = np.array([g.get('bof_arm_var', 0.0) for g in grid])
     fs = np.array([g.get('flow_scale', 1.0) for g in grid]) * 0.01   # cm/s -> m/s times a flow scale gain
@@ -613,9 +615,15 @@ def replay_truth(d, grid, tilt_gain=FW_TILT_GAIN, bof_arm_var=None):
     armed = d['DroneStatus.ARM_Status'] > 0.5
     ph = d['flight_phase']
     cnt = d['ano_of.of_update_cnt']
-    of_ok = (d['ano_of.of_quality'] >= 50) & (d['ano_of.of_alt_cm'] >= 10)
+    alt = d['ano_of.of_alt_cm']
+    alt_ok = (alt >= 10) & (alt < OF_ALT_VALID_MAX_CM)
+    of_ok = (d['ano_of.of_quality'] >= 50) & alt_ok
+    # rotation leak: flow_dx += K*h*GyroY, flow_dy -= K*h*GyroX (cm/s, K in cm/s per m*rad/s; fit 10-07 step B ~72)
+    h = np.interp(t, t[alt_ok], alt[alt_ok]) * 0.01 if alt_ok.any() else np.zeros(len(t))
+    gx = d.get('Gyro_X_Real', np.zeros(len(t))); gy = d.get('Gyro_Y_Real', np.zeros(len(t)))
+    k1 = np.array([g.get('rot1', 0.0) for g in grid]); k2 = np.array([g.get('rot2', 0.0) for g in grid])
     N = len(t)
-    px = np.zeros((B, N)); py = np.zeros((B, N))
+    px = np.zeros((B, N)); py = np.zeros((B, N)); vx = np.zeros((B, N)); vy = np.zeros((B, N))
     for _ in range(400):                       # 2 s on the pad before the log: ZUPT settles v and P
         m.predict(0.005, 0.0, 0.0)
         m.update_zero_vel()
@@ -630,11 +638,12 @@ def replay_truth(d, grid, tilt_gain=FW_TILT_GAIN, bof_arm_var=None):
         if on_ground:
             m.update_zero_vel()
         elif of_ok[i] and cnt[i] != cnt[i - 1]:
-            m.update_of((d['ano_of.of2_dx_fix'][i] - OF_TRIM_CMS[0]) * fs,
-                        (d['ano_of.of2_dy_fix'][i] - OF_TRIM_CMS[1]) * fs)
-            m.update_raw(d['ano_of.of1_dx'][i] * fs, d['ano_of.of1_dy'][i] * fs)
-        px[:, i] = m.x[:, 0]; py[:, i] = m.x[:, 3]
-    return t, px, py
+            wy = h[i] * gy[i]; wx = h[i] * gx[i]
+            m.update_of((d['ano_of.of2_dx_fix'][i] - OF_TRIM_CMS[0] - k2 * wy) * fs,
+                        (d['ano_of.of2_dy_fix'][i] - OF_TRIM_CMS[1] + k2 * wx) * fs)
+            m.update_raw((d['ano_of.of1_dx'][i] - k1 * wy) * fs, (d['ano_of.of1_dy'][i] + k1 * wx) * fs)
+        px[:, i] = m.x[:, 0]; py[:, i] = m.x[:, 3]; vx[:, i] = m.x[:, 1]; vy[:, i] = m.x[:, 4]
+    return (t, px, py, vx, vy) if vel else (t, px, py)
 
 
 def fit_rotation(d, tr, t, px, py, mapping, win_s=1.0):
@@ -696,14 +705,18 @@ def run_truth_cli(argv):
     ap.add_argument('--of1-gate', type=float, nargs='+', default=[5.0])
     ap.add_argument('--r-of', type=float, nargs='+', default=[1e-4], help='of2_fix R (1e3 = of2 off)')
     ap.add_argument('--flow-scale', type=float, nargs='+', default=[1.0])
+    ap.add_argument('--rot1', type=float, nargs='+', default=[0.0], help='of1 gyro leak K, cm/s per m*rad/s')
+    ap.add_argument('--rot2', type=float, nargs='+', default=[0.0], help='of2_fix gyro leak K, cm/s per m*rad/s')
     ap.add_argument('--no-rot', action='store_true', help='score in the truth frame as is (no fitted yaw)')
     ap.add_argument('--out', default=None, help='json with every config score')
     ap.add_argument('--plot', default=None, help='png: truth vs firmware-as-flown vs best config, XY per pair')
     a = ap.parse_args(argv)
-    base_cfg = {'q_bof': 0.0, 'R_of1': 0.0, 'bof_arm_var': 0.0, 'of1_gate': 5.0, 'R_of': 1e-4, 'flow_scale': 1.0}
-    grid = [base_cfg] + [{'q_bof': q, 'R_of1': r, 'bof_arm_var': v, 'of1_gate': g, 'R_of': ro, 'flow_scale': f}
+    base_cfg = {'q_bof': 0.0, 'R_of1': 0.0, 'bof_arm_var': 0.0, 'of1_gate': 5.0, 'R_of': 1e-4, 'flow_scale': 1.0,
+                'rot1': 0.0, 'rot2': 0.0}
+    grid = [base_cfg] + [{'q_bof': q, 'R_of1': r, 'bof_arm_var': v, 'of1_gate': g, 'R_of': ro, 'flow_scale': f,
+                          'rot1': k1, 'rot2': k2}
                          for q in a.q_bof for r in a.r_of1 for v in a.arm_var for g in a.of1_gate
-                         for ro in a.r_of for f in a.flow_scale]   # grid[0] = firmware as flown
+                         for ro in a.r_of for f in a.flow_scale for k1 in a.rot1 for k2 in a.rot2]   # grid[0] = as flown
     rows = [dict(g, idx=i) for i, g in enumerate(grid)]
     xy = {}
     for sess, tcsv in a.pair:
@@ -728,6 +741,7 @@ def run_truth_cli(argv):
                           for n in names)
         tag = 'BASE' if r is base else '    '
         print(f"{tag} q_bof {r['q_bof']:.0e} R_of1 {r['R_of1']:.0e} R_of {r['R_of']:.0e} k {r['flow_scale']:.2f} "
+              f"rot {r['rot1']:3.0f}/{r['rot2']:3.0f} "
               f"arm {r['bof_arm_var']:.0e} g1 {r['of1_gate']:.0f} | {cells} cm")
     if a.out:
         Path(a.out).write_text(json.dumps(rows, indent=1))
