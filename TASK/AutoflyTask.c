@@ -377,7 +377,7 @@ typedef struct {
 	float   circ_r_cm;  /* circle radius [cm], 10-80; the start point is on the circle, centre at -x   */
 	float   circ_laps;  /* circle laps in move_s, up to 3                                              */
 	float   f8_a_cm;    /* figure-8 size [cm], 10-80                                                   */
-	float   f8_laps;    /* figure-8 laps in move_s, up to 3                                            */
+	float   f8_laps;    /* figure-8 laps in move_s, up to 4                                            */
 	float   f8_tilt_deg;  /* figure-8 plane tilted about x: y lobes climb/sink, z = y * sin(tilt) [deg],
 	                         +-60 and |z| up to 40 cm (Gerono a 70: up to 34 deg)                      */
 	uint8_t yaw_follow;   /* circle and figure-8: 1 nose faces the direction of travel, 0 hold heading  */
@@ -576,7 +576,7 @@ static uint8_t Traj_Check(void)
 		y0 = -s_tp.circ_r_cm;
 		y1 = s_tp.circ_r_cm;
 	} else {
-		if (s_tp.f8_a_cm < 10.0f || s_tp.f8_a_cm > 80.0f || s_tp.f8_laps <= 0.0f || s_tp.f8_laps > 3.0f ||
+		if (s_tp.f8_a_cm < 10.0f || s_tp.f8_a_cm > 80.0f || s_tp.f8_laps <= 0.0f || s_tp.f8_laps > 4.0f ||
 		    s_tp.f8_type > 1U || s_tp.f8_tilt_deg < -60.0f || s_tp.f8_tilt_deg > 60.0f) {
 			return 0xEEU;
 		}
