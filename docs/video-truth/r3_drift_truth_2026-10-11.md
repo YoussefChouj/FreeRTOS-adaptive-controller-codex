@@ -37,8 +37,11 @@ ignoring its eyes whenever it turns fast. Each turn used to leave a stumble that
    error would give the same error at the same place. So the EKF accumulates error along the path.
 3. **The errors are born in fast RC moves** (plot, 128-145 s and 170-178 s). In hover the error barely changes.
 4. **Mechanism.** The raw-flow anchor (`EkfOf_UpdateRaw`, of1) has no gyro compensation, no bias state and no
-   rejection release. In fast moves the rotation flow pushes its innovation past 5 sigma. It is then dropped,
-   one-sided, for the whole move. Each move leaves a position step that never heals.
+   rejection release. In fast moves its innovation passes 5 sigma. It is then dropped, one-sided, for the whole
+   move. Each move leaves a position step that never heals. Why the innovation grows is UNVERIFIED: a gyro
+   compensation of the raw flow (replay `rot1` = -100..+100 cm/s per m*rad/s, and `rot2` = +-50 on of2) never beat
+   rot1 = 0. Best with of1_gate 10: rot1 -50 rms 31.2 / rev p90 62.4; rot1 +50 53.6 / 53.9; rot1 0 32.4 / 38.5 (computed,
+   `o4r.py`). So the fix is the gate, not a compensation.
 5. **Takeoff camera artifact.** From 69.5 to 72 s the drone sinks from Z 1.1 to 0.84 m. The camera xy moves
    about 45 cm while the EKF says about 10 cm. The camera ray is about 55 deg off nadir (atan(2.70 m tape horizontal / 1.9 m height), computed), so a height error maps
    to 1.0-1.6 cm of floor error per cm (regression on Z, computed). Scores from 72 s on avoid this. It does not
