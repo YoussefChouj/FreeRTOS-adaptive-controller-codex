@@ -139,9 +139,10 @@ volatile uint8_t g_ekf_of1_on = 1U;
 /* Keil watch-window presets, one write each, applied on the ground (DISARMED or EMERGENCY, not flying/landing):
  * kp_id = N (kp_go = 1 re-applies), vp_id = N (MRAC variant row). kp_active/vp_active show the applied id
  * (vp 0xEE = a field was refused). A kp request made in flight waits for the ground; a vp request (vp_id, or
- * vp_user + vp_user_go = 1) also applies in flight while ch8 is off. Reboot = 0/0.
+ * vp_user + vp_user_go = 1) also applies in flight while ch8 is off. Reboot = kp 7 (2026-10-10 matrix default: of1 on
+ * + z headroom; boot globals are row 0, so kp_active 0 makes the first ground tick apply row 7), vp 0.
  * Tables: s_kp before Keil_PresetPoll, s_vp before Keil_VariantPoll. */
-volatile uint8_t kp_id = 0U, kp_go = 0U, kp_active = 0U;
+volatile uint8_t kp_id = 7U, kp_go = 0U, kp_active = 0U;
 /* Limit mode (s_lim table, Limit_ModePoll): lim_mode = 0 slow, 1 conservative, 2 max; lim_active shows the
  * applied row (0xFF until the first ground tick). Ground only, on change, so later GS writes to gs_max_* stick. */
 volatile uint8_t lim_mode = 0U, lim_active = 0xFFU;
@@ -477,8 +478,9 @@ static void Wfb_Step(void)
 }
 /* WFB END glue */
 
-/* Always-on auto-land (API/land_gate.c): pack sag or a motor pinned at the cap while FLYING lands like RC ch5.
- * Runs after Mix_Compute so it sees this tick's motor commands. Off: g_land_gate_enable = 0 in the watch window. */
+/* Always-on auto-land (API/land_gate.c): pack sag while FLYING lands like RC ch5. A motor pinned at the cap is only
+ * counted (g_land_gate_sat_n, g_land_gate_sat_max_s), never lands. Runs after Mix_Compute so it sees this tick's
+ * motor commands. Off: g_land_gate_enable = 0 in the watch window. */
 static void LandGate_Tick(void)
 {
 	static land_gate_state_t  s_gate;

@@ -1,6 +1,6 @@
 {
   "name": "vp23_rbf24_phys",
-  "notes": "Set Keil vp_id = 23, check vp_active = 23. RBF40T_BPQ (basis 10): 24 RBF + 4 physics, ext_g 4. The row ships its mask; mask_act readback is in slot 3. Theta[6..41] = RBF cells, Theta[42..45] = physics (Phi[42..45] logged). Log + VOFA per experiment; CSV = adaptive_review stem. Rates: core 100 Hz, weights 25 Hz, drift 50 Hz, status 25 Hz (fits the firmware link guard).",
+  "notes": "Set Keil vp_id = 23, check vp_active = 23. RBF40T_BPQ (basis 10): 24 RBF + 4 physics, ext_g 4. The row ships its mask; mask_act readback is in slot 3. Theta[6..41] = RBF cells, Theta[42..45] = physics (Phi[42..45] logged). Log + VOFA per experiment; CSV = adaptive_review stem. Rates: core 100 Hz, weights 25 Hz, drift 50 Hz, status 25 Hz (fits the firmware link guard). Status slot also logs the land gate (trip, pinned-run count, longest pinned s), kp_active, lim_active, of_quality (2026-10-10).",
   "slots": [
     {
       "rate": 100.0,
@@ -215,7 +215,13 @@
         "mrac_vp12.mask_act[1][0]",
         "mrac_vp12.mask_act[1][1]",
         "mrac_vp12.mask_act[2][0]",
-        "mrac_vp12.mask_act[2][1]"
+        "mrac_vp12.mask_act[2][1]",
+        "g_land_gate_trip",
+        "g_land_gate_sat_n",
+        "g_land_gate_sat_max_s",
+        "kp_active",
+        "lim_active",
+        "ano_of.of_quality"
       ]
     }
   ]

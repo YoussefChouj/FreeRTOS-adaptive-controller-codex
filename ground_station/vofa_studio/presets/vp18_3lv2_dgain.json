@@ -1,6 +1,6 @@
 {
   "name": "vp18_3lv2_dgain",
-  "notes": "Set Keil vp_id = 18, check vp_active = 18. row 16 + D self-tuning gain (p_max 4, forget 0.5). Log + VOFA per experiment; CSV = adaptive_review stem. Rates: core 100 Hz, weights 25 Hz, drift 50 Hz, status 25 Hz (fits the firmware link guard).",
+  "notes": "Set Keil vp_id = 18, check vp_active = 18. row 16 + D self-tuning gain (p_max 4, forget 0.5). Log + VOFA per experiment; CSV = adaptive_review stem. Rates: core 100 Hz, weights 25 Hz, drift 50 Hz, status 25 Hz (fits the firmware link guard). Status slot also logs the land gate (trip, pinned-run count, longest pinned s), kp_active, lim_active, of_quality (2026-10-10).",
   "slots": [
     {
       "rate": 100.0,
@@ -153,7 +153,13 @@
         "Ctrler.yawPID.Des",
         "traj_phase",
         "traj_status",
-        "traj_t"
+        "traj_t",
+        "g_land_gate_trip",
+        "g_land_gate_sat_n",
+        "g_land_gate_sat_max_s",
+        "kp_active",
+        "lim_active",
+        "ano_of.of_quality"
       ]
     }
   ]

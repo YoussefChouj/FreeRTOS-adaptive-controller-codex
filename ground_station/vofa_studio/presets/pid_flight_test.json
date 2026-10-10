@@ -1,6 +1,6 @@
 {
   "name": "pid_flight_test",
-  "notes": "PID flight test: full cascade (rate, attitude, position, altitude), motors, throttle.",
+  "notes": "PID flight test: full cascade (rate, attitude, position, altitude), motors, throttle. Status slot also logs the land gate (trip, pinned-run count, longest pinned s), kp_active, lim_active, of_quality (2026-10-10).",
   "slots": [
     {
       "rate": 50.0,
@@ -72,7 +72,12 @@
         "ano_of.of_quality",
         "mrac_flags.adaptation_on",
         "mrac_flags.output_injection_on",
-        "g_ctrl_select"
+        "g_ctrl_select",
+        "g_land_gate_trip",
+        "g_land_gate_sat_n",
+        "g_land_gate_sat_max_s",
+        "kp_active",
+        "lim_active"
       ]
     }
   ],

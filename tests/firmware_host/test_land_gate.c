@@ -80,21 +80,42 @@ int main(void)
     LandGate_Reset(&s);
     CHECK(run(&s, all, NAN, 3500.0f, 1U, 1000, NULL) == LAND_GATE_LOW_V);
 
-    /* motor pinned: 240 ms bursts (vp15 above 14.2 V) pass, 350 ms trips */
+    /* motor pinned: log only. 240 ms bursts (vp15 above 14.2 V) are not counted, 350 ms runs are, none lands */
     LandGate_Reset(&s);
     CHECK(run(&s, all, 15.0f, 4000.0f, 1U, 48, NULL) == LAND_GATE_NONE);
+    CHECK(g_land_gate_sat_n == 0U);
+    CHECK(g_land_gate_sat_max_s > 0.235f && g_land_gate_sat_max_s < 0.245f);
     CHECK(run(&s, all, 15.0f, 3800.0f, 1U, 1, NULL) == LAND_GATE_NONE);
-    CHECK(run(&s, all, 15.0f, 3990.0f, 1U, 100, &at) == LAND_GATE_SAT);
-    CHECK(NEAR_TICK(at, 69));
-    CHECK(g_land_gate_trip == LAND_GATE_SAT);
+    CHECK(run(&s, all, 15.0f, 3990.0f, 1U, 400, NULL) == LAND_GATE_NONE);   /* one 2 s run counts once */
+    CHECK(g_land_gate_sat_n == 1U);
+    CHECK(g_land_gate_sat_max_s > 1.99f && g_land_gate_sat_max_s < 2.01f);
+    CHECK(g_land_gate_trip == LAND_GATE_NONE);
+    CHECK(run(&s, all, 15.0f, 3800.0f, 1U, 1, NULL) == LAND_GATE_NONE);
+    CHECK(run(&s, all, 15.0f, 4000.0f, 1U, 80, NULL) == LAND_GATE_NONE);    /* a second 400 ms run */
+    CHECK(g_land_gate_sat_n == 2U);
+    CHECK(g_land_gate_sat_max_s > 1.99f && g_land_gate_sat_max_s < 2.01f);  /* the max is kept */
+
+    /* pinning still counted after the low-V gate fired; low-V still lands while pinned */
+    CHECK(run(&s, all, 15.0f, 3800.0f, 1U, 1, NULL) == LAND_GATE_NONE);
+    CHECK(run(&s, all, 13.0f, 4000.0f, 1U, 400, &at) == LAND_GATE_LOW_V);
+    CHECK(g_land_gate_trip == LAND_GATE_LOW_V);
+    CHECK(g_land_gate_sat_n == 3U);
+
+    /* landing then a new takeoff clears the counters */
+    CHECK(run(&s, all, 15.0f, 3500.0f, 0U, 10, NULL) == LAND_GATE_NONE);
+    CHECK(g_land_gate_sat_n == 3U);                                            /* kept on the ground for the log */
+    CHECK(run(&s, all, 15.0f, 3500.0f, 1U, 1, NULL) == LAND_GATE_NONE);
+    CHECK(g_land_gate_sat_n == 0U && g_land_gate_sat_max_s == 0.0f && g_land_gate_trip == LAND_GATE_NONE);
 
     /* the off flag: 0 disables both, single bits disable one */
     LandGate_Reset(&s);
     CHECK(run(&s, 0U, 13.0f, 4000.0f, 1U, 2000, NULL) == LAND_GATE_NONE);
+    CHECK(g_land_gate_sat_n == 0U);                                            /* EN_SAT off: not counted */
     LandGate_Reset(&s);
     CHECK(run(&s, LAND_GATE_EN_SAT, 13.0f, 3500.0f, 1U, 2000, NULL) == LAND_GATE_NONE);
     LandGate_Reset(&s);
     CHECK(run(&s, LAND_GATE_EN_LOW_V, 15.0f, 4000.0f, 1U, 2000, NULL) == LAND_GATE_NONE);
+    CHECK(g_land_gate_sat_n == 0U);
 
     /* on the ground nothing accumulates */
     LandGate_Reset(&s);
