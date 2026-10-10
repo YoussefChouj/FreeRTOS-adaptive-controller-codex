@@ -16,10 +16,10 @@ Rank by position error vs the planned path (50 Hz).
 
 ## Next 3 actions
 1. Operator at the lab: `python -m ground_station.flashtool.rebuild_and_flash --yes`, check `kp_active == 7`.
-2. **6-axis MRAC** (operator: "i want all 6 axes to adaptaion layers"). Today `API/mrac.h:97` has 4 axes
-   (pitch, roll, yaw, Z); x/y are PID only. Plan: `AXES` 4 -> 6, x/y u_ad added on the position/velocity
-   loop output before the tilt command, regressors/priors/gains per axis, host tests + log replay before any
-   flight. Do not fly untested x/y layers.
+2. **6-axis MRAC** (operator: "i want all 6 axes to adaptaion layers"). Wired in commit 7d83471: x/y
+   velocity layers, off at boot (axis_enable_x/y idx 13/14 + axis_mask bits 4/5). Keil 0/0, host tests pass;
+   built, not flashed. Still to do: log replay of x/y on old flights (e p99 vs e_sat/e_freeze, |u_ad| <= u_max),
+   then telemetry arrays 4 -> 6. Do not fly x/y until the replay is done.
 3. Logging option f: add estimator internal error signals plus other meta-analysis variables to the preset
    logs (check the slot budget). Confirm the variable list and rate with the operator before any capture.
 
