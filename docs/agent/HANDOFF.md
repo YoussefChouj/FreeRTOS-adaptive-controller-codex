@@ -19,7 +19,7 @@ Rank by position error vs the planned path (50 Hz).
 2. **6-axis MRAC** (operator: "i want all 6 axes to adaptaion layers"). Wiring 7d83471, replay d8bd1a4
    (`docs/analysis/mrac-xy-replay-2026-10-10.md`), x/y ref model 75710e9 (ref_type 1, bw 2 measured, operator OK):
    45 logs 0 freeze, 0 clamp, max u_ad 0.80. Off at boot, built (Keil 0/0), NOT flashed, unflown.
-   Next: telemetry arrays g_tlm.mrac e/u_nom/u_ad [4] -> [6] + decoders.
+   Telemetry dd7b22f: g_tlm.mrac arrays [6]. After the flash: regenerate capability_manifest.json.
 3. Logging option f: add estimator internal error signals plus other meta-analysis variables to the preset
    logs (check the slot budget). Confirm the variable list and rate with the operator before any capture.
 
