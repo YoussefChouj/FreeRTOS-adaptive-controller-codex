@@ -66,9 +66,13 @@ void EkfOf_Init(EkfOf_t *e)
     e->R_of1  = 1e-3f;
     e->R_zupt = 1e-4f;
     e->of_gate = 5.0f;   /* sigmas; armed flights auto_landing_1/hover_7/ekf1 peak at 4.5 sigma */
-    e->of1_gate = 5.0f;
+    e->of1_gate = 10.0f; /* raw flow carries the uncompensated rotation flow in fast moves; see 2026-10-11 */
 
     /* Change history (newest first)
+     * 2026-10-11 R3 camera truth: of1_gate 5 -> 10. At 5 sigma the raw of1 anchor is dropped one-sided in
+     *   fast RC moves (no release), so each move leaves a position step. Replay vs R3 camera (computed,
+     *   ekf_of_replay replay_truth, x tilt sign fixed): rms 43.6 -> 32.4 cm, same-place revisit error
+     *   p90 55.5 -> 38.5 cm; hover drift unchanged 0.44 cm/s. Gates 8..40 and off all within 2 cm.
      * 2026-10-07 two-channel EKF: of1 (raw flow) as a 2nd velocity measurement (EkfOf_UpdateRaw,
      *   h = [0,1,0,0], R_of1 1e-3, gate 5) and q_bof 0 -> 1e-5, so bof learns the gyro-fixed of2
      *   bias against of1. Replay vs video truth (ekf_of_replay truth, yaw-fixed): step B rms

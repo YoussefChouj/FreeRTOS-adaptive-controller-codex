@@ -9,7 +9,7 @@ DEFAULTS = {
     'R_zupt': 1e-4,
     'of_gate': 5.0,  # sigmas, mirrors EkfOf_t.of_gate (0 = off)
     'R_of1': 1e-3,   # of1 (raw FLOW_HEIGHT) 2nd velocity meas, h=[0,1,0,0]; 0 = channel off (2026-10-07)
-    'of1_gate': 5.0,
+    'of1_gate': 10.0,  # mirrors EkfOf_t.of1_gate; 5 -> 10 on 2026-10-11 (R3 camera truth)
 }
 
 VEL_P0 = 0.1      # mirrors EKF_OF_VEL_P0 (ekf_of.c)
