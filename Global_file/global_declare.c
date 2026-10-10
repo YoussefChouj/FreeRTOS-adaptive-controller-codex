@@ -47,7 +47,7 @@ volatile CirclePath_t circle_path = {0};
 
 volatile Figure8Path_t figure8_path = {0};
 
-volatile float waypoint_spacing = 5.0f;  /* default 5 cm waypoint density (loc-PID units = cm); 0 = continuous */
+volatile float waypoint_spacing = 0.0f;  /* 0 = continuous: the 200 Hz reference goes straight to loc-PID (2026-10-10; was 5 cm, a stair-step reference). >0 = commit every N cm of arc */
 
 volatile uint8_t GS_KeySDKflag = 0;
 
