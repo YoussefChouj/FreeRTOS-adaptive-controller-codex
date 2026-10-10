@@ -1612,12 +1612,14 @@ void MRAC_Init(void)
     /* x / y velocity layers (6-axis, 2026-10-10, operator: "i want all 6 axes"). Start from the z column (same
      * translational structure, no cross term), then override. x = velocity m/s, u = world accel m/s^2;
      * mrac_to_mixer 100 = cm/s^2 per m/s^2 (locxsPID.U feeds accel_to_lean_angles in cm/s^2). Unflown: every
-     * value below is PROPOSED until log replay; axis_enable_x/y = 0 and g_ctrl_axis_mask bits 4/5 = 0 at boot. */
+     * value is PROPOSED unless marked; log replay in docs/analysis/mrac-xy-replay-2026-10-10.md. axis_enable_x/y = 0
+     * and g_ctrl_axis_mask bits 4/5 = 0 at boot. */
     mrac_config_x = mrac_config_z;
     mrac_config_x.u_max         = 1.0f;     /* PROPOSED: about 5.8 deg of extra lean (computed atan(1/9.81)) */
     mrac_config_x.mrac_to_mixer = 100.0f;   /* exact: cm per m */
     mrac_config_x.J             = 1.0f;     /* unit mass: u is an acceleration */
-    mrac_config_x.ref_model_bw  = 4.0f;     /* PROPOSED: velocity-loop bandwidth not measured */
+    mrac_config_x.ref_type      = 1.0f;     /* first-order reference model: passthrough would learn the PID lag */
+    mrac_config_x.ref_model_bw  = 2.0f;     /* measured: first-order fit of FB to Des, 5 figure-8 logs (operator OK) */
     mrac_config_x.omega_u       = 4.0f;     /* PROPOSED: same as pitch */
     mrac_config_x.What_lower_limit[0] = -mrac_config_x.What_limit[0];   /* bias: wind / payload sign unknown */
     mrac_config_y = mrac_config_x;
