@@ -166,6 +166,7 @@
         "mrac_state.roll.nan_hold",
         "mrac_state.yaw.nan_hold",
         "traj_active",
+        "Ctrler.yawPID.Des",
         "traj_phase",
         "traj_status",
         "traj_t"
