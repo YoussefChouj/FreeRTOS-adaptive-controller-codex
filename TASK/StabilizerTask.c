@@ -1634,6 +1634,11 @@ volatile float g_att_trim_roll_deg = -1.24f;
 volatile float g_att_trim_pitch_deg = -0.90f;
 volatile uint8_t g_traj_ff_on = 1U;
 static TrajFF_t s_traj_ff;
+/* Preset trajectories (AutoflyTask traj_id) feed their reference rates forward: xy velocity, climb rate and
+ * yaw rate. 0 = the old pure-position reference (the P loops then trail by v / Kp). */
+volatile uint8_t g_traj_ff_preset = 1U;
+extern float g_traj_vff_x, g_traj_vff_y, g_traj_vff_z, g_traj_vff_yaw;
+#define TRAJ_FF_VZ_MAX_MPS     1.0f     /* = Z_posPID UMax, the climb-rate the position loop may ask for */
 /* Trajectory feed-forward (TrajFF_Step) on the xy velocity loops. Vmax for the FF clamp: the v_max_mps
  * of wfb_traj_default_limits (API/wfb_traj.c) x 100 = 100.0f cm/s. */
 #define TRAJ_FF_DT_S           0.01f    /* the xy loops run every 2nd tick */
@@ -1809,6 +1814,10 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact)
 		TrajFF_Step(&s_traj_ff, active, TWC.target_x, TWC.target_y, TRAJ_FF_DT_S, TRAJ_FF_TAU_S, TRAJ_FF_VMAX_CMS, &vx, &vy, &ax, &ay);
 		Ctrler.locxsPID.Des += vx;
 		Ctrler.locysPID.Des += vy;
+		if (g_traj_ff_preset && airborne) {
+			Ctrler.locxsPID.Des = fmaxf(-g_vxy_des_max, fminf(g_vxy_des_max, Ctrler.locxsPID.Des + g_traj_vff_x));
+			Ctrler.locysPID.Des = fmaxf(-g_vxy_des_max, fminf(g_vxy_des_max, Ctrler.locysPID.Des + g_traj_vff_y));
+		}
 		ComputePID_GatedHold(&Ctrler.locxsPID, airborne, land_contact);
 		ComputePID_GatedHold(&Ctrler.locysPID, airborne, land_contact);
 		Ctrler.locxsPID.U += ax;
@@ -2158,6 +2167,8 @@ static void Des_VHeight(void)
 		Ctrler.Z_ratePID.Des = 0.0f;
 	else if(Thr_StickActive())
 		Ctrler.Z_ratePID.Des = RCInput_Get(RC_AXIS_THR) * gs_max_vertical_speed_mps ;
+	else if (g_traj_ff_preset)
+		Ctrler.Z_ratePID.Des = fmaxf(-TRAJ_FF_VZ_MAX_MPS, fminf(TRAJ_FF_VZ_MAX_MPS, Ctrler.Z_posPID.U + g_traj_vff_z));
 	else
 		Ctrler.Z_ratePID.Des = Ctrler.Z_posPID.U;
 }
@@ -2268,12 +2279,15 @@ static void Des_Gyro(void)
 	if(RCInput_IsActive(RC_AXIS_YAW))
 		Ctrler.gyrozPID.Des = RCInput_Get(RC_AXIS_YAW) * Stick_to_MAX_GyroZ ;
 	else
-		if(Ctrler.yawPID.U>YAWRATE_DES_MAX)
+	{
+		float r = Ctrler.yawPID.U + (g_traj_ff_preset ? g_traj_vff_yaw : 0.0f);   /* + preset yaw-rate FF */
+		if(r>YAWRATE_DES_MAX)
 			Ctrler.gyrozPID.Des  = YAWRATE_DES_MAX;
-		else if(Ctrler.yawPID.U< -YAWRATE_DES_MAX)
+		else if(r< -YAWRATE_DES_MAX)
 			Ctrler.gyrozPID.Des  = -YAWRATE_DES_MAX;
 		else
-			Ctrler.gyrozPID.Des = Ctrler.yawPID.U ;
+			Ctrler.gyrozPID.Des = r;
+	}
 }
 
 /* Update one level's setpoints (which_level = case_Update_*_Des, StabilizerTask.h). Every call first

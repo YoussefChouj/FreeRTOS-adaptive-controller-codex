@@ -645,6 +645,53 @@ static void Traj_SticksCentred(void)
 	RCInput_SetVirtualStick(RC_AXIS_YAW, 0.0f);
 }
 
+/* Reference rates for the stabilizer's feed-forward (g_traj_ff_preset). The preset path is a pure position
+ * reference, so without these the P position loops trail the figure-8 by v / Kp. Finite difference of this
+ * tick's continuous reference against the last one; 0 while no preset trajectory runs. */
+float g_traj_vff_x = 0.0f, g_traj_vff_y = 0.0f;   /* cm/s, world      */
+float g_traj_vff_z = 0.0f;                        /* m/s              */
+float g_traj_vff_yaw = 0.0f;                      /* deg/s, yawPID frame */
+static uint8_t s_ff_have = 0U;
+static float s_ff_x, s_ff_y, s_ff_z, s_ff_yaw;   /* last tick's reference */
+static float s_c_x, s_c_y, s_c_z;                /* this tick's reference */
+
+static void Traj_Commit(float x, float y, float z)
+{
+	s_c_x = x;
+	s_c_y = y;
+	s_c_z = z;
+	AutoflyTask_CommitRef(x, y, z);
+}
+
+static void Traj_FFClear(void)
+{
+	g_traj_vff_x = 0.0f;
+	g_traj_vff_y = 0.0f;
+	g_traj_vff_z = 0.0f;
+	g_traj_vff_yaw = 0.0f;
+	s_ff_have = 0U;
+}
+
+static void Traj_FFUpdate(void)
+{
+	if (s_ff_have) {
+		g_traj_vff_x = (s_c_x - s_ff_x) / AFLY_DT_S;
+		g_traj_vff_y = (s_c_y - s_ff_y) / AFLY_DT_S;
+		g_traj_vff_z = (s_c_z - s_ff_z) / AFLY_DT_S;
+		g_traj_vff_yaw = TrajShape_WrapDeg(s_yaw_cmd - s_ff_yaw) / AFLY_DT_S;
+		if (traj_active == 1U && s_tp.profile == 0U) {   /* hard step: no rate, only a one-tick spike */
+			g_traj_vff_x = 0.0f;
+			g_traj_vff_y = 0.0f;
+			g_traj_vff_z = 0.0f;
+		}
+	}
+	s_ff_x = s_c_x;
+	s_ff_y = s_c_y;
+	s_ff_z = s_c_z;
+	s_ff_yaw = s_yaw_cmd;
+	s_ff_have = 1U;
+}
+
 static void Traj_End(uint8_t status)
 {
 	if (RCInput_GetAuthority()) {
@@ -656,6 +703,7 @@ static void Traj_End(uint8_t status)
 	traj_phase = 0U;
 	traj_stop = 0U;
 	traj_status = status;
+	Traj_FFClear();
 }
 
 static void Traj_Start(void)
@@ -719,6 +767,7 @@ static void Traj_Tick(void)
 	}
 	if (traj_active == 0U) {
 		traj_stop = 0U;
+		Traj_FFClear();
 		return;
 	}
 
@@ -748,24 +797,24 @@ static void Traj_Tick(void)
 			s_ref_x = traj_home_x + dx;
 			s_ref_y = traj_home_y + dy;
 			s_ref_z = traj_home_z + 0.01f * dz;
-			AutoflyTask_CommitRef(s_ref_x, s_ref_y, s_ref_z);
+			Traj_Commit(s_ref_x, s_ref_y, s_ref_z);
 		}
 	}
 	if (traj_phase == 2U) {
 		/* fly back from the last move reference to the start point, cosine blend over ret_s */
 		float k = Traj_Ramp01(s_tph / s_tp.ret_s);
-		AutoflyTask_CommitRef(s_ref_x + (traj_home_x - s_ref_x) * k,
-		                      s_ref_y + (traj_home_y - s_ref_y) * k,
-		                      s_ref_z + (traj_home_z - s_ref_z) * k);
+		Traj_Commit(s_ref_x + (traj_home_x - s_ref_x) * k,
+		            s_ref_y + (traj_home_y - s_ref_y) * k,
+		            s_ref_z + (traj_home_z - s_ref_z) * k);
 		if (s_tph >= s_tp.ret_s) {
 			/* commit the start point exactly (the quantizer may hold up to waypoint_spacing short of it) */
 			AutoflyTask_WaypointReset();
-			AutoflyTask_CommitRef(traj_home_x, traj_home_y, traj_home_z);
+			Traj_Commit(traj_home_x, traj_home_y, traj_home_z);
 			traj_phase = 3U;
 			s_tph = 0.0f;
 		}
 	} else if (traj_phase == 3U) {
-		AutoflyTask_CommitRef(traj_home_x, traj_home_y, traj_home_z);
+		Traj_Commit(traj_home_x, traj_home_y, traj_home_z);
 		if (s_tph >= s_tp.hold_s) {
 			Traj_End(s_stopped ? 4U : 2U);
 			return;
@@ -780,6 +829,7 @@ static void Traj_Tick(void)
 		s_yaw_cmd = traj_home_yaw;
 	}
 	Ctrler.yawPID.Des = s_yaw_cmd;
+	Traj_FFUpdate();
 }
 
 /* ------------------------------------------------------------------
