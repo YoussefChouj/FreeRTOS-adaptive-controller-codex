@@ -78,3 +78,5 @@ In-flight sequence: hover with ch8 on → ch8 off (PID) → edit `vp_user` → `
 
 Step, zigzag, circle and figure-8 from the watch window (`traj_id`, `traj_p`, `traj_go`), each at most 25 s
 including the fly-back to the start point: `2026-10-08-trajectory-presets.md`.
+2026-10-10: the figure-8 can tilt (`f8_tilt_deg`) and the nose follows circles and figure-8s (`yaw_follow`,
+`yaw_rate_dps`, `yaw_nose_deg`); fields, speed ladder and the first-run nose check in `2026-10-08-trajectory-presets.md`.
