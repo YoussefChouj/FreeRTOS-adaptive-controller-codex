@@ -520,6 +520,11 @@
               <FilePath>..\API\wfb_glue.c</FilePath>
             </File>
             <File>
+              <FileName>wfb_prog.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\API\wfb_prog.c</FilePath>
+            </File>
+            <File>
               <FileName>sysid.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\API\sysid.c</FilePath>

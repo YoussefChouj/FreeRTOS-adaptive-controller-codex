@@ -123,7 +123,8 @@ typedef enum {
     MRAC_GRP_COUPLING,
     MRAC_GRP_CTRL,
     MRAC_GRP_REF,
-    MRAC_GRP_RBF        // V3 Gaussian grid (used only when MRAC_VARIANT == MRAC_VARIANT_STRUCT6_RBF12)
+    MRAC_GRP_RBF,       // V3 Gaussian grid (used only when MRAC_VARIANT == MRAC_VARIANT_STRUCT6_RBF12)
+    MRAC_GRP_PHY        // Physics features (RBF40T_BPQ ext 36-39: acc_bpq, acc_bp, angacc, thrust_x_tilt)
 } MRAC_FeatureGroup_e;
 
 typedef enum {
@@ -521,9 +522,18 @@ extern volatile float mrac_in_acc[2];
 /* vp 15: S10X in ext 0-7 (as vp 12) + the 16 inner RBF24T Gaussians in ext 8-23 (rate centres +-0.1, +-0.3 x all
  * four tilt centres = RBF24T slots 4-19, 99 % of the vp 13 ext output in exp16). S6 keeps u_nom and xm only. */
 #define MRAC_BASIS_S10XR16 9
-#define MRAC_BASIS_N_X  (MRAC_BASIS_S10XR16 + 1)
+/* Single maskable feature basis (docs/design/vp-maskable-basis.md, 2026-10-09): 6 rate x 6 tilt = 36 RBF cells
+ * (gap-width, normalised to 200 deg/s and 15 deg) + 4 physics features = 40 ext cells. The vp row picks
+ * which cells are live via mrac_vp12.mask[axis] (24 bits live on the wire as one float, so we widen the
+ * mask to 40 bits = a pair of floats: mask[0..1] for RBF, mask[2] for physics; the setter is the same
+ * pattern as before, just wider). One firmware basis, four vp rows: vp 22 = 36 RBF only, vp 23 = 36 RBF +
+ * 4 physics, vp 24 = 24 RBF (mask the inner 12) only, vp 25 = 24 RBF + 4 physics. The user can dial any
+ * subset at runtime via the Keil watch window -- no flash cycle between variants. Requires
+ * MRAC_N_EXT >= 40 in the MULTI build. */
+#define MRAC_BASIS_RBF40T_BPQ 10
+#define MRAC_BASIS_N_X  (MRAC_BASIS_RBF40T_BPQ + 1)
 #if MRAC_VARIANT == MRAC_VARIANT_MULTI
-#define MRAC_BASIS_HI_X ((float)MRAC_BASIS_S10XR16)
+#define MRAC_BASIS_HI_X ((float)MRAC_BASIS_RBF40T_BPQ)
 #else
 #define MRAC_BASIS_HI_X MRAC_BASIS_HI
 #endif
@@ -535,8 +545,12 @@ typedef struct {
     float swing_ref;                    /* swing phase normaliser, m/s^2 */
     float sag_ref;                      /* battery normaliser on (V_arm / V - 1) */
     float lag_tau;                      /* motor lag time constant, s */
-    float mask[AXES];                   /* requested ext-slot mask per axis */
-    float mask_act[AXES];               /* applied mask (readback) */
+    /* ext-slot mask per axis. Each axis has 2 floats of 24 bits = 48 bits, so we cover all 40 ext cells.
+     * mask[axis][0] = ext 0-23, mask[axis][1] = ext 24-39. Encoded as the old single-float scheme
+     * (NaN / negative / >= 2^24 = all on; 0..2^24-1 = bit field). The setter combines the two floats
+     * into a 40-bit uint64_t. */
+    float mask[AXES][2];                /* requested ext-slot mask per axis (low, high 24 bits) */
+    float mask_act[AXES][2];            /* applied mask (readback) */
     float anf_hz[2];                    /* tracked swing frequency, pitch / roll, Hz (readback) */
     float v_arm;                        /* pack voltage latched at the arm edge, V (readback) */
 } MRAC_Vp12_t;

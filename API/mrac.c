@@ -72,8 +72,8 @@ MRAC_Vp12_t mrac_vp12 = {
     0.5f,                   /* swing_ref m/s^2: ~1 N on the drone at a 10 deg swing of 570 g (physics, not measured) */
     0.2f,                   /* sag_ref */
     0.0505f,                /* lag_tau s = 1/19.8 (roll sysid) */
-    {16777215.0f, 16777215.0f, 16777215.0f, 16777215.0f},
-    {16777215.0f, 16777215.0f, 16777215.0f, 16777215.0f},
+    {{16777215.0f, 16777215.0f}, {16777215.0f, 16777215.0f}, {16777215.0f, 16777215.0f}, {16777215.0f, 16777215.0f}},
+    {{16777215.0f, 16777215.0f}, {16777215.0f, 16777215.0f}, {16777215.0f, 16777215.0f}, {16777215.0f, 16777215.0f}},
     {0.5f, 0.5f},
     0.0f
 };
@@ -304,6 +304,22 @@ const MRAC_FeatureDesc_t mrac_feature_desc[MRAC_N_FEATURES] = {
    ,{27, "ext_21", MRAC_BLK_RBF, MRAC_GRP_RBF}
    ,{28, "ext_22", MRAC_BLK_RBF, MRAC_GRP_RBF}
    ,{29, "ext_23", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{30, "ext_24", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{31, "ext_25", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{32, "ext_26", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{33, "ext_27", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{34, "ext_28", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{35, "ext_29", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{36, "ext_30", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{37, "ext_31", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{38, "ext_32", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{39, "ext_33", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{40, "ext_34", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{41, "ext_35", MRAC_BLK_RBF, MRAC_GRP_RBF}
+   ,{42, "ext_36", MRAC_BLK_RBF, MRAC_GRP_PHY}
+   ,{43, "ext_37", MRAC_BLK_RBF, MRAC_GRP_PHY}
+   ,{44, "ext_38", MRAC_BLK_RBF, MRAC_GRP_PHY}
+   ,{45, "ext_39", MRAC_BLK_RBF, MRAC_GRP_PHY}
 #endif
 };
 const uint8_t mrac_n_features = MRAC_N_FEATURES;
@@ -424,6 +440,13 @@ static void MRAC_ExtGrid(float pr, float ph, int a, int b, float *phi)
 static const float mrac_t_rate_c[6] = {-0.7f, -0.3f, -0.1f, 0.1f, 0.3f, 0.7f};
 static const float mrac_t_ang_c[4]  = {-0.6f, -0.2f, 0.2f, 0.6f};
 
+/* Maskable feature basis (docs/design/vp-maskable-basis.md, 2026-10-09): 6 rate x 6 tilt = 36 RBF cells
+ * (gap-width, normalised to MRAC_LIM_RATE / MRAC_LIM_TILT), then 4 physics features in ext slots 36-39.
+ * Tilt centres dense near 0 and reaching +-1.0 (= +-15 deg, the hard limit) so the static map covers
+ * the arm envelope without a separate basis. Rate centres same as RBF24T. */
+static const float mrac_t40_rate_c[6] = {-0.7f, -0.3f, -0.1f, 0.1f, 0.3f, 0.7f};
+static const float mrac_t40_ang_c[6]  = {-1.0f, -0.6f, -0.2f, 0.2f, 0.6f, 1.0f};
+
 /* n Gaussians at centres c, each width = mean gap to its neighbours (an edge centre: its one gap) */
 static void MRAC_Gap1D(float x, const float *c, int n, float *g)
 {
@@ -451,6 +474,29 @@ static void MRAC_ExtGap(float pr, float ph, float *phi)
     for (i = 0; i < 6; i++) {
         for (j = 0; j < 4; j++) phi[i * 4 + j] = gr[i] * ga[j];
     }
+}
+
+/* RBF40T_BPQ (single maskable feature basis, docs/design/vp-maskable-basis.md): 6 x 6 = 36 RBF cells, then
+ * 4 physics features in ext 36-39. The vp row sets the mask to dial the feature subset (vp 22..25). The
+ * 4 physics features use the same signal sources as the S10X basis (ANF swing ip/qd, body rate derivative,
+ * thrust x tilt), so the mask can mix and match with the S10X RBF cells without doubling the input layer. */
+static void MRAC_ExtGap40(float pr, float ph, float sw_ip, float sw_qd, float angacc, float un_tilt, float *phi)
+{
+    float gr[6];
+    float ga[6];
+    int i, j;
+
+    MRAC_Gap1D(pr, mrac_t40_rate_c, 6, gr);
+    MRAC_Gap1D(ph, mrac_t40_ang_c,  6, ga);
+    for (i = 0; i < 6; i++) {
+        for (j = 0; j < 6; j++) phi[i * 6 + j] = gr[i] * ga[j];
+    }
+    /* 4 physics features: rate-major with 6 tilts puts slots 36-39 at the END of the 6x6 grid; we keep
+     * them at the very end (i*6+j == 36..39) for clarity, by writing them in after the loop */
+    phi[36] = sw_qd;        /* acc_bpq: swing quadrature (the #1 feature from feature_id_rope_phys) */
+    phi[37] = sw_ip;        /* acc_bp:  swing in-phase */
+    phi[38] = angacc;       /* angacc:  10 Hz-filtered body rate derivative (S10 phi[3] reused) */
+    phi[39] = un_tilt;      /* thrust_x_tilt: u_nom * own tilt, the lever-arm effect */
 }
 
 /* RBF24D: level l at scale s = 2^-l: rate centres {-s, 0, s} width s, tilt {-s, s} width 2s, phi[l * 6 + i * 2 + j] */
@@ -529,12 +575,22 @@ static uint32_t MRAC_MaskOf(float m)
     return (m < 8388608.0f) ? (uint32_t)(m + 0.5f) : (uint32_t)m;
 }
 
+/* Combine two 24-bit float masks (low = ext 0-23, high = ext 24-39) into a 48-bit mask; each half is
+ * "all on" if the float is NaN, negative, or >= 2^24. We return a 64-bit value so a single comparison
+ * covers the whole 40-cell ext block. */
+static uint64_t MRAC_Mask48(const float m[2])
+{
+    uint32_t lo = MRAC_MaskOf(m[0]);
+    uint32_t hi = MRAC_MaskOf(m[1]);
+    return ((uint64_t)hi << 24) | (uint64_t)lo;
+}
+
 static void MRAC_ApplyMask(MRAC_Axis_e axis, float *phi)
 {
-    uint32_t m = MRAC_MaskOf(mrac_vp12.mask_act[axis]);
+    uint64_t m = MRAC_Mask48(mrac_vp12.mask_act[axis]);
     int k;
     for (k = 0; k < MRAC_N_EXT; k++) {
-        if (!(m & (1UL << k))) phi[k] = 0.0f;
+        if (!(m & (1ULL << k))) phi[k] = 0.0f;
     }
 }
 
@@ -543,22 +599,23 @@ static void MRAC_ApplyMask(MRAC_Axis_e axis, float *phi)
 static void MRAC_Vp12Step(uint8_t hold, uint8_t arm_edge)
 {
     MRAC_AxisState_t *st[AXES];
-    uint32_t req, off;
+    uint64_t req, off;
     int a, k;
 
     st[0] = &mrac_state.pitch; st[1] = &mrac_state.roll; st[2] = &mrac_state.yaw; st[3] = &mrac_state.z_rate;
     if (arm_edge) mrac_vp12.v_arm = mrac_in_vbat;
     if (hold) return;
     for (a = 0; a < AXES; a++) {
-        req = MRAC_MaskOf(mrac_vp12.mask[a]);
-        off = MRAC_MaskOf(mrac_vp12.mask_act[a]) & ~req;
+        req = MRAC_Mask48(mrac_vp12.mask[a]);
+        off = MRAC_Mask48(mrac_vp12.mask_act[a]) & ~req;
         for (k = 0; k < MRAC_N_EXT; k++) {
-            if (off & (1UL << k)) {
+            if (off & (1ULL << k)) {
                 st[a]->Theta[MRAC_N_STRUCT + k] = 0.0f;
                 st[a]->Whatf[MRAC_N_STRUCT + k] = 0.0f;
             }
         }
-        mrac_vp12.mask_act[a] = (float)req;
+        mrac_vp12.mask_act[a][0] = mrac_vp12.mask[a][0];
+        mrac_vp12.mask_act[a][1] = mrac_vp12.mask[a][1];
     }
 }
 
@@ -627,6 +684,15 @@ static void MRAC_GenExt(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *phi)
         case MRAC_BASIS_RBF24: MRAC_ExtGrid(pr, ang / 0.5f, 6, 4, phi); break;
         case MRAC_BASIS_RBF24T: MRAC_ExtGap(bus->x / MRAC_LIM_RATE, ang / MRAC_LIM_TILT, phi); break;
         case MRAC_BASIS_RBF24D: MRAC_ExtDoll(bus->x / MRAC_LIM_RATE, ang / MRAC_LIM_TILT, phi); break;
+        case MRAC_BASIS_RBF40T_BPQ:
+            /* Single maskable feature basis (docs/design/vp-maskable-basis.md): 36 RBF + 4 physics.
+             * The vp row sets the mask; the helper writes every cell, the mask kills the unused ones. */
+            MRAC_ExtGap40(bus->x / MRAC_LIM_RATE, ang / MRAC_LIM_TILT,
+                          (mrac_vp12.swing_ref > 0.0f) ? sw_ip / mrac_vp12.swing_ref : 0.0f,
+                          (mrac_vp12.swing_ref > 0.0f) ? sw_qd / mrac_vp12.swing_ref : 0.0f,
+                          mrac_acc_f[axis] / 50.0f,
+                          un * (ang / MRAC_LIM_TILT), phi);
+            break;
         case MRAC_BASIS_S6RBF12: {
             float gr[4];
             float ga[3];
@@ -1689,6 +1755,19 @@ static void MRAC_Vp12Lims(uint8_t axis, MRAC_AxisConfig_t *c)
             MRAC_SetRow(c, MRAC_N_STRUCT + 5, 0.094f, 0.02f * u);
             MRAC_SetRow(c, MRAC_N_STRUCT + 6, 0.094f, 0.05f * u);
             MRAC_SetRow(c, MRAC_N_STRUCT + 7, 0.094f, 0.10f * u);
+        } else if (b == MRAC_BASIS_RBF40T_BPQ) {
+            /* Single maskable feature basis (docs/design/vp-maskable-basis.md, 2026-10-09): 36 RBF cells +
+             * 4 physics features in ext 36-39. The vp row sets the mask; this sets the per-cell defaults:
+             * RBF cells (ext 0-35) at vp 13's lim 0.05, the 4 physics cells (ext 36-39) at a wider lim
+             * 0.10 since they carry the swing-band signal that the RBF cannot see. The mask kills the
+             * unused cells, so the same defaults work for vp 22-25. */
+            MRAC_SetRow(c, 0, 1.50f, 0.15f);                                  /* bias (unused on RBF bases) */
+            for (k = 0; k < 8; k++) MRAC_SetRow(c, MRAC_N_STRUCT + k, 0.10f, 0.05f);  /* RBF cells ext 0-7 */
+            for (k = 8; k < 36; k++) MRAC_SetRow(c, MRAC_N_STRUCT + k, 0.10f, 0.05f); /* RBF cells ext 8-35 */
+            MRAC_SetRow(c, MRAC_N_STRUCT + 36, 0.20f, 0.10f * u);              /* acc_bpq    (slot 36) -- the #1 feature */
+            MRAC_SetRow(c, MRAC_N_STRUCT + 37, 0.20f, 0.10f * u);              /* acc_bp     (slot 37) */
+            MRAC_SetRow(c, MRAC_N_STRUCT + 38, 0.20f, 0.05f * u);              /* angacc     (slot 38) */
+            MRAC_SetRow(c, MRAC_N_STRUCT + 39, 0.20f, 0.05f * u);              /* thrust_x_tilt (slot 39) */
         } else {
             MRAC_SetRow(c, 0, 1.50f, 0.15f);
             for (k = 0; k < 8; k++) MRAC_SetRow(c, MRAC_N_STRUCT + k, 0.10f, 0.05f);

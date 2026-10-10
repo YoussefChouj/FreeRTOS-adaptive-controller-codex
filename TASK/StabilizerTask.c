@@ -1246,6 +1246,15 @@ static const VariantPreset_t s_vp[] = {
 	 * p_forget/m^2), p_max barely matters; L2only g20 + D p_max 20 p_forget 5 gives median p/r cancel +0.04/+0.02 vs
 	 * row 17 -0.07/-0.09, but is worst on load-drop logs (f17 *_remov, -8.75). Fly after row 17, hover only. PROPOSED. */
 	VP_ROW3(  4.0f,   0.25f,   1U,    20.0f,  49.0f,    7.0f,   20.0f, 20.0f,  5.0f ),  /* 19 L2 only g20 + D self-tuning gain */
+	/* 20-24: single maskable feature basis RBF40T_BPQ (basis 10, 36 RBF + 4 physics cells, 40 ext slots total).
+	 * Each row sets a different ext_g (learning rate) and ships a starting mask in mrac_vp12.mask[axis] on
+	 * the Keil-side through Keil_VariantPoll. The user can dial any subset at runtime by writing the mask
+	 * in the Keil watch window -- no flash cycle between variants. See docs/design/vp-maskable-basis.md. */
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,  10U, 4.0f ),  /* 20 RBF40T_BPQ, 36 RBF cells, no physics (mask = all 36 + 0 phys) */
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,  10U, 4.0f ),  /* 21 RBF40T_BPQ, 36 RBF + 4 physics (mask = all 40) */
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,  10U, 4.0f ),  /* 22 RBF40T_BPQ, 24 RBF (mask inner 12 off), no physics (vp 13 equivalent) */
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,  10U, 4.0f ),  /* 23 RBF40T_BPQ, 24 RBF + 4 physics (the multi-axis reusable pattern) */
+	VP_ROW(    2,      1,       1U,       0.0018f,      2.0f,   0.0f,      0.0f,       0.0f,      0.0f,       4.0f,      0.25f,  10U, 6.0f ),  /* 24 RBF40T_BPQ, 24 RBF + 4 physics, ext_g 6 (faster learning for the arm) */
 };
 #define VP_PR   0x03U
 #define VP_Y    0x04U

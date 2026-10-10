@@ -15,7 +15,7 @@
 #define MRAC_BASIS_COUNT   6
 
 #ifndef MRAC_VARIANT
-#define MRAC_VARIANT MRAC_VARIANT_STRUCT6
+#define MRAC_VARIANT MRAC_VARIANT_MULTI
 #endif
 
 #if MRAC_VARIANT == MRAC_VARIANT_STRUCT6
@@ -32,22 +32,22 @@
     #ifndef MRAC_CAPACITY
         #define MRAC_CAPACITY MRAC_N_FEATURES
     #endif
-    #define MRAC_N_GROUPS 7
+    #define MRAC_N_GROUPS 8
 #elif MRAC_VARIANT == MRAC_VARIANT_MULTI
     #define MRAC_N_STRUCT 6
-    #define MRAC_N_EXT 24
-    #define MRAC_N_FEATURES 30
+    #define MRAC_N_EXT 40
+    #define MRAC_N_FEATURES 46
     #ifndef MRAC_CAPACITY
         #define MRAC_CAPACITY MRAC_N_FEATURES
     #endif
-    #define MRAC_N_GROUPS 7
+    #define MRAC_N_GROUPS 8
 #else
     #error "Unknown MRAC_VARIANT"
 #endif
 
 /* Highest basis id the setter accepts: a default build refuses every basis but S6 (vp_active 0xEE). */
 #if MRAC_VARIANT == MRAC_VARIANT_MULTI
-#define MRAC_BASIS_HI 5.0f
+    #define MRAC_BASIS_HI 10.0f
 #else
 #define MRAC_BASIS_HI 0.0f
 #endif

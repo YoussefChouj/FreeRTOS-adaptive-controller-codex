@@ -15,6 +15,7 @@
 _imu_st imu_data = {0};
 
 float MRAC_VectorNormSquare(const float *v, uint8_t length) { return 0.0f; }
+float MRAC_Simple_RBF(float x, float c, float width) { (void)x; (void)c; (void)width; return 0.0f; }
 
 static void setup(void)
 {
