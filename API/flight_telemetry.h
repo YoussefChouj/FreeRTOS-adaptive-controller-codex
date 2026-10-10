@@ -64,10 +64,10 @@ typedef struct {            /* controller outputs and motor commands, CCR (2000 
     float m4;               /* mymotor.motor4 */
 } TlmMotor_t;
 
-typedef struct {            /* MRAC per axis, order pitch, roll, yaw, z (mrac_state.<axis>) */
-    float e[4];             /* tracking error x - xm */
-    float u_nom[4];         /* PID output in MRAC units */
-    float u_ad[4];          /* adaptive correction */
+typedef struct {            /* MRAC per axis, order pitch, roll, yaw, z, x, y (mrac_state.<axis>, MRAC_AXIS_*) */
+    float e[6];             /* tracking error x - xm */
+    float u_nom[6];         /* PID output in MRAC units */
+    float u_ad[6];          /* adaptive correction */
     float fade;             /* mrac_simplex.fade, u_ad multiplier */
 } TlmMrac_t;
 
@@ -111,7 +111,7 @@ typedef struct {
     TlmHealth_t    hlth;
 } FlightTelemetry_t;
 
-#define FLIGHT_TLM_FLOATS ((unsigned)(sizeof(FlightTelemetry_t) / sizeof(float)))   /* 68 */
+#define FLIGHT_TLM_FLOATS ((unsigned)(sizeof(FlightTelemetry_t) / sizeof(float)))   /* 74 */
 
 extern FlightTelemetry_t g_tlm;
 

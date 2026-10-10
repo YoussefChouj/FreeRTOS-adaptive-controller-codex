@@ -561,14 +561,20 @@ static void Tlm_Snapshot(void)
 	g_tlm.mrac.e[1]      = mrac_state.roll.e;
 	g_tlm.mrac.e[2]      = mrac_state.yaw.e;
 	g_tlm.mrac.e[3]      = mrac_state.z_rate.e;
+	g_tlm.mrac.e[4]      = mrac_state.x_vel.e;
+	g_tlm.mrac.e[5]      = mrac_state.y_vel.e;
 	g_tlm.mrac.u_nom[0]  = mrac_state.pitch.u_nom;
 	g_tlm.mrac.u_nom[1]  = mrac_state.roll.u_nom;
 	g_tlm.mrac.u_nom[2]  = mrac_state.yaw.u_nom;
 	g_tlm.mrac.u_nom[3]  = mrac_state.z_rate.u_nom;
+	g_tlm.mrac.u_nom[4]  = mrac_state.x_vel.u_nom;
+	g_tlm.mrac.u_nom[5]  = mrac_state.y_vel.u_nom;
 	g_tlm.mrac.u_ad[0]   = mrac_state.pitch.u_ad;
 	g_tlm.mrac.u_ad[1]   = mrac_state.roll.u_ad;
 	g_tlm.mrac.u_ad[2]   = mrac_state.yaw.u_ad;
 	g_tlm.mrac.u_ad[3]   = mrac_state.z_rate.u_ad;
+	g_tlm.mrac.u_ad[4]   = mrac_state.x_vel.u_ad;
+	g_tlm.mrac.u_ad[5]   = mrac_state.y_vel.u_ad;
 	g_tlm.mrac.fade      = mrac_simplex.fade;
 
 	g_tlm.est.kf_x_m       = s_ekf_of.x[0];
