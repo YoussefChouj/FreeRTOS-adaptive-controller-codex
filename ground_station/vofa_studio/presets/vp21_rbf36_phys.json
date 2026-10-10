@@ -1,6 +1,6 @@
 {
   "name": "vp21_rbf36_phys",
-  "notes": "Set Keil vp_id = 21, check vp_active = 21. RBF40T_BPQ (basis 10): 36 RBF + 4 physics (mask = all 40), ext_g 4. The row ships its mask; mask_act readback is in slot 3. Theta[6..41] = RBF cells, Theta[42..45] = physics (Phi[42..45] logged). Log + VOFA per experiment; CSV = adaptive_review stem. Rates: core 100 Hz, weights 25 Hz, drift 50 Hz, status 25 Hz (fits the firmware link guard). Status slot also logs the land gate (trip, pinned-run count, longest pinned s), kp_active, lim_active, of_quality (2026-10-10).",
+  "notes": "Set Keil vp_id = 21, check vp_active = 21. RBF40T_BPQ (basis 10): 36 RBF + 4 physics (mask = all 40), ext_g 4. The row ships its mask; mask_act readback is in slot 3. Theta[6..41] = RBF cells, Theta[42..45] = physics (Phi[42..45] logged). Log + VOFA per experiment; CSV = adaptive_review stem. Rates: core 100 Hz, weights 25 Hz, drift 50 Hz, status 25 Hz (fits the firmware link guard). Status slot also logs the land gate (trip, pinned-run count, longest pinned s), kp_active, lim_active, of_quality (2026-10-10). Logging f (operator OK 2026-10-10): drift slot adds EKF-OF innovations + bias states x[2,5,6,7], status slot adds OF reject counters, velocity variance P[0/1][5] and estimator flags.",
   "slots": [
     {
       "rate": 100.0,
@@ -185,7 +185,13 @@
         "mrac_state.pitch.xdot_f",
         "mrac_state.pitch.e_int",
         "mrac_state.roll.xdot_f",
-        "mrac_state.roll.e_int"
+        "mrac_state.roll.e_int",
+        "s_ekf_of.innov_x",
+        "s_ekf_of.innov_y",
+        "s_ekf_of.x[2]",
+        "s_ekf_of.x[5]",
+        "s_ekf_of.x[6]",
+        "s_ekf_of.x[7]"
       ]
     },
     {
@@ -221,7 +227,15 @@
         "g_land_gate_sat_max_s",
         "kp_active",
         "lim_active",
-        "ano_of.of_quality"
+        "ano_of.of_quality",
+        "s_ekf_of.rej_x",
+        "s_ekf_of.rej_y",
+        "s_ekf_of.rej_run_x",
+        "s_ekf_of.rej_run_y",
+        "s_ekf_of.P[0][5]",
+        "s_ekf_of.P[1][5]",
+        "g_ekf_of_vel_fb",
+        "g_ekf_of_shadow"
       ]
     }
   ]

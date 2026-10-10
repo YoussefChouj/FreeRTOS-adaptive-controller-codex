@@ -1,7 +1,8 @@
-# Logging option f: estimator error signals (PROPOSED, awaiting operator confirmation)
+# Logging option f: estimator error signals (APPROVED, presets edited)
 
-Status: PROPOSED. No preset is edited and nothing is recorded until the operator confirms the list and rates
-(operator: "I'll confirm the variable list and rate with you before anything is recorded").
+Status: APPROVED (operator "go ahead", 2026-10-10). The list and rates below were added to presets vp15 to vp24
+(drift slot 50 Hz, status slot 25 Hz). Re-checked with `plan_budget` after the edit: totals match the table below,
+all OK. Nothing is recorded yet; recording starts only on an operator request at the lab.
 
 Estimator in the loop: the 8-state optical-flow EKF `s_ekf_of` (`TASK/StabilizerTask.c`, `API/ekf_of.h`),
 velocity feedback on at boot (`g_ekf_of_vel_fb = 1`). State `x = [pos_x, vel_x, bof_x, pos_y, vel_y, bof_y, ba_x, ba_y]`.

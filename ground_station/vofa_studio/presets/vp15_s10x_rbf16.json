@@ -1,6 +1,6 @@
 {
   "name": "vp15_s10x_rbf16",
-  "notes": "Set Keil vp_id = 15, check vp_active = 15. S10X+RBF16, mu_sat 0.85, ext_g 4 (MULTI). Log + VOFA per experiment; CSV = adaptive_review stem. Rates: core 100 Hz, weights 25 Hz, drift 50 Hz, status 25 Hz (fits the firmware link guard). Status slot also logs the land gate (trip, pinned-run count, longest pinned s), kp_active, lim_active, of_quality (2026-10-10).",
+  "notes": "Set Keil vp_id = 15, check vp_active = 15. S10X+RBF16, mu_sat 0.85, ext_g 4 (MULTI). Log + VOFA per experiment; CSV = adaptive_review stem. Rates: core 100 Hz, weights 25 Hz, drift 50 Hz, status 25 Hz (fits the firmware link guard). Status slot also logs the land gate (trip, pinned-run count, longest pinned s), kp_active, lim_active, of_quality (2026-10-10). Logging f (operator OK 2026-10-10): drift slot adds EKF-OF innovations + bias states x[2,5,6,7], status slot adds OF reject counters, velocity variance P[0/1][5] and estimator flags.",
   "slots": [
     {
       "rate": 100.0,
@@ -145,7 +145,13 @@
         "mrac_state.pitch.xdot_f",
         "mrac_state.pitch.e_int",
         "mrac_state.roll.xdot_f",
-        "mrac_state.roll.e_int"
+        "mrac_state.roll.e_int",
+        "s_ekf_of.innov_x",
+        "s_ekf_of.innov_y",
+        "s_ekf_of.x[2]",
+        "s_ekf_of.x[5]",
+        "s_ekf_of.x[6]",
+        "s_ekf_of.x[7]"
       ]
     },
     {
@@ -175,7 +181,15 @@
         "g_land_gate_sat_max_s",
         "kp_active",
         "lim_active",
-        "ano_of.of_quality"
+        "ano_of.of_quality",
+        "s_ekf_of.rej_x",
+        "s_ekf_of.rej_y",
+        "s_ekf_of.rej_run_x",
+        "s_ekf_of.rej_run_y",
+        "s_ekf_of.P[0][5]",
+        "s_ekf_of.P[1][5]",
+        "g_ekf_of_vel_fb",
+        "g_ekf_of_shadow"
       ]
     }
   ]

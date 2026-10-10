@@ -20,9 +20,9 @@ Rank by position error vs the planned path (50 Hz).
    (`docs/analysis/mrac-xy-replay-2026-10-10.md`), x/y ref model 75710e9 (ref_type 1, bw 2 measured, operator OK):
    45 logs 0 freeze, 0 clamp, max u_ad 0.80. Off at boot, built (Keil 0/0), NOT flashed, unflown.
    Telemetry dd7b22f: g_tlm.mrac arrays [6]. After the flash: regenerate capability_manifest.json.
-3. Logging option f PROPOSED (`docs/lab/logging-f-proposal-2026-10-10.md`): EKF-OF innovations + bias states at 50 Hz,
-   reject counters + vel variance + estimator flags at 25 Hz; +3400 B/s, all families fit (max 73050/87552).
-   Operator confirms list and rates, THEN edit vp15-24 presets. Nothing recorded yet.
+3. Logging option f DONE (operator "go ahead"; `docs/lab/logging-f-proposal-2026-10-10.md`): vp15-24 presets now log
+   EKF-OF innovations + bias states at 50 Hz, reject counters + vel variance + estimator flags at 25 Hz;
+   plan_budget re-checked on all 10 (max 73050/87552). Nothing recorded yet: record only on operator request.
    Note: build-only runs restore the 11:04 board ELF (artifact_custody), so new symbols resolve only after the flash.
 
 ## Do not
