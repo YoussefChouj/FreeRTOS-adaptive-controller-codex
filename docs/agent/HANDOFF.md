@@ -20,8 +20,10 @@ Rank by position error vs the planned path (50 Hz).
    (`docs/analysis/mrac-xy-replay-2026-10-10.md`), x/y ref model 75710e9 (ref_type 1, bw 2 measured, operator OK):
    45 logs 0 freeze, 0 clamp, max u_ad 0.80. Off at boot, built (Keil 0/0), NOT flashed, unflown.
    Telemetry dd7b22f: g_tlm.mrac arrays [6]. After the flash: regenerate capability_manifest.json.
-3. Logging option f: add estimator internal error signals plus other meta-analysis variables to the preset
-   logs (check the slot budget). Confirm the variable list and rate with the operator before any capture.
+3. Logging option f PROPOSED (`docs/lab/logging-f-proposal-2026-10-10.md`): EKF-OF innovations + bias states at 50 Hz,
+   reject counters + vel variance + estimator flags at 25 Hz; +3400 B/s, all families fit (max 73050/87552).
+   Operator confirms list and rates, THEN edit vp15-24 presets. Nothing recorded yet.
+   Note: build-only runs restore the 11:04 board ELF (artifact_custody), so new symbols resolve only after the flash.
 
 ## Do not
 - Arm/spin outside an operator-opened workflow-B battery session; flash while armed or with `--force`.
