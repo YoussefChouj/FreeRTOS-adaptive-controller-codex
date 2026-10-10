@@ -27,6 +27,18 @@ f the focal length in pixels and B the guard spacing. The error grows with the s
 camera should be as close as the full figure-8 allows. The value can be computed once B is taped (f is in the
 `docs/video-truth` calib JSON).
 
+## What mature pipelines do (from prior knowledge, not web-checked on 2026-10-10)
+
+| pipeline | used for | how it works | what we can borrow |
+|---|---|---|---|
+| Vicon / OptiTrack mocap (EuRoC, Blackbird datasets) | drone ground truth | many IR cameras, reflective markers, a rigid-body model, hardware sync | the rigid-body model: our 4 guards as markers → PnP |
+| Argus (Jackson et al. 2016) | field biomechanics with GoPros | wand calibration, **audio sync between cameras**, triangulation | audio-onset sync |
+| Anipose / DeepLabCut | animal 3D pose | ChArUco calibration, a learned 2D detector, triangulation, temporal filters | learned detector as a fallback; filtering |
+| DLTdv8 (Hedrick) | biology and robotics digitizing | manual or assisted 2D tracking, DLT calibration | click-correction tool for bad frames |
+| evo / rpg_trajectory_evaluation (Zhang & Scaramuzza 2018) | standard VO/VIO scoring | time and Sim(3) alignment, ATE, RPE per sub-length | use as is |
+
+Ours works like a single-camera Argus. The gaps are a rigid-body pose (PnP), audio sync, a second view, and the standard metrics.
+
 ## Order to build
 
 1. White-guard mask + PnP 6-DoF (`detect_guards`, a new `guard_pose`), checked against telemetry h(t) and yaw. Biggest gain.
