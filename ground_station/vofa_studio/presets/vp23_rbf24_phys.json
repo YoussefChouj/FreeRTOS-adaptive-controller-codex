@@ -182,6 +182,10 @@
         "mrac_state.z_rate.e",
         "mrac_state.z_rate.u_nom",
         "mrac_state.z_rate.u_ad",
+        "mrac_state.x_vel.e",
+        "mrac_state.x_vel.u_ad",
+        "mrac_state.y_vel.e",
+        "mrac_state.y_vel.u_ad",
         "mrac_state.pitch.xdot_f",
         "mrac_state.pitch.e_int",
         "mrac_state.roll.xdot_f",
@@ -198,6 +202,7 @@
       "rate": 25.0,
       "vars": [
         "vp_active",
+        "lab_stage_active",
         "mrac_var_id[0]",
         "mrac_var_id[1]",
         "g_ctrl_select",

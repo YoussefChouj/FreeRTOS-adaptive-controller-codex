@@ -377,8 +377,8 @@ static void test_xy_axes(void)
     int k;
 
     MRAC_Init();
-    ok("xy: axis_enable_x off at boot", mrac_flags.axis_enable_x == 0);
-    ok("xy: axis_enable_y off at boot", mrac_flags.axis_enable_y == 0);
+    ok("xy: axis_enable_x on at boot", mrac_flags.axis_enable_x == 1);
+    ok("xy: axis_enable_y on at boot", mrac_flags.axis_enable_y == 1);
     ok("xy: mrac_to_mixer x = 100 (cm per m)", mrac_config_x.mrac_to_mixer == 100.0f);
     ok("xy: u_max x = 1 m/s^2", mrac_config_x.u_max == 1.0f);
     ok("xy: y config = x config", memcmp(&mrac_config_x, &mrac_config_y, sizeof(mrac_config_x)) == 0);

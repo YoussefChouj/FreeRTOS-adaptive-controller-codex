@@ -146,6 +146,9 @@ volatile uint8_t kp_id = 7U, kp_go = 0U, kp_active = 0U;
 /* Limit mode (s_lim table, Limit_ModePoll): lim_mode = 0 slow, 1 conservative, 2 max; lim_active shows the
  * applied row (0xFF until the first ground tick). Ground only, on change, so later GS writes to gs_max_* stick. */
 volatile uint8_t lim_mode = 0U, lim_active = 0xFFU;
+/* Lab stage (s_stage table, Lab_StagePoll): one Keil write sets path tilt/laps/yaw rate and lim_mode for the
+ * 2026-10-10 matrix. lab_stage_active shows the applied row (0xFF until the first ground tick, 0xEE bad id). */
+volatile uint8_t lab_stage = 1U, lab_stage_active = 0xFFU;
 float g_vxy_des_max = 120.0f;       /* cm/s  */
 float g_yawrate_des_max = 90.0f;    /* deg/s */
 float g_traj_v_max_cms = 80.0f;     /* cm/s, AutoflyTask refuses faster trajectories */
@@ -1206,7 +1209,7 @@ static const KeilPreset_t s_kp[] = {
 	KP_ROW(   1U,     0x08U,     1.0f,   0U ),  /* 4 MRAC on z only, EKF as flown                            */
 	KP_ROW(   0U,     0x0FU,     1.0f,   1U ),  /* 5 preset 1 + z headroom (PID no longer sinks, 0.5 kg)    */
 	KP_ROW(   0U,     0x08U,     1.0f,   1U ),  /* 6 preset 3 + z headroom                                   */
-	KP_ROW(   1U,     0x0FU,     1.0f,   1U ),  /* 7 preset 5 with of1 on (replay vs truth 22/21 vs 32/45 cm) */
+	KP_ROW(   1U,     0x3FU,     1.0f,   1U ),  /* 7 preset 5, of1 on (replay vs truth 22/21 vs 32/45 cm), x/y MRAC on 10-10 */
 };
 /* zhd 1: Z_ratePID UMax, UiMax, SumEMax (Ki 0.435 * 700 = 305 > UiMax). Bench 2026-10-08 (PROPOSED): flown
  * 300/100/250 holds the 0.5 kg sling at z 0.47 of 1.0 (Up+Ui clip at 300); 500/300/700 holds 1.00. */
@@ -1272,6 +1275,32 @@ static void Limit_ModePoll(FlightState_t state)
 	g_traj_v_max_cms = s_lim[id].trajv_cms;
 	g_yawrate_des_max = s_lim[id].yawr_dps;
 	lim_active = id;
+}
+
+/* Lab stages (docs/lab/run-sheet-2026-10-10.md). Each row sets traj_id 4 (figure-8), traj_p.f8_tilt_deg,
+ * f8_laps, yaw_rate_dps and lim_mode, so a flight needs only lab_stage, vp_id (ch8 for MRAC) and traj_go.
+ * Loads are hung by hand; stages 4 and 5 only name them. Ground only, on change, before Limit_ModePoll. */
+typedef struct { float tilt_deg; float laps; float yaw_dps; uint8_t lim; } LabStage_t;
+#define STAGE_ROW(tilt, laps, yaw, lim)  { (tilt), (laps), (yaw), (lim) }
+static const LabStage_t s_stage[] = {
+	/*          tilt   laps  yaw     lim */
+	STAGE_ROW(  0.0f, 1.0f,  90.0f, 0U ),  /* 0 flat, 1 lap: nose check, x/y shakedown                 */
+	STAGE_ROW( 30.0f, 2.0f,  90.0f, 0U ),  /* 1 no load, mode 0 (boot default)                         */
+	STAGE_ROW( 30.0f, 3.0f, 120.0f, 1U ),  /* 2 no load, mode 1 (104 cm/s computed)                    */
+	STAGE_ROW( 30.0f, 4.0f, 160.0f, 2U ),  /* 3 no load, mode 2 (138 cm/s computed)                    */
+	STAGE_ROW( 30.0f, 2.0f,  90.0f, 0U ),  /* 4 0.2 kg under the front-left motor                      */
+	STAGE_ROW( 30.0f, 2.0f,  90.0f, 0U ),  /* 5 0.2 kg front-left + 0.4 kg centre                      */
+};
+
+static void Lab_StagePoll(FlightState_t state)
+{
+	uint8_t id = lab_stage;
+	if (id == lab_stage_active) return;
+	if (!Keil_OnGround(state)) return;
+	if (id >= (uint8_t)(sizeof(s_stage) / sizeof(s_stage[0]))) { lab_stage_active = 0xEEU; return; }
+	Traj_SetStage(s_stage[id].tilt_deg, s_stage[id].laps, s_stage[id].yaw_dps);
+	lim_mode = s_stage[id].lim;
+	lab_stage_active = id;
 }
 
 /* MRAC variant rows (docs/flights/2026-10-08-variant-sweep-plan.md). Every row writes every column, so any
@@ -1588,6 +1617,7 @@ void Update_Motor(void)
 
 	Keil_PresetPoll(state);
 	Keil_VariantPoll(state);
+	Lab_StagePoll(state);
 	Limit_ModePoll(state);
 	if (Motor_DebugOverride(state)) return;
 
@@ -1831,7 +1861,7 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact)
 		Ctrler.locxsPID.U += ax;
 		Ctrler.locysPID.U += ay;
 		/* 6-axis MRAC (2026-10-10): keep the PID-only accel for the x/y layers' u_nom, then add u_ad. Off unless
-		 * axis_enable_x/y learns and g_ctrl_axis_mask bits 4/5 inject (both 0 at boot). */
+		 * axis_enable_x/y learns and g_ctrl_axis_mask bits 4/5 inject (both on at boot via kp row 7). */
 		mrac_xy_unom[0] = Ctrler.locxsPID.U;
 		mrac_xy_unom[1] = Ctrler.locysPID.U;
 		Ctrler.locxsPID.U = Controller_Update(CTRL_AXIS_X, Ctrler.locxsPID.U);

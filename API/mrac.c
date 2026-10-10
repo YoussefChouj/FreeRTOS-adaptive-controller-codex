@@ -1612,8 +1612,8 @@ void MRAC_Init(void)
     /* x / y velocity layers (6-axis, 2026-10-10, operator: "i want all 6 axes"). Start from the z column (same
      * translational structure, no cross term), then override. x = velocity m/s, u = world accel m/s^2;
      * mrac_to_mixer 100 = cm/s^2 per m/s^2 (locxsPID.U feeds accel_to_lean_angles in cm/s^2). Unflown: every
-     * value is PROPOSED unless marked; log replay in docs/analysis/mrac-xy-replay-2026-10-10.md. axis_enable_x/y = 0
-     * and g_ctrl_axis_mask bits 4/5 = 0 at boot. */
+     * value is PROPOSED unless marked; log replay in docs/analysis/mrac-xy-replay-2026-10-10.md. axis_enable_x/y = 1
+     * at boot; g_ctrl_axis_mask bits 4/5 come from kp row 7 (0x3F). */
     mrac_config_x = mrac_config_z;
     mrac_config_x.u_max         = 1.0f;     /* PROPOSED: about 5.8 deg of extra lean (computed atan(1/9.81)) */
     mrac_config_x.mrac_to_mixer = 100.0f;   /* exact: cm per m */
@@ -1643,8 +1643,8 @@ void MRAC_Init(void)
     mrac_flags.axis_enable_pitch  = 1;
     mrac_flags.axis_enable_roll   = 1;
     mrac_flags.axis_enable_yaw    = 1;
-    mrac_flags.axis_enable_x      = 0;   /* x/y adaptation off until host tests + log replay + operator approval */
-    mrac_flags.axis_enable_y      = 0;
+    mrac_flags.axis_enable_x      = 1;   /* x/y adaptation on at boot (operator "go", 2026-10-10; replay + host tests done) */
+    mrac_flags.axis_enable_y      = 1;
     // Shadow mode by default: MRAC learns and computes u_ad but motors see pure PID
     // until the operator explicitly enables injection from the dashboard (CMD 0x0F idx 10).
     mrac_flags.output_injection_on = 0;

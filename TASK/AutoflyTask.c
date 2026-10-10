@@ -421,6 +421,15 @@ TrajParams_t traj_p = {                 /* watch-window struct, latched at traj_
 	4.0f, 2.0f                      /* goto at least 4 s, settle 2 s (not in the 25 s move cap)    */
 };
 
+/* Lab stage (StabilizerTask s_stage, ground only): figure-8 path, tilt, laps and yaw rate for the stage. */
+void Traj_SetStage(float tilt_deg, float laps, float yaw_rate_dps)
+{
+	traj_id = 4U;
+	traj_p.f8_tilt_deg = tilt_deg;
+	traj_p.f8_laps = laps;
+	traj_p.yaw_rate_dps = yaw_rate_dps;
+}
+
 static TrajParams_t s_tp;                         /* traj_p latched at traj_go                    */
 static float s_tph = 0.0f;                        /* time in the current phase [s]                */
 static float s_om = 0.0f;                         /* circle / figure-8 rate [rad per path second] */

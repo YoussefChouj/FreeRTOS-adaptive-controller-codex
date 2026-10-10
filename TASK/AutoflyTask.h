@@ -21,6 +21,7 @@ void AutoflyTask(void);
 void AutoflyTask_RunSinusoid(void);
 void AutoflyTask_RunCircle(void);
 void AutoflyTask_RunFigure8(void);
+void Traj_SetStage(float tilt_deg, float laps, float yaw_rate_dps);
 
 void SDK_StateMachine_Reset(void);
 void SDK_StateMachine_Loop(void);

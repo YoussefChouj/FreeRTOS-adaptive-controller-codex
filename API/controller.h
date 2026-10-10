@@ -27,7 +27,7 @@ typedef struct {
     uint8_t available;
 } ctrl_ops_t;
 
-#define CTRL_AXIS_MASK_ALL 0x0F   /* boot default: pitch/roll/yaw/z; x/y (bits 4/5) stay pure PID */
+#define CTRL_AXIS_MASK_ALL 0x0F   /* boot default: pitch/roll/yaw/z; x/y bits 4/5 are set by kp row 7 (boot) */
 #define CTRL_AXIS_MASK_MAX 0x3F   /* highest mask the GS may write (CMD 0x1E idx 1): all 6 axes */
 
 extern volatile uint8_t g_ctrl_select;      /* active controller (ctrl_id_e) */

@@ -23,6 +23,12 @@ Not proposed for today: x/y MRAC signals (`mrac_state.x_vel/y_vel.e`, `u_ad`, `x
 boot and `MRAC_Control` does not update them while off (mrac.c, axis_enable_x/y), so they would log zeros. Add them
 to the preset of the first x/y flight. Their g_tlm copies already exist (dd7b22f).
 
+Update (operator "go ahead", 2026-10-10): x/y MRAC is now on at boot, so vp15 to vp24 also log
+`mrac_state.x_vel.e`, `x_vel.u_ad`, `y_vel.e`, `y_vel.u_ad` (drift slot, 50 Hz) and `lab_stage_active` (status
+slot, 25 Hz). These symbols do not resolve against the board ELF until the lab flash, so the budget is computed by
+hand with plan_budget's formula (payload x guard rate 100 / 50 B/s per byte): +1650 B/s, new totals 65500 / 66300 /
+74700 of 87552 (computed). Re-run plan_budget after the flash.
+
 ## Budget (computed by `vofa_studio.core.plan_budget` against the ELF on disk = board image of 11:04)
 
 | family | now B/s | with f B/s | limit B/s | ranges per slot with f (max 62) |
