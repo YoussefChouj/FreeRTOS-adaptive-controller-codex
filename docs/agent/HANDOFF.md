@@ -15,7 +15,9 @@ Matrix (operator answers a-f, 2026-10-10): stages 1/2/3 at laps 2/3/4, `move_s` 
 Rank by position error vs the planned path (50 Hz).
 
 ## Next 3 actions
-1. Operator at the lab: `python -m ground_station.flashtool.rebuild_and_flash --yes`, check `kp_active == 7`.
+1. Operator at the lab closes uVision, drone disarmed: `python -m ground_station.flashtool.rebuild_and_flash --yes`
+   (6425548 not Keil-built yet). Check `kp_active` 7, `g_ctrl_axis_mask` 63, `lab_stage_active` 1. Run sheet:
+   `docs/lab/run-sheet-2026-10-10.md` (per flight: `lab_stage`, `vp_id` + ch8, `traj_go`). x/y MRAC on at boot.
 2. **6-axis MRAC** (operator: "i want all 6 axes to adaptaion layers"). Wiring 7d83471, replay d8bd1a4
    (`docs/analysis/mrac-xy-replay-2026-10-10.md`), x/y ref model 75710e9 (ref_type 1, bw 2 measured, operator OK):
    45 logs 0 freeze, 0 clamp, max u_ad 0.80. Off at boot, built (Keil 0/0), NOT flashed, unflown.
