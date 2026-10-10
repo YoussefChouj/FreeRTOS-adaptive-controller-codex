@@ -14,7 +14,7 @@ not flown. The fix is committed (fb615c7) but **not flashed**.
 | Is the EKF error real or camera geometry? | Real: it depends on the path flown, not on where the drone is (revisit test). |
 | Biggest lever | `of1_gate` 5 -> 10 sigma: rms 43.6 -> 32.4 cm, same-place revisit p90 55.5 -> 38.5 cm. |
 | Hover drift | 0.42-0.46 cm/s in every variant tried (earlier camera-truth flights: ~1.6 cm/s). No EKF tuning moves it. |
-| What fixes hover drift for good | An absolute position reference (camera / fiducial fusion). Not started. |
+| What fixes hover drift for good | An absolute position reference. Replay: 1 s camera fusion gives hover 0.44 -> 0.06 cm/s (computed). Not in firmware. |
 
 Think of the EKF as a walker counting steps with eyes half closed. The fix stops it from
 ignoring its eyes whenever it turns fast. Each turn used to leave a stumble that never healed.
@@ -83,7 +83,23 @@ Gates 8 to 12 are a broad optimum. 10 sits in the middle of it.
   the repeatable part.
 - **Absolute fix (proposed).** Fuse a camera position into the EKF: a ground-station ArUco/ring tracker, a WiFi
   uplink, and a delayed-measurement update with a short state history. This bounds drift by construction.
-  It is a bigger change. Not started.
+  Replay test (computed, session scratch `o5a.py`, gate-10 config, scored from 72 s vs the same camera). Camera position
+  is fused into the EKF pos states at a fixed period with 0.3 s latency. The innovation is formed on the earth path
+  (`ano_of.earth_x/y`), rotated into body axes, and checked against the state buffered at capture time:
+
+  | Fusion | rms | p95 | max | hover cm/s |
+  |---|---|---|---|---|
+  | none | 26.3 | 53.7 | 64.1 | 0.44 |
+  | every 1 s, R sd 1 cm | 13.9 | 28.8 | 56.1 | 0.06 |
+  | every 1 s, R sd 5 cm | 17.3 | 33.7 | 55.8 | 0.17 |
+  | every 5 s, R sd 2 cm | 18.2 | 36.3 | 57.1 | 0.14 |
+  | every 20 s, R sd 2 cm | 19.7 | 42.5 | 61.7 | 0.25 |
+
+  Latency 0 to 1.0 s barely matters at a 5 s period. The max error in fast moves stays about 55 cm in every variant.
+  Part of it may be the camera itself, because height changes map to floor error. Caveats: the scoring camera is
+  also the fused camera, which is partly circular at 1 s. EKF pos must NOT be fused directly: it is a body-axis
+  integral, and a first try that did so diverged (rms 47-89 cm).
+  Not started in firmware. It needs a live tracker plus a WiFi uplink into the estimator: an operator decision.
 - **Keil build of fb615c7** is pending because the uVision GUI held `OBJ/`. The gcc `-Werror` golden tests pass
   (14).
 
