@@ -385,6 +385,13 @@ typedef struct {
 	float   yaw_nose_deg; /* where the nose points in the loc x/y frame at yaw 0 [deg, x toward y].
 	                         x is the roll axis at yaw 0, so the nose is +90 or -90: check it on the
 	                         first slow run (nose must lead) and flip the sign if the tail leads        */
+	uint8_t start_fixed;  /* 1 fly to the fixed start point first and run the preset around it, so every
+	                         run starts at the same place; 0 run it around the hover setpoint at traj_go */
+	float   start_x_cm;   /* fixed start point in the loc frame [cm]                                     */
+	float   start_y_cm;
+	float   start_z_m;    /* fixed start height [m], 0.5-1.5                                             */
+	float   goto_s;       /* time to fly there [s], 2-10; stretched when the limit mode's speed needs it */
+	float   settle_s;     /* hover there before the move [s], 0-5; the nose turns to the path meanwhile  */
 } TrajParams_t;
 
 volatile uint8_t traj_id        = 4U;  /* 1 step, 2 zigzag, 3 circle, 4 figure-8 (default: the standard test path) */
@@ -392,12 +399,13 @@ volatile uint8_t traj_go        = 0U;  /* write 1 to start traj_id (ignored whil
 volatile uint8_t traj_stop      = 0U;  /* write 1 to end the move early and fly back                           */
 volatile uint8_t traj_fence_off = 0U;  /* 0 fence on (x/y/z checks); 1 fence off (x/y/z checks bypassed)         */
 volatile uint8_t traj_active = 0U;  /* id of the running preset, 0 idle                                     */
-volatile uint8_t traj_phase  = 0U;  /* 0 idle, 1 move, 2 return, 3 hold at the start point                 */
+volatile uint8_t traj_phase  = 0U;  /* 0 idle, 1 move, 2 return, 3 hold at the start point,
+                                       4 fly to the fixed start point, 5 settle there (start_fixed 1)   */
 volatile uint8_t traj_status = 0U;  /* 1 running, 2 done, 3 aborted (takeover/landing), 4 stopped and back,
                                        0xE0 not flying, 0xE1 busy (GS path or GS authority), 0xE2 bad traj_id,
                                        0xEE a traj_p field out of range or too fast, 0xEF outside the soft fence */
 volatile uint8_t traj_id_seen = 0U; /* traj_id as read at the last traj_go (explains a 0xE2)                */
-volatile float   traj_t      = 0.0f; /* time since traj_go [s]                                              */
+volatile float   traj_t      = 0.0f; /* time since traj_go [s], goto and settle included                   */
 volatile float   traj_home_x = 0.0f, traj_home_y = 0.0f, traj_home_z = 0.0f, traj_home_yaw = 0.0f; /* start point */
 TrajParams_t traj_p = {                 /* watch-window struct, latched at traj_go (same pattern as vp_user) */
 	1U, 0U, 0U, 1U,                 /* profile smooth, axis x, zigzag triangle, figure-8 Gerono    */
@@ -408,7 +416,9 @@ TrajParams_t traj_p = {                 /* watch-window struct, latched at traj_
 	70.0f, 2.0f,                    /* figure-8 size [cm], laps: standard test path, x +-35 cm,
 	                                   y +-70 cm, peak 69 cm/s (limit 80)                          */
 	0.0f,                           /* figure-8 tilt [deg]: flat (30 gives z +-35 cm)              */
-	1U, 90.0f, 90.0f                /* yaw follow on, 90 deg/s, nose +y at yaw 0 (PROPOSED)        */
+	1U, 90.0f, 90.0f,               /* yaw follow on, 90 deg/s, nose +y at yaw 0 (PROPOSED)        */
+	1U, 0.0f, 0.0f, 0.85f,          /* fly to (0, 0, 0.85 m) first and start the preset there      */
+	4.0f, 2.0f                      /* goto at least 4 s, settle 2 s (not in the 25 s move cap)    */
 };
 
 static TrajParams_t s_tp;                         /* traj_p latched at traj_go                    */
@@ -418,6 +428,8 @@ static float s_ref_x = 0.0f, s_ref_y = 0.0f, s_ref_z = 0.0f; /* last move refere
 static uint8_t s_stopped = 0U;                    /* traj_stop ended the move                     */
 static traj_shape_t s_shape = { 0U, 0.0f, 0U, 0.0f, 0.0f, 1.0f }; /* circle / figure-8 shape, set by Traj_Check */
 static float s_yaw_cmd = 0.0f;                    /* slewed yaw reference [deg]                   */
+static float s_goto_s = 0.0f;                     /* goto time after the speed stretch [s]        */
+static float s_from_x = 0.0f, s_from_y = 0.0f, s_from_z = 0.0f; /* setpoint at traj_go (goto start) */
 
 static float Traj_Ramp01(float u)
 {
@@ -726,6 +738,27 @@ static void Traj_Start(void)
 	traj_home_z = Ctrler.Z_posPID.Des;
 	traj_home_yaw = Ctrler.yawPID.Des;
 	s_yaw_cmd = traj_home_yaw;
+	s_from_x = traj_home_x;
+	s_from_y = traj_home_y;
+	s_from_z = traj_home_z;
+	if (s_tp.start_fixed > 1U || (s_tp.start_fixed == 1U &&
+	    !(fabsf(s_tp.start_x_cm) <= 500.0f && fabsf(s_tp.start_y_cm) <= 500.0f &&
+	      s_tp.start_z_m >= 0.5f && s_tp.start_z_m <= 1.5f && s_tp.goto_s >= 2.0f && s_tp.goto_s <= 10.0f &&
+	      s_tp.settle_s >= 0.0f && s_tp.settle_s <= 5.0f))) {
+		traj_status = 0xEEU;
+		return;
+	}
+	if (s_tp.start_fixed == 1U) {
+		/* the preset runs around the fixed point, so Traj_Check fences the box around it */
+		float ddx = s_tp.start_x_cm - s_from_x;
+		float ddy = s_tp.start_y_cm - s_from_y;
+		float ddz = 100.0f * (s_tp.start_z_m - s_from_z);
+		float need = 0.5f * TRAJ_PI * sqrtf(ddx * ddx + ddy * ddy + ddz * ddz) / TRAJ_V_MAX_CMS;
+		traj_home_x = s_tp.start_x_cm;
+		traj_home_y = s_tp.start_y_cm;
+		traj_home_z = s_tp.start_z_m;
+		s_goto_s = (need > s_tp.goto_s) ? need : s_tp.goto_s;   /* cosine blend peaks at pi/2 x the mean speed */
+	}
 	code = Traj_Check();
 	if (code != 0U) {
 		traj_status = code;
@@ -747,7 +780,7 @@ static void Traj_Start(void)
 	traj_t = 0.0f;
 	traj_stop = 0U;
 	traj_active = traj_id;
-	traj_phase = 1U;
+	traj_phase = (s_tp.start_fixed == 1U) ? 4U : 1U;
 	traj_status = 1U;
 }
 
@@ -786,6 +819,35 @@ static void Traj_Tick(void)
 	s_tph += AFLY_DT_S;
 	traj_t += AFLY_DT_S;
 
+	/* traj_stop before the move: finish the flight to the start point, then hold and end there */
+	if ((traj_phase == 4U || traj_phase == 5U) && traj_stop != 0U) {
+		s_stopped = 1U;
+		traj_stop = 0U;
+		if (traj_phase == 5U) {
+			traj_phase = 3U;
+			s_tph = 0.0f;
+		}
+	}
+	if (traj_phase == 4U) {
+		/* fly from the setpoint at traj_go to the fixed start point, cosine blend over s_goto_s */
+		float k = Traj_Ramp01(s_tph / s_goto_s);
+		Traj_Commit(s_from_x + (traj_home_x - s_from_x) * k,
+		            s_from_y + (traj_home_y - s_from_y) * k,
+		            s_from_z + (traj_home_z - s_from_z) * k);
+		if (s_tph >= s_goto_s) {
+			AutoflyTask_WaypointReset();
+			Traj_Commit(traj_home_x, traj_home_y, traj_home_z);
+			traj_phase = s_stopped ? 3U : 5U;
+			s_tph = 0.0f;
+		}
+	} else if (traj_phase == 5U) {
+		Traj_Commit(traj_home_x, traj_home_y, traj_home_z);
+		if (s_tph >= s_tp.settle_s) {
+			traj_phase = 1U;
+			s_tph = 0.0f;
+		}
+	}
+
 	if (traj_phase == 1U) {
 		if (traj_stop != 0U || s_tph >= s_tp.move_s) {
 			s_stopped = traj_stop;
@@ -821,9 +883,11 @@ static void Traj_Tick(void)
 		}
 	}
 
-	/* yaw: nose along the path while a circle / figure-8 moves, back to the start heading after; slewed */
+	/* yaw: nose along the path while a circle / figure-8 moves (turned to the first heading while it
+	   settles), back to the heading at traj_go after; slewed */
 	if (s_tp.yaw_follow == 1U && (traj_active == 3U || traj_active == 4U)) {
-		float target = (traj_phase == 1U) ? Traj_FollowYaw(s_tph) : traj_home_yaw;
+		float target = (traj_phase == 1U) ? Traj_FollowYaw(s_tph) :
+		               (traj_phase == 5U && !s_stopped) ? Traj_FollowYaw(0.0f) : traj_home_yaw;
 		s_yaw_cmd = TrajShape_YawStep(s_yaw_cmd, target, s_tp.yaw_rate_dps * AFLY_DT_S);
 	} else {
 		s_yaw_cmd = traj_home_yaw;
