@@ -356,7 +356,8 @@ void AutoflyTask_RunFigure8(void)
  * Units: loc x/y cm, Z_pos m, yaw deg; the traj_p fields are cm, Hz and s. Numbers are PROPOSED, untested. */
 
 #define TRAJ_TOTAL_MAX_S   25.0f        /* move_s + ret_s + hold_s ceiling (motor 2 runs hot with the load) [s] */
-#define TRAJ_V_MAX_CMS     80.0f        /* peak reference speed above this is refused [cm/s]                    */
+#define TRAJ_V_MAX_CMS     g_traj_v_max_cms /* peak reference speed above this is refused [cm/s]; limit mode  */
+extern float g_traj_v_max_cms;          /* StabilizerTask.c s_lim: 80 / 110 / 150 for lim_mode 0 / 1 / 2       */
 #define TRAJ_Z_OFF_MAX_CM  40.0f        /* largest z step or zigzag amplitude [cm]                              */
 #define TRAJ_Z_MIN_M       0.4f         /* lowest z reference [m]                                               */
 #define TRAJ_PI            3.14159265f

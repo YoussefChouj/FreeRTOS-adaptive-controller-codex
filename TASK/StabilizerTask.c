@@ -142,6 +142,12 @@ volatile uint8_t g_ekf_of1_on = 1U;
  * vp_user + vp_user_go = 1) also applies in flight while ch8 is off. Reboot = 0/0.
  * Tables: s_kp before Keil_PresetPoll, s_vp before Keil_VariantPoll. */
 volatile uint8_t kp_id = 0U, kp_go = 0U, kp_active = 0U;
+/* Limit mode (s_lim table, Limit_ModePoll): lim_mode = 0 slow, 1 conservative, 2 max; lim_active shows the
+ * applied row (0xFF until the first ground tick). Ground only, on change, so later GS writes to gs_max_* stick. */
+volatile uint8_t lim_mode = 0U, lim_active = 0xFFU;
+float g_vxy_des_max = 120.0f;       /* cm/s  */
+float g_yawrate_des_max = 90.0f;    /* deg/s */
+float g_traj_v_max_cms = 80.0f;     /* cm/s, AutoflyTask refuses faster trajectories */
 volatile uint8_t vp_id = 0U, vp_active = 0U;
 
 float Sin_roll_01= 0;
@@ -1233,6 +1239,33 @@ static void Keil_PresetPoll(FlightState_t state)
 	s_vp_last = 0xFFU;             /* the kp row wrote p/r gamma: re-apply the variant row on top */
 }
 
+/* Limit modes (docs/lab/today-2026-10-10.md). tilt = gs_max_pitch/roll_deg (lean cap in accel_to_lean_angles),
+ * vxy = position-loop velocity setpoint cap, trajv = fastest trajectory AutoflyTask accepts, yawr = heading-hold
+ * rate cap. Fixed caps above every row: locxsPID UMax 600 cm/s^2 = 31.4 deg lean, yawPID UMax 160 deg/s, z 1 m/s.
+ * Mode 2 sits just under those. Hover throttle 0.43-0.47 (10-07 logs), so 30 deg needs about 0.55 collective. */
+typedef struct { float tilt_deg; float vxy_cms; float trajv_cms; float yawr_dps; } LimitMode_t;
+#define LIM_ROW(tilt, vxy, trajv, yawr)  { (tilt), (vxy), (trajv), (yawr) }
+static const LimitMode_t s_lim[] = {
+	/*        tilt   vxy     trajv   yawr */
+	LIM_ROW( 15.0f, 120.0f,  80.0f,  90.0f ),  /* 0 slow: the 10-07 limits, yaw cap 60 -> 90 = traj yaw_rate_dps */
+	LIM_ROW( 20.0f, 150.0f, 110.0f, 120.0f ),  /* 1 conservative: f8_laps 3 fits (104 cm/s)                     */
+	LIM_ROW( 30.0f, 200.0f, 150.0f, 160.0f ),  /* 2 max: just under the fixed PID caps above                    */
+};
+
+static void Limit_ModePoll(FlightState_t state)
+{
+	uint8_t id = lim_mode;
+	if (id == lim_active) return;
+	if (!Keil_OnGround(state)) return;
+	if (id >= (uint8_t)(sizeof(s_lim) / sizeof(s_lim[0]))) { lim_mode = (lim_active < 3U) ? lim_active : 0U; return; }
+	gs_max_pitch_deg = s_lim[id].tilt_deg;
+	gs_max_roll_deg = s_lim[id].tilt_deg;
+	g_vxy_des_max = s_lim[id].vxy_cms;
+	g_traj_v_max_cms = s_lim[id].trajv_cms;
+	g_yawrate_des_max = s_lim[id].yawr_dps;
+	lim_active = id;
+}
+
 /* MRAC variant rows (docs/flights/2026-10-08-variant-sweep-plan.md). Every row writes every column, so any
  * row restores the others. Axes: p/r = pitch+roll, y = yaw, pry = all three; z is never touched. Values
  * copy the WP-33 SIL presets (ground_station/analysis/controllers/mrac_v1/v2/pr/st.yaml); the SIL injected
@@ -1547,6 +1580,7 @@ void Update_Motor(void)
 
 	Keil_PresetPoll(state);
 	Keil_VariantPoll(state);
+	Limit_ModePoll(state);
 	if (Motor_DebugOverride(state)) return;
 
 	if (state == FLIGHT_STATE_ARMED)
@@ -1950,8 +1984,8 @@ void Compute_Motor(void)
 #define Z_DES_SLEW_M           0.005f   /* max Z setpoint step per call toward TWC.target_z */
 #define LAND_SINK_BIAS_STEP    0.001f   /* m/s added per tick while stuck in ground effect */
 #define LAND_SINK_SLOW_VZ      0.10f    /* m/s, |Z rate| below this counts as stuck */
-#define VXY_DES_MAX            120.0f   /* cm/s, clamp on the position-loop velocity setpoints */
-#define YAWRATE_DES_MAX        60.0f    /* deg/s, clamp on the heading-hold rate setpoint */
+#define VXY_DES_MAX            g_vxy_des_max    /* cm/s, clamp on the position-loop velocity setpoints (limit mode) */
+#define YAWRATE_DES_MAX        g_yawrate_des_max /* deg/s, clamp on the heading-hold rate setpoint (limit mode) */
 #define OFHOLD_ON_MIN          1000     /* ch6 (OFHOLD_CH) above this = OF position hold on */
 
 /* Body-frame lean commands (cm/s^2) of the last pitch/roll setpoint update; telemetry only. */
