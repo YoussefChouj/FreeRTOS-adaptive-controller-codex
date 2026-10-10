@@ -325,14 +325,14 @@ static void test_multi_basis(void)
     ok("M basis 4 (RBF24) fills all 24", MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 4.0f) == 1U);
     tick(5.0f, -3.0f);
     ok("M RBF24: 24 ext slots live", ext_nonzero(phi) == 24);
-    mrac_vp12.mask[0] = mrac_vp12.mask_act[0] = 16777215.0f;   /* the all-on default: must not round to bit 24 (exp15 bug) */
+    mrac_vp12.mask[0][0] = mrac_vp12.mask_act[0][0] = 16777215.0f;   /* the all-on default: must not round to bit 24 (exp15 bug) */
     tick(5.0f, -3.0f);
     ok("M mask 0xFFFFFF: all 24 ext slots live", ext_nonzero(phi) == 24);
-    mrac_vp12.mask[0] = mrac_vp12.mask_act[0] = 8388609.0f;    /* bits 0 and 23 */
+    mrac_vp12.mask[0][0] = mrac_vp12.mask_act[0][0] = 8388609.0f;    /* bits 0 and 23 */
     tick(5.0f, -3.0f);
     ok("M mask bits 0+23: exactly slots 0 and 23", ext_nonzero(phi) == 2 && phi[MRAC_N_STRUCT] != 0.0f
        && phi[MRAC_N_STRUCT + 23] != 0.0f);
-    mrac_vp12.mask[0] = mrac_vp12.mask_act[0] = 16777215.0f;
+    mrac_vp12.mask[0][0] = mrac_vp12.mask_act[0][0] = 16777215.0f;
     mrac_in_acc[0] = 0.5f; mrac_in_vbat = 15.0f; mrac_vp12.v_arm = 16.0f;
     ok("M basis 6 (S10X) accepted", MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 6.0f) == 1U);
     ok("M S10X lims: swing 2 % vs lag 10 %, bias = lag",
@@ -356,7 +356,7 @@ static void test_multi_basis(void)
        fabsf(mrac_config_pitch.gamma[MRAC_N_STRUCT] - 0.10f) < 1e-6f
        && fabsf(mrac_config_pitch.gamma[MRAC_N_STRUCT + 4] - 0.10f) < 1e-6f
        && fabsf(mrac_config_pitch.What_limit[MRAC_N_STRUCT + 4] - 0.05f) < 1e-6f);
-    ok("M basis 10 refused", MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 10.0f) == 0U);
+    ok("M basis 11 refused", MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 11.0f) == 0U);
     MRAC_VariantParamSet(MRAC_AXIS_PITCH, MRAC_VF_BASIS, 0.0f);
     tick(5.0f, -3.0f);
     ok("M back to basis 0: ext slots 0 again", ext_nonzero(phi) == 0);

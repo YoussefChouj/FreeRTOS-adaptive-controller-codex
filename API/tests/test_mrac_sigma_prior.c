@@ -35,6 +35,7 @@
 
 _imu_st imu_data = {0};
 float MRAC_VectorNormSquare(const float *v, int n) { return 0.0f; }
+float MRAC_Simple_RBF(float x, float c, float width) { (void)x; (void)c; (void)width; return 0.0f; }
 
 /* A full-sized stand-in for CtrlerTypeDef. mrac.c's MRAC_Control reads:
  *   current_state->gyroyPID.FB / Des / U
@@ -312,8 +313,9 @@ int main(void)
      * PRIMASK is a no-op, but the call must still produce the
      * expected write/read. */
     {
-        float w[6] = {0.01f, 0.02f, 0.03f, 0.04f, 0.05f, 0.06f};
-        float r[6] = {0,0,0,0,0,0};
+        float w[MAX_NUM_BASIS];
+        float r[MAX_NUM_BASIS] = {0};
+        for (i = 0; i < MAX_NUM_BASIS; i++) w[i] = 0.01f * (float)(i + 1);
         MRAC_SetPrior(MRAC_AXIS_PITCH, w);
         MRAC_GetPrior(MRAC_AXIS_PITCH, r);
         for (i = 0; i < MAX_NUM_BASIS; i++) {
@@ -323,7 +325,7 @@ int main(void)
         }
         /* Out-of-range axis is a no-op. */
         {
-            float before[6], after[6];
+            float before[MAX_NUM_BASIS], after[MAX_NUM_BASIS];
             MRAC_GetPrior(MRAC_AXIS_PITCH, before);
             MRAC_SetPrior(99, w);  /* no axis 99 */
             MRAC_GetPrior(MRAC_AXIS_PITCH, after);
