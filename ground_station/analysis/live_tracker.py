@@ -387,15 +387,17 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
             "read_ms": 1000 * t_rd / max(n, 1), "detect_ms": 1000 * t_det / max(n, 1)}
 
 
-def replay(name: str, links=(0.15, 0.3), delay_err_s: float = 0.0, period: float = 0.1, n_med: int = 3,
-           window_s: float = 0.2, gate: bool = True, cam_path: str = "docs/video-truth/cam_r4_lenswave_2026-10-11.json",
+def replay(name: str, links=(0.15, 0.3), delay_err_s: float = 0.0, period: float = 0.05, n_med: int = 2,
+           window_s: float = 0.1, gate: bool = True, cam_path: str = "docs/video-truth/cam_r4_lenswave_2026-10-11.json",
            root: str = "logs/video_truth", max_frames: int = 0, gain: float = vt.EXT_POS["gain"],
            slew_m: float = vt.EXT_POS["slew_m"], beta: float = vt.EXT_POS["beta"]) -> dict:
     """Real-time replay of one R4 flight: the online CoralTracker (+ JumpGate) on cam.mkv, fixes packed exactly as
     sent, decoded as the firmware does (value -> cm, age byte), relative to the pad spot, arriving link s after
     the frame on the telemetry clock (truth4 offset); the drone dates each fix with delay_ms = link + delay_err_s.
     vt.ext_pos_replay on the earth estimate, scored by vt.drift_score (tag _live_<ms>ms). CIRCULAR: same camera,
-    lens, floor pose, sync and earth rotation as truth4 (the rotation is an oracle the live run must fit)."""
+    lens, floor pose, sync and earth rotation as truth4 (the rotation is an oracle the live run must fit).
+    Fix rate default 20 Hz (period 0.05, median of 2, 0.1 s window; PROPOSED 2026-10-12): 10 Hz missed the budget on
+    the b16 trajectory. Score tags carry _pNNNnNwNNN unless the rate is the old 10 Hz (0.1 / 3 / 0.2)."""
     vd = Path(root) / name
     summ = json.loads((vd / "truth4.json").read_text())
     tab = np.genfromtxt(vd / "truth4.csv", delimiter=",", names=True)
@@ -417,8 +419,10 @@ def replay(name: str, links=(0.15, 0.3), delay_err_s: float = 0.0, period: float
     xy -= np.median(xy[pad], axis=0)                      # truth4 is relative to the pad spot too
     earth = np.c_[tab["earth_x"], tab["earth_y"]]
     out = {"name": name, "tracker": st, "circular": True, "delay_err_s": delay_err_s, "gain": gain,
-           "slew_cm": slew_m * 100, "spread_ms": vt.EXT_POS["spread_s"] * 1000, "beta": beta, "links": {}}
+           "slew_cm": slew_m * 100, "spread_ms": vt.EXT_POS["spread_s"] * 1000, "beta": beta, "period_s": period, "n_med": n_med, "window_s": window_s, "links": {}}
     sfx = vt.ext_pos_sfx(gain, slew_m, vt.EXT_POS["spread_s"], beta)
+    if (period, n_med, window_s) != (0.1, 3, 0.2):
+        sfx += f"_p{round(period * 1000):03d}n{n_med}w{round(window_s * 1000):03d}"
     for L in links:
         arr = t_read + o + L
         fused, n = vt.ext_pos_replay(tt, earth, arr - age - (L + delay_err_s), xy, 0.0,
@@ -435,9 +439,9 @@ def replay_main(argv) -> int:
     ap.add_argument("names", nargs="+", help="logs/video_truth/<name> dirs with truth4.csv")
     ap.add_argument("--link", type=float, nargs="+", default=[0.15, 0.3], help="frame -> drone delay(s), s")
     ap.add_argument("--delay-err", type=float, default=0.0, help="delay_ms the drone uses minus the true link, s")
-    ap.add_argument("--period", type=float, default=0.1)
-    ap.add_argument("--n-med", type=int, default=3)
-    ap.add_argument("--window-s", type=float, default=0.2)
+    ap.add_argument("--period", type=float, default=0.05, help="s between fixes (20 Hz, PROPOSED)")
+    ap.add_argument("--n-med", type=int, default=2)
+    ap.add_argument("--window-s", type=float, default=0.1)
     ap.add_argument("--no-gate", action="store_true")
     ap.add_argument("--max-frames", type=int, default=0)
     ap.add_argument("--gain", type=float, default=vt.EXT_POS["gain"], help="c step per accepted fix, x innovation")
@@ -472,9 +476,9 @@ def main(argv=None) -> int:
     ap.add_argument("--start-s", type=float, default=0.0, help="file only: seek before reading")
     ap.add_argument("--detector", choices=["ring", "coral", "guards"], default="ring",
                     help="ring: R3 red ring (default); coral: R4 guard ring (needs --seed-px live)")
-    ap.add_argument("--period", type=float, default=0.1, help="s between fixes (fuse4 replay: 10 Hz)")
-    ap.add_argument("--n-med", type=int, default=3)
-    ap.add_argument("--window-s", type=float, default=0.2)
+    ap.add_argument("--period", type=float, default=0.05, help="s between fixes (20 Hz, PROPOSED; 10 Hz missed on b16)")
+    ap.add_argument("--n-med", type=int, default=2)
+    ap.add_argument("--window-s", type=float, default=0.1)
     ap.add_argument("--gate", action="store_true", help="JumpGate on detections (PROPOSED thresholds)")
     ap.add_argument("--send", default="", help="udp:PORT (stream_log --relay-port) or udp:HOST:PORT; default: no send")
     ap.add_argument("--mode", type=int, choices=[0, 1, 2], default=None, help="EXT_POS mode frame: 0 off, 1 shadow, 2 closed")

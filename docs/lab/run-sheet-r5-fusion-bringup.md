@@ -24,7 +24,10 @@ flash mode-2 ─> bench (link, kick) ─> latency event ─> track check ─> sh
    python -m ground_station.livewatch.stream_log --frames <drift_rc_extpos frames> --seconds 3600 --out logs/r5_bench.csv --relay-port <PORT>
    python -m ground_station.analysis.live_tracker --source "window:<scrcpy title>" --cam docs/video-truth/cam_r4_lenswave_2026-10-11.json --height-m <h> --detector coral --gate --send udp:<PORT> --mode 1 --delay-ms 0 --out logs/r5_bench_fixes.csv
    ```
-2. Check that the mode and delay readbacks match the hello frames and that fixes arrive at about 10 Hz.
+2. Check that the mode and delay readbacks match the hello frames. Fix rate: the tracker sends 20 Hz by default
+   (`--period 0.05 --n-med 2 --window-s 0.1`). **Received rate 20 fixes/s or more is REQUIRED (PROPOSED)**: count
+   the growth of `g_ext_pos.n_ok + n_rej + n_old` over 60 s on the bench. Replay at 0.15 s: 10 Hz left b16 at
+   12.1 cm, 20 Hz brought it to 7.4. Frames have no ACK, so only this count shows what arrived.
 3. Kick: switch to `--mode 2`, move the drone by hand about 20 cm and hold it there. `c_x/c_y` must step at most
    10 cm per fix (SLEW) and settle in 2 to 3 fixes. While held still, `earth_x/y` must ramp at most 0.5 cm per 5 ms
    tick (2.5 cm per 40 Hz sample, the spread that keeps the locx/locy D term from kicking). A bigger step in either
@@ -33,9 +36,9 @@ flash mode-2 ─> bench (link, kick) ─> latency event ─> track check ─> sh
 ## 2. Latency event (measures `--delay-ms`)
 
 A sharp tap on the frame, seen in both the video and `Acc_*_Real`. delay = frame time minus IMU time plus the
-link. **0.15 s or less is REQUIRED** (replay, 1 s-mean 60 s drift p90 with the 18c7d964 rule): at 0.15 s b17
-hover 4.2, b13c 9.7, b5 9.6, b16 traj 12.1 cm; at 0.3 s 6.3 / 13.4 / 13.6 / 16.5. Above 0.15 s: hover flights
-only, no dense trajectory presets.
+link. **0.15 s or less is REQUIRED** (replay, 1 s-mean 60 s drift p90 with the 18c7d964 rule, 20 Hz fixes): at
+0.15 s b17 hover 3.5, b13c 7.3, b5 7.4, b16 traj 7.4 cm; at 0.3 s 5.6 / 11.3 / 11.8 / 12.3. Above 0.15 s: hover
+flights only, no dense trajectory presets.
 
 ## 3. Coral track quality (go/no-go for every flight)
 
