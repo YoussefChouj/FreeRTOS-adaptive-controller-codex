@@ -13,7 +13,7 @@ confirm (1 question) -> start <name> (bg) -> "recording, fly" -> operator says s
 
 1. **Confirm once** (AskUserQuestion): drift_rc preset (slots 1-3 at 100/50/25 Hz, slot 0 default 25 Hz),
    session name `drift_rc_r<N>_b<battery>`. Drone disarmed. Phone on USB, camera in the R3 pose.
-2. **Start:** `bash ground_station/lab/camera_truth.sh start <name> [preset]` (preset = a file in `ground_station/vofa_studio/presets/`, default `drift_rc`; `drift_rc_xy` adds the x/y MRAC layers, `drift_rc_max` logs all 6 MRAC axes at 81700/87552 B/s, every live weight)
+2. **Start:** `bash ground_station/lab/camera_truth.sh start <name> [preset]` (preset = a file in `ground_station/vofa_studio/presets/`, default `drift_rc`; `drift_rc_xy` adds the x/y MRAC layers, `drift_rc_max` logs all 6 MRAC axes at 84600/87552 B/s incl. slot0, every live weight)
    (starts the 8081 service if down, applies drift_rc, stream log unlimited, recording start
    requested_by operator, scrcpy camera 4 zoom 0.6 1080p30 -> `logs/video_truth/<name>/cam.mkv`,
    host start time in `scrcpy_start_host_time.txt`). It prints rows per slot and video size after 5 s.
