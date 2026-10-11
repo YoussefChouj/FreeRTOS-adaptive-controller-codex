@@ -94,3 +94,79 @@ def test_tel_height_shifts_time_and_adds_ring_offset():
     k = "slot0.Ctrler.Z_posPID.FB"
     h = tel_height({k + "|t": np.array([0.0, 10.0]), k: np.array([0.0, 1.0])}, tel_offset_s=15.0, ring_offset_m=0.05)
     assert abs(h(20.0) - 0.55) < 1e-12 and abs(h(0.0) - 0.05) < 1e-12      # video 20 s = tel 5 s; clamps before tel 0
+
+
+_CORAL = (40, 90, 230)                                         # BGR: OpenCV hue ~8, sat ~210, val 230 -> coral_mask
+
+
+def _coral_frame(c, blob=None):
+    import cv2
+    f = np.zeros((480, 640, 3), np.uint8)
+    cv2.circle(f, (int(c[0]), int(c[1])), 15, _CORAL, -1)
+    if blob is not None:
+        f[blob[1] - 10:blob[1] + 10, blob[0] - 10:blob[0] + 10] = _CORAL
+    return f
+
+
+def test_coral_tracker_follows_masks_static_and_grows_on_a_miss():
+    from ground_station.analysis.live_tracker import CoralTracker
+    static = np.zeros((480, 640), bool)
+    static[170:190, 290:310] = True                            # a coral object 80 px from the drone, in the ROI
+    tr = CoralTracker([300, 260], static=static)
+    for k in range(5):
+        c = (300 + 10 * k, 260)
+        uv = tr.step(_coral_frame(c, blob=(300, 180)))
+        assert uv is not None and np.hypot(*(uv - c)) <= 1.0
+    assert tr.step(np.zeros((480, 640, 3), np.uint8)) is None and tr.r == 210.0
+    tr.recentre([100, 100])
+    assert tr.r == 140.0 and np.allclose(tr.c, [100, 100])
+
+
+def test_jump_gate_rejects_jumps_caps_dt_and_reseeds_on_a_cluster():
+    from ground_station.analysis.live_tracker import JumpGate
+    g = JumpGate(v_max=1.0, slack_m=0.05, dt_max=0.5, n_reseed=3, cluster_m=0.05)
+    assert g.check(0.0, [0, 0]) and g.check(0.1, [0.1, 0])     # 0.1 m in 0.1 s at 1 m/s + slack
+    assert not g.check(0.2, [1.0, 0]) and not g.check(0.3, [1.0, 0.01])
+    assert g.check(0.4, [1.01, 0]) and g.reseeds == 1 and g.n_rej == 3   # 3 agreeing rejects: drone moved
+    assert g.check(0.5, [1.02, 0])
+    assert not g.check(10.0, [3.0, 0])                         # 9.5 s gap still allows only 0.5 s of travel
+
+
+def test_scheduler_window_outlasts_the_period():
+    s = FixScheduler(period=0.1, n_med=3, window_s=0.2)
+    s.due(0.0)
+    for t in (0.04, 0.11, 0.18):                               # one frame per 0.1 s period would be < n_med
+        s.push(t, [0.0, 0.0])
+    assert s.due(0.2) is not None
+
+
+def test_run_source_sends_hello_then_fixes_when_latency_exceeds_period(tmp_path):
+    import cv2
+    from ground_station.analysis.live_tracker import CoralTracker, run_source
+    p = str(tmp_path / "v.avi")
+    w = cv2.VideoWriter(p, cv2.VideoWriter_fourcc(*"MJPG"), 30.0, (640, 480))
+    for k in range(45):
+        w.write(_coral_frame((300 + k, 260)))
+    w.release()
+    cam = {"K": [[500.0, 0, 320], [0, 500.0, 240], [0, 0, 1]], "dist": [0.0] * 5,
+           "R": [[1.0, 0, 0], [0, -1.0, 0], [0, 0, -1.0]], "t": [0.0, 0.0, 2.0]}
+    sent, fixes = [], []
+    st = run_source(p, cam, EarthAlign(), 0.05, cam_latency_s=0.15, send=sent.append, ring=CoralTracker([300, 260]),
+                    sched=FixScheduler(0.1, 3, window_s=0.2), mode=2, delay_ms=300.0, fix_log=fixes)
+    assert sent[0][2] == 0x2C and sent[0][3] == 0xFE and sent[1][3] == 0xFF   # delay, then mode, once for a file
+    assert st["fixes"] >= 10 and len(fixes) == st["fixes"] and len(sent) == 2 + st["fixes"]
+    for t_read, t_fix, b in fixes:
+        assert b[3] == round((t_read - t_fix) * 100) and b[3] >= 15            # age includes the camera latency
+        assert ext_pos_decode(struct.unpack("<f", b[4:8])[0]) is not None
+
+
+def test_udp_sender_sends_one_datagram_per_frame():
+    import socket
+    from ground_station.analysis.live_tracker import udp_sender
+    r = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    r.bind(("127.0.0.1", 0))
+    r.settimeout(2.0)
+    udp_sender(f"udp:{r.getsockname()[1]}")(b"\xcc\xdd\x2c")
+    assert r.recv(64) == b"\xcc\xdd\x2c"
+    with pytest.raises(ValueError):
+        udp_sender("tcp:1")

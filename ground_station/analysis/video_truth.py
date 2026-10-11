@@ -1332,15 +1332,17 @@ def drift_score(name: str, cam: str = "docs/video-truth/cam_r4_lenswave_2026-10-
 EXT_POS = {"ring_n": 32, "ring_dt": 0.05, "gate_m": 0.40, "slew_m": 0.03, "gain": 0.1, "rej_n": 3}
 
 
-def ext_pos_replay(t, est, fix_t, fix_xy, lat_s: float, p: dict = EXT_POS) -> tuple[np.ndarray, dict]:
+def ext_pos_replay(t, est, fix_t, fix_xy, lat_s: float, p: dict = EXT_POS, arr_t=None) -> tuple[np.ndarray, dict]:
     """The firmware EXT_POS path closed: a fix of the position at fix_t reaches the drone lat_s later; its
     innovation e = z - (ring(fix_t) + c) is taken against the raw estimate buffered every ring_dt for ring_n samples
     (linear between samples, the newest after it) plus the running correction c. |e| > gate is dropped unless
     rej_n gated fixes came in a row, then accepted through the slew clamp until a fix is back inside the gate
-    (slewed re-anchor). An accepted fix moves c by gain*e, at most slew. Returns est + c(t) and the fix counts."""
+    (slewed re-anchor). An accepted fix moves c by gain*e, at most slew. `arr_t` (sorted): per-fix arrival times
+    instead of fix_t + lat_s, for a fix time the drone computes from a wrong delay. Returns est + c(t), fix counts."""
     rt, rx, c = [], [], np.zeros(2)
     n = {"ok": 0, "gated": 0, "old": 0, "reanchor": 0}
-    out, rej, k, arr = np.empty_like(est), 0, 0, np.asarray(fix_t) + lat_s
+    out, rej, k = np.empty_like(est), 0, 0
+    arr = np.asarray(fix_t) + lat_s if arr_t is None else np.asarray(arr_t)
     for i, ti in enumerate(t):
         if not rt or ti - rt[-1] >= p["ring_dt"] - 1e-9:
             rt.append(ti), rx.append(est[i].copy())
