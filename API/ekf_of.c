@@ -392,7 +392,7 @@ void ext_pos_stale_tick(ext_pos_stat_t *s, uint32_t now_ms)
 
 /* Closed-loop step for one ext_pos_fix() result: an accepted fix, or a gated one once EXT_POS_REJ_N came in a
  * row (slewed re-anchor), moves c by EXT_POS_GAIN * e clamped to EXT_POS_SLEW_CM. Returns 1 and the step
- * (dx, dy, cm) for the caller to add to earth_x/y; 0 = no step (old, or gated inside the run). */
+ * (dx, dy, cm) of the target c; earth_x/y follows through ext_pos_spread(). 0 = no step (old, or gated inside the run). */
 uint8_t ext_pos_step(ext_pos_stat_t *s, uint8_t res, float *dx, float *dy)
 {
     float d;
@@ -414,6 +414,24 @@ uint8_t ext_pos_step(ext_pos_stat_t *s, uint8_t res, float *dx, float *dy)
     s->c_x += *dx;
     s->c_y += *dy;
     return 1U;
+}
+
+/* Mode 2, every control tick: move the applied part a toward the target c by at most EXT_POS_SLEW_CM /
+ * EXT_POS_SPREAD_N (a full slew step over EXT_POS_SPREAD_N ticks), so a fix reaches earth_x/y as a ramp, not as a
+ * one-tick step into the locx/locyPID D term. Returns the step (dx, dy, cm) for the caller to add to earth_x/y. */
+void ext_pos_spread(ext_pos_stat_t *s, float *dx, float *dy)
+{
+    const float m = EXT_POS_SLEW_CM / (float)EXT_POS_SPREAD_N;
+    float ex = s->c_x - s->a_x, ey = s->c_y - s->a_y;
+    float d = sqrtf(ex * ex + ey * ey);
+    if (d > m) {
+        ex *= m / d;
+        ey *= m / d;
+    }
+    s->a_x += ex;
+    s->a_y += ey;
+    *dx = ex;
+    *dy = ey;
 }
 
 /* Wire value: an exact integer code = (qx + 2048) * 4096 + (qy + 2048), q = round(cm / EXT_POS_Q_CM) in

@@ -417,6 +417,8 @@ void Reset_World_Origin(void)
 	ext_pos_ring_reset(&s_ext_pos_ring);   /* the buffered path is in the old origin */
 	g_ext_pos.c_x = 0.0f;                   /* mode 2 then re-anchors (slewed) to the camera frame */
 	g_ext_pos.c_y = 0.0f;
+	g_ext_pos.a_x = 0.0f;
+	g_ext_pos.a_y = 0.0f;
 	ano_of.earth_x_ture  = 0.0f;
 	ano_of.earth_y_ture  = 0.0f;
 	ano_of.DISTANCE_X    = 0.0f;
@@ -863,13 +865,15 @@ static void Of_TickKf(u8 of_ok)
 	}
 }
 
-/* External position fix: buffer the raw earth path (earth_x/y minus the correction c), score each posted fix
- * against it at its capture time (g_ext_pos). Mode 1 shadow: telemetry only. Mode 2: ext_pos_step() moves c and
- * earth_x/y (so locx/locyPID.FB) by at most EXT_POS_SLEW_CM per fix; the EKF is not touched. */
+/* External position fix: buffer the raw earth path (earth_x/y minus the applied correction a), score each posted
+ * fix against it at its capture time (g_ext_pos). Mode 1 shadow: telemetry only. Mode 2: ext_pos_step() moves the
+ * target c by at most EXT_POS_SLEW_CM per fix, ext_pos_spread() ramps earth_x/y (so locx/locyPID.FB) toward it at
+ * most EXT_POS_SLEW_CM / EXT_POS_SPREAD_N per tick; the EKF is not touched. */
 static void Ext_Pos_Tick(void)
 {
 	uint32_t now_ms = (uint32_t)xTaskGetTickCount() * (uint32_t)portTICK_PERIOD_MS;
-	ext_pos_ring_tick(&s_ext_pos_ring, now_ms, ano_of.earth_x - g_ext_pos.c_x, ano_of.earth_y - g_ext_pos.c_y);
+	float dx, dy;
+	ext_pos_ring_tick(&s_ext_pos_ring, now_ms, ano_of.earth_x - g_ext_pos.a_x, ano_of.earth_y - g_ext_pos.a_y);
 	if (g_ext_pos_post.seq != s_ext_pos_seen) {
 		float zx, zy;
 		uint32_t t_meas;
@@ -881,12 +885,15 @@ static void Ext_Pos_Tick(void)
 		taskEXIT_CRITICAL();
 		if (g_ext_pos_on) {
 			uint8_t res = ext_pos_fix(&g_ext_pos, &s_ext_pos_ring, t_meas, now_ms, zx, zy);
-			float dx, dy;
-			if (g_ext_pos_on == 2U && ext_pos_step(&g_ext_pos, res, &dx, &dy)) {
-				ano_of.earth_x += dx;
-				ano_of.earth_y += dy;
+			if (g_ext_pos_on == 2U) {
+				(void)ext_pos_step(&g_ext_pos, res, &dx, &dy);
 			}
 		}
+	}
+	if (g_ext_pos_on == 2U) {
+		ext_pos_spread(&g_ext_pos, &dx, &dy);
+		ano_of.earth_x += dx;
+		ano_of.earth_y += dy;
 	}
 	ext_pos_stale_tick(&g_ext_pos, now_ms);
 }

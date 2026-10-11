@@ -136,7 +136,9 @@ extern volatile uint8_t g_ekf_of_vel_fb;
  * Design: docs/video-truth/live_camera_fusion_design_2026-10-11.md. StabilizerTask keeps the raw earth path
  * (earth_x/y minus the running correction c, cm) every EXT_POS_RING_DT_MS; Cmd_ExtPos (TASK/send_data.c, CMD 0x2C)
  * posts a fix with its capture time; ext_pos_fix() takes e = z - (path(t_meas) + c). Shadow: telemetry only.
- * Closed loop: ext_pos_step() moves c (and earth_x/y) by EXT_POS_GAIN * e, at most EXT_POS_SLEW_CM per fix; after
+ * Closed loop: ext_pos_step() moves the target c by EXT_POS_GAIN * e, at most EXT_POS_SLEW_CM per fix, and
+ * ext_pos_spread() moves the applied part a (in earth_x/y) toward c by at most EXT_POS_SLEW_CM / EXT_POS_SPREAD_N per
+ * control tick (no one-tick step into the locx/locyPID D term, which is on the error); after
  * EXT_POS_REJ_N gated fixes in a row the gated ones are taken too, through the same clamp (slewed re-anchor), until
  * one is back inside the gate. No fix for EXT_POS_STALE_MS: c holds (OF-only fallback). Replayed rule:
  * ground_station/analysis/video_truth.py ext_pos_replay(), same constants. */
@@ -145,8 +147,9 @@ extern volatile uint8_t g_ekf_of_vel_fb;
 #define EXT_POS_GATE_CM       40.0f    /* design choice, PROPOSED; R3 replay had no camera outliers */
 #define EXT_POS_STALE_MS      3000U
 #define EXT_POS_Q_CM          0.5f     /* wire quantum: 12-bit signed per axis, +-1023.5 cm */
-#define EXT_POS_GAIN          0.1f     /* per fix: tau ~1 s at 10 Hz; R4 fuse4 replay CHOSEN, PROPOSED in flight */
-#define EXT_POS_SLEW_CM       3.0f     /* max |dc| per fix (design doc section 3) */
+#define EXT_POS_GAIN          0.9f     /* per fix; R4 live replay 2026-10-12 (0.1: moves 14.9-15.5 cm at 0.15 s), PROPOSED */
+#define EXT_POS_SLEW_CM       10.0f    /* max |dc| per fix; 3 cm was the moving-flight floor in replay, PROPOSED */
+#define EXT_POS_SPREAD_N      20U      /* control ticks per full slew step: 0.5 cm per 5 ms tick (1 m/s), PROPOSED */
 #define EXT_POS_REJ_N         3U       /* gated fixes in a row before the slewed re-anchor */
 typedef struct {
     float    x[EXT_POS_RING_N];
@@ -164,6 +167,7 @@ typedef struct {
     float    c_x, c_y;                 /* running correction added to earth_x/y, cm (mode 2 moves it, else held) */
     uint8_t  stale;                    /* 1 = no accepted fix for EXT_POS_STALE_MS */
     uint32_t last_ok_ms;
+    float    a_x, a_y;                 /* applied part of c, already in earth_x/y (ext_pos_spread), cm */
 } ext_pos_stat_t;
 typedef struct {                       /* Send_Task -> StabilizerTask handover, written under a critical section */
     float    x_cm, y_cm;
@@ -180,6 +184,7 @@ uint8_t ext_pos_ring_at(const ext_pos_ring_t *r, uint32_t t_ms, float *ex, float
 uint8_t ext_pos_fix(ext_pos_stat_t *s, const ext_pos_ring_t *r, uint32_t t_meas_ms, uint32_t now_ms, float zx, float zy);
 void    ext_pos_stale_tick(ext_pos_stat_t *s, uint32_t now_ms);
 uint8_t ext_pos_step(ext_pos_stat_t *s, uint8_t res, float *dx, float *dy);
+void    ext_pos_spread(ext_pos_stat_t *s, float *dx, float *dy);
 uint8_t ext_pos_decode(float val, float *x_cm, float *y_cm);
 #define EXT_POS_FIX_OK        0U
 #define EXT_POS_FIX_GATED     1U
