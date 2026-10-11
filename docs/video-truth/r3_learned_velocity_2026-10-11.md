@@ -64,6 +64,29 @@ The ~10 cm offset is a computed hint only: measure the OF sensor offset from the
 Freezing accel bias does nothing; height tilt correction has no effect (height enters only the gyro term).
 Flow scale 0.90 is a small in-sample gain (needs R4 to confirm). of1 is essential. No onboard variant gets near 0.17 cm/s.
 
+## 5. Pure-yaw drift (operator observation), camera truth (`yawseg.py`, `levseg.py`, `levseg2.py`, `levcv.py`)
+Yaw segments = 1 s mean |gz| > 0.3 rad/s. Displacements in cm, camera frame. All computed, R3 only.
+
+| segment (s) | yaw turned | camera: drone really moved | FW EKF error | replay EKF error | replay + lever (fit t>=124, in-sample) |
+|---|---|---|---|---|---|
+| 160.6-167.6 | 185 deg | 63.4 | 45.8 | 33.8 | 12.9 |
+| 183.4-190.8 | 374 deg | 6.6 | 10.4 | 19.8 | 18.9 |
+| 197.3-204.7 | 540 deg | 35.0 | 41.2 | 15.2 | 9.1 |
+
+Calm 7 s windows (n 16): FW EKF error median 10.5 cm. So pure yaw really moves the drone, and the EKF misses most of it.
+The lever arm (sign fixed: lever.py fits truth - fw = cf*gz) explains about half the FW error vector in segments 1 and 3.
+
+Checks:
+- gyro z bias in calm hover -0.0004 rad/s: not the cause. Lever applied only inside yaw segments: same segment gain, rms 34.5.
+- Whole-flight rms still rises (32.4 -> 35.0), hover slope unchanged 0.44 cm/s.
+- Cross-fit (honest): fit on segment 3 only -> cf (+3.4, -2.7) cm/s per rad/s, |r| 4.3 cm; held-out segment 1 error 33.8 -> 24.8 cm,
+  whole-flight rms 32.9, p90 39.1 (neutral). Fit on segment 1 or on t<124 is ill-conditioned (gz nearly constant or ~0): |r| 38-41 cm, nonsense.
+- So the direction is consistent, the size is not pinned by one flight (4.3-9.7 cm).
+- Gyro z reads 6% below the attitude yaw rate (slope 0.936; turn integrals 175/185, 356/374, 513/540 deg). Which one is right needs the top marker (R4).
+
+Next: tape-measure the OF lens offset from the motor centroid (fixes r without data), then R4 with in-place yaw spins
+both ways at 2 rates to validate a firmware `of_lever_xy` term (PROPOSED, not written).
+
 ## Verdict
 With one flight nothing learned beats the EKF on position. The gyro-residual velocity gain (16-24%) does not carry
 over to position. Camera position fusion (0.44 -> 0.06 cm/s, `r3_drift_truth_2026-10-11.md`) is still the only
