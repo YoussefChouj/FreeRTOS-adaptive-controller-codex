@@ -5,7 +5,7 @@ History: `docs/agent/ledger/` (grep, never read whole). Desktop session is CEO: 
 
 ## Now: 2026-10-11 - OF/EKF drift fix in code, not built in Keil, not flashed or flown
 
-Branch `overnight-2026-10-08`. Result doc: `docs/video-truth/r3_drift_truth_2026-10-11.md` (plot, scores, R4 plan).
+Branch `overnight-2026-10-08`. Result doc: `docs/video-truth/r3_drift_truth_2026-10-11.md` (incl. R4 plan).
 R3 (10-11) camera truth showed the EKF error is born in fast RC moves: the raw-flow anchor (of1) is gated out
 at 5 sigma and never heals. Fix fb615c7: `of1_gate` 5 -> 10. Replay vs camera (computed): rms from 72 s
 48.9 -> 26.3 cm, revisit p90 55.5 -> 38.5 cm. Hover drift unchanged at 0.44 cm/s (needs an absolute reference
