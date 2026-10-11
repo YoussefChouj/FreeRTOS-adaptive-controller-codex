@@ -1372,7 +1372,7 @@ def ext_pos_replay(t, est, fix_t, fix_xy, lat_s: float, p: dict = EXT_POS, arr_t
 
 
 def fuse4(name: str, rate_hz: float = 10.0, lat_s: float = 0.3, sd_m: float | None = None, drop: float | None = None,
-          gain: float = EXT_POS["gain"], seed: int = 0) -> dict:
+          gain: float = EXT_POS["gain"], seed: int = 0, slew_m: float = EXT_POS["slew_m"]) -> dict:
     """Replay the closed-loop camera fusion on one truth4 flight: fixes at rate_hz = truth + noise (default sd: the
     flight's on-pad jitter / 1.18, the Rayleigh median), a drop rate (default: the tracker's lost fraction), lat_s
     capture-to-drone delay, fed to ext_pos_replay on the earth estimate; earth and fused are scored by
@@ -1386,9 +1386,12 @@ def fuse4(name: str, rate_hz: float = 10.0, lat_s: float = 0.3, sd_m: float | No
     ft = np.arange(t[0], t[-1], 1.0 / rate_hz)
     ft = ft[rng.random(len(ft)) >= (summ["coral_lost_frac"] if drop is None else drop)]
     z = np.c_[np.interp(ft, t, truth[:, 0]), np.interp(ft, t, truth[:, 1])] + rng.normal(0.0, sd, (len(ft), 2))
-    fused, n = ext_pos_replay(t, earth, ft, z, lat_s, dict(EXT_POS, gain=gain))
-    r = drift_score(name, ests={"earth": earth, "fused": fused}, tag=f"_fuse_{int(lat_s * 1000)}ms")
-    r["fuse"] = {"rate_hz": rate_hz, "lat_s": lat_s, "sd_cm": sd * 100, "gain": gain, "counts": n, "seed": seed}
+    fused, n = ext_pos_replay(t, earth, ft, z, lat_s, dict(EXT_POS, gain=gain, slew_m=slew_m))
+    tag = (f"_fuse_{int(lat_s * 1000)}ms" + ("" if gain == EXT_POS["gain"] else f"_g{round(gain * 100):03d}")
+           + ("" if slew_m == EXT_POS["slew_m"] else f"_s{round(slew_m * 100):03d}"))
+    r = drift_score(name, ests={"earth": earth, "fused": fused}, tag=tag)
+    r["fuse"] = {"rate_hz": rate_hz, "lat_s": lat_s, "sd_cm": sd * 100, "gain": gain, "slew_cm": slew_m * 100,
+                 "counts": n, "seed": seed}
     return r
 
 
@@ -1646,7 +1649,9 @@ def main(argv=None):
     fu = sub.add_parser("fuse4", help="replay the PROPOSED closed-loop camera fusion (EXT_POS) on truth4 flights")
     fu.add_argument("names", nargs="+"); fu.add_argument("--rate", type=float, default=10.0)
     fu.add_argument("--lat", type=float, nargs="+", default=[0.3], help="capture-to-drone delay(s), s")
-    fu.add_argument("--gain", type=float, default=EXT_POS["gain"]); fu.add_argument("--seed", type=int, default=0)
+    fu.add_argument("--gain", type=float, default=EXT_POS["gain"])
+    fu.add_argument("--slew-cm", type=float, default=EXT_POS["slew_m"] * 100, help="max c step per fix, cm")
+    fu.add_argument("--seed", type=int, default=0)
     fu.add_argument("--sd-cm", type=float, default=None, help="fix noise sd per axis (default: on-pad jitter / 1.18)")
     nn = sub.add_parser("nn4", help="LOFO learned camera-off correction (ridge + MLP) on truth4 flights")
     nn.add_argument("names", nargs="*"); nn.add_argument("--lam", type=float, default=300.0)
@@ -1670,7 +1675,8 @@ def main(argv=None):
     elif a.cmd == "fuse4":
         for n in a.names:
             for lat in a.lat:
-                r = fuse4(n, a.rate, lat, None if a.sd_cm is None else a.sd_cm / 100, gain=a.gain, seed=a.seed)
+                r = fuse4(n, a.rate, lat, None if a.sd_cm is None else a.sd_cm / 100, gain=a.gain, seed=a.seed,
+                          slew_m=a.slew_cm / 100)
                 print(f"{n:24s} lat {lat:.2f} sd {r['fuse']['sd_cm']:.1f} " + " | ".join(
                     f"{k} rms {e['rms_cm']:5.1f} d60 p90/max {e.get('drift60_p90_cm', float('nan')):5.1f}/"
                     f"{e.get('drift60_max_cm', float('nan')):5.1f} 1s-mean {e.get('drift60s_p90_cm', float('nan')):5.1f}/"
