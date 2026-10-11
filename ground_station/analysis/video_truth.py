@@ -1512,6 +1512,79 @@ def nn4(names=None, lam: float = 300.0, H: int = 32, ep: int = 60, seeds: int = 
     return out
 
 
+REPORT4_EST = (("EKF alone", "truth4_score_fuse_300ms.json", "earth"), ("camera replay, 0.3 s", "truth4_score_fuse_300ms.json", "fused"),
+               ("live tracker, 0.3 s", "truth4_score_live_300ms.json", "fused"), ("camera-off MLP", "truth4_score_nn4.json", "mlp"))
+
+
+def table4() -> str:
+    """Markdown tables over every truth4 flight: truth quality + sync, then drift per estimator (cm; '-' = no file)."""
+    def ld(n, f):
+        p = Path(f"logs/video_truth/{n}/{f}")
+        return json.loads(p.read_text()) if p.exists() else {}
+
+    def g(d, *ks, nd=0):
+        for k in ks:
+            d = d.get(k, {}) if isinstance(d, dict) else {}
+        return f"{d:.{nd}f}" if isinstance(d, (int, float)) and np.isfinite(d) else "-"
+    names = sorted(p.parent.name for p in Path("logs/video_truth").glob("*/truth4.json"))
+    a = ["| flight | flight s | hold / move / yaw s | h_ring m | pad jitter cm | sync anchor | takeoff-landing "
+         "offset s | coral lost | landed from take-off cm |", "|" + "---|" * 9]
+    b = ["| flight | EKF rms | EKF d60 p90 | EKF 1 s-d60 p90 | hold rate cm/s | move rate cm/s | camera replay rms / "
+         "1 s-d60 | live rms / 1 s-d60 | MLP rms / 1 s-d60 |", "|" + "---|" * 9]
+    for n in names:
+        t, s, f, lv, nn = (ld(n, x) for x in ("truth4.json", "truth4_score.json", "truth4_score_fuse_300ms.json",
+                                             "truth4_score_live_300ms.json", "truth4_score_nn4.json"))
+        c = s.get("class_s", {})
+        sk = t.get("offset_takeoff_s", np.nan) - t.get("offset_landing_s", np.nan)
+        a.append(f"| {n} | {g(t, 'flight_s')} | {g(c, 'hold')} / {g(c, 'move')} / "
+                 f"{g(c, 'yaw')} | {g(t, 'h_ring_m', nd=3)} | {g(t, 'pad_jitter_cm', nd=1)} | {t.get('sync_anchor', '-')} | "
+                 f"{g({'v': sk}, 'v', nd=2)} | {g(t, 'coral_lost_frac', nd=3)} | {g(t, 'truth_land_cm')} |")
+        e = f.get("est", {}).get("earth", {})
+        b.append(f"| {n} | {g(e, 'rms_cm')} | {g(e, 'drift60_p90_cm')} | {g(e, 'drift60s_p90_cm')} | "
+                 f"{g(e, 'net_rate_cm_s', 'hold', nd=2)} | {g(e, 'net_rate_cm_s', 'move', nd=1)} | "
+                 + " | ".join(f"{g(x, 'est', k, 'rms_cm', nd=1)} / {g(x, 'est', k, 'drift60s_p90_cm', nd=1)}"
+                              for x, k in ((f, "fused"), (lv, "fused"), (nn, "mlp"))) + " |")
+    return "\n".join(a) + "\n\n" + "\n".join(b) + "\n"
+
+
+def report4(md: str, out: str, metric: str = "drift60s_p90_cm") -> str:
+    """Self-contained HTML of a markdown report with a bar chart of `metric` per truth4 flight for each REPORT4_EST
+    score file present (missing files leave a gap). The chart goes where the markdown has `<!-- chart -->`."""
+    import io
+    import markdown
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    names = sorted(p.parent.name for p in Path("logs/video_truth").glob("*/truth4.json"))
+    short = [n.replace("drift_rc_r4_", "").replace("hover_r4_", "") for n in names]
+    fig, ax = plt.subplots(figsize=(11, 4.2))
+    w = 0.8 / len(REPORT4_EST)
+    for k, (lab, f, est) in enumerate(REPORT4_EST):
+        v = []
+        for n in names:
+            p = Path(f"logs/video_truth/{n}/{f}")
+            e = json.loads(p.read_text())["est"].get(est, {}) if p.exists() else {}
+            v.append(e.get(metric) or np.nan)
+        ax.bar(np.arange(len(names)) + (k - (len(REPORT4_EST) - 1) / 2) * w, v, w, label=lab)
+    ax.axhline(10, color="k", ls="--", lw=1, label="10 cm goal")
+    ax.set_yscale("log"); ax.set_ylabel(f"{metric} (log)"); ax.set_xticks(range(len(names)), short, rotation=30, ha="right")
+    ax.legend(ncol=5, fontsize=8, loc="upper left"); ax.grid(axis="y", alpha=0.3); fig.tight_layout()
+    buf = io.StringIO(); fig.savefig(buf, format="svg"); plt.close(fig)
+    svg = buf.getvalue()[buf.getvalue().index("<svg"):]
+    body = markdown.markdown(Path(md).read_text(encoding="utf-8"), extensions=["tables", "fenced_code"])
+    body = body.replace("<!-- chart -->", f'<figure>{svg}</figure>')
+    css = ("body{font:15px/1.5 system-ui,sans-serif;max-width:1100px;margin:auto;padding:16px;background:#fff;color:#111}"
+           "table{border-collapse:collapse;margin:8px 0;font-size:13px;display:block;overflow-x:auto}"
+           "td,th{border:1px solid #ccc;padding:3px 7px}th{background:#f2f2f2}code,pre{background:#f6f6f6}"
+           "pre{padding:8px;overflow-x:auto}figure{margin:0;overflow-x:auto}svg{max-width:100%;height:auto}")
+    text = Path(md).read_text(encoding="utf-8")
+    title = next((ln[2:].strip() for ln in text.splitlines() if ln.startswith("# ")), Path(md).stem)
+    Path(out).write_text(f'<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" '
+                         f'content="width=device-width,initial-scale=1"><title>{title}</title><style>{css}</style>'
+                         f"</head><body>{body}</body></html>", encoding="utf-8")
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1579,6 +1652,9 @@ def main(argv=None):
     nn.add_argument("names", nargs="*"); nn.add_argument("--lam", type=float, default=300.0)
     nn.add_argument("--hidden", type=int, default=32); nn.add_argument("--epochs", type=int, default=60)
     nn.add_argument("--seeds", type=int, default=2)
+    rp = sub.add_parser("report4", help="self-contained HTML of a markdown report + truth4 drift bar chart")
+    rp.add_argument("md", help="report markdown, or - to print the per-flight markdown tables")
+    rp.add_argument("--out", default=""); rp.add_argument("--metric", default="drift60s_p90_cm")
     a = ap.parse_args(argv)
     if a.cmd == "aruco":
         r = aruco_scan(a.video, a.step, a.t0, a.t1, out=a.out)
@@ -1601,6 +1677,8 @@ def main(argv=None):
                     f"{e.get('drift60s_max_cm', float('nan')):5.1f} hf {e.get('hf_rms_cm', float('nan')):4.1f} "
                     f"hold {e['net_rate_cm_s']['hold']:.2f} cm/s"
                     for k, e in r["est"].items()) + f" | {r['fuse']['counts']}")
+    elif a.cmd == "report4":
+        print(table4() if a.md == "-" else report4(a.md, a.out, a.metric))
     elif a.cmd == "nn4":
         r = nn4(a.names or None, a.lam, a.hidden, a.epochs, a.seeds)
         print(f"pool {len(r['pool'])} flights, {r['features']} features, params {r['params']}, MACs/step {r['macs_per_step']}")
