@@ -30,6 +30,7 @@
  */
 
 #include "ekf_of.h"
+#include <math.h>
 
 /* axis index table: state index of each local index (EKF_OF_L_*) on the X and Y axis */
 static const uint8_t k_axis_idx[2][4] = {{0,1,2,6},{3,4,5,7}};
@@ -355,7 +356,8 @@ uint8_t ext_pos_ring_at(const ext_pos_ring_t *r, uint32_t t_ms, float *ex, float
     return 0U;
 }
 
-/* Innovation of one fix (z, cm, EKF earth frame) taken at t_meas_ms. Gated fixes still record e_x/e_y. */
+/* Innovation of one fix (z, cm, EKF earth frame) taken at t_meas_ms against the raw path plus the running
+ * correction c. Gated fixes still record e_x/e_y. */
 uint8_t ext_pos_fix(ext_pos_stat_t *s, const ext_pos_ring_t *r, uint32_t t_meas_ms, uint32_t now_ms, float zx, float zy)
 {
     float px, py;
@@ -365,8 +367,8 @@ uint8_t ext_pos_fix(ext_pos_stat_t *s, const ext_pos_ring_t *r, uint32_t t_meas_
         s->n_old++;
         return EXT_POS_FIX_OLD;
     }
-    s->e_x = zx - px;
-    s->e_y = zy - py;
+    s->e_x = zx - (px + s->c_x);
+    s->e_y = zy - (py + s->c_y);
     if (s->e_x * s->e_x + s->e_y * s->e_y > EXT_POS_GATE_CM * EXT_POS_GATE_CM) {
         s->n_rej++;
         if (s->rej_run < 255U) {
@@ -386,6 +388,32 @@ void ext_pos_stale_tick(ext_pos_stat_t *s, uint32_t now_ms)
     if (s->n_ok == 0U || (int32_t)(now_ms - s->last_ok_ms) > (int32_t)EXT_POS_STALE_MS) {
         s->stale = 1U;
     }
+}
+
+/* Closed-loop step for one ext_pos_fix() result: an accepted fix, or a gated one once EXT_POS_REJ_N came in a
+ * row (slewed re-anchor), moves c by EXT_POS_GAIN * e clamped to EXT_POS_SLEW_CM. Returns 1 and the step
+ * (dx, dy, cm) for the caller to add to earth_x/y; 0 = no step (old, or gated inside the run). */
+uint8_t ext_pos_step(ext_pos_stat_t *s, uint8_t res, float *dx, float *dy)
+{
+    float d;
+    *dx = 0.0f;
+    *dy = 0.0f;
+    if (res == EXT_POS_FIX_OLD || (res == EXT_POS_FIX_GATED && s->rej_run < EXT_POS_REJ_N)) {
+        return 0U;
+    }
+    if (res == EXT_POS_FIX_GATED && s->n_anchor < 65535U) {
+        s->n_anchor++;
+    }
+    *dx = EXT_POS_GAIN * s->e_x;
+    *dy = EXT_POS_GAIN * s->e_y;
+    d = sqrtf(*dx * *dx + *dy * *dy);
+    if (d > EXT_POS_SLEW_CM) {
+        *dx *= EXT_POS_SLEW_CM / d;
+        *dy *= EXT_POS_SLEW_CM / d;
+    }
+    s->c_x += *dx;
+    s->c_y += *dy;
+    return 1U;
 }
 
 /* Wire value: an exact integer code = (qx + 2048) * 4096 + (qy + 2048), q = round(cm / EXT_POS_Q_CM) in

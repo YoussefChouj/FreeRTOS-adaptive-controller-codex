@@ -1,6 +1,6 @@
 /*
- * test_ext_pos.c - Host C test for the EXT_POS camera fix (shadow mode): wire decode, earth-path ring buffer,
- *                  innovation gate, stale flag. Design: docs/video-truth/live_camera_fusion_design_2026-10-11.md.
+ * test_ext_pos.c - Host C test for the EXT_POS camera fix: wire decode, earth-path ring buffer, innovation gate,
+ *                  stale flag, and the mode-2 closed loop (gain, slew clamp, slewed re-anchor). Design: docs/video-truth/live_camera_fusion_design_2026-10-11.md.
  *
  * Build and run (from the repo root):
  *   gcc -std=c99 -Wall -Wextra -IAPI -IAPI/tests/stubs_wp14 API/tests/test_ext_pos.c API/ekf_of.c -lm \
@@ -113,11 +113,88 @@ static void test_fix_and_stale(void)
     CHECK(ext_pos_fix(&s, &r, 2100U, 2000U, 10.0f, 20.0f) == EXT_POS_FIX_OK && s.age_ms == 0U, "future stamp clamps age");
 }
 
+/* Mode 2 as StabilizerTask runs it: 200 Hz ticks, earth = truth + drift (1, -0.5 cm/s), the raw path (earth - c)
+ * buffered, a fix of the truth every 100 ms reaching the drone 300 ms after capture. Same case as
+ * tests/test_video_truth.py test_ext_pos_replay_cancels_drift_through_the_delay, then a 100 cm truth jump. */
+static float truth_x(uint32_t t) { return 30.0f * sinf(0.5e-3f * (float)t) + ((t >= 20000U) ? 100.0f : 0.0f); }
+static float truth_y(uint32_t t) { return 20.0f * cosf(0.3e-3f * (float)t); }
+
+static void test_closed_loop(void)
+{
+    ext_pos_ring_t r;
+    ext_pos_stat_t s;
+    uint32_t t, t_fix = 0U;
+    float ex = truth_x(0U), ey = truth_y(0U), dx, dy, err, worst = 0.0f, step_max = 0.0f;
+    uint16_t rej_before_jump = 0U;
+    uint8_t res;
+    memset(&s, 0, sizeof s);
+    ext_pos_ring_reset(&r);
+    for (t = 5U; t <= 40000U; t += 5U) {
+        /* the drift and the path; the jump is in the truth only (a re-anchor case) */
+        ex += (30.0f * sinf(0.5e-3f * (float)t) - 30.0f * sinf(0.5e-3f * (float)(t - 5U))) + 1.0f * 0.005f;
+        ey += (truth_y(t) - truth_y(t - 5U)) - 0.5f * 0.005f;
+        ext_pos_ring_tick(&r, t, ex - s.c_x, ey - s.c_y);
+        if (t >= 400U && t % 100U == 0U) {
+            t_fix = t - 300U;
+            res = ext_pos_fix(&s, &r, t_fix, t, truth_x(t_fix), truth_y(t_fix));
+            if (ext_pos_step(&s, res, &dx, &dy)) {
+                ex += dx;
+                ey += dy;
+                if (sqrtf(dx * dx + dy * dy) > step_max) step_max = sqrtf(dx * dx + dy * dy);
+            }
+        }
+        err = sqrtf((ex - truth_x(t)) * (ex - truth_x(t)) + (ey - truth_y(t)) * (ey - truth_y(t)));
+        if (t > 10000U && t < 20000U && err > worst) worst = err;
+        if (t == 19995U) rej_before_jump = s.n_rej;
+    }
+    CHECK(rej_before_jump == 0U && s.n_old == 0U, "no gated or old fix before the jump");
+    CHECK(worst < 2.0f, "fused error < 2 cm from 10 s to the jump through a 300 ms delay");
+    CHECK(step_max <= EXT_POS_SLEW_CM + 1e-4f, "every step within the slew clamp");
+    CHECK(s.n_rej >= EXT_POS_REJ_N && s.n_anchor >= 1U, "jump gated, then re-anchored");
+    CHECK(fabsf(ex - truth_x(40000U)) < 5.0f, "re-anchored onto the jumped truth by 40 s");
+    (void)t_fix;
+}
+
+static void test_step_rules(void)
+{
+    ext_pos_stat_t s;
+    float dx, dy;
+    memset(&s, 0, sizeof s);
+    s.e_x = 4.0f; s.e_y = -2.0f;
+    CHECK(ext_pos_step(&s, EXT_POS_FIX_OK, &dx, &dy) == 1U && fabsf(dx - 0.4f) < 1e-6f && fabsf(dy + 0.2f) < 1e-6f, "gain step");
+    CHECK(fabsf(s.c_x - 0.4f) < 1e-6f && fabsf(s.c_y + 0.2f) < 1e-6f, "c moves by the step");
+    CHECK(ext_pos_step(&s, EXT_POS_FIX_OLD, &dx, &dy) == 0U && dx == 0.0f && dy == 0.0f, "old fix: no step");
+    s.rej_run = EXT_POS_REJ_N - 1U; s.e_x = 300.0f; s.e_y = 400.0f;
+    CHECK(ext_pos_step(&s, EXT_POS_FIX_GATED, &dx, &dy) == 0U && s.n_anchor == 0U, "gated inside the run: no step");
+    s.rej_run = EXT_POS_REJ_N;
+    CHECK(ext_pos_step(&s, EXT_POS_FIX_GATED, &dx, &dy) == 1U && s.n_anchor == 1U, "gated run: re-anchor step");
+    CHECK(fabsf(dx - 1.8f) < 1e-5f && fabsf(dy - 2.4f) < 1e-5f, "re-anchor step clamped to 3 cm along e");
+}
+
+static void test_shadow_with_held_c(void)
+{
+    /* mode 2 -> 1 keeps c; the shadow innovation must still be z - earth, earth = raw + c */
+    ext_pos_ring_t r;
+    ext_pos_stat_t s;
+    uint32_t t;
+    memset(&s, 0, sizeof s);
+    s.c_x = 7.0f; s.c_y = -3.0f;
+    ext_pos_ring_reset(&r);
+    for (t = 0U; t <= 2000U; t += 5U) {
+        ext_pos_ring_tick(&r, t, 10.0f - s.c_x, 20.0f - s.c_y);   /* earth = (10, 20) */
+    }
+    CHECK(ext_pos_fix(&s, &r, 1700U, 2000U, 13.0f, 16.0f) == EXT_POS_FIX_OK, "fix ok with c held");
+    CHECK(fabsf(s.e_x - 3.0f) < 1e-4f && fabsf(s.e_y + 4.0f) < 1e-4f, "innovation against earth, not raw");
+}
+
 int main(void)
 {
     test_decode();
     test_ring();
     test_fix_and_stale();
+    test_step_rules();
+    test_shadow_with_held_c();
+    test_closed_loop();
     if (s_fail) {
         printf("test_ext_pos: %d FAILED\n", s_fail);
         return 1;

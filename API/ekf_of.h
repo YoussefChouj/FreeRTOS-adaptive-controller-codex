@@ -132,15 +132,22 @@ extern volatile uint8_t g_ekf_of_vel_fb;
 #define EKF_OF_HEALTH_THRESH    0.061f  /* m/s — 5 x median per-axis innovation sd 1.22 cm/s (5 pinned logs, replay CHOSEN) */
 #define EKF_OF_HEALTH_PERSIST   100U    /* ticks — 0.5 s at 200 Hz */
 
-/* ---- External position fix (camera), shadow mode ----
- * Design: docs/video-truth/live_camera_fusion_design_2026-10-11.md. StabilizerTask keeps earth_x/y (cm) every
- * EXT_POS_RING_DT_MS; Cmd_ExtPos (TASK/send_data.c, CMD 0x2C) posts a fix with its capture time; ext_pos_fix()
- * takes the innovation against the buffered path at that time. Shadow: telemetry only, no state write. */
+/* ---- External position fix (camera): shadow (mode 1) and closed loop (mode 2) ----
+ * Design: docs/video-truth/live_camera_fusion_design_2026-10-11.md. StabilizerTask keeps the raw earth path
+ * (earth_x/y minus the running correction c, cm) every EXT_POS_RING_DT_MS; Cmd_ExtPos (TASK/send_data.c, CMD 0x2C)
+ * posts a fix with its capture time; ext_pos_fix() takes e = z - (path(t_meas) + c). Shadow: telemetry only.
+ * Closed loop: ext_pos_step() moves c (and earth_x/y) by EXT_POS_GAIN * e, at most EXT_POS_SLEW_CM per fix; after
+ * EXT_POS_REJ_N gated fixes in a row the gated ones are taken too, through the same clamp (slewed re-anchor), until
+ * one is back inside the gate. No fix for EXT_POS_STALE_MS: c holds (OF-only fallback). Replayed rule:
+ * ground_station/analysis/video_truth.py ext_pos_replay(), same constants. */
 #define EXT_POS_RING_N        32U      /* 32 x 50 ms = 1.55 s of earth path */
 #define EXT_POS_RING_DT_MS    50U
 #define EXT_POS_GATE_CM       40.0f    /* design choice, PROPOSED; R3 replay had no camera outliers */
 #define EXT_POS_STALE_MS      3000U
 #define EXT_POS_Q_CM          0.5f     /* wire quantum: 12-bit signed per axis, +-1023.5 cm */
+#define EXT_POS_GAIN          0.1f     /* per fix: tau ~1 s at 10 Hz; R4 fuse4 replay CHOSEN, PROPOSED in flight */
+#define EXT_POS_SLEW_CM       3.0f     /* max |dc| per fix (design doc section 3) */
+#define EXT_POS_REJ_N         3U       /* gated fixes in a row before the slewed re-anchor */
 typedef struct {
     float    x[EXT_POS_RING_N];
     float    y[EXT_POS_RING_N];
@@ -152,7 +159,9 @@ typedef struct {
     float    e_x, e_y;                 /* last innovation z - earth(t_meas), cm (also kept when gated) */
     uint16_t n_ok, n_rej, n_old;       /* accepted, gated (|e| > gate), older than the buffer */
     uint16_t age_ms;                   /* now - t_meas of the last fix */
-    uint8_t  rej_run;                  /* consecutive gated fixes (re-anchor rule, not applied in shadow) */
+    uint8_t  rej_run;                  /* consecutive gated fixes (re-anchor rule, applied in mode 2) */
+    uint16_t n_anchor;                 /* gated fixes taken by the re-anchor rule (mode 2) */
+    float    c_x, c_y;                 /* running correction added to earth_x/y, cm (mode 2 moves it, else held) */
     uint8_t  stale;                    /* 1 = no accepted fix for EXT_POS_STALE_MS */
     uint32_t last_ok_ms;
 } ext_pos_stat_t;
@@ -161,7 +170,7 @@ typedef struct {                       /* Send_Task -> StabilizerTask handover, 
     uint32_t t_meas_ms;
     uint32_t seq;
 } ext_pos_post_t;
-extern volatile uint8_t        g_ext_pos_on;        /* 0 off (boot), 1 shadow */
+extern volatile uint8_t        g_ext_pos_on;        /* 0 off (boot), 1 shadow, 2 closed loop */
 extern volatile float          g_ext_pos_delay_ms;  /* link delay added to the fix age; measure, default 0 */
 extern volatile ext_pos_post_t g_ext_pos_post;
 extern ext_pos_stat_t          g_ext_pos;           /* telemetry: g_ext_pos.e_x, .e_y, .n_ok, .n_rej, .age_ms */
@@ -170,6 +179,7 @@ void    ext_pos_ring_tick(ext_pos_ring_t *r, uint32_t now_ms, float ex, float ey
 uint8_t ext_pos_ring_at(const ext_pos_ring_t *r, uint32_t t_ms, float *ex, float *ey);
 uint8_t ext_pos_fix(ext_pos_stat_t *s, const ext_pos_ring_t *r, uint32_t t_meas_ms, uint32_t now_ms, float zx, float zy);
 void    ext_pos_stale_tick(ext_pos_stat_t *s, uint32_t now_ms);
+uint8_t ext_pos_step(ext_pos_stat_t *s, uint8_t res, float *dx, float *dy);
 uint8_t ext_pos_decode(float val, float *x_cm, float *y_cm);
 #define EXT_POS_FIX_OK        0U
 #define EXT_POS_FIX_GATED     1U

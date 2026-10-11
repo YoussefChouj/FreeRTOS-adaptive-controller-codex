@@ -1869,8 +1869,9 @@ static void Cmd_CtrlSelect(GsCmd_t *c)
 }
 
 /* CMD 0x2C - EXT_POS camera position fix (docs/video-truth/live_camera_fusion_design_2026-10-11.md). Shadow mode:
- * StabilizerTask (Ext_Pos_Tick) only computes the innovation against the buffered earth path and logs it in g_ext_pos.
- *   idx 0xFF: g_ext_pos_on (val 0 off, 1 on). Off at boot.
+ * StabilizerTask (Ext_Pos_Tick) computes the innovation against the buffered earth path and logs it in g_ext_pos;
+ * in mode 2 it also steps earth_x/y toward the fix (ext_pos_step: gain, slew clamp, slewed re-anchor).
+ *   idx 0xFF: g_ext_pos_on (val 0 off, 1 shadow, 2 closed loop). Off at boot.
  *   idx 0xFE: g_ext_pos_delay_ms, the fixed link delay (0..1000 ms).
  *   idx 0..0xFD: a fix, idx = age in 10 ms units at send time, val = exact integer code from ext_pos_decode.
  * Fixes are dropped while fusion is off or when the code is not valid. */
@@ -1882,7 +1883,7 @@ static void Cmd_ExtPos(GsCmd_t *c)
     float x_cm, y_cm;
     uint32_t now_ms, back_ms;
     if (c->idx == EXT_POS_IDX_ON) {
-        g_ext_pos_on = (c->val >= 0.5f) ? 1U : 0U;
+        g_ext_pos_on = (c->val >= 1.5f && c->val < 2.5f) ? 2U : ((c->val >= 0.5f && c->val < 1.5f) ? 1U : 0U);
     } else if (c->idx == EXT_POS_IDX_DELAY) {
         if (c->val >= 0.0f && c->val <= EXT_POS_DELAY_MAX_MS) {
             g_ext_pos_delay_ms = c->val;
