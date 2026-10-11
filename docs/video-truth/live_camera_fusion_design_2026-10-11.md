@@ -1,6 +1,6 @@
 # Live camera fusion: design (option C), 2026-10-11
 
-Status: PROPOSED. No code yet. Numbers marked computed come from R3 replays (`r3_drift_truth_2026-10-11.md`,
+Status: PROPOSED, sec 3 revised after replay (2026-10-11). No firmware code yet. Numbers marked computed come from R3 replays (`r3_drift_truth_2026-10-11.md`,
 `r3_learned_velocity_2026-10-11.md`). All other numbers are design choices and must be validated in replay first.
 
 ## Goal
@@ -39,20 +39,39 @@ The existing 9-byte command frame `0xCC 0xDD [CMD][IDX][VALUE f32 LE][XOR]` over
   earth position at t_meas. Innovation e = z - earth(t_meas).
 - Gate: |e| > 40 cm counts a reject and the fix is not applied. 3 consistent rejects in a row trigger a re-anchor
   (slewed, see below). This is the R1 #9 "reset after repeated rejections" rule.
-- Correction (complementary PI on the earth path, NOT on EKF pos):
-  - position: earth += Kp*e, and the whole ring buffer is shifted by the same amount;
-  - drift rate: rotate e into body axes and add Ki*e/T_fix to the flow-bias trim (removes the hover slope);
-  - Kp 0.3, Ki 0.05, T_fix 1 s are starting values (PROPOSED) to be tuned in replay.
+- Correction (replay-validated, see "Replay results"): an EKF position update, the o5a pattern. The innovation is
+  e = z - earth(t_meas), rotated into body axes with the current yaw, and fed to `ekf_of_update_one` on the pos states
+  (H = [1,0,0,0], R sd 1 cm). bof and vel move only through the covariance. No separate Ki term.
 - Slew clamp: at most 3 cm of position correction per fix, so the loc PID never sees a step.
 - Stale: if there is no fix for 3 s, fall back to OF-only silently and set a telemetry flag.
 - Telemetry: `ext_pos_e_x/y`, `ext_pos_n_ok`, `ext_pos_n_rej`, `ext_pos_age`.
 
-Why not fuse into the EKF pos states: the replay that did so diverged (rms 47-89 cm, computed). EKF pos is a
-body-axis integral, while the camera is an earth measurement.
+## Replay results (R3, computed, 2026-10-11; scripts `docs/video-truth/scripts/fuse*.py`)
+| Variant | Hover 72-124 s rms / max (cm) | Moves 124 s+ rms / p90 (cm) |
+|---|---|---|
+| No fusion | 10.9 / 22.8 | 31.0 / 50.1 |
+| EKF update, 1 s, R 1 cm | 4.7 / 17.8 | 16.5 / 25.7 |
+| EKF update, 1 s, R 5 cm | 6.1 / 22.5 | 20.4 / 31.4 |
+| EKF update, 2 s, R 1 cm | 5.3 / 21.1 | 17.5 / 28.0 |
+| EKF update, 5 s, R 1 cm | 5.9 / 19.1 | 24.7 / 36.8 |
+
+- Hold-out (camera fused in "on" segments, scored in "off" segments) learns no lasting trim. The median drift in
+  off windows stays the same: 20 s windows 1.49 cm/s with no fusion vs 1.43-1.52 fused; hover-only 10 s windows
+  0.93 vs 0.90-0.92. The camera-off error in R3 is wander born in moves, not a constant bias. So the 0.17 cm/s
+  budget holds only with the camera in the loop, and the "drop the camera" NN has no stationary target in one flight.
+- The earth-path PI first proposed here (Kp 0.3, Ki 0.05) is worse. Kp only: rms 19.7, off drift 1.36 cm/s.
+  Ki >= 0.05 diverges (rms 40-3000): the integrator winds up behind the 3 cm slew clamp.
+- A 40 cm gate changes nothing in R3 (no camera outliers).
+- In moves, most of the remaining error is a time lag. Shifting the camera truth 0.3 s later cuts the fused rms
+  from 16.5 to 12.9 cm (no fusion: 31.0 to 29.0). The cause is unknown: either a camera/telemetry sync offset or a
+  real estimate lag. R4 must time-stamp a sharp event (tap or LED) seen by both the camera and telemetry. The
+  firmware WIFI_DELAY_MS and the tracker latency then follow from that measurement.
+
+The earlier claim that EKF-pos fusion diverges (rms 47-89 cm) does not hold for this pattern: the innovation is
+taken against the buffered earth path at capture time and rotated into body axes.
 
 ## 4. Validation order
-1. Replay: port section 3 exactly (ring buffer, age, gate, PI, slew) into the R3 replay and score with hold-out
-   segments (fuse on t < 124 only, score t >= 124, and the reverse). Pass: hover <= 0.17 cm/s in the held-out half.
+1. Replay: done (see "Replay results"). The hold-out pass (camera off, <= 0.17 cm/s) FAILS on R3; camera-on passes.
 2. Host unit test (gcc golden harness): frame decode, gate, slew, stale fallback.
 3. Keil build, review, flash with the operator present (rebuild_and_flash --yes).
 4. Bench: drone disarmed, carry by hand under the camera, fusion on. Check the innovations stay < 5 cm.
