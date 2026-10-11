@@ -21,6 +21,7 @@ import csv
 import json
 import socket
 import struct
+import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,8 +30,8 @@ from typing import Callable, Optional
 import numpy as np
 
 from ground_station.analysis import video_truth as vt
-from ground_station.comm.ext_pos_encoder import (ext_pos_decode, ext_pos_delay_frame, ext_pos_fix_frame,
-                                                 ext_pos_mode_frame)
+from ground_station.comm.ext_pos_encoder import (ext_pos_decode, ext_pos_delay_frame, ext_pos_encode,
+                                                 ext_pos_fix_frame, ext_pos_mode_frame)
 
 
 def detect_xy(frame_bgr, cam: dict, z_m: float, static=None) -> Optional[np.ndarray]:
@@ -387,17 +388,60 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
             "read_ms": 1000 * t_rd / max(n, 1), "detect_ms": 1000 * t_det / max(n, 1)}
 
 
+REPO = Path(__file__).resolve().parents[2]
+FW_DRIVER = REPO / "API" / "tests" / "ext_pos_replay_host.c"
+
+
+def fw_build(out_dir: Path = REPO / "logs" / "fw_host") -> Path:
+    """gcc the firmware camera-fix path (API/ekf_of.c) around FW_DRIVER; returns the exe."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    exe = out_dir / "ext_pos_replay.exe"
+    cmd = ["gcc", "-std=c99", "-O2", "-ffp-contract=off", str(FW_DRIVER), str(REPO / "API" / "ekf_of.c"),
+           "-I", str(REPO / "API"), "-I", str(REPO / "API" / "tests" / "stubs_wp14"), "-lm", "-o", str(exe)]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        raise RuntimeError(res.stderr)
+    return exe
+
+
+def fw_fusion(t, est, arr_t, idx, xy, delay_ms: float, exe: Path | None = None) -> tuple[np.ndarray, dict]:
+    """The firmware mode-2 path (fw_build) on est (m, at t): 5 ms control ticks, fixes (xy m, encoded with
+    ext_pos_encode, age byte idx) drained by the 10 ms command loop at the first tick >= arr_t, dated by the drone as
+    drain - (idx * 10 + delay_ms). Returns est + a(t) and the firmware counters (as vt.ext_pos_replay)."""
+    exe = exe or fw_build()
+    shift = 100000 - int(np.floor(t[0] * 1000))                     # keep the uint32 clock well above 0
+    ms = np.arange(int(np.ceil((t[0] * 1000 + shift) / 10)) * 10, int(t[-1] * 1000 + shift), 5)
+    ts = (ms - shift) / 1000.0
+    ex, ey = np.interp(ts, t, est[:, 0]) * 100, np.interp(ts, t, est[:, 1]) * 100
+    drain = np.ceil((np.asarray(arr_t) * 1000 + shift) / 10).astype(np.int64) * 10
+    fx = {}
+    for d, i, (x, y) in zip(drain, idx, xy):
+        fx.setdefault(int(d), []).append(f"F {int(d)} {int(i)} {int(ext_pos_encode(x * 100, y * 100))}")
+    lines = [f"D {delay_ms:.3f}"]
+    for m, a, b in zip(ms, ex, ey):
+        lines += fx.get(int(m), [])
+        lines.append(f"T {int(m)} {a:.4f} {b:.4f}")
+    res = subprocess.run([str(exe)], input="\n".join(lines) + "\n", capture_output=True, text=True, check=True)
+    rows = res.stdout.split("\n")
+    tail = [r for r in rows if r.startswith("N ")][0].split()[1:]
+    a = np.array([r.split() for r in rows if r.strip() and not r.startswith("N ")], float) / 100.0
+    out = est + np.c_[np.interp(t, ts, a[:, 0]), np.interp(t, ts, a[:, 1])]
+    return out, dict(zip(("ok", "gated", "old", "reanchor"), map(int, tail)))
+
+
 def replay(name: str, links=(0.15, 0.3), delay_err_s: float = 0.0, period: float = 0.05, n_med: int = 2,
            window_s: float = 0.1, gate: bool = True, cam_path: str = "docs/video-truth/cam_r4_lenswave_2026-10-11.json",
            root: str = "logs/video_truth", max_frames: int = 0, gain: float = vt.EXT_POS["gain"],
-           slew_m: float = vt.EXT_POS["slew_m"], beta: float = vt.EXT_POS["beta"]) -> dict:
+           slew_m: float = vt.EXT_POS["slew_m"], beta: float = vt.EXT_POS["beta"], fw: bool = False) -> dict:
     """Real-time replay of one R4 flight: the online CoralTracker (+ JumpGate) on cam.mkv, fixes packed exactly as
     sent, decoded as the firmware does (value -> cm, age byte), relative to the pad spot, arriving link s after
     the frame on the telemetry clock (truth4 offset); the drone dates each fix with delay_ms = link + delay_err_s.
     vt.ext_pos_replay on the earth estimate, scored by vt.drift_score (tag _live_<ms>ms). CIRCULAR: same camera,
     lens, floor pose, sync and earth rotation as truth4 (the rotation is an oracle the live run must fit).
     Fix rate default 20 Hz (period 0.05, median of 2, 0.1 s window; PROPOSED 2026-10-12): 10 Hz missed the budget on
-    the b16 trajectory. Score tags carry _pNNNnNwNNN unless the rate is the old 10 Hz (0.1 / 3 / 0.2)."""
+    the b16 trajectory. Score tags carry _pNNNnNwNNN unless the rate is the old 10 Hz (0.1 / 3 / 0.2).
+    fw: the firmware C path (fw_fusion: API/ekf_of.c, 5 ms ticks, 10 ms command drain, float32; the built-in
+    gain/slew/spread, so gain/slew_m/beta must stay default) instead of the Python mirror; tag _fw."""
     vd = Path(root) / name
     summ = json.loads((vd / "truth4.json").read_text())
     tab = np.genfromtxt(vd / "truth4.csv", delimiter=",", names=True)
@@ -413,22 +457,31 @@ def replay(name: str, links=(0.15, 0.3), delay_err_s: float = 0.0, period: float
                     sched=FixScheduler(period, n_med, window_s=window_s), max_frames=max_frames,
                     ring=CoralTracker(seed, vt.coral_static(video)), gate=JumpGate() if gate else None, fix_log=fixes)
     t_read = np.array([f[0] for f in fixes])
-    age = np.array([f[2][3] for f in fixes]) * 0.01
+    idx = np.array([f[2][3] for f in fixes])
+    age = idx * 0.01
     xy = np.array([ext_pos_decode(struct.unpack("<f", bytes(f[2][4:8]))[0]) for f in fixes], float) / 100.0
     pad = np.array([f[1] for f in fixes]) < summ["takeoff_video_s"] - 1.0
     xy -= np.median(xy[pad], axis=0)                      # truth4 is relative to the pad spot too
     earth = np.c_[tab["earth_x"], tab["earth_y"]]
     out = {"name": name, "tracker": st, "circular": True, "delay_err_s": delay_err_s, "gain": gain,
-           "slew_cm": slew_m * 100, "spread_ms": vt.EXT_POS["spread_s"] * 1000, "beta": beta, "period_s": period, "n_med": n_med, "window_s": window_s, "links": {}}
+           "slew_cm": slew_m * 100, "spread_ms": vt.EXT_POS["spread_s"] * 1000, "beta": beta, "period_s": period, "n_med": n_med, "window_s": window_s, "fw": fw, "links": {}}
     sfx = vt.ext_pos_sfx(gain, slew_m, vt.EXT_POS["spread_s"], beta)
     if (period, n_med, window_s) != (0.1, 3, 0.2):
         sfx += f"_p{round(period * 1000):03d}n{n_med}w{round(window_s * 1000):03d}"
+    if fw:
+        if (gain, slew_m, beta) != (vt.EXT_POS["gain"], vt.EXT_POS["slew_m"], vt.EXT_POS["beta"]):
+            raise ValueError("fw runs the built-in API/ekf_of.h constants; keep gain/slew/beta default")
+        sfx += "_fw"
+        exe = fw_build()
     if delay_err_s:
         sfx += f"_de{'p' if delay_err_s > 0 else 'm'}{round(abs(delay_err_s) * 1000):03d}"
     for L in links:
         arr = t_read + o + L
-        fused, n = vt.ext_pos_replay(tt, earth, arr - age - (L + delay_err_s), xy, 0.0,
-                                     dict(vt.EXT_POS, gain=gain, slew_m=slew_m, beta=beta), arr_t=arr)
+        if fw:
+            fused, n = fw_fusion(tt, earth, arr, idx, xy, (L + delay_err_s) * 1000, exe)
+        else:
+            fused, n = vt.ext_pos_replay(tt, earth, arr - age - (L + delay_err_s), xy, 0.0,
+                                         dict(vt.EXT_POS, gain=gain, slew_m=slew_m, beta=beta), arr_t=arr)
         r = vt.drift_score(name, ests={"earth": earth, "fused": fused}, tag=f"_live_{int(L * 1000)}ms{sfx}")
         out["links"][L] = {"counts": n, "est": {k: {q: e.get(q) for q in ("rms_cm", "drift60_p90_cm", "drift60s_p90_cm",
                                                                          "hf_rms_cm")}
@@ -449,10 +502,11 @@ def replay_main(argv) -> int:
     ap.add_argument("--gain", type=float, default=vt.EXT_POS["gain"], help="c step per accepted fix, x innovation")
     ap.add_argument("--slew-cm", type=float, default=vt.EXT_POS["slew_m"] * 100, help="max c step per fix, cm")
     ap.add_argument("--beta", type=float, default=vt.EXT_POS["beta"], help="offset-rate gain per fix (0 = off)")
+    ap.add_argument("--fw", action="store_true", help="run the firmware C path (gcc API/ekf_of.c), tag _fw")
     a = ap.parse_args(argv)
     for nm in a.names:
         r = replay(nm, a.link, a.delay_err, a.period, a.n_med, a.window_s, not a.no_gate, max_frames=a.max_frames,
-                   gain=a.gain, slew_m=a.slew_cm / 100, beta=a.beta)
+                   gain=a.gain, slew_m=a.slew_cm / 100, beta=a.beta, fw=a.fw)
         print(json.dumps(r, default=float))
     return 0
 

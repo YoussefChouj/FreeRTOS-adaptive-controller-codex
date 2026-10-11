@@ -13,7 +13,8 @@ Branch `overnight-2026-10-08`. Report: `docs/flights/2026-10-12-r4-overnight-rep
 - Camera fusion, live tracker replay, retuned rule (gain 0.9, slew 10 cm, spread 0.1 s) + 20 Hz fixes (all
   PROPOSED), 1 s-d60 p90 at 0.15 s: b17 3.5, b13c 7.3, b5 7.4, b16 traj 7.4 cm = budget met on all 4 (10 Hz: b16
   12.1). 0.3 s: 5.6/11.3/11.8/12.3. Replay and circular. Gates: latency <=0.15 s and >=20 fixes/s received.
-  `--beta` (db259a48) tried, not adopted. FW takes 20-30 Hz (16-deep queue at 100 Hz, newest-wins mailbox).
+  `--beta` (db259a48) tried, not adopted. `replay --fw` runs the real `API/ekf_of.c` (gcc host driver
+  `API/tests/ext_pos_replay_host.c`): 3.5/7.4/7.5/7.9 cm at 0.15 s, within 0.5 cm of the Python copy. FW takes 20-30 Hz (16-deep queue at 100 Hz, newest-wins mailbox).
 - Firmware EXT_POS mode 2: e179e95f + 18c7d964 (spread 0.5 cm/5 ms tick so the locx D term (Kd 4.0) does not
   kick). Host test passes, Keil 0 errors. NOT flashed. `test_ekf_of_shadow` `test_reset_bias` fails at HEAD too.
 - b16 per-preset (`presets4`): estimate error 14-105 cm, controller lag 6-30 cm, fused 1.9-11.4. Yaw (`yaw4`):

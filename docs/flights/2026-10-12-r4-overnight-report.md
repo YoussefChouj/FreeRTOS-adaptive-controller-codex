@@ -8,7 +8,7 @@ Every number is measured from the R4 logs unless it says computed, PROPOSED or U
 | Question | Answer |
 |---|---|
 | Is drift solved? | **In replay, yes.** Camera fixes stop the error from growing: on the 10 flights with good truth, EKF 30-146 cm rms becomes 5.1-13.6 cm rms (0.3 s latency, replay). Hover drift rate on b17: 0.29 to 0.03 cm/s. |
-| Is the 10 cm / 60 s budget met? | **At 0.15 s latency and 20 fixes per second: yes, on all 4 flights (replay).** Live tracker replay with the retuned firmware rule (gain 0.9, slew 10 cm, spread) and 20 Hz fixes (all PROPOSED), 1 s-mean 60 s drift p90: b17 hover 3.5, b13c 7.3, b5 7.4, b16 traj 7.4 cm (30 Hz: 3.0 / 6.3 / 6.3 / 6.5). At 10 Hz b16 missed (12.1). At 0.3 s latency only the hover passes (moving flights 11.3-12.3 at 20 Hz, 10.3-11.3 at 30 Hz). So two link gates are required: latency 0.15 s or less, and 20 or more fixes received per second. |
+| Is the 10 cm / 60 s budget met? | **At 0.15 s latency and 20 fixes per second: yes, on all 4 flights (replay).** Live tracker replay with the retuned firmware rule (gain 0.9, slew 10 cm, spread) and 20 Hz fixes (all PROPOSED), 1 s-mean 60 s drift p90: b17 hover 3.5, b13c 7.3, b5 7.4, b16 traj 7.4 cm (30 Hz: 3.0 / 6.3 / 6.3 / 6.5). At 10 Hz b16 missed (12.1). At 0.3 s latency only the hover passes (moving flights 11.3-12.3 at 20 Hz, 10.3-11.3 at 30 Hz). So two link gates are required: latency 0.15 s or less, and 20 or more fixes received per second. The real firmware C code, run on the same fixes, gives the same result within 0.5 cm (b16 7.9). |
 | Can a small NN fix drift with the camera off? | **No.** Best 34 cm (b15, in the training pool), best held-out 47 cm (b7); the b17 hold-out got worse (19 to 28 cm). The camera is required. |
 | Lab tomorrow? | **Go, as a fusion bring-up day** ([run sheet R5](../lab/run-sheet-r5-fusion-bringup.md)). Dense trajectory presets and load scenarios only after the closed-loop hover gate passes, the measured latency is 0.15 s or less and the drone receives 20 or more fixes per second; start the dense presets at moderate speed (b16 runs at 38-40 cm/s were the worst, PROPOSED). |
 
@@ -273,6 +273,27 @@ should help. `live_tracker replay --period/--n-med/--window-s`, retuned rule, 1 
   budget, with 0.5-0.6 cm left at the worst case, so the latency event must pin `--delay-ms` to within 50 ms
   (PROPOSED).
 
+Firmware in the loop. The numbers above come from a Python copy of the fusion rule. `live_tracker replay --fw`
+feeds the same live fixes to the real C code that will be flashed: `API/ekf_of.c` (decode, ring, gate, step,
+spread; float32) built with gcc around `API/tests/ext_pos_replay_host.c`, which copies the `Cmd_ExtPos` dating
+(`now - (idx * 10 + delay_ms)`, newest wins) and `Ext_Pos_Tick` (5 ms ticks), with fixes drained on the 10 ms
+command loop. 20 Hz, 1 s-d60 p90 / rms cm, Python copy -> firmware C:
+
+| Flight | 0.15 s | 0.3 s |
+|---|---|---|
+| b17 hover | 3.5 -> 3.5 / 3.2 | 5.6 -> 5.7 / 4.3 |
+| b13c | 7.3 -> 7.4 / 7.2 | 11.3 -> 11.4 / 9.1 |
+| b5_max2 | 7.4 -> 7.5 / 7.3 | 11.8 -> 12.0 / 10.0 |
+| b16 traj | 7.4 -> 7.9 / 6.7 | 12.3 -> 12.8 / 8.8 |
+
+- The flashable code holds the budget at 0.15 s on all 4 flights, 0-0.5 cm worse than the copy; b16 has 2.1 cm
+  left. Likely causes, not separated: the 10 ms drain dates a fix up to 10 ms late (up to 0.4 cm at 40 cm/s,
+  computed), the 0.5 cm wire quantum and float32.
+- Fix counts match the copy except "old": fixes drained before the first control tick are not fed (b16: 3 old
+  instead of 561), the start-of-log effect noted above.
+- `test_firmware_path_matches_the_python_mirror` (synthetic drift, 20 Hz, one wild fix) checks the C path against
+  the copy: same counts, within 1 cm. It runs wherever gcc is on the path.
+
 - b10 is a bad track: the firmware gated 608 fixes and re-anchored 557 times. Track quality is a go/no-go check.
 - Tracker cost: frame read 9-12 ms + detect 2-3 ms per frame.
 
@@ -318,8 +339,8 @@ should help. `live_tracker replay --period/--n-med/--window-s`, retuned rule, 1 
   - 18c7d964: firmware gain 0.9 / slew 10 cm / spread (NOT flashed).
   - db259a48: offset-rate term `--beta` (replay only, not adopted).
   - de2e61d1: `live_tracker` 20 Hz fix-rate default and `_pNNNnNwNNN` tags, fix-rate table, run sheet gate.
-  - (this commit): `_depNNN/_demNNN` delay-error tags, delay-error check.
-  - db259a48: replay-only offset-rate option `--beta` (tried, not adopted, default off).
+  - 1302f1e1: `_depNNN/_demNNN` delay-error tags, delay-error check.
+  - (this commit): firmware-in-the-loop replay (`--fw`, `API/tests/ext_pos_replay_host.c`, `_fw` tags).
 - Rebuild this page:
   `python -m ground_station.analysis.video_truth report4 docs/flights/2026-10-12-r4-overnight-report.md --out docs/flights/2026-10-12-r4-overnight-report.html`
   (`report4 -` prints tables A and B).

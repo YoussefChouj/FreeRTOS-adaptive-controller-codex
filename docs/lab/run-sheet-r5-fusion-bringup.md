@@ -11,7 +11,7 @@ flash mode-2 ─> bench (link, kick) ─> latency event ─> track check ─> sh
 
 ## 0. Build and preset (drone on the bench, disarmed, props off)
 
-1. Flash the mode-2 build (18c7d964 or later: gain 0.9, slew 10 cm, spread 20 ticks, all PROPOSED; Keil 0 errors, host test `API/tests/test_ext_pos.c` passes):
+1. Flash the mode-2 build (18c7d964 or later: gain 0.9, slew 10 cm, spread 20 ticks, all PROPOSED; Keil 0 errors, host test `API/tests/test_ext_pos.c` passes; if `API/ekf_of.c` changed since, `pytest ground_station/analysis/tests/test_live_tracker.py -k firmware` must pass and `live_tracker replay <flight> --fw` must still score under 10 cm at 0.15 s):
    `python -m ground_station.flashtool.rebuild_and_flash --yes` (never `--force`; stop on a non-zero exit).
 2. Re-price the VOFA preset `drift_rc_extpos` against the flashed ELF (overnight: 86300 B/s computed for the
    mode-2 layout vs the 87552 budget, slot2 60/62 ranges; the old ELF lacked `c_x/c_y/n_anchor`). Apply it only if

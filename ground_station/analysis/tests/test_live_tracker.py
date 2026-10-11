@@ -4,6 +4,7 @@ import pytest
 
 from ground_station.analysis.live_tracker import EarthAlign, FixScheduler
 from ground_station.comm.ext_pos_encoder import ext_pos_decode
+import shutil
 import struct
 
 
@@ -170,3 +171,27 @@ def test_udp_sender_sends_one_datagram_per_frame():
     assert r.recv(64) == b"\xcc\xdd\x2c"
     with pytest.raises(ValueError):
         udp_sender("tcp:1")
+
+
+@pytest.mark.skipif(shutil.which("gcc") is None, reason="needs gcc for the API/ekf_of.c host build")
+def test_firmware_path_matches_the_python_mirror():
+    """fw_fusion (the real API/ekf_of.c camera-fix path) and vt.ext_pos_replay agree on a drifting estimate fed
+    20 Hz fixes 0.15 s late: same fix counts, fused paths within 1 cm (float32, 5 ms ticks, 10 ms drain)."""
+    from ground_station.analysis import video_truth as vt
+    from ground_station.analysis.live_tracker import fw_fusion
+    rng = np.random.default_rng(1)
+    t = np.arange(0.0, 40.0, 0.01) + 3.0
+    truth = np.c_[0.3 * np.sin(0.4 * t), 0.2 * np.cos(0.3 * t)]
+    est = truth + np.c_[0.02 * (t - 3), -0.015 * (t - 3)] + np.c_[0.01 * np.sin(5 * t), np.zeros_like(t)]
+    t_read = np.arange(3.5, 42.5, 0.05)
+    idx = np.full(len(t_read), 3)
+    t_fix = t_read - idx * 0.01
+    xy = np.c_[np.interp(t_fix, t, truth[:, 0]), np.interp(t_fix, t, truth[:, 1])] + rng.normal(0, 0.005, (len(t_fix), 2))
+    xy[200] += 0.8                                                        # one wild fix: gated by both
+    arr, L = t_read + 0.15, 0.15
+    py, n_py = vt.ext_pos_replay(t, est, arr - idx * 0.01 - L, xy, 0.0, vt.EXT_POS, arr_t=arr)
+    fw, n_fw = fw_fusion(t, est, arr, idx, xy, L * 1000)
+    assert n_fw == n_py and n_fw["gated"] >= 1
+    k = t > 5.0
+    assert np.abs(fw - py)[k].max() < 0.01
+    assert np.abs(fw - truth)[t > 10].max() < 0.05
