@@ -18,8 +18,9 @@ phone camera -> scrcpy -> live tracker (ground station) -> WiFi 0xCC 0xDD frame 
 
 ## 1. Live tracker (ground station, `ground_station/analysis/live_tracker.py`)
 Status: dry run coded (985dadb), sends nothing. The detector is the R3 red-ring mean-shift run online
-(`RingTracker`, seeded at ArUco id0). On R3 82-112 s it matches the offline R3 track: 900/900 frames, px error
-median 0.7, p95 5.0 (measured; a consistency check, not independent truth). The `video_truth.py` guard-blob
+(`RingTracker`, seeded at ArUco id0). On the whole R3 flight (82-255 s) it matches the offline R3 track: 5200/5200
+frames, px error median 0.4, p95 3.6, max 96.5 near the end of the video (measured; a consistency check, not
+independent truth). The `video_truth.py` guard-blob
 detector locks onto scenery in R3 (about 1 m off) and is only kept as `--detector guards`. Plane height =
 telemetry Z + ring offset (`--tel-npz`; R3 values 15.05 s fit, 0.05 m guess). UNMEASURED: camera latency, link
 delay, ring offset.
