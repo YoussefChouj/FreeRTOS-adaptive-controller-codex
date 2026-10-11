@@ -20,14 +20,22 @@ start)
   post /api/streams/apply "$body"
   post /api/streams/log/start "{\"name\":\"$name\",\"mode\":\"unlimited\"}"
   post /api/recording/start "{\"requested_by\":\"operator\",\"label\":\"$name\",\"reason\":\"camera-truth session\"}"
-  python -c "import time,datetime;t=time.time();print(f'{t:.3f}',datetime.datetime.fromtimestamp(t).isoformat())" > "$vid/scrcpy_start_host_time.txt"
-  nohup scrcpy --video-source=camera --camera-id=4 --camera-zoom=0.6 --camera-size=1920x1080 --camera-fps=30 \
-    --no-audio --no-playback --no-window --record="$vid/cam.mkv" > "$vid/scrcpy.log" 2>&1 &
+  rm -f "$vid/stop"
+  # scrcpy exits when Android drops the camera (R4: "Camera disconnected" at frame 2313); restart into the next part.
+  # Part 1 keeps the R3 names (cam.mkv, scrcpy_start_host_time.txt); part k: cam_k.mkv, scrcpy_start_host_time_k.txt.
+  nohup bash -c '
+    vid=$1; k=1
+    while [ ! -f "$vid/stop" ]; do
+      sfx=$([ $k = 1 ] || echo _$k)
+      python -c "import time,datetime;t=time.time();print(f\"{t:.3f}\",datetime.datetime.fromtimestamp(t).isoformat())" > "$vid/scrcpy_start_host_time$sfx.txt"
+      scrcpy --video-source=camera --camera-id=4 --camera-zoom=0.6 --camera-size=1920x1080 --camera-fps=30         --no-audio --no-playback --no-window --record="$vid/cam$sfx.mkv" >> "$vid/scrcpy.log" 2>&1
+      [ -f "$vid/stop" ] || echo "restart part $((k+1)) at $(date +%T)" >> "$vid/scrcpy.log"; k=$((k+1)); sleep 1
+    done' _ "$vid" > /dev/null 2>&1 &
   sleep 5; "$0" check "$name" ;;
 stop)
   post /api/recording/stop '{}'; post /api/streams/log/stop '{}'
-  taskkill //F //IM scrcpy.exe > /dev/null 2>&1 || true; sleep 1; "$0" check "$name" ;;
+  touch "$vid/stop"; taskkill //F //IM scrcpy.exe > /dev/null 2>&1 || true; sleep 1; "$0" check "$name" ;;
 check)
   for f in logs/vofa/"$name".slot*.csv; do [ -f "$f" ] && echo "$f rows $(($(wc -l < "$f") - 1))"; done
-  ls -la "$vid/cam.mkv" 2>/dev/null || echo "no video yet"; tail -2 "$vid/scrcpy.log" 2>/dev/null ;;
+  ls -la "$vid"/cam*.mkv 2>/dev/null || echo "no video yet"; grep -c restart "$vid/scrcpy.log" 2>/dev/null | sed "s/^/restarts /"; tail -2 "$vid/scrcpy.log" 2>/dev/null ;;
 esac
