@@ -4,20 +4,20 @@ Written 2026-10-12 (overnight R4 run). Evidence: `docs/flights/2026-10-12-r4-ove
 Every threshold below is PROPOSED until a step measures it. Stop at the first failed gate.
 
 ```
-flash mode-2 ─> bench (link, 3 cm kick) ─> latency event ─> track check ─> shadow out-and-back ─> closed-loop hover gate
+flash mode-2 ─> bench (link, kick) ─> latency event ─> track check ─> shadow out-and-back ─> closed-loop hover gate
                                                                                                      │ pass
                                                                                   dense trajectory presets ─> load scenarios
 ```
 
 ## 0. Build and preset (drone on the bench, disarmed, props off)
 
-1. Flash the mode-2 build (e179e95f or later; Keil 0 errors, host test `API/tests/test_ext_pos.c` passes):
+1. Flash the mode-2 build (18c7d964 or later: gain 0.9, slew 10 cm, spread 20 ticks, all PROPOSED; Keil 0 errors, host test `API/tests/test_ext_pos.c` passes):
    `python -m ground_station.flashtool.rebuild_and_flash --yes` (never `--force`; stop on a non-zero exit).
 2. Re-price the VOFA preset `drift_rc_extpos` against the flashed ELF (overnight: 86300 B/s computed for the
    mode-2 layout vs the 87552 budget, slot2 60/62 ranges; the old ELF lacked `c_x/c_y/n_anchor`). Apply it only if
    it fits.
 
-## 1. Bench: link and the 3 cm slew kick
+## 1. Bench: link and the slew kick
 
 1. Logger with the relay port, then the tracker on the scrcpy window:
    ```bash
@@ -25,14 +25,17 @@ flash mode-2 ─> bench (link, 3 cm kick) ─> latency event ─> track check �
    python -m ground_station.analysis.live_tracker --source "window:<scrcpy title>" --cam docs/video-truth/cam_r4_lenswave_2026-10-11.json --height-m <h> --detector coral --gate --send udp:<PORT> --mode 1 --delay-ms 0 --out logs/r5_bench_fixes.csv
    ```
 2. Check that the mode and delay readbacks match the hello frames and that fixes arrive at about 10 Hz.
-3. Kick: switch to `--mode 2`, move the drone by hand about 20 cm and hold it there. `c_x/c_y` must ramp at most
-   3 cm per step (SLEW) and settle. A step bigger than 3 cm is a firmware bug: stop.
+3. Kick: switch to `--mode 2`, move the drone by hand about 20 cm and hold it there. `c_x/c_y` must step at most
+   10 cm per fix (SLEW) and settle in 2 to 3 fixes. While held still, `earth_x/y` must ramp at most 0.5 cm per 5 ms
+   tick (2.5 cm per 40 Hz sample, the spread that keeps the locx/locy D term from kicking). A bigger step in either
+   is a firmware bug: stop.
 
 ## 2. Latency event (measures `--delay-ms`)
 
 A sharp tap on the frame, seen in both the video and `Acc_*_Real`. delay = frame time minus IMU time plus the
-link. Overnight, error grows with delay (b17 1 s-mean d60 p90: 9.2 / 10.3 / 11.5 cm at 0.15 / 0.3 / 0.5 s,
-replay). Hover gate math needs about 0.15 s or less.
+link. **0.15 s or less is REQUIRED** (replay, 1 s-mean 60 s drift p90 with the 18c7d964 rule): at 0.15 s b17
+hover 4.2, b13c 9.7, b5 9.6, b16 traj 12.1 cm; at 0.3 s 6.3 / 13.4 / 13.6 / 16.5. Above 0.15 s: hover flights
+only, no dense trajectory presets.
 
 ## 3. Coral track quality (go/no-go for every flight)
 

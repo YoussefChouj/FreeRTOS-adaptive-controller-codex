@@ -16,7 +16,7 @@ Every number is measured from the R4 logs unless it says computed, PROPOSED or U
 </tr>
 <tr>
 <td>Is the 10 cm / 60 s budget met?</td>
-<td><strong>Hover only.</strong> b17 1 s-mean 60 s drift p90: 9.2 cm at 0.15 s latency, 10.3 at 0.3 s. Moving flights: 16-27 cm. The rest is latency.</td>
+<td><strong>At 0.15 s latency: hover and moderate moves yes, the fast trajectory no (replay).</strong> Live tracker replay with the retuned firmware rule (gain 0.9, slew 10 cm, spread, all PROPOSED), 1 s-mean 60 s drift p90: b17 hover 4.2, b13c 9.7, b5 9.6, b16 traj 12.1 cm. At 0.3 s: 6.3 / 13.4 / 13.6 / 16.5. The first pass (gain 0.1, 3 cm slew) read 10.0-15.5: the slew cap, not latency, was the floor. Latency at or below 0.15 s is required.</td>
 </tr>
 <tr>
 <td>Can a small NN fix drift with the camera off?</td>
@@ -24,7 +24,7 @@ Every number is measured from the R4 logs unless it says computed, PROPOSED or U
 </tr>
 <tr>
 <td>Lab tomorrow?</td>
-<td><strong>Go, as a fusion bring-up day</strong> (<a href="../lab/run-sheet-r5-fusion-bringup.md">run sheet R5</a>). Dense trajectory presets and load scenarios only after the closed-loop hover gate passes.</td>
+<td><strong>Go, as a fusion bring-up day</strong> (<a href="../lab/run-sheet-r5-fusion-bringup.md">run sheet R5</a>). Dense trajectory presets and load scenarios only after the closed-loop hover gate passes and the measured latency is 0.15 s or less; start the dense presets at moderate speed (b16 runs at 38-40 cm/s were the worst, PROPOSED).</td>
 </tr>
 </tbody>
 </table>
@@ -40,7 +40,7 @@ second. The glance stops the wandering. What is left is that each glance shows w
   <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
    <cc:Work>
     <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
-    <dc:date>2026-10-11T21:24:14.911226</dc:date>
+    <dc:date>2026-10-11T22:00:53.095989</dc:date>
     <dc:format>image/svg+xml</dc:format>
     <dc:creator>
      <cc:Agent>
@@ -77,7 +77,7 @@ L 93.635831 139439.624612
 L 93.635831 23.450104 
 L 83.249665 23.450104 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #1f77b4"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #1f77b4"/>
    </g>
    <g id="patch_4">
     <path d="M 135.180494 139439.624612 
@@ -85,7 +85,7 @@ L 145.566659 139439.624612
 L 145.566659 60.33922 
 L 135.180494 60.33922 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #1f77b4"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #1f77b4"/>
    </g>
    <g id="patch_5">
     <path d="M 187.111322 139439.624612 
@@ -93,7 +93,7 @@ L 197.497488 139439.624612
 L 197.497488 42.551143 
 L 187.111322 42.551143 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #1f77b4"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #1f77b4"/>
    </g>
    <g id="patch_6">
     <path d="M 239.04215 139439.624612 
@@ -101,7 +101,7 @@ L 249.428316 139439.624612
 L 249.428316 117.199854 
 L 239.04215 117.199854 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #1f77b4"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #1f77b4"/>
    </g>
    <g id="patch_7">
     <path d="M 290.972979 139439.624612 
@@ -109,7 +109,7 @@ L 301.359145 139439.624612
 L 301.359145 95.624074 
 L 290.972979 95.624074 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #1f77b4"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #1f77b4"/>
    </g>
    <g id="patch_8">
     <path d="M 342.903807 139439.624612 
@@ -117,7 +117,7 @@ L 353.289973 139439.624612
 L 353.289973 116.526099 
 L 342.903807 116.526099 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #1f77b4"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #1f77b4"/>
    </g>
    <g id="patch_9">
     <path d="M 394.834636 139439.624612 
@@ -125,7 +125,7 @@ L 405.220802 139439.624612
 L 405.220802 71.109095 
 L 394.834636 71.109095 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #1f77b4"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #1f77b4"/>
    </g>
    <g id="patch_10">
     <path d="M 446.765464 139439.624612 
@@ -133,7 +133,7 @@ L 457.15163 139439.624612
 L 457.15163 66.406369 
 L 446.765464 66.406369 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #1f77b4"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #1f77b4"/>
    </g>
    <g id="patch_11">
     <path d="M 498.696293 139439.624612 
@@ -141,7 +141,7 @@ L 509.082459 139439.624612
 L 509.082459 82.805198 
 L 498.696293 82.805198 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #1f77b4"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #1f77b4"/>
    </g>
    <g id="patch_12">
     <path d="M 550.627121 139439.624612 
@@ -149,7 +149,7 @@ L 561.013287 139439.624612
 L 561.013287 78.154349 
 L 550.627121 78.154349 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #1f77b4"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #1f77b4"/>
    </g>
    <g id="patch_13">
     <path d="M 602.55795 139439.624612 
@@ -157,7 +157,7 @@ L 612.944116 139439.624612
 L 612.944116 26.541951 
 L 602.55795 26.541951 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #1f77b4"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #1f77b4"/>
    </g>
    <g id="patch_14">
     <path d="M 654.488778 139439.624612 
@@ -165,7 +165,7 @@ L 664.874944 139439.624612
 L 664.874944 66.789599 
 L 654.488778 66.789599 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #1f77b4"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #1f77b4"/>
    </g>
    <g id="patch_15">
     <path d="M 706.419607 139439.624612 
@@ -173,7 +173,7 @@ L 716.805773 139439.624612
 L 716.805773 185.208661 
 L 706.419607 185.208661 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #1f77b4"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #1f77b4"/>
    </g>
    <g id="patch_16">
     <path d="M 93.635831 139439.624612 
@@ -181,7 +181,7 @@ L 104.021996 139439.624612
 L 104.021996 46.681568 
 L 93.635831 46.681568 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #ff7f0e"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #ff7f0e"/>
    </g>
    <g id="patch_17">
     <path d="M 145.566659 139439.624612 
@@ -189,7 +189,7 @@ L 155.952825 139439.624612
 L 155.952825 171.103908 
 L 145.566659 171.103908 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #ff7f0e"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #ff7f0e"/>
    </g>
    <g id="patch_18">
     <path d="M 197.497488 139439.624612 
@@ -197,7 +197,7 @@ L 207.883653 139439.624612
 L 207.883653 63.340026 
 L 197.497488 63.340026 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #ff7f0e"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #ff7f0e"/>
    </g>
    <g id="patch_19">
     <path d="M 249.428316 139439.624612 
@@ -205,7 +205,7 @@ L 259.814482 139439.624612
 L 259.814482 195.906454 
 L 249.428316 195.906454 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #ff7f0e"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #ff7f0e"/>
    </g>
    <g id="patch_20">
     <path d="M 301.359145 139439.624612 
@@ -213,7 +213,7 @@ L 311.74531 139439.624612
 L 311.74531 181.747263 
 L 301.359145 181.747263 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #ff7f0e"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #ff7f0e"/>
    </g>
    <g id="patch_21">
     <path d="M 353.289973 139439.624612 
@@ -221,7 +221,7 @@ L 363.676139 139439.624612
 L 363.676139 186.916125 
 L 353.289973 186.916125 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #ff7f0e"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #ff7f0e"/>
    </g>
    <g id="patch_22">
     <path d="M 405.220802 139439.624612 
@@ -229,7 +229,7 @@ L 415.606967 139439.624612
 L 415.606967 164.524817 
 L 405.220802 164.524817 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #ff7f0e"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #ff7f0e"/>
    </g>
    <g id="patch_23">
     <path d="M 457.15163 139439.624612 
@@ -237,7 +237,7 @@ L 467.537796 139439.624612
 L 467.537796 195.246273 
 L 457.15163 195.246273 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #ff7f0e"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #ff7f0e"/>
    </g>
    <g id="patch_24">
     <path d="M 509.082459 139439.624612 
@@ -245,7 +245,7 @@ L 519.468624 139439.624612
 L 519.468624 178.778486 
 L 509.082459 178.778486 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #ff7f0e"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #ff7f0e"/>
    </g>
    <g id="patch_25">
     <path d="M 561.013287 139439.624612 
@@ -253,7 +253,7 @@ L 571.399453 139439.624612
 L 571.399453 179.020916 
 L 561.013287 179.020916 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #ff7f0e"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #ff7f0e"/>
    </g>
    <g id="patch_26">
     <path d="M 612.944116 139439.624612 
@@ -261,7 +261,7 @@ L 623.330281 139439.624612
 L 623.330281 39.469339 
 L 612.944116 39.469339 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #ff7f0e"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #ff7f0e"/>
    </g>
    <g id="patch_27">
     <path d="M 664.874944 139439.624612 
@@ -269,7 +269,7 @@ L 675.26111 139439.624612
 L 675.26111 184.43 
 L 664.874944 184.43 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #ff7f0e"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #ff7f0e"/>
    </g>
    <g id="patch_28">
     <path d="M 716.805773 139439.624612 
@@ -277,7 +277,7 @@ L 727.191938 139439.624612
 L 727.191938 222.67936 
 L 716.805773 222.67936 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #ff7f0e"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #ff7f0e"/>
    </g>
    <g id="patch_29">
     <path d="M 104.021996 139439.624612 
@@ -285,13 +285,13 @@ L 114.408162 139439.624612
 L 114.408162 40.927975 
 L 104.021996 40.927975 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #2ca02c"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #2ca02c"/>
    </g>
    <g id="patch_30">
-    <path clip-path="url(#p31af94aa36)" style="fill: #2ca02c"/>
+    <path clip-path="url(#pd37a7d7e6c)" style="fill: #2ca02c"/>
    </g>
    <g id="patch_31">
-    <path clip-path="url(#p31af94aa36)" style="fill: #2ca02c"/>
+    <path clip-path="url(#pd37a7d7e6c)" style="fill: #2ca02c"/>
    </g>
    <g id="patch_32">
     <path d="M 259.814482 139439.624612 
@@ -299,16 +299,16 @@ L 270.200648 139439.624612
 L 270.200648 191.870209 
 L 259.814482 191.870209 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #2ca02c"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #2ca02c"/>
    </g>
    <g id="patch_33">
-    <path clip-path="url(#p31af94aa36)" style="fill: #2ca02c"/>
+    <path clip-path="url(#pd37a7d7e6c)" style="fill: #2ca02c"/>
    </g>
    <g id="patch_34">
-    <path clip-path="url(#p31af94aa36)" style="fill: #2ca02c"/>
+    <path clip-path="url(#pd37a7d7e6c)" style="fill: #2ca02c"/>
    </g>
    <g id="patch_35">
-    <path clip-path="url(#p31af94aa36)" style="fill: #2ca02c"/>
+    <path clip-path="url(#pd37a7d7e6c)" style="fill: #2ca02c"/>
    </g>
    <g id="patch_36">
     <path d="M 467.537796 139439.624612 
@@ -316,19 +316,19 @@ L 477.923962 139439.624612
 L 477.923962 194.693279 
 L 467.537796 194.693279 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #2ca02c"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #2ca02c"/>
    </g>
    <g id="patch_37">
-    <path clip-path="url(#p31af94aa36)" style="fill: #2ca02c"/>
+    <path clip-path="url(#pd37a7d7e6c)" style="fill: #2ca02c"/>
    </g>
    <g id="patch_38">
-    <path clip-path="url(#p31af94aa36)" style="fill: #2ca02c"/>
+    <path clip-path="url(#pd37a7d7e6c)" style="fill: #2ca02c"/>
    </g>
    <g id="patch_39">
-    <path clip-path="url(#p31af94aa36)" style="fill: #2ca02c"/>
+    <path clip-path="url(#pd37a7d7e6c)" style="fill: #2ca02c"/>
    </g>
    <g id="patch_40">
-    <path clip-path="url(#p31af94aa36)" style="fill: #2ca02c"/>
+    <path clip-path="url(#pd37a7d7e6c)" style="fill: #2ca02c"/>
    </g>
    <g id="patch_41">
     <path d="M 727.191938 139439.624612 
@@ -336,7 +336,7 @@ L 737.578104 139439.624612
 L 737.578104 218.114812 
 L 727.191938 218.114812 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #2ca02c"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #2ca02c"/>
    </g>
    <g id="patch_42">
     <path d="M 114.408162 139439.624612 
@@ -344,7 +344,7 @@ L 124.794328 139439.624612
 L 124.794328 20.962854 
 L 114.408162 20.962854 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #d62728"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #d62728"/>
    </g>
    <g id="patch_43">
     <path d="M 166.338991 139439.624612 
@@ -352,10 +352,10 @@ L 176.725156 139439.624612
 L 176.725156 54.297567 
 L 166.338991 54.297567 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #d62728"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #d62728"/>
    </g>
    <g id="patch_44">
-    <path clip-path="url(#p31af94aa36)" style="fill: #d62728"/>
+    <path clip-path="url(#pd37a7d7e6c)" style="fill: #d62728"/>
    </g>
    <g id="patch_45">
     <path d="M 270.200648 139439.624612 
@@ -363,7 +363,7 @@ L 280.586813 139439.624612
 L 280.586813 88.833014 
 L 270.200648 88.833014 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #d62728"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #d62728"/>
    </g>
    <g id="patch_46">
     <path d="M 322.131476 139439.624612 
@@ -371,7 +371,7 @@ L 332.517642 139439.624612
 L 332.517642 55.703613 
 L 322.131476 55.703613 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #d62728"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #d62728"/>
    </g>
    <g id="patch_47">
     <path d="M 374.062305 139439.624612 
@@ -379,7 +379,7 @@ L 384.44847 139439.624612
 L 384.44847 150.067767 
 L 374.062305 150.067767 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #d62728"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #d62728"/>
    </g>
    <g id="patch_48">
     <path d="M 425.993133 139439.624612 
@@ -387,7 +387,7 @@ L 436.379299 139439.624612
 L 436.379299 63.840925 
 L 425.993133 63.840925 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #d62728"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #d62728"/>
    </g>
    <g id="patch_49">
     <path d="M 477.923962 139439.624612 
@@ -395,7 +395,7 @@ L 488.310127 139439.624612
 L 488.310127 47.538727 
 L 477.923962 47.538727 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #d62728"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #d62728"/>
    </g>
    <g id="patch_50">
     <path d="M 529.85479 139439.624612 
@@ -403,7 +403,7 @@ L 540.240956 139439.624612
 L 540.240956 117.408574 
 L 529.85479 117.408574 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #d62728"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #d62728"/>
    </g>
    <g id="patch_51">
     <path d="M 581.785619 139439.624612 
@@ -411,10 +411,10 @@ L 592.171784 139439.624612
 L 592.171784 127.951618 
 L 581.785619 127.951618 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #d62728"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #d62728"/>
    </g>
    <g id="patch_52">
-    <path clip-path="url(#p31af94aa36)" style="fill: #d62728"/>
+    <path clip-path="url(#pd37a7d7e6c)" style="fill: #d62728"/>
    </g>
    <g id="patch_53">
     <path d="M 685.647276 139439.624612 
@@ -422,7 +422,7 @@ L 696.033441 139439.624612
 L 696.033441 90.216738 
 L 685.647276 90.216738 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #d62728"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #d62728"/>
    </g>
    <g id="patch_54">
     <path d="M 737.578104 139439.624612 
@@ -430,18 +430,18 @@ L 747.96427 139439.624612
 L 747.96427 162.30439 
 L 737.578104 162.30439 
 z
-" clip-path="url(#p31af94aa36)" style="fill: #d62728"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: #d62728"/>
    </g>
    <g id="matplotlib.axis_1">
     <g id="xtick_1">
      <g id="line2d_1">
       <defs>
-       <path id="me110d36eda" d="M 0 0 
+       <path id="m4a5213fd82" d="M 0 0 
 L 0 3.5 
 " style="stroke: #000000; stroke-width: 0.8"/>
       </defs>
       <g>
-       <use xlink:href="#me110d36eda" x="104.021996" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#m4a5213fd82" x="104.021996" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_1">
@@ -564,7 +564,7 @@ z
     <g id="xtick_2">
      <g id="line2d_2">
       <g>
-       <use xlink:href="#me110d36eda" x="155.952825" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#m4a5213fd82" x="155.952825" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_2">
@@ -604,7 +604,7 @@ z
     <g id="xtick_3">
      <g id="line2d_3">
       <g>
-       <use xlink:href="#me110d36eda" x="207.883653" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#m4a5213fd82" x="207.883653" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_3">
@@ -623,7 +623,7 @@ z
     <g id="xtick_4">
      <g id="line2d_4">
       <g>
-       <use xlink:href="#me110d36eda" x="259.814482" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#m4a5213fd82" x="259.814482" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_4">
@@ -698,7 +698,7 @@ z
     <g id="xtick_5">
      <g id="line2d_5">
       <g>
-       <use xlink:href="#me110d36eda" x="311.74531" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#m4a5213fd82" x="311.74531" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_5">
@@ -756,7 +756,7 @@ z
     <g id="xtick_6">
      <g id="line2d_6">
       <g>
-       <use xlink:href="#me110d36eda" x="363.676139" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#m4a5213fd82" x="363.676139" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_6">
@@ -804,7 +804,7 @@ z
     <g id="xtick_7">
      <g id="line2d_7">
       <g>
-       <use xlink:href="#me110d36eda" x="415.606967" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#m4a5213fd82" x="415.606967" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_7">
@@ -953,7 +953,7 @@ z
     <g id="xtick_8">
      <g id="line2d_8">
       <g>
-       <use xlink:href="#me110d36eda" x="467.537796" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#m4a5213fd82" x="467.537796" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_8">
@@ -1019,7 +1019,7 @@ z
     <g id="xtick_9">
      <g id="line2d_9">
       <g>
-       <use xlink:href="#me110d36eda" x="519.468624" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#m4a5213fd82" x="519.468624" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_9">
@@ -1042,7 +1042,7 @@ z
     <g id="xtick_10">
      <g id="line2d_10">
       <g>
-       <use xlink:href="#me110d36eda" x="571.399453" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#m4a5213fd82" x="571.399453" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_10">
@@ -1107,7 +1107,7 @@ z
     <g id="xtick_11">
      <g id="line2d_11">
       <g>
-       <use xlink:href="#me110d36eda" x="623.330281" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#m4a5213fd82" x="623.330281" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_11">
@@ -1166,7 +1166,7 @@ z
     <g id="xtick_12">
      <g id="line2d_12">
       <g>
-       <use xlink:href="#me110d36eda" x="675.26111" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#m4a5213fd82" x="675.26111" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_12">
@@ -1184,7 +1184,7 @@ z
     <g id="xtick_13">
      <g id="line2d_13">
       <g>
-       <use xlink:href="#me110d36eda" x="727.191938" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#m4a5213fd82" x="727.191938" y="234.382779" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_13">
@@ -1208,16 +1208,16 @@ z
      <g id="line2d_14">
       <path d="M 50.013935 224.219925 
 L 781.2 224.219925 
-" clip-path="url(#p31af94aa36)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.3; stroke-width: 0.8; stroke-linecap: square"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.3; stroke-width: 0.8; stroke-linecap: square"/>
      </g>
      <g id="line2d_15">
       <defs>
-       <path id="m907dbadf37" d="M 0 0 
+       <path id="m185ef350df" d="M 0 0 
 L -3.5 0 
 " style="stroke: #000000; stroke-width: 0.8"/>
       </defs>
       <g>
-       <use xlink:href="#m907dbadf37" x="50.013935" y="224.219925" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#m185ef350df" x="50.013935" y="224.219925" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_14">
@@ -1233,11 +1233,11 @@ L -3.5 0
      <g id="line2d_16">
       <path d="M 50.013935 85.143597 
 L 781.2 85.143597 
-" clip-path="url(#p31af94aa36)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.3; stroke-width: 0.8; stroke-linecap: square"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: none; stroke: #b0b0b0; stroke-opacity: 0.3; stroke-width: 0.8; stroke-linecap: square"/>
      </g>
      <g id="line2d_17">
       <g>
-       <use xlink:href="#m907dbadf37" x="50.013935" y="85.143597" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#m185ef350df" x="50.013935" y="85.143597" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_15">
@@ -1252,82 +1252,82 @@ L 781.2 85.143597
     <g id="ytick_3">
      <g id="line2d_18">
       <defs>
-       <path id="m77baba0834" d="M 0 0 
+       <path id="m281321b1f3" d="M 0 0 
 L -2 0 
 " style="stroke: #000000; stroke-width: 0.6"/>
       </defs>
       <g>
-       <use xlink:href="#m77baba0834" x="50.013935" y="230.583709" style="stroke: #000000; stroke-width: 0.6"/>
+       <use xlink:href="#m281321b1f3" x="50.013935" y="230.583709" style="stroke: #000000; stroke-width: 0.6"/>
       </g>
      </g>
     </g>
     <g id="ytick_4">
      <g id="line2d_19">
       <g>
-       <use xlink:href="#m77baba0834" x="50.013935" y="182.353779" style="stroke: #000000; stroke-width: 0.6"/>
+       <use xlink:href="#m281321b1f3" x="50.013935" y="182.353779" style="stroke: #000000; stroke-width: 0.6"/>
       </g>
      </g>
     </g>
     <g id="ytick_5">
      <g id="line2d_20">
       <g>
-       <use xlink:href="#m77baba0834" x="50.013935" y="157.863653" style="stroke: #000000; stroke-width: 0.6"/>
+       <use xlink:href="#m281321b1f3" x="50.013935" y="157.863653" style="stroke: #000000; stroke-width: 0.6"/>
       </g>
      </g>
     </g>
     <g id="ytick_6">
      <g id="line2d_21">
       <g>
-       <use xlink:href="#m77baba0834" x="50.013935" y="140.487632" style="stroke: #000000; stroke-width: 0.6"/>
+       <use xlink:href="#m281321b1f3" x="50.013935" y="140.487632" style="stroke: #000000; stroke-width: 0.6"/>
       </g>
      </g>
     </g>
     <g id="ytick_7">
      <g id="line2d_22">
       <g>
-       <use xlink:href="#m77baba0834" x="50.013935" y="127.009743" style="stroke: #000000; stroke-width: 0.6"/>
+       <use xlink:href="#m281321b1f3" x="50.013935" y="127.009743" style="stroke: #000000; stroke-width: 0.6"/>
       </g>
      </g>
     </g>
     <g id="ytick_8">
      <g id="line2d_23">
       <g>
-       <use xlink:href="#m77baba0834" x="50.013935" y="115.997506" style="stroke: #000000; stroke-width: 0.6"/>
+       <use xlink:href="#m281321b1f3" x="50.013935" y="115.997506" style="stroke: #000000; stroke-width: 0.6"/>
       </g>
      </g>
     </g>
     <g id="ytick_9">
      <g id="line2d_24">
       <g>
-       <use xlink:href="#m77baba0834" x="50.013935" y="106.686793" style="stroke: #000000; stroke-width: 0.6"/>
+       <use xlink:href="#m281321b1f3" x="50.013935" y="106.686793" style="stroke: #000000; stroke-width: 0.6"/>
       </g>
      </g>
     </g>
     <g id="ytick_10">
      <g id="line2d_25">
       <g>
-       <use xlink:href="#m77baba0834" x="50.013935" y="98.621486" style="stroke: #000000; stroke-width: 0.6"/>
+       <use xlink:href="#m281321b1f3" x="50.013935" y="98.621486" style="stroke: #000000; stroke-width: 0.6"/>
       </g>
      </g>
     </g>
     <g id="ytick_11">
      <g id="line2d_26">
       <g>
-       <use xlink:href="#m77baba0834" x="50.013935" y="91.507381" style="stroke: #000000; stroke-width: 0.6"/>
+       <use xlink:href="#m281321b1f3" x="50.013935" y="91.507381" style="stroke: #000000; stroke-width: 0.6"/>
       </g>
      </g>
     </g>
     <g id="ytick_12">
      <g id="line2d_27">
       <g>
-       <use xlink:href="#m77baba0834" x="50.013935" y="43.27745" style="stroke: #000000; stroke-width: 0.6"/>
+       <use xlink:href="#m281321b1f3" x="50.013935" y="43.27745" style="stroke: #000000; stroke-width: 0.6"/>
       </g>
      </g>
     </g>
     <g id="ytick_13">
      <g id="line2d_28">
       <g>
-       <use xlink:href="#m77baba0834" x="50.013935" y="18.787325" style="stroke: #000000; stroke-width: 0.6"/>
+       <use xlink:href="#m281321b1f3" x="50.013935" y="18.787325" style="stroke: #000000; stroke-width: 0.6"/>
       </g>
      </g>
     </g>
@@ -1535,7 +1535,7 @@ z
    <g id="line2d_29">
     <path d="M 50.013935 224.219925 
 L 781.2 224.219925 
-" clip-path="url(#p31af94aa36)" style="fill: none; stroke-dasharray: 3.7,1.6; stroke-dashoffset: 0; stroke: #000000"/>
+" clip-path="url(#pd37a7d7e6c)" style="fill: none; stroke-dasharray: 3.7,1.6; stroke-dashoffset: 0; stroke: #000000"/>
    </g>
    <g id="patch_55">
     <path d="M 50.013935 234.382779 
@@ -1904,7 +1904,7 @@ z
   </g>
  </g>
  <defs>
-  <clipPath id="p31af94aa36">
+  <clipPath id="pd37a7d7e6c">
    <rect x="50.013935" y="10.8" width="731.186065" height="223.582779"/>
   </clipPath>
  </defs>
@@ -2255,9 +2255,165 @@ latency; "1 s-d60" = 1 s-mean 60 s drift p90.</p>
 <li>The hover alone fails the budget: b17 EKF 60 s drift p90 20 cm.</li>
 <li>Variants: b5-b12 are 4-guard, b13c-b17 are 3-guard (the 4-guard vs v0_3g caveat applies). No variant ranking
   is claimed: the spread is dominated by move error and the truth caveats.</li>
-<li><strong>Not done tonight:</strong> the b16 per-preset tracking error (needs Des-shape segmentation) and a separate pure-yaw
-  drift ranking (the yaw seconds are in table A, the per-class rates in each <code>truth4_score.json</code>).</li>
 <li>Move-rate values on b17 (12.8 cm/s) come from a 0.02 s "move" class: ignore them.</li>
+</ul>
+<p><strong>b16 per-preset tracking error</strong> (<code>video_truth presets4</code>, setpoint runs; ctrl = estimate vs setpoint, i.e.
+controller lag; ekf = estimate vs truth; track = truth vs setpoint, what the drone really did; fused = fuse4 replay
+at 0.15 s, gain 0.9, slew 10 cm, spread 0.1 s; all rms cm):</p>
+<table>
+<thead>
+<tr>
+<th>t0 s</th>
+<th>kind</th>
+<th>dur s</th>
+<th>speed cm/s</th>
+<th>ctrl</th>
+<th>ekf</th>
+<th>track</th>
+<th>fused</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>791</td>
+<td>return</td>
+<td>4.0</td>
+<td>3.8</td>
+<td>6.4</td>
+<td>32.3</td>
+<td>34.6</td>
+<td>1.9</td>
+</tr>
+<tr>
+<td>797</td>
+<td>traj</td>
+<td>19.9</td>
+<td>40.0</td>
+<td>29.9</td>
+<td>46.5</td>
+<td>49.5</td>
+<td>10.4</td>
+</tr>
+<tr>
+<td>830</td>
+<td>traj</td>
+<td>4.4</td>
+<td>15.5</td>
+<td>12.6</td>
+<td>14.5</td>
+<td>21.0</td>
+<td>4.0</td>
+</tr>
+<tr>
+<td>838</td>
+<td>return</td>
+<td>4.0</td>
+<td>9.4</td>
+<td>6.7</td>
+<td>13.9</td>
+<td>19.6</td>
+<td>3.7</td>
+</tr>
+<tr>
+<td>844</td>
+<td>traj</td>
+<td>20.0</td>
+<td>22.1</td>
+<td>11.2</td>
+<td>46.9</td>
+<td>51.1</td>
+<td>2.8</td>
+</tr>
+<tr>
+<td>893</td>
+<td>return</td>
+<td>4.0</td>
+<td>36.0</td>
+<td>15.3</td>
+<td>105.3</td>
+<td>97.7</td>
+<td>3.8</td>
+</tr>
+<tr>
+<td>899</td>
+<td>traj</td>
+<td>10.1</td>
+<td>12.6</td>
+<td>19.1</td>
+<td>94.0</td>
+<td>102.2</td>
+<td>3.4</td>
+</tr>
+<tr>
+<td>925</td>
+<td>return</td>
+<td>4.0</td>
+<td>27.2</td>
+<td>11.9</td>
+<td>80.7</td>
+<td>91.2</td>
+<td>5.2</td>
+</tr>
+<tr>
+<td>952</td>
+<td>return</td>
+<td>4.0</td>
+<td>34.2</td>
+<td>17.0</td>
+<td>70.0</td>
+<td>78.1</td>
+<td>8.2</td>
+</tr>
+<tr>
+<td>958</td>
+<td>traj</td>
+<td>5.8</td>
+<td>37.8</td>
+<td>29.2</td>
+<td>73.8</td>
+<td>74.1</td>
+<td>11.4</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Track error is about ctrl + ekf: the estimate error is most of it (14-105 cm), the controller lag is 6-30 cm.</li>
+<li>Fused (replay) cuts the estimate error to 1.9-11.4 cm; the worst runs are the fastest (38-40 cm/s). With the
+  spread off, the same runs read 1.9-10.5 cm, so the spread costs at most 0.9 cm.</li>
+<li>Dense trajectory presets need both: camera fusion for the estimate and a faster controller for the 30 cm lag.</li>
+</ul>
+<p><strong>Pure-yaw drift ranking</strong> (<code>video_truth yaw4</code>, EKF error jump per yaw episode, cm per 90 deg of yaw):</p>
+<table>
+<thead>
+<tr>
+<th>b12</th>
+<th>b7</th>
+<th>b14</th>
+<th>b6</th>
+<th>b13c</th>
+<th>b11</th>
+<th>b5</th>
+<th>b9</th>
+<th>b15</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>9.0</td>
+<td>8.2</td>
+<td>6.0</td>
+<td>4.7</td>
+<td>4.0</td>
+<td>3.2</td>
+<td>2.6</td>
+<td>2.2</td>
+<td>2.1</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Yaw alone moves the estimate 2-9 cm per 90 deg (b12 truth suspect). That is small next to the move error
+  (table B), so yaw is not the main drift source; the camera offset removes it anyway.</li>
 </ul>
 <h2>3. Small NN with the camera off (STM32F4-sized)</h2>
 <p>Literature check (abstracts verified on arXiv):</p>
@@ -2427,11 +2583,19 @@ latency; "1 s-d60" = 1 s-mean 60 s drift p90.</p>
 <li><strong>Verdict:</strong> no camera-off fix; the best is 34 cm (pooled; 47 cm held out) against the 10 cm budget. Not worth flashing.</li>
 </ul>
 <h2>4. Live camera fusion (built, replay-tested, not flashed)</h2>
-<p><strong>Firmware EXT_POS mode 2</strong> (e179e95f):
+<p><strong>Firmware EXT_POS mode 2</strong> (e179e95f, retuned in 18c7d964):
 - Off at boot; <code>Cmd 0xFF</code> value 2 turns it on.
-- Each 10 Hz camera fix nudges an offset c on <code>earth_x/y</code>: gain 0.1, slew at most 3 cm per step, 40 cm gate,
-  re-anchor after 3 rejects, 32×50 ms history ring for the delay.
-- Host gcc test passes; Keil build 0 errors (4 old warnings).
+- Each 10 Hz camera fix moves a target offset c: gain 0.9, at most 10 cm per fix (slew), 40 cm gate, re-anchor
+  after 3 rejects, 32×50 ms history ring for the delay. All three values are PROPOSED (replay-chosen).
+- <strong>Spread (18c7d964):</strong> the applied offset a follows c at most 0.5 cm per 5 ms tick (1 m/s, 20 ticks for a full
+  10 cm step) and only that step is added to <code>earth_x/y</code>. Without it a 10 cm step lands in one tick, and the
+  locx/locy PID has its D term on the error (Kd 4.0, <code>pid.c:36</code>): a 40 cm/s kick in the velocity setpoint. The
+  ring stores <code>earth - a</code> (the raw EKF path); <code>Reset_World_Origin</code> zeroes a and c.
+- Host gcc test <code>test_ext_pos.c</code> passes (new checks: c step at most slew, earth step at most slew/20 per tick,
+  a reaches c in 20 ticks). Keil build 0 errors; the first try failed writing <code>OBJ/*.o</code> ("Invalid argument",
+  Windows Defender holding the files), the retry passed. Defender stayed on.
+- Pre-existing, not fixed: <code>test_ekf_of_shadow.c</code> <code>test_reset_bias</code> fails at HEAD too (the flow-bias freeze in
+  946f801d; the test was never updated). Unrelated to EXT_POS.
 - <code>Reset_World_Origin</code> zeroes c; sysid start (<code>send_data.c</code> case 6) zeroes earth, so neither may run in mode 2.
 - <strong>Design deviation:</strong> this is the offset rule that the replay validated, not the delayed EKF state update in
   the design doc. The EKF itself (<code>s_ekf_of</code>) still dead-reckons; only the position the controller uses is
@@ -2581,8 +2745,60 @@ latency; "1 s-d60" = 1 s-mean 60 s drift p90.</p>
 </tr>
 </tbody>
 </table>
+<p>Retuned rule (gain 0.9, slew 10 cm, spread 0.1 s; <code>live_tracker replay</code>, 1 s-mean 60 s drift p90 / rms, cm):</p>
+<table>
+<thead>
+<tr>
+<th>Flight</th>
+<th>0.15 s, no spread</th>
+<th>0.15 s, spread</th>
+<th>0.3 s, spread</th>
+<th>first pass (gain 0.1, 3 cm) at 0.15 s</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>b17 hover</td>
+<td>4.1 / 3.5</td>
+<td>4.2 / 3.6</td>
+<td>6.3 / 4.5</td>
+<td>10.0 / 5.0</td>
+</tr>
+<tr>
+<td>b13c</td>
+<td>9.1 / 8.3</td>
+<td>9.7 / 8.5</td>
+<td>13.4 / 10.0</td>
+<td>15.5 / 9.4</td>
+</tr>
+<tr>
+<td>b5_max2</td>
+<td>8.9 / 8.1</td>
+<td>9.6 / 8.4</td>
+<td>13.6 / 10.9</td>
+<td>14.9 / 10.6</td>
+</tr>
+<tr>
+<td>b16 traj</td>
+<td>11.2 / 7.8</td>
+<td>12.1 / 8.1</td>
+<td>16.5 / 10.0</td>
+<td>-</td>
+</tr>
+</tbody>
+</table>
 <ul>
-<li>b10 is a bad track: the firmware gated 608 fixes and re-anchored 557 times. Track quality is a go/no-go check.</li>
+<li><code>fuse4 --slew-cm</code> showed the 3 cm slew was the floor on moving flights: the offset could not keep up. Gain 0.9
+  with a 10 cm slew lets each fix close most of the gap.</li>
+<li>The spread (no D-term kick) costs 0.1-0.9 cm. The budget holds at 0.15 s on 3 of 4 flights; b16 (fast
+  trajectory, 38-40 cm/s runs) misses by 2 cm. At 0.3 s only the hover passes, so step 2 of the run sheet
+  (latency) is a hard gate.</li>
+<li>
+<p>All of this is replay and circular (camera = fixes and truth). The firmware is built and host-tested, not flown.</p>
+</li>
+<li>
+<p>b10 is a bad track: the firmware gated 608 fixes and re-anchored 557 times. Track quality is a go/no-go check.</p>
+</li>
 <li>Tracker cost: frame read 9-12 ms + detect 2-3 ms per frame.</li>
 </ul>
 <h2>5. Risks for the lab</h2>
@@ -2620,6 +2836,11 @@ latency; "1 s-d60" = 1 s-mean 60 s drift p90.</p>
 <td>firmware</td>
 <td>shadow (mode 1) first, slew kick on the bench</td>
 </tr>
+<tr>
+<td>Offset step kicks the D term</td>
+<td><code>pid.c:36</code> (Kd 4.0)</td>
+<td>spread 0.5 cm/tick (18c7d964); bench check step 1.3</td>
+</tr>
 </tbody>
 </table>
 <h2>6. Next lab</h2>
@@ -2643,7 +2864,11 @@ latency; "1 s-d60" = 1 s-mean 60 s drift p90.</p>
 <li>6e6e0759: live_tracker.</li>
 <li>d629deb1: preset.</li>
 <li>3802526d: nn4.</li>
-<li>This report: run sheet, <code>video_truth report4</code>.</li>
+<li>91c7a22d: this report (first pass), run sheet, <code>video_truth report4</code>.</li>
+<li>6de83927: fuse4 <code>--slew-cm</code> (found the 3 cm slew floor).</li>
+<li>a897f212: <code>presets4</code>, <code>yaw4</code>, <code>live_tracker replay --gain/--slew-cm</code>.</li>
+<li>89d40514: replay spread + explicit <code>_gNNN_sNNN_spNNN</code> score tags (untagged files are the old gain 0.1 / 3 cm).</li>
+<li>18c7d964: firmware gain 0.9 / slew 10 cm / spread (NOT flashed).</li>
 <li>Rebuild this page:
   <code>python -m ground_station.analysis.video_truth report4 docs/flights/2026-10-12-r4-overnight-report.md --out docs/flights/2026-10-12-r4-overnight-report.html</code>
   (<code>report4 -</code> prints tables A and B).</li>

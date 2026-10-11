@@ -8,9 +8,9 @@ Every number is measured from the R4 logs unless it says computed, PROPOSED or U
 | Question | Answer |
 |---|---|
 | Is drift solved? | **In replay, yes.** Camera fixes stop the error from growing: on the 10 flights with good truth, EKF 30-146 cm rms becomes 5.1-13.6 cm rms (0.3 s latency, replay). Hover drift rate on b17: 0.29 to 0.03 cm/s. |
-| Is the 10 cm / 60 s budget met? | **Hover only.** b17 1 s-mean 60 s drift p90: 9.2 cm at 0.15 s latency, 10.3 at 0.3 s. Moving flights: 16-27 cm. The rest is latency. |
+| Is the 10 cm / 60 s budget met? | **At 0.15 s latency: hover and moderate moves yes, the fast trajectory no (replay).** Live tracker replay with the retuned firmware rule (gain 0.9, slew 10 cm, spread, all PROPOSED), 1 s-mean 60 s drift p90: b17 hover 4.2, b13c 9.7, b5 9.6, b16 traj 12.1 cm. At 0.3 s: 6.3 / 13.4 / 13.6 / 16.5. The first pass (gain 0.1, 3 cm slew) read 10.0-15.5: the slew cap, not latency, was the floor. Latency at or below 0.15 s is required. |
 | Can a small NN fix drift with the camera off? | **No.** Best 34 cm (b15, in the training pool), best held-out 47 cm (b7); the b17 hold-out got worse (19 to 28 cm). The camera is required. |
-| Lab tomorrow? | **Go, as a fusion bring-up day** ([run sheet R5](../lab/run-sheet-r5-fusion-bringup.md)). Dense trajectory presets and load scenarios only after the closed-loop hover gate passes. |
+| Lab tomorrow? | **Go, as a fusion bring-up day** ([run sheet R5](../lab/run-sheet-r5-fusion-bringup.md)). Dense trajectory presets and load scenarios only after the closed-loop hover gate passes and the measured latency is 0.15 s or less; start the dense presets at moderate speed (b16 runs at 38-40 cm/s were the worst, PROPOSED). |
 
 Think of the EKF as a walker counting steps with closed eyes, and the camera as a glance at a landmark ten times a
 second. The glance stops the wandering. What is left is that each glance shows where you were 0.3 s ago.
@@ -82,9 +82,38 @@ latency; "1 s-d60" = 1 s-mean 60 s drift p90.
 - The hover alone fails the budget: b17 EKF 60 s drift p90 20 cm.
 - Variants: b5-b12 are 4-guard, b13c-b17 are 3-guard (the 4-guard vs v0_3g caveat applies). No variant ranking
   is claimed: the spread is dominated by move error and the truth caveats.
-- **Not done tonight:** the b16 per-preset tracking error (needs Des-shape segmentation) and a separate pure-yaw
-  drift ranking (the yaw seconds are in table A, the per-class rates in each `truth4_score.json`).
 - Move-rate values on b17 (12.8 cm/s) come from a 0.02 s "move" class: ignore them.
+
+**b16 per-preset tracking error** (`video_truth presets4`, setpoint runs; ctrl = estimate vs setpoint, i.e.
+controller lag; ekf = estimate vs truth; track = truth vs setpoint, what the drone really did; fused = fuse4 replay
+at 0.15 s, gain 0.9, slew 10 cm, spread 0.1 s; all rms cm):
+
+| t0 s | kind | dur s | speed cm/s | ctrl | ekf | track | fused |
+|---|---|---|---|---|---|---|---|
+| 791 | return | 4.0 | 3.8 | 6.4 | 32.3 | 34.6 | 1.9 |
+| 797 | traj | 19.9 | 40.0 | 29.9 | 46.5 | 49.5 | 10.4 |
+| 830 | traj | 4.4 | 15.5 | 12.6 | 14.5 | 21.0 | 4.0 |
+| 838 | return | 4.0 | 9.4 | 6.7 | 13.9 | 19.6 | 3.7 |
+| 844 | traj | 20.0 | 22.1 | 11.2 | 46.9 | 51.1 | 2.8 |
+| 893 | return | 4.0 | 36.0 | 15.3 | 105.3 | 97.7 | 3.8 |
+| 899 | traj | 10.1 | 12.6 | 19.1 | 94.0 | 102.2 | 3.4 |
+| 925 | return | 4.0 | 27.2 | 11.9 | 80.7 | 91.2 | 5.2 |
+| 952 | return | 4.0 | 34.2 | 17.0 | 70.0 | 78.1 | 8.2 |
+| 958 | traj | 5.8 | 37.8 | 29.2 | 73.8 | 74.1 | 11.4 |
+
+- Track error is about ctrl + ekf: the estimate error is most of it (14-105 cm), the controller lag is 6-30 cm.
+- Fused (replay) cuts the estimate error to 1.9-11.4 cm; the worst runs are the fastest (38-40 cm/s). With the
+  spread off, the same runs read 1.9-10.5 cm, so the spread costs at most 0.9 cm.
+- Dense trajectory presets need both: camera fusion for the estimate and a faster controller for the 30 cm lag.
+
+**Pure-yaw drift ranking** (`video_truth yaw4`, EKF error jump per yaw episode, cm per 90 deg of yaw):
+
+| b12 | b7 | b14 | b6 | b13c | b11 | b5 | b9 | b15 |
+|---|---|---|---|---|---|---|---|---|
+| 9.0 | 8.2 | 6.0 | 4.7 | 4.0 | 3.2 | 2.6 | 2.2 | 2.1 |
+
+- Yaw alone moves the estimate 2-9 cm per 90 deg (b12 truth suspect). That is small next to the move error
+  (table B), so yaw is not the main drift source; the camera offset removes it anyway.
 
 ## 3. Small NN with the camera off (STM32F4-sized)
 
@@ -136,11 +165,19 @@ Leave-one-flight-out, 1 s-mean 60 s drift p90 (cm), EKF → ridge / MLP:
 
 ## 4. Live camera fusion (built, replay-tested, not flashed)
 
-**Firmware EXT_POS mode 2** (e179e95f):
+**Firmware EXT_POS mode 2** (e179e95f, retuned in 18c7d964):
 - Off at boot; `Cmd 0xFF` value 2 turns it on.
-- Each 10 Hz camera fix nudges an offset c on `earth_x/y`: gain 0.1, slew at most 3 cm per step, 40 cm gate,
-  re-anchor after 3 rejects, 32×50 ms history ring for the delay.
-- Host gcc test passes; Keil build 0 errors (4 old warnings).
+- Each 10 Hz camera fix moves a target offset c: gain 0.9, at most 10 cm per fix (slew), 40 cm gate, re-anchor
+  after 3 rejects, 32×50 ms history ring for the delay. All three values are PROPOSED (replay-chosen).
+- **Spread (18c7d964):** the applied offset a follows c at most 0.5 cm per 5 ms tick (1 m/s, 20 ticks for a full
+  10 cm step) and only that step is added to `earth_x/y`. Without it a 10 cm step lands in one tick, and the
+  locx/locy PID has its D term on the error (Kd 4.0, `pid.c:36`): a 40 cm/s kick in the velocity setpoint. The
+  ring stores `earth - a` (the raw EKF path); `Reset_World_Origin` zeroes a and c.
+- Host gcc test `test_ext_pos.c` passes (new checks: c step at most slew, earth step at most slew/20 per tick,
+  a reaches c in 20 ticks). Keil build 0 errors; the first try failed writing `OBJ/*.o` ("Invalid argument",
+  Windows Defender holding the files), the retry passed. Defender stayed on.
+- Pre-existing, not fixed: `test_ekf_of_shadow.c` `test_reset_bias` fails at HEAD too (the flow-bias freeze in
+  946f801d; the test was never updated). Unrelated to EXT_POS.
 - `Reset_World_Origin` zeroes c; sysid start (`send_data.c` case 6) zeroes earth, so neither may run in mode 2.
 - **Design deviation:** this is the offset rule that the replay validated, not the delayed EKF state update in
   the design doc. The EKF itself (`s_ekf_of`) still dead-reckons; only the position the controller uses is
@@ -179,6 +216,22 @@ Live tracker replay (`live_tracker replay`, real-time, simulated link):
 | b5 | 2004 | 29 | (not logged) | 10.6 / 11.5 | 14.9 / 16.3 | 113 / 136 |
 | b10 | (not logged) | 700 | 4 | 92 (0.3 s) | 208 | 121 / 278 |
 
+Retuned rule (gain 0.9, slew 10 cm, spread 0.1 s; `live_tracker replay`, 1 s-mean 60 s drift p90 / rms, cm):
+
+| Flight | 0.15 s, no spread | 0.15 s, spread | 0.3 s, spread | first pass (gain 0.1, 3 cm) at 0.15 s |
+|---|---|---|---|---|
+| b17 hover | 4.1 / 3.5 | 4.2 / 3.6 | 6.3 / 4.5 | 10.0 / 5.0 |
+| b13c | 9.1 / 8.3 | 9.7 / 8.5 | 13.4 / 10.0 | 15.5 / 9.4 |
+| b5_max2 | 8.9 / 8.1 | 9.6 / 8.4 | 13.6 / 10.9 | 14.9 / 10.6 |
+| b16 traj | 11.2 / 7.8 | 12.1 / 8.1 | 16.5 / 10.0 | - |
+
+- `fuse4 --slew-cm` showed the 3 cm slew was the floor on moving flights: the offset could not keep up. Gain 0.9
+  with a 10 cm slew lets each fix close most of the gap.
+- The spread (no D-term kick) costs 0.1-0.9 cm. The budget holds at 0.15 s on 3 of 4 flights; b16 (fast
+  trajectory, 38-40 cm/s runs) misses by 2 cm. At 0.3 s only the hover passes, so step 2 of the run sheet
+  (latency) is a hard gate.
+- All of this is replay and circular (camera = fixes and truth). The firmware is built and host-tested, not flown.
+
 - b10 is a bad track: the firmware gated 608 fixes and re-anchored 557 times. Track quality is a go/no-go check.
 - Tracker cost: frame read 9-12 ms + detect 2-3 ms per frame.
 
@@ -191,6 +244,7 @@ Live tracker replay (`live_tracker replay`, real-time, simulated link):
 | Circular truth | all | tape-measured landing vs take-off mark (step 5) |
 | h_ring 0.15-0.17 m | b5, b6, b9, b12 | check the pad sits on id0 |
 | Mode 2 never flown | firmware | shadow (mode 1) first, slew kick on the bench |
+| Offset step kicks the D term | `pid.c:36` (Kd 4.0) | spread 0.5 cm/tick (18c7d964); bench check step 1.3 |
 
 ## 6. Next lab
 
@@ -215,7 +269,11 @@ Live tracker replay (`live_tracker replay`, real-time, simulated link):
   - 6e6e0759: live_tracker.
   - d629deb1: preset.
   - 3802526d: nn4.
-  - This report: run sheet, `video_truth report4`.
+  - 91c7a22d: this report (first pass), run sheet, `video_truth report4`.
+  - 6de83927: fuse4 `--slew-cm` (found the 3 cm slew floor).
+  - a897f212: `presets4`, `yaw4`, `live_tracker replay --gain/--slew-cm`.
+  - 89d40514: replay spread + explicit `_gNNN_sNNN_spNNN` score tags (untagged files are the old gain 0.1 / 3 cm).
+  - 18c7d964: firmware gain 0.9 / slew 10 cm / spread (NOT flashed).
 - Rebuild this page:
   `python -m ground_station.analysis.video_truth report4 docs/flights/2026-10-12-r4-overnight-report.md --out docs/flights/2026-10-12-r4-overnight-report.html`
   (`report4 -` prints tables A and B).
