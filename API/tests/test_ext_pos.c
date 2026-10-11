@@ -1,0 +1,127 @@
+/*
+ * test_ext_pos.c - Host C test for the EXT_POS camera fix (shadow mode): wire decode, earth-path ring buffer,
+ *                  innovation gate, stale flag. Design: docs/video-truth/live_camera_fusion_design_2026-10-11.md.
+ *
+ * Build and run (from the repo root):
+ *   gcc -std=c99 -Wall -Wextra -IAPI -IAPI/tests/stubs_wp14 API/tests/test_ext_pos.c API/ekf_of.c -lm \
+ *       -o /tmp/ext_pos && /tmp/ext_pos
+ *
+ * The encoder mirrors ground_station/comm/ext_pos_encoder.py ext_pos_encode(); keep the two in step.
+ */
+
+#include <stdio.h>
+#include <math.h>
+#include <string.h>
+#include "ekf_of.h"
+
+/* globals normally defined in StabilizerTask.c */
+volatile uint8_t g_ekf_of_shadow = 1U;
+volatile uint8_t g_ekf_of_vel_fb = 0U;
+
+static int s_fail;
+#define CHECK(cond, msg) do { if (!(cond)) { printf("FAIL %s (line %d)\n", msg, __LINE__); s_fail++; } } while (0)
+
+static float encode(float x_cm, float y_cm)
+{
+    long qx = lroundf(x_cm / EXT_POS_Q_CM), qy = lroundf(y_cm / EXT_POS_Q_CM);
+    if (qx < -2048) qx = -2048;
+    if (qx > 2047) qx = 2047;
+    if (qy < -2048) qy = -2048;
+    if (qy > 2047) qy = 2047;
+    return (float)((qx + 2048) * 4096 + (qy + 2048));
+}
+
+static void test_decode(void)
+{
+    static const float xs[] = { 0.0f, 12.5f, -37.0f, 1023.5f, -1024.0f, 0.5f, -0.5f };
+    float x, y;
+    unsigned i, j;
+    for (i = 0; i < sizeof xs / sizeof xs[0]; i++) {
+        for (j = 0; j < sizeof xs / sizeof xs[0]; j++) {
+            CHECK(ext_pos_decode(encode(xs[i], xs[j]), &x, &y) == 1U, "decode ok");
+            CHECK(x == xs[i] && y == xs[j], "decode round trip");
+        }
+    }
+    CHECK(ext_pos_decode(-1.0f, &x, &y) == 0U, "negative code");
+    CHECK(ext_pos_decode(16777216.0f, &x, &y) == 0U, "code >= 2^24");
+    CHECK(ext_pos_decode(1234.5f, &x, &y) == 0U, "non-integer code");
+    CHECK(ext_pos_decode(NAN, &x, &y) == 0U, "NaN code");
+    CHECK(ext_pos_decode(INFINITY, &x, &y) == 0U, "inf code");
+}
+
+static void test_ring(void)
+{
+    ext_pos_ring_t r;
+    float x, y;
+    uint32_t t;
+    ext_pos_ring_reset(&r);
+    CHECK(ext_pos_ring_at(&r, 0U, &x, &y) == 0U, "empty ring");
+    /* 200 Hz ticks: only every 50 ms is stored; path x = t/10 cm, y = -t/20 cm */
+    for (t = 1000U; t <= 1200U; t += 5U) {
+        ext_pos_ring_tick(&r, t, (float)t / 10.0f, -(float)t / 20.0f);
+    }
+    CHECK(r.count == 5U, "tick spacing 50 ms");
+    CHECK(ext_pos_ring_at(&r, 1125U, &x, &y) == 1U && fabsf(x - 112.5f) < 1e-3f && fabsf(y + 56.25f) < 1e-3f,
+          "interpolate");
+    CHECK(ext_pos_ring_at(&r, 1300U, &x, &y) == 1U && x == 120.0f, "newer than head -> head");
+    CHECK(ext_pos_ring_at(&r, 1000U, &x, &y) == 1U && x == 100.0f, "oldest sample exact");
+    CHECK(ext_pos_ring_at(&r, 999U, &x, &y) == 0U, "older than ring");
+    /* wrap: 40 samples into 32 slots keeps the newest 32 (1.55 s) */
+    ext_pos_ring_reset(&r);
+    for (t = 0U; t < 40U * 50U; t += 50U) {
+        ext_pos_ring_tick(&r, t, (float)t, 0.0f);
+    }
+    CHECK(r.count == EXT_POS_RING_N, "ring full");
+    CHECK(ext_pos_ring_at(&r, 8U * 50U, &x, &y) == 1U && x == 400.0f, "oldest kept after wrap");
+    CHECK(ext_pos_ring_at(&r, 7U * 50U + 25U, &x, &y) == 0U, "overwritten sample is gone");
+    CHECK(ext_pos_ring_at(&r, 20U * 50U + 10U, &x, &y) == 1U && fabsf(x - 1010.0f) < 1e-3f, "interpolate after wrap");
+    /* tick counter wrap-around (uint32 ms) */
+    ext_pos_ring_reset(&r);
+    ext_pos_ring_tick(&r, 0xFFFFFFF0U, 1.0f, 0.0f);
+    ext_pos_ring_tick(&r, 0x00000022U, 3.0f, 0.0f);
+    CHECK(r.count == 2U, "tick wrap stores");
+    CHECK(ext_pos_ring_at(&r, 0x00000009U, &x, &y) == 1U && fabsf(x - 2.0f) < 1e-3f, "interpolate across wrap");
+}
+
+static void test_fix_and_stale(void)
+{
+    ext_pos_ring_t r;
+    ext_pos_stat_t s;
+    uint32_t t;
+    int i;
+    memset(&s, 0, sizeof s);
+    ext_pos_ring_reset(&r);
+    for (t = 0U; t <= 2000U; t += 5U) {
+        ext_pos_ring_tick(&r, t, 10.0f, 20.0f);
+    }
+    ext_pos_stale_tick(&s, 2000U);
+    CHECK(s.stale == 1U, "stale before any fix");
+    CHECK(ext_pos_fix(&s, &r, 1700U, 2000U, 13.0f, 16.0f) == EXT_POS_FIX_OK, "fix ok");
+    CHECK(fabsf(s.e_x - 3.0f) < 1e-4f && fabsf(s.e_y + 4.0f) < 1e-4f && s.age_ms == 300U, "innovation and age");
+    CHECK(s.n_ok == 1U && s.stale == 0U && s.last_ok_ms == 2000U, "ok counters");
+    for (i = 0; i < 3; i++) {
+        CHECK(ext_pos_fix(&s, &r, 1900U, 2000U, 60.0f, 20.0f) == EXT_POS_FIX_GATED, "gated at 50 cm");
+    }
+    CHECK(s.n_rej == 3U && s.rej_run == 3U && fabsf(s.e_x - 50.0f) < 1e-4f, "gated counters, e kept");
+    CHECK(ext_pos_fix(&s, &r, 1900U, 2000U, 49.0f, 20.0f) == EXT_POS_FIX_OK && s.rej_run == 0U, "39 cm passes, run reset");
+    CHECK(ext_pos_fix(&s, &r, 100U, 2000U, 10.0f, 20.0f) == EXT_POS_FIX_OLD && s.n_old == 1U, "too old");
+    CHECK(s.n_ok == 2U && s.n_rej == 3U, "old fix leaves ok/rej alone");
+    ext_pos_stale_tick(&s, 5000U);
+    CHECK(s.stale == 0U, "3.0 s after last ok: not stale yet");
+    ext_pos_stale_tick(&s, 5001U);
+    CHECK(s.stale == 1U, "3.001 s after last ok: stale");
+    CHECK(ext_pos_fix(&s, &r, 2100U, 2000U, 10.0f, 20.0f) == EXT_POS_FIX_OK && s.age_ms == 0U, "future stamp clamps age");
+}
+
+int main(void)
+{
+    test_decode();
+    test_ring();
+    test_fix_and_stale();
+    if (s_fail) {
+        printf("test_ext_pos: %d FAILED\n", s_fail);
+        return 1;
+    }
+    printf("test_ext_pos: all passed\n");
+    return 0;
+}

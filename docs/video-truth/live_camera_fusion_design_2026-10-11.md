@@ -1,6 +1,7 @@
 # Live camera fusion: design (option C), 2026-10-11
 
-Status: PROPOSED, sec 3 revised after replay (2026-10-11). No firmware code yet. Numbers marked computed come from R3 replays (`r3_drift_truth_2026-10-11.md`,
+Status: PROPOSED, sec 3 revised after replay (2026-10-11). Firmware shadow mode coded (sec 2-3, gcc test
+`API/tests/test_ext_pos.c`), not built in Keil or flown; the EKF update is not coded. Numbers marked computed come from R3 replays (`r3_drift_truth_2026-10-11.md`,
 `r3_learned_velocity_2026-10-11.md`). All other numbers are design choices and must be validated in replay first.
 
 ## Goal
@@ -26,12 +27,14 @@ phone camera -> scrcpy -> live tracker (ground station) -> WiFi 0xCC 0xDD frame 
 
 ## 2. Uplink frame (no new transport)
 The existing 9-byte command frame `0xCC 0xDD [CMD][IDX][VALUE f32 LE][XOR]` over WiFi (USART3, same parser as UART5).
-- CMD = new `EXT_POS`, using the first free id above `MRAC_ELEM_CMD_LAST` (TASK/send_data.c:1271). It must be added to
-  `k_gs_cmds` and `firmware_contract.py` in the same commit, or `CommandSafetyReject` refuses it.
-- IDX = fix age in 10 ms units (0-2.55 s): ground-station time from frame capture to send.
-- VALUE = 4 raw bytes, int16 x_mm and int16 y_mm in the EKF earth frame (cm-scale of `earth_x/y`). One frame per
-  fix keeps it atomic.
-- Control: `EXT_POS` with IDX 0xFF and VALUE 0/1 switches fusion off or on. Off at boot.
+- CMD = `EXT_POS` 0x2C, the first free id above `MRAC_ELEM_CMD_LAST` (0x2B). Handler `Cmd_ExtPos`, allowed in
+  `CommandSafetyReject`, entry in `k_gs_cmds` and `firmware_contract.py`. Encoder `ground_station/comm/ext_pos_encoder.py`.
+- IDX 0..253 = a fix; IDX = fix age in 10 ms units (0-2.53 s): ground-station time from frame capture to send.
+- VALUE = an exact integer code `(qx+2048)*4096 + (qy+2048)`, q = round(cm/0.5) in [-2048, 2047] (+-1023.5 cm, 0.5 cm
+  steps), EKF earth frame (`earth_x/y`). An integer below 2^24 is exact in float32, so no NaN patterns. One frame per
+  fix keeps it atomic; a code that is not such an integer is dropped.
+- Control: IDX 0xFF, VALUE 0/1 switches fusion off or on (off at boot; fixes are dropped while off). IDX 0xFE sets
+  `g_ext_pos_delay_ms` (0-1000 ms), the fixed link delay.
 
 ## 3. Firmware update (StabilizerTask, next to `Of_IntegratePosition`)
 - Ring buffer: earth_x/y every 50 ms for 1.6 s (32 x 2 floats = 256 B).
@@ -44,7 +47,11 @@ The existing 9-byte command frame `0xCC 0xDD [CMD][IDX][VALUE f32 LE][XOR]` over
   (H = [1,0,0,0], R sd 1 cm). bof and vel move only through the covariance. No separate Ki term.
 - Slew clamp: at most 3 cm of position correction per fix, so the loc PID never sees a step.
 - Stale: if there is no fix for 3 s, fall back to OF-only silently and set a telemetry flag.
-- Telemetry: `ext_pos_e_x/y`, `ext_pos_n_ok`, `ext_pos_n_rej`, `ext_pos_age`.
+- Telemetry: `g_ext_pos.e_x/e_y` (cm), `.n_ok`, `.n_rej`, `.n_old` (fix older than the 1.6 s ring), `.age_ms`,
+  `.rej_run`, `.stale`.
+- Coded now (shadow mode): Send_Task posts the fix (`g_ext_pos_post`, seq under a critical section, t_meas = now -
+  IDX*10 - delay); `Ext_Pos_Tick` in StabilizerTask (after `Of_IntegratePosition`) keeps the ring, computes the
+  innovation, gate and stale flag. No state write, no slew, no re-anchor yet. The ring clears at `Reset_World_Origin`.
 
 ## Replay results (R3, computed, 2026-10-11; scripts `docs/video-truth/scripts/fuse*.py`)
 | Variant | Hover 72-124 s rms / max (cm) | Moves 124 s+ rms / p90 (cm) |

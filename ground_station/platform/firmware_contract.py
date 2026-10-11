@@ -562,6 +562,21 @@ COMMAND_TABLE: dict[int, CommandSpec] = {
         ),
         notes="Handler Cmd_CtrlSelect (TASK/send_data.c, WP-38). Out-of-range writes are ignored.",
     ),
+    0x2C: CommandSpec(
+        id=0x2C, name="EXT_POS",
+        description="Camera position fix (live camera fusion, shadow mode: innovation logged in g_ext_pos, no state "
+                    "write). idx 0..253 = a fix, idx = age in 10 ms units, value = exact integer code "
+                    "(qx+2048)*4096+(qy+2048), q = round(cm/0.5), EKF earth frame (ano_of.earth_x/y).",
+        params=(
+            CommandParam(254, "delay_ms", "ms", 0, 1000, description="Fixed link delay subtracted from each fix time.",
+                         symbol="g_ext_pos_delay_ms"),
+            CommandParam(255, "on", "bool", 0, 1, description="Fusion on/off. Off at boot; fixes are dropped while off.",
+                         symbol="g_ext_pos_on"),
+        ),
+        safety=SafetyClass(description="Safe at runtime: shadow mode only logs the innovation."),
+        notes="Handler Cmd_ExtPos (TASK/send_data.c); encoder ground_station/comm/ext_pos_encoder.py; "
+              "design docs/video-truth/live_camera_fusion_design_2026-10-11.md. Bad codes are dropped.",
+    ),
 }
 
 

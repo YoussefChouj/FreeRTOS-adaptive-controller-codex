@@ -258,6 +258,13 @@ volatile uint8_t g_ekf_of_fallback = 0U; /* 1=fell back to FIXED  */
  * Default 1 (shadow on). A bad innovation in shadow only clears health,
  * never changes g_of_bias_mode. Position feed stays on mode 2 only. */
 volatile uint8_t g_ekf_of_shadow   = 1U;
+/* External position fix (camera), shadow mode (API/ekf_of.h, CMD 0x2C): innovation telemetry only. */
+volatile uint8_t        g_ext_pos_on       = 0U;
+volatile float          g_ext_pos_delay_ms = 0.0f;
+volatile ext_pos_post_t g_ext_pos_post;
+ext_pos_stat_t          g_ext_pos;
+static ext_pos_ring_t   s_ext_pos_ring;
+static uint32_t         s_ext_pos_seen;
 /* WP-14: active velocity feedback. When 1 AND mode 2 AND healthy,
  * locxsPID/locysPID.FB take KF velocity instead of raw OF. Default 1 (WP-21; was 0). */
 volatile uint8_t g_ekf_of_vel_fb   = 1U;
@@ -407,6 +414,7 @@ void Reset_World_Origin(void)
 	Of_RebaseKfBias(OF_BIAS_TRIM_X_CMS - s_of_bias_x, OF_BIAS_TRIM_Y_CMS - s_of_bias_y);
 	ano_of.earth_x       = 0.0f;
 	ano_of.earth_y       = 0.0f;
+	ext_pos_ring_reset(&s_ext_pos_ring);   /* the buffered path is in the old origin */
 	ano_of.earth_x_ture  = 0.0f;
 	ano_of.earth_y_ture  = 0.0f;
 	ano_of.DISTANCE_X    = 0.0f;
@@ -853,6 +861,28 @@ static void Of_TickKf(u8 of_ok)
 	}
 }
 
+/* External position fix, shadow mode: buffer earth_x/y, score each posted fix against the path at its
+ * capture time. Telemetry only (g_ext_pos); earth_x/y and the EKF are not touched. */
+static void Ext_Pos_Tick(void)
+{
+	uint32_t now_ms = (uint32_t)xTaskGetTickCount() * (uint32_t)portTICK_PERIOD_MS;
+	ext_pos_ring_tick(&s_ext_pos_ring, now_ms, ano_of.earth_x, ano_of.earth_y);
+	if (g_ext_pos_post.seq != s_ext_pos_seen) {
+		float zx, zy;
+		uint32_t t_meas;
+		taskENTER_CRITICAL();
+		zx = g_ext_pos_post.x_cm;
+		zy = g_ext_pos_post.y_cm;
+		t_meas = g_ext_pos_post.t_meas_ms;
+		s_ext_pos_seen = g_ext_pos_post.seq;
+		taskEXIT_CRITICAL();
+		if (g_ext_pos_on) {
+			(void)ext_pos_fix(&g_ext_pos, &s_ext_pos_ring, t_meas, now_ms, zx, zy);
+		}
+	}
+	ext_pos_stale_tick(&g_ext_pos, now_ms);
+}
+
 /* ---- Position integration: Modes 0/1 use raw OF, Mode 2 uses KF ----
  * FIX 2026-09-26: one ground-hold gate for all modes (mode 2 used to
  * integrate on the ground, so armed-idle drift became a takeoff step).
@@ -1120,6 +1150,7 @@ void Update_Data(void)
 		}
 	}
 	Of_IntegratePosition();
+	Ext_Pos_Tick();
 
 	Cal_Step();
 

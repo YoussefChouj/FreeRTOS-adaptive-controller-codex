@@ -30,6 +30,7 @@
 #include "imu_update.h"  /* imu_data, Lin_Acc_X/Y_body */
 #include "calib.h"       /* CalTrim_t, CalHot_t */
 #include "ekf.h"         /* Ekf9_t, ADR-0011 9-state EKF */
+#include "ekf_of.h"      /* ext_pos_* camera fix (CMD 0x2C) */
 #include "usart5.h"      /* UART5 extended-prefix subscribe hook (uart5_address_subscription_cmd) */
 #include "subscribe.h"   /* Subscribe_StreamTick / Subscribe_StreamOwnsUsart3 */
 #include "gs_command.h"
@@ -1237,7 +1238,8 @@ extern volatile uint8_t gs_cmd_tail;
 #define TXN_HISTORY_LEN         16U
 #define CMD_REJECT_UNKNOWN      4U   /* reason byte of a REJECTED transaction result (firmware_contract.py: 4 unknown, 6 interlock) */
 #define CMD_REJECT_INTERLOCK    6U
-#define CMD_ID_LAST_PLAIN       0x1FU  /* ids above this are unknown, except the MRAC element block */
+#define CMD_ID_LAST_PLAIN       0x1FU  /* ids above this are unknown, except the MRAC element block and EXT_POS */
+#define EXT_POS_CMD_ID          0x2CU  /* first free id above MRAC_ELEM_CMD_LAST */
 
 static uint8_t s_transaction_result_buf[64];
 static uint16_t s_transaction_history[TXN_HISTORY_LEN];
@@ -1300,7 +1302,7 @@ static void MracElemParamApply(uint8_t axis, uint8_t field, uint8_t elem, float 
 
 static uint8_t CommandSafetyReject(uint8_t id)
 {
-    if ((id == 0U) || ((id > CMD_ID_LAST_PLAIN) && !MRAC_ELEM_CMD_IS(id))) {
+    if ((id == 0U) || ((id > CMD_ID_LAST_PLAIN) && !MRAC_ELEM_CMD_IS(id) && (id != EXT_POS_CMD_ID))) {
         return CMD_REJECT_UNKNOWN;
     }
     if ((id == 0x06U) && (DroneStatus.FlyMode != FlyMode_SDK)) {
@@ -1866,6 +1868,37 @@ static void Cmd_CtrlSelect(GsCmd_t *c)
     }
 }
 
+/* CMD 0x2C - EXT_POS camera position fix (docs/video-truth/live_camera_fusion_design_2026-10-11.md). Shadow mode:
+ * StabilizerTask (Ext_Pos_Tick) only computes the innovation against the buffered earth path and logs it in g_ext_pos.
+ *   idx 0xFF: g_ext_pos_on (val 0 off, 1 on). Off at boot.
+ *   idx 0xFE: g_ext_pos_delay_ms, the fixed link delay (0..1000 ms).
+ *   idx 0..0xFD: a fix, idx = age in 10 ms units at send time, val = exact integer code from ext_pos_decode.
+ * Fixes are dropped while fusion is off or when the code is not valid. */
+#define EXT_POS_IDX_ON          0xFFU
+#define EXT_POS_IDX_DELAY       0xFEU
+#define EXT_POS_DELAY_MAX_MS    1000.0f
+static void Cmd_ExtPos(GsCmd_t *c)
+{
+    float x_cm, y_cm;
+    uint32_t now_ms, back_ms;
+    if (c->idx == EXT_POS_IDX_ON) {
+        g_ext_pos_on = (c->val >= 0.5f) ? 1U : 0U;
+    } else if (c->idx == EXT_POS_IDX_DELAY) {
+        if (c->val >= 0.0f && c->val <= EXT_POS_DELAY_MAX_MS) {
+            g_ext_pos_delay_ms = c->val;
+        }
+    } else if (g_ext_pos_on && ext_pos_decode(c->val, &x_cm, &y_cm)) {
+        now_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+        back_ms = (uint32_t)c->idx * 10U + (uint32_t)g_ext_pos_delay_ms;
+        taskENTER_CRITICAL();
+        g_ext_pos_post.x_cm = x_cm;
+        g_ext_pos_post.y_cm = y_cm;
+        g_ext_pos_post.t_meas_ms = (now_ms > back_ms) ? (now_ms - back_ms) : 0U;
+        g_ext_pos_post.seq++;
+        taskEXIT_CRITICAL();
+    }
+}
+
 /* CMD 0x18 — force recalibration (ADR-0011).
  * Re-enters cold-cal from the top. Accepted only in GROUND_IDLE and DisArmed.
  * Resets: s_cal_trim, s_cal_hot, g_cal_health, g_estimator_ready, EKF. */
@@ -2035,7 +2068,8 @@ static const GsCmdEntry_t k_gs_cmds[] = {
     GS_CMD_ENTRY(0x1D,                 0x1D,                 Cmd_MracVariant),        /* MRAC_VARIANT */
     GS_CMD_ENTRY(0x1E,                 0x1E,                 Cmd_OfBiasMode),         /* OF_BIAS_MODE */
     GS_CMD_ENTRY(0x1F,                 0x1F,                 Cmd_CtrlSelect),         /* CTRL_SELECT */
-    GS_CMD_ENTRY(MRAC_ELEM_CMD_BASE,   MRAC_ELEM_CMD_LAST,   Cmd_MracElem8)           /* MRAC element, 8-bit index */
+    GS_CMD_ENTRY(MRAC_ELEM_CMD_BASE,   MRAC_ELEM_CMD_LAST,   Cmd_MracElem8),          /* MRAC element, 8-bit index */
+    GS_CMD_ENTRY(EXT_POS_CMD_ID,       EXT_POS_CMD_ID,       Cmd_ExtPos)              /* EXT_POS */
 };
 
 static void GsCmd_Dispatch(GsCmd_t *c)

@@ -305,3 +305,102 @@ void EkfOf_ResetPos(EkfOf_t *e)
     e->x[k_axis_idx[0][EKF_OF_L_POS]] = 0.0f;  /* pos_x */
     e->x[k_axis_idx[1][EKF_OF_L_POS]] = 0.0f;  /* pos_y */
 }
+
+/* ---- External position fix (camera), shadow mode (see ekf_of.h) ---- */
+void ext_pos_ring_reset(ext_pos_ring_t *r)
+{
+    r->head  = 0U;
+    r->count = 0U;
+}
+
+/* One sample every EXT_POS_RING_DT_MS (the 200 Hz caller hits every 10th tick). */
+void ext_pos_ring_tick(ext_pos_ring_t *r, uint32_t now_ms, float ex, float ey)
+{
+    if (r->count > 0U && (int32_t)(now_ms - r->t[r->head]) < (int32_t)EXT_POS_RING_DT_MS) {
+        return;
+    }
+    r->head = (uint8_t)((r->head + 1U) % EXT_POS_RING_N);
+    r->x[r->head] = ex;
+    r->y[r->head] = ey;
+    r->t[r->head] = now_ms;
+    if (r->count < EXT_POS_RING_N) {
+        r->count++;
+    }
+}
+
+/* Earth position at t_ms: linear between the two samples around it, the newest sample when t_ms is after it.
+ * Returns 0 when the buffer is empty or t_ms is older than the oldest sample. */
+uint8_t ext_pos_ring_at(const ext_pos_ring_t *r, uint32_t t_ms, float *ex, float *ey)
+{
+    uint8_t k, a, b;
+    if (r->count == 0U) {
+        return 0U;
+    }
+    b = r->head;
+    if ((int32_t)(t_ms - r->t[b]) >= 0) {
+        *ex = r->x[b];
+        *ey = r->y[b];
+        return 1U;
+    }
+    for (k = 1U; k < r->count; k++) {
+        a = (uint8_t)((r->head + EXT_POS_RING_N - k) % EXT_POS_RING_N);
+        if ((int32_t)(t_ms - r->t[a]) >= 0) {
+            float w = (float)(int32_t)(t_ms - r->t[a]) / (float)(int32_t)(r->t[b] - r->t[a]);
+            *ex = r->x[a] + w * (r->x[b] - r->x[a]);
+            *ey = r->y[a] + w * (r->y[b] - r->y[a]);
+            return 1U;
+        }
+        b = a;
+    }
+    return 0U;
+}
+
+/* Innovation of one fix (z, cm, EKF earth frame) taken at t_meas_ms. Gated fixes still record e_x/e_y. */
+uint8_t ext_pos_fix(ext_pos_stat_t *s, const ext_pos_ring_t *r, uint32_t t_meas_ms, uint32_t now_ms, float zx, float zy)
+{
+    float px, py;
+    int32_t age = (int32_t)(now_ms - t_meas_ms);
+    s->age_ms = (uint16_t)((age < 0) ? 0 : ((age > 65535) ? 65535 : age));
+    if (!ext_pos_ring_at(r, t_meas_ms, &px, &py)) {
+        s->n_old++;
+        return EXT_POS_FIX_OLD;
+    }
+    s->e_x = zx - px;
+    s->e_y = zy - py;
+    if (s->e_x * s->e_x + s->e_y * s->e_y > EXT_POS_GATE_CM * EXT_POS_GATE_CM) {
+        s->n_rej++;
+        if (s->rej_run < 255U) {
+            s->rej_run++;
+        }
+        return EXT_POS_FIX_GATED;
+    }
+    s->n_ok++;
+    s->rej_run = 0U;
+    s->last_ok_ms = now_ms;
+    s->stale = 0U;
+    return EXT_POS_FIX_OK;
+}
+
+void ext_pos_stale_tick(ext_pos_stat_t *s, uint32_t now_ms)
+{
+    if (s->n_ok == 0U || (int32_t)(now_ms - s->last_ok_ms) > (int32_t)EXT_POS_STALE_MS) {
+        s->stale = 1U;
+    }
+}
+
+/* Wire value: an exact integer code = (qx + 2048) * 4096 + (qy + 2048), q = round(cm / EXT_POS_Q_CM) in
+ * [-2048, 2047]. An integer below 2^24 survives the float32 field bit-exact (no NaN patterns). 0 = bad code. */
+uint8_t ext_pos_decode(float val, float *x_cm, float *y_cm)
+{
+    uint32_t c;
+    if (!(val >= 0.0f && val < 16777216.0f)) {
+        return 0U;
+    }
+    c = (uint32_t)val;
+    if ((float)c != val) {
+        return 0U;
+    }
+    *x_cm = (float)((int32_t)(c >> 12) - 2048) * EXT_POS_Q_CM;
+    *y_cm = (float)((int32_t)(c & 0xFFFU) - 2048) * EXT_POS_Q_CM;
+    return 1U;
+}
