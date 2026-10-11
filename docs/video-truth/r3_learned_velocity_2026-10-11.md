@@ -41,13 +41,28 @@ Replay with flow += k * (omega_z x r) on of1 and of2 (fit t >= 124 s, hover slop
 | variant | rms | aff | rev med | rev p90 | hover (cm/s) |
 |---|---|---|---|---|---|
 | FW logged (gate 5) | 47.1 | 34.4 | 22.6 | 67.7 | 0.45 |
-| replay gate 10, k = 0 | **32.4** | 20.8 | 12.0 | 30.4 | 0.44 |
-| k = 0.5 | 33.2 | 20.3 | 12.1 | 34.8 | 0.44 |
-| k = 1.0 | 35.0 | 20.5 | 12.2 | 42.3 | 0.44 |
-| k = -1.0 (sign check) | 33.3 | 23.9 | 12.2 | 29.1 | 0.46 |
+| replay gate 10, k = 0 | **32.4** | 20.8 | 17.8 | 38.5 | 0.44 |
+| k = 0.5 | 33.2 | 20.3 | 18.0 | 39.0 | 0.44 |
+| k = 1.0 | 35.0 | 20.5 | 18.1 | 43.0 | 0.44 |
+| k = -1.0 (sign check) | 33.3 | 23.9 | 17.9 | 41.5 | 0.46 |
 
 The lever correction does not reduce position error, and the hover slope is yaw-independent in this window.
 The ~10 cm offset is a computed hint only: measure the OF sensor offset from the CG on the airframe.
+
+## 4. R1 ranked items, replay sweep (`sweep.py`, in-sample, R3 only, gate 10 base)
+
+| variant | rms | aff | rev med | rev p90 | hover (cm/s) |
+|---|---|---|---|---|---|
+| base | 32.4 | 20.8 | 17.8 | 38.5 | 0.44 |
+| accel bias frozen (q_ba 0) | 32.6 | 20.8 | 18.2 | 38.4 | 0.46 |
+| q_bof 1e-6 / 1e-4 | 32.5 / 31.5 | 21.8 / 20.8 | 17.3 / 17.7 | 39.2 / 39.8 | 0.44 / 0.44 |
+| q_ba 0 + q_bof 1e-6 | 32.3 | 21.7 | 17.3 | 39.0 | 0.44 |
+| flow_scale 0.90 / 0.95 / 1.05 | 30.2 / 30.8 / 33.6 | 18.6 / 19.6 / 22.6 | 15.9 / 16.3 / 20.0 | 34.5 / 36.5 / 40.1 | 0.41 / 0.42 / 0.50 |
+| of1 off (R_of1 0) | 570.2 | 229.4 | 344.4 | 649.2 | 8.30 |
+| ToF height x cos(pit) cos(rol) | 32.4 | 20.8 | 17.8 | 38.5 | 0.44 |
+
+Freezing accel bias does nothing; height tilt correction has no effect (height enters only the gyro term).
+Flow scale 0.90 is a small in-sample gain (needs R4 to confirm). of1 is essential. No onboard variant gets near 0.17 cm/s.
 
 ## Verdict
 With one flight nothing learned beats the EKF on position. The gyro-residual velocity gain (16-24%) does not carry
