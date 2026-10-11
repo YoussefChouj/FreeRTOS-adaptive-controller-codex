@@ -18,7 +18,10 @@ hover rms 10.9->4.7 cm, moves 31->16.5 cm; hold-out learns no lasting trim, so t
 The 0.3 s lag in moves is a camera/telemetry sync offset (~0.25 s, 4882068); with it fixed, moves rms is 11.7 cm.
 R4 must time-stamp one sharp event (tap or LED) on both camera and telemetry.
 EXT_POS shadow mode (6e3b00b): CMD 0x2C uplinks a camera fix; firmware logs the innovation `g_ext_pos.*` only, no
-state write, off at boot. Encoder `ground_station/comm/ext_pos_encoder.py`. Next: `live_tracker.py` (1 fix/s).
+state write, off at boot. Encoder `ground_station/comm/ext_pos_encoder.py`.
+Live tracker dry run (985dadb, a6d319e): R3 red-ring mean-shift run online, matches offline R3 at 0.7 px median
+(measured, consistency only); height = telemetry Z + ring offset. Sends nothing yet. Latency, link delay and ring
+offset UNMEASURED (R4).
 
 ## Next 3 actions
 1. Lab, drone disarmed, uVision closed: `python -m ground_station.flashtool.rebuild_and_flash --yes`.
