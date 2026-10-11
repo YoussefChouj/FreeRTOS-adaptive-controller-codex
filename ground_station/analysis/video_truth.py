@@ -1257,12 +1257,14 @@ def hold_windows(t, des, min_s: float = 20.0) -> list:
 
 
 def drift_score(name: str, cam: str = "docs/video-truth/cam_r4_lenswave_2026-10-11.json", win_s: float = 60.0,
-                yaw_dps: float = 15.0, min_hold_s: float = 20.0) -> dict:
+                yaw_dps: float = 15.0, min_hold_s: float = 20.0, ests: dict | None = None, tag: str = "",
+                smooth_s: float = 1.0) -> dict:
     """Score one truth4 flight. The estimate error e = est - truth (both from take-off, est rotated by truth4) is
     split by what the drone was doing: `yaw` (|yaw rate| > yaw_dps), `hold` (hands-off: constant Des, see
     hold_windows) and `move` (the rest); the net error each class adds is the sum of its increments, so the
     classes add up to the end error. Drift = |e(t+win_s) - e(t)| over sliding windows. Along = horizontal
-    camera->pad direction (cast error from a height error lands here), across = its normal (height-free)."""
+    camera->pad direction (cast error from a height error lands here), across = its normal (height-free).
+    `ests` scores other estimates ({name: (N, 2) m on the truth4 rows}, e.g. fuse4) into truth4_score<tag>.json."""
     vd = Path(f"logs/video_truth/{name}")
     rows = np.genfromtxt(vd / "truth4.csv", delimiter=",", names=True)
     summ = json.loads((vd / "truth4.json").read_text())
@@ -1297,15 +1299,18 @@ def drift_score(name: str, cam: str = "docs/video-truth/cam_r4_lenswave_2026-10-
         out["holds"].append({"t0": a, "t1": b, "dur_s": float(t[w][-1] - t[w][0]), "truth_disp_cm": float(np.hypot(*d[-1]) * 100),
                              "truth_max_cm": float(np.hypot(*d.T).max() * 100),
                              "disp_along_across_cm": (d[-1] @ ax * 100).round(1).tolist()})
-    for est in R4_EST:
-        e = np.c_[rows[f"{est}_x"], rows[f"{est}_y"]] - truth
+    for est, xy in (ests or {k: np.c_[rows[f"{k}_x"], rows[f"{k}_y"]] for k in R4_EST}).items():
+        e = xy - truth
         de = np.diff(e, axis=0)
         net = {q: de[cls[1:] == q].sum(0) for q in ("hold", "move", "yaw")}
         j = np.searchsorted(t, t + win_s)
         i = np.flatnonzero(j < len(t))
         g = e[j[i]] - e[i]
         gm = np.hypot(*g.T) * 100
-        o = {"rms_cm": summ["est"][est]["rms_cm"], "rot_deg": summ["est"][est]["rot_deg"],
+        ks = max(1, int(round(smooth_s / np.median(np.diff(t)))))      # drift of the 1 s mean: jitter is not drift
+        es = np.c_[[np.convolve(e[:, a], np.ones(ks), "same") / np.convolve(np.ones(len(e)), np.ones(ks), "same") for a in (0, 1)]].T
+        gs = np.hypot(*(es[j[i]] - es[i]).T) * 100
+        o = {"rms_cm": float(np.sqrt(np.mean(np.sum(e ** 2, 1))) * 100), "rot_deg": summ["est"].get(est, {}).get("rot_deg"),
              "rms_along_across_cm": (np.sqrt(np.mean((e @ ax) ** 2, 0)) * 100).round(1).tolist(),
              "end_cm": float(np.hypot(*e[-1]) * 100),
              "net_cm": {q: float(np.hypot(*v) * 100) for q, v in net.items()},
@@ -1313,10 +1318,76 @@ def drift_score(name: str, cam: str = "docs/video-truth/cam_r4_lenswave_2026-10-
         if len(i):
             o.update({f"drift{int(win_s)}_med_cm": float(np.median(gm)), f"drift{int(win_s)}_p90_cm": float(np.percentile(gm, 90)),
                       f"drift{int(win_s)}_max_cm": float(gm.max()), "frac_le_10cm": float((gm <= 10).mean()),
-                      "drift_across_p90_cm": float(np.percentile(np.abs(g @ ax[:, 1]) * 100, 90))})
+                      "drift_across_p90_cm": float(np.percentile(np.abs(g @ ax[:, 1]) * 100, 90)),
+                      f"drift{int(win_s)}s_p90_cm": float(np.percentile(gs, 90)), f"drift{int(win_s)}s_max_cm": float(gs.max()),
+                      "frac_s_le_10cm": float((gs <= 10).mean()), "hf_rms_cm": float(np.sqrt(np.mean(np.sum((e - es) ** 2, 1))) * 100)})
         out["est"][est] = o
-    (vd / "truth4_score.json").write_text(json.dumps(out, indent=1))
+    (vd / f"truth4_score{tag}.json").write_text(json.dumps(out, indent=1))
     return out
+
+
+# ---------------------------------------------------------------- R4: live camera fusion replay
+# Ring and gate as API/ekf_of.h; slew, gain and the re-anchor rule are the PROPOSED closed loop
+# (docs/video-truth/live_camera_fusion_design_2026-10-11.md): gain 0.1 at 10 fixes/s ~ a 1 s time constant.
+EXT_POS = {"ring_n": 32, "ring_dt": 0.05, "gate_m": 0.40, "slew_m": 0.03, "gain": 0.1, "rej_n": 3}
+
+
+def ext_pos_replay(t, est, fix_t, fix_xy, lat_s: float, p: dict = EXT_POS) -> tuple[np.ndarray, dict]:
+    """The firmware EXT_POS path closed: a fix of the position at fix_t reaches the drone lat_s later; its
+    innovation e = z - (ring(fix_t) + c) is taken against the raw estimate buffered every ring_dt for ring_n samples
+    (linear between samples, the newest after it) plus the running correction c. |e| > gate is dropped unless
+    rej_n gated fixes came in a row, then accepted through the slew clamp until a fix is back inside the gate
+    (slewed re-anchor). An accepted fix moves c by gain*e, at most slew. Returns est + c(t) and the fix counts."""
+    rt, rx, c = [], [], np.zeros(2)
+    n = {"ok": 0, "gated": 0, "old": 0, "reanchor": 0}
+    out, rej, k, arr = np.empty_like(est), 0, 0, np.asarray(fix_t) + lat_s
+    for i, ti in enumerate(t):
+        if not rt or ti - rt[-1] >= p["ring_dt"] - 1e-9:
+            rt.append(ti), rx.append(est[i].copy())
+            if len(rt) > p["ring_n"]:
+                rt.pop(0), rx.pop(0)
+        while k < len(arr) and arr[k] <= ti:
+            tm = fix_t[k]
+            if tm < rt[0]:
+                n["old"] += 1
+            else:
+                j = int(np.searchsorted(rt, tm, side="right"))
+                pm = rx[-1] if j >= len(rt) else rx[j - 1] + (tm - rt[j - 1]) / (rt[j] - rt[j - 1]) * (rx[j] - rx[j - 1])
+                e = fix_xy[k] - (pm + c)
+                take = np.hypot(*e) <= p["gate_m"]
+                if take:
+                    rej, n["ok"] = 0, n["ok"] + 1
+                else:
+                    rej, n["gated"] = rej + 1, n["gated"] + 1
+                    take = rej >= p["rej_n"]
+                    n["reanchor"] += int(take)
+                if take:
+                    d = p["gain"] * e
+                    c = c + d * min(1.0, p["slew_m"] / max(np.hypot(*d), 1e-12))
+            k += 1
+        out[i] = est[i] + c
+    return out, n
+
+
+def fuse4(name: str, rate_hz: float = 10.0, lat_s: float = 0.3, sd_m: float | None = None, drop: float | None = None,
+          gain: float = EXT_POS["gain"], seed: int = 0) -> dict:
+    """Replay the closed-loop camera fusion on one truth4 flight: fixes at rate_hz = truth + noise (default sd: the
+    flight's on-pad jitter / 1.18, the Rayleigh median), a drop rate (default: the tracker's lost fraction), lat_s
+    capture-to-drone delay, fed to ext_pos_replay on the earth estimate; earth and fused are scored by
+    drift_score. The fixes come from the same camera as the truth, so this scores the fusion, not the camera."""
+    vd = Path(f"logs/video_truth/{name}")
+    rows = np.genfromtxt(vd / "truth4.csv", delimiter=",", names=True)
+    summ = json.loads((vd / "truth4.json").read_text())
+    t, truth, earth = rows["t_tel"], np.c_[rows["truth_x"], rows["truth_y"]], np.c_[rows["earth_x"], rows["earth_y"]]
+    rng = np.random.default_rng(seed)
+    sd = summ["pad_jitter_cm"] / 100 / 1.18 if sd_m is None else sd_m
+    ft = np.arange(t[0], t[-1], 1.0 / rate_hz)
+    ft = ft[rng.random(len(ft)) >= (summ["coral_lost_frac"] if drop is None else drop)]
+    z = np.c_[np.interp(ft, t, truth[:, 0]), np.interp(ft, t, truth[:, 1])] + rng.normal(0.0, sd, (len(ft), 2))
+    fused, n = ext_pos_replay(t, earth, ft, z, lat_s, dict(EXT_POS, gain=gain))
+    r = drift_score(name, ests={"earth": earth, "fused": fused}, tag=f"_fuse_{int(lat_s * 1000)}ms")
+    r["fuse"] = {"rate_hz": rate_hz, "lat_s": lat_s, "sd_cm": sd * 100, "gain": gain, "counts": n, "seed": seed}
+    return r
 
 
 def main(argv=None):
@@ -1377,6 +1448,11 @@ def main(argv=None):
                     "(0 = whole flight; a later estimate jump corrupts a whole-flight fit)")
     sc = sub.add_parser("score4", help="drift score of truth4 flights (hold/move/yaw split, 60 s windows)")
     sc.add_argument("names", nargs="+"); sc.add_argument("--win", type=float, default=60.0)
+    fu = sub.add_parser("fuse4", help="replay the PROPOSED closed-loop camera fusion (EXT_POS) on truth4 flights")
+    fu.add_argument("names", nargs="+"); fu.add_argument("--rate", type=float, default=10.0)
+    fu.add_argument("--lat", type=float, nargs="+", default=[0.3], help="capture-to-drone delay(s), s")
+    fu.add_argument("--gain", type=float, default=EXT_POS["gain"]); fu.add_argument("--seed", type=int, default=0)
+    fu.add_argument("--sd-cm", type=float, default=None, help="fix noise sd per axis (default: on-pad jitter / 1.18)")
     a = ap.parse_args(argv)
     if a.cmd == "aruco":
         r = aruco_scan(a.video, a.step, a.t0, a.t1, out=a.out)
@@ -1389,6 +1465,16 @@ def main(argv=None):
                   f"land {r['truth_land_cm'] or float('nan'):5.1f} | earth rms {e['rms_cm']:5.1f} d60 med/p90/max "
                   f"{e.get('drift60_med_cm', float('nan')):5.1f}/{e.get('drift60_p90_cm', float('nan')):5.1f}/{e.get('drift60_max_cm', float('nan')):5.1f} "
                   f"rate hold/move/yaw " + "/".join(f"{e['net_rate_cm_s'][q]:.2f}" for q in ("hold", "move", "yaw")))
+    elif a.cmd == "fuse4":
+        for n in a.names:
+            for lat in a.lat:
+                r = fuse4(n, a.rate, lat, None if a.sd_cm is None else a.sd_cm / 100, gain=a.gain, seed=a.seed)
+                print(f"{n:24s} lat {lat:.2f} sd {r['fuse']['sd_cm']:.1f} " + " | ".join(
+                    f"{k} rms {e['rms_cm']:5.1f} d60 p90/max {e.get('drift60_p90_cm', float('nan')):5.1f}/"
+                    f"{e.get('drift60_max_cm', float('nan')):5.1f} 1s-mean {e.get('drift60s_p90_cm', float('nan')):5.1f}/"
+                    f"{e.get('drift60s_max_cm', float('nan')):5.1f} hf {e.get('hf_rms_cm', float('nan')):4.1f} "
+                    f"hold {e['net_rate_cm_s']['hold']:.2f} cm/s"
+                    for k, e in r["est"].items()) + f" | {r['fuse']['counts']}")
     elif a.cmd == "truth4":
         r = r4_truth(f"logs/vofa/{a.name}", f"logs/video_truth/{a.name}", a.cam, a.refine, a.coral_step, a.rot_s, out=f"logs/video_truth/{a.name}/truth4")
         print(json.dumps(r["summary"], indent=1))

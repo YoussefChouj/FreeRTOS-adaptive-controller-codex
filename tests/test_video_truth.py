@@ -375,3 +375,26 @@ def test_hold_windows_keeps_long_constant_setpoint_runs():
     des = np.zeros((len(t), 2)); des[t >= 30] = [5, 0]; des[(t >= 50) & (t < 55)] = [9, 9]
     w = vt.hold_windows(t, des, min_s=20.0)
     assert [(round(a), round(b)) for a, b in w] == [(0, 30), (55, 100)]
+
+
+def test_ext_pos_replay_cancels_drift_through_the_delay():
+    t = np.arange(0, 60, 0.02)
+    truth = np.c_[0.3 * np.sin(t / 3), np.zeros_like(t)]
+    est = truth + np.c_[0.01 * t, -0.005 * t]                          # 1 cm/s, 0.5 cm/s drift
+    ft = np.arange(0, 60, 0.1)
+    z = np.c_[np.interp(ft, t, truth[:, 0]), np.interp(ft, t, truth[:, 1])]
+    fused, n = vt.ext_pos_replay(t, est, ft, z, 0.3)
+    assert n["gated"] == 0 and n["ok"] > 500
+    assert np.abs(fused - truth)[t > 10].max() < 0.02                   # bounded by drift rate x time constant
+    assert np.abs(est - truth)[-1].max() > 0.5
+
+
+def test_ext_pos_replay_gates_a_jump_then_reanchors_slewed():
+    t = np.arange(0, 20, 0.02)
+    est = np.zeros((len(t), 2))
+    ft = np.arange(0, 20, 0.1)
+    z = np.zeros((len(ft), 2)); z[ft >= 10] = [1.0, 0.0]                # truth jumps 1 m at 10 s
+    fused, n = vt.ext_pos_replay(t, est, ft, z, 0.0)
+    assert n["gated"] >= 3 and n["reanchor"] >= 1
+    assert np.abs(np.diff(fused[:, 0])).max() <= vt.EXT_POS["slew_m"] + 1e-9
+    assert abs(fused[-1, 0] - 1.0) < 0.05
