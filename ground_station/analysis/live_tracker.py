@@ -417,9 +417,8 @@ def replay(name: str, links=(0.15, 0.3), delay_err_s: float = 0.0, period: float
     xy -= np.median(xy[pad], axis=0)                      # truth4 is relative to the pad spot too
     earth = np.c_[tab["earth_x"], tab["earth_y"]]
     out = {"name": name, "tracker": st, "circular": True, "delay_err_s": delay_err_s, "gain": gain,
-           "slew_cm": slew_m * 100, "links": {}}
-    sfx = ("" if gain == vt.EXT_POS["gain"] else f"_g{round(gain * 100):03d}") + (
-        "" if slew_m == vt.EXT_POS["slew_m"] else f"_s{round(slew_m * 100):03d}")
+           "slew_cm": slew_m * 100, "spread_ms": vt.EXT_POS["spread_s"] * 1000, "links": {}}
+    sfx = vt.ext_pos_sfx(gain, slew_m, vt.EXT_POS["spread_s"])
     for L in links:
         arr = t_read + o + L
         fused, n = vt.ext_pos_replay(tt, earth, arr - age - (L + delay_err_s), xy, 0.0,

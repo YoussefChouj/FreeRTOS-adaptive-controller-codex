@@ -396,5 +396,5 @@ def test_ext_pos_replay_gates_a_jump_then_reanchors_slewed():
     z = np.zeros((len(ft), 2)); z[ft >= 10] = [1.0, 0.0]                # truth jumps 1 m at 10 s
     fused, n = vt.ext_pos_replay(t, est, ft, z, 0.0)
     assert n["gated"] >= 3 and n["reanchor"] >= 1
-    assert np.abs(np.diff(fused[:, 0])).max() <= vt.EXT_POS["slew_m"] + 1e-9
+    assert np.abs(np.diff(fused[:, 0])).max() <= vt.EXT_POS["slew_m"] / vt.EXT_POS["spread_s"] * 0.02 + 1e-9
     assert abs(fused[-1, 0] - 1.0) < 0.05
