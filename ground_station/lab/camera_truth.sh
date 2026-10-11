@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Camera-truth session (R3 recipe): dashboard service + WiFi stream log (drift_rc preset) + phone camera video.
+# Camera-truth session (R3 recipe): dashboard service + WiFi stream log (preset arg 3, default drift_rc) + phone camera video.
 #   bash ground_station/lab/camera_truth.sh start <name>   # drone DISARMED; operator confirmed preset + name first
 #   bash ground_station/lab/camera_truth.sh stop  <name>   # after landing + disarm
 #   bash ground_station/lab/camera_truth.sh check <name>   # rows per slot, video size
 # WiFi only, never the SWD probe. Video: phone camera id 4, zoom 0.6, 1080p30 (the R3 calibration pose).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-cmd=${1:?start|stop|check}; name=${2:?session name}; api=http://127.0.0.1:8081; vid=logs/video_truth/$name
+cmd=${1:?start|stop|check}; name=${2:?session name}; preset=${3:-drift_rc}; api=http://127.0.0.1:8081; vid=logs/video_truth/$name
 post() { curl -s -m 10 -X POST -H 'Content-Type: application/json' -d "$2" "$api$1"; echo; }
 up() { curl -s -m 2 -o /dev/null -w '%{http_code}' "$api/health" | grep -q 200; }
 case $cmd in
@@ -16,7 +16,7 @@ start)
     nohup python -m ground_station.service --port 8081 > "$vid/service.log" 2>&1 &
     for i in $(seq 30); do up && break; sleep 1; done; up || { echo "service did not come up, see $vid/service.log"; exit 1; }
   fi
-  body=$(python -c "import json;p=json.load(open('ground_station/vofa_studio/presets/drift_rc.json'));print(json.dumps({'slots':[{'slot':i+1,'vars':s['vars'],'rate':s['rate'],'name':'drift_rc'} for i,s in enumerate(p['slots'])]}))")
+  body=$(python -c "import json;p=json.load(open('ground_station/vofa_studio/presets/$preset.json'));print(json.dumps({'slots':[{'slot':i+1,'vars':s['vars'],'rate':s['rate'],'name':'$preset'} for i,s in enumerate(p['slots'])]}))")
   post /api/streams/apply "$body"
   post /api/streams/log/start "{\"name\":\"$name\",\"mode\":\"unlimited\"}"
   post /api/recording/start "{\"requested_by\":\"operator\",\"label\":\"$name\",\"reason\":\"camera-truth session\"}"
