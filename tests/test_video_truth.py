@@ -350,3 +350,21 @@ def test_flight_window_uses_the_lift_for_a_disarmed_carry():
     off = np.zeros(len(h), bool)
     fly, armed, i_to, i_end = vt.flight_window(off, off, h)
     assert (i_to, i_end) == (2, 4) and fly.sum() == 3
+
+
+def test_ring_height_recovers_the_pad_point_height():
+    rvec, R, t = _pose()
+    uv = _project([[0.0, 0.0, 0.056]], rvec, t)
+    assert vt.ring_height(uv, K, DIST, R, t) == pytest.approx(0.056, abs=1e-4)
+
+
+def test_coral_mask_wraps_the_red_hue():
+    hsv = np.array([[[5, 200, 200], [176, 200, 200], [90, 200, 200], [5, 40, 200]]], np.uint8)
+    assert vt.coral_mask(hsv).tolist() == [[True, True, False, False]]
+
+
+def test_touchdown_video_finds_the_first_still_frame():
+    t = np.arange(0, 20, 0.1)
+    xy = np.c_[0.1 * np.sin(3 * t), 0.1 * np.cos(2 * t)]
+    xy[t >= 12.0] = [0.2, 0.3]
+    assert vt.touchdown_video(t, xy, guess=11.0) == pytest.approx(12.0, abs=0.11)

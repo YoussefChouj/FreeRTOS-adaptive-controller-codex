@@ -32,6 +32,7 @@ MIN_AREA = 30                                      # px, smallest blob kept
 DETECTOR_PX = 0.15                                 # px per axis, SB corner error on a perfect render (measured 0.12-0.14 mean)
 CHARUCO_DICT, CHARUCO_MARKER = "DICT_5X5_100", 0.75   # marker side / square side
 CHARUCO_MIN = 12                                   # corners a partial ChArUco view needs to be used
+ARUCO_DICT = "DICT_4X4_50"                         # R4 markers: pad id0, top id1, loose floor/wall 2-5
 X_CM, Y_CM, Z_M = "Ctrler.locxPID.FB", "Ctrler.locyPID.FB", "Ctrler.Z_posPID.FB"
 X_SP, Y_SP = "Ctrler.locxPID.Des", "Ctrler.locyPID.Des"   # position setpoints, estimator frame (cm)
 X_V, Y_V = "Ctrler.locxsPID.FB", "Ctrler.locysPID.FB"     # velocity estimate, estimator frame (cm/s)
@@ -56,7 +57,7 @@ def board_image(squares: tuple[int, int], square_px: int = 140, margin_px: int =
 
 
 # ---------------------------------------------------------------- geometry
-def _spread_cm(objs, imgs, size, dist_m=4.0) -> dict | None:
+def _spread_cm(objs, imgs, size, dist_m=4.0, flags=0, K0=None) -> dict | None:
     """Lens-model repeatability: calibrate 3 interleaved thirds of the views and compare their rays, scaled to `dist_m`
     (common offset removed: the floor pose absorbs it), inside the region the board covered. Outside it the polynomial
     distortion is extrapolated and unbounded: that part is what coverage_6x6 reports."""
@@ -69,7 +70,8 @@ def _spread_cm(objs, imgs, size, dist_m=4.0) -> dict | None:
                     np.float32).reshape(-1, 1, 2)
     rays = []
     for s in range(3):
-        _, K, d, _, _ = cv2.calibrateCamera(objs[s::3], imgs[s::3], size, None, None)
+        _, K, d, _, _ = cv2.calibrateCamera(objs[s::3], imgs[s::3], size, None if K0 is None else K0.copy(), None,
+                                            flags=flags)
         rays.append(cv2.undistortPoints(grid, K, d).reshape(-1, 2))
     e = np.concatenate([np.linalg.norm((a - b) - (a - b).mean(0), axis=1)
                         for a, b in ((rays[0], rays[1]), (rays[0], rays[2]), (rays[1], rays[2]))]) * dist_m * 100
@@ -123,6 +125,208 @@ def calibrate(video: str, board: tuple[int, int], square: float, step: int = 10,
     return {"K": K.tolist(), "dist": dist.ravel().tolist(), "rms_px": float(rms), "frames": len(objs),
             "frames_found": found, "size": list(size), "worst_frame_px": max(per), "coverage_6x6": cells / 36,
             "spread_cm": _spread_cm(objs, imgs, size)}
+
+
+def aruco_detector(dict_name: str = ARUCO_DICT):
+    a = _cv2().aruco
+    p = a.DetectorParameters()
+    p.cornerRefinementMethod = a.CORNER_REFINE_SUBPIX    # sub-pixel corners: the lens fit and the ~29 px top marker need them
+    return a.ArucoDetector(a.getPredefinedDictionary(getattr(a, dict_name)), p)
+
+
+def aruco_scan(video: str, step: int = 1, t0: float = 0.0, t1: float | None = None, dict_name: str = ARUCO_DICT,
+               out: str | None = None) -> dict:
+    """Corners of every ArUco marker in every `step`-th frame between t0 and t1 s (video time). Returns {"t": (n,) s,
+    "c<id>": (n, 4, 2) px, NaN where that id was not seen}; `out` saves it as .npz (a scan is minutes of decoding,
+    what follows is seconds)."""
+    cv2 = _cv2()
+    det, cap = aruco_detector(dict_name), cv2.VideoCapture(video)
+    if t0:
+        cap.set(cv2.CAP_PROP_POS_MSEC, t0 * 1000)
+    ts, seen, i = [], {}, -1
+    while cap.grab():
+        i += 1
+        t = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
+        if t1 is not None and t > t1:
+            break
+        if i % step:
+            continue
+        c, ids, _ = det.detectMarkers(cv2.cvtColor(cap.retrieve()[1], cv2.COLOR_BGR2GRAY))
+        for cc, m in zip(c, ids.ravel() if ids is not None else []):
+            seen.setdefault(int(m), {})[len(ts)] = cc.reshape(4, 2)
+        ts.append(t)
+    res = {"t": np.array(ts)}
+    for m, d in sorted(seen.items()):
+        a = np.full((len(ts), 4, 2), np.nan, np.float32)
+        a[list(d)] = np.array(list(d.values()))
+        res[f"c{m}"] = a
+    if out:
+        np.savez_compressed(out, **res)
+    return res
+
+
+def marker_obj(side: float) -> np.ndarray:
+    """ArUco corner order (TL, TR, BR, BL) in the marker plane, centred (the SOLVEPNP_IPPE_SQUARE layout)."""
+    h = side / 2
+    return np.array([[-h, h, 0], [h, h, 0], [h, -h, 0], [-h, -h, 0]], np.float32)
+
+
+def marker_views(c, size, max_views: int = 150, min_px: float = 40.0, max_move_px: float = 2.0) -> np.ndarray:
+    """Indices of sharp, diverse views of one moving marker: seen in both neighbouring scan frames and moved less than
+    `max_move_px` per corner to each (a hand-waved marker blurs), side >= `min_px`, then farthest-point sampled over
+    image position and the two foreshortening ratios (opposite-edge length differences = tilt), so the 4-point views
+    cover the frame and the tilts that fix the focal length."""
+    ok = ~np.isnan(c[:, 0, 0])
+    move = np.full(len(c), np.inf)
+    both = ok[1:-1] & ok[:-2] & ok[2:]
+    m = np.maximum(np.abs(c[1:-1] - c[:-2]).max(axis=(1, 2)), np.abs(c[1:-1] - c[2:]).max(axis=(1, 2)))
+    move[1:-1][both] = m[both]
+    e = np.linalg.norm(np.roll(c, -1, axis=1) - c, axis=2)                  # edges TL-TR, TR-BR, BR-BL, BL-TL
+    side = np.nanmean(e, axis=1)
+    cand = np.flatnonzero((move < max_move_px) & (side >= min_px))
+    if len(cand) == 0:
+        return cand
+    ctr = c[cand].mean(axis=1) / np.asarray(size, float)
+    tilt = np.c_[(e[cand, 0] - e[cand, 2]) / (e[cand, 0] + e[cand, 2]), (e[cand, 1] - e[cand, 3]) / (e[cand, 1] + e[cand, 3])]
+    f = np.c_[ctr, tilt * 4.0]                                              # 0.25 foreshortening ~ a frame width apart
+    pick, d = [int(np.argmax(side[cand]))], np.full(len(cand), np.inf)
+    while len(pick) < min(max_views, len(cand)):
+        d = np.minimum(d, np.linalg.norm(f - f[pick[-1]], axis=1))
+        pick.append(int(np.argmax(d)))
+    return cand[np.sort(pick)]
+
+
+def marker_calibrate(scan: dict, mid: int, side: float, size, f0: float = 1000.0, max_views: int = 150,
+                     fix_k3: bool = True, **kw) -> dict:
+    """Lens model from one hand-waved square marker (4 corners per view). k3 fixed by default: 4-point views cannot
+    hold the 6th-order term. Views with a reprojection error > 3x the median are dropped once and the fit repeated."""
+    cv2 = _cv2()
+    c = scan[f"c{mid}"]
+    keep = marker_views(c, size, max_views, **kw)
+    if len(keep) < 10:
+        raise SystemExit(f"only {len(keep)} sharp views of id{mid}; need >= 10")
+    obj = marker_obj(side)
+    K0 = np.array([[f0, 0, size[0] / 2], [0, f0, size[1] / 2], [0, 0, 1]], float)
+    flags = cv2.CALIB_USE_INTRINSIC_GUESS | (cv2.CALIB_FIX_K3 if fix_k3 else 0)
+    for _ in range(2):
+        objs, imgs = [obj] * len(keep), [c[k].astype(np.float32).reshape(-1, 1, 2) for k in keep]
+        rms, K, dist, rv, tv = cv2.calibrateCamera(objs, imgs, tuple(size), K0.copy(), None, flags=flags)
+        per = np.array([np.sqrt(np.mean(np.sum((cv2.projectPoints(obj, r, t, K, dist)[0] - im) ** 2, axis=2)))
+                        for im, r, t in zip(imgs, rv, tv)])
+        good = per <= 3 * np.median(per)
+        if good.all():
+            break
+        keep = keep[good]
+    pts = np.concatenate(imgs).reshape(-1, 2) / np.asarray(size, float) * 6
+    cells = len({(int(u), int(v)) for u, v in pts})
+    return {"K": K.tolist(), "dist": dist.ravel().tolist(), "rms_px": float(rms), "frames": len(imgs),
+            "size": list(size), "worst_frame_px": float(per.max()), "coverage_6x6": cells / 36,
+            "fx_over_fy": float(K[0, 0] / K[1, 1]), "marker_id": mid, "marker_side_m": side,
+            "view_t_s": scan["t"][keep].round(3).tolist(),
+            "spread_cm": _spread_cm(objs, imgs, size, flags=flags, K0=K0)}
+
+
+def marker_pose(K, dist, corners, side: float):
+    """R, t (marker -> camera) of one square marker, IPPE_SQUARE (the planar-square solver)."""
+    cv2 = _cv2()
+    ok, rv, tv = cv2.solvePnP(marker_obj(side), np.asarray(corners, np.float32).reshape(-1, 1, 2),
+                              np.asarray(K, float), np.asarray(dist, float), flags=cv2.SOLVEPNP_IPPE_SQUARE)
+    return cv2.Rodrigues(rv)[0], tv.ravel()
+
+
+def static_corners(c):
+    """Median corners of a marker over the frames it was seen, and the median absolute deviation of its corners (px):
+    a static marker shows detector jitter only; a large MAD means it moved or was bumped."""
+    ok = ~np.isnan(c[:, 0, 0])
+    if not ok.any():
+        return None, np.inf
+    med = np.median(c[ok], axis=0)
+    return med, float(np.median(np.abs(c[ok] - med)))
+
+
+def static_check(scan: dict, cam: dict, sides: dict, origin: int = 0, frames=None) -> dict:
+    """Cross-check a lens model on the markers that did not move (optionally only scan `frames`): the origin marker
+    fixes the floor plane; every other static marker's corners are cast onto that plane and its sides measured (a flat
+    floor marker must come back at its taped side), and its own PnP normal is compared with the floor normal (floor
+    ~0 deg, the wall marker ~90 deg)."""
+    K, dist = np.array(cam["K"]), np.array(cam["dist"])
+    sel = slice(None) if frames is None else frames
+    c0, mad0 = static_corners(scan[f"c{origin}"][sel])
+    R0, t0 = marker_pose(K, dist, c0, sides[origin])
+    out = {"origin": origin, "origin_mad_px": mad0, "origin_range_m": float(np.linalg.norm(t0)), "markers": {}}
+    for key in scan:
+        if not key.startswith("c") or int(key[1:]) == origin or int(key[1:]) not in sides:
+            continue
+        mid = int(key[1:])
+        cm, mad = static_corners(scan[key][sel])
+        if cm is None:
+            continue
+        R, t = marker_pose(K, dist, cm, sides[mid])
+        xyz = pixel_to_plane(cm, K, dist, R0, t0, 0.0)                     # marker-0 plane, world -> camera = (R0, t0)
+        e = np.linalg.norm(np.roll(xyz, -1, axis=0) - xyz, axis=1)
+        out["markers"][mid] = {"seen": int((~np.isnan(scan[key][sel][:, 0, 0])).sum()), "mad_px": mad,
+                               "normal_deg": float(np.degrees(np.arccos(min(1.0, abs(float(R0[:, 2] @ R[:, 2])))))),
+                               "side_on_floor_cm": float(e.mean() * 100), "side_sd_cm": float(e.std() * 100),
+                               "xy_m": xyz[:, :2].mean(0).round(3).tolist(), "pnp_range_m": float(np.linalg.norm(t))}
+    return out
+
+
+
+def floor_from_marker(scan: dict, cam: dict, origin: int = 0, side: float = 0.199):
+    """Floor frame (world -> camera R, t) = the origin marker's median pose over every frame it was seen (the drone
+    hides the pad marker while it sits on it), and its corner MAD (px)."""
+    c0, mad = static_corners(scan[f"c{origin}"])
+    if c0 is None:
+        raise SystemExit(f"id{origin} never seen: no floor frame")
+    R, t = marker_pose(np.array(cam["K"]), np.array(cam["dist"]), c0, side)
+    return R, t, mad
+
+
+def track_top(scan: dict, cam: dict, R, t, top: int = 1, side: float = 0.077) -> dict:
+    """The top marker per scan frame in the floor frame (R, t world -> camera). Its corners are cast onto z = 0; the
+    camera centre C is the homothety centre between parallel planes, so a cast side s0 puts the marker at the height
+    h = Cz (1 - side / s0) ("scale height", noisy at ~30 px). Returns t (s video), uv (px centre), xy0 (the centre ray
+    at z = 0), C (camera centre), h_scale (m) and heading (rad, the cast TL->TR edge, unwrapped), NaN where unseen."""
+    K, dist = np.array(cam["K"]), np.array(cam["dist"])
+    c = scan[f"c{top}"]
+    ok = ~np.isnan(c[:, 0, 0])
+    n = len(c)
+    C = -R.T @ t
+    xy0 = np.full((n, 2), np.nan); s0 = np.full(n, np.nan); hd = np.full(n, np.nan)
+    p = pixel_to_plane(c[ok].reshape(-1, 2), K, dist, R, t, 0.0).reshape(-1, 4, 3)
+    xy0[ok] = pixel_to_plane(c[ok].mean(axis=1), K, dist, R, t, 0.0)[:, :2]
+    s0[ok] = np.linalg.norm(np.roll(p, -1, axis=1) - p, axis=2).mean(axis=1)
+    e = p[:, 1, :2] - p[:, 0, :2]
+    hd[ok] = np.arctan2(e[:, 1], e[:, 0])
+    hd[ok] = np.unwrap(hd[ok])
+    return {"t": scan["t"], "uv": c.mean(axis=1), "xy0": xy0, "C": C, "h_scale": C[2] * (1 - side / s0),
+            "heading": hd, "seen": ok}
+
+
+def top_at(track: dict, h) -> np.ndarray:
+    """Top-marker centre (x, y) at height h (scalar or per frame): slide the z = 0 cast towards the camera centre."""
+    C = track["C"]
+    return C[:2] + (track["xy0"] - C[:2]) * ((C[2] - np.asarray(h, float)) / C[2])[..., None]
+
+
+def sync_xcorr(t_a, a, t_b, b, max_lag: float = 30.0, dt: float = 0.01, min_overlap: float = 0.5, centre=0.0):
+    """Offset o (t_b = t_a + o) maximising the normalised cross-correlation of two scalar series (NaN-free on their
+    own grids), searched over centre +- max_lag. Returns (o, r_best, r_runner_up 1 s away or more)."""
+    grid = np.arange(t_b[0], t_b[-1], dt)
+    sb = np.interp(grid, t_b, b)
+    lags = np.arange(centre - max_lag, centre + max_lag + dt / 2, dt)
+    r = np.full(len(lags), -np.inf)
+    for i, o in enumerate(lags):
+        g = grid - o
+        m = (g >= t_a[0]) & (g <= t_a[-1])
+        if m.sum() < max(50, min_overlap * len(grid)):
+            continue
+        x, y = sb[m] - sb[m].mean(), np.interp(g[m], t_a, a)
+        y = y - y.mean()
+        r[i] = float(x @ y / (np.linalg.norm(x) * np.linalg.norm(y) + 1e-12))
+    k = int(np.argmax(r))
+    far = np.abs(lags - lags[k]) >= 1.0
+    return float(lags[k]), float(r[k]), float(r[far].max()) if far.any() else -np.inf
 
 
 def load_cam(path, size=None) -> dict:
@@ -428,6 +632,68 @@ def track(video: str, lo=HSV_LO, hi=HSV_HI, min_area=MIN_AREA, stride: int = 1, 
     return np.array(ts), blobs
 
 
+CORAL_LO, CORAL_HI = (0, 90, 120), (12, 255, 255)  # R4 guard rings (coral, b17); the hue also wraps from 172
+
+
+def coral_mask(hsv, lo=CORAL_LO, hi=CORAL_HI, wrap: int = 172) -> np.ndarray:
+    """Guard-ring pixels of an HSV image; a red-orange hue wraps past 180, so `wrap`..180 counts too."""
+    cv2 = _cv2()
+    m = cv2.inRange(hsv, lo, hi)
+    if wrap:
+        m |= cv2.inRange(hsv, (wrap, lo[1], lo[2]), (180, hi[1], hi[2]))
+    return m > 0
+
+
+def coral_static(video: str, n: int = 30, frac: float = 0.7, grow_px: int = 7) -> np.ndarray:
+    """Guard-coloured scenery: pixels coral in >= `frac` of n frames spread over the video, grown by grow_px."""
+    cv2 = _cv2()
+    cap = cv2.VideoCapture(video)
+    dur = cap.get(cv2.CAP_PROP_FRAME_COUNT) / (cap.get(cv2.CAP_PROP_FPS) or 30.0)
+    acc, k = None, 0
+    for ts in np.linspace(0.02, 0.95, n) * dur:
+        cap.set(cv2.CAP_PROP_POS_MSEC, ts * 1000)
+        ok, f = cap.read()
+        if not ok:
+            continue
+        m = coral_mask(cv2.cvtColor(f, cv2.COLOR_BGR2HSV)).astype(np.uint16)
+        acc, k = (m if acc is None else acc + m), k + 1
+    st = (acc >= frac * k).astype(np.uint8)
+    return cv2.dilate(st, np.ones((grow_px, grow_px), np.uint8)) > 0
+
+
+def track_coral(video: str, start_uv, static=None, roi: int = 140, min_px: int = 40, step: int = 1, out=None) -> dict:
+    """Drone pixel per frame from its guard rings: coral pixels (minus `static` scenery) in a +-roi px box around
+    the last fix, their median (u, v) is the fix (robust to a ring the view hides; with 3 guards it sits off the
+    hub). A lost frame (< min_px pixels) is NaN and the box grows 1.5x per frame until the drone is found."""
+    cv2 = _cv2()
+    cap = cv2.VideoCapture(video)
+    W, H = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    ts, uv, npx, i = [], [], [], -1
+    c, r = np.asarray(start_uv, float), float(roi)
+    while cap.grab():
+        i += 1
+        if i % step:
+            continue
+        ts.append(cap.get(cv2.CAP_PROP_POS_MSEC) / 1000)
+        u0, v0 = int(max(0, c[0] - r)), int(max(0, c[1] - r))
+        u1, v1 = int(min(W, c[0] + r)), int(min(H, c[1] + r))
+        m = coral_mask(cv2.cvtColor(cap.retrieve()[1][v0:v1, u0:u1], cv2.COLOR_BGR2HSV))
+        if static is not None:
+            m &= ~static[v0:v1, u0:u1]
+        vv, uu = np.nonzero(m)
+        npx.append(len(uu))
+        if len(uu) >= min_px:
+            c, r = np.array([np.median(uu) + u0, np.median(vv) + v0]), float(roi)
+            uv.append(c.copy())
+        else:
+            uv.append((np.nan, np.nan))
+            r = min(r * 1.5, float(max(W, H)))
+    res = {"t": np.array(ts), "uv": np.array(uv, float), "npx": np.array(npx)}
+    if out:
+        np.savez_compressed(out, **res)
+    return res
+
+
 # ---------------------------------------------------------------- sync + alignment
 def _speed(t, xy, grid):
     x = np.interp(grid, t, xy[:, 0])
@@ -584,6 +850,22 @@ def read_livewatch(path: str, names) -> dict:
         if not cols:
             raise SystemExit(f"{path}: no column for {n}")
         out[n] = np.array([float(r[cols[0]]) if r[cols[0]] not in ("", "nan") else np.nan for r in body])
+    return out
+
+
+def read_slots(stem: str, slots=(0, 1, 2, 3)) -> dict:
+    """stream_log slot CSVs `<stem>.slot<k>.csv` (R4 presets): {k: {"t": s on the drone clock (t_src_ms / 1000),
+    column: array}}. Every slot shares that clock, so slots at different rates line up by "t"."""
+    import pandas as pd
+    out = {}
+    for k in slots:
+        p = Path(f"{stem}.slot{k}.csv")
+        if not p.exists():
+            continue
+        df = pd.read_csv(p)
+        d = {c: df[c].to_numpy(float) for c in df.columns}
+        d["t"] = d["t_src_ms"] / 1000.0
+        out[k] = d
     return out
 
 
@@ -858,6 +1140,106 @@ def _click(video, t_s, world, out):
     Path(out).write_text(json.dumps({"world": world, "pixel": pts}, indent=2))
 
 
+# ---------------------------------------------------------------- R4: guard-ring truth on the slot logs
+R4_EST = {"earth": ("ano_of.earth_x", "ano_of.earth_y", 0.01),      # control path, cm
+          "ekf": ("s_ekf_of.x[0]", "s_ekf_of.x[1]", 1.0)}            # EKF state, m
+
+
+def ring_height(uv_pad, K, dist, R, t) -> float:
+    """Height of the guard-ring centroid while the drone sits on the pad: the z at which its ray passes closest to
+    the origin marker's vertical (the drone sits centred on the pad marker)."""
+    p0 = pixel_to_plane(uv_pad, K, dist, R, t, 0.0)[0]
+    d = pixel_to_plane(uv_pad, K, dist, R, t, 1.0)[0] - p0
+    return float(-p0[:2] @ d[:2] / (d[:2] @ d[:2]))
+
+
+def touchdown_video(t, xy, guess: float, search_s: float = 15.0, still_m: float = 0.03, hold_s: float = 2.0) -> float:
+    """Video touchdown near `guess` (the telemetry landing mapped to video time): first frame after guess - search_s
+    from which the floor cast stays within still_m of itself for hold_s (a hover moves the floor cast several
+    times its real motion, so it is never that still in the air). NaN if none in the search window."""
+    for k in np.flatnonzero((t >= guess - search_s) & (t <= guess + search_s)):
+        w = (t >= t[k]) & (t <= t[k] + hold_s)
+        if np.hypot(*(xy[w] - xy[k]).T).max() < still_m:
+            return float(t[k])
+    return float("nan")
+
+
+def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: int = 1, out=None) -> dict:
+    """Camera truth for one R4 flight. Floor = id0 median pose (aruco.npz); drone pixel = guard-ring track
+    (coral.npz, made here if missing); the ring plane is its on-pad height plus the telemetry height rise, so a
+    climb does not move the cast. Sync: take-off (video cast leaves the pad) vs telemetry lift-off, refined +-refine_s
+    by speed cross-correlation against the earth estimate; the landing offset is reported as a clock-skew check.
+    Each estimate (R4_EST) is taken relative to take-off and rotated (orthogonal Kabsch over the flight) onto the
+    floor frame. Returns the per-telemetry-sample table and a summary; `out` writes <out>.csv and <out>.json."""
+    cam = json.loads(Path(cam).read_text()) if not isinstance(cam, dict) else cam
+    K, dist, vd = np.array(cam["K"]), np.array(cam["dist"]), Path(video_dir)
+    scan = dict(np.load(vd / "aruco.npz"))
+    R, tw, mad0 = floor_from_marker(scan, cam)
+    cp = vd / "coral.npz"
+    if not cp.exists():
+        c0, _ = static_corners(scan["c0"])
+        track_coral(str(vd / "cam.mkv"), c0.mean(0), coral_static(str(vd / "cam.mkv")), step=coral_step, out=str(cp))
+    tr = np.load(cp)
+    ok = ~np.isnan(tr["uv"][:, 0])
+    t_v, uv = tr["t"][ok], tr["uv"][ok]
+
+    S = read_slots(stem)
+    s2 = S[2]
+    te = s2["t"]
+    armed = np.interp(te, S[0]["t"], S[0]["DroneStatus.ARM_Status"]) > 0.5
+    z = np.nan_to_num(s2["Ctrler.Z_posPID.FB"])
+    z0 = float(np.median(z[armed][:25]))
+    up = armed & (z > z0 + 0.05)
+    to_tel, ld_tel = float(te[np.argmax(up)]), float(te[len(up) - 1 - np.argmax(up[::-1])])
+
+    g0 = pixel_to_plane(uv, K, dist, R, tw, 0.0)[:, :2]                     # floor cast: a climb moves it too
+    to_vid = takeoff_video(t_v, g0)
+    pad = t_v < to_vid - 1.0
+    h = ring_height(np.median(uv[pad], axis=0), K, dist, R, tw)
+
+    def cast(o):
+        rise = np.clip(np.interp(t_v + o, te, z) - z0, 0.0, None)
+        return pixel_to_plane(uv, K, dist, R, tw, h + rise)[:, :2]
+
+    fly = (te >= to_tel) & (te <= ld_tel)
+    ex, ey, es = R4_EST["earth"]
+    earth = np.c_[s2[ex], s2[ey]] * es
+    o0 = to_tel - to_vid
+    d = sync_offset(t_v + o0, cast(o0), te[fly], earth[fly], max_lag=refine_s, dt=0.02)
+    o = o0 + d
+    ld_vid = touchdown_video(t_v, g0, ld_tel - o)
+    xy = cast(o)
+    xy -= np.median(xy[t_v < to_vid - 1.0], axis=0)                         # truth relative to the pad spot
+
+    tt = te[fly]
+    truth = np.c_[np.interp(tt - o, t_v, xy[:, 0]), np.interp(tt - o, t_v, xy[:, 1])]
+    rows = {"t_tel": tt, "truth_x": truth[:, 0], "truth_y": truth[:, 1], "z": z[fly] - z0}
+    summ = {"stem": stem, "h_ring_m": h, "id0_mad_px": mad0, "z0_m": z0, "takeoff_tel_s": to_tel,
+            "takeoff_video_s": to_vid, "landing_tel_s": ld_tel, "landing_video_s": ld_vid,
+            "offset_takeoff_s": o0, "offset_landing_s": ld_tel - ld_vid, "offset_refine_s": d, "offset_s": o,
+            "flight_s": ld_tel - to_tel, "coral_lost_frac": float(1 - ok.mean()),
+            "pad_jitter_cm": float(np.median(np.hypot(*(xy[pad] - np.median(xy[pad], 0)).T)) * 100),
+            "truth_land_cm": float(np.hypot(*np.median(xy[t_v > ld_vid + 1.0], 0)) * 100) if (t_v > ld_vid + 1).any() else None,
+            "est": {}}
+    for name, (cx, cy, sc) in R4_EST.items():
+        e = np.c_[s2[cx], s2[cy]][fly] * sc
+        e = e - e[0]
+        q, refl = align(e, truth, len(e))
+        ea = e @ q.T
+        err = np.hypot(*(ea - truth).T)
+        rows[f"{name}_x"], rows[f"{name}_y"] = ea[:, 0], ea[:, 1]
+        summ["est"][name] = {"rot_deg": float(np.degrees(np.arctan2(q[1, 0], q[0, 0]))), "reflect": refl,
+                             "rms_cm": float(np.sqrt(np.mean(err ** 2)) * 100), "p90_cm": float(np.percentile(err, 90) * 100),
+                             "max_cm": float(err.max() * 100), "end_cm": float(err[-1] * 100)}
+    if out:
+        with open(f"{out}.csv", "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(list(rows))
+            w.writerows(np.c_[tuple(rows.values())].round(5).tolist())
+        Path(f"{out}.json").write_text(json.dumps(summ, indent=2))
+    return {"rows": rows, "summary": summ}
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -899,8 +1281,41 @@ def main(argv=None):
     s.add_argument("--cam-tape", required=True, help="x,y,z lens in the drone frame (on the pad, facing forward), m")
     s.add_argument("--ref", action="append", default=[], help='"u,v:x,y" floor pixel and its taped drone-frame xy')
     s.add_argument("--run", help="output folder of `run`: also convert its landing offset, write survey.json")
+    q = sub.add_parser("aruco", help="scan every marker's corners into an .npz")
+    q.add_argument("video"); q.add_argument("--out", required=True); q.add_argument("--step", type=int, default=1)
+    q.add_argument("--t0", type=float, default=0.0); q.add_argument("--t1", type=float)
+    m = sub.add_parser("mcal", help="lens model from one waved marker in an `aruco` scan, cross-checked on the static ones")
+    m.add_argument("scan"); m.add_argument("--id", type=int, required=True); m.add_argument("--side", type=float, required=True)
+    m.add_argument("--size", default="1920x1080"); m.add_argument("--max-views", type=int, default=150)
+    m.add_argument("--free-k3", action="store_true"); m.add_argument("--max-move-px", type=float, default=2.0)
+    m.add_argument("--sides", default="0:0.199", help="static markers id:side_m,... for the cross-check (origin first)")
+    m.add_argument("--out", required=True)
+    r4 = sub.add_parser("truth4", help="R4 guard-ring truth for one flight: logs/vofa/<name> + logs/video_truth/<name>")
+    r4.add_argument("name"); r4.add_argument("--cam", default="docs/video-truth/cam_r4_lenswave_2026-10-11.json")
+    r4.add_argument("--refine", type=float, default=2.0)
     a = ap.parse_args(argv)
-    if a.cmd == "board":
+    if a.cmd == "aruco":
+        r = aruco_scan(a.video, a.step, a.t0, a.t1, out=a.out)
+        print(f"{len(r['t'])} frames {r['t'][0]:.2f}-{r['t'][-1]:.2f} s -> {a.out}; seen: "
+              + ", ".join(f"id{k[1:]} {int((~np.isnan(v[:, 0, 0])).sum())}" for k, v in r.items() if k != "t"))
+    elif a.cmd == "truth4":
+        r = r4_truth(f"logs/vofa/{a.name}", f"logs/video_truth/{a.name}", a.cam, a.refine, out=f"logs/video_truth/{a.name}/truth4")
+        print(json.dumps(r["summary"], indent=1))
+    elif a.cmd == "mcal":
+        scan, size = dict(np.load(a.scan)), tuple(int(v) for v in a.size.split("x"))
+        cam = marker_calibrate(scan, a.id, a.side, size, max_views=a.max_views, fix_k3=not a.free_k3,
+                               max_move_px=a.max_move_px)
+        sides = {int(k): float(v) for k, v in (kv.split(":") for kv in a.sides.split(","))}
+        cam["static_check"] = static_check(scan, cam, sides, origin=next(iter(sides)))
+        Path(a.out).write_text(json.dumps(cam, indent=2))
+        sp = cam["spread_cm"]
+        print(f"id{a.id}: rms {cam['rms_px']:.3f} px, {cam['frames']} views, coverage {cam['coverage_6x6']:.0%}, "
+              f"f {cam['K'][0][0]:.1f}/{cam['K'][1][1]:.1f}, c {cam['K'][0][2]:.1f},{cam['K'][1][2]:.1f}, "
+              f"dist {[round(v, 4) for v in cam['dist']]}" + (f", spread@4m rms {sp['rms']:.1f} max {sp['max']:.1f} cm" if sp else ""))
+        for mid, r in cam["static_check"]["markers"].items():
+            print(f"  id{mid}: seen {r['seen']}, mad {r['mad_px']:.2f} px, normal {r['normal_deg']:.1f} deg, side on floor "
+                  f"{r['side_on_floor_cm']:.2f}+-{r['side_sd_cm']:.2f} cm, xy {r['xy_m']}")
+    elif a.cmd == "board":
         cols, rows = (int(v) for v in a.squares.lower().split("x"))
         _cv2().imwrite(a.out, board_image((cols, rows), a.square_px, a.margin_px))
         print(f"wrote {a.out}: {cols}x{rows} squares, {CHARUCO_DICT}; show it full-screen (or print it flat) and measure "
