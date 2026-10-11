@@ -526,3 +526,28 @@ def test_run_usart3_with_count_4_writes_4_data_columns(tmp_path):
     assert len(rows[0]) == 7, f"expected 7 header cols, got {len(rows[0])}: {rows[0]}"
     assert result["columns"] == ["rpm_dbg_period_cyc[0]", "rpm_dbg_period_cyc[1]",
                                   "rpm_dbg_period_cyc[2]", "rpm_dbg_period_cyc[3]"]
+
+
+def test_relay_uplink_forwards_local_frames_on_the_logging_socket():
+    import socket
+    import time
+    import types
+    from ground_station.livewatch.stream_log import _relay_uplink
+    relay = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    relay.bind(("127.0.0.1", 0))
+    relay.setblocking(False)
+    tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    wifi = types.SimpleNamespace(_udp=FakeUdpSocket(), module_ip="192.168.4.1", port=14550)
+    try:
+        frames = [bytes.fromhex("ccdd2c05") + bytes(5), bytes.fromhex("ccdd2cff") + bytes(5)]
+        for f in frames:
+            tx.sendto(f, relay.getsockname())
+        n, t_end = 0, time.monotonic() + 1.0
+        while n < 2 and time.monotonic() < t_end:
+            n += _relay_uplink(relay, wifi)
+        assert n == 2
+        assert wifi._udp._sent == [(f, ("192.168.4.1", 14550)) for f in frames]
+        assert _relay_uplink(relay, wifi) == 0
+    finally:
+        relay.close()
+        tx.close()

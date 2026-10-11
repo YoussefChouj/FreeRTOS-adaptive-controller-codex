@@ -5,7 +5,7 @@ import struct
 import pytest
 
 from ground_station.comm.ext_pos_encoder import (
-    EXT_POS_CMD_ID, ext_pos_decode, ext_pos_delay_frame, ext_pos_encode, ext_pos_fix_frame, ext_pos_on_frame,
+    EXT_POS_CMD_ID, ext_pos_decode, ext_pos_delay_frame, ext_pos_encode, ext_pos_fix_frame, ext_pos_mode_frame, ext_pos_on_frame,
 )
 
 
@@ -40,3 +40,10 @@ def test_frames():
     assert ext_pos_delay_frame(250)[3] == 0xFE
     with pytest.raises(ValueError):
         ext_pos_delay_frame(2000)
+
+
+def test_mode_frame():
+    assert [struct.unpack("<f", ext_pos_mode_frame(m)[4:8])[0] for m in (0, 1, 2)] == [0.0, 1.0, 2.0]
+    assert ext_pos_mode_frame(2)[3] == 0xFF
+    with pytest.raises(ValueError):
+        ext_pos_mode_frame(3)

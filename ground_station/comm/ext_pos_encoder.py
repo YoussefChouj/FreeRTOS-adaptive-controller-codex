@@ -45,8 +45,15 @@ def ext_pos_fix_frame(x_cm: float, y_cm: float, age_s: float) -> bytes:
     return build_command_frame(EXT_POS_CMD_ID, age, ext_pos_encode(x_cm, y_cm))
 
 
+def ext_pos_mode_frame(mode: int) -> bytes:
+    """Fusion mode: 0 off, 1 shadow (innovations only), 2 closed loop (offset c steps earth_x/y)."""
+    if mode not in (0, 1, 2):
+        raise ValueError(f"mode {mode} not in 0/1/2")
+    return build_command_frame(EXT_POS_CMD_ID, EXT_POS_IDX_ON, float(mode))
+
+
 def ext_pos_on_frame(on: bool) -> bytes:
-    return build_command_frame(EXT_POS_CMD_ID, EXT_POS_IDX_ON, 1.0 if on else 0.0)
+    return ext_pos_mode_frame(1 if on else 0)
 
 
 def ext_pos_delay_frame(delay_ms: float) -> bytes:

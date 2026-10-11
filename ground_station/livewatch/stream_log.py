@@ -373,10 +373,27 @@ def load_frames(path=DEFAULT_FRAMES):
     return parse_frames_markdown(path.read_text(encoding="utf-8"))
 
 
-def _usart3_loop(wifi, decoder, writers, rows, schemas, t0, seconds, stop_event, on_row, vofa_sock, vofa_addr):
+def _relay_uplink(relay, wifi) -> int:
+    """Forward every datagram waiting on the local relay socket (live_tracker EXT_POS fixes, raw 0xCC 0xDD frames) to
+    the module on the logging socket. MicoAir sends telemetry to the source of the last uplink datagram, so a second
+    sender socket would take the downlink away from this logger."""
+    n = 0
+    while True:
+        try:
+            frame, _ = relay.recvfrom(256)
+        except OSError:                 # BlockingIOError when empty
+            return n
+        wifi._udp.sendto(frame, (wifi.module_ip, wifi.port))
+        n += 1
+
+
+def _usart3_loop(wifi, decoder, writers, rows, schemas, t0, seconds, stop_event, on_row, vofa_sock, vofa_addr,
+                 relay=None):
     """Read and write frames until `seconds` pass or stop_event is set (the _run_groups_usart3 body)."""
     while time.monotonic() - t0 < seconds and not (
             stop_event is not None and stop_event.is_set()):
+        if relay is not None:
+            _relay_uplink(relay, wifi)
         waiting = wifi._udp.in_waiting
         if not waiting:
             time.sleep(0.002)
@@ -405,13 +422,14 @@ def _usart3_loop(wifi, decoder, writers, rows, schemas, t0, seconds, stop_event,
 
 def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
                        usart3_baud, transport, vofa=None, stop_event=None,
-                       on_start=None, on_row=None):
+                       on_start=None, on_row=None, relay_port=None):
     """Execute multi-slot subscribe over WiFi UDP (Usart3WifiSubscribeTransport).
 
     Hooks for embedding (VOFA Studio): ``stop_event`` ends the run early,
     ``on_start(schemas, decoder)`` fires once subscribed, and
     ``on_row(slot, seq, t_ms, t_host, flat)`` fires per decoded frame.
-    ``out_path=None`` skips the built-in CSV writer.
+    ``out_path=None`` skips the built-in CSV writer. ``relay_port`` binds 127.0.0.1:<port> and forwards each
+    datagram sent there to the module on this socket (see _relay_uplink).
     """
     port = int(data_port.split(":", 1)[1]) if data_port.startswith("udp:") else DEFAULT_USART3_UDP_PORT
     wifi = Usart3WifiSubscribeTransport(port=port)
@@ -423,6 +441,11 @@ def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
         host, vport = vofa.rsplit(":", 1)
         vofa_addr = (host, int(vport))
         vofa_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    relay = None
+    if relay_port:
+        relay = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        relay.bind(("127.0.0.1", int(relay_port)))
+        relay.setblocking(False)
     try:
         wifi.connect()
         for slot, ranges, divider, request in plans:
@@ -458,7 +481,7 @@ def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
         t0 = time.monotonic()
         try:
             _usart3_loop(wifi, decoder, writers, rows, schemas, t0, seconds, stop_event, on_row,
-                         vofa_sock, vofa_addr)
+                         vofa_sock, vofa_addr, relay)
         except KeyboardInterrupt:     # Ctrl+C ends an open-ended capture: keep the rows, stop the slots
             if not quiet:
                 print("stream-log: stopped by Ctrl+C")
@@ -466,6 +489,8 @@ def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
     finally:
         if vofa_sock is not None:
             vofa_sock.close()
+        if relay is not None:
+            relay.close()
         for fh in handles:
             fh.close()
         # Stop every subscribed slot over WiFi
@@ -638,6 +663,9 @@ def main(argv=None):
     ap.add_argument("--vofa", default=None, metavar="HOST:PORT",
                     help="also forward slot-0 rows to VOFA+ as FireWater over UDP "
                          "(e.g. 127.0.0.1:1347); WiFi transport only")
+    ap.add_argument("--relay-port", type=int, default=None, metavar="PORT",
+                    help="forward raw command frames sent to UDP 127.0.0.1:PORT to the module on the logging "
+                         "socket (live_tracker --send udp:PORT); WiFi transport only")
     ap.add_argument("--frames", default=None, metavar="FILE",
                     help="Markdown frame table to log when neither --symbol nor "
                          "--group is given (default: %s)" % DEFAULT_FRAMES.name)
@@ -667,7 +695,7 @@ def main(argv=None):
                 print("frame: %s (%d slot(s))" % (frames, len(groups)))
             stats = run_groups(args.control_port, data_port, groups, transport,
                                args.seconds, args.out, elf=args.elf,
-                               usart3_baud=args.usart3_baud, vofa=args.vofa)
+                               usart3_baud=args.usart3_baud, vofa=args.vofa, relay_port=args.relay_port)
             print("")
             for row in stats:
                 print("slot %d: %5d rows = %5.1f Hz   dropped %d (%.2f%%)   "
