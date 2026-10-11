@@ -142,6 +142,40 @@ def calib(rate_hz: float = RATE_HZ, chunk_s: float = 20.0) -> dict:
 
 
 # ---------------------------------------------------------------- torch: drift-horizon models
+def _iself(d: dict, R: np.ndarray) -> np.ndarray:
+    """In-sample drift-domain oracle: body residual a v + b fitted so that its integral matches R over the flight."""
+    dts = np.diff(d["ts"], prepend=d["ts"][0])
+    U, W = np.cumsum(d["v"] * d["back"] * dts), np.cumsum(d["back"] * dts)
+    (a, b, _), *_ = np.linalg.lstsq(np.c_[U, W, np.ones_like(U)], R, rcond=None)
+    p = a * d["v"] + b
+    return np.c_[p.real, p.imag]
+
+
+def sync_scan(span_s: float = 3.0, step_s: float = 0.1, rate_hz: float = RATE_HZ) -> dict:
+    """Is the truth4 time sync limiting? Per flight, shift the truth by dt in [-span_s, span_s] and report quick_d60
+    of earth and of the in-sample oracle (_iself): a minimum far from dt = 0 means the truth clock is off and every
+    learned/calibrated score on that flight is capped by it. Writes logs/video_truth/nnio_sync.json."""
+    data, skipped = load_all(rate_hz)
+    grid = np.round(np.arange(-span_s, span_s + step_s / 2, step_s), 3)
+    out = {"skipped": skipped, "grid_s": grid.tolist(), "flights": {}}
+    for n, d in data.items():
+        tr, ea = d["truth"], d["earth"]
+        rows = []
+        for dt in grid:
+            R = (np.interp(d["ts"] + dt, d["t"], tr.real) + 1j * np.interp(d["ts"] + dt, d["t"], tr.imag)
+                 - np.interp(d["ts"], d["t"], ea.real) - 1j * np.interp(d["ts"], d["t"], ea.imag))
+            e = dict(d, R=R)
+            rows.append((quick_d60(e), quick_d60(e, _iself(e, R))))
+        rows = np.array(rows)
+        i0, ie, io = int(np.argmin(np.abs(grid))), int(np.argmin(rows[:, 0])), int(np.argmin(rows[:, 1]))
+        f = {"earth0": round(rows[i0, 0], 1), "iself0": round(rows[i0, 1], 1), "earth_best": [float(grid[ie]), round(rows[ie, 0], 1)],
+             "iself_best": [float(grid[io]), round(rows[io, 1], 1)], "earth": rows[:, 0].round(1).tolist(), "iself": rows[:, 1].round(1).tolist()}
+        out["flights"][n] = f
+        print(f"{n[:27]:27s} earth {f['earth0']:6.1f} best {f['earth_best']}  iself {f['iself0']:6.1f} best {f['iself_best']}", flush=True)
+    Path("logs/video_truth/nnio_sync.json").write_text(json.dumps(out, indent=1))
+    return out
+
+
 def _torch():
     import torch
     torch.set_num_threads(4)
@@ -319,6 +353,7 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("calib")
     c.add_argument("--chunk-s", type=float, default=20.0)
+    sub.add_parser("sync", help="truth time-shift scan of earth and the in-sample oracle")
     t = sub.add_parser("train")
     t.add_argument("--kind", default="gru", choices=("gru", "tcn"))
     t.add_argument("--H", type=int, default=32)
@@ -340,6 +375,8 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.cmd == "calib":
         calib(chunk_s=a.chunk_s)
+    elif a.cmd == "sync":
+        sync_scan()
     else:
         train(a.kind, a.H, a.head, a.layers, a.iters, a.seeds, a.lofo, a.tag, a.eval_every,
               tuple(x for x in a.exclude.split(",") if x), crop_s=a.crop_s, lr=a.lr, wd=a.wd, drop=a.drop, vel_w=a.vel_w,
