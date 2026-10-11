@@ -87,3 +87,10 @@ def test_ring_tracker_coasts_then_reacquires():
     assert all(tr.step(_ring_frame(None)) is None for _ in range(5)) and tr.lost == 5
     uv = tr.step(_ring_frame((260, 300)))
     assert uv is not None and np.linalg.norm(uv - (260, 300)) < 4.0 and tr.lost == 0
+
+
+def test_tel_height_shifts_time_and_adds_ring_offset():
+    from ground_station.analysis.live_tracker import tel_height
+    k = "slot0.Ctrler.Z_posPID.FB"
+    h = tel_height({k + "|t": np.array([0.0, 10.0]), k: np.array([0.0, 1.0])}, tel_offset_s=15.0, ring_offset_m=0.05)
+    assert abs(h(20.0) - 0.55) < 1e-12 and abs(h(0.0) - 0.05) < 1e-12      # video 20 s = tel 5 s; clamps before tel 0

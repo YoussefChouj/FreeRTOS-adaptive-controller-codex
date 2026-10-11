@@ -16,8 +16,14 @@ phone camera -> scrcpy -> live tracker (ground station) -> WiFi 0xCC 0xDD frame 
   -> Cmd_ExtPos (stores fix) -> StabilizerTask: delayed earth-path correction -> earth_x/y -> loc PID FB
 ```
 
-## 1. Live tracker (ground station, new `ground_station/analysis/live_tracker.py`)
-- Reuse the `video_truth.py` detector and the floor pose (`cam_r3_selfcal_2026-10-11.json`) on live scrcpy frames.
+## 1. Live tracker (ground station, `ground_station/analysis/live_tracker.py`)
+Status: dry run coded (985dadb), sends nothing. The detector is the R3 red-ring mean-shift run online
+(`RingTracker`, seeded at ArUco id0). On R3 82-112 s it matches the offline R3 track: 900/900 frames, px error
+median 0.7, p95 5.0 (measured; a consistency check, not independent truth). The `video_truth.py` guard-blob
+detector locks onto scenery in R3 (about 1 m off) and is only kept as `--detector guards`. Plane height =
+telemetry Z + ring offset (`--tel-npz`; R3 values 15.05 s fit, 0.05 m guess). UNMEASURED: camera latency, link
+delay, ring offset.
+- Floor pose `cam_r3_selfcal_2026-10-11.json` on live scrcpy frames.
 - Output at 30 Hz: pad-frame position (m), capture time (frame pts), detection quality (marker area, reprojection error).
 - Frame alignment camera -> EKF earth. R3 fitted this offline (`c/rot/1.094`, rotation +1.9 deg). Live options:
   (a) top marker id1 gives heading in the camera frame, so rot = heading_cam - yaw_imu (preferred; it also settles

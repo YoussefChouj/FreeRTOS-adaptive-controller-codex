@@ -174,6 +174,16 @@ class FixScheduler:
         return float(np.median(tc[keep])), np.median(xy[keep], axis=0)
 
 
+def tel_height(tel_npz, key: str = "slot0.Ctrler.Z_posPID.FB", tel_offset_s: float = 0.0,
+               ring_offset_m: float = 0.0) -> Callable[[float], float]:
+    """Plane height for frame time t: telemetry Z (m) at t - tel_offset_s, plus the ring's height above the Z
+    reference. `tel_npz` holds `key` and `key|t` (the R3 tel_r3.npz layout). R3 used offset 15.05 s and ring
+    offset 0.05 m; neither is measured (the offset came from a fit, the ring offset is a guess)."""
+    d = np.load(tel_npz) if isinstance(tel_npz, str) else tel_npz
+    tz, z = np.asarray(d[key + "|t"], float), np.asarray(d[key], float)
+    return lambda t: float(np.interp(t - tel_offset_s, tz, z)) + ring_offset_m
+
+
 def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[[float], float],
                cam_latency_s: float = 0.0, send: Callable[[bytes], None] | None = None, out_csv: str | None = None,
                sched: FixScheduler | None = None, clock: Callable[[], float] | None = None, max_frames: int = 0, start_s: float = 0.0,
@@ -230,7 +240,10 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Live camera tracker, dry run (writes fixes, sends nothing).")
     ap.add_argument("--source", required=True, help="video file, or a capture device index")
     ap.add_argument("--cam", required=True, help="floor pose json (e.g. docs/video-truth/cam_r3_selfcal_2026-10-11.json)")
-    ap.add_argument("--height-m", type=float, required=True, help="guard plane height above the floor, m")
+    ap.add_argument("--height-m", type=float, default=None, help="fixed plane height above the floor, m")
+    ap.add_argument("--tel-npz", default="", help="telemetry npz with Z (tel_r3.npz layout); replaces --height-m")
+    ap.add_argument("--tel-offset-s", type=float, default=0.0, help="video time - telemetry time; R3: 15.05 (fit)")
+    ap.add_argument("--ring-offset-m", type=float, default=0.05, help="ring above the Z reference; R3 guess, UNVERIFIED")
     ap.add_argument("--cam-latency-s", type=float, default=0.0, help="photon -> frame read; UNMEASURED until R4")
     ap.add_argument("--yaw-deg", type=float, default=0.0, help="pad -> earth rotation until a fit or marker exists")
     ap.add_argument("--mirror", action="store_true")
@@ -241,6 +254,9 @@ def main(argv=None) -> int:
     ap.add_argument("--seed-px", default="", help="u,v of the drone on the pad; default the ArUco id0 centre")
     ap.add_argument("--static-t", default="", help='file only, "90,140,190": mask guard-colour pixels present at all these times')
     a = ap.parse_args(argv)
+    if (a.height_m is None) == (not a.tel_npz):
+        ap.error("give exactly one of --height-m or --tel-npz")
+    height = tel_height(a.tel_npz, tel_offset_s=a.tel_offset_s, ring_offset_m=a.ring_offset_m) if a.tel_npz else a.height_m
     cam = vt.load_cam(a.cam, None if str(a.source).isdigit() else vt.video_size(a.source))
     align = EarthAlign(a=complex(np.exp(1j * np.radians(a.yaw_deg))), mirror=a.mirror)
     times = [float(x) for x in a.static_t.split(",") if x]
@@ -251,7 +267,7 @@ def main(argv=None) -> int:
             raw = json.load(f)
         seed = [float(x) for x in a.seed_px.split(",")] if a.seed_px else np.mean(raw["aruco_id0_corners_px"], axis=0)
         ring = RingTracker(seed)
-    print(run_source(a.source, cam, align, a.height_m, a.cam_latency_s, None, a.out, max_frames=a.max_frames,
+    print(run_source(a.source, cam, align, height, a.cam_latency_s, None, a.out, max_frames=a.max_frames,
                      start_s=a.start_s, static=static, ring=ring))
     return 0
 
