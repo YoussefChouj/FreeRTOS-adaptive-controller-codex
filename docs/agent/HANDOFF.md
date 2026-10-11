@@ -9,10 +9,10 @@ Branch `overnight-2026-10-08`. Result doc: `docs/video-truth/r3_drift_truth_2026
 R3 (10-11) camera truth showed the EKF error is born in fast RC moves: the raw-flow anchor (of1) is gated out
 at 5 sigma and never heals. Fix fb615c7: `of1_gate` 5 -> 10. Replay vs camera (computed): rms from 72 s
 48.9 -> 26.3 cm, revisit p90 55.5 -> 38.5 cm. Hover drift unchanged at 0.44 cm/s (needs an absolute reference
-or a trim confirmed by R4). Gyro compensation of of1 and Q/R variants did not beat the gate alone.
+or a trim confirmed by R4).
 
-R3 follow-ups (computed, `r3_learned_velocity_2026-10-11.md`): NN/ridge, flow scale, bias freeze, OF delay give no
-gain. Pure yaw moves the drone (63/35 cm); OF lever arm explains about half. Only camera fusion meets 0.17 cm/s.
+R3 follow-ups (computed, `r3_learned_velocity_2026-10-11.md`): NN/ridge, flow scale, bias freeze, OF delay: no gain.
+Pure yaw moves the drone (63/35 cm, half from OF lever arm). Only camera fusion meets 0.17 cm/s.
 Fusion replay (651531d, computed, design doc `live_camera_fusion_design_2026-10-11.md`): EKF-pos update at 1 s cuts
 hover rms 10.9->4.7 cm, moves 31->16.5 cm; hold-out learns no lasting trim, so the camera must stay in the loop.
 The 0.3 s lag in moves is a camera/telemetry sync offset (~0.25 s, 4882068); with it fixed, moves rms is 11.7 cm.
