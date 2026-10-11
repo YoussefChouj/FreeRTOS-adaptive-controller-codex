@@ -1240,6 +1240,76 @@ def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: 
     return {"rows": rows, "summary": summ}
 
 
+def hold_windows(t, des, min_s: float = 20.0) -> list:
+    """Hands-off windows: runs of a constant position setpoint (slot3 locx/locy Des) lasting >= min_s."""
+    ch = np.r_[True, np.any(np.diff(des, axis=0) != 0, axis=1)]
+    k = np.flatnonzero(ch)
+    ends = np.r_[k[1:] - 1, len(t) - 1]
+    return [(float(t[a]), float(t[b])) for a, b in zip(k, ends) if t[b] - t[a] >= min_s]
+
+
+def drift_score(name: str, cam: str = "docs/video-truth/cam_r4_lenswave_2026-10-11.json", win_s: float = 60.0,
+                yaw_dps: float = 15.0, min_hold_s: float = 20.0) -> dict:
+    """Score one truth4 flight. The estimate error e = est - truth (both from take-off, est rotated by truth4) is
+    split by what the drone was doing: `yaw` (|yaw rate| > yaw_dps), `hold` (hands-off: constant Des, see
+    hold_windows) and `move` (the rest); the net error each class adds is the sum of its increments, so the
+    classes add up to the end error. Drift = |e(t+win_s) - e(t)| over sliding windows. Along = horizontal
+    camera->pad direction (cast error from a height error lands here), across = its normal (height-free)."""
+    vd = Path(f"logs/video_truth/{name}")
+    rows = np.genfromtxt(vd / "truth4.csv", delimiter=",", names=True)
+    summ = json.loads((vd / "truth4.json").read_text())
+    camd = json.loads(Path(cam).read_text())
+    R, tw, _ = floor_from_marker(dict(np.load(vd / "aruco.npz")), camd)
+    c = -R.T @ tw
+    u = -c[:2] / np.linalg.norm(c[:2])
+    ax = np.c_[u, [-u[1], u[0]]]                                    # columns: along, across
+    t, truth = rows["t_tel"], np.c_[rows["truth_x"], rows["truth_y"]]
+    S = read_slots(f"logs/vofa/{name}")
+    s0, s3 = S[0], S[3]
+    yaw = np.unwrap(np.radians(s0["imu_data.yaw"]))
+    k = max(1, int(round(0.5 / np.median(np.diff(s0["t"])))))
+    rate = np.degrees(np.gradient(np.convolve(yaw, np.ones(k) / k, "same"), s0["t"]))
+    yawing = np.abs(np.interp(t, s0["t"], rate)) > yaw_dps
+    holds = [w for w in hold_windows(s3["t"], np.c_[s3["Ctrler.locxPID.Des"], s3["Ctrler.locyPID.Des"]], min_hold_s)
+             if w[1] > t[0] and w[0] < t[-1]]
+    hold = np.zeros(len(t), bool)
+    for a, b in holds:
+        hold |= (t >= a) & (t <= b)
+    cls = np.where(yawing, "yaw", np.where(hold, "hold", "move"))
+    dt = np.diff(t)
+    out = {"name": name, "flight_s": summ["flight_s"], "offset_skew_s": summ["offset_landing_s"] - summ["offset_takeoff_s"],
+           "view_dir": u.round(3).tolist(), "class_s": {q: float(dt[cls[1:] == q].sum()) for q in ("hold", "move", "yaw")},
+           "truth_land_cm": summ["truth_land_cm"], "holds": [], "est": {}}
+    for a, b in holds:
+        w = (t >= a) & (t <= b)
+        if w.sum() < 10:
+            continue
+        d = truth[w] - truth[w][0]
+        out["holds"].append({"t0": a, "t1": b, "dur_s": float(t[w][-1] - t[w][0]), "truth_disp_cm": float(np.hypot(*d[-1]) * 100),
+                             "truth_max_cm": float(np.hypot(*d.T).max() * 100),
+                             "disp_along_across_cm": (d[-1] @ ax * 100).round(1).tolist()})
+    for est in R4_EST:
+        e = np.c_[rows[f"{est}_x"], rows[f"{est}_y"]] - truth
+        de = np.diff(e, axis=0)
+        net = {q: de[cls[1:] == q].sum(0) for q in ("hold", "move", "yaw")}
+        j = np.searchsorted(t, t + win_s)
+        i = np.flatnonzero(j < len(t))
+        g = e[j[i]] - e[i]
+        gm = np.hypot(*g.T) * 100
+        o = {"rms_cm": summ["est"][est]["rms_cm"], "rot_deg": summ["est"][est]["rot_deg"],
+             "rms_along_across_cm": (np.sqrt(np.mean((e @ ax) ** 2, 0)) * 100).round(1).tolist(),
+             "end_cm": float(np.hypot(*e[-1]) * 100),
+             "net_cm": {q: float(np.hypot(*v) * 100) for q, v in net.items()},
+             "net_rate_cm_s": {q: float(np.hypot(*v) * 100 / max(out["class_s"][q], 1e-9)) for q, v in net.items()}}
+        if len(i):
+            o.update({f"drift{int(win_s)}_med_cm": float(np.median(gm)), f"drift{int(win_s)}_p90_cm": float(np.percentile(gm, 90)),
+                      f"drift{int(win_s)}_max_cm": float(gm.max()), "frac_le_10cm": float((gm <= 10).mean()),
+                      "drift_across_p90_cm": float(np.percentile(np.abs(g @ ax[:, 1]) * 100, 90))})
+        out["est"][est] = o
+    (vd / "truth4_score.json").write_text(json.dumps(out, indent=1))
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1293,13 +1363,23 @@ def main(argv=None):
     r4 = sub.add_parser("truth4", help="R4 guard-ring truth for one flight: logs/vofa/<name> + logs/video_truth/<name>")
     r4.add_argument("name"); r4.add_argument("--cam", default="docs/video-truth/cam_r4_lenswave_2026-10-11.json")
     r4.add_argument("--refine", type=float, default=2.0)
+    r4.add_argument("--coral-step", type=int, default=2, help="track every Nth frame (2 = 15 Hz at 30 fps)")
+    sc = sub.add_parser("score4", help="drift score of truth4 flights (hold/move/yaw split, 60 s windows)")
+    sc.add_argument("names", nargs="+"); sc.add_argument("--win", type=float, default=60.0)
     a = ap.parse_args(argv)
     if a.cmd == "aruco":
         r = aruco_scan(a.video, a.step, a.t0, a.t1, out=a.out)
         print(f"{len(r['t'])} frames {r['t'][0]:.2f}-{r['t'][-1]:.2f} s -> {a.out}; seen: "
               + ", ".join(f"id{k[1:]} {int((~np.isnan(v[:, 0, 0])).sum())}" for k, v in r.items() if k != "t"))
+    elif a.cmd == "score4":
+        for n in a.names:
+            r = drift_score(n, win_s=a.win); e = r["est"]["earth"]
+            print(f"{n:30s} fly {r['flight_s']:5.0f} s skew {r['offset_skew_s']:+.2f} hold {r['class_s']['hold']:4.0f} s "
+                  f"land {r['truth_land_cm'] or float('nan'):5.1f} | earth rms {e['rms_cm']:5.1f} d60 med/p90/max "
+                  f"{e.get('drift60_med_cm', float('nan')):5.1f}/{e.get('drift60_p90_cm', float('nan')):5.1f}/{e.get('drift60_max_cm', float('nan')):5.1f} "
+                  f"rate hold/move/yaw " + "/".join(f"{e['net_rate_cm_s'][q]:.2f}" for q in ("hold", "move", "yaw")))
     elif a.cmd == "truth4":
-        r = r4_truth(f"logs/vofa/{a.name}", f"logs/video_truth/{a.name}", a.cam, a.refine, out=f"logs/video_truth/{a.name}/truth4")
+        r = r4_truth(f"logs/vofa/{a.name}", f"logs/video_truth/{a.name}", a.cam, a.refine, a.coral_step, out=f"logs/video_truth/{a.name}/truth4")
         print(json.dumps(r["summary"], indent=1))
     elif a.cmd == "mcal":
         scan, size = dict(np.load(a.scan)), tuple(int(v) for v in a.size.split("x"))

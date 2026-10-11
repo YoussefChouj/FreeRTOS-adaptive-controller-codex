@@ -368,3 +368,10 @@ def test_touchdown_video_finds_the_first_still_frame():
     xy = np.c_[0.1 * np.sin(3 * t), 0.1 * np.cos(2 * t)]
     xy[t >= 12.0] = [0.2, 0.3]
     assert vt.touchdown_video(t, xy, guess=11.0) == pytest.approx(12.0, abs=0.11)
+
+
+def test_hold_windows_keeps_long_constant_setpoint_runs():
+    t = np.arange(0, 100, 0.04)
+    des = np.zeros((len(t), 2)); des[t >= 30] = [5, 0]; des[(t >= 50) & (t < 55)] = [9, 9]
+    w = vt.hold_windows(t, des, min_s=20.0)
+    assert [(round(a), round(b)) for a, b in w] == [(0, 30), (55, 100)]
