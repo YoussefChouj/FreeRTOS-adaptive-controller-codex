@@ -23,7 +23,7 @@ confirm (1 question) -> start <name> (bg) -> "recording, fly" -> operator says s
    `check <name>` any time shows rows and video size.
 5. After the last battery: a ChArUco lens wave, `start lens_wave_<date>` / `stop`, then tape measurements.
 
-Phone (Xiaomi 2510ERA8BC, Android 16): turn OFF "Keep screen on while viewing" (screen attention) and set screen timeout to the max. At screen timeout com.xiaomi.aon AonAttentionService opens the camera and evicts scrcpy (R4 b1 drop 19:00:44, logcat measured).
+Phone (REDMI Note 15 Pro+, HyperOS 3): Settings page "Sleep" -> turn OFF "Screen attention" (secure adaptive_sleep; check `adb shell settings get secure adaptive_sleep` = 0). Shortcut: `adb shell am start -a android.settings.SCREEN_TIMEOUT_SETTINGS` opens the page; the OPERATOR taps the toggle. It opens the front camera (com.xiaomi.aon) and evicts scrcpy for ~18 s: R4 b1 drop 19:00:44, b4 drop 19:20:46 (logcat measured).
 
 Rules: WiFi only, never the SWD probe; never arm; record until "stop", no timer. Top marker: DICT_4X4_50 id1,
 measured black square 77 mm (use 0.077 m). Pad marker id0.
