@@ -74,6 +74,16 @@ def corrected(d: dict, p: np.ndarray) -> np.ndarray:
     return np.c_[z.real, z.imag]
 
 
+def quick_d60(d: dict, p: np.ndarray | None = None, rate_hz: float = RATE_HZ) -> float:
+    """drift60s_p90 (cm) of earth + the body residual p on the rate_hz grid: fast, for learning curves (drift_score
+    on the truth4 rows is the reference)."""
+    dts = np.diff(d["ts"], prepend=d["ts"][0])
+    c = 0.0 if p is None else np.cumsum((p[:, 0] + 1j * p[:, 1]) * d["back"] * dts)
+    ks, h = int(rate_hz), int(60 * rate_hz)
+    es = np.convolve(c - d["R"], np.ones(ks) / ks, "valid")
+    return float(np.percentile(np.abs(es[h:] - es[:-h]), 90) * 100) if len(es) > h else float("nan")
+
+
 def _cfit(v: np.ndarray, y: np.ndarray) -> tuple[complex, complex]:
     """Least squares y = a v + b over complex samples."""
     A = np.c_[v, np.ones_like(v)]
@@ -214,18 +224,21 @@ def _arrays(d: dict, mu, sd):
 
 
 def fit(train: list[dict], kind="gru", H=32, head="scale", layers=1, iters=1500, crop_s=90.0, batch=16, lr=3e-3,
-        wd=1e-4, drop=0.1, vel_w=0.0, seed=0, rate_hz=RATE_HZ, log_every=0):
-    """Train on random crop_s windows of the train flights (zero initial state, like a take-off)."""
+        wd=1e-4, drop=0.1, vel_w=0.0, seed=0, rate_hz=RATE_HZ, log_every=0, feats=None, noise=0.0, cb=None, cb_every=0):
+    """Train on random crop_s windows of the train flights (zero initial state, like a take-off). feats: NN4_CH column
+    subset; noise: Gaussian input noise (normalised units); cb(it, model) every cb_every iterations."""
     torch = _torch()
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
     Fall = np.vstack([d["F"] for d in train])
+    feats = list(range(Fall.shape[1])) if feats is None else list(feats)
     mu, sd = Fall.mean(0), Fall.std(0) + 1e-6
     arr = [_arrays(d, mu, sd) for d in train]
+    arr = [(a[0][:, feats],) + a[1:] for a in arr]
     T = int(crop_s * rate_hz)
     steps = [int(h * rate_hz) for h in HORIZONS_S]
     ks = int(rate_hz)
-    net = build(Fall.shape[1], kind, H, head, layers, drop=drop)
+    net = build(len(feats), kind, H, head, layers, drop=drop)
     opt = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=wd)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=lr, total_steps=iters)
     lens = np.array([len(a[0]) for a in arr], float)
@@ -240,6 +253,8 @@ def fit(train: list[dict], kind="gru", H=32, head="scale", layers=1, iters=1500,
             cols.append([x[s:s + L] for x in a])
         L = min(len(c[0]) for c in cols)
         X, V, B, DT, R, Y = (torch.from_numpy(np.stack([c[j][:L] for c in cols])) for j in range(6))
+        if noise:
+            X = X + noise * torch.randn_like(X)
         net.train()
         loss = drift_loss(net(X, V), B, DT, R, steps, ks, vel_w, Y)
         opt.zero_grad()
@@ -249,38 +264,52 @@ def fit(train: list[dict], kind="gru", H=32, head="scale", layers=1, iters=1500,
         sched.step()
         if log_every and it % log_every == 0:
             print(f"  it {it} loss {float(loss):.1f}", flush=True)
+        if cb and cb_every and (it + 1) % cb_every == 0 and it + 1 < iters:
+            net.eval()
+            cb(it + 1, (net, mu, sd, feats))
     net.eval()
-    return net, mu, sd
+    return net, mu, sd, feats
 
 
 def predict(model, d: dict) -> np.ndarray:
     torch = _torch()
-    net, mu, sd = model
+    net, mu, sd, feats = model
     X, V, *_ = _arrays(d, mu, sd)
     with torch.no_grad():
-        return net(torch.from_numpy(X)[None], torch.from_numpy(V)[None])[0].numpy().astype(float)
+        return net(torch.from_numpy(np.ascontiguousarray(X[:, feats]))[None], torch.from_numpy(V)[None])[0].numpy().astype(float)
 
 
-def train(kind="gru", H=32, head="scale", layers=1, iters=1500, seeds=2, lofo=False, tag="", **kw) -> dict:
-    """Hold-out: train on the whole pool, score NN4_HOLD. lofo: also each pool flight with the pool minus it."""
+def train(kind="gru", H=32, head="scale", layers=1, iters=1500, seeds=2, lofo=False, tag="", eval_every=0, exclude=(),
+          **kw) -> dict:
+    """Hold-out: train on the whole pool, score NN4_HOLD. lofo: also each pool flight with the pool minus it.
+    eval_every: print the quick_d60 learning curve of each scored flight; exclude: name substrings dropped from the pool."""
     data, skipped = load_all()
     pool, hold = split(list(data))
+    pool = [n for n in pool if not any(x in n for x in exclude)]
     tag = tag or f"_nnio_{kind}{H}{head[0]}{layers}"
-    jobs = [(n, pool) for n in hold] + ([(n, [m for m in pool if m != n]) for n in pool] if lofo else [])
-    cache, out = {}, {"pool": pool, "hold": hold, "skipped": skipped, "cfg": {"kind": kind, "H": H, "head": head, "layers": layers,
-                                                                             "iters": iters, "seeds": seeds, **kw}, "flights": {}}
-    for n, tr in jobs:
-        key = tuple(tr)
-        if key not in cache:
-            cache[key] = [fit([data[m] for m in tr], kind, H, head, layers, iters, seed=s, **kw) for s in range(seeds)]
-        d = data[n]
-        p = np.mean([predict(m, d) for m in cache[key]], 0)
-        r = drift_score(n, ests={"earth": np.c_[d["earth"].real, d["earth"].imag], "nn": corrected(d, p)}, tag=tag)
-        f = {k: round(e["drift60s_p90_cm"], 1) for k, e in r["est"].items() if "drift60s_p90_cm" in e}
-        out["flights"][n] = {"in_pool": n in pool, "d60s": f, "rms_cm": {k: round(e["rms_cm"], 1) for k, e in r["est"].items()}}
-        print(f"{n[:27]:27s} pool={n in pool:d} earth {f.get('earth')} -> nn {f.get('nn')}", flush=True)
-        if len(cache) > 1:                            # LOFO folds are single-use
-            cache = {k: v for k, v in cache.items() if k == tuple(pool)}
+    groups = [(pool, hold)] + ([([m for m in pool if m != n], [n]) for n in pool] if lofo else [])
+    out = {"pool": pool, "hold": hold, "skipped": skipped, "cfg": {"kind": kind, "H": H, "head": head, "layers": layers,
+           "iters": iters, "seeds": seeds, "exclude": list(exclude), **kw}, "flights": {}, "curve": {}}
+
+    def curve(names, s):
+        def cb(it, m):
+            q = {n: round(quick_d60(data[n], predict(m, data[n])), 1) for n in names}
+            out["curve"].setdefault(f"{names[0]}|{s}", []).append([it, q])
+            print(f"  seed {s} it {it}: " + " ".join(f"{n.split('_')[-2] if n.count('_') > 2 else n}={v}" for n, v in q.items()), flush=True)
+        return cb
+
+    for tr, names in groups:
+        print("  earth quick_d60: " + " ".join(f"{n[:24]}={quick_d60(data[n]):.1f}" for n in names), flush=True)
+        models = [fit([data[m] for m in tr], kind, H, head, layers, iters, seed=s, cb=curve(names, s), cb_every=eval_every, **kw)
+                  for s in range(seeds)]
+        for n in names:
+            d = data[n]
+            p = np.mean([predict(m, d) for m in models], 0)
+            r = drift_score(n, ests={"earth": np.c_[d["earth"].real, d["earth"].imag], "nn": corrected(d, p)}, tag=tag)
+            f = {k: round(e["drift60s_p90_cm"], 1) for k, e in r["est"].items() if "drift60s_p90_cm" in e}
+            out["flights"][n] = {"in_pool": n in pool, "d60s": f, "quick_nn": round(quick_d60(d, p), 1),
+                                 "rms_cm": {k: round(e["rms_cm"], 1) for k, e in r["est"].items()}}
+            print(f"{n[:27]:27s} pool={n in pool:d} earth {f.get('earth')} -> nn {f.get('nn')}", flush=True)
     Path(f"logs/video_truth/nnio{tag}.json").write_text(json.dumps(out, indent=1))
     return out
 
@@ -304,12 +333,17 @@ def main(argv=None):
     t.add_argument("--drop", type=float, default=0.1)
     t.add_argument("--vel-w", type=float, default=0.0)
     t.add_argument("--tag", default="")
+    t.add_argument("--eval-every", type=int, default=0)
+    t.add_argument("--noise", type=float, default=0.0)
+    t.add_argument("--feats", default="", help="comma-separated NN4_CH column indices (default all)")
+    t.add_argument("--exclude", default="", help="comma-separated name substrings dropped from the pool")
     a = ap.parse_args(argv)
     if a.cmd == "calib":
         calib(chunk_s=a.chunk_s)
     else:
-        train(a.kind, a.H, a.head, a.layers, a.iters, a.seeds, a.lofo, a.tag, crop_s=a.crop_s, lr=a.lr, wd=a.wd, drop=a.drop,
-              vel_w=a.vel_w)
+        train(a.kind, a.H, a.head, a.layers, a.iters, a.seeds, a.lofo, a.tag, a.eval_every,
+              tuple(x for x in a.exclude.split(",") if x), crop_s=a.crop_s, lr=a.lr, wd=a.wd, drop=a.drop, vel_w=a.vel_w,
+              noise=a.noise, feats=[int(x) for x in a.feats.split(",")] if a.feats else None)
 
 
 if __name__ == "__main__":

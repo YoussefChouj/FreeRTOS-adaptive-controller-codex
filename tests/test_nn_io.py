@@ -37,3 +37,15 @@ def test_models_start_at_zero_and_drift_loss_is_zero_on_a_perfect_track():
     R = torch.cumsum(p * dt[..., None], 1)
     assert float(nn_io.drift_loss(p, back, dt, R, [20, 100], 20)) < 1e-6
     assert float(nn_io.drift_loss(p + 0.01, back, dt, R, [20, 100], 20)) > 0.1
+
+
+def test_quick_d60_is_zero_for_the_true_residual_and_grows_with_a_bias():
+    ts = np.arange(0, 120, 0.05)
+    back = np.exp(-0.2j * ts)
+    vb = 0.05 * np.sin(0.3 * ts) + 0.02j
+    dts = np.diff(ts, prepend=ts[0])
+    d = {"ts": ts, "back": back, "R": np.cumsum(vb * back * dts)}
+    p = np.c_[vb.real, vb.imag]
+    assert nn_io.quick_d60(d, p) < 1e-9
+    d0 = {"ts": ts, "back": np.ones_like(back), "R": np.cumsum(vb * dts)}
+    assert abs(nn_io.quick_d60(d0, p + [0.001, 0.0]) - 6.0) < 0.01     # 1 mm/s bias, no yaw -> 6 cm per 60 s
