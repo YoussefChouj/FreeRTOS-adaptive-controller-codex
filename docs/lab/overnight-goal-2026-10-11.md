@@ -24,8 +24,9 @@ Pre-approved (delete what you do not allow):
 - Lens: lens_wave_20261011 (~9 min): ONE loose 17.2 cm ArUco marker waved, no ChArUco board; it then stayed on
   the right wall. Waved id unknown (find the one whose corners move).
 - Tape (operator): id0 pad 19.9 x 19.9 cm; id1 top marker 77 mm black (use 0.077 m), ~19.7 cm above the floor on
-  the pad; loose floor markers 17.2 cm; OF sensor offset 6.1-6.2 cm from the frame centre, direction: ________ (fill in; if blank,
-  fit it from the data and mark it computed).
+  the pad; loose floor markers 17.2 cm; OF sensor offset 6.1-6.2 cm from the frame centre along body -x only, y = 0 (operator);
+  confirm the firmware's body-x convention before using the sign. Tripod feet and phone pose taped, zoom
+  untouched, so the lens calibration carries to the next lab.
 - R3 data and modules from the earlier option-C work (video_truth, live_tracker, fusion replay, r3 learned
   velocity) are reused, not rewritten. Extend existing modules; no one-off scripts.
 
