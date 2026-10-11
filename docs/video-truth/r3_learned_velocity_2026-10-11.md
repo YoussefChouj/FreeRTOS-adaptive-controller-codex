@@ -87,6 +87,22 @@ Checks:
 Next: tape-measure the OF lens offset from the motor centroid (fixes r without data), then R4 with in-place yaw spins
 both ways at 2 rates to validate a firmware `of_lever_xy` term (PROPOSED, not written).
 
+## 6. OF-IMU delay (R1 item 4; `delay.py`, `xlag.py`, computed, R3 only)
+Direct: raw flow of1 vs gyro (0.5 s high-pass, 100 Hz grid), main correlation lobe: of1_dx~Gyro_Y r -0.53 at -31 ms,
+of1_dy~Gyro_X r +0.50 at -34 ms. So flow(t) matches gyro(t+~32 ms): the logged gyro trails the flow (inference: gyro LPF group delay).
+Side lobes of opposite sign at about +-140 ms show a ~3.5 Hz attitude oscillation.
+
+Replay, the four flow channels shifted against gyro/tilt (replay dt 9.5 ms):
+
+| shift (ms) | -47 | -28 | -19 | -9 | 0 | +9 | +19 | +28 |
+|---|---|---|---|---|---|---|---|---|
+| rms (cm) | 33.8 | 33.8 | 38.2 | 36.0 | **32.4** | 32.7 | 34.6 | 34.2 |
+| rev p90 (cm) | 40.7 | 36.7 | 38.1 | 39.0 | 38.5 | 39.2 | 40.9 | 43.0 |
+| hover (cm/s) | 0.43 | 0.51 | 0.60 | 0.52 | **0.44** | 0.46 | 0.55 | 0.46 |
+
+No shift beats zero on rms or hover. The scores move non-monotonically between neighbours, so gate flips dominate.
+Delay compensation is not a lever for the hover-drift budget.
+
 ## Verdict
 With one flight nothing learned beats the EKF on position. The gyro-residual velocity gain (16-24%) does not carry
 over to position. Camera position fusion (0.44 -> 0.06 cm/s, `r3_drift_truth_2026-10-11.md`) is still the only
