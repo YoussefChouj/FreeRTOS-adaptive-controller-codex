@@ -16,7 +16,6 @@ Pure yaw moves the drone (63/35 cm, half from OF lever arm). Only camera fusion 
 Fusion replay (651531d, computed, design doc `live_camera_fusion_design_2026-10-11.md`): EKF-pos update at 1 s cuts
 hover rms 10.9->4.7 cm, moves 31->16.5 cm; hold-out learns no lasting trim, so the camera must stay in the loop.
 The 0.3 s lag in moves is a camera/telemetry sync offset (~0.25 s, 4882068); with it fixed, moves rms is 11.7 cm.
-R4 must time-stamp one sharp event (tap or LED) on both camera and telemetry.
 EXT_POS shadow mode (6e3b00b): CMD 0x2C uplinks a camera fix; firmware logs the innovation `g_ext_pos.*` only, no
 state write, off at boot. Encoder `ground_station/comm/ext_pos_encoder.py`.
 Live tracker dry run (985dadb, a6d319e): R3 red-ring mean-shift run online, matches offline R3 at 0.7 px median
@@ -29,7 +28,7 @@ offset UNMEASURED (R4).
    Then re-run `test_command_symbol_map` (fails until g_ext_pos_* are in the axf).
    After it: check `kp_active` 7, `g_ctrl_axis_mask` 63, `lab_stage_active` 1 (run sheet `docs/lab/run-sheet-2026-10-10.md`).
 2. R4 flight (doc "R4 flight plan"): camera records the whole battery, 90 s hover, 4 x (1 m out, back, 15 s hold),
-   top marker id1, yaw spins both ways at 2 rates, LANDING switch, tape touchdown. Success = rms, p90 -30% vs R3.
+   top marker id1, one sharp sync event (tap/LED) seen by camera and telemetry, yaw spins both ways at 2 rates, LANDING switch, tape touchdown. Success = rms, p90 -30% vs R3.
 3. Still pending from 10-10: 6-axis MRAC (off at boot, `docs/analysis/mrac-xy-replay-2026-10-10.md`), lab matrix
    `docs/lab/today-2026-10-10.md`, logging option f. After the flash: regenerate capability_manifest.json.
 
