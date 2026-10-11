@@ -1337,7 +1337,8 @@ def drift_score(name: str, cam: str = "docs/video-truth/cam_r4_lenswave_2026-10-
 # Ring and gate as API/ekf_of.h; slew, gain and the re-anchor rule are the PROPOSED closed loop
 # (docs/video-truth/live_camera_fusion_design_2026-10-11.md): gain 0.1 at 10 fixes/s ~ a 1 s time constant.
 # API/ekf_of.h 2026-10-12 (PROPOSED): gain 0.9 / slew 10 cm per fix, applied part ramped over SPREAD_N 20 x 5 ms
-EXT_POS = {"ring_n": 32, "ring_dt": 0.05, "gate_m": 0.40, "slew_m": 0.10, "gain": 0.9, "rej_n": 3, "spread_s": 0.1}
+EXT_POS = {"ring_n": 32, "ring_dt": 0.05, "gate_m": 0.40, "slew_m": 0.10, "gain": 0.9, "rej_n": 3, "spread_s": 0.1,
+           "beta": 0.0, "rmax_mps": 0.3}
 
 
 def ext_pos_replay(t, est, fix_t, fix_xy, lat_s: float, p: dict = EXT_POS, arr_t=None) -> tuple[np.ndarray, dict]:
@@ -1347,8 +1348,12 @@ def ext_pos_replay(t, est, fix_t, fix_xy, lat_s: float, p: dict = EXT_POS, arr_t
     rej_n gated fixes came in a row, then accepted through the slew clamp until a fix is back inside the gate
     (slewed re-anchor). An accepted fix moves the target c by gain*e, at most slew; the applied part a follows c at
     most slew per spread_s (ext_pos_spread; 0 = at once). `arr_t` (sorted): per-fix arrival times instead of
-    fix_t + lat_s, for a fix time the drone computes from a wrong delay. Returns est + a(t), fix counts."""
+    fix_t + lat_s, for a fix time the drone computes from a wrong delay. beta > 0 (PROPOSED, replay only) adds an
+    offset rate r: c runs on at r between fixes, the innovation is taken against c back-dated to fix_t
+    (c - r (now - fix_t)), and an accepted fix moves r by beta*e per fix interval, |r| <= rmax_mps.
+    Returns est + a(t), fix counts."""
     rt, rx, c, a, tp = [], [], np.zeros(2), np.zeros(2), None
+    r, beta, tf = np.zeros(2), p.get("beta", 0.0), None
     n = {"ok": 0, "gated": 0, "old": 0, "reanchor": 0}
     out, rej, k = np.empty_like(est), 0, 0
     arr = np.asarray(fix_t) + lat_s if arr_t is None else np.asarray(arr_t)
@@ -1364,7 +1369,7 @@ def ext_pos_replay(t, est, fix_t, fix_xy, lat_s: float, p: dict = EXT_POS, arr_t
             else:
                 j = int(np.searchsorted(rt, tm, side="right"))
                 pm = rx[-1] if j >= len(rt) else rx[j - 1] + (tm - rt[j - 1]) / (rt[j] - rt[j - 1]) * (rx[j] - rx[j - 1])
-                e = fix_xy[k] - (pm + c)
+                e = fix_xy[k] - (pm + c - r * (ti - tm))
                 take = np.hypot(*e) <= p["gate_m"]
                 if take:
                     rej, n["ok"] = 0, n["ok"] + 1
@@ -1375,7 +1380,14 @@ def ext_pos_replay(t, est, fix_t, fix_xy, lat_s: float, p: dict = EXT_POS, arr_t
                 if take:
                     d = p["gain"] * e
                     c = c + d * min(1.0, p["slew_m"] / max(np.hypot(*d), 1e-12))
+                    if beta > 0:
+                        dtf = min(max(tm - tf, p["ring_dt"]), 1.0) if tf is not None else 1.0
+                        r = r + beta * e / dtf
+                        r = r * min(1.0, p["rmax_mps"] / max(np.hypot(*r), 1e-12))
+                    tf = tm
             k += 1
+        if beta > 0 and tp is not None:
+            c = c + r * (ti - tp)
         d, sp = c - a, p.get("spread_s", 0.0)
         a = c.copy() if sp <= 0 or tp is None else a + d * min(1.0, p["slew_m"] / sp * (ti - tp) / max(np.hypot(*d), 1e-12))
         out[i], tp = est[i] + a, ti
@@ -1384,29 +1396,31 @@ def ext_pos_replay(t, est, fix_t, fix_xy, lat_s: float, p: dict = EXT_POS, arr_t
 
 def fuse4(name: str, rate_hz: float = 10.0, lat_s: float = 0.3, sd_m: float | None = None, drop: float | None = None,
           gain: float = EXT_POS["gain"], seed: int = 0, slew_m: float = EXT_POS["slew_m"],
-          spread_s: float = EXT_POS["spread_s"]) -> dict:
+          spread_s: float = EXT_POS["spread_s"], beta: float = EXT_POS["beta"]) -> dict:
     """Replay the closed-loop camera fusion on one truth4 flight: fixes at rate_hz = truth + noise (default sd: the
     flight's on-pad jitter / 1.18, the Rayleigh median), a drop rate (default: the tracker's lost fraction), lat_s
     capture-to-drone delay, fed to ext_pos_replay on the earth estimate; earth and fused are scored by
     drift_score. The fixes come from the same camera as the truth, so this scores the fusion, not the camera."""
-    t, truth, earth, fused, sd, n = _fuse4_est(name, rate_hz, lat_s, sd_m, drop, gain, seed, slew_m, spread_s)
-    r = drift_score(name, ests={"earth": earth, "fused": fused}, tag=_fuse4_tag(lat_s, gain, slew_m, spread_s))
+    t, truth, earth, fused, sd, n = _fuse4_est(name, rate_hz, lat_s, sd_m, drop, gain, seed, slew_m, spread_s,
+                                               beta)
+    r = drift_score(name, ests={"earth": earth, "fused": fused}, tag=_fuse4_tag(lat_s, gain, slew_m, spread_s, beta))
     r["fuse"] = {"rate_hz": rate_hz, "lat_s": lat_s, "sd_cm": sd * 100, "gain": gain, "slew_cm": slew_m * 100,
-                 "spread_ms": spread_s * 1000,
+                 "spread_ms": spread_s * 1000, "beta": beta,
                  "counts": n, "seed": seed}
     return r
 
 
-def _fuse4_tag(lat_s, gain, slew_m, spread_s=EXT_POS["spread_s"]) -> str:
-    return f"_fuse_{int(lat_s * 1000)}ms" + ext_pos_sfx(gain, slew_m, spread_s)
+def _fuse4_tag(lat_s, gain, slew_m, spread_s=EXT_POS["spread_s"], beta=0.0) -> str:
+    return f"_fuse_{int(lat_s * 1000)}ms" + ext_pos_sfx(gain, slew_m, spread_s, beta)
 
 
-def ext_pos_sfx(gain, slew_m, spread_s) -> str:
+def ext_pos_sfx(gain, slew_m, spread_s, beta=0.0) -> str:
     """Explicit score-file suffix (the defaults changed 2026-10-12; files without it are gain 0.1 / slew 3 cm)."""
-    return f"_g{round(gain * 100):03d}_s{round(slew_m * 100):03d}_sp{round(spread_s * 1000):03d}"
+    return (f"_g{round(gain * 100):03d}_s{round(slew_m * 100):03d}_sp{round(spread_s * 1000):03d}"
+            + (f"_b{round(beta * 100):03d}" if beta else ""))
 
 
-def _fuse4_est(name, rate_hz, lat_s, sd_m, drop, gain, seed, slew_m, spread_s=EXT_POS["spread_s"]):
+def _fuse4_est(name, rate_hz, lat_s, sd_m, drop, gain, seed, slew_m, spread_s=EXT_POS["spread_s"], beta=0.0):
     vd = Path(f"logs/video_truth/{name}")
     rows = np.genfromtxt(vd / "truth4.csv", delimiter=",", names=True)
     summ = json.loads((vd / "truth4.json").read_text())
@@ -1416,7 +1430,8 @@ def _fuse4_est(name, rate_hz, lat_s, sd_m, drop, gain, seed, slew_m, spread_s=EX
     ft = np.arange(t[0], t[-1], 1.0 / rate_hz)
     ft = ft[rng.random(len(ft)) >= (summ["coral_lost_frac"] if drop is None else drop)]
     z = np.c_[np.interp(ft, t, truth[:, 0]), np.interp(ft, t, truth[:, 1])] + rng.normal(0.0, sd, (len(ft), 2))
-    fused, n = ext_pos_replay(t, earth, ft, z, lat_s, dict(EXT_POS, gain=gain, slew_m=slew_m, spread_s=spread_s))
+    fused, n = ext_pos_replay(t, earth, ft, z, lat_s, dict(EXT_POS, gain=gain, slew_m=slew_m, spread_s=spread_s,
+                                                                 beta=beta))
     return t, truth, earth, fused, sd, n
 
 
@@ -1735,6 +1750,7 @@ def main(argv=None):
     fu.add_argument("--gain", type=float, default=EXT_POS["gain"])
     fu.add_argument("--slew-cm", type=float, default=EXT_POS["slew_m"] * 100, help="max c step per fix, cm")
     fu.add_argument("--spread-ms", type=float, default=EXT_POS["spread_s"] * 1000, help="applied ramp per slew, ms")
+    fu.add_argument("--beta", type=float, default=EXT_POS["beta"], help="offset-rate gain per fix (0 = off)")
     fu.add_argument("--seed", type=int, default=0)
     fu.add_argument("--sd-cm", type=float, default=None, help="fix noise sd per axis (default: on-pad jitter / 1.18)")
     ps = sub.add_parser("presets4", help="per-preset (setpoint-run) tracking error, EKF and fuse4 replay vs truth4")
@@ -1766,7 +1782,7 @@ def main(argv=None):
         for n in a.names:
             for lat in a.lat:
                 r = fuse4(n, a.rate, lat, None if a.sd_cm is None else a.sd_cm / 100, gain=a.gain, seed=a.seed,
-                          slew_m=a.slew_cm / 100, spread_s=a.spread_ms / 1000)
+                          slew_m=a.slew_cm / 100, spread_s=a.spread_ms / 1000, beta=a.beta)
                 print(f"{n:24s} lat {lat:.2f} sd {r['fuse']['sd_cm']:.1f} " + " | ".join(
                     f"{k} rms {e['rms_cm']:5.1f} d60 p90/max {e.get('drift60_p90_cm', float('nan')):5.1f}/"
                     f"{e.get('drift60_max_cm', float('nan')):5.1f} 1s-mean {e.get('drift60s_p90_cm', float('nan')):5.1f}/"

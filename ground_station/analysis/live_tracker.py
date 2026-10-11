@@ -390,7 +390,7 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
 def replay(name: str, links=(0.15, 0.3), delay_err_s: float = 0.0, period: float = 0.1, n_med: int = 3,
            window_s: float = 0.2, gate: bool = True, cam_path: str = "docs/video-truth/cam_r4_lenswave_2026-10-11.json",
            root: str = "logs/video_truth", max_frames: int = 0, gain: float = vt.EXT_POS["gain"],
-           slew_m: float = vt.EXT_POS["slew_m"]) -> dict:
+           slew_m: float = vt.EXT_POS["slew_m"], beta: float = vt.EXT_POS["beta"]) -> dict:
     """Real-time replay of one R4 flight: the online CoralTracker (+ JumpGate) on cam.mkv, fixes packed exactly as
     sent, decoded as the firmware does (value -> cm, age byte), relative to the pad spot, arriving link s after
     the frame on the telemetry clock (truth4 offset); the drone dates each fix with delay_ms = link + delay_err_s.
@@ -417,12 +417,12 @@ def replay(name: str, links=(0.15, 0.3), delay_err_s: float = 0.0, period: float
     xy -= np.median(xy[pad], axis=0)                      # truth4 is relative to the pad spot too
     earth = np.c_[tab["earth_x"], tab["earth_y"]]
     out = {"name": name, "tracker": st, "circular": True, "delay_err_s": delay_err_s, "gain": gain,
-           "slew_cm": slew_m * 100, "spread_ms": vt.EXT_POS["spread_s"] * 1000, "links": {}}
-    sfx = vt.ext_pos_sfx(gain, slew_m, vt.EXT_POS["spread_s"])
+           "slew_cm": slew_m * 100, "spread_ms": vt.EXT_POS["spread_s"] * 1000, "beta": beta, "links": {}}
+    sfx = vt.ext_pos_sfx(gain, slew_m, vt.EXT_POS["spread_s"], beta)
     for L in links:
         arr = t_read + o + L
         fused, n = vt.ext_pos_replay(tt, earth, arr - age - (L + delay_err_s), xy, 0.0,
-                                     dict(vt.EXT_POS, gain=gain, slew_m=slew_m), arr_t=arr)
+                                     dict(vt.EXT_POS, gain=gain, slew_m=slew_m, beta=beta), arr_t=arr)
         r = vt.drift_score(name, ests={"earth": earth, "fused": fused}, tag=f"_live_{int(L * 1000)}ms{sfx}")
         out["links"][L] = {"counts": n, "est": {k: {q: e.get(q) for q in ("rms_cm", "drift60_p90_cm", "drift60s_p90_cm",
                                                                          "hf_rms_cm")}
@@ -442,10 +442,11 @@ def replay_main(argv) -> int:
     ap.add_argument("--max-frames", type=int, default=0)
     ap.add_argument("--gain", type=float, default=vt.EXT_POS["gain"], help="c step per accepted fix, x innovation")
     ap.add_argument("--slew-cm", type=float, default=vt.EXT_POS["slew_m"] * 100, help="max c step per fix, cm")
+    ap.add_argument("--beta", type=float, default=vt.EXT_POS["beta"], help="offset-rate gain per fix (0 = off)")
     a = ap.parse_args(argv)
     for nm in a.names:
         r = replay(nm, a.link, a.delay_err, a.period, a.n_med, a.window_s, not a.no_gate, max_frames=a.max_frames,
-                   gain=a.gain, slew_m=a.slew_cm / 100)
+                   gain=a.gain, slew_m=a.slew_cm / 100, beta=a.beta)
         print(json.dumps(r, default=float))
     return 0
 
