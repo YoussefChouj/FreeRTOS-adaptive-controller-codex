@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -1287,10 +1288,15 @@ def drift_score(name: str, cam: str = "docs/video-truth/cam_r4_lenswave_2026-10-
         hold |= (t >= a) & (t <= b)
     cls = np.where(yawing, "yaw", np.where(hold, "hold", "move"))
     dt = np.diff(t)
+    ed = np.flatnonzero(np.diff(np.r_[0, yawing.astype(int), 0]))     # yaw episodes: [start, end) index pairs
+    eps = [(a, b - 1) for a, b in zip(ed[::2], ed[1::2]) if t[b - 1] - t[a] >= 0.5]
+    yaw_t = np.interp(t, s0["t"], yaw)
     out = {"name": name, "flight_s": summ["flight_s"], "offset_skew_s": summ["offset_s"] - summ["offset_landing_s"],
            "sync_anchor": summ.get("sync_anchor"),
            "view_dir": u.round(3).tolist(), "class_s": {q: float(dt[cls[1:] == q].sum()) for q in ("hold", "move", "yaw")},
-           "truth_land_cm": summ["truth_land_cm"], "holds": [], "est": {}}
+           "truth_land_cm": summ["truth_land_cm"], "holds": [], "est": {},
+           "yaw_eps": [{"t0": float(t[a]), "t1": float(t[b]), "deg": float(np.degrees(yaw_t[b] - yaw_t[a])),
+                        "pure": bool(hold[a:b + 1].all())} for a, b in eps]}
     for a, b in holds:
         w = (t >= a) & (t <= b)
         if w.sum() < 10:
@@ -1314,7 +1320,8 @@ def drift_score(name: str, cam: str = "docs/video-truth/cam_r4_lenswave_2026-10-
              "rms_along_across_cm": (np.sqrt(np.mean((e @ ax) ** 2, 0)) * 100).round(1).tolist(),
              "end_cm": float(np.hypot(*e[-1]) * 100),
              "net_cm": {q: float(np.hypot(*v) * 100) for q, v in net.items()},
-             "net_rate_cm_s": {q: float(np.hypot(*v) * 100 / max(out["class_s"][q], 1e-9)) for q, v in net.items()}}
+             "net_rate_cm_s": {q: float(np.hypot(*v) * 100 / max(out["class_s"][q], 1e-9)) for q, v in net.items()},
+             "yaw_eps_cm": [float(np.hypot(*(e[b] - e[a])) * 100) for a, b in eps]}
         if len(i):
             o.update({f"drift{int(win_s)}_med_cm": float(np.median(gm)), f"drift{int(win_s)}_p90_cm": float(np.percentile(gm, 90)),
                       f"drift{int(win_s)}_max_cm": float(gm.max()), "frac_le_10cm": float((gm <= 10).mean()),
@@ -1377,6 +1384,19 @@ def fuse4(name: str, rate_hz: float = 10.0, lat_s: float = 0.3, sd_m: float | No
     flight's on-pad jitter / 1.18, the Rayleigh median), a drop rate (default: the tracker's lost fraction), lat_s
     capture-to-drone delay, fed to ext_pos_replay on the earth estimate; earth and fused are scored by
     drift_score. The fixes come from the same camera as the truth, so this scores the fusion, not the camera."""
+    t, truth, earth, fused, sd, n = _fuse4_est(name, rate_hz, lat_s, sd_m, drop, gain, seed, slew_m)
+    r = drift_score(name, ests={"earth": earth, "fused": fused}, tag=_fuse4_tag(lat_s, gain, slew_m))
+    r["fuse"] = {"rate_hz": rate_hz, "lat_s": lat_s, "sd_cm": sd * 100, "gain": gain, "slew_cm": slew_m * 100,
+                 "counts": n, "seed": seed}
+    return r
+
+
+def _fuse4_tag(lat_s, gain, slew_m) -> str:
+    return (f"_fuse_{int(lat_s * 1000)}ms" + ("" if gain == EXT_POS["gain"] else f"_g{round(gain * 100):03d}")
+            + ("" if slew_m == EXT_POS["slew_m"] else f"_s{round(slew_m * 100):03d}"))
+
+
+def _fuse4_est(name, rate_hz, lat_s, sd_m, drop, gain, seed, slew_m):
     vd = Path(f"logs/video_truth/{name}")
     rows = np.genfromtxt(vd / "truth4.csv", delimiter=",", names=True)
     summ = json.loads((vd / "truth4.json").read_text())
@@ -1387,12 +1407,65 @@ def fuse4(name: str, rate_hz: float = 10.0, lat_s: float = 0.3, sd_m: float | No
     ft = ft[rng.random(len(ft)) >= (summ["coral_lost_frac"] if drop is None else drop)]
     z = np.c_[np.interp(ft, t, truth[:, 0]), np.interp(ft, t, truth[:, 1])] + rng.normal(0.0, sd, (len(ft), 2))
     fused, n = ext_pos_replay(t, earth, ft, z, lat_s, dict(EXT_POS, gain=gain, slew_m=slew_m))
-    tag = (f"_fuse_{int(lat_s * 1000)}ms" + ("" if gain == EXT_POS["gain"] else f"_g{round(gain * 100):03d}")
-           + ("" if slew_m == EXT_POS["slew_m"] else f"_s{round(slew_m * 100):03d}"))
-    r = drift_score(name, ests={"earth": earth, "fused": fused}, tag=tag)
-    r["fuse"] = {"rate_hz": rate_hz, "lat_s": lat_s, "sd_cm": sd * 100, "gain": gain, "slew_cm": slew_m * 100,
-                 "counts": n, "seed": seed}
-    return r
+    return t, truth, earth, fused, sd, n
+
+
+def presets4(name: str, lat_s: float = 0.3, gain: float = EXT_POS["gain"], slew_m: float = EXT_POS["slew_m"],
+             gap_s: float = 1.5, min_s: float = 3.0) -> dict:
+    """Per-preset tracking error on one truth4 flight. Segments are the runs where the position setpoint (slot3
+    Ctrler.loc{x,y}PID.Des, cm, earth frame) moves, merged over gaps < gap_s and kept if >= min_s; a straight run
+    that ends at (0, 0) is labelled 'return'. Per segment: ctrl = Des - earth (what the controller sees), track =
+    Des - truth (where the drone really is vs where it was told), ekf = earth - truth, fused = the fuse4 replay
+    (same lat/gain/slew rules, synthetic fixes) - truth. rms and max in cm."""
+    vd = Path(f"logs/video_truth/{name}")
+    t, truth, earth, fused, _, _ = _fuse4_est(name, 10.0, lat_s, None, None, gain, 0, slew_m)
+    s3 = read_slots(json.loads((vd / "truth4.json").read_text())["stem"], (3,))[3]
+    D = np.c_[s3["Ctrler.locxPID.Des"], s3["Ctrler.locyPID.Des"]]
+    mv = np.flatnonzero(np.r_[False, np.any(np.abs(np.diff(D, axis=0)) > 1e-4, axis=1)])
+    runs, a = [], 0
+    for i in range(1, len(mv) + 1):
+        if i == len(mv) or s3["t"][mv[i]] - s3["t"][mv[i - 1]] > gap_s:
+            runs.append((s3["t"][mv[a]], s3["t"][mv[i - 1]])); a = i
+    des = np.c_[np.interp(t, s3["t"], D[:, 0]), np.interp(t, s3["t"], D[:, 1])] / 100
+    segs = []
+    for t0, t1 in runs:
+        m = (t >= t0) & (t <= t1)
+        if t1 - t0 < min_s or m.sum() < 10:
+            continue
+        d = des[m]; path = float(np.sum(np.hypot(*np.diff(d, axis=0).T)))
+        disp = float(np.hypot(*(d[-1] - d[0])))
+        kind = "return" if np.hypot(*d[-1]) < 0.01 and path < 1.05 * disp + 0.01 else "traj"
+        err = {"ctrl": d - earth[m], "track": d - truth[m], "ekf": earth[m] - truth[m], "fused": fused[m] - truth[m]}
+        segs.append({"t0": float(t0), "t1": float(t1), "kind": kind, "dur_s": float(t1 - t0),
+                     "extent_cm": (100 * (d.max(0) - d.min(0))).round(1).tolist(), "path_cm": round(100 * path, 1),
+                     "speed_cm_s": round(100 * path / (t1 - t0), 1),
+                     **{f"{k}_rms_cm": round(float(100 * np.sqrt(np.mean(np.sum(e ** 2, 1)))), 1) for k, e in err.items()},
+                     **{f"{k}_max_cm": round(float(100 * np.max(np.hypot(*e.T))), 1) for k, e in err.items()}})
+    out = {"name": name, "fuse": {"lat_s": lat_s, "gain": gain, "slew_cm": slew_m * 100}, "segments": segs}
+    (vd / f"truth4_presets{_fuse4_tag(lat_s, gain, slew_m)}.json").write_text(json.dumps(out, indent=1))
+    return out
+
+
+def yaw4(names, est: str = "earth") -> list[dict]:
+    """Pure-yaw drift ranking: per flight, the yaw episodes drift_score finds (|yaw rate| > 15 deg/s, >= 0.5 s),
+    the error jump |e(end) - e(start)| of `est` vs truth across each, and cm per 90 deg turned; 'pure' = the
+    position setpoint was held for the whole episode. Group: 3g (b13c-b17 guard set) or 4g, variant from _vNN.
+    Sorted worst first by pure cm/90 deg (all episodes if a flight has no pure one)."""
+    rows = []
+    for n in names:
+        r = drift_score(n); ep = r["yaw_eps"]; cm = r["est"][est]["yaw_eps_cm"]
+        def per90(sel):
+            d = sum(abs(e["deg"]) for e, s in zip(ep, sel) if s)
+            return 90 * sum(c for c, s in zip(cm, sel) if s) / d if d else float("nan")
+        pure = [e["pure"] for e in ep]
+        m = re.search(r"_v(\d+)", n)
+        rows.append({"name": n, "group": "3g" if "_3g" in n or "b13c" in n else "4g", "variant": f"v{m.group(1)}" if m else "?",
+                     "eps": len(ep), "pure_eps": sum(pure), "deg_total": round(sum(abs(e["deg"]) for e in ep)),
+                     "cm_per90": per90([True] * len(ep)), "pure_cm_per90": per90(pure),
+                     "ep_med_cm": float(np.median(cm)) if cm else float("nan"),
+                     "yaw_rate_cm_s": r["est"][est]["net_rate_cm_s"]["yaw"], "hold_rate_cm_s": r["est"][est]["net_rate_cm_s"]["hold"]})
+    key = lambda q: -(q["pure_cm_per90"] if q["pure_eps"] else q["cm_per90"]) if q["eps"] else 0.0
+    return sorted(rows, key=key)
 
 
 # ---------------------------------------------------------------- R4: learned camera-off correction (Phase 3)
@@ -1653,6 +1726,12 @@ def main(argv=None):
     fu.add_argument("--slew-cm", type=float, default=EXT_POS["slew_m"] * 100, help="max c step per fix, cm")
     fu.add_argument("--seed", type=int, default=0)
     fu.add_argument("--sd-cm", type=float, default=None, help="fix noise sd per axis (default: on-pad jitter / 1.18)")
+    ps = sub.add_parser("presets4", help="per-preset (setpoint-run) tracking error, EKF and fuse4 replay vs truth4")
+    ps.add_argument("names", nargs="+"); ps.add_argument("--lat", type=float, default=0.3)
+    ps.add_argument("--gain", type=float, default=EXT_POS["gain"])
+    ps.add_argument("--slew-cm", type=float, default=EXT_POS["slew_m"] * 100)
+    yw = sub.add_parser("yaw4", help="pure-yaw drift ranking (error jump per yaw episode, cm per 90 deg)")
+    yw.add_argument("names", nargs="+"); yw.add_argument("--est", default="earth")
     nn = sub.add_parser("nn4", help="LOFO learned camera-off correction (ridge + MLP) on truth4 flights")
     nn.add_argument("names", nargs="*"); nn.add_argument("--lam", type=float, default=300.0)
     nn.add_argument("--hidden", type=int, default=32); nn.add_argument("--epochs", type=int, default=60)
@@ -1683,6 +1762,21 @@ def main(argv=None):
                     f"{e.get('drift60s_max_cm', float('nan')):5.1f} hf {e.get('hf_rms_cm', float('nan')):4.1f} "
                     f"hold {e['net_rate_cm_s']['hold']:.2f} cm/s"
                     for k, e in r["est"].items()) + f" | {r['fuse']['counts']}")
+    elif a.cmd == "presets4":
+        for n in a.names:
+            r = presets4(n, a.lat, a.gain, a.slew_cm / 100)
+            print(f"{n} lat {a.lat:.2f} gain {a.gain} slew {a.slew_cm} cm: rms/max cm")
+            for s in r["segments"]:
+                print(f"  {s['t0']:6.1f}-{s['t1']:6.1f} {s['kind']:6s} {s['dur_s']:4.1f} s ext {s['extent_cm']} "
+                      f"{s['speed_cm_s']:5.1f} cm/s | " + " ".join(
+                          f"{k} {s[k + '_rms_cm']:5.1f}/{s[k + '_max_cm']:5.1f}" for k in ("ctrl", "track", "ekf", "fused")))
+    elif a.cmd == "yaw4":
+        print("| flight | group | variant | yaw eps (pure) | deg turned | cm/90 deg all | cm/90 deg pure | median jump cm | yaw / hold cm/s |")
+        print("|---|---|---|---|---|---|---|---|---|")
+        for q in yaw4(a.names, a.est):
+            print(f"| {q['name']} | {q['group']} | {q['variant']} | {q['eps']} ({q['pure_eps']}) | {q['deg_total']} | "
+                  f"{q['cm_per90']:.1f} | {q['pure_cm_per90']:.1f} | {q['ep_med_cm']:.1f} | "
+                  f"{q['yaw_rate_cm_s']:.2f} / {q['hold_rate_cm_s']:.2f} |")
     elif a.cmd == "report4":
         print(table4() if a.md == "-" else report4(a.md, a.out, a.metric))
     elif a.cmd == "nn4":
