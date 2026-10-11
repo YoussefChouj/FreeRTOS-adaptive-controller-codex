@@ -62,10 +62,22 @@ The existing 9-byte command frame `0xCC 0xDD [CMD][IDX][VALUE f32 LE][XOR]` over
 - The earth-path PI first proposed here (Kp 0.3, Ki 0.05) is worse. Kp only: rms 19.7, off drift 1.36 cm/s.
   Ki >= 0.05 diverges (rms 40-3000): the integrator winds up behind the 3 cm slew clamp.
 - A 40 cm gate changes nothing in R3 (no camera outliers).
-- In moves, most of the remaining error is a time lag. Shifting the camera truth 0.3 s later cuts the fused rms
-  from 16.5 to 12.9 cm (no fusion: 31.0 to 29.0). The cause is unknown: either a camera/telemetry sync offset or a
-  real estimate lag. R4 must time-stamp a sharp event (tap or LED) seen by both the camera and telemetry. The
-  firmware WIFI_DELAY_MS and the tracker latency then follow from that measurement.
+- In moves, most of the remaining error was a timestamp offset, not estimator lag. `camlag.py` cross-correlates
+  camera body velocity (moves, t >= 124 s) with raw flow of2_fix and with the EKF velocity. Raw flow trails the camera
+  by 0.22 s (x) / 0.28 s (y), corr 0.80 / 0.74. The EKF trails it by 0.28 / 0.32 s. The physical flow delay is
+  only ~32 ms, so the R3 sync (`video_t = tel_t + 15.05`) is about 0.25 s off (truth at telemetry time t = camera at
+  t - 0.25 s), or the telemetry stamps carry a link delay. The EKF itself adds only ~0.05 s on top of raw flow.
+- Re-run with the 0.25 s shift (`fuse4.py <o1> 124 0.25`):
+
+| Variant (sync shifted 0.25 s) | Hover rms / max (cm) | Moves rms / p90 / max (cm) |
+|---|---|---|
+| No fusion | 14.4 / 34.1 | 28.7 / 54.6 / 66.9 |
+| EKF update, 1 s, R 1 cm | 4.3 / 17.7 | 11.7 / 18.1 / 36.3 |
+| EKF update, 2 s, R 1 cm | 4.8 / 20.9 | 12.0 / 19.0 / 34.6 |
+| EKF update, 5 s, R 1 cm | 5.1 / 16.6 | 21.2 / 31.7 / 45.1 |
+
+- Live consequence: the camera-to-firmware delay must be measured, not assumed. R4: one sharp event (a tap on the
+  frame or an LED) seen by both the camera and telemetry fixes the sync. WIFI_DELAY_MS and the tracker age follow.
 
 The earlier claim that EKF-pos fusion diverges (rms 47-89 cm) does not hold for this pattern: the innovation is
 taken against the buffered earth path at capture time and rotated into body axes.

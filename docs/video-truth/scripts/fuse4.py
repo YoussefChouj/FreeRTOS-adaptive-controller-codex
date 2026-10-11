@@ -5,7 +5,8 @@ S = sys.argv[1]; A2 = sys.argv[2:]; sys.argv = [sys.argv[0], S]
 exec(open(S + 'o4k.py').read().split("fwc=dict")[0])
 import ground_station.analysis.ekf_of_model as M
 fwc = dict(of_gate=5.0, q_acc=1e-3, of1_gate=10.0); t0 = 72.0
-ct = lambda q: np.interp(q, C['tt'], C['xy'][:, 0]) + 1j * np.interp(q, C['tt'], C['xy'][:, 1]); c72 = ct(t0)
+SH = float(A2[1]) if len(A2) > 1 else 0.0  # camera sync shift s: truth at tel time q = camera at q - SH
+ct = lambda q: np.interp(q - SH, C['tt'], C['xy'][:, 0]) + 1j * np.interp(q - SH, C['tt'], C['xy'][:, 1]); c72 = ct(t0)
 segoff = lambda q, p: p > 0 and ((q - t0) // p) % 2 == 1
 # (name, period s, seg length s (0 = all on, -1 = never), Rc sd m, gate m)
 V = [('none', 1, -1, .05, 0), ('on p1 R5', 1, 0, .05, 0), ('on p1 R1', 1, 0, .01, 0), ('on p2 R1', 2, 0, .01, 0), ('on p5 R1', 5, 0, .01, 0), ('on p1 R1 g40', 1, 0, .01, .4)]
