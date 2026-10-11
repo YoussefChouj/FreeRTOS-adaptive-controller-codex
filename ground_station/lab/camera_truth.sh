@@ -17,7 +17,7 @@ start)
     for i in $(seq 30); do up && break; sleep 1; done; up || { echo "service did not come up, see $vid/service.log"; exit 1; }
   fi
   body=$(python -c "import json;p=json.load(open('ground_station/vofa_studio/presets/$preset.json'));print(json.dumps({'slots':[{'slot':i+1,'vars':s['vars'],'rate':s['rate'],'name':'$preset'} for i,s in enumerate(p['slots'])]}))")
-  post /api/streams/apply "$body"
+  out=$(post /api/streams/apply "$body"); echo "${out:0:300}"; case "$out" in *'"ok": false'*|*'"error"'*) echo "ABORT: preset $preset refused by apply (slots unchanged)"; exit 1;; esac
   post /api/streams/log/start "{\"name\":\"$name\",\"mode\":\"unlimited\"}"
   post /api/recording/start "{\"requested_by\":\"operator\",\"label\":\"$name\",\"reason\":\"camera-truth session\"}"
   rm -f "$vid/stop"
