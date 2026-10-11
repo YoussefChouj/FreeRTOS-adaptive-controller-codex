@@ -1164,12 +1164,13 @@ def touchdown_video(t, xy, guess: float, search_s: float = 15.0, still_m: float 
     return float("nan")
 
 
-def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: int = 1, out=None) -> dict:
+def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: int = 1, rot_s: float = 60.0,
+             out=None) -> dict:
     """Camera truth for one R4 flight. Floor = id0 median pose (aruco.npz); drone pixel = guard-ring track
     (coral.npz, made here if missing); the ring plane is its on-pad height plus the telemetry height rise, so a
     climb does not move the cast. Sync: take-off (video cast leaves the pad) vs telemetry lift-off, refined +-refine_s
     by speed cross-correlation against the earth estimate; the landing offset is reported as a clock-skew check.
-    Each estimate (R4_EST) is taken relative to take-off and rotated (orthogonal Kabsch over the flight) onto the
+    Each estimate (R4_EST) is taken relative to take-off and rotated (orthogonal Kabsch over the first rot_s of flight) onto the
     floor frame. Returns the per-telemetry-sample table and a summary; `out` writes <out>.csv and <out>.json."""
     cam = json.loads(Path(cam).read_text()) if not isinstance(cam, dict) else cam
     K, dist, vd = np.array(cam["K"]), np.array(cam["dist"]), Path(video_dir)
@@ -1206,8 +1207,14 @@ def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: 
     earth = np.c_[s2[ex], s2[ey]] * es
     o0 = to_tel - to_vid
     d = sync_offset(t_v + o0, cast(o0), te[fly], earth[fly], max_lag=refine_s, dt=0.02)
-    o = o0 + d
+    o, anchor = o0 + d, "takeoff"
     ld_vid = touchdown_video(t_v, g0, ld_tel - o)
+    if np.isfinite(ld_vid) and abs(ld_tel - ld_vid - o) > 2.0:
+        # R4 4-guard flights: Z_posPID.FB rises 9-12 s after the video lift-off, while the touchdown (= disarm)
+        # agrees with a +-15 s speed cross-correlation, so the landing is the better anchor there
+        o1 = ld_tel - ld_vid
+        d = sync_offset(t_v + o1, cast(o1), te[fly], earth[fly], max_lag=refine_s, dt=0.02)
+        o, anchor = o1 + d, "landing"
     xy = cast(o)
     xy -= np.median(xy[t_v < to_vid - 1.0], axis=0)                         # truth relative to the pad spot
 
@@ -1217,6 +1224,7 @@ def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: 
     summ = {"stem": stem, "h_ring_m": h, "id0_mad_px": mad0, "z0_m": z0, "takeoff_tel_s": to_tel,
             "takeoff_video_s": to_vid, "landing_tel_s": ld_tel, "landing_video_s": ld_vid,
             "offset_takeoff_s": o0, "offset_landing_s": ld_tel - ld_vid, "offset_refine_s": d, "offset_s": o,
+            "sync_anchor": anchor if np.isfinite(ld_vid) else "takeoff-unverified", "rot_fit_s": rot_s,
             "flight_s": ld_tel - to_tel, "coral_lost_frac": float(1 - ok.mean()),
             "pad_jitter_cm": float(np.median(np.hypot(*(xy[pad] - np.median(xy[pad], 0)).T)) * 100),
             "truth_land_cm": float(np.hypot(*np.median(xy[t_v > ld_vid + 1.0], 0)) * 100) if (t_v > ld_vid + 1).any() else None,
@@ -1224,7 +1232,7 @@ def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: 
     for name, (cx, cy, sc) in R4_EST.items():
         e = np.c_[s2[cx], s2[cy]][fly] * sc
         e = e - e[0]
-        q, refl = align(e, truth, len(e))
+        q, refl = align(e, truth, int(np.searchsorted(tt, tt[0] + rot_s)) if rot_s else len(e))
         ea = e @ q.T
         err = np.hypot(*(ea - truth).T)
         rows[f"{name}_x"], rows[f"{name}_y"] = ea[:, 0], ea[:, 1]
@@ -1277,7 +1285,8 @@ def drift_score(name: str, cam: str = "docs/video-truth/cam_r4_lenswave_2026-10-
         hold |= (t >= a) & (t <= b)
     cls = np.where(yawing, "yaw", np.where(hold, "hold", "move"))
     dt = np.diff(t)
-    out = {"name": name, "flight_s": summ["flight_s"], "offset_skew_s": summ["offset_landing_s"] - summ["offset_takeoff_s"],
+    out = {"name": name, "flight_s": summ["flight_s"], "offset_skew_s": summ["offset_s"] - summ["offset_landing_s"],
+           "sync_anchor": summ.get("sync_anchor"),
            "view_dir": u.round(3).tolist(), "class_s": {q: float(dt[cls[1:] == q].sum()) for q in ("hold", "move", "yaw")},
            "truth_land_cm": summ["truth_land_cm"], "holds": [], "est": {}}
     for a, b in holds:
@@ -1364,6 +1373,8 @@ def main(argv=None):
     r4.add_argument("name"); r4.add_argument("--cam", default="docs/video-truth/cam_r4_lenswave_2026-10-11.json")
     r4.add_argument("--refine", type=float, default=2.0)
     r4.add_argument("--coral-step", type=int, default=2, help="track every Nth frame (2 = 15 Hz at 30 fps)")
+    r4.add_argument("--rot-s", type=float, default=60.0, help="fit the estimate->floor rotation on the first N s of flight "
+                    "(0 = whole flight; a later estimate jump corrupts a whole-flight fit)")
     sc = sub.add_parser("score4", help="drift score of truth4 flights (hold/move/yaw split, 60 s windows)")
     sc.add_argument("names", nargs="+"); sc.add_argument("--win", type=float, default=60.0)
     a = ap.parse_args(argv)
@@ -1374,12 +1385,12 @@ def main(argv=None):
     elif a.cmd == "score4":
         for n in a.names:
             r = drift_score(n, win_s=a.win); e = r["est"]["earth"]
-            print(f"{n:30s} fly {r['flight_s']:5.0f} s skew {r['offset_skew_s']:+.2f} hold {r['class_s']['hold']:4.0f} s "
+            print(f"{n:30s} fly {r['flight_s']:5.0f} s skew {r['offset_skew_s']:+.2f} {(r['sync_anchor'] or '?')[:4]} hold {r['class_s']['hold']:4.0f} s "
                   f"land {r['truth_land_cm'] or float('nan'):5.1f} | earth rms {e['rms_cm']:5.1f} d60 med/p90/max "
                   f"{e.get('drift60_med_cm', float('nan')):5.1f}/{e.get('drift60_p90_cm', float('nan')):5.1f}/{e.get('drift60_max_cm', float('nan')):5.1f} "
                   f"rate hold/move/yaw " + "/".join(f"{e['net_rate_cm_s'][q]:.2f}" for q in ("hold", "move", "yaw")))
     elif a.cmd == "truth4":
-        r = r4_truth(f"logs/vofa/{a.name}", f"logs/video_truth/{a.name}", a.cam, a.refine, a.coral_step, out=f"logs/video_truth/{a.name}/truth4")
+        r = r4_truth(f"logs/vofa/{a.name}", f"logs/video_truth/{a.name}", a.cam, a.refine, a.coral_step, a.rot_s, out=f"logs/video_truth/{a.name}/truth4")
         print(json.dumps(r["summary"], indent=1))
     elif a.cmd == "mcal":
         scan, size = dict(np.load(a.scan)), tuple(int(v) for v in a.size.split("x"))
