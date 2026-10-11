@@ -3,33 +3,27 @@
 Read order: `AGENTS.md` -> this file -> `docs/agent/memory/rules.md` -> `.claude_state.md` (newest entry first).
 History: `docs/agent/ledger/` (grep, never read whole). Desktop session is CEO: inline, no subagents.
 
-## Now: 2026-10-11 - OF/EKF drift fix in code, not built in Keil, not flashed or flown
+## Now: 2026-10-12 - R4 overnight analysis done; camera fusion built, NOT flashed or flown
 
-Branch `overnight-2026-10-08`. Result doc: `docs/video-truth/r3_drift_truth_2026-10-11.md` (incl. R4 plan).
-R3 (10-11) camera truth showed the EKF error is born in fast RC moves: the raw-flow anchor (of1) is gated out
-at 5 sigma and never heals. Fix fb615c7: `of1_gate` 5 -> 10. Replay vs camera (computed): rms from 72 s
-48.9 -> 26.3 cm, revisit p90 55.5 -> 38.5 cm. Hover drift unchanged at 0.44 cm/s (needs an absolute reference
-or a trim confirmed by R4).
-
-R3 follow-ups (computed, `r3_learned_velocity_2026-10-11.md`): NN/ridge, flow scale, bias freeze, OF delay: no gain.
-Pure yaw moves the drone (63/35 cm, half from OF lever arm). Only camera fusion meets 0.17 cm/s.
-Fusion replay (651531d, computed, design doc `live_camera_fusion_design_2026-10-11.md`): EKF-pos update at 1 s cuts
-hover rms 10.9->4.7 cm, moves 31->16.5 cm; hold-out learns no lasting trim, so the camera must stay in the loop.
-The 0.3 s lag in moves is a camera/telemetry sync offset (~0.25 s, 4882068); with it fixed, moves rms is 11.7 cm.
-EXT_POS shadow mode (6e3b00b): CMD 0x2C uplinks a camera fix; firmware logs the innovation `g_ext_pos.*` only, no
-state write, off at boot. Encoder `ground_station/comm/ext_pos_encoder.py`.
-`live_tracker.py` dry run (985dadb): online R3 ring tracker, 0.7 px median vs offline (measured), height =
-telemetry Z + ring offset, sends nothing. Latency, link delay, ring offset UNMEASURED (R4).
+Branch `overnight-2026-10-08`. Report: `docs/flights/2026-10-12-r4-overnight-report.md` (+ `.html`, rebuild with
+`video_truth report4 <md> --out <html>`). Phase 1/2 notes: ledger `state-2026-10-11.md` (end).
+- Truth (R4, 13 flights): lens 0.287 px, coral rings 0 lost, pad jitter 0.6-1.1 cm. Flights b5/b6/b8/b9/b12 are
+  landing-anchored (take-off detected 9-12 s late). b8/b10/b12 are truth suspect (coral jumps).
+- EKF alone: 30-146 cm rms, hover b17 1 s-mean 60 s drift p90 19 cm. Camera replay (`fuse4`, offset c, gain 0.1,
+  0.3 s): 5.1-13.6 cm rms on good tracks; 10 cm budget met on hover only (9.2 at 0.15 s), moves 16-27 (latency).
+- `nn4` camera-off NN (LOFO): no fix, best 34 cm. The camera must stay in the loop.
+- Firmware EXT_POS mode 2 (e179e95f): offset c on earth_x/y (replayed rule, not the design-doc EKF update), gain
+  0.1, slew 3 cm, gate 40 cm, re-anchor after 3. Host test passes, Keil 0 errors. NOT flashed.
+- Ground: `live_tracker` (6e6e0759) live coral tracker + UDP relay via `stream_log --relay-port`; preset
+  `drift_rc_extpos` (d629deb1) priced, not applied.
+- Not done: b16 per-preset tracking error, a separate pure-yaw drift ranking.
 
 ## Next 3 actions
-1. Lab, drone disarmed, uVision closed: `python -m ground_station.flashtool.rebuild_and_flash --yes`.
-   The image carries fb615c7, EXT_POS shadow and the 10-10 items. gcc tests pass. Keil not run yet (UV4 open).
-   Then re-run `test_command_symbol_map` (fails until g_ext_pos_* are in the axf).
-   After it: check `kp_active` 7, `g_ctrl_axis_mask` 63, `lab_stage_active` 1 (run sheet `docs/lab/run-sheet-2026-10-10.md`).
-2. R4 flight (doc "R4 flight plan"): camera records the whole battery, 90 s hover, 4 x (1 m out, back, 15 s hold),
-   top marker id1, one sharp sync event (tap/LED) seen by camera and telemetry, yaw spins both ways at 2 rates, LANDING switch, tape touchdown. Success = rms, p90 -30% vs R3.
-3. Still pending from 10-10: 6-axis MRAC (off at boot, `docs/analysis/mrac-xy-replay-2026-10-10.md`), lab matrix
-   `docs/lab/today-2026-10-10.md`, logging option f. After the flash: regenerate capability_manifest.json.
+1. Lab, drone disarmed: follow `docs/lab/run-sheet-r5-fusion-bringup.md` from step 0 (flash with
+   `rebuild_and_flash --yes`, re-price the preset against the new ELF, bench 3 cm kick).
+2. Latency event, track check, shadow out-and-back (mode 1), then the closed-loop hover gate (mode 2, PROPOSED
+   10 cm + a tape-measured landing). No sysid start or origin reset in mode 2.
+3. Only after a pass: dense trajectory presets, then the load scenarios. Fail: mode 0, no dense/load flights.
 
 ## Do not
 - Arm/spin outside an operator-opened workflow-B battery session; flash while armed or with `--force`.
