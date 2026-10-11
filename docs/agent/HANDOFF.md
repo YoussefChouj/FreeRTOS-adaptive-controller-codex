@@ -13,6 +13,8 @@ Branch `overnight-2026-10-08`. Report: `docs/flights/2026-10-12-r4-overnight-rep
 - Camera fusion, live tracker replay, retuned rule (gain 0.9, slew 10 cm, spread 0.1 s, PROPOSED), 1 s-d60 p90:
   0.15 s latency b17 4.2, b13c 9.7, b5 9.6, b16 traj 12.1 cm; 0.3 s 6.3/13.4/13.6/16.5. First pass (gain 0.1,
   3 cm slew) was slew-limited. Replay and circular; latency 0.15 s or less REQUIRED.
+  Offset-rate term (`--beta`, db259a48) tried, not adopted: b16 9.0 but b13c/b5 10.8-13.3. b16 gap is tracker
+  fix error at speed (synthetic fixes 7.8).
 - Firmware EXT_POS mode 2: e179e95f + 18c7d964 (spread 0.5 cm/5 ms tick so the locx D term (Kd 4.0) does not
   kick). Host test passes, Keil 0 errors. NOT flashed. `test_ekf_of_shadow` `test_reset_bias` fails at HEAD too.
 - b16 per-preset (`presets4`): estimate error 14-105 cm, controller lag 6-30 cm, fused 1.9-11.4. Yaw (`yaw4`):

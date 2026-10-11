@@ -232,6 +232,20 @@ Retuned rule (gain 0.9, slew 10 cm, spread 0.1 s; `live_tracker replay`, 1 s-mea
   (latency) is a hard gate.
 - All of this is replay and circular (camera = fixes and truth). The firmware is built and host-tested, not flown.
 
+Tried, not adopted: an offset-rate term (`--beta`, db259a48, replay only). Between fixes the offset keeps moving
+at a learned rate. Live tracker at 0.15 s, 1 s-d60 p90 cm (rms):
+
+| beta | b16 traj | b13c | b5_max2 |
+|---|---|---|---|
+| 0 (adopted rule) | 12.1 (8.1) | 9.7 (8.5) | 9.6 (8.4) |
+| 0.1 | 10.5 (10.0) | 12.5 (10.6) | 13.3 (10.4) |
+| 0.2 | 9.0 (9.9) | 10.8 (10.7) | - |
+| 0.4 | 8.9 (10.0) | - | - |
+
+It brings b16 inside the budget, but rms rises on every flight and the moderate flights fail, so it stays off.
+Synthetic fixes on b16 score 7.8 cm with no rate term, against 12.1 live, so the rest of the b16 gap is tracker
+fix error at speed, not the fusion rule.
+
 - b10 is a bad track: the firmware gated 608 fixes and re-anchored 557 times. Track quality is a go/no-go check.
 - Tracker cost: frame read 9-12 ms + detect 2-3 ms per frame.
 
@@ -274,6 +288,7 @@ Retuned rule (gain 0.9, slew 10 cm, spread 0.1 s; `live_tracker replay`, 1 s-mea
   - a897f212: `presets4`, `yaw4`, `live_tracker replay --gain/--slew-cm`.
   - 89d40514: replay spread + explicit `_gNNN_sNNN_spNNN` score tags (untagged files are the old gain 0.1 / 3 cm).
   - 18c7d964: firmware gain 0.9 / slew 10 cm / spread (NOT flashed).
+  - db259a48: replay-only offset-rate option `--beta` (tried, not adopted, default off).
 - Rebuild this page:
   `python -m ground_station.analysis.video_truth report4 docs/flights/2026-10-12-r4-overnight-report.md --out docs/flights/2026-10-12-r4-overnight-report.html`
   (`report4 -` prints tables A and B).
