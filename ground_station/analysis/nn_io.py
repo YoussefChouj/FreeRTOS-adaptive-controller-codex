@@ -312,7 +312,8 @@ def airio_vel(m, d: dict, win: int = 1000) -> np.ndarray:
     return np.interp(k, u, out[j, 0]) + 1j * np.interp(k, u, out[j, 1])
 
 
-def airio_eval(model: str = "blackbird", rate_hz: float = 100.0, util_val: str = "const4", root: Path = UTIL_DIR) -> dict:
+def airio_eval(model: str = "blackbird", rate_hz: float = 100.0, util_val: str = "const4", root: Path = UTIL_DIR,
+               airio_hz: float = 100.0) -> dict:
     """Does the published AirIO net (IMU + attitude only) know the UTIL body velocity beyond the flow model? Global
     least-squares fits on the non-val flights, scored on the val flights: velocity r2 (x, y) and naive quick_d60
     p50/p90 (cm) of flow, AirIO and flow + AirIO. Offline only: AirIO's GRUs are bidirectional (non-causal)."""
@@ -322,14 +323,19 @@ def airio_eval(model: str = "blackbird", rate_hz: float = 100.0, util_val: str =
             r = util_raw(f, rate_hz)
         except (ValueError, KeyError, OSError):
             continue
-        va = airio_vel(m, r)
+        if rate_hz == airio_hz:
+            va = airio_vel(m, r)
+        else:  # AirIO runs at its training rate, then is resampled onto the scoring grid
+            r2 = util_raw(f, airio_hz)
+            v2 = airio_vel(m, r2)
+            va = np.interp(r["ts"], r2["ts"], v2.real) + 1j * np.interp(r["ts"], r2["ts"], v2.imag)
         A = np.c_[va.real, va.imag, np.ones(len(va))]
         raws.append({**r, "flow": r["Q"], "airio": A, "flow+airio": np.c_[r["Q"], A], "va": va})
     tr = [r for r in raws if util_val not in r["name"]]
     vr = [r for r in raws if util_val in r["name"]]
     vt = np.concatenate([r["vt"] for r in vr])
     e = np.concatenate([r["va"] for r in vr]) - vt
-    out = {"model": model, "rate_hz": rate_hz, "n": len(raws), "val": len(vr),
+    out = {"model": model, "rate_hz": rate_hz, "airio_hz": airio_hz, "n": len(raws), "val": len(vr),
            "val_rms_vt_mps": round(float(np.sqrt(np.mean(np.abs(vt) ** 2))), 3),
            "val_rms_airio_raw_err_mps": round(float(np.sqrt(np.mean(np.abs(e) ** 2))), 3)}
     T = np.c_[vt.real, vt.imag]
@@ -343,7 +349,7 @@ def airio_eval(model: str = "blackbird", rate_hz: float = 100.0, util_val: str =
         print(f"  {key:10s} val r2 {out[key]['r2']}  quick_d60 p50/p90 {out[key]['d60_p50_p90']}")
     print(f"  {model} @ {rate_hz:g} Hz: {out['n']} flights ({out['val']} val), |vt| rms {out['val_rms_vt_mps']} m/s, "
           f"raw AirIO error rms {out['val_rms_airio_raw_err_mps']} m/s")
-    Path(f"logs/video_truth/nnio_airio_{model}.json").write_text(json.dumps(out, indent=1))
+    Path(f"logs/video_truth/nnio_airio_{model}_{rate_hz:g}hz.json").write_text(json.dumps(out, indent=1))
     return out
 
 
@@ -553,6 +559,7 @@ def main(argv=None):
     ai.add_argument("--model", default="blackbird", choices=tuple(AIRIO))
     ai.add_argument("--rate", type=float, default=100.0)
     ai.add_argument("--util-val", default="const4")
+    ai.add_argument("--airio-rate", type=float, default=100.0, help="rate AirIO runs at (resampled onto --rate)")
     t = sub.add_parser("train")
     t.add_argument("--kind", default="gru", choices=("gru", "tcn"))
     t.add_argument("--H", type=int, default=32)
@@ -580,7 +587,7 @@ def main(argv=None):
     elif a.cmd == "sync":
         sync_scan()
     elif a.cmd == "airio":
-        airio_eval(a.model, a.rate, a.util_val)
+        airio_eval(a.model, a.rate, a.util_val, airio_hz=a.airio_rate)
     else:
         train(a.kind, a.H, a.head, a.layers, a.iters, a.seeds, a.lofo, a.tag, a.eval_every,
               tuple(x for x in a.exclude.split(",") if x), a.pre_iters, a.ft_lr, a.util_val, crop_s=a.crop_s, lr=a.lr, wd=a.wd, drop=a.drop, vel_w=a.vel_w,
