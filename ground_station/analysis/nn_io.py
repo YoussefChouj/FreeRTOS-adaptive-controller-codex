@@ -212,7 +212,8 @@ def util_raw(path, rate_hz: float = RATE_HZ, min_z: float = 0.3, min_s: float = 
     vt = np.gradient(pos, ts) * np.conj(back)
     F0 = np.c_[acc[0], acc[1], acc[2], gyr[0], gyr[1], gyr[2], roll, pitch, fl[0] * z, fl[1] * z, z * 100]
     Q = np.c_[fl[0] * z, fl[1] * z, gyr[0] * z, gyr[1] * z]
-    return {"name": Path(path).stem, "ts": ts[sl], "F0": F0[sl], "Q": Q[sl], "vt": vt[sl], "back": back[sl], "pos": pos[sl]}
+    return {"name": Path(path).stem, "ts": ts[sl], "F0": F0[sl], "Q": Q[sl], "vt": vt[sl], "back": back[sl], "pos": pos[sl],
+            "q": np.c_[qx, qy, qz, qw][sl]}
 
 
 def util_finish(raws: list[dict], coef: np.ndarray | None = None) -> tuple[list[dict], np.ndarray]:
@@ -249,6 +250,101 @@ def _torch():
     import torch
     torch.set_num_threads(4)
     return torch
+
+
+AIRIO = {"euroc": Path("D:/datasets/airio_ckpt_euroc/best_model.ckpt"),
+         "blackbird": Path("D:/datasets/airio_ckpt_bb/best_model.ckpt")}
+FRD = np.array([1.0, -1.0, -1.0])  # Crazyflie FLU body <-> Blackbird FRD body (BatchNorm-implied mean acc_z -11 m/s^2)
+
+
+def airio_net(ckpt):
+    """AirIO CodeNetMotionwithRot (Qiu et al. 2025) rebuilt in plain torch, published weights loaded strictly with
+    weights_only. In: body acc (m/s^2, gravity included), gyro (rad/s), attitude rotation vector; out: body velocity
+    once every 9 input samples."""
+    torch = _torch()
+    nn = torch.nn
+
+    class Enc(nn.Module):
+        def __init__(self, c):
+            super().__init__()
+            self.net = nn.Sequential(nn.Conv1d(c, 32, 7, 3, 3), nn.BatchNorm1d(32), nn.GELU(), nn.Conv1d(32, 64, 7, 3, 3),
+                                     nn.BatchNorm1d(64), nn.GELU(), nn.Dropout(0.5))
+
+    class Net(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.cnn, self.feature_encoder, self.ori_encoder = Enc(6), Enc(6), Enc(3)
+            self.gru1 = nn.GRU(64, 64, batch_first=True, bidirectional=True)
+            self.gru2 = nn.GRU(128, 128, batch_first=True, bidirectional=True)
+            self.fcn1, self.batchnorm1 = nn.Sequential(nn.Linear(128, 128)), nn.BatchNorm1d(128)
+            self.fcn2, self.batchnorm2 = nn.Sequential(nn.Linear(128, 64)), nn.BatchNorm1d(64)
+            self.veldecoder = nn.Sequential(nn.Linear(256, 128), nn.GELU(), nn.Linear(128, 3))
+            self.velcov_decoder = nn.Sequential(nn.Linear(256, 128), nn.GELU(), nn.Linear(128, 3))
+
+        def forward(self, imu, rv):
+            h = torch.cat([self.feature_encoder.net(imu.transpose(1, 2)), self.ori_encoder.net(rv.transpose(1, 2))], 1)
+            h = self.fcn2(h.transpose(1, 2))
+            h = nn.functional.gelu(self.batchnorm2(h.transpose(1, 2)).transpose(1, 2))
+            return self.veldecoder(self.gru2(self.gru1(h)[0])[0])
+
+    m = Net()
+    m.load_state_dict(torch.load(ckpt, map_location="cpu", weights_only=True)["model_state_dict"])
+    return m.eval()
+
+
+def airio_vel(m, d: dict, win: int = 1000) -> np.ndarray:
+    """AirIO body velocity (complex, FLU x + iy) on the grid of a util_raw dict made at the model's IMU rate."""
+    torch = _torch()
+    q = d["q"] * np.where(d["q"][:, 3:] < 0, -1.0, 1.0)
+    n = np.linalg.norm(q[:, :3], axis=1, keepdims=True)
+    rv = 2 * np.arctan2(n, q[:, 3:]) * q[:, :3] / np.maximum(n, 1e-9) * FRD
+    imu = np.c_[d["F0"][:, :3] * 9.81, np.radians(d["F0"][:, 3:6])] * np.r_[FRD, FRD]
+    L, idx, out = len(q), [], []
+    with torch.no_grad():
+        for i0 in sorted({*range(0, max(L - win, 0) + 1, win), max(L - win, 0)}):
+            sl = slice(i0, i0 + win)
+            v = m(torch.tensor(imu[None, sl], dtype=torch.float32), torch.tensor(rv[None, sl], dtype=torch.float32))[0]
+            idx.append(i0 + np.minimum(14 + 9 * np.arange(len(v)), min(win, L) - 1))
+            out.append(v.numpy() * FRD)
+    idx, out = np.concatenate(idx), np.concatenate(out)
+    u, j = np.unique(idx, return_index=True)
+    k = np.arange(L)
+    return np.interp(k, u, out[j, 0]) + 1j * np.interp(k, u, out[j, 1])
+
+
+def airio_eval(model: str = "blackbird", rate_hz: float = 100.0, util_val: str = "const4", root: Path = UTIL_DIR) -> dict:
+    """Does the published AirIO net (IMU + attitude only) know the UTIL body velocity beyond the flow model? Global
+    least-squares fits on the non-val flights, scored on the val flights: velocity r2 (x, y) and naive quick_d60
+    p50/p90 (cm) of flow, AirIO and flow + AirIO. Offline only: AirIO's GRUs are bidirectional (non-causal)."""
+    m, raws = airio_net(AIRIO[model]), []
+    for f in sorted(Path(root).glob("*/*.csv")):
+        try:
+            r = util_raw(f, rate_hz)
+        except (ValueError, KeyError, OSError):
+            continue
+        va = airio_vel(m, r)
+        A = np.c_[va.real, va.imag, np.ones(len(va))]
+        raws.append({**r, "flow": r["Q"], "airio": A, "flow+airio": np.c_[r["Q"], A], "va": va})
+    tr = [r for r in raws if util_val not in r["name"]]
+    vr = [r for r in raws if util_val in r["name"]]
+    vt = np.concatenate([r["vt"] for r in vr])
+    e = np.concatenate([r["va"] for r in vr]) - vt
+    out = {"model": model, "rate_hz": rate_hz, "n": len(raws), "val": len(vr),
+           "val_rms_vt_mps": round(float(np.sqrt(np.mean(np.abs(vt) ** 2))), 3),
+           "val_rms_airio_raw_err_mps": round(float(np.sqrt(np.mean(np.abs(e) ** 2))), 3)}
+    T = np.c_[vt.real, vt.imag]
+    for key in ("flow", "airio", "flow+airio"):
+        coef = util_finish([{**r, "Q": r[key]} for r in tr])[1]
+        ds = util_finish([{**r, "Q": r[key]} for r in vr], coef)[0]
+        y = np.concatenate([d["Y"] for d in ds])
+        q60 = [quick_d60(d, rate_hz=rate_hz) for d in ds]
+        out[key] = {"r2": (1 - (y ** 2).sum(0) / ((T - T.mean(0)) ** 2).sum(0)).round(3).tolist(),
+                    "d60_p50_p90": np.round(np.nanpercentile(q60, [50, 90]), 1).tolist()}
+        print(f"  {key:10s} val r2 {out[key]['r2']}  quick_d60 p50/p90 {out[key]['d60_p50_p90']}")
+    print(f"  {model} @ {rate_hz:g} Hz: {out['n']} flights ({out['val']} val), |vt| rms {out['val_rms_vt_mps']} m/s, "
+          f"raw AirIO error rms {out['val_rms_airio_raw_err_mps']} m/s")
+    Path(f"logs/video_truth/nnio_airio_{model}.json").write_text(json.dumps(out, indent=1))
+    return out
 
 
 def build(D: int, kind: str = "gru", H: int = 32, head: str = "scale", layers: int = 1, k: int = 5, drop: float = 0.1):
@@ -453,6 +549,10 @@ def main(argv=None):
     c = sub.add_parser("calib")
     c.add_argument("--chunk-s", type=float, default=20.0)
     sub.add_parser("sync", help="truth time-shift scan of earth and the in-sample oracle")
+    ai = sub.add_parser("airio", help="published AirIO net vs the UTIL flow model (velocity r2, naive drift)")
+    ai.add_argument("--model", default="blackbird", choices=tuple(AIRIO))
+    ai.add_argument("--rate", type=float, default=100.0)
+    ai.add_argument("--util-val", default="const4")
     t = sub.add_parser("train")
     t.add_argument("--kind", default="gru", choices=("gru", "tcn"))
     t.add_argument("--H", type=int, default=32)
@@ -479,6 +579,8 @@ def main(argv=None):
         calib(chunk_s=a.chunk_s)
     elif a.cmd == "sync":
         sync_scan()
+    elif a.cmd == "airio":
+        airio_eval(a.model, a.rate, a.util_val)
     else:
         train(a.kind, a.H, a.head, a.layers, a.iters, a.seeds, a.lofo, a.tag, a.eval_every,
               tuple(x for x in a.exclude.split(",") if x), a.pre_iters, a.ft_lr, a.util_val, crop_s=a.crop_s, lr=a.lr, wd=a.wd, drop=a.drop, vel_w=a.vel_w,
