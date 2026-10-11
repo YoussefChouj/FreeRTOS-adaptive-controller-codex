@@ -1392,6 +1392,126 @@ def fuse4(name: str, rate_hz: float = 10.0, lat_s: float = 0.3, sd_m: float | No
     return r
 
 
+# ---------------------------------------------------------------- R4: learned camera-off correction (Phase 3)
+# A small model learns the body-frame velocity the earth path misses (truth - earth, from truth4) from 1 s of
+# 100 Hz IMU/OF and 50 Hz EKF states; its integral corrects earth with the camera off. Leave-one-flight-out, and
+# the model never trains on NN4_HOLD (b17 hover; b7/b10 take-off-unverified sync) or NN4_SUSPECT (coral jumps).
+NN4_HOLD = ("hover_r4_b17_v0_3g", "drift_rc_r4_b7_v19_4000", "drift_rc_r4_b10_v20")
+NN4_SUSPECT = ("drift_rc_r4_b8_v17", "drift_rc_r4_b12_v21")
+NN4_CH = {1: ("Acc_X_Real", "Acc_Y_Real", "Acc_Z_Real", "Gyro_X_Real", "Gyro_Y_Real", "Gyro_Z_Real", "imu_data.rol",
+              "imu_data.pit", "ano_of.of2_dx_fix", "ano_of.of2_dy_fix", "ano_of.of1_dx", "ano_of.of1_dy"),
+          2: ("s_ekf_of.x[1]", "s_ekf_of.x[4]", "ano_of.of_alt_cm", "s_ekf_of.innov_x", "s_ekf_of.innov_y")}
+
+
+def nn4_data(name: str, rate_hz: float = 10.0, win_s: float = 1.0, nblk: int = 10) -> dict:
+    """One truth4 flight at rate_hz: features = nblk block means of NN4_CH over a causal win_s window; target Y =
+    body-frame velocity residual (truth - earth, 0.5 s savgol derivative; truth4 rotation undone, then turned by
+    the yaw). The yaw sense `sign` is the one whose body-frame earth velocity best matches the EKF body velocity
+    (complex correlation `corr`, checked per flight). `back` turns body vectors at ts into the truth4 frame."""
+    from scipy.signal import savgol_filter
+    vd = Path(f"logs/video_truth/{name}")
+    rows = np.genfromtxt(vd / "truth4.csv", delimiter=",", names=True)
+    summ = json.loads((vd / "truth4.json").read_text())
+    if summ["est"]["earth"]["reflect"]:
+        raise ValueError(f"{name}: reflected earth fit, body frame undefined")
+    S = read_slots(summ["stem"], (1, 2))
+    t = rows["t_tel"]; dt = float(np.median(np.diff(t)))
+    truth = rows["truth_x"] + 1j * rows["truth_y"]; earth = rows["earth_x"] + 1j * rows["earth_y"]
+    unrot = np.exp(-1j * np.radians(summ["est"]["earth"]["rot_deg"]))
+    yaw = np.interp(t, S[1]["t"], np.unwrap(np.radians(S[1]["imu_data.yaw"])))
+    d = lambda z: savgol_filter(z.real, 25, 2, deriv=1, delta=dt) + 1j * savgol_filter(z.imag, 25, 2, deriv=1, delta=dt)
+    ekf = np.interp(t, S[2]["t"], S[2]["s_ekf_of.x[1]"]) + 1j * np.interp(t, S[2]["t"], S[2]["s_ekf_of.x[4]"])
+    ve = d(earth) * unrot
+    cc = {s: np.vdot(ve * np.exp(1j * s * yaw), ekf) / np.sqrt(np.vdot(ve, ve).real * np.vdot(ekf, ekf).real) for s in (1, -1)}
+    sign = max(cc, key=lambda s: abs(cc[s]))
+    vres = d(truth - earth) * unrot * np.exp(1j * sign * yaw)
+    ts = np.arange(t[0] + win_s, t[-1], 1.0 / rate_hz)
+    edges = ts[:, None] - win_s + np.arange(nblk + 1)[None, :] * win_s / nblk
+    F = []
+    for k, chans in NN4_CH.items():
+        j = np.searchsorted(S[k]["t"], edges); n = np.maximum(np.diff(j, axis=1), 1)
+        for c in chans:
+            cs = np.r_[0.0, np.cumsum(np.nan_to_num(S[k][c]))]
+            F.append(np.diff(cs[j], axis=1) / n)
+    i = np.searchsorted(t, ts)
+    return {"name": name, "t": t, "truth": truth, "earth": earth, "ts": ts, "F": np.hstack(F),
+            "Y": np.c_[vres[i].real, vres[i].imag], "back": np.exp(-1j * sign * yaw[i]) / unrot,
+            "sign": sign, "corr": complex(cc[sign])}
+
+
+def _ridge(Xtr, Ytr, Xte, lam):
+    mu, sd = Xtr.mean(0), Xtr.std(0) + 1e-9
+    A = np.c_[(Xtr - mu) / sd, np.ones(len(Xtr))]
+    W = np.linalg.solve(A.T @ A + lam * np.diag(np.r_[np.ones(Xtr.shape[1]), 0.0]), A.T @ Ytr)
+    return np.c_[(Xte - mu) / sd, np.ones(len(Xte))] @ W
+
+
+def _mlp(Xtr, Ytr, Xte, H=32, ep=60, lr=3e-3, wd=1e-3, seed=0):
+    """2 tanh layers, MSE, Adam; early stop on the last 1/8 of the training rows."""
+    rng = np.random.default_rng(seed)
+    mu, sd = Xtr.mean(0), Xtr.std(0) + 1e-9; ym, ys = Ytr.mean(0), Ytr.std(0) + 1e-9
+    A, B = (Xtr - mu) / sd, (Ytr - ym) / ys
+    nv = max(1, len(A) // 8); tr, va = np.arange(len(A) - nv), np.arange(len(A) - nv, len(A))
+    D = A.shape[1]
+    P = [rng.normal(0, 1 / np.sqrt(D), (D, H)), np.zeros(H), rng.normal(0, 1 / np.sqrt(H), (H, H)), np.zeros(H),
+         rng.normal(0, 0.1 / np.sqrt(H), (H, 2)), np.zeros(2)]
+    M = [np.zeros_like(p) for p in P]; V = [np.zeros_like(p) for p in P]; best, step = (np.inf, P), 0
+    fwd = lambda Z, P: (h1 := np.tanh(Z @ P[0] + P[1]), h2 := np.tanh(h1 @ P[2] + P[3]), h2 @ P[4] + P[5])
+    for _ in range(ep):
+        for b in np.array_split(rng.permutation(tr), max(1, len(tr) // 128)):
+            h1, h2, o = fwd(A[b], P); go = (o - B[b]) / len(b)
+            d2 = (go @ P[4].T) * (1 - h2 ** 2); d1 = (d2 @ P[2].T) * (1 - h1 ** 2)
+            G = [A[b].T @ d1, d1.sum(0), h1.T @ d2, d2.sum(0), h2.T @ go, go.sum(0)]; step += 1
+            for k in range(6):
+                g = G[k] + wd * P[k] * (k % 2 == 0)
+                M[k] = 0.9 * M[k] + 0.1 * g; V[k] = 0.999 * V[k] + 0.001 * g ** 2
+                P[k] = P[k] - lr * (M[k] / (1 - 0.9 ** step)) / (np.sqrt(V[k] / (1 - 0.999 ** step)) + 1e-8)
+        L = float(np.mean((fwd(A[va], P)[2] - B[va]) ** 2))
+        if L < best[0]:
+            best = (L, [p.copy() for p in P])
+    return fwd((Xte - mu) / sd, best[1])[2] * ys + ym
+
+
+def nn4(names=None, lam: float = 300.0, H: int = 32, ep: int = 60, seeds: int = 2) -> dict:
+    """LOFO camera-off correction on every truth4 flight: ridge and MLP trained on the pool (all flights minus
+    NN4_HOLD, NN4_SUSPECT and the scored one) predict the body velocity residual; its integral (from the first
+    sample, in the truth4 frame) is added to earth and scored by drift_score (tag _nn4). `oracle` integrates the
+    true residual (pipeline check: should land near truth). vel_r2 = residual variance explained, out of fold."""
+    allf, data, skipped = sorted(p.parent.name for p in Path("logs/video_truth").glob("*/truth4.json")), {}, {}
+    for n in allf:
+        try:
+            data[n] = nn4_data(n)
+        except ValueError as e:
+            skipped[n] = str(e)
+    allf = [n for n in allf if n in data]
+    pool = [n for n in allf if n not in NN4_HOLD + NN4_SUSPECT]
+    D = data[allf[0]]["F"].shape[1]
+    out = {"pool": pool, "hold": list(NN4_HOLD), "suspect": list(NN4_SUSPECT), "skipped": skipped, "features": D, "lam": lam, "H": H,
+           "params": {"ridge": 2 * (D + 1), "mlp": D * H + H + H * H + H + 2 * H + 2},
+           "macs_per_step": {"ridge": 2 * D, "mlp": D * H + H * H + 2 * H}, "flights": {}}
+    for n in names or allf:
+        d = data[n]; tr = [m for m in pool if m != n]
+        Xtr = np.vstack([data[m]["F"] for m in tr]); Ytr = np.vstack([data[m]["Y"] for m in tr])
+        pred = {"oracle": d["Y"], "ridge": _ridge(Xtr, Ytr, d["F"], lam),
+                "mlp": np.mean([_mlp(Xtr, Ytr, d["F"], H, ep, seed=s) for s in range(seeds)], 0)}
+        dts = np.diff(d["ts"], prepend=d["ts"][0])
+        ests = {"earth": np.c_[d["earth"].real, d["earth"].imag]}
+        r2 = {}
+        for k, p in pred.items():
+            c = np.cumsum((p[:, 0] + 1j * p[:, 1]) * d["back"] * dts)
+            c = np.interp(d["t"], d["ts"], c.real, left=0.0) + 1j * np.interp(d["t"], d["ts"], c.imag, left=0.0)
+            z = d["earth"] + c
+            ests[k] = np.c_[z.real, z.imag]
+            r2[k] = float(1 - np.sum((p - d["Y"]) ** 2) / np.sum((d["Y"] - d["Y"].mean(0)) ** 2))
+        r = drift_score(n, ests=ests, tag="_nn4")
+        out["flights"][n] = {"in_pool": n in pool, "sign": d["sign"], "corr": round(abs(d["corr"]), 3),
+                             "corr_deg": round(float(np.degrees(np.angle(d["corr"]))), 1), "n_train": len(Ytr),
+                             "vel_r2": r2, "est": {k: {q: e.get(q) for q in ("rms_cm", "drift60_p90_cm", "drift60s_p90_cm")}
+                                                   for k, e in r["est"].items()}}
+    Path("logs/video_truth/nn4_lofo.json").write_text(json.dumps(out, indent=1))
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1455,6 +1575,10 @@ def main(argv=None):
     fu.add_argument("--lat", type=float, nargs="+", default=[0.3], help="capture-to-drone delay(s), s")
     fu.add_argument("--gain", type=float, default=EXT_POS["gain"]); fu.add_argument("--seed", type=int, default=0)
     fu.add_argument("--sd-cm", type=float, default=None, help="fix noise sd per axis (default: on-pad jitter / 1.18)")
+    nn = sub.add_parser("nn4", help="LOFO learned camera-off correction (ridge + MLP) on truth4 flights")
+    nn.add_argument("names", nargs="*"); nn.add_argument("--lam", type=float, default=300.0)
+    nn.add_argument("--hidden", type=int, default=32); nn.add_argument("--epochs", type=int, default=60)
+    nn.add_argument("--seeds", type=int, default=2)
     a = ap.parse_args(argv)
     if a.cmd == "aruco":
         r = aruco_scan(a.video, a.step, a.t0, a.t1, out=a.out)
@@ -1477,6 +1601,13 @@ def main(argv=None):
                     f"{e.get('drift60s_max_cm', float('nan')):5.1f} hf {e.get('hf_rms_cm', float('nan')):4.1f} "
                     f"hold {e['net_rate_cm_s']['hold']:.2f} cm/s"
                     for k, e in r["est"].items()) + f" | {r['fuse']['counts']}")
+    elif a.cmd == "nn4":
+        r = nn4(a.names or None, a.lam, a.hidden, a.epochs, a.seeds)
+        print(f"pool {len(r['pool'])} flights, {r['features']} features, params {r['params']}, MACs/step {r['macs_per_step']}")
+        for n, f in r["flights"].items():
+            print(f"{n:30s} {'pool' if f['in_pool'] else 'HELD'} sign {f['sign']:+d} corr {f['corr']:.2f}@{f['corr_deg']:+.0f} r2 "
+                  + "/".join(f"{f['vel_r2'][k]:+.2f}" for k in ("ridge", "mlp")) + " | " + " ".join(
+                      f"{k} {e['rms_cm']:5.1f}/{e['drift60s_p90_cm'] or float('nan'):5.1f}" for k, e in f["est"].items()))
     elif a.cmd == "truth4":
         r = r4_truth(f"logs/vofa/{a.name}", f"logs/video_truth/{a.name}", a.cam, a.refine, a.coral_step, a.rot_s, out=f"logs/video_truth/{a.name}/truth4")
         print(json.dumps(r["summary"], indent=1))
