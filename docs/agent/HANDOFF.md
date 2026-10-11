@@ -17,7 +17,8 @@ moves the drone (63/35 cm in 185/540 deg turns); OF lever arm explains about hal
 Only camera fusion meets 0.17 cm/s. Operator: tape-measure OF lens offset from motor centroid.
 Fusion replay (651531d, computed, design doc `live_camera_fusion_design_2026-10-11.md`): EKF-pos update at 1 s cuts
 hover rms 10.9->4.7 cm, moves 31->16.5 cm; hold-out learns no lasting trim, so the camera must stay in the loop.
-Moves error is mostly a 0.3 s estimate-vs-camera lag (sync offset or real lag, being checked).
+The 0.3 s lag in moves is a camera/telemetry sync offset (~0.25 s, 4882068); with it fixed, moves rms is 11.7 cm.
+R4 must time-stamp one sharp event (tap or LED) on both camera and telemetry.
 
 ## Next 3 actions
 1. Lab, drone disarmed, uVision closed: `python -m ground_station.flashtool.rebuild_and_flash --yes`.
