@@ -38,7 +38,8 @@ flash mode-2 ─> bench (link, kick) ─> latency event ─> track check ─> sh
 A sharp tap on the frame, seen in both the video and `Acc_*_Real`. delay = frame time minus IMU time plus the
 link. **0.15 s or less is REQUIRED** (replay, 1 s-mean 60 s drift p90 with the 18c7d964 rule, 20 Hz fixes): at
 0.15 s b17 hover 3.5, b13c 7.3, b5 7.4, b16 traj 7.4 cm; at 0.3 s 5.6 / 11.3 / 11.8 / 12.3. Above 0.15 s: hover
-flights only, no dense trajectory presets.
+flights only, no dense trajectory presets. Pin `--delay-ms` to within 50 ms (PROPOSED): a 50 ms error moved b16/b13c
+to 6.8-9.5 cm in replay, inside the budget with about 0.5 cm left.
 
 ## 3. Coral track quality (go/no-go for every flight)
 

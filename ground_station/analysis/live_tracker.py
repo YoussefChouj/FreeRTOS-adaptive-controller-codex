@@ -423,6 +423,8 @@ def replay(name: str, links=(0.15, 0.3), delay_err_s: float = 0.0, period: float
     sfx = vt.ext_pos_sfx(gain, slew_m, vt.EXT_POS["spread_s"], beta)
     if (period, n_med, window_s) != (0.1, 3, 0.2):
         sfx += f"_p{round(period * 1000):03d}n{n_med}w{round(window_s * 1000):03d}"
+    if delay_err_s:
+        sfx += f"_de{'p' if delay_err_s > 0 else 'm'}{round(abs(delay_err_s) * 1000):03d}"
     for L in links:
         arr = t_read + o + L
         fused, n = vt.ext_pos_replay(tt, earth, arr - age - (L + delay_err_s), xy, 0.0,

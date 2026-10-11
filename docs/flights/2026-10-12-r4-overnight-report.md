@@ -268,6 +268,10 @@ should help. `live_tracker replay --period/--n-med/--window-s`, retuned rule, 1 
   have no ACK, so the received rate must be measured on the bench (run sheet step 1: growth of `g_ext_pos.n_ok + n_rej + n_old`).
 - Link load: one fix frame is 9 bytes, so 20 Hz is 180 B/s and 30 Hz 270 B/s before UDP/WiFi overhead (computed).
 - At 0.3 s latency no rate saves the moving flights (10.3-12.3 cm), so latency stays the first gate.
+- Delay setting off by 50 ms (`--delay-err`, 20 Hz, 0.15 s link), 1 s-d60 p90 / rms cm: b16 7.4 becomes 6.8 / 6.5
+  (+50 ms) and 9.5 / 7.0 (-50 ms); b13c 7.3 becomes 9.4 / 7.7 (+50 ms) and 7.4 / 7.1 (-50 ms). Still inside the
+  budget, with 0.5-0.6 cm left at the worst case, so the latency event must pin `--delay-ms` to within 50 ms
+  (PROPOSED).
 
 - b10 is a bad track: the firmware gated 608 fixes and re-anchored 557 times. Track quality is a go/no-go check.
 - Tracker cost: frame read 9-12 ms + detect 2-3 ms per frame.
@@ -313,7 +317,8 @@ should help. `live_tracker replay --period/--n-med/--window-s`, retuned rule, 1 
   - 89d40514: replay spread + explicit `_gNNN_sNNN_spNNN` score tags (untagged files are the old gain 0.1 / 3 cm).
   - 18c7d964: firmware gain 0.9 / slew 10 cm / spread (NOT flashed).
   - db259a48: offset-rate term `--beta` (replay only, not adopted).
-  - (this commit): `live_tracker` 20 Hz fix-rate default and `_pNNNnNwNNN` tags, fix-rate table, run sheet gate.
+  - de2e61d1: `live_tracker` 20 Hz fix-rate default and `_pNNNnNwNNN` tags, fix-rate table, run sheet gate.
+  - (this commit): `_depNNN/_demNNN` delay-error tags, delay-error check.
   - db259a48: replay-only offset-rate option `--beta` (tried, not adopted, default off).
 - Rebuild this page:
   `python -m ground_station.analysis.video_truth report4 docs/flights/2026-10-12-r4-overnight-report.md --out docs/flights/2026-10-12-r4-overnight-report.html`
