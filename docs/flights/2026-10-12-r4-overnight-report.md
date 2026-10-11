@@ -176,8 +176,8 @@ Leave-one-flight-out, 1 s-mean 60 s drift p90 (cm), EKF → ridge / MLP:
 - Host gcc test `test_ext_pos.c` passes (new checks: c step at most slew, earth step at most slew/20 per tick,
   a reaches c in 20 ticks). Keil build 0 errors; the first try failed writing `OBJ/*.o` ("Invalid argument",
   Windows Defender holding the files), the retry passed. Defender stayed on.
-- Pre-existing, not fixed: `test_ekf_of_shadow.c` `test_reset_bias` fails at HEAD too (the flow-bias freeze in
-  946f801d; the test was never updated). Unrelated to EXT_POS.
+- Fixed (test only): `test_ekf_of_shadow.c` `test_reset_bias` asserted the 10-03 bias freeze (q_bof 0), but
+  41c9dea2 (10-07) learns the bias again (q_bof 1e-5). It now checks a slow learn from 0; 8/8 pass. No firmware change.
 - `Reset_World_Origin` zeroes c; sysid start (`send_data.c` case 6) zeroes earth, so neither may run in mode 2.
 - **Design deviation:** this is the offset rule that the replay validated, not the delayed EKF state update in
   the design doc. The EKF itself (`s_ekf_of`) still dead-reckons; only the position the controller uses is
@@ -340,7 +340,8 @@ command loop. 20 Hz, 1 s-d60 p90 / rms cm, Python copy -> firmware C:
   - db259a48: offset-rate term `--beta` (replay only, not adopted).
   - de2e61d1: `live_tracker` 20 Hz fix-rate default and `_pNNNnNwNNN` tags, fix-rate table, run sheet gate.
   - 1302f1e1: `_depNNN/_demNNN` delay-error tags, delay-error check.
-  - (this commit): firmware-in-the-loop replay (`--fw`, `API/tests/ext_pos_replay_host.c`, `_fw` tags).
+  - 5f32ec4c: firmware-in-the-loop replay (`--fw`, `API/tests/ext_pos_replay_host.c`, `_fw` tags).
+  - (this commit): stale `test_reset_bias` assertion updated (all firmware host tests pass).
 - Rebuild this page:
   `python -m ground_station.analysis.video_truth report4 docs/flights/2026-10-12-r4-overnight-report.md --out docs/flights/2026-10-12-r4-overnight-report.html`
   (`report4 -` prints tables A and B).

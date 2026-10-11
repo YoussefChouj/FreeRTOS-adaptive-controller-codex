@@ -16,7 +16,7 @@ Branch `overnight-2026-10-08`. Report: `docs/flights/2026-10-12-r4-overnight-rep
   `--beta` (db259a48) tried, not adopted. `replay --fw` runs the real `API/ekf_of.c` (gcc host driver
   `API/tests/ext_pos_replay_host.c`): 3.5/7.4/7.5/7.9 cm at 0.15 s, within 0.5 cm of the Python copy. FW takes 20-30 Hz (16-deep queue at 100 Hz, newest-wins mailbox).
 - Firmware EXT_POS mode 2: e179e95f + 18c7d964 (spread 0.5 cm/5 ms tick so the locx D term (Kd 4.0) does not
-  kick). Host test passes, Keil 0 errors. NOT flashed. `test_ekf_of_shadow` `test_reset_bias` fails at HEAD too.
+  kick). Host test passes, Keil 0 errors. NOT flashed. All firmware host tests pass.
 - b16 per-preset (`presets4`): estimate error 14-105 cm, controller lag 6-30 cm, fused 1.9-11.4. Yaw (`yaw4`):
   2-9 cm per 90 deg, not the main drift source.
 - Ground: `live_tracker` (6e6e0759) + `stream_log --relay-port`; preset `drift_rc_extpos` priced, not applied.
