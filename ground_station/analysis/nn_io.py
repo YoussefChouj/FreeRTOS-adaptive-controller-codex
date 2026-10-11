@@ -28,21 +28,21 @@ def flights() -> list[str]:
     return sorted(p.parent.name for p in Path("logs/video_truth").glob("*/truth4.json"))
 
 
+def _bmean(t: np.ndarray, x: np.ndarray, ts: np.ndarray, w: float, total: bool = False) -> np.ndarray:
+    """Mean (total: sum) of the samples x(t) in each causal block [ts - w, ts); the last sample when a block is empty."""
+    j = np.searchsorted(t, np.c_[ts - w, ts])
+    n = j[:, 1] - j[:, 0]
+    cs = np.r_[0.0, np.cumsum(x)]
+    s = cs[j[:, 1]] - cs[j[:, 0]]
+    return s if total else np.where(n > 0, s / np.maximum(n, 1), x[np.clip(j[:, 1] - 1, 0, len(t) - 1)])
+
+
 def seq(name: str, rate_hz: float = RATE_HZ) -> dict:
     """One flight on a causal rate_hz grid: nn4_data with one block per step (F = block means of the NN4_CH channels,
     falling back to the last sample when a block is empty), plus R = truth - earth (truth4 frame, m) at ts."""
     d = nn4_data(name, rate_hz=rate_hz, win_s=1.0 / rate_hz, nblk=1)
     S = read_slots(json.loads((Path(f"logs/video_truth/{name}") / "truth4.json").read_text())["stem"], (1, 2))
-    edges = np.c_[d["ts"] - 1.0 / rate_hz, d["ts"]]
-    F = []
-    for k, chans in NN4_CH.items():
-        j = np.searchsorted(S[k]["t"], edges)
-        n = np.diff(j, axis=1)[:, 0]
-        last = np.clip(j[:, 1] - 1, 0, len(S[k]["t"]) - 1)
-        for c in chans:
-            x = np.nan_to_num(S[k][c])
-            cs = np.r_[0.0, np.cumsum(x)]
-            F.append(np.where(n > 0, (cs[j[:, 1]] - cs[j[:, 0]]) / np.maximum(n, 1), x[last]))
+    F = [_bmean(S[k]["t"], np.nan_to_num(S[k][c]), d["ts"], 1.0 / rate_hz) for k, chans in NN4_CH.items() for c in chans]
     r = d["truth"] - d["earth"]
     d["F"] = np.c_[F].T
     d["R"] = np.interp(d["ts"], d["t"], r.real) + 1j * np.interp(d["ts"], d["t"], r.imag)
@@ -176,6 +176,75 @@ def sync_scan(span_s: float = 3.0, step_s: float = 0.1, rate_hz: float = RATE_HZ
     return out
 
 
+UTIL_DIR = Path("D:/datasets/util_uwb/x/dataset/flight-dataset/csv-data")
+COMMON = list(range(8)) + [12, 13, 14]   # NN4_CH acc, gyro, rol, pit, EKF body vel x/y, of_alt: the util F columns
+_UCOLS = ["t_acc", "acc_x", "acc_y", "acc_z", "t_gyro", "gyro_x", "gyro_y", "gyro_z", "t_tof", "tof", "t_flow",
+          "deltaX", "deltaY", "t_pose", "pose_x", "pose_y", "pose_z", "pose_qx", "pose_qy", "pose_qz", "pose_qw"]
+
+
+def util_raw(path, rate_hz: float = RATE_HZ, min_z: float = 0.3, min_s: float = 70.0) -> dict:
+    """One UTIL flight csv (Crazyflie 2.1: BMI088, PMW3901 flow, VL53L1x ToF, Vicon) on a causal rate_hz grid over its
+    longest airborne stretch (Vicon z > min_z). F0: acc (g), gyro (deg/s), roll, pitch (deg), flow (counts/s) x ToF (2),
+    ToF (cm); Q: flow-model regressors [flow_x z, flow_y z, gyro_x z, gyro_y z]; vt: Vicon body velocity; back: Vicon yaw."""
+    import pandas as pd
+    df = pd.read_csv(path, usecols=_UCOLS)
+    g = {k: df[[f"t_{k}"] + c].dropna().to_numpy().T for k, c in
+         (("acc", ["acc_x", "acc_y", "acc_z"]), ("gyro", ["gyro_x", "gyro_y", "gyro_z"]), ("tof", ["tof"]),
+          ("flow", ["deltaX", "deltaY"]), ("pose", ["pose_x", "pose_y", "pose_z", "pose_qx", "pose_qy", "pose_qz", "pose_qw"]))}
+    w = 1.0 / rate_hz
+    ts = np.arange(max(a[0][0] for a in g.values()) + w, min(a[0][-1] for a in g.values()), w)
+    P = np.array([np.interp(ts, g["pose"][0], x) for x in g["pose"][1:]])
+    qx, qy, qz, qw = P[3:] / np.linalg.norm(P[3:], axis=0)
+    roll = np.degrees(np.arctan2(2 * (qw * qx + qy * qz), 1 - 2 * (qx * qx + qy * qy)))
+    pitch = np.degrees(np.arcsin(np.clip(2 * (qw * qy - qz * qx), -1, 1)))
+    back = np.exp(1j * np.arctan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz)))
+    z = np.clip(np.interp(ts, *g["tof"]), 0.05, 4.0)
+    acc = [_bmean(g["acc"][0], x, ts, w) for x in g["acc"][1:]]
+    gyr = [_bmean(g["gyro"][0], x, ts, w) for x in g["gyro"][1:]]
+    fl = [_bmean(g["flow"][0], x, ts, w, total=True) / w for x in g["flow"][1:]]
+    pos = P[0] + 1j * P[1]
+    air = (P[2] > min_z) & (np.interp(ts, *g["tof"]) > 0.1)
+    e = np.flatnonzero(np.diff(np.r_[0, air.astype(int), 0]))
+    i0, i1 = max(zip(e[::2], e[1::2]), key=lambda r: r[1] - r[0])
+    if (i1 - i0) * w < min_s:
+        raise ValueError(f"airborne stretch {(i1 - i0) * w:.0f} s < {min_s:.0f} s")
+    sl = slice(i0, i1)
+    vt = np.gradient(pos, ts) * np.conj(back)
+    F0 = np.c_[acc[0], acc[1], acc[2], gyr[0], gyr[1], gyr[2], roll, pitch, fl[0] * z, fl[1] * z, z * 100]
+    Q = np.c_[fl[0] * z, fl[1] * z, gyr[0] * z, gyr[1] * z]
+    return {"name": Path(path).stem, "ts": ts[sl], "F0": F0[sl], "Q": Q[sl], "vt": vt[sl], "back": back[sl], "pos": pos[sl]}
+
+
+def util_finish(raws: list[dict], coef: np.ndarray | None = None) -> tuple[list[dict], np.ndarray]:
+    """The naive flow odometry of every UTIL flight: body velocity v = Q coef (one global least-squares fit of the Vicon
+    body velocity, coef (4, 2), the analogue of our EKF velocity), F = F0 with the flow columns replaced by v,
+    R = Vicon - integral of v (earth frame, m), Y = Vicon body velocity - v. Same keys as seq()."""
+    if coef is None:
+        Q = np.vstack([r["Q"] for r in raws])
+        vt = np.concatenate([r["vt"] for r in raws])
+        coef = np.c_[np.linalg.lstsq(Q, vt.real, rcond=None)[0], np.linalg.lstsq(Q, vt.imag, rcond=None)[0]]
+    out = []
+    for r in raws:
+        v = r["Q"] @ coef[:, 0] + 1j * (r["Q"] @ coef[:, 1])
+        dts = np.diff(r["ts"], prepend=r["ts"][0])
+        F = r["F0"].copy()
+        F[:, 8], F[:, 9] = v.real, v.imag
+        out.append({"name": r["name"], "ts": r["ts"], "back": r["back"], "F": F, "v": v,
+                    "R": (r["pos"] - r["pos"][0]) - np.cumsum(v * r["back"] * dts),
+                    "Y": np.c_[(r["vt"] - v).real, (r["vt"] - v).imag]})
+    return out, coef
+
+
+def util_load(rate_hz: float = RATE_HZ, root: Path = UTIL_DIR) -> tuple[list[dict], dict]:
+    raws, skipped = [], {}
+    for f in sorted(Path(root).glob("*/*.csv")):
+        try:
+            raws.append(util_raw(f, rate_hz))
+        except (ValueError, KeyError, OSError) as e:
+            skipped[f.stem] = str(e)[:120]
+    return util_finish(raws)[0], skipped
+
+
 def _torch():
     import torch
     torch.set_num_threads(4)
@@ -258,9 +327,10 @@ def _arrays(d: dict, mu, sd):
 
 
 def fit(train: list[dict], kind="gru", H=32, head="scale", layers=1, iters=1500, crop_s=90.0, batch=16, lr=3e-3,
-        wd=1e-4, drop=0.1, vel_w=0.0, seed=0, rate_hz=RATE_HZ, log_every=0, feats=None, noise=0.0, cb=None, cb_every=0):
+        wd=1e-4, drop=0.1, vel_w=0.0, seed=0, rate_hz=RATE_HZ, log_every=0, feats=None, noise=0.0, cb=None, cb_every=0, init=None):
     """Train on random crop_s windows of the train flights (zero initial state, like a take-off). feats: NN4_CH column
-    subset; noise: Gaussian input noise (normalised units); cb(it, model) every cb_every iterations."""
+    subset; noise: Gaussian input noise (normalised units); cb(it, model) every cb_every iterations; init: a model to
+    fine-tune (its net is copied, mu/sd are refit on train: per-dataset normalisation)."""
     torch = _torch()
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
@@ -272,7 +342,7 @@ def fit(train: list[dict], kind="gru", H=32, head="scale", layers=1, iters=1500,
     T = int(crop_s * rate_hz)
     steps = [int(h * rate_hz) for h in HORIZONS_S]
     ks = int(rate_hz)
-    net = build(len(feats), kind, H, head, layers, drop=drop)
+    net = build(len(feats), kind, H, head, layers, drop=drop) if init is None else __import__("copy").deepcopy(init[0])
     opt = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=wd)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=lr, total_steps=iters)
     lens = np.array([len(a[0]) for a in arr], float)
@@ -313,17 +383,41 @@ def predict(model, d: dict) -> np.ndarray:
         return net(torch.from_numpy(np.ascontiguousarray(X[:, feats]))[None], torch.from_numpy(V)[None])[0].numpy().astype(float)
 
 
+def _pretrain(kind, H, head, layers, pre_iters, seeds, eval_every, util_val, kw, out) -> list:
+    """One UTIL model per seed (val = UTIL flights whose name contains util_val, curve printed every eval_every)."""
+    util, uskip = util_load()
+    val = [d for d in util if util_val and util_val in d["name"]]
+    tr = [d for d in util if not (util_val and util_val in d["name"])]
+    q0 = [quick_d60(d) for d in util]
+    out["util"] = {"n": len(util), "skipped": uskip, "val": [d["name"] for d in val],
+                   "naive_d60_p50_p90": [round(float(np.percentile(q0, 50)), 1), round(float(np.percentile(q0, 90)), 1)]}
+    print(f"  util {len(util)} flights ({len(uskip)} skipped), naive quick_d60 p50/p90 {out['util']['naive_d60_p50_p90']}", flush=True)
+
+    def cb(s):
+        def f(it, m):
+            q = [quick_d60(d, predict(m, d)) for d in val]
+            out["curve"].setdefault(f"util|{s}", []).append([it, round(float(np.median(q)), 1)])
+            print(f"  pre seed {s} it {it}: util val median {np.median([quick_d60(d) for d in val]):.1f} -> {np.median(q):.1f}", flush=True)
+        return f
+    return [fit(tr, kind, H, head, layers, pre_iters, seed=s, cb=cb(s) if val else None, cb_every=eval_every,
+                **{**kw, "feats": None}) for s in range(seeds)]
+
+
 def train(kind="gru", H=32, head="scale", layers=1, iters=1500, seeds=2, lofo=False, tag="", eval_every=0, exclude=(),
-          **kw) -> dict:
+          pre_iters=0, ft_lr=1e-3, util_val="const4", **kw) -> dict:
     """Hold-out: train on the whole pool, score NN4_HOLD. lofo: also each pool flight with the pool minus it.
-    eval_every: print the quick_d60 learning curve of each scored flight; exclude: name substrings dropped from the pool."""
+    eval_every: print the quick_d60 learning curve of each scored flight; exclude: name substrings dropped from the pool.
+    pre_iters: first pretrain on UTIL (COMMON features), then fine-tune iters at ft_lr (scored flights: it 0 = zero-shot)."""
     data, skipped = load_all()
     pool, hold = split(list(data))
     pool = [n for n in pool if not any(x in n for x in exclude)]
     tag = tag or f"_nnio_{kind}{H}{head[0]}{layers}"
+    out_pre = {"curve": {}}
+    bases = _pretrain(kind, H, head, layers, pre_iters, seeds, eval_every, util_val, kw, out_pre) if pre_iters else None
     groups = [(pool, hold)] + ([([m for m in pool if m != n], [n]) for n in pool] if lofo else [])
     out = {"pool": pool, "hold": hold, "skipped": skipped, "cfg": {"kind": kind, "H": H, "head": head, "layers": layers,
-           "iters": iters, "seeds": seeds, "exclude": list(exclude), **kw}, "flights": {}, "curve": {}}
+           "iters": iters, "seeds": seeds, "exclude": list(exclude), "pre_iters": pre_iters, "ft_lr": ft_lr, **kw}, "flights": {}, "curve": out_pre["curve"],
+           "util": out_pre.get("util")}
 
     def curve(names, s):
         def cb(it, m):
@@ -334,8 +428,13 @@ def train(kind="gru", H=32, head="scale", layers=1, iters=1500, seeds=2, lofo=Fa
 
     for tr, names in groups:
         print("  earth quick_d60: " + " ".join(f"{n[:24]}={quick_d60(data[n]):.1f}" for n in names), flush=True)
-        models = [fit([data[m] for m in tr], kind, H, head, layers, iters, seed=s, cb=curve(names, s), cb_every=eval_every, **kw)
-                  for s in range(seeds)]
+        if bases:
+            Ftr = np.vstack([data[m]["F"] for m in tr])
+            for s, b in enumerate(bases):
+                curve(names, s)(0, (b[0], Ftr.mean(0), Ftr.std(0) + 1e-6, COMMON))
+        ft = {**kw, "feats": COMMON, "lr": ft_lr} if bases else kw
+        models = [fit([data[m] for m in tr], kind, H, head, layers, iters, seed=s, cb=curve(names, s), cb_every=eval_every,
+                      init=bases[s] if bases else None, **ft) for s in range(seeds)]
         for n in names:
             d = data[n]
             p = np.mean([predict(m, d) for m in models], 0)
@@ -372,6 +471,9 @@ def main(argv=None):
     t.add_argument("--noise", type=float, default=0.0)
     t.add_argument("--feats", default="", help="comma-separated NN4_CH column indices (default all)")
     t.add_argument("--exclude", default="", help="comma-separated name substrings dropped from the pool")
+    t.add_argument("--pre-iters", type=int, default=0, help="UTIL pretraining iterations (0 = none)")
+    t.add_argument("--ft-lr", type=float, default=1e-3)
+    t.add_argument("--util-val", default="const4")
     a = ap.parse_args(argv)
     if a.cmd == "calib":
         calib(chunk_s=a.chunk_s)
@@ -379,7 +481,7 @@ def main(argv=None):
         sync_scan()
     else:
         train(a.kind, a.H, a.head, a.layers, a.iters, a.seeds, a.lofo, a.tag, a.eval_every,
-              tuple(x for x in a.exclude.split(",") if x), crop_s=a.crop_s, lr=a.lr, wd=a.wd, drop=a.drop, vel_w=a.vel_w,
+              tuple(x for x in a.exclude.split(",") if x), a.pre_iters, a.ft_lr, a.util_val, crop_s=a.crop_s, lr=a.lr, wd=a.wd, drop=a.drop, vel_w=a.vel_w,
               noise=a.noise, feats=[int(x) for x in a.feats.split(",")] if a.feats else None)
 
 
