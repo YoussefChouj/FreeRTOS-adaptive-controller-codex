@@ -209,6 +209,134 @@ class WindowSource:
         self.sct.close()
 
 
+def floor_from_dir(video_dir, cam_path) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, dict]:
+    """Floor pose of a fixed phone from an earlier capture with the same placement: id0 median pose in its aruco.npz
+    (vt.floor_from_marker; R, t do not depend on the image scale). Returns R, t, the id0 centre (px of that video),
+    the video width (to rescale pixels to the live window) and the scan's static corners {id: (4, 2) px}."""
+    vd = Path(video_dir)
+    size = vt.video_size(str(vd / "cam.mkv"))
+    scan = dict(np.load(vd / "aruco.npz"))
+    R, t, _ = vt.floor_from_marker(scan, vt.load_cam(cam_path, size))
+    ref = {int(k[1:]): vt.static_corners(scan[k])[0] for k in scan if k.startswith("c")}
+    return R, t, ref[0].mean(0), float(size[0]), {k: v for k, v in ref.items() if v is not None}
+
+
+def floor_shift_px(frame_bgr, ref: dict, scale: float) -> tuple[float, int]:
+    """Median corner shift (px, live window) of the markers seen now against the reference scan: the phone moved if
+    it is more than a few px. Returns (shift, markers matched); (nan, 0) when none of them is visible."""
+    cv2 = vt._cv2()
+    c, ids, _ = vt.aruco_detector().detectMarkers(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY))
+    d = [np.linalg.norm(cc.reshape(4, 2) - ref[int(m)] * scale, axis=1)
+         for cc, m in zip(c, ids.ravel() if ids is not None else []) if int(m) in ref]
+    return (float(np.median(np.concatenate(d))), len(d)) if d else (float("nan"), 0)
+
+
+class TelHeight:
+    """Ring-plane height from the live telemetry: tails the stream_log slot CSV (line-buffered) for `key` (Z, m) and
+    returns ring_h + max(0, z), the truth4 plane. `ground` is z < ground_m. Older than stale_s (or no row yet): the
+    fallback height (None = no plane, the frame gives no fix)."""
+
+    def __init__(self, path, key: str = "Ctrler.Z_posPID.FB", ring_h_m: float = 0.057, ground_m: float = 0.03,
+                 stale_s: float = 1.0, fallback_m: float | None = None, clock: Callable[[], float] = time.monotonic):
+        self.path, self.key, self.ring_h, self.ground_m = Path(path), key, ring_h_m, ground_m
+        self.stale_s, self.fallback, self.clock = stale_s, fallback_m, clock
+        self.f, self.col, self.buf, self.z, self.t_z = None, None, "", None, -1e9
+
+    def poll(self) -> None:
+        if self.f is None:
+            if not self.path.exists():
+                return
+            self.f = self.path.open("r", newline="", encoding="utf-8")
+        chunk = self.f.read()
+        if not chunk:
+            return
+        *lines, self.buf = (self.buf + chunk).split("\n")
+        for ln in lines:
+            cells = ln.rstrip("\r").split(",")
+            if self.col is None:
+                if self.key not in cells:
+                    raise SystemExit(f"{self.key} not in {self.path}")
+                self.col = cells.index(self.key)
+                continue
+            try:
+                z = float(cells[self.col])
+            except (ValueError, IndexError):
+                continue
+            if np.isfinite(z):
+                self.z, self.t_z = z, self.clock()
+
+    @property
+    def fresh(self) -> bool:
+        return self.z is not None and self.clock() - self.t_z <= self.stale_s
+
+    @property
+    def ground(self) -> bool:
+        return self.fresh and self.z < self.ground_m
+
+    def __call__(self, t_cap: float) -> float:
+        self.poll()
+        if self.fresh:
+            return self.ring_h + max(0.0, self.z)
+        return float("nan") if self.fallback is None else self.fallback
+
+
+class PadOrigin:
+    """Fixes are pad-relative: the firmware innovation is z - (p + c) and earth_x/y zero at arming, on the spot the
+    drone stands on. Until the first take-off the origin follows the median of the last n detections; then it is
+    frozen for the session (no arm flag in the log: a re-arm elsewhere is the firmware re-anchor's job, n_anchor).
+    ground None (no telemetry): the first n detections. Until the first detection nothing is sent."""
+
+    def __init__(self, n: int = 20):
+        self.n, self.hist, self.xy, self.frozen = n, [], None, False
+
+    def apply(self, xy, ground: bool | None):
+        if ground is None:
+            ground = len(self.hist) < self.n
+        if ground and not self.frozen:
+            self.hist = (self.hist + [np.asarray(xy, float)])[-self.n:]
+            self.xy = np.median(self.hist, axis=0)
+        elif self.xy is not None:
+            self.frozen = True
+        return None if self.xy is None else np.asarray(xy, float) - self.xy
+
+
+class Preview:
+    """--show: the grabbed frame, the tracked ring, its pad-frame xy and the fix counters, redrawn at most `hz` per s
+    at `scale` (resize + imshow + waitKey(1)). Placed right of (or below) the grab rect: a preview over the scrcpy
+    window would be grabbed itself."""
+
+    def __init__(self, hz: float = 10.0, scale: float = 0.6, rect: dict | None = None, title: str = "live_tracker"):
+        self.cv2, self.dt, self.scale, self.title, self.t_last, self.ms = vt._cv2(), 1.0 / hz, scale, title, -1e9, 0.0
+        self.n = 0
+        self.cv2.namedWindow(title, self.cv2.WINDOW_AUTOSIZE)
+        if rect:                                          # right of the grab rect if it fits on screen, else below
+            import ctypes
+            sw = ctypes.windll.user32.GetSystemMetrics(0)
+            right = rect["left"] + rect["width"] + 8
+            fits = right + scale * rect["width"] <= sw
+            self.cv2.moveWindow(title, right if fits else rect["left"],
+                                rect["top"] if fits else rect["top"] + rect["height"] + 40)
+
+    def __call__(self, now: float, frame, uv, xy, lines) -> None:
+        if now - self.t_last < self.dt:
+            return
+        p0 = time.perf_counter()
+        cv2, s = self.cv2, self.scale
+        img = cv2.resize(frame, None, fx=s, fy=s, interpolation=cv2.INTER_NEAREST)
+        if uv is not None:
+            c = (int(uv[0] * s), int(uv[1] * s))
+            cv2.circle(img, c, 14, (0, 255, 0), 2)
+            if xy is not None:
+                cv2.putText(img, f"{xy[0] * 100:+.0f},{xy[1] * 100:+.0f} cm", (c[0] + 16, c[1]),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+        for i, txt in enumerate(lines):
+            cv2.putText(img, txt, (8, 20 + 18 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(img, txt, (8, 20 + 18 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+        cv2.imshow(self.title, img)
+        cv2.waitKey(1)
+        self.t_last, self.n, self.ms = now, self.n + 1, self.ms + 1000 * (time.perf_counter() - p0)
+
+
 def udp_sender(spec: str) -> Callable[[bytes], None]:
     """'udp:PORT' or 'udp:HOST:PORT' -> send(bytes), one datagram per frame (stream_log --relay-port)."""
     parts = spec.split(":")
@@ -311,13 +439,16 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
                cam_latency_s: float = 0.0, send: Callable[[bytes], None] | None = None, out_csv: str | None = None,
                sched: FixScheduler | None = None, clock: Callable[[], float] | None = None, max_frames: int = 0, start_s: float = 0.0,
                static=None, ring=None, uv_log: list | None = None, gate: JumpGate | None = None,
-               mode: int | None = None, delay_ms: float | None = None, fix_log: list | None = None) -> dict:
+               mode: int | None = None, delay_ms: float | None = None, fix_log: list | None = None,
+               pad: PadOrigin | None = None, ground: Callable[[], bool] | None = None,
+               show: Preview | None = None) -> dict:
     """Read frames from `source` (file, device index or window:<title>), emit fixes. For a file the capture time is
     the frame pts and the send time is that pts too (age = camera latency only); live, both come from `clock`.
     `ring`: a pixel tracker with .step(frame) -> uv (RingTracker, CoralTracker), else the guard detector with
     `static` (a video_truth.static_mask). `gate` drops jumps (the tracker is re-centred on the last accepted uv).
     With `send`, the delay and mode frames go first and again every 2 s while live. `fix_log` collects
-    (t_read, t_fix, frame bytes) per fix."""
+    (t_read, t_fix, frame bytes) per fix. `pad` makes the fixes pad-relative (`ground()`: telemetry on-ground flag,
+    None = first detections); a NaN height (stale telemetry) gives no fix. `show` draws each frame (throttled)."""
     cv2 = vt._cv2()
     win = str(source).startswith("window:")
     cap = WindowSource(str(source)[7:]) if win else cv2.VideoCapture(int(source) if str(source).isdigit() else source)
@@ -354,14 +485,20 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
             uv = ring.step(frame)
             if uv_log is not None:
                 uv_log.append((t_read, *(uv if uv is not None else (np.nan, np.nan))))
-            xy = None if uv is None else ring_xy(uv, cam, z)
+            xy = None if uv is None or not np.isfinite(z) else ring_xy(uv, cam, z)
         else:
-            xy = detect_xy(frame, cam, z, static)
+            xy = detect_xy(frame, cam, z, static) if np.isfinite(z) else None
         if xy is not None and gate is not None and not gate.check(t_cap, xy, uv):
             if ring is not None and hasattr(ring, "recentre") and gate.last[2] is not None:
                 ring.recentre(gate.last[2])
             xy = None
+        if xy is not None and pad is not None:
+            xy = pad.apply(xy, ground() if ground else None)
         t_rd, t_det = t_rd + (p1 - p0), t_det + (time.perf_counter() - p1)
+        if show is not None:
+            show(t_read, frame, uv, xy, [f"mode {mode}  z {z:.2f} m  fixes {sched.n_sent}  det {n_det}/{n}",
+                                         f"gate rej {gate.n_rej if gate else 0}  pad {'set' if pad is None or pad.xy is not None else 'WAIT'}"
+                                         f"{' frozen' if pad is not None and pad.frozen else ''}"])
         if xy is not None:
             n_det += 1
             sched.push(t_cap, xy)
@@ -385,7 +522,9 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
             w.writerows(rows)
     return {"frames": n, "detections": n_det, "fixes": sched.n_sent, "skipped": sched.n_skip,
             "gate_rej": gate.n_rej if gate else 0, "reseeds": gate.reseeds if gate else 0,
-            "read_ms": 1000 * t_rd / max(n, 1), "detect_ms": 1000 * t_det / max(n, 1)}
+            "read_ms": 1000 * t_rd / max(n, 1), "detect_ms": 1000 * t_det / max(n, 1),
+            "show_ms": show.ms / max(show.n, 1) if show else 0.0,
+            "pad_xy": None if pad is None or pad.xy is None else [round(float(v), 4) for v in pad.xy]}
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -540,31 +679,52 @@ def main(argv=None) -> int:
     ap.add_argument("--mode", type=int, choices=[0, 1, 2], default=None, help="EXT_POS mode frame: 0 off, 1 shadow, 2 closed")
     ap.add_argument("--delay-ms", type=float, default=None, help="0xFE frame: firmware back-dating delay (measure it)")
     ap.add_argument("--seed-px", default="", help="u,v of the drone on the pad; default the ArUco id0 centre")
+    ap.add_argument("--floor", default="", help="logs/video_truth/<dir> of an earlier capture, same phone placement: "
+                    "floor pose + pad seed from its aruco.npz id0 (replaces the cam json R, t)")
+    ap.add_argument("--tel-csv", default="", help="live height: tail this stream_log slot CSV (line-buffered)")
+    ap.add_argument("--tel-key", default="Ctrler.Z_posPID.FB")
+    ap.add_argument("--ring-h-m", type=float, default=0.057, help="ring plane on the pad (r5_marks_1 truth4 h_ring_m)")
+    ap.add_argument("--tel-stale-s", type=float, default=1.0, help="older telemetry: --height-m, or no fix")
+    ap.add_argument("--no-pad-origin", action="store_true", help="send floor-frame xy (default: pad-relative)")
+    ap.add_argument("--show", action="store_true", help="preview window (frame, ring, xy, counters), throttled")
     ap.add_argument("--static-t", default="", help='file only, "90,140,190": mask guard-colour pixels present at all these times')
     a = ap.parse_args(argv)
-    if (a.height_m is None) == (not a.tel_npz):
-        ap.error("give exactly one of --height-m or --tel-npz")
-    height = tel_height(a.tel_npz, tel_offset_s=a.tel_offset_s, ring_offset_m=a.ring_offset_m) if a.tel_npz else a.height_m
+    if a.tel_npz and a.tel_csv or not (a.tel_npz or a.tel_csv or a.height_m is not None):
+        ap.error("give --tel-csv (with an optional --height-m fallback), --tel-npz or --height-m")
+    tel = TelHeight(a.tel_csv, a.tel_key, a.ring_h_m, stale_s=a.tel_stale_s, fallback_m=a.height_m) if a.tel_csv else None
+    height = tel or (tel_height(a.tel_npz, tel_offset_s=a.tel_offset_s, ring_offset_m=a.ring_offset_m)
+                     if a.tel_npz else a.height_m)
     src_live = str(a.source).isdigit() or a.source.startswith("window:")
     size = (WindowSource(a.source[7:]).size() if a.source.startswith("window:")
             else None if str(a.source).isdigit() else vt.video_size(a.source))
     cam = vt.load_cam(a.cam, size)
+    seed = [float(x) for x in a.seed_px.split(",")] if a.seed_px else None
+    s = 1.0
+    if a.floor:
+        R, t, c0, w_ref, ref = floor_from_dir(a.floor, a.cam)
+        cam, s = dict(cam, R=R, t=t), (size[0] / w_ref if size else 1.0)
+        seed = seed if seed is not None else list(c0 * s)
+        if a.source.startswith("window:"):
+            ok, f0 = WindowSource(a.source[7:]).read()
+            d, k = floor_shift_px(f0, {i: c for i, c in ref.items() if i}, s) if ok else (float("nan"), 0)
+            print(f"floor check: {k} markers, median shift {d:.1f} px" + ("  WARNING phone moved? (> 5 px, PROPOSED)"
+                                                                         if d > 5 else ""), flush=True)
     align = EarthAlign(a=complex(np.exp(1j * np.radians(a.yaw_deg))), mirror=a.mirror)
     times = [float(x) for x in a.static_t.split(",") if x]
     static = vt.static_mask(a.source, times) if times and not src_live else None
     ring = None
     if a.detector in ("ring", "coral"):
-        if a.seed_px:
-            seed = [float(x) for x in a.seed_px.split(",")]
-        else:
+        if seed is None:
             with open(a.cam) as f:
                 seed = np.mean(json.load(f)["aruco_id0_corners_px"], axis=0)
-        ring = RingTracker(seed) if a.detector == "ring" else CoralTracker(
-            seed, None if src_live else vt.coral_static(a.source))
+        ring = RingTracker(seed) if a.detector == "ring" else CoralTracker(   # track_coral sizes are 1920 px
+            seed, None if src_live else vt.coral_static(a.source), roi=140.0 * s, min_px=max(10, round(40 * s * s)))
+    show = Preview(rect=WindowSource(a.source[7:]).rect() if a.source.startswith("window:") else None) if a.show else None
     print(run_source(a.source, cam, align, height, a.cam_latency_s, udp_sender(a.send) if a.send else None, a.out,
                      sched=FixScheduler(a.period, a.n_med, window_s=a.window_s), max_frames=a.max_frames,
                      start_s=a.start_s, static=static, ring=ring, gate=JumpGate() if a.gate else None,
-                     mode=a.mode, delay_ms=a.delay_ms))
+                     mode=a.mode, delay_ms=a.delay_ms, pad=None if a.no_pad_origin else PadOrigin(),
+                     ground=(lambda: tel.ground if tel.fresh else None) if tel else None, show=show), flush=True)
     return 0
 
 

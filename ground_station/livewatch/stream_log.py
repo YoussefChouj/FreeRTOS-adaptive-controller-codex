@@ -469,7 +469,7 @@ def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
                 continue
             path = _slot_path(out_path, schema.slot)
             path.parent.mkdir(parents=True, exist_ok=True)
-            fh = path.open("w", newline="", encoding="utf-8")
+            fh = path.open("w", newline="", encoding="utf-8", buffering=1)   # line-buffered: live_tracker --tel-csv tails it
             handles.append(fh)
             writer = csv.writer(fh)
             writer.writerow(["t_src_ms", "t_host_s", "seq"] + columns_for(schema))
@@ -573,7 +573,7 @@ def run_groups(control_port, data_port, groups, transport, seconds, out_path,
         for schema in schemas:
             path = _slot_path(out_path, schema.slot)
             path.parent.mkdir(parents=True, exist_ok=True)
-            fh = path.open("w", newline="", encoding="utf-8")
+            fh = path.open("w", newline="", encoding="utf-8", buffering=1)
             handles.append(fh)
             writer = csv.writer(fh)
             writer.writerow(["t_src_ms", "t_host_s", "seq"] + columns_for(schema))

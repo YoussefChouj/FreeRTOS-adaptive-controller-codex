@@ -195,3 +195,34 @@ def test_firmware_path_matches_the_python_mirror():
     k = t > 5.0
     assert np.abs(fw - py)[k].max() < 0.01
     assert np.abs(fw - truth)[t > 10].max() < 0.05
+
+
+def test_tel_height_tails_a_growing_csv_with_partial_lines_and_goes_stale(tmp_path):
+    from ground_station.analysis.live_tracker import TelHeight
+    p, now = tmp_path / "s.slot1.csv", [0.0]
+    tel = TelHeight(p, ring_h_m=0.05, stale_s=1.0, clock=lambda: now[0])
+    assert np.isnan(tel(0.0)) and not tel.ground                       # no file yet, no fallback: no plane
+    with p.open("w", newline="", encoding="utf-8", buffering=1) as f:
+        f.write("t,Ctrler.Z_posPID.FB\r\n1,0.01\r\n2,0.4")             # last row still being written
+        f.flush()
+        assert tel(0.0) == pytest.approx(0.06) and tel.ground
+        f.write("0\r\n")
+        f.flush()
+        assert tel(0.0) == pytest.approx(0.45) and not tel.ground
+    now[0] = 2.0
+    assert np.isnan(tel(0.0))
+    tel.fallback = 0.9
+    assert tel(0.0) == 0.9
+
+
+def test_pad_origin_follows_on_ground_then_freezes_after_take_off():
+    from ground_station.analysis.live_tracker import PadOrigin
+    pad = PadOrigin(n=3)
+    for x in (0.10, 0.12, 0.11):
+        pad.apply([x, -0.2], True)
+    assert pad.apply([0.61, 0.3], False) == pytest.approx([0.5, 0.5]) and pad.frozen
+    assert pad.apply([0.0, 0.0], True) == pytest.approx([-0.11, 0.2])   # landed elsewhere: origin kept
+    auto = PadOrigin(n=2)
+    assert auto.apply([1.0, 1.0], None) == pytest.approx([0, 0])
+    auto.apply([1.0, 1.0], None)
+    assert auto.apply([2.0, 1.0], None) == pytest.approx([1.0, 0.0])
