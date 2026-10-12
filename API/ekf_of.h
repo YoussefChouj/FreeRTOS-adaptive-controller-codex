@@ -165,6 +165,7 @@ extern volatile uint8_t g_ekf_of_vel_fb;
 #define EXT_POS_SPREAD_N      20U      /* control ticks per full slew step: 0.5 cm per 5 ms tick (1 m/s), PROPOSED */
 #define EXT_POS_REJ_N         3U       /* gated fixes in a row before the slewed re-anchor */
 #define EXT_POS_AGREE_CM      5.0f     /* re-anchor only when the last EXT_POS_REJ_N offsets lie within this of their mean, PROPOSED */
+#define EXT_POS_ANCHOR_MAX_CM 150.0f   /* no re-anchor when |e| > this: r6_f3_mode3 took a consistent ~960 cm wrong fix, PROPOSED */
 #define EXT_POS_TRUST_N       3U       /* accepted fixes in a row before a stale camera counts again, PROPOSED */
 #define EXT_POS_HIST_N        3U       /* offsets kept for the agreement rule, >= EXT_POS_REJ_N */
 #define EXT_POS_CAM_SD_CM     1.7f     /* mode 3 R: camera sd, r5_live_2 (measured 2026-10-12) */

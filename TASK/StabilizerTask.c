@@ -889,8 +889,13 @@ static void Ext_Pos_Ekf(void)
 {
 	float k = CM_PER_M * g_of_scale, r = EXT_POS_CAM_SD_CM / k;
 	float px0 = s_ekf_of.x[0], py0 = s_ekf_of.x[3], dx, dy;
-	float hx = (g_ext_pos.e_x * Cos_Yaw_01 - g_ext_pos.e_y * Sin_Yaw_01) / k;
-	float hy = (g_ext_pos.e_x * Sin_Yaw_01 + g_ext_pos.e_y * Cos_Yaw_01) / k;
+	float ex = g_ext_pos.e_x, ey = g_ext_pos.e_y, d = sqrtf(ex * ex + ey * ey), hx, hy;
+	if (d > EXT_POS_SLEW_CM) {   /* r6_f3_mode3: REJ_RELEASE took a 960 cm fix in one step; cap it like mode 2 */
+		ex *= EXT_POS_SLEW_CM / d;
+		ey *= EXT_POS_SLEW_CM / d;
+	}
+	hx = (ex * Cos_Yaw_01 - ey * Sin_Yaw_01) / k;
+	hy = (ex * Sin_Yaw_01 + ey * Cos_Yaw_01) / k;
 	(void)EkfOf_UpdatePos(&s_ekf_of, px0 + hx, py0 + hy, r * r, EXT_POS_EKF_GATE);
 	s_ekf_prev_px += s_ekf_of.x[0] - px0;
 	s_ekf_prev_py += s_ekf_of.x[3] - py0;

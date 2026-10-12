@@ -1465,7 +1465,8 @@ def drift_score(name: str, cam: str = "docs/video-truth/cam_r4_lenswave_2026-10-
 # (docs/video-truth/live_camera_fusion_design_2026-10-11.md): gain 0.1 at 10 fixes/s ~ a 1 s time constant.
 # API/ekf_of.h 2026-10-12 (PROPOSED): gain 0.9 / slew 10 cm per fix, applied part ramped over SPREAD_N 20 x 5 ms
 EXT_POS = {"ring_n": 32, "ring_dt": 0.05, "gate_m": 0.40, "slew_m": 0.10, "gain": 0.9, "rej_n": 3, "spread_s": 0.1,
-           "beta": 0.0, "rmax_mps": 0.3, "trust_n": 3, "agree_m": 0.05, "stale_s": 3.0}
+           "beta": 0.0, "rmax_mps": 0.3, "trust_n": 3, "agree_m": 0.05, "stale_s": 3.0,
+           "anchor_m": 1.5}
 
 
 def ext_pos_replay(t, est, fix_t, fix_xy, lat_s: float, p: dict = EXT_POS, arr_t=None) -> tuple[np.ndarray, dict]:
@@ -1510,7 +1511,8 @@ def ext_pos_replay(t, est, fix_t, fix_xy, lat_s: float, p: dict = EXT_POS, arr_t
                     take = rej >= p["rej_n"]
                     if take and "agree_m" in p:
                         o = np.asarray(oh)
-                        take = len(o) >= p["rej_n"] and bool(np.all(np.hypot(*(o - o.mean(0)).T) <= p["agree_m"]))
+                        take = (len(o) >= p["rej_n"] and bool(np.all(np.hypot(*(o - o.mean(0)).T) <= p["agree_m"]))
+                                and np.hypot(*e) <= p.get("anchor_m", np.inf))
                         n["disagree"] += int(not take)
                     n["reanchor"] += int(take)
                 if take:

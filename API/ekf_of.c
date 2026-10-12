@@ -444,7 +444,8 @@ static uint8_t ext_pos_agree(const ext_pos_stat_t *s, uint8_t n)
 }
 
 /* Whether a closed loop (mode 2 or 3) applies this fix: an accepted one while the camera is trusted (not stale),
- * or a gated one once EXT_POS_REJ_N came in a row and their offsets agree (re-anchor; counted in n_anchor). */
+ * or a gated one once EXT_POS_REJ_N came in a row, their offsets agree and |e| <= EXT_POS_ANCHOR_MAX_CM (re-anchor;
+ * counted in n_anchor, a run held back in n_disagree). */
 uint8_t ext_pos_take(ext_pos_stat_t *s, uint8_t res)
 {
     if (res == EXT_POS_FIX_OK) {
@@ -453,7 +454,8 @@ uint8_t ext_pos_take(ext_pos_stat_t *s, uint8_t res)
     if (res != EXT_POS_FIX_GATED || s->rej_run < EXT_POS_REJ_N) {
         return 0U;
     }
-    if (!ext_pos_agree(s, (uint8_t)EXT_POS_REJ_N)) {
+    if (!ext_pos_agree(s, (uint8_t)EXT_POS_REJ_N) ||
+        s->e_x * s->e_x + s->e_y * s->e_y > EXT_POS_ANCHOR_MAX_CM * EXT_POS_ANCHOR_MAX_CM) {   /* bounded re-anchor */
         if (s->n_disagree < 65535U) {
             s->n_disagree++;
         }

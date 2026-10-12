@@ -180,6 +180,8 @@ static void test_step_rules(void)
     s.o_x[0] = 300.0f; s.o_y[0] = 400.0f; s.o_x[1] = 300.0f; s.o_y[1] = 380.0f; s.o_x[2] = 300.0f; s.o_y[2] = 400.0f;
     CHECK(ext_pos_step(&s, EXT_POS_FIX_GATED, &dx, &dy) == 0U && s.n_anchor == 0U && s.n_disagree == 1U, "gated run spread over 20 cm: held back");
     s.o_y[1] = 404.0f;
+    CHECK(ext_pos_step(&s, EXT_POS_FIX_GATED, &dx, &dy) == 0U && s.n_anchor == 0U && s.n_disagree == 2U, "agreeing run 500 cm away (r6_f3_mode3): bounded, held back");
+    s.e_x = 60.0f; s.e_y = 80.0f;
     CHECK(ext_pos_step(&s, EXT_POS_FIX_GATED, &dx, &dy) == 1U && s.n_anchor == 1U, "gated run within EXT_POS_AGREE_CM: re-anchor step");
     CHECK(fabsf(dx - 0.6f * EXT_POS_SLEW_CM) < 1e-4f && fabsf(dy - 0.8f * EXT_POS_SLEW_CM) < 1e-4f, "re-anchor step clamped to the slew along e");
 }

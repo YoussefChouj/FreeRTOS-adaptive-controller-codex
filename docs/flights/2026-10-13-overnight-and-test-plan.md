@@ -55,6 +55,20 @@ An aborted first F4c attempt is in `logs/aborted/` (not for analysis). F1/F2 hov
 4. Add a golden test built from this F3 log.
 
 Until then, do not fly mode 2 or mode 3 (mode 1 shadow is safe).
+
+**F2 `r6_f2_mode2` (mode 2, 132.6 s, flown 10-13 at the operator's request): no jumps, but drift-prone (operator fought
+it with RC).** Measured:
+- Camera healthy: 2570 frames / 2533 detections / 2110 fixes / 26 gate rej / 0 reseeds. Firmware n_ok 2089, n_rej 4,
+  n_anchor 2, stale fraction 0.05. |e| p50/p90/max 0.7 / 4.5 / 76.9 cm.
+- Max FB step per sample: 2.3 cm (locx), 2.7 cm (locy). So the rate limits held.
+- Correction c vs camera-truth position: y `c = 1.10 * pos + 2.2 cm` (r 0.93), x `c = 0.29 * pos - 13.9 cm` (r 0.13).
+  On y the camera loop carries nearly all of the position; the OF path barely registers the motion.
+- Cause UNVERIFIED: OF y scale, axis swap or sign, or pad-to-EKF rotation, plus `--delay-ms 0`. Mode 3 shares it.
+- Overnight item 0 gets step 5: check OF y vs camera y on the F4 mode 1 logs (scale, sign, lag) before any closed loop.
+
+**Quick fix in source (10-13, host C test + twin pass, NOT flashed):** re-anchor refused when |e| > 150 cm
+(`EXT_POS_ANCHOR_MAX_CM`, PROPOSED, modes 2 and 3); the mode 3 innovation is capped at `EXT_POS_SLEW_CM` per fix.
+Steps 2-4 of item 0 (bumpless setpoint shift, tracker reseed hold, F3 golden) are still open.
 Uses: fit the plant on one flight and validate on the others. The pack comparison asks whether the response changes
 with battery voltage. F4b camera stats need masking where detection drops out.
 
