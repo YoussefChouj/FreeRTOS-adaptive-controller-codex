@@ -1240,6 +1240,19 @@ def plumb_check(stem: str, video_dir: str, cam, coral_step: int = 2, sync_s: flo
             "markers": {k: v.round(3).tolist() for k, v in marks.items()}, "holds": rows, "fit": fit}
 
 
+def host_clock_offset(stem: str, video_dir: str) -> float:
+    """Telemetry s minus video s from the host clocks (nan without meta.json / scrcpy_start_host_time.txt): device ms
+    line-fitted onto the logger's host stamps (WiFi batches repeat them, as plumb_check), video t0 = scrcpy start."""
+    import pandas as pd
+    mp, vp = Path(f"{stem}.meta.json"), Path(video_dir) / "scrcpy_start_host_time.txt"
+    if not (mp.exists() and vp.exists() and Path(f"{stem}.slot1.csv").exists()):
+        return float("nan")
+    s1 = pd.read_csv(f"{stem}.slot1.csv", usecols=["t_src_ms", "t_host_s"])
+    ts, th = s1["t_src_ms"].to_numpy(float), json.loads(mp.read_text())["started"] + s1["t_host_s"].to_numpy(float)
+    a, b = np.polyfit(ts - ts[0], th, 1)
+    return float(ts[0] / 1000.0 + (float(vp.read_text().split()[0]) - b) / (1000.0 * a))
+
+
 def touchdown_video(t, xy, guess: float, search_s: float = 15.0, still_m: float = 0.03, hold_s: float = 2.0) -> float:
     """Video touchdown near `guess` (the telemetry landing mapped to video time): first frame after guess - search_s
     from which the floor cast stays within still_m of itself for hold_s (a hover moves the floor cast several
@@ -1303,6 +1316,12 @@ def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: 
         o1 = ld_tel - ld_vid
         d = sync_offset(t_v + o1, cast(o1), te[fly], earth[fly], max_lag=refine_s, dt=0.02)
         o, anchor = o1 + d, "landing"
+    o_host = host_clock_offset(stem, video_dir)
+    if np.isfinite(o_host) and abs(o - o_host) > 2.0:
+        # r5_marks_1: re-arms on the pad hold z at 0 (z0 = 0, take-off = arm) and the last touchdown is a different
+        # arm segment, so both event anchors miss; the device-ms vs scrcpy host clock does not depend on either
+        d = sync_offset(t_v + o_host, cast(o_host), te[fly], earth[fly], max_lag=refine_s, dt=0.02)
+        o, anchor = o_host + d, "host"
     xy = cast(o)
     xy -= np.median(xy[t_v < to_vid - 1.0], axis=0)                         # truth relative to the pad spot
 
@@ -1311,8 +1330,8 @@ def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: 
     rows = {"t_tel": tt, "truth_x": truth[:, 0], "truth_y": truth[:, 1], "z": z[fly] - z0}
     summ = {"stem": stem, "h_ring_m": h, "id0_mad_px": mad0, "z0_m": z0, "takeoff_tel_s": to_tel,
             "takeoff_video_s": to_vid, "landing_tel_s": ld_tel, "landing_video_s": ld_vid,
-            "offset_takeoff_s": o0, "offset_landing_s": ld_tel - ld_vid, "offset_refine_s": d, "offset_s": o,
-            "sync_anchor": anchor if np.isfinite(ld_vid) else "takeoff-unverified", "rot_fit_s": rot_s,
+            "offset_takeoff_s": o0, "offset_landing_s": ld_tel - ld_vid, "offset_refine_s": d, "offset_host_s": o_host, "offset_s": o,
+            "sync_anchor": anchor if np.isfinite(ld_vid) or anchor == "host" else "takeoff-unverified", "rot_fit_s": rot_s,
             "flight_s": ld_tel - to_tel, "coral_lost_frac": float(1 - ok.mean()),
             "pad_jitter_cm": float(np.median(np.hypot(*(xy[pad] - np.median(xy[pad], 0)).T)) * 100),
             "truth_land_cm": float(np.hypot(*np.median(xy[t_v > ld_vid + 1.0], 0)) * 100) if (t_v > ld_vid + 1).any() else None,
@@ -1327,6 +1346,27 @@ def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: 
         summ["est"][name] = {"rot_deg": float(np.degrees(np.arctan2(q[1, 0], q[0, 0]))), "reflect": refl,
                              "rms_cm": float(np.sqrt(np.mean(err ** 2)) * 100), "p90_cm": float(np.percentile(err, 90) * 100),
                              "max_cm": float(err.max() * 100), "end_cm": float(err[-1] * 100)}
+    arm_f = armed[fly].astype(int)
+    starts, ends = np.flatnonzero(np.diff(np.r_[0, arm_f]) == 1), np.flatnonzero(np.diff(np.r_[arm_f, 0]) == -1)
+    if len(starts) > 1:
+        # each re-arm zeroes earth and the EKF (r5_marks_1: 4 armed runs), so the whole-flight fit above is void:
+        # score every armed run of 20 s or more from its own start, truth relative to where that run began
+        summ["segments"] = []
+        for a, b in zip(starts, ends):
+            if tt[b] - tt[a] < 20.0:
+                continue
+            tr = truth[a:b + 1] - truth[a]
+            seg = {"t0": float(tt[a]), "t1": float(tt[b]), "start_xy_m": truth[a].round(3).tolist(),
+                   "end_xy_m": truth[b].round(3).tolist()}
+            for name, (cx, cy, sc) in R4_EST.items():
+                e = np.c_[s2[cx], s2[cy]][fly][a:b + 1] * sc
+                e = e - e[0]
+                q, refl = align(e, tr, int(np.searchsorted(tt[a:b + 1], tt[a] + rot_s)) if rot_s else len(e))
+                err = np.hypot(*(e @ q.T - tr).T)
+                seg[name] = {"rot_deg": float(np.degrees(np.arctan2(q[1, 0], q[0, 0]))), "reflect": refl,
+                             "rms_cm": float(np.sqrt(np.mean(err ** 2)) * 100),
+                             "p90_cm": float(np.percentile(err, 90) * 100), "end_cm": float(err[-1] * 100)}
+            summ["segments"].append(seg)
     if out:
         with open(f"{out}.csv", "w", newline="") as f:
             w = csv.writer(f)
