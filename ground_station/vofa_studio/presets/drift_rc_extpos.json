@@ -87,7 +87,17 @@
         "mrac_state.y_vel.u_nom",
         "g_ext_pos_on",
         "traj_phase",
-        "traj_status"
+        "traj_status",
+        "Remoter.ThrCtrler",
+        "Remoter.PitCtrler",
+        "Remoter.RolCtrler",
+        "Remoter.YawCtrler",
+        "g_ext_pos.a_x",
+        "g_ext_pos.a_y",
+        "g_ext_pos.ok_run",
+        "g_ext_pos.n_disagree",
+        "s_ekf_of.pos_rej_run_x",
+        "s_ekf_of.pos_rej_run_y"
       ]
     },
     {
