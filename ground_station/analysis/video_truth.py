@@ -1146,12 +1146,96 @@ R4_EST = {"earth": ("ano_of.earth_x", "ano_of.earth_y", 0.01),      # control pa
           "ekf": ("s_ekf_of.x[0]", "s_ekf_of.x[1]", 1.0)}            # EKF state, m
 
 
-def ring_height(uv_pad, K, dist, R, t) -> float:
+def ray_at_vertical(uv, K, dist, R, t, m_xy=(0.0, 0.0)):
+    """The z at which the camera ray through pixel uv passes closest to the vertical line over floor point m_xy, and
+    that closest horizontal distance (m): a drone held plumb over a marker sits on that vertical, so z is its true
+    height and the distance is the plumb error (a plumb error moves z by only about 1 / 3.4 of itself)."""
+    p0 = pixel_to_plane(uv, K, dist, R, t, 0.0)[0]
+    d = pixel_to_plane(uv, K, dist, R, t, 1.0)[0] - p0
+    m = np.asarray(m_xy, float)
+    z = float((m - p0[:2]) @ d[:2] / (d[:2] @ d[:2]))
+    return z, float(np.linalg.norm(p0[:2] + z * d[:2] - m))
+
+
+def ring_height(uv_pad, K, dist, R, t, m_xy=(0.0, 0.0)) -> float:
     """Height of the guard-ring centroid while the drone sits on the pad: the z at which its ray passes closest to
     the origin marker's vertical (the drone sits centred on the pad marker)."""
-    p0 = pixel_to_plane(uv_pad, K, dist, R, t, 0.0)[0]
-    d = pixel_to_plane(uv_pad, K, dist, R, t, 1.0)[0] - p0
-    return float(-p0[:2] @ d[:2] / (d[:2] @ d[:2]))
+    return ray_at_vertical(uv_pad, K, dist, R, t, m_xy)[0]
+
+
+def plumb_holds(t, z, min_z: float = 0.2, win_s: float = 2.0, sd_m: float = 0.015, min_s: float = 4.0):
+    """Still hand holds in telemetry height z (m): runs at least min_s long where the centred rolling sd over win_s
+    stays under sd_m and z is above min_z. Returns [(t0, t1)]."""
+    import pandas as pd
+    n = max(3, int(round(win_s / float(np.median(np.diff(t))))))
+    sd = pd.Series(z).rolling(n, center=True).std().to_numpy()
+    e = np.flatnonzero(np.diff(np.r_[0, ((sd < sd_m) & (z > min_z)).astype(int), 0]))
+    return [(float(t[a]), float(t[b - 1])) for a, b in zip(e[::2], e[1::2]) if t[b - 1] - t[a] >= min_s]
+
+
+def plumb_check(stem: str, video_dir: str, cam, coral_step: int = 2, sync_s: float = 5.0, max_mad_px: float = 2.0,
+                trim_s: float = 0.5) -> dict:
+    """R5 static plumb (run sheet R5 sec 3b): the drone is held still and level over floor markers at several
+    heights. Per hold, the guard-ring pixel's ray meets the nearest static floor marker's vertical at the true ring
+    height; minus the on-pad ring height that is the true rise, compared with telemetry Ctrler.Z_posPID.FB. Video and
+    log are lined up by their host start times, refined by cross-correlating ring pixel speed with |dz/dt|."""
+    cam = json.loads(Path(cam).read_text()) if not isinstance(cam, dict) else cam
+    K, dist, vd = np.array(cam["K"]), np.array(cam["dist"]), Path(video_dir)
+    sp = vd / "aruco.npz"
+    scan = dict(np.load(sp)) if sp.exists() else aruco_scan(str(vd / "cam.mkv"), step=5, out=str(sp))
+    R, tw, mad0 = floor_from_marker(scan, cam)
+    marks = {}
+    for k in scan:
+        if k.startswith("c"):
+            cm, mad = static_corners(scan[k])
+            if cm is not None and mad <= max_mad_px:
+                marks[int(k[1:])] = pixel_to_plane(cm.mean(0), K, dist, R, tw, 0.0)[0, :2]
+    marks[0] = np.zeros(2)
+    cp = vd / "coral.npz"
+    if not cp.exists():
+        c0, _ = static_corners(scan["c0"])
+        track_coral(str(vd / "cam.mkv"), c0.mean(0), coral_static(str(vd / "cam.mkv")), step=coral_step, out=str(cp))
+    tr = np.load(cp)
+    ok = ~np.isnan(tr["uv"][:, 0])
+    t_v, uv = tr["t"][ok], tr["uv"][ok]
+
+    import pandas as pd
+    s1 = pd.read_csv(f"{stem}.slot1.csv")
+    meta = json.loads(Path(f"{stem}.meta.json").read_text())
+    t_z = meta["started"] + s1["t_host_s"].to_numpy(float)
+    z = np.nan_to_num(s1["Ctrler.Z_posPID.FB"].to_numpy(float))
+    v0 = float((vd / "scrcpy_start_host_time.txt").read_text().split()[0])
+    tv_h = v0 + t_v
+    sm = lambda x, n: np.convolve(x, np.ones(n) / n, "same")
+    sv = sm(np.r_[0, np.linalg.norm(np.diff(uv, axis=0), axis=1) / np.diff(t_v)], 5)
+    sz = sm(np.abs(np.gradient(z, t_z)), 25)
+    o = sync_xcorr(tv_h, sv, t_z, sz, max_lag=sync_s, dt=0.02)[0]         # t_z = tv_h + o
+    tv_h = tv_h + o
+
+    pad = tv_h < t_z[np.argmax(z > 0.1)] - 1.0
+    h0 = ring_height(np.median(uv[pad], axis=0), K, dist, R, tw) if pad.sum() > 5 else float("nan")
+    rows = []
+    for a, b in plumb_holds(t_z, z):
+        w = (tv_h > a + trim_s) & (tv_h < b - trim_s)
+        if w.sum() < 5:
+            continue
+        u = np.median(uv[w], axis=0)
+        zt = float(np.median(z[(t_z >= a) & (t_z <= b)]))
+        best = min(((ray_at_vertical(u, K, dist, R, tw, m), mid) for mid, m in marks.items()), key=lambda r: r[0][1])
+        (zc, miss), mid = best
+        rows.append({"t0": round(a - t_z[0], 1), "t1": round(b - t_z[0], 1), "marker": mid, "z_tel": round(zt, 3),
+                     "z_cam": round(zc - h0, 3), "err_cm": round((zc - h0 - zt) * 100, 1),
+                     "miss_cm": round(miss * 100, 1), "px_sd": round(float(np.median(np.abs(uv[w] - u))), 1)})
+    fit = None
+    good = [r for r in rows if r["miss_cm"] <= 15]
+    if len(good) >= 3:
+        A = np.c_[np.ones(len(good)), [r["z_tel"] for r in good]]
+        c, *_ = np.linalg.lstsq(A, [r["z_cam"] for r in good], rcond=None)
+        res = np.array([r["z_cam"] for r in good]) - A @ c
+        fit = {"offset_cm": round(c[0] * 100, 1), "scale": round(c[1], 4), "resid_sd_cm": round(res.std() * 100, 1),
+               "n": len(good)}
+    return {"h_ring_pad_m": round(h0, 3), "sync_s": round(o, 2), "origin_mad_px": round(mad0, 2),
+            "markers": {k: v.round(3).tolist() for k, v in marks.items()}, "holds": rows, "fit": fit}
 
 
 def touchdown_video(t, xy, guess: float, search_s: float = 15.0, still_m: float = 0.03, hold_s: float = 2.0) -> float:
@@ -1742,6 +1826,9 @@ def main(argv=None):
     r4.add_argument("--coral-step", type=int, default=2, help="track every Nth frame (2 = 15 Hz at 30 fps)")
     r4.add_argument("--rot-s", type=float, default=60.0, help="fit the estimate->floor rotation on the first N s of flight "
                     "(0 = whole flight; a later estimate jump corrupts a whole-flight fit)")
+    pl = sub.add_parser("plumb4", help="R5 static plumb: camera-ray height over floor markers vs telemetry z, per hold")
+    pl.add_argument("name"); pl.add_argument("--cam", default="docs/video-truth/cam_r4_lenswave_2026-10-11.json")
+    pl.add_argument("--coral-step", type=int, default=2); pl.add_argument("--sync", type=float, default=5.0)
     sc = sub.add_parser("score4", help="drift score of truth4 flights (hold/move/yaw split, 60 s windows)")
     sc.add_argument("names", nargs="+"); sc.add_argument("--win", type=float, default=60.0)
     fu = sub.add_parser("fuse4", help="replay the PROPOSED closed-loop camera fusion (EXT_POS) on truth4 flights")
@@ -1771,6 +1858,11 @@ def main(argv=None):
         r = aruco_scan(a.video, a.step, a.t0, a.t1, out=a.out)
         print(f"{len(r['t'])} frames {r['t'][0]:.2f}-{r['t'][-1]:.2f} s -> {a.out}; seen: "
               + ", ".join(f"id{k[1:]} {int((~np.isnan(v[:, 0, 0])).sum())}" for k, v in r.items() if k != "t"))
+    elif a.cmd == "plumb4":
+        r = plumb_check(f"logs/vofa/{a.name}", f"logs/video_truth/{a.name}", a.cam, a.coral_step, a.sync)
+        print(json.dumps({k: v for k, v in r.items() if k != "holds"}))
+        for h in r["holds"]:
+            print(h)
     elif a.cmd == "score4":
         for n in a.names:
             r = drift_score(n, win_s=a.win); e = r["est"]["earth"]
