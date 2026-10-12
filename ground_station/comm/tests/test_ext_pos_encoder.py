@@ -43,7 +43,7 @@ def test_frames():
 
 
 def test_mode_frame():
-    assert [struct.unpack("<f", ext_pos_mode_frame(m)[4:8])[0] for m in (0, 1, 2)] == [0.0, 1.0, 2.0]
+    assert [struct.unpack("<f", ext_pos_mode_frame(m)[4:8])[0] for m in (0, 1, 2, 3)] == [0.0, 1.0, 2.0, 3.0]
     assert ext_pos_mode_frame(2)[3] == 0xFF
     with pytest.raises(ValueError):
-        ext_pos_mode_frame(3)
+        ext_pos_mode_frame(4)

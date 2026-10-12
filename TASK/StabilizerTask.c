@@ -868,11 +868,47 @@ static void Of_TickKf(u8 of_ok)
 /* External position fix: buffer the raw earth path (earth_x/y minus the applied correction a), score each posted
  * fix against it at its capture time (g_ext_pos). Mode 1 shadow: telemetry only. Mode 2: ext_pos_step() moves the
  * target c by at most EXT_POS_SLEW_CM per fix, ext_pos_spread() ramps earth_x/y (so locx/locyPID.FB) toward it at
- * most EXT_POS_SLEW_CM / EXT_POS_SPREAD_N per tick; the EKF is not touched. */
+ * most EXT_POS_SLEW_CM / EXT_POS_SPREAD_N per tick; the EKF is not touched. Mode 3 (PROPOSED, needs the OF EKF,
+ * else shadow): c follows a, so e = z - earth_past; Ext_Pos_Ekf() feeds the fix to the EKF as a position measurement.
+ * Both closed modes re-derive the loc FB at once and shift PreE by the same jump (Ext_Pos_SetFb). */
+static void Ext_Pos_SetFb(void)
+{
+	float fx = Ctrler.locxPID.FB, fy = Ctrler.locyPID.FB;
+	ano_of.earth_x_ture =  ano_of.earth_y;
+	ano_of.earth_y_ture = -ano_of.earth_x;
+	Ctrler.locxPID.FB = ano_of.earth_x_ture;
+	Ctrler.locyPID.FB = ano_of.earth_y_ture;
+	Ctrler.locxPID.PreE -= Ctrler.locxPID.FB - fx;   /* E = Des - FB jumps by -dFB: no Kd kick */
+	Ctrler.locyPID.PreE -= Ctrler.locyPID.FB - fy;
+}
+
+/* Mode 3: the past innovation e (cm, earth frame) rotated into the heading frame and scaled to EKF metres is applied
+ * now, z = x_now + e (ring, past innovation applied now: SIMULATED M3); the position step goes into earth_x/y and
+ * s_ekf_prev_px/py, so Of_IntegratePosition does not count it twice. */
+static void Ext_Pos_Ekf(void)
+{
+	float k = CM_PER_M * g_of_scale, r = EXT_POS_CAM_SD_CM / k;
+	float px0 = s_ekf_of.x[0], py0 = s_ekf_of.x[3], dx, dy;
+	float hx = (g_ext_pos.e_x * Cos_Yaw_01 - g_ext_pos.e_y * Sin_Yaw_01) / k;
+	float hy = (g_ext_pos.e_x * Sin_Yaw_01 + g_ext_pos.e_y * Cos_Yaw_01) / k;
+	(void)EkfOf_UpdatePos(&s_ekf_of, px0 + hx, py0 + hy, r * r, EXT_POS_EKF_GATE);
+	s_ekf_prev_px += s_ekf_of.x[0] - px0;
+	s_ekf_prev_py += s_ekf_of.x[3] - py0;
+	dx = (s_ekf_of.x[0] - px0) * k;
+	dy = (s_ekf_of.x[3] - py0) * k;
+	ano_of.earth_x += dx * Cos_Yaw_01 + dy * Sin_Yaw_01;
+	ano_of.earth_y += dy * Cos_Yaw_01 - dx * Sin_Yaw_01;
+}
+
 static void Ext_Pos_Tick(void)
 {
 	uint32_t now_ms = (uint32_t)xTaskGetTickCount() * (uint32_t)portTICK_PERIOD_MS;
 	float dx, dy;
+	uint8_t ekf3 = (uint8_t)(g_ext_pos_on == 3U && g_of_bias_mode == OF_BIAS_EKF && s_ekf_of_inited);
+	if (g_ext_pos_on == 3U) {
+		g_ext_pos.c_x = g_ext_pos.a_x;   /* the ring holds earth - a: e = z - earth_past */
+		g_ext_pos.c_y = g_ext_pos.a_y;
+	}
 	ext_pos_ring_tick(&s_ext_pos_ring, now_ms, ano_of.earth_x - g_ext_pos.a_x, ano_of.earth_y - g_ext_pos.a_y);
 	if (g_ext_pos_post.seq != s_ext_pos_seen) {
 		float zx, zy;
@@ -887,6 +923,9 @@ static void Ext_Pos_Tick(void)
 			uint8_t res = ext_pos_fix(&g_ext_pos, &s_ext_pos_ring, t_meas, now_ms, zx, zy);
 			if (g_ext_pos_on == 2U) {
 				(void)ext_pos_step(&g_ext_pos, res, &dx, &dy);
+			} else if (ekf3 && ext_pos_take(&g_ext_pos, res)) {
+				Ext_Pos_Ekf();
+				Ext_Pos_SetFb();
 			}
 		}
 	}
@@ -894,6 +933,7 @@ static void Ext_Pos_Tick(void)
 		ext_pos_spread(&g_ext_pos, &dx, &dy);
 		ano_of.earth_x += dx;
 		ano_of.earth_y += dy;
+		Ext_Pos_SetFb();
 	}
 	ext_pos_stale_tick(&g_ext_pos, now_ms);
 }

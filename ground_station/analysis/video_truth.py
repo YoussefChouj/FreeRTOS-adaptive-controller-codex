@@ -1465,15 +1465,17 @@ def drift_score(name: str, cam: str = "docs/video-truth/cam_r4_lenswave_2026-10-
 # (docs/video-truth/live_camera_fusion_design_2026-10-11.md): gain 0.1 at 10 fixes/s ~ a 1 s time constant.
 # API/ekf_of.h 2026-10-12 (PROPOSED): gain 0.9 / slew 10 cm per fix, applied part ramped over SPREAD_N 20 x 5 ms
 EXT_POS = {"ring_n": 32, "ring_dt": 0.05, "gate_m": 0.40, "slew_m": 0.10, "gain": 0.9, "rej_n": 3, "spread_s": 0.1,
-           "beta": 0.0, "rmax_mps": 0.3}
+           "beta": 0.0, "rmax_mps": 0.3, "trust_n": 3, "agree_m": 0.05, "stale_s": 3.0}
 
 
 def ext_pos_replay(t, est, fix_t, fix_xy, lat_s: float, p: dict = EXT_POS, arr_t=None) -> tuple[np.ndarray, dict]:
     """The firmware EXT_POS path closed: a fix of the position at fix_t reaches the drone lat_s later; its
     innovation e = z - (ring(fix_t) + c) is taken against the raw estimate buffered every ring_dt for ring_n samples
     (linear between samples, the newest after it) plus the running correction c. |e| > gate is dropped unless
-    rej_n gated fixes came in a row, then accepted through the slew clamp until a fix is back inside the gate
-    (slewed re-anchor). An accepted fix moves the target c by gain*e, at most slew; the applied part a follows c at
+    rej_n gated fixes came in a row whose offsets z - ring (free of c) lie within agree_m of their mean, then
+    accepted through the slew clamp until a fix is back inside the gate (slewed re-anchor). The camera starts stale,
+    goes stale after stale_s without an accepted fix, and counts again after trust_n accepted fixes in a row
+    (ext_pos_take: an accepted fix moves c only while not stale). An accepted fix moves the target c by gain*e, at most slew; the applied part a follows c at
     most slew per spread_s (ext_pos_spread; 0 = at once). `arr_t` (sorted): per-fix arrival times instead of
     fix_t + lat_s, for a fix time the drone computes from a wrong delay. beta > 0 (PROPOSED, replay only) adds an
     offset rate r: c runs on at r between fixes, the innovation is taken against c back-dated to fix_t
@@ -1481,8 +1483,9 @@ def ext_pos_replay(t, est, fix_t, fix_xy, lat_s: float, p: dict = EXT_POS, arr_t
     Returns est + a(t), fix counts."""
     rt, rx, c, a, tp = [], [], np.zeros(2), np.zeros(2), None
     r, beta, tf = np.zeros(2), p.get("beta", 0.0), None
-    n = {"ok": 0, "gated": 0, "old": 0, "reanchor": 0}
-    out, rej, k = np.empty_like(est), 0, 0
+    n = {"ok": 0, "gated": 0, "old": 0, "reanchor": 0, "disagree": 0}
+    out, rej, k, oh = np.empty_like(est), 0, 0, []
+    stale, ok_run, t_ok, trust_n = True, 0, None, p.get("trust_n", 1)
     arr = np.asarray(fix_t) + lat_s if arr_t is None else np.asarray(arr_t)
     for i, ti in enumerate(t):
         if not rt or ti - rt[-1] >= p["ring_dt"] - 1e-9:
@@ -1497,12 +1500,18 @@ def ext_pos_replay(t, est, fix_t, fix_xy, lat_s: float, p: dict = EXT_POS, arr_t
                 j = int(np.searchsorted(rt, tm, side="right"))
                 pm = rx[-1] if j >= len(rt) else rx[j - 1] + (tm - rt[j - 1]) / (rt[j] - rt[j - 1]) * (rx[j] - rx[j - 1])
                 e = fix_xy[k] - (pm + c - r * (ti - tm))
-                take = np.hypot(*e) <= p["gate_m"]
-                if take:
-                    rej, n["ok"] = 0, n["ok"] + 1
+                oh = (oh + [fix_xy[k] - pm])[-p["rej_n"]:]
+                if np.hypot(*e) <= p["gate_m"]:
+                    rej, n["ok"], ok_run, t_ok = 0, n["ok"] + 1, ok_run + 1, ti
+                    stale = stale and ok_run < trust_n
+                    take = not stale
                 else:
-                    rej, n["gated"] = rej + 1, n["gated"] + 1
+                    rej, n["gated"], ok_run = rej + 1, n["gated"] + 1, 0
                     take = rej >= p["rej_n"]
+                    if take and "agree_m" in p:
+                        o = np.asarray(oh)
+                        take = len(o) >= p["rej_n"] and bool(np.all(np.hypot(*(o - o.mean(0)).T) <= p["agree_m"]))
+                        n["disagree"] += int(not take)
                     n["reanchor"] += int(take)
                 if take:
                     d = p["gain"] * e
@@ -1513,6 +1522,8 @@ def ext_pos_replay(t, est, fix_t, fix_xy, lat_s: float, p: dict = EXT_POS, arr_t
                         r = r * min(1.0, p["rmax_mps"] / max(np.hypot(*r), 1e-12))
                     tf = tm
             k += 1
+        if t_ok is None or ti - t_ok > p.get("stale_s", np.inf):
+            stale = True
         if beta > 0 and tp is not None:
             c = c + r * (ti - tp)
         d, sp = c - a, p.get("spread_s", 0.0)

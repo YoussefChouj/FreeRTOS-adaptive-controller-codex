@@ -51,6 +51,8 @@ typedef struct {
     uint32_t rej_y;
     uint8_t rej_run_x;  /* consecutive rejected OF samples, see EKF_OF_REJ_RELEASE */
     uint8_t rej_run_y;
+    uint8_t pos_rej_run_x;  /* consecutive rejected camera fixes (EkfOf_UpdatePos), same release rule */
+    uint8_t pos_rej_run_y;
 } EkfOf_t;
 
 /* Gate-lockout recovery: after this many consecutive rejected OF samples on one axis
@@ -63,6 +65,7 @@ typedef struct {
  * tilt-only predict cannot follow, and 0.5 s later the trip drops mode 2 to FIXED for
  * the rest of the flight. A single glitch frame is still rejected. */
 #define EKF_OF_REJ_RELEASE      5U
+#define EKF_OF_POS_P0           1.0f    /* position variance at init and at a camera-fix release, m^2 */
 
 /** Call once at boot or after Reset_World_Origin. */
 extern void EkfOf_Init(EkfOf_t *e);
@@ -82,6 +85,13 @@ extern void EkfOf_Update(EkfOf_t *e, float of_x, float of_y);
  *  WHY (2026-10-07): on video truth the gyro-fixed of2 carries a slow bias that bof cannot learn
  *  without a second, bias-free reference; of1 gives that reference (replay ekf_of_replay truth). */
 extern void EkfOf_UpdateRaw(EkfOf_t *e, float of1_x, float of1_y);
+
+/** Camera position fix (mode 3), h = [1, 0, 0, 0] per axis. z_x, z_y: absolute heading-frame position, m
+ *  (x_now + the delayed innovation, see Ext_Pos_Tick). R: variance, m^2. gate: sigmas, 0 = off. After
+ *  EKF_OF_REJ_RELEASE gated fixes in a row on one axis its position variance goes back to EKF_OF_POS_P0
+ *  and the fix is applied (re-anchor). Returns the gated axes: bit0 x, bit1 y.
+ *  Twin: ground_station/analysis/ekf_of_model.py EkfOfModel.update_pos. */
+extern uint8_t EkfOf_UpdatePos(EkfOf_t *e, float z_x, float z_y, float R, float gate);
 
 /** Zero velocity update (on ground). */
 extern void EkfOf_UpdateZeroVel(EkfOf_t *e);
@@ -132,7 +142,7 @@ extern volatile uint8_t g_ekf_of_vel_fb;
 #define EKF_OF_HEALTH_THRESH    0.061f  /* m/s — 5 x median per-axis innovation sd 1.22 cm/s (5 pinned logs, replay CHOSEN) */
 #define EKF_OF_HEALTH_PERSIST   100U    /* ticks — 0.5 s at 200 Hz */
 
-/* ---- External position fix (camera): shadow (mode 1) and closed loop (mode 2) ----
+/* ---- External position fix (camera): shadow (mode 1), offset outside the EKF (mode 2), in-EKF fix (mode 3) ----
  * Design: docs/video-truth/live_camera_fusion_design_2026-10-11.md. StabilizerTask keeps the raw earth path
  * (earth_x/y minus the running correction c, cm) every EXT_POS_RING_DT_MS; Cmd_ExtPos (TASK/send_data.c, CMD 0x2C)
  * posts a fix with its capture time; ext_pos_fix() takes e = z - (path(t_meas) + c). Shadow: telemetry only.
@@ -140,7 +150,10 @@ extern volatile uint8_t g_ekf_of_vel_fb;
  * ext_pos_spread() moves the applied part a (in earth_x/y) toward c by at most EXT_POS_SLEW_CM / EXT_POS_SPREAD_N per
  * control tick (no one-tick step into the locx/locyPID D term, which is on the error); after
  * EXT_POS_REJ_N gated fixes in a row the gated ones are taken too, through the same clamp (slewed re-anchor), until
- * one is back inside the gate. No fix for EXT_POS_STALE_MS: c holds (OF-only fallback). Replayed rule:
+ * one is back inside the gate, and only when their offsets z - path agree within EXT_POS_AGREE_CM (ext_pos_take()).
+ * No fix for EXT_POS_STALE_MS: c holds (OF-only fallback), and the camera counts again after EXT_POS_TRUST_N accepted
+ * fixes in a row. Mode 3 (PROPOSED): c follows a, so e = z - earth(t_meas); each fix ext_pos_take() passes goes to
+ * EkfOf_UpdatePos() as x_now + e (heading frame, metres, sd EXT_POS_CAM_SD_CM, gate EXT_POS_EKF_GATE). Replayed rule:
  * ground_station/analysis/video_truth.py ext_pos_replay(), same constants. */
 #define EXT_POS_RING_N        32U      /* 32 x 50 ms = 1.55 s of earth path */
 #define EXT_POS_RING_DT_MS    50U
@@ -151,6 +164,11 @@ extern volatile uint8_t g_ekf_of_vel_fb;
 #define EXT_POS_SLEW_CM       10.0f    /* max |dc| per fix; 3 cm was the moving-flight floor in replay, PROPOSED */
 #define EXT_POS_SPREAD_N      20U      /* control ticks per full slew step: 0.5 cm per 5 ms tick (1 m/s), PROPOSED */
 #define EXT_POS_REJ_N         3U       /* gated fixes in a row before the slewed re-anchor */
+#define EXT_POS_AGREE_CM      5.0f     /* re-anchor only when the last EXT_POS_REJ_N offsets lie within this of their mean, PROPOSED */
+#define EXT_POS_TRUST_N       3U       /* accepted fixes in a row before a stale camera counts again, PROPOSED */
+#define EXT_POS_HIST_N        3U       /* offsets kept for the agreement rule, >= EXT_POS_REJ_N */
+#define EXT_POS_CAM_SD_CM     1.7f     /* mode 3 R: camera sd, r5_live_2 (measured 2026-10-12) */
+#define EXT_POS_EKF_GATE      5.0f     /* mode 3 EkfOf_UpdatePos gate, sigmas, PROPOSED (twin sim) */
 typedef struct {
     float    x[EXT_POS_RING_N];
     float    y[EXT_POS_RING_N];
@@ -168,13 +186,17 @@ typedef struct {
     uint8_t  stale;                    /* 1 = no accepted fix for EXT_POS_STALE_MS */
     uint32_t last_ok_ms;
     float    a_x, a_y;                 /* applied part of c, already in earth_x/y (ext_pos_spread), cm */
+    uint8_t  ok_run;                   /* consecutive accepted fixes (stale clears at EXT_POS_TRUST_N) */
+    uint8_t  o_n, o_head;              /* offset history fill and newest slot */
+    float    o_x[EXT_POS_HIST_N], o_y[EXT_POS_HIST_N];  /* z - path(t_meas) of the last non-old fixes, cm */
+    uint16_t n_disagree;               /* re-anchor runs held back by EXT_POS_AGREE_CM */
 } ext_pos_stat_t;
 typedef struct {                       /* Send_Task -> StabilizerTask handover, written under a critical section */
     float    x_cm, y_cm;
     uint32_t t_meas_ms;
     uint32_t seq;
 } ext_pos_post_t;
-extern volatile uint8_t        g_ext_pos_on;        /* 0 off (boot), 1 shadow, 2 closed loop */
+extern volatile uint8_t        g_ext_pos_on;        /* 0 off (boot), 1 shadow, 2 offset outside the EKF, 3 in-EKF fix */
 extern volatile float          g_ext_pos_delay_ms;  /* link delay added to the fix age; measure, default 0 */
 extern volatile ext_pos_post_t g_ext_pos_post;
 extern ext_pos_stat_t          g_ext_pos;           /* telemetry: g_ext_pos.e_x, .e_y, .n_ok, .n_rej, .age_ms */
@@ -183,6 +205,7 @@ void    ext_pos_ring_tick(ext_pos_ring_t *r, uint32_t now_ms, float ex, float ey
 uint8_t ext_pos_ring_at(const ext_pos_ring_t *r, uint32_t t_ms, float *ex, float *ey);
 uint8_t ext_pos_fix(ext_pos_stat_t *s, const ext_pos_ring_t *r, uint32_t t_meas_ms, uint32_t now_ms, float zx, float zy);
 void    ext_pos_stale_tick(ext_pos_stat_t *s, uint32_t now_ms);
+uint8_t ext_pos_take(ext_pos_stat_t *s, uint8_t res);
 uint8_t ext_pos_step(ext_pos_stat_t *s, uint8_t res, float *dx, float *dy);
 void    ext_pos_spread(ext_pos_stat_t *s, float *dx, float *dy);
 uint8_t ext_pos_decode(float val, float *x_cm, float *y_cm);

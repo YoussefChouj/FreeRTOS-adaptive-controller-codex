@@ -98,14 +98,19 @@ static void test_fix_and_stale(void)
     CHECK(s.stale == 1U, "stale before any fix");
     CHECK(ext_pos_fix(&s, &r, 1700U, 2000U, 13.0f, 16.0f) == EXT_POS_FIX_OK, "fix ok");
     CHECK(fabsf(s.e_x - 3.0f) < 1e-4f && fabsf(s.e_y + 4.0f) < 1e-4f && s.age_ms == 300U, "innovation and age");
-    CHECK(s.n_ok == 1U && s.stale == 0U && s.last_ok_ms == 2000U, "ok counters");
+    CHECK(s.n_ok == 1U && s.ok_run == 1U && s.stale == 1U && s.last_ok_ms == 2000U, "ok counters; stale until EXT_POS_TRUST_N in a row");
     for (i = 0; i < 3; i++) {
         CHECK(ext_pos_fix(&s, &r, 1900U, 2000U, 60.0f, 20.0f) == EXT_POS_FIX_GATED, "gated at 50 cm");
     }
-    CHECK(s.n_rej == 3U && s.rej_run == 3U && fabsf(s.e_x - 50.0f) < 1e-4f, "gated counters, e kept");
+    CHECK(s.n_rej == 3U && s.rej_run == 3U && s.ok_run == 0U && fabsf(s.e_x - 50.0f) < 1e-4f, "gated counters, e kept, ok run reset");
     CHECK(ext_pos_fix(&s, &r, 1900U, 2000U, 49.0f, 20.0f) == EXT_POS_FIX_OK && s.rej_run == 0U, "39 cm passes, run reset");
+    for (i = 1; i < (int)EXT_POS_TRUST_N; i++) {
+        CHECK(s.stale == 1U, "still stale inside the trust run");
+        CHECK(ext_pos_fix(&s, &r, 1900U, 2000U, 12.0f, 20.0f) == EXT_POS_FIX_OK, "trust run fix ok");
+    }
+    CHECK(s.stale == 0U && s.ok_run == EXT_POS_TRUST_N, "EXT_POS_TRUST_N good fixes in a row: trusted");
     CHECK(ext_pos_fix(&s, &r, 100U, 2000U, 10.0f, 20.0f) == EXT_POS_FIX_OLD && s.n_old == 1U, "too old");
-    CHECK(s.n_ok == 2U && s.n_rej == 3U, "old fix leaves ok/rej alone");
+    CHECK(s.n_ok == 1U + EXT_POS_TRUST_N && s.n_rej == 3U, "old fix leaves ok/rej alone");
     ext_pos_stale_tick(&s, 5000U);
     CHECK(s.stale == 0U, "3.0 s after last ok: not stale yet");
     ext_pos_stale_tick(&s, 5001U);
@@ -165,10 +170,17 @@ static void test_step_rules(void)
     CHECK(ext_pos_step(&s, EXT_POS_FIX_OK, &dx, &dy) == 1U && fabsf(dx - EXT_POS_GAIN * 4.0f) < 1e-5f && fabsf(dy + EXT_POS_GAIN * 2.0f) < 1e-5f, "gain step");
     CHECK(fabsf(s.c_x - dx) < 1e-6f && fabsf(s.c_y - dy) < 1e-6f && s.a_x == 0.0f, "c moves by the step, a does not");
     CHECK(ext_pos_step(&s, EXT_POS_FIX_OLD, &dx, &dy) == 0U && dx == 0.0f && dy == 0.0f, "old fix: no step");
+    s.stale = 1U;
+    CHECK(ext_pos_step(&s, EXT_POS_FIX_OK, &dx, &dy) == 0U, "accepted fix while stale: no step");
+    s.stale = 0U;
     s.rej_run = EXT_POS_REJ_N - 1U; s.e_x = 300.0f; s.e_y = 400.0f;
     CHECK(ext_pos_step(&s, EXT_POS_FIX_GATED, &dx, &dy) == 0U && s.n_anchor == 0U, "gated inside the run: no step");
     s.rej_run = EXT_POS_REJ_N;
-    CHECK(ext_pos_step(&s, EXT_POS_FIX_GATED, &dx, &dy) == 1U && s.n_anchor == 1U, "gated run: re-anchor step");
+    s.o_n = EXT_POS_HIST_N; s.o_head = 0U;
+    s.o_x[0] = 300.0f; s.o_y[0] = 400.0f; s.o_x[1] = 300.0f; s.o_y[1] = 380.0f; s.o_x[2] = 300.0f; s.o_y[2] = 400.0f;
+    CHECK(ext_pos_step(&s, EXT_POS_FIX_GATED, &dx, &dy) == 0U && s.n_anchor == 0U && s.n_disagree == 1U, "gated run spread over 20 cm: held back");
+    s.o_y[1] = 404.0f;
+    CHECK(ext_pos_step(&s, EXT_POS_FIX_GATED, &dx, &dy) == 1U && s.n_anchor == 1U, "gated run within EXT_POS_AGREE_CM: re-anchor step");
     CHECK(fabsf(dx - 0.6f * EXT_POS_SLEW_CM) < 1e-4f && fabsf(dy - 0.8f * EXT_POS_SLEW_CM) < 1e-4f, "re-anchor step clamped to the slew along e");
 }
 

@@ -570,7 +570,8 @@ COMMAND_TABLE: dict[int, CommandSpec] = {
         params=(
             CommandParam(254, "delay_ms", "ms", 0, 1000, description="Fixed link delay subtracted from each fix time.",
                          symbol="g_ext_pos_delay_ms"),
-            CommandParam(255, "on", "bool", 0, 1, description="Fusion on/off. Off at boot; fixes are dropped while off.",
+            CommandParam(255, "on", "enum", 0, 3, description="Fusion mode: 0 off (boot; fixes dropped), 1 shadow, "
+                         "2 offset outside the EKF, 3 in-EKF fix (needs the OF EKF).",
                          symbol="g_ext_pos_on"),
         ),
         safety=SafetyClass(description="Safe at runtime: shadow mode only logs the innovation."),

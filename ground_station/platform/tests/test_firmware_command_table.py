@@ -51,6 +51,7 @@ def firmware_entries() -> list[tuple[int, int, str]]:
         "WFB_CMD_PROG": _hex_define(wfb, "WFB_CMD_PROG"),
         "MRAC_ELEM_CMD_BASE": base,
         "MRAC_ELEM_CMD_LAST": base + (tol << 2) + 3,
+        "EXT_POS_CMD_ID": _hex_define(text, "EXT_POS_CMD_ID"),
     }
     table = text[text.index("k_gs_cmds[] = {"):]
     table = table[: table.index("};")]

@@ -685,7 +685,7 @@ def fw_fusion(t, est, arr_t, idx, xy, delay_ms: float, exe: Path | None = None) 
     tail = [r for r in rows if r.startswith("N ")][0].split()[1:]
     a = np.array([r.split() for r in rows if r.strip() and not r.startswith("N ")], float) / 100.0
     out = est + np.c_[np.interp(t, ts, a[:, 0]), np.interp(t, ts, a[:, 1])]
-    return out, dict(zip(("ok", "gated", "old", "reanchor"), map(int, tail)))
+    return out, dict(zip(("ok", "gated", "old", "reanchor", "disagree"), map(int, tail)))
 
 
 def replay(name: str, links=(0.15, 0.3), delay_err_s: float = 0.0, period: float = 0.05, n_med: int = 2,
@@ -798,7 +798,8 @@ def main(argv=None) -> int:
     ap.add_argument("--window-s", type=float, default=0.1)
     ap.add_argument("--gate", action="store_true", help="JumpGate on detections (PROPOSED thresholds)")
     ap.add_argument("--send", default="", help="udp:PORT (stream_log --relay-port) or udp:HOST:PORT; default: no send")
-    ap.add_argument("--mode", type=int, choices=[0, 1, 2], default=None, help="EXT_POS mode frame: 0 off, 1 shadow, 2 closed")
+    ap.add_argument("--mode", type=int, choices=[0, 1, 2, 3], default=None,
+                    help="EXT_POS mode frame: 0 off, 1 shadow, 2 offset outside the EKF, 3 in-EKF fix")
     ap.add_argument("--delay-ms", type=float, default=None, help="0xFE frame: firmware back-dating delay (measure it)")
     ap.add_argument("--seed-px", default="", help="u,v of the drone on the pad; default the ArUco id0 centre")
     ap.add_argument("--floor", default="", help="logs/video_truth/<dir> of an earlier capture, same phone placement: "

@@ -33,6 +33,8 @@ class EkfOf_t(ctypes.Structure):
         ("rej_y", ctypes.c_uint32),
         ("rej_run_x", ctypes.c_uint8),
         ("rej_run_y", ctypes.c_uint8),
+        ("pos_rej_run_x", ctypes.c_uint8),
+        ("pos_rej_run_y", ctypes.c_uint8),
     ]
 
 @pytest.fixture(scope="module")
@@ -70,10 +72,13 @@ def gcc_lib(tmp_path_factory):
                 raise
             shim = tmp_dir / "fltused.c"
             shim.write_text("int _fltused = 0;\n")
+            # 2026-10-12: no CRT headers either; ekf_of.c needs only sqrtf from <math.h>
+            (tmp_dir / "math.h").write_text("#define sqrtf __builtin_sqrtf\n#define fabsf __builtin_fabsf\n")
             exports = [f"-Wl,-export:{n}" for n in ("EkfOf_Init", "EkfOf_Predict", "EkfOf_Update",
-                       "EkfOf_UpdateRaw", "EkfOf_UpdateZeroVel", "EkfOf_ResetPos", "EkfOf_ResetBias")]
+                       "EkfOf_UpdateRaw", "EkfOf_UpdateZeroVel", "EkfOf_ResetPos", "EkfOf_ResetBias",
+                       "EkfOf_UpdatePos")]
             subprocess.run([clang, "-std=c99", "-Wall", "-Wextra", "-Werror", "-fno-math-errno", "-shared",
-                            "-nostdlib", "-Wl,-noentry", *exports, str(src), str(shim), "-o", str(lib_path)],
+                            "-nostdlib", "-Wl,-noentry", f"-I{tmp_dir}", *exports, str(src), str(shim), "-o", str(lib_path)],
                            check=True, capture_output=True, text=True)
             ctypes.CDLL(str(lib_path))
     except (subprocess.CalledProcessError, OSError) as e:
@@ -288,6 +293,44 @@ def test_gate_lockout_release_golden(gcc_lib):
     assert abs(frames[REJ_RELEASE - 1][0] - 0.12) < 0.01 and abs(frames[REJ_RELEASE - 1][1] + 0.12) < 0.01
     assert abs(c_model.innov_x) < 0.061 and abs(c_model.innov_y) < 0.061  # under EKF_OF_HEALTH_THRESH
 
+
+def test_update_pos_golden(gcc_lib):
+    """Proposed mode 3: C EkfOf_UpdatePos matches EkfOfModel.update_pos (gain, per-axis gate, REJ_RELEASE
+    re-anchor) on a hover with OF frames between camera fixes, incl. the rejection bitmask."""
+    from ground_station.analysis.ekf_of_model import REJ_RELEASE
+    dt, R, gate = 0.005, (0.017 / 1.04) ** 2, 5.0
+    model = EkfOfModel(1, dtype=np.float32)
+    lib = ctypes.CDLL(str(gcc_lib))
+    lib.EkfOf_Init.argtypes = [ctypes.POINTER(EkfOf_t)]
+    lib.EkfOf_Predict.argtypes = [ctypes.POINTER(EkfOf_t), ctypes.c_float, ctypes.c_float, ctypes.c_float]
+    lib.EkfOf_Update.argtypes = [ctypes.POINTER(EkfOf_t), ctypes.c_float, ctypes.c_float]
+    lib.EkfOf_UpdatePos.argtypes = [ctypes.POINTER(EkfOf_t), ctypes.c_float, ctypes.c_float, ctypes.c_float,
+                                    ctypes.c_float]
+    lib.EkfOf_UpdatePos.restype = ctypes.c_uint8
+    c_model = EkfOf_t()
+    lib.EkfOf_Init(ctypes.byref(c_model))
+    # fixes every 20 ticks: near (taken), far on x only (gated REJ_RELEASE-1 times, then released), near again
+    fixes = [(0.01, -0.01)] * 3 + [(0.5, 0.0)] * REJ_RELEASE + [(0.5, 0.0)] * 2
+    masks = []
+    for i in range(1, 20 * len(fixes) + 1):
+        model.predict(dt, 0.0, 0.0)
+        lib.EkfOf_Predict(ctypes.byref(c_model), dt, 0.0, 0.0)
+        if i % 8 == 0:
+            model.update_of(0.0, 0.0)
+            lib.EkfOf_Update(ctypes.byref(c_model), 0.0, 0.0)
+        if i % 20 == 0:
+            zx, zy = fixes[i // 20 - 1]
+            rx, ry = model.update_pos(np.array([zx], np.float32), np.array([zy], np.float32), R, gate=gate)
+            m = lib.EkfOf_UpdatePos(ctypes.byref(c_model), zx, zy, R, gate)
+            assert m == int(rx[0]) | (int(ry[0]) << 1)
+            masks.append(m)
+            np.testing.assert_allclose(model.x[0], np.array(c_model.x), rtol=1e-4, atol=1e-6)
+            np.testing.assert_allclose(model.P[0].reshape(2, 16), np.array([list(r) for r in c_model.P]),
+                                       rtol=1e-3, atol=1e-7)
+            assert (c_model.pos_rej_run_x, c_model.pos_rej_run_y) == tuple(int(v) for v in model.pos_rej_run[:, 0])
+    assert masks[:3] == [0, 0, 0] and masks[3:3 + REJ_RELEASE - 1] == [1] * (REJ_RELEASE - 1)
+    assert masks[3 + REJ_RELEASE - 1] == 1 and masks[-1] == 0   # the release fix reports gated, then tracked
+    assert abs(c_model.x[0] - 0.5) < 0.02 and c_model.pos_rej_run_x == 0
 
 def _run_two_channel(model, lib, c_model, of2, of1, ticks, dt=0.005):
     for i in range(1, ticks):

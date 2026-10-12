@@ -1883,7 +1883,8 @@ static void Cmd_ExtPos(GsCmd_t *c)
     float x_cm, y_cm;
     uint32_t now_ms, back_ms;
     if (c->idx == EXT_POS_IDX_ON) {
-        g_ext_pos_on = (c->val >= 1.5f && c->val < 2.5f) ? 2U : ((c->val >= 0.5f && c->val < 1.5f) ? 1U : 0U);
+        g_ext_pos_on = (c->val >= 2.5f && c->val < 3.5f) ? 3U : ((c->val >= 1.5f && c->val < 2.5f) ? 2U :
+                       ((c->val >= 0.5f && c->val < 1.5f) ? 1U : 0U));
     } else if (c->idx == EXT_POS_IDX_DELAY) {
         if (c->val >= 0.0f && c->val <= EXT_POS_DELAY_MAX_MS) {
             g_ext_pos_delay_ms = c->val;

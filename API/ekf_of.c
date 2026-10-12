@@ -57,7 +57,7 @@ void EkfOf_Init(EkfOf_t *e)
     }
 
     /* q = random-walk/white-noise density per second, units per state; P0 = initial variance */
-    EKF_OF_STATE(0, q_pos, 1e-6f, 1.0f);   /* p    position */
+    EKF_OF_STATE(0, q_pos, 1e-6f, EKF_OF_POS_P0);   /* p    position */
     EKF_OF_STATE(1, q_acc, 1e-3f, EKF_OF_VEL_P0);   /* v    velocity */
     EKF_OF_STATE(2, q_bof, 1e-5f, 0.01f);  /* bof  optical flow bias: learned vs of1, see change history */
     EKF_OF_STATE(3, q_ba,  1e-6f, 0.25f);  /* ba   accel bias */
@@ -95,6 +95,8 @@ void EkfOf_Init(EkfOf_t *e)
     e->rej_y   = 0U;
     e->rej_run_x = 0U;
     e->rej_run_y = 0U;
+    e->pos_rej_run_x = 0U;
+    e->pos_rej_run_y = 0U;
     e->inited  = 1U;
 }
 
@@ -229,15 +231,15 @@ static uint8_t ekf_of_update_one(EkfOf_t *e, int axis, const float h[4], float z
     return 0U;
 }
 
-/* Reset one axis's velocity variance to its P0 with no cross-covariance (gate-lockout recovery). */
-static void ekf_of_release_vel(EkfOf_t *e, int axis)
+/* Reset one axis's state l (local index) variance to p0 with no cross-covariance (gate-lockout recovery). */
+static void ekf_of_release(EkfOf_t *e, int axis, int l, float p0)
 {
     int k;
-    for (k = 0; k < 4; k++) {              /* vel: clear its row and column */
-        e->P[axis][EKF_OF_L_VEL*4 + k] = 0.0f;
-        e->P[axis][k*4 + EKF_OF_L_VEL] = 0.0f;
+    for (k = 0; k < 4; k++) {              /* clear its row and column */
+        e->P[axis][l*4 + k] = 0.0f;
+        e->P[axis][k*4 + l] = 0.0f;
     }
-    e->P[axis][EKF_OF_L_VEL*4 + EKF_OF_L_VEL] = EKF_OF_VEL_P0;
+    e->P[axis][l*4 + l] = p0;
 }
 
 /* One axis of the OF update with gate-lockout recovery (see EKF_OF_REJ_RELEASE). */
@@ -251,8 +253,32 @@ static void ekf_of_update_axis(EkfOf_t *e, int axis, float z, float *innov, uint
     (*rej)++;
     if (++(*run) < EKF_OF_REJ_RELEASE) return;
     *run = 0U;
-    ekf_of_release_vel(e, axis);
+    ekf_of_release(e, axis, EKF_OF_L_VEL, EKF_OF_VEL_P0);
     (void)ekf_of_update_one(e, axis, h, z, e->R_of, 0.0f, 0);
+}
+
+/* One axis of the camera position fix; 1 = gated (the release, if due, is applied before returning). */
+static uint8_t ekf_of_update_pos_axis(EkfOf_t *e, int axis, float z, float R, float gate, uint8_t *run)
+{
+    const float h[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+    if (!ekf_of_update_one(e, axis, h, z, R, gate, 0)) {
+        *run = 0U;
+        return 0U;
+    }
+    if (++(*run) < EKF_OF_REJ_RELEASE) return 1U;
+    *run = 0U;
+    ekf_of_release(e, axis, EKF_OF_L_POS, EKF_OF_POS_P0);
+    (void)ekf_of_update_one(e, axis, h, z, R, 0.0f, 0);
+    return 1U;
+}
+
+uint8_t EkfOf_UpdatePos(EkfOf_t *e, float z_x, float z_y, float R, float gate)
+{
+    uint8_t m;
+    if (!e->inited) return 0U;
+    m  = ekf_of_update_pos_axis(e, 0, z_x, R, gate, &e->pos_rej_run_x);
+    m |= (uint8_t)(ekf_of_update_pos_axis(e, 1, z_y, R, gate, &e->pos_rej_run_y) << 1);
+    return m;
 }
 
 void EkfOf_Update(EkfOf_t *e, float of_x, float of_y)
@@ -369,18 +395,74 @@ uint8_t ext_pos_fix(ext_pos_stat_t *s, const ext_pos_ring_t *r, uint32_t t_meas_
     }
     s->e_x = zx - (px + s->c_x);
     s->e_y = zy - (py + s->c_y);
+    s->o_head = (uint8_t)((s->o_head + 1U) % EXT_POS_HIST_N);
+    s->o_x[s->o_head] = zx - px;           /* offset of this fix, free of c (c moves during a re-anchor) */
+    s->o_y[s->o_head] = zy - py;
+    if (s->o_n < EXT_POS_HIST_N) {
+        s->o_n++;
+    }
     if (s->e_x * s->e_x + s->e_y * s->e_y > EXT_POS_GATE_CM * EXT_POS_GATE_CM) {
         s->n_rej++;
         if (s->rej_run < 255U) {
             s->rej_run++;
         }
+        s->ok_run = 0U;
         return EXT_POS_FIX_GATED;
     }
     s->n_ok++;
     s->rej_run = 0U;
     s->last_ok_ms = now_ms;
-    s->stale = 0U;
+    if (s->ok_run < 255U) {
+        s->ok_run++;
+    }
+    if (s->ok_run >= EXT_POS_TRUST_N) {    /* a stale camera counts again after EXT_POS_TRUST_N good fixes */
+        s->stale = 0U;
+    }
     return EXT_POS_FIX_OK;
+}
+
+/* 1 if the newest n offsets lie within EXT_POS_AGREE_CM of their mean (one jump, not scattered outliers). */
+static uint8_t ext_pos_agree(const ext_pos_stat_t *s, uint8_t n)
+{
+    float mx = 0.0f, my = 0.0f, dx, dy;
+    uint8_t i, k;
+    if (n == 0U || s->o_n < n) return 0U;
+    for (i = 0U; i < n; i++) {
+        k = (uint8_t)((s->o_head + EXT_POS_HIST_N - i) % EXT_POS_HIST_N);
+        mx += s->o_x[k];
+        my += s->o_y[k];
+    }
+    mx /= (float)n;
+    my /= (float)n;
+    for (i = 0U; i < n; i++) {
+        k = (uint8_t)((s->o_head + EXT_POS_HIST_N - i) % EXT_POS_HIST_N);
+        dx = s->o_x[k] - mx;
+        dy = s->o_y[k] - my;
+        if (dx * dx + dy * dy > EXT_POS_AGREE_CM * EXT_POS_AGREE_CM) return 0U;
+    }
+    return 1U;
+}
+
+/* Whether a closed loop (mode 2 or 3) applies this fix: an accepted one while the camera is trusted (not stale),
+ * or a gated one once EXT_POS_REJ_N came in a row and their offsets agree (re-anchor; counted in n_anchor). */
+uint8_t ext_pos_take(ext_pos_stat_t *s, uint8_t res)
+{
+    if (res == EXT_POS_FIX_OK) {
+        return (uint8_t)(s->stale == 0U);
+    }
+    if (res != EXT_POS_FIX_GATED || s->rej_run < EXT_POS_REJ_N) {
+        return 0U;
+    }
+    if (!ext_pos_agree(s, (uint8_t)EXT_POS_REJ_N)) {
+        if (s->n_disagree < 65535U) {
+            s->n_disagree++;
+        }
+        return 0U;
+    }
+    if (s->n_anchor < 65535U) {
+        s->n_anchor++;
+    }
+    return 1U;
 }
 
 void ext_pos_stale_tick(ext_pos_stat_t *s, uint32_t now_ms)
@@ -390,19 +472,16 @@ void ext_pos_stale_tick(ext_pos_stat_t *s, uint32_t now_ms)
     }
 }
 
-/* Closed-loop step for one ext_pos_fix() result: an accepted fix, or a gated one once EXT_POS_REJ_N came in a
- * row (slewed re-anchor), moves c by EXT_POS_GAIN * e clamped to EXT_POS_SLEW_CM. Returns 1 and the step
- * (dx, dy, cm) of the target c; earth_x/y follows through ext_pos_spread(). 0 = no step (old, or gated inside the run). */
+/* Mode 2 step for one ext_pos_fix() result that ext_pos_take() applies: moves c by EXT_POS_GAIN * e clamped to
+ * EXT_POS_SLEW_CM (a gated run is a slewed re-anchor). Returns 1 and the step (dx, dy, cm) of the target c;
+ * earth_x/y follows through ext_pos_spread(). 0 = no step (old, stale, gated inside the run, or not agreeing). */
 uint8_t ext_pos_step(ext_pos_stat_t *s, uint8_t res, float *dx, float *dy)
 {
     float d;
     *dx = 0.0f;
     *dy = 0.0f;
-    if (res == EXT_POS_FIX_OLD || (res == EXT_POS_FIX_GATED && s->rej_run < EXT_POS_REJ_N)) {
+    if (!ext_pos_take(s, res)) {
         return 0U;
-    }
-    if (res == EXT_POS_FIX_GATED && s->n_anchor < 65535U) {
-        s->n_anchor++;
     }
     *dx = EXT_POS_GAIN * s->e_x;
     *dy = EXT_POS_GAIN * s->e_y;

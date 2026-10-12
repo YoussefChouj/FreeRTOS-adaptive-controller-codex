@@ -46,9 +46,10 @@ def ext_pos_fix_frame(x_cm: float, y_cm: float, age_s: float) -> bytes:
 
 
 def ext_pos_mode_frame(mode: int) -> bytes:
-    """Fusion mode: 0 off, 1 shadow (innovations only), 2 closed loop (offset c steps earth_x/y)."""
-    if mode not in (0, 1, 2):
-        raise ValueError(f"mode {mode} not in 0/1/2")
+    """Fusion mode: 0 off, 1 shadow (innovations only), 2 closed loop (offset c steps earth_x/y),
+    3 in-EKF fix (the OF EKF takes each fix as a position measurement; shadow without the OF EKF)."""
+    if mode not in (0, 1, 2, 3):
+        raise ValueError(f"mode {mode} not in 0/1/2/3")
     return build_command_frame(EXT_POS_CMD_ID, EXT_POS_IDX_ON, float(mode))
 
 

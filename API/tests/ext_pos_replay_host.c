@@ -9,7 +9,7 @@
  *   D delay_ms               g_ext_pos_delay_ms
  *   F now_ms idx code        one CMD 0x2C fix frame drained at now_ms (idx = age in 10 ms units, code = wire value)
  *   T now_ms earth_x earth_y one control tick; earth = the raw path (earth_x/y minus the applied correction a)
- * stdout: "a_x a_y" (applied correction after the tick) per T, then "N n_ok n_rej n_old n_anchor".
+ * stdout: "a_x a_y" (applied correction after the tick) per T, then "N n_ok n_rej n_old n_anchor n_disagree".
  *
  * Build: gcc -std=c99 -O2 -ffp-contract=off -IAPI -IAPI/tests/stubs_wp14 API/tests/ext_pos_replay_host.c API/ekf_of.c -lm
  */
@@ -58,6 +58,7 @@ int main(void)
             printf("%.4f %.4f\n", s.a_x, s.a_y);
         }
     }
-    printf("N %u %u %u %u\n", (unsigned)s.n_ok, (unsigned)s.n_rej, (unsigned)s.n_old, (unsigned)s.n_anchor);
+    printf("N %u %u %u %u %u\n", (unsigned)s.n_ok, (unsigned)s.n_rej, (unsigned)s.n_old, (unsigned)s.n_anchor,
+           (unsigned)s.n_disagree);
     return 0;
 }
