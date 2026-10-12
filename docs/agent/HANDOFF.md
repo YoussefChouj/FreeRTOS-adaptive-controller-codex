@@ -3,25 +3,23 @@
 Read order: `AGENTS.md` -> this file -> `docs/agent/memory/rules.md` -> `.claude_state.md` (newest entry first).
 History: `docs/agent/ledger/` (grep, never read whole). Desktop session is CEO: inline, no subagents.
 
-## Now: 2026-10-13 night - mode 2/3 drift root cause found: 90 deg frame rotation; fix is tracker-side
+## Now: 2026-10-13 nightly run - tracker `docs/agent/nightly-2026-10-13.md` (one row per item, with commits)
 
-Branch `overnight-2026-10-08`. Plan: `docs/flights/2026-10-13-overnight-and-test-plan.md`, section "Item 0 result".
-The drone is on ELF 6da69207 (f6424fa1). No reflash is needed for this fix.
-- **Cause (measured).** r6 F2/F3/F3b were flown with `--yaw-deg 0` (the script default). `live_tracker fit` measures
-  the pad->EKF rotation at about 90 deg (F2 raw-path windows 90-98 deg). Rotated feedback has no restoring force,
-  hence the drift and the RC fight.
-- **Fix.** `live_tracker --align auto` (`AutoAlign`). The tracker stays in mode 1 until it has fitted the rotation in
-  flight (span 80 cm, scale 0.6-1.5, rms 20 cm, 2 fits within 15 deg, all PROPOSED). It then sets the offset so the
-  switch is bumpless and sends the mode. `camera_truth.sh fusion` adds it for modes 2/3.
-- **Replay (`fit <stem> --auto`).** F4c locks at 85 deg (step 14.5 cm). F2 locks at 99 deg. The F4 hover and F4b do
-  not lock (safe). Tests: `python -m pytest ground_station/analysis/tests/test_live_tracker.py -q` (25 pass).
+Branch `overnight-2026-10-08`. The drone is on ELF 6da69207 (f6424fa1). Every change since then is tracker-side: no reflash.
+- **Done:** items 1, 3, 4, 5, 9, 10, 11, 13. Mode 2/3 drift inputs fixed in the tracker, all measured on r6 replays:
+  - `--align auto`: r6 flew `--yaw-deg 0` against a ~90 deg yaw.
+  - Coral mask learned at start: stuck fixes; r6_f4 replay p50 272 -> 7.6 cm.
+  - `--delay-ms 200`: camera lag 0.21 s.
+- **Live video:** `camera_truth.sh fusion` (modes 1-3) or `video <name>` (window + recording only, for workflows A/B/C).
+- **Background:** NN variant `tcn5h_s5_r6m1` (pool without mode 2/3 flights) and the VPS F3B worker (mode 3 loose
+  tracking, brief `docs/agent/briefs/F3B-study.md`).
+- **Open:** the per-flight constant offset between fixes and truth4 (40-95 cm, unexplained) and the r6_f2 replay p90 tail.
 
 ## Next 3 actions
-1. Overnight: measure the camera delay (F4 stick-pulse xcorr) -> `--delay-ms`. Mask RC-active segments for acceptance.
-   Start the NN held-out training run (commands in `docs/agent/ledger/state-2026-10-12.md`).
-2. Next lab: `camera_truth.sh fusion <name> 2`. Fly about 1 m out and back plus sideways. Wait for `align LOCK ~90 deg`,
-   then 60 s hands-off. Repeat with mode 3.
-3. Follow-up: online refit after lock (the EKF yaw wanders between flights).
+1. When the background jobs finish: NN result into row 2; F3B fetch, verify (replay numbers, C tests), merge, row 7.
+2. Next lab: `docs/lab/run-sheet-2026-10-13-drift-free.md`. Fusion mode 2, then mode 3: wait for `align LOCK`, then
+   60 s hands-off. Pass mark PROPOSED: under 20 cm.
+3. Item 6 (optional): online yaw refit after lock.
 
 ## Do not
 - Arm/spin outside an operator-opened workflow-B battery session; flash while armed or with `--force`.
