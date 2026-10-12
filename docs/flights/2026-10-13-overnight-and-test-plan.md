@@ -38,7 +38,23 @@ Flown 10-12 (measured from the logs; all ext_pos mode 1 shadow, firmware 91f9d40
 | `r6_f4b_sysid_p5300` | P5300 (same pack, 2nd flight) | 30750 | 2132..3866 all axes | 8200 / 6151 / 4266 / 2056 / 7 (drone left view; locy FB to -362 cm) |
 | `r6_f4c_sysid_p4000` | P4000 (fresh) | 27237 | roll/pitch/yaw full; throttle 2132..3347 only | 5720 / 5556 / 4418 / 165 / 1 |
 
-An aborted first F4c attempt is in `logs/aborted/` (not for analysis). F3/F1/F2 hovers were not flown yet.
+An aborted first F4c attempt is in `logs/aborted/` (not for analysis). F1/F2 hovers were not flown.
+
+**F3 `r6_f3_mode3` (mode 3, P-pack after power-cycle): sudden drift, operator killed the motors.** Measured in the log:
+- Before: n_ok stuck at 620, stale = 1. Rejected fixes then agreed with each other, so `n_anchor` counted up 1, 2, 4.
+- The rejected fixes had an innovation of about e_x -426 cm, e_y -860 cm. That is larger than the room, so the camera fix was wrong but self-consistent.
+- In one slot1 step (20 ms), `locxPID.FB` (= earth_y) jumped from -80 to -937 cm. The position loop then saw an 8.6 m error.
+- Tracker: 4760 frames, 4352 detections, 1879 fixes, 407 gate rejections, 3 reseeds.
+- Cause (UNVERIFIED until replay): the consistency-checked re-anchor accepted a consistently wrong fix. Nothing bounds
+  the size of a re-anchor step. Also, `--delay-ms 0` was used and the camera delay was never measured.
+
+**Overnight item 0 (before anything else, a safety fix; host replay of this log must reproduce the jump first):**
+1. Bound every re-anchor step and every fix. PROPOSED: reject any fix outside the room box; a single anchor step may not exceed about 30 cm.
+2. On a re-anchor, shift the position setpoint by the same amount, so the controller sees no step (bumpless).
+3. In the tracker, send no fixes after a reseed until the track is confirmed.
+4. Add a golden test built from this F3 log.
+
+Until then, do not fly mode 2 or mode 3 (mode 1 shadow is safe).
 Uses: fit the plant on one flight and validate on the others. The pack comparison asks whether the response changes
 with battery voltage. F4b camera stats need masking where detection drops out.
 
