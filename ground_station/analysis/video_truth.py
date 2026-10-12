@@ -1202,7 +1202,9 @@ def plumb_check(stem: str, video_dir: str, cam, coral_step: int = 2, sync_s: flo
     import pandas as pd
     s1 = pd.read_csv(f"{stem}.slot1.csv")
     meta = json.loads(Path(f"{stem}.meta.json").read_text())
-    t_z = meta["started"] + s1["t_host_s"].to_numpy(float)
+    # host stamps arrive in WiFi batches (repeats break np.gradient): device ms mapped onto host time by a line fit
+    ts, th = s1["t_src_ms"].to_numpy(float), meta["started"] + s1["t_host_s"].to_numpy(float)
+    t_z = np.polyval(np.polyfit(ts - ts[0], th, 1), ts - ts[0])
     z = np.nan_to_num(s1["Ctrler.Z_posPID.FB"].to_numpy(float))
     v0 = float((vd / "scrcpy_start_host_time.txt").read_text().split()[0])
     tv_h = v0 + t_v
