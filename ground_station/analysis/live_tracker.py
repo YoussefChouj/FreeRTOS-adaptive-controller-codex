@@ -430,13 +430,15 @@ class EarthAlign:
 
 
 def shadow_pairs(stem: str, min_h_m: float = 0.15):
-    """Shadow log -> (t_s, cam_m, earth_cm, run), one row per slot2 sample with a newly scored fix. ekf_of.c keeps
-    e = z - (p + c) with p = ano_of.earth_x - a_x, and c = a = 0 in shadow, so z = e + earth is the fix as sent
-    (cm), paired with the EKF on the device clock: no host sync. run numbers the airborne stretches (Z FB > min_h_m)."""
+    """Shadow or live log -> (t_s, cam_m, earth_cm, run), one row per slot2 sample with a newly scored fix. ekf_of.c
+    keeps e = z - (p + c) with p = ano_of.earth_x - a_x, so z = e + earth + (c - a) ~ e + earth is the fix as sent
+    (cm), paired with the raw EKF path earth - c (a, the applied offset, is not logged; it trails c by <= 0.5 cm per
+    tick). In shadow c = a = 0. Device clock only: no host sync. run numbers the airborne stretches (Z FB > min_h_m).
+    On a live log the fit reads the residual rotation/scale left after --yaw-deg (0 deg, 1.0 if aligned)."""
     import pandas as pd
     s1 = pd.read_csv(f"{stem}.slot1.csv", usecols=["t_src_ms", "ano_of.earth_x", "ano_of.earth_y", "Ctrler.Z_posPID.FB"])
-    s2 = pd.read_csv(f"{stem}.slot2.csv", usecols=["t_src_ms", "g_ext_pos.e_x", "g_ext_pos.e_y",
-                                                   "g_ext_pos.n_ok", "g_ext_pos.n_rej"])
+    s2 = pd.read_csv(f"{stem}.slot2.csv", usecols=["t_src_ms", "g_ext_pos.e_x", "g_ext_pos.e_y", "g_ext_pos.c_x",
+                                                   "g_ext_pos.c_y", "g_ext_pos.n_ok", "g_ext_pos.n_rej"])
     t1, t2 = s1["t_src_ms"].to_numpy(float), s2["t_src_ms"].to_numpy(float)
     air = s1["Ctrler.Z_posPID.FB"].to_numpy(float) > min_h_m
     lab = np.cumsum(np.r_[air[0], air[1:] & ~air[:-1]]) * air         # 1, 2, ... per airborne stretch, 0 on ground
@@ -445,7 +447,25 @@ def shadow_pairs(stem: str, min_h_m: float = 0.15):
     k = np.r_[False, np.diff(n) > 0] & (run > 0)
     earth = np.c_[np.interp(t2, t1, s1["ano_of.earth_x"]), np.interp(t2, t1, s1["ano_of.earth_y"])]
     z = s2[["g_ext_pos.e_x", "g_ext_pos.e_y"]].to_numpy(float) + earth
-    return t2[k] / 1000.0, z[k] / 100.0, earth[k], run[k]
+    raw = earth - s2[["g_ext_pos.c_x", "g_ext_pos.c_y"]].to_numpy(float)
+    return t2[k] / 1000.0, z[k] / 100.0, raw[k], run[k]
+
+
+def offset_noise(t_s, z_cm, y_cm, dt_fix: float = 0.04):
+    """One axis at successive fixes: z = camera (cm), y = camera - raw EKF path = the offset the firmware tracks
+    (e + c). Camera sd from second differences (white noise: var = 6 sd^2, smooth motion cancels; MAD = robust).
+    Offset drift = |y(t + 1 s) - y(t)| (cm/s). A constant gain K per fix lags a drift v by v dt (1 - K) / K and
+    passes sd sqrt(K / (2 - K)) of camera noise: K is the grid minimum of their quadrature sum at the p90 drift.
+    Returns (camera sd, drift p50, drift p90, K)."""
+    z, y, t = (np.asarray(v, float) for v in (z_cm, y_cm, t_s))
+    d2 = z[2:] - 2.0 * z[1:-1] + z[:-2]
+    sd = 1.4826 * np.median(np.abs(d2 - np.median(d2))) / np.sqrt(6.0)
+    g = np.arange(t[0], t[-1], dt_fix)
+    v = np.abs(np.diff(np.interp(g, t, y)[::int(round(1.0 / dt_fix))]))
+    p50, p90 = np.percentile(v, [50, 90])
+    K = np.linspace(0.05, 1.0, 96)
+    cost = (p90 * dt_fix * (1.0 - K) / K) ** 2 + sd ** 2 * K / (2.0 - K)
+    return sd, p50, p90, float(K[np.argmin(cost)])
 
 
 def fit_main(argv) -> int:
@@ -454,11 +474,16 @@ def fit_main(argv) -> int:
     ap.add_argument("stem", help="stream_log stem, e.g. logs/r5_shadow_3")
     ap.add_argument("--fit-s", type=float, default=30.0, help="also fit the first s of each stretch (EKF drift grows)")
     ap.add_argument("--min-h-m", type=float, default=0.15)
+    ap.add_argument("--window-s", type=float, default=0.0, help="also fit back-to-back windows of s (yaw drift)")
     a = ap.parse_args(argv)
     t, cam, earth, run = shadow_pairs(a.stem, a.min_h_m)
     for r in np.unique(run):
         k = run == r
-        for label, m in ((f"first {a.fit_s:.0f} s", k & (t <= t[k][0] + a.fit_s)), ("all", k)):
+        wins = [(f"first {a.fit_s:.0f} s", k & (t <= t[k][0] + a.fit_s)), ("all", k)]
+        if a.window_s > 0:
+            wins += [(f"win {w:.0f} s", k & (t >= w) & (t < w + a.window_s))
+                     for w in np.arange(t[k][0], t[k][-1], a.window_s)]
+        for label, m in wins:
             if m.sum() < 20:
                 continue
             span = float(np.ptp(cam[m], axis=0).max()) * 100.0
@@ -469,6 +494,11 @@ def fit_main(argv) -> int:
                 continue
             print(f"run {r} t {t[m][0]:.0f}-{t[m][-1]:.0f} s {label:>10s}: n {m.sum():4d} span {span:4.0f} cm  "
                   f"yaw_deg {np.degrees(np.angle(f.a)):7.1f}  mirror {f.mirror}  scale {f.scale:.2f}  rms {f.rms_cm:5.1f} cm")
+        y = cam[k] * 100.0 - earth[k]
+        nz = [offset_noise(t[k], cam[k][:, i] * 100.0, y[:, i]) for i in (0, 1)]
+        print(f"run {r} noise (fix dt {np.median(np.diff(t[k])) * 1e3:.0f} ms): " + "  ".join(
+            f"{ax} cam sd {sd:3.1f} cm, offset drift p50 {p50:4.1f} p90 {p90:4.1f} cm/s, K {kk:.2f}"
+            for ax, (sd, p50, p90, kk) in zip("xy", nz)))
     return 0
 
 

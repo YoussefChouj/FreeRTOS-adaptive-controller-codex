@@ -268,6 +268,7 @@ def test_shadow_pairs_rebuild_the_sent_fix_from_the_firmware_innovation(tmp_path
     a = np.exp(1j * np.radians(-100))                                # sent fix = pad at yaw 0 = earth rotated back
     z = a * (ex[::2] + 1j * ey[::2])
     pd.DataFrame({"t_src_ms": t2, "g_ext_pos.e_x": z.real - ex[::2], "g_ext_pos.e_y": z.imag - ey[::2],
+                  "g_ext_pos.c_x": 0.0, "g_ext_pos.c_y": 0.0,
                   "g_ext_pos.n_ok": np.arange(len(t2)), "g_ext_pos.n_rej": 0}).to_csv(tmp_path / "s.slot2.csv", index=False)
     ts, cam, earth, run = shadow_pairs(str(tmp_path / "s"))
     assert set(run) == {1} and ts.min() > 2.0 and ts.max() < 18.0
