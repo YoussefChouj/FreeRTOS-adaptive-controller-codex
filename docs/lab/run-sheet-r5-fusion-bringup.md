@@ -48,6 +48,22 @@ On-pad id0 found, `h_ring` 0.06 to 0.09 m (b5, b6, b9 and b12 read 0.15 to 0.17)
 the firmware gated 608 fixes, re-anchored 557 times and ended at 90 cm rms. If the track jumps, fix the
 lighting or background first, then repeat.
 
+## 3b. Truth calibration (once per camera setup)
+
+The truth height is the on-pad ring height plus the telemetry rise, so a wrong zero or ToF scale slides the cast
+point along the camera ray (about 3.2-3.6x at 1.15 m): it shows up only in the "along" error, never "across".
+
+- **Static plumb (disarmed, props off, about 10 min).** First check that telemetry z moves when the drone is lifted
+  by hand (UNVERIFIED). Then hold the drone level over a floor marker at tape heights 0.3 / 0.6 / 0.9 / 1.2 m, 10 s
+  each, plumb line from the drone centre to the marker centre, ToF beam on open floor, hands clear of the ring.
+  Repeat over a far marker and the pad. WiFi log plus the tracker. Gives ToF offset and scale vs tape, and camera xy
+  error vs height split along/across. Reading: along error growing with height = height zero or scale; constant
+  offset at every height = camera pose or marker map; error growing toward the image edge = lens. Pass (PROPOSED):
+  ToF within 2 cm of tape, camera xy within 2 cm at every height.
+- **Marker staircase (flight, mode 1).** Take off from the pad, hover over a floor marker at 0.5 / 1.0 / 1.5 m for
+  15 s each, land on that marker, take off, land on the pad. The landings are exact xy truth; an along shift that
+  changes with hover height is a height-zero error.
+
 ## 4. Shadow flight (mode 1): out-and-back
 
 Hover, then about 1 m out and back on one axis, then land on the pad. Fixes are logged, not applied. Offline:
