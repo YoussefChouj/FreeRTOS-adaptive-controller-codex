@@ -163,6 +163,49 @@ Leave-one-flight-out, 1 s-mean 60 s drift p90 (cm), EKF → ridge / MLP:
 - b12 was skipped (reflected earth fit). b8 and b12 were never trained on (truth suspect).
 - **Verdict:** no camera-off fix; the best is 34 cm (pooled; 47 cm held out) against the 10 cm budget. Not worth flashing.
 
+### 3b. Second pass (10-12 day): sequence models, more data, a pretrained net
+
+Tool: `python -m ground_station.analysis.nn_io` (commits 6f61d042, 66c5830b, 44bb6a3a, e46eb859, 36c0bad9, 88c7cc43).
+Same metric (1 s-mean 60 s drift p90, cm), same held-out flights; b3 and b4 excluded from training (bad truth).
+
+Is the target even reachable from our data?
+- Linear velocity calibration fitted per flight *on its own truth* (a cheating oracle): 31-73 cm on moving
+  flights, 13 on b17. A learned correction must do better than this oracle to reach 10 cm.
+- Truth time shift scan (±3 s): best shift ≤ 0.2 s on every usable flight, gain < 2 cm. Sync is not the cap.
+
+| Model (held-out b17 / b7 / b10) | b17 | b7 | b10 | Note |
+|---|---|---|---|---|
+| EKF, no NN | 17.4 | 112.2 | 278.3 | baseline |
+| nn4 ridge / MLP (pass 1) | 28 (MLP) | 47 (ridge) | 264 | best honest number so far |
+| GRU 32, our 9-flight pool | 62 | 66 | 257 | overfits |
+| TCN, b3 b4 excluded | 72-77 | 57-67 | 247 | collapses to one global bias |
+| TCN, UTIL pretrain + fine-tune, best checkpoint | 17.7 | 55.6 | 268 | checkpoint picked on these flights: optimistic |
+| same, final | 23.2 | 69.2 | 265 | |
+| same, 3-seed average | 43.3 | 60.9 | 273.9 | seeds disagree |
+| same, 5-seed average, gentler fine-tune (lr 3e-4, 60 it) | 23.2 | 81.3 | 270.8 | under-fits b7 |
+
+More data (UTIL, Toronto): 78 Crazyflie 2.1 flights with the same sensors (BMI088 + PMW3901 flow + ToF) and Vicon
+truth. On its 39 held-out flights, the plain flow model reaches velocity r² 0.84 but still drifts 87 / 111 cm
+(p50 / p90 over 60 s). A TCN trained on UTIL cut the held-out median from 74 to 59 cm, then overfit. Pretraining
+on UTIL stops our hover flight from collapsing (b17 18-23 instead of 72-77) but does not reach 10 cm.
+
+Pretrained net (AirIO, Blackbird checkpoint, loaded as plain weights): body axes inferred from its BatchNorm
+statistics (FRD). It tracks UTIL velocity direction (corr 0.98 / 0.96 on one flight) but with a bias:
+
+| UTIL held-out (39 flights, 20 Hz) | velocity r² x / y | 60 s drift p50 / p90 (cm) |
+|---|---|---|
+| flow | 0.84 / 0.84 | 87 / 111 |
+| AirIO | 0.14 / 0.15 | 817 / 909 |
+| flow + AirIO | 0.84 / 0.85 | 187 / 213 |
+
+AirIO also needs a 100-200 Hz raw IMU; our telemetry has 20-40 Hz block means.
+
+**Verdict (second pass):** still no camera-off model at 10 cm. Even a well-calibrated Crazyflie flow deck drifts
+tens of cm per minute, so 10 cm per 60 s without an absolute reference is beyond this sensor class. Our error
+is a per-flight flow scale (truth ≈ 0.65-0.95 × EKF velocity) that none of our inputs reveal. What could move it:
+log PMW3901 surface quality and shutter at full rate, raw 100+ Hz IMU, and many more flights. The camera-on
+fusion (section 4, 3.5-7.9 cm) stays the path to the 10 cm budget.
+
 ## 4. Live camera fusion (built, replay-tested, not flashed)
 
 **Firmware EXT_POS mode 2** (e179e95f, retuned in 18c7d964):

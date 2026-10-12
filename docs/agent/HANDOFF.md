@@ -9,7 +9,9 @@ Branch `overnight-2026-10-08`. Report: `docs/flights/2026-10-12-r4-overnight-rep
 `video_truth report4 <md> --out <html>`). Phase 1/2 notes: ledger `state-2026-10-11.md` (end).
 - Truth (R4, 13 flights): lens 0.287 px, coral rings 0 lost, pad jitter 0.6-1.1 cm. Flights b5/b6/b8/b9/b12 are
   landing-anchored (take-off detected 9-12 s late). b8/b10/b12 are truth suspect (coral jumps).
-- EKF alone: 30-146 cm rms, hover b17 1 s-mean 60 s drift p90 19 cm. `nn4` camera-off NN: no fix (best 34 cm).
+- EKF alone: 30-146 cm rms, hover b17 1 s-mean 60 s drift p90 19 cm. `nn4` camera-off NN: no fix (best 34 cm). Second pass `nn_io` (GRU/TCN, UTIL 78-flight Crazyflie pretrain,
+  AirIO pretrained net): still no fix, best held-out b17 18 / b7 56 cm; AirIO adds nothing (report sec 3b).
+  Installs: mss 10.2.0, markdown 3.11, torch 2.14.1+cpu; data D:/datasets/util_uwb, D:/datasets/airio_ckpt_*.
 - Camera fusion, live tracker replay, retuned rule (gain 0.9, slew 10 cm, spread 0.1 s) + 20 Hz fixes (all
   PROPOSED), 1 s-d60 p90 at 0.15 s: b17 3.5, b13c 7.3, b5 7.4, b16 traj 7.4 cm = budget met on all 4 (10 Hz: b16
   12.1). 0.3 s: 5.6/11.3/11.8/12.3. Replay and circular. Gates: latency <=0.15 s and >=20 fixes/s received.
