@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import numpy as np
+import pandas as pd
 
 from ground_station.analysis import video_truth as vt
 from ground_station.comm.ext_pos_encoder import (ext_pos_decode, ext_pos_delay_frame, ext_pos_encode,
@@ -796,8 +797,8 @@ def fw_build(out_dir: Path = REPO / "logs" / "fw_host") -> Path:
     return exe
 
 
-def fw_fusion(t, est, arr_t, idx, xy, delay_ms: float, exe: Path | None = None) -> tuple[np.ndarray, dict]:
-    """The firmware mode-2 path (fw_build) on est (m, at t): 5 ms control ticks, fixes (xy m, encoded with
+def fw_fusion(t, est, arr_t, idx, xy, delay_ms: float, exe: Path | None = None, mode: int = 2) -> tuple[np.ndarray, dict]:
+    """The firmware mode-2/3 path (fw_build) on est (m, at t): 5 ms control ticks, fixes (xy m, encoded with
     ext_pos_encode, age byte idx) drained by the 10 ms command loop at the first tick >= arr_t, dated by the drone as
     drain - (idx * 10 + delay_ms). Returns est + a(t) and the firmware counters (as vt.ext_pos_replay)."""
     exe = exe or fw_build()
@@ -809,7 +810,7 @@ def fw_fusion(t, est, arr_t, idx, xy, delay_ms: float, exe: Path | None = None) 
     fx = {}
     for d, i, (x, y) in zip(drain, idx, xy):
         fx.setdefault(int(d), []).append(f"F {int(d)} {int(i)} {int(ext_pos_encode(x * 100, y * 100))}")
-    lines = [f"D {delay_ms:.3f}"]
+    lines = [f"M {mode}", f"D {delay_ms:.3f}"]
     for m, a, b in zip(ms, ex, ey):
         lines += fx.get(int(m), [])
         lines.append(f"T {int(m)} {a:.4f} {b:.4f}")
@@ -824,7 +825,8 @@ def fw_fusion(t, est, arr_t, idx, xy, delay_ms: float, exe: Path | None = None) 
 def replay(name: str, links=(0.15, 0.3), delay_err_s: float = 0.0, period: float = 0.05, n_med: int = 2,
            window_s: float = 0.1, gate: bool = True, cam_path: str = "docs/video-truth/cam_r4_lenswave_2026-10-11.json",
            root: str = "logs/video_truth", max_frames: int = 0, gain: float = vt.EXT_POS["gain"],
-           slew_m: float = vt.EXT_POS["slew_m"], beta: float = vt.EXT_POS["beta"], fw: bool = False) -> dict:
+           slew_m: float = vt.EXT_POS["slew_m"], beta: float = vt.EXT_POS["beta"], fw: bool = False,
+           mode: int = 2, fixes: str | None = None) -> dict:
     """Real-time replay of one R4 flight: the online CoralTracker (+ JumpGate) on cam.mkv, fixes packed exactly as
     sent, decoded as the firmware does (value -> cm, age byte), relative to the pad spot, arriving link s after
     the frame on the telemetry clock (truth4 offset); the drone dates each fix with delay_ms = link + delay_err_s.
@@ -838,46 +840,61 @@ def replay(name: str, links=(0.15, 0.3), delay_err_s: float = 0.0, period: float
     summ = json.loads((vd / "truth4.json").read_text())
     tab = np.genfromtxt(vd / "truth4.csv", delimiter=",", names=True)
     video = str(vd / "cam.mkv")
-    cam = vt.load_cam(cam_path, vt.video_size(video))
-    scan = dict(np.load(vd / "aruco.npz"))
-    R, tw, _ = vt.floor_from_marker(scan, cam)
-    cam = dict(cam, R=R, t=tw)
-    o, h, tt, z = summ["offset_s"], summ["h_ring_m"], tab["t_tel"], tab["z"]
-    seed = vt.static_corners(scan["c0"])[0].mean(0)
-    fixes: list = []
-    st = run_source(video, cam, EarthAlign(), lambda tv: h + max(0.0, float(np.interp(tv + o, tt, z, left=0, right=0))),
-                    sched=FixScheduler(period, n_med, window_s=window_s), max_frames=max_frames,
-                    ring=CoralTracker(seed, vt.coral_static(video)), gate=JumpGate() if gate else None, fix_log=fixes)
-    t_read = np.array([f[0] for f in fixes])
-    idx = np.array([f[2][3] for f in fixes])
-    age = idx * 0.01
-    xy = np.array([ext_pos_decode(struct.unpack("<f", bytes(f[2][4:8]))[0]) for f in fixes], float) / 100.0
-    pad = np.array([f[1] for f in fixes]) < summ["takeoff_video_s"] - 1.0
-    xy -= np.median(xy[pad], axis=0)                      # truth4 is relative to the pad spot too
+    o, h, tt, z = summ.get("offset_s", 0.0), summ.get("h_ring_m", 0.15), tab["t_tel"], tab["z"]
+    fixes_list: list = []
+    if fixes or not Path(video).exists():
+        fx_p = Path(fixes) if fixes else (vd / "fixes.csv")
+        fx_df = pd.read_csv(fx_p)
+        idx = np.array([bytes.fromhex(h)[3] for h in fx_df["frame_hex"]])
+        age = idx * 0.01
+        codes = [struct.unpack("<f", bytes.fromhex(h)[4:8])[0] for h in fx_df["frame_hex"]]
+        xy = np.array([ext_pos_decode(c) for c in codes], float) / 100.0
+        stem_candidates = [str(vd.parent.parent / name), f"logs/{name}", f"/home/agent/data/r6/logs/{name}"]
+        stem = next((s for s in stem_candidates if Path(f"{s}.slot2.csv").exists()), stem_candidates[0])
+        fc = vt.fixes_clock(stem, fx_p)
+        t_read = fc["t"]
+        st = None
+        links = [0.0] if (fixes or not Path(video).exists()) and links == (0.15, 0.3) else links
+    else:
+        cam = vt.load_cam(cam_path, vt.video_size(video))
+        scan = dict(np.load(vd / "aruco.npz"))
+        R, tw, _ = vt.floor_from_marker(scan, cam)
+        cam = dict(cam, R=R, t=tw)
+        seed = vt.static_corners(scan["c0"])[0].mean(0)
+        st = run_source(video, cam, EarthAlign(), lambda tv: h + max(0.0, float(np.interp(tv + o, tt, z, left=0, right=0))),
+                        sched=FixScheduler(period, n_med, window_s=window_s), max_frames=max_frames,
+                        ring=CoralTracker(seed, vt.coral_static(video)), gate=JumpGate() if gate else None, fix_log=fixes_list)
+        t_read = np.array([f[0] for f in fixes_list])
+        idx = np.array([f[2][3] for f in fixes_list])
+        age = idx * 0.01
+        xy = np.array([ext_pos_decode(struct.unpack("<f", bytes(f[2][4:8]))[0]) for f in fixes_list], float) / 100.0
+        pad = np.array([f[1] for f in fixes_list]) < summ["takeoff_video_s"] - 1.0
+        xy -= np.median(xy[pad], axis=0)                      # truth4 is relative to the pad spot too
     earth = np.c_[tab["earth_x"], tab["earth_y"]]
     out = {"name": name, "tracker": st, "circular": True, "delay_err_s": delay_err_s, "gain": gain,
-           "slew_cm": slew_m * 100, "spread_ms": vt.EXT_POS["spread_s"] * 1000, "beta": beta, "period_s": period, "n_med": n_med, "window_s": window_s, "fw": fw, "links": {}}
+           "slew_cm": slew_m * 100, "spread_ms": vt.EXT_POS["spread_s"] * 1000, "beta": beta, "period_s": period, "n_med": n_med, "window_s": window_s, "fw": fw, "mode": mode, "links": {}}
     sfx = vt.ext_pos_sfx(gain, slew_m, vt.EXT_POS["spread_s"], beta)
     if (period, n_med, window_s) != (0.1, 3, 0.2):
         sfx += f"_p{round(period * 1000):03d}n{n_med}w{round(window_s * 1000):03d}"
     if fw:
         if (gain, slew_m, beta) != (vt.EXT_POS["gain"], vt.EXT_POS["slew_m"], vt.EXT_POS["beta"]):
             raise ValueError("fw runs the built-in API/ekf_of.h constants; keep gain/slew/beta default")
-        sfx += "_fw"
+        sfx += f"_fw_m{mode}"
         exe = fw_build()
     if delay_err_s:
         sfx += f"_de{'p' if delay_err_s > 0 else 'm'}{round(abs(delay_err_s) * 1000):03d}"
     for L in links:
-        arr = t_read + o + L
+        arr = t_read if (fixes or not Path(video).exists()) else (t_read + o + L)
+        dly_ms = (L + delay_err_s) * 1000 if Path(video).exists() and not fixes else delay_err_s * 1000
         if fw:
-            fused, n = fw_fusion(tt, earth, arr, idx, xy, (L + delay_err_s) * 1000, exe)
+            fused, n = fw_fusion(tt, earth, arr, idx, xy, dly_ms, exe, mode=mode)
         else:
             fused, n = vt.ext_pos_replay(tt, earth, arr - age - (L + delay_err_s), xy, 0.0,
                                          dict(vt.EXT_POS, gain=gain, slew_m=slew_m, beta=beta), arr_t=arr)
         r = vt.drift_score(name, ests={"earth": earth, "fused": fused}, tag=f"_live_{int(L * 1000)}ms{sfx}")
         out["links"][L] = {"counts": n, "est": {k: {q: e.get(q) for q in ("rms_cm", "drift60_p90_cm", "drift60s_p90_cm",
                                                                          "hf_rms_cm")}
-                                               for k, e in r["est"].items()}}
+                                                for k, e in r["est"].items()}}
     return out
 
 
@@ -895,10 +912,12 @@ def replay_main(argv) -> int:
     ap.add_argument("--slew-cm", type=float, default=vt.EXT_POS["slew_m"] * 100, help="max c step per fix, cm")
     ap.add_argument("--beta", type=float, default=vt.EXT_POS["beta"], help="offset-rate gain per fix (0 = off)")
     ap.add_argument("--fw", action="store_true", help="run the firmware C path (gcc API/ekf_of.c), tag _fw")
+    ap.add_argument("--mode", type=int, default=2, help="ext_pos mode (2 or 3, default 2)")
+    ap.add_argument("--fixes", type=str, default=None, help="replay fixes CSV (e.g. fixes.csv, replay_start_fixes.csv)")
     a = ap.parse_args(argv)
     for nm in a.names:
         r = replay(nm, a.link, a.delay_err, a.period, a.n_med, a.window_s, not a.no_gate, max_frames=a.max_frames,
-                   gain=a.gain, slew_m=a.slew_cm / 100, beta=a.beta, fw=a.fw)
+                   gain=a.gain, slew_m=a.slew_cm / 100, beta=a.beta, fw=a.fw, mode=a.mode, fixes=a.fixes)
         print(json.dumps(r, default=float))
     return 0
 

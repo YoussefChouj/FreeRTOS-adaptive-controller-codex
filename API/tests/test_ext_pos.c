@@ -221,6 +221,93 @@ static void test_shadow_with_held_c(void)
     CHECK(fabsf(s.e_x - 3.0f) < 1e-4f && fabsf(s.e_y + 4.0f) < 1e-4f, "innovation against earth, not raw");
 }
 
+/* Mode 3 as StabilizerTask runs it: 200 Hz ticks, earth = truth + drift, ring holds earth - a,
+ * fixes arrive every 100 ms with 300 ms delay. Ext_Pos_Ekf feeds fix to EKF. */
+static void test_mode3_closed_loop(void)
+{
+    ext_pos_ring_t r;
+    ext_pos_stat_t s;
+    EkfOf_t ekf;
+    uint32_t t, t_fix = 0U;
+    float ex = truth_x(0U), ey = truth_y(0U), dx, dy, err, worst = 0.0f;
+    uint16_t rej_before_jump = 0U;
+    uint8_t res, ekf_rej_count = 0U;
+    const float k = 100.0f; /* cm per m */
+    const float var_r = (EXT_POS_CAM_SD_CM / k) * (EXT_POS_CAM_SD_CM / k);
+
+    EkfOf_Init(&ekf);
+    memset(&s, 0, sizeof s);
+    ext_pos_ring_reset(&r);
+
+    for (t = 5U; t <= 40000U; t += 5U) {
+        /* the drift and the path; the jump is in the truth only (a re-anchor case) */
+        ex += (30.0f * sinf(0.5e-3f * (float)t) - 30.0f * sinf(0.5e-3f * (float)(t - 5U))) + 1.0f * 0.005f;
+        ey += (truth_y(t) - truth_y(t - 5U)) - 0.5f * 0.005f;
+        EkfOf_Predict(&ekf, 0.005f, 0.0f, 0.0f);
+
+        s.c_x = s.a_x;
+        s.c_y = s.a_y;
+        ext_pos_ring_tick(&r, t, ex - s.a_x, ey - s.a_y);
+
+        if (t >= 400U && t % 100U == 0U) {
+            t_fix = t - 300U;
+            res = ext_pos_fix(&s, &r, t_fix, t, truth_x(t_fix), truth_y(t_fix));
+            if (ext_pos_take(&s, res)) {
+                float px0 = ekf.x[0], py0 = ekf.x[3];
+                float e_x = s.e_x, e_y = s.e_y;
+                float d = sqrtf(e_x * e_x + e_y * e_y);
+                if (d > EXT_POS_SLEW_CM) {
+                    e_x *= EXT_POS_SLEW_CM / d;
+                    e_y *= EXT_POS_SLEW_CM / d;
+                }
+                uint8_t m = EkfOf_UpdatePos(&ekf, px0 + e_x / k, py0 + e_y / k, var_r, EXT_POS_EKF_GATE);
+                if (m) ekf_rej_count++;
+                dx = (ekf.x[0] - px0) * k;
+                dy = (ekf.x[3] - py0) * k;
+                ex += dx;
+                ey += dy;
+                s.a_x += dx;
+                s.a_y += dy;
+                s.c_x = s.a_x;
+                s.c_y = s.a_y;
+            }
+        }
+        err = sqrtf((ex - truth_x(t)) * (ex - truth_x(t)) + (ey - truth_y(t)) * (ey - truth_y(t)));
+        if (t > 10000U && t < 20000U && err > worst) worst = err;
+        if (t == 19995U) rej_before_jump = s.n_rej;
+    }
+    CHECK(rej_before_jump == 0U && s.n_old == 0U, "mode 3: no gated or old fix before jump");
+    CHECK(worst < 3.0f, "mode 3: fused error < 3 cm before jump");
+    CHECK(s.n_rej >= EXT_POS_REJ_N && s.n_anchor >= 1U, "mode 3: jump gated, then re-anchored");
+    CHECK(ekf_rej_count == 0U, "mode 3: no EKF inner gate rejections (no double gating)");
+    CHECK(fabsf(ex - truth_x(40000U)) < 5.0f, "mode 3: re-anchored onto jumped truth by 40 s");
+    (void)t_fix;
+}
+
+/* F3B (2026-10-13): a slewed re-anchor step of EXT_POS_SLEW_CM must pass the mode 3 EKF gate and move the position
+ * by most of it. With q_pos 1e-6 the position variance stays near R/n, so K_pos is small and a 10 cm step moves the
+ * position by less than half of it (this test fails with -DEKF_OF_Q_POS=1e-6f; it passes with the 5 sigma gate). */
+static void test_mode3_slew_step_accepted(void)
+{
+    EkfOf_t ekf;
+    const float k = 100.0f; /* cm per m */
+    const float var_r = (EXT_POS_CAM_SD_CM / k) * (EXT_POS_CAM_SD_CM / k);
+    float px0;
+    uint16_t i;
+    uint8_t m;
+
+    EkfOf_Init(&ekf);
+    for (i = 0U; i < 200U; i++) {  /* 1 s of 5 ms ticks, a fix on the spot every 100 ms */
+        EkfOf_Predict(&ekf, 0.005f, 0.0f, 0.0f);
+        if (i % 20U == 19U) (void)EkfOf_UpdatePos(&ekf, ekf.x[0], ekf.x[3], var_r, EXT_POS_EKF_GATE);
+    }
+    EkfOf_Predict(&ekf, 0.005f, 0.0f, 0.0f);
+    px0 = ekf.x[0];
+    m = EkfOf_UpdatePos(&ekf, px0 + EXT_POS_SLEW_CM / k, ekf.x[3], var_r, EXT_POS_EKF_GATE);
+    CHECK(m == 0U, "mode 3: a full slew step passes the EKF gate");
+    CHECK((ekf.x[0] - px0) * k > 0.5f * EXT_POS_SLEW_CM, "mode 3: the EKF takes most of a slew step");
+}
+
 int main(void)
 {
     test_decode();
@@ -230,6 +317,8 @@ int main(void)
     test_spread();
     test_shadow_with_held_c();
     test_closed_loop();
+    test_mode3_closed_loop();
+    test_mode3_slew_step_accepted();
     if (s_fail) {
         printf("test_ext_pos: %d FAILED\n", s_fail);
         return 1;

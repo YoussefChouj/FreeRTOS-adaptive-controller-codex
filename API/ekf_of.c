@@ -56,8 +56,11 @@ void EkfOf_Init(EkfOf_t *e)
         }
     }
 
+#ifndef EKF_OF_Q_POS
+#define EKF_OF_Q_POS 0.05f
+#endif
     /* q = random-walk/white-noise density per second, units per state; P0 = initial variance */
-    EKF_OF_STATE(0, q_pos, 1e-6f, EKF_OF_POS_P0);   /* p    position */
+    EKF_OF_STATE(0, q_pos, EKF_OF_Q_POS, EKF_OF_POS_P0);   /* p    position */
     EKF_OF_STATE(1, q_acc, 1e-3f, EKF_OF_VEL_P0);   /* v    velocity */
     EKF_OF_STATE(2, q_bof, 1e-5f, 0.01f);  /* bof  optical flow bias: learned vs of1, see change history */
     EKF_OF_STATE(3, q_ba,  1e-6f, 0.25f);  /* ba   accel bias */
@@ -70,6 +73,9 @@ void EkfOf_Init(EkfOf_t *e)
     e->of1_gate = 10.0f; /* raw flow carries the uncompensated rotation flow in fast moves; see 2026-10-11 */
 
     /* Change history (newest first)
+     * 2026-10-13 F3B mode 3 camera fusion: q_pos 1e-6 -> 0.05. At 1e-6 a camera fix moved the position by less
+     *   than half of a 10 cm slewed step (test_ext_pos test_mode3_slew_step_accepted), so mode 3 tracked loosely. No other
+     *   update observes the position, so modes 0-2 are unchanged. Not flown yet; docs/flights/2026-10-13-f3b-mode3-study.md.
      * 2026-10-11 R3 camera truth: of1_gate 5 -> 10. At 5 sigma the raw of1 anchor is dropped one-sided in
      *   fast RC moves (no release), so each move leaves a position step. Replay vs R3 camera (computed,
      *   ekf_of_replay replay_truth, x tilt sign fixed): rms 43.6 -> 32.4 cm, same-place revisit error
