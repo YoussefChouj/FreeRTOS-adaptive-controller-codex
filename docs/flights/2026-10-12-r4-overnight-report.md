@@ -184,6 +184,7 @@ Is the target even reachable from our data?
 | same, 3-seed average | 43.3 | 60.9 | 273.9 | seeds disagree |
 | same, 5-seed average, gentler fine-tune (lr 3e-4, 60 it) | 23.2 | 81.3 | 270.8 | under-fits b7 |
 | **same, head-only fine-tune (base frozen), 3-seed average, final** | **15.7** | **47.2** | **260.0** | best: beats EKF on all three, no checkpoint picking |
+| same, 300 fine-tune steps | 28.6 | 41.8 | 268.0 | overfits: b7 better, hover worse; keep 150 |
 
 More data (UTIL, Toronto): 78 Crazyflie 2.1 flights with the same sensors (BMI088 + PMW3901 flow + ToF) and Vicon
 truth. On its 39 held-out flights, the plain flow model reaches velocity r² 0.84 but still drifts 87 / 111 cm
