@@ -854,13 +854,19 @@ def read_livewatch(path: str, names) -> dict:
     return out
 
 
+EXTPOS_SLOTS = {1: 0, 2: 1}     # r5_extpos_frames.md (fusion sessions): R4 slot1 (IMU/flow) and slot2 (EKF/earth) columns
+
+
 def read_slots(stem: str, slots=(0, 1, 2, 3)) -> dict:
     """stream_log slot CSVs `<stem>.slot<k>.csv` (R4 presets): {k: {"t": s on the drone clock (t_src_ms / 1000),
-    column: array}}. Every slot shares that clock, so slots at different rates line up by "t"."""
+    column: array}}. Every slot shares that clock, so slots at different rates line up by "t". A fusion-session log
+    (slot1 carries g_ext_pos_on) is read through EXTPOS_SLOTS, so k keeps its R4 meaning; it has no R4 slot 0 or 3."""
     import pandas as pd
+    s1 = Path(f"{stem}.slot1.csv")
+    ext = s1.exists() and "g_ext_pos_on" in s1.open().readline().split(",")
     out = {}
     for k in slots:
-        p = Path(f"{stem}.slot{k}.csv")
+        p = Path(f"{stem}.slot{EXTPOS_SLOTS.get(k, -1) if ext else k}.csv")
         if not p.exists():
             continue
         df = pd.read_csv(p)
@@ -1265,7 +1271,7 @@ def touchdown_video(t, xy, guess: float, search_s: float = 15.0, still_m: float 
 
 
 def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: int = 1, rot_s: float = 60.0,
-             out=None) -> dict:
+             out=None, floor=None) -> dict:
     """Camera truth for one R4 flight. Floor = id0 median pose (aruco.npz); drone pixel = guard-ring track
     (coral.npz, made here if missing); the ring plane is its on-pad height plus the telemetry height rise, so a
     climb does not move the cast. Sync: take-off (video cast leaves the pad) vs telemetry lift-off, refined +-refine_s
@@ -1274,7 +1280,7 @@ def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: 
     floor frame. Returns the per-telemetry-sample table and a summary; `out` writes <out>.csv and <out>.json."""
     cam = json.loads(Path(cam).read_text()) if not isinstance(cam, dict) else cam
     K, dist, vd = np.array(cam["K"]), np.array(cam["dist"]), Path(video_dir)
-    scan = dict(np.load(vd / "aruco.npz"))
+    scan = dict(np.load(Path(floor or vd) / "aruco.npz"))                  # floor: a session with the same phone pose
     R, tw, mad0 = floor_from_marker(scan, cam)
     cp = vd / "coral.npz"
     if not cp.exists():
@@ -1287,8 +1293,9 @@ def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: 
     S = read_slots(stem)
     s2 = S[2]
     te = s2["t"]
-    armed = np.interp(te, S[0]["t"], S[0]["DroneStatus.ARM_Status"]) > 0.5
-    zk = next(k for k in (2, 1, 3, 0) if "Ctrler.Z_posPID.FB" in S[k])     # R4 presets: slot2; plumb.json: slot1
+    armed = (np.interp(te, S[0]["t"], S[0]["DroneStatus.ARM_Status"]) > 0.5 if 0 in S
+             else np.ones(len(te), bool))                                  # fusion logs: no arm flag, start on the pad
+    zk = next(k for k in (2, 1, 3, 0) if k in S and "Ctrler.Z_posPID.FB" in S[k])  # R4: slot2; plumb.json: slot1
     z = np.interp(te, S[zk]["t"], np.nan_to_num(S[zk]["Ctrler.Z_posPID.FB"]))
     z0 = float(np.median(z[armed][:25]))
     up = armed & (z > z0 + 0.05)
@@ -1879,6 +1886,8 @@ def main(argv=None):
     r4 = sub.add_parser("truth4", help="R4 guard-ring truth for one flight: logs/vofa/<name> + logs/video_truth/<name>")
     r4.add_argument("name"); r4.add_argument("--cam", default="docs/video-truth/cam_r4_lenswave_2026-10-11.json")
     r4.add_argument("--refine", type=float, default=2.0)
+    r4.add_argument("--stem", default="", help="telemetry stem (default logs/vofa/<name>; fusion sessions: logs/<name>)")
+    r4.add_argument("--floor", default="", help="video dir whose aruco.npz gives the floor (fusion: r5_marks_1)")
     r4.add_argument("--coral-step", type=int, default=2, help="track every Nth frame (2 = 15 Hz at 30 fps)")
     r4.add_argument("--rot-s", type=float, default=60.0, help="fit the estimate->floor rotation on the first N s of flight "
                     "(0 = whole flight; a later estimate jump corrupts a whole-flight fit)")
@@ -1962,7 +1971,8 @@ def main(argv=None):
                   + "/".join(f"{f['vel_r2'][k]:+.2f}" for k in ("ridge", "mlp")) + " | " + " ".join(
                       f"{k} {e['rms_cm']:5.1f}/{e['drift60s_p90_cm'] or float('nan'):5.1f}" for k, e in f["est"].items()))
     elif a.cmd == "truth4":
-        r = r4_truth(f"logs/vofa/{a.name}", f"logs/video_truth/{a.name}", a.cam, a.refine, a.coral_step, a.rot_s, out=f"logs/video_truth/{a.name}/truth4")
+        r = r4_truth(a.stem or f"logs/vofa/{a.name}", f"logs/video_truth/{a.name}", a.cam, a.refine, a.coral_step, a.rot_s,
+                     out=f"logs/video_truth/{a.name}/truth4", floor=a.floor or None)
         print(json.dumps(r["summary"], indent=1))
     elif a.cmd == "mcal":
         scan, size = dict(np.load(a.scan)), tuple(int(v) for v in a.size.split("x"))

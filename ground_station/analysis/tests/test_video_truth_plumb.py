@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 
-from ground_station.analysis.video_truth import plumb_holds, ray_at_vertical, ring_height
+from ground_station.analysis.video_truth import plumb_holds, ray_at_vertical, read_slots, ring_height
 
 
 def _cam(C=(0.0, -2.0, 1.5)):
@@ -32,3 +32,15 @@ def test_holds_are_the_still_runs_above_the_floor():
     h = plumb_holds(t, z)
     assert len(h) == 2                                                    # the 2 s hold at 0.3 m is too short
     assert 11 < h[0][0] < 12.5 and 18.5 < h[0][1] < 20 and 21 < h[1][0] < 22.5
+
+
+def test_read_slots_maps_a_fusion_log_onto_the_r4_slot_numbers(tmp_path):
+    stem = tmp_path / "f"
+    (tmp_path / "f.slot0.csv").write_text("t_src_ms,t_host_s,seq,Acc_X_Real\n1000,0,0,1.5\n")
+    (tmp_path / "f.slot1.csv").write_text("t_src_ms,t_host_s,seq,g_ext_pos_on,ano_of.earth_x\n1000,0,0,0,7\n")
+    (tmp_path / "f.slot2.csv").write_text("t_src_ms,t_host_s,seq,mrac_state.pitch.Theta[0]\n1000,0,0,0\n")
+    S = read_slots(str(stem))
+    assert sorted(S) == [1, 2] and S[1]["Acc_X_Real"][0] == 1.5 and S[2]["ano_of.earth_x"][0] == 7
+    (tmp_path / "f.slot1.csv").write_text("t_src_ms,t_host_s,seq,ano_of.earth_x\n1000,0,0,7\n")   # R4 layout
+    S = read_slots(str(stem))
+    assert sorted(S) == [0, 1, 2] and "Acc_X_Real" in S[0]
