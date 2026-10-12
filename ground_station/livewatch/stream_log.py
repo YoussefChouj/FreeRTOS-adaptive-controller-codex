@@ -206,7 +206,7 @@ def _run_usart3(data_port, ranges, divider, transport, seconds, out_path,
         elapsed = time.monotonic() - t0
     finally:
         try:
-            wifi._udp.sendto(stop, (wifi.module_ip, wifi.port))
+            wifi._port()._sock.sendto(stop, (wifi.module_ip, wifi.port))
         except Exception:
             pass
         wifi.close()
@@ -383,7 +383,7 @@ def _relay_uplink(relay, wifi) -> int:
             frame, _ = relay.recvfrom(256)
         except OSError:                 # BlockingIOError when empty
             return n
-        wifi._udp.sendto(frame, (wifi.module_ip, wifi.port))
+        wifi._port()._sock.sendto(frame, (wifi.module_ip, wifi.port))
         n += 1
 
 
@@ -498,7 +498,7 @@ def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
             try:
                 stop_req = build_stream_request([], 0, transport,
                                                 usart3_baud, slot)
-                wifi._udp.sendto(stop_req, (wifi.module_ip, wifi.port))
+                wifi._port()._sock.sendto(stop_req, (wifi.module_ip, wifi.port))
             except Exception:
                 pass
         wifi.close()

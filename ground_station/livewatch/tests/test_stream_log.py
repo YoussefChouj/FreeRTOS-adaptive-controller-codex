@@ -155,6 +155,9 @@ class FakeUsart3WifiTransport:
         self.connect_called = False
         self.subscribe_calls = []
 
+    def _port(self):                     # real: UdpDataPort, whose bound socket is ._sock
+        return types.SimpleNamespace(_sock=self._udp)
+
     def _stage(self, frame):
         self._udp._buf.extend(frame)
 
@@ -538,6 +541,7 @@ def test_relay_uplink_forwards_local_frames_on_the_logging_socket():
     relay.setblocking(False)
     tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     wifi = types.SimpleNamespace(_udp=FakeUdpSocket(), module_ip="192.168.4.1", port=14550)
+    wifi._port = lambda: types.SimpleNamespace(_sock=wifi._udp)
     try:
         frames = [bytes.fromhex("ccdd2c05") + bytes(5), bytes.fromhex("ccdd2cff") + bytes(5)]
         for f in frames:
