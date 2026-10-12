@@ -429,10 +429,11 @@ def _arrays(d: dict, mu, sd):
 
 
 def fit(train: list[dict], kind="gru", H=32, head="scale", layers=1, iters=1500, crop_s=90.0, batch=16, lr=3e-3,
-        wd=1e-4, drop=0.1, vel_w=0.0, seed=0, rate_hz=RATE_HZ, log_every=0, feats=None, noise=0.0, cb=None, cb_every=0, init=None):
+        wd=1e-4, drop=0.1, vel_w=0.0, seed=0, rate_hz=RATE_HZ, log_every=0, feats=None, noise=0.0, cb=None, cb_every=0, init=None, train_only=""):
     """Train on random crop_s windows of the train flights (zero initial state, like a take-off). feats: NN4_CH column
     subset; noise: Gaussian input noise (normalised units); cb(it, model) every cb_every iterations; init: a model to
-    fine-tune (its net is copied, mu/sd are refit on train: per-dataset normalisation)."""
+    fine-tune (its net is copied, mu/sd are refit on train: per-dataset normalisation); train_only: parameter-name
+    prefix, others frozen (e.g. 'out' = fine-tune the head only)."""
     torch = _torch()
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
@@ -445,7 +446,8 @@ def fit(train: list[dict], kind="gru", H=32, head="scale", layers=1, iters=1500,
     steps = [int(h * rate_hz) for h in HORIZONS_S]
     ks = int(rate_hz)
     net = build(len(feats), kind, H, head, layers, drop=drop) if init is None else __import__("copy").deepcopy(init[0])
-    opt = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=wd)
+    params = [q for n, q in net.named_parameters() if n.startswith(train_only)] if train_only else list(net.parameters())
+    opt = torch.optim.AdamW(params, lr=lr, weight_decay=wd)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=lr, total_steps=iters)
     lens = np.array([len(a[0]) for a in arr], float)
     for it in range(iters):
@@ -465,7 +467,7 @@ def fit(train: list[dict], kind="gru", H=32, head="scale", layers=1, iters=1500,
         loss = drift_loss(net(X, V), B, DT, R, steps, ks, vel_w, Y)
         opt.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(params, 1.0)
         opt.step()
         sched.step()
         if log_every and it % log_every == 0:
@@ -506,10 +508,11 @@ def _pretrain(kind, H, head, layers, pre_iters, seeds, eval_every, util_val, kw,
 
 
 def train(kind="gru", H=32, head="scale", layers=1, iters=1500, seeds=2, lofo=False, tag="", eval_every=0, exclude=(),
-          pre_iters=0, ft_lr=1e-3, util_val="const4", **kw) -> dict:
+          pre_iters=0, ft_lr=1e-3, util_val="const4", ft_only="", **kw) -> dict:
     """Hold-out: train on the whole pool, score NN4_HOLD. lofo: also each pool flight with the pool minus it.
     eval_every: print the quick_d60 learning curve of each scored flight; exclude: name substrings dropped from the pool.
-    pre_iters: first pretrain on UTIL (COMMON features), then fine-tune iters at ft_lr (scored flights: it 0 = zero-shot)."""
+    pre_iters: first pretrain on UTIL (COMMON features), then fine-tune iters at ft_lr (scored flights: it 0 = zero-shot);
+    ft_only: parameter-name prefix trained in the fine-tune (others frozen)."""
     data, skipped = load_all()
     pool, hold = split(list(data))
     pool = [n for n in pool if not any(x in n for x in exclude)]
@@ -518,7 +521,7 @@ def train(kind="gru", H=32, head="scale", layers=1, iters=1500, seeds=2, lofo=Fa
     bases = _pretrain(kind, H, head, layers, pre_iters, seeds, eval_every, util_val, kw, out_pre) if pre_iters else None
     groups = [(pool, hold)] + ([([m for m in pool if m != n], [n]) for n in pool] if lofo else [])
     out = {"pool": pool, "hold": hold, "skipped": skipped, "cfg": {"kind": kind, "H": H, "head": head, "layers": layers,
-           "iters": iters, "seeds": seeds, "exclude": list(exclude), "pre_iters": pre_iters, "ft_lr": ft_lr, **kw}, "flights": {}, "curve": out_pre["curve"],
+           "iters": iters, "seeds": seeds, "exclude": list(exclude), "pre_iters": pre_iters, "ft_lr": ft_lr, "ft_only": ft_only, **kw}, "flights": {}, "curve": out_pre["curve"],
            "util": out_pre.get("util")}
 
     def curve(names, s):
@@ -534,7 +537,7 @@ def train(kind="gru", H=32, head="scale", layers=1, iters=1500, seeds=2, lofo=Fa
             Ftr = np.vstack([data[m]["F"] for m in tr])
             for s, b in enumerate(bases):
                 curve(names, s)(0, (b[0], Ftr.mean(0), Ftr.std(0) + 1e-6, COMMON))
-        ft = {**kw, "feats": COMMON, "lr": ft_lr} if bases else kw
+        ft = {**kw, "feats": COMMON, "lr": ft_lr, "train_only": ft_only} if bases else kw
         models = [fit([data[m] for m in tr], kind, H, head, layers, iters, seed=s, cb=curve(names, s), cb_every=eval_every,
                       init=bases[s] if bases else None, **ft) for s in range(seeds)]
         for n in names:
@@ -581,6 +584,7 @@ def main(argv=None):
     t.add_argument("--pre-iters", type=int, default=0, help="UTIL pretraining iterations (0 = none)")
     t.add_argument("--ft-lr", type=float, default=1e-3)
     t.add_argument("--util-val", default="const4")
+    t.add_argument("--ft-only", default="", help="parameter-name prefix trained in the fine-tune, e.g. out (head only)")
     a = ap.parse_args(argv)
     if a.cmd == "calib":
         calib(chunk_s=a.chunk_s)
@@ -590,7 +594,7 @@ def main(argv=None):
         airio_eval(a.model, a.rate, a.util_val, airio_hz=a.airio_rate)
     else:
         train(a.kind, a.H, a.head, a.layers, a.iters, a.seeds, a.lofo, a.tag, a.eval_every,
-              tuple(x for x in a.exclude.split(",") if x), a.pre_iters, a.ft_lr, a.util_val, crop_s=a.crop_s, lr=a.lr, wd=a.wd, drop=a.drop, vel_w=a.vel_w,
+              tuple(x for x in a.exclude.split(",") if x), a.pre_iters, a.ft_lr, a.util_val, a.ft_only, crop_s=a.crop_s, lr=a.lr, wd=a.wd, drop=a.drop, vel_w=a.vel_w,
               noise=a.noise, feats=[int(x) for x in a.feats.split(",")] if a.feats else None)
 
 

@@ -49,3 +49,17 @@ def test_quick_d60_is_zero_for_the_true_residual_and_grows_with_a_bias():
     assert nn_io.quick_d60(d, p) < 1e-9
     d0 = {"ts": ts, "back": np.ones_like(back), "R": np.cumsum(vb * dts)}
     assert abs(nn_io.quick_d60(d0, p + [0.001, 0.0]) - 6.0) < 0.01     # 1 mm/s bias, no yaw -> 6 cm per 60 s
+
+
+def test_fit_train_only_freezes_everything_but_the_head():
+    torch = pytest.importorskip("torch")
+    rng = np.random.default_rng(1)
+    n = 200
+    ts = np.arange(n) * 0.05
+    v = 0.1 * (rng.normal(size=n) + 1j * rng.normal(size=n))
+    d = {"F": rng.normal(size=(n, 6)), "v": v, "back": np.ones(n, complex), "ts": ts,
+         "R": np.cumsum(0.8 * v * 0.05), "Y": np.zeros((n, 2))}
+    base = nn_io.fit([d], "tcn", H=8, layers=2, iters=2, crop_s=8.0, batch=2)
+    m = nn_io.fit([d], "tcn", H=8, layers=2, iters=3, crop_s=8.0, batch=2, lr=1e-2, init=base, train_only="out")
+    for (k, a), b in zip(base[0].state_dict().items(), m[0].state_dict().values()):
+        assert torch.equal(a, b) != k.startswith("out"), k
