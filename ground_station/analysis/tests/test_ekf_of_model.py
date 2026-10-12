@@ -548,3 +548,22 @@ def test_fake_log_loader(tmp_path):
             
     assert 'Acc_X_Real' in L.signals
     assert len(L.signals['Acc_X_Real'].v) == 2
+
+
+def test_update_pos_gain_gate_release():
+    # proposed mode 3: a camera fix moves px by K*y with K = P_pp/(P_pp+R), the gate rejects a far fix,
+    # REJ_RELEASE rejections in a row re-open P_pp and take the fix
+    from ground_station.analysis.ekf_of_model import POS_P0, REJ_RELEASE
+    m = EkfOfModel(1)
+    R = 0.017 ** 2
+    p0 = m.P[0, 0, 0, 0]
+    m.update_pos(np.array([0.1]), np.array([0.0]), R, gate=5.0)
+    assert m.x[0, 0] == pytest.approx(0.1 * p0 / (p0 + R), rel=1e-9)
+    assert m.P[0, 0, 0, 0] < R
+    x0 = m.x[0, 0]
+    for k in range(REJ_RELEASE - 1):
+        rx, _ = m.update_pos(np.array([2.0]), np.array([0.0]), R, gate=5.0)
+        assert rx[0] and m.x[0, 0] == x0
+    m.update_pos(np.array([2.0]), np.array([0.0]), R, gate=5.0)
+    assert m.x[0, 0] == pytest.approx(x0 + (2.0 - x0) * POS_P0 / (POS_P0 + R), rel=1e-6)
+    assert m.pos_rej_run[0, 0] == 0

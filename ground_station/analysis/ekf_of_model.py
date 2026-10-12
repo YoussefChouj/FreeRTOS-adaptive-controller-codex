@@ -14,6 +14,7 @@ DEFAULTS = {
 
 VEL_P0 = 0.1      # mirrors EKF_OF_VEL_P0 (ekf_of.c)
 REJ_RELEASE = 5   # mirrors EKF_OF_REJ_RELEASE (ekf_of.h): gate-lockout recovery
+POS_P0 = 1.0      # mirrors the initial P_pp: a camera re-anchor re-opens the position variance to it
 
 class EkfOfModel:
     def __init__(self, batch_size, dtype=np.float64, **kwargs):
@@ -42,6 +43,7 @@ class EkfOfModel:
         self.rej_x = np.zeros(self.B, dtype=np.int64)
         self.rej_y = np.zeros(self.B, dtype=np.int64)
         self.rej_run = np.zeros((2, self.B), dtype=np.int64)  # consecutive rejections per axis
+        self.pos_rej_run = np.zeros((2, self.B), dtype=np.int64)  # consecutive camera rejections per axis
 
     def predict(self, dt, ax, ay):
         ax = np.asarray(ax, dtype=self.dtype)
@@ -169,6 +171,27 @@ class EkfOfModel:
         h = [0.0, 1.0, 0.0, 0.0]
         self._update_one(0, h, of1_x, R, mask, self.of1_gate)
         self._update_one(1, h, of1_y, R, mask, self.of1_gate)
+
+    def update_pos(self, z_x, z_y, R, gate=0.0, mask=None):
+        # PROPOSED firmware mode 3 (camera inside the EKF): position fix, h=[1,0,0,0], gated per axis; REJ_RELEASE
+        # rejections in a row re-open P_pp to POS_P0 and take the fix ungated (the re-anchor, inside the EKF)
+        h = [1.0, 0.0, 0.0, 0.0]
+        live = np.ones(self.B, dtype=bool) if mask is None else np.asarray(mask) > 0
+        rejs = []
+        for axis, z in ((0, z_x), (1, z_y)):
+            self._update_one(axis, h, z, R, mask, gate)
+            rej = self._last_rejected & live
+            run = self.pos_rej_run[axis]
+            run[:] = np.where(rej, run + 1, np.where(live, 0, run))
+            release = run >= REJ_RELEASE
+            if release.any():
+                run[release] = 0
+                self.P[release, axis, 0, :] = 0.0
+                self.P[release, axis, :, 0] = 0.0
+                self.P[release, axis, 0, 0] = POS_P0
+                self._update_one(axis, h, z, R, release.astype(self.dtype), 0.0)
+            rejs.append(rej)
+        return rejs
 
     def update_zero_vel(self, mask=None):
         h = [0.0, 1.0, 0.0, 0.0]

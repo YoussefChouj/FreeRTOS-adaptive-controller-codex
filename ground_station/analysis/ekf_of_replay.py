@@ -776,9 +776,210 @@ def plot_truth(xy, base, best, path):
     print(f"plot: {path}")
 
 
+# ---------------------------------------------------------------- delayed camera fusion: method comparison (SIMULATED)
+# Six ways to fuse a late camera position fix with the 8-state OF EKF, on synthetic truth. The camera numbers are the
+# r5_live_2 measurements (sd 1.7 cm, delay 0.14 s, ~25 fixes/s); the IMU/OF noise, OF bias walk, scale 1.04 (shadow_3
+# fit), outliers and the dropout are ILLUSTRATIVE. Every method sees the same truth and the same sensor noise
+# (paired), B seeds batched. Heading frame = camera frame (yaw error is a separate problem, the same for all).
+SIM = {"dt": 0.005, "T": 60.0, "of_hz": 50, "cam_hz": 25, "cam_sd": 0.017, "delay": 0.14, "jit": 0.01,
+       "acc_sd": 0.3, "of_sd": 0.01, "of_scale": 1.04, "bof0": 0.01, "q_bof": 1e-6, "ba0": 0.05,
+       "outlier": 0.01, "drop": (30.0, 35.0), "skip": 5.0, "tau": 0.25, "gate": 5.0}
+METHODS = {0: "M0 EKF only", 1: "M1 offset outside (fw now)", 2: "M2 in-EKF, delay ignored",
+           3: "M3 in-EKF, ring (past innov, apply now)", 4: "M4 in-EKF, re-propagate", 5: "M5 delayed horizon + output pred"}
+
+
+def _minjerk(t, t0s, dirs, T=2.0, L=1.0):
+    p, v, a = np.zeros_like(t), np.zeros_like(t), np.zeros_like(t)
+    for t0, sg in zip(t0s, dirs):
+        u = np.clip((t - t0) / T, 0.0, 1.0)
+        on = (t > t0) & (t < t0 + T)
+        p += sg * L * (10 * u**3 - 15 * u**4 + 6 * u**5)
+        v += sg * L * on * (30 * u**2 - 60 * u**3 + 30 * u**4) / T
+        a += sg * L * on * (60 * u - 180 * u**2 + 120 * u**3) / T**2
+    return p, v, a
+
+
+def sim_data(scn, B, s=SIM, seed=0):
+    """Truth p/v/a (B,2,n) and the sensors: accel every tick, OF every 1/of_hz, camera fixes (capture time,
+    arrival time, xy per seed). Camera timing is common to the batch, noise is per seed."""
+    rng = np.random.default_rng(seed)
+    dt, n = s["dt"], int(round(s["T"] / s["dt"]))
+    t = np.arange(n) * dt
+    if scn == "hover":  # few-cm wander, 3 random sines per axis
+        A = rng.uniform(0.01, 0.03, (B, 2, 3, 1))
+        w = 2 * np.pi / rng.uniform(3.0, 8.0, (B, 2, 3, 1))
+        ph = rng.uniform(0, 2 * np.pi, (B, 2, 3, 1))
+        arg = w * t + ph
+        p = (A * np.sin(arg)).sum(2)
+        p -= p[..., :1]
+        v, a = (A * w * np.cos(arg)).sum(2), -(A * w * w * np.sin(arg)).sum(2)
+    elif scn == "circle":  # dense-waypoint case: r 0.5 m, period 10 s (0.31 m/s), 3 s ramp in
+        w, r = 2 * np.pi / 10.0, 0.5
+        ph = w * np.where(t < 3.0, t * t / 6.0, t - 1.5)
+        dph = w * np.where(t < 3.0, t / 3.0, 1.0)
+        ddph = w * np.where(t < 3.0, 1.0 / 3.0, 0.0)
+        p = np.stack([r * np.sin(ph), r * (1 - np.cos(ph))])
+        v = np.stack([r * np.cos(ph) * dph, r * np.sin(ph) * dph])
+        a = np.stack([-r * np.sin(ph) * dph**2 + r * np.cos(ph) * ddph, r * np.cos(ph) * dph**2 + r * np.sin(ph) * ddph])
+        p, v, a = (np.broadcast_to(q, (B, 2, n)).copy() for q in (p, v, a))
+    else:  # step: 1 m moves in 2 s every 6 s, x and y interleaved
+        x = _minjerk(t, np.arange(6.0, s["T"] - 2, 12.0), [1, -1] * 10)
+        y = _minjerk(t, np.arange(12.0, s["T"] - 2, 12.0), [1, -1] * 10)
+        p, v, a = (np.broadcast_to(np.stack([x[i], y[i]]), (B, 2, n)).copy() for i in range(3))
+    ba = rng.normal(0, s["ba0"], (B, 2, 1))
+    acc = a + ba + rng.normal(0, s["acc_sd"], (B, 2, n))
+    bof = rng.normal(0, s["bof0"], (B, 2, 1)) + np.cumsum(rng.normal(0, np.sqrt(s["q_bof"] * dt), (B, 2, n)), -1)
+    of_on = (np.arange(n) % int(round(1 / (s["of_hz"] * dt)))) == 0
+    of = s["of_scale"] * v + bof + rng.normal(0, s["of_sd"], (B, 2, n))
+    tc = np.arange(0.5, s["T"], 1.0 / s["cam_hz"])
+    tc = tc[(tc < s["drop"][0]) | (tc >= s["drop"][1])]
+    arr = tc + np.maximum(s["delay"] + rng.normal(0, s["jit"], tc.size), 0.03)
+    o = np.argsort(arr)
+    tc, arr = tc[o], arr[o]
+    keep = arr < t[-1]
+    tc, arr = tc[keep], arr[keep]
+    z = p[..., np.clip(np.round(tc / dt).astype(int), 0, n - 1)] + rng.normal(0, s["cam_sd"], (B, 2, tc.size))
+    bad = rng.random((B, tc.size)) < s["outlier"]  # tracker glitches 0.3..1 m, random direction
+    mag, ang = rng.uniform(0.3, 1.0, (B, tc.size)), rng.uniform(0, 2 * np.pi, (B, tc.size))
+    z += (bad * mag)[:, None] * np.stack([np.cos(ang), np.sin(ang)], 1)
+    return {"t": t, "p": p, "v": v, "acc": acc, "of": of, "of_on": of_on, "tc": tc, "arr": arr,
+            "ka": np.minimum(np.ceil(arr / dt - 1e-9).astype(int), n - 1), "z": z}
+
+
+def _snap(e):
+    return e.x.copy(), e.P.copy(), e.rej_run.copy(), e.pos_rej_run.copy()
+
+
+def sim_method(m, D, d_as, s=SIM):
+    """est (B,2,n) of method m with assumed delay d_as, plus the EKF predict count (the CPU cost)."""
+    dt, (B, _, n) = s["dt"], D["p"].shape
+    R, gate, j = s["cam_sd"] ** 2, s["gate"], int(round(d_as / dt))
+    acc, of, of_on, z = D["acc"], D["of"], D["of_on"], D["z"]
+    if m == 1:  # the firmware offset path (video_truth.ext_pos_replay) on top of the EKF-only estimate
+        from ground_station.analysis.video_truth import ext_pos_replay
+        e0, est = sim_method(0, D, d_as, s)[0], np.zeros((B, 2, n))
+        for b in range(B):
+            est[b] = ext_pos_replay(D["t"], e0[b].T, D["arr"] - d_as, z[b].T, 0.0, arr_t=D["arr"])[0].T
+        return est, n
+    if m == 5:
+        return _sim_horizon(D, j, s)
+    by_tick = {}
+    for i, k in enumerate(D["ka"]):
+        by_tick.setdefault(int(k), []).append(i)
+    e, est, hist, snap, npred = EkfOfModel(B), np.zeros((B, 2, n)), np.zeros((B, 2, n)), {}, 0
+
+    def tick(k):
+        e.predict(dt, acc[:, 0, k], acc[:, 1, k])
+        if of_on[k]:
+            e.update_of(of[:, 0, k], of[:, 1, k])
+
+    for k in range(n):
+        tick(k)
+        npred += 1
+        if m == 4:
+            snap[k] = _snap(e)
+            snap.pop(k - j - 2, None)
+        hist[:, :, k] = e.x[:, [0, 3]]
+        for i in by_tick.get(k, ()) if m else ():
+            zi = z[:, :, i]
+            if m == 2:
+                e.update_pos(zi[:, 0], zi[:, 1], R, gate)
+            elif m == 3:  # innovation against the buffered past estimate, applied to the current state
+                y = zi - hist[:, :, max(k - j, 0)]
+                e.update_pos(y[:, 0] + e.x[:, 0], y[:, 1] + e.x[:, 3], R, gate)
+            elif k - j >= 0:  # m == 4: rewind to the capture tick, fuse there, re-run the ticks since
+                e.x[:], e.P[:], e.rej_run[:], e.pos_rej_run[:] = (q.copy() for q in snap[k - j])
+                e.update_pos(zi[:, 0], zi[:, 1], R, gate)
+                snap[k - j] = _snap(e)
+                for kk in range(k - j + 1, k + 1):
+                    tick(kk)
+                    npred += 1
+                    snap[kk] = _snap(e)
+            hist[:, :, k] = e.x[:, [0, 3]]
+        est[:, :, k] = e.x[:, [0, 3]]
+    return est, npred
+
+
+def _sim_horizon(D, j, s):
+    """PX4 EKF2 style: the EKF runs j ticks behind (at the camera's capture time, so a fix is fused when it is
+    due), an output predictor integrates the newest accel to now and is pulled toward the delayed EKF state by a
+    complementary filter (tau as PX4 vel_Tau/pos_Tau 0.25 s) whose correction is added to the whole output buffer."""
+    dt, (B, _, n) = s["dt"], D["p"].shape
+    R, gate, g = s["cam_sd"] ** 2, s["gate"], dt / s["tau"]
+    acc, of, of_on, z = D["acc"], D["of"], D["of_on"], D["z"]
+    due = {}
+    for i, k in enumerate(D["ka"]):
+        due.setdefault(int(k) - j, []).append(i)
+    e, est = EkfOfModel(B), np.zeros((B, 2, n))
+    po, vo, ip, iv = (np.zeros((B, 2)) for _ in range(4))
+    bp, bv = np.zeros((B, 2, n)), np.zeros((B, 2, n))
+    for k in range(n):
+        u = acc[:, :, k] - e.x[:, [6, 7]]
+        po, vo = po + vo * dt + 0.5 * u * dt * dt, vo + u * dt
+        bp[:, :, k], bv[:, :, k] = po, vo
+        kd = k - j
+        if kd >= 0:
+            e.predict(dt, acc[:, 0, kd], acc[:, 1, kd])
+            if of_on[kd]:
+                e.update_of(of[:, 0, kd], of[:, 1, kd])
+            for i in due.get(kd, ()):
+                e.update_pos(z[:, 0, i], z[:, 1, i], R, gate)
+            ep, ev = e.x[:, [0, 3]] - bp[:, :, kd], e.x[:, [1, 4]] - bv[:, :, kd]
+            ip, iv = ip + ep, iv + ev
+            cp, cv = ep * g + ip * g * g * 0.1, ev * g + iv * g * g * 0.1
+            bp[:, :, kd:k + 1] += cp[..., None]
+            bv[:, :, kd:k + 1] += cv[..., None]
+            po, vo = bp[:, :, k].copy(), bv[:, :, k].copy()
+        est[:, :, k] = po
+    return est, 2 * n
+
+
+def sim_score(est, D, s=SIM):
+    k0 = int(s["skip"] / s["dt"])
+    err = est - D["p"]
+    r = np.hypot(err[:, 0], err[:, 1])[:, k0:]
+    de = np.diff(err, axis=-1)[..., k0:]
+    fv = np.hypot(de[:, 0], de[:, 1]) / s["dt"]  # fake velocity the D term sees, m/s
+    t = D["t"][k0:]
+    w = (t >= s["drop"][0]) & (t < s["drop"][1] + 0.5)
+    return {"rms": 100 * np.sqrt((r**2).mean()), "p90": 100 * np.percentile(r, 90), "max": 100 * r.max(),
+            "drop": 100 * np.percentile(r[:, w], 90) if w.any() else np.nan, "fv99": np.percentile(fv, 99), "fvmax": fv.max()}
+
+
+def run_methods_cli(argv):
+    ap = argparse.ArgumentParser(prog="ekf_of_replay methods", description="SIMULATED delayed camera fusion methods")
+    ap.add_argument("--seeds", type=int, default=16)
+    ap.add_argument("--T", type=float, default=SIM["T"])
+    ap.add_argument("--scen", nargs="+", default=["hover", "circle", "step"])
+    ap.add_argument("--methods", nargs="+", type=int, default=list(METHODS))
+    ap.add_argument("--sens", nargs="*", type=float, default=[0.10, 0.20], help="assumed delays for a circle run")
+    a = ap.parse_args(argv)
+    s = dict(SIM, T=a.T)
+    print(f"SIMULATED, {a.seeds} seeds x {a.T:.0f} s, true delay {s['delay']} s, cam sd {100 * s['cam_sd']:.1f} cm "
+          f"at {s['cam_hz']} Hz, dropout {s['drop']} s, outliers {100 * s['outlier']:.0f}%")
+    print("| scenario | method | rms cm | p90 cm | max cm | dropout p90 cm | fake vel p99 m/s | fake vel max m/s | predicts/s |")
+    print("|---|---|---|---|---|---|---|---|---|")
+    for scn in a.scen:
+        D = sim_data(scn, a.seeds, s)
+        for m in a.methods:
+            est, npred = sim_method(m, D, s["delay"], s)
+            q = sim_score(est, D, s)
+            print(f"| {scn} | {METHODS[m]} | {q['rms']:.1f} | {q['p90']:.1f} | {q['max']:.1f} | {q['drop']:.1f} | "
+                  f"{q['fv99']:.2f} | {q['fvmax']:.2f} | {npred / a.T:.0f} |", flush=True)
+    if a.sens:
+        D, ms = sim_data("circle", a.seeds, s), [m for m in (1, 3, 4, 5) if m in a.methods]
+        print("\n| circle rms cm, assumed delay (true 0.14 s) | " + " | ".join(METHODS[m] for m in ms) + " |")
+        print("|---|" + "---|" * len(ms))
+        for d_as in a.sens:
+            row = [sim_score(sim_method(m, D, d_as, s)[0], D, s)["rms"] for m in ms]
+            print(f"| {d_as:.2f} s | " + " | ".join(f"{v:.1f}" for v in row) + " |", flush=True)
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == 'truth':
         run_truth_cli(sys.argv[2:])
+    elif len(sys.argv) > 1 and sys.argv[1] == 'methods':
+        run_methods_cli(sys.argv[2:])
     else:
         run_cli()
 
