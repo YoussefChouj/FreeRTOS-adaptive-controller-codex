@@ -183,6 +183,7 @@ Is the target even reachable from our data?
 | same, final | 23.2 | 69.2 | 265 | |
 | same, 3-seed average | 43.3 | 60.9 | 273.9 | seeds disagree |
 | same, 5-seed average, gentler fine-tune (lr 3e-4, 60 it) | 23.2 | 81.3 | 270.8 | under-fits b7 |
+| **same, head-only fine-tune (base frozen), 3-seed average, final** | **15.7** | **47.2** | **260.0** | best: beats EKF on all three, no checkpoint picking |
 
 More data (UTIL, Toronto): 78 Crazyflie 2.1 flights with the same sensors (BMI088 + PMW3901 flow + ToF) and Vicon
 truth. On its 39 held-out flights, the plain flow model reaches velocity r² 0.84 but still drifts 87 / 111 cm
@@ -200,7 +201,7 @@ statistics (FRD). It tracks UTIL velocity direction (corr 0.98 / 0.96 on one fli
 
 AirIO also needs a 100-200 Hz raw IMU; our telemetry has 20-40 Hz block means.
 
-**Verdict (second pass):** still no camera-off model at 10 cm. Even a well-calibrated Crazyflie flow deck drifts
+**Verdict (second pass):** still no camera-off model at 10 cm. The best model (UTIL-pretrained TCN, only its output layer fine-tuned on our flights) gives b17 15.7 / b7 47.2 / b10 260 cm: better than the EKF on every held-out flight and better than pass 1, but 4-25x over budget on the moving flights. Even a well-calibrated Crazyflie flow deck drifts
 tens of cm per minute, so 10 cm per 60 s without an absolute reference is beyond this sensor class. Our error
 is a per-flight flow scale (truth ≈ 0.65-0.95 × EKF velocity) that none of our inputs reveal. What could move it:
 log PMW3901 surface quality and shutter at full rate, raw 100+ Hz IMU, and many more flights. The camera-on
