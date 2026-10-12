@@ -1,0 +1,94 @@
+{
+  "name": "plumb",
+  "notes": "Truth calibration (run sheet R5 sec 3b, 2026-10-12): drift_rc vars, every slot 100 Hz, height chain (Z_posPID.FB, Z_ratePID.FB, of_alt_cm, of2_raw_h, of2_h) in slot 1 next to the raw IMU and attitude; + gravity tilt, handheld flag, flight phase. Static plumb holds and the z-step preset flight.",
+  "slots": [
+    {
+      "rate": 100.0,
+      "vars": [
+        "Acc_X_Real",
+        "Acc_Y_Real",
+        "Acc_Z_Real",
+        "Gyro_X_Real",
+        "Gyro_Y_Real",
+        "Gyro_Z_Real",
+        "ano_of.of2_dx_fix",
+        "ano_of.of2_dy_fix",
+        "ano_of.of1_dx",
+        "ano_of.of1_dy",
+        "imu_data.rol",
+        "imu_data.pit",
+        "imu_data.yaw",
+        "Ctrler.Z_posPID.FB",
+        "Ctrler.Z_ratePID.FB",
+        "ano_of.of_alt_cm",
+        "ano_of.of2_raw_h",
+        "ano_of.of2_h"
+      ]
+    },
+    {
+      "rate": 100.0,
+      "vars": [
+        "s_ekf_of.x[0]",
+        "s_ekf_of.x[1]",
+        "s_ekf_of.x[2]",
+        "s_ekf_of.x[3]",
+        "s_ekf_of.x[4]",
+        "s_ekf_of.x[5]",
+        "s_ekf_of.x[6]",
+        "s_ekf_of.x[7]",
+        "s_ekf_of.innov_x",
+        "s_ekf_of.innov_y",
+        "ano_of.earth_x",
+        "ano_of.earth_y",
+        "ano_of.gyr_data_x",
+        "ano_of.gyr_data_y",
+        "ano_of.gyr_data_z",
+        "ano_of.acc_data_x",
+        "ano_of.acc_data_y",
+        "ano_of.acc_data_z",
+        "ano_of.of2_dx",
+        "ano_of.of2_dy",
+        "Ctrler.locxPID.FB",
+        "Ctrler.locyPID.FB"
+      ]
+    },
+    {
+      "rate": 100.0,
+      "vars": [
+        "ano_of.of0_dx",
+        "ano_of.of0_dy",
+        "ano_of.of_quality",
+        "ano_of.of_update_cnt",
+        "ano_of.intergral_x",
+        "ano_of.intergral_y",
+        "s_ekf_of.rej_x",
+        "s_ekf_of.rej_y",
+        "Ctrler.locxPID.Des",
+        "Ctrler.locyPID.Des",
+        "Lin_Acc_X_body",
+        "Lin_Acc_Y_body",
+        "real_voltage",
+        "g_ekf_of_shadow",
+        "DroneStatus.ARM_Status",
+        "DroneStatus.FlyMode",
+        "s_of_bias_x",
+        "s_of_bias_y",
+        "g_of_bias_mode",
+        "Gravity_Body_X",
+        "Gravity_Body_Y",
+        "g_of_handheld_test",
+        "flight_phase"
+      ]
+    }
+  ],
+  "vofa": [
+    "ano_of.of2_dx_fix",
+    "ano_of.of2_dy_fix",
+    "ano_of.earth_x",
+    "ano_of.earth_y",
+    "Ctrler.locxPID.FB",
+    "Ctrler.locyPID.FB",
+    "imu_data.yaw",
+    "ano_of.of_alt_cm"
+  ]
+}

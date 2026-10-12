@@ -189,6 +189,7 @@ Is the target even reachable from our data?
 | **same, head-only fine-tune (base frozen), 3-seed average, final** | **15.7** | **47.2** | **260.0** | best: beats EKF on all three, no checkpoint picking |
 | same, 300 fine-tune steps | 28.6 | 41.8 | 268.0 | overfits: b7 better, hover worse; keep 150 |
 | same, last conv + head fine-tuned (3 seeds, 150 it) | 40.3 | 53.4 | 273.1 | more freedom = hover collapses again; head-only stays best |
+| GRU 32 x 2, UTIL pretrain, head-only fine-tune (3 seeds, 150 it) | 25.7 | 59.4 | 261.0 | worse than the TCN on all three; TCN stays |
 | head-only, 1 seed, leave-one-flight-out over the 9 pool flights | 14.9 | 55.3 | 266.1 | pool median 103.9 → 73.2; 7 of 9 better; worse on b14 (84 → 144) and b16 (126 → 186) |
 
 Leave-one-flight-out (each pool flight scored by a model that never saw it) confirms the gain is real but not
