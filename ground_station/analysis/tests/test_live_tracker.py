@@ -313,6 +313,11 @@ def test_auto_align_locks_on_a_90_deg_frame_bumplessly_then_stops():
     assert abs(np.degrees(np.angle(al.a)) - 90.0) < 5.0 and not al.mirror
     assert np.hypot(*(al.apply(cam[i]) - earth[i])) < 5.0              # fix == EKF at the switch: no step
     assert np.sqrt(((np.array([al.apply(c) for c in cam[i:]]) - earth[i:]) ** 2).sum(1).mean()) < 8.0
+    a0 = al.a                                                          # item 6: IMU yaw creeps 10 deg after the lock
+    ze2 = 95 * np.exp(1j * np.radians(100.0)) * zc + (40 - 25j)
+    for k in range(len(t)):
+        aa.push(t[-1] + 0.1 + t[k], cam[k], (ze2[k].real, ze2[k].imag))
+    assert abs(aa.drift_deg - 10.0) < 3.0 and al.a == a0 and aa.mode == 3 and "refit +10 deg" in aa.status
 
 
 def test_auto_align_never_locks_on_a_hover_or_a_wrong_scale():

@@ -485,25 +485,31 @@ class AutoAlign:
         self.agree_deg, self.window_s, self.refit_s, self.hold_s = agree_deg, window_s, refit_s, hold_s
         self.mode, self.locked, self.prev, self.t_fit, self.t_lock = 1, False, None, -1e9, None
         self.rows: list = []
+        self.drift_deg, self.lock_msg = None, ""
         self.status = "align WAIT airborne"
 
     def push(self, t: float, cam_xy_m, earth_cm) -> bool:
-        """One airborne pair (pad m as fed to `align`, EKF earth cm); True on the push that locks."""
-        if self.locked:
-            return False
+        """One airborne pair (pad m as fed to `align`, EKF earth cm); True on the push that locks. After the lock the
+        same fit keeps running every 5 refit_s as a monitor only (nightly item 6): `drift_deg` is the rotation the
+        window fits now against the locked one. Not applied: in modes 2/3 earth carries the fixes, so it reads low."""
         self.rows.append((t, *np.asarray(cam_xy_m, float)[:2], *np.asarray(earth_cm, float)[:2]))
         while self.rows[0][0] < t - self.window_s:
             self.rows.pop(0)
-        if t - self.t_fit < self.refit_s or len(self.rows) < 20:
+        if t - self.t_fit < self.refit_s * (5 if self.locked else 1) or len(self.rows) < 20:
             return False
         self.t_fit = t
         r = np.array(self.rows)
         cam, earth = r[:, 1:3], r[:, 3:5]
         span = float(np.ptp(cam, axis=0).max()) * 100.0
         if span < self.span_cm:
-            self.prev, self.status = None, f"align WAIT span {span:.0f}/{self.span_cm:.0f} cm"
+            if not self.locked:
+                self.prev, self.status = None, f"align WAIT span {span:.0f}/{self.span_cm:.0f} cm"
             return False
         f = EarthAlign.fit(cam, earth, mirror=self.align.mirror)
+        if self.locked:
+            self.drift_deg = float(np.degrees(np.angle(f.a / self.align.a)))
+            self.status = f"{self.lock_msg} | refit {self.drift_deg:+.0f} deg rms {f.rms_cm:.0f} cm"
+            return False
         ok = self.scale[0] <= f.scale <= self.scale[1] and f.rms_cm <= self.max_rms_cm
         prev, self.prev = self.prev, (f if ok else None)
         self.status = (f"align {np.degrees(np.angle(f.a)):.0f} deg scale {f.scale:.2f} rms {f.rms_cm:.0f} cm"
@@ -517,7 +523,7 @@ class AutoAlign:
         self.align.earth0 = complex(np.mean(ze - 100.0 * f.a * (zc.conjugate() if f.mirror else zc)))
         self.align.scale, self.align.rms_cm = f.scale, f.rms_cm
         self.locked, self.mode, self.t_lock = True, self.target, t
-        self.status = f"align LOCK {np.degrees(np.angle(f.a)):.0f} deg -> mode {self.target}"
+        self.status = self.lock_msg = f"align LOCK {np.degrees(np.angle(f.a)):.0f} deg -> mode {self.target}"
         return True
 
 
@@ -584,6 +590,12 @@ def fit_main(argv) -> int:
                 print(f"run {r} t {t[k][0]:.0f}-{t[k][-1]:.0f} s: lock at +{t[i_lock] - t[k][0]:.1f} s {aa.status}  "
                       f"step {np.hypot(*res[0]):.1f} cm  next 30 s rms {np.sqrt((res ** 2).sum(1).mean()):.1f} cm "
                       f"(n {post.sum()})")
+                drift = []                                # post-lock yaw monitor (item 6), raw EKF in shadow
+                for i in np.flatnonzero(k & (t > t[i_lock])):
+                    aa.push(t[i], cam[i], earth[i])
+                    if aa.drift_deg is not None and (not drift or aa.drift_deg != drift[-1]):
+                        drift.append(aa.drift_deg)
+                print(f"  post-lock refit every {5 * aa.refit_s:.0f} s (deg): " + " ".join(f"{x:+.0f}" for x in drift))
         wins = [(f"first {a.fit_s:.0f} s", k & (t <= t[k][0] + a.fit_s)), ("all", k)]
         if a.window_s > 0:
             wins += [(f"win {w:.0f} s", k & (t >= w) & (t < w + a.window_s))
@@ -740,12 +752,14 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
         if fix is None:
             continue
         t_fix, med = fix
-        if auto is not None and not auto.locked and np.isfinite(z) and z >= air_m and earth is not None:
-            ev = earth()
+        if auto is not None and np.isfinite(z) and z >= air_m and earth is not None:
+            ev, st = earth(), auto.status
             if ev is not None and auto.push(t_read, med, ev):
                 print(f"{auto.status} at t {t_read:.1f} s", flush=True)
                 if send:
                     send(ext_pos_mode_frame(auto.mode))
+            elif auto.locked and auto.status != st:           # post-lock yaw monitor, one line per refit
+                print(f"{auto.status} at t {t_read:.1f} s", flush=True)
         e = align.apply(med)
         frame_b = ext_pos_fix_frame(e[0], e[1], t_read - t_fix)
         if fix_log is not None:
