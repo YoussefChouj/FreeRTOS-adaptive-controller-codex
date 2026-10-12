@@ -277,13 +277,16 @@ def floor_shift_px(frame_bgr, ref: dict, scale: float) -> tuple[float, int]:
 class TelHeight:
     """Ring-plane height from the live telemetry: tails the stream_log slot CSV (line-buffered) for `key` (Z, m) and
     returns ring_h + max(0, z), the truth4 plane. `ground` is z < ground_m. Older than stale_s (or no row yet): the
-    fallback height (None = no plane, the frame gives no fix)."""
+    fallback height (None = no plane, the frame gives no fix). `extra` columns (e.g. ano_of.earth_x/y for --align
+    auto) are kept in `v`, read from the same rows."""
 
     def __init__(self, path, key: str = "Ctrler.Z_posPID.FB", ring_h_m: float = 0.057, ground_m: float = 0.03,
-                 stale_s: float = 1.0, fallback_m: float | None = None, clock: Callable[[], float] = time.monotonic):
+                 stale_s: float = 1.0, fallback_m: float | None = None, clock: Callable[[], float] = time.monotonic,
+                 extra: tuple = ()):
         self.path, self.key, self.ring_h, self.ground_m = Path(path), key, ring_h_m, ground_m
         self.stale_s, self.fallback, self.clock = stale_s, fallback_m, clock
         self.f, self.col, self.buf, self.z, self.t_z = None, None, "", None, -1e9
+        self.extra, self.cols, self.v = tuple(extra), {}, {}
 
     def poll(self) -> None:
         if self.f is None:
@@ -297,16 +300,19 @@ class TelHeight:
         for ln in lines:
             cells = ln.rstrip("\r").split(",")
             if self.col is None:
-                if self.key not in cells:
-                    raise SystemExit(f"{self.key} not in {self.path}")
+                for k in (self.key, *self.extra):
+                    if k not in cells:
+                        raise SystemExit(f"{k} not in {self.path}")
                 self.col = cells.index(self.key)
+                self.cols = {k: cells.index(k) for k in self.extra}
                 continue
             try:
                 z = float(cells[self.col])
+                v = {k: float(cells[c]) for k, c in self.cols.items()}
             except (ValueError, IndexError):
                 continue
             if np.isfinite(z):
-                self.z, self.t_z = z, self.clock()
+                self.z, self.t_z, self.v = z, self.clock(), v
 
     @property
     def fresh(self) -> bool:
@@ -315,6 +321,11 @@ class TelHeight:
     @property
     def ground(self) -> bool:
         return self.fresh and self.z < self.ground_m
+
+    def vec(self, keys) -> np.ndarray | None:
+        """The latest `extra` values (polled, fresh) as an array, else None."""
+        self.poll()
+        return np.array([self.v[k] for k in keys]) if self.fresh and all(k in self.v for k in keys) else None
 
     def __call__(self, t_cap: float) -> float:
         self.poll()
@@ -407,13 +418,14 @@ class EarthAlign:
         return np.array([e.real, e.imag])
 
     @classmethod
-    def fit(cls, cam_xy_m, earth_cm) -> "EarthAlign":
+    def fit(cls, cam_xy_m, earth_cm, mirror: bool | None = None) -> "EarthAlign":
         """Least-squares rotation + offset over paired samples (option b: the first 1 m out-and-back), both
-        handednesses tried, the lower rms kept. Needs real motion: a hover alone leaves the rotation undecided."""
+        handednesses tried (or only `mirror`), the lower rms kept. Needs real motion: a hover alone leaves the
+        rotation undecided, a straight line the handedness."""
         c = np.asarray(cam_xy_m, float); e = np.asarray(earth_cm, float)
         zc, ze = c[:, 0] + 1j * c[:, 1], (e[:, 0] + 1j * e[:, 1]) / 100.0
         best = None
-        for mirror in (False, True):
+        for mirror in ((False, True) if mirror is None else (mirror,)):
             b = zc.conj() if mirror else zc
             bm, em = b.mean(), ze.mean()
             db, de = b - bm, ze - em
@@ -427,6 +439,58 @@ class EarthAlign:
                 best = cls(a=complex(u), mirror=mirror, cam0=complex(c0), earth0=complex(em * 100.0),
                            scale=float(abs(a)), rms_cm=rms)
         return best
+
+
+class AutoAlign:
+    """--align auto. r6 flew every fusion run at the default --yaw-deg 0 while `fit` measured pad -> earth ~90 deg:
+    the camera loop pushed sideways (no restoring force), the drift the operator held with RC in modes 2 and 3.
+    Until locked the tracker sends mode 1 (shadow) whatever --mode says, and airborne fix/EKF pairs collect (earth =
+    ano_of.earth_x/y, the raw EKF path in shadow). Every refit_s the last window_s are fitted (EarthAlign.fit, mirror
+    held at the --mirror value: a straight out-and-back leaves it undecided). Lock: the camera path spans span_cm,
+    scale and rms inside limits, and two fits in a row agree within agree_deg (limits PROPOSED). The offset is then
+    set from the last hold_s so the fix equals the EKF now (e ~ 0, a bumpless switch) and `mode` becomes `target`."""
+
+    def __init__(self, align: EarthAlign, target: int, span_cm: float = 80.0, max_rms_cm: float = 20.0,
+                 scale: tuple = (0.6, 1.5), agree_deg: float = 15.0, window_s: float = 30.0, refit_s: float = 2.0,
+                 hold_s: float = 1.0):
+        self.align, self.target, self.span_cm, self.max_rms_cm, self.scale = align, target, span_cm, max_rms_cm, scale
+        self.agree_deg, self.window_s, self.refit_s, self.hold_s = agree_deg, window_s, refit_s, hold_s
+        self.mode, self.locked, self.prev, self.t_fit, self.t_lock = 1, False, None, -1e9, None
+        self.rows: list = []
+        self.status = "align WAIT airborne"
+
+    def push(self, t: float, cam_xy_m, earth_cm) -> bool:
+        """One airborne pair (pad m as fed to `align`, EKF earth cm); True on the push that locks."""
+        if self.locked:
+            return False
+        self.rows.append((t, *np.asarray(cam_xy_m, float)[:2], *np.asarray(earth_cm, float)[:2]))
+        while self.rows[0][0] < t - self.window_s:
+            self.rows.pop(0)
+        if t - self.t_fit < self.refit_s or len(self.rows) < 20:
+            return False
+        self.t_fit = t
+        r = np.array(self.rows)
+        cam, earth = r[:, 1:3], r[:, 3:5]
+        span = float(np.ptp(cam, axis=0).max()) * 100.0
+        if span < self.span_cm:
+            self.prev, self.status = None, f"align WAIT span {span:.0f}/{self.span_cm:.0f} cm"
+            return False
+        f = EarthAlign.fit(cam, earth, mirror=self.align.mirror)
+        ok = self.scale[0] <= f.scale <= self.scale[1] and f.rms_cm <= self.max_rms_cm
+        prev, self.prev = self.prev, (f if ok else None)
+        self.status = (f"align {np.degrees(np.angle(f.a)):.0f} deg scale {f.scale:.2f} rms {f.rms_cm:.0f} cm"
+                       + ("" if ok else " REJ"))
+        if not ok or prev is None or abs(np.degrees(np.angle(f.a / prev.a))) > self.agree_deg:
+            return False
+        h = r[:, 0] >= t - self.hold_s
+        zc = cam[h, 0] + 1j * cam[h, 1]
+        ze = earth[h, 0] + 1j * earth[h, 1]
+        self.align.a, self.align.mirror, self.align.cam0 = f.a, f.mirror, 0j
+        self.align.earth0 = complex(np.mean(ze - 100.0 * f.a * (zc.conjugate() if f.mirror else zc)))
+        self.align.scale, self.align.rms_cm = f.scale, f.rms_cm
+        self.locked, self.mode, self.t_lock = True, self.target, t
+        self.status = f"align LOCK {np.degrees(np.angle(f.a)):.0f} deg -> mode {self.target}"
+        return True
 
 
 def shadow_pairs(stem: str, min_h_m: float = 0.15):
@@ -475,10 +539,23 @@ def fit_main(argv) -> int:
     ap.add_argument("--fit-s", type=float, default=30.0, help="also fit the first s of each stretch (EKF drift grows)")
     ap.add_argument("--min-h-m", type=float, default=0.15)
     ap.add_argument("--window-s", type=float, default=0.0, help="also fit back-to-back windows of s (yaw drift)")
+    ap.add_argument("--auto", action="store_true", help="replay --align auto per stretch: lock time/yaw, residual")
+    ap.add_argument("--span-cm", type=float, default=80.0, help="--align auto lock span (PROPOSED)")
     a = ap.parse_args(argv)
     t, cam, earth, run = shadow_pairs(a.stem, a.min_h_m)
     for r in np.unique(run):
         k = run == r
+        if a.auto:
+            aa = AutoAlign(EarthAlign(), target=2, span_cm=a.span_cm)
+            i_lock = next((i for i in np.flatnonzero(k) if aa.push(t[i], cam[i], earth[i])), None)
+            if i_lock is None:
+                print(f"run {r} t {t[k][0]:.0f}-{t[k][-1]:.0f} s: no lock ({aa.status})")
+            else:
+                post = k & (t >= t[i_lock]) & (t < t[i_lock] + 30.0)
+                res = np.array([aa.align.apply(c) for c in cam[post]]) - earth[post]
+                print(f"run {r} t {t[k][0]:.0f}-{t[k][-1]:.0f} s: lock at +{t[i_lock] - t[k][0]:.1f} s {aa.status}  "
+                      f"step {np.hypot(*res[0]):.1f} cm  next 30 s rms {np.sqrt((res ** 2).sum(1).mean()):.1f} cm "
+                      f"(n {post.sum()})")
         wins = [(f"first {a.fit_s:.0f} s", k & (t <= t[k][0] + a.fit_s)), ("all", k)]
         if a.window_s > 0:
             wins += [(f"win {w:.0f} s", k & (t >= w) & (t < w + a.window_s))
@@ -494,6 +571,8 @@ def fit_main(argv) -> int:
                 continue
             print(f"run {r} t {t[m][0]:.0f}-{t[m][-1]:.0f} s {label:>10s}: n {m.sum():4d} span {span:4.0f} cm  "
                   f"yaw_deg {np.degrees(np.angle(f.a)):7.1f}  mirror {f.mirror}  scale {f.scale:.2f}  rms {f.rms_cm:5.1f} cm")
+        if k.sum() < 50 or t[k][-1] - t[k][0] < 3.0:              # offset_noise needs >= 2 s of fixes
+            continue
         y = cam[k] * 100.0 - earth[k]
         nz = [offset_noise(t[k], cam[k][:, i] * 100.0, y[:, i]) for i in (0, 1)]
         print(f"run {r} noise (fix dt {np.median(np.diff(t[k])) * 1e3:.0f} ms): " + "  ".join(
@@ -557,14 +636,18 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
                static=None, ring=None, uv_log: list | None = None, gate: JumpGate | None = None,
                mode: int | None = None, delay_ms: float | None = None, fix_log: list | None = None,
                pad: PadOrigin | None = None, ground: Callable[[], bool] | None = None,
-               show: Preview | None = None, stop_file: str | None = None, size: tuple | None = None) -> dict:
+               show: Preview | None = None, stop_file: str | None = None, size: tuple | None = None,
+               auto: AutoAlign | None = None, earth: Callable[[], np.ndarray | None] | None = None,
+               air_m: float = 0.15) -> dict:
     """Read frames from `source` (file, device index or window:<title>), emit fixes. For a file the capture time is
     the frame pts and the send time is that pts too (age = camera latency only); live, both come from `clock`.
     `ring`: a pixel tracker with .step(frame) -> uv (RingTracker, CoralTracker), else the guard detector with
     `static` (a video_truth.static_mask). `gate` drops jumps (the tracker is re-centred on the last accepted uv).
     With `send`, the delay and mode frames go first and again every 2 s while live. `fix_log` collects
     (t_read, t_fix, frame bytes) per fix. `pad` makes the fixes pad-relative (`ground()`: telemetry on-ground flag,
-    None = first detections); a NaN height (stale telemetry) gives no fix. `show` draws each frame (throttled)."""
+    None = first detections); a NaN height (stale telemetry) gives no fix. `show` draws each frame (throttled).
+    `auto` (--align auto): mode 1 is sent until it locks, fed each fix taken above `air_m` with a fresh `earth()`
+    (EKF cm); on lock the mode frame goes out at once."""
     cv2 = vt._cv2()
     win = str(source).startswith("window:")
     cap = WindowSource(str(source)[7:], size=size) if win else cv2.VideoCapture(int(source) if str(source).isdigit() else source)
@@ -574,7 +657,7 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
         if send and delay_ms is not None:
             send(ext_pos_delay_frame(delay_ms))
         if send and mode is not None:
-            send(ext_pos_mode_frame(mode))
+            send(ext_pos_mode_frame(auto.mode if auto else mode))
 
     while start_s and not live and cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0 < start_s and cap.grab():
         pass                                              # frame-exact; set(POS_MSEC) lands seconds off on scrcpy mkv
@@ -618,9 +701,10 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
             xy = pad.apply(xy, ground() if ground else None)
         t_rd, t_det = t_rd + (p1 - p0), t_det + (time.perf_counter() - p1)
         if show is not None:
-            show(t_read, frame, uv, xy, [f"mode {mode}  z {z:.2f} m  fixes {sched.n_sent}  det {n_det}/{n}",
+            show(t_read, frame, uv, xy, [f"mode {auto.mode if auto else mode}  z {z:.2f} m  fixes {sched.n_sent}  det {n_det}/{n}",
                                          f"gate rej {gate.n_rej if gate else 0}  pad {'set' if pad is None or pad.xy is not None else 'WAIT'}"
-                                         f"{' frozen' if pad is not None and pad.frozen else ''}"])
+                                         f"{' frozen' if pad is not None and pad.frozen else ''}"]
+                 + ([auto.status] if auto else []))
         if xy is not None:
             n_det += 1
             sched.push(t_cap, xy)
@@ -628,6 +712,12 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
         if fix is None:
             continue
         t_fix, med = fix
+        if auto is not None and not auto.locked and np.isfinite(z) and z >= air_m and earth is not None:
+            ev = earth()
+            if ev is not None and auto.push(t_read, med, ev):
+                print(f"{auto.status} at t {t_read:.1f} s", flush=True)
+                if send:
+                    send(ext_pos_mode_frame(auto.mode))
         e = align.apply(med)
         frame_b = ext_pos_fix_frame(e[0], e[1], t_read - t_fix)
         if fix_log is not None:
@@ -644,7 +734,8 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
             "gate_rej": gate.n_rej if gate else 0, "reseeds": gate.reseeds if gate else 0,
             "read_ms": 1000 * t_rd / max(n, 1), "detect_ms": 1000 * t_det / max(n, 1),
             "show_ms": show.ms / max(show.n, 1) if show else 0.0,
-            "pad_xy": None if pad is None or pad.xy is None else [round(float(v), 4) for v in pad.xy]}
+            "pad_xy": None if pad is None or pad.xy is None else [round(float(v), 4) for v in pad.xy],
+            "align": auto.status if auto else "fixed"}
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -788,6 +879,11 @@ def main(argv=None) -> int:
     ap.add_argument("--cam-latency-s", type=float, default=0.0, help="photon -> frame read; UNMEASURED until R4")
     ap.add_argument("--yaw-deg", type=float, default=0.0, help="pad -> earth rotation until a fit or marker exists")
     ap.add_argument("--mirror", action="store_true")
+    ap.add_argument("--align", choices=["fixed", "auto"], default="fixed",
+                    help="auto: send mode 1 and fit the rotation in flight (fly ~1 m out-and-back + sideways), then "
+                         "switch to --mode bumplessly; needs --tel-csv with ano_of.earth_x/y")
+    ap.add_argument("--align-span-cm", type=float, default=80.0, help="--align auto: camera path span to lock (PROPOSED)")
+    ap.add_argument("--align-min-h-m", type=float, default=0.15, help="--align auto: only fixes above this height")
     ap.add_argument("--out", required=True, help="fixes CSV")
     ap.add_argument("--max-frames", type=int, default=0)
     ap.add_argument("--start-s", type=float, default=0.0, help="file only: seek before reading")
@@ -813,9 +909,13 @@ def main(argv=None) -> int:
     ap.add_argument("--stop-file", default="", help="end the run cleanly when this file appears (camera_truth.sh stop)")
     ap.add_argument("--static-t", default="", help='file only, "90,140,190": mask guard-colour pixels present at all these times')
     a = ap.parse_args(argv)
+    if a.align == "auto" and not (a.tel_csv and a.mode in (2, 3)):
+        ap.error("--align auto needs --tel-csv and --mode 2 or 3")
     if a.tel_npz and a.tel_csv or not (a.tel_npz or a.tel_csv or a.height_m is not None):
         ap.error("give --tel-csv (with an optional --height-m fallback), --tel-npz or --height-m")
-    tel = TelHeight(a.tel_csv, a.tel_key, a.ring_h_m, stale_s=a.tel_stale_s, fallback_m=a.height_m) if a.tel_csv else None
+    ek = ("ano_of.earth_x", "ano_of.earth_y") if a.align == "auto" else ()
+    tel = TelHeight(a.tel_csv, a.tel_key, a.ring_h_m, stale_s=a.tel_stale_s, fallback_m=a.height_m,
+                    extra=ek) if a.tel_csv else None
     height = tel or (tel_height(a.tel_npz, tel_offset_s=a.tel_offset_s, ring_offset_m=a.ring_offset_m)
                      if a.tel_npz else a.height_m)
     src_live = str(a.source).isdigit() or a.source.startswith("window:")
@@ -834,6 +934,7 @@ def main(argv=None) -> int:
             print(f"floor check: {k} markers, median shift {d:.1f} px" + ("  WARNING phone moved? (> 5 px, PROPOSED)"
                                                                          if d > 5 else ""), flush=True)
     align = EarthAlign(a=complex(np.exp(1j * np.radians(a.yaw_deg))), mirror=a.mirror)
+    auto = AutoAlign(align, a.mode, span_cm=a.align_span_cm) if a.align == "auto" else None
     times = [float(x) for x in a.static_t.split(",") if x]
     static = vt.static_mask(a.source, times) if times and not src_live else None
     ring = None
@@ -849,7 +950,9 @@ def main(argv=None) -> int:
                      start_s=a.start_s, static=static, ring=ring, gate=JumpGate() if a.gate else None,
                      mode=a.mode, delay_ms=a.delay_ms, pad=None if a.no_pad_origin else PadOrigin(),
                      ground=(lambda: tel.ground if tel.fresh else None) if tel else None, show=show,
-                     stop_file=a.stop_file or None, size=size if a.source.startswith("window:") else None), flush=True)
+                     stop_file=a.stop_file or None, size=size if a.source.startswith("window:") else None,
+                     auto=auto, earth=(lambda: tel.vec(ek)) if auto else None,
+                     air_m=a.ring_h_m + a.align_min_h_m), flush=True)          # z there is the ring plane
     return 0
 
 

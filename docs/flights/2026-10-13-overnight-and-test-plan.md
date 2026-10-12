@@ -99,6 +99,61 @@ What this changes overnight:
 - Mode 3: why 749 rejections and 624 re-anchors (gate vs P, delay 0). Fix in the twin, then the C, then a golden test.
 - Every candidate fix must pass the replay acceptance above before it is flashed.
 
+## Item 0 result: the mode 2/3 drift was a 90° frame rotation (measured 10-13 night)
+
+**Root cause.** Every r6 fusion flight (F2, F3, F3b) ran `camera_truth.sh fusion <name> <mode>`, which passed no
+`--yaw-deg`, so the tracker used its default of 0°. The `live_tracker fit` rotation from pad to EKF earth is about 90°:
+
+| Log | What was fitted | yaw (deg) | scale | rms (cm) |
+|---|---|---|---|---|
+| r6_f4c_sysid_p4000 (mode 1) | windows | 76 to 99 | 0.47 to 0.96 | 16 to 63 |
+| r6_f2_mode2 | raw EKF path, 3 windows | 90.3 / 98.5 / 93.0 | 0.84 / 1.07 / 0.80 | 21.7 / 8.5 / 7.8 |
+| R5 (earlier) | flown with `--yaw-deg 100` | | | |
+
+With the camera position rotated 90°, its correction acts at a right angle to the error: cos 90° = 0, so there is no
+restoring force. The drone circles away and the operator has to hold it with RC. Two other findings are consistent
+with this (UNVERIFIED): F2's `c_y = 1.10 * pos_y` (the camera's x on the EKF's y), and mode 3's 749 rejections and 624
+re-anchors (innovations of a rotated fix). The EKF frame yaw is not fixed between flights (R5 73-115°, F2 within ±5° in one
+flight), so a fixed `--yaw-deg` is fragile.
+
+**Fix (tracker only, no reflash): `live_tracker --align auto`.** `camera_truth.sh` now adds it for modes 2/3 unless
+`--yaw-deg` or `--align` is given.
+- The tracker sends mode 1 (shadow) whatever `--mode` says. It pairs each airborne fix with telemetry
+  `ano_of.earth_x/y` (the raw EKF path in mode 1).
+- Every 2 s it fits the last 30 s, with the mirror held at `--mirror`. It locks when all of these hold (all PROPOSED):
+  - the camera path spans at least 80 cm;
+  - the scale is between 0.6 and 1.5;
+  - the rms is 20 cm or less;
+  - two fits in a row agree within 15°.
+- On lock it sets the offset from the last 1 s so that fix = EKF at that moment, which makes the switch bumpless. It
+  then sends `--mode`. If it never locks, the drone stays in mode 1, which is safe.
+
+`fit --auto` replay of this logic on the r6 logs (measured):
+
+| Log | Result | step at lock | rms next 30 s |
+|---|---|---|---|
+| r6_f4_sysid (hover) | no lock: span 71 of 80 cm | | |
+| r6_f4b_sysid_p5300 (camera lost view) | no lock: every fit rejected (scale 0.08-0.54) | | |
+| r6_f4c_sysid_p4000 | lock at +36.4 s, 85° | 14.5 cm | 22.4 cm |
+| r6_f2_mode2 (live log, raw path) | lock at +5.2 s, 99° | 2.3 cm | 46.9 cm |
+| r6_f3b_mode3 | lock at -4°: not a valid test (mode 3 earth already follows the yaw-0 camera) | | |
+
+Caveats:
+- The 14.5 cm step at lock is spread by mode 2 and capped per fix in mode 3 (`EXT_POS_SLEW_CM`).
+- The 47 cm F2 residual is the raw OF path drifting against the camera. The camera loop is there to remove exactly that.
+  The rotation is what decides whether the loop restores, and 99° is within 10° of the 90° windows.
+- The two agreeing fits share most of their window, so agreement is weak evidence. The lock limits are PROPOSED until
+  a live lock is seen.
+- Follow-up, not built: refit online after lock. The EKF yaw wanders, and a residual of 20° or more costs restoring force.
+
+**Procedure for the next lab (PROPOSED):**
+1. `camera_truth.sh fusion <name> 2` (or 3).
+2. Take off. The preview shows `align WAIT ...`.
+3. Fly by RC about 1 m out and back along one axis, then sideways.
+4. Wait for `align LOCK <yaw> deg -> mode N` on the preview and in `check`. The lock yaw should be about 90°.
+5. Release the sticks for the 60 s hands-off window.
+6. If the drone has not locked after 60 s of motion, land: it is still in mode 1.
+
 ## Overnight work, in order (each item has a done-check)
 
 1. **Ingest tonight's logs.** flight_review page per flight, camera-truth fit, ledger rows.

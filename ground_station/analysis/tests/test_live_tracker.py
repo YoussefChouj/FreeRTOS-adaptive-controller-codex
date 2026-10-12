@@ -281,3 +281,55 @@ def test_fit_frame_rescales_a_resized_window_grab_to_the_start_size():
     f = np.zeros((672, 1194, 3), np.uint8)
     assert lt.fit_frame(f, (1194, 672)) is f and lt.fit_frame(f, None) is f
     assert lt.fit_frame(np.zeros((540, 960, 3), np.uint8), (1194, 672)).shape == (672, 1194, 3)
+
+
+def _l_flight(n=400, dt=0.1):
+    """Hover, then a 1 m L (x out, y out) and back: the --align auto manoeuvre."""
+    s = np.linspace(0, 1, n)
+    x = np.clip(4 * s - 1, 0, 1) - np.clip(4 * s - 3, 0, 1)
+    y = np.clip(4 * s - 2, 0, 1) * 0.8 - np.clip(4 * s - 3, 0, 1) * 0.8
+    return np.arange(n) * dt, np.c_[x, y]
+
+
+def test_fit_with_mirror_fixed_keeps_that_handedness():
+    _, cam = _l_flight()
+    zc = cam[:, 0] + 1j * cam[:, 1]
+    ze = 100 * np.exp(1j * np.radians(90.0)) * zc
+    al = EarthAlign.fit(cam, np.c_[ze.real, ze.imag], mirror=True)
+    assert al.mirror and al.rms_cm > 10.0                              # wrong hand forced: a poor fit, not a flip
+
+
+def test_auto_align_locks_on_a_90_deg_frame_bumplessly_then_stops():
+    from ground_station.analysis.live_tracker import AutoAlign
+    t, cam = _l_flight()
+    zc = cam[:, 0] + 1j * cam[:, 1]
+    ze = 95 * np.exp(1j * np.radians(90.0)) * zc + (40 - 25j)          # r6: ~90 deg, scale ~1, EKF origin elsewhere
+    earth = np.c_[ze.real, ze.imag] + np.random.default_rng(1).normal(0, 2.0, (len(t), 2))
+    al = EarthAlign()                                                  # --yaw-deg 0 as flown in r6
+    aa = AutoAlign(al, target=3)
+    locks = [aa.push(t[i], cam[i], earth[i]) for i in range(len(t))]
+    assert sum(locks) == 1 and aa.locked and aa.mode == 3
+    i = locks.index(True)
+    assert abs(np.degrees(np.angle(al.a)) - 90.0) < 5.0 and not al.mirror
+    assert np.hypot(*(al.apply(cam[i]) - earth[i])) < 5.0              # fix == EKF at the switch: no step
+    assert np.sqrt(((np.array([al.apply(c) for c in cam[i:]]) - earth[i:]) ** 2).sum(1).mean()) < 8.0
+
+
+def test_auto_align_never_locks_on_a_hover_or_a_wrong_scale():
+    from ground_station.analysis.live_tracker import AutoAlign
+    t, cam = _l_flight()
+    hover = np.random.default_rng(2).normal(0, 0.03, cam.shape)
+    aa = AutoAlign(EarthAlign(), target=2)
+    assert not any(aa.push(t[i], hover[i], 100 * hover[i]) for i in range(len(t))) and aa.mode == 1
+    aa = AutoAlign(EarthAlign(), target=2)
+    assert not any(aa.push(t[i], cam[i], 300 * cam[i]) for i in range(len(t))) and "REJ" in aa.status
+
+
+def test_tel_height_keeps_extra_columns(tmp_path):
+    from ground_station.analysis.live_tracker import TelHeight
+    p, now = tmp_path / "s.slot1.csv", [0.0]
+    p.write_text("t,ano_of.earth_x,Ctrler.Z_posPID.FB,ano_of.earth_y\r\n1,12.5,0.4,-3\r\n", encoding="utf-8")
+    tel = TelHeight(p, extra=("ano_of.earth_x", "ano_of.earth_y"), clock=lambda: now[0])
+    assert np.allclose(tel.vec(("ano_of.earth_x", "ano_of.earth_y")), [12.5, -3.0])
+    now[0] = 5.0
+    assert tel.vec(("ano_of.earth_x", "ano_of.earth_y")) is None      # stale
