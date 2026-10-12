@@ -3,7 +3,7 @@
 #   bash ground_station/lab/camera_truth.sh start <name>   # drone DISARMED; operator confirmed preset + name first
 #   bash ground_station/lab/camera_truth.sh stop  <name>   # after landing + disarm
 #   bash ground_station/lab/camera_truth.sh check <name>   # rows per slot, video size
-#   bash ground_station/lab/camera_truth.sh fusion <name> <1|2> [tracker args]   # R5 camera fusion, 1 shadow 2 live:
+#   bash ground_station/lab/camera_truth.sh fusion <name> <1|2|3> [tracker args]   # camera fusion, 1 shadow, 2 offset, 3 in-EKF:
 #     stream_log --relay-port 47800 (no 8081) + scrcpy window r5cam (record, always on top) + live_tracker --show;
 #     `stop <name>` ends all three cleanly (stop file). Same phone placement as r5_marks_1 (its floor pose is reused).
 # WiFi only, never the SWD probe. Video: phone camera id 4, zoom 0.6, 1080p30 (the R3 calibration pose).
@@ -36,7 +36,7 @@ start)
     done' _ "$vid" > /dev/null 2>&1 &
   sleep 5; "$0" check "$name" ;;
 fusion)
-  mode=${3:?mode 1 shadow or 2 live}; shift 3
+  mode=${3:?mode 1 shadow, 2 offset, 3 in-EKF}; shift 3
   up && { echo "8081 service is up: stop it first (stream_log needs the WiFi downlink)"; exit 1; }
   mkdir -p "$vid"; rm -f "$vid/stop"; echo "$mode" > "$vid/fusion"
   nohup python -m ground_station.livewatch.stream_log --frames ground_station/livewatch/r5_extpos_frames.md     --relay-port 47800 --seconds 86400 --stop-file "$vid/stop" --out "logs/$name.csv" > "$vid/stream_log.out" 2>&1 &
