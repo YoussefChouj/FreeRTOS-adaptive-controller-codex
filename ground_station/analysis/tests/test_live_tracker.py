@@ -273,3 +273,10 @@ def test_shadow_pairs_rebuild_the_sent_fix_from_the_firmware_innovation(tmp_path
     assert set(run) == {1} and ts.min() > 2.0 and ts.max() < 18.0
     f = EarthAlign.fit(cam, earth)
     assert np.degrees(np.angle(f.a)) == pytest.approx(100, abs=0.1) and not f.mirror and f.rms_cm < 0.1
+
+
+def test_fit_frame_rescales_a_resized_window_grab_to_the_start_size():
+    from ground_station.analysis import live_tracker as lt
+    f = np.zeros((672, 1194, 3), np.uint8)
+    assert lt.fit_frame(f, (1194, 672)) is f and lt.fit_frame(f, None) is f
+    assert lt.fit_frame(np.zeros((540, 960, 3), np.uint8), (1194, 672)).shape == (672, 1194, 3)

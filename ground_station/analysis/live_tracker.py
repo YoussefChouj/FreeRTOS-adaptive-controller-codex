@@ -167,12 +167,20 @@ class JumpGate:
         return False
 
 
+def fit_frame(frame: np.ndarray, size: tuple | None) -> np.ndarray:
+    """Resize a grab to the size the run started with (K, seed and floor scale were set for it): a restore or a
+    window resize mid-run would otherwise feed the tracker a different pixel scale."""
+    if size is None or (frame.shape[1], frame.shape[0]) == tuple(size):
+        return frame
+    return vt._cv2().resize(frame, tuple(int(v) for v in size), interpolation=vt._cv2().INTER_AREA)
+
+
 class WindowSource:
     """Live frames from a window's client area (the scrcpy mirror, e.g. `scrcpy --window-title cam`), Windows only:
     mss grabs the screen rectangle user32 reports. The window must show the whole video at its aspect (no letterbox
     bars), or the K rescale in load_cam is wrong. cv2.VideoCapture interface: read() -> (ok, bgr), release()."""
 
-    def __init__(self, title: str, wait_s: float = 30.0):
+    def __init__(self, title: str, wait_s: float = 30.0, size: tuple | None = None):
         import ctypes
         from ctypes import wintypes
         import mss                                        # pip install mss
@@ -181,7 +189,7 @@ class WindowSource:
             self.u32.SetProcessDPIAware()                 # physical pixels, as mss grabs them
         except Exception:
             pass
-        self.title = title
+        self.title, self.fixed = title, size             # size: every grab is resized to it (fit_frame)
         self.hwnd = self._find(wait_s)
         if not self.hwnd:
             raise RuntimeError(f"no window titled {title!r} after {wait_s:.0f} s")
@@ -217,10 +225,24 @@ class WindowSource:
                 time.sleep(0.3)
             r = self.rect() if self.hwnd else {"width": 0, "height": 0}
             if r["width"] > 0 and r["height"] > 0:
-                return True, np.ascontiguousarray(np.asarray(self.sct.grab(r))[..., :3])   # BGRA -> BGR
+                return True, fit_frame(np.ascontiguousarray(np.asarray(self.sct.grab(r))[..., :3]), self.fixed)
             if time.monotonic() >= t_end:
                 print(f"window {self.title!r} lost for 15 s", flush=True)
                 return False, None
+            time.sleep(0.2)
+
+    def ready(self, wait_s: float = 30.0, min_mean: float = 8.0) -> tuple:
+        """Wait until the window shows video (not minimized, not the black frame scrcpy opens with) and return its
+        size. r5_live_1 read the size and floor check before the first frame: 0 markers, then 0 detections live
+        while the same video replayed from file gave 1500/1500."""
+        t_end = time.monotonic() + wait_s
+        while True:
+            ok, f = self.read()
+            if ok and float(f.mean()) > min_mean:
+                print(f"window {self.title!r} ready {f.shape[1]}x{f.shape[0]}", flush=True)
+                return f.shape[1], f.shape[0]
+            if time.monotonic() >= t_end:
+                raise RuntimeError(f"window {self.title!r} shows no video after {wait_s:.0f} s")
             time.sleep(0.2)
 
     def get(self, prop) -> float:
@@ -505,7 +527,7 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
                static=None, ring=None, uv_log: list | None = None, gate: JumpGate | None = None,
                mode: int | None = None, delay_ms: float | None = None, fix_log: list | None = None,
                pad: PadOrigin | None = None, ground: Callable[[], bool] | None = None,
-               show: Preview | None = None, stop_file: str | None = None) -> dict:
+               show: Preview | None = None, stop_file: str | None = None, size: tuple | None = None) -> dict:
     """Read frames from `source` (file, device index or window:<title>), emit fixes. For a file the capture time is
     the frame pts and the send time is that pts too (age = camera latency only); live, both come from `clock`.
     `ring`: a pixel tracker with .step(frame) -> uv (RingTracker, CoralTracker), else the guard detector with
@@ -515,7 +537,7 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
     None = first detections); a NaN height (stale telemetry) gives no fix. `show` draws each frame (throttled)."""
     cv2 = vt._cv2()
     win = str(source).startswith("window:")
-    cap = WindowSource(str(source)[7:]) if win else cv2.VideoCapture(int(source) if str(source).isdigit() else source)
+    cap = WindowSource(str(source)[7:], size=size) if win else cv2.VideoCapture(int(source) if str(source).isdigit() else source)
     live = win or str(source).isdigit()
 
     def hello():
@@ -766,7 +788,7 @@ def main(argv=None) -> int:
     height = tel or (tel_height(a.tel_npz, tel_offset_s=a.tel_offset_s, ring_offset_m=a.ring_offset_m)
                      if a.tel_npz else a.height_m)
     src_live = str(a.source).isdigit() or a.source.startswith("window:")
-    size = (WindowSource(a.source[7:]).size() if a.source.startswith("window:")
+    size = (WindowSource(a.source[7:]).ready() if a.source.startswith("window:")
             else None if str(a.source).isdigit() else vt.video_size(a.source))
     cam = vt.load_cam(a.cam, size)
     seed = [float(x) for x in a.seed_px.split(",")] if a.seed_px else None
@@ -776,7 +798,7 @@ def main(argv=None) -> int:
         cam, s = dict(cam, R=R, t=t), (size[0] / w_ref if size else 1.0)
         seed = seed if seed is not None else list(c0 * s)
         if a.source.startswith("window:"):
-            ok, f0 = WindowSource(a.source[7:]).read()
+            ok, f0 = WindowSource(a.source[7:], size=size).read()
             d, k = floor_shift_px(f0, {i: c for i, c in ref.items() if i}, s) if ok else (float("nan"), 0)
             print(f"floor check: {k} markers, median shift {d:.1f} px" + ("  WARNING phone moved? (> 5 px, PROPOSED)"
                                                                          if d > 5 else ""), flush=True)
@@ -796,7 +818,7 @@ def main(argv=None) -> int:
                      start_s=a.start_s, static=static, ring=ring, gate=JumpGate() if a.gate else None,
                      mode=a.mode, delay_ms=a.delay_ms, pad=None if a.no_pad_origin else PadOrigin(),
                      ground=(lambda: tel.ground if tel.fresh else None) if tel else None, show=show,
-                     stop_file=a.stop_file or None), flush=True)
+                     stop_file=a.stop_file or None, size=size if a.source.startswith("window:") else None), flush=True)
     return 0
 
 
