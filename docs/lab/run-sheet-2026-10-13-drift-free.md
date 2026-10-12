@@ -3,19 +3,29 @@
 Goal: hold position hands-off in modes 2 and 3 with the camera fusion. Each flight gets a pass or fail from the
 camera truth. Numbers marked PROPOSED have not been measured yet. Measured inputs: `docs/agent/nightly-2026-10-13.md`.
 
-## What changed since r6 (tracker only, no new firmware)
+## What changed since r6 (tracker, plus one firmware change for mode 3)
 
 | Change | Why | Measured on |
 |---|---|---|
 | Coral scenery mask learned at start (`--coral-static auto` = start when live) | Live fixes stuck on static coral spots | r6_f4 replay error p50 272 -> 7.6 cm |
 | `--delay-ms 200` sent by camera_truth.sh | Camera lag 0.21 s | r6_f4, r6_f4c (`video_truth delay4`) |
 | `--align auto` in modes 2/3 | r6 flew `--yaw-deg 0` against a ~90 deg yaw | r6 truth4 fits |
+| Mode 3 only: q_pos 1e-6 -> 0.05 (3492cbdb), needs a reflash | A camera fix moved the mode 3 position by under half a 10 cm step | host test only, not flown |
 
 ## Before the session
 
 1. Stop the 8081 service: stream_log needs the WiFi downlink.
 2. Put the phone where r5_marks_1 had it, because its floor pose is reused.
 3. Drone powered, disarmed, on the pad, in view.
+
+## Before the first mode 3 flight
+
+Fly the mode 2 flights first: they need no firmware change. Then, with the drone powered, disarmed and the 8081
+service stopped (it locks the axf), flash 3492cbdb once. Stop if it exits non-zero:
+
+```bash
+python -m ground_station.flashtool.rebuild_and_flash --yes
+```
 
 ## Each flight (mode M = 2 or 3)
 
