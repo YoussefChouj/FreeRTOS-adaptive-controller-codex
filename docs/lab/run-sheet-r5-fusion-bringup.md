@@ -54,15 +54,20 @@ The truth height is the on-pad ring height plus the telemetry rise, so a wrong z
 point along the camera ray (about 3.2-3.6x at 1.15 m): it shows up only in the "along" error, never "across".
 
 - **Static plumb (disarmed, props off, about 10 min).** First check that telemetry z moves when the drone is lifted
-  by hand (UNVERIFIED). Then hold the drone level over a floor marker at tape heights 0.3 / 0.6 / 0.9 / 1.2 m, 10 s
-  each, plumb line from the drone centre to the marker centre, ToF beam on open floor, hands clear of the ring.
-  Repeat over a far marker and the pad. WiFi log plus the tracker. Gives ToF offset and scale vs tape, and camera xy
-  error vs height split along/across. Reading: along error growing with height = height zero or scale; constant
-  offset at every height = camera pose or marker map; error growing toward the image edge = lens. Pass (PROPOSED):
-  ToF within 2 cm of tape, camera xy within 2 cm at every height.
-- **Marker staircase (flight, mode 1).** Take off from the pad, hover over a floor marker at 0.5 / 1.0 / 1.5 m for
-  15 s each, land on that marker, take off, land on the pad. The landings are exact xy truth; an along shift that
-  changes with hover height is a height-zero error.
+  by hand (UNVERIFIED). Then hold the drone level over a floor marker at four rough heights (about 0.3 to 1.2 m,
+  read from telemetry z; no tape needed), 10 s each, plumb line from the drone centre to the marker centre, ToF
+  beam on open floor, hands clear of the ring. Repeat over a far marker and the pad. WiFi log plus the tracker.
+  The marker fixes xy, so the camera ray gives the true height where it meets the marker's vertical (`ring_height`
+  does this for the pad; extend it to any marker). A plumb error moves that height by only about 1/3.4 of itself.
+  Gives telemetry z offset and scale vs the camera height. Pass (PROPOSED): within 2 cm at every height.
+- **Z-step flight (mode 1, step preset).** Take off by hand, hover over a far marker at about 0.6 m, sticks
+  centred. Watch window: `traj_id = 1`, `traj_p.axis = 2`, `traj_p.step_cm = 40`, `traj_p.start_fixed = 0` (the
+  fixed start point is in the drifting EKF frame), rest default (smooth, move 20 s, return 3, hold 2: 10 s at
+  +40 cm, 10 s back), then `traj_go = 1`. On `traj_status = 2` repeat `traj_go = 1` twice. Climb by hand to about
+  1.0 m and do three more (1.0 to 1.4 m). Any stick move aborts without the return. Land on that marker by hand,
+  then on the pad. Reading: EKF wander is random, a height error moves the camera point along the ray in step with
+  the z steps, so regress the along position on z over the six steps (new analysis, PROPOSED). The landings are
+  exact xy truth.
 
 ## 4. Shadow flight (mode 1): out-and-back
 
