@@ -27,6 +27,9 @@ Chart: 1 s-mean 60 s drift p90 per flight (log scale; the dashed line is the 10 
 ## 1. Truth (camera)
 
 - Lens (`docs/video-truth/cam_r4_lenswave_2026-10-11.json`): reprojection rms 0.287 px, f 878 / 879 px.
+  - Phone factory metadata (`adb shell dumpsys media.camera`, back ultra-wide, 1.67 mm): f 1491.07 px at
+    3264 px width, i.e. 877.1 px at 1920, within 0.3% of ours. Its centre (exact image centre) and distortion (all
+    zeros) are placeholders, not a per-phone calibration, so ours stays.
   - Floor markers measured 17.61 / 16.95 / 16.90 cm against 17.2 cm by tape; plane normals within 1-2.5 deg.
   - Camera centre (-1.64, -2.25, 2.01) m. Computed: a 10 cm height error moves the cast 36 cm along the view.
 - The drone is tracked by its coral guard rings (`truth4`): 0 frames lost on all 13 flights.
