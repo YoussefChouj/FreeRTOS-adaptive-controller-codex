@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 
-from ground_station.analysis.video_truth import fixes_clock, plumb_holds, ray_at_vertical, read_slots, ring_height, tilt_delay, rc_active
+from ground_station.analysis.video_truth import fixes_clock, plumb_holds, ray_at_vertical, read_slots, ring_height, tilt_delay, rc_active, align
 
 
 def _cam(C=(0.0, -2.0, 1.5)):
@@ -90,3 +90,13 @@ def test_rc_active_marks_stick_moves_plus_settle():
     s[(t >= 5) & (t < 6), 0] += 400                                  # pitch pulse 5-6 s
     a = rc_active(t, s, dead=40, settle_s=1.0)
     assert not a[t < 4.9].any() and a[(t >= 5) & (t < 6.9)].all() and not a[t > 7.1].any()
+
+
+def test_align_no_reflect_keeps_a_rotation():
+    rng = np.random.default_rng(1)
+    e = np.cumsum(rng.normal(0, 0.05, (300, 2)), 0)
+    tr = e * [1.0, -1.0]                                              # mirrored truth: best fit is a reflection
+    q, refl = align(e, tr, len(e))
+    assert refl and np.allclose(e @ q.T, tr)
+    q, refl = align(e, tr, len(e), reflect=False)
+    assert not refl and np.linalg.det(q) > 0

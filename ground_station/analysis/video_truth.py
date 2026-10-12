@@ -860,12 +860,14 @@ def delay4(names, half=10) -> list[dict]:
     return out
 
 
-def align(est_xy, truth_xy, n_fit: int) -> tuple[np.ndarray, bool]:
+def align(est_xy, truth_xy, n_fit: int, reflect: bool = True) -> tuple[np.ndarray, bool]:
     """Orthogonal Q (rotation or reflection) with truth ~ est @ Q.T, fitted on the first n_fit samples.
-    Both inputs are already relative to the take-off point."""
+    Both inputs are already relative to the take-off point. reflect=False keeps Q a rotation (Kabsch sign fix)."""
     a, b = np.asarray(est_xy[:n_fit], float), np.asarray(truth_xy[:n_fit], float)
     u, _, vt = np.linalg.svd(b.T @ a)
     q = u @ vt
+    if not reflect and np.linalg.det(q) < 0:
+        q = u @ np.diag([1.0, -1.0]) @ vt
     return q, bool(np.linalg.det(q) < 0)
 
 
@@ -1352,7 +1354,7 @@ def touchdown_video(t, xy, guess: float, search_s: float = 15.0, still_m: float 
 
 
 def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: int = 1, rot_s: float = 60.0,
-             out=None, floor=None, fixes=None) -> dict:
+             out=None, floor=None, fixes=None, reflect: bool = True) -> dict:
     """Camera truth for one R4 flight. Floor = id0 median pose (aruco.npz); drone pixel = guard-ring track
     (coral.npz, made here if missing); the ring plane is its on-pad height plus the telemetry height rise, so a
     climb does not move the cast. Sync: take-off (video cast leaves the pad) vs telemetry lift-off, refined +-refine_s
@@ -1430,7 +1432,7 @@ def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: 
             "takeoff_video_s": to_vid, "landing_tel_s": ld_tel, "landing_video_s": ld_vid,
             "offset_takeoff_s": o0, "offset_landing_s": ld_tel - ld_vid, "offset_refine_s": d, "offset_host_s": o_host, "offset_s": o,
             "sync_anchor": anchor if np.isfinite(ld_vid) or anchor in ("host", "fixes") else "takeoff-unverified",
-            "rot_fit_s": rot_s,
+            "rot_fit_s": rot_s, "reflect_allowed": reflect,
             "flight_s": ld_tel - to_tel, "coral_lost_frac": float(1 - ok.mean()),
             "pad_jitter_cm": float(np.median(np.hypot(*(xy[pad] - np.median(xy[pad], 0)).T)) * 100),
             "truth_land_cm": float(np.hypot(*np.median(xy[t_v > ld_vid + 1.0], 0)) * 100) if (t_v > ld_vid + 1).any() else None,
@@ -1447,7 +1449,7 @@ def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: 
     for name, (cx, cy, sc) in R4_EST.items():
         e = np.c_[s2[cx], s2[cy]][fly] * sc
         e = e - e[0]
-        q, refl = align(e, truth, int(np.searchsorted(tt, tt[0] + rot_s)) if rot_s else len(e))
+        q, refl = align(e, truth, int(np.searchsorted(tt, tt[0] + rot_s)) if rot_s else len(e), reflect)
         ea = e @ q.T
         err = np.hypot(*(ea - truth).T)
         rows[f"{name}_x"], rows[f"{name}_y"] = ea[:, 0], ea[:, 1]
@@ -1469,7 +1471,7 @@ def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: 
             for name, (cx, cy, sc) in R4_EST.items():
                 e = np.c_[s2[cx], s2[cy]][fly][a:b + 1] * sc
                 e = e - e[0]
-                q, refl = align(e, tr, int(np.searchsorted(tt[a:b + 1], tt[a] + rot_s)) if rot_s else len(e))
+                q, refl = align(e, tr, int(np.searchsorted(tt[a:b + 1], tt[a] + rot_s)) if rot_s else len(e), reflect)
                 err = np.hypot(*(e @ q.T - tr).T)
                 seg[name] = {"rot_deg": float(np.degrees(np.arctan2(q[1, 0], q[0, 0]))), "reflect": refl,
                              "rms_cm": float(np.sqrt(np.mean(err ** 2)) * 100),
@@ -1783,7 +1785,7 @@ def yaw4(names, est: str = "earth") -> list[dict]:
 # 100 Hz IMU/OF and 50 Hz EKF states; its integral corrects earth with the camera off. Leave-one-flight-out, and
 # the model never trains on NN4_HOLD (b17 hover; b7/b10 take-off-unverified sync) or NN4_SUSPECT (coral jumps).
 NN4_HOLD = ("hover_r4_b17_v0_3g", "drift_rc_r4_b7_v19_4000", "drift_rc_r4_b10_v20")
-NN4_SUSPECT = ("drift_rc_r4_b8_v17", "drift_rc_r4_b12_v21")
+NN4_SUSPECT = ("drift_rc_r4_b8_v17", "drift_rc_r4_b12_v21", "r6_f4b_sysid_p5300")   # r6_f4b: truth4 sync suspect (2026-10-13)
 NN4_CH = {1: ("Acc_X_Real", "Acc_Y_Real", "Acc_Z_Real", "Gyro_X_Real", "Gyro_Y_Real", "Gyro_Z_Real", "imu_data.rol",
               "imu_data.pit", "ano_of.of2_dx_fix", "ano_of.of2_dy_fix", "ano_of.of1_dx", "ano_of.of1_dy"),
           2: ("s_ekf_of.x[1]", "s_ekf_of.x[4]", "ano_of.of_alt_cm", "s_ekf_of.innov_x", "s_ekf_of.innov_y")}
@@ -2030,6 +2032,8 @@ def main(argv=None):
     r4.add_argument("--fixes", action="store_true", help="sync on the tracker fixes.csv in the video dir (fusion sessions)")
     r4.add_argument("--rot-s", type=float, default=60.0, help="fit the estimate->floor rotation on the first N s of flight "
                     "(0 = whole flight; a later estimate jump corrupts a whole-flight fit)")
+    r4.add_argument("--no-reflect", action="store_true", help="rotation-only estimate->floor fit (a mirror fit "
+                    "means a bad fit window, and nn_io rejects it)")
     pl = sub.add_parser("plumb4", help="R5 static plumb: camera-ray height over floor markers vs telemetry z, per hold")
     pl.add_argument("name"); pl.add_argument("--cam", default="docs/video-truth/cam_r4_lenswave_2026-10-11.json")
     pl.add_argument("--coral-step", type=int, default=2); pl.add_argument("--sync", type=float, default=5.0)
@@ -2123,7 +2127,7 @@ def main(argv=None):
     elif a.cmd == "truth4":
         r = r4_truth(a.stem or f"logs/vofa/{a.name}", f"logs/video_truth/{a.name}", a.cam, a.refine, a.coral_step, a.rot_s,
                      out=f"logs/video_truth/{a.name}/truth4", floor=a.floor or None,
-                     fixes=f"logs/video_truth/{a.name}/fixes.csv" if a.fixes else None)
+                     fixes=f"logs/video_truth/{a.name}/fixes.csv" if a.fixes else None, reflect=not a.no_reflect)
         print(json.dumps(r["summary"], indent=1))
     elif a.cmd == "mcal":
         scan, size = dict(np.load(a.scan)), tuple(int(v) for v in a.size.split("x"))
