@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 
-from ground_station.analysis.video_truth import fixes_clock, plumb_holds, ray_at_vertical, read_slots, ring_height
+from ground_station.analysis.video_truth import fixes_clock, plumb_holds, ray_at_vertical, read_slots, ring_height, tilt_delay, rc_active
 
 
 def _cam(C=(0.0, -2.0, 1.5)):
@@ -64,3 +64,29 @@ def test_fixes_clock_recovers_the_offset_through_lost_packets(tmp_path):
     assert abs(fc["c"] - (c_true - lat - 0.0015)) < 0.002              # c absorbs the mean latency
     assert fc["n_sent"] == 3000 and 2935 <= fc["n_recv"] <= 2940 and fc["lost_monotone_frac"] > 0.99 and fc["resid_p90_ms"] < 3.0
     assert abs(fc["t"][0] - (sent[0] - 0.03 - fc["c"])) < 1e-3
+
+
+def test_tilt_delay_recovers_camera_lag():
+    # Smooth random tilt drives the horizontal acceleration (pitch -> +x, roll -> -y, yaw 30 deg); the video track
+    # is that motion stamped 0.18 s late at 15 Hz. tilt_delay must find the lag, the signs and the 30 deg yaw.
+    rng = np.random.default_rng(0)
+    t_imu = np.arange(0, 120, 0.01)
+    k = np.ones(60) / 60
+    pit, rol = (np.convolve(rng.normal(0, 8, t_imu.size), k, mode="same") for _ in range(2))
+    yaw = np.full(t_imu.size, 30.0)
+    a = 9.81 * (np.tan(np.radians(pit)) - 1j * np.tan(np.radians(rol))) * np.exp(1j * np.radians(30))
+    v = np.cumsum(a) * 0.01
+    p = np.cumsum(v - v.mean()) * 0.01
+    t_cam = np.arange(5, 115, 1 / 15)
+    xy = np.c_[np.interp(t_cam - 0.18, t_imu, p.real), np.interp(t_cam - 0.18, t_imu, p.imag)]
+    r = tilt_delay(t_cam, xy, t_imu, rol, pit, yaw)
+    assert abs(r["lag_s"] - 0.18) <= 0.02
+    assert r["signs"] == (1, -1) and abs(r["rot_deg"]) < 5 and r["coherence"] > 0.9
+
+
+def test_rc_active_marks_stick_moves_plus_settle():
+    t = np.arange(0, 20, 0.02)
+    s = np.full((t.size, 4), 3000.0) + np.random.default_rng(0).normal(0, 2, (t.size, 4))
+    s[(t >= 5) & (t < 6), 0] += 400                                  # pitch pulse 5-6 s
+    a = rc_active(t, s, dead=40, settle_s=1.0)
+    assert not a[t < 4.9].any() and a[(t >= 5) & (t < 6.9)].all() and not a[t > 7.1].any()

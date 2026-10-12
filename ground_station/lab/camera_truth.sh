@@ -50,9 +50,10 @@ fusion)
       [ -f "$vid/stop" ] || echo "restart part $((k+1)) at $(date +%T)" >> "$vid/scrcpy.log"; k=$((k+1)); sleep 1
     done' _ "$vid" > /dev/null 2>&1 &
   sleep 4                                           # scrcpy window opens 256x256, final size after ~1.1 s (measured)
+  dly=${DELAY_MS:-200}                              # camera delay: video_truth delay4 lag 0.21 s on r6_f4 + f4c (2026-10-13)
   al=()                                             # r6 flew modes 2/3 at --yaw-deg 0 vs ~90 deg measured: auto-fit it
   case " $* " in *" --yaw-deg"*|*" --align"*) ;; *) [ "$mode" -ge 2 ] && al=(--align auto) ;; esac
-  nohup python -m ground_station.analysis.live_tracker --source window:r5cam     --cam docs/video-truth/cam_r4_lenswave_2026-10-11.json --floor logs/video_truth/r5_marks_1     --tel-csv "logs/$name.slot1.csv" --detector coral --gate --send udp:47800 --mode "$mode" --delay-ms 0     --out "$vid/fixes.csv" --show --stop-file "$vid/stop" "${al[@]}" "$@" > "$vid/tracker.out" 2>&1 &
+  nohup python -m ground_station.analysis.live_tracker --source window:r5cam     --cam docs/video-truth/cam_r4_lenswave_2026-10-11.json --floor logs/video_truth/r5_marks_1     --tel-csv "logs/$name.slot1.csv" --detector coral --gate --send udp:47800 --mode "$mode" --delay-ms "$dly"     --out "$vid/fixes.csv" --show --stop-file "$vid/stop" "${al[@]}" "$@" > "$vid/tracker.out" 2>&1 &
   echo $! > "$vid/tracker.pid"
   sleep 12; "$0" check "$name" ;;
 stop)

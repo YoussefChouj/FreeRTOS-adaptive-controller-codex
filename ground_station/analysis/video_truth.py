@@ -821,6 +821,45 @@ def velocity_fit(t, truth_xy, est_v, est_xy=None, lags=np.arange(-0.2, 0.61, 0.0
     return out
 
 
+def tilt_delay(t, truth_xy, t_imu, rol_deg, pit_deg, yaw_deg, lags=np.arange(-0.3, 0.61, 0.01), dt=0.02,
+               half=10) -> dict:
+    """Camera delay against the IMU: truth acceleration (two zero-phase slopes of the video track, already on the
+    drone clock) vs the tilt acceleration g*tan(tilt) rotated by yaw, rotation-free coherence over `lags`
+    (positive = the camera time stamps are late by lag; that lag is the firmware's g_ext_pos_delay_ms when the
+    track is dated like the live fixes). The tilt sign convention is not assumed: all four are tried."""
+    g = np.arange(t[0], t[-1], dt)
+    acc = np.c_[[slope(slope(np.interp(g, t, truth_xy[:, i]), dt, half), dt, half) for i in (0, 1)]].T
+    w = np.ones(2 * half + 1) / (2 * half + 1)
+    lp = lambda x: np.convolve(np.convolve(x, w, mode="same"), w, mode="same")
+    best = None
+    for sp, sr in ((1, 1), (1, -1), (-1, 1), (-1, -1)):
+        z = 9.81 * (sp * np.tan(np.radians(pit_deg)) + 1j * sr * np.tan(np.radians(rol_deg))) * np.exp(1j * np.radians(yaw_deg))
+        z = lp(z.real) + 1j * lp(z.imag)
+        for lag in lags:
+            zi = np.interp(g - lag, t_imu, z.real, left=np.nan, right=np.nan) + 1j * np.interp(
+                g - lag, t_imu, z.imag, left=np.nan, right=np.nan)
+            ok = np.isfinite(acc).all(1) & np.isfinite(zi)
+            f = fit_2d(acc[ok], np.c_[zi[ok].real, zi[ok].imag])
+            if best is None or f["coherence"] > best[0]["coherence"]:
+                best = (f, float(lag), (sp, sr))
+    f, lag, s = best
+    return {"lag_s": round(lag, 3), "signs": s, **f, "n": int(np.isfinite(acc).all(1).sum()),
+            "acc_rms": round(float(np.sqrt(np.nanmean(np.sum(acc ** 2, 1)))), 3)}
+
+
+def delay4(names, half=10) -> list[dict]:
+    """tilt_delay on truth4 flights (logs/video_truth/<name>/truth4.csv + the fusion log logs/<name>)."""
+    import pandas as pd
+    out = []
+    for n in names:
+        tr = pd.read_csv(f"logs/video_truth/{n}/truth4.csv")
+        imu = next(d for d in read_slots(f"logs/{n}").values() if "imu_data.rol" in d)
+        r = tilt_delay(tr["t_tel"].to_numpy(), tr[["truth_x", "truth_y"]].to_numpy(), imu["t"], imu["imu_data.rol"],
+                       imu["imu_data.pit"], imu["imu_data.yaw"], half=half)
+        out.append({"name": n, **r})
+    return out
+
+
 def align(est_xy, truth_xy, n_fit: int) -> tuple[np.ndarray, bool]:
     """Orthogonal Q (rotation or reflection) with truth ~ est @ Q.T, fitted on the first n_fit samples.
     Both inputs are already relative to the take-off point."""
@@ -1453,6 +1492,43 @@ def hold_windows(t, des, min_s: float = 20.0) -> list:
     return [(float(t[a]), float(t[b])) for a, b in zip(k, ends) if t[b] - t[a] >= min_s]
 
 
+RC_STICKS = ("Remoter.PitCtrler", "Remoter.RolCtrler", "Remoter.YawCtrler", "Remoter.ThrCtrler")
+
+
+def rc_active(t, sticks, dead: float = 40.0, settle_s: float = 1.0) -> np.ndarray:
+    """Operator on the sticks: any stick (N, k) more than `dead` counts off its flight median (the centre; the
+    throttle centre is the mode 2/3 altitude hold), widened by settle_s after release (the drone still answers)."""
+    on = np.any(np.abs(sticks - np.median(sticks, 0)) > dead, axis=1).astype(float)
+    k = max(1, int(round(settle_s / np.median(np.diff(t)))))
+    return np.convolve(on, np.r_[np.zeros(k), np.ones(k + 1)], "same") > 0     # causal: release + settle_s
+
+
+def handsoff4(name: str, min_s: float = 10.0, dead: float = 40.0) -> dict:
+    """Hands-off drift of a fusion truth4 flight: windows with every stick centred (rc_active off) for >= min_s,
+    each with the truth displacement and the earth / ekf estimate error growth over it (cm and cm/s)."""
+    import pandas as pd
+    tr = pd.read_csv(f"logs/video_truth/{name}/truth4.csv")
+    rc = next(d for d in read_slots(f"logs/{name}").values() if RC_STICKS[0] in d)
+    t = tr["t_tel"].to_numpy()
+    act = np.interp(t, rc["t"], rc_active(rc["t"], np.c_[[rc[c] for c in RC_STICKS]].T, dead).astype(float)) > 0
+    truth = tr[["truth_x", "truth_y"]].to_numpy()
+    ed = np.flatnonzero(np.diff(np.r_[1, act.astype(int), 1]))       # off runs: [start, end) index pairs
+    wins = []
+    for a, b in zip(ed[::2], ed[1::2]):
+        d = t[b - 1] - t[a]
+        if d < min_s:
+            continue
+        w = {"t0": round(float(t[a]), 2), "dur_s": round(float(d), 1),
+             "truth_disp_cm": round(float(np.hypot(*(truth[b - 1] - truth[a])) * 100), 1)}
+        for k in ("earth", "ekf"):
+            e = tr[[f"{k}_x", f"{k}_y"]].to_numpy() - truth
+            w[f"{k}_err_growth_cm"] = round(float(np.hypot(*(e[b - 1] - e[a])) * 100), 1)
+        w["truth_rate_cm_s"] = round(w["truth_disp_cm"] / float(d), 2)
+        wins.append(w)
+    off = float(np.diff(t)[~act[1:]].sum())
+    return {"name": name, "handsoff_s": round(off, 1), "flight_s": round(float(t[-1] - t[0]), 1), "windows": wins}
+
+
 def drift_score(name: str, cam: str = "docs/video-truth/cam_r4_lenswave_2026-10-11.json", win_s: float = 60.0,
                 yaw_dps: float = 15.0, min_hold_s: float = 20.0, ests: dict | None = None, tag: str = "",
                 smooth_s: float = 1.0) -> dict:
@@ -1957,6 +2033,11 @@ def main(argv=None):
     pl = sub.add_parser("plumb4", help="R5 static plumb: camera-ray height over floor markers vs telemetry z, per hold")
     pl.add_argument("name"); pl.add_argument("--cam", default="docs/video-truth/cam_r4_lenswave_2026-10-11.json")
     pl.add_argument("--coral-step", type=int, default=2); pl.add_argument("--sync", type=float, default=5.0)
+    dl = sub.add_parser("delay4", help="camera delay: truth4 acceleration vs IMU tilt (lag = g_ext_pos_delay_ms)")
+    dl.add_argument("names", nargs="+"); dl.add_argument("--half", type=int, default=10)
+    ho = sub.add_parser("handsoff4", help="drift on hands-off windows (all sticks centred) of truth4 flights")
+    ho.add_argument("names", nargs="+"); ho.add_argument("--min-s", type=float, default=10.0)
+    ho.add_argument("--dead", type=float, default=40.0)
     sc = sub.add_parser("score4", help="drift score of truth4 flights (hold/move/yaw split, 60 s windows)")
     sc.add_argument("names", nargs="+"); sc.add_argument("--win", type=float, default=60.0)
     fu = sub.add_parser("fuse4", help="replay the PROPOSED closed-loop camera fusion (EXT_POS) on truth4 flights")
@@ -2033,6 +2114,12 @@ def main(argv=None):
             print(f"{n:30s} {'pool' if f['in_pool'] else 'HELD'} sign {f['sign']:+d} corr {f['corr']:.2f}@{f['corr_deg']:+.0f} r2 "
                   + "/".join(f"{f['vel_r2'][k]:+.2f}" for k in ("ridge", "mlp")) + " | " + " ".join(
                       f"{k} {e['rms_cm']:5.1f}/{e['drift60s_p90_cm'] or float('nan'):5.1f}" for k, e in f["est"].items()))
+    elif a.cmd == "handsoff4":
+        for n in a.names:
+            print(json.dumps(handsoff4(n, a.min_s, a.dead)))
+    elif a.cmd == "delay4":
+        for r in delay4(a.names, a.half):
+            print(json.dumps(r))
     elif a.cmd == "truth4":
         r = r4_truth(a.stem or f"logs/vofa/{a.name}", f"logs/video_truth/{a.name}", a.cam, a.refine, a.coral_step, a.rot_s,
                      out=f"logs/video_truth/{a.name}/truth4", floor=a.floor or None,
