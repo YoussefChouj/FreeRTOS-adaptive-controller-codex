@@ -73,6 +73,12 @@ and flymode 1 (SDK) selected; after the RC arm, hands off the sticks: idle, take
 (firmware 0e5beae; a fast stick move is a pilot takeover, ch10 is the kill),
 phone recording, operator present, area clear. Any "no" stops the launch.
 
+**Live video.** After Q4, before Go, open the phone camera window (always on top, recorded to
+`logs/video_truth/<campaign>_<YYYYmmdd-HHMM>/cam.mkv`, same stamp as the launch copy):
+`bash ground_station/lab/camera_truth.sh video <campaign>_<YYYYmmdd-HHMM>`. It only runs scrcpy: the campaign keeps
+its own log, and `stop` does not touch 8081. This window is the Q4 "phone recording". No video in the `check`
+output means the phone is unplugged (read `scrcpy.log`); the loop restarts scrcpy on its own when the camera drops.
+
 ## 2. Go
 
 Go is the operator's consent to arm and disarm for the whole campaign (operator decision 2026-10-03).
@@ -109,6 +115,8 @@ same path and pack. A reply with `notice: 8081 restarted` means the runner state
   beyond it, independent of you.
 
 ## 4. At the end
+
+Stop the video first: `bash ground_station/lab/camera_truth.sh stop <campaign>_<YYYYmmdd-HHMM>`.
 
 `campaign_state.outputs_dir` points to `logs/campaigns/<campaign>_<stamp>/`: `summary.md` (flight table),
 `plots/<flight_id>.png`, `metrics.json`, `log_plan.json`, `campaign.yaml`, `flights/<flight_id>/` (flightlab).

@@ -40,6 +40,11 @@ Read `.claude/skills/workflow-b/SKILL.md` once; its hard rules, checklist and fa
 3. Copy it into the run folder as `01/step_c.yaml` (fly mode, `max_flights: 1`, `capture: campaign`, log plan
    50 Hz `estimator_truth` + `optical_flow` + `velocity_loops` + `takeoff_gate` + `thrust_model` + `ekf_states`).
 
+**Live video.** Every flight is filmed. At the session start open the phone camera window (always on top, recorded):
+`bash ground_station/lab/camera_truth.sh video wfc_<YYYYMMDD-HHMM>` (the run folder's stamp; video in
+`logs/video_truth/wfc_<stamp>/`). It only runs scrcpy: the campaign keeps its own log. Phone where r5_marks_1 had it,
+so its floor pose can be reused for video truth.
+
 ## The loop (one pass per flight)
 
 1. **Launch**: `python -m ground_station.service.campaign_launch <run>/<NN>/next.yaml --pack <id>` (first flight:
@@ -92,6 +97,8 @@ Mechanical findings (motor spread, saturation, EKF divergence) come before any g
 then tune.
 
 ## Session end
+
+Stop the video first: `bash ground_station/lab/camera_truth.sh stop wfc_<stamp>`.
 
 Write `<run>/session.md`: one row per flight from `history.jsonl` (args, key numbers, change flown, verdict), the
 gains that are now different from `API/pid.c`, and the recommendation for the next session. Send it with

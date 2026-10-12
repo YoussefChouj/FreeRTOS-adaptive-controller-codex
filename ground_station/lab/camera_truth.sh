@@ -6,12 +6,26 @@
 #   bash ground_station/lab/camera_truth.sh fusion <name> <1|2|3> [tracker args]   # camera fusion, 1 shadow, 2 offset, 3 in-EKF:
 #     stream_log --relay-port 47800 (no 8081) + scrcpy window r5cam (record, always on top) + live_tracker --show;
 #     `stop <name>` ends all three cleanly (stop file). Same phone placement as r5_marks_1 (its floor pose is reused).
+#   bash ground_station/lab/camera_truth.sh video <name>   # live window + recording only (workflows A/B/C keep their own log)
 # WiFi only, never the SWD probe. Video: phone camera id 4, zoom 0.6, 1080p30 (the R3 calibration pose).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-cmd=${1:?start|stop|check|fusion}; name=${2:?session name}; preset=${3:-drift_rc}; api=http://127.0.0.1:8081; vid=logs/video_truth/$name
+cmd=${1:?start|stop|check|fusion|video}; name=${2:?session name}; preset=${3:-drift_rc}; api=http://127.0.0.1:8081; vid=logs/video_truth/$name
 post() { curl -s -m 10 -X POST -H 'Content-Type: application/json' -d "$2" "$api$1"; echo; }
 up() { curl -s -m 2 -o /dev/null -w '%{http_code}' "$api/health" | grep -q 200; }
+# scrcpy exits when Android drops the camera (R4: "Camera disconnected" at frame 2313); restart into the next part.
+# Part 1 keeps the R3 names (cam.mkv, scrcpy_start_host_time.txt); part k: cam_k.mkv, scrcpy_start_host_time_k.txt.
+# Every mode shows the live window r5cam on top (fusion: the tracker captures it) and records it.
+cam() {
+  nohup bash -c '
+    vid=$1; k=1
+    while [ ! -f "$vid/stop" ]; do
+      sfx=$([ $k = 1 ] || echo _$k)
+      python -c "import time,datetime;t=time.time();print(f\"{t:.3f}\",datetime.datetime.fromtimestamp(t).isoformat())" > "$vid/scrcpy_start_host_time$sfx.txt"
+      scrcpy --video-source=camera --camera-id=4 --camera-zoom=0.6 --camera-size=1920x1080 --camera-fps=30         --no-audio --window-title=r5cam --window-width=1194 --window-height=672 --always-on-top --record="$vid/cam$sfx.mkv" >> "$vid/scrcpy.log" 2>&1
+      [ -f "$vid/stop" ] || echo "restart part $((k+1)) at $(date +%T)" >> "$vid/scrcpy.log"; k=$((k+1)); sleep 1
+    done' _ "$vid" > /dev/null 2>&1 &
+}
 case $cmd in
 start)
   mkdir -p "$vid"
@@ -23,32 +37,16 @@ start)
   out=$(post /api/streams/apply "$body"); echo "${out:0:300}"; case "$out" in *'"ok": false'*|*'"error"'*) echo "ABORT: preset $preset refused by apply (slots unchanged)"; exit 1;; esac
   post /api/streams/log/start "{\"name\":\"$name\",\"mode\":\"unlimited\"}"
   post /api/recording/start "{\"requested_by\":\"operator\",\"label\":\"$name\",\"reason\":\"camera-truth session\"}"
-  rm -f "$vid/stop"
-  # scrcpy exits when Android drops the camera (R4: "Camera disconnected" at frame 2313); restart into the next part.
-  # Part 1 keeps the R3 names (cam.mkv, scrcpy_start_host_time.txt); part k: cam_k.mkv, scrcpy_start_host_time_k.txt.
-  nohup bash -c '
-    vid=$1; k=1
-    while [ ! -f "$vid/stop" ]; do
-      sfx=$([ $k = 1 ] || echo _$k)
-      python -c "import time,datetime;t=time.time();print(f\"{t:.3f}\",datetime.datetime.fromtimestamp(t).isoformat())" > "$vid/scrcpy_start_host_time$sfx.txt"
-      scrcpy --video-source=camera --camera-id=4 --camera-zoom=0.6 --camera-size=1920x1080 --camera-fps=30         --no-audio --no-playback --no-window --record="$vid/cam$sfx.mkv" >> "$vid/scrcpy.log" 2>&1
-      [ -f "$vid/stop" ] || echo "restart part $((k+1)) at $(date +%T)" >> "$vid/scrcpy.log"; k=$((k+1)); sleep 1
-    done' _ "$vid" > /dev/null 2>&1 &
+  rm -f "$vid/stop" "$vid/fusion" "$vid/video_only"
+  cam
   sleep 5; "$0" check "$name" ;;
 fusion)
   mode=${3:?mode 1 shadow, 2 offset, 3 in-EKF}; shift 3
   up && { echo "8081 service is up: stop it first (stream_log needs the WiFi downlink)"; exit 1; }
-  mkdir -p "$vid"; rm -f "$vid/stop"; echo "$mode" > "$vid/fusion"
+  mkdir -p "$vid"; rm -f "$vid/stop" "$vid/video_only"; echo "$mode" > "$vid/fusion"
   nohup python -m ground_station.livewatch.stream_log --frames ground_station/livewatch/r5_extpos_frames.md     --relay-port 47800 --seconds 86400 --stop-file "$vid/stop" --out "logs/$name.csv" > "$vid/stream_log.out" 2>&1 &
   echo $! > "$vid/stream_log.pid"
-  nohup bash -c '
-    vid=$1; k=1
-    while [ ! -f "$vid/stop" ]; do
-      sfx=$([ $k = 1 ] || echo _$k)
-      python -c "import time,datetime;t=time.time();print(f\"{t:.3f}\",datetime.datetime.fromtimestamp(t).isoformat())" > "$vid/scrcpy_start_host_time$sfx.txt"
-      scrcpy --video-source=camera --camera-id=4 --camera-zoom=0.6 --camera-size=1920x1080 --camera-fps=30         --no-audio --window-title=r5cam --window-width=1194 --window-height=672 --always-on-top --record="$vid/cam$sfx.mkv" >> "$vid/scrcpy.log" 2>&1
-      [ -f "$vid/stop" ] || echo "restart part $((k+1)) at $(date +%T)" >> "$vid/scrcpy.log"; k=$((k+1)); sleep 1
-    done' _ "$vid" > /dev/null 2>&1 &
+  cam
   sleep 4                                           # scrcpy window opens 256x256, final size after ~1.1 s (measured)
   dly=${DELAY_MS:-200}                              # camera delay: video_truth delay4 lag 0.21 s on r6_f4 + f4c (2026-10-13)
   al=()                                             # r6 flew modes 2/3 at --yaw-deg 0 vs ~90 deg measured: auto-fit it
@@ -56,6 +54,9 @@ fusion)
   nohup python -m ground_station.analysis.live_tracker --source window:r5cam     --cam docs/video-truth/cam_r4_lenswave_2026-10-11.json --floor logs/video_truth/r5_marks_1     --tel-csv "logs/$name.slot1.csv" --detector coral --gate --send udp:47800 --mode "$mode" --delay-ms "$dly"     --out "$vid/fixes.csv" --show --stop-file "$vid/stop" "${al[@]}" "$@" > "$vid/tracker.out" 2>&1 &
   echo $! > "$vid/tracker.pid"
   sleep 12; "$0" check "$name" ;;
+video)                                              # video only (workflows A/B/C): the log stays theirs
+  mkdir -p "$vid"; rm -f "$vid/stop" "$vid/fusion"; touch "$vid/video_only"; cam
+  sleep 5; "$0" check "$name" ;;
 stop)
   touch "$vid/stop"
   if [ -f "$vid/fusion" ]; then                     # tracker + stream_log poll the stop file and exit cleanly
@@ -63,7 +64,7 @@ stop)
       alive=0; for f in "$vid"/tracker.pid "$vid"/stream_log.pid; do kill -0 "$(cat "$f")" 2>/dev/null && alive=1; done
       [ $alive = 0 ] && break; sleep 1
     done
-  else
+  elif [ ! -f "$vid/video_only" ]; then
     post /api/recording/stop '{}'; post /api/streams/log/stop '{}'
   fi
   taskkill //F //IM scrcpy.exe > /dev/null 2>&1 || true; sleep 1; "$0" check "$name" ;;

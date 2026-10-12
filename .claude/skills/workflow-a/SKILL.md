@@ -34,6 +34,12 @@ Options: approve (Recommended), other rate, other variables. Name the log `exp<N
 
 ## Fly and log
 
+**Live video (always).** Before the capture, open the phone camera window (always on top, recorded to
+`logs/video_truth/<stem>/cam.mkv`): `bash ground_station/lab/camera_truth.sh video <stem>`. After the stop below:
+`bash ground_station/lab/camera_truth.sh stop <stem>`. `check <stem>` shows the video size; no video means the
+phone is unplugged (read `scrcpy.log`). For a camera fusion flight (modes 1-3) use the camera-truth skill's fusion
+session instead: it runs stream_log, the video and the tracker overlay together.
+
 Start the capture in the background when the operator says so:
 
 ```bash
