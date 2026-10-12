@@ -5,21 +5,20 @@ History: `docs/agent/ledger/` (grep, never read whole). Desktop session is CEO: 
 
 ## Now: 2026-10-13 nightly run - tracker `docs/agent/nightly-2026-10-13.md` (one row per item, with commits)
 
-Branch `overnight-2026-10-08`. The drone is on ELF 6da69207 (f6424fa1). Every change since then is tracker-side: no reflash.
-- **Done:** items 1, 3, 4, 5, 9, 10, 11, 13. Mode 2/3 drift inputs fixed in the tracker, all measured on r6 replays:
-  - `--align auto`: r6 flew `--yaw-deg 0` against a ~90 deg yaw.
-  - Coral mask learned at start: stuck fixes; r6_f4 replay p50 272 -> 7.6 cm.
-  - `--delay-ms 200`: camera lag 0.21 s.
-- **Live video:** `camera_truth.sh fusion` (modes 1-3) or `video <name>` (window + recording only, for workflows A/B/C).
-- **Background:** NN variant `tcn5h_s5_r6m1` (pool without mode 2/3 flights) and the VPS F3B worker (mode 3 loose
-  tracking, brief `docs/agent/briefs/F3B-study.md`).
-- **Open:** the per-flight constant offset between fixes and truth4 (40-95 cm, unexplained) and the r6_f2 replay p90 tail.
+Branch `overnight-2026-10-08`. The drone is on ELF 6da69207 (f6424fa1). All 13 items are closed (item 8 docs ongoing).
+- **Mode 2:** tracker-side fixes only, no reflash, all measured on r6 replays: `--align auto` (r6 flew yaw 0 vs ~90 deg),
+  coral mask learned at start (stuck fixes; r6_f4 replay p50 272 -> 7.6 cm), `--delay-ms 200` (lag 0.21 s).
+- **Mode 3:** also q_pos 1e-6 -> 0.05 in `API/ekf_of.c` (3492cbdb, F3B), pinned by a host test, NOT flashed, not flown.
+  The replay shows no gain vs truth (not a valid check for mode 3). The gate stays at 5 sigma.
+- **NN:** no gain from the r6 data (row 2). It halves b7 vs earth and does nothing for b17/b10.
+- **Drift summary:** nightly doc, item 12 section. **Live video:** `camera_truth.sh fusion` or `video <name>`.
+- **Open:** fixes vs truth4 offset 40-95 cm per flight (unexplained), the r6_f2 replay p90 tail, NN seed spread.
 
 ## Next 3 actions
-1. When the background jobs finish: NN result into row 2; F3B fetch, verify (replay numbers, C tests), merge, row 7.
-2. Next lab: `docs/lab/run-sheet-2026-10-13-drift-free.md`. Fusion mode 2, then mode 3: wait for `align LOCK`, then
-   60 s hands-off. Pass mark PROPOSED: under 20 cm.
-3. Item 6 (optional): online yaw refit after lock.
+1. Lab per `docs/lab/run-sheet-2026-10-13-drift-free.md`: mode 2 first, wait for `align LOCK`, 60 s hands-off.
+   Pass mark PROPOSED: under 20 cm.
+2. Before mode 3: stop 8081, `python -m ground_station.flashtool.rebuild_and_flash --yes` (3492cbdb), then fly mode 3.
+3. NN: next lever is more mode 1 flights with camera truth, not a bigger model (PROPOSED).
 
 ## Do not
 - Arm/spin outside an operator-opened workflow-B battery session; flash while armed or with `--force`.
