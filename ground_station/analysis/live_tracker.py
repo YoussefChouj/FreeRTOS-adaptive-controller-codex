@@ -172,7 +172,7 @@ class WindowSource:
     mss grabs the screen rectangle user32 reports. The window must show the whole video at its aspect (no letterbox
     bars), or the K rescale in load_cam is wrong. cv2.VideoCapture interface: read() -> (ok, bgr), release()."""
 
-    def __init__(self, title: str):
+    def __init__(self, title: str, wait_s: float = 30.0):
         import ctypes
         from ctypes import wintypes
         import mss                                        # pip install mss
@@ -181,10 +181,20 @@ class WindowSource:
             self.u32.SetProcessDPIAware()                 # physical pixels, as mss grabs them
         except Exception:
             pass
-        self.hwnd = self.u32.FindWindowW(None, title)
+        self.title = title
+        self.hwnd = self._find(wait_s)
         if not self.hwnd:
-            raise RuntimeError(f"no window titled {title!r}")
+            raise RuntimeError(f"no window titled {title!r} after {wait_s:.0f} s")
         self.sct = mss.mss()
+
+    def _find(self, wait_s: float) -> int:
+        """Wait up to wait_s for the window (scrcpy still starting, or restarting after Android dropped the camera)."""
+        t_end = time.monotonic() + wait_s
+        while True:
+            hwnd = self.u32.FindWindowW(None, self.title)
+            if hwnd or time.monotonic() >= t_end:
+                return hwnd
+            time.sleep(0.2)
 
     def rect(self) -> dict:
         r, p = self._wt.RECT(), self._wt.POINT(0, 0)
@@ -197,10 +207,21 @@ class WindowSource:
         return r["width"], r["height"]
 
     def read(self):
-        r = self.rect()
-        if r["width"] <= 0 or r["height"] <= 0:
-            return False, None
-        return True, np.ascontiguousarray(np.asarray(self.sct.grab(r))[..., :3])   # BGRA -> BGR
+        t_end = time.monotonic() + 15.0                   # a live run survives a lost/zero-size window for 15 s
+        while True:
+            if not self.u32.IsWindow(self.hwnd):          # scrcpy restarted into a new part: same title, new window
+                self.hwnd = self.u32.FindWindowW(None, self.title)
+            if self.hwnd and self.u32.IsIconic(self.hwnd):    # minimized (seen ~2.5 s after start): 0x0 client rect
+                print(f"window {self.title!r} minimized, restoring", flush=True)
+                self.u32.ShowWindow(self.hwnd, 4)         # SW_SHOWNOACTIVATE
+                time.sleep(0.3)
+            r = self.rect() if self.hwnd else {"width": 0, "height": 0}
+            if r["width"] > 0 and r["height"] > 0:
+                return True, np.ascontiguousarray(np.asarray(self.sct.grab(r))[..., :3])   # BGRA -> BGR
+            if time.monotonic() >= t_end:
+                print(f"window {self.title!r} lost for 15 s", flush=True)
+                return False, None
+            time.sleep(0.2)
 
     def get(self, prop) -> float:
         return 0.0
@@ -441,7 +462,7 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
                static=None, ring=None, uv_log: list | None = None, gate: JumpGate | None = None,
                mode: int | None = None, delay_ms: float | None = None, fix_log: list | None = None,
                pad: PadOrigin | None = None, ground: Callable[[], bool] | None = None,
-               show: Preview | None = None) -> dict:
+               show: Preview | None = None, stop_file: str | None = None) -> dict:
     """Read frames from `source` (file, device index or window:<title>), emit fixes. For a file the capture time is
     the frame pts and the send time is that pts too (age = camera latency only); live, both come from `clock`.
     `ring`: a pixel tracker with .step(frame) -> uv (RingTracker, CoralTracker), else the guard detector with
@@ -464,11 +485,17 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
         pass                                              # frame-exact; set(POS_MSEC) lands seconds off on scrcpy mkv
     clock = clock or time.monotonic
     sched = sched or FixScheduler()
-    rows, n, n_det, uv = [], 0, 0, None
+    n, n_det, uv = 0, 0, None
+    f_out = open(out_csv, "w", newline="", buffering=1) if out_csv else None   # line-buffered: a killed run keeps its fixes
+    w_out = csv.writer(f_out) if f_out else None
+    if w_out:
+        w_out.writerow(["t_send", "t_cap", "pad_x_m", "pad_y_m", "earth_x_cm", "earth_y_cm", "frame_hex"])
     t_rd = t_det = 0.0
     hello()
     t_hello = clock()
     while True:
+        if stop_file and n % 10 == 0 and Path(stop_file).exists():
+            break
         p0 = time.perf_counter()
         ok, frame = cap.read()
         p1 = time.perf_counter()
@@ -512,14 +539,12 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
             fix_log.append((t_read, t_fix, frame_b))
         if send:
             send(frame_b)
-        rows.append([round(t_read, 3), round(t_fix, 3), round(med[0], 4), round(med[1], 4), round(e[0], 1),
-                     round(e[1], 1), frame_b.hex()])
+        if w_out:
+            w_out.writerow([round(t_read, 3), round(t_fix, 3), round(med[0], 4), round(med[1], 4), round(e[0], 1),
+                            round(e[1], 1), frame_b.hex()])
     cap.release()
-    if out_csv:
-        with open(out_csv, "w", newline="") as f:
-            w = csv.writer(f)
-            w.writerow(["t_send", "t_cap", "pad_x_m", "pad_y_m", "earth_x_cm", "earth_y_cm", "frame_hex"])
-            w.writerows(rows)
+    if f_out:
+        f_out.close()
     return {"frames": n, "detections": n_det, "fixes": sched.n_sent, "skipped": sched.n_skip,
             "gate_rej": gate.n_rej if gate else 0, "reseeds": gate.reseeds if gate else 0,
             "read_ms": 1000 * t_rd / max(n, 1), "detect_ms": 1000 * t_det / max(n, 1),
@@ -687,6 +712,7 @@ def main(argv=None) -> int:
     ap.add_argument("--tel-stale-s", type=float, default=1.0, help="older telemetry: --height-m, or no fix")
     ap.add_argument("--no-pad-origin", action="store_true", help="send floor-frame xy (default: pad-relative)")
     ap.add_argument("--show", action="store_true", help="preview window (frame, ring, xy, counters), throttled")
+    ap.add_argument("--stop-file", default="", help="end the run cleanly when this file appears (camera_truth.sh stop)")
     ap.add_argument("--static-t", default="", help='file only, "90,140,190": mask guard-colour pixels present at all these times')
     a = ap.parse_args(argv)
     if a.tel_npz and a.tel_csv or not (a.tel_npz or a.tel_csv or a.height_m is not None):
@@ -724,7 +750,8 @@ def main(argv=None) -> int:
                      sched=FixScheduler(a.period, a.n_med, window_s=a.window_s), max_frames=a.max_frames,
                      start_s=a.start_s, static=static, ring=ring, gate=JumpGate() if a.gate else None,
                      mode=a.mode, delay_ms=a.delay_ms, pad=None if a.no_pad_origin else PadOrigin(),
-                     ground=(lambda: tel.ground if tel.fresh else None) if tel else None, show=show), flush=True)
+                     ground=(lambda: tel.ground if tel.fresh else None) if tel else None, show=show,
+                     stop_file=a.stop_file or None), flush=True)
     return 0
 
 

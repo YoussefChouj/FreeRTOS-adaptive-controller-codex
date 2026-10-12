@@ -226,3 +226,31 @@ def test_pad_origin_follows_on_ground_then_freezes_after_take_off():
     assert auto.apply([1.0, 1.0], None) == pytest.approx([0, 0])
     auto.apply([1.0, 1.0], None)
     assert auto.apply([2.0, 1.0], None) == pytest.approx([1.0, 0.0])
+
+
+def test_run_source_writes_fixes_as_it_goes_and_ends_on_the_stop_file(tmp_path):
+    import cv2
+    from ground_station.analysis.live_tracker import CoralTracker, run_source
+    p = str(tmp_path / "v.avi")
+    w = cv2.VideoWriter(p, cv2.VideoWriter_fourcc(*"MJPG"), 30.0, (640, 480))
+    for k in range(45):
+        w.write(_coral_frame((300 + k, 260)))
+    w.release()
+    cam = {"K": [[500.0, 0, 320], [0, 500.0, 240], [0, 0, 1]], "dist": [0.0] * 5,
+           "R": [[1.0, 0, 0], [0, -1.0, 0], [0, 0, -1.0]], "t": [0.0, 0.0, 2.0]}
+    out, stop = tmp_path / "fixes.csv", tmp_path / "stop"
+    st = run_source(p, cam, EarthAlign(), 0.05, out_csv=str(out), ring=CoralTracker([300, 260]),
+                    sched=FixScheduler(0.1, 3, window_s=0.2), stop_file=str(stop))
+    assert st["fixes"] >= 10 and len(out.read_text().splitlines()) == 1 + st["fixes"]
+    stop.touch()
+    st = run_source(p, cam, EarthAlign(), 0.05, out_csv=str(out), ring=CoralTracker([300, 260]), stop_file=str(stop))
+    assert st["frames"] == 0 and out.read_text().splitlines()[0].startswith("t_send")
+
+
+def test_stream_log_stop_file_sets_once_the_file_appears(tmp_path):
+    from ground_station.livewatch.stream_log import StopFile
+    ev = StopFile(tmp_path / "stop")
+    assert not ev.is_set()
+    (tmp_path / "stop").touch()
+    ev._t = 0.0                                   # skip the 0.5 s disk throttle
+    assert ev.is_set() and ev.is_set()

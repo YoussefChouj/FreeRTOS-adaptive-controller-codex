@@ -387,6 +387,18 @@ def _relay_uplink(relay, wifi) -> int:
         n += 1
 
 
+class StopFile:
+    """stop_event that is set once a file exists (a background job gets no Ctrl+C); checks the disk every 0.5 s."""
+
+    def __init__(self, path):
+        self.path, self._t, self._set = Path(path), 0.0, False
+
+    def is_set(self) -> bool:
+        if not self._set and time.monotonic() - self._t >= 0.5:
+            self._t, self._set = time.monotonic(), self.path.exists()
+        return self._set
+
+
 def _usart3_loop(wifi, decoder, writers, rows, schemas, t0, seconds, stop_event, on_row, vofa_sock, vofa_addr,
                  relay=None):
     """Read and write frames until `seconds` pass or stop_event is set (the _run_groups_usart3 body)."""
@@ -643,6 +655,7 @@ def main(argv=None):
     ap.add_argument("--rate", type=float, default=20.0,
                     help="desired Hz (rounded to a Send_Task divider at ~80.4 Hz)")
     ap.add_argument("--seconds", type=float, default=30.0)
+    ap.add_argument("--stop-file", default="", help="end the capture cleanly when this file appears (background runs)")
     ap.add_argument("--out", default="logs/stream.csv")
     ap.add_argument("--transport", choices=sorted(_TRANSPORTS), default="usart3")
     ap.add_argument("--control-port", default="COM6", help="UART5 / CMSIS-DAP VCP; ignored for usart3")
@@ -695,7 +708,8 @@ def main(argv=None):
                 print("frame: %s (%d slot(s))" % (frames, len(groups)))
             stats = run_groups(args.control_port, data_port, groups, transport,
                                args.seconds, args.out, elf=args.elf,
-                               usart3_baud=args.usart3_baud, vofa=args.vofa, relay_port=args.relay_port)
+                               usart3_baud=args.usart3_baud, vofa=args.vofa, relay_port=args.relay_port,
+                               stop_event=StopFile(args.stop_file) if args.stop_file else None)
             print("")
             for row in stats:
                 print("slot %d: %5d rows = %5.1f Hz   dropped %d (%.2f%%)   "
