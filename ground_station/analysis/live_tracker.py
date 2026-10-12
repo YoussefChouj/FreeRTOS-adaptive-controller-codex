@@ -407,6 +407,49 @@ class EarthAlign:
         return best
 
 
+def shadow_pairs(stem: str, min_h_m: float = 0.15):
+    """Shadow log -> (t_s, cam_m, earth_cm, run), one row per slot2 sample with a newly scored fix. ekf_of.c keeps
+    e = z - (p + c) with p = ano_of.earth_x - a_x, and c = a = 0 in shadow, so z = e + earth is the fix as sent
+    (cm), paired with the EKF on the device clock: no host sync. run numbers the airborne stretches (Z FB > min_h_m)."""
+    import pandas as pd
+    s1 = pd.read_csv(f"{stem}.slot1.csv", usecols=["t_src_ms", "ano_of.earth_x", "ano_of.earth_y", "Ctrler.Z_posPID.FB"])
+    s2 = pd.read_csv(f"{stem}.slot2.csv", usecols=["t_src_ms", "g_ext_pos.e_x", "g_ext_pos.e_y",
+                                                   "g_ext_pos.n_ok", "g_ext_pos.n_rej"])
+    t1, t2 = s1["t_src_ms"].to_numpy(float), s2["t_src_ms"].to_numpy(float)
+    air = s1["Ctrler.Z_posPID.FB"].to_numpy(float) > min_h_m
+    lab = np.cumsum(np.r_[air[0], air[1:] & ~air[:-1]]) * air         # 1, 2, ... per airborne stretch, 0 on ground
+    run = lab[np.clip(np.searchsorted(t1, t2), 0, len(t1) - 1)]
+    n = (s2["g_ext_pos.n_ok"] + s2["g_ext_pos.n_rej"]).to_numpy(float)
+    k = np.r_[False, np.diff(n) > 0] & (run > 0)
+    earth = np.c_[np.interp(t2, t1, s1["ano_of.earth_x"]), np.interp(t2, t1, s1["ano_of.earth_y"])]
+    z = s2[["g_ext_pos.e_x", "g_ext_pos.e_y"]].to_numpy(float) + earth
+    return t2[k] / 1000.0, z[k] / 100.0, earth[k], run[k]
+
+
+def fit_main(argv) -> int:
+    ap = argparse.ArgumentParser(prog="live_tracker fit", description="Shadow run (sent at --yaw-deg 0) -> "
+                                 "--yaw-deg/--mirror per airborne stretch, from the firmware's own innovations")
+    ap.add_argument("stem", help="stream_log stem, e.g. logs/r5_shadow_3")
+    ap.add_argument("--fit-s", type=float, default=30.0, help="also fit the first s of each stretch (EKF drift grows)")
+    ap.add_argument("--min-h-m", type=float, default=0.15)
+    a = ap.parse_args(argv)
+    t, cam, earth, run = shadow_pairs(a.stem, a.min_h_m)
+    for r in np.unique(run):
+        k = run == r
+        for label, m in ((f"first {a.fit_s:.0f} s", k & (t <= t[k][0] + a.fit_s)), ("all", k)):
+            if m.sum() < 20:
+                continue
+            span = float(np.ptp(cam[m], axis=0).max()) * 100.0
+            try:
+                f = EarthAlign.fit(cam[m], earth[m])
+            except ValueError as e:
+                print(f"run {r} {label}: {e}")
+                continue
+            print(f"run {r} t {t[m][0]:.0f}-{t[m][-1]:.0f} s {label:>10s}: n {m.sum():4d} span {span:4.0f} cm  "
+                  f"yaw_deg {np.degrees(np.angle(f.a)):7.1f}  mirror {f.mirror}  scale {f.scale:.2f}  rms {f.rms_cm:5.1f} cm")
+    return 0
+
+
 class FixScheduler:
     """One fix every `period` s from the last `n_med` detections inside that period: detections farther than
     `max_spread_m` from their median are dropped (a bad blob), and the fix is the median of the rest. Skipped when
@@ -680,7 +723,9 @@ def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv[:1] == ["replay"]:
         return replay_main(argv[1:])
-    ap = argparse.ArgumentParser(description="Live camera tracker -> CMD 0x2C fixes (dry run without --send). "
+    if argv[:1] == ["fit"]:
+        return fit_main(argv[1:])
+    ap =argparse.ArgumentParser(description="Live camera tracker -> CMD 0x2C fixes (dry run without --send). "
                                              "`replay <names>`: online tracker + fusion replay on R4 videos.")
     ap.add_argument("--source", required=True, help="video file, a capture device index, or window:<title> (scrcpy)")
     ap.add_argument("--cam", required=True, help="floor pose json (e.g. docs/video-truth/cam_r3_selfcal_2026-10-11.json)")

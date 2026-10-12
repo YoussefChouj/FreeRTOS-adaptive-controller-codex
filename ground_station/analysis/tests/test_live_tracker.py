@@ -254,3 +254,22 @@ def test_stream_log_stop_file_sets_once_the_file_appears(tmp_path):
     (tmp_path / "stop").touch()
     ev._t = 0.0                                   # skip the 0.5 s disk throttle
     assert ev.is_set() and ev.is_set()
+
+
+def test_shadow_pairs_rebuild_the_sent_fix_from_the_firmware_innovation(tmp_path):
+    import pandas as pd
+    from ground_station.analysis.live_tracker import shadow_pairs
+    t = np.arange(0, 20000, 20.0)                                    # slot1 50 Hz, device ms
+    air = (t > 2000) & (t < 18000)
+    ex, ey = 100 * np.sin(t / 3000), 80 * np.cos(t / 2000)           # EKF earth, cm
+    pd.DataFrame({"t_src_ms": t, "ano_of.earth_x": ex, "ano_of.earth_y": ey,
+                  "Ctrler.Z_posPID.FB": np.where(air, 0.8, 0.0)}).to_csv(tmp_path / "s.slot1.csv", index=False)
+    t2 = t[::2]
+    a = np.exp(1j * np.radians(-100))                                # sent fix = pad at yaw 0 = earth rotated back
+    z = a * (ex[::2] + 1j * ey[::2])
+    pd.DataFrame({"t_src_ms": t2, "g_ext_pos.e_x": z.real - ex[::2], "g_ext_pos.e_y": z.imag - ey[::2],
+                  "g_ext_pos.n_ok": np.arange(len(t2)), "g_ext_pos.n_rej": 0}).to_csv(tmp_path / "s.slot2.csv", index=False)
+    ts, cam, earth, run = shadow_pairs(str(tmp_path / "s"))
+    assert set(run) == {1} and ts.min() > 2.0 and ts.max() < 18.0
+    f = EarthAlign.fit(cam, earth)
+    assert np.degrees(np.angle(f.a)) == pytest.approx(100, abs=0.1) and not f.mirror and f.rms_cm < 0.1
