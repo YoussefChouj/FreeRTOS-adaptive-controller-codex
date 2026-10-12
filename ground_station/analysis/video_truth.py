@@ -1259,6 +1259,48 @@ def host_clock_offset(stem: str, video_dir: str) -> float:
     return float(ts[0] / 1000.0 + (float(vp.read_text().split()[0]) - b) / (1000.0 * a))
 
 
+def fixes_clock(stem: str, fixes_csv) -> dict:
+    """Tracker fixes (fixes.csv, host time.monotonic s) onto the drone clock: telemetry s = monotonic s - c. The
+    firmware counts every fix it takes (n_ok + n_rej + n_old, fusion slot2) and logs the newest one's age, so the
+    N-th sent fix arrived at t_src - age_ms: c = sent[N-1] - arrival. Each lost packet makes the count lag one fix
+    (c falls a fix period), so c starts as the first-quartile median and is refined by matching each arrival to its
+    nearest sent fix. c absorbs the WiFi latency, so t_tel is the arrival-equivalent capture time.
+    Returns c, the arrival residual spread, the counts and the fixes (t_tel s, pad xy m)."""
+    import pandas as pd
+    fx = pd.read_csv(fixes_csv)
+    sent = fx["t_send"][fx["frame_hex"].notna()].to_numpy(float)
+    g = "g_ext_pos."
+    s = pd.read_csv(f"{stem}.slot2.csv", usecols=["t_src_ms"] + [g + k for k in ("n_ok", "n_rej", "n_old", "age_ms")])
+    n = np.nan_to_num((s[g + "n_ok"] + s[g + "n_rej"] + s[g + "n_old"]).to_numpy(float)).astype(int)
+    arr = (s["t_src_ms"].to_numpy(float) - s[g + "age_ms"].to_numpy(float)) / 1e3
+    new = np.r_[n[0] > 0, np.diff(n) > 0] & (n > 0) & (n <= len(sent)) & np.isfinite(arr)
+    a, cs = arr[new], sent[n[new] - 1] - arr[new]
+
+    def refine(c):
+        for _ in range(3):
+            j = np.clip(np.searchsorted(sent, a + c), 1, len(sent) - 1)
+            j = np.where(np.abs(sent[j] - a - c) < np.abs(sent[j - 1] - a - c), j, j - 1)
+            c += float(np.median(sent[j] - a - c))
+        return c, j, sent[j] - a - c
+
+    c, j, r = refine(float(np.median(cs[:max(1, len(cs) // 4)])))
+    # nearest matching locks onto some fix, not always the right one: the matched index minus the count is the
+    # number lost so far, which never falls and is 0 before the first loss, so shift the lock until it starts at 0
+    # (median of the first 5 %: WiFi jitter, p90 ~30 ms on r6, flips single matches by one fix either way)
+    lost = j - (n[new] - 1)
+    m = int(round(np.median(lost[:max(1, len(lost) // 20)])))
+    if m:
+        c, j, r = refine(c + float(np.median(sent[np.clip(j - m, 0, len(sent) - 1)] - sent[j])))
+        lost = j - (n[new] - 1)
+    ok = np.isfinite(fx["pad_x_m"].to_numpy(float))
+    return {"c": c, "n_sent": int(len(sent)), "n_recv": int(n.max()), "n_arrivals": int(new.sum()),
+            "resid_p50_ms": float(np.median(np.abs(r - np.median(r))) * 1e3),
+            "resid_p90_ms": float(np.percentile(np.abs(r - np.median(r)), 90) * 1e3),
+            "c_count_iqr_ms": float(np.subtract(*np.percentile(cs, [75, 25])) * 1e3), "lock_shift": m,
+            "lost_end": int(lost[-1]), "lost_monotone_frac": float(np.mean(np.diff(lost) >= 0)),
+            "t": fx["t_cap"].to_numpy(float)[ok] - c, "xy": fx[["pad_x_m", "pad_y_m"]].to_numpy(float)[ok]}
+
+
 def touchdown_video(t, xy, guess: float, search_s: float = 15.0, still_m: float = 0.03, hold_s: float = 2.0) -> float:
     """Video touchdown near `guess` (the telemetry landing mapped to video time): first frame after guess - search_s
     from which the floor cast stays within still_m of itself for hold_s (a hover moves the floor cast several
@@ -1271,13 +1313,15 @@ def touchdown_video(t, xy, guess: float, search_s: float = 15.0, still_m: float 
 
 
 def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: int = 1, rot_s: float = 60.0,
-             out=None, floor=None) -> dict:
+             out=None, floor=None, fixes=None) -> dict:
     """Camera truth for one R4 flight. Floor = id0 median pose (aruco.npz); drone pixel = guard-ring track
     (coral.npz, made here if missing); the ring plane is its on-pad height plus the telemetry height rise, so a
     climb does not move the cast. Sync: take-off (video cast leaves the pad) vs telemetry lift-off, refined +-refine_s
     by speed cross-correlation against the earth estimate; the landing offset is reported as a clock-skew check.
     Each estimate (R4_EST) is taken relative to take-off and rotated (orthogonal Kabsch over the first rot_s of flight) onto the
-    floor frame. Returns the per-telemetry-sample table and a summary; `out` writes <out>.csv and <out>.json."""
+    floor frame. Returns the per-telemetry-sample table and a summary; `out` writes <out>.csv and <out>.json.
+    fixes (a fusion session's tracker fixes.csv) replaces the event anchors: the fixes are put on the drone clock by
+    fixes_clock, and the video is synced to them (camera against camera: take-off in both, then speed refine)."""
     cam = json.loads(Path(cam).read_text()) if not isinstance(cam, dict) else cam
     K, dist, vd = np.array(cam["K"]), np.array(cam["dist"]), Path(video_dir)
     scan = dict(np.load(Path(floor or vd) / "aruco.npz"))                  # floor: a session with the same phone pose
@@ -1324,7 +1368,15 @@ def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: 
         d = sync_offset(t_v + o1, cast(o1), te[fly], earth[fly], max_lag=refine_s, dt=0.02)
         o, anchor = o1 + d, "landing"
     o_host = host_clock_offset(stem, video_dir)
-    if np.isfinite(o_host) and abs(o - o_host) > 2.0:
+    fc = fixes_clock(stem, fixes) if fixes else None
+    if fc is not None:
+        # r6 fusion flights: Z_posPID.FB lift-off and the touchdown disagree by 15 s; the tracker's own fixes carry
+        # the drone clock (fixes_clock), and they and the video are the same camera, so the speeds match closely
+        ff = (fc["t"] >= to_tel - 5.0) & (fc["t"] <= ld_tel + 5.0)
+        o0f = takeoff_video(fc["t"][ff], fc["xy"][ff]) - to_vid
+        d = sync_offset(t_v + o0f, cast(o0f), fc["t"][ff], fc["xy"][ff], max_lag=refine_s, dt=0.02)
+        o, anchor = o0f + d, "fixes"
+    elif np.isfinite(o_host) and abs(o - o_host) > 2.0:
         # r5_marks_1: re-arms on the pad hold z at 0 (z0 = 0, take-off = arm) and the last touchdown is a different
         # arm segment, so both event anchors miss; the device-ms vs scrcpy host clock does not depend on either
         d = sync_offset(t_v + o_host, cast(o_host), te[fly], earth[fly], max_lag=refine_s, dt=0.02)
@@ -1338,11 +1390,21 @@ def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: 
     summ = {"stem": stem, "h_ring_m": h, "id0_mad_px": mad0, "z0_m": z0, "takeoff_tel_s": to_tel,
             "takeoff_video_s": to_vid, "landing_tel_s": ld_tel, "landing_video_s": ld_vid,
             "offset_takeoff_s": o0, "offset_landing_s": ld_tel - ld_vid, "offset_refine_s": d, "offset_host_s": o_host, "offset_s": o,
-            "sync_anchor": anchor if np.isfinite(ld_vid) or anchor == "host" else "takeoff-unverified", "rot_fit_s": rot_s,
+            "sync_anchor": anchor if np.isfinite(ld_vid) or anchor in ("host", "fixes") else "takeoff-unverified",
+            "rot_fit_s": rot_s,
             "flight_s": ld_tel - to_tel, "coral_lost_frac": float(1 - ok.mean()),
             "pad_jitter_cm": float(np.median(np.hypot(*(xy[pad] - np.median(xy[pad], 0)).T)) * 100),
             "truth_land_cm": float(np.hypot(*np.median(xy[t_v > ld_vid + 1.0], 0)) * 100) if (t_v > ld_vid + 1).any() else None,
             "est": {}}
+    if fc is not None:
+        # the fixes against the offline truth: frame-free (Kabsch from take-off), residual = live tracker error + sync
+        fe = np.c_[np.interp(tt, fc["t"], fc["xy"][:, 0]), np.interp(tt, fc["t"], fc["xy"][:, 1])]
+        fe = fe - fe[0]
+        q, _ = align(fe, truth, len(fe))
+        err = np.hypot(*(fe @ q.T - truth).T)
+        summ["fixes"] = {k: v for k, v in fc.items() if k not in ("t", "xy")} | {
+            "offset_takeoff_s": o0f, "offset_refine_s": d, "rot_deg": float(np.degrees(np.arctan2(q[1, 0], q[0, 0]))),
+            "vs_truth_rms_cm": float(np.sqrt(np.mean(err ** 2)) * 100), "vs_truth_p90_cm": float(np.percentile(err, 90) * 100)}
     for name, (cx, cy, sc) in R4_EST.items():
         e = np.c_[s2[cx], s2[cy]][fly] * sc
         e = e - e[0]
@@ -1889,6 +1951,7 @@ def main(argv=None):
     r4.add_argument("--stem", default="", help="telemetry stem (default logs/vofa/<name>; fusion sessions: logs/<name>)")
     r4.add_argument("--floor", default="", help="video dir whose aruco.npz gives the floor (fusion: r5_marks_1)")
     r4.add_argument("--coral-step", type=int, default=2, help="track every Nth frame (2 = 15 Hz at 30 fps)")
+    r4.add_argument("--fixes", action="store_true", help="sync on the tracker fixes.csv in the video dir (fusion sessions)")
     r4.add_argument("--rot-s", type=float, default=60.0, help="fit the estimate->floor rotation on the first N s of flight "
                     "(0 = whole flight; a later estimate jump corrupts a whole-flight fit)")
     pl = sub.add_parser("plumb4", help="R5 static plumb: camera-ray height over floor markers vs telemetry z, per hold")
@@ -1972,7 +2035,8 @@ def main(argv=None):
                       f"{k} {e['rms_cm']:5.1f}/{e['drift60s_p90_cm'] or float('nan'):5.1f}" for k, e in f["est"].items()))
     elif a.cmd == "truth4":
         r = r4_truth(a.stem or f"logs/vofa/{a.name}", f"logs/video_truth/{a.name}", a.cam, a.refine, a.coral_step, a.rot_s,
-                     out=f"logs/video_truth/{a.name}/truth4", floor=a.floor or None)
+                     out=f"logs/video_truth/{a.name}/truth4", floor=a.floor or None,
+                     fixes=f"logs/video_truth/{a.name}/fixes.csv" if a.fixes else None)
         print(json.dumps(r["summary"], indent=1))
     elif a.cmd == "mcal":
         scan, size = dict(np.load(a.scan)), tuple(int(v) for v in a.size.split("x"))

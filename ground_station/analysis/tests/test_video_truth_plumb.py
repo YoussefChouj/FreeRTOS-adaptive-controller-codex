@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 
-from ground_station.analysis.video_truth import plumb_holds, ray_at_vertical, read_slots, ring_height
+from ground_station.analysis.video_truth import fixes_clock, plumb_holds, ray_at_vertical, read_slots, ring_height
 
 
 def _cam(C=(0.0, -2.0, 1.5)):
@@ -44,3 +44,23 @@ def test_read_slots_maps_a_fusion_log_onto_the_r4_slot_numbers(tmp_path):
     (tmp_path / "f.slot1.csv").write_text("t_src_ms,t_host_s,seq,ano_of.earth_x\n1000,0,0,7\n")   # R4 layout
     S = read_slots(str(stem))
     assert sorted(S) == [0, 1, 2] and "Acc_X_Real" in S[0]
+
+
+def test_fixes_clock_recovers_the_offset_through_lost_packets(tmp_path):
+    rng = np.random.default_rng(0)
+    sent = 400000.0 + np.cumsum(rng.uniform(0.040, 0.054, 3000))       # tracker monotonic s, ~47 ms per fix
+    c_true, lat = 400100.0, 0.004                                       # drone s = monotonic s - c_true; WiFi 4 ms
+    got = np.r_[:20, np.sort(20 + rng.choice(len(sent) - 20, len(sent) - 80, replace=False))]  # 2 % lost after the 20th
+    arr = sent[got] - c_true + lat + rng.uniform(0, 0.003, len(got))
+    with open(tmp_path / "fixes.csv", "w") as f:
+        f.write("t_send,t_cap,pad_x_m,pad_y_m,earth_x_cm,earth_y_cm,frame_hex\n")
+        f.writelines(f"{s:.4f},{s - 0.03:.4f},0.1,0.2,0,0,ccdd\n" for s in sent)
+    t = np.arange(arr[0], arr[-1], 0.04)                                # 25 Hz slot2 rows
+    k = np.searchsorted(arr, t, side="right")
+    with open(tmp_path / "f.slot2.csv", "w") as f:
+        f.write("t_src_ms,g_ext_pos.n_ok,g_ext_pos.n_rej,g_ext_pos.n_old,g_ext_pos.age_ms\n")
+        f.writelines(f"{ti * 1e3:.1f},{ki - 5},5,0,{(ti - arr[ki - 1]) * 1e3:.1f}\n" for ti, ki in zip(t, k) if ki > 5)
+    fc = fixes_clock(str(tmp_path / "f"), tmp_path / "fixes.csv")
+    assert abs(fc["c"] - (c_true - lat - 0.0015)) < 0.002              # c absorbs the mean latency
+    assert fc["n_sent"] == 3000 and 2935 <= fc["n_recv"] <= 2940 and fc["lost_monotone_frac"] > 0.99 and fc["resid_p90_ms"] < 3.0
+    assert abs(fc["t"][0] - (sent[0] - 0.03 - fc["c"])) < 1e-3
