@@ -192,6 +192,12 @@ Leave-one-flight-out (each pool flight scored by a model that never saw it) conf
 uniform: best b5 136 → 52, b6 104 → 59; the two losers are both moving flights with the 3 g load. No flight
 reaches 10 cm (best 45 cm, b13c).
 
+Truth height check: is the per-flight velocity scale (truth = 0.65 to 1.22 × EKF) an artefact of the camera truth
+using the wrong height plane? An independent height from the ring's pixel size follows the telemetry height
+(r 0.43 to 0.97) with a near-constant offset of +0.22 to +0.33 m on every flight. On hover b17 (lowest scale,
+0.66), the ball-model height is 1.147 m against 1.149 m telemetry. Offset and scale do not move together (b5 0.22 m /
+0.65, b2 0.33 m / 0.93), so the scale error is in the EKF flow velocity, not in the truth.
+
 More data (UTIL, Toronto): 78 Crazyflie 2.1 flights with the same sensors (BMI088 + PMW3901 flow + ToF) and Vicon
 truth. On its 39 held-out flights, the plain flow model reaches velocity r² 0.84 but still drifts 87 / 111 cm
 (p50 / p90 over 60 s). A TCN trained on UTIL cut the held-out median from 74 to 59 cm, then overfit. Pretraining
