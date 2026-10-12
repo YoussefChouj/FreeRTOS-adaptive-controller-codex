@@ -63,3 +63,6 @@ def test_fit_train_only_freezes_everything_but_the_head():
     m = nn_io.fit([d], "tcn", H=8, layers=2, iters=3, crop_s=8.0, batch=2, lr=1e-2, init=base, train_only="out")
     for (k, a), b in zip(base[0].state_dict().items(), m[0].state_dict().values()):
         assert torch.equal(a, b) != k.startswith("out"), k
+    m2 = nn_io.fit([d], "tcn", H=8, layers=2, iters=3, crop_s=8.0, batch=2, lr=1e-2, init=base, train_only="convs.1,out")
+    for (k, a), b in zip(base[0].state_dict().items(), m2[0].state_dict().values()):
+        assert torch.equal(a, b) != k.startswith(("convs.1", "out")), k

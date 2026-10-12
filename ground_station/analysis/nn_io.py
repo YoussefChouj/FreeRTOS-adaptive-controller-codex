@@ -433,7 +433,7 @@ def fit(train: list[dict], kind="gru", H=32, head="scale", layers=1, iters=1500,
     """Train on random crop_s windows of the train flights (zero initial state, like a take-off). feats: NN4_CH column
     subset; noise: Gaussian input noise (normalised units); cb(it, model) every cb_every iterations; init: a model to
     fine-tune (its net is copied, mu/sd are refit on train: per-dataset normalisation); train_only: parameter-name
-    prefix, others frozen (e.g. 'out' = fine-tune the head only)."""
+    prefixes, comma-separated, others frozen (e.g. 'out' = the head only, 'convs.4,out' = last conv + head)."""
     torch = _torch()
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
@@ -446,7 +446,8 @@ def fit(train: list[dict], kind="gru", H=32, head="scale", layers=1, iters=1500,
     steps = [int(h * rate_hz) for h in HORIZONS_S]
     ks = int(rate_hz)
     net = build(len(feats), kind, H, head, layers, drop=drop) if init is None else __import__("copy").deepcopy(init[0])
-    params = [q for n, q in net.named_parameters() if n.startswith(train_only)] if train_only else list(net.parameters())
+    pre = tuple(x for x in train_only.split(",") if x)
+    params = [q for n, q in net.named_parameters() if n.startswith(pre)] if pre else list(net.parameters())
     opt = torch.optim.AdamW(params, lr=lr, weight_decay=wd)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=lr, total_steps=iters)
     lens = np.array([len(a[0]) for a in arr], float)
@@ -584,7 +585,7 @@ def main(argv=None):
     t.add_argument("--pre-iters", type=int, default=0, help="UTIL pretraining iterations (0 = none)")
     t.add_argument("--ft-lr", type=float, default=1e-3)
     t.add_argument("--util-val", default="const4")
-    t.add_argument("--ft-only", default="", help="parameter-name prefix trained in the fine-tune, e.g. out (head only)")
+    t.add_argument("--ft-only", default="", help="parameter-name prefixes (comma-separated) trained in the fine-tune, e.g. out (head only) or convs.4,out")
     a = ap.parse_args(argv)
     if a.cmd == "calib":
         calib(chunk_s=a.chunk_s)
