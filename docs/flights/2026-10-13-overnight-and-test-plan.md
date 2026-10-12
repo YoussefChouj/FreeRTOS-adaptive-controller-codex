@@ -83,6 +83,22 @@ Measured:
 Uses: fit the plant on one flight and validate on the others. The pack comparison asks whether the response changes
 with battery voltage. F4b camera stats need masking where detection drops out.
 
+## Operator goal for the next lab (10-13, stated after F3b)
+
+Operator: both mode 2 (F2) and mode 3 (F3b) drifted and had to be held with RC. Goal: **drift-free mode 2 and mode 3, and
+an NN with a real held-out gain.** Acceptance (PROPOSED):
+- Mode 2 and mode 3 each: 60 s hands-off hover, 1 s-mean d60s p90 ≤ 10 cm against camera truth, and stick deflection
+  near centre for that window (the RC sticks are logged, so "had to fight it" is measurable as stick effort).
+- NN: held-out flight beats the plain EKF on 1 s-mean d60s p90 (item 8 target ≤ 10 cm, camera off).
+
+What this changes overnight:
+- Item 0 first: replay F2, F3 and F3b with `replay --fw`, splitting each into hands-off and stick-active segments. Stick
+  input moves the drone on purpose, so it must be masked before blaming the estimator, and it measures how bad the drift was.
+- Find the y mismatch (F2 `c_y = 1.10 * pos_y`) on the F4 mode 1 logs: OF y vs camera y, scale, sign and lag. A loop that
+  fights a wrong-scale estimator is the most likely reason both modes drift.
+- Mode 3: why 749 rejections and 624 re-anchors (gate vs P, delay 0). Fix in the twin, then the C, then a golden test.
+- Every candidate fix must pass the replay acceptance above before it is flashed.
+
 ## Overnight work, in order (each item has a done-check)
 
 1. **Ingest tonight's logs.** flight_review page per flight, camera-truth fit, ledger rows.
