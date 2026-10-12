@@ -69,6 +69,17 @@ it with RC).** Measured:
 **Quick fix in source (10-13, host C test + twin pass, NOT flashed):** re-anchor refused when |e| > 150 cm
 (`EXT_POS_ANCHOR_MAX_CM`, PROPOSED, modes 2 and 3); the mode 3 innovation is capped at `EXT_POS_SLEW_CM` per fix.
 Steps 2-4 of item 0 (bumpless setpoint shift, tracker reseed hold, F3 golden) are still open.
+
+**F3b `r6_f3b_mode3` (mode 3 on ELF 6da69207 = quick fix, 194.7 s in mode 3 incl. ground time): no jump, loose tracking.**
+Measured:
+- Tracker: 4510 frames / 4493 detections / 3472 fixes / 11 gate rej / 0 reseeds.
+- Max FB step per 20 ms sample: 9.9 cm (locx), 10.4 cm (locy), i.e. the per-fix cap held. FB range x -127..42, y -59..101 cm.
+- Firmware: n_ok 2715, n_rej 749, n_anchor 624, n_disagree 68, stale fraction 0.061.
+- |e| p50/p90/max 13.2 / 58.1 / 86.7 cm (F2 mode 2: 0.7 / 4.5 / 76.9). The in-EKF update rejects many fixes and lives on
+  capped re-anchors, so the estimate lags the camera. Likely the same y mismatch as F2 plus the 5σ gate on a
+  P that is too small (UNVERIFIED; replay item 0 with `replay --fw` on this log).
+- First try (WiFi schema timeout + scrcpy window 1366x745, tracker refused the aspect) in `logs/aborted/r6_f3b_mode3_try1`;
+  `camera_truth.sh` now pins the window to 1194x672.
 Uses: fit the plant on one flight and validate on the others. The pack comparison asks whether the response changes
 with battery voltage. F4b camera stats need masking where detection drops out.
 

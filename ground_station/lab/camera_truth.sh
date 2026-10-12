@@ -46,7 +46,7 @@ fusion)
     while [ ! -f "$vid/stop" ]; do
       sfx=$([ $k = 1 ] || echo _$k)
       python -c "import time,datetime;t=time.time();print(f\"{t:.3f}\",datetime.datetime.fromtimestamp(t).isoformat())" > "$vid/scrcpy_start_host_time$sfx.txt"
-      scrcpy --video-source=camera --camera-id=4 --camera-zoom=0.6 --camera-size=1920x1080 --camera-fps=30         --no-audio --window-title=r5cam --always-on-top --record="$vid/cam$sfx.mkv" >> "$vid/scrcpy.log" 2>&1
+      scrcpy --video-source=camera --camera-id=4 --camera-zoom=0.6 --camera-size=1920x1080 --camera-fps=30         --no-audio --window-title=r5cam --window-width=1194 --window-height=672 --always-on-top --record="$vid/cam$sfx.mkv" >> "$vid/scrcpy.log" 2>&1
       [ -f "$vid/stop" ] || echo "restart part $((k+1)) at $(date +%T)" >> "$vid/scrcpy.log"; k=$((k+1)); sleep 1
     done' _ "$vid" > /dev/null 2>&1 &
   sleep 4                                           # scrcpy window opens 256x256, final size after ~1.1 s (measured)
