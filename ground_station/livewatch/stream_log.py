@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import socket
 import sys
 import time
@@ -130,6 +131,24 @@ def columns_for(schema) -> list[str]:
     return names
 
 
+def format_header_datagram(slot: int, names: list[str]) -> bytes:
+    """JSON header datagram for live_plot: {"type":"hdr","slot":k,"names":[...]}"""
+    return json.dumps({"type": "hdr", "slot": slot, "names": names}, separators=(',', ':')).encode("utf-8")
+
+
+def format_row_datagram(slot: int, seq: int, t_ms: int | float, flat: list) -> bytes:
+    """JSON row datagram for live_plot: {"type":"row","slot":k,"seq":seq,"t":t_ms,"v":[...]}"""
+    return json.dumps({"type": "row", "slot": slot, "seq": seq, "t": t_ms, "v": flat}, separators=(',', ':')).encode("utf-8")
+
+
+def _plot_send(sock, data: bytes, addr) -> None:
+    """Best effort: a missing live_plot (Windows WSAECONNRESET after ICMP unreachable) must never stop a capture."""
+    try:
+        sock.sendto(data, addr)
+    except OSError:
+        pass
+
+
 def _make_stop(divider, transport, usart3_baud, slot=0):
     """Build a stop-request frame (divider=0) for the given slot."""
     return build_stream_request([], 0, transport, usart3_baud, slot)
@@ -163,10 +182,15 @@ def _await_schema(source, ranges, timeout=1.5):
 
 
 def _run_usart3(data_port, ranges, divider, transport, seconds, out_path,
-                quiet, req, stop, usart3_baud, slot=0):
+                quiet, req, stop, usart3_baud, slot=0, plot=None):
     """Execute a single-slot subscribe over WiFi UDP (Usart3WifiSubscribeTransport)."""
     port = int(data_port.split(":", 1)[1]) if data_port.startswith("udp:") else DEFAULT_USART3_UDP_PORT
     wifi = Usart3WifiSubscribeTransport(port=port)
+    plot_sock = plot_addr = None
+    if plot:
+        host, pport = plot.rsplit(":", 1)
+        plot_addr = (host, int(pport))
+        plot_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         wifi.connect()
         schema = wifi.subscribe(ranges, divider=divider, transport=transport, slot=slot)
@@ -176,6 +200,9 @@ def _run_usart3(data_port, ranges, divider, transport, seconds, out_path,
                   % (len(cols), schema.frame_bytes, schema.hz))
             print("data on %s -> %s" % (data_port, out_path))
 
+        if plot_sock is not None:
+            _plot_send(plot_sock, format_header_datagram(schema.slot, cols), plot_addr)
+
         data = wifi._udp
         data.reset_input_buffer()
         decoder = StreamDecoder(schema)
@@ -183,10 +210,15 @@ def _run_usart3(data_port, ranges, divider, transport, seconds, out_path,
         out_path.parent.mkdir(parents=True, exist_ok=True)
         rows = 0
         t0 = time.monotonic()
+        last_plot_hdr_t = t0
         with out_path.open("w", newline="", encoding="utf-8") as fh:
             writer = csv.writer(fh)
             writer.writerow(["t_src_ms", "t_host_s", "seq"] + cols)
             while time.monotonic() - t0 < seconds:
+                now = time.monotonic()
+                if plot_sock is not None and now - last_plot_hdr_t >= 1.0:
+                    last_plot_hdr_t = now
+                    _plot_send(plot_sock, format_header_datagram(schema.slot, cols), plot_addr)
                 waiting = data.in_waiting
                 if not waiting:
                     time.sleep(0.002)
@@ -203,8 +235,12 @@ def _run_usart3(data_port, ranges, divider, transport, seconds, out_path,
                     writer.writerow(
                         [t_ms, "%.4f" % (time.monotonic() - t0), seq] + flat)
                     rows += 1
+                    if plot_sock is not None:
+                        _plot_send(plot_sock, format_row_datagram(schema.slot, seq, t_ms, flat), plot_addr)
         elapsed = time.monotonic() - t0
     finally:
+        if plot_sock is not None:
+            plot_sock.close()
         try:
             wifi._port()._sock.sendto(stop, (wifi.module_ip, wifi.port))
         except Exception:
@@ -224,7 +260,8 @@ def _run_usart3(data_port, ranges, divider, transport, seconds, out_path,
 
 
 def run(control_port, data_port, ranges, divider, transport, seconds, out_path,
-        elf="OBJ/JX_FLY.axf", usart3_baud=921600, quiet=False, auto_split=False):
+        elf="OBJ/JX_FLY.axf", usart3_baud=921600, quiet=False, auto_split=False,
+        plot=None):
     if auto_split:
         return auto_split_and_log(
             control_port, data_port, ranges, divider, transport,
@@ -235,7 +272,7 @@ def run(control_port, data_port, ranges, divider, transport, seconds, out_path,
 
     if transport == TRANSPORT_USART3:
         return _run_usart3(data_port, ranges, divider, transport, seconds,
-                           out_path, quiet, req, stop, usart3_baud)
+                           out_path, quiet, req, stop, usart3_baud, plot=plot)
 
     # --- UART5 path (legacy; firmware ignores SUBSCRIBE_UART5) ---
     import serial
@@ -400,12 +437,21 @@ class StopFile:
 
 
 def _usart3_loop(wifi, decoder, writers, rows, schemas, t0, seconds, stop_event, on_row, vofa_sock, vofa_addr,
-                 relay=None):
+                 relay=None, plot_sock=None, plot_addr=None):
     """Read and write frames until `seconds` pass or stop_event is set (the _run_groups_usart3 body)."""
+    last_plot_hdr_t = time.monotonic()
+    if plot_sock is not None:
+        for schema in schemas:
+            _plot_send(plot_sock, format_header_datagram(schema.slot, columns_for(schema)), plot_addr)
     while time.monotonic() - t0 < seconds and not (
             stop_event is not None and stop_event.is_set()):
         if relay is not None:
             _relay_uplink(relay, wifi)
+        now = time.monotonic()
+        if plot_sock is not None and now - last_plot_hdr_t >= 1.0:
+            last_plot_hdr_t = now
+            for schema in schemas:
+                _plot_send(plot_sock, format_header_datagram(schema.slot, columns_for(schema)), plot_addr)
         waiting = wifi._udp.in_waiting
         if not waiting:
             time.sleep(0.002)
@@ -430,11 +476,13 @@ def _usart3_loop(wifi, decoder, writers, rows, schemas, t0, seconds, stop_event,
                 # VOFA+ FireWater: "v0,v1,...\n", channel order = CSV column order
                 vofa_sock.sendto((",".join("%g" % v for v in flat) + "\n").encode(),
                                  vofa_addr)
+            if plot_sock is not None:
+                _plot_send(plot_sock, format_row_datagram(slot, seq, t_ms, flat), plot_addr)
 
 
 def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
                        usart3_baud, transport, vofa=None, stop_event=None,
-                       on_start=None, on_row=None, relay_port=None):
+                       on_start=None, on_row=None, relay_port=None, plot=None):
     """Execute multi-slot subscribe over WiFi UDP (Usart3WifiSubscribeTransport).
 
     Hooks for embedding (VOFA Studio): ``stop_event`` ends the run early,
@@ -453,6 +501,11 @@ def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
         host, vport = vofa.rsplit(":", 1)
         vofa_addr = (host, int(vport))
         vofa_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    plot_sock = plot_addr = None
+    if plot:
+        host, pport = plot.rsplit(":", 1)
+        plot_addr = (host, int(pport))
+        plot_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     relay = None
     if relay_port:
         relay = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -489,11 +542,14 @@ def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
 
         if on_start is not None:
             on_start(schemas, decoder)
+        if plot_sock is not None:
+            for schema in schemas:
+                _plot_send(plot_sock, format_header_datagram(schema.slot, columns_for(schema)), plot_addr)
         wifi._udp.reset_input_buffer()
         t0 = time.monotonic()
         try:
             _usart3_loop(wifi, decoder, writers, rows, schemas, t0, seconds, stop_event, on_row,
-                         vofa_sock, vofa_addr, relay)
+                         vofa_sock, vofa_addr, relay, plot_sock=plot_sock, plot_addr=plot_addr)
         except KeyboardInterrupt:     # Ctrl+C ends an open-ended capture: keep the rows, stop the slots
             if not quiet:
                 print("stream-log: stopped by Ctrl+C")
@@ -501,6 +557,8 @@ def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
     finally:
         if vofa_sock is not None:
             vofa_sock.close()
+        if plot_sock is not None:
+            plot_sock.close()
         if relay is not None:
             relay.close()
         for fh in handles:
@@ -528,7 +586,7 @@ def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
 
 def run_groups(control_port, data_port, groups, transport, seconds, out_path,
                elf="OBJ/JX_FLY.axf", usart3_baud=921600, quiet=False,
-               vofa=None, **hooks):
+               vofa=None, plot=None, **hooks):
     """Subscribe several slots at different rates; one CSV per slot.
 
     Separate files because the slots tick at different rates -- interleaving
@@ -557,7 +615,7 @@ def run_groups(control_port, data_port, groups, transport, seconds, out_path,
 
     if transport == TRANSPORT_USART3:
         return _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
-                                   usart3_baud, transport, vofa=vofa, **hooks)
+                                   usart3_baud, transport, vofa=vofa, plot=plot, **hooks)
 
     # --- UART5 path (legacy; firmware ignores SUBSCRIBE_UART5) ---
     import serial
@@ -676,6 +734,9 @@ def main(argv=None):
     ap.add_argument("--vofa", default=None, metavar="HOST:PORT",
                     help="also forward slot-0 rows to VOFA+ as FireWater over UDP "
                          "(e.g. 127.0.0.1:1347); WiFi transport only")
+    ap.add_argument("--plot", default=None, metavar="HOST:PORT",
+                    help="forward all slot frames to live_plot as JSON over UDP "
+                         "(e.g. 127.0.0.1:47900); WiFi transport only")
     ap.add_argument("--relay-port", type=int, default=None, metavar="PORT",
                     help="forward raw command frames sent to UDP 127.0.0.1:PORT to the module on the logging "
                          "socket (live_tracker --send udp:PORT); WiFi transport only")
@@ -708,7 +769,8 @@ def main(argv=None):
                 print("frame: %s (%d slot(s))" % (frames, len(groups)))
             stats = run_groups(args.control_port, data_port, groups, transport,
                                args.seconds, args.out, elf=args.elf,
-                               usart3_baud=args.usart3_baud, vofa=args.vofa, relay_port=args.relay_port,
+                               usart3_baud=args.usart3_baud, vofa=args.vofa, plot=args.plot,
+                               relay_port=args.relay_port,
                                stop_event=StopFile(args.stop_file) if args.stop_file else None)
             print("")
             for row in stats:
@@ -724,7 +786,8 @@ def main(argv=None):
         ranges = coalesce_ranges(resolve_ranges(resolver, args.symbol))
         result = run(args.control_port, data_port, ranges, divider, transport,
                      args.seconds, args.out, elf=args.elf,
-                     usart3_baud=args.usart3_baud, auto_split=args.auto_split)
+                     usart3_baud=args.usart3_baud, auto_split=args.auto_split,
+                     plot=args.plot)
     except LiveTransportError as exc:
         print(str(exc), file=sys.stderr)
         return 1
