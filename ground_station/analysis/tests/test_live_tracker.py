@@ -333,3 +333,17 @@ def test_tel_height_keeps_extra_columns(tmp_path):
     assert np.allclose(tel.vec(("ano_of.earth_x", "ano_of.earth_y")), [12.5, -3.0])
     now[0] = 5.0
     assert tel.vec(("ano_of.earth_x", "ano_of.earth_y")) is None      # stale
+
+
+def test_coral_tracker_learns_static_at_start_so_scenery_cannot_hold_the_fix():
+    from ground_station.analysis.live_tracker import CoralTracker
+    blob, pad, far = (300, 180), (300, 260), (560, 420)        # coral scenery 80 px from the pad, in the ROI
+    old = CoralTracker(pad)
+    new = CoralTracker(pad, learn_n=4, learn_every=1, keep_r=40)
+    for _ in range(4):                                         # drone on the pad: the start frames
+        old.step(_coral_frame(pad, blob=blob)), new.step(_coral_frame(pad, blob=blob))
+    assert new.static[blob[1], blob[0]] and not new.static[pad[1], pad[0]]
+    for _ in range(4):                                         # the drone leaves the ROI in one frame
+        uo, un = old.step(_coral_frame(far, blob=blob)), new.step(_coral_frame(far, blob=blob))
+    assert np.hypot(*(uo - blob)) < 30                         # no mask: held at the scenery (the r6_f4 lock)
+    assert un is not None and np.hypot(*(un - far)) <= 1.0

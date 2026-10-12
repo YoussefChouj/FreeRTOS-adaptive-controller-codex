@@ -111,14 +111,42 @@ def ring_xy(uv, cam: dict, z_m: float) -> np.ndarray:
 class CoralTracker:
     """video_truth.track_coral run online (the R4 truth tracker): coral guard-ring pixels (vt.coral_mask, minus the
     `static` scenery mask from vt.coral_static) in a square ROI around the last fix; their median is the drone. A
-    miss grows the ROI 1.5x per frame up to the whole frame."""
+    miss grows the ROI 1.5x per frame up to the whole frame.
+    Live there is no whole video to learn `static` from, so with learn_n > 0 it is learned from the start: coral in
+    >= frac of learn_n frames taken every learn_every frames (drone on the pad; a keep_r disc, 1.3 roi by default, around
+    the seed is the drone and stays out), grown by grow_px, as vt.coral_static does. Without it a coral-coloured object near
+    the path held the r6_f4 fixes still at one spot for 120 s (nightly-2026-10-13 item 1)."""
 
-    def __init__(self, seed_uv, static=None, roi: float = 140.0, min_px: int = 40):   # track_coral defaults
+    def __init__(self, seed_uv, static=None, roi: float = 140.0, min_px: int = 40,   # track_coral defaults
+                 learn_n: int = 0, learn_every: int = 5, frac: float = 0.7, grow_px: int = 7,
+                 keep_r: float | None = None):
         self.c, self.static, self.roi, self.min_px = np.asarray(seed_uv, float), static, float(roi), min_px
         self.r = self.roi
+        self.seed0, self.learn_n, self.learn_every, self.frac, self.grow = self.c.copy(), learn_n, learn_every, frac, grow_px
+        self.keep_r = 1.3 * self.roi if keep_r is None else float(keep_r)   # r6_f4 pad: drone coral to ~170 px of 1920
+        self._acc, self._k, self._i = None, 0, 0
+
+    def _learn(self, frame_bgr) -> None:
+        cv2 = vt._cv2()
+        self._i += 1
+        if (self._i - 1) % self.learn_every:
+            return
+        m = vt.coral_mask(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)).astype(np.uint16)
+        self._acc, self._k = (m if self._acc is None else self._acc + m), self._k + 1
+        if self._k < self.learn_n:
+            return
+        st = (self._acc >= self.frac * self._k).astype(np.uint8)
+        yy, xx = np.ogrid[:st.shape[0], :st.shape[1]]
+        st[(xx - self.seed0[0]) ** 2 + (yy - self.seed0[1]) ** 2 <= self.keep_r ** 2] = 0
+        learned = cv2.dilate(st, np.ones((self.grow, self.grow), np.uint8)) > 0
+        self.static = learned if self.static is None else self.static | learned
+        self.learn_n, self._acc = 0, None
+        print(f"coral static learned: {int(learned.sum())} px from {self._k} frames", flush=True)
 
     def step(self, frame_bgr) -> Optional[np.ndarray]:
         cv2 = vt._cv2()
+        if self.learn_n:
+            self._learn(frame_bgr)
         H, W = frame_bgr.shape[:2]
         u0, v0 = int(max(0, self.c[0] - self.r)), int(max(0, self.c[1] - self.r))
         u1, v1 = int(min(W, self.c[0] + self.r)), int(min(H, self.c[1] + self.r))
@@ -889,6 +917,11 @@ def main(argv=None) -> int:
     ap.add_argument("--start-s", type=float, default=0.0, help="file only: seek before reading")
     ap.add_argument("--detector", choices=["ring", "coral", "guards"], default="ring",
                     help="ring: R3 red ring (default); coral: R4 guard ring (needs --seed-px live)")
+    ap.add_argument("--coral-static", choices=["auto", "video", "start", "none"], default="auto",
+                    help="coral scenery mask: video = whole file (offline truth), start = learned from the first "
+                         "--static-n frames x5 with the drone on the pad (live), none = the pre-2026-10-13 live "
+                         "behaviour; auto: video for a file, start live")
+    ap.add_argument("--static-n", type=int, default=30, help="--coral-static start: frames sampled (every 5th)")
     ap.add_argument("--period", type=float, default=0.05, help="s between fixes (20 Hz, PROPOSED; 10 Hz missed on b16)")
     ap.add_argument("--n-med", type=int, default=2)
     ap.add_argument("--window-s", type=float, default=0.1)
@@ -942,8 +975,10 @@ def main(argv=None) -> int:
         if seed is None:
             with open(a.cam) as f:
                 seed = np.mean(json.load(f)["aruco_id0_corners_px"], axis=0)
+        cs = a.coral_static if a.coral_static != "auto" else ("start" if src_live else "video")
         ring = RingTracker(seed) if a.detector == "ring" else CoralTracker(   # track_coral sizes are 1920 px
-            seed, None if src_live else vt.coral_static(a.source), roi=140.0 * s, min_px=max(10, round(40 * s * s)))
+            seed, vt.coral_static(a.source) if cs == "video" else None, roi=140.0 * s,
+            min_px=max(10, round(40 * s * s)), learn_n=a.static_n if cs == "start" else 0)
     show = Preview(rect=WindowSource(a.source[7:]).rect() if a.source.startswith("window:") else None) if a.show else None
     print(run_source(a.source, cam, align, height, a.cam_latency_s, udp_sender(a.send) if a.send else None, a.out,
                      sched=FixScheduler(a.period, a.n_med, window_s=a.window_s), max_frames=a.max_frames,
