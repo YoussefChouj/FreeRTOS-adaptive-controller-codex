@@ -185,6 +185,11 @@ Is the target even reachable from our data?
 | same, 5-seed average, gentler fine-tune (lr 3e-4, 60 it) | 23.2 | 81.3 | 270.8 | under-fits b7 |
 | **same, head-only fine-tune (base frozen), 3-seed average, final** | **15.7** | **47.2** | **260.0** | best: beats EKF on all three, no checkpoint picking |
 | same, 300 fine-tune steps | 28.6 | 41.8 | 268.0 | overfits: b7 better, hover worse; keep 150 |
+| head-only, 1 seed, leave-one-flight-out over the 9 pool flights | 14.9 | 55.3 | 266.1 | pool median 103.9 → 73.2; 7 of 9 better; worse on b14 (84 → 144) and b16 (126 → 186) |
+
+Leave-one-flight-out (each pool flight scored by a model that never saw it) confirms the gain is real but not
+uniform: best b5 136 → 52, b6 104 → 59; the two losers are both moving flights with the 3 g load. No flight
+reaches 10 cm (best 45 cm, b13c).
 
 More data (UTIL, Toronto): 78 Crazyflie 2.1 flights with the same sensors (BMI088 + PMW3901 flow + ToF) and Vicon
 truth. On its 39 held-out flights, the plain flow model reaches velocity r² 0.84 but still drifts 87 / 111 cm
