@@ -13,6 +13,7 @@ import csv
 import itertools
 import socket as _real_socket
 import struct
+import threading
 import types
 from pathlib import Path
 from unittest import mock
@@ -573,3 +574,23 @@ def test_plot_row_is_plotjuggler_json():
     msg = json.loads(format_row_datagram(["s_ekf_of.x[0]", "rpm[1]", "flag"], 2, 99, 12345,
                                          [3.5, math.nan, 1]))
     assert msg == {"t": 12.345, "slot2/seq": 99, "s_ekf_of/x[0]": 3.5, "rpm[1]": None, "flag": 1}
+
+
+def test_run_groups_usart3_rec_stop_closes_csv_and_streams_on(tmp_path, capsys):
+    """rec_stop ends the recording (CSVs closed) but the loop keeps running until stop_event."""
+    plans = [(0, [_TEST_RANGE], 1, b"\xCC\xDE\x21")]
+    fake = FakeUsart3WifiTransport()
+    rec, polls = threading.Event(), []
+    rec.set()
+
+    class _Stop:
+        def is_set(self):
+            polls.append(1)
+            return len(polls) > 5
+
+    with _patched_transport(fake):
+        _run_groups_usart3("udp:14550", plans, 30.0, tmp_path / "r.csv", False, 921600, TRANSPORT_USART3,
+                           stop_event=_Stop(), rec_stop=rec)
+    out = capsys.readouterr().out
+    assert "recording stopped" in out and len(polls) > 5, "streaming went on after the recording stopped"
+    assert (tmp_path / "r.slot0.csv").read_text().startswith("t_src_ms,")

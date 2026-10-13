@@ -449,11 +449,17 @@ class StopFile:
 
 
 def _usart3_loop(wifi, decoder, writers, rows, schemas, t0, seconds, stop_event, on_row, vofa_sock, vofa_addr,
-                 relay=None, plot_sock=None, plot_addr=None):
-    """Read and write frames until `seconds` pass or stop_event is set (the _run_groups_usart3 body)."""
+                 relay=None, plot_sock=None, plot_addr=None, rec_stop=None, on_rec_stop=None):
+    """Read and write frames until `seconds` pass or stop_event is set (the _run_groups_usart3 body).
+
+    Once ``rec_stop`` is set, ``on_rec_stop()`` ends the recording (the CSVs close) while the plot stream goes on.
+    """
     plot_cols = {schema.slot: columns_for(schema) for schema in schemas} if plot_sock is not None else {}
     while time.monotonic() - t0 < seconds and not (
             stop_event is not None and stop_event.is_set()):
+        if rec_stop is not None and rec_stop.is_set():
+            rec_stop = None
+            on_rec_stop()
         if relay is not None:
             _relay_uplink(relay, wifi)
         waiting = wifi._udp.in_waiting
@@ -486,10 +492,11 @@ def _usart3_loop(wifi, decoder, writers, rows, schemas, t0, seconds, stop_event,
 
 def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
                        usart3_baud, transport, vofa=None, stop_event=None,
-                       on_start=None, on_row=None, relay_port=None, plot=None):
+                       on_start=None, on_row=None, relay_port=None, plot=None, rec_stop=None):
     """Execute multi-slot subscribe over WiFi UDP (Usart3WifiSubscribeTransport).
 
-    Hooks for embedding (VOFA Studio): ``stop_event`` ends the run early,
+    Hooks for embedding (VOFA Studio): ``stop_event`` ends the run early, ``rec_stop`` (set later) closes the CSVs
+    but keeps streaming to ``plot``/``vofa`` until ``stop_event``,
     ``on_start(schemas, decoder)`` fires once subscribed, and
     ``on_row(slot, seq, t_ms, t_host, flat)`` fires per decoded frame.
     ``out_path=None`` skips the built-in CSV writer. ``relay_port`` binds 127.0.0.1:<port> and forwards each
@@ -548,9 +555,20 @@ def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
             on_start(schemas, decoder)
         wifi._udp.reset_input_buffer()
         t0 = time.monotonic()
+
+        def end_recording():
+            for fh in handles:
+                fh.close()
+            handles.clear()
+            for slot in writers:
+                writers[slot] = (None, writers[slot][1])
+            if not quiet:
+                print("stream-log: recording stopped at %.1f s (rows %s), streaming goes on"
+                      % (time.monotonic() - t0, dict(rows)), flush=True)
         try:
             _usart3_loop(wifi, decoder, writers, rows, schemas, t0, seconds, stop_event, on_row,
-                         vofa_sock, vofa_addr, relay, plot_sock=plot_sock, plot_addr=plot_addr)
+                         vofa_sock, vofa_addr, relay, plot_sock=plot_sock, plot_addr=plot_addr,
+                         rec_stop=rec_stop, on_rec_stop=end_recording)
         except KeyboardInterrupt:     # Ctrl+C ends an open-ended capture: keep the rows, stop the slots
             if not quiet:
                 print("stream-log: stopped by Ctrl+C")
@@ -715,6 +733,8 @@ def main(argv=None):
                     help="desired Hz (rounded to a Send_Task divider at ~80.4 Hz)")
     ap.add_argument("--seconds", type=float, default=30.0)
     ap.add_argument("--stop-file", default="", help="end the capture cleanly when this file appears (background runs)")
+    ap.add_argument("--rec-stop-file", default="",
+                    help="close the CSVs when this file appears but keep streaming (--plot/--vofa) until --stop-file")
     ap.add_argument("--out", default="logs/stream.csv")
     ap.add_argument("--transport", choices=sorted(_TRANSPORTS), default="usart3")
     ap.add_argument("--control-port", default="COM6", help="UART5 / CMSIS-DAP VCP; ignored for usart3")
@@ -778,7 +798,8 @@ def main(argv=None):
                                args.seconds, args.out, elf=args.elf,
                                usart3_baud=args.usart3_baud, vofa=args.vofa, plot=args.plot,
                                relay_port=args.relay_port,
-                               stop_event=StopFile(args.stop_file) if args.stop_file else None)
+                               stop_event=StopFile(args.stop_file) if args.stop_file else None,
+                               rec_stop=StopFile(args.rec_stop_file) if args.rec_stop_file else None)
             print("")
             for row in stats:
                 print("slot %d: %5d rows = %5.1f Hz   dropped %d (%.2f%%)   "

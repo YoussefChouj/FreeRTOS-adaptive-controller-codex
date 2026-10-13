@@ -5,12 +5,14 @@
 #   bash ground_station/lab/camera_truth.sh check <name>   # rows per slot, video size
 #   bash ground_station/lab/camera_truth.sh fusion <name> <1|2|3> [tracker args]   # camera fusion, 1 shadow, 2 offset, 3 in-EKF:
 #     stream_log --relay-port 47800 (no 8081) + scrcpy window r5cam (record, always on top) + live_tracker --show;
-#     `stop <name>` ends all three cleanly (stop file). Same phone placement as r5_marks_1 (its floor pose is reused).
+#     `stop <name>` ends the recording, tracker and video (stop file); PlotJuggler keeps streaming live until
+#     `end` or the next fusion. Same phone placement as r5_marks_1 (its floor pose is reused).
+#   bash ground_station/lab/camera_truth.sh end            # end the live PlotJuggler stream (before starting 8081)
 #   bash ground_station/lab/camera_truth.sh video <name>   # live window + recording only (workflows A/B/C keep their own log)
 # WiFi only, never the SWD probe. Video: phone camera id 4, zoom 0.6, 1080p30 (the R3 calibration pose).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-cmd=${1:?start|stop|check|fusion|video}; name=${2:?session name}; preset=${3:-drift_rc}; api=http://127.0.0.1:8081; vid=logs/video_truth/$name
+cmd=${1:?start|stop|check|fusion|video|end}; name=${2:-}; [ "$cmd" = end ] || : "${name:?session name}"; preset=${3:-drift_rc}; api=http://127.0.0.1:8081; vid=logs/video_truth/$name
 post() { curl -s -m 10 -X POST -H 'Content-Type: application/json' -d "$2" "$api$1"; echo; }
 up() { curl -s -m 2 -o /dev/null -w '%{http_code}' "$api/health" | grep -q 200; }
 # scrcpy exits when Android drops the camera (R4: "Camera disconnected" at frame 2313); restart into the next part.
@@ -37,6 +39,12 @@ pj() {
     fi
   done
 }
+endlive() {                                         # a previous fusion's stream_log still streams to PlotJuggler: end it
+  [ -f logs/plot_live.pid ] || return 0
+  touch logs/plot_live.end
+  for i in $(seq 10); do kill -0 "$(cat logs/plot_live.pid)" 2>/dev/null || break; sleep 1; done
+  kill "$(cat logs/plot_live.pid)" 2>/dev/null || true; rm -f logs/plot_live.pid logs/plot_live.end
+}
 case $cmd in
 start)
   mkdir -p "$vid"
@@ -54,13 +62,17 @@ start)
 fusion)
   mode=${3:?mode 1 shadow, 2 offset, 3 in-EKF}; shift 3
   up && { echo "8081 service is up: stop it first (stream_log needs the WiFi downlink)"; exit 1; }
+  endlive
   mkdir -p "$vid" logs; rm -f "$vid/stop" "$vid/video_only"; echo "$mode" > "$vid/fusion"
   PLOT=${PLOT-127.0.0.1:9870}                       # every slot to PlotJuggler (UDP Server, JSON); PLOT= turns it off
   if [ -n "$PLOT" ]; then
     python -m ground_station.livewatch.pj_layout ground_station/livewatch/r5_extpos_frames.md --out "logs/$name.pj.xml"       && pj "logs/$name.pj.xml" || echo "PlotJuggler layout failed: flight goes on, open PJ by hand"
   fi
-  nohup python -m ground_station.livewatch.stream_log --frames ground_station/livewatch/r5_extpos_frames.md     --relay-port 47800 ${PLOT:+--plot "$PLOT"} --seconds 86400 --stop-file "$vid/stop" --out "logs/$name.csv" > "$vid/stream_log.out" 2>&1 &
+  ends=(--stop-file "$vid/stop")                   # with PlotJuggler: the stop file ends only the recording
+  [ -n "$PLOT" ] && ends=(--rec-stop-file "$vid/stop" --stop-file logs/plot_live.end)
+  nohup python -m ground_station.livewatch.stream_log --frames ground_station/livewatch/r5_extpos_frames.md     --relay-port 47800 ${PLOT:+--plot "$PLOT"} --seconds 86400 "${ends[@]}" --out "logs/$name.csv" > "$vid/stream_log.out" 2>&1 &
   echo $! > "$vid/stream_log.pid"
+  [ -n "$PLOT" ] && cp "$vid/stream_log.pid" logs/plot_live.pid
   cam
   sleep 4                                           # scrcpy window opens 256x256, final size after ~1.1 s (measured)
   dly=${DELAY_MS:-200}                              # camera delay: video_truth delay4 lag 0.21 s on r6_f4 + f4c (2026-10-13)
@@ -74,15 +86,18 @@ video)                                              # video only (workflows A/B/
   sleep 5; "$0" check "$name" ;;
 stop)
   touch "$vid/stop"
-  if [ -f "$vid/fusion" ]; then                     # tracker + stream_log poll the stop file and exit cleanly
+  if [ -f "$vid/fusion" ]; then                     # tracker exits; stream_log closes its CSVs (and streams on to PJ)
     for i in $(seq 20); do
-      alive=0; for f in "$vid"/tracker.pid "$vid"/stream_log.pid; do kill -0 "$(cat "$f")" 2>/dev/null && alive=1; done
+      alive=0; kill -0 "$(cat "$vid/tracker.pid")" 2>/dev/null && alive=1
+      kill -0 "$(cat "$vid/stream_log.pid")" 2>/dev/null && ! grep -q "recording stopped" "$vid/stream_log.out" && alive=1
       [ $alive = 0 ] && break; sleep 1
     done
   elif [ ! -f "$vid/video_only" ]; then
     post /api/recording/stop '{}'; post /api/streams/log/stop '{}'
   fi
-  taskkill //F //IM scrcpy.exe > /dev/null 2>&1 || true; sleep 1; "$0" check "$name" ;;   # PlotJuggler stays open for review
+  taskkill //F //IM scrcpy.exe > /dev/null 2>&1 || true; sleep 1; "$0" check "$name"   # PlotJuggler stays open for review
+  [ -f logs/plot_live.pid ] && echo "PlotJuggler still streaming live: 'camera_truth.sh end' stops it" || true ;;
+end) endlive; echo "live stream ended" ;;
 check)
   for f in logs/vofa/"$name".slot*.csv logs/"$name".slot*.csv; do [ -f "$f" ] && echo "$f rows $(($(wc -l < "$f") - 1))"; done
   ls -la "$vid"/cam*.mkv 2>/dev/null || echo "no video yet"; grep -c restart "$vid/scrcpy.log" 2>/dev/null | sed "s/^/restarts /"; tail -2 "$vid/scrcpy.log" 2>/dev/null
