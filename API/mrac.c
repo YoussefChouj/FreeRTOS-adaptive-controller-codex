@@ -1441,6 +1441,7 @@ void MRAC_SimplexStep(void)
    @st_phi_max      -          [1, 50]      ST: cap of the gradient gain
    @st_bar          -          [0, 1]       ST: log-barrier drive gain, 0 = off
    @lf_gain         -          [0, 10]      LFHG: 0 = off, else LF learning and gamma x lf_gain
+   @basis           -          [0, 10]      FW-B ext feature set MRAC_BASIS_* (mrac.h), 0 = S6 only
    @nan_rearm       ticks      [0, 2000]    finite ticks after a non-finite input before u_ad reaches the mixer (200 = 1 s) */
 #define MRAC_SET(f, p, r, y, z) \
     mrac_config_pitch.f = (p); \

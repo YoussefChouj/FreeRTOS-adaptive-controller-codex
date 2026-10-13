@@ -1,3 +1,9 @@
+/**
+ * @module     land_gate.c
+ * @subsystem  safety
+ * @purpose    Always-on auto-land gate (sagging pack while FLYING starts an RC ch5 landing);
+ *             see land_gate.h for the thresholds and the 2026-10-09 reason.
+ */
 #include "land_gate.h"
 #include <stddef.h>
 

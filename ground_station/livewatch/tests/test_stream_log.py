@@ -13,6 +13,7 @@ import csv
 import itertools
 import socket as _real_socket
 import struct
+import types
 from pathlib import Path
 from unittest import mock
 
@@ -176,9 +177,14 @@ class FakeUsart3WifiTransport:
             "slot": slot,
         })
         self._subscribed_slot = slot
+        # Like the real Usart3WifiSubscribeTransport.subscribe, send the
+        # 0xCC 0xDE request over the UDP socket.
+        ranges = symbols or [_TEST_RANGE]
+        self._udp.sendto(
+            build_stream_request(ranges, divider, transport, slot=slot),
+            (self.module_ip, self.port))
         # Do NOT stage frames here — _run_usart3 resets the buffer after
         # subscribe. Tests stage whatever frames they need after calling _run_*.
-        ranges = symbols or [_TEST_RANGE]
         payload = _make_schema_payload(ranges, slot=slot, divider=divider)
         return decode_schema(len(ranges), payload, ranges)
 

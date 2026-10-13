@@ -1,3 +1,9 @@
+/**
+ * @module     wfb_prog.c
+ * @subsystem  guidance
+ * @purpose    Onboard preset program (segments of geometry atoms moved by velocity profiles),
+ *             validated at COMMIT, evaluated every tick; see wfb_prog.h.
+ */
 #include "wfb_prog.h"
 #include <stdint.h>
 #include <stddef.h>

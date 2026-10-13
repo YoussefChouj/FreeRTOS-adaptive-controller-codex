@@ -1,3 +1,9 @@
+/**
+ * @module     traj_shape.c
+ * @subsystem  guidance
+ * @purpose    Circle / figure-8 shapes for the AutoflyTask presets plus yaw-follow heading and slew.
+ *             Pure math, host-tested by tests/firmware_host/test_traj_shape.c.
+ */
 #include "traj_shape.h"
 #include <math.h>
 #include <stddef.h>

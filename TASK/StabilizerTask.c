@@ -1288,7 +1288,12 @@ static uint8_t Motor_TestOverride(FlightState_t state)
 
 /* Keil presets: of1 = g_ekf_of1_on, axis mask = g_ctrl_axis_mask (bit per ctrl_axis_e, clear = pure PID),
  * p/r gamma = mrac_g_gamma scale on every pitch and roll group (learning rate), zhd = Z_ratePID headroom
- * (1 = UMax/UiMax/SumEMax from s_zhd, 0 = the API/pid.c boot values). Ctrler persists to reboot. */
+ * (1 = UMax/UiMax/SumEMax from s_zhd, 0 = the API/pid.c boot values). Ctrler persists to reboot.
+ * Legend (tools/row_meta.py, bounds PROPOSED):
+ *   @of1    -  [0, 1]   g_ekf_of1_on
+ *   @mask   -  [0, 63]  g_ctrl_axis_mask, one bit per ctrl_axis_e (6 axes)
+ *   @g_pr   -  [0, 1]   mrac_g_gamma scale on every pitch and roll group
+ *   @zhd    -  [0, 1]   1 = Z_ratePID headroom from s_zhd, 0 = boot values */
 typedef struct { uint8_t of1; uint8_t axis_mask; float g_pr; uint8_t zhd; } KeilPreset_t;
 #define KP_ROW(of1, mask, g_pr, zhd)  { (of1), (mask), (g_pr), (zhd) }
 static const KeilPreset_t s_kp[] = {
@@ -1344,7 +1349,12 @@ static void Keil_PresetPoll(FlightState_t state)
 /* Limit modes (docs/lab/today-2026-10-10.md). tilt = gs_max_pitch/roll_deg (lean cap in accel_to_lean_angles),
  * vxy = position-loop velocity setpoint cap, trajv = fastest trajectory AutoflyTask accepts, yawr = heading-hold
  * rate cap. Fixed caps above every row: locxsPID UMax 600 cm/s^2 = 31.4 deg lean, yawPID UMax 160 deg/s, z 1 m/s.
- * Mode 2 sits just under those. Hover throttle 0.43-0.47 (10-07 logs), so 30 deg needs about 0.55 collective. */
+ * Mode 2 sits just under those. Hover throttle 0.43-0.47 (10-07 logs), so 30 deg needs about 0.55 collective.
+ * Legend (tools/row_meta.py, bounds PROPOSED, max = the fixed caps above):
+ *   @tilt   deg    [0, 31.4]  gs_max_pitch_deg and gs_max_roll_deg
+ *   @vxy    cm/s   [0, 300]   g_vxy_des_max
+ *   @trajv  cm/s   [0, 300]   g_traj_v_max_cms
+ *   @yawr   deg/s  [0, 160]   g_yawrate_des_max */
 typedef struct { float tilt_deg; float vxy_cms; float trajv_cms; float yawr_dps; } LimitMode_t;
 #define LIM_ROW(tilt, vxy, trajv, yawr)  { (tilt), (vxy), (trajv), (yawr) }
 static const LimitMode_t s_lim[] = {
@@ -1370,7 +1380,12 @@ static void Limit_ModePoll(FlightState_t state)
 
 /* Lab stages (docs/lab/run-sheet-2026-10-10.md). Each row sets traj_id 4 (figure-8), traj_p.f8_tilt_deg,
  * f8_laps, yaw_rate_dps and lim_mode, so a flight needs only lab_stage, vp_id (ch8 for MRAC) and traj_go.
- * Loads are hung by hand; stages 4 and 5 only name them. Ground only, on change, before Limit_ModePoll. */
+ * Loads are hung by hand; stages 4 and 5 only name them. Ground only, on change, before Limit_ModePoll.
+ * Legend (tools/row_meta.py, bounds PROPOSED):
+ *   @tilt   deg    [0, 31.4]  traj_p.f8_tilt_deg
+ *   @laps   -      [1, 10]    traj_p.f8_laps
+ *   @yaw    deg/s  [0, 160]   traj_p.yaw_rate_dps
+ *   @lim    -      [0, 2]     lim_mode, a row of s_lim */
 typedef struct { float tilt_deg; float laps; float yaw_dps; uint8_t lim; } LabStage_t;
 #define STAGE_ROW(tilt, laps, yaw, lim)  { (tilt), (laps), (yaw), (lim) }
 static const LabStage_t s_stage[] = {
@@ -1397,7 +1412,21 @@ static void Lab_StagePoll(FlightState_t state)
 /* MRAC variant rows (docs/flights/2026-10-08-variant-sweep-plan.md). Every row writes every column, so any
  * row restores the others. Axes: p/r = pitch+roll, y = yaw, pry = all three; z is never touched. Values
  * copy the WP-33 SIL presets (ground_station/analysis/controllers/mrac_v1/v2/pr/st.yaml); the SIL injected
- * p/r only and was stable at gamma 0.25-0.5, every variant tipped at gamma 1 (PROPOSED for flight). */
+ * p/r only and was stable at gamma 0.25-0.5, every variant tipped at gamma 1 (PROPOSED for flight).
+ * Legend (tools/row_meta.py; bounds PROPOSED, the MRAC_SET legend in API/mrac.c where the field matches):
+ *   @ref_pr    -      [-1, 2]    ref_type on pitch and roll, -1 = global ref_model_type
+ *   @ref_y     -      [-1, 2]    ref_type on yaw
+ *   @dn        -      [0, 1]     drive_norm on pitch, roll and yaw
+ *   @lam_edot  s      [0, 0.1]   lam_edot on pitch and roll
+ *   @bw_y      rad/s  [0.5, 100] ref_model_bw on yaw
+ *   @mu_sat    -      [0, 10]    mu_sat on pitch, roll and yaw
+ *   @kappa     -      [0, 2]     kappa_pr on pitch and roll
+ *   @crm       1/s    [0, 50]    crm_ell on pitch and roll
+ *   @st_eps    rad/s  [0, 2]     st_eps on pitch and roll
+ *   @lam_ang   1/s    [0, 20]    lam_ang on pitch and roll
+ *   @g         -      [0, 1]     mrac_g_gamma scale on pitch, roll and yaw
+ *   @basis     -      [0, 10]    basis MRAC_BASIS_* on pitch and roll
+ *   @ext_g     -      [0, 10]    ext block (RBF / S10X slots) learns at g * ext_g */
 typedef struct {
 	int8_t ref_pr, ref_y; uint8_t dn; float lam_edot, bw_y, mu_sat, kappa, crm_ell, st_eps, lam_ang, g; uint8_t basis; float ext_g;
 	/* 3L-v2 p/r (f00412a): te_off 1 = tracking-error learning off on p/r (gamma 0, yaw keeps g); L2 composite
