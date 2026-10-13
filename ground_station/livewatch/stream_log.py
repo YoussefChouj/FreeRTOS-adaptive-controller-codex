@@ -464,16 +464,42 @@ def _vofa_view_for(schemas):
     return vofa_view_map(schemas, view_channels(available=avail)["vars"])
 
 
+# A battery swap reboots the FC, which forgets every subscription: all slots go silent and VOFA+, PlotJuggler, the
+# CSVs and the EXT_POS relay stop until a restart. Same numbers as the 8081 wifi_bridge slot watchdog
+# (_SLOT_SILENT_MIN_S, _SLOT_SILENT_PERIODS, _SLOT_RESEND_EVERY_S).
+RESUB_SILENT_MIN_S, RESUB_SILENT_PERIODS, RESUB_EVERY_S = 3.0, 5, 5.0
+
+
+def _resubscribe_silent(wifi, decoder, resub, last_rx, sent, now):
+    """Re-send the subscribe of each slot silent for max(3 s, 5 frame periods), at most every 5 s per slot.
+
+    ``resub`` is {slot: (request bytes, hz)}: the request the firmware already accepted, so it is only valid while
+    the same firmware runs (a reboot, not a reflash). ``last_rx``/``sent`` are t0-relative times, updated here."""
+    for slot, (request, hz) in resub.items():
+        silent = now - last_rx[slot]
+        if silent < max(RESUB_SILENT_MIN_S, RESUB_SILENT_PERIODS / max(hz, 1e-3)) \
+                or now - sent.get(slot, -RESUB_EVERY_S) < RESUB_EVERY_S:
+            continue
+        wifi._port()._sock.sendto(request, (wifi.module_ip, wifi.port))
+        decoder.decoders[slot]._last_seq = None     # the rebooted FC restarts SEQ: the gap is not radio loss
+        sent[slot] = now
+        print("stream-log: slot %d silent %.1f s (FC reboot / battery swap?), re-subscribing" % (slot, silent),
+              file=sys.stderr, flush=True)
+
+
 def _usart3_loop(wifi, decoder, writers, rows, schemas, t0, seconds, stop_event, on_row, vofa_sock, vofa_addr,
-                 relay=None, plot_sock=None, plot_addr=None, rec_stop=None, on_rec_stop=None, vofa_view=False):
+                 relay=None, plot_sock=None, plot_addr=None, rec_stop=None, on_rec_stop=None, vofa_view=False,
+                 resub=None):
     """Read and write frames until `seconds` pass or stop_event is set (the _run_groups_usart3 body).
 
     Once ``rec_stop`` is set, ``on_rec_stop()`` ends the recording (the CSVs close) while the plot stream goes on.
     ``vofa_view`` sends VOFA+ the flight-view channels only, each slot's last value held, on every slot-0 row.
+    ``resub`` ({slot: (request, hz)}) re-subscribes slots that go silent (see _resubscribe_silent).
     """
     plot_cols = {schema.slot: columns_for(schema) for schema in schemas} if plot_sock is not None else {}
     vofa_map = _vofa_view_for(schemas) if vofa_sock is not None and vofa_view else None
     latest = {schema.slot: [0] * len(columns_for(schema)) for schema in schemas} if vofa_map else {}
+    last_rx, sent = {slot: 0.0 for slot in resub or ()}, {}
     while time.monotonic() - t0 < seconds and not (
             stop_event is not None and stop_event.is_set()):
         if rec_stop is not None and rec_stop.is_set():
@@ -481,6 +507,8 @@ def _usart3_loop(wifi, decoder, writers, rows, schemas, t0, seconds, stop_event,
             on_rec_stop()
         if relay is not None:
             _relay_uplink(relay, wifi)
+        if resub:
+            _resubscribe_silent(wifi, decoder, resub, last_rx, sent, time.monotonic() - t0)
         waiting = wifi._udp.in_waiting
         if not waiting:
             time.sleep(0.002)
@@ -496,6 +524,10 @@ def _usart3_loop(wifi, decoder, writers, rows, schemas, t0, seconds, stop_event,
                     got = values.get(rng.name or "r%d" % len(flat), 0)
                     flat.extend(got if isinstance(got, list) else [got])
             t_host = time.monotonic() - t0
+            if slot in last_rx:
+                last_rx[slot] = t_host
+                if sent.pop(slot, None) is not None:
+                    print("stream-log: slot %d streaming again" % slot, file=sys.stderr, flush=True)
             if writer is not None:
                 writer.writerow([t_ms, "%.4f" % t_host, seq] + flat)
             rows[slot] += 1
@@ -590,7 +622,8 @@ def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
         try:
             _usart3_loop(wifi, decoder, writers, rows, schemas, t0, seconds, stop_event, on_row,
                          vofa_sock, vofa_addr, relay, plot_sock=plot_sock, plot_addr=plot_addr,
-                         rec_stop=rec_stop, on_rec_stop=end_recording, vofa_view=vofa_view)
+                         rec_stop=rec_stop, on_rec_stop=end_recording, vofa_view=vofa_view,
+                         resub={slot: (request, schema.hz) for (slot, _, _, request), schema in zip(plans, schemas)})
         except KeyboardInterrupt:     # Ctrl+C ends an open-ended capture: keep the rows, stop the slots
             if not quiet:
                 print("stream-log: stopped by Ctrl+C")

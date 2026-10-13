@@ -594,3 +594,27 @@ def test_run_groups_usart3_rec_stop_closes_csv_and_streams_on(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "recording stopped" in out and len(polls) > 5, "streaming went on after the recording stopped"
     assert (tmp_path / "r.slot0.csv").read_text().startswith("t_src_ms,")
+
+
+def test_usart3_loop_resubscribes_a_silent_slot_after_a_reboot(capsys):
+    """Battery swap = FC reboot: the slot goes silent, the accepted request goes out again every 5 s until frames
+    come back (VOFA+/PlotJuggler/CSV/relay used to stay dead until a restart)."""
+    from ground_station.livewatch.stream import MultiStreamDecoder
+    from ground_station.livewatch.stream_log import _usart3_loop
+    fake = FakeUsart3WifiTransport()
+    schema = fake.subscribe([_TEST_RANGE], 1, TRANSPORT_USART3, 0)
+    fake._udp._sent.clear()
+    decoder, clock = MultiStreamDecoder([schema]), [0.0]
+
+    def _sleep(_):
+        clock[0] += 1.0
+        if clock[0] == 9.0:          # the rebooted FC streams again
+            fake._stage(_data_frame(struct.pack("<f", 1.0), slot=0, seq=0, t_ms=5))
+
+    with mock.patch("ground_station.livewatch.stream_log.time.monotonic", lambda: clock[0]), \
+            mock.patch("ground_station.livewatch.stream_log.time.sleep", _sleep):
+        _usart3_loop(fake, decoder, {0: (None, schema)}, {0: 0}, [schema], 0.0, 11.0, None, None, None, None,
+                     resub={0: (b"REQ", schema.hz)})
+    assert [s for s, _ in fake._udp._sent] == [b"REQ", b"REQ"], "re-sent at 3 s and 8 s, not every poll"
+    err = capsys.readouterr().err
+    assert err.count("re-subscribing") == 2 and "slot 0 streaming again" in err
