@@ -286,3 +286,41 @@ def test_preset_fields_are_checked_before_flight(fields, msg):
     data["steps"][1]["preset"].update(fields)
     with pytest.raises(Exception, match=re.escape(msg)):
         parse_scenario(data)
+
+
+def _steps(*middle):
+    return {"scenario": "keys", "steps": [{"takeoff": {"z": 0.5}}, *middle, "land"]}
+
+
+def test_next_key_ends_a_hold_early_and_a_stale_key_skips_nothing():
+    drone, clock, deps = _rig()
+    _hook_step(deps, clock, 0.2, lambda: deps.control.request("next"))      # during takeoff: dropped at the hold
+    out = fly_scenario(parse_scenario(_steps({"hold": {"s": 10}}, {"hold": {"s": 30}})), deps)
+    first = out.steps[1]
+    assert first["t1_s"] - first["t0_s"] >= 10 - 1e-6 and "operator" not in first
+    drone2, clock2, deps2 = _rig()
+    _hook_step(deps2, clock2, 15.0, lambda: deps2.control.request("next"))
+    out2 = fly_scenario(parse_scenario(_steps({"hold": {"s": 30}})), deps2)
+    hold = out2.steps[1]
+    assert not out2.aborted and out2.landed and hold["operator"] == "next" and hold["t1_s"] < 16
+
+
+def test_next_key_mid_preset_sends_traj_stop_and_goes_on():
+    drone, clock, deps = _rig()
+    _hook_step(deps, clock, 25.0, lambda: deps.control.request("next"))
+    out = fly_scenario(parse_scenario(_steps({"preset": {"name": "circle", "move_s": 20}}, {"hold": {"s": 2}})), deps)
+    assert not out.aborted and out.landed, out.decision
+    pre = out.steps[1]
+    assert pre["operator"] == "next" and pre["traj_status"] == 4 and ("traj_stop", 1.0) in drone.var_writes
+    assert pre["t1_s"] < 30 and [r["kind"] for r in out.steps] == ["takeoff", "preset", "hold", "land"]
+
+
+def test_stop_key_holds_the_hover_point_until_next():
+    drone, clock, deps = _rig()
+    _hook_step(deps, clock, 25.0, lambda: deps.control.request("stop"))
+    _hook_step(deps, clock, 60.0, lambda: deps.control.request("next"))
+    out = fly_scenario(parse_scenario(_steps({"preset": {"name": "circle", "move_s": 20}}, {"hold": {"s": 2}})), deps)
+    assert not out.aborted and out.landed, out.decision
+    pre, hold = out.steps[1], out.steps[2]
+    assert pre["operator"] == "stop" and pre["traj_status"] == 4 and 60 <= pre["t1_s"] < 61
+    assert hold["t1_s"] - hold["t0_s"] >= 2 - 1e-6 and "operator" not in hold

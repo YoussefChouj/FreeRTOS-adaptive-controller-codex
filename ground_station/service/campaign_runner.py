@@ -44,15 +44,21 @@ PRESET_MARGIN_S = 10.0
 OF_DRIFT_CM_S = 1.35
 
 class RunnerControl:
+    """Operator requests. pause/land/abort latch (abort > land > pause). stop/next are one-shot nudges (fly keys s/n)
+    that a hold or a preset takes: next ends the step early, stop ends it and holds at the hover point until next."""
+
     def __init__(self):
         self._lock = threading.Lock()
         self._req = None
+        self._nudge = None
 
     def request(self, cmd: str):
-        if cmd not in {"pause", "land", "abort"}:
+        if cmd not in {"pause", "land", "abort", "stop", "next"}:
             raise ValueError(f"invalid request {cmd!r}")
         with self._lock:
-            if self._req == "abort":
+            if cmd in ("stop", "next"):
+                self._nudge = cmd
+            elif self._req == "abort":
                 pass
             elif self._req == "land" and cmd == "abort":
                 self._req = cmd
@@ -64,6 +70,11 @@ class RunnerControl:
     def get(self) -> str | None:
         with self._lock:
             return self._req
+
+    def take_nudge(self) -> str | None:
+        with self._lock:
+            nudge, self._nudge = self._nudge, None
+            return nudge
 
     def clear(self):
         with self._lock:
@@ -236,14 +247,19 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
     def prim() -> int:
         return int(deps.status()["prim_state"])
 
-    def wait(cond: Callable[[], bool], phase: str, dt_s: float | None = None) -> bool:
-        nonlocal ticks, decision
+    nudged = ""  # the operator nudge (stop/next) that ended the last skippable wait early
+
+    def wait(cond: Callable[[], bool], phase: str, dt_s: float | None = None, skippable: bool = False) -> bool:
+        nonlocal ticks, decision, nudged
         dt = dt_s or deps.dt_s
         while not cond():
             req = deps.control.get() if deps.control else None
             if req in ("land", "abort"):
                 decision = AbortDecision(level=1, reason=f"operator {req}")
                 return False
+            if skippable and deps.control and (nudge := deps.control.take_nudge()):
+                nudged = nudge
+                return True
             if ticks >= max_ticks:
                 decision = AbortDecision(level=1, reason=f"timeout: {phase}")
                 return False
@@ -263,6 +279,8 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
     for i, st in enumerate(steps[:-1]):
         t0 = deps.clock() - t_start
         extra: dict = {}
+        if deps.control:
+            deps.control.take_nudge()  # a key pressed during an earlier step must not skip this one
         if st.kind == "takeoff":
             cmds = []
             # MRAC injection: the step's mrac_injection, else the campaign default (run_campaign: mrac_* -> 1, else 0).
@@ -310,7 +328,7 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
                 ok = airborne = wait(lambda: prim() == PRIM_HOVER, "takeoff")
         elif st.kind == "hold":
             t_hold = deps.clock()
-            ok = wait(lambda: deps.clock() - t_hold >= st.duration_s, "hold")
+            ok = wait(lambda: deps.clock() - t_hold >= st.duration_s, "hold", skippable=True)
         elif st.kind in TRAJ_KINDS + PROG_KINDS:
             # A program (CMD 0x1C) runs like a trajectory: same START, same traj_state DONE, generated onboard.
             t_settle = deps.clock()
@@ -390,7 +408,14 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
                     ok = False
                 if ok:
                     ok = wait(lambda: preset_status() != PRESET_RUNNING
-                              or deps.clock() - t_go >= st.duration_s + PRESET_MARGIN_S, f"preset {name}")
+                              or deps.clock() - t_go >= st.duration_s + PRESET_MARGIN_S, f"preset {name}",
+                              skippable=True)
+                    if ok and nudged:  # operator s/n: the preset flies back to its start point (status 4)
+                        deps.client.var_write("traj_stop", 1)
+                        t_stop = deps.clock()
+                        ok = wait(lambda: preset_status() != PRESET_RUNNING
+                                  or deps.clock() - t_stop >= st.args["params"]["traj_p.ret_s"] + PRESET_MARGIN_S,
+                                  f"preset {name} stop")
                     code = preset_status()
                     if ok and code not in PRESET_OK:
                         why = "still running" if code == PRESET_RUNNING else f"traj_status {code}"
@@ -399,6 +424,13 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
                 extra = {"preset": name, "traj_status": code}
         else:
             raise ValueError(f"step {i}: unexpected kind {st.kind!r} before land")
+        if nudged:
+            extra["operator"] = nudged
+        while ok and nudged == "stop":  # s: hold the hover point until n (next step), l (land) or the airborne cap
+            deps.say("operator stop: holding at the hover point; n = next step, l = land")
+            nudged = ""
+            ok = wait(lambda: False, "operator hold", skippable=True)
+        nudged = ""
         records.append({"step": i, "kind": st.kind, "t0_s": round(t0, 3),
                         "t1_s": round(deps.clock() - t_start, 3), "ok": ok, **extra})
         if not ok:

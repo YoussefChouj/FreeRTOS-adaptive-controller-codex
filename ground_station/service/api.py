@@ -533,6 +533,8 @@ _ROUTE_MAP = {
         "/api/campaign/pause": "finish the current flight, then stop (operator_stop)",
         "/api/campaign/land": "level-1 traj_stop + land now, then stop (operator_stop)",
         "/api/campaign/abort": "level-1 traj_stop + land now, then status operator_needed",
+        "/api/campaign/stop": "fly key s: end the current hold/preset (traj_stop) and hold the hover point until next",
+        "/api/campaign/next": "fly key n: end the current hold/preset (traj_stop) and go on to the next step",
     },
     "ui_testids": {
         "tab-<workspace>": "workspace tab button, e.g. tab-replay",
@@ -2371,7 +2373,8 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                 code, res = campaign.go(body.get("campaign_path"), body.get("pack_id"), body.get("checklist"),
                                         body.get("source"), body.get("confirmation"))
                 self._json(code, res)
-            elif route in ("/api/campaign/pause", "/api/campaign/land", "/api/campaign/abort"):
+            elif route in ("/api/campaign/pause", "/api/campaign/land", "/api/campaign/abort", "/api/campaign/stop",
+                           "/api/campaign/next"):
                 self._drain_body()
                 if campaign is None:
                     self._json(503, {"error": "campaign runner unavailable"})
