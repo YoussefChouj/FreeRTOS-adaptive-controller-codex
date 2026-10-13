@@ -4,7 +4,8 @@
 #   bash ground_station/lab/camera_truth.sh stop  <name>   # after landing + disarm
 #   bash ground_station/lab/camera_truth.sh check <name>   # rows per slot, video size
 #   bash ground_station/lab/camera_truth.sh fusion <name> <1|2|3> [tracker args]   # camera fusion, 1 shadow, 2 offset, 3 in-EKF:
-#     stream_log --relay-port 47800 (no 8081) + scrcpy window r5cam (record, always on top) + live_tracker --show;
+#     stream_log --relay-port 47800 (no 8081) + scrcpy r5cam (record, off screen) + live_tracker --show (topmost,
+#     resizable, path/anchor map, --traj preset, demo clip tracker.mp4; keys r a c f);
 #     `stop <name>` ends the recording, tracker and video (stop file); PlotJuggler keeps streaming live until
 #     `end` or the next fusion. Same phone placement as r5_marks_1 (its floor pose is reused).
 #   bash ground_station/lab/camera_truth.sh end            # end the live PlotJuggler stream (before starting 8081)
@@ -17,16 +18,16 @@ post() { curl -s -m 10 -X POST -H 'Content-Type: application/json' -d "$2" "$api
 up() { curl -s -m 2 -o /dev/null -w '%{http_code}' "$api/health" | grep -q 200; }
 # scrcpy exits when Android drops the camera (R4: "Camera disconnected" at frame 2313); restart into the next part.
 # Part 1 keeps the R3 names (cam.mkv, scrcpy_start_host_time.txt); part k: cam_k.mkv, scrcpy_start_host_time_k.txt.
-# Every mode shows the live window r5cam on top (fusion: the tracker captures it) and records it.
-cam() {
+# start/video show the live window r5cam on top; fusion puts it off screen (the tracker window is the one on top).
+cam() {                                           # CT_WIN: scrcpy window flags (default on top)
   nohup bash -c '
-    vid=$1; k=1
+    vid=$1; win=$2; k=1
     while [ ! -f "$vid/stop" ]; do
       sfx=$([ $k = 1 ] || echo _$k)
       python -c "import time,datetime;t=time.time();print(f\"{t:.3f}\",datetime.datetime.fromtimestamp(t).isoformat())" > "$vid/scrcpy_start_host_time$sfx.txt"
-      scrcpy --video-source=camera --camera-id=4 --camera-zoom=0.6 --camera-size=1920x1080 --camera-fps=30         --no-audio --window-title=r5cam --window-width=1194 --window-height=672 --always-on-top --record="$vid/cam$sfx.mkv" >> "$vid/scrcpy.log" 2>&1
+      scrcpy --video-source=camera --camera-id=4 --camera-zoom=0.6 --camera-size=1920x1080 --camera-fps=30         --no-audio --window-title=r5cam --window-width=1194 --window-height=672 $win --record="$vid/cam$sfx.mkv" >> "$vid/scrcpy.log" 2>&1
       [ -f "$vid/stop" ] || echo "restart part $((k+1)) at $(date +%T)" >> "$vid/scrcpy.log"; k=$((k+1)); sleep 1
-    done' _ "$vid" > /dev/null 2>&1 &
+    done' _ "$vid" "${CT_WIN---always-on-top}" > /dev/null 2>&1 &
 }
 pj() {
   local layout=$1
@@ -78,12 +79,12 @@ fusion)
   nohup python -m ground_station.livewatch.stream_log --frames ground_station/livewatch/r5_extpos_frames.md     --relay-port 47800 ${PLOT:+--plot "$PLOT"} ${VOFA:+--vofa "$VOFA" --vofa-view} --seconds 86400 "${ends[@]}" --out "logs/$name.csv" > "$vid/stream_log.out" 2>&1 &
   echo $! > "$vid/stream_log.pid"
   [ -n "$PLOT$VOFA" ] && cp "$vid/stream_log.pid" logs/plot_live.pid
-  cam
+  CT_WIN="${CT_WIN---window-x=-3000 --window-y=0}" cam   # mirror off screen, still grabbed (PrintWindow); CT_WIN= shows it
   sleep 4                                           # scrcpy window opens 256x256, final size after ~1.1 s (measured)
   dly=${DELAY_MS:-200}                              # camera delay: video_truth delay4 lag 0.21 s on r6_f4 + f4c (2026-10-13)
   al=()                                             # r6 flew modes 2/3 at --yaw-deg 0 vs ~90 deg measured: auto-fit it
   case " $* " in *" --yaw-deg"*|*" --align"*) ;; *) [ "$mode" -ge 2 ] && al=(--align auto) ;; esac
-  nohup python -m ground_station.analysis.live_tracker --source window:r5cam     --cam docs/video-truth/cam_r4_lenswave_2026-10-11.json --floor logs/video_truth/r5_marks_1     --tel-csv "logs/$name.slot1.csv" --detector coral --gate --send udp:47800 --mode "$mode" --delay-ms "$dly"     --out "$vid/fixes.csv" --show --stop-file "$vid/stop" "${al[@]}" "$@" > "$vid/tracker.out" 2>&1 &
+  nohup python -m ground_station.analysis.live_tracker --source window:r5cam     --cam docs/video-truth/cam_r4_lenswave_2026-10-11.json --floor logs/video_truth/r5_marks_1     --tel-csv "logs/$name.slot1.csv" --detector coral --gate --send udp:47800 --mode "$mode" --delay-ms "$dly"     --out "$vid/fixes.csv" --show --show-rec "$vid/tracker.mp4" --stop-file "$vid/stop" "${al[@]}" "$@" > "$vid/tracker.out" 2>&1 &
   echo $! > "$vid/tracker.pid"
   sleep 12; "$0" check "$name" ;;
 video)                                              # video only (workflows A/B/C): the log stays theirs

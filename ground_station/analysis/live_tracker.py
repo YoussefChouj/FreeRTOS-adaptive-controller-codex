@@ -425,45 +425,160 @@ class PadOrigin:
         return None if self.xy is None else np.asarray(xy, float) - self.xy
 
 
-class Preview:
-    """--show: the grabbed frame, the tracked ring, its pad-frame xy and the fix counters, redrawn at most `hz` per s
-    at `scale` (resize + imshow + waitKey(1)). Placed right of (or below) the grab rect: a preview over the scrcpy
-    window would be grabbed itself."""
+def traj_xy(spec: str) -> np.ndarray:
+    """--traj: a preset trajectory_pipeline shape as 'circle:radius_m=0.5' (k=v floats, comma-separated) or a .json
+    {"shape": ..., "params": {...}} -> closed (N, 2) xy in metres from the start point (shape_xy starts at 0,0), drawn
+    from the drift anchor on the --show map (the pad origin until the first fix)."""
+    from ground_station.service.trajectory_pipeline import shape_xy
+    if spec.endswith(".json"):
+        with open(spec) as f:
+            d = json.load(f)
+        shape, params = d["shape"], d.get("params", {})
+    else:
+        shape, _, kv = spec.partition(":")
+        params = {k: float(v) for k, v in (p.split("=") for p in kv.split(",") if p)}
+    return np.asarray(shape_xy(shape, params), float)
 
-    def __init__(self, hz: float = 10.0, scale: float = 0.6, rect: dict | None = None, title: str = "live_tracker"):
+
+class Preview:
+    """--show: the tracker window, the only always-on-top window (the scrcpy mirror sits off screen: the PrintWindow
+    grab still reads it). Left: the grabbed frame, the tracked ring, its uv trail and the counters. Right: a top-down
+    pad-frame map: 0.5 m grid, path trail vs current xy, the --traj preset, the drift anchor and its pass circle
+    (green while max drift < pass_cm, else red) with the hold time. Resizable (WINDOW_NORMAL, aspect kept); state
+    updates every frame, drawing at most `hz` per s. Keys (window focused): r record on/off, a anchor here,
+    c clear trails, f fullscreen. Recording writes each drawn frame to `rec` (mp4, `hz` fps) for demo clips."""
+
+    KEYS = "keys: r rec  a anchor  c clear  f full"
+
+    def __init__(self, hz: float = 10.0, scale: float = 0.6, rect: dict | None = None, title: str = "live_tracker",
+                 traj: np.ndarray | None = None, rec: str | None = None, pass_cm: float = 20.0, trail_s: float = 120.0):
         self.cv2, self.dt, self.scale, self.title, self.t_last, self.ms = vt._cv2(), 1.0 / hz, scale, title, -1e9, 0.0
-        self.n = 0
-        self.cv2.namedWindow(title, self.cv2.WINDOW_AUTOSIZE)
-        if rect:                                          # right of the grab rect, else below, else screen top-left
-            import ctypes                                 # (r7_f6: 1194x672 mirror on 1366x768 put it below = off screen)
-            sw, sh = ctypes.windll.user32.GetSystemMetrics(0), ctypes.windll.user32.GetSystemMetrics(1)
-            right, below = rect["left"] + rect["width"] + 8, rect["top"] + rect["height"] + 40
-            if right + scale * rect["width"] <= sw:
-                self.cv2.moveWindow(title, right, rect["top"])
-            elif below + scale * rect["height"] <= sh:
-                self.cv2.moveWindow(title, rect["left"], below)
-            else:                                         # overlaps the mirror: only safe with the PrintWindow grab
-                self.cv2.moveWindow(title, 0, 0)
-            self.cv2.setWindowProperty(title, self.cv2.WND_PROP_TOPMOST, 1)   # above scrcpy --always-on-top
+        self.hz, self.rect, self.traj, self.pass_m, self.trail_s, self.n = hz, rect, traj, pass_cm / 100.0, trail_s, 0
+        self.trail, self.uvs, self.anchor, self.max_d, self.xy = [], [], None, 0.0, None   # trail (t,x,y), uvs (t,u,v)
+        self.rec, self.recording, self.writer = rec, rec is not None, None
+        self.placed = self.full = self.closed = False
+        self.cv2.namedWindow(title, self.cv2.WINDOW_NORMAL | self.cv2.WINDOW_KEEPRATIO)
+
+    def _place(self, w: int, h: int) -> None:
+        """Right of the grab rect, else below, else top-left; clamped to the screen (the mirror is off screen)."""
+        import ctypes
+        cv2, r = self.cv2, self.rect
+        sw, sh = ctypes.windll.user32.GetSystemMetrics(0), ctypes.windll.user32.GetSystemMetrics(1)
+        cv2.resizeWindow(self.title, w, h)
+        x, y = 0, 0
+        if r and r["left"] >= 0 and r["left"] + r["width"] <= sw:
+            if r["left"] + r["width"] + 8 + w <= sw:
+                x, y = r["left"] + r["width"] + 8, r["top"]
+            elif r["top"] + r["height"] + 40 + h <= sh:
+                x, y = r["left"], r["top"] + r["height"] + 40
+        cv2.moveWindow(self.title, max(0, min(x, sw - w)), max(0, min(y, sh - h - 40)))
+        cv2.setWindowProperty(self.title, cv2.WND_PROP_TOPMOST, 1)
+        self.placed = True
+
+    def _map(self, side: int) -> np.ndarray:
+        cv2, img = self.cv2, np.full((side, side, 3), 28, np.uint8)
+        o = np.zeros(2) if self.anchor is None else np.asarray(self.anchor[1:])
+        tr = np.asarray(self.trail, float)[:, 1:] if self.trail else np.zeros((0, 2))
+        tj = np.zeros((0, 2)) if self.traj is None else self.traj + o   # shape_xy starts at 0,0: drawn from the anchor
+        ext = np.ceil(2 * max(1.0, 1.15 * float(np.abs(np.vstack([tr, tj])).max(initial=0.0)))) / 2   # 0.5 m steps
+        k = side / (2 * ext)
+
+        def px(xy):
+            xy = np.atleast_2d(xy)
+            return np.stack([side / 2 + xy[:, 0] * k, side / 2 - xy[:, 1] * k], 1).astype(np.int32)
+        for v in np.arange(-ext, ext + 1e-9, 0.5):
+            c = (110, 110, 110) if abs(v) < 1e-9 else (60, 60, 60)
+            cv2.line(img, *map(tuple, px([[v, -ext], [v, ext]])), c, 1)
+            cv2.line(img, *map(tuple, px([[-ext, v], [ext, v]])), c, 1)
+        if len(tj):
+            cv2.polylines(img, [px(tj)], True, (255, 170, 60), 1, cv2.LINE_AA)
+        if self.anchor is not None:
+            cv2.circle(img, tuple(px(o)[0]), max(1, int(self.pass_m * k)),
+                       (0, 200, 0) if self.max_d < self.pass_m else (0, 0, 230), 1, cv2.LINE_AA)
+        if len(tr) > 1:
+            cv2.polylines(img, [px(tr)], False, (0, 210, 255), 1, cv2.LINE_AA)
+        if self.xy is not None:
+            cv2.circle(img, tuple(px(self.xy)[0]), 5, (0, 255, 0), -1, cv2.LINE_AA)
+        cv2.putText(img, f"pad frame, 0.5 m grid, +x right +y up, {2 * ext:.1f} m wide", (6, side - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (170, 170, 170), 1, cv2.LINE_AA)
+        return img
+
+    def _key(self, k: int, now: float) -> None:
+        cv2 = self.cv2
+        if k == ord("r"):
+            if self.rec is None:
+                self.rec = time.strftime("logs/video_truth/tracker_%Y%m%d_%H%M%S.mp4")
+            self.recording = not self.recording
+            print("show: recording", "on" if self.recording else "paused", "->", self.rec, flush=True)
+        elif k == ord("a") and self.xy is not None:
+            self.anchor, self.max_d = (now, *self.xy), 0.0
+        elif k == ord("c"):
+            self.trail, self.uvs = [], []
+        elif k == ord("f"):
+            self.full = not self.full
+            cv2.setWindowProperty(self.title, cv2.WND_PROP_FULLSCREEN,
+                                  cv2.WINDOW_FULLSCREEN if self.full else cv2.WINDOW_NORMAL)
 
     def __call__(self, now: float, frame, uv, xy, lines) -> None:
+        if uv is not None:
+            self.uvs.append((now, float(uv[0]), float(uv[1])))
+        if xy is not None:
+            self.xy = (float(xy[0]), float(xy[1]))
+            self.trail.append((now, *self.xy))
+            if self.anchor is None:                       # first fix anchors the drift circle; key a re-anchors
+                self.anchor = (now, *self.xy)
+            self.max_d = max(self.max_d, float(np.hypot(self.xy[0] - self.anchor[1], self.xy[1] - self.anchor[2])))
         if now - self.t_last < self.dt:
             return
         p0 = time.perf_counter()
+        while self.trail and now - self.trail[0][0] > self.trail_s:
+            self.trail.pop(0)
+        while self.uvs and now - self.uvs[0][0] > 10.0:
+            self.uvs.pop(0)
         cv2, s = self.cv2, self.scale
         img = cv2.resize(frame, None, fx=s, fy=s, interpolation=cv2.INTER_NEAREST)
+        if len(self.uvs) > 1:
+            cv2.polylines(img, [(np.asarray(self.uvs)[:, 1:] * s).astype(np.int32)], False, (0, 210, 255), 1,
+                          cv2.LINE_AA)
         if uv is not None:
             c = (int(uv[0] * s), int(uv[1] * s))
             cv2.circle(img, c, 14, (0, 255, 0), 2)
             if xy is not None:
                 cv2.putText(img, f"{xy[0] * 100:+.0f},{xy[1] * 100:+.0f} cm", (c[0] + 16, c[1]),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
-        for i, txt in enumerate(lines):
+        if self.anchor is not None and self.xy is not None:
+            d = np.hypot(self.xy[0] - self.anchor[1], self.xy[1] - self.anchor[2])
+            lines = [*lines, f"drift {d * 100:.1f} cm  max {self.max_d * 100:.1f}/{self.pass_m * 100:.0f}  "
+                             f"hold {now - self.anchor[0]:.1f} s"]
+        for i, txt in enumerate([*lines, self.KEYS]):
             cv2.putText(img, txt, (8, 20 + 18 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3, cv2.LINE_AA)
             cv2.putText(img, txt, (8, 20 + 18 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-        cv2.imshow(self.title, img)
-        cv2.waitKey(1)
+        img = np.hstack([img, self._map(img.shape[0])])
+        if self.recording:
+            if self.writer is None:
+                Path(self.rec).parent.mkdir(parents=True, exist_ok=True)
+                self.writer = cv2.VideoWriter(self.rec, cv2.VideoWriter_fourcc(*"mp4v"), min(self.hz, 60.0),
+                                              (img.shape[1], img.shape[0]))
+            self.writer.write(img)
+            cv2.circle(img, (img.shape[1] - 16, 16), 7, (0, 0, 255), -1)   # REC dot on screen only
+        if not self.closed:
+            if not self.placed:
+                self._place(img.shape[1], img.shape[0])
+            elif cv2.getWindowProperty(self.title, cv2.WND_PROP_VISIBLE) < 1:   # user closed it: stop redrawing
+                self.closed = True
+            if not self.closed:
+                cv2.imshow(self.title, img)
+                k = cv2.waitKey(1)
+                if k > 0:
+                    self._key(k & 0xFF, now)
         self.t_last, self.n, self.ms = now, self.n + 1, self.ms + 1000 * (time.perf_counter() - p0)
+
+    def close(self) -> None:
+        if self.writer is not None:
+            self.writer.release()
+            print(f"show: recorded {self.rec}", flush=True)
+        if not self.closed:
+            self.cv2.destroyWindow(self.title)
 
 
 def udp_sender(spec: str) -> Callable[[bytes], None]:
@@ -817,6 +932,8 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
             w_out.writerow([round(t_read, 3), round(t_fix, 3), round(med[0], 4), round(med[1], 4), round(e[0], 1),
                             round(e[1], 1), frame_b.hex()])
     cap.release()
+    if show:
+        show.close()
     if f_out:
         f_out.close()
     return {"frames": n, "detections": n_det, "fixes": sched.n_sent, "skipped": sched.n_skip,
@@ -1017,7 +1134,11 @@ def main(argv=None) -> int:
     ap.add_argument("--ring-h-m", type=float, default=0.057, help="ring plane on the pad (r5_marks_1 truth4 h_ring_m)")
     ap.add_argument("--tel-stale-s", type=float, default=1.0, help="older telemetry: --height-m, or no fix")
     ap.add_argument("--no-pad-origin", action="store_true", help="send floor-frame xy (default: pad-relative)")
-    ap.add_argument("--show", action="store_true", help="preview window (frame, ring, xy, counters), throttled")
+    ap.add_argument("--show", action="store_true", help="tracker window: frame + ring + trails | pad-frame map, topmost")
+    ap.add_argument("--show-hz", type=float, default=10.0, help="--show redraw (and --show-rec fps) rate")
+    ap.add_argument("--show-rec", help="record the --show window to this mp4 from the start (key r pauses/resumes)")
+    ap.add_argument("--traj", help="preset trajectory on the --show map: 'circle:radius_m=0.5' or a shape/params json")
+    ap.add_argument("--pass-cm", type=float, default=20.0, help="--show drift pass circle radius about the anchor")
     ap.add_argument("--stop-file", default="", help="end the run cleanly when this file appears (camera_truth.sh stop)")
     ap.add_argument("--static-t", default="", help='file only, "90,140,190": mask guard-colour pixels present at all these times')
     a = ap.parse_args(argv)
@@ -1058,7 +1179,8 @@ def main(argv=None) -> int:
         ring = RingTracker(seed) if a.detector == "ring" else CoralTracker(   # track_coral sizes are 1920 px
             seed, vt.coral_static(a.source) if cs == "video" else None, roi=140.0 * s,
             min_px=max(10, round(40 * s * s)), learn_n=a.static_n if cs == "start" else 0)
-    show = Preview(rect=WindowSource(a.source[7:]).rect() if a.source.startswith("window:") else None) if a.show else None
+    show = Preview(hz=a.show_hz, rect=WindowSource(a.source[7:]).rect() if a.source.startswith("window:") else None,
+                   traj=traj_xy(a.traj) if a.traj else None, rec=a.show_rec, pass_cm=a.pass_cm) if a.show else None
     print(run_source(a.source, cam, align, height, a.cam_latency_s, udp_sender(a.send) if a.send else None, a.out,
                      sched=FixScheduler(a.period, a.n_med, window_s=a.window_s), max_frames=a.max_frames,
                      start_s=a.start_s, static=static, ring=ring, gate=JumpGate() if a.gate else None,
