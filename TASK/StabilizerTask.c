@@ -901,8 +901,16 @@ static void Ext_Pos_Ekf(void)
 	s_ekf_prev_py += s_ekf_of.x[3] - py0;
 	dx = (s_ekf_of.x[0] - px0) * k;
 	dy = (s_ekf_of.x[3] - py0) * k;
-	ano_of.earth_x += dx * Cos_Yaw_01 + dy * Sin_Yaw_01;
-	ano_of.earth_y += dy * Cos_Yaw_01 - dx * Sin_Yaw_01;
+	hx = dx * Cos_Yaw_01 + dy * Sin_Yaw_01;
+	hy = dy * Cos_Yaw_01 - dx * Sin_Yaw_01;
+	ano_of.earth_x += hx;
+	ano_of.earth_y += hy;
+	/* FIX 2026-10-13 r7_f5_mode3: the jump also goes into a, so the ring (earth - a) keeps the correction-free path and
+	 * c = a re-adds every correction made so far. Before, a stayed 0 and each fix (age 213-294 ms, ~17 per s) was scored
+	 * against a past earth that lacked the corrections applied since, so every innovation was applied 4-5 times:
+	 * locxPID.FB 1.06 Hz limit cycle, std 17.4 cm, mean step 5.9 cm per fix (mode 2: 1.4 cm p95) -> roll/pitch rocking. */
+	g_ext_pos.a_x += hx;
+	g_ext_pos.a_y += hy;
 }
 
 static void Ext_Pos_Tick(void)
