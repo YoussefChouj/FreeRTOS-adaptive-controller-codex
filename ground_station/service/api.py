@@ -484,6 +484,7 @@ _ROUTE_MAP = {
         "/api/campaign/state": "campaign runner state {status, banner, phase, total_flights, waiting_pack, campaign_path, reason, flights, control, arm_refusal, outputs_dir}",
         "/api/campaign/preflight": "every workflow B launch check ?campaign=<launch yaml>&pack=<id> - {ok, instance, checks: [{name, value, pass, fix}]} (pass null = check by the operator checklist)",
         "/api/campaign/vitals": "position, RC link + switches, arm sources, battery, g_wfb_status, build id and per-slot stream freshness in one read",
+        "/api/values": "newest value per symbol across all streams ?names=a,b - {values: {name: {value, age_s}}}; unseen names left out (live_tracker --tel-url height)",
         "/api/campaign/list": "saved campaigns, launch copies (newest first) and pack ids {saved, launch, packs}",
         # Both of these block; test_http_api_routes_endpoint cannot GET them,
         # which is why they sat undeclared -- an agent reading this map would
@@ -1431,6 +1432,11 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                     self._json(500, {"ok": False, "error": f"preflight failed: {type(exc).__name__}: {exc}"})
                     return
                 self._json(200, res)
+            elif route == "/api/values":
+                names = [n for n in ",".join(parse_qs(urlsplit(self.path).query).get("names", [])).split(",") if n]
+                now = time.time_ns()
+                self._json(200, {"values": {k: {"value": v, "age_s": round((now - ts) / 1e9, 3)}
+                                            for k, (v, ts) in service.latest_values(names).items()}})
             elif route == "/api/campaign/vitals":
                 from ground_station.service.campaign_preflight import vitals
                 self._json(200, vitals(service))

@@ -241,6 +241,10 @@ class WifiBridge:
         # FC ignores (see docs/skills/micoair-connect.md). 30 s is far inside
         # the module idle window but cheap (1 B / 5 s).
         keepalive_interval: float = 5.0,
+        # live_tracker camera fixes (EXT_POS frames, `--send udp:47800`) arrive on 127.0.0.1:relay_port and go out
+        # through the 14550 socket: the module sends its downlink to the last uplink sender, so a second host socket
+        # would steal the stream (stream_log --relay-port does the same). None = off.
+        relay_port: Optional[int] = None,
     ):
         self._wifi_host = wifi_host
         self._wifi_port = wifi_port
@@ -275,6 +279,7 @@ class WifiBridge:
         # route expiring (~8-10 min idle), which would otherwise silently halt
         # all USART3 telemetry with no socket error and no firmware change.
         self._keepalive_interval = keepalive_interval
+        self._relay_port, self._relay, self.relayed = relay_port, None, 0
         self._last_nudge = 0.0
 
         # Subscribe-stream schemas, one per slot. Populated by
@@ -441,6 +446,18 @@ class WifiBridge:
         telem.start()
 
         self._threads = (rx, cmd, telem)
+        if self._relay_port:
+            try:
+                self._relay = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                self._relay.bind(("127.0.0.1", self._relay_port))
+                self._relay.settimeout(0.2)
+            except OSError as e:   # port taken (stream_log running): the service runs without the relay
+                print(f"[wifi_bridge] Warning: fix relay off, udp {self._relay_port}: {e}", file=sys.stderr, flush=True)
+                self._relay = None
+            else:
+                relay = threading.Thread(target=self._relay_loop, name="wifi_bridge_relay", daemon=True)
+                relay.start()
+                self._threads += (relay,)
 
         # Auto-subscribe to the dashboard layout (slot 0). This drives the
         # dashboard's sidebar via _slot0_to_sidebar() — see boot_default_layout
@@ -687,7 +704,7 @@ class WifiBridge:
         self._stop.set()
         for t in getattr(self, "_threads", ()):
             t.join(timeout=1.0)
-        for s in (self._wifi, self._wifi_send, self._cmd_udp, self._telem_udp, self._udp_send):
+        for s in (self._wifi, self._wifi_send, self._cmd_udp, self._telem_udp, self._udp_send, self._relay):
             if s:
                 try:
                     s.close()
@@ -1750,6 +1767,19 @@ class WifiBridge:
 
             self._cmd_queue.put_nowait(cmd)
             self._flush_queue()
+
+    def _relay_loop(self) -> None:
+        """Forward each datagram on the relay port to the module unchanged (camera fixes, EXT_POS frames)."""
+        while not self._stop.is_set():
+            try:
+                frame, _ = self._relay.recvfrom(256)
+            except (socket.timeout, OSError):
+                continue
+            try:
+                self._wifi_send.sendto(frame, (self._wifi_host, self._wifi_port))
+                self.relayed += 1
+            except OSError:
+                pass
 
     def _flush_queue(self) -> None:
         """Send all queued commands over WiFi."""

@@ -43,6 +43,10 @@ def _build_argparser() -> argparse.ArgumentParser:
         help="MicoAir command UDP port on the WiFi module (default: 14550)",
     )
     p.add_argument(
+        "--relay-port", type=int, default=47800,
+        help="relay live_tracker camera fixes from udp 127.0.0.1:PORT to the drone (default 47800, 0 = off)",
+    )
+    p.add_argument(
         "--no-auto-subscribe", action="store_true",
         help="Skip the automatic boot-default subscribe request on start.",
     )
@@ -266,6 +270,7 @@ def main() -> None:
     bridge = WifiBridge(
         wifi_host=args.wifi_host,
         wifi_port=args.wifi_port,
+        relay_port=args.relay_port or None,
         on_telemetry=None,  # set below after service exists
     )
 

@@ -23,6 +23,8 @@ import socket
 import struct
 import subprocess
 import time
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -403,6 +405,32 @@ class TelHeight:
         if self.fresh:
             return self.ring_h + max(0.0, self.z)
         return float("nan") if self.fallback is None else self.fallback
+
+
+class TelHeightHttp(TelHeight):
+    """TelHeight fed by the 8081 service (GET /api/values) instead of a slot CSV: with 8081 up the campaign capture
+    owns the logging, its CSV name is not known before the flight and PlainWriter flushes about once a second. Same
+    z, ground and `extra` values; the sample age is the service's. Polled at most every min_dt_s."""
+
+    def __init__(self, url: str, *args, min_dt_s: float = 0.02, timeout_s: float = 0.1, **kw):
+        super().__init__(url, *args, **kw)
+        self.url, self.min_dt, self.timeout, self.t_poll = url.rstrip("/"), min_dt_s, timeout_s, -1e9
+
+    def poll(self) -> None:
+        now = self.clock()
+        if now - self.t_poll < self.min_dt:
+            return
+        self.t_poll = now
+        q = urllib.parse.quote(",".join((self.key, *self.extra)), safe=",")
+        try:
+            with urllib.request.urlopen(f"{self.url}/api/values?names={q}", timeout=self.timeout) as r:
+                vals = json.load(r)["values"]
+            z, age = float(vals[self.key]["value"]), float(vals[self.key]["age_s"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return
+        if np.isfinite(z):
+            self.z, self.t_z, self.z_min = z, now - age, min(self.z_min, z)
+            self.v = {k: float(vals[k]["value"]) for k in self.extra if k in vals}
 
 
 class PadOrigin:
@@ -1138,6 +1166,8 @@ def main(argv=None) -> int:
     ap.add_argument("--floor", default="", help="logs/video_truth/<dir> of an earlier capture, same phone placement: "
                     "floor pose + pad seed from its aruco.npz id0 (replaces the cam json R, t)")
     ap.add_argument("--tel-csv", default="", help="live height: tail this stream_log slot CSV (line-buffered)")
+    ap.add_argument("--tel-url", default="", help="live height from the 8081 service instead (http://127.0.0.1:8081): "
+                    "use it when 8081 owns the link (campaign_fly)")
     ap.add_argument("--tel-key", default="Ctrler.Z_posPID.FB")
     ap.add_argument("--ring-h-m", type=float, default=0.057, help="ring plane on the pad (r5_marks_1 truth4 h_ring_m)")
     ap.add_argument("--tel-stale-s", type=float, default=1.0, help="older telemetry: --height-m, or no fix")
@@ -1150,13 +1180,15 @@ def main(argv=None) -> int:
     ap.add_argument("--stop-file", default="", help="end the run cleanly when this file appears (camera_truth.sh stop)")
     ap.add_argument("--static-t", default="", help='file only, "90,140,190": mask guard-colour pixels present at all these times')
     a = ap.parse_args(argv)
-    if a.align == "auto" and not (a.tel_csv and a.mode in (2, 3)):
-        ap.error("--align auto needs --tel-csv and --mode 2 or 3")
-    if a.tel_npz and a.tel_csv or not (a.tel_npz or a.tel_csv or a.height_m is not None):
-        ap.error("give --tel-csv (with an optional --height-m fallback), --tel-npz or --height-m")
+    if a.align == "auto" and not ((a.tel_csv or a.tel_url) and a.mode in (2, 3)):
+        ap.error("--align auto needs --tel-csv or --tel-url and --mode 2 or 3")
+    if sum(map(bool, (a.tel_npz, a.tel_csv, a.tel_url))) > 1 or not (a.tel_npz or a.tel_csv or a.tel_url
+                                                                      or a.height_m is not None):
+        ap.error("give one of --tel-csv / --tel-url (with an optional --height-m fallback), --tel-npz or --height-m")
     ek = ("ano_of.earth_x", "ano_of.earth_y") if a.align == "auto" else ()
-    tel = TelHeight(a.tel_csv, a.tel_key, a.ring_h_m, stale_s=a.tel_stale_s, fallback_m=a.height_m,
-                    extra=ek) if a.tel_csv else None
+    live = a.tel_csv or a.tel_url
+    tel = (TelHeightHttp if a.tel_url else TelHeight)(live, a.tel_key, a.ring_h_m, stale_s=a.tel_stale_s,
+                                                      fallback_m=a.height_m, extra=ek) if live else None
     height = tel or (tel_height(a.tel_npz, tel_offset_s=a.tel_offset_s, ring_offset_m=a.ring_offset_m)
                      if a.tel_npz else a.height_m)
     src_live = str(a.source).isdigit() or a.source.startswith("window:")
