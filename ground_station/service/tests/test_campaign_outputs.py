@@ -192,7 +192,8 @@ def test_live_capture_applies_plan_once_and_records_per_flight():
     assert begin(_exp(), "hover_ladder-001") == "logs/sessions/hover_ladder-001_hover_z050"
     subs = [c.kwargs for c in svc.bridge.subscribe_slot.call_args_list]
     used = [s for s in subs if s["divider"]]
-    assert used and [s["slot"] for s in subs if not s["divider"]] == list(range(len(used), MAX_SLOTS))
+    assert used and [s["slot"] for s in used] == list(range(1, len(used) + 1))   # slot 0 stays the dashboard's
+    assert [s["slot"] for s in subs if not s["divider"]] == list(range(len(used) + 1, MAX_SLOTS))
     start = svc.calls[1][1]
     assert start["requested_by"] == "agent:campaign" and "velocity_loops" in start["notes"]
     assert end("tok") == "logs/sessions/x"

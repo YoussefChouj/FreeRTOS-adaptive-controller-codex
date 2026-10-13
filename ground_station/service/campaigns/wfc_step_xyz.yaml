@@ -1,0 +1,40 @@
+# Autonomous xyz steps (operator 2026-10-13): take off to 0.7 m, step +-0.5 m in x and back, y and back, z and back,
+# land on the pad as accurately as possible. Same pattern as wfc_step_c.yaml: ONE `program` step (CMD 0x1C, one
+# upload, the firmware generates the path). goto(back=True) = out, dwell, back to the start, dwell.
+# z: +0.5 to 1.2 m, then -0.4 to 0.3 m (operator: "go with -0.4"; 0.2 m would break the TrajLimits z floor 0.3).
+# Steps are around the pad (0, 0), not (0, -0.5) as in step C: +y 0.5 may sit at the camera frame edge (10-07 only
+# about +0.4 m of +y was seen) - check the frame before takeoff. The program ends at (0, 0, 0.7) (home), then land.
+# Airborne cap: the firmware lands via hover at 120 s (API/wfb_safety.c); schedule estimate: see the launch table.
+# Launch it by hand: python -m ground_station.service.campaign_fly <launch copy> --pack <id> --run <run folder>.
+campaign: wfc-step-xyz
+objective: "autonomous +-0.5 m steps in x, y and z (+0.5/-0.4) from a 0.7 m hover, back to the pad and land; estimator scale/lag vs video truth per axis; landing offset vs pad"
+controller: pid
+mode: fly
+packs:
+  - P4000-1
+max_flights: 1
+experiments:
+  - name: f01_xyz
+    scenario:
+      scenario: steps-xyz
+      description: 0.7 m hover, stop-and-go steps +x, -x, +y, -y (0.5 m), +z 1.2 m, -z 0.3 m, each back to the pad hover, 3 s dwell, 0.3 m/s, land
+      motion: {v_cruise_mps: 0.3, a_max_mps2: 0.5, ds_m: 0.25}
+      steps:
+        - takeoff: {z: 0.7}
+        - hold: {s: 3}
+        - program:
+            profile: scurve
+            v: 0.3
+            a: 0.5
+            ops:
+              - {goto: {x: 0.5, dwell: 3}}
+              - {goto: {x: -0.5, dwell: 3}}
+              - {goto: {y: 0.5, dwell: 3}}
+              - {goto: {y: -0.5, dwell: 3}}
+              - {goto: {z: 1.2, dwell: 3}}
+              - {goto: {z: 0.3, dwell: 3}}
+        - land
+    capture: campaign
+    repeats: 1
+    log_plan: {rate_hz: 33, groups: [estimator_truth, optical_flow, velocity_loops, takeoff_gate, thrust_model, ekf_states]}
+abort: {}

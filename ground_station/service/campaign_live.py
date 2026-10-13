@@ -273,15 +273,19 @@ def live_capture_hooks(service: Any, controller: str = "pid", max_rate_hz: float
     def begin(exp: Any, flight_id: str) -> str:
         plan = plan_capture(exp.log_plan or None, max_rate_hz=max_rate_hz)
         steps = subscribe_steps(plan)
+        if len(steps) < MAX_SLOTS:   # leave slot 0 to the bridge's dashboard auto-subscribe (its watchdog re-sends
+            for step in steps:       # the dashboard layout there; xyz-f1 2026-10-13 died "slot 0: no schema yet")
+                step["args"]["slot"] += 1
+        first = steps[0]["args"]["slot"] if steps else 0
         if steps != applied["steps"]:
             bridge = getattr(service, "bridge", None)
             if bridge is None:
                 raise RuntimeError("bridge unavailable: cannot apply the log plan")
             for step in steps:
                 bridge.subscribe_slot(**step["args"])
-            for slot in range(len(steps), applied["slots"]):
+            for slot in range(first + len(steps), applied["slots"]):
                 bridge.subscribe_slot(slot=slot, divider=0, ranges=[])
-            applied.update(steps=steps, slots=len(steps))
+            applied.update(steps=steps, slots=first + len(steps))
         wait_streams_named(getattr(service, "bridge", None), [step["args"]["slot"] for step in steps])
         service.stop_recording()
         st = service.start_recording(
