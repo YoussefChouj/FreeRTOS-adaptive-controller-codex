@@ -28,6 +28,16 @@ PACK_RESTED_S = 1e6
 # EXCITE_ORIGIN_WAIT_S of the step start. PROPOSED, not measured.
 EXCITE_ORIGIN_TOL_M = 0.15
 EXCITE_ORIGIN_WAIT_S = 5.0
+
+# preset: traj_status (TASK/AutoflyTask.c) 1 running, 2 done, 3 aborted (takeover/landing), 4 stopped and back,
+# >= 0xE0 traj_go refused (0xE0 not flying, 0xE1 busy, 0xE2 bad traj_id, 0xEE range/too fast, 0xEF fence).
+# PROPOSED, not measured: time for the stream to show 1 or a refusal after traj_go, and the margin over the planned
+# preset time (the firmware stretches goto_s when the limit mode's speed needs it).
+PRESET_RUNNING = 1
+PRESET_OK = (2, 4)
+PRESET_REFUSED_MIN = 0xE0
+PRESET_START_S = 3.0
+PRESET_MARGIN_S = 10.0
 # Pad re-seat gate: the optical-flow position walks at up to this rate (worst body-y bias, 10-03 roam-and-return
 # flights, docs/analysis/adaptive-arch-study-2026-10-05.md sec I). The drone stays RC-armed between flights, so the
 # origin (and the fence around it) walks with the estimate until the operator re-seats and re-arms on the pad.
@@ -197,6 +207,10 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
     uploads = [i for i, st in enumerate(steps) if st.kind in TRAJ_KINDS + PROG_KINDS]
     preload = uploads[0] if len(uploads) == 1 else None
     preload_err = ""
+    # A lone preset writes its traj_p and traj_id on the ground too (VAR_WRITE needs no flight state); traj_go flies.
+    presets = [i for i, st in enumerate(steps) if st.kind == "preset"]
+    preset_pre = presets[0] if len(presets) == 1 else None
+    preset_sent = False
 
     def upload_step(st: Step) -> tuple[bool, str]:
         if st.kind in PROG_KINDS:
@@ -210,6 +224,14 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
         nonlocal preload_err
         ok, preload_err = upload_step(steps[preload])
         return ok
+
+    def preset_write(st: Step) -> str:
+        """VAR_WRITE every traj_p field and traj_id; "" when all APPLIED, else the first refused name."""
+        writes = list(st.args["params"].items()) + [("traj_id", st.args["id"])]
+        return next((name for name, v in writes if not deps.client.var_write(name, v)), "")
+
+    def preset_status() -> int:
+        return int(deps.status().get("traj_status", 0))
 
     def prim() -> int:
         return int(deps.status()["prim_state"])
@@ -254,6 +276,8 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
             cmds.append(("set_hover_z", lambda: deps.client.set_hover_z(scenario.hover_z_m)))
             if preload is not None:
                 cmds.append((f"{steps[preload].kind} upload", preload_send))
+            if preset_pre is not None:
+                cmds.append(("preset var_write", lambda: preset_write(steps[preset_pre]) == ""))
             if deps.agent_arms:
                 cmds.append(("arm", deps.client.arm))
             cmds.append(("idle", deps.client.idle))
@@ -341,6 +365,38 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
             ok = ok and session.result.status in LIVETUNE_OK
             extra = {"livetune": session.result.summary()}
             deps.on_livetune(extra["livetune"])
+        elif st.kind == "preset":
+            # Keil preset from the hover (WP-45: the glue yields HOVER while traj_active, holds the point again after).
+            t_settle = deps.clock()
+            ok = wait(lambda: deps.clock() - t_settle >= WFB_SETTLE_S and prim() == PRIM_HOVER, "preset settle")
+            name = st.args["name"]
+            bad = "" if not ok or i == preset_pre else preset_write(st)
+            if bad:
+                decision = AbortDecision(level=1, reason=f"preset {name}: var_write {bad} not applied")
+                ok = False
+            elif ok and not deps.client.var_write("traj_go", 1):
+                decision = AbortDecision(level=1, reason=f"preset {name}: traj_go not applied")
+                ok = False
+            elif ok:
+                preset_sent = True
+                t_go = deps.clock()
+                # a stale 2/4 from the previous preset stays until the firmware runs traj_go: wait for 1 or a refusal
+                ok = wait(lambda: preset_status() == PRESET_RUNNING or preset_status() >= PRESET_REFUSED_MIN
+                          or deps.clock() - t_go >= PRESET_START_S, "preset start")
+                code = preset_status()
+                if ok and code != PRESET_RUNNING:
+                    why = f"refused 0x{code:02X}" if code >= PRESET_REFUSED_MIN else f"traj_status {code} after traj_go"
+                    decision = AbortDecision(level=1, reason=f"preset {name}: {why}")
+                    ok = False
+                if ok:
+                    ok = wait(lambda: preset_status() != PRESET_RUNNING
+                              or deps.clock() - t_go >= st.duration_s + PRESET_MARGIN_S, f"preset {name}")
+                    code = preset_status()
+                    if ok and code not in PRESET_OK:
+                        why = "still running" if code == PRESET_RUNNING else f"traj_status {code}"
+                        decision = AbortDecision(level=1, reason=f"preset {name}: {why}")
+                        ok = False
+                extra = {"preset": name, "traj_status": code}
         else:
             raise ValueError(f"step {i}: unexpected kind {st.kind!r} before land")
         records.append({"step": i, "kind": st.kind, "t0_s": round(t0, 3),
@@ -352,6 +408,8 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
     if aborted:
         if excite_sent:
             deps.client._send_cmd(ex.CMD_SYSID, ex.IDX_START, 0.0)  # SysID abort -> RECOVERY
+        if preset_sent:
+            deps.client.var_write("traj_stop", 1)  # the preset flies back to its start point, then LAND
         deps.client.traj_stop()
     t0 = deps.clock() - t_start
     land_sent = deps.client.land()

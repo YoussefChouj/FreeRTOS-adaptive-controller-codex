@@ -7,6 +7,9 @@ name as the APPLIED detail. docs/firmware-table-pattern.md has the wire rules.
 
     client.var_write("traj_p.move_s", 12)      # WfbClient: True when APPLIED
     client.var_write("traj_go", 1)
+
+The Keil trajectory presets (traj_id, traj_go) read the traj_p struct; traj_defaults() parses its boot values from the
+same file, so a flight script that names a few fields flies the rest at the firmware's own defaults.
 """
 
 from __future__ import annotations
@@ -20,6 +23,8 @@ CMD_VAR_WRITE: int = 0x2D
 SOURCE = Path(__file__).resolve().parents[2] / "TASK" / "AutoflyTask.c"
 
 _NUM = r"([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)[fF]?"
+# traj_id values (TASK/AutoflyTask.c traj_id comment)
+PRESETS: dict[str, int] = {"step": 1, "zigzag": 2, "circle": 3, "figure8": 4}
 _ROW = re.compile(r"^[ \t]*VAR_WRITE_ROW\(\s*([\w.]+)\s*,\s*(VW_U8|VW_F32)\s*,\s*(\d+)\s*,\s*%s\s*,\s*%s\s*\)"
                   % (_NUM, _NUM), re.M)
 
@@ -75,3 +80,38 @@ def check(name: str, value: float, table: dict[str, VarRow] | None = None) -> Va
     if row.integer and v != int(v):
         raise VarWriteError(f"{name} = {value}: a u8 variable takes an integral value")
     return row
+
+
+def _strip_comments(text: str) -> str:
+    return re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+
+
+def traj_defaults(path: Path = SOURCE) -> dict[str, float]:
+    """"traj_p.<field>" -> boot value: the TrajParams_t field order zipped with the traj_p initializer's numbers.
+    Raises ValueError when the two counts differ (a field without an initializer value, or a value parsed twice)."""
+    text = _strip_comments(path.read_text(encoding="utf-8"))
+    body = re.search(r"typedef struct \{([^{}]*)\} TrajParams_t;", text)
+    init = re.search(r"\bTrajParams_t traj_p = \{([^{}]*)\};", text)
+    if body is None or init is None:
+        raise ValueError(f"{path.name}: TrajParams_t or its traj_p initializer not found")
+    fields = re.findall(r"\b(?:uint8_t|float)\s+(\w+)\s*;", body.group(1))
+    values = [float(v) for v in re.findall(r"([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)[fFuU]?", init.group(1))]
+    if not fields or len(fields) != len(values):
+        raise ValueError(f"{path.name}: {len(fields)} TrajParams_t fields but {len(values)} traj_p initializer values")
+    return {f"traj_p.{f}": v for f, v in zip(fields, values)}
+
+
+def traj_total_max_s(path: Path = SOURCE) -> float:
+    """TRAJ_TOTAL_MAX_S: the move_s + ret_s + hold_s ceiling traj_go refuses above (status 0xEE)."""
+    m = re.search(r"#define TRAJ_TOTAL_MAX_S\s+%s" % _NUM, path.read_text(encoding="utf-8"))
+    if m is None:
+        raise ValueError(f"{path.name}: TRAJ_TOTAL_MAX_S not found")
+    return float(m.group(1))
+
+
+def preset_duration_s(params: dict[str, float]) -> float:
+    """Planned preset time from traj_go to back at the start point: goto and settle when start_fixed, then move,
+    return and hold. The firmware stretches goto_s when the limit mode's speed needs it, so this is a lower bound."""
+    p = params
+    lead = p["traj_p.goto_s"] + p["traj_p.settle_s"] if p["traj_p.start_fixed"] else 0.0
+    return lead + p["traj_p.move_s"] + p["traj_p.ret_s"] + p["traj_p.hold_s"]

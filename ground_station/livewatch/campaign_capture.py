@@ -81,6 +81,8 @@ WFB_STATUS_FIELDS: tuple[str, ...] = (
 )
 WFB_STATUS: tuple[str, ...] = tuple(f"g_wfb_status.{f}" for f in WFB_STATUS_FIELDS)
 KF_HEALTH = "g_ekf_of_health"
+# Keil preset status (TASK/AutoflyTask.c): the runner's preset step waits on traj_status
+PRESET_STATUS: tuple[str, ...] = ("traj_status",)
 
 MRAC_AXES = ("pitch", "roll", "yaw", "z_rate")
 def _mrac_n_features() -> int:
@@ -116,6 +118,7 @@ CAMPAIGN_SET: Mapping[str, tuple[str, ...]] = MappingProxyType({
         + MOTORS
         + WFB_STATUS
         + (KF_HEALTH,)
+        + PRESET_STATUS
     ),
     "optional": MRAC_SHADOW,
 })

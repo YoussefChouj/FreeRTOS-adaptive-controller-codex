@@ -73,3 +73,19 @@ def test_row_types_match_c_declarations() -> None:
             assert decl, row.name
             ctype = decl.group(1)
         assert (ctype == "uint8_t") == row.integer, row.name
+
+
+def test_traj_defaults_cover_every_traj_p_row() -> None:
+    """The boot values parsed from the traj_p initializer: one per row, each one writable to its own row."""
+    d = wfb_var.traj_defaults()
+    assert set(d) == {n for n in wfb_var.rows() if n.startswith("traj_p.")}
+    for name, value in d.items():
+        wfb_var.check(name, value)
+
+
+def test_preset_duration_counts_goto_only_with_a_fixed_start() -> None:
+    d = dict(wfb_var.traj_defaults(), **{"traj_p.goto_s": 4.0, "traj_p.settle_s": 2.0, "traj_p.move_s": 10.0,
+                                         "traj_p.ret_s": 3.0, "traj_p.hold_s": 1.0})
+    assert wfb_var.preset_duration_s(dict(d, **{"traj_p.start_fixed": 1.0})) == 20.0
+    assert wfb_var.preset_duration_s(dict(d, **{"traj_p.start_fixed": 0.0})) == 14.0
+    assert wfb_var.traj_total_max_s() == max(r.max for n, r in wfb_var.rows().items() if n == "traj_p.move_s")

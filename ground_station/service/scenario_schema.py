@@ -11,6 +11,11 @@ Steps run in order:
   excite  {axis, signal, f0, f1, amp, duration_s}
                                  SysID run (CMD 0x14) on one rate loop; only right after a hold (see below)
   livetune {loop, axes, budget_s, ...}  hold the hover point while ground_station/livetune tunes gains for budget_s
+  preset  {name, <traj_p field>: value, ...}
+                                 Keil trajectory preset (TASK/AutoflyTask.c traj_id/traj_go), started over VAR_WRITE
+                                 (CMD 0x2D) from the hover: name step|zigzag|circle|figure8; fields left out fly at the
+                                 firmware boot defaults (wfb_var.traj_defaults; start_fixed 1 flies to its start point
+                                 first). The hover yields while it runs and holds the hover point again after (WP-45)
   land    {}                     the last step, exactly once
 
 takeoff may also set mrac_injection (0/1): CMD 0x0F idx 10 sent on the ground before takeoff (autotune flies 0),
@@ -53,13 +58,13 @@ from ground_station.service.trajectory_pipeline import (
 from ground_station.livetune.loop import STEP_OPTIONAL as LIVETUNE_OPTIONAL
 from ground_station.livetune.loop import STEP_REQUIRED as LIVETUNE_REQUIRED
 from ground_station.livetune.loop import parse_step as parse_livetune
-from ground_station.platform import wfb_presets
+from ground_station.platform import wfb_presets, wfb_var
 from ground_station.platform.wfb_presets import MOTION_KEYS
 from ground_station.platform.wfb_program import Segment, preview
 
 SCENARIO_DIR = Path(__file__).resolve().parents[2] / "docs" / "workflow-b" / "scenarios"
 
-STEP_KINDS = ("takeoff", "hold", "goto", "path", "program", "excite", "livetune", "land")
+STEP_KINDS = ("takeoff", "hold", "goto", "path", "program", "excite", "livetune", "preset", "land")
 TRAJ_KINDS = ("goto", "path")
 PROG_KINDS = ("program",)
 
@@ -96,6 +101,7 @@ _STEP_KEYS: Mapping[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "program": (("ops",), tuple(sorted(MOTION_KEYS))),
     "excite": (("axis", "f0", "f1", "amp", "duration_s"), ("signal",)),
     "livetune": (LIVETUNE_REQUIRED, LIVETUNE_OPTIONAL),
+    "preset": (("name",), tuple(k.split(".", 1)[1] for k in wfb_var.traj_defaults())),
     "land": ((), ()),
 }
 
@@ -151,8 +157,8 @@ class Scenario:
 
     @property
     def budget_s(self) -> float:
-        """Estimated airborne time: steps + one settle per trajectory or program + climb/landing overhead."""
-        n_traj = sum(1 for s in self.steps if s.kind in TRAJ_KINDS + PROG_KINDS)
+        """Estimated airborne time: steps + one settle per trajectory, program or preset + climb/landing overhead."""
+        n_traj = sum(1 for s in self.steps if s.kind in TRAJ_KINDS + PROG_KINDS + ("preset",))
         return self.step_time_s + n_traj * WFB_SETTLE_S + WFB_FLIGHT_OVERHEAD_S
 
     def summary(self) -> list[dict[str, Any]]:
@@ -174,6 +180,36 @@ class ScenarioError(ValueError):
 
 def _num(value: Any) -> bool:
     return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
+
+
+def _compile_preset(body: dict, path: str, problems: list[str]) -> Step | None:
+    """traj_p = the firmware boot defaults overlaid with the step's fields, each checked against its VAR_WRITE row,
+    and move_s + ret_s + hold_s against TRAJ_TOTAL_MAX_S (traj_go refuses it as 0xEE in the air otherwise)."""
+    name = body.get("name")
+    if name not in wfb_var.PRESETS:
+        problems.append(f"{path}.name: must be one of {', '.join(wfb_var.PRESETS)} (got {name!r})")
+        return None
+    params, n0 = wfb_var.traj_defaults(), len(problems)
+    for k, v in body.items():
+        if k == "name":
+            continue
+        if not _num(v):
+            problems.append(f"{path}.{k}: must be a finite number (got {v!r})")
+            continue
+        try:
+            wfb_var.check(f"traj_p.{k}", v)
+        except wfb_var.VarWriteError as e:
+            problems.append(f"{path}.{k}: {e}")
+            continue
+        params[f"traj_p.{k}"] = float(v)
+    total, cap = (params["traj_p.move_s"] + params["traj_p.ret_s"] + params["traj_p.hold_s"],
+                  wfb_var.traj_total_max_s())
+    if total > cap:
+        problems.append(f"{path}: move_s + ret_s + hold_s = {total:g} s exceeds TRAJ_TOTAL_MAX_S {cap:g} s")
+    if len(problems) > n0:
+        return None
+    return Step("preset", {"name": name, "id": wfb_var.PRESETS[name], "params": params}, (),
+                wfb_var.preset_duration_s(params))
 
 
 def _subst(value: Any, args: Mapping[str, Any], path: str, problems: list[str]) -> Any:
@@ -410,6 +446,10 @@ def parse_scenario(data: Any, args: Mapping[str, Any] | None = None) -> Scenario
                 problems.extend(f"{path}.livetune.{e}" for e in errs)
                 if not errs:
                     steps.append(Step("livetune", dict(body), (), float(body["budget_s"])))
+        elif kind == "preset":
+            step = _compile_preset(body, f"{path}.preset", problems)
+            if step is not None:
+                steps.append(step)
         elif kind == "program":
             if math.isfinite(hover_z):
                 step = _compile_program(body, hover_z, path, problems)

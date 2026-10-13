@@ -25,7 +25,7 @@ from ground_station.platform.wfb_commands import (
     ProgIdx,
     TrajIdx,
 )
-from ground_station.platform import wfb_program
+from ground_station.platform import wfb_program, wfb_var
 from ground_station.service.trajectory_pipeline import TrajLimits, TrajPoint, crc32, validate
 
 PARAM_CMDS = (0x01, 0x0F, 0x14)  # PID_GAIN, MRAC/telemetry flags, SysID control: the livetune step's writes
@@ -199,6 +199,15 @@ class FakeDrone:
         self._sysid_t: float = 0.0
         self.mrac_flags: dict[int, bool] = {}
 
+        # CMD 0x2D VAR_WRITE rows (name -> value) and the Keil preset they start (TASK/AutoflyTask.c Traj_Start/Tick):
+        # traj_status / traj_active as the firmware streams them; the preset holds the position, only its time runs.
+        self.vars: dict[str, float] = {**wfb_var.traj_defaults(), "traj_id": 4.0}
+        self.var_writes: list[tuple[str, float]] = []
+        self._traj_status: int = 0
+        self._traj_active: int = 0
+        self._preset_t: float = 0.0
+        self._preset_s: float = 0.0
+
     @property
     def armed(self) -> bool:
         """Whether the flight controller is currently armed."""
@@ -236,6 +245,8 @@ class FakeDrone:
             return self._handle_traj(cmd)
         elif cmd.command_id == CMD_PROG:
             return self._handle_prog(cmd)
+        elif cmd.command_id == wfb_var.CMD_VAR_WRITE:
+            return self._handle_var(cmd)
         if cmd.command_id in PARAM_CMDS:  # no dynamics behind them: recorded for the livetune tests
             self.param_writes.append((cmd.command_id, cmd.index, cmd.value))
         if cmd.command_id == ex.CMD_MRAC_FLAGS and cmd.index <= 12:
@@ -283,6 +294,33 @@ class FakeDrone:
                 return int(Outcome.APPLIED)
 
         return int(Outcome.REJECTED)
+
+    def _handle_var(self, cmd: Command) -> int:
+        """CMD 0x2D: the row id names the variable; traj_go 1 starts traj_id like Traj_Start, traj_stop 1 ends it."""
+        row = next((r for r in wfb_var.rows().values() if r.id == cmd.index), None)
+        if row is None:
+            return int(Outcome.REJECTED)
+        try:
+            wfb_var.check(row.name, cmd.value)
+        except wfb_var.VarWriteError:
+            return int(Outcome.REJECTED)
+        self.var_writes.append((row.name, float(cmd.value)))
+        if row.name == "traj_go" and cmd.value == 1.0:
+            preset = int(self.vars["traj_id"])
+            if self._prim_state == PrimState.IDLE:
+                self._traj_status = 0xE0
+            elif self._traj_active or self._prim_state != PrimState.HOVER:
+                self._traj_status = 0xE1
+            elif preset not in wfb_var.PRESETS.values():
+                self._traj_status = 0xE2
+            else:
+                self._traj_status, self._traj_active, self._preset_t = 1, preset, 0.0
+                self._preset_s = wfb_var.preset_duration_s(self.vars)
+        elif row.name == "traj_stop" and cmd.value == 1.0 and self._traj_active:
+            self._traj_status, self._traj_active = 4, 0
+        elif row.name not in ("traj_go", "traj_stop"):
+            self.vars[row.name] = float(cmd.value)
+        return int(Outcome.APPLIED)
 
     def _handle_sysid(self, cmd: Command) -> int:
         """CMD 0x14 as TASK/send_data.c:1838-1872: always applied; a start that fails SysID_Start's preconditions
@@ -609,6 +647,12 @@ class FakeDrone:
         if self._traj_state == TrajState.EXECUTING:
             self._traj_t += dt
         self._step_sysid(dt)
+        if self._traj_active:
+            self._preset_t += dt
+            if self._prim_state != PrimState.HOVER:   # landing or a takeover: Traj_Tick aborts
+                self._traj_status, self._traj_active = 3, 0
+            elif self._preset_t >= self._preset_s:
+                self._traj_status, self._traj_active = 2, 0
 
         # 2. Safety net
         out = 0
@@ -975,4 +1019,6 @@ class FakeDrone:
             "fence_push": float(self._push),
             "prog_mode": float(self._prog_mode),
             "prog_err_seg": float(self._prog_err_seg),
+            "traj_status": float(self._traj_status),
+            "traj_active": float(self._traj_active),
         }

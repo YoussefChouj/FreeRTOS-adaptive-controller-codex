@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 
 import pytest
@@ -220,3 +221,68 @@ def test_takeoff_sets_injection_once_on_the_ground(injection, step_args, expect)
     out = fly_scenario(parse_scenario(data), deps, injection=injection)
     assert not out.aborted and out.landed
     assert sent == expect  # once, before IDLE; never again in the air, so an RC ch8 flip keeps primacy
+
+
+def _preset(**fields):
+    return {"scenario": "pre", "steps": [{"takeoff": {"z": 0.5}}, {"preset": {"name": "circle", **fields}}, "land"]}
+
+
+def test_preset_writes_traj_p_on_the_ground_and_flies_from_the_hover():
+    """A lone preset: traj_p + traj_id by VAR_WRITE while IDLE, traj_go in HOVER, done (2), then LAND."""
+    drone, _, deps = _rig()
+    prims = []
+    inner = deps.client.var_write
+    deps.client.var_write = lambda n, v: prims.append((n, int(drone.status()["prim_state"]))) or inner(n, v)
+    out = fly_scenario(parse_scenario(_preset(move_s=8, circ_r_cm=30)), deps)
+    assert not out.aborted and out.landed, out.decision
+    assert [r["kind"] for r in out.steps] == ["takeoff", "preset", "land"]
+    assert out.steps[1]["traj_status"] == 2 and out.steps[1]["preset"] == "circle"
+    assert {p for n, p in prims if n != "traj_go"} == {PRIM_IDLE} and ("traj_go", 2) in prims
+    assert drone.vars["traj_p.circ_r_cm"] == 30.0 and drone.vars["traj_id"] == 3.0
+    run = out.steps[1]["t1_s"] - out.steps[1]["t0_s"]
+    assert run >= 4 + 2 + 8 + 3 + 2 - 1e-6        # goto + settle + move + return + hold, boot defaults otherwise
+
+
+def test_two_presets_write_in_the_air_and_wait_past_the_stale_done():
+    data = {"scenario": "two", "steps": [{"takeoff": {"z": 0.5}}, {"preset": {"name": "step", "move_s": 4}},
+                                         {"preset": {"name": "zigzag", "move_s": 4}}, "land"]}
+    drone, _, deps = _rig()
+    out = fly_scenario(parse_scenario(data), deps)
+    assert not out.aborted and out.landed, out.decision
+    assert [(r["kind"], r.get("preset")) for r in out.steps[1:3]] == [("preset", "step"), ("preset", "zigzag")]
+    assert all(r["ok"] for r in out.steps) and drone.vars["traj_id"] == 2.0
+
+
+def test_refused_preset_aborts_with_the_code_and_lands():
+    drone, _, deps = _rig()
+    inner = drone._handle_var
+    def busy(cmd):  # traj_go while the firmware reports busy (0xE1)
+        rc = inner(cmd)
+        if drone._traj_active:
+            drone._traj_status, drone._traj_active = 0xE1, 0
+        return rc
+    drone._handle_var = busy
+    out = fly_scenario(parse_scenario(_preset(move_s=4)), deps)
+    assert out.aborted and out.landed and out.decision.reason == "preset circle: refused 0xE1"
+    assert out.steps[1]["traj_status"] == 0xE1
+
+
+def test_operator_land_mid_preset_stops_it_then_lands():
+    drone, clock, deps = _rig()
+    _hook_step(deps, clock, 25.0, lambda: deps.control.request("land"))
+    out = fly_scenario(parse_scenario(_preset(move_s=20)), deps)
+    assert out.aborted and out.landed and out.decision.reason == "operator land"
+    assert ("traj_stop", 1.0) in drone.var_writes and int(drone.status()["traj_status"]) == 4
+
+
+@pytest.mark.parametrize("fields, msg", [
+    ({"name": "loop"}, "name: must be one of"),
+    ({"move_s": 30}, "outside [0, 25]"),
+    ({"move_s": 22, "ret_s": 5}, "exceeds TRAJ_TOTAL_MAX_S 25"),
+    ({"profile": 0.5}, "integral"),
+])
+def test_preset_fields_are_checked_before_flight(fields, msg):
+    data = _preset()
+    data["steps"][1]["preset"].update(fields)
+    with pytest.raises(Exception, match=re.escape(msg)):
+        parse_scenario(data)
