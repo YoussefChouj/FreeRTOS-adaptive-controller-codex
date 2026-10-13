@@ -1,6 +1,6 @@
 ---
 name: workflow-c
-description: Fly an iterative flight-test session on the live drone, one flight at a time. The operator launches each flight by hand from a terminal (one campaign_fly command, preflight, arm by RC, type go); the agent prepares the launch copy and the command, and after every flight the agent debriefs what happened, sends plots, recommends what to tune, try or modify, and proposes the next flight. Use when the user says /workflow-c, "workflow c", "fly and tune", "debrief each flight", or wants a guided flight-by-flight test night.
+description: Fly an iterative flight-test session on the live drone, one flight at a time. The operator launches each flight by hand from a terminal (one `fly` command, silent preflight, the RC arm is the go); the agent prepares the launch copy and the command, and after every flight the agent debriefs what happened, sends plots, recommends what to tune, try or modify, and proposes the next flight. Use when the user says /workflow-c, "workflow c", "fly and tune", "debrief each flight", or wants a guided flight-by-flight test night.
 ---
 
 # Workflow C: fly, debrief, recommend, repeat
@@ -9,9 +9,9 @@ Workflow B with a loop around it. Every launch is a **one-flight** fly campaign,
 a stop: what happened, plots, what to change, and the next flight.
 
 **The operator flies, not the agent (operator 2026-10-07).** Each flight is one terminal command the operator runs:
-`python -m ground_station.service.campaign_fly <launch copy> --pack <id> --run <run folder>`. It prints the
-preflight; they fix any FAIL, press Enter, arm by RC and type `go`; Ctrl+C once lands, twice aborts, RC ch10 kills;
-after landing it runs the debrief into the run folder. The agent writes `<run>/<NN>/MANUAL.md` with that exact
+`fly <launch copy> --pack <id> --run <run folder> --once` (fly.cmd = `python -m ground_station.service.campaign_fly`).
+It prints only preflight FAIL rows; they fix them, arm by RC, and the takeoff follows a 3 s countdown (a disarm
+cancels); Ctrl+C once lands, twice aborts, RC ch10 kills; after landing it runs the debrief into the run folder. The agent writes `<run>/<NN>/MANUAL.md` with that exact
 command (template: `logs/workflow-c/20261007-1546/01/MANUAL.md`), gives it in a `bash` block, and does not call
 `campaign_preflight` / `campaign_go` unless the operator asks for an agent-flown flight.
 
@@ -57,7 +57,7 @@ so its floor pose can be reused for video truth.
    94.3 s airborne against 73.1 s (about 5.3 s of upload hover per goto). Keep the projection well under the 120 s
    firmware cap, or the flight lands via hover early.
 2. **Hand over**: write `<run>/<NN>/MANUAL.md` and give the operator the `campaign_fly` command in its own `bash`
-   block. They run it, arm by RC and type `go` in their terminal. Wait for "landed"; do not poll.
+   block. They run it and arm by RC (the arm is the go). Wait for "landed"; do not poll.
 3. **Check**: read the command's debrief output (it runs `flight_debrief --run <run>` itself). Run step 4 by hand
    only if that failed or the operator stopped it.
 4. **Debrief** on the outputs folder the campaign wrote:

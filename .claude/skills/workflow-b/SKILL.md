@@ -16,9 +16,12 @@ Q1 campaign ─> Q2 pack ─> campaign_launch (1 command) ─> Q3 log plan ─> 
 
 **Default is the terminal (operator 2026-10-07): no dashboard approvals.** After Q1-Q3 and `campaign_launch`,
 give the operator one command in a `bash` block and let them run it:
-`python -m ground_station.service.campaign_fly <launch copy> --pack <id>`. It starts the service if 8081 is down,
-prints the preflight (they fix any FAIL), waits for the RC arm and a typed `go`, flies, and writes the same
-outputs as section 4. Ctrl+C once lands, twice aborts, RC ch10 kills. The MCP path below (sections 1 Preflight,
+`fly <campaign> --pack <id>` (`fly.cmd` at the repo root = `python -m ground_station.service.campaign_fly`; the
+campaign is a `.fly` script, a campaign yaml, a launch copy or a saved name; the pack is remembered). It starts
+the service if 8081 is down, runs a silent preflight (prints only FAIL rows), and the RC arm is the go: arm ->
+3 s countdown -> takeoff, a disarm cancels. Live line at 5 Hz, keys s stop step, n next, l land; Ctrl+C once
+lands, twice aborts, RC ch10 kills. After landing: a 5-line debrief, `logs/flights/<date>/<NN>_<campaign>/`, the
+same outputs as section 4, then it waits for the next arm. The MCP path below (sections 1 Preflight,
 2, 3) is used only when the operator asks for an agent-flown campaign.
 
 ## Hard rules

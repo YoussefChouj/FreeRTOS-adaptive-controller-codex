@@ -79,3 +79,181 @@ def test_tel_line_names_states_scales_cm_and_drops_stale(monkeypatch):
     assert line.split() == ["HOVER", "traj", "EXECUTING", "air", "12.3/120s", "x", "+0.50->+1.00", "z", "+0.70"]
     monkeypatch.setattr(campaign_fly, "call", lambda base, route: (200, {"values": {}}))
     assert campaign_fly.tel_line("http://h") == ""
+
+
+# --- fly: arm = go, live watch, debrief, flight folder ---------------------------------------------------------------
+
+import pytest  # noqa: E402
+
+from ground_station.service.campaign_launch import LaunchError  # noqa: E402
+from ground_station.service.tests.test_fly_file import SAMPLE  # noqa: E402
+
+
+class Rig:
+    """Fake clock + 8081: arm(t) -> armed|disarmed|unknown, link(t) -> fresh streams, a preflight verdict."""
+
+    def __init__(self, monkeypatch, arm, link=lambda t: True, pf_ok=True, quit_at=20.0, interrupt_at=()):
+        self.t, self.arm, self.link, self.pf_ok, self.quit_at = 0.0, arm, link, pf_ok, quit_at
+        self.interrupt_at, self.calls, self.preflights = list(interrupt_at), [], 0
+        monkeypatch.setattr(campaign_fly, "_clock", lambda: self.t)
+        monkeypatch.setattr(campaign_fly, "_sleep", self.sleep)
+        monkeypatch.setattr(campaign_fly, "_key", lambda: "q" if self.t >= self.quit_at else "")
+        monkeypatch.setattr(campaign_fly, "call", self.call)
+
+    def sleep(self, s):
+        self.t += s
+        if self.interrupt_at and self.t >= self.interrupt_at[0]:
+            self.interrupt_at.pop(0)
+            raise KeyboardInterrupt
+
+    def call(self, base, route, body=None, timeout=10):
+        self.calls.append((route, body))
+        if route == "/api/campaign/vitals":
+            return 200, {"arm": {"state": self.arm(self.t)},
+                         "streams": {"0": {"age_s": 0.1 if self.link(self.t) else 99.0}}}
+        if route.startswith("/api/campaign/preflight"):
+            self.preflights += 1
+            return 200, {"ok": self.pf_ok, "checks": [] if self.pf_ok else
+                         [{"name": "battery", "value": "3.50 V/cell", "pass": False, "fix": "charge the pack"}]}
+        raise AssertionError(route)
+
+
+def _wait(rig, **kw):
+    return campaign_fly.wait_for_arm("http://h", "c.yaml", "P4000-1", **kw)
+
+
+def test_arm_edge_counts_down_then_goes(monkeypatch, capsys):
+    rig = Rig(monkeypatch, lambda t: "armed" if t >= 1.0 else "disarmed")
+    assert _wait(rig) == "go"
+    out = capsys.readouterr().out
+    assert rig.t >= 1.0 + campaign_fly.COUNTDOWN_S and "preflight OK" in out
+    assert [ln.strip() for ln in out.splitlines() if ln.strip() in ("3", "2", "1")] == ["3", "2", "1"]
+
+
+def test_armed_at_start_needs_a_disarm_first(monkeypatch, capsys):
+    rig = Rig(monkeypatch, lambda t: "armed", quit_at=10.0)
+    assert _wait(rig) == "quit"
+    assert "ARMED already: disarm by RC" in capsys.readouterr().out and rig.preflights == 0
+
+
+def test_disarm_cancels_the_countdown_and_a_new_arm_restarts_it(monkeypatch, capsys):
+    rig = Rig(monkeypatch, lambda t: "armed" if 1.0 <= t < 2.0 or t >= 3.0 else "disarmed")
+    assert _wait(rig) == "go"
+    assert rig.t >= 3.0 + campaign_fly.COUNTDOWN_S and "countdown cancelled" in capsys.readouterr().out
+
+
+def test_ctrl_c_in_the_countdown_cancels_and_holding_the_arm_never_goes(monkeypatch, capsys):
+    rig = Rig(monkeypatch, lambda t: "armed" if t >= 1.0 else "disarmed", quit_at=12.0, interrupt_at=[2.0])
+    assert _wait(rig) == "quit"
+    out = capsys.readouterr().out
+    assert "countdown cancelled: disarm by RC" in out and "ARMED already" not in out
+
+
+def test_failing_preflight_blocks_the_go_and_prints_once(monkeypatch, capsys):
+    rig = Rig(monkeypatch, lambda t: "armed" if t >= 5.0 else "disarmed", pf_ok=False, quit_at=12.0)
+    assert _wait(rig) == "quit"
+    out = capsys.readouterr().out
+    assert rig.preflights >= 2 and out.count("preflight FAIL") == 1 and "charge the pack" in out
+    assert "ARMED with the preflight failing" in out
+
+
+def test_link_back_after_silence_asks_for_the_pack(monkeypatch, capsys):
+    rig = Rig(monkeypatch, lambda t: "unknown" if 1.0 <= t < 6.0 else "disarmed", link=lambda t: not 1.0 <= t < 6.0)
+    assert _wait(rig) == "link"
+    assert "link lost" in capsys.readouterr().out and 6.0 <= rig.t < 6.5
+
+
+def test_held_campaign_skips_the_preflight(monkeypatch):
+    rig = Rig(monkeypatch, lambda t: "armed" if t >= 1.0 else "disarmed")
+    assert _wait(rig, preflight=False) == "go" and rig.preflights == 0
+
+
+def _sample(t, prim, x, y, z, dx=0.0, dz=0.0, air=0.0):
+    return {"t": t, "g_wfb_status.prim_state": prim, "g_wfb_status.airborne_t": air,
+            "Ctrler.locxPID.FB": x, "Ctrler.locxPID.Des": x - dx, "Ctrler.locyPID.FB": y, "Ctrler.locyPID.Des": y,
+            "Ctrler.Z_posPID.FB": z, "Ctrler.Z_posPID.Des": z - dz}
+
+
+def test_debrief_lines_rms_max_and_landing_offset():
+    samples = [_sample(0.0, 0, 10.0, 0.0, 0.0), _sample(1.0, 2, 10.0, 0.0, 0.52, dx=3.0, dz=0.02, air=1.0),
+               _sample(2.0, 2, 10.0, 0.0, 0.52, dx=-3.0, dz=0.02, air=2.0), _sample(3.0, 0, 14.0, -3.0, 0.0, air=3.5)]
+    lines = campaign_fly.debrief_lines(samples, {"status": "done", "flights": [{}], "outputs_dir": "logs/o"}, "f/01")
+    assert lines == ["done  air 3.5 s  1 flight(s)  4 live samples",
+                     "HOVER  x/y/z error cm  rms 3/0/2  max 3/0/2  (1 s)",
+                     "TRAJ   no samples",
+                     "landing offset x +4 y -3 cm from the takeoff point (5 cm)",
+                     "outputs logs/o  flight folder f/01"]
+
+
+def test_flight_folder_numbers_the_days_flights(tmp_path):
+    first = campaign_fly.flight_folder("hover", root=tmp_path, now=0)
+    second = campaign_fly.flight_folder("hover", root=tmp_path, now=0)
+    assert first.name == "01_hover" and second.name == "02_hover" and first.parent == second.parent
+
+
+def test_remember_pack(tmp_path):
+    f = tmp_path / "pack.txt"
+    assert campaign_fly.remember_pack(None, f) == ""
+    assert campaign_fly.remember_pack(" P4000-2 ", f) == "P4000-2"
+    assert campaign_fly.remember_pack("", f) == "P4000-2"
+
+
+def test_resolve_campaign_fly_file_name_and_launch_copy(tmp_path):
+    kw = {"launch_dir": tmp_path / "launch", "fly_dir": tmp_path / "fly"}
+    launch, src = campaign_fly.resolve_campaign(str(SAMPLE), "P4000-1", **kw)
+    assert src == SAMPLE and launch.parent == tmp_path / "launch"
+    by_name, src2 = campaign_fly.resolve_campaign("preset_tour", "P4000-1", **kw)
+    assert src2 == SAMPLE and by_name.parent == tmp_path / "launch"
+    assert campaign_fly.resolve_campaign(str(launch), "other", **kw) == (launch, launch)
+    with pytest.raises(LaunchError, match="preset_tour"):
+        campaign_fly.resolve_campaign("no_such_campaign", "P4000-1", **kw)
+
+
+class Flight(Rig):
+    """Rig + go, campaign state running for `run_s` after the go, then done; live values; keys pressed in order."""
+
+    def __init__(self, monkeypatch, keys=(), run_s=3.0, **kw):
+        super().__init__(monkeypatch, lambda t: "armed" if t >= 1.0 else "disarmed", **kw)
+        self.go_t, self.run_s, self.keys = None, run_s, list(keys)
+        monkeypatch.setattr(campaign_fly, "_key", lambda: self.keys.pop(0) if self.keys else "")
+
+    def call(self, base, route, body=None, timeout=10):
+        if route == "/api/campaign/go":
+            self.calls.append((route, body))
+            self.go_t = self.t
+            return 200, {"ok": True}
+        if route == "/api/campaign/state":
+            running = self.go_t is not None and self.t - self.go_t < self.run_s
+            return 200, {"status": "running" if running else "done", "phase": "HOVER", "outputs_dir": "logs/o"}
+        if route.startswith("/api/values"):
+            return 200, {"values": {k: {"value": v, "age_s": 0.1} for k, v in
+                                    _sample(0, 2, 10.0, 0.0, 0.5).items() if k != "t"}}
+        if route in ("/api/campaign/stop", "/api/campaign/next", "/api/campaign/land", "/api/campaign/abort"):
+            self.calls.append((route, body))
+            return 200, {}
+        return super().call(base, route, body, timeout)
+
+
+def test_watch_keys_post_their_routes_and_ctrl_c_lands_then_aborts(monkeypatch):
+    rig = Flight(monkeypatch, keys=["s", "n", "l"], interrupt_at=[1.0, 1.5])
+    rig.go_t = 0.0
+    st, samples = campaign_fly.watch("http://h")
+    assert [r for r, _ in rig.calls] == ["/api/campaign/stop", "/api/campaign/next", "/api/campaign/land",
+                                         "/api/campaign/land", "/api/campaign/abort"]
+    assert st["status"] == "done" and len(samples) >= 10 and samples[0]["g_wfb_status.prim_state"] == 2
+
+
+def test_fly_loop_once_goes_on_the_arm_and_files_the_flight(tmp_path, monkeypatch):
+    launch = tmp_path / "c.yaml"
+    launch.write_text(YAML, encoding="utf-8")
+    rig = Flight(monkeypatch)
+    monkeypatch.setattr(campaign_fly, "resolve_campaign", lambda arg, pack, rate=None: (launch, launch))
+    monkeypatch.setattr(campaign_fly, "FLIGHTS_DIR", tmp_path / "flights")
+    assert campaign_fly.fly_loop("http://h", "c", "P9", once=True) == 0
+    (_, body), = [c for c in rig.calls if c[0] == "/api/campaign/go"]
+    assert rig.go_t >= 1.0 + campaign_fly.COUNTDOWN_S
+    assert body["pack_id"] == "P4000-1" and body["source"] == "operator:cli"   # the launch copy pack, not P9
+    assert body["confirmation"] == campaign_fly.CONFIRMATION and all(body["checklist"].values())
+    folder, = (tmp_path / "flights").glob("*/01_t-carry")
+    assert sorted(p.name for p in folder.iterdir()) == ["c.yaml", "debrief.txt", "live_5hz.csv", "outputs.txt"]
+    assert "HOVER  x/y/z error cm  rms 0/0/0" in (folder / "debrief.txt").read_text(encoding="utf-8")
