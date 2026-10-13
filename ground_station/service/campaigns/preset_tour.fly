@@ -1,0 +1,12 @@
+# Keil presets from a 0.5 m hover: circle, then figure-8 at the feed-forward default, back to the pad
+# Fly it: python -m ground_station.service.campaign_fly ground_station/service/campaigns/preset_tour.fly --pack <id>
+# UNVERIFIED on the drone: needs the WP-44/WP-45 firmware (VAR_WRITE, preset from the WiFi hover).
+campaign preset-tour
+rate 33
+takeoff 0.5
+hold 3
+set traj_p.move_s=12 traj_p.hold_s=1
+preset circle circ_r_cm=30
+hold 2
+preset figure8 f8_a_cm=30
+land

@@ -8,6 +8,7 @@ import shutil
 import pytest
 
 from ground_station.platform import wfb_program as wp
+from ground_station.platform.transactions import Outcome
 from ground_station.platform.wfb_commands import WfbClient
 from ground_station.service.campaign_runner import PRIM_IDLE, TRAJ_DONE, fly_scenario
 from ground_station.service.fake_drone import FakeDrone
@@ -324,3 +325,34 @@ def test_stop_key_holds_the_hover_point_until_next():
     pre, hold = out.steps[1], out.steps[2]
     assert pre["operator"] == "stop" and pre["traj_status"] == 4 and 60 <= pre["t1_s"] < 61
     assert hold["t1_s"] - hold["t0_s"] >= 2 - 1e-6 and "operator" not in hold
+
+
+def test_set_step_writes_in_order_from_the_hover():
+    drone, _, deps = _rig()
+    out = fly_scenario(parse_scenario(_steps({"hold": {"s": 1}}, {"set": {"kp_id": 3, "g_traj_ff_preset": 0}},
+                                             {"hold": {"s": 1}})), deps)
+    assert not out.aborted and out.landed, out.decision
+    assert drone.var_writes == [("kp_id", 3.0), ("g_traj_ff_preset", 0.0)]
+    assert out.steps[2]["kind"] == "set" and out.steps[2]["set"] == {"kp_id": 3.0, "g_traj_ff_preset": 0.0}
+
+
+def test_refused_set_aborts_and_lands():
+    drone, _, deps = _rig()
+    inner = drone._handle_var
+    drone._handle_var = lambda cmd: int(Outcome.REJECTED) if cmd.index == 40 else inner(cmd)  # kp_id refused
+    out = fly_scenario(parse_scenario(_steps({"set": {"kp_id": 3}})), deps)
+    assert out.aborted and out.landed and "set kp_id not applied" in out.decision.reason
+
+
+@pytest.mark.parametrize("body,why", [
+    ({}, "at least one"),
+    ({"traj_go": 1}, "preset step"),
+    ({"traj_p.move_s": 10}, "preset step"),
+    ({"traj_fence_off": 1}, "preset step"),
+    ({"kp_id": 9}, "outside"),
+    ({"kp_active": 1}, "allowlist"),
+    ({"kp_id": "3"}, "finite number"),
+])
+def test_set_step_refuses_bad_writes(body, why):
+    with pytest.raises(Exception, match=re.escape(why)):
+        parse_scenario(_steps({"set": body}))

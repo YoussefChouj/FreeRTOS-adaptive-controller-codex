@@ -422,6 +422,13 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
                         decision = AbortDecision(level=1, reason=f"preset {name}: {why}")
                         ok = False
                 extra = {"preset": name, "traj_status": code}
+        elif st.kind == "set":
+            writes = st.args["writes"]
+            bad = next((name for name, v in writes if not deps.client.var_write(name, v)), "")
+            if bad:
+                decision = AbortDecision(level=1, reason=f"set {bad} not applied")
+                ok = False
+            extra = {"set": {name: v for name, v in writes}}
         else:
             raise ValueError(f"step {i}: unexpected kind {st.kind!r} before land")
         if nudged:

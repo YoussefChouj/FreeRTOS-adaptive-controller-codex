@@ -1,0 +1,76 @@
+"""`.fly` text flight scripts: compile to a fly-mode campaign, report problems by line, fly on the FakeDrone."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from ground_station.service import fly_file
+from ground_station.service.campaign_runner import fly_scenario
+from ground_station.service.campaign_schema import load_campaign
+from ground_station.service.scenario_schema import parse_scenario
+from ground_station.service.tests.test_fly_scenario import _rig
+
+SAMPLE = Path(fly_file.__file__).parent / "campaigns" / "preset_tour.fly"
+
+
+def _scenario(text: str) -> dict:
+    data, _ = fly_file.compile_fly(text, "t.fly")
+    return data["experiments"][0]["scenario"]
+
+
+def test_sample_compiles_with_sticky_traj_fields_and_positional_values():
+    data, lines = fly_file.compile_fly(SAMPLE.read_text(encoding="utf-8"), SAMPLE.name)
+    steps = data["experiments"][0]["scenario"]["steps"]
+    assert data["campaign"] == "preset-tour" and data["mode"] == "fly"
+    assert data["objective"].startswith("Keil presets from a 0.5 m hover")
+    assert steps == [{"takeoff": {"z": 0.5}}, {"hold": {"s": 3}},
+                     {"preset": {"move_s": 12, "hold_s": 1, "name": "circle", "circ_r_cm": 30}},
+                     {"hold": {"s": 2}},
+                     {"preset": {"move_s": 12, "hold_s": 1, "name": "figure8", "f8_a_cm": 30}}, "land"]
+    assert len(lines) == len(steps) and 0 not in lines   # every step came from a line, the set line made none
+
+
+def test_takeoff_and_land_are_added_and_run_is_preset():
+    steps = _scenario("run circle move_s=8\n")["steps"]
+    assert steps == [{"takeoff": {"z": 0.5}}, {"preset": {"name": "circle", "move_s": 8}}, "land"]
+
+
+def test_indented_lines_are_program_ops_and_set_keeps_other_rows():
+    text = "takeoff 0.7\nset kp_id=3\nprogram profile=scurve v=0.3\n  goto x=0.5 dwell=3\n  goto z=1.0\nland\n"
+    steps = _scenario(text)["steps"]
+    assert steps[1] == {"set": {"kp_id": 3}}
+    assert steps[2] == {"program": {"profile": "scurve", "v": 0.3,
+                                    "ops": [{"goto": {"x": 0.5, "dwell": 3}}, {"goto": {"z": 1.0}}]}}
+
+
+@pytest.mark.parametrize("text,expect", [
+    ("hold 3\npreset circle move_s=30\n", "t.fly: line 2"),            # schema problem -> its source line
+    ("hold 3\nwiggle x=2\n", "line 2: unknown step kind"),
+    ("hold 3\n  goto x=1\n", "t.fly:2: an indented line must follow a program line"),
+    ("hold 3\nrate 50\n", "t.fly:2: header line 'rate' must come before the first step"),
+    ("hold 3 extra\n", "t.fly:1: expected key=value"),
+    ("campaign Bad_Name\nhold 3\n", "campaign name 'Bad_Name'"),
+    ("# only a comment\n", "no steps"),
+])
+def test_problems_name_the_line(text, expect):
+    with pytest.raises(fly_file.FlyFileError) as e:
+        fly_file.compile_fly(text, "t.fly")
+    assert any(expect in p for p in e.value.problems), e.value.problems
+
+
+def test_launch_writes_a_loadable_launch_copy(tmp_path):
+    out, campaign, plans = fly_file.launch_fly(SAMPLE, "P4000-1", out_dir=tmp_path / "fly",
+                                               launch_dir=tmp_path / "launch")
+    assert out.parent == tmp_path / "launch" and out.name.startswith("preset-tour_")
+    assert (tmp_path / "fly" / "preset-tour.yaml").is_file()
+    assert load_campaign(out).campaign == "preset-tour" and tuple(campaign.packs) == ("P4000-1",) and plans
+
+
+def test_compiled_sample_flies_on_the_fake_drone():
+    drone, _, deps = _rig()
+    out = fly_scenario(parse_scenario(_scenario(SAMPLE.read_text(encoding="utf-8"))), deps)
+    assert not out.aborted and out.landed, out.decision
+    assert [r.get("preset") for r in out.steps if r["kind"] == "preset"] == ["circle", "figure8"]
+    assert drone.vars["traj_p.move_s"] == 12.0 and drone.vars["traj_p.f8_a_cm"] == 30.0

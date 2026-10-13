@@ -16,6 +16,9 @@ Steps run in order:
                                  (CMD 0x2D) from the hover: name step|zigzag|circle|figure8; fields left out fly at the
                                  firmware boot defaults (wfb_var.traj_defaults; start_fixed 1 flies to its start point
                                  first). The hover yields while it runs and holds the hover point again after (WP-45)
+  set     {<variable>: value, ...}
+                                 VAR_WRITE (CMD 0x2D) each variable in order from the hover (kp_id, kp_go, vp_user_go,
+                                 g_traj_ff_preset); the traj_* rows belong to the preset step (SET_FORBIDDEN)
   land    {}                     the last step, exactly once
 
 takeoff may also set mrac_injection (0/1): CMD 0x0F idx 10 sent on the ground before takeoff (autotune flies 0),
@@ -64,7 +67,7 @@ from ground_station.platform.wfb_program import Segment, preview
 
 SCENARIO_DIR = Path(__file__).resolve().parents[2] / "docs" / "workflow-b" / "scenarios"
 
-STEP_KINDS = ("takeoff", "hold", "goto", "path", "program", "excite", "livetune", "preset", "land")
+STEP_KINDS = ("takeoff", "hold", "goto", "path", "program", "excite", "livetune", "preset", "set", "land")
 TRAJ_KINDS = ("goto", "path")
 PROG_KINDS = ("program",)
 
@@ -102,6 +105,7 @@ _STEP_KEYS: Mapping[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "excite": (("axis", "f0", "f1", "amp", "duration_s"), ("signal",)),
     "livetune": (LIVETUNE_REQUIRED, LIVETUNE_OPTIONAL),
     "preset": (("name",), tuple(k.split(".", 1)[1] for k in wfb_var.traj_defaults())),
+    "set": ((), ()),  # keys are VAR_WRITE rows, checked by _compile_set
     "land": ((), ()),
 }
 
@@ -212,6 +216,36 @@ def _compile_preset(body: dict, path: str, problems: list[str]) -> Step | None:
                 wfb_var.preset_duration_s(params))
 
 
+# A set step may not write these: traj_go/traj_stop/traj_id and traj_p.* are the preset step's (it writes all of
+# traj_p before every traj_go, so a set would be overwritten or, for a ground-loaded preset, fly instead of the
+# step's own fields); traj_fence_off is an operator-only Keil switch, never a script's.
+SET_FORBIDDEN = ("traj_go", "traj_stop", "traj_id", "traj_fence_off", "traj_p.")
+
+
+def _compile_set(body: dict, path: str, problems: list[str]) -> Step | None:
+    """One VAR_WRITE per key, in the file's order, each value checked against its row."""
+    if not body:
+        problems.append(f"{path}: needs at least one variable: value")
+        return None
+    writes, n0 = [], len(problems)
+    for k, v in body.items():
+        if not isinstance(k, str) or k.startswith(SET_FORBIDDEN):
+            problems.append(f"{path}.{k}: not writable by a set step (traj_* rows belong to the preset step)")
+            continue
+        if not _num(v):
+            problems.append(f"{path}.{k}: must be a finite number (got {v!r})")
+            continue
+        try:
+            wfb_var.check(k, v)
+        except wfb_var.VarWriteError as e:
+            problems.append(f"{path}.{k}: {e}")
+            continue
+        writes.append([k, float(v)])
+    if len(problems) > n0:
+        return None
+    return Step("set", {"writes": writes}, (), 0.0)
+
+
 def _subst(value: Any, args: Mapping[str, Any], path: str, problems: list[str]) -> Any:
     if isinstance(value, dict):
         return {k: _subst(v, args, f"{path}.{k}", problems) for k, v in value.items()}
@@ -243,7 +277,7 @@ def _split_step(raw: Any, path: str, problems: list[str]) -> tuple[str, dict] | 
         problems.append(f"{path}.{kind}: must be a mapping")
         return None
     required, optional = _STEP_KEYS[kind]
-    for k in body:
+    for k in body if kind != "set" else ():
         if k not in required and k not in optional:
             problems.append(f"{path}.{kind}.{k}: unknown key")
     for k in required:
@@ -448,6 +482,10 @@ def parse_scenario(data: Any, args: Mapping[str, Any] | None = None) -> Scenario
                     steps.append(Step("livetune", dict(body), (), float(body["budget_s"])))
         elif kind == "preset":
             step = _compile_preset(body, f"{path}.preset", problems)
+            if step is not None:
+                steps.append(step)
+        elif kind == "set":
+            step = _compile_set(body, f"{path}.set", problems)
             if step is not None:
                 steps.append(step)
         elif kind == "program":
