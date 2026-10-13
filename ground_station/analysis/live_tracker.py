@@ -449,8 +449,9 @@ class Preview:
     c clear trails, f fullscreen. Recording writes each drawn frame to `rec` (mp4, `hz` fps) for demo clips."""
 
     KEYS = "keys: r rec  a anchor  c clear  f full"
+    HOLD_S = 0.5      # r7_f6: 3056 detections in 3970 frames, so ~1 draw in 4 had no ring (it blinked)
 
-    def __init__(self, hz: float = 10.0, scale: float = 0.6, rect: dict | None = None, title: str = "live_tracker",
+    def __init__(self, hz: float = 30.0, scale: float = 0.6, rect: dict | None = None, title: str = "live_tracker",
                  traj: np.ndarray | None = None, rec: str | None = None, pass_cm: float = 20.0, trail_s: float = 120.0):
         self.cv2, self.dt, self.scale, self.title, self.t_last, self.ms = vt._cv2(), 1.0 / hz, scale, title, -1e9, 0.0
         self.hz, self.rect, self.traj, self.pass_m, self.trail_s, self.n = hz, rect, traj, pass_cm / 100.0, trail_s, 0
@@ -476,7 +477,7 @@ class Preview:
         self.placed = True
 
     def _map(self, side: int) -> np.ndarray:
-        cv2, img = self.cv2, np.full((side, side, 3), 28, np.uint8)
+        cv2 = self.cv2
         o = np.zeros(2) if self.anchor is None else np.asarray(self.anchor[1:])
         tr = np.asarray(self.trail, float)[:, 1:] if self.trail else np.zeros((0, 2))
         tj = np.zeros((0, 2)) if self.traj is None else self.traj + o   # shape_xy starts at 0,0: drawn from the anchor
@@ -486,21 +487,28 @@ class Preview:
         def px(xy):
             xy = np.atleast_2d(xy)
             return np.stack([side / 2 + xy[:, 0] * k, side / 2 - xy[:, 1] * k], 1).astype(np.int32)
-        for v in np.arange(-ext, ext + 1e-9, 0.5):
-            c = (110, 110, 110) if abs(v) < 1e-9 else (60, 60, 60)
-            cv2.line(img, *map(tuple, px([[v, -ext], [v, ext]])), c, 1)
-            cv2.line(img, *map(tuple, px([[-ext, v], [ext, v]])), c, 1)
-        if len(tj):
-            cv2.polylines(img, [px(tj)], True, (255, 170, 60), 1, cv2.LINE_AA)
+        key = (side, ext, tuple(o) if len(tj) else None)
+        if getattr(self, "_bg_key", None) != key:     # grid, preset and footer: redrawn only when the extent moves
+            bg = np.full((side, side, 3), 28, np.uint8)
+            for v in np.arange(-ext, ext + 1e-9, 0.5):
+                c = (110, 110, 110) if abs(v) < 1e-9 else (60, 60, 60)
+                cv2.line(bg, *map(tuple, px([[v, -ext], [v, ext]])), c, 1)
+                cv2.line(bg, *map(tuple, px([[-ext, v], [ext, v]])), c, 1)
+            if len(tj):
+                cv2.polylines(bg, [px(tj)], True, (255, 170, 60), 1, cv2.LINE_AA)
+            cv2.putText(bg, f"pad frame, 0.5 m grid, +x right +y up, {2 * ext:.1f} m wide", (6, side - 8),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (170, 170, 170), 1, cv2.LINE_AA)
+            self._bg, self._bg_key = bg, key
+        img = self._bg.copy()
         if self.anchor is not None:
             cv2.circle(img, tuple(px(o)[0]), max(1, int(self.pass_m * k)),
                        (0, 200, 0) if self.max_d < self.pass_m else (0, 0, 230), 1, cv2.LINE_AA)
         if len(tr) > 1:
-            cv2.polylines(img, [px(tr)], False, (0, 210, 255), 1, cv2.LINE_AA)
+            pt = px(tr)
+            cv2.polylines(img, [pt[np.r_[True, (np.diff(pt, axis=0) != 0).any(1)]]], False, (0, 210, 255), 1,
+                          cv2.LINE_AA)                # one vertex per pixel step (hover piles fixes on one pixel)
         if self.xy is not None:
             cv2.circle(img, tuple(px(self.xy)[0]), 5, (0, 255, 0), -1, cv2.LINE_AA)
-        cv2.putText(img, f"pad frame, 0.5 m grid, +x right +y up, {2 * ext:.1f} m wide", (6, side - 8),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (170, 170, 170), 1, cv2.LINE_AA)
         return img
 
     def _key(self, k: int, now: float) -> None:
@@ -540,12 +548,12 @@ class Preview:
         if len(self.uvs) > 1:
             cv2.polylines(img, [(np.asarray(self.uvs)[:, 1:] * s).astype(np.int32)], False, (0, 210, 255), 1,
                           cv2.LINE_AA)
-        if uv is not None:
-            c = (int(uv[0] * s), int(uv[1] * s))
-            cv2.circle(img, c, 14, (0, 255, 0), 2)
-            if xy is not None:
-                cv2.putText(img, f"{xy[0] * 100:+.0f},{xy[1] * 100:+.0f} cm", (c[0] + 16, c[1]),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+        if self.uvs and now - self.uvs[-1][0] < self.HOLD_S:   # held ring: no blink on frames without a detection
+            c, col = (int(self.uvs[-1][1] * s), int(self.uvs[-1][2] * s)), (0, 255, 0) if uv is not None else (0, 200, 255)
+            cv2.circle(img, c, 14, col, 2, cv2.LINE_AA)
+            if self.xy is not None:
+                cv2.putText(img, f"{self.xy[0] * 100:+.0f},{self.xy[1] * 100:+.0f} cm", (c[0] + 16, c[1]),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 1, cv2.LINE_AA)
         if self.anchor is not None and self.xy is not None:
             d = np.hypot(self.xy[0] - self.anchor[1], self.xy[1] - self.anchor[2])
             lines = [*lines, f"drift {d * 100:.1f} cm  max {self.max_d * 100:.1f}/{self.pass_m * 100:.0f}  "
@@ -1135,7 +1143,7 @@ def main(argv=None) -> int:
     ap.add_argument("--tel-stale-s", type=float, default=1.0, help="older telemetry: --height-m, or no fix")
     ap.add_argument("--no-pad-origin", action="store_true", help="send floor-frame xy (default: pad-relative)")
     ap.add_argument("--show", action="store_true", help="tracker window: frame + ring + trails | pad-frame map, topmost")
-    ap.add_argument("--show-hz", type=float, default=10.0, help="--show redraw (and --show-rec fps) rate")
+    ap.add_argument("--show-hz", type=float, default=30.0, help="--show redraw (and --show-rec fps) rate")
     ap.add_argument("--show-rec", help="record the --show window to this mp4 from the start (key r pauses/resumes)")
     ap.add_argument("--traj", help="preset trajectory on the --show map: 'circle:radius_m=0.5' or a shape/params json")
     ap.add_argument("--pass-cm", type=float, default=20.0, help="--show drift pass circle radius about the anchor")
