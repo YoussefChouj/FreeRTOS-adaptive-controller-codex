@@ -215,6 +215,20 @@ def test_tel_height_tails_a_growing_csv_with_partial_lines_and_goes_stale(tmp_pa
     assert tel(0.0) == 0.9
 
 
+def test_tel_height_ground_is_relative_to_the_pad_reading(tmp_path):
+    """r7_f2: z read 0.050 m on the pad, so an absolute z < 0.03 never held and PadOrigin sent 0 fixes."""
+    from ground_station.analysis.live_tracker import TelHeight
+    p = tmp_path / "s.slot1.csv"
+    p.write_text("t,Ctrler.Z_posPID.FB\n1,0.050\n2,0.052\n", encoding="utf-8")
+    tel = TelHeight(p, clock=lambda: 0.0)
+    tel(0.0)
+    assert tel.ground
+    with p.open("a", encoding="utf-8") as f:
+        f.write("3,0.30\n")
+    tel(0.0)
+    assert not tel.ground
+
+
 def test_pad_origin_follows_on_ground_then_freezes_after_take_off():
     from ground_station.analysis.live_tracker import PadOrigin
     pad = PadOrigin(n=3)

@@ -305,7 +305,8 @@ def floor_shift_px(frame_bgr, ref: dict, scale: float) -> tuple[float, int]:
 
 class TelHeight:
     """Ring-plane height from the live telemetry: tails the stream_log slot CSV (line-buffered) for `key` (Z, m) and
-    returns ring_h + max(0, z), the truth4 plane. `ground` is z < ground_m. Older than stale_s (or no row yet): the
+    returns ring_h + max(0, z), the truth4 plane. `ground` is z < z_min + ground_m, z_min the lowest z seen: r7_f2 read
+    z 0.050 m on the pad (r7_f1 0.000), so an absolute z < ground_m never held, PadOrigin never set and 0 fixes were sent. Older than stale_s (or no row yet): the
     fallback height (None = no plane, the frame gives no fix). `extra` columns (e.g. ano_of.earth_x/y for --align
     auto) are kept in `v`, read from the same rows."""
 
@@ -314,7 +315,7 @@ class TelHeight:
                  extra: tuple = ()):
         self.path, self.key, self.ring_h, self.ground_m = Path(path), key, ring_h_m, ground_m
         self.stale_s, self.fallback, self.clock = stale_s, fallback_m, clock
-        self.f, self.col, self.buf, self.z, self.t_z = None, None, "", None, -1e9
+        self.f, self.col, self.buf, self.z, self.t_z, self.z_min = None, None, "", None, -1e9, float("inf")
         self.extra, self.cols, self.v = tuple(extra), {}, {}
 
     def poll(self) -> None:
@@ -341,7 +342,7 @@ class TelHeight:
             except (ValueError, IndexError):
                 continue
             if np.isfinite(z):
-                self.z, self.t_z, self.v = z, self.clock(), v
+                self.z, self.t_z, self.v, self.z_min = z, self.clock(), v, min(self.z_min, z)
 
     @property
     def fresh(self) -> bool:
@@ -349,7 +350,7 @@ class TelHeight:
 
     @property
     def ground(self) -> bool:
-        return self.fresh and self.z < self.ground_m
+        return self.fresh and self.z < self.z_min + self.ground_m
 
     def vec(self, keys) -> np.ndarray | None:
         """The latest `extra` values (polled, fresh) as an array, else None."""
