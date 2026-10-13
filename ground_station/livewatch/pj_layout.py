@@ -18,8 +18,9 @@ from ground_station.livewatch.stream_log import load_frames, parse_frames_markdo
 
 
 # Standard distinct color palette for curves within each plot
-MAX_CURVES = 8   # curves per plot before it is split
-MAX_PLOTS = 6    # plots stacked in one tab before the rest spill to "<tab> (2)"
+MAX_CURVES = 6   # curves per plot before it is split (legend stays readable)
+MAX_PLOTS = 4    # plots per tab, a 2x2 grid (PJ tabs do not scroll; 6 stacked plots on a 768 px screen were
+                 # ~105 px tall each); the rest spill to "<tab> (2)"
 
 COLOR_PALETTE = [
     "#1f77b4",  # blue
@@ -237,6 +238,18 @@ def load_variables_from_source(source: str | Path | Sequence[str]) -> list[str]:
     return list(dict.fromkeys(source))
 
 
+def _paginate(name: str, plots: list[tuple[str, list[str]]]) -> list[tuple[str, dict[str, list[str]]]]:
+    """Split plots into tabs of at most MAX_PLOTS: name, "name (2)", ..."""
+    return [(name if k == 0 else f"{name} ({k // MAX_PLOTS + 1})", dict(plots[k:k + MAX_PLOTS]))
+            for k in range(0, len(plots), MAX_PLOTS)]
+
+
+def _splitter(parent: ET.Element, orientation: str, count: int) -> ET.Element:
+    """PJ DockSplitter with equal sizes; orientation "-" stacks vertically, "|" places side by side."""
+    sizes = ";".join(f"{1.0 / count:.3f}" for _ in range(count)) if count > 1 else "1.0"
+    return ET.SubElement(parent, "DockSplitter", count=str(count), orientation=orientation, sizes=sizes)
+
+
 def generate_layout_xml(variables: Iterable[str]) -> str:
     """Generate PlotJuggler 3 layout XML for given variable names.
 
@@ -261,7 +274,7 @@ def generate_layout_xml(variables: Iterable[str]) -> str:
     pages: list[tuple[str, dict[str, list[str]]]] = []
     for tab_name in sorted_tab_names:
         # Readability: a group over MAX_CURVES splits into plots "<group> (1/2)", ...; a group needing more than two
-        # plots (pitch/roll Theta, 46 weights) gets its own tab "<tab> <group>"; overflow past MAX_PLOTS -> "<tab> (2)".
+        # plots (pitch/roll Theta, 46 weights) gets its own tab "<tab> <group>"; overflow past MAX_PLOTS -> "... (2)".
         small, big = [], []
         for title, pv in partition_tab_vars(tab_name, tabs[tab_name]).items():
             parts = [pv[i:i + MAX_CURVES] for i in range(0, len(pv), MAX_CURVES)]
@@ -271,34 +284,33 @@ def generate_layout_xml(variables: Iterable[str]) -> str:
                 big.append((f"{tab_name} {title}", dict(named)))
             else:
                 small += named
-        for k in range(0, len(small), MAX_PLOTS):
-            pages.append((tab_name if k == 0 else f"{tab_name} ({k // MAX_PLOTS + 1})", dict(small[k:k + MAX_PLOTS])))
-        pages += big
+        pages += _paginate(tab_name, small)
+        for name, plots in big:
+            pages += _paginate(name, list(plots.items()))
 
     for tab_name, plots_dict in pages:
         tab_el = ET.SubElement(tw, "Tab", tab_name=tab_name, containers="1")
         container_el = ET.SubElement(tab_el, "Container")
 
-        num_plots = len(plots_dict)
-        sizes_str = ";".join(f"{1.0 / num_plots:.3f}" for _ in range(num_plots)) if num_plots > 1 else "1.0"
-        splitter_el = ET.SubElement(
-            container_el,
-            "DockSplitter",
-            count=str(num_plots),
-            orientation="-",
-            sizes=sizes_str
-        )
+        # 1-2 plots stack full width; 3-4 plots form two columns of two stacked plots
+        items = list(plots_dict.items())
+        if len(items) <= 2:
+            columns = [(_splitter(container_el, "-", len(items)), items)]
+        else:
+            grid = _splitter(container_el, "|", 2)
+            columns = [(_splitter(grid, "-", len(col)), col) for col in (items[:2], items[2:])]
 
-        for plot_title, p_vars in plots_dict.items():
-            dock_area = ET.SubElement(splitter_el, "DockArea", name=plot_title)
-            plot_el = ET.SubElement(dock_area, "plot", mode="TimeSeries", style="Lines")
-            ET.SubElement(plot_el, "range", bottom="-1.0", top="1.0", left="0.0", right="1.0")
-            ET.SubElement(plot_el, "limitY")
+        for splitter_el, col in columns:
+            for plot_title, p_vars in col:
+                dock_area = ET.SubElement(splitter_el, "DockArea", name=plot_title)
+                plot_el = ET.SubElement(dock_area, "plot", mode="TimeSeries", style="Lines")
+                ET.SubElement(plot_el, "range", bottom="-1.0", top="1.0", left="0.0", right="1.0")
+                ET.SubElement(plot_el, "limitY")
 
-            for i, var_name in enumerate(p_vars):
-                color = COLOR_PALETTE[i % len(COLOR_PALETTE)]
-                curve_name = plot_curve_name(var_name)
-                ET.SubElement(plot_el, "curve", color=color, name=curve_name)
+                for i, var_name in enumerate(p_vars):
+                    color = COLOR_PALETTE[i % len(COLOR_PALETTE)]
+                    curve_name = plot_curve_name(var_name)
+                    ET.SubElement(plot_el, "curve", color=color, name=curve_name)
 
     ET.SubElement(root, "use_relative_time_offset", enabled="1")
 

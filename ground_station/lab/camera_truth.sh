@@ -64,15 +64,20 @@ fusion)
   up && { echo "8081 service is up: stop it first (stream_log needs the WiFi downlink)"; exit 1; }
   endlive
   mkdir -p "$vid" logs; rm -f "$vid/stop" "$vid/video_only"; echo "$mode" > "$vid/fusion"
-  PLOT=${PLOT-127.0.0.1:9870}                       # every slot to PlotJuggler (UDP Server, JSON); PLOT= turns it off
+  VOFA=${VOFA-127.0.0.1:1347}                       # flight view to VOFA+ (UDP FireWater, named tabs); VOFA= turns it off
+  PLOT=${PLOT-}                                     # PlotJuggler opt-in (every slot): PLOT=127.0.0.1:9870
+  if [ -n "$VOFA" ]; then                           # closes VOFA+, writes channel names/colors + one tab per chart, relaunches
+    python -m ground_station.vofa_studio.vofa_config --frames ground_station/livewatch/r5_extpos_frames.md \
+      || echo "VOFA+ view setup failed: flight goes on, VOFA+ shows raw channels"
+  fi
   if [ -n "$PLOT" ]; then
     python -m ground_station.livewatch.pj_layout ground_station/livewatch/r5_extpos_frames.md --out "logs/$name.pj.xml"       && pj "logs/$name.pj.xml" || echo "PlotJuggler layout failed: flight goes on, open PJ by hand"
   fi
-  ends=(--stop-file "$vid/stop")                   # with PlotJuggler: the stop file ends only the recording
-  [ -n "$PLOT" ] && ends=(--rec-stop-file "$vid/stop" --stop-file logs/plot_live.end)
-  nohup python -m ground_station.livewatch.stream_log --frames ground_station/livewatch/r5_extpos_frames.md     --relay-port 47800 ${PLOT:+--plot "$PLOT"} --seconds 86400 "${ends[@]}" --out "logs/$name.csv" > "$vid/stream_log.out" 2>&1 &
+  ends=(--stop-file "$vid/stop")                   # with a live viewer: the stop file ends only the recording
+  [ -n "$PLOT$VOFA" ] && ends=(--rec-stop-file "$vid/stop" --stop-file logs/plot_live.end)
+  nohup python -m ground_station.livewatch.stream_log --frames ground_station/livewatch/r5_extpos_frames.md     --relay-port 47800 ${PLOT:+--plot "$PLOT"} ${VOFA:+--vofa "$VOFA" --vofa-view} --seconds 86400 "${ends[@]}" --out "logs/$name.csv" > "$vid/stream_log.out" 2>&1 &
   echo $! > "$vid/stream_log.pid"
-  [ -n "$PLOT" ] && cp "$vid/stream_log.pid" logs/plot_live.pid
+  [ -n "$PLOT$VOFA" ] && cp "$vid/stream_log.pid" logs/plot_live.pid
   cam
   sleep 4                                           # scrcpy window opens 256x256, final size after ~1.1 s (measured)
   dly=${DELAY_MS:-200}                              # camera delay: video_truth delay4 lag 0.21 s on r6_f4 + f4c (2026-10-13)
@@ -96,7 +101,7 @@ stop)
     post /api/recording/stop '{}'; post /api/streams/log/stop '{}'
   fi
   taskkill //F //IM scrcpy.exe > /dev/null 2>&1 || true; sleep 1; "$0" check "$name"   # PlotJuggler stays open for review
-  [ -f logs/plot_live.pid ] && echo "PlotJuggler still streaming live: 'camera_truth.sh end' stops it" || true ;;
+  [ -f logs/plot_live.pid ] && echo "VOFA+/PlotJuggler still streaming live: 'camera_truth.sh end' stops it" || true ;;
 end) endlive; echo "live stream ended" ;;
 check)
   for f in logs/vofa/"$name".slot*.csv logs/"$name".slot*.csv; do [ -f "$f" ] && echo "$f rows $(($(wc -l < "$f") - 1))"; done

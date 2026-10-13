@@ -57,12 +57,12 @@ def test_xml_is_valid_and_schema_compliant():
         assert container is not None
         splitter = container.find("DockSplitter")
         assert splitter is not None
-        assert splitter.attrib.get("orientation") == "-"
-        assert int(splitter.attrib.get("count", 0)) >= 1
-        assert "sizes" in splitter.attrib
+        for sp in container.iter("DockSplitter"):
+            assert sp.attrib.get("orientation") in ("-", "|")
+            assert len(sp) == int(sp.attrib["count"]) == len(sp.attrib["sizes"].split(";"))
 
-        dock_areas = splitter.findall("DockArea")
-        assert len(dock_areas) == int(splitter.attrib["count"])
+        dock_areas = container.findall(".//DockArea")
+        assert 1 <= len(dock_areas) <= MAX_PLOTS
         for da in dock_areas:
             assert "name" in da.attrib
             plot = da.find("plot")
@@ -120,13 +120,17 @@ def test_r5_extpos_every_streamed_var_in_exactly_one_tab():
     assert seen_curves == expected_curves
     assert len(seen_curves) == len(expected_vars)
 
-    # Readable: no plot over MAX_CURVES; the 46 pitch Theta weights get their own tab, the main pitch tab keeps 3 plots
+    # Readable: no plot over MAX_CURVES, no tab over MAX_PLOTS (2x2 grid); the 46 pitch Theta weights (8 plots of
+    # <= 6) fill their own tab and a "(2)" tab, the main pitch tab keeps 3 plots
     for tab in tabs:
         areas = tab.findall(".//DockArea")
         assert len(areas) <= MAX_PLOTS, tab.attrib["tab_name"]
         assert all(len(a.findall(".//curve")) <= MAX_CURVES for a in areas), tab.attrib["tab_name"]
     by_name = {t.attrib["tab_name"]: t for t in tabs}
-    assert len(by_name["MRAC Pitch Adaptive Weights (Theta)"].findall(".//DockArea")) == 6
+    assert len(by_name["MRAC Pitch Adaptive Weights (Theta)"].findall(".//DockArea")) == 4
+    assert len(by_name["MRAC Pitch Adaptive Weights (Theta) (2)"].findall(".//DockArea")) == 4
+    grid = by_name["MRAC Pitch"].find("Container/DockSplitter")
+    assert grid.attrib["orientation"] == "|" and [len(c) for c in grid] == [2, 1]
     assert len(by_name["MRAC Pitch"].findall(".//DockArea")) == 3 <= MAX_PLOTS
 
 

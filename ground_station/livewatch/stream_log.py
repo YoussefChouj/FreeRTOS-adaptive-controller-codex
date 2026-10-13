@@ -448,13 +448,32 @@ class StopFile:
         return self._set
 
 
+def vofa_view_map(schemas, view_vars):
+    """(slot, column) of each view variable, in view order (first slot that streams it)."""
+    where = {}
+    for schema in schemas:
+        for i, col in enumerate(columns_for(schema)):
+            where.setdefault(col, (schema.slot, i))
+    return [where[v] for v in view_vars]
+
+
+def _vofa_view_for(schemas):
+    """vofa_config.FLIGHT_VIEW channels these slots stream, as vofa_view_map pairs (the order VOFA+ is laid out)."""
+    from ground_station.vofa_studio.vofa_config import view_channels
+    avail = [c for schema in schemas for c in columns_for(schema)]
+    return vofa_view_map(schemas, view_channels(available=avail)["vars"])
+
+
 def _usart3_loop(wifi, decoder, writers, rows, schemas, t0, seconds, stop_event, on_row, vofa_sock, vofa_addr,
-                 relay=None, plot_sock=None, plot_addr=None, rec_stop=None, on_rec_stop=None):
+                 relay=None, plot_sock=None, plot_addr=None, rec_stop=None, on_rec_stop=None, vofa_view=False):
     """Read and write frames until `seconds` pass or stop_event is set (the _run_groups_usart3 body).
 
     Once ``rec_stop`` is set, ``on_rec_stop()`` ends the recording (the CSVs close) while the plot stream goes on.
+    ``vofa_view`` sends VOFA+ the flight-view channels only, each slot's last value held, on every slot-0 row.
     """
     plot_cols = {schema.slot: columns_for(schema) for schema in schemas} if plot_sock is not None else {}
+    vofa_map = _vofa_view_for(schemas) if vofa_sock is not None and vofa_view else None
+    latest = {schema.slot: [0] * len(columns_for(schema)) for schema in schemas} if vofa_map else {}
     while time.monotonic() - t0 < seconds and not (
             stop_event is not None and stop_event.is_set()):
         if rec_stop is not None and rec_stop.is_set():
@@ -482,9 +501,12 @@ def _usart3_loop(wifi, decoder, writers, rows, schemas, t0, seconds, stop_event,
             rows[slot] += 1
             if on_row is not None:
                 on_row(slot, seq, t_ms, t_host, flat)
+            if vofa_map:
+                latest[slot] = flat
             if vofa_sock is not None and slot == schemas[0].slot:
-                # VOFA+ FireWater: "v0,v1,...\n", channel order = CSV column order
-                vofa_sock.sendto((",".join("%g" % v for v in flat) + "\n").encode(),
+                # VOFA+ FireWater: "v0,v1,...\n", channel order = CSV column order (or the flight view's)
+                out = flat if not vofa_map else [latest[sl][i] for sl, i in vofa_map]
+                vofa_sock.sendto((",".join("%g" % v for v in out) + "\n").encode(),
                                  vofa_addr)
             if plot_sock is not None:
                 _plot_send(plot_sock, format_row_datagram(plot_cols[slot], slot, seq, t_ms, flat), plot_addr)
@@ -492,7 +514,7 @@ def _usart3_loop(wifi, decoder, writers, rows, schemas, t0, seconds, stop_event,
 
 def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
                        usart3_baud, transport, vofa=None, stop_event=None,
-                       on_start=None, on_row=None, relay_port=None, plot=None, rec_stop=None):
+                       on_start=None, on_row=None, relay_port=None, plot=None, rec_stop=None, vofa_view=False):
     """Execute multi-slot subscribe over WiFi UDP (Usart3WifiSubscribeTransport).
 
     Hooks for embedding (VOFA Studio): ``stop_event`` ends the run early, ``rec_stop`` (set later) closes the CSVs
@@ -568,7 +590,7 @@ def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
         try:
             _usart3_loop(wifi, decoder, writers, rows, schemas, t0, seconds, stop_event, on_row,
                          vofa_sock, vofa_addr, relay, plot_sock=plot_sock, plot_addr=plot_addr,
-                         rec_stop=rec_stop, on_rec_stop=end_recording)
+                         rec_stop=rec_stop, on_rec_stop=end_recording, vofa_view=vofa_view)
         except KeyboardInterrupt:     # Ctrl+C ends an open-ended capture: keep the rows, stop the slots
             if not quiet:
                 print("stream-log: stopped by Ctrl+C")
@@ -755,6 +777,9 @@ def main(argv=None):
     ap.add_argument("--vofa", default=None, metavar="HOST:PORT",
                     help="also forward slot-0 rows to VOFA+ as FireWater over UDP "
                          "(e.g. 127.0.0.1:1347); WiFi transport only")
+    ap.add_argument("--vofa-view", action="store_true",
+                    help="with --vofa: send only the vofa_config FLIGHT_VIEW channels (all slots, last value "
+                         "held) in the order vofa_config lays VOFA+ out")
     ap.add_argument("--plot", default=None, metavar="HOST:PORT",
                     help="forward all slot frames to PlotJuggler (UDP Server, JSON, port 9870) "
                          "(e.g. 127.0.0.1:9870); WiFi transport only")
@@ -799,7 +824,8 @@ def main(argv=None):
                                usart3_baud=args.usart3_baud, vofa=args.vofa, plot=args.plot,
                                relay_port=args.relay_port,
                                stop_event=StopFile(args.stop_file) if args.stop_file else None,
-                               rec_stop=StopFile(args.rec_stop_file) if args.rec_stop_file else None)
+                               rec_stop=StopFile(args.rec_stop_file) if args.rec_stop_file else None,
+                               vofa_view=args.vofa_view)
             print("")
             for row in stats:
                 print("slot %d: %5d rows = %5.1f Hz   dropped %d (%.2f%%)   "

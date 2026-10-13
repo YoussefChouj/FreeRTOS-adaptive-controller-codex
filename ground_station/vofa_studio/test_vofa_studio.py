@@ -238,3 +238,79 @@ def test_limits_come_from_elf_and_plan_counts_merged_ranges():
         assert s["ranges"] <= s["max_ranges"] or s["errors"]   # the union of every preset may overflow: flagged
         assert s["payload"] <= s["max_bytes"]
     assert sum(s["ranges"] for s in plan["slots"]) < sum(len(s["vars"]) for s in plan["slots"])
+
+
+def test_view_channels_layout_and_filter():
+    v = vofa_config.view_channels()
+    n_chart = sum(len(ch) for _, ch in vofa_config.FLIGHT_VIEW)
+    assert len(v["vars"]) == len(v["names"]) == len(v["colors"]) == n_chart + len(vofa_config.MONITOR_ROW)
+    assert len(set(v["vars"])) == len(v["vars"]) and len(set(v["names"])) == len(v["names"])
+    assert [t["name"] for t in v["tabs"]] == [tab for tab, _ in vofa_config.FLIGHT_VIEW]
+    assert v["tabs"][0]["lines"] == [0, 1, 2, 3] and v["missing"] == []
+    for t in v["tabs"]:                               # readable: <= 6 lines, each its own color
+        assert len(t["lines"]) <= len(vofa_config.VIEW_COLORS)
+        assert len({v["colors"][i] for i in t["lines"]}) == len(t["lines"])
+    v = vofa_config.view_channels(available=["imu_data.rol", "imu_data.yaw", "real_voltage"])
+    assert v["vars"] == ["imu_data.rol", "imu_data.yaw", "real_voltage"]
+    assert v["tabs"] == [{"name": "attitude", "lines": [0, 1]}]
+    assert v["colors"] == [vofa_config.VIEW_COLORS[0], vofa_config.VIEW_COLORS[1], vofa_config.MONITOR_COLOR]
+    assert "imu_data.pit" in v["missing"]
+
+
+def test_flight_view_is_streamed_by_r5_frames():
+    from ground_station.livewatch.stream_log import load_frames
+    avail = [v for _, syms in load_frames("ground_station/livewatch/r5_extpos_frames.md") for v in syms]
+    assert vofa_config.view_channels(available=avail)["missing"] == []
+
+
+def test_patch_names_sets_colors(tmp_path):
+    entry = {"is_draw": False, "color": "#ffffff", "name": ""}
+    cfg = {"ctx": {"settingsPanel": {"ctx": {".": {"settings_ctx": [dict(entry, name="I%d" % i) for i in range(3)]}}}}}
+    p = tmp_path / "vofa+.config.json"
+    p.write_text(json.dumps(cfg), encoding="utf-8")
+    vofa_config.patch_names(["a", "b"], path=p, backup=False, colors=["#111111"])
+    ctx = json.loads(p.read_text())["ctx"]["settingsPanel"]["ctx"]["."]["settings_ctx"]
+    assert [e["color"] for e in ctx] == ["#111111", "#ffffff", "#ffffff"]
+    assert vofa_config.read_names(p) == ["a", "b", "I2"]
+
+
+def test_patch_tabs_fixture(tmp_path):
+    tpl = {"path": "WaveChart", "ctx": {"rbw": {"ctx": {".": {"lines": [7]}}}, "axis_y_wave": {"top": 5}}}
+    tv = {"type": "tabviews", "ctx": [
+        {"tabs": [{"name": "old", "bg": "x", "widgets": [{"path": "Button"}, tpl]}], "currentIndex": 3, "lastIndex": 2},
+        {"tabs": [{"name": "other", "widgets": []}]}]}
+    p = tmp_path / "vofa+.tabviews.json"
+    p.write_text(json.dumps(tv), encoding="utf-8")
+    want = [{"name": "pos xy", "lines": [0, 1]}, {"name": "rc", "lines": [4]}]
+    assert vofa_config.patch_tabs(want, path=p).exists()
+    assert vofa_config.read_tabs(p) == want
+    data = json.loads(p.read_text())
+    assert len(data["ctx"]) == 1 and data["ctx"][0]["currentIndex"] == data["ctx"][0]["lastIndex"] == 0
+    for tab in data["ctx"][0]["tabs"]:                # one full-screen chart per tab, template theme kept
+        (w,) = tab["widgets"]
+        assert tab["bg"] == "x" and w["ctx"]["axis_y_wave"] == {"top": 5}
+        assert w["ctx"]["."]["ctx"]["resize_border"]["ctx"]["."]["full_screen"] is True
+    p.write_text(json.dumps({"ctx": [{"tabs": [{"name": "t", "widgets": [{"path": "Button"}]}]}]}), encoding="utf-8")
+    with pytest.raises(ValueError):
+        vofa_config.patch_tabs(want, path=p, backup=False)
+
+
+def test_vofa_view_map_picks_first_slot_streaming_each_var():
+    from ground_station.livewatch.stream_log import vofa_view_map
+
+    def schema(slot, *names):
+        return SimpleNamespace(slot=slot, ranges=[SimpleNamespace(_names=None, name=n, count=1, address=0)
+                                                  for n in names])
+    schemas = [schema(0, "a", "b"), schema(1, "c", "a"), schema(2, "d")]
+    assert vofa_view_map(schemas, ["d", "a", "c"]) == [(2, 0), (0, 0), (1, 0)]
+    with pytest.raises(KeyError):
+        vofa_view_map(schemas, ["zz"])
+
+
+def test_park_datas_moves_saved_samples_aside(tmp_path):
+    from ground_station.vofa_studio.vofa_config import park_datas
+    datas = tmp_path / "vofa+.datas.csv"
+    assert park_datas(datas) is None
+    datas.write_text("test_1,I1\n1,2\n", encoding="utf-8")
+    bak = park_datas(datas)
+    assert not datas.exists() and bak.read_text(encoding="utf-8").startswith("test_1,I1")
