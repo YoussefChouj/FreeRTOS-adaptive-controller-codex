@@ -1313,6 +1313,9 @@ def fixes_clock(stem: str, fixes_csv) -> dict:
     g = "g_ext_pos."
     s = pd.read_csv(f"{stem}.slot2.csv", usecols=["t_src_ms"] + [g + k for k in ("n_ok", "n_rej", "n_old", "age_ms")])
     n = np.nan_to_num((s[g + "n_ok"] + s[g + "n_rej"] + s[g + "n_old"]).to_numpy(float)).astype(int)
+    # without a reboot the counters carry earlier flights (r7_f5: 9838 at log start); the tracker sends its first
+    # fix only after the log's slot1 CSV exists, so the first logged count is this session's zero
+    n = n - n[0]
     arr = (s["t_src_ms"].to_numpy(float) - s[g + "age_ms"].to_numpy(float)) / 1e3
     new = np.r_[n[0] > 0, np.diff(n) > 0] & (n > 0) & (n <= len(sent)) & np.isfinite(arr)
     a, cs = arr[new], sent[n[new] - 1] - arr[new]

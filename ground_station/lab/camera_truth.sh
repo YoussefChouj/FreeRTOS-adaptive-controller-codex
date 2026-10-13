@@ -105,6 +105,6 @@ stop)
 end) endlive; echo "live stream ended" ;;
 check)
   for f in logs/vofa/"$name".slot*.csv logs/"$name".slot*.csv; do [ -f "$f" ] && echo "$f rows $(($(wc -l < "$f") - 1))"; done
-  ls -la "$vid"/cam*.mkv 2>/dev/null || echo "no video yet"; grep -c restart "$vid/scrcpy.log" 2>/dev/null | sed "s/^/restarts /"; tail -2 "$vid/scrcpy.log" 2>/dev/null
+  ls -la "$vid"/cam*.mkv 2>/dev/null || echo "no video yet"; { grep -c restart "$vid/scrcpy.log" 2>/dev/null || true; } | sed "s/^/restarts /"; tail -2 "$vid/scrcpy.log" 2>/dev/null
   [ -f "$vid/fusion" ] && { echo "fixes $(($(wc -l < "$vid/fixes.csv" 2>/dev/null || echo 1) - 1))"; tail -3 "$vid/tracker.out"; tail -2 "$vid/stream_log.out"; } || true ;;
 esac
