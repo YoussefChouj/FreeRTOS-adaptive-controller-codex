@@ -480,13 +480,21 @@ class Preview:
     HOLD_S = 0.5      # r7_f6: 3056 detections in 3970 frames, so ~1 draw in 4 had no ring (it blinked)
 
     def __init__(self, hz: float = 30.0, scale: float = 0.6, rect: dict | None = None, title: str = "live_tracker",
-                 traj: np.ndarray | None = None, rec: str | None = None, pass_cm: float = 20.0, trail_s: float = 120.0):
+                 traj: np.ndarray | None = None, rec: str | None = None, pass_cm: float = 20.0, trail_s: float = 120.0,
+                 width: int | None = None):
         self.cv2, self.dt, self.scale, self.title, self.t_last, self.ms = vt._cv2(), 1.0 / hz, scale, title, -1e9, 0.0
+        self.width = width    # drawn frame width px (the grab keeps its full size for the tracker); None: `scale`
         self.hz, self.rect, self.traj, self.pass_m, self.trail_s, self.n = hz, rect, traj, pass_cm / 100.0, trail_s, 0
         self.trail, self.uvs, self.anchor, self.max_d, self.xy = [], [], None, 0.0, None   # trail (t,x,y), uvs (t,u,v)
         self.rec, self.recording, self.writer = rec, rec is not None, None
         self.placed = self.full = self.closed = False
         self.cv2.namedWindow(title, self.cv2.WINDOW_NORMAL | self.cv2.WINDOW_KEEPRATIO)
+
+    def display_scale(self, frame_w: int) -> float:
+        """Grab px -> drawn px: `width` / frame width (never above 1), else the fixed `scale`. A 1920 px mirror then
+        draws at the size the 1194 px one did, while the tracker reads all 1920 px."""
+        self.scale = min(1.0, self.width / frame_w) if self.width else self.scale
+        return self.scale
 
     def _place(self, w: int, h: int) -> None:
         """Right of the grab rect, else below, else top-left; clamped to the screen (the mirror is off screen)."""
@@ -571,8 +579,8 @@ class Preview:
             self.trail.pop(0)
         while self.uvs and now - self.uvs[0][0] > 10.0:
             self.uvs.pop(0)
-        cv2, s = self.cv2, self.scale
-        img = cv2.resize(frame, None, fx=s, fy=s, interpolation=cv2.INTER_NEAREST)
+        cv2, s = self.cv2, self.display_scale(frame.shape[1])
+        img = cv2.resize(frame, None, fx=s, fy=s, interpolation=cv2.INTER_AREA if s < 1.0 else cv2.INTER_NEAREST)
         if len(self.uvs) > 1:
             cv2.polylines(img, [(np.asarray(self.uvs)[:, 1:] * s).astype(np.int32)], False, (0, 210, 255), 1,
                           cv2.LINE_AA)
@@ -1174,6 +1182,8 @@ def main(argv=None) -> int:
     ap.add_argument("--no-pad-origin", action="store_true", help="send floor-frame xy (default: pad-relative)")
     ap.add_argument("--show", action="store_true", help="tracker window: frame + ring + trails | pad-frame map, topmost")
     ap.add_argument("--show-hz", type=float, default=30.0, help="--show redraw (and --show-rec fps) rate")
+    ap.add_argument("--show-width", type=int, default=716,
+                    help="--show frame width px (default 716 = 0.6 x the 1194 px r7 mirror); the tracker uses the full grab")
     ap.add_argument("--show-rec", help="record the --show window to this mp4 from the start (key r pauses/resumes)")
     ap.add_argument("--traj", help="preset trajectory on the --show map: 'circle:radius_m=0.5' or a shape/params json")
     ap.add_argument("--pass-cm", type=float, default=20.0, help="--show drift pass circle radius about the anchor")
@@ -1220,7 +1230,8 @@ def main(argv=None) -> int:
             seed, vt.coral_static(a.source) if cs == "video" else None, roi=140.0 * s,
             min_px=max(10, round(40 * s * s)), learn_n=a.static_n if cs == "start" else 0)
     show = Preview(hz=a.show_hz, rect=WindowSource(a.source[7:]).rect() if a.source.startswith("window:") else None,
-                   traj=traj_xy(a.traj) if a.traj else None, rec=a.show_rec, pass_cm=a.pass_cm) if a.show else None
+                   traj=traj_xy(a.traj) if a.traj else None, rec=a.show_rec, pass_cm=a.pass_cm,
+                   width=a.show_width or None) if a.show else None
     print(run_source(a.source, cam, align, height, a.cam_latency_s, udp_sender(a.send) if a.send else None, a.out,
                      sched=FixScheduler(a.period, a.n_med, window_s=a.window_s), max_frames=a.max_frames,
                      start_s=a.start_s, static=static, ring=ring, gate=JumpGate() if a.gate else None,

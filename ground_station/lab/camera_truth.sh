@@ -19,15 +19,15 @@ up() { curl -s -m 2 -o /dev/null -w '%{http_code}' "$api/health" | grep -q 200; 
 # scrcpy exits when Android drops the camera (R4: "Camera disconnected" at frame 2313); restart into the next part.
 # Part 1 keeps the R3 names (cam.mkv, scrcpy_start_host_time.txt); part k: cam_k.mkv, scrcpy_start_host_time_k.txt.
 # start/video show the live window r5cam on top; fusion puts it off screen (the tracker window is the one on top).
-cam() {                                           # CT_WIN: scrcpy window flags (default on top)
+cam() {                                           # CT_WIN: scrcpy window flags (default on top), CT_SIZE: WxH
   nohup bash -c '
-    vid=$1; win=$2; k=1
+    vid=$1; win=$2; size=$3; k=1
     while [ ! -f "$vid/stop" ]; do
       sfx=$([ $k = 1 ] || echo _$k)
       python -c "import time,datetime;t=time.time();print(f\"{t:.3f}\",datetime.datetime.fromtimestamp(t).isoformat())" > "$vid/scrcpy_start_host_time$sfx.txt"
-      scrcpy --video-source=camera --camera-id=4 --camera-zoom=0.6 --camera-size=1920x1080 --camera-fps=30         --no-audio --window-title=r5cam --window-width=1194 --window-height=672 $win --record="$vid/cam$sfx.mkv" >> "$vid/scrcpy.log" 2>&1
+      scrcpy --video-source=camera --camera-id=4 --camera-zoom=0.6 --camera-size=1920x1080 --camera-fps=30         --no-audio --window-title=r5cam --window-width=${size%x*} --window-height=${size#*x} $win --record="$vid/cam$sfx.mkv" >> "$vid/scrcpy.log" 2>&1
       [ -f "$vid/stop" ] || echo "restart part $((k+1)) at $(date +%T)" >> "$vid/scrcpy.log"; k=$((k+1)); sleep 1
-    done' _ "$vid" "${CT_WIN---always-on-top}" > /dev/null 2>&1 &
+    done' _ "$vid" "${CT_WIN---always-on-top}" "${CT_SIZE-1194x672}" > /dev/null 2>&1 &
 }
 pj() {
   local layout=$1
@@ -79,7 +79,10 @@ fusion)
   nohup python -m ground_station.livewatch.stream_log --frames ground_station/livewatch/r5_extpos_frames.md     --relay-port 47800 ${PLOT:+--plot "$PLOT"} ${VOFA:+--vofa "$VOFA" --vofa-view} --seconds 86400 "${ends[@]}" --out "logs/$name.csv" > "$vid/stream_log.out" 2>&1 &
   echo $! > "$vid/stream_log.pid"
   [ -n "$PLOT$VOFA" ] && cp "$vid/stream_log.pid" logs/plot_live.pid
-  CT_WIN="${CT_WIN---window-x=-3000 --window-y=0}" cam   # mirror off screen, still grabbed (PrintWindow); CT_WIN= shows it
+  # mirror off screen at the full 1920x1080 camera size, borderless (client area = video), still grabbed by
+  # PrintWindow, so the tracker reads every camera pixel; CT_WIN= CT_SIZE=1194x672 shows it as before. UNVERIFIED:
+  # Windows keeps a 1920x1080 window on a 1920x1080 screen unclamped (check the tracker line "window 'r5cam' ready 1920x1080").
+  CT_SIZE="${CT_SIZE-1920x1080}" CT_WIN="${CT_WIN---window-x=-3000 --window-y=0 --window-borderless}" cam
   sleep 4                                           # scrcpy window opens 256x256, final size after ~1.1 s (measured)
   dly=${DELAY_MS:-200}                              # camera delay: video_truth delay4 lag 0.21 s on r6_f4 + f4c (2026-10-13)
   al=()                                             # r6 flew modes 2/3 at --yaw-deg 0 vs ~90 deg measured: auto-fit it
@@ -107,5 +110,6 @@ end) endlive; echo "live stream ended" ;;
 check)
   for f in logs/vofa/"$name".slot*.csv logs/"$name".slot*.csv; do [ -f "$f" ] && echo "$f rows $(($(wc -l < "$f") - 1))"; done
   ls -la "$vid"/cam*.mkv 2>/dev/null || echo "no video yet"; { grep -c restart "$vid/scrcpy.log" 2>/dev/null || true; } | sed "s/^/restarts /"; tail -2 "$vid/scrcpy.log" 2>/dev/null
+  { [ -f "$vid/fusion" ] && grep -m1 " ready " "$vid/tracker.out"; } || true   # grab size: 1920x1080 = full camera px
   [ -f "$vid/fusion" ] && { echo "fixes $(($(wc -l < "$vid/fixes.csv" 2>/dev/null || echo 1) - 1))"; tail -3 "$vid/tracker.out"; tail -2 "$vid/stream_log.out"; } || true ;;
 esac

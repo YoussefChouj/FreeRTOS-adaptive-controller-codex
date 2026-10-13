@@ -366,3 +366,13 @@ def test_coral_tracker_learns_static_at_start_so_scenery_cannot_hold_the_fix():
         uo, un = old.step(_coral_frame(far, blob=blob)), new.step(_coral_frame(far, blob=blob))
     assert np.hypot(*(uo - blob)) < 30                         # no mask: held at the scenery (the r6_f4 lock)
     assert un is not None and np.hypot(*(un - far)) <= 1.0
+
+
+def test_preview_draws_a_full_size_grab_at_the_set_width():
+    from types import SimpleNamespace
+    from ground_station.analysis.live_tracker import Preview
+    scale = Preview.display_scale
+    assert scale(SimpleNamespace(width=716, scale=0.6), 1920) == pytest.approx(716 / 1920)   # 1920 mirror: r7 size
+    assert scale(SimpleNamespace(width=716, scale=0.6), 1194) == pytest.approx(0.6, abs=1e-3)
+    assert scale(SimpleNamespace(width=716, scale=0.6), 640) == 1.0                         # never upscaled
+    assert scale(SimpleNamespace(width=None, scale=0.6), 1920) == 0.6                        # no width: fixed scale
