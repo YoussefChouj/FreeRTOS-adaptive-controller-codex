@@ -26,6 +26,17 @@ cam() {
       [ -f "$vid/stop" ] || echo "restart part $((k+1)) at $(date +%T)" >> "$vid/scrcpy.log"; k=$((k+1)); sleep 1
     done' _ "$vid" > /dev/null 2>&1 &
 }
+pj() {
+  local layout=$1
+  taskkill //F //IM plotjuggler.exe > /dev/null 2>&1 || pkill -f plotjuggler 2>/dev/null || true
+  for cand in "${PJ_BIN:-}" "D:/PlotJuggler/plotjuggler.exe" "/mnt/d/PlotJuggler/plotjuggler.exe" "plotjuggler.exe" "plotjuggler"; do
+    if [ -n "$cand" ] && { command -v "$cand" > /dev/null 2>&1 || [ -x "$cand" ] || [ -f "$cand" ]; }; then
+      nohup "$cand" -l "$layout" --start_streamer "UDP Server" --buffer_size 400 --nosplash > "$vid/plotjuggler.out" 2>&1 &
+      echo $! > "$vid/plotjuggler.pid"
+      break
+    fi
+  done
+}
 case $cmd in
 start)
   mkdir -p "$vid"
@@ -43,8 +54,11 @@ start)
 fusion)
   mode=${3:?mode 1 shadow, 2 offset, 3 in-EKF}; shift 3
   up && { echo "8081 service is up: stop it first (stream_log needs the WiFi downlink)"; exit 1; }
-  mkdir -p "$vid"; rm -f "$vid/stop" "$vid/video_only"; echo "$mode" > "$vid/fusion"
+  mkdir -p "$vid" logs; rm -f "$vid/stop" "$vid/video_only"; echo "$mode" > "$vid/fusion"
   PLOT=${PLOT-127.0.0.1:9870}                       # every slot to PlotJuggler (UDP Server, JSON); PLOT= turns it off
+  if [ -n "$PLOT" ]; then
+    python -m ground_station.livewatch.pj_layout ground_station/livewatch/r5_extpos_frames.md --out "logs/$name.pj.xml"       && pj "logs/$name.pj.xml" || echo "PlotJuggler layout failed: flight goes on, open PJ by hand"
+  fi
   nohup python -m ground_station.livewatch.stream_log --frames ground_station/livewatch/r5_extpos_frames.md     --relay-port 47800 ${PLOT:+--plot "$PLOT"} --seconds 86400 --stop-file "$vid/stop" --out "logs/$name.csv" > "$vid/stream_log.out" 2>&1 &
   echo $! > "$vid/stream_log.pid"
   cam
@@ -68,7 +82,7 @@ stop)
   elif [ ! -f "$vid/video_only" ]; then
     post /api/recording/stop '{}'; post /api/streams/log/stop '{}'
   fi
-  taskkill //F //IM scrcpy.exe > /dev/null 2>&1 || true; sleep 1; "$0" check "$name" ;;
+  taskkill //F //IM scrcpy.exe > /dev/null 2>&1 || true; sleep 1; "$0" check "$name" ;;   # PlotJuggler stays open for review
 check)
   for f in logs/vofa/"$name".slot*.csv logs/"$name".slot*.csv; do [ -f "$f" ] && echo "$f rows $(($(wc -l < "$f") - 1))"; done
   ls -la "$vid"/cam*.mkv 2>/dev/null || echo "no video yet"; grep -c restart "$vid/scrcpy.log" 2>/dev/null | sed "s/^/restarts /"; tail -2 "$vid/scrcpy.log" 2>/dev/null

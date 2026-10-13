@@ -410,6 +410,18 @@ def load_frames(path=DEFAULT_FRAMES):
     return parse_frames_markdown(path.read_text(encoding="utf-8"))
 
 
+def generate_layout_xml(variables):
+    """Generate PlotJuggler 3 layout XML for given variable names."""
+    from .pj_layout import generate_layout_xml as _gen
+    return _gen(variables)
+
+
+def write_layout_from_frames(frames_or_preset, out_path):
+    """Read a frames/preset file, generate PlotJuggler XML, and write it to out_path."""
+    from .pj_layout import write_layout_from_frames as _write
+    return _write(frames_or_preset, out_path)
+
+
 def _relay_uplink(relay, wifi) -> int:
     """Forward every datagram waiting on the local relay socket (live_tracker EXT_POS fixes, raw 0xCC 0xDD frames) to
     the module on the logging socket. MicoAir sends telemetry to the source of the last uplink datagram, so a second
@@ -732,6 +744,8 @@ def main(argv=None):
     ap.add_argument("--frames", default=None, metavar="FILE",
                     help="Markdown frame table to log when neither --symbol nor "
                          "--group is given (default: %s)" % DEFAULT_FRAMES.name)
+    ap.add_argument("--layout-out", default=None, metavar="FILE",
+                    help="also write PlotJuggler layout XML for the subscribed frames to FILE")
     args = ap.parse_args(argv)
 
     transport = _TRANSPORTS[args.transport]
@@ -756,6 +770,10 @@ def main(argv=None):
                 frames = Path(args.frames) if args.frames else DEFAULT_FRAMES
                 groups = load_frames(frames)
                 print("frame: %s (%d slot(s))" % (frames, len(groups)))
+            if args.layout_out:
+                layout_vars = [v for _, symbols in groups for v in symbols]
+                write_layout_from_frames(layout_vars, args.layout_out)
+                print("layout: wrote PlotJuggler layout to %s" % args.layout_out)
             stats = run_groups(args.control_port, data_port, groups, transport,
                                args.seconds, args.out, elf=args.elf,
                                usart3_baud=args.usart3_baud, vofa=args.vofa, plot=args.plot,
