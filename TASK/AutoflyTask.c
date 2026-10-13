@@ -421,6 +421,96 @@ TrajParams_t traj_p = {                 /* watch-window struct, latched at traj_
 	4.0f, 2.0f                      /* goto at least 4 s, settle 2 s (not in the 25 s move cap)    */
 };
 
+/* ------------------------------------------------------------------
+ * VAR_WRITE allowlist: GS CMD 0x2D, the WiFi twin of a Keil watch-window write (docs/firmware-table-pattern.md)
+ * ------------------------------------------------------------------
+ * One frame writes one row: INDEX = the row id, value = float32 (a u8 row takes an integral value only). Nothing
+ * outside this table can be written. Ranges are the ones in each variable's comment; the traj_go checks (0xEE,
+ * 0xEF) still run on top. Row ids are permanent: never renumber or reuse one, so a stale build refuses an id it
+ * does not know instead of writing the wrong variable. ground_station/platform/wfb_var.py parses these rows.
+   @id   -  [1, 254]     permanent row id, the command's INDEX
+   @min  -  [-500, 500]  lowest value accepted
+   @max  -  [-500, 500]  highest value accepted */
+#define VW_U8   0U
+#define VW_F32  1U
+typedef struct {
+	uint8_t        id;
+	uint8_t        type;   /* VW_U8 or VW_F32 */
+	volatile void *addr;
+	float          min;
+	float          max;
+	const char    *name;   /* the variable as written in the row, echoed in the APPLIED detail */
+} VarWriteRow_t;
+#define VAR_WRITE_ROW(var, type, id, min, max)  { (id), (type), (volatile void *)&(var), (min), (max), #var }
+
+extern volatile uint8_t kp_id, kp_go, vp_user_go, g_traj_ff_preset;   /* StabilizerTask.c */
+
+static const VarWriteRow_t s_var_write[] = {
+/*                var                 type    id    min      max            range source */
+    VAR_WRITE_ROW(traj_id,            VW_U8,   1,   1,       4      ),  /* 1 step .. 4 figure-8          */
+    VAR_WRITE_ROW(traj_go,            VW_U8,   2,   0,       1      ),  /* bool                          */
+    VAR_WRITE_ROW(traj_stop,          VW_U8,   3,   0,       1      ),  /* bool                          */
+    VAR_WRITE_ROW(traj_fence_off,     VW_U8,   4,   0,       1      ),  /* bool                          */
+
+    VAR_WRITE_ROW(traj_p.profile,     VW_U8,  10,   0,       1      ),  /* enum 0 hard, 1 smooth         */
+    VAR_WRITE_ROW(traj_p.axis,        VW_U8,  11,   0,       2      ),  /* enum 0 x, 1 y, 2 z            */
+    VAR_WRITE_ROW(traj_p.zz_shape,    VW_U8,  12,   0,       1      ),  /* enum triangle, sine           */
+    VAR_WRITE_ROW(traj_p.f8_type,     VW_U8,  13,   0,       1      ),  /* enum Bernoulli, Gerono        */
+    VAR_WRITE_ROW(traj_p.move_s,      VW_F32, 14,   0.0f,    25.0f  ),  /* TRAJ_TOTAL_MAX_S              */
+    VAR_WRITE_ROW(traj_p.ret_s,       VW_F32, 15,   3.0f,    10.0f  ),  /* 3-10                          */
+    VAR_WRITE_ROW(traj_p.hold_s,      VW_F32, 16,   0.0f,    5.0f   ),  /* 0-5                           */
+    VAR_WRITE_ROW(traj_p.ramp_s,      VW_F32, 17,   0.5f,    6.25f  ),  /* 0.5 to move_s / 4, move_s 25  */
+    VAR_WRITE_ROW(traj_p.step_cm,     VW_F32, 18, -100.0f,   100.0f ),  /* +-100 (z +-40 at traj_go)     */
+    VAR_WRITE_ROW(traj_p.zz_amp_cm,   VW_F32, 19,   0.0f,    80.0f  ),  /* up to 80 (z 40 at traj_go)    */
+    VAR_WRITE_ROW(traj_p.zz_hz,       VW_F32, 20,   0.0f,    1.0f   ),  /* up to 1                       */
+    VAR_WRITE_ROW(traj_p.circ_r_cm,   VW_F32, 21,  10.0f,    80.0f  ),  /* 10-80                         */
+    VAR_WRITE_ROW(traj_p.circ_laps,   VW_F32, 22,   0.0f,    3.0f   ),  /* up to 3                       */
+    VAR_WRITE_ROW(traj_p.f8_a_cm,     VW_F32, 23,  10.0f,    80.0f  ),  /* 10-80                         */
+    VAR_WRITE_ROW(traj_p.f8_laps,     VW_F32, 24,   0.0f,    4.0f   ),  /* up to 4                       */
+    VAR_WRITE_ROW(traj_p.f8_tilt_deg, VW_F32, 25, -60.0f,    60.0f  ),  /* +-60                          */
+    VAR_WRITE_ROW(traj_p.yaw_follow,  VW_U8,  26,   0,       1      ),  /* bool                          */
+    VAR_WRITE_ROW(traj_p.yaw_rate_dps,VW_F32, 27,  10.0f,    180.0f ),  /* 10-180                        */
+    VAR_WRITE_ROW(traj_p.yaw_nose_deg,VW_F32, 28, -180.0f,   180.0f ),  /* an angle (+90 or -90 in use)  */
+    VAR_WRITE_ROW(traj_p.start_fixed, VW_U8,  29,   0,       1      ),  /* bool                          */
+    VAR_WRITE_ROW(traj_p.start_x_cm,  VW_F32, 30, -500.0f,   500.0f ),  /* wfb_traj x_abs_m legend 5 m   */
+    VAR_WRITE_ROW(traj_p.start_y_cm,  VW_F32, 31, -500.0f,   500.0f ),  /* wfb_traj y_abs_m legend 5 m   */
+    VAR_WRITE_ROW(traj_p.start_z_m,   VW_F32, 32,   0.5f,    1.5f   ),  /* 0.5-1.5                       */
+    VAR_WRITE_ROW(traj_p.goto_s,      VW_F32, 33,   2.0f,    10.0f  ),  /* 2-10                          */
+    VAR_WRITE_ROW(traj_p.settle_s,    VW_F32, 34,   0.0f,    5.0f   ),  /* 0-5                           */
+
+    VAR_WRITE_ROW(kp_id,              VW_U8,  40,   0,       7      ),  /* s_kp rows 0..7                */
+    VAR_WRITE_ROW(kp_go,              VW_U8,  41,   0,       1      ),  /* bool                          */
+    VAR_WRITE_ROW(vp_user_go,         VW_U8,  42,   0,       1      ),  /* bool                          */
+    VAR_WRITE_ROW(g_traj_ff_preset,   VW_U8,  43,   0,       1      )   /* bool                          */
+};
+
+/* GS CMD 0x2D: write row `id` = val. Returns 0 (written) or a VAR_WRITE_REJECT_* code (nothing written);
+ * *name is the row's variable name when the id is known. NaN fails the range check. */
+uint8_t VarWrite_Apply(uint8_t id, float val, const char **name)
+{
+	uint8_t i;
+	for (i = 0U; i < (uint8_t)(sizeof(s_var_write) / sizeof(s_var_write[0])); i++) {
+		const VarWriteRow_t *r = &s_var_write[i];
+		if (r->id == id) {
+			*name = r->name;
+			if (!((val >= r->min) && (val <= r->max))) {
+				return VAR_WRITE_REJECT_RANGE;
+			}
+			if (r->type == VW_U8) {
+				uint8_t u = (uint8_t)val;
+				if ((float)u != val) {
+					return VAR_WRITE_REJECT_RANGE;   /* a u8 row takes an integral value only */
+				}
+				*(volatile uint8_t *)r->addr = u;
+			} else {
+				*(volatile float *)r->addr = val;
+			}
+			return 0U;
+		}
+	}
+	return VAR_WRITE_REJECT_UNKNOWN;
+}
+
 /* Lab stage (StabilizerTask s_stage, ground only): figure-8 path, tilt, laps and yaw rate for the stage. */
 void Traj_SetStage(float tilt_deg, float laps, float yaw_rate_dps)
 {

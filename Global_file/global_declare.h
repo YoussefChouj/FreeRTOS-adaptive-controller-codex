@@ -281,6 +281,11 @@ extern void AutoflyTask_WaypointReset(void);
 extern void AutoflyTask_StartSinusoid(void);
 extern void AutoflyTask_StartCircle(void);
 extern void AutoflyTask_StartFigure8(void);
+/* GS CMD 0x2D VAR_WRITE: write one row of the s_var_write allowlist (AutoflyTask.c). Returns 0 or a reject
+ * reason (transactions.py RejectReason); *name = the row's variable name when the id is known. */
+#define VAR_WRITE_REJECT_UNKNOWN  0x40U   /* no row with this id */
+#define VAR_WRITE_REJECT_RANGE    0x41U   /* outside [min, max], or not integral for a u8 row */
+extern uint8_t VarWrite_Apply(uint8_t id, float val, const char **name);
 
 /* Ground station: parallel trigger for SDK state machine (see AutoflyTask, CMD 0x0E) */
 extern volatile uint8_t GS_KeySDKflag;

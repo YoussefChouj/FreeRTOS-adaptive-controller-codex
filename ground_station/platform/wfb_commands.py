@@ -90,6 +90,14 @@ class WfbClient:
         result = self._send(frame)
         return result == Outcome.APPLIED
 
+    def var_write(self, name: str, value: float) -> bool:
+        """CMD 0x2D: write one allowlisted variable (wfb_var, TASK/AutoflyTask.c VAR_WRITE_ROW), True when APPLIED.
+        Raises wfb_var.VarWriteError (nothing sent) on an unknown name or a value the row refuses."""
+        from ground_station.platform import wfb_var
+
+        row = wfb_var.check(name, value)
+        return self._send_cmd(wfb_var.CMD_VAR_WRITE, row.id, float(value))
+
     def arm(self) -> bool:
         """Arm the drone."""
         return self._send_cmd(CMD_ARM, ArmIdx.ARM, 1.0)

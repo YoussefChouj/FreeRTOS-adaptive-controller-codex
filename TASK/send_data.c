@@ -1238,8 +1238,9 @@ extern volatile uint8_t gs_cmd_tail;
 #define TXN_HISTORY_LEN         16U
 #define CMD_REJECT_UNKNOWN      4U   /* reason byte of a REJECTED transaction result (firmware_contract.py: 4 unknown, 6 interlock) */
 #define CMD_REJECT_INTERLOCK    6U
-#define CMD_ID_LAST_PLAIN       0x1FU  /* ids above this are unknown, except the MRAC element block and EXT_POS */
+#define CMD_ID_LAST_PLAIN       0x1FU  /* ids above this are unknown, except the MRAC element block, EXT_POS, VAR_WRITE */
 #define EXT_POS_CMD_ID          0x2CU  /* first free id above MRAC_ELEM_CMD_LAST */
+#define VAR_WRITE_CMD_ID        0x2DU  /* one allowlisted variable (AutoflyTask.c s_var_write) */
 
 static uint8_t s_transaction_result_buf[64];
 static uint16_t s_transaction_history[TXN_HISTORY_LEN];
@@ -1302,7 +1303,8 @@ static void MracElemParamApply(uint8_t axis, uint8_t field, uint8_t elem, float 
 
 static uint8_t CommandSafetyReject(uint8_t id)
 {
-    if ((id == 0U) || ((id > CMD_ID_LAST_PLAIN) && !MRAC_ELEM_CMD_IS(id) && (id != EXT_POS_CMD_ID))) {
+    if ((id == 0U) || ((id > CMD_ID_LAST_PLAIN) && !MRAC_ELEM_CMD_IS(id) && (id != EXT_POS_CMD_ID) &&
+         (id != VAR_WRITE_CMD_ID))) {
         return CMD_REJECT_UNKNOWN;
     }
     if ((id == 0x06U) && (DroneStatus.FlyMode != FlyMode_SDK)) {
@@ -1368,6 +1370,8 @@ typedef struct {
     uint32_t lease_now_ms;    /* WP-28 gain lease clock, ms */
     uint8_t  lease_airborne;
     uint8_t  wfb_res;         /* WFB_RESULT_* of a 0x1A/0x1B/0x1C; APPLIED for every other command */
+    uint8_t  reason;          /* nonzero: the handler refused (REJECTED with this reason); 0x2D only */
+    const char *detail;       /* APPLIED detail instead of "applied" (0x2D: the variable name) */
 } GsCmd_t;
 
 typedef void (*GsCmdHandler_t)(GsCmd_t *c);
@@ -1878,6 +1882,12 @@ static void Cmd_CtrlSelect(GsCmd_t *c)
 #define EXT_POS_IDX_ON          0xFFU
 #define EXT_POS_IDX_DELAY       0xFEU
 #define EXT_POS_DELAY_MAX_MS    1000.0f
+/* CMD 0x2D VAR_WRITE: idx = permanent row id of the allowlist, val = the value (docs/firmware-table-pattern.md) */
+static void Cmd_VarWrite(GsCmd_t *c)
+{
+    c->reason = VarWrite_Apply(c->idx, c->val, &c->detail);
+}
+
 static void Cmd_ExtPos(GsCmd_t *c)
 {
     float x_cm, y_cm;
@@ -2071,7 +2081,8 @@ static const GsCmdEntry_t k_gs_cmds[] = {
     GS_CMD_ENTRY(0x1E,                 0x1E,                 Cmd_OfBiasMode),         /* OF_BIAS_MODE */
     GS_CMD_ENTRY(0x1F,                 0x1F,                 Cmd_CtrlSelect),         /* CTRL_SELECT */
     GS_CMD_ENTRY(MRAC_ELEM_CMD_BASE,   MRAC_ELEM_CMD_LAST,   Cmd_MracElem8),          /* MRAC element, 8-bit index */
-    GS_CMD_ENTRY(EXT_POS_CMD_ID,       EXT_POS_CMD_ID,       Cmd_ExtPos)              /* EXT_POS */
+    GS_CMD_ENTRY(EXT_POS_CMD_ID,       EXT_POS_CMD_ID,       Cmd_ExtPos),             /* EXT_POS */
+    GS_CMD_ENTRY(VAR_WRITE_CMD_ID,     VAR_WRITE_CMD_ID,     Cmd_VarWrite)            /* VAR_WRITE */
 };
 
 static void GsCmd_Dispatch(GsCmd_t *c)
@@ -2114,6 +2125,8 @@ void Process_GroundStation_Command(void)
         /* WFB BEGIN glue */
         cmd.wfb_res = WFB_RESULT_APPLIED;
         /* WFB END glue */
+        cmd.reason = 0U;
+        cmd.detail = 0;
 
         /* CMD 0x1E idx=0 (estimator mode switch) is disarmed-only */
         if ((reject_reason == 0U) && (cmd.id == 0x1EU) && (cmd.idx == 0U) &&
@@ -2157,10 +2170,24 @@ void Process_GroundStation_Command(void)
             continue;
         }
         /* WFB END glue */
+        if (cmd.reason != 0U) {
+            /* 0x2D refused (unknown row, out of range): nothing was written, so a retry with the same txid
+             * must execute again; it leaves the duplicate history like a rejected WFB command. */
+            if (transaction_id != 0U) {
+                uint8_t last_slot = (uint8_t)((s_transaction_history_head + (TXN_HISTORY_LEN - 1U)) % TXN_HISTORY_LEN);
+                if (s_transaction_history[last_slot] == transaction_id) {
+                    s_transaction_history[last_slot] = 0U;
+                }
+                SendTransactionResult(transaction_id, transaction_transport,
+                                      PLATFORM_RESULT_REJECTED, cmd.id, cmd.idx,
+                                      cmd.reason, "var rejected");
+            }
+            continue;
+        }
         if (transaction_id != 0U) {
             SendTransactionResult(transaction_id, transaction_transport,
                                   PLATFORM_RESULT_APPLIED, cmd.id, cmd.idx, 0U,
-                                  "applied");
+                                  (cmd.detail != 0) ? cmd.detail : "applied");
         }
     }
 }

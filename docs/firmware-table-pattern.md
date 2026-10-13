@@ -105,6 +105,25 @@ Points this reference adds:
   `--define MRAC_CAPACITY=16` and `=24`, not a compile-time compare, because the table is
   code, not initialized data (see the note below on code-based init).
 
+## Writable table: `VAR_WRITE_ROW` (GS CMD 0x2D, WP-44)
+
+`s_var_write` in `TASK/AutoflyTask.c` is the WiFi twin of a Keil watch-window write: the only variables the ground
+may set by name. `VAR_WRITE_ROW(var, type, id, min, max)` stores the address, `VW_U8` or `VW_F32`, and `#var` as
+the name; `var, type` are key arguments (`ASSIGN` in `tools/row_meta.py`), so the legend has `@id @min @max`.
+
+- Frame: CMD `0x2D`, INDEX = the row id, value = float32. A `VW_U8` row takes an integral value only.
+- Ids are permanent: never renumber or reuse one (a retired row keeps its id unused). A stale build then refuses
+  an id it does not know instead of writing the wrong variable.
+- Ranges come from the variable's own comment; with none, the legal enum/bool range. Range checks that depend on
+  other fields stay where they were (`traj_go` status 0xEE/0xEF); the table is the first gate, not the only one.
+- Replies: APPLIED with the variable name as detail; REJECTED reason `0x40` unknown id, `0x41` out of range or not
+  integral (`RejectReason.UNKNOWN_VARIABLE` / `OUT_OF_RANGE`). A rejected txid leaves the duplicate history, so a
+  retry runs again. Nothing outside the table can be written.
+- Ground: `ground_station/platform/wfb_var.py` parses the rows from the C source (no copied list) and checks name
+  and range before sending; `WfbClient.var_write(name, value)` returns True on APPLIED.
+- Adding a row: next free id, range from the comment, then `python tools/row_meta.py TASK/AutoflyTask.c` and
+  `pytest ground_station/platform/tests/test_wfb_var.py` (it checks the type against the C declaration).
+
 ## Verifying a layout-only refactor
 
 The values must not change. Prove it three ways before committing:
