@@ -19,7 +19,7 @@ Keil: open the project, F7 (build), then Download. Expect 0 errors. If ARMCC com
 | `traj_stop` | write 1 | end the move now and fly back (status 4) |
 | `traj_fence_off` | write | 0 fence on (x/y/z checks); 1 fence off (x/y and ceiling bypassed, trajectory may leave the box; the 0.4 m floor still applies) |
 | `traj_status` | read | 1 running, 2 done and back, 3 aborted (stick takeover, landing, disarm), 4 stopped and back |
-| | | refused, nothing moved: `0xE0` not flying, `0xE1` busy (a GS path or GS authority), `0xE2` bad `traj_id`, `0xEE` a field out of range or too fast, `0xEF` the shape leaves the soft fence |
+| | | refused, nothing moved: `0xE0` not flying, `0xE1` busy (a GS path or GS authority; a WiFi `fly` hover is not busy: the preset takes the point over and the hover holds it again after, WP-45), `0xE2` bad `traj_id`, `0xEE` a field out of range or too fast, `0xEF` the shape leaves the soft fence |
 | `traj_id_seen` | read | `traj_id` as the firmware read it at the last `traj_go`; if `traj_status` is `0xE2`, this shows why |
 | `traj_phase` | read | 0 idle, 1 move, 2 return, 3 hold at the start point |
 | `traj_active`, `traj_t` | read | running id, seconds since `traj_go` |

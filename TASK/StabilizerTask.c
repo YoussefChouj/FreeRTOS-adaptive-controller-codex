@@ -23,6 +23,7 @@
 #include "wfb_traj.h"
 #include "wfb_prim.h"
 /* WFB END glue */
+extern volatile uint8_t traj_active;   /* AutoflyTask.c: id of the running Keil preset, 0 idle */
 
 /**
  * @module     StabilizerTask.c
@@ -462,6 +463,7 @@ static void Wfb_Step(void)
 	in.sbus_live   = sbus_lost ? 0U : 1U;
 	in.airborne    = (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING) ? 1U : 0U;
 	in.rc_override = (RCInput_IsActive(RC_AXIS_ROLL) || RCInput_IsActive(RC_AXIS_PITCH)) ? 1U : 0U;
+	in.preset_active = traj_active ? 1U : 0U;   /* AutoflyTask.c Keil preset */
 
 	/* send_data.c and RemoterTask.c call into the glue from other tasks */
 	taskENTER_CRITICAL();

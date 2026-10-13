@@ -367,6 +367,7 @@ int main(void)
 			gi.roll_deg = c[4]; gi.pitch_deg = c[5]; gi.vbat_v = c[6]; gi.yaw_deg = c[7];
 			gi.armed = (uint8_t)c[8]; gi.motors_idle = (uint8_t)c[9]; gi.sbus_live = (uint8_t)c[10];
 			gi.airborne = (uint8_t)c[11]; gi.rc_override = (uint8_t)c[12];
+			gi.preset_active = 0U;
 			wfb_glue_tick(&gi, &go);
 			r[0] = go.setpoint_valid; r[1] = go.x_sp_m; r[2] = go.y_sp_m; r[3] = go.z_sp_m; r[4] = go.yaw_sp_deg;
 			r[5] = go.takeoff_req; r[6] = go.land_req; r[7] = go.motor_stop_req;

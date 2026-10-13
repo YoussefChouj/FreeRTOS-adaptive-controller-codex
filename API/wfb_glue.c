@@ -420,7 +420,8 @@ void wfb_glue_tick(const wfb_glue_in_t *in, wfb_glue_out_t *out)
         out->motor_stop_req = in->armed ? 1u : 0u;
     } else {
         out->land_req = (s_wfb.land_now || pout.descend) ? 1u : 0u;
-        if (!s_wfb.takeover &&
+        /* HOVER only holds the point: a Keil preset (traj_go) flies from it and back, then HOVER holds again */
+        if (!s_wfb.takeover && !(st == (uint8_t)WFB_PRIM_HOVER && in->preset_active) &&
             (st == (uint8_t)WFB_PRIM_CLIMB || st == (uint8_t)WFB_PRIM_HOVER || st == (uint8_t)WFB_PRIM_TRAJ ||
              st == (uint8_t)WFB_PRIM_RETURN || st == (uint8_t)WFB_PRIM_SETTLE)) {
             out->setpoint_valid = 1u;

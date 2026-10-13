@@ -72,6 +72,7 @@ typedef struct {
     uint8_t sbus_live;    /* physical RC link present */
     uint8_t airborne;     /* flight phase FLYING or LANDING */
     uint8_t rc_override;  /* physical roll/pitch stick active (the existing TWC cancel condition) */
+    uint8_t preset_active; /* a Keil preset runs (AutoflyTask traj_active): HOVER yields the setpoints to it */
 } wfb_glue_in_t;
 
 /* What the firmware must do this tick. */

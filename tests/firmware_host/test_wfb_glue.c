@@ -698,6 +698,46 @@ static void test_pilot_takeover(void)
     CHECK(out.land_req == 1u);
 }
 
+/* A Keil preset (AutoflyTask traj_go) flies from a GS hover: HOVER yields its setpoint while the preset runs (no
+ * TWC fight, no land), and holds the same point again once the preset is back. The pilot stick still wins. */
+static void test_preset_runs_from_hover(void)
+{
+    wfb_glue_in_t in;
+    wfb_glue_out_t out;
+    float x0, y0, z0;
+    int i;
+
+    fly_to_hover(&in, &out);
+    step(&in, &out, 1);
+    CHECK(out.setpoint_valid == 1u);
+    x0 = out.x_sp_m;
+    y0 = out.y_sp_m;
+    z0 = out.z_sp_m;
+
+    in.preset_active = 1u;
+    for (i = 0; i < 600; i++) {
+        in.x_m = x0 + 0.3f * (float)i / 600.0f;   /* the preset moves the drone; the glue does not pull it back */
+        step(&in, &out, 1);
+        CHECK(out.setpoint_valid == 0u);
+        CHECK(out.land_req == 0u);
+    }
+    CHECK(prim_state() == WFB_PRIM_HOVER);
+
+    in.x_m = x0;                                    /* back at traj_home: the preset ended */
+    in.preset_active = 0u;
+    step(&in, &out, 1);
+    CHECK(out.setpoint_valid == 1u);
+    CHECK(out.x_sp_m == x0 && out.y_sp_m == y0 && out.z_sp_m == z0);
+
+    in.preset_active = 1u;                          /* a pilot stick during a preset is still a takeover */
+    in.rc_override = 1u;
+    step(&in, &out, 1);
+    in.rc_override = 0u;
+    in.preset_active = 0u;
+    step(&in, &out, 1);
+    CHECK(out.setpoint_valid == 0u);
+}
+
 /* Just outside the fence on a GS flight: the setpoint is pushed to the soft boundary, the
  * trajectory clock stands still, and back inside the push clears with no landing. */
 static void test_fence_push_back(void)
@@ -786,6 +826,7 @@ int main(void)
     RUN(test_regular_heartbeat_never_trips);
     RUN(test_rc_flight_has_no_safety_net);
     RUN(test_pilot_takeover);
+    RUN(test_preset_runs_from_hover);
     RUN(test_fence_push_back);
     RUN(test_future_heartbeat_clamps_to_zero);
     RUN(test_malformed_commands_rejected);

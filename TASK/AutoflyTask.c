@@ -18,6 +18,8 @@
 #include "task.h"
 #include "wfb_safety.h"
 #include "wfb_traj.h"
+#include "wfb_prim.h"
+#include "wfb_glue.h"      /* g_wfb_status: a WFB hover hold yields to a preset */
 #include "traj_shape.h"
 
 /* ------------------------------------------------------------------
@@ -817,6 +819,15 @@ static void Traj_End(uint8_t status)
 	Traj_FFClear();
 }
 
+/* TWC.execute held by an owner a preset must not fight. A WFB HOVER only holds the point, so a preset takes it over:
+ * the glue yields HOVER while traj_active (wfb_glue.c) and holds again at the start point once the preset is back. */
+static uint8_t Traj_TwcBusy(void)
+{
+	if (TWC.execute == 0)
+		return 0U;
+	return (g_wfb_status.gs_flight_active > 0.5f && g_wfb_status.prim_state == (float)WFB_PRIM_HOVER) ? 0U : 1U;
+}
+
 static void Traj_Start(void)
 {
 	uint8_t code;
@@ -826,7 +837,7 @@ static void Traj_Start(void)
 		traj_status = 0xE0U;
 		return;
 	}
-	if (RCInput_GetAuthority() || TWC.execute != 0 ||
+	if (RCInput_GetAuthority() || Traj_TwcBusy() ||
 	    sinusoid_path.active || circle_path.active || figure8_path.active) {
 		traj_status = 0xE1U;
 		return;
@@ -868,6 +879,7 @@ static void Traj_Start(void)
 	taskENTER_CRITICAL();
 	RCInput_SetAuthority(1U);
 	Traj_SticksCentred();
+	TWC.execute = 0;   /* a WFB hover hold: the preset owns the setpoints now */
 	taskEXIT_CRITICAL();
 
 	AutoflyTask_WaypointReset();
@@ -906,13 +918,14 @@ static void Traj_Tick(void)
 	/* takeover (any stick move drops the authority), disarm, landing, or a GS path: stop here, no return */
 	if (!RCInput_GetAuthority() || FlightFSM_GetState() != FLIGHT_STATE_ARMED ||
 	    flight_phase != FLIGHT_PHASE_FLYING || DroneStatus.FlyMode != FlyMode_SDK ||
-	    TWC.execute != 0 || sinusoid_path.active || circle_path.active || figure8_path.active) {
+	    Traj_TwcBusy() || sinusoid_path.active || circle_path.active || figure8_path.active) {
 		Traj_End(3U);
 		return;
 	}
 
 	taskENTER_CRITICAL();
 	Traj_SticksCentred();
+	TWC.execute = 0;   /* a WFB hover tick that ran before the glue saw traj_active */
 	taskEXIT_CRITICAL();
 
 	s_tph += AFLY_DT_S;
