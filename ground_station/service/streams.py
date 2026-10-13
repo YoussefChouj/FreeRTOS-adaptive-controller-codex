@@ -27,6 +27,7 @@ from typing import Any, Callable, Optional
 from ground_station.comm import boot_default_layout as bdl
 
 DEFAULT_FORWARD_ADDR = "127.0.0.1:1347"
+DEFAULT_PLOT_ADDR = "127.0.0.1:9870"   # PlotJuggler UDP Server, as stream_log --plot
 SWAPPABLE = (1, 2, 3)
 SLOT_COUNT = 4
 
@@ -429,6 +430,103 @@ class VofaForward:
             return self.status_locked()
 
 
+class PlotForward:
+    """Every streamed slot to PlotJuggler's UDP Server (JSON, stream_log.format_row_datagram), one message per
+    sample, independent of logging and of the VOFA+ forward: ending a recording keeps the plots live.
+
+    Series paths are the variable names with "/" for "." (packed ranges as name[i]); "t" is the drone clock in
+    seconds when the sample carries it. Best effort: no PlotJuggler listening never stops the stream."""
+
+    def __init__(self, sock_factory: Optional[Callable[[], Any]] = None):
+        self._sock_factory = sock_factory or (
+            lambda: socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+        self._lock = threading.RLock()
+        self.active = False
+        self.addr = None
+        self.vars: list[str] = []
+        self.sent = 0
+        self._sock = None
+        self._target = None
+        self._fmt = None
+
+    def start(self, slots: dict, addr: str = DEFAULT_PLOT_ADDR) -> dict:
+        """``slots`` as for VofaForward; the reply lists every streamed variable (for a layout)."""
+        from ground_station.livewatch.stream_log import format_row_datagram
+        host, _, port = addr.rpartition(":")
+        if not host or not port.isdigit():
+            raise ValueError("address must look like host:port")
+        with self._lock:
+            self.stop_locked()
+            self.vars = list(dict.fromkeys(v for spec in slots.values() for v in spec["vars"]))
+            self._fmt = format_row_datagram
+            self._target = (host, int(port))
+            self._sock = self._sock_factory()
+            self.addr = addr
+            self.sent = 0
+            self.active = True
+            return self.status_locked()
+
+    def stop_locked(self) -> dict:
+        self.active = False
+        if self._sock is not None:
+            try:
+                self._sock.close()
+            except Exception:
+                pass
+            self._sock = None
+        return self.status_locked()
+
+    def stop(self) -> dict:
+        with self._lock:
+            return self.stop_locked()
+
+    def note(self, slot, sample):
+        if not self.active:
+            return
+        try:
+            slot = int(slot)
+        except (TypeError, ValueError):
+            return
+        values = sample.values
+        prefix = "slot%d." % slot
+        names, flat = [], []
+        for key, v in values.items():
+            name = key[len(prefix):] if key.startswith(prefix) else key
+            if name in ("t_ms", "seq"):
+                continue
+            if isinstance(v, (list, tuple)):
+                if all(isinstance(x, (int, float)) for x in v):
+                    names.extend("%s[%d]" % (name, i) for i in range(len(v)))
+                    flat.extend(v)
+            elif isinstance(v, (int, float)):
+                names.append(name)
+                flat.append(v)
+        meta = getattr(sample, "metadata", None)
+        t_ms = getattr(meta, "source_time_ms", None)
+        if t_ms is None:
+            t_ms = values.get("t_ms")
+        if not isinstance(t_ms, (int, float)):
+            t_ms = time.time() * 1000.0
+        seq = getattr(meta, "sequence", None)
+        seq = values.get("seq", 0) if seq is None else seq
+        with self._lock:
+            if not self.active:
+                return
+            try:
+                self._sock.sendto(self._fmt(names, slot, seq, t_ms, flat), self._target)
+                self.sent += 1
+            except (OSError, ValueError, TypeError):
+                pass
+
+    def status_locked(self) -> dict:
+        return {"active": self.active, "addr": self.addr,
+                "vars": list(self.vars), "sent": self.sent}
+
+    def status(self) -> dict:
+        with self._lock:
+            return self.status_locked()
+
+
 # --------------------------------------------------------------- manager
 
 class StreamsManager:
@@ -454,6 +552,7 @@ class StreamsManager:
                        "slots": []}
         self.logger = StreamLogger(log_dir or vcore.LOG_DIR)
         self.forward = VofaForward()
+        self.plot = PlotForward()
 
     # ---- slot table
 
@@ -538,6 +637,7 @@ class StreamsManager:
             "apply": dict(self.status),
             "log": self.logger.status(),
             "forward": self.forward.status(),
+            "plot": self.plot.status(),
         }
 
     # ---- apply / restore
@@ -845,6 +945,7 @@ class StreamsManager:
     def note(self, slot, sample):
         self.logger.note(slot, sample)
         self.forward.note(slot, sample)
+        self.plot.note(slot, sample)
 
 
 def _divider(rate: float) -> int:
@@ -952,6 +1053,13 @@ def handle_post(service, route: str, body: dict) -> tuple[int, dict]:
                 str(body.get("addr") or DEFAULT_FORWARD_ADDR))
         except FileNotFoundError:
             return 404, {"error": "no such preset"}
+        except ValueError as exc:
+            return 400, {"error": str(exc)}
+    if route == "/api/streams/plot":
+        if not body.get("enable", True):
+            return 200, mgr.plot.stop()
+        try:
+            return 200, mgr.plot.start(mgr.slot_specs(), str(body.get("addr") or DEFAULT_PLOT_ADDR))
         except ValueError as exc:
             return 400, {"error": str(exc)}
     return 404, {"error": "unknown streams route"}

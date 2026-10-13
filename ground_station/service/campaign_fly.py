@@ -5,6 +5,10 @@
     fly <launch copy> --run logs/workflow-c/<run>       # a launch copy flies as is; --run adds flight_debrief
     fly <campaign> --record-only carry --rate 100       # disarmed handheld log, no drone command
 
+At start the VOFA+ FLIGHT_VIEW variables are forwarded (FireWater 127.0.0.1:1347) and the two VOFA+ import files
+are written; their paths are printed. The `p` key streams every slot to PlotJuggler (UDP Server JSON, 9870) and
+opens it on a layout of the streamed variables; that stream outlives the recording.
+
 Each round: compile the file (a .fly via fly_file, a yaml via campaign_launch), run the preflight every 2 s while
 disarmed and print only what fails, then wait for the RC arm. Armed with a passing preflight: a 3 s countdown (a
 disarm or Ctrl+C cancels it), then go. In flight one live line is rewritten in place at 5 Hz and phase changes
@@ -18,6 +22,7 @@ stays the primary stop. `fly.cmd` at the repo root runs this module.
 import argparse
 import json
 import math
+import os
 import shutil
 import subprocess
 import sys
@@ -37,6 +42,7 @@ PREFLIGHT_S = 2.0     # operator Q5: silent preflight period while disarmed
 LIVE_S = 0.2          # operator Q12: the live line at 5 Hz
 LINK_LOST_S = 3.0     # PROPOSED: every stream older than this = the drone is off (pack swap)
 CONFIRMATION = "RC arm held through the 3 s fly countdown"
+PJ_BINS = ("D:/PlotJuggler/plotjuggler.exe", "plotjuggler")   # camera_truth.sh pj() candidates; $PJ_BIN first
 _clock, _sleep = time.monotonic, time.sleep  # tests replace both
 
 
@@ -413,6 +419,59 @@ def _ask_pack(pack):
     return remember_pack(said) if said else pack
 
 
+def vofa_setup(base, out_dir=None):
+    """VOFA+ FLIGHT_VIEW (operator Q3): forward its streamed variables (FireWater, 8081 /api/streams/forward) and
+    write VOFA+'s two native import files in the same channel order. Returns the lines to print. UNVERIFIED in the
+    lab: VOFA+ loading both files against the live forward."""
+    from ground_station.vofa_studio import vofa_config
+    code, st = call(base, "/api/streams/forward", {"enable": True, "channels": vofa_config.view_channels()["vars"]})
+    if code != 200:
+        return [f"VOFA+: forward refused ({code}): {st.get('error', st)}"]
+    ch = vofa_config.export_view(**({"out_dir": out_dir} if out_dir else {}), available=st["channels"])
+    lines = [f"VOFA+ FireWater UDP {st['addr']}, {len(st['channels'])} channels"
+             + (f" ({len(ch['missing'])} not streamed)" if ch["missing"] else ""),
+             f"  File > Load widget windows and tabs <- {ch['tabviews']}",
+             f"  File > Load datas <- {ch['names_csv']}"]
+    if ch["vars"] != st["channels"]:
+        lines.append("  channel order differs from the forward: the names will be wrong, report it")
+    return lines
+
+
+def _pj_running():
+    try:
+        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq plotjuggler.exe", "/NH"], capture_output=True,
+                             text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "plotjuggler.exe" in out.lower()
+
+
+def plotjuggler(base, out_dir=None, popen=subprocess.Popen):
+    """`p` key (operator Q14): every streamed slot to PlotJuggler (8081 /api/streams/plot, UDP Server JSON), then
+    PlotJuggler opened on a layout of the streamed variables unless one already runs. The stream is independent of
+    the recording: it keeps plotting after a flight. Returns one status line. UNVERIFIED in the lab: the layout curves
+    against the streamed series names, packed ranges above all."""
+    code, st = call(base, "/api/streams/plot", {"enable": True})
+    if code != 200:
+        return f"PlotJuggler: forward refused ({code}): {st.get('error', st)}"
+    if _pj_running():
+        return f"PlotJuggler: already open; its UDP Server (JSON) must listen on {st['addr']}"
+    exe = next((c for c in (os.environ.get("PJ_BIN"), *PJ_BINS) if c and (Path(c).is_file() or shutil.which(c))),
+               None)
+    if not exe:
+        return f"PlotJuggler: streaming to {st['addr']}, but no plotjuggler.exe found (set PJ_BIN)"
+    args = [exe]
+    if st.get("vars"):
+        from ground_station.livewatch.pj_layout import generate_layout_xml
+        layout = Path(out_dir or FLIGHTS_DIR) / "plotjuggler_live.xml"
+        layout.parent.mkdir(parents=True, exist_ok=True)
+        layout.write_text(generate_layout_xml(st["vars"]), encoding="utf-8")
+        args += ["-l", str(layout)]
+    popen(args + ["--start_streamer", "UDP Server", "--buffer_size", "400", "--nosplash"],
+          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return f"PlotJuggler: opening on {len(st.get('vars') or [])} streamed variables, UDP Server {st['addr']}"
+
+
 def fly_loop(base, arg, pack, rate=None, run=None, once=False):
     """Compile -> wait for the RC arm -> go -> watch -> debrief, flight after flight until q."""
     from ground_station.service.campaign_launch import rel
@@ -453,7 +512,7 @@ def fly_loop(base, arg, pack, rate=None, run=None, once=False):
             held = None
             continue
         print("GO. keys: s stop step, n next, l land, p PlotJuggler; Ctrl+C land, twice abort. RC kill stays first.")
-        st, samples = watch(base)
+        st, samples = watch(base, on_pj=lambda: plotjuggler(base))
         lines = debrief_lines(samples, st, rel(folder))
         print("\n".join(lines))
         (folder / "debrief.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -486,6 +545,7 @@ def main(argv=None):
     if not pack:
         sys.exit("no pack yet: give --pack <id> once, it is remembered")
     ensure_service(base, a.port)
+    print("\n".join(vofa_setup(base)), flush=True)
     if a.record_only:
         try:
             launch, _ = resolve_campaign(a.campaign, pack, a.rate)

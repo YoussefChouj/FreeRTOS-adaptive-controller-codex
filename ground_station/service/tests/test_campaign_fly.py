@@ -257,3 +257,55 @@ def test_fly_loop_once_goes_on_the_arm_and_files_the_flight(tmp_path, monkeypatc
     folder, = (tmp_path / "flights").glob("*/01_t-carry")
     assert sorted(p.name for p in folder.iterdir()) == ["c.yaml", "debrief.txt", "live_5hz.csv", "outputs.txt"]
     assert "HOVER  x/y/z error cm  rms 0/0/0" in (folder / "debrief.txt").read_text(encoding="utf-8")
+
+
+# --- fly: VOFA+ FLIGHT_VIEW import files, PlotJuggler `p` key ---------------------------------------------------------
+
+def test_vofa_setup_forwards_the_view_and_writes_imports_in_forward_order(tmp_path, monkeypatch):
+    from ground_station.vofa_studio import vofa_config
+    want = vofa_config.view_channels()["vars"]
+    sent = []
+
+    def call(base, route, body=None, timeout=10):
+        sent.append((route, body))
+        return 200, {"active": True, "addr": "127.0.0.1:1347", "channels": want[:-1], "sent": 0}
+    monkeypatch.setattr(campaign_fly, "call", call)
+    lines = campaign_fly.vofa_setup("http://h", out_dir=tmp_path)
+    assert sent == [("/api/streams/forward", {"enable": True, "channels": want})]
+    assert lines[0] == f"VOFA+ FireWater UDP 127.0.0.1:1347, {len(want) - 1} channels (1 not streamed)"
+    assert str(tmp_path / "flight_view.tabviews.json") in lines[1] and str(tmp_path / "flight_names.csv") in lines[2]
+    assert len(lines) == 3   # same channel order as the forward
+    header = (tmp_path / "flight_names.csv").read_text(encoding="utf-8").splitlines()[0]
+    assert len(header.split(",")) == len(want) - 1
+
+
+def test_vofa_setup_refused_is_one_line(monkeypatch):
+    monkeypatch.setattr(campaign_fly, "call", lambda *a, **k: (400, {"error": "none of the channels is on a slot"}))
+    assert campaign_fly.vofa_setup("http://h") == ["VOFA+: forward refused (400): none of the channels is on a slot"]
+
+
+def test_p_key_streams_then_opens_plotjuggler_once_on_a_layout(tmp_path, monkeypatch):
+    exe = tmp_path / "plotjuggler.exe"
+    exe.write_text("", encoding="utf-8")
+    monkeypatch.setenv("PJ_BIN", str(exe))
+    monkeypatch.setattr(campaign_fly, "call", lambda base, route, body=None, timeout=10: (
+        200, {"active": True, "addr": "127.0.0.1:9870", "vars": ["imu_data.rol", "Ctrler.locxPID.FB"]}))
+    running, opened = [False], []
+    monkeypatch.setattr(campaign_fly, "_pj_running", lambda: running[0])
+    line = campaign_fly.plotjuggler("http://h", out_dir=tmp_path, popen=lambda args, **k: opened.append(args))
+    assert line == "PlotJuggler: opening on 2 streamed variables, UDP Server 127.0.0.1:9870"
+    (args,) = opened
+    assert args[:3] == [str(exe), "-l", str(tmp_path / "plotjuggler_live.xml")] and "UDP Server" in args
+    assert "/imu_data/rol" in (tmp_path / "plotjuggler_live.xml").read_text(encoding="utf-8")
+    running[0] = True
+    assert campaign_fly.plotjuggler("http://h", out_dir=tmp_path, popen=opened.append).startswith(
+        "PlotJuggler: already open") and len(opened) == 1
+
+
+def test_p_key_without_plotjuggler_installed_still_streams(monkeypatch):
+    monkeypatch.delenv("PJ_BIN", raising=False)
+    monkeypatch.setattr(campaign_fly, "PJ_BINS", ("no_such_plotjuggler_bin",))
+    monkeypatch.setattr(campaign_fly, "_pj_running", lambda: False)
+    monkeypatch.setattr(campaign_fly, "call", lambda *a, **k: (200, {"addr": "127.0.0.1:9870", "vars": []}))
+    assert campaign_fly.plotjuggler("http://h") == (
+        "PlotJuggler: streaming to 127.0.0.1:9870, but no plotjuggler.exe found (set PJ_BIN)")

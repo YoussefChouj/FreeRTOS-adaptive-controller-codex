@@ -16,7 +16,7 @@ import pytest
 
 from ground_station.service import streams
 from ground_station.service.streams import (
-    StreamLogger, StreamsManager, TAB_NEEDS, VofaForward, default_slots,
+    PlotForward, StreamLogger, StreamsManager, TAB_NEEDS, VofaForward, default_slots,
 )
 from ground_station.service.telemetry_adapter import StreamMetadata
 from ground_station.vofa_studio import core as vcore
@@ -369,6 +369,25 @@ def test_forward_refuses_without_channels():
         fw.start(["a"], slots, addr="nonsense")
 
 
+def test_plot_forward_sends_every_sample_as_plotjuggler_json():
+    import json
+    sock = FakeSock()
+    pf = PlotForward(sock_factory=lambda: sock)
+    st = pf.start({0: {"vars": ["a.b", "c"], "rate": 50}, 1: {"vars": ["c", "d"], "rate": 10}})
+    assert st["vars"] == ["a.b", "c", "d"] and st["addr"] == "127.0.0.1:9870"
+    pf.note(0, _sample({"slot0.a.b": 1.5, "c": [1, 2], "seq": 9, "name": "txt"}, seq=7, t_ms=2500))
+    pf.note(1, _sample({"d": float("nan")}, seq=3, t_ms=2600))
+    (m0, to), (m1, _) = [(json.loads(d), t) for d, t in sock.sent]
+    assert to == ("127.0.0.1", 9870)
+    assert m0 == {"t": 2.5, "slot0/seq": 7, "a/b": 1.5, "c[0]": 1, "c[1]": 2}
+    assert m1 == {"t": 2.6, "slot1/seq": 3, "d": None}
+    assert pf.stop()["active"] is False and sock.closed
+    pf.note(0, _sample({"c": 1}))
+    assert len(sock.sent) == 2
+    with pytest.raises(ValueError):
+        pf.start({}, addr="nonsense")
+
+
 # ------------------------------------------------------------ HTTP handlers
 @needs_elf
 def test_handlers_plan_presets_log_forward(resolver, tmp_path, monkeypatch):
@@ -404,6 +423,12 @@ def test_handlers_plan_presets_log_forward(resolver, tmp_path, monkeypatch):
     assert streams.handle_post(svc, "/api/streams/forward",
                                {"enable": True, "channels": [default_slots()[0]["vars"][0]]})[0] == 200
     assert streams.handle_post(svc, "/api/streams/forward", {"enable": False})[1]["active"] is False
+    # plot: every streamed slot to PlotJuggler, on and off
+    code, st = streams.handle_post(svc, "/api/streams/plot", {"enable": True})
+    assert code == 200 and st["active"] and default_slots()[0]["vars"][0] in st["vars"]
+    assert streams.handle_get(svc, "/api/streams")[1]["plot"]["active"]
+    assert streams.handle_post(svc, "/api/streams/plot", {"addr": "bad"})[0] == 400
+    assert streams.handle_post(svc, "/api/streams/plot", {"enable": False})[1]["active"] is False
     assert streams.handle_post(svc, "/api/streams/nope", {})[0] == 404
 
 

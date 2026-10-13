@@ -520,6 +520,7 @@ _ROUTE_MAP = {
         "/api/streams/log/start": "{name?,mode:timed|rolling|unlimited,seconds?,window_s?} per-slot CSV under logs/vofa (no flight command)",
         "/api/streams/log/stop": "stop the stream log",
         "/api/streams/forward": "{enable,channels|preset,addr?} FireWater UDP forward to VOFA+ (default 127.0.0.1:1347)",
+        "/api/streams/plot": "{enable,addr?} every streamed slot as PlotJuggler UDP Server JSON (default 127.0.0.1:9870)",
         "/replay/<id>/play": "push stored telemetry onto the live bus; sends nothing to the drone",
         "/sessions/<id>/export": "export a session to CSV",
         "/api/agent/control": "set control {mode?, allow_agent_arm?, tier0_access?: partial|full, source} (423 while off; 403 if an agent: source sets allow_agent_arm/tier0_access)",
