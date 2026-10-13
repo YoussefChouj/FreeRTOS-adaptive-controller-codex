@@ -314,3 +314,13 @@ def test_park_datas_moves_saved_samples_aside(tmp_path):
     datas.write_text("test_1,I1\n1,2\n", encoding="utf-8")
     bak = park_datas(datas)
     assert not datas.exists() and bak.read_text(encoding="utf-8").startswith("test_1,I1")
+
+
+def test_export_view_writes_native_import_files(tmp_path):
+    ch = vofa_config.export_view(tmp_path)
+    t = json.loads(ch["tabviews"].read_text(encoding="utf-8"))
+    tabs = t["ctx"][0]["tabs"]
+    assert t["type"] == "tabviews" and [x["name"] for x in tabs] == [x["name"] for x in ch["tabs"]]
+    assert [x["widgets"][0]["ctx"]["rbw"]["ctx"]["."]["lines"] for x in tabs] == [x["lines"] for x in ch["tabs"]]
+    header, zeros = ch["names_csv"].read_text(encoding="utf-8").splitlines()
+    assert header.split(",") == ch["names"] and zeros.split(",") == ["0"] * len(ch["names"])

@@ -66,7 +66,7 @@ fusion)
   mkdir -p "$vid" logs; rm -f "$vid/stop" "$vid/video_only"; echo "$mode" > "$vid/fusion"
   VOFA=${VOFA-127.0.0.1:1347}                       # flight view to VOFA+ (UDP FireWater, named tabs); VOFA= turns it off
   PLOT=${PLOT-}                                     # PlotJuggler opt-in (every slot): PLOT=127.0.0.1:9870
-  if [ -n "$VOFA" ]; then                           # closes VOFA+, writes channel names/colors + one tab per chart, relaunches
+  if [ -n "$VOFA" ]; then                           # writes C:/tmp/vofa import files only; VOFA+ is never closed or patched
     python -m ground_station.vofa_studio.vofa_config --frames ground_station/livewatch/r5_extpos_frames.md \
       || echo "VOFA+ view setup failed: flight goes on, VOFA+ shows raw channels"
   fi

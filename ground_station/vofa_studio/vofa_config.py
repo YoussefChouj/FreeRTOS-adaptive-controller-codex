@@ -253,15 +253,50 @@ def apply_view(view=FLIGHT_VIEW, monitor=MONITOR_ROW, available=None, relaunch=T
     return ch
 
 
+TAB_TEMPLATE = Path(__file__).with_name("vofa_tab_template.tabviews.json")   # VOFA+'s own one-tab export
+EXPORT_DIR = Path(r"C:\tmp\vofa")
+
+
+def export_view(out_dir=EXPORT_DIR, view=FLIGHT_VIEW, monitor=MONITOR_ROW, available=None, template=TAB_TEMPLATE):
+    """Write the view as VOFA+'s native imports, VOFA+ untouched:
+    File > Load widget windows and tabs <- flight_view.tabviews.json (one WaveChart tab per view tab),
+    File > Load datas <- flight_names.csv (header row = channel names, renames every channel)."""
+    ch = view_channels(view, monitor, available)
+    t = json.loads(Path(template).read_text(encoding="utf-8"))
+    tpl, tabs = t["ctx"][0]["tabs"][0], []
+    for tab in ch["tabs"]:
+        n = copy.deepcopy(tpl)
+        n["name"] = tab["name"]
+        n["widgets"][0]["ctx"]["rbw"]["ctx"]["."]["lines"] = tab["lines"]
+        tabs.append(n)
+    t["ctx"][0]["tabs"] = tabs
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    ch["tabviews"], ch["names_csv"] = out / "flight_view.tabviews.json", out / "flight_names.csv"
+    ch["tabviews"].write_text(json.dumps(t, ensure_ascii=False), encoding="utf-8")
+    ch["names_csv"].write_text(",".join(ch["names"]) + "\n" + ",".join(["0"] * len(ch["names"])) + "\n",
+                               encoding="utf-8")
+    return ch
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Lay out VOFA+ for the live flight view (FLIGHT_VIEW).")
     ap.add_argument("--frames", default=None, help="frames .md; channels it does not stream are dropped")
-    ap.add_argument("--no-relaunch", action="store_true", help="patch only, leave VOFA+ closed")
+    ap.add_argument("--out", default=str(EXPORT_DIR), help="where the two import files go (default mode)")
+    ap.add_argument("--patch", action="store_true", help="old mode: close VOFA+ and patch its context files")
+    ap.add_argument("--no-relaunch", action="store_true", help="with --patch: leave VOFA+ closed")
     args = ap.parse_args(argv)
     available = None
     if args.frames:
         from ground_station.livewatch.stream_log import load_frames
         available = [v for _, symbols in load_frames(Path(args.frames)) for v in symbols]
+    if not args.patch:
+        ch = export_view(args.out, available=available)
+        print("vofa+: %d channels, %d tabs. VOFA+ File > Load widget windows and tabs: %s ; File > Load datas: %s"
+              % (len(ch["vars"]), len(ch["tabs"]), ch["tabviews"], ch["names_csv"]))
+        if ch["missing"]:
+            print("vofa+: not streamed, dropped: %s" % ", ".join(ch["missing"]))
+        return 0
     ch = apply_view(available=available, relaunch=not args.no_relaunch)
     print("vofa+: %d channels, %d tabs (%s), VOFA+ %s%s"
           % (len(ch["vars"]), len(ch["tabs"]), ", ".join(t["name"] for t in ch["tabs"]), ch["closed"],
