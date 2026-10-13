@@ -12,6 +12,8 @@ Branch `overnight-2026-10-08`. The drone is on ELF 6da69207 (f6424fa1). All 13 i
   The replay shows no gain vs truth (not a valid check for mode 3). The gate stays at 5 sigma.
 - **NN:** no gain from the r6 data (row 2). It halves b7 vs earth and does nothing for b17/b10.
 - **Drift summary:** nightly doc, item 12 section. **Live video:** `camera_truth.sh fusion` or `video <name>`.
+- **Audit (2026-10-13 am):** `docs/agent/audit-2026-10-13-nightly.md`. Item 10 live_plot is a from-scratch GUI, against
+  the operator's adopt-a-mature-tool intent; PROPOSED: PlotJuggler via flat JSON from `stream_log --plot`. Awaiting decision.
 - **Open:** fixes vs truth4 offset 40-95 cm per flight (unexplained), the r6_f2 replay p90 tail, NN seed spread.
 
 ## Next 3 actions
@@ -25,3 +27,25 @@ Branch `overnight-2026-10-08`. The drone is on ELF 6da69207 (f6424fa1). All 13 i
 - Stage OBJ/ or USER/ or logs/; `git add -A`.
 - Start recording until the operator confirms preset, variable list and session name.
 - Write unmeasured numbers without PROPOSED/computed.
+
+<!-- AUTO:BEGIN -->
+Refreshed: 2026-10-13 09:50 (mechanical, no LLM)
+- Tree: .; branch / HEAD: overnight-2026-10-08 @ e4c275c7; unpushed commits: 183
+- Dirty paths outside OBJ/: 458
+  -  M .agent-ops/.ark-last-spawn
+  -  M .agent-ops/served/estimator-panel.js
+  -  M .claude_state.md
+  -  M USER/JX_FLY.uvguix.Acer
+  -  M USER/JX_FLY.uvoptx
+  -  M USER/main.c
+  -  M docs/agent/ledger/state-2026-10-05-improvements.md
+  -  M docs/flights/ledger.csv
+  - ... +450 more
+- Dashboard 8081: UP (HTTP 200)
+- Last commits:
+  - e4c275c7 agent: HANDOFF refresh, nightly 2026-10-13 closed (F3B merged not flashed, next: lab per run sheet)
+  - fb228975 nightly: row 7 F3B done (merged, not flown), item 12 drift summary; run sheet: flash 3492cbdb before mode 3
+  - 3492cbdb F3B: mode 3 q_pos 1e-6 -> 0.05 (worker 4690fa39, selective), pinned by a host test
+  - fb54c546 nightly: item 2 mode-1-only NN variant, no held-out gain over baseline
+  - 89a4814d live_tracker: post-lock yaw refit monitor (nightly item 6, not applied), fit --auto prints it; nightly rows 6, 9, 11 table fix
+<!-- AUTO:END -->
