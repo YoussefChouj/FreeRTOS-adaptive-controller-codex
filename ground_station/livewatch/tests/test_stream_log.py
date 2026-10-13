@@ -555,3 +555,15 @@ def test_relay_uplink_forwards_local_frames_on_the_logging_socket():
     finally:
         relay.close()
         tx.close()
+
+
+def test_plot_row_is_plotjuggler_json():
+    """--plot rows: one JSON object per row that PlotJuggler's UDP Server JSON parser reads (nested names via "/",
+    drone time in seconds under "t", NaN sent as null so the message stays valid JSON)."""
+    import json
+    import math
+    from ground_station.livewatch.stream_log import format_row_datagram
+
+    msg = json.loads(format_row_datagram(["s_ekf_of.x[0]", "rpm[1]", "flag"], 2, 99, 12345,
+                                         [3.5, math.nan, 1]))
+    assert msg == {"t": 12.345, "slot2/seq": 99, "s_ekf_of/x[0]": 3.5, "rpm[1]": None, "flag": 1}

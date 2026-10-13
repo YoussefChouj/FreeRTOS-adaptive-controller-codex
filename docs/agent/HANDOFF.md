@@ -12,8 +12,9 @@ Branch `overnight-2026-10-08`. The drone is on ELF 6da69207 (f6424fa1). All 13 i
   The replay shows no gain vs truth (not a valid check for mode 3). The gate stays at 5 sigma.
 - **NN:** no gain from the r6 data (row 2). It halves b7 vs earth and does nothing for b17/b10.
 - **Drift summary:** nightly doc, item 12 section. **Live video:** `camera_truth.sh fusion` or `video <name>`.
-- **Audit (2026-10-13 am):** `docs/agent/audit-2026-10-13-nightly.md`. Item 10 live_plot is a from-scratch GUI, against
-  the operator's adopt-a-mature-tool intent; PROPOSED: PlotJuggler via flat JSON from `stream_log --plot`. Awaiting decision.
+- **Audit (2026-10-13 am):** `docs/agent/audit-2026-10-13-nightly.md`. Decided: PlotJuggler replaces live_plot (removed).
+  Installed at D:\PlotJuggler, UDP Server json port 9870, field `t`; seen working with synthetic rows, not yet with the
+  drone. `camera_truth.sh fusion` sends to it by default. Setup: stream-log skill, "Live plot".
 - **Open:** fixes vs truth4 offset 40-95 cm per flight (unexplained), the r6_f2 replay p90 tail, NN seed spread.
 
 ## Next 3 actions

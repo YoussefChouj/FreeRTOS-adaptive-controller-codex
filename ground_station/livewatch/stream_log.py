@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import socket
 import sys
 import time
@@ -131,18 +132,25 @@ def columns_for(schema) -> list[str]:
     return names
 
 
-def format_header_datagram(slot: int, names: list[str]) -> bytes:
-    """JSON header datagram for live_plot: {"type":"hdr","slot":k,"names":[...]}"""
-    return json.dumps({"type": "hdr", "slot": slot, "names": names}, separators=(',', ':')).encode("utf-8")
+def plot_key(name: str) -> str:
+    """PlotJuggler series path for a CSV column: "s_ekf_of.x[0]" -> "s_ekf_of/x[0]" (its tree splits on "/")."""
+    return name.replace(".", "/")
 
 
-def format_row_datagram(slot: int, seq: int, t_ms: int | float, flat: list) -> bytes:
-    """JSON row datagram for live_plot: {"type":"row","slot":k,"seq":seq,"t":t_ms,"v":[...]}"""
-    return json.dumps({"type": "row", "slot": slot, "seq": seq, "t": t_ms, "v": flat}, separators=(',', ':')).encode("utf-8")
+def format_row_datagram(names: list[str], slot: int, seq: int, t_ms: int | float, flat: list) -> bytes:
+    """One row as a PlotJuggler UDP Server JSON message: {"t": s, "slot<k>/seq": n, "<struct>/<field>": v, ...}.
+
+    "t" is the drone clock in seconds: tick "use field as timestamp" = t in the UDP Server dialog to plot against it
+    (else PlotJuggler uses the receive time). Non-finite values go out as null, which PlotJuggler skips (a NaN would
+    make the whole message invalid JSON)."""
+    msg = {"t": t_ms / 1000.0, "slot%d/seq" % slot: seq}
+    for name, v in zip(names, flat):
+        msg[plot_key(name)] = v if not isinstance(v, float) or math.isfinite(v) else None
+    return json.dumps(msg, separators=(',', ':'), allow_nan=False).encode("utf-8")
 
 
 def _plot_send(sock, data: bytes, addr) -> None:
-    """Best effort: a missing live_plot (Windows WSAECONNRESET after ICMP unreachable) must never stop a capture."""
+    """Best effort: a missing PlotJuggler (Windows WSAECONNRESET after ICMP unreachable) must never stop a capture."""
     try:
         sock.sendto(data, addr)
     except OSError:
@@ -200,9 +208,6 @@ def _run_usart3(data_port, ranges, divider, transport, seconds, out_path,
                   % (len(cols), schema.frame_bytes, schema.hz))
             print("data on %s -> %s" % (data_port, out_path))
 
-        if plot_sock is not None:
-            _plot_send(plot_sock, format_header_datagram(schema.slot, cols), plot_addr)
-
         data = wifi._udp
         data.reset_input_buffer()
         decoder = StreamDecoder(schema)
@@ -210,15 +215,10 @@ def _run_usart3(data_port, ranges, divider, transport, seconds, out_path,
         out_path.parent.mkdir(parents=True, exist_ok=True)
         rows = 0
         t0 = time.monotonic()
-        last_plot_hdr_t = t0
         with out_path.open("w", newline="", encoding="utf-8") as fh:
             writer = csv.writer(fh)
             writer.writerow(["t_src_ms", "t_host_s", "seq"] + cols)
             while time.monotonic() - t0 < seconds:
-                now = time.monotonic()
-                if plot_sock is not None and now - last_plot_hdr_t >= 1.0:
-                    last_plot_hdr_t = now
-                    _plot_send(plot_sock, format_header_datagram(schema.slot, cols), plot_addr)
                 waiting = data.in_waiting
                 if not waiting:
                     time.sleep(0.002)
@@ -236,7 +236,7 @@ def _run_usart3(data_port, ranges, divider, transport, seconds, out_path,
                         [t_ms, "%.4f" % (time.monotonic() - t0), seq] + flat)
                     rows += 1
                     if plot_sock is not None:
-                        _plot_send(plot_sock, format_row_datagram(schema.slot, seq, t_ms, flat), plot_addr)
+                        _plot_send(plot_sock, format_row_datagram(cols, schema.slot, seq, t_ms, flat), plot_addr)
         elapsed = time.monotonic() - t0
     finally:
         if plot_sock is not None:
@@ -439,19 +439,11 @@ class StopFile:
 def _usart3_loop(wifi, decoder, writers, rows, schemas, t0, seconds, stop_event, on_row, vofa_sock, vofa_addr,
                  relay=None, plot_sock=None, plot_addr=None):
     """Read and write frames until `seconds` pass or stop_event is set (the _run_groups_usart3 body)."""
-    last_plot_hdr_t = time.monotonic()
-    if plot_sock is not None:
-        for schema in schemas:
-            _plot_send(plot_sock, format_header_datagram(schema.slot, columns_for(schema)), plot_addr)
+    plot_cols = {schema.slot: columns_for(schema) for schema in schemas} if plot_sock is not None else {}
     while time.monotonic() - t0 < seconds and not (
             stop_event is not None and stop_event.is_set()):
         if relay is not None:
             _relay_uplink(relay, wifi)
-        now = time.monotonic()
-        if plot_sock is not None and now - last_plot_hdr_t >= 1.0:
-            last_plot_hdr_t = now
-            for schema in schemas:
-                _plot_send(plot_sock, format_header_datagram(schema.slot, columns_for(schema)), plot_addr)
         waiting = wifi._udp.in_waiting
         if not waiting:
             time.sleep(0.002)
@@ -477,7 +469,7 @@ def _usart3_loop(wifi, decoder, writers, rows, schemas, t0, seconds, stop_event,
                 vofa_sock.sendto((",".join("%g" % v for v in flat) + "\n").encode(),
                                  vofa_addr)
             if plot_sock is not None:
-                _plot_send(plot_sock, format_row_datagram(slot, seq, t_ms, flat), plot_addr)
+                _plot_send(plot_sock, format_row_datagram(plot_cols[slot], slot, seq, t_ms, flat), plot_addr)
 
 
 def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
@@ -542,9 +534,6 @@ def _run_groups_usart3(data_port, plans, seconds, out_path, quiet,
 
         if on_start is not None:
             on_start(schemas, decoder)
-        if plot_sock is not None:
-            for schema in schemas:
-                _plot_send(plot_sock, format_header_datagram(schema.slot, columns_for(schema)), plot_addr)
         wifi._udp.reset_input_buffer()
         t0 = time.monotonic()
         try:
@@ -735,8 +724,8 @@ def main(argv=None):
                     help="also forward slot-0 rows to VOFA+ as FireWater over UDP "
                          "(e.g. 127.0.0.1:1347); WiFi transport only")
     ap.add_argument("--plot", default=None, metavar="HOST:PORT",
-                    help="forward all slot frames to live_plot as JSON over UDP "
-                         "(e.g. 127.0.0.1:47900); WiFi transport only")
+                    help="forward all slot frames to PlotJuggler (UDP Server, JSON, port 9870) "
+                         "(e.g. 127.0.0.1:9870); WiFi transport only")
     ap.add_argument("--relay-port", type=int, default=None, metavar="PORT",
                     help="forward raw command frames sent to UDP 127.0.0.1:PORT to the module on the logging "
                          "socket (live_tracker --send udp:PORT); WiFi transport only")

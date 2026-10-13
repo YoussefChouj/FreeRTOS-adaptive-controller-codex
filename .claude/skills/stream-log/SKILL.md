@@ -89,23 +89,23 @@ acceptance test.
 
 ---
 
-## Live plot (VOFA+ replacement, WiFi only)
+## Live plot: PlotJuggler (WiFi only)
 
-Plot every subscribed variable live while it logs. Names come from the frames file, one series per variable.
+PlotJuggler 3.17.2 is installed at `D:\PlotJuggler\PlotJuggler.exe`. `stream_log --plot` sends one flat JSON
+object per row: `{"t": <drone s>, "slot<k>/seq": .., "<struct>/<field>": ..}`. PlotJuggler builds the series tree.
+
+1. In PlotJuggler: Streaming > UDP Server > Start. Address 127.0.0.1, port 9870, protocol json, tick
+   "use field as timestamp if available", field name `t`. Buffer: 60 s or more.
+2. `camera_truth.sh fusion` sends to 127.0.0.1:9870 by default (`PLOT=` turns it off). Manual run:
 
 ```bash
-python -m ground_station.livewatch.live_plot --port 47900
+python -m ground_station.livewatch.stream_log --frames ground_station/livewatch/log_frames.md --plot 127.0.0.1:9870 --out logs/<stem>.csv
 ```
 
-```bash
-python -m ground_station.livewatch.stream_log --frames ground_station/livewatch/log_frames.md --plot 127.0.0.1:47900 --out logs/<stem>.csv
-```
-
-- Start live_plot first, then stream_log with `--plot`. The CSV is written as usual; the plot is extra.
-- Replay a log offline: `python -m ground_station.livewatch.live_plot --csv logs/<stem>` (loads every slot CSV).
-- `--layout <name>` loads a saved layout (default `fusion`). `--demo` sends synthetic data for a smoke test.
-- For a fusion session, `camera_truth.sh fusion` runs stream_log itself (no `--plot`); add the plot by replaying
-  the slot CSVs after landing.
+- Drag series from the tree onto a plot (dropping on a plot adds a curve). Select two series and drag with the
+  right mouse button for an XY plot (e.g. fix_x vs fix_y).
+- Layout > save keeps the plots for the next session. NaN values arrive as null and are skipped.
+- Post-flight: Data > load the slot CSVs. VOFA+ FireWater (`--vofa`) stays as the fallback.
 
 ---
 

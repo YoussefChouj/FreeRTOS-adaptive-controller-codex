@@ -44,7 +44,8 @@ fusion)
   mode=${3:?mode 1 shadow, 2 offset, 3 in-EKF}; shift 3
   up && { echo "8081 service is up: stop it first (stream_log needs the WiFi downlink)"; exit 1; }
   mkdir -p "$vid"; rm -f "$vid/stop" "$vid/video_only"; echo "$mode" > "$vid/fusion"
-  nohup python -m ground_station.livewatch.stream_log --frames ground_station/livewatch/r5_extpos_frames.md     --relay-port 47800 --seconds 86400 --stop-file "$vid/stop" --out "logs/$name.csv" > "$vid/stream_log.out" 2>&1 &
+  PLOT=${PLOT-127.0.0.1:9870}                       # every slot to PlotJuggler (UDP Server, JSON); PLOT= turns it off
+  nohup python -m ground_station.livewatch.stream_log --frames ground_station/livewatch/r5_extpos_frames.md     --relay-port 47800 ${PLOT:+--plot "$PLOT"} --seconds 86400 --stop-file "$vid/stop" --out "logs/$name.csv" > "$vid/stream_log.out" 2>&1 &
   echo $! > "$vid/stream_log.pid"
   cam
   sleep 4                                           # scrcpy window opens 256x256, final size after ~1.1 s (measured)
