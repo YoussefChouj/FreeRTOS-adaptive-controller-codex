@@ -206,8 +206,10 @@ def fit_frame(frame: np.ndarray, size: tuple | None) -> np.ndarray:
 
 class WindowSource:
     """Live frames from a window's client area (the scrcpy mirror, e.g. `scrcpy --window-title cam`), Windows only:
-    mss grabs the screen rectangle user32 reports. The window must show the whole video at its aspect (no letterbox
-    bars), or the K rescale in load_cam is wrong. cv2.VideoCapture interface: read() -> (ok, bgr), release()."""
+    PrintWindow(PW_CLIENTONLY | PW_RENDERFULLCONTENT) copies the client area even under other windows (2026-10-13 on
+    scrcpy direct3d11: 18 ms median vs mss 32 ms, 0/39 identical frame pairs while covered), so --show can cover
+    the raw mirror; mss (screen rectangle) is the fallback. The window must show the whole video at its aspect (no
+    letterbox bars), or the K rescale in load_cam is wrong. cv2.VideoCapture interface: read() -> (ok, bgr), release()."""
 
     def __init__(self, title: str, wait_s: float = 30.0, size: tuple | None = None):
         import ctypes
@@ -223,6 +225,35 @@ class WindowSource:
         if not self.hwnd:
             raise RuntimeError(f"no window titled {title!r} after {wait_s:.0f} s")
         self.sct = mss.mss()
+        self.via, self._gdi = "", None                    # via: "print" (occlusion-proof) or "mss" (last read)
+        vp, g32 = ctypes.c_void_p, ctypes.windll.gdi32
+        self.g32 = g32
+        for f, at, rt in [(self.u32.GetDC, [vp], vp), (self.u32.ReleaseDC, [vp, vp], ctypes.c_int),
+                          (g32.CreateCompatibleDC, [vp], vp), (g32.CreateCompatibleBitmap, [vp, ctypes.c_int, ctypes.c_int], vp),
+                          (g32.SelectObject, [vp, vp], vp), (g32.DeleteObject, [vp], ctypes.c_int), (g32.DeleteDC, [vp], ctypes.c_int),
+                          (self.u32.PrintWindow, [vp, vp, ctypes.c_uint], ctypes.c_int),
+                          (g32.GetDIBits, [vp, vp, ctypes.c_uint, ctypes.c_uint, vp, vp, ctypes.c_uint], ctypes.c_int)]:
+            f.argtypes, f.restype = at, rt
+
+    def _free(self) -> None:
+        if self._gdi:
+            self.g32.DeleteObject(self._gdi[3]); self.g32.DeleteDC(self._gdi[2]); self._gdi = None
+
+    def _print(self, w: int, h: int):
+        """Client area via PrintWindow into a 32-bit top-down DIB, or None (then read() falls back to mss)."""
+        if not self._gdi or self._gdi[:2] != (w, h) or self._gdi[6] != self.hwnd:
+            self._free()
+            dc = self.u32.GetDC(self.hwnd)
+            mdc = self.g32.CreateCompatibleDC(dc); bmp = self.g32.CreateCompatibleBitmap(dc, w, h)
+            self.u32.ReleaseDC(self.hwnd, dc); self.g32.SelectObject(mdc, bmp)
+            bi = (self._ct.c_uint32 * 10)(40, w, (-h) & 0xFFFFFFFF, 1 | (32 << 16), 0, 0, 0, 0, 0, 0)
+            self._gdi = (w, h, mdc, bmp, bi, np.empty((h, w, 4), np.uint8), self.hwnd)
+        _, _, mdc, bmp, bi, buf, _ = self._gdi
+        if not self.u32.PrintWindow(self.hwnd, mdc, 3):   # PW_CLIENTONLY | PW_RENDERFULLCONTENT (Win 8.1+)
+            return None
+        if self.g32.GetDIBits(mdc, bmp, 0, h, buf.ctypes.data, self._ct.byref(bi), 0) != h:
+            return None
+        return buf[..., :3]
 
     def _find(self, wait_s: float) -> int:
         """Wait up to wait_s for the window (scrcpy still starting, or restarting after Android dropped the camera)."""
@@ -254,7 +285,11 @@ class WindowSource:
                 time.sleep(0.3)
             r = self.rect() if self.hwnd else {"width": 0, "height": 0}
             if r["width"] > 0 and r["height"] > 0:
-                return True, fit_frame(np.ascontiguousarray(np.asarray(self.sct.grab(r))[..., :3]), self.fixed)
+                f = self._print(r["width"], r["height"])
+                self.via = "mss" if f is None else "print"
+                if f is None:
+                    f = np.asarray(self.sct.grab(r))[..., :3]
+                return True, fit_frame(np.ascontiguousarray(f), self.fixed)
             if time.monotonic() >= t_end:
                 print(f"window {self.title!r} lost for 15 s", flush=True)
                 return False, None
@@ -277,7 +312,13 @@ class WindowSource:
     def get(self, prop) -> float:
         return 0.0
 
+    def outer(self) -> dict:
+        r = self._wt.RECT()
+        self.u32.GetWindowRect(self.hwnd, self._ct.byref(r))
+        return {"left": r.left, "top": r.top, "width": r.right - r.left, "height": r.bottom - r.top}
+
     def release(self) -> None:
+        self._free()
         self.sct.close()
 
 
@@ -393,13 +434,17 @@ class Preview:
         self.cv2, self.dt, self.scale, self.title, self.t_last, self.ms = vt._cv2(), 1.0 / hz, scale, title, -1e9, 0.0
         self.n = 0
         self.cv2.namedWindow(title, self.cv2.WINDOW_AUTOSIZE)
-        if rect:                                          # right of the grab rect if it fits on screen, else below
-            import ctypes
-            sw = ctypes.windll.user32.GetSystemMetrics(0)
-            right = rect["left"] + rect["width"] + 8
-            fits = right + scale * rect["width"] <= sw
-            self.cv2.moveWindow(title, right if fits else rect["left"],
-                                rect["top"] if fits else rect["top"] + rect["height"] + 40)
+        if rect:                                          # right of the grab rect, else below, else screen top-left
+            import ctypes                                 # (r7_f6: 1194x672 mirror on 1366x768 put it below = off screen)
+            sw, sh = ctypes.windll.user32.GetSystemMetrics(0), ctypes.windll.user32.GetSystemMetrics(1)
+            right, below = rect["left"] + rect["width"] + 8, rect["top"] + rect["height"] + 40
+            if right + scale * rect["width"] <= sw:
+                self.cv2.moveWindow(title, right, rect["top"])
+            elif below + scale * rect["height"] <= sh:
+                self.cv2.moveWindow(title, rect["left"], below)
+            else:                                         # overlaps the mirror: only safe with the PrintWindow grab
+                self.cv2.moveWindow(title, 0, 0)
+            self.cv2.setWindowProperty(title, self.cv2.WND_PROP_TOPMOST, 1)   # above scrcpy --always-on-top
 
     def __call__(self, now: float, frame, uv, xy, lines) -> None:
         if now - self.t_last < self.dt:
