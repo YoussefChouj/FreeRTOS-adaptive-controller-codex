@@ -191,6 +191,25 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
     ticks = 0
     airborne = excite_sent = False
     decision: AbortDecision | None = None
+    # The firmware holds one trajectory/program buffer and keeps it from boot to the next BEGIN (API/wfb_glue.c), so a
+    # lone traj/prog step is uploaded on the ground right after set_hover_z (COMMIT checks against hover_z): xyz-f1
+    # 10-13 spent 68 s of the 120 s airborne cap uploading in HOVER and the cap cut the z leg.
+    uploads = [i for i, st in enumerate(steps) if st.kind in TRAJ_KINDS + PROG_KINDS]
+    preload = uploads[0] if len(uploads) == 1 else None
+    preload_err = ""
+
+    def upload_step(st: Step) -> tuple[bool, str]:
+        if st.kind in PROG_KINDS:
+            res = wfb_program.upload(st.program, deps.client)
+            seg = "" if res.ok else f" (prog_err_seg {deps.status().get('prog_err_seg', 'n/a')})"  # COMMIT names it
+        else:
+            res, seg = upload(st.points, deps.client), ""
+        return res.ok, "" if res.ok else f"{res.error}{seg}"
+
+    def preload_send() -> bool:
+        nonlocal preload_err
+        ok, preload_err = upload_step(steps[preload])
+        return ok
 
     def prim() -> int:
         return int(deps.status()["prim_state"])
@@ -233,6 +252,8 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
                 cmds.append(("mrac_injection",
                              lambda: deps.client._send_cmd(ex.CMD_MRAC_FLAGS, ex.MRAC_IDX_INJECTION, inj)))
             cmds.append(("set_hover_z", lambda: deps.client.set_hover_z(scenario.hover_z_m)))
+            if preload is not None:
+                cmds.append((f"{steps[preload].kind} upload", preload_send))
             if deps.agent_arms:
                 cmds.append(("arm", deps.client.arm))
             cmds.append(("idle", deps.client.idle))
@@ -256,7 +277,7 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
             elif (refused or (gate_why := _gate_problem(deps.status()) or _takeover_problem(auth_idle, deps.status()))
                   or not deps.client.takeoff()):
                 refused = refused or "takeoff"
-                why = gate_why or getattr(deps.client, "last_error", "") or "not applied"
+                why = gate_why or preload_err or getattr(deps.client, "last_error", "") or "not applied"
                 hint = " (operator: flymode 1, arm by RC, hands off the sticks)" if refused == "idle" and not deps.agent_arms else ""
                 decision = AbortDecision(level=1, reason=f"takeoff refused at {refused}: {why}{hint}")
                 ok = False
@@ -271,15 +292,9 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
             t_settle = deps.clock()
             ok = wait(lambda: deps.clock() - t_settle >= WFB_SETTLE_S and prim() == PRIM_HOVER, f"{st.kind} settle")
             if ok:
-                seg = ""
-                if st.kind in PROG_KINDS:
-                    res = wfb_program.upload(st.program, deps.client)
-                    if not res.ok:  # a rejected COMMIT names the failing segment
-                        seg = f" (prog_err_seg {deps.status().get('prog_err_seg', 'n/a')})"
-                else:
-                    res = upload(st.points, deps.client)
-                if not res.ok:
-                    decision = AbortDecision(level=1, reason=f"{st.kind} upload failed: {res.error}{seg}")
+                up_ok, up_err = (True, "") if i == preload else upload_step(st)
+                if not up_ok:
+                    decision = AbortDecision(level=1, reason=f"{st.kind} upload failed: {up_err}")
                     ok = False
                 else:
                     deps.client.traj_start()

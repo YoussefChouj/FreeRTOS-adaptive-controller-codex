@@ -67,3 +67,15 @@ def test_record_only_stops_on_ctrl_c(tmp_path, monkeypatch):
     monkeypatch.setattr(campaign_fly.time, "sleep", lambda s: None)
     campaign_fly.record_only("http://h", str(path), wait=interrupt)
     assert routes[-1] == "/api/recording/stop"
+
+
+def test_tel_line_names_states_scales_cm_and_drops_stale(monkeypatch):
+    vals = {"g_wfb_status.prim_state": 2, "g_wfb_status.traj_state": 3, "g_wfb_status.airborne_t": 12.34,
+            "Ctrler.locxPID.FB": 50.0, "Ctrler.locxPID.Des": 100.0, "Ctrler.Z_posPID.FB": 0.7}
+    values = {k: {"value": v, "age_s": 0.1} for k, v in vals.items()}
+    values["Ctrler.locyPID.FB"] = {"value": 30.0, "age_s": 5.0}   # stale: left out
+    monkeypatch.setattr(campaign_fly, "call", lambda base, route: (200, {"values": values}))
+    line = campaign_fly.tel_line("http://h")
+    assert line.split() == ["HOVER", "traj", "EXECUTING", "air", "12.3/120s", "x", "+0.50->+1.00", "z", "+0.70"]
+    monkeypatch.setattr(campaign_fly, "call", lambda base, route: (200, {"values": {}}))
+    assert campaign_fly.tel_line("http://h") == ""

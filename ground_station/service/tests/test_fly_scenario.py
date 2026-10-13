@@ -173,6 +173,19 @@ def test_program_step_uploads_parameters_and_flies_the_onboard_path():
     assert len(sent) < 25  # parameters only: one ARC record, not a dense waypoint list
 
 
+def test_lone_upload_goes_up_on_the_ground_before_takeoff():
+    """One traj/prog step is uploaded while IDLE (xyz-f1: the in-flight upload spent 68 s of the 120 s cap)."""
+    data = {"scenario": "prog", "steps": [{"takeoff": {"z": 0.5}},
+                                          {"program": {"ops": [{"circle": {"r": 0.3}}]}}, "land"]}
+    drone, _, deps = _rig()
+    prims = []
+    inner = deps.client.prog
+    deps.client.prog = lambda idx, val: prims.append(int(drone.status()["prim_state"])) or inner(idx, val)
+    out = fly_scenario(parse_scenario(data), deps)
+    assert not out.aborted and out.landed, out.decision
+    assert prims and set(prims) == {PRIM_IDLE}
+
+
 @pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not on PATH")
 def test_fake_rejects_a_program_at_commit_and_names_the_segment():
     drone = FakeDrone()

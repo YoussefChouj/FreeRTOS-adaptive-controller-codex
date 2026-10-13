@@ -67,8 +67,35 @@ def preflight(base, campaign, pack):
     return bool(res.get("ok"))
 
 
-def watch(base, poll_s=1.0):
-    last, stops, st = None, 0, {}
+PRIM_NAMES = ("IDLE", "CLIMB", "HOVER", "TRAJ", "RETURN", "SETTLE", "DESCEND")   # API/wfb_prim.h order
+TRAJ_NAMES = ("EMPTY", "LOADING", "READY", "EXECUTING", "DONE")                   # API/wfb_traj.h order
+TEL_NAMES = ("g_wfb_status.prim_state", "g_wfb_status.traj_state", "g_wfb_status.airborne_t",
+             "Ctrler.locxPID.FB", "Ctrler.locxPID.Des", "Ctrler.locyPID.FB", "Ctrler.locyPID.Des",
+             "Ctrler.Z_posPID.FB", "Ctrler.Z_posPID.Des")
+
+
+def tel_line(base):
+    """One terminal line of flight state from /api/values: prim, traj, airborne s, x/y/z FB/Des in m, or '' if none."""
+    from urllib.parse import urlencode
+    v = {k: d["value"] for k, d in call(base, "/api/values?" + urlencode({"names": ",".join(TEL_NAMES)}))[1]
+         .get("values", {}).items() if d.get("age_s", 99) < 2}
+    if not v:
+        return ""
+    name = lambda names, k: names[int(v[k])] if k in v and 0 <= int(v[k]) < len(names) else "?"
+    out = [f"{name(PRIM_NAMES, 'g_wfb_status.prim_state'):<7}", f"traj {name(TRAJ_NAMES, 'g_wfb_status.traj_state'):<9}"]
+    if "g_wfb_status.airborne_t" in v:
+        out.append(f"air {v['g_wfb_status.airborne_t']:5.1f}/120s")
+    for ax, pid, scale in (("x", "locxPID", 0.01), ("y", "locyPID", 0.01), ("z", "Z_posPID", 1.0)):  # loc PIDs in cm
+        fb, des = v.get(f"Ctrler.{pid}.FB"), v.get(f"Ctrler.{pid}.Des")
+        if fb is not None:
+            out.append(f"{ax} {fb * scale:+.2f}" + (f"->{des * scale:+.2f}" if des is not None else ""))
+    if out[0].strip() == "IDLE" and "LOADING" in out[1]:   # xyz-f2: ~150 frames at 0.37 s each, measured 2026-10-13
+        out.append("<- uploading the program on the ground, about 60 s: wait, motors start after it")
+    return "  ".join(out)
+
+
+def watch(base, poll_s=1.0, tel_s=2.0):
+    last, stops, st, t_tel = None, 0, {}, 0.0
     while True:
         try:
             time.sleep(poll_s)
@@ -78,6 +105,11 @@ def watch(base, poll_s=1.0):
                 refusal = f"  ARM REFUSED: {line[3]}" if line[3] else ""
                 print(f"{time.strftime('%H:%M:%S')}  {line[0]}  {line[1] or ''}  {line[2] or ''}{refusal}")
                 last = line
+            if st.get("status") == "running" and time.monotonic() - t_tel >= tel_s:
+                t_tel = time.monotonic()
+                tel = tel_line(base)
+                if tel:
+                    print(f"{time.strftime('%H:%M:%S')}    {tel}", flush=True)
             if st.get("status") not in ("running", "waiting_for_go"):
                 return st
         except KeyboardInterrupt:
