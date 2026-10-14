@@ -68,6 +68,15 @@ def test_read_telemetry_strips_slot_prefix_and_zeroes_time(tmp_path):
     assert lo == pytest.approx(1.0) and hi == pytest.approx(4.98)
 
 
+@pytest.mark.parametrize("tail", ["", "1400000000,0,slot0.a,abc\n", "1400000000,0,sl"])
+def test_read_telemetry_merges_slots_in_file_order_and_skips_rows_without_a_number(tmp_path, tail):
+    """The column read and its row-by-row fallback (bad value, torn last row) give the same series."""
+    (tmp_path / "telemetry.csv").write_text(
+        "received_ns,slot,key,value\n1000000000,0,slot0.a,1\n1100000000,1,slot1.a,2\n1200000000,0,slot0.a,\n"
+        "1250000000,0,slot0.a,nan\n1300000000,1,slot1.b,4\n" + tail, encoding="utf-8")
+    assert read_telemetry(tmp_path) == {"a": ([0.0, 0.1], [1.0, 2.0]), "b": ([pytest.approx(0.3)], [4.0])}
+
+
 def test_flight_metrics_over_hover_window(tmp_path):
     m = flight_metrics(read_telemetry(_session(tmp_path, "s", z_m=0.7)), target_z_m=0.7, sat=(1900.0, 1000.0))
     assert m["hold_s"] == pytest.approx(3.98)

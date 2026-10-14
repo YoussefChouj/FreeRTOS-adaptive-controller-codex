@@ -38,14 +38,57 @@ Series = dict[str, tuple[list[float], list[float]]]
 
 
 def read_telemetry(session_dir: str | Path) -> Series:
-    """``{symbol: (t_s, values)}`` from a session's telemetry.csv; t_s counts from the first row."""
+    """``{symbol: (t_s, values)}`` from a session's telemetry.csv; t_s counts from the first row. A row without a
+    number (empty or nan value) carries no sample and is skipped: one NaN would turn a whole RMS into nan.
+
+    Column read first: a 74 s flight is 1.3 M rows, 0.9 s with pandas' pyarrow engine against 12 s row by row
+    (10-14 rehearsal, same output), and the row read set most of the landing-to-summary wait. A file the typed
+    read refuses (a torn last row, a non-numeric value, no pandas) goes row by row, which skips the bad rows."""
+    path = Path(session_dir) / "telemetry.csv"
+    try:
+        return _read_columns(path)
+    except (ImportError, ValueError, IndexError):
+        return _read_rows(path)
+
+
+def _read_columns(path: Path) -> Series:
+    import numpy as np
+    import pandas as pd
+
+    kw: dict[str, Any] = {"usecols": ["received_ns", "key", "value"],
+                          "dtype": {"received_ns": "int64", "key": "category", "value": "float64"}}
+    try:
+        df = pd.read_csv(path, engine="pyarrow", **kw)
+    except ImportError:
+        df = pd.read_csv(path, **kw)
+    ns, values = df["received_ns"].to_numpy(), df["value"].to_numpy()
+    codes = df["key"].cat.codes.to_numpy()
+    num = ~np.isnan(values)
+    ns, values, codes = ns[num], values[num], codes[num]
+    t_s = (ns - ns[0]) / 1e9
+    keys = df["key"].cat.categories
+    order = np.argsort(codes, kind="stable")  # rows grouped by key, file order kept inside a group
+    bounds = np.searchsorted(codes[order], np.arange(len(keys) + 1))
+    rows: dict[str, list[Any]] = {}
+    for c, key in enumerate(keys):
+        rows.setdefault(_SLOT_PREFIX.sub("", key), []).append(order[bounds[c]:bounds[c + 1]])
+    series: Series = {}
+    for name, parts in rows.items():
+        idx = np.sort(np.concatenate(parts)) if len(parts) > 1 else parts[0]  # one symbol in two slots
+        series[name] = (t_s[idx].tolist(), values[idx].tolist())
+    return series
+
+
+def _read_rows(path: Path) -> Series:
     series: Series = {}
     t0 = None
-    with (Path(session_dir) / "telemetry.csv").open(newline="", encoding="utf-8") as f:
+    with path.open(newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             try:
                 ns, value = int(row["received_ns"]), float(row["value"])
             except (KeyError, TypeError, ValueError):
+                continue
+            if math.isnan(value):
                 continue
             t0 = ns if t0 is None else t0
             ts, vs = series.setdefault(_SLOT_PREFIX.sub("", row.get("key") or ""), ([], []))
