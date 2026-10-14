@@ -237,7 +237,8 @@ def check_live_ready(service: Any, now_ns: Callable[[], int] = time.time_ns) -> 
         raise RuntimeError(f"g_wfb_status is stale ({age_s:.1f} s old)")
 
 
-NAMING_WAIT_S = 3.0
+NAMING_WAIT_S = 5.0
+NAMING_RESEND_S = 1.0   # re-send a still-unnamed slot's request this often while waiting (PROPOSED)
 
 
 def wait_streams_named(bridge: Any, slots: list[int], timeout_s: float | None = None) -> None:
@@ -250,14 +251,24 @@ def wait_streams_named(bridge: Any, slots: list[int], timeout_s: float | None = 
     status = getattr(bridge, "stream_naming_status", None)
     if not callable(status):
         return
-    deadline = time.monotonic() + (NAMING_WAIT_S if timeout_s is None else timeout_s)
+    resend = getattr(bridge, "resend_slot", None)
+    start = time.monotonic()
+    deadline = start + (NAMING_WAIT_S if timeout_s is None else timeout_s)
+    next_resend = start + NAMING_RESEND_S
     while True:
         problems = status(slots)
         if not isinstance(problems, dict) or not problems:
             return
-        if time.monotonic() >= deadline:
+        now = time.monotonic()
+        if now >= deadline:
             raise RuntimeError("stream not named: " + "; ".join(
                 f"slot {slot}: {why}" for slot, why in sorted(problems.items())))
+        if callable(resend) and now >= next_resend:
+            # A lost request or schema reply leaves the slot streaming its old layout, so the bridge's
+            # silence watchdog never re-asks (2026-10-14 A1): re-send the request ourselves.
+            for slot in sorted(problems):
+                resend(slot)
+            next_resend = now + NAMING_RESEND_S
         time.sleep(0.1)
 
 

@@ -149,3 +149,30 @@ def test_raw_range_requests_are_not_rebuilt(rig):
     rig.reflash()
     assert not rig.b._request_is_stale(SLOT)
     assert rig.b._heal_slot(SLOT, "test") is False
+
+
+def test_back_to_back_requests_are_paced(rig, monkeypatch):
+    # The FC drops a 0x21 that lands while the previous one is still pending (BSP/usart5.c mailbox): on
+    # 2026-10-14 A1 the campaign's slot 1 request and slot 3 stop were lost this way.
+    def sleep(s):
+        rig.clock[0] += s
+    monkeypatch.setattr(wb.time, "sleep", sleep)
+    times = []
+    rig.b._wifi_send.sendto.side_effect = lambda *a: times.append(rig.clock[0])
+    rig.b.subscribe_slot(1, DIV, NAMES)
+    rig.b.subscribe_slot(2, DIV, NAMES)
+    rig.b.subscribe_slot(3, 0, [])
+    assert [round(b - a, 6) for a, b in zip(times, times[1:])] == [WifiBridge._SUBSCRIBE_GAP_S] * 2
+
+
+def test_stream_check_resends_a_slot_whose_request_was_lost(rig, monkeypatch):
+    rig.b.subscribe_slot(SLOT, DIV, NAMES)          # lost: no 0x08 reply, the old layout keeps streaming
+    sent = rig.b._wifi_send.sendto.call_count
+
+    def sleep(s):
+        rig.clock[0] += s
+        if rig.b._wifi_send.sendto.call_count > sent and rig.b.stream_naming_status([SLOT]):
+            rig.reply()                              # the re-sent request gets its reply
+    monkeypatch.setattr(wb.time, "sleep", sleep)
+    wait_streams_named(rig.b, [SLOT])
+    assert rig.b._wifi_send.sendto.call_count == sent + 1

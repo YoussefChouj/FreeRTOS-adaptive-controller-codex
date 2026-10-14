@@ -468,6 +468,19 @@ class WifiBridge:
             self._request_slot0_schema(layout="dashboard")
 
     # Subscribe data silent this long while other frames arrive = FC rebooted.
+    # The FC stages one 0x21 at a time (BSP/usart5.c single-slot mailbox) and drops a request that lands while
+    # the previous one is still pending, so back-to-back slot requests lose all but one (2026-10-14 A1: slot 1
+    # never named, the slot 3 stop lost). Its send task drains the mailbox at 200 Hz. 50 ms is PROPOSED.
+    _SUBSCRIBE_GAP_S = 0.05
+
+    def _send_request_paced(self, request: bytes) -> None:
+        """Send one 0x21 request at least ``_SUBSCRIBE_GAP_S`` after the previous one."""
+        wait = getattr(self, "_last_subscribe_tx", float("-inf")) + self._SUBSCRIBE_GAP_S - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        self._wifi_send.sendto(request, (self._wifi_host, self._wifi_port))
+        self._last_subscribe_tx = time.monotonic()
+
     _SLOT_SILENT_MIN_S = 3.0
     _SLOT_RESEND_EVERY_S = 5.0
     _SLOT_SILENT_PERIODS = 5
@@ -497,7 +510,7 @@ class WifiBridge:
                             resent.append(slot)
                         continue
                     try:
-                        self._wifi_send.sendto(req_bytes, (self._wifi_host, self._wifi_port))
+                        self._send_request_paced(req_bytes)
                     except OSError as e:
                         print(f"[wifi_bridge] Warning: slot {slot} re-send failed: {e}",
                               file=sys.stderr, flush=True)
@@ -518,7 +531,7 @@ class WifiBridge:
         if self._request_is_stale(slot):
             return self._heal_slot(slot, "resend asked for after an axf change")
         try:
-            self._wifi_send.sendto(req_bytes, (self._wifi_host, self._wifi_port))
+            self._send_request_paced(req_bytes)
         except OSError as e:
             print(f"[wifi_bridge] Warning: resend_slot({slot}) failed: {e}",
                   file=sys.stderr, flush=True)
@@ -894,7 +907,7 @@ class WifiBridge:
             )
 
             # Send over WiFi
-            self._wifi_send.sendto(request, (self._wifi_host, self._wifi_port))
+            self._send_request_paced(request)
 
         except Exception as e:
             print(f"[wifi_bridge] Warning: {label} schema request failed: {e}",
@@ -1067,7 +1080,7 @@ class WifiBridge:
             transport=transport,
         )
 
-        self._wifi_send.sendto(request, (self._wifi_host, self._wifi_port))
+        self._send_request_paced(request)
 
         # Format preset description
         if len(result.preset_ids) == 1:
@@ -1155,7 +1168,7 @@ class WifiBridge:
         # 0x21; in 'multi-slot' this is len(preset_ids_list) 0x21s, each
         # targeting a different slot starting at base_slot.
         for req_slot, request in burst_result.requests:
-            self._wifi_send.sendto(request, (self._wifi_host, self._wifi_port))
+            self._send_request_paced(request)
 
         # Aggregate metadata for the print + return dict. In 'burst'
         # strategy there is exactly one PresetMergeResult; in 'multi-slot'
@@ -1338,7 +1351,7 @@ class WifiBridge:
             slot=slot,
         )
         self._slot_states[slot] = "sent"
-        self._wifi_send.sendto(request, (self._wifi_host, self._wifi_port))
+        self._send_request_paced(request)
         
         rate_hz = self._expected_rate_for_slot(slot, divider)
         if divider > 0:
