@@ -23,7 +23,12 @@ Workers (VPS, agy) are off while the operator is at the lab: all work inline and
 2. 8081: `python -m ground_station.service --port 8081` (single instance; `curl -s localhost:8081/api/routes`).
 3. Camera truth: `/camera-truth` (`bash ground_station/lab/camera_truth.sh start|stop|check`); `check` must print
    `ready 1920x1080`. Only the tracker window shows.
-4. Captures: only on the operator's request, after confirming the variable list and rate; WiFi only, never the
+4. Camera-corrected flights (drift fix): with 8081 up, `bash ground_station/lab/camera_truth.sh fusion <name> 2
+   --yaw-deg 94` (mode 2 = r7_f3's best; 3 = in-EKF, fixed in 5f30b9b8 but its drift is unmeasured). With 8081 up the
+   tracker reads height from 8081 and its fixes go through the 8081 relay (port 47800), so `fly` runs alongside
+   (UNVERIFIED in the lab; its `check` may list missing slot CSVs: the 8081 capture logs instead). Mode is fixed per
+   session; `stop <name>` after landing. Re-check the phone pose first (r7_f6 marker shift 157 px).
+5. Captures: only on the operator's request, after confirming the variable list and rate; WiFi only, never the
    SWD probe; record until the operator says stop (stop the recording, keep the streams).
 
 ## Fly

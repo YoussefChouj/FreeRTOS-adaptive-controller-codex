@@ -4,7 +4,7 @@
 #   bash ground_station/lab/camera_truth.sh stop  <name>   # after landing + disarm
 #   bash ground_station/lab/camera_truth.sh check <name>   # rows per slot, video size
 #   bash ground_station/lab/camera_truth.sh fusion <name> <1|2|3> [tracker args]   # camera fusion, 1 shadow, 2 offset, 3 in-EKF:
-#     stream_log --relay-port 47800 (no 8081) + scrcpy r5cam (record, off screen) + live_tracker --show (topmost,
+#     stream_log --relay-port 47800 (or, with 8081 up for `fly`, its relay + --tel-url) + scrcpy r5cam (record, off screen) + live_tracker --show (topmost,
 #     resizable, path/anchor map, --traj preset, demo clip tracker.mp4; keys r a c f);
 #     `stop <name>` ends the recording, tracker and video (stop file); PlotJuggler keeps streaming live until
 #     `end` or the next fusion. Same phone placement as r5_marks_1 (its floor pose is reused).
@@ -62,9 +62,11 @@ start)
   sleep 5; "$0" check "$name" ;;
 fusion)
   mode=${3:?mode 1 shadow, 2 offset, 3 in-EKF}; shift 3
-  up && { echo "8081 service is up: stop it first (stream_log needs the WiFi downlink)"; exit 1; }
-  endlive
+  # 8081 up (`fly` flights): it owns the link, relays the fixes (--relay-port 47800) and logs; the tracker reads
+  # height from it. 8081 down: stream_log owns the link, relays and logs, as before.
+  if up; then link=8081; tel=(--tel-url "$api"); else link=sl; tel=(--tel-csv "logs/$name.slot1.csv"); endlive; fi
   mkdir -p "$vid" logs; rm -f "$vid/stop" "$vid/video_only"; echo "$mode" > "$vid/fusion"
+  if [ "$link" = sl ]; then                         # `fly` sets up VOFA+/PJ itself (key p)
   VOFA=${VOFA-127.0.0.1:1347}                       # flight view to VOFA+ (UDP FireWater, named tabs); VOFA= turns it off
   PLOT=${PLOT-}                                     # PlotJuggler opt-in (every slot): PLOT=127.0.0.1:9870
   if [ -n "$VOFA" ]; then                           # writes C:/tmp/vofa import files only; VOFA+ is never closed or patched
@@ -79,6 +81,7 @@ fusion)
   nohup python -m ground_station.livewatch.stream_log --frames ground_station/livewatch/r5_extpos_frames.md     --relay-port 47800 ${PLOT:+--plot "$PLOT"} ${VOFA:+--vofa "$VOFA" --vofa-view} --seconds 86400 "${ends[@]}" --out "logs/$name.csv" > "$vid/stream_log.out" 2>&1 &
   echo $! > "$vid/stream_log.pid"
   [ -n "$PLOT$VOFA" ] && cp "$vid/stream_log.pid" logs/plot_live.pid
+  fi
   # mirror off screen at the full 1920x1080 camera size, borderless (client area = video), still grabbed by
   # PrintWindow, so the tracker reads every camera pixel; CT_WIN= CT_SIZE=1194x672 shows it as before. UNVERIFIED:
   # Windows keeps a 1920x1080 window on a 1920x1080 screen unclamped (check the tracker line "window 'r5cam' ready 1920x1080").
@@ -87,7 +90,7 @@ fusion)
   dly=${DELAY_MS:-200}                              # camera delay: video_truth delay4 lag 0.21 s on r6_f4 + f4c (2026-10-13)
   al=()                                             # r6 flew modes 2/3 at --yaw-deg 0 vs ~90 deg measured: auto-fit it
   case " $* " in *" --yaw-deg"*|*" --align"*) ;; *) [ "$mode" -ge 2 ] && al=(--align auto) ;; esac
-  nohup python -m ground_station.analysis.live_tracker --source window:r5cam     --cam docs/video-truth/cam_r4_lenswave_2026-10-11.json --floor logs/video_truth/r5_marks_1     --tel-csv "logs/$name.slot1.csv" --detector coral --gate --send udp:47800 --mode "$mode" --delay-ms "$dly"     --out "$vid/fixes.csv" --show --show-rec "$vid/tracker.mp4" --stop-file "$vid/stop" "${al[@]}" "$@" > "$vid/tracker.out" 2>&1 &
+  nohup python -m ground_station.analysis.live_tracker --source window:r5cam     --cam docs/video-truth/cam_r4_lenswave_2026-10-11.json --floor logs/video_truth/r5_marks_1     "${tel[@]}" --detector coral --gate --send udp:47800 --mode "$mode" --delay-ms "$dly"     --out "$vid/fixes.csv" --show --show-rec "$vid/tracker.mp4" --stop-file "$vid/stop" "${al[@]}" "$@" > "$vid/tracker.out" 2>&1 &
   echo $! > "$vid/tracker.pid"
   sleep 12; "$0" check "$name" ;;
 video)                                              # video only (workflows A/B/C): the log stays theirs
