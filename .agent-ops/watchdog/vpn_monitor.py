@@ -11,6 +11,10 @@ Safety rules, because other Claude sessions share the proxy at 127.0.0.1:7897:
 - it never closes connections on a working node. After switching away from a dead node it closes
   only that node's connections, so their clients reconnect through the new node.
 - while the core is down, and for CORE_GRACE_S after it comes back, it only watches.
+
+On/off: a tray icon (green = auto-switch on, grey = off). Left-click toggles; right-click shows the
+"Auto-switch VPN" checkbox, the log and Quit. Off is the file ~/.vpn_monitor.paused, so it survives a reboot;
+while it exists the monitor does nothing. Without pystray the monitor runs headless and still obeys the file.
 """
 import ctypes
 import json
@@ -18,6 +22,7 @@ import msvcrt
 import os
 import re
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -27,6 +32,7 @@ from pathlib import Path
 
 LOG_PATH = Path.home() / ".vpn_monitor.log"
 LOG_MAX_BYTES = 1_000_000
+PAUSE_FLAG = Path.home() / ".vpn_monitor.paused"   # exists = auto-switch off
 PIPE_DIR = "//./pipe/"
 PIPE_PREFIX = "verge-mihomo"   # name gets "-sidecar-release-<hash>" / "-production-<hash>" depending on how Verge started it
 PROXY = "http://127.0.0.1:7897"
@@ -70,6 +76,16 @@ def single_instance():
     global _mutex
     _mutex = k32.CreateMutexW(None, False, MUTEX_NAME)
     return bool(_mutex) and ctypes.get_last_error() != ERROR_ALREADY_EXISTS
+
+def is_enabled():
+    return not PAUSE_FLAG.exists()
+
+def set_enabled(on):
+    if on:
+        PAUSE_FLAG.unlink(missing_ok=True)
+    else:
+        PAUSE_FLAG.write_text("auto-switch off; delete this file or use the tray icon to turn it back on\n")
+    log(f"auto-switch turned {'ON' if on else 'OFF'}")
 
 def find_pipe():
     names = sorted(n for n in os.listdir(PIPE_DIR) if n.startswith(PIPE_PREFIX))
@@ -188,6 +204,45 @@ def net_ok():
     except Exception:
         return False
 
+def run_tray(wake):
+    """Tray icon with the on/off checkbox, in the main thread; starts the monitor thread.
+    Returns False if pystray/Pillow is missing (the caller then runs headless)."""
+    try:
+        import pystray
+        from PIL import Image, ImageDraw
+    except ImportError:
+        return False
+
+    def image(on):
+        img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+        ImageDraw.Draw(img).ellipse((4, 4, 60, 60), fill=(46, 160, 67) if on else (140, 140, 140))
+        return img
+
+    def refresh():
+        on = is_enabled()
+        title = f"VPN auto-switch: {'ON' if on else 'OFF'}"
+        if icon.title != title:
+            icon.icon, icon.title = image(on), title
+
+    def toggle(_icon, _item):
+        set_enabled(not is_enabled())
+        refresh()
+        wake.set()                       # check at once instead of waiting for the next cycle
+
+    def quit_monitor(_icon, _item):
+        log("VPN monitor quit from the tray")
+        icon.stop()
+
+    icon = pystray.Icon("vpn_monitor", image(is_enabled()), menu=pystray.Menu(
+        pystray.MenuItem("Auto-switch VPN (Japan/Singapore)", toggle,
+                         checked=lambda _item: is_enabled(), default=True),
+        pystray.MenuItem("Open log", lambda _icon, _item: os.startfile(LOG_PATH)),
+        pystray.MenuItem("Quit monitor", quit_monitor)))
+    refresh()
+    threading.Thread(target=monitor_loop, args=(wake, refresh), daemon=True).start()
+    icon.run()
+    return True
+
 def main():
     if "--dry-run" in sys.argv:          # read-only: no switching, no closing, no mutex
         log(f"dry-run: net_ok={net_ok()}")
@@ -196,11 +251,24 @@ def main():
     if not single_instance():
         log("another VPN monitor is already running; this copy exits")
         return
+    wake = threading.Event()
+    if not run_tray(wake):
+        monitor_loop(wake)
 
-    log(f"VPN monitor started (pid {os.getpid()}). Checking every {CHECK_INTERVAL_S}s.")
-    fails, core_since, last_beat, down_logged = 0, None, None, False
+def monitor_loop(wake, refresh=None):
+    log(f"VPN monitor started (pid {os.getpid()}). Checking every {CHECK_INTERVAL_S}s. "
+        f"Auto-switch {'ON' if is_enabled() else 'OFF'}.")
+    fails, core_since, last_beat, down_logged, off_logged = 0, None, None, False, False
     while True:
         try:
+            if refresh:
+                refresh()                # icon follows the flag file even if it was edited by hand
+            if not is_enabled():
+                if not off_logged:
+                    log("auto-switch is off: not checking or switching")
+                fails, last_beat, off_logged = 0, None, True
+                continue
+            off_logged = False
             try:
                 find_pipe()
             except FileNotFoundError:
@@ -230,7 +298,8 @@ def main():
         except Exception as e:
             log(f"monitor error: {e}")
         finally:
-            time.sleep(CHECK_INTERVAL_S)
+            wake.wait(CHECK_INTERVAL_S)
+            wake.clear()
 
 if __name__ == "__main__":
     main()
