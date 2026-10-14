@@ -5,7 +5,8 @@ fly-mode campaign (campaign_schema) and checked with the same scenario rules as 
     campaign circle-f8                                <- optional, default: the file name
     rate 33                                           <- log rate, Hz
     log estimator_truth velocity_loops                <- log_plan groups
-    takeoff 0.5                                       <- optional, default takeoff 0.5; land is added when missing
+    set g_xy_ctrl_kind=2                              <- set rows before takeoff: VAR_WRITE on the ground, before IDLE
+    takeoff 0.5                                      <- optional, default takeoff 0.5; land is added when missing
     hold 3
     set traj_p.move_s=12                              <- traj_p.* fields are sticky for every later preset line
     preset circle circ_r_cm=30                        <- `run` is the same; own fields beat sticky ones
@@ -138,11 +139,17 @@ def compile_fly(text: str, src: str = "<fly>") -> tuple[dict[str, Any], list[int
         steps.append({kind: fields})
         lines.append(n)
 
+    # set rows before the takeoff are written on the ground: they fold into the takeoff's set
+    lead = next((i for i, s in enumerate(steps) if not (isinstance(s, dict) and "set" in s)), len(steps))
+    ground = {k: v for s in steps[:lead] for k, v in s["set"].items()}
+    del steps[:lead], lines[:lead]
     if not steps:
         problems.append(f"{src}: no steps")
     if steps and not (isinstance(steps[0], dict) and "takeoff" in steps[0]):
         steps.insert(0, {"takeoff": {"z": DEFAULT_TAKEOFF_Z}})
         lines.insert(0, 0)
+    if steps and ground:
+        steps[0]["takeoff"]["set"] = {**ground, **steps[0]["takeoff"].get("set", {})}
     if steps and steps[-1] != "land":
         steps.append("land")
         lines.append(0)

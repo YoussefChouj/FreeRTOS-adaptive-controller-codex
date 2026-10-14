@@ -23,6 +23,8 @@ Steps run in order:
 
 takeoff may also set mrac_injection (0/1): CMD 0x0F idx 10 sent on the ground before takeoff (autotune flies 0),
 and idle_s (0..IDLE_S_MAX): seconds the props spin at idle on the ground between IDLE and TAKEOFF.
+and set {<variable>: value}: VAR_WRITEs sent on the ground before IDLE, checked like a set step (g_xy_ctrl_kind
+latches only on the ground, StabilizerTask.c XyCtrl latch).
 An excite start zeroes the optical-flow origin and the loc PID setpoints (TASK/send_data.c:1848-1865), so it must
 follow a hold at the hover point; the runner also checks the position before it sends the start.
 
@@ -97,7 +99,7 @@ _ARG_RE = re.compile(r"^\$([a-z_][a-z0-9_]*)$")
 _TOP_KEYS = {"scenario", "description", "args", "motion", "steps"}
 _STEP_KEYS: Mapping[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     # kind: (required keys, optional keys)
-    "takeoff": (("z",), ("mrac_injection", "idle_s")),
+    "takeoff": (("z",), ("mrac_injection", "idle_s", "set")),
     "hold": (("s",), ()),
     "goto": (("x", "y", "z"), ("dwell_s",) + tuple(DEFAULT_MOTION)),
     "path": (("shape", "params"), tuple(DEFAULT_MOTION)),
@@ -454,7 +456,11 @@ def parse_scenario(data: Any, args: Mapping[str, Any] | None = None) -> Scenario
             idle_s = body.get("idle_s", 0)
             if isinstance(idle_s, bool) or not isinstance(idle_s, (int, float)) or not 0 <= idle_s <= IDLE_S_MAX:
                 problems.append(f"{path}.takeoff.idle_s: must be in [0, {IDLE_S_MAX}] s (got {idle_s!r})")
-            steps.append(Step("takeoff", dict(body)))
+            args = dict(body)
+            if "set" in args:
+                ground = _compile_set(args["set"] if isinstance(args["set"], dict) else {}, f"{path}.takeoff.set", problems)
+                args["set"] = ground.args["writes"] if ground is not None else []
+            steps.append(Step("takeoff", args))
         elif kind == "land":
             steps.append(Step("land", {}))
         elif kind == "excite":

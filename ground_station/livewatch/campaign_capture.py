@@ -176,6 +176,12 @@ MRAC_3L: tuple[str, ...] = (
     + tuple(f"mrac_state.{axis}.Phi_f[{i}]" for i in range(6) for axis in ("pitch", "roll"))
     + tuple(f"mrac_state.{axis}.p_gain" for axis in ("pitch", "roll"))
 )
+# Camera fusion (g_ext_pos_on 2/3): the fix innovation e_x/e_y, the applied correction c_x/c_y, accepted and rejected
+# fix counts, fix age and the stale flag, so a drift can be split into camera-not-arriving vs camera-not-trusted.
+CAMERA_FUSION: tuple[str, ...] = (
+    "g_ext_pos_on", "g_ext_pos.e_x", "g_ext_pos.e_y", "g_ext_pos.n_ok", "g_ext_pos.n_rej",
+    "g_ext_pos.age_ms", "g_ext_pos.stale", "g_ext_pos.c_x", "g_ext_pos.c_y",
+)
 LOG_GROUPS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "mrac_shadow": MRAC_SHADOW,
     "mrac_3l": MRAC_3L,
@@ -185,6 +191,7 @@ LOG_GROUPS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "estimator_truth": ESTIMATOR_TRUTH,
     "thrust_model": THRUST_MODEL,
     "ekf_states": EKF_STATES,
+    "camera_fusion": CAMERA_FUSION,
 })
 LOG_PLAN_KEYS = ("rate_hz", "groups")
 # PROPOSED default: 50 Hz is the rate the 10 s stream_log check carried with 0 dropped after the last flash.

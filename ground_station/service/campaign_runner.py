@@ -291,6 +291,9 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
                 inj = float(inj_arg)
                 cmds.append(("mrac_injection",
                              lambda: deps.client._send_cmd(ex.CMD_MRAC_FLAGS, ex.MRAC_IDX_INJECTION, inj)))
+            # takeoff set: VAR_WRITEs on the ground before IDLE (g_xy_ctrl_kind latches only on the ground)
+            for name, v in st.args.get("set", ()):
+                cmds.append((f"set {name}", lambda name=name, v=v: deps.client.var_write(name, v)))
             cmds.append(("set_hover_z", lambda: deps.client.set_hover_z(scenario.hover_z_m)))
             if preload is not None:
                 cmds.append((f"{steps[preload].kind} upload", preload_send))

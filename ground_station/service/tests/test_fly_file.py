@@ -45,6 +45,26 @@ def test_indented_lines_are_program_ops_and_set_keeps_other_rows():
                                     "ops": [{"goto": {"x": 0.5, "dwell": 3}}, {"goto": {"z": 1.0}}]}}
 
 
+def test_set_rows_before_takeoff_are_ground_writes_on_the_takeoff():
+    text = "set g_xy_ctrl_kind=2 g_traj_ff_shift_s=0\nset g_land_xy_gate_cm=10\ntakeoff 0.5\nhold 3\n"
+    steps = _scenario(text)["steps"]
+    assert steps[0] == {"takeoff": {"z": 0.5, "set": {"g_xy_ctrl_kind": 2, "g_traj_ff_shift_s": 0,
+                                                       "g_land_xy_gate_cm": 10}}}
+    assert [s for s in steps if isinstance(s, dict) and "set" in s] == []   # no in-flight set step left
+    assert _scenario("set g_xy_ctrl_kind=3\nhold 3\n")["steps"][0] == {"takeoff": {"z": 0.5,
+                                                                                   "set": {"g_xy_ctrl_kind": 3}}}
+    with pytest.raises(fly_file.FlyFileError, match="g_xy_ctrl_kind"):
+        _scenario("set g_xy_ctrl_kind=7\nhold 3\n")                       # out of range, checked like a set step
+
+
+def test_ground_writes_fly_on_the_fake_drone_before_takeoff():
+    drone, _, deps = _rig()
+    text = "set g_xy_ctrl_kind=2 g_land_xy_gate_cm=10\nhold 2\n"
+    out = fly_scenario(parse_scenario(_scenario(text)), deps)
+    assert not out.aborted and out.landed, out.decision
+    assert drone.vars["g_xy_ctrl_kind"] == 2.0 and drone.vars["g_land_xy_gate_cm"] == 10.0
+
+
 @pytest.mark.parametrize("text,expect", [
     ("hold 3\npreset circle move_s=30\n", "t.fly: line 2"),            # schema problem -> its source line
     ("hold 3\nwiggle x=2\n", "line 2: unknown step kind"),
