@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import http.client
 import json
 import socket
 import struct
@@ -428,7 +429,7 @@ class TelHeightHttp(TelHeight):
             try:
                 with self.http.open(f"{self.url}/api/values?names={q}", timeout=self.timeout) as r:
                     self.got = (json.load(r)["values"], self.clock())
-            except (OSError, ValueError, KeyError, TypeError):
+            except (OSError, ValueError, KeyError, TypeError, http.client.HTTPException):  # IncompleteRead is no OSError
                 pass
             time.sleep(max(0.0, self.min_dt - (time.monotonic() - t0)))
 

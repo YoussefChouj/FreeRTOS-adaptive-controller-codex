@@ -41,7 +41,7 @@ endlive() {                                         # a previous fusion's stream
   [ -f logs/plot_live.pid ] || return 0
   touch logs/plot_live.end
   for i in $(seq 10); do alive logs/plot_live.pid || break; sleep 1; done
-  alive logs/plot_live.pid && taskkill //F //PID "$(cat logs/plot_live.pid)" > /dev/null 2>&1; rm -f logs/plot_live.pid logs/plot_live.end
+  alive logs/plot_live.pid && taskkill //F //PID "$(cat logs/plot_live.pid)" > /dev/null 2>&1 || true; rm -f logs/plot_live.pid logs/plot_live.end
 }
 case $cmd in
 start)
@@ -111,7 +111,7 @@ floor)                                              # floor pose of this placeme
   taskkill //IM scrcpy.exe > /dev/null 2>&1 || true; sleep 2; taskkill //F //IM scrcpy.exe > /dev/null 2>&1 || true; sleep 1
   [ -s "$vid/cam.mkv" ] || { echo "floor: no video, see $vid/scrcpy.log"; tail -3 "$vid/scrcpy.log" 2>/dev/null; exit 1; }
   out=$(python -m ground_station.analysis.video_truth aruco "$vid/cam.mkv" --out "$vid/aruco.npz" --step 5); echo "$out"
-  n=$(echo "$out" | grep -o '^[0-9]* frames' | cut -d' ' -f1); n0=$(echo "$out" | grep -o 'id0 [0-9]*' | cut -d' ' -f2)
+  n=$(echo "$out" | grep -o '^[0-9]* frames' | cut -d' ' -f1 || true); n0=$(echo "$out" | grep -o 'id0 [0-9]*' | cut -d' ' -f2 || true)  # id0 unseen: no word, grep fails
   if [ "${n0:-0}" -gt 0 ] && [ $((2 * ${n0:-0})) -ge "${n:-1}" ]; then
     echo "floor OK: pad marker id0 in ${n0} of ${n} frames. Fly with CT_FLOOR=$vid"
   else

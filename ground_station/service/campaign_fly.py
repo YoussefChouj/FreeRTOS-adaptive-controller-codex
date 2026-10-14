@@ -166,7 +166,8 @@ KEY_ROUTES = {"s": "/api/campaign/stop", "n": "/api/campaign/next", "l": "/api/c
 def watch(base, term=None, key=None, poll_s=1.0, live_s=LIVE_S, on_pj=None):
     """Flight view until the runner stops running: (last campaign state, live samples). Phase changes are events,
     the live line updates every live_s and each fresh read is kept as a sample {t, <TEL_NAMES>} for the debrief.
-    Keys s/n/l post stop/next/land, p calls on_pj; Ctrl+C lands, a second Ctrl+C aborts."""
+    Keys s/n/l post stop/next/land, p calls on_pj; Ctrl+C lands, a second Ctrl+C aborts. While the service is down
+    Ctrl+C returns ({"status": "service_down"}, samples) instead."""
     term, key = term or Term(), key or _key
     last, stops, st, samples, t_state, t_down = None, 0, {}, [], -math.inf, None
     t0 = _clock()
@@ -203,6 +204,11 @@ def watch(base, term=None, key=None, poll_s=1.0, live_s=LIVE_S, on_pj=None):
                 term.line(format_tel(v))
             _sleep(live_s)
         except KeyboardInterrupt:
+            if t_down is not None:           # nothing can take a land/abort post: leave, so fly can run again
+                events.log("key", key="ctrl+c", route=None, service_down_s=round(_clock() - t_down, 1))
+                term.event("Ctrl+C: service down, leaving fly. Run fly again (it restarts the service).")
+                term.close()
+                return {"status": "service_down"}, samples
             route = "/api/campaign/land" if stops == 0 else "/api/campaign/abort"
             stops += 1
             events.log("key", key="ctrl+c", route=route)
@@ -217,7 +223,7 @@ def watch(base, term=None, key=None, poll_s=1.0, live_s=LIVE_S, on_pj=None):
                 t_down = now
                 events.log("service_down", error=str(e))
                 term.event(f"SERVICE DOWN ({e}): fly has no control path and the flight log has stopped. "
-                           f"Fly with the RC: take over and land. After landing, run fly again (it restarts the service).")
+                           f"Fly with the RC: take over and land. After landing, Ctrl+C leaves; then run fly again (it restarts the service).")
             elif int(now - t_down) // 10 != int(now - t_down - poll_s) // 10:
                 term.event(f"service still down {now - t_down:.0f} s: RC has the drone")
             _sleep(poll_s)
@@ -617,6 +623,8 @@ def fly_loop(base, arg, pack, rate=None, run=None, once=False):
         (folder / "debrief.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
         (folder / "outputs.txt").write_text(f"{st.get('outputs_dir') or ''}\n", encoding="utf-8")
         write_samples(folder / "live_5hz.csv", samples)
+        if st.get("status") == "service_down":
+            return 1
         if run and st.get("outputs_dir"):
             subprocess.run([sys.executable, "-m", "ground_station.analysis.flight_debrief", st["outputs_dir"],
                             "--run", run], cwd=ROOT)

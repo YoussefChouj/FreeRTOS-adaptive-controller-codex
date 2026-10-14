@@ -55,7 +55,11 @@ def main(argv=None):
         print(f"no events for {a.date} ({p})")
         return
     for line in p.read_text(encoding="utf-8").splitlines()[-a.n:]:
-        r = json.loads(line)
+        try:
+            r = json.loads(line)
+        except ValueError:                       # a line torn by a crash mid-write
+            print(f"(unreadable line: {line[:60]})")
+            continue
         rest = " ".join(f"{k}={v}" for k, v in r.items() if k not in ("t", "pid", "event"))
         print(f"{r['t'][11:]} {r['event']:<14} {rest}")
 

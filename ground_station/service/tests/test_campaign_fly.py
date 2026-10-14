@@ -368,3 +368,27 @@ def test_watch_says_once_what_to_do_when_the_service_dies(monkeypatch):
     assert len(down) == 1 and "RC" in down[0] and "run fly again" in down[0]
     assert sum("still down" in e for e in term.events) == 1          # one reminder per 10 s, not one per poll
     assert any(e.startswith("service back after 13 s") for e in term.events)
+
+
+def test_watch_ctrl_c_leaves_while_the_service_is_down(monkeypatch):
+    """2026-10-14 review: with 8081 down, Ctrl+C only re-posted land/abort to the dead service, so closing the window
+    was the only way out and the debrief and fly_end were lost."""
+    class Down(Flight):
+        def call(self, base, route, body=None, timeout=10):
+            if self.t >= 1.0:
+                raise ConnectionRefusedError("refused")
+            return super().call(base, route, body, timeout)
+    class T:
+        events = []
+        def event(self, s): self.events.append(s)
+        def line(self, s): pass
+        def close(self): pass
+    rig = Down(monkeypatch, run_s=20.0)
+    rig.go_t = 0.0
+    def key():
+        if rig.t >= 5.0:
+            raise KeyboardInterrupt
+    term = T()
+    st, _ = campaign_fly.watch("http://h", term=term, key=key)
+    assert st == {"status": "service_down"} and rig.t < 7.0
+    assert any("leaving fly" in e for e in term.events) and not any("FAILED" in e for e in term.events)
