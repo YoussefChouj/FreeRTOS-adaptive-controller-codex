@@ -29,7 +29,8 @@ SCALES = ("log", "lin")
 # (TASK/send_data.c:1474-1519). The contract's axis/elem ranges stay the authority for which idx
 # values are legal; a test asserts these tuples cover exactly those ranges.
 PID_GAIN_CMD = 0x01  # idx = axis * 3 + gain
-PID_AXES = ("pitchPID", "rollPID", "yawPID", "gyroxPID", "gyroyPID", "gyrozPID", "Z_ratePID")
+PID_AXES = ("pitchPID", "rollPID", "yawPID", "gyroxPID", "gyroyPID", "gyrozPID", "Z_ratePID",
+            "Z_posPID", "locxPID", "locyPID", "locxsPID", "locysPID")
 PID_GAINS = ("Kp", "Ki", "Kd")
 MRAC_ARRAY_CMDS = {0x02: "gamma", 0x05: "What_limit", 0x08: "What_tol"}  # idx = axis << 4 | elem
 MRAC_AXES = ("mrac_config_pitch", "mrac_config_roll", "mrac_config_yaw", "mrac_config_z")

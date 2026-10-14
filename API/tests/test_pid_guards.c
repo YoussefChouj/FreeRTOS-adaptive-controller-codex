@@ -294,11 +294,12 @@ static void test_hold_equiv(void)
 static void test_cmd_bounds(void)
 {
     PIDTypeDef *const order[PID_CMD_AXES] = { &Ctrler.pitchPID, &Ctrler.rollPID, &Ctrler.yawPID,
-        &Ctrler.gyroxPID, &Ctrler.gyroyPID, &Ctrler.gyrozPID, &Ctrler.Z_ratePID };   /* TASK/send_data.c 0x01 */
+        &Ctrler.gyroxPID, &Ctrler.gyroyPID, &Ctrler.gyrozPID, &Ctrler.Z_ratePID,
+        &Ctrler.Z_posPID, &Ctrler.locxPID, &Ctrler.locyPID, &Ctrler.locxsPID, &Ctrler.locysPID };   /* TASK/send_data.c 0x01 */
     float boot[3], max;
     uint8_t a, g;
 
-    check(PID_CmdLoop((uint8_t)PID_CMD_AXES) == 0, "0x01 axis 7 has no target", 7);
+    check(PID_CmdLoop((uint8_t)PID_CMD_AXES) == 0, "0x01 axis past the table has no target", PID_CMD_AXES);
     for (a = 0U; a < PID_CMD_AXES; a++) {
         check(PID_CmdLoop(a) == order[a], "0x01 axis order", a);
         boot[0] = order[a]->Kp;

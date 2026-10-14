@@ -85,8 +85,8 @@ typedef char pid_table_rows_match_ctrler[(sizeof(CtrlerTypeDef) == PID_TABLE_ROW
  *   2026-09-29 Kp 0.8->0.6: flight15 0.5-0.8 Hz pendulum sway from pos-hold, drift +-13 cm.
  *   legacy: hui fei zhe 1.8 outKP, 1.8 0.45 inKP KI.
  */
-/* Gain lease (WP-28 livetune), default OFF. In flight, the first CMD 0x01 write snapshots Kp Ki Kd of the seven
-   0x01 axes and opens a lease; each later 0x01 write renews it. No 0x01 write for lease_ms, or the drone leaving the
+/* Gain lease (WP-28 livetune), default OFF. In flight, the first CMD 0x01 write snapshots Kp Ki Kd of all
+   PID_CMD_AXES 0x01 axes and opens a lease; each later 0x01 write renews it. No 0x01 write for lease_ms, or the drone leaving the
    air, restores the snapshot and closes the lease, so a candidate left by a lost link cannot outlive the link.
    On the ground the lease is off: gains written there (a verify flight's) stay.
    @enable   -   [0, 1]          1 = on, 0 = off (CMD 0x01 behaves as before)
@@ -94,9 +94,10 @@ typedef char pid_table_rows_match_ctrler[(sizeof(CtrlerTypeDef) == PID_TABLE_ROW
 #define GAIN_LEASE_ROW(enable, lease_ms) { (enable), (lease_ms) }
 static const struct { uint8_t enable; uint32_t lease_ms; } s_gain_lease_cfg = GAIN_LEASE_ROW(0, 2000);
 
-static PIDTypeDef *const s_lease_pid[7] = { &Ctrler.pitchPID, &Ctrler.rollPID, &Ctrler.yawPID,
-    &Ctrler.gyroxPID, &Ctrler.gyroyPID, &Ctrler.gyrozPID, &Ctrler.Z_ratePID };  /* CMD 0x01 axis order */
-static float s_lease_gain[7][3];
+static PIDTypeDef *const s_lease_pid[PID_CMD_AXES] = { &Ctrler.pitchPID, &Ctrler.rollPID, &Ctrler.yawPID,
+    &Ctrler.gyroxPID, &Ctrler.gyroyPID, &Ctrler.gyrozPID, &Ctrler.Z_ratePID,
+    &Ctrler.Z_posPID, &Ctrler.locxPID, &Ctrler.locyPID, &Ctrler.locxsPID, &Ctrler.locysPID };  /* CMD 0x01 axis order */
+static float s_lease_gain[PID_CMD_AXES][3];
 static uint8_t s_lease_open = 0U;
 static uint32_t s_lease_ms = 0U;
 
@@ -105,7 +106,7 @@ void PID_GainLeaseRenew(uint32_t now_ms, uint8_t airborne)
     uint8_t a;
     if (!s_gain_lease_cfg.enable || !airborne) return;
     if (!s_lease_open) {
-        for (a = 0U; a < 7U; a++) {
+        for (a = 0U; a < PID_CMD_AXES; a++) {
             s_lease_gain[a][0] = s_lease_pid[a]->Kp;
             s_lease_gain[a][1] = s_lease_pid[a]->Ki;
             s_lease_gain[a][2] = s_lease_pid[a]->Kd;
@@ -119,7 +120,7 @@ void PID_GainLeaseTick(uint32_t now_ms, uint8_t airborne)
 {
     uint8_t a;
     if (!s_lease_open || (airborne && (uint32_t)(now_ms - s_lease_ms) <= s_gain_lease_cfg.lease_ms)) return;
-    for (a = 0U; a < 7U; a++) {
+    for (a = 0U; a < PID_CMD_AXES; a++) {
         s_lease_pid[a]->Kp = s_lease_gain[a][0];
         s_lease_pid[a]->Ki = s_lease_gain[a][1];
         s_lease_pid[a]->Kd = s_lease_gain[a][2];
@@ -129,7 +130,8 @@ void PID_GainLeaseTick(uint32_t now_ms, uint8_t airborne)
 
 /* CMD 0x01 write bounds (TASK/send_data.c Cmd_PidGain), one row per 0x01 axis in s_lease_pid order; the minimum
    is 0. Rule: max(200, 2 x the PID_ROW default), so every boot gain can be written back and doubled
-   (API/tests/test_pid_guards.c checks it). Before WP-38 one bound of 200 covered every gain, so Z_ratePID Kp 400
+   (API/tests/test_pid_guards.c checks it). Axes 7-11 (position loops) since 2026-10-14, so
+   the wobble after a setpoint move (debrief 'Setpoint moves') can be A/B tuned between flights without a reflash. Before WP-38 one bound of 200 covered every gain, so Z_ratePID Kp 400
    could not be written back. Plausibility limits against a garbled write, not stability limits (PROPOSED).
    @Kp  U/E        [0, 1000]  largest Kp the command accepts
    @Ki  U/(E*tick) [0, 200]   largest Ki
@@ -143,7 +145,12 @@ const float pid_cmd_max[PID_CMD_AXES][3] = {
     PID_CMD_ROW(200,  200,  200), /* 3     gyroxPID   5 / 0.01 / 10 */
     PID_CMD_ROW(200,  200,  200), /* 4     gyroyPID   5 / 0.01 / 10 */
     PID_CMD_ROW(200,  200,  200), /* 5     gyrozPID   8 / 0.005 / 0.02 */
-    PID_CMD_ROW(800,  200,  200)  /* 6     Z_ratePID  400 / 0.435 / 0 */
+    PID_CMD_ROW(800,  200,  200), /* 6     Z_ratePID  400 / 0.435 / 0 */
+    PID_CMD_ROW(200,  200,  200), /* 7     Z_posPID   0.7 / 0.005 / 0.1 */
+    PID_CMD_ROW(200,  200,  200), /* 8     locxPID    0.8 / 0.0013 / 4 */
+    PID_CMD_ROW(200,  200,  200), /* 9     locyPID    0.8 / 0.0013 / 4 */
+    PID_CMD_ROW(200,  200,  200), /* 10    locxsPID   3 / 0.008 / 6 */
+    PID_CMD_ROW(200,  200,  200)  /* 11    locysPID   3 / 0.008 / 6 */
 };
 
 PIDTypeDef *PID_CmdLoop(uint8_t axis)

@@ -181,9 +181,9 @@ _PATH_CENTRE = "overwritten at start: the path begins at the current position (A
 COMMAND_TABLE: dict[int, CommandSpec] = {
     0x01: CommandSpec(
         id=0x01, name="PID_GAIN",
-        description="Update PID gain (Kp/Ki/Kd) for one of 7 control axes.",
+        description="Update PID gain (Kp/Ki/Kd) for one of 12 control axes (7-11: Z_pos, locx, locy, locxs, locys).",
         params=(
-            CommandParam(0, "axis", "axis", 0, 6),
+            CommandParam(0, "axis", "axis", 0, 11),
             CommandParam(1, "gain_type", "enum", 0, 2),
             CommandParam(2, "Kp_or_Ki_or_Kd", "gain", 0.0, 800.0,
                          "bound per axis and gain (API/pid.c PID_CMD_ROW): 200, Z_ratePID Kp 800"),

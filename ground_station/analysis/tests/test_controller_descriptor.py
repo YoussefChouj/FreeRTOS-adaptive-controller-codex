@@ -69,7 +69,9 @@ def test_loaded_dataclasses_are_frozen() -> None:
     (0x01, 0, "pitchPID.Kp"),
     (0x01, 11, "gyroxPID.Kd"),
     (0x01, 20, "Z_ratePID.Kd"),
-    (0x01, 21, None),                              # axis 7 does not exist
+    (0x01, 21, "Z_posPID.Kp"),                     # axis 7: first position loop (2026-10-14)
+    (0x01, 35, "locysPID.Kd"),
+    (0x01, 36, None),                              # axis 12 does not exist
     (0x02, 0x10, "mrac_config_roll.gamma[0]"),
     (0x05, 0x35, "mrac_config_z.What_limit[5]"),
     (0x08, 0x21, "mrac_config_yaw.What_tol[1]"),
@@ -113,7 +115,7 @@ SINGLE_MISTAKES = [
     ("cmd_id not a byte", descriptor([knob(cmd_id=256)]), "must both be bytes"),
     ("idx not a byte", descriptor([knob(idx=-1)]), "must both be bytes"),
     ("not a tuning command", descriptor([knob(cmd_id=0x03)]), "0x03 is not a tuning command"),
-    ("idx outside decode", descriptor([knob(idx=21)]), "idx 21 decodes outside"),
+    ("idx outside decode", descriptor([knob(idx=36)]), "idx 36 decodes outside"),
     ("idx writes another gain", descriptor([knob(idx=9)]), "writes gyroxPID.Kp, not gyroxPID.Kd"),
     ("range beyond contract", descriptor([knob(hi=BEYOND)]), "leaves the contract range"),
     ("same variable twice", descriptor([knob(), knob()]), "#0 and #1 both write gyroxPID.Kd"),
