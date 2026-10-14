@@ -10,9 +10,9 @@ from ground_station.analysis.battery_model import PackError, PackRegistry
 
 
 def test_shipped_packs_loads() -> None:
-    """1. The shipped packs.yaml loads; pack_ids() == ["P5300-1", "P4000-1", "P4000-2"]."""
+    """1. The shipped packs.yaml loads; pack_ids() == ["type1", "type2"]."""
     registry = PackRegistry.load()
-    assert registry.pack_ids() == ["P5300-1", "P4000-1", "P4000-2"]
+    assert registry.pack_ids() == ["type1", "type2"]
 
 
 def test_predict_soc_values() -> None:
@@ -24,24 +24,24 @@ def test_predict_soc_values() -> None:
     registry = PackRegistry.load()
 
     # 16.8 V -> 100
-    assert registry.predict_soc("P5300-1", 16.8) == pytest.approx(100.0, abs=1e-6)
+    assert registry.predict_soc("type1", 16.8) == pytest.approx(100.0, abs=1e-6)
 
     # 13.08 V -> 0
-    assert registry.predict_soc("P5300-1", 13.08) == pytest.approx(0.0, abs=1e-6)
+    assert registry.predict_soc("type1", 13.08) == pytest.approx(0.0, abs=1e-6)
 
     # 15.36 V (3.84 V/cell) -> 50
-    assert registry.predict_soc("P5300-1", 15.36) == pytest.approx(50.0, abs=1e-6)
+    assert registry.predict_soc("type1", 15.36) == pytest.approx(50.0, abs=1e-6)
 
     # Halfway between [3.87, 60] and [3.85, 55]:
     # v_cell = (3.87 + 3.85) / 2 = 3.86 V/cell -> 3.86 * 4 = 15.44 V
     # SoC should be halfway: (60 + 55) / 2 = 57.5%
-    assert registry.predict_soc("P5300-1", 15.44) == pytest.approx(57.5, abs=1e-6)
+    assert registry.predict_soc("type1", 15.44) == pytest.approx(57.5, abs=1e-6)
 
     # Above 16.8 V clamps to 100
-    assert registry.predict_soc("P5300-1", 17.5) == pytest.approx(100.0, abs=1e-6)
+    assert registry.predict_soc("type1", 17.5) == pytest.approx(100.0, abs=1e-6)
 
     # Below 13.08 V clamps to 0
-    assert registry.predict_soc("P5300-1", 11.5) == pytest.approx(0.0, abs=1e-6)
+    assert registry.predict_soc("type1", 11.5) == pytest.approx(0.0, abs=1e-6)
 
 
 def test_predict_soc_invalid_inputs() -> None:
@@ -52,13 +52,13 @@ def test_predict_soc_invalid_inputs() -> None:
         registry.predict_soc("NON_EXISTENT_PACK", 16.0)
 
     with pytest.raises(PackError):
-        registry.predict_soc("P5300-1", float("nan"))
+        registry.predict_soc("type1", float("nan"))
 
     with pytest.raises(PackError):
-        registry.predict_soc("P5300-1", float("inf"))
+        registry.predict_soc("type1", float("inf"))
 
     with pytest.raises(PackError):
-        registry.predict_soc("P5300-1", float("-inf"))
+        registry.predict_soc("type1", float("-inf"))
 
 
 def test_per_pack_ocv_table_override(tmp_path: Path) -> None:
@@ -152,7 +152,7 @@ packs: []
         (lambda d: d.update({"ocv_table": [[4.20, 110], [3.27, 0]]}), "table soc values not non-increasing or outside 0..100"),
         (lambda d: d.update({"ocv_table": [[4.20, 100], [3.27, -5]]}), "table soc values not non-increasing or outside 0..100"),
         # Duplicate pack id
-        (lambda d: d["packs"].append({"id": "P5300-1", "label": "dup", "cells": 4, "capacity_mah": 5000}), "duplicate pack id"),
+        (lambda d: d["packs"].append({"id": "type1", "label": "dup", "cells": 4, "capacity_mah": 5000}), "duplicate pack id"),
         # Pack with cells < 1 or capacity_mah <= 0
         (lambda d: d["packs"][0].update({"cells": 0}), "pack with cells < 1 or capacity_mah <= 0"),
         (lambda d: d["packs"][0].update({"capacity_mah": 0}), "pack with cells < 1 or capacity_mah <= 0"),
@@ -173,7 +173,7 @@ def test_load_single_problems(tmp_path: Path, mutator, expected_error_substr: st
             [3.27, 0],
         ],
         "packs": [
-            {"id": "P5300-1", "label": "5300 mAh #1", "cells": 4, "capacity_mah": 5300},
+            {"id": "type1", "label": "5300 mAh #1", "cells": 4, "capacity_mah": 5300},
         ],
     }
     mutator(base_data)
@@ -216,34 +216,34 @@ def test_expected_drop_and_record_flight() -> None:
     registry = PackRegistry.load()
 
     # Default before any record
-    assert registry.expected_drop("P5300-1") == pytest.approx(10.0, abs=1e-6)
+    assert registry.expected_drop("type1") == pytest.approx(10.0, abs=1e-6)
 
     # Record two flights: drops of 12.0 and 8.0 -> mean 10.0
-    registry.record_flight("P5300-1", 90.0, 78.0)  # drop = 12.0
-    registry.record_flight("P5300-1", 78.0, 70.0)  # drop = 8.0
-    assert registry.expected_drop("P5300-1") == pytest.approx(10.0, abs=1e-6)
+    registry.record_flight("type1", 90.0, 78.0)  # drop = 12.0
+    registry.record_flight("type1", 78.0, 70.0)  # drop = 8.0
+    assert registry.expected_drop("type1") == pytest.approx(10.0, abs=1e-6)
 
     # Record a third flight with drop 14.0 -> mean 34/3
-    registry.record_flight("P5300-1", 70.0, 56.0)  # drop = 14.0
+    registry.record_flight("type1", 70.0, 56.0)  # drop = 14.0
     expected_mean = (12.0 + 8.0 + 14.0) / 3.0
-    assert registry.expected_drop("P5300-1") == pytest.approx(expected_mean, abs=1e-6)
+    assert registry.expected_drop("type1") == pytest.approx(expected_mean, abs=1e-6)
 
     # Rejection of zero drop
     with pytest.raises(PackError):
-        registry.record_flight("P5300-1", 50.0, 50.0)
+        registry.record_flight("type1", 50.0, 50.0)
 
     # Rejection of negative drop
     with pytest.raises(PackError):
-        registry.record_flight("P5300-1", 50.0, 55.0)
+        registry.record_flight("type1", 50.0, 55.0)
 
     # Rejection of NaN drops
     with pytest.raises(PackError):
-        registry.record_flight("P5300-1", float("nan"), 50.0)
+        registry.record_flight("type1", float("nan"), 50.0)
     with pytest.raises(PackError):
-        registry.record_flight("P5300-1", 50.0, float("nan"))
+        registry.record_flight("type1", 50.0, float("nan"))
 
     # Mean remains completely unchanged
-    assert registry.expected_drop("P5300-1") == pytest.approx(expected_mean, abs=1e-6)
+    assert registry.expected_drop("type1") == pytest.approx(expected_mean, abs=1e-6)
 
 
 def test_next_flight_allowed() -> None:
@@ -256,40 +256,40 @@ def test_next_flight_allowed() -> None:
     registry = PackRegistry.load()
 
     # Allowed case: rest >= 60, high resting voltage
-    allowed, reason = registry.next_flight_allowed("P5300-1", 16.0, 65.0)
+    allowed, reason = registry.next_flight_allowed("type1", 16.0, 65.0)
     assert allowed is True
     assert reason == "ok"
 
     # Short rest -> reason starts "REST:"
-    allowed, reason = registry.next_flight_allowed("P5300-1", 16.0, 45.0)
+    allowed, reason = registry.next_flight_allowed("type1", 16.0, 45.0)
     assert allowed is False
     assert reason.startswith("REST:")
 
     # Low SoC -> reason starts "SOC:" (cooldown ok, but resting voltage low)
     # At 14.76 V on 4S (3.69 V/cell), predicted SoC is 10.0%. Post-flight: 10 - 10 = 0% < 30%.
-    allowed, reason = registry.next_flight_allowed("P5300-1", 14.76, 65.0)
+    allowed, reason = registry.next_flight_allowed("type1", 14.76, 65.0)
     assert allowed is False
     assert reason.startswith("SOC:")
 
     # Both fail -> reason starts "REST:"
-    allowed, reason = registry.next_flight_allowed("P5300-1", 14.76, 45.0)
+    allowed, reason = registry.next_flight_allowed("type1", 14.76, 45.0)
     assert allowed is False
     assert reason.startswith("REST:")
 
     # Exactly at the gate -> allowed
     # Cooldown = 60.0 s (== min_rest_s)
     # Voltage: 3.80 V/cell * 4 = 15.20 V -> SoC 40.0%. Drop = 10.0%. Post-flight: 40.0 - 10.0 = 30.0% == gate.
-    allowed, reason = registry.next_flight_allowed("P5300-1", 15.20, 60.0)
+    allowed, reason = registry.next_flight_allowed("type1", 15.20, 60.0)
     assert allowed is True
     assert reason == "ok"
 
     # A learned larger drop turns an allowed case into "SOC:"
     # Currently 15.20 V at 60s cooldown is allowed.
     # Record a flight with drop = 15.0%
-    registry.record_flight("P5300-1", 50.0, 35.0)
+    registry.record_flight("type1", 50.0, 35.0)
     # New expected drop is (10.0? No, before records default was 10.0. With 1 record, drop is 15.0%).
     # Post-flight SoC = 40.0 - 15.0 = 25.0% < 30.0% gate.
-    allowed, reason = registry.next_flight_allowed("P5300-1", 15.20, 60.0)
+    allowed, reason = registry.next_flight_allowed("type1", 15.20, 60.0)
     assert allowed is False
     assert reason.startswith("SOC:")
 
@@ -299,7 +299,7 @@ def test_next_flight_allowed() -> None:
     assert reason.startswith("INPUT:")
 
     # NaN voltage -> (False, reason starting "INPUT:")
-    allowed, reason = registry.next_flight_allowed("P5300-1", float("nan"), 65.0)
+    allowed, reason = registry.next_flight_allowed("type1", float("nan"), 65.0)
     assert allowed is False
     assert reason.startswith("INPUT:")
 
@@ -310,13 +310,13 @@ def test_sag_critical() -> None:
 
     # 4 x 3.55 V = 14.20 V
     # False just above 4 x 3.55 V
-    assert registry.sag_critical("P5300-1", 14.21) is False
+    assert registry.sag_critical("type1", 14.21) is False
 
     # True just below
-    assert registry.sag_critical("P5300-1", 14.19) is True
+    assert registry.sag_critical("type1", 14.19) is True
 
     # True for NaN
-    assert registry.sag_critical("P5300-1", float("nan")) is True
+    assert registry.sag_critical("type1", float("nan")) is True
 
     # True for an unknown pack
     assert registry.sag_critical("UNKNOWN_PACK", 16.0) is True

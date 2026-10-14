@@ -12,8 +12,8 @@ objective: "cascaded PID under no / pad-hung / one-arm load: 25 s hover then zig
 controller: pid
 mode: fly
 packs:
-  - P4000-1          # launch Q2 replaces this with the packs on hand
-  - P4000-2
+  - type2          # launch Q2 replaces this with the packs on hand
+  - type1
 max_flights: 6
 experiments:
   # log_plan: core set + velocity loops + MRAC shadow outputs (zero under PID) so both controllers log the same rows.

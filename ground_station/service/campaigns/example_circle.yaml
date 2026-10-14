@@ -7,9 +7,9 @@ controller: pid
 # Non-empty list of unique battery pack identifiers
 packs:
   # First battery pack identifier
-  - P4000-1
+  - type2
   # Second battery pack identifier
-  - P4000-2
+  - type1
 # Maximum total flight budget for this campaign (int >= 1)
 max_flights: 12
 # Parameter bounds and per-flight step limits for controller gains

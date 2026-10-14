@@ -8,7 +8,7 @@ objective: "MRAC V3 (4x3 RBF grid on rate and angle) injected at gamma x0.25: ho
 controller: mrac_v3
 mode: fly
 packs:
-  - P4000-1
+  - type2
 max_flights: 4
 experiments:
   - name: hover

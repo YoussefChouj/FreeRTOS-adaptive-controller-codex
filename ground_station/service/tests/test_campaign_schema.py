@@ -476,7 +476,7 @@ def test_6_non_mapping_top_level_and_invalid_yaml(tmp_path):
 
 def _fly_data() -> dict[str, Any]:
     return {
-        "campaign": "hover_ladder_t", "objective": "hover ladder", "controller": "pid", "packs": ["P4000-1"],
+        "campaign": "hover_ladder_t", "objective": "hover ladder", "controller": "pid", "packs": ["type2"],
         "max_flights": 3, "mode": "fly",
         "experiments": [{"name": "hover_z050", "scenario": "hover", "scenario_args": {"z": 0.5},
                          "capture": "campaign", "repeats": 1}],

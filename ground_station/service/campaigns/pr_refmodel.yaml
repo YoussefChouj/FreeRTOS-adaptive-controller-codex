@@ -7,7 +7,7 @@ objective: "MRAC PR (performance recovery kappa_pr + closed-loop ref model crm_e
 controller: mrac_pr
 mode: fly
 packs:
-  - P4000-1
+  - type2
 max_flights: 3
 experiments:
   - name: hover

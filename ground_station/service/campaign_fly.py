@@ -1,7 +1,7 @@
 """`fly`: fly a campaign from a terminal, flight after flight, no agent and no internet. Arm by RC = go.
 
     fly preset_tour                       # ground_station/service/campaigns/preset_tour.fly (or .yaml)
-    fly my_script.fly --pack P4000-1      # a .fly file anywhere; the pack is remembered for the next call
+    fly my_script.fly --pack 2            # a .fly file anywhere; the pack type is remembered for the next call
     fly <launch copy> --run logs/workflow-c/<run>       # a launch copy flies as is; --run adds flight_debrief
     fly <campaign> --record-only carry --rate 100       # disarmed handheld log, no drone command
 
@@ -309,6 +309,13 @@ def resolve_campaign(arg, pack, rate=None, launch_dir=None, fly_dir=None):
     return write_launch_copy(p, pack, rate, launch_dir)[0], p
 
 
+def pack_id(said):
+    """The packs.yaml id for what the operator typed: '2', 't2', 'type 2' and 'Type2' are all 'type2' (2026-10-15:
+    the lab knows two pack types, not single packs). Anything else comes back as typed, for pack_problem."""
+    s = "".join((said or "").lower().split()).removeprefix("type").removeprefix("t")
+    return f"type{s}" if s.isdigit() else (said or "").strip()
+
+
 def remember_pack(pack=None, path=None):
     """`pack` saved as the default for the next call, or the saved one when `pack` is empty ('' if none)."""
     path = Path(path or PACK_FILE)
@@ -327,11 +334,11 @@ def pack_problem(pack):
     'P1' was saved, then refused at every preflight)."""
     from ground_station.service.campaign_launch import _pack_ids
     known = _pack_ids()
-    ids = ", ".join(known) or "see ground_station/analysis/packs.yaml"
+    types = " or ".join(k.removeprefix("type") for k in known) or "1 or 2"
     if not pack:
-        return f"no pack yet: give --pack <id> once, it is remembered ({ids})"
+        return f"no pack yet: give --pack {types} (the pack type in the drone) once, it is remembered"
     if known and pack not in known:
-        return f"unknown pack '{pack}': give --pack with one of {ids}"
+        return f"unknown pack type '{pack}': give --pack {types} (packs.yaml: {', '.join(known)})"
     return ""
 
 
@@ -650,7 +657,8 @@ def fly_loop(base, arg, pack, rate=None, run=None, once=False):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("campaign", help=".fly file, campaign yaml, launch copy, or a saved campaign name")
-    ap.add_argument("--pack", help="pack id (default: the last one given, logs/campaigns/fly/last_pack.txt)")
+    ap.add_argument("--pack", help="the pack type in the drone, 1 or 2 (default: the last one given, "
+                                    "logs/campaigns/fly/last_pack.txt)")
     ap.add_argument("--run", help="workflow-c run folder: flight_debrief after each landing")
     ap.add_argument("--port", type=int, default=8081)
     ap.add_argument("--once", action="store_true", help="one flight, then exit")
@@ -659,7 +667,7 @@ def main(argv=None):
     ap.add_argument("--rate", type=float, help="override the log plan rate, Hz")
     a = ap.parse_args(argv)
     base = f"http://127.0.0.1:{a.port}"
-    pack = (a.pack or "").strip() or remember_pack()
+    pack = pack_id(a.pack) or remember_pack()
     why = pack_problem(pack)
     if why:
         sys.exit(why)

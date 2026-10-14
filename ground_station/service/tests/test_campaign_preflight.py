@@ -66,7 +66,7 @@ def elf(tmp_path):
     return p
 
 
-def _run(svc, elf, campaign=None, path=LADDER, pack="P4000-1", **kw):
+def _run(svc, elf, campaign=None, path=LADDER, pack="type2", **kw):
     kw.setdefault("ready_check", lambda s: None)
     return run_preflight(svc, CampaignService() if campaign is None else campaign, path, pack,
                          elf_path=elf, now_ns=lambda: NOW, **kw)
@@ -92,7 +92,7 @@ def test_all_rows_pass_on_a_ready_drone(elf):
     assert all(c["pass"] is True and c["fix"] == "" for c in res["checks"]), res["checks"]
     assert "DroneStatus.ARM_Status 0" in _row(res, "arm_state")["value"]  # the raw source field is shown
     assert "x +0.02 y -0.03" in _row(res, "position")["value"]
-    assert "16.40 V, pack P4000-1" in _row(res, "battery")["value"]
+    assert "16.40 V, pack type2" in _row(res, "battery")["value"]
     assert "hover_z050 50 Hz" in _row(res, "log_plan")["value"]
 
 
@@ -177,7 +177,7 @@ def test_battery_rows(elf):
     _only_red(_run(FakeService(values=values), elf), "battery")
     assert "swap" in _only_red(_run(FakeService(values={**READY, "real_voltage": 13.0}), elf), "battery")["fix"]
     res = _run(FakeService(), elf, path=None, pack="NOPE-9")
-    assert "P4000-1" in _row(res, "battery")["fix"]
+    assert "type2" in _row(res, "battery")["fix"]
 
 
 def test_runner_row(elf):
@@ -192,8 +192,8 @@ def test_log_plan_rows(elf, tmp_path):
     bad = tmp_path / "bad.yaml"
     bad.write_text("campaign: Bad Name\n", encoding="utf-8")
     assert "campaign_launch" in _only_red(_run(FakeService(), elf, path=str(bad)), "log_plan")["fix"]
-    row = _only_red(_run(FakeService(), elf, pack="P4000-2"), "log_plan")
-    assert "--pack P4000-2" in row["fix"]
+    row = _only_red(_run(FakeService(), elf, pack="type1"), "log_plan")
+    assert "--pack type1" in row["fix"]
 
 
 def test_vitals_reads_everything_together():
@@ -234,7 +234,7 @@ def _get(addr, path):
 
 
 def test_routes_answer_in_one_call(api):
-    resp, body = _get(api, f"/api/campaign/preflight?campaign={LADDER}&pack=P4000-1")
+    resp, body = _get(api, f"/api/campaign/preflight?campaign={LADDER}&pack=type2")
     res = json.loads(body)
     assert resp.status == 200 and [c["name"] for c in res["checks"]] == ROWS
     assert resp.getheader("X-GS-Instance") == res["instance"]
@@ -243,7 +243,7 @@ def test_routes_answer_in_one_call(api):
     assert resp.status == 200 and {"position_m", "rc", "arm", "battery", "streams"} <= set(json.loads(body))
     resp, body = _get(api, "/api/campaign/list")
     listing = json.loads(body)
-    assert "hover_ladder" in [c["name"] for c in listing["saved"]] and "P4000-1" in listing["packs"]
+    assert "hover_ladder" in [c["name"] for c in listing["saved"]] and "type2" in listing["packs"]
 
 
 def test_plugin_js_is_never_cached(api):

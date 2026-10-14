@@ -1,6 +1,6 @@
 """lab up: the day's bring-up as one table, then the day's queue (docs/lab/pipeline-design.md, `lab up`).
 
-    lab up [docs/lab/queue-<today>.txt] [--pack P5300-1] [--no-camera] [--fake]
+    lab up [docs/lab/queue-<today>.txt] [--pack 1|2] [--no-camera] [--fake]
 
 Each row is OK, WARN, WAIT or FAIL with its fix. A FAIL stops here (fix it, run lab up again); a WARN or WAIT asks
 for one Enter. WAIT rows are the drone's own preflight: the RC arm waits for them, as in `fly`. The table is appended
@@ -19,7 +19,7 @@ from urllib.parse import urlencode
 
 from ground_station.lab import cards, events, fake_drone, runner
 from ground_station.service import campaign_fly as fly
-from ground_station.service.campaign_launch import ROOT, _pack_ids
+from ground_station.service.campaign_launch import ROOT
 
 DRIVE = Path("G:/My Drive")      # decision 10: lab end moves the day's videos there
 MIN_FREE_GB = 20.0               # PROPOSED: room for a day's videos on D:
@@ -38,7 +38,7 @@ def tag_row(day):
     behind = _git("rev-list", "--count", f"{tag}..HEAD")
     if behind == "0":
         return ("rehearsal", "OK", f"{tag} at HEAD", "")
-    return ("rehearsal", "WARN", f"{tag} is {behind or '?'} commits behind HEAD", "the code changed after the rehearsal")
+    return ("rehearsal", "WARN", f"{tag} is {behind or '?'} commits behind HEAD", "code changed after the rehearsal")
 
 
 def planned(card):
@@ -59,8 +59,8 @@ def queue_row(path, state_file):
 def pack_row(pack):
     why = fly.pack_problem(pack)
     if why:
-        return ("pack", "FAIL", why, "lab up --pack <id>")
-    return ("pack", "OK", f"{pack} in the drone (packs.yaml: {', '.join(_pack_ids())})", "")
+        return ("pack", "FAIL", why, "lab up --pack 1 or --pack 2")
+    return ("pack", "OK", f"{runner.kind_name(pack)} in the drone", "")
 
 
 def fake_row(fake):
@@ -131,7 +131,8 @@ def drone_rows(base, q, pack, fake, state_file):
     if host and host.startswith("127.") != fake:
         pid = re.search(r"pid (\d+)", next((r[2] for r in rows if r[0] == "service"), ""))
         stop = f"taskkill /F /PID {pid.group(1)}" if pid else "close the 8081 window"
-        rows.insert(0, ("wiring", "FAIL", f"8081 talks to {host}, " + ("the fake drone" if not fake else "not the fake"),
+        what = "the fake drone" if not fake else "not the fake"
+        rows.insert(0, ("wiring", "FAIL", f"8081 talks to {host}, {what}",
                         f"{stop}, then lab up again (it starts 8081)" if not fake
                         else f"{stop}, then start 8081 with --wifi-host 127.0.0.2"))
     return rows
@@ -151,7 +152,7 @@ def main(argv=None, ask=input):
     ap = argparse.ArgumentParser(prog="lab up", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("queue", nargs="?", help="queue file (default docs/lab/queue-<today>.txt)")
-    ap.add_argument("--pack", help="the pack in the drone now (default: the last one given)")
+    ap.add_argument("--pack", help="the pack type in the drone now, 1 or 2 (default: the last one given)")
     ap.add_argument("--port", type=int, default=8081)
     ap.add_argument("--no-camera", action="store_true", help="fly without the camera")
     ap.add_argument("--fake", action="store_true", help="the night rehearsal: 8081 on the fake drone")
@@ -160,7 +161,7 @@ def main(argv=None, ask=input):
     day, t0 = time.strftime("%Y-%m-%d"), time.time()
     qpath = a.queue or str(ROOT / "docs" / "lab" / f"queue-{day}.txt")
     state_file = Path(a.state) if a.state else runner.state_path()
-    pack = (a.pack or "").strip() or fly.remember_pack() or ""
+    pack = fly.pack_id(a.pack) or fly.remember_pack() or ""
     q, qrow = queue_row(qpath, state_file)
     rows = [tag_row(day), qrow, pack_row(pack), fake_row(a.fake), disk_row(), drive_row()]
     if q:

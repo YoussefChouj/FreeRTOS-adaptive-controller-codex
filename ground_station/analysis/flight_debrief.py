@@ -542,7 +542,7 @@ def current_gains(history: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
 
 
 def debrief(session_dir: str | Path, run_dir: str | Path, *, flight_id: str | None = None, scenario: str = "hover",
-            scenario_args: Mapping[str, Any] | None = None, pack: str = "P4000-1",
+            scenario_args: Mapping[str, Any] | None = None, pack: str = "type2",
             sat: tuple[float, float] | None = None, gains: Mapping[str, Mapping[str, float]] | None = None,
             plots: bool = True, log_plan: Mapping[str, Any] | None = None,
             applied: Sequence[str] | None = None) -> Path:
@@ -610,7 +610,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--run", required=True, help="workflow C run folder, e.g. logs/workflow-c/20261005-2000")
     p.add_argument("--scenario", default="hover")
     p.add_argument("--args", default="{}", help='scenario args as JSON, e.g. \'{"z": 0.5, "hold_s": 20}\'')
-    p.add_argument("--pack", default="P4000-1")
+    p.add_argument("--pack", default="type2")
     p.add_argument("--no-sat", action="store_true", help="skip the bench saturation limits")
     p.add_argument("--applied", action="append", default=[], metavar="LOOP.GAIN[=VALUE]",
                    help="a gain change actually written (run_plan finished) before this flight; repeatable. "

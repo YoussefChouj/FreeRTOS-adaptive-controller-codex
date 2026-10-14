@@ -8,7 +8,7 @@ objective: "verify proposed rate gains: re-measured margins and hover rate error
 controller: pid
 mode: fly
 packs:
-  - P4000-1          # launch Q2 replaces this with the pack on the drone
+  - type2          # launch Q2 replaces this with the pack on the drone
 max_flights: 1
 experiments:
   - name: verify_rate

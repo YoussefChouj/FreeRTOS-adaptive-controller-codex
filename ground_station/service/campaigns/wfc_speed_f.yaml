@@ -12,7 +12,7 @@ objective: "stop-and-go lines: x +-0.9 m at 0.4 and 0.6 m/s, y to -1.0 m at 0.4 
 controller: pid
 mode: fly
 packs:
-  - P4000-1
+  - type2
 max_flights: 1
 experiments:
   - name: f01_speed

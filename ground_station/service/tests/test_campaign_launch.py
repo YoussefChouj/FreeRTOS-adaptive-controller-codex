@@ -23,12 +23,12 @@ def _one_line_error(capsys, argv):
 
 
 def test_launch_writes_copy_and_prints_table(launch_dir, capsys):
-    assert campaign_launch.main(["hover_ladder", "--pack", "P4000-2"]) == 0
+    assert campaign_launch.main(["hover_ladder", "--pack", "type1"]) == 0
     out = capsys.readouterr().out
     copies = list(launch_dir.glob("hover_ladder_*.yaml"))
     assert len(copies) == 1
     c = load_campaign(copies[0])
-    assert c.packs == ("P4000-2",) and [e.name for e in c.experiments] == ["hover_z050", "hover_z070", "hover_z130"]
+    assert c.packs == ("type1",) and [e.name for e in c.experiments] == ["hover_z050", "hover_z070", "hover_z130"]
     assert "# Log plan: hover_ladder" in out and "| core (always on) |" in out
     assert out.strip().splitlines()[-1].startswith("launch copy: ") and copies[0].name in out
     assert "warning" not in out
@@ -45,19 +45,19 @@ def test_rate_overrides_every_experiment_and_unknown_pack_warns(launch_dir, caps
 
 
 def test_errors_are_one_line_and_write_nothing(launch_dir, capsys, tmp_path):
-    assert "unknown campaign 'nope'" in _one_line_error(capsys, ["nope", "--pack", "P4000-1"])
-    assert "no campaign file" in _one_line_error(capsys, ["missing.yaml", "--pack", "P4000-1"])
+    assert "unknown campaign 'nope'" in _one_line_error(capsys, ["nope", "--pack", "type2"])
+    assert "no campaign file" in _one_line_error(capsys, ["missing.yaml", "--pack", "type2"])
     bad = tmp_path / "bad.yaml"
     bad.write_text("campaign: Bad Name\nmode: fly\n", encoding="utf-8")
-    assert "campaign invalid" in _one_line_error(capsys, [str(bad), "--pack", "P4000-1"])
-    assert "--rate must be > 0" in _one_line_error(capsys, ["hover_ladder", "--pack", "P4000-1", "--rate", "0"])
+    assert "campaign invalid" in _one_line_error(capsys, [str(bad), "--pack", "type2"])
+    assert "--rate must be > 0" in _one_line_error(capsys, ["hover_ladder", "--pack", "type2", "--rate", "0"])
     assert not launch_dir.exists() or not list(launch_dir.iterdir())
 
 
 def test_list_campaigns(launch_dir, capsys):
-    campaign_launch.main(["hover_ladder", "--pack", "P4000-1"])
+    campaign_launch.main(["hover_ladder", "--pack", "type2"])
     listing = campaign_launch.list_campaigns()
     saved = {c["name"]: c for c in listing["saved"]}
     assert saved["hover_ladder"]["mode"] == "fly" and saved["hover_ladder"]["path"].endswith("hover_ladder.yaml")
-    assert listing["launch"][0]["name"].startswith("hover_ladder_") and listing["launch"][0]["packs"] == ["P4000-1"]
-    assert {"P4000-1", "P4000-2", "P5300-1"} <= set(listing["packs"])
+    assert listing["launch"][0]["name"].startswith("hover_ladder_") and listing["launch"][0]["packs"] == ["type2"]
+    assert {"type1", "type2"} <= set(listing["packs"])

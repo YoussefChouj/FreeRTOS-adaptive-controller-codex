@@ -1,7 +1,7 @@
 """The lab day's commands (docs/lab/pipeline-design.md); `fly` stays for one-off flight paths.
 
-    lab up [queue] [--pack P]      check everything in one table, then fly the day's queue (ground_station/lab/up.py)
-    lab queue <file> [--pack P]    fly a queue without the checks (ground_station/lab/runner.py)
+    lab up [queue] [--pack 1|2]    check everything in one table, then fly the day's queue (ground_station/lab/up.py)
+    lab queue <file> [--pack 1|2]  fly a queue without the checks (ground_station/lab/runner.py)
     lab end [--day D]              the day's report, then its videos to Google Drive (ground_station/lab/end.py)
     lab catalog [cards|modules]    every card, module and image with its status (ground_station/lab/catalog.py)
 """

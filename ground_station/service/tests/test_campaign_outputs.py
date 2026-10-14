@@ -54,7 +54,7 @@ def _session(root: Path, name: str, z_m: float = 0.5, hz: float = 50.0, hold_s: 
 
 
 def _record(flight_id, experiment, recording="", abort_level=0, reason=""):
-    return FlightRecord(flight_id=flight_id, pack_id="P4000-1", experiment=experiment, j=None,
+    return FlightRecord(flight_id=flight_id, pack_id="type2", experiment=experiment, j=None,
                         abort_level=abort_level, abort_reason=reason, decision="", hover_only=False,
                         duration_s=10.0, scenario="hover", recording=str(recording))
 

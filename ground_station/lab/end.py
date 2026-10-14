@@ -68,8 +68,9 @@ def report(day, queue, state):
                     f"{fmt((f.get('metrics') or {}).get(c.metric) if c else None)} | {f.get('folder') or '-'} |"
                     for f in mine] + [""]
     out += ["## Packs", ""]
-    out += [f"- {p}: {r.get('flights', 0)} flights, {r.get('state', '?')}"
-            + (f", rested {r['rest_v']:.2f} V" if r.get("rest_v") else "") for p, r in state["packs"].items()]
+    out += [f"- {runner.kind_name(p)}: " + (f"{r['packs']} packs, " if "packs" in r else "")
+            + f"{r.get('flights', 0)} flights" + (f", last rested {r['rest_v']:.2f} V" if r.get("rest_v") else "")
+            for p, r in state["packs"].items()]
     return out + [""]
 
 
@@ -163,8 +164,8 @@ def main(argv=None, ask=input):
         dest, size = DRIVE_DAY / a.day, sum(s for _, s in files)
         if not DRIVE_DAY.parent.is_dir():
             notes.append(f"{DRIVE_DAY.parent} not found: start Google Drive, then lab end again")
-        elif ask(f"{len(files)} videos, {size / 1e9:.2f} GB, to {dest}. "
-                 "Enter moves them (copied, checked, then removed from D:), n keeps them on D: ").strip().lower() != "n":
+        elif ask(f"{len(files)} videos, {size / 1e9:.2f} GB, to {dest}. Enter moves them "
+                 "(copied, checked, then removed from D:), n keeps them on D: ").strip().lower() != "n":
             moved = move(files, dest, notes)
     lines = report(a.day, queue, state) + catalog_day(a.day, queue, state) + video_lines(files, moved, notes)
     out = state_file.parent / "day_report.md"

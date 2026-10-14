@@ -8,7 +8,7 @@ objective: "baseline: PID flight with MRAC V1 in shadow; V1 band rate error vs t
 controller: mrac_v1
 mode: fly
 packs:
-  - P4000-1
+  - type2
 max_flights: 3
 experiments:
   - name: hover

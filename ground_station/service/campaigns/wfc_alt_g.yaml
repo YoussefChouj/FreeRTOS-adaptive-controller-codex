@@ -12,7 +12,7 @@ objective: "height ladder over the pad 0.5 and 1.1 m (6 s each), then a 0.5 m x 
 controller: pid
 mode: fly
 packs:
-  - P4000-1
+  - type2
 max_flights: 1
 experiments:
   - name: f01_alt

@@ -9,7 +9,7 @@ YAML = """campaign: t-carry
 objective: test
 controller: pid
 mode: fly
-packs: [P4000-1]
+packs: [type2]
 max_flights: 1
 experiments:
   - name: f01
@@ -126,7 +126,7 @@ class Rig:
 
 
 def _wait(rig, **kw):
-    return campaign_fly.wait_for_arm("http://h", "c.yaml", "P4000-1", **kw)
+    return campaign_fly.wait_for_arm("http://h", "c.yaml", "type2", **kw)
 
 
 def test_arm_edge_counts_down_then_goes(monkeypatch, capsys):
@@ -201,8 +201,8 @@ def test_flight_folder_numbers_the_days_flights(tmp_path):
 def test_remember_pack(tmp_path):
     f = tmp_path / "pack.txt"
     assert campaign_fly.remember_pack(None, f) == ""
-    assert campaign_fly.remember_pack(" P4000-2 ", f) == "P4000-2"
-    assert campaign_fly.remember_pack("", f) == "P4000-2"
+    assert campaign_fly.remember_pack(" type1 ", f) == "type1"
+    assert campaign_fly.remember_pack("", f) == "type1"
 
 
 def test_unknown_pack_is_refused_before_it_is_remembered(tmp_path, monkeypatch):
@@ -211,22 +211,22 @@ def test_unknown_pack_is_refused_before_it_is_remembered(tmp_path, monkeypatch):
     monkeypatch.setattr(campaign_fly, "ensure_service", lambda *a: pytest.fail("no service before the pack check"))
     with pytest.raises(SystemExit) as exc:
         campaign_fly.main(["c", "--pack", "P1"])
-    assert "unknown pack 'P1'" in str(exc.value) and "P4000-1" in str(exc.value) and not f.exists()
+    assert "unknown pack type 'P1'" in str(exc.value) and "type2" in str(exc.value) and not f.exists()
     with pytest.raises(SystemExit) as exc:
         campaign_fly.main(["c"])
-    assert "no pack yet" in str(exc.value) and "P4000-1" in str(exc.value)
-    assert campaign_fly.pack_problem("P4000-1") == ""
+    assert "no pack yet" in str(exc.value) and "--pack 1 or 2" in str(exc.value)
+    assert campaign_fly.pack_problem("type2") == ""
 
 
 def test_resolve_campaign_fly_file_name_and_launch_copy(tmp_path):
     kw = {"launch_dir": tmp_path / "launch", "fly_dir": tmp_path / "fly"}
-    launch, src = campaign_fly.resolve_campaign(str(SAMPLE), "P4000-1", **kw)
+    launch, src = campaign_fly.resolve_campaign(str(SAMPLE), "type2", **kw)
     assert src == SAMPLE and launch.parent == tmp_path / "launch"
-    by_name, src2 = campaign_fly.resolve_campaign("preset_tour", "P4000-1", **kw)
+    by_name, src2 = campaign_fly.resolve_campaign("preset_tour", "type2", **kw)
     assert src2 == SAMPLE and by_name.parent == tmp_path / "launch"
     assert campaign_fly.resolve_campaign(str(launch), "other", **kw) == (launch, launch)
     with pytest.raises(LaunchError, match="preset_tour"):
-        campaign_fly.resolve_campaign("no_such_campaign", "P4000-1", **kw)
+        campaign_fly.resolve_campaign("no_such_campaign", "type2", **kw)
 
 
 class Flight(Rig):
@@ -272,7 +272,7 @@ def test_fly_loop_once_goes_on_the_arm_and_files_the_flight(tmp_path, monkeypatc
     assert campaign_fly.fly_loop("http://h", "c", "P9", once=True) == 0
     (_, body), = [c for c in rig.calls if c[0] == "/api/campaign/go"]
     assert rig.go_t >= 1.0 + campaign_fly.COUNTDOWN_S
-    assert body["pack_id"] == "P4000-1" and body["source"] == "operator:cli"   # the launch copy pack, not P9
+    assert body["pack_id"] == "type2" and body["source"] == "operator:cli"   # the launch copy pack, not P9
     assert body["confirmation"] == campaign_fly.CONFIRMATION and all(body["checklist"].values())
     folder, = (tmp_path / "flights").glob("*/01_t-carry")
     assert sorted(p.name for p in folder.iterdir()) == ["c.yaml", "debrief.txt", "live_5hz.csv", "outputs.txt"]

@@ -42,7 +42,7 @@ def _post(url: str, body: dict) -> tuple[int, dict]:
     return _request("POST", url, json.dumps(body).encode())
 
 
-def _go(base: str, pack_id: str = "P4000-1", checklist: dict | None = None,
+def _go(base: str, pack_id: str = "type2", checklist: dict | None = None,
         source: str = "operator", confirmation: str | None = None) -> tuple[int, dict]:
     body = {
         "campaign_path": CAMPAIGN, "pack_id": pack_id,
@@ -147,10 +147,10 @@ def test_go_refused_for_agent_source(api):
 
 def test_agent_go_with_confirmation_is_logged(api):
     service, base = api
-    code, res = _go(base, source="agent:mcp", confirmation="yes, go pack P4000-1")
+    code, res = _go(base, source="agent:mcp", confirmation="yes, go pack type2")
     assert code == 200, res
     assert res["last_go"]["source"] == "agent:mcp"
-    assert res["last_go"]["confirmation"] == "yes, go pack P4000-1"
+    assert res["last_go"]["confirmation"] == "yes, go pack type2"
 
 
 def test_go_refused_for_unticked_checklist(api):
@@ -192,7 +192,7 @@ def test_live_flights_visible_while_running(api):
     assert res["status"] == "waiting_for_go"
     assert server.campaign.runner_thread.is_alive()
     assert len(res["flights"]) >= 1
-    assert res["flights"][0]["pack_id"] == "P4000-1"
+    assert res["flights"][0]["pack_id"] == "type2"
     _post(base + "/api/campaign/abort", {})
 
 
@@ -334,8 +334,8 @@ def test_campaign_stream_check_passes_clears_refusal():
 def test_wp23_go_for_the_wrong_pack_is_refused(api):
     """A Go for a pack the runner is not waiting for would never match: refuse it with the pack named."""
     _, base = api
-    code, res = _go(base, pack_id="P5300-1")
-    assert code == 409 and "first flight uses pack P4000-1, not P5300-1" in res["error"]
+    code, res = _go(base, pack_id="type1")
+    assert code == 409 and "first flight uses pack type2, not type1" in res["error"]
     assert _get(base + "/api/campaign/state")[1]["status"] == "idle"
 
 
@@ -347,11 +347,11 @@ def test_wp23_go_while_flying_is_refused():
     cs.runner_thread = threading.Thread(target=stop.wait, daemon=True)
     cs.runner_thread.start()
     try:
-        code, res = cs.go(CAMPAIGN, "P4000-1", {"item": True}, "operator")
+        code, res = cs.go(CAMPAIGN, "type2", {"item": True}, "operator")
         assert code == 409 and "not waiting for a go" in res["error"] and cs.go_grant is None
-        cs.waiting_pack = "P4000-1"
-        code, _ = cs.go(CAMPAIGN, "P4000-1", {"item": True}, "operator")
-        assert code == 200 and cs.go_grant == "P4000-1"
+        cs.waiting_pack = "type2"
+        code, _ = cs.go(CAMPAIGN, "type2", {"item": True}, "operator")
+        assert code == 200 and cs.go_grant == "type2"
     finally:
         stop.set()
 

@@ -205,11 +205,11 @@ def test_mcp_campaign_tools(service, api):
         assert "confirmation" in resp["result"]["content"][0]["text"]
         # campaign_preflight: one call, every row named, ok false without a launch copy
         resp = _request(proc, 35, "tools/call", {"name": "campaign_preflight", "arguments": {
-            "campaign_path": "", "pack_id": "P4000-1"}})
+            "campaign_path": "", "pack_id": "type2"}})
         pre = json.loads(resp["result"]["content"][0]["text"])
         assert [c["name"] for c in pre["checks"]] == [
-            "service", "link", "firmware", "wfb_status", "rc_link", "arm_state", "position", "battery", "runner",
-            "log_plan"]
+            "service", "link", "firmware", "wfb_status", "rc_link", "of_hold", "arm_state", "position", "battery",
+            "runner", "log_plan"]
         assert pre["ok"] is False and pre["checks"][-1]["fix"].startswith("pass campaign=")
     finally:
         proc.stdin.close() if proc.stdin else None

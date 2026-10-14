@@ -16,7 +16,7 @@ objective: "step C: 15 s still hold + cardinal steps around (0, -0.5), for stati
 controller: pid
 mode: fly
 packs:
-  - P4000-1
+  - type2
 max_flights: 1
 experiments:
   - name: f01_steps

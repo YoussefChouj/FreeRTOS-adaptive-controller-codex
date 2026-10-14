@@ -7,7 +7,7 @@ objective: "MRAC V2 (mu_sat leakage on |u_def|) injected: hover, doublet, figure
 controller: mrac_v2
 mode: fly
 packs:
-  - P4000-1
+  - type2
 max_flights: 4
 experiments:
   - name: hover

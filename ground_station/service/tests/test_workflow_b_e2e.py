@@ -141,7 +141,7 @@ def campaign_yaml(tmp_path):
         "campaign": "e2e_test",
         "objective": "test e2e",
         "controller": "pid",
-        "packs": ["P4000-1", "P4000-2"],
+        "packs": ["type2", "type1"],
         "max_flights": 2,
         "envelope": {"locxPID.Kp": {"min": 0.3, "max": 1.2, "max_step": 0.1}},
         "experiments": [
@@ -172,14 +172,14 @@ def test_go_source_and_checklist(api_server, campaign_yaml):
     _, base = api_server
     # 403 on agent source
     code, _ = _post(base + "/api/campaign/go", {
-        "campaign_path": campaign_yaml, "pack_id": "P4000-1",
+        "campaign_path": campaign_yaml, "pack_id": "type2",
         "checklist": {"ok": True}, "source": "agent:xyz"
     })
     assert code == 403
 
     # 409 on checklist
     code, _ = _post(base + "/api/campaign/go", {
-        "campaign_path": campaign_yaml, "pack_id": "P4000-1",
+        "campaign_path": campaign_yaml, "pack_id": "type2",
         "checklist": {"ok": False}, "source": "operator"
     })
     assert code == 409
@@ -189,7 +189,7 @@ def test_go_allow_agent_arm_false(api_server, campaign_yaml):
     server, base = api_server
     _allow_arm(base, False)
     server.campaign.apply_params = Mock(return_value=True)  # tier-0 writes wait for approval without "full"
-    assert _go(base, campaign_yaml, "P4000-1") == 200
+    assert _go(base, campaign_yaml, "type2") == 200
     state = _wait_state(base, lambda s: s.get("flights") or s.get("status") in ("arm_refused", "error"))
     assert state.get("status") != "arm_refused" and len(state.get("flights", [])) >= 1, state
     _post(base + "/api/campaign/abort", {})
@@ -197,7 +197,7 @@ def test_go_allow_agent_arm_false(api_server, campaign_yaml):
 def test_go_e2e_two_packs(api_server, hold, campaign_yaml):
     _, base = api_server
     _allow_arm(base, True)
-    assert _go(base, campaign_yaml, "P4000-1") == 200
+    assert _go(base, campaign_yaml, "type2") == 200
 
     _wait_in_flight(base, hold)
     _, state = _get(base + "/api/campaign/state")
@@ -207,10 +207,10 @@ def test_go_e2e_two_packs(api_server, hold, campaign_yaml):
 
     state = _wait_state(base, lambda s: s.get("status") != "running")
     assert state.get("status") == "waiting_for_go"
-    assert state.get("waiting_pack") == "P4000-2"
+    assert state.get("waiting_pack") == "type1"
     assert len(state.get("flights", [])) == 1
 
-    assert _go(base, campaign_yaml, "P4000-2") == 200
+    assert _go(base, campaign_yaml, "type1") == 200
     state = _wait_state(base, lambda s: s.get("status") in ("complete", "error", "operator_needed"))
     assert state.get("status") == "complete"
 
@@ -231,7 +231,7 @@ def test_go_e2e_two_packs(api_server, hold, campaign_yaml):
 def test_operator_control_mid_flight(api_server, hold, campaign_yaml, cmd, status, reason):
     _, base = api_server
     _allow_arm(base, True)
-    assert _go(base, campaign_yaml, "P4000-1") == 200
+    assert _go(base, campaign_yaml, "type2") == 200
 
     drone = _wait_in_flight(base, hold)
     _, state = _get(base + "/api/campaign/state")
@@ -268,7 +268,7 @@ def test_non_sim_without_link_returns_409(real_api_server, campaign_yaml):
     # live deps are wired, but with no bridge / no g_wfb_status stream the factory refuses before any command
     _, base = real_api_server
     code, res = _post(base + "/api/campaign/go", {
-        "campaign_path": campaign_yaml, "pack_id": "P4000-1",
+        "campaign_path": campaign_yaml, "pack_id": "type2",
         "checklist": {"ok": True}, "source": "operator"
     })
     assert code == 409

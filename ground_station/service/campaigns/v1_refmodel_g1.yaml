@@ -6,7 +6,7 @@ objective: "MRAC V1 injected at gamma x1: doublet and dense figure-8"
 controller: mrac_v1
 mode: fly
 packs:
-  - P4000-1
+  - type2
 max_flights: 2
 experiments:
   - name: doublet

@@ -7,7 +7,7 @@ objective: "identify the roll rate plant for the autotune cli (WP-25 F1)"
 controller: pid
 mode: fly
 packs:
-  - P4000-1          # launch Q2 replaces this with the pack on the drone
+  - type2          # launch Q2 replaces this with the pack on the drone
 max_flights: 1
 experiments:
   - name: id_roll_rate

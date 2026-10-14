@@ -1,6 +1,6 @@
 """Fly a day's cards in a fixed order, one flight at a time (docs/lab/pipeline-design.md).
 
-    python -m ground_station.lab.runner docs/lab/queue-2026-10-15.txt --pack P5300-1
+    python -m ground_station.lab.runner docs/lab/queue-2026-10-15.txt --pack 2
 
 The queue file names the camera's floor scan (`floor <dir under logs/video_truth>`; a new name is scanned at the
 start), extra live_tracker args (`tracker ...`) and then the cards (docs/lab/cards/<name>.card), one per line, flown
@@ -29,7 +29,7 @@ from pathlib import Path
 
 from ground_station.lab import cards, catalog, events
 from ground_station.service import campaign_fly as fly
-from ground_station.service.campaign_launch import ROOT, _pack_ids, rel
+from ground_station.service.campaign_launch import ROOT, rel
 
 LAB_DIR = ROOT / "logs" / "lab"
 VIDEO_DIR = ROOT / "logs" / "video_truth"
@@ -38,9 +38,13 @@ SWAP_V = 15.0          # pipeline-design.md decision 6: a pack resting below thi
 PACK_FLIGHTS = 2       # decision 6: two flights per pack
 REST_X = 2.0           # decision 6: rest twice the flight time before the next takeoff
 REST_V_S = 20.0        # decision 6: the resting voltage is read 20 s after landing
-CHARGE_S = 3600.0      # decision 6: about 1 h on the charger
 LINK_WAIT_S = 90.0     # a pack swap's reboot gets this long before the runner asks again; PROPOSED
 NORMAL_END = "complete"
+
+
+def kind_name(pack):
+    """'type2' -> 'type 2', as the operator says it."""
+    return pack.replace("type", "type ", 1)
 
 
 @dataclass
@@ -267,10 +271,8 @@ class Lab:
         self._input, self.wall, self.sleep = ask, wall, sleep
         self.day_dir = self.state_file.parent
         self.state = load_state(self.state_file)
-        for p, rec in self.state["packs"].items():           # restarted with another pack: it was swapped outside
-            if rec.get("state") == "in" and p != pack:
-                rec.update(state="flown", t=self.wall())
-        self.pack_rec(pack)["state"] = "in"
+        if (self.state.get("pack") or {}).get("type") != pack:   # restarted with the other type: a new pack
+            self.new_pack(pack)
 
     def ask(self, prompt):
         try:
@@ -281,73 +283,52 @@ class Lab:
     def save(self):
         save_state(self.state_file, self.state)
 
-    def pack_rec(self, pack):
-        return self.state["packs"].setdefault(pack, {"state": "charged", "flights": 0, "rest_v": None, "t": None})
+    # ---- packs: the lab knows two pack types, not single packs (2026-10-15). A swap starts a fresh count of
+    # PACK_FLIGHTS, the resting voltage gates every takeoff, and the charger is the operator's.
+    def new_pack(self, kind):
+        """A fresh pack of `kind` (a packs.yaml id) is in the drone; state["packs"] keeps the day's count per type."""
+        self.state["pack"] = {"type": kind, "flights": 0, "rest_v": None, "t": self.wall()}
+        day = self.state["packs"].setdefault(kind, {})
+        day["packs"] = day.get("packs", 0) + 1
+        self.pack = kind
 
-    # ---- packs
-    def known_packs(self):
-        return list(dict.fromkeys(list(_pack_ids()) + list(self.state["packs"])))
-
-    def charged(self, r):
-        """Charged: so marked, or on the charger for CHARGE_S. A pack not seen today counts as charged (PROPOSED:
-        the packs are charged before a lab day)."""
-        if r is None or r["state"] == "charged":
-            return True
-        return r["state"] == "charging" and self.wall() - (r.get("t") or self.wall()) >= CHARGE_S
+    def count_flight(self):
+        for r in (self.state["pack"], self.state["packs"][self.pack]):
+            r["flights"] = r.get("flights", 0) + 1
 
     def pack_lines(self):
-        out = []
-        for p in self.known_packs():
-            r = self.state["packs"].get(p)
-            if r is None:
-                s = "charged? (not seen today)"
-            elif r["state"] == "charging" and not self.charged(r):
-                s = f"charging, {(CHARGE_S - (self.wall() - (r.get('t') or self.wall()))) / 60:.0f} min left"
-            else:
-                s = "charged" if self.charged(r) else r["state"]
-            v = f"  rested {r['rest_v']:.2f} V" if r and r.get("rest_v") else ""
-            out.append(f"  {p:<10} {s:<26} {(r or {}).get('flights', 0)} flights{v}")
-        return out
-
-    def ready_pack(self):
-        return next((p for p in self.known_packs() if p != self.pack and self.charged(self.state["packs"].get(p))), "")
+        r = self.state["pack"]
+        v = f", rested {r['rest_v']:.2f} V" if r.get("rest_v") else ""
+        day = "; ".join(f"{kind_name(k)}: {d.get('packs', 0)} packs, {d.get('flights', 0)} flights"
+                        for k, d in self.state["packs"].items() if "packs" in d)
+        return [f"  in the drone: {kind_name(self.pack)}, {r.get('flights', 0)} of {PACK_FLIGHTS} flights{v}",
+                f"  today: {day}"]
 
     def swap(self, why, came_back=False):
         """Books a pack swap; False on q. Without came_back it asks for the swap and waits for the drone's link;
         came_back = the link already came back (a reboot seen while waiting for the arm): Enter keeps the pack."""
         print(f"\n{why}.\n" + "\n".join(self.pack_lines()), flush=True)
-        hint = self.pack if came_back else self.ready_pack()
-        if not came_back:
-            print("Power the drone off, swap the pack, power it on, then type the pack now in the drone.", flush=True)
+        now = self.pack.removeprefix("type")
+        if came_back:
+            prompt = "the same pack? Enter = yes (a power cycle), 1 or 2 = a fresh pack of that type, q quits: "
+        else:
+            print("Power the drone off, swap in a charged pack, power it on, then type its type.", flush=True)
+            prompt = f"pack type now in the drone, 1 or 2 [Enter = {now}] (q quits): "
         while True:
-            said = self.ask(f"pack now in the drone{f' [Enter = {hint}]' if hint else ''} (q quits): ") or hint.lower()
+            said = self.ask(prompt)
             if said == "q":
                 return False
-            said = next((p for p in self.known_packs() if p.lower() == said), said)
+            if came_back and not said:
+                return True
+            said = fly.pack_id(said or now)
             problem = fly.pack_problem(said)
-            if not problem and said == self.pack and not came_back:
-                problem = f"{said} is the pack coming off"
-            if problem:
-                print(problem, flush=True)
-                continue
-            r = self.state["packs"].get(said)
-            if said == self.pack or self.charged(r):
+            if not problem:
                 break
-            had = (f"on the charger {(self.wall() - (r.get('t') or self.wall())) / 60:.0f} of {CHARGE_S / 60:.0f} min"
-                   if r["state"] == "charging" else f"{r['state']}, {r.get('flights', 0)} flights")
-            if self.ask(f"{said} is not charged by my count ({had}). Charged? Enter = yes, n = pick another: ") != "n":
-                r["state"] = "charged"          # the operator's word; the voltage check after the swap still gates it
-                break
-        if said != self.pack:
-            on = self.ask(f"{self.pack} on the charger now? Enter = yes, n = not yet: ") != "n"
-            self.pack_rec(self.pack).update(state="charging" if on else "flown", t=self.wall())
-            new = self.pack_rec(said)
-            if self.charged(new):
-                new["flights"] = 0
-            new.update(state="in", t=self.wall(), rest_v=None)
-            events.log("queue_swap", old=self.pack, new=said, why=why, charging=on)
-            self.pack = fly.remember_pack(said)
-            self.save()
+            print(problem, flush=True)
+        events.log("queue_swap", old=self.pack, new=said, why=why)
+        self.new_pack(said)
+        fly.remember_pack(said)
+        self.save()
         return came_back or self.wait_link()
 
     def wait_link(self):
@@ -367,11 +348,11 @@ class Lab:
         """Swaps until the pack in the drone may fly; False on q."""
         floor = max(SWAP_V, min_v)
         while True:
-            r, v = self.pack_rec(self.pack), volts(fly._vitals(self.base))
+            r, v = self.state["pack"], volts(fly._vitals(self.base))
             if r.get("flights", 0) >= PACK_FLIGHTS:
-                why = f"{self.pack} has flown {r['flights']} flights"
+                why = f"the {kind_name(self.pack)} pack has flown {r['flights']} flights"
             elif v is not None and v < floor:
-                why = f"{self.pack} rests at {v:.2f} V, below {floor:g} V"
+                why = f"the {kind_name(self.pack)} pack rests at {v:.2f} V, below {floor:g} V"
             else:
                 if v is None:
                     print("no battery voltage from the drone yet: the preflight checks the link", flush=True)
@@ -435,9 +416,9 @@ class Lab:
         if REST_V_S - (self.wall() - t_land) > 0:
             self.sleep(REST_V_S - (self.wall() - t_land))
         v = volts(fly._vitals(self.base))
-        self.pack_rec(self.pack)["rest_v"] = v
+        self.state["pack"]["rest_v"] = self.state["packs"][self.pack]["rest_v"] = v
         if v is not None:
-            print(f"pack {self.pack} rests at {v:.2f} V", flush=True)
+            print(f"the {kind_name(self.pack)} pack rests at {v:.2f} V", flush=True)
 
     def why_early(self, st):
         print(f"The flight ended early: {st.get('status')} in {st.get('phase')}.", flush=True)
@@ -455,9 +436,9 @@ class Lab:
         total = sum(len(p) if p is not None else 2 * (c.repeats or 3) for c, p in plans)
         done = sum(len(flown(self.state, c)) for c, _ in plans)
         n = len(order(card, self.state))
-        flights = self.pack_rec(self.pack).get("flights", 0)
+        flights = self.state["pack"].get("flights", 0)
         print(f"\n[{done + 1}/{total}] {card.name}  {fl.variant}  (flight {fl.n} of {n})  "
-              f"pack {self.pack} (flight {flights + 1} of {PACK_FLIGHTS})", flush=True)
+              f"{kind_name(self.pack)} pack (flight {flights + 1} of {PACK_FLIGHTS})", flush=True)
         if card.hypothesis:
             print("  " + card.hypothesis, flush=True)
 
@@ -508,7 +489,7 @@ class Lab:
         record(self.state, self.queue, card, fl, pack=self.pack, status=st.get("status"), phase=st.get("phase"),
                early=early, metrics=m, folder=rel(folder), camera=name if cam_on else None, t_land=t_land,
                flight_s=fs)
-        self.pack_rec(self.pack)["flights"] = self.pack_rec(self.pack).get("flights", 0) + 1
+        self.count_flight()
         self.save()
         value = m.get(card.metric)
         ok = passes(card, value)
@@ -620,7 +601,7 @@ class Lab:
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("queue", help="queue file, e.g. docs/lab/queue-2026-10-15.txt")
-    ap.add_argument("--pack", help="the pack in the drone now (default: the last one given)")
+    ap.add_argument("--pack", help="the pack type in the drone now, 1 or 2 (default: the last one given)")
     ap.add_argument("--port", type=int, default=8081)
     ap.add_argument("--no-camera", action="store_true", help="fly without the camera (the fake-drone rehearsal)")
     ap.add_argument("--state", help="state file (default logs/lab/<today>/queue_state.json)")
@@ -630,7 +611,7 @@ def main(argv=None):
     except (OSError, cards.CardError) as e:
         print(f"{a.queue}: cannot fly it:\n  " + str(e).replace("\n", "\n  "))
         return 1
-    pack = (a.pack or "").strip() or fly.remember_pack()
+    pack = fly.pack_id(a.pack) or fly.remember_pack()
     why = fly.pack_problem(pack)
     if why:
         sys.exit(why)

@@ -131,12 +131,11 @@ class FakeDrone:
         monkeypatch.setattr(fly, "resolve_campaign", lambda src, pack: (tmp_path / "launch.yaml", src))
         monkeypatch.setattr(fly, "wait_for_arm", lambda *a, **k: "go")
         monkeypatch.setattr(fly, "fly_one", self.fly_one)
-        monkeypatch.setattr(fly, "pack_problem", lambda p: "" if p in ("P1", "P2") else f"{p}: unknown pack")
+        monkeypatch.setattr(fly, "pack_problem", lambda p: "" if p in ("type1", "type2") else f"{p}: unknown pack")
         monkeypatch.setattr(fly, "remember_pack", lambda p=None: p)
-        monkeypatch.setattr(runner, "_pack_ids", lambda: ["P1", "P2"])
         monkeypatch.setattr(runner.events, "log", lambda *a, **k: None)
         self.lab = runner.Lab("http://x", runner.Queue(cards=[card("lst", variants=("a", "b"))]),
-                              tmp_path / "day" / "queue_state.json", "P1", camera=False,
+                              tmp_path / "day" / "queue_state.json", "type1", camera=False,
                               ask=lambda prompt: self.answers.pop(0), wall=lambda: self.now, sleep=self.sleep)
 
     def sleep(self, s):
@@ -150,28 +149,44 @@ class FakeDrone:
 
 
 def test_lab_flies_rests_and_swaps_after_two_flights(monkeypatch, tmp_path):
-    d = FakeDrone(monkeypatch, tmp_path, answers=["", ""])
+    d = FakeDrone(monkeypatch, tmp_path, answers=["2"])
     lab = d.lab
     assert lab.one(*runner.next_flight(lab.queue, lab.state)) is None
     t_land = lab.state["flights"][0]["t_land"]
-    assert lab.state["flights"][0]["flight_s"] == 60.0 and lab.state["packs"]["P1"]["rest_v"] == 16.4
+    assert lab.state["flights"][0]["flight_s"] == 60.0 and lab.state["pack"]["rest_v"] == 16.4
     assert lab.one(*runner.next_flight(lab.queue, lab.state)) is None
-    assert d.flown == [("lst-a", "P1"), ("lst-b", "P1")]
+    assert d.flown == [("lst-a", "type1"), ("lst-b", "type1")]
     assert lab.state["flights"][1]["t_land"] - t_land >= 100 + runner.REST_X * 60   # the rest held the takeoff
-    lab.queue.cards[0].repeats = 2                                    # two more flights: P1 has flown its two
+    lab.queue.cards[0].repeats = 2                                # two more flights: the pack has flown its two
     assert lab.one(*runner.next_flight(lab.queue, lab.state)) is None
-    assert d.flown[-1][1] == "P2" and lab.state["packs"]["P1"]["state"] == "charging"
-    assert runner.load_state(lab.state_file)["packs"]["P2"]["flights"] == 1
+    assert d.flown[-1][1] == "type2" and not d.answers
+    s = runner.load_state(lab.state_file)
+    assert s["pack"]["type"] == "type2" and s["pack"]["flights"] == 1 and s["packs"]["type1"]["rest_v"] == 16.4
+    assert {k: (r["packs"], r["flights"]) for k, r in s["packs"].items()} == {"type1": (1, 2), "type2": (1, 1)}
 
 
-def test_lab_swap_to_a_pack_still_charging_takes_the_operators_word(monkeypatch, tmp_path):
-    d = FakeDrone(monkeypatch, tmp_path, answers=["p2", "n", "p2", "", ""])
+def test_a_swap_asks_the_type_again_and_enter_is_a_fresh_pack_of_the_same_type(monkeypatch, tmp_path):
+    d = FakeDrone(monkeypatch, tmp_path, answers=["3", ""])
     lab = d.lab
-    lab.state["packs"]["P1"]["flights"] = 2
-    lab.state["packs"]["P2"] = {"state": "charging", "flights": 2, "rest_v": 15.1, "t": d.now - 600}
+    lab.state["pack"]["flights"] = 2                              # the type 1 pack in the drone has flown its two
     assert lab.one(*runner.next_flight(lab.queue, lab.state)) is None
-    assert d.flown == [("lst-a", "P2")] and not d.answers
-    assert lab.state["packs"]["P2"]["flights"] == 1 and lab.state["packs"]["P1"]["state"] == "charging"
+    assert d.flown == [("lst-a", "type1")] and not d.answers
+    assert lab.state["pack"]["flights"] == 1 and lab.state["packs"]["type1"]["packs"] == 2
+
+
+def test_a_power_cycle_keeps_the_pack_and_a_type_is_a_fresh_one(monkeypatch, tmp_path):
+    d = FakeDrone(monkeypatch, tmp_path, answers=["", "type 2"])
+    lab = d.lab
+    lab.state["pack"]["flights"] = 1
+    assert lab.swap("the drone rebooted", came_back=True) is True
+    assert lab.state["pack"]["flights"] == 1 and lab.state["packs"]["type1"]["packs"] == 1
+    assert lab.swap("the drone rebooted", came_back=True) is True
+    assert lab.pack == "type2" and lab.state["pack"]["flights"] == 0 and lab.state["packs"]["type2"]["packs"] == 1
+
+
+def test_pack_types_as_typed():
+    assert [fly.pack_id(x) for x in ("2", "t1", "Type 2", " type1 ", "P4000-1", "", None)] == [
+        "type2", "type1", "type2", "type1", "P4000-1", "", ""]
 
 
 def test_lab_early_end_asks_why_and_x_flies_it_again(monkeypatch, tmp_path):

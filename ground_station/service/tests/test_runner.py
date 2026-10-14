@@ -412,7 +412,7 @@ def test_p_landing_timeout_revert_flight(tmp_path):
 FLY_YAML = """campaign: hover_ladder_t
 objective: "hover ladder"
 controller: pid
-packs: [P4000-1]
+packs: [type2]
 max_flights: 9
 mode: fly
 experiments:
@@ -544,7 +544,7 @@ def test_wp23_fresh_pack_is_rested_and_pack_failures_name_the_pack():
     deps.packs.next_flight_allowed.return_value = (False, "SOC: predicted post-flight SoC 12.0% < required 30.0%")
     report = run_campaign(YAML_PATH, deps)
     assert report.status == "operator_needed"
-    assert report.reason == "pack P4000-1: SOC: predicted post-flight SoC 12.0% < required 30.0%"
+    assert report.reason == "pack type2: SOC: predicted post-flight SoC 12.0% < required 30.0%"
     assert deps.packs.next_flight_allowed.call_args_list[0].args[2] == PACK_RESTED_S
 
 
@@ -563,5 +563,5 @@ def test_wp23_phases_and_arm_refused_reason():
     deps.arm_allowed = Mock(return_value=False)
     report = run_campaign(YAML_PATH, deps)
     assert (report.status, report.reason) == ("arm_refused", "stream check failed before takeoff")
-    assert phases[0].startswith("waiting for go: pack P4000-1, flight 1/")
+    assert phases[0].startswith("waiting for go: pack type2, flight 1/")
     assert phases[-1].startswith("stream check before flight 1/")

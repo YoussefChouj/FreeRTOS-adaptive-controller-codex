@@ -8,7 +8,7 @@ objective: "tune the roll/pitch rate-loop PID live in one hover flight (relative
 controller: pid
 mode: fly
 packs:
-  - P4000-1          # launch Q2 replaces this with the pack on the drone
+  - type2          # launch Q2 replaces this with the pack on the drone
 max_flights: 1
 experiments:
   # log_plan: the always-on core carries the rate loops (FB, Des), attitude, positions, motors and g_wfb_status;

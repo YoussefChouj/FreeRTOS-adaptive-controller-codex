@@ -17,7 +17,7 @@ objective: "3L-v2 rows 17, 19, 16 on the 570 g rope: 20 s hover each, compare wi
 controller: mrac
 mode: fly
 packs:
-  - P4000-1          # launch Q2 replaces this with the packs on hand
+  - type2          # launch Q2 replaces this with the packs on hand
 max_flights: 3
 experiments:
   - name: row17_l2only_hover

@@ -81,11 +81,11 @@ def test_problems_name_the_line(text, expect):
 
 
 def test_launch_writes_a_loadable_launch_copy(tmp_path):
-    out, campaign, plans = fly_file.launch_fly(SAMPLE, "P4000-1", out_dir=tmp_path / "fly",
+    out, campaign, plans = fly_file.launch_fly(SAMPLE, "type2", out_dir=tmp_path / "fly",
                                                launch_dir=tmp_path / "launch")
     assert out.parent == tmp_path / "launch" and out.name.startswith("preset-tour_")
     assert (tmp_path / "fly" / "preset-tour.yaml").is_file()
-    assert load_campaign(out).campaign == "preset-tour" and tuple(campaign.packs) == ("P4000-1",) and plans
+    assert load_campaign(out).campaign == "preset-tour" and tuple(campaign.packs) == ("type2",) and plans
 
 
 def test_compiled_sample_flies_on_the_fake_drone():

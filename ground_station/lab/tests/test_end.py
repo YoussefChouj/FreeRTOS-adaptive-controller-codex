@@ -23,13 +23,13 @@ def day(monkeypatch, tmp_path, flights=2):
         vid.mkdir(parents=True)
         (vid / "cam.mkv").write_bytes(b"x" * 1000)
         (vid / "fixes.csv").write_text("t,x\n", encoding="utf-8")
-        fs.append({"card": "pad-landing", "variant": "v1", "n": n, "pack": "P1", "status": "complete", "early": None,
+        fs.append({"card": "pad-landing", "variant": "v1", "n": n, "pack": "type2", "status": "complete", "early": None,
                    "metrics": {"cam_landing_cm": 7.5 + n}, "camera": vid.name, "t_land": 1e9 + 300 * n,
                    "flight_s": 130.0})
     state = tmp_path / "lab" / "queue_state.json"
     state.parent.mkdir(parents=True)
     state.write_text(json.dumps({"flights": fs, "winners": {}, "skipped": {},
-                                 "packs": {"P1": {"state": "in use", "flights": flights, "rest_v": 15.62}}}))
+                                 "packs": {"type2": {"packs": 1, "flights": flights, "rest_v": 15.62}}}))
     return state
 
 

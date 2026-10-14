@@ -11,7 +11,7 @@ objective: "rate-loop multisine 0.5-15 Hz, 30 deg/s, roll then pitch 15 s each, 
 controller: pid
 mode: fly
 packs:
-  - P4000-1
+  - type2
 max_flights: 1
 experiments:
   - name: f01_sysid
