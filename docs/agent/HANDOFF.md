@@ -18,7 +18,7 @@ Branch `overnight-2026-10-08`. The drone is still on ELF 6da69207. Commits are l
   `.fly` text scripts (a40b99ef); a `preset` step (2ad619c8), plus a `set` step.
 - **Camera** (5450c76a): the fusion scrcpy mirror is 1920x1080, off screen and grabbed by PrintWindow, so only the tracker window shows.
 - **VOFA+/PJ** (bb41660e):
-  - `fly` prints the VOFA+ import paths (C:	mpofa);
+  - `fly` prints the VOFA+ import paths (C:/tmp/vofa);
   - `p` = PlotForward /api/streams/plot -> PlotJuggler 9870.
 
 ## Next 3 actions

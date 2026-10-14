@@ -16,17 +16,20 @@ command (template: `logs/workflow-c/20261007-1546/01/MANUAL.md`), gives it in a 
 `campaign_preflight` / `campaign_go` unless the operator asks for an agent-flown flight.
 
 Read `.claude/skills/workflow-b/SKILL.md` once; its hard rules, checklist and failure handling apply unchanged.
+Lab-day mechanics (bring-up, `fly` keys `s n l p`, `.fly` scripts, flight folders, VOFA+/PJ, compaction between
+flights) are in `.claude/skills/lab/SKILL.md` (/lab): use it instead of re-reading the code.
 
 ## Hard rules (same as workflow B, plus two)
 
 - Never arm, spin motors, flash or edit firmware. The operator arms by RC.
-- Terminal and chat only (operator 2026-10-07): no dashboard approvals, no `mcp__dashboard__run_plan`, no queue.
-  Confirmations are QA in chat: one question per AskUserQuestion, recommended option first.
+- Terminal and chat only (operator 2026-10-07): no dashboard approvals, no queue. Confirmations are QA in chat:
+  one question per AskUserQuestion, recommended option first. The one exception is a gain write (next rule).
 - **Gains change only on the ground, disarmed, between flights**, and only after the operator picks the change in
-  chat. The operator applies it in the Keil watch window: a preset (`kp_id`, then `kp_go = 1`, check `kp_active`;
-  table in `docs/flights/2026-10-08-morning-brief.md`) or one field (e.g. `Ctrler.Z_ratePID.Kp`). Watch-window
-  writes persist until reboot; a reboot or pack swap with a power cycle resets them to `API/pid.c` and preset 0.
-  Say so when it matters.
+  chat (the pick is the approval). One field of any of the 12 PID loops (attitude, rate, Z_rate and, from 6aa642fc
+  flashed, Z_pos/locx/locy/locxs/locys): CMD 0x01 via `mcp__dashboard__run_plan`, idx = axis*3 + gain
+  (`controller_descriptor.PID_AXES`). A Keil preset: `.fly` `set kp_id=N` + `set kp_go=1`, or the Keil watch
+  window when the probe is attached (table in `docs/flights/2026-10-08-morning-brief.md`). All of these are RAM
+  only: a reboot or pack swap resets them to `API/pid.c` and preset 0. Say so when it matters.
 - Every threshold and step in the debrief is PROPOSED. Present it as a suggestion, never as a measured fact.
 
 ## Session start
@@ -79,18 +82,19 @@ so its floor pose can be reused for video truth.
    - repeat the same flight unchanged (to check repeatability);
    - a different change or flight the operator names ("Other");
    - stop for tonight.
-7. **Apply** an accepted gain change: give the operator the Keil watch-window line (expression and value, from
-   the `step` in `debrief.json`), drone on the ground and disarmed. Wait until they say it is written and the
-   watch window reads it back.
+7. **Apply** an accepted gain change (the `step` in `debrief.json`), drone on the ground and disarmed: send the
+   CMD 0x01 write with `run_plan` and read the value back from the stream, or give the Keil line when the loop
+   or preset needs the probe. Pass it to the next debrief as `--applied LOOP.GAIN=VALUE`.
 8. Back to 1 with the new `next.yaml` (edit its `scenario_args` first if the operator chose something else).
 
 ## What the debrief can and cannot change
 
 | loop | ground write | how |
 |---|---|---|
-| pitch/roll/yaw angle, gyrox/y/z rate, Z_ratePID | yes (bounds: 200, Z_ratePID Kp 800) | Keil watch window `Ctrler.<loop>.Kp/Ki/Kd`, disarmed |
-| Keil presets 0-6 (of1, MRAC axis mask, p/r gamma, Z_ratePID headroom) | yes | `kp_id`, then `kp_go = 1`, disarmed |
-| Z_posPID, locx/locyPID, locxs/locysPID | no | firmware table edit + flash: lab only, operator decides |
+| pitch/roll/yaw angle, gyrox/y/z rate, Z_ratePID (0x01 axes 0-6) | yes (bounds: `pid_cmd_max` in `API/pid.c`) | CMD 0x01 `run_plan`, disarmed |
+| Z_posPID, locx/locyPID, locxs/locysPID (0x01 axes 7-11) | yes once 6aa642fc is flashed (bounds 200) | CMD 0x01 `run_plan`, disarmed; before: pid.c edit + flash |
+| Keil presets 0-6 (of1, MRAC axis mask, p/r gamma, Z_ratePID headroom) | yes | `.fly` `set kp_id=N`, `set kp_go=1` (ground only) |
+| PID_ROW defaults (what a reboot restores) | no | `API/pid.c` edit + review + flash, operator decides |
 | CG, props, motors, floor texture, light | no | the operator, on the bench |
 
 Mechanical findings (motor spread, saturation, EKF divergence) come before any gain change: fix the hardware,
