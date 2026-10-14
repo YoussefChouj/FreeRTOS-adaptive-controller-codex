@@ -23,7 +23,7 @@ normal fast descent; replaces the a14f67e7 mid-descent pause). Keil build 0 err/
 ## Next 3 actions
 1. Bring-up per the run sheet: stop 8081, `rebuild_and_flash --yes`, 8081 up, 10 s 100 Hz link check (60 vars,
    UNVERIFIED; fallback `rate 50`), `camera_truth.sh check`, phone pose.
-2. A1 `fly lab_a_hover --once` with `fusion r8_a1 2 --yaw-deg 94`, then A2 with fusion 3; 600 s cooldown
+2. A1 `.ly lab_a_hover --once --pack <packs.yaml id>` with `fusion r8_a1 2 --yaw-deg 94`, then A2 with fusion 3; 600 s cooldown
    debrief after each flight (run sheet table).
 3. B1-B2 `lab_b_land`, then C1-C5; C2 needs the 0x01 tuned gains (chat pick, disarmed) and a power cycle after.
 

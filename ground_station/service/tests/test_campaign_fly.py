@@ -21,7 +21,7 @@ abort: {}
 """
 
 
-def test_record_only_subscribes_records_and_stops(tmp_path, monkeypatch):
+def test_record_only_subscribes_records_and_stops(tmp_path, monkeypatch, capsys):
     path = tmp_path / "c.yaml"
     path.write_text(YAML, encoding="utf-8")
     calls = []
@@ -34,6 +34,9 @@ def test_record_only_subscribes_records_and_stops(tmp_path, monkeypatch):
             return 200, {"streams": {str(k): {"age_s": 0.05} for k in range(MAX_SLOTS)}}
         if route == "/api/recording/start":
             return 202, {"recording": True, "session_dir": "logs/sessions/x_carry"}
+        if route == "/api/diagnostics/bundle":   # 1000 frames and 10 dropped on slot 0 while recording
+            n = sum(r == route for r, _ in calls) - 1
+            return 200, {"transport": {"active_slots": [{"slot": 0, "received": 1000 * n, "dropped": 10 * n}]}}
         return 200, {"recording": False, "session_dir": "logs/sessions/x_carry"}
 
     monkeypatch.setattr(campaign_fly, "call", fake_call)
@@ -41,8 +44,9 @@ def test_record_only_subscribes_records_and_stops(tmp_path, monkeypatch):
     out = campaign_fly.record_only("http://h", str(path), rate_hz=100, label="carry", wait=lambda prompt: "")
 
     assert out == "logs/sessions/x_carry"
+    assert "link slot 0: 1000 frames, 10 dropped (1.0 %)" in capsys.readouterr().out
     routes = [r for r, _ in calls]
-    assert routes[-2:] == ["/api/recording/start", "/api/recording/stop"]
+    assert routes[-1] == "/api/recording/stop" and "/api/recording/start" in routes
     assert not any(r.startswith("/api/campaign/") and r != "/api/campaign/vitals" for r in routes)
     assert not any(r.startswith("/command") for r in routes)
     subs = [b for r, b in calls if r == "/subscribe"]
@@ -199,6 +203,19 @@ def test_remember_pack(tmp_path):
     assert campaign_fly.remember_pack(None, f) == ""
     assert campaign_fly.remember_pack(" P4000-2 ", f) == "P4000-2"
     assert campaign_fly.remember_pack("", f) == "P4000-2"
+
+
+def test_unknown_pack_is_refused_before_it_is_remembered(tmp_path, monkeypatch):
+    f = tmp_path / "pack.txt"
+    monkeypatch.setattr(campaign_fly, "PACK_FILE", f)
+    monkeypatch.setattr(campaign_fly, "ensure_service", lambda *a: pytest.fail("no service before the pack check"))
+    with pytest.raises(SystemExit) as exc:
+        campaign_fly.main(["c", "--pack", "P1"])
+    assert "unknown pack 'P1'" in str(exc.value) and "P4000-1" in str(exc.value) and not f.exists()
+    with pytest.raises(SystemExit) as exc:
+        campaign_fly.main(["c"])
+    assert "no pack yet" in str(exc.value) and "P4000-1" in str(exc.value)
+    assert campaign_fly.pack_problem("P4000-1") == ""
 
 
 def test_resolve_campaign_fly_file_name_and_launch_copy(tmp_path):

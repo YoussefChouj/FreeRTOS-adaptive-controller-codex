@@ -203,10 +203,27 @@ def watch(base, term=None, key=None, poll_s=1.0, live_s=LIVE_S, on_pj=None):
             _sleep(poll_s)
 
 
+def slot_counts(base):
+    """{slot: (received, dropped)} from the bridge's stream stats ({} when the service has none)."""
+    rows = (call(base, "/api/diagnostics/bundle")[1].get("transport") or {}).get("active_slots") or []
+    return {int(r["slot"]): (int(r.get("received") or 0), int(r.get("dropped") or 0)) for r in rows}
+
+
+def link_lines(before, after, slots):
+    """One line per slot: frames received and dropped between two slot_counts snapshots."""
+    out = []
+    for k in slots:
+        rx, dr = (after.get(k, (0, 0))[i] - before.get(k, (0, 0))[i] for i in (0, 1))
+        pct = 100.0 * dr / (rx + dr) if rx + dr else 0.0
+        out.append(f"  link slot {k}: {rx} frames, {dr} dropped ({pct:.1f} %)")
+    return out
+
+
 def record_only(base, campaign, rate_hz=None, label="handheld", settle_s=3.0, wait=input):
     """Disarmed handheld carry: the launch copy's log plan on the stream slots, record until Enter or Ctrl+C.
 
     Sends no drone command (no go, no arm, no takeoff): only /subscribe and /api/recording. Returns the session dir.
+    It ends with the frames received and dropped per slot: a 10 s run of a plan is the bring-up link check.
     """
     from ground_station.livewatch.campaign_capture import MAX_SLOTS, log_plan_table, plan_capture, subscribe_steps
     from ground_station.service.campaign_schema import load_campaign
@@ -227,6 +244,7 @@ def record_only(base, campaign, rate_hz=None, label="handheld", settle_s=3.0, wa
     for s in steps:
         age = (streams.get(str(s["args"]["slot"])) or {}).get("age_s")
         print(f"  slot {s['args']['slot']}: {'NOT STREAMING' if age is None or age > 1.0 else f'fresh ({age} s)'}")
+    before = slot_counts(base)
     code, st = call(base, "/api/recording/start", {
         "requested_by": "operator", "label": label, "reason": "workflow C handheld carry (disarmed)",
         "notes": f"log_plan rate {plan['rate_hz']:g} Hz, groups {', '.join(plan['groups']) or 'core only'}"})
@@ -237,8 +255,11 @@ def record_only(base, campaign, rate_hz=None, label="handheld", settle_s=3.0, wa
         wait("Carry the drone now (DISARMED). Enter or Ctrl+C stops the log: ")
     except (KeyboardInterrupt, EOFError):
         print()
+    after = slot_counts(base)
     st = call(base, "/api/recording/stop", {})[1]
     print(f"stopped: {st.get('session_dir')}")
+    for line in link_lines(before, after, [s["args"]["slot"] for s in steps]):
+        print(line)
     return str(st.get("session_dir") or "")
 
 
@@ -273,6 +294,19 @@ def remember_pack(pack=None, path=None):
         return path.read_text(encoding="utf-8").strip()
     except OSError:
         return ""
+
+
+def pack_problem(pack):
+    """Why `pack` cannot fly ('' when it can): the preflight pack gate takes only packs.yaml ids (2026-10-14:
+    'P1' was saved, then refused at every preflight)."""
+    from ground_station.service.campaign_launch import _pack_ids
+    known = _pack_ids()
+    ids = ", ".join(known) or "see ground_station/analysis/packs.yaml"
+    if not pack:
+        return f"no pack yet: give --pack <id> once, it is remembered ({ids})"
+    if known and pack not in known:
+        return f"unknown pack '{pack}': give --pack with one of {ids}"
+    return ""
 
 
 def quiet_preflight(base, campaign, pack, shown):
@@ -441,11 +475,17 @@ def write_samples(path, samples):
 
 
 def _ask_pack(pack):
-    try:
-        said = input(f"new pack? [Enter = {pack}] ").strip()
-    except EOFError:
-        said = ""
-    return remember_pack(said) if said else pack
+    while True:
+        try:
+            said = input(f"new pack? [Enter = {pack}] ").strip()
+        except EOFError:
+            said = ""
+        if not said:
+            return pack
+        why = pack_problem(said)
+        if not why:
+            return remember_pack(said)
+        print(why, flush=True)
 
 
 def vofa_setup(base, out_dir=None):
@@ -570,9 +610,11 @@ def main(argv=None):
     ap.add_argument("--rate", type=float, help="override the log plan rate, Hz")
     a = ap.parse_args(argv)
     base = f"http://127.0.0.1:{a.port}"
-    pack = remember_pack(a.pack)
-    if not pack:
-        sys.exit("no pack yet: give --pack <id> once, it is remembered")
+    pack = (a.pack or "").strip() or remember_pack()
+    why = pack_problem(pack)
+    if why:
+        sys.exit(why)
+    remember_pack(pack)
     ensure_service(base, a.port)
     print("\n".join(vofa_setup(base)), flush=True)
     if a.record_only:

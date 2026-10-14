@@ -33,11 +33,12 @@ Workers (VPS, agy) are off while the operator is at the lab: all work inline and
 
 ## Fly
 
-One terminal command per flight (`fly.cmd` = `python -m ground_station.service.campaign_fly`):
+One terminal command per flight (`fly.cmd` = `python -m ground_station.service.campaign_fly`; the operator's
+terminal is PowerShell, so always write it `.ly`):
 
-```bash
-fly preset_tour            # saved name, .fly file, campaign yaml or launch copy; --pack <id> once (remembered)
-fly my_step.fly --once     # one flight then exit; --run <workflow-c run folder> adds flight_debrief
+```powershell
+.ly preset_tour            # saved name, .fly file, campaign yaml or launch copy; --pack <id> once (remembered)
+.ly my_step.fly --once     # one flight then exit; --run <workflow-c run folder> adds flight_debrief
 ```
 
 - Preflight runs silently every 2 s and prints only FAIL rows. **The RC arm is the go**: disarmed -> armed, 3 s
@@ -90,7 +91,7 @@ Lab order 2026-10-14 (sim replay, PROPOSED): baseline -> tuned_shift PID -> LQR 
 (`refused = set <name>`).
 
 Today's plan (2026-10-14): `docs/lab/run-sheet-2026-10-14.md`, 9 flights from `ground_station/service/campaigns/`:
-`fly lab_a_hover --once` (A1 fusion 2, A2 fusion 3), `lab_b_land` (B1-B2), `lab_c_pid`, `lab_c_tuned` (0x01 gains
+`.ly lab_a_hover --once` (A1 fusion 2, A2 fusion 3), `lab_b_land` (B1-B2), `lab_c_pid`, `lab_c_tuned` (0x01 gains
 first, power cycle after), `lab_c_lqr`, `lab_c_mpc`, `lab_c_pid` again (C1-C5).
 
 ## Known friction (2026-10-13 logs)
@@ -99,4 +100,7 @@ first, power cycle after), `lab_c_lqr`, `lab_c_mpc`, `lab_c_pid` again (C1-C5).
 - "begin rejected at frame 0" (program upload refused before takeoff): retry once; if it repeats, read
   `campaign_runner` upload path, do not fly the program step.
 - flight_debrief/flightlab `NotImplementedError: v2`: use the `fly` 5-line debrief and `flight_debrief`.
-- "slot 0: no schema yet": 8081 just restarted; wait for streams (`/api/campaign/vitals` ages < 1 s), then fly.
+- "slot N: no schema yet": the FC takes one 0x21 at a time and dropped back-to-back requests; fixed in bf1bdf25
+  (paced sends + re-send while waiting). If it still shows, 8081 just restarted: wait for streams
+  (`/api/campaign/vitals` ages < 1 s), then fly again.
+- `--pack` must be a `ground_station/analysis/packs.yaml` id (P5300-1, P4000-1, P4000-2); fly refuses others.
