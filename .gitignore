@@ -73,3 +73,12 @@ firmware_backups/
 .skipper/*
 !.skipper/receipts/
 logs/activity/
+
+# Run output kept out of `git status` (2026-10-14). Flight data in logs/ is still
+# committed on purpose with `git add -f <path>`; files already tracked stay tracked.
+logs/
+.agent-ops/out/
+.agent-ops/tmp/
+.agent-ops/*-out/
+docs/flights/plots/
+sim/bench/results/
