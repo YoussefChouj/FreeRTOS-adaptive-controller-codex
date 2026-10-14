@@ -14,8 +14,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 cmd=${1:?start|stop|check|fusion|video|end}; name=${2:-}; [ "$cmd" = end ] || : "${name:?session name}"; preset=${3:-drift_rc}; api=http://127.0.0.1:8081; vid=logs/video_truth/$name
-post() { curl -s -m 10 -X POST -H 'Content-Type: application/json' -d "$2" "$api$1"; echo; }
-up() { curl -s -m 2 -o /dev/null -w '%{http_code}' "$api/health" | grep -q 200; }
+post() { curl -s --noproxy "*" -m 10 -X POST -H 'Content-Type: application/json' -d "$2" "$api$1"; echo; }
+up() { curl -s --noproxy "*" -m 2 -o /dev/null -w '%{http_code}' "$api/health" | grep -q 200; }
 # scrcpy exits when Android drops the camera (R4: "Camera disconnected" at frame 2313); restart into the next part.
 # Part 1 keeps the R3 names (cam.mkv, scrcpy_start_host_time.txt); part k: cam_k.mkv, scrcpy_start_host_time_k.txt.
 # start/video show the live window r5cam on top; fusion puts it off screen (the tracker window is the one on top).
