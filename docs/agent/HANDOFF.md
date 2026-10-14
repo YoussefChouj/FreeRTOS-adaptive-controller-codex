@@ -3,25 +3,25 @@
 Read order: `AGENTS.md` -> this file -> `docs/agent/memory/rules.md` -> `.claude_state.md` (newest entry first).
 History: `docs/agent/ledger/` (grep, never read whole). Desktop session is CEO: inline, no subagents.
 
-## Now: 2026-10-14 pre-lab - `fly`, /lab skill, position-gain writes built; nothing flashed or flown
+## Now: 2026-10-14 afternoon - xy tune, ADRC/LQR/MPC, camera-gated landing built; nothing flashed or flown
 
-Branch `overnight-2026-10-08`, local commits, UNVERIFIED on the drone. Drone: ELF e4dd3652 (10-13 15:10, has 3492cbdb +
-the 5f30b9b8 mode 3 fix). Built, NOT flashed: WP-44 VAR_WRITE (41013a0e), WP-45 preset from a WiFi hover (03716d5c),
-CMD 0x01 axes 7-11 = Z_pos/locx/locy/locxs/locys (6aa642fc, not Keil-built).
-- `fly` (03ddcf5b..bb41660e): arm = go, keys s/n/l/p, `.fly` scripts, 5-line debrief + a camera landing line while
-  fusion runs (71f364cf). Lab playbook: `/lab` skill (bring-up, fly, debrief, gains, compaction between flights).
-- Fusion alongside 8081/`fly` (884c79d3, UNVERIFIED): `camera_truth.sh fusion <name> 2 --yaw-deg 94`.
-- Measured: wobble = position loops (overshoot 6-16 cm, settle 1.6-2.7 s or never, period 2.6-3.5 s; flight_debrief
-  "Setpoint moves"). Mode 2 r7_f3 drift 7-23 cm per 14-35 s window, landed 35 cm from the pad (camera). Pad landing
-  NOT proven.
+Branch `overnight-2026-10-08`, local commits, UNVERIFIED on the drone. Drone: ELF e4dd3652. Built, NOT flashed: WP-44
+VAR_WRITE (41013a0e), WP-45 (03716d5c), CMD 0x01 axes 7-11 (6aa642fc), xy_ctrl (bff1d29f: VAR 44 `g_xy_ctrl_kind`
+0 PID/1 ADRC/2 LQR/3 MPC, latched on the ground; VAR 45 `g_traj_ff_shift_s` 0-0.6 s), camera-gated descent
+(a14f67e7: VAR 46 `g_land_xy_gate_cm` 0-50, 0 = off). Keil build 0 err/0 warn.
+- Sim (b922a6a9, `analysis.xy_tune` / `xy_ctrl`), replay `logs/xy_tune/20261014-replay*/`: 213613 x overshoot (log
+  11.4 cm, mean of 3 plants) current 11.6, tuned_shift 1.7, LQR 4.2, MPC 4.6, ADRC 9.9. "tuned" (no shift) 41-102 cm
+  on r7 -> never. Sim faithful only on 213613 (r7/r6 are RC-velocity flights).
+- -x landing drift: EKF descent dx +2..+6 cm (3/29 sessions) -> OF estimate drift, only the camera sees it. Plan:
+  `docs/flights/2026-10-14-camera-landing-plan.md`. Fw land + fusion never flown; pad landing NOT proven.
 
 ## Next 3 actions
-1. Stop 8081, `rebuild_and_flash --yes` (WP-44/45 + 6aa642fc). Ground, disarmed: VAR_WRITE round trip, 0x01 axis 8
-   write + read-back, `camera_truth.sh check` ready 1920x1080, VOFA+ files, `p` opens PJ.
-2. Re-check the phone pose and floor marks; `fusion r8_f1 2 --yaw-deg 94`, then `fly preset_tour`; read the camera
-   landing line.
-3. Wobble A/B, one change per flight (PROPOSED): baseline, locx Kd 4->6, locxs Kp 3->4, or `program profile=scurve`.
-   LINK_LOST_S 3 s is PROPOSED.
+1. Stop 8081, `rebuild_and_flash --yes` (all of the above). Ground, disarmed: VAR_WRITE round trip (44/45/46), 0x01
+   axis 8 write + read-back, `camera_truth.sh check` ready 1920x1080.
+2. Phone pose + floor marks; `fusion r8_f1 2 --yaw-deg 94`, `fly preset_tour` baseline; read the camera landing line.
+3. One change per flight, operator picks (PROPOSED): (a) tuned_shift: 0x01 locx/locy .67/.0014/4.93, locxs/locys
+   4.70/.0031/0 + VAR 45 0.31; (b) LQR VAR 44 = 2; (c) VAR 46 = 10 with fusion 2, `fly`-landed. Never "tuned"/ADRC;
+   MPC (VAR 44 = 3) last, optional.
 
 ## Do not
 - Arm/spin outside an operator-opened workflow-B battery session; flash while armed or with `--force`.

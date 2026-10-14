@@ -81,9 +81,12 @@ land
 | attitude, rate, Z_rate, **Z_pos, locx/y, locxs/ys** (CMD 0x01 axes 0-11, 6aa642fc+) | `run_plan` 0x01 write, idx = axis*3 + gain (`controller_descriptor.PID_AXES`); chat pick = approval | RAM, reboot resets to `API/pid.c` |
 | Keil presets (of1, MRAC mask, gamma, Z headroom) | `.fly` `set kp_id=N` then `set kp_go=1` (applies on the ground only) | until reboot (default kp 7) |
 | traj_p.* preset shape | `.fly` `set` / preset fields | per flight |
+| xy controller (bff1d29f+) | `.fly` `set g_xy_ctrl_kind=N` before `takeoff` (0 PID, 2 LQR, 3 MPC; latched on the ground; never 1 ADRC); `set g_traj_ff_shift_s=0.31` with the tuned_shift gains | until reboot (0 / 0) |
+| camera-gated landing (a14f67e7+) | `.fly` `set g_land_xy_gate_cm=10` with fusion 2; descent pauses while the camera fix is > r off target or > 0.5 s old (flat z in LANDING; no pause counter yet) | until reboot (0 = off) |
 | PID_ROW defaults | edit `API/pid.c` + review + flash | permanent |
 
 Before 6aa642fc is flashed, position loops change only by pid.c edit + flash. Thresholds and gain steps are PROPOSED.
+Lab order 2026-10-14 (sim replay, PROPOSED): baseline -> tuned_shift PID -> LQR -> land gate 10 cm. Whether `fly` sends pre-takeoff `set` lines while disarmed is UNVERIFIED: confirm with a read-back.
 
 ## Known friction (2026-10-13 logs)
 
