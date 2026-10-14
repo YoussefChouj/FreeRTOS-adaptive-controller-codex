@@ -132,8 +132,11 @@ If two rules conflict, the stricter one wins until the operator says otherwise.
 - Locks, released after use: `ah lock hw` (probe, flash, 8081 writes, arming), `ah lock keil` (UV4, writes `OBJ/`).
   Exit code 3 = held elsewhere: do other work, do not poll. Expiry 30 min.
 - Workers: count first (`ah board --workers`), one per stream; see `docs/agent/memory/rules.md` > Parallel sessions.
-- Every task boundary: `git commit -m "..." -- <paths>` (never `git add -A`, `git add .` or `commit -a`), push,
-  overwrite the stream page (goal, facts, next 3 actions, do-nots), `ah refresh`.
+- Save after each verified subtask: `bash .agent-ops/ship.sh "msg" <paths>` (one quiet pathspec commit; never
+  `git add -A`, `git add .` or `commit -a` repo-wide). Fold state/doc edits into that commit, not a commit of their own.
+- Ship at ship points only (end of a work package, before compact, before a flash or lab step, session end):
+  `ship.sh --push ...`, overwrite the stream page (goal, facts, next 3 actions, do-nots), `ah refresh`.
+- `logs/`, `OBJ/` and run output are git-ignored: commit a capture on purpose with `git add -f <path>`.
 - Continuing elsewhere (other account, Cursor, Codex, agy): `ah start <stream> --as <harness> --takeover`, or paste
   the output of `ah prompt <stream> --for <harness>`. Do not resume the old transcript.
 - Durable lessons go to `docs/agent/memory/` (`env.md` facts, `rules.md` behavior), not only to harness-private memory.
