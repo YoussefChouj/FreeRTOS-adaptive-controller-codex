@@ -7,7 +7,7 @@
 #     stream_log --relay-port 47800 (or, with 8081 up for `fly`, its relay + --tel-url) + scrcpy r5cam (record, off screen) + live_tracker --show (topmost,
 #     resizable, path/anchor map, --traj preset, demo clip tracker.mp4; keys r a c f);
 #     `stop <name>` ends the recording, tracker and video (stop file); PlotJuggler keeps streaming live until
-#     `end` or the next fusion. Same phone placement as r5_marks_1 (its floor pose is reused).
+#     `end` or the next fusion. Floor pose: CT_FLOOR=<scan dir> (cam.mkv + aruco.npz of this placement), default r5_marks_1.
 #   bash ground_station/lab/camera_truth.sh end            # end the live PlotJuggler stream (before starting 8081)
 #   bash ground_station/lab/camera_truth.sh video <name>   # live window + recording only (workflows A/B/C keep their own log)
 # WiFi only, never the SWD probe. Video: phone camera id 4, zoom 0.6, 1080p30 (the R3 calibration pose).
@@ -90,7 +90,7 @@ fusion)
   dly=${DELAY_MS:-200}                              # camera delay: video_truth delay4 lag 0.21 s on r6_f4 + f4c (2026-10-13)
   al=()                                             # r6 flew modes 2/3 at --yaw-deg 0 vs ~90 deg measured: auto-fit it
   case " $* " in *" --yaw-deg"*|*" --align"*) ;; *) [ "$mode" -ge 2 ] && al=(--align auto) ;; esac
-  nohup python -m ground_station.analysis.live_tracker --source window:r5cam     --cam docs/video-truth/cam_r4_lenswave_2026-10-11.json --floor logs/video_truth/r5_marks_1     "${tel[@]}" --detector coral --gate --send udp:47800 --mode "$mode" --delay-ms "$dly"     --out "$vid/fixes.csv" --show --show-rec "$vid/tracker.mp4" --stop-file "$vid/stop" "${al[@]}" "$@" > "$vid/tracker.out" 2>&1 &
+  nohup python -m ground_station.analysis.live_tracker --source window:r5cam     --cam docs/video-truth/cam_r4_lenswave_2026-10-11.json --floor "${CT_FLOOR:-logs/video_truth/r5_marks_1}"     "${tel[@]}" --detector coral --gate --send udp:47800 --mode "$mode" --delay-ms "$dly"     --out "$vid/fixes.csv" --show --show-rec "$vid/tracker.mp4" --stop-file "$vid/stop" "${al[@]}" "$@" > "$vid/tracker.out" 2>&1 &
   echo $! > "$vid/tracker.pid"
   sleep 12; "$0" check "$name" ;;
 video)                                              # video only (workflows A/B/C): the log stays theirs
