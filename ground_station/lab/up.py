@@ -158,7 +158,7 @@ def main(argv=None, ask=input):
     ap.add_argument("--state", help="state file (default logs/lab/<today>/queue_state.json)")
     a = ap.parse_args(argv)
     day, t0 = time.strftime("%Y-%m-%d"), time.time()
-    qpath = a.queue or f"docs/lab/queue-{day}.txt"
+    qpath = a.queue or str(ROOT / "docs" / "lab" / f"queue-{day}.txt")
     state_file = Path(a.state) if a.state else runner.state_path()
     pack = (a.pack or "").strip() or fly.remember_pack() or ""
     q, qrow = queue_row(qpath, state_file)

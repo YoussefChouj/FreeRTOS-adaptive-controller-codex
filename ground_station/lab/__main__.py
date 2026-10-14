@@ -2,6 +2,7 @@
 
     lab up [queue] [--pack P]      check everything in one table, then fly the day's queue (ground_station/lab/up.py)
     lab queue <file> [--pack P]    fly a queue without the checks (ground_station/lab/runner.py)
+    lab end [--day D]              the day's report, then its videos to Google Drive (ground_station/lab/end.py)
 """
 import sys
 
@@ -15,6 +16,9 @@ def main(argv=None):
     if cmd == "queue":
         from ground_station.lab import runner
         return runner.main(argv)
+    if cmd == "end":
+        from ground_station.lab import end
+        return end.main(argv)
     print(__doc__)
     return 0 if cmd in ("", "-h", "--help") else 2
 
