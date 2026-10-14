@@ -27,6 +27,7 @@ typedef struct {
     float y_m;
     float z_m;
     float dt_s;
+    uint8_t pad_gate;   /* LAND_XY_GATE_OFF/OK/WAIT (land_xy_gate.h); 0 = off, old behaviour */
 } wfb_prim_in_t;
 
 typedef struct {

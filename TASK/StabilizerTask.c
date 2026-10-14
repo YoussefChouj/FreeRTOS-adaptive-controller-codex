@@ -23,7 +23,8 @@
 #include "wfb_traj.h"
 #include "wfb_prim.h"
 #include "xy_ctrl.h"        /* ADRC / LQR / MPC xy outer loops (g_xy_ctrl_kind) */
-#include "land_xy_gate.h"   /* camera-gated landing descent (g_land_xy_gate_cm) */
+#include "land_xy_gate.h"   /* camera pad gate for the land (g_land_xy_gate_cm) */
+extern volatile float g_land_xy_gate_cm;   /* defined with the xy_ctrl VARs below */
 /* WFB END glue */
 extern volatile uint8_t traj_active;   /* AutoflyTask.c: id of the running Keil preset, 0 idle */
 
@@ -466,6 +467,15 @@ static void Wfb_Step(void)
 	in.airborne    = (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING) ? 1U : 0U;
 	in.rc_override = (RCInput_IsActive(RC_AXIS_ROLL) || RCInput_IsActive(RC_AXIS_PITCH)) ? 1U : 0U;
 	in.preset_active = traj_active ? 1U : 0U;   /* AutoflyTask.c Keil preset */
+	{   /* camera pad gate (VAR 46): the land's SETTLE waits for a fresh fused fix within r of the pad */
+		LandXyGateIn gin;
+		gin.gate_cm    = g_land_xy_gate_cm;
+		gin.err_cm     = sqrtf(Ctrler.locxPID.FB * Ctrler.locxPID.FB + Ctrler.locyPID.FB * Ctrler.locyPID.FB);
+		gin.fused      = (uint8_t)(g_ext_pos_on >= 2U);
+		gin.stale      = g_ext_pos.stale;
+		gin.fix_age_ms = in.now_ms - g_ext_pos.last_ok_ms;
+		in.pad_gate    = LandXyGate_Check(&gin);
+	}
 
 	/* send_data.c and RemoterTask.c call into the glue from other tasks */
 	taskENTER_CRITICAL();
@@ -1812,12 +1822,10 @@ extern float g_traj_vff_x, g_traj_vff_y, g_traj_vff_z, g_traj_vff_yaw;
  * not airborne. g_traj_ff_shift_s (id 45): position-loop reference lag behind the FF, s (0 = off). */
 volatile uint8_t g_xy_ctrl_kind = 0U;
 volatile float g_traj_ff_shift_s = 0.0f;
-/* Camera-gated landing (API/land_xy_gate.c, VAR_WRITE id 46): with fusion 2/3, LANDING pauses the sink while
- * |fused xy - target| > this radius or the camera fix is not fresh, cm (0 = off). Set in Des_Height, used by
- * Des_VHeight. */
+/* Camera-gated landing (API/land_xy_gate.c, VAR_WRITE id 46): with fusion 2/3, the ground-station land does not
+ * start its descent until the camera-fused xy is within this radius of the pad (origin) on a fresh fix, cm
+ * (0 = off). Read in Wfb_Step; the descent itself is unchanged. */
 volatile float g_land_xy_gate_cm = 0.0f;
-static LandXyGateState s_land_xy;
-static uint8_t s_land_xy_hold;
 static uint8_t s_xyc_kind;
 static XyCtrlState s_xyc[2];
 #define TRAJ_FF_VZ_MAX_MPS     1.0f     /* = Z_posPID UMax, the climb-rate the position loop may ask for */
@@ -2313,28 +2321,11 @@ static void Des_Height(void)
 	 * command; Des only feeds the Des-at-floor touchdown gates).
 	 * Snap Des = min(Des, FB) so a setpoint above current altitude cannot
 	 * pull the drone upward at landing entry (case A fix). */
-	if (flight_phase != FLIGHT_PHASE_LANDING) {
-		LandXyGate_Reset(&s_land_xy);
-		s_land_xy_hold = 0U;
-	}
 	if (flight_phase == FLIGHT_PHASE_LANDING)
 	{
-		LandXyGateIn gin;
-		uint32_t now_ms = (uint32_t)xTaskGetTickCount() * (uint32_t)portTICK_PERIOD_MS;
-		float gex = Ctrler.locxPID.FB - Ctrler.locxPID.Des;
-		float gey = Ctrler.locyPID.FB - Ctrler.locyPID.Des;
-		gin.gate_cm    = g_land_xy_gate_cm;
-		gin.err_cm     = sqrtf(gex * gex + gey * gey);
-		gin.z_m        = Ctrler.Z_posPID.FB;
-		gin.fused      = (uint8_t)(g_ext_pos_on >= 2U);
-		gin.stale      = g_ext_pos.stale;
-		gin.fix_age_ms = now_ms - g_ext_pos.last_ok_ms;
-		s_land_xy_hold = LandXyGate_Step(&s_land_xy, &gin);
 		TWC.execute = 0U;
 		if (Ctrler.Z_posPID.Des > Ctrler.Z_posPID.FB)
 			Ctrler.Z_posPID.Des = Ctrler.Z_posPID.FB;
-		if (s_land_xy_hold)   /* paused: the Des ramp waits with the rate command */
-			return;
 		Ctrler.Z_posPID.Des -= ((Ctrler.Z_posPID.FB < LAND_FAST_ALT) ?
 		                        LAND_VZ_FAST_MPS : LAND_VZ_MPS) * LAND_TICK_S;
 		if (Ctrler.Z_posPID.Des < 0.0f) Ctrler.Z_posPID.Des = 0.0f;
@@ -2384,7 +2375,7 @@ static void Des_VHeight(void)
 	if (flight_phase == FLIGHT_PHASE_LANDING || flight_phase == FLIGHT_PHASE_LANDED)
 	{
 		if (flight_phase == FLIGHT_PHASE_LANDING)
-			Ctrler.Z_ratePID.Des = s_land_xy_hold ? 0.0f : -((Ctrler.Z_posPID.FB < LAND_FAST_ALT) ?
+			Ctrler.Z_ratePID.Des = -((Ctrler.Z_posPID.FB < LAND_FAST_ALT) ?
 			                         LAND_VZ_FAST_MPS : LAND_VZ_MPS);
 		else
 			Ctrler.Z_ratePID.Des = Ctrler.Z_posPID.U;

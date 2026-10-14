@@ -84,6 +84,7 @@ static void wfb_glue_prim_in(wfb_prim_in_t *pin, const wfb_glue_in_t *in, float 
 {
     pin->x_m = in->x_m;
     pin->y_m = in->y_m;
+    pin->pad_gate = in->pad_gate;
     pin->z_m = in->z_m;
     pin->dt_s = dt_s;
 }

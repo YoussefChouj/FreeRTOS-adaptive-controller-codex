@@ -82,7 +82,7 @@ land
 | Keil presets (of1, MRAC mask, gamma, Z headroom) | `.fly` `set kp_id=N` then `set kp_go=1` (applies on the ground only) | until reboot (default kp 7) |
 | traj_p.* preset shape | `.fly` `set` / preset fields | per flight |
 | xy controller (bff1d29f+) | `.fly` `set g_xy_ctrl_kind=N` before `takeoff` (0 PID, 2 LQR, 3 MPC; latched on the ground; never 1 ADRC); `set g_traj_ff_shift_s=0.31` with the tuned_shift gains | until reboot (0 / 0) |
-| camera-gated landing (a14f67e7+) | `.fly` `set g_land_xy_gate_cm=10` with fusion 2; descent pauses while the camera fix is > r off target or > 0.5 s old (flat z in LANDING; no pause counter yet) | until reboot (0 = off) |
+| camera pad gate (land) | `.fly` `set g_land_xy_gate_cm=10` with fusion 2; the `fly` land hovers over the pad until the camera fix is within r and < 0.5 s old for 1 s, then drops at the normal speed (10 s cap, then lands aimed at the pad); RC/land-in-place not gated | until reboot (0 = off) |
 | PID_ROW defaults | edit `API/pid.c` + review + flash | permanent |
 
 Before 6aa642fc is flashed, position loops change only by pid.c edit + flash. Thresholds and gain steps are PROPOSED.

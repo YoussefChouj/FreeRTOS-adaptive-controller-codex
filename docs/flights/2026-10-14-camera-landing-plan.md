@@ -35,11 +35,13 @@
   The -x drift the operator sees is not in the estimate, so it is estimator (OF) drift that only the camera sees:
   a controller holding the EKF position cannot fix it, a descent gated on the camera-fused position can.
   The xy plant fits (logs/xy_tune/20261014-1200/plants.json) also carry a negative x bias on all fits.
-- Firmware (this commit, default off): VAR 46 `g_land_xy_gate_cm` (0..50 cm). With fusion 2/3, LANDING holds
-  altitude (rate 0, Des ramp paused) while |fused xy - landing target| > the radius or the last accepted camera
-  fix is older than 500 ms / stale; resumes below 0.6 x radius; never pauses below 0.30 m; at most 8 s of pause
-  per landing, then it lands anyway. Pattern: ArduPilot PLND_XY_DIST_MAX, PX4 PLD_HACC_RAD / PLD_FAPPR_ALT.
-  Code: API/land_xy_gate.c (host test fw_land_xy_gate), hook in Des_Height / Des_VHeight. All values PROPOSED.
-- Lab use, PROPOSED: fusion 2 + `fly`-landed preset, VAR 46 = 10 (cm); a pause shows as a flat z during LANDING (no pause counter in telemetry yet).
-  Known gaps: a SETTLE timeout still freezes the target where the drone is (off the pad), and RC or land-in-place
-  landings hold the current xy, so the gate centres on that spot, not on the pad.
+- Firmware a14f67e7 paused the descent mid-air while the camera said off-pad. Replaced the same day (operator:
+  "smooth and very fast ... just more precise"): VAR 46 `g_land_xy_gate_cm` (0..50 cm, 0 = off) now gates the
+  START of the descent, not the descent. With fusion 2/3, the ground-station land's SETTLE (hover over the origin,
+  15 cm / 1 s) also needs |camera-fused xy| <= the radius on a fresh fix (< 500 ms, not stale) for the whole 1 s
+  dwell; then the normal fast descent runs untouched (0.65 m/s, 0.50 below 0.40 m), xy target held on the pad.
+  If the gate never opens, the 10 s RETURN+SETTLE timeout still lands, aimed at the pad (gate off: where it is,
+  as before). Pattern: PX4 PLD_HACC_RAD (align, then descend). Code: API/land_xy_gate.c (stateless check, host
+  test fw_land_xy_gate), API/wfb_prim.c SETTLE (test fw_wfb_prim test_11), fed by Wfb_Step. Values PROPOSED.
+- Lab use, PROPOSED: fusion 2 + `fly`-landed preset, VAR 46 = 10 (cm). A long hover before the drop = waiting for
+  the camera. Known gap: RC ch5 and land-in-place landings skip SETTLE, so they are not gated.

@@ -3,12 +3,13 @@
 Read order: `AGENTS.md` -> this file -> `docs/agent/memory/rules.md` -> `.claude_state.md` (newest entry first).
 History: `docs/agent/ledger/` (grep, never read whole). Desktop session is CEO: inline, no subagents.
 
-## Now: 2026-10-14 afternoon - xy tune, ADRC/LQR/MPC, camera-gated landing built; nothing flashed or flown
+## Now: 2026-10-14 afternoon - xy tune, ADRC/LQR/MPC, camera pad gate built; nothing flashed or flown
 
 Branch `overnight-2026-10-08`, local commits, UNVERIFIED on the drone. Drone: ELF e4dd3652. Built, NOT flashed: WP-44
 VAR_WRITE (41013a0e), WP-45 (03716d5c), CMD 0x01 axes 7-11 (6aa642fc), xy_ctrl (bff1d29f: VAR 44 `g_xy_ctrl_kind`
-0 PID/1 ADRC/2 LQR/3 MPC, latched on the ground; VAR 45 `g_traj_ff_shift_s` 0-0.6 s), camera-gated descent
-(a14f67e7: VAR 46 `g_land_xy_gate_cm` 0-50, 0 = off). Keil build 0 err/0 warn.
+0 PID/1 ADRC/2 LQR/3 MPC, latched on the ground; VAR 45 `g_traj_ff_shift_s` 0-0.6 s), camera pad gate
+(VAR 46 `g_land_xy_gate_cm` 0-50, 0 = off: the land's SETTLE waits for a fresh camera fix within r, then the
+normal fast descent; replaces the a14f67e7 mid-descent pause). Keil build 0 err/0 warn.
 - Sim (b922a6a9, `analysis.xy_tune` / `xy_ctrl`), replay `logs/xy_tune/20261014-replay*/`: 213613 x overshoot (log
   11.4 cm, mean of 3 plants) current 11.6, tuned_shift 1.7, LQR 4.2, MPC 4.6, ADRC 9.9. "tuned" (no shift) 41-102 cm
   on r7 -> never. Sim faithful only on 213613 (r7/r6 are RC-velocity flights).

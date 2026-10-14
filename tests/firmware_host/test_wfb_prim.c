@@ -1,4 +1,5 @@
 #include "wfb_prim.h"
+#include "land_xy_gate.h"
 #include <stdio.h>
 #include <math.h>
 
@@ -256,6 +257,61 @@ static int test_10_non_finite_position(void) {
     return 0;
 }
 
+static int test_11_pad_gate(void) {
+    /* the camera pad gate holds the land's SETTLE dwell until the camera says over the pad, then descends at once */
+    wfb_prim_init(&p);
+    wfb_prim_default_cfg(&cfg);
+    p.state = WFB_PRIM_SETTLE;
+    p.land_after_return = 1;
+    in.x_m = 0.05f; in.y_m = 0.0f; in.z_m = 0.5f; in.dt_s = 0.5f;
+    out.z_sp_m = 0.5f;
+    in.pad_gate = LAND_XY_GATE_WAIT;
+    wfb_prim_step(&p, &cfg, &in, &out);
+    wfb_prim_step(&p, &cfg, &in, &out);
+    wfb_prim_step(&p, &cfg, &in, &out);
+    ASSERT(p.state == WFB_PRIM_SETTLE && p.settle_t == 0.0f);     /* inside 15 cm but the camera says wait */
+    in.pad_gate = LAND_XY_GATE_OK;
+    wfb_prim_step(&p, &cfg, &in, &out);
+    ASSERT(p.state == WFB_PRIM_SETTLE);
+    in.pad_gate = LAND_XY_GATE_WAIT;
+    wfb_prim_step(&p, &cfg, &in, &out);
+    ASSERT(p.settle_t == 0.0f);                                   /* the dwell must be unbroken */
+    in.pad_gate = LAND_XY_GATE_OK;
+    wfb_prim_step(&p, &cfg, &in, &out);
+    wfb_prim_step(&p, &cfg, &in, &out);
+    ASSERT(p.state == WFB_PRIM_DESCEND && out.descend == 1);
+    ASSERT(out.x_sp_m == 0.0f && out.y_sp_m == 0.0f);
+
+    /* a hover SETTLE (no land) ignores the gate */
+    wfb_prim_init(&p);
+    p.state = WFB_PRIM_SETTLE;
+    p.land_after_return = 0;
+    in.pad_gate = LAND_XY_GATE_WAIT; in.dt_s = 1.1f;
+    wfb_prim_step(&p, &cfg, &in, &out);
+    ASSERT(p.state == WFB_PRIM_HOVER);
+
+    /* the gate never opens: the timeout still lands, aimed at the pad instead of where it is */
+    wfb_prim_init(&p);
+    p.state = WFB_PRIM_SETTLE;
+    p.land_after_return = 1;
+    p.return_t = 9.9f;
+    in.x_m = 0.4f; in.y_m = -0.3f; in.dt_s = 0.2f;
+    wfb_prim_step(&p, &cfg, &in, &out);
+    ASSERT(p.state == WFB_PRIM_DESCEND && out.descend == 1);
+    ASSERT(out.x_sp_m == 0.0f && out.y_sp_m == 0.0f);
+
+    /* gate off: the old timeout freezes where it is */
+    wfb_prim_init(&p);
+    p.state = WFB_PRIM_SETTLE;
+    p.land_after_return = 1;
+    p.return_t = 9.9f;
+    in.pad_gate = LAND_XY_GATE_OFF;
+    wfb_prim_step(&p, &cfg, &in, &out);
+    ASSERT(p.state == WFB_PRIM_DESCEND);
+    ASSERT(fabsf(out.x_sp_m - 0.4f) < 1e-6f && fabsf(out.y_sp_m + 0.3f) < 1e-6f);
+    return 0;
+}
+
 int main(void) {
     int passed = 0;
     if (test_1_init_takeoff() == 0) passed++; else return 1;
@@ -268,6 +324,7 @@ int main(void) {
     if (test_8_disarmed() == 0) passed++; else return 1;
     if (test_9_default_cfg() == 0) passed++; else return 1;
     if (test_10_non_finite_position() == 0) passed++; else return 1;
+    if (test_11_pad_gate() == 0) passed++; else return 1;
 
     printf("PASS %d\n", passed);
     return 0;

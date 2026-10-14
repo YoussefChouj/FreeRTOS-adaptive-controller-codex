@@ -1,11 +1,10 @@
 // ------------------------------------------------------------------------------
-// Camera-gated landing descent (2026-10-14, PROPOSED, not flown)
+// Camera pad gate for the ground-station land (2026-10-14, PROPOSED, not flown)
 // ------------------------------------------------------------------------------
-// The ArduPilot PLND_XY_DIST_MAX / PX4 PLD_HACC_RAD rule: during LANDING, pause the descent (hold
-// altitude) while the camera-fused xy position is farther than a radius from the landing target, or
-// while the camera fix is not fresh, so the xy hold pulls the drone back over the pad before it sinks.
-// Below LAND_XY_GATE_FLOOR_M the descent commits (PX4 PLD_FAPPR_ALT idea), and the total pause per landing
-// is capped at LAND_XY_GATE_MAX_TICKS so a lost camera or an unreachable target still lands.
+// PX4 PLD_HACC_RAD rule: align over the target first, then descend. The land's SETTLE (API/wfb_prim.c)
+// does not start the descent until the camera-fused xy is within a radius of the pad (the origin) on a
+// fresh camera fix; the descent itself stays the normal fast one, never paused. If the gate never opens,
+// the SETTLE timeout still lands, with the target kept on the pad.
 // Off unless gate_cm > 0 (VAR 46 g_land_xy_gate_cm) and fusion is mode 2 or 3.
 // ------------------------------------------------------------------------------
 
@@ -14,28 +13,21 @@
 
 #include <stdint.h>
 
-#define LAND_XY_GATE_FLOOR_M     0.30f   /* below this altitude the descent no longer pauses, PROPOSED */
 #define LAND_XY_GATE_FRESH_MS    500U    /* an accepted camera fix newer than this is fresh, PROPOSED */
-#define LAND_XY_GATE_HYST        0.6f    /* a pause ends below gate_cm * this (no stop-go chatter), PROPOSED */
-#define LAND_XY_GATE_MAX_TICKS   1600U   /* total pause per landing: 8 s at the 200 Hz Des_Height tick, PROPOSED */
+
+#define LAND_XY_GATE_OFF   0U   /* VAR 46 = 0 or fusion 0/1: old behaviour */
+#define LAND_XY_GATE_OK    1U   /* over the pad on a fresh fix: the descent may start */
+#define LAND_XY_GATE_WAIT  2U   /* off the pad or no fresh fix: keep settling */
 
 typedef struct {
-	uint8_t  hold;    /* 1 = descent paused this tick */
-	uint16_t held;    /* ticks paused so far in this landing */
-} LandXyGateState;
-
-typedef struct {
-	float    gate_cm;      /* pause radius; <= 0 = gate off */
-	float    err_cm;       /* |fused xy - target xy| */
-	float    z_m;          /* altitude */
+	float    gate_cm;      /* radius; <= 0 = gate off */
+	float    err_cm;       /* |fused xy - pad xy| */
 	uint8_t  fused;        /* camera fusion mode 2 or 3 */
 	uint8_t  stale;        /* g_ext_pos.stale */
 	uint32_t fix_age_ms;   /* now - last accepted camera fix */
 } LandXyGateIn;
 
-void LandXyGate_Reset(LandXyGateState *s);
-
-/* One LANDING tick: returns 1 while the descent should pause. */
-uint8_t LandXyGate_Step(LandXyGateState *s, const LandXyGateIn *in);
+/* Stateless: LAND_XY_GATE_OFF / _OK / _WAIT for this tick. */
+uint8_t LandXyGate_Check(const LandXyGateIn *in);
 
 #endif

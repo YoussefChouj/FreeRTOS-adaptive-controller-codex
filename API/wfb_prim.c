@@ -1,4 +1,5 @@
 #include "wfb_prim.h"
+#include "land_xy_gate.h"
 #include <math.h>
 #include <string.h>
 
@@ -187,7 +188,9 @@ void wfb_prim_step(wfb_prim_t *p, const wfb_prim_cfg_t *cfg, const wfb_prim_in_t
         dz = out->z_sp_m - in->z_m;
         dist = sqrtf(dx * dx + dy * dy + dz * dz);
 
-        if (dist <= cfg->settle_radius_m) {
+        /* with the camera pad gate on, a land's dwell also needs a fresh camera fix within r of the pad, so
+         * the fast descent starts over the pad (PX4 PLD_HACC_RAD: align, then descend) */
+        if (dist <= cfg->settle_radius_m && !(p->land_after_return && in->pad_gate == LAND_XY_GATE_WAIT)) {
             p->settle_t += in->dt_s;
             if (p->settle_t >= cfg->settle_time_s) {
                 if (p->land_after_return) {
@@ -209,8 +212,13 @@ void wfb_prim_step(wfb_prim_t *p, const wfb_prim_cfg_t *cfg, const wfb_prim_in_t
 
         if (p->state == WFB_PRIM_SETTLE && p->land_after_return && p->return_t > cfg->return_timeout_s) {
             p->state = WFB_PRIM_DESCEND;
-            p->x_sp_m = wfb_prim_finite_or(in->x_m, p->x_sp_m);
-            p->y_sp_m = wfb_prim_finite_or(in->y_m, p->y_sp_m);
+            if (in->pad_gate != LAND_XY_GATE_OFF) {   /* gate on: keep pulling to the pad while it sinks */
+                p->x_sp_m = 0.0f;
+                p->y_sp_m = 0.0f;
+            } else {
+                p->x_sp_m = wfb_prim_finite_or(in->x_m, p->x_sp_m);
+                p->y_sp_m = wfb_prim_finite_or(in->y_m, p->y_sp_m);
+            }
             p->descend_frozen = 1;
             out->x_sp_m = p->x_sp_m;
             out->y_sp_m = p->y_sp_m;

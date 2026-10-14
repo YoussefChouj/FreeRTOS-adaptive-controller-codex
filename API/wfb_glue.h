@@ -63,6 +63,7 @@ typedef struct {
     float x_m;
     float y_m;
     float z_m;
+    uint8_t pad_gate;     /* LAND_XY_GATE_OFF/OK/WAIT: camera pad check for the land's SETTLE (VAR 46) */
     float roll_deg;
     float pitch_deg;
     float vbat_v;
