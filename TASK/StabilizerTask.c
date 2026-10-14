@@ -22,6 +22,7 @@
 #include "wfb_glue.h"       /* Workflow B: GS takeoff/trajectory/land sequencer + safety net */
 #include "wfb_traj.h"
 #include "wfb_prim.h"
+#include "xy_ctrl.h"        /* ADRC / LQR / MPC xy outer loops (g_xy_ctrl_kind) */
 /* WFB END glue */
 extern volatile uint8_t traj_active;   /* AutoflyTask.c: id of the running Keil preset, 0 idle */
 
@@ -1806,6 +1807,12 @@ static TrajFF_t s_traj_ff;
  * yaw rate. 0 = the old pure-position reference (the P loops then trail by v / Kp). */
 volatile uint8_t g_traj_ff_preset = 1U;
 extern float g_traj_vff_x, g_traj_vff_y, g_traj_vff_z, g_traj_vff_yaw;
+/* xy outer controller (API/xy_ctrl.c, VAR_WRITE id 44): 0 PID cascade, 1 ADRC, 2 LQR, 3 MPC. Latched while
+ * not airborne. g_traj_ff_shift_s (id 45): position-loop reference lag behind the FF, s (0 = off). */
+volatile uint8_t g_xy_ctrl_kind = 0U;
+volatile float g_traj_ff_shift_s = 0.0f;
+static uint8_t s_xyc_kind;
+static XyCtrlState s_xyc[2];
 #define TRAJ_FF_VZ_MAX_MPS     1.0f     /* = Z_posPID UMax, the climb-rate the position loop may ask for */
 /* Trajectory feed-forward (TrajFF_Step) on the xy velocity loops. Vmax for the FF clamp: the v_max_mps
  * of wfb_traj_default_limits (API/wfb_traj.c) x 100 = 100.0f cm/s. */
@@ -1969,17 +1976,40 @@ static void Pos_ArmEdge(void)
 /* xy position loops, then the velocity loops with the trajectory feed-forward. Armed only. */
 static void Pos_Compute(uint8_t airborne, uint8_t land_contact)
 {
+	uint8_t active = g_traj_ff_on && airborne && TWC.execute && g_wfb_status.traj_state == (float)WFB_TRAJ_EXECUTING && g_wfb_status.prim_state == (float)WFB_PRIM_TRAJ;
+	float vx, vy, ax, ay, vff_x, vff_y;
+	uint8_t xyc_on[2];
+	/* the reference velocity (trajectory FF + preset FF), computed first so the position loops can use it */
+	TrajFF_Step(&s_traj_ff, active, TWC.target_x, TWC.target_y, TRAJ_FF_DT_S, TRAJ_FF_TAU_S, TRAJ_FF_VMAX_CMS, &vx, &vy, &ax, &ay);
+	vff_x = vx + ((g_traj_ff_preset && airborne) ? g_traj_vff_x : 0.0f);
+	vff_y = vy + ((g_traj_ff_preset && airborne) ? g_traj_vff_y : 0.0f);
+
 	Update_Des(case_Update_loc_Des);
-	ComputePID_GatedHold(&Ctrler.locxPID, airborne, land_contact);
-	ComputePID_GatedHold(&Ctrler.locyPID, airborne, land_contact);
+	{
+		/* FF lead (2026-10-14, xy_tune): the position loops compare with the reference g_traj_ff_shift_s ago,
+		 * so the velocity FF leads them by the plant lag instead of both pushing (0 = the loops before). */
+		float sx = g_traj_ff_shift_s * vff_x, sy = g_traj_ff_shift_s * vff_y;
+		Ctrler.locxPID.Des -= sx;
+		Ctrler.locyPID.Des -= sy;
+		ComputePID_GatedHold(&Ctrler.locxPID, airborne, land_contact);
+		ComputePID_GatedHold(&Ctrler.locyPID, airborne, land_contact);
+		Ctrler.locxPID.Des += sx;
+		Ctrler.locyPID.Des += sy;
+	}
 
 	Update_Des(case_Update_v_loc_Des);
 	SDK_Set_V_Loc();   /* SDK velocity override (AutoflyTask) */
+	/* xy_ctrl flies an axis only while its velocity setpoint is the position loop's own output (not the RC stick,
+	 * an SDK velocity, or the VXY clamp); otherwise the PID flies and xy_ctrl tracks. Kind latched on the ground. */
+	if (!airborne || land_contact) {
+		s_xyc_kind = (g_xy_ctrl_kind <= XY_CTRL_MPC) ? g_xy_ctrl_kind : XY_CTRL_PID;
+		XyCtrl_Reset(&s_xyc[0]);
+		XyCtrl_Reset(&s_xyc[1]);
+	}
+	xyc_on[0] = s_xyc_kind && airborne && !land_contact && Ctrler.locxsPID.Des == Ctrler.locxPID.U;
+	xyc_on[1] = s_xyc_kind && airborne && !land_contact && Ctrler.locysPID.Des == Ctrler.locyPID.U;
 
 	{
-		uint8_t active = g_traj_ff_on && airborne && TWC.execute && g_wfb_status.traj_state == (float)WFB_TRAJ_EXECUTING && g_wfb_status.prim_state == (float)WFB_PRIM_TRAJ;
-		float vx, vy, ax, ay;
-		TrajFF_Step(&s_traj_ff, active, TWC.target_x, TWC.target_y, TRAJ_FF_DT_S, TRAJ_FF_TAU_S, TRAJ_FF_VMAX_CMS, &vx, &vy, &ax, &ay);
 		Ctrler.locxsPID.Des += vx;
 		Ctrler.locysPID.Des += vy;
 		if (g_traj_ff_preset && airborne) {
@@ -1988,6 +2018,14 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact)
 		}
 		ComputePID_GatedHold(&Ctrler.locxsPID, airborne, land_contact);
 		ComputePID_GatedHold(&Ctrler.locysPID, airborne, land_contact);
+		if (xyc_on[0]) {
+			float u = XyCtrl_Step(&s_xyc[0], s_xyc_kind, Ctrler.locxPID.Des, Ctrler.locxPID.FB, Ctrler.locxsPID.FB, vff_x);
+			if (isfinite(u)) Ctrler.locxsPID.U = u; else XyCtrl_Reset(&s_xyc[0]);
+		} else if (s_xyc_kind) XyCtrl_Track(&s_xyc[0], s_xyc_kind, Ctrler.locxPID.FB);
+		if (xyc_on[1]) {
+			float u = XyCtrl_Step(&s_xyc[1], s_xyc_kind, Ctrler.locyPID.Des, Ctrler.locyPID.FB, Ctrler.locysPID.FB, vff_y);
+			if (isfinite(u)) Ctrler.locysPID.U = u; else XyCtrl_Reset(&s_xyc[1]);
+		} else if (s_xyc_kind) XyCtrl_Track(&s_xyc[1], s_xyc_kind, Ctrler.locyPID.FB);
 		Ctrler.locxsPID.U += ax;
 		Ctrler.locysPID.U += ay;
 		/* 6-axis MRAC (2026-10-10): keep the PID-only accel for the x/y layers' u_nom, then add u_ad. Off unless
@@ -2013,6 +2051,10 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact)
 		Ctrler.locysPID.U    = 0.0f;
 		mrac_xy_unom[0]      = 0.0f;
 		mrac_xy_unom[1]      = 0.0f;
+	}
+	if (s_xyc_kind) {   /* the command the plant gets enters the predictor pipe */
+		XyCtrl_Commit(&s_xyc[0], Ctrler.locxsPID.U);
+		XyCtrl_Commit(&s_xyc[1], Ctrler.locysPID.U);
 	}
 }
 

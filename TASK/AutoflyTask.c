@@ -446,6 +446,8 @@ typedef struct {
 #define VAR_WRITE_ROW(var, type, id, min, max)  { (id), (type), (volatile void *)&(var), (min), (max), #var }
 
 extern volatile uint8_t kp_id, kp_go, vp_user_go, g_traj_ff_preset;   /* StabilizerTask.c */
+extern volatile uint8_t g_xy_ctrl_kind;                                /* StabilizerTask.c, API/xy_ctrl.h */
+extern volatile float g_traj_ff_shift_s;                               /* StabilizerTask.c */
 
 static const VarWriteRow_t s_var_write[] = {
 /*                var                 type    id    min      max            range source */
@@ -483,7 +485,9 @@ static const VarWriteRow_t s_var_write[] = {
     VAR_WRITE_ROW(kp_id,              VW_U8,  40,   0,       7      ),  /* s_kp rows 0..7                */
     VAR_WRITE_ROW(kp_go,              VW_U8,  41,   0,       1      ),  /* bool                          */
     VAR_WRITE_ROW(vp_user_go,         VW_U8,  42,   0,       1      ),  /* bool                          */
-    VAR_WRITE_ROW(g_traj_ff_preset,   VW_U8,  43,   0,       1      )   /* bool                          */
+    VAR_WRITE_ROW(g_traj_ff_preset,   VW_U8,  43,   0,       1      ),  /* bool                          */
+    VAR_WRITE_ROW(g_xy_ctrl_kind,     VW_U8,  44,   0,       3      ),  /* 0 PID 1 ADRC 2 LQR 3 MPC; ground */
+    VAR_WRITE_ROW(g_traj_ff_shift_s,  VW_F32, 45,   0.0f,    0.6f   )   /* s, FF lead (xy_tune .31)      */
 };
 
 /* GS CMD 0x2D: write row `id` = val. Returns 0 (written) or a VAR_WRITE_REJECT_* code (nothing written);

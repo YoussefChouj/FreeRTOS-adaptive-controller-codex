@@ -490,6 +490,11 @@
               <FilePath>..\API\mrac_math.c</FilePath>
             </File>
             <File>
+              <FileName>xy_ctrl.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\API\xy_ctrl.c</FilePath>
+            </File>
+            <File>
               <FileName>wfb_traj.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\API\wfb_traj.c</FilePath>
