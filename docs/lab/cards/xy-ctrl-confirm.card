@@ -1,0 +1,5 @@
+# The screen's winner overshoots less than PID on every flight: 3 flights each, in ABBA order.
+# Margin 0: all 3 winner flights better than all 3 PID flights happens 1 time in 20 when the two are the same.
+stage confirm xy-ctrl-screen
+repeats 3
+metric overshoot_x_cm lower margin 0

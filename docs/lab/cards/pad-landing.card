@@ -1,0 +1,8 @@
+# The xy landing gate (10 cm) puts the drone down on the pad (run sheet 2026-10-14, B1 and B2).
+# Pass: the camera landing point within 10 cm of the pad, every flight.
+path lab_b_land
+stage list
+ground fusion=3
+variant gate10
+repeats 2
+metric cam_landing_cm lower pass 10

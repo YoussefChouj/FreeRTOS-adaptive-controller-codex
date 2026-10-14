@@ -1,0 +1,11 @@
+# Which xy controller overshoots the 0.4 m step least: PID, tuned PID, LQR or MPC? (run sheet 2026-10-14, C1-C5)
+# One flight each, PID first and last (the day's drift). Ranking only; xy-ctrl-confirm decides.
+path lab_c_pid
+stage screen
+ground fusion=3 min_v=15.8      # min_v: run sheet 2026-10-14, PROPOSED
+variant pid set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0
+variant tuned set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0.31 ask "Tuned gains in RAM? Ask Claude in chat to write them (CMD 0x01, run sheet 2026-10-14 table), drone on the ground and disarmed. Enter once written." after "Power-cycle the drone or swap the pack: the next flight needs the pid.c gains back. Enter when done."
+variant lqr set g_xy_ctrl_kind=2 g_traj_ff_shift_s=0
+variant mpc set g_xy_ctrl_kind=3 g_traj_ff_shift_s=0
+baseline pid
+metric overshoot_x_cm lower

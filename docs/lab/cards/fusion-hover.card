@@ -1,0 +1,8 @@
+# A 70 s hover stays put on camera fusion, mode 2 then mode 3 (run sheet 2026-10-14, A1 and A2).
+# Pass: the camera sees the landing within 20 cm of the pad, a PROPOSED stand-in for "moves < 20 cm in 60 s".
+# Mode 3 fails: fix it on the ground and fly fusion3 again before pad-landing.
+path lab_a_hover
+stage list
+variant fusion2 ground fusion=2
+variant fusion3 ground fusion=3
+metric cam_landing_cm lower pass 20
