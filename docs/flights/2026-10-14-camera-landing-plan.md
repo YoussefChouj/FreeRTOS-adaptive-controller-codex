@@ -28,3 +28,18 @@
    last 15 cm of descent so the camera corrects the drift that builds up in ground effect.
 5. Align: `--align auto` refits the yaw in flight (live_tracker), but the operator wants one mode per flight; a
    pre-flight yaw fit from a short hand-carried path over the marks would remove the -9.6 deg without switching modes.
+
+## 2026-10-14 afternoon: where the -x drift comes from, and the camera-gated descent (built, not flown)
+- `landing_report` over all 29 sessions of 10-10..10-13 (logs/landing_drift/*.json): only 3 had a detected
+  landing; their EKF-frame drift was small and +x (descent dx +0.02/+0.06/+0.04 m, ground dx -0.005..+0.03 m).
+  The -x drift the operator sees is not in the estimate, so it is estimator (OF) drift that only the camera sees:
+  a controller holding the EKF position cannot fix it, a descent gated on the camera-fused position can.
+  The xy plant fits (logs/xy_tune/20261014-1200/plants.json) also carry a negative x bias on all fits.
+- Firmware (this commit, default off): VAR 46 `g_land_xy_gate_cm` (0..50 cm). With fusion 2/3, LANDING holds
+  altitude (rate 0, Des ramp paused) while |fused xy - landing target| > the radius or the last accepted camera
+  fix is older than 500 ms / stale; resumes below 0.6 x radius; never pauses below 0.30 m; at most 8 s of pause
+  per landing, then it lands anyway. Pattern: ArduPilot PLND_XY_DIST_MAX, PX4 PLD_HACC_RAD / PLD_FAPPR_ALT.
+  Code: API/land_xy_gate.c (host test fw_land_xy_gate), hook in Des_Height / Des_VHeight. All values PROPOSED.
+- Lab use, PROPOSED: fusion 2 + `fly`-landed preset, VAR 46 = 10 (cm); a pause shows as a flat z during LANDING (no pause counter in telemetry yet).
+  Known gaps: a SETTLE timeout still freezes the target where the drone is (off the pad), and RC or land-in-place
+  landings hold the current xy, so the gate centres on that spot, not on the pad.

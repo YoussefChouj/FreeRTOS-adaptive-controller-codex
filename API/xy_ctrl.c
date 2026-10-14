@@ -1,3 +1,9 @@
+/**
+ * @module     xy_ctrl.c
+ * @subsystem  control
+ * @purpose    xy outer-loop ADRC / LQR / MPC (kind via VAR 44 g_xy_ctrl_kind);
+ *             C port of ground_station/analysis/xy_ctrl.py, gains in xy_ctrl_gains.h.
+ */
 // ------------------------------------------------------------------------------
 // xy outer-loop controllers: ADRC, LQR (Smith predictor), MPC (Smith predictor + FISTA QP)
 // ------------------------------------------------------------------------------

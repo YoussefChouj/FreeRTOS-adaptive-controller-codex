@@ -495,6 +495,11 @@
               <FilePath>..\API\xy_ctrl.c</FilePath>
             </File>
             <File>
+              <FileName>land_xy_gate.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\API\land_xy_gate.c</FilePath>
+            </File>
+            <File>
               <FileName>wfb_traj.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\API\wfb_traj.c</FilePath>
