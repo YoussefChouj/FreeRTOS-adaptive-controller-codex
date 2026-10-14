@@ -415,6 +415,8 @@ class TelHeightHttp(TelHeight):
     def __init__(self, url: str, *args, min_dt_s: float = 0.02, timeout_s: float = 0.1, **kw):
         super().__init__(url, *args, **kw)
         self.url, self.min_dt, self.timeout, self.t_poll = url.rstrip("/"), min_dt_s, timeout_s, -1e9
+        self.http = urllib.request.build_opener(urllib.request.ProxyHandler({}))   # the system proxy 502s 127.0.0.1:
+                                                                                    # r9_a1 sent 0 fixes (2026-10-14)
 
     def poll(self) -> None:
         now = self.clock()
@@ -423,7 +425,7 @@ class TelHeightHttp(TelHeight):
         self.t_poll = now
         q = urllib.parse.quote(",".join((self.key, *self.extra)), safe=",")
         try:
-            with urllib.request.urlopen(f"{self.url}/api/values?names={q}", timeout=self.timeout) as r:
+            with self.http.open(f"{self.url}/api/values?names={q}", timeout=self.timeout) as r:
                 vals = json.load(r)["values"]
             z, age = float(vals[self.key]["value"]), float(vals[self.key]["age_s"])
         except (OSError, ValueError, KeyError, TypeError):
