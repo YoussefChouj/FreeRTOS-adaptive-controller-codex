@@ -1,10 +1,11 @@
 """end.py: the day report from the queue state, and the videos' move to Drive (copied, checked, then removed)."""
 import json
 
-from ground_station.lab import end, runner
+from ground_station.lab import catalog, end, runner
 from ground_station.lab import __main__ as lab
 
 QUEUE = str(end.ROOT / "docs" / "lab" / "queue-2026-10-15.txt")
+CARDS = ("fusion-hover", "pad-landing", "xy-ctrl-screen", "xy-ctrl-confirm")        # the queue's cards
 
 
 def day(monkeypatch, tmp_path, flights=2):
@@ -12,6 +13,9 @@ def day(monkeypatch, tmp_path, flights=2):
     monkeypatch.setattr(runner, "VIDEO_DIR", tmp_path / "video")
     monkeypatch.setattr(end, "DRIVE_DAY", tmp_path / "drive" / "UAV_lab")
     monkeypatch.setattr(end.events, "log", lambda *a, **k: None)
+    monkeypatch.setattr(catalog, "CATALOG", tmp_path / "catalog.yaml")       # never the real docs/lab/catalog.yaml
+    (tmp_path / "catalog.yaml").write_text("# head\ncards:\n" + "".join(f"  {c}: {{status: idea}}\n" for c in CARDS),
+                                           encoding="utf-8")
     (tmp_path / "drive").mkdir()
     fs = []
     for n in range(1, flights + 1):
@@ -73,6 +77,32 @@ def test_no_drive_asks_nothing_and_keeps_them(monkeypatch, tmp_path):
 def test_no_flights_no_report(tmp_path, capsys):
     rc = end.main(["--day", "2026-10-15", "--state", str(tmp_path / "none.json")], ask=lambda p: 1 / 0)
     assert rc == 0 and "nothing to report" in capsys.readouterr().out
+
+
+def test_the_day_moves_its_cards_forward_in_the_catalog(monkeypatch, tmp_path):
+    state = day(monkeypatch, tmp_path)
+    _, _, rep = run(state, "--no-videos")
+    cat = catalog.load()
+    assert cat["cards"]["pad-landing"] == {"status": "flown", "flown": {"2026-10-15": 2}}
+    assert "- pad-landing: 2 flights count, idea -> flown" in rep
+    assert (tmp_path / "catalog.yaml").read_text(encoding="utf-8").startswith("# head\n")
+    run(state, "--no-videos")                                               # a second lab end changes nothing
+    assert catalog.load()["cards"]["pad-landing"]["flown"] == {"2026-10-15": 2}
+
+
+def test_a_passed_confirm_is_confirmed(monkeypatch, tmp_path):
+    state = day(monkeypatch, tmp_path)
+    s = json.loads(state.read_text())
+    for f in s["flights"]:
+        f["card"] = "xy-ctrl-confirm"
+    state.write_text(json.dumps(s))
+    cat = catalog.load()
+    cat["cards"]["xy-ctrl-confirm"]["status"] = "flown"
+    catalog.save(cat)
+    monkeypatch.setattr(runner, "complete", lambda c, st: True)
+    monkeypatch.setattr(runner, "verdict", lambda c, st: (True, "lqr beat pid on every flight."))
+    _, _, rep = run(state, "--no-videos")
+    assert catalog.load()["cards"]["xy-ctrl-confirm"]["status"] == "confirmed" and "flown -> confirmed" in rep
 
 
 def test_lab_end_word(monkeypatch):

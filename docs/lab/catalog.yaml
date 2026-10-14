@@ -1,0 +1,24 @@
+# The lab catalog (docs/lab/pipeline-design.md, decision 12): every firmware module, firmware image and card,
+# with its status: idea -> sim-passed -> flown -> confirmed.
+#   lab catalog [cards|modules|images]   prints it
+#   lab up / lab queue                   refuse a card that is not listed here
+#   lab end                              moves the day's cards forward (flown; confirmed when the confirm passes)
+#                                        and sets flown: {<day>: <flights that count>}; the flights themselves are
+#                                        in that day's logs/lab/<day>/day_report.md, with their folders
+# The tools only move a status forward; set one back by hand. lab end rewrites the sections below this header,
+# so free text goes in an entry's `note:`, not in comments. UNVERIFIED in a note = not checked against a log.
+# images: the image manifest (decision 11) is not built yet.
+modules:
+  xy-pid: {status: flown, what: 'xy position PID outer loop (VAR 44 g_xy_ctrl_kind 0, the default)', note: the baseline; position hold flights in docs/flights/ledger.csv}
+  xy-adrc: {status: idea, what: 'xy ADRC outer loop (VAR 44 g_xy_ctrl_kind 1, API/xy_ctrl.c)', note: in the firmware; flown UNVERIFIED}
+  xy-lqr: {status: idea, what: 'xy LQR outer loop (VAR 44 g_xy_ctrl_kind 2, API/xy_ctrl.c)', note: in the firmware; flown UNVERIFIED; card xy-ctrl-screen}
+  xy-mpc: {status: idea, what: 'xy MPC outer loop (VAR 44 g_xy_ctrl_kind 3, API/xy_ctrl.c, a14f67e7)', note: in the firmware; flown UNVERIFIED; card xy-ctrl-screen}
+  mrac: {status: flown, what: 'MRAC adaptive layer (API/mrac.c), shadow or active', note: ledger flights with mrac_mode shadow and active}
+  ekf: {status: flown, what: position EKF, note: ledger flight f17_hover_shadow3_ekf_active_batery_type_2}
+  camera-fusion: {status: idea, what: 'camera position fusion, ground setting fusion=2|3', note: flown UNVERIFIED; card fusion-hover}
+images: {}
+cards:
+  fusion-hover: {status: idea}
+  pad-landing: {status: idea}
+  xy-ctrl-screen: {status: idea}
+  xy-ctrl-confirm: {status: idea}

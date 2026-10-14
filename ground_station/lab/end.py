@@ -16,7 +16,7 @@ import sys
 import time
 from pathlib import Path
 
-from ground_station.lab import events, runner
+from ground_station.lab import catalog, events, runner
 from ground_station.service.campaign_launch import ROOT
 
 DRIVE_DAY = Path("G:/My Drive/UAV_lab")
@@ -61,15 +61,39 @@ def report(day, queue, state):
         if c:
             out += [outcome(c, state), ""]
         if mine:
-            out += [f"| # | landed | variant | pack | end | early | {c.metric if c else 'metric'} |",
-                    "|---|---|---|---|---|---|---|"]
+            out += [f"| # | landed | variant | pack | end | early | {c.metric if c else 'metric'} | folder |",
+                    "|---|---|---|---|---|---|---|---|"]
             out += [f"| {f.get('n')} | {clock(f.get('t_land'))} | {f['variant']} | {f.get('pack') or '-'} | "
                     f"{f.get('status') or '-'} | {f.get('early') or ''} | "
-                    f"{fmt((f.get('metrics') or {}).get(c.metric) if c else None)} |" for f in mine] + [""]
+                    f"{fmt((f.get('metrics') or {}).get(c.metric) if c else None)} | {f.get('folder') or '-'} |"
+                    for f in mine] + [""]
     out += ["## Packs", ""]
     out += [f"- {p}: {r.get('flights', 0)} flights, {r.get('state', '?')}"
             + (f", rested {r['rest_v']:.2f} V" if r.get("rest_v") else "") for p, r in state["packs"].items()]
     return out + [""]
+
+
+def catalog_day(day, queue, state):
+    """Moves the day's cards forward in the catalog (flown; confirmed when the confirm passes); one line per card."""
+    try:
+        cat = catalog.load()
+    except catalog.CatalogError as e:
+        return ["## Catalog", "", f"Not updated: {e}", ""]
+    byname, out = ({c.name: c for c in queue.cards} if queue else {}), []
+    for name in dict.fromkeys(f["card"] for f in state["flights"]):
+        c = byname.get(name)
+        n = len(runner.flown(state, c)) if c else sum(f["card"] == name and f.get("early") != "x"
+                                                          for f in state["flights"])
+        if not n:
+            continue
+        e = cat["cards"].setdefault(name, {"status": "idea"})
+        was, passed = e["status"], (c and c.stage == "confirm" and runner.complete(c, state)
+                                    and runner.verdict(c, state)[0])
+        e["status"] = catalog.later(was, "confirmed" if passed else "flown")
+        e["flown"] = {**(e.get("flown") or {}), day: n}
+        out.append(f"- {name}: {n} flights count" + (f", {was} -> {e['status']}" if e["status"] != was else ""))
+    catalog.save(cat)
+    return ["## Catalog", ""] + (out or ["No card flew a flight that counts."]) + [""]
 
 
 def videos(state):
@@ -142,7 +166,7 @@ def main(argv=None, ask=input):
         elif ask(f"{len(files)} videos, {size / 1e9:.2f} GB, to {dest}. "
                  "Enter moves them (copied, checked, then removed from D:), n keeps them on D: ").strip().lower() != "n":
             moved = move(files, dest, notes)
-    lines = report(a.day, queue, state) + video_lines(files, moved, notes)
+    lines = report(a.day, queue, state) + catalog_day(a.day, queue, state) + video_lines(files, moved, notes)
     out = state_file.parent / "day_report.md"
     out.write_text("\n".join(lines), encoding="utf-8")
     if notes:

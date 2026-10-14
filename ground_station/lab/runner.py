@@ -27,7 +27,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ground_station.lab import cards, events
+from ground_station.lab import cards, catalog, events
 from ground_station.service import campaign_fly as fly
 from ground_station.service.campaign_launch import ROOT, _pack_ids, rel
 
@@ -50,9 +50,15 @@ class Queue:
     cards: list = field(default_factory=list)     # cards.Card, in flying order
 
 
+def listed_card(name):
+    """cards.load_card behind the catalog's gate (decision 12): a card not in docs/lab/catalog.yaml does not fly."""
+    catalog.require_card(name)
+    return cards.load_card(name)
+
+
 def parse_queue(text, src="<queue>", load=None):
     """The Queue in `text`; raises cards.CardError with every problem (`<src>:<line>: ...`)."""
-    load = load or cards.load_card
+    load = load or listed_card
     q, problems = Queue(), []
     for i, line in enumerate(text.splitlines(), 1):
         try:
