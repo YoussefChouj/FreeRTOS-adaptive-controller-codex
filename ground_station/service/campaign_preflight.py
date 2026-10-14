@@ -95,6 +95,8 @@ def _row(name: str, value: str, ok: bool | None, fix: str = "") -> dict[str, Any
 def _service_row(service: Any) -> dict[str, Any]:
     started = getattr(service, "started_at", None)
     up = f", up {time.time() - started:.0f} s" if isinstance(started, (int, float)) else ""
+    wifi = getattr(getattr(service, "bridge", None), "_wifi_host", None)
+    up += f", WiFi {wifi}" if wifi else ""
     return _row("service", f"pid {os.getpid()}, instance {INSTANCE_ID}{up}; a second 8081 refuses to start", True)
 
 
@@ -309,4 +311,5 @@ def run_preflight(service: Any, campaign: Any = None, campaign_path: str | None 
         _runner_row(campaign),
         _log_plan_row(campaign_path, pack_id),
     ]
-    return {"ok": all(c["pass"] is not False for c in checks), "instance": INSTANCE_ID, "checks": checks}
+    return {"ok": all(c["pass"] is not False for c in checks), "instance": INSTANCE_ID, "checks": checks,
+            "wifi_host": getattr(getattr(service, "bridge", None), "_wifi_host", None)}   # lab up: real or fake drone
