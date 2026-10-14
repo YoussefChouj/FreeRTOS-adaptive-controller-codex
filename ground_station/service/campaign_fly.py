@@ -365,9 +365,35 @@ def _pos_cm(sample):
     return tuple(sample.get(f"Ctrler.{pid}.FB", math.nan) * scale * 100 for _, pid, scale in AXES[:2])
 
 
-def debrief_lines(samples, st, folder):
+def camera_landing(root=Path("logs/video_truth"), now=None, n=15, fresh_s=10.0):
+    """Where the drone stands by the camera: the median pad_x/pad_y (cm) of the last n fixes of the running
+    `camera_truth.sh fusion` session (a `fusion` file, no `stop`, fixes.csv written in the last fresh_s). The EKF
+    landing offset cannot see drift (the EKF drifted with the drone); this can. The tracker's pad origin is where the
+    drone stood before the session's first takeoff. If the ring is lost on the ground the last fixes are from the
+    descent. Returns (x_cm, y_cm, session, fixes) or None without a running fusion session."""
+    now = time.time() if now is None else now
+    root = Path(root)
+    live = [d for d in (root.iterdir() if root.is_dir() else []) if (d / "fusion").exists()
+            and not (d / "stop").exists() and (d / "fixes.csv").exists()
+            and now - (d / "fixes.csv").stat().st_mtime < fresh_s]
+    if not live:
+        return None
+    d = max(live, key=lambda d: (d / "fixes.csv").stat().st_mtime)
+    xy = []
+    for row in (d / "fixes.csv").read_text(encoding="utf-8").splitlines()[1:][-n:]:
+        try:
+            xy.append((float(row.split(",")[2]) * 100, float(row.split(",")[3]) * 100))
+        except (IndexError, ValueError):
+            continue
+    if not xy:
+        return None
+    med = [sorted(c)[len(c) // 2] for c in zip(*xy)]
+    return med[0], med[1], d.name, len(xy)
+
+
+def debrief_lines(samples, st, folder, cam=None):
     """Five lines: result, HOVER and TRAJ error (RMS/max per axis in cm, from the live samples), landing offset from
-    the takeoff point, where the files are."""
+    the takeoff point, where the files are. `cam` (camera_landing()) adds the camera's landing offset from the pad."""
     def prim(s):
         return _state_name(PRIM_NAMES, s, "g_wfb_status.prim_state")
     air = max((s.get("g_wfb_status.airborne_t", 0.0) for s in samples), default=0.0)
@@ -389,6 +415,9 @@ def debrief_lines(samples, st, folder):
         lines.append(f"landing offset x {dx:+.0f} y {dy:+.0f} cm from the takeoff point ({math.hypot(dx, dy):.0f} cm)")
     else:
         lines.append("landing offset: no position before takeoff and after landing")
+    if cam:
+        lines.append(f"camera landing x {cam[0]:+.0f} y {cam[1]:+.0f} cm from the pad ({math.hypot(cam[0], cam[1]):.0f} cm, "
+                     f"{cam[2]}, median of {cam[3]} fixes)")
     lines.append(f"outputs {st.get('outputs_dir') or '-'}  flight folder {folder}")
     return lines
 
@@ -513,7 +542,7 @@ def fly_loop(base, arg, pack, rate=None, run=None, once=False):
             continue
         print("GO. keys: s stop step, n next, l land, p PlotJuggler; Ctrl+C land, twice abort. RC kill stays first.")
         st, samples = watch(base, on_pj=lambda: plotjuggler(base))
-        lines = debrief_lines(samples, st, rel(folder))
+        lines = debrief_lines(samples, st, rel(folder), cam=camera_landing())
         print("\n".join(lines))
         (folder / "debrief.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
         (folder / "outputs.txt").write_text(f"{st.get('outputs_dir') or ''}\n", encoding="utf-8")

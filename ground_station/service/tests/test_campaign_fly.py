@@ -1,5 +1,7 @@
 """campaign_fly --record-only: log plan on the slots, record, stop; never a drone command."""
 
+import time
+
 from ground_station.livewatch.campaign_capture import MAX_SLOTS
 from ground_station.service import campaign_fly
 
@@ -83,6 +85,7 @@ def test_tel_line_names_states_scales_cm_and_drops_stale(monkeypatch):
 
 # --- fly: arm = go, live watch, debrief, flight folder ---------------------------------------------------------------
 
+import time
 import pytest  # noqa: E402
 
 from ground_station.service.campaign_launch import LaunchError  # noqa: E402
@@ -309,3 +312,20 @@ def test_p_key_without_plotjuggler_installed_still_streams(monkeypatch):
     monkeypatch.setattr(campaign_fly, "call", lambda *a, **k: (200, {"addr": "127.0.0.1:9870", "vars": []}))
     assert campaign_fly.plotjuggler("http://h") == (
         "PlotJuggler: streaming to 127.0.0.1:9870, but no plotjuggler.exe found (set PJ_BIN)")
+
+
+def test_camera_landing_reads_the_running_fusion_session(tmp_path):
+    hdr = "t_send,t_cap,pad_x_m,pad_y_m,earth_x_cm,earth_y_cm,frame_hex\n"
+    live, done = tmp_path / "r8_f1", tmp_path / "r8_f0"
+    for d in (live, done):
+        d.mkdir()
+        (d / "fusion").write_text("2\n")
+    (live / "fixes.csv").write_text(hdr + "".join(f"1.0,1.0,{0.5 - i * 0.01:.2f},0.05,0,0,00\n" for i in range(40))
+                                    + "2.0,2.0,0.10,-0.04,0,0,00\n" * 15)
+    (done / "fixes.csv").write_text(hdr + "1.0,1.0,0.9,0.9,0,0,00\n")
+    (done / "stop").write_text("")
+    x, y, name, n = campaign_fly.camera_landing(tmp_path)
+    assert (round(x), round(y), name, n) == (10, -4, "r8_f1", 15)
+    assert campaign_fly.camera_landing(tmp_path, now=time.time() + 60) is None   # stale fixes: no running session
+    lines = campaign_fly.debrief_lines([], {"status": "done"}, "f/01", cam=(10.0, -4.0, "r8_f1", 15))
+    assert "camera landing x +10 y -4 cm from the pad (11 cm, r8_f1, median of 15 fixes)" in lines
