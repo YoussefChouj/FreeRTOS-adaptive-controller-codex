@@ -321,9 +321,17 @@ class Lab:
             problem = fly.pack_problem(said)
             if not problem and said == self.pack and not came_back:
                 problem = f"{said} is the pack coming off"
-            if not problem:
+            if problem:
+                print(problem, flush=True)
+                continue
+            r = self.state["packs"].get(said)
+            if said == self.pack or self.charged(r):
                 break
-            print(problem, flush=True)
+            had = (f"on the charger {(self.wall() - (r.get('t') or self.wall())) / 60:.0f} of {CHARGE_S / 60:.0f} min"
+                   if r["state"] == "charging" else f"{r['state']}, {r.get('flights', 0)} flights")
+            if self.ask(f"{said} is not charged by my count ({had}). Charged? Enter = yes, n = pick another: ") != "n":
+                r["state"] = "charged"          # the operator's word; the voltage check after the swap still gates it
+                break
         if said != self.pack:
             on = self.ask(f"{self.pack} on the charger now? Enter = yes, n = not yet: ") != "n"
             self.pack_rec(self.pack).update(state="charging" if on else "flown", t=self.wall())

@@ -164,6 +164,16 @@ def test_lab_flies_rests_and_swaps_after_two_flights(monkeypatch, tmp_path):
     assert runner.load_state(lab.state_file)["packs"]["P2"]["flights"] == 1
 
 
+def test_lab_swap_to_a_pack_still_charging_takes_the_operators_word(monkeypatch, tmp_path):
+    d = FakeDrone(monkeypatch, tmp_path, answers=["p2", "n", "p2", "", ""])
+    lab = d.lab
+    lab.state["packs"]["P1"]["flights"] = 2
+    lab.state["packs"]["P2"] = {"state": "charging", "flights": 2, "rest_v": 15.1, "t": d.now - 600}
+    assert lab.one(*runner.next_flight(lab.queue, lab.state)) is None
+    assert d.flown == [("lst-a", "P2")] and not d.answers
+    assert lab.state["packs"]["P2"]["flights"] == 1 and lab.state["packs"]["P1"]["state"] == "charging"
+
+
 def test_lab_early_end_asks_why_and_x_flies_it_again(monkeypatch, tmp_path):
     d = FakeDrone(monkeypatch, tmp_path, answers=["?", "x"], status="aborted")
     lab = d.lab
