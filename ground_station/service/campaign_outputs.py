@@ -6,7 +6,8 @@
         campaign.yaml          the campaign file that was flown
         log_plan.json          per-experiment plan_capture() plans and their subscribe steps
         plots/<flight_id>.png  x / y / z against their references, attitude, motors
-        flights/<flight_id>/   flightlab report of the recording (it also upserts docs/flights/ledger.csv)
+        flights/<flight_id>/   flightlab report of the recording (it also upserts docs/flights/ledger.csv); absent
+                               until flightlab loads recorder sessions (loaders/session.py is the v2 stub)
 
 Each flight's raw log stays in its recorder session (FlightRecord.recording, ``logs/sessions/<stamp>-<label>``,
 telemetry.csv rows ``received_ns,slot,key,value`` with keys ``slot<N>.<symbol>``).
@@ -286,6 +287,8 @@ def write_campaign_outputs(
             if analyze_flight is not None:
                 try:
                     row["report_dir"] = str(analyze_flight(session, out / "flights" / rec_d["flight_id"]))
+                except NotImplementedError:
+                    pass  # flightlab cannot load recorder sessions yet (loaders/session.py, v2): nothing failed
                 except Exception as exc:
                     row["notes"].append(f"flightlab failed: {type(exc).__name__}: {exc}")
         else:

@@ -148,6 +148,19 @@ def test_outputs_note_a_failing_flightlab_run(tmp_path):
     assert not (out / "plots").exists()
 
 
+def test_outputs_stay_quiet_while_flightlab_cannot_load_sessions(tmp_path):
+    """loaders/session.py is the v2 stub: every summary said 'flightlab failed' (10-14 rehearsal)."""
+    s1 = _session(tmp_path / "sessions", "a")
+    report = CampaignReport(None, [_record("hover_ladder-001", "hover_z050", s1)], "complete", "")
+
+    def stub(session, out_dir):
+        raise NotImplementedError("v2")
+
+    out = write_campaign_outputs(LADDER, report, out_root=tmp_path, sat=None, analyze_flight=stub,
+                                 plots=False, now=datetime(2026, 10, 3))
+    assert "flightlab" not in (out / "summary.md").read_text()
+
+
 # --- runner capture hooks ---------------------------------------------------------------------------
 
 
