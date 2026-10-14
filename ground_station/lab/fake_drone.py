@@ -237,11 +237,12 @@ class FakeUdpDrone:
             return "error: empty"
         op = parts[0]
         if op == "arm":                                          # RC arm + motor init, through the real handlers
+            reply = "ok arm"
             for idx in (ArmIdx.ARM, ArmIdx.IDLE):
                 out = Outcome(self.drone.send(build_command(Command(0, CMD_ARM, idx, 1.0))))
                 if out != Outcome.APPLIED:
-                    return f"refused: arm step {idx.name} {out.name}"
-            reply = "ok arm"
+                    reply = f"refused: arm step {idx.name} {out.name}"
+                    break
         elif op == "disarm":
             out = Outcome(self.drone.send(build_command(Command(0, CMD_ARM, ArmIdx.ARM, 0.0))))
             reply = "ok disarm" if out == Outcome.APPLIED else "refused: airborne"
@@ -250,8 +251,11 @@ class FakeUdpDrone:
             self.subs = {}
             reply = f"ok reboot, silent {self.silent_s:g} s"
         elif op == "vbat" and len(parts) == 2:
-            self.vbat = self.pack_v = float(parts[1])
-            reply = f"ok vbat {self.vbat:.2f}"
+            try:
+                self.vbat = self.pack_v = float(parts[1])
+                reply = f"ok vbat {self.vbat:.2f}"
+            except ValueError:
+                reply = f"error: vbat needs a number, got {parts[1]!r}"
         elif op == "sbus" and len(parts) == 2 and parts[1] in ("on", "off"):
             self.drone.sbus_live = parts[1] == "on"
             reply = f"ok sbus {parts[1]}"

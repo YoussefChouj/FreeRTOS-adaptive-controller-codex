@@ -137,6 +137,8 @@ def test_reboot_goes_silent_then_forgets_the_subscription(rig):
         _recv(gs, _is(0x09), timeout_s=0.3)
 
 
-def test_unknown_control_word_is_an_error(rig):
+def test_bad_control_words_are_errors_and_the_drone_keeps_running(rig):
     drone, _ = rig
     assert ctl("fly away", port=drone.ctl_port, host="127.0.0.1").startswith("error")
+    assert ctl("vbat low", port=drone.ctl_port, host="127.0.0.1").startswith("error")
+    assert ctl("vbat 15.1", port=drone.ctl_port, host="127.0.0.1") == "ok vbat 15.10"
