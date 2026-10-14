@@ -1,7 +1,7 @@
 import numpy as np
 
 DEFAULTS = {
-    'q_pos': 1e-6,
+    'q_pos': 0.05,  # firmware since 2026-10-12 3492cbdb (mode 3 camera fusion; no other update observes p)
     'q_acc': 1e-3,
     'q_bof': 1e-5,  # firmware since 2026-10-07 two-channel EKF (0 from 2026-10-03 to 10-07: bof frozen)
     'q_ba': 1e-6,

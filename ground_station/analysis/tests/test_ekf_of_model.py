@@ -294,12 +294,17 @@ def test_gate_lockout_release_golden(gcc_lib):
     assert abs(c_model.innov_x) < 0.061 and abs(c_model.innov_y) < 0.061  # under EKF_OF_HEALTH_THRESH
 
 
+Q_POS_GATE_SCENARIO = 1e-6
+
+
 def test_update_pos_golden(gcc_lib):
     """Proposed mode 3: C EkfOf_UpdatePos matches EkfOfModel.update_pos (gain, per-axis gate, REJ_RELEASE
     re-anchor) on a hover with OF frames between camera fixes, incl. the rejection bitmask."""
     from ground_station.analysis.ekf_of_model import REJ_RELEASE
     dt, R, gate = 0.005, (0.017 / 1.04) ** 2, 5.0
-    model = EkfOfModel(1, dtype=np.float32)
+    # the gate/release scenario was built at q_pos 1e-6; at firmware 0.05 (3492cbdb) P is wider and the expected
+    # gate masks no longer hold. Pin it on both sides: this test is about the gate logic, not the tuning.
+    model = EkfOfModel(1, dtype=np.float32, q_pos=Q_POS_GATE_SCENARIO)
     lib = ctypes.CDLL(str(gcc_lib))
     lib.EkfOf_Init.argtypes = [ctypes.POINTER(EkfOf_t)]
     lib.EkfOf_Predict.argtypes = [ctypes.POINTER(EkfOf_t), ctypes.c_float, ctypes.c_float, ctypes.c_float]
@@ -309,6 +314,7 @@ def test_update_pos_golden(gcc_lib):
     lib.EkfOf_UpdatePos.restype = ctypes.c_uint8
     c_model = EkfOf_t()
     lib.EkfOf_Init(ctypes.byref(c_model))
+    c_model.q_pos = Q_POS_GATE_SCENARIO
     # fixes every 20 ticks: near (taken), far on x only (gated REJ_RELEASE-1 times, then released), near again
     fixes = [(0.01, -0.01)] * 3 + [(0.5, 0.0)] * REJ_RELEASE + [(0.5, 0.0)] * 2
     masks = []
