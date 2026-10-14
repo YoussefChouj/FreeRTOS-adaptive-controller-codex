@@ -784,8 +784,13 @@ class StreamsManager:
             return (True, "")
         
         specs = self.slot_specs()
-        configured = {slot: spec["rate"] for slot, spec in specs.items() if spec.get("rate", 0) > 0}
-        
+        # A campaign log plan stops the slots it does not use (divider 0, straight on the bridge), so the
+        # dashboard default for them is not expected: lab_a_hover stopped slot 3 and preflight failed (2026-10-14).
+        naming = getattr(bridge, "_naming", None)
+        stopped = set(getattr(naming(), "cleared", ())) if callable(naming) else set()
+        configured = {slot: spec["rate"] for slot, spec in specs.items()
+                      if spec.get("rate", 0) > 0 and slot not in stopped}
+
         if not configured:
             return (True, "")
             

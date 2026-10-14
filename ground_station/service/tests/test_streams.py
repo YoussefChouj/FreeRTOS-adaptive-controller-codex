@@ -625,6 +625,32 @@ def test_preflight_all_growing(tmp_path):
     assert reason == ""
 
 
+def test_preflight_skips_slots_the_plan_stopped(tmp_path):
+    """A campaign log plan stopped slot 3 (divider 0): its silence is expected, not a link fault (2026-10-14 A1)."""
+
+    class FakePrefBridge:
+        _stream_stats = {0: {"received": 0}, 1: {"received": 0},
+                         2: {"received": 0}, 3: {"received": 0}}
+        _stream_lock = threading.Lock()
+
+        def _naming(self):
+            return SimpleNamespace(cleared={3})
+
+        def resend_slot(self, slot):
+            raise AssertionError(f"slot {slot} re-sent")
+
+    bridge = FakePrefBridge()
+
+    def advance(s):
+        with bridge._stream_lock:
+            for slot in (0, 1, 2):
+                bridge._stream_stats[slot]["received"] += 100
+
+    m = StreamsManager(SimpleNamespace(bridge=bridge), resolver_factory=lambda: None,
+                       log_dir=tmp_path / "logs", sleep=advance)
+    assert m.preflight_check() == (True, "")
+
+
 def _advance_bridge_stats(bridge, s):
     """Simulate stream stats advancing during sleep."""
     with bridge._stream_lock:
