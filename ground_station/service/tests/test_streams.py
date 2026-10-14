@@ -666,7 +666,7 @@ def test_preflight_expects_the_rate_the_plan_asked_for(tmp_path):
     bridge = FakePrefBridge()
     m = StreamsManager(SimpleNamespace(bridge=bridge), resolver_factory=lambda: None,
                        log_dir=tmp_path / "logs", sleep=lambda s: _advance_bridge_stats(bridge, s))
-    assert m.preflight_check() == (False, "slot 1 silent")
+    assert m.preflight_check() == (False, "slot 1 slow: 50 Hz, needs 80 of 100 Hz")
     bridge._slot_requests = {1: (50.0, b"", ())}
     assert m.preflight_check() == (True, "")
 

@@ -808,47 +808,46 @@ class StreamsManager:
         self._sleep(window_s)
         after = _get_counts()
         
-        silent_slots = []
-        for slot, rate in configured.items():
-            b = before.get(slot, 0)
-            a = after.get(slot, 0)
-            growth = a - b if a >= b else a
-            if growth < min_ratio * rate * window_s:
-                silent_slots.append(slot)
-                
-        if not silent_slots:
+        def _short(before, after, slots):           # slot -> rows in the window, for the slots under the bar
+            out = {}
+            for slot in slots:
+                b, a = before.get(slot, 0), after.get(slot, 0)
+                growth = a - b if a >= b else a
+                if growth < min_ratio * configured[slot] * window_s:
+                    out[slot] = growth
+            return out
+
+        # Say how short a slot is, not only "silent": a slot at half rate needs a different fix than a dead one
+        # (2026-10-14 lab: "slot 3 silent" hid that the FC streamed it at another rate).
+        def _why(short):
+            parts = []
+            for slot in sorted(short):
+                rate, hz = configured[slot], short[slot] / window_s
+                need = "needs %d of %d Hz" % (round(min_ratio * rate), rate)
+                parts.append("slot %d silent (0 Hz, %s)" % (slot, need) if short[slot] == 0
+                             else "slot %d slow: %d Hz, %s" % (slot, round(hz), need))
+            return "; ".join(parts)
+
+        short = _short(before, after, configured)
+        if not short:
             return (True, "")
-            
+
         resent = False
-        for slot in silent_slots:
+        for slot in short:
             if hasattr(bridge, "resend_slot"):
                 bridge.resend_slot(slot)
                 resent = True
-                
+
         if not resent:
-            silent_slots.sort()
-            msg = "slot %d silent" % silent_slots[0] if len(silent_slots) == 1 else "slots %s silent" % ",".join(map(str, silent_slots))
-            return (False, msg)
-            
+            return (False, _why(short))
+
         before2 = _get_counts()
         self._sleep(window_s)
         after2 = _get_counts()
-        
-        silent_slots2 = []
-        for slot in silent_slots:
-            rate = configured[slot]
-            b = before2.get(slot, 0)
-            a = after2.get(slot, 0)
-            growth = a - b if a >= b else a
-            if growth < min_ratio * rate * window_s:
-                silent_slots2.append(slot)
-                
-        if not silent_slots2:
+        short2 = _short(before2, after2, short)
+        if not short2:
             return (True, "")
-            
-        silent_slots2.sort()
-        msg = "slot %d silent" % silent_slots2[0] if len(silent_slots2) == 1 else "slots %s silent" % ",".join(map(str, silent_slots2))
-        return (False, msg)
+        return (False, _why(short2))
 
     def _await_schemas(self, bridge, sent: dict, specs: dict, timeout_s=None, retries=None, raise_on_fail=True):
         if timeout_s is None:
