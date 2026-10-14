@@ -235,6 +235,21 @@ def test_replay_keeps_swaps_and_defaults(resolver, tmp_path):
 
 
 @needs_elf
+def test_replay_resends_a_campaign_plan_instead_of_the_default(resolver, tmp_path):
+    """The campaign log plan goes straight to bridge.subscribe_slot, not through apply. After an FC reboot the
+    replay re-sends that latest request; the default preset would drop g_wfb_status (2026-10-14 rehearsal)."""
+    svc, m = _mgr(resolver, tmp_path)
+    m.apply([SMALL], background=False)
+    resent = []
+    svc.bridge._naming = lambda: SimpleNamespace(names={0: ("g_wfb_status.prim_state", "real_voltage")})
+    svc.bridge.resend_slot = resent.append
+    svc.bridge.requests.clear()
+    svc.bridge._resubscribe_fn()
+    assert resent == [0]
+    assert [r[0] for r in svc.bridge.requests] == [2, 3]   # the other defaults still replay
+
+
+@needs_elf
 def test_reset_after_preset_apply(resolver, tmp_path):
     _, m = _mgr(resolver, tmp_path)
     m.apply([SMALL], background=False)

@@ -177,6 +177,23 @@ def test_readiness_loads_the_core_plan_when_status_is_not_streaming():
     assert len(calls) == 1
 
 
+def test_readiness_reloads_the_core_plan_when_status_is_left_over_from_before_a_reboot():
+    """A pack swap reboots the FC: the cached prim_state is old, so Go loads the core plan again instead of failing
+    'g_wfb_status is stale' (2026-10-14 rehearsal)."""
+    svc = FakeService()
+    calls = []
+
+    class Bridge:
+        def subscribe_slot(self, **args):
+            calls.append(args)
+            svc.stream(g_wfb_status__prim_state=0)
+
+    svc.bridge = Bridge()
+    svc.values["g_wfb_status.prim_state"] = (0.0, NOW_NS - 10_000_000_000)   # streamed 10 s ago, before the reboot
+    check_live_ready(svc, now_ns=lambda: NOW_NS)
+    assert [c["slot"] for c in calls] == [0]
+
+
 
 def test_readiness_still_refuses_when_the_fc_never_streams_status(monkeypatch):
     from ground_station.service import campaign_live

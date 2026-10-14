@@ -205,7 +205,8 @@ STATUS_PRIME_S = 3.0       # PROPOSED: Go waits this long for g_wfb_status after
 
 
 def prime_status_stream(service: Any, wait_s: float | None = None, sleep: Callable[[float], None] = time.sleep,
-                        clock: Callable[[], float] = time.monotonic) -> None:
+                        clock: Callable[[], float] = time.monotonic,
+                        now_ns: Callable[[], int] = time.time_ns) -> None:
     """Put the core log plan (it carries g_wfb_status) on its slots and wait for prim_state to stream.
 
     The begin hook applies each experiment's plan only after Go, but Go needs g_wfb_status first, and no operator
@@ -213,22 +214,30 @@ def prime_status_stream(service: Any, wait_s: float | None = None, sleep: Callab
     No-op without a bridge or when prim_state already streams.
     """
     bridge = getattr(service, "bridge", None)
-    if bridge is None or "g_wfb_status.prim_state" in service.latest_values(("g_wfb_status.prim_state",)):
+    if bridge is None or _status_fresh(service, now_ns):
         return
     for step in subscribe_steps(plan_capture(None)):
         bridge.subscribe_slot(**step["args"])
     deadline = clock() + (STATUS_PRIME_S if wait_s is None else wait_s)
     while clock() < deadline:
-        if "g_wfb_status.prim_state" in service.latest_values(("g_wfb_status.prim_state",)):
+        if _status_fresh(service, now_ns):
             return
         sleep(0.1)
+
+
+def _status_fresh(service: Any, now_ns: Callable[[], int]) -> bool:
+    """prim_state streamed within STATUS_STALE_S. A value left over from before a reboot (pack swap) is not fresh."""
+    vals = service.latest_values(("g_wfb_status.prim_state",))
+    if "g_wfb_status.prim_state" not in vals:
+        return False
+    return (now_ns() - vals["g_wfb_status.prim_state"][1]) / 1e9 <= STATUS_STALE_S
 
 
 def check_live_ready(service: Any, now_ns: Callable[[], int] = time.time_ns) -> None:
     """Raise RuntimeError naming the first missing piece: gateway, or fresh g_wfb_status."""
     if getattr(service, "gateway", None) is None:
         raise RuntimeError("no command gateway: the service has no bridge connected")
-    prime_status_stream(service)
+    prime_status_stream(service, now_ns=now_ns)
     vals = service.latest_values(("g_wfb_status.prim_state",))
     if "g_wfb_status.prim_state" not in vals:
         raise RuntimeError("g_wfb_status is not streaming (add g_wfb_status.* to the subscribe set)")

@@ -912,6 +912,13 @@ class StreamsManager:
             slot = d["slot"]
             if slot in overrides:
                 continue
+            # A direct bridge.subscribe_slot (the campaign's log plan) replaced the default and never entered
+            # _overrides: re-send that latest request, not the default (the default would drop g_wfb_status).
+            naming = getattr(bridge, "_naming", None)
+            remembered = naming().names.get(slot) if naming is not None else None
+            if remembered is not None and remembered != tuple(d["vars"]):
+                bridge.resend_slot(slot)
+                continue
             with bridge._stream_lock:
                 bridge._stream_schemas.pop(slot, None)
             bridge._request_stream_schema(slot, tuple(d["vars"]), d["divider"], d["name"])
