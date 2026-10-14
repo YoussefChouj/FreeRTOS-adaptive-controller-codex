@@ -68,3 +68,10 @@ def _stdlib_is_not_left_patched():
             "or `mock.patch` context so it is restored; a module-level "
             "assignment persists for the whole pytest session."
             % ", ".join(leaked))
+
+
+@pytest.fixture(autouse=True)
+def _pipeline_events_stay_out_of_logs(tmp_path_factory, monkeypatch):
+    """Code under test calls ground_station.lab.events.log: keep those lines out of logs/pipeline (the real log)."""
+    if "LAB_EVENTS_DIR" not in os.environ:
+        monkeypatch.setenv("LAB_EVENTS_DIR", str(tmp_path_factory.getbasetemp() / "pipeline_events"))

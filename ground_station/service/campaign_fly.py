@@ -31,6 +31,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from ground_station.lab import events
+
 ROOT = Path(__file__).resolve().parents[2]
 CHECKLIST = ("pack charged and plugged", "drone on the pad", "phone filming LANDSCAPE, calibration focus",
              "ch6 HIGH, flymode SDK", "thumb on ch10 kill", "area clear")
@@ -68,6 +70,7 @@ def ensure_service(base, port, wait_s=60):
     subprocess.Popen([sys.executable, "-m", "ground_station.service", "--port", str(port)], cwd=ROOT,
                      creationflags=flags)
     print(f"service starting in its own window on {port} ...")
+    events.log("service_start", port=port)
     for _ in range(wait_s):
         time.sleep(1)
         try:
@@ -75,6 +78,7 @@ def ensure_service(base, port, wait_s=60):
             return
         except OSError:
             pass
+    events.log("service_start_failed", port=port, wait_s=wait_s)
     sys.exit(f"service did not answer on {port} in {wait_s} s: check its window")
 
 
@@ -172,19 +176,23 @@ def watch(base, term=None, key=None, poll_s=1.0, live_s=LIVE_S, on_pj=None):
             if k in KEY_ROUTES:
                 code, res = call(base, KEY_ROUTES[k], {})
                 term.event(f"key {k} -> {KEY_ROUTES[k]}: {code} {res.get('error', '')}".rstrip())
+                events.log("key", key=k, route=KEY_ROUTES[k], code=code, error=res.get("error"))
             elif k == "p":
                 term.event(on_pj() if on_pj else "PlotJuggler: not wired here")
+                events.log("key", key="p")
             now = _clock()
             if now - t_state >= poll_s:
                 t_state = now
                 st = call(base, "/api/campaign/state")[1]
                 if t_down is not None:
                     term.event(f"service back after {_clock() - t_down:.0f} s")
+                    events.log("service_back", down_s=round(_clock() - t_down, 1))
                     t_down = None
                 line = (st.get("status"), st.get("phase"), st.get("banner"), st.get("arm_refusal"))
                 if line != last:
                     refusal = f"  ARM REFUSED: {line[3]}" if line[3] else ""
                     term.event(f"{line[0]}  {line[1] or ''}  {line[2] or ''}{refusal}")
+                    events.log("phase", status=line[0], phase=line[1], banner=line[2], refusal=line[3])
                     last = line
                 if st.get("status") != "running":
                     term.close()
@@ -197,6 +205,7 @@ def watch(base, term=None, key=None, poll_s=1.0, live_s=LIVE_S, on_pj=None):
         except KeyboardInterrupt:
             route = "/api/campaign/land" if stops == 0 else "/api/campaign/abort"
             stops += 1
+            events.log("key", key="ctrl+c", route=route)
             try:
                 term.event(f"Ctrl+C -> {route}: {call(base, route, {})}")
             except OSError as e:
@@ -206,6 +215,7 @@ def watch(base, term=None, key=None, poll_s=1.0, live_s=LIVE_S, on_pj=None):
             now = _clock()
             if t_down is None:
                 t_down = now
+                events.log("service_down", error=str(e))
                 term.event(f"SERVICE DOWN ({e}): fly has no control path and the flight log has stopped. "
                            f"Fly with the RC: take over and land. After landing, run fly again (it restarts the service).")
             elif int(now - t_down) // 10 != int(now - t_down - poll_s) // 10:
@@ -328,6 +338,7 @@ def quiet_preflight(base, campaign, pack, shown):
     if "error" in res:
         fails += (f"preflight error: {res['error']}",)
     if fails != shown:
+        events.log("preflight", ok=not fails, fails=list(fails), campaign=campaign, pack=pack)
         print("preflight " + ("FAIL:\n  " + "\n  ".join(fails) if fails else "OK: arm by RC to fly"), flush=True)
     return bool(res.get("ok")) and not fails, fails
 
@@ -362,10 +373,12 @@ def wait_for_arm(base, campaign, pack, key=None, poll_s=0.25, preflight=True):
                 t_link = now
                 if lost:
                     print("link back", flush=True)
+                    events.log("link_back")
                     return "link"
             elif not lost and now - t_link > LINK_LOST_S:
                 lost = True
                 print("link lost: waiting for the drone (a new pack asks for its id)", flush=True)
+                events.log("link_lost")
             state = (v.get("arm") or {}).get("state")
             if state != "armed":
                 if armed_t is not None:
@@ -380,6 +393,7 @@ def wait_for_arm(base, campaign, pack, key=None, poll_s=0.25, preflight=True):
                         print("ARMED " + ("with the preflight failing" if seen_disarmed else "already") +
                               ": disarm by RC, then arm again", flush=True)
                         warned = True
+                        events.log("arm_refused", seen_disarmed=seen_disarmed, preflight_ok=pf_ok)
                     seen_disarmed = False
                 else:
                     armed_t, count = now, None
@@ -574,7 +588,9 @@ def fly_loop(base, arg, pack, rate=None, run=None, once=False):
             name, go_pack = c.campaign, c.packs[0]
             print(f"{name}  {rel(src)}  pack {go_pack}  -> {rel(launch)}\nWaiting for the RC arm (q quits).",
                   flush=True)
+        t_wait = _clock()
         r = wait_for_arm(base, str(launch), go_pack, preflight=not held)
+        events.log("arm_wait", result=r, campaign=name, pack=go_pack, s=round(_clock() - t_wait, 1))
         if r == "quit":
             return 0
         if r == "link":
@@ -586,14 +602,18 @@ def fly_loop(base, arg, pack, rate=None, run=None, once=False):
         code, res = call(base, "/api/campaign/go", {
             "campaign_path": str(launch), "pack_id": go_pack, "checklist": {c: True for c in CHECKLIST},
             "source": "operator:cli", "confirmation": CONFIRMATION}, timeout=30)
+        events.log("go", code=code, campaign=name, pack=go_pack, folder=rel(folder), error=res.get("error"))
         if code != 200:
             print(f"GO refused ({code}): {res.get('error', res)}. Disarm by RC.", flush=True)
             held = None
             continue
         print("GO. keys: s stop step, n next, l land, p PlotJuggler; Ctrl+C land, twice abort. RC kill stays first.")
         st, samples = watch(base, on_pj=lambda: plotjuggler(base))
+        t_land = _clock()
         lines = debrief_lines(samples, st, rel(folder), cam=camera_landing())
         print("\n".join(lines))
+        events.log("debrief", ms=round((_clock() - t_land) * 1000), folder=rel(folder), status=st.get("status"),
+                   phase=st.get("phase"), samples=len(samples))
         (folder / "debrief.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
         (folder / "outputs.txt").write_text(f"{st.get('outputs_dir') or ''}\n", encoding="utf-8")
         write_samples(folder / "live_5hz.csv", samples)
@@ -625,6 +645,7 @@ def main(argv=None):
     if why:
         sys.exit(why)
     remember_pack(pack)
+    events.log("fly_start", campaign=a.campaign, pack=pack, record_only=a.record_only, once=a.once)
     ensure_service(base, a.port)
     print("\n".join(vofa_setup(base)), flush=True)
     if a.record_only:
@@ -636,6 +657,7 @@ def main(argv=None):
         rc = 0
     else:
         rc = fly_loop(base, a.campaign, pack, a.rate, a.run, a.once)
+    events.log("fly_end", rc=rc)
     print("Stop the video. The service window stays open; close it when you are done.")
     return rc
 
