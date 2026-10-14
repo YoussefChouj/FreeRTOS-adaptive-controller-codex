@@ -788,8 +788,14 @@ class StreamsManager:
         # dashboard default for them is not expected: lab_a_hover stopped slot 3 and preflight failed (2026-10-14).
         naming = getattr(bridge, "_naming", None)
         stopped = set(getattr(naming(), "cleared", ())) if callable(naming) else set()
-        configured = {slot: spec["rate"] for slot, spec in specs.items()
-                      if spec.get("rate", 0) > 0 and slot not in stopped}
+        # The rate a slot must show is the one the bridge last asked the FC for: a campaign log plan replaces
+        # the dashboard rate (lab_c_* stream 100 Hz). A stop (divider 0) leaves the old entry, hence `stopped`.
+        requested = getattr(bridge, "_slot_requests", None) or {}
+        configured = {}
+        for slot, spec in specs.items():
+            rate = requested[slot][0] if slot in requested else spec.get("rate", 0)
+            if rate > 0 and slot not in stopped:
+                configured[slot] = rate
 
         if not configured:
             return (True, "")

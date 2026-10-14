@@ -651,6 +651,26 @@ def test_preflight_skips_slots_the_plan_stopped(tmp_path):
     assert m.preflight_check() == (True, "")
 
 
+def test_preflight_expects_the_rate_the_plan_asked_for(tmp_path):
+    """A plan asked slot 1 for 100 Hz; 50 Hz arriving is a fault even if the dashboard default is lower."""
+
+    class FakePrefBridge:
+        _stream_stats = {0: {"received": 0}, 1: {"received": 0},
+                         2: {"received": 0}, 3: {"received": 0}}
+        _stream_lock = threading.Lock()
+        _slot_requests = {1: (100.0, b"", ())}
+
+        def _naming(self):
+            return SimpleNamespace(cleared={3})
+
+    bridge = FakePrefBridge()
+    m = StreamsManager(SimpleNamespace(bridge=bridge), resolver_factory=lambda: None,
+                       log_dir=tmp_path / "logs", sleep=lambda s: _advance_bridge_stats(bridge, s))
+    assert m.preflight_check() == (False, "slot 1 silent")
+    bridge._slot_requests = {1: (50.0, b"", ())}
+    assert m.preflight_check() == (True, "")
+
+
 def _advance_bridge_stats(bridge, s):
     """Simulate stream stats advancing during sleep."""
     with bridge._stream_lock:
