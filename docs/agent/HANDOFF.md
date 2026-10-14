@@ -3,32 +3,25 @@
 Read order: `AGENTS.md` -> this file -> `docs/agent/memory/rules.md` -> `.claude_state.md` (newest entry first).
 History: `docs/agent/ledger/` (grep, never read whole). Desktop session is CEO: inline, no subagents.
 
-## Now: 2026-10-14 overnight - lab flight workflow `fly` built (inline, operator asleep), nothing flashed or flown
+## Now: 2026-10-14 pre-lab - `fly`, /lab skill, position-gain writes built; nothing flashed or flown
 
-Branch `overnight-2026-10-08`. The drone is still on ELF 6da69207. Commits are local only, and the code + tests are UNVERIFIED on the drone.
-- **WP-44 VAR_WRITE** (41013a0e): GS CMD 0x2D writes one row of the 33-row VAR_WRITE_ROW allowlist (AutoflyTask.c).
-- **WP-45** (03716d5c): a Keil preset starts from a WiFi hover (HOVER yields to it). Deviation from "fly-up without WFB":
-  the WFB takeoff/hover/land is kept, because the code shows the drone probably cannot climb without WFB.
-- **`fly`** (`fly.cmd <name|.fly|yaml>`, 03ddcf5b):
-  - arm = go, with a 3 s countdown;
-  - preflight runs silently;
-  - keys s/n/l/p, Ctrl+C lands;
-  - 5-line debrief;
-  - flights are filed under `logs/flights/<date>/<NN>_<c>/`.
-  `.fly` text scripts (a40b99ef); a `preset` step (2ad619c8), plus a `set` step.
-- **Camera** (5450c76a): the fusion scrcpy mirror is 1920x1080, off screen and grabbed by PrintWindow, so only the tracker window shows.
-- **VOFA+/PJ** (bb41660e):
-  - `fly` prints the VOFA+ import paths (C:/tmp/vofa);
-  - `p` = PlotForward /api/streams/plot -> PlotJuggler 9870.
+Branch `overnight-2026-10-08`, local commits, UNVERIFIED on the drone. Drone: ELF e4dd3652 (10-13 15:10, has 3492cbdb +
+the 5f30b9b8 mode 3 fix). Built, NOT flashed: WP-44 VAR_WRITE (41013a0e), WP-45 preset from a WiFi hover (03716d5c),
+CMD 0x01 axes 7-11 = Z_pos/locx/locy/locxs/locys (6aa642fc, not Keil-built).
+- `fly` (03ddcf5b..bb41660e): arm = go, keys s/n/l/p, `.fly` scripts, 5-line debrief + a camera landing line while
+  fusion runs (71f364cf). Lab playbook: `/lab` skill (bring-up, fly, debrief, gains, compaction between flights).
+- Fusion alongside 8081/`fly` (884c79d3, UNVERIFIED): `camera_truth.sh fusion <name> 2 --yaw-deg 94`.
+- Measured: wobble = position loops (overshoot 6-16 cm, settle 1.6-2.7 s or never, period 2.6-3.5 s; flight_debrief
+  "Setpoint moves"). Mode 2 r7_f3 drift 7-23 cm per 14-35 s window, landed 35 cm from the pad (camera). Pad landing
+  NOT proven.
 
 ## Next 3 actions
-1. At the lab, stop 8081, then `python -m ground_station.flashtool.rebuild_and_flash --yes` (WP-44/45 + 3492cbdb).
-2. Ground tests, disarmed:
-   - a VAR_WRITE round trip (its time is unmeasured);
-   - `camera_truth.sh check` should show `ready 1920x1080`;
-   - VOFA+ loads both files;
-   - `p` opens PJ with live curves.
-3. First `fly preset_tour` with the operator; LINK_LOST_S 3 s is PROPOSED.
+1. Stop 8081, `rebuild_and_flash --yes` (WP-44/45 + 6aa642fc). Ground, disarmed: VAR_WRITE round trip, 0x01 axis 8
+   write + read-back, `camera_truth.sh check` ready 1920x1080, VOFA+ files, `p` opens PJ.
+2. Re-check the phone pose and floor marks; `fusion r8_f1 2 --yaw-deg 94`, then `fly preset_tour`; read the camera
+   landing line.
+3. Wobble A/B, one change per flight (PROPOSED): baseline, locx Kd 4->6, locxs Kp 3->4, or `program profile=scurve`.
+   LINK_LOST_S 3 s is PROPOSED.
 
 ## Do not
 - Arm/spin outside an operator-opened workflow-B battery session; flash while armed or with `--force`.
