@@ -3,7 +3,7 @@
 Read order: `AGENTS.md` -> this file -> `docs/agent/memory/rules.md` -> `.claude_state.md` (newest entry first).
 History: `docs/agent/ledger/` (grep, never read whole). Desktop session is CEO: inline, no subagents.
 
-## Now: 2026-10-14 afternoon - xy tune, ADRC/LQR/MPC, camera pad gate built; nothing flashed or flown
+## Now: 2026-10-14 evening - today's 9-flight plan built (run sheet + 6 .fly); nothing flashed or flown
 
 Branch `overnight-2026-10-08`, local commits, UNVERIFIED on the drone. Drone: ELF e4dd3652. Built, NOT flashed: WP-44
 VAR_WRITE (41013a0e), WP-45 (03716d5c), CMD 0x01 axes 7-11 (6aa642fc), xy_ctrl (bff1d29f: VAR 44 `g_xy_ctrl_kind`
@@ -15,14 +15,17 @@ normal fast descent; replaces the a14f67e7 mid-descent pause). Keil build 0 err/
   on r7 -> never. Sim faithful only on 213613 (r7/r6 are RC-velocity flights).
 - -x landing drift: EKF descent dx +2..+6 cm (3/29 sessions) -> OF estimate drift, only the camera sees it. Plan:
   `docs/flights/2026-10-14-camera-landing-plan.md`. Fw land + fusion never flown; pad landing NOT proven.
+- Plan (chat 2026-10-14): `docs/lab/run-sheet-2026-10-14.md`. A drift (A1 fusion 2, A2 fusion 3) -> B pad
+  landing (VAR 46 = 10) -> C PID / tuned_shift / LQR / MPC / PID again on one track, mode 3 from A2 on.
+  5ab96dd3: `.fly` set rows before takeoff = ground VAR_WRITEs before IDLE; LOG_GROUPS camera_fusion.
+  d2485ca9: `ground_station/service/campaigns/lab_*.fly` (FakeDrone-tested). Pass marks PROPOSED.
 
 ## Next 3 actions
-1. Stop 8081, `rebuild_and_flash --yes` (all of the above). Ground, disarmed: VAR_WRITE round trip (44/45/46), 0x01
-   axis 8 write + read-back, `camera_truth.sh check` ready 1920x1080.
-2. Phone pose + floor marks; `fusion r8_f1 2 --yaw-deg 94`, `fly preset_tour` baseline; read the camera landing line.
-3. One change per flight, operator picks (PROPOSED): (a) tuned_shift: 0x01 locx/locy .67/.0014/4.93, locxs/locys
-   4.70/.0031/0 + VAR 45 0.31; (b) LQR VAR 44 = 2; (c) VAR 46 = 10 with fusion 2, `fly`-landed. Never "tuned"/ADRC;
-   MPC (VAR 44 = 3) last, optional.
+1. Bring-up per the run sheet: stop 8081, `rebuild_and_flash --yes`, 8081 up, 10 s 100 Hz link check (60 vars,
+   UNVERIFIED; fallback `rate 50`), `camera_truth.sh check`, phone pose.
+2. A1 `fly lab_a_hover --once` with `fusion r8_a1 2 --yaw-deg 94`, then A2 with fusion 3; 600 s cooldown
+   debrief after each flight (run sheet table).
+3. B1-B2 `lab_b_land`, then C1-C5; C2 needs the 0x01 tuned gains (chat pick, disarmed) and a power cycle after.
 
 ## Do not
 - Arm/spin outside an operator-opened workflow-B battery session; flash while armed or with `--force`.

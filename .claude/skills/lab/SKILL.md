@@ -24,7 +24,7 @@ Workers (VPS, agy) are off while the operator is at the lab: all work inline and
 3. Camera truth: `/camera-truth` (`bash ground_station/lab/camera_truth.sh start|stop|check`); `check` must print
    `ready 1920x1080`. Only the tracker window shows.
 4. Camera-corrected flights (drift fix): with 8081 up, `bash ground_station/lab/camera_truth.sh fusion <name> 2
-   --yaw-deg 94` (mode 2 = r7_f3's best; 3 = in-EKF, fixed in 5f30b9b8 but its drift is unmeasured). With 8081 up the
+   --yaw-deg 94` (mode 2 = r7_f3's best; 3 = in-EKF, fixed in 5f30b9b8, flew with little drift on 10-13 r7_f6). With 8081 up the
    tracker reads height from 8081 and its fixes go through the 8081 relay (port 47800), so `fly` runs alongside
    (UNVERIFIED in the lab; its `check` may list missing slot CSVs: the 8081 capture logs instead). Mode is fixed per
    session; `stop <name>` after landing. Re-check the phone pose first (r7_f6 marker shift 157 px).
@@ -66,8 +66,8 @@ land
 
 1. Read the 5-line terminal debrief (HOVER/TRAJ rms/max xyz cm, landing offset). Do not poll during flight.
    With fusion running it adds `camera landing x/y cm from the pad`: the drift-free one (the EKF offset reads ~0
-   wherever it lands). Pad landings: let `fly` land (`l`, script end), not RC; end scripts with `goto x=0 y=0
-   dwell=3` before `land`. Plan: `docs/flights/2026-10-14-camera-landing-plan.md`.
+   wherever it lands). Pad landings: let `fly` land (`l`, script end), not RC; end scripts with `hold 3` before
+   `land` (a top-level `goto x y z dwell_s` already flies back to the hover point). Plan: `docs/flights/2026-10-14-camera-landing-plan.md`.
 2. Full debrief when needed: `python -m ground_station.analysis.flight_debrief <outputs dir> --run <run folder>`
    (`--run` is required: a workflow-c run folder, e.g. `logs/workflow-c/<YYYYMMDD-HHMM>`; `debrief.md` there has
    the "Setpoint moves" table: overshoot, settle s, swings, period per setpoint move).
@@ -81,12 +81,17 @@ land
 | attitude, rate, Z_rate, **Z_pos, locx/y, locxs/ys** (CMD 0x01 axes 0-11, 6aa642fc+) | `run_plan` 0x01 write, idx = axis*3 + gain (`controller_descriptor.PID_AXES`); chat pick = approval | RAM, reboot resets to `API/pid.c` |
 | Keil presets (of1, MRAC mask, gamma, Z headroom) | `.fly` `set kp_id=N` then `set kp_go=1` (applies on the ground only) | until reboot (default kp 7) |
 | traj_p.* preset shape | `.fly` `set` / preset fields | per flight |
-| xy controller (bff1d29f+) | `.fly` `set g_xy_ctrl_kind=N` before `takeoff` (0 PID, 2 LQR, 3 MPC; latched on the ground; never 1 ADRC); `set g_traj_ff_shift_s=0.31` with the tuned_shift gains | until reboot (0 / 0) |
-| camera pad gate (land) | `.fly` `set g_land_xy_gate_cm=10` with fusion 2; the `fly` land hovers over the pad until the camera fix is within r and < 0.5 s old for 1 s, then drops at the normal speed (10 s cap, then lands aimed at the pad); RC/land-in-place not gated | until reboot (0 = off) |
+| xy controller (bff1d29f+) | `.fly` `set g_xy_ctrl_kind=N` before `takeoff`: set lines before takeoff are ground VAR_WRITEs before IDLE (5ab96dd3+) (0 PID, 2 LQR, 3 MPC; latched on the ground; never 1 ADRC); `set g_traj_ff_shift_s=0.31` with the tuned_shift gains | until reboot (0 / 0) |
+| camera pad gate (land) | `.fly` `set g_land_xy_gate_cm=10` with fusion 2 or 3; the `fly` land hovers over the pad until the camera fix is within r and < 0.5 s old for 1 s, then drops at the normal speed (10 s cap, then lands aimed at the pad); RC/land-in-place not gated | until reboot (0 = off) |
 | PID_ROW defaults | edit `API/pid.c` + review + flash | permanent |
 
 Before 6aa642fc is flashed, position loops change only by pid.c edit + flash. Thresholds and gain steps are PROPOSED.
-Lab order 2026-10-14 (sim replay, PROPOSED): baseline -> tuned_shift PID -> LQR -> land gate 10 cm. Whether `fly` sends pre-takeoff `set` lines while disarmed is UNVERIFIED: confirm with a read-back.
+Lab order 2026-10-14 (sim replay, PROPOSED): baseline -> tuned_shift PID -> LQR -> land gate 10 cm. `fly` sends pre-takeoff `set` lines on the ground before IDLE (5ab96dd3); an unacked write refuses the takeoff
+(`refused = set <name>`).
+
+Today's plan (2026-10-14): `docs/lab/run-sheet-2026-10-14.md`, 9 flights from `ground_station/service/campaigns/`:
+`fly lab_a_hover --once` (A1 fusion 2, A2 fusion 3), `lab_b_land` (B1-B2), `lab_c_pid`, `lab_c_tuned` (0x01 gains
+first, power cycle after), `lab_c_lqr`, `lab_c_mpc`, `lab_c_pid` again (C1-C5).
 
 ## Known friction (2026-10-13 logs)
 
