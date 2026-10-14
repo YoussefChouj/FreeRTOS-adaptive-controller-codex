@@ -346,3 +346,25 @@ def test_camera_landing_reads_the_running_fusion_session(tmp_path):
     assert campaign_fly.camera_landing(tmp_path, now=time.time() + 60) is None   # stale fixes: no running session
     lines = campaign_fly.debrief_lines([], {"status": "done"}, "f/01", cam=(10.0, -4.0, "r8_f1", 15))
     assert "camera landing x +10 y -4 cm from the pad (11 cm, r8_f1, median of 15 fixes)" in lines
+
+
+def test_watch_says_once_what_to_do_when_the_service_dies(monkeypatch):
+    """2026-10-14: 8081 died mid-session and watch printed a bare 'state unreachable' every second."""
+    class Down(Flight):
+        def call(self, base, route, body=None, timeout=10):
+            if 1.0 <= self.t < 14.0:
+                raise ConnectionRefusedError("refused")
+            return super().call(base, route, body, timeout)
+    class T:
+        events = []
+        def event(self, s): self.events.append(s)
+        def line(self, s): pass
+        def close(self): pass
+    rig = Down(monkeypatch, run_s=20.0)
+    rig.go_t = 0.0
+    term = T()
+    campaign_fly.watch("http://h", term=term)
+    down = [e for e in term.events if "SERVICE DOWN" in e]
+    assert len(down) == 1 and "RC" in down[0] and "run fly again" in down[0]
+    assert sum("still down" in e for e in term.events) == 1          # one reminder per 10 s, not one per poll
+    assert any(e.startswith("service back after 13 s") for e in term.events)

@@ -164,7 +164,7 @@ def watch(base, term=None, key=None, poll_s=1.0, live_s=LIVE_S, on_pj=None):
     the live line updates every live_s and each fresh read is kept as a sample {t, <TEL_NAMES>} for the debrief.
     Keys s/n/l post stop/next/land, p calls on_pj; Ctrl+C lands, a second Ctrl+C aborts."""
     term, key = term or Term(), key or _key
-    last, stops, st, samples, t_state = None, 0, {}, [], -math.inf
+    last, stops, st, samples, t_state, t_down = None, 0, {}, [], -math.inf, None
     t0 = _clock()
     while True:
         try:
@@ -178,6 +178,9 @@ def watch(base, term=None, key=None, poll_s=1.0, live_s=LIVE_S, on_pj=None):
             if now - t_state >= poll_s:
                 t_state = now
                 st = call(base, "/api/campaign/state")[1]
+                if t_down is not None:
+                    term.event(f"service back after {_clock() - t_down:.0f} s")
+                    t_down = None
                 line = (st.get("status"), st.get("phase"), st.get("banner"), st.get("arm_refusal"))
                 if line != last:
                     refusal = f"  ARM REFUSED: {line[3]}" if line[3] else ""
@@ -199,7 +202,14 @@ def watch(base, term=None, key=None, poll_s=1.0, live_s=LIVE_S, on_pj=None):
             except OSError as e:
                 term.event(f"Ctrl+C -> {route} FAILED ({e}): use the RC kill switch")
         except OSError as e:
-            term.event(f"state unreachable: {e}")
+            # 2026-10-14: 8081 died mid-session and this printed one bare line per second, with no next step.
+            now = _clock()
+            if t_down is None:
+                t_down = now
+                term.event(f"SERVICE DOWN ({e}): fly has no control path and the flight log has stopped. "
+                           f"Fly with the RC: take over and land. After landing, run fly again (it restarts the service).")
+            elif int(now - t_down) // 10 != int(now - t_down - poll_s) // 10:
+                term.event(f"service still down {now - t_down:.0f} s: RC has the drone")
             _sleep(poll_s)
 
 
