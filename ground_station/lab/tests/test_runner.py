@@ -165,13 +165,15 @@ def test_lab_flies_rests_and_swaps_after_two_flights(monkeypatch, tmp_path):
     assert {k: (r["packs"], r["flights"]) for k, r in s["packs"].items()} == {"type1": (1, 2), "type2": (1, 1)}
 
 
-def test_a_swap_asks_the_type_again_and_enter_is_a_fresh_pack_of_the_same_type(monkeypatch, tmp_path):
+def test_a_swap_asks_the_type_again_and_enter_is_a_fresh_pack_of_the_same_type(monkeypatch, tmp_path, capsys):
     d = FakeDrone(monkeypatch, tmp_path, answers=["3", ""])
     lab = d.lab
     lab.state["pack"]["flights"] = 2                              # the type 1 pack in the drone has flown its two
     assert lab.one(*runner.next_flight(lab.queue, lab.state)) is None
     assert d.flown == [("lst-a", "type1")] and not d.answers
     assert lab.state["pack"]["flights"] == 1 and lab.state["packs"]["type1"]["packs"] == 2
+    out = capsys.readouterr().out                                  # the header names the pack that flies
+    assert out.index("swap in a charged pack") < out.index("type 1 pack (flight 1 of 2)")
 
 
 def test_a_power_cycle_keeps_the_pack_and_a_type_is_a_fresh_one(monkeypatch, tmp_path):

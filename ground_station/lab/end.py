@@ -68,8 +68,9 @@ def report(day, queue, state):
                     f"{fmt((f.get('metrics') or {}).get(c.metric) if c else None)} | {f.get('folder') or '-'} |"
                     for f in mine] + [""]
     out += ["## Packs", ""]
-    out += [f"- {runner.kind_name(p)}: " + (f"{r['packs']} packs, " if "packs" in r else "")
-            + f"{r.get('flights', 0)} flights" + (f", last rested {r['rest_v']:.2f} V" if r.get("rest_v") else "")
+    out += [f"- {runner.kind_name(p)}: " + (f"{runner.n_of(r['packs'], 'pack')}, " if "packs" in r else "")
+            + runner.n_of(r.get("flights", 0), "flight")
+            + (f", last rested {r['rest_v']:.2f} V" if r.get("rest_v") else "")
             for p, r in state["packs"].items()]
     return out + [""]
 

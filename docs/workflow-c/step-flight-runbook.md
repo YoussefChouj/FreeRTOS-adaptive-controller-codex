@@ -54,7 +54,7 @@ Prepare the next step C flight for me to launch by hand, pack <P4000-1>: launch 
 Claude runs `campaign_launch` on `wfc_step_c.yaml`, writes `logs/workflow-c/<run>/01/MANUAL.md` and gives you:
 
 ```text
-python -m ground_station.service.campaign_fly logs/campaigns/launch/wfc-stepc-steps_<stamp>.yaml --pack P4000-1 --run logs/workflow-c/<run>
+python -m ground_station.service.campaign_fly logs/campaigns/launch/wfc-stepc-steps_<stamp>.yaml --pack 2 --run logs/workflow-c/<run>
 ```
 
 ## 2. Fly it (your terminal)

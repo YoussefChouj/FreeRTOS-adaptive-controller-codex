@@ -42,6 +42,11 @@ LINK_WAIT_S = 90.0     # a pack swap's reboot gets this long before the runner a
 NORMAL_END = "complete"
 
 
+def n_of(n, word):
+    """'1 pack', '2 packs'."""
+    return f"{n} {word}" + ("" if n == 1 else "s")
+
+
 def kind_name(pack):
     """'type2' -> 'type 2', as the operator says it."""
     return pack.replace("type", "type ", 1)
@@ -299,7 +304,7 @@ class Lab:
     def pack_lines(self):
         r = self.state["pack"]
         v = f", rested {r['rest_v']:.2f} V" if r.get("rest_v") else ""
-        day = "; ".join(f"{kind_name(k)}: {d.get('packs', 0)} packs, {d.get('flights', 0)} flights"
+        day = "; ".join(f"{kind_name(k)}: {n_of(d.get('packs', 0), 'pack')}, {n_of(d.get('flights', 0), 'flight')}"
                         for k, d in self.state["packs"].items() if "packs" in d)
         return [f"  in the drone: {kind_name(self.pack)}, {r.get('flights', 0)} of {PACK_FLIGHTS} flights{v}",
                 f"  today: {day}"]
@@ -446,9 +451,9 @@ class Lab:
         """Flies the next flight: None to go on, an exit code to stop."""
         var = card.variants[fl.variant]
         ground = {**card.ground, **var.ground}
-        self.header(card, fl)
-        if not self.pack_check(float(ground.get("min_v") or 0)):
+        if not self.pack_check(float(ground.get("min_v") or 0)):     # first: a swap changes the header's pack
             return 0
+        self.header(card, fl)
         if var.ask and self.ask(var.ask + " (q quits) ") == "q":
             return 0
         src = cards.write_fly(card, fl.variant, self.day_dir / "fly")

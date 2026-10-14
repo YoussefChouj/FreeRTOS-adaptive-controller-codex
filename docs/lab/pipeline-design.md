@@ -29,6 +29,8 @@ idea -> flight-ready (night) -> flown (lab) -> verdict (30 s after landing, day 
    flight time before the next takeoff. Console: resting voltage 20 s after landing; swap when below the next
    flight's minimum or 15.0 V, or after 2 flights; holds the next flight until the rest ends; tracks pack
    states (charged / charging with 1 h timer / flown). A pack swap reboots the drone: nothing may break.
+   2026-10-15 (operator): two pack types only, type 1 and type 2 (`--pack 1|2`). Flights are counted on the
+   pack in the drone, a swap asks its type, and the charger is the operator's (no charger states or timer).
 7. Lab-ready: night rehearsal of the full session against a fake drone, then tag `lab-ready-<date>`; the lab
    runs that tag. A lab bug gets a workaround or the card is skipped, goes on a list, is fixed that night.
 8. Debrief within 30 s of landing (measured): flight metric, per-variant table, confirm status, warning flags,

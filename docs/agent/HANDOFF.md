@@ -3,35 +3,38 @@
 Read order: `AGENTS.md` -> this file -> `docs/agent/memory/rules.md` -> `.claude_state.md` (newest entry first).
 History: `docs/agent/ledger/` (grep, never read whole). Desktop session is CEO: inline, no subagents.
 
-## Now: 2026-10-14 evening - today's 9-flight plan built (run sheet + 6 .fly); nothing flashed or flown
+## Now: 2026-10-15 lab day on the new pipeline (cards + queue); night rehearsal PASSED
 
-Branch `overnight-2026-10-08`, local commits, UNVERIFIED on the drone. Drone: ELF e4dd3652. Built, NOT flashed: WP-44
-VAR_WRITE (41013a0e), WP-45 (03716d5c), CMD 0x01 axes 7-11 (6aa642fc), xy_ctrl (bff1d29f: VAR 44 `g_xy_ctrl_kind`
-0 PID/1 ADRC/2 LQR/3 MPC, latched on the ground; VAR 45 `g_traj_ff_shift_s` 0-0.6 s), camera pad gate
-(VAR 46 `g_land_xy_gate_cm` 0-50, 0 = off: the land's SETTLE waits for a fresh camera fix within r, then the
-normal fast descent; replaces the a14f67e7 mid-descent pause). Keil build 0 err/0 warn.
-- Sim (b922a6a9, `analysis.xy_tune` / `xy_ctrl`), replay `logs/xy_tune/20261014-replay*/`: 213613 x overshoot (log
-  11.4 cm, mean of 3 plants) current 11.6, tuned_shift 1.7, LQR 4.2, MPC 4.6, ADRC 9.9. "tuned" (no shift) 41-102 cm
-  on r7 -> never. Sim faithful only on 213613 (r7/r6 are RC-velocity flights).
-- -x landing drift: EKF descent dx +2..+6 cm (3/29 sessions) -> OF estimate drift, only the camera sees it. Plan:
-  `docs/flights/2026-10-14-camera-landing-plan.md`. Fw land + fusion never flown; pad landing NOT proven.
-- Plan (chat 2026-10-14): `docs/lab/run-sheet-2026-10-14.md`. A drift (A1 fusion 2, A2 fusion 3) -> B pad
-  landing (VAR 46 = 10) -> C PID / tuned_shift / LQR / MPC / PID again on one track, mode 3 from A2 on.
-  5ab96dd3: `.fly` set rows before takeoff = ground VAR_WRITEs before IDLE; LOG_GROUPS camera_fusion.
-  d2485ca9: `ground_station/service/campaigns/lab_*.fly` (FakeDrone-tested). Pass marks PROPOSED.
+Branch `overnight-2026-10-08`, local commits. Design and decisions: `docs/lab/pipeline-design.md` (e3ee0e83).
+- A card = one hypothesis, one `.fly` path, variants switched on the ground (`docs/lab/cards/`). Stages: list,
+  screen (1 flight per variant, baseline first and last), confirm (ABBA; the winner beats every baseline flight).
+- Queue `docs/lab/queue-2026-10-15.txt`: fusion-hover 2, pad-landing 2, xy-ctrl-screen 5, xy-ctrl-confirm 6 = 15
+  flights (counted from the cards). Early-end tags: c = controller fail (counts), x = outside cause (flown again;
+  a 2nd x puts the card on the fix list).
+- Rehearsal (fake drone, no camera): 15/15 flights in 61 min, 7 swaps, a veto, 0 early ends, 0 skips; its
+  confirm verdict means nothing (fake metrics are 0). Re-run after the pack change: 4/4 flights in 12 min, one
+  typed swap (type 1 -> type 2), rc 0. A power cycle and an x re-fly were not rehearsed (unit tests only).
+  Their logs: logs/discarded/rehearsal-2026-10-15/.
+- Packs: two types, type 1 and type 2 (`--pack 1|2`, a swap asks the type); swap below 15.0 V or after 2
+  flights (a swap reboots the drone); the charger is the operator's.
+- Firmware: the 10-14 build is on the drone (C:/tmp/reflash2.log, Verify OK); no firmware commit since: no flash.
+- Catalog `docs/lab/catalog.yaml` (`.\lab catalog`): the queue flies only listed cards; `lab end` moves them forward.
 
 ## Next 3 actions
-1. Bring-up per the run sheet: stop 8081, `rebuild_and_flash --yes`, 8081 up, 10 s 100 Hz link check (60 vars,
-   UNVERIFIED; fallback `rate 50`), `camera_truth.sh check`, phone pose.
-2. A1 `.ly lab_a_hover --once --pack <packs.yaml id>` with `fusion r8_a1 2 --yaw-deg 94`, then A2 with fusion 3; 600 s cooldown
-   debrief after each flight (run sheet table).
-3. B1-B2 `lab_b_land`, then C1-C5; C2 needs the 0x01 tuned gains (chat pick, disarmed) and a power cycle after.
+1. Before the lab (CEO): `python -m ground_station.lab.fake_drone ctl quit`, restart 8081 WITHOUT `--wifi-host`;
+   packs.yaml says type 1 = 5300 mAh, type 2 = 4000 mAh (UNVERIFIED: asked the operator).
+2. Lab, PowerShell in the repo: `.\lab up --pack 1` (the type in the drone): one check table (FAIL stops,
+   WARN asks one Enter), then the queue flies card by card with a debrief after each landing (16 s measured
+   in rehearsal).
+3. Day end: `.\lab end`: `logs/lab/<day>/day_report.md`, then videos to `G:/My Drive/UAV_lab/<day>/` after one
+   question (copied, size-checked, then removed from D:).
 
 ## Do not
 - Arm/spin outside an operator-opened workflow-B battery session; flash while armed or with `--force`.
 - Stage OBJ/ or USER/ or logs/; `git add -A`.
 - Start recording until the operator confirms preset, variable list and session name.
 - Write unmeasured numbers without PROPOSED/computed.
+- Run `lab end` on test or rehearsal state against the real catalog (it rewrites `docs/lab/catalog.yaml`).
 
 <!-- AUTO:BEGIN -->
 Refreshed: 2026-10-13 09:50 (mechanical, no LLM)
