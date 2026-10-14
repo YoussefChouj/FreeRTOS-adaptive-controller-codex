@@ -1,0 +1,9 @@
+# Lab 2026-10-15: the 2026-10-14 plan as cards, then the confirm (docs/lab/pipeline-design.md), 15 flights.
+#   python -m ground_station.lab.runner docs/lab/queue-2026-10-15.txt --pack <pack in the drone>
+# A new camera placement needs its own floor scan: the runner offers it when logs/video_truth/<floor>/aruco.npz is
+# missing. `tracker --yaw-deg N` would pin the camera yaw; left out, the tracker fits it (94 was the r8 placement only).
+floor floor-2026-10-15
+fusion-hover
+pad-landing
+xy-ctrl-screen
+xy-ctrl-confirm
