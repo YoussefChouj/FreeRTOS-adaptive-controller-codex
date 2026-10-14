@@ -105,9 +105,10 @@ stop)
   taskkill //F //IM scrcpy.exe > /dev/null 2>&1 || true; sleep 1; "$0" check "$name"   # PlotJuggler stays open for review
   [ -f logs/plot_live.pid ] && echo "VOFA+/PlotJuggler still streaming live: 'camera_truth.sh end' stops it" || true ;;
 floor)                                              # floor pose of this placement: video, then the id0 scan
-  mkdir -p "$vid"; rm -f "$vid/stop" "$vid/fusion" "$vid/cam.mkv"; touch "$vid/video_only"
+  mkdir -p "$vid"; rm -f "$vid/stop" "$vid/fusion"; touch "$vid/video_only"
+  [ -e "$vid/cam.mkv" ] && mv "$vid/cam.mkv" "$vid/cam.$(date +%H%M%S).mkv.bak"   # an older scan of this name is kept, not deleted
   cam; sleep "${FLOOR_S:-10}"; touch "$vid/stop"
-  taskkill //IM scrcpy.exe > /dev/null 2>&1; sleep 2; taskkill //F //IM scrcpy.exe > /dev/null 2>&1 || true; sleep 1
+  taskkill //IM scrcpy.exe > /dev/null 2>&1 || true; sleep 2; taskkill //F //IM scrcpy.exe > /dev/null 2>&1 || true; sleep 1
   [ -s "$vid/cam.mkv" ] || { echo "floor: no video, see $vid/scrcpy.log"; tail -3 "$vid/scrcpy.log" 2>/dev/null; exit 1; }
   out=$(python -m ground_station.analysis.video_truth aruco "$vid/cam.mkv" --out "$vid/aruco.npz" --step 5); echo "$out"
   n=$(echo "$out" | grep -o '^[0-9]* frames' | cut -d' ' -f1); n0=$(echo "$out" | grep -o 'id0 [0-9]*' | cut -d' ' -f2)
