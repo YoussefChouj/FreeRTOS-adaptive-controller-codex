@@ -94,3 +94,18 @@ def test_compiled_sample_flies_on_the_fake_drone():
     assert not out.aborted and out.landed, out.decision
     assert [r.get("preset") for r in out.steps if r["kind"] == "preset"] == ["circle", "figure8"]
     assert drone.vars["traj_p.move_s"] == 12.0 and drone.vars["traj_p.f8_a_cm"] == 30.0
+
+
+@pytest.mark.parametrize("path", sorted(SAMPLE.parent.glob("lab_*.fly")), ids=lambda p: p.stem)
+def test_lab_scripts_compile_log_and_fly_on_the_fake_drone(path):
+    from ground_station.livewatch.campaign_capture import check_log_plan
+
+    data, _ = fly_file.compile_fly(path.read_text(encoding="utf-8"), path.name)
+    exp = data["experiments"][0]
+    assert check_log_plan(exp["log_plan"]) == [] and "camera_fusion" in exp["log_plan"]["groups"]
+    ground = exp["scenario"]["steps"][0]["takeoff"]["set"]
+    assert set(ground) == {"g_xy_ctrl_kind", "g_traj_ff_shift_s", "g_land_xy_gate_cm"}  # a pack swap reboots
+    drone, _, deps = _rig()
+    out = fly_scenario(parse_scenario(exp["scenario"]), deps)
+    assert not out.aborted and out.landed, out.decision
+    assert drone.vars["g_xy_ctrl_kind"] == ground["g_xy_ctrl_kind"]

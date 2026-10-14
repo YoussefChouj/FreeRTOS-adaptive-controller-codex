@@ -1,0 +1,17 @@
+# C: tuned_shift PID: 0x01 locx/locy .67/.0014/4.93 + locxs/locys 4.70/.0031/0 written on the ground first (RAM: power-cycle after) on the same track (0.4 m x step, circle r30, figure-8 a30), gated pad landing, fusion 3
+# Fly it: fly lab_c_tuned --once at >= 15.8 V resting. Score: step overshoot (debrief Setpoint moves) vs today's PID,
+# tie-break circle + figure-8 xy rms. Plan: docs/lab/run-sheet-2026-10-14.md
+campaign lab-c-tuned
+rate 100
+log velocity_loops camera_fusion
+set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0.31 g_land_xy_gate_cm=10
+takeoff 0.5
+hold 3
+goto x=0.4 y=0 z=0.5 dwell_s=4
+hold 4
+set traj_p.move_s=12 traj_p.hold_s=1
+preset circle circ_r_cm=30
+hold 2
+preset figure8 f8_a_cm=30
+hold 3
+land

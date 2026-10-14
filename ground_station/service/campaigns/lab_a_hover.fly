@@ -1,0 +1,10 @@
+# A: hands-off drift, 70 s at a 0.5 m hover, fly-landed with the pad gate off (A1 fusion 2, A2 fusion 3)
+# Fly it: fly lab_a_hover --once, with camera_truth.sh fusion <name> 2|3 --yaw-deg 94 running. Pass (PROPOSED):
+# camera truth moves < 20 cm over 60 s; read the camera landing line. Plan: docs/lab/run-sheet-2026-10-14.md
+campaign lab-a-hover
+rate 50
+log estimator_truth optical_flow velocity_loops takeoff_gate thrust_model ekf_states camera_fusion
+set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=0
+takeoff 0.5
+hold 70
+land

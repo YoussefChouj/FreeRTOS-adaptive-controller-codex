@@ -1,0 +1,11 @@
+# B: excursion to (0.4, -0.3) and back, then the camera-gated pad landing (gate 10 cm, fusion 3)
+# Fly it: fly lab_b_land --once. Pass (PROPOSED): camera landing < 10 cm on 3 in a row (C landings count).
+campaign lab-b-land
+rate 50
+log estimator_truth optical_flow velocity_loops takeoff_gate thrust_model ekf_states camera_fusion
+set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10
+takeoff 0.5
+hold 3
+goto x=0.4 y=-0.3 z=0.5 dwell_s=3
+hold 3
+land
