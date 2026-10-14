@@ -2,7 +2,7 @@
 
     python -m ground_station.lab.fake_drone                # 127.0.0.2:14550, control port 14551
     python -m ground_station.service --port 8081 --wifi-host 127.0.0.2
-    python -m ground_station.lab.fake_drone ctl arm      # operator stand-ins: arm, disarm, reboot, vbat 15.2, sbus off|on, quit
+    python -m ground_station.lab.fake_drone ctl arm      # operator stand-ins: arm, disarm, reboot, vbat 15.2, sbus|ch6 off|on, quit
 
 127.0.0.2, not 127.0.0.1: the bridge holds 0.0.0.0:14550 itself, and its keepalive nudge goes to wifi-host:14550,
 so on its own loopback address the fake drone gets the nudge like the real WiFi module and replies to the sender.
@@ -26,7 +26,7 @@ import time
 from dataclasses import dataclass
 
 from ground_station.lab import events
-from ground_station.livewatch.campaign_capture import ATTITUDE, KF_HEALTH, POSITION_AXES
+from ground_station.livewatch.campaign_capture import ATTITUDE, KF_HEALTH, POSITION_AXES, WFB_STATUS_FIELDS
 from ground_station.livewatch.transport import crc16_ccitt
 from ground_station.platform.transactions import Command, Outcome, RejectReason, Result, build_command, build_result, parse_command
 from ground_station.platform.wfb_commands import CMD_ARM, ArmIdx
@@ -81,6 +81,7 @@ class FakeUdpDrone:
         self.ctl.bind((host, ctl_port))
         self.port, self.ctl_port = self.sock.getsockname()[1], self.ctl.getsockname()[1]
         self.silent_s, self.pack_v = silent_s, vbat
+        self.ch6 = True                       # RC ch6 HIGH (OF hold), as the checklist sets it; a reboot keeps it
         self.peer: tuple[str, int] | None = None
         self.mem: dict[int, int] = {}
         self.counts: dict[str, int] = {}
@@ -129,12 +130,13 @@ class FakeUdpDrone:
     def _values(self) -> dict[str, float]:
         """Every symbol the fake drone serves, by name, as the firmware would hold it now. Other memory reads 0."""
         d, st = self.drone, self.drone.status()
-        vals = {ARM_SYM: float(d.armed), "status.motor_idle": float(d.motors_idle),
-                "status.sbus_lost": float(not d.sbus_live), "status.rc_authority": 0.0,
+        # firmware names; the bridge renames them status.motor_idle / status.sbus_lost / status.rc_authority
+        vals = {ARM_SYM: float(d.armed), "g_motor_idle_enabled": float(d.motors_idle),
+                "sbus_lost": float(not d.sbus_live), "s_authority": 0.0, "g_of_hold_active": float(self.ch6),
                 KF_HEALTH: 1.0, "xTickCount": float(self._t_ms()), VBAT_SYMS[0]: self.vbat,
                 "traj_status": st.get("traj_status", 0.0), "traj_active": st.get("traj_active", 0.0)}
         vals.update(zip(ATTITUDE, (getattr(d, "roll_deg", 0.0), getattr(d, "pitch_deg", 0.0), d.yaw_deg)))
-        vals.update((f"g_wfb_status.{k}", v) for k, v in st.items())
+        vals.update((f"g_wfb_status.{k}", st[k]) for k in WFB_STATUS_FIELDS if k in st)
         for a, pos_m in zip(POSITION_AXES, d.position):
             vals[a.feedback] = vals[a.reference] = pos_m / a.to_m
         return vals
@@ -259,6 +261,9 @@ class FakeUdpDrone:
         elif op == "sbus" and len(parts) == 2 and parts[1] in ("on", "off"):
             self.drone.sbus_live = parts[1] == "on"
             reply = f"ok sbus {parts[1]}"
+        elif op == "ch6" and len(parts) == 2 and parts[1] in ("on", "off"):
+            self.ch6 = parts[1] == "on"
+            reply = f"ok ch6 {parts[1]}"
         elif op == "quit":
             self._stop = True
             reply = "ok quit"
