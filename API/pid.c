@@ -130,9 +130,10 @@ void PID_GainLeaseTick(uint32_t now_ms, uint8_t airborne)
 
 /* CMD 0x01 write bounds (TASK/send_data.c Cmd_PidGain), one row per 0x01 axis in s_lease_pid order; the minimum
    is 0. Rule: max(200, 2 x the PID_ROW default), so every boot gain can be written back and doubled
-   (API/tests/test_pid_guards.c checks it). Axes 7-11 (position loops) since 2026-10-14, so
-   the wobble after a setpoint move (debrief 'Setpoint moves') can be A/B tuned between flights without a reflash. Before WP-38 one bound of 200 covered every gain, so Z_ratePID Kp 400
+   (API/tests/test_pid_guards.c checks it). Before WP-38 one bound of 200 covered every gain, so Z_ratePID Kp 400
    could not be written back. Plausibility limits against a garbled write, not stability limits (PROPOSED).
+   Axes 7-11 (position loops, 2026-10-14) let the wobble after a setpoint move (debrief 'Setpoint moves') be
+   A/B tuned between flights without a reflash.
    @Kp  U/E        [0, 1000]  largest Kp the command accepts
    @Ki  U/(E*tick) [0, 200]   largest Ki
    @Kd  U*tick/E   [0, 200]   largest Kd */
