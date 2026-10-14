@@ -26,7 +26,7 @@ import time
 from dataclasses import dataclass
 
 from ground_station.lab import events
-from ground_station.livewatch.campaign_capture import ATTITUDE, KF_HEALTH, POSITION_AXES, WFB_STATUS_FIELDS
+from ground_station.livewatch.campaign_capture import ATTITUDE, KF_HEALTH, MOTORS, POSITION_AXES, WFB_STATUS_FIELDS
 from ground_station.livewatch.transport import crc16_ccitt
 from ground_station.platform.transactions import Command, Outcome, RejectReason, Result, build_command, build_result, parse_command
 from ground_station.platform.wfb_commands import CMD_ARM, ArmIdx
@@ -37,6 +37,8 @@ DT = 0.01                  # Send_Task period: SEND_TASK_MEASURED_HZ 100
 JUSTFLOAT_EVERY = 10       # ticks between fallback frames (10 Hz)
 SAG_V_PER_S = 0.005        # fake: about 0.65 V over a 130 s flight
 ARM_SYM = "DroneStatus.ARM_Status"
+MOTOR_STANDIN = 3000.0     # armed motor output: mid of the abort monitor's saturation band (2005, 3995); not a measured
+                           # hover PWM. Unserved memory reads 0, which tripped motor_saturation 2 s after GO (10-14 night)
 HOST = "127.0.0.2"
 JUSTFLOAT_TAIL = b"\x00\x00\x80\x7f"
 
@@ -137,6 +139,7 @@ class FakeUdpDrone:
                 "traj_status": st.get("traj_status", 0.0), "traj_active": st.get("traj_active", 0.0)}
         vals.update(zip(ATTITUDE, (getattr(d, "roll_deg", 0.0), getattr(d, "pitch_deg", 0.0), d.yaw_deg)))
         vals.update((f"g_wfb_status.{k}", st[k]) for k in WFB_STATUS_FIELDS if k in st)
+        vals.update((m, MOTOR_STANDIN if d.armed else 0.0) for m in MOTORS)
         for a, pos_m in zip(POSITION_AXES, d.position):
             vals[a.feedback] = vals[a.reference] = pos_m / a.to_m
         return vals

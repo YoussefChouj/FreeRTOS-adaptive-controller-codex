@@ -142,3 +142,14 @@ def test_bad_control_words_are_errors_and_the_drone_keeps_running(rig):
     assert ctl("fly away", port=drone.ctl_port, host="127.0.0.1").startswith("error")
     assert ctl("vbat low", port=drone.ctl_port, host="127.0.0.1").startswith("error")
     assert ctl("vbat 15.1", port=drone.ctl_port, host="127.0.0.1") == "ok vbat 15.10"
+
+
+def test_armed_motors_sit_inside_the_saturation_band(rig):
+    """Unserved memory reads 0, below SAT_LO: the abort monitor tripped motor_saturation 2 s after GO (10-14 night)."""
+    from ground_station.livewatch.campaign_capture import MOTORS
+    from ground_station.service.campaign_live import _sat_hi_lo
+    drone, _ = rig
+    assert ctl("arm", port=drone.ctl_port, host="127.0.0.1") == "ok arm"
+    hi, lo = _sat_hi_lo()
+    vals = drone._values()
+    assert all(lo < vals[m] < hi for m in MOTORS)
