@@ -22,6 +22,7 @@ import json
 import socket
 import struct
 import subprocess
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -412,26 +413,40 @@ class TelHeightHttp(TelHeight):
     owns the logging, its CSV name is not known before the flight and PlainWriter flushes about once a second. Same
     z, ground and `extra` values; the sample age is the service's. Polled at most every min_dt_s."""
 
-    def __init__(self, url: str, *args, min_dt_s: float = 0.02, timeout_s: float = 0.1, **kw):
+    def __init__(self, url: str, *args, min_dt_s: float = 0.02, timeout_s: float = 1.0, **kw):
         super().__init__(url, *args, **kw)
-        self.url, self.min_dt, self.timeout, self.t_poll = url.rstrip("/"), min_dt_s, timeout_s, -1e9
+        self.url, self.min_dt, self.timeout = url.rstrip("/"), min_dt_s, timeout_s
         self.http = urllib.request.build_opener(urllib.request.ProxyHandler({}))   # the system proxy 502s 127.0.0.1:
                                                                                     # r9_a1 sent 0 fixes (2026-10-14)
+        self.worker, self.got = None, None
+
+    # The request runs on its own thread: a 0.1 s timeout inside the frame loop gave up on a busy 8081 and left
+    # 19 ConnectionAborted in svc8081.log (2026-10-14); waiting longer there would stall the frames instead.
+    def _loop(self, q: str) -> None:
+        while True:
+            t0 = time.monotonic()
+            try:
+                with self.http.open(f"{self.url}/api/values?names={q}", timeout=self.timeout) as r:
+                    self.got = (json.load(r)["values"], self.clock())
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+            time.sleep(max(0.0, self.min_dt - (time.monotonic() - t0)))
 
     def poll(self) -> None:
-        now = self.clock()
-        if now - self.t_poll < self.min_dt:
+        if self.worker is None:
+            q = urllib.parse.quote(",".join((self.key, *self.extra)), safe=",")
+            self.worker = threading.Thread(target=self._loop, args=(q,), daemon=True)
+            self.worker.start()
+        got, self.got = self.got, None
+        if got is None:
             return
-        self.t_poll = now
-        q = urllib.parse.quote(",".join((self.key, *self.extra)), safe=",")
+        vals, t_recv = got
         try:
-            with self.http.open(f"{self.url}/api/values?names={q}", timeout=self.timeout) as r:
-                vals = json.load(r)["values"]
             z, age = float(vals[self.key]["value"]), float(vals[self.key]["age_s"])
-        except (OSError, ValueError, KeyError, TypeError):
+        except (ValueError, KeyError, TypeError):
             return
         if np.isfinite(z):
-            self.z, self.t_z, self.z_min = z, now - age, min(self.z_min, z)
+            self.z, self.t_z, self.z_min = z, t_recv - age, min(self.z_min, z)
             self.v = {k: float(vals[k]["value"]) for k in self.extra if k in vals}
 
 
