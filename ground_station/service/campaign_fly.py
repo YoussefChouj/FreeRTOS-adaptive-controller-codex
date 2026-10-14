@@ -571,6 +571,34 @@ def plotjuggler(base, out_dir=None, popen=subprocess.Popen):
     return f"PlotJuggler: opening on {len(st.get('vars') or [])} streamed variables, UDP Server {st['addr']}"
 
 
+def fly_one(base, launch, src, name, pack):
+    """GO for the armed flight, watch it to the end, debrief: (status, live samples, camera landing, folder). The
+    status is None when the service refused GO."""
+    from ground_station.service.campaign_launch import rel
+    folder = flight_folder(name)
+    for f in dict.fromkeys((Path(src), Path(launch))):
+        shutil.copy2(f, folder / f.name)
+    code, res = call(base, "/api/campaign/go", {
+        "campaign_path": str(launch), "pack_id": pack, "checklist": {c: True for c in CHECKLIST},
+        "source": "operator:cli", "confirmation": CONFIRMATION}, timeout=30)
+    events.log("go", code=code, campaign=name, pack=pack, folder=rel(folder), error=res.get("error"))
+    if code != 200:
+        print(f"GO refused ({code}): {res.get('error', res)}. Disarm by RC.", flush=True)
+        return None, [], None, folder
+    print("GO. keys: s stop step, n next, l land, p PlotJuggler; Ctrl+C land, twice abort. RC kill stays first.")
+    st, samples = watch(base, on_pj=lambda: plotjuggler(base))
+    t_land = _clock()
+    cam = camera_landing()
+    lines = debrief_lines(samples, st, rel(folder), cam=cam)
+    print("\n".join(lines))
+    events.log("debrief", ms=round((_clock() - t_land) * 1000), folder=rel(folder), status=st.get("status"),
+               phase=st.get("phase"), samples=len(samples))
+    (folder / "debrief.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (folder / "outputs.txt").write_text(f"{st.get('outputs_dir') or ''}\n", encoding="utf-8")
+    write_samples(folder / "live_5hz.csv", samples)
+    return st, samples, cam, folder
+
+
 def fly_loop(base, arg, pack, rate=None, run=None, once=False):
     """Compile -> wait for the RC arm -> go -> watch -> debrief, flight after flight until q."""
     from ground_station.service.campaign_launch import rel
@@ -602,27 +630,10 @@ def fly_loop(base, arg, pack, rate=None, run=None, once=False):
         if r == "link":
             pack, held = _ask_pack(pack), None
             continue
-        folder = flight_folder(name)
-        for f in dict.fromkeys((Path(src), Path(launch))):
-            shutil.copy2(f, folder / f.name)
-        code, res = call(base, "/api/campaign/go", {
-            "campaign_path": str(launch), "pack_id": go_pack, "checklist": {c: True for c in CHECKLIST},
-            "source": "operator:cli", "confirmation": CONFIRMATION}, timeout=30)
-        events.log("go", code=code, campaign=name, pack=go_pack, folder=rel(folder), error=res.get("error"))
-        if code != 200:
-            print(f"GO refused ({code}): {res.get('error', res)}. Disarm by RC.", flush=True)
+        st, _, _, _ = fly_one(base, launch, src, name, go_pack)
+        if st is None:
             held = None
             continue
-        print("GO. keys: s stop step, n next, l land, p PlotJuggler; Ctrl+C land, twice abort. RC kill stays first.")
-        st, samples = watch(base, on_pj=lambda: plotjuggler(base))
-        t_land = _clock()
-        lines = debrief_lines(samples, st, rel(folder), cam=camera_landing())
-        print("\n".join(lines))
-        events.log("debrief", ms=round((_clock() - t_land) * 1000), folder=rel(folder), status=st.get("status"),
-                   phase=st.get("phase"), samples=len(samples))
-        (folder / "debrief.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
-        (folder / "outputs.txt").write_text(f"{st.get('outputs_dir') or ''}\n", encoding="utf-8")
-        write_samples(folder / "live_5hz.csv", samples)
         if st.get("status") == "service_down":
             return 1
         if run and st.get("outputs_dir"):
