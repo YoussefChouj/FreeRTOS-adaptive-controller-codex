@@ -10,10 +10,12 @@
 #     `end` or the next fusion. Floor pose: CT_FLOOR=<scan dir> (cam.mkv + aruco.npz of this placement), default r5_marks_1.
 #   bash ground_station/lab/camera_truth.sh end            # end the live PlotJuggler stream (before starting 8081)
 #   bash ground_station/lab/camera_truth.sh video <name>   # live window + recording only (workflows A/B/C keep their own log)
+#   bash ground_station/lab/camera_truth.sh floor <name>   # new camera placement: 10 s video + ArUco scan, says if the pad
+#     marker id0 was seen; then fly with CT_FLOOR=logs/video_truth/<name> (FLOOR_S changes the 10 s)
 # WiFi only, never the SWD probe. Video: phone camera id 4, zoom 0.6, 1080p30 (the R3 calibration pose).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-cmd=${1:?start|stop|check|fusion|video|end}; name=${2:-}; [ "$cmd" = end ] || : "${name:?session name}"; preset=${3:-drift_rc}; api=http://127.0.0.1:8081; vid=logs/video_truth/$name
+cmd=${1:?start|stop|check|fusion|video|floor|end}; name=${2:-}; [ "$cmd" = end ] || : "${name:?session name}"; preset=${3:-drift_rc}; api=http://127.0.0.1:8081; vid=logs/video_truth/$name
 post() { curl -s --noproxy "*" -m 10 -X POST -H 'Content-Type: application/json' -d "$2" "$api$1"; echo; }
 up() { curl -s --noproxy "*" -m 2 -o /dev/null -w '%{http_code}' "$api/health" | grep -q 200; }
 # Lab processes start through ground_station.lab.detach: their own hidden console, no parent left, so they outlive
@@ -102,6 +104,18 @@ stop)
   fi
   taskkill //F //IM scrcpy.exe > /dev/null 2>&1 || true; sleep 1; "$0" check "$name"   # PlotJuggler stays open for review
   [ -f logs/plot_live.pid ] && echo "VOFA+/PlotJuggler still streaming live: 'camera_truth.sh end' stops it" || true ;;
+floor)                                              # floor pose of this placement: video, then the id0 scan
+  mkdir -p "$vid"; rm -f "$vid/stop" "$vid/fusion" "$vid/cam.mkv"; touch "$vid/video_only"
+  cam; sleep "${FLOOR_S:-10}"; touch "$vid/stop"
+  taskkill //IM scrcpy.exe > /dev/null 2>&1; sleep 2; taskkill //F //IM scrcpy.exe > /dev/null 2>&1 || true; sleep 1
+  [ -s "$vid/cam.mkv" ] || { echo "floor: no video, see $vid/scrcpy.log"; tail -3 "$vid/scrcpy.log" 2>/dev/null; exit 1; }
+  out=$(python -m ground_station.analysis.video_truth aruco "$vid/cam.mkv" --out "$vid/aruco.npz" --step 5); echo "$out"
+  n=$(echo "$out" | grep -o '^[0-9]* frames' | cut -d' ' -f1); n0=$(echo "$out" | grep -o 'id0 [0-9]*' | cut -d' ' -f2)
+  if [ "${n0:-0}" -gt 0 ] && [ $((2 * ${n0:-0})) -ge "${n:-1}" ]; then
+    echo "floor OK: pad marker id0 in ${n0} of ${n} frames. Fly with CT_FLOOR=$vid"
+  else
+    echo "floor NOT OK: pad marker id0 in ${n0:-0} of ${n:-0} frames (need half). Clear the pad marker's view, then run floor again"; exit 1
+  fi ;;
 end) endlive; echo "live stream ended" ;;
 check)
   for f in logs/vofa/"$name".slot*.csv logs/"$name".slot*.csv; do [ -f "$f" ] && echo "$f rows $(($(wc -l < "$f") - 1))"; done
