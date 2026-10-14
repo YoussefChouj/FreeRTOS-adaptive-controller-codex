@@ -134,6 +134,58 @@ def timeline(series: Series) -> list[dict[str, Any]]:
     return sorted(events, key=lambda e: e["t_s"])
 
 
+# Position setpoint moves (Des holds after a step or a ramp): how the drone arrives. All thresholds PROPOSED.
+STEP_AXES = (("x", "Ctrler.locxPID", 1.0), ("y", "Ctrler.locyPID", 1.0), ("z", "Ctrler.Z_posPID", 100.0))  # -> cm
+SETTLE_BAND_CM = 5.0    # settled = inside +-5 cm of the new setpoint for the rest of the hold
+STEP_MIN_MOVE_CM = 10.0
+STEP_MIN_HOLD_S = 2.0
+STEP_FLAT_CM = 0.05     # Des changes below this between samples count as holding
+
+
+def step_settle(series: Series) -> list[dict[str, Any]]:
+    """One row per setpoint move: overshoot past the new setpoint, settle time after Des stops (None: never inside
+    the band for good), error swings (sign changes outside half the band) and their period."""
+    import numpy as np
+
+    rows: list[dict[str, Any]] = []
+    for axis, base, scale in STEP_AXES:
+        td, vd = series.get(base + ".Des", ([], []))
+        tf, vf = series.get(base + ".FB", ([], []))
+        if len(td) < 3 or len(tf) < 3:
+            continue
+        td, des = np.asarray(td, float), np.asarray(vd, float) * scale
+        fb = np.interp(td, np.asarray(tf, float), np.asarray(vf, float) * scale)
+        flat = np.abs(np.diff(des)) < STEP_FLAT_CM
+        holds, i = [], 0
+        while i < len(flat):                          # runs of flat Des: (first index, last index)
+            if flat[i]:
+                j = i
+                while j + 1 < len(flat) and flat[j + 1]:
+                    j += 1
+                holds.append((i, j + 1))
+                i = j + 1
+            i += 1
+        prev = None
+        for a, b in holds:
+            if td[b] - td[a] < STEP_MIN_HOLD_S:
+                continue
+            level = float(des[a])
+            if prev is not None and abs(level - prev) >= STEP_MIN_MOVE_CM:
+                err = fb[a:b + 1] - level
+                t = td[a:b + 1] - td[a]
+                out = np.nonzero(np.abs(err) > SETTLE_BAND_CM)[0]
+                settle = None if len(out) and out[-1] == len(err) - 1 else (float(t[out[-1]]) if len(out) else 0.0)
+                big = [(tt, e > 0) for tt, e in zip(t, err) if abs(e) > SETTLE_BAND_CM / 2]
+                flips = [t2 for (t1, s1), (t2, s2) in zip(big, big[1:]) if s1 != s2]
+                rows.append({"axis": axis, "t_s": round(float(td[a]), 2), "move_cm": round(level - prev, 1),
+                             "overshoot_cm": round(max(0.0, float(np.max(np.sign(level - prev) * err))), 1),
+                             "settle_s": None if settle is None else round(settle, 2), "swings": len(flips),
+                             "period_s": round(2 * float(np.mean(np.diff(flips))), 2) if len(flips) > 1 else None,
+                             "hold_s": round(float(t[-1]), 1)})
+            prev = level
+    return sorted(rows, key=lambda r: r["t_s"])
+
+
 def measure(series: Series, target_z_m: float | None, sat: tuple[float, float] | None) -> dict[str, Any]:
     """campaign_outputs.flight_metrics plus spectra, rate tracking, per-motor means and sample timing."""
     m = flight_metrics(series, target_z_m, sat)
@@ -141,6 +193,7 @@ def measure(series: Series, target_z_m: float | None, sat: tuple[float, float] |
     m["timeline"] = timeline(series)
     timing = sample_timing(series)
     m["timing"] = {k: v for k, v in timing.items() if k != "dts"}
+    m["steps"] = step_settle(series)
     if window is None:      # flight_metrics stops early; trips and EKF health still matter for a failed takeoff
         for key, sym, fn in (("kf_health_min", KF_HEALTH, min), ("safety_trip_max", SAFETY_TRIP, max)):
             vs = series.get(sym, ([], []))[1]
@@ -423,6 +476,12 @@ def render(d: Mapping[str, Any]) -> str:
     if d.get("not_applied"):
         lines += ["", "Proposed but NOT applied before this flight (no verdict): " + ", ".join(
             f"{c['loop']}.{c['gain']} {c['from']} -> {c['to']}" for c in d["not_applied"])]
+    if m.get("steps"):
+        lines += ["", f"## Setpoint moves (settled = inside +-{SETTLE_BAND_CM:g} cm, PROPOSED)", "",
+                  "| t s | axis | move cm | overshoot cm | settle s | swings | period s |", "|---|---|---|---|---|---|---|"]
+        lines += [f"| {r['t_s']} | {r['axis']} | {r['move_cm']:+g} | {r['overshoot_cm']} | "
+                  f"{_fmt(r['settle_s']) if r['settle_s'] is not None else 'never (' + str(r['hold_s']) + ' s hold)'} "
+                  f"| {r['swings']} | {_fmt(r['period_s'])} |" for r in m["steps"]]
     lines += ["", "## Findings (thresholds PROPOSED)", "", "| level | finding | evidence | recommendation |",
               "|---|---|---|---|"]
     lines += [f"| {f['level']} | {f['id']} | {f['evidence']} | {f['recommend']} |" for f in found] or \

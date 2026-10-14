@@ -166,3 +166,26 @@ def test_applied_with_other_value(tmp_path):
                applied=["Z_ratePID.Ki=0.47"])
     d = json.loads((out / "debrief.json").read_text())
     assert d["verdicts"][0]["to"] == 0.47 and d["not_applied"] == []
+
+
+def _step(move_cm: float, decay: float, hold_s: float = 6.0, hz: float = 50.0):
+    """x Des 0 for 4 s then move_cm held; FB = damped 3 s-period swing around the new setpoint; y flat."""
+    t = [i / hz for i in range(int((4.0 + hold_s) * hz))]
+    des = [0.0 if tt < 4.0 else move_cm for tt in t]
+    fb = [0.0 if tt < 4.0 else move_cm * (1 - math.exp(-decay * (tt - 4.0)) * math.cos(2 * math.pi * (tt - 4.0) / 3))
+          for tt in t]
+    return {"Ctrler.locxPID.Des": (t, des), "Ctrler.locxPID.FB": (t, fb),
+            "Ctrler.locyPID.Des": (t, [0.0] * len(t)), "Ctrler.locyPID.FB": (t, [0.0] * len(t))}
+
+
+def test_step_settle_measures_overshoot_settle_and_swing_period():
+    (row,) = fd.step_settle(_step(50.0, 0.8))
+    assert row["axis"] == "x" and row["move_cm"] == 50.0 and abs(row["t_s"] - 4.0) < 0.05
+    assert 14.0 < row["overshoot_cm"] < 18.0      # first peak ~half a period in: 50*exp(-0.8*1.5) = 15
+    assert 1.5 < row["settle_s"] < 2.5 and row["swings"] == 2 and abs(row["period_s"] - 3.0) < 0.4
+
+
+def test_step_settle_never_settled_and_small_moves_skipped():
+    (row,) = fd.step_settle(_step(50.0, 0.0, hold_s=3.0))
+    assert row["settle_s"] is None and row["hold_s"] <= 3.0
+    assert fd.step_settle(_step(5.0, 0.8)) == []
