@@ -24,7 +24,7 @@
    over the pad (no firmware change).
 3. Wobble A/B (HANDOFF next action 3): a faster settle makes the 15 cm / 1 s gate pass well before the 10 s timeout.
 4. Firmware, after 1-3 show where the error comes from (each a reviewed change + flash, values PROPOSED):
-   settle on xy only (z is already at the land height); tighter radius (8 cm) with a longer timeout (15 s); slow the
+   settle on xy only (z drifts less and is not the pad error); tighter radius (8 cm) with a longer timeout (15 s); slow the
    last 15 cm of descent so the camera corrects the drift that builds up in ground effect.
 5. Align: `--align auto` refits the yaw in flight (live_tracker), but the operator wants one mode per flight; a
    pre-flight yaw fit from a short hand-carried path over the marks would remove the -9.6 deg without switching modes.

@@ -65,6 +65,9 @@ land
 ## After each landing
 
 1. Read the 5-line terminal debrief (HOVER/TRAJ rms/max xyz cm, landing offset). Do not poll during flight.
+   With fusion running it adds `camera landing x/y cm from the pad`: the drift-free one (the EKF offset reads ~0
+   wherever it lands). Pad landings: let `fly` land (`l`, script end), not RC; end scripts with `goto x=0 y=0
+   dwell=3` before `land`. Plan: `docs/flights/2026-10-14-camera-landing-plan.md`.
 2. Full debrief when needed: `python -m ground_station.analysis.flight_debrief <outputs dir> --run <run folder>`
    (`--run` is required: a workflow-c run folder, e.g. `logs/workflow-c/<YYYYMMDD-HHMM>`; `debrief.md` there has
    the "Setpoint moves" table: overshoot, settle s, swings, period per setpoint move).
