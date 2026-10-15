@@ -216,7 +216,9 @@ def prime_status_stream(service: Any, wait_s: float | None = None, sleep: Callab
     bridge = getattr(service, "bridge", None)
     if bridge is None or _status_fresh(service, now_ns):
         return
-    for step in subscribe_steps(plan_capture(None)):
+    # lab mode: the core plan replaces the sidebar frame on slot 0, so it keeps the lab slot-0 rate (10 Hz), not 50
+    cap = LAB_STATUS_HZ if getattr(bridge, "lab_mode", False) else None
+    for step in subscribe_steps(plan_capture(None, max_rate_hz=cap)):
         bridge.subscribe_slot(**step["args"])
     deadline = clock() + (STATUS_PRIME_S if wait_s is None else wait_s)
     while clock() < deadline:
@@ -281,6 +283,12 @@ def wait_streams_named(bridge: Any, slots: list[int], timeout_s: float | None = 
         time.sleep(0.1)
 
 
+# 2026-10-15 lab: the card plan at 50 Hz (2 slots, ~52k B/s) + slot 0 dropped 12-30% and every command reply
+# was lost (two takeoffs refused at mrac_injection). Lab mode caps the plan at 25 Hz (PROPOSED).
+LAB_PLAN_MAX_HZ = 25.0
+LAB_STATUS_HZ = 10.0       # = 100 Hz / WifiBridge.LAB_SLOT0_DIVIDER
+
+
 def live_capture_hooks(service: Any, controller: str = "pid", max_rate_hz: float | None = None,
                        ) -> tuple[Callable[[Any, str], Any], Callable[[Any], str]]:
     """RunnerDeps begin_capture / end_capture for the live link (decision 8).
@@ -320,6 +328,12 @@ def live_capture_hooks(service: Any, controller: str = "pid", max_rate_hz: float
 
     def end(token: Any) -> str:
         st = service.stop_recording()
+        bridge = getattr(service, "bridge", None)
+        if getattr(bridge, "lab_mode", False) and applied["steps"]:
+            # lab mode: plan slots off on the ground, so the next takeoff's writes get their replies
+            for step in applied["steps"]:
+                bridge.subscribe_slot(slot=step["args"]["slot"], divider=0, ranges=[])
+            applied["steps"] = None
         return str(st.get("session_dir") or token or "")
 
     return begin, end
@@ -336,7 +350,9 @@ def live_deps_factory(service: Any, controller: str = "pid", dt_s: float = LIVE_
         tuner, gate = tuner_and_gate(controller, 0, clock,
                                      workdir or tempfile.mkdtemp(prefix="wfb_live_"))
         sat = _sat_hi_lo()
-        begin_capture, end_capture = live_capture_hooks(service, controller)
+        lab = getattr(getattr(service, "bridge", None), "lab_mode", False)
+        begin_capture, end_capture = live_capture_hooks(service, controller,
+                                                        max_rate_hz=LAB_PLAN_MAX_HZ if lab else None)
 
         def no_flash() -> str:
             raise RuntimeError("reflash is not wired into live campaigns; use the flash skill between campaigns")

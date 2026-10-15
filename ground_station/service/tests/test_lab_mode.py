@@ -65,3 +65,32 @@ def test_preset_switch_refused_in_lab_mode(monkeypatch):
     svc = SimpleNamespace(bridge=SimpleNamespace(lab_mode=True), arm_state=lambda: "disarmed")
     status, body = api.start_preset_apply(svc, "dashboard")
     assert status == 409 and "lab mode" in body["error"]
+
+
+def test_lab_capture_caps_plan_and_stops_slots_after_flight(monkeypatch):
+    from ground_station.service import campaign_live
+    sent = []
+    bridge = SimpleNamespace(lab_mode=True, subscribe_slot=lambda slot, divider, ranges: sent.append((slot, divider)))
+    svc = SimpleNamespace(bridge=bridge, stop_recording=lambda: {"session_dir": "d"},
+                          start_recording=lambda **kw: {"session_dir": "d"})
+    monkeypatch.setattr(campaign_live, "wait_streams_named", lambda b, slots: None)
+    begin, end = campaign_live.live_capture_hooks(svc, max_rate_hz=campaign_live.LAB_PLAN_MAX_HZ)
+    exp = SimpleNamespace(log_plan={"rate_hz": 50, "groups": ["estimator_truth", "ekf_states"]}, name="x")
+    try:
+        begin(exp, "f01")
+    except Exception:
+        pass                                     # recording start details are not under test
+    on = [s for s in sent if s[1] > 0]
+    assert on and all(d == 4 for _, d in on)     # 100 Hz / 4 = 25 Hz, not 50
+    sent.clear()
+    end("tok")
+    assert sent and all(d == 0 for _, d in sent)
+
+
+def test_lab_status_prime_keeps_slot0_at_10hz():
+    from ground_station.service import campaign_live
+    sent = []
+    bridge = SimpleNamespace(lab_mode=True, subscribe_slot=lambda slot, divider, ranges: sent.append((slot, divider)))
+    svc = SimpleNamespace(bridge=bridge, latest_values=lambda names: {})
+    campaign_live.prime_status_stream(svc, wait_s=0, sleep=lambda s: None)
+    assert sent == [(0, 10)]                     # 2026-10-15: was divider 2 (50 Hz) over the lab sidebar frame
