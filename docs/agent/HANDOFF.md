@@ -3,32 +3,20 @@
 Read order: `AGENTS.md` -> this file -> `docs/agent/memory/rules.md` -> `.claude_state.md` (newest entry first).
 History: `docs/agent/ledger/` (grep, never read whole). Desktop session is CEO: inline, no subagents.
 
-## Now: 2026-10-15 lab day on the new pipeline (cards + queue); night rehearsal PASSED
+## Now: 2026-10-15 evening lab ended, 4-way comparison NOT flown (F1 2 attempts, F2-F6 not flown)
 
-Branch `overnight-2026-10-08`, local commits. Design and decisions: `docs/lab/pipeline-design.md` (e3ee0e83).
-- A card = one hypothesis, one `.fly` path, variants switched on the ground (`docs/lab/cards/`). Stages: list,
-  screen (1 flight per variant, baseline first and last), confirm (ABBA; the winner beats every baseline flight).
-- Queue `docs/lab/queue-2026-10-15.txt`: fusion-hover 2, pad-landing 2, xy-ctrl-screen 5, xy-ctrl-confirm 6 = 15
-  flights (counted from the cards). Early-end tags: c = controller fail (counts), x = outside cause (flown again;
-  a 2nd x puts the card on the fix list).
-- Rehearsal (fake drone, no camera): 15/15 flights in 61 min, 7 swaps, a veto, 0 early ends, 0 skips; its
-  confirm verdict means nothing (fake metrics are 0). Re-run after the pack change: 4/4 flights in 12 min, one
-  typed swap (type 1 -> type 2), rc 0. A power cycle and an x re-fly were not rehearsed (unit tests only).
-  Their logs: logs/discarded/rehearsal-2026-10-15/.
-- Packs: two types, type 1 and type 2 (`--pack 1|2`, a swap asks the type); swap below 15.0 V or after 2
-  flights (a swap reboots the drone); the charger is the operator's.
-- Firmware: the 10-14 build is on the drone (C:/tmp/reflash2.log, Verify OK); no firmware commit since: no flash.
-- Catalog `docs/lab/catalog.yaml` (`.\lab catalog`): the queue flies only listed cards; `lab end` moves them forward.
+Branch `overnight-2026-10-08`, local commits (ad83fa79 = livetune loop=pos + 6-flight run sheet).
+Full record: `docs/lab/lab-session-2026-10-15.md` (read it first). Plan: `docs/lab/run-sheet-2026-10-16.md`.
+- F1 attempt 1: C3 gains applied, abort L1 position_error at takeoff (26.5 cm drift, camera agrees).
+- F1 attempt 2: abort before liftoff, trajectory BEGIN timed out on the host, firmware `applied` arrived late
+  -> "begin rejected". Cause PROPOSED: WiFi reply latency vs host command timeout under load.
+- Firmware: the 10-14 build, unchanged, no flash. Drone may still hold C3 in RAM until power-cycled.
 
 ## Next 3 actions
-1. Done 01:37: fake drone quit, 8081 restarted for the real drone (WiFi 192.168.4.1), a dry `lab up` READY
-   (only the drone-off WAIT rows). Packs:
-   type 1 = the big 5300 mAh pack (operator confirmed); type 2 = the small packs, 4000 mAh (operator confirmed 2026-10-15).
-2. Lab, PowerShell in the repo: `.\lab up --pack 1` (the type in the drone): one check table (FAIL stops,
-   WARN asks one Enter), then the queue flies card by card with a debrief after each landing (16 s measured
-   in rehearsal).
-3. Day end: `.\lab end`: `logs/lab/<day>/day_report.md`, then videos to `G:/My Drive/UAV_lab/<day>/` after one
-   question (copied, size-checked, then removed from D:).
+1. Fix the trajectory upload (late BEGIN ack, upload before arm, find the 445x cmd 26 idx 2 sender);
+   host tests; then the takeoff-drift replay of attempt 1 (fix list 1-3 in the session record).
+2. Lab: power-cycle, re-write C3 stop-and-wait (operator chat approval), fusion 3, `.\fly lab_c_robust --pack 1 --once`.
+3. Then F2-F6 per the run sheet (livetune rate/pos with fusion 2, ES gains chat-approved, LQR, MPC).
 
 ## Do not
 - Arm/spin outside an operator-opened workflow-B battery session; flash while armed or with `--force`.
