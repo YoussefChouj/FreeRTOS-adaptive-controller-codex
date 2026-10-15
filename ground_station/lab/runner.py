@@ -18,6 +18,7 @@ import argparse
 import json
 import math
 import os
+import re
 import shlex
 import shutil
 import statistics
@@ -34,6 +35,16 @@ from ground_station.service.campaign_launch import ROOT, rel
 LAB_DIR = ROOT / "logs" / "lab"
 VIDEO_DIR = ROOT / "logs" / "video_truth"
 CAMERA_SH = "ground_station/lab/camera_truth.sh"
+
+
+def git_bash():
+    """Git Bash, never WSL's: from PowerShell `bash` is System32's WSL bash, which has no `python` (2026-10-15 lab)."""
+    for p in (Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git" / "bin" / "bash.exe",
+              Path("C:/Program Files/Git/bin/bash.exe")):
+        if p.is_file():
+            return str(p)
+    found = shutil.which("bash") or "bash"
+    return "bash" if re.search(r"system32|windowsapps", found, re.I) else found
 SWAP_V = 15.0          # pipeline-design.md decision 6: a pack resting below this comes off
 PACK_FLIGHTS = 2       # decision 6: two flights per pack
 REST_X = 2.0           # decision 6: rest twice the flight time before the next takeoff
@@ -368,7 +379,7 @@ class Lab:
     # ---- camera
     def camera_run(self, *args):
         env = {**os.environ, "CT_FLOOR": f"logs/video_truth/{self.queue.floor}"}
-        cmd = [shutil.which("bash") or "bash", CAMERA_SH, *args]   # Git Bash: System32 holds WSL's bash
+        cmd = [git_bash(), CAMERA_SH, *args]
         return subprocess.run(cmd, cwd=ROOT, env=env, stdin=subprocess.DEVNULL).returncode
 
     def floor_ready(self):
