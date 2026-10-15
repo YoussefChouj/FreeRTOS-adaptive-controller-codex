@@ -87,3 +87,48 @@ def test_operator_land_mid_livetune_reverts_and_lands():
     assert lt["status"] == "stopped" and lt["reverted"]
     gains = [x for x in drone.param_writes if x[0] == 0x01]
     assert [v for _, _, v in gains[-6:]] == pytest.approx([FIRMWARE_RATE[g] for g in ("Kp", "Ki", "Kd")] * 2)
+
+
+def test_pos_livetune_parses_with_the_pos_defaults():
+    from ground_station.livetune.loop import FIRMWARE_POS, POS_EXCITE, parse_step
+
+    cfg, problems = parse_step({"loop": "pos", "axes": ["x", "y"], "budget_s": 60}, (0.0, 0.0, 0.5), (2.0, 2.0))
+    assert problems == [] and cfg.loop == "pos" and cfg.axes == ("x", "y")
+    assert cfg.baseline == FIRMWARE_POS and cfg.trust == 0.6 and cfg.popsize == 4
+    assert cfg.excite == POS_EXCITE and cfg.weights.f_c_hz == 2.5
+
+
+@pytest.mark.parametrize("lt, needle", [
+    ({"axes": ["roll"]}, "axes"),
+    ({"trust": 0.8}, "trust"),
+    ({"baseline": {"Kp": 1.0, "Ki": 0.0, "Kd": 1.0}}, "baseline"),
+])
+def test_pos_livetune_is_rejected(lt, needle):
+    body = {"loop": "pos", "axes": ["x", "y"], **lt}
+    with pytest.raises(ScenarioError) as exc:
+        parse_scenario(scenario(**body))
+    assert any(needle in p for p in exc.value.problems), exc.value.problems
+
+
+def test_pos_knobs_are_the_loc_pid_kp_kd_idx():
+    from ground_station.livetune.loop import FIRMWARE_POS, POS_GAINS, loop_knobs
+
+    k = loop_knobs("pos", ("x", "y"), FIRMWARE_POS, 0.6)
+    assert [k["x"][g].idx for g in POS_GAINS] == [24, 26, 30, 32]   # locx Kp Kd, locxs Kp Kd
+    assert [k["y"][g].idx for g in POS_GAINS] == [27, 29, 33, 35]   # locy Kp Kd, locys Kp Kd
+
+
+def test_fly_scenario_runs_pos_livetune_and_lands_on_the_pos_baseline():
+    from ground_station.livetune.loop import FIRMWARE_POS, POS_GAINS
+
+    drone, clock = FakeDrone(), FakeClock()
+    deps = create_deps(drone, WfbClient(drone.send), clock)
+    results = []
+    deps.on_livetune = results.append
+    out = fly_scenario(parse_scenario(scenario(loop="pos", axes=["x", "y"], budget_s=30)), deps)
+    assert not out.aborted and out.landed, out.decision
+    lt = out.steps[1]["livetune"]
+    assert results == [lt] and lt["status"] == "budget" and lt["reverted"] and lt["evals"]
+    gains = [x for x in drone.param_writes if x[0] == 0x01]
+    assert {i for _, i, _ in gains} == {24, 26, 27, 29, 30, 32, 33, 35}   # Ki and the rate loops untouched
+    assert [v for _, _, v in gains[-8:]] == pytest.approx([FIRMWARE_POS[g] for g in POS_GAINS] * 2)

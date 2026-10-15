@@ -18,12 +18,17 @@ checks the real-frame position (walk + pos) against the fence box; the run ends 
 
 Search space: x = log(gain / baseline) per gain, box [log(1 - trust), log(1 + trust)], CMA-ES started at x = 0.
 Every end (budget, evals, failures, stop) writes the baseline back; the best gains are reported, never applied.
+
+loop "pos" tunes the xy position cascade instead: outer locx/locy Kp, Kd and inner locxs/locys Kp, Kd (Ki is not
+written), the same values on x and y. The same CMD 0x14 chirp, slower (POS_EXCITE), on pitch for x and roll for y, is
+the disturbance; the score is the position error on the window's axis (pos_m - hover point after the origin reset),
+normalised by POS_ERR_REF_M, with the oscillation line searched above POS_F_C_HZ.
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Callable, Mapping
 
 import numpy as np
@@ -36,9 +41,21 @@ GAINS = ("Kp", "Ki", "Kd")
 FIRMWARE_RATE: Mapping[str, float] = {"Kp": 5.0, "Ki": 0.01, "Kd": 10.0}  # gyroxPID = gyroyPID, API/pid.c:23-24
 RATE_PID = {"roll": "gyroxPID", "pitch": "gyroyPID"}
 ERR_IDX = {"roll": 0, "pitch": 1}           # AbortSample.rate_err_dps is (roll, pitch, yaw)
+POS_GAINS = ("out.Kp", "out.Kd", "in.Kp", "in.Kd")  # out = locx/locy position PID, in = locxs/locys velocity PID
+FIRMWARE_POS: Mapping[str, float] = {"out.Kp": 0.8, "out.Kd": 4.0, "in.Kp": 3.0, "in.Kd": 6.0}  # API/pid.c LOCX/LOCXS
+POS_PID = {"x": {"out": "locxPID", "in": "locxsPID"}, "y": {"out": "locyPID", "in": "locysPID"}}
+POS_IDX = {"x": 0, "y": 1}                  # AbortSample.pos_m is (x, y, z)
+POS_ERR_REF_M = 0.10                        # PROPOSED: position error that costs J_track 1
+POS_F_C_HZ = 2.5                            # PROPOSED: above the POS_EXCITE band
+LOOP_GAINS = {"rate": GAINS, "pos": POS_GAINS}
+LOOP_AXES = {"rate": tuple(RATE_PID), "pos": tuple(POS_PID)}
+FIRMWARE = {"rate": FIRMWARE_RATE, "pos": FIRMWARE_POS}
+TRUST_DEFAULT = {"rate": 0.3, "pos": 0.6}   # PROPOSED: pos 0.6 reaches the sim C3 tune (outer Kp 0.32, Kd 6.29)
+TRUST_MAX = {"rate": 0.5, "pos": 0.7}
+POPSIZE = {"rate": None, "pos": 4}          # PROPOSED: a pos generation = 4 windows, ~34 s, inside the 120 s cap
 CMD_MRAC_FLAGS, MRAC_INJECTION_IDX = 0x0F, 10  # output_injection_on (firmware_contract CMD 0x0F)
 CMD_SYSID = 0x14
-SYSID_AXIS = {"pitch": 0, "roll": 1}        # CMD 0x14 idx 0 (TASK/send_data.c:1834)
+SYSID_AXIS = {"pitch": 0, "roll": 1, "x": 0, "y": 1}        # CMD 0x14 idx 0 (TASK/send_data.c:1834)
 SYSID_RAMP_S = 1.5                          # API/sysid.c:16
 SYSID_RECOVERY_S = 2.0                      # API/sysid.c:17
 SYSID_ALT_M = (0.30, 1.50)                  # API/sysid.c:22-23: SysID refuses to start and aborts outside
@@ -62,6 +79,10 @@ class ExciteConfig:
                            # overshoots amp_dps (~3x in the WP-28 sim)
 
 
+POS_EXCITE = ExciteConfig(amp_dps=20.0, f0_hz=0.3, f1_hz=2.0, dur_s=3.0)  # PROPOSED: slow chirp = xy disturbance;
+                                                                           # x <- pitch, y <- roll PROPOSED
+
+
 @dataclass(frozen=True)
 class LiveTuneConfig:
     loop: str = "rate"
@@ -72,6 +93,7 @@ class LiveTuneConfig:
     sigma0: float = 0.1               # in log-gain units, ~10 %
     baseline: Mapping[str, float] = field(default_factory=lambda: dict(FIRMWARE_RATE))
     seed: int = 0
+    popsize: int | None = None        # CMA-ES lambda; None = 4 + 3 ln(n)
     mrac_off: bool = True             # CMD 0x0F idx 10 = 0 before the first window; left off
     excite: ExciteConfig = ExciteConfig()
     settle_s: float = 2.5             # PROPOSED: >= SYSID_RECOVERY_S
@@ -107,13 +129,18 @@ def _int(v: Any) -> bool:
 def parse_step(body: Mapping[str, Any], hover_m: tuple[float, float, float],
                fence_xy_m: tuple[float, float]) -> tuple[LiveTuneConfig | None, list[str]]:
     """Check a scenario `livetune` step body; (config, []) or (None, problems). Keys are checked by the caller."""
-    d = LiveTuneConfig()
     p: list[str] = []
-    if body.get("loop") != "rate":
-        p.append(f"loop: only 'rate' is implemented, angle and yaw come later (got {body.get('loop')!r})")
+    loop = body.get("loop")
+    if loop not in LOOP_GAINS:
+        p.append(f"loop: must be one of {list(LOOP_GAINS)}, angle and yaw come later (got {loop!r})")
+        loop = "rate"
+    gains_t = LOOP_GAINS[loop]
+    d = LiveTuneConfig(loop=loop, trust=TRUST_DEFAULT[loop], baseline=dict(FIRMWARE[loop]),
+                       excite=POS_EXCITE if loop == "pos" else ExciteConfig())
     axes = body.get("axes")
-    if not (isinstance(axes, list) and axes and all(a in RATE_PID for a in axes) and len(set(axes)) == len(axes)):
-        p.append(f"axes: must be a non-empty list of distinct {list(RATE_PID)} (got {axes!r})")
+    if not (isinstance(axes, list) and axes and all(a in LOOP_AXES[loop] for a in axes)
+            and len(set(axes)) == len(axes)):
+        p.append(f"axes: must be a non-empty list of distinct {list(LOOP_AXES[loop])} (got {axes!r})")
     budget = body.get("budget_s")
     if not (_num(budget) and budget >= 2 * d.window_s):
         p.append(f"budget_s: must be a number >= {2 * d.window_s:.1f} s, two {d.window_s:.1f} s windows "
@@ -122,8 +149,8 @@ def parse_step(body: Mapping[str, Any], hover_m: tuple[float, float, float],
     if not (_int(max_evals) and 1 <= max_evals <= 500):
         p.append(f"max_evals: must be an integer in [1, 500] (got {max_evals!r})")
     trust = body.get("trust", d.trust)
-    if not (_num(trust) and 0.0 < trust <= 0.5):
-        p.append(f"trust: must be in (0, 0.5] (got {trust!r})")
+    if not (_num(trust) and 0.0 < trust <= TRUST_MAX[loop]):
+        p.append(f"trust: must be in (0, {TRUST_MAX[loop]:g}] for loop {loop} (got {trust!r})")
         trust = d.trust
     sigma0 = body.get("sigma0", d.sigma0)
     if not (_num(sigma0) and 0.0 < sigma0 <= 0.5):
@@ -144,9 +171,9 @@ def parse_step(body: Mapping[str, Any], hover_m: tuple[float, float, float],
         p.append(f"hold_radius_m: {hold} m + origin walk budget {d.walk_budget_m} m reaches outside the fence box "
                  f"(|x| <= {fence_xy_m[0]}, |y| <= {fence_xy_m[1]} m)")
     baseline = body.get("baseline", dict(d.baseline))
-    if not (isinstance(baseline, dict) and sorted(baseline) == sorted(GAINS)
+    if not (isinstance(baseline, dict) and sorted(baseline) == sorted(gains_t)
             and all(_num(v) and 0.0 < v and v * (1.0 + trust) <= GAIN_MAX for v in baseline.values())):
-        p.append(f"baseline: must map exactly {list(GAINS)} to numbers > 0 with value * (1 + trust) <= {GAIN_MAX:g} "
+        p.append(f"baseline: must map exactly {list(gains_t)} to numbers > 0 with value * (1 + trust) <= {GAIN_MAX:g} "
                  f"(got {baseline!r})")
     lo, hi = SYSID_ALT_M[0] + ALT_MARGIN_M, SYSID_ALT_M[1] - ALT_MARGIN_M
     if not lo <= hover_m[2] <= hi:
@@ -154,24 +181,32 @@ def parse_step(body: Mapping[str, Any], hover_m: tuple[float, float, float],
     if p:
         return None, p
     return LiveTuneConfig(
-        loop="rate", axes=tuple(axes), budget_s=float(budget), max_evals=int(max_evals), trust=float(trust),
-        sigma0=float(sigma0), baseline={g: float(baseline[g]) for g in GAINS}, seed=int(seed), mrac_off=mrac_off,
-        excite=ExciteConfig(amp_dps=float(amp)), hover_m=tuple(float(v) for v in hover_m),
+        loop=loop, axes=tuple(axes), budget_s=float(budget), max_evals=int(max_evals), trust=float(trust),
+        sigma0=float(sigma0), baseline={g: float(baseline[g]) for g in gains_t}, seed=int(seed),
+        popsize=POPSIZE[loop], mrac_off=mrac_off, excite=replace(d.excite, amp_dps=float(amp)),
+        weights=CostWeights(f_c_hz=POS_F_C_HZ) if loop == "pos" else CostWeights(), hover_m=tuple(float(v) for v in hover_m),
         fence_xy_m=tuple(float(v) for v in fence_xy_m),
         limits=SafetyLimits(hold_radius_m=float(hold)),
     ), []
 
 
 def rate_knobs(axes: tuple[str, ...], baseline: Mapping[str, float], trust: float) -> dict[str, dict[str, Any]]:
-    """The CMD 0x01 knob per (axis, gain), checked against the firmware idx decode."""
+    return loop_knobs("rate", axes, baseline, trust)
+
+
+def loop_knobs(loop: str, axes: tuple[str, ...], baseline: Mapping[str, float],
+               trust: float) -> dict[str, dict[str, Any]]:
+    """The CMD 0x01 knob per (axis, gain key), checked against the firmware idx decode."""
     from ground_station.analysis.controller_descriptor import PID_AXES, PID_GAIN_CMD, PID_GAINS, Knob, wire_target
 
     out: dict[str, dict[str, Any]] = {}
     for axis in axes:
         out[axis] = {}
-        for g in GAINS:
-            sym = f"{RATE_PID[axis]}.{g}"
-            idx = PID_AXES.index(RATE_PID[axis]) * len(PID_GAINS) + PID_GAINS.index(g)
+        for g in LOOP_GAINS[loop]:
+            part, gain = g.split(".") if loop == "pos" else ("", g)
+            member = POS_PID[axis][part] if loop == "pos" else RATE_PID[axis]
+            sym = f"{member}.{gain}"
+            idx = PID_AXES.index(member) * len(PID_GAINS) + PID_GAINS.index(gain)
             if wire_target(PID_GAIN_CMD, idx) != sym:
                 raise RuntimeError(f"CMD 0x01 idx {idx} does not write {sym}")
             b = float(baseline[g])
@@ -219,7 +254,7 @@ class LiveTuneResult:
 
 
 def _fmt(g: Mapping[str, float]) -> str:
-    return " ".join(f"{k} {g[k]:.4g}" for k in GAINS)
+    return " ".join(f"{k} {v:.4g}" for k, v in g.items())
 
 
 class LiveTuneSession:
@@ -229,9 +264,10 @@ class LiveTuneSession:
                  say: Callable[[str], None] = lambda text: None) -> None:
         self.cfg = cfg
         self._send, self._clock, self._say = send, clock, say
-        self.knobs = rate_knobs(cfg.axes, cfg.baseline, cfg.trust)
-        self.es = CMAES(np.zeros(len(GAINS)), cfg.sigma0, math.log(1.0 - cfg.trust), math.log(1.0 + cfg.trust),
-                        seed=cfg.seed)
+        self.gains_t = LOOP_GAINS[cfg.loop]
+        self.knobs = loop_knobs(cfg.loop, cfg.axes, cfg.baseline, cfg.trust)
+        self.es = CMAES(np.zeros(len(self.gains_t)), cfg.sigma0, math.log(1.0 - cfg.trust),
+                        math.log(1.0 + cfg.trust), popsize=cfg.popsize, seed=cfg.seed)
         self.sup = Supervisor(cfg.limits, cfg.hover_m, cfg.fence_xy_m)
         self.result = LiveTuneResult(baseline=dict(cfg.baseline))
         self.done = False
@@ -251,7 +287,7 @@ class LiveTuneSession:
         self._t_write = 0.0
 
     def gains_of(self, x) -> dict[str, float]:
-        return {g: self.cfg.baseline[g] * math.exp(float(v)) for g, v in zip(GAINS, x)}
+        return {g: self.cfg.baseline[g] * math.exp(float(v)) for g, v in zip(self.gains_t, x)}
 
     # ------------------------------------------------------------------ runner interface
 
@@ -273,7 +309,7 @@ class LiveTuneSession:
             if now - self._t_phase >= self.cfg.settle_s:
                 if v.kind == "trip":
                     self._finish("baseline_unsafe", f"still tripped {self.cfg.settle_s} s after the revert: {v.reason}",
-                                 revert=FIRMWARE_RATE)
+                                 revert=FIRMWARE[self.cfg.loop])
                 else:
                     self._next(now)
         elif v.kind == "trip":
@@ -286,7 +322,11 @@ class LiveTuneSession:
             elif dt >= self.cfg.settle_s + self.cfg.start_wait_s:
                 self._trip(now, f"could not settle within {self.cfg.start_tol_m} m of the hover point ({off:.2f} m)")
         elif self._phase == "excite":
-            self._buf.append((sample.t_s, sample.rate_err_dps[ERR_IDX[self._axis]], sample.sat_frac))
+            if self.cfg.loop == "pos":
+                e = sample.pos_m[POS_IDX[self._axis]] - self.cfg.hover_m[POS_IDX[self._axis]]
+            else:
+                e = sample.rate_err_dps[ERR_IDX[self._axis]]
+            self._buf.append((sample.t_s, e, sample.sat_frac))
             if now - self._t_phase >= self.cfg.excite_s:
                 self._exciting = False
                 self._score(now)
@@ -312,7 +352,7 @@ class LiveTuneSession:
 
     def _write(self, gains: Mapping[str, float]) -> bool:
         for axis in self.cfg.axes:
-            for g in GAINS:
+            for g in self.gains_t:
                 k = self.knobs[axis][g]
                 if not self._send(k.cmd_id, k.idx, float(gains[g])):
                     return False
@@ -323,9 +363,10 @@ class LiveTuneSession:
         """Re-send the active Kp (same value) so the firmware gain lease, when enabled, does not expire mid-window."""
         if now - self._t_write < self.cfg.keepalive_s:
             return True
-        k = self.knobs[self.cfg.axes[0]]["Kp"]
+        g = self.gains_t[0]
+        k = self.knobs[self.cfg.axes[0]][g]
         self._t_write = now
-        return self._send(k.cmd_id, k.idx, float(self._active["Kp"]))
+        return self._send(k.cmd_id, k.idx, float(self._active[g]))
 
     def _next(self, now: float) -> None:
         cfg, res = self.cfg, self.result
@@ -364,7 +405,8 @@ class LiveTuneSession:
 
     def _score(self, now: float) -> None:
         cols = list(zip(*self._buf)) if self._buf else [(), (), ()]
-        wc = window_cost(cols[0], cols[1], cols[2], self.cfg.excite.amp_dps, self.cfg.weights)
+        ref = POS_ERR_REF_M if self.cfg.loop == "pos" else self.cfg.excite.amp_dps
+        wc = window_cost(cols[0], cols[1], cols[2], ref, self.cfg.weights)
         if wc is None:
             return self._finish("link_lost", "no telemetry in the excitation window")
         kind, i, gains = self._cur
@@ -392,7 +434,7 @@ class LiveTuneSession:
             self._exciting = False
         kind, i, gains = self._cur
         if kind == "baseline":
-            return self._finish("baseline_unsafe", f"baseline tripped: {reason}", revert=FIRMWARE_RATE)
+            return self._finish("baseline_unsafe", f"baseline tripped: {reason}", revert=FIRMWARE[self.cfg.loop])
         if not self._write(self.cfg.baseline):
             return self._finish("write_failed", f"revert after a trip ({reason}) not applied")
         res = self.result

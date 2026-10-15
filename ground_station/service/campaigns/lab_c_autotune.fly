@@ -1,6 +1,6 @@
-# C: auto-tuned PID: lab_c_robust's xy gains (C3, idx 24-35) plus the roll/pitch rate-loop gains the autotune cli proposed
-# from lab_d_excite, all written on the ground first, stop-and-wait (RAM: a reboot loses them). Only the rate loops differ
-# from lab_c_robust, so the gap between the two is the autotune's effect. Same track, gated pad landing, fusion 3.
+# C: ES auto-tuned PID: the best gains of the in-flight CMA-ES (livetune) flights, rate loops from lab_d_livetune_rate
+# (idx 9-14) and xy position from lab_d_livetune_pos (idx 24-35), written on the ground first, stop-and-wait (RAM: a
+# reboot loses them). Same track as lab_c_robust (hand/sim C3 tune), lab_c_lqr and lab_c_mpc: the 4-way comparison.
 # Fly it: fly lab_c_autotune --once at >= 15.8 V resting. Plan: docs/lab/run-sheet-2026-10-16.md
 campaign lab-c-autotune
 rate 100
