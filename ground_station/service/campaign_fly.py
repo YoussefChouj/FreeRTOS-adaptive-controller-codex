@@ -391,7 +391,202 @@ GAIN_PRESETS = {
 }
 
 
-def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeout_s=2.0):
+LIVETUNE_BEST_PATH = Path("logs/campaigns/livetune_best.json")
+
+
+def load_livetune_gains(path=None, force=False):
+    """Load best gains from livetune_best.json and build gain dict and why string.
+
+    Returns (gains_dict, why_text, err_msg).
+    """
+    p = Path(path or LIVETUNE_BEST_PATH)
+    if not p.is_file():
+        return None, None, f"livetune_best.json not found at {p}: run F2 (lab_d_livetune_rate) and F3 (lab_d_livetune_pos) first"
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return None, None, f"failed to read {p}: {exc}"
+
+    rate_data = data.get("rate")
+    pos_data = data.get("pos")
+
+    gains = {}
+    why_parts = []
+
+    # Rate gains
+    if rate_data:
+        rate_rec = rate_data.get("recommended")
+        if rate_rec or force:
+            best_rate = rate_data.get("best") or (rate_rec if isinstance(rate_rec, dict) else None)
+            if isinstance(best_rate, dict):
+                kp = float(best_rate.get("Kp", 5.0))
+                ki = float(best_rate.get("Ki", 0.01))
+                kd = float(best_rate.get("Kd", 10.0))
+                # gyroxPID (9, 10, 11) and gyroyPID (12, 13, 14)
+                gains[9] = kp
+                gains[10] = ki
+                gains[11] = kd
+                gains[12] = kp
+                gains[13] = ki
+                gains[14] = kd
+                base_j = rate_data.get("base_j")
+                best_j = rate_data.get("best_j")
+                if base_j is not None and best_j is not None:
+                    pct = ((best_j - base_j) / base_j) * 100.0 if base_j > 0 else 0.0
+                    why_parts.append(f"rate J {best_j:.3g} vs base {base_j:.3g} ({pct:+.1f}%)")
+                else:
+                    why_parts.append(f"rate Kp={kp:.4g} Ki={ki:.4g} Kd={kd:.4g}")
+        else:
+            print("livetune: rate gains were not recommended (did not beat baseline by min_gain). Pass --force-livetune to apply anyway.", flush=True)
+
+    # Pos gains
+    if pos_data:
+        pos_rec = pos_data.get("recommended")
+        if pos_rec or force:
+            best_pos = pos_data.get("best") or (pos_rec if isinstance(pos_rec, dict) else None)
+            if isinstance(best_pos, dict):
+                out_kp = float(best_pos.get("out.Kp", 0.8))
+                out_kd = float(best_pos.get("out.Kd", 4.0))
+                in_kp = float(best_pos.get("in.Kp", 3.0))
+                in_kd = float(best_pos.get("in.Kd", 6.0))
+                # locxPID: 24 (Kp), 25 (Ki default), 26 (Kd)
+                gains[24] = out_kp
+                gains[25] = PID_DEFAULTS[25][1]
+                gains[26] = out_kd
+                # locyPID: 27 (Kp), 28 (Ki default), 29 (Kd)
+                gains[27] = out_kp
+                gains[28] = PID_DEFAULTS[28][1]
+                gains[29] = out_kd
+                # locxsPID: 30 (Kp), 31 (Ki default), 32 (Kd)
+                gains[30] = in_kp
+                gains[31] = PID_DEFAULTS[31][1]
+                gains[32] = in_kd
+                # locysPID: 33 (Kp), 34 (Ki default), 35 (Kd)
+                gains[33] = in_kp
+                gains[34] = PID_DEFAULTS[34][1]
+                gains[35] = in_kd
+                base_j = pos_data.get("base_j")
+                best_j = pos_data.get("best_j")
+                if base_j is not None and best_j is not None:
+                    pct = ((best_j - base_j) / base_j) * 100.0 if base_j > 0 else 0.0
+                    why_parts.append(f"pos J {best_j:.3g} vs base {base_j:.3g} ({pct:+.1f}%)")
+                else:
+                    why_parts.append(f"pos out.Kp={out_kp:.4g} out.Kd={out_kd:.4g} in.Kp={in_kp:.4g} in.Kd={in_kd:.4g}")
+        else:
+            print("livetune: pos gains were not recommended (did not beat baseline by min_gain). Pass --force-livetune to apply anyway.", flush=True)
+
+    if not gains:
+        return None, None, f"no applicable gains in {p} (neither rate nor pos was recommended; use --force-livetune to force)"
+
+    why_str = "livetune: " + "; ".join(why_parts) + f" from F2/F3 in-flight CMA-ES ({p})"
+    return gains, why_str, None
+
+
+def save_livetune_result(summary, loop=None, path=None):
+    """Persist F2/F3 livetune best gains into logs/campaigns/livetune_best.json (merging rate and pos)."""
+    p = Path(path or LIVETUNE_BEST_PATH)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    existing = {}
+    if p.is_file():
+        try:
+            loaded = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing = loaded
+        except Exception:
+            existing = {}
+
+    best = summary.get("best")
+    baseline = summary.get("baseline") or {}
+    baseline_J = summary.get("baseline_J") or {}
+    evals = summary.get("evals") or []
+    best_rel = summary.get("best_rel")
+    recommended = summary.get("recommended")
+
+    if not loop:
+        loop = summary.get("loop")
+    if not loop:
+        if "out.Kp" in baseline or (isinstance(best, dict) and "out.Kp" in best):
+            loop = "pos"
+        elif "Kp" in baseline or (isinstance(best, dict) and "Kp" in best):
+            loop = "rate"
+        else:
+            loop = "rate"
+
+    base_j = None
+    if baseline_J and isinstance(baseline_J, dict):
+        vals = [v for v in baseline_J.values() if isinstance(v, (int, float))]
+        if vals:
+            base_j = round(sum(vals) / len(vals), 4)
+    if base_j is None and summary.get("base_j") is not None:
+        try:
+            base_j = round(float(summary["base_j"]), 4)
+        except Exception:
+            pass
+
+    best_j = None
+    if best and isinstance(best, dict):
+        match_eval = next((e for e in evals if isinstance(e, dict) and e.get("gains") == best and e.get("J") is not None), None)
+        if match_eval:
+            best_j = round(float(match_eval["J"]), 4)
+    if best_j is None and summary.get("best_j") is not None:
+        try:
+            best_j = round(float(summary["best_j"]), 4)
+        except Exception:
+            pass
+    elif best_j is None and base_j is not None and best_rel is not None:
+        try:
+            best_j = round(base_j * float(best_rel), 4)
+        except Exception:
+            pass
+
+    entry = {
+        "loop": loop,
+        "best": best,
+        "best_j": best_j,
+        "base_j": base_j,
+        "best_rel": round(float(best_rel), 4) if best_rel is not None else None,
+        "recommended": recommended,
+        "status": summary.get("status"),
+        "candidates": summary.get("candidates", 0),
+        "generations": summary.get("generations", 0),
+        "stamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    existing[loop] = entry
+    p.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    print(f"LiveTune best gains ({loop}) saved to {p}", flush=True)
+    return entry
+
+
+def check_and_persist_livetune(st, path=None):
+    """Scan st (campaign state) and/or outputs_dir/metrics.json for livetune results, persisting to livetune_best.json."""
+    if not isinstance(st, dict):
+        return []
+    found = []
+    for flt in (st.get("flights") or []):
+        for stp in (flt.get("steps") or []):
+            if stp.get("kind") == "livetune" and "livetune" in stp:
+                found.append(stp["livetune"])
+    out_dir = st.get("outputs_dir")
+    if out_dir:
+        m_path = Path(out_dir) / "metrics.json"
+        if m_path.is_file():
+            try:
+                m_data = json.loads(m_path.read_text(encoding="utf-8"))
+                for flt in m_data.get("flights") or []:
+                    for stp in flt.get("steps") or []:
+                        if stp.get("kind") == "livetune" and "livetune" in stp:
+                            found.append(stp["livetune"])
+            except Exception:
+                pass
+    saved = []
+    for lt_summary in found:
+        if isinstance(lt_summary, dict) and lt_summary.get("best"):
+            res = save_livetune_result(lt_summary, path=path)
+            saved.append(res)
+    return saved
+
+
+def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeout_s=2.0, force_livetune=False, livetune_path=None):
     """Stop-and-wait gain writer enforcing disarmed gate, rationale print, y/N consent, and confirmation table.
 
     Friction A1-A6 & B10. Returns True if all gains were ACKed/applied; False on refusal or failure.
@@ -407,12 +602,19 @@ def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeou
     if isinstance(preset_or_gains, str):
         key = preset_or_gains.strip().lower()
         key = {"robust": "c3", "tuned": "c2", "default": "defaults", "pid": "defaults", "pid.c": "defaults"}.get(key, key)
-        if key not in GAIN_PRESETS:
-            print(f"unknown gain preset {preset_or_gains!r}: available presets are {', '.join(GAIN_PRESETS.keys())}", flush=True)
+        if key == "livetune":
+            gains, why_str, err = load_livetune_gains(path=livetune_path, force=force_livetune)
+            if err:
+                print(f"Gain write REFUSED: {err}", flush=True)
+                return False
+            why = why or why_str
+        elif key not in GAIN_PRESETS:
+            print(f"unknown gain preset {preset_or_gains!r}: available presets are {', '.join(GAIN_PRESETS.keys())}, livetune", flush=True)
             return False
-        preset = GAIN_PRESETS[key]
-        gains = dict(preset["gains"])
-        why = why or preset.get("why", "")
+        else:
+            preset = GAIN_PRESETS[key]
+            gains = dict(preset["gains"])
+            why = why or preset.get("why", "")
     elif isinstance(preset_or_gains, dict):
         gains = dict(preset_or_gains)
     elif isinstance(preset_or_gains, (list, tuple)):
@@ -463,6 +665,7 @@ def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeou
     rows = []
     total_ack = 0
     all_ok = True
+    txids = []
 
     for idx, new_val in sorted(gains.items()):
         axis = PID_DEFAULTS.get(idx, (f"idx_{idx}", 0.0))[0]
@@ -470,6 +673,7 @@ def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeou
         acked = False
         ms = 0
         retries = 0
+        current_txid = None
 
         for attempt in range(3):  # initial + up to 2 retries
             retries = attempt
@@ -487,6 +691,7 @@ def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeou
                 acked = True
                 ms = round((_clock() - t0) * 1000)
                 break
+            current_txid = txid
 
             deadline = _clock() + timeout_s
             while _clock() < deadline:
@@ -511,23 +716,42 @@ def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeou
 
         if acked:
             total_ack += 1
+            if current_txid is not None:
+                txids.append(current_txid)
             rows.append((axis, idx, old_val, new_val, "ACK", ms, retries))
         else:
             rows.append((axis, idx, old_val, new_val, "FAIL", round((_clock() - t0) * 1000), retries))
             all_ok = False
             break
 
-    # 7. Print confirmation table (A3)
+    # 7. Print confirmation table (A3) and parameter shadow / journal read-back check (A5)
     total_s = _clock() - t_start
     print(f"\n| {'Axis':<14} | {'idx':<4} | {'Old':<8} | {'New':<8} | {'ACK':<4} | {'ms':<4} | {'Retries':<7} |")
     print(f"|{'-'*16}|{'-'*6}|{'-'*10}|{'-'*10}|{'-'*6}|{'-'*6}|{'-'*9}|")
     for axis, idx, old_v, new_v, ack_str, ms_val, ret_val in rows:
         print(f"| {axis:<14} | {idx:<4} | {old_v:<8.4g} | {new_v:<8.4g} | {ack_str:<4} | {ms_val:<4} | {ret_val:<7} |")
-    print(f"\nTotal time: {total_s:.2f} s ({total_ack}/{len(gains)} ACK)", flush=True)
 
-    events.log("gain_write", total=len(gains), ack=total_ack, total_s=round(total_s, 2), ok=all_ok)
+    journal_ok = True
+    if all_ok and txids:
+        try:
+            _, bundle = call(base, "/api/diagnostics/bundle", timeout=5)
+            cmd_results = (bundle.get("commands") or {}).get("results") or []
+            res_by_tid = {r.get("transaction_id"): r.get("status") for r in cmd_results if r.get("transaction_id") is not None}
+            unapplied = [t for t in txids if res_by_tid.get(t) != "applied"]
+            if unapplied:
+                journal_ok = False
+        except Exception:
+            pass
+
+    ver_suffix = " (applied & verified in 8081 journal)" if (all_ok and journal_ok) else ""
+    print(f"\nTotal time: {total_s:.2f} s ({total_ack}/{len(gains)} ACK{ver_suffix})", flush=True)
+
+    events.log("gain_write", total=len(gains), ack=total_ack, total_s=round(total_s, 2), ok=(all_ok and journal_ok))
     if not all_ok:
         print(f"Gain write ABORTED: write failed for idx {rows[-1][1]}.", flush=True)
+        return False
+    if not journal_ok:
+        print("Gain write ABORTED: some transactions not confirmed as 'applied' in 8081 journal.", flush=True)
         return False
     return True
 
@@ -544,7 +768,7 @@ def extract_fly_directives(fly_path):
             s = line.strip()
             if s.startswith("#") and "gains:" in s:
                 after = s.split("gains:", 1)[1].strip()
-                gains_preset = after.split()[0] if after else None
+                gains_preset = after.split()[0].lower() if after else None
             elif s.startswith("#") and "why:" in s:
                 why_text = s.split("why:", 1)[1].strip()
     except Exception:
@@ -911,10 +1135,15 @@ def fly_one(base, launch, src, name, pack):
     (folder / "debrief.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
     (folder / "outputs.txt").write_text(f"{st.get('outputs_dir') or ''}\n", encoding="utf-8")
     write_samples(folder / "live_5hz.csv", samples)
+    try:
+        check_and_persist_livetune(st)
+    except Exception:
+        pass
     return st, samples, cam, folder
 
 
-def fly_loop(base, arg, pack, rate=None, run=None, once=False, yes=False):
+def fly_loop(base, arg, pack, rate=None, run=None, once=False, yes=False,
+             gains=None, no_gains=False, force_livetune=False, livetune_path=None):
     """Compile -> wait for the RC arm -> go -> watch -> debrief, flight after flight until q."""
     from ground_station.service.campaign_launch import rel
     from ground_station.service.campaign_schema import load_campaign
@@ -935,10 +1164,19 @@ def fly_loop(base, arg, pack, rate=None, run=None, once=False, yes=False):
                     return 1
                 continue
             name, go_pack = c.campaign, c.packs[0]
-            # Check directives in .fly (# gains: c3, # why: ...)
+            # Check directives in .fly (# gains: c3, # why: ...) or CLI override
             fly_preset, fly_why = extract_fly_directives(src)
-            if fly_preset:
-                if not write_gains(base, fly_preset, why=fly_why, yes=yes):
+            preset_to_write = None
+            preset_why = None
+            if not no_gains:
+                if gains:
+                    preset_to_write = gains
+                elif fly_preset:
+                    preset_to_write = fly_preset
+                    preset_why = fly_why
+            if preset_to_write:
+                if not write_gains(base, preset_to_write, why=preset_why, yes=yes,
+                                   force_livetune=force_livetune, livetune_path=livetune_path):
                     return 1
             print(f"{name}  {rel(src)}  pack {go_pack}  -> {rel(launch)}\nWaiting for the RC arm (q quits).",
                   flush=True)
@@ -971,7 +1209,7 @@ def fly_loop(base, arg, pack, rate=None, run=None, once=False, yes=False):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("campaign", help=".fly file, campaign yaml, launch copy, or a saved campaign name")
+    ap.add_argument("campaign", nargs="?", default="", help=".fly file, campaign yaml, launch copy, or a saved campaign name")
     ap.add_argument("--pack", help="the pack type in the drone, 1 or 2 (default: the last one given, "
                                     "logs/campaigns/fly/last_pack.txt)")
     ap.add_argument("--run", help="workflow-c run folder: flight_debrief after each landing")
@@ -980,7 +1218,9 @@ def main(argv=None):
     ap.add_argument("--record-only", metavar="LABEL", help="no flight: record the log plan (drone disarmed, carried "
                                                             "by hand) until Enter; sends no drone command")
     ap.add_argument("--rate", type=float, help="override the log plan rate, Hz")
-    ap.add_argument("--gains", help="preset name (c3, c2, defaults) to write stop-and-wait to RAM before flight")
+    ap.add_argument("--gains", help="preset name (c3, c2, defaults, livetune) to write stop-and-wait to RAM before flight")
+    ap.add_argument("--no-gains", action="store_true", help="skip any gains write directive in the .fly file")
+    ap.add_argument("--force-livetune", action="store_true", help="write livetune gains even if not recommended")
     ap.add_argument("--restore-defaults", action="store_true", help="write API/pid.c defaults to RAM stop-and-wait")
     ap.add_argument("--yes", "-y", action="store_true", help="skip y/N consent prompt for gain writes")
     a = ap.parse_args(argv)
@@ -989,10 +1229,12 @@ def main(argv=None):
         ensure_service(base, a.port)
         ok = write_gains(base, "defaults", yes=a.yes)
         return 0 if ok else 1
-    if a.gains:
-        ensure_service(base, a.port)
-        if not write_gains(base, a.gains, yes=a.yes):
-            return 1
+    if not a.campaign:
+        if a.gains:
+            ensure_service(base, a.port)
+            ok = write_gains(base, a.gains, yes=a.yes, force_livetune=a.force_livetune)
+            return 0 if ok else 1
+        ap.error("the following arguments are required: campaign")
     pack = pack_id(a.pack) or remember_pack()
     why = pack_problem(pack)
     if why:
@@ -1009,7 +1251,8 @@ def main(argv=None):
         record_only(base, str(launch), a.rate, a.record_only)
         rc = 0
     else:
-        rc = fly_loop(base, a.campaign, pack, a.rate, a.run, a.once, yes=a.yes)
+        rc = fly_loop(base, a.campaign, pack, a.rate, a.run, a.once, yes=a.yes,
+                      gains=a.gains, no_gains=a.no_gains, force_livetune=a.force_livetune)
     events.log("fly_end", rc=rc)
     print("Stop the video. The service window stays open; close it when you are done.")
     return rc

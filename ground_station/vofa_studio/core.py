@@ -215,7 +215,8 @@ def plan_budget(resolver, slots):
             except Exception as exc:
                 entries.append({"spec": spec, "ok": False, "error": str(exc)})
         if rate <= 0:
-            errors.append("rate must be > 0")
+            if ranges or slot.get("vars"):
+                errors.append("rate must be > 0")
             divider = 0
         else:
             divider = divider_for(rate)

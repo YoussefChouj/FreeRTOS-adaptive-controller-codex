@@ -556,14 +556,70 @@ class StreamsManager:
 
     # ---- slot table
 
+    def lab_slots(self) -> list[dict]:
+        from ground_station.comm import boot_default_layout as bdl
+        bridge = getattr(self.service, "bridge", None)
+        div0 = getattr(bridge, "LAB_SLOT0_DIVIDER", 10)
+        naming = getattr(bridge, "_naming", None)
+        nm = naming() if callable(naming) else None
+        schemas = getattr(bridge, "_stream_schemas", {}) or {}
+
+        vars0 = list(nm.names[0]) if (nm and 0 in getattr(nm, "names", {})) else list(bdl.DASHBOARD_FRAME_A_VARS)
+        if nm and 0 in getattr(nm, "dividers", {}):
+            div0 = nm.dividers[0]
+        s0 = {
+            "slot": 0,
+            "vars": vars0,
+            "divider": div0,
+            "name": "lab-frame",
+            "rate": 100.0 / div0 if div0 else 0.0,
+            "source": "lab",
+            "default": True,
+        }
+        slots = [s0]
+        for slot in (1, 2, 3):
+            names = getattr(nm, "names", {}).get(slot) if nm else None
+            schema = schemas.get(slot)
+            div = getattr(nm, "dividers", {}).get(slot) if nm else None
+            if div is None and schema is not None:
+                div = getattr(schema, "divider", 0)
+            if names or (schema and getattr(schema, "ranges", None)):
+                vars_list = list(names) if names else [r.name for r in schema.ranges if getattr(r, "name", None)]
+                div = div or 10
+                rate = 100.0 / div if div else 0.0
+                slots.append({
+                    "slot": slot,
+                    "vars": vars_list,
+                    "divider": div,
+                    "name": getattr(schema, "name", None) or f"slot{slot}",
+                    "rate": rate,
+                    "source": "lab",
+                    "default": False,
+                })
+            else:
+                slots.append({
+                    "slot": slot,
+                    "vars": [],
+                    "divider": 0,
+                    "name": "stopped",
+                    "rate": 0.0,
+                    "source": "lab",
+                    "default": False,
+                })
+        return slots
+
     def current_slots(self) -> list[dict]:
-        slots = default_slots()
-        with self._lock:
-            for n, ov in self._overrides.items():
-                slots[n] = dict(ov, slot=n, default=False)
-        for s in slots:
-            s.setdefault("default", s["source"] == "dashboard")
-            s["divider"] = s.get("divider") or _divider(s["rate"])
+        bridge = getattr(self.service, "bridge", None)
+        if getattr(bridge, "lab_mode", False):
+            slots = self.lab_slots()
+        else:
+            slots = default_slots()
+            with self._lock:
+                for n, ov in self._overrides.items():
+                    slots[n] = dict(ov, slot=n, default=False)
+            for s in slots:
+                s.setdefault("default", s["source"] == "dashboard")
+                s["divider"] = s.get("divider") or _divider(s["rate"])
         return slots
 
     def slot_specs(self) -> dict:

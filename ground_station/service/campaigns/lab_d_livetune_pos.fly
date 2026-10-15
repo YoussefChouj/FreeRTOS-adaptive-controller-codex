@@ -1,3 +1,5 @@
+# gains: defaults
+# why: defaults: restore API/pid.c firmware default gains without requiring power-cycle (docs/agent/lab-friction-2026-10-15.md A6)
 # D2: in-flight ES auto-tune of the xy position cascade (livetune loop=pos, CMA-ES): outer locx/locy Kp, Kd and inner
 # locxs/locys Kp, Kd, the same values on x and y (idx 24-35, Ki not written). One candidate per 8.5 s window: write the
 # gains, settle 2.5 s, a 0.3-2 Hz 20 deg/s chirp on pitch (x) or roll (y) as the disturbance, score the position error.

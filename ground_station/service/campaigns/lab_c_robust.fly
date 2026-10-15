@@ -1,3 +1,5 @@
+# gains: c3
+# why: C3 robust: robust tune over 18 delay-varied plants (sim, PROPOSED): overshoot 3.61 cm, settle 0.84 s vs default 10.0 cm / 1.42 s (docs/lab/run-sheet-2026-10-16.md)
 # C: robust tuned PID (C3): 0x01 locx/locy .3214/.0001/6.2937 + locxs/locys 3.2242/.0157/4.7283 (idx 24-35) written on
 # the ground first, stop-and-wait (RAM: a reboot loses them). No ff shift. Sim (PROPOSED, 18 delay-varied plants):
 # step overshoot 3.61 cm, settle 0.84 s vs default 10.0 cm / 1.42 s. Same track as lab_c_pid, gated pad landing, fusion 3.

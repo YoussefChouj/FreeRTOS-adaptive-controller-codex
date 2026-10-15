@@ -1,3 +1,4 @@
+# gains: livetune
 # C: ES auto-tuned PID: the best gains of the in-flight CMA-ES (livetune) flights, rate loops from lab_d_livetune_rate
 # (idx 9-14) and xy position from lab_d_livetune_pos (idx 24-35), written on the ground first, stop-and-wait (RAM: a
 # reboot loses them). Same track as lab_c_robust (hand/sim C3 tune), lab_c_lqr and lab_c_mpc: the 4-way comparison.

@@ -94,3 +94,36 @@ def test_lab_status_prime_keeps_slot0_at_10hz():
     svc = SimpleNamespace(bridge=bridge, latest_values=lambda names: {})
     campaign_live.prime_status_stream(svc, wait_s=0, sleep=lambda s: None)
     assert sent == [(0, 10)]                     # 2026-10-15: was divider 2 (50 Hz) over the lab sidebar frame
+
+
+def test_api_streams_shows_real_lab_layout_in_lab_mode():
+    from ground_station.service.streams import handle_get
+    b = _bridge(True)
+    svc = SimpleNamespace(bridge=b, arm_state=lambda: "disarmed", streams=None)
+    b._request_slot0_schema(layout="lab")
+    code, snap = handle_get(svc, "/api/streams")
+    assert code == 200
+    assert len(snap["slots"]) == 4
+    s0 = snap["slots"][0]
+    assert s0["name"] == "lab-frame"
+    assert s0["rate"] == 10.0
+    assert s0["divider"] == 10
+    assert s0["vars"] == list(DASHBOARD_FRAME_A_VARS)
+    # slots 1-3 are stopped in initial lab mode
+    for s in snap["slots"][1:]:
+        assert s["vars"] == []
+        assert s["divider"] == 0
+        assert s["rate"] == 0.0
+        assert s["name"] == "stopped"
+
+    # Now simulate a card's log plan configuring slot 1
+    nm = b._naming()
+    nm.names[1] = ("Ctrler.locxPID.FB", "Ctrler.locyPID.FB")
+    nm.dividers[1] = 4  # 25 Hz
+    code, snap2 = handle_get(svc, "/api/streams")
+    assert code == 200
+    s1 = snap2["slots"][1]
+    assert s1["vars"] == ["Ctrler.locxPID.FB", "Ctrler.locyPID.FB"]
+    assert s1["divider"] == 4
+    assert s1["rate"] == 25.0
+

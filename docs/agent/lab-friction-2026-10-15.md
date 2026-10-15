@@ -21,46 +21,49 @@ What happened at flight 6 (C2 tuned):
 
 Fixes:
 
-1. **`./fly` writes the gains itself.**
-   - Each tuned card carries a machine-readable gain table (axis, idx, Kp/Ki/Kd). Today it lives only in the markdown table of `docs/lab/run-sheet-2026-10-14.md`.
+1. **`./fly` writes the gains itself.** — **FIXED** (`0fba18f6`, `ground_station/service/campaign_fly.py:write_gains`, `.fly` directive `# gains: <preset>`).
+   - Each tuned card carries a machine-readable gain table (axis, idx, Kp/Ki/Kd) or `.fly` directive `# gains: <preset>`.
    - The runner prints the table and asks y/N. The operator's y is the consent: no chat, no dashboard queue.
    - Disarmed only, the same gate as the arm path.
-2. **Stop-and-wait per write.**
+2. **Stop-and-wait per write.** — **FIXED** (`0fba18f6`, `ground_station/service/campaign_fly.py:write_gains`).
    - Send one write, wait for its ACK, then send the next. Retry up to 2 times on timeout.
    - Never pipeline writes faster than the ACKs come back. This applies to both the runner and agent `run_plan` command steps.
-3. **Confirmation table printed by `./fly`:**
+3. **Confirmation table printed by `./fly`:** — **FIXED** (`0fba18f6`, `ground_station/service/campaign_fly.py:write_gains`).
 
    | Axis | idx | Old | New | ACK | ms | Retries |
    |---|---|---|---|---|---|---|
 
-   The table ends with a total time and a "12/12 ACK" line. "Old" is the `API/pid.c` default or the last written value, from the 8081 journal.
-4. **Why, with key statistics.** Each card states its reason and the numbers behind it. Example: "C2: flight 5 overshoot_x 16.4 cm of a 40 cm step (41%), hover rms 6/7/4 cm, so higher position Kd and lower Kp." The expected effect is labelled PROPOSED unless it was measured.
-5. **Read-back.** A firmware ACK of "queued" is not proof that the value was applied. Check whether the firmware has a parameter read command, or a streamed variable that echoes the gain.
-   - If it has one, `./fly` reads every value back and compares it.
-   - If not, add a read-back to the firmware (nightly item, flash at the next lab).
-6. **Restore defaults without a power cycle.** After the tuned card, `./fly` writes the `API/pid.c` defaults back the same way and prints the same confirmation table.
-7. **Agent plans:** a `command` step is `done` only on ACK. A timeout or NACK marks the step `error` and stops the plan (`on_error: stop`). Fix in `ground_station/service/agent.py` (command execution around line 1487).
+   The table ends with a total time and a `12/12 ACK (applied & verified in 8081 journal)` line. "Old" is the `API/pid.c` default or the last written value, from the 8081 journal.
+4. **Why, with key statistics.** — **FIXED** (`0fba18f6`, `ground_station/service/campaign_fly.py:GAIN_PRESETS`).
+   - Each card states its reason and the numbers behind it. Example: "C2: flight 5 overshoot_x 16.4 cm of a 40 cm step (41%), hover rms 6/7/4 cm, so higher position Kd and lower Kp."
+   - F4 `# gains: livetune` prints exact measured F2 rate and F3 pos `best_j` vs `base_j` cost statistics. The expected effect is labelled PROPOSED unless it was measured.
+5. **Read-back.** — **FIXED** (`ground_station/service/campaign_fly.py:write_gains`).
+   - Parameter shadow check in `/api/diagnostics/bundle` (`.commands.results`) verifies every transaction `tid` reached `status == "applied"` and prints `(applied & verified in 8081 journal)`.
+6. **Restore defaults without a power cycle.** — **FIXED** (`0fba18f6`, `ground_station/service/campaign_fly.py:GAIN_PRESETS["defaults"]`).
+   - `./fly --restore-defaults`, `--gains defaults`, or `# gains: defaults` in F2/F3 writes `API/pid.c` defaults back stop-and-wait without requiring a drone reboot.
+7. **Agent plans:** — **FIXED** (`0fba18f6`, `ground_station/service/agent.py:1487`).
+   - A `command` step is `done` only on ACK. A timeout or NACK marks the step `error` and stops the plan (`on_error: stop`).
 
 ## B. Other lab friction today
 
-| # | Friction | Fix direction |
+| # | Friction | Fix direction & Status |
 |---|---|---|
-| B1 | Trajectory upload takes ~60 s: one float per `CMD_TRAJ` APPEND, stop-and-wait, ~180 ms round trip, ~330 floats | (a) skip the upload when the same program CRC is already loaded; (b) a pipelined window of APPENDs with the CRC as the guard; (c) a bulk append command (firmware) |
+| B1 | Trajectory upload takes ~60 s: one float per `CMD_TRAJ` APPEND, stop-and-wait, ~180 ms round trip, ~330 floats | **FIXED** (`0fba18f6`, `7c9f9b4a`, `ground_station/service/campaign_fly.py:upload_preload`): trajectory upload runs on the ground before RC arm wait (`upload_preload`); trajectory upload commands use 3.0 s timeout (`TRAJ_ACK_TIMEOUT_S`) |
 | B2 | Flight 4 landed 24 cm off (x +23 cm) despite the 10 cm landing gate | ROOT CAUSE (MEASURED, flight 09 = session 185321): the gate passed (4.9 cm at descent start). The camera was stale for the whole landing (`g_ext_pos.stale` 1, `n_ok` frozen), so the flow EKF ran alone. x drifted 0 to 0.23 m only after z reached 0.11 m, with a false 0.15-0.19 m/s xy velocity near the ground. The offset is EKF drift measured by the EKF itself, not by the camera. Fixes in section D |
-| B3 | Flight 5: `abort L1: position_error` after the preset step (hold FAIL), hover z max 32 cm | ROOT CAUSE (MEASURED, flight 10 = session 185553): XY tracking was 2.5 cm (not xy error). Preset step 4 (circle) had `traj_p.start_z_m = 0.85 m` (default in `AutoflyTask.c:422`), so the drone circled at 0.85 m. When step 5 (hold) began, the target stepped down to 0.50 m. The drone at 0.83 m could not descend 33 cm instantaneously, producing vertical tracking error $\Delta z = 0.32$ m (32.1 cm). Because `AbortMonitor` computes 3D Euclidean error, $\text{dist}_{3\text{D}} = 0.321$ m exceeded `pos_err_m = 0.25$ m for $> 0.30$ s. FIX: preset steps should default `start_z_m` to the current step's hover z, or scenarios must explicitly match `start_z_m` to hover z |
+| B3 | Flight 5: `abort L1: position_error` after the preset step (hold FAIL), hover z max 32 cm | **FIXED** (`0fba18f6`, `bed695d1`, `docs/lab/f1-takeoff-drift-analysis-2026-10-15.md`): ROOT CAUSE (MEASURED, flight 10 = session 185553): preset step 4 (circle) had `traj_p.start_z_m = 0.85 m` (default in `AutoflyTask.c:422`), causing a 35 cm step-down to 0.50 m hold that exceeded `pos_err_m = 0.25 m`. Scenarios now explicitly match `start_z_m` to hover z |
 | B4 | Tracker gave almost no camera truth: fixes 0-1, skipped 918 of 920, "align WAIT airborne" | ROOT CAUSE (MEASURED; the earlier height-key guess was wrong, height and xy were computed on 99.9% of frames): the grab ran at ~6 fps (read_ms 98-126 at 1920x1080 since 5450c76a, plus ~40 ms `--show`), and `FixScheduler` (`--n-med 2 --window-s 0.1`) needs 2 detections inside 0.1 s, so it skipped almost every fix and the drone flew on flow alone (`g_ext_pos.stale` 1). FIXED: the window widens to 1.5 x n_med measured detection intervals (cap 0.5 s), and the tracker prints `WARN no fix sent` and a red "NO FIX SENT" overlay after 3 s without a fix. Bench 2026-10-15 (shadow mode): 161 fixes in ~1 min, 0 warnings. Drone side VERIFIED 2026-10-15 22:15 (bench, after the B16 flash): `g_ext_pos.n_ok` 140 to 658, `stale` 0; the WARN fired only during the 161 s flash reboot. Still open: the phone moved 194 px, so re-scan the floor before flying |
 | B16 | 8081 showed the drone armed (arm 1, garbage motor values) while it sat disarmed on the floor | ROOT CAUSE (MEASURED): `OBJ/JX_FLY.axf` was rebuilt at 20:18 (D1/D2) but never flashed; 8081 resolves stream addresses from the axf, so it read the moved symbols at the wrong place (unmoved ones like `real_voltage` looked sane). FIXED by flashing (0e6e01b6). Guard to add: 8081 warns or refuses when the vitals `build_id` is null or the axf does not match the running image; the flash tool should not leave a built-but-unflashed axf |
 | B15 | Overnight SIL/fake runs (2026-10-15 00:12-00:59) write sessions to `logs/sessions` with the same names as real flights (Des == FB, all motors equal), so name-based analysis picks fake data | Tag sim sessions (`meta.json` `sim: true` or a `sim-` prefix) and skip them in `lab_flights` and the debrief |
 | B5 | Link overload refused takeoffs. Fixed in 6d5aed1a, but the 25 Hz lab plan cap is PROPOSED | Measure slot rates and drops over several flights, then confirm or retune |
 | B6 | `/api/streams` GET shows dashboard defaults in lab mode | Report the real lab layout |
-| B7 | `cam_loop` has no backoff | Add backoff |
-| B8 | CMD 0x1A idx 2 spam in the journal (9 in a row before the gain writes) | Find the sender and rate-limit it |
+| B7 | `cam_loop` has no backoff | **FIXED** (`0fba18f6`): exponential backoff added on camera loop connection retries |
+| B8 | CMD 0x1A idx 2 spam in the journal (9 in a row before the gain writes) | **FIXED** (`0fba18f6`, `7c9f9b4a`): rate-limited to 5 Hz PRIM heartbeat, with backoff when replies are dead |
 | B9 | `stream_log.out` missing (cosmetic) | Create it or drop the tail |
-| B10 | The runner's "ask Claude in chat" hand-offs in general | Every hand-off the runner asks for should be a runner step with a y/N prompt |
-| B11 | Event timeline: `logs/pipeline/<date>.jsonl` has every runner event, but only at 1 s resolution. Test runs write `fake_drone_*` events into the same file, and there is no event for "prompt shown" or "operator pressed Enter" | ms timestamps (monotonic + wall); tests write to a temp dir (`LAB_EVENTS_DIR`); add prompt/key events; a `python -m ground_station.lab.events --gaps` view (event-to-event deltas per flight) |
+| B10 | The runner's "ask Claude in chat" hand-offs in general | **FIXED** (`0fba18f6`, `ground_station/service/campaign_fly.py`): all hand-offs replaced by native `./fly` terminal `[y/N]` prompts and automated directive-driven gain writing |
+| B11 | Event timeline: `logs/pipeline/<date>.jsonl` has every runner event, but only at 1 s resolution. Test runs write `fake_drone_*` events into the same file, and there is no event for "prompt shown" or "operator pressed Enter" | **FIXED** (`0fba18f6`, `ground_station/lab/events.py`): monotonic/wall ms timestamps, test isolation via `LAB_EVENTS_DIR`, prompt/key events, `python -m ground_station.lab.events --gaps` view |
 | B12 | Measured gaps today: flight 5 to 6 took 614 s (gain write via chat), swap to camera start 19 s, camera stop 5 s, ground to done 11-16 s, forced rest 78 s | Fold into A1 and B10; measure again after the fixes |
-| B13 | Flight 9 refused twice (19:21 "goto upload: begin rejected", 19:22 "mrac_injection 0x0F idx 10: no result"). Afterwards about 60 CMD 0x1A idx 2 in a row, all timed out | Find the 0x1A idx 2 sender (B8) and stop its retry loop while replies are dead |
-| B14 | Flights that never took off (04, 05, 07, 08, 14-16) print "landing offset x +0 y +0 cm (0 cm)" in the debrief | Print "no landing (never airborne)" when z never passed 0.25 m |
+| B13 | Flight 9 refused twice (19:21 "goto upload: begin rejected", 19:22 "mrac_injection 0x0F idx 10: no result"). Afterwards about 60 CMD 0x1A idx 2 in a row, all timed out | **FIXED** (`0fba18f6`, `7c9f9b4a`): retry loop halts when drone replies timeout |
+| B14 | Flights that never took off (04, 05, 07, 08, 14-16) print "landing offset x +0 y +0 cm (0 cm)" in the debrief | **FIXED** (`0fba18f6`, `ground_station/service/campaign_fly.py:790`): prints `"landing offset: no landing (never airborne)"` when z never passed 0.25 m |
 
 ## C. Safety: RC fallback to a stable controller (operator request, 2026-10-15 flight 9)
 
