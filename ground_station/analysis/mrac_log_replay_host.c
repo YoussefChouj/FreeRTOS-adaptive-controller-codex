@@ -150,8 +150,11 @@ int main(int argc, char **argv)
         if (strncmp(argv[i], "simplex:", 8) == 0) { apply_arg(argv[i]); continue; }
         if (strncmp(argv[i], "acc:", 4) == 0) { n_in = strtol(argv[i] + 4, NULL, 10) ? N_IN + 2 : N_IN; continue; }
         if (strncmp(argv[i], "swref:", 6) == 0) { mrac_vp12.swing_ref = strtof(argv[i] + 6, NULL); continue; }
-        if (strncmp(argv[i], "mask:", 5) == 0) { mrac_vp12.mask[0] = mrac_vp12.mask[1] = mrac_vp12.mask_act[0] = mrac_vp12.mask_act[1]
-                = strtof(argv[i] + 5, NULL); continue; }
+        if (strncmp(argv[i], "mask:", 5) == 0) {
+            float m = strtof(argv[i] + 5, NULL);
+            for (int a = 0; a < 4; a++) { mrac_vp12.mask[a][0] = mrac_vp12.mask[a][1] = mrac_vp12.mask_act[a][0] = mrac_vp12.mask_act[a][1] = m; }
+            continue;
+        }
         if (strncmp(argv[i], "cfg:", 4) == 0) { fprintf(stderr, "set %d\n", apply_cfg(argv[i])); continue; }
         fprintf(stream ? stderr : stdout, "set %d\n", apply_arg(argv[i]));
     }

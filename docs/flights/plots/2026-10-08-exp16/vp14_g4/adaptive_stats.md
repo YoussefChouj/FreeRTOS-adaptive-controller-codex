@@ -40,6 +40,14 @@ Grid inputs in the firmware's normalised units (rate, angle); the Gaussian centr
 | F1 MRAC | pitch | -0.163 / +0.002 / +0.137 | -0.549 / -0.027 / +0.528 | 0.608 | 0.0830 | 0.0011 | 100% | 0.000 -> 0.061 | +0.0006 | e2 16%, e8 15% |
 | F1 MRAC | roll | -0.177 / -0.001 / +0.187 | -0.766 / -0.051 / +0.828 | 0.728 | 0.0534 | 0.0009 | 100% | 0.000 -> 0.046 | +0.0007 | e2 27%, e8 23% |
 
+### Ext ranking (every Gaussian, RMS^2 share of the ext block, cumulative in brackets)
+
+| seg | axis | ranked |
+|---|---|---|
+| F1 MRAC | pitch | e2 15.7% [16%], e8 15.2% [31%], e3 12.7% [44%], e14 11.6% [55%], e9 9.9% [65%], e15 4.7% [70%], e20 4.4% [74%], e16 2.8% [77%], e10 2.6% [79%], e4 2.3% [82%], e22 2.2% [84%], e0 2.0% [86%], e6 2.0% [88%], e5 1.8% [90%], e1 1.7% [92%], e11 1.6% [93%], e12 1.6% [95%], e7 1.3% [96%], e17 1.0% [97%], e21 1.0% [98%], e13 0.7% [99%], e18 0.7% [99%], e23 0.4% [100%], e19 0.2% [100%] |
+| F1 MRAC | roll | e2 26.7% [27%], e8 23.1% [50%], e3 11.2% [61%], e6 5.6% [67%], e14 5.2% [72%], e0 4.8% [77%], e9 4.6% [81%], e12 3.1% [84%], e4 2.8% [87%], e20 2.4% [90%], e1 2.1% [92%], e10 1.9% [94%], e7 1.3% [95%], e5 1.1% [96%], e15 1.0% [97%], e22 0.8% [98%], e13 0.5% [98%], e11 0.4% [99%], e21 0.3% [99%], e16 0.3% [99%], e17 0.3% [100%], e18 0.2% [100%], e19 0.1% [100%], e23 0.1% [100%] |
+| F1 MRAC | p+r mean | e2 21.2% [21%], e8 19.2% [40%], e3 12.0% [52%], e14 8.4% [61%], e9 7.3% [68%], e6 3.8% [72%], e0 3.4% [75%], e20 3.4% [79%], e15 2.9% [81%], e4 2.6% [84%], e12 2.3% [86%], e10 2.2% [89%], e1 1.9% [90%], e16 1.5% [92%], e22 1.5% [93%], e5 1.5% [95%], e7 1.3% [96%], e11 1.0% [97%], e21 0.7% [98%], e17 0.6% [99%], e13 0.6% [99%], e18 0.4% [100%], e23 0.3% [100%], e19 0.2% [100%] |
+
 ## Static offsets per segment (drift)
 
 Expected static torque of the load at the rope point: pitch 0.112 N m (x 2 cm), roll 0.391 N m (y 7 cm), mg = 5.59 N.
@@ -50,9 +58,9 @@ Expected static torque of the load at the rope point: pitch 0.112 N m (x 2 cm), 
 
 ## Per segment: attitude, height, motors, battery
 
-| seg | s | pitch sd | roll sd | rate sd p / r (deg/s) | band PSD p / r | z - z_des | motor at 4000 (%) | max motor spread | V mean |
-|---|---|---|---|---|---|---|---|---|---|
-| F1 MRAC | 61 | 3.23 | 4.59 | 11.9 / 14.3 | 49.0 / 86.1 | -0.015 | 33.1 | 1485 | 14.34 |
+| seg | s | pitch sd | roll sd | rate sd p / r (deg/s) | band PSD p / r | z - z_des | motor at 4000 (%) | max motor spread | V mean | stab CPU % mean / max |
+|---|---|---|---|---|---|---|---|---|---|---|
+| F1 MRAC | 61 | 3.23 | 4.59 | 11.9 / 14.3 | 49.0 / 86.1 | -0.015 | 33.1 | 1485 | 14.34 | 10.1 / 10.5 |
 
 ## Uncertainty estimate: does u_ad match the disturbance?
 

@@ -52,3 +52,17 @@ Append new dated entries below only if a task needs a long note; keep this file 
   warnings: base (main ff160cc files) Code 118,700 / RO 5,336 -> branch Code 116,152 / RO 5,052 (-2,548 / -284 B);
   RW/ZI unchanged. Speed PROPOSED (bench: hlth.stab_cpu_pct, loop_max_us). Worktree OBJ currently holds the BASE build.
   NEXT: doc on branch + HANDOFF line on main; then next backlog item (ETag post-demo / 2 M baud doc / A-B-C dedup).
+
+## Moved from .claude_state.md (2026-10-05 10:3x)
+
+Done on main (details: archive + git log): stack_budget + gate
+`stack` (tasks 68-79 % margin; start_task malloc-failed overflow, fix on ram-savings, drop KNOWN_OVER at merge).
+Finding: FaultCapture_Record 512 B local
+(USER/fault_capture.c) overflows MSP on a fault in deep nesting; fix PROPOSED = build record in fault_backup in place;
+map confirms fault_backup .bss / fault_captured .data: re-inited every reset, so post-reset persist never fires (UNINIT fix PROPOSED).
+Safety finding (docs/firmware-safety.md "Fault in flight", lab doc + demo doc abort line): a HardFault spins with TIM3
+holding the last motor PWM, RC kill dead, IWDG off; fix PROPOSED = Set_Zero_Motors() first in FaultCapture_Record.
+Defender holds the FIRST run of every new .exe -> tools/exe_cache.py content-keyed (.cache/exe);
+bare subprocess "bash" = WSL bash (use shutil.which). clang-tidy passes cached in .cache/lint (ce9706b, 21 -> 5 s).
+d26d79a filter test. 6e186c2 ss_gain cycle, 2a529f6 no scipy in SIL. Gate now (ddbb472): host 3, mrac 10, c-pytest 15, sil 45-52 (4 groups ~47 s each, CPU-bound now; replay test
+shortened to a 13 s two-axis goto), tidy 4 s. Never touch Defender/WSL settings (user's call).
