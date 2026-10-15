@@ -13,8 +13,8 @@ Full record: `docs/lab/lab-session-2026-10-15.md` (read it first). Plan: `docs/l
 - Firmware: the 10-14 build, unchanged, no flash. Drone may still hold C3 in RAM until power-cycled.
 
 ## Next 3 actions
-1. Fix the trajectory upload (late BEGIN ack, upload before arm, find the 445x cmd 26 idx 2 sender);
-   host tests; then the takeoff-drift replay of attempt 1 (fix list 1-3 in the session record).
+1. DONE 7c9f9b4a: traj upload waits 3.0 s (PROPOSED) for late results; cmd 26 idx 2 = 5 Hz heartbeat (keep).
+   Open: takeoff-drift replay of attempt 1 (fix 3), then parametric trajectories (fix 5, replaces fix 2).
 2. Lab: power-cycle, re-write C3 stop-and-wait (operator chat approval), fusion 3, `.\fly lab_c_robust --pack 1 --once`.
 3. Then F2-F6 per the run sheet (livetune rate/pos with fusion 2, ES gains chat-approved, LQR, MPC).
 

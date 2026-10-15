@@ -40,13 +40,18 @@ then poll `/api/diagnostics/bundle` `.commands.results` for `applied`.
 
 ## Fix list for the next session (in order)
 
-1. Trajectory upload: accept a late `applied` for BEGIN (or wait longer), and on retry check the firmware's
-   upload state first; find what sends cmd 26 idx 2 (445x) and pause it during uploads.
-   Files: `ground_station/platform/trajectory_upload.py:67`, `ground_station/platform/wfb_commands.py:129`.
+1. DONE (commit 7c9f9b4a): `LiveWfbClient` waits `TRAJ_ACK_TIMEOUT_S` 3.0 s (PROPOSED) for CMD_TRAJ results,
+   other commands keep 1.0 s. A late `applied` still reaches the client after the service marks the command
+   timed_out (checked in `core.py`). The firmware accepts a repeated BEGIN, so a retry needs no state check.
+   Correction to the cause above: cmd 26 idx 2 is the PRIM heartbeat the client sends at 5 Hz while it waits.
+   The firmware needs it, so it is not paused.
 2. Upload every trajectory on the ground before the RC arm, so a link failure costs no battery or arm.
 3. Takeoff drift under C3: replay attempt 1's telemetry (locyPID / g_ext_pos) and decide whether the 0.25 m
    takeoff abort is too tight or the C3 outer Kp is too low. Measure before changing either.
 4. Small: "preflight FAIL: position not streaming" printed once before "preflight OK" in attempt 1.
+5. Strategic (operator idea): send a trajectory as parameters (goto target x/y/z + move_s, generated on the
+   drone) instead of about 135 single-float APPENDs. circle/figure8 presets already work this way (VAR writes).
+   This removes the 30+ s ground upload and most of the late-reply exposure, and replaces fix 2. Needs firmware + flash.
 
 ## Next lab plan
 
@@ -55,4 +60,4 @@ then F2 `.\fly lab_d_livetune_rate --once` and F3 `.\fly lab_d_livetune_pos --on
 chat approval + stop-and-wait write of the ES best gains (rate idx 9-14, pos idx 24/26/27/29/30/32/33/35),
 F4 `lab_c_autotune`, F5 `lab_c_lqr`, F6 `lab_c_mpc` (fusion 3). Fusion: `CT_FLOOR=logs/video_truth/floor-2026-10-15
 bash ground_station/lab/camera_truth.sh fusion <name> <mode> --yaw-deg 94`; stop with `... stop <name>`.
-Fix 1 above first: without it, every .fly with a goto or preset can hit the same refusal.
+Fix 1 is done (host only, no flash), so the next lab can re-fly F1 as planned.
