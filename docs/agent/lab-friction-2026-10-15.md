@@ -55,3 +55,16 @@ Fixes:
 | B8 | CMD 0x1A idx 2 spam in the journal (9 in a row before the gain writes) | Find the sender and rate-limit it |
 | B9 | `stream_log.out` missing (cosmetic) | Create it or drop the tail |
 | B10 | The runner's "ask Claude in chat" hand-offs in general | Every hand-off the runner asks for should be a runner step with a y/N prompt |
+| B11 | Event timeline: `logs/pipeline/<date>.jsonl` has every runner event, but only at 1 s resolution. Test runs write `fake_drone_*` events into the same file, and there is no event for "prompt shown" or "operator pressed Enter" | ms timestamps (monotonic + wall); tests write to a temp dir (`LAB_EVENTS_DIR`); add prompt/key events; a `python -m ground_station.lab.events --gaps` view (event-to-event deltas per flight) |
+| B12 | Measured gaps today: flight 5 to 6 took 614 s (gain write via chat), swap to camera start 19 s, camera stop 5 s, ground to done 11-16 s, forced rest 78 s | Fold into A1 and B10; measure again after the fixes |
+| B13 | Flight 9 refused twice (19:21 "goto upload: begin rejected", 19:22 "mrac_injection 0x0F idx 10: no result"). Afterwards about 60 CMD 0x1A idx 2 in a row, all timed out | Find the 0x1A idx 2 sender (B8) and stop its retry loop while replies are dead |
+
+## C. Safety: RC fallback to a stable controller (operator request, 2026-10-15 flight 9)
+
+LQR and MPC hold position well but oscillate. The operator wants an RC switch that immediately hands control to the PID. It should not cut the motors, and the operator then lands by hand.
+
+- Today: the xy outer loop is chosen by `g_xy_ctrl_kind` and latched on the ground only (`TASK/StabilizerTask.c` ~2020). The PID loops run every tick, and xy_ctrl flies an axis only while the velocity setpoint is the position loop's own output; otherwise the PID flies and xy_ctrl tracks. The stick path into that setpoint (`Update_Des`) is not verified yet. Attitude `g_ctrl_select` changes only while disarmed (`API/controller.c:154`).
+- Fix (nightly, bench-test before a flight):
+  - An RC aux switch, channel picked by the operator, forces `s_xyc_kind = XY_CTRL_PID` and attitude `CTRL_PID` in flight, latched until disarm.
+  - Reset xy_ctrl so the hand-off is bumpless (the PID is already warm).
+  - Telemeter the switch as `status.fallback`, and log it as a flight event.
