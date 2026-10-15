@@ -275,6 +275,10 @@ def start_preset_apply(service, name: str) -> tuple[int, dict]:
         return 404, {"ok": False, "error": f"unknown preset {name!r}"}
     if service.bridge is None:
         return 409, {"ok": False, "error": "no WiFi bridge"}
+    if getattr(service.bridge, "lab_mode", False):
+        # 2026-10-15: lab up's 8081 got the 4-slot dashboard layout back from a preset switch (link FAIL).
+        return 409, {"ok": False, "error": "8081 runs in lab mode: the card's log plan owns the slots. "
+                                           "Restart 8081 without --lab for stream presets."}
     arm = service.arm_state()
     if arm != "disarmed":
         return 409, {"ok": False, "error": f"refused: arm state is {arm}; "

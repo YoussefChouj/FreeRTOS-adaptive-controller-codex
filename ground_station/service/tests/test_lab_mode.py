@@ -57,3 +57,11 @@ def test_ensure_service_starts_lab_8081(monkeypatch):
     except SystemExit:
         pass
     assert calls and calls[0][-1] == "--lab"
+
+
+def test_preset_switch_refused_in_lab_mode(monkeypatch):
+    from ground_station.service import api
+    monkeypatch.setattr(api, "list_presets", lambda service: {"presets": [{"name": "dashboard"}]})
+    svc = SimpleNamespace(bridge=SimpleNamespace(lab_mode=True), arm_state=lambda: "disarmed")
+    status, body = api.start_preset_apply(svc, "dashboard")
+    assert status == 409 and "lab mode" in body["error"]
