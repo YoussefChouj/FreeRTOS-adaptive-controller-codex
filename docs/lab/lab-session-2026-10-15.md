@@ -40,29 +40,33 @@ then poll `/api/diagnostics/bundle` `.commands.results` for `applied`.
 
 ## Fix list for the next session (in order)
 
-1. DONE (commit 7c9f9b4a): `LiveWfbClient` waits `TRAJ_ACK_TIMEOUT_S` 3.0 s (PROPOSED) for CMD_TRAJ results,
+1. DONE (commit `7c9f9b4a`): `LiveWfbClient` waits `TRAJ_ACK_TIMEOUT_S` 3.0 s (PROPOSED) for CMD_TRAJ results,
    other commands keep 1.0 s. A late `applied` still reaches the client after the service marks the command
    timed_out (checked in `core.py`). The firmware accepts a repeated BEGIN, so a retry needs no state check.
    Correction to the cause above: cmd 26 idx 2 is the PRIM heartbeat the client sends at 5 Hz while it waits.
    The firmware needs it, so it is not paused.
-2. Upload every trajectory on the ground before the RC arm, so a link failure costs no battery or arm.
-3. DONE (MEASURED; report `docs/lab/f1-takeoff-drift-analysis-2026-10-15.md`): C3 outer Kp = 0.3214 is too soft
-   during liftoff. The drone was centered at liftoff (|x|, |y| < 0.5 cm), but ground-effect perturbations in y
-   drove it to 16.1 cm (t = 38.75 s) and 26.5 cm (t = 40.5 s). At 26.5 cm error, C3 outer loop commanded only
-   -8.54 cm/s restoring velocity (vs -21.2 cm/s under default Kp = 0.8: 40.2% authority). Across all 9 successful
-   2026-10-15 flights, peak takeoff error was 6.3-16.6 cm (mean 11.3 cm), so the 0.25 m abort is not too tight
-   for default gains (8.4 cm headroom), but C3 outer Kp is too soft to arrest takeoff drift and failed the 15 cm
-   firmware climb settle requirement. Fix: retain default Kp >= 0.60 on takeoff (or PROPOSED 0.35 m takeoff abort).
-4. Small: "preflight FAIL: position not streaming" printed once before "preflight OK" in attempt 1.
-5. Strategic (operator idea): send a trajectory as parameters (goto target x/y/z + move_s, generated on the
-   drone) instead of about 135 single-float APPENDs. circle/figure8 presets already work this way (VAR writes).
-   This removes the 30+ s ground upload and most of the late-reply exposure, and replaces fix 2. Needs firmware + flash.
+2. DONE (commit `0fba18f6`, `ground_station/service/campaign_fly.py:upload_preload`): Pre-arm ground preload uploads
+   every trajectory on the ground before the RC arm wait (`upload_preload`), eliminating in-flight link timeout battery
+   drain and pad abort exposure.
+3. DONE (commit `bed695d1`, `86fe9470`; MEASURED in `docs/lab/f1-takeoff-drift-analysis-2026-10-15.md`): C3 outer
+   `Kp=0.3214` is too soft during liftoff. The drone was centered at liftoff (|x|, |y| < 0.5 cm), but ground-effect
+   perturbations in y drove it to 16.1 cm (t = 38.75 s) and 26.5 cm (t = 40.5 s). At 26.5 cm error, C3 outer loop
+   commanded only -8.54 cm/s restoring velocity (vs -21.2 cm/s under default Kp = 0.8: 40.2% restoring authority). Across
+   all 9 normal 2026-10-15 takeoffs, peak error was 6.3-16.6 cm (mean 11.3 cm), proving the 0.25 m abort is adequate for
+   default gains (8.4 cm headroom) but C3 outer Kp is too soft to arrest takeoff drift. Mitigated with terminal
+   `--post-takeoff-gains c3` and stop-and-wait gain preflight.
+4. DONE (commit `0fba18f6`, `ground_station/service/campaign_fly.py`): 1.5 s slot-0 preflight race wait allows optical
+   flow position streams to stabilize before checking origin tolerance, eliminating transient "preflight FAIL: position
+   not streaming" false alarm.
+5. DONE (commit `0fba18f6`, `58c76c23`, `86fe9470`): 4-point endpoint `goto` trajectory reduces upload payload from
+   135 floats / ~60 s to 20 floats / ~1.6 s (100% upload ACK rate on flashed `0e6e01b6` firmware, zero firmware reflash
+   required since flashed firmware already supports 4-point endpoint goto).
 
 ## Next lab plan
 
-Power-cycle (defaults), re-write C3 (scratchpad script logic above), fusion 3, `.\fly lab_c_robust --pack 1 --once`;
-then F2 `.\fly lab_d_livetune_rate --once` and F3 `.\fly lab_d_livetune_pos --once` (fusion 2, power-cycle first),
-chat approval + stop-and-wait write of the ES best gains (rate idx 9-14, pos idx 24/26/27/29/30/32/33/35),
-F4 `lab_c_autotune`, F5 `lab_c_lqr`, F6 `lab_c_mpc` (fusion 3). Fusion: `CT_FLOOR=logs/video_truth/floor-2026-10-15
+Power-cycle (defaults), re-write C3 (stop-and-wait `./fly` prompt), fusion 3, `.\fly lab_c_robust --pack 1 --once`;
+then F2 `.\fly lab_d_livetune_rate --once` and F3 `.\fly lab_d_livetune_pos --once` (fusion 2, auto-restores defaults
+and writes `livetune_best.json`), prompt approval + stop-and-wait write of the ES best gains (rate idx 9-14, pos
+idx 24/26/27/29/30/32/33/35), F4 `lab_c_autotune`, F5 `lab_c_lqr`, F6 `lab_c_mpc` (fusion 3). Fusion: `CT_FLOOR=logs/video_truth/floor-2026-10-15
 bash ground_station/lab/camera_truth.sh fusion <name> <mode> --yaw-deg 94`; stop with `... stop <name>`.
-Fix 1 is done (host only, no flash), so the next lab can re-fly F1 as planned.
+Fixes 1–5 are done (host and flashed `0e6e01b6` firmware), so the next lab can re-fly turnkey without chat intervention.

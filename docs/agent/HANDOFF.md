@@ -3,21 +3,16 @@
 Read order: `AGENTS.md` -> this file -> `docs/agent/memory/rules.md` -> `.claude_state.md` (newest entry first).
 History: `docs/agent/ledger/` (grep, never read whole). Desktop session is CEO: inline, no subagents.
 
-## Now: 2026-10-15 evening lab ended & synced to `origin` (`main` and `overnight-2026-10-08`)
+## Now: 2026-10-15 evening post-lab autonomous overhaul (`bed695d1`, `0fba18f6`, `58c76c23`, `86fe9470`)
 
-Branches `overnight-2026-10-08` and `main` are synced and pushed to `origin` (`9393c5e7` + handoff).
-- `7c9f9b4a`: `LiveWfbClient` `CMD_TRAJ` (`0x1B`) waits `TRAJ_ACK_TIMEOUT_S = 3.0` s (PROPOSED) for late firmware results; 2 host tests in `ground_station/service/tests/test_campaign_live.py`.
-- `2f434380`: 2026-10-15 evening lab record in `docs/lab/lab-session-2026-10-15.md` (read it first; next plan: `docs/lab/run-sheet-2026-10-16.md`).
-- `9393c5e7`: synced local MRAC replay/variant/contract updates (`ground_station/analysis/mrac_log_replay_host.c` 4-axis mask, `ground_station/analysis/mrac_variants.py` `basis` `0..11`, `ground_station/platform/firmware_contract.py` `CMD 0x1A` field `0..25`), `sim/bench/` Yucelen P2 scripts, `docs/design/vp-maskable-basis.md`, `docs/research/vp16/briefs/`, `docs/agent/briefs/`, `docs/learning/gap-ledger.md`, and `docs/flights/ledger.csv`.
-- Lab status: F1 attempt 1 aborted L1 `position_error` at takeoff (26.5 cm drift, camera agrees); F1 attempt 2 aborted before liftoff on late trajectory `BEGIN` ack (addressed by `7c9f9b4a`). F2-F6 not flown. Firmware is the 10-14 build (unchanged, no flash).
-- Uncommitted local working-tree items intentionally left unstaged: Keil IDE/build files (`USER/JX_FLY.uvguix.Acer`, `USER/JX_FLY.uvoptx`, `USER/build_log.txt`) and local `.agent-ops/` scratch files.
+- **Terminal-native `./fly` workflow**: `# gains:` directives (`c3`, `defaults`, `livetune`), stop-and-wait parameter writer with `[y/N]` prompt, `| Axis | idx | Old | New | ACK | ms | Retries |` table, 8081 journal read-back, `--restore-defaults`, `--list-gains`, `--dry-run`, `--post-takeoff-gains`, and F2/F3 -> F4 `livetune_best.json` persistence.
+- **Trajectory & preflight fixes**: 4-point `goto` (`20` floats, `~1.6 s` upload on flashed `0e6e01b6` firmware), pre-arm ground preload (`upload_preload`), `start_z_m` preset altitude sync (fixes B3), CRC upload cache (B1a), 1.5 s preflight position stream wait (Fix 4), heartbeat backoff (B8/B13).
+- **Analysis & safety guards**: F1 takeoff drift analysis (`docs/lab/f1-takeoff-drift-analysis-2026-10-15.md`), B5 measured slot/ACK rates (`99.92%` ACK), B15 sim session filter, B16 AXF flash/symbol mismatch guard, B6 `/api/streams` lab layout, D2/B2 camera touchdown offset, Section C RC/command PID fallback (`API/pid_fallback.h`, un-flashed so `OBJ/JX_FLY.axf` stays matched to `0e6e01b6`).
 
-## Next 3 actions
-1. Cloud/local worker handoff (base on `origin/overnight-2026-10-08` or `origin/main`):
-   - Replay F1 attempt-1 takeoff drift (`docs/lab/lab-session-2026-10-15.md` fix 3: C3 outer Kp 0.32 vs 0.25 m takeoff abort threshold).
-   - Implement parametric goto trajectories (`docs/lab/lab-session-2026-10-15.md` fix 5: send goto target `x/y/z + move_s` parameters instead of ~135 single-float `APPEND`s; requires firmware build + flash).
-2. Lab: power-cycle, re-write C3 stop-and-wait (operator chat approval), fusion 3, `.\fly lab_c_robust --pack 1 --once`.
-3. Then F2-F6 per `docs/lab/run-sheet-2026-10-16.md` (livetune rate/pos with fusion 2, ES gains chat-approved, LQR, MPC).
+## Next 3 actions (turnkey lab execution, `docs/lab/run-sheet-2026-10-16.md`)
+1. **Bring-up**: Start 8081, verify `arm 0` & motors ~3050, re-scan floor (`bash ground_station/lab/camera_truth.sh floor <name>`), start fusion 3 (`CT_FLOOR=... bash ground_station/lab/camera_truth.sh fusion f1-robust 3 --yaw-deg 94`).
+2. **Run F1**: `.\fly lab_c_robust --pack 1 --once` (auto-prompts `[y/N]` to write C3 gains stop-and-wait, preloads 4-pt `goto` on ground before RC arm; fallback `--gains c2` or `--post-takeoff-gains c3` if pad ground-effect drift recurs).
+3. **Run F2–F6** per `docs/lab/run-sheet-2026-10-16.md`: `lab_d_livetune_rate` & `lab_d_livetune_pos` (fusion 2, auto-restores defaults & saves `livetune_best.json`), then `lab_c_autotune` (auto-loads `livetune_best.json`), `lab_c_lqr`, `lab_c_mpc` (fusion 3).
 
 ## Do not
 - Arm/spin outside an operator-opened workflow-B battery session; flash while armed or with `--force`.
@@ -27,23 +22,23 @@ Branches `overnight-2026-10-08` and `main` are synced and pushed to `origin` (`9
 - Run `lab end` on test or rehearsal state against the real catalog (it rewrites `docs/lab/catalog.yaml`).
 
 <!-- AUTO:BEGIN -->
-Refreshed: 2026-10-15 22:45 (mechanical, no LLM)
-- Tree: .; branch / HEAD: overnight-2026-10-08 @ 9393c5e7; unpushed commits: 0
-- Dirty paths outside OBJ/: 97
+Refreshed: 2026-10-15 22:08 (mechanical, no LLM)
+- Tree: .; branch / HEAD: overnight-2026-10-08 @ 86fe9470; unpushed commits: 4
+- Dirty paths outside OBJ/: 109
   -  M .agent-ops/.ark-last-spawn
   -  M .agent-ops/served/estimator-panel.js
-  -  M .claude_state.md
+  -  M .agents/agents/codebase-scout/agent.md
   -  M USER/JX_FLY.uvguix.Acer
   -  M USER/JX_FLY.uvoptx
   -  M USER/build_log.txt
   -  M USER/main.c
   -  M docs/agent/HANDOFF.md
-  - ... +89 more
+  - ... +101 more
 - Dashboard 8081: UP (HTTP 200)
 - Last commits:
-  - 9393c5e7 chore: sync local MRAC replay/variant updates, flight ledger, sim bench, and research docs
-  - 2f434380 docs: 2026-10-15 record + HANDOFF: upload fix 7c9f9b4a done, cmd 26 idx 2 = heartbeat (correction), fix 5 parametric trajectories (operator idea), drift replay still open
-  - 7c9f9b4a campaign_live: trajectory upload commands (CMD_TRAJ 0x1B) wait TRAJ_ACK_TIMEOUT_S 3.0 s (PROPOSED) for the firmware result, others keep 1.0 s; 2026-10-15 re-fly BEGIN applied 1.55/1.70 s late -> host said 'begin rejected' and aborted on the pad. Late results still land in _txn_results after core expire_commands (verified in code). Cmd 26 idx 2 x445 = the 5 Hz PRIM heartbeat, required, not a rogue sender. 2 tests (late traj accepted / takeoff still 1.0 s; full upload with 1.6 s late replies ok in 1 attempt)
-  - b802f4e0 lab 2026-10-15: session record (F1 C3 2 attempts: position-error abort at takeoff; re-fly refused before liftoff, trajectory BEGIN late ack -> begin rejected; F2-F6 not flown), fix list + next lab plan; HANDOFF current state
-  - ad83fa79 livetune: loop=pos tunes the xy cascade in flight (locx/locy + locxs/locys Kp, Kd; idx 24-35; POS_EXCITE 0.3-2 Hz chirp as disturbance, pos error score, popsize 4, trust 0.6, all PROPOSED); lab_d_livetune_rate/pos fly scripts; lab_c_autotune flies the ES best gains; run sheet 2026-10-16 = 4-way C3 PID / ES PID / LQR / MPC (6 flights); 4 tests
+  - 86fe9470 feat(fw,lab): RC/command PID fallback latch (Section C), measured B5 slot/ACK rates (99.92% ACK), ./fly --list-gains, --dry-run, and --post-takeoff-gains; 24/24 host C + 75 pytest pass
+  - 58c76c23 feat(lab): .fly # gains directives & livetune_best persistence (A1-A6), sim session filter (B15), AXF flash/symbol guard (B16), /api/streams lab layout (B6), cam touchdown offset (D2/B2), stream_log.out guard (B9); 69 tests pass
+  - 0fba18f6 feat(lab): native ./fly stop-and-wait gain writer (A1-A7), 4-pt goto & preset start_z_m (B1/B3/fix5), ground preload (fix2), preflight race (fix4), heartbeat backoff (B8/B13), events ms/--gaps (B7/B11/B14); 257 tests pass
+  - bed695d1 docs(lab): measured F1 takeoff drift replay (C3 Kp 0.3214 = 40.2% restoring vel vs 9 normal takeoffs 6.3-16.6 cm) and B3 flight-5 preset start_z_m 0.85m root cause
+  - 874f6307 docs(handoff): record 2026-10-15 full project sync to origin/main and overnight-2026-10-08
 <!-- AUTO:END -->
