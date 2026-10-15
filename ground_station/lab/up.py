@@ -100,15 +100,14 @@ def floor_row(q, camera):
 def camera_row(camera):
     if not camera:
         return ("camera", "OK", "off (--no-camera)", "")
-    try:
-        r = subprocess.run([shutil.which("bash") or "bash", runner.CAMERA_SH, "check"], cwd=ROOT, text=True,
-                           capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
-        out = (r.stdout + r.stderr).strip().splitlines()
-    except (OSError, subprocess.TimeoutExpired) as e:
-        out = [f"check failed: {e}"]
-    if any(line.startswith("ready") for line in out):
-        return ("camera", "OK", next(line for line in out if line.startswith("ready")), "")
-    return ("camera", "WARN", (out[-1] if out else "no output")[:90], "/camera-truth: phone on USB, unlocked")
+    try:   # the phone on adb (camera_truth.sh check needs a session name: 2026-10-15 it always warned)
+        r = subprocess.run(["adb", "devices"], text=True, capture_output=True, timeout=10, stdin=subprocess.DEVNULL)
+        phones = [ln.split()[0] for ln in r.stdout.splitlines()[1:] if ln.split()[1:] == ["device"]]
+    except (OSError, subprocess.TimeoutExpired):
+        phones = []
+    if phones:
+        return ("camera", "OK", f"phone {phones[0]} on adb", "")
+    return ("camera", "WARN", "no phone on adb (or unauthorized)", "/camera-truth: phone on USB, unlocked")
 
 
 def drone_rows(base, q, pack, fake, state_file):
