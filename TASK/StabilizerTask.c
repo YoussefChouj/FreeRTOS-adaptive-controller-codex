@@ -77,9 +77,8 @@ static void GsIdle_ReleaseOnDisarm(void);    /* below Des_Height: GS idle author
  * below 0.5 m, 0.3 -> 0.13 m in 0.28 s vs 0.86 s auto (F6). Des_Height still lowers
  * Z_posPID.Des at the same rate so the Des-at-floor touchdown gates keep working.
  * Touchdown detected by Z_ratePID.FB -> 0 on frame contact. */
-#define LAND_VZ_MPS        0.65f    /* F8 2026-10-06: was 0.40 (F7 1.0->0.5 m took 1.34 s vs M8 0.69 s) */
-#define LAND_FAST_ALT      0.40f
-#define LAND_VZ_FAST_MPS   0.50f    /* F8: was 0.70; touchdown speed, impact energy goes with speed^2 */
+/* LAND_VZ_MPS / LAND_FAST_ALT / LAND_VZ_FAST_MPS and the 2026-10-15 slow stage live in land_profile.h. */
+#include "land_profile.h"
 #define LAND_TICK_S        0.005f   /* Des_Height runs every 200 Hz tick */
 /* Safety net: 3000 ticks at 200 Hz = 15 s max landing time before forced disarm
  * (was 10 s; kept for margin: rate-mode LAND from 2.5 m is about 5.7 s, arithmetic). */
@@ -1826,6 +1825,10 @@ volatile float g_traj_ff_shift_s = 0.0f;
  * start its descent until the camera-fused xy is within this radius of the pad (origin) on a fresh fix, cm
  * (0 = off). Read in Wfb_Step; the descent itself is unchanged. */
 volatile float g_land_xy_gate_cm = 0.0f;
+/* Smith-predictor delay of the LQR/MPC xy loops, 10 ms ticks (VAR_WRITE id 47, latched on the ground with the kind).
+ * 2026-10-15: the gains assume 33; a shorter real delay (camera stale, flow only) limit-cycled LQR/MPC at ~2 Hz in
+ * ground_station/analysis/xy_delay_sim.py. Default 12 is PROPOSED from that sim, not measured. */
+volatile uint8_t g_xyc_delay_ticks = 12U;
 static uint8_t s_xyc_kind;
 static XyCtrlState s_xyc[2];
 #define TRAJ_FF_VZ_MAX_MPS     1.0f     /* = Z_posPID UMax, the climb-rate the position loop may ask for */
@@ -2037,6 +2040,8 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact)
 	 * the RC fallback forces the PID in flight (the PID cascade runs every tick, so it is warm). */
 	if (!airborne || land_contact || g_rc_fallback) {
 		s_xyc_kind = (g_xy_ctrl_kind <= XY_CTRL_MPC && !g_rc_fallback) ? g_xy_ctrl_kind : XY_CTRL_PID;
+		if (!airborne && g_xyc_delay_ticks != XyCtrl_Delay())
+			XyCtrl_SetDelay(g_xyc_delay_ticks);
 		XyCtrl_Reset(&s_xyc[0]);
 		XyCtrl_Reset(&s_xyc[1]);
 	}
@@ -2197,6 +2202,7 @@ void Compute_Motor(void)
 {
 	uint8_t airborne = (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING);
 	uint8_t land_contact = (uint8_t)(Land_ContactStep() | (s_land_spool != 0U));   /* spool = touchdown too */
+	land_contact |= LandProfile_XyFreeze(flight_phase == FLIGHT_PHASE_LANDING, Ctrler.Z_posPID.FB);   /* 10-15 D2 */
 
 	Rc_FallbackStep();
 	Z_Compute();
@@ -2346,8 +2352,7 @@ static void Des_Height(void)
 		TWC.execute = 0U;
 		if (Ctrler.Z_posPID.Des > Ctrler.Z_posPID.FB)
 			Ctrler.Z_posPID.Des = Ctrler.Z_posPID.FB;
-		Ctrler.Z_posPID.Des -= ((Ctrler.Z_posPID.FB < LAND_FAST_ALT) ?
-		                        LAND_VZ_FAST_MPS : LAND_VZ_MPS) * LAND_TICK_S;
+		Ctrler.Z_posPID.Des -= LandProfile_SinkMps(Ctrler.Z_posPID.FB) * LAND_TICK_S;
 		if (Ctrler.Z_posPID.Des < 0.0f) Ctrler.Z_posPID.Des = 0.0f;
 		return;
 	}
@@ -2395,8 +2400,7 @@ static void Des_VHeight(void)
 	if (flight_phase == FLIGHT_PHASE_LANDING || flight_phase == FLIGHT_PHASE_LANDED)
 	{
 		if (flight_phase == FLIGHT_PHASE_LANDING)
-			Ctrler.Z_ratePID.Des = -((Ctrler.Z_posPID.FB < LAND_FAST_ALT) ?
-			                         LAND_VZ_FAST_MPS : LAND_VZ_MPS);
+			Ctrler.Z_ratePID.Des = -LandProfile_SinkMps(Ctrler.Z_posPID.FB);
 		else
 			Ctrler.Z_ratePID.Des = Ctrler.Z_posPID.U;
 		/* Progressive sink bias: once setpoint has reached the floor, ramp up

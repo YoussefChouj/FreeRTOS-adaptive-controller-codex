@@ -34,6 +34,11 @@ typedef struct {
 
 void XyCtrl_Reset(XyCtrlState *s);
 
+/* Smith-predictor delay, 10 ms ticks (clamped 1..XY_CTRL_DMAX; default XYC_D). Rebuilds the prediction matrices;
+ * shared by both axes, so call it on the ground and Reset every state afterwards (the pipe length changes). */
+void XyCtrl_SetDelay(int d);
+int XyCtrl_Delay(void);
+
 /* One controller tick, without committing: returns the accel command cm/s^2 (clamped to the tilt cap). */
 float XyCtrl_Step(XyCtrlState *s, uint8_t kind, float des, float pos, float vel, float vff);
 

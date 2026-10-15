@@ -54,23 +54,26 @@ class _Tape:
         return u
 
 
-def _run_c(exe: Path, rows: list[str]) -> np.ndarray:
-    res = subprocess.run([str(exe)], input="\n".join(rows) + "\n", capture_output=True, text=True, check=True)
+def _run_c(exe: Path, rows: list[str], *args: str) -> np.ndarray:
+    res = subprocess.run([str(exe), *args], input="\n".join(rows) + "\n", capture_output=True, text=True, check=True)
     return np.array([float(v) for v in res.stdout.split()])
 
 
-@pytest.mark.parametrize("kind", ["adrc", "lqr", "mpc"])
-def test_c_matches_python_closed_loop(exe, kind):
-    """A 60 cm step, then a 30 cm/s ramp with its velocity feed-forward, on the nominal plant with noise."""
+@pytest.mark.parametrize("kind,d", [("adrc", None), ("lqr", None), ("mpc", None), ("lqr", 12), ("mpc", 12)])
+def test_c_matches_python_closed_loop(exe, kind, d):
+    """A 60 cm step, then a 30 cm/s ramp with its velocity feed-forward, on the nominal plant with noise. d: the
+    runtime predictor delay (VAR 47 g_xyc_delay_ticks, XyCtrl_SetDelay) against Python's predictor at that d."""
     n = 900
     t = np.arange(n) * xc.DT
     des = np.where(t < 0.3, 0.0, 60.0) + np.where(t > 4.5, 30.0 * (t - 4.5), 0.0)
     vff = np.where(t > 4.5, 30.0, 0.0)
     noise = np.random.default_rng(5).normal(0.0, 1.0, (n, 1))
-    tape = _Tape(xc.factory(kind, M, xc.X0[kind])(1))
+    m = M if d is None else {**M, "d": d}
+    tape = _Tape(xc.factory(kind, m, xc.X0[kind])(1))
     xt.simulate(tape, xt.plant_arrays([NOM]), des, vff=vff, noise=noise)
     code = xc.KIND_CODE[kind]
-    u_c = _run_c(exe, [f"s {code} {d!r} {p!r} {v!r} {f!r} {u!r}" for d, p, v, f, u in tape.rows])
+    u_c = _run_c(exe, [f"s {code} {r!r} {p!r} {v!r} {f!r} {u!r}" for r, p, v, f, u in tape.rows],
+                 *([] if d is None else [str(d)]))
     u_py = np.array([r[4] for r in tape.rows])
     assert len(u_c) == n
     assert np.abs(u_c - u_py).max() < 0.05 + 1e-3 * np.abs(u_py).max()

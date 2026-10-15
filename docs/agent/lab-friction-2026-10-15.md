@@ -48,7 +48,8 @@ Fixes:
 | B1 | Trajectory upload takes ~60 s: one float per `CMD_TRAJ` APPEND, stop-and-wait, ~180 ms round trip, ~330 floats | (a) skip the upload when the same program CRC is already loaded; (b) a pipelined window of APPENDs with the CRC as the guard; (c) a bulk append command (firmware) |
 | B2 | Flight 4 landed 24 cm off (x +23 cm) despite the 10 cm landing gate | ROOT CAUSE (MEASURED, flight 09 = session 185321): the gate passed (4.9 cm at descent start). The camera was stale for the whole landing (`g_ext_pos.stale` 1, `n_ok` frozen), so the flow EKF ran alone. x drifted 0 to 0.23 m only after z reached 0.11 m, with a false 0.15-0.19 m/s xy velocity near the ground. The offset is EKF drift measured by the EKF itself, not by the camera. Fixes in section D |
 | B3 | Flight 5: `abort L1: position_error` after the preset step (hold FAIL), hover z max 32 cm | Investigate from the flight-5 log |
-| B4 | Tracker gave almost no camera truth: fixes 0-1, skipped 918 of 920, "align WAIT airborne" | Debug the airborne alignment gate |
+| B4 | Tracker gave almost no camera truth: fixes 0-1, skipped 918 of 920, "align WAIT airborne" | MEASURED (flights 10/12/13): the drone got no camera fix at all: `g_ext_pos.stale` 1 and `n_ok` frozen the whole flight. The tracker followed the drone in pixels, but `FixScheduler` sends a fix only with a metric xy, which needs a fresh 8081 height (`Telemetry.stale_s` 1.0), and `AutoAlign` locks only on pairs with z above air_m and a fresh `ano_of.earth_x/y`. The lab frame (slot0, 10 Hz) does carry `ano_of.earth_x/y` and `Z_posPID.FB`, so the break is between them: check the tracker `--tel-url` poll key names (a `slot0.` prefix?) and the `camera_truth.sh` args. 2-min bench check with 8081 + tracker, no flight |
+| B15 | Overnight SIL/fake runs (2026-10-15 00:12-00:59) write sessions to `logs/sessions` with the same names as real flights (Des == FB, all motors equal), so name-based analysis picks fake data | Tag sim sessions (`meta.json` `sim: true` or a `sim-` prefix) and skip them in `lab_flights` and the debrief |
 | B5 | Link overload refused takeoffs. Fixed in 6d5aed1a, but the 25 Hz lab plan cap is PROPOSED | Measure slot rates and drops over several flights, then confirm or retune |
 | B6 | `/api/streams` GET shows dashboard defaults in lab mode | Report the real lab layout |
 | B7 | `cam_loop` has no backoff | Add backoff |
@@ -96,3 +97,11 @@ Tool: `python -m ground_station.analysis.lab_flights 2026-10-15 --only xy-ctrl p
      - Zero the xy velocity setpoint, and freeze the flow update, below about 0.12 m.
      - Fix the stale camera fusion (B4).
      - Report the touchdown offset from the camera, not the EKF.
+
+### D fixes shipped (firmware, bench test before flight)
+
+| Fix | What | Status |
+|---|---|---|
+| D1 predictor delay | LQR/MPC Smith-predictor delay is now runtime VAR 47 `g_xyc_delay_ticks` (1..48 ticks, ground only). Default 12 ticks, PROPOSED from `ground_station/analysis/xy_delay_sim.py` (assumed 33 vs true 5-15 ticks limit-cycles at 1.9-2.25 Hz). The loop delay could not be fitted from the 25 Hz lab logs (R^2 ~ 0) | Host test vs Python at d 12 and 33, Keil 0/0. Not flown |
+| D2 landing | `API/land_profile.h`: 0.25 m/s below 0.15 m (was 0.50), and below 0.12 m in LANDING the xy lean is zeroed and the xy integrators cleared (the contact path) | Host test, Keil 0/0. PROPOSED, not flown |
+
