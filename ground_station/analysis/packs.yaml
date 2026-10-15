@@ -32,4 +32,4 @@ packs:  # 2026-10-15: the lab knows two pack types, not single packs (user); the
   - id: "type2"
     label: "type 2 (the small packs)"
     cells: 4
-    capacity_mah: 4000  # UNVERIFIED: the old P4000 entries said 4000, pipeline-design decision 6 says 4400
+    capacity_mah: 4000  # the operator confirmed 2026-10-15

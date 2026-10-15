@@ -25,7 +25,7 @@ idea -> flight-ready (night) -> flown (lab) -> verdict (30 s after landing, day 
    Simulator = light firmware-in-loop (Python dynamics + the host-compiled C controller code, fitted to logs).
    Research first (adopt RotorPy / gym-pybullet-drones or build). Also research: Gazebo-in-WSL value,
    Google AI Pro/Ultra cloud credits, the "drone bench" agent-controls-hardware benchmark.
-6. Batteries: 1x P5300 + 4x P4400; charger 2 at a time, ~1 h each; ~130 s flights, 2 per pack; rest 2x the
+6. Batteries: 1x P5300 + 4x P4000 (4000 mAh, operator confirmed 2026-10-15); charger 2 at a time, ~1 h each; ~130 s flights, 2 per pack; rest 2x the
    flight time before the next takeoff. Console: resting voltage 20 s after landing; swap when below the next
    flight's minimum or 15.0 V, or after 2 flights; holds the next flight until the rest ends; tracks pack
    states (charged / charging with 1 h timer / flown). A pack swap reboots the drone: nothing may break.
