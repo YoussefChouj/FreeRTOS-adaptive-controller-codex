@@ -756,3 +756,95 @@ def test_check_and_persist_livetune(tmp_path):
     assert data["rate"]["best"]["Kp"] == 4.9
 
 
+def test_list_gains(capsys, tmp_path):
+    rc = campaign_fly.main(["--list-gains"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "=== Preset: c3 ===" in out
+    assert "=== Preset: c2 ===" in out
+    assert "=== Preset: defaults ===" in out
+    assert "=== Preset: livetune ===" in out
+    assert "| Axis           | idx  | Default  | Target   |" in out
+    assert "0.3214" in out
+    assert "0.67" in out
+
+    # Test with livetune_best.json present
+    lt_json = tmp_path / "livetune_best.json"
+    lt_json.write_text(json.dumps({
+        "rate": {
+            "recommended": {"Kp": 4.5, "Ki": 0.015, "Kd": 9.0},
+            "best": {"Kp": 4.5, "Ki": 0.015, "Kd": 9.0},
+            "best_j": 0.08,
+            "base_j": 0.12,
+        }
+    }), encoding="utf-8")
+    campaign_fly.list_gain_presets(livetune_path=lt_json)
+    out2 = capsys.readouterr().out
+    assert "4.5" in out2
+    assert "rate J 0.08 vs base 0.12 (-33.3%)" in out2
+
+
+def test_dry_run_scenario(capsys):
+    rc = campaign_fly.main(["lab_c_robust", "--dry-run"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "=== DRY RUN: lab-c-robust ===" in out
+    assert "Ground gain preset: c3" in out
+    assert "| Axis           | idx  | Default  | Target   |" in out
+    assert "Preload step: goto" in out
+    assert "CRC=0x848956AB" in out
+    assert "< 2 s for 4-point goto" in out
+    assert "Scenario Plan" in out
+    assert "takeoff" in out
+    assert "land" in out
+
+
+def test_dry_run_post_takeoff_gains(capsys):
+    rc = campaign_fly.main(["lab_c_robust", "--dry-run", "--gains", "defaults", "--post-takeoff-gains", "c3"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Ground gain preset: defaults" in out
+    assert "Post-takeoff gain preset: c3 (applied after takeoff in HOVER)" in out
+    assert "0.3214" in out
+
+
+def test_extract_fly_directives_post_takeoff(tmp_path):
+    fly = tmp_path / "post_test.fly"
+    fly.write_text("# gains: defaults\n# post_takeoff_gains: c3\n# why: climb on defaults then switch\ncampaign test\ntakeoff 0.5\nland\n", encoding="utf-8")
+    res = campaign_fly.extract_fly_directives(fly)
+    # 2-tuple unpacking backward compatibility
+    preset, why = res
+    assert preset == "defaults"
+    assert why == "climb on defaults then switch"
+    # post_takeoff attribute
+    assert res.post_takeoff == "c3"
+
+
+def test_write_gains_in_flight(capsys, monkeypatch):
+    # Drone is armed: normal write_gains should REFUSE, in_flight should PASS without prompt
+    monkeypatch.setattr(campaign_fly, "_vitals", lambda base: {"arm": {"state": "armed"}})
+    txn_status = "applied"
+
+    def fake_call(base, route, body=None, timeout=10):
+        if route == "/commands":
+            return 200, {"ok": True, "transaction_id": 99}
+        if route == "/api/actions":
+            return 200, {"actions": [{"transaction_id": 99, "lifecycle": "applied"}]}
+        if route == "/api/diagnostics/bundle":
+            return 200, {"commands": {"results": [{"transaction_id": 99, "status": txn_status}]}}
+        return 200, {}
+
+    monkeypatch.setattr(campaign_fly, "call", fake_call)
+
+    # Normal write while armed is refused
+    assert campaign_fly.write_gains("http://h", {24: 0.3214}) is False
+    assert "Gain write REFUSED: drone is not disarmed" in capsys.readouterr().out
+
+    # In-flight write while armed succeeds
+    assert campaign_fly.write_gains("http://h", {24: 0.3214}, in_flight=True) is True
+    out = capsys.readouterr().out
+    assert "[In-flight]" in out
+    assert "1/1 ACK (applied & verified in 8081 journal)" in out
+
+
+

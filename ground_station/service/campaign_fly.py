@@ -163,7 +163,7 @@ class Term:
 KEY_ROUTES = {"s": "/api/campaign/stop", "n": "/api/campaign/next", "l": "/api/campaign/land"}
 
 
-def watch(base, term=None, key=None, poll_s=1.0, live_s=LIVE_S, on_pj=None):
+def watch(base, term=None, key=None, poll_s=1.0, live_s=LIVE_S, on_pj=None, post_takeoff_gains=None):
     """Flight view until the runner stops running: (last campaign state, live samples). Phase changes are events,
     the live line updates every live_s and each fresh read is kept as a sample {t, <TEL_NAMES>} for the debrief.
     Keys s/n/l post stop/next/land, p calls on_pj; Ctrl+C lands, a second Ctrl+C aborts. While the service is down
@@ -171,6 +171,7 @@ def watch(base, term=None, key=None, poll_s=1.0, live_s=LIVE_S, on_pj=None):
     term, key = term or Term(), key or _key
     last, stops, st, samples, t_state, t_down = None, 0, {}, [], -math.inf, None
     t0 = _clock()
+    applied_post_takeoff = False
     while True:
         try:
             k = key()
@@ -202,6 +203,13 @@ def watch(base, term=None, key=None, poll_s=1.0, live_s=LIVE_S, on_pj=None):
             if v:
                 samples.append({"t": round(now - t0, 2), **v})
                 term.line(format_tel(v))
+                if post_takeoff_gains and not applied_post_takeoff:
+                    prim = _state_name(PRIM_NAMES, v, "g_wfb_status.prim_state")
+                    z_fb = v.get("Ctrler.Z_posPID.FB", 0.0)
+                    if prim == "HOVER" or (prim not in ("IDLE", "CLIMB") and z_fb >= 0.40):
+                        applied_post_takeoff = True
+                        term.event(f"Transitioning to post-takeoff gains ({post_takeoff_gains})...")
+                        write_gains(base, post_takeoff_gains, in_flight=True, yes=True)
             _sleep(live_s)
         except KeyboardInterrupt:
             if t_down is not None:           # nothing can take a land/abort post: leave, so fly can run again
@@ -586,42 +594,203 @@ def check_and_persist_livetune(st, path=None):
     return saved
 
 
-def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeout_s=2.0, force_livetune=False, livetune_path=None):
-    """Stop-and-wait gain writer enforcing disarmed gate, rationale print, y/N consent, and confirmation table.
+class DirectivesTuple(tuple):
+    def __new__(cls, gains_preset, why_text, post_takeoff=None):
+        inst = super().__new__(cls, (gains_preset, why_text))
+        inst.post_takeoff = post_takeoff
+        return inst
 
-    Friction A1-A6 & B10. Returns True if all gains were ACKed/applied; False on refusal or failure.
-    """
-    # 1. Enforce disarmed gate (A1)
-    v = _vitals(base)
-    arm_state = (v.get("arm") or {}).get("state")
-    if arm_state is not None and arm_state != "disarmed":
-        print(f"Gain write REFUSED: drone is not disarmed (arm state: {arm_state!r}). Disarm by RC first.", flush=True)
-        return False
 
-    # 2. Resolve target gains & why
+def format_gain_table(gains, old_gains=None, col_old="Old", col_new="New"):
+    lines = [
+        f"| {'Axis':<14} | {'idx':<4} | {col_old:<8} | {col_new:<8} |",
+        f"|{'-'*16}|{'-'*6}|{'-'*10}|{'-'*10}|",
+    ]
+    for idx, new_val in sorted(gains.items()):
+        axis = PID_DEFAULTS.get(idx, (f"idx_{idx}", 0.0))[0]
+        old_val = (old_gains.get(idx, PID_DEFAULTS.get(idx, ("", 0.0))[1]) if old_gains is not None
+                   else PID_DEFAULTS.get(idx, ("", 0.0))[1])
+        lines.append(f"| {axis:<14} | {idx:<4} | {old_val:<8.4g} | {new_val:<8.4g} |")
+    return "\n".join(lines)
+
+
+def resolve_preset_gains(preset_or_gains, why=None, force_livetune=False, livetune_path=None):
+    """Resolve preset name, dict, or list into (gains_dict, why_text, err_msg)."""
     if isinstance(preset_or_gains, str):
         key = preset_or_gains.strip().lower()
         key = {"robust": "c3", "tuned": "c2", "default": "defaults", "pid": "defaults", "pid.c": "defaults"}.get(key, key)
         if key == "livetune":
             gains, why_str, err = load_livetune_gains(path=livetune_path, force=force_livetune)
             if err:
-                print(f"Gain write REFUSED: {err}", flush=True)
-                return False
-            why = why or why_str
+                return None, None, err
+            return gains, why or why_str, None
         elif key not in GAIN_PRESETS:
-            print(f"unknown gain preset {preset_or_gains!r}: available presets are {', '.join(GAIN_PRESETS.keys())}, livetune", flush=True)
-            return False
+            return None, None, f"unknown gain preset {preset_or_gains!r}: available presets are {', '.join(GAIN_PRESETS.keys())}, livetune"
         else:
             preset = GAIN_PRESETS[key]
-            gains = dict(preset["gains"])
-            why = why or preset.get("why", "")
+            return dict(preset["gains"]), why or preset.get("why", ""), None
     elif isinstance(preset_or_gains, dict):
-        gains = dict(preset_or_gains)
+        return dict(preset_or_gains), why or "", None
     elif isinstance(preset_or_gains, (list, tuple)):
-        gains = {idx: val for idx, val in preset_or_gains}
+        return {idx: val for idx, val in preset_or_gains}, why or "", None
     else:
-        print(f"invalid gains specification: {type(preset_or_gains)}", flush=True)
+        return None, None, f"invalid gains specification: {type(preset_or_gains)}"
+
+
+def list_gain_presets(livetune_path=None):
+    """Print all available gain presets, their rationale, and full gain table."""
+    for key in ("c3", "c2", "defaults"):
+        preset = GAIN_PRESETS[key]
+        print(f"=== Preset: {key} ===")
+        print(f"Why: {preset['why']}")
+        print(format_gain_table(preset["gains"], col_old="Default", col_new="Target"))
+        print()
+
+    p = Path(livetune_path or LIVETUNE_BEST_PATH)
+    print("=== Preset: livetune ===")
+    if p.is_file():
+        gains, why_str, err = load_livetune_gains(path=p, force=True)
+        if gains:
+            print(f"Why: {why_str}")
+            print(format_gain_table(gains, col_old="Default", col_new="Target"))
+        else:
+            print(f"Why: in-flight CMA-ES tuned gains from F2/F3 ({p})")
+            print(f"Note: {err}")
+    else:
+        print("Why: in-flight CMA-ES tuned gains from F2/F3 (rate idx 9-14, pos idx 24-35)")
+        print(f"Note: {p} not found (run F2 and F3 first to generate livetune gains)")
+
+
+def dry_run(campaign, pack=None, rate=None, gains=None, no_gains=False,
+            post_takeoff_gains=None, livetune_path=None):
+    """Compile scenario, print resolved gains, trajectory preload summary, and scenario plan without contacting 8081."""
+    from ground_station.service.campaign_launch import rel
+    from ground_station.service.campaign_schema import load_campaign
+    from ground_station.service.scenario_schema import TRAJ_KINDS, PROG_KINDS
+    from ground_station.service.trajectory_pipeline import crc32
+
+    pack_chosen = pack_id(pack) or remember_pack() or "type1"
+    launch, src = resolve_campaign(campaign, pack_chosen, rate)
+    c = load_campaign(launch)
+
+    print(f"=== DRY RUN: {c.campaign} ===")
+    print(f"Source:   {rel(src)}")
+    print(f"Launch:   {rel(launch)}")
+    print(f"Pack:     {pack_chosen}")
+
+    # 1. Resolved gains preset table
+    fly_directives = extract_fly_directives(src)
+    fly_preset, fly_why = fly_directives[0], fly_directives[1]
+    fly_post = getattr(fly_directives, "post_takeoff", None)
+
+    ground_preset = None
+    ground_why = None
+    if not no_gains:
+        if gains:
+            ground_preset = gains
+        elif fly_preset:
+            ground_preset = fly_preset
+            ground_why = fly_why
+
+    post_preset = None
+    if not no_gains:
+        if post_takeoff_gains:
+            post_preset = post_takeoff_gains
+        elif fly_post:
+            post_preset = fly_post
+
+    print("\n--- Gains Plan ---")
+    if ground_preset:
+        g_dict, g_why, g_err = resolve_preset_gains(ground_preset, why=ground_why, livetune_path=livetune_path)
+        if g_err:
+            print(f"Ground gains ERROR: {g_err}")
+        else:
+            print(f"Ground gain preset: {ground_preset}")
+            if g_why:
+                print(f"Why: {g_why}")
+            print(format_gain_table(g_dict, col_old="Default", col_new="Target"))
+    else:
+        print("Ground gains: none (firmware defaults unchanged)")
+
+    if post_preset:
+        p_dict, p_why, p_err = resolve_preset_gains(post_preset, livetune_path=livetune_path)
+        if p_err:
+            print(f"\nPost-takeoff gains ERROR: {p_err}")
+        else:
+            print(f"\nPost-takeoff gain preset: {post_preset} (applied after takeoff in HOVER)")
+            if p_why:
+                print(f"Why: {p_why}")
+            print(format_gain_table(p_dict, col_old="Default", col_new="Target"))
+
+    # 2. Trajectory preload summary
+    print("\n--- Trajectory Preload ---")
+    sc = getattr(c.experiments[0], "scenario", None) if c.experiments else None
+    if sc and getattr(sc, "steps", None):
+        uploads = [st for st in sc.steps if st.kind in TRAJ_KINDS + PROG_KINDS]
+        if uploads:
+            for st in uploads:
+                if hasattr(st, "points") and st.points:
+                    n_pts = len(st.points)
+                    crc_val = crc32(list(st.points))
+                    cmd_count = n_pts * 5 + 3
+                    est_time_s = cmd_count * 0.07
+                    cmp_str = "< 2 s" if est_time_s < 2.0 else f"~{est_time_s:.1f} s"
+                    print(f"Preload step: {st.kind} ({n_pts} points, CRC=0x{crc_val:08X}, est upload time ~{est_time_s:.1f} s [{cmp_str} for {n_pts}-point goto])")
+                elif hasattr(st, "program") and st.program:
+                    print(f"Preload step: {st.kind} ({len(st.program)} program operations)")
+        else:
+            print("Trajectory preload: none")
+    else:
+        print("Trajectory preload: none")
+
+    # 3. Scenario plan
+    print(f"\n--- Scenario Plan ---")
+    if sc and getattr(sc, "steps", None):
+        print(f"Hover altitude: {sc.hover_z_m:.2f} m ({len(sc.steps)} steps)")
+        for i, st in enumerate(sc.steps, 1):
+            args = getattr(st, "args", {}) or {}
+            dur = getattr(st, "duration_s", 0.0)
+            desc = ""
+            if st.kind == "takeoff":
+                set_info = f", set={args.get('set')}" if args.get("set") else ""
+                desc = f"z = {args.get('z', sc.hover_z_m)} m{set_info}"
+            elif st.kind == "hold":
+                desc = f"duration = {args.get('s', dur):.1f} s"
+            elif st.kind == "goto":
+                pts_cnt = len(st.points) if hasattr(st, "points") and st.points else "?"
+                desc = f"target ({args.get('x')}, {args.get('y')}, {args.get('z')}) m, dwell = {args.get('dwell_s')} s ({pts_cnt} points)"
+            elif st.kind == "preset":
+                desc = f"name = {args.get('name')}, duration = {dur:.1f} s"
+            elif st.kind == "livetune":
+                desc = f"loop = {args.get('loop')}, axes = {args.get('axes')}, budget = {args.get('budget_s')} s"
+            elif st.kind == "land":
+                desc = "controlled landing to pad"
+            else:
+                desc = f"args = {args}"
+            print(f"  {i}. {st.kind:<8} : {desc}")
+    else:
+        print("Scenario plan: empty")
+
+
+def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeout_s=2.0, force_livetune=False, livetune_path=None, in_flight=False):
+    """Stop-and-wait gain writer enforcing disarmed gate, rationale print, y/N consent, and confirmation table.
+
+    Friction A1-A6 & B10. Returns True if all gains were ACKed/applied; False on refusal or failure.
+    """
+    # 1. Enforce disarmed gate (A1) unless in-flight transition
+    if not in_flight:
+        v = _vitals(base)
+        arm_state = (v.get("arm") or {}).get("state")
+        if arm_state is not None and arm_state != "disarmed":
+            print(f"Gain write REFUSED: drone is not disarmed (arm state: {arm_state!r}). Disarm by RC first.", flush=True)
+            return False
+
+    # 2. Resolve target gains & why
+    gains, why_resolved, err = resolve_preset_gains(preset_or_gains, why=why, force_livetune=force_livetune, livetune_path=livetune_path)
+    if err:
+        print(f"Gain write REFUSED: {err}", flush=True)
         return False
+    why = why_resolved
 
     if not gains:
         print("no gains to write", flush=True)
@@ -643,18 +812,14 @@ def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeou
             old_gains[idx] = PID_DEFAULTS.get(idx, ("", 0.0))[1]
 
     # 4. Print Why rationale and proposed table (A4)
+    tag = "[In-flight] " if in_flight else ""
     if why:
-        print(f"Why: {why}", flush=True)
-    print("\nProposed gain table:")
-    print(f"| {'Axis':<14} | {'idx':<4} | {'Old':<8} | {'New':<8} |")
-    print(f"|{'-'*16}|{'-'*6}|{'-'*10}|{'-'*10}|")
-    for idx, new_val in sorted(gains.items()):
-        axis = PID_DEFAULTS.get(idx, (f"idx_{idx}", 0.0))[0]
-        old_val = old_gains.get(idx, 0.0)
-        print(f"| {axis:<14} | {idx:<4} | {old_val:<8.4g} | {new_val:<8.4g} |")
+        print(f"{tag}Why: {why}", flush=True)
+    print(f"\n{tag}Proposed gain table:")
+    print(format_gain_table(gains, old_gains=old_gains, col_old="Old", col_new="New"), flush=True)
 
     # 5. Consent prompt (A1)
-    if not yes:
+    if not yes and not in_flight:
         ans = ask_fn(f"\nWrite {len(gains)} gains to RAM? [y/N]: ").strip().lower()
         if ans not in ("y", "yes"):
             print("Gain write cancelled.", flush=True)
@@ -746,7 +911,7 @@ def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeou
     ver_suffix = " (applied & verified in 8081 journal)" if (all_ok and journal_ok) else ""
     print(f"\nTotal time: {total_s:.2f} s ({total_ack}/{len(gains)} ACK{ver_suffix})", flush=True)
 
-    events.log("gain_write", total=len(gains), ack=total_ack, total_s=round(total_s, 2), ok=(all_ok and journal_ok))
+    events.log("gain_write", total=len(gains), ack=total_ack, total_s=round(total_s, 2), ok=(all_ok and journal_ok), in_flight=in_flight)
     if not all_ok:
         print(f"Gain write ABORTED: write failed for idx {rows[-1][1]}.", flush=True)
         return False
@@ -757,23 +922,28 @@ def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeou
 
 
 def extract_fly_directives(fly_path):
-    """Parse # gains: <preset> and # why: <text> directives from a .fly file."""
+    """Parse # gains: <preset>, # post_takeoff_gains: <preset>, and # why: <text> directives from a .fly file."""
     p = Path(fly_path)
     if not p.is_file():
-        return None, None
+        return DirectivesTuple(None, None, None)
     gains_preset = None
     why_text = None
+    post_takeoff = None
     try:
         for line in p.read_text(encoding="utf-8").splitlines():
             s = line.strip()
-            if s.startswith("#") and "gains:" in s:
+            if s.startswith("#") and ("post_takeoff_gains:" in s or "post-takeoff-gains:" in s):
+                key = "post_takeoff_gains:" if "post_takeoff_gains:" in s else "post-takeoff-gains:"
+                after = s.split(key, 1)[1].strip()
+                post_takeoff = after.split()[0].lower() if after else None
+            elif s.startswith("#") and "gains:" in s:
                 after = s.split("gains:", 1)[1].strip()
                 gains_preset = after.split()[0].lower() if after else None
             elif s.startswith("#") and "why:" in s:
                 why_text = s.split("why:", 1)[1].strip()
     except Exception:
         pass
-    return gains_preset, why_text
+    return DirectivesTuple(gains_preset, why_text, post_takeoff)
 
 
 class HttpWfbClient:
@@ -1110,7 +1280,7 @@ def plotjuggler(base, out_dir=None, popen=subprocess.Popen):
     return f"PlotJuggler: opening on {len(st.get('vars') or [])} streamed variables, UDP Server {st['addr']}"
 
 
-def fly_one(base, launch, src, name, pack):
+def fly_one(base, launch, src, name, pack, post_takeoff_gains=None):
     """GO for the armed flight, watch it to the end, debrief: (status, live samples, camera landing, folder). The
     status is None when the service refused GO."""
     from ground_station.service.campaign_launch import rel
@@ -1125,7 +1295,7 @@ def fly_one(base, launch, src, name, pack):
         print(f"GO refused ({code}): {res.get('error', res)}. Disarm by RC.", flush=True)
         return None, [], None, folder
     print("GO. keys: s stop step, n next, l land, p PlotJuggler; Ctrl+C land, twice abort. RC kill stays first.")
-    st, samples = watch(base, on_pj=lambda: plotjuggler(base))
+    st, samples = watch(base, on_pj=lambda: plotjuggler(base), post_takeoff_gains=post_takeoff_gains)
     t_land = _clock()
     cam = camera_landing()
     lines = debrief_lines(samples, st, rel(folder), cam=cam)
@@ -1143,7 +1313,8 @@ def fly_one(base, launch, src, name, pack):
 
 
 def fly_loop(base, arg, pack, rate=None, run=None, once=False, yes=False,
-             gains=None, no_gains=False, force_livetune=False, livetune_path=None):
+             gains=None, no_gains=False, force_livetune=False, livetune_path=None,
+             post_takeoff_gains=None):
     """Compile -> wait for the RC arm -> go -> watch -> debrief, flight after flight until q."""
     from ground_station.service.campaign_launch import rel
     from ground_station.service.campaign_schema import load_campaign
@@ -1165,15 +1336,22 @@ def fly_loop(base, arg, pack, rate=None, run=None, once=False, yes=False,
                 continue
             name, go_pack = c.campaign, c.packs[0]
             # Check directives in .fly (# gains: c3, # why: ...) or CLI override
-            fly_preset, fly_why = extract_fly_directives(src)
+            fly_directives = extract_fly_directives(src)
+            fly_preset, fly_why = fly_directives[0], fly_directives[1]
+            fly_post = getattr(fly_directives, "post_takeoff", None)
             preset_to_write = None
             preset_why = None
+            post_to_write = None
             if not no_gains:
                 if gains:
                     preset_to_write = gains
                 elif fly_preset:
                     preset_to_write = fly_preset
                     preset_why = fly_why
+                if post_takeoff_gains:
+                    post_to_write = post_takeoff_gains
+                elif fly_post:
+                    post_to_write = fly_post
             if preset_to_write:
                 if not write_gains(base, preset_to_write, why=preset_why, yes=yes,
                                    force_livetune=force_livetune, livetune_path=livetune_path):
@@ -1190,7 +1368,7 @@ def fly_loop(base, arg, pack, rate=None, run=None, once=False, yes=False,
         if r == "link":
             pack, held = _ask_pack(pack), None
             continue
-        st, _, _, _ = fly_one(base, launch, src, name, go_pack)
+        st, _, _, _ = fly_one(base, launch, src, name, go_pack, post_takeoff_gains=post_to_write)
         if st is None:
             held = None
             continue
@@ -1223,7 +1401,19 @@ def main(argv=None):
     ap.add_argument("--force-livetune", action="store_true", help="write livetune gains even if not recommended")
     ap.add_argument("--restore-defaults", action="store_true", help="write API/pid.c defaults to RAM stop-and-wait")
     ap.add_argument("--yes", "-y", action="store_true", help="skip y/N consent prompt for gain writes")
+    ap.add_argument("--list-gains", action="store_true", help="list all available gain presets and exit")
+    ap.add_argument("--dry-run", action="store_true", help="compile .fly scenario and print execution plan without contacting 8081")
+    ap.add_argument("--post-takeoff-gains", help="preset name to write once airborne in HOVER (takes off on ground/default gains)")
     a = ap.parse_args(argv)
+    if a.list_gains:
+        list_gain_presets()
+        return 0
+    if a.dry_run:
+        if not a.campaign:
+            ap.error("--dry-run requires a campaign argument")
+        dry_run(a.campaign, a.pack, rate=a.rate, gains=a.gains, no_gains=a.no_gains,
+                post_takeoff_gains=a.post_takeoff_gains)
+        return 0
     base = f"http://127.0.0.1:{a.port}"
     if a.restore_defaults:
         ensure_service(base, a.port)
@@ -1252,7 +1442,8 @@ def main(argv=None):
         rc = 0
     else:
         rc = fly_loop(base, a.campaign, pack, a.rate, a.run, a.once, yes=a.yes,
-                      gains=a.gains, no_gains=a.no_gains, force_livetune=a.force_livetune)
+                      gains=a.gains, no_gains=a.no_gains, force_livetune=a.force_livetune,
+                      post_takeoff_gains=a.post_takeoff_gains)
     events.log("fly_end", rc=rc)
     print("Stop the video. The service window stays open; close it when you are done.")
     return rc
