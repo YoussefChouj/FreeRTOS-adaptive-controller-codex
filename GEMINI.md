@@ -23,5 +23,6 @@ Every turn re-sends the whole conversation, so each file you open is paid for ag
    (replace the lines, never rewrite whole files). Run the verify command the task gives you.
 8. Answers are short: file:line references, no pasted file contents.
 9. Exploration that spans more than 3 files goes to the `codebase-scout` subagent (invoke_subagent). It works in its
-   own context and returns paths, line numbers and a short summary. Work from that summary; do not re-read those
-   files in the main thread except the 1-2 ranges you will edit.
+   own context and returns paths, line numbers and a short summary. Once you call invoke_subagent, make no
+   view_file or search calls until its report arrives. Then answer from that summary; open at most 2 ranges,
+   and only ranges you will edit or a line the summary left unclear.
