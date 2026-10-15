@@ -342,6 +342,307 @@ def pack_problem(pack):
     return ""
 
 
+def _vitals(base):
+    try:
+        return call(base, "/api/campaign/vitals", timeout=5)[1]
+    except OSError:
+        return {}
+
+
+# ── PID GAIN PRESETS & STOP-AND-WAIT GAIN WRITER (Friction A1-A6 & B10) ────────
+PID_DEFAULTS = {
+    0: ("pitchPID.Kp", 3.0), 1: ("pitchPID.Ki", 0.02), 2: ("pitchPID.Kd", 8.0),
+    3: ("rollPID.Kp", 3.0), 4: ("rollPID.Ki", 0.02), 5: ("rollPID.Kd", 8.0),
+    6: ("yawPID.Kp", 6.0), 7: ("yawPID.Ki", 0.04), 8: ("yawPID.Kd", 0.0),
+    9: ("gyroxPID.Kp", 5.0), 10: ("gyroxPID.Ki", 0.01), 11: ("gyroxPID.Kd", 10.0),
+    12: ("gyroyPID.Kp", 5.0), 13: ("gyroyPID.Ki", 0.01), 14: ("gyroyPID.Kd", 10.0),
+    15: ("gyrozPID.Kp", 8.0), 16: ("gyrozPID.Ki", 0.005), 17: ("gyrozPID.Kd", 0.02),
+    18: ("Z_ratePID.Kp", 400.0), 19: ("Z_ratePID.Ki", 0.435), 20: ("Z_ratePID.Kd", 0.0),
+    21: ("Z_posPID.Kp", 0.7), 22: ("Z_posPID.Ki", 0.005), 23: ("Z_posPID.Kd", 0.1),
+    24: ("locxPID.Kp", 0.8), 25: ("locxPID.Ki", 0.0013), 26: ("locxPID.Kd", 4.0),
+    27: ("locyPID.Kp", 0.8), 28: ("locyPID.Ki", 0.0013), 29: ("locyPID.Kd", 4.0),
+    30: ("locxsPID.Kp", 3.0), 31: ("locxsPID.Ki", 0.008), 32: ("locxsPID.Kd", 6.0),
+    33: ("locysPID.Kp", 3.0), 34: ("locysPID.Ki", 0.008), 35: ("locysPID.Kd", 6.0),
+}
+
+GAIN_PRESETS = {
+    "c3": {
+        "why": "C3 robust: robust tune over 18 delay-varied plants (sim, PROPOSED): overshoot 3.61 cm, settle 0.84 s vs default 10.0 cm / 1.42 s (docs/lab/run-sheet-2026-10-16.md).",
+        "gains": {
+            24: 0.3214, 25: 0.0001, 26: 6.2937,
+            27: 0.3214, 28: 0.0001, 29: 6.2937,
+            30: 3.2242, 31: 0.0157, 32: 4.7283,
+            33: 3.2242, 34: 0.0157, 35: 4.7283,
+        },
+    },
+    "c2": {
+        "why": "C2 tuned_shift: overshoot reduction on 0.4 m step (docs/lab/run-sheet-2026-10-14.md); higher velocity P (4.70 vs 3.0), zero velocity D (0 vs 6.0), tuned position loop.",
+        "gains": {
+            24: 0.67, 25: 0.0014, 26: 4.93,
+            27: 0.67, 28: 0.0014, 29: 4.93,
+            30: 4.70, 31: 0.0031, 32: 0.0,
+            33: 4.70, 34: 0.0031, 35: 0.0,
+        },
+    },
+    "defaults": {
+        "why": "defaults: restore API/pid.c firmware default gains without requiring power-cycle (docs/agent/lab-friction-2026-10-15.md A6).",
+        "gains": {idx: PID_DEFAULTS[idx][1] for idx in range(24, 36)},
+    },
+}
+
+
+def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeout_s=2.0):
+    """Stop-and-wait gain writer enforcing disarmed gate, rationale print, y/N consent, and confirmation table.
+
+    Friction A1-A6 & B10. Returns True if all gains were ACKed/applied; False on refusal or failure.
+    """
+    # 1. Enforce disarmed gate (A1)
+    v = _vitals(base)
+    arm_state = (v.get("arm") or {}).get("state")
+    if arm_state is not None and arm_state != "disarmed":
+        print(f"Gain write REFUSED: drone is not disarmed (arm state: {arm_state!r}). Disarm by RC first.", flush=True)
+        return False
+
+    # 2. Resolve target gains & why
+    if isinstance(preset_or_gains, str):
+        key = preset_or_gains.strip().lower()
+        key = {"robust": "c3", "tuned": "c2", "default": "defaults", "pid": "defaults", "pid.c": "defaults"}.get(key, key)
+        if key not in GAIN_PRESETS:
+            print(f"unknown gain preset {preset_or_gains!r}: available presets are {', '.join(GAIN_PRESETS.keys())}", flush=True)
+            return False
+        preset = GAIN_PRESETS[key]
+        gains = dict(preset["gains"])
+        why = why or preset.get("why", "")
+    elif isinstance(preset_or_gains, dict):
+        gains = dict(preset_or_gains)
+    elif isinstance(preset_or_gains, (list, tuple)):
+        gains = {idx: val for idx, val in preset_or_gains}
+    else:
+        print(f"invalid gains specification: {type(preset_or_gains)}", flush=True)
+        return False
+
+    if not gains:
+        print("no gains to write", flush=True)
+        return True
+
+    # 3. Retrieve "Old" gains from actions journal or pid.c defaults
+    old_gains = {}
+    try:
+        _, act_res = call(base, "/api/actions", timeout=5)
+        for a in act_res.get("actions", []):
+            if int(a.get("command_id", 0)) == 1 and int(a.get("index", -1)) in gains:
+                idx = int(a["index"])
+                if idx not in old_gains:
+                    old_gains[idx] = float(a.get("value", 0.0))
+    except Exception:
+        pass
+    for idx in gains:
+        if idx not in old_gains:
+            old_gains[idx] = PID_DEFAULTS.get(idx, ("", 0.0))[1]
+
+    # 4. Print Why rationale and proposed table (A4)
+    if why:
+        print(f"Why: {why}", flush=True)
+    print("\nProposed gain table:")
+    print(f"| {'Axis':<14} | {'idx':<4} | {'Old':<8} | {'New':<8} |")
+    print(f"|{'-'*16}|{'-'*6}|{'-'*10}|{'-'*10}|")
+    for idx, new_val in sorted(gains.items()):
+        axis = PID_DEFAULTS.get(idx, (f"idx_{idx}", 0.0))[0]
+        old_val = old_gains.get(idx, 0.0)
+        print(f"| {axis:<14} | {idx:<4} | {old_val:<8.4g} | {new_val:<8.4g} |")
+
+    # 5. Consent prompt (A1)
+    if not yes:
+        ans = ask_fn(f"\nWrite {len(gains)} gains to RAM? [y/N]: ").strip().lower()
+        if ans not in ("y", "yes"):
+            print("Gain write cancelled.", flush=True)
+            return False
+
+    # 6. Stop-and-wait execution (A2)
+    t_start = _clock()
+    rows = []
+    total_ack = 0
+    all_ok = True
+
+    for idx, new_val in sorted(gains.items()):
+        axis = PID_DEFAULTS.get(idx, (f"idx_{idx}", 0.0))[0]
+        old_val = old_gains.get(idx, 0.0)
+        acked = False
+        ms = 0
+        retries = 0
+
+        for attempt in range(3):  # initial + up to 2 retries
+            retries = attempt
+            t0 = _clock()
+            try:
+                code, res = call(base, "/commands", {"command_id": 1, "index": idx, "value": float(new_val)}, timeout=timeout_s)
+            except Exception:
+                _sleep(0.05)
+                continue
+            if code not in (200, 202):
+                _sleep(0.05)
+                continue
+            txid = res.get("transaction_id")
+            if txid is None:
+                acked = True
+                ms = round((_clock() - t0) * 1000)
+                break
+
+            deadline = _clock() + timeout_s
+            while _clock() < deadline:
+                try:
+                    _, act_res = call(base, "/api/actions", timeout=timeout_s)
+                    for a in act_res.get("actions", []):
+                        if a.get("transaction_id") == txid:
+                            lc = a.get("lifecycle", "")
+                            if lc in ("applied", "acknowledged", "verified"):
+                                acked = True
+                                ms = round((_clock() - t0) * 1000)
+                                break
+                            if lc in ("rejected", "timed_out", "error"):
+                                break
+                    if acked:
+                        break
+                except Exception:
+                    pass
+                _sleep(0.02)
+            if acked:
+                break
+
+        if acked:
+            total_ack += 1
+            rows.append((axis, idx, old_val, new_val, "ACK", ms, retries))
+        else:
+            rows.append((axis, idx, old_val, new_val, "FAIL", round((_clock() - t0) * 1000), retries))
+            all_ok = False
+            break
+
+    # 7. Print confirmation table (A3)
+    total_s = _clock() - t_start
+    print(f"\n| {'Axis':<14} | {'idx':<4} | {'Old':<8} | {'New':<8} | {'ACK':<4} | {'ms':<4} | {'Retries':<7} |")
+    print(f"|{'-'*16}|{'-'*6}|{'-'*10}|{'-'*10}|{'-'*6}|{'-'*6}|{'-'*9}|")
+    for axis, idx, old_v, new_v, ack_str, ms_val, ret_val in rows:
+        print(f"| {axis:<14} | {idx:<4} | {old_v:<8.4g} | {new_v:<8.4g} | {ack_str:<4} | {ms_val:<4} | {ret_val:<7} |")
+    print(f"\nTotal time: {total_s:.2f} s ({total_ack}/{len(gains)} ACK)", flush=True)
+
+    events.log("gain_write", total=len(gains), ack=total_ack, total_s=round(total_s, 2), ok=all_ok)
+    if not all_ok:
+        print(f"Gain write ABORTED: write failed for idx {rows[-1][1]}.", flush=True)
+        return False
+    return True
+
+
+def extract_fly_directives(fly_path):
+    """Parse # gains: <preset> and # why: <text> directives from a .fly file."""
+    p = Path(fly_path)
+    if not p.is_file():
+        return None, None
+    gains_preset = None
+    why_text = None
+    try:
+        for line in p.read_text(encoding="utf-8").splitlines():
+            s = line.strip()
+            if s.startswith("#") and "gains:" in s:
+                after = s.split("gains:", 1)[1].strip()
+                gains_preset = after.split()[0] if after else None
+            elif s.startswith("#") and "why:" in s:
+                why_text = s.split("why:", 1)[1].strip()
+    except Exception:
+        pass
+    return gains_preset, why_text
+
+
+class HttpWfbClient:
+    """Minimal WfbClient sending commands to base /commands endpoint with stop-and-wait."""
+    def __init__(self, base, timeout_s=10.0):
+        self.base = base
+        self.timeout_s = timeout_s
+
+    def _send_cmd(self, cmd: int, idx: int, value: float) -> bool:
+        try:
+            code, res = call(self.base, "/commands", {"command_id": cmd, "index": idx, "value": float(value)}, timeout=self.timeout_s)
+            if code not in (200, 202):
+                return False
+            txid = res.get("transaction_id")
+            if txid is None:
+                return True
+            deadline = _clock() + self.timeout_s
+            while _clock() < deadline:
+                _, act_res = call(self.base, "/api/actions", timeout=self.timeout_s)
+                for a in act_res.get("actions", []):
+                    if a.get("transaction_id") == txid:
+                        if a.get("lifecycle") in ("applied", "acknowledged", "verified"):
+                            return True
+                        if a.get("lifecycle") in ("rejected", "timed_out", "error"):
+                            return False
+                _sleep(0.02)
+            return False
+        except Exception:
+            return False
+
+    def set_hover_z(self, z: float) -> bool:
+        return self._send_cmd(26, 0, float(z))
+
+    def traj_begin(self, n: int) -> bool:
+        return self._send_cmd(27, 0, float(n))
+
+    def traj_append(self, v: float) -> bool:
+        return self._send_cmd(27, 1, float(v))
+
+    def traj_commit(self, crc: int) -> bool:
+        if not self._send_cmd(27, 2, float((crc >> 16) & 0xFFFF)):
+            return False
+        return self._send_cmd(27, 3, float(crc & 0xFFFF))
+
+    def prog(self, idx: int, value: float) -> bool:
+        return self._send_cmd(28, idx, float(value))
+
+
+def upload_preload(base, launch_path=None, runner=None):
+    """Run trajectory/program upload on the ground BEFORE wait_for_arm() (Fix 2)."""
+    if runner is not None:
+        if hasattr(runner, "upload_preload") and callable(runner.upload_preload):
+            return runner.upload_preload()
+        if hasattr(runner, "preload_send") and callable(runner.preload_send):
+            return runner.preload_send()
+    if not launch_path:
+        return True
+    try:
+        from ground_station.service.campaign_schema import load_campaign
+        from ground_station.service.scenario_schema import TRAJ_KINDS, PROG_KINDS
+        from ground_station.platform.trajectory_upload import upload
+        from ground_station.platform import wfb_program
+        c = load_campaign(launch_path)
+        if not c.experiments:
+            return True
+        sc = getattr(c.experiments[0], "scenario", None)
+        if not sc or not getattr(sc, "steps", None):
+            return True
+        uploads = [st for st in sc.steps if st.kind in TRAJ_KINDS + PROG_KINDS]
+        if len(uploads) != 1:
+            return True
+        st = uploads[0]
+        print(f"Preloading {st.kind} upload on the ground before arming...", flush=True)
+        events.log("upload_preload_start", kind=st.kind)
+        client = HttpWfbClient(base)
+        client.set_hover_z(sc.hover_z_m)
+        if st.kind in PROG_KINDS:
+            res = wfb_program.upload(st.program, client)
+            ok, err = res.ok, res.error or ""
+        else:
+            res = upload(st.points, client)
+            ok, err = res.ok, res.error or ""
+        events.log("upload_preload_done", kind=st.kind, ok=ok, error=err)
+        if ok:
+            print(f"Preload {st.kind} upload OK.", flush=True)
+        else:
+            print(f"Preload {st.kind} upload FAIL: {err}", flush=True)
+        return ok
+    except Exception as e:
+        print(f"upload_preload: {e}", flush=True)
+        return False
+
+
 def quiet_preflight(base, campaign, pack, shown):
     """(ok, failing rows) of one preflight; prints only when the failing set differs from `shown`."""
     from urllib.parse import urlencode
@@ -350,17 +651,21 @@ def quiet_preflight(base, campaign, pack, shown):
                   for c in res.get("checks", []) if c.get("pass") is False)
     if "error" in res:
         fails += (f"preflight error: {res['error']}",)
+    # Fix 4 (Preflight race): if very first poll fails ONLY on position not streaming, wait up to 1.5s
+    if shown is None and fails and all("position" in f and "not streaming" in f for f in fails):
+        for _ in range(3):
+            _sleep(0.5)
+            _, res = call(base, "/api/campaign/preflight?" + urlencode({"campaign": campaign, "pack": pack}), timeout=30)
+            fails = tuple(f"{c.get('name')}: {c.get('value')}" + (f"  -> {c['fix']}" if c.get("fix") else "")
+                          for c in res.get("checks", []) if c.get("pass") is False)
+            if "error" in res:
+                fails += (f"preflight error: {res['error']}",)
+            if not fails or not all("position" in f and "not streaming" in f for f in fails):
+                break
     if fails != shown:
         events.log("preflight", ok=not fails, fails=list(fails), campaign=campaign, pack=pack)
         print("preflight " + ("FAIL:\n  " + "\n  ".join(fails) if fails else "OK: arm by RC to fly"), flush=True)
     return bool(res.get("ok")) and not fails, fails
-
-
-def _vitals(base):
-    try:
-        return call(base, "/api/campaign/vitals", timeout=5)[1]
-    except OSError:
-        return {}
 
 
 def _link_age(v):
@@ -481,7 +786,10 @@ def debrief_lines(samples, st, folder, cam=None):
         lines.append(f"{phase:<6} x/y/z error cm  rms {rms}  max {mx}  ({part[-1]['t'] - part[0]['t']:.0f} s)")
     pad = next((s for s in samples if prim(s) in ("IDLE", "CLIMB")), None)
     end = samples[-1] if samples else None
-    if pad and end and not any(math.isnan(c) for c in _pos_cm(pad) + _pos_cm(end)):
+    max_z = max((s.get("Ctrler.Z_posPID.FB", 0.0) for s in samples), default=0.0)
+    if air <= 0 or max_z < 0.25:
+        lines.append("landing offset: no landing (never airborne)")
+    elif pad and end and not any(math.isnan(c) for c in _pos_cm(pad) + _pos_cm(end)):
         dx, dy = (e - p for e, p in zip(_pos_cm(end), _pos_cm(pad)))
         lines.append(f"landing offset x {dx:+.0f} y {dy:+.0f} cm from the takeoff point ({math.hypot(dx, dy):.0f} cm)")
     else:
@@ -606,7 +914,7 @@ def fly_one(base, launch, src, name, pack):
     return st, samples, cam, folder
 
 
-def fly_loop(base, arg, pack, rate=None, run=None, once=False):
+def fly_loop(base, arg, pack, rate=None, run=None, once=False, yes=False):
     """Compile -> wait for the RC arm -> go -> watch -> debrief, flight after flight until q."""
     from ground_station.service.campaign_launch import rel
     from ground_station.service.campaign_schema import load_campaign
@@ -627,8 +935,15 @@ def fly_loop(base, arg, pack, rate=None, run=None, once=False):
                     return 1
                 continue
             name, go_pack = c.campaign, c.packs[0]
+            # Check directives in .fly (# gains: c3, # why: ...)
+            fly_preset, fly_why = extract_fly_directives(src)
+            if fly_preset:
+                if not write_gains(base, fly_preset, why=fly_why, yes=yes):
+                    return 1
             print(f"{name}  {rel(src)}  pack {go_pack}  -> {rel(launch)}\nWaiting for the RC arm (q quits).",
                   flush=True)
+        # Fix 2: Trajectory preload on the ground BEFORE wait_for_arm
+        upload_preload(base, str(launch))
         t_wait = _clock()
         r = wait_for_arm(base, str(launch), go_pack, preflight=not held)
         events.log("arm_wait", result=r, campaign=name, pack=go_pack, s=round(_clock() - t_wait, 1))
@@ -665,8 +980,19 @@ def main(argv=None):
     ap.add_argument("--record-only", metavar="LABEL", help="no flight: record the log plan (drone disarmed, carried "
                                                             "by hand) until Enter; sends no drone command")
     ap.add_argument("--rate", type=float, help="override the log plan rate, Hz")
+    ap.add_argument("--gains", help="preset name (c3, c2, defaults) to write stop-and-wait to RAM before flight")
+    ap.add_argument("--restore-defaults", action="store_true", help="write API/pid.c defaults to RAM stop-and-wait")
+    ap.add_argument("--yes", "-y", action="store_true", help="skip y/N consent prompt for gain writes")
     a = ap.parse_args(argv)
     base = f"http://127.0.0.1:{a.port}"
+    if a.restore_defaults:
+        ensure_service(base, a.port)
+        ok = write_gains(base, "defaults", yes=a.yes)
+        return 0 if ok else 1
+    if a.gains:
+        ensure_service(base, a.port)
+        if not write_gains(base, a.gains, yes=a.yes):
+            return 1
     pack = pack_id(a.pack) or remember_pack()
     why = pack_problem(pack)
     if why:
@@ -683,7 +1009,7 @@ def main(argv=None):
         record_only(base, str(launch), a.rate, a.record_only)
         rc = 0
     else:
-        rc = fly_loop(base, a.campaign, pack, a.rate, a.run, a.once)
+        rc = fly_loop(base, a.campaign, pack, a.rate, a.run, a.once, yes=a.yes)
     events.log("fly_end", rc=rc)
     print("Stop the video. The service window stays open; close it when you are done.")
     return rc

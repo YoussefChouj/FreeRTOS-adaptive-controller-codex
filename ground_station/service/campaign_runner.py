@@ -201,18 +201,73 @@ class FlightOutcome:
     steps: list[dict]
 
 
-def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
-                 injection: float | None = None) -> FlightOutcome:
-    """Fly one scenario: takeoff, each step in order, land. Any abort -> traj_stop + land.
+class CampaignRunner:
+    """Orchestrates scenario execution and ground preloads for autonomous flights."""
 
-    takeoff: set_hover_z + arm/idle/takeoff, wait prim HOVER. hold: heartbeat for s.
-    goto/path: settle WFB_SETTLE_S in HOVER, upload step.points, traj_start, wait traj DONE and prim back in HOVER.
-    livetune: hold HOVER while a livetune.loop session tunes gains (ticked every cfg.dt_s); it always ends on the
-    baseline gains, and an end other than budget / max_evals / walk_budget lands the drone.
-    hover_only (first flight after a reflash) keeps takeoff and land and swaps the middle for hold deps.hover_s.
-    The whole flight shares one deadline, deps.flight_timeout_s; a firmware landing (prim DESCEND/IDLE we did not
-    command) aborts the step. Each step gets a record {step, kind, t0_s, t1_s, ok} relative to the takeoff command.
-    """
+    def __init__(
+        self,
+        scenario: Scenario,
+        deps: RunnerDeps,
+        hover_only: bool = False,
+        injection: float | None = None,
+    ) -> None:
+        self.scenario = scenario
+        self.deps = deps
+        self.hover_only = hover_only
+        self.injection = injection
+        self._preload_uploaded = False
+        self.preload_err = ""
+
+        # Identify lone trajectory or program step eligible for preload
+        self.steps = list(self.scenario.steps)
+        if self.hover_only:
+            self.steps = [
+                self.steps[0],
+                Step("hold", {"s": self.deps.hover_s}, duration_s=self.deps.hover_s),
+                self.steps[-1],
+            ]
+        uploads = [i for i, st in enumerate(self.steps) if st.kind in TRAJ_KINDS + PROG_KINDS]
+        self._preload = uploads[0] if len(uploads) == 1 else None
+
+    def _upload_step(self, st: Step) -> tuple[bool, str]:
+        if st.kind in PROG_KINDS:
+            res = wfb_program.upload(st.program, self.deps.client)
+            seg = "" if res.ok else f" (prog_err_seg {self.deps.status().get('prog_err_seg', 'n/a')})"  # COMMIT names it
+        else:
+            res, seg = upload(st.points, self.deps.client), ""
+        return res.ok, "" if res.ok else f"{res.error}{seg}"
+
+    def upload_preload(self) -> bool:
+        """Ground Trajectory Preload Before RC Arm (Fix 2).
+
+        Uploads the trajectory or program buffer to the drone on the ground BEFORE wait_for_arm().
+        When takeoff runs later, if self._preload_uploaded is True, it skips calling preload_send again.
+        Returns True if preloaded successfully (or if no preload step exists); False on failure.
+        """
+        if self._preload is None:
+            return True
+        if self._preload_uploaded:
+            return True
+        self.deps.client.set_hover_z(self.scenario.hover_z_m)
+        ok, err = self._upload_step(self.steps[self._preload])
+        if ok:
+            self._preload_uploaded = True
+            self.preload_err = ""
+            return True
+        self.preload_err = err
+        return False
+
+    def fly(self) -> FlightOutcome:
+        return self.run()
+
+    def run(self) -> FlightOutcome:
+        return fly_scenario(self.scenario, self.deps, hover_only=self.hover_only,
+                            injection=self.injection, runner=self)
+
+
+def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
+                 injection: float | None = None, runner: 'CampaignRunner | None' = None) -> FlightOutcome:
+    """Fly one scenario: takeoff, each step in order, land. Any abort -> traj_stop + land."""
     steps = list(scenario.steps)
     if hover_only:
         steps = [steps[0], Step("hold", {"s": deps.hover_s}, duration_s=deps.hover_s), steps[-1]]
@@ -222,13 +277,9 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
     ticks = 0
     airborne = excite_sent = False
     decision: AbortDecision | None = None
-    # The firmware holds one trajectory/program buffer and keeps it from boot to the next BEGIN (API/wfb_glue.c), so a
-    # lone traj/prog step is uploaded on the ground right after set_hover_z (COMMIT checks against hover_z): xyz-f1
-    # 10-13 spent 68 s of the 120 s airborne cap uploading in HOVER and the cap cut the z leg.
     uploads = [i for i, st in enumerate(steps) if st.kind in TRAJ_KINDS + PROG_KINDS]
     preload = uploads[0] if len(uploads) == 1 else None
     preload_err = ""
-    # A lone preset writes its traj_p and traj_id on the ground too (VAR_WRITE needs no flight state); traj_go flies.
     presets = [i for i, st in enumerate(steps) if st.kind == "preset"]
     preset_pre = presets[0] if len(presets) == 1 else None
     preset_sent = False
@@ -243,6 +294,12 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
 
     def preload_send() -> bool:
         nonlocal preload_err
+        if runner is not None:
+            if runner._preload_uploaded:
+                return True
+            ok = runner.upload_preload()
+            preload_err = runner.preload_err
+            return ok
         ok, preload_err = upload_step(steps[preload])
         return ok
 
@@ -305,7 +362,8 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
             for name, v in st.args.get("set", ()):
                 cmds.append((f"set {name}", lambda name=name, v=v: deps.client.var_write(name, v)))
             cmds.append(("set_hover_z", lambda: deps.client.set_hover_z(scenario.hover_z_m)))
-            if preload is not None:
+            preload_already_done = runner._preload_uploaded if runner is not None else False
+            if preload is not None and not preload_already_done:
                 cmds.append((f"{steps[preload].kind} upload", preload_send))
             if preset_pre is not None:
                 cmds.append(("preset var_write", lambda: preset_write(steps[preset_pre]) == ""))
@@ -464,16 +522,20 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
             deps.client.var_write("traj_stop", 1)  # the preset flies back to its start point, then LAND
         deps.client.traj_stop()
     t0 = deps.clock() - t_start
-    land_sent = deps.client.land()
+    land_sent = deps.client.land() if airborne else True
     landed = False
-    for _ in range(max_ticks):
-        deps.client.heartbeat()
-        deps.step(deps.dt_s)
-        if prim() == PRIM_IDLE:
+    for _ in range(max_ticks if airborne else 1):
+        if airborne:
+            deps.client.heartbeat()
+            deps.step(deps.dt_s)
+            if prim() == PRIM_IDLE:
+                landed = True
+                break
+            if not land_sent and prim() == PRIM_HOVER:  # LAND lost or refused while still hovering: resend
+                land_sent = deps.client.land()
+        else:
             landed = True
             break
-        if not land_sent and prim() == PRIM_HOVER:  # LAND lost or refused while still hovering: resend
-            land_sent = deps.client.land()
     records.append({"step": len(steps) - 1, "kind": "land", "t0_s": round(t0, 3),
                     "t1_s": round(deps.clock() - t_start, 3), "ok": landed})
     return FlightOutcome(aborted, decision, landed, records)

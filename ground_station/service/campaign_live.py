@@ -85,20 +85,40 @@ class LiveWfbClient(WfbClient):
         self._sleep = sleep
         self._last_hb = -math.inf
         self.last_error = ""
+        self._consecutive_timeouts = 0
+        self._pending_hb_txids: list[int] = []
+        self._prim_active = False
 
     @staticmethod
     def _no_raw_send(frame: bytes) -> int:
         raise RuntimeError("LiveWfbClient sends through the service gateway, not raw frames")
 
     def heartbeat(self) -> bool:
+        if self._consecutive_timeouts >= 2:
+            return False
         now = self._clock()
         if now - self._last_hb >= self._hb_period_s:
-            self._service.submit_command(CMD_PRIM, PrimIdx.HEARTBEAT, 0.0)
+            if self._pending_hb_txids:
+                still_pending = []
+                for txid in self._pending_hb_txids:
+                    res = self._service.command_result(txid, pop=True)
+                    if res is None:
+                        still_pending.append(txid)
+                    elif res.get("status") in ("applied", "ack"):
+                        self._consecutive_timeouts = 0
+                self._pending_hb_txids = still_pending
+                if len(self._pending_hb_txids) >= 3:
+                    self._consecutive_timeouts = max(self._consecutive_timeouts, 2)
+                    return False
+            txid = self._service.submit_command(CMD_PRIM, PrimIdx.HEARTBEAT, 0.0)
+            self._pending_hb_txids.append(txid)
             self._last_hb = now
         return True
 
     def _send_cmd(self, cmd: int, idx: int, value: float) -> bool:
-        self.heartbeat()
+        # B8 fix: Do not heartbeat before every command (especially before PRIM starts).
+        if cmd == CMD_PRIM and idx == PrimIdx.TAKEOFF:
+            self._prim_active = True
         txid = self._service.submit_command(cmd, idx, float(value))
         timeout_s = self._traj_ack_timeout_s if cmd == CMD_TRAJ else self._ack_timeout_s   # uploads are on the ground
         deadline = self._clock() + timeout_s
@@ -108,18 +128,29 @@ class LiveWfbClient(WfbClient):
             if res is not None:
                 status = res.get("status")
                 if status == "applied":
+                    self._consecutive_timeouts = 0
+                    self._pending_hb_txids.clear()
+                    if cmd == CMD_PRIM and idx == PrimIdx.LAND:
+                        self._prim_active = False
                     return True
                 if status == "rejected":
+                    self._consecutive_timeouts = 0
+                    self._pending_hb_txids.clear()
                     self.last_error = (f"cmd 0x{cmd:02X} idx {idx} rejected: "
                                        f"{wfb_reason(res)} {res.get('detail', '')}".strip())
                     return False
                 acked = acked or status == "ack"
             if self._clock() >= deadline:
                 if acked:
+                    self._consecutive_timeouts = 0
+                    self._pending_hb_txids.clear()
                     return True
+                self._consecutive_timeouts += 1
                 self.last_error = f"cmd 0x{cmd:02X} idx {idx}: no result in {timeout_s} s"
                 return False
-            self.heartbeat()
+            # Only heartbeat while waiting if PRIM is active or sending a flight primitive (B8/B13)
+            if self._prim_active or (cmd == CMD_PRIM and idx in (PrimIdx.TAKEOFF, PrimIdx.LAND)):
+                self.heartbeat()
             self._sleep(_RESULT_POLL_S)
 
 

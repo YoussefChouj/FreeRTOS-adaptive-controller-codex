@@ -197,3 +197,32 @@ def test_lab_early_end_asks_why_and_x_flies_it_again(monkeypatch, tmp_path):
     assert lab.one(*runner.next_flight(lab.queue, lab.state)) is None
     assert lab.state["flights"][0]["early"] == "x"
     assert runner.next_flight(lab.queue, lab.state)[1].variant == "a"
+
+
+def test_runner_ask_logs_prompt_and_operator_key(monkeypatch, tmp_path):
+    events_logged = []
+    monkeypatch.setattr(runner.events, "log", lambda ev, **kw: events_logged.append((ev, kw)))
+    lab = runner.Lab("http://x", runner.Queue(cards=[]), tmp_path / "queue_state.json", "type1", ask=lambda p: " Y \n")
+    ans = lab.ask("Arm drone? [y/N]: ")
+    assert ans == "y"
+    assert ("prompt", {"text": "Arm drone? [y/N]: "}) in events_logged
+    assert ("operator_key", {"key": "y"}) in events_logged
+
+
+def test_runner_native_gains_in_ask_and_after_restore_defaults(monkeypatch, tmp_path):
+    d = FakeDrone(monkeypatch, tmp_path, answers=[])
+    gains_written = []
+    monkeypatch.setattr(fly, "write_gains", lambda base, preset, **kw: (gains_written.append(preset), True)[1])
+    preload_called = []
+    monkeypatch.setattr(fly, "upload_preload", lambda base, launch: (preload_called.append(launch), True)[1])
+
+    c = cards.Card("xy", hypothesis="gains test", path="lab_c_pid", stage="list",
+                   variants={"tuned": cards.Variant("tuned", ask="gains: c2", after="restore defaults")},
+                   baseline="", metric="overshoot_x_cm")
+    d.lab.queue = runner.Queue(cards=[c])
+    nxt = runner.next_flight(d.lab.queue, d.lab.state)
+    assert d.lab.one(*nxt) is None
+
+    assert "c2" in gains_written
+    assert len(preload_called) >= 1
+    assert "defaults" in gains_written

@@ -223,7 +223,7 @@ def test_resolve_campaign_fly_file_name_and_launch_copy(tmp_path):
     launch, src = campaign_fly.resolve_campaign(str(SAMPLE), "type2", **kw)
     assert src == SAMPLE and launch.parent == tmp_path / "launch"
     by_name, src2 = campaign_fly.resolve_campaign("preset_tour", "type2", **kw)
-    assert src2 == SAMPLE and by_name.parent == tmp_path / "launch"
+    assert src2.resolve() == SAMPLE.resolve() and by_name.parent == tmp_path / "launch"
     assert campaign_fly.resolve_campaign(str(launch), "other", **kw) == (launch, launch)
     with pytest.raises(LaunchError, match="preset_tour"):
         campaign_fly.resolve_campaign("no_such_campaign", "type2", **kw)
@@ -392,3 +392,149 @@ def test_watch_ctrl_c_leaves_while_the_service_is_down(monkeypatch):
     st, _ = campaign_fly.watch("http://h", term=term, key=key)
     assert st == {"status": "service_down"} and rig.t < 7.0
     assert any("leaving fly" in e for e in term.events) and not any("FAILED" in e for e in term.events)
+
+
+def test_write_gains_refuses_when_not_disarmed(monkeypatch, capsys):
+    monkeypatch.setattr(campaign_fly, "_vitals", lambda base: {"arm": {"state": "armed"}})
+    ok = campaign_fly.write_gains("http://h", "c2")
+    assert ok is False
+    out = capsys.readouterr().out
+    assert "REFUSED: drone is not disarmed" in out
+
+
+def test_write_gains_operator_cancellation(monkeypatch, capsys):
+    monkeypatch.setattr(campaign_fly, "_vitals", lambda base: {"arm": {"state": "disarmed"}})
+    ok = campaign_fly.write_gains("http://h", "c2", ask_fn=lambda p: "n")
+    assert ok is False
+    out = capsys.readouterr().out
+    assert "Gain write cancelled." in out
+
+
+def test_write_gains_success_and_table(monkeypatch, capsys):
+    vitals_data = {
+        "arm": {"state": "disarmed"},
+        "g_wfb_status.yaw_kp": 2.0,
+        "g_wfb_status.yaw_ki": 0.0,
+        "g_wfb_status.yaw_kd": 0.0,
+    }
+    monkeypatch.setattr(campaign_fly, "_vitals", lambda base: vitals_data)
+    posted = []
+
+    def fake_call(base, route, body=None, timeout=10):
+        posted.append((route, body))
+        return 200, {"ok": True, "command_id": 0x01, "status": "applied"}
+
+    monkeypatch.setattr(campaign_fly, "call", fake_call)
+    test_gains = {0: 2.5, 1: 0.1}
+    ok = campaign_fly.write_gains("http://h", test_gains, why="unit test", yes=True)
+    assert ok is True
+    out = capsys.readouterr().out
+    assert "Why: unit test" in out
+    assert "| Axis" in out and "| idx" in out and "| Old" in out and "| New" in out and "| ACK" in out
+    assert "2/2 ACK" in out
+    cmd_posts = [p for p in posted if p[0] == "/commands"]
+    assert len(cmd_posts) == 2
+
+
+def test_write_gains_defaults_preset(monkeypatch, capsys):
+    vitals_data = {"arm": {"state": "disarmed"}}
+    monkeypatch.setattr(campaign_fly, "_vitals", lambda base: vitals_data)
+    posted = []
+
+    def fake_call(base, route, body=None, timeout=10):
+        posted.append((route, body))
+        return 200, {"ok": True, "command_id": 0x01, "status": "applied"}
+
+    monkeypatch.setattr(campaign_fly, "call", fake_call)
+    ok = campaign_fly.write_gains("http://h", "defaults", yes=True)
+    assert ok is True
+    out = capsys.readouterr().out
+    assert "12/12 ACK" in out
+    cmd_posts = [p for p in posted if p[0] == "/commands"]
+    assert len(cmd_posts) == 12
+
+
+def test_debrief_lines_never_airborne():
+    # Friction B14: air <= 0 or max_z < 0.25 -> "landing offset: no landing (never airborne)"
+    samples_air_zero = [_sample(0.0, 0, 10.0, 0.0, 0.0, air=0.0)]
+    lines = campaign_fly.debrief_lines(samples_air_zero, {"status": "done"}, "f/01")
+    assert "landing offset: no landing (never airborne)" in lines
+
+    # Even if air > 0, if max_z < 0.25, report never airborne
+    samples_low_z = [_sample(0.0, 0, 10.0, 0.0, 0.1, air=1.0)]
+    lines2 = campaign_fly.debrief_lines(samples_low_z, {"status": "done"}, "f/01")
+    assert "landing offset: no landing (never airborne)" in lines2
+
+
+def test_quiet_preflight_waits_for_position_streaming(monkeypatch, capsys):
+    # Fix 4: first poll fails ONLY on position not streaming -> retries up to 1.5s
+    attempts = [0]
+
+    def fake_call(base, route, body=None, timeout=10):
+        attempts[0] += 1
+        if attempts[0] == 1:
+            return 200, {
+                "ok": False,
+                "checks": [{"name": "position", "value": "position not streaming", "pass": False}],
+            }
+        return 200, {"ok": True, "checks": [{"name": "position", "value": "streaming at 50 Hz", "pass": True}]}
+
+    slept = []
+    monkeypatch.setattr(campaign_fly, "call", fake_call)
+    monkeypatch.setattr(campaign_fly, "_sleep", lambda s: slept.append(s))
+    events_logged = []
+    monkeypatch.setattr(campaign_fly.events, "log", lambda ev, **kw: events_logged.append((ev, kw)))
+
+    ok, fails = campaign_fly.quiet_preflight("http://h", "test_camp", "type2", shown=None)
+    assert ok is True
+    assert fails == ()
+    assert slept == [0.5]
+    assert attempts[0] == 2
+    assert "preflight OK: arm by RC to fly" in capsys.readouterr().out
+
+
+def test_upload_preload(tmp_path, monkeypatch):
+    class DummyRunner:
+        called = False
+        def upload_preload(self):
+            self.called = True
+            return True
+
+    r = DummyRunner()
+    assert campaign_fly.upload_preload("http://h", runner=r) is True
+    assert r.called is True
+
+    # Empty launch path returns True
+    assert campaign_fly.upload_preload("http://h", launch_path=None) is True
+
+    # Campaign yaml without upload steps returns True
+    c_yaml = tmp_path / "c_no_upload.yaml"
+    c_yaml.write_text(YAML, encoding="utf-8")
+    assert campaign_fly.upload_preload("http://h", launch_path=str(c_yaml)) is True
+
+    # Campaign with goto upload step executes upload
+    from unittest.mock import Mock
+    c_traj_yaml = tmp_path / "c_traj.yaml"
+    traj_text = """campaign: t-goto
+objective: test
+controller: pid
+mode: fly
+packs: [type2]
+max_flights: 1
+experiments:
+  - name: f01
+    scenario:
+      scenario: circle
+      steps:
+        - takeoff: {z: 0.5}
+        - goto: {x: 1.0, y: 0.5, z: 0.5}
+        - land
+    capture: campaign
+    repeats: 1
+abort: {}
+"""
+    c_traj_yaml.write_text(traj_text, encoding="utf-8")
+    res_obj = Mock(ok=True, error=None)
+    monkeypatch.setattr("ground_station.platform.trajectory_upload.upload", lambda pts, client: res_obj)
+    monkeypatch.setattr(campaign_fly, "HttpWfbClient", lambda base: Mock())
+    assert campaign_fly.upload_preload("http://h", launch_path=str(c_traj_yaml)) is True

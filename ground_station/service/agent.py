@@ -1486,12 +1486,44 @@ class AgentManager:
             return self._wait_for(plan, args)
         if action == "command":
             # Same code path as POST /commands (including the arm gate).
-            return svc.submit_command(
-                int(args.get("command_id")),
-                int(args.get("index", 0)),
-                float(args.get("value", 0.0)),
-                int(args.get("flags", 0)),
-            )
+            cmd_id = int(args.get("command_id"))
+            idx = int(args.get("index", 0))
+            val = float(args.get("value", 0.0))
+            flags = int(args.get("flags", 0))
+            timeout_s = float(args.get("timeout_s", 2.0))
+            txid = svc.submit_command(cmd_id, idx, val, flags)
+
+            # Stop-and-wait for transaction outcome (Friction A7).
+            # A command step is done only on ACK/applied; timeout or NAK marks error.
+            deadline = time.monotonic() + timeout_s
+            while True:
+                if plan.cancelled.is_set():
+                    raise PlanCancelled(plan.plan_id)
+                if svc.gateway is not None:
+                    try:
+                        svc.poll_command(timeout=0.0)
+                    except Exception:
+                        pass
+                res = svc.command_result(txid)
+                if res is not None:
+                    st = res.get("status")
+                    if st in ("applied", "acknowledged", "verified"):
+                        return res
+                    if st in ("rejected", "timed_out", "error"):
+                        reason = res.get("reason") or res.get("detail") or st
+                        raise RuntimeError(f"command {cmd_id} (txid {txid}) rejected: {reason}")
+                for act in reversed(getattr(svc, "_action_journal", [])):
+                    if getattr(act, "transaction_id", None) == txid:
+                        lc = getattr(act, "lifecycle", "")
+                        if lc in ("applied", "acknowledged", "verified"):
+                            return act.to_dict()
+                        if lc in ("rejected", "timed_out", "error"):
+                            detail = getattr(act, "detail", "") or getattr(act, "reason_name", "")
+                            raise RuntimeError(f"command {cmd_id} (txid {txid}) {lc}: {detail}")
+                        break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(f"command {cmd_id} (txid {txid}) timed out after {timeout_s}s waiting for ACK")
+                time.sleep(0.01)
         if action == "ui_navigate":
             self._broadcast("ui", {
                 "action": "switch_tab",

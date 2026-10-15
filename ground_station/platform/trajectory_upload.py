@@ -29,6 +29,7 @@ def upload(
     points: Sequence[TrajPoint],
     client: WfbClient,
     attempts: int = 3,
+    skip_if_loaded: bool = False,
 ) -> UploadResult:
     """Upload trajectory points to the drone via CMD 0x1B with retry.
 
@@ -36,6 +37,8 @@ def upload(
         points: Sequence of trajectory points to upload.
         client: WfbClient connected to drone command transport.
         attempts: Maximum number of upload attempts (must be >= 1).
+        skip_if_loaded: If True and client._last_committed_traj_crc matches (len(points), crc),
+            skip the upload and return success immediately with 0 attempts.
 
     Returns:
         UploadResult indicating success/failure, number of attempts, and error text.
@@ -62,6 +65,9 @@ def upload(
 
     crc = crc32(points if isinstance(points, list) else list(points))
 
+    if skip_if_loaded and getattr(client, "_last_committed_traj_crc", None) == (n, crc):
+        return UploadResult(ok=True, attempts=0, error=None)
+
     last_error: str | None = None
     for attempt in range(1, attempts + 1):
         if not client.traj_begin(n):
@@ -87,6 +93,10 @@ def upload(
             last_error = "commit rejected"
             continue
 
+        try:
+            client._last_committed_traj_crc = (n, crc)
+        except Exception:
+            pass
         return UploadResult(ok=True, attempts=attempt, error=None)
 
     return UploadResult(ok=False, attempts=attempts, error=last_error)
