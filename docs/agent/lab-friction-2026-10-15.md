@@ -46,7 +46,7 @@ Fixes:
 | # | Friction | Fix direction |
 |---|---|---|
 | B1 | Trajectory upload takes ~60 s: one float per `CMD_TRAJ` APPEND, stop-and-wait, ~180 ms round trip, ~330 floats | (a) skip the upload when the same program CRC is already loaded; (b) a pipelined window of APPENDs with the CRC as the guard; (c) a bulk append command (firmware) |
-| B2 | Flight 4 landed 24 cm off (x +23 cm) despite the 10 cm landing gate | Investigate the gate logic against the flight-4 log |
+| B2 | Flight 4 landed 24 cm off (x +23 cm) despite the 10 cm landing gate | ROOT CAUSE (MEASURED, flight 09 = session 185321): the gate passed (4.9 cm at descent start). The camera was stale for the whole landing (`g_ext_pos.stale` 1, `n_ok` frozen), so the flow EKF ran alone. x drifted 0 to 0.23 m only after z reached 0.11 m, with a false 0.15-0.19 m/s xy velocity near the ground. The offset is EKF drift measured by the EKF itself, not by the camera. Fixes in section D |
 | B3 | Flight 5: `abort L1: position_error` after the preset step (hold FAIL), hover z max 32 cm | Investigate from the flight-5 log |
 | B4 | Tracker gave almost no camera truth: fixes 0-1, skipped 918 of 920, "align WAIT airborne" | Debug the airborne alignment gate |
 | B5 | Link overload refused takeoffs. Fixed in 6d5aed1a, but the 25 Hz lab plan cap is PROPOSED | Measure slot rates and drops over several flights, then confirm or retune |
@@ -58,6 +58,7 @@ Fixes:
 | B11 | Event timeline: `logs/pipeline/<date>.jsonl` has every runner event, but only at 1 s resolution. Test runs write `fake_drone_*` events into the same file, and there is no event for "prompt shown" or "operator pressed Enter" | ms timestamps (monotonic + wall); tests write to a temp dir (`LAB_EVENTS_DIR`); add prompt/key events; a `python -m ground_station.lab.events --gaps` view (event-to-event deltas per flight) |
 | B12 | Measured gaps today: flight 5 to 6 took 614 s (gain write via chat), swap to camera start 19 s, camera stop 5 s, ground to done 11-16 s, forced rest 78 s | Fold into A1 and B10; measure again after the fixes |
 | B13 | Flight 9 refused twice (19:21 "goto upload: begin rejected", 19:22 "mrac_injection 0x0F idx 10: no result"). Afterwards about 60 CMD 0x1A idx 2 in a row, all timed out | Find the 0x1A idx 2 sender (B8) and stop its retry loop while replies are dead |
+| B14 | Flights that never took off (04, 05, 07, 08, 14-16) print "landing offset x +0 y +0 cm (0 cm)" in the debrief | Print "no landing (never airborne)" when z never passed 0.25 m |
 
 ## C. Safety: RC fallback to a stable controller (operator request, 2026-10-15 flight 9)
 
@@ -68,3 +69,30 @@ LQR and MPC hold position well but oscillate. The operator wants an RC switch th
   - An RC aux switch, channel picked by the operator, forces `s_xyc_kind = XY_CTRL_PID` and attitude `CTRL_PID` in flight, latched until disarm.
   - Reset xy_ctrl so the hand-off is bumpless (the PID is already warm).
   - Telemeter the switch as `status.fallback`, and log it as a flight event.
+
+## D. Flight analysis 2026-10-15 (PROPOSED fixes, numbers MEASURED)
+
+Tool: `python -m ground_station.analysis.lab_flights 2026-10-15 --only xy-ctrl pad-landing` writes plots, `metrics.json` and `report.html` to `logs/analysis/2026-10-15/`.
+
+| Flight | Overshoot cm | Settle 5 cm s | Path rms / max cm | Roll cmd rms deg (dominant Hz) |
+|---|---|---|---|---|
+| 10 pid | 16.4 | 2.86 | 9.5 / 23.7 | 1.7 (0.5) |
+| 11 tuned | 7.0 | 1.96 | 7.9 / 24.7 | 2.8 (0.6) |
+| 12 lqr | 3.9 | 0.75 | 4.7 / 13.0 | 3.0 (2.0) |
+| 13 mpc | 3.2 | 0.66 | 4.9 / 13.5 | 1.8 (0.6) |
+| 17 pid | 16.2 | 2.36 | 12.4 / 42.6 | 2.2 (0.5) |
+
+1. **LQR 2 Hz roll limit cycle** (the operator's "oscillation").
+   - 42% of roll-command power is at 1-4 Hz, peak 2.0 Hz. PID has 3-4%.
+   - Gyro x std is 15.8 deg/s, against 5.5-9 for the others. 21% of IMU roll power is at 2 Hz.
+   - MPC shows the same, milder: 19% at 1.9 Hz.
+   - The velocity setpoint has no 1-4 Hz content, so the cycle is generated in the xy_ctrl to attitude path.
+   - PROPOSED: lower the LQR velocity gain or weight, or low-pass the attitude command (cutoff about 1 Hz). Re-fly a screen and compare the 1-4 Hz fraction.
+2. **Landing** (section B2).
+   - The descent takes 0.9-1.5 s at -0.5 to -0.65 m/s.
+   - Touchdown vz: pid -0.7, tuned -0.5, lqr -2.2, mpc -1.25 m/s.
+   - PROPOSED:
+     - A 2-stage descent at about -0.2 m/s below 0.15 m.
+     - Zero the xy velocity setpoint, and freeze the flow update, below about 0.12 m.
+     - Fix the stale camera fusion (B4).
+     - Report the touchdown offset from the camera, not the EKF.
