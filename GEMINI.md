@@ -22,3 +22,6 @@ Every turn re-sends the whole conversation, so each file you open is paid for ag
 7. Plan before you edit: state the files and the change in at most 5 lines, then make targeted edits
    (replace the lines, never rewrite whole files). Run the verify command the task gives you.
 8. Answers are short: file:line references, no pasted file contents.
+9. Exploration that spans more than 3 files goes to the `codebase-scout` subagent (invoke_subagent). It works in its
+   own context and returns paths, line numbers and a short summary. Work from that summary; do not re-read those
+   files in the main thread except the 1-2 ranges you will edit.
