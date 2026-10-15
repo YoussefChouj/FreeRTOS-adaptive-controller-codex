@@ -123,6 +123,16 @@ class RunnerDeps:
     on_livetune: Callable[[dict], None] = lambda result: None  # livetune step result (best gains, J history, CMA state)
 
 
+
+def _send_retry(client, cmd, idx, value, tries=3):
+    """An idempotent write sent again when its reply is lost (one dropped WiFi packet refused a takeoff 2026-10-15)."""
+    for _ in range(tries):
+        if client._send_cmd(cmd, idx, value):
+            return True
+        if "no result in" not in str(getattr(client, "last_error", "") or ""):
+            return False
+    return False
+
 def _gate_problem(status: dict) -> str:
     """Why the firmware TAKEOFF gate (API/wfb_glue.c:109) would refuse, from the streamed inputs; "" if none seen."""
     if "motor_idle" in status and status["motor_idle"] != 1:
@@ -290,7 +300,7 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
             if inj_arg is not None:
                 inj = float(inj_arg)
                 cmds.append(("mrac_injection",
-                             lambda: deps.client._send_cmd(ex.CMD_MRAC_FLAGS, ex.MRAC_IDX_INJECTION, inj)))
+                             lambda: _send_retry(deps.client, ex.CMD_MRAC_FLAGS, ex.MRAC_IDX_INJECTION, inj)))
             # takeoff set: VAR_WRITEs on the ground before IDLE (g_xy_ctrl_kind latches only on the ground)
             for name, v in st.args.get("set", ()):
                 cmds.append((f"set {name}", lambda name=name, v=v: deps.client.var_write(name, v)))

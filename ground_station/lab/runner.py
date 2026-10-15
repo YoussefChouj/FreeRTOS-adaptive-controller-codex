@@ -243,6 +243,13 @@ def flight_s(samples):
     return round(t[-1] - t[0], 1) if len(t) > 1 else None
 
 
+def left_ground(samples):
+    """False only when the samples show the drone never left IDLE (a refused takeoff); no samples = unknown = True."""
+    if not samples:
+        return True
+    return any(phase(s) not in ("IDLE", "?") or (s.get("g_wfb_status.airborne_t") or 0) > 0 for s in samples)
+
+
 def volts(vitals):
     b = (vitals or {}).get("battery")
     try:
@@ -491,8 +498,12 @@ class Lab:
                 return None                                          # the same flight again, from its checks
             t_go = self.wall()
             st, samples, cam, folder = fly.fly_one(self.base, launch, src, f"{card.name}-{fl.variant}", self.pack)
-            if st is not None:
+            if st is not None and left_ground(samples):
                 break
+            if st is not None:                                       # takeoff refused: not a flight, fly it again
+                why = next((f.get("abort_reason") for f in st.get("flights") or [] if f.get("abort_reason")), "")
+                events.log("no_takeoff", campaign=f"{card.name}-{fl.variant}", reason=why, folder=rel(folder))
+                print(f"The drone never took off{': ' + why if why else ''}. Not counted.", flush=True)
             print("Disarm by RC, then arm again to retry.", flush=True)
         self.camera_stop(name, cam_on)
         if st.get("status") == "service_down":
