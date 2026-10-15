@@ -25,7 +25,7 @@ from ground_station.livewatch.campaign_capture import (
     ATTITUDE, KF_HEALTH, MAX_SLOTS, MOTORS, POSITION_AXES, RATE_LOOPS, WFB_STATUS_FIELDS, plan_capture,
     subscribe_steps,
 )
-from ground_station.platform.wfb_commands import CMD_PRIM, PrimIdx, WfbClient
+from ground_station.platform.wfb_commands import CMD_PRIM, CMD_TRAJ, PrimIdx, WfbClient
 from ground_station.service.abort_monitor import AbortLimits, AbortMonitor, AbortSample
 from ground_station.service.schema_registry import SchemaRegistry
 from ground_station.service.campaign_runner import RunnerDeps
@@ -60,6 +60,7 @@ _REGISTRY = SchemaRegistry.builtin_dashboard()
 _ALIASES = {s: a for s in SAMPLE_SYMS if (a := _REGISTRY.resolve(s)) and a != s}
 
 ACK_TIMEOUT_S = 1.0        # PROPOSED: step A 10-07 ack latency max 0.72 s at a 97 % full link; 0.5 s restarted every upload
+TRAJ_ACK_TIMEOUT_S = 3.0   # PROPOSED: 10-15 re-fly, traj BEGIN applied 1.55/1.70 s late on a loaded link -> refused
 HEARTBEAT_PERIOD_S = 0.2   # PROPOSED: 5 Hz, interfaces.md "GS sends at 5 Hz"; firmware hb_timeout_s 1.0
 STATUS_STALE_S = 1.0       # PROPOSED: factory refuses to start without g_wfb_status this fresh
 LIVE_DT_S = 0.1            # PROPOSED: runner tick
@@ -73,11 +74,12 @@ class LiveWfbClient(WfbClient):
     """WfbClient whose frames go through the service gateway; each command waits for its own result."""
 
     def __init__(self, service: Any, ack_timeout_s: float = ACK_TIMEOUT_S,
-                 heartbeat_period_s: float = HEARTBEAT_PERIOD_S,
+                 traj_ack_timeout_s: float = TRAJ_ACK_TIMEOUT_S, heartbeat_period_s: float = HEARTBEAT_PERIOD_S,
                  clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep) -> None:
         super().__init__(send=self._no_raw_send)
         self._service = service
         self._ack_timeout_s = ack_timeout_s
+        self._traj_ack_timeout_s = traj_ack_timeout_s
         self._hb_period_s = heartbeat_period_s
         self._clock = clock
         self._sleep = sleep
@@ -98,7 +100,8 @@ class LiveWfbClient(WfbClient):
     def _send_cmd(self, cmd: int, idx: int, value: float) -> bool:
         self.heartbeat()
         txid = self._service.submit_command(cmd, idx, float(value))
-        deadline = self._clock() + self._ack_timeout_s
+        timeout_s = self._traj_ack_timeout_s if cmd == CMD_TRAJ else self._ack_timeout_s   # uploads are on the ground
+        deadline = self._clock() + timeout_s
         acked = False
         while True:
             res = self._service.command_result(txid, pop=True)
@@ -114,7 +117,7 @@ class LiveWfbClient(WfbClient):
             if self._clock() >= deadline:
                 if acked:
                     return True
-                self.last_error = f"cmd 0x{cmd:02X} idx {idx}: no result in {self._ack_timeout_s} s"
+                self.last_error = f"cmd 0x{cmd:02X} idx {idx}: no result in {timeout_s} s"
                 return False
             self.heartbeat()
             self._sleep(_RESULT_POLL_S)

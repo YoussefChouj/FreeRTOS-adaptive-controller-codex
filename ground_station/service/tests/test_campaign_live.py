@@ -92,6 +92,44 @@ def test_heartbeat_rate_limited_and_interleaved_while_waiting():
     assert len(hbs) >= 3                           # kept the firmware heartbeat alive while waiting
 
 
+
+class LateService(FakeService):
+    """The firmware applies every command delay_s after submit (2026-10-15 re-fly: traj BEGIN applied 1.55/1.70 s late)."""
+
+    def __init__(self, clock, delay_s):
+        super().__init__(mode="none")
+        self.clock, self.delay_s, self.due = clock, delay_s, {}
+
+    def submit_command(self, command_id, index, value, flags=0):
+        txid = super().submit_command(command_id, index, value, flags)
+        self.due[txid] = self.clock() + self.delay_s
+        return txid
+
+    def command_result(self, txid, pop=False):
+        if self.clock() < self.due.get(txid, math.inf):
+            return None
+        if pop:
+            self.due.pop(txid)
+        return {"transaction_id": txid, "status": "applied", "reason": "", "detail": ""}
+
+
+def test_late_traj_result_accepted_other_commands_keep_short_deadline():
+    clock = FakeClock()
+    svc = LateService(clock, delay_s=1.6)
+    client = LiveWfbClient(svc, clock=clock, sleep=clock.sleep)   # production deadlines
+    assert client.traj_begin(18) is True                          # was "begin rejected" at 1.0 s
+    assert client.takeoff() is False and "no result in 1.0 s" in client.last_error
+
+
+def test_upload_survives_late_results():
+    from ground_station.platform.trajectory_upload import upload
+    from ground_station.service.trajectory_pipeline import TrajPoint
+    clock = FakeClock()
+    svc = LateService(clock, delay_s=1.6)
+    client = LiveWfbClient(svc, clock=clock, sleep=clock.sleep)
+    res = upload([TrajPoint(0, 0, 0.5, 0, 0), TrajPoint(0.3, 0, 0.5, 0, 3)], client)
+    assert res.ok and res.attempts == 1, res
+
 def test_live_status_and_staleness():
     svc = FakeService()
     with pytest.raises(RuntimeError, match="not streaming"):
