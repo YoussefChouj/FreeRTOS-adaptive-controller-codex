@@ -46,8 +46,13 @@ then poll `/api/diagnostics/bundle` `.commands.results` for `applied`.
    Correction to the cause above: cmd 26 idx 2 is the PRIM heartbeat the client sends at 5 Hz while it waits.
    The firmware needs it, so it is not paused.
 2. Upload every trajectory on the ground before the RC arm, so a link failure costs no battery or arm.
-3. Takeoff drift under C3: replay attempt 1's telemetry (locyPID / g_ext_pos) and decide whether the 0.25 m
-   takeoff abort is too tight or the C3 outer Kp is too low. Measure before changing either.
+3. DONE (MEASURED; report `docs/lab/f1-takeoff-drift-analysis-2026-10-15.md`): C3 outer Kp = 0.3214 is too soft
+   during liftoff. The drone was centered at liftoff (|x|, |y| < 0.5 cm), but ground-effect perturbations in y
+   drove it to 16.1 cm (t = 38.75 s) and 26.5 cm (t = 40.5 s). At 26.5 cm error, C3 outer loop commanded only
+   -8.54 cm/s restoring velocity (vs -21.2 cm/s under default Kp = 0.8: 40.2% authority). Across all 9 successful
+   2026-10-15 flights, peak takeoff error was 6.3-16.6 cm (mean 11.3 cm), so the 0.25 m abort is not too tight
+   for default gains (8.4 cm headroom), but C3 outer Kp is too soft to arrest takeoff drift and failed the 15 cm
+   firmware climb settle requirement. Fix: retain default Kp >= 0.60 on takeoff (or PROPOSED 0.35 m takeoff abort).
 4. Small: "preflight FAIL: position not streaming" printed once before "preflight OK" in attempt 1.
 5. Strategic (operator idea): send a trajectory as parameters (goto target x/y/z + move_s, generated on the
    drone) instead of about 135 single-float APPENDs. circle/figure8 presets already work this way (VAR writes).
