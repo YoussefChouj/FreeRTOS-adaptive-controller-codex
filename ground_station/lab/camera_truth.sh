@@ -23,6 +23,17 @@ up() { curl -s --noproxy "*" -m 2 -o /dev/null -w '%{http_code}' "$api/health" |
 # Their .pid files hold Windows PIDs: alive/kill them with tasklist/taskkill, never bash kill.
 bg() { python -m ground_station.lab.detach "$@" > /dev/null; }
 alive() { local p; p=$(cat "$1" 2>/dev/null) || return 1; tasklist //FI "PID eq $p" //NH 2>/dev/null | grep -qi python; }
+# Running live_tracker PIDs, by command line (a .pid file's PID can be reused by another python, e.g. 8081).
+trackers() { powershell -NoProfile -Command 'Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "python.exe" -and $_.CommandLine -match "analysis.live_tracker" } | ForEach-Object { $_.ProcessId }' 2>/dev/null | tr -d ''; }
+# A tracker left from a session nobody stopped (2026-10-15: a Ctrl+C'd runner left its window up 42 min) closes
+# before a new one starts: stop file first (it finishes tracker.mp4), then a force kill.
+reap() {
+  local d i
+  [ -n "$(trackers)" ] || return 0
+  for d in logs/video_truth/*/; do [ -f "$d/tracker.pid" ] && [ ! -f "$d/stop" ] && touch "$d/stop"; done
+  for i in $(seq 3); do [ -n "$(trackers)" ] || return 0; sleep 1; done
+  for i in $(trackers); do echo "closing a leftover tracker (pid $i)"; taskkill //F //PID "$i" > /dev/null 2>&1 || true; done
+}
 # start/video show the live window r5cam on top; fusion puts it off screen (the tracker window is the one on top).
 cam() {                                           # CT_WIN: scrcpy window flags (default on top), CT_SIZE: WxH; loop: cam_loop.sh
   bg --log "$vid/cam_loop.out" --pid "$vid/cam_loop.pid" -- bash ground_station/lab/cam_loop.sh "$vid" "${CT_WIN---always-on-top}" "${CT_SIZE-1194x672}"
@@ -59,6 +70,7 @@ start)
   sleep 5; "$0" check "$name" ;;
 fusion)
   mode=${3:?mode 1 shadow, 2 offset, 3 in-EKF}; shift 3
+  reap
   # 8081 up (`fly` flights): it owns the link, relays the fixes (--relay-port 47800) and logs; the tracker reads
   # height from it. 8081 down: stream_log owns the link, relays and logs, as before.
   if up; then link=8081; tel=(--tel-url "$api"); else link=sl; tel=(--tel-csv "logs/$name.slot1.csv"); endlive; fi
@@ -99,6 +111,9 @@ stop)
       alive "$vid/stream_log.pid" && ! grep -q "recording stopped" "$vid/stream_log.out" && busy=1
       [ $busy = 0 ] && break; sleep 1
     done
+    if alive "$vid/tracker.pid" && trackers | grep -qx "$(cat "$vid/tracker.pid")"; then   # 20 s and still up: close it
+      echo "tracker did not stop, closing it"; taskkill //F //PID "$(cat "$vid/tracker.pid")" > /dev/null 2>&1 || true
+    fi
   elif [ ! -f "$vid/video_only" ]; then
     post /api/recording/stop '{}'; post /api/streams/log/stop '{}'
   fi

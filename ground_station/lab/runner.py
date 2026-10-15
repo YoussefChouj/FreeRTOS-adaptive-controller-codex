@@ -413,14 +413,19 @@ class Lab:
             rc = self.camera_run("fusion", name, str(mode), *self.queue.tracker)
             events.log("queue_camera", name=name, mode=mode, rc=rc)
             if rc == 0:
+                self.cam_live = name
                 return True
             a = self.ask("The camera did not start: Enter tries again, n flies without it, q quits: ")
             if a in ("n", "q"):
                 return None if a == "q" else False
 
     def camera_stop(self, name, on):
+        """The stop file first: a Ctrl+C that kills the bash child still ends the tracker (it left its window up 42 min)."""
         if on:
+            (VIDEO_DIR / name).mkdir(parents=True, exist_ok=True)
+            (VIDEO_DIR / name / "stop").touch()
             events.log("queue_camera_stop", name=name, rc=self.camera_run("stop", name))
+            self.cam_live = None
 
     # ---- one flight
     def rest(self):
@@ -615,6 +620,11 @@ class Lab:
                     return rc
         except KeyboardInterrupt:
             self.save()
+            if getattr(self, "cam_live", None):            # Ctrl+C mid-flight-setup: the camera and tracker stop too
+                try:
+                    self.camera_stop(self.cam_live, True)
+                except KeyboardInterrupt:
+                    pass
             events.log("queue_end", rc=130, flights=len(self.state["flights"]))
             print("\nStopped. Run the same command again to go on from here.", flush=True)
             return 130
