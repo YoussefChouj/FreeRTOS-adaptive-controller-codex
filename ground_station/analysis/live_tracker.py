@@ -178,8 +178,9 @@ class JumpGate:
     blob agrees with itself too, so re-seeds are counted and reported. Thresholds PROPOSED, not tuned on flights."""
 
     def __init__(self, v_max: float = 1.5, slack_m: float = 0.05, dt_max: float = 0.5, n_reseed: int = 10,
-                 cluster_m: float = 0.05):
+                 cluster_m: float = 0.05, lost_s: float = 1.0):
         self.v_max, self.slack, self.dt_max, self.n_reseed, self.cluster = v_max, slack_m, dt_max, n_reseed, cluster_m
+        self.lost_s = lost_s       # 2026-10-15 lab: a static wrong blob won 10 frames in a row and the track ping-ponged
         self.last: Optional[tuple] = None                 # (t, xy, uv) of the last accepted detection
         self.rej: list = []
         self.n_rej = self.reseeds = 0
@@ -193,7 +194,7 @@ class JumpGate:
         self.n_rej += 1
         self.rej.append(xy)
         r = np.array(self.rej[-self.n_reseed:])
-        if len(r) >= self.n_reseed and np.all(np.linalg.norm(r - np.median(r, axis=0), axis=1) <= self.cluster):
+        if len(r) >= self.n_reseed and t - self.last[0] >= self.lost_s and np.all(np.linalg.norm(r - np.median(r, axis=0), axis=1) <= self.cluster):
             self.reseeds += 1
             self.last, self.rej = (t, xy, uv), []
             return True
@@ -291,9 +292,10 @@ class WindowSource:
             if r["width"] > 0 and r["height"] > 0:
                 f = self._print(r["width"], r["height"])
                 self.via = "mss" if f is None else "print"
-                if f is None:
+                if f is None and r.get("left", 0) >= 0:   # mss reads the screen: scrcpy parked off screen (x=-3000) is black there
                     f = np.asarray(self.sct.grab(r))[..., :3]
-                return True, fit_frame(np.ascontiguousarray(f), self.fixed)
+                if f is not None and float(f.mean()) > 2.0:   # 2026-10-15 lab: black frames when PrintWindow failed once
+                    return True, fit_frame(np.ascontiguousarray(f), self.fixed)
             if time.monotonic() >= t_end:
                 print(f"window {self.title!r} lost for 15 s", flush=True)
                 return False, None

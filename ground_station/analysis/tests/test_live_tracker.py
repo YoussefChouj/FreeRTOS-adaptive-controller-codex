@@ -123,9 +123,20 @@ def test_coral_tracker_follows_masks_static_and_grows_on_a_miss():
     assert tr.r == 140.0 and np.allclose(tr.c, [100, 100])
 
 
+def test_jump_gate_reseeds_only_after_the_track_is_lost_for_lost_s():
+    """2026-10-15 lab: a static wrong blob won 10 frames in a row and the track ping-ponged every few seconds."""
+    from ground_station.analysis.live_tracker import JumpGate
+    g = JumpGate(v_max=1.0, slack_m=0.05, n_reseed=3, cluster_m=0.05, lost_s=1.0)
+    assert g.check(0.0, [0, 0])
+    assert not any(g.check(t, [1.0, 0]) for t in (0.1, 0.2, 0.3, 0.4))   # agreeing rejects, but lost only 0.4 s
+    assert g.check(0.45, [0.02, 0]) and g.reseeds == 0                     # the real track is back
+    assert not any(g.check(0.45 + 0.1 * k, [1.0, 0]) for k in range(1, 10))
+    assert g.check(1.5, [1.0, 0]) and g.reseeds == 1                       # lost 1.05 s: the drone really moved
+
+
 def test_jump_gate_rejects_jumps_caps_dt_and_reseeds_on_a_cluster():
     from ground_station.analysis.live_tracker import JumpGate
-    g = JumpGate(v_max=1.0, slack_m=0.05, dt_max=0.5, n_reseed=3, cluster_m=0.05)
+    g = JumpGate(v_max=1.0, slack_m=0.05, dt_max=0.5, n_reseed=3, cluster_m=0.05, lost_s=0.0)
     assert g.check(0.0, [0, 0]) and g.check(0.1, [0.1, 0])     # 0.1 m in 0.1 s at 1 m/s + slack
     assert not g.check(0.2, [1.0, 0]) and not g.check(0.3, [1.0, 0.01])
     assert g.check(0.4, [1.01, 0]) and g.reseeds == 1 and g.n_rej == 3   # 3 agreeing rejects: drone moved
