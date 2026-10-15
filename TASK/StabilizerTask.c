@@ -1988,6 +1988,24 @@ static void Pos_ArmEdge(void)
 	s_prev_armed = armed_now;
 }
 
+/* RC fallback (2026-10-15, lab-friction C): FALLBACK_CH high for FALLBACK_DEBOUNCE_TICKS ticks in a row latches
+ * g_rc_fallback until disarm. The xy outer loop goes to the PID cascade (Pos_Compute) and the attitude correction
+ * fades out to CTRL_PID (API/controller.c). Motors stay on; the operator lands by hand. Telemetered as status.fallback. */
+volatile uint8_t g_rc_fallback = 0U;
+#define FALLBACK_ON_MIN          1400     /* above mid: an unassigned SBUS channel may idle at ~1000-1024 */
+#define FALLBACK_DEBOUNCE_TICKS  3U       /* 15 ms at 200 Hz */
+static void Rc_FallbackStep(void)
+{
+	static uint8_t s_high_ticks = 0U;
+	if (DroneStatus.ARM_Status != Armed) { g_rc_fallback = 0U; s_high_ticks = 0U; }
+	else {
+		if (sbus_lost == 0U && FALLBACK_CH > FALLBACK_ON_MIN) { if (s_high_ticks < FALLBACK_DEBOUNCE_TICKS) s_high_ticks++; }
+		else s_high_ticks = 0U;
+		if (s_high_ticks >= FALLBACK_DEBOUNCE_TICKS) g_rc_fallback = 1U;
+	}
+	g_ctrl_fallback = g_rc_fallback;
+}
+
 /* xy position loops, then the velocity loops with the trajectory feed-forward. Armed only. */
 static void Pos_Compute(uint8_t airborne, uint8_t land_contact)
 {
@@ -2015,9 +2033,10 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact)
 	Update_Des(case_Update_v_loc_Des);
 	SDK_Set_V_Loc();   /* SDK velocity override (AutoflyTask) */
 	/* xy_ctrl flies an axis only while its velocity setpoint is the position loop's own output (not the RC stick,
-	 * an SDK velocity, or the VXY clamp); otherwise the PID flies and xy_ctrl tracks. Kind latched on the ground. */
-	if (!airborne || land_contact) {
-		s_xyc_kind = (g_xy_ctrl_kind <= XY_CTRL_MPC) ? g_xy_ctrl_kind : XY_CTRL_PID;
+	 * an SDK velocity, or the VXY clamp); otherwise the PID flies and xy_ctrl tracks. Kind latched on the ground;
+	 * the RC fallback forces the PID in flight (the PID cascade runs every tick, so it is warm). */
+	if (!airborne || land_contact || g_rc_fallback) {
+		s_xyc_kind = (g_xy_ctrl_kind <= XY_CTRL_MPC && !g_rc_fallback) ? g_xy_ctrl_kind : XY_CTRL_PID;
 		XyCtrl_Reset(&s_xyc[0]);
 		XyCtrl_Reset(&s_xyc[1]);
 	}
@@ -2179,6 +2198,7 @@ void Compute_Motor(void)
 	uint8_t airborne = (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING);
 	uint8_t land_contact = (uint8_t)(Land_ContactStep() | (s_land_spool != 0U));   /* spool = touchdown too */
 
+	Rc_FallbackStep();
 	Z_Compute();
 
 	cnt_loc++;

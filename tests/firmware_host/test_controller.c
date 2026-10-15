@@ -139,6 +139,26 @@ int main(void)
     MRAC_GateStep();
     assert(mrac_inj.inj_alpha == 0.0f);
 
+    /* (e) RC fallback: armed, the correction fades out over 0.1 s, then CTRL_PID; disarm restores the request */
+    setup();
+    assert(g_ctrl_select == CTRL_MRAC && g_ctrl_select_req == CTRL_MRAC);
+    assert(Controller_Update(CTRL_AXIS_ROLL, 10.0f) == 13.0f);
+    g_ctrl_fallback = 1;
+    for(int i=0; i<10; i++) Controller_CheckSwitch(1);
+    assert(fabsf(Controller_Update(CTRL_AXIS_ROLL, 10.0f) - 11.5f) < 1e-4f);   /* half faded */
+    assert(g_ctrl_select == CTRL_MRAC);
+    for(int i=0; i<11; i++) Controller_CheckSwitch(1);
+    assert(g_ctrl_select == CTRL_PID);
+    assert(Controller_Update(CTRL_AXIS_ROLL, 10.0f) == 10.0f);
+    assert(g_ctrl_select_req == CTRL_MRAC);
+    g_ctrl_fallback = 0;                       /* cleared on disarm by StabilizerTask */
+    Controller_CheckSwitch(1);
+    assert(g_ctrl_select == CTRL_PID);         /* still armed: no switch back in flight */
+    Controller_CheckSwitch(0);
+    assert(g_ctrl_select == CTRL_MRAC);
+    setup();
+    assert(Controller_Update(CTRL_AXIS_ROLL, 10.0f) == 13.0f);   /* full correction again */
+
     printf("test_controller: all passed\n");
 
     return 0;

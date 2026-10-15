@@ -33,6 +33,7 @@ typedef struct {
 extern volatile uint8_t g_ctrl_select;      /* active controller (ctrl_id_e) */
 extern volatile uint8_t g_ctrl_select_req;  /* requested controller; refused requests are reverted */
 extern volatile uint8_t g_ctrl_axis_mask;   /* bit per ctrl_axis_e; a cleared bit sends pure PID on that axis */
+extern volatile uint8_t g_ctrl_fallback;    /* RC fallback (StabilizerTask): fade the correction out, then CTRL_PID */
 
 void  Controller_Init(void);
 void  Controller_CheckSwitch(uint8_t armed);

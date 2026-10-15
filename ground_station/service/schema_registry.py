@@ -229,6 +229,7 @@ class SchemaRegistry:
             "TWC_arrived":             "status.twc_arrived",
             "s_authority":             "status.rc_authority",
             "g_of_hold_active":        "status.of_hold",
+            "g_rc_fallback":           "status.fallback",   # RC fallback to the PID, latched until disarm
             "g_estimator_ready":       "status.estimator_ready",
             "g_motor_idle_enabled":    "status.motor_idle",
             # Battery

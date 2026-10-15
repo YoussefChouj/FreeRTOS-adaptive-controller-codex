@@ -21,6 +21,8 @@
 #define  FLYUP_CH     sbus_channel[6]  /* ch7: momentary — rising edge >500 commands fly-up to Z=0.5 m */
 #define  INJECT_CH    sbus_channel[7]  /* ch8: 2-state - high(~1000)=MRAC u_ad injected, low(~300)=shadow (edge-driven) */
 #define  OFHOLD_CH    sbus_channel[5]  /* ch6: 2-state - high(~1694)=OF position-hold ON, low(~306)/lost=angle mode (default) */
+#define  FALLBACK_CH  sbus_channel[8]  /* ch9: 2-state - high(~1694)=RC fallback to the PID, latched until disarm (StabilizerTask Rc_FallbackStep).
+                                            * TODO(operator): confirm ch9 is a free 2-position switch on the transmitter. Used: ch1-8, ch10 kill. */
 
 /////////////////////////////////////////////////////////////////////////////////////
 //���ݲ�ֺ궨�壬�ڷ��ʹ���1�ֽڵ���������ʱ������int16��float�ȣ���Ҫ�����ݲ�ֳɵ����ֽڽ��з���

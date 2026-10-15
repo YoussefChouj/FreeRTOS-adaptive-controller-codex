@@ -15,6 +15,12 @@
 volatile uint8_t g_ctrl_select = CTRL_MRAC;     /* == pre-interface behaviour: PID + gated MRAC injection */
 volatile uint8_t g_ctrl_select_req = CTRL_MRAC;
 volatile uint8_t g_ctrl_axis_mask = CTRL_AXIS_MASK_ALL;
+/* RC fallback (2026-10-15, lab-friction C): set by TASK/StabilizerTask.c Rc_FallbackStep while latched (armed only).
+ * The correction fades 1 -> 0 over CTRL_FALLBACK_FADE_S (the MRAC simplex fade time), then g_ctrl_select = CTRL_PID.
+ * g_ctrl_select_req is left alone, so after disarm Controller_CheckSwitch restores the requested controller. */
+volatile uint8_t g_ctrl_fallback = 0U;
+#define CTRL_FALLBACK_FADE_S 0.1f
+static float s_fallback_fade = 1.0f;
 
 /* Quad-X mixer, one row per motor: motor = thr*thr_in + pitch*u_pitch + roll*u_roll + yaw*u_yaw, with
  * u_pitch = u_gyroy (already -pitch U), u_roll = u_gyrox, u_yaw = g_yaw_mix_dir*u_gyroz (StabilizerTask.c
@@ -151,6 +157,15 @@ void Controller_CheckSwitch(uint8_t armed)
 #if defined(__CC_ARM) && MRAC_ENABLE_SATAWARE == 1
     mrac_mixer_deficit();   /* V2 input; read by the law only while mu_sat > 0 */
 #endif
+    if (g_ctrl_fallback) {
+        s_fallback_fade -= MRAC_DT / CTRL_FALLBACK_FADE_S;
+        if (s_fallback_fade <= 0.0f) {
+            s_fallback_fade = 0.0f;
+            g_ctrl_select = CTRL_PID;               /* PID baseline was running all along: nothing to reset */
+        }
+        return;
+    }
+    s_fallback_fade = 1.0f;
     if (req == g_ctrl_select || armed) return;      /* armed: request stays pending until disarm */
     if (req >= CTRL_MAX || !controllers[req].available) {
         g_ctrl_select_req = g_ctrl_select;          /* refuse, visibly */
@@ -167,5 +182,5 @@ float Controller_Update(uint8_t axis, float u_nom)
     if (axis > CTRL_AXIS_Y || sel >= CTRL_MAX || !(g_ctrl_axis_mask & (1U << axis))) return u_nom;
     c = controllers[sel].correction(axis);
     if (!(c - c == 0.0f)) return u_nom;             /* NaN/Inf correction: PID baseline only */
-    return u_nom + c;
+    return u_nom + c * s_fallback_fade;
 }
