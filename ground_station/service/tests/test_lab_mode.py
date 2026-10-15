@@ -20,7 +20,7 @@ def _bridge(lab):
 def test_lab_layout_is_slot0_frame_at_10hz_and_stops_1_to_3():
     b = _bridge(True)
     b._request_slot0_schema(layout="lab")
-    assert b.sent == [(0, 20, "lab-frame", len(DASHBOARD_FRAME_A_VARS)),
+    assert b.sent == [(0, 10, "lab-frame", len(DASHBOARD_FRAME_A_VARS)),
                       (1, 0, "stop", 0), (2, 0, "stop", 0), (3, 0, "stop", 0)]
 
 

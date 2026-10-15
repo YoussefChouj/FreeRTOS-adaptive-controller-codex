@@ -478,8 +478,9 @@ class WifiBridge:
     # the previous one is still pending, so back-to-back slot requests lose all but one (2026-10-14 A1: slot 1
     # never named, the slot 3 stop lost). Its send task drains the mailbox at 200 Hz. 50 ms is PROPOSED.
     _SUBSCRIBE_GAP_S = 0.05
-    # Lab slot 0: the sidebar vars the preflight and runner read, at 200 Hz / 20 = 10 Hz nominal (PROPOSED).
-    LAB_SLOT0_DIVIDER = 20
+    # Lab slot 0: the sidebar vars the preflight and runner read, at the 100 Hz Send_Task contract / 10 = 10 Hz
+    # (_expected_rate_for_slot; flight 1 measured ~50 Hz at divider 2). ~2.3 kB/s of the 87.5k budget (PROPOSED).
+    LAB_SLOT0_DIVIDER = 10
 
     def _send_request_paced(self, request: bytes) -> None:
         """Send one 0x21 request at least ``_SUBSCRIBE_GAP_S`` after the previous one."""
