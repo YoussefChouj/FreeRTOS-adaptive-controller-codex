@@ -616,7 +616,8 @@ class Preview:
                              f"hold {now - self.anchor[0]:.1f} s"]
         for i, txt in enumerate([*lines, self.KEYS]):
             cv2.putText(img, txt, (8, 20 + 18 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3, cv2.LINE_AA)
-            cv2.putText(img, txt, (8, 20 + 18 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+            cv2.putText(img, txt, (8, 20 + 18 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                        (0, 0, 255) if txt.startswith("NO FIX") else (255, 255, 255), 1, cv2.LINE_AA)
         img = np.hstack([img, self._map(img.shape[0])])
         if self.recording:
             if self.writer is None:
@@ -851,17 +852,30 @@ class FixScheduler:
     """One fix every `period` s from the last `n_med` detections inside that period: detections farther than
     `max_spread_m` from their median are dropped (a bad blob), and the fix is the median of the rest. Skipped when
     fewer than `min_in` remain or fewer than n_med arrived. `window_s` (default period) is how far back a detection
-    may be: at 30 fps a 0.1 s period holds only 3 frames, so one dropped frame would skip the fix."""
+    may be: at 30 fps a 0.1 s period holds only 3 frames, so one dropped frame would skip the fix.
+    The window widens to n_med measured detection intervals (x1.5), at most max_window_s: on 2026-10-15 the grab ran at
+    ~6 fps (read_ms 98-126 at 1920x1080), a 0.1 s window never held 2 detections and 0-2 fixes went out per flight
+    (skipped 99.9%), so the drone flew on flow alone. The fix carries its age, so the firmware back-dates it."""
 
     def __init__(self, period: float = 1.0, n_med: int = 5, max_spread_m: float = 0.05, min_in: int = 3,
-                 window_s: Optional[float] = None):
+                 window_s: Optional[float] = None, max_window_s: float = 0.5):
         self.period, self.n_med, self.max_spread, self.min_in = period, n_med, max_spread_m, min(min_in, n_med)
         self.window = period if window_s is None else window_s
+        self.max_window = max(self.window, max_window_s)
+        self.dt: Optional[float] = None                   # EMA of the detection interval
         self.buf: list[tuple[float, np.ndarray]] = []
         self.next_t: Optional[float] = None
         self.n_sent = self.n_skip = 0
 
+    def window_s(self) -> float:
+        if self.dt is None:
+            return self.window
+        return min(self.max_window, max(self.window, 1.5 * self.n_med * self.dt))
+
     def push(self, t_cap: float, xy_m) -> None:
+        if self.buf and 0.0 < t_cap - self.buf[-1][0] < 1.0:
+            d = t_cap - self.buf[-1][0]
+            self.dt = d if self.dt is None else 0.8 * self.dt + 0.2 * d
         self.buf.append((t_cap, np.asarray(xy_m, float)))
         if len(self.buf) > 4 * self.n_med:
             del self.buf[0]
@@ -873,7 +887,7 @@ class FixScheduler:
         if now < self.next_t:
             return None
         self.next_t += self.period * max(1, int((now - self.next_t) // self.period) + 1)
-        recent = [d for d in self.buf if d[0] > now - self.window][-self.n_med:]
+        recent = [d for d in self.buf if d[0] > now - self.window_s()][-self.n_med:]
         if len(recent) < self.n_med:
             self.n_skip += 1
             return None
@@ -937,6 +951,7 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
     t_rd = t_det = 0.0
     hello()
     t_hello = clock()
+    nf_seen, t_nf, t_nf_warn = -1, 0.0, -1e9
     while True:
         if stop_file and n % 10 == 0 and Path(stop_file).exists():
             break
@@ -966,8 +981,16 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
         if xy is not None and pad is not None:
             xy = pad.apply(xy, ground() if ground else None)
         t_rd, t_det = t_rd + (p1 - p0), t_det + (time.perf_counter() - p1)
+        if sched.n_sent != nf_seen:                       # the 2026-10-15 window: a perfect track, 0 fixes sent
+            nf_seen, t_nf = sched.n_sent, t_read
+        no_fix = n_det > 0 and t_read - t_nf >= 3.0
+        if no_fix and t_read - t_nf_warn >= 5.0:
+            t_nf_warn = t_read
+            print(f"WARN no fix sent for {t_read - t_nf:.0f} s: det {n_det}/{n} skipped {sched.n_skip} "
+                  f"window {sched.window_s():.2f} s; the drone flies on flow alone", flush=True)
         if show is not None:
-            show(t_read, frame, uv, xy, [f"mode {auto.mode if auto else mode}  z {z:.2f} m  fixes {sched.n_sent}  det {n_det}/{n}",
+            show(t_read, frame, uv, xy, ([f"NO FIX SENT {t_read - t_nf:.0f} s - FLOW ONLY"] if no_fix else []) +
+                 [f"mode {auto.mode if auto else mode}  z {z:.2f} m  fixes {sched.n_sent}  det {n_det}/{n}",
                                          f"gate rej {gate.n_rej if gate else 0}  pad {'set' if pad is None or pad.xy is not None else 'WAIT'}"
                                          f"{' frozen' if pad is not None and pad.frozen else ''}"]
                  + ([auto.status] if auto else []))

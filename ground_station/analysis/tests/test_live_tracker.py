@@ -152,6 +152,27 @@ def test_scheduler_window_outlasts_the_period():
     assert s.due(0.2) is not None
 
 
+def test_scheduler_window_widens_at_low_frame_rate():
+    s = FixScheduler(period=0.05, n_med=2, window_s=0.1)          # the 2026-10-15 args: 0 fixes at ~6 fps
+    s.due(0.0)
+    sent = 0
+    for k in range(1, 40):
+        t = 0.16 * k
+        s.push(t, [0.0, 0.0])
+        sent += s.due(t) is not None
+    assert 0.1 < s.window_s() <= 0.5
+    assert sent >= 30
+
+
+def test_scheduler_window_stays_tight_at_high_frame_rate():
+    s = FixScheduler(period=0.05, n_med=2, window_s=0.1)
+    s.due(0.0)
+    for k in range(1, 60):
+        s.push(k / 30.0, [0.0, 0.0])
+        s.due(k / 30.0)
+    assert s.window_s() == 0.1
+
+
 def test_run_source_sends_hello_then_fixes_when_latency_exceeds_period(tmp_path):
     import cv2
     from ground_station.analysis.live_tracker import CoralTracker, run_source
