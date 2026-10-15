@@ -658,7 +658,7 @@ def main(argv=None):
                   camera=not a.no_camera)
     except ValueError as e:
         sys.exit(str(e))
-    fly.ensure_service(lab.base, a.port)
+    fly.ensure_service(lab.base, a.port, lab=True)
     print("\n".join(fly.vofa_setup(lab.base)), flush=True)
     return lab.run()
 

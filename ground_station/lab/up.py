@@ -134,6 +134,12 @@ def drone_rows(base, q, pack, fake, state_file):
         rows.insert(0, ("wiring", "FAIL", f"8081 talks to {host}, {what}",
                         f"{stop}, then lab up again (it starts 8081)" if not fake
                         else f"{stop}, then start 8081 with --wifi-host 127.0.0.2"))
+    elif host and not fake and not res.get("lab_mode"):
+        # The dashboard stream layer re-sends 4 slots after every pack swap and overloads the link (2026-10-15).
+        pid = re.search(r"pid (\d+)", next((r[2] for r in rows if r[0] == "service"), ""))
+        stop = f"taskkill /F /PID {pid.group(1)}" if pid else "close the 8081 window"
+        rows.insert(0, ("wiring", "FAIL", "8081 runs the dashboard stream layer, not lab mode",
+                        f"disarmed: {stop}, then lab up again (it starts 8081 --lab)"))
     return rows
 
 
@@ -168,7 +174,7 @@ def main(argv=None, ask=input):
     if not any(r[1] == "FAIL" for r in rows):
         base = f"http://127.0.0.1:{a.port}"
         try:
-            fly.ensure_service(base, a.port)
+            fly.ensure_service(base, a.port, lab=not a.fake)
             rows += drone_rows(base, q, pack, a.fake, state_file)
         except SystemExit as e:                      # 8081 did not come up (ensure_service says why)
             rows.append(("service", "FAIL", str(e), "read the 8081 window"))

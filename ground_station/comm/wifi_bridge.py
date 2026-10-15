@@ -268,6 +268,10 @@ class WifiBridge:
         # When set (a multi-slot preset is active), the watchdog replays this
         # instead of the dashboard layout, so an FC reboot restores the preset.
         self._resubscribe_fn = None
+        # Lab mode (8081 --lab): no dashboard layer. Slot 0 is the sidebar frame at LAB_SLOT0_DIVIDER, slots 1-3
+        # belong to the card's log plan alone, and an FC reboot gets back exactly the last request per slot
+        # (_check_slot_watchdog), never the 4-slot dashboard layout (2026-10-15: every pack swap re-sent it).
+        self.lab_mode = False
         self._last_stream_rx = 0.0
         self._last_resubscribe = 0.0
         self._last_slot_rx: dict[int, float] = {}
@@ -462,7 +466,9 @@ class WifiBridge:
         # Auto-subscribe to the dashboard layout (slot 0). This drives the
         # dashboard's sidebar via _slot0_to_sidebar() — see boot_default_layout
         # docstring for the dashboard vs firmware-mirror distinction.
-        if auto_subscribe_boot_default:
+        if auto_subscribe_boot_default and self.lab_mode:
+            self._request_slot0_schema(layout="lab")
+        elif auto_subscribe_boot_default:
             self._resubscribe_layout = "dashboard"
             self._last_resubscribe = time.monotonic()
             self._request_slot0_schema(layout="dashboard")
@@ -472,6 +478,8 @@ class WifiBridge:
     # the previous one is still pending, so back-to-back slot requests lose all but one (2026-10-14 A1: slot 1
     # never named, the slot 3 stop lost). Its send task drains the mailbox at 200 Hz. 50 ms is PROPOSED.
     _SUBSCRIBE_GAP_S = 0.05
+    # Lab slot 0: the sidebar vars the preflight and runner read, at 200 Hz / 20 = 10 Hz nominal (PROPOSED).
+    LAB_SLOT0_DIVIDER = 20
 
     def _send_request_paced(self, request: bytes) -> None:
         """Send one 0x21 request at least ``_SUBSCRIBE_GAP_S`` after the previous one."""
@@ -782,16 +790,24 @@ class WifiBridge:
             vars_tuple = DASHBOARD_FRAME_A_VARS
             divider = DASHBOARD_FRAME_A_DIVIDER
             label = "dashboard"
+        elif layout == "lab":
+            vars_tuple = DASHBOARD_FRAME_A_VARS
+            divider = self.LAB_SLOT0_DIVIDER
+            label = "lab-frame"
         elif layout == "boot_default":
             vars_tuple = BOOT_DEFAULT_VARS
             divider = BOOT_DEFAULT_DIVIDER
             label = "boot-default"
         else:
             raise ValueError(
-                f"layout must be 'dashboard' or 'boot_default', got {layout!r}"
+                f"layout must be 'dashboard', 'lab' or 'boot_default', got {layout!r}"
             )
 
         self._request_stream_schema(0, vars_tuple, divider, label)
+        if layout == "lab":
+            # The FC keeps slots in RAM across an 8081 restart: stop whatever an earlier session left on 1-3.
+            for slot in (1, 2, 3):
+                self.subscribe_slot(slot=slot, divider=0, ranges=[])
         if layout == "dashboard":
             # Panel extras ride on slot 1: the firmware caps a slot at
             # SUBSCRIBE_MAX_STREAM_RANGES = 62 ranges (API/subscribe.h:189),

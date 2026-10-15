@@ -20,7 +20,7 @@ class Bench:
         monkeypatch.setattr(up, "MIN_FREE_GB", 0.0)
         monkeypatch.setattr(fly, "pack_problem", lambda p: "" if p == "type2" else f"unknown pack {p!r}")
         monkeypatch.setattr(fly, "remember_pack", lambda p=None: "type2")
-        monkeypatch.setattr(fly, "ensure_service", lambda base, port: self.started.append(port))
+        monkeypatch.setattr(fly, "ensure_service", lambda base, port, **kw: self.started.append(port))
         monkeypatch.setattr(fly, "resolve_campaign", lambda src, pack: (tmp_path / "launch.yaml", src))
         monkeypatch.setattr(fly, "call", self.call)
         monkeypatch.setattr(up.events, "log", lambda *a, **k: None)
@@ -33,7 +33,7 @@ class Bench:
     def call(self, base, route, body=None, timeout=10):
         assert route.startswith("/api/campaign/preflight?") and "pack=type2" in route and "launch.yaml" in route
         return 200, {"ok": all(c["pass"] is not False for c in self.checks), "checks": self.checks,
-                     "wifi_host": self.wifi}
+                     "wifi_host": self.wifi, "lab_mode": True}
 
     def up(self, *args, queue=QUEUE, answer=""):
         def ask(prompt):
@@ -100,7 +100,7 @@ def test_the_rehearsal_wants_the_fake_drone(monkeypatch, tmp_path):
 def test_8081_that_does_not_start_is_a_fail_row(monkeypatch, tmp_path):
     b = Bench(monkeypatch, tmp_path)
 
-    def down(base, port):
+    def down(base, port, **kw):
         raise SystemExit("service did not answer on 8081 in 60 s: check its window")
     monkeypatch.setattr(fly, "ensure_service", down)
     assert b.up("--pack", "2") == 1 and "FAIL  service" in b.table() and b.ran == []

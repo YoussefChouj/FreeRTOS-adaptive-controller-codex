@@ -312,4 +312,5 @@ def run_preflight(service: Any, campaign: Any = None, campaign_path: str | None 
         _log_plan_row(campaign_path, pack_id),
     ]
     return {"ok": all(c["pass"] is not False for c in checks), "instance": INSTANCE_ID, "checks": checks,
-            "wifi_host": getattr(getattr(service, "bridge", None), "_wifi_host", None)}   # lab up: real or fake drone
+            "wifi_host": getattr(getattr(service, "bridge", None), "_wifi_host", None),
+            "lab_mode": bool(getattr(getattr(service, "bridge", None), "lab_mode", False))}   # lab up: real or fake drone

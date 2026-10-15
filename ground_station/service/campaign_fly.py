@@ -59,7 +59,7 @@ def call(base, route, body=None, timeout=10):
         return e.code, json.loads(e.read() or b"{}")
 
 
-def ensure_service(base, port, wait_s=60):
+def ensure_service(base, port, wait_s=60, lab=False):
     try:
         call(base, "/api/campaign/state", timeout=2)
         print(f"service already up on {port}")
@@ -67,7 +67,7 @@ def ensure_service(base, port, wait_s=60):
     except OSError:
         pass
     flags = subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0
-    subprocess.Popen([sys.executable, "-m", "ground_station.service", "--port", str(port)], cwd=ROOT,
+    subprocess.Popen([sys.executable, "-m", "ground_station.service", "--port", str(port)] + (["--lab"] if lab else []), cwd=ROOT,
                      creationflags=flags)
     print(f"service starting in its own window on {port} ...")
     events.log("service_start", port=port)

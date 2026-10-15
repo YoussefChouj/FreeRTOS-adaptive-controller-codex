@@ -660,6 +660,9 @@ class StreamsManager:
         ``{slot, restore: true}``. Returns (http status, body)."""
         if not assignments:
             return 400, {"ok": False, "error": "nothing to apply"}
+        if getattr(self.service.bridge, "lab_mode", False):
+            return 409, {"ok": False, "error": "8081 runs in lab mode: the card's log plan owns slots 1-3. "
+                         "Restart 8081 without --lab for dashboard stream presets."}
         why = self._refusal()
         if why:
             return 409, {"ok": False, "error": why}

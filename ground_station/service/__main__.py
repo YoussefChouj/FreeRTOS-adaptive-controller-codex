@@ -47,6 +47,10 @@ def _build_argparser() -> argparse.ArgumentParser:
         help="relay live_tracker camera fixes from udp 127.0.0.1:PORT to the drone (default 47800, 0 = off)",
     )
     p.add_argument(
+        "--lab", action="store_true",
+        help="lab mode: no dashboard stream layer. Slot 0 = sidebar frame at 10 Hz, slots 1-3 only from "
+             "the card's log plan, an FC reboot gets back the last request per slot (lab up starts this)")
+    p.add_argument(
         "--no-auto-subscribe", action="store_true",
         help="Skip the automatic boot-default subscribe request on start.",
     )
@@ -273,6 +277,7 @@ def main() -> None:
         relay_port=args.relay_port or None,
         on_telemetry=None,  # set below after service exists
     )
+    bridge.lab_mode = args.lab
 
     # Experiment runtime: ticks on every telemetry ingest so active experiments
     # can record samples and advance their settle/measure state machine.
