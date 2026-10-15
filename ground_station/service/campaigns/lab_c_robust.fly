@@ -1,0 +1,18 @@
+# C: robust tuned PID (C3): 0x01 locx/locy .3214/.0001/6.2937 + locxs/locys 3.2242/.0157/4.7283 (idx 24-35) written on
+# the ground first, stop-and-wait (RAM: a reboot loses them). No ff shift. Sim (PROPOSED, 18 delay-varied plants):
+# step overshoot 3.61 cm, settle 0.84 s vs default 10.0 cm / 1.42 s. Same track as lab_c_pid, gated pad landing, fusion 3.
+# Fly it: fly lab_c_robust --once at >= 15.8 V resting. Plan: docs/lab/run-sheet-2026-10-16.md
+campaign lab-c-robust
+rate 100
+log velocity_loops camera_fusion
+set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10
+takeoff 0.5
+hold 3
+goto x=0.4 y=0 z=0.5 dwell_s=4
+hold 4
+set traj_p.move_s=12 traj_p.hold_s=1
+preset circle circ_r_cm=30
+hold 2
+preset figure8 f8_a_cm=30
+hold 3
+land

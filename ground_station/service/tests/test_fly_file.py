@@ -104,7 +104,10 @@ def test_lab_scripts_compile_log_and_fly_on_the_fake_drone(path):
     exp = data["experiments"][0]
     assert check_log_plan(exp["log_plan"]) == [] and "camera_fusion" in exp["log_plan"]["groups"]
     ground = exp["scenario"]["steps"][0]["takeoff"]["set"]
-    assert set(ground) == {"g_xy_ctrl_kind", "g_traj_ff_shift_s", "g_land_xy_gate_cm"}  # a pack swap reboots
+    want = {"g_xy_ctrl_kind", "g_traj_ff_shift_s", "g_land_xy_gate_cm"}  # a pack swap reboots
+    if ground["g_xy_ctrl_kind"] in (2, 3):  # LQR/MPC also pin the predictor delay, VAR 47
+        want.add("g_xyc_delay_ticks")
+    assert set(ground) == want
     drone, _, deps = _rig()
     out = fly_scenario(parse_scenario(exp["scenario"]), deps)
     assert not out.aborted and out.landed, out.decision

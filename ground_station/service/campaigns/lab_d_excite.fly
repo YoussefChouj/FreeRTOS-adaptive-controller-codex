@@ -1,0 +1,15 @@
+# D: auto-tune identification: roll then pitch rate-loop multisine (excitation.ID_EXCITE, 0.5-15 Hz, 60 deg/s, 30 s),
+# MRAC injection off, default PID gains, fusion 2 (each excite start re-zeroes the flow origin; fusion 3 would pull it
+# back mid-run). First excite on this airframe: all values PROPOSED (WP-25), none measured. Then on the ground:
+# python -m ground_station.autotune.cli <session> --axis roll   (and --axis pitch). Plan: docs/lab/run-sheet-2026-10-16.md
+campaign lab-d-excite
+rate 100
+log velocity_loops camera_fusion
+set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10
+takeoff 0.5 mrac_injection=0
+hold 8
+excite axis=roll signal=multisine f0=0.5 f1=15 amp=60 duration_s=30
+hold 3
+excite axis=pitch signal=multisine f0=0.5 f1=15 amp=60 duration_s=30
+hold 3
+land
