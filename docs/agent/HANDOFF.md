@@ -21,8 +21,10 @@ Branch `overnight-2026-10-08`, local commits. Design and decisions: `docs/lab/pi
 - Catalog `docs/lab/catalog.yaml` (`.\lab catalog`): the queue flies only listed cards; `lab end` moves them forward.
 
 ## Next 3 actions
-1. Before the lab (CEO): `python -m ground_station.lab.fake_drone ctl quit`, restart 8081 WITHOUT `--wifi-host`;
-   packs.yaml says type 1 = 5300 mAh, type 2 = 4000 mAh (UNVERIFIED: asked the operator).
+1. Done 01:37: fake drone quit, 8081 restarted for the real drone (WiFi 192.168.4.1), a dry `lab up` READY
+   (only the drone-off WAIT rows). Packs:
+   type 1 = the big 5300 mAh pack (operator confirmed); type 2 = the small packs, 4000 mAh in packs.yaml
+   (UNVERIFIED: 4000 or 4400? asked the operator).
 2. Lab, PowerShell in the repo: `.\lab up --pack 1` (the type in the drone): one check table (FAIL stops,
    WARN asks one Enter), then the queue flies card by card with a debrief after each landing (16 s measured
    in rehearsal).

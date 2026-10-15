@@ -26,10 +26,10 @@ ocv_table:  # PROPOSED generic LiPo curve
   - [3.27, 0]
 packs:  # 2026-10-15: the lab knows two pack types, not single packs (user); the operator gives --pack 1 or 2
   - id: "type1"
-    label: "type 1 (the big pack; UNVERIFIED)"
+    label: "type 1 (the big pack)"
     cells: 4
-    capacity_mah: 5300  # UNVERIFIED: the old P5300-1 entry
+    capacity_mah: 5300  # the operator confirmed 2026-10-15
   - id: "type2"
-    label: "type 2 (the small packs; UNVERIFIED)"
+    label: "type 2 (the small packs)"
     cells: 4
     capacity_mah: 4000  # UNVERIFIED: the old P4000 entries said 4000, pipeline-design decision 6 says 4400

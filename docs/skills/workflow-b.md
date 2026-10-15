@@ -5,8 +5,8 @@ description: Launch a workflow B flight campaign on the live drone. The operator
 
 # Workflow B: launch a fly campaign
 
-The minimal deterministic path. The operator answers four questions, says go, and keeps hands on the RC
-sticks. You run one command and two MCP calls to launch (`campaign_preflight`, `campaign_go`), then one
+The minimal deterministic path. The operator answers four questions, arms by RC in flymode 1 (SDK), says go,
+and keeps hands off the sticks (a fast stick move is a takeover, ch10 kills). You run one command and two MCP calls to launch (`campaign_preflight`, `campaign_go`), then one
 `campaign_state` per flight.
 
 ```
@@ -14,11 +14,22 @@ Q1 campaign ─> Q2 pack ─> campaign_launch (1 command) ─> Q3 log plan ─> 
   ─> Q4 checklist ─> "arm by RC, say go" ─> campaign_go ─> campaign_state once per flight ─> send outputs
 ```
 
+**Default is the terminal (operator 2026-10-07): no dashboard approvals.** After Q1-Q3 and `campaign_launch`,
+give the operator one command in a `bash` block and let them run it:
+`fly <campaign> --pack <id>` (`fly.cmd` at the repo root = `python -m ground_station.service.campaign_fly`; the
+campaign is a `.fly` script, a campaign yaml, a launch copy or a saved name; the pack is remembered). It starts
+the service if 8081 is down, runs a silent preflight (prints only FAIL rows), and the RC arm is the go: arm ->
+3 s countdown -> takeoff, a disarm cancels. Live line at 5 Hz, keys s stop step, n next, l land; Ctrl+C once
+lands, twice aborts, RC ch10 kills. After landing: a 5-line debrief, `logs/flights/<date>/<NN>_<campaign>/`, the
+same outputs as section 4, then it waits for the next arm. The MCP path below (sections 1 Preflight,
+2, 3) is used only when the operator asks for an agent-flown campaign.
+
 ## Hard rules
 
 - You never arm, never spin motors, never flash, never edit firmware. The operator arms by RC.
-- You never POST to the 8081 HTTP API yourself. Use only the dashboard MCP tools: `campaign_preflight`,
+- You never POST to the 8081 HTTP API yourself. Agent-flown only: the dashboard MCP tools `campaign_preflight`,
   `campaign_state`, `campaign_go`, `campaign_pause`, `campaign_land`, `campaign_abort`, `say`.
+- Confirmations are QA in chat, never the dashboard queue.
 - Fence (firmware, decision 2-4): hard z 1.7 m, |x| 1.6 m, |y| 2.0 m from the ground-center origin.
   Soft boundary 0.3 m inside (z 1.4, |x| 1.3, |y| 1.7). Every scenario point must be inside the soft
   boundary; `load_campaign` rejects anything else. Never widen these numbers.
@@ -60,8 +71,16 @@ position, battery, runner, log_plan. Show the table.
 - `pass: null` (amber, e.g. rc_link when `sbus_lost` is not streamed): covered by the Q4 checklist.
 - The drone must be disarmed here; the operator arms only after Q4.
 
-**Q4 Checklist.** Ask the operator to confirm: pack swapped, drone on the pad, powered in place, RC ready with ch6 (OF hold) HIGH (ch6 LOW = angle mode: nothing holds position, 10-06 f01 drifted away),
+**Q4 Checklist.** Ask the operator to confirm: pack swapped, drone on the pad, powered in place, RC ready with ch6 (OF hold) HIGH (ch6 LOW = angle mode: nothing holds position, 10-06 f01 drifted away)
+and flymode 1 (SDK) selected; after the RC arm, hands off the sticks: idle, takeoff and climb need no stick
+(firmware 0e5beae; a fast stick move is a pilot takeover, ch10 is the kill),
 phone recording, operator present, area clear. Any "no" stops the launch.
+
+**Live video.** After Q4, before Go, open the phone camera window (always on top, recorded to
+`logs/video_truth/<campaign>_<YYYYmmdd-HHMM>/cam.mkv`, same stamp as the launch copy):
+`bash ground_station/lab/camera_truth.sh video <campaign>_<YYYYmmdd-HHMM>`. It only runs scrcpy: the campaign keeps
+its own log, and `stop` does not touch 8081. This window is the Q4 "phone recording". No video in the `check`
+output means the phone is unplugged (read `scrcpy.log`); the loop restarts scrcpy on its own when the camera drops.
 
 ## 2. Go
 
@@ -99,6 +118,8 @@ same path and pack. A reply with `notice: 8081 restarted` means the runner state
   beyond it, independent of you.
 
 ## 4. At the end
+
+Stop the video first: `bash ground_station/lab/camera_truth.sh stop <campaign>_<YYYYmmdd-HHMM>`.
 
 `campaign_state.outputs_dir` points to `logs/campaigns/<campaign>_<stamp>/`: `summary.md` (flight table),
 `plots/<flight_id>.png`, `metrics.json`, `log_plan.json`, `campaign.yaml`, `flights/<flight_id>/` (flightlab).
