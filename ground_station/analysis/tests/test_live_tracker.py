@@ -408,3 +408,41 @@ def test_preview_draws_a_full_size_grab_at_the_set_width():
     assert scale(SimpleNamespace(width=716, scale=0.6), 1194) == pytest.approx(0.6, abs=1e-3)
     assert scale(SimpleNamespace(width=716, scale=0.6), 640) == 1.0                         # never upscaled
     assert scale(SimpleNamespace(width=None, scale=0.6), 1920) == 0.6                        # no width: fixed scale
+
+
+def test_preview_keeps_persistent_traced_path_and_renders_3d_auto_view():
+    import ground_station.analysis.video_truth as vt
+    from ground_station.analysis.live_tracker import Preview
+    p = object.__new__(Preview)
+    p.cv2, p.dt, p.scale, p.title, p.t_last, p.ms = vt._cv2(), 0.0, 0.5, "test", -1e9, 0.0
+    p.width, p.hz, p.rect, p.traj, p.pass_m, p.trail_s, p.n = None, 30.0, None, None, 0.20, 0.0, 0
+    p.trail, p.uvs, p.anchor, p.max_d, p.xy, p.z = [], [], None, 0.0, None, 0.0
+    p.z_max, p.view_idx, p.zoom_pip = 0.0, 0, False
+    p._az, p._el, p._center = -38.0, 30.0, None
+    p.rec, p.recording, p.writer, p.placed, p.full, p.closed = None, False, None, True, False, True
+    frame = np.zeros((240, 320, 3), dtype=np.uint8)
+    for k in range(30):
+        t = k * 10.0   # spans 290 s (> old 10 s uv and 120 s trail limits)
+        p(t, frame, (50.0 + k * 4.0, 60.0 + k * 2.0), (0.02 * k, 0.01 * k), ["status"], z=0.03 * k)
+    assert len(p.uvs) == 30 and len(p.trail) == 30
+    assert p.trail[-1][3] == pytest.approx(0.03 * 29)
+    panel = p._map(120, now=290.0)
+    assert panel.shape == (120, 120, 3)
+    assert p._center is not None and p._center[2] > 0.1
+    # Key 'c' explicitly clears both persistent trails
+    p._key(ord("c"), 300.0)
+    assert len(p.uvs) == 0 and len(p.trail) == 0
+
+
+def test_coral_tracker_landing_zoom_preserves_canonical_sensor_coordinates():
+    from ground_station.analysis.live_tracker import CoralTracker
+    target = (312, 228)
+    frame = _coral_frame(target)
+    t_base = CoralTracker(target, zoom=1.0, land_zoom=1.0)
+    t_zoom = CoralTracker(target, zoom=1.0, land_zoom=2.0, land_z_m=0.30)
+    uv_base = t_base.step(frame, z_agl=0.15)
+    uv_zoom = t_zoom.step(frame, z_agl=0.15)
+    assert uv_base is not None and uv_zoom is not None
+    assert t_zoom.active_zoom == pytest.approx(2.0)
+    assert np.allclose(uv_base, uv_zoom, atol=0.75)
+
