@@ -62,6 +62,8 @@ _ALIASES = {s: a for s in SAMPLE_SYMS if (a := _REGISTRY.resolve(s)) and a != s}
 ACK_TIMEOUT_S = 1.0        # PROPOSED: step A 10-07 ack latency max 0.72 s at a 97 % full link; 0.5 s restarted every upload
 TRAJ_ACK_TIMEOUT_S = 3.0   # PROPOSED: 10-15 re-fly, traj BEGIN applied 1.55/1.70 s late on a loaded link -> refused
 HEARTBEAT_PERIOD_S = 0.2   # PROPOSED: 5 Hz, interfaces.md "GS sends at 5 Hz"; firmware hb_timeout_s 1.0
+HEARTBEAT_LOCKOUT_S = 2.0  # PROPOSED: 2x firmware hb_timeout_s; oldest unanswered heartbeat this old -> stop flooding
+HEARTBEAT_PROBE_S = 1.0    # PROPOSED: while locked out, one probe heartbeat per second so a recovered link resumes
 STATUS_STALE_S = 1.0       # PROPOSED: factory refuses to start without g_wfb_status this fresh
 LIVE_DT_S = 0.1            # PROPOSED: runner tick
 GROUND_WAIT_S = 10.0       # decision 12: time on the ground after a fly-mode landing before the auto-next check
@@ -87,6 +89,8 @@ class LiveWfbClient(WfbClient):
         self.last_error = ""
         self._consecutive_timeouts = 0
         self._pending_hb_txids: list[int] = []
+        self._pending_hb_sent: list[float] = []   # submit time of each pending heartbeat, same order
+        self._lock_t: float | None = None
         self._prim_active = False
 
     @staticmethod
@@ -94,26 +98,44 @@ class LiveWfbClient(WfbClient):
         raise RuntimeError("LiveWfbClient sends through the service gateway, not raw frames")
 
     def heartbeat(self) -> bool:
-        if self._consecutive_timeouts >= 2:
-            return False
+        """Send a heartbeat if one is due; False while the link looks dead (B13: no flooding).
+
+        Any result for a pending heartbeat proves the link is alive and clears the lockout, so a slow
+        link (results late, not lost) never locks the ground out for the rest of the flight.
+        """
         now = self._clock()
-        if now - self._last_hb >= self._hb_period_s:
-            if self._pending_hb_txids:
-                still_pending = []
-                for txid in self._pending_hb_txids:
-                    res = self._service.command_result(txid, pop=True)
-                    if res is None:
-                        still_pending.append(txid)
-                    elif res.get("status") in ("applied", "ack"):
-                        self._consecutive_timeouts = 0
-                self._pending_hb_txids = still_pending
-                if len(self._pending_hb_txids) >= 3:
-                    self._consecutive_timeouts = max(self._consecutive_timeouts, 2)
-                    return False
+        self._poll_heartbeats()
+        if self._pending_hb_sent and now - self._pending_hb_sent[0] >= HEARTBEAT_LOCKOUT_S:
+            self._consecutive_timeouts = max(self._consecutive_timeouts, 2)
+        locked = self._consecutive_timeouts >= 2
+        if not locked:
+            self._lock_t = None
+            period, ref = self._hb_period_s, self._last_hb
+        else:
+            if self._lock_t is None:
+                self._lock_t = now
+            period, ref = HEARTBEAT_PROBE_S, max(self._last_hb, self._lock_t)
+        if now - ref >= period:
             txid = self._service.submit_command(CMD_PRIM, PrimIdx.HEARTBEAT, 0.0)
             self._pending_hb_txids.append(txid)
+            self._pending_hb_sent.append(now)
             self._last_hb = now
-        return True
+        return not locked
+
+    def _poll_heartbeats(self) -> None:
+        answered = -1
+        for i, txid in enumerate(self._pending_hb_txids):
+            if self._service.command_result(txid, pop=True) is not None:
+                answered = i   # any result (applied, ack, even rejected) means the drone heard us
+        if answered >= 0:
+            # earlier heartbeats are older than the answered one: stop waiting for them
+            del self._pending_hb_txids[:answered + 1]
+            del self._pending_hb_sent[:answered + 1]
+            self._consecutive_timeouts = 0
+
+    def _clear_pending_hb(self) -> None:
+        self._pending_hb_txids.clear()
+        self._pending_hb_sent.clear()
 
     def _send_cmd(self, cmd: int, idx: int, value: float) -> bool:
         # B8 fix: Do not heartbeat before every command (especially before PRIM starts).
@@ -129,13 +151,13 @@ class LiveWfbClient(WfbClient):
                 status = res.get("status")
                 if status == "applied":
                     self._consecutive_timeouts = 0
-                    self._pending_hb_txids.clear()
+                    self._clear_pending_hb()
                     if cmd == CMD_PRIM and idx == PrimIdx.LAND:
                         self._prim_active = False
                     return True
                 if status == "rejected":
                     self._consecutive_timeouts = 0
-                    self._pending_hb_txids.clear()
+                    self._clear_pending_hb()
                     self.last_error = (f"cmd 0x{cmd:02X} idx {idx} rejected: "
                                        f"{wfb_reason(res)} {res.get('detail', '')}".strip())
                     return False
@@ -143,7 +165,7 @@ class LiveWfbClient(WfbClient):
             if self._clock() >= deadline:
                 if acked:
                     self._consecutive_timeouts = 0
-                    self._pending_hb_txids.clear()
+                    self._clear_pending_hb()
                     return True
                 self._consecutive_timeouts += 1
                 self.last_error = f"cmd 0x{cmd:02X} idx {idx}: no result in {timeout_s} s"

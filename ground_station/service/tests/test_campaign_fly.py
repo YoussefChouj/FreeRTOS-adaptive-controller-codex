@@ -876,3 +876,17 @@ def test_write_gains_in_flight(capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "[In-flight]" in out
     assert "1/1 ACK (applied, 8081 journal)" in out
+
+
+def test_watch_warns_when_post_takeoff_gains_fail(monkeypatch):
+    rig = Flight(monkeypatch)
+    rig.go_t = 0.0
+    monkeypatch.setattr(campaign_fly, "write_gains", lambda *a, **k: False)
+    said = []
+
+    class T:
+        event = staticmethod(said.append)
+        line = staticmethod(lambda s: None)
+        close = staticmethod(lambda: None)
+    campaign_fly.watch("http://h", term=T(), post_takeoff_gains="c3")
+    assert any(s.startswith("POST-TAKEOFF GAINS FAILED (c3)") for s in said)

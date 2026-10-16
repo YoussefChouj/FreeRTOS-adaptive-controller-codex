@@ -359,3 +359,42 @@ def test_heartbeat_stops_when_consecutive_commands_time_out():
     assert client.heartbeat() is False
     assert len(svc.calls) == calls_before
 
+
+
+def _hbs(svc):
+    return [c for c in svc.calls if (c[0], c[1]) == (CMD_PRIM, PrimIdx.HEARTBEAT)]
+
+
+def test_heartbeat_late_results_do_not_lock_out():
+    """A loaded link answers heartbeats ~0.7 s late: several stay pending, but the ground keeps sending at 5 Hz."""
+    svc = FakeService(mode="none")
+    client, clock = _client(svc)
+    answered = 0
+    for _ in range(30):                         # 6 s at 0.2 s
+        assert client.heartbeat() is True
+        while answered < svc._txid - 4:         # answer each heartbeat 4 periods (~0.8 s) late
+            answered += 1
+            svc.results[answered] = {"transaction_id": answered, "status": "applied"}
+        clock.sleep(0.21)                       # just over one period, clear of float rounding
+    assert len(_hbs(svc)) == 30
+
+
+def test_heartbeat_probes_after_lockout_and_resumes_when_link_returns():
+    svc = FakeService(mode="none")
+    client, clock = _client(svc)
+    assert client.takeoff() is False
+    assert client.land() is False
+    before = len(_hbs(svc))
+    clock.sleep(0.5)
+    assert client.heartbeat() is False          # B13: no frame right after the lockout
+    assert len(_hbs(svc)) == before
+    for _ in range(10):                         # 2 s locked: about one probe per second, not 5 Hz
+        clock.sleep(0.2)
+        assert client.heartbeat() is False
+    assert len(_hbs(svc)) - before == 2
+    # the link comes back: the probe's result clears the lockout
+    probe_txid = svc._txid
+    svc.results[probe_txid] = {"transaction_id": probe_txid, "status": "applied"}
+    clock.sleep(0.2)
+    assert client.heartbeat() is True
+    assert client._consecutive_timeouts == 0
