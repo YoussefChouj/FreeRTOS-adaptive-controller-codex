@@ -864,6 +864,35 @@ def dry_run(campaign, pack=None, rate=None, gains=None, no_gains=False,
         print("Scenario plan: empty")
 
 
+TXN_DONE = ("applied", "verified")
+TXN_FAILED = ("rejected", "timed_out", "error")
+ACK_GRACE_S = 3.0  # ACK -> APPLIED gap; a trajectory BEGIN applied 1.55 s after its ACK (2026-10-15, campaign_live TRAJ_ACK_TIMEOUT_S)
+
+
+def wait_txn(base, txid, timeout_s=2.0):
+    """Final lifecycle of one /commands transaction from the 8081 action journal: 'applied', 'rejected', ... .
+
+    The firmware answers ACK, then APPLIED or REJECTED (TASK/send_data.c). 'applied'/'verified' and the failures
+    return at once; an action still 'acknowledged' ACK_GRACE_S after its ACK (or at the deadline) returns 'acknowledged' (an 8081 started before
+    the journal kept ACKed actions open never shows the final outcome); nothing at all returns 'timeout'."""
+    deadline = _clock() + timeout_s
+    seen = "timeout"
+    while True:
+        try:
+            _, res = call(base, "/api/actions", timeout=timeout_s)
+            lc = next((a.get("lifecycle", "") for a in res.get("actions", []) if a.get("transaction_id") == txid), "")
+        except Exception:
+            lc = ""
+        if lc in TXN_DONE or lc in TXN_FAILED:
+            return lc
+        if lc == "acknowledged" and seen != lc:
+            seen = lc
+            deadline = min(deadline, _clock() + ACK_GRACE_S)
+        if _clock() >= deadline:
+            return seen
+        _sleep(0.02)
+
+
 def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeout_s=2.0, force_livetune=False, livetune_path=None, in_flight=False):
     """Stop-and-wait gain writer enforcing disarmed gate, rationale print, y/N consent, and confirmation table.
 
@@ -923,6 +952,7 @@ def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeou
     total_ack = 0
     all_ok = True
     txids = []
+    ack_only = []  # ACKed, final APPLIED not seen (8081 started before the journal kept ACKed actions open)
 
     for idx, new_val in sorted(gains.items()):
         axis = PID_DEFAULTS.get(idx, (f"idx_{idx}", 0.0))[0]
@@ -944,33 +974,17 @@ def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeou
                 _sleep(0.05)
                 continue
             txid = res.get("transaction_id")
-            if txid is None:
+            outcome = "applied" if txid is None else wait_txn(base, txid, timeout_s)
+            if outcome in TXN_DONE or outcome == "acknowledged":
                 acked = True
                 ms = round((_clock() - t0) * 1000)
+                if txid is not None:
+                    current_txid = txid
+                    if outcome == "acknowledged":
+                        ack_only.append(idx)
                 break
-            current_txid = txid
-
-            deadline = _clock() + timeout_s
-            while _clock() < deadline:
-                try:
-                    _, act_res = call(base, "/api/actions", timeout=timeout_s)
-                    for a in act_res.get("actions", []):
-                        if a.get("transaction_id") == txid:
-                            lc = a.get("lifecycle", "")
-                            if lc in ("applied", "acknowledged", "verified"):
-                                acked = True
-                                ms = round((_clock() - t0) * 1000)
-                                break
-                            if lc in ("rejected", "timed_out", "error"):
-                                break
-                    if acked:
-                        break
-                except Exception:
-                    pass
-                _sleep(0.02)
-            if acked:
-                break
-
+            if outcome == "rejected":
+                break  # the firmware refused this value: a retry sends the same value again
         if acked:
             total_ack += 1
             if current_txid is not None:
@@ -988,27 +1002,15 @@ def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeou
     for axis, idx, old_v, new_v, ack_str, ms_val, ret_val in rows:
         print(f"| {axis:<14} | {idx:<4} | {old_v:<8.4g} | {new_v:<8.4g} | {ack_str:<4} | {ms_val:<4} | {ret_val:<7} |")
 
-    journal_ok = True
-    if all_ok and txids:
-        try:
-            _, bundle = call(base, "/api/diagnostics/bundle", timeout=5)
-            cmd_results = (bundle.get("commands") or {}).get("results") or []
-            res_by_tid = {r.get("transaction_id"): r.get("status") for r in cmd_results if r.get("transaction_id") is not None}
-            unapplied = [t for t in txids if res_by_tid.get(t) != "applied"]
-            if unapplied:
-                journal_ok = False
-        except Exception:
-            pass
-
-    ver_suffix = " (applied & verified in 8081 journal)" if (all_ok and journal_ok) else ""
+    journal_ok = not ack_only
+    if all_ok and ack_only:
+        print(f"note: idx {ack_only} ACKed but APPLIED not seen in the 8081 journal: restart 8081 on this branch", flush=True)
+    ver_suffix = " (applied, 8081 journal)" if (all_ok and journal_ok) else ""
     print(f"\nTotal time: {total_s:.2f} s ({total_ack}/{len(gains)} ACK{ver_suffix})", flush=True)
 
-    events.log("gain_write", total=len(gains), ack=total_ack, total_s=round(total_s, 2), ok=(all_ok and journal_ok), in_flight=in_flight)
+    events.log("gain_write", total=len(gains), ack=total_ack, total_s=round(total_s, 2), ok=all_ok, applied=all_ok and journal_ok, in_flight=in_flight)
     if not all_ok:
         print(f"Gain write ABORTED: write failed for idx {rows[-1][1]}.", flush=True)
-        return False
-    if not journal_ok:
-        print("Gain write ABORTED: some transactions not confirmed as 'applied' in 8081 journal.", flush=True)
         return False
     return True
 
@@ -1050,19 +1052,8 @@ class HttpWfbClient:
             if code not in (200, 202):
                 return False
             txid = res.get("transaction_id")
-            if txid is None:
-                return True
-            deadline = _clock() + self.timeout_s
-            while _clock() < deadline:
-                _, act_res = call(self.base, "/api/actions", timeout=self.timeout_s)
-                for a in act_res.get("actions", []):
-                    if a.get("transaction_id") == txid:
-                        if a.get("lifecycle") in ("applied", "acknowledged", "verified"):
-                            return True
-                        if a.get("lifecycle") in ("rejected", "timed_out", "error"):
-                            return False
-                _sleep(0.02)
-            return False
+            # a trajectory APPEND/COMMIT can be REJECTED after its ACK: wait for the final outcome
+            return txid is None or wait_txn(self.base, txid, self.timeout_s) in TXN_DONE + ("acknowledged",)
         except Exception:
             return False
 

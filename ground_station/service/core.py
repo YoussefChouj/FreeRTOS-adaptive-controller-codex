@@ -1103,8 +1103,12 @@ class GroundStationService:
 
         # Find the matching open action (reverse to get the latest)
         for action in reversed(self._action_journal):
-            if action.transaction_id == result.transaction_id and \
-                    action.lifecycle == CommandLifecycle.SUBMITTED:
+            # The firmware sends ACK, then APPLIED or REJECTED for the same txid (TASK/send_data.c
+            # Process_GroundStation_Command): an acknowledged action stays open for that final outcome.
+            if action.transaction_id == result.transaction_id and (
+                    action.lifecycle == CommandLifecycle.SUBMITTED or
+                    (action.lifecycle == CommandLifecycle.ACKNOWLEDGED and
+                     lifecycle != CommandLifecycle.ACKNOWLEDGED)):
                 # Replace in-place by building a new CommandAction with resolved fields.
                 resolved = CommandAction(
                     transaction_id=action.transaction_id,

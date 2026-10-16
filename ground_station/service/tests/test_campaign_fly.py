@@ -715,33 +715,42 @@ def test_write_gains_livetune_preset_and_force(tmp_path, monkeypatch, capsys):
     assert "6/6 ACK" in out_force
 
 
-def test_write_gains_journal_verification(monkeypatch, capsys):
+def test_write_gains_waits_for_the_final_outcome(monkeypatch, capsys):
+    """ACK then APPLIED passes; REJECTED fails at once with no retry; ACK-only passes with a restart-8081 note.
+    No /api/diagnostics/bundle: it keeps only the last 10 results, fewer than one 12-gain write produces."""
     monkeypatch.setattr(campaign_fly, "_vitals", lambda base: {"arm": {"state": "disarmed"}})
-    txn_status = "applied"
+    t = [0.0]
+    monkeypatch.setattr(campaign_fly, "_clock", lambda: t[0])
+    monkeypatch.setattr(campaign_fly, "_sleep", lambda s: t.__setitem__(0, t[0] + s))
+    lifecycles, sent, routes = [], [], []
 
     def fake_call(base, route, body=None, timeout=10):
+        routes.append(route)
         if route == "/commands":
-            return 200, {"ok": True, "transaction_id": 42}
+            sent.append(body["index"])
+            return 202, {"transaction_id": 42}
         if route == "/api/actions":
-            return 200, {"actions": [{"transaction_id": 42, "lifecycle": "applied"}]}
-        if route == "/api/diagnostics/bundle":
-            return 200, {"commands": {"results": [{"transaction_id": 42, "status": txn_status}]}}
+            lc = lifecycles.pop(0) if len(lifecycles) > 1 else lifecycles[0]
+            return 200, {"actions": [{"transaction_id": 42, "lifecycle": lc}]}
         return 200, {}
 
     monkeypatch.setattr(campaign_fly, "call", fake_call)
 
-    # 1. Applied in journal -> success and confirmation message
-    ok = campaign_fly.write_gains("http://h", {0: 3.5}, yes=True)
-    assert ok is True
-    out = capsys.readouterr().out
-    assert "1/1 ACK (applied & verified in 8081 journal)" in out
+    lifecycles[:] = ["submitted", "acknowledged", "applied"]
+    assert campaign_fly.write_gains("http://h", {0: 3.5}, yes=True) is True
+    assert "1/1 ACK (applied, 8081 journal)" in capsys.readouterr().out
+    assert "/api/diagnostics/bundle" not in routes
 
-    # 2. Not applied in journal -> aborts
-    txn_status = "timed_out"
-    ok_fail = campaign_fly.write_gains("http://h", {0: 3.5}, yes=True)
-    assert ok_fail is False
-    out_fail = capsys.readouterr().out
-    assert "some transactions not confirmed as 'applied' in 8081 journal" in out_fail
+    sent.clear()
+    lifecycles[:] = ["acknowledged", "rejected"]
+    assert campaign_fly.write_gains("http://h", {0: 3.5}, yes=True) is False
+    assert sent == [0]  # a rejected value is not re-sent
+    assert "Gain write ABORTED" in capsys.readouterr().out
+
+    lifecycles[:] = ["acknowledged"]
+    assert campaign_fly.write_gains("http://h", {0: 3.5}, yes=True) is True
+    out = capsys.readouterr().out
+    assert "1/1 ACK" in out and "restart 8081" in out
 
 
 def test_check_and_persist_livetune(tmp_path):
@@ -863,10 +872,7 @@ def test_write_gains_in_flight(capsys, monkeypatch):
     assert campaign_fly.write_gains("http://h", {24: 0.3214}, in_flight=True) is True
     out = capsys.readouterr().out
     assert "[In-flight]" in out
-    assert "1/1 ACK (applied & verified in 8081 journal)" in out
-
-
-
+    assert "1/1 ACK (applied, 8081 journal)" in out
 
 
 def _fake_service(monkeypatch, stale, safe):
