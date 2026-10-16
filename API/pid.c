@@ -24,11 +24,11 @@ CtrlerTypeDef Ctrler={
        Ki 0.02 -> wn 0.32 Hz, zeta 0.75. */
     PID_ROW(3.0,  0.02,   8,    200,  200,   26,    10,    1300,    10    ), /* pitchPID     pitch angle */ /* F1x: Ui 26 / SumE 1300 / EMin 10 so the lean is carried (WP-10) */
     PID_ROW(3.0,  0.02,   8,    200,  200,   26,    10,    1300,    10    ), /* rollPID      roll angle */  /* F1x: Ui 26 / SumE 1300 / EMin 10 so the lean is carried (WP-10) */
-    PID_ROW(6.0,  0.04,  0,    160,  160,   2,     10,    50,      2     ), /* yawPID       yaw angle */
+    PID_ROW(2.5,  0.04,  0,    160,  160,   2,     10,    50,      2     ), /* yawPID       yaw angle */
 
     PID_ROW(5,    0.01,   10,   300,  300,   160,   100,   16000,   50    ), /* gyroxPID     roll rate  (inner) */ /* F1x */
     PID_ROW(5,    0.01,   10,   300,  300,   160,   100,   16000,   50    ), /* gyroyPID     pitch rate (inner) */ /* F1x */
-    PID_ROW(8.0,  0.005, 0.02, 650,  650,   500,   10,    100000,  1000  ), /* gyrozPID     yaw rate   (inner) */
+    PID_ROW(8.0,  0.02,  0.02, 650,  650,   500,   10,    25000,   1000  ), /* gyrozPID     yaw rate   (inner) */
 
     PID_ROW(0.7,  0.005, 0.1,  1.0,  0.9,   0.3,   0.3,   30,      0.3   ), /* Z_posPID     altitude */
     PID_ROW(400,  0.435, 0,    300,  300,   100,   60,    250,     10    ), /* Z_ratePID    climb rate (inner) */
@@ -60,6 +60,9 @@ typedef char pid_table_rows_match_ctrler[(sizeof(CtrlerTypeDef) == PID_TABLE_ROW
  *   flight_1784538359 Kp 3.0->2.6 for phase margin, Kd 8.0->9.5 for damping (PM=30 deg fix).
  *   legacy: skywalker 4, letian40A 3 (pitch/roll Kp per frame).
  * yaw angle
+ *   2026-10-16 Kp 6->2.5 (yaw overhaul, PROPOSED, not flown): the rate loop crosses near 8 x 1.13 deg/s^2 per U
+ *              = ~9 rad/s (sim/sil/plant.py yaw effectiveness), so Kp 6 left a 1.5x outer/inner bandwidth ratio;
+ *              2.5 gives ~3.6x. Computed, check with a yaw step.
  *   2026-09-29 Kp 6.5->6.0, Kd 1.5->0: restored to FreeRTOS_original; UMax/UpMax 160 kept.
  *   flight_1784538359 Kp 6.0->6.5 for tracking, Kd 0->1.5 to damp a 0.4 Hz oscillation.
  *   legacy: Kp 3->4.
@@ -68,6 +71,11 @@ typedef char pid_table_rows_match_ctrler[(sizeof(CtrlerTypeDef) == PID_TABLE_ROW
  *              of ~19.7 dps vs ~14.7 dps at Kd 10 (flight15).
  *   2026-09-29 Kd 10->8: flight15 roll rate err rms 10.8 vs pitch 5.4 dps, U std 105 vs 69.
  * gyroz (yaw rate)
+ *   2026-10-16 Ki 0.005->0.02, SumEMax 100000->25000 (yaw overhaul, PROPOSED, not flown): the ~110 U hover trim
+ *              (flight16) took ~11 s to build at a 10 deg/s error, ~2.75 s now; Ki*SumEMax = UiMax 500 as before.
+ *              PI zero Ki/Kp = 0.5 rad/s, well below the ~9 rad/s crossover. The integrator now holds while the
+ *              mixer cuts yaw (StabilizerTask.c Att_Compute, g_yaw_desat_k). Note: the 2026-09-29 line below says
+ *              Ki 0.005->0.001, but the row stayed at 0.005 (the flown value) until this change.
  *   2026-09-29 Kp 4->8, Ki 0.005->0.001, Kd 2.0->0.02: restored to FreeRTOS_original; limits kept,
  *              so Ui cap = Ki*SumEMax = 100 vs flight16 hover trim U~110 (Ui~106 at Ki 0.005).
  *   2026-09-27 EMin 20->1000: gate |E|<EMin blocked all integration at E~110 (flight7).
@@ -142,10 +150,10 @@ const float pid_cmd_max[PID_CMD_AXES][3] = {
 /*              Kp    Ki    Kd       axis  loop       default Kp / Ki / Kd */
     PID_CMD_ROW(200,  200,  200), /* 0     pitchPID   3 / 0.02 / 8 */
     PID_CMD_ROW(200,  200,  200), /* 1     rollPID    3 / 0.02 / 8 */
-    PID_CMD_ROW(200,  200,  200), /* 2     yawPID     6 / 0.04 / 0 */
+    PID_CMD_ROW(200,  200,  200), /* 2     yawPID     2.5 / 0.04 / 0 */
     PID_CMD_ROW(200,  200,  200), /* 3     gyroxPID   5 / 0.01 / 10 */
     PID_CMD_ROW(200,  200,  200), /* 4     gyroyPID   5 / 0.01 / 10 */
-    PID_CMD_ROW(200,  200,  200), /* 5     gyrozPID   8 / 0.005 / 0.02 */
+    PID_CMD_ROW(200,  200,  200), /* 5     gyrozPID   8 / 0.02 / 0.02 */
     PID_CMD_ROW(800,  200,  200), /* 6     Z_ratePID  400 / 0.435 / 0 */
     PID_CMD_ROW(200,  200,  200), /* 7     Z_posPID   0.7 / 0.005 / 0.1 */
     PID_CMD_ROW(200,  200,  200), /* 8     locxPID    0.8 / 0.0013 / 4 */

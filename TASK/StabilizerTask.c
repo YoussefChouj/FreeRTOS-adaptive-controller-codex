@@ -135,6 +135,10 @@ volatile uint8_t  dbg_motor_manual = 0U;
 volatile uint16_t dbg_motor_ccr[4] = {2000U, 2000U, 2000U, 2000U};
 /* Yaw mixer sign: -1 = 09-10 signs (M3/M4 get +u_gyroz), +1 = flipped. Flight4 (+1) spun 3.5x faster. */
 volatile float g_yaw_mix_dir = -1.0f;
+/* Yaw-first mixer desaturation (Mix_Compute, API/controller.c Mix_YawShare): 1 = on (default), 0 = off.
+ * g_yaw_desat_k is the share of u_gyroz applied this tick (1 = no yaw cut), for logging. */
+volatile uint8_t g_yaw_desat_on = 1U;
+volatile float g_yaw_desat_k = 1.0f;
 /* 0: the OF EKF ignores raw flow of1 (single of2 channel, as before 41c9dea). 1 = 10-07 flown behaviour.
  * 10-07 load flights: swing-band velocity FB tracked body rate at 85-103 cm/rad, the of1 slope, ~3x the
  * physical g/w^2 (docs/flights/2026-10-07-load-swing-analysis.md, PROPOSED cause of the growing MRAC swing). */
@@ -2135,7 +2139,9 @@ static void Att_Compute(uint8_t airborne)
 
 	ComputePID_Gated(&Ctrler.gyroxPID, airborne);
 	ComputePID_Gated(&Ctrler.gyroyPID, airborne);
-	ComputePID(&Ctrler.gyrozPID);
+	/* Yaw overhaul 2026-10-16: while the mixer cut yaw last tick (g_yaw_desat_k < 1) the yaw-rate integrator holds,
+	 * so it does not wind up against authority the motors cannot give. */
+	ComputePID_GatedHold(&Ctrler.gyrozPID, 1U, (uint8_t)(g_yaw_desat_k < 1.0f));
 }
 
 /* Controller layer, throttle window, quad-X mixer into mymotor (CCR; Set_PWM_Motors clamps later). */
@@ -2166,6 +2172,12 @@ static void Mix_Compute(void)
 		}
 		Throttle_out = Constrain_Float(Throttle_out, pwm_lo, pwm_hi);
 	}
+
+	/* Yaw-first desaturation (yaw overhaul 2026-10-16): scale only the yaw input so no motor leaves [2000, 4000]
+	 * because of yaw; roll and pitch keep their authority. u_gyroz itself is scaled, so the MRAC V2 deficit and
+	 * telemetry see the yaw that was applied. g_yaw_desat_on 0 = the mixer before (per-motor clamp only). */
+	g_yaw_desat_k = g_yaw_desat_on ? Mix_YawShare(Throttle_out, u_gyroy, u_gyrox, g_yaw_mix_dir*u_gyroz) : 1.0f;
+	u_gyroz *= g_yaw_desat_k;
 
 	// CONSTRAINT: the motor signs live in one place, the MIX_ROW table in API/controller.c (also used by the
 	// MRAC V2 saturation deficit). Keep it in sync with the physical motor map and pwm.h channel mapping.

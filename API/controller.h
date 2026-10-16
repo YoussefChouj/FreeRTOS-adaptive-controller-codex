@@ -53,5 +53,11 @@ float Mix_Column(const float v[MIX_MOTORS], uint8_t input);
 /* MRAC V2 saturation deficit in mixer units, def[ctrl_axis_e]: the part of each motor command outside
  * [2000, 4000] projected back per axis, mean over the motors (yaw scaled by yaw_dir = g_yaw_mix_dir). */
 void  Mix_SatDeficit(float thr, float u_pitch, float u_roll, float u_yaw, float yaw_dir, float def[4]);
+/* Yaw-first desaturation (yaw overhaul 2026-10-16): the share k in [0, 1] of u_yaw the motors can take. k is the
+ * largest value for which no motor is pushed further outside [2000, 4000] by k*u_yaw than by throttle, pitch and
+ * roll alone; roll, pitch and throttle are never changed. Yaw is the weakest axis, so it gives way first (PX4 style)
+ * instead of the per-motor clamp in Set_PWM_Motors cutting all axes together. 1 when nothing saturates, 0 for a
+ * non-finite input. */
+float Mix_YawShare(float thr, float u_pitch, float u_roll, float u_yaw);
 
 #endif /* CONTROLLER_H */

@@ -11,6 +11,7 @@
  */
 #include "controller.h"
 #include "mrac.h"
+#include <math.h>
 
 volatile uint8_t g_ctrl_select = CTRL_MRAC;     /* == pre-interface behaviour: PID + gated MRAC injection */
 volatile uint8_t g_ctrl_select_req = CTRL_MRAC;
@@ -81,6 +82,26 @@ void Mix_SatDeficit(float thr, float u_pitch, float u_roll, float u_yaw, float y
     def[CTRL_AXIS_PITCH] = -MIX_PER_MOTOR * Mix_Column(d, MIX_PITCH);   /* u_gyroy = -pitch */
     def[CTRL_AXIS_YAW]   = MIX_PER_MOTOR * yaw_dir * Mix_Column(d, MIX_YAW);
     def[CTRL_AXIS_Z]     = MIX_PER_MOTOR * Mix_Column(d, MIX_THR);
+}
+
+float Mix_YawShare(float thr, float u_pitch, float u_roll, float u_yaw)
+{
+    float k = 1.0f;
+    float base, s, room;
+    uint8_t i;
+
+    if (!(thr - thr == 0.0f) || !(u_pitch - u_pitch == 0.0f) || !(u_roll - u_roll == 0.0f) || !(u_yaw - u_yaw == 0.0f))
+        return 0.0f;
+    for (i = 0U; i < MIX_MOTORS; i++) {
+        base = Mix_Motor(i, thr, u_pitch, u_roll, 0.0f);
+        s = g_mix[i][MIX_YAW] * u_yaw;                          /* what yaw adds to this motor */
+        if (s > 0.0f) room = MIX_PWM_MAX - base;
+        else if (s < 0.0f) room = base - MIX_PWM_MIN;
+        else continue;
+        if (room < 0.0f) room = 0.0f;                           /* already outside without yaw: yaw adds nothing */
+        if (room < k * fabsf(s)) k = room / fabsf(s);
+    }
+    return k;
 }
 
 static void none_reset(void) { }

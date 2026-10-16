@@ -4,6 +4,7 @@
  * TASK/StabilizerTask.c (Compute_Motor, wp/36) and the MRAC V2 saturation deficit in API/controller.c (wp/36).
  * The reference copies below are those expressions, verbatim. Every table cell is +-1, so the results must be
  * bit-identical for any input, including non-unit g_yaw_mix_dir, huge values and the sign of zero.
+ * Mix_YawShare (yaw-first desaturation, 2026-10-16) is checked against its definition on random inputs.
  *
  *   gcc -std=c99 -Wall -Wextra -Itests/firmware_host/stubs -IAPI API/tests/test_mixer.c API/controller.c -lm
  *       (or: python tools/host_tests.py mixer)
@@ -96,6 +97,45 @@ static float rnd(float lo, float hi)
     return lo + (hi - lo) * (float)(g_lcg >> 8) / 16777216.0f;
 }
 
+/* Out-of-range amount of one motor command, CCR (0 inside [2000, 4000]). */
+static float over(float m)
+{
+    return m > 4000.0f ? m - 4000.0f : (m < 2000.0f ? 2000.0f - m : 0.0f);
+}
+
+/* Mix_YawShare (yaw overhaul 2026-10-16): k in [0, 1]; with k*u_yaw no motor is further out of range than without
+ * yaw; k is the largest such share (some motor sits on its limit when k < 1); 1 when the full yaw fits. */
+static void check_yaw_share(float thr, float up, float ur, float uw, long step)
+{
+    float k = Mix_YawShare(thr, up, ur, uw);
+    float tight = 1e30f, m0, m1, m;
+    int i, fits = 1;
+    g_checks++;
+    if (!(k >= 0.0f && k <= 1.0f)) {
+        g_fail++;
+        if (g_fail <= 10) printf("FAIL Mix_YawShare out of [0, 1]: %g (step %ld)\n", k, step);
+        return;
+    }
+    for (i = 0; i < 4; i++) {
+        m0 = Mix_Motor((uint8_t)i, thr, up, ur, 0.0f);
+        m1 = Mix_Motor((uint8_t)i, thr, up, ur, uw);
+        m  = Mix_Motor((uint8_t)i, thr, up, ur, k * uw);
+        if (over(m1) > over(m0)) fits = 0;
+        g_checks++;
+        if (over(m) > over(m0) + 1e-3f * (1.0f + fabsf(m0))) {
+            g_fail++;
+            if (g_fail <= 10) printf("FAIL yaw pushes motor %d out: %g vs %g (step %ld)\n", i, m, m0, step);
+        }
+        if (g_mix[i][MIX_YAW] * uw > 0.0f) tight = fminf(tight, 4000.0f - m);
+        if (g_mix[i][MIX_YAW] * uw < 0.0f) tight = fminf(tight, m - 2000.0f);
+    }
+    g_checks++;
+    if (fits ? (k != 1.0f) : (k < 1.0f && fabsf(tight) > 1e-3f * (1.0f + fabsf(thr)) && k > 0.0f)) {
+        g_fail++;
+        if (g_fail <= 10) printf("FAIL Mix_YawShare not the largest share: k %g fits %d slack %g (step %ld)\n", k, fits, tight, step);
+    }
+}
+
 int main(void)
 {
     static const float dirs[] = { -1.0f, 1.0f, 0.37f, -2.5f };
@@ -127,6 +167,16 @@ int main(void)
             check_same(def[i] / kk[i], refd[i], "Mix_SatDeficit / k == wp/36 mrac_mixer_deficit", k);
         }
     }
+    for (k = 0; k < 400000; k++) {
+        check_yaw_share(rnd(1800.0f, 4200.0f), rnd(-900.0f, 900.0f), rnd(-900.0f, 900.0f), rnd(-1500.0f, 1500.0f), k);
+    }
+    check_yaw_share(3050.0f, 0.0f, 0.0f, 0.0f, -1);
+    g_checks++;
+    if (Mix_YawShare(3050.0f, 0.0f, 0.0f, 500.0f) != 1.0f) { g_fail++; printf("FAIL hover yaw 500 must fit\n"); }
+    g_checks++;   /* hover 3050 + roll 300 + pitch 300: the worst motor has 4000 - 3650 = 350 left for yaw 650 */
+    if (fabsf(Mix_YawShare(3050.0f, 300.0f, 300.0f, -650.0f) - 350.0f / 650.0f) > 1e-6f) { g_fail++; printf("FAIL hover share\n"); }
+    g_checks++;
+    if (Mix_YawShare(3050.0f, 0.0f, 0.0f, NAN) != 0.0f || Mix_YawShare(NAN, 0.0f, 0.0f, 10.0f) != 0.0f) { g_fail++; printf("FAIL NaN share\n"); }
     printf("%d checks, %d failure(s)\n", g_checks, g_fail);
     return g_fail ? 1 : 0;
 }

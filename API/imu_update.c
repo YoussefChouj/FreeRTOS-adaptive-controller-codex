@@ -6,7 +6,7 @@
  * @purpose    Mahony attitude filter: accelerometer-vs-estimated gravity error drives a PI correction of the gyro
  *             rates, the corrected rates propagate the quaternion, the quaternion gives roll/pitch/yaw. A boot window
  *             boosts the gains (fast convergence) and an innovation low-pass latches "estimator ready".
- * @inputs     Acc_*_Real (mg), Gyro_*_Real (rad/s, corrected in place), sensor.sensor_ok, dt (s, must match the
+ * @inputs     Acc_*_Real (mg), Gyro_*_Real (rad/s, read only: corrected in a private copy), sensor.sensor_ok, dt (s, must match the
  *             task period: the PI integral and the quaternion step are both dt-scaled).
  * @outputs    imu->rol/pit/yaw (deg), g_estimator_ready, g_imu_settle_metric, Lin_Acc_*_body (mg),
  *             Gravity_Body_* (1 G = 1.0).
@@ -73,6 +73,8 @@ static float q3 = 0.0f;
 /* Rotation-matrix entries of the last update: R11, R21 give yaw; (vecxZ, vecyZ, veczZ) = R^T * [0,0,1] is the
    estimated body-frame gravity direction, which the next update compares with the accelerometer. */
 static float R11, R21;
+/* This update's gyro rates (rad/s): the sample, then the PI correction. Private, see s_accel_correction. */
+static float s_gyro[VEC_XYZ];
 static float vecxZ, vecyZ, veczZ;
 
 
@@ -145,10 +147,12 @@ static void s_accel_correction(float kp_eff, float ki_eff, float dt)
 		eyInt += ki_eff * ey * dt ;
 		ezInt += ki_eff * ez * dt ;
 
-		/* PI-corrected gyro rates */
- 		Gyro_X_Real += kp_eff * ex + exInt;
- 		Gyro_Y_Real += kp_eff * ey + eyInt;
- 		Gyro_Z_Real += kp_eff * ez + ezInt;
+		/* PI-corrected gyro rates, into the filter's own copy: Gyro_*_Real stays the sensor sample, so the rate
+		 * loops, MRAC and the 9-state EKF read one signal whatever order the two 1 kHz tasks ran in (yaw overhaul,
+		 * 2026-10-16; before, they saw the corrected or the raw rate depending on the scheduler). */
+ 		s_gyro[X] += kp_eff * ex + exInt;
+ 		s_gyro[Y] += kp_eff * ey + eyInt;
+ 		s_gyro[Z] += kp_eff * ez + ezInt;
 
 		/* A2: track low-passed innovation energy and latch "settled" once it
 		 * falls below threshold after the boost window has elapsed. */
@@ -176,9 +180,9 @@ static void s_propagate(float half_T)
 	float delta_theta[3];   /* half rotation increment, x y z (rad) */
 	float delta_theta_s;    /* |delta_theta|^2 */
 
-	delta_theta[0] = Gyro_X_Real*half_T;
-	delta_theta[1] = Gyro_Y_Real*half_T;
-	delta_theta[2] = Gyro_Z_Real*half_T;
+	delta_theta[0] = s_gyro[X]*half_T;
+	delta_theta[1] = s_gyro[Y]*half_T;
+	delta_theta[2] = s_gyro[Z]*half_T;
 	delta_theta_s = delta_theta[0]*delta_theta[0] + delta_theta[1]*delta_theta[1] + delta_theta[2]*delta_theta[2];
 
 	q0 = q0Last*(1-delta_theta_s) - q1Last * delta_theta[0] - q2Last * delta_theta[1] - q3Last * delta_theta[2];
@@ -240,6 +244,9 @@ void IMU_Update_Mahony(_imu_st *imu,float dt)
 {
 	float kp_eff, ki_eff;
 
+	s_gyro[X] = Gyro_X_Real;
+	s_gyro[Y] = Gyro_Y_Real;
+	s_gyro[Z] = Gyro_Z_Real;
 	s_gain_schedule(dt, &kp_eff, &ki_eff);
 	s_accel_correction(kp_eff, ki_eff, dt);
 
