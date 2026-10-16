@@ -248,6 +248,109 @@ class SizeGate:
                 "size_dz_med_cm": round(float(np.median(dz)) * 100, 1) if len(dz) else None}
 
 
+def _wrap_deg(a):
+    return (np.asarray(a, float) + 180.0) % 360.0 - 180.0
+
+
+class MarkerCheck:
+    """The drone's top ArUco marker (R4: id1, 0.077 m) in the coral tracker's ROI: a second, independent detector.
+    It re-acquires the coral tracker after a miss, reports how far the marker is from the coral fix, and gives the
+    drone heading in the floor frame (the cast TL->TR edge; the cast is a homothety from the camera centre, so the
+    heading does not need the height). R4 also has a STATIC id1 in the scenery: an id1 farther than near_px from a
+    coral fix votes for its spot, and a spot with n_static votes (within tol_px) is ignored from then on.
+    With the telemetry yaw (imu_data.yaw, deg), off = wrap(yaw - heading) is collected on the pad and in the air; the
+    pad median is the mounting + floor rotation offset and |off - pad| in the air a yaw drift monitor. Offline R4
+    (computed, sparse old scans): in-air MAD 0.8-3.7 deg per flight, pad offset ~0 +- 6 deg. Thresholds PROPOSED."""
+
+    def __init__(self, cam: dict, mid: int = 1, near_px: float = 50.0, n_static: int = 10, tol_px: float = 5.0,
+                 dict_name: str = vt.ARUCO_DICT):
+        self.K, self.dist = np.asarray(cam["K"], float), np.asarray(cam["dist"], float)
+        self.R, self.t = np.asarray(cam["R"], float), np.asarray(cam["t"], float)
+        self.mid, self.near, self.n_static, self.tol = mid, float(near_px), n_static, float(tol_px)
+        self.det = vt.aruco_detector(dict_name)
+        self.votes: list[list] = []              # [u, v, count] of far same-id detections
+        self.static: list[np.ndarray] = []
+        self.uv: np.ndarray | None = None
+        self.heading: float | None = None        # deg, floor frame
+        self.n = self.n_seen = self.n_reacq = 0
+        self.sep, self.off_pad, self.off_air = [], [], []
+
+    def _is_static(self, uv) -> bool:
+        return any(np.linalg.norm(uv - s) <= self.tol for s in self.static)
+
+    def _vote(self, uv) -> None:
+        for v in self.votes:
+            if np.hypot(uv[0] - v[0], uv[1] - v[1]) <= self.tol:
+                v[2] += 1
+                if v[2] == self.n_static:
+                    self.static.append(np.array(v[:2]))
+                    print(f"marker id{self.mid}: static spot at ({v[0]:.0f}, {v[1]:.0f}) px ignored", flush=True)
+                return
+        self.votes.append([float(uv[0]), float(uv[1]), 1])
+
+    def step(self, frame_bgr, centre, r: float, coral_uv=None, yaw_deg: float | None = None,
+             ground: bool | None = None) -> np.ndarray | None:
+        """Search the square of half-size r around centre; returns the marker centre (px) or None."""
+        cv2 = vt._cv2()
+        self.n += 1
+        self.uv = self.heading = None
+        H, W = frame_bgr.shape[:2]
+        u0, v0 = int(max(0, centre[0] - r)), int(max(0, centre[1] - r))
+        u1, v1 = int(min(W, centre[0] + r)), int(min(H, centre[1] + r))
+        if u1 - u0 < 8 or v1 - v0 < 8:
+            return None
+        corners, ids, _ = self.det.detectMarkers(cv2.cvtColor(frame_bgr[v0:v1, u0:u1], cv2.COLOR_BGR2GRAY))
+        if ids is None:
+            return None
+        best, best_d = None, float("inf")
+        for c, i in zip(corners, ids.ravel()):
+            if int(i) != self.mid:
+                continue
+            c = c.reshape(4, 2) + (u0, v0)
+            uv = c.mean(axis=0)
+            if self._is_static(uv):
+                continue
+            if coral_uv is not None and np.linalg.norm(uv - coral_uv) > self.near:
+                self._vote(uv)
+                continue
+            d = np.linalg.norm(uv - np.asarray(centre, float))
+            if d < best_d:
+                best, best_d = c, d
+        if best is None:
+            return None
+        self.n_seen += 1
+        self.uv = best.mean(axis=0)
+        p = vt.pixel_to_plane(best, self.K, self.dist, self.R, self.t, 0.0)
+        self.heading = float(np.degrees(np.arctan2(p[1, 1] - p[0, 1], p[1, 0] - p[0, 0])))
+        if coral_uv is not None:
+            self.sep.append(float(np.linalg.norm(self.uv - coral_uv)))
+        else:
+            self.n_reacq += 1
+        if yaw_deg is not None and np.isfinite(yaw_deg) and ground is not None:
+            (self.off_pad if ground else self.off_air).append(float(_wrap_deg(yaw_deg - self.heading)))
+        return self.uv.copy()
+
+    @property
+    def pad_offset(self) -> float | None:
+        """Circular median-ish of the pad offsets (deg): median of the offsets unwrapped about the first."""
+        if not self.off_pad:
+            return None
+        o = np.asarray(self.off_pad)
+        return float(_wrap_deg(o[0] + np.median(_wrap_deg(o - o[0]))))
+
+    def summary(self) -> dict:
+        sep = np.asarray(self.sep)
+        out = {"marker_n": self.n, "marker_seen": self.n_seen, "marker_reacq": self.n_reacq,
+               "marker_static_spots": len(self.static),
+               "marker_coral_px_p50_p95": [round(float(v), 1) for v in np.percentile(sep, [50, 95])] if len(sep) else None,
+               "marker_yaw_pad_deg": None if self.pad_offset is None else round(self.pad_offset, 1),
+               "marker_yaw_dev_p50_p95_deg": None}
+        if self.off_air and self.pad_offset is not None:
+            dev = np.abs(_wrap_deg(np.asarray(self.off_air) - self.pad_offset))
+            out["marker_yaw_dev_p50_p95_deg"] = [round(float(v), 1) for v in np.percentile(dev, [50, 95])]
+        return out
+
+
 class JumpGate:
     """Velocity gate on detections (pad frame, m): one farther than v_max * dt + slack from the last accepted one
     is a wrong blob and is dropped (R4 b8/b10/b12 offline coral tracks jumped 4-7 m/s); dt is capped at dt_max so a
@@ -1173,7 +1276,8 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
                pad: PadOrigin | None = None, ground: Callable[[], bool] | None = None,
                show: Preview | None = None, stop_file: str | None = None, size: tuple | None = None,
                auto: AutoAlign | None = None, earth: Callable[[], np.ndarray | None] | None = None,
-               air_m: float = 0.15, size_gate: SizeGate | None = None) -> dict:
+               air_m: float = 0.15, size_gate: SizeGate | None = None, marker: MarkerCheck | None = None,
+               tel_yaw: Callable[[], float | None] | None = None) -> dict:
     """Read frames from `source` (file, device index or window:<title>), emit fixes. For a file the capture time is
     the frame pts and the send time is that pts too (age = camera latency only); live, both come from `clock`.
     `ring`: a pixel tracker with .step(frame) -> uv (RingTracker, CoralTracker), else the guard detector with
@@ -1183,7 +1287,9 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
     None = first detections); a NaN height (stale telemetry) gives no fix. `show` draws each frame (throttled).
     `auto` (--align auto): mode 1 is sent until it locks, fed each fix taken above `air_m` with a fresh `earth()`
     (EKF cm); on lock the mode frame goes out at once. `size_gate` checks a CoralTracker blob's pixel count against
-    the telemetry height (calibrated on the pad; it drops the fix only with reject=True)."""
+    the telemetry height (calibrated on the pad; it drops the fix only with reject=True). `marker` looks for the
+    drone's ArUco id in the CoralTracker ROI: after a coral miss it only re-centres the tracker (no fix comes from the
+    marker); with `tel_yaw()` (deg) it compares the marker heading with the telemetry yaw."""
     cv2 = vt._cv2()
     win = str(source).startswith("window:")
     cap = WindowSource(str(source)[7:], size=size) if win else cv2.VideoCapture(int(source) if str(source).isdigit() else source)
@@ -1226,6 +1332,11 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
         z_agl = height_agl(height_m, z)
         if ring is not None:
             uv = ring.step(frame, z_agl) if isinstance(ring, CoralTracker) else ring.step(frame)
+            if marker is not None and isinstance(ring, CoralTracker):
+                mk = marker.step(frame, ring.c if uv is None else uv, ring.r if uv is None else ring.roi, uv,
+                                 tel_yaw() if tel_yaw else None, ground() if ground else None)
+                if uv is None and mk is not None:
+                    ring.recentre(mk)
             if uv_log is not None:
                 uv_log.append((t_read, *(uv if uv is not None else (np.nan, np.nan))))
             xy = None if uv is None or not np.isfinite(z) else ring_xy(uv, cam, z)
@@ -1257,7 +1368,9 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
                                          f"{' frozen' if pad is not None and pad.frozen else ''}"]
                  + ([auto.status] if auto else [])
                  + ([f"size {size_gate.ratio:.2f}  z_size {size_gate.z_size:.2f} m  out {size_gate.n_out}"]
-                    if size_gate is not None and size_gate.ratio is not None else []), z=z_agl)
+                    if size_gate is not None and size_gate.ratio is not None else [])
+                 + ([f"marker hdg {marker.heading:.0f} deg  seen {marker.n_seen}/{marker.n}  reacq {marker.n_reacq}"]
+                    if marker is not None and marker.heading is not None else []), z=z_agl)
         if xy is not None:
             n_det += 1
             sched.push(t_cap, xy)
@@ -1292,7 +1405,8 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
             "read_ms": 1000 * t_rd / max(n, 1), "detect_ms": 1000 * t_det / max(n, 1),
             "show_ms": show.ms / max(show.n, 1) if show else 0.0,
             "pad_xy": None if pad is None or pad.xy is None else [round(float(v), 4) for v in pad.xy],
-            "align": auto.status if auto else "fixed", **(size_gate.summary() if size_gate else {})}
+            "align": auto.status if auto else "fixed", **(size_gate.summary() if size_gate else {}),
+            **(marker.summary() if marker else {})}
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -1475,6 +1589,10 @@ def main(argv=None) -> int:
     ap.add_argument("--gate", action="store_true", help="JumpGate on detections (PROPOSED thresholds)")
     ap.add_argument("--size-gate", choices=["off", "count", "reject"], default="off",
                     help="coral detector: ring pixel size vs telemetry height; count = report only (PROPOSED bounds)")
+    ap.add_argument("--marker", choices=["off", "on"], default="off",
+                    help="coral: the drone's ArUco marker in the ROI re-acquires after a miss, heading vs --tel-yaw-key")
+    ap.add_argument("--marker-id", type=int, default=1, help="--marker: the drone's top marker id (R4: id1, 0.077 m)")
+    ap.add_argument("--tel-yaw-key", default="imu_data.yaw", help="--marker: telemetry yaw (deg) for the heading check")
     ap.add_argument("--send", default="", help="udp:PORT (stream_log --relay-port) or udp:HOST:PORT; default: no send")
     ap.add_argument("--mode", type=int, choices=[0, 1, 2, 3], default=None,
                     help="EXT_POS mode frame: 0 off, 1 shadow, 2 offset outside the EKF, 3 in-EKF fix")
@@ -1504,10 +1622,13 @@ def main(argv=None) -> int:
     if sum(map(bool, (a.tel_npz, a.tel_csv, a.tel_url))) > 1 or not (a.tel_npz or a.tel_csv or a.tel_url
                                                                       or a.height_m is not None):
         ap.error("give one of --tel-csv / --tel-url (with an optional --height-m fallback), --tel-npz or --height-m")
+    if a.marker == "on" and a.detector != "coral":
+        ap.error("--marker on needs --detector coral")
     ek = ("ano_of.earth_x", "ano_of.earth_y") if a.align == "auto" else ()
     live = a.tel_csv or a.tel_url
+    yk = (a.tel_yaw_key,) if a.marker == "on" and live else ()
     tel = (TelHeightHttp if a.tel_url else TelHeight)(live, a.tel_key, a.ring_h_m, stale_s=a.tel_stale_s,
-                                                      fallback_m=a.height_m, extra=ek) if live else None
+                                                      fallback_m=a.height_m, extra=ek + yk) if live else None
     height = tel or (tel_height(a.tel_npz, tel_offset_s=a.tel_offset_s, ring_offset_m=a.ring_offset_m)
                      if a.tel_npz else a.height_m)
     src_live = str(a.source).isdigit() or a.source.startswith("window:")
@@ -1549,7 +1670,9 @@ def main(argv=None) -> int:
                      stop_file=a.stop_file or None, size=size if a.source.startswith("window:") else None,
                      auto=auto, earth=(lambda: tel.vec(ek)) if auto else None,
                      air_m=a.ring_h_m + a.align_min_h_m,
-                     size_gate=SizeGate(cam, reject=a.size_gate == "reject") if a.size_gate != "off" else None),
+                     size_gate=SizeGate(cam, reject=a.size_gate == "reject") if a.size_gate != "off" else None,
+                     marker=MarkerCheck(cam, mid=a.marker_id, near_px=50.0 * s) if a.marker == "on" else None,
+                     tel_yaw=(lambda: None if (v := tel.vec(yk)) is None else float(v[0])) if yk else None),
           flush=True)          # z there is the ring plane
     return 0
 

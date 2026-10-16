@@ -514,3 +514,99 @@ def test_size_gate_passes_fixes_it_cannot_judge():
     uv = np.array([960.0, 540.0])
     assert g.check(uv, None, 1.0) and g.check(uv, 500.0, float("nan"))
     assert g.check(uv, 500.0, 1.0) and g.n == 0                # not calibrated yet
+
+
+def _marker_frame(marks, size=(1080, 1920)):
+    """Gray frame with DICT_4X4_50 markers: marks = [(id, (u, v) centre, side px, quarter turns CCW)]."""
+    import cv2
+    from ground_station.analysis import video_truth as vt
+    d = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, vt.ARUCO_DICT))
+    img = np.full(size, 170, np.uint8)
+    for mid, (u, v), side, rot in marks:
+        m = np.rot90(cv2.aruco.generateImageMarker(d, mid, side), rot)
+        q = np.full((side + 2 * side // 4,) * 2, 255, np.uint8)   # white quiet zone
+        q[side // 4:side // 4 + side, side // 4:side // 4 + side] = m
+        h = q.shape[0] // 2
+        img[v - h:v - h + q.shape[0], u - h:u - h + q.shape[1]] = q
+    return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+
+
+def test_marker_check_heading_is_the_cast_top_edge_in_the_floor_frame():
+    from ground_station.analysis.live_tracker import MarkerCheck
+    mc = MarkerCheck(_size_cam())
+    assert np.allclose(mc.step(_marker_frame([(1, (900, 500), 60, 0)]), (905, 505), 120, (900, 500)), (900, 500), atol=2)
+    assert abs(mc.heading) < 3                          # top edge along image +u = floor +x
+    mc.step(_marker_frame([(1, (900, 500), 60, 1)]), (900, 500), 120, (900, 500))
+    assert abs(mc.heading - 90) < 3                     # turned CCW in the image: image up = floor +y
+    assert mc.step(_marker_frame([(0, (900, 500), 60, 0)]), (900, 500), 120, (900, 500)) is None   # pad id0 ignored
+    assert mc.step(_marker_frame([(1, (1300, 500), 60, 0)]), (900, 500), 120, (900, 500)) is None  # outside the ROI
+
+
+def test_marker_check_learns_a_static_id_far_from_the_coral_fix_and_ignores_it():
+    from ground_station.analysis.live_tracker import MarkerCheck
+    mc = MarkerCheck(_size_cam(), near_px=50, n_static=3)
+    scene = (1, (1100, 500), 50, 0)
+    for _ in range(3):                                  # drone marker hidden, coral fix far from the scenery id1
+        assert mc.step(_marker_frame([scene]), (950, 500), 250, (900, 500)) is None
+    assert len(mc.static) == 1
+    assert mc.step(_marker_frame([scene]), (1100, 500), 100, None) is None   # a coral miss no longer locks on it
+    uv = mc.step(_marker_frame([scene, (1, (900, 500), 50, 0)]), (1000, 500), 250, None)
+    assert np.allclose(uv, (900, 500), atol=2) and mc.n_reacq == 1
+
+
+def test_marker_check_yaw_offset_on_the_pad_and_deviation_in_the_air():
+    from ground_station.analysis.live_tracker import MarkerCheck
+    mc = MarkerCheck(_size_cam())
+    f = _marker_frame([(1, (900, 500), 60, 1)])        # heading +90
+    for y in (85.0, 86.0, 84.0):
+        mc.step(f, (900, 500), 120, (900, 500), y, True)
+    for y in (88.0, 100.0, None):
+        mc.step(f, (900, 500), 120, (900, 500), y, False)
+    s = mc.summary()
+    assert abs(s["marker_yaw_pad_deg"] + 5) < 3 and len(mc.off_air) == 2
+    assert s["marker_yaw_dev_p50_p95_deg"][1] > 10 and s["marker_seen"] == 6 and s["marker_coral_px_p50_p95"][1] < 3
+    mc2 = MarkerCheck(_size_cam())
+    mc2.step(f, (900, 500), 120, (900, 500), 179.0, True)
+    mc2.step(f, (900, 500), 120, (900, 500), -179.0, True)
+    assert abs(abs(mc2.pad_offset) - 90) < 4          # wrap-safe (179 and -179 are 2 deg apart)
+
+
+def test_run_source_marker_recentres_the_coral_tracker_after_a_miss(tmp_path, monkeypatch):
+    from ground_station.analysis import live_tracker as lt
+    calls = []
+
+    class Coral(lt.CoralTracker):
+        def __init__(self):
+            self.c, self.r, self.roi, self.npx = np.array([500.0, 500.0]), 300.0, 140.0, None
+
+        def step(self, frame, z=None):
+            return None
+
+        def recentre(self, uv):
+            calls.append(np.asarray(uv, float))
+
+    frames = [_marker_frame([(1, (600, 520), 50, 0)])] * 3
+
+    class Cap:
+        def __init__(self, *a):
+            self.i = 0
+
+        def read(self):
+            self.i += 1
+            return (self.i <= len(frames), frames[self.i - 1] if self.i <= len(frames) else None)
+
+        def get(self, p):
+            return self.i * 33.0
+
+        def grab(self):
+            return True
+
+        def release(self):
+            pass
+
+    import cv2
+    monkeypatch.setattr(cv2, "VideoCapture", Cap)
+    mc = lt.MarkerCheck(_size_cam())
+    out = lt.run_source("x.mp4", _size_cam(), lt.EarthAlign(), 0.1, ring=Coral(), marker=mc, pad=None)
+    assert out["marker_reacq"] == 3 and out["fixes"] == 0 and len(calls) == 3
+    assert np.allclose(calls[0], (600, 520), atol=2)
