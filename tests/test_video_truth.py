@@ -398,3 +398,21 @@ def test_ext_pos_replay_gates_a_jump_then_reanchors_slewed():
     assert n["gated"] >= 3 and n["reanchor"] >= 1
     assert np.abs(np.diff(fused[:, 0])).max() <= vt.EXT_POS["slew_m"] / vt.EXT_POS["spread_s"] * 0.02 + 1e-9
     assert abs(fused[-1, 0] - 1.0) < 0.05
+
+
+def test_drop_static_keeps_the_moving_same_id_marker():
+    sq = np.array([[0, 0], [30, 0], [30, 30], [0, 30]], np.float32)
+    n = 10
+    c1 = np.tile(sq + [500, 500], (n, 1, 1))                     # c<id> kept the static one in every frame
+    mov = [sq * 0.7 + [100 + 10 * k, 200] for k in range(n)]
+    scan = {"t": np.arange(n) * 0.1, "c1": c1.copy(),
+            "all_i": np.r_[np.arange(n), np.arange(0, n, 2)].astype(np.int32),
+            "all_id": np.ones(n + n // 2, np.int32),
+            "all_c": np.concatenate([c1, np.array(mov)[::2]]).astype(np.float32)}
+    out = vt.drop_static(scan, 1)
+    seen = ~np.isnan(out["c1"][:, 0, 0])
+    assert seen.tolist() == [k % 2 == 0 for k in range(n)]
+    assert np.allclose(out["c1"][seen].mean(axis=1)[:, 0], [100 + 10 * k + 10.5 for k in range(0, n, 2)])
+    assert np.array_equal(scan["c1"], c1)                         # input untouched
+    old = vt.drop_static({"t": scan["t"], "c1": c1.copy()}, 1)    # an old scan without all_*: static frames dropped
+    assert np.isnan(old["c1"]).all()
