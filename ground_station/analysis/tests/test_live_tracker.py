@@ -97,6 +97,15 @@ def test_tel_height_shifts_time_and_adds_ring_offset():
     assert abs(h(20.0) - 0.55) < 1e-12 and abs(h(0.0) - 0.05) < 1e-12      # video 20 s = tel 5 s; clamps before tel 0
 
 
+
+def test_tel_yaw_npz_shifts_time_wraps_and_skips_outside_the_log():
+    from ground_station.analysis.live_tracker import tel_yaw_npz
+    k = "imu_data.yaw"
+    f = tel_yaw_npz({k + "|t": np.array([0.0, 10.0]), k: np.array([170.0, -170.0])}, k, tel_offset_s=15.0)
+    assert abs(abs(f(20.0)) - 180.0) < 1e-9                    # midpoint across the wrap: 180, not 0
+    assert abs(f(16.0) - 172.0) < 1e-9 and f(14.0) is None and f(26.0) is None
+    assert tel_yaw_npz({"other|t": np.array([0.0]), "other": np.array([0.0])}, k) is None
+
 _CORAL = (40, 90, 230)                                         # BGR: OpenCV hue ~8, sat ~210, val 230 -> coral_mask
 
 

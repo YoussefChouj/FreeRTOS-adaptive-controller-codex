@@ -244,7 +244,7 @@ class SizeGate:
     def summary(self) -> dict:
         r, dz = np.asarray(self.ratios), np.asarray(self.dz)
         return {"size_k": self.k, "size_n": self.n, "size_out": self.n_out,
-                "size_ratio_p5_p50_p95": [round(float(v), 3) for v in np.percentile(r, [5, 50, 95])] if len(r) else None,
+                "size_ratio_p1_p5_p50_p95_p99": [round(float(v), 3) for v in np.percentile(r, [1, 5, 50, 95, 99])] if len(r) else None,
                 "size_dz_med_cm": round(float(np.median(dz)) * 100, 1) if len(dz) else None}
 
 
@@ -1268,6 +1268,26 @@ def tel_height(tel_npz, key: str = "slot0.Ctrler.Z_posPID.FB", tel_offset_s: flo
     return lambda t: float(np.interp(t - tel_offset_s, tz, z)) + ring_offset_m
 
 
+def tel_yaw_npz(tel_npz, key: str = "imu_data.yaw", tel_offset_s: float = 0.0) -> Callable[[float], float | None] | None:
+    """Telemetry yaw (deg, wrapped to +-180) for frame time t, from `key` and `key|t` in `tel_npz` (same layout and
+    offset as tel_height), so the --marker heading check also runs on a replay. Interpolates the unwrapped angle;
+    None outside the logged span. Returns None (no check) when the npz has no `key`."""
+    d = np.load(tel_npz) if isinstance(tel_npz, str) else tel_npz
+    if key not in d or key + "|t" not in d:
+        return None
+    ty = np.asarray(d[key + "|t"], float)
+    y = np.unwrap(np.radians(np.asarray(d[key], float)))
+    if ty.size == 0:
+        return None
+
+    def f(t: float) -> float | None:
+        tt = t - tel_offset_s
+        if not ty[0] <= tt <= ty[-1]:
+            return None
+        return float((np.degrees(np.interp(tt, ty, y)) + 180.0) % 360.0 - 180.0)
+    return f
+
+
 def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[[float], float],
                cam_latency_s: float = 0.0, send: Callable[[bytes], None] | None = None, out_csv: str | None = None,
                sched: FixScheduler | None = None, clock: Callable[[], float] | None = None, max_frames: int = 0, start_s: float = 0.0,
@@ -1277,7 +1297,7 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
                show: Preview | None = None, stop_file: str | None = None, size: tuple | None = None,
                auto: AutoAlign | None = None, earth: Callable[[], np.ndarray | None] | None = None,
                air_m: float = 0.15, size_gate: SizeGate | None = None, marker: MarkerCheck | None = None,
-               tel_yaw: Callable[[], float | None] | None = None) -> dict:
+               tel_yaw: Callable[[float], float | None] | None = None) -> dict:
     """Read frames from `source` (file, device index or window:<title>), emit fixes. For a file the capture time is
     the frame pts and the send time is that pts too (age = camera latency only); live, both come from `clock`.
     `ring`: a pixel tracker with .step(frame) -> uv (RingTracker, CoralTracker), else the guard detector with
@@ -1289,7 +1309,7 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
     (EKF cm); on lock the mode frame goes out at once. `size_gate` checks a CoralTracker blob's pixel count against
     the telemetry height (calibrated on the pad; it drops the fix only with reject=True). `marker` looks for the
     drone's ArUco id in the CoralTracker ROI: after a coral miss it only re-centres the tracker (no fix comes from the
-    marker); with `tel_yaw()` (deg) it compares the marker heading with the telemetry yaw."""
+    marker); with `tel_yaw(t_cap)` (deg) it compares the marker heading with the telemetry yaw."""
     cv2 = vt._cv2()
     win = str(source).startswith("window:")
     cap = WindowSource(str(source)[7:], size=size) if win else cv2.VideoCapture(int(source) if str(source).isdigit() else source)
@@ -1334,7 +1354,7 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
             uv = ring.step(frame, z_agl) if isinstance(ring, CoralTracker) else ring.step(frame)
             if marker is not None and isinstance(ring, CoralTracker):
                 mk = marker.step(frame, ring.c if uv is None else uv, ring.r if uv is None else ring.roi, uv,
-                                 tel_yaw() if tel_yaw else None, ground() if ground else None)
+                                 tel_yaw(t_cap) if tel_yaw else None, ground() if ground else None)
                 if uv is None and mk is not None:
                     ring.recentre(mk)
             if uv_log is not None:
@@ -1592,7 +1612,7 @@ def main(argv=None) -> int:
     ap.add_argument("--marker", choices=["off", "on"], default="off",
                     help="coral: the drone's ArUco marker in the ROI re-acquires after a miss, heading vs --tel-yaw-key")
     ap.add_argument("--marker-id", type=int, default=1, help="--marker: the drone's top marker id (R4: id1, 0.077 m)")
-    ap.add_argument("--tel-yaw-key", default="imu_data.yaw", help="--marker: telemetry yaw (deg) for the heading check")
+    ap.add_argument("--tel-yaw-key", default="imu_data.yaw", help="--marker: telemetry yaw (deg) for the heading check (live CSV/URL or --tel-npz)")
     ap.add_argument("--send", default="", help="udp:PORT (stream_log --relay-port) or udp:HOST:PORT; default: no send")
     ap.add_argument("--mode", type=int, choices=[0, 1, 2, 3], default=None,
                     help="EXT_POS mode frame: 0 off, 1 shadow, 2 offset outside the EKF, 3 in-EKF fix")
@@ -1631,6 +1651,13 @@ def main(argv=None) -> int:
                                                       fallback_m=a.height_m, extra=ek + yk) if live else None
     height = tel or (tel_height(a.tel_npz, tel_offset_s=a.tel_offset_s, ring_offset_m=a.ring_offset_m)
                      if a.tel_npz else a.height_m)
+    yaw_fn = None
+    if yk:
+        yaw_fn = lambda t: None if (v := tel.vec(yk)) is None else float(v[0])   # noqa: E731 - live: latest sample
+    elif a.marker == "on" and a.tel_npz:
+        yaw_fn = tel_yaw_npz(a.tel_npz, a.tel_yaw_key, a.tel_offset_s)
+        if yaw_fn is None:
+            print(f"--marker: {a.tel_yaw_key} not in {a.tel_npz}; no heading check", flush=True)
     src_live = str(a.source).isdigit() or a.source.startswith("window:")
     size = (WindowSource(a.source[7:]).ready() if a.source.startswith("window:")
             else None if str(a.source).isdigit() else vt.video_size(a.source))
@@ -1672,7 +1699,7 @@ def main(argv=None) -> int:
                      air_m=a.ring_h_m + a.align_min_h_m,
                      size_gate=SizeGate(cam, reject=a.size_gate == "reject") if a.size_gate != "off" else None,
                      marker=MarkerCheck(cam, mid=a.marker_id, near_px=50.0 * s) if a.marker == "on" else None,
-                     tel_yaw=(lambda: None if (v := tel.vec(yk)) is None else float(v[0])) if yk else None),
+                     tel_yaw=yaw_fn),
           flush=True)          # z there is the ring plane
     return 0
 
