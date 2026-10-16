@@ -29,8 +29,9 @@ FIRMWARE = ["pid.c", "pid.h", "mrac.c", "mrac.h", "mrac_math.c", "mrac_math.h", 
             "controller.c", "controller.h",
             # Workflow B safety glue (pure C, no firmware headers), driven by sim/sil/faults.py
             "wfb_glue.c", "wfb_glue.h", "wfb_traj.c", "wfb_traj.h", "wfb_safety.c", "wfb_safety.h", "wfb_prim.c",
-            "wfb_prim.h", "wfb_types.h"]
-WFB_C = ["wfb_glue.c", "wfb_traj.c", "wfb_safety.c", "wfb_prim.c"]
+            "wfb_prim.h", "wfb_prog.c", "wfb_prog.h", "wfb_types.h",
+            "land_xy_gate.c", "land_xy_gate.h"]
+WFB_C = ["wfb_glue.c", "wfb_traj.c", "wfb_safety.c", "wfb_prim.c", "wfb_prog.c", "land_xy_gate.c"]
 CFLAGS = ["-std=gnu99", "-O2", "-msse2", "-mfpmath=sse", "-ffp-contract=off", "-fno-fast-math", "-Wall", "-Wextra"]
 # pre-existing firmware warnings (PID_ROW leaves aw_mode/Kt to zero-init; the unused MRAC_InverseMixer stub)
 FW_QUIET = ["-Wno-missing-field-initializers", "-Wno-unused-parameter", "-Wno-unused-function"]
