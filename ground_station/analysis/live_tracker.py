@@ -134,6 +134,7 @@ class CoralTracker:
         self.keep_r = 1.3 * self.roi if keep_r is None else float(keep_r)   # r6_f4 pad: drone coral to ~170 px of 1920
         self.zoom, self.land_zoom, self.land_z_m, self.active_zoom = float(zoom), float(land_zoom), float(land_z_m), 1.0
         self._acc, self._k, self._i = None, 0, 0
+        self.npx: float | None = None      # coral pixels of the last fix (full-res px, zoom undone), for SizeGate
 
     def _learn(self, frame_bgr) -> None:
         cv2 = vt._cv2()
@@ -174,16 +175,77 @@ class CoralTracker:
                                          interpolation=cv2.INTER_NEAREST) > 0
                 m &= ~st_crop
             vv, uu = np.nonzero(m)
+            self.npx = None
             if len(uu) >= self.min_px * (z_eff * z_eff):
+                self.npx = len(uu) / (z_eff * z_eff)
                 self.c = np.array([(np.median(uu) + 0.5) / z_eff - 0.5 + u0,
                                    (np.median(vv) + 0.5) / z_eff - 0.5 + v0])
                 self.r = self.roi
                 return self.c.copy()
+        self.npx = None
         self.r = min(self.r * 1.5, float(max(W, H)))
         return None
 
     def recentre(self, uv) -> None:
         self.c, self.r = np.asarray(uv, float), self.roi
+
+
+class SizeGate:
+    """Ring pixel-size vs telemetry-height check (wrong-blob guard + independent height). The coral ring is a flat
+    horizontal disc, so its pixel area goes as cos(view angle) / range^2 = (-d_z) / s^2 along the unit ray d from the
+    camera centre, s the range to the ring plane: npx = k (-d_z) / s^2. k is calibrated on the pad (n_cal fixes while
+    telemetry says ground); after that a fix at the telemetry height whose npx / expected is outside [lo, hi] is
+    flagged, and solving the same model for s gives the ring height from the blob size alone (z_size).
+    Bounds PROPOSED (motion blur, ROI clipping and partial occlusion all shrink the blob); not yet run on flights,
+    so run_source only counts flags unless reject=True."""
+
+    def __init__(self, cam: dict, lo: float = 0.4, hi: float = 2.5, n_cal: int = 15, reject: bool = False):
+        self.K, self.dist = np.asarray(cam["K"], float), np.asarray(cam["dist"], float)
+        self.R, self.t = np.asarray(cam["R"], float), np.asarray(cam["t"], float)
+        self.C = -self.R.T @ self.t
+        self.lo, self.hi, self.n_cal, self.reject = lo, hi, n_cal, reject
+        self.cal: list[float] = []
+        self.k: float | None = None
+        self.n, self.n_out, self.ratios, self.dz = 0, 0, [], []
+        self.ratio: float | None = None
+        self.z_size: float | None = None
+
+    def ray(self, uv) -> np.ndarray:
+        p = vt.pixel_to_plane(np.asarray(uv, float)[None, :], self.K, self.dist, self.R, self.t, 0.0)[0]
+        d = p - self.C
+        return d / np.linalg.norm(d)
+
+    def check(self, uv, npx: float | None, z: float, ground: bool = False) -> bool:
+        """True = keep. npx None (no size) or a non-finite z keeps the fix untested."""
+        self.ratio = self.z_size = None
+        if npx is None or uv is None or not np.isfinite(z) or npx <= 0:
+            return True
+        d = self.ray(uv)
+        if d[2] >= 0:
+            return True
+        s = (z - self.C[2]) / d[2]                          # range to the ring plane at the telemetry height
+        k_now = npx * s * s / -d[2]
+        if self.k is None:
+            if ground:
+                self.cal.append(k_now)
+                if len(self.cal) >= self.n_cal:
+                    self.k = float(np.median(self.cal))
+            return True
+        self.n += 1
+        self.ratio = k_now / self.k
+        s_size = np.sqrt(self.k * -d[2] / npx)
+        self.z_size = float(self.C[2] + s_size * d[2])
+        self.ratios.append(self.ratio)
+        self.dz.append(self.z_size - z)
+        ok = self.lo <= self.ratio <= self.hi
+        self.n_out += not ok
+        return ok or not self.reject
+
+    def summary(self) -> dict:
+        r, dz = np.asarray(self.ratios), np.asarray(self.dz)
+        return {"size_k": self.k, "size_n": self.n, "size_out": self.n_out,
+                "size_ratio_p5_p50_p95": [round(float(v), 3) for v in np.percentile(r, [5, 50, 95])] if len(r) else None,
+                "size_dz_med_cm": round(float(np.median(dz)) * 100, 1) if len(dz) else None}
 
 
 class JumpGate:
@@ -1111,7 +1173,7 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
                pad: PadOrigin | None = None, ground: Callable[[], bool] | None = None,
                show: Preview | None = None, stop_file: str | None = None, size: tuple | None = None,
                auto: AutoAlign | None = None, earth: Callable[[], np.ndarray | None] | None = None,
-               air_m: float = 0.15) -> dict:
+               air_m: float = 0.15, size_gate: SizeGate | None = None) -> dict:
     """Read frames from `source` (file, device index or window:<title>), emit fixes. For a file the capture time is
     the frame pts and the send time is that pts too (age = camera latency only); live, both come from `clock`.
     `ring`: a pixel tracker with .step(frame) -> uv (RingTracker, CoralTracker), else the guard detector with
@@ -1120,7 +1182,8 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
     (t_read, t_fix, frame bytes) per fix. `pad` makes the fixes pad-relative (`ground()`: telemetry on-ground flag,
     None = first detections); a NaN height (stale telemetry) gives no fix. `show` draws each frame (throttled).
     `auto` (--align auto): mode 1 is sent until it locks, fed each fix taken above `air_m` with a fresh `earth()`
-    (EKF cm); on lock the mode frame goes out at once."""
+    (EKF cm); on lock the mode frame goes out at once. `size_gate` checks a CoralTracker blob's pixel count against
+    the telemetry height (calibrated on the pad; it drops the fix only with reject=True)."""
     cv2 = vt._cv2()
     win = str(source).startswith("window:")
     cap = WindowSource(str(source)[7:], size=size) if win else cv2.VideoCapture(int(source) if str(source).isdigit() else source)
@@ -1168,6 +1231,11 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
             xy = None if uv is None or not np.isfinite(z) else ring_xy(uv, cam, z)
         else:
             xy = detect_xy(frame, cam, z, static) if np.isfinite(z) else None
+        if xy is not None and size_gate is not None and isinstance(ring, CoralTracker) and \
+                not size_gate.check(uv, ring.npx, z, ground() if ground else True):
+            if gate is not None and gate.last is not None and gate.last[2] is not None:
+                ring.recentre(gate.last[2])
+            xy = None
         if xy is not None and gate is not None and not gate.check(t_cap, xy, uv):
             if ring is not None and hasattr(ring, "recentre") and gate.last[2] is not None:
                 ring.recentre(gate.last[2])
@@ -1187,7 +1255,9 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
                  [f"mode {auto.mode if auto else mode}  z {z:.2f} m  fixes {sched.n_sent}  det {n_det}/{n}",
                                          f"gate rej {gate.n_rej if gate else 0}  pad {'set' if pad is None or pad.xy is not None else 'WAIT'}"
                                          f"{' frozen' if pad is not None and pad.frozen else ''}"]
-                 + ([auto.status] if auto else []), z=z_agl)
+                 + ([auto.status] if auto else [])
+                 + ([f"size {size_gate.ratio:.2f}  z_size {size_gate.z_size:.2f} m  out {size_gate.n_out}"]
+                    if size_gate is not None and size_gate.ratio is not None else []), z=z_agl)
         if xy is not None:
             n_det += 1
             sched.push(t_cap, xy)
@@ -1222,7 +1292,7 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
             "read_ms": 1000 * t_rd / max(n, 1), "detect_ms": 1000 * t_det / max(n, 1),
             "show_ms": show.ms / max(show.n, 1) if show else 0.0,
             "pad_xy": None if pad is None or pad.xy is None else [round(float(v), 4) for v in pad.xy],
-            "align": auto.status if auto else "fixed"}
+            "align": auto.status if auto else "fixed", **(size_gate.summary() if size_gate else {})}
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -1403,6 +1473,8 @@ def main(argv=None) -> int:
     ap.add_argument("--n-med", type=int, default=2)
     ap.add_argument("--window-s", type=float, default=0.1)
     ap.add_argument("--gate", action="store_true", help="JumpGate on detections (PROPOSED thresholds)")
+    ap.add_argument("--size-gate", choices=["off", "count", "reject"], default="off",
+                    help="coral detector: ring pixel size vs telemetry height; count = report only (PROPOSED bounds)")
     ap.add_argument("--send", default="", help="udp:PORT (stream_log --relay-port) or udp:HOST:PORT; default: no send")
     ap.add_argument("--mode", type=int, choices=[0, 1, 2, 3], default=None,
                     help="EXT_POS mode frame: 0 off, 1 shadow, 2 offset outside the EKF, 3 in-EKF fix")
@@ -1476,7 +1548,9 @@ def main(argv=None) -> int:
                      ground=(lambda: tel.ground if tel.fresh else None) if tel else None, show=show,
                      stop_file=a.stop_file or None, size=size if a.source.startswith("window:") else None,
                      auto=auto, earth=(lambda: tel.vec(ek)) if auto else None,
-                     air_m=a.ring_h_m + a.align_min_h_m), flush=True)          # z there is the ring plane
+                     air_m=a.ring_h_m + a.align_min_h_m,
+                     size_gate=SizeGate(cam, reject=a.size_gate == "reject") if a.size_gate != "off" else None),
+          flush=True)          # z there is the ring plane
     return 0
 
 

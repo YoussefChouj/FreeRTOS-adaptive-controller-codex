@@ -467,3 +467,50 @@ def test_thin_path_keeps_the_tail_and_strides_the_rest():
     q = thin_path(p)
     assert len(q) <= 4000 and q[0, 0] == 0 and np.array_equal(q[-1000:], p[-1000:])
     assert np.all(np.diff(q[:, 0]) > 0)
+
+
+def test_coral_tracker_reports_blob_size_and_clears_it_on_a_miss():
+    from ground_station.analysis.live_tracker import CoralTracker
+    tr = CoralTracker([300, 260])
+    assert tr.step(_coral_frame((300, 260))) is not None
+    assert 600 <= tr.npx <= 800                                 # radius-15 disc ~707 px
+    assert tr.step(np.zeros((480, 640, 3), np.uint8)) is None and tr.npx is None
+
+
+def _size_cam():
+    # 2 m above the floor, looking straight down (R maps world z up to camera z forward-down)
+    return {"K": [[1000, 0, 960], [0, 1000, 540], [0, 0, 1]], "dist": [0, 0, 0, 0, 0],
+            "R": [[1, 0, 0], [0, -1, 0], [0, 0, -1]], "t": [0, 0, 2]}
+
+
+def _npx_at(g, uv, z, k):
+    d = g.ray(np.asarray(uv, float))
+    s = (z - g.C[2]) / d[2]
+    return k * -d[2] / (s * s)
+
+
+@pytest.mark.parametrize("reject", [False, True])
+def test_size_gate_calibrates_on_the_pad_and_flags_a_blob_too_small_for_the_telemetry_height(reject):
+    from ground_station.analysis.live_tracker import SizeGate
+    g = SizeGate(_size_cam(), reject=reject)
+    uv = np.array([1100.0, 600.0])
+    k = 2800.0
+    for _ in range(15):
+        assert g.check(uv, _npx_at(g, uv, 0.057, k), 0.057, ground=True)
+    assert g.k == pytest.approx(k, rel=1e-6)
+    assert g.check(uv, _npx_at(g, uv, 1.0, k), 1.0)            # true size at 1 m: kept
+    assert g.ratio == pytest.approx(1.0, abs=1e-6) and g.z_size == pytest.approx(1.0, abs=1e-6)
+    pad_size = _npx_at(g, uv, 0.057, k)                         # pad-size blob (scenery, 1.94 m away) while telemetry says 1 m
+    assert g.check(uv, pad_size, 1.0) is (not reject)
+    assert g.ratio == pytest.approx(0.265, abs=0.01) and g.z_size == pytest.approx(0.057, abs=1e-3)
+    assert g.n == 2 and g.n_out == 1
+    s = g.summary()
+    assert s["size_n"] == 2 and s["size_out"] == 1
+
+
+def test_size_gate_passes_fixes_it_cannot_judge():
+    from ground_station.analysis.live_tracker import SizeGate
+    g = SizeGate(_size_cam(), reject=True)
+    uv = np.array([960.0, 540.0])
+    assert g.check(uv, None, 1.0) and g.check(uv, 500.0, float("nan"))
+    assert g.check(uv, 500.0, 1.0) and g.n == 0                # not calibrated yet
