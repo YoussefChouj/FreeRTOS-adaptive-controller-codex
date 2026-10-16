@@ -22,6 +22,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 HTM = ROOT / 'OBJ' / 'JX_FLY.htm'
 TASK_H = ROOT / 'Global_file' / 'creat_task.h'
 MAIN_C = ROOT / 'USER' / 'main.c'
+# Modules that create their own task with a plain xTaskCreate(fn, "name", WORDS_MACRO, ...) call.
+MODULE_TASKS = [ROOT / 'NN' / 'drift_nn_task.c']
 CONFIG_H = ROOT / 'FreeRTOS' / 'include' / 'FreeRTOSConfig.h'
 STARTUP = ROOT / 'stm32_lib' / 'startup_stm32f40_41xxx.s'
 WORD = 4                       # FreeRTOS stack depth unit on Cortex-M [bytes]
@@ -127,6 +129,13 @@ def tasks():
         if fn and sz:
             words = int(sz.group(1)) if sz.group(1).isdigit() else macros.get(sz.group(1))
             yield fn.group(1), words
+    for src in MODULE_TASKS:
+        if not src.exists():
+            continue
+        txt = read(src)
+        defs = {k: int(v) for k, v in re.findall(r'#define\s+(\w+)\s+(\d+)U?\b', txt)}
+        for fn, sz in re.findall(r'xTaskCreate\(\s*(\w+)\s*,\s*"[^"]*"\s*,\s*(\w+)', txt):
+            yield fn, int(sz) if sz.isdigit() else defs.get(sz)
     cfg = read(CONFIG_H)
     minimal = int(re.search(r'#define\s+configMINIMAL_STACK_SIZE\s+\(\(unsigned short\)(\d+)\)', cfg).group(1))
     yield 'prvIdleTask', minimal

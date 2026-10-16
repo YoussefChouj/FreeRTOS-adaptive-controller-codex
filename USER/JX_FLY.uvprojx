@@ -335,7 +335,7 @@
               <MiscControls>--C99</MiscControls>
               <Define>STM32F40_41xxx,USE_STDPERIPH_DRIVER</Define>
               <Undefine></Undefine>
-              <IncludePath>..\USER;..\stm32_lib;..\TASK;..\Global_file;..\BSP;..\API;..\firmware;..\FreeRTOS\include;..\FreeRTOS\portable\RVDS\ARM_CM4F</IncludePath>
+              <IncludePath>..\USER;..\stm32_lib;..\TASK;..\Global_file;..\BSP;..\API;..\firmware;..\NN;..\FreeRTOS\include;..\FreeRTOS\portable\RVDS\ARM_CM4F</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -1013,6 +1013,21 @@
               <FileName>heap_4.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\FreeRTOS\portable\MemMang\heap_4.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>NN</GroupName>
+          <Files>
+            <File>
+              <FileName>drift_nn.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\NN\drift_nn.c</FilePath>
+            </File>
+            <File>
+              <FileName>drift_nn_task.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\NN\drift_nn_task.c</FilePath>
             </File>
           </Files>
         </Group>
