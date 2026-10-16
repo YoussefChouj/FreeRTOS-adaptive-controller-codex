@@ -124,12 +124,17 @@ class CoralTracker:
 
     def __init__(self, seed_uv, static=None, roi: float = 140.0, min_px: int = 40,   # track_coral defaults
                  learn_n: int = 0, learn_every: int = 5, frac: float = 0.7, grow_px: int = 7,
-                 keep_r: float | None = None):
+                 keep_r: float | None = None, zoom: float = 1.0, land_zoom: float = 1.0, land_z_m: float = 0.30):
+        # land_zoom > 1 supersamples the ROI below land_z_m. Off by default: r7_f6_mode3 (4950 frames, offline)
+        # gave the same HF centroid noise at 2x (2.51/1.48 -> 2.44/1.48 px), 3.1x the step time (0.94 -> 2.91 ms
+        # p50) and a -0.87 px mean u shift between the two, i.e. a small jump at the switch, for no gain.
         self.c, self.static, self.roi, self.min_px = np.asarray(seed_uv, float), static, float(roi), min_px
         self.r = self.roi
         self.seed0, self.learn_n, self.learn_every, self.frac, self.grow = self.c.copy(), learn_n, learn_every, frac, grow_px
         self.keep_r = 1.3 * self.roi if keep_r is None else float(keep_r)   # r6_f4 pad: drone coral to ~170 px of 1920
+        self.zoom, self.land_zoom, self.land_z_m, self.active_zoom = float(zoom), float(land_zoom), float(land_z_m), 1.0
         self._acc, self._k, self._i = None, 0, 0
+        self.npx: float | None = None      # coral pixels of the last fix (full-res px, zoom undone), for SizeGate
 
     def _learn(self, frame_bgr) -> None:
         cv2 = vt._cv2()
@@ -148,26 +153,202 @@ class CoralTracker:
         self.learn_n, self._acc = 0, None
         print(f"coral static learned: {int(learned.sum())} px from {self._k} frames", flush=True)
 
-    def step(self, frame_bgr) -> Optional[np.ndarray]:
+    def step(self, frame_bgr, z_agl: float | None = None) -> Optional[np.ndarray]:
         cv2 = vt._cv2()
         if self.learn_n:
             self._learn(frame_bgr)
         H, W = frame_bgr.shape[:2]
+        z_eff = self.land_zoom if (z_agl is not None and np.isfinite(z_agl) and 0.0 < z_agl <= self.land_z_m) else self.zoom
+        z_eff = max(1.0, float(z_eff))
+        self.active_zoom = z_eff
         u0, v0 = int(max(0, self.c[0] - self.r)), int(max(0, self.c[1] - self.r))
         u1, v1 = int(min(W, self.c[0] + self.r)), int(min(H, self.c[1] + self.r))
         if u1 > u0 and v1 > v0:
-            m = vt.coral_mask(cv2.cvtColor(frame_bgr[v0:v1, u0:u1], cv2.COLOR_BGR2HSV))
+            crop = frame_bgr[v0:v1, u0:u1]
+            if z_eff > 1.01:
+                crop = cv2.resize(crop, (0, 0), fx=z_eff, fy=z_eff, interpolation=cv2.INTER_LINEAR)
+            m = vt.coral_mask(cv2.cvtColor(crop, cv2.COLOR_BGR2HSV))
             if self.static is not None:
-                m &= ~self.static[v0:v1, u0:u1]
+                st_crop = self.static[v0:v1, u0:u1]
+                if z_eff > 1.01:
+                    st_crop = cv2.resize(st_crop.astype(np.uint8), (m.shape[1], m.shape[0]),
+                                         interpolation=cv2.INTER_NEAREST) > 0
+                m &= ~st_crop
             vv, uu = np.nonzero(m)
-            if len(uu) >= self.min_px:
-                self.c, self.r = np.array([np.median(uu) + u0, np.median(vv) + v0]), self.roi
+            self.npx = None
+            if len(uu) >= self.min_px * (z_eff * z_eff):
+                self.npx = len(uu) / (z_eff * z_eff)
+                self.c = np.array([(np.median(uu) + 0.5) / z_eff - 0.5 + u0,
+                                   (np.median(vv) + 0.5) / z_eff - 0.5 + v0])
+                self.r = self.roi
                 return self.c.copy()
+        self.npx = None
         self.r = min(self.r * 1.5, float(max(W, H)))
         return None
 
     def recentre(self, uv) -> None:
         self.c, self.r = np.asarray(uv, float), self.roi
+
+
+class SizeGate:
+    """Ring pixel-size vs telemetry-height check (wrong-blob guard + independent height). The coral ring is a flat
+    horizontal disc, so its pixel area goes as cos(view angle) / range^2 = (-d_z) / s^2 along the unit ray d from the
+    camera centre, s the range to the ring plane: npx = k (-d_z) / s^2. k is calibrated on the pad (n_cal fixes while
+    telemetry says ground); after that a fix at the telemetry height whose npx / expected is outside [lo, hi] is
+    flagged, and solving the same model for s gives the ring height from the blob size alone (z_size).
+    Bounds PROPOSED (motion blur, ROI clipping and partial occlusion all shrink the blob); not yet run on flights,
+    so run_source only counts flags unless reject=True."""
+
+    def __init__(self, cam: dict, lo: float = 0.4, hi: float = 2.5, n_cal: int = 15, reject: bool = False):
+        self.K, self.dist = np.asarray(cam["K"], float), np.asarray(cam["dist"], float)
+        self.R, self.t = np.asarray(cam["R"], float), np.asarray(cam["t"], float)
+        self.C = -self.R.T @ self.t
+        self.lo, self.hi, self.n_cal, self.reject = lo, hi, n_cal, reject
+        self.cal: list[float] = []
+        self.k: float | None = None
+        self.n, self.n_out, self.ratios, self.dz = 0, 0, [], []
+        self.ratio: float | None = None
+        self.z_size: float | None = None
+
+    def ray(self, uv) -> np.ndarray:
+        p = vt.pixel_to_plane(np.asarray(uv, float)[None, :], self.K, self.dist, self.R, self.t, 0.0)[0]
+        d = p - self.C
+        return d / np.linalg.norm(d)
+
+    def check(self, uv, npx: float | None, z: float, ground: bool = False) -> bool:
+        """True = keep. npx None (no size) or a non-finite z keeps the fix untested."""
+        self.ratio = self.z_size = None
+        if npx is None or uv is None or not np.isfinite(z) or npx <= 0:
+            return True
+        d = self.ray(uv)
+        if d[2] >= 0:
+            return True
+        s = (z - self.C[2]) / d[2]                          # range to the ring plane at the telemetry height
+        k_now = npx * s * s / -d[2]
+        if self.k is None:
+            if ground:
+                self.cal.append(k_now)
+                if len(self.cal) >= self.n_cal:
+                    self.k = float(np.median(self.cal))
+            return True
+        self.n += 1
+        self.ratio = k_now / self.k
+        s_size = np.sqrt(self.k * -d[2] / npx)
+        self.z_size = float(self.C[2] + s_size * d[2])
+        self.ratios.append(self.ratio)
+        self.dz.append(self.z_size - z)
+        ok = self.lo <= self.ratio <= self.hi
+        self.n_out += not ok
+        return ok or not self.reject
+
+    def summary(self) -> dict:
+        r, dz = np.asarray(self.ratios), np.asarray(self.dz)
+        return {"size_k": self.k, "size_n": self.n, "size_out": self.n_out,
+                "size_ratio_p1_p5_p50_p95_p99": [round(float(v), 3) for v in np.percentile(r, [1, 5, 50, 95, 99])] if len(r) else None,
+                "size_dz_med_cm": round(float(np.median(dz)) * 100, 1) if len(dz) else None}
+
+
+def _wrap_deg(a):
+    return (np.asarray(a, float) + 180.0) % 360.0 - 180.0
+
+
+class MarkerCheck:
+    """The drone's top ArUco marker (R4: id1, 0.077 m) in the coral tracker's ROI: a second, independent detector.
+    It re-acquires the coral tracker after a miss, reports how far the marker is from the coral fix, and gives the
+    drone heading in the floor frame (the cast TL->TR edge; the cast is a homothety from the camera centre, so the
+    heading does not need the height). R4 also has a STATIC id1 in the scenery: an id1 farther than near_px from a
+    coral fix votes for its spot, and a spot with n_static votes (within tol_px) is ignored from then on.
+    With the telemetry yaw (imu_data.yaw, deg), off = wrap(yaw - heading) is collected on the pad and in the air; the
+    pad median is the mounting + floor rotation offset and |off - pad| in the air a yaw drift monitor. Offline R4
+    (computed, sparse old scans): in-air MAD 0.8-3.7 deg per flight, pad offset ~0 +- 6 deg. Thresholds PROPOSED."""
+
+    def __init__(self, cam: dict, mid: int = 1, near_px: float = 50.0, n_static: int = 10, tol_px: float = 5.0,
+                 dict_name: str = vt.ARUCO_DICT):
+        self.K, self.dist = np.asarray(cam["K"], float), np.asarray(cam["dist"], float)
+        self.R, self.t = np.asarray(cam["R"], float), np.asarray(cam["t"], float)
+        self.mid, self.near, self.n_static, self.tol = mid, float(near_px), n_static, float(tol_px)
+        self.det = vt.aruco_detector(dict_name)
+        self.votes: list[list] = []              # [u, v, count] of far same-id detections
+        self.static: list[np.ndarray] = []
+        self.uv: np.ndarray | None = None
+        self.heading: float | None = None        # deg, floor frame
+        self.n = self.n_seen = self.n_reacq = 0
+        self.sep, self.off_pad, self.off_air = [], [], []
+
+    def _is_static(self, uv) -> bool:
+        return any(np.linalg.norm(uv - s) <= self.tol for s in self.static)
+
+    def _vote(self, uv) -> None:
+        for v in self.votes:
+            if np.hypot(uv[0] - v[0], uv[1] - v[1]) <= self.tol:
+                v[2] += 1
+                if v[2] == self.n_static:
+                    self.static.append(np.array(v[:2]))
+                    print(f"marker id{self.mid}: static spot at ({v[0]:.0f}, {v[1]:.0f}) px ignored", flush=True)
+                return
+        self.votes.append([float(uv[0]), float(uv[1]), 1])
+
+    def step(self, frame_bgr, centre, r: float, coral_uv=None, yaw_deg: float | None = None,
+             ground: bool | None = None) -> np.ndarray | None:
+        """Search the square of half-size r around centre; returns the marker centre (px) or None."""
+        cv2 = vt._cv2()
+        self.n += 1
+        self.uv = self.heading = None
+        H, W = frame_bgr.shape[:2]
+        u0, v0 = int(max(0, centre[0] - r)), int(max(0, centre[1] - r))
+        u1, v1 = int(min(W, centre[0] + r)), int(min(H, centre[1] + r))
+        if u1 - u0 < 8 or v1 - v0 < 8:
+            return None
+        corners, ids, _ = self.det.detectMarkers(cv2.cvtColor(frame_bgr[v0:v1, u0:u1], cv2.COLOR_BGR2GRAY))
+        if ids is None:
+            return None
+        best, best_d = None, float("inf")
+        for c, i in zip(corners, ids.ravel()):
+            if int(i) != self.mid:
+                continue
+            c = c.reshape(4, 2) + (u0, v0)
+            uv = c.mean(axis=0)
+            if self._is_static(uv):
+                continue
+            if coral_uv is not None and np.linalg.norm(uv - coral_uv) > self.near:
+                self._vote(uv)
+                continue
+            d = np.linalg.norm(uv - np.asarray(centre, float))
+            if d < best_d:
+                best, best_d = c, d
+        if best is None:
+            return None
+        self.n_seen += 1
+        self.uv = best.mean(axis=0)
+        p = vt.pixel_to_plane(best, self.K, self.dist, self.R, self.t, 0.0)
+        self.heading = float(np.degrees(np.arctan2(p[1, 1] - p[0, 1], p[1, 0] - p[0, 0])))
+        if coral_uv is not None:
+            self.sep.append(float(np.linalg.norm(self.uv - coral_uv)))
+        else:
+            self.n_reacq += 1
+        if yaw_deg is not None and np.isfinite(yaw_deg) and ground is not None:
+            (self.off_pad if ground else self.off_air).append(float(_wrap_deg(yaw_deg - self.heading)))
+        return self.uv.copy()
+
+    @property
+    def pad_offset(self) -> float | None:
+        """Circular median-ish of the pad offsets (deg): median of the offsets unwrapped about the first."""
+        if not self.off_pad:
+            return None
+        o = np.asarray(self.off_pad)
+        return float(_wrap_deg(o[0] + np.median(_wrap_deg(o - o[0]))))
+
+    def summary(self) -> dict:
+        sep = np.asarray(self.sep)
+        out = {"marker_n": self.n, "marker_seen": self.n_seen, "marker_reacq": self.n_reacq,
+               "marker_static_spots": len(self.static),
+               "marker_coral_px_p50_p95": [round(float(v), 1) for v in np.percentile(sep, [50, 95])] if len(sep) else None,
+               "marker_yaw_pad_deg": None if self.pad_offset is None else round(self.pad_offset, 1),
+               "marker_yaw_dev_p50_p95_deg": None}
+        if self.off_air and self.pad_offset is not None:
+            dev = np.abs(_wrap_deg(np.asarray(self.off_air) - self.pad_offset))
+            out["marker_yaw_dev_p50_p95_deg"] = [round(float(v), 1) for v in np.percentile(dev, [50, 95])]
+        return out
 
 
 class JumpGate:
@@ -411,6 +592,16 @@ class TelHeight:
         return float("nan") if self.fallback is None else self.fallback
 
 
+def height_agl(height_m, z) -> float | None:
+    """Height above the pad rest (m) for the landing PiP / zoom: the plane height z minus ring_h minus the lowest
+    telemetry z seen (Z_posPID.FB reads 0.05 m on the pad in r7_f2/r7_f6, so z_tel alone is never 0 on the ground).
+    None when the height is a constant (no telemetry) or not fresh."""
+    if not isinstance(height_m, TelHeight) or z is None or not np.isfinite(z):
+        return None
+    z_min = height_m.z_min if np.isfinite(height_m.z_min) else 0.0
+    return max(0.0, float(z) - height_m.ring_h - max(0.0, z_min))
+
+
 class TelHeightHttp(TelHeight):
     """TelHeight fed by the 8081 service (GET /api/values) instead of a slot CSV: with 8081 up the campaign capture
     owns the logging, its CSV name is not known before the flight and PlainWriter flushes about once a second. Same
@@ -488,24 +679,36 @@ def traj_xy(spec: str) -> np.ndarray:
     return np.asarray(shape_xy(shape, params), float)
 
 
+def thin_path(p: np.ndarray, n_max: int = 4000, n_tail: int = 1000) -> np.ndarray:
+    """Rows to draw from a persistent trail: all of it up to n_max, else the last n_tail rows in full and an even
+    stride over the older ones (trail_s 0 keeps every fix: 30 fps x 10 min = 18000 rows, re-projected per draw)."""
+    if len(p) <= n_max:
+        return p
+    old = p[:-n_tail]
+    return np.vstack([old[::int(np.ceil(len(old) / (n_max - n_tail)))], p[-n_tail:]])
+
+
 class Preview:
     """--show: the tracker window, the only always-on-top window (the scrcpy mirror sits off screen: the PrintWindow
-    grab still reads it). Left: the grabbed frame, the tracked ring, its uv trail and the counters. Right: a top-down
-    pad-frame map: 0.5 m grid, path trail vs current xy, the --traj preset, the drift anchor and its pass circle
-    (green while max drift < pass_cm, else red) with the hold time. Resizable (WINDOW_NORMAL, aspect kept); state
-    updates every frame, drawing at most `hz` per s. Keys (window focused): r record on/off, a anchor here,
-    c clear trails, f fullscreen. Recording writes each drawn frame to `rec` (mp4, `hz` fps) for demo clips."""
+    grab still reads it). Left: the grabbed frame, the tracked ring, its persistent uv trail, landing zoom PiP and
+    counters. Right: a 3D pad-frame trajectory viewer (x, y, z) that automatically centers the 3D path and selects
+    the best viewing angle (broadside to principal horizontal axis, elevation adapted to z-vs-xy span), with 0.5 m
+    floor grid, ground shadow, vertical drop-stems, preset trajectory and drift pass circle. Keys (window focused):
+    r record on/off, a anchor here, c clear trails, v cycle 3D view (auto/orbit/iso/top), z toggle zoom PiP, f full."""
 
-    KEYS = "keys: r rec  a anchor  c clear  f full"
+    KEYS = "keys: r rec  a anchor  c clear  v 3d-view  z zoom  f full"
     HOLD_S = 0.5      # r7_f6: 3056 detections in 3970 frames, so ~1 draw in 4 had no ring (it blinked)
+    VIEWS = ("auto", "orbit", "iso", "top")
 
     def __init__(self, hz: float = 30.0, scale: float = 0.6, rect: dict | None = None, title: str = "live_tracker",
-                 traj: np.ndarray | None = None, rec: str | None = None, pass_cm: float = 20.0, trail_s: float = 120.0,
+                 traj: np.ndarray | None = None, rec: str | None = None, pass_cm: float = 20.0, trail_s: float = 0.0,
                  width: int | None = None):
         self.cv2, self.dt, self.scale, self.title, self.t_last, self.ms = vt._cv2(), 1.0 / hz, scale, title, -1e9, 0.0
         self.width = width    # drawn frame width px (the grab keeps its full size for the tracker); None: `scale`
         self.hz, self.rect, self.traj, self.pass_m, self.trail_s, self.n = hz, rect, traj, pass_cm / 100.0, trail_s, 0
-        self.trail, self.uvs, self.anchor, self.max_d, self.xy = [], [], None, 0.0, None   # trail (t,x,y), uvs (t,u,v)
+        self.trail, self.uvs, self.anchor, self.max_d, self.xy, self.z = [], [], None, 0.0, None, 0.0
+        self.z_max, self.view_idx, self.zoom_pip = 0.0, 0, False
+        self._az, self._el, self._center = -38.0, 30.0, None
         self.rec, self.recording, self.writer = rec, rec is not None, None
         self.placed = self.full = self.closed = False
         self.cv2.namedWindow(title, self.cv2.WINDOW_NORMAL | self.cv2.WINDOW_KEEPRATIO)
@@ -532,40 +735,182 @@ class Preview:
         cv2.setWindowProperty(self.title, cv2.WND_PROP_TOPMOST, 1)
         self.placed = True
 
-    def _map(self, side: int) -> np.ndarray:
-        cv2 = self.cv2
-        o = np.zeros(2) if self.anchor is None else np.asarray(self.anchor[1:])
-        tr = np.asarray(self.trail, float)[:, 1:] if self.trail else np.zeros((0, 2))
-        tj = np.zeros((0, 2)) if self.traj is None else self.traj + o   # shape_xy starts at 0,0: drawn from the anchor
-        ext = np.ceil(2 * max(1.0, 1.15 * float(np.abs(np.vstack([tr, tj])).max(initial=0.0)))) / 2   # 0.5 m steps
-        k = side / (2 * ext)
+    def _best_angles(self, tr3: np.ndarray, now: float) -> tuple[float, float]:
+        mode = self.VIEWS[self.view_idx % len(self.VIEWS)]
+        if mode == "top":
+            return 0.0, 88.0
+        if mode == "iso":
+            return -38.0, 30.0
+        if mode == "orbit":
+            t0 = self.trail[0][0] if self.trail else now
+            return (-38.0 + 14.0 * max(0.0, now - t0)) % 360.0 - 180.0, 28.0
+        az_t, el_t = -38.0, 30.0
+        if len(tr3) >= 4:
+            pts = tr3[-240:]
+            span_xy = float(np.ptp(pts[:, :2], axis=0).max())
+            span_z = float(np.ptp(pts[:, 2]))
+            if span_xy > 0.05:
+                centered = pts[:, :2] - pts[:, :2].mean(axis=0)
+                cov = (centered.T @ centered) / max(1, len(centered) - 1)
+                vals, vecs = np.linalg.eigh(cov)
+                v_dom = vecs[:, int(np.argmax(vals))]
+                pca_deg = float(np.degrees(np.arctan2(v_dom[1], v_dom[0])))
+                # Look ~62 deg oblique to the principal horizontal axis so neither X/Y nor depth foreshortens
+                cand1 = (pca_deg + 62.0 + 180.0) % 360.0 - 180.0
+                cand2 = (pca_deg - 118.0 + 180.0) % 360.0 - 180.0
+                d1 = abs((cand1 - self._az + 180.0) % 360.0 - 180.0)
+                d2 = abs((cand2 - self._az + 180.0) % 360.0 - 180.0)
+                az_t = cand1 if d1 <= d2 else cand2
+            z_ratio = span_z / max(span_xy, 0.20)
+            # Lower elevation (22-26 deg) when vertical Z motion dominates; higher (32-42 deg) when XY loop dominates
+            el_t = float(np.clip(38.0 - 11.0 * z_ratio, 22.0, 42.0))
+        d_az = (az_t - self._az + 180.0) % 360.0 - 180.0
+        self._az = (self._az + 0.14 * d_az + 180.0) % 360.0 - 180.0
+        self._el = self._el + 0.14 * (el_t - self._el)
+        return self._az, self._el
 
-        def px(xy):
-            xy = np.atleast_2d(xy)
-            return np.stack([side / 2 + xy[:, 0] * k, side / 2 - xy[:, 1] * k], 1).astype(np.int32)
-        key = (side, ext, tuple(o) if len(tj) else None)
-        if getattr(self, "_bg_key", None) != key:     # grid, preset and footer: redrawn only when the extent moves
-            bg = np.full((side, side, 3), 28, np.uint8)
-            for v in np.arange(-ext, ext + 1e-9, 0.5):
-                c = (110, 110, 110) if abs(v) < 1e-9 else (60, 60, 60)
-                cv2.line(bg, *map(tuple, px([[v, -ext], [v, ext]])), c, 1)
-                cv2.line(bg, *map(tuple, px([[-ext, v], [ext, v]])), c, 1)
-            if len(tj):
-                cv2.polylines(bg, [px(tj)], True, (255, 170, 60), 1, cv2.LINE_AA)
-            cv2.putText(bg, f"pad frame, 0.5 m grid, +x right +y up, {2 * ext:.1f} m wide", (6, side - 8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (170, 170, 170), 1, cv2.LINE_AA)
-            self._bg, self._bg_key = bg, key
-        img = self._bg.copy()
+    def _map(self, side: int, now: float = 0.0) -> np.ndarray:
+        cv2 = self.cv2
+        o2 = np.zeros(2) if self.anchor is None else np.asarray(self.anchor[1:3], float)
+        o3 = np.array([o2[0], o2[1], 0.0])
+        if self.trail:
+            raw = np.asarray(self.trail, float)
+            tr3 = np.column_stack([raw[:, 1:3], raw[:, 3] if raw.shape[1] >= 4 else np.zeros(len(raw))])
+        else:
+            tr3 = np.zeros((0, 3))
+        tr3 = thin_path(tr3)
+        z_ref = float(np.median(tr3[-30:, 2])) if len(tr3) else max(0.0, self.z)
+        if self.traj is None or len(self.traj) == 0:
+            tj3 = np.zeros((0, 3))
+        else:
+            tj_arr = np.asarray(self.traj, float)
+            tj3 = (np.column_stack([tj_arr[:, :2] + o2, np.full(len(tj_arr), max(0.25, z_ref))])
+                   if tj_arr.shape[1] == 2 else tj_arr + o3)
+        all_pts = np.vstack([p for p in (tr3, tj3, o3[None, :]) if len(p)])
+        pmin, pmax = all_pts.min(axis=0), all_pts.max(axis=0)
+        c_tgt = np.array([0.5 * (pmin[0] + pmax[0]), 0.5 * (pmin[1] + pmax[1]),
+                          0.45 * max(0.35, float(pmax[2]))])
+        self._center = c_tgt if self._center is None else (self._center + 0.20 * (c_tgt - self._center))
+        cx, cy, cz = self._center
+        half_xy = max(0.5, float(np.abs(all_pts[:, :2] - np.array([cx, cy])).max(initial=0.0)) * 1.20)
+        ext_xy = np.ceil(4.0 * half_xy) / 4.0     # 0.25 m steps, min 0.5 m half-span
+        ext_z = max(0.5, np.ceil(4.0 * max(0.4, float(pmax[2]) * 1.20)) / 4.0)
+        z_scale = min(1.35, max(0.75, 0.85 * ext_xy / max(ext_z, 0.25)))
+        az_deg, el_deg = self._best_angles(tr3, now)
+        az, el = np.radians(az_deg), np.radians(el_deg)
+        ca, sa, ce, se = np.cos(az), np.sin(az), np.cos(el), np.sin(el)
+        k = (0.40 * side) / max(ext_xy, 0.5)
+
+        def proj(pts3):
+            p = np.atleast_2d(np.asarray(pts3, float))
+            dx, dy, dz = p[:, 0] - cx, p[:, 1] - cy, (p[:, 2] - cz) * z_scale
+            rx = ca * dx - sa * dy
+            ry = sa * dx + ca * dy
+            depth = (-ce * ry + se * dz) / max(ext_xy, 0.5)
+            persp = 1.0 / np.clip(1.0 + 0.14 * depth, 0.65, 1.55)
+            u = side * 0.50 + rx * k * persp
+            v = side * 0.54 - (se * ry + ce * dz) * k * persp
+            return np.stack([u, v], axis=1).astype(np.int32)
+
+        img = np.full((side, side, 3), 24, np.uint8)
+        step_g = 0.25 if ext_xy <= 0.75 else 0.5
+        g_min_x, g_max_x = np.floor((cx - ext_xy) / step_g) * step_g, np.ceil((cx + ext_xy) / step_g) * step_g
+        g_min_y, g_max_y = np.floor((cy - ext_xy) / step_g) * step_g, np.ceil((cy + ext_xy) / step_g) * step_g
+        for gx in np.arange(g_min_x, g_max_x + 1e-9, step_g):
+            col = (95, 95, 105) if abs(gx) < 1e-6 else (50, 50, 56)
+            cv2.line(img, *map(tuple, proj([[gx, g_min_y, 0.0], [gx, g_max_y, 0.0]])), col, 1, cv2.LINE_AA)
+        for gy in np.arange(g_min_y, g_max_y + 1e-9, step_g):
+            col = (95, 95, 105) if abs(gy) < 1e-6 else (50, 50, 56)
+            cv2.line(img, *map(tuple, proj([[g_min_x, gy, 0.0], [g_max_x, gy, 0.0]])), col, 1, cv2.LINE_AA)
+
+        # Vertical Z-axis post at back corner of floor grid + 0.25 m tick marks
+        z_post_xy = [g_min_x, g_max_y]
+        cv2.line(img, *map(tuple, proj([[*z_post_xy, 0.0], [*z_post_xy, ext_z]])), (120, 110, 80), 1, cv2.LINE_AA)
+        for gz in np.arange(0.0, ext_z + 1e-9, 0.25):
+            tp = proj([[*z_post_xy, gz], [z_post_xy[0] + 0.06 * ext_xy, z_post_xy[1], gz]])
+            cv2.line(img, tuple(tp[0]), tuple(tp[1]), (140, 130, 95), 1, cv2.LINE_AA)
+            if gz > 0:
+                cv2.putText(img, f"{gz:.2f}m", (int(tp[0][0]) + 4, int(tp[0][1]) - 2),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.33, (145, 140, 115), 1, cv2.LINE_AA)
+
+        # Pad origin 3D axis triad (+X red, +Y green, +Z cyan) & drift pass circle on z=0 floor
+        ax_len = min(0.25, 0.35 * ext_xy)
+        triad = proj([o3, o3 + [ax_len, 0, 0], o3 + [0, ax_len, 0], o3 + [0, 0, ax_len]])
+        cv2.line(img, tuple(triad[0]), tuple(triad[1]), (70, 80, 235), 2, cv2.LINE_AA)
+        cv2.line(img, tuple(triad[0]), tuple(triad[2]), (70, 210, 70), 2, cv2.LINE_AA)
+        cv2.line(img, tuple(triad[0]), tuple(triad[3]), (235, 200, 50), 2, cv2.LINE_AA)
         if self.anchor is not None:
-            cv2.circle(img, tuple(px(o)[0]), max(1, int(self.pass_m * k)),
-                       (0, 200, 0) if self.max_d < self.pass_m else (0, 0, 230), 1, cv2.LINE_AA)
-        if len(tr) > 1:
-            pt = px(tr)
-            cv2.polylines(img, [pt[np.r_[True, (np.diff(pt, axis=0) != 0).any(1)]]], False, (0, 210, 255), 1,
-                          cv2.LINE_AA)                # one vertex per pixel step (hover piles fixes on one pixel)
+            th = np.linspace(0.0, 2.0 * np.pi, 48)
+            ring3 = np.column_stack([o2[0] + self.pass_m * np.cos(th), o2[1] + self.pass_m * np.sin(th), np.zeros_like(th)])
+            cv2.polylines(img, [proj(ring3)], True, (0, 200, 0) if self.max_d < self.pass_m else (0, 0, 230), 1, cv2.LINE_AA)
+
+        if len(tj3):
+            tj_floor = np.column_stack([tj3[:, :2], np.zeros(len(tj3))])
+            cv2.polylines(img, [proj(tj_floor)], True, (110, 80, 40), 1, cv2.LINE_AA)
+            cv2.polylines(img, [proj(tj3)], True, (255, 170, 60), 1, cv2.LINE_AA)
+
+        if len(tr3) > 1:
+            # Ground shadow on z=0 plane
+            sh_pts = proj(np.column_stack([tr3[:, :2], np.zeros(len(tr3))]))
+            sh_uniq = sh_pts[np.r_[True, (np.diff(sh_pts, axis=0) != 0).any(1)]]
+            if len(sh_uniq) > 1:
+                cv2.polylines(img, [sh_uniq], False, (82, 78, 72), 1, cv2.LINE_AA)
+            # Vertical drop-stems from 3D path to z=0 floor for 3D depth perception
+            step_s = max(1, len(tr3) // 18)
+            for idx in range(0, len(tr3), step_s):
+                p_top, p_bot = proj([tr3[idx], [tr3[idx, 0], tr3[idx, 1], 0.0]])
+                cv2.line(img, tuple(p_bot), tuple(p_top), (75, 95, 110), 1, cv2.LINE_AA)
+            # 3D path ribbon with dark backing + persistent crisp stroke
+            pt3 = proj(tr3)
+            keep = np.r_[True, (np.diff(pt3, axis=0) != 0).any(1)]
+            pt_u = pt3[keep]
+            if len(pt_u) > 1:
+                cv2.polylines(img, [pt_u], False, (15, 15, 15), 4, cv2.LINE_AA)
+                cv2.polylines(img, [pt_u], False, (0, 215, 255), 2, cv2.LINE_AA)
+
         if self.xy is not None:
-            cv2.circle(img, tuple(px(self.xy)[0]), 5, (0, 255, 0), -1, cv2.LINE_AA)
+            cur3 = np.array([self.xy[0], self.xy[1], max(0.0, self.z)])
+            p_cur, p_gnd = proj([cur3, [self.xy[0], self.xy[1], 0.0]])
+            cv2.line(img, tuple(p_gnd), tuple(p_cur), (0, 235, 180), 1, cv2.LINE_AA)
+            cv2.circle(img, tuple(p_gnd), 3, (0, 180, 140), 1, cv2.LINE_AA)
+            cv2.circle(img, tuple(p_cur), 6, (15, 15, 15), -1, cv2.LINE_AA)
+            cv2.circle(img, tuple(p_cur), 5, (0, 255, 0), -1, cv2.LINE_AA)
+
+        mode_name = self.VIEWS[self.view_idx % len(self.VIEWS)]
+        xyz_txt = (f"x {self.xy[0]*100:+.0f} y {self.xy[1]*100:+.0f} z {self.z*100:.0f} cm"
+                   if self.xy is not None else "no fix")
+        cv2.putText(img, f"3D [{mode_name} az {az_deg:+.0f} el {el_deg:.0f}]  {xyz_txt}", (6, 18),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (220, 220, 220), 1, cv2.LINE_AA)
+        cv2.putText(img, f"pad 3D ({step_g:.2f}m grid) +X:red +Y:grn +Z:cyn  span {2*ext_xy:.1f}x{ext_z:.1f}m",
+                    (6, side - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (170, 170, 170), 1, cv2.LINE_AA)
         return img
+
+    def _draw_landing_pip(self, img: np.ndarray, frame: np.ndarray) -> None:
+        """Magnified 2.5x Picture-in-Picture inset around the drone/pad during landing phase or when key z is active."""
+        if not self.uvs:
+            return
+        cv2 = self.cv2
+        H, W = frame.shape[:2]
+        ih, iw = img.shape[:2]
+        u_c, v_c = self.uvs[-1][1], self.uvs[-1][2]
+        pip_side = max(110, min(200, int(0.32 * ih)))
+        half_src = max(36, int(pip_side / (2.5 * max(self.scale, 0.25))))
+        u0 = int(np.clip(u_c - half_src, 0, max(0, W - 2 * half_src)))
+        v0 = int(np.clip(v_c - half_src, 0, max(0, H - 2 * half_src)))
+        crop = frame[v0:min(H, v0 + 2 * half_src), u0:min(W, u0 + 2 * half_src)]
+        if crop.size == 0:
+            return
+        pip = cv2.resize(crop, (pip_side, pip_side), interpolation=cv2.INTER_LINEAR)
+        cx_p = int((u_c - u0) * pip_side / max(1, crop.shape[1]))
+        cy_p = int((v_c - v0) * pip_side / max(1, crop.shape[0]))
+        cv2.circle(pip, (cx_p, cy_p), 12, (0, 255, 0), 2, cv2.LINE_AA)
+        cv2.line(pip, (cx_p - 18, cy_p), (cx_p + 18, cy_p), (0, 255, 180), 1, cv2.LINE_AA)
+        cv2.line(pip, (cx_p, cy_p - 18), (cx_p, cy_p + 18), (0, 255, 180), 1, cv2.LINE_AA)
+        cv2.rectangle(pip, (0, 0), (pip_side - 1, pip_side - 1), (0, 215, 255), 2)
+        cv2.putText(pip, f"LAND ZOOM 2.5x z={self.z*100:.0f}cm", (5, 15),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.36, (0, 215, 255), 1, cv2.LINE_AA)
+        y1, x1 = ih - 8, iw - 8
+        img[y1 - pip_side:y1, x1 - pip_side:x1] = pip
 
     def _key(self, k: int, now: float) -> None:
         cv2 = self.cv2
@@ -577,39 +922,52 @@ class Preview:
         elif k == ord("a") and self.xy is not None:
             self.anchor, self.max_d = (now, *self.xy), 0.0
         elif k == ord("c"):
-            self.trail, self.uvs = [], []
+            self.trail, self.uvs, self.z_max, self._center = [], [], 0.0, None
+        elif k == ord("v"):
+            self.view_idx = (self.view_idx + 1) % len(self.VIEWS)
+        elif k == ord("z"):
+            self.zoom_pip = not self.zoom_pip
         elif k == ord("f"):
             self.full = not self.full
             cv2.setWindowProperty(self.title, cv2.WND_PROP_FULLSCREEN,
                                   cv2.WINDOW_FULLSCREEN if self.full else cv2.WINDOW_NORMAL)
 
-    def __call__(self, now: float, frame, uv, xy, lines) -> None:
+    def __call__(self, now: float, frame, uv, xy, lines, z: float | None = None) -> None:
+        if z is not None and np.isfinite(z):
+            self.z = max(0.0, float(z))
+            self.z_max = max(self.z_max, self.z)
         if uv is not None:
             self.uvs.append((now, float(uv[0]), float(uv[1])))
         if xy is not None:
             self.xy = (float(xy[0]), float(xy[1]))
-            self.trail.append((now, *self.xy))
+            self.trail.append((now, self.xy[0], self.xy[1], self.z))
             if self.anchor is None:                       # first fix anchors the drift circle; key a re-anchors
                 self.anchor = (now, *self.xy)
             self.max_d = max(self.max_d, float(np.hypot(self.xy[0] - self.anchor[1], self.xy[1] - self.anchor[2])))
         if now - self.t_last < self.dt:
             return
         p0 = time.perf_counter()
-        while self.trail and now - self.trail[0][0] > self.trail_s:
-            self.trail.pop(0)
-        while self.uvs and now - self.uvs[0][0] > 10.0:
-            self.uvs.pop(0)
+        if self.trail_s > 0:
+            while self.trail and now - self.trail[0][0] > self.trail_s:
+                self.trail.pop(0)
+            while self.uvs and now - self.uvs[0][0] > self.trail_s:
+                self.uvs.pop(0)
         cv2, s = self.cv2, self.display_scale(frame.shape[1])
         img = cv2.resize(frame, None, fx=s, fy=s, interpolation=cv2.INTER_AREA if s < 1.0 else cv2.INTER_NEAREST)
         if len(self.uvs) > 1:
-            cv2.polylines(img, [(np.asarray(self.uvs)[:, 1:] * s).astype(np.int32)], False, (0, 210, 255), 1,
-                          cv2.LINE_AA)
+            uv_px = (thin_path(np.asarray(self.uvs))[:, 1:3] * s).astype(np.int32)
+            uv_u = uv_px[np.r_[True, (np.diff(uv_px, axis=0) != 0).any(1)]]
+            if len(uv_u) > 1:
+                cv2.polylines(img, [uv_u], False, (15, 15, 15), 3, cv2.LINE_AA)
+                cv2.polylines(img, [uv_u], False, (0, 215, 255), 2, cv2.LINE_AA)
         if self.uvs and now - self.uvs[-1][0] < self.HOLD_S:   # held ring: no blink on frames without a detection
             c, col = (int(self.uvs[-1][1] * s), int(self.uvs[-1][2] * s)), (0, 255, 0) if uv is not None else (0, 200, 255)
             cv2.circle(img, c, 14, col, 2, cv2.LINE_AA)
             if self.xy is not None:
-                cv2.putText(img, f"{self.xy[0] * 100:+.0f},{self.xy[1] * 100:+.0f} cm", (c[0] + 16, c[1]),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 1, cv2.LINE_AA)
+                cv2.putText(img, f"{self.xy[0] * 100:+.0f},{self.xy[1] * 100:+.0f},{self.z * 100:.0f} cm",
+                            (c[0] + 16, c[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 1, cv2.LINE_AA)
+        if self.zoom_pip or (self.z_max >= 0.20 and 0.0 < self.z <= 0.30):
+            self._draw_landing_pip(img, frame)
         if self.anchor is not None and self.xy is not None:
             d = np.hypot(self.xy[0] - self.anchor[1], self.xy[1] - self.anchor[2])
             lines = [*lines, f"drift {d * 100:.1f} cm  max {self.max_d * 100:.1f}/{self.pass_m * 100:.0f}  "
@@ -618,7 +976,7 @@ class Preview:
             cv2.putText(img, txt, (8, 20 + 18 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3, cv2.LINE_AA)
             cv2.putText(img, txt, (8, 20 + 18 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                         (0, 0, 255) if txt.startswith("NO FIX") else (255, 255, 255), 1, cv2.LINE_AA)
-        img = np.hstack([img, self._map(img.shape[0])])
+        img = np.hstack([img, self._map(img.shape[0], now)])
         if self.recording:
             if self.writer is None:
                 Path(self.rec).parent.mkdir(parents=True, exist_ok=True)
@@ -910,6 +1268,26 @@ def tel_height(tel_npz, key: str = "slot0.Ctrler.Z_posPID.FB", tel_offset_s: flo
     return lambda t: float(np.interp(t - tel_offset_s, tz, z)) + ring_offset_m
 
 
+def tel_yaw_npz(tel_npz, key: str = "imu_data.yaw", tel_offset_s: float = 0.0) -> Callable[[float], float | None] | None:
+    """Telemetry yaw (deg, wrapped to +-180) for frame time t, from `key` and `key|t` in `tel_npz` (same layout and
+    offset as tel_height), so the --marker heading check also runs on a replay. Interpolates the unwrapped angle;
+    None outside the logged span. Returns None (no check) when the npz has no `key`."""
+    d = np.load(tel_npz) if isinstance(tel_npz, str) else tel_npz
+    if key not in d or key + "|t" not in d:
+        return None
+    ty = np.asarray(d[key + "|t"], float)
+    y = np.unwrap(np.radians(np.asarray(d[key], float)))
+    if ty.size == 0:
+        return None
+
+    def f(t: float) -> float | None:
+        tt = t - tel_offset_s
+        if not ty[0] <= tt <= ty[-1]:
+            return None
+        return float((np.degrees(np.interp(tt, ty, y)) + 180.0) % 360.0 - 180.0)
+    return f
+
+
 def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[[float], float],
                cam_latency_s: float = 0.0, send: Callable[[bytes], None] | None = None, out_csv: str | None = None,
                sched: FixScheduler | None = None, clock: Callable[[], float] | None = None, max_frames: int = 0, start_s: float = 0.0,
@@ -918,7 +1296,8 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
                pad: PadOrigin | None = None, ground: Callable[[], bool] | None = None,
                show: Preview | None = None, stop_file: str | None = None, size: tuple | None = None,
                auto: AutoAlign | None = None, earth: Callable[[], np.ndarray | None] | None = None,
-               air_m: float = 0.15) -> dict:
+               air_m: float = 0.15, size_gate: SizeGate | None = None, marker: MarkerCheck | None = None,
+               tel_yaw: Callable[[float], float | None] | None = None) -> dict:
     """Read frames from `source` (file, device index or window:<title>), emit fixes. For a file the capture time is
     the frame pts and the send time is that pts too (age = camera latency only); live, both come from `clock`.
     `ring`: a pixel tracker with .step(frame) -> uv (RingTracker, CoralTracker), else the guard detector with
@@ -927,7 +1306,10 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
     (t_read, t_fix, frame bytes) per fix. `pad` makes the fixes pad-relative (`ground()`: telemetry on-ground flag,
     None = first detections); a NaN height (stale telemetry) gives no fix. `show` draws each frame (throttled).
     `auto` (--align auto): mode 1 is sent until it locks, fed each fix taken above `air_m` with a fresh `earth()`
-    (EKF cm); on lock the mode frame goes out at once."""
+    (EKF cm); on lock the mode frame goes out at once. `size_gate` checks a CoralTracker blob's pixel count against
+    the telemetry height (calibrated on the pad; it drops the fix only with reject=True). `marker` looks for the
+    drone's ArUco id in the CoralTracker ROI: after a coral miss it only re-centres the tracker (no fix comes from the
+    marker); with `tel_yaw(t_cap)` (deg) it compares the marker heading with the telemetry yaw."""
     cv2 = vt._cv2()
     win = str(source).startswith("window:")
     cap = WindowSource(str(source)[7:], size=size) if win else cv2.VideoCapture(int(source) if str(source).isdigit() else source)
@@ -967,13 +1349,24 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
             t_hello = t_read
         t_cap = t_read - cam_latency_s
         z = height_m(t_cap) if callable(height_m) else height_m
+        z_agl = height_agl(height_m, z)
         if ring is not None:
-            uv = ring.step(frame)
+            uv = ring.step(frame, z_agl) if isinstance(ring, CoralTracker) else ring.step(frame)
+            if marker is not None and isinstance(ring, CoralTracker):
+                mk = marker.step(frame, ring.c if uv is None else uv, ring.r if uv is None else ring.roi, uv,
+                                 tel_yaw(t_cap) if tel_yaw else None, ground() if ground else None)
+                if uv is None and mk is not None:
+                    ring.recentre(mk)
             if uv_log is not None:
                 uv_log.append((t_read, *(uv if uv is not None else (np.nan, np.nan))))
             xy = None if uv is None or not np.isfinite(z) else ring_xy(uv, cam, z)
         else:
             xy = detect_xy(frame, cam, z, static) if np.isfinite(z) else None
+        if xy is not None and size_gate is not None and isinstance(ring, CoralTracker) and \
+                not size_gate.check(uv, ring.npx, z, ground() if ground else True):
+            if gate is not None and gate.last is not None and gate.last[2] is not None:
+                ring.recentre(gate.last[2])
+            xy = None
         if xy is not None and gate is not None and not gate.check(t_cap, xy, uv):
             if ring is not None and hasattr(ring, "recentre") and gate.last[2] is not None:
                 ring.recentre(gate.last[2])
@@ -993,7 +1386,11 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
                  [f"mode {auto.mode if auto else mode}  z {z:.2f} m  fixes {sched.n_sent}  det {n_det}/{n}",
                                          f"gate rej {gate.n_rej if gate else 0}  pad {'set' if pad is None or pad.xy is not None else 'WAIT'}"
                                          f"{' frozen' if pad is not None and pad.frozen else ''}"]
-                 + ([auto.status] if auto else []))
+                 + ([auto.status] if auto else [])
+                 + ([f"size {size_gate.ratio:.2f}  z_size {size_gate.z_size:.2f} m  out {size_gate.n_out}"]
+                    if size_gate is not None and size_gate.ratio is not None else [])
+                 + ([f"marker hdg {marker.heading:.0f} deg  seen {marker.n_seen}/{marker.n}  reacq {marker.n_reacq}"]
+                    if marker is not None and marker.heading is not None else []), z=z_agl)
         if xy is not None:
             n_det += 1
             sched.push(t_cap, xy)
@@ -1028,7 +1425,8 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
             "read_ms": 1000 * t_rd / max(n, 1), "detect_ms": 1000 * t_det / max(n, 1),
             "show_ms": show.ms / max(show.n, 1) if show else 0.0,
             "pad_xy": None if pad is None or pad.xy is None else [round(float(v), 4) for v in pad.xy],
-            "align": auto.status if auto else "fixed"}
+            "align": auto.status if auto else "fixed", **(size_gate.summary() if size_gate else {}),
+            **(marker.summary() if marker else {})}
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -1209,6 +1607,12 @@ def main(argv=None) -> int:
     ap.add_argument("--n-med", type=int, default=2)
     ap.add_argument("--window-s", type=float, default=0.1)
     ap.add_argument("--gate", action="store_true", help="JumpGate on detections (PROPOSED thresholds)")
+    ap.add_argument("--size-gate", choices=["off", "count", "reject"], default="off",
+                    help="coral detector: ring pixel size vs telemetry height; count = report only (PROPOSED bounds)")
+    ap.add_argument("--marker", choices=["off", "on"], default="off",
+                    help="coral: the drone's ArUco marker in the ROI re-acquires after a miss, heading vs --tel-yaw-key")
+    ap.add_argument("--marker-id", type=int, default=1, help="--marker: the drone's top marker id (R4: id1, 0.077 m)")
+    ap.add_argument("--tel-yaw-key", default="imu_data.yaw", help="--marker: telemetry yaw (deg) for the heading check (live CSV/URL or --tel-npz)")
     ap.add_argument("--send", default="", help="udp:PORT (stream_log --relay-port) or udp:HOST:PORT; default: no send")
     ap.add_argument("--mode", type=int, choices=[0, 1, 2, 3], default=None,
                     help="EXT_POS mode frame: 0 off, 1 shadow, 2 offset outside the EKF, 3 in-EKF fix")
@@ -1238,12 +1642,22 @@ def main(argv=None) -> int:
     if sum(map(bool, (a.tel_npz, a.tel_csv, a.tel_url))) > 1 or not (a.tel_npz or a.tel_csv or a.tel_url
                                                                       or a.height_m is not None):
         ap.error("give one of --tel-csv / --tel-url (with an optional --height-m fallback), --tel-npz or --height-m")
+    if a.marker == "on" and a.detector != "coral":
+        ap.error("--marker on needs --detector coral")
     ek = ("ano_of.earth_x", "ano_of.earth_y") if a.align == "auto" else ()
     live = a.tel_csv or a.tel_url
+    yk = (a.tel_yaw_key,) if a.marker == "on" and live else ()
     tel = (TelHeightHttp if a.tel_url else TelHeight)(live, a.tel_key, a.ring_h_m, stale_s=a.tel_stale_s,
-                                                      fallback_m=a.height_m, extra=ek) if live else None
+                                                      fallback_m=a.height_m, extra=ek + yk) if live else None
     height = tel or (tel_height(a.tel_npz, tel_offset_s=a.tel_offset_s, ring_offset_m=a.ring_offset_m)
                      if a.tel_npz else a.height_m)
+    yaw_fn = None
+    if yk:
+        yaw_fn = lambda t: None if (v := tel.vec(yk)) is None else float(v[0])   # noqa: E731 - live: latest sample
+    elif a.marker == "on" and a.tel_npz:
+        yaw_fn = tel_yaw_npz(a.tel_npz, a.tel_yaw_key, a.tel_offset_s)
+        if yaw_fn is None:
+            print(f"--marker: {a.tel_yaw_key} not in {a.tel_npz}; no heading check", flush=True)
     src_live = str(a.source).isdigit() or a.source.startswith("window:")
     size = (WindowSource(a.source[7:]).ready() if a.source.startswith("window:")
             else None if str(a.source).isdigit() else vt.video_size(a.source))
@@ -1282,7 +1696,11 @@ def main(argv=None) -> int:
                      ground=(lambda: tel.ground if tel.fresh else None) if tel else None, show=show,
                      stop_file=a.stop_file or None, size=size if a.source.startswith("window:") else None,
                      auto=auto, earth=(lambda: tel.vec(ek)) if auto else None,
-                     air_m=a.ring_h_m + a.align_min_h_m), flush=True)          # z there is the ring plane
+                     air_m=a.ring_h_m + a.align_min_h_m,
+                     size_gate=SizeGate(cam, reject=a.size_gate == "reject") if a.size_gate != "off" else None,
+                     marker=MarkerCheck(cam, mid=a.marker_id, near_px=50.0 * s) if a.marker == "on" else None,
+                     tel_yaw=yaw_fn),
+          flush=True)          # z there is the ring plane
     return 0
 
 

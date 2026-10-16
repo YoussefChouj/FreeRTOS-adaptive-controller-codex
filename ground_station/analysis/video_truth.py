@@ -138,13 +138,15 @@ def aruco_detector(dict_name: str = ARUCO_DICT):
 def aruco_scan(video: str, step: int = 1, t0: float = 0.0, t1: float | None = None, dict_name: str = ARUCO_DICT,
                out: str | None = None) -> dict:
     """Corners of every ArUco marker in every `step`-th frame between t0 and t1 s (video time). Returns {"t": (n,) s,
-    "c<id>": (n, 4, 2) px, NaN where that id was not seen}; `out` saves it as .npz (a scan is minutes of decoding,
-    what follows is seconds)."""
+    "c<id>": (n, 4, 2) px, NaN where that id was not seen, plus every detection as all_i (frame index), all_id, all_c
+    (4, 2) px: c<id> keeps one per frame, and R4 has a second, static id1 that hid the drone's top marker in >90 % of
+    frames (drop_static rebuilds the moving one); `out` saves it as .npz (a scan is minutes of decoding, what follows
+    is seconds)."""
     cv2 = _cv2()
     det, cap = aruco_detector(dict_name), cv2.VideoCapture(video)
     if t0:
         cap.set(cv2.CAP_PROP_POS_MSEC, t0 * 1000)
-    ts, seen, i = [], {}, -1
+    ts, seen, i, all_i, all_id, all_c = [], {}, -1, [], [], []
     while cap.grab():
         i += 1
         t = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
@@ -155,8 +157,10 @@ def aruco_scan(video: str, step: int = 1, t0: float = 0.0, t1: float | None = No
         c, ids, _ = det.detectMarkers(cv2.cvtColor(cap.retrieve()[1], cv2.COLOR_BGR2GRAY))
         for cc, m in zip(c, ids.ravel() if ids is not None else []):
             seen.setdefault(int(m), {})[len(ts)] = cc.reshape(4, 2)
+            all_i.append(len(ts)); all_id.append(int(m)); all_c.append(cc.reshape(4, 2))
         ts.append(t)
-    res = {"t": np.array(ts)}
+    res = {"t": np.array(ts), "all_i": np.array(all_i, np.int32), "all_id": np.array(all_id, np.int32),
+           "all_c": np.array(all_c, np.float32).reshape(-1, 4, 2)}
     for m, d in sorted(seen.items()):
         a = np.full((len(ts), 4, 2), np.nan, np.float32)
         a[list(d)] = np.array(list(d.values()))
@@ -164,6 +168,27 @@ def aruco_scan(video: str, step: int = 1, t0: float = 0.0, t1: float | None = No
     if out:
         np.savez_compressed(out, **res)
     return res
+
+
+def drop_static(scan: dict, mid: int = 1, tol_px: float = 5.0) -> dict:
+    """Copy of `scan` whose c<mid> holds only the moving marker of that id: detections within tol_px of the id's
+    median centre (a same-id marker fixed in the scenery, R4's second id1) are removed. With all_* (new scans) a frame
+    where both were seen keeps the moving one; an old scan only loses the static frames. R4 b2-b16 check (computed):
+    the kept id1 fixes follow the coral truth (x/y corr 0.86-0.99 in 10 of 13 flights, 5-12 cm spread about the
+    offset), so they are the drone's top marker."""
+    out = dict(scan)
+    c = np.array(scan[f"c{mid}"], np.float32)
+    ctr = c.mean(axis=1)
+    static = np.nanmedian(ctr, axis=0)
+    c[np.linalg.norm(ctr - static, axis=1) <= tol_px] = np.nan
+    if "all_id" in scan:
+        sel = np.asarray(scan["all_id"]) == mid
+        ii, cc = np.asarray(scan["all_i"])[sel], np.asarray(scan["all_c"])[sel]
+        mov = np.linalg.norm(cc.mean(axis=1) - static, axis=1) > tol_px
+        for k, q in zip(ii[mov], cc[mov]):
+            c[k] = q          # more than one moving id<mid> in a frame: the last one wins, as in c<id>
+    out[f"c{mid}"] = c
+    return out
 
 
 def marker_obj(side: float) -> np.ndarray:

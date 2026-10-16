@@ -97,6 +97,15 @@ def test_tel_height_shifts_time_and_adds_ring_offset():
     assert abs(h(20.0) - 0.55) < 1e-12 and abs(h(0.0) - 0.05) < 1e-12      # video 20 s = tel 5 s; clamps before tel 0
 
 
+
+def test_tel_yaw_npz_shifts_time_wraps_and_skips_outside_the_log():
+    from ground_station.analysis.live_tracker import tel_yaw_npz
+    k = "imu_data.yaw"
+    f = tel_yaw_npz({k + "|t": np.array([0.0, 10.0]), k: np.array([170.0, -170.0])}, k, tel_offset_s=15.0)
+    assert abs(abs(f(20.0)) - 180.0) < 1e-9                    # midpoint across the wrap: 180, not 0
+    assert abs(f(16.0) - 172.0) < 1e-9 and f(14.0) is None and f(26.0) is None
+    assert tel_yaw_npz({"other|t": np.array([0.0]), "other": np.array([0.0])}, k) is None
+
 _CORAL = (40, 90, 230)                                         # BGR: OpenCV hue ~8, sat ~210, val 230 -> coral_mask
 
 
@@ -408,3 +417,205 @@ def test_preview_draws_a_full_size_grab_at_the_set_width():
     assert scale(SimpleNamespace(width=716, scale=0.6), 1194) == pytest.approx(0.6, abs=1e-3)
     assert scale(SimpleNamespace(width=716, scale=0.6), 640) == 1.0                         # never upscaled
     assert scale(SimpleNamespace(width=None, scale=0.6), 1920) == 0.6                        # no width: fixed scale
+
+
+def test_preview_keeps_persistent_traced_path_and_renders_3d_auto_view():
+    import ground_station.analysis.video_truth as vt
+    from ground_station.analysis.live_tracker import Preview
+    p = object.__new__(Preview)
+    p.cv2, p.dt, p.scale, p.title, p.t_last, p.ms = vt._cv2(), 0.0, 0.5, "test", -1e9, 0.0
+    p.width, p.hz, p.rect, p.traj, p.pass_m, p.trail_s, p.n = None, 30.0, None, None, 0.20, 0.0, 0
+    p.trail, p.uvs, p.anchor, p.max_d, p.xy, p.z = [], [], None, 0.0, None, 0.0
+    p.z_max, p.view_idx, p.zoom_pip = 0.0, 0, False
+    p._az, p._el, p._center = -38.0, 30.0, None
+    p.rec, p.recording, p.writer, p.placed, p.full, p.closed = None, False, None, True, False, True
+    frame = np.zeros((240, 320, 3), dtype=np.uint8)
+    for k in range(30):
+        t = k * 10.0   # spans 290 s (> old 10 s uv and 120 s trail limits)
+        p(t, frame, (50.0 + k * 4.0, 60.0 + k * 2.0), (0.02 * k, 0.01 * k), ["status"], z=0.03 * k)
+    assert len(p.uvs) == 30 and len(p.trail) == 30
+    assert p.trail[-1][3] == pytest.approx(0.03 * 29)
+    panel = p._map(120, now=290.0)
+    assert panel.shape == (120, 120, 3)
+    assert p._center is not None and p._center[2] > 0.1
+    # Key 'c' explicitly clears both persistent trails
+    p._key(ord("c"), 300.0)
+    assert len(p.uvs) == 0 and len(p.trail) == 0
+
+
+def test_coral_tracker_landing_zoom_preserves_canonical_sensor_coordinates():
+    from ground_station.analysis.live_tracker import CoralTracker
+    target = (312, 228)
+    frame = _coral_frame(target)
+    t_base = CoralTracker(target, zoom=1.0, land_zoom=1.0)
+    t_zoom = CoralTracker(target, zoom=1.0, land_zoom=2.0, land_z_m=0.30)
+    uv_base = t_base.step(frame, z_agl=0.15)
+    uv_zoom = t_zoom.step(frame, z_agl=0.15)
+    assert uv_base is not None and uv_zoom is not None
+    assert t_zoom.active_zoom == pytest.approx(2.0)
+    assert np.allclose(uv_base, uv_zoom, atol=0.75)
+
+
+
+def test_height_agl_is_relative_to_the_pad_rest_and_off_without_telemetry(tmp_path):
+    """r7_f6: Z_posPID.FB reads 0.05 m on the pad, so z_tel alone kept the landing PiP/zoom 'near pad' on the ground."""
+    from ground_station.analysis.live_tracker import TelHeight, height_agl
+    p = tmp_path / "s.slot1.csv"
+    p.write_text("t,Ctrler.Z_posPID.FB\n1,0.05\n2,0.05\n3,0.30\n")
+    tel = TelHeight(p, ring_h_m=0.057, clock=lambda: 0.0)
+    z = tel(0.0)
+    assert height_agl(tel, z) == pytest.approx(0.25)
+    assert height_agl(tel, tel.ring_h + 0.05) == pytest.approx(0.0)
+    assert height_agl(0.15, 0.15) is None and height_agl(tel, float("nan")) is None
+
+
+def test_thin_path_keeps_the_tail_and_strides_the_rest():
+    from ground_station.analysis.live_tracker import thin_path
+    p = np.c_[np.arange(18000.0), np.zeros(18000)]
+    assert thin_path(p[:4000]) is not None and len(thin_path(p[:4000])) == 4000
+    q = thin_path(p)
+    assert len(q) <= 4000 and q[0, 0] == 0 and np.array_equal(q[-1000:], p[-1000:])
+    assert np.all(np.diff(q[:, 0]) > 0)
+
+
+def test_coral_tracker_reports_blob_size_and_clears_it_on_a_miss():
+    from ground_station.analysis.live_tracker import CoralTracker
+    tr = CoralTracker([300, 260])
+    assert tr.step(_coral_frame((300, 260))) is not None
+    assert 600 <= tr.npx <= 800                                 # radius-15 disc ~707 px
+    assert tr.step(np.zeros((480, 640, 3), np.uint8)) is None and tr.npx is None
+
+
+def _size_cam():
+    # 2 m above the floor, looking straight down (R maps world z up to camera z forward-down)
+    return {"K": [[1000, 0, 960], [0, 1000, 540], [0, 0, 1]], "dist": [0, 0, 0, 0, 0],
+            "R": [[1, 0, 0], [0, -1, 0], [0, 0, -1]], "t": [0, 0, 2]}
+
+
+def _npx_at(g, uv, z, k):
+    d = g.ray(np.asarray(uv, float))
+    s = (z - g.C[2]) / d[2]
+    return k * -d[2] / (s * s)
+
+
+@pytest.mark.parametrize("reject", [False, True])
+def test_size_gate_calibrates_on_the_pad_and_flags_a_blob_too_small_for_the_telemetry_height(reject):
+    from ground_station.analysis.live_tracker import SizeGate
+    g = SizeGate(_size_cam(), reject=reject)
+    uv = np.array([1100.0, 600.0])
+    k = 2800.0
+    for _ in range(15):
+        assert g.check(uv, _npx_at(g, uv, 0.057, k), 0.057, ground=True)
+    assert g.k == pytest.approx(k, rel=1e-6)
+    assert g.check(uv, _npx_at(g, uv, 1.0, k), 1.0)            # true size at 1 m: kept
+    assert g.ratio == pytest.approx(1.0, abs=1e-6) and g.z_size == pytest.approx(1.0, abs=1e-6)
+    pad_size = _npx_at(g, uv, 0.057, k)                         # pad-size blob (scenery, 1.94 m away) while telemetry says 1 m
+    assert g.check(uv, pad_size, 1.0) is (not reject)
+    assert g.ratio == pytest.approx(0.265, abs=0.01) and g.z_size == pytest.approx(0.057, abs=1e-3)
+    assert g.n == 2 and g.n_out == 1
+    s = g.summary()
+    assert s["size_n"] == 2 and s["size_out"] == 1
+
+
+def test_size_gate_passes_fixes_it_cannot_judge():
+    from ground_station.analysis.live_tracker import SizeGate
+    g = SizeGate(_size_cam(), reject=True)
+    uv = np.array([960.0, 540.0])
+    assert g.check(uv, None, 1.0) and g.check(uv, 500.0, float("nan"))
+    assert g.check(uv, 500.0, 1.0) and g.n == 0                # not calibrated yet
+
+
+def _marker_frame(marks, size=(1080, 1920)):
+    """Gray frame with DICT_4X4_50 markers: marks = [(id, (u, v) centre, side px, quarter turns CCW)]."""
+    import cv2
+    from ground_station.analysis import video_truth as vt
+    d = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, vt.ARUCO_DICT))
+    img = np.full(size, 170, np.uint8)
+    for mid, (u, v), side, rot in marks:
+        m = np.rot90(cv2.aruco.generateImageMarker(d, mid, side), rot)
+        q = np.full((side + 2 * side // 4,) * 2, 255, np.uint8)   # white quiet zone
+        q[side // 4:side // 4 + side, side // 4:side // 4 + side] = m
+        h = q.shape[0] // 2
+        img[v - h:v - h + q.shape[0], u - h:u - h + q.shape[1]] = q
+    return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+
+
+def test_marker_check_heading_is_the_cast_top_edge_in_the_floor_frame():
+    from ground_station.analysis.live_tracker import MarkerCheck
+    mc = MarkerCheck(_size_cam())
+    assert np.allclose(mc.step(_marker_frame([(1, (900, 500), 60, 0)]), (905, 505), 120, (900, 500)), (900, 500), atol=2)
+    assert abs(mc.heading) < 3                          # top edge along image +u = floor +x
+    mc.step(_marker_frame([(1, (900, 500), 60, 1)]), (900, 500), 120, (900, 500))
+    assert abs(mc.heading - 90) < 3                     # turned CCW in the image: image up = floor +y
+    assert mc.step(_marker_frame([(0, (900, 500), 60, 0)]), (900, 500), 120, (900, 500)) is None   # pad id0 ignored
+    assert mc.step(_marker_frame([(1, (1300, 500), 60, 0)]), (900, 500), 120, (900, 500)) is None  # outside the ROI
+
+
+def test_marker_check_learns_a_static_id_far_from_the_coral_fix_and_ignores_it():
+    from ground_station.analysis.live_tracker import MarkerCheck
+    mc = MarkerCheck(_size_cam(), near_px=50, n_static=3)
+    scene = (1, (1100, 500), 50, 0)
+    for _ in range(3):                                  # drone marker hidden, coral fix far from the scenery id1
+        assert mc.step(_marker_frame([scene]), (950, 500), 250, (900, 500)) is None
+    assert len(mc.static) == 1
+    assert mc.step(_marker_frame([scene]), (1100, 500), 100, None) is None   # a coral miss no longer locks on it
+    uv = mc.step(_marker_frame([scene, (1, (900, 500), 50, 0)]), (1000, 500), 250, None)
+    assert np.allclose(uv, (900, 500), atol=2) and mc.n_reacq == 1
+
+
+def test_marker_check_yaw_offset_on_the_pad_and_deviation_in_the_air():
+    from ground_station.analysis.live_tracker import MarkerCheck
+    mc = MarkerCheck(_size_cam())
+    f = _marker_frame([(1, (900, 500), 60, 1)])        # heading +90
+    for y in (85.0, 86.0, 84.0):
+        mc.step(f, (900, 500), 120, (900, 500), y, True)
+    for y in (88.0, 100.0, None):
+        mc.step(f, (900, 500), 120, (900, 500), y, False)
+    s = mc.summary()
+    assert abs(s["marker_yaw_pad_deg"] + 5) < 3 and len(mc.off_air) == 2
+    assert s["marker_yaw_dev_p50_p95_deg"][1] > 10 and s["marker_seen"] == 6 and s["marker_coral_px_p50_p95"][1] < 3
+    mc2 = MarkerCheck(_size_cam())
+    mc2.step(f, (900, 500), 120, (900, 500), 179.0, True)
+    mc2.step(f, (900, 500), 120, (900, 500), -179.0, True)
+    assert abs(abs(mc2.pad_offset) - 90) < 4          # wrap-safe (179 and -179 are 2 deg apart)
+
+
+def test_run_source_marker_recentres_the_coral_tracker_after_a_miss(tmp_path, monkeypatch):
+    from ground_station.analysis import live_tracker as lt
+    calls = []
+
+    class Coral(lt.CoralTracker):
+        def __init__(self):
+            self.c, self.r, self.roi, self.npx = np.array([500.0, 500.0]), 300.0, 140.0, None
+
+        def step(self, frame, z=None):
+            return None
+
+        def recentre(self, uv):
+            calls.append(np.asarray(uv, float))
+
+    frames = [_marker_frame([(1, (600, 520), 50, 0)])] * 3
+
+    class Cap:
+        def __init__(self, *a):
+            self.i = 0
+
+        def read(self):
+            self.i += 1
+            return (self.i <= len(frames), frames[self.i - 1] if self.i <= len(frames) else None)
+
+        def get(self, p):
+            return self.i * 33.0
+
+        def grab(self):
+            return True
+
+        def release(self):
+            pass
+
+    import cv2
+    monkeypatch.setattr(cv2, "VideoCapture", Cap)
+    mc = lt.MarkerCheck(_size_cam())
+    out = lt.run_source("x.mp4", _size_cam(), lt.EarthAlign(), 0.1, ring=Coral(), marker=mc, pad=None)
+    assert out["marker_reacq"] == 3 and out["fixes"] == 0 and len(calls) == 3
+    assert np.allclose(calls[0], (600, 520), atol=2)

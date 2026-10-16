@@ -135,6 +135,9 @@ def tasks():
 
 
 def main():
+    if not HTM.exists():  # git-ignored Keil output: a fresh checkout (the CI runner) has no call graph to check
+        print('stack-budget: SKIP, no %s (build JX_FLY in Keil first)' % HTM.relative_to(ROOT).as_posix())
+        return 0
     htm = read(HTM)
     stamp = re.search(r'Last Updated: ([^\n<]+)', htm)
     print('stack-budget: call graph %s (%s)' % (HTM.relative_to(ROOT).as_posix(), stamp.group(1) if stamp else '?'))
