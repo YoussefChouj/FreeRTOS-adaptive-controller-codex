@@ -356,3 +356,23 @@ def test_refused_set_aborts_and_lands():
 def test_set_step_refuses_bad_writes(body, why):
     with pytest.raises(Exception, match=re.escape(why)):
         parse_scenario(_steps({"set": body}))
+
+
+def test_abort_during_the_climb_still_sends_land():
+    """An abort before prim reaches HOVER (2026-10-15 F1: position_error in the climb) must still LAND the drone."""
+    PRIM_CLIMB = 1  # API/wfb_prim.h
+    drone, _, deps = _rig()
+    inner, seen = deps.step, []
+
+    def step(dt):
+        inner(dt)
+        if not seen and int(drone.status()["prim_state"]) == PRIM_CLIMB:
+            seen.append(True)
+            deps.control.request("land")
+
+    deps.step = step
+    out = fly_scenario(load_scenario("hover", {"z": 0.5}), deps)
+    assert seen  # the abort came mid-climb, before HOVER
+    assert out.aborted and out.decision.reason == "operator land"
+    assert out.steps[0]["kind"] == "takeoff" and not out.steps[0]["ok"]
+    assert out.landed and int(drone.status()["prim_state"]) == PRIM_IDLE

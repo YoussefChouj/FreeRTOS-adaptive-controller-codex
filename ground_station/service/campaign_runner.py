@@ -275,7 +275,7 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
     t_start = deps.clock()
     records: list[dict] = []
     ticks = 0
-    airborne = excite_sent = False
+    airborne = excite_sent = takeoff_sent = False
     decision: AbortDecision | None = None
     uploads = [i for i, st in enumerate(steps) if st.kind in TRAJ_KINDS + PROG_KINDS]
     preload = uploads[0] if len(uploads) == 1 else None
@@ -291,6 +291,11 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
         else:
             res, seg = upload(st.points, deps.client), ""
         return res.ok, "" if res.ok else f"{res.error}{seg}"
+
+    def send_takeoff() -> bool:
+        nonlocal takeoff_sent
+        takeoff_sent = True  # a timed-out TAKEOFF may still have reached the drone (late acks, 2026-10-15)
+        return deps.client.takeoff()
 
     def preload_send() -> bool:
         nonlocal preload_err
@@ -388,7 +393,7 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
             if not refused and idle_s > 0 and not wait(lambda: deps.clock() - t_idle >= idle_s, "idle"):
                 ok = False
             elif (refused or (gate_why := _gate_problem(deps.status()) or _takeover_problem(auth_idle, deps.status()))
-                  or not deps.client.takeoff()):
+                  or not send_takeoff()):
                 refused = refused or "takeoff"
                 why = gate_why or preload_err or getattr(deps.client, "last_error", "") or "not applied"
                 hint = " (operator: flymode 1, arm by RC, hands off the sticks)" if refused == "idle" and not deps.agent_arms else ""
@@ -522,20 +527,19 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
             deps.client.var_write("traj_stop", 1)  # the preset flies back to its start point, then LAND
         deps.client.traj_stop()
     t0 = deps.clock() - t_start
-    land_sent = deps.client.land() if airborne else True
-    landed = False
-    for _ in range(max_ticks if airborne else 1):
-        if airborne:
-            deps.client.heartbeat()
-            deps.step(deps.dt_s)
-            if prim() == PRIM_IDLE:
-                landed = True
-                break
-            if not land_sent and prim() == PRIM_HOVER:  # LAND lost or refused while still hovering: resend
-                land_sent = deps.client.land()
-        else:
+    # LAND whenever the drone may have left the ground: an abort during the climb (2026-10-15 F1 position_error)
+    # leaves airborne False while the drone is in the air. Skip it only when no TAKEOFF went out and prim is IDLE.
+    need_land = airborne or takeoff_sent or prim() != PRIM_IDLE
+    land_sent = deps.client.land() if need_land else True
+    landed = not need_land
+    for _ in range(max_ticks if need_land else 0):
+        deps.client.heartbeat()
+        deps.step(deps.dt_s)
+        if prim() == PRIM_IDLE:
             landed = True
             break
+        if not land_sent and prim() == PRIM_HOVER:  # LAND lost or refused while still hovering: resend
+            land_sent = deps.client.land()
     records.append({"step": len(steps) - 1, "kind": "land", "t0_s": round(t0, 3),
                     "t1_s": round(deps.clock() - t_start, 3), "ok": landed})
     return FlightOutcome(aborted, decision, landed, records)
