@@ -102,6 +102,7 @@ static void ref_pid(PIDTypeDef *pPID)
 
 static void ref_yaw(PIDTypeDef *pPID)
 {
+    float dE;
     pPID->E = fmodf(pPID->Des - pPID->FB, 360.0f);
     if(pPID->E>=180)pPID->E-=360;
     if(pPID->E<=-180)pPID->E+=360;
@@ -114,7 +115,10 @@ static void ref_yaw(PIDTypeDef *pPID)
     value_limit( pPID->Ui , -pPID->UiMax , pPID->UiMax );
     pPID->Up = pPID->Kp * pPID->E;
     value_limit( pPID->Up , -pPID->UpMax , pPID->UpMax );
-    pPID->Ud = pPID->Kd * ( pPID->E - pPID->PreE );
+    dE = pPID->E - pPID->PreE;
+    if (dE > 180.0f) dE -= 360.0f;
+    else if (dE < -180.0f) dE += 360.0f;
+    pPID->Ud = pPID->Kd * dE;
     value_limit( pPID->Ud , -pPID->UdMax , pPID->UdMax );
     pPID->U = pPID->Up + pPID->Ui + pPID->Ud;
     value_limit( pPID->U , -pPID->UMax , pPID->UMax );

@@ -142,8 +142,9 @@ def _axf_flash_row(elf_path: Path) -> dict[str, Any]:
     try:
         stamp = json.loads(stamp_file.read_text(encoding="utf-8"))
         cur_sha = hashlib.sha256(elf.read_bytes()).hexdigest()
-        cur_mtime = elf.stat().st_mtime
-        if stamp.get("sha256") != cur_sha or abs(stamp.get("mtime", 0) - cur_mtime) > 1e-4:
+        cur_size = elf.stat().st_size
+        stamp_size = stamp.get("size")
+        if stamp.get("sha256") != cur_sha or (stamp_size is not None and stamp_size != cur_size):
             return _row(
                 "axf_flash",
                 "axf rebuilt since last flash (flash or revert OBJ/JX_FLY.axf)",
