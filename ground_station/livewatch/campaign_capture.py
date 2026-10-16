@@ -182,6 +182,13 @@ CAMERA_FUSION: tuple[str, ...] = (
     "g_ext_pos_on", "g_ext_pos.e_x", "g_ext_pos.e_y", "g_ext_pos.n_ok", "g_ext_pos.n_rej",
     "g_ext_pos.age_ms", "g_ext_pos.stale", "g_ext_pos.c_x", "g_ext_pos.c_y",
 )
+# Shadow drift network (NN/drift_nn_task.c, g_drift_nn): its velocity estimate vx/vy, the two inputs it last saw,
+# the step count, the worst cycle time and status (0 IDLE, 1 RUN, 2 LOWHEAP, 3 NOCREATE, 4 BADSUM). Nothing in the
+# flight loop reads it. Older images lack the symbol; campaign_live.begin then drops the group with a warning.
+DRIFT_NN: tuple[str, ...] = (
+    "g_drift_nn.vx", "g_drift_nn.vy", "g_drift_nn.v_in[0]", "g_drift_nn.v_in[1]",
+    "g_drift_nn.steps", "g_drift_nn.cyc_max", "g_drift_nn.status",
+)
 LOG_GROUPS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "mrac_shadow": MRAC_SHADOW,
     "mrac_3l": MRAC_3L,
@@ -192,6 +199,7 @@ LOG_GROUPS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "thrust_model": THRUST_MODEL,
     "ekf_states": EKF_STATES,
     "camera_fusion": CAMERA_FUSION,
+    "drift_nn": DRIFT_NN,
 })
 LOG_PLAN_KEYS = ("rate_hz", "groups")
 # PROPOSED default: 50 Hz is the rate the 10 s stream_log check carried with 0 dropped after the last flash.

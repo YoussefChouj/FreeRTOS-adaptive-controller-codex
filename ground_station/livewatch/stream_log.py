@@ -70,6 +70,28 @@ def _open_data(data_port: str, control, control_port: str):
     return serial.Serial(data_port, 115200, timeout=0.05)
 
 
+# Symbols a frames table may name before every flashed image has them (the shadow drift network, NN/drift_nn_task.c).
+# An image without one logs the rest of its slot and warns; any other unresolved name still stops the capture.
+OPTIONAL_PREFIXES = ("g_drift_nn.",)
+
+
+def drop_optional_missing(resolver: SymbolResolver, specs) -> list:
+    """Drop OPTIONAL_PREFIXES specs the ELF cannot resolve, with one warning on stderr."""
+    kept, missing = [], []
+    for spec in specs:
+        path = spec.partition(":")[0]
+        if path.startswith(OPTIONAL_PREFIXES):
+            try:
+                resolver.resolve(path)
+            except Exception:
+                missing.append(path)
+                continue
+        kept.append(spec)
+    if missing:
+        print("stream-log: Warning: the ELF has no %s; logging without them" % ", ".join(missing), file=sys.stderr)
+    return kept
+
+
 def resolve_ranges(resolver: SymbolResolver, specs) -> list[StreamRange]:
     """Turn ``path`` or ``path:count`` strings into StreamRanges."""
     ranges = []
@@ -679,7 +701,7 @@ def run_groups(control_port, data_port, groups, transport, seconds, out_path,
         # Neighbouring variables go out as one range, which is what the
         # firmware copies anyway; the range limit then counts memory blocks,
         # not variables.
-        ranges = coalesce_ranges(resolve_ranges(resolver, specs))
+        ranges = coalesce_ranges(resolve_ranges(resolver, drop_optional_missing(resolver, specs)))
         divider = max(1, min(255, round(SEND_TASK_MEASURED_HZ / rate)))
         request = build_stream_request(ranges, divider, transport, usart3_baud,
                                        slot, committed)

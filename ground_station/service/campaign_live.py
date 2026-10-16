@@ -16,13 +16,14 @@ only IDLE (accepted by the firmware only while RC-armed, on the ground, throttle
 from __future__ import annotations
 
 import math
+import sys
 import tempfile
 import time
 from typing import Any, Callable
 
 from ground_station.analysis.battery_model import PackRegistry
 from ground_station.livewatch.campaign_capture import (
-    ATTITUDE, KF_HEALTH, MAX_SLOTS, MOTORS, POSITION_AXES, RATE_LOOPS, WFB_STATUS_FIELDS, plan_capture,
+    ATTITUDE, CAMPAIGN_SET, KF_HEALTH, MAX_SLOTS, MOTORS, POSITION_AXES, RATE_LOOPS, WFB_STATUS_FIELDS, plan_capture,
     subscribe_steps,
 )
 from ground_station.platform.wfb_commands import CMD_PRIM, CMD_TRAJ, PrimIdx, WfbClient
@@ -345,6 +346,35 @@ LAB_PLAN_MAX_HZ = 25.0
 LAB_STATUS_HZ = 10.0       # = 100 Hz / WifiBridge.LAB_SLOT0_DIVIDER
 
 
+def drop_missing_symbols(bridge: Any, steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """``steps`` without the names the flashed image (OBJ axf) lacks, so an optional group a newer image adds
+    (``drift_nn`` on the old image) logs nothing instead of failing the subscribe. A missing core name still
+    raises: the runner refuses to fly without its core log. Steps left empty are dropped. A bridge without
+    ``_resolvable`` (test double, no axf) is not checked.
+    """
+    resolvable = getattr(bridge, "_resolvable", None)
+    if not callable(resolvable):
+        return steps
+    out, missing = [], []
+    for step in steps:
+        names = list(step["args"]["ranges"])
+        keep = resolvable(names)
+        if not isinstance(keep, list):
+            return steps
+        missing += [n for n in names if n not in keep]
+        if keep:
+            out.append({**step, "args": {**step["args"], "ranges": keep}})
+    core = [n for n in missing if n in CAMPAIGN_SET["needed"]]
+    if core:
+        raise RuntimeError(f"log plan: the flashed image has no core symbol(s) {core}; refusing to fly unlogged")
+    if missing:
+        print(f"[campaign] Warning: the flashed image has no {missing}; logging without them",
+              file=sys.stderr, flush=True)
+    for slot, step in enumerate(out):    # repack so the slots stay contiguous from 0
+        step["args"]["slot"] = slot
+    return out
+
+
 def live_capture_hooks(service: Any, controller: str = "pid", max_rate_hz: float | None = None,
                        ) -> tuple[Callable[[Any, str], Any], Callable[[Any], str]]:
     """RunnerDeps begin_capture / end_capture for the live link (decision 8).
@@ -358,7 +388,7 @@ def live_capture_hooks(service: Any, controller: str = "pid", max_rate_hz: float
 
     def begin(exp: Any, flight_id: str) -> str:
         plan = plan_capture(exp.log_plan or None, max_rate_hz=max_rate_hz)
-        steps = subscribe_steps(plan)
+        steps = drop_missing_symbols(getattr(service, "bridge", None), subscribe_steps(plan))
         if len(steps) < MAX_SLOTS:   # leave slot 0 to the bridge's dashboard auto-subscribe (its watchdog re-sends
             for step in steps:       # the dashboard layout there; xyz-f1 2026-10-13 died "slot 0: no schema yet")
                 step["args"]["slot"] += 1

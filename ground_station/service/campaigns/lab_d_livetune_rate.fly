@@ -8,7 +8,7 @@
 # Plan: docs/lab/run-sheet-2026-10-16.md
 campaign lab-d-livetune-rate
 rate 100
-log velocity_loops camera_fusion
+log velocity_loops camera_fusion drift_nn
 set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10
 takeoff 0.5
 hold 2

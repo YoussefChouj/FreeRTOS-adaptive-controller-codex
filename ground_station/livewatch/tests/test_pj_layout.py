@@ -86,7 +86,7 @@ def test_r5_extpos_every_streamed_var_in_exactly_one_tab():
     """For r5_extpos_frames.md: tabs are present, every streamed var in exactly one tab."""
     groups = load_frames(R5_FRAMES)
     expected_vars = [v for _, symbols in groups for v in symbols]
-    assert len(expected_vars) == 287
+    assert len(expected_vars) == 294   # 287 + 7 g_drift_nn.* (shadow drift network, 2026-10-16)
 
     xml_str = generate_layout_xml(expected_vars)
     root = ET.fromstring(xml_str)
