@@ -23,6 +23,7 @@ import argparse
 import json
 import math
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -477,12 +478,13 @@ GAIN_PRESETS = {
     },
     "defaults": {
         "why": "defaults: restore API/pid.c firmware default gains without requiring power-cycle (docs/agent/lab-friction-2026-10-15.md A6).",
-        "gains": {idx: PID_DEFAULTS[idx][1] for idx in range(24, 36)},
+        # rate loops (9-14) too: F4 livetune writes them and RAM gains outlive the flight
+        "gains": {idx: PID_DEFAULTS[idx][1] for idx in [*range(9, 15), *range(24, 36)]},
     },
 }
 
 
-LIVETUNE_BEST_PATH = Path("logs/campaigns/livetune_best.json")
+LIVETUNE_BEST_PATH = ROOT / "logs" / "campaigns" / "livetune_best.json"
 
 
 def load_livetune_gains(path=None, force=False):
@@ -1015,6 +1017,10 @@ def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeou
     return True
 
 
+# a directive is a whole comment line "# key: value"; prose that merely mentions "gains:" is not one
+_DIRECTIVE_RE = re.compile(r"^\s*#\s*(post[_-]takeoff[_-]gains|gains|why)\s*:(.*)$", re.IGNORECASE)
+
+
 def extract_fly_directives(fly_path):
     """Parse # gains: <preset>, # post_takeoff_gains: <preset>, and # why: <text> directives from a .fly file."""
     p = Path(fly_path)
@@ -1025,16 +1031,16 @@ def extract_fly_directives(fly_path):
     post_takeoff = None
     try:
         for line in p.read_text(encoding="utf-8").splitlines():
-            s = line.strip()
-            if s.startswith("#") and ("post_takeoff_gains:" in s or "post-takeoff-gains:" in s):
-                key = "post_takeoff_gains:" if "post_takeoff_gains:" in s else "post-takeoff-gains:"
-                after = s.split(key, 1)[1].strip()
+            m = _DIRECTIVE_RE.match(line)
+            if not m:
+                continue
+            key, after = m.group(1).lower().replace("-", "_"), m.group(2).strip()
+            if key == "post_takeoff_gains":
                 post_takeoff = after.split()[0].lower() if after else None
-            elif s.startswith("#") and "gains:" in s:
-                after = s.split("gains:", 1)[1].strip()
+            elif key == "gains":
                 gains_preset = after.split()[0].lower() if after else None
-            elif s.startswith("#") and "why:" in s:
-                why_text = s.split("why:", 1)[1].strip()
+            elif key == "why":
+                why_text = after
     except Exception:
         pass
     return DirectivesTuple(gains_preset, why_text, post_takeoff)
