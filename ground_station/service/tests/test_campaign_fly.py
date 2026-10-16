@@ -2,6 +2,7 @@
 
 import json
 import time
+from pathlib import Path
 
 from ground_station.livewatch.campaign_capture import MAX_SLOTS
 from ground_station.service import campaign_fly
@@ -450,9 +451,11 @@ def test_write_gains_defaults_preset(monkeypatch, capsys):
     ok = campaign_fly.write_gains("http://h", "defaults", yes=True)
     assert ok is True
     out = capsys.readouterr().out
-    assert "12/12 ACK" in out
+    assert "18/18 ACK" in out
     cmd_posts = [p for p in posted if p[0] == "/commands"]
-    assert len(cmd_posts) == 12
+    assert len(cmd_posts) == 18
+    # rate loops 9-14 are reset too (F4 livetune writes them and RAM gains persist)
+    assert sorted(b["index"] for _, b in cmd_posts) == [*range(9, 15), *range(24, 36)]
 
 
 def test_debrief_lines_never_airborne():
@@ -815,6 +818,25 @@ def test_dry_run_post_takeoff_gains(capsys):
     assert "Ground gain preset: defaults" in out
     assert "Post-takeoff gain preset: c3 (applied after takeoff in HOVER)" in out
     assert "0.3214" in out
+
+
+def test_extract_fly_directives_ignores_prose_mentions(tmp_path):
+    fly = tmp_path / "prose.fly"
+    fly.write_text("# C: same track; ground gains: c3 were too soft\n# note why: drift\n"
+                   "  #GAINS : C2  extra\n# post-takeoff-gains: c3\ncampaign t\n", encoding="utf-8")
+    res = campaign_fly.extract_fly_directives(fly)
+    assert (res[0], res[1], res.post_takeoff) == ("c2", None, "c3")
+
+
+def test_lab_c_lqr_and_mpc_reset_pid_gains_first():
+    # F5/F6 fly after F4 wrote livetune gains into RAM: both must restore defaults on the ground
+    for name in ("lab_c_lqr", "lab_c_mpc"):
+        fly = Path(campaign_fly.__file__).parent / "campaigns" / f"{name}.fly"
+        assert campaign_fly.extract_fly_directives(fly)[0] == "defaults"
+
+
+def test_livetune_best_path_is_repo_relative():
+    assert campaign_fly.LIVETUNE_BEST_PATH == campaign_fly.ROOT / "logs" / "campaigns" / "livetune_best.json"
 
 
 def test_extract_fly_directives_post_takeoff(tmp_path):

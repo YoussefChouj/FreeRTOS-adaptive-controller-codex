@@ -141,9 +141,10 @@ def _axf_flash_row(elf_path: Path) -> dict[str, Any]:
         return _row("axf_flash", f"{elf} missing", False, "build and flash firmware")
     try:
         stamp = json.loads(stamp_file.read_text(encoding="utf-8"))
-        cur_sha = hashlib.sha256(elf.read_bytes()).hexdigest()
-        cur_mtime = elf.stat().st_mtime
-        if stamp.get("sha256") != cur_sha or abs(stamp.get("mtime", 0) - cur_mtime) > 1e-4:
+        data = elf.read_bytes()
+        # content only: a checkout, copy or touch changes mtime without changing what was flashed
+        size_ok = stamp.get("size") is None or int(stamp["size"]) == len(data)
+        if stamp.get("sha256") != hashlib.sha256(data).hexdigest() or not size_ok:
             return _row(
                 "axf_flash",
                 "axf rebuilt since last flash (flash or revert OBJ/JX_FLY.axf)",

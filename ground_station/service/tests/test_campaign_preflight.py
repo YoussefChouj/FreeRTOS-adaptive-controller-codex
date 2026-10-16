@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -308,6 +309,10 @@ def test_axf_flash_stamp_matching_passes(elf):
         row = _axf_flash_row(elf)
         assert row["pass"] is True
         assert "matches last flash stamp" in row["value"]
+        # same bytes, new mtime (git checkout / copy): still the flashed build
+        st = elf.stat()
+        os.utime(elf, (st.st_atime, st.st_mtime + 3600))
+        assert _axf_flash_row(elf)["pass"] is True
     finally:
         stamp_file.unlink(missing_ok=True)
 
