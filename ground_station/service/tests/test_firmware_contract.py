@@ -282,6 +282,27 @@ def test_service_fault_log_on_rejection():
     service.stop()
 
 
+def test_service_action_journal_ack_then_applied_or_rejected():
+    """The firmware sends ACK then APPLIED/REJECTED for one txid: the journal ends on the final outcome."""
+    store = SessionStore()
+    mock_bridge = MagicMock()
+    mock_bridge.send_transaction.side_effect = [5, 6]
+    service = GroundStationService(store=store, bridge=mock_bridge, source="test")
+    service.start()
+
+    service.submit_command(0x01, index=0, value=1.0)
+    service.submit_command(0x1B, index=1, value=0.5)
+    service.record_command_result(Result(5, Outcome.ACK, 0x01, 0, RejectReason.NONE))
+    service.record_command_result(Result(5, Outcome.APPLIED, 0x01, 0, RejectReason.NONE))
+    service.record_command_result(Result(6, Outcome.ACK, 0x1B, 1, RejectReason.NONE))
+    service.record_command_result(Result(6, Outcome.REJECTED, 0x1B, 1, RejectReason.NONE))
+    service.record_command_result(Result(5, Outcome.ACK, 0x01, 0, RejectReason.NONE))  # late duplicate ACK
+
+    by_txid = {a["transaction_id"]: a["lifecycle"] for a in service.action_journal()}
+    assert by_txid == {5: "applied", 6: "rejected"}
+    service.stop()
+
+
 def test_service_action_journal_updates_on_ack():
     """poll_command with an ACK resolves the submitted action to acknowledged."""
     store = SessionStore()
