@@ -20,7 +20,7 @@
 #endif
 
 #define DRIFT_NN_PRIO         1U
-#define DRIFT_NN_STK_WORDS    256U
+#define DRIFT_NN_STK_WORDS    384U    /* 256 left only 5% over the 972 B Keil worst case (expf chain) */
 #define DRIFT_NN_HEAP_MARGIN  2048U   /* bytes left for later allocations */
 #define DRIFT_NN_PERIOD_MS    10U
 #define DRIFT_NN_BLOCK        5U      /* samples per step: 5 x 10 ms = 50 ms */
