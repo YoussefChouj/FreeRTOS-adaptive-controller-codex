@@ -618,3 +618,28 @@ def test_usart3_loop_resubscribes_a_silent_slot_after_a_reboot(capsys):
     assert [s for s, _ in fake._udp._sent] == [b"REQ", b"REQ"], "re-sent at 3 s and 8 s, not every poll"
     err = capsys.readouterr().err
     assert err.count("re-subscribing") == 2 and "slot 0 streaming again" in err
+
+
+def test_frames_skip_shadow_network_symbols_the_elf_lacks(capsys):
+    from ground_station.livewatch.stream_log import drop_optional_missing
+
+    class OldElf:
+        def resolve(self, path):
+            if path.startswith("g_drift_nn."):
+                raise KeyError(path)
+            return object()
+
+    specs = ["real_voltage", "g_drift_nn.vx", "g_drift_nn.status"]
+    assert drop_optional_missing(OldElf(), specs) == ["real_voltage"]
+    assert "g_drift_nn.vx, g_drift_nn.status" in capsys.readouterr().err
+
+
+def test_frames_keep_shadow_network_symbols_and_never_hide_other_missing_names():
+    from ground_station.livewatch.stream_log import drop_optional_missing
+
+    class NewElf:
+        def resolve(self, path):
+            return object()
+
+    specs = ["g_drift_nn.vx", "typo_name"]
+    assert drop_optional_missing(NewElf(), specs) == specs   # non-optional names are left for resolve_ranges to reject

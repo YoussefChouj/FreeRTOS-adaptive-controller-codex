@@ -65,7 +65,8 @@ HOST_TESTS = [
                                                                                                  ["-std=c99", *W, "-Werror", "-Wdeclaration-after-statement", "-Wvla", "-IAPI"]),
     ("fw_prearm",        ["tests/firmware_host/test_prearm.c", "API/prearm.c"],                  ["-std=c99", *W, "-Werror", "-Wdeclaration-after-statement", "-IAPI"]),
     ("fw_health",        ["tests/firmware_host/test_fw_health.c", "API/fw_health.c"],            ["-std=c99", *W, "-Werror", "-Wdeclaration-after-statement", "-IAPI"]),
-]
+    ("fw_pid_fallback",  ["tests/firmware_host/test_pid_fallback.c"],                           ["-std=c99", "-Wall", "-Werror", *FWH]),
+];
 
 
 def _tail(text: str, n: int = 12) -> str:

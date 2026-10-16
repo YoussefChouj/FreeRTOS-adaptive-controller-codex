@@ -1,3 +1,5 @@
+# gains: defaults
+# why: defaults: restore API/pid.c firmware default gains without requiring power-cycle (docs/agent/lab-friction-2026-10-15.md A6)
 # D1: in-flight ES auto-tune of the roll/pitch rate loops (livetune loop=rate, CMA-ES, WP-28): gyroxPID/gyroyPID Kp, Ki,
 # Kd, the same values on roll and pitch (idx 9-14). One candidate per 6.5 s window: write the gains, settle 2.5 s, a
 # 1-8 Hz 30 deg/s chirp, score the rate error. Starts from the firmware defaults (5/0.01/10), trust 0.3; every end writes
@@ -6,7 +8,7 @@
 # Plan: docs/lab/run-sheet-2026-10-16.md
 campaign lab-d-livetune-rate
 rate 100
-log velocity_loops camera_fusion
+log velocity_loops camera_fusion drift_nn
 set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10
 takeoff 0.5
 hold 2

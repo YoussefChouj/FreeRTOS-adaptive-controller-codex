@@ -45,6 +45,7 @@ def flights_of_day(date: str) -> list[dict]:
 
 def load(session: Path) -> pd.DataFrame:
     df = pd.read_csv(session / "telemetry.csv", usecols=["received_ns", "key", "value"])
+    df["key"] = df["key"].str.replace(r"^slot\d+\.(?=g_ext_pos|mymotor)", "", regex=True)
     imu = df.key.isin(["slot0.imu_data.rol", "slot0.imu_data.pit"])
     df = df[~df.key.str.startswith("slot") | imu]
     df["value"] = pd.to_numeric(df["value"], errors="coerce")
@@ -57,6 +58,101 @@ def load(session: Path) -> pd.DataFrame:
 
 def col(w, k):
     return w[k].to_numpy(float) if k in w else np.full(len(w), np.nan)
+
+
+def is_sim(session: Path | None = None, w: pd.DataFrame | None = None) -> bool:
+    """Return True if session or telemetry DataFrame represents a simulation or synthetic SIL run."""
+    if session is not None:
+        p = Path(session)
+        if p.name.startswith("sim-") or "fake" in p.name:
+            return True
+        for m_file in ("manifest.json", "meta.json"):
+            mf = p / m_file
+            if mf.exists():
+                try:
+                    data = json.loads(mf.read_text(encoding="utf-8", errors="replace"))
+                    if data.get("sim") is True:
+                        return True
+                    if any(s in str(data.get("requested_by", "")) for s in ("sim", "fake")):
+                        return True
+                except Exception:
+                    pass
+    if w is not None:
+        m1 = col(w, "mymotor.motor1")
+        m2 = col(w, "mymotor.motor2")
+        m3 = col(w, "mymotor.motor3")
+        m4 = col(w, "mymotor.motor4")
+        valid_m = np.isfinite(m1) & np.isfinite(m2) & np.isfinite(m3) & np.isfinite(m4)
+        if valid_m.sum() >= 5 and np.all(m1[valid_m] == m2[valid_m]) and np.all(m2[valid_m] == m3[valid_m]) and np.all(m3[valid_m] == m4[valid_m]):
+            for k in ("Ctrler.locxPID", "Ctrler.locyPID", "Ctrler.Z_posPID"):
+                des = col(w, f"{k}.Des")
+                fb = col(w, f"{k}.FB")
+                valid = np.isfinite(des) & np.isfinite(fb)
+                if valid.sum() >= 5 and np.all(des[valid] == fb[valid]):
+                    return True
+    return False
+
+
+def _find_fixes_csv(session: Path | None = None, flight_name: str | None = None) -> Path | None:
+    if session is not None:
+        p = Path(session)
+        if (p / "fixes.csv").exists() and (p / "fixes.csv").stat().st_size > 65:
+            return p / "fixes.csv"
+    vt_dir = ROOT / "logs" / "video_truth"
+    if not vt_dir.exists():
+        return None
+    if flight_name:
+        direct = vt_dir / flight_name / "fixes.csv"
+        if direct.exists() and direct.stat().st_size > 65:
+            return direct
+        bare = flight_name.split("_", 1)[-1]
+        direct_bare = vt_dir / bare / "fixes.csv"
+        if direct_bare.exists() and direct_bare.stat().st_size > 65:
+            return direct_bare
+    candidates = []
+    bare = flight_name.split("_", 1)[-1] if flight_name else ""
+    for d in vt_dir.iterdir():
+        if d.is_dir() and ((flight_name and flight_name in d.name) or (bare and bare in d.name)):
+            fx = d / "fixes.csv"
+            if fx.exists() and fx.stat().st_size > 65:
+                candidates.append(fx)
+    if not candidates:
+        return None
+    if session is not None:
+        try:
+            s_mtime = (Path(session) / "telemetry.csv").stat().st_mtime
+            candidates.sort(key=lambda c: abs(c.stat().st_mtime - s_mtime))
+        except Exception:
+            pass
+    return candidates[0]
+
+
+def _cam_touch_from_fixes(fixes_csv: Path, target_xy_cm: list[float], n: int = 15) -> tuple[list[float], float] | None:
+    try:
+        lines = [ln.strip() for ln in fixes_csv.read_text(encoding="utf-8", errors="replace").splitlines() if ln.strip()]
+        if len(lines) <= 1:
+            return None
+        xy = []
+        for row in lines[1:][-n:]:
+            parts = row.split(",")
+            if len(parts) >= 6:
+                try:
+                    ex = float(parts[4])
+                    ey = float(parts[5])
+                    xy.append((ex, ey))
+                except ValueError:
+                    try:
+                        xy.append((float(parts[2]) * 100.0, float(parts[3]) * 100.0))
+                    except ValueError:
+                        continue
+        if not xy:
+            return None
+        med_x = float(np.median([p[0] for p in xy]))
+        med_y = float(np.median([p[1] for p in xy]))
+        err = float(np.hypot(med_x - target_xy_cm[0], med_y - target_xy_cm[1]))
+        return [med_x, med_y], err
+    except Exception:
+        return None
 
 
 # ---------- metrics ----------
@@ -145,7 +241,7 @@ def xy_metrics(w):
     return r
 
 
-def land_metrics(w):
+def land_metrics(w, session: Path | None = None, flight_name: str | None = None):
     W = windows(w)
     if W is None:
         return None
@@ -159,16 +255,61 @@ def land_metrics(w):
     pre = (t > tl - 3) & (t < tl)
     dsc = (t >= tl) & (t <= td)
     after = (t > td) & (t < td + 3)
+    target_xy = [100 * xd[i_l], 100 * yd[i_l]]
+    err_touch = 100 * float(np.hypot(x[i_t] - xd[i_t], y[i_t] - yd[i_t]))
+    touch_xy = [100 * x[i_t], 100 * y[i_t]]
+
+    # Camera touchdown offset
+    cam_touch_xy_cm = None
+    cam_err_at_touch_cm = None
+    cam_source = None
+
+    stale_col = col(w, "g_ext_pos.stale")
+    stale_val = stale_col[i_t] if (len(stale_col) > i_t and np.isfinite(stale_col[i_t])) else 0.0
+    cam_stale = bool(stale_val > 0.5)
+
+    fixes_csv = _find_fixes_csv(session, flight_name)
+    if fixes_csv:
+        cam_res = _cam_touch_from_fixes(fixes_csv, target_xy)
+        if cam_res:
+            cam_touch_xy_cm, cam_err_at_touch_cm = cam_res
+            cam_source = "fixes.csv"
+
+    if cam_touch_xy_cm is None:
+        ex_col = col(w, "g_ext_pos.e_x")
+        ey_col = col(w, "g_ext_pos.e_y")
+        if len(ex_col) > i_t and np.isfinite(ex_col[i_t]) and np.isfinite(ey_col[i_t]):
+            cam_touch_xy_cm = [float(100 * x[i_t] + ex_col[i_t]), float(100 * y[i_t] + ey_col[i_t])]
+            cam_err_at_touch_cm = float(np.hypot(cam_touch_xy_cm[0] - target_xy[0], cam_touch_xy_cm[1] - target_xy[1]))
+            cam_source = "telemetry"
+
+    # When camera fusion went stale at landing, report camera offset as primary over EKF offset
+    if cam_stale and cam_err_at_touch_cm is not None:
+        primary_err = cam_err_at_touch_cm
+        primary_xy = cam_touch_xy_cm
+        primary_source = cam_source or "camera"
+    else:
+        primary_err = err_touch
+        primary_xy = touch_xy
+        primary_source = "ekf"
+
     r = {"t_land": tl, "t_touch": td, "descent_s": td - tl, "hover_z": W["hover_z"],
-         "target_xy_cm": [100 * xd[i_l], 100 * yd[i_l]],
+         "target_xy_cm": target_xy,
          "err_at_land_start_cm": 100 * float(np.hypot(x[i_l] - xd[i_l], y[i_l] - yd[i_l])),
          "err_rms_3s_before_cm": 100 * float(np.sqrt(np.nanmean((x[pre] - xd[pre]) ** 2 + (y[pre] - yd[pre]) ** 2))),
          "drift_during_descent_cm": 100 * float(np.hypot(x[i_t] - x[i_l], y[i_t] - y[i_l])),
          "err_max_during_descent_cm": 100 * float(np.nanmax(np.hypot(x[dsc] - xd[dsc], y[dsc] - yd[dsc]))) if dsc.any() else None,
-         "err_at_touch_cm": 100 * float(np.hypot(x[i_t] - xd[i_t], y[i_t] - yd[i_t])),
-         "touch_xy_cm": [100 * x[i_t], 100 * y[i_t]],
+         "err_at_touch_cm": err_touch,
+         "touch_xy_cm": touch_xy,
          "vz_at_touch_cms": 100 * float(np.nanmin(vz[(t > td - 0.5) & (t <= td + 0.1)])) if np.isfinite(vz).any() else None,
-         "slide_after_touch_cm": 100 * float(np.nanmax(np.hypot(x[after] - x[i_t], y[after] - y[i_t]))) if after.any() else None}
+         "slide_after_touch_cm": 100 * float(np.nanmax(np.hypot(x[after] - x[i_t], y[after] - y[i_t]))) if after.any() else None,
+         "cam_stale": cam_stale,
+         "cam_touch_xy_cm": cam_touch_xy_cm,
+         "cam_err_at_touch_cm": cam_err_at_touch_cm,
+         "cam_source": cam_source,
+         "primary_err_at_touch_cm": primary_err,
+         "primary_touch_xy_cm": primary_xy,
+         "primary_source": primary_source}
     return r
 
 
@@ -282,10 +423,18 @@ def plot_land(flights, out: Path) -> list[Path]:
         d = (t >= -3) & (t <= L["descent_s"] + 2)
         row[2].plot(100 * col(w, "Ctrler.locxPID.FB")[d], 100 * col(w, "Ctrler.locyPID.FB")[d], lw=.9)
         row[2].plot(*L["target_xy_cm"], "k+", ms=12)
-        row[2].plot(*L["touch_xy_cm"], "rx", ms=9)
+        row[2].plot(*L["touch_xy_cm"], "rx", ms=9, label="ekf touch")
+        if L.get("cam_touch_xy_cm"):
+            row[2].plot(*L["cam_touch_xy_cm"], "m*", ms=10, label="cam touch")
+            row[2].legend(fontsize=7)
         row[2].add_patch(plt.Circle(L["target_xy_cm"], 10, fill=False, ls=":"))
         row[2].set_aspect("equal")
-        row[2].set_title(f"top view, last 3 s + descent: touch {L['err_at_touch_cm']:.0f} cm off target", fontsize=8)
+        cam_info = ""
+        if L.get("cam_err_at_touch_cm") is not None:
+            cam_info = f", cam {L['cam_err_at_touch_cm']:.0f} cm"
+            if L.get("cam_stale"):
+                cam_info += " (stale EKF)"
+        row[2].set_title(f"top view, last 3 s + descent: touch {L['err_at_touch_cm']:.0f} cm{cam_info} off target", fontsize=8)
     for a in ax[-1][:2]:
         a.set_xlabel("s after descent start")
     files = [_save(fig, out / "landing.png")]
@@ -323,14 +472,19 @@ def report(date, flights, pngs, out: Path) -> Path:
                      f"<td>{_f(r.get('path_x', {}).get('f_dom_hz'), 2)} / {_f(r.get('path_y', {}).get('f_dom_hz'), 2)}</td>"
                      f"<td>{_f(r.get('att_roll_cmd', {}).get('osc_rms_cm'), 2)}</td></tr>")
     lrows = ["<tr><th>#</th><th>target cm</th><th>err at descent start</th><th>rms 3 s before</th><th>max in descent</th>"
-             "<th>drift in descent</th><th>off target at touch</th><th>descent s</th><th>vz at touch cm/s</th><th>slide after</th></tr>"]
+             "<th>drift in descent</th><th>EKF touch cm</th><th>cam touch cm</th><th>descent s</th><th>vz at touch cm/s</th><th>slide after</th></tr>"]
     for f in flights:
         L = f.get("land")
         if L:
+            cam_str = ""
+            if L.get("cam_err_at_touch_cm") is not None:
+                cam_str = _f(L["cam_err_at_touch_cm"])
+                if L.get("cam_stale"):
+                    cam_str += " (stale)"
             lrows.append(f"<tr><td>{f['n']}</td><td>{_f(L['target_xy_cm'][0], 0)}, {_f(L['target_xy_cm'][1], 0)}</td>"
                          f"<td>{_f(L['err_at_land_start_cm'])}</td><td>{_f(L['err_rms_3s_before_cm'])}</td>"
                          f"<td>{_f(L['err_max_during_descent_cm'])}</td><td>{_f(L['drift_during_descent_cm'])}</td>"
-                         f"<td>{_f(L['err_at_touch_cm'])}</td><td>{_f(L['descent_s'])}</td><td>{_f(L['vz_at_touch_cms'])}</td>"
+                         f"<td>{_f(L['err_at_touch_cm'])}</td><td>{cam_str}</td><td>{_f(L['descent_s'])}</td><td>{_f(L['vz_at_touch_cms'])}</td>"
                          f"<td>{_f(L['slide_after_touch_cm'])}</td></tr>")
     imgs = "".join(f"<h3>{p.stem}</h3><img src='data:image/png;base64,{base64.b64encode(p.read_bytes()).decode()}'>" for p in pngs)
     html = f"""<!doctype html><meta charset=utf-8><title>Lab flights {date}</title>
@@ -349,19 +503,28 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="python -m ground_station.analysis.lab_flights")
     ap.add_argument("date")
     ap.add_argument("--only", nargs="*", default=None, help="card prefixes to keep")
+    ap.add_argument("--include-sim", action="store_true", default=False, help="include synthetic/simulated sessions")
     ap.add_argument("--out", default=None)
     a = ap.parse_args(argv)
     out = Path(a.out) if a.out else ROOT / "logs" / "analysis" / a.date
     out.mkdir(parents=True, exist_ok=True)
     flights = [f for f in flights_of_day(a.date) if not a.only or any(f["card"].startswith(o) for o in a.only)]
+    kept = []
     for f in flights:
         f["label"] = f"{f['n']:02d} {f['card'].rsplit('-', 1)[-1]}"
         if not f["session"]:
+            kept.append(f)
+            continue
+        if not a.include_sim and is_sim(f["session"]):
             continue
         f["w"] = load(f["session"])
+        if not a.include_sim and is_sim(f["session"], f["w"]):
+            continue
         if f["card"].startswith("xy-ctrl"):
             f["xy"] = xy_metrics(f["w"])
-        f["land"] = land_metrics(f["w"])
+        f["land"] = land_metrics(f["w"], session=f["session"], flight_name=f["name"])
+        kept.append(f)
+    flights = kept
     pngs = plot_xy(flights, out) + plot_land([f for f in flights if f["card"].startswith("pad-landing")], out)
     keep = {k: v for k, v in ((f["name"], {"session": str(f["session"]), "xy": f.get("xy"), "land": f.get("land")})
                                for f in flights)}

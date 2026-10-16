@@ -2,7 +2,7 @@
 # Fly it: fly lab_b_land --once. Pass (PROPOSED): camera landing < 10 cm on 3 in a row (C landings count).
 campaign lab-b-land
 rate 50
-log estimator_truth optical_flow velocity_loops takeoff_gate thrust_model ekf_states camera_fusion
+log estimator_truth optical_flow velocity_loops takeoff_gate thrust_model ekf_states camera_fusion drift_nn
 set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10
 takeoff 0.5
 hold 3

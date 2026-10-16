@@ -523,6 +523,11 @@ def main(argv=None):
     # target. Commit the custody cache (delete it) and run the post-flash
     # verification.
     artifact_custody.commit(_OBJ)
+    try:
+        from .rebuild_and_flash import record_flashed_axf
+        record_flashed_axf()
+    except Exception:
+        pass
     print(verify_ekf())
 
 

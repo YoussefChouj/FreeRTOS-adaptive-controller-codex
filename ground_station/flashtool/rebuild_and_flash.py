@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import shutil
 import sys
 import time
@@ -115,6 +116,24 @@ def archive_artifact() -> None:
             _say(f"archived {archive_name}")
     except Exception as exc:
         _say(f"archive failed (non-fatal): {exc}")
+
+
+def record_flashed_axf(axf_path: Path = sf.ELF) -> Path:
+    """Record OBJ/.last_flashed_axf.json stamp to guard against built-but-unflashed AXF."""
+    p = Path(axf_path)
+    data = p.read_bytes()
+    st = p.stat()
+    stamp = {
+        "path": str(p).replace("\\", "/"),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "size": int(st.st_size),
+        "mtime": float(st.st_mtime),
+        "flashed_at": time.time(),
+    }
+    stamp_file = p.parent / ".last_flashed_axf.json"
+    stamp_file.write_text(json.dumps(stamp, indent=2), encoding="utf-8")
+    _say(f"stamped {stamp_file.name} (sha256: {stamp['sha256'][:8]}...)")
+    return stamp_file
 
 
 def build(rebuild: bool = True, timeout: float = 900):
@@ -488,6 +507,7 @@ def main(argv=None) -> int:
 
     shutil.rmtree(SNAPSHOT, ignore_errors=True)
     archive_artifact()
+    record_flashed_axf()
     _say("DONE: flashed, target alive, OBJ/JX_FLY.axf now matches the running image.")
     return 0
 

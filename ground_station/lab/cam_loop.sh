@@ -10,5 +10,6 @@ while [ ! -f "$vid/stop" ]; do
   python -c "import time,datetime;t=time.time();print(f\"{t:.3f}\",datetime.datetime.fromtimestamp(t).isoformat())" > "$vid/scrcpy_start_host_time$sfx.txt"
   scrcpy --video-source=camera --camera-id=4 --camera-zoom=0.6 --camera-size=1920x1080 --camera-fps=30 \
     --no-audio --window-title=r5cam --window-width=${size%x*} --window-height=${size#*x} $win --record="$vid/cam$sfx.mkv" >> "$vid/scrcpy.log" 2>&1
-  [ -f "$vid/stop" ] || echo "restart part $((k+1)) at $(date +%T)" >> "$vid/scrcpy.log"; k=$((k+1)); sleep 1
+  [ -f "$vid/stop" ] || echo "restart part $((k+1)) at $(date +%T)" >> "$vid/scrcpy.log"; k=$((k+1)); sleep 2
 done
+

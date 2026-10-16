@@ -16,13 +16,14 @@ only IDLE (accepted by the firmware only while RC-armed, on the ground, throttle
 from __future__ import annotations
 
 import math
+import sys
 import tempfile
 import time
 from typing import Any, Callable
 
 from ground_station.analysis.battery_model import PackRegistry
 from ground_station.livewatch.campaign_capture import (
-    ATTITUDE, KF_HEALTH, MAX_SLOTS, MOTORS, POSITION_AXES, RATE_LOOPS, WFB_STATUS_FIELDS, plan_capture,
+    ATTITUDE, CAMPAIGN_SET, KF_HEALTH, MAX_SLOTS, MOTORS, POSITION_AXES, RATE_LOOPS, WFB_STATUS_FIELDS, plan_capture,
     subscribe_steps,
 )
 from ground_station.platform.wfb_commands import CMD_PRIM, CMD_TRAJ, PrimIdx, WfbClient
@@ -62,6 +63,8 @@ _ALIASES = {s: a for s in SAMPLE_SYMS if (a := _REGISTRY.resolve(s)) and a != s}
 ACK_TIMEOUT_S = 1.0        # PROPOSED: step A 10-07 ack latency max 0.72 s at a 97 % full link; 0.5 s restarted every upload
 TRAJ_ACK_TIMEOUT_S = 3.0   # PROPOSED: 10-15 re-fly, traj BEGIN applied 1.55/1.70 s late on a loaded link -> refused
 HEARTBEAT_PERIOD_S = 0.2   # PROPOSED: 5 Hz, interfaces.md "GS sends at 5 Hz"; firmware hb_timeout_s 1.0
+HEARTBEAT_LOCKOUT_S = 2.0  # PROPOSED: 2x firmware hb_timeout_s; oldest unanswered heartbeat this old -> stop flooding
+HEARTBEAT_PROBE_S = 1.0    # PROPOSED: while locked out, one probe heartbeat per second so a recovered link resumes
 STATUS_STALE_S = 1.0       # PROPOSED: factory refuses to start without g_wfb_status this fresh
 LIVE_DT_S = 0.1            # PROPOSED: runner tick
 GROUND_WAIT_S = 10.0       # decision 12: time on the ground after a fly-mode landing before the auto-next check
@@ -85,20 +88,60 @@ class LiveWfbClient(WfbClient):
         self._sleep = sleep
         self._last_hb = -math.inf
         self.last_error = ""
+        self._consecutive_timeouts = 0
+        self._pending_hb_txids: list[int] = []
+        self._pending_hb_sent: list[float] = []   # submit time of each pending heartbeat, same order
+        self._lock_t: float | None = None
+        self._prim_active = False
 
     @staticmethod
     def _no_raw_send(frame: bytes) -> int:
         raise RuntimeError("LiveWfbClient sends through the service gateway, not raw frames")
 
     def heartbeat(self) -> bool:
+        """Send a heartbeat if one is due; False while the link looks dead (B13: no flooding).
+
+        Any result for a pending heartbeat proves the link is alive and clears the lockout, so a slow
+        link (results late, not lost) never locks the ground out for the rest of the flight.
+        """
         now = self._clock()
-        if now - self._last_hb >= self._hb_period_s:
-            self._service.submit_command(CMD_PRIM, PrimIdx.HEARTBEAT, 0.0)
+        self._poll_heartbeats()
+        if self._pending_hb_sent and now - self._pending_hb_sent[0] >= HEARTBEAT_LOCKOUT_S:
+            self._consecutive_timeouts = max(self._consecutive_timeouts, 2)
+        locked = self._consecutive_timeouts >= 2
+        if not locked:
+            self._lock_t = None
+            period, ref = self._hb_period_s, self._last_hb
+        else:
+            if self._lock_t is None:
+                self._lock_t = now
+            period, ref = HEARTBEAT_PROBE_S, max(self._last_hb, self._lock_t)
+        if now - ref >= period:
+            txid = self._service.submit_command(CMD_PRIM, PrimIdx.HEARTBEAT, 0.0)
+            self._pending_hb_txids.append(txid)
+            self._pending_hb_sent.append(now)
             self._last_hb = now
-        return True
+        return not locked
+
+    def _poll_heartbeats(self) -> None:
+        answered = -1
+        for i, txid in enumerate(self._pending_hb_txids):
+            if self._service.command_result(txid, pop=True) is not None:
+                answered = i   # any result (applied, ack, even rejected) means the drone heard us
+        if answered >= 0:
+            # earlier heartbeats are older than the answered one: stop waiting for them
+            del self._pending_hb_txids[:answered + 1]
+            del self._pending_hb_sent[:answered + 1]
+            self._consecutive_timeouts = 0
+
+    def _clear_pending_hb(self) -> None:
+        self._pending_hb_txids.clear()
+        self._pending_hb_sent.clear()
 
     def _send_cmd(self, cmd: int, idx: int, value: float) -> bool:
-        self.heartbeat()
+        # B8 fix: Do not heartbeat before every command (especially before PRIM starts).
+        if cmd == CMD_PRIM and idx == PrimIdx.TAKEOFF:
+            self._prim_active = True
         txid = self._service.submit_command(cmd, idx, float(value))
         timeout_s = self._traj_ack_timeout_s if cmd == CMD_TRAJ else self._ack_timeout_s   # uploads are on the ground
         deadline = self._clock() + timeout_s
@@ -108,18 +151,29 @@ class LiveWfbClient(WfbClient):
             if res is not None:
                 status = res.get("status")
                 if status == "applied":
+                    self._consecutive_timeouts = 0
+                    self._clear_pending_hb()
+                    if cmd == CMD_PRIM and idx == PrimIdx.LAND:
+                        self._prim_active = False
                     return True
                 if status == "rejected":
+                    self._consecutive_timeouts = 0
+                    self._clear_pending_hb()
                     self.last_error = (f"cmd 0x{cmd:02X} idx {idx} rejected: "
                                        f"{wfb_reason(res)} {res.get('detail', '')}".strip())
                     return False
                 acked = acked or status == "ack"
             if self._clock() >= deadline:
                 if acked:
+                    self._consecutive_timeouts = 0
+                    self._clear_pending_hb()
                     return True
+                self._consecutive_timeouts += 1
                 self.last_error = f"cmd 0x{cmd:02X} idx {idx}: no result in {timeout_s} s"
                 return False
-            self.heartbeat()
+            # Only heartbeat while waiting if PRIM is active or sending a flight primitive (B8/B13)
+            if self._prim_active or (cmd == CMD_PRIM and idx in (PrimIdx.TAKEOFF, PrimIdx.LAND)):
+                self.heartbeat()
             self._sleep(_RESULT_POLL_S)
 
 
@@ -292,6 +346,35 @@ LAB_PLAN_MAX_HZ = 25.0
 LAB_STATUS_HZ = 10.0       # = 100 Hz / WifiBridge.LAB_SLOT0_DIVIDER
 
 
+def drop_missing_symbols(bridge: Any, steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """``steps`` without the names the flashed image (OBJ axf) lacks, so an optional group a newer image adds
+    (``drift_nn`` on the old image) logs nothing instead of failing the subscribe. A missing core name still
+    raises: the runner refuses to fly without its core log. Steps left empty are dropped. A bridge without
+    ``_resolvable`` (test double, no axf) is not checked.
+    """
+    resolvable = getattr(bridge, "_resolvable", None)
+    if not callable(resolvable):
+        return steps
+    out, missing = [], []
+    for step in steps:
+        names = list(step["args"]["ranges"])
+        keep = resolvable(names)
+        if not isinstance(keep, list):
+            return steps
+        missing += [n for n in names if n not in keep]
+        if keep:
+            out.append({**step, "args": {**step["args"], "ranges": keep}})
+    core = [n for n in missing if n in CAMPAIGN_SET["needed"]]
+    if core:
+        raise RuntimeError(f"log plan: the flashed image has no core symbol(s) {core}; refusing to fly unlogged")
+    if missing:
+        print(f"[campaign] Warning: the flashed image has no {missing}; logging without them",
+              file=sys.stderr, flush=True)
+    for slot, step in enumerate(out):    # repack so the slots stay contiguous from 0
+        step["args"]["slot"] = slot
+    return out
+
+
 def live_capture_hooks(service: Any, controller: str = "pid", max_rate_hz: float | None = None,
                        ) -> tuple[Callable[[Any, str], Any], Callable[[Any], str]]:
     """RunnerDeps begin_capture / end_capture for the live link (decision 8).
@@ -305,7 +388,7 @@ def live_capture_hooks(service: Any, controller: str = "pid", max_rate_hz: float
 
     def begin(exp: Any, flight_id: str) -> str:
         plan = plan_capture(exp.log_plan or None, max_rate_hz=max_rate_hz)
-        steps = subscribe_steps(plan)
+        steps = drop_missing_symbols(getattr(service, "bridge", None), subscribe_steps(plan))
         if len(steps) < MAX_SLOTS:   # leave slot 0 to the bridge's dashboard auto-subscribe (its watchdog re-sends
             for step in steps:       # the dashboard layout there; xyz-f1 2026-10-13 died "slot 0: no schema yet")
                 step["args"]["slot"] += 1

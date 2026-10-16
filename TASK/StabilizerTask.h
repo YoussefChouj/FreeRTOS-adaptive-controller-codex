@@ -61,5 +61,11 @@ extern TargetSet_WorldReal_Coordinate TWC;
 extern float real_voltage;   /* pack voltage, V (Get_Voltage) */
 extern float Cos_Yaw_01;
 
+/* RC / command PID fallback (lab-friction C) */
+extern volatile uint8_t g_rc_pid_fallback_ch;
+extern volatile uint8_t g_ctrl_pid_fallback;
+extern volatile uint8_t g_ctrl_pid_fallback_active;
+extern volatile uint8_t g_rc_fallback;
+
 #endif
 

@@ -3,7 +3,7 @@
 # camera truth moves < 20 cm over 60 s; read the camera landing line. Plan: docs/lab/run-sheet-2026-10-14.md
 campaign lab-a-hover
 rate 50
-log estimator_truth optical_flow velocity_loops takeoff_gate thrust_model ekf_states camera_fusion
+log estimator_truth optical_flow velocity_loops takeoff_gate thrust_model ekf_states camera_fusion drift_nn
 set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=0
 takeoff 0.5
 hold 70

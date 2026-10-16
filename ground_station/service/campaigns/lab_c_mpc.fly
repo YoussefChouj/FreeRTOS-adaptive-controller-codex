@@ -1,9 +1,11 @@
+# gains: defaults
+# why: PID gains are unused by the MPC xy loop but stay live in RAM (rate loops 9-14 always fly; 24-35 fly if the PID fallback trips); reset them so F4 livetune gains do not carry in
 # C: MPC on the same track (0.4 m x step, circle r30, figure-8 a30), gated pad landing, fusion 3
 # Fly it: fly lab_c_mpc --once at >= 15.8 V resting. Score: step overshoot (debrief Setpoint moves) vs today's PID,
 # tie-break circle + figure-8 xy rms. Plan: docs/lab/run-sheet-2026-10-14.md
 campaign lab-c-mpc
 rate 100
-log velocity_loops camera_fusion
+log velocity_loops camera_fusion drift_nn
 set g_xy_ctrl_kind=3 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10 g_xyc_delay_ticks=12
 takeoff 0.5
 hold 3

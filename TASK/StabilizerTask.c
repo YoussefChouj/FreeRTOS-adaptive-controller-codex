@@ -79,6 +79,7 @@ static void GsIdle_ReleaseOnDisarm(void);    /* below Des_Height: GS idle author
  * Touchdown detected by Z_ratePID.FB -> 0 on frame contact. */
 /* LAND_VZ_MPS / LAND_FAST_ALT / LAND_VZ_FAST_MPS and the 2026-10-15 slow stage live in land_profile.h. */
 #include "land_profile.h"
+#include "pid_fallback.h"
 #define LAND_TICK_S        0.005f   /* Des_Height runs every 200 Hz tick */
 /* Safety net: 3000 ticks at 200 Hz = 15 s max landing time before forced disarm
  * (was 10 s; kept for margin: rate-mode LAND from 2.5 m is about 5.7 s, arithmetic). */
@@ -1991,22 +1992,44 @@ static void Pos_ArmEdge(void)
 	s_prev_armed = armed_now;
 }
 
-/* RC fallback (2026-10-15, lab-friction C): FALLBACK_CH high for FALLBACK_DEBOUNCE_TICKS ticks in a row latches
- * g_rc_fallback until disarm. The xy outer loop goes to the PID cascade (Pos_Compute) and the attitude correction
- * fades out to CTRL_PID (API/controller.c). Motors stay on; the operator lands by hand. Telemetered as status.fallback. */
+/* RC fallback (2026-10-15, lab-friction C): configurable aux switch channel (g_rc_pid_fallback_ch 1..16,
+ * 0 = disabled) > FALLBACK_ON_MIN for FALLBACK_DEBOUNCE_TICKS ticks in a row, or direct command
+ * (g_ctrl_pid_fallback != 0) while armed, latches fallback until disarm.
+ * On transition edge: s_xyc_kind is forced to XY_CTRL_PID and xy_ctrl_reset() is called for bumpless
+ * hand-off (the PID cascade is already warm). Attitude correction fades out to CTRL_PID (controller.c).
+ * Motors stay on; operator lands by hand. Status exposed via g_ctrl_pid_fallback_active & g_rc_fallback. */
+volatile uint8_t g_rc_pid_fallback_ch = 0U;
+volatile uint8_t g_ctrl_pid_fallback = 0U;
+volatile uint8_t g_ctrl_pid_fallback_active = 0U;
 volatile uint8_t g_rc_fallback = 0U;
-#define FALLBACK_ON_MIN          1400     /* above mid: an unassigned SBUS channel may idle at ~1000-1024 */
-#define FALLBACK_DEBOUNCE_TICKS  3U       /* 15 ms at 200 Hz */
+
+static PidFallbackState s_pid_fallback = {0U, 0U};
+
+static void xy_ctrl_reset(void)
+{
+	XyCtrl_Reset(&s_xyc[0]);
+	XyCtrl_Reset(&s_xyc[1]);
+}
+
 static void Rc_FallbackStep(void)
 {
-	static uint8_t s_high_ticks = 0U;
-	if (DroneStatus.ARM_Status != Armed) { g_rc_fallback = 0U; s_high_ticks = 0U; }
-	else {
-		if (sbus_lost == 0U && FALLBACK_CH > FALLBACK_ON_MIN) { if (s_high_ticks < FALLBACK_DEBOUNCE_TICKS) s_high_ticks++; }
-		else s_high_ticks = 0U;
-		if (s_high_ticks >= FALLBACK_DEBOUNCE_TICKS) g_rc_fallback = 1U;
+	uint8_t armed = (uint8_t)(DroneStatus.ARM_Status == Armed);
+	uint8_t edge = PidFallback_Step(&s_pid_fallback,
+	                                armed,
+	                                g_ctrl_pid_fallback,
+	                                g_rc_pid_fallback_ch,
+	                                sbus_lost,
+	                                (const uint16_t *)sbus_channel);
+	if (edge) {
+		s_xyc_kind = XY_CTRL_PID;
+		xy_ctrl_reset();
 	}
-	g_ctrl_fallback = g_rc_fallback;
+	g_ctrl_pid_fallback_active = s_pid_fallback.latched;
+	g_rc_fallback = s_pid_fallback.latched;
+	g_ctrl_fallback = s_pid_fallback.latched;
+	if (!armed) {
+		g_ctrl_pid_fallback = 0U;
+	}
 }
 
 /* xy position loops, then the velocity loops with the trajectory feed-forward. Armed only. */
@@ -2038,12 +2061,13 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact)
 	/* xy_ctrl flies an axis only while its velocity setpoint is the position loop's own output (not the RC stick,
 	 * an SDK velocity, or the VXY clamp); otherwise the PID flies and xy_ctrl tracks. Kind latched on the ground;
 	 * the RC fallback forces the PID in flight (the PID cascade runs every tick, so it is warm). */
-	if (!airborne || land_contact || g_rc_fallback) {
-		s_xyc_kind = (g_xy_ctrl_kind <= XY_CTRL_MPC && !g_rc_fallback) ? g_xy_ctrl_kind : XY_CTRL_PID;
+	if (!airborne || land_contact || g_ctrl_pid_fallback_active) {
+		s_xyc_kind = (g_xy_ctrl_kind <= XY_CTRL_MPC && !g_ctrl_pid_fallback_active) ? g_xy_ctrl_kind : XY_CTRL_PID;
 		if (!airborne && g_xyc_delay_ticks != XyCtrl_Delay())
 			XyCtrl_SetDelay(g_xyc_delay_ticks);
-		XyCtrl_Reset(&s_xyc[0]);
-		XyCtrl_Reset(&s_xyc[1]);
+		if (!g_ctrl_pid_fallback_active) {
+			xy_ctrl_reset();
+		}
 	}
 	xyc_on[0] = s_xyc_kind && airborne && !land_contact && Ctrler.locxsPID.Des == Ctrler.locxPID.U;
 	xyc_on[1] = s_xyc_kind && airborne && !land_contact && Ctrler.locysPID.Des == Ctrler.locyPID.U;

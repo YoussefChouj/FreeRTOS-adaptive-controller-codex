@@ -190,6 +190,7 @@ class _SlotNaming:
     """
     rebuild: Dict[int, Any] = field(default_factory=dict)       # slot -> callable that re-sends the request by name
     names: Dict[int, tuple] = field(default_factory=dict)       # slot -> DWARF names last requested
+    dividers: Dict[int, int] = field(default_factory=dict)      # slot -> divider last requested
     fw_key: Dict[int, Optional[tuple]] = field(default_factory=dict)  # slot -> axf key the request was built with
     cleared: set = field(default_factory=set)                   # slots the GS stopped (divider 0) on purpose
     faults: Dict[int, str] = field(default_factory=dict)        # slot -> why its stream is not fully named
@@ -596,12 +597,14 @@ class WifiBridge:
         if divider and rebuild is not None:
             nm.rebuild[slot] = rebuild
             nm.names[slot] = tuple(names)
+            nm.dividers[slot] = int(divider)
             nm.fw_key[slot] = _axf_key()
             nm.cleared.discard(slot)
             return
-        for d in (nm.rebuild, nm.names, nm.fw_key, nm.faults, nm.heal_count):
+        for d in (nm.rebuild, nm.names, nm.dividers, nm.fw_key, nm.faults, nm.heal_count):
             d.pop(slot, None)
         if divider:
+            nm.dividers[slot] = int(divider)
             nm.cleared.discard(slot)        # raw StreamRange request: nothing to rebuild from
         else:
             nm.cleared.add(slot)

@@ -527,11 +527,22 @@ class GroundStationService:
             notes: free-text operator notes
         """
         try:
+            is_sim = False
+            if getattr(self, "source", "") in ("fake", "sim", "fake_drone", "sil"):
+                is_sim = True
+            bridge = getattr(self, "bridge", None)
+            if bridge:
+                host = getattr(bridge, "_wifi_host", None) or getattr(bridge, "host", None)
+                if host in ("127.0.0.2", "127.0.0.1", "localhost"):
+                    is_sim = True
+                if getattr(bridge, "is_fake", False) or getattr(bridge, "fake", False):
+                    is_sim = True
             self.recorder.start(
                 label=label, requested_by=requested_by, reason=reason,
                 subscribe_layout=self._subscribe_layout_snapshot(),
                 context=self._manifest_context(),
                 session_schema=self._session_schema(),
+                sim=is_sim,
             )
             preset_name = ""
             bridge = getattr(self, "bridge", None)
@@ -1089,8 +1100,12 @@ class GroundStationService:
 
         # Find the matching open action (reverse to get the latest)
         for action in reversed(self._action_journal):
-            if action.transaction_id == result.transaction_id and \
-                    action.lifecycle == CommandLifecycle.SUBMITTED:
+            # The firmware sends ACK, then APPLIED or REJECTED for the same txid (TASK/send_data.c
+            # Process_GroundStation_Command): an acknowledged action stays open for that final outcome.
+            if action.transaction_id == result.transaction_id and (
+                    action.lifecycle == CommandLifecycle.SUBMITTED or
+                    (action.lifecycle == CommandLifecycle.ACKNOWLEDGED and
+                     lifecycle != CommandLifecycle.ACKNOWLEDGED)):
                 # Replace in-place by building a new CommandAction with resolved fields.
                 resolved = CommandAction(
                     transaction_id=action.transaction_id,

@@ -25,10 +25,13 @@ def root() -> Path:
 
 
 def log(event: str, **fields) -> None:
-    rec = {"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "pid": os.getpid(), "event": event, **fields}
+    now = time.time()
+    iso_ms = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(now)) + f".{int((now % 1) * 1000):03d}"
+    rec = {"t": iso_ms, "mono_s": round(time.monotonic(), 3), "pid": os.getpid(), "event": event, **fields}
     try:
         root().mkdir(parents=True, exist_ok=True)
-        with open(root() / (time.strftime("%Y-%m-%d") + ".jsonl"), "a", encoding="utf-8") as f:
+        date_str = time.strftime("%Y-%m-%d", time.localtime(now))
+        with open(root() / f"{date_str}.jsonl", "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, default=str) + "\n")
     except OSError:
         pass
@@ -49,19 +52,43 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="print the pipeline event log")
     ap.add_argument("date", nargs="?", default=time.strftime("%Y-%m-%d"))
     ap.add_argument("-n", type=int, default=40)
+    ap.add_argument("--gaps", action="store_true", help="show event-to-event deltas per flight")
     a = ap.parse_args(argv)
     p = root() / f"{a.date}.jsonl"
     if not p.exists():
         print(f"no events for {a.date} ({p})")
         return
-    for line in p.read_text(encoding="utf-8").splitlines()[-a.n:]:
+    lines = p.read_text(encoding="utf-8").splitlines()
+    if a.gaps:
+        last_mono = {}
+        for line in lines[-a.n:]:
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            fl = r.get("campaign") or r.get("card") or "pipeline"
+            mono = r.get("mono_s")
+            if mono is None:
+                try:
+                    from datetime import datetime
+                    mono = datetime.fromisoformat(r["t"]).timestamp()
+                except Exception:
+                    mono = 0.0
+            prev = last_mono.get(fl)
+            gap = f"+{mono - prev:6.2f}s" if prev is not None else "  start"
+            last_mono[fl] = mono
+            rest = " ".join(f"{k}={v}" for k, v in r.items() if k not in ("t", "mono_s", "pid", "event"))
+            print(f"{r['t'][11:]} {fl:<20} {r['event']:<14} {gap} {rest}")
+        return
+    for line in lines[-a.n:]:
         try:
             r = json.loads(line)
         except ValueError:                       # a line torn by a crash mid-write
             print(f"(unreadable line: {line[:60]})")
             continue
-        rest = " ".join(f"{k}={v}" for k, v in r.items() if k not in ("t", "pid", "event"))
+        rest = " ".join(f"{k}={v}" for k, v in r.items() if k not in ("t", "mono_s", "pid", "event"))
         print(f"{r['t'][11:]} {r['event']:<14} {rest}")
+
 
 
 if __name__ == "__main__":

@@ -249,6 +249,40 @@ def test_live_capture_refuses_to_fly_unnamed_streams(monkeypatch):
     assert begin(_exp(), "f2").endswith("f2_hover_z050")
 
 
+def test_live_capture_skips_symbols_the_flashed_image_lacks(capsys):
+    # old image (no g_drift_nn): the drift_nn group drops with a warning, the rest still logs
+    svc = FakeRecService()
+    svc.bridge._resolvable = lambda names: [n for n in names if not n.startswith("g_drift_nn")]
+    begin, _ = live_capture_hooks(svc)
+    plan = {"rate_hz": 25, "groups": ["velocity_loops", "drift_nn"]}
+    assert begin(_exp(log_plan=plan), "f1").endswith("f1_hover_z050")
+    used = [c.kwargs for c in svc.bridge.subscribe_slot.call_args_list if c.kwargs["divider"]]
+    names = [n for s in used for n in s["ranges"]]
+    assert names and not any(n.startswith("g_drift_nn") for n in names)
+    assert [s["slot"] for s in used] == list(range(1, len(used) + 1))
+    assert "g_drift_nn.status" in capsys.readouterr().err
+
+
+def test_live_capture_logs_drift_nn_when_the_image_has_it():
+    svc = FakeRecService()
+    svc.bridge._resolvable = lambda names: list(names)
+    begin, _ = live_capture_hooks(svc)
+    begin(_exp(log_plan={"rate_hz": 25, "groups": ["velocity_loops", "drift_nn"]}), "f1")
+    names = [n for c in svc.bridge.subscribe_slot.call_args_list for n in c.kwargs["ranges"]]
+    assert "g_drift_nn.status" in names and "g_drift_nn.cyc_max" in names
+
+
+def test_live_capture_refuses_when_a_core_symbol_is_missing():
+    from ground_station.livewatch.campaign_capture import CAMPAIGN_SET
+    core = CAMPAIGN_SET["needed"][0]
+    svc = FakeRecService()
+    svc.bridge._resolvable = lambda names: [n for n in names if n != core]
+    begin, _ = live_capture_hooks(svc)
+    with pytest.raises(RuntimeError, match="no core symbol"):
+        begin(_exp(), "f1")
+    assert not any(isinstance(c, tuple) and c[0] == "start" for c in svc.calls)
+
+
 # --- CampaignService outputs ---------------------------------------------------------------------------
 
 

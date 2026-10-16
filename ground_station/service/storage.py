@@ -223,8 +223,10 @@ class CsvRecorder:
     _STOP = object()
 
     def __init__(self, root: str | Path = "logs/sessions", *,
-                 enabled: bool = True, flush_interval_s: float = 1.0) -> None:
+                 enabled: bool = True, flush_interval_s: float = 1.0,
+                 sim: bool = False) -> None:
         self.enabled = bool(enabled)
+        self.sim = bool(sim)
         self.root = Path(root)
         self.flush_interval_s = float(flush_interval_s)
         # Public status (read by /health and /api/recording; written by the
@@ -262,7 +264,8 @@ class CsvRecorder:
               requested_by: str = "operator", reason: str | None = None,
               subscribe_layout: dict[str, Any] | None = None,
               context: dict[str, Any] | None = None,
-              session_schema: dict[str, Any] | None = None) -> bool:
+              session_schema: dict[str, Any] | None = None,
+              sim: bool | None = None) -> bool:
         """Begin a fresh recording: create a new directory and writer thread.
 
         Creates ``<root>/<YYYYmmdd-HHMMSS>[-label]/`` with ``telemetry.csv``,
@@ -272,6 +275,8 @@ class CsvRecorder:
         """
         if not self.enabled or self._closed or self.recording:
             return False
+        if sim is not None:
+            self.sim = bool(sim)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         # The label comes from HTTP; keep it a single safe path component.
         label = re.sub(r"[^A-Za-z0-9_-]+", "_", label or "").strip("_")[:40] or None
@@ -338,6 +343,11 @@ class CsvRecorder:
             self.stopped_at = time.time()
             self.recording = False
             self._draining = False
+            if not self.sim and self.path and self.path.exists():
+                try:
+                    self.sim = self._detect_synthetic_sil()
+                except Exception:
+                    pass
             self._write_manifest()
             self._close_events()
         return was_recording
@@ -453,9 +463,75 @@ class CsvRecorder:
                 with self._lock:
                     self.errors += 1
 
+    def _detect_synthetic_sil(self) -> bool:
+        """Check if telemetry.csv matches the synthetic SIL / fake_drone signature
+        (all 4 motors identical and Des == FB)."""
+        if not self.path or not self.path.exists():
+            return False
+        try:
+            import csv
+            motors: dict[str, list[float]] = {"mymotor.motor1": [], "mymotor.motor2": [],
+                                              "mymotor.motor3": [], "mymotor.motor4": []}
+            des_fb: dict[str, list[float]] = {}
+            pairs = [
+                ("Ctrler.locxPID.Des", "Ctrler.locxPID.FB"),
+                ("Ctrler.locyPID.Des", "Ctrler.locyPID.FB"),
+                ("Ctrler.Z_posPID.Des", "Ctrler.Z_posPID.FB"),
+            ]
+            for d, fb in pairs:
+                des_fb[d] = []
+                des_fb[fb] = []
+
+            with open(self.path, "r", encoding="utf-8", errors="replace") as f:
+                reader = csv.reader(f)
+                header = next(reader, None)
+                count = 0
+                for row in reader:
+                    if len(row) < 4:
+                        continue
+                    key, val_str = row[2], row[3]
+                    bare_key = key.split(".", 1)[-1] if key.startswith("slot") and "." in key else key
+                    if bare_key in motors:
+                        try:
+                            motors[bare_key].append(float(val_str))
+                        except ValueError:
+                            pass
+                    elif bare_key in des_fb:
+                        try:
+                            des_fb[bare_key].append(float(val_str))
+                        except ValueError:
+                            pass
+                    count += 1
+                    if count >= 5000:
+                        break
+
+            min_len = min(len(v) for v in motors.values())
+            if min_len >= 5:
+                all_equal = True
+                for i in range(min_len):
+                    if not (motors["mymotor.motor1"][i] == motors["mymotor.motor2"][i] ==
+                            motors["mymotor.motor3"][i] == motors["mymotor.motor4"][i]):
+                        all_equal = False
+                        break
+                if all_equal:
+                    des_fb_match = False
+                    for d, fb in pairs:
+                        ld, lfb = des_fb[d], des_fb[fb]
+                        m_len = min(len(ld), len(lfb))
+                        if m_len >= 5:
+                            if all(ld[i] == lfb[i] for i in range(m_len)):
+                                des_fb_match = True
+                                break
+                    if des_fb_match:
+                        return True
+        except Exception:
+            pass
+        return False
+
     def _write_manifest(self) -> None:
         manifest = {
             "schema_version": 1,
+            "sim": bool(self.sim),
             "started_at": (datetime.fromtimestamp(
                 self.started_at or time.time(), tz=timezone.utc).isoformat()
                 if self.started_at else None),

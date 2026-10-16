@@ -1,6 +1,6 @@
 {
   "name": "drift_rc_extpos",
-  "notes": "drift_rc_max + camera fusion (EXT_POS) + trajectory phase. 50 Hz adds g_ext_pos_on, traj_phase, traj_status (traj pair merges, 2 ranges). 25 Hz adds g_ext_pos.* (innovation e, correction c, counters, age, stale): a 10 Hz fix holds >= 2 rows. Re-priced 2026-10-12 on the flashed mode-2 ELF (build 26e0a177): slot2 was 64/62 ranges, dropped constant config arrays mrac_var_id/mrac_ref_type_eff/mrac_u_ff -> slot2 61/62, total 72900/87552 B/s (plan_budget ok).",
+  "notes": "drift_rc_max + camera fusion (EXT_POS) + trajectory phase. 50 Hz adds g_ext_pos_on, traj_phase, traj_status (traj pair merges, 2 ranges). 25 Hz adds g_ext_pos.* (innovation e, correction c, counters, age, stale): a 10 Hz fix holds >= 2 rows. Re-priced 2026-10-12 on the flashed mode-2 ELF (build 26e0a177): slot2 was 64/62 ranges, dropped constant config arrays mrac_var_id/mrac_ref_type_eff/mrac_u_ff -> slot2 61/62, total 72900/87552 B/s (plan_budget ok). 2026-10-16: slot2 adds the shadow drift network g_drift_nn.* (one struct, 36 B: computed 1 range -> 62/62, about +800 B/s; not re-priced on an ELF yet). An image without g_drift_nn drops these with a warning.",
   "slots": [
     {
       "rate": 100.0,
@@ -301,7 +301,14 @@
         "g_ext_pos.n_anchor",
         "g_ext_pos.c_x",
         "g_ext_pos.c_y",
-        "g_ext_pos.stale"
+        "g_ext_pos.stale",
+        "g_drift_nn.vx",
+        "g_drift_nn.vy",
+        "g_drift_nn.v_in[0]",
+        "g_drift_nn.v_in[1]",
+        "g_drift_nn.steps",
+        "g_drift_nn.cyc_max",
+        "g_drift_nn.status"
       ]
     }
   ],

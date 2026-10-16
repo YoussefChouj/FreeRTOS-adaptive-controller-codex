@@ -298,10 +298,13 @@ class Lab:
             self.new_pack(pack)
 
     def ask(self, prompt):
+        events.log("prompt", text=prompt)
         try:
-            return self._input(prompt).strip().lower()
+            ans = self._input(prompt).strip().lower()
         except EOFError:
-            return "q"
+            ans = "q"
+        events.log("operator_key", key=ans)
+        return ans
 
     def save(self):
         save_state(self.state_file, self.state)
@@ -477,8 +480,23 @@ class Lab:
         if not self.pack_check(float(ground.get("min_v") or 0)):     # first: a swap changes the header's pack
             return 0
         self.header(card, fl)
-        if var.ask and self.ask(var.ask + " (q quits) ") == "q":
-            return 0
+        if var.ask:
+            if "gains" in var.ask.lower():
+                m = re.search(r'gains?:\s*([a-zA-Z0-9_\-]+)', var.ask, re.IGNORECASE)
+                if m:
+                    preset = m.group(1).lower()
+                elif "c3" in var.ask.lower():
+                    preset = "c3"
+                elif "c2" in var.ask.lower():
+                    preset = "c2"
+                elif "default" in var.ask.lower():
+                    preset = "defaults"
+                else:
+                    preset = "c2"
+                if not fly.write_gains(self.base, preset, ask_fn=self.ask):
+                    return 0
+            elif self.ask(var.ask + " (q quits) ") == "q":
+                return 0
         src = cards.write_fly(card, fl.variant, self.day_dir / "fly")
         try:
             launch, src = fly.resolve_campaign(str(src), self.pack)
@@ -492,6 +510,7 @@ class Lab:
             return 0
         self.rest()
         while True:
+            fly.upload_preload(self.base, str(launch))
             print(f"Drone on the pad, then arm by RC to fly {card.name} {fl.variant} (q quits).", flush=True)
             r = fly.wait_for_arm(self.base, str(launch), self.pack)
             events.log("arm_wait", result=r, campaign=f"{card.name}-{fl.variant}", pack=self.pack)
@@ -537,7 +556,11 @@ class Lab:
             self.card_end(card)
         nxt = next_flight(self.queue, self.state)
         if var.after and (nxt[0] is None or (nxt[0].name, nxt[1].variant) != (card.name, fl.variant)):
-            if self.ask(var.after + " (q quits) ") == "q":
+            after_lower = var.after.lower()
+            if "restore defaults" in after_lower or "pid.c gains" in after_lower:
+                if not fly.write_gains(self.base, "defaults", ask_fn=self.ask):
+                    return 0
+            elif self.ask(var.after + " (q quits) ") == "q":
                 return 0
         return None
 

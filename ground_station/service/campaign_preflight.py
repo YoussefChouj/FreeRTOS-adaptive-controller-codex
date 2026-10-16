@@ -11,6 +11,8 @@ arm sources, battery, g_wfb_status and per-slot stream freshness in one reply.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import os
 import time
@@ -35,6 +37,7 @@ AUTHORITY_SYMS = ("status.rc_authority", "s_authority")
 OF_HOLD_SYMS = ("status.of_hold", "g_of_hold_active")   # ch6 HIGH: velocity loops drive tilt (Des_Att)
 WFB_SYMS = ("g_wfb_status.prim_state", "g_wfb_status.safety_trip")
 BUILD_ID_SYMS = tuple(f"build_id[{i}]" for i in range(4))
+MOTOR_SYMS = tuple(f"mymotor.motor{i}" for i in range(1, 5))
 
 
 def _num(x: float) -> str:
@@ -52,7 +55,7 @@ def vitals(service: Any, now_ns: Callable[[], int] = time.time_ns) -> dict[str, 
     streams it.
     """
     names = (tuple(a.feedback for a in POSITION_AXES) + RC_LOST_SYMS + FLYMODE_SYMS + AUTHORITY_SYMS
-             + OF_HOLD_SYMS + VBAT_SYMS + WFB_SYMS + BUILD_ID_SYMS)
+             + OF_HOLD_SYMS + VBAT_SYMS + WFB_SYMS + BUILD_ID_SYMS + MOTOR_SYMS)
     now = now_ns()
     fresh: dict[str, dict[str, Any]] = {}
     for name, (value, ts) in service.latest_values(names).items():
@@ -84,6 +87,7 @@ def vitals(service: Any, now_ns: Callable[[], int] = time.time_ns) -> dict[str, 
         "battery": _pick(fresh, VBAT_SYMS),
         "wfb": {"prim_state": fresh.get(WFB_SYMS[0]), "safety_trip": fresh.get(WFB_SYMS[1])},
         "build_id": build,
+        "motors": {m: fresh[m]["value"] for m in MOTOR_SYMS if m in fresh},
         "streams": streams,
     }
 
@@ -128,6 +132,30 @@ def _elf_identity(elf: Path) -> tuple[int, ...] | None:
         return None
 
 
+def _axf_flash_row(elf_path: Path) -> dict[str, Any]:
+    elf = Path(elf_path)
+    stamp_file = elf.parent / ".last_flashed_axf.json"
+    if not stamp_file.exists():
+        return _row("axf_flash", "no flash stamp recorded", True)
+    if not elf.exists():
+        return _row("axf_flash", f"{elf} missing", False, "build and flash firmware")
+    try:
+        stamp = json.loads(stamp_file.read_text(encoding="utf-8"))
+        data = elf.read_bytes()
+        # content only: a checkout, copy or touch changes mtime without changing what was flashed
+        size_ok = stamp.get("size") is None or int(stamp["size"]) == len(data)
+        if stamp.get("sha256") != hashlib.sha256(data).hexdigest() or not size_ok:
+            return _row(
+                "axf_flash",
+                "axf rebuilt since last flash (flash or revert OBJ/JX_FLY.axf)",
+                False,
+                "flash the current build with rebuild_and_flash --yes, or revert OBJ/JX_FLY.axf",
+            )
+    except Exception as exc:
+        return _row("axf_flash", f"stamp read error: {exc}", False, "re-flash or delete .last_flashed_axf.json")
+    return _row("axf_flash", "OBJ/JX_FLY.axf matches last flash stamp", True)
+
+
 def _firmware_row(service: Any, v: dict[str, Any], elf_path: Path) -> dict[str, Any]:
     if v["source"] == "sim":
         return _row("firmware", "simulator source (no firmware)", True)
@@ -138,6 +166,9 @@ def _firmware_row(service: Any, v: dict[str, Any], elf_path: Path) -> dict[str, 
     mtime = elf.stat().st_mtime
     parts = [f"{elf.name} built {time.strftime('%Y-%m-%d %H:%M', time.localtime(mtime))}"]
     problems: list[tuple[str, str]] = []
+    flash_check = _axf_flash_row(elf)
+    if flash_check["pass"] is False:
+        problems.append((flash_check["value"], flash_check["fix"] or flash))
     if (elf.parent / CUSTODY_DIR).exists():
         problems.append((f"a build was not flashed ({CUSTODY_DIR} present): the axf may not match the drone", flash))
     started = getattr(service, "started_at", None)
@@ -218,8 +249,28 @@ def _arm_row(v: dict[str, Any]) -> dict[str, Any]:
     if disagree:
         return _row("arm_state", value, False,
                     "arm sources disagree: DroneStatus.ARM_Status decides; after a reflash restart 8081 (stale names)")
+    # Check for garbage symbol alignment: if arm == 1 while motors are bogus (< 0 or > 10000 PWM)
+    # or real_voltage is out of sane bounds (< 0 or > 30 V), report "possible stale AXF symbol mismatch"
+    is_arm1 = (state == "armed") or any(s.get("value") == 1.0 for s in srcs)
+    motors = v.get("motors", {})
+    bogus_motor = any(val < 0 or val > 10000 for val in motors.values()) if motors else False
+    vbat = v.get("battery")
+    bogus_voltage = False
+    if vbat is not None:
+        try:
+            volts = float(vbat.get("value", 0))
+            if volts < 0 or volts > 30.0:
+                bogus_voltage = True
+        except (ValueError, TypeError):
+            bogus_voltage = True
+    if is_arm1 and (bogus_motor or bogus_voltage):
+        return _row("arm_state", f"{value}; possible stale AXF symbol mismatch", False,
+                    "possible stale AXF symbol mismatch: flash the current build or restart 8081 with matching AXF")
     return _row("arm_state", value, False,
                 "the drone reports armed: disarm by RC; the operator arms only after the preflight and checklist")
+
+
+_disarmed_row = _arm_row
 
 
 def _position_row(v: dict[str, Any]) -> dict[str, Any]:

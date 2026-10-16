@@ -188,14 +188,24 @@ def _num(value: Any) -> bool:
     return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
 
 
-def _compile_preset(body: dict, path: str, problems: list[str]) -> Step | None:
+def _compile_preset(body: dict, hover_z: float, path: str, problems: list[str]) -> Step | None:
     """traj_p = the firmware boot defaults overlaid with the step's fields, each checked against its VAR_WRITE row,
-    and move_s + ret_s + hold_s against TRAJ_TOTAL_MAX_S (traj_go refuses it as 0xEE in the air otherwise)."""
+    and move_s + ret_s + hold_s against TRAJ_TOTAL_MAX_S (traj_go refuses it as 0xEE in the air otherwise).
+
+    Friction B3 fix: writes traj_p.start_z_m to match scenario hover_z (unless explicitly overridden by the preset body)
+    so preset maneuvers do not jump to firmware boot default 0.85 m.
+    """
     name = body.get("name")
     if name not in wfb_var.PRESETS:
         problems.append(f"{path}.name: must be one of {', '.join(wfb_var.PRESETS)} (got {name!r})")
         return None
     params, n0 = wfb_var.traj_defaults(), len(problems)
+    if math.isfinite(hover_z):
+        try:
+            wfb_var.check("traj_p.start_z_m", hover_z)
+            params["traj_p.start_z_m"] = float(hover_z)
+        except wfb_var.VarWriteError as e:
+            problems.append(f"{path}.start_z_m: hover_z {hover_z} violates start_z_m: {e}")
     for k, v in body.items():
         if k == "name":
             continue
@@ -316,16 +326,29 @@ def _motion(body: Mapping[str, Any], base: Mapping[str, Any], hover_z: float, pa
                    float(m["yaw_deg"]))
 
 
-def goto_points(target: tuple[float, float, float], dwell_s: float, profile: Profile) -> list[TrajPoint]:
-    """Out-and-back trajectory hover -> target, dwell_s at the target, target -> hover."""
+def goto_points(target: tuple[float, float, float], dwell_s: float, profile: Profile,
+                ds_m: float | None = None) -> list[TrajPoint]:
+    """Out-and-back trajectory hover -> target, dwell_s at the target, target -> hover.
+
+    When ds_m is None (default), compiles to minimal 4 corner waypoints:
+    [hover (t=0), target (t_reach), target (t_dwell), hover (t_return)].
+    Firmware linearly interpolates between segment endpoints.
+    If ds_m is explicitly provided and > 0, resamples along the line.
+    """
     hover = (0.0, 0.0, profile.hover_z_m)
-    out = time_profile(resample([hover, target], profile.ds_m), profile)
+    out_pts = [hover, target]
+    if ds_m is not None and ds_m > 0:
+        out_pts = resample(out_pts, ds_m)
+    out = time_profile(out_pts, profile)
     points = list(out)
     t_end = points[-1].t
     if dwell_s > 0.0:
         t_end += dwell_s
         points.append(TrajPoint(target[0], target[1], target[2], profile.yaw_deg, t_end))
-    back = time_profile(resample([target, hover], profile.ds_m), profile)
+    back_pts = [target, hover]
+    if ds_m is not None and ds_m > 0:
+        back_pts = resample(back_pts, ds_m)
+    back = time_profile(back_pts, profile)
     points.extend(TrajPoint(p.x, p.y, p.z, p.yaw_deg, t_end + p.t) for p in back[1:])
     return points
 
@@ -347,7 +370,8 @@ def _compile_traj(kind: str, body: dict, base_motion: Mapping[str, Any], hover_z
         if math.dist(target, (0.0, 0.0, hover_z)) <= TrajLimits().endpoint_tol_m:
             problems.append(f"{path}.goto: target is the hover point, use hold")
             return None
-        points = goto_points(target, float(dwell), profile)
+        ds_m_val = float(body["ds_m"]) if "ds_m" in body and _num(body["ds_m"]) else None
+        points = goto_points(target, float(dwell), profile, ds_m=ds_m_val)
         errs = validate(points, TrajLimits(), hover_z)
     else:
         shape, params = body["shape"], body["params"]
@@ -487,7 +511,7 @@ def parse_scenario(data: Any, args: Mapping[str, Any] | None = None) -> Scenario
                 if not errs:
                     steps.append(Step("livetune", dict(body), (), float(body["budget_s"])))
         elif kind == "preset":
-            step = _compile_preset(body, f"{path}.preset", problems)
+            step = _compile_preset(body, hover_z, f"{path}.preset", problems)
             if step is not None:
                 steps.append(step)
         elif kind == "set":
