@@ -126,7 +126,7 @@ If two rules conflict, the stricter one wins until the operator says otherwise.
 `ah` = `python -m ground_station.agent_handoff` (any worktree, harness or account). Why: `docs/agent/handoff-protocol.md`.
 - First command: `ah start [stream] --as <harness>`. STOP = a live session holds that tree: `ah new <name>` or pick
   another stream. `--takeover` only when the operator says the holder is dead or at its limit.
-- Stream `main` (main tree, page `docs/agent/HANDOFF.md`) is the only one that builds with Keil, flashes, uses the probe
+- Stream `main` (main tree, page `docs/agent/HANDOFF.md`) is the only one that builds in the main tree, flashes, uses the probe
   or 8081, and merges. Other streams: `.worktrees/<stream>`, branch `<stream>`, page `docs/agent/streams/<stream>.md`.
   Never edit another stream's tree or page; read them with `ah board`.
 - Locks, released after use: `ah lock hw` (probe, flash, 8081 writes, arming), `ah lock keil` (UV4, writes `OBJ/`).
