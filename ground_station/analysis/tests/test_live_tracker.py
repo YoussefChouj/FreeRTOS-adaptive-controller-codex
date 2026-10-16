@@ -446,3 +446,24 @@ def test_coral_tracker_landing_zoom_preserves_canonical_sensor_coordinates():
     assert t_zoom.active_zoom == pytest.approx(2.0)
     assert np.allclose(uv_base, uv_zoom, atol=0.75)
 
+
+
+def test_height_agl_is_relative_to_the_pad_rest_and_off_without_telemetry(tmp_path):
+    """r7_f6: Z_posPID.FB reads 0.05 m on the pad, so z_tel alone kept the landing PiP/zoom 'near pad' on the ground."""
+    from ground_station.analysis.live_tracker import TelHeight, height_agl
+    p = tmp_path / "s.slot1.csv"
+    p.write_text("t,Ctrler.Z_posPID.FB\n1,0.05\n2,0.05\n3,0.30\n")
+    tel = TelHeight(p, ring_h_m=0.057, clock=lambda: 0.0)
+    z = tel(0.0)
+    assert height_agl(tel, z) == pytest.approx(0.25)
+    assert height_agl(tel, tel.ring_h + 0.05) == pytest.approx(0.0)
+    assert height_agl(0.15, 0.15) is None and height_agl(tel, float("nan")) is None
+
+
+def test_thin_path_keeps_the_tail_and_strides_the_rest():
+    from ground_station.analysis.live_tracker import thin_path
+    p = np.c_[np.arange(18000.0), np.zeros(18000)]
+    assert thin_path(p[:4000]) is not None and len(thin_path(p[:4000])) == 4000
+    q = thin_path(p)
+    assert len(q) <= 4000 and q[0, 0] == 0 and np.array_equal(q[-1000:], p[-1000:])
+    assert np.all(np.diff(q[:, 0]) > 0)

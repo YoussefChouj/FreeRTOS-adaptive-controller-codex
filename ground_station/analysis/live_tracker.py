@@ -124,7 +124,10 @@ class CoralTracker:
 
     def __init__(self, seed_uv, static=None, roi: float = 140.0, min_px: int = 40,   # track_coral defaults
                  learn_n: int = 0, learn_every: int = 5, frac: float = 0.7, grow_px: int = 7,
-                 keep_r: float | None = None, zoom: float = 1.0, land_zoom: float = 2.0, land_z_m: float = 0.30):
+                 keep_r: float | None = None, zoom: float = 1.0, land_zoom: float = 1.0, land_z_m: float = 0.30):
+        # land_zoom > 1 supersamples the ROI below land_z_m. Off by default: r7_f6_mode3 (4950 frames, offline)
+        # gave the same HF centroid noise at 2x (2.51/1.48 -> 2.44/1.48 px), 3.1x the step time (0.94 -> 2.91 ms
+        # p50) and a -0.87 px mean u shift between the two, i.e. a small jump at the switch, for no gain.
         self.c, self.static, self.roi, self.min_px = np.asarray(seed_uv, float), static, float(roi), min_px
         self.r = self.roi
         self.seed0, self.learn_n, self.learn_every, self.frac, self.grow = self.c.copy(), learn_n, learn_every, frac, grow_px
@@ -424,6 +427,16 @@ class TelHeight:
         return float("nan") if self.fallback is None else self.fallback
 
 
+def height_agl(height_m, z) -> float | None:
+    """Height above the pad rest (m) for the landing PiP / zoom: the plane height z minus ring_h minus the lowest
+    telemetry z seen (Z_posPID.FB reads 0.05 m on the pad in r7_f2/r7_f6, so z_tel alone is never 0 on the ground).
+    None when the height is a constant (no telemetry) or not fresh."""
+    if not isinstance(height_m, TelHeight) or z is None or not np.isfinite(z):
+        return None
+    z_min = height_m.z_min if np.isfinite(height_m.z_min) else 0.0
+    return max(0.0, float(z) - height_m.ring_h - max(0.0, z_min))
+
+
 class TelHeightHttp(TelHeight):
     """TelHeight fed by the 8081 service (GET /api/values) instead of a slot CSV: with 8081 up the campaign capture
     owns the logging, its CSV name is not known before the flight and PlainWriter flushes about once a second. Same
@@ -499,6 +512,15 @@ def traj_xy(spec: str) -> np.ndarray:
         shape, _, kv = spec.partition(":")
         params = {k: float(v) for k, v in (p.split("=") for p in kv.split(",") if p)}
     return np.asarray(shape_xy(shape, params), float)
+
+
+def thin_path(p: np.ndarray, n_max: int = 4000, n_tail: int = 1000) -> np.ndarray:
+    """Rows to draw from a persistent trail: all of it up to n_max, else the last n_tail rows in full and an even
+    stride over the older ones (trail_s 0 keeps every fix: 30 fps x 10 min = 18000 rows, re-projected per draw)."""
+    if len(p) <= n_max:
+        return p
+    old = p[:-n_tail]
+    return np.vstack([old[::int(np.ceil(len(old) / (n_max - n_tail)))], p[-n_tail:]])
 
 
 class Preview:
@@ -591,6 +613,7 @@ class Preview:
             tr3 = np.column_stack([raw[:, 1:3], raw[:, 3] if raw.shape[1] >= 4 else np.zeros(len(raw))])
         else:
             tr3 = np.zeros((0, 3))
+        tr3 = thin_path(tr3)
         z_ref = float(np.median(tr3[-30:, 2])) if len(tr3) else max(0.0, self.z)
         if self.traj is None or len(self.traj) == 0:
             tj3 = np.zeros((0, 3))
@@ -767,7 +790,7 @@ class Preview:
         cv2, s = self.cv2, self.display_scale(frame.shape[1])
         img = cv2.resize(frame, None, fx=s, fy=s, interpolation=cv2.INTER_AREA if s < 1.0 else cv2.INTER_NEAREST)
         if len(self.uvs) > 1:
-            uv_px = (np.asarray(self.uvs)[:, 1:3] * s).astype(np.int32)
+            uv_px = (thin_path(np.asarray(self.uvs))[:, 1:3] * s).astype(np.int32)
             uv_u = uv_px[np.r_[True, (np.diff(uv_px, axis=0) != 0).any(1)]]
             if len(uv_u) > 1:
                 cv2.polylines(img, [uv_u], False, (15, 15, 15), 3, cv2.LINE_AA)
@@ -1137,8 +1160,7 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
             t_hello = t_read
         t_cap = t_read - cam_latency_s
         z = height_m(t_cap) if callable(height_m) else height_m
-        z_agl = (max(0.0, float(z) - float(getattr(height_m, "ring_h", 0.0)))
-                 if z is not None and np.isfinite(z) else 0.0)
+        z_agl = height_agl(height_m, z)
         if ring is not None:
             uv = ring.step(frame, z_agl) if isinstance(ring, CoralTracker) else ring.step(frame)
             if uv_log is not None:
