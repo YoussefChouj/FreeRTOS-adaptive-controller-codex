@@ -12,6 +12,7 @@
 #include "subscribe.h"
 #include "fw_identity.h"
 #include "send_prof.h"
+#include "drift_nn_task.h"
 
 /* DEBUG-telemetry-bisect: instrumentation kept for future use. Flip to `#if 1`
  * to re-enable the UART5 polling checkpoints and the priority-5 counter
@@ -223,6 +224,8 @@ void start_task(void *pvParameters)
         (UBaseType_t    )5,
         (TaskHandle_t*  )NULL);
 #endif
+
+  drift_nn_task_create(); /* shadow-mode drift NN, priority 1 (PROPOSED, not flown) */
 
   vTaskDelete(StartTask_Handler); //ɾ����ʼ���� (sh��n ch�� k��i sh�� r��n w��) - "delete start task" - this task deletes itself since its job (creating other tasks) is done
   taskEXIT_CRITICAL();            //�˳��ٽ��� (tu�� ch�� l��n ji�� q��) - "exit critical section" - re-enables interrupts (though this line never executes because task was deleted)

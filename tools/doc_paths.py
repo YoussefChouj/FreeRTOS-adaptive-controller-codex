@@ -7,7 +7,8 @@ not checked.
 
 A path is a backtick span with a '/' and a file extension whose first segment is a top-level repo entry
 (`API/pid.c`, `docs/agent/HANDOFF.md:12`); run outputs under logs/ are skipped. A `:line` past the end of the
-file fails too (the code moved, the doc did not). Known exceptions (a file that lives on a branch or in another
+file fails too (the code moved, the doc did not). Keil outputs under OBJ/ are skipped too (git-ignored, absent on
+the CI runner). Known exceptions (a file that lives on a branch or in another
 repo) go in tools/doc_paths_allow.txt; that list shrinks only: an entry whose file now exists fails too.
 """
 import pathlib
@@ -16,7 +17,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ALLOW = ROOT / 'tools' / 'doc_paths_allow.txt'
-RUN_OUTPUT = ('logs/',)          # written by a run, absent in a fresh checkout
+RUN_OUTPUT = ('logs/', 'OBJ/')   # written by a run or a Keil build, absent in a fresh checkout
 SCOPE = ['AGENTS.md', 'CLAUDE.md', 'docs/*.md', 'docs/agent/*.md', 'docs/skills/*.md', '.claude/skills/*/SKILL.md']
 PATH = re.compile(r'`([\w.][\w./-]*/[\w./-]*\.[A-Za-z]{1,8})(?::(\d+)(?:-(\d+))?)?`')
 
