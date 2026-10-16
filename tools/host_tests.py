@@ -3,7 +3,8 @@
 
 One row per test: the sources and the flags from the build line in the test's header comment. A test
 passes when it builds and exits 0. Exit 1 if any test fails. Run from anywhere; paths are repo-relative.
-`{src}` is a scratch copy of API/mrac*.[ch], for tests whose stubs must win over the headers next to mrac.c
+`{src}` is a scratch copy of API/mrac*.[ch] and API/imu_update.c, for tests whose stubs must win over the headers
+next to them
 (the same trick as API/tests/run_mrac_equiv.py).
 
     python tools/host_tests.py            # all rows
@@ -65,6 +66,7 @@ HOST_TESTS = [
                                                                                                  ["-std=c99", *W, "-Werror", "-Wdeclaration-after-statement", "-Wvla", "-IAPI"]),
     ("fw_prearm",        ["tests/firmware_host/test_prearm.c", "API/prearm.c"],                  ["-std=c99", *W, "-Werror", "-Wdeclaration-after-statement", "-IAPI"]),
     ("fw_health",        ["tests/firmware_host/test_fw_health.c", "API/fw_health.c"],            ["-std=c99", *W, "-Werror", "-Wdeclaration-after-statement", "-IAPI"]),
+    ("fw_imu_update",    ["tests/firmware_host/test_imu_update.c", "{src}/imu_update.c"],      ["-std=c99", *W, "-Itests/firmware_host/stubs_imu"]),
 ]
 
 
@@ -117,7 +119,7 @@ def gcc_system_args() -> list[str]:
 
 def firmware_jobs(src: Path) -> dict[str, list[str]]:
     """Each firmware file (API/*.c, not the tests) the rows build -> the include/define flags of its first row."""
-    for f in (REPO / "API").glob("mrac*.[ch]"):
+    for f in [*(REPO / "API").glob("mrac*.[ch]"), REPO / "API" / "imu_update.c"]:
         shutil.copy2(f, src / f.name)
     jobs: dict[str, list[str]] = {}
     for _name, sources, flags in HOST_TESTS:
@@ -225,7 +227,7 @@ def main(argv: list[str]) -> int:
     failed, n_built = [], 0
     with tempfile.TemporaryDirectory() as tmp, ThreadPoolExecutor(JOBS) as pool:
         (Path(tmp) / "src").mkdir()
-        for f in (REPO / "API").glob("mrac*.[ch]"):
+        for f in [*(REPO / "API").glob("mrac*.[ch]"), REPO / "API" / "imu_update.c"]:
             shutil.copy2(f, Path(tmp) / "src" / f.name)
         # map() yields in row order, so the report reads the same as a serial run
         for (name, _, _), (ok, built, line) in zip(rows, pool.map(lambda r: run_one(gcc, *r, Path(tmp)), rows)):
