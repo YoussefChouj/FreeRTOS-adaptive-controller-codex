@@ -6,6 +6,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # mrac-equiv reads its reference tree from an older commit (git show <base>:API/mrac*)
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -13,6 +15,6 @@ jobs:
         # gcc-multilib: the subscribe harness builds with -m32 (the firmware assumes 32-bit pointers)
         run: sudo apt-get update && sudo apt-get install -y gcc gcc-multilib clang-tidy gcc-arm-none-eabi
       - name: Python packages
-        run: pip install pytest numpy scipy pandas pyyaml
+        run: pip install pytest numpy scipy pandas pyyaml pyelftools  # pyelftools: livewatch/symbols.py, imported by the SIL controllers
       - name: Gate
         run: bash tools/check.sh
