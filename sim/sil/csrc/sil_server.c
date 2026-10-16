@@ -23,9 +23,26 @@
  */
 #include <stdio.h>
 #include <math.h>
+#ifdef _WIN32  /* binary pipes and the tick timer; the CI runner (Linux) takes the POSIX branch */
 #include <io.h>
 #include <fcntl.h>
 #include <windows.h>
+static double host_s(void)
+{
+	LARGE_INTEGER f, t;
+	QueryPerformanceFrequency(&f);
+	QueryPerformanceCounter(&t);
+	return (double)t.QuadPart / (double)f.QuadPart;
+}
+#else
+#include <time.h>
+static double host_s(void)
+{
+	struct timespec t;
+	clock_gettime(CLOCK_MONOTONIC, &t);
+	return (double)t.tv_sec + (double)t.tv_nsec * 1e-9;
+}
+#endif
 
 #include "pid.h"
 #include "mrac.h"
@@ -317,10 +334,11 @@ static void write_f(const float *buf, int n) { fwrite(buf, sizeof(float), (size_
 int main(void)
 {
 	float in[SIL_NIN], out[SIL_NOUT];
-	LARGE_INTEGER f, t0, t1;
+	double t0;
+#ifdef _WIN32
 	_setmode(_fileno(stdin), _O_BINARY);
 	_setmode(_fileno(stdout), _O_BINARY);
-	QueryPerformanceFrequency(&f);
+#endif
 	Controller_Init();
 	wfb_glue_init();
 	for (;;) {
@@ -328,10 +346,9 @@ int main(void)
 		if (op == EOF || op == 'Q') return 0;
 		if (op == 'S') {
 			if (!read_f(in, SIL_NIN)) return 1;
-			QueryPerformanceCounter(&t0);
+			t0 = host_s();
 			sil_step(in, out);
-			QueryPerformanceCounter(&t1);
-			out[O_HOST_US] = (float)((double)(t1.QuadPart - t0.QuadPart) * 1e6 / (double)f.QuadPart);
+			out[O_HOST_US] = (float)((host_s() - t0) * 1e6);
 			write_f(out, SIL_NOUT);
 		} else if (op == 'C') {
 			float c[3], r;
