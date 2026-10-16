@@ -556,6 +556,14 @@ def test_wp23_battery_not_streaming_is_a_readable_reason():
                                               "battery: battery voltage is not streaming (real_voltage)")
 
 
+
+def test_battery_voltage_late_by_a_few_ticks_is_waited_for():
+    deps = _quick_deps()
+    deps.resting_v = Mock(side_effect=[RuntimeError("battery voltage is not streaming (real_voltage)")] * 3 + [16.0] * 50)
+    report = run_campaign(YAML_PATH, deps)
+    assert not (report.reason or "").startswith("battery:")
+    assert deps.resting_v.call_count >= 4
+
 def test_wp23_phases_and_arm_refused_reason():
     deps = _quick_deps()
     phases = []
