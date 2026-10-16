@@ -293,7 +293,11 @@ def watch(base, term=None, key=None, poll_s=1.0, live_s=LIVE_S, on_pj=None, post
                     if prim == "HOVER" or (prim not in ("IDLE", "CLIMB") and z_fb >= 0.40):
                         applied_post_takeoff = True
                         term.event(f"Transitioning to post-takeoff gains ({post_takeoff_gains})...")
-                        write_gains(base, post_takeoff_gains, in_flight=True, yes=True)
+                        if not write_gains(base, post_takeoff_gains, in_flight=True, yes=True):
+                            # write_gains stops at the first failed index: the drone now flies a mix of old and new gains
+                            term.event(f"POST-TAKEOFF GAINS FAILED ({post_takeoff_gains}): gains are mixed. "
+                                       f"Land (l) and fly again.")
+                            events.log("post_takeoff_gains_failed", preset=post_takeoff_gains)
             _sleep(live_s)
         except KeyboardInterrupt:
             if t_down is not None:           # nothing can take a land/abort post: leave, so fly can run again
