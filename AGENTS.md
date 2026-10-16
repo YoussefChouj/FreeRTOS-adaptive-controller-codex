@@ -72,6 +72,20 @@ UV4 -b -t JX_FLY -j0 JX_FLY.uvprojx
 python -m ground_station.flashtool.rebuild_and_flash --yes
 ```
 
+**Keil build before done (required).** A change to `API/`, `TASK/`, `BSP/`, `FreeRTOS/` or the Keil project is not
+done until it compiles in Keil on the lab PC. Host tests and `tools/check.sh` do not count: they skip ARMCC.
+- Build the branch in its own worktree or clone, never in the main tree (it holds uncommitted Keil files), e.g.
+  `git worktree add --detach ../<repo>-<name>build origin/<branch>`. Output lands in that worktree's own `OBJ/`.
+- Build only, never flash. Any stream may run this build-only check. Flashing stays with stream `main`.
+- One Keil build on the PC at a time: take `ah lock keil` first (exit 3 = held: wait, do not poll fast), or confirm
+  no `UV4.exe` runs. Release the lock after.
+- From that worktree's `USER/`: `UV4 -b -t JX_FLY -j0 JX_FLY.uvprojx -o build_log_<name>.txt`. Exit 0 = clean,
+  1 = warnings, >=2 = errors.
+- Report the exit code, every error and warning line, and the `Program Size:` line. Say whether any warning is new
+  in the files you changed. Fix errors, rebuild, and repeat until there are 0 errors.
+- No Windows PC with Keil available (cloud or WSL session): hand the build to a session on the lab PC. Do not call
+  the change done until that build is reported.
+
 ## Hardware notes
 
 - **Flashing**: SWD wireless debugger on UART5, WiFi module on USART3.
