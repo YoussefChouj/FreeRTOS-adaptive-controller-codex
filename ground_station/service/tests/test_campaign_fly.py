@@ -768,6 +768,17 @@ def test_check_and_persist_livetune(tmp_path):
     assert data["rate"]["best"]["Kp"] == 4.9
 
 
+
+def test_check_and_persist_livetune_saves_a_step_once_when_also_in_metrics(tmp_path):
+    lt = {"loop": "pos", "baseline": {"out.Kp": 0.8}, "best": {"out.Kp": 0.7}, "best_rel": 0.9}
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    flights = [{"steps": [{"kind": "livetune", "livetune": lt}]}]
+    (out_dir / "metrics.json").write_text(json.dumps({"flights": flights}), encoding="utf-8")
+    st = {"status": "done", "flights": flights, "outputs_dir": str(out_dir)}
+    saved = campaign_fly.check_and_persist_livetune(st, path=tmp_path / "livetune_best.json")
+    assert [e["loop"] for e in saved] == ["pos"]
+
 def test_list_gains(capsys, tmp_path):
     rc = campaign_fly.main(["--list-gains"])
     assert rc == 0

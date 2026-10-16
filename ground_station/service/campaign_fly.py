@@ -593,8 +593,13 @@ def check_and_persist_livetune(st, path=None):
             except Exception:
                 pass
     saved = []
+    seen = set()
     for lt_summary in found:
         if isinstance(lt_summary, dict) and lt_summary.get("best"):
+            key = json.dumps(lt_summary, sort_keys=True, default=str)
+            if key in seen:  # the same step is in both the live state and metrics.json
+                continue
+            seen.add(key)
             res = save_livetune_result(lt_summary, path=path)
             saved.append(res)
     return saved

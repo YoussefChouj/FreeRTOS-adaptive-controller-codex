@@ -23,6 +23,7 @@ TRAJ_DONE = 4
 IDLE_CONFIRM_S = 1.5
 # cooldown passed to the pack gate for a pack that has not flown in this campaign: any min_rest_s passes
 PACK_RESTED_S = 1e6
+BATTERY_GRACE_S = 5.0  # PROPOSED: wait this long for real_voltage to stream (8081 just started, link reconnect) before giving up
 
 # excite: the drone must be this close to the hover point before the SysID start re-zeroes the origin, within
 # EXCITE_ORIGIN_WAIT_S of the step start. PROPOSED, not measured.
@@ -632,7 +633,12 @@ def run_campaign(yaml_path: str, deps: RunnerDeps) -> CampaignReport:
             try:
                 v = deps.resting_v(pack_id)
             except Exception as exc:  # live: battery voltage not streaming
-                return CampaignReport(campaign, flights, "operator_needed", f"battery: {exc}")
+                if ticks * deps.dt_s >= BATTERY_GRACE_S:
+                    return CampaignReport(campaign, flights, "operator_needed", f"battery: {exc}")
+                deps.on_phase(f"pack gate {pack_id}: waiting for battery voltage ({exc})")
+                deps.sleep(deps.dt_s)
+                ticks += 1
+                continue
             allowed, reason = deps.packs.next_flight_allowed(pack_id, v, elapsed)
             if allowed:
                 break
