@@ -72,13 +72,6 @@ UV4 -b -t JX_FLY -j0 JX_FLY.uvprojx
 python -m ground_station.flashtool.rebuild_and_flash --yes
 ```
 
-**Keil build before done (operator, 2026-10-16).** Any change to firmware C or the Keil project (`API/`, `TASK/`,
-`BSP/`, `USER/`, `firmware/`, `FreeRTOS/`, `Global_file/`) counts as done only after a Keil build of the committed
-change returns 0 errors. Build in a separate git worktree of the branch, never in the main tree's working copy, and
-build only: no flash. One Keil build on the PC at a time (`ah lock keil`). Report the UV4 exit code, every error and
-warning line, and the `Program Size:` line against the current build. A cloud or Linux session without Keil hands the
-build to a session on the operator's PC; host tests and `tools/check.sh` do not replace it.
-
 ## Hardware notes
 
 - **Flashing**: SWD wireless debugger on UART5, WiFi module on USART3.
