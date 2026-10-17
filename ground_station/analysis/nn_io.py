@@ -593,7 +593,10 @@ def score(tag: str) -> dict:
     out = json.loads((vt / f"nnio{tag}.json").read_text())
     with np.load(vt / f"nnio{tag}_pred.npz") as z:
         for n in z.files:
-            out["flights"][n].update(_score(n, seq(n), z[n], tag, out["flights"][n]["in_pool"]))
+            try:
+                out["flights"][n].update(_score(n, seq(n), z[n], tag, out["flights"][n]["in_pool"]))
+            except (ValueError, KeyError, OSError) as e:  # no aruco.npz here: quick_nn is the only score
+                print(f"{n[:27]:27s} not scored: {e.__class__.__name__}", flush=True)
     (vt / f"nnio{tag}.json").write_text(json.dumps(out, indent=1))
     return out
 
