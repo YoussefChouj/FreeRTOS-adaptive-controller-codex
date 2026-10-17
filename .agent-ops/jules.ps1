@@ -20,8 +20,13 @@ if (-not $key) { "jules NO-KEY: the user makes a key at jules.google -> Settings
 $api = "https://jules.googleapis.com/v1alpha"
 $hdr = @{ "x-goog-api-key" = $key }
 function Call($method, $path, $body) {
-  $a = @{ Method = $method; Uri = "$api/$path"; Headers = $hdr; UseBasicParsing = $true }
-  if ($body) { $a.Body = [Text.Encoding]::UTF8.GetBytes(($body | ConvertTo-Json -Depth 6)); $a.ContentType = "application/json; charset=utf-8" }
+  $a = @{ Method = $method; Uri = "$api/$path"; Headers = $hdr; UseBasicParsing = $true; TimeoutSec = 120 }
+  if ($body) {
+    $json = $body | ConvertTo-Json -Depth 6
+    # Get-Content strings carry PSPath/PSDrive/PSProvider notes that ConvertTo-Json expands (a 1 KB reply became 107 MB
+    # and got 400, 2026-10-17): read files with Text, and refuse any body that big before it is sent
+    if ($json.Length -gt 1MB) { [Console]::WriteLine("jules BODY-TOO-BIG $($json.Length) chars on $method $path"); exit 3 }
+    $a.Body = [Text.Encoding]::UTF8.GetBytes($json); $a.ContentType = "application/json; charset=utf-8" }
   # A VPN or proxy drop must not kill a 90 min wait (2026-10-17: one drop failed 4 runs at once). Retry with backoff:
   # a GET on a network error, 429 or 5xx; a POST only when the request never left (connect, send or DNS failure),
   # so a reply is never delivered twice.
@@ -38,6 +43,7 @@ function Call($method, $path, $body) {
       [Console]::WriteLine("jules API-ERROR $code on $method $path : $($ex.Message)"); exit 3 }
   }
 }
+function Text($rel) { [IO.File]::ReadAllText((Join-Path $root $rel), [Text.Encoding]::UTF8) }
 function Cut($s, $n) { if (-not $s) { return "" }; $s = ($s -replace "\s+", " ").Trim(); if ($s.Length -gt $n) { $s.Substring(0, $n) + "..." } else { $s } }
 
 if ($Sources) { (Call GET "sources?pageSize=50" $null).sources | ForEach-Object { $_.name }; exit 0 }
@@ -51,7 +57,7 @@ if (-not $Session) {
   $remote = ((git -C $root ls-remote origin "refs/heads/$Branch") -split "\s+")[0]
   if (-not $remote) { "jules NOT-PUSHED: origin has no branch $Branch (Jules clones the pushed branch)"; exit 5 }
   if ($remote -ne (git -C $root rev-parse HEAD).Trim()) { $note = "WARN: Jules sees origin/$Branch $($remote.Substring(0,8)), not local HEAD" }
-  $prompt = (Get-Content (Join-Path $root $Brief) -Raw -Encoding utf8) + "`n`nRules: read AGENTS.md first. Keep the change " +
+  $prompt = (Text $Brief) + "`n`nRules: read AGENTS.md first. Keep the change " +
     "small and inside this brief. Never edit USER/ (Keil project), flashing or lab scripts. Run the tests for every file " +
     "you change. In the PR description list the files changed and each test command with its result."
   $body = @{ prompt = $prompt; title = $Id; requirePlanApproval = $false
@@ -65,7 +71,7 @@ $grace = 0
 if ($Session -and $Approve) { Call POST "sessions/${Session}:approvePlan" @{} | Out-Null; $grace = 5 }
 if ($Session -and $Reply) {
   if (-not (Test-Path (Join-Path $root $Reply))) { "jules: -Reply <repo-relative path> not found"; exit 1 }
-  Call POST "sessions/${Session}:sendMessage" @{ prompt = (Get-Content (Join-Path $root $Reply) -Raw -Encoding utf8) } | Out-Null
+  Call POST "sessions/${Session}:sendMessage" @{ prompt = (Text $Reply) } | Out-Null
   $grace = 5
 }
 # Waits inside this one background run (the CEO starts it once and reads the digest, never polls by hand)
