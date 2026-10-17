@@ -9,6 +9,7 @@ PROPOSED_RISE_THRES_LO = 0.1
 PROPOSED_RISE_THRES_HI = 0.9
 PROPOSED_GAP_THRES = 0.05
 PROPOSED_BOOTSTRAP_RESAMPLES = 1000
+PROPOSED_STEP_THRES = 0.1 # units match Des
 
 def _get_kind_from_fly(log, axis):
     """Fallback: read kind from the set lines in .fly if logged variable missing."""
@@ -56,7 +57,7 @@ def _calc_step_metrics(t, y, y_final, y0):
 
     span = y_final - y0
     if abs(span) < 1e-6:
-        rise_time = 0.0
+        rise_time = None
     else:
         lo_val = y0 + PROPOSED_RISE_THRES_LO * span
         hi_val = y0 + PROPOSED_RISE_THRES_HI * span
@@ -70,12 +71,12 @@ def _calc_step_metrics(t, y, y_final, y0):
         if t_lo is not None and t_hi is not None and t_hi >= t_lo:
             rise_time = float(t_hi - t_lo)
         else:
-            rise_time = float('nan')
+            rise_time = None
 
     band = PROPOSED_SETTLE_BAND_FRAC * abs(span)
     diff = np.abs(y - y_final)
     within_band = diff <= band
-    settle_t = float('nan')
+    settle_t = None
     for k in range(n):
         if np.all(within_band[k:]):
             settle_t = float(t[k] - t[0])
@@ -220,7 +221,7 @@ class LeaguePlugin:
                 ax_metrics["steady"]["sat_frac"] = metrics.frac_true(sat)
 
             diff_des = np.abs(np.diff(a_des))
-            if len(diff_des) > 0 and np.nanmax(diff_des) > 0.1:
+            if len(diff_des) > 0 and np.nanmax(diff_des) > PROPOSED_STEP_THRES:
                 step_idx = np.nanargmax(diff_des)
                 if step_idx + 10 < len(a_des):
                     y0 = a_fb[step_idx]
@@ -235,8 +236,8 @@ class LeaguePlugin:
                         if ov is not None:
                             ax_metrics["step"] = {
                                 "overshoot": ov,
-                                "rise_time": rt,
-                                "settle_time": st
+                                "rise_time": rt if rt is not None else "n/a",
+                                "settle_time": st if st is not None else "n/a"
                             }
 
             metrics_by_axis[ax] = ax_metrics

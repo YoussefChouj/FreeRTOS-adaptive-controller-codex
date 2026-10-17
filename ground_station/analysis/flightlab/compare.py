@@ -1,5 +1,6 @@
 import json
 import re
+import os
 import subprocess
 from pathlib import Path
 from . import pipeline
@@ -69,10 +70,11 @@ def league(dirs, out_dir):
             league_data = metrics.get("league")
             if league_data:
                 flights.append({"dir": d, "metrics": metrics, "league": league_data})
-        except Exception as e:
-            print(f"Skipping {d}: {e}")
+        except (OSError, json.JSONDecodeError, KeyError) as e:
+            print(f"Skipping {d}: {type(e).__name__}: {e}")
 
-    PROPOSED_GAP_THRES = 0.05
+    # Filter by gap fraction
+    from ground_station.analysis.flightlab.plugins.league import PROPOSED_GAP_THRES
     valid_flights = []
     excluded_flights = []
 
@@ -83,6 +85,7 @@ def league(dirs, out_dir):
         else:
             valid_flights.append(f)
 
+    # Group by Axis -> Kind -> Flight
     axes = ["roll", "pitch", "yaw", "z", "x", "y"]
     KINDS = {0: "PID", 1: "ADRC", 2: "LQR", 3: "MPC"}
 
@@ -97,12 +100,13 @@ def league(dirs, out_dir):
         table_lines.append("")
 
     PROPOSED_BOOTSTRAP_RESAMPLES = 1000
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(42) # fixed seed
 
     league_json = {"flights": [f["dir"] for f in flights], "excluded": excluded_flights, "axes": {}}
 
     for ax in axes:
         ax_data = {}
+        # gather e_rms per kind
         for f in valid_flights:
             kinds = f["league"].get("axis_kinds", {})
             kind_int = kinds.get(ax)
@@ -126,6 +130,7 @@ def league(dirs, out_dir):
             v_arr = np.array(values)
             mean_e = np.mean(v_arr)
 
+            # Bootstrap CI
             if len(v_arr) > 1:
                 resamples = rng.choice(v_arr, size=(PROPOSED_BOOTSTRAP_RESAMPLES, len(v_arr)), replace=True)
                 means = np.mean(resamples, axis=1)
@@ -139,6 +144,7 @@ def league(dirs, out_dir):
 
         ranks.sort(key=lambda x: x["mean"])
 
+        # Determine ties (overlapping CIs)
         for i in range(len(ranks)):
             ranks[i]["tie"] = False
             for j in range(len(ranks)):
@@ -158,6 +164,7 @@ def league(dirs, out_dir):
 
         table_lines.append("")
 
+        # Plot
         if HAS_MPL:
             fig, ax_plt = plt.subplots(figsize=(8, 5))
             kinds_labels = [r["kind"] for r in ranks]

@@ -5,6 +5,7 @@ from pathlib import Path
 from ground_station.analysis.flightlab.plugins.league import LeaguePlugin, _calc_step_metrics
 from ground_station.analysis.flightlab.compare import league
 from ground_station.analysis.flightlab.model import Signal
+import ground_station.analysis.flight_report as fr
 
 def test_synthetic_step_metrics():
     t = np.linspace(0, 5, 500)
@@ -18,6 +19,16 @@ def test_synthetic_step_metrics():
     expected_ov = expected_peak - 1.0
 
     assert ov == pytest.approx(expected_ov, rel=0.1)
+
+def test_synthetic_step_never_reaches():
+    t = np.linspace(0, 5, 500)
+    y0 = 0.0
+    y_final = 1.0
+
+    y = 0.5 * (1.0 - np.exp(-t))  # never reaches 90%
+    ov, rt, st = _calc_step_metrics(t, y, y_final, y0)
+
+    assert rt is None
 
 def test_latch_detection(hover_log, cfg):
     plugin = LeaguePlugin()
@@ -129,7 +140,12 @@ def test_end_to_end(tmp_path):
     write_m(d1, 0, 1.0)
     write_m(d2, 2, 2.0)
 
-    res_dir = league([str(d1), str(d2)], tmp_path / "league_out")
+    try:
+        fr.main(["--league", str(d1), str(d2), "--out", str(tmp_path)])
+    except SystemExit as e:
+        assert e.code == 0
+
+    res_dir = tmp_path
 
     md = (Path(res_dir) / "league.md").read_text()
     assert "League Report" in md
