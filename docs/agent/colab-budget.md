@@ -89,7 +89,24 @@ NumPy copies), and train all seeds (and folds) as one batched model. The GPU det
 
 ## GPU techniques for small models
 
-UNVERIFIED until Argon `cb-c2-gpu` is read and added here.
+From Argon `cb-c2-gpu` (2026-10-17). The quotes in the first column were re-read on the source pages the same day.
+
+| Point | Source (quote) |
+|---|---|
+| One tiny model on a GPU wastes it: each step is many small kernel launches waiting on Python. PyTorch says to train such models on the CPU | docs.pytorch.org/tutorials/recipes/recipes/tuning_guide.html: "For small scale models or memory-bound models, such as DLRM, training on CPU is also a good choice." |
+| Biggest win: train all fold x seed models as one batched model (`torch.func.stack_module_state` + `functional_call` + `torch.vmap`). The tutorial measured 1.40 ms without vmap and 626.57 µs with it, for 10 small models | docs.pytorch.org/tutorials/intermediate/ensembling.html |
+| TCN path (our best result): `nn.Conv1d` works under vmap. A grouped `Conv1d(groups=N)` does the same job without vmap | vmap: same tutorial. Grouped conv speed vs vmap: UNVERIFIED |
+| GRU path: whether `nn.GRU` (cuDNN) runs batched under vmap is UNVERIFIED (the tutorial does not cover RNNs). Keep the GRU on the CPU, or write the GRU cell by hand as batched matmuls | UNVERIFIED |
+| Dropout under vmap needs `randomness="different"` so each model draws its own mask | PyTorch `torch.vmap` API (not re-read today) |
+| `torch.compile(mode="reduce-overhead")` uses CUDA graphs to cut launch overhead. Compiling costs paid minutes, so use it only on runs of an hour or more | tuning guide: "CUDA graphs are a way to keep computation within the GPU without paying the extra cost of kernel launches" |
+| AMP fp16 on a T4: "up to 3x overall speedup on Volta and newer GPU architectures", but only once batching keeps the GPU busy. H=32 is a multiple of 8, so Tensor Cores apply | tuning guide |
+| Several processes sharing one T4 duplicate CUDA contexts and VRAM: worse than one batched model | UNVERIFIED |
+
+Size check for the batched TCN (46 models x 16 windows x 1,800 steps x 32 channels, fp32): about 170 MB per layer of
+activations, far below the T4's 16 GB. So one T4 can hold every LOFO fit at once.
+
+Order of work: (1) time one fit on the laptop; (2) batch the models with vmap on the CPU first (that alone cuts the
+Python loop); (3) only then probe the batched code on a Colab CPU runtime vs a T4 (rule 1 above).
 
 ## Ledger (measured, append one line per Colab session)
 
