@@ -190,8 +190,8 @@ def test_runner_refuses_to_fly_unlogged(tmp_path):
 
 
 class FakeRecService:
-    def __init__(self, recording=True):
-        self.bridge = Mock()
+    def __init__(self, recording=True, lab_mode=False):
+        self.bridge = Mock(lab_mode=lab_mode)   # a bare Mock's lab_mode is a truthy Mock
         self.recording_ok = recording
         self.calls = []
 
@@ -222,6 +222,21 @@ def test_live_capture_applies_plan_once_and_records_per_flight():
     svc.bridge.subscribe_slot.reset_mock()
     begin(_exp("hover_z070"), "hover_ladder-002")        # same plan: slots untouched
     svc.bridge.subscribe_slot.assert_not_called()
+
+
+def test_live_capture_lab_mode_stops_plan_slots_after_each_flight():
+    svc = FakeRecService(lab_mode=True)
+    begin, end = live_capture_hooks(svc)
+    begin(_exp(), "hover_ladder-001")
+    used = [c.kwargs["slot"] for c in svc.bridge.subscribe_slot.call_args_list if c.kwargs["divider"]]
+    svc.bridge.subscribe_slot.reset_mock()
+    end("tok")                                           # on the ground: plan slots off
+    stops = [c.kwargs for c in svc.bridge.subscribe_slot.call_args_list]
+    assert [s["slot"] for s in stops] == used and not any(s["divider"] for s in stops)
+    svc.bridge.subscribe_slot.reset_mock()
+    begin(_exp("hover_z070"), "hover_ladder-002")        # same plan is applied again
+    again = [c.kwargs["slot"] for c in svc.bridge.subscribe_slot.call_args_list if c.kwargs["divider"]]
+    assert again == used
 
 
 def test_live_capture_raises_without_bridge_or_recording():
