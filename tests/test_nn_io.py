@@ -66,3 +66,24 @@ def test_fit_train_only_freezes_everything_but_the_head():
     m2 = nn_io.fit([d], "tcn", H=8, layers=2, iters=3, crop_s=8.0, batch=2, lr=1e-2, init=base, train_only="convs.1,out")
     for (k, a), b in zip(base[0].state_dict().items(), m2[0].state_dict().values()):
         assert torch.equal(a, b) != k.startswith(("convs.1", "out")), k
+
+
+def test_pack_hook_reads_the_pickles_and_score_fills_the_drift(tmp_path, monkeypatch):
+    import json
+    import pickle
+    data, util = ({"f1": {"x": 1}}, {"f9": "bad"}), ([{"name": "u"}], {})
+    (tmp_path / "truth.pkl").write_bytes(pickle.dumps(data))
+    (tmp_path / "util.pkl").write_bytes(pickle.dumps(util))
+    monkeypatch.setattr(nn_io, "PACK", str(tmp_path))
+    assert nn_io.load_all() == data and nn_io.util_load() == util
+
+    monkeypatch.chdir(tmp_path)
+    vt = tmp_path / "logs/video_truth"
+    vt.mkdir(parents=True)
+    (vt / "nnio_t.json").write_text(json.dumps({"flights": {"f1": {"in_pool": True, "quick_nn": 1.0}}}))
+    np.savez(vt / "nnio_t_pred.npz", f1=np.zeros(3))
+    monkeypatch.setattr(nn_io, "seq", lambda n: {"n": n})
+    monkeypatch.setattr(nn_io, "_score", lambda n, d, p, tag, in_pool: {"d60s": {"nn": float(len(p))}, "seen": [d["n"], tag, in_pool]})
+    out = nn_io.score("_t")
+    assert out["flights"]["f1"] == {"in_pool": True, "quick_nn": 1.0, "d60s": {"nn": 3.0}, "seen": ["f1", "_t", True]}
+    assert json.loads((vt / "nnio_t.json").read_text()) == out

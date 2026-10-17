@@ -8,11 +8,16 @@ quantity drift_score reports. Data: the truth4 flights (video truth), same pool 
 
   python -m ground_station.analysis.nn_io calib            per-flight scale/rotation of the EKF velocity error
   python -m ground_station.analysis.nn_io train [opts]     GRU/TCN drift-horizon model, hold-out + LOFO, tag _nnio*
+  python -m ground_station.analysis.nn_io pack [--out DIR]  pickle the flights + UTIL set; NNIO_PACK=DIR train runs
+                                                            off-site (no video) and saves nnio<tag>_pred.npz
+  python -m ground_station.analysis.nn_io score --tag TAG   drift_score that npz here, filling nnio<tag>.json
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import pickle
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +27,7 @@ from ground_station.analysis.video_truth import NN4_CH, NN4_HOLD, NN4_SUSPECT, d
 RATE_HZ = 20.0
 HORIZONS_S = (1.0, 5.0, 20.0, 60.0)
 V_COL = (12, 13)                       # s_ekf_of.x[1], x[4] (body velocity, m/s) in the NN4_CH feature order
+PACK = os.environ.get("NNIO_PACK", "")  # dir from `pack`: load_all / util_load read it, train skips drift_score
 
 
 def flights() -> list[str]:
@@ -56,6 +62,8 @@ def split(names: list[str]) -> tuple[list[str], list[str]]:
 
 
 def load_all(rate_hz: float = RATE_HZ) -> tuple[dict, dict]:
+    if PACK:
+        return pickle.loads((Path(PACK) / "truth.pkl").read_bytes())
     data, skipped = {}, {}
     for n in flights():
         try:
@@ -237,6 +245,8 @@ def util_finish(raws: list[dict], coef: np.ndarray | None = None) -> tuple[list[
 
 
 def util_load(rate_hz: float = RATE_HZ, root: Path = UTIL_DIR) -> tuple[list[dict], dict]:
+    if PACK and Path(root) == UTIL_DIR:
+        return pickle.loads((Path(PACK) / "util.pkl").read_bytes())
     raws, skipped = [], {}
     for f in sorted(Path(root).glob("*/*.csv")):
         try:
@@ -532,6 +542,7 @@ def train(kind="gru", H=32, head="scale", layers=1, iters=1500, seeds=2, lofo=Fa
             print(f"  seed {s} it {it}: " + " ".join(f"{n.split('_')[-2] if n.count('_') > 2 else n}={v}" for n, v in q.items()), flush=True)
         return cb
 
+    preds = {}
     for tr, names in groups:
         print("  earth quick_d60: " + " ".join(f"{n[:24]}={quick_d60(data[n]):.1f}" for n in names), flush=True)
         if bases:
@@ -544,12 +555,46 @@ def train(kind="gru", H=32, head="scale", layers=1, iters=1500, seeds=2, lofo=Fa
         for n in names:
             d = data[n]
             p = np.mean([predict(m, d) for m in models], 0)
-            r = drift_score(n, ests={"earth": np.c_[d["earth"].real, d["earth"].imag], "nn": corrected(d, p)}, tag=tag)
-            f = {k: round(e["drift60s_p90_cm"], 1) for k, e in r["est"].items() if "drift60s_p90_cm" in e}
-            out["flights"][n] = {"in_pool": n in pool, "d60s": f, "quick_nn": round(quick_d60(d, p), 1),
-                                 "rms_cm": {k: round(e["rms_cm"], 1) for k, e in r["est"].items()}}
-            print(f"{n[:27]:27s} pool={n in pool:d} earth {f.get('earth')} -> nn {f.get('nn')}", flush=True)
-    Path(f"logs/video_truth/nnio{tag}.json").write_text(json.dumps(out, indent=1))
+            out["flights"][n] = {"in_pool": n in pool, "quick_nn": round(quick_d60(d, p), 1)}
+            if PACK:
+                preds[n] = p
+                print(f"{n[:27]:27s} pool={n in pool:d} quick_d60 {quick_d60(d):.1f} -> {out['flights'][n]['quick_nn']}", flush=True)
+            else:
+                out["flights"][n].update(_score(n, d, p, tag, n in pool))
+    vt = Path("logs/video_truth")
+    vt.mkdir(parents=True, exist_ok=True)
+    if PACK:
+        np.savez(vt / f"nnio{tag}_pred.npz", **preds)
+    (vt / f"nnio{tag}.json").write_text(json.dumps(out, indent=1))
+    return out
+
+
+def _score(n: str, d: dict, p: np.ndarray, tag: str, in_pool: bool) -> dict:
+    """drift_score of the earth track and the NN-corrected one (needs the flight's video truth on this machine)."""
+    r = drift_score(n, ests={"earth": np.c_[d["earth"].real, d["earth"].imag], "nn": corrected(d, p)}, tag=tag)
+    f = {k: round(e["drift60s_p90_cm"], 1) for k, e in r["est"].items() if "drift60s_p90_cm" in e}
+    print(f"{n[:27]:27s} pool={in_pool:d} earth {f.get('earth')} -> nn {f.get('nn')}", flush=True)
+    return {"d60s": f, "rms_cm": {k: round(e["rms_cm"], 1) for k, e in r["est"].items()}}
+
+
+def pack(out: str) -> None:
+    """out/truth.pkl = load_all(), out/util.pkl = util_load(): train with NNIO_PACK=out needs no video or CSV."""
+    assert not PACK, "unset NNIO_PACK to pack from the live files"
+    o = Path(out)
+    o.mkdir(parents=True, exist_ok=True)
+    for f, v in (("truth.pkl", load_all()), ("util.pkl", util_load())):
+        (o / f).write_bytes(pickle.dumps(v, protocol=4))
+        print(f"{o / f}: {(o / f).stat().st_size / 1e6:.1f} MB, {len(v[0])} items, {len(v[1])} skipped", flush=True)
+
+
+def score(tag: str) -> dict:
+    """Finish a packed train run: drift_score each flight of nnio{tag}_pred.npz here and fill nnio{tag}.json."""
+    vt = Path("logs/video_truth")
+    out = json.loads((vt / f"nnio{tag}.json").read_text())
+    with np.load(vt / f"nnio{tag}_pred.npz") as z:
+        for n in z.files:
+            out["flights"][n].update(_score(n, seq(n), z[n], tag, out["flights"][n]["in_pool"]))
+    (vt / f"nnio{tag}.json").write_text(json.dumps(out, indent=1))
     return out
 
 
@@ -586,11 +631,19 @@ def main(argv=None):
     t.add_argument("--ft-lr", type=float, default=1e-3)
     t.add_argument("--util-val", default="const4")
     t.add_argument("--ft-only", default="", help="parameter-name prefixes (comma-separated) trained in the fine-tune, e.g. out (head only) or convs.4,out")
+    pk = sub.add_parser("pack", help="pickle the flights + UTIL set for an off-site train (NNIO_PACK=DIR)")
+    pk.add_argument("--out", default="D:/datasets/nnio_pack")
+    sc = sub.add_parser("score", help="drift_score the predictions of a packed train run (same --tag)")
+    sc.add_argument("--tag", required=True)
     a = ap.parse_args(argv)
     if a.cmd == "calib":
         calib(chunk_s=a.chunk_s)
     elif a.cmd == "sync":
         sync_scan()
+    elif a.cmd == "pack":
+        pack(a.out)
+    elif a.cmd == "score":
+        score(a.tag)
     elif a.cmd == "airio":
         airio_eval(a.model, a.rate, a.util_val, airio_hz=a.airio_rate)
     else:
