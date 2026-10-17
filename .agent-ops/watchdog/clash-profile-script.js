@@ -24,6 +24,7 @@ const REGIONS = [
   ["SG-auto", "\\bSG\\b|Singapore|新加坡|狮城"],
 ];
 const JPSG = REGIONS[1][1] + "|" + REGIONS[2][1];
+const ALL_REGIONS = REGIONS.map((r) => r[1]).join("|");
 const AI_RULES = [
   "DOMAIN-SUFFIX,googlevideo.com,VPN07.com", // YouTube video bytes: keep them off the AI exit
   "DOMAIN-KEYWORD,google", // google.com, googleapis.com, *.google (Antigravity, Gemini, Jules, Colab)
@@ -82,9 +83,9 @@ function main(config, profileName) {
   const aiExit = {
     name: AI_GROUP,
     type: "select",
-    proxies: regionGroups.map((g) => g.name).concat(matching(names, REGIONS[0][1])),
+    proxies: regionGroups.map((g) => g.name).concat(matching(names, ALL_REGIONS)),
     use: [OTHER],
-    filter: REGIONS[0][1], // manual picks: US nodes only
+    filter: ALL_REGIONS, // fixed nodes of all three countries: the vpn_monitor tray pins one when auto-switch is off
     "exclude-filter": INFO_NODES.source,
   };
 

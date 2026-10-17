@@ -1,20 +1,27 @@
-"""Standalone VPN monitor for Clash Verge (started at logon by StartVPNMonitor.bat).
+"""Tray switch for the Clash Verge exit country (started at logon by StartVPNMonitor.bat).
 
-Every 60 s it checks the internet through the proxy and keeps the main selector on a Japan/Singapore node.
-If the net is down twice in a row, or the selector is on another region or on a group such as 自动选择,
-it delay-tests the Japan/Singapore nodes (one controller request) and pins the fastest live one.
+The profile script (clash-profile-script.js) gives each country its own auto-switching group: US-auto, JP-auto,
+SG-auto and JPSG-auto. mihomo moves inside a group by itself (calm url-test), so the exit country never changes
+behind your back. Two selectors pick a group:
+- AI-exit    : Google (Argon, Jules, Gemini, Kaggle, Colab), Anthropic and OpenAI traffic.
+- VPN07.com  : everything else.
+
+The tray menu (right-click the icon in the hidden-icons area) shows both selectors. For each one:
+- Country: USA / Japan / Singapore / Japan + Singapore.
+- "Auto-switch inside the country": on = follow the country group; off = pin that group's current node and stay
+  there. Japan + Singapore needs auto-switch, since one node is in one country.
+Left-click pops up the current exit nodes. Icon: green = both selectors auto-switch, amber = one is pinned,
+grey = problem (Clash down, Global mode, or the profile script was skipped at a subscription refresh).
+
+Every 60 s the monitor re-reads the state, notifies once when a problem starts, and delay-tests pinned nodes so you
+hear about a dead one. It never switches anything by itself: only your menu clicks change a selector.
 
 Safety rules, because other Claude sessions share the proxy at 127.0.0.1:7897:
 - one instance only (named mutex): a second copy exits at once.
 - it never starts, stops or restarts any process, and never touches Clash Verge's files.
-- one controller request at a time, each with a hard deadline; the pipe handle is always closed.
-- it never closes connections on a working node. After switching away from a dead node it closes
-  only that node's connections, so their clients reconnect through the new node.
-- while the core is down, and for CORE_GRACE_S after it comes back, it only watches.
-
-On/off: a tray icon (green = auto-switch on, grey = off). Left-click toggles; right-click shows the
-"Auto-switch VPN" checkbox, the log and Quit. Off is the file ~/.vpn_monitor.paused, so it survives a reboot;
-while it exists the monitor does nothing. Without pystray the monitor runs headless and still obeys the file.
+- one controller request at a time (a lock), each with a hard deadline; the pipe handle is always closed.
+- it never closes connections.
+Without pystray it runs headless: it only logs. `--dry-run` logs the current state once and exits.
 """
 import ctypes
 import json
@@ -24,28 +31,23 @@ import re
 import sys
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from ctypes import wintypes
 from pathlib import Path
 
 LOG_PATH = Path.home() / ".vpn_monitor.log"
 LOG_MAX_BYTES = 1_000_000
-PAUSE_FLAG = Path.home() / ".vpn_monitor.paused"   # exists = auto-switch off
 PIPE_DIR = "//./pipe/"
 PIPE_PREFIX = "verge-mihomo"   # name gets "-sidecar-release-<hash>" / "-production-<hash>" depending on how Verge started it
-PROXY = "http://127.0.0.1:7897"
 
 CHECK_INTERVAL_S = 60
-FAILS_BEFORE_HEAL = 2
-CORE_GRACE_S = 120        # after the core (re)starts, let Clash Verge restore its saved selections first
 PIPE_TIMEOUT_S = 10
 DELAY_TIMEOUT_MS = 5000
-HEARTBEAT_S = 3600
-NODE_PAT = re.compile(r"JP|Japan|日本|Tokyo|东京|SG|Singapore|新加坡|狮城", re.I)
 DELAY_URL = "https://www.gstatic.com/generate_204"
-GROUP_TYPES = {"Selector", "URLTest", "Fallback", "LoadBalance", "Relay"}
+LANES = (("AI-exit", "AI traffic (Argon, Jules, Claude)", "AI"), ("VPN07.com", "Other traffic", "Other"))
+COUNTRIES = (("US-auto", "USA"), ("JP-auto", "Japan"), ("SG-auto", "Singapore"), ("JPSG-auto", "Japan + Singapore"))
+COUNTRY_NAMES = dict(COUNTRIES)
+JPSG_ALIASES = {"自动选择", "故障转移"}   # the subscription's own groups; the profile script filters them to JP/SG
 MUTEX_NAME = "Local\\vpn_monitor_clash_verge"
 ERROR_ALREADY_EXISTS = 183
 
@@ -56,6 +58,7 @@ k32.PeekNamedPipe.argtypes = [wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD, 
                               ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID]
 k32.PeekNamedPipe.restype = wintypes.BOOL
 _mutex = None
+_pipe_lock = threading.Lock()
 
 def log(msg):
     line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
@@ -77,16 +80,6 @@ def single_instance():
     _mutex = k32.CreateMutexW(None, False, MUTEX_NAME)
     return bool(_mutex) and ctypes.get_last_error() != ERROR_ALREADY_EXISTS
 
-def is_enabled():
-    return not PAUSE_FLAG.exists()
-
-def set_enabled(on):
-    if on:
-        PAUSE_FLAG.unlink(missing_ok=True)
-    else:
-        PAUSE_FLAG.write_text("auto-switch off; delete this file or use the tray icon to turn it back on\n")
-    log(f"auto-switch turned {'ON' if on else 'OFF'}")
-
 def find_pipe():
     names = sorted(n for n in os.listdir(PIPE_DIR) if n.startswith(PIPE_PREFIX))
     if not names:
@@ -103,6 +96,11 @@ def _complete(raw):
     return b"chunked" in head.lower() and (b"\r\n" + rest).endswith(b"\r\n0\r\n\r\n")
 
 def clash(method, path, body=None, timeout_s=PIPE_TIMEOUT_S):
+    """One controller request at a time: the tray and monitor threads share the pipe."""
+    with _pipe_lock:
+        return _clash(method, path, body, timeout_s)
+
+def _clash(method, path, body, timeout_s):
     """One HTTP request over the mihomo controller pipe, with a hard deadline. The handle is always closed."""
     data = json.dumps(body).encode() if body is not None else b""
     head = (f"{method} {path} HTTP/1.1\r\nHost: clash\r\nContent-Type: application/json\r\n"
@@ -139,73 +137,61 @@ def clash(method, path, body=None, timeout_s=PIPE_TIMEOUT_S):
         rest = out
     return status, (json.loads(rest) if rest.strip() else None)
 
-def active_group():
-    _, cfg = clash("GET", "/configs")
-    _, px = clash("GET", "/proxies")
-    px = px["proxies"]
-    if (cfg or {}).get("mode", "rule").lower() == "global":
-        return "GLOBAL", px
-    sel = [k for k, v in px.items() if v.get("type") == "Selector" and k != "GLOBAL"]
-    sel.sort(key=lambda k: -sum(bool(NODE_PAT.search(n)) for n in px[k].get("all", [])))
-    return sel[0] if sel else "GLOBAL", px
+def lane_state(px, lane):
+    """(group, auto, node) for one selector: the country group it belongs to (None if it matches none), whether it
+    follows that group's auto-switching, and the node its traffic leaves through right now."""
+    now = px[lane].get("now")
+    group = "JPSG-auto" if now in JPSG_ALIASES else now
+    if group in COUNTRY_NAMES:
+        return group, True, px.get(now, {}).get("now")
+    country = next((g for g, _ in COUNTRIES[:3] if now in px.get(g, {}).get("all", [])), None)
+    return country, False, now
 
-def is_preferred_node(name, px):
-    """A real Japan/Singapore node, never a group such as 自动选择 (which could hold other regions)."""
-    return bool(NODE_PAT.search(name or "")) and px.get(name, {}).get("type") not in GROUP_TYPES
-
-def test_candidates(group, px):
-    """Delay-test the group's Japan/Singapore nodes. mihomo tests them in parallel: one controller request."""
-    cands = [n for n in px[group].get("all", []) if is_preferred_node(n, px)]
-    q = urllib.parse.urlencode({"url": DELAY_URL, "timeout": DELAY_TIMEOUT_MS})
-    st, d = clash("GET", f"/group/{urllib.parse.quote(group)}/delay?{q}", timeout_s=DELAY_TIMEOUT_MS / 1000 + 10)
-    res = {n: (d or {}).get(n) for n in cands} if st == 200 else {}
-    live = sorted((v, n) for n, v in res.items() if v)
-    log(f"heal: group={group} now={px[group].get('now')} live={len(live)}/{len(cands)} best={live[:3]}")
-    return live, res
-
-def close_connections_on(node):
-    """Close only the connections routed through `node`; everything else keeps running."""
-    _, d = clash("GET", "/connections")
-    ids = [c["id"] for c in (d or {}).get("connections") or [] if node in c.get("chains", [])]
-    for cid in ids:
-        clash("DELETE", f"/connections/{cid}")
-    return len(ids)
-
-def heal(apply=True):
+def snapshot():
+    """Read-only view of the state the tray shows. Never raises: trouble comes back as snap["problem"]."""
     try:
-        group, px = active_group()
-        now = px[group].get("now")
-        live, res = test_candidates(group, px)
+        _, cfg = clash("GET", "/configs")
+        _, d = clash("GET", "/proxies")
+    except FileNotFoundError:
+        return {"problem": "Clash Verge is not running", "lanes": {}}
     except Exception as e:
-        log(f"heal: {e}")
-        return False
-    if not live:
-        log("heal: no Japan/Singapore node answers; will retry next cycle")
-        return False
+        return {"problem": f"controller: {e}", "lanes": {}}
+    px = d["proxies"]
+    if LANES[0][0] not in px:
+        return {"problem": "profile script skipped: in Clash Verge, re-activate the VPN07.com profile", "lanes": {}}
+    mode = (cfg or {}).get("mode", "rule").lower()
+    problem = None if mode == "rule" else f"Clash Verge is in {mode} mode: switch it to Rule, or AI-exit is bypassed"
+    return {"problem": problem, "lanes": {lane: lane_state(px, lane) for lane, _, _ in LANES if lane in px}}
 
-    best_d, best = live[0]
-    if res.get(now) and res[now] <= best_d * 1.3 + 50:
-        log(f"heal: current node {now} alive ({res[now]} ms), keeping")
-        return True
-    if apply:
-        st, _ = clash("PUT", f"/proxies/{urllib.parse.quote(group)}", {"name": best})
-        log(f"heal: switched {group}: {now} -> {best} ({best_d} ms) status={st}")
-        if not res.get(now) and is_preferred_node(now, px):
-            log(f"heal: closed {close_connections_on(now)} connections on dead node {now}")
-    return True
+def describe(snap, nodes=False):
+    """One entry per selector, e.g. "AI: USA auto"; with nodes=True also the exit node."""
+    parts = []
+    for lane, _, short in LANES:
+        if lane not in snap["lanes"]:
+            continue
+        group, auto, node = snap["lanes"][lane]
+        where = f"{COUNTRY_NAMES.get(group, 'no country')} {'auto' if auto else 'pinned'}"
+        parts.append(f"{short}: {where}" + (f" -> {node}" if nodes else ""))
+    return parts
 
-def net_ok():
-    op = urllib.request.build_opener(urllib.request.ProxyHandler({"http": PROXY, "https": PROXY}))
-    try:
-        op.open("https://api.anthropic.com/", timeout=10)
-        return True
-    except urllib.error.HTTPError:
-        return True          # any HTTP answer means the path works
-    except Exception:
-        return False
+def choose(lane, group, auto):
+    """Point `lane` at a country group (auto) or pin the node that group is on now (not auto)."""
+    _, d = clash("GET", "/proxies")
+    target = group if auto else d["proxies"][group].get("now")
+    if not target:
+        raise RuntimeError(f"{group} has no node to pin")
+    st, body = clash("PUT", f"/proxies/{urllib.parse.quote(lane)}", {"name": target})
+    if st not in (200, 204):
+        raise RuntimeError(f"{lane} -> {target}: HTTP {st} {(body or {}).get('message', '')}".strip())
+    log(f"tray: {lane} -> {target}")
+
+def node_alive(node):
+    q = urllib.parse.urlencode({"url": DELAY_URL, "timeout": DELAY_TIMEOUT_MS})
+    st, d = clash("GET", f"/proxies/{urllib.parse.quote(node)}/delay?{q}", timeout_s=DELAY_TIMEOUT_MS / 1000 + 10)
+    return st == 200 and bool((d or {}).get("delay"))
 
 def run_tray(wake):
-    """Tray icon with the on/off checkbox, in the main thread; starts the monitor thread.
+    """Tray icon and menu in the main thread; the monitor thread feeds it snapshots.
     Returns False if pystray/Pillow is missing (the caller then runs headless)."""
     try:
         import pystray
@@ -213,40 +199,109 @@ def run_tray(wake):
     except ImportError:
         return False
 
-    def image(on):
+    def image(rgb):
         img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-        ImageDraw.Draw(img).ellipse((4, 4, 60, 60), fill=(46, 160, 67) if on else (140, 140, 140))
+        ImageDraw.Draw(img).ellipse((4, 4, 60, 60), fill=rgb)
         return img
 
-    def refresh():
-        on = is_enabled()
-        title = f"VPN auto-switch: {'ON' if on else 'OFF'}"
-        if icon.title != title:
-            icon.icon, icon.title = image(on), title
+    images = {"auto": image((46, 160, 67)), "pinned": image((230, 160, 30)), "problem": image((140, 140, 140))}
+    snap = {"problem": "starting", "lanes": {}}
 
-    def toggle(_icon, _item):
-        set_enabled(not is_enabled())
-        refresh()
-        wake.set()                       # check at once instead of waiting for the next cycle
+    def show(new):
+        """Called by the monitor thread. pystray builds the Windows menu ahead of time, so rebuild it here."""
+        nonlocal snap
+        snap = new
+        lanes = snap["lanes"].values()
+        kind = ("problem" if snap["problem"] or not lanes else
+                "auto" if all(auto for _, auto, _ in lanes) else "pinned")
+        title = ("VPN: " + (snap["problem"] or " | ".join(describe(snap))))[:127]   # Windows tooltip limit
+        if icon.title != title:
+            icon.icon, icon.title = images[kind], title
+        icon.update_menu()
+
+    def act(lane, group, auto):
+        """Menu clicks run off the GUI thread: a slow controller must never freeze the tray."""
+        def work():
+            try:
+                choose(lane, group, auto)
+            except Exception as e:
+                log(f"tray: {e}")
+                icon.notify(str(e), "VPN switch failed")
+            wake.set()                   # re-read the state at once
+        threading.Thread(target=work, daemon=True).start()
+
+    def lane_menu(lane):
+        def state():
+            return snap["lanes"].get(lane, (None, False, None))
+
+        def pick(group):
+            return lambda _icon, _item: act(lane, group, state()[1] or group == "JPSG-auto")
+
+        items = [pystray.MenuItem(name, pick(group), radio=True,
+                                  checked=lambda _item, g=group: state()[0] == g,
+                                  enabled=lambda _item, g=group: lane in snap["lanes"] and (
+                                      g != "JPSG-auto" or state()[1]))
+                 for group, name in COUNTRIES]
+        items += [pystray.Menu.SEPARATOR,
+                  pystray.MenuItem("Auto-switch inside the country",
+                                   lambda _icon, _item: act(lane, state()[0], not state()[1]),
+                                   checked=lambda _item: state()[1],
+                                   enabled=lambda _item: state()[0] is not None)]
+        return pystray.Menu(*items)
+
+    def status(_icon, _item):
+        icon.notify("\n".join(describe(snap, nodes=True)) or snap["problem"] or "no state yet", "VPN exit")
 
     def quit_monitor(_icon, _item):
         log("VPN monitor quit from the tray")
         icon.stop()
 
-    icon = pystray.Icon("vpn_monitor", image(is_enabled()), menu=pystray.Menu(
-        pystray.MenuItem("Auto-switch VPN (Japan/Singapore)", toggle,
-                         checked=lambda _item: is_enabled(), default=True),
+    icon = pystray.Icon("vpn_monitor", images["problem"], "VPN: starting", menu=pystray.Menu(
+        pystray.MenuItem("Show exit nodes", status, default=True),
+        *(pystray.MenuItem(label, lane_menu(lane)) for lane, label, _ in LANES),
+        pystray.Menu.SEPARATOR,
         pystray.MenuItem("Open log", lambda _icon, _item: os.startfile(LOG_PATH)),
         pystray.MenuItem("Quit monitor", quit_monitor)))
-    refresh()
-    threading.Thread(target=monitor_loop, args=(wake, refresh), daemon=True).start()
+    threading.Thread(target=monitor_loop, args=(wake, show, icon.notify), daemon=True).start()
     icon.run()
     return True
 
+def monitor_loop(wake, show=None, notify=None):
+    """Re-read the state every CHECK_INTERVAL_S (or when woken), log changes, warn once per problem or dead pin."""
+    log(f"VPN monitor started (pid {os.getpid()}). Checking every {CHECK_INTERVAL_S}s; it never switches by itself.")
+    last_line, dead = None, set()
+    while True:
+        try:
+            snap = snapshot()
+            if show:
+                show(snap)
+            line = snap["problem"] or "ok: " + " | ".join(describe(snap, nodes=True))
+            if line != last_line:
+                log(line)
+                if snap["problem"] and notify:
+                    notify(snap["problem"], "VPN")
+                last_line = line
+            pinned = {node for _, auto, node in snap["lanes"].values() if not auto and node}
+            for node in pinned:
+                if node_alive(node):
+                    dead.discard(node)
+                elif node not in dead:
+                    dead.add(node)
+                    log(f"pinned node {node} does not answer")
+                    if notify:
+                        notify(f"{node} does not answer. Turn auto-switch on or pick another country.",
+                               "VPN pinned node down")
+            dead &= pinned
+        except Exception as e:
+            log(f"monitor error: {e}")
+        finally:
+            wake.wait(CHECK_INTERVAL_S)
+            wake.clear()
+
 def main():
-    if "--dry-run" in sys.argv:          # read-only: no switching, no closing, no mutex
-        log(f"dry-run: net_ok={net_ok()}")
-        heal(apply=False)
+    if "--dry-run" in sys.argv:          # read-only: one state read, no mutex
+        snap = snapshot()
+        log(f"dry-run: {snap['problem'] or 'ok'}; " + "; ".join(describe(snap, nodes=True)))
         return
     if not single_instance():
         log("another VPN monitor is already running; this copy exits")
@@ -254,52 +309,6 @@ def main():
     wake = threading.Event()
     if not run_tray(wake):
         monitor_loop(wake)
-
-def monitor_loop(wake, refresh=None):
-    log(f"VPN monitor started (pid {os.getpid()}). Checking every {CHECK_INTERVAL_S}s. "
-        f"Auto-switch {'ON' if is_enabled() else 'OFF'}.")
-    fails, core_since, last_beat, down_logged, off_logged = 0, None, None, False, False
-    while True:
-        try:
-            if refresh:
-                refresh()                # icon follows the flag file even if it was edited by hand
-            if not is_enabled():
-                if not off_logged:
-                    log("auto-switch is off: not checking or switching")
-                fails, last_beat, off_logged = 0, None, True
-                continue
-            off_logged = False
-            try:
-                find_pipe()
-            except FileNotFoundError:
-                if not down_logged:
-                    log("Clash Verge core is down; only watching until it is back")
-                core_since, down_logged = None, True
-                continue
-            down_logged = False
-            if core_since is None:
-                core_since = time.monotonic()
-                log(f"core is up; leaving the selector alone for {CORE_GRACE_S}s")
-            fails = 0 if net_ok() else fails + 1
-            if time.monotonic() - core_since < CORE_GRACE_S:
-                continue
-            group, px = active_group()
-            now = px[group].get("now")
-            if fails >= FAILS_BEFORE_HEAL:
-                log(f"net: down x{fails}, healing proxy")
-            elif not is_preferred_node(now, px):
-                log(f"selector {group} is on {now}, not a Japan/Singapore node: healing")
-            elif last_beat is None or time.monotonic() - last_beat > HEARTBEAT_S:
-                log(f"ok: {group} on {now}")
-                last_beat = time.monotonic()
-            if fails >= FAILS_BEFORE_HEAL or not is_preferred_node(now, px):
-                if heal(apply=True):
-                    fails = 0
-        except Exception as e:
-            log(f"monitor error: {e}")
-        finally:
-            wake.wait(CHECK_INTERVAL_S)
-            wake.clear()
 
 if __name__ == "__main__":
     main()
