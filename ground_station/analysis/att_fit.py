@@ -14,6 +14,11 @@ from scipy import optimize, signal
 from ground_station.analysis import log_corpus as lc
 from ground_station.autotune.frf import load_series
 
+try:
+    from ground_station.autotune.frf import direct_iv
+except ImportError:
+    direct_iv = None
+
 """Time-domain output-error fit of attitude plant per axis.
 
 Simulates the model with ZOH at the log rate from the logged u, minimizes the w prediction error over (b, a, tau)
@@ -222,7 +227,7 @@ class AttFitter:
 def get_git_sha():
     try:
         return subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip()
-    except Exception: # noqa: BLE001
+    except (subprocess.CalledProcessError, OSError, FileNotFoundError):
         return "unknown"
 
 
@@ -334,7 +339,7 @@ def main(argv: list[str] | None = None) -> int:
                 segs, is_sysid, skipped = prepare_segments(series, axis, dt)
                 global_skipped.extend(skipped)
                 all_sessions_data[sess] = {"segs": segs, "is_sysid": is_sysid, "dt": dt}
-            except Exception as e: # noqa: BLE001
+            except (ValueError, RuntimeError, KeyError, TypeError, IndexError) as e:
                 print(f"Skipping {sess}: {e}")
 
         if not all_sessions_data:
@@ -417,8 +422,7 @@ def main(argv: list[str] | None = None) -> int:
         sysid_segs_map[axis] = [seg for data in all_sessions_data.values() if data['is_sysid'] for seg in data['segs']]
 
     # Soft import j-sysid-multi direct_iv
-    try:
-        from ground_station.autotune.frf import direct_iv
+    if direct_iv is not None:
         print("direct_iv found, comparing frequency domain (b, a, tau, D)...")
         for axis in axes:
             if axis in out and axis in sysid_segs_map:
@@ -426,11 +430,17 @@ def main(argv: list[str] | None = None) -> int:
                     res_iv = direct_iv(sysid_segs_map[axis], axis, dt)
                     print(f"Axis {axis}: Time Domain (b={out[axis]['b']:.2f}, a={out[axis]['a']:.2f}, tau={out[axis]['tau']:.4f}, D={out[axis]['D_ticks_200hz']}) vs Freq Domain (b={res_iv['b']:.2f}, a={res_iv['a']:.2f}, tau={res_iv['tau']:.4f}, D={res_iv['D']})")
                     out[axis]["direct_iv"] = {"b": res_iv['b'], "a": res_iv['a'], "tau": res_iv['tau'], "D": res_iv['D']}
-                except Exception as e: # noqa: BLE001
+                except (ValueError, RuntimeError, KeyError, TypeError, IndexError) as e:
                     print(f"Could not compute direct_iv for {axis}: {e}")
-
-    except ImportError:
+                    out[axis]["direct_iv"] = None
+                    out[axis]["direct_iv_skip"] = str(e)
+    else:
         print("Note: direct_iv not found in ground_station/autotune/frf.py")
+        for axis in axes:
+            if axis in out:
+                out[axis]["direct_iv"] = None
+                out[axis]["direct_iv_skip"] = "direct_iv not imported"
+
 
     out_file = args.out if args.out else f"att_model_{datetime.date.today().strftime('%Y-%m-%d')}.json"
 
@@ -455,7 +465,7 @@ def main(argv: list[str] | None = None) -> int:
 
                 if "c2" in h_res[model_key]:
                     hover_fit_result["c2"] = h_res[model_key]["c2"]
-        except Exception as e: # noqa: BLE001
+        except (ValueError, RuntimeError, KeyError, TypeError, IndexError) as e:
             print(f"Hover fit failed: {e}")
 
     final_out = {

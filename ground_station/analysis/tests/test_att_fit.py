@@ -114,7 +114,57 @@ def test_json_schema(tmp_path):
 
     out = json.loads(out_file.read_text())
     expected_keys = {"git_sha", "sessions", "models", "hover"}
-    model_keys = {"b", "a", "tau", "D_ticks_200hz", "D_s", "bounds", "model", "skipped_segments", "lofo_per_flight", "sysid_flights_summary", "traj_flights_summary", "pass"}
+    model_keys = {"b", "a", "tau", "D_ticks_200hz", "D_s", "bounds", "model", "skipped_segments", "direct_iv", "direct_iv_skip", "lofo_per_flight", "sysid_flights_summary", "traj_flights_summary", "pass"}
 
     assert set(out.keys()) == expected_keys
     assert set(out["models"]["roll"].keys()) == model_keys
+
+def test_direct_iv_monkeypatch(tmp_path, monkeypatch):
+    import json
+
+    import numpy as np
+    import pandas as pd
+
+    from ground_station.analysis.att_fit import main
+
+    def mock_direct_iv(runs, axis, dt):
+        return {"b": 100.0, "a": 50.0, "tau": 0.05, "D": 5}
+
+    # We must patch it in att_fit where it's imported dynamically...
+    # Actually, because att_fit imports it locally, we can't just monkeypatch the module level easily if it catches ImportError.
+    # But wait, att_fit imports `from ground_station.autotune.frf import direct_iv` at the top level now!
+    import ground_station.analysis.att_fit as att_fit_mod
+    monkeypatch.setattr(att_fit_mod, "direct_iv", mock_direct_iv)
+
+    dt = 0.01
+    n = 300
+    t = np.arange(n) * dt
+
+    df = pd.DataFrame({
+        "t": t,
+        "Ctrler.gyroxPID.U": np.random.normal(0, 1, n),
+        "Ctrler.gyroxPID.FB": np.random.normal(0, 1, n),
+        "seq": np.arange(n) % 256,
+        "status.arm": np.ones(n),
+        "flight_phase": np.ones(n),
+        "Ctrler.Z_ratePID.FB": np.zeros(n),
+        "Ctrler.locxsPID.FB": np.zeros(n),
+        "Ctrler.locysPID.FB": np.zeros(n),
+        "Ctrler.Z_posPID.FB": np.ones(n),
+        "Ctrler.Z_posPID.Des": np.ones(n),
+        "Ctrler.Z_ratePID.U": np.ones(n) * 100.0,
+        "status.vbat": np.ones(n) * 15.0,
+        "status.pitch_deg": np.zeros(n),
+        "status.roll_deg": np.zeros(n),
+        "id.sysid_state": np.ones(n)
+    })
+    df.to_csv(tmp_path / "log.csv", index=False)
+
+    out_file = tmp_path / "out.json"
+    args = [str(tmp_path / "log.csv"), "--axes", "roll", "--out", str(out_file)]
+
+    main(args)
+
+    out = json.loads(out_file.read_text())
+    assert out["models"]["roll"]["direct_iv"] is not None
+    assert out["models"]["roll"]["direct_iv"]["b"] == 100.0

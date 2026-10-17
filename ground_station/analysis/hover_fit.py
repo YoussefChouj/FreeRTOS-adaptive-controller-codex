@@ -29,7 +29,7 @@ Fits u_hov(V) = c0 + c1*(V0 - V) from steady hover segments (position hold).
 try:
     _reg = PackRegistry.load()
     V0 = _reg.ocv_table[0][0] * 4.0  # Assuming 4S
-except Exception: # noqa: BLE001
+except (ValueError, FileNotFoundError, OSError):
     V0 = 16.7
 PROPOSED_HOVER_THR_FREE = 3050.0       # baseline hover throttle free flight (from StabilizerTask.c)
 PROPOSED_VZ_SMALL_MPS = 0.2            # threshold for "vz small"
@@ -85,7 +85,7 @@ def extract_hover_points(series: lc.Series, flight_name: str, skip_s: float = 2.
     vz = np.abs(g["Ctrler.Z_ratePID.FB"])
     vxy = np.sqrt(g["Ctrler.locxsPID.FB"]**2 + g["Ctrler.locysPID.FB"]**2) / 100.0 # locxsPID.FB in cm/s (TASK/StabilizerTask.c:1110)
 
-    z_err = np.abs(g["Ctrler.Z_posPID.FB"] - g["Ctrler.Z_posPID.Des"]) * 100.0 # assume m, convert to cm
+    z_err = np.abs(g["Ctrler.Z_posPID.FB"] - g["Ctrler.Z_posPID.Des"]) * 100.0 # Z_posPID.FB in m (TASK/StabilizerTask.c:1138), convert to cm
 
     # Steady hold mask
     steady = (
@@ -275,7 +275,7 @@ def main(argv: list[str] | None = None) -> int:
                 # autotune.frf.load_series can load either
                 series = load_series(p)
                 series_map[path.name] = series
-            except Exception as e: # noqa: BLE001
+            except (ValueError, RuntimeError, KeyError, TypeError, IndexError) as e:
                 print(f"Skipping {p}: {e}")
 
     if not series_map:

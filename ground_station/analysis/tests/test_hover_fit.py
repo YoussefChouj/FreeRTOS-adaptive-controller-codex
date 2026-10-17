@@ -59,3 +59,50 @@ def test_extract_hover_points():
 
     pts = extract_hover_points(series, "f1", skip_s=2.0, window_s=1.0)
     assert len(pts) == 7 # 10s total, skip 2s = 8s
+
+def test_extract_hover_points_advanced():
+    import numpy as np
+
+    from ground_station.analysis.hover_fit import PROPOSED_DT, extract_hover_points
+
+    t = np.arange(0, 10, PROPOSED_DT)
+    series = {
+        "status.arm": (t, np.ones_like(t)),
+        "flight_phase": (t, np.ones_like(t)),
+
+        "Ctrler.Z_ratePID.FB": (t, np.zeros_like(t)),
+        "Ctrler.locxsPID.FB": (t, np.zeros_like(t)),
+        "Ctrler.locysPID.FB": (t, np.zeros_like(t)),
+
+        "Ctrler.Z_posPID.FB": (t, np.full_like(t, 1.0)),
+        "Ctrler.Z_posPID.Des": (t, np.full_like(t, 1.0)),
+        "Ctrler.Z_ratePID.U": (t, np.full_like(t, 100.0)),
+
+        "status.vbat": (t, np.full_like(t, 15.0)),
+        "status.pitch_deg": (t, np.zeros_like(t)),
+        "status.roll_deg": (t, np.zeros_like(t)),
+    }
+
+    # Ground effect stretch: [0:3s]
+    series["Ctrler.Z_posPID.FB"][1][:300] = 0.2
+    series["Ctrler.Z_posPID.Des"][1][:300] = 0.2
+
+    # Tilt stretch: [4s:7s]
+    series["status.pitch_deg"][1][400:700] = 30.0 # cos(30) = 0.866
+
+    # Unsteady stretch: [8s:10s]
+    series["Ctrler.Z_ratePID.FB"][1][800:1000] = 10.0 # High Z rate -> unsteady
+
+    pts = extract_hover_points(series, "f1", skip_s=0.5, window_s=1.0)
+    # The valid points are from 0 to 8s.
+    # We skip 0.5s.
+    # 0s - 3s: GE (2 points of length 1s)
+    # 3s - 4s: regular hold
+    # 4s - 7s: Tilted hold
+    # 7s - 8s: regular hold
+    # 8s - 10s: invalid
+
+    assert len(pts) > 0
+    assert any(p.ge for p in pts)
+    assert any(not p.ge for p in pts)
+    assert any(p.tilt_correction < 0.95 for p in pts)
