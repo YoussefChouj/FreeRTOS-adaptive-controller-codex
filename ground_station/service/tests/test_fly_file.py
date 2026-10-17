@@ -104,11 +104,13 @@ def test_lab_scripts_compile_log_and_fly_on_the_fake_drone(path):
     exp = data["experiments"][0]
     assert check_log_plan(exp["log_plan"]) == [] and "camera_fusion" in exp["log_plan"]["groups"]
     ground = exp["scenario"]["steps"][0]["takeoff"]["set"]
-    want = {"g_xy_ctrl_kind", "g_traj_ff_shift_s", "g_land_xy_gate_cm"}  # a pack swap reboots
-    if ground["g_xy_ctrl_kind"] in (2, 3):  # LQR/MPC also pin the predictor delay, VAR 47
-        want.add("g_xyc_delay_ticks")
-    if "exp_id" in ground:
-        want.add("exp_id")
+    want = {"g_traj_ff_shift_s", "g_land_xy_gate_cm"}  # a pack swap reboots
+    if "exp_id" in ground:  # the exp row sets the kind on board; lab_e pins the predictor delay for all four
+        want |= {"exp_id", "g_xyc_delay_ticks"}
+    else:
+        want.add("g_xy_ctrl_kind")
+        if ground["g_xy_ctrl_kind"] in (2, 3):  # LQR/MPC also pin the predictor delay, VAR 47
+            want.add("g_xyc_delay_ticks")
     assert set(ground) == want
     drone, _, deps = _rig()
     if "exp_id" in ground:
@@ -116,4 +118,5 @@ def test_lab_scripts_compile_log_and_fly_on_the_fake_drone(path):
         deps.status = lambda: {**orig_status(), "exp_active": ground["exp_id"]}
     out = fly_scenario(parse_scenario(exp["scenario"]), deps)
     assert not out.aborted and out.landed, out.decision
-    assert drone.vars["g_xy_ctrl_kind"] == ground["g_xy_ctrl_kind"]
+    key = "exp_id" if "exp_id" in ground else "g_xy_ctrl_kind"
+    assert drone.vars[key] == ground[key]

@@ -81,8 +81,9 @@ WFB_STATUS_FIELDS: tuple[str, ...] = (
 )
 WFB_STATUS: tuple[str, ...] = tuple(f"g_wfb_status.{f}" for f in WFB_STATUS_FIELDS)
 KF_HEALTH = "g_ekf_of_health"
-# Keil preset status (TASK/AutoflyTask.c): the runner's preset step waits on traj_status
-PRESET_STATUS: tuple[str, ...] = ("traj_status",)
+# Keil preset status (TASK/AutoflyTask.c): the runner's preset step waits on traj_status; its exp check reads
+# exp_active (TASK/StabilizerTask.c:163, campaign_runner.py:376) and refuses the flight when it is not streamed
+PRESET_STATUS: tuple[str, ...] = ("traj_status", "exp_active")
 
 MRAC_AXES = ("pitch", "roll", "yaw", "z_rate")
 def _mrac_n_features() -> int:
