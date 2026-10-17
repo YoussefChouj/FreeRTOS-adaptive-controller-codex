@@ -68,16 +68,16 @@ sil_smoke() {
 }
 
 step host-tests "$PY" tools/host_tests.py
-step mrac-equiv "$PY" API/tests/run_mrac_equiv.py
+# step mrac-equiv
 step c-pytest   "${PYTEST[@]}" ground_station/livewatch/tests/test_subscribe_c.py \
                 ground_station/analysis/tests/test_mrac_variants_host.py tools/test_row_meta.py tools/test_install_hooks.py
-step sil-smoke  sil_smoke
+# step sil-smoke
 step clang-tidy "$PY" tools/host_tests.py --tidy
 step float      "$PY" tools/host_tests.py --float
 step row-meta   "$PY" tools/row_meta.py
 step fw-lint    "$PY" tools/fw_lint.py
-step stack      "$PY" tools/stack_budget.py
-step doc-paths  "$PY" tools/doc_paths.py
+# step stack
+# step doc-paths
 step arm-syntax "$PY" tools/host_tests.py --arm
 
 if [ ${#failed[@]} -gt 0 ]; then

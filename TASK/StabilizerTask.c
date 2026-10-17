@@ -1,4 +1,5 @@
 #include "StabilizerTask.h"
+#include "att_ctrl.h"
 #include "ekf_of.h"         /* 8-state OF position+velocity-bias+accel-bias KF (Mode 2 bias estimation) */
 #include "ekf.h"            /* g_ekf_gate: EKF body velocity for the x/y velocity loops */
 #include "math.h"
@@ -717,6 +718,7 @@ void stabilizer_Task(void)
 	Update_Data();
 
 	Wfb_Step();   /* WFB glue: after Update_Data() so the FB values are this tick's */
+	AttCtrl_TickBegin();
 	GsIdle_ReleaseOnDisarm();
 
 	Compute_Motor();
@@ -1959,10 +1961,16 @@ static void Z_Compute(void)
 	{   /* P0 Finding 2: ToF out of range - freeze the Z-rate integrator while
 	     still running P/D on the held FB, so the manual height-rate loop cannot
 	     wind throttle up without bound (verdict: unbounded climb at >5 m AGL). */
+		AttCtrlIn in_z;
+		in_z.r = Ctrler.Z_ratePID.Des;
+		in_z.w_ff = 0.0f;
+		in_z.y = Ctrler.Z_posPID.FB;
+		in_z.w = Ctrler.Z_ratePID.FB;
 		float zr_sumE = Ctrler.Z_ratePID.SumE;
 		float zr_Ui   = Ctrler.Z_ratePID.Ui;
 		ComputePID(&Ctrler.Z_ratePID);
 		if (!s_alt_valid_tick) { Ctrler.Z_ratePID.SumE = zr_sumE; Ctrler.Z_ratePID.Ui = zr_Ui; }
+		Ctrler.Z_ratePID.U = AttCtrl_Apply(ATT_Z, Ctrler.Z_ratePID.U, &in_z);
 	}
 }
 
@@ -2250,7 +2258,7 @@ static void Mix_Compute(void)
 	 // free-flight hover 2950->3150: flight_test_pid_2/_4 (matched props, 2026-09-28) hovered at
 	 // motor avg 3135-3145 with Z_rate P carrying the missing ~190 -> 0.4-0.5 m altitude sag.
 	 // PWM ceiling is 4000 - anything above risks ESC saturation.
-	 Throttle_th = bench_mode_active ? (short)HOVER_THR_BENCH : (short)HOVER_THR_FREE;
+	 Throttle_th = bench_mode_active ? (short)HOVER_THR_BENCH : (short)(g_hov_ff_mode ? (3050.0f + 0.0f * (16.8f - g_att_v_filt)) : HOVER_THR_FREE);
 
 	// Controller layer (API/controller.c): u = u_nom + correction of the selected controller.
 	// CTRL_MRAC (default) == PID + MRAC u_ad gated by output_injection_on and simplex fade; CTRL_PID == pure PID.
@@ -2344,6 +2352,13 @@ void Compute_Motor(void)
 	mrac_in_phase = (uint8_t)flight_phase;
 	MRAC_Control(&Ctrler);
 
+	AttCtrlIn in_r, in_p, in_y;
+	in_r.r=Ctrler.rollPID.Des; in_r.w_ff=0.0f; in_r.y=Ctrler.rollPID.FB; in_r.w=Ctrler.gyroxPID.FB;
+	in_p.r=Ctrler.pitchPID.Des; in_p.w_ff=0.0f; in_p.y=Ctrler.pitchPID.FB; in_p.w=Ctrler.gyroyPID.FB;
+	in_y.r=Ctrler.yawPID.Des; in_y.w_ff=0.0f; in_y.y=Ctrler.yawPID.FB; in_y.w=Ctrler.gyrozPID.FB;
+	Ctrler.gyroxPID.U = AttCtrl_Apply(ATT_ROLL, Ctrler.gyroxPID.U, &in_r);
+	Ctrler.gyroyPID.U = AttCtrl_Apply(ATT_PITCH, Ctrler.gyroyPID.U, &in_p);
+	Ctrler.gyrozPID.U = AttCtrl_Apply(ATT_YAW, Ctrler.gyrozPID.U, &in_y);
 	Mix_Compute();
 	LandGate_Tick();
 
@@ -2404,6 +2419,7 @@ static void GsIdle_ReleaseOnDisarm(void)
 	static uint8_t s_was_armed;
 	uint8_t armed = (FlightFSM_GetState() == FLIGHT_STATE_ARMED) ? 1U : 0U;
 	if (s_was_armed && !armed && RCInput_GetAuthority()) {
+		AttCtrl_ResetAll();
 		RCInput_SetAuthority(0U);
 		GS_KeySDKflag = 0U;
 	}

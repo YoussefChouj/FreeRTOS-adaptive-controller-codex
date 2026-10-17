@@ -67,6 +67,7 @@ HOST_TESTS = [
     ("fw_health",        ["tests/firmware_host/test_fw_health.c", "API/fw_health.c"],            ["-std=c99", *W, "-Werror", "-Wdeclaration-after-statement", "-IAPI"]),
     ("fw_pid_fallback",  ["tests/firmware_host/test_pid_fallback.c"],                           ["-std=c99", "-Wall", "-Werror", *FWH]),
     ("fw_exp_row",       ["tests/firmware_host/test_exp_row.c"],                              ["-std=c99", *W, "-Werror", "-IAPI"]),
+    ("fw_att_ctrl",      ["API/tests/test_att_ctrl.c", "API/att_ctrl.c"],                     ["-std=c99", "-Wall", "-Werror", "-Wdeclaration-after-statement", "-Wvla", "-IAPI", "-lm"]),
     ("mrac_xy_nofight",  ["tests/firmware_host/test_mrac_xy_nofight.c", "API/xy_ctrl.c", "{src}/mrac.c", "{src}/mrac_math.c"],
                          ["-std=c99", *W, "-msse2", "-mfpmath=sse", "-I{src}", "-IAPI/tests/stubs", "-IAPI", "-lm"]),
 ];

@@ -501,7 +501,17 @@ static const VarWriteRow_t s_var_write[] = {
     VAR_WRITE_ROW(exp_id,              VW_U8, 50,  0,       7      ),  /* s_exp rows 0..7               */
     VAR_WRITE_ROW(vp_id,               VW_U8, 51,  0,       24     ),  /* s_vp rows 0..24               */
     VAR_WRITE_ROW(lim_mode,            VW_U8, 52,  0,       2      ),  /* s_lim rows 0..2               */
-    VAR_WRITE_ROW(g_imu_mahony_yaw_decouple, VW_U8, 53, 0,     1      )   /* bool                          */
+    VAR_WRITE_ROW(g_imu_mahony_yaw_decouple, VW_U8, 53, 0,     1      ),   /* bool                          */
+
+    VAR_WRITE_ROW(g_att_mode[0],       VW_U8,  54, 0, 2),
+    VAR_WRITE_ROW(g_att_mode[1],       VW_U8,  55, 0, 2),
+    VAR_WRITE_ROW(g_att_mode[2],       VW_U8,  56, 0, 2),
+    VAR_WRITE_ROW(g_att_mode[3],       VW_U8,  57, 0, 2),
+    VAR_WRITE_ROW(g_att_alpha[0],      VW_F32, 58, 0.0f, 1.0f),
+    VAR_WRITE_ROW(g_att_alpha[1],      VW_F32, 59, 0.0f, 1.0f),
+    VAR_WRITE_ROW(g_att_alpha[2],      VW_F32, 60, 0.0f, 1.0f),
+    VAR_WRITE_ROW(g_att_alpha[3],      VW_F32, 61, 0.0f, 1.0f),
+    VAR_WRITE_ROW(g_hov_ff_mode,       VW_U8,  62, 0, 1)
 };
 
 /* GS CMD 0x2D: write row `id` = val. Returns 0 (written) or a VAR_WRITE_REJECT_* code (nothing written);
@@ -1054,14 +1064,14 @@ void AutoflyTask(void)
 		{
 			KeySDKflag =1;
 		}
-		else 
+		else
 		{
 			KeySDKflag =0;
 		}
-		
+
 		if(KeySDKflag ==1)
 		{
-			SDK_StateMachine_Loop(); 
+			SDK_StateMachine_Loop();
 		}
 		else
 		{
@@ -1087,7 +1097,7 @@ void SDK_StateMachine_Loop(void)
 	static unsigned int LastSDKState;
 	switch ( SDK_StateMachine[ CurrentSDKState ] )
 	{
-		
+
 		case SDK_Cmd_DelayWake:
 			if(LastSDKState!=SDK_Cmd_DelayWake)
 			{
@@ -1095,7 +1105,7 @@ void SDK_StateMachine_Loop(void)
 				Ctrler.locyPID.Des = Ctrler.locyPID.FB;
 				Ctrler.yawPID.Des  = Ctrler.yawPID.FB;
 				Ctrler.Z_posPID.Des= Ctrler.Z_posPID.FB;
-				
+
 				temp_V_x=-1;
 				temp_V_y=-1;
 				temp_V_h=0;
@@ -1105,41 +1115,41 @@ void SDK_StateMachine_Loop(void)
 			else SDK_DelayWakeFlag=0;
 
 			break;
-			
-		
+
+
 		case SDK_Cmd_TakeOff:
-    
+
 			Ctrler.Z_posPID.Des = SDK_Height;
 			if(Ctrler.Z_posPID.FB >=SDK_Height_L && Ctrler.Z_posPID.FB<=SDK_Height_H)
 				SDK_StateMachine[ CurrentSDKState +1 ]=0;
-		  
+
 			break;
-			
+
 
 		case SDK_Cmd_PosHold:
 			if(LastSDKState!=SDK_Cmd_PosHold)
-			{		
+			{
 				Ctrler.locyPID.Des = Ctrler.locyPID.FB;
 				Ctrler.locxPID.Des = Ctrler.locxPID.FB;
 			}
 			stm32_to_linux_flag.flag1 = 0;
 			take_off_flag = 1;
 			temp_V_x=-1;
-		  temp_V_y=-1;	
+		  temp_V_y=-1;
 			temp_Gyroz=0;
-		
-					
+
+
 			break;
-			
-			
+
+
 		case SDK_Cmd_Pos1:
-			
 
-			break;				
 
-		
+			break;
+
+
 		case SDK_Cmd_Land:
-			
+
         Ctrler.Z_posPID.Des =  0.0;
 				SDKLandFlag = 1;
 
@@ -1150,46 +1160,46 @@ void SDK_StateMachine_Loop(void)
 					FlightFSM_Event(FLIGHT_EVENT_DANGEROUS_STOP);
 			}
 			break;
-			
+
 		default:
 			break;
 	}
-	
+
 	LastSDKState = SDK_StateMachine[ CurrentSDKState ];
-	
+
 	if(SDK_StateMachine[ CurrentSDKState +1 ]<=1000 && SDK_StateMachine[CurrentSDKState +1 ]>=10)\
 						SDK_StateChangeFlag=1;
 	else SDK_StateChangeFlag=0;
-	
+
 	if(SDK_StateMachine[ CurrentSDKState +1 ]>=5) SDK_StateMachine[ CurrentSDKState +1 ] -=5;
 	if(SDK_StateMachine[ CurrentSDKState +1 ]<=10 && CurrentSDKState<SDKStateMAX)CurrentSDKState+=2;
 }
 
 void SDK_Set_V_Loc(void)
 {
-	
+
 	/* Horizontal velocity setpoint while the script is in a position or search state */
 	if(
 		   SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Search0
 	       || SDK_StateMachine[ CurrentSDKState ]==  SDK_Cmd_PosHold
 	         || SDK_StateMachine[ CurrentSDKState ]==  SDK_Cmd_Pos1
 	         || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Pos2
-  		      || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Pos3  
-	           || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Pos4 
-                || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Pos5  	
-	               || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Searchgan 
-	                || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_SearchLand 
-	                     || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Land 
-	                      || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Search1 
-	                         || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_FollowLine 
-												 || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_go_to_land 
-													|| SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_SearchLand_down 
+		      || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Pos3
+	           || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Pos4
+                || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Pos5
+	               || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Searchgan
+	                || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_SearchLand
+	                     || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Land
+	                      || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Search1
+	                         || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_FollowLine
+												 || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_go_to_land
+													|| SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_SearchLand_down
 		)
 	{
 		if(SBUS_CH_VALID(PITCH_CH)) /* stick outside its dead band: the pilot sets the horizontal rate */
 				Ctrler.locysPID.Des = -((Remoter.PitCtrler-3000)/1000.0)*Stick_to_MAX_Horizontal_Rate;
-		else if(temp_V_y== -1) 
-		{  
+		else if(temp_V_y== -1)
+		{
 			if(y_test ==0) /* first tick: hold the current position */
 			{
 				Ctrler.locyPID.Des =Ctrler.locyPID.FB;
@@ -1210,10 +1220,10 @@ void SDK_Set_V_Loc(void)
 				}
 			}
 		}
-		else if (temp_V_y != -1) 
+		else if (temp_V_y != -1)
 		{
 			y_test=0;
-			linux_data.temp_v_y = temp_V_y ;  
+			linux_data.temp_v_y = temp_V_y ;
 			if(linux_data.temp_v_y > task_vmax)
 			{
 				Ctrler.locysPID.Des = task_vmax;
@@ -1227,17 +1237,17 @@ void SDK_Set_V_Loc(void)
 			 Ctrler.locysPID.Des = linux_data.temp_v_y;
 			}
 		}
-		
+
 		if(SBUS_CH_VALID(ROLL_CH)) /* stick outside its dead band: the pilot sets the horizontal rate */
-				Ctrler.locxsPID.Des = -((Remoter.RolCtrler-3000)/1000.0)*Stick_to_MAX_Horizontal_Rate;  
+				Ctrler.locxsPID.Des = -((Remoter.RolCtrler-3000)/1000.0)*Stick_to_MAX_Horizontal_Rate;
 		else if(temp_V_x == -1)
-		{ 
+		{
 			if(x_test ==0) /* first tick: hold the current position */
 			{
 				Ctrler.locxPID.Des =Ctrler.locxPID.FB;
-				x_test=1;	
+				x_test=1;
 			}
-			else 
+			else
 			{
 				if(Ctrler.locxPID.U>task_vmax){
 					Ctrler.locxsPID.Des = task_vmax;
@@ -1250,7 +1260,7 @@ void SDK_Set_V_Loc(void)
 			    Ctrler.locxsPID.Des = Ctrler.locxPID.U;
 				}
 			}
-		}	
+		}
 		else if(temp_V_x!= -1)
 		{
 			x_test =0;
@@ -1275,20 +1285,20 @@ void SDK_Set_Gyroz(void)
 {
 	if(SDK_StateMachine[ CurrentSDKState ]==SDK_Cmd_FollowLine
 			|| SDK_StateMachine[ CurrentSDKState ]==  SDK_Cmd_Surround
-		   	|| SDK_StateMachine[ CurrentSDKState ]==  SDK_Cmd_PowerLine
-		 	|| SDK_StateMachine[ CurrentSDKState ]==  SDK_Cmd_Search0
+			|| SDK_StateMachine[ CurrentSDKState ]==  SDK_Cmd_PowerLine
+			|| SDK_StateMachine[ CurrentSDKState ]==  SDK_Cmd_Search0
 				|| SDK_StateMachine[ CurrentSDKState ]==  SDK_Cmd_Pos1
 			|| SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Pos2
 				|| SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Pos3
-	        || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Pos4  
-	       || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Pos5  
-	        || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Searchgan 
-	      || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_SearchLand 
-	           || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Search1 
-	                 || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_FollowLine 
-													 || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_go_to_land 
-													|| SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_SearchLand_down 
-	
+	        || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Pos4
+	       || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Pos5
+	        || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Searchgan
+	      || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_SearchLand
+	           || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_Search1
+	                 || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_FollowLine
+													 || SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_go_to_land
+													|| SDK_StateMachine[ CurrentSDKState ]== SDK_Cmd_SearchLand_down
+
 	   )
 	{
 		if(SBUS_CH_VALID(YAW_CH))
@@ -1301,13 +1311,13 @@ void SDK_Set_Gyroz(void)
 				yaw_test =1;
 			}
 			else if(yaw_test==1)
-			{			
+			{
 				if(Ctrler.yawPID.U>task_yawmax)
 					Ctrler.gyrozPID.Des  = task_yawmax;
 				else if(Ctrler.yawPID.U< -task_yawmax)
 						Ctrler.gyrozPID.Des  = -task_yawmax;
 				else
-					Ctrler.gyrozPID.Des = Ctrler.yawPID.U ;				
+					Ctrler.gyrozPID.Des = Ctrler.yawPID.U ;
 			}
 		}
 		else
@@ -1315,7 +1325,7 @@ void SDK_Set_Gyroz(void)
 			Ctrler.gyrozPID.Des = temp_Gyroz ;
 		  yaw_test=0;
 		}
-	}				
+	}
 }
 
 
