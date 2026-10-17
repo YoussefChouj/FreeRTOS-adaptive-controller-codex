@@ -1,26 +1,32 @@
-from __future__ import annotations
-
-import re
-
 """Fit hover throttle sag against battery voltage across all flights.
 
 Fits u_hov(V) = c0 + c1*(V0 - V) from steady hover segments (position hold).
 """
+from __future__ import annotations
 
 import argparse
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
 from ground_station.analysis import log_corpus as lc
+from ground_station.analysis.battery_model import PackRegistry
 from ground_station.autotune.frf import load_series
+
+"""Fit hover throttle sag against battery voltage across all flights.
+
+Fits u_hov(V) = c0 + c1*(V0 - V) from steady hover segments (position hold).
+"""
+
+
+
 
 # Constants / Thresholds
 
 try:
-    from ground_station.analysis.battery_model import PackRegistry
     _reg = PackRegistry.load()
     V0 = _reg.ocv_table[0][0] * 4.0  # Assuming 4S
 except Exception: # noqa: BLE001
@@ -75,10 +81,9 @@ def extract_hover_points(series: lc.Series, flight_name: str, skip_s: float = 2.
         sysid = np.zeros(len(t), bool)
 
     # Calculate |vz| and |vxy|
+
     vz = np.abs(g["Ctrler.Z_ratePID.FB"])
-    vxy = np.sqrt(g["Ctrler.locxsPID.FB"]**2 + g["Ctrler.locysPID.FB"]**2) / 100.0 # to m/s? Actually locxs/y are inner pos loops (velocities in cm/s usually). Wait, let's check units.
-    # Usually locxs is cm/s, let's assume cm/s. If cm/s, 40 cm/s = 0.4m/s.
-    vxy = np.sqrt(g["Ctrler.locxsPID.FB"]**2 + g["Ctrler.locysPID.FB"]**2) / 100.0 # assume cm/s based on typical ano codebase
+    vxy = np.sqrt(g["Ctrler.locxsPID.FB"]**2 + g["Ctrler.locysPID.FB"]**2) / 100.0 # locxsPID.FB in cm/s (TASK/StabilizerTask.c:1110)
 
     z_err = np.abs(g["Ctrler.Z_posPID.FB"] - g["Ctrler.Z_posPID.Des"]) * 100.0 # assume m, convert to cm
 

@@ -2,6 +2,16 @@
 """
 from __future__ import annotations
 
+import argparse
+import datetime
+import json
+import subprocess
+from pathlib import Path
+
+import numpy as np
+from scipy import optimize, signal
+
+from ground_station.analysis import log_corpus as lc
 from ground_station.autotune.frf import load_series
 
 """Time-domain output-error fit of attitude plant per axis.
@@ -10,15 +20,7 @@ Simulates the model with ZOH at the log rate from the logged u, minimizes the w 
 for each integer delay D on a grid.
 """
 
-import argparse
-import datetime
-import json
-import math
-import subprocess
-from pathlib import Path
 
-import numpy as np
-from scipy import signal
 
 
 def sim_200hz(u: np.ndarray, b: float, a: float, tau: float, d_ticks: int, dt_log: float) -> tuple[np.ndarray, np.ndarray]:
@@ -45,9 +47,7 @@ def sim_200hz(u: np.ndarray, b: float, a: float, tau: float, d_ticks: int, dt_lo
 
     return w_sim[::n_upsample], m_sim[::n_upsample]
 
-from scipy import optimize
 
-from ground_station.analysis import log_corpus as lc
 
 # Proposed thresholds and bounds
 PROPOSED_MIN_SEGMENT_S = 2.0
@@ -59,86 +59,6 @@ PROPOSED_MIN_TAU = 0.005
 PROPOSED_MAX_TAU = 0.2
 BOUNDS = ([0.0, 0.0, 0.005], [np.inf, np.inf, 0.2])
 
-
-def sim_zoh(u: np.ndarray, b: float, a: float, tau: float, dt: float) -> np.ndarray:
-    """Simulate y' = w, w' = -a*w + b*m, m' = (u - m)/tau with ZOH.
-    State space:
-    x = [w, m]^T
-    x' = [-a, b; 0, -1/tau] x + [0; 1/tau] u
-    y = w
-
-    Using exact ZOH discretization:
-    Phi = expm(A dt)
-    Gamma = int_0^dt expm(A s) ds B
-
-    A = [-a, b; 0, -1/tau]
-    expm(A t) = [exp(-a*t), b*tau/(1-a*tau)*(exp(-a*t) - exp(-t/tau)); 0, exp(-t/tau)]
-    (If a == 1/tau, it's [exp(-a t), b*t*exp(-a t); 0, exp(-a t)]).
-
-    We can just simulate it explicitly step by step or use lfilter.
-    For simplicity, we use the step-by-step matrix mult or lfilter if possible.
-    Since we need to optimize this heavily, let's write an efficient simulation.
-    """
-    n = len(u)
-    np.zeros(n)
-    np.zeros(n)
-
-    # Precompute Phi and Gamma
-    # avoid division by zero if a * tau == 1.0
-    if abs(a * tau - 1.0) < 1e-6:
-        # a = 1/tau limit
-        e_at = math.exp(-a * dt)
-        b * dt * e_at
-
-        (b/a) * (1 - e_at - a*dt*e_at) if a > 1e-6 else b * dt**2 / 2
-        1 - e_at
-    else:
-        e_at = math.exp(-a * dt)
-        e_tau = math.exp(-dt / tau)
-
-        b * tau / (1 - a * tau) * (e_at - e_tau)
-
-        # Gamma = A^-1 (Phi - I) B (if A is invertible)
-        # Gamma2 = 1 - e_tau
-        1 - e_tau
-        if a > 1e-6:
-            # Gamma1 = int_0^dt (b*tau/(1-a*tau)*(exp(-a s) - exp(-s/tau)))/tau ds
-            # = b/(1-a*tau) * [ (1 - e_at)/a - tau*(1 - e_tau) ]
-            b / (1 - a * tau) * ((1 - e_at) / a - tau * (1 - e_tau))
-        else:
-            # a -> 0
-            b * (dt - tau * (1 - e_tau))
-
-    # Fast loop with numba-like or vectorized?
-    # Python loop for thousands of samples is okay, but we can do it faster.
-    # We can write it as an IIR filter.
-    # The transfer function is W(s)/U(s) = b / ((s+a)*(tau*s+1)) = (b/tau) / ((s+a)*(s+1/tau))
-    # We can use scipy.signal.lfilter if we get the discrete TF.
-    # z-transform of ZOH equivalent:
-
-    # state space A, B, C, D
-    A = np.array([[-a, b], [0, -1/tau]])
-    B = np.array([[0], [1/tau]])
-    C = np.array([[1, 0]])
-    D = np.array([[0]])
-
-    sys = signal.StateSpace(A, B, C, D)
-    sys_d = sys.to_discrete(dt)
-
-    # We can use lfilter
-    b_d, a_d = signal.ss2tf(sys_d.A, sys_d.B, sys_d.C, sys_d.D)
-
-    w_out = signal.lfilter(b_d[0], a_d, u)
-    return w_out
-
-
-def fit_segment(u: np.ndarray, w: np.ndarray, dt: float, d_grid: list[int]) -> dict:
-    """Finds best b, a, tau, D for a single segment (or multiple concatenated).
-    We estimate a bias per segment as well, but for simplicity we can just do
-    it inside the optimization or demean. The prompt says "Estimate a constant input bias per segment (trim), not shared across segments."
-    Actually, let's pass a list of segments and optimize b, a, tau globally, while bias_i and D is global?
-    "minimize the w prediction error over (b, a, tau) for each integer delay D on a grid ... pick D by lowest error"
-    """
 
 
 def prepare_segments(series: lc.Series, axis: str, dt_log: float) -> tuple[list[dict], bool, list[dict]]:
@@ -235,15 +155,26 @@ class AttFitter:
         self.d_grid = d_grid
 
 
+
     def _loss(self, params: np.ndarray, delay_idx: int) -> float:
         b, a, tau = params[:3]
-        biases = params[3:]
 
         loss = 0.0
         for i, seg in enumerate(self.segments):
-            u = seg["u"] + biases[i]
+            u = seg["u"]
             w = seg["w"]
-            w_pred, _ = sim_200hz(u, b, a, tau, delay_idx, self.dt)
+            w_pred0, _ = sim_200hz(u, b, a, tau, delay_idx, self.dt)
+
+            step_input = np.ones_like(u)
+            step_resp, _ = sim_200hz(step_input, b, a, tau, delay_idx, self.dt)
+
+            denom = np.sum(step_resp**2)
+            if denom > 1e-9:
+                bias = np.sum(step_resp * (w - w_pred0)) / denom
+            else:
+                bias = 0.0
+
+            w_pred = w_pred0 + bias * step_resp
             loss += np.sum((w - w_pred)**2)
 
         return loss
@@ -274,13 +205,19 @@ class AttFitter:
                 best_d = d
 
         # Calculate validation metrics on the same segments (for one-step and 0.5s ahead)
-        # Actually one-step is tricky with lfilter, 0.5s ahead is also tricky.
         # But we can just report overall error.
 
+        # Calculate final biases analytically
         b, a, tau = best_params[:3]
-        biases = best_params[3:]
+        final_biases = []
+        for seg in self.segments:
+            w_pred0, _ = sim_200hz(seg["u"], b, a, tau, best_d, self.dt)
+            step_resp, _ = sim_200hz(np.ones_like(seg["u"]), b, a, tau, best_d, self.dt)
+            denom = np.sum(step_resp**2)
+            bias = np.sum(step_resp * (seg["w"] - w_pred0)) / denom if denom > 1e-9 else 0.0
+            final_biases.append(bias)
 
-        return b, a, tau, best_d, biases
+        return b, a, tau, best_d, final_biases
 
 def get_git_sha():
     try:
@@ -377,6 +314,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
     out = {}
+    sysid_segs_map = {}
 
     dt = 0.005 # default
     d_grid = list(range(13)) # 0-12 ticks at 200 Hz
@@ -476,12 +414,21 @@ def main(argv: list[str] | None = None) -> int:
             res["pass"] = bool(avg_tic < PROPOSED_TIC_PASS)
 
         out[axis] = res
+        sysid_segs_map[axis] = [seg for data in all_sessions_data.values() if data['is_sysid'] for seg in data['segs']]
 
     # Soft import j-sysid-multi direct_iv
     try:
-        from ground_station.autotune.frf import direct_iv  # noqa: F401
+        from ground_station.autotune.frf import direct_iv
         print("direct_iv found, comparing frequency domain (b, a, tau, D)...")
-        # Just a print as specified
+        for axis in axes:
+            if axis in out and axis in sysid_segs_map:
+                try:
+                    res_iv = direct_iv(sysid_segs_map[axis], axis, dt)
+                    print(f"Axis {axis}: Time Domain (b={out[axis]['b']:.2f}, a={out[axis]['a']:.2f}, tau={out[axis]['tau']:.4f}, D={out[axis]['D_ticks_200hz']}) vs Freq Domain (b={res_iv['b']:.2f}, a={res_iv['a']:.2f}, tau={res_iv['tau']:.4f}, D={res_iv['D']})")
+                    out[axis]["direct_iv"] = {"b": res_iv['b'], "a": res_iv['a'], "tau": res_iv['tau'], "D": res_iv['D']}
+                except Exception as e: # noqa: BLE001
+                    print(f"Could not compute direct_iv for {axis}: {e}")
+
     except ImportError:
         print("Note: direct_iv not found in ground_station/autotune/frf.py")
 
