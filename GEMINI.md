@@ -26,3 +26,5 @@ Every turn re-sends the whole conversation, so each file you open is paid for ag
    own context and returns paths, line numbers and a short summary. Once you call invoke_subagent, make no
    view_file or search calls until its report arrives. Then answer from that summary; open at most 2 ranges,
    and only ranges you will edit or a line the summary left unclear.
+10. Token ceiling: 160K tokens per run, counting you and every subagent you spawn. Stop before it and answer with what
+   you have. Since 2026-10-17 you are a research / second-opinion manager only: do not edit files or commit.
