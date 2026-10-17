@@ -10,7 +10,9 @@ History: `docs/agent/ledger/` (grep, never read whole). Desktop session is CEO: 
 - `lab_h_speed_ladder_l0/l1/l2`: Gerono a60, 67/100/134 cm/s under trajv 80/110/150, heading held (`yaw_follow=0`).
 - Unflashed firmware: 86fe9470 (PID fallback), 37ecf87e (yaw dE wrap + Mahony decouple), d29ada99 (exp rows). The drone still runs 0e6e01b6.
 
-## Next 3 actions (`docs/lab/run-sheet-2026-10-17.md`)
+- **LAB DAY ON HOLD (user, 10-17 08:55):** no flights until the stream ladder is bench-measured: A guard prices the real rate, D 2 Mbaud, B int16/uint8 types, C delta codec after Argon research, E parity frame + link-settled check. Grilling still open (tracker zoom, NN): `.claude_state.md` GRILL line. No code until shared understanding.
+
+## Next 3 actions after the hold (`docs/lab/run-sheet-2026-10-17.md`)
 1. **Reflash** disarmed: `python ground_station/flashtool/rebuild_and_flash.py --yes`, restart 8081, check `arm 0` and `exp_active` streamed.
 2. **F1** `.\fly lab_c_robust --pack <1|2> --once`: first flight of the new yaw code, land if the heading swings.
 3. **E1-E4, H0-H2, then 10-16 F2-F6** in the run-sheet order.
