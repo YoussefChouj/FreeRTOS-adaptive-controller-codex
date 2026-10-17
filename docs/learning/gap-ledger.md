@@ -70,3 +70,10 @@ Firmware facts: dead-zone is a hard step (`API/mrac.c:1282`, on by default `API/
   (payload mass, CG offset); (3) one flight per cell is an anecdote: n >= 3 repeats, interleaved order (battery sag,
   warm motors), effect bigger than tracker noise and flight-to-flight scatter; (4) the cost: margins, drift on long
   hovers (round 3), effort and saturation. Break point: "it improved" vs "adaptation caused the improvement".
+- Q2 (MRAC + NN, why both?): 6/10, answered by a scope cut. Got: the NN is out of the thesis, a drift-fix tool, and
+  shadow mode keeps it out of the control loop, so no thesis result depends on it (say that last part out loud: it is
+  the defence). Then stated the core claim: a configurable MRAC architecture whose layers each adapt to the physics
+  that dominates at their own time and space scale, composable or prunable per problem, and controller-agnostic; the
+  current three-layer variant is one experiment. Missed: the claim is a philosophy, not yet a hypothesis. "Fundamental
+  patterns" is undefined, and no result is named that would prove it wrong. Break point: vision vs falsifiable claim
+  (which layer, which time scale, which perturbation, which metric, what counts as failure).
