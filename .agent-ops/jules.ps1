@@ -22,10 +22,21 @@ $hdr = @{ "x-goog-api-key" = $key }
 function Call($method, $path, $body) {
   $a = @{ Method = $method; Uri = "$api/$path"; Headers = $hdr; UseBasicParsing = $true }
   if ($body) { $a.Body = [Text.Encoding]::UTF8.GetBytes(($body | ConvertTo-Json -Depth 6)); $a.ContentType = "application/json; charset=utf-8" }
-  try { Invoke-RestMethod @a } catch {
-    $code = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { "net" }
-    # Console write: plain output would vanish into the caller's assignment when exit runs
-    [Console]::WriteLine("jules API-ERROR $code on $method $path : $($_.Exception.Message)"); exit 3 }
+  # A VPN or proxy drop must not kill a 90 min wait (2026-10-17: one drop failed 4 runs at once). Retry with backoff:
+  # a GET on a network error, 429 or 5xx; a POST only when the request never left (connect, send or DNS failure),
+  # so a reply is never delivered twice.
+  for ($try = 1; ; $try++) {
+    try { return Invoke-RestMethod @a } catch {
+      $ex = $_.Exception
+      $code = if ($ex.Response) { [int]$ex.Response.StatusCode } else { "net" }
+      $unsent = ($ex -is [Net.WebException]) -and
+        (@("ConnectFailure", "SendFailure", "NameResolutionFailure", "ProxyNameResolutionFailure") -contains "$($ex.Status)")
+      $transient = ($code -eq "net") -or ($code -is [int] -and ($code -eq 429 -or $code -ge 500))
+      if ($try -lt 8 -and ($unsent -or ($method -eq "GET" -and $transient))) {
+        [Console]::WriteLine("jules retry $try on $method $path ($code $($ex.Status))"); Start-Sleep -Seconds (15 * $try); continue }
+      # Console write: plain output would vanish into the caller's assignment when exit runs
+      [Console]::WriteLine("jules API-ERROR $code on $method $path : $($ex.Message)"); exit 3 }
+  }
 }
 function Cut($s, $n) { if (-not $s) { return "" }; $s = ($s -replace "\s+", " ").Trim(); if ($s.Length -gt $n) { $s.Substring(0, $n) + "..." } else { $s } }
 
