@@ -359,8 +359,36 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
                 cmds.append(("mrac_injection",
                              lambda: _send_retry(deps.client, ex.CMD_MRAC_FLAGS, ex.MRAC_IDX_INJECTION, inj)))
             # takeoff set: VAR_WRITEs on the ground before IDLE (g_xy_ctrl_kind latches only on the ground)
+            exp_err = ""
+            def _send_set(var_name: str, var_val: Any) -> bool:
+                nonlocal exp_err
+                if not deps.client.var_write(var_name, var_val):
+                    return False
+                if var_name == "exp_id":
+                    from ground_station.platform import exp_rows
+                    row = exp_rows.exp_by_id(int(var_val))
+                    exp_name = row.name if row else str(int(var_val))
+                    t0 = deps.clock()
+                    seen = False
+                    last = None
+                    while deps.clock() - t0 <= 2.0:
+                        st_now = deps.status()
+                        if "exp_active" in st_now:
+                            seen = True
+                            last = int(st_now["exp_active"])
+                            if last == int(var_val):
+                                return True
+                        deps.sleep(deps.dt_s)
+                    if not seen:
+                        exp_err = f"exp {exp_name}: exp_active not streamed"
+                    else:
+                        v_str = f"0x{last:02X}" if last == 0xEE else str(last)
+                        exp_err = f"exp {exp_name}: exp_active={v_str} (want {int(var_val)})"
+                    return False
+                return True
+
             for name, v in st.args.get("set", ()):
-                cmds.append((f"set {name}", lambda name=name, v=v: deps.client.var_write(name, v)))
+                cmds.append((f"set {name}", lambda name=name, v=v: _send_set(name, v)))
             cmds.append(("set_hover_z", lambda: deps.client.set_hover_z(scenario.hover_z_m)))
             preload_already_done = runner._preload_uploaded if runner is not None else False
             if preload is not None and not preload_already_done:
@@ -390,7 +418,7 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
             elif (refused or (gate_why := _gate_problem(deps.status()) or _takeover_problem(auth_idle, deps.status()))
                   or not deps.client.takeoff()):
                 refused = refused or "takeoff"
-                why = gate_why or preload_err or getattr(deps.client, "last_error", "") or "not applied"
+                why = exp_err or gate_why or preload_err or getattr(deps.client, "last_error", "") or "not applied"
                 hint = " (operator: flymode 1, arm by RC, hands off the sticks)" if refused == "idle" and not deps.agent_arms else ""
                 decision = AbortDecision(level=1, reason=f"takeoff refused at {refused}: {why}{hint}")
                 ok = False

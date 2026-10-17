@@ -661,6 +661,15 @@ def list_gain_presets(livetune_path=None):
         print(f"Note: {p} not found (run F2 and F3 first to generate livetune gains)")
 
 
+def list_exp_rows():
+    """Print the experiment rows from TASK/StabilizerTask.c."""
+    from ground_station.platform import exp_rows
+    rows = exp_rows.exp_rows()
+    print(f"{'name':<10} {'id':>3} {'xy':>3} {'kp':>3} {'vp':>3} {'lim':>4} {'mdec':>5} {'xyrm':>5}")
+    for r in rows:
+        print(f"{r.name:<10} {r.id:>3} {r.xy:>3} {r.kp:>3} {r.vp:>3} {r.lim:>4} {r.mdec:>5} {r.xyrm:>5}")
+
+
 def dry_run(campaign, pack=None, rate=None, gains=None, no_gains=False,
             post_takeoff_gains=None, livetune_path=None):
     """Compile scenario, print resolved gains, trajectory preload summary, and scenario plan without contacting 8081."""
@@ -1402,11 +1411,15 @@ def main(argv=None):
     ap.add_argument("--restore-defaults", action="store_true", help="write API/pid.c defaults to RAM stop-and-wait")
     ap.add_argument("--yes", "-y", action="store_true", help="skip y/N consent prompt for gain writes")
     ap.add_argument("--list-gains", action="store_true", help="list all available gain presets and exit")
+    ap.add_argument("--list-exp", action="store_true", help="list all experiment rows and exit")
     ap.add_argument("--dry-run", action="store_true", help="compile .fly scenario and print execution plan without contacting 8081")
     ap.add_argument("--post-takeoff-gains", help="preset name to write once airborne in HOVER (takes off on ground/default gains)")
     a = ap.parse_args(argv)
     if a.list_gains:
         list_gain_presets()
+        return 0
+    if a.list_exp:
+        list_exp_rows()
         return 0
     if a.dry_run:
         if not a.campaign:

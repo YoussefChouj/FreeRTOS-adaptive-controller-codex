@@ -1,0 +1,17 @@
+# E1/4 pid_3l: 3-layer adaptive matrix, hover then figure-8. Flight order: lab_e_exp_matrix (pid_3l),
+#   lab_e_exp_adrc_3l, lab_e_exp_lqr_3l, lab_e_exp_mpc_3l. The four differ only in this header, campaign and exp.
+# Fly it: fly lab_e_exp_matrix --once at >= 15.8 V resting.
+# exp pid_3l = xy 0, kp 7, vp 16, lim 0, mdec 1, xyrm -1 (follows xy: s_xyrm row 0, bw 2.0 measured);
+#   `python -m ground_station.service.campaign_fly --list-exp` prints every row. The exp row sets g_xy_ctrl_kind.
+# The set line is lab_c_pid.fly:7 without g_xy_ctrl_kind.
+campaign lab-e-exp-matrix
+rate 100
+log velocity_loops camera_fusion
+exp pid_3l
+set g_traj_ff_shift_s=0 g_land_xy_gate_cm=10 g_xyc_delay_ticks=12
+takeoff 0.5
+hold 3
+set traj_p.move_s=12 traj_p.hold_s=1
+preset figure8 f8_a_cm=30
+hold 3
+land

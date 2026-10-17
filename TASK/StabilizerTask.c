@@ -24,7 +24,10 @@
 #include "wfb_prim.h"
 #include "xy_ctrl.h"        /* ADRC / LQR / MPC xy outer loops (g_xy_ctrl_kind) */
 #include "land_xy_gate.h"   /* camera pad gate for the land (g_land_xy_gate_cm) */
+#include "exp_row.h"
 extern volatile float g_land_xy_gate_cm;   /* defined with the xy_ctrl VARs below */
+extern volatile uint8_t g_xy_ctrl_kind;
+extern volatile uint8_t g_imu_mahony_yaw_decouple;
 /* WFB END glue */
 extern volatile uint8_t traj_active;   /* AutoflyTask.c: id of the running Keil preset, 0 idle */
 
@@ -157,6 +160,7 @@ float g_vxy_des_max = 120.0f;       /* cm/s  */
 float g_yawrate_des_max = 90.0f;    /* deg/s */
 float g_traj_v_max_cms = 80.0f;     /* cm/s, AutoflyTask refuses faster trajectories */
 volatile uint8_t vp_id = 0U, vp_active = 0U;
+volatile uint8_t exp_id = 0xFFU, exp_active = 0xFFU;
 
 float Sin_roll_01= 0;
 float Cos_roll_01= 0;
@@ -1570,6 +1574,81 @@ static void Keil_VariantPoll(FlightState_t state)
 	vp_active = ok ? id : 0xEEU;
 }
 
+/* Experiment rows (docs/agent/briefs/WP-46.md). One write to exp_id picks controller, adaptation,
+ * limits and reference model on the ground.
+ * Legend (tools/row_meta.py, bounds PROPOSED):
+ *   @xy     -      [0, 255]   g_xy_ctrl_kind (0-3, 0xFF keep)
+ *   @kp     -      [0, 255]   kp_id (0-7, 0xFF keep)
+ *   @vp     -      [0, 255]   vp_id (0-24, 0xFF keep)
+ *   @lim    -      [0, 255]   lim_mode (0-2, 0xFF keep)
+ *   @mdec   -      [0, 255]   g_imu_mahony_yaw_decouple (0/1, 0xFF keep)
+ *   @xyrm   -      [-1, 127]  s_xyrm row (-1 auto/follow xy, 0-3, 0xFF keep)
+ *   @layer  -      [0, 255]   reserved layer (0 off) */
+#define EXP_ROW(name, xy, kp, vp, lim, mdec, xyrm, layer)  { (xy), (kp), (vp), (lim), (mdec), (xyrm), (layer) }
+static const ExpRow_t s_exp[] = {
+	/*         name       xy    kp    vp    lim   mdec  xyrm  layer */
+	EXP_ROW(   pid,       0U,   7U,   0U,   0U,   1U,   -1,   0U ),  /* 0 PROPOSED */
+	EXP_ROW(   adrc,      1U,   7U,   0U,   0U,   1U,   -1,   0U ),  /* 1 PROPOSED */
+	EXP_ROW(   lqr,       2U,   7U,   0U,   0U,   1U,   -1,   0U ),  /* 2 PROPOSED */
+	EXP_ROW(   mpc,       3U,   7U,   0U,   0U,   1U,   -1,   0U ),  /* 3 PROPOSED */
+	EXP_ROW(   pid_3l,    0U,   7U,  16U,   0U,   1U,   -1,   0U ),  /* 4 PROPOSED */
+	EXP_ROW(   adrc_3l,   1U,   7U,  16U,   0U,   1U,   -1,   0U ),  /* 5 PROPOSED */
+	EXP_ROW(   lqr_3l,    2U,   7U,  16U,   0U,   1U,   -1,   0U ),  /* 6 PROPOSED */
+	EXP_ROW(   mpc_3l,    3U,   7U,  16U,   0U,   1U,   -1,   0U ),  /* 7 PROPOSED */
+};
+
+/* xy reference model per controller kind (step D fit to figure-8 velocity profile).
+ * Legend (tools/row_meta.py, bounds PROPOSED):
+ *   @ref_type  -      [0, 2]     ref_type (1.0 first order, 2.0 second order)
+ *   @bw        rad/s  [0.5, 50]  ref_model_bw
+ *   @crm_ell   1/s    [0, 50]    crm_ell (0 off)
+ *   @g         -      [0, 2]     gamma scale */
+#define XYRM_ROW(ref_type, bw, crm_ell, g)  { (ref_type), (bw), (crm_ell), (g) }
+static const XyRm_t s_xyrm[4] = {
+	/*          ref_type    bw     crm_ell    g   */
+	XYRM_ROW(   1.0f,     2.0f,     0.0f,   1.0f ),  /* 0 PID: measured 2.0 */
+	XYRM_ROW(   1.0f,     2.2f,     0.0f,   1.0f ),  /* 1 ADRC: PROPOSED (SIL fit) */
+	XYRM_ROW(   1.0f,     4.8f,     0.0f,   1.0f ),  /* 2 LQR: PROPOSED (SIL fit) */
+	XYRM_ROW(   1.0f,     4.4f,     0.0f,   1.0f ),  /* 3 MPC: PROPOSED (SIL fit) */
+};
+
+static uint8_t s_exp_last = 0xFFU;
+
+static void Exp_Poll(FlightState_t state)
+{
+	int8_t xyrm = -1;
+	uint8_t res, on_ground;
+	ExpKnobs_t knobs;
+
+	knobs.xy_kind = &g_xy_ctrl_kind;
+	knobs.kp_id = &kp_id;
+	knobs.vp_id = &vp_id;
+	knobs.lim_mode = &lim_mode;
+	knobs.mdec = &g_imu_mahony_yaw_decouple;
+
+	on_ground = Keil_OnGround(state);
+	res = Exp_Step(exp_id, &s_exp_last, exp_active, on_ground,
+	               s_exp, (uint8_t)(sizeof(s_exp) / sizeof(s_exp[0])),
+	               &knobs, &xyrm);
+
+	if (xyrm >= 0 && xyrm < (int8_t)(sizeof(s_xyrm) / sizeof(s_xyrm[0]))) {
+		uint8_t ok = 1U;
+		const XyRm_t *r = &s_xyrm[xyrm];
+		ok &= MRAC_VariantParamSet(MRAC_AXIS_X, MRAC_VF_REF_TYPE,     r->ref_type);
+		ok &= MRAC_VariantParamSet(MRAC_AXIS_X, MRAC_VF_REF_MODEL_BW, r->bw);
+		ok &= MRAC_VariantParamSet(MRAC_AXIS_X, MRAC_VF_CRM_ELL,      r->crm_ell);
+		ok &= MRAC_VariantParamSet(MRAC_AXIS_X, MRAC_VF_GAMMA_SCALE,  r->g);
+		ok &= MRAC_VariantParamSet(MRAC_AXIS_Y, MRAC_VF_REF_TYPE,     r->ref_type);
+		ok &= MRAC_VariantParamSet(MRAC_AXIS_Y, MRAC_VF_REF_MODEL_BW, r->bw);
+		ok &= MRAC_VariantParamSet(MRAC_AXIS_Y, MRAC_VF_CRM_ELL,      r->crm_ell);
+		ok &= MRAC_VariantParamSet(MRAC_AXIS_Y, MRAC_VF_GAMMA_SCALE,  r->g);
+		if (!ok) {
+			res = 0xEEU;
+		}
+	}
+	exp_active = res;
+}
+
 /* Keil debug manual motor override (dbg_motor_manual / dbg_motor_ccr, see their definition).
  * DISARMED-only. Returns 1 when it owned the motors this tick. */
 static uint8_t Motor_DebugOverride(FlightState_t state)
@@ -1757,6 +1836,7 @@ void Update_Motor(void)
 
 	if (Motor_TestOverride(state)) return;
 
+	Exp_Poll(state);
 	Keil_PresetPoll(state);
 	Keil_VariantPoll(state);
 	Lab_StagePoll(state);

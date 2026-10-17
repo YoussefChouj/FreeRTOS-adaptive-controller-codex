@@ -85,6 +85,7 @@ def compile_fly(text: str, src: str = "<fly>") -> tuple[dict[str, Any], list[int
     steps: list[dict[str, Any] | str] = []
     lines: list[int] = []
     sticky: dict[str, Any] = {}
+    exp_target: tuple[str, int] | None = None
     for n, raw in enumerate(text.splitlines(), 1):
         where = f"{src}:{n}"
         body = raw.split("#", 1)[0].rstrip()
@@ -105,6 +106,22 @@ def compile_fly(text: str, src: str = "<fly>") -> tuple[dict[str, Any], list[int
                 problems.append(f"{where}: an indented line must follow a program line")
                 continue
             parent["program"].setdefault("ops", []).append({word: _pairs(rest, where, problems)})
+            continue
+        if word == "exp":
+            from ground_station.platform import exp_rows
+            valid = [r.name for r in exp_rows.exp_rows()]
+            if steps:
+                problems.append(f"{where}: exp must come before every step line (later set lines override its columns)")
+            elif len(rest) != 1 or "=" in rest[0]:
+                problems.append(f"{where}: expected exp <name>; valid: {', '.join(valid)}")
+            elif exp_target is not None:
+                problems.append(f"{where}: exp given twice")
+            else:
+                row = exp_rows.exp_by_name(rest[0])
+                if row is None:
+                    problems.append(f"{where}: unknown exp {rest[0]!r}; valid: {', '.join(valid)}")
+                else:
+                    exp_target = (row.name, row.id)
             continue
         if word in HEADERS:
             if steps:
@@ -143,13 +160,22 @@ def compile_fly(text: str, src: str = "<fly>") -> tuple[dict[str, Any], list[int
     lead = next((i for i, s in enumerate(steps) if not (isinstance(s, dict) and "set" in s)), len(steps))
     ground = {k: v for s in steps[:lead] for k, v in s["set"].items()}
     del steps[:lead], lines[:lead]
-    if not steps:
+    if not steps and exp_target is None:
         problems.append(f"{src}: no steps")
     if steps and not (isinstance(steps[0], dict) and "takeoff" in steps[0]):
         steps.insert(0, {"takeoff": {"z": DEFAULT_TAKEOFF_Z}})
         lines.insert(0, 0)
-    if steps and ground:
-        steps[0]["takeoff"]["set"] = {**ground, **steps[0]["takeoff"].get("set", {})}
+    elif not steps and exp_target is not None:
+        steps.insert(0, {"takeoff": {"z": DEFAULT_TAKEOFF_Z}})
+        lines.insert(0, 0)
+    if steps and (ground or exp_target is not None):
+        combined = {}
+        if exp_target is not None:
+            combined["exp_id"] = exp_target[1]
+        combined.update(ground)
+        if "set" in steps[0]["takeoff"]:
+            combined.update(steps[0]["takeoff"]["set"])
+        steps[0]["takeoff"]["set"] = combined
     if steps and steps[-1] != "land":
         steps.append("land")
         lines.append(0)

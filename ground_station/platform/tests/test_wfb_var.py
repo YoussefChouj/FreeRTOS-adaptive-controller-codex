@@ -12,6 +12,7 @@ from ground_station.platform.wfb_commands import WfbClient
 
 C = wfb_var.SOURCE.read_text(encoding="utf-8")
 STAB = (wfb_var.SOURCE.parent / "StabilizerTask.c").read_text(encoding="utf-8")
+IMU = (wfb_var.SOURCE.parents[1] / "API" / "imu_update.c").read_text(encoding="utf-8")
 
 
 def _client(frames: list[bytes]) -> WfbClient:
@@ -53,7 +54,7 @@ def test_every_c_row_parses() -> None:
     """Every VAR_WRITE_ROW line of the table parses (load_rows refuses repeated names and ids)."""
     lines = re.findall(r"^[ \t]*VAR_WRITE_ROW\(", C, re.M)
     rows = wfb_var.load_rows()
-    assert len(rows) == len(lines) == 39
+    assert len(rows) == len(lines) == 43
     assert all(1 <= r.id <= 254 and r.min <= r.max for r in rows.values())
 
 
@@ -69,7 +70,7 @@ def test_row_types_match_c_declarations() -> None:
         if row.name.startswith("traj_p."):
             ctype = fields[row.name.split(".", 1)[1]]
         else:
-            decl = re.search(r"^volatile (uint8_t|float) [^;]*\b%s\s*=" % row.name, C + STAB, re.M)
+            decl = re.search(r"^volatile (uint8_t|float) [^;]*\b%s\s*=" % row.name, C + STAB + IMU, re.M)
             assert decl, row.name
             ctype = decl.group(1)
         assert (ctype == "uint8_t") == row.integer, row.name

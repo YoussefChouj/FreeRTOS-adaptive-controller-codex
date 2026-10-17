@@ -452,6 +452,8 @@ extern volatile float g_land_xy_gate_cm;                               /* Stabil
 extern volatile uint8_t g_xyc_delay_ticks;                             /* StabilizerTask.c */
 extern volatile uint8_t g_rc_pid_fallback_ch;                          /* StabilizerTask.c */
 extern volatile uint8_t g_ctrl_pid_fallback;                           /* StabilizerTask.c */
+extern volatile uint8_t exp_id, vp_id, lim_mode;                     /* StabilizerTask.c */
+extern volatile uint8_t g_imu_mahony_yaw_decouple;                   /* API/imu_update.h */
 
 static const VarWriteRow_t s_var_write[] = {
 /*                var                 type    id    min      max            range source */
@@ -495,7 +497,11 @@ static const VarWriteRow_t s_var_write[] = {
     VAR_WRITE_ROW(g_land_xy_gate_cm,  VW_F32, 46,   0.0f,    50.0f  ),  /* cm, land pause radius; 0 off  */
     VAR_WRITE_ROW(g_xyc_delay_ticks,  VW_U8,  47,   1,       48     ),  /* ticks, LQR/MPC predictor; ground */
     VAR_WRITE_ROW(g_rc_pid_fallback_ch, VW_U8, 48,  0,       16     ),  /* RC aux ch: 0 disabled, 1..16  */
-    VAR_WRITE_ROW(g_ctrl_pid_fallback,  VW_U8, 49,  0,       1      )   /* direct fallback trigger: bool */
+    VAR_WRITE_ROW(g_ctrl_pid_fallback,  VW_U8, 49,  0,       1      ),  /* direct fallback trigger: bool */
+    VAR_WRITE_ROW(exp_id,              VW_U8, 50,  0,       7      ),  /* s_exp rows 0..7               */
+    VAR_WRITE_ROW(vp_id,               VW_U8, 51,  0,       24     ),  /* s_vp rows 0..24               */
+    VAR_WRITE_ROW(lim_mode,            VW_U8, 52,  0,       2      ),  /* s_lim rows 0..2               */
+    VAR_WRITE_ROW(g_imu_mahony_yaw_decouple, VW_U8, 53, 0,     1      )   /* bool                          */
 };
 
 /* GS CMD 0x2D: write row `id` = val. Returns 0 (written) or a VAR_WRITE_REJECT_* code (nothing written);

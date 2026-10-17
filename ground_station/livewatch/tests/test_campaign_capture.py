@@ -32,7 +32,7 @@ DWARF_ONLY = {"real_voltage", "flight_phase", cc.KF_HEALTH, *cc.WFB_STATUS, *cc.
 # ---- the campaign set ---------------------------------------------------------------------------------
 
 def test_set_sizes_and_order():
-    assert len(NEEDED) == 42 and len(OPTIONAL) == 20 + 8 * cc.MRAC_N_FEATURES   # 68 STRUCT6, 260 MULTI
+    assert len(NEEDED) == 43 and len(OPTIONAL) == 20 + 8 * cc.MRAC_N_FEATURES   # 68 STRUCT6, 260 MULTI
     assert NEEDED[:len(REQUIRED_SYNC_VARS)] == REQUIRED_SYNC_VARS
     scoring = [n for a in cc.POSITION_AXES for n in (a.feedback, a.reference)] + list(cc.MOTORS)
     assert set(scoring) <= set(NEEDED)
@@ -83,15 +83,15 @@ def test_plan_respects_slot_limits_and_budget(rate):
 @STRUCT6_ONLY
 def test_50hz_records_everything():
     slots, dropped = slots_for(50)
-    assert [(s["hz"], len(s["vars"])) for s in slots] == [(50.0, 62), (50.0, 47)]
-    assert dropped == [] and _guard_bps(slots) == 46000
+    assert [(s["hz"], len(s["vars"])) for s in slots] == [(50.0, 62), (50.0, 49)]
+    assert dropped == [] and _guard_bps(slots) == 46800
 
 
-def test_100hz_drops_the_last_28_optional():
+def test_100hz_drops_the_last_30_optional():
     slots, dropped = slots_for(100)
     assert [(s["hz"], len(s["vars"])) for s in slots] == [(100.0, 62), (100.0, 19)]
     assert _guard_bps(slots) == 52000 + 17600  # one more var would cost 70400 > 70041.6
-    assert dropped == list(OPTIONAL[39:])
+    assert dropped == list(OPTIONAL[38:])  # 81 vars fit: 43 core + 38 optional
 
 
 def test_divider_truncates_like_the_live_host():
@@ -265,17 +265,17 @@ def test_plan_capture_keeps_group_order_and_caps_at_the_probed_rate():
 @STRUCT6_ONLY
 def test_plan_capture_drops_group_tail_at_100hz():
     plan = cc.plan_capture({"rate_hz": 100, "groups": ["optical_flow", "mrac_shadow"]})
-    assert plan["dropped"] == list(OPTIONAL[35:])  # 81 vars fit at 100 Hz: 41 core + 5 flow + 35 shadow
+    assert plan["dropped"] == list(OPTIONAL[33:])  # 81 vars fit at 100 Hz: 43 core + 5 flow + 33 shadow
     table = cc.log_plan_table(plan)
-    assert "| core (always on) | 42/42 | 100 |  |" in table
+    assert "| core (always on) | 43/43 | 100 |  |" in table
     assert "| optical_flow | 5/5 | 100 |  |" in table
-    assert "| mrac_shadow | 35/68 | 100 | 33 dropped (link budget) |" in table
+    assert "| mrac_shadow | 33/68 | 100 | 35 dropped (link budget) |" in table
     assert table.splitlines()[-1].startswith("2 slot(s), 69600 of 70042 B/s")
 
 
 def test_log_plan_table_notes_a_capped_rate():
     table = cc.log_plan_table(cc.plan_capture({"rate_hz": 100}, max_rate_hz=25))
-    assert "| core (always on) | 42/42 | 25 |  |" in table
+    assert "| core (always on) | 43/43 | 25 |  |" in table
     assert "requested 100 Hz" in table.splitlines()[-1]
 
 
