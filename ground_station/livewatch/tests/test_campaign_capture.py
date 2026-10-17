@@ -58,7 +58,7 @@ def test_every_symbol_resolves_in_the_elf_as_one_scalar():
     from ground_station.livewatch.symbols import SymbolResolver
 
     resolver = SymbolResolver(ELF)
-    sizes = {v: resolver.resolve(v).size for v in ALL_VARS + cc.VELOCITY_LOOPS + cc.OPTICAL_FLOW}
+    sizes = {v: resolver.resolve(v).size for v in ALL_VARS + cc.VELOCITY_LOOPS + cc.OPTICAL_FLOW + cc.XY_CTRL + cc.NN4}
     assert {v: s for v, s in sizes.items() if not 1 <= s <= 4} == {}
 
 
@@ -219,10 +219,13 @@ def test_read_rejects_non_json(tmp_path):
 # ---- per-experiment log plan ---------------------------------------------------------------------------
 
 def test_log_groups_are_disjoint_from_needed_and_each_other():
-    group_vars = [v for g in cc.LOG_GROUPS.values() for v in g]
+    # nn4 is the drift net's input list, so it overlaps on purpose; plan_capture records a variable once.
+    group_vars = [v for name, g in cc.LOG_GROUPS.items() if name != "nn4" for v in g]
     assert len(set(group_vars)) == len(group_vars)
     assert not set(group_vars) & set(NEEDED)
     assert cc.LOG_GROUPS["mrac_shadow"] == OPTIONAL
+    from ground_station.analysis.video_truth import NN4_CH
+    assert cc.NN4 == NN4_CH[1] + NN4_CH[2]
 
 
 @pytest.mark.parametrize("log_plan, problem", [
@@ -235,6 +238,12 @@ def test_log_groups_are_disjoint_from_needed_and_each_other():
     ({"groups": "optical_flow"}, "list of group names"),
     ({"groups": ["gyro"]}, "unknown group 'gyro'"),
     ({"groups": ["optical_flow", "optical_flow"]}, "twice"),
+    ({"slow_hz": 0}, "slow_hz"),
+    ({"slow_hz": "25"}, "slow_hz"),
+    ({"slow": "nn4"}, "slow: must be a list of group names"),
+    ({"slow": ["gyro"]}, "slow: unknown group 'gyro'"),
+    ({"slow": ["nn4", "nn4"]}, "slow: a group is listed twice"),
+    ({"groups": ["nn4", "xy_ctrl"], "slow": ["nn4"]}, "slow: nn4 also in groups"),
 ])
 def test_check_log_plan_problems(log_plan, problem):
     problems = cc.check_log_plan(log_plan)
@@ -271,6 +280,39 @@ def test_plan_capture_drops_group_tail_at_100hz():
     assert "| optical_flow | 5/5 | 100 |  |" in table
     assert "| mrac_shadow | 33/68 | 100 | 35 dropped (link budget) |" in table
     assert table.splitlines()[-1].startswith("2 slot(s), 69600 of 70042 B/s")
+
+
+def test_two_speed_plan_fills_the_link_without_repeats():
+    slow = ["nn4", "xy_ctrl", "mrac_3l", "ekf_states", "estimator_truth"]
+    plan = cc.plan_capture({"rate_hz": 100, "groups": ["velocity_loops", "camera_fusion"], "slow": slow})
+    hz = [s["hz"] for s in plan["slots"]]
+    assert hz[0] == 100.0 and len(hz) >= 2 and set(hz[1:]) == {25.0} and plan["slow_hz"] == 25.0
+    assert [s["slot"] for s in plan["slots"]] == list(range(len(hz)))
+    recorded = [v for s in plan["slots"] for v in s["vars"]]
+    assert len(recorded) == len(set(recorded)) and plan["dropped"] == []
+    assert set(cc.NN4 + cc.XY_CTRL) <= set(recorded)
+    assert cc.plan_bps(plan["slots"]) <= cc.PLANNING_BUDGET_BPS
+    table = cc.log_plan_table(plan)
+    assert f"| xy_ctrl | {len(cc.XY_CTRL)}/{len(cc.XY_CTRL)} | 25 |  |" in table
+    assert f"{len(hz)} slot(s), {cc.plan_bps(plan['slots']):.0f} of 70042 B/s" in table.splitlines()[-1]
+
+
+def test_slow_lane_skips_fast_vars_and_trims_to_the_budget():
+    core_bps = cc.plan_bps(cc.plan_capture()["slots"])
+    five_at_25 = (cc.FRAME_OVERHEAD + 5 * cc.DEFAULT_VALUE_BYTES) * cc.GUARD_SEND_HZ / 4
+    plan = cc.plan_capture({"slow": ["nn4"]}, budget_bps=core_bps + five_at_25)
+    slow_vars = [v for v in cc.NN4 if v not in NEEDED]
+    assert plan["slots"][1] == {"slot": 1, "hz": 25.0, "vars": slow_vars[:5]}
+    assert plan["dropped"] == slow_vars[5:]
+    in_core = len(set(cc.NN4) & set(NEEDED))
+    assert in_core and f"{in_core} at 50 Hz (in a fast group)" in cc.log_plan_table(plan)
+
+
+def test_slow_lane_never_runs_faster_than_the_fast_lane():
+    plan = cc.plan_capture({"rate_hz": 10, "slow": ["xy_ctrl"]})
+    assert plan["slow_hz"] == 10.0 and [s["hz"] for s in plan["slots"]] == [10.0, 10.0]
+    assert cc.plan_capture({"slow": []})["slow_hz"] is None
+    assert "| xy_ctrl | 0/" not in cc.log_plan_table(plan)
 
 
 def test_log_plan_table_notes_a_capped_rate():
