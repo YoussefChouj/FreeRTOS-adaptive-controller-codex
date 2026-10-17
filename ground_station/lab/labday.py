@@ -1,0 +1,324 @@
+"""Fly a lab day's .fly files in order: `.\\labday <date>` reads docs/lab/days/<date>.yaml.
+
+    .\\labday 2026-10-17 --pack 2      # ground dry run of every flight, then fly them one by one
+    .\\labday 2026-10-17 --list        # the day's plan and what is flown already, no flight
+    .\\labday 2026-10-17 --sheet       # the run sheet as markdown, made from the day file
+
+Each flight is the unchanged `.\\fly <name> --once` (ground_station/service/campaign_fly.py) run as a child process,
+so its keys, gain prompts, arm wait, pack checks and debrief are the same as by hand. Around it the player starts the
+camera fusion (camera_truth.sh fusion, exit 0 = running, as runner.py) and stops it after the landing. It stops for
+analysis after the flights marked `stop: true`, and on its own when a flight ends badly (fly exits non-zero, or its
+debrief status is not "complete"); the day file's branches table says what to do then. logs/lab/<date>/
+labday_state.json keeps what was flown: the same command again goes on where it stopped (--from ID starts there).
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import yaml
+
+from ground_station.lab import events
+from ground_station.lab.runner import CAMERA_SH, LAB_DIR, NORMAL_END, VIDEO_DIR, git_bash
+from ground_station.service.campaign_launch import ROOT, rel
+
+DAYS_DIR = ROOT / "docs" / "lab" / "days"
+CAMPAIGNS = ROOT / "ground_station" / "service" / "campaigns"
+FLY = [sys.executable, "-m", "ground_station.service.campaign_fly"]
+
+
+def load_day(path):
+    """The day file as a dict, checked: unique flight ids, each with a .fly name that exists."""
+    path = Path(path)
+    d = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    flights = d.get("flights") or []
+    if not flights:
+        raise ValueError(f"{rel(path)}: no flights")
+    seen = set()
+    for i, f in enumerate(flights):
+        fid, name = str(f.get("id") or ""), str(f.get("fly") or "")
+        if not fid or not name:
+            raise ValueError(f"{rel(path)}: flight {i + 1} needs an id and a fly name")
+        if fid in seen:
+            raise ValueError(f"{rel(path)}: flight id {fid} twice")
+        if not (CAMPAIGNS / f"{name}.fly").is_file():
+            raise ValueError(f"{rel(path)}: {fid}: no {rel(CAMPAIGNS / (name + '.fly'))}")
+        seen.add(fid)
+        f["id"], f["args"] = fid, [str(a) for a in f.get("args") or []]
+    d["flights"], d["branches"] = flights, d.get("branches") or []
+    return d
+
+
+def day_path(date):
+    p = Path(date)
+    return p if p.suffix in (".yaml", ".yml") else DAYS_DIR / f"{date}.yaml"
+
+
+def fly_cmd(f, pack=None, dry=False):
+    return FLY + [f["fly"], "--dry-run" if dry else "--once"] + (["--pack", pack] if pack else []) + f["args"]
+
+
+def shown(f):
+    return " ".join([".\\fly", f["fly"], "--once"] + f["args"])
+
+
+def sheet(d):
+    """The run sheet (markdown) from the day file: one table row per flight, then the branches."""
+    out = [f"# Run sheet {d.get('day', '')}: {d.get('title', '')}".rstrip(": "), "",
+           f"Generated from `docs/lab/days/{d.get('day', '<date>')}.yaml` by `.\\labday {d.get('day', '<date>')} "
+           "--sheet`; fly it with `.\\labday " f"{d.get('day', '<date>')} --pack <1|2>`. Pass marks are PROPOSED "
+           "unless they say MEASURED.", ""]
+    if d.get("before"):
+        out += ["## Before the first flight", ""] + [f"{i}. {s}" for i, s in enumerate(d["before"], 1)] + [""]
+    out += ["## Flights", "", "| # | Command | What it tests | Pass | Stop after |", "|---|---|---|---|---|"]
+    for f in d["flights"]:
+        why, ok = (str(f.get(k) or "").replace("|", "\\|").strip() for k in ("why", "pass"))
+        out.append(f"| {f['id']} | `{shown(f)}` | {why} | {ok} | {'yes' if f.get('stop') else ''} |")
+    if d["branches"]:
+        out += ["", "## Branches & fallbacks", "", "| Event | Do |", "|---|---|"]
+        out += [f"| {b.get('when', '')} | {b.get('do', '')} |" for b in d["branches"]]
+    return "\n".join(out) + "\n"
+
+
+def state_file(day):
+    return LAB_DIR / str(day) / "labday_state.json"
+
+
+def load_state(path):
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"flown": {}, "skipped": []}
+
+
+def save_state(path, state):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text(json.dumps(state, indent=1) + "\n", encoding="utf-8")
+
+
+def todo(d, state, start=None):
+    """The flights left, in order: from `start` (an id) when given, else those not flown well nor skipped."""
+    ids = [f["id"] for f in d["flights"]]
+    if start:
+        if start not in ids:
+            raise ValueError(f"--from {start}: not a flight id ({', '.join(ids)})")
+        return d["flights"][ids.index(start):]
+    done = {k for k, r in state["flown"].items() if r.get("ok")} | set(state["skipped"])
+    return [f for f in d["flights"] if f["id"] not in done]
+
+
+def bad_end(rc, ev):
+    """Why a flight ended badly, or None: fly's exit code, then the debrief status it logged."""
+    if rc != 0:
+        return f"fly exited {rc}"
+    if not ev:
+        return "no debrief logged (no flight: quit at the arm wait, or GO refused)"
+    if ev.get("status") != NORMAL_END:
+        return f"ended {ev.get('status')} in {ev.get('phase')}"
+    return None
+
+
+def debrief_event(pid, since):
+    """The last `debrief` event the child `pid` wrote to the events log after `since` (a byte offset per file)."""
+    found = None
+    for p, off in since.items():
+        try:
+            with open(p, encoding="utf-8") as fh:
+                fh.seek(off)
+                for line in fh:
+                    try:
+                        r = json.loads(line)
+                    except ValueError:
+                        continue
+                    if r.get("event") == "debrief" and r.get("pid") == pid:
+                        found = r
+        except OSError:
+            pass
+    return found
+
+
+def log_offsets():
+    """Byte offsets of today's and tomorrow's events log (a flight past midnight writes to the next file)."""
+    out = {}
+    for t in (time.time(), time.time() + 86400):
+        p = events.root() / f"{time.strftime('%Y-%m-%d', time.localtime(t))}.jsonl"
+        out[p] = p.stat().st_size if p.is_file() else 0
+    return out
+
+
+class Day:
+    """The interactive part: dry run, prompts, camera and the resume file around each `.\\fly --once`."""
+
+    def __init__(self, d, state_path, pack=None, camera=True, ask=input, run=None, popen=None):
+        self.d, self.state_path, self.pack = d, Path(state_path), pack
+        self.cam = (d.get("camera") or {}) if camera else {}
+        self.ask, self.run, self.popen = ask, run or subprocess.run, popen or subprocess.Popen
+        self.state = load_state(self.state_path)
+
+    def say(self, *lines):
+        print("\n".join(lines), flush=True)
+
+    def dry_run(self, flights):
+        """Ground dry run of every flight left (no 8081): the names of those that fail."""
+        bad = []
+        for f in flights:
+            r = self.run(fly_cmd(f, self.pack, dry=True), cwd=ROOT, capture_output=True, text=True,
+                         stdin=subprocess.DEVNULL)
+            ok = r.returncode == 0
+            self.say(f"  dry run {f['id']:<4} {f['fly']:<26} {'OK' if ok else 'FAILED'}")
+            if not ok:
+                bad.append(f["id"])
+                self.say(*["      " + s for s in ((r.stdout or "") + (r.stderr or "")).strip().splitlines()[-8:]])
+        events.log("labday_dry_run", day=self.d.get("day"), n=len(flights), failed=bad)
+        return bad
+
+    def camera(self, *args):
+        env = {**os.environ, "CT_FLOOR": f"logs/video_truth/{self.cam.get('floor', '')}"}
+        return self.run([git_bash(), CAMERA_SH, *args], cwd=ROOT, env=env, stdin=subprocess.DEVNULL).returncode
+
+    def camera_start(self, name):
+        """True running, False flying without it, None on q."""
+        if not self.cam.get("mode"):
+            return False
+        while True:
+            rc = self.camera("fusion", name, str(self.cam["mode"]), *[str(a) for a in self.cam.get("args") or []])
+            events.log("labday_camera", name=name, rc=rc)
+            if rc == 0:
+                return True
+            a = self.ask("The camera did not start: Enter tries again, n flies without it, q quits: ").strip().lower()
+            if a in ("n", "q"):
+                return None if a == "q" else False
+
+    def camera_stop(self, name):
+        (VIDEO_DIR / name).mkdir(parents=True, exist_ok=True)
+        (VIDEO_DIR / name / "stop").touch()
+        events.log("labday_camera_stop", name=name, rc=self.camera("stop", name))
+
+    def fly(self, f, pack):
+        """One `.\\fly <name> --once`, stdin passed through: (exit code, its debrief event or None)."""
+        since = log_offsets()
+        child = self.popen(fly_cmd(f, pack), cwd=ROOT)
+        rc = child.wait()
+        return rc, debrief_event(child.pid, since)
+
+    def branches(self):
+        if self.d["branches"]:
+            self.say("Branches:", *[f"  {b.get('when', '')}: {b.get('do', '')}" for b in self.d["branches"]])
+
+    def one(self, f, pack):
+        """Flies `f` until it ends well or the operator moves on: 'next', 'stop' (analysis stop asked) or 'quit'."""
+        while True:
+            name = f"{f['id']}-{f['fly']}".lower().replace("_", "-")
+            cam = self.camera_start(name)
+            if cam is None:
+                return "quit"
+            rc, ev = self.fly(f, pack)
+            pack = None
+            if cam:
+                self.camera_stop(name)
+            why = bad_end(rc, ev)
+            self.state["flown"][f["id"]] = {"ok": why is None, "rc": rc, "why": why, "t": time.strftime("%H:%M:%S"),
+                                            "status": (ev or {}).get("status"), "folder": (ev or {}).get("folder"),
+                                            "camera": name if cam else None}
+            self.save()
+            events.log("labday_flight", day=self.d.get("day"), id=f["id"], fly=f["fly"], rc=rc, why=why)
+            if why is None:
+                return "stop" if f.get("stop") else "next"
+            self.say(f"\nAUTO STOP: {f['id']} {why}.")
+            self.branches()
+            a = self.ask("r flies it again, Enter goes on to the next flight, q quits (the same command resumes): ")
+            a = a.strip().lower()
+            if a == "q":
+                return "quit"
+            if a != "r":
+                return "next"
+
+    def save(self):
+        save_state(self.state_path, self.state)
+
+    def go(self, start=None):
+        flights = todo(self.d, self.state, start)
+        if not flights:
+            self.say(f"{self.d.get('day')}: every flight is flown or skipped ({rel(self.state_path)}).")
+            return 0
+        floor = VIDEO_DIR / str(self.cam.get("floor") or "")
+        if self.cam.get("mode") and not (self.cam.get("floor") and floor.is_dir()):
+            self.say(f"No floor scan {rel(floor)}: run `bash {CAMERA_SH} floor {self.cam.get('floor') or '<name>'}` "
+                     "first (or pass --floor NAME, or --no-camera).")
+            return 1
+        self.say(f"Ground dry run of {len(flights)} flights (no drone contact):")
+        bad = self.dry_run(flights)
+        if bad:
+            self.say(f"Dry run failed for {', '.join(bad)}: fix the files, then run the same command again.")
+            return 1
+        pack = self.pack
+        for i, f in enumerate(flights):
+            nxt = flights[i + 1]["id"] if i + 1 < len(flights) else None
+            self.say("", f"=== {f['id']} ({i + 1} of {len(flights)}): {shown(f)}",
+                     *([f"    tests: {f['why']}"] if f.get("why") else []),
+                     *([f"    pass (PROPOSED): {f['pass']}"] if f.get("pass") else []))
+            a = self.ask("Enter flies it (then arm by RC), s skips it, q quits: ").strip().lower()
+            if a == "q":
+                return 0
+            if a == "s":
+                self.state["skipped"].append(f["id"])
+                self.save()
+                continue
+            r = self.one(f, pack)
+            pack = None   # fly remembers the pack; a swap mid-day is asked by fly itself
+            if r == "quit":
+                return 0
+            if r == "stop" and nxt:
+                self.say(f"\nANALYSIS STOP after {f['id']}: read its debrief and the log before {nxt}.")
+                if self.ask(f"Enter goes on to {nxt}, q quits (the same command resumes): ").strip().lower() == "q":
+                    return 0
+        self.say(f"\n{self.d.get('day')}: day done.", *self.listing())
+        return 0
+
+    def listing(self):
+        out = []
+        for f in self.d["flights"]:
+            r = self.state["flown"].get(f["id"])
+            mark = "skipped" if f["id"] in self.state["skipped"] else (
+                ("OK " if r["ok"] else "BAD ") + f"{r['t']} {r.get('why') or r.get('status') or ''}" if r else "-")
+            out.append(f"  {f['id']:<4} {shown(f):<48} {mark}")
+        return out
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("day", help="a date (docs/lab/days/<date>.yaml) or a day file path")
+    ap.add_argument("--pack", help="the pack type in the drone now, 1 or 2 (passed to the first flight's .\\fly)")
+    ap.add_argument("--from", dest="start", metavar="ID", help="start at this flight id (default: the first not flown)")
+    ap.add_argument("--list", action="store_true", help="print the plan and what is flown, then exit")
+    ap.add_argument("--sheet", action="store_true", help="print the run sheet markdown, then exit")
+    ap.add_argument("--dry-run", action="store_true", help="only the ground dry run of every flight left")
+    ap.add_argument("--no-camera", action="store_true", help="fly without the camera fusion")
+    ap.add_argument("--floor", help="the floor scan folder under logs/video_truth (default: the day file's)")
+    a = ap.parse_args(argv)
+    try:
+        d = load_day(day_path(a.day))
+    except (OSError, ValueError) as e:
+        sys.exit(str(e))
+    if a.floor and d.get("camera"):
+        d["camera"]["floor"] = a.floor
+    if a.sheet:
+        sys.stdout.write(sheet(d))
+        return 0
+    day = Day(d, state_file(d.get("day") or a.day), pack=a.pack, camera=not a.no_camera)
+    if a.list:
+        print("\n".join(day.listing()))
+        return 0
+    if a.dry_run:
+        return 1 if day.dry_run(todo(d, day.state, a.start)) else 0
+    events.log("labday_start", day=d.get("day"), start=a.start, pack=a.pack)
+    return day.go(a.start)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
