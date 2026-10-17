@@ -29,7 +29,7 @@ def test_models_start_at_zero_and_drift_loss_is_zero_on_a_perfect_track():
     for kind in ("gru", "tcn"):
         net = nn_io.build(17, kind, H=8, head="scale", layers=2)
         out = net(torch.randn(2, 40, 17), torch.randn(2, 40, 2))
-        assert out.shape == (2, 40, 2) and float(out.abs().max()) == 0.0
+        assert out.shape == (2, 40, 2) and float(out.detach().abs().max()) == 0.0
     T = 200
     p = torch.randn(1, T, 2) * 0.01
     back = torch.tensor([[[1.0, 0.0]]]).repeat(1, T, 1)
