@@ -31,3 +31,6 @@ Migrated 2026-09-30 from Claude-private memory. Re-verify before relying on anyt
   in the VPS `~/.config/opencode/opencode.json`; key `ARK_API_KEY` in VPS `~/.config/agent-keys.env` (copied from WSL
   `~/.claude/settings.json` ANTHROPIC_AUTH_TOKEN). `oc-run` allows only `ark/deepseek-v4-flash` and runs one at a time
   (`~/locks/ark`, avoids burst 429). Smoke spawn: OK in 26 s. Backups `*.bak-20260930-*` next to both files.
+- Camera videos (2026-10-17): old `logs/video_truth` `.mkv`/`.mp4` are on Google Drive `G:/My Drive/UAV_lab/<day>/<folder>/`
+  (Drive for desktop, cache on D:). CSV/npz/floor scans stay on D:. Index `docs/lab/video-archive.csv`; open with
+  `video_truth.video_file()`; rules `docs/agent/video-archive.md`.

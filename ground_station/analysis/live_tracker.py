@@ -333,7 +333,7 @@ def floor_from_dir(video_dir, cam_path) -> tuple[np.ndarray, np.ndarray, np.ndar
     (vt.floor_from_marker; R, t do not depend on the image scale). Returns R, t, the id0 centre (px of that video),
     the video width (to rescale pixels to the live window) and the scan's static corners {id: (4, 2) px}."""
     vd = Path(video_dir)
-    size = vt.video_size(str(vd / "cam.mkv"))
+    size = vt.video_size(vt.video_file(vd))
     scan = dict(np.load(vd / "aruco.npz"))
     R, t, _ = vt.floor_from_marker(scan, vt.load_cam(cam_path, size))
     ref = {int(k[1:]): vt.static_corners(scan[k])[0] for k in scan if k.startswith("c")}
@@ -1089,7 +1089,7 @@ def replay(name: str, links=(0.15, 0.3), delay_err_s: float = 0.0, period: float
     vd = Path(root) / name
     summ = json.loads((vd / "truth4.json").read_text())
     tab = np.genfromtxt(vd / "truth4.csv", delimiter=",", names=True)
-    video = str(vd / "cam.mkv")
+    video = vt.video_file(vd)
     o, h, tt, z = summ.get("offset_s", 0.0), summ.get("h_ring_m", 0.15), tab["t_tel"], tab["z"]
     fixes_list: list = []
     if fixes or not Path(video).exists():

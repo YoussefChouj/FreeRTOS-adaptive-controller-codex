@@ -5,7 +5,8 @@
 Every logs/video_truth/<folder> whose newest file is older than --days gives its .mkv/.mp4 to
 G:/My Drive/UAV_lab/<that day>/<folder>/, the layout `lab end` uses. Without --yes it only lists them and their size.
 Each video is copied, checked by size, and only then removed from D: (end.move); the folder keeps an ARCHIVED.txt
-that names where each one went. CSV, npz, json and txt stay on D:. Skipped: floor scans (aruco.npz, the tracker
+that names where each one went, and docs/lab/video-archive.csv (tracked, so every checkout and agent sees it) gets
+one row per video. CSV, npz, json and txt stay on D:. Skipped: floor scans (aruco.npz, the tracker
 reads them) and a folder whose tracker still runs (tracker.pid without stop).
 """
 from __future__ import annotations
@@ -15,6 +16,8 @@ import sys
 import time
 
 from ground_station.lab import end, events, runner
+
+INDEX = runner.ROOT / "docs" / "lab" / "video-archive.csv"   # day,folder,file,bytes,drive_path (docs/agent/video-archive.md)
 
 
 def folders(days, now=None):
@@ -34,6 +37,17 @@ def folders(days, now=None):
         else:
             out.append((d, time.strftime("%Y-%m-%d", time.localtime(newest)), vids))
     return sorted(out, key=lambda r: r[1]), skipped
+
+
+def index(day, moved, sizes):
+    """Appends one docs/lab/video-archive.csv row per moved video."""
+    if not moved:
+        return
+    new = not INDEX.exists()
+    with open(INDEX, "a", encoding="utf-8", newline="") as f:
+        f.write("day,folder,file,bytes,drive_path\n" if new else "")
+        f.write("".join(f"{day},{p.parent.name},{p.name},{sizes[p]},"
+                        f"{(end.DRIVE_DAY / day / p.parent.name / p.name).as_posix()}\n" for p in moved))
 
 
 def main(argv=None):
@@ -62,6 +76,7 @@ def main(argv=None):
         moved_n, kept_n = moved_n + len(moved), kept_n + len(v) - len(moved)
         with open(d / "ARCHIVED.txt", "a", encoding="utf-8") as f:
             f.write("".join(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {n}\n" for n in notes))
+        index(day, moved, dict(v))
         for n in notes:
             if n.startswith("KEPT"):
                 print(n)

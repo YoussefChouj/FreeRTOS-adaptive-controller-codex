@@ -23,6 +23,7 @@ def setup(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "VIDEO_DIR", tmp_path / "video")
     monkeypatch.setattr(end, "DRIVE_DAY", tmp_path / "drive" / "UAV_lab")
     monkeypatch.setattr(archive.events, "log", lambda *a, **k: None)
+    monkeypatch.setattr(archive, "INDEX", tmp_path / "video-archive.csv")
     (tmp_path / "drive").mkdir()
 
 
@@ -45,6 +46,9 @@ def test_moves_old_keeps_floor_live_and_new(monkeypatch, tmp_path):
     assert not (old / "cam.mkv").exists() and (old / "fixes.csv").exists()          # the CSVs stay on D:
     assert "cam.mkv" in (old / "ARCHIVED.txt").read_text(encoding="utf-8")
     assert all((d / "cam.mkv").exists() for d in (floor, live, new))
+    rows = (tmp_path / "video-archive.csv").read_text(encoding="utf-8").splitlines()
+    assert rows[0] == "day,folder,file,bytes,drive_path" and rows[1].startswith(f"{day},f1-old,cam.mkv,1000,")
+    assert len(rows) == 2
 
 
 def test_no_drive_moves_nothing(monkeypatch, tmp_path):

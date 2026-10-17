@@ -18,6 +18,7 @@ History: `docs/agent/ledger/` (grep, never read whole). Desktop session is CEO: 
 3. **E1-E4, H0-H2, then 10-16 F2-F6** in the run-sheet order.
 
 ## Do not
+- Do not treat a missing `logs/video_truth/<folder>/cam.mkv` as lost: it is on Drive (`docs/agent/video-archive.md`).
 - Arm/spin outside an operator-opened workflow-B battery session; flash while armed or with `--force`.
 - Stage OBJ/ or USER/ or logs/; `git add -A`.
 - Start recording until the operator confirms preset, variable list and session name.
