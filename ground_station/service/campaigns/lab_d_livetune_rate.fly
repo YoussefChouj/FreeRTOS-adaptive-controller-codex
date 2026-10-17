@@ -9,6 +9,7 @@
 campaign lab-d-livetune-rate
 rate 100
 log velocity_loops camera_fusion
+slow 25 nn4 xy_ctrl mrac_3l ekf_states estimator_truth
 set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10
 takeoff 0.5
 hold 2
