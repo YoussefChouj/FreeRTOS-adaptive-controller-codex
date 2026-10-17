@@ -18,11 +18,14 @@ from __future__ import annotations
 
 import argparse
 import csv
+import time
 import http.client
 import json
 import socket
 import struct
 import subprocess
+import time
+import cv2
 import threading
 import time
 import urllib.parse
@@ -130,7 +133,7 @@ class CoralTracker:
         self.seed0, self.learn_n, self.learn_every, self.frac, self.grow = self.c.copy(), learn_n, learn_every, frac, grow_px
         self.keep_r = 1.3 * self.roi if keep_r is None else float(keep_r)   # r6_f4 pad: drone coral to ~170 px of 1920
         self.zoom, self.land_zoom, self.land_z_m, self.active_zoom = float(zoom), float(land_zoom), float(land_z_m), 1.0
-        self.last_ms = {}
+        self.last_s = {}
         self._acc, self._k, self._i = None, 0, 0
 
     def _learn(self, frame_bgr) -> None:
@@ -161,13 +164,12 @@ class CoralTracker:
         u0, v0 = int(max(0, self.c[0] - self.r)), int(max(0, self.c[1] - self.r))
         u1, v1 = int(min(W, self.c[0] + self.r)), int(min(H, self.c[1] + self.r))
         if u1 > u0 and v1 > v0:
-            import time
             t0 = time.perf_counter()
             crop = frame_bgr[v0:v1, u0:u1]
             if z_eff > 1.01:
                 crop = cv2.resize(crop, (0, 0), fx=z_eff, fy=z_eff, interpolation=cv2.INTER_LINEAR)
             t1 = time.perf_counter()
-            self.last_ms["crop"] = t1 - t0
+            self.last_s["crop"] = t1 - t0
             m = vt.coral_mask(cv2.cvtColor(crop, cv2.COLOR_BGR2HSV))
             if self.static is not None:
                 st_crop = self.static[v0:v1, u0:u1]
@@ -180,9 +182,9 @@ class CoralTracker:
                 self.c = np.array([(np.median(uu) + 0.5) / z_eff - 0.5 + u0,
                                    (np.median(vv) + 0.5) / z_eff - 0.5 + v0])
                 self.r = self.roi
-                self.last_ms["detect"] = time.perf_counter() - t1
+                self.last_s["detect"] = time.perf_counter() - t1
                 return self.c.copy()
-            self.last_ms["detect"] = time.perf_counter() - t1
+            self.last_s["detect"] = time.perf_counter() - t1
         self.r = min(self.r * 1.5, float(max(W, H)))
         return None
 
@@ -513,9 +515,13 @@ def traj_xy(spec: str) -> np.ndarray:
 
 
 
+
+
 def pip_label(z_eff: float, z_m: float) -> str:
     """Pure function formatting the landing zoom PiP text."""
     return f"LAND ZOOM {z_eff:.1f}x z={z_m*100:.0f}cm"
+
+
 
 class Preview:
     """--show: the tracker window, the only always-on-top window (the scrcpy mirror sits off screen: the PrintWindow
@@ -537,6 +543,7 @@ class Preview:
         self.hz, self.rect, self.traj, self.pass_m, self.trail_s, self.n = hz, rect, traj, pass_cm / 100.0, trail_s, 0
         self.trail, self.uvs, self.anchor, self.max_d, self.xy, self.z = [], [], None, 0.0, None, 0.0
         self.z_max, self.view_idx, self.zoom_pip = 0.0, 0, False
+        self.active_zoom = 1.0
         self._az, self._el, self._center = -38.0, 30.0, None
         self.rec, self.recording, self.writer = rec, rec is not None, None
         self.placed = self.full = self.closed = False
@@ -724,7 +731,7 @@ class Preview:
         ih, iw = img.shape[:2]
         u_c, v_c = self.uvs[-1][1], self.uvs[-1][2]
         pip_side = max(110, min(200, int(0.32 * ih)))
-        z_eff = getattr(self, "active_zoom", 1.0)
+        z_eff = self.active_zoom
         z_eff = max(1.0, z_eff)
         half_src = max(36, int(pip_side / (z_eff * max(self.scale, 0.25))))
         u0 = int(np.clip(u_c - half_src, 0, max(0, W - 2 * half_src)))
@@ -1187,7 +1194,7 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
                  [f"mode {auto.mode if auto else mode}  z {z:.2f} m  fixes {sched.n_sent}  det {n_det}/{n}",
                                          f"gate rej {gate.n_rej if gate else 0}  pad {'set' if pad is None or pad.xy is not None else 'WAIT'}"
                                          f"{' frozen' if pad is not None and pad.frozen else ''}"]
-                 + ([auto.status] if auto else []), z=z_agl, z_eff=getattr(ring, "active_zoom", 1.0) if ring else 1.0)
+                 + ([auto.status] if auto else []), z=z_agl, z_eff=ring.active_zoom if ring else 1.0)
         if xy is not None:
             n_det += 1
             sched.push(t_cap, xy)
@@ -1342,11 +1349,11 @@ def replay(name: str, links=(0.15, 0.3), delay_err_s: float = 0.0, period: float
     return out
 
 
-def ab_replay(video: str, z_csv: str | None = None) -> int:
-    import csv
-    from pathlib import Path
+AB_REPLAY_SEED_PX = (320, 240)    # PROPOSED
+AB_REPLAY_H_M = 0.15            # PROPOSED
 
-    import cv2
+
+def ab_replay(video: str, z_csv: str | None = None, zoom_a: float = 1.0, zoom_b: float = 1.0, land_zoom_a: float = 1.0, land_zoom_b: float = 2.0, land_z_m: float = 0.30) -> int:
     out_dir = Path(video).parent
 
     if z_csv and Path(z_csv).exists():
@@ -1357,13 +1364,16 @@ def ab_replay(video: str, z_csv: str | None = None) -> int:
                 ts_list.append(float(row["t_s"]))
                 zs_list.append(float(row["z_m"]))
         if ts_list:
-            height_fn = lambda t: float(np.interp(t, ts_list, zs_list, left=0.0, right=0.0))
+            def height_fn(t):
+                return float(np.interp(t, ts_list, zs_list, left=0.0, right=0.0))
         else:
-            height_fn = lambda t: 0.15
+            def height_fn(t):
+                return AB_REPLAY_H_M
     else:
-        height_fn = lambda t: 0.15
+        def height_fn(t):
+            return AB_REPLAY_H_M
 
-    seed = (320, 240)
+    seed = AB_REPLAY_SEED_PX
 
     cam_json = out_dir / "cam.json"
     if cam_json.exists():
@@ -1388,17 +1398,18 @@ def ab_replay(video: str, z_csv: str | None = None) -> int:
             dt0 = time.perf_counter()
             ok, frame = cap.read()
             dt1 = time.perf_counter()
-            if not ok: break
+            if not ok:
+                break
             decode_t.append(dt1 - dt0)
 
             t_cap = n_frames / fps
             z = height_fn(t_cap)
 
             uv = ring.step(frame, z_agl=z)
-            if "crop" in ring.last_ms:
-                crop_t.append(ring.last_ms["crop"])
-            if "detect" in ring.last_ms:
-                det_t.append(ring.last_ms["detect"])
+            if "crop" in ring.last_s:
+                crop_t.append(ring.last_s["crop"])
+            if "detect" in ring.last_s:
+                det_t.append(ring.last_s["detect"])
 
             t_draw_start = time.perf_counter()
             prev_t_last = show.t_last
@@ -1433,39 +1444,48 @@ def ab_replay(video: str, z_csv: str | None = None) -> int:
     ua, va = np.array([u[1] for u in uvs_a]), np.array([u[2] for u in uvs_a])
     ub, vb = np.array([u[1] for u in uvs_b]), np.array([u[2] for u in uvs_b])
 
+
     def jitter(u, v):
         vu = u[np.isfinite(u)]
         vv = v[np.isfinite(v)]
-        if len(vu) < 3: return 0.0
+        if len(vu) < 3:
+            return None
         return float(np.sqrt(np.mean(np.diff(vu, n=2)**2 + np.diff(vv, n=2)**2)))
 
     jit_a, jit_b = jitter(ua, va), jitter(ub, vb)
 
     mask = np.isfinite(ua) & np.isfinite(ub)
-    disag = float(np.mean(np.hypot(ua[mask] - ub[mask], va[mask] - vb[mask]))) if np.any(mask) else 0.0
+    disag = float(np.mean(np.hypot(ua[mask] - ub[mask], va[mask] - vb[mask]))) if np.any(mask) else None
+
+    fps_a = f"{na/dur_a:.1f}" if dur_a > 0.0 else "n/a"
+    fps_b = f"{nb/dur_b:.1f}" if dur_b > 0.0 else "n/a"
+    ja = f"{jit_a:.2f} px" if jit_a is not None else "n/a (< 3 pts)"
+    jb = f"{jit_b:.2f} px" if jit_b is not None else "n/a (< 3 pts)"
+    da = f"{disag:.2f} px" if disag is not None else "n/a (no overlap)"
+
 
     lines = [
         "## A/B Replay Summary",
         f"- **Detection Rate**: A = {rate_a:.2%} | B = {rate_b:.2%}",
         f"- **Track Losses**: A = {losses_a} | B = {losses_b}",
-        f"- **UV Jitter (RMS)**: A = {jit_a:.2f} px | B = {jit_b:.2f} px",
-        f"- **A-vs-B UV Disagreement**: {disag:.2f} px",
-        f"- **Implied FPS**: A = {na/dur_a:.1f} | B = {nb/dur_b:.1f}",
+        f"- **UV Jitter (RMS)**: A = {ja} | B = {jb}",
+        f"- **A-vs-B UV Disagreement**: {da}",
+        f"- **Implied FPS**: A = {fps_a} | B = {fps_b}",
         "### Stage Timings (Run B, ms)",
         f"- **Decode**: p50 = {np.percentile(dec_b, 50)*1000:.1f} | p95 = {np.percentile(dec_b, 95)*1000:.1f}",
         f"- **Zoom/Crop**: p50 = {np.percentile(c_b, 50)*1000:.1f} | p95 = {np.percentile(c_b, 95)*1000:.1f}" if len(c_b) > 0 else "- **Zoom/Crop**: N/A",
         f"- **Detect**: p50 = {np.percentile(dt_b, 50)*1000:.1f} | p95 = {np.percentile(dt_b, 95)*1000:.1f}" if len(dt_b) > 0 else "- **Detect**: N/A",
         f"- **Draw**: p50 = {np.percentile(dr_b, 50)*1000:.1f} | p95 = {np.percentile(dr_b, 95)*1000:.1f}" if len(dr_b) > 0 else "- **Draw**: N/A"
     ]
-    with open(out_dir / "ab_summary.md", "w") as f:
+    with open(out_dir / "ab_summary.md", "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
-    with open(out_dir / "ab_frames.csv", "w", newline='') as f:
+    with open(out_dir / "ab_frames.csv", "w", newline='', encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["t_s", "u_a", "v_a", "u_b", "v_b", "z_eff_b"])
         for i in range(na):
             z_m = height_fn(uvs_a[i][0])
-            z_eff_b = 2.0 if (0.0 < z_m <= 0.30) else 1.0
+            z_eff_b = land_zoom_b if (0.0 < z_m <= land_z_m) else zoom_b
             writer.writerow([uvs_a[i][0], ua[i], va[i], ub[i], vb[i], z_eff_b])
 
     print(f"A/B replay complete: wrote {out_dir}/ab_summary.md and ab_frames.csv")
@@ -1473,15 +1493,10 @@ def ab_replay(video: str, z_csv: str | None = None) -> int:
 
 
 def replay_main(argv) -> int:
-    if argv and len(argv) >= 1 and (argv[0].endswith(".mkv") or argv[0].endswith(".avi") or argv[0].endswith(".mp4")):
-        ap = argparse.ArgumentParser(prog="live_tracker replay <video>", description="A/B replay")
-        ap.add_argument("video", help="Video file to replay")
-        ap.add_argument("--z-csv", help="CSV with z heights")
-        a = ap.parse_args(argv)
-        return ab_replay(a.video, a.z_csv)
-
     ap = argparse.ArgumentParser(prog="live_tracker replay", description=replay.__doc__)
-    ap.add_argument("names", nargs="+", help="logs/video_truth/<name> dirs with truth4.csv")
+    ap.add_argument("names", nargs="+", help="logs/video_truth/<name> dirs with truth4.csv or video with --ab")
+    ap.add_argument("--ab", action="store_true", help="run A/B replay on a video file")
+    ap.add_argument("--z-csv", help="CSV with z heights for A/B replay")
     ap.add_argument("--link", type=float, nargs="+", default=[0.15, 0.3], help="frame -> drone delay(s), s")
     ap.add_argument("--delay-err", type=float, default=0.0, help="delay_ms the drone uses minus the true link, s")
     ap.add_argument("--period", type=float, default=0.05, help="s between fixes (20 Hz, PROPOSED)")
@@ -1495,7 +1510,16 @@ def replay_main(argv) -> int:
     ap.add_argument("--fw", action="store_true", help="run the firmware C path (gcc API/ekf_of.c), tag _fw")
     ap.add_argument("--mode", type=int, default=2, help="ext_pos mode (2 or 3, default 2)")
     ap.add_argument("--fixes", type=str, default=None, help="replay fixes CSV (e.g. fixes.csv, replay_start_fixes.csv)")
+
+    ap.add_argument("--zoom", type=float, default=1.0)
+    ap.add_argument("--land-zoom", type=float, default=2.0)
+    ap.add_argument("--land-z-m", type=float, default=0.30)
     a = ap.parse_args(argv)
+    if a.ab:
+        if a.zoom < 1.0 or a.land_zoom < 1.0 or a.land_z_m <= 0.0:
+            ap.error("zoom/land-zoom must be >= 1.0, land-z-m must be > 0.0")
+        return ab_replay(a.names[0], a.z_csv, a.zoom, a.zoom, 1.0, a.land_zoom, a.land_z_m)
+
     for nm in a.names:
         r = replay(nm, a.link, a.delay_err, a.period, a.n_med, a.window_s, not a.no_gate, max_frames=a.max_frames,
                    gain=a.gain, slew_m=a.slew_cm / 100, beta=a.beta, fw=a.fw, mode=a.mode, fixes=a.fixes)
@@ -1567,8 +1591,8 @@ def main(argv=None) -> int:
     ap.add_argument("--land-zoom", type=float, default=2.0, help="tracking zoom when below land_z_m (default 2.0)")
     ap.add_argument("--land-z-m", type=float, default=0.30, help="apply land_zoom when 0 < z_agl <= this, m (default 0.30)")
     a = ap.parse_args(argv)
-    if a.zoom < 1.0:
-        ap.error("--zoom must be >= 1.0")
+    if a.zoom < 1.0 or a.land_zoom < 1.0 or a.land_z_m <= 0.0:
+        ap.error("zoom/land-zoom must be >= 1.0, land-z-m must be > 0.0")
     if a.align == "auto" and not ((a.tel_csv or a.tel_url) and a.mode in (2, 3)):
         ap.error("--align auto needs --tel-csv or --tel-url and --mode 2 or 3")
     if sum(map(bool, (a.tel_npz, a.tel_csv, a.tel_url))) > 1 or not (a.tel_npz or a.tel_csv or a.tel_url

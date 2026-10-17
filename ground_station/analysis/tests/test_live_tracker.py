@@ -460,9 +460,10 @@ def test_pip_label():
     assert pip_label(3.0, 0.2) == "LAND ZOOM 3.0x z=20cm"
 
 def test_preview_headless_does_not_call_cv2_window_functions(monkeypatch):
-    from ground_station.analysis.live_tracker import Preview
     import cv2
     import numpy as np
+
+    from ground_station.analysis.live_tracker import Preview
 
     def raise_err(*args, **kwargs):
         raise RuntimeError("Window function called in headless mode!")
@@ -477,8 +478,8 @@ def test_preview_headless_does_not_call_cv2_window_functions(monkeypatch):
     p(1.0, frame, None, None, [])
 
 def test_cli_flags_reach_coral_tracker_and_zoom_validated(monkeypatch, tmp_path):
-    from ground_station.analysis.live_tracker import main
     import ground_station.analysis.live_tracker as lt
+    from ground_station.analysis.live_tracker import main
 
     captured_ring = None
 
@@ -504,13 +505,15 @@ def test_cli_flags_reach_coral_tracker_and_zoom_validated(monkeypatch, tmp_path)
     ])
 
     assert captured_ring is not None
-    assert getattr(captured_ring, "zoom") == 1.5
-    assert getattr(captured_ring, "land_zoom") == 3.0
-    assert getattr(captured_ring, "land_z_m") == 0.4
+    assert captured_ring.zoom == 1.5
+    assert captured_ring.land_zoom == 3.0
+    assert captured_ring.land_z_m == 0.4
 
 def test_ab_replay_produces_summary_and_handles_flags_correctly(tmp_path):
-    import cv2
     import json
+
+    import cv2
+
     from ground_station.analysis.live_tracker import replay_main
     from ground_station.analysis.tests.test_live_tracker import _coral_frame
     p = str(tmp_path / "test_ab.avi")
@@ -528,7 +531,7 @@ def test_ab_replay_produces_summary_and_handles_flags_correctly(tmp_path):
     with open(z_csv, "w") as f:
         f.write("t_s,z_m\n0.0,0.4\n0.5,0.2\n1.0,0.1\n")
 
-    ret = replay_main([p, "--z-csv", str(z_csv)])
+    ret = replay_main([p, "--ab", "--z-csv", str(z_csv)])
     assert ret == 0
 
     md_text = (tmp_path / "ab_summary.md").read_text()
@@ -559,3 +562,26 @@ def test_ab_replay_produces_summary_and_handles_flags_correctly(tmp_path):
     df["z_m"] = df["t_s"].apply(get_z_m)
     assert (df.loc[df["z_m"] <= 0.30, "z_eff_b"] == 2.0).all()
     assert (df.loc[df["z_m"] > 0.30, "z_eff_b"] == 1.0).all()
+
+
+def test_ab_replay_summary_on_tiny_video(tmp_path):
+
+    import cv2
+
+    from ground_station.analysis.live_tracker import replay_main
+    from ground_station.analysis.tests.test_live_tracker import _coral_frame
+    p = str(tmp_path / "test_ab_tiny.avi")
+    w = cv2.VideoWriter(p, cv2.VideoWriter_fourcc(*"MJPG"), 30.0, (640, 480))
+    for k in range(2):
+        w.write(_coral_frame((300 + k, 260)))
+    w.release()
+
+    ret = replay_main([p, "--ab"])
+    assert ret == 0
+
+    md_text = (tmp_path / "ab_summary.md").read_text()
+    assert "n/a (< 3 pts)" in md_text
+
+    import pandas as pd
+    df = pd.read_csv(tmp_path / "ab_frames.csv")
+    assert len(df) == 2
