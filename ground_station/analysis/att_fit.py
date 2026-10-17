@@ -1,3 +1,4 @@
+
 """Time-domain output-error fit of attitude plant per axis.
 
 Simulates the model with ZOH at the log rate from the logged u, minimizes the w prediction error over (b, a, tau)
@@ -12,6 +13,33 @@ import math
 from pathlib import Path
 
 import numpy as np
+
+
+def sim_200hz(u: np.ndarray, b: float, a: float, tau: float, d_ticks: int, dt_log: float) -> tuple[np.ndarray, np.ndarray]:
+    """Simulate plant at 200 Hz, applying d_ticks delay. Return (w_sim, m_sim) at the log rate."""
+    from scipy import signal
+    dt_sim = 0.005
+    n_upsample = round(dt_log / dt_sim)
+
+    A = np.array([[-a, b], [0, -1/tau]])
+    B = np.array([[0], [1/tau]])
+    C = np.array([[1, 0]])
+    D = np.array([[0]])
+    sys_sim = signal.StateSpace(A, B, C, D).to_discrete(dt_sim)
+
+    # Upsample u by holding
+    u_sim = np.repeat(u, n_upsample)
+
+    # Delay in 200 Hz ticks
+    if d_ticks > 0:
+        u_sim = np.concatenate([np.full(d_ticks, u_sim[0]), u_sim[:-d_ticks]])
+
+    _, _y_sim, x_sim = signal.dlsim(sys_sim, u_sim)
+    w_sim = x_sim[:, 0]
+    m_sim = x_sim[:, 1]
+
+    return w_sim[::n_upsample], m_sim[::n_upsample]
+
 from scipy import optimize
 
 from ground_station.analysis import log_corpus as lc
@@ -134,11 +162,13 @@ def prepare_segments(series: lc.Series, axis: str, dt_log: float) -> list[dict]:
 
     if "seq" in g:
         seq = g["seq"]
-        drops = np.diff(seq) > 1
+        # wrap-aware diff for uint8
+        drops = (np.diff(seq) % 256) > 1
         split_idx = np.flatnonzero(drops) + 1
         u_segs = np.split(u, split_idx)
         w_segs = np.split(w, split_idx)
     else:
+        print("Note: 'seq' absent, no SEQ split performed.")
         u_segs = [u]
         w_segs = [w]
 
@@ -183,33 +213,16 @@ class AttFitter:
         self.dt = dt
         self.d_grid = d_grid
 
+
     def _loss(self, params: np.ndarray, delay_idx: int) -> float:
         b, a, tau = params[:3]
         biases = params[3:]
 
         loss = 0.0
-        from scipy import signal
-        A = np.array([[-a, b], [0, -1/tau]])
-        B = np.array([[0], [1/tau]])
-        C = np.array([[1, 0]])
-        D = np.array([[0]])
-
-        sys = signal.StateSpace(A, B, C, D)
-        sys_d = sys.to_discrete(self.dt)
-        b_d, a_d = signal.ss2tf(sys_d.A, sys_d.B, sys_d.C, sys_d.D)
-
         for i, seg in enumerate(self.segments):
             u = seg["u"] + biases[i]
             w = seg["w"]
-
-            # apply delay D
-            # delay_idx is in ticks.
-            if delay_idx > 0:
-                u_d = np.concatenate([np.full(delay_idx, u[0]), u[:-delay_idx]])
-            else:
-                u_d = u
-
-            w_pred = signal.lfilter(b_d[0], a_d, u_d)
+            w_pred, _ = sim_200hz(u, b, a, tau, delay_idx, self.dt)
             loss += np.sum((w - w_pred)**2)
 
         return loss
@@ -255,76 +268,113 @@ def get_git_sha():
     except Exception: # noqa: BLE001
         return "unknown"
 
-def analyze_axis(axis: str, train_segs: list[dict], val_segs: list[dict], dt: float, d_grid: list[int]) -> dict:
-    if not train_segs:
+
+
+def calc_val_metrics(val_segs: list[dict], b: float, a: float, tau: float, d_ticks: int, dt: float) -> dict:
+    if not val_segs:
         return {}
 
-    fitter = AttFitter(train_segs, dt, d_grid)
-    b, a, tau, d, _biases = fitter.fit()
-
-    # Calculate metrics on val_segs
-    # For simplicity, we just use open-loop simulation as prediction
     y_all = []
     y_pred_all = []
+    err_1step_sq = []
+    err_05s_sq = []
+
+    n_05s = max(1, int(0.5 / dt))
 
     from scipy import signal
     A = np.array([[-a, b], [0, -1/tau]])
     B = np.array([[0], [1/tau]])
-    C = np.array([[1, 0]])
-    D = np.array([[0]])
-    sys = signal.StateSpace(A, B, C, D)
-    sys_d = sys.to_discrete(dt)
-    b_d, a_d = signal.ss2tf(sys_d.A, sys_d.B, sys_d.C, sys_d.D)
+    sys_d = signal.StateSpace(A, B, C=np.array([[1, 0]]), D=np.array([[0]])).to_discrete(dt)
+    _A_d, _B_d = sys_d.A, sys_d.B
 
     for seg in val_segs:
-        # we don't have bias for validation segment!
-        # Just demean or use 0 bias?
-        # "Estimate a constant input bias per segment (trim)"
-        # Let's estimate bias for validation segment by mean(w) - mean(u)?
-        # Better: just minimize sum((w - w_pred(u+bias))^2) for this segment quickly.
-        u = seg["u"]
         w = seg["w"]
+        u = seg["u"]
 
-        # simplistic bias: mean(w) / DC_gain - mean(u)
-        DC_gain = b / (a + 1e-9) if a > 1e-9 else 0.0
-        if DC_gain > 0:
-            bias = np.mean(w) / DC_gain - np.mean(u)
+        w_pred0, _ = sim_200hz(u, b, a, tau, d_ticks, dt)
+
+        step_input = np.ones_like(u)
+        step_resp, _ = sim_200hz(step_input, b, a, tau, d_ticks, dt)
+
+        denom = np.sum(step_resp**2)
+        if denom > 1e-9:
+            bias = np.sum(step_resp * (w - w_pred0)) / denom
         else:
             bias = 0.0
 
-        u_bias = u + bias
-        if d > 0:
-            u_d = np.concatenate([np.full(d, u_bias[0]), u_bias[:-d]])
-        else:
-            u_d = u_bias
-
-        w_pred = signal.lfilter(b_d[0], a_d, u_d)
+        u_biased = u + bias
+        w_pred = w_pred0 + bias * step_resp
 
         y_all.append(w)
         y_pred_all.append(w_pred)
 
-    if not y_all:
-        return {}
+        _, m_sim = sim_200hz(u_biased, b, a, tau, d_ticks, dt)
+
+        sys_sim = signal.StateSpace(A, B, C=np.array([[1, 0]]), D=np.array([[0]])).to_discrete(0.005)
+        A_sim, B_sim = sys_sim.A, sys_sim.B
+        n_up = round(dt / 0.005)
+
+        u_sim = np.repeat(u_biased, n_up)
+        if d_ticks > 0:
+            u_sim = np.concatenate([np.full(d_ticks, u_sim[0]), u_sim[:-d_ticks]])
+
+        w_1step = np.zeros_like(w)
+        for k in range(len(w)-1):
+            xk = np.array([w[k], m_sim[k]])
+            for step in range(n_up):
+                idx = k * n_up + step
+                xk = A_sim @ xk + B_sim[:, 0] * u_sim[idx]
+            w_1step[k+1] = xk[0]
+
+        err_1step_sq.extend((w[1:] - w_1step[1:])**2)
+        err_05s_sq.extend((w[n_05s:] - w_pred[n_05s:])**2)
 
     y_all = np.concatenate(y_all)
     y_pred_all = np.concatenate(y_pred_all)
 
     tic = theil_u2(y_all, y_pred_all)
     vaf_val = vaf(y_all, y_pred_all)
+    rms_1step = float(np.sqrt(np.mean(err_1step_sq))) if err_1step_sq else 0.0
+    rms_05s = float(np.sqrt(np.mean(err_05s_sq))) if err_05s_sq else 0.0
 
-    # 0.5s ahead prediction is skipped here for brevity,
-    # one-step prediction is just simulation since we don't do Kalman filter yet.
+    return {
+        "tic": tic,
+        "vaf": vaf_val,
+        "rms_1step": rms_1step,
+        "rms_05s_ahead": rms_05s
+    }
+
+def analyze_axis(axis: str, train_segs: list[dict], val_sysid_segs: list[dict], val_traj_segs: list[dict], dt: float, d_grid: list[int]) -> dict:
+
+    if not train_segs:
+        return {}
+
+    fitter = AttFitter(train_segs, dt, d_grid)
+    b, a, tau, d, _biases = fitter.fit()
+
+    val_sysid_metrics = calc_val_metrics(val_sysid_segs, b, a, tau, d, dt)
+    val_traj_metrics = calc_val_metrics(val_traj_segs, b, a, tau, d, dt)
+
+    val_all_metrics = calc_val_metrics(val_sysid_segs + val_traj_segs, b, a, tau, d, dt)
+    tic = val_all_metrics.get("tic", 0.0)
+    vaf_val = val_all_metrics.get("vaf", 0.0)
+    rms_1step = val_all_metrics.get("rms_1step", 0.0)
+    rms_05s = val_all_metrics.get("rms_05s_ahead", 0.0)
 
     return {
         "b": float(b),
         "a": float(a),
         "tau": float(tau),
-        "D_ticks": int(d),
-        "D_s": float(d * dt),
+        "D_ticks_200hz": int(d),
+        "D_s": float(d * 0.005),
         "bounds": {"b": ">0", "a": ">=0", "tau": "[0.005, 0.2]"},
         "tic": tic,
         "vaf": vaf_val,
-        "pass": bool(tic < PROPOSED_TIC_PASS)
+        "rms_1step": rms_1step,
+        "rms_05s_ahead": rms_05s,
+        "pass": bool(tic < PROPOSED_TIC_PASS),
+        "sysid_flights": val_sysid_metrics,
+        "traj_flights": val_traj_metrics
     }
 
 
@@ -361,10 +411,7 @@ def main(argv: list[str] | None = None) -> int:
                 series = load_series(sess)
                 dt = get_dt(series)
                 # adjust d_grid if 100 Hz
-                if dt > 0.0075:
-                    d_grid = list(range(7))
-                else:
-                    d_grid = list(range(13))
+                d_grid = list(range(13))
                 train_segs.extend(prepare_segments(series, axis, dt))
             except Exception as e: # noqa: BLE001
                 print(f"Skipping {sess}: {e}")
@@ -389,7 +436,7 @@ def main(argv: list[str] | None = None) -> int:
     except ImportError:
         print("Note: direct_iv not found in ground_station/autotune/frf.py")
 
-    out_file = f"att_model_{datetime.date.today().strftime('%Y-%m-%d')}.json"
+    out_file = args.out if args.out else f"att_model_{datetime.date.today().strftime('%Y-%m-%d')}.json"
 
     final_out = {
         "git_sha": get_git_sha(),

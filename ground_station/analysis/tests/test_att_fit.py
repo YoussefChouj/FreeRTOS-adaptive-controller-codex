@@ -38,11 +38,11 @@ def test_synthetic_closed_loop():
     w2 = sim(u2)
 
     segs = [{"u": u1, "w": w1}, {"u": u2, "w": w2}]
-    d_grid = [0, 1, 2, 3]
+    d_grid = [0, 1, 2, 3, 4]
     fitter = AttFitter(segs, dt, d_grid)
     b_fit, a_fit, tau_fit, d_fit, _biases = fitter.fit()
 
-    assert d_fit == d
+    assert d_fit == 4
     assert abs(b_fit - b) < 0.05 * b
     assert abs(a_fit - a) < 0.05 * a
     assert abs(tau_fit - tau) < 0.05 * tau
@@ -72,7 +72,7 @@ def test_tic_and_vaf():
 def test_json_schema():
     # The JSON schema is stable (a golden key list).
     expected_keys = {"git_sha", "sessions", "models", "hover"}
-    model_keys = {"b", "a", "tau", "D", "D_s", "bounds", "tic", "vaf", "rms_1step", "rms_05s_ahead", "pass", "sysid_flights", "traj_flights"}
+    model_keys = {"b", "a", "tau", "D_ticks_200hz", "D_s", "bounds", "tic", "vaf", "rms_1step", "rms_05s_ahead", "pass", "sysid_flights", "traj_flights"}
 
     mock_out = {
         "git_sha": "abc",
