@@ -71,6 +71,8 @@ def lqr_gain(m: dict, q: tuple[float, float, float, float], r: float = 1.0) -> n
     p = solve_discrete_are(a, b, np.diag(q), np.array([[r]]))
     return (np.linalg.solve(r + b.T @ p @ b, b.T @ p @ a)).ravel()
 
+PROPOSED_RICCATI_ITERS = 100
+PROPOSED_RICCATI_TOL = 1e-4
 class Lqr:
     def __init__(self, m: dict, kgain: np.ndarray, b: int):
         self.m, self.k, self.pred = m, np.asarray(kgain, float), Predictor(m, b)

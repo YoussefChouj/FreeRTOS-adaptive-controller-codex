@@ -274,7 +274,7 @@ def run_self_test(base_rev: str, repo_root: Path, driver_path: Path, stubs_dir: 
 
 def main():
     parser = argparse.ArgumentParser(description="Host bit-exact equivalence test for MRAC firmware")
-    parser.add_argument("--base", default="4458435", help="Base git commit revision (default: 4458435)")
+    parser.add_argument("--base", default="44584354c3df4ee90064d986bb5dc6b99936af53", help="Base git commit revision (default: 4458435)")
     parser.add_argument("--self-test", action="store_true", help="Run self-test with intentional perturbations")
     parser.add_argument("--define", action="append", default=[], metavar="NAME=VAL",
                         help="Extra -D for the new-tree builds only (the base tree predates e.g. MRAC_CAPACITY)")

@@ -281,6 +281,14 @@ void AttCtrl_TickBegin(void)
     s_cyccnt_total = 0;
 }
 
+
+void AttCtrl_Rebuild(uint8_t axis) {
+    if (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING) {
+        // Assert nothing is written while armed
+        return;
+    }
+}
+
 void AttCtrl_ResetAll(void)
 {
     int i;
