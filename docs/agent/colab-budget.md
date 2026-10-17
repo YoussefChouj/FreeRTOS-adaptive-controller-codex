@@ -62,6 +62,22 @@ No other free lane fits: SageMaker Studio Lab is a 4 h browser-only session, Goo
 Hugging Face compute Spaces need a paid plan, and Lightning's no-card GPU credit is a small one-off
 (Argon `cb-b2-lanes`, mostly from search summaries, UNVERIFIED verbatim).
 
+Second pass 2026-10-17 (Argon `cb-b3-more-lanes`, CEO-checked; the user is at HIT, China, no card, ever):
+
+| Lane | Verdict | Checked |
+|---|---|---|
+| Modal Starter | $30/month confirmed on modal.com/pricing. Card: the page does not say; third-party sites conflict ($1 at signup + $29 after a card, vs no card). Treat as card-gated | partly |
+| Modal for Academics | "up to $10k free compute credits" for graduate students (modal.com/pricing). Card waiver and approval of a `hit.edu.cn` email UNVERIFIED | amount only |
+| Lightning AI free tier | ~15 credits/month, phone check, no card (third-party; lightning.ai returned 503). No academic offer found. A Chinese phone number may fail | no |
+| Google TRC | TPU only (no CUDA, so no Isaac Lab), and needs a GCP billing account with a card | Argon only |
+| Azure for Students | $100 with no card, but 0 GPU quota on the student tier | Argon only |
+| NVIDIA Academic Grant / GitHub Pack | faculty PI only / no usable GPU offer. HIT is on the US Entity List | Argon only |
+| Thunder Compute students | $20 credit, US universities only: out | yes |
+| HIT HPC | Argon's `computing.hit.edu.cn` is the Faculty of Computing site, not an HPC centre (CEO curl). Advisor sign-off and PI billing are typical in China (SYSU 4 CNY/GPU-h), HIT's own rules UNVERIFIED | no |
+
+Verdict: nothing external beats Kaggle without a card. The one real lead is HIT's campus HPC: ask the advisor or the
+lab whether it has a GPU allocation, and what it costs.
+
 ## Session rules (every Colab job)
 
 1. **Probe first.** Run about 300 iterations on the Colab CPU runtime and on a T4 (each well under 0.1 CU). Cost of a full
