@@ -1,10 +1,13 @@
 import json
 import re
-import os
 import subprocess
 from pathlib import Path
+
+import numpy as np
+
 from . import pipeline
 from .loaders import LoadError
+from .plugins.league import PROPOSED_BOOTSTRAP_RESAMPLES, PROPOSED_GAP_THRES
 
 def flatten(obj, prefix=""):
     """
@@ -43,6 +46,145 @@ def _fmt_float(val):
     if isinstance(val, float):
         return f"{val:.4g}"
     return str(val)
+
+def league(dirs, out_dir):
+    # Lazy like the plugins: importing compare must not pick a matplotlib backend.
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        has_mpl = True
+    except ImportError:
+        has_mpl = False
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    flights = []
+    excluded_flights = []
+
+    for d in dirs:
+        try:
+            p = _resolve_path(d)
+            with open(p, "r", encoding="utf-8") as f:
+                metrics = json.load(f)
+            league_data = metrics.get("league")
+            if league_data:
+                flights.append({"dir": d, "metrics": metrics, "league": league_data})
+            else:
+                excluded_flights.append({"dir": d, "reason": "no league block in metrics.json"})
+        except (LoadError, OSError, json.JSONDecodeError, KeyError) as e:
+            print(f"Skipping {d}: {type(e).__name__}: {e}")
+            excluded_flights.append({"dir": d, "reason": f"{type(e).__name__}: {e}"})
+
+    # Filter by gap fraction
+    valid_flights = []
+
+    for f in flights:
+        gf = f["league"].get("gap_fraction")
+        if gf is not None and not np.isnan(gf) and gf > PROPOSED_GAP_THRES:
+            excluded_flights.append({"dir": f["dir"], "reason": f"gap fraction {gf:.3f} > {PROPOSED_GAP_THRES}"})
+        else:
+            valid_flights.append(f)
+
+    # Group by Axis -> Kind -> Flight
+    axes = ["roll", "pitch", "yaw", "z", "x", "y"]
+    KINDS = {0: "PID", 1: "ADRC", 2: "LQR", 3: "MPC"}
+
+    table_lines = []
+    table_lines.append("# League Report")
+    table_lines.append("")
+
+    if excluded_flights:
+        table_lines.append("## Excluded Flights")
+        for ef in excluded_flights:
+            table_lines.append(f"- {ef['dir']}: {ef['reason']}")
+        table_lines.append("")
+
+    rng = np.random.default_rng(42) # fixed seed
+
+    league_json = {"flights": [f["dir"] for f in flights], "excluded": excluded_flights, "axes": {}}
+
+    for ax in axes:
+        ax_data = {}
+        # gather e_rms per kind
+        for f in valid_flights:
+            kinds = f["league"].get("axis_kinds", {})
+            kind_int = kinds.get(ax)
+            if kind_int == "unknown" or kind_int not in KINDS:
+                continue
+            kind = KINDS[kind_int]
+
+            mba = f["league"].get("metrics_by_axis", {}).get(ax, {})
+            e_rms = mba.get("steady", {}).get("e_rms")
+            if e_rms is not None and np.isfinite(e_rms):
+                ax_data.setdefault(kind, []).append(e_rms)
+
+        if not ax_data:
+            continue
+
+        ranks = []
+        for kind, values in ax_data.items():
+            if len(values) == 0:
+                continue
+
+            v_arr = np.array(values)
+            mean_e = np.mean(v_arr)
+
+            # Bootstrap CI
+            if len(v_arr) > 1:
+                resamples = rng.choice(v_arr, size=(PROPOSED_BOOTSTRAP_RESAMPLES, len(v_arr)), replace=True)
+                means = np.mean(resamples, axis=1)
+                ci_lo = np.percentile(means, 2.5)
+                ci_hi = np.percentile(means, 97.5)
+            else:
+                ci_lo = mean_e
+                ci_hi = mean_e
+
+            ranks.append({"kind": kind, "mean": mean_e, "ci_lo": ci_lo, "ci_hi": ci_hi, "n": len(v_arr)})
+
+        ranks.sort(key=lambda x: x["mean"])
+
+        # Determine ties (overlapping CIs)
+        for i in range(len(ranks)):
+            ranks[i]["tie"] = False
+            for j in range(len(ranks)):
+                if i != j:
+                    if not (ranks[i]["ci_hi"] < ranks[j]["ci_lo"] or ranks[i]["ci_lo"] > ranks[j]["ci_hi"]):
+                        ranks[i]["tie"] = True
+
+        table_lines.append(f"## Axis: {ax}")
+        table_lines.append("| Rank | Controller | n | Error RMS | 95% CI | Tie |")
+        table_lines.append("|---|---|---|---|---|---|")
+
+        league_json["axes"][ax] = ranks
+
+        for i, r in enumerate(ranks):
+            tie_str = "*" if r["tie"] else ""
+            table_lines.append(f"| {i+1} | {r['kind']} | {r['n']} | {r['mean']:.4g} | [{r['ci_lo']:.4g}, {r['ci_hi']:.4g}] | {tie_str} |")
+
+        table_lines.append("")
+
+        # Plot
+        if has_mpl:
+            fig, ax_plt = plt.subplots(figsize=(8, 5))
+            kinds_labels = [r["kind"] for r in ranks]
+            means = [r["mean"] for r in ranks]
+            yerr = [[r["mean"] - r["ci_lo"] for r in ranks], [r["ci_hi"] - r["mean"] for r in ranks]]
+
+            ax_plt.bar(kinds_labels, means, yerr=yerr, capsize=5)
+            ax_plt.set_ylabel("Error RMS")
+            ax_plt.set_title(f"Axis {ax} Comparison")
+
+            plot_path = out_dir / f"league_{ax}.png"
+            fig.savefig(plot_path)
+            plt.close(fig)
+
+    (out_dir / "league.md").write_text("\n".join(table_lines), encoding="utf-8")
+    (out_dir / "league.json").write_text(json.dumps(league_json, indent=2), encoding="utf-8")
+
+    return str(out_dir)
+
 
 def compare(a, b):
     path_a = _resolve_path(a)
