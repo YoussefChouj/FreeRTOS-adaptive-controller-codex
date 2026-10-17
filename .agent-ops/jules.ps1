@@ -7,7 +7,9 @@
 # Start:   powershell -File .agent-ops/jules.ps1 -Id t-foo -Brief .agent-ops/briefs/t-foo.md [-Branch b] [-NoPr]
 # Re-poll: powershell -File .agent-ops/jules.ps1 -Id t-foo -Session <session id>
 # Sources: powershell -File .agent-ops/jules.ps1 -Sources        (is the GitHub repo connected?)
-param([string]$Id, [string]$Brief, [string]$Session, [string]$Branch, [switch]$NoPr, [switch]$Sources,
+# Reply:   powershell -File .agent-ops/jules.ps1 -Id t-foo -Session <id> -Reply <repo-relative .md>  (answers a question, then waits)
+#          add -Approve to approve a pending plan instead of (or before) the reply
+param([string]$Id, [string]$Brief, [string]$Session, [string]$Branch, [switch]$NoPr, [switch]$Sources, [string]$Reply, [switch]$Approve,
       [string]$Repo = "YoussefChouj/FreeRTOS-adaptive-controller-codex", [int]$TimeoutMin = 90, [int]$PollSec = 60,
       [string]$KeyFile = "D:\tools\jules\api-key.txt")
 $ErrorActionPreference = "Stop"
@@ -47,12 +49,21 @@ if (-not $Session) {
   $Session = (Call POST "sessions" $body).id
   $Session | Out-File "$out.session" -Encoding ascii
 }
+# A reply or approval: the state stays AWAITING_* for a moment after it, so the loop ignores that state for a few polls
+$grace = 0
+if ($Session -and $Approve) { Call POST "sessions/${Session}:approvePlan" @{} | Out-Null; $grace = 5 }
+if ($Session -and $Reply) {
+  if (-not (Test-Path (Join-Path $root $Reply))) { "jules: -Reply <repo-relative path> not found"; exit 1 }
+  Call POST "sessions/${Session}:sendMessage" @{ prompt = (Get-Content (Join-Path $root $Reply) -Raw -Encoding utf8) } | Out-Null
+  $grace = 5
+}
 # Waits inside this one background run (the CEO starts it once and reads the digest, never polls by hand)
 $t0 = Get-Date
 $stop = @("COMPLETED", "FAILED", "PAUSED", "AWAITING_USER_FEEDBACK", "AWAITING_PLAN_APPROVAL")
 do {
   $s = Call GET "sessions/$Session" $null
   $pr = @($s.outputs | Where-Object { $_.pullRequest } | ForEach-Object { $_.pullRequest })[0]
+  if ($grace -gt 0 -and $s.state -like "AWAITING*" -and -not $pr) { $grace--; Start-Sleep -Seconds $PollSec; continue }
   if ($stop -contains $s.state -or $pr) { break }
   Start-Sleep -Seconds $PollSec
 } while (((Get-Date) - $t0).TotalMinutes -lt $TimeoutMin)
