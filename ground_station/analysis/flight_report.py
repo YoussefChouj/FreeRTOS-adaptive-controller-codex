@@ -2005,6 +2005,29 @@ def main(argv: list[str] | None = None) -> None:
     if argv is None:
         argv = sys.argv[1:]
 
+    if "--league" in argv:
+        import uuid
+        idx = argv.index("--league")
+        league_args = argv[idx+1:]
+        dirs = []
+        out_dir = Path("logs/flight_tests/compare") / f"league_{uuid.uuid4().hex[:8]}"
+
+        i = 0
+        while i < len(league_args):
+            if league_args[i] == "--out" and i + 1 < len(league_args):
+                out_dir = Path(league_args[i + 1])
+                i += 2
+            elif league_args[i].startswith("--"):
+                break
+            else:
+                dirs.append(league_args[i])
+                i += 1
+
+        from ground_station.analysis.flightlab.compare import league
+        result_dir = league(dirs, out_dir)
+        print(f"League report generated in: {result_dir}")
+        sys.exit(0)
+
     if "--compare" in argv:
         # Compare mode
         idx = argv.index("--compare")
