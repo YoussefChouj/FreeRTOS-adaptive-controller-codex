@@ -31,11 +31,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
 from ground_station.lab import events
+
+ROOT = Path(__file__).resolve().parents[2]
 CHECKLIST = ("pack charged and plugged", "drone on the pad", "phone filming LANDSCAPE, calibration focus",
              "ch6 HIGH, flymode SDK", "thumb on ch10 kill", "area clear")
 _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # a system proxy must not see 127.0.0.1
@@ -657,6 +655,7 @@ def list_gain_presets(livetune_path=None):
             print(format_gain_table(gains, col_old="Default", col_new="Target"))
         else:
             print(f"Why: in-flight CMA-ES tuned gains from F2/F3 ({p})")
+            print(f"Note: {err}")
     else:
         print("Why: in-flight CMA-ES tuned gains from F2/F3 (rate idx 9-14, pos idx 24-35)")
         print(f"Note: {p} not found (run F2 and F3 first to generate livetune gains)")
@@ -669,7 +668,6 @@ def list_exp_rows():
     print(f"{'name':<10} {'id':>3} {'xy':>3} {'kp':>3} {'vp':>3} {'lim':>4} {'mdec':>5} {'xyrm':>5}")
     for r in rows:
         print(f"{r.name:<10} {r.id:>3} {r.xy:>3} {r.kp:>3} {r.vp:>3} {r.lim:>4} {r.mdec:>5} {r.xyrm:>5}")
-
 
 
 def dry_run(campaign, pack=None, rate=None, gains=None, no_gains=False,
