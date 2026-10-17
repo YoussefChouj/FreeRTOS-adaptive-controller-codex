@@ -35,3 +35,38 @@ Firmware facts: dead-zone is a hard step (`API/mrac.c:1282`, on by default `API/
 
 - Round 3 (waiting for an answer): after the 60 s hover the rate-feature weight has drifted; predict what the first fast roll
   command does, and say which switch limits the damage most and why.
+
+## 2026-10-17 lab-prep quiz (strategy)
+
+- Q1 (stream bandwidth): partial. Sees the link as capacity, not integrity: dropped frames poison every flight's data.
+- Q2 (fair controller comparison): good, about 2/3. Missed frozen firmware and gains, same MRAC setup and stream frame, order effects.
+- Q3 (judging a shadow controller from logs): partial, 4/10. Got: replay the logged inputs through the controller offline
+  and compare its output with the logged one. That checks the code, not the flying. Missed: a fitted plant model to
+  simulate the counterfactual flight, and the trap that the shadow's internal states (ESO, integrator) ride the PID's
+  trajectory, so its output is off-policy. Break point: replay as verification vs replay as counterfactual.
+- Q4 (fitting the plant from PID-flown logs): good, 6/10. Got: the fit sees the closed loop (PID + plant), and
+  the fix is an injected identification signal (chirp / SysID covering the frequency range). Missed the mechanism:
+  under feedback the input u is computed FROM the noise and disturbance, so u and the noise are correlated and
+  least squares is biased (it can "find" the PID's inverse). The fix works only because the dither is independent
+  of the feedback: inject it at the rate setpoint (the repo's SysID_Update) and use it as the instrument (IV/PEM).
+  Trajectory maneuvers (steps, circles, figure 8) are valid reference excitation but slow: they shake the position
+  loops near 0.1-1 Hz, while the rate dynamics (motor lag tens of ms) need content out to about 5-10 Hz.
+  Break point: knows WHAT to add, not WHY the plain fit is biased.
+- Q5 (can one 2-min hover fit both c0 and c1 of u_hov = c0 + c1*(V0 - V)?): partial, 5/10. Got: the data must span
+  the pack's voltage range (full to 20-30%). Missed: a 2-min flight spans only part of it, so c0 and c1 are nearly
+  collinear (a short V range lets the line pivot). Misplaced "excitation" on the throttle: the regressor that must
+  vary is V, steady hover is the ideal data for u_hov. Also V is not exogenous: throttle sags V through the pack's
+  internal resistance (the Q4 feedback trap again), which heavy filtering breaks. Break point: identifiability =
+  regressor spread, and which signal is the regressor.
+
+## 2026-10-18 big-picture strategy
+
+- Q1 (one lab result for the defence, and the examiner's first attack): partial, 4/10. Got: the strongest claim is
+  generality, the adaptive (MRAC) layer improves several baseline controllers, not only PID. Missed: no metric
+  ("improvement" in what: camera rms_cm, peak error, control effort?) and no attack. The attacks, in order:
+  (1) adaptation or just more gain? A layer that adds effort lowers error like a higher PID gain does; the answer is a
+  frozen-weight ablation (fly the baseline with the weights frozen at their converged values) and equal tuning effort
+  for every baseline; (2) nothing to adapt to: nominal hover has no changed uncertainty, so add a known perturbation
+  (payload mass, CG offset); (3) one flight per cell is an anecdote: n >= 3 repeats, interleaved order (battery sag,
+  warm motors), effect bigger than tracker noise and flight-to-flight scatter; (4) the cost: margins, drift on long
+  hovers (round 3), effort and saturation. Break point: "it improved" vs "adaptation caused the improvement".

@@ -39,18 +39,24 @@ powershell -File .agent-ops/jules.ps1 -Sources                                  
 - Read only the digest `.agent-ops/out/jules-<id>.md` and the one status line. `jules-<id>.json` has the raw session and
   activities, for debugging only. `jules-<id>.session` holds the session id.
 - If the branch on origin differs from local HEAD, the status line and digest say `WARN: Jules sees origin/...`.
-- To answer Jules or approve a plan, use the session URL from the digest in a browser (the user), or the API
-  `POST sessions/<id>:sendMessage {"prompt": ...}` / `:approvePlan` (not wrapped in the script yet).
+- Answer Jules: `-Session <id> -Reply <repo-relative .md>` sends the file and waits; add `-Approve` for a pending plan.
+  `-Session <id> -Wait` only waits (the reply already went out: never re-send it).
+- Network (net-wait.ps1): every API call waits out a VPN or proxy drop, probing `gstatic.com/generate_204` through
+  `127.0.0.1:7897` (`$env:NET_WAIT_PROXY` overrides), backoff 15 s, 30 s, then 60 s, for up to `-NetMaxMin` (default 30)
+  minutes in total, then exits 7. A reply POST that timed out is re-sent only when the activities show it did not land.
+  `AMBIGUOUS` on an exit 3 = the POST may have arrived: open the session's activities (or `-Wait`) before re-running,
+  so Jules never gets the same reply twice.
 
 | Exit | Meaning |
 |---|---|
 | 0 | PR opened or session COMPLETED |
 | 1 | FAILED (reason in the digest), or a bad argument |
 | 2 | still running at the timeout: re-poll with `-Session` |
-| 3 | API error (401 = bad or missing key, ask the user) |
+| 3 | API error (401 = bad or missing key, ask the user); `AMBIGUOUS` = a POST may have landed, check first |
 | 4 | no key |
 | 5 | branch not on origin |
 | 6 | stopped for input (AWAITING_USER_FEEDBACK / AWAITING_PLAN_APPROVAL / PAUSED) |
+| 7 | no network for `-NetMaxMin` minutes (proxy or VPN node down): check the tray, then re-poll with `-Session` |
 
 ## API facts (v1alpha, may change)
 
