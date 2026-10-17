@@ -107,8 +107,13 @@ def test_lab_scripts_compile_log_and_fly_on_the_fake_drone(path):
     want = {"g_xy_ctrl_kind", "g_traj_ff_shift_s", "g_land_xy_gate_cm"}  # a pack swap reboots
     if ground["g_xy_ctrl_kind"] in (2, 3):  # LQR/MPC also pin the predictor delay, VAR 47
         want.add("g_xyc_delay_ticks")
+    if "exp_id" in ground:
+        want.add("exp_id")
     assert set(ground) == want
     drone, _, deps = _rig()
+    if "exp_id" in ground:
+        orig_status = deps.status
+        deps.status = lambda: {**orig_status(), "exp_active": ground["exp_id"]}
     out = fly_scenario(parse_scenario(exp["scenario"]), deps)
     assert not out.aborted and out.landed, out.decision
     assert drone.vars["g_xy_ctrl_kind"] == ground["g_xy_ctrl_kind"]

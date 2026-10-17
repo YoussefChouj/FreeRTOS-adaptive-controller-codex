@@ -66,6 +66,9 @@ HOST_TESTS = [
     ("fw_prearm",        ["tests/firmware_host/test_prearm.c", "API/prearm.c"],                  ["-std=c99", *W, "-Werror", "-Wdeclaration-after-statement", "-IAPI"]),
     ("fw_health",        ["tests/firmware_host/test_fw_health.c", "API/fw_health.c"],            ["-std=c99", *W, "-Werror", "-Wdeclaration-after-statement", "-IAPI"]),
     ("fw_pid_fallback",  ["tests/firmware_host/test_pid_fallback.c"],                           ["-std=c99", "-Wall", "-Werror", *FWH]),
+    ("fw_exp_row",       ["tests/firmware_host/test_exp_row.c", "API/exp_row.c"],              ["-std=c99", *W, "-Werror", "-IAPI"]),
+    ("mrac_xy_nofight",  ["tests/firmware_host/test_mrac_xy_nofight.c", "API/xy_ctrl.c", "{src}/mrac.c", "{src}/mrac_math.c"],
+                         ["-std=c99", *W, "-msse2", "-mfpmath=sse", "-I{src}", "-IAPI/tests/stubs", "-IAPI", "-lm"]),
 ];
 
 
@@ -73,8 +76,26 @@ def _tail(text: str, n: int = 12) -> str:
     return "\n".join("    " + line for line in text.strip().splitlines()[-n:])
 
 
+_m32_ok = None
+
+
+def m32_supported(gcc: str) -> bool:
+    global _m32_ok
+    if _m32_ok is None:
+        try:
+            res = subprocess.run([gcc, "-m32", "-xc", "-", "-o", "/dev/null"],
+                                 input="#include <stdio.h>\nint main(void){return 0;}\n",
+                                 capture_output=True, text=True, timeout=5)
+            _m32_ok = (res.returncode == 0)
+        except Exception:
+            _m32_ok = False
+    return _m32_ok
+
+
 def run_one(gcc: str, name: str, sources: list[str], flags: list[str], out_dir: Path) -> tuple[bool, bool, str]:
     """Build (unless cached) and run one row; return (passed, built, report line). Rows share only the {src} copy."""
+    if any(a.startswith("-m32") for a in flags) and not m32_supported(gcc):
+        return True, False, f"PASS {name}: SKIP (-m32 headers not installed on host)"
     src = out_dir / "src"
     args = [a.replace("{src}", src.as_posix()) for a in [*flags, *sources]]
     ok, exe, built, stderr = exe_cache.build(gcc, name, args, out_dir, {src: "{src}"})
