@@ -14,7 +14,17 @@ no Colab compute units, no Antigravity overages, no paid tiers. Memory `ultra-on
 | Jules | Ultra = 300 tasks / rolling 24 h, 60 concurrent | jules.google/docs/usage-limits |
 
 Local state: Drive for desktop running as `G:` (`G:\My Drive`). C: has 12.6 GB free (the tight disk); D: 183 GB free.
-Not installed: gcloud, rclone, jules, jupyter. Installed: node/npm, VS Code, Python, WSL Ubuntu.
+Not installed: gcloud, rclone, jupyter. Installed: node/npm, VS Code, Python, WSL Ubuntu, plus the tools below.
+
+## Installed tools (2026-10-17, all on D: or in WSL, never C:)
+
+| Tool | Where | Notes |
+|---|---|---|
+| Jules CLI `@google/jules` 0.1.42 | `D:/tools/npm/jules.cmd` (binary `D:/tools/npm/bin/jules.exe`), npm cache `D:/tools/npm-cache` | not on PATH: call the full path. No `--version` flag; with no TTY it hangs, so the user runs `jules login` in a real terminal |
+| Colab MCP (googlecolab/colab-mcp @ b9ab3899, v1.0.1) | venv `D:/tools/colab-mcp` (Python 3.13), logs `D:/tools/colab-mcp/logs` | Claude Code user MCP `colab-mcp`, connected. The PyPI package `colab-mcp` is NOT Google's: never install it |
+| Colab CLI `google-colab-cli` 0.7.4 | WSL `~/.local/bin/colab` (uv tool; uv at `~/.local/bin/uv`) | Linux only. Repo googlecolab/google-colab-cli |
+| pip cache (Windows) | `D:/tools/pip-cache` (`%APPDATA%\pip\pip.ini`) | the old 348 MB C: cache was purged |
+| Temp for installs | `D:/tools/tmp` | set `TMP`/`TEMP` to it for big installs |
 Sims (`sim/sil`, `sim/bench`, `sim/adaptive_compare`) are numpy + scipy, single process (no multiprocessing):
 CPU cores help, GPUs do not. GPU candidates: `sim/bench/ctrl_nn2.py`, `ctrl_p2_neuro.py`, ground-side `nn_io.py` GRU/TCN, tracker vision.
 
@@ -42,4 +52,4 @@ CPU cores help, GPUs do not. GPU candidates: `sim/bench/ctrl_nn2.py`, `ctrl_p2_n
 
 ## Status
 
-- 2026-10-17: step 1 built (99ab323c, `lab archive`, dry run only so far: 27 GB movable at --days 0). User 10-17: move all but floor scans; d427a174 = Drive fallback `video_truth.video_file()` + index `docs/lab/video-archive.csv` + `docs/agent/video-archive.md`. Move DONE 10-17: `lab archive --days 0 --yes` rc=0, 1044 videos / 26.99 GB on Drive, 0 kept, 24 floor scans stay, 1044 rows in the index. D: frees as Drive uploads its D: cache. Tools go on D: (C: ~13 GB free): Colab MCP venv `D:/tools/colab-mcp` (Google's GitHub repo, needs Python 3.13; the PyPI `colab-mcp` is someone else's, never install it), Jules CLI `D:/tools/npm`. Waiting: GCP card go/no-go.
+- 2026-10-17: step 1 built (99ab323c, `lab archive`, dry run only so far: 27 GB movable at --days 0). User 10-17: move all but floor scans; d427a174 = Drive fallback `video_truth.video_file()` + index `docs/lab/video-archive.csv` + `docs/agent/video-archive.md`. Move DONE 10-17: `lab archive --days 0 --yes` rc=0, 1044 videos / 26.99 GB on Drive, 0 kept, 24 floor scans stay, 1044 rows in the index. D: frees as Drive uploads its D: cache. Tools go on D: (C: ~13 GB free). Installed and checked 10-17 (table above): Jules CLI, Colab MCP (registered, connected), Colab CLI in WSL, pip cache moved. C: unchanged at 13 GB free. User still to do: `D:\tools\npm\jules.cmd login` + connect GitHub at jules.google; open Colab once and sign in (first colab-mcp use opens it); `colab` login in WSL. Waiting: GCP card go/no-go.
