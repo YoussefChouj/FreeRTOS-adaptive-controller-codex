@@ -84,7 +84,15 @@ do {
   if ($stop -contains $s.state -or $pr) { break }
   Start-Sleep -Seconds $PollSec
 } while (((Get-Date) - $t0).TotalMinutes -lt $TimeoutMin)
-$acts = @((Call GET "sessions/$Session/activities?pageSize=100" $null).activities)
+# Page through every activity: one 100-item page shows only the oldest ones, so a long session looked stale
+# (2026-10-17, j-ladder-b) and a reply could go out twice
+$acts = @(); $tok = ""
+do {
+  $q = "sessions/$Session/activities?pageSize=100" + $(if ($tok) { "&pageToken=$tok" } else { "" })
+  $pg = Call GET $q $null
+  if ($pg.activities) { $acts += @($pg.activities) }
+  $tok = $pg.nextPageToken
+} while ($tok)
 @{ session = $s; activities = $acts } | ConvertTo-Json -Depth 10 | Out-File "$out.json" -Encoding utf8
 $md = @("# Jules $Id", "", "- state: $($s.state)", "- session: $Session ($($s.url))", "- PR: $(if ($pr) { "$($pr.url) - $($pr.title)" } else { 'none yet' })")
 if ($note) { $md += "- $note" }
