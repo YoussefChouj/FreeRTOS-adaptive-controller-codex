@@ -16,11 +16,12 @@
 _imu_st imu_data;
 static CtrlerTypeDef ctrl;
 
+/* Exact copy of TASK/StabilizerTask.c s_xyrm (test_wp46_host.py asserts the two tables are equal). */
 static const XyRm_t s_xyrm[4] = {
     { 1.0f, 2.0f,    0.0f, 1.0f }, /* 0: PID */
-    { 1.0f, 2.2007f, 0.0f, 1.0f }, /* 1: ADRC */
-    { 1.0f, 4.7842f, 0.0f, 1.0f }, /* 2: LQR */
-    { 1.0f, 4.3675f, 0.0f, 1.0f }, /* 3: MPC */
+    { 1.0f, 2.2f   , 0.0f, 1.0f }, /* 1: ADRC */
+    { 1.0f, 4.8f   , 0.0f, 1.0f }, /* 2: LQR */
+    { 1.0f, 4.4f   , 0.0f, 1.0f }, /* 3: MPC */
 };
 
 #define N_PTS 2000

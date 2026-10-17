@@ -1574,7 +1574,7 @@ static void Keil_VariantPoll(FlightState_t state)
 	vp_active = ok ? id : 0xEEU;
 }
 
-/* Experiment rows (docs/briefs/WP-46.md). One write to exp_id picks controller, adaptation,
+/* Experiment rows (docs/agent/briefs/WP-46.md). One write to exp_id picks controller, adaptation,
  * limits and reference model on the ground.
  * Legend (tools/row_meta.py, bounds PROPOSED):
  *   @xy     -      [0, 255]   g_xy_ctrl_kind (0-3, 0xFF keep)
