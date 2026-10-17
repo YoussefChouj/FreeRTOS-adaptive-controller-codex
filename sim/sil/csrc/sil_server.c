@@ -1,3 +1,6 @@
+#ifndef _WIN32
+#include <time.h>
+#endif
 /* SIL step server (WP-31): the real API/pid.c, API/mrac.c, API/mrac_math.c and API/controller.c, stepped one
  * 200 Hz control tick per request by sim/sil/fw.py over binary stdin/stdout.
  *
@@ -23,9 +26,19 @@
  */
 #include <stdio.h>
 #include <math.h>
+#ifdef _WIN32
+#ifdef _WIN32
 #include <io.h>
+#endif
+#endif
 #include <fcntl.h>
+#ifdef _WIN32
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <time.h>
+#endif
+#endif
 
 #include "pid.h"
 #include "mrac.h"
@@ -317,10 +330,25 @@ static void write_f(const float *buf, int n) { fwrite(buf, sizeof(float), (size_
 int main(void)
 {
 	float in[SIL_NIN], out[SIL_NOUT];
+	#ifdef _WIN32
+	#ifdef _WIN32
 	LARGE_INTEGER f, t0, t1;
-	_setmode(_fileno(stdin), _O_BINARY);
-	_setmode(_fileno(stdout), _O_BINARY);
+#else
+	struct timespec t0, t1;
+#endif
+#else
+    struct timespec t0, t1;
+#endif
+
+	#ifdef _WIN32
+    #ifdef _WIN32
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
+
+#endif
+	#ifdef _WIN32
 	QueryPerformanceFrequency(&f);
+#endif
 	Controller_Init();
 	wfb_glue_init();
 	for (;;) {
@@ -328,10 +356,23 @@ int main(void)
 		if (op == EOF || op == 'Q') return 0;
 		if (op == 'S') {
 			if (!read_f(in, SIL_NIN)) return 1;
-			QueryPerformanceCounter(&t0);
+			#ifdef _WIN32
+                        #ifdef _WIN32
+				QueryPerformanceCounter(&t0);
+#else
+				clock_gettime(CLOCK_MONOTONIC, &t0);
+#endif
+#else
+                        clock_gettime(CLOCK_MONOTONIC, &t0);
+#endif
 			sil_step(in, out);
-			QueryPerformanceCounter(&t1);
-			out[O_HOST_US] = (float)((double)(t1.QuadPart - t0.QuadPart) * 1e6 / (double)f.QuadPart);
+			#ifdef _WIN32
+                        QueryPerformanceCounter(&t1);
+                        out[O_HOST_US] = (float)((double)(t1.QuadPart - t0.QuadPart) * 1e6 / (double)f.QuadPart);
+#else
+                        clock_gettime(CLOCK_MONOTONIC, &t1);
+                        out[O_HOST_US] = (float)((t1.tv_sec - t0.tv_sec) * 1e6 + (t1.tv_nsec - t0.tv_nsec) / 1e3);
+#endif
 			write_f(out, SIL_NOUT);
 		} else if (op == 'C') {
 			float c[3], r;
