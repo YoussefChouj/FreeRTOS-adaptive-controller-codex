@@ -9,7 +9,8 @@
 # Sources: powershell -File .agent-ops/jules.ps1 -Sources        (is the GitHub repo connected?)
 # Reply:   powershell -File .agent-ops/jules.ps1 -Id t-foo -Session <id> -Reply <repo-relative .md>  (answers a question, then waits)
 #          add -Approve to approve a pending plan instead of (or before) the reply
-param([string]$Id, [string]$Brief, [string]$Session, [string]$Branch, [switch]$NoPr, [switch]$Sources, [string]$Reply, [switch]$Approve,
+# Wait:    powershell -File .agent-ops/jules.ps1 -Id t-foo -Session <id> -Wait   (the reply already went out: wait, never re-send)
+param([string]$Id, [string]$Brief, [string]$Session, [string]$Branch, [switch]$NoPr, [switch]$Sources, [string]$Reply, [switch]$Approve, [switch]$Wait,
       [string]$Repo = "YoussefChouj/FreeRTOS-adaptive-controller-codex", [int]$TimeoutMin = 90, [int]$PollSec = 60,
       [string]$KeyFile = "D:\tools\jules\api-key.txt")
 $ErrorActionPreference = "Stop"
@@ -72,16 +73,22 @@ if ($Session -and $Approve) { Call POST "sessions/${Session}:approvePlan" @{} | 
 if ($Session -and $Reply) {
   if (-not (Test-Path (Join-Path $root $Reply))) { "jules: -Reply <repo-relative path> not found"; exit 1 }
   Call POST "sessions/${Session}:sendMessage" @{ prompt = (Text $Reply) } | Out-Null
-  $grace = 5
+  $grace = 5; $Wait = $true
 }
+# After a reply (or with -Wait, when the reply already went out) the session keeps its old state (COMPLETED, or a PR
+# that already exists) until Jules picks the message up, so wait for it to move first (2026-10-17, j-att-fit: 0 min)
+$moved = -not $Wait
+if ($Wait -and -not $grace) { $grace = 5 }
 # Waits inside this one background run (the CEO starts it once and reads the digest, never polls by hand)
 $t0 = Get-Date
 $stop = @("COMPLETED", "FAILED", "PAUSED", "AWAITING_USER_FEEDBACK", "AWAITING_PLAN_APPROVAL")
 do {
   $s = Call GET "sessions/$Session" $null
   $pr = @($s.outputs | Where-Object { $_.pullRequest } | ForEach-Object { $_.pullRequest })[0]
+  if ($stop -notcontains $s.state) { $moved = $true }
+  if (-not $moved -and $grace -gt 0) { $grace--; Start-Sleep -Seconds $PollSec; continue }
   if ($grace -gt 0 -and $s.state -like "AWAITING*" -and -not $pr) { $grace--; Start-Sleep -Seconds $PollSec; continue }
-  if ($stop -contains $s.state -or $pr) { break }
+  if ($stop -contains $s.state -or ($pr -and -not $Wait)) { break }
   Start-Sleep -Seconds $PollSec
 } while (((Get-Date) - $t0).TotalMinutes -lt $TimeoutMin)
 # Page through every activity: one 100-item page shows only the oldest ones, so a long session looked stale
