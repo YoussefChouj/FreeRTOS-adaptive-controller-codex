@@ -42,4 +42,4 @@ CPU cores help, GPUs do not. GPU candidates: `sim/bench/ctrl_nn2.py`, `ctrl_p2_n
 
 ## Status
 
-- 2026-10-17: facts verified, user picked all four, no-spend rule saved. Nothing installed yet. NEXT: step 1.
+- 2026-10-17: step 1 built (99ab323c, `lab archive`, dry run only so far: 27 GB movable at --days 0). Waiting: user picks the cutoff; GCP card go/no-go. Next: Jules, Colab.
