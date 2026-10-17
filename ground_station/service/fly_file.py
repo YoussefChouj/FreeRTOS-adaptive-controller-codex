@@ -5,6 +5,7 @@ fly-mode campaign (campaign_schema) and checked with the same scenario rules as 
     campaign circle-f8                                <- optional, default: the file name
     rate 33                                           <- log rate, Hz
     log estimator_truth velocity_loops                <- log_plan groups
+    slow 25 nn4 xy_ctrl                               <- slow lane: groups in their own slots, Hz optional (25)
     set g_xy_ctrl_kind=2                              <- set rows before takeoff: VAR_WRITE on the ground, before IDLE
     takeoff 0.5                                      <- optional, default takeoff 0.5; land is added when missing
     hold 3
@@ -39,7 +40,7 @@ DEFAULT_RATE_HZ = 33
 DEFAULT_LOG = ("estimator_truth", "optical_flow", "velocity_loops", "takeoff_gate", "thrust_model", "ekf_states")
 POSITIONAL = {"takeoff": "z", "hold": "s", "preset": "name", "path": "shape"}
 ALIASES = {"run": "preset"}
-HEADERS = ("campaign", "controller", "rate", "log", "motion", "pack")
+HEADERS = ("campaign", "controller", "rate", "log", "slow", "motion", "pack")
 _NAME_RE = re.compile(r"^[a-z0-9_-]{1,40}$")
 _STEPS_RE = re.compile(r"\bsteps\.(\d+)\b")
 
@@ -80,7 +81,7 @@ def _default_name(src: str) -> str:
 def compile_fly(text: str, src: str = "<fly>") -> tuple[dict[str, Any], list[int]]:
     """(campaign data, source line of each scenario step). Raises FlyFileError with every problem found."""
     problems: list[str] = []
-    head: dict[str, Any] = {"controller": "pid", "rate": DEFAULT_RATE_HZ, "log": list(DEFAULT_LOG), "motion": {}}
+    head: dict[str, Any] = {"controller": "pid", "rate": DEFAULT_RATE_HZ, "log": list(DEFAULT_LOG), "slow": [], "motion": {}}
     objective = ""
     steps: list[dict[str, Any] | str] = []
     lines: list[int] = []
@@ -128,6 +129,11 @@ def compile_fly(text: str, src: str = "<fly>") -> tuple[dict[str, Any], list[int
                 problems.append(f"{where}: header line {word!r} must come before the first step")
             elif word == "log":
                 head["log"] = rest
+            elif word == "slow":
+                hz = _value(rest[0]) if rest else None
+                if isinstance(hz, (int, float)) and not isinstance(hz, bool):
+                    head["slow_hz"], rest = hz, rest[1:]
+                head["slow"] = rest
             elif word == "motion":
                 head["motion"].update(_pairs(rest, where, problems))
             elif len(rest) != 1:
@@ -201,7 +207,9 @@ def compile_fly(text: str, src: str = "<fly>") -> tuple[dict[str, Any], list[int
             "scenario": scenario,
             "capture": "campaign",
             "repeats": 1,
-            "log_plan": {"rate_hz": head["rate"], "groups": list(head["log"])},
+            "log_plan": {"rate_hz": head["rate"], "groups": list(head["log"]),
+                         **({"slow": list(head["slow"])} if head["slow"] else {}),
+                         **({"slow_hz": head["slow_hz"]} if "slow_hz" in head else {})},
         }],
         "abort": {},
     }

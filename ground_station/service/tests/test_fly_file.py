@@ -73,11 +73,25 @@ def test_ground_writes_fly_on_the_fake_drone_before_takeoff():
     ("hold 3 extra\n", "t.fly:1: expected key=value"),
     ("campaign Bad_Name\nhold 3\n", "campaign name 'Bad_Name'"),
     ("# only a comment\n", "no steps"),
+    ("hold 3\nslow nn4\n", "t.fly:2: header line 'slow' must come before the first step"),
 ])
 def test_problems_name_the_line(text, expect):
     with pytest.raises(fly_file.FlyFileError) as e:
         fly_file.compile_fly(text, "t.fly")
     assert any(expect in p for p in e.value.problems), e.value.problems
+
+
+def test_slow_header_sets_the_slow_lane_with_optional_hz():
+    def plan(text):
+        data, _ = fly_file.compile_fly(text + "hold 3\n", "t.fly")
+        return data["experiments"][0]["log_plan"]
+    assert plan("rate 100\nlog velocity_loops\nslow 20 nn4 xy_ctrl\n") == {
+        "rate_hz": 100, "groups": ["velocity_loops"], "slow": ["nn4", "xy_ctrl"], "slow_hz": 20}
+    assert plan("slow nn4\n")["slow"] == ["nn4"] and "slow_hz" not in plan("slow nn4\n")
+    assert "slow" not in plan("")
+    from ground_station.livewatch.campaign_capture import check_log_plan    # load_campaign runs this check
+    assert any("slow: unknown group 'gyro'" in p for p in check_log_plan(plan("slow 25 gyro\n")))
+    assert any("slow: nn4 also in groups" in p for p in check_log_plan(plan("log nn4\nslow nn4\n")))
 
 
 def test_launch_writes_a_loadable_launch_copy(tmp_path):
