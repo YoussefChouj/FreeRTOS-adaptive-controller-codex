@@ -91,9 +91,9 @@ def test_checkpoint_keys_exactly_match_spec(tmp_path):
 
 
 def test_any_slot_loader_rate_invariance_and_fallback(tmp_path):
-    import json
     import pandas as pd
-    from ground_station.analysis.nn_io import any_slot_loader, RATE_HZ
+
+    from ground_station.analysis.nn_io import RATE_HZ, any_slot_loader
     from ground_station.analysis.video_truth import NN4_CH
 
     stem = str(tmp_path / "testflight")
@@ -129,9 +129,7 @@ def test_any_slot_loader_rate_invariance_and_fallback(tmp_path):
     assert np.allclose(F50, F100, atol=0.1)
 
     # Verify predictions are identical within it.
-    from ground_station.analysis.nn_io import _torch
-    torch = _torch()
-    import torch.nn as nn
+    from torch import nn
 
     class DummyNet(nn.Module):
         def forward(self, X, V):
@@ -140,7 +138,7 @@ def test_any_slot_loader_rate_invariance_and_fallback(tmp_path):
     model = (DummyNet(), F50.mean(0), F50.std(0) + 1e-6, list(range(len(chans))))
 
     # We must construct dictionaries like `predict` expects
-    from ground_station.analysis.nn_io import predict, V_COL
+    from ground_station.analysis.nn_io import V_COL, predict
     def mock_dict(F_arr):
         v = F_arr[:, V_COL[0]] + 1j * F_arr[:, V_COL[1]]
         return {"F": F_arr, "v": v, "back": np.ones(len(F_arr), dtype=complex), "ts": ts,
@@ -154,13 +152,13 @@ def test_any_slot_loader_rate_invariance_and_fallback(tmp_path):
     assert np.allclose(p50, p100, atol=0.1)
 
 def test_any_slot_loader_regression_matches_read_slots(tmp_path):
-    from ground_station.analysis.nn_io import any_slot_loader, _bmean, RATE_HZ
-    from ground_station.analysis.video_truth import NN4_CH
     import pandas as pd
+
+    from ground_station.analysis.nn_io import RATE_HZ, _bmean, any_slot_loader
+    from ground_station.analysis.video_truth import NN4_CH
 
     stem = str(tmp_path / "regress_flight")
     ts = np.arange(0.5, 3.0, 1.0 / RATE_HZ)
-    chans = [c for k, cols in NN4_CH.items() for c in cols]
 
     # Create slot 1 and 2 just like old format
     np.random.seed(0)

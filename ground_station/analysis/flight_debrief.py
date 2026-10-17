@@ -32,6 +32,8 @@ from pathlib import Path
 from typing import Any
 
 from ground_station.analysis import landing_report
+from ground_station.analysis.nn_io import load_model
+import ground_station.analysis.nn_replay as nnr
 from ground_station.analysis.controller_descriptor import (
     PID_AXES,
     PID_GAIN_CMD,
@@ -552,6 +554,43 @@ def current_gains(history: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
     return gains
 
 
+
+def _nn_shadow(sd: Path, out: Path) -> dict:
+    """Run the offline NN replay against the flight and return its debrief section."""
+    truth = sd / "truth4.csv"
+    slot1_path = sd / f"{sd.name}.slot1.csv"
+
+    if not slot1_path.exists():
+        return {"md": "Skipped NN shadow: no slot CSV"}
+    if not truth.exists():
+        return {"md": "Skipped NN shadow: no truth4.csv"}
+
+    ckpts = list(sd.glob("*.pt"))
+    if not ckpts:
+        return {"md": "Skipped NN shadow: no checkpoint"}
+    if len(ckpts) > 1:
+        return {"md": "Skipped NN shadow: ambiguous checkpoint"}
+    ckpt = ckpts[0]
+
+    try:
+        load_model(ckpt)
+    except Exception as e:
+        return {"md": f"Skipped NN shadow: checkpoint rejected ({e})"}
+
+    try:
+        import subprocess
+        # We call the main method directly
+        nnr_out = out / "nn_replay"
+        nnr_out.mkdir(exist_ok=True)
+        if nnr.main([sd.name, "--truth", str(truth), "--ckpt", str(ckpt), "--out", str(nnr_out)]) == 0:
+            md = (nnr_out / "nn_replay.md").read_text(encoding="utf-8") if (nnr_out / "nn_replay.md").exists() else ""
+            js = json.loads((nnr_out / "nn_replay.json").read_text(encoding="utf-8")) if (nnr_out / "nn_replay.json").exists() else {}
+            return {"md": md, "json": js}
+        else:
+            return {"md": "Skipped NN shadow: replay script failed"}
+    except Exception as e:
+        return {"md": f"Skipped NN shadow: replay script failed ({e})"}
+
 def debrief(session_dir: str | Path, run_dir: str | Path, *, flight_id: str | None = None, scenario: str = "hover",
             scenario_args: Mapping[str, Any] | None = None, pack: str = "type2",
             sat: tuple[float, float] | None = None, gains: Mapping[str, Mapping[str, float]] | None = None,
@@ -582,46 +621,7 @@ def debrief(session_dir: str | Path, run_dir: str | Path, *, flight_id: str | No
          "metrics": m, "findings": found, "verdicts": verdicts, "not_applied": not_applied, "next": nxt, "gains": gains,
          "previous": {"flight_id": prev["flight_id"], "metrics": prev["metrics"]} if prev else None,
          "landing": landing_report.landing(series)}
-    # NN shadow hook
-    sd = Path(session_dir)
-    truth = sd / "truth4.csv"
-    ckpt = sd / "model.pt"  # Assumed configured checkpoint name, or any *.pt if configured
-    if not ckpt.exists():
-        ckpts = list(sd.glob("*.pt"))
-        if ckpts:
-            ckpt = ckpts[0]
-
-    slot1_path = sd / f"{sd.name}.slot1.csv"
-    skip_reason = None
-    if not slot1_path.exists():
-        skip_reason = "no slot CSV"
-    elif not truth.exists():
-        skip_reason = "no truth4.csv"
-    elif not ckpt.exists():
-        skip_reason = "no checkpoint"
-    else:
-        # Check checkpoint validity to report if rejected
-        try:
-            from ground_station.analysis.nn_io import load_model
-            load_model(ckpt)
-        except Exception as e:
-            skip_reason = f"checkpoint rejected ({e})"
-
-    if skip_reason is None:
-        try:
-            import ground_station.analysis.nn_replay as nnr
-            nnr_out = out / "nn_replay"
-            nnr_out.mkdir(exist_ok=True)
-            if nnr.main([sd.name, "--truth", str(truth), "--ckpt", str(ckpt), "--out", str(nnr_out)]) == 0:
-                d["nn_shadow"] = {
-                    "md": (nnr_out / "nn_replay.md").read_text() if (nnr_out / "nn_replay.md").exists() else "",
-                    "json": json.loads((nnr_out / "nn_replay.json").read_text()) if (nnr_out / "nn_replay.json").exists() else {}
-                }
-        except Exception as e:
-            skip_reason = f"replay script failed ({e})"
-            d["nn_shadow"] = {"md": f"Skipped NN shadow: {skip_reason}"}
-    else:
-        d["nn_shadow"] = {"md": f"Skipped NN shadow: {skip_reason}"}
+    d["nn_shadow"] = _nn_shadow(Path(session_dir), out)
 
     if plots:
         plot_flight(series, out / "plots" / "tracking.png", f"{flight_id} {scenario}", hold_window(series))
