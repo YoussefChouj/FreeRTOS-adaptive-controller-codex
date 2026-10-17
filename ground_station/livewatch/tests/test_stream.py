@@ -114,8 +114,8 @@ def test_range_count_ceiling():
 
 
 def test_payload_ceiling_is_reported_in_float32():
-    with pytest.raises(LiveTransportError, match="256 float32"):
-        build_stream_request([StreamRange(SRAM, 4, 300)], 8, TRANSPORT_USART3,
+    with pytest.raises(LiveTransportError, match="508 float32"):
+        build_stream_request([StreamRange(SRAM, 4, 600)], 8, TRANSPORT_USART3,
                              usart3_baud=921600)
 
 
@@ -147,8 +147,8 @@ def _max_float32(baud, divider, transport=TRANSPORT_USART3):
 
 
 def test_budget_ceilings_at_both_bauds():
-    # Nominal 200 Hz guard post-unlock; the measured SUBSCRIBE_ONLY cadence is
-    # ~160 Hz, so the guard is ~20% pessimistic.
+    # The guard prices SEND_TASK_HZ / divider = 100 Hz / divider (step A,
+    # 2026-10-17), the rate the 100 Hz Send_Task branch really sends.
     # Each ceiling is 5 B/frame lower than before the timestamp+CRC16: that
     # overhead is real bandwidth and the guard must charge for it.
     # Values track SUBSCRIBE_BUDGET_PCT_USART3 (95% since 2026-08-09, when the
@@ -156,7 +156,7 @@ def test_budget_ceilings_at_both_bauds():
     assert _max_float32(115200, 1) == 24
     assert _max_float32(115200, 2) == 51
     assert _max_float32(921600, 1) == 215
-    assert _max_float32(921600, 2) == 256     # under STREAM_MAX_BYTES cap (256)
+    assert _max_float32(921600, 2) == 434     # (12 + 4*434) * 50 <= 87552; cap is 508
 
 
 def test_raising_the_divider_buys_variables():
@@ -317,8 +317,8 @@ def test_constants_match_firmware_header():
     assert define("SUBSCRIBE_MAX_SLOTS") == MAX_SLOTS
     assert define("SUBSCRIBE_MAX_STREAM_RANGES") == MAX_STREAM_RANGES
     assert define("SUBSCRIBE_STREAM_MAX_BYTES") == STREAM_MAX_BYTES
-    # Firmware header API/subscribe.h still has legacy 200U, while Send_Task runs at 100 Hz by design.
-    assert define("SUBSCRIBE_SEND_TASK_HZ") == 200
+    # The guard prices the real 100 Hz Send_Task rate since stream ladder step A (2026-10-17).
+    assert define("SUBSCRIBE_SEND_TASK_HZ") == 100 == SEND_TASK_HZ
     assert SEND_TASK_HZ == 100
     assert define("SUBSCRIBE_BUDGET_PCT_USART3") == BUDGET_PCT[TRANSPORT_USART3]
     assert define("SUBSCRIBE_BUDGET_PCT_UART5") == BUDGET_PCT[TRANSPORT_UART5]

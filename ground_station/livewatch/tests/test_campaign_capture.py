@@ -65,8 +65,8 @@ def test_every_symbol_resolves_in_the_elf_as_one_scalar():
 # ---- slots_for -----------------------------------------------------------------------------------------
 
 def _guard_bps(slots: list[dict]) -> float:
-    """Firmware guard price, by hand: (12 + 4 B per var) per frame, at 200 Hz / divider."""
-    return sum((FRAME_OVERHEAD + 4 * len(s["vars"])) * 200 * s["hz"] / 100 for s in slots)
+    """Firmware guard price, by hand: (12 + 4 B per var) per frame, at GUARD_SEND_HZ / divider."""
+    return sum((FRAME_OVERHEAD + 4 * len(s["vars"])) * cc.GUARD_SEND_HZ * s["hz"] / 100 for s in slots)
 
 
 @pytest.mark.parametrize("rate", [200, 100, 60, 50, 25, 10, 1])
@@ -87,11 +87,12 @@ def test_50hz_records_everything():
     assert dropped == [] and _guard_bps(slots) == 46800
 
 
-def test_100hz_drops_the_last_30_optional():
+def test_100hz_drops_the_optional_past_the_budget():
+    # Priced at 100 Hz (step A), so twice the vars of the old 200 Hz guard fit.
     slots, dropped = slots_for(100)
-    assert [(s["hz"], len(s["vars"])) for s in slots] == [(100.0, 62), (100.0, 19)]
-    assert _guard_bps(slots) == 52000 + 17600  # one more var would cost 70400 > 70041.6
-    assert dropped == list(OPTIONAL[38:])  # 81 vars fit: 43 core + 38 optional
+    assert [(s["hz"], len(s["vars"])) for s in slots] == [(100.0, 62), (100.0, 62), (100.0, 42)]
+    assert _guard_bps(slots) == 2 * 26000 + 18000  # one more var would cost 70400 > 70041.6
+    assert dropped == list(OPTIONAL[123:])  # 166 vars fit: 43 core + 123 optional
 
 
 def test_divider_truncates_like_the_live_host():
@@ -100,16 +101,16 @@ def test_divider_truncates_like_the_live_host():
 
 
 def test_tiny_budget_drops_optional_before_needed():
-    needed_only = (FRAME_OVERHEAD + 4 * len(NEEDED)) * 200  # 35200 B/s at 100 Hz
+    needed_only = (FRAME_OVERHEAD + 4 * len(NEEDED)) * cc.GUARD_SEND_HZ
     slots, dropped = slots_for(100, budget_bps=needed_only)
     assert [s["vars"] for s in slots] == [list(NEEDED)] and dropped == list(OPTIONAL)
-    slots, dropped = slots_for(100, budget_bps=needed_only + 3 * 4 * 200)
+    slots, dropped = slots_for(100, budget_bps=needed_only + 3 * 4 * cc.GUARD_SEND_HZ)
     assert slots[0]["vars"] == list(NEEDED + OPTIONAL[:3]) and dropped == list(OPTIONAL[3:])
 
 
 def test_needed_that_cannot_fit_raises():
     with pytest.raises(CaptureError, match="needed"):
-        slots_for(100, budget_bps=(FRAME_OVERHEAD + 4 * len(NEEDED)) * 200 - 1)
+        slots_for(100, budget_bps=(FRAME_OVERHEAD + 4 * len(NEEDED)) * cc.GUARD_SEND_HZ - 1)
 
 
 @pytest.mark.parametrize("rate", [0, -50, float("nan"), float("inf")])

@@ -387,6 +387,10 @@ static Subscribe_Stream_t s_streams[SUBSCRIBE_MAX_SLOTS] SUBSCRIBE_CCM;
  * repeatedly due cannot monopolise the wire and starve the others. */
 static uint8_t s_rr;
 
+/* Stream-tick pacer state (see Subscribe_StreamTick). */
+static uint32_t s_last_tick_ms;
+static uint8_t  s_tick_started;
+
 /* Parse target. A malformed request must NOT disturb a stream that is
  * already running, so parsing lands here and is copied into its slot only
  * after every range has validated. */
@@ -742,6 +746,20 @@ void Subscribe_StreamTick(void)
     Subscribe_Stream_t* st;
     uint8_t frames_sent;
     uint8_t served;
+    uint32_t now_ms;
+
+    /* Pacer: the link guard prices every slot at SUBSCRIBE_SEND_TASK_HZ, but
+     * the SysID branch of Send_Task calls this every ~5 ms. A call that comes
+     * sooner than SUBSCRIBE_STREAM_TICK_MIN_MS after the last tick is skipped
+     * whole (no phase, no seq), so a divider means the same rate in both
+     * branches and a vTaskDelayUntil catch-up burst cannot flood the wire. */
+    now_ms = Subscribe_TimeMs();
+    if ((s_tick_started != 0U) &&
+        ((uint32_t)(now_ms - s_last_tick_ms) < (uint32_t)SUBSCRIBE_STREAM_TICK_MIN_MS)) {
+        return;
+    }
+    s_tick_started = 1U;
+    s_last_tick_ms = now_ms;
 
     /* Phase 1: advance every slot's clock and mark those that came due.
      * Marking is separate from sending because only one frame goes out per

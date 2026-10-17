@@ -36,9 +36,10 @@ from ground_station.livewatch.stream import (
 # --- limits and budget -------------------------------------------------------------------------------
 
 VARS_PER_SLOT = min(MAX_STREAM_RANGES, STREAM_MAX_BYTES // DEFAULT_VALUE_BYTES)  # 62 ranges bind first
-# The firmware budget guard prices a slot as if Send_Task ran at 200 Hz (API/subscribe.h:271,
-# subscribe.c:592), although it really runs at SEND_TASK_HZ = 100. A plan must pass the guard.
-GUARD_SEND_HZ = 200
+# The firmware budget guard prices a slot at SUBSCRIBE_SEND_TASK_HZ / divider (API/subscribe.c guard).
+# Since stream ladder step A (2026-10-17) that is 100 Hz, the real Send_Task rate, and the stream-tick
+# pacer keeps the 5 ms SysID branch to it. A plan must pass the guard of the firmware it flies on.
+GUARD_SEND_HZ = 100
 RADIO_BUDGET_BPS = 87552  # USART3 radio share: 95 % of 92160 B/s (livewatch/log_frames.md:73)
 PLANNING_BUDGET_BPS = 0.8 * RADIO_BUDGET_BPS  # 20 % headroom for retries and the command channel
 PROBE_RATES_HZ = (200, 100, 50, 25)

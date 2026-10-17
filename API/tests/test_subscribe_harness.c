@@ -172,7 +172,7 @@ static int count_type(uint8_t t)
 int main(void)
 {
     uint32_t a[2]; uint16_t s[2], c[2];
-    int i;
+    int i, bad;
 
     a[0] = (uint32_t)(uintptr_t)g_theta; s[0] = 4; c[0] = 6;
     a[1] = (uint32_t)(uintptr_t)g_rpm;   s[1] = 2; c[1] = 2;
@@ -198,12 +198,12 @@ int main(void)
     /* ---- 3. budget is summed across slots -------------------------------- */
     stop_all();
     a[0] = (uint32_t)(uintptr_t)g_theta; s[0] = 4; c[0] = 6;
-    subscribe(0, 4, SUBSCRIBE_TRANSPORT_UART5, a, s, c, 1);
-    okv("36 B at divider 4 = 1800 B/s fits UART5's 2304 B/s alone",
+    subscribe(0, 2, SUBSCRIBE_TRANSPORT_UART5, a, s, c, 1);
+    okv("36 B at divider 2 (100 Hz / 2) = 1800 B/s fits UART5's 2304 B/s alone",
         cap_type[0], SUBSCRIBE_FRAME_TYPE_SCHEMA);
     cap_n = 0;
     for (i = 1; i < (int)SUBSCRIBE_MAX_SLOTS; i++) {
-        subscribe((uint8_t)i, 4, SUBSCRIBE_TRANSPORT_UART5, a, s, c, 1);
+        subscribe((uint8_t)i, 2, SUBSCRIBE_TRANSPORT_UART5, a, s, c, 1);
     }
     ok("a second identical slot trips the SUMMED budget (3600 > 2304)",
        count_type(SUBSCRIBE_FRAME_TYPE_ERROR) > 0);
@@ -300,9 +300,10 @@ int main(void)
     subscribe(0, 1, SUBSCRIBE_TRANSPORT_USART3, a, s, c, 1);
     cap_n = 0;
     usart3_busy = 1U;
-    for (i = 0; i < 10; i++) { Subscribe_StreamTick(); }
+    for (i = 0; i < 10; i++) { g_ticks += 10U; Subscribe_StreamTick(); }
     okv("busy DMA emits nothing", cap_n, 0);
     usart3_busy = 0U;
+    g_ticks += 10U;
     Subscribe_StreamTick();
     okv("and resumes once drained", cap_n, 1);
     ok("the skipped frames show up as a SEQ gap, not silence", cap_seq[0] >= 10);
@@ -318,12 +319,38 @@ int main(void)
     }
     okv("every slot 0..MAX_SLOTS-1 accepted", count_type(SUBSCRIBE_FRAME_TYPE_SCHEMA), (int)SUBSCRIBE_MAX_SLOTS);
     cap_n = 0;
-    for (i = 0; i < 4; i++) { Subscribe_StreamTick(); }
+    for (i = 0; i < 4; i++) { g_ticks += 10U; Subscribe_StreamTick(); }
     for (i = 0; i < (int)SUBSCRIBE_MAX_SLOTS; i++) {
         okv("two data frames per slot, frame type 0x09 + slot",
             count_type((uint8_t)(SUBSCRIBE_FRAME_TYPE_DATA + i)), 2);
     }
     okv("nothing else on the wire", cap_n, 2 * (int)SUBSCRIBE_MAX_SLOTS);
+
+    /* ---- 9. the pacer holds a slot to SUBSCRIBE_SEND_TASK_HZ (step A, 2026-10-17) */
+    /* The SysID branch of Send_Task calls the tick every ~5 ms, the guard prices every
+     * slot at 100 Hz. A call within SUBSCRIBE_STREAM_TICK_MIN_MS of the last served
+     * tick is skipped whole: no frame, no phase step, no SEQ step. */
+    stop_all();
+    a[0] = (uint32_t)(uintptr_t)g_theta; s[0] = 4; c[0] = 6;
+    subscribe(0, 1, SUBSCRIBE_TRANSPORT_USART3, a, s, c, 1);
+    cap_n = 0;
+    g_ticks += 100U;
+    for (i = 0; i < 20; i++) { Subscribe_StreamTick(); g_ticks += 5U; }
+    okv("20 calls 5 ms apart serve 10 frames (100 Hz, not 200)", cap_n, 10);
+    bad = 0;
+    for (i = 1; i < cap_n; i++) { if ((uint8_t)(cap_seq[i] - cap_seq[i - 1]) != 1U) { bad++; } }
+    okv("a skipped call leaves no SEQ gap", bad, 0);
+    cap_n = 0;
+    g_ticks += 10U;
+    for (i = 0; i < 5; i++) { Subscribe_StreamTick(); }
+    okv("a catch-up burst of 5 calls in one ms serves 1 frame", cap_n, 1);
+    g_ticks += (uint32_t)SUBSCRIBE_STREAM_TICK_MIN_MS - 1U;
+    Subscribe_StreamTick();
+    okv("MIN_MS - 1 later is still skipped", cap_n, 1);
+    g_ticks += 1U;
+    Subscribe_StreamTick();
+    okv("MIN_MS later is served", cap_n, 2);
+
     printf("slots %u, sizeof(Subscribe_Stream_t) %u B, slot table + staging %u B\n",
            (unsigned)SUBSCRIBE_MAX_SLOTS, (unsigned)sizeof(Subscribe_Stream_t),
            (unsigned)((SUBSCRIBE_MAX_SLOTS + 1U) * sizeof(Subscribe_Stream_t)));
