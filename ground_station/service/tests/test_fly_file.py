@@ -105,6 +105,8 @@ def test_lab_scripts_compile_log_and_fly_on_the_fake_drone(path):
     assert check_log_plan(exp["log_plan"]) == [] and "camera_fusion" in exp["log_plan"]["groups"]
     ground = exp["scenario"]["steps"][0]["takeoff"]["set"]
     want = {"g_traj_ff_shift_s", "g_land_xy_gate_cm"}  # a pack swap reboots
+    if "lim_mode" in ground:  # lab_h speed ladder picks its s_lim row on the ground, VAR 52
+        want.add("lim_mode")
     if "exp_id" in ground:  # the exp row sets the kind on board; lab_e pins the predictor delay for all four
         want |= {"exp_id", "g_xyc_delay_ticks"}
     else:
