@@ -89,7 +89,8 @@ need a bigger GPU (L4 / A100) or long uninterrupted runs, which the free lanes d
 | CPU only: `torch.set_num_threads(4)`, no `.cuda()` or `.to(device)` anywhere | `nn_io.py:251` |
 | `fit()`: batch 16 windows of 90 s at 20 Hz (1,800 steps), built in a Python loop each iteration | `nn_io.py:431-464` |
 | Folds and seeds run one after another | `nn_io.py:535`, `:543` |
-| LOFO with the default 2 seeds: about 23 folds x 2 = 46 fits x 1,500 iters = 69,000 steps | Argon `cb-c1-repo` (fold count from the pool, not run) |
+| LOFO with the default 2 seeds: 21 folds (pool 20 + the pool fit) x 2 = 42 fits x 1,500 iters = 63,000 steps | measured 2026-10-17: `load_all()` gives 24 flights (4 skipped), pool 20, hold 3, load 67 s |
+| **Laptop baseline (measured 2026-10-17, torch 2.14.1+cpu, 4 threads, defaults):** TCN 0.077 s/iter = 1.9 min a fit = **1.35 h** for LOFO x 2 seeds. GRU 1.40 s/iter = 35 min a fit = **24.5 h** | scratch `time_fit.py` (100 TCN / 30 GRU iters after a 10-iter warm-up). UTIL pretraining time not measured |
 | Model ~5-7k parameters (H=32, 1 layer) | `nn_io.py:356-399` |
 
 Before a GPU can help: put the data tensors on the device once, build the window indices on the device (no per-iteration
