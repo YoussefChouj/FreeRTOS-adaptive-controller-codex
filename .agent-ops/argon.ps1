@@ -4,23 +4,57 @@
 # token cap, so the wrapper enforces it twice: the prompt states the budget, and the timeout kills a runaway run.
 # usage.* in the JSON covers the main thread only (subagent tokens are not reported). Smoke 10-17: one grep question
 # = 63k input + 55k cache-read in 52 s, so keep each brief to one narrow question.
+# Network: a VPN node timeout ends an agy run with status ERROR "There was a network issue connecting to the server"
+# after ~640 s, and the work was lost (2026-10-17: 3 runs). Now the wrapper waits for the proxy first (net-wait.ps1),
+# and after a network ERROR it waits again and resumes the SAME conversation (--conversation), up to NetRetries times.
+# TimeoutMin counts agy run time only, not network waits; the cap counts the tokens of every attempt.
+# Exit: 0 answered, 1 agy ERROR, 2 killed (over time), 3 no JSON, 7 no network.
 # Example: powershell -File .agent-ops/argon.ps1 -Id res-lqr -Brief .agent-ops/briefs/res-lqr.md
 param([Parameter(Mandatory=$true)][string]$Id, [Parameter(Mandatory=$true)][string]$Brief,
-      [int]$CapK = 160, [int]$TimeoutMin = 20)
+      [int]$CapK = 160, [int]$TimeoutMin = 20, [int]$NetRetries = 3, [double]$NetMaxMin = 30)
 $root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot "net-wait.ps1")
 $out = Join-Path $root ".agent-ops\out\argon-$Id"
 $prompt = "Read the brief $Brief and answer it. Read-only: do not edit files or commit. Token ceiling: $CapK K tokens in " +
   "total for you and every subagent you spawn; before you reach it, stop and answer with what you have. Answer in at most " +
   "40 lines: findings with file:line or quoted sources (URL + short quote), then a one-line verdict."
-$p = Start-Process -FilePath "D:\Tools\agy\bin\agy.exe" -WorkingDirectory $root -WindowStyle Hidden -PassThru `
-  -RedirectStandardOutput "$out.json" -RedirectStandardError "$out.err" `
-  -ArgumentList @("-p", "`"$prompt`"", "--output-format", "json")
-if (-not $p.WaitForExit($TimeoutMin * 60000)) { $p.Kill(); "$Id KILLED after $TimeoutMin min (over time = over budget)"; exit 2 }
-try { $j = Get-Content "$out.json" -Raw -Encoding utf8 | ConvertFrom-Json } catch { "$Id no JSON, see $out.err"; exit 3 }
-$u = $j.usage
+$resume = "The network dropped during your last turn. Continue the same brief ($Brief) from where you stopped, under " +
+  "the same rules and token ceiling, and give the final answer."
+# agy's own wording, plus the Node and gRPC codes a dropped proxy surfaces as
+$netErr = "network issue|ECONN|ETIMEDOUT|EAI_AGAIN|fetch failed|socket hang up|UNAVAILABLE|deadline exceeded"
+if (-not (Wait-Net -MaxMin $NetMaxMin -Tag $Id)) { "$Id NO-NET: no network for $NetMaxMin min, agy not started"; exit 7 }
+$agyArgs = @("-p", "`"$prompt`"", "--output-format", "json")
+$runMs = 0; $in = 0; $cache = 0; $outTok = 0; $think = 0; $turns = 0; $secs = 0
+for ($n = 0; ; $n++) {
+  $f = if ($n) { "$out.r$n" } else { $out }     # every attempt keeps its own .json/.err
+  $sw = [Diagnostics.Stopwatch]::StartNew()
+  $p = Start-Process -FilePath "D:\Tools\agy\bin\agy.exe" -WorkingDirectory $root -WindowStyle Hidden -PassThru `
+    -RedirectStandardOutput "$f.json" -RedirectStandardError "$f.err" -ArgumentList $agyArgs
+  if (-not $p.WaitForExit([Math]::Max(0, $TimeoutMin * 60000 - $runMs))) {
+    $p.Kill(); "$Id KILLED after $TimeoutMin min of agy run time (over time = over budget)"; exit 2 }
+  $runMs += $sw.ElapsedMilliseconds
+  $j = $null
+  try { $j = Get-Content "$f.json" -Raw -Encoding utf8 | ConvertFrom-Json } catch { }
+  $errText = if ($j) { "$($j.error)" } else { (Get-Content "$f.err" -Raw -ErrorAction SilentlyContinue) + "" }
+  $isNet = ((-not $j) -or $j.status -eq "ERROR") -and $errText -match $netErr
+  if (-not $j -and -not $isNet) { "$Id no JSON, see $f.err"; exit 3 }
+  if ($j) {
+    $u = $j.usage
+    $in += [int]$u.input_tokens; $cache += [int]$u.cache_read_tokens; $outTok += [int]$u.output_tokens
+    $think += [int]$u.thinking_tokens; $turns += [int]$j.num_turns; $secs += [int]$j.duration_seconds
+  }
+  if (-not $isNet -or $n -ge $NetRetries) { break }
+  [Console]::WriteLine("$Id NET-ERROR in attempt $($n + 1): $(($errText -replace '\s+', ' ').Trim())")
+  if (-not (Wait-Net -MaxMin $NetMaxMin -Tag $Id)) { break }
+  # resume the same conversation when agy reported one, else start the brief again
+  $agyArgs = if ($j -and $j.conversation_id) {
+    @("-p", "`"$resume`"", "--conversation", $j.conversation_id, "--output-format", "json") } else { $agyArgs }
+}
+if (-not $j) { "$Id NO-NET: agy lost the network $($n + 1) times without a reply, see $f.err"; exit 7 }
 # the cap counts fresh tokens; cache reads (the re-sent prefix) are shown but not counted
-$used = [int]$u.input_tokens + [int]$u.output_tokens + [int]$u.thinking_tokens
+$used = $in + $outTok + $think
 $flag = if ($used -gt $CapK * 1000) { "OVER-CAP" } else { "ok" }
 $j.response | Out-File "$out.md" -Encoding utf8
-"$Id $($j.status) $flag used=$used (in $($u.input_tokens) cache $($u.cache_read_tokens) out $($u.output_tokens)) " +
-  "turns=$($j.num_turns) $([int]$j.duration_seconds)s conv=$($j.conversation_id) -> $out.md"
+"$Id $($j.status) $flag used=$used (in $in cache $cache out $outTok) turns=$turns ${secs}s net-retries=$n " +
+  "conv=$($j.conversation_id) -> $out.md"
+if ($isNet) { exit 7 } elseif ($j.status -ne "SUCCESS") { exit 1 } else { exit 0 }
