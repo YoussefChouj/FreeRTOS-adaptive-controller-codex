@@ -1,0 +1,5 @@
+# Research: GPU vs CPU for a tiny GRU/TCN, and batching many small models (web only)
+
+Context: the user bought Google Colab compute units themselves. `colab usage` (google-colab-cli 0.7.4) shows 100.00 units, 0 active, on 2026-10-17. They will not buy more or add a card anywhere, so the units must give the most value. Do NOT spawn subagents; use at most 8 web fetches. Give each claim as: claim, URL, quote under 15 words, source date. Prefer official Google pages and 2025-2026 sources. Mark anything unsourced UNVERIFIED. Answer in at most 30 lines.
+
+Model: GRU or TCN, hidden 32, 1-2 layers, about 10^4 parameters, sequences at 20 Hz, a few thousand steps per flight, 28 flights, leave-one-flight-out x 3 seeds. Questions: (1) Is a T4 faster than a laptop CPU for models this small? Measured benchmarks or maintainer statements. (2) Ways to fill a GPU with small models: torch.func.stack_module_state + vmap over seeds and folds, grouped conv for a TCN, N processes on one GPU, larger batch, AMP fp16 on T4, torch.compile. Which gives the biggest win? End with a one-line verdict: laptop CPU, Colab CPU runtime, or T4, and the one technique to use.

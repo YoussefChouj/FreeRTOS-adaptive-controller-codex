@@ -17,8 +17,8 @@ Written 2026-10-17. Facts were checked that day; "UNVERIFIED" marks the rest. Se
 | Item | State |
 |---|---|
 | Account | user's Google AI Ultra Gmail (`colab whoami` shows it) |
-| Compute units | **0.00** (`colab usage`). The Ultra Colab benefit is NOT applied yet (see "Zero compute units" below) |
-| Free T4 GPU | **works**: `colab run --gpu T4` ran torch 2.11.0+cu130 on a Tesla T4 15 GB and stopped itself |
+| Compute units | **100.00** on 2026-10-17 (`colab usage`), bought once by the user. Spend them by `docs/agent/colab-budget.md` (read it before any Colab job) |
+| Free T4 GPU | **only at 0 CU** (FAQ: free runtimes need no positive balance; with units, a T4 costs ~1.6 CU/h). At 0 CU it worked: `colab run --gpu T4` ran torch 2.11.0+cu130 on a Tesla T4 15 GB and stopped itself |
 | L4 / A100 / H100 / G4, TPU | need units or an entitlement. A `400` on `colab new --gpu X` = not allowed: fall back to `--gpu T4` |
 | Free VM life | Google can reclaim a free VM at any time (idle or long runs; exact limits UNVERIFIED). Save checkpoints and download them often |
 

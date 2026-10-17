@@ -1,0 +1,5 @@
+# Research: Google AI Ultra Colab benefit, and Kaggle free GPU (web only)
+
+Context: the user bought Google Colab compute units themselves. `colab usage` (google-colab-cli 0.7.4) shows 100.00 units, 0 active, on 2026-10-17. They will not buy more or add a card anywhere, so the units must give the most value. Do NOT spawn subagents; use at most 8 web fetches. Give each claim as: claim, URL, quote under 15 words, source date. Prefer official Google pages and 2025-2026 sources. Mark anything unsourced UNVERIFIED. Answer in at most 30 lines.
+
+Questions: (1) Does Google AI Ultra (2026) include any Colab benefit (Pro, units, priority GPUs)? Status of github.com/googlecolab/colabtools issue 6127? (2) Kaggle Notebooks: weekly GPU and TPU hours, GPU types, max session length, phone verification, card needed, and can a job run unattended from a script (`kaggle kernels push`, then `kaggle kernels output`)? End with a one-line verdict: is Kaggle a better first lane than paid Colab units for a 1-3 hour small PyTorch job?
