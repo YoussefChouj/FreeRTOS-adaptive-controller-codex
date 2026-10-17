@@ -111,7 +111,7 @@ def compile_fly(text: str, src: str = "<fly>") -> tuple[dict[str, Any], list[int
             from ground_station.platform import exp_rows
             valid = [r.name for r in exp_rows.exp_rows()]
             if steps:
-                problems.append(f"{where}: exp line must come before takeoff")
+                problems.append(f"{where}: exp must come before every step line (later set lines override its columns)")
             elif len(rest) != 1 or "=" in rest[0]:
                 problems.append(f"{where}: expected exp <name>; valid: {', '.join(valid)}")
             elif exp_target is not None:
