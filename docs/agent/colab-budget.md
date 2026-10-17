@@ -53,7 +53,7 @@ measurements in the ledger below:
 | Order | Lane | Cost | Use when |
 |---|---|---|---|
 | 1 | Laptop CPU (`nn_io.py` as is) | free | up to ~1 h; mind the AC drop under load (memory `laptop-power-fragility`) |
-| 2 | Kaggle notebook, CPU or GPU (T4 x2 / P100) | free, ~30 GPU h a week (community sources; the real quota floats and shows in Kaggle account settings), 12 h a session (UNVERIFIED, the docs page is JS-only) | long or unattended runs: `kaggle kernels push`, then `status`, then `output`. SET UP 2026-10-17: Kaggle CLI 2.2.4 in WSL (`~/.local/bin/kaggle`, `uv tool`), token in `~/.kaggle/access_token` (mode 600), user `yousschouj`, auth checked. GPU may need a verified phone on the account (UNVERIFIED) |
+| 2 | Kaggle notebook, CPU or GPU (T4 x2 / P100) | free. Account settings, read by the user 2026-10-17: Kaggle GPU 00:00 / 30 hrs, TPU 00:00 / 20 hrs, private datasets 0 B / 214.75 GB, phone verified. Weekly reset and 12 h a session: community sources, UNVERIFIED | long or unattended runs: `kaggle kernels push`, then `status`, then `output`. SET UP 2026-10-17: Kaggle CLI 2.2.4 in WSL (`~/.local/bin/kaggle`, `uv tool`), token in `~/.kaggle/access_token` (mode 600), user `yousschouj`, auth checked |
 | 3 | Colab CPU runtime (`colab new`, no `--gpu`) | 0.07 CU/h | when the laptop is busy or the run is long, and Kaggle is out of hours |
 | 4 | Colab T4 | ~1.6 CU/h | only after the batching change below, and only if the probe says it is cheaper per run |
 | 5 | L4 / A100 / G4 / H100 | 3-18 CU/h | not for this model. Only for a big model that does not fit a T4 |
