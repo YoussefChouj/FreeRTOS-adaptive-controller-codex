@@ -1,10 +1,13 @@
 import json
 import re
-import os
 import subprocess
 from pathlib import Path
+
+import numpy as np
+
 from . import pipeline
 from .loaders import LoadError
+from .plugins.league import PROPOSED_BOOTSTRAP_RESAMPLES, PROPOSED_GAP_THRES
 
 def flatten(obj, prefix=""):
     """
@@ -45,22 +48,20 @@ def _fmt_float(val):
     return str(val)
 
 def league(dirs, out_dir):
-    import json
-    import numpy as np
-    from pathlib import Path
-
+    # Lazy like the plugins: importing compare must not pick a matplotlib backend.
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        HAS_MPL = True
+        has_mpl = True
     except ImportError:
-        HAS_MPL = False
+        has_mpl = False
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     flights = []
+    excluded_flights = []
 
     for d in dirs:
         try:
@@ -70,13 +71,14 @@ def league(dirs, out_dir):
             league_data = metrics.get("league")
             if league_data:
                 flights.append({"dir": d, "metrics": metrics, "league": league_data})
-        except (OSError, json.JSONDecodeError, KeyError) as e:
+            else:
+                excluded_flights.append({"dir": d, "reason": "no league block in metrics.json"})
+        except (LoadError, OSError, json.JSONDecodeError, KeyError) as e:
             print(f"Skipping {d}: {type(e).__name__}: {e}")
+            excluded_flights.append({"dir": d, "reason": f"{type(e).__name__}: {e}"})
 
     # Filter by gap fraction
-    from ground_station.analysis.flightlab.plugins.league import PROPOSED_GAP_THRES
     valid_flights = []
-    excluded_flights = []
 
     for f in flights:
         gf = f["league"].get("gap_fraction")
@@ -99,7 +101,6 @@ def league(dirs, out_dir):
             table_lines.append(f"- {ef['dir']}: {ef['reason']}")
         table_lines.append("")
 
-    PROPOSED_BOOTSTRAP_RESAMPLES = 1000
     rng = np.random.default_rng(42) # fixed seed
 
     league_json = {"flights": [f["dir"] for f in flights], "excluded": excluded_flights, "axes": {}}
@@ -165,7 +166,7 @@ def league(dirs, out_dir):
         table_lines.append("")
 
         # Plot
-        if HAS_MPL:
+        if has_mpl:
             fig, ax_plt = plt.subplots(figsize=(8, 5))
             kinds_labels = [r["kind"] for r in ranks]
             means = [r["mean"] for r in ranks]

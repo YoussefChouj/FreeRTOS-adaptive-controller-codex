@@ -140,16 +140,44 @@ def test_end_to_end(tmp_path):
     write_m(d1, 0, 1.0)
     write_m(d2, 2, 2.0)
 
-    try:
+    with pytest.raises(SystemExit) as ei:
         fr.main(["--league", str(d1), str(d2), "--out", str(tmp_path)])
-    except SystemExit as e:
-        assert e.code == 0
+    assert ei.value.code == 0
 
     res_dir = tmp_path
 
-    md = (Path(res_dir) / "league.md").read_text()
+    md = (Path(res_dir) / "league.md").read_text(encoding="utf-8")
+    rows = [ln for ln in md.splitlines() if ln.startswith("| ") and ln.split("|")[1].strip().isdigit()]
+    assert [r.split("|")[2].strip() for r in rows] == ["PID", "LQR"]
+    assert all(r.split("|")[3].strip() == "1" for r in rows)
     assert "League Report" in md
     assert "PID" in md
     assert "LQR" in md
 
     assert (Path(res_dir) / "league_x.png").exists()
+
+
+def test_unreadable_dirs_listed_as_excluded(tmp_path):
+    good = tmp_path / "good"
+    good.mkdir()
+    (good / "metrics.json").write_text(json.dumps({"league": {"gap_fraction": 0.0,
+        "axis_kinds": {"x": 0}, "metrics_by_axis": {"x": {"steady": {"e_rms": 1.0}}}}}))
+    bad_json = tmp_path / "bad_json"
+    bad_json.mkdir()
+    (bad_json / "metrics.json").write_text("{not json")
+    no_block = tmp_path / "no_block"
+    no_block.mkdir()
+    (no_block / "metrics.json").write_text(json.dumps({"flight": {}}))
+    missing = tmp_path / "missing"
+
+    out = tmp_path / "out"
+    league([str(good), str(bad_json), str(no_block), str(missing)], out)
+
+    md = (out / "league.md").read_text(encoding="utf-8")
+    excluded = md.split("## Excluded Flights")[1].split("## Axis")[0]
+    assert f"{bad_json}: JSONDecodeError" in excluded
+    assert f"{no_block}: no league block in metrics.json" in excluded
+    assert f"{missing}: LoadError" in excluded
+    assert str(good) not in excluded
+    reasons = json.loads((out / "league.json").read_text(encoding="utf-8"))["excluded"]
+    assert len(reasons) == 3
