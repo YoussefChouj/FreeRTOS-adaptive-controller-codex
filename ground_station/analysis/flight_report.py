@@ -21,15 +21,11 @@ import csv
 import hashlib
 import json
 import math
-import os
 import statistics
 import subprocess
 import sys
-import time
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Optional imports — gracefully degrade when dependencies are missing
@@ -38,8 +34,6 @@ try:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    import matplotlib.patches as mpatches
-    import matplotlib.font_manager as font_manager
     HAS_MPL = True
 except ImportError:
     HAS_MPL = False
@@ -51,8 +45,6 @@ except ImportError:
     HAS_NP = False
 
 try:
-    from scipy import signal as sp_signal
-    from scipy import stats as sp_stats
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
@@ -301,11 +293,15 @@ def _find_airborne_window(
     timestamps, values = pivoted[throttle_key]
     # Use armed_start/armed_end as boundaries if available, otherwise whole log
     if armed_start is not None and armed_end is not None:
-        start_mask = lambda ts: ts >= armed_start
-        end_mask = lambda ts: ts <= armed_end
+        def start_mask(ts):
+            return ts >= armed_start
+        def end_mask(ts):
+            return ts <= armed_end
     else:
-        start_mask = lambda ts: True
-        end_mask = lambda ts: True
+        def start_mask(ts):
+            return True
+        def end_mask(ts):
+            return True
 
     airborne_start = None
     airborne_end = None
@@ -422,14 +418,12 @@ def _overshoot_and_settling(
     overshoot_pct = (overshoot / range_val * 100) if range_val > 0 else 0.0
 
     # Settling time: time from start until signal stays within 2% of final
-    settled = False
     settle_idx = len(values)
     for i in range(len(values)):
         if abs(values[i] - final_val) <= settling_threshold:
             # Check next N samples stay settled
             check_count = min(20, len(values) - i)
             if all(abs(values[i + j] - final_val) <= settling_threshold for j in range(check_count)):
-                settled = True
                 settle_idx = i
                 break
 
@@ -609,14 +603,14 @@ def compute_metrics(
     if mrac_active_key and mrac_active_key in pivoted:
         mrac_ts, mrac_vals = pivoted[mrac_active_key]
         mrac_active_indices = [i for i, v in enumerate(mrac_vals) if v >= 1.0]
-        mrac_split = len(mrac_active_indices) > 0
+        len(mrac_active_indices) > 0
     else:
-        mrac_split = False
+        pass
 
     for axis in ("roll", "pitch", "yaw"):
         u_ad_key = available_signals.get(f"u_ad_{axis}")
         theta_keys = [k for k in pivoted.keys() if f"mrac.{axis}.theta_" in k]
-        mrac_e_key = available_signals.get(f"mrac.{axis}.e") if "mrac.{axis}.e" in pivoted else None
+        available_signals.get(f"mrac.{axis}.e") if "mrac.{axis}.e" in pivoted else None
 
         axis_metrics: dict[str, Any] = {}
 
@@ -790,7 +784,7 @@ def compute_metrics(
             if len(sorted_ts) >= 2:
                 dts = [sorted_ts[i + 1] - sorted_ts[i] for i in range(len(sorted_ts) - 1)]
                 med_dt = statistics.median(dts)
-                total_dts = sum(dts)
+                sum(dts)
                 all_dts.append(med_dt)
                 total_dt_count += len(dts)
                 gap_thresh = med_dt * 5 if med_dt > 0 else 0
@@ -886,11 +880,6 @@ def plot_attitude_tracking(
         return []
     _setup_style()
     files = []
-    axes_map = {
-        "roll": "roll_deg",
-        "pitch": "pitch_deg",
-        "yaw": "yaw_deg",
-    }
     sp_map = {
         "roll": "roll_sp",
         "pitch": "pitch_sp",
@@ -1270,7 +1259,7 @@ def plot_trajectory_3d(
     has_actual = any(signal_map.get(pos_keys[k], [])[0] and
                      signal_map.get(pos_keys[k], [])[0] in pivoted
                      for k in pos_keys)
-    has_desired = any(signal_map.get(sp_keys[k], [])[0] and
+    any(signal_map.get(sp_keys[k], [])[0] and
                       signal_map.get(sp_keys[k], [])[0] in pivoted
                       for k in sp_keys)
 
@@ -1511,8 +1500,7 @@ def plot_compare_metrics(
         for label, metrics, _ in sessions:
             errors = []
             for axis in ("roll", "pitch", "yaw"):
-                sp_key = None
-                me_key = None
+                pass
                 # We need the pivoted data for this; skip if not available
             if errors:
                 sorted_e = np.sort(np.abs(errors))
@@ -1570,7 +1558,7 @@ def generate_summary(
     else:
         lines.append("- Armed window detected.")
         if segmentation.get("airborne_start_ns") is not None:
-            lines.append(f"- Airborne window: armed with throttle above idle threshold.")
+            lines.append("- Airborne window: armed with throttle above idle threshold.")
     lines.append("")
 
     lines.append("## Key Results")
@@ -1949,14 +1937,14 @@ def generate_compare_report(
         if not sd_path.exists():
             continue
         try:
-            session_out = generate_report(
+            generate_report(
                 session_dir=sd_path,
                 out_dir=out_dir / f"session_{i}",
                 notes="",
                 controller=label,
                 payload=payload_labels[i] if payload_labels else "unknown",
             )
-            manifest = read_manifest(sd_path)
+            read_manifest(sd_path)
             signal_map = _load_signal_map(sd_path)
             telemetry = read_telemetry_csv(sd_path)
             pivoted = pivot(telemetry)
@@ -2005,6 +1993,29 @@ def main(argv: list[str] | None = None) -> None:
     if argv is None:
         argv = sys.argv[1:]
 
+    if "--league" in argv:
+        import uuid
+        idx = argv.index("--league")
+        league_args = argv[idx+1:]
+        dirs = []
+        out_dir = Path("logs/flight_tests/compare") / f"league_{uuid.uuid4().hex[:8]}"
+
+        i = 0
+        while i < len(league_args):
+            if league_args[i] == "--out" and i + 1 < len(league_args):
+                out_dir = Path(league_args[i + 1])
+                i += 2
+            elif league_args[i].startswith("--"):
+                break
+            else:
+                dirs.append(league_args[i])
+                i += 1
+
+        from ground_station.analysis.flightlab.compare import league
+        result_dir = league(dirs, out_dir)
+        print(f"League report generated in: {result_dir}")
+        sys.exit(0)
+
     if "--compare" in argv:
         # Compare mode
         idx = argv.index("--compare")
@@ -2012,8 +2023,6 @@ def main(argv: list[str] | None = None) -> None:
         if not compare_dirs:
             print("Error: --compare requires directory arguments", file=sys.stderr)
             sys.exit(1)
-        controller_labels = None
-        payload_labels = None
         out_dir = None
         # Check for optional --out
         if "--out" in argv:
