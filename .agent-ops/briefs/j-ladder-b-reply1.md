@@ -1,19 +1,19 @@
-Good findings. Decisions (final, please plan against these):
+Option 2, made precise. Not option 3 (mocking `_var_bytes` hides the real path), and do not rewrite the legacy assertions
+(option 1): they guard the format the flashed firmware speaks today.
 
-1. Command encoding: yes, a new command byte, name SUBSCRIBE_STREAM_NARROW_CMD. Do NOT use 0x22-0x25 (0x24 is FW_IDENTITY_CMD, and 0x22-0x25 / 0x30-0x32 / 0x7F are FC frame types, see the list at subscribe.h ~line 201). Grep API/ and ground_station/ for every *_CMD and frame-type define and pick a byte that is free in both, then add it to that list.
-   Before coding, read BSP/usart5.c (read only, do not edit) and confirm the UART5 IRQ parser latches a frame with any CMD byte. If it does, an old firmware falls through to Subscribe_ParseRequest and replies "E:bad cmd": that is the required clean rejection, and a harness test must show it. If the IRQ parser filters CMD bytes so the new one would never reach Uart5_Subscribe_HandleRequest, stop and tell me before writing code.
-   The host sends the new command ONLY when at least one range is narrowed. A plan with no narrowed range sends today's 0x21 command, byte-identical. On an error reply to the new command the host raises a clear error ("firmware has no narrow streams: reflash or drop narrow"); it never falls back silently.
+1. The bytes per value depend on the wire format the stream will actually use. Until the firmware is reflashed and the
+   host has selected the int16 request (CMD 0x27, frame 0x0D), every value is 4 bytes. So: one explicit setting
+   (for example `wire_format = "f32" | "i16"`, default `"f32"`), and the planner, the admission guard and the manifest
+   price the bytes of the format that is requested. Only `"i16"` reads `var_scales.yaml`.
+2. One source of truth: a single helper for bytes per value and frame size (next to the frame-size formula in
+   `stream.py`), imported by `campaign_capture.py` and `manifest.py`. No second copy of `_var_bytes`.
+3. The legacy tests stay as they are and must pass unchanged. Add new tests for the `"i16"` path whose expected counts
+   are computed from the frame-size formula and the 80% wire cap (`HOST_SAFE_WIRE_PCT`), not hardcoded. Include a var with
+   no yaml entry (falls back to 4 bytes or is refused, say which and why) and a mixed i16/f32 plan.
+4. Never weaken the 80% cap or the guard. The guard rate stays `GUARD_SEND_HZ` (100).
+5. Earlier review note: `API/subscribe.c` has whitespace-only changed lines around L505 and L523; revert those so the
+   diff has only real changes.
 
-2. Range record for the new command, 14 bytes, little-endian: address u32, size u16, count u16, wire u8, reserved u8 (must be 0), scale f32.
-   wire: 0 = raw copy (exactly today's semantics, scale must be 0), 1 = I16 from float32 (size must be 4), 2 = I16 from int32 (size must be 4). Reject anything else with an error reply: unknown wire, reserved != 0, size != 4 for wire 1/2, scale not finite or <= 0 for wire 1/2, scale != 0 for wire 0, and a request that does not fit USART5_SUBSCRIBE_RX_LEN (the host encoder raises before sending; compute the max range count for the new command from that define and assert it on both sides).
-   Yes, the host asks for the in-memory size (4) and the firmware converts. The firmware computes inv_scale = 1.0f / scale ONCE at parse time and stores it; no division in Subscribe_BuildStreamFrame. Store wire and inv_scale per range, either as new Subscribe_Range_t fields or as parallel arrays in Subscribe_Stream_t, whichever keeps 0x21 code paths untouched. Update the RAM comment at subscribe.h ~line 195 with sizeof values printed by the host build, not guessed.
-   total_bytes = sum of (wire 0: size*count, wire 1/2: 2*count). The guard and SUBSCRIBE_STREAM_FRAME_OVERHEAD pricing use that.
-   Schema reply for the new command: a distinct schema frame type (pick a free byte the same way, add it to the list) that echoes the 14-byte records as accepted, plus TOTAL_BYTES, so the host checks wire and scale were accepted exactly. The 0x08 schema for 0x21 stays unchanged.
-
-3. Encoder, exact (test each case): v = x * inv_scale (wire 2: v = (float)int_x * inv_scale). If v != v -> -32768. Else clamp v to [-32767.0f, 32767.0f] first (this also handles +/-inf and avoids UB in the cast), then t = (int32_t)v (truncate), f = v - (float)t (exact in this range), if f >= 0.5f t++, if f <= -0.5f t--. That is round half away from zero WITHOUT the v + 0.5f bug: 0.49999997f must give 0, 0.5f -> 1, -0.5f -> -1, 2.5f -> 3, -2.5f -> -3, 32767.4f -> 32767, 1e30f -> 32767, -inf -> -32767. Write the int16 little-endian byte by byte (the frame buffer is unaligned).
-
-4. Host coalescing: yes, coalesce only when adjacent AND same size AND same wire AND bit-identical scale. Add a test that a narrowed var next to a float var stays two ranges, and two narrowed vars with different scales stay two ranges.
-
-5. Decoder and stats as the brief says: q * scale -> float, -32768 -> NaN, |q| == 32767 counted per variable as saturated in the stream stats.
-
-Tests to add beyond the brief: a slot with only wire 0 ranges sent through the new command produces data frames byte-identical to the same slot through 0x21; a guard test where a mixed slot fits only because of the 2-byte widths. Run python tools/host_tests.py and python -m pytest ground_station/livewatch -q and put both outputs in the PR description.
+Then: scoped pytest on the changed test files, `python tools/host_tests.py` 26/26 plus your new cases, `ruff check` on
+changed .py files, CRLF. Do not ask again: open ONE PR against `overnight-2026-10-08`. If a test fails that you cannot
+fix in one try, list it in the PR body with its error line and open the PR anyway.
