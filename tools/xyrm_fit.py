@@ -15,8 +15,8 @@ import numpy as np
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
-from ground_station.analysis import xy_ctrl as xc
-from ground_station.analysis import xy_tune as xt
+from ground_station.analysis import xy_ctrl as xc  # noqa: E402 (after sys.path insert)
+from ground_station.analysis import xy_tune as xt  # noqa: E402 (after sys.path insert)
 
 M = {"k": 0.674, "tau": 0.0674, "drag": 0.426, "d": 12}
 DT = 0.01

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import io
-from unittest.mock import Mock
 import pytest
 
 from ground_station.platform import exp_rows

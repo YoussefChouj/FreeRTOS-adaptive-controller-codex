@@ -282,32 +282,6 @@ def test_fly_loop_once_goes_on_the_arm_and_files_the_flight(tmp_path, monkeypatc
 
 # --- fly: VOFA+ FLIGHT_VIEW import files, PlotJuggler `p` key ---------------------------------------------------------
 
-try:
-    from ground_station.vofa_studio import vofa_config
-except (IndexError, ImportError):
-    import sys
-    import types
-    from pathlib import Path
-    vofa_config = types.ModuleType("ground_station.vofa_studio.vofa_config")
-    _vlist = ["imu_data.rol", "imu_data.pit", "real_voltage"]
-    vofa_config.view_channels = lambda: {"vars": _vlist}
-    def _export_view(out_dir=None, available=None):
-        out_p = Path(out_dir or "/tmp")
-        out_p.mkdir(parents=True, exist_ok=True)
-        tabviews = out_p / "flight_view.tabviews.json"
-        tabviews.write_text("{}", encoding="utf-8")
-        names_csv = out_p / "flight_names.csv"
-        names_csv.write_text(",".join(available or _vlist) + "\n", encoding="utf-8")
-        return {
-            "vars": list(available or _vlist),
-            "missing": [v for v in _vlist if v not in (available or [])],
-            "tabviews": tabviews,
-            "names_csv": names_csv,
-        }
-    vofa_config.export_view = _export_view
-    sys.modules["ground_station.vofa_studio.vofa_config"] = vofa_config
-
-
 def test_vofa_setup_forwards_the_view_and_writes_imports_in_forward_order(tmp_path, monkeypatch):
     from ground_station.vofa_studio import vofa_config
     want = vofa_config.view_channels()["vars"]
