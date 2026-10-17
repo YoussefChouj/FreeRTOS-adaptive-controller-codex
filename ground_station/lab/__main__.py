@@ -3,6 +3,7 @@
     lab up [queue] [--pack 1|2]    check everything in one table, then fly the day's queue (ground_station/lab/up.py)
     lab queue <file> [--pack 1|2]  fly a queue without the checks (ground_station/lab/runner.py)
     lab end [--day D]              the day's report, then its videos to Google Drive (ground_station/lab/end.py)
+    lab archive [--days 7] [--yes] older camera videos to Google Drive (ground_station/lab/archive.py)
     lab catalog [cards|modules]    every card, module and image with its status (ground_station/lab/catalog.py)
 """
 import sys
@@ -20,6 +21,9 @@ def main(argv=None):
     if cmd == "end":
         from ground_station.lab import end
         return end.main(argv)
+    if cmd == "archive":
+        from ground_station.lab import archive
+        return archive.main(argv)
     if cmd == "catalog":
         from ground_station.lab import catalog
         return catalog.main(argv)
