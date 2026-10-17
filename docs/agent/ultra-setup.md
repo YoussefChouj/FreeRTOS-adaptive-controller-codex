@@ -63,3 +63,17 @@ CPU cores help, GPUs do not. GPU candidates: `sim/bench/ctrl_nn2.py`, `ctrl_p2_n
   so it uses no Claude tokens. Its quota counts TASKS (Ultra 300 per rolling 24 h, 60 concurrent; jules.google/docs/usage-limits),
   not tokens, so a long task is still 1 task. Google publishes no per-task context size, time limit or compaction rule.
   The Claude-side cost is the CEO reviewing Jules PRs: keep Jules tasks small and review with `git diff --stat` + targeted reads.
+- 2026-10-17 Jules models + automation (official docs: jules.google/docs/usage-limits, /changelog, /api/reference,
+  /cli/reference). Model is AUTOMATIC: no model picker in the web UI docs, the REST API or the CLI. Ultra = "Priority
+  access to the latest model (starting with Gemini 3 Pro)"; changelog: Gemini 3 Flash base model for all tiers (2026-01-30),
+  Gemini 3.1 Pro default for Pro (2026-03-09); which one an Ultra task gets is not stated. What counts as a "task"
+  (does a follow-up message count?) is not defined (UNVERIFIED). Worker route = REST API `https://jules.googleapis.com/v1alpha`
+  (alpha), header `x-goog-api-key` (key made by the USER in Jules web Settings, max 3), `POST /sessions` with `prompt`,
+  `sourceContext.source` = `sources/github/<owner>/<repo>`, `githubRepoContext.startingBranch`, `automationMode:
+  "AUTO_CREATE_PR"`, `requirePlanApproval`; poll the session, PR shows in `outputs[].pullRequest.url`. CLI alt:
+  `jules remote new --repo R --session "prompt" --parallel N`, `jules remote pull --session ID` (but the CLI prints
+  nothing without a TTY here, so prefer the API). Jules reads AGENTS.md. Its VM is a clean Ubuntu clone of the PUSHED
+  branch: no Keil, no lab, no WSL tools, no untracked logs/videos. Fit = Python ground_station + host C tests + docs.
+- Colab links for the user: notebook gear icon -> Settings (subscription tab); "Colab paid products" page =
+  https://colab.research.google.com/signup (signed in it shows the current plan; never click a priced button);
+  plan/trial check = https://one.google.com.
