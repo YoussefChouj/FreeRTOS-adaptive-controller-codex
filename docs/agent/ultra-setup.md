@@ -77,3 +77,6 @@ CPU cores help, GPUs do not. GPU candidates: `sim/bench/ctrl_nn2.py`, `ctrl_p2_n
 - Colab links for the user: notebook gear icon -> Settings (subscription tab); "Colab paid products" page =
   https://colab.research.google.com/signup (signed in it shows the current plan; never click a priced button);
   plan/trial check = https://one.google.com.
+- 2026-10-17 Jules worker lane built: `.agent-ops/jules.ps1` + guide `docs/agent/jules.md` + one AGENTS.md line. Smoke OK
+  from PS 5.1: no key rc=4, dummy key HTTP 401 rc=3, missing brief rc=1, unpushed branch rc=5. Waiting on the user's API
+  key in `D:\tools\jules\api-key.txt` (outside the repo), then `-Sources` and one tiny test PR reviewed by the CEO.
