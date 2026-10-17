@@ -90,3 +90,16 @@ Firmware facts: dead-zone is a hard step (`API/mrac.c:1282`, on by default `API/
   layers fighting (pair worse than best single layer), frozen weights match live, weight drift in long hovers, margin
   loss, helps PID only. Best single experiment: injected disturbance at swept frequencies, rejection vs frequency per
   layer set. Break point: "scale" as a feeling vs scale as a frequency band mapped to one layer.
+- Q4 (map each MRAC layer to a band + a lab perturbation): 6/10. Got: a coherent block architecture that maps onto
+  known theory: block 1 = physics regressor (dynamics terms + RBF), block 2 = gate that detects the active time
+  scale and weights block 1 (a mixture of experts over time scales), block 3 = known information as an adaptive
+  feedforward. Good reframe: bands live inside block 1, block 2 picks them. Agreed "deactivate" beats "remove".
+  Missed: no perturbation per block; how the gate detects scale is undefined ("history buffer, patterns");
+  "irreducible whole" conflicts with "configurable/prunable" (resolve: roles fixed, contents configurable) and
+  irreducibility is itself the claim ablation tests; reference model (desired behaviour) conflated with feedforward
+  (known r-dot-dot through an adaptive inverse model). Risks taught: a gate adapted from tracking error makes the law
+  bilinear and breaks the linear-in-parameters Lyapunov proof (keep the gate a known function of measured signals);
+  blocks 1 and 3 see near-collinear regressors when x ~ r, so weights can trade along a null direction (the real
+  "fight"). Fact: on this branch MRAC_L2_Update is empty and MRAC_L3_Feedforward returns 0 (API/mrac.c:744,748;
+  S4 spec unmerged), so only block 1 can fly today. Prior art to cite: Neural-Fly (learned basis + online linear
+  weights, wind). Break point: architecture as roles vs architecture as testable mechanisms.
