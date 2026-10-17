@@ -1,3 +1,8 @@
+/**
+ * @module     att_ctrl.c
+ * @subsystem  control
+ * @purpose    Advanced attitude and altitude controllers (ADRC/LQR/MPC) wrapper.
+ */
 #include "att_ctrl.h"
 #include "att_ctrl_gains.h"
 #include <math.h>
