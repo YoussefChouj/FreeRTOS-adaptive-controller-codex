@@ -26,6 +26,8 @@ The user will not buy more (memory `ultra-only-no-spend`): never run `colab pay`
 | Pro and Pay As You Go VMs run "at most 12 hours"; Pro+ up to 24 h | FAQ, 2026-10-17 |
 | At 0 units: "backend termination" of the running VM, then the account "will revert to the free-of-charge tier" | FAQ, 2026-10-17 |
 | Eligible Google AI plans include "a monthly allotment of Colab compute units" (which plans, and how many, is not stated) | FAQ, 2026-10-17 |
+| The user's accounts are NOT offered that allotment (tried several accounts). The 100 CU were bought once and do not refill | user, 2026-10-17 |
+| Using a second free Colab account to get free runtimes is disallowed on every managed runtime: "using multiple accounts to work around access or resource usage restrictions" | FAQ, disallowed activities, 2026-10-17 |
 | Ultra: "uninterrupted background execution and Premium GPU access" | developers.googleblog.com/colab-is-now-part-of-your-google-ai-plan, 2026-09-22 |
 | Monthly plan units sometimes fail to refresh (issue open, 13 comments) | github.com/googlecolab/colabtools/issues/6127, last updated 2026-10-14 |
 | Units expire 90 days after purchase | UNVERIFIED (the signup page needs a login). The user can check it at colab.research.google.com/signup |
@@ -51,7 +53,7 @@ measurements in the ledger below:
 | Order | Lane | Cost | Use when |
 |---|---|---|---|
 | 1 | Laptop CPU (`nn_io.py` as is) | free | up to ~1 h; mind the AC drop under load (memory `laptop-power-fragility`) |
-| 2 | Kaggle notebook, CPU or GPU (T4 x2 / P100) | free, ~30 GPU h a week (community source, UNVERIFIED), 12 h a session (kaggle.com/docs/notebooks) | long or unattended runs: `kaggle kernels push`, then `status`, then `output`. Needs a Kaggle account with a verified phone and an API token, which only the user makes |
+| 2 | Kaggle notebook, CPU or GPU (T4 x2 / P100) | free, ~30 GPU h a week (community sources; the real quota floats and shows in Kaggle account settings), 12 h a session (UNVERIFIED, the docs page is JS-only) | long or unattended runs: `kaggle kernels push`, then `status`, then `output`. SET UP 2026-10-17: Kaggle CLI 2.2.4 in WSL (`~/.local/bin/kaggle`, `uv tool`), token in `~/.kaggle/access_token` (mode 600), user `yousschouj`, auth checked. GPU may need a verified phone on the account (UNVERIFIED) |
 | 3 | Colab CPU runtime (`colab new`, no `--gpu`) | 0.07 CU/h | when the laptop is busy or the run is long, and Kaggle is out of hours |
 | 4 | Colab T4 | ~1.6 CU/h | only after the batching change below, and only if the probe says it is cheaper per run |
 | 5 | L4 / A100 / G4 / H100 | 3-18 CU/h | not for this model. Only for a big model that does not fit a T4 |
@@ -71,8 +73,14 @@ Hugging Face compute Spaces need a paid plan, and Lightning's no-card GPU credit
 5. **Stop it.** `colab stop -s drift` right after the last download. Then `colab sessions` must be empty.
 6. **Log it** in the ledger: date, runtime, minutes, `colab usage` balance before and after. Our measured rate replaces the
    community number in the table above.
-7. **Watch for a monthly top-up.** Run `colab usage` at the start of each Colab day. A jump at a month boundary means the
-   Ultra plan adds a monthly allotment (FAQ). Then use that allotment each month instead of saving it.
+7. **No refill.** The user's accounts get no monthly allotment, so every unit spent is gone. Still run `colab usage`
+   before and after each session for the ledger.
+
+## What the paid units are for
+
+The user bought them for the big jobs: GPU 3D physics simulations to test controller ideas and hypotheses. Those may
+need a bigger GPU (L4 / A100) or long uninterrupted runs, which the free lanes do not offer. So small and medium jobs
+(the drift net, timing probes) go laptop -> Kaggle, and the units stay saved for the simulations.
 
 ## The drift net (`ground_station/analysis/nn_io.py`), checked 2026-10-17
 
@@ -106,7 +114,7 @@ Size check for the batched TCN (46 models x 16 windows x 1,800 steps x 32 channe
 activations, far below the T4's 16 GB. So one T4 can hold every LOFO fit at once.
 
 Order of work: (1) time one fit on the laptop; (2) batch the models with vmap on the CPU first (that alone cuts the
-Python loop); (3) only then probe the batched code on a Colab CPU runtime vs a T4 (rule 1 above).
+Python loop); (3) then run the batched code on a free Kaggle GPU. Colab units only if Kaggle cannot do it.
 
 ## Ledger (measured, append one line per Colab session)
 
