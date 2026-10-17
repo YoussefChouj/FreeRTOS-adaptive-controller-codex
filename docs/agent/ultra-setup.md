@@ -42,4 +42,4 @@ CPU cores help, GPUs do not. GPU candidates: `sim/bench/ctrl_nn2.py`, `ctrl_p2_n
 
 ## Status
 
-- 2026-10-17: step 1 built (99ab323c, `lab archive`, dry run only so far: 27 GB movable at --days 0). Waiting: user picks the cutoff; GCP card go/no-go. Next: Jules, Colab.
+- 2026-10-17: step 1 built (99ab323c, `lab archive`, dry run only so far: 27 GB movable at --days 0). User 10-17: move all but floor scans; d427a174 = Drive fallback `video_truth.video_file()` + index `docs/lab/video-archive.csv` + `docs/agent/video-archive.md`. Move DONE 10-17: `lab archive --days 0 --yes` rc=0, 1044 videos / 26.99 GB on Drive, 0 kept, 24 floor scans stay, 1044 rows in the index. D: frees as Drive uploads its D: cache. Tools go on D: (C: ~13 GB free): Colab MCP venv `D:/tools/colab-mcp` (Google's GitHub repo, needs Python 3.13; the PyPI `colab-mcp` is someone else's, never install it), Jules CLI `D:/tools/npm`. Waiting: GCP card go/no-go.
