@@ -140,6 +140,8 @@ If two rules conflict, the stricter one wins until the operator says otherwise.
 - Old camera videos (`logs/video_truth/*/cam.mkv` etc.) live on Google Drive `G:/My Drive/UAV_lab/<day>/<folder>/`;
   the CSVs and floor scans stay on D:. Open videos with `video_truth.video_file()`, index `docs/lab/video-archive.csv`,
   rules `docs/agent/video-archive.md`. A missing local `cam.mkv` is archived, not lost.
+- GPU jobs run on Google Colab (free T4, CLI in WSL): read `docs/agent/colab.md` first. Never run `colab pay` or buy
+  units (Ultra only, no spend), always stop VMs, nothing on C:.
 - Continuing elsewhere (other account, Cursor, Codex, agy): `ah start <stream> --as <harness> --takeover`, or paste
   the output of `ah prompt <stream> --for <harness>`. Do not resume the old transcript.
 - Durable lessons go to `docs/agent/memory/` (`env.md` facts, `rules.md` behavior), not only to harness-private memory.
