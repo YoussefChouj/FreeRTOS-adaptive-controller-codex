@@ -26,15 +26,26 @@ import json
 import math
 import re
 import statistics
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
-from ground_station.analysis.controller_descriptor import PID_AXES, PID_GAIN_CMD, PID_GAINS
 from ground_station.analysis import landing_report
+from ground_station.analysis.controller_descriptor import (
+    PID_AXES,
+    PID_GAIN_CMD,
+    PID_GAINS,
+)
 from ground_station.livewatch.campaign_capture import ATTITUDE, KF_HEALTH, MOTORS
 from ground_station.service.campaign_outputs import (
-    PRIM_STATE, SAFETY_TRIP, Series, flight_metrics, hold_window, plot_flight, read_telemetry,
+    PRIM_STATE,
+    SAFETY_TRIP,
+    Series,
+    flight_metrics,
+    hold_window,
+    plot_flight,
+    read_telemetry,
 )
 
 PRIM_NAMES = ("IDLE", "CLIMB", "HOVER", "TRAJ", "RETURN", "SETTLE", "DESCEND")  # API/wfb_prim.h
@@ -571,6 +582,47 @@ def debrief(session_dir: str | Path, run_dir: str | Path, *, flight_id: str | No
          "metrics": m, "findings": found, "verdicts": verdicts, "not_applied": not_applied, "next": nxt, "gains": gains,
          "previous": {"flight_id": prev["flight_id"], "metrics": prev["metrics"]} if prev else None,
          "landing": landing_report.landing(series)}
+    # NN shadow hook
+    sd = Path(session_dir)
+    truth = sd / "truth4.csv"
+    ckpt = sd / "model.pt"  # Assumed configured checkpoint name, or any *.pt if configured
+    if not ckpt.exists():
+        ckpts = list(sd.glob("*.pt"))
+        if ckpts:
+            ckpt = ckpts[0]
+
+    slot1_path = sd / f"{sd.name}.slot1.csv"
+    skip_reason = None
+    if not slot1_path.exists():
+        skip_reason = "no slot CSV"
+    elif not truth.exists():
+        skip_reason = "no truth4.csv"
+    elif not ckpt.exists():
+        skip_reason = "no checkpoint"
+    else:
+        # Check checkpoint validity to report if rejected
+        try:
+            from ground_station.analysis.nn_io import load_model
+            load_model(ckpt)
+        except Exception as e:
+            skip_reason = f"checkpoint rejected ({e})"
+
+    if skip_reason is None:
+        try:
+            import ground_station.analysis.nn_replay as nnr
+            nnr_out = out / "nn_replay"
+            nnr_out.mkdir(exist_ok=True)
+            if nnr.main([sd.name, "--truth", str(truth), "--ckpt", str(ckpt), "--out", str(nnr_out)]) == 0:
+                d["nn_shadow"] = {
+                    "md": (nnr_out / "nn_replay.md").read_text() if (nnr_out / "nn_replay.md").exists() else "",
+                    "json": json.loads((nnr_out / "nn_replay.json").read_text()) if (nnr_out / "nn_replay.json").exists() else {}
+                }
+        except Exception as e:
+            skip_reason = f"replay script failed ({e})"
+            d["nn_shadow"] = {"md": f"Skipped NN shadow: {skip_reason}"}
+    else:
+        d["nn_shadow"] = {"md": f"Skipped NN shadow: {skip_reason}"}
+
     if plots:
         plot_flight(series, out / "plots" / "tracking.png", f"{flight_id} {scenario}", hold_window(series))
         plot_analysis(series, m, out / "plots" / "analysis.png", sat)
