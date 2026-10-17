@@ -572,24 +572,26 @@ def _nn_shadow(sd: Path, out: Path) -> dict:
         return {"md": "Skipped NN shadow: ambiguous checkpoint"}
     ckpt = ckpts[0]
 
+    # load_model raises ValueError on an unreadable file or a bad format/hash/channel list, and
+    # load_state_dict RuntimeError on a shape mismatch.
     try:
         load_model(ckpt)
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError) as e:
         return {"md": f"Skipped NN shadow: checkpoint rejected ({e})"}
 
+    nnr_out = out / "nn_replay"
+    nnr_out.mkdir(exist_ok=True)
     try:
-        import subprocess
-        # We call the main method directly
-        nnr_out = out / "nn_replay"
-        nnr_out.mkdir(exist_ok=True)
-        if nnr.main([sd.name, "--truth", str(truth), "--ckpt", str(ckpt), "--out", str(nnr_out)]) == 0:
-            md = (nnr_out / "nn_replay.md").read_text(encoding="utf-8") if (nnr_out / "nn_replay.md").exists() else ""
-            js = json.loads((nnr_out / "nn_replay.json").read_text(encoding="utf-8")) if (nnr_out / "nn_replay.json").exists() else {}
-            return {"md": md, "json": js}
-        else:
-            return {"md": "Skipped NN shadow: replay script failed"}
-    except Exception as e:
+        rc = nnr.main([sd.name, "--truth", str(truth), "--ckpt", str(ckpt), "--out", str(nnr_out)])
+    except (OSError, ValueError, RuntimeError, KeyError) as e:
         return {"md": f"Skipped NN shadow: replay script failed ({e})"}
+    if rc != 0:
+        return {"md": f"Skipped NN shadow: replay script failed (exit {rc})"}
+    md_path = nnr_out / "nn_replay.md"
+    js_path = nnr_out / "nn_replay.json"
+    md = md_path.read_text(encoding="utf-8") if md_path.exists() else ""
+    js = json.loads(js_path.read_text(encoding="utf-8")) if js_path.exists() else {}
+    return {"md": md, "json": js}
 
 def debrief(session_dir: str | Path, run_dir: str | Path, *, flight_id: str | None = None, scenario: str = "hover",
             scenario_args: Mapping[str, Any] | None = None, pack: str = "type2",

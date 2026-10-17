@@ -199,3 +199,16 @@ def test_any_slot_loader_regression_matches_read_slots(tmp_path):
 
     assert np.array_equal(F_new, F_old_real)
     assert F_new.dtype == F_old_real.dtype
+
+
+def test_save_load_roundtrip_is_weights_only(tmp_path):
+    # numpy feats and numpy scalars in meta must not leak into the file, or torch.load(weights_only=True) rejects it.
+    from ground_station.analysis.nn_io import build, load_model, save_model
+    net = build(17, "gru", 8, "scale", 1, drop=0.0)
+    mu, sd = np.arange(17.0), np.ones(17)
+    ckpt = tmp_path / "m.pt"
+    save_model((net, mu, sd, list(np.arange(17))), ckpt, {"kind": "gru", "H": 8, "head": "scale", "layers": 1,
+                                                          "lr": np.float32(1e-3)})
+    _, mu2, sd2, feats = load_model(ckpt)
+    assert np.array_equal(mu2, mu) and np.array_equal(sd2, sd)
+    assert feats == list(range(17)) and all(type(f) is int for f in feats)

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import pickle
 from pathlib import Path
 
 import numpy as np
@@ -530,6 +531,10 @@ def save_model(model, path: str | Path, meta: dict):
     torch = _torch()
     net, mu, sd, feats = model
     state_dict = net.state_dict()
+    # Tensors, lists and plain values only, so load_model can use torch.load(weights_only=True) (no pickle code).
+    mu = np.ascontiguousarray(mu, dtype=np.float64)
+    sd = np.ascontiguousarray(sd, dtype=np.float64)
+    meta = json.loads(json.dumps(meta, default=lambda o: o.item() if hasattr(o, "item") else str(o)))
 
     # Hash weights+norm arrays
     h = hashlib.sha256()
@@ -544,9 +549,9 @@ def save_model(model, path: str | Path, meta: dict):
         "format": "nnio-v1",
         "state_dict": state_dict,
         "cfg": meta,
-        "mu": mu,
-        "sd": sd,
-        "feats": feats,
+        "mu": torch.from_numpy(mu),
+        "sd": torch.from_numpy(sd),
+        "feats": [int(f) for f in feats],
         "rate_hz": RATE_HZ,
         "channels": chans,
         "v_col": list(V_COL),
@@ -554,20 +559,30 @@ def save_model(model, path: str | Path, meta: dict):
     }
     torch.save(payload, path)
 
+_CKPT_KEYS = frozenset({"format", "state_dict", "cfg", "mu", "sd", "feats", "channels", "sha256"})
+
+
 def load_model(path: str | Path):
     """Load model from file, checking hash, format, and channel list."""
     import hashlib
     torch = _torch()
-    p = torch.load(path, map_location="cpu", weights_only=False)
-
-    if p.get("format") != "nnio-v1":
+    # weights_only: a checkpoint is data, never code. Every unreadable file becomes one ValueError for the callers.
+    try:
+        p = torch.load(path, map_location="cpu", weights_only=True)
+    except (OSError, EOFError, RuntimeError, pickle.UnpicklingError) as e:
+        raise ValueError(f"Unreadable checkpoint {path}: {e}") from e
+    missing = _CKPT_KEYS - set(p) if isinstance(p, dict) else _CKPT_KEYS
+    if missing:
+        raise ValueError(f"Not an nnio checkpoint, missing {sorted(missing)}")
+    if p["format"] != "nnio-v1":
         raise ValueError(f"Invalid format: {p.get('format')}")
 
     h = hashlib.sha256()
     for v in p["state_dict"].values():
         h.update(v.numpy().tobytes())
-    h.update(p["mu"].tobytes())
-    h.update(p["sd"].tobytes())
+    mu, sd = p["mu"].numpy(), p["sd"].numpy()
+    h.update(mu.tobytes())
+    h.update(sd.tobytes())
     if h.hexdigest() != p["sha256"]:
         raise ValueError("Hash mismatch in checkpoint")
 
@@ -580,7 +595,7 @@ def load_model(path: str | Path):
     net.load_state_dict(p["state_dict"])
     net.eval()
 
-    return (net, p["mu"], p["sd"], p["feats"])
+    return (net, mu, sd, p["feats"])
 
 def predict(model, d: dict) -> np.ndarray:
     torch = _torch()

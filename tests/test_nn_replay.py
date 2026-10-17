@@ -9,35 +9,30 @@ def test_nn_replay_exits_nonzero_on_mismatch_and_missing(tmp_path):
     # Missing truth4 flight
     assert nn_replay.main(["dummy", "--truth", "non_existent_flight", "--ckpt", "dummy.pt"]) == 1
 
-def test_nn_replay_writes_metrics(tmp_path, mocker):
+def test_nn_replay_writes_metrics(tmp_path, monkeypatch):
     import ground_station.analysis.nn_replay as nnr
 
-    # Mock load_model
+    # A real truth4.csv under a temp cwd (no global Path.exists patch, which would make the output asserts vacuous).
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "logs/video_truth/dummy_flight").mkdir(parents=True)
+    (tmp_path / "logs/video_truth/dummy_flight/truth4.csv").touch()
+
     def dummy_model(d):
         return np.zeros((len(d["ts"]), 2))
 
-    mocker.patch("ground_station.analysis.nn_replay.load_model", return_value=dummy_model)
-    mocker.patch("ground_station.analysis.nn_replay.predict", side_effect=lambda m, d: m(d))
-
-    # Mock seq
     def mock_seq(name, rate_hz):
-        # build a mock dictionary
         n = 100
         t = np.arange(n)
-        return {
-            "ts": t,
-            "t": t,
-            "earth": np.ones(n, dtype=complex),
-            "truth": np.ones(n, dtype=complex),
-            "back": np.ones(n, dtype=complex),
-            "R": np.zeros(n, dtype=complex)
-        }
-    mocker.patch("ground_station.analysis.nn_replay.seq", side_effect=mock_seq)
+        return {"ts": t, "t": t, "earth": np.ones(n, dtype=complex), "truth": np.ones(n, dtype=complex),
+                "back": np.ones(n, dtype=complex), "R": np.zeros(n, dtype=complex)}
 
     def mock_drift_score(name, ests):
         return {"est": {"earth": {"drift60s_p90_cm": 1.0}, "nn": {"drift60s_p90_cm": 0.5}}}
-    mocker.patch("ground_station.analysis.nn_replay.drift_score", side_effect=mock_drift_score)
-    mocker.patch("pathlib.Path.exists", return_value=True)
+
+    monkeypatch.setattr(nnr, "load_model", lambda path: dummy_model)
+    monkeypatch.setattr(nnr, "predict", lambda m, d: m(d))
+    monkeypatch.setattr(nnr, "seq", mock_seq)
+    monkeypatch.setattr(nnr, "drift_score", mock_drift_score)
 
     out_dir = tmp_path / "out"
     assert nnr.main(["stem", "--truth", "dummy_flight", "--ckpt", "dummy.pt", "--out", str(out_dir)]) == 0
@@ -47,6 +42,21 @@ def test_nn_replay_writes_metrics(tmp_path, mocker):
 
     j = json.loads((out_dir / "nn_replay.json").read_text())
     assert j["drift60s_p90_cm"]["nn"] == 0.5
+
+
+def test_load_model_rejects_unreadable_and_foreign_files(tmp_path):
+    import pytest
+
+    from ground_station.analysis.nn_io import _torch, load_model
+    empty = tmp_path / "empty.pt"
+    empty.touch()
+    with pytest.raises(ValueError, match="Unreadable checkpoint"):
+        load_model(empty)
+    foreign = tmp_path / "foreign.pt"
+    _torch().save({"weights": 1}, foreign)
+    with pytest.raises(ValueError, match="missing"):
+        load_model(foreign)
+
 
 def test_hash_mismatch(tmp_path):
     from torch import nn
