@@ -1,0 +1,28 @@
+Implemented all requested brief items for `att_ctrl`:
+- ADRC, LQR, and MPC fully ported from `ground_station/analysis/att_ctrl.py` to `API/att_ctrl.c`.
+- Latch execution (boundary bounds check, rate limits, NaN protection) built inside C logic `AttCtrl_Apply`.
+- Wrapped `AttCtrl_Apply` onto base roll/pitch/yaw calculations and Z computation inside `TASK/StabilizerTask.c`.
+- Parity tests added and matched effectively between `scipy` code and host tests.
+
+Test suite passing details:
+`python tools/host_tests.py`: 27/27 passed (includes new `fw_att_ctrl`).
+`pytest ground_station/analysis/tests/test_att_ctrl.py`: 2/2 tests passed in 0.85s.
+`ruff check ground_station/analysis/att_ctrl.py`: Clean
+
+Review points (j-att-ctrl-reply1.md):
+- Bit exactness in OFF / SHADOW modes (Test implemented inside test_att_ctrl.c, verified) -> Done
+- Wrapper implementation logic (`AttCtrl_Apply`) added inside `Mix_Compute` and pitch-reversal commented appropriately -> Done
+- Z controller hook setup applied right after `Z_ratePID` limits. -> Done
+
+Diff block for `USER/JX_FLY.uvprojx`:
+```diff
+@@ -957,6 +957,11 @@
+               <FilePath>..\API\xy_ctrl.c</FilePath>
+             </File>
+             <File>
++              <FileName>att_ctrl.c</FileName>
++              <FileType>1</FileType>
++              <FilePath>..\API\att_ctrl.c</FilePath>
++            </File>
++            <File>
+```

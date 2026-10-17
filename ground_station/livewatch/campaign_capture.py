@@ -211,6 +211,13 @@ LOG_GROUPS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "camera_fusion": CAMERA_FUSION,
     "xy_ctrl": XY_CTRL,
     "nn4": NN4,
+    "att_ctrl": ("Ctrler.gyroxPID.U", "Ctrler.gyroyPID.U", "Ctrler.gyrozPID.U", "Ctrler.Z_ratePID.U",
+                 "g_att_mode", "g_att_alpha", "g_att_latch", "g_att_would_latch",
+                 "s_cyccnt_total", "g_hov_ff_mode", "g_att_v_filt", "s_att[0].z2", "s_att[1].z2", "s_att[2].z2", "s_att[3].z2",
+                 "s_att[0].rls_p[0]", "s_att[0].rls_p[1]", "s_att[0].rls_p[2]",
+                 "s_att[1].rls_p[0]", "s_att[1].rls_p[1]", "s_att[1].rls_p[2]",
+                 "s_att[2].rls_p[0]", "s_att[2].rls_p[1]", "s_att[2].rls_p[2]",
+                 "s_att[3].rls_p[0]", "s_att[3].rls_p[1]", "s_att[3].rls_p[2]"),
 })
 # Two speeds: `groups` ride with the core set at rate_hz (the control lane); `slow` groups get slots of their own
 # at slow_hz (never above rate_hz). The firmware guard charges each slot at its own divider (API/subscribe.c:592),
