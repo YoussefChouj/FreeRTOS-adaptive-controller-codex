@@ -77,3 +77,16 @@ Firmware facts: dead-zone is a hard step (`API/mrac.c:1282`, on by default `API/
   current three-layer variant is one experiment. Missed: the claim is a philosophy, not yet a hypothesis. "Fundamental
   patterns" is undefined, and no result is named that would prove it wrong. Break point: vision vs falsifiable claim
   (which layer, which time scale, which perturbation, which metric, what counts as failure).
+- Q3 (one layer, one perturbation, the result that proves you wrong): 6/10. Got: two good falsifiers, (a) augment a
+  tuned and a detuned nominal controller (gain should be big on the detuned one and never negative on the tuned one),
+  (b) any scenario where the adaptation does worse than the nominal controller alone; a useful lab perturbation list
+  (swinging load at symmetric and offset points, hard hand-drawn trajectories, flight near a wall); multi-metric view.
+  Missed: never picked one layer; "scale" not defined operationally. Corrections: scale = frequency band of the change
+  relative to the loop bandwidths (vibration 50+ Hz is a filter job, not adaptation; swinging load ~1 Hz, f =
+  sqrt(g/L)/2pi; wall/ground effect = space scale, fades within a few rotor diameters; battery sag/mass/CG = minutes,
+  classic MRAC home). The body-frame inertia does NOT change with roll/pitch/yaw (rigid body); tilt changes the thrust
+  split (cos tilt) and gyroscopic coupling. Many metrics invite cherry-picking: fix the metric set and decision rule
+  before flying. Added falsifiers: layer ablation (remove the matched layer, its disturbance should get through),
+  layers fighting (pair worse than best single layer), frozen weights match live, weight drift in long hovers, margin
+  loss, helps PID only. Best single experiment: injected disturbance at swept frequencies, rejection vs frequency per
+  layer set. Break point: "scale" as a feeling vs scale as a frequency band mapped to one layer.
