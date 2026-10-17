@@ -8,12 +8,14 @@ Fits u_hov(V) = c0 + c1*(V0 - V) from steady hover segments (position hold).
 """
 
 import argparse
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
 from ground_station.analysis import log_corpus as lc
+from ground_station.autotune.frf import load_series
 
 # Constants / Thresholds
 
@@ -257,6 +259,7 @@ def analyze(series_map: dict[str, lc.Series]) -> dict:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("logs", nargs="+", help="paths to flight logs")
+    ap.add_argument("--out", default=None, help="output path")
     args = ap.parse_args(argv)
 
     series_map = {}
@@ -265,7 +268,6 @@ def main(argv: list[str] | None = None) -> int:
         if path.is_dir() or path.name.endswith(".csv"):
             try:
                 # autotune.frf.load_series can load either
-                from ground_station.autotune.frf import load_series
                 series = load_series(p)
                 series_map[path.name] = series
             except Exception as e: # noqa: BLE001
@@ -276,8 +278,10 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     res = analyze(series_map)
-    import json
-    print(json.dumps(res, indent=2))
+    if args.out:
+        Path(args.out).write_text(json.dumps(res, indent=2))
+    else:
+        print(json.dumps(res, indent=2))
     return 0
 
 if __name__ == "__main__":

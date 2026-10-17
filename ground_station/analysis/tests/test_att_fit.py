@@ -69,19 +69,52 @@ def test_tic_and_vaf():
     v_val = vaf(y, y_pred)
     assert abs(v_val - 97.6) < 1.0
 
-def test_json_schema():
-    # The JSON schema is stable (a golden key list).
+
+def test_json_schema(tmp_path):
+    import json
+
+    import numpy as np
+
+    # Create dummy csv logs
+    import pandas as pd
+
+    from ground_station.analysis.att_fit import main
+
+    dt = 0.01
+    n = 300
+    t = np.arange(n) * dt
+
+    for i in range(2):
+        df = pd.DataFrame({
+            "t": t,
+            "Ctrler.gyroxPID.U": np.random.normal(0, 1, n),
+            "Ctrler.gyroxPID.FB": np.random.normal(0, 1, n),
+            "seq": np.arange(n) % 256,
+            "status.arm": np.ones(n),
+            "flight_phase": np.ones(n),
+            "Ctrler.Z_ratePID.FB": np.zeros(n),
+            "Ctrler.locxsPID.FB": np.zeros(n),
+            "Ctrler.locysPID.FB": np.zeros(n),
+            "Ctrler.Z_posPID.FB": np.ones(n),
+            "Ctrler.Z_posPID.Des": np.ones(n),
+            "Ctrler.Z_ratePID.U": np.ones(n) * 100.0,
+            "status.vbat": np.ones(n) * 15.0,
+            "status.pitch_deg": np.zeros(n),
+            "status.roll_deg": np.zeros(n),
+        })
+        # Add sysid flag to second one
+        if i == 1:
+            df["id.sysid_state"] = np.ones(n)
+        df.to_csv(tmp_path / f"log{i}.csv", index=False)
+
+    out_file = tmp_path / "out.json"
+    args = [str(tmp_path / "log0.csv"), str(tmp_path / "log1.csv"), "--axes", "roll", "--out", str(out_file)]
+
+    main(args)
+
+    out = json.loads(out_file.read_text())
     expected_keys = {"git_sha", "sessions", "models", "hover"}
-    model_keys = {"b", "a", "tau", "D_ticks_200hz", "D_s", "bounds", "tic", "vaf", "rms_1step", "rms_05s_ahead", "pass", "sysid_flights", "traj_flights"}
+    model_keys = {"b", "a", "tau", "D_ticks_200hz", "D_s", "bounds", "model", "skipped_segments", "lofo_per_flight", "sysid_flights_summary", "traj_flights_summary", "pass"}
 
-    mock_out = {
-        "git_sha": "abc",
-        "sessions": ["a"],
-        "hover": {"c0": 1, "c1": 2},
-        "models": {
-            "roll": {k: 0 for k in model_keys}
-        }
-    }
-
-    assert set(mock_out.keys()) == expected_keys
-    assert set(mock_out["models"]["roll"].keys()) == model_keys
+    assert set(out.keys()) == expected_keys
+    assert set(out["models"]["roll"].keys()) == model_keys

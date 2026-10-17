@@ -1,23 +1,28 @@
+"""Time-domain output-error fit of attitude plant per axis.
+"""
+from __future__ import annotations
+
+from ground_station.autotune.frf import load_series
 
 """Time-domain output-error fit of attitude plant per axis.
 
 Simulates the model with ZOH at the log rate from the logged u, minimizes the w prediction error over (b, a, tau)
 for each integer delay D on a grid.
 """
-from __future__ import annotations
 
 import argparse
 import datetime
 import json
 import math
+import subprocess
 from pathlib import Path
 
 import numpy as np
+from scipy import signal
 
 
 def sim_200hz(u: np.ndarray, b: float, a: float, tau: float, d_ticks: int, dt_log: float) -> tuple[np.ndarray, np.ndarray]:
     """Simulate plant at 200 Hz, applying d_ticks delay. Return (w_sim, m_sim) at the log rate."""
-    from scipy import signal
     dt_sim = 0.005
     n_upsample = round(dt_log / dt_sim)
 
@@ -43,13 +48,15 @@ def sim_200hz(u: np.ndarray, b: float, a: float, tau: float, d_ticks: int, dt_lo
 from scipy import optimize
 
 from ground_station.analysis import log_corpus as lc
-from ground_station.autotune.frf import load_series
 
 # Proposed thresholds and bounds
 PROPOSED_MIN_SEGMENT_S = 2.0
 PROPOSED_TIC_PASS = 0.25
 
 # Bounds: b > 0, a >= 0, 0.005 <= tau <= 0.2 s
+
+PROPOSED_MIN_TAU = 0.005
+PROPOSED_MAX_TAU = 0.2
 BOUNDS = ([0.0, 0.0, 0.005], [np.inf, np.inf, 0.2])
 
 
@@ -108,7 +115,6 @@ def sim_zoh(u: np.ndarray, b: float, a: float, tau: float, dt: float) -> np.ndar
     # The transfer function is W(s)/U(s) = b / ((s+a)*(tau*s+1)) = (b/tau) / ((s+a)*(s+1/tau))
     # We can use scipy.signal.lfilter if we get the discrete TF.
     # z-transform of ZOH equivalent:
-    from scipy import signal
 
     # state space A, B, C, D
     A = np.array([[-a, b], [0, -1/tau]])
@@ -135,50 +141,65 @@ def fit_segment(u: np.ndarray, w: np.ndarray, dt: float, d_grid: list[int]) -> d
     """
 
 
-def prepare_segments(series: lc.Series, axis: str, dt_log: float) -> list[dict]:
-    """Extract segments of u and w from log."""
+def prepare_segments(series: lc.Series, axis: str, dt_log: float) -> tuple[list[dict], bool, list[dict]]:
+    """Extract segments and a boolean indicating if it is a SysID flight, plus skipped segments."""
     pid_map = {"roll": "gyroxPID", "pitch": "gyroyPID", "yaw": "gyrozPID", "z": "Z_ratePID"}
     if axis not in pid_map:
-        return []
+        return [], False, []
     pid = pid_map[axis]
 
-    keys = [f"Ctrler.{pid}.U", f"Ctrler.{pid}.FB", "seq"]
+    keys = [f"Ctrler.{pid}.U", f"Ctrler.{pid}.FB"]
     if f"mrac_state.{axis}.u_ad" in series:
         keys.append(f"mrac_state.{axis}.u_ad")
 
-    # check for stream drops by SEQ
-    if "seq" not in series:
-        # fallback to just basic keys
-        keys.remove("seq")
-
-    t, g = lc.grid(series, keys, dt_log)
-    if len(t) == 0:
-        return []
-
-    u = g[f"Ctrler.{pid}.U"]
-    w = g[f"Ctrler.{pid}.FB"]
-    if f"mrac_state.{axis}.u_ad" in g:
-        u += g[f"mrac_state.{axis}.u_ad"]
-
-    if "seq" in g:
-        seq = g["seq"]
-        # wrap-aware diff for uint8
-        drops = (np.diff(seq) % 256) > 1
-        split_idx = np.flatnonzero(drops) + 1
-        u_segs = np.split(u, split_idx)
-        w_segs = np.split(w, split_idx)
+    raw_splits = []
+    if "seq" in series:
+        t_seq, seq = series["seq"]
+        dt_raw = np.diff(t_seq)
+        seq_drops = ((np.diff(seq) + 256) % 256) > 1
+        time_drops = dt_raw > 1.5 * dt_log
+        drops = seq_drops | time_drops
+        raw_splits = np.flatnonzero(drops) + 1
+        t_segs = np.split(t_seq, raw_splits)
     else:
         print("Note: 'seq' absent, no SEQ split performed.")
-        u_segs = [u]
-        w_segs = [w]
+        if f"Ctrler.{pid}.U" in series:
+            t_u, _ = series[f"Ctrler.{pid}.U"]
+            t_segs = [t_u]
+        else:
+            return [], False, []
 
     segs = []
-    for us, ws in zip(u_segs, w_segs):
-        if len(us) * dt_log >= PROPOSED_MIN_SEGMENT_S:
-            segs.append({"u": us, "w": ws})
-    return segs
+    skipped = []
 
+    for t_arr in t_segs:
+        if len(t_arr) < 2:
+            continue
+        seg_len_s = t_arr[-1] - t_arr[0]
+        if seg_len_s < PROPOSED_MIN_SEGMENT_S:
+            skipped.append({"reason": f"shorter than {PROPOSED_MIN_SEGMENT_S}s", "len_s": seg_len_s})
+            continue
 
+        sub_series = {}
+        for k in keys:
+            if k in series:
+                t_orig, v_orig = series[k]
+                mask = (t_orig >= t_arr[0]) & (t_orig <= t_arr[-1])
+                sub_series[k] = (t_orig[mask], v_orig[mask])
+
+        t, g = lc.grid(sub_series, keys, dt_log)
+        if len(t) == 0:
+            continue
+
+        u = g[f"Ctrler.{pid}.U"]
+        w = g[f"Ctrler.{pid}.FB"]
+        if f"mrac_state.{axis}.u_ad" in g:
+            u = u + g[f"mrac_state.{axis}.u_ad"]
+
+        segs.append({"u": u, "w": w})
+
+    is_sysid = "id.sysid_state" in series and np.any(series["id.sysid_state"][1] > 0)
+    return segs, is_sysid, skipped
 def get_dt(series: lc.Series) -> float:
     # Attempt to guess log dt based on timestamps
     # if it's 200 Hz it's 0.005, 100 Hz is 0.01
@@ -262,7 +283,6 @@ class AttFitter:
         return b, a, tau, best_d, biases
 
 def get_git_sha():
-    import subprocess
     try:
         return subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip()
     except Exception: # noqa: BLE001
@@ -281,10 +301,9 @@ def calc_val_metrics(val_segs: list[dict], b: float, a: float, tau: float, d_tic
 
     n_05s = max(1, int(0.5 / dt))
 
-    from scipy import signal
     A = np.array([[-a, b], [0, -1/tau]])
     B = np.array([[0], [1/tau]])
-    sys_d = signal.StateSpace(A, B, C=np.array([[1, 0]]), D=np.array([[0]])).to_discrete(dt)
+    sys_d = signal.StateSpace(A, B, np.array([[1, 0]]), np.array([[0]])).to_discrete(dt)
     _A_d, _B_d = sys_d.A, sys_d.B
 
     for seg in val_segs:
@@ -310,7 +329,7 @@ def calc_val_metrics(val_segs: list[dict], b: float, a: float, tau: float, d_tic
 
         _, m_sim = sim_200hz(u_biased, b, a, tau, d_ticks, dt)
 
-        sys_sim = signal.StateSpace(A, B, C=np.array([[1, 0]]), D=np.array([[0]])).to_discrete(0.005)
+        sys_sim = signal.StateSpace(A, B, np.array([[1, 0]]), np.array([[0]])).to_discrete(0.005)
         A_sim, B_sim = sys_sim.A, sys_sim.B
         n_up = round(dt / 0.005)
 
@@ -344,55 +363,18 @@ def calc_val_metrics(val_segs: list[dict], b: float, a: float, tau: float, d_tic
         "rms_05s_ahead": rms_05s
     }
 
-def analyze_axis(axis: str, train_segs: list[dict], val_sysid_segs: list[dict], val_traj_segs: list[dict], dt: float, d_grid: list[int]) -> dict:
-
-    if not train_segs:
-        return {}
-
-    fitter = AttFitter(train_segs, dt, d_grid)
-    b, a, tau, d, _biases = fitter.fit()
-
-    val_sysid_metrics = calc_val_metrics(val_sysid_segs, b, a, tau, d, dt)
-    val_traj_metrics = calc_val_metrics(val_traj_segs, b, a, tau, d, dt)
-
-    val_all_metrics = calc_val_metrics(val_sysid_segs + val_traj_segs, b, a, tau, d, dt)
-    tic = val_all_metrics.get("tic", 0.0)
-    vaf_val = val_all_metrics.get("vaf", 0.0)
-    rms_1step = val_all_metrics.get("rms_1step", 0.0)
-    rms_05s = val_all_metrics.get("rms_05s_ahead", 0.0)
-
-    return {
-        "b": float(b),
-        "a": float(a),
-        "tau": float(tau),
-        "D_ticks_200hz": int(d),
-        "D_s": float(d * 0.005),
-        "bounds": {"b": ">0", "a": ">=0", "tau": "[0.005, 0.2]"},
-        "tic": tic,
-        "vaf": vaf_val,
-        "rms_1step": rms_1step,
-        "rms_05s_ahead": rms_05s,
-        "pass": bool(tic < PROPOSED_TIC_PASS),
-        "sysid_flights": val_sysid_metrics,
-        "traj_flights": val_traj_metrics
-    }
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("sessions", nargs="+", help="paths to flight logs")
     ap.add_argument("--axes", default="roll,pitch,yaw,z", help="comma separated axes")
+    ap.add_argument("--segments", default=None, help="segment filter expression")
+    ap.add_argument("--out", default=None, help="output path")
     args = ap.parse_args(argv)
 
     axes = args.axes.split(",")
 
-    # Split into train / val
-    if len(args.sessions) > 1:
-        train_sess = args.sessions[:-1]
-        val_sess = [args.sessions[-1]]
-    else:
-        train_sess = args.sessions
-        val_sess = args.sessions
 
     out = {}
 
@@ -403,30 +385,97 @@ def main(argv: list[str] | None = None) -> int:
     # hover_fit_result = ...
 
     for axis in axes:
-        train_segs = []
-        val_segs = []
+        # Group sessions
+        all_sessions_data = {}
+        global_skipped = []
 
-        for sess in train_sess:
+        for sess in args.sessions:
             try:
                 series = load_series(sess)
                 dt = get_dt(series)
-                # adjust d_grid if 100 Hz
-                d_grid = list(range(13))
-                train_segs.extend(prepare_segments(series, axis, dt))
+                segs, is_sysid, skipped = prepare_segments(series, axis, dt)
+                global_skipped.extend(skipped)
+                all_sessions_data[sess] = {"segs": segs, "is_sysid": is_sysid, "dt": dt}
             except Exception as e: # noqa: BLE001
                 print(f"Skipping {sess}: {e}")
 
-        for sess in val_sess:
-            try:
-                series = load_series(sess)
-                val_segs.extend(prepare_segments(series, axis, dt))
-            except Exception: # noqa: BLE001, S110
-                pass
+        if not all_sessions_data:
+            continue
 
-        res = analyze_axis(axis, train_segs, val_segs, dt, d_grid)
-        if res:
-            out[axis] = res
+        dt = next(iter(all_sessions_data.values()))["dt"]
+        d_grid = list(range(13))
 
+        # Final fit on ALL data
+        all_train_segs = []
+        for data in all_sessions_data.values():
+            all_train_segs.extend(data["segs"])
+
+        if not all_train_segs:
+            continue
+
+        fitter = AttFitter(all_train_segs, dt, d_grid)
+        b, a, tau, d, _biases = fitter.fit()
+
+        res = {
+            "b": float(b),
+            "a": float(a),
+            "tau": float(tau),
+            "D_ticks_200hz": int(d),
+            "D_s": float(d * 0.005),
+            "model": "y' = w, w' = -a*w + b*m, m' = (u_d - m)/tau, u_d(t) = u(t - D)",
+            "bounds": {"b": ">0", "a": ">=0", "tau": f"[{PROPOSED_MIN_TAU}, {PROPOSED_MAX_TAU}]"},
+            "skipped_segments": global_skipped
+        }
+
+        # LOFO validation
+        if len(all_sessions_data) < 2:
+            res["validation"] = "LOFO not possible with < 2 flights"
+        else:
+            lofo_results = {}
+            sysid_metrics = []
+            traj_metrics = []
+
+            for val_sess, val_data in all_sessions_data.items():
+                train_segs = []
+                for t_sess, t_data in all_sessions_data.items():
+                    if t_sess != val_sess:
+                        train_segs.extend(t_data["segs"])
+
+                if not train_segs:
+                    continue
+
+                fitter_lofo = AttFitter(train_segs, dt, d_grid)
+                b_l, a_l, tau_l, d_l, _biases_l = fitter_lofo.fit()
+
+                v_metrics = calc_val_metrics(val_data["segs"], b_l, a_l, tau_l, d_l, val_data["dt"])
+                lofo_results[val_sess] = v_metrics
+
+                if val_data["is_sysid"]:
+                    sysid_metrics.append(v_metrics)
+                else:
+                    traj_metrics.append(v_metrics)
+
+            def aggregate(metrics_list):
+                if not metrics_list:
+                    return {}
+                agg = {}
+                for k in ["tic", "vaf", "rms_1step", "rms_05s_ahead"]:
+                    vals = [m[k] for m in metrics_list if k in m and m[k] is not None]
+                    if vals:
+                        agg[k] = float(np.mean(vals))
+                    else:
+                        agg[k] = None
+                return agg
+
+            res["lofo_per_flight"] = lofo_results
+            res["sysid_flights_summary"] = aggregate(sysid_metrics)
+            res["traj_flights_summary"] = aggregate(traj_metrics)
+
+            all_tic = [m["tic"] for m in lofo_results.values() if "tic" in m and m["tic"] is not None]
+            avg_tic = np.mean(all_tic) if all_tic else 1.0
+            res["pass"] = bool(avg_tic < PROPOSED_TIC_PASS)
+
+        out[axis] = res
 
     # Soft import j-sysid-multi direct_iv
     try:
@@ -438,11 +487,37 @@ def main(argv: list[str] | None = None) -> int:
 
     out_file = args.out if args.out else f"att_model_{datetime.date.today().strftime('%Y-%m-%d')}.json"
 
+
+    hover_fit_result = {}
+    if args.sessions:
+        try:
+            from ground_station.analysis.hover_fit import analyze as hover_analyze
+            series_map = {}
+            for s in args.sessions:
+                series_map[Path(s).name] = load_series(s)
+            h_res = hover_analyze(series_map)
+            model_key = h_res.get("best_model", "linear")
+            if model_key in h_res:
+                hover_fit_result["c0"] = h_res[model_key]["c0"]
+                hover_fit_result["c1"] = h_res[model_key]["c1"]
+                hover_fit_result["V0"] = h_res["V0"]
+                hover_fit_result["bounds"] = "weighted residuals in covariance, student-t"
+                hover_fit_result["lofo"] = True
+                hover_fit_result["linear"] = h_res.get("linear")
+                hover_fit_result["quadratic"] = h_res.get("quadratic")
+
+                if "c2" in h_res[model_key]:
+                    hover_fit_result["c2"] = h_res[model_key]["c2"]
+        except Exception as e: # noqa: BLE001
+            print(f"Hover fit failed: {e}")
+
     final_out = {
         "git_sha": get_git_sha(),
         "sessions": args.sessions,
+        "hover": hover_fit_result,
         "models": out
     }
+
 
     Path(out_file).write_text(json.dumps(final_out, indent=2))
     print(f"Wrote {out_file}")
