@@ -585,3 +585,35 @@ def test_ab_replay_summary_on_tiny_video(tmp_path):
     import pandas as pd
     df = pd.read_csv(tmp_path / "ab_frames.csv")
     assert len(df) == 2
+
+
+def test_ab_replay_z_eff_b_follows_land_zoom_flags(tmp_path):
+    """Run B's zoom column is derived from --zoom/--land-zoom/--land-z-m, not from defaults."""
+    import json
+
+    import cv2
+    import numpy as np
+    import pandas as pd
+
+    from ground_station.analysis.live_tracker import replay_main
+    p = str(tmp_path / "ab.avi")
+    w = cv2.VideoWriter(p, cv2.VideoWriter_fourcc(*"MJPG"), 30.0, (640, 480))
+    for k in range(30):
+        w.write(_coral_frame((300 + k, 260)))
+    w.release()
+    cam = {"K": [[500.0, 0, 320], [0, 500.0, 240], [0, 0, 1]], "dist": [0.0] * 5,
+           "R": [[1.0, 0, 0], [0, -1.0, 0], [0, 0, -1.0]], "t": [0.0, 0.0, 2.0]}
+    (tmp_path / "cam.json").write_text(json.dumps(cam), encoding="utf-8")
+    z_csv = tmp_path / "z.csv"
+    z_csv.write_text("t_s,z_m\n0.0,0.4\n0.5,0.2\n1.0,0.1\n", encoding="utf-8")
+
+    land_zoom, land_z_m, zoom = 3.0, 0.25, 1.5
+    assert replay_main([p, "--ab", "--z-csv", str(z_csv), "--zoom", str(zoom),
+                        "--land-zoom", str(land_zoom), "--land-z-m", str(land_z_m)]) == 0
+
+    df = pd.read_csv(tmp_path / "ab_frames.csv")
+    z_m = np.interp(df["t_s"], [0.0, 0.5, 1.0], [0.4, 0.2, 0.1])
+    low, high = z_m < land_z_m - 1e-6, z_m > land_z_m + 1e-6
+    assert low.any() and high.any()
+    assert (df.loc[low, "z_eff_b"] == land_zoom).all()
+    assert (df.loc[high, "z_eff_b"] == zoom).all()

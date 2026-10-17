@@ -24,10 +24,8 @@ import json
 import socket
 import struct
 import subprocess
-import time
 import cv2
 import threading
-import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -514,13 +512,9 @@ def traj_xy(spec: str) -> np.ndarray:
     return np.asarray(shape_xy(shape, params), float)
 
 
-
-
-
 def pip_label(z_eff: float, z_m: float) -> str:
     """Pure function formatting the landing zoom PiP text."""
     return f"LAND ZOOM {z_eff:.1f}x z={z_m*100:.0f}cm"
-
 
 
 class Preview:
@@ -1377,13 +1371,13 @@ def ab_replay(video: str, z_csv: str | None = None, zoom_a: float = 1.0, zoom_b:
 
     cam_json = out_dir / "cam.json"
     if cam_json.exists():
-        with open(cam_json) as f:
+        with open(cam_json, encoding="utf-8") as f:
             cam_data = json.load(f)
             if "aruco_id0_corners_px" in cam_data:
                 seed = tuple(np.mean(cam_data["aruco_id0_corners_px"], axis=0))
 
     def run_with_timing(zoom, land_zoom):
-        ring = CoralTracker(seed, zoom=zoom, land_zoom=land_zoom, land_z_m=0.30)
+        ring = CoralTracker(seed, zoom=zoom, land_zoom=land_zoom, land_z_m=land_z_m)
 
         cap = cv2.VideoCapture(video)
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -1413,7 +1407,7 @@ def ab_replay(video: str, z_csv: str | None = None, zoom_a: float = 1.0, zoom_b:
 
             t_draw_start = time.perf_counter()
             prev_t_last = show.t_last
-            show(t_cap, frame, uv, None, [], z=z, z_eff=getattr(ring, "active_zoom", 1.0))
+            show(t_cap, frame, uv, None, [], z=z, z_eff=ring.active_zoom)
             if show.t_last != prev_t_last:
                 draw_t.append(time.perf_counter() - t_draw_start)
 
