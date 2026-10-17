@@ -18,6 +18,8 @@ sys.path.insert(0, str(REPO))
 from ground_station.analysis import xy_ctrl as xc  # noqa: E402 (after sys.path insert)
 from ground_station.analysis import xy_tune as xt  # noqa: E402 (after sys.path insert)
 
+# Plant k/tau/drag: API/xy_ctrl_gains.h:6 (nominal plant). d = Smith-predictor delay in 10 ms ticks: the firmware
+# default g_xyc_delay_ticks = 12 (TASK/StabilizerTask.c:1912, PROPOSED), not the design value 33 (xy_ctrl_gains.h:7).
 M = {"k": 0.674, "tau": 0.0674, "drag": 0.426, "d": 12}
 DT = 0.01
 
@@ -74,11 +76,11 @@ def simulate_kind(kind: int, pos_des: np.ndarray, vff: np.ndarray,
     if kind == 0:  # PID
         vel_pid = xt.FwPid(xt.LOCXS_ROW, b=1)
         ctrl = None
-    elif kind == 1:  # ADRC
+    elif kind == 1:  # ADRC: wc, wo, b0 from API/xy_ctrl_gains.h:18-20
         ctrl = xc.Adrc(M, 1.34060242, 19.36, 0.572712305, 1)
-    elif kind == 2:  # LQR
+    elif kind == 2:  # LQR: K from API/xy_ctrl_gains.h:40
         ctrl = xc.Lqr(M, [29.7682778, 10.0523956, 0.35933145, 2.2333094], 1)
-    elif kind == 3:  # MPC
+    elif kind == 3:  # MPC: q_pos, q_vel, q_int, rd from API/xy_ctrl_gains.h:25-26
         ctrl = xc.Mpc(M, (1000.0, 0.0189, 0.0, 10.0), 0.0399208702, 1)
     else:
         raise ValueError(f"Unknown kind {kind}")
