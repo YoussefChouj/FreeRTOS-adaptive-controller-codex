@@ -18,13 +18,14 @@ from __future__ import annotations
 
 import argparse
 import csv
+import time
 import http.client
 import json
 import socket
 import struct
 import subprocess
+import cv2
 import threading
-import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -130,6 +131,7 @@ class CoralTracker:
         self.seed0, self.learn_n, self.learn_every, self.frac, self.grow = self.c.copy(), learn_n, learn_every, frac, grow_px
         self.keep_r = 1.3 * self.roi if keep_r is None else float(keep_r)   # r6_f4 pad: drone coral to ~170 px of 1920
         self.zoom, self.land_zoom, self.land_z_m, self.active_zoom = float(zoom), float(land_zoom), float(land_z_m), 1.0
+        self.last_s = {}
         self._acc, self._k, self._i = None, 0, 0
 
     def _learn(self, frame_bgr) -> None:
@@ -160,9 +162,12 @@ class CoralTracker:
         u0, v0 = int(max(0, self.c[0] - self.r)), int(max(0, self.c[1] - self.r))
         u1, v1 = int(min(W, self.c[0] + self.r)), int(min(H, self.c[1] + self.r))
         if u1 > u0 and v1 > v0:
+            t0 = time.perf_counter()
             crop = frame_bgr[v0:v1, u0:u1]
             if z_eff > 1.01:
                 crop = cv2.resize(crop, (0, 0), fx=z_eff, fy=z_eff, interpolation=cv2.INTER_LINEAR)
+            t1 = time.perf_counter()
+            self.last_s["crop"] = t1 - t0
             m = vt.coral_mask(cv2.cvtColor(crop, cv2.COLOR_BGR2HSV))
             if self.static is not None:
                 st_crop = self.static[v0:v1, u0:u1]
@@ -175,7 +180,9 @@ class CoralTracker:
                 self.c = np.array([(np.median(uu) + 0.5) / z_eff - 0.5 + u0,
                                    (np.median(vv) + 0.5) / z_eff - 0.5 + v0])
                 self.r = self.roi
+                self.last_s["detect"] = time.perf_counter() - t1
                 return self.c.copy()
+            self.last_s["detect"] = time.perf_counter() - t1
         self.r = min(self.r * 1.5, float(max(W, H)))
         return None
 
@@ -255,15 +262,19 @@ class WindowSource:
 
     def _free(self) -> None:
         if self._gdi:
-            self.g32.DeleteObject(self._gdi[3]); self.g32.DeleteDC(self._gdi[2]); self._gdi = None
+            self.g32.DeleteObject(self._gdi[3])
+            self.g32.DeleteDC(self._gdi[2])
+            self._gdi = None
 
     def _print(self, w: int, h: int):
         """Client area via PrintWindow into a 32-bit top-down DIB, or None (then read() falls back to mss)."""
         if not self._gdi or self._gdi[:2] != (w, h) or self._gdi[6] != self.hwnd:
             self._free()
             dc = self.u32.GetDC(self.hwnd)
-            mdc = self.g32.CreateCompatibleDC(dc); bmp = self.g32.CreateCompatibleBitmap(dc, w, h)
-            self.u32.ReleaseDC(self.hwnd, dc); self.g32.SelectObject(mdc, bmp)
+            mdc = self.g32.CreateCompatibleDC(dc)
+            bmp = self.g32.CreateCompatibleBitmap(dc, w, h)
+            self.u32.ReleaseDC(self.hwnd, dc)
+            self.g32.SelectObject(mdc, bmp)
             bi = (self._ct.c_uint32 * 10)(40, w, (-h) & 0xFFFFFFFF, 1 | (32 << 16), 0, 0, 0, 0, 0, 0)
             self._gdi = (w, h, mdc, bmp, bi, np.empty((h, w, 4), np.uint8), self.hwnd)
         _, _, mdc, bmp, bi, buf, _ = self._gdi
@@ -501,6 +512,11 @@ def traj_xy(spec: str) -> np.ndarray:
     return np.asarray(shape_xy(shape, params), float)
 
 
+def pip_label(z_eff: float, z_m: float) -> str:
+    """Pure function formatting the landing zoom PiP text."""
+    return f"LAND ZOOM {z_eff:.1f}x z={z_m*100:.0f}cm"
+
+
 class Preview:
     """--show: the tracker window, the only always-on-top window (the scrcpy mirror sits off screen: the PrintWindow
     grab still reads it). Left: the grabbed frame, the tracked ring, its persistent uv trail, landing zoom PiP and
@@ -515,16 +531,19 @@ class Preview:
 
     def __init__(self, hz: float = 30.0, scale: float = 0.6, rect: dict | None = None, title: str = "live_tracker",
                  traj: np.ndarray | None = None, rec: str | None = None, pass_cm: float = 20.0, trail_s: float = 0.0,
-                 width: int | None = None):
+                 width: int | None = None, headless: bool = False):
         self.cv2, self.dt, self.scale, self.title, self.t_last, self.ms = vt._cv2(), 1.0 / hz, scale, title, -1e9, 0.0
         self.width = width    # drawn frame width px (the grab keeps its full size for the tracker); None: `scale`
         self.hz, self.rect, self.traj, self.pass_m, self.trail_s, self.n = hz, rect, traj, pass_cm / 100.0, trail_s, 0
         self.trail, self.uvs, self.anchor, self.max_d, self.xy, self.z = [], [], None, 0.0, None, 0.0
         self.z_max, self.view_idx, self.zoom_pip = 0.0, 0, False
+        self.active_zoom = 1.0
         self._az, self._el, self._center = -38.0, 30.0, None
         self.rec, self.recording, self.writer = rec, rec is not None, None
         self.placed = self.full = self.closed = False
-        self.cv2.namedWindow(title, self.cv2.WINDOW_NORMAL | self.cv2.WINDOW_KEEPRATIO)
+        self.headless = headless
+        if not self.headless:
+            self.cv2.namedWindow(title, self.cv2.WINDOW_NORMAL | self.cv2.WINDOW_KEEPRATIO)
 
     def display_scale(self, frame_w: int) -> float:
         """Grab px -> drawn px: `width` / frame width (never above 1), else the fixed `scale`. A 1920 px mirror then
@@ -698,7 +717,7 @@ class Preview:
         return img
 
     def _draw_landing_pip(self, img: np.ndarray, frame: np.ndarray) -> None:
-        """Magnified 2.5x Picture-in-Picture inset around the drone/pad during landing phase or when key z is active."""
+        """Magnified Picture-in-Picture inset around the drone/pad during landing phase or when key z is active."""
         if not self.uvs:
             return
         cv2 = self.cv2
@@ -706,7 +725,9 @@ class Preview:
         ih, iw = img.shape[:2]
         u_c, v_c = self.uvs[-1][1], self.uvs[-1][2]
         pip_side = max(110, min(200, int(0.32 * ih)))
-        half_src = max(36, int(pip_side / (2.5 * max(self.scale, 0.25))))
+        z_eff = self.active_zoom
+        z_eff = max(1.0, z_eff)
+        half_src = max(36, int(pip_side / (z_eff * max(self.scale, 0.25))))
         u0 = int(np.clip(u_c - half_src, 0, max(0, W - 2 * half_src)))
         v0 = int(np.clip(v_c - half_src, 0, max(0, H - 2 * half_src)))
         crop = frame[v0:min(H, v0 + 2 * half_src), u0:min(W, u0 + 2 * half_src)]
@@ -719,7 +740,7 @@ class Preview:
         cv2.line(pip, (cx_p - 18, cy_p), (cx_p + 18, cy_p), (0, 255, 180), 1, cv2.LINE_AA)
         cv2.line(pip, (cx_p, cy_p - 18), (cx_p, cy_p + 18), (0, 255, 180), 1, cv2.LINE_AA)
         cv2.rectangle(pip, (0, 0), (pip_side - 1, pip_side - 1), (0, 215, 255), 2)
-        cv2.putText(pip, f"LAND ZOOM 2.5x z={self.z*100:.0f}cm", (5, 15),
+        cv2.putText(pip, pip_label(z_eff, self.z), (5, 15),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.36, (0, 215, 255), 1, cv2.LINE_AA)
         y1, x1 = ih - 8, iw - 8
         img[y1 - pip_side:y1, x1 - pip_side:x1] = pip
@@ -744,10 +765,11 @@ class Preview:
             cv2.setWindowProperty(self.title, cv2.WND_PROP_FULLSCREEN,
                                   cv2.WINDOW_FULLSCREEN if self.full else cv2.WINDOW_NORMAL)
 
-    def __call__(self, now: float, frame, uv, xy, lines, z: float | None = None) -> None:
+    def __call__(self, now: float, frame, uv, xy, lines, z: float | None = None, z_eff: float = 1.0) -> None:
         if z is not None and np.isfinite(z):
             self.z = max(0.0, float(z))
             self.z_max = max(self.z_max, self.z)
+        self.active_zoom = float(z_eff)
         if uv is not None:
             self.uvs.append((now, float(uv[0]), float(uv[1])))
         if xy is not None:
@@ -796,7 +818,7 @@ class Preview:
                                               (img.shape[1], img.shape[0]))
             self.writer.write(img)
             cv2.circle(img, (img.shape[1] - 16, 16), 7, (0, 0, 255), -1)   # REC dot on screen only
-        if not self.closed:
+        if not self.closed and not self.headless:
             if not self.placed:
                 self._place(img.shape[1], img.shape[0])
             elif cv2.getWindowProperty(self.title, cv2.WND_PROP_VISIBLE) < 1:   # user closed it: stop redrawing
@@ -847,7 +869,8 @@ class EarthAlign:
         """Least-squares rotation + offset over paired samples (option b: the first 1 m out-and-back), both
         handednesses tried (or only `mirror`), the lower rms kept. Needs real motion: a hover alone leaves the
         rotation undecided, a straight line the handedness."""
-        c = np.asarray(cam_xy_m, float); e = np.asarray(earth_cm, float)
+        c = np.asarray(cam_xy_m, float)
+        e = np.asarray(earth_cm, float)
         zc, ze = c[:, 0] + 1j * c[:, 1], (e[:, 0] + 1j * e[:, 1]) / 100.0
         best = None
         for mirror in ((False, True) if mirror is None else (mirror,)):
@@ -1165,7 +1188,7 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
                  [f"mode {auto.mode if auto else mode}  z {z:.2f} m  fixes {sched.n_sent}  det {n_det}/{n}",
                                          f"gate rej {gate.n_rej if gate else 0}  pad {'set' if pad is None or pad.xy is not None else 'WAIT'}"
                                          f"{' frozen' if pad is not None and pad.frozen else ''}"]
-                 + ([auto.status] if auto else []), z=z_agl)
+                 + ([auto.status] if auto else []), z=z_agl, z_eff=ring.active_zoom if ring else 1.0)
         if xy is not None:
             n_det += 1
             sched.push(t_cap, xy)
@@ -1320,9 +1343,154 @@ def replay(name: str, links=(0.15, 0.3), delay_err_s: float = 0.0, period: float
     return out
 
 
+AB_REPLAY_SEED_PX = (320, 240)    # PROPOSED
+AB_REPLAY_H_M = 0.15            # PROPOSED
+
+
+def ab_replay(video: str, z_csv: str | None = None, zoom_a: float = 1.0, zoom_b: float = 1.0, land_zoom_a: float = 1.0, land_zoom_b: float = 2.0, land_z_m: float = 0.30) -> int:
+    out_dir = Path(video).parent
+
+    if z_csv and Path(z_csv).exists():
+        with open(z_csv) as f:
+            reader = csv.DictReader(f)
+            ts_list, zs_list = [], []
+            for row in reader:
+                ts_list.append(float(row["t_s"]))
+                zs_list.append(float(row["z_m"]))
+        if ts_list:
+            def height_fn(t):
+                return float(np.interp(t, ts_list, zs_list, left=0.0, right=0.0))
+        else:
+            def height_fn(t):
+                return AB_REPLAY_H_M
+    else:
+        def height_fn(t):
+            return AB_REPLAY_H_M
+
+    seed = AB_REPLAY_SEED_PX
+
+    cam_json = out_dir / "cam.json"
+    if cam_json.exists():
+        with open(cam_json, encoding="utf-8") as f:
+            cam_data = json.load(f)
+            if "aruco_id0_corners_px" in cam_data:
+                seed = tuple(np.mean(cam_data["aruco_id0_corners_px"], axis=0))
+
+    def run_with_timing(zoom, land_zoom):
+        ring = CoralTracker(seed, zoom=zoom, land_zoom=land_zoom, land_z_m=land_z_m)
+
+        cap = cv2.VideoCapture(video)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        n_frames, n_det = 0, 0
+
+        decode_t, crop_t, det_t, draw_t = [], [], [], []
+        uvs = []
+
+        show = Preview(headless=True, hz=fps)
+
+        while cap.isOpened():
+            dt0 = time.perf_counter()
+            ok, frame = cap.read()
+            dt1 = time.perf_counter()
+            if not ok:
+                break
+            decode_t.append(dt1 - dt0)
+
+            t_cap = n_frames / fps
+            z = height_fn(t_cap)
+
+            uv = ring.step(frame, z_agl=z)
+            if "crop" in ring.last_s:
+                crop_t.append(ring.last_s["crop"])
+            if "detect" in ring.last_s:
+                det_t.append(ring.last_s["detect"])
+
+            t_draw_start = time.perf_counter()
+            prev_t_last = show.t_last
+            show(t_cap, frame, uv, None, [], z=z, z_eff=ring.active_zoom)
+            if show.t_last != prev_t_last:
+                draw_t.append(time.perf_counter() - t_draw_start)
+
+            if uv is not None:
+                n_det += 1
+                uvs.append((t_cap, uv[0], uv[1]))
+            else:
+                uvs.append((t_cap, np.nan, np.nan))
+            n_frames += 1
+
+        return n_frames, n_det, uvs, np.array(decode_t), np.array(crop_t), np.array(det_t), np.array(draw_t)
+
+    t0_run = time.perf_counter()
+    na, det_a, uvs_a, _dec_a, _c_a, _dt_a, _dr_a = run_with_timing(1.0, 1.0)
+    dur_a = time.perf_counter() - t0_run
+
+    t0_run = time.perf_counter()
+    nb, det_b, uvs_b, dec_b, c_b, dt_b, dr_b = run_with_timing(1.0, 2.0)
+    dur_b = time.perf_counter() - t0_run
+
+    if na == 0:
+        return 1
+
+    rate_a, rate_b = det_a / na, det_b / nb
+    losses_a = na - det_a
+    losses_b = nb - det_b
+
+    ua, va = np.array([u[1] for u in uvs_a]), np.array([u[2] for u in uvs_a])
+    ub, vb = np.array([u[1] for u in uvs_b]), np.array([u[2] for u in uvs_b])
+
+
+    def jitter(u, v):
+        vu = u[np.isfinite(u)]
+        vv = v[np.isfinite(v)]
+        if len(vu) < 3:
+            return None
+        return float(np.sqrt(np.mean(np.diff(vu, n=2)**2 + np.diff(vv, n=2)**2)))
+
+    jit_a, jit_b = jitter(ua, va), jitter(ub, vb)
+
+    mask = np.isfinite(ua) & np.isfinite(ub)
+    disag = float(np.mean(np.hypot(ua[mask] - ub[mask], va[mask] - vb[mask]))) if np.any(mask) else None
+
+    fps_a = f"{na/dur_a:.1f}" if dur_a > 0.0 else "n/a"
+    fps_b = f"{nb/dur_b:.1f}" if dur_b > 0.0 else "n/a"
+    ja = f"{jit_a:.2f} px" if jit_a is not None else "n/a (< 3 pts)"
+    jb = f"{jit_b:.2f} px" if jit_b is not None else "n/a (< 3 pts)"
+    da = f"{disag:.2f} px" if disag is not None else "n/a (no overlap)"
+
+
+    lines = [
+        "## A/B Replay Summary",
+        f"- **Detection Rate**: A = {rate_a:.2%} | B = {rate_b:.2%}",
+        f"- **Track Losses**: A = {losses_a} | B = {losses_b}",
+        f"- **UV Jitter (RMS)**: A = {ja} | B = {jb}",
+        f"- **A-vs-B UV Disagreement**: {da}",
+        f"- **Implied FPS**: A = {fps_a} | B = {fps_b}",
+        "### Stage Timings (Run B, ms)",
+        f"- **Decode**: p50 = {np.percentile(dec_b, 50)*1000:.1f} | p95 = {np.percentile(dec_b, 95)*1000:.1f}",
+        f"- **Zoom/Crop**: p50 = {np.percentile(c_b, 50)*1000:.1f} | p95 = {np.percentile(c_b, 95)*1000:.1f}" if len(c_b) > 0 else "- **Zoom/Crop**: N/A",
+        f"- **Detect**: p50 = {np.percentile(dt_b, 50)*1000:.1f} | p95 = {np.percentile(dt_b, 95)*1000:.1f}" if len(dt_b) > 0 else "- **Detect**: N/A",
+        f"- **Draw**: p50 = {np.percentile(dr_b, 50)*1000:.1f} | p95 = {np.percentile(dr_b, 95)*1000:.1f}" if len(dr_b) > 0 else "- **Draw**: N/A"
+    ]
+    with open(out_dir / "ab_summary.md", "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+    with open(out_dir / "ab_frames.csv", "w", newline='', encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["t_s", "u_a", "v_a", "u_b", "v_b", "z_eff_b"])
+        for i in range(na):
+            z_m = height_fn(uvs_a[i][0])
+            z_eff_b = land_zoom_b if (0.0 < z_m <= land_z_m) else zoom_b
+            writer.writerow([uvs_a[i][0], ua[i], va[i], ub[i], vb[i], z_eff_b])
+
+    print(f"A/B replay complete: wrote {out_dir}/ab_summary.md and ab_frames.csv")
+    return 0
+
+
 def replay_main(argv) -> int:
     ap = argparse.ArgumentParser(prog="live_tracker replay", description=replay.__doc__)
-    ap.add_argument("names", nargs="+", help="logs/video_truth/<name> dirs with truth4.csv")
+    ap.add_argument("names", nargs="+", help="logs/video_truth/<name> dirs with truth4.csv or video with --ab")
+    ap.add_argument("--ab", action="store_true", help="run A/B replay on a video file")
+    ap.add_argument("--z-csv", help="CSV with z heights for A/B replay")
     ap.add_argument("--link", type=float, nargs="+", default=[0.15, 0.3], help="frame -> drone delay(s), s")
     ap.add_argument("--delay-err", type=float, default=0.0, help="delay_ms the drone uses minus the true link, s")
     ap.add_argument("--period", type=float, default=0.05, help="s between fixes (20 Hz, PROPOSED)")
@@ -1336,7 +1504,16 @@ def replay_main(argv) -> int:
     ap.add_argument("--fw", action="store_true", help="run the firmware C path (gcc API/ekf_of.c), tag _fw")
     ap.add_argument("--mode", type=int, default=2, help="ext_pos mode (2 or 3, default 2)")
     ap.add_argument("--fixes", type=str, default=None, help="replay fixes CSV (e.g. fixes.csv, replay_start_fixes.csv)")
+
+    ap.add_argument("--zoom", type=float, default=1.0)
+    ap.add_argument("--land-zoom", type=float, default=2.0)
+    ap.add_argument("--land-z-m", type=float, default=0.30)
     a = ap.parse_args(argv)
+    if a.ab:
+        if a.zoom < 1.0 or a.land_zoom < 1.0 or a.land_z_m <= 0.0:
+            ap.error("zoom/land-zoom must be >= 1.0, land-z-m must be > 0.0")
+        return ab_replay(a.names[0], a.z_csv, a.zoom, a.zoom, 1.0, a.land_zoom, a.land_z_m)
+
     for nm in a.names:
         r = replay(nm, a.link, a.delay_err, a.period, a.n_med, a.window_s, not a.no_gate, max_frames=a.max_frames,
                    gain=a.gain, slew_m=a.slew_cm / 100, beta=a.beta, fw=a.fw, mode=a.mode, fixes=a.fixes)
@@ -1404,7 +1581,12 @@ def main(argv=None) -> int:
     ap.add_argument("--pass-cm", type=float, default=20.0, help="--show drift pass circle radius about the anchor")
     ap.add_argument("--stop-file", default="", help="end the run cleanly when this file appears (camera_truth.sh stop)")
     ap.add_argument("--static-t", default="", help='file only, "90,140,190": mask guard-colour pixels present at all these times')
+    ap.add_argument("--zoom", type=float, default=1.0, help="base tracking zoom >= 1.0 (default 1.0)")
+    ap.add_argument("--land-zoom", type=float, default=2.0, help="tracking zoom when below land_z_m (default 2.0)")
+    ap.add_argument("--land-z-m", type=float, default=0.30, help="apply land_zoom when 0 < z_agl <= this, m (default 0.30)")
     a = ap.parse_args(argv)
+    if a.zoom < 1.0 or a.land_zoom < 1.0 or a.land_z_m <= 0.0:
+        ap.error("zoom/land-zoom must be >= 1.0, land-z-m must be > 0.0")
     if a.align == "auto" and not ((a.tel_csv or a.tel_url) and a.mode in (2, 3)):
         ap.error("--align auto needs --tel-csv or --tel-url and --mode 2 or 3")
     if sum(map(bool, (a.tel_npz, a.tel_csv, a.tel_url))) > 1 or not (a.tel_npz or a.tel_csv or a.tel_url
@@ -1443,7 +1625,8 @@ def main(argv=None) -> int:
         cs = a.coral_static if a.coral_static != "auto" else ("start" if src_live else "video")
         ring = RingTracker(seed) if a.detector == "ring" else CoralTracker(   # track_coral sizes are 1920 px
             seed, vt.coral_static(a.source) if cs == "video" else None, roi=140.0 * s,
-            min_px=max(10, round(40 * s * s)), learn_n=a.static_n if cs == "start" else 0)
+            min_px=max(10, round(40 * s * s)), learn_n=a.static_n if cs == "start" else 0,
+            zoom=a.zoom, land_zoom=a.land_zoom, land_z_m=a.land_z_m)
     show = Preview(hz=a.show_hz, rect=WindowSource(a.source[7:]).rect() if a.source.startswith("window:") else None,
                    traj=traj_xy(a.traj) if a.traj else None, rec=a.show_rec, pass_cm=a.pass_cm,
                    width=a.show_width or None) if a.show else None
