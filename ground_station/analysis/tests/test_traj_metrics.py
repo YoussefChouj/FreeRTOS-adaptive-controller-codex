@@ -106,3 +106,11 @@ def test_check_fly_smoke():
     rows = tm.check_fly(ROOT / "ground_station" / "service" / "campaigns" / "lab_c_pid.fly")
     assert rows and {r["preset"] for r in rows} <= set(tm.PRESET_IDS)
     assert not [n for r in rows for n in r["notes"] if n[0] == "REFUSE"]
+
+
+def test_check_fly_preset_fields_do_not_carry_over():
+    rows = tm.check_fly(ROOT / "ground_station" / "service" / "campaigns" / "lab_f_dense_traj.fly")
+    flat, tilted = (r["kin"] for r in rows if r["preset"] == "figure8")
+    assert flat.box[5] - flat.box[4] < 1.0        # tilt 0: the ground writes its boot values, not lab_stage 1
+    assert tilted.box[5] - tilted.box[4] > 20.0   # f8_tilt_deg=30 on that preset only
+    assert not [n for r in rows for n in r["notes"] if n[0] == "REFUSE"]

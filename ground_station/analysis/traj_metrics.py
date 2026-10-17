@@ -32,12 +32,13 @@ CEILING_M = 1.7 - 0.3         # API/wfb_safety.c ceiling - soft margin
 PRESET_IDS = {"step": 1, "zigzag": 2, "circle": 3, "figure8": 4}   # platform/wfb_var.py PRESETS
 LAPS_MAX = {3: 3.0, 4: 4.0}   # circ_laps, f8_laps caps at traj_go
 
-# AutoflyTask.c `TrajParams_t traj_p` boot values (field names as in the VAR_WRITE_ROW lines, traj_p. stripped)
+# AutoflyTask.c `TrajParams_t traj_p` boot values (field names as in the VAR_WRITE_ROW lines, traj_p. stripped), after
+# StabilizerTask.c Lab_StagePoll applies the boot lab_stage 1 row at the first ground tick: f8 tilt 30, 2 laps, 90 deg/s
 TRAJ_DEFAULTS: dict[str, float] = {
     "profile": 1, "axis": 0, "zz_shape": 0, "f8_type": 1,
     "move_s": 20.0, "ret_s": 3.0, "hold_s": 2.0, "ramp_s": 2.0,
     "step_cm": 40.0, "zz_amp_cm": 30.0, "zz_hz": 0.2,
-    "circ_r_cm": 40.0, "circ_laps": 1.0, "f8_a_cm": 70.0, "f8_laps": 2.0, "f8_tilt_deg": 0.0,
+    "circ_r_cm": 40.0, "circ_laps": 1.0, "f8_a_cm": 70.0, "f8_laps": 2.0, "f8_tilt_deg": 30.0,
     "yaw_follow": 1, "yaw_rate_dps": 90.0, "yaw_nose_deg": 90.0,
     "start_fixed": 1, "start_x_cm": 0.0, "start_y_cm": 0.0, "start_z_m": 0.85, "goto_s": 4.0, "settle_s": 2.0,
 }
@@ -277,18 +278,23 @@ def _sets(step: dict) -> dict:
 
 def check_fly(path: Path, lim_mode: int | None = None, k: float = K_ACCEL) -> list[dict]:
     """Every preset of a .fly file, with the firmware's sticky traj_p state and the lim_mode in force."""
-    from ground_station.service.fly_file import compile_fly   # read-only use
+    from ground_station.platform.wfb_var import traj_defaults   # read-only use
+    from ground_station.service.fly_file import compile_fly
     camp, _ = compile_fly(Path(path).read_text(encoding="utf-8"), Path(path))
     lims = load_limits()
+    # scenario_schema._compile_preset writes ALL of traj_p before every traj_go: the ground copy of the boot values
+    # (f8 tilt 0, not the lab_stage row) overlaid with the step's own fields, start_z_m = the takeoff hover z
+    base = {k[7:]: v for k, v in traj_defaults().items()}
     rows = []
     for exp in camp["experiments"]:
-        tp, lm, home = dict(TRAJ_DEFAULTS), 0, (0.0, 0.0, 0.85)
+        lm, home, hz = 0, (0.0, 0.0, 0.85), base["start_z_m"]
         for step in exp["scenario"]["steps"]:
             for key, val in _sets(step).items():
                 if key == "lim_mode":
                     lm = int(val)
-                elif key.startswith("traj_p."):
-                    tp[key[7:]] = val
+            if isinstance(step, dict) and "takeoff" in step:
+                hz = float(step["takeoff"]["z"])
+                home = (home[0], home[1], hz)
             if isinstance(step, dict) and "goto" in step:
                 g = step["goto"]
                 home = (g.get("x", home[0]), g.get("y", home[1]), g.get("z", home[2]))
@@ -296,7 +302,8 @@ def check_fly(path: Path, lim_mode: int | None = None, k: float = K_ACCEL) -> li
                 continue
             pr = dict(step["preset"])
             name = pr.pop("name")
-            tp.update(pr)           # VAR_WRITE persists in the firmware for the rest of the flight
+            tp = dict(base, start_z_m=hz)
+            tp.update(pr)           # fly_file has already folded the sticky `set traj_p.*` lines into pr
             mode = lm if lim_mode is None else lim_mode
             st = (tp["start_x_cm"] / 100, tp["start_y_cm"] / 100, tp["start_z_m"]) if tp["start_fixed"] else home
             kin, notes = check(tp, PRESET_IDS[name], lims[mode], st, k)
