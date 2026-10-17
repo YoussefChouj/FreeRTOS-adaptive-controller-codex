@@ -87,3 +87,150 @@ def test_pack_hook_reads_the_pickles_and_score_fills_the_drift(tmp_path, monkeyp
     out = nn_io.score("_t")
     assert out["flights"]["f1"] == {"in_pool": True, "quick_nn": 1.0, "d60s": {"nn": 3.0}, "seen": ["f1", "_t", True]}
     assert json.loads((vt / "nnio_t.json").read_text()) == out
+
+
+def test_checkpoint_keys_exactly_match_spec(tmp_path):
+    from torch import nn
+
+    from ground_station.analysis.nn_io import _torch, save_model
+    torch = _torch()
+    class DummyNet(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.a = nn.Parameter(torch.ones(1))
+        def forward(self, x):
+            return x
+    net = DummyNet()
+    model = (net, np.zeros(17), np.ones(17), list(range(17)))
+    ckpt = tmp_path / "model.pt"
+
+    save_model(model, ckpt, {"kind": "dummy"})
+
+    payload = torch.load(ckpt, map_location="cpu", weights_only=False)
+
+    expected_keys = {"format", "state_dict", "cfg", "mu", "sd", "feats", "rate_hz", "channels", "v_col", "sha256"}
+    assert set(payload.keys()) == expected_keys
+
+
+def test_any_slot_loader_rate_invariance_and_fallback(tmp_path):
+    import pandas as pd
+
+    from ground_station.analysis.nn_io import RATE_HZ, any_slot_loader
+    from ground_station.analysis.video_truth import NN4_CH
+
+    stem = str(tmp_path / "testflight")
+    ts = np.arange(0.5, 3.0, 1.0 / RATE_HZ)
+    chans = [c for k, cols in NN4_CH.items() for c in cols]
+
+    def _create_slot(rate, k):
+        t = np.arange(0.0, 4.0, 1.0 / rate)
+        df = pd.DataFrame({"t_src_ms": t * 1000})
+        for i, c in enumerate(chans):
+            # Generate a signal with bandwidth well below Nyquist (e.g. 1 Hz sin wave)
+            df[c] = np.sin(2 * np.pi * 1.0 * t + i * 0.1)
+        df.to_csv(f"{stem}.slot{k}.csv", index=False)
+        return t, df
+
+    # 25 Hz
+    _create_slot(25.0, 1)
+    F25 = any_slot_loader(stem, ts, RATE_HZ)
+
+    # 50 Hz
+    _create_slot(50.0, 1)
+    F50 = any_slot_loader(stem, ts, RATE_HZ)
+
+    # 100 Hz
+    _create_slot(100.0, 1)
+    F100 = any_slot_loader(stem, ts, RATE_HZ)
+
+    # Check that block means are similar (rate invariance)
+    # They should be close since the underlying signal is the same and we're just
+    # averaging it in the same causal blocks.
+    # Tolerance based on signal bandwidth and block mean differences for discrete sampling.
+    assert np.allclose(F25, F50, atol=0.2)
+    assert np.allclose(F50, F100, atol=0.1)
+
+    # Verify predictions are identical within it.
+    from torch import nn
+
+    class DummyNet(nn.Module):
+        def forward(self, X, V):
+            return X[:, :, :2].mean(1)  # simple dummy prediction
+
+    model = (DummyNet(), F50.mean(0), F50.std(0) + 1e-6, list(range(len(chans))))
+
+    # We must construct dictionaries like `predict` expects
+    from ground_station.analysis.nn_io import V_COL, predict
+    def mock_dict(F_arr):
+        v = F_arr[:, V_COL[0]] + 1j * F_arr[:, V_COL[1]]
+        return {"F": F_arr, "v": v, "back": np.ones(len(F_arr), dtype=complex), "ts": ts,
+                "R": np.zeros(len(F_arr), dtype=complex), "Y": np.zeros((len(F_arr), 2))}
+
+    p25 = predict(model, mock_dict(F25))
+    p50 = predict(model, mock_dict(F50))
+    p100 = predict(model, mock_dict(F100))
+
+    assert np.allclose(p25, p50, atol=0.2)
+    assert np.allclose(p50, p100, atol=0.1)
+
+def test_any_slot_loader_regression_matches_read_slots(tmp_path):
+    import pandas as pd
+
+    from ground_station.analysis.nn_io import RATE_HZ, _bmean, any_slot_loader
+    from ground_station.analysis.video_truth import NN4_CH
+
+    stem = str(tmp_path / "regress_flight")
+    ts = np.arange(0.5, 3.0, 1.0 / RATE_HZ)
+
+    # Create slot 1 and 2 just like old format
+    np.random.seed(0)
+    t = np.arange(0.0, 4.0, 1.0 / 100.0)
+
+    df1 = pd.DataFrame({"t_src_ms": t * 1000})
+    df2 = pd.DataFrame({"t_src_ms": t * 1000})
+
+    for c in NN4_CH[1]:
+        df1[c] = np.random.randn(len(t))
+    for c in NN4_CH[2]:
+        df2[c] = np.random.randn(len(t))
+
+    df1.to_csv(f"{stem}.slot1.csv", index=False)
+    df2.to_csv(f"{stem}.slot2.csv", index=False)
+
+    # Read via new logic
+    F_new = any_slot_loader(stem, ts, RATE_HZ)
+
+    # Read via old logic equivalent
+    F_old = []
+    for k, cols in NN4_CH.items():
+        df = df1 if k == 1 else df2
+        for c in cols:
+            F_old.append(_bmean(df["t_src_ms"].values / 1000.0, df[c].values, ts, 1.0 / RATE_HZ))
+
+    F_old = np.c_[F_old].T
+
+    # The requirement is exact bit-for-bit match
+    # Since any_slot_loader reads from CSV via pandas similarly, the float values might have negligible differences due to CSV serialization.
+    # To test exact equivalence, we need F_new and F_old to be array_equal.
+    # Wait, the prompt says: "when the loader reads the same CSV through the old path and the new any-slot path, the feature arrays must be identical (np.array_equal, same dtype)"
+    # We should use read_slots instead of a manual loop to prove it.
+    from ground_station.analysis.video_truth import read_slots
+    S = read_slots(stem, (1, 2))
+    F_old_real = [_bmean(S[k]["t"], np.nan_to_num(S[k][c]), ts, 1.0 / RATE_HZ) for k, chans in NN4_CH.items() for c in chans]
+    F_old_real = np.c_[F_old_real].T
+
+    assert np.array_equal(F_new, F_old_real)
+    assert F_new.dtype == F_old_real.dtype
+
+
+def test_save_load_roundtrip_is_weights_only(tmp_path):
+    # numpy feats and numpy scalars in meta must not leak into the file, or torch.load(weights_only=True) rejects it.
+    from ground_station.analysis.nn_io import build, load_model, save_model
+    net = build(17, "gru", 8, "scale", 1, drop=0.0)
+    mu, sd = np.arange(17.0), np.ones(17)
+    ckpt = tmp_path / "m.pt"
+    save_model((net, mu, sd, list(np.arange(17))), ckpt, {"kind": "gru", "H": 8, "head": "scale", "layers": 1,
+                                                          "lr": np.float32(1e-3)})
+    _, mu2, sd2, feats = load_model(ckpt)
+    assert np.array_equal(mu2, mu) and np.array_equal(sd2, sd)
+    assert feats == list(range(17)) and all(type(f) is int for f in feats)

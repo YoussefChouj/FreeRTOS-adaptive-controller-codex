@@ -189,3 +189,39 @@ def test_step_settle_never_settled_and_small_moves_skipped():
     (row,) = fd.step_settle(_step(50.0, 0.0, hold_s=3.0))
     assert row["settle_s"] is None and row["hold_s"] <= 3.0
     assert fd.step_settle(_step(5.0, 0.8)) == []
+
+def test_nn_shadow_skip_reasons(tmp_path):
+    from ground_station.analysis.flight_debrief import _nn_shadow
+    sd = tmp_path / "flight_01"
+    sd.mkdir()
+    out = tmp_path / "out"
+
+    # 1. No slot CSV
+    res = _nn_shadow(sd, out)
+    assert "no slot CSV" in res["md"]
+
+    (sd / "flight_01.slot1.csv").touch()
+
+    # 2. No truth4.csv
+    res = _nn_shadow(sd, out)
+    assert "no truth4.csv" in res["md"]
+
+    (sd / "truth4.csv").touch()
+
+    # 3. No checkpoint
+    res = _nn_shadow(sd, out)
+    assert "no checkpoint" in res["md"]
+
+    (sd / "model.pt").touch()
+    (sd / "model2.pt").touch()
+
+    # 4. Ambiguous checkpoint
+    res = _nn_shadow(sd, out)
+    assert "ambiguous checkpoint" in res["md"]
+
+    (sd / "model2.pt").unlink()
+
+    # 5. Rejected checkpoint
+    # model.pt is empty so it will raise an exception in load_model
+    res = _nn_shadow(sd, out)
+    assert "checkpoint rejected" in res["md"]

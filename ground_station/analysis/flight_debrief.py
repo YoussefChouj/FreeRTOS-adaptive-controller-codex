@@ -26,15 +26,28 @@ import json
 import math
 import re
 import statistics
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
-from ground_station.analysis.controller_descriptor import PID_AXES, PID_GAIN_CMD, PID_GAINS
 from ground_station.analysis import landing_report
+from ground_station.analysis.nn_io import load_model
+import ground_station.analysis.nn_replay as nnr
+from ground_station.analysis.controller_descriptor import (
+    PID_AXES,
+    PID_GAIN_CMD,
+    PID_GAINS,
+)
 from ground_station.livewatch.campaign_capture import ATTITUDE, KF_HEALTH, MOTORS
 from ground_station.service.campaign_outputs import (
-    PRIM_STATE, SAFETY_TRIP, Series, flight_metrics, hold_window, plot_flight, read_telemetry,
+    PRIM_STATE,
+    SAFETY_TRIP,
+    Series,
+    flight_metrics,
+    hold_window,
+    plot_flight,
+    read_telemetry,
 )
 
 PRIM_NAMES = ("IDLE", "CLIMB", "HOVER", "TRAJ", "RETURN", "SETTLE", "DESCEND")  # API/wfb_prim.h
@@ -541,6 +554,45 @@ def current_gains(history: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
     return gains
 
 
+
+def _nn_shadow(sd: Path, out: Path) -> dict:
+    """Run the offline NN replay against the flight and return its debrief section."""
+    truth = sd / "truth4.csv"
+    slot1_path = sd / f"{sd.name}.slot1.csv"
+
+    if not slot1_path.exists():
+        return {"md": "Skipped NN shadow: no slot CSV"}
+    if not truth.exists():
+        return {"md": "Skipped NN shadow: no truth4.csv"}
+
+    ckpts = list(sd.glob("*.pt"))
+    if not ckpts:
+        return {"md": "Skipped NN shadow: no checkpoint"}
+    if len(ckpts) > 1:
+        return {"md": "Skipped NN shadow: ambiguous checkpoint"}
+    ckpt = ckpts[0]
+
+    # load_model raises ValueError on an unreadable file or a bad format/hash/channel list, and
+    # load_state_dict RuntimeError on a shape mismatch.
+    try:
+        load_model(ckpt)
+    except (OSError, ValueError, RuntimeError) as e:
+        return {"md": f"Skipped NN shadow: checkpoint rejected ({e})"}
+
+    nnr_out = out / "nn_replay"
+    nnr_out.mkdir(exist_ok=True)
+    try:
+        rc = nnr.main([sd.name, "--truth", str(truth), "--ckpt", str(ckpt), "--out", str(nnr_out)])
+    except (OSError, ValueError, RuntimeError, KeyError) as e:
+        return {"md": f"Skipped NN shadow: replay script failed ({e})"}
+    if rc != 0:
+        return {"md": f"Skipped NN shadow: replay script failed (exit {rc})"}
+    md_path = nnr_out / "nn_replay.md"
+    js_path = nnr_out / "nn_replay.json"
+    md = md_path.read_text(encoding="utf-8") if md_path.exists() else ""
+    js = json.loads(js_path.read_text(encoding="utf-8")) if js_path.exists() else {}
+    return {"md": md, "json": js}
+
 def debrief(session_dir: str | Path, run_dir: str | Path, *, flight_id: str | None = None, scenario: str = "hover",
             scenario_args: Mapping[str, Any] | None = None, pack: str = "type2",
             sat: tuple[float, float] | None = None, gains: Mapping[str, Mapping[str, float]] | None = None,
@@ -571,6 +623,8 @@ def debrief(session_dir: str | Path, run_dir: str | Path, *, flight_id: str | No
          "metrics": m, "findings": found, "verdicts": verdicts, "not_applied": not_applied, "next": nxt, "gains": gains,
          "previous": {"flight_id": prev["flight_id"], "metrics": prev["metrics"]} if prev else None,
          "landing": landing_report.landing(series)}
+    d["nn_shadow"] = _nn_shadow(Path(session_dir), out)
+
     if plots:
         plot_flight(series, out / "plots" / "tracking.png", f"{flight_id} {scenario}", hold_window(series))
         plot_analysis(series, m, out / "plots" / "analysis.png", sat)
