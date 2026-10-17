@@ -1,11 +1,12 @@
 """live_tracker: earth alignment fit, fix scheduler (median, spread, period), frame packing."""
+import shutil
+import struct
+
 import numpy as np
 import pytest
 
 from ground_station.analysis.live_tracker import EarthAlign, FixScheduler
 from ground_station.comm.ext_pos_encoder import ext_pos_decode
-import shutil
-import struct
 
 
 def _path(n=200):
@@ -175,6 +176,7 @@ def test_scheduler_window_stays_tight_at_high_frame_rate():
 
 def test_run_source_sends_hello_then_fixes_when_latency_exceeds_period(tmp_path):
     import cv2
+
     from ground_station.analysis.live_tracker import CoralTracker, run_source
     p = str(tmp_path / "v.avi")
     w = cv2.VideoWriter(p, cv2.VideoWriter_fourcc(*"MJPG"), 30.0, (640, 480))
@@ -195,6 +197,7 @@ def test_run_source_sends_hello_then_fixes_when_latency_exceeds_period(tmp_path)
 
 def test_udp_sender_sends_one_datagram_per_frame():
     import socket
+
     from ground_station.analysis.live_tracker import udp_sender
     r = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     r.bind(("127.0.0.1", 0))
@@ -276,6 +279,7 @@ def test_pad_origin_follows_on_ground_then_freezes_after_take_off():
 
 def test_run_source_writes_fixes_as_it_goes_and_ends_on_the_stop_file(tmp_path):
     import cv2
+
     from ground_station.analysis.live_tracker import CoralTracker, run_source
     p = str(tmp_path / "v.avi")
     w = cv2.VideoWriter(p, cv2.VideoWriter_fourcc(*"MJPG"), 30.0, (640, 480))
@@ -304,6 +308,7 @@ def test_stream_log_stop_file_sets_once_the_file_appears(tmp_path):
 
 def test_shadow_pairs_rebuild_the_sent_fix_from_the_firmware_innovation(tmp_path):
     import pandas as pd
+
     from ground_station.analysis.live_tracker import shadow_pairs
     t = np.arange(0, 20000, 20.0)                                    # slot1 50 Hz, device ms
     air = (t > 2000) & (t < 18000)
@@ -402,6 +407,7 @@ def test_coral_tracker_learns_static_at_start_so_scenery_cannot_hold_the_fix():
 
 def test_preview_draws_a_full_size_grab_at_the_set_width():
     from types import SimpleNamespace
+
     from ground_station.analysis.live_tracker import Preview
     scale = Preview.display_scale
     assert scale(SimpleNamespace(width=716, scale=0.6), 1920) == pytest.approx(716 / 1920)   # 1920 mirror: r7 size
@@ -446,3 +452,110 @@ def test_coral_tracker_landing_zoom_preserves_canonical_sensor_coordinates():
     assert t_zoom.active_zoom == pytest.approx(2.0)
     assert np.allclose(uv_base, uv_zoom, atol=0.75)
 
+
+
+def test_pip_label():
+    from ground_station.analysis.live_tracker import pip_label
+    assert pip_label(1.5, 0.45) == "LAND ZOOM 1.5x z=45cm"
+    assert pip_label(3.0, 0.2) == "LAND ZOOM 3.0x z=20cm"
+
+def test_preview_headless_does_not_call_cv2_window_functions(monkeypatch):
+    from ground_station.analysis.live_tracker import Preview
+    import cv2
+    import numpy as np
+
+    def raise_err(*args, **kwargs):
+        raise RuntimeError("Window function called in headless mode!")
+
+    monkeypatch.setattr(cv2, "namedWindow", raise_err)
+    monkeypatch.setattr(cv2, "imshow", raise_err)
+    monkeypatch.setattr(cv2, "resizeWindow", raise_err)
+    monkeypatch.setattr(cv2, "moveWindow", raise_err)
+
+    p = Preview(headless=True)
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    p(1.0, frame, None, None, [])
+
+def test_cli_flags_reach_coral_tracker_and_zoom_validated(monkeypatch, tmp_path):
+    from ground_station.analysis.live_tracker import main
+    import ground_station.analysis.live_tracker as lt
+
+    captured_ring = None
+
+    def mock_run_source(*args, **kwargs):
+        nonlocal captured_ring
+        captured_ring = kwargs.get("ring")
+        return {}
+
+    monkeypatch.setattr(lt, "run_source", mock_run_source)
+
+    cam_json = tmp_path / "cam.json"
+    cam_json.write_text('{"K": [[1,0,0], [0,1,0], [0,0,1]], "dist": [0,0,0,0,0], "R": [[1,0,0], [0,1,0], [0,0,1]], "t": [0,0,0], "aruco_id0_corners_px": [[0,0],[1,0],[1,1],[0,1]]}')
+
+    main([
+        "--source", "0",
+        "--cam", str(cam_json),
+        "--out", str(tmp_path / "out.csv"),
+        "--detector", "coral",
+        "--zoom", "1.5",
+        "--land-zoom", "3.0",
+        "--land-z-m", "0.4",
+        "--height-m", "0.0"
+    ])
+
+    assert captured_ring is not None
+    assert getattr(captured_ring, "zoom") == 1.5
+    assert getattr(captured_ring, "land_zoom") == 3.0
+    assert getattr(captured_ring, "land_z_m") == 0.4
+
+def test_ab_replay_produces_summary_and_handles_flags_correctly(tmp_path):
+    import cv2
+    import json
+    from ground_station.analysis.live_tracker import replay_main
+    from ground_station.analysis.tests.test_live_tracker import _coral_frame
+    p = str(tmp_path / "test_ab.avi")
+    w = cv2.VideoWriter(p, cv2.VideoWriter_fourcc(*"MJPG"), 30.0, (640, 480))
+    for k in range(30):
+        w.write(_coral_frame((300 + k, 260)))
+    w.release()
+
+    cam = {"K": [[500.0, 0, 320], [0, 500.0, 240], [0, 0, 1]], "dist": [0.0] * 5,
+           "R": [[1.0, 0, 0], [0, -1.0, 0], [0, 0, -1.0]], "t": [0.0, 0.0, 2.0]}
+    with open(tmp_path / "cam.json", "w") as f:
+        json.dump(cam, f)
+
+    z_csv = tmp_path / "z.csv"
+    with open(z_csv, "w") as f:
+        f.write("t_s,z_m\n0.0,0.4\n0.5,0.2\n1.0,0.1\n")
+
+    ret = replay_main([p, "--z-csv", str(z_csv)])
+    assert ret == 0
+
+    md_text = (tmp_path / "ab_summary.md").read_text()
+    assert "A/B Replay Summary" in md_text
+    assert "Detection Rate**: A =" in md_text
+    assert "Zoom/Crop**:" in md_text
+    assert "Draw**:" in md_text
+
+    import pandas as pd
+    df = pd.read_csv(tmp_path / "ab_frames.csv")
+    assert "z_eff_b" in df.columns
+    # Both runs detect the ring on at least 90% of frames
+    lines = md_text.split("\n")
+    det_line = next(line for line in lines if "Detection Rate**: A =" in line)
+    a_rate = float(det_line.split("A = ")[1].split("%")[0])
+    b_rate = float(det_line.split("B = ")[1].split("%")[0])
+    assert a_rate >= 90.0 and b_rate >= 90.0
+
+    # Zoom B is land_zoom exactly when z <= land_z_m and zoom when z > land_z_m
+    # Test script used zoom=1.0, land_zoom=2.0, land_z_m=0.30
+    assert (df.loc[df["z_eff_b"] == 2.0, "t_s"] > 0.0).any()
+    z_m_list = [0.4, 0.2, 0.1]
+    def get_z_m(t_s):
+        import numpy as np
+        ts_list = [0.0, 0.5, 1.0]
+        return np.interp(t_s, ts_list, z_m_list)
+
+    df["z_m"] = df["t_s"].apply(get_z_m)
+    assert (df.loc[df["z_m"] <= 0.30, "z_eff_b"] == 2.0).all()
+    assert (df.loc[df["z_m"] > 0.30, "z_eff_b"] == 1.0).all()
