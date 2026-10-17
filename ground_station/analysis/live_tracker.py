@@ -124,11 +124,12 @@ class CoralTracker:
 
     def __init__(self, seed_uv, static=None, roi: float = 140.0, min_px: int = 40,   # track_coral defaults
                  learn_n: int = 0, learn_every: int = 5, frac: float = 0.7, grow_px: int = 7,
-                 keep_r: float | None = None):
+                 keep_r: float | None = None, zoom: float = 1.0, land_zoom: float = 2.0, land_z_m: float = 0.30):
         self.c, self.static, self.roi, self.min_px = np.asarray(seed_uv, float), static, float(roi), min_px
         self.r = self.roi
         self.seed0, self.learn_n, self.learn_every, self.frac, self.grow = self.c.copy(), learn_n, learn_every, frac, grow_px
         self.keep_r = 1.3 * self.roi if keep_r is None else float(keep_r)   # r6_f4 pad: drone coral to ~170 px of 1920
+        self.zoom, self.land_zoom, self.land_z_m, self.active_zoom = float(zoom), float(land_zoom), float(land_z_m), 1.0
         self._acc, self._k, self._i = None, 0, 0
 
     def _learn(self, frame_bgr) -> None:
@@ -148,20 +149,32 @@ class CoralTracker:
         self.learn_n, self._acc = 0, None
         print(f"coral static learned: {int(learned.sum())} px from {self._k} frames", flush=True)
 
-    def step(self, frame_bgr) -> Optional[np.ndarray]:
+    def step(self, frame_bgr, z_agl: float | None = None) -> Optional[np.ndarray]:
         cv2 = vt._cv2()
         if self.learn_n:
             self._learn(frame_bgr)
         H, W = frame_bgr.shape[:2]
+        z_eff = self.land_zoom if (z_agl is not None and np.isfinite(z_agl) and 0.0 < z_agl <= self.land_z_m) else self.zoom
+        z_eff = max(1.0, float(z_eff))
+        self.active_zoom = z_eff
         u0, v0 = int(max(0, self.c[0] - self.r)), int(max(0, self.c[1] - self.r))
         u1, v1 = int(min(W, self.c[0] + self.r)), int(min(H, self.c[1] + self.r))
         if u1 > u0 and v1 > v0:
-            m = vt.coral_mask(cv2.cvtColor(frame_bgr[v0:v1, u0:u1], cv2.COLOR_BGR2HSV))
+            crop = frame_bgr[v0:v1, u0:u1]
+            if z_eff > 1.01:
+                crop = cv2.resize(crop, (0, 0), fx=z_eff, fy=z_eff, interpolation=cv2.INTER_LINEAR)
+            m = vt.coral_mask(cv2.cvtColor(crop, cv2.COLOR_BGR2HSV))
             if self.static is not None:
-                m &= ~self.static[v0:v1, u0:u1]
+                st_crop = self.static[v0:v1, u0:u1]
+                if z_eff > 1.01:
+                    st_crop = cv2.resize(st_crop.astype(np.uint8), (m.shape[1], m.shape[0]),
+                                         interpolation=cv2.INTER_NEAREST) > 0
+                m &= ~st_crop
             vv, uu = np.nonzero(m)
-            if len(uu) >= self.min_px:
-                self.c, self.r = np.array([np.median(uu) + u0, np.median(vv) + v0]), self.roi
+            if len(uu) >= self.min_px * (z_eff * z_eff):
+                self.c = np.array([(np.median(uu) + 0.5) / z_eff - 0.5 + u0,
+                                   (np.median(vv) + 0.5) / z_eff - 0.5 + v0])
+                self.r = self.roi
                 return self.c.copy()
         self.r = min(self.r * 1.5, float(max(W, H)))
         return None
@@ -490,22 +503,25 @@ def traj_xy(spec: str) -> np.ndarray:
 
 class Preview:
     """--show: the tracker window, the only always-on-top window (the scrcpy mirror sits off screen: the PrintWindow
-    grab still reads it). Left: the grabbed frame, the tracked ring, its uv trail and the counters. Right: a top-down
-    pad-frame map: 0.5 m grid, path trail vs current xy, the --traj preset, the drift anchor and its pass circle
-    (green while max drift < pass_cm, else red) with the hold time. Resizable (WINDOW_NORMAL, aspect kept); state
-    updates every frame, drawing at most `hz` per s. Keys (window focused): r record on/off, a anchor here,
-    c clear trails, f fullscreen. Recording writes each drawn frame to `rec` (mp4, `hz` fps) for demo clips."""
+    grab still reads it). Left: the grabbed frame, the tracked ring, its persistent uv trail, landing zoom PiP and
+    counters. Right: a 3D pad-frame trajectory viewer (x, y, z) that automatically centers the 3D path and selects
+    the best viewing angle (broadside to principal horizontal axis, elevation adapted to z-vs-xy span), with 0.5 m
+    floor grid, ground shadow, vertical drop-stems, preset trajectory and drift pass circle. Keys (window focused):
+    r record on/off, a anchor here, c clear trails, v cycle 3D view (auto/orbit/iso/top), z toggle zoom PiP, f full."""
 
-    KEYS = "keys: r rec  a anchor  c clear  f full"
+    KEYS = "keys: r rec  a anchor  c clear  v 3d-view  z zoom  f full"
     HOLD_S = 0.5      # r7_f6: 3056 detections in 3970 frames, so ~1 draw in 4 had no ring (it blinked)
+    VIEWS = ("auto", "orbit", "iso", "top")
 
     def __init__(self, hz: float = 30.0, scale: float = 0.6, rect: dict | None = None, title: str = "live_tracker",
-                 traj: np.ndarray | None = None, rec: str | None = None, pass_cm: float = 20.0, trail_s: float = 120.0,
+                 traj: np.ndarray | None = None, rec: str | None = None, pass_cm: float = 20.0, trail_s: float = 0.0,
                  width: int | None = None):
         self.cv2, self.dt, self.scale, self.title, self.t_last, self.ms = vt._cv2(), 1.0 / hz, scale, title, -1e9, 0.0
         self.width = width    # drawn frame width px (the grab keeps its full size for the tracker); None: `scale`
         self.hz, self.rect, self.traj, self.pass_m, self.trail_s, self.n = hz, rect, traj, pass_cm / 100.0, trail_s, 0
-        self.trail, self.uvs, self.anchor, self.max_d, self.xy = [], [], None, 0.0, None   # trail (t,x,y), uvs (t,u,v)
+        self.trail, self.uvs, self.anchor, self.max_d, self.xy, self.z = [], [], None, 0.0, None, 0.0
+        self.z_max, self.view_idx, self.zoom_pip = 0.0, 0, False
+        self._az, self._el, self._center = -38.0, 30.0, None
         self.rec, self.recording, self.writer = rec, rec is not None, None
         self.placed = self.full = self.closed = False
         self.cv2.namedWindow(title, self.cv2.WINDOW_NORMAL | self.cv2.WINDOW_KEEPRATIO)
@@ -532,40 +548,181 @@ class Preview:
         cv2.setWindowProperty(self.title, cv2.WND_PROP_TOPMOST, 1)
         self.placed = True
 
-    def _map(self, side: int) -> np.ndarray:
-        cv2 = self.cv2
-        o = np.zeros(2) if self.anchor is None else np.asarray(self.anchor[1:])
-        tr = np.asarray(self.trail, float)[:, 1:] if self.trail else np.zeros((0, 2))
-        tj = np.zeros((0, 2)) if self.traj is None else self.traj + o   # shape_xy starts at 0,0: drawn from the anchor
-        ext = np.ceil(2 * max(1.0, 1.15 * float(np.abs(np.vstack([tr, tj])).max(initial=0.0)))) / 2   # 0.5 m steps
-        k = side / (2 * ext)
+    def _best_angles(self, tr3: np.ndarray, now: float) -> tuple[float, float]:
+        mode = self.VIEWS[self.view_idx % len(self.VIEWS)]
+        if mode == "top":
+            return 0.0, 88.0
+        if mode == "iso":
+            return -38.0, 30.0
+        if mode == "orbit":
+            t0 = self.trail[0][0] if self.trail else now
+            return (-38.0 + 14.0 * max(0.0, now - t0)) % 360.0 - 180.0, 28.0
+        az_t, el_t = -38.0, 30.0
+        if len(tr3) >= 4:
+            pts = tr3[-240:]
+            span_xy = float(np.ptp(pts[:, :2], axis=0).max())
+            span_z = float(np.ptp(pts[:, 2]))
+            if span_xy > 0.05:
+                centered = pts[:, :2] - pts[:, :2].mean(axis=0)
+                cov = (centered.T @ centered) / max(1, len(centered) - 1)
+                vals, vecs = np.linalg.eigh(cov)
+                v_dom = vecs[:, int(np.argmax(vals))]
+                pca_deg = float(np.degrees(np.arctan2(v_dom[1], v_dom[0])))
+                # Look ~62 deg oblique to the principal horizontal axis so neither X/Y nor depth foreshortens
+                cand1 = (pca_deg + 62.0 + 180.0) % 360.0 - 180.0
+                cand2 = (pca_deg - 118.0 + 180.0) % 360.0 - 180.0
+                d1 = abs((cand1 - self._az + 180.0) % 360.0 - 180.0)
+                d2 = abs((cand2 - self._az + 180.0) % 360.0 - 180.0)
+                az_t = cand1 if d1 <= d2 else cand2
+            z_ratio = span_z / max(span_xy, 0.20)
+            # Lower elevation (22-26 deg) when vertical Z motion dominates; higher (32-42 deg) when XY loop dominates
+            el_t = float(np.clip(38.0 - 11.0 * z_ratio, 22.0, 42.0))
+        d_az = (az_t - self._az + 180.0) % 360.0 - 180.0
+        self._az = (self._az + 0.14 * d_az + 180.0) % 360.0 - 180.0
+        self._el = self._el + 0.14 * (el_t - self._el)
+        return self._az, self._el
 
-        def px(xy):
-            xy = np.atleast_2d(xy)
-            return np.stack([side / 2 + xy[:, 0] * k, side / 2 - xy[:, 1] * k], 1).astype(np.int32)
-        key = (side, ext, tuple(o) if len(tj) else None)
-        if getattr(self, "_bg_key", None) != key:     # grid, preset and footer: redrawn only when the extent moves
-            bg = np.full((side, side, 3), 28, np.uint8)
-            for v in np.arange(-ext, ext + 1e-9, 0.5):
-                c = (110, 110, 110) if abs(v) < 1e-9 else (60, 60, 60)
-                cv2.line(bg, *map(tuple, px([[v, -ext], [v, ext]])), c, 1)
-                cv2.line(bg, *map(tuple, px([[-ext, v], [ext, v]])), c, 1)
-            if len(tj):
-                cv2.polylines(bg, [px(tj)], True, (255, 170, 60), 1, cv2.LINE_AA)
-            cv2.putText(bg, f"pad frame, 0.5 m grid, +x right +y up, {2 * ext:.1f} m wide", (6, side - 8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (170, 170, 170), 1, cv2.LINE_AA)
-            self._bg, self._bg_key = bg, key
-        img = self._bg.copy()
+    def _map(self, side: int, now: float = 0.0) -> np.ndarray:
+        cv2 = self.cv2
+        o2 = np.zeros(2) if self.anchor is None else np.asarray(self.anchor[1:3], float)
+        o3 = np.array([o2[0], o2[1], 0.0])
+        if self.trail:
+            raw = np.asarray(self.trail, float)
+            tr3 = np.column_stack([raw[:, 1:3], raw[:, 3] if raw.shape[1] >= 4 else np.zeros(len(raw))])
+        else:
+            tr3 = np.zeros((0, 3))
+        z_ref = float(np.median(tr3[-30:, 2])) if len(tr3) else max(0.0, self.z)
+        if self.traj is None or len(self.traj) == 0:
+            tj3 = np.zeros((0, 3))
+        else:
+            tj_arr = np.asarray(self.traj, float)
+            tj3 = (np.column_stack([tj_arr[:, :2] + o2, np.full(len(tj_arr), max(0.25, z_ref))])
+                   if tj_arr.shape[1] == 2 else tj_arr + o3)
+        all_pts = np.vstack([p for p in (tr3, tj3, o3[None, :]) if len(p)])
+        pmin, pmax = all_pts.min(axis=0), all_pts.max(axis=0)
+        c_tgt = np.array([0.5 * (pmin[0] + pmax[0]), 0.5 * (pmin[1] + pmax[1]),
+                          0.45 * max(0.35, float(pmax[2]))])
+        self._center = c_tgt if self._center is None else (self._center + 0.20 * (c_tgt - self._center))
+        cx, cy, cz = self._center
+        half_xy = max(0.5, float(np.abs(all_pts[:, :2] - np.array([cx, cy])).max(initial=0.0)) * 1.20)
+        ext_xy = np.ceil(4.0 * half_xy) / 4.0     # 0.25 m steps, min 0.5 m half-span
+        ext_z = max(0.5, np.ceil(4.0 * max(0.4, float(pmax[2]) * 1.20)) / 4.0)
+        z_scale = min(1.35, max(0.75, 0.85 * ext_xy / max(ext_z, 0.25)))
+        az_deg, el_deg = self._best_angles(tr3, now)
+        az, el = np.radians(az_deg), np.radians(el_deg)
+        ca, sa, ce, se = np.cos(az), np.sin(az), np.cos(el), np.sin(el)
+        k = (0.40 * side) / max(ext_xy, 0.5)
+
+        def proj(pts3):
+            p = np.atleast_2d(np.asarray(pts3, float))
+            dx, dy, dz = p[:, 0] - cx, p[:, 1] - cy, (p[:, 2] - cz) * z_scale
+            rx = ca * dx - sa * dy
+            ry = sa * dx + ca * dy
+            depth = (-ce * ry + se * dz) / max(ext_xy, 0.5)
+            persp = 1.0 / np.clip(1.0 + 0.14 * depth, 0.65, 1.55)
+            u = side * 0.50 + rx * k * persp
+            v = side * 0.54 - (se * ry + ce * dz) * k * persp
+            return np.stack([u, v], axis=1).astype(np.int32)
+
+        img = np.full((side, side, 3), 24, np.uint8)
+        step_g = 0.25 if ext_xy <= 0.75 else 0.5
+        g_min_x, g_max_x = np.floor((cx - ext_xy) / step_g) * step_g, np.ceil((cx + ext_xy) / step_g) * step_g
+        g_min_y, g_max_y = np.floor((cy - ext_xy) / step_g) * step_g, np.ceil((cy + ext_xy) / step_g) * step_g
+        for gx in np.arange(g_min_x, g_max_x + 1e-9, step_g):
+            col = (95, 95, 105) if abs(gx) < 1e-6 else (50, 50, 56)
+            cv2.line(img, *map(tuple, proj([[gx, g_min_y, 0.0], [gx, g_max_y, 0.0]])), col, 1, cv2.LINE_AA)
+        for gy in np.arange(g_min_y, g_max_y + 1e-9, step_g):
+            col = (95, 95, 105) if abs(gy) < 1e-6 else (50, 50, 56)
+            cv2.line(img, *map(tuple, proj([[g_min_x, gy, 0.0], [g_max_x, gy, 0.0]])), col, 1, cv2.LINE_AA)
+
+        # Vertical Z-axis post at back corner of floor grid + 0.25 m tick marks
+        z_post_xy = [g_min_x, g_max_y]
+        cv2.line(img, *map(tuple, proj([[*z_post_xy, 0.0], [*z_post_xy, ext_z]])), (120, 110, 80), 1, cv2.LINE_AA)
+        for gz in np.arange(0.0, ext_z + 1e-9, 0.25):
+            tp = proj([[*z_post_xy, gz], [z_post_xy[0] + 0.06 * ext_xy, z_post_xy[1], gz]])
+            cv2.line(img, tuple(tp[0]), tuple(tp[1]), (140, 130, 95), 1, cv2.LINE_AA)
+            if gz > 0:
+                cv2.putText(img, f"{gz:.2f}m", (int(tp[0][0]) + 4, int(tp[0][1]) - 2),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.33, (145, 140, 115), 1, cv2.LINE_AA)
+
+        # Pad origin 3D axis triad (+X red, +Y green, +Z cyan) & drift pass circle on z=0 floor
+        ax_len = min(0.25, 0.35 * ext_xy)
+        triad = proj([o3, o3 + [ax_len, 0, 0], o3 + [0, ax_len, 0], o3 + [0, 0, ax_len]])
+        cv2.line(img, tuple(triad[0]), tuple(triad[1]), (70, 80, 235), 2, cv2.LINE_AA)
+        cv2.line(img, tuple(triad[0]), tuple(triad[2]), (70, 210, 70), 2, cv2.LINE_AA)
+        cv2.line(img, tuple(triad[0]), tuple(triad[3]), (235, 200, 50), 2, cv2.LINE_AA)
         if self.anchor is not None:
-            cv2.circle(img, tuple(px(o)[0]), max(1, int(self.pass_m * k)),
-                       (0, 200, 0) if self.max_d < self.pass_m else (0, 0, 230), 1, cv2.LINE_AA)
-        if len(tr) > 1:
-            pt = px(tr)
-            cv2.polylines(img, [pt[np.r_[True, (np.diff(pt, axis=0) != 0).any(1)]]], False, (0, 210, 255), 1,
-                          cv2.LINE_AA)                # one vertex per pixel step (hover piles fixes on one pixel)
+            th = np.linspace(0.0, 2.0 * np.pi, 48)
+            ring3 = np.column_stack([o2[0] + self.pass_m * np.cos(th), o2[1] + self.pass_m * np.sin(th), np.zeros_like(th)])
+            cv2.polylines(img, [proj(ring3)], True, (0, 200, 0) if self.max_d < self.pass_m else (0, 0, 230), 1, cv2.LINE_AA)
+
+        if len(tj3):
+            tj_floor = np.column_stack([tj3[:, :2], np.zeros(len(tj3))])
+            cv2.polylines(img, [proj(tj_floor)], True, (110, 80, 40), 1, cv2.LINE_AA)
+            cv2.polylines(img, [proj(tj3)], True, (255, 170, 60), 1, cv2.LINE_AA)
+
+        if len(tr3) > 1:
+            # Ground shadow on z=0 plane
+            sh_pts = proj(np.column_stack([tr3[:, :2], np.zeros(len(tr3))]))
+            sh_uniq = sh_pts[np.r_[True, (np.diff(sh_pts, axis=0) != 0).any(1)]]
+            if len(sh_uniq) > 1:
+                cv2.polylines(img, [sh_uniq], False, (82, 78, 72), 1, cv2.LINE_AA)
+            # Vertical drop-stems from 3D path to z=0 floor for 3D depth perception
+            step_s = max(1, len(tr3) // 18)
+            for idx in range(0, len(tr3), step_s):
+                p_top, p_bot = proj([tr3[idx], [tr3[idx, 0], tr3[idx, 1], 0.0]])
+                cv2.line(img, tuple(p_bot), tuple(p_top), (75, 95, 110), 1, cv2.LINE_AA)
+            # 3D path ribbon with dark backing + persistent crisp stroke
+            pt3 = proj(tr3)
+            keep = np.r_[True, (np.diff(pt3, axis=0) != 0).any(1)]
+            pt_u = pt3[keep]
+            if len(pt_u) > 1:
+                cv2.polylines(img, [pt_u], False, (15, 15, 15), 4, cv2.LINE_AA)
+                cv2.polylines(img, [pt_u], False, (0, 215, 255), 2, cv2.LINE_AA)
+
         if self.xy is not None:
-            cv2.circle(img, tuple(px(self.xy)[0]), 5, (0, 255, 0), -1, cv2.LINE_AA)
+            cur3 = np.array([self.xy[0], self.xy[1], max(0.0, self.z)])
+            p_cur, p_gnd = proj([cur3, [self.xy[0], self.xy[1], 0.0]])
+            cv2.line(img, tuple(p_gnd), tuple(p_cur), (0, 235, 180), 1, cv2.LINE_AA)
+            cv2.circle(img, tuple(p_gnd), 3, (0, 180, 140), 1, cv2.LINE_AA)
+            cv2.circle(img, tuple(p_cur), 6, (15, 15, 15), -1, cv2.LINE_AA)
+            cv2.circle(img, tuple(p_cur), 5, (0, 255, 0), -1, cv2.LINE_AA)
+
+        mode_name = self.VIEWS[self.view_idx % len(self.VIEWS)]
+        xyz_txt = (f"x {self.xy[0]*100:+.0f} y {self.xy[1]*100:+.0f} z {self.z*100:.0f} cm"
+                   if self.xy is not None else "no fix")
+        cv2.putText(img, f"3D [{mode_name} az {az_deg:+.0f} el {el_deg:.0f}]  {xyz_txt}", (6, 18),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (220, 220, 220), 1, cv2.LINE_AA)
+        cv2.putText(img, f"pad 3D ({step_g:.2f}m grid) +X:red +Y:grn +Z:cyn  span {2*ext_xy:.1f}x{ext_z:.1f}m",
+                    (6, side - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (170, 170, 170), 1, cv2.LINE_AA)
         return img
+
+    def _draw_landing_pip(self, img: np.ndarray, frame: np.ndarray) -> None:
+        """Magnified 2.5x Picture-in-Picture inset around the drone/pad during landing phase or when key z is active."""
+        if not self.uvs:
+            return
+        cv2 = self.cv2
+        H, W = frame.shape[:2]
+        ih, iw = img.shape[:2]
+        u_c, v_c = self.uvs[-1][1], self.uvs[-1][2]
+        pip_side = max(110, min(200, int(0.32 * ih)))
+        half_src = max(36, int(pip_side / (2.5 * max(self.scale, 0.25))))
+        u0 = int(np.clip(u_c - half_src, 0, max(0, W - 2 * half_src)))
+        v0 = int(np.clip(v_c - half_src, 0, max(0, H - 2 * half_src)))
+        crop = frame[v0:min(H, v0 + 2 * half_src), u0:min(W, u0 + 2 * half_src)]
+        if crop.size == 0:
+            return
+        pip = cv2.resize(crop, (pip_side, pip_side), interpolation=cv2.INTER_LINEAR)
+        cx_p = int((u_c - u0) * pip_side / max(1, crop.shape[1]))
+        cy_p = int((v_c - v0) * pip_side / max(1, crop.shape[0]))
+        cv2.circle(pip, (cx_p, cy_p), 12, (0, 255, 0), 2, cv2.LINE_AA)
+        cv2.line(pip, (cx_p - 18, cy_p), (cx_p + 18, cy_p), (0, 255, 180), 1, cv2.LINE_AA)
+        cv2.line(pip, (cx_p, cy_p - 18), (cx_p, cy_p + 18), (0, 255, 180), 1, cv2.LINE_AA)
+        cv2.rectangle(pip, (0, 0), (pip_side - 1, pip_side - 1), (0, 215, 255), 2)
+        cv2.putText(pip, f"LAND ZOOM 2.5x z={self.z*100:.0f}cm", (5, 15),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.36, (0, 215, 255), 1, cv2.LINE_AA)
+        y1, x1 = ih - 8, iw - 8
+        img[y1 - pip_side:y1, x1 - pip_side:x1] = pip
 
     def _key(self, k: int, now: float) -> None:
         cv2 = self.cv2
@@ -577,39 +734,52 @@ class Preview:
         elif k == ord("a") and self.xy is not None:
             self.anchor, self.max_d = (now, *self.xy), 0.0
         elif k == ord("c"):
-            self.trail, self.uvs = [], []
+            self.trail, self.uvs, self.z_max, self._center = [], [], 0.0, None
+        elif k == ord("v"):
+            self.view_idx = (self.view_idx + 1) % len(self.VIEWS)
+        elif k == ord("z"):
+            self.zoom_pip = not self.zoom_pip
         elif k == ord("f"):
             self.full = not self.full
             cv2.setWindowProperty(self.title, cv2.WND_PROP_FULLSCREEN,
                                   cv2.WINDOW_FULLSCREEN if self.full else cv2.WINDOW_NORMAL)
 
-    def __call__(self, now: float, frame, uv, xy, lines) -> None:
+    def __call__(self, now: float, frame, uv, xy, lines, z: float | None = None) -> None:
+        if z is not None and np.isfinite(z):
+            self.z = max(0.0, float(z))
+            self.z_max = max(self.z_max, self.z)
         if uv is not None:
             self.uvs.append((now, float(uv[0]), float(uv[1])))
         if xy is not None:
             self.xy = (float(xy[0]), float(xy[1]))
-            self.trail.append((now, *self.xy))
+            self.trail.append((now, self.xy[0], self.xy[1], self.z))
             if self.anchor is None:                       # first fix anchors the drift circle; key a re-anchors
                 self.anchor = (now, *self.xy)
             self.max_d = max(self.max_d, float(np.hypot(self.xy[0] - self.anchor[1], self.xy[1] - self.anchor[2])))
         if now - self.t_last < self.dt:
             return
         p0 = time.perf_counter()
-        while self.trail and now - self.trail[0][0] > self.trail_s:
-            self.trail.pop(0)
-        while self.uvs and now - self.uvs[0][0] > 10.0:
-            self.uvs.pop(0)
+        if self.trail_s > 0:
+            while self.trail and now - self.trail[0][0] > self.trail_s:
+                self.trail.pop(0)
+            while self.uvs and now - self.uvs[0][0] > self.trail_s:
+                self.uvs.pop(0)
         cv2, s = self.cv2, self.display_scale(frame.shape[1])
         img = cv2.resize(frame, None, fx=s, fy=s, interpolation=cv2.INTER_AREA if s < 1.0 else cv2.INTER_NEAREST)
         if len(self.uvs) > 1:
-            cv2.polylines(img, [(np.asarray(self.uvs)[:, 1:] * s).astype(np.int32)], False, (0, 210, 255), 1,
-                          cv2.LINE_AA)
+            uv_px = (np.asarray(self.uvs)[:, 1:3] * s).astype(np.int32)
+            uv_u = uv_px[np.r_[True, (np.diff(uv_px, axis=0) != 0).any(1)]]
+            if len(uv_u) > 1:
+                cv2.polylines(img, [uv_u], False, (15, 15, 15), 3, cv2.LINE_AA)
+                cv2.polylines(img, [uv_u], False, (0, 215, 255), 2, cv2.LINE_AA)
         if self.uvs and now - self.uvs[-1][0] < self.HOLD_S:   # held ring: no blink on frames without a detection
             c, col = (int(self.uvs[-1][1] * s), int(self.uvs[-1][2] * s)), (0, 255, 0) if uv is not None else (0, 200, 255)
             cv2.circle(img, c, 14, col, 2, cv2.LINE_AA)
             if self.xy is not None:
-                cv2.putText(img, f"{self.xy[0] * 100:+.0f},{self.xy[1] * 100:+.0f} cm", (c[0] + 16, c[1]),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 1, cv2.LINE_AA)
+                cv2.putText(img, f"{self.xy[0] * 100:+.0f},{self.xy[1] * 100:+.0f},{self.z * 100:.0f} cm",
+                            (c[0] + 16, c[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 1, cv2.LINE_AA)
+        if self.zoom_pip or (self.z_max >= 0.20 and 0.0 < self.z <= 0.30):
+            self._draw_landing_pip(img, frame)
         if self.anchor is not None and self.xy is not None:
             d = np.hypot(self.xy[0] - self.anchor[1], self.xy[1] - self.anchor[2])
             lines = [*lines, f"drift {d * 100:.1f} cm  max {self.max_d * 100:.1f}/{self.pass_m * 100:.0f}  "
@@ -618,7 +788,7 @@ class Preview:
             cv2.putText(img, txt, (8, 20 + 18 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 3, cv2.LINE_AA)
             cv2.putText(img, txt, (8, 20 + 18 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                         (0, 0, 255) if txt.startswith("NO FIX") else (255, 255, 255), 1, cv2.LINE_AA)
-        img = np.hstack([img, self._map(img.shape[0])])
+        img = np.hstack([img, self._map(img.shape[0], now)])
         if self.recording:
             if self.writer is None:
                 Path(self.rec).parent.mkdir(parents=True, exist_ok=True)
@@ -967,8 +1137,10 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
             t_hello = t_read
         t_cap = t_read - cam_latency_s
         z = height_m(t_cap) if callable(height_m) else height_m
+        z_agl = (max(0.0, float(z) - float(getattr(height_m, "ring_h", 0.0)))
+                 if z is not None and np.isfinite(z) else 0.0)
         if ring is not None:
-            uv = ring.step(frame)
+            uv = ring.step(frame, z_agl) if isinstance(ring, CoralTracker) else ring.step(frame)
             if uv_log is not None:
                 uv_log.append((t_read, *(uv if uv is not None else (np.nan, np.nan))))
             xy = None if uv is None or not np.isfinite(z) else ring_xy(uv, cam, z)
@@ -993,7 +1165,7 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
                  [f"mode {auto.mode if auto else mode}  z {z:.2f} m  fixes {sched.n_sent}  det {n_det}/{n}",
                                          f"gate rej {gate.n_rej if gate else 0}  pad {'set' if pad is None or pad.xy is not None else 'WAIT'}"
                                          f"{' frozen' if pad is not None and pad.frozen else ''}"]
-                 + ([auto.status] if auto else []))
+                 + ([auto.status] if auto else []), z=z_agl)
         if xy is not None:
             n_det += 1
             sched.push(t_cap, xy)
