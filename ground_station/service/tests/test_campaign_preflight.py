@@ -16,7 +16,7 @@ from ground_station.service.campaign_preflight import run_preflight, vitals
 ROOT = Path(__file__).resolve().parents[3]
 LADDER = "ground_station/service/campaigns/hover_ladder.yaml"
 NOW = 1_800_000_000_000_000_000
-ROWS = ["service", "link", "firmware", "wfb_status", "rc_link", "of_hold", "arm_state", "position", "battery", "runner",
+ROWS = ["service", "link", "fix_relay", "firmware", "wfb_status", "rc_link", "of_hold", "arm_state", "position", "battery", "runner",
         "log_plan"]
 
 READY = {
@@ -36,7 +36,7 @@ class FakeService:
         self.connected = connected
         self.sources = DISARMED if sources is None else sources
         self.slot_age_ns = int(slot_age_s * 1e9)
-        self.bridge = object()
+        self.bridge = SimpleNamespace(relay_state="bound", _relay_port=47800, relayed=0)
         self.gateway = object()
         self.started_at = time.time() + 1.0  # after the fixture axf was written
         self.streams = SimpleNamespace(preflight_check=lambda: (True, ""))
@@ -105,6 +105,17 @@ def test_link_rows(elf):
     nobridge = FakeService()
     nobridge.bridge = None
     assert "restart 8081" in _only_red(_run(nobridge, elf), "link")["fix"]
+
+
+def test_fix_relay_rows(elf):
+    """Lab 10-18: a leftover stream_log held udp 47800, every camera fix was lost and nothing said so."""
+    held = FakeService()
+    held.bridge = SimpleNamespace(relay_state="waiting", _relay_port=47800, relayed=0)
+    assert "endlive" in _only_red(_run(held, elf), "fix_relay")["fix"]
+    off = FakeService()
+    off.bridge = SimpleNamespace(relay_state="off", _relay_port=None, relayed=0)
+    res = _run(off, elf)
+    assert _row(res, "fix_relay")["pass"] is None and res["ok"] is True
 
 
 def test_firmware_rows(elf, tmp_path):

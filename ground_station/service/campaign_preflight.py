@@ -124,6 +124,22 @@ def _link_row(service: Any, v: dict[str, Any], stream_check: Callable[[], tuple[
     return _row("link", value, ok, fix)
 
 
+def _relay_row(service: Any, v: dict[str, Any]) -> dict[str, Any]:
+    """The camera-fix relay (live_tracker --send udp:47800 -> 8081 -> drone). Waiting = another process holds the
+    port and every fix is lost (lab 10-18: a leftover stream_log); the bridge retries the bind every second."""
+    if v["source"] == "sim":
+        return _row("fix_relay", "simulator source (no relay)", True)
+    bridge = getattr(service, "bridge", None)
+    state, port = getattr(bridge, "relay_state", "off"), getattr(bridge, "_relay_port", None)
+    if state == "bound":
+        return _row("fix_relay", f"udp {port} bound, {getattr(bridge, 'relayed', 0)} frames forwarded", True)
+    if state == "waiting":
+        return _row("fix_relay", f"udp {port} held by another process: camera fixes are lost", False,
+                    "a leftover stream_log holds it: bash ground_station/lab/camera_truth.sh endlive; the relay binds within 1 s")
+    return _row("fix_relay", "off (8081 started with --relay-port 0): no camera fixes reach the drone", None,
+                "restart 8081 without --relay-port 0 for camera-corrected flights")
+
+
 def _elf_identity(elf: Path) -> tuple[int, ...] | None:
     try:
         from ground_station.flashtool.build_id import identity_from_elf
@@ -352,6 +368,7 @@ def run_preflight(service: Any, campaign: Any = None, campaign_path: str | None 
     checks = [
         _service_row(service),
         _link_row(service, v, stream_check),
+        _relay_row(service, v),
         _firmware_row(service, v, elf_path),
         _wfb_row(service, v, ready_check),
         _rc_row(v),

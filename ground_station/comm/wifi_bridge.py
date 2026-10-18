@@ -97,6 +97,8 @@ from ground_station.platform.transactions import parse_result_parts
 
 RX_SOCKET_BUFFER_BYTES = 8 << 20  # 8 MB, about 2 min of the heaviest plan
 INGEST_QUEUE_MAX = 200_000  # decoded frames held for the ingest thread before counting drops
+RELAY_RETRY_S = 1.0   # the relay port is re-tried this often until it binds
+
 INGEST_LAG_WARN_NS = 200_000_000  # PROPOSED: frame age that counts as "ingest behind" in the log (stale abort is 0.5 s)
 
 
@@ -292,6 +294,7 @@ class WifiBridge:
         # all USART3 telemetry with no socket error and no firmware change.
         self._keepalive_interval = keepalive_interval
         self._relay_port, self._relay, self.relayed = relay_port, None, 0
+        self.relay_state = "waiting" if relay_port else "off"   # off | waiting | bound
         self._last_nudge = 0.0
 
         # Subscribe-stream schemas, one per slot. Populated by
@@ -468,17 +471,11 @@ class WifiBridge:
 
         self._threads = (rx, cmd, telem)
         if self._relay_port:
-            try:
-                self._relay = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                self._relay.bind(("127.0.0.1", self._relay_port))
-                self._relay.settimeout(0.2)
-            except OSError as e:   # port taken (stream_log running): the service runs without the relay
-                print(f"[wifi_bridge] Warning: fix relay off, udp {self._relay_port}: {e}", file=sys.stderr, flush=True)
-                self._relay = None
-            else:
-                relay = threading.Thread(target=self._relay_loop, name="wifi_bridge_relay", daemon=True)
-                relay.start()
-                self._threads += (relay,)
+            # The relay thread owns the bind and retries it: a port held at start (a leftover stream_log) must
+            # not switch the camera fixes off for the life of this service (lab 10-18).
+            relay = threading.Thread(target=self._relay_loop, name="wifi_bridge_relay", daemon=True)
+            relay.start()
+            self._threads += (relay,)
 
         # Auto-subscribe to the dashboard layout (slot 0). This drives the
         # dashboard's sidebar via _slot0_to_sidebar() — see boot_default_layout
@@ -1861,9 +1858,31 @@ class WifiBridge:
             self._cmd_queue.put_nowait(cmd)
             self._flush_queue()
 
+    def _bind_relay(self) -> bool:
+        """Bind the relay port; False while another process holds it. Warns once per distinct error."""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.bind(("127.0.0.1", self._relay_port))
+        except OSError as e:
+            sock.close()
+            err = str(e)
+            if err != getattr(self, "_relay_err", None):
+                self._relay_err = err
+                print(f"[wifi_bridge] Warning: fix relay waiting for udp {self._relay_port} (retry every {RELAY_RETRY_S:.0f} s): {e}", file=sys.stderr, flush=True)
+            return False
+        sock.settimeout(0.2)
+        self._relay = sock
+        self.relay_state = "bound"
+        if getattr(self, "_relay_err", None):
+            print(f"[wifi_bridge] fix relay bound, udp {self._relay_port}", file=sys.stderr, flush=True)
+        return True
+
     def _relay_loop(self) -> None:
         """Forward each datagram on the relay port to the module unchanged (camera fixes, EXT_POS frames)."""
         while not self._stop.is_set():
+            if self._relay is None and not self._bind_relay():
+                self._stop.wait(RELAY_RETRY_S)
+                continue
             try:
                 frame, _ = self._relay.recvfrom(256)
             except (socket.timeout, OSError):
