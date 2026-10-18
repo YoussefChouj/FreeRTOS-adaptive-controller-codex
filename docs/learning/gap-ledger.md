@@ -141,3 +141,17 @@ Firmware facts: dead-zone is a hard step (`API/mrac.c:1282`, on by default `API/
   adaptation (RLS/composite) is the prior art for per-direction speed; gating stops drift of inactive features but
   not of active-but-collinear ones (still needs projection/sigma-mod). Break point: turning "holistic" into a
   condition + metric where the claim must win.
+- Q8 (design the gate-memory flight: A->B->A): 5/10. Got: the gate reads frequency content (right family: S4 draft =
+  4-band IIR bank -> band shares -> group scores via an affinity table -> per-group gamma/sigma/phi scale); two good
+  MECHANISM checks (same features active in A1 and A3; expert-A contributions unchanged after B). Missed: an "arm" is
+  a controller configuration, not a flight segment - compare gated vs ungated on the SAME basis and sequence
+  (interleaved, n>=3); the outcome number (error peak / rms in the first seconds after re-entering A, or
+  re-convergence time to A1's steady rms); the falsifier (gated A3 transient not smaller than ungated by the
+  pre-registered margin, or expert-A weights moved during B); the useless-test case (ungated arm shows no spike on
+  return = nothing to forget, or the gate never switched because A and B differ in nothing the gate reads). Model
+  answer: A = slow hover (low-band energy), B = fast laps (high-band energy), A and B must need different weights.
+  Taught: Neural-Fly adapts at the force level because wind is a matched force there and m*accel - thrust is a direct
+  label; inner-loop torque adaptation cannot cancel a steady force; offline labels can be zero-phase filtered (no
+  delay), only online use needs causal filtering; redundant active features = flat valley (w1-w2 unobserved),
+  tug-of-war drift, fixed by projection / sigma-mod / pruning / excitation. Break point: control arm + outcome metric
+  vs within-arm mechanism checks.
