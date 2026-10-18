@@ -878,6 +878,7 @@ def _fake_service(monkeypatch, stale, safe):
     monkeypatch.setattr(campaign_fly.subprocess, "Popen", lambda args, **k: log["popen"].append(args))
     monkeypatch.setattr(campaign_fly.time, "sleep", lambda s: None)
     monkeypatch.setattr(campaign_fly.events, "log", lambda *a, **k: None)
+    monkeypatch.setattr(campaign_fly, "_stream_logs", lambda: [])
 
     def call(base, path, timeout=None):
         if log["kill"] and not log["popen"]:
@@ -939,3 +940,23 @@ def test_service_stale_reads_the_instance_header(monkeypatch):
         assert (got is not None) is stale
         if stale:
             assert got[0] == 77 and "tests" not in got[1].parts
+
+
+def test_ensure_service_ends_leftover_stream_log_first(monkeypatch, tmp_path, capsys):
+    # 10-18: a camera session's stream_log kept udp 14550/47800, the next 8081 died on WinError 10013
+    log = _fake_service(monkeypatch, None, True)
+    alive = [777]
+    monkeypatch.setattr(campaign_fly, "ROOT", tmp_path)
+    monkeypatch.setattr(campaign_fly, "_stream_logs", lambda: list(alive))
+    monkeypatch.setattr(campaign_fly.os, "kill", lambda pid, sig: (log["kill"].append(pid), alive.clear()))
+    reaped = []
+    monkeypatch.setattr(campaign_fly.events, "log", lambda ev, **k: reaped.append((ev, k)))
+    campaign_fly.ensure_service("http://x", 8081)
+    assert log["kill"] == [777] and ("stream_log_reaped", {"pids": [777], "killed": [777]}) in reaped
+    assert not (tmp_path / "logs" / "plot_live.end").exists()
+    assert "leftover live logger" in capsys.readouterr().out
+    alive[:] = [778]                                  # one that obeys the stop file is never killed
+    log["kill"].clear()
+    monkeypatch.setattr(campaign_fly.time, "sleep", lambda s: alive.clear())
+    campaign_fly.ensure_service("http://x", 8081)
+    assert log["kill"] == []

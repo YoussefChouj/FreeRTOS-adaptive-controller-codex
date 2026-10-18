@@ -80,6 +80,7 @@ class _Fake:
 
     def __init__(self, answers, fly_rc=(), dry_rc=0):
         self.answers, self.fly_rc, self.dry_rc, self.cmds = list(answers), list(fly_rc), dry_rc, []
+        self.service_fail = 0
 
     def ask(self, prompt):
         return self.answers.pop(0)
@@ -87,6 +88,12 @@ class _Fake:
     def run(self, cmd, **kw):
         self.cmds.append(cmd)
         return SimpleNamespace(returncode=self.dry_rc if "--dry-run" in cmd else 0, stdout="boom", stderr="")
+
+    def service(self):
+        self.cmds.append(["8081"])
+        if self.service_fail:
+            self.service_fail -= 1
+            raise SystemExit("service did not answer on 8081 in 60 s: check its window")
 
     def popen(self, cmd, **kw):
         self.cmds.append(cmd)
@@ -99,7 +106,8 @@ def _player(tmp_path, monkeypatch, fake, flights, status="complete", camera=None
     monkeypatch.setattr(labday, "debrief_event", lambda pid, since: status and {"status": status, "phase": "land",
                                                                               "folder": "f"})
     monkeypatch.setattr(labday, "git_bash", lambda: "bash")
-    return labday.Day(d, tmp_path / "state.json", pack=pack, ask=fake.ask, run=fake.run, popen=fake.popen)
+    return labday.Day(d, tmp_path / "state.json", pack=pack, ask=fake.ask, run=fake.run, popen=fake.popen,
+                      service=fake.service)
 
 
 def _flown(fake):
@@ -187,7 +195,17 @@ def test_camera_around_each_flight_and_floor_check(tmp_path, monkeypatch):
     sh = [c[2:] for c in fake.cmds if c[:2] == ["bash", labday.CAMERA_SH]]
     assert sh == [["fusion", "a-lab-c-robust", "3", "--yaw-deg", "94"], ["stop", "a-lab-c-robust"]]
     assert (tmp_path / "vt" / "a-lab-c-robust" / "stop").is_file()
-    assert fake.cmds.index(next(c for c in fake.cmds if "--once" in c)) == 2   # dry run, fusion, then the flight
+    # dry run, 8081 (before the camera: lab 10-18), fusion, then the flight
+    assert [c[0] if c == ["8081"] else c[2] if c[:2] == ["bash", labday.CAMERA_SH] else "--once" in c and "fly"
+            for c in fake.cmds[1:4]] == ["8081", "fusion", "fly"]
+
+
+def test_8081_failure_asks_again_or_quits(tmp_path, monkeypatch):
+    fake = _Fake(["", "", "q"])                     # go prompt, then retry once, then quit
+    fake.service_fail = 2
+    p = _player(tmp_path, monkeypatch, fake, [{"id": "A", "fly": "lab_c_robust"}])
+    p.go()
+    assert fake.cmds.count(["8081"]) == 2 and not [c for c in fake.cmds if "--once" in c]
 
 
 def test_fly_cmd_is_campaign_fly():

@@ -85,7 +85,49 @@ def _safe_to_restart(base):
     return idle and ((rows.get("arm_state") or {}).get("pass") is True or (rows.get("link") or {}).get("pass") is False)
 
 
+def _stream_logs():
+    """PIDs of running livewatch.stream_log processes, by command line (a .pid file's PID can be reused)."""
+    import psutil
+    out = []
+    for p in psutil.process_iter(["pid", "cmdline"]):
+        try:
+            if any("livewatch.stream_log" in c for c in p.info["cmdline"] or []):
+                out.append(p.info["pid"])
+        except (psutil.Error, TypeError):
+            pass
+    return out
+
+
+def reap_stream_logs(wait_s=10):
+    """End a stream_log left from a camera session started without 8081: it holds udp 14550 (link) and 47800 (camera
+    fixes), so the next 8081 dies on WinError 10013 or runs without its fix relay (lab 10-18, ~45 min lost). 8081 is
+    the only link owner while `fly` runs; the stop file lets it close its CSVs first."""
+    pids = _stream_logs()
+    if not pids:
+        return []
+    end, pidf = ROOT / "logs" / "plot_live.end", ROOT / "logs" / "plot_live.pid"
+    end.parent.mkdir(exist_ok=True)
+    end.touch()
+    for _ in range(wait_s):
+        if not _stream_logs():
+            break
+        time.sleep(1)
+    left = _stream_logs()
+    for pid in left:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    for f in (end, pidf):
+        f.unlink(missing_ok=True)
+    print(f"ended a leftover live logger (pid {', '.join(map(str, pids))}): 8081 owns the link and camera fixes",
+          flush=True)
+    events.log("stream_log_reaped", pids=pids, killed=left)
+    return pids
+
+
 def ensure_service(base, port, wait_s=60, lab=False):
+    reap_stream_logs()
     try:
         stale = _service_stale(base)
         if stale and _safe_to_restart(base):

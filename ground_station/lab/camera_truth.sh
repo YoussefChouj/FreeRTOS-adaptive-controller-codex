@@ -73,7 +73,8 @@ fusion)
   reap
   # 8081 up (`fly` flights): it owns the link, relays the fixes (--relay-port 47800) and logs; the tracker reads
   # height from it. 8081 down: stream_log owns the link, relays and logs, as before.
-  if up; then link=8081; tel=(--tel-url "$api"); else link=sl; tel=(--tel-csv "logs/$name.slot1.csv"); endlive; fi
+  endlive                                           # a leftover logger holds udp 14550/47800 either way (lab 10-18)
+  if up; then link=8081; tel=(--tel-url "$api"); else link=sl; tel=(--tel-csv "logs/$name.slot1.csv"); fi
   mkdir -p "$vid" logs; touch "$vid/stream_log.out" "$vid/tracker.out"; rm -f "$vid/stop" "$vid/video_only"; echo "$mode" > "$vid/fusion"
   if [ "$link" = sl ]; then                         # `fly` sets up VOFA+/PJ itself (key p)
   VOFA=${VOFA-127.0.0.1:1347}                       # flight view to VOFA+ (UDP FireWater, named tabs); VOFA= turns it off

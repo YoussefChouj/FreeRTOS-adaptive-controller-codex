@@ -270,15 +270,23 @@ def log_offsets():
     return out
 
 
+
+def ensure_8081():
+    """Same 8081 as `fly` uses; also ends a leftover live logger (campaign_fly.reap_stream_logs)."""
+    from ground_station.service import campaign_fly
+    campaign_fly.ensure_service("http://127.0.0.1:8081", 8081)
+
+
 class Day:
     """The interactive part: dry run, prompts, camera and the resume file around each `.\\fly --once`."""
 
     def __init__(self, d, state_path, pack=None, camera=True, ask=input, run=None, popen=None, cooldown_s=0,
-                 wait=cooldown):
+                 wait=cooldown, service=None):
         self.d, self.state_path, self.pack = d, Path(state_path), pack
         self.cooldown_s, self.wait, self.landed = cooldown_s, wait, None
         self.cam = (d.get("camera") or {}) if camera else {}
         self.ask, self.run, self.popen = ask, run or subprocess.run, popen or subprocess.Popen
+        self.service = service or ensure_8081
         self.state = load_state(self.state_path)
 
     def say(self, *lines):
@@ -315,6 +323,18 @@ class Day:
             if a in ("n", "q"):
                 return None if a == "q" else False
 
+    def service_up(self):
+        """8081 up before the camera: the camera session then uses its link, and no stream_log takes udp 14550/47800
+        (lab 10-18: camera first with 8081 down = WinError 10013 or no fixes, a hand restart every flight)."""
+        while True:
+            try:
+                self.service()
+                return True
+            except SystemExit as e:
+                self.say(str(e.code or "8081 did not start"))
+                if self.ask("Enter tries again, q quits: ").strip().lower() == "q":
+                    return False
+
     def camera_stop(self, name):
         (VIDEO_DIR / name).mkdir(parents=True, exist_ok=True)
         (VIDEO_DIR / name / "stop").touch()
@@ -335,6 +355,8 @@ class Day:
         """Flies `f` until it ends well or the operator moves on: 'next', 'stop' (analysis stop asked) or 'quit'."""
         while True:
             name = f"{f['id']}-{f['fly']}".lower().replace("_", "-")
+            if not self.service_up():
+                return "quit"
             cam = self.camera_start(name)
             if cam is None:
                 return "quit"
