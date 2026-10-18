@@ -242,3 +242,10 @@ def test_carry_off_and_bad_earlier_day(tmp_path, monkeypatch):
     assert [f["id"] for f in labday.load_day(tmp_path / "2099-01-02.yaml")["flights"]] == ["B"]
     flights, _, notes = labday.carry_over(tmp_path, "2099-01-02", [])
     assert flights == [] and notes[0].startswith("2099-01-01: not carried (")
+
+
+def test_note_is_the_fly_files_first_comment_and_its_steps():
+    about, steps = labday.note({"fly": "lab_m_memory_u100"})
+    assert about.startswith("M: gate-memory premise")
+    assert steps == "takeoff 0.8 mrac_injection=1 -> hold 28 -> preset figure8 f8_type=1 f8_a_cm=60 f8_laps=2 -> hold 28 -> land"
+    assert labday.note({"fly": "no_such_flight"}) == ("", "")

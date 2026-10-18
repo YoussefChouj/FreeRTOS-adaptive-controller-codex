@@ -19,6 +19,7 @@ from ground_station.platform.wfb_commands import (
     CMD_KILL,
     CMD_PRIM,
     CMD_PROG,
+    CMD_RESET_ORIGIN,
     CMD_TRAJ,
     ArmIdx,
     PrimIdx,
@@ -185,6 +186,7 @@ class FakeDrone:
 
         # (cmd, idx, value) of every accepted PARAM_CMDS frame, in order
         self.param_writes: list[tuple[int, int, float]] = []
+        self.origin_resets = 0   # CMD 0x10 idx 0 (the takeoff sends one on the pad)
 
         # Trajectory storage
         self._traj_raw_floats: list[float] = []
@@ -247,6 +249,9 @@ class FakeDrone:
             return self._handle_prog(cmd)
         elif cmd.command_id == wfb_var.CMD_VAR_WRITE:
             return self._handle_var(cmd)
+        elif cmd.command_id == CMD_RESET_ORIGIN and cmd.index == 0:
+            self.origin_resets += 1
+            return int(Outcome.APPLIED)
         if cmd.command_id in PARAM_CMDS:  # no dynamics behind them: recorded for the livetune tests
             self.param_writes.append((cmd.command_id, cmd.index, cmd.value))
         if cmd.command_id == ex.CMD_MRAC_FLAGS and cmd.index <= 12:

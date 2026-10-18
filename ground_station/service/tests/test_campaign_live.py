@@ -7,7 +7,7 @@ import math
 import pytest
 
 from ground_station.platform.transactions import Outcome, RejectReason, Result
-from ground_station.platform.wfb_commands import CMD_ARM, CMD_PRIM, ArmIdx, PrimIdx, encode
+from ground_station.platform.wfb_commands import CMD_ARM, CMD_PRIM, CMD_RESET_ORIGIN, ArmIdx, PrimIdx, encode
 from ground_station.service.campaign_live import (
     WFB_STATUS_FIELDS, LiveWfbClient, check_live_ready, live_deps_factory, live_resting_v, live_sample,
     live_status,
@@ -267,7 +267,8 @@ def test_live_takeoff_never_sends_arm():
     assert not out.aborted and out.landed, out.decision
     sent = _non_hb(svc)
     assert (CMD_ARM, ArmIdx.ARM) not in sent
-    assert sent[:3] == [(CMD_PRIM, PrimIdx.SET_HOVER_Z), (CMD_ARM, ArmIdx.IDLE), (CMD_PRIM, PrimIdx.TAKEOFF)]
+    assert sent[:4] == [(CMD_PRIM, PrimIdx.SET_HOVER_Z), (CMD_RESET_ORIGIN, 0), (CMD_ARM, ArmIdx.IDLE),
+                        (CMD_PRIM, PrimIdx.TAKEOFF)]
     assert int(drone.status()["prim_state"]) == PRIM_IDLE
 
 

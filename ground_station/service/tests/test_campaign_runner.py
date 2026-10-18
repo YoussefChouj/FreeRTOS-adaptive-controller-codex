@@ -101,3 +101,16 @@ def test_campaign_runner_preload_noop_when_no_trajectory():
     assert runner.upload_preload() is True
     outcome = runner.run()
     assert outcome.landed is True
+
+
+def test_takeoff_resets_origin_on_the_pad_before_idle():
+    """Operator 10-18: a drone left armed between flights keeps the walked origin; the takeoff sends CMD 0x10 first."""
+    drone = FakeDrone()
+    drone.sbus_live = True
+    client = WfbClient(drone.send)
+    sent = []
+    for name in ("reset_origin", "idle", "takeoff"):
+        setattr(client, name, (lambda n, f: lambda: sent.append(n) or f())(name, getattr(client, name)))
+    outcome = CampaignRunner(parse_scenario(_make_scenario()), create_deps(drone, client, FakeClock())).run()
+    assert not outcome.aborted and drone.origin_resets == 1
+    assert sent.index("reset_origin") < sent.index("idle") < sent.index("takeoff")

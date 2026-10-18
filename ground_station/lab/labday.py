@@ -130,6 +130,20 @@ def shown(f):
     return " ".join([".\\fly", f["fly"], "--once"] + f["args"])
 
 
+HEADER_WORDS = ("campaign", "rate", "log", "slow", "set")
+
+
+def note(f):
+    """(about, steps) from the flight's .fly file: its first comment line and its steps joined by ->, '' when absent."""
+    try:
+        lines = (CAMPAIGNS / f"{f['fly']}.fly").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return "", ""
+    about = next((s.lstrip("#").strip() for s in lines if s.startswith("#")), "")
+    steps = [s.split("#")[0].strip() for s in lines]
+    return about, " -> ".join(s for s in steps if s and s.split()[0] not in HEADER_WORDS)
+
+
 def sheet(d):
     """The run sheet (markdown) from the day file: one table row per flight, then the branches."""
     out = [f"# Run sheet {d.get('day', '')}: {d.get('title', '')}".rstrip(": "), "",
@@ -324,7 +338,10 @@ class Day:
             cam = self.camera_start(name)
             if cam is None:
                 return "quit"
+            self.say(f"--- FLYING {f['id']}: {f.get('why') or note(f)[0] or f['fly']}")
+            t0 = time.monotonic()
             rc, ev = self.fly(f, pack)
+            took = time.monotonic() - t0
             pack = None
             if cam:
                 self.camera_stop(name)
@@ -334,6 +351,9 @@ class Day:
                                             "camera": name if cam else None}
             self.save()
             events.log("labday_flight", day=self.d.get("day"), id=f["id"], fly=f["fly"], rc=rc, why=why)
+            self.say(f"--- {f['id']} done {time.strftime('%H:%M')}: {'OK' if why is None else 'BAD, ' + why}; "
+                     f"{int(took // 60)} min {int(took % 60):02d} s in fly; status {(ev or {}).get('status') or '-'}; "
+                     f"log {(ev or {}).get('folder') or '-'}")
             if why is None:
                 return "stop" if f.get("stop") else "next"
             self.say(f"\nAUTO STOP: {f['id']} {why}.")
@@ -366,7 +386,9 @@ class Day:
         pack = self.pack
         for i, f in enumerate(flights):
             nxt = flights[i + 1]["id"] if i + 1 < len(flights) else None
+            about, steps = note(f)
             self.say("", f"=== {f['id']} ({i + 1} of {len(flights)}): {shown(f)}",
+                     *([f"    what: {about}"] if about else []), *([f"    steps: {steps}"] if steps else []),
                      *([f"    tests: {f['why']}"] if f.get("why") else []),
                      *([f"    pass (PROPOSED): {f['pass']}"] if f.get("pass") else []))
             if self.landed is not None and self.cooldown_s > 0:

@@ -397,6 +397,10 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
                 cmds.append(("preset var_write", lambda: preset_write(steps[preset_pre]) == ""))
             if deps.agent_arms:
                 cmds.append(("arm", deps.client.arm))
+            # CMD 0x10 on the pad: the firmware zeroes the OF origin only on the ARM edge, so a drone left armed
+            # between flights would take off from the last flight's walked origin (operator 10-18).
+            if getattr(deps.client, "reset_origin", None):
+                cmds.append(("reset origin", deps.client.reset_origin))
             cmds.append(("idle", deps.client.idle))
             refused = next((name for name, send in cmds if not send()), None)
             # IDLE is acked even when the firmware ignores it (send_data.c CMD_ARM idx 1 needs ARMED, on the ground,

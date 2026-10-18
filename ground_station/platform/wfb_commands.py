@@ -12,6 +12,7 @@ from typing import Callable
 from ground_station.platform.transactions import Command, Outcome, build_command
 
 
+CMD_RESET_ORIGIN: int = 0x10
 CMD_KILL: int = 0x0D
 CMD_ARM: int = 0x0E
 CMD_PRIM: int = 0x1A
@@ -156,6 +157,10 @@ class WfbClient:
     def traj_clear(self) -> bool:
         """Clear the trajectory buffer."""
         return self._send_cmd(CMD_TRAJ, TrajIdx.CLEAR, 0.0)
+
+    def reset_origin(self) -> bool:
+        """CMD 0x10 idx 0: the drone's current location becomes the world-frame OF origin (StabilizerTask.c)."""
+        return self._send_cmd(CMD_RESET_ORIGIN, 0, 1.0)
 
     def prog(self, idx: int, value: float) -> bool:
         """Send one CMD 0x1C frame: a segment field (0..18) or a ProgIdx control slot.
