@@ -138,6 +138,15 @@ def test_arm_edge_counts_down_then_goes(monkeypatch, capsys):
     assert [ln.strip() for ln in out.splitlines() if ln.strip() in ("3", "2", "1")] == ["3", "2", "1"]
 
 
+def test_no_arm_signal_is_said_once_and_its_return_too(monkeypatch, capsys):
+    # 10-18 mem1: slot 0 died after an axf change, arm stayed "unknown" and fly waited silently forever.
+    rig = Rig(monkeypatch, lambda t: "unknown" if t < 8.0 else ("disarmed" if t < 9.0 else "armed"))
+    assert _wait(rig) == "go"
+    out = capsys.readouterr().out
+    assert out.count("NO ARM SIGNAL") == 1 and "arm signal back: disarmed" in out
+    assert out.index("NO ARM SIGNAL") < out.index("arm signal back") < out.index("ARMED: takeoff")
+
+
 def test_armed_at_start_needs_a_disarm_first(monkeypatch, capsys):
     rig = Rig(monkeypatch, lambda t: "armed", quit_at=10.0)
     assert _wait(rig) == "quit"

@@ -43,6 +43,9 @@ COUNTDOWN_S = 3.0     # operator Q5: RC arm -> 3 s -> takeoff; a disarm inside i
 PREFLIGHT_S = 2.0     # operator Q5: silent preflight period while disarmed
 LIVE_S = 0.2          # operator Q12: the live line at 5 Hz
 LINK_LOST_S = 3.0     # PROPOSED: every stream older than this = the drone is off (pack swap)
+NO_ARM_S = 3.0        # link up but no arm flag this long = say so (10-18 mem1 hung silently on "unknown")
+NO_ARM_MSG = ("NO ARM SIGNAL: telemetry arrives but the arm flag (DroneStatus.ARM_Status, slot 0) does not, "
+              "so an RC arm cannot be seen. Fix: restart the 8081 service, then run this again (q quits).")
 CONFIRMATION = "RC arm held through the 3 s fly countdown"
 PJ_BINS = ("D:/PlotJuggler/plotjuggler.exe", "plotjuggler")   # camera_truth.sh pj() candidates; $PJ_BIN first
 _clock, _sleep = time.monotonic, time.sleep  # tests replace both
@@ -1085,6 +1088,7 @@ def wait_for_arm(base, campaign, pack, key=None, poll_s=0.25, preflight=True):
     shown, pf_ok, t_pf = None, not preflight, -math.inf
     seen_disarmed, warned, armed_t, count = False, False, None, None
     t_link, lost = _clock(), False
+    t_arm, no_arm = t_link, False
     while True:
         try:
             if key() == "q":
@@ -1101,6 +1105,16 @@ def wait_for_arm(base, campaign, pack, key=None, poll_s=0.25, preflight=True):
                 print("link lost: waiting for the drone (a new pack asks for its id)", flush=True)
                 events.log("link_lost")
             state = (v.get("arm") or {}).get("state")
+            if state in ("armed", "disarmed"):
+                t_arm = now
+                if no_arm:
+                    no_arm = False
+                    print(f"arm signal back: {state}", flush=True)
+                    events.log("arm_signal_back", state=state)
+            elif not lost and not no_arm and now - t_arm > NO_ARM_S:
+                no_arm = True
+                print(NO_ARM_MSG, flush=True)
+                events.log("arm_signal_missing", state=state)
             if state != "armed":
                 if armed_t is not None:
                     print("disarmed: countdown cancelled", flush=True)
