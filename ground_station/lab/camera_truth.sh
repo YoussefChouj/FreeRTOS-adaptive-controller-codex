@@ -24,7 +24,7 @@ up() { curl -s --noproxy "*" -m 2 -o /dev/null -w '%{http_code}' "$api/health" |
 bg() { python -m ground_station.lab.detach "$@" > /dev/null; }
 alive() { local p; p=$(cat "$1" 2>/dev/null) || return 1; tasklist //FI "PID eq $p" //NH 2>/dev/null | grep -qi python; }
 # Running live_tracker PIDs, by command line (a .pid file's PID can be reused by another python, e.g. 8081).
-trackers() { powershell -NoProfile -Command 'Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "python.exe" -and $_.CommandLine -match "analysis.live_tracker" } | ForEach-Object { $_.ProcessId }' 2>/dev/null | tr -d ''; }
+trackers() { powershell -NoProfile -Command 'Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "python.exe" -and $_.CommandLine -match "analysis.live_tracker" } | ForEach-Object { $_.ProcessId }' 2>/dev/null | tr -d '\r'; }
 # A tracker left from a session nobody stopped (2026-10-15: a Ctrl+C'd runner left its window up 42 min) closes
 # before a new one starts: stop file first (it finishes tracker.mp4), then a force kill.
 reap() {
@@ -35,6 +35,24 @@ reap() {
   for i in $(trackers); do echo "closing a leftover tracker (pid $i)"; taskkill //F //PID "$i" > /dev/null 2>&1 || true; done
 }
 # start/video show the live window r5cam on top; fusion puts it off screen (the tracker window is the one on top).
+# One camera loop at a time: two scrcpy on the phone camera take it from each other every second (lab 10-18: a
+# re-flown name kept the last flight's loop alive, 10 parts in 60 s, six of them 0-byte cam_N.mkv).
+camloops() { powershell -NoProfile -Command 'Get-CimInstance Win32_Process | Where-Object { $_.Name -in "bash.exe","sh.exe" -and $_.CommandLine -match "cam_loop\.sh" } | ForEach-Object { $_.ProcessId }' 2>/dev/null | tr -d '\r'; }
+camstop() {
+  local i
+  for i in $(camloops); do taskkill //F //PID "$i" > /dev/null 2>&1 || true; done
+  taskkill //F //IM scrcpy.exe > /dev/null 2>&1 || true
+  [ -z "$(camloops)" ] || { echo "a camera loop would not close (pids $(camloops | tr '\n' ' '))"; exit 1; }
+}
+# A re-flown name keeps the last run's video, fixes and logs in run-HHMMSS/ (the next part 1 used to overwrite cam.mkv).
+keeprun() {
+  local old f
+  ls "$vid"/cam*.mkv > /dev/null 2>&1 || return 0
+  old="$vid/run-$(date -r "$vid/scrcpy.log" +%H%M%S 2>/dev/null || date +%H%M%S)"; mkdir -p "$old"
+  for f in "$vid"/cam*.mkv "$vid"/scrcpy_start_host_time*.txt "$vid"/scrcpy.log "$vid"/fixes.csv "$vid"/tracker.mp4 \
+           "$vid"/tracker.out "$vid"/stream_log.out "$vid"/cam_loop.out; do [ -e "$f" ] && mv "$f" "$old/"; done
+  echo "previous run of $name kept in $old"
+}
 cam() {                                           # CT_WIN: scrcpy window flags (default on top), CT_SIZE: WxH; loop: cam_loop.sh
   bg --log "$vid/cam_loop.out" --pid "$vid/cam_loop.pid" -- bash ground_station/lab/cam_loop.sh "$vid" "${CT_WIN---always-on-top}" "${CT_SIZE-1194x672}"
 }
@@ -65,17 +83,17 @@ start)
   out=$(post /api/streams/apply "$body"); echo "${out:0:300}"; case "$out" in *'"ok": false'*|*'"error"'*) echo "ABORT: preset $preset refused by apply (slots unchanged)"; exit 1;; esac
   post /api/streams/log/start "{\"name\":\"$name\",\"mode\":\"unlimited\"}"
   post /api/recording/start "{\"requested_by\":\"operator\",\"label\":\"$name\",\"reason\":\"camera-truth session\"}"
-  rm -f "$vid/stop" "$vid/fusion" "$vid/video_only"
+  camstop; keeprun; rm -f "$vid/stop" "$vid/fusion" "$vid/video_only"
   cam
   sleep 5; "$0" check "$name" ;;
 fusion)
   mode=${3:?mode 1 shadow, 2 offset, 3 in-EKF}; shift 3
-  reap
+  reap; camstop
   # 8081 up (`fly` flights): it owns the link, relays the fixes (--relay-port 47800) and logs; the tracker reads
   # height from it. 8081 down: stream_log owns the link, relays and logs, as before.
   endlive                                           # a leftover logger holds udp 14550/47800 either way (lab 10-18)
   if up; then link=8081; tel=(--tel-url "$api"); else link=sl; tel=(--tel-csv "logs/$name.slot1.csv"); fi
-  mkdir -p "$vid" logs; touch "$vid/stream_log.out" "$vid/tracker.out"; rm -f "$vid/stop" "$vid/video_only"; echo "$mode" > "$vid/fusion"
+  mkdir -p "$vid" logs; keeprun; touch "$vid/stream_log.out" "$vid/tracker.out"; rm -f "$vid/stop" "$vid/video_only"; echo "$mode" > "$vid/fusion"
   if [ "$link" = sl ]; then                         # `fly` sets up VOFA+/PJ itself (key p)
   VOFA=${VOFA-127.0.0.1:1347}                       # flight view to VOFA+ (UDP FireWater, named tabs); VOFA= turns it off
   PLOT=${PLOT-}                                     # PlotJuggler opt-in (every slot): PLOT=127.0.0.1:9870
@@ -102,7 +120,7 @@ fusion)
   bg --log "$vid/tracker.out" --pid "$vid/tracker.pid" -- python -m ground_station.analysis.live_tracker --source window:r5cam     --cam docs/video-truth/cam_r4_lenswave_2026-10-11.json --floor "${CT_FLOOR:-logs/video_truth/r5_marks_1}"     "${tel[@]}" --detector coral --gate --send udp:47800 --mode "$mode" --delay-ms "$dly"     --out "$vid/fixes.csv" --show --show-rec "$vid/tracker.mp4" --stop-file "$vid/stop" "${al[@]}" "$@"
   sleep 12; "$0" check "$name" ;;
 video)                                              # video only (workflows A/B/C): the log stays theirs
-  mkdir -p "$vid"; rm -f "$vid/stop" "$vid/fusion"; touch "$vid/video_only"; cam
+  mkdir -p "$vid"; camstop; keeprun; rm -f "$vid/stop" "$vid/fusion"; touch "$vid/video_only"; cam
   sleep 5; "$0" check "$name" ;;
 stop)
   touch "$vid/stop"
@@ -122,6 +140,7 @@ stop)
   [ -f logs/plot_live.pid ] && echo "VOFA+/PlotJuggler still streaming live: 'camera_truth.sh end' stops it" || true ;;
 floor)                                              # floor pose of this placement: video, then the id0 scan
   mkdir -p "$vid"; rm -f "$vid/stop" "$vid/fusion"; touch "$vid/video_only"
+  camstop
   [ -e "$vid/cam.mkv" ] && mv "$vid/cam.mkv" "$vid/cam.$(date +%H%M%S).mkv.bak"   # an older scan of this name is kept, not deleted
   cam; sleep "${FLOOR_S:-10}"; touch "$vid/stop"
   taskkill //IM scrcpy.exe > /dev/null 2>&1 || true; sleep 2; taskkill //F //IM scrcpy.exe > /dev/null 2>&1 || true; sleep 1
