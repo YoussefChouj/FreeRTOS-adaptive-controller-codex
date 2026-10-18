@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import math
+import time
 
 import pytest
 
 from ground_station.platform.transactions import Outcome, RejectReason, Result
 from ground_station.platform.wfb_commands import CMD_ARM, CMD_PRIM, CMD_RESET_ORIGIN, ArmIdx, PrimIdx, encode
 from ground_station.service.campaign_live import (
-    WFB_STATUS_FIELDS, LiveWfbClient, check_live_ready, live_deps_factory, live_resting_v, live_sample,
-    live_status,
+    _FRESHNESS_SYMS, WFB_STATUS_FIELDS, LiveWfbClient, check_live_ready, link_snapshot, live_deps_factory,
+    live_on_abort, live_resting_v, live_sample, live_status,
 )
 from ground_station.service.campaign_runner import PRIM_IDLE, fly_scenario
 from ground_station.service.fake_drone import FakeDrone
@@ -360,3 +361,41 @@ def test_heartbeat_stops_when_consecutive_commands_time_out():
     assert client.heartbeat() is False
     assert len(svc.calls) == calls_before
 
+
+
+def _all_fresh(svc: FakeService, t_ns: int) -> None:
+    for sym in _FRESHNESS_SYMS:
+        svc.values[sym] = (0.0, t_ns)
+
+
+def test_link_snapshot_names_the_stalest_symbol_and_merges_the_bridge_health():
+    svc = FakeService()
+    _all_fresh(svc, NOW_NS)
+    svc.values[_FRESHNESS_SYMS[1]] = (0.0, NOW_NS - 700_000_000)
+    svc.bridge = type("Bridge", (), {"link_health": lambda self: {"rx_age_s": 0.71, "reply_age_s": 0.69,
+                                                                   "ingest_lag_s": 0.0, "ingest_queue": 0,
+                                                                   "ingest_dropped": 0}})()
+    snap = link_snapshot(svc, now_ns=lambda: NOW_NS + 10_000_000)
+    assert snap["stalest"] == _FRESHNESS_SYMS[1] and snap["stalest_age_s"] == 0.71
+    assert snap["rx_age_s"] == 0.71 and snap["reply_age_s"] == 0.69 and snap["ingest_queue"] == 0
+
+
+def test_link_snapshot_never_seen_symbol_and_no_bridge():
+    svc = FakeService()
+    _all_fresh(svc, NOW_NS)
+    del svc.values[_FRESHNESS_SYMS[0]]
+    snap = link_snapshot(svc, now_ns=lambda: NOW_NS)
+    assert snap == {"stalest": _FRESHNESS_SYMS[0], "stalest_age_s": None}
+
+
+def test_live_on_abort_records_an_abort_event_with_the_snapshot(capsys):
+    from ground_station.service.abort_monitor import AbortDecision
+    svc = FakeService()
+    _all_fresh(svc, time.time_ns())
+    events = []
+    svc._sess_event = lambda kind, data: events.append((kind, data))
+    live_on_abort(svc, AbortDecision(level=1, reason="stale_telemetry"))
+    (kind, data), = events
+    assert kind == "abort" and data["reason"] == "stale_telemetry" and data["level"] == 1
+    assert data["stalest"] in _FRESHNESS_SYMS and 0 <= data["stalest_age_s"] < 1.0
+    assert "[campaign] abort (stale_telemetry): link" in capsys.readouterr().out

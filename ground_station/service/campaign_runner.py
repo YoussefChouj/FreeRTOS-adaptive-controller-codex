@@ -1,4 +1,5 @@
 import subprocess
+import sys
 import math
 import threading
 from dataclasses import dataclass, field
@@ -111,6 +112,7 @@ class RunnerDeps:
     apply_params: Callable[[dict], bool] = lambda params: True
     on_flight: Callable[['FlightRecord'], None] = lambda rec: None
     say: Callable[[str], None] = lambda text: None               # chat line to the operator (live: agent message)
+    on_abort: Callable[[AbortDecision], None] = lambda dec: None  # once per abort, before landing (live: link snapshot)
     health: Callable[[], tuple[bool, str]] = lambda: (True, "")  # live: RC-armed + g_ekf_of_health
     ground_wait_s: float = 0.0  # fly mode: time on the ground before the auto-next check
     drift_budget_m: float = 0.0  # fly mode: pause for a pad re-seat once airborne s x OF_DRIFT_CM_S since go exceeds it
@@ -558,6 +560,10 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
 
     aborted = decision is not None
     if aborted:
+        try:
+            deps.on_abort(decision)
+        except Exception as e:                                   # diagnostics must never hold up the landing
+            print(f"[campaign] on_abort failed: {e!r}", file=sys.stderr)
         if excite_sent:
             deps.client._send_cmd(ex.CMD_SYSID, ex.IDX_START, 0.0)  # SysID abort -> RECOVERY
         if preset_sent:

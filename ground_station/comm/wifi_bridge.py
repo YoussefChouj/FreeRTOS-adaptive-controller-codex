@@ -269,6 +269,7 @@ class WifiBridge:
         self._ingest_q: queue.Queue = queue.Queue(maxsize=INGEST_QUEUE_MAX)
         self.ingest_dropped = 0  # frames dropped because the ingest thread fell INGEST_QUEUE_MAX behind
         self.ingest_lag_ns = 0  # age of the frame the ingest thread finished last (receive stamp to done)
+        self._last_reply_rx = 0.0  # monotonic arrival of the last command reply (link_health)
         # Subscribe watchdog. The FC keeps its slots in RAM, so a power cycle
         # drops them: it comes back sending only its fallback frames, and every
         # subscribed key froze at its last value while the link looked alive.
@@ -576,6 +577,15 @@ class WifiBridge:
         if self._last_wifi_rx and gap_s >= self._LINK_GAP_RESEND_S:
             self._on_link_back(gap_s)
         self._last_wifi_rx = now
+
+    def link_health(self, now: float | None = None) -> dict:
+        """Seconds since the last datagram and the last command reply, and how far the ingest thread is behind. At a
+        stale abort these tell a link loss (both ages grow) from a host stall (datagrams arrive, ingest falls behind)."""
+        now = time.monotonic() if now is None else now
+        age = lambda t: round(now - t, 3) if t else None   # None: nothing received yet
+        return {"rx_age_s": age(self._last_wifi_rx), "reply_age_s": age(self._last_reply_rx),
+                "ingest_lag_s": round(self.ingest_lag_ns / 1e9, 3), "ingest_queue": self._ingest_q.qsize(),
+                "ingest_dropped": self.ingest_dropped}
 
     def _on_link_back(self, gap_s: float) -> None:
         """Re-send every live slot's last request after a whole-link silence (the FC came back with its boot default)."""
@@ -1568,6 +1578,7 @@ class WifiBridge:
                 tag, payload = result
                 if tag == "transaction":
                     # Command replies go out at once, never behind the stream backlog.
+                    self._last_reply_rx = time.monotonic()
                     self._transaction_results.put(payload)
                 else:
                     # Publish/ingest/record run on the ingest thread (10-18 P12: inline they backed up the

@@ -70,3 +70,54 @@ def test_reply_not_delayed_by_slow_telemetry_ingest():
         bridge._stop.set()
         for t in threads:
             t.join(timeout=1.0)
+
+
+def test_link_health_tells_a_host_stall_from_a_link_loss():
+    """10-18: two takeoff link losses could not be told apart. Real rx loop: while the ingest thread is stuck,
+    datagrams and replies still arrive (ages stay small, the ingest queue grows); when the socket goes quiet, both
+    ages grow."""
+    import socket
+    import struct
+    import threading
+    import time
+
+    bridge = WifiBridge(vofa_enabled=False)
+    bridge._check_resubscribe = lambda: None
+    bridge._publish_telem = lambda *a: None
+    assert bridge.link_health()["rx_age_s"] is None and bridge.link_health()["reply_age_s"] is None
+    attitude = struct.pack("<3f", 1.0, 2.0, 3.0) + b"\x00\x00\x80\x7f"
+    datagrams = [attitude] * 20 + [bytes(build_result(Result(9, Outcome.APPLIED, 1, 0, detail="applied")))]
+
+    class FakeSock:
+        def recvfrom(self, _n):
+            if datagrams:
+                return datagrams.pop(0), ("127.0.0.1", 14550)
+            time.sleep(0.01)
+            raise socket.timeout
+
+    release = threading.Event()
+
+    def stuck_ingest(tag, payload, t_ns):
+        release.wait(5.0)                           # the host stall: ingest blocks, rx keeps reading
+
+    stuck_ingest.takes_time_ns = True
+    bridge._wifi = FakeSock()
+    bridge._on_telemetry = stuck_ingest
+    threads = [threading.Thread(target=bridge._rx_loop, daemon=True),
+               threading.Thread(target=bridge._ingest_loop, daemon=True)]
+    for t in threads:
+        t.start()
+    try:
+        bridge._transaction_results.get(timeout=1.0)
+        stall = bridge.link_health()
+        assert stall["rx_age_s"] < 0.2 and stall["reply_age_s"] < 0.2
+        assert stall["ingest_queue"] >= 15         # 20 frames in, the stuck thread holds one
+        time.sleep(0.4)                             # the socket stays quiet: the link-loss signature
+        quiet = bridge.link_health()
+        grew = (quiet["rx_age_s"] - stall["rx_age_s"], quiet["reply_age_s"] - stall["reply_age_s"])
+        assert min(grew) > 0.3, grew                # both ages grow with the quiet time (15.6 ms clock on Windows)
+    finally:
+        release.set()
+        bridge._stop.set()
+        for t in threads:
+            t.join(timeout=1.0)

@@ -565,3 +565,44 @@ def test_wp23_phases_and_arm_refused_reason():
     assert (report.status, report.reason) == ("arm_refused", "stream check failed before takeoff")
     assert phases[0].startswith("waiting for go: pack type2, flight 1/")
     assert phases[-1].startswith("stream check before flight 1/")
+
+
+def _abort_on_executing(drone, deps):
+    def mock_step(sample):
+        if drone.status()["traj_state"] == 3:  # EXECUTING
+            return AbortDecision(level=1, reason="stale_telemetry")
+        return AbortDecision(level=0, reason="")
+    deps.monitor.step = Mock(side_effect=mock_step)
+
+
+def test_on_abort_gets_the_decision_once_before_landing(tmp_path):
+    """The live link snapshot is taken at the trip, before the landing sequence starts."""
+    campaign_yaml = tmp_path / "camp.yaml"
+    campaign_yaml.write_text(Path(YAML_PATH).read_text())
+    drone = FakeDrone()
+    drone.sbus_live = True
+    client = WfbClient(drone.send)
+    deps = create_deps(drone, client, FakeClock())
+    order = Mock()
+    client.land = order.land
+    deps.on_abort = order.on_abort
+    _abort_on_executing(drone, deps)
+    report = run_campaign(str(campaign_yaml), deps)
+    assert report.flights[0].abort_level == 1
+    aborts = [c for c in order.mock_calls if c[0] == "on_abort"]
+    assert len(aborts) == 1 and aborts[0].args[0].reason == "stale_telemetry"
+    assert [c[0] for c in order.mock_calls].index("on_abort") < [c[0] for c in order.mock_calls].index("land")
+
+
+def test_a_failing_on_abort_still_lands(tmp_path):
+    campaign_yaml = tmp_path / "camp.yaml"
+    campaign_yaml.write_text(Path(YAML_PATH).read_text())
+    drone = FakeDrone()
+    drone.sbus_live = True
+    client = WfbClient(drone.send)
+    deps = create_deps(drone, client, FakeClock())
+    client.land = Mock()
+    deps.on_abort = Mock(side_effect=RuntimeError("no recorder"))
+    _abort_on_executing(drone, deps)
+    report = run_campaign(str(campaign_yaml), deps)
+    assert client.land.called and report.flights[0].abort_level == 1

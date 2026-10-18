@@ -215,6 +215,31 @@ def live_sample(service: Any, t_s: float, sat: tuple[float, float] | None = None
     )
 
 
+def link_snapshot(service: Any, now_ns: Callable[[], int] = time.time_ns) -> dict[str, Any]:
+    """The link at an abort: the stalest freshness symbol and its age, plus the bridge's link_health() (10-18: the
+    two takeoff link losses after P15 could not be told apart, WiFi drop vs host stall)."""
+    vals = service.latest_values(_FRESHNESS_SYMS + tuple(_ALIASES[s] for s in _FRESHNESS_SYMS if s in _ALIASES))
+    now = now_ns()
+
+    def age(s: str) -> float:
+        got = vals.get(s) or vals.get(_ALIASES.get(s, ""))
+        return (now - got[1]) / 1e9 if got else math.inf
+
+    sym = max(_FRESHNESS_SYMS, key=age)
+    snap: dict[str, Any] = {"stalest": sym, "stalest_age_s": None if math.isinf(age(sym)) else round(age(sym), 3)}
+    health = getattr(getattr(service, "bridge", None), "link_health", None)
+    if callable(health):
+        snap.update(health())
+    return snap
+
+
+def live_on_abort(service: Any, dec: Any) -> None:
+    """Record the link snapshot as an 'abort' event in the session's events.jsonl and in the 8081 log."""
+    snap = link_snapshot(service)
+    service._sess_event("abort", {"reason": dec.reason, "level": dec.level, **snap})
+    print(f"[campaign] abort ({dec.reason}): link {snap}", flush=True)
+
+
 def live_resting_v(service: Any) -> float:
     vals = service.latest_values(VBAT_SYMS)
     for s in VBAT_SYMS:
@@ -399,6 +424,7 @@ def live_deps_factory(service: Any, controller: str = "pid", dt_s: float = LIVE_
             sleep=time.sleep,
             status=lambda: live_status(service),
             sample=lambda t_s: live_sample(service, t_s, sat),
+            on_abort=lambda dec: live_on_abort(service, dec),
             packs=PackRegistry.load(None),
             monitor=AbortMonitor(limits=AbortLimits()),
             tuner=tuner,
