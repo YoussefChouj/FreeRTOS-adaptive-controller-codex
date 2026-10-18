@@ -283,6 +283,7 @@ class WifiBridge:
         # (_check_slot_watchdog), never the 4-slot dashboard layout (2026-10-15: every pack swap re-sent it).
         self.lab_mode = False
         self._last_stream_rx = 0.0
+        self._last_wifi_rx = 0.0
         self._last_resubscribe = 0.0
         self._last_slot_rx: dict[int, float] = {}
         self._last_slot_resend: dict[int, float] = {}
@@ -492,6 +493,11 @@ class WifiBridge:
     # the previous one is still pending, so back-to-back slot requests lose all but one (2026-10-14 A1: slot 1
     # never named, the slot 3 stop lost). Its send task drains the mailbox at 200 Hz. 50 ms is PROPOSED.
     _SUBSCRIBE_GAP_S = 0.05
+    # The whole link silent this long, then frames again = the drone was off (pack swap, power cycle): its slots came
+    # back with the firmware boot default, so every slot's last request is re-sent. The per-slot watchdog misses
+    # slot 0 here because the boot default keeps it streaming (10-18: no re-push after link_lost/link_back left
+    # DroneStatus.ARM_Status missing for 43-103 s). Matches campaign_fly.LINK_LOST_S.
+    _LINK_GAP_RESEND_S = 3.0
     # Lab slot 0: the sidebar vars the preflight and runner read, at the 100 Hz Send_Task contract / 10 = 10 Hz
     # (_expected_rate_for_slot; flight 1 measured ~50 Hz at divider 2). ~2.3 kB/s of the 87.5k budget (PROPOSED).
     LAB_SLOT0_DIVIDER = 10
@@ -563,6 +569,31 @@ class WifiBridge:
             self._pending_schema_ranges[slot] = ranges
         self._last_slot_resend[slot] = time.monotonic()
         return True
+
+    def _note_wifi_rx(self, now: float) -> None:
+        """Called for every datagram: a whole-link silence of _LINK_GAP_RESEND_S or more means the FC rebooted."""
+        gap_s = now - self._last_wifi_rx
+        if self._last_wifi_rx and gap_s >= self._LINK_GAP_RESEND_S:
+            self._on_link_back(gap_s)
+        self._last_wifi_rx = now
+
+    def _on_link_back(self, gap_s: float) -> None:
+        """Re-send every live slot's last request after a whole-link silence (the FC came back with its boot default)."""
+        slots = sorted(s for s, (rate_hz, _, _) in self._slot_requests.items() if rate_hz > 0)
+        if not slots:
+            return
+        now = time.monotonic()
+        for slot in slots:
+            # The per-slot watchdog would re-send the silent slots 1-3 too: hold it off, resend_slot covers them.
+            self._last_slot_resend[slot] = now
+        print(f"[wifi_bridge] link back after {gap_s:.1f}s of silence: re-sending slots {slots}",
+              file=sys.stderr, flush=True)
+
+        def run() -> None:
+            for slot in slots:
+                self.resend_slot(slot)
+
+        threading.Thread(target=run, name="wifi_bridge_link_back", daemon=True).start()
 
     def _check_resubscribe(self) -> None:
         """Re-send the auto-subscribe when the FC has evidently forgotten it.
@@ -1527,6 +1558,7 @@ class WifiBridge:
                     print("[wifi_bridge] WiFi socket recv error, retrying...", file=sys.stderr)
                 continue
 
+            self._note_wifi_rx(time.monotonic())
             rx_buf.extend(data)
 
             while len(rx_buf) > 0:

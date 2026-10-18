@@ -274,3 +274,35 @@ def test_request_stream_schema_coalesces_byte_count():
     assert after < before, "coalescing should reduce range count"
     assert after < 512, "coalesced request should be < 512 bytes"
 
+
+
+def _link_back_bridge(bridge, monkeypatch):
+    b, _sent, clock = bridge
+    resent = []
+    monkeypatch.setattr(b, "resend_slot", lambda slot: resent.append(slot) or True)
+    b._slot_requests = {0: (10.0, b"x", ()), 1: (0, b"y", ()), 2: (25.0, b"z", ())}
+    return b, clock, resent
+
+
+def test_link_back_after_power_cycle_resends_every_live_slot(bridge, monkeypatch):
+    """10-18: after a pack swap the boot default kept slot 0 streaming, so ARM_Status stayed missing 43-103 s."""
+    b, clock, resent = _link_back_bridge(bridge, monkeypatch)
+    b._note_wifi_rx(clock[0])
+    clock[0] += b._LINK_GAP_RESEND_S
+    b._note_wifi_rx(clock[0])
+    assert resent == [0, 2]  # slot 1 is off (rate 0): nothing to restore
+    assert b._last_slot_resend[2] == clock[0]  # the per-slot watchdog is held off, no double request
+
+
+def test_short_link_gap_resends_nothing(bridge, monkeypatch):
+    b, clock, resent = _link_back_bridge(bridge, monkeypatch)
+    b._note_wifi_rx(clock[0])
+    clock[0] += b._LINK_GAP_RESEND_S - 0.1
+    b._note_wifi_rx(clock[0])
+    assert resent == []
+
+
+def test_first_datagram_is_not_a_link_back(bridge, monkeypatch):
+    b, clock, resent = _link_back_bridge(bridge, monkeypatch)
+    b._note_wifi_rx(clock[0])
+    assert resent == []
