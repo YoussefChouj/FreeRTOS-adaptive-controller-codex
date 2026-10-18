@@ -178,6 +178,10 @@ MRAC_3L: tuple[str, ...] = (
     + tuple(f"mrac_state.{axis}.Phi_f[{i}]" for i in range(6) for axis in ("pitch", "roll"))
     + tuple(f"mrac_state.{axis}.p_gain" for axis in ("pitch", "roll"))
 )
+# Gate-memory flights (lab_m_memory_*): the weights pitch and roll run with rbf_on 0 (MRAC_N_STRUCT = 6,
+# API/mrac_variant.h), so memory_premise sees the drift over the figure 8 and, with mrac_3l's Phi_f[0..5],
+# adaptive_review rebuilds Theta'Phi_f. With rbf_on 1 the RBF weights 6..45 come from mrac_shadow.
+MRAC_THETA: tuple[str, ...] = tuple(f"mrac_state.{axis}.Theta[{i}]" for i in range(6) for axis in ("pitch", "roll"))
 # Camera fusion (g_ext_pos_on 2/3): the fix innovation e_x/e_y, the applied correction c_x/c_y, accepted and rejected
 # fix counts, fix age and the stale flag, so a drift can be split into camera-not-arriving vs camera-not-trusted.
 CAMERA_FUSION: tuple[str, ...] = (
@@ -202,6 +206,7 @@ NN4: tuple[str, ...] = (
 LOG_GROUPS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "mrac_shadow": MRAC_SHADOW,
     "mrac_3l": MRAC_3L,
+    "mrac_theta": MRAC_THETA,
     "velocity_loops": VELOCITY_LOOPS,
     "optical_flow": OPTICAL_FLOW,
     "takeoff_gate": TAKEOFF_GATE,

@@ -220,8 +220,10 @@ def test_read_rejects_non_json(tmp_path):
 # ---- per-experiment log plan ---------------------------------------------------------------------------
 
 def test_log_groups_are_disjoint_from_needed_and_each_other():
-    # nn4 is the drift net's input list, so it overlaps on purpose; plan_capture records a variable once.
-    group_vars = [v for name, g in cc.LOG_GROUPS.items() if name != "nn4" for v in g]
+    # nn4 is the drift net's input list and mrac_theta the live 6 of mrac_shadow's weights, so both overlap on
+    # purpose; plan_capture records a variable once.
+    assert set(cc.LOG_GROUPS["mrac_theta"]) <= set(cc.LOG_GROUPS["mrac_shadow"])
+    group_vars = [v for name, g in cc.LOG_GROUPS.items() if name not in ("nn4", "mrac_theta") for v in g]
     assert len(set(group_vars)) == len(group_vars)
     assert not set(group_vars) & set(NEEDED)
     assert cc.LOG_GROUPS["mrac_shadow"] == OPTIONAL
@@ -296,6 +298,17 @@ def test_two_speed_plan_fills_the_link_without_repeats():
     table = cc.log_plan_table(plan)
     assert f"| xy_ctrl | {len(cc.XY_CTRL)}/{len(cc.XY_CTRL)} | 25 |  |" in table
     assert f"{len(hz)} slot(s), {cc.plan_bps(plan['slots']):.0f} of 70042 B/s" in table.splitlines()[-1]
+
+
+def test_memory_plan_logs_the_live_mrac_weights():
+    theta = cc.LOG_GROUPS["mrac_theta"]
+    assert len(theta) == 12 and len(set(theta)) == 12
+    assert {f"mrac_state.{a}.Theta[{i}]" for a in ("pitch", "roll") for i in range(6)} == set(theta)
+    slow = ["nn4", "xy_ctrl", "mrac_3l", "mrac_theta", "ekf_states", "estimator_truth"]
+    plan = cc.plan_capture({"rate_hz": 100, "groups": ["velocity_loops", "camera_fusion"], "slow": slow})
+    recorded = [v for s in plan["slots"] for v in s["vars"]]
+    assert set(theta) <= set(recorded) and plan["dropped"] == []
+    assert cc.plan_bps(plan["slots"]) <= cc.PLANNING_BUDGET_BPS
 
 
 def test_slow_lane_skips_fast_vars_and_trims_to_the_budget():
