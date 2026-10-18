@@ -125,6 +125,33 @@ def test_flies_in_order_with_pack_once_and_analysis_stop(tmp_path, monkeypatch):
     assert [f["id"] for f in labday.todo(p2.d, p2.state)] == ["C"]
 
 
+def test_cooldown_between_flights_not_after_the_last(tmp_path, monkeypatch):
+    fake = _Fake(["", "", ""])
+    p = _player(tmp_path, monkeypatch, fake, [{"id": "A", "fly": "lab_c_robust"}, {"id": "B", "fly": "lab_c_lqr"},
+                                              {"id": "C", "fly": "lab_c_mpc"}])
+    waits = []
+    p.cooldown_s, p.wait = 60, waits.append
+    assert p.go() == 0 and _flown(fake) == ["lab_c_robust", "lab_c_lqr", "lab_c_mpc"]
+    assert len(waits) == 2 and all(55 < w <= 60 for w in waits)
+    off = _Fake(["", ""])
+    (tmp_path / "off").mkdir()
+    p = _player(tmp_path / "off", monkeypatch, off, [{"id": "A", "fly": "lab_c_robust"}, {"id": "B", "fly": "lab_c_lqr"}])
+    waits.clear()
+    p.wait = waits.append
+    assert p.go() == 0 and not waits      # cooldown_s 0 = off
+
+
+def test_cooldown_counts_down_and_enter_ends_it(capsys):
+    now = [0.0]
+    keys = iter([False, False, True])
+    waited = labday.cooldown(10, key=lambda: next(keys), clock=lambda: now[0],
+                             sleep=lambda s: now.__setitem__(0, now[0] + 1), flush=lambda: None)
+    assert waited == 2 and "cooldown 0:10" in capsys.readouterr().out
+    now[0] = 0.0
+    assert labday.cooldown(3, key=lambda: False, clock=lambda: now[0],
+                           sleep=lambda s: now.__setitem__(0, now[0] + 1), flush=lambda: None) == 3
+
+
 def test_auto_stop_on_bad_end_then_refly(tmp_path, monkeypatch):
     fake = _Fake(["", "r"], fly_rc=[1, 0])   # fly A: exits 1 -> r flies again -> ok
     p = _player(tmp_path, monkeypatch, fake, [{"id": "A", "fly": "lab_c_robust"}])

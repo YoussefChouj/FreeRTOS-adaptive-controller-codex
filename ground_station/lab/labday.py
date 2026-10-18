@@ -15,6 +15,8 @@ Carry-over (the norm, `carry: false` in a day file turns it off): after the day'
 day file's flights that were never flown well nor skipped, oldest day first, as <MMDD>-<id> (2026-10-17 F1 ->
 1017-F1). A flight a later day plans again with the same fly + args is left to that later plan, and skipping (s)
 retires a carried flight for good. So a plan is written once and stays on the list until it is flown or skipped.
+
+Between flights a cooldown counts down from the landing (an analysis stop counts as rest; Enter skips it).
 """
 from __future__ import annotations
 
@@ -186,6 +188,46 @@ def bad_end(rc, ev):
     return None
 
 
+COOLDOWN_S = 90   # PROPOSED, not measured: motor and pack rest after a landing; day file `cooldown_s`, --cooldown S
+
+
+def key_pressed():
+    """True when a key (Enter) was pressed, without waiting for one."""
+    try:
+        import msvcrt
+    except ImportError:
+        import select
+        return bool(select.select([sys.stdin], [], [], 0)[0]) and sys.stdin.readline() is not None
+    if msvcrt.kbhit():
+        msvcrt.getwch()
+        return True
+    return False
+
+
+def flush_keys():
+    """Drop keys typed during the flight, so an old Enter does not end the cooldown."""
+    try:
+        import msvcrt
+    except ImportError:
+        return
+    while msvcrt.kbhit():
+        msvcrt.getwch()
+
+
+def cooldown(seconds, key=key_pressed, clock=time.monotonic, sleep=time.sleep, flush=flush_keys):
+    """Count `seconds` down on one line; Enter ends it early. Returns the seconds it waited."""
+    flush()
+    t0 = clock()
+    while (left := seconds - (clock() - t0)) > 0:
+        print(f"\r  cooldown {int(left) // 60}:{int(left) % 60:02d} before the next flight (swap the pack now if due; "
+              "Enter skips) ", end="", flush=True)
+        if key():
+            break
+        sleep(0.2)
+    print("\r  cooldown over." + " " * 72, flush=True)
+    return clock() - t0
+
+
 def debrief_event(pid, since):
     """The last `debrief` event the child `pid` wrote to the events log after `since` (a byte offset per file)."""
     found = None
@@ -217,8 +259,10 @@ def log_offsets():
 class Day:
     """The interactive part: dry run, prompts, camera and the resume file around each `.\\fly --once`."""
 
-    def __init__(self, d, state_path, pack=None, camera=True, ask=input, run=None, popen=None):
+    def __init__(self, d, state_path, pack=None, camera=True, ask=input, run=None, popen=None, cooldown_s=0,
+                 wait=cooldown):
         self.d, self.state_path, self.pack = d, Path(state_path), pack
+        self.cooldown_s, self.wait, self.landed = cooldown_s, wait, None
         self.cam = (d.get("camera") or {}) if camera else {}
         self.ask, self.run, self.popen = ask, run or subprocess.run, popen or subprocess.Popen
         self.state = load_state(self.state_path)
@@ -325,6 +369,10 @@ class Day:
             self.say("", f"=== {f['id']} ({i + 1} of {len(flights)}): {shown(f)}",
                      *([f"    tests: {f['why']}"] if f.get("why") else []),
                      *([f"    pass (PROPOSED): {f['pass']}"] if f.get("pass") else []))
+            if self.landed is not None and self.cooldown_s > 0:
+                left = self.cooldown_s - (time.monotonic() - self.landed)   # an analysis stop counts as rest
+                if left > 0:
+                    self.wait(left)
             a = self.ask("Enter flies it (then arm by RC), s skips it, q quits: ").strip().lower()
             if a == "q":
                 return 0
@@ -333,6 +381,7 @@ class Day:
                 self.save()
                 continue
             r = self.one(f, pack)
+            self.landed = time.monotonic()
             pack = None   # fly remembers the pack; a swap mid-day is asked by fly itself
             if r == "quit":
                 return 0
@@ -362,6 +411,8 @@ def main(argv=None):
     ap.add_argument("--sheet", action="store_true", help="print the run sheet markdown, then exit")
     ap.add_argument("--dry-run", action="store_true", help="only the ground dry run of every flight left")
     ap.add_argument("--no-camera", action="store_true", help="fly without the camera fusion")
+    ap.add_argument("--cooldown", type=float, metavar="S", help=f"rest between a landing and the next flight's "
+                    f"prompt, Enter skips it (default: the day file's cooldown_s, else {COOLDOWN_S} s PROPOSED; 0 = off)")
     ap.add_argument("--floor", help="the floor scan folder under logs/video_truth (default: the day file's)")
     a = ap.parse_args(argv)
     try:
@@ -373,7 +424,8 @@ def main(argv=None):
     if a.sheet:
         sys.stdout.write(sheet(d))
         return 0
-    day = Day(d, state_file(d.get("day") or a.day), pack=a.pack, camera=not a.no_camera)
+    day = Day(d, state_file(d.get("day") or a.day), pack=a.pack, camera=not a.no_camera,
+              cooldown_s=a.cooldown if a.cooldown is not None else float(d.get("cooldown_s", COOLDOWN_S)))
     if a.list:
         print("\n".join(day.listing()))
         return 0
