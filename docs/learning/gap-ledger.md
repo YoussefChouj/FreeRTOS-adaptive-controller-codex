@@ -103,3 +103,14 @@ Firmware facts: dead-zone is a hard step (`API/mrac.c:1282`, on by default `API/
   "fight"). Fact: on this branch MRAC_L2_Update is empty and MRAC_L3_Feedforward returns 0 (API/mrac.c:744,748;
   S4 spec unmerged), so only block 1 can fly today. Prior art to cite: Neural-Fly (learned basis + online linear
   weights, wind). Break point: architecture as roles vs architecture as testable mechanisms.
+- Q5 (pre-register today's primary metric + decision rule + secondaries): 4/10. Got: repeats (2-3) and sensible
+  secondaries (control effort, settling time, stability margin). Missed: no primary metric named; no win threshold
+  (what difference counts); n=2 cannot estimate run-to-run spread (need n>=3, interleaved ABAB); "stability margin"
+  has no in-flight method yet (needs plant-input injection + loop-break measurement). Model answer: primary = camera
+  rms_cm over the steady segment; win = median gain >= max(15%, 2x baseline run-to-run spread), n>=3 interleaved runs
+  per arm, fixed before flying; secondaries = RMS control effort, % time saturated, recovery time after a disturbance.
+  Fact: API/sysid.c already makes chirp/multisine, but adds it to ONE axis's RATE setpoint (a reference = tests
+  tracking, block 3), not the plant input (a disturbance = tests blocks 1-2 and gives margins). Taught: stable experts
+  + switching is not stable by itself (needs one common Lyapunov function or a dwell time); a known softmax gate gives
+  the common V for free, and its partition of unity keeps the ungated weights reachable. Break point: the decision
+  rule as a number fixed before the data.
