@@ -5,7 +5,7 @@
 campaign lab-z-vz-steps
 rate 100
 log velocity_loops camera_fusion thrust_model
-slow 25 mrac_3l ekf_states estimator_truth
+slow 25 mrac_3l ekf_states estimator_truth nn4 optical_flow mrac_theta takeoff_gate
 set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10
 takeoff 1.0 mrac_injection=0
 hold 8
