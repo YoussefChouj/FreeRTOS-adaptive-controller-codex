@@ -1,0 +1,16 @@
+# Lab day 2026-10-16 (not flown), made from docs/lab/run-sheet-2026-10-16.md so carry-over sees it.
+# All six flights are planned again on 2026-10-17 (same fly, same args), so they carry over as 1017-F1..F6.
+day: 2026-10-16
+title: robust PID, live tuning (rate, pos), autotune, LQR and MPC
+flights:
+  - {id: F1, fly: lab_c_robust, why: robust PID baseline (gains c3), pass: hover and lands on the pad}
+  - {id: F2, fly: lab_d_livetune_rate, why: live tuning of the rate loop (roll/pitch), pass: tuner finishes in budget}
+  - {id: F3, fly: lab_d_livetune_pos, why: live tuning of the position loop (x/y), pass: tuner finishes in budget, stop: true}
+  - {id: F4, fly: lab_c_autotune, why: PID with the live-tuned gains, pass: hover and lands on the pad}
+  - {id: F5, fly: lab_c_lqr, why: LQR xy (kind 2), pass: no 2 Hz cycle}
+  - {id: F6, fly: lab_c_mpc, why: MPC xy (kind 3), pass: hover and lands on the pad}
+branches:
+  - {when: F1 drifts, do: "re-fly with c2 or --post-takeoff-gains c3"}
+  - {when: F3 tuner says not recommended, do: "seed=1, or --force-livetune"}
+  - {when: F5 2 Hz cycle, do: "VAR 47 = 8, then 16"}
+  - {when: '"NO FIX SENT"', do: "Land, check the tracker, re-fly"}

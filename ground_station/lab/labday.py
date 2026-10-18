@@ -10,12 +10,18 @@ camera fusion (camera_truth.sh fusion, exit 0 = running, as runner.py) and stops
 analysis after the flights marked `stop: true`, and on its own when a flight ends badly (fly exits non-zero, or its
 debrief status is not "complete"); the day file's branches table says what to do then. logs/lab/<date>/
 labday_state.json keeps what was flown: the same command again goes on where it stopped (--from ID starts there).
+
+Carry-over (the norm, `carry: false` in a day file turns it off): after the day's own flights come every earlier
+day file's flights that were never flown well nor skipped, oldest day first, as <MMDD>-<id> (2026-10-17 F1 ->
+1017-F1). A flight a later day plans again with the same fly + args is left to that later plan, and skipping (s)
+retires a carried flight for good. So a plan is written once and stays on the list until it is flown or skipped.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -32,7 +38,7 @@ CAMPAIGNS = ROOT / "ground_station" / "service" / "campaigns"
 FLY = [sys.executable, "-m", "ground_station.service.campaign_fly"]
 
 
-def load_day(path):
+def _read(path):
     """The day file as a dict, checked: unique flight ids, each with a .fly name that exists."""
     path = Path(path)
     d = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -52,6 +58,61 @@ def load_day(path):
         f["id"], f["args"] = fid, [str(a) for a in f.get("args") or []]
     d["flights"], d["branches"] = flights, d.get("branches") or []
     return d
+
+
+def load_day(path):
+    """The day file, checked, plus the flights earlier days planned and never flown (carry_over; `carry: false` in
+    the day file turns it off)."""
+    d = _read(path)
+    d["carry_note"] = []
+    if d.get("carry", True) and d.get("day"):
+        flights, branches, d["carry_note"] = carry_over(Path(path).parent, str(d["day"]), d["flights"])
+        d["flights"] += flights
+        d["branches"] += branches
+    return d
+
+
+def carried_id(day, fid):
+    """A carried flight's id: <MMDD>-<id> of the day that planned it (2026-10-17 F1 -> 1017-F1)."""
+    return f"{day[5:7]}{day[8:10]}-{fid}"
+
+
+def done_ids(state):
+    return {k for k, r in state["flown"].items() if r.get("ok")} | set(state["skipped"])
+
+
+def carry_over(days_dir, today, own):
+    """Every earlier <date>.yaml's flights not flown well nor skipped, oldest day first, as <MMDD>-<id> with `from`.
+    Done = its own day's state has the id, or a day's state between it and today has the <MMDD>-<id> (it was carried
+    there and flown or skipped; today's own state is left to todo, so --list still shows it). One whose fly + args a
+    later day (today included) plans again is left to that later plan. Returns the flights, the branches of the days
+    that gave flights (`when` prefixed with the day) and one note per earlier day for --list and the sheet."""
+    plans, notes = {}, []
+    for p in sorted(Path(days_dir).glob("*.yaml")):
+        if re.fullmatch(r"\d{4}-\d\d-\d\d", p.stem) and p.stem < today:
+            try:
+                plans[p.stem] = _read(p)
+            except ValueError as e:
+                notes.append(f"{p.stem}: not carried ({e})")
+    states = {x: done_ids(load_state(state_file(x))) for x in plans}
+    flights, branches = [], []
+    for day in sorted(plans):
+        later = [x for x in plans if x > day]
+        between = set().union(*(states[x] for x in later))
+        again = {(g["fly"], tuple(g["args"])) for g in own + [g for x in later for g in plans[x]["flights"]]}
+        left, n_again = [], 0
+        for f in plans[day]["flights"]:
+            if f["id"] in states[day] or carried_id(day, f["id"]) in between:
+                continue
+            if (f["fly"], tuple(f["args"])) in again:
+                n_again += 1
+                continue
+            left.append({**f, "id": carried_id(day, f["id"]), "from": day})
+        notes.append(f"{day}: {len(left)} carried" + (f", {n_again} planned again on a later day" if n_again else ""))
+        if left:
+            flights += left
+            branches += [{**b, "when": f"({day}) {b.get('when', '')}"} for b in plans[day]["branches"]]
+    return flights, branches, notes
 
 
 def day_path(date):
@@ -79,6 +140,8 @@ def sheet(d):
     for f in d["flights"]:
         why, ok = (str(f.get(k) or "").replace("|", "\\|").strip() for k in ("why", "pass"))
         out.append(f"| {f['id']} | `{shown(f)}` | {why} | {ok} | {'yes' if f.get('stop') else ''} |")
+    if d.get("carry_note"):
+        out += ["", "Carried over from earlier days (ids <MMDD>-<id>): " + "; ".join(d["carry_note"]) + "."]
     if d["branches"]:
         out += ["", "## Branches & fallbacks", "", "| Event | Do |", "|---|---|"]
         out += [f"| {b.get('when', '')} | {b.get('do', '')} |" for b in d["branches"]]
@@ -281,13 +344,13 @@ class Day:
         return 0
 
     def listing(self):
-        out = []
+        out, w = [], max(4, *(len(f["id"]) for f in self.d["flights"]))
         for f in self.d["flights"]:
             r = self.state["flown"].get(f["id"])
             mark = "skipped" if f["id"] in self.state["skipped"] else (
                 ("OK " if r["ok"] else "BAD ") + f"{r['t']} {r.get('why') or r.get('status') or ''}" if r else "-")
-            out.append(f"  {f['id']:<4} {shown(f):<48} {mark}")
-        return out
+            out.append(f"  {f['id']:<{w}} {shown(f):<48} {mark}")
+        return out + [f"  carry-over: {n}" for n in self.d.get("carry_note") or []]
 
 
 def main(argv=None):

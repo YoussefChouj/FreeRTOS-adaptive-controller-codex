@@ -168,3 +168,50 @@ def test_fly_cmd_is_campaign_fly():
     assert labday.fly_cmd(f, "1", dry=True)[1:] == ["-m", "ground_station.service.campaign_fly", "lab_c_robust",
                                                     "--dry-run", "--pack", "1", "--gains", "c2"]
     assert subprocess.list2cmdline(labday.fly_cmd(f)).endswith("lab_c_robust --once --gains c2")
+
+
+def _days(tmp_path, monkeypatch, days, states=None):
+    """Day files <date>.yaml in tmp_path (date -> flights) and their labday states; returns the last day loaded."""
+    monkeypatch.setattr(labday, "LAB_DIR", tmp_path / "lab")
+    for day, flights in days.items():
+        (tmp_path / f"{day}.yaml").write_text(json.dumps({"day": day, "flights": flights, "branches": [
+            {"when": f"w{day[-1]}", "do": "d"}]}), encoding="utf-8")
+    for day, st in (states or {}).items():
+        labday.save_state(labday.state_file(day), {"flown": {}, "skipped": [], **st})
+    return labday.load_day(tmp_path / f"{max(days)}.yaml")
+
+
+def test_carry_over_appends_unflown_flights_of_earlier_days(tmp_path, monkeypatch):
+    d = _days(tmp_path, monkeypatch, {
+        "2099-01-01": [{"id": "A", "fly": "lab_c_robust"}, {"id": "B", "fly": "lab_c_lqr"}],
+        "2099-01-02": [{"id": "C", "fly": "lab_c_mpc"}, {"id": "B2", "fly": "lab_c_lqr"}],
+        "2099-01-03": [{"id": "D", "fly": "lab_c_autotune"}]},
+        {"2099-01-01": {"flown": {"A": {"ok": True}}}})
+    assert [(f["id"], f.get("from")) for f in d["flights"]] == [
+        ("D", None), ("0102-C", "2099-01-02"), ("0102-B2", "2099-01-02")]   # 01 A flown, 01 B planned again on 02
+    assert d["carry_note"] == ["2099-01-01: 0 carried, 1 planned again on a later day", "2099-01-02: 2 carried"]
+    assert [b["when"] for b in d["branches"]] == ["w3", "(2099-01-02) w2"]
+    assert "Carried over from earlier days" in labday.sheet(d)
+
+
+def test_carry_over_done_on_a_later_day_or_today(tmp_path, monkeypatch):
+    days = {"2099-01-01": [{"id": "A", "fly": "lab_c_robust"}, {"id": "B", "fly": "lab_c_lqr"}],
+            "2099-01-02": [{"id": "C", "fly": "lab_c_mpc"}],
+            "2099-01-03": [{"id": "D", "fly": "lab_c_autotune"}]}
+    d = _days(tmp_path, monkeypatch, days, {"2099-01-02": {"flown": {"0101-A": {"ok": True}}, "skipped": ["0101-B"]},
+                                            "2099-01-03": {"flown": {"0102-C": {"ok": True, "t": "t"}}}})
+    assert [f["id"] for f in d["flights"]] == ["D", "0102-C"]           # today's own state: listed, not to do
+    assert [f["id"] for f in labday.todo(d, labday.load_state(labday.state_file("2099-01-03")))] == ["D"]
+    flown_bad = _days(tmp_path, monkeypatch, days, {"2099-01-02": {"flown": {"0101-A": {"ok": False}}}})
+    assert [f["id"] for f in flown_bad["flights"]][:2] == ["D", "0101-A"]
+
+
+def test_carry_off_and_bad_earlier_day(tmp_path, monkeypatch):
+    monkeypatch.setattr(labday, "LAB_DIR", tmp_path / "lab")
+    (tmp_path / "2099-01-01.yaml").write_text(json.dumps({"day": "2099-01-01", "flights": [
+        {"id": "A", "fly": "no_such_flight"}]}), encoding="utf-8")
+    (tmp_path / "2099-01-02.yaml").write_text(json.dumps({"day": "2099-01-02", "carry": False, "flights": [
+        {"id": "B", "fly": "lab_c_lqr"}]}), encoding="utf-8")
+    assert [f["id"] for f in labday.load_day(tmp_path / "2099-01-02.yaml")["flights"]] == ["B"]
+    flights, _, notes = labday.carry_over(tmp_path, "2099-01-02", [])
+    assert flights == [] and notes[0].startswith("2099-01-01: not carried (")
