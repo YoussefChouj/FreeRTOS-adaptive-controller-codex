@@ -3,19 +3,18 @@
 Read order: `AGENTS.md` -> this file -> `docs/agent/memory/rules.md` -> `.claude_state.md` (newest entry first).
 History: `docs/agent/ledger/` (grep, never read whole). Desktop session is CEO: inline, no subagents.
 
-## Now: 2026-10-18 lab prep (run sheet `docs/lab/run-sheet-2026-10-18.md`)
+## Now: 2026-10-19 lab = redo of all 10-18 flights (`.\labday 2026-10-19`, day file `docs/lab/days/2026-10-19.yaml`)
 
-- Claude manager DISABLED: the CEO builds inline and merges; Argon High (`.agent-ops/argon.ps1`) researches and runs the Jules review loops (max 3 rounds), 160K cap.
-- Learning session PAUSED at Q9 (Z forces -> block 1/2/3 -> isolating flight); Q1-Q8 scored in `docs/learning/gap-ledger.md`. Thesis: memory `thesis-core-claim`.
-- Lab target (user): 20-30 flights in 3-4 h that also answer thesis questions: gate-memory premise (A->B->A, MRAC 100 vs 0, n=3) and Z force identification.
-- Jules jobs launched 10-18 (briefs `.agent-ops/briefs/`): `j-lab-thesis` (lab_m_memory_u100/u0, lab_z_* .fly, memory_premise.py, run-sheet thesis section), `j-sysid-torque` (sysid u = c + d, log c/d/u), `j-z-feat` (Z block-1 features, `mrac_z_feat_mask` default 0).
-- PAUSED 10-18 (user left for the lab): all 3 sessions AWAITING_USER_FEEDBACK with questions. Answers written in `.agent-ops/briefs/<id>-reply1.md` delivery UNVERIFIED (`-Approve` 404'd: no plan pending; local `jules-<id>.json` shows no user message). At the lab: re-poll `-Session <sid>`; if still no user message, resend with `-Reply` only (no `-Approve`). Session ids in `.agent-ops/out/jules-<id>.session`. Argon review briefs ready: `.agent-ops/briefs/rv-<id>.md` (fill PRNUM).
-- Unflashed firmware: 86fe9470, 37ecf87e, d29ada99, cb7ca992 (stream ladder A). The drone still runs 0e6e01b6.
+- 10-18 post-lab fixes, all committed: relay bind retry 5e0e545c; labday starts 8081 before the camera + endlive 7ffb9ff0; stale-telemetry trip only after 0.3 s f51d3de3 (operator OK); bridge re-pushes slots after 3 s silence a0d15173; dry run once per unchanged flight + width-safe cooldown line 6cfd8a85; one camera loop + run-HHMMSS dirs + CR in tracker PIDs 056eb0c3; landing zoom off d2879e1d; 8081 log to `logs/service/<port>-<ts>.log` + QuickEdit off 9b7046d3; abort link snapshot a2efc3ad; 1 Hz `link` events d4c653c6.
+- Tracker bias (~30 cm fix offset on 10-18): the fire-station print on the mat sat in the keep disc and pulled the dot off the drone. Fixed 52784922 (floor-scan scenery mask, cached PNG in the floor dir). Floor = floor-1018; if the camera moved, re-scan (`camera_truth.sh floor floor-1019`, `--floor floor-1019`).
+- Takeoff link losses 220517/220919 (after P15): cause still UNKNOWN (WiFi vs host rx). The new service log + abort/link events will tell on the next one.
+- No firmware source change since the 10-18 flash: no reflash.
+- Claude manager DISABLED; Argon High researches + runs Jules loops, 160K cap. Thesis: memory `thesis-core-claim`.
 
 ## Next 3 actions
-1. **Unpause Jules** (above), then **review + merge** the three PRs (Argon review loop, then CEO QA: host_tests, scoped pytest, ruff, Keil build-only).
-2. **Reflash** disarmed: `python ground_station/flashtool/rebuild_and_flash.py --yes`, restart 8081, check `arm 0`, `exp_active`, then bench the stream ladder (run sheet Step 0).
-3. **Fly** in the run-sheet priority order: M1-M6 memory premise, Z flights, S1-S3, H0-H2, E1-E4, I1 at each pack end.
+1. Lab: `.\labday 2026-10-19` (it starts 8081, the camera and the cached dry run). Check the dot sits on the parked drone before mem1.
+2. After mem1 stop: check fixes vs optical flow (no steady offset) and the `link` events.
+3. Open: service bind takes ~41 s after start (look later); Jules sessions j-sysid-torque / j-z-feat state UNVERIFIED.
 
 ## Do not
 - Do not treat a missing `logs/video_truth/<folder>/cam.mkv` as lost: it is on Drive (`docs/agent/video-archive.md`).

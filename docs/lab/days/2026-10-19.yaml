@@ -1,0 +1,57 @@
+# Lab day 2026-10-19: fly it with `.\labday 2026-10-19` (add `--pack 2` once after a type-2 swap; ground_station/lab/labday.py).
+# `.\labday 2026-10-19 --list` shows what is flown; the same command again goes on from the first flight not flown.
+# Each flight is `.\fly <fly> --once <args>`; `stop: true` = analysis stop after it. Pass marks are PROPOSED.
+# Redo of all 10-18 flights: there the camera fixes carried a steady ~30 cm offset (the fire-station print on the
+# mat pulled the tracked dot off the drone; fixed 52784922), so the 10-18 memory runs are not used. No firmware
+# source change since the 10-18 flash, so no reflash. The 10-18 flights are planned again here, so they are not
+# carried over a second time.
+day: 2026-10-19
+title: redo of 10-18 - gate-memory premise (MRAC u100 vs u0, n=3 per arm, interleaved), then Z ground effect and v_z steps
+camera:                       # camera_truth.sh fusion <id-fly> <mode> <args>, CT_FLOOR=logs/video_truth/<floor>
+  floor: floor-1018           # camera moved since 10-18? scan first: bash ground_station/lab/camera_truth.sh floor floor-1019, then --floor floor-1019
+  mode: 3
+  args: [--yaw-deg, "94"]
+before:
+  - "8081 running, `arm 0`, landing pad clear, camera in the recording position"
+  - "Tracker window: the dot sits on the drone body while it is parked (if not: land, `r`, tell me)"
+flights:
+  - id: mem1
+    fly: lab_m_memory_u100
+    why: "memory u100 #1 (A hold, B figure-8, A hold); first flight with the floor-scan scenery fix"
+    pass: "figure-8 completes; the dot stays on the drone in the tracker window"
+    stop: true
+  - id: mem2
+    fly: lab_m_memory_u0
+    why: memory u0 #1 (MRAC injection 0, the control arm)
+    pass: figure-8 completes
+  - id: mem3
+    fly: lab_m_memory_u100
+    why: memory u100 #2
+    pass: figure-8 completes
+  - id: mem4
+    fly: lab_m_memory_u0
+    why: memory u0 #2
+    pass: figure-8 completes
+  - id: mem5
+    fly: lab_m_memory_u100
+    why: memory u100 #3
+    pass: figure-8 completes
+  - id: mem6
+    fly: lab_m_memory_u0
+    why: memory u0 #3 (n=3 per arm reached)
+    pass: figure-8 completes
+    stop: true
+  - id: z1
+    fly: lab_z_ground_effect
+    why: Z ground effect (thrust vs height near the pad)
+    pass: holds at each height; lands on the pad
+  - id: z2
+    fly: lab_z_vz_steps
+    why: Z vertical drag (v_z steps)
+    pass: steps complete; lands on the pad
+    stop: true
+branches:
+  - {when: '"NO FIX SENT" or the dot off the drone', do: "Land, check the tracker, re-fly (r at the auto-stop prompt)"}
+  - {when: Stale-telemetry abort at take-off, do: "Land; tell me (the abort event and logs/service/8081-*.log now say link vs host)"}
+  - {when: Tilt trip or fence stop, do: "Land; tell me before the next flight"}
+  - {when: "Pack at the packs.yaml gate (gate_soc_pct, post-flight, ground only)", do: "Swap before the next flight; give the new type when fly asks"}
