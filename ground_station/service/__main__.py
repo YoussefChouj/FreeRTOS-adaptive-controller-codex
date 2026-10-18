@@ -293,11 +293,14 @@ def main() -> None:
     # tuples to ingest_decoded. The typed signature keeps the payload dict
     # free of __stream_metadata__ injection — the service's adapter consumes
     # the StreamMetadata directly via the metadata= keyword.
-    # The bridge's rx loop invokes ``_on_telemetry(tag, payload)``; metadata
-    # is None so the adapter hoists defaults / legacy slotN.* keys.
-    bridge._on_telemetry = (
-        lambda tag, payload: service.ingest_decoded(tag, payload)
-    )
+    # The bridge's ingest thread invokes ``_on_telemetry(tag, payload, t_ns)``
+    # with the rx thread's arrival time; metadata is None so the adapter
+    # hoists defaults / legacy slotN.* keys.
+    def _ingest(tag, payload, t_ns):
+        service.ingest_decoded(tag, payload, time_ns=t_ns)
+
+    _ingest.takes_time_ns = True
+    bridge._on_telemetry = _ingest
 
     # ---- Start session + bridge ----
     service.start(auto_subscribe=not args.no_auto_subscribe)

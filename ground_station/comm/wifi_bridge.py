@@ -95,6 +95,9 @@ from ground_station.platform.transactions import build_command as build_transact
 from ground_station.platform.transactions import Result as TransactionResult
 from ground_station.platform.transactions import parse_result_parts
 
+RX_SOCKET_BUFFER_BYTES = 8 << 20  # 8 MB, about 2 min of the heaviest plan
+INGEST_QUEUE_MAX = 200_000  # decoded frames held for the ingest thread before counting drops
+
 
 def _parse_simple_yaml(path: Path) -> Dict[str, Any]:
     """Load a config.yaml without a full YAML parser dependency."""
@@ -260,6 +263,8 @@ class WifiBridge:
         self._on_telemetry = on_telemetry  # optional (tag, payload) callback for service integration
 
         self._stop = threading.Event()
+        self._ingest_q: queue.Queue = queue.Queue(maxsize=INGEST_QUEUE_MAX)
+        self.ingest_dropped = 0  # frames dropped because the ingest thread fell INGEST_QUEUE_MAX behind
         # Subscribe watchdog. The FC keeps its slots in RAM, so a power cycle
         # drops them: it comes back sending only its fallback frames, and every
         # subscribed key froze at its last value while the link looked alive.
@@ -408,6 +413,12 @@ class WifiBridge:
         # which received telemetry but NOT command result frames (those arrive from
         # port 14550 where _wifi_send was bound). Merging into one socket fixes
         # the routing: all inbound data goes to the same socket that sent the nudge.
+        # A large receive buffer rides out ingest pauses (GC, disk) without the OS dropping datagrams; the
+        # Windows default is small. Best effort: the OS may cap it.
+        try:
+            self._wifi.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, RX_SOCKET_BUFFER_BYTES)
+        except OSError:
+            pass
         self._wifi.bind(("0.0.0.0", 14550))
         self._wifi.settimeout(0.1)
 
@@ -433,6 +444,7 @@ class WifiBridge:
         self._udp_send = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._transaction_id = 0
         self._transaction_results = queue.Queue()
+        self._ingest_q = queue.Queue(maxsize=INGEST_QUEUE_MAX)
 
         # Telemetry-mode switch BEFORE threads start so the FC's
         # g_telemetry_mode is settled on the first Send_Task cycle. We use
@@ -443,6 +455,8 @@ class WifiBridge:
             self.set_telemetry_mode_now(initial_telemetry_mode)
 
         rx = threading.Thread(target=self._rx_loop, name="wifi_bridge_rx", daemon=True)
+        ingest = threading.Thread(target=self._ingest_loop, name="wifi_bridge_ingest", daemon=True)
+        ingest.start()
         cmd = threading.Thread(target=self._cmd_loop, name="wifi_bridge_cmd", daemon=True)
         telem = threading.Thread(target=self._telem_loop, name="wifi_bridge_telem", daemon=True)
 
@@ -1522,15 +1536,35 @@ class WifiBridge:
                     break  # partial frame: wait for more data
                 tag, payload = result
                 if tag == "transaction":
+                    # Command replies go out at once, never behind the stream backlog.
                     self._transaction_results.put(payload)
                 else:
-                    self._publish_telem(tag, payload)
-                    # Feed decoded telemetry to service.ingest_decoded() if callback is registered.
-                    if self._on_telemetry is not None:
-                        try:
-                            self._on_telemetry(tag, payload)
-                        except Exception:
-                            pass
+                    # Publish/ingest/record run on the ingest thread (10-18 P12: inline they backed up the
+                    # socket at 64600 B/s and replies waited 0.3-2 s behind the stream). Arrival time is
+                    # stamped here so recorded received_ns stays the true arrival.
+                    try:
+                        self._ingest_q.put_nowait((tag, payload, time.time_ns()))
+                    except queue.Full:
+                        self.ingest_dropped += 1
+
+    def _ingest_loop(self) -> None:
+        """Publish decoded telemetry and feed the service callback, off the rx thread."""
+        while not self._stop.is_set():
+            try:
+                tag, payload, t_ns = self._ingest_q.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            self._publish_telem(tag, payload)
+            # Feed decoded telemetry to service.ingest_decoded() if callback is registered.
+            cb = self._on_telemetry
+            if cb is not None:
+                try:
+                    if getattr(cb, "takes_time_ns", False):
+                        cb(tag, payload, t_ns)
+                    else:
+                        cb(tag, payload)
+                except Exception:
+                    pass
 
     def _parse_one(self, buf: bytearray) -> tuple | None:
         """Parse one complete frame from buf.
