@@ -127,3 +127,17 @@ Firmware facts: dead-zone is a hard step (`API/mrac.c:1282`, on by default `API/
   the state, not a time-frequency band, so RFF is a block-1 basis, never a gate. A small NN in block 1 keeps the proof
   only if its hidden layers are frozen offline and the last layer adapts (Neural-Fly structure). Break point: mapping
   an experiment's input point to the transfer function it reveals.
+- Q7 (contribution vs Neural-Fly, one sentence + experiment): 6/10. Got: the right experiment shape (Neural-Fly as
+  block 1 alone vs with blocks 2-3, side by side = ablation on a fixed basis); contribution = time-scale separation.
+  Missed: the sentence stayed vague ("holistic", "greater than the sum") with no condition where it must win, no
+  metric, and "greater than the sum" needs an interaction test (2x2: gain(1+2+3) > gain(1+2) + gain(1+3)?). Model
+  answer: "A known time-scale gate plus known-information feedforward adds tracking gain on top of ANY block-1 basis,
+  Neural-Fly's included, when disturbances span several bands" - arms 1 / 1+2 / 1+3 / 1+2+3 on one basis, multi-band
+  disturbance (slow battery sag + fast gusts), primary camera rms_cm, n>=3 interleaved. Sharper differentiator found:
+  a known gate freezes inactive experts (update = Gamma*g*Phi*e -> 0), so they REMEMBER a condition; Neural-Fly's
+  single a(w) re-adapts from scratch -> test A->B->A re-convergence time. Taught: Neural-Fly = frozen DNN basis
+  phi(x) (DAIML: adversarial wind-invariance + spectral norm), online linear a by composite adaptation with a
+  covariance gain; gate scales effective learning rate by g^2 (feature-specific speed, the user's idea); matrix-gain
+  adaptation (RLS/composite) is the prior art for per-direction speed; gating stops drift of inactive features but
+  not of active-but-collinear ones (still needs projection/sigma-mod). Break point: turning "holistic" into a
+  condition + metric where the claim must win.
