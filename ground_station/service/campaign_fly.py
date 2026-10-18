@@ -24,6 +24,7 @@ import json
 import math
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -62,11 +63,48 @@ def call(base, route, body=None, timeout=10):
         return e.code, json.loads(e.read() or b"{}")
 
 
+def _service_stale(base):
+    """(pid, newest .py) when 8081 runs code older than the newest service-side .py, else None (10-18: a limit change
+    sat unused until a hand restart). The X-GS-Instance header is "<pid>-<start ms>"."""
+    with urllib.request.urlopen(base + "/api/campaign/state", timeout=2) as r:
+        pid, _, ms = (r.headers.get("X-GS-Instance") or "").partition("-")
+    if not (pid.isdigit() and ms.isdigit()):
+        return None
+    # the service never imports this CLI or ground_station/lab: an edit there must not restart it
+    newest = max((q for q in (ROOT / "ground_station").rglob("*.py") if "tests" not in q.parts and "lab" not in q.parts
+                  and q.name != "campaign_fly.py"), key=lambda q: q.stat().st_mtime)
+    return (int(pid), newest) if newest.stat().st_mtime > int(ms) / 1000 else None
+
+
+def _safe_to_restart(base):
+    """Runner idle, and the drone disarmed or out of contact: a restart cannot cut a flight."""
+    _, pf = call(base, "/api/campaign/preflight", timeout=5)
+    rows = {c.get("name"): c for c in pf.get("checks") or []}
+    runner = rows.get("runner") or {}
+    idle = runner.get("pass") is True and not str(runner.get("value", "")).startswith("paused")
+    return idle and ((rows.get("arm_state") or {}).get("pass") is True or (rows.get("link") or {}).get("pass") is False)
+
+
 def ensure_service(base, port, wait_s=60, lab=False):
     try:
-        call(base, "/api/campaign/state", timeout=2)
-        print(f"service already up on {port}")
-        return
+        stale = _service_stale(base)
+        if stale and _safe_to_restart(base):
+            print(f"service on {port} runs code older than {stale[1].relative_to(ROOT)}: restarting it (disarmed, idle)")
+            events.log("service_restart_stale", port=port, pid=stale[0], newest=str(stale[1].relative_to(ROOT)))
+            os.kill(stale[0], signal.SIGTERM)
+            for _ in range(20):
+                time.sleep(0.5)
+                try:
+                    call(base, "/api/campaign/state", timeout=1)
+                except OSError:
+                    break
+        elif stale:
+            print(f"service on {port} runs old code ({stale[1].relative_to(ROOT)} is newer) but a flight may be on: "
+                  "kept it", flush=True)
+            return
+        else:
+            print(f"service already up on {port}")
+            return
     except OSError:
         pass
     flags = subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0

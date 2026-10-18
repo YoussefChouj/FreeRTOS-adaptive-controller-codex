@@ -867,3 +867,75 @@ def test_write_gains_in_flight(capsys, monkeypatch):
 
 
 
+
+
+def _fake_service(monkeypatch, stale, safe):
+    # ensure_service with a fake 8081: down after the kill, up once a new one is started
+    log = {"kill": [], "popen": []}
+    monkeypatch.setattr(campaign_fly, "_service_stale", lambda base: stale)
+    monkeypatch.setattr(campaign_fly, "_safe_to_restart", lambda base: safe)
+    monkeypatch.setattr(campaign_fly.os, "kill", lambda pid, sig: log["kill"].append(pid))
+    monkeypatch.setattr(campaign_fly.subprocess, "Popen", lambda args, **k: log["popen"].append(args))
+    monkeypatch.setattr(campaign_fly.time, "sleep", lambda s: None)
+    monkeypatch.setattr(campaign_fly.events, "log", lambda *a, **k: None)
+
+    def call(base, path, timeout=None):
+        if log["kill"] and not log["popen"]:
+            raise OSError("down")
+        return 200, {}
+    monkeypatch.setattr(campaign_fly, "call", call)
+    return log
+
+
+def test_ensure_service_restarts_stale_code_when_safe(monkeypatch, capsys):
+    # 10-18: the takeoff-limit change sat unused in a running 8081 until a hand restart
+    newest = campaign_fly.ROOT / "ground_station" / "service" / "abort_monitor.py"
+    log = _fake_service(monkeypatch, (4242, newest), True)
+    campaign_fly.ensure_service("http://x", 8081, lab=True)
+    assert log["kill"] == [4242]
+    assert log["popen"] and log["popen"][0][-3:] == ["--port", "8081", "--lab"]
+    assert "restarting it" in capsys.readouterr().out
+
+
+def test_ensure_service_never_restarts_while_flying(monkeypatch, capsys):
+    newest = campaign_fly.ROOT / "ground_station" / "service" / "abort_monitor.py"
+    log = _fake_service(monkeypatch, (4242, newest), False)
+    campaign_fly.ensure_service("http://x", 8081)
+    assert log == {"kill": [], "popen": []}
+    assert "kept it" in capsys.readouterr().out
+    log = _fake_service(monkeypatch, None, True)
+    campaign_fly.ensure_service("http://x", 8081)
+    assert log == {"kill": [], "popen": []}
+
+
+@pytest.mark.parametrize("runner,arm,link,ok", [
+    ({"pass": True, "value": "idle"}, True, True, True),
+    ({"pass": True, "value": "done: 3 flights"}, True, True, True),
+    ({"pass": False, "value": "running: f/01"}, True, True, False),
+    ({"pass": True, "value": "paused: hovering"}, True, True, False),
+    ({"pass": True, "value": "idle"}, False, True, False),   # armed, or arm state unknown with the link up
+    ({"pass": True, "value": "idle"}, False, False, True),   # no link: nothing to cut
+])
+def test_safe_to_restart(monkeypatch, runner, arm, link, ok):
+    pf = {"checks": [dict(runner, name="runner"), {"name": "arm_state", "pass": arm}, {"name": "link", "pass": link}]}
+    monkeypatch.setattr(campaign_fly, "call", lambda base, path, timeout=None: (200, pf))
+    assert campaign_fly._safe_to_restart("http://x") is ok
+
+
+def test_service_stale_reads_the_instance_header(monkeypatch):
+    class Resp:
+        def __init__(self, h):
+            self.headers = h
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+    for header, stale in [("77-0", True), (f"77-{10**15}", False), (None, False)]:
+        monkeypatch.setattr(campaign_fly.urllib.request, "urlopen",
+                            lambda url, timeout=None, h=header: Resp({"X-GS-Instance": h} if h else {}))
+        got = campaign_fly._service_stale("http://x")
+        assert (got is not None) is stale
+        if stale:
+            assert got[0] == 77 and "tests" not in got[1].parts
