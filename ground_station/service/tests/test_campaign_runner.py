@@ -114,3 +114,24 @@ def test_takeoff_resets_origin_on_the_pad_before_idle():
     outcome = CampaignRunner(parse_scenario(_make_scenario()), create_deps(drone, client, FakeClock())).run()
     assert not outcome.aborted and drone.origin_resets == 1
     assert sent.index("reset_origin") < sent.index("idle") < sent.index("takeoff")
+
+
+def test_var_write_retry_resends_a_lost_reply_only():
+    """mem1 2026-10-18: one lost VAR_WRITE reply refused the takeoff; a timeout is retried, a reject is not."""
+    from ground_station.service.campaign_runner import _var_write_retry
+
+    class C:
+        def __init__(self, results, err):
+            self.results, self.err, self.calls, self.last_error = list(results), err, 0, ""
+        def var_write(self, name, value):
+            self.calls += 1
+            ok = self.results.pop(0)
+            self.last_error = "" if ok else self.err
+            return ok
+
+    lost = C([False, True], "cmd 0x2D idx 26: no result in 1.0 s")
+    assert _var_write_retry(lost, "traj_p.yaw_follow", 0) and lost.calls == 2
+    rej = C([False, True], "cmd 0x2D idx 26 rejected: RANGE")
+    assert not _var_write_retry(rej, "traj_p.yaw_follow", 9) and rej.calls == 1
+    dead = C([False] * 5, "cmd 0x2D idx 26: no result in 1.0 s")
+    assert not _var_write_retry(dead, "traj_p.yaw_follow", 0) and dead.calls == 3

@@ -133,6 +133,16 @@ def _send_retry(client, cmd, idx, value, tries=3):
             return False
     return False
 
+def _var_write_retry(client, name, value, tries=3):
+    """VAR_WRITE sets an absolute value, so a lost reply is sent again like _send_retry
+    (mem1 2026-10-18: one lost reply to traj_p.yaw_follow refused the takeoff)."""
+    for _ in range(tries):
+        if client.var_write(name, value):
+            return True
+        if "no result in" not in str(getattr(client, "last_error", "") or ""):
+            return False
+    return False
+
 def _gate_problem(status: dict) -> str:
     """Why the firmware TAKEOFF gate (API/wfb_glue.c:109) would refuse, from the streamed inputs; "" if none seen."""
     if "motor_idle" in status and status["motor_idle"] != 1:
@@ -306,7 +316,7 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
     def preset_write(st: Step) -> str:
         """VAR_WRITE every traj_p field and traj_id; "" when all APPLIED, else the first refused name."""
         writes = list(st.args["params"].items()) + [("traj_id", st.args["id"])]
-        return next((name for name, v in writes if not deps.client.var_write(name, v)), "")
+        return next((name for name, v in writes if not _var_write_retry(deps.client, name, v)), "")
 
     def preset_status() -> int:
         return int(deps.status().get("traj_status", 0))
@@ -362,7 +372,7 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
             exp_err = ""
             def _send_set(var_name: str, var_val: Any) -> bool:
                 nonlocal exp_err
-                if not deps.client.var_write(var_name, var_val):
+                if not _var_write_retry(deps.client, var_name, var_val):
                     return False
                 if var_name == "exp_id":
                     from ground_station.platform import exp_rows
@@ -527,7 +537,7 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
                 extra = {"preset": name, "traj_status": code}
         elif st.kind == "set":
             writes = st.args["writes"]
-            bad = next((name for name, v in writes if not deps.client.var_write(name, v)), "")
+            bad = next((name for name, v in writes if not _var_write_retry(deps.client, name, v)), "")
             if bad:
                 decision = AbortDecision(level=1, reason=f"set {bad} not applied")
                 ok = False
