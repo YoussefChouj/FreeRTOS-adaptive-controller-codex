@@ -114,3 +114,16 @@ Firmware facts: dead-zone is a hard step (`API/mrac.c:1282`, on by default `API/
   + switching is not stable by itself (needs one common Lyapunov function or a dwell time); a known softmax gate gives
   the common V for free, and its partition of unity keeps the ungated weights reachable. Break point: the decision
   rule as a number fixed before the data.
+- Q6 (setpoint vs torque injection, what each measures): 4/10. Got: block 1 belongs at the torque command "where the
+  dynamics live" (right point, right reason); honest "I don't know". Missed: what each point measures; block 2 is not
+  an outer-loop test. Model answer: rate-setpoint injection = a known reference -> tracking y/r (complementary
+  sensitivity T), tests block 3. Torque (plant-input) injection d with u = c + d -> sensitivity S = u/d, loop gain
+  L = -c/u (broken-loop method), gain/phase margins, and the plant P = (y/d)/(u/d) (indirect closed-loop ID; d is
+  uncorrelated with noise, so it is also the instrument the SINDy fit needs). Blocks 1 and 2 share the torque point;
+  block 2 is tested by sweeping the injection FREQUENCY and checking the gate weights follow the band. Ref: Forssell &
+  Ljung 1999, Closed-loop identification revisited (Automatica). Taught: online regressor count is bounded by
+  excitation (PE rank), collinearity and adaptation speed (lambda_min of the regressor Gram matrix), not CPU; the
+  library can be hundreds offline, the active set small online. "Fourier" in random Fourier features = a kernel over
+  the state, not a time-frequency band, so RFF is a block-1 basis, never a gate. A small NN in block 1 keeps the proof
+  only if its hidden layers are frozen offline and the last layer adapts (Neural-Fly structure). Break point: mapping
+  an experiment's input point to the transfer function it reveals.
