@@ -21,9 +21,11 @@ Between flights a cooldown counts down from the landing (an analysis stop counts
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -124,6 +126,29 @@ def day_path(date):
 
 def fly_cmd(f, pack=None, dry=False):
     return FLY + [f["fly"], "--dry-run" if dry else "--once"] + (["--pack", pack] if pack else []) + f["args"]
+
+
+def code_stamp():
+    """The host code a dry run exercised: HEAD plus a hash of uncommitted ground_station changes (None = unknown)."""
+    try:
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True)
+        diff = subprocess.run(["git", "diff", "HEAD", "--", "ground_station"], cwd=ROOT, capture_output=True,
+                              check=True)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return head.stdout.strip() + ":" + hashlib.sha256(diff.stdout).hexdigest()[:16]
+
+
+def dry_key(f, pack, stamp):
+    """What a passed dry run proves: the exact command, the .fly text and the host code (None = never cached)."""
+    if stamp is None:
+        return None
+    try:
+        text = (CAMPAIGNS / f"{f['fly']}.fly").read_bytes()
+    except OSError:
+        return None
+    h = hashlib.sha256(json.dumps(fly_cmd(f, pack, dry=True)).encode() + b"\0" + text + b"\0" + stamp.encode())
+    return h.hexdigest()
 
 
 def shown(f):
@@ -231,14 +256,16 @@ def flush_keys():
 def cooldown(seconds, key=key_pressed, clock=time.monotonic, sleep=time.sleep, flush=flush_keys):
     """Count `seconds` down on one line; Enter ends it early. Returns the seconds it waited."""
     flush()
+    width = max(20, shutil.get_terminal_size((80, 20)).columns - 1)  # a wrapped line would print a new row per tick
     t0 = clock()
     while (left := seconds - (clock() - t0)) > 0:
-        print(f"\r  cooldown {int(left) // 60}:{int(left) % 60:02d} before the next flight (swap the pack now if due; "
-              "Enter skips) ", end="", flush=True)
+        text = (f"  cooldown {int(left) // 60}:{int(left) % 60:02d} before the next flight "
+                "(swap the pack now if due; Enter skips)")
+        print("\r" + text[:width].ljust(width), end="", flush=True)
         if key():
             break
         sleep(0.2)
-    print("\r  cooldown over." + " " * 72, flush=True)
+    print("\r" + "  cooldown over.".ljust(width), flush=True)
     return clock() - t0
 
 
@@ -293,17 +320,29 @@ class Day:
         print("\n".join(lines), flush=True)
 
     def dry_run(self, flights):
-        """Ground dry run of every flight left (no 8081): the names of those that fail."""
-        bad = []
+        """Ground dry run of every flight left (no 8081): the names of those that fail. A flight whose command,
+        .fly file and host code are unchanged since its last pass is not run again."""
+        bad, passed, same = [], self.state.setdefault("dry_ok", {}), 0
+        stamp = code_stamp()
         for f in flights:
+            key = dry_key(f, self.pack, stamp)
+            if key is not None and passed.get(f["id"]) == key:
+                same += 1
+                continue
             r = self.run(fly_cmd(f, self.pack, dry=True), cwd=ROOT, capture_output=True, text=True,
                          stdin=subprocess.DEVNULL)
             ok = r.returncode == 0
             self.say(f"  dry run {f['id']:<4} {f['fly']:<26} {'OK' if ok else 'FAILED'}")
+            if ok and key is not None:
+                passed[f["id"]] = key
             if not ok:
+                passed.pop(f["id"], None)
                 bad.append(f["id"])
                 self.say(*["      " + s for s in ((r.stdout or "") + (r.stderr or "")).strip().splitlines()[-8:]])
-        events.log("labday_dry_run", day=self.d.get("day"), n=len(flights), failed=bad)
+        if same:
+            self.say(f"  dry run: {same} flight(s) unchanged since their last pass, not re-run")
+        self.save()
+        events.log("labday_dry_run", day=self.d.get("day"), n=len(flights), cached=same, failed=bad)
         return bad
 
     def camera(self, *args):

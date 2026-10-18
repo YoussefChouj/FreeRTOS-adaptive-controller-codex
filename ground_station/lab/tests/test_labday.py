@@ -106,6 +106,7 @@ def _player(tmp_path, monkeypatch, fake, flights, status="complete", camera=None
     monkeypatch.setattr(labday, "debrief_event", lambda pid, since: status and {"status": status, "phase": "land",
                                                                               "folder": "f"})
     monkeypatch.setattr(labday, "git_bash", lambda: "bash")
+    monkeypatch.setattr(labday, "code_stamp", lambda: "test")
     return labday.Day(d, tmp_path / "state.json", pack=pack, ask=fake.ask, run=fake.run, popen=fake.popen,
                       service=fake.service)
 
@@ -158,6 +159,49 @@ def test_cooldown_counts_down_and_enter_ends_it(capsys):
     now[0] = 0.0
     assert labday.cooldown(3, key=lambda: False, clock=lambda: now[0],
                            sleep=lambda s: now.__setitem__(0, now[0] + 1), flush=lambda: None) == 3
+
+
+def test_cooldown_line_fits_a_narrow_terminal(capsys, monkeypatch):
+    monkeypatch.setattr(labday.shutil, "get_terminal_size", lambda fallback: SimpleNamespace(columns=40, lines=20))
+    now = [0.0]
+    labday.cooldown(3, key=lambda: False, clock=lambda: now[0], sleep=lambda s: now.__setitem__(0, now[0] + 1),
+                    flush=lambda: None)
+    rows = capsys.readouterr().out.split("\r")[1:]
+    assert len(rows) == 4 and all(len(r.rstrip("\n")) == 39 for r in rows)   # 3 ticks + "over", never wraps
+    assert rows[0].startswith("  cooldown 0:03") and rows[-1].startswith("  cooldown over.")
+
+
+def test_dry_run_reruns_only_what_changed(tmp_path, monkeypatch):
+    monkeypatch.setattr(labday, "CAMPAIGNS", tmp_path)
+    (tmp_path / "a.fly").write_text("x", encoding="utf-8")
+    (tmp_path / "b.fly").write_text("y", encoding="utf-8")
+    fake = _Fake([])
+    flights = [{"id": "A", "fly": "a"}, {"id": "B", "fly": "b"}]
+    p = _player(tmp_path, monkeypatch, fake, flights)
+    stamp = ["c1"]
+    monkeypatch.setattr(labday, "code_stamp", lambda: stamp[0])
+    left = labday.todo(p.d, p.state)
+
+    def dry():
+        return sum("--dry-run" in c for c in fake.cmds)
+
+    assert p.dry_run(left) == [] and dry() == 2
+    assert p.dry_run(left) == [] and dry() == 2                       # unchanged: nothing re-run
+    again = _player(tmp_path, monkeypatch, fake, flights)            # a new labday start reads the saved passes
+    monkeypatch.setattr(labday, "code_stamp", lambda: stamp[0])
+    assert again.dry_run(labday.todo(again.d, again.state)) == [] and dry() == 2
+    (tmp_path / "b.fly").write_text("y2", encoding="utf-8")
+    assert p.dry_run(left) == [] and dry() == 3                       # only B's file changed
+    stamp[0] = "c2"
+    assert p.dry_run(left) == [] and dry() == 5                       # new host code: every flight again
+    fake.dry_rc, stamp[0] = 2, "c3"
+    assert p.dry_run(left) == ["A", "B"] and p.state["dry_ok"] == {}
+    fake.dry_rc = 0
+    assert p.dry_run(left) == [] and dry() == 9                       # a failure is never remembered as a pass
+    stamp[0] = None
+    p.dry_run(left)
+    p.dry_run(left)
+    assert dry() == 13                                                # host code unknown: never skipped
 
 
 def test_auto_stop_on_bad_end_then_refly(tmp_path, monkeypatch):
