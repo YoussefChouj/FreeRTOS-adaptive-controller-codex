@@ -295,6 +295,8 @@ TIER0_ACCESS = ("partial", "full")
 WAIT_MS_MAX = 60_000
 WAIT_FOR_TIMEOUT_MAX = 120
 LONG_POLL_TIMEOUT_MAX = 60
+_COPILOT_OFF_TEXT = ("Co-pilot is off: no API key found (COPILOT_API_KEY or the WSL "
+                     "agent-keys.env). See docs/RUNBOOK.md, section Co-pilot.")
 SSE_HEARTBEAT_S = 15.0
 SSE_SUBSCRIBER_LIMIT = 32
 SSE_SUBSCRIBER_QSIZE = 200
@@ -656,6 +658,11 @@ class AgentManager:
         self._copilot_worker: threading.Thread | None = None
         self._copilot_stop = threading.Event()
         self._copilot_off_notified = False
+        # While ApiServer builds the copilot after the bind (its key lookup can
+        # boot WSL), notes queue for it instead of getting "Co-pilot is off".
+        self._copilot_pending = False
+        self._copilot_pending_note = False
+        self._copilot_lock = threading.Lock()
 
     # -- lifecycle ----------------------------------------------------------
     def start(self) -> None:
@@ -665,14 +672,7 @@ class AgentManager:
             self._running = True
         self._control_changed_init()
         # Start the copilot worker thread if a copilot is configured.
-        if self.copilot is not None:
-            self._copilot_stop.clear()
-            self._copilot_worker = threading.Thread(
-                target=self._copilot_worker_loop,
-                name="copilot_worker",
-                daemon=True,
-            )
-            self._copilot_worker.start()
+        self._start_copilot_worker()
         if self.shell_watch_enabled and self.shell_root:
             threading.Thread(target=self._shell_watch_loop, name="agent_shell_watch",
                              daemon=True).start()
@@ -1408,6 +1408,48 @@ class AgentManager:
         except queue.Full:
             pass  # queue full (max 3); drop the oldest request silently.
 
+    def _start_copilot_worker(self) -> None:
+        """One worker, once a copilot exists and the manager runs (either order)."""
+        with self._copilot_lock:
+            if self.copilot is None or not self._running:
+                return
+            if self._copilot_worker is not None and self._copilot_worker.is_alive():
+                return
+            self._copilot_stop.clear()
+            self._copilot_worker = threading.Thread(
+                target=self._copilot_worker_loop,
+                name="copilot_worker",
+                daemon=True,
+            )
+            self._copilot_worker.start()
+
+    def expect_copilot(self) -> None:
+        """A copilot is being built in the background: queue notes until it comes."""
+        with self._copilot_lock:
+            if self.copilot is None:
+                self._copilot_pending = True
+
+    def attach_copilot(self, copilot: Any) -> None:
+        """Late copilot from expect_copilot(); None = off (say so if a note waited)."""
+        with self._copilot_lock:
+            self.copilot = copilot
+            self._copilot_pending = False
+            say_off = (copilot is None and self._copilot_pending_note
+                       and not self._copilot_off_notified)
+            self._copilot_pending_note = False
+            if say_off:
+                self._copilot_off_notified = True
+        if copilot is not None:
+            self._start_copilot_worker()
+            return
+        while True:  # notes queued for a copilot that is not coming
+            try:
+                self._copilot_queue.get_nowait()
+            except queue.Empty:
+                break
+        if say_off:
+            self.add_agent_message(_COPILOT_OFF_TEXT, "agent:copilot")
+
     # -- ui step execution ---------------------------------------------------
     def _exec_ui(self, plan: Plan, step: PlanStep) -> Any:
         # Push the ui_action and wait for the browser ack (5 s).
@@ -1609,15 +1651,19 @@ class AgentManager:
         # Never answer our own copilot output to avoid echo loops.
         if source in ("agent:copilot", "agent:copilot:reply"):
             return entry
-        if self.copilot is not None:
+        with self._copilot_lock:
+            feed = self.copilot is not None or self._copilot_pending
+            if self._copilot_pending and kind in ("note", "goal"):
+                self._copilot_pending_note = True
+            say_off = (not feed and kind in ("note", "goal")
+                       and not self._copilot_off_notified)
+            if say_off:
+                self._copilot_off_notified = True
+        if feed:
             self._feed_copilot(str(text))
-        elif kind in ("note", "goal") and not self._copilot_off_notified:
+        elif say_off:
             # Say once why nobody answers, instead of leaving the chat silent.
-            self._copilot_off_notified = True
-            self.add_agent_message(
-                "Co-pilot is off: no API key found (COPILOT_API_KEY or the WSL "
-                "agent-keys.env). See docs/RUNBOOK.md, section Co-pilot.",
-                "agent:copilot")
+            self.add_agent_message(_COPILOT_OFF_TEXT, "agent:copilot")
         return entry
 
     def notes_since(self, seq: int) -> list[dict[str, Any]]:
