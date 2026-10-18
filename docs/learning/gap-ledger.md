@@ -155,3 +155,16 @@ Firmware facts: dead-zone is a hard step (`API/mrac.c:1282`, on by default `API/
   delay), only online use needs causal filtering; redundant active features = flat valley (w1-w2 unobserved),
   tug-of-war drift, fixed by projection / sigma-mod / pruning / excitation. Break point: control arm + outcome metric
   vs within-arm mechanism checks.
+- Q9 (Z-channel forces -> scale -> block -> isolating flight): 3/10. Got: thrust is the control input; a correct
+  mechanism for "climbs faster than it drops": fixed-pitch props cannot push down, so descent acceleration is capped
+  at 1 g (less with the motor idle floor) while climb gets (T_max/mg - 1) g; named gusts and drag. Missed: no scale,
+  no block, no isolating flight; missed ground effect (space scale; Cheeseman-Bennett T_IGE/T_OGE = 1/(1-(R/4z)^2):
+  +33% at z = R/2, +7% at z = R, +2% at z = 2R, so ~1/h^2 feature), tilt loss (vertical thrust = T cos(tilt), a known
+  function of measured attitude -> known compensation / block 3, not adaptation), mass/payload (block-1 bias), inflow
+  (thrust per command drops while climbing; v_z|v_z| feature). Taught: the asymmetry is actuator SATURATION, not a
+  force to adapt; adapting through it winds Theta up (firmware: saturation-aware leakage mu_sat*|u_def|,
+  API/mrac.c:1068, flag MRAC_ENABLE_SATAWARE; literature: pseudo-control hedging, Johnson & Calise). Ground effect is
+  the natural block-2 demo on Z: gate g(h) is a known function of measured height, so one Lyapunov function holds.
+  Isolation = one variable per flight: the ground-effect ladder holds a fresh pack (sag out), no XY motion (tilt out),
+  v_z = 0 in each hold (drag out), same floor; measure hover thrust command vs h. Break point: forces as a list of
+  words vs force -> scale -> block -> one-variable flight.
