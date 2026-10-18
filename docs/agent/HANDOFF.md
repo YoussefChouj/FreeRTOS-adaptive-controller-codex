@@ -3,19 +3,18 @@
 Read order: `AGENTS.md` -> this file -> `docs/agent/memory/rules.md` -> `.claude_state.md` (newest entry first).
 History: `docs/agent/ledger/` (grep, never read whole). Desktop session is CEO: inline, no subagents.
 
-## Now: 2026-10-17 lab day (`88e71602` + run sheet)
+## Now: 2026-10-18 lab prep (run sheet `docs/lab/run-sheet-2026-10-18.md`)
 
-- Claude manager DISABLED (user, 10-17): the CEO builds inline; Gemini 4 Argon High (`.agent-ops/argon.ps1`) does research and second opinions only, 160K cap.
-- WP-46 merged (`d29ada99`): experiment rows `exp_id`/`exp_active` (8 rows, `--list-exp`), xy no-fight reference model, `lab_e_exp_*` 3-layer matrix (4 flights).
-- `lab_h_speed_ladder_l0/l1/l2`: Gerono a60, 67/100/134 cm/s under trajv 80/110/150, heading held (`yaw_follow=0`).
-- Unflashed firmware: 86fe9470 (PID fallback), 37ecf87e (yaw dE wrap + Mahony decouple), d29ada99 (exp rows). The drone still runs 0e6e01b6.
+- Claude manager DISABLED: the CEO builds inline and merges; Argon High (`.agent-ops/argon.ps1`) researches and runs the Jules review loops (max 3 rounds), 160K cap.
+- Learning session PAUSED at Q9 (Z forces -> block 1/2/3 -> isolating flight); Q1-Q8 scored in `docs/learning/gap-ledger.md`. Thesis: memory `thesis-core-claim`.
+- Lab target (user): 20-30 flights in 3-4 h that also answer thesis questions: gate-memory premise (A->B->A, MRAC 100 vs 0, n=3) and Z force identification.
+- Jules jobs launched 10-18 (briefs `.agent-ops/briefs/`): `j-lab-thesis` (lab_m_memory_u100/u0, lab_z_* .fly, memory_premise.py, run-sheet thesis section), `j-sysid-torque` (sysid u = c + d, log c/d/u), `j-z-feat` (Z block-1 features, `mrac_z_feat_mask` default 0).
+- Unflashed firmware: 86fe9470, 37ecf87e, d29ada99, cb7ca992 (stream ladder A). The drone still runs 0e6e01b6.
 
-- **LAB DAY ON HOLD (user, 10-17 08:55):** no flights until the stream ladder is bench-measured: A guard prices the real rate, D 2 Mbaud, B int16/uint8 types, C delta codec after Argon research, E parity frame + link-settled check. Grilling still open (tracker zoom, NN): `.claude_state.md` GRILL line. No code until shared understanding.
-
-## Next 3 actions after the hold (`docs/lab/run-sheet-2026-10-17.md`)
-1. **Reflash** disarmed: `python ground_station/flashtool/rebuild_and_flash.py --yes`, restart 8081, check `arm 0` and `exp_active` streamed.
-2. **F1** `.\fly lab_c_robust --pack <1|2> --once`: first flight of the new yaw code, land if the heading swings.
-3. **E1-E4, H0-H2, then 10-16 F2-F6** in the run-sheet order.
+## Next 3 actions
+1. **Review + merge** the three Jules PRs (Argon review loop, then CEO QA: host_tests, scoped pytest, ruff, Keil build-only).
+2. **Reflash** disarmed: `python ground_station/flashtool/rebuild_and_flash.py --yes`, restart 8081, check `arm 0`, `exp_active`, then bench the stream ladder (run sheet Step 0).
+3. **Fly** in the run-sheet priority order: M1-M6 memory premise, Z flights, S1-S3, H0-H2, E1-E4, I1 at each pack end.
 
 ## Do not
 - Do not treat a missing `logs/video_truth/<folder>/cam.mkv` as lost: it is on Drive (`docs/agent/video-archive.md`).
