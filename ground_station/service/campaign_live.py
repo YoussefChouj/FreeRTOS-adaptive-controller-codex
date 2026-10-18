@@ -211,7 +211,7 @@ def live_sample(service: Any, t_s: float, sat: tuple[float, float] | None = None
     return AbortSample(
         t_s=t_s, age_s=max(ages), airborne=prim != 0, pos_m=pos, ref_m=ref,
         roll_deg=v(ATTITUDE[0]), pitch_deg=v(ATTITUDE[1]), rate_err_dps=rate_err, sat_frac=sat_frac,
-        safety_trip=int(v("g_wfb_status.safety_trip")), soc_pct=None,
+        safety_trip=int(v("g_wfb_status.safety_trip")), soc_pct=None, takeoff=prim == PRIM_TAKEOFF,
     )
 
 

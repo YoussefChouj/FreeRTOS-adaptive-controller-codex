@@ -16,6 +16,7 @@ import math
 @dataclass(frozen=True)
 class AbortLimits:                      # PROPOSED = not yet validated on the bench or in flight
     pos_err_m: float = 0.25             # PROPOSED: 3-D distance between position and reference
+    pos_err_takeoff_m: float = 0.40     # operator OK 10-18: takeoff only (mem1 drifted 0.31 m sideways on lift-off)
     pos_err_hold_s: float = 0.3         # PROPOSED
     tilt_deg: float = 35.0              # PROPOSED: |roll| or |pitch|
     tilt_hold_s: float = 0.2            # PROPOSED
@@ -41,6 +42,7 @@ class AbortSample:
     sat_frac: float                              # fraction of the four motors at a limit, 0..1
     safety_trip: int = 0                         # firmware trip code, 0 = none
     soc_pct: float | None = None                 # None when unknown
+    takeoff: bool = False                        # in the takeoff primitive: pos_err_takeoff_m applies, not pos_err_m
 
 
 @dataclass(frozen=True)
@@ -204,10 +206,11 @@ class AbortMonitor:
         else:
             self._tilt_t0 = None
 
-        # 5d. Position error: ref_m is not None and distance(pos_m, ref_m) > pos_err_m continuously for pos_err_hold_s
+        # 5d. Position error: ref_m is not None and distance(pos_m, ref_m) > pos_err_m (pos_err_takeoff_m while
+        # taking off) continuously for pos_err_hold_s
         if sample.ref_m is not None:
             pos_dist = math.dist(sample.pos_m, sample.ref_m)
-            if pos_dist > self._limits.pos_err_m:
+            if pos_dist > (self._limits.pos_err_takeoff_m if sample.takeoff else self._limits.pos_err_m):
                 if self._pos_err_t0 is None:
                     self._pos_err_t0 = sample.t_s
                 if _time_reached(sample.t_s - self._pos_err_t0, self._limits.pos_err_hold_s):
