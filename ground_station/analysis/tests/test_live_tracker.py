@@ -617,3 +617,57 @@ def test_ab_replay_z_eff_b_follows_land_zoom_flags(tmp_path):
     assert low.any() and high.any()
     assert (df.loc[low, "z_eff_b"] == land_zoom).all()
     assert (df.loc[high, "z_eff_b"] == zoom).all()
+
+def _pad_frame(drone=None, station=True, parked=False):
+    """480x640 like _coral_frame: the drone a coral disc, a printed coral 'fire station' 50 px from the pad (inside the
+    keep disc and the ROI, lab 10-18), and in the floor scan the drone parked off the pad."""
+    import cv2
+    f = np.zeros((480, 640, 3), np.uint8)
+    if station:
+        f[275:305, 335:365] = _CORAL
+    if parked:
+        cv2.circle(f, (220, 200), 15, _CORAL, -1)
+    if drone is not None:
+        cv2.circle(f, (int(drone[0]), int(drone[1])), 15, _CORAL, -1)
+    return f
+
+
+@pytest.mark.parametrize("with_scenery", [False, True])
+def test_floor_scenery_keeps_pad_side_coral_static_and_the_dot_on_the_drone(with_scenery):
+    """Lab 10-18: coral print next to the pad was on in every start frame but inside the keep disc, so it was never
+    learned static and pulled the dot ~55 px off the drone. With the floor scan's scenery (pad clear, drone parked
+    elsewhere) it is learned static; the parked spot is not (no coral there at start), so the drone is still tracked
+    when it flies over it."""
+    from ground_station.analysis.live_tracker import CoralTracker
+    import cv2
+    hsv = cv2.cvtColor(_pad_frame(station=True, parked=True), cv2.COLOR_BGR2HSV)
+    from ground_station.analysis import video_truth as vt
+    scenery = vt.coral_mask(hsv) > 0
+    tr = CoralTracker([300, 260], learn_n=3, learn_every=1, scenery=scenery if with_scenery else None)
+    errs = []
+    for c in [(300, 260)] * 4 + [(300 - 10 * k, 260 - 7 * k) for k in range(1, 9)]:   # lift off, over the parked spot
+        uv = tr.step(_pad_frame(drone=c))
+        errs.append(np.inf if uv is None else float(np.hypot(*(uv - c))))
+    if with_scenery:
+        assert max(errs[3:]) <= 1.0, errs
+    else:
+        assert max(errs[3:]) > 10.0, errs                       # the bug: the print drags the dot off the drone
+
+
+def test_floor_scenery_is_cached_per_threshold_and_redone_after_a_rescan(tmp_path, monkeypatch):
+    import os
+    from ground_station.analysis import live_tracker as lt
+    calls = []
+    mask = np.zeros((48, 64), bool)
+    mask[10:20, 30:40] = True
+    monkeypatch.setattr(lt.vt, "coral_static", lambda v: calls.append(v) or mask)
+    assert lt.floor_scenery(tmp_path) is None and not calls     # no scan video, no cache
+    (tmp_path / "cam.mkv").write_bytes(b"x")
+    os.utime(tmp_path / "cam.mkv", (1000, 1000))
+    m = lt.floor_scenery(tmp_path)
+    png = tmp_path / ("coral_scenery_" + "-".join(map(str, (*lt.vt.CORAL_LO, *lt.vt.CORAL_HI))) + ".png")
+    assert len(calls) == 1 and png.exists() and np.array_equal(m, mask)
+    assert np.array_equal(lt.floor_scenery(tmp_path), mask) and len(calls) == 1      # second call reads the PNG
+    os.utime(tmp_path / "cam.mkv", (png.stat().st_mtime + 10,) * 2)                  # floor run again here
+    lt.floor_scenery(tmp_path)
+    assert len(calls) == 2

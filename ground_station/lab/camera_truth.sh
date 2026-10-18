@@ -149,6 +149,7 @@ floor)                                              # floor pose of this placeme
   n=$(echo "$out" | grep -o '^[0-9]* frames' | cut -d' ' -f1 || true); n0=$(echo "$out" | grep -o 'id0 [0-9]*' | cut -d' ' -f2 || true)  # id0 unseen: no word, grep fails
   if [ "${n0:-0}" -gt 0 ] && [ $((2 * ${n0:-0})) -ge "${n:-1}" ]; then
     echo "floor OK: pad marker id0 in ${n0} of ${n} frames. Fly with CT_FLOOR=$vid"
+    python -c "import sys; from ground_station.analysis.live_tracker import floor_scenery as f; m = f(sys.argv[1]); print('coral scenery (pad clear) cached:', 0 if m is None else int(m.sum()), 'px')" "$vid"  # the tracker tells the pad's own coral from the drone with it; ~16 s here, 0 at take-off
   else
     echo "floor NOT OK: pad marker id0 in ${n0:-0} of ${n:-0} frames (need half). Clear the pad marker's view, then run floor again"; exit 1
   fi ;;

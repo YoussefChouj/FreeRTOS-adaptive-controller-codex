@@ -121,17 +121,22 @@ class CoralTracker:
     Live there is no whole video to learn `static` from, so with learn_n > 0 it is learned from the start: coral in
     >= frac of learn_n frames taken every learn_every frames (drone on the pad; a keep_r disc, 1.3 roi by default, around
     the seed is the drone and stays out), grown by grow_px, as vt.coral_static does. Without it a coral-coloured object near
-    the path held the r6_f4 fixes still at one spot for 120 s (nightly-2026-10-13 item 1)."""
+    the path held the r6_f4 fixes still at one spot for 120 s (nightly-2026-10-13 item 1).
+    `scenery` (coral with the pad clear: vt.coral_static of the floor scan's video, frame-sized) splits the keep disc: a
+    pixel static at the start that is also scenery is learned static there too. Lab 10-18: the fire station printed on
+    the mat next to the pad sat inside the keep disc and the ROI, pulled every ground dot ~55 px off the drone, and the
+    pad origin frozen from those dots turned it into a steady ~30 cm fix offset in flight."""
 
     def __init__(self, seed_uv, static=None, roi: float = 140.0, min_px: int = 40,   # track_coral defaults
                  learn_n: int = 0, learn_every: int = 5, frac: float = 0.7, grow_px: int = 7,
-                 keep_r: float | None = None, zoom: float = 1.0, land_zoom: float = 2.0, land_z_m: float = 0.30):
+                 keep_r: float | None = None, zoom: float = 1.0, land_zoom: float = 2.0, land_z_m: float = 0.30,
+                 scenery=None):
         self.c, self.static, self.roi, self.min_px = np.asarray(seed_uv, float), static, float(roi), min_px
         self.r = self.roi
         self.seed0, self.learn_n, self.learn_every, self.frac, self.grow = self.c.copy(), learn_n, learn_every, frac, grow_px
         self.keep_r = 1.3 * self.roi if keep_r is None else float(keep_r)   # r6_f4 pad: drone coral to ~170 px of 1920
         self.zoom, self.land_zoom, self.land_z_m, self.active_zoom = float(zoom), float(land_zoom), float(land_z_m), 1.0
-        self.last_s = {}
+        self.last_s, self.scenery = {}, scenery
         self._acc, self._k, self._i = None, 0, 0
 
     def _learn(self, frame_bgr) -> None:
@@ -145,11 +150,19 @@ class CoralTracker:
             return
         st = (self._acc >= self.frac * self._k).astype(np.uint8)
         yy, xx = np.ogrid[:st.shape[0], :st.shape[1]]
-        st[(xx - self.seed0[0]) ** 2 + (yy - self.seed0[1]) ** 2 <= self.keep_r ** 2] = 0
+        keep = (xx - self.seed0[0]) ** 2 + (yy - self.seed0[1]) ** 2 <= self.keep_r ** 2
+        kept = 0
+        if self.scenery is not None and self.scenery.shape == st.shape:
+            kept = int((st.astype(bool) & keep & self.scenery).sum())
+            keep &= ~self.scenery                      # coral there with the pad clear too: scenery, not the drone
+        elif self.scenery is not None:
+            print(f"coral scenery ignored: {self.scenery.shape} vs frame {st.shape}", flush=True)
+        st[keep] = 0
         learned = cv2.dilate(st, np.ones((self.grow, self.grow), np.uint8)) > 0
         self.static = learned if self.static is None else self.static | learned
         self.learn_n, self._acc = 0, None
-        print(f"coral static learned: {int(learned.sum())} px from {self._k} frames", flush=True)
+        print(f"coral static learned: {int(learned.sum())} px from {self._k} frames"
+              + (f" ({kept} px near the pad kept as floor-scan scenery)" if self.scenery is not None else ""), flush=True)
 
     def step(self, frame_bgr, z_agl: float | None = None) -> Optional[np.ndarray]:
         cv2 = vt._cv2()
@@ -362,6 +375,23 @@ def floor_from_dir(video_dir, cam_path) -> tuple[np.ndarray, np.ndarray, np.ndar
     R, t, _ = vt.floor_from_marker(scan, vt.load_cam(cam_path, size))
     ref = {int(k[1:]): vt.static_corners(scan[k])[0] for k in scan if k.startswith("c")}
     return R, t, ref[0].mean(0), float(size[0]), {k: v for k, v in ref.items() if v is not None}
+
+
+def floor_scenery(video_dir) -> Optional[np.ndarray]:
+    """Coral scenery with the pad clear (the `floor` scan needs the pad marker in view, so the drone is off the pad):
+    vt.coral_static of the scan's cam.mkv, frame-sized bool. Cached next to it as a PNG whose name carries the coral
+    thresholds (a threshold change computes it again) and redone when the video is newer (a re-scan); computing takes
+    ~16 s on a 10 s scan, so camera_truth.sh floor makes it at scan time. None when the scan has no video."""
+    cv2 = vt._cv2()
+    d = Path(video_dir)
+    mkv, png = d / "cam.mkv", d / ("coral_scenery_" + "-".join(map(str, (*vt.CORAL_LO, *vt.CORAL_HI))) + ".png")
+    if png.exists() and (not mkv.exists() or png.stat().st_mtime >= mkv.stat().st_mtime):
+        return cv2.imread(str(png), cv2.IMREAD_GRAYSCALE) > 0
+    if not mkv.exists():
+        return None
+    m = vt.coral_static(str(mkv))
+    cv2.imwrite(str(png), m.astype(np.uint8) * 255)
+    return m
 
 
 def floor_shift_px(frame_bgr, ref: dict, scale: float) -> tuple[float, int]:
@@ -1603,7 +1633,7 @@ def main(argv=None) -> int:
             else None if str(a.source).isdigit() else vt.video_size(a.source))
     cam = vt.load_cam(a.cam, size)
     seed = [float(x) for x in a.seed_px.split(",")] if a.seed_px else None
-    s = 1.0
+    s, shift = 1.0, None
     if a.floor:
         R, t, c0, w_ref, ref = floor_from_dir(a.floor, a.cam)
         cam, s = dict(cam, R=R, t=t), (size[0] / w_ref if size else 1.0)
@@ -1611,6 +1641,7 @@ def main(argv=None) -> int:
         if a.source.startswith("window:"):
             ok, f0 = WindowSource(a.source[7:], size=size).read()
             d, k = floor_shift_px(f0, {i: c for i, c in ref.items() if i}, s) if ok else (float("nan"), 0)
+            shift = d
             print(f"floor check: {k} markers, median shift {d:.1f} px" + ("  WARNING phone moved? (> 5 px, PROPOSED)"
                                                                          if d > 5 else ""), flush=True)
     align = EarthAlign(a=complex(np.exp(1j * np.radians(a.yaw_deg))), mirror=a.mirror)
@@ -1623,10 +1654,17 @@ def main(argv=None) -> int:
             with open(a.cam) as f:
                 seed = np.mean(json.load(f)["aruco_id0_corners_px"], axis=0)
         cs = a.coral_static if a.coral_static != "auto" else ("start" if src_live else "video")
+        scenery = None
+        if cs == "start" and a.floor:            # same placement as the floor pose assumes, or the scenery is elsewhere
+            scenery = floor_scenery(a.floor) if shift is None or shift <= 5 else None
+            if scenery is not None and size and scenery.shape != (size[1], size[0]):
+                scenery = cv2.resize(scenery.astype(np.uint8), tuple(size), interpolation=cv2.INTER_NEAREST) > 0
+            print(f"coral scenery from the floor scan: {'off' if scenery is None else f'{int(scenery.sum())} px'}",
+                  flush=True)
         ring = RingTracker(seed) if a.detector == "ring" else CoralTracker(   # track_coral sizes are 1920 px
             seed, vt.coral_static(a.source) if cs == "video" else None, roi=140.0 * s,
             min_px=max(10, round(40 * s * s)), learn_n=a.static_n if cs == "start" else 0,
-            zoom=a.zoom, land_zoom=a.land_zoom, land_z_m=a.land_z_m)
+            zoom=a.zoom, land_zoom=a.land_zoom, land_z_m=a.land_z_m, scenery=scenery)
     show = Preview(hz=a.show_hz, rect=WindowSource(a.source[7:]).rect() if a.source.startswith("window:") else None,
                    traj=traj_xy(a.traj) if a.traj else None, rec=a.show_rec, pass_cm=a.pass_cm,
                    width=a.show_width or None) if a.show else None
