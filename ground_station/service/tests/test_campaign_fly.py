@@ -464,6 +464,16 @@ def test_write_gains_defaults_preset(monkeypatch, capsys):
     assert len(cmd_posts) == 12
 
 
+def test_debrief_lines_names_the_abort():
+    # 10-18 mem1: a takeoff abort printed as a plain "done" and read as "it only hovered"
+    st = {"status": "done", "flights": [{"experiment": "lab_m_memory_u", "abort_level": 1,
+                                          "abort_reason": "position_error"}]}
+    lines = campaign_fly.debrief_lines([], st, "f/01")
+    assert lines[1] == ("ABORTED L1 lab_m_memory_u: position_error (the safety monitor landed it; "
+                        "the steps after that point never ran)")
+    assert not any("ABORTED" in ln for ln in campaign_fly.debrief_lines([], {"status": "done", "flights": [{}]}, "f/01"))
+
+
 def test_debrief_lines_never_airborne():
     # Friction B14: air <= 0 or max_z < 0.25 -> "landing offset: no landing (never airborne)"
     samples_air_zero = [_sample(0.0, 0, 10.0, 0.0, 0.0, air=0.0)]

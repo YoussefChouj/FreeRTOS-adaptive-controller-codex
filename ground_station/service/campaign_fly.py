@@ -1192,6 +1192,9 @@ def debrief_lines(samples, st, folder, cam=None):
     air = max((s.get("g_wfb_status.airborne_t", 0.0) for s in samples), default=0.0)
     lines = [f"{st.get('status')} {st.get('reason') or ''}".strip()
              + f"  air {air:.1f} s  {len(st.get('flights') or [])} flight(s)  {len(samples)} live samples"]
+    # 10-18 mem1: a takeoff abort read as "it only hovered": say the abort and that the steps after it never ran
+    lines += [f"ABORTED L{f.get('abort_level') or '?'} {f.get('experiment') or 'flight'}: {f['abort_reason']} (the safety "
+              "monitor landed it; the steps after that point never ran)" for f in st.get("flights") or [] if f.get("abort_reason")]
     for phase in ("HOVER", "TRAJ"):
         part = [s for s in samples if prim(s) == phase]
         errs = {ax: _err_cm(part, ax) for ax in "xyz"}
