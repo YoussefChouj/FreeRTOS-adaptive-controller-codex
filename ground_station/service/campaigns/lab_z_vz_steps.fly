@@ -1,0 +1,16 @@
+# Z: vertical-speed steps outside ground effect, nominal PID only (mrac_injection=0). From hover 1.0 m, z-only
+#   out-and-back legs to 1.4 and 0.6 m at 0.2 m/s, then at 0.4 m/s: each leg gives a +v and a -v segment.
+# Fit: thrust residual vs v_z|v_z| (vertical drag, Z block 1 bit2) at 2 speeds x 2 signs.
+# Fly it: fly lab_z_vz_steps --once at >= 15.8 V resting. UNVERIFIED: never flown.
+campaign lab-z-vz-steps
+rate 100
+log velocity_loops camera_fusion thrust_model
+slow 25 mrac_3l ekf_states estimator_truth
+set g_xy_ctrl_kind=0 g_land_xy_gate_cm=10
+takeoff 1.0 mrac_injection=0
+hold 8
+goto x=0 y=0 z=1.4 dwell_s=3 v_cruise_mps=0.2
+goto x=0 y=0 z=0.6 dwell_s=3 v_cruise_mps=0.2
+goto x=0 y=0 z=1.4 dwell_s=3 v_cruise_mps=0.4
+goto x=0 y=0 z=0.6 dwell_s=3 v_cruise_mps=0.4
+land

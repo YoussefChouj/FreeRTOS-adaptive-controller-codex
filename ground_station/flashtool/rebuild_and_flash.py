@@ -118,7 +118,7 @@ def archive_artifact() -> None:
         _say(f"archive failed (non-fatal): {exc}")
 
 
-def record_flashed_axf(axf_path: Path = sf.ELF) -> Path:
+def record_flashed_axf(axf_path: Path = sf._ELF) -> Path:
     """Record OBJ/.last_flashed_axf.json stamp to guard against built-but-unflashed AXF."""
     p = Path(axf_path)
     data = p.read_bytes()
