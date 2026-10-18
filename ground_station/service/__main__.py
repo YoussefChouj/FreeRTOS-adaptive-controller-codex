@@ -265,6 +265,13 @@ def main() -> None:
         print(f"[service] REFUSED: {exc}", file=sys.stderr, flush=True)
         sys.exit(2)
 
+    # ---- Console output also goes to logs/service/<port>-<stamp>.log (lab 10-18: lost with the window) ----
+    # QuickEdit off: a click in this window would otherwise block every print, the ingest thread's included
+    from ground_station.service.run_log import quickedit_off, tee_console
+    log_path = tee_console(args.port)
+    qe = "; QuickEdit off, so a click here no longer freezes the service" if quickedit_off() else ""
+    print(f"[service] console log: {log_path}{qe}", flush=True)
+
     # ---- Build the service stack ----
     from ground_station.comm.wifi_bridge import WifiBridge
     from ground_station.platform.experiments import ExperimentRuntime
