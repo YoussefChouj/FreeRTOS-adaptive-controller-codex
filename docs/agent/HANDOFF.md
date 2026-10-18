@@ -9,10 +9,11 @@ History: `docs/agent/ledger/` (grep, never read whole). Desktop session is CEO: 
 - Learning session PAUSED at Q9 (Z forces -> block 1/2/3 -> isolating flight); Q1-Q8 scored in `docs/learning/gap-ledger.md`. Thesis: memory `thesis-core-claim`.
 - Lab target (user): 20-30 flights in 3-4 h that also answer thesis questions: gate-memory premise (A->B->A, MRAC 100 vs 0, n=3) and Z force identification.
 - Jules jobs launched 10-18 (briefs `.agent-ops/briefs/`): `j-lab-thesis` (lab_m_memory_u100/u0, lab_z_* .fly, memory_premise.py, run-sheet thesis section), `j-sysid-torque` (sysid u = c + d, log c/d/u), `j-z-feat` (Z block-1 features, `mrac_z_feat_mask` default 0).
+- PAUSED 10-18 (user left for the lab): all 3 sessions AWAITING_USER_FEEDBACK with questions. Answers written in `.agent-ops/briefs/<id>-reply1.md` delivery UNVERIFIED (`-Approve` 404'd: no plan pending; local `jules-<id>.json` shows no user message). At the lab: re-poll `-Session <sid>`; if still no user message, resend with `-Reply` only (no `-Approve`). Session ids in `.agent-ops/out/jules-<id>.session`. Argon review briefs ready: `.agent-ops/briefs/rv-<id>.md` (fill PRNUM).
 - Unflashed firmware: 86fe9470, 37ecf87e, d29ada99, cb7ca992 (stream ladder A). The drone still runs 0e6e01b6.
 
 ## Next 3 actions
-1. **Review + merge** the three Jules PRs (Argon review loop, then CEO QA: host_tests, scoped pytest, ruff, Keil build-only).
+1. **Unpause Jules** (above), then **review + merge** the three PRs (Argon review loop, then CEO QA: host_tests, scoped pytest, ruff, Keil build-only).
 2. **Reflash** disarmed: `python ground_station/flashtool/rebuild_and_flash.py --yes`, restart 8081, check `arm 0`, `exp_active`, then bench the stream ladder (run sheet Step 0).
 3. **Fly** in the run-sheet priority order: M1-M6 memory premise, Z flights, S1-S3, H0-H2, E1-E4, I1 at each pack end.
 
