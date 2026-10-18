@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import math
+import subprocess
+import sys
 import time
+from types import SimpleNamespace
 
 import pytest
 
 from ground_station.platform.transactions import Outcome, RejectReason, Result
 from ground_station.platform.wfb_commands import CMD_ARM, CMD_PRIM, CMD_RESET_ORIGIN, ArmIdx, PrimIdx, encode
 from ground_station.service.campaign_live import (
-    _FRESHNESS_SYMS, WFB_STATUS_FIELDS, LiveWfbClient, check_live_ready, link_snapshot, live_deps_factory,
-    live_on_abort, live_resting_v, live_sample, live_status,
+    _FRESHNESS_SYMS, WFB_STATUS_FIELDS, LiveWfbClient, check_live_ready, laptop_wifi, link_snapshot, link_watch_tick,
+    live_deps_factory, live_on_abort, live_resting_v, live_sample, live_status, start_link_watch,
 )
 from ground_station.service.campaign_runner import PRIM_IDLE, fly_scenario
 from ground_station.service.fake_drone import FakeDrone
@@ -399,3 +402,81 @@ def test_live_on_abort_records_an_abort_event_with_the_snapshot(capsys):
     assert kind == "abort" and data["reason"] == "stale_telemetry" and data["level"] == 1
     assert data["stalest"] in _FRESHNESS_SYMS and 0 <= data["stalest_age_s"] < 1.0
     assert "[campaign] abort (stale_telemetry): link" in capsys.readouterr().out
+
+
+_NETSH = """
+There are 2 interfaces on the system:
+
+    Name                   : Wi-Fi
+    Description            : Intel(R) Wireless-AC 9560
+    State                  : connected
+    SSID                   : JX_FLY_AP
+    BSSID                  : 3c:71:bf:01:02:03
+    Signal                 : 87%
+    Receive rate (Mbps)    : 72.2
+    Transmit rate (Mbps)   : 65
+
+    Name                   : Wi-Fi 2
+    State                  : disconnected
+"""
+
+
+def test_laptop_wifi_reads_the_first_interface():
+    got = laptop_wifi(run=lambda *a, **k: SimpleNamespace(stdout=_NETSH))
+    assert got == {"wifi_state": "connected", "wifi_ssid": "JX_FLY_AP", "wifi_bssid": "3c:71:bf:01:02:03",
+                   "wifi_signal": "87%", "wifi_rx_mbps": "72.2", "wifi_tx_mbps": "65"}
+
+
+@pytest.mark.parametrize("exc", [OSError("no netsh"), subprocess.TimeoutExpired("netsh", 2)])
+def test_laptop_wifi_is_empty_when_netsh_fails(exc):
+    def run(*a, **k):
+        raise exc
+    assert laptop_wifi(run=run) == {}
+
+
+def test_laptop_wifi_real_netsh_reports_a_state():
+    """Real outcome: this laptop's netsh answers with the WiFi interface's state (connected or not)."""
+    if sys.platform != "win32":
+        assert laptop_wifi() == {}
+        return
+    assert laptop_wifi().get("wifi_state")
+
+
+def _watched(recording):
+    events = []
+    svc = SimpleNamespace(recorder=SimpleNamespace(recording=recording),
+                          bridge=SimpleNamespace(link_health=lambda: {"rx_age_s": 0.04, "ingest_queue": 0}),
+                          _sess_event=lambda kind, data: events.append((kind, data)))
+    return svc, events
+
+
+def test_link_watch_tick_writes_wifi_and_link_health_only_while_recording():
+    svc, events = _watched(False)
+    assert link_watch_tick(svc, wifi=lambda: {"wifi_state": "connected"}) is False and events == []
+    svc.recorder.recording = True
+    assert link_watch_tick(svc, wifi=lambda: {"wifi_state": "connected"}) is True
+    assert events == [("link", {"wifi_state": "connected", "rx_age_s": 0.04, "ingest_queue": 0})]
+
+
+def test_link_watch_thread_starts_once_and_outlives_a_bad_reading(capsys):
+    svc, events = _watched(True)
+    calls = []
+
+    def wifi():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("netsh garbled")
+        return {"wifi_state": "connected"}
+
+    t = start_link_watch(svc, period_s=0.02, wifi=wifi)
+    assert start_link_watch(svc, period_s=0.02, wifi=wifi) is t and t.daemon
+    deadline = time.monotonic() + 5
+    while len(events) < 3 and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert len(events) >= 3 and all(k == "link" for k, _ in events)
+    svc.recorder.recording = False                     # session over: the thread stays, the events stop
+    time.sleep(0.1)
+    n = len(events)
+    time.sleep(0.1)
+    assert len(events) == n
+    assert "[campaign] link watch: RuntimeError('netsh garbled')" in capsys.readouterr().err

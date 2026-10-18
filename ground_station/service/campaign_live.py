@@ -16,7 +16,10 @@ only IDLE (accepted by the firmware only while RC-armed, on the ground, throttle
 from __future__ import annotations
 
 import math
+import subprocess
+import sys
 import tempfile
+import threading
 import time
 from typing import Any, Callable
 
@@ -240,6 +243,66 @@ def live_on_abort(service: Any, dec: Any) -> None:
     print(f"[campaign] abort ({dec.reason}): link {snap}", flush=True)
 
 
+LINK_WATCH_PERIOD_S = 1.0  # PROPOSED: one 'link' event a second; a WiFi re-association takes several seconds
+_NETSH_FIELDS = {"State": "wifi_state", "SSID": "wifi_ssid", "BSSID": "wifi_bssid", "AP BSSID": "wifi_bssid",
+                 "Signal": "wifi_signal", "Receive rate (Mbps)": "wifi_rx_mbps",
+                 "Transmit rate (Mbps)": "wifi_tx_mbps"}
+
+
+def laptop_wifi(run: Callable[..., Any] = subprocess.run) -> dict[str, Any]:
+    """The laptop's WiFi association from ``netsh wlan show interfaces`` (first interface): state, SSID, BSSID,
+    signal, rx/tx rate. {} off Windows or when netsh fails, so a missing reading never stops the caller."""
+    if sys.platform != "win32" and run is subprocess.run:
+        return {}
+    try:
+        out = run(["netsh", "wlan", "show", "interfaces"], capture_output=True, text=True, timeout=2,
+                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout or ""
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return {}
+    got: dict[str, Any] = {}
+    for line in out.splitlines():
+        key, sep, val = line.partition(" : ")
+        key = key.strip()
+        if not sep:
+            continue
+        if key == "Name" and got:
+            break                                      # a second interface: the first one is the drone link
+        if key in _NETSH_FIELDS:
+            got[_NETSH_FIELDS[key]] = val.strip()
+    return got
+
+
+def link_watch_tick(service: Any, wifi: Callable[[], dict[str, Any]] = laptop_wifi) -> bool:
+    """While a session records, write one 'link' event: laptop WiFi association + the bridge's link_health()
+    (10-18: the abort snapshot alone cannot tell a drone AP/WiFi reset from a drone-side stall). True if written."""
+    if not getattr(getattr(service, "recorder", None), "recording", False):
+        return False
+    health = getattr(getattr(service, "bridge", None), "link_health", None)
+    service._sess_event("link", {**wifi(), **(health() if callable(health) else {})})
+    return True
+
+
+def start_link_watch(service: Any, period_s: float = LINK_WATCH_PERIOD_S,
+                     wifi: Callable[[], dict[str, Any]] = laptop_wifi) -> threading.Thread:
+    """Start the 'link' event thread once per service (a daemon: never in the landing path, never joined)."""
+    t = getattr(service, "_link_watch", None)
+    if t is not None and t.is_alive():
+        return t
+
+    def loop() -> None:
+        while True:
+            try:
+                link_watch_tick(service, wifi)
+            except Exception as exc:                   # a bad reading must not end the watch
+                print(f"[campaign] link watch: {exc!r}", file=sys.stderr, flush=True)
+            time.sleep(period_s)
+
+    t = threading.Thread(target=loop, name="link_watch", daemon=True)
+    service._link_watch = t
+    t.start()
+    return t
+
+
 def live_resting_v(service: Any) -> float:
     vals = service.latest_values(VBAT_SYMS)
     for s in VBAT_SYMS:
@@ -406,6 +469,7 @@ def live_deps_factory(service: Any, controller: str = "pid", dt_s: float = LIVE_
 
     def factory() -> RunnerDeps:
         check_live_ready(service)
+        start_link_watch(service)
         clock = time.monotonic
         tuner, gate = tuner_and_gate(controller, 0, clock,
                                      workdir or tempfile.mkdtemp(prefix="wfb_live_"))
