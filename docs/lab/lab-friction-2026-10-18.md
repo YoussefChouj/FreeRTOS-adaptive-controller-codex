@@ -36,6 +36,30 @@ Think of a pilot's preflight checklist: it is done on the ground before boarding
 | P10 | An aborted flight logged as OK | mem1 aborted at L1 (`takeoff refused at preset var_write ... idx 26: no result in 1.0 s`), yet labday printed `mem1 done: OK` and would have moved on to mem2 | `bad_end` (labday.py ~194) checks the fly exit code, the debrief and `status != complete` only; the campaign status is `complete` even when its one flight aborts | `bad_end` also reads metrics.json: any flight outcome `abort*` or airtime 0 s counts as BAD |
 | P11 | One lost WiFi reply refuses a takeoff | A wasted arm on mem1 | Preset and `set` VAR_WRITEs had no resend, unlike the MRAC flags (`_send_retry`, 10-15) | **Fixed at the lab** (04a36224, it blocked the next flight): `_var_write_retry` resends a timed-out write, max 3 tries, never a reject. After the lab: audit every other single-shot command on the takeoff path |
 
+## The two mistake patterns behind P2, P3, P10 and P11
+
+| Pattern | Instances on 10-18 | Rule from now on |
+|---|---|---|
+| **Unknown treated as refused.** A timeout means "we don't know if it applied", but the code handled it as a refusal | P11. The 10-15 fix added a resend to the MRAC flags only, so the sibling preset writes still failed this way on 10-18 | Resend idempotent commands on a timeout (max 3, never after a refusal). For triggers, read the drone state back. **When fixing a call site, grep its siblings** and fix or list each one |
+| **Proxy check.** The check tests something next to the real thing | P2 (something answers on 8081 ≠ it runs HEAD), P3 (in-process ≠ the service), P10 (`status complete` ≠ the drone flew) | Ask "what would this print if the real thing failed?" Read the real artifact: the service sha, the service preflight, metrics.json abort reason and airtime |
+
+### P11 audit: commands still single-shot on the flight path (read-only, done at the lab, not fixed: code freeze)
+
+Lines are from campaign_runner.py at 04a36224.
+
+| Command | Line | Idempotent? | What one lost reply does today | Fix after the lab |
+|---|---|---|---|---|
+| set_hover_z | 402 | yes (absolute value) | refuses the takeoff: a wasted arm | resend on a timeout |
+| reset_origin | 413 | yes, on the pad | refuses the takeoff | resend on a timeout |
+| idle | 414 | yes (motor_idle is read back next) | refuses the takeoff | resend on a timeout |
+| takeoff | 433 | no (trigger) | the runner logs a refusal and sends no LAND (`airborne` stays False), but the drone may be climbing. The heartbeat stops, so the firmware's `hb_timeout_s` (wfb_safety.c) should land it: **not tested for this case** | on a timeout, read prim: if TAKEOFF or HOVER, carry on as airborne |
+| traj_go | 508 | no (trigger) | L1 abort while the drone may already be flying the preset. Only CMD 0x1B traj_stop is sent, not the preset's `traj_stop` var | on a timeout, read the traj state back |
+| sysid fields | 474 | yes (absolute fields) | aborts the excitation | resend on a timeout |
+| land | 567 | — | already resent while prim stays HOVER | none |
+
+Until these are fixed: if a landing line shows that a flight never took off, redo it with `--from <id>`. P10 means labday
+will still print OK.
+
 ## The lab-ready gate (build after the lab)
 
 `.\labready <date>`, run the evening before. It prints READY or a NOT READY list:
