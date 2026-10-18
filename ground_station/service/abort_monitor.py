@@ -25,6 +25,7 @@ class AbortLimits:                      # PROPOSED = not yet validated on the be
     sat_frac: float = 0.5               # PROPOSED: mean motor-saturation fraction
     sat_window_s: float = 1.0           # PROPOSED
     stale_s: float = 0.5                # PROPOSED: telemetry age
+    stale_hold_s: float = 0.3           # operator OK 10-18: mem1 tripped 0.1 s after traj_go, telemetry max gap 0.11 s
     soc_min_pct: float = 30.0           # spec Q5, not PROPOSED
     max_consecutive_aborts: int = 2     # spec Q12, not PROPOSED
 
@@ -74,6 +75,7 @@ class AbortMonitor:
         self._decision: AbortDecision = NO_ABORT
         self._last_t_s: float | None = None
         self._tilt_t0: float | None = None
+        self._stale_t0: float | None = None
         self._pos_err_t0: float | None = None
         self._osc: collections.deque[tuple[float, tuple[float, float, float]]] = collections.deque()
         self._sat: collections.deque[tuple[float, float]] = collections.deque()
@@ -105,6 +107,7 @@ class AbortMonitor:
 
     def _clear_holds_and_windows(self) -> None:
         self._tilt_t0 = None
+        self._stale_t0 = None
         self._pos_err_t0 = None
         self._osc.clear()
         self._sat.clear()
@@ -191,10 +194,15 @@ class AbortMonitor:
             self._trip_level_1("nonfinite:sat_frac")
             return self._decision
 
-        # 5b. Stale
+        # 5b. Stale: age_s > stale_s continuously for stale_hold_s
         if sample.age_s > self._limits.stale_s:
-            self._trip_level_1("stale_telemetry")
-            return self._decision
+            if self._stale_t0 is None:
+                self._stale_t0 = sample.t_s
+            if _time_reached(sample.t_s - self._stale_t0, self._limits.stale_hold_s):
+                self._trip_level_1("stale_telemetry")
+                return self._decision
+        else:
+            self._stale_t0 = None
 
         # 5c. Tilt: |roll_deg| > tilt_deg or |pitch_deg| > tilt_deg continuously for tilt_hold_s
         if abs(sample.roll_deg) > self._limits.tilt_deg or abs(sample.pitch_deg) > self._limits.tilt_deg:

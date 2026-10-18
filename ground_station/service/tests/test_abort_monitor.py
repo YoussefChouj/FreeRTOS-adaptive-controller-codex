@@ -18,7 +18,6 @@ from ground_station.service.abort_monitor import (
     AbortMonitor,
     AbortSample,
     NO_ABORT,
-    TRIP_NAMES,
 )
 
 
@@ -203,15 +202,42 @@ def test_saturation() -> None:
 
 
 def test_stale() -> None:
-    # 6. Stale: age_s 0.6 -> level 1 "stale_telemetry" at once; age_s 0.5 (equal) does not trip.
+    # 6. Stale: age_s 0.6 held for stale_hold_s (0.3 s) -> level 1 "stale_telemetry"; one stale sample does
+    # not trip (mem1 10-18 false trip); age_s 0.5 (equal) never trips.
     mon = AbortMonitor()
     mon.begin_flight()
-    dec = mon.step(mk(0.0, age_s=0.6))
-    assert dec == AbortDecision(1, "stale_telemetry")
+    for i in range(15):
+        t = round(i * 0.02, 4)
+        assert mon.step(mk(t, age_s=0.6)) == NO_ABORT
+    assert mon.step(mk(0.30, age_s=0.6)) == AbortDecision(1, "stale_telemetry")
 
     mon_eq = AbortMonitor()
     mon_eq.begin_flight()
-    assert mon_eq.step(mk(0.0, age_s=0.5)) == NO_ABORT
+    for i in range(30):
+        assert mon_eq.step(mk(round(i * 0.02, 4), age_s=0.5)) == NO_ABORT
+
+
+def test_stale_fresh_sample_resets_hold() -> None:
+    # 6b. A fresh sample inside the hold restarts it: 0.28 s stale, one fresh, 0.28 s stale -> no trip.
+    mon = AbortMonitor()
+    mon.begin_flight()
+    for i in range(15):
+        assert mon.step(mk(round(i * 0.02, 4), age_s=0.6)) == NO_ABORT
+    assert mon.step(mk(0.30, age_s=0.1)) == NO_ABORT
+    for i in range(15):
+        assert mon.step(mk(round(0.32 + i * 0.02, 4), age_s=0.6)) == NO_ABORT
+    assert mon.step(mk(0.62, age_s=0.6)) == AbortDecision(1, "stale_telemetry")
+
+
+def test_stale_hold_clears_when_not_airborne() -> None:
+    # 6c. Landing in the middle of a stale run clears the hold.
+    mon = AbortMonitor()
+    mon.begin_flight()
+    assert mon.step(mk(0.0, age_s=0.6)) == NO_ABORT
+    assert mon.step(mk(0.2, age_s=0.6, airborne=False)) == NO_ABORT
+    assert mon.step(mk(0.4, age_s=0.6)) == NO_ABORT
+    assert mon.step(mk(0.6, age_s=0.6)) == NO_ABORT
+    assert mon.step(mk(0.7, age_s=0.6)) == AbortDecision(1, "stale_telemetry")
 
 
 @pytest.mark.parametrize("field,override,expected_reason", [
@@ -296,26 +322,28 @@ def test_latch() -> None:
     # the first level-1 reason is kept when a second level-1 condition appears.
     mon = AbortMonitor()
     mon.begin_flight()
-    dec1 = mon.step(mk(0.0, age_s=0.6))
+    assert mon.step(mk(0.0, age_s=0.6)) == NO_ABORT
+    dec1 = mon.step(mk(0.3, age_s=0.6))
     assert dec1 == AbortDecision(1, "stale_telemetry")
 
-    dec2 = mon.step(mk(0.02))
+    dec2 = mon.step(mk(0.32))
     assert dec2 == AbortDecision(1, "stale_telemetry")
 
-    dec3 = mon.step(mk(0.04, safety_trip=4))
+    dec3 = mon.step(mk(0.34, safety_trip=4))
     assert dec3 == AbortDecision(3, "firmware:FENCE")
 
-    assert mon.step(mk(0.06)) == AbortDecision(3, "firmware:FENCE")
-    assert mon.step(mk(0.08, soc_pct=10.0)) == AbortDecision(3, "firmware:FENCE")
-    assert mon.step(mk(0.10, safety_trip=1)) == AbortDecision(3, "firmware:FENCE")
-    assert mon.step(mk(0.12, roll_deg=80.0)) == AbortDecision(3, "firmware:FENCE")
+    assert mon.step(mk(0.36)) == AbortDecision(3, "firmware:FENCE")
+    assert mon.step(mk(0.38, soc_pct=10.0)) == AbortDecision(3, "firmware:FENCE")
+    assert mon.step(mk(0.40, safety_trip=1)) == AbortDecision(3, "firmware:FENCE")
+    assert mon.step(mk(0.42, roll_deg=80.0)) == AbortDecision(3, "firmware:FENCE")
 
     # First level-1 reason kept when second level-1 condition appears
     mon2 = AbortMonitor()
     mon2.begin_flight()
-    assert mon2.step(mk(0.0, age_s=0.6)) == AbortDecision(1, "stale_telemetry")
+    assert mon2.step(mk(0.0, age_s=0.6)) == NO_ABORT
+    assert mon2.step(mk(0.3, age_s=0.6)) == AbortDecision(1, "stale_telemetry")
     for i in range(15):
-        t = round(0.02 + i * 0.02, 4)
+        t = round(0.32 + i * 0.02, 4)
         assert mon2.step(mk(t, roll_deg=50.0)) == AbortDecision(1, "stale_telemetry")
 
 
