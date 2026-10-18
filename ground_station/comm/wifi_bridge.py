@@ -97,6 +97,7 @@ from ground_station.platform.transactions import parse_result_parts
 
 RX_SOCKET_BUFFER_BYTES = 8 << 20  # 8 MB, about 2 min of the heaviest plan
 INGEST_QUEUE_MAX = 200_000  # decoded frames held for the ingest thread before counting drops
+INGEST_LAG_WARN_NS = 200_000_000  # PROPOSED: frame age that counts as "ingest behind" in the log (stale abort is 0.5 s)
 
 
 def _parse_simple_yaml(path: Path) -> Dict[str, Any]:
@@ -265,6 +266,7 @@ class WifiBridge:
         self._stop = threading.Event()
         self._ingest_q: queue.Queue = queue.Queue(maxsize=INGEST_QUEUE_MAX)
         self.ingest_dropped = 0  # frames dropped because the ingest thread fell INGEST_QUEUE_MAX behind
+        self.ingest_lag_ns = 0  # age of the frame the ingest thread finished last (receive stamp to done)
         # Subscribe watchdog. The FC keeps its slots in RAM, so a power cycle
         # drops them: it comes back sending only its fallback frames, and every
         # subscribed key froze at its last value while the link looked alive.
@@ -1548,7 +1550,16 @@ class WifiBridge:
                         self.ingest_dropped += 1
 
     def _ingest_loop(self) -> None:
-        """Publish decoded telemetry and feed the service callback, off the rx thread."""
+        """Publish decoded telemetry and feed the service callback, off the rx thread.
+
+        Prints, at most once a second, when this thread falls behind (frame age above INGEST_LAG_WARN_NS, or
+        frames dropped) and the first error of each type: a slow or failing ingest made the 10-18 flights
+        abort on stale telemetry with nothing in the log (P15).
+        """
+        last_report_ns = 0
+        reported_dropped = 0
+        max_lag_ns = 0
+        errors_seen: set[str] = set()
         while not self._stop.is_set():
             try:
                 tag, payload, t_ns = self._ingest_q.get(timeout=0.1)
@@ -1563,8 +1574,23 @@ class WifiBridge:
                         cb(tag, payload, t_ns)
                     else:
                         cb(tag, payload)
-                except Exception:
-                    pass
+                except Exception as e:
+                    name = type(e).__name__
+                    if name not in errors_seen:
+                        errors_seen.add(name)
+                        print(f"[wifi_bridge] ingest callback error (first {name}): {e!r}", file=sys.stderr, flush=True)
+            now = time.time_ns()
+            lag = now - t_ns
+            self.ingest_lag_ns = lag
+            max_lag_ns = max(max_lag_ns, lag)
+            if now - last_report_ns >= 1_000_000_000:
+                dropped = self.ingest_dropped
+                if max_lag_ns > INGEST_LAG_WARN_NS or dropped != reported_dropped:
+                    print(f"[wifi_bridge] ingest behind: max frame age {max_lag_ns / 1e6:.0f} ms, "
+                          f"queue {self._ingest_q.qsize()}, dropped {dropped}", file=sys.stderr, flush=True)
+                reported_dropped = dropped
+                max_lag_ns = 0
+                last_report_ns = now
 
     def _parse_one(self, buf: bytearray) -> tuple | None:
         """Parse one complete frame from buf.

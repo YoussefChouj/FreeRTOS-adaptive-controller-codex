@@ -52,6 +52,8 @@ TXN_RESULTS_MAX = 256
 
 # Maximum number of command actions kept in the service's action journal.
 ACTION_JOURNAL_MAX = 64
+# Telemetry readback (APPLIED -> VERIFIED) runs at most this often; it ran per frame before 10-18 P15.
+READBACK_MIN_INTERVAL_NS = 100_000_000
 
 # Maximum number of fault entries kept in the service's fault log.
 FAULT_LOG_MAX = 64
@@ -295,6 +297,7 @@ class GroundStationService:
         # Track APPLIED commands waiting for telemetry readback confirmation.
         # Maps (command_id, index) -> list of transaction_ids waiting for VERIFIED.
         self._pending_verifications: dict[tuple[int, int], list[int]] = {}
+        self._last_readback_ns = 0
         self.gateway = CommandGateway(bridge, self._record_event) if bridge else None
         # Experiment runtime: ticks on every telemetry ingest so active experiments
         # can record samples and advance their settle/measure state machine.
@@ -1179,6 +1182,22 @@ class GroundStationService:
         """
         if not self._pending_verifications:
             return
+        # Runs on the ingest thread for every frame, so it must stay cheap (10-18 P15: at full cost it took
+        # half the ingest thread, the queue fell behind and both flights aborted on stale telemetry).
+        now = time.monotonic_ns()
+        if now - self._last_readback_ns < READBACK_MIN_INTERVAL_NS:
+            return
+        self._last_readback_ns = now
+        by_txid = {a.transaction_id: a for a in self._action_journal}
+        # A txid that has left the bounded journal can never be verified: drop it, or the list only grows.
+        still_pending: dict[tuple[int, int], list[int]] = {}
+        for key, txids in self._pending_verifications.items():
+            alive = [t for t in txids if t in by_txid]
+            if alive:
+                still_pending[key] = alive
+        if not still_pending:
+            self._pending_verifications.clear()
+            return
         # Collect all telemetry values into a flat set for matching.
         values: set[float] = set()
         for slot_data in self._streams.values():
@@ -1188,44 +1207,36 @@ class GroundStationService:
                         values.add(float(v))
                     except (TypeError, ValueError):
                         pass
-        # Check each pending verification.
-        still_pending: dict[tuple[int, int], list[int]] = {}
-        for key, txids in self._pending_verifications.items():
-            cmd_id, idx = key
-            resolved = False
+        for key in list(still_pending):
+            cmd_id, _idx = key
             remaining = []
-            for txid in txids:
-                # Find the action in the journal for this txid.
-                for action in self._action_journal:
-                    if action.transaction_id == txid and \
-                            action.command_id == cmd_id and \
-                            action.lifecycle == CommandLifecycle.APPLIED:
-                        # Check if the submitted value is present in telemetry.
-                        if action.value in values:
-                            # Upgrade to VERIFIED.
-                            resolved_action = CommandAction(
-                                transaction_id=action.transaction_id,
-                                command_id=action.command_id,
-                                index=action.index,
-                                value=action.value,
-                                flags=action.flags,
-                                lifecycle=CommandLifecycle.VERIFIED,
-                                outcome_name=action.outcome_name,
-                                reason_name=action.reason_name,
-                                wire_bytes=action.wire_bytes,
-                                submitted_ns=action.submitted_ns,
-                                resolved_ns=action.resolved_ns,
-                                detail=action.detail + " (verified)",
-                            )
-                            idx_in_journal = self._action_journal.index(action)
-                            self._action_journal[idx_in_journal] = resolved_action
-                            self._record_event("command_verified", resolved_action.to_dict())
-                            resolved = True
-                            break
-                if not resolved:
+            for txid in still_pending[key]:
+                action = by_txid[txid]
+                if action.command_id == cmd_id and                         action.lifecycle == CommandLifecycle.APPLIED and                         action.value in values:
+                    # Upgrade to VERIFIED.
+                    resolved_action = CommandAction(
+                        transaction_id=action.transaction_id,
+                        command_id=action.command_id,
+                        index=action.index,
+                        value=action.value,
+                        flags=action.flags,
+                        lifecycle=CommandLifecycle.VERIFIED,
+                        outcome_name=action.outcome_name,
+                        reason_name=action.reason_name,
+                        wire_bytes=action.wire_bytes,
+                        submitted_ns=action.submitted_ns,
+                        resolved_ns=action.resolved_ns,
+                        detail=action.detail + " (verified)",
+                    )
+                    idx_in_journal = self._action_journal.index(action)
+                    self._action_journal[idx_in_journal] = resolved_action
+                    self._record_event("command_verified", resolved_action.to_dict())
+                else:
                     remaining.append(txid)
             if remaining:
                 still_pending[key] = remaining
+            else:
+                del still_pending[key]
         self._pending_verifications.clear()
         self._pending_verifications.update(still_pending)
 
