@@ -1582,7 +1582,7 @@ def main(argv=None) -> int:
     ap.add_argument("--stop-file", default="", help="end the run cleanly when this file appears (camera_truth.sh stop)")
     ap.add_argument("--static-t", default="", help='file only, "90,140,190": mask guard-colour pixels present at all these times')
     ap.add_argument("--zoom", type=float, default=1.0, help="base tracking zoom >= 1.0 (default 1.0)")
-    ap.add_argument("--land-zoom", type=float, default=2.0, help="tracking zoom when below land_z_m (default 2.0)")
+    ap.add_argument("--land-zoom", type=float, default=1.0, help="tracking zoom when below land_z_m (default 1.0 = off; 2.0 lost the drone at mem2 lift-off 10-18)")
     ap.add_argument("--land-z-m", type=float, default=0.30, help="apply land_zoom when 0 < z_agl <= this, m (default 0.30)")
     a = ap.parse_args(argv)
     if a.zoom < 1.0 or a.land_zoom < 1.0 or a.land_z_m <= 0.0:
