@@ -13,7 +13,9 @@ undefined-reference list: a function (one gcc's -aux-info lists for a compiled u
 anything else (a variable) becomes a zeroed 64 KiB buffer, so reads give 0 and writes land in RAM, not in code.
 `--cov` also builds the new version with gcov and prints the line coverage of the code the target exercises. On a
 case-sensitive filesystem the GlobalUse_Basic_Function.h include resolves through the alias in tools/fw_equiv_stubs.
-Never touches OBJ/.
+Both versions use the working tree's harness; the base is built with -DFW_TRACE_BASE, so harness self-checks tied to
+the current layout (the stab g_tlm check) run on the new version only and an older --base still builds. A base from
+before an intended firmware change DIFFERs, as it should. Never touches OBJ/.
 
     python tools/fw_trace.py                          # stab vs HEAD, 4 seeds x 200000 ticks
     python tools/fw_trace.py cmd --base wp/36 --cov
@@ -54,7 +56,7 @@ def run_ok(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(args, cwd=cwd, capture_output=True, text=True, errors="replace")
 
 
-def build(gcc: str, target: str, root: Path, exe: Path, cov: bool) -> None:
+def build(gcc: str, target: str, root: Path, exe: Path, cov: bool, base: bool) -> None:
     harness, macro, rel, extra, _ = TARGETS[target]
     out = exe.parent
     ctrl, dummy_c, dummy_o = out / "controller.o", out / "dummies.c", out / "dummies.o"
@@ -63,7 +65,8 @@ def build(gcc: str, target: str, root: Path, exe: Path, cov: bool) -> None:
                       str(ctrl)], out)
         if res.returncode != 0:
             raise SystemExit(f"build {root} controller.c:\n{res.stderr[-3000:]}")
-    units = [[f'-D{macro}="{(root / rel).as_posix()}"', str(REPO / "tools" / "fw_trace" / harness)],
+    units = [[f'-D{macro}="{(root / rel).as_posix()}"', *(["-DFW_TRACE_BASE"] if base else []),
+              str(REPO / "tools" / "fw_trace" / harness)],
              *([str(root / e)] for e in extra if e != "ctrl"),
              *([[*RENAME, str(root / "API" / "controller.c")]] if "ctrl" in extra else [])]
     link = [gcc, *CFLAGS, *(["--coverage"] if cov else []), *fw_equiv.flags(root), *units[0],
@@ -129,12 +132,13 @@ def main(argv: list[str]) -> int:
         t = Path(tmp)
         base = t / "base"
         tar = subprocess.run(["git", "archive", args.base, *fw_equiv.ARCHIVE], cwd=REPO, capture_output=True, check=True)
-        tarfile.open(fileobj=io.BytesIO(tar.stdout)).extractall(base)
+        safe = {"filter": "data"} if hasattr(tarfile, "data_filter") else {}   # Python >= 3.12 warns without one
+        tarfile.open(fileobj=io.BytesIO(tar.stdout)).extractall(base, **safe)
         (t / "a").mkdir()
         (t / "b").mkdir()
         exe_a, exe_b = t / "a" / "trace.exe", t / "b" / "trace.exe"
-        build(gcc, args.target, base, exe_a, False)
-        build(gcc, args.target, REPO, exe_b, args.cov)
+        build(gcc, args.target, base, exe_a, False, True)
+        build(gcc, args.target, REPO, exe_b, args.cov, False)
         for seed in (int(s) for s in args.seeds.split(",")):
             a = run(exe_a, args.ticks, seed, args.every)
             b = run(exe_b, args.ticks, seed, args.every)
