@@ -198,14 +198,16 @@ def test_abort_rules_fire():
 
 
 def test_plant_filters_are_scipy_butter():
-    """sim/bench/plant.py writes its sensor IIRs as float64 literals so importing it skips scipy.signal: every bit must
-    still be the butter() design."""
+    """sim/bench/plant.py writes its sensor IIRs as float64 literals so importing it skips scipy.signal: they must
+    still be the butter() design, to 1 ulp (scipy 1.18 rounds the numerator gain 1 ulp off the version that wrote them;
+    the sim runs the literals, so its output does not move with scipy)."""
     from scipy.signal import butter
     bp = sim_plant.bp
     for (b, a), (order, wn) in (((bp.BG_B, bp.BG_A), (3, 50.0 / 500.0)), ((bp.BA_B, bp.BA_A), (2, 30.0 / 500.0))):
         rb, ra = butter(order, wn)
         assert b.dtype == rb.dtype and a.dtype == ra.dtype
-        assert np.array_equal(b, rb) and np.array_equal(a, ra)
+        np.testing.assert_array_max_ulp(b, rb, 1)
+        np.testing.assert_array_max_ulp(a, ra, 1)
 
 
 def _xy_goto(t):

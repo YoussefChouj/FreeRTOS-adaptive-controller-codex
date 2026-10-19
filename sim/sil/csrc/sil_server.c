@@ -23,9 +23,13 @@
  */
 #include <stdio.h>
 #include <math.h>
+#ifdef _WIN32
 #include <io.h>
 #include <fcntl.h>
 #include <windows.h>
+#else
+#include <time.h>
+#endif
 
 #include "pid.h"
 #include "mrac.h"
@@ -314,13 +318,30 @@ static float sil_cmd(int id, int idx, float val)
 static int read_f(float *buf, int n) { return (int)fread(buf, sizeof(float), (size_t)n, stdin) == n; }
 static void write_f(const float *buf, int n) { fwrite(buf, sizeof(float), (size_t)n, stdout); fflush(stdout); }
 
+/* host clock in us, for O_HOST_US (what a step costs on this PC) */
+static double host_us(void)
+{
+#ifdef _WIN32
+	static LARGE_INTEGER f;
+	LARGE_INTEGER t;
+	if (f.QuadPart == 0) QueryPerformanceFrequency(&f);
+	QueryPerformanceCounter(&t);
+	return (double)t.QuadPart * 1e6 / (double)f.QuadPart;
+#else
+	struct timespec t;
+	clock_gettime(CLOCK_MONOTONIC, &t);
+	return (double)t.tv_sec * 1e6 + (double)t.tv_nsec * 1e-3;
+#endif
+}
+
 int main(void)
 {
 	float in[SIL_NIN], out[SIL_NOUT];
-	LARGE_INTEGER f, t0, t1;
+	double t0;
+#ifdef _WIN32
 	_setmode(_fileno(stdin), _O_BINARY);
 	_setmode(_fileno(stdout), _O_BINARY);
-	QueryPerformanceFrequency(&f);
+#endif
 	Controller_Init();
 	wfb_glue_init();
 	for (;;) {
@@ -328,10 +349,9 @@ int main(void)
 		if (op == EOF || op == 'Q') return 0;
 		if (op == 'S') {
 			if (!read_f(in, SIL_NIN)) return 1;
-			QueryPerformanceCounter(&t0);
+			t0 = host_us();
 			sil_step(in, out);
-			QueryPerformanceCounter(&t1);
-			out[O_HOST_US] = (float)((double)(t1.QuadPart - t0.QuadPart) * 1e6 / (double)f.QuadPart);
+			out[O_HOST_US] = (float)(host_us() - t0);
 			write_f(out, SIL_NOUT);
 		} else if (op == 'C') {
 			float c[3], r;
