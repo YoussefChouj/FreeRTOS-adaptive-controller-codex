@@ -88,8 +88,11 @@ def any_slot_loader(stem: str, ts: np.ndarray, rate_hz: float = RATE_HZ) -> np.n
 
 def seq(name: str, rate_hz: float = RATE_HZ) -> dict:
     """One flight on a causal rate_hz grid: nn4_data with one block per step (F = block means of the NN4_CH channels,
-    falling back to the last sample when a block is empty), plus R = truth - earth (truth4 frame, m) at ts."""
-    d = nn4_data(name, rate_hz=rate_hz, win_s=1.0 / rate_hz, nblk=1)
+    falling back to the last sample when a block is empty), plus R = truth - earth (truth4 frame, m) at ts.
+
+    Legacy target (nn4_data target="earth"): on camera-fused flights (g_ext_pos_on >= 2) earth and the EKF channels in
+    NN4_CH carry the camera, so R and F leak the label. nn4_data's default "rawof" target is the leak-free one."""
+    d = nn4_data(name, rate_hz=rate_hz, win_s=1.0 / rate_hz, nblk=1, target="earth")
     stem = json.loads((Path(f"logs/video_truth/{name}") / "truth4.json").read_text())["stem"]
 
     d["F"] = any_slot_loader(stem, d["ts"], rate_hz)

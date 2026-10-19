@@ -1822,50 +1822,95 @@ def yaw4(names, est: str = "earth") -> list[dict]:
 
 
 # ---------------------------------------------------------------- R4: learned camera-off correction (Phase 3)
-# A small model learns the body-frame velocity the earth path misses (truth - earth, from truth4) from 1 s of
-# 100 Hz IMU/OF and 50 Hz EKF states; its integral corrects earth with the camera off. Leave-one-flight-out, and
-# the model never trains on NN4_HOLD (b17 hover; b7/b10 take-off-unverified sync) or NN4_SUSPECT (coral jumps).
+# A small model learns the body-frame velocity the raw optical flow misses (camera truth - scaled raw OF, from
+# truth4) from 1 s of 100 Hz IMU/OF and the OF height; raw OF plus the model, integrated from take-off, is the
+# camera-off track. Leave-one-flight-out, and the model never trains on NN4_HOLD (b17 hover; b7/b10
+# take-off-unverified sync) or NN4_SUSPECT (coral jumps).
+# 2026-10-19 leak fix: the target was truth - earth and the features held the EKF states. On a camera-fused flight
+# both carry the camera (g_ext_pos_on 2 ramps the fixes into ano_of.earth_x/y; 3 moves the EKF position, and through
+# its covariance the velocity and innovation, in EkfOf_UpdatePos), so the model was fed part of the answer. The
+# features are now NN4_RAW_CH (no s_ekf_of channel) and the target is built from raw OF, which no fix touches.
+# NN4_CH keeps the EKF channels for nn_io and the campaign capture list (livewatch/campaign_capture.py).
 NN4_HOLD = ("hover_r4_b17_v0_3g", "drift_rc_r4_b7_v19_4000", "drift_rc_r4_b10_v20")
 NN4_SUSPECT = ("drift_rc_r4_b8_v17", "drift_rc_r4_b12_v21", "r6_f4b_sysid_p5300")   # r6_f4b: truth4 sync suspect (2026-10-13)
 NN4_CH = {1: ("Acc_X_Real", "Acc_Y_Real", "Acc_Z_Real", "Gyro_X_Real", "Gyro_Y_Real", "Gyro_Z_Real", "imu_data.rol",
               "imu_data.pit", "ano_of.of2_dx_fix", "ano_of.of2_dy_fix", "ano_of.of1_dx", "ano_of.of1_dy"),
           2: ("s_ekf_of.x[1]", "s_ekf_of.x[4]", "ano_of.of_alt_cm", "s_ekf_of.innov_x", "s_ekf_of.innov_y")}
+NN4_RAW_CH = {1: NN4_CH[1], 2: ("ano_of.of_alt_cm",)}
+NN4_OF = ("ano_of.of2_dx_fix", "ano_of.of2_dy_fix")   # cm/s on the s_ekf_of.x[1]/x[4] axes (StabilizerTask ofx/ofy)
+NN4_OF_SCALE = 0.01 * 1.094                           # -> true m/s: M_PER_CM * g_of_scale; the bias trim is left to the model
 
 
-def nn4_data(name: str, rate_hz: float = 10.0, win_s: float = 1.0, nblk: int = 10) -> dict:
-    """One truth4 flight at rate_hz: features = nblk block means of NN4_CH over a causal win_s window; target Y =
-    body-frame velocity residual (truth - earth, 0.5 s savgol derivative; truth4 rotation undone, then turned by
-    the yaw). The yaw sense `sign` is the one whose body-frame earth velocity best matches the EKF body velocity
-    (complex correlation `corr`, checked per flight). `back` turns body vectors at ts into the truth4 frame."""
+def _bm(tk, x, edges):
+    """Mean of the samples x(tk) in each [edges[..., i], edges[..., i + 1]) (an empty block gives 0; x may be complex)."""
+    j = np.searchsorted(tk, edges)
+    cs = np.r_[0.0, np.cumsum(np.nan_to_num(x))]
+    return np.diff(cs[j], axis=-1) / np.maximum(np.diff(j, axis=-1), 1)
+
+
+def _cinterp(x, xp, z, **kw):
+    return np.interp(x, xp, z.real, **kw) + 1j * np.interp(x, xp, z.imag, **kw)
+
+
+def nn4_data(name: str, rate_hz: float = 10.0, win_s: float = 1.0, nblk: int = 10, features: dict = NN4_RAW_CH,
+             target: str = "rawof") -> dict:
+    """One truth4 flight at rate_hz: features F = nblk block means of `features` over a causal win_s window.
+    target "rawof" (leak-free, default): Y = the body-frame truth velocity (0.5 s savgol derivative, truth4 rotation
+    undone, turned by the yaw) minus the scaled raw OF `of` (m/s), both as means over the step (ts - 1/rate_hz, ts].
+    The yaw sense `sign` is the one whose body-frame truth velocity best matches the raw OF (complex correlation
+    `corr`, checked per flight). target "earth" (before 2026-10-19; nn_io): Y = the body residual of truth - earth
+    at ts, sign from the earth velocity vs the EKF one. It carries the camera on a fused flight (`ext_pos_on`, the
+    highest g_ext_pos_on logged; 0 when the log has none). `back` turns body vectors at ts into the truth4 frame;
+    `head` is the raw-OF track on the truth4 rows (truth4 frame, m, 0 at the first row)."""
     from scipy.signal import savgol_filter
     vd = Path(f"logs/video_truth/{name}")
     rows = np.genfromtxt(vd / "truth4.csv", delimiter=",", names=True)
     summ = json.loads((vd / "truth4.json").read_text())
     if summ["est"]["earth"]["reflect"]:
         raise ValueError(f"{name}: reflected earth fit, body frame undefined")
+    if target not in ("rawof", "earth"):
+        raise ValueError(f"target {target!r}: 'rawof' or 'earth'")
     S = read_slots(summ["stem"], (1, 2))
     t = rows["t_tel"]; dt = float(np.median(np.diff(t)))
     truth = rows["truth_x"] + 1j * rows["truth_y"]; earth = rows["earth_x"] + 1j * rows["earth_y"]
     unrot = np.exp(-1j * np.radians(summ["est"]["earth"]["rot_deg"]))
     yaw = np.interp(t, S[1]["t"], np.unwrap(np.radians(S[1]["imu_data.yaw"])))
     d = lambda z: savgol_filter(z.real, 25, 2, deriv=1, delta=dt) + 1j * savgol_filter(z.imag, 25, 2, deriv=1, delta=dt)
-    ekf = np.interp(t, S[2]["t"], S[2]["s_ekf_of.x[1]"]) + 1j * np.interp(t, S[2]["t"], S[2]["s_ekf_of.x[4]"])
-    ve = d(earth) * unrot
-    cc = {s: np.vdot(ve * np.exp(1j * s * yaw), ekf) / np.sqrt(np.vdot(ve, ve).real * np.vdot(ekf, ekf).real) for s in (1, -1)}
+    ofk = np.nan_to_num(S[1][NN4_OF[0]] + 1j * S[1][NN4_OF[1]]) * NN4_OF_SCALE        # raw OF, body m/s, slot rate
+    of_t = _cinterp(t, S[1]["t"], ofk)
+    if target == "rawof":
+        v, ref = d(truth) * unrot, of_t
+    else:
+        v, ref = d(earth) * unrot, _cinterp(t, S[2]["t"], S[2]["s_ekf_of.x[1]"] + 1j * S[2]["s_ekf_of.x[4]"])
+    cc = {s: np.vdot(v * np.exp(1j * s * yaw), ref) / np.sqrt(np.vdot(v, v).real * np.vdot(ref, ref).real) for s in (1, -1)}
     sign = max(cc, key=lambda s: abs(cc[s]))
-    vres = d(truth - earth) * unrot * np.exp(1j * sign * yaw)
+    body = unrot * np.exp(1j * sign * yaw)                                              # truth4 frame -> body
     ts = np.arange(t[0] + win_s, t[-1], 1.0 / rate_hz)
     edges = ts[:, None] - win_s + np.arange(nblk + 1)[None, :] * win_s / nblk
-    F = []
-    for k, chans in NN4_CH.items():
-        j = np.searchsorted(S[k]["t"], edges); n = np.maximum(np.diff(j, axis=1), 1)
-        for c in chans:
-            cs = np.r_[0.0, np.cumsum(np.nan_to_num(S[k][c]))]
-            F.append(np.diff(cs[j], axis=1) / n)
+    F = [_bm(S[k]["t"], S[k][c], edges) for k, chans in features.items() for c in chans]
+    step = np.c_[ts - 1.0 / rate_hz, ts]
+    of = _bm(S[1]["t"], ofk, step)[:, 0]
     i = np.searchsorted(t, ts)
-    return {"name": name, "t": t, "truth": truth, "earth": earth, "ts": ts, "F": np.hstack(F),
-            "Y": np.c_[vres[i].real, vres[i].imag], "back": np.exp(-1j * sign * yaw[i]) / unrot,
-            "sign": sign, "corr": complex(cc[sign])}
+    if target == "rawof":
+        y = _bm(t, d(truth) * body, step)[:, 0] - of
+    else:
+        y = (d(truth - earth) * body)[i]
+    back = 1.0 / (unrot * np.exp(1j * sign * np.interp(ts, t, yaw)))                  # body at ts -> truth4 frame
+    oe = of_t / body
+    ext = S.get(2, {}).get("g_ext_pos_on")
+    return {"name": name, "target": target, "t": t, "truth": truth, "earth": earth, "ts": ts, "F": np.hstack(F),
+            "Y": np.c_[y.real, y.imag], "of": of, "back": back, "sign": sign, "corr": complex(cc[sign]),
+            "head": np.r_[0.0, np.cumsum(0.5 * (oe[1:] + oe[:-1]) * np.diff(t))],
+            "ext_pos_on": int(np.nan_to_num(ext).max()) if ext is not None and len(ext) else 0}
+
+
+def nn4_track(d: dict, p) -> np.ndarray:
+    """Camera-off track of an nn4_data flight (complex, truth4 frame, m, on d["t"]): the raw OF plus the predicted
+    body residual p (rows of d["ts"], m/s), turned by `back` and integrated step by step from the first truth4 row
+    (d["head"], the raw OF alone, until the first full window)."""
+    c = np.cumsum((d["of"] + p[:, 0] + 1j * p[:, 1]) * d["back"] * np.diff(d["ts"], prepend=d["ts"][0]))
+    return (d["earth"][0] + _cinterp(np.minimum(d["t"], d["ts"][0]), d["t"], d["head"])
+            + _cinterp(d["t"], d["ts"], c, left=0.0))
 
 
 def _ridge(Xtr, Ytr, Xte, lam):
@@ -1903,9 +1948,12 @@ def _mlp(Xtr, Ytr, Xte, H=32, ep=60, lr=3e-3, wd=1e-3, seed=0):
 
 def nn4(names=None, lam: float = 300.0, H: int = 32, ep: int = 60, seeds: int = 2) -> dict:
     """LOFO camera-off correction on every truth4 flight: ridge and MLP trained on the pool (all flights minus
-    NN4_HOLD, NN4_SUSPECT and the scored one) predict the body velocity residual; its integral (from the first
-    sample, in the truth4 frame) is added to earth and scored by drift_score (tag _nn4). `oracle` integrates the
-    true residual (pipeline check: should land near truth). vel_r2 = residual variance explained, out of fold."""
+    NN4_HOLD, NN4_SUSPECT and the scored one) predict the body velocity the raw OF misses (nn4_data target "rawof").
+    Raw OF plus that, turned to the truth4 frame and integrated from the first row (`head` until the first full
+    window), is scored by drift_score (tag _nn4). `rawof` integrates the raw OF alone (the model's baseline),
+    `oracle` the true residual (pipeline check: should land near truth). `earth` is the logged track: camera-aided on
+    a fused flight (ext_pos_on >= 2), so a reference there, not a camera-off baseline. vel_r2 = residual variance
+    explained, out of fold."""
     allf, data, skipped = sorted(p.parent.name for p in Path("logs/video_truth").glob("*/truth4.json")), {}, {}
     for n in allf:
         try:
@@ -1915,25 +1963,23 @@ def nn4(names=None, lam: float = 300.0, H: int = 32, ep: int = 60, seeds: int = 
     allf = [n for n in allf if n in data]
     pool = [n for n in allf if n not in NN4_HOLD + NN4_SUSPECT]
     D = data[allf[0]]["F"].shape[1]
-    out = {"pool": pool, "hold": list(NN4_HOLD), "suspect": list(NN4_SUSPECT), "skipped": skipped, "features": D, "lam": lam, "H": H,
+    out = {"target": "camera truth - raw OF (2026-10-19)", "pool": pool, "hold": list(NN4_HOLD), "suspect": list(NN4_SUSPECT),
+           "skipped": skipped, "features": D, "lam": lam, "H": H,
            "params": {"ridge": 2 * (D + 1), "mlp": D * H + H + H * H + H + 2 * H + 2},
            "macs_per_step": {"ridge": 2 * D, "mlp": D * H + H * H + 2 * H}, "flights": {}}
     for n in names or allf:
         d = data[n]; tr = [m for m in pool if m != n]
         Xtr = np.vstack([data[m]["F"] for m in tr]); Ytr = np.vstack([data[m]["Y"] for m in tr])
-        pred = {"oracle": d["Y"], "ridge": _ridge(Xtr, Ytr, d["F"], lam),
+        pred = {"oracle": d["Y"], "rawof": np.zeros_like(d["Y"]), "ridge": _ridge(Xtr, Ytr, d["F"], lam),
                 "mlp": np.mean([_mlp(Xtr, Ytr, d["F"], H, ep, seed=s) for s in range(seeds)], 0)}
-        dts = np.diff(d["ts"], prepend=d["ts"][0])
         ests = {"earth": np.c_[d["earth"].real, d["earth"].imag]}
         r2 = {}
         for k, p in pred.items():
-            c = np.cumsum((p[:, 0] + 1j * p[:, 1]) * d["back"] * dts)
-            c = np.interp(d["t"], d["ts"], c.real, left=0.0) + 1j * np.interp(d["t"], d["ts"], c.imag, left=0.0)
-            z = d["earth"] + c
+            z = nn4_track(d, p)
             ests[k] = np.c_[z.real, z.imag]
             r2[k] = float(1 - np.sum((p - d["Y"]) ** 2) / np.sum((d["Y"] - d["Y"].mean(0)) ** 2))
         r = drift_score(n, ests=ests, tag="_nn4")
-        out["flights"][n] = {"in_pool": n in pool, "sign": d["sign"], "corr": round(abs(d["corr"]), 3),
+        out["flights"][n] = {"in_pool": n in pool, "ext_pos_on": d["ext_pos_on"], "sign": d["sign"], "corr": round(abs(d["corr"]), 3),
                              "corr_deg": round(float(np.degrees(np.angle(d["corr"]))), 1), "n_train": len(Ytr),
                              "vel_r2": r2, "est": {k: {q: e.get(q) for q in ("rms_cm", "drift60_p90_cm", "drift60s_p90_cm")}
                                                    for k, e in r["est"].items()}}
@@ -1942,7 +1988,8 @@ def nn4(names=None, lam: float = 300.0, H: int = 32, ep: int = 60, seeds: int = 
 
 
 REPORT4_EST = (("EKF alone", "truth4_score_fuse_300ms.json", "earth"), ("camera replay, 0.3 s", "truth4_score_fuse_300ms.json", "fused"),
-               ("live tracker, 0.3 s", "truth4_score_live_300ms.json", "fused"), ("camera-off MLP", "truth4_score_nn4.json", "mlp"))
+               ("live tracker, 0.3 s", "truth4_score_live_300ms.json", "fused"), ("raw OF alone", "truth4_score_nn4.json", "rawof"),
+               ("camera-off MLP", "truth4_score_nn4.json", "mlp"))
 
 
 def table4() -> str:
@@ -2156,7 +2203,7 @@ def main(argv=None):
         r = nn4(a.names or None, a.lam, a.hidden, a.epochs, a.seeds)
         print(f"pool {len(r['pool'])} flights, {r['features']} features, params {r['params']}, MACs/step {r['macs_per_step']}")
         for n, f in r["flights"].items():
-            print(f"{n:30s} {'pool' if f['in_pool'] else 'HELD'} sign {f['sign']:+d} corr {f['corr']:.2f}@{f['corr_deg']:+.0f} r2 "
+            print(f"{n:30s} {'pool' if f['in_pool'] else 'HELD'} ext {f['ext_pos_on']} sign {f['sign']:+d} corr {f['corr']:.2f}@{f['corr_deg']:+.0f} r2 "
                   + "/".join(f"{f['vel_r2'][k]:+.2f}" for k in ("ridge", "mlp")) + " | " + " ".join(
                       f"{k} {e['rms_cm']:5.1f}/{e['drift60s_p90_cm'] or float('nan'):5.1f}" for k, e in f["est"].items()))
     elif a.cmd == "handsoff4":
