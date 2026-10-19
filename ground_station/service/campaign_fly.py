@@ -888,6 +888,7 @@ def wait_txn(base, txid, timeout_s=2.0):
     the journal kept ACKed actions open never shows the final outcome); nothing at all returns 'timeout'."""
     deadline = _clock() + timeout_s
     seen = "timeout"
+    ack_extended = False
     while True:
         try:
             _, res = call(base, "/api/actions", timeout=timeout_s)
@@ -898,7 +899,9 @@ def wait_txn(base, txid, timeout_s=2.0):
             return lc
         if lc == "acknowledged" and seen != lc:
             seen = lc
-            deadline = min(deadline, _clock() + ACK_GRACE_S)
+            if not ack_extended:
+                deadline = max(deadline, _clock() + ACK_GRACE_S)
+                ack_extended = True
         if _clock() >= deadline:
             return seen
         _sleep(0.02)
@@ -1089,6 +1092,33 @@ class HttpWfbClient:
     def prog(self, idx: int, value: float) -> bool:
         return self._send_cmd(28, idx, float(value))
 
+
+
+def preapply_exp_id(base, launch_path):
+    """Write exp_id 50 on the ground before wait_for_arm (Fix)."""
+    if not launch_path:
+        return None
+    try:
+        from ground_station.service.campaign_schema import load_campaign
+        c = load_campaign(launch_path)
+        if not c.experiments:
+            return None
+        sc = getattr(c.experiments[0], "scenario", None)
+        if not sc or not getattr(sc, "steps", None):
+            return None
+        for st in sc.steps:
+            if st.kind == "exp" and "id" in st.args:
+                val = float(st.args["id"])
+            elif st.kind == "set" and st.args.get("var") == "exp_id" and "value" in st.args:
+                val = float(st.args["value"])
+            else:
+                continue
+            import requests
+            requests.post(f"{base}/api/vars/write", json={"index": 50, "value": val, "author": "fly:pre_exp"}, timeout=2.0)
+            return val
+    except Exception:
+        pass
+    return None
 
 def upload_preload(base, launch_path=None, runner=None):
     """Run trajectory/program upload on the ground BEFORE wait_for_arm() (Fix 2)."""
@@ -1281,8 +1311,29 @@ def debrief_lines(samples, st, folder, cam=None):
     # 10-18 mem1: a takeoff abort read as "it only hovered": say the abort and that the steps after it never ran
     lines += [f"ABORTED L{f.get('abort_level') or '?'} {f.get('experiment') or 'flight'}: {f['abort_reason']} (the safety "
               "monitor landed it; the steps after that point never ran)" for f in st.get("flights") or [] if f.get("abort_reason")]
+    def is_traj(s, prev_s):
+        if prim(s) == "TRAJ" or s.get("g_wfb_status.traj_state") == 3:
+            return True
+        if prim(s) == "HOVER" and prev_s is not None:
+            dt = s.get("t", 0.0) - prev_s.get("t", 0.0)
+            dx = s.get("Ctrler.locxPID.Des", 0.0) - prev_s.get("Ctrler.locxPID.Des", 0.0)
+            dy = s.get("Ctrler.locyPID.Des", 0.0) - prev_s.get("Ctrler.locyPID.Des", 0.0)
+            if dt > 0 and math.hypot(dx, dy) / dt > 2.0:
+                return True
+        return False
+
+    traj_samples = []
+    hover_samples = []
+    prev_s = None
+    for s in samples:
+        if is_traj(s, prev_s):
+            traj_samples.append(s)
+        elif prim(s) == "HOVER":
+            hover_samples.append(s)
+        prev_s = s
+
     for phase in ("HOVER", "TRAJ"):
-        part = [s for s in samples if prim(s) == phase]
+        part = hover_samples if phase == "HOVER" else traj_samples
         errs = {ax: _err_cm(part, ax) for ax in "xyz"}
         if not any(errs.values()):
             lines.append(f"{phase:<6} no samples")
@@ -1412,8 +1463,11 @@ def fly_one(base, launch, src, name, pack, post_takeoff_gains=None):
     cam = camera_landing()
     lines = debrief_lines(samples, st, rel(folder), cam=cam)
     print("\n".join(lines))
+    aborted = bool(any(f.get("abort_reason") for f in st.get("flights") or []))
+    abort_reason = next((f.get("abort_reason") for f in st.get("flights") or [] if f.get("abort_reason")), None)
+    air_s = round(max((s.get("g_wfb_status.airborne_t", 0.0) for s in samples), default=0.0), 1)
     events.log("debrief", ms=round((_clock() - t_land) * 1000), folder=rel(folder), status=st.get("status"),
-               phase=st.get("phase"), samples=len(samples))
+               phase=st.get("phase"), samples=len(samples), aborted=aborted, abort_reason=abort_reason, air_s=air_s)
     (folder / "debrief.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
     (folder / "outputs.txt").write_text(f"{st.get('outputs_dir') or ''}\n", encoding="utf-8")
     write_samples(folder / "live_5hz.csv", samples)
@@ -1472,29 +1526,38 @@ def fly_loop(base, arg, pack, rate=None, run=None, once=False, yes=False,
                   flush=True)
         # Fix 2: Trajectory preload on the ground BEFORE wait_for_arm
         upload_preload(base, str(launch))
-        t_wait = _clock()
-        r = wait_for_arm(base, str(launch), go_pack, preflight=not held)
-        events.log("arm_wait", result=r, campaign=name, pack=go_pack, s=round(_clock() - t_wait, 1))
-        if r == "quit":
-            return 0
-        if r == "link":
-            pack, held = _ask_pack(pack), None
-            continue
-        st, _, _, _ = fly_one(base, launch, src, name, go_pack, post_takeoff_gains=post_to_write)
-        if st is None:
-            held = None
-            continue
-        if st.get("status") == "service_down":
-            return 1
-        if run and st.get("outputs_dir"):
-            subprocess.run([sys.executable, "-m", "ground_station.analysis.flight_debrief", st["outputs_dir"],
-                            "--run", run], cwd=ROOT)
-        waiting = st.get("status") == "waiting_for_go" and st.get("waiting_pack")
-        held = (launch, src, name, st["waiting_pack"]) if waiting else None
-        if once and not held:
-            return 0
-        print("Disarm by RC; " + ("the next flight of this campaign" if held else f"then {rel(src)} is read again")
-              + " and the next arm flies it.", flush=True)
+        pre_exp = preapply_exp_id(base, str(launch))
+        try:
+            t_wait = _clock()
+            r = wait_for_arm(base, str(launch), go_pack, preflight=not held)
+            events.log("arm_wait", result=r, campaign=name, pack=go_pack, s=round(_clock() - t_wait, 1))
+            if r == "quit":
+                return 0
+            if r == "link":
+                pack, held = _ask_pack(pack), None
+                continue
+            st, _, _, _ = fly_one(base, launch, src, name, go_pack, post_takeoff_gains=post_to_write)
+            if st is None:
+                held = None
+                continue
+            if st.get("status") == "service_down":
+                return 1
+            if run and st.get("outputs_dir"):
+                subprocess.run([sys.executable, "-m", "ground_station.analysis.flight_debrief", st["outputs_dir"],
+                                "--run", run], cwd=ROOT)
+            waiting = st.get("status") == "waiting_for_go" and st.get("waiting_pack")
+            held = (launch, src, name, st["waiting_pack"]) if waiting else None
+            if once and not held:
+                return 0
+            print("Disarm by RC; " + ("the next flight of this campaign" if held else f"then {rel(src)} is read again")
+                  + " and the next arm flies it.", flush=True)
+        finally:
+            if pre_exp is not None and pre_exp != 255:
+                try:
+                    import requests
+                    requests.post(f"{base}/api/vars/write", json={"index": 50, "value": 255.0, "author": "fly:pre_exp"}, timeout=2.0)
+                except Exception:
+                    pass
 
 
 def main(argv=None):

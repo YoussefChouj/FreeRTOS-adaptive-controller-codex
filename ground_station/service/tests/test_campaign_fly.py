@@ -193,11 +193,11 @@ def _sample(t, prim, x, y, z, dx=0.0, dz=0.0, air=0.0):
 
 
 def test_debrief_lines_rms_max_and_landing_offset():
-    samples = [_sample(0.0, 0, 10.0, 0.0, 0.0), _sample(1.0, 2, 10.0, 0.0, 0.52, dx=3.0, dz=0.02, air=1.0),
-               _sample(2.0, 2, 10.0, 0.0, 0.52, dx=-3.0, dz=0.02, air=2.0), _sample(3.0, 0, 14.0, -3.0, 0.0, air=3.5)]
+    samples = [_sample(0.0, 0, 10.0, 0.0, 0.0), _sample(10.0, 2, 10.0, 0.0, 0.52, dx=3.0, dz=0.02, air=1.0),
+               _sample(20.0, 2, 10.0, 0.0, 0.52, dx=-3.0, dz=0.02, air=2.0), _sample(30.0, 0, 14.0, -3.0, 0.0, air=3.5)]
     lines = campaign_fly.debrief_lines(samples, {"status": "done", "flights": [{}], "outputs_dir": "logs/o"}, "f/01")
     assert lines == ["done  air 3.5 s  1 flight(s)  4 live samples",
-                     "HOVER  x/y/z error cm  rms 3/0/2  max 3/0/2  (1 s)",
+                     "HOVER  x/y/z error cm  rms 3/0/2  max 3/0/2  (10 s)",
                      "TRAJ   no samples",
                      "landing offset x +4 y -3 cm from the takeoff point (5 cm)",
                      "outputs logs/o  flight folder f/01"]
@@ -1011,3 +1011,113 @@ def test_watch_warns_when_post_takeoff_gains_fail(monkeypatch):
         close = staticmethod(lambda: None)
     campaign_fly.watch("http://h", term=T(), post_takeoff_gains="c3")
     assert any(s.startswith("POST-TAKEOFF GAINS FAILED (c3)") for s in said)
+
+def test_wait_txn_extends_deadline_once(monkeypatch):
+    from ground_station.service.campaign_fly import wait_txn, ACK_GRACE_S
+    import time
+
+    calls = []
+    def mock_call(base, route, timeout=None):
+        calls.append(route)
+        if len(calls) < 3:
+            return 200, {"actions": [{"transaction_id": "123", "lifecycle": "acknowledged"}]}
+        return 200, {"actions": [{"transaction_id": "123", "lifecycle": "applied"}]}
+
+    monkeypatch.setattr("ground_station.service.campaign_fly.call", mock_call)
+
+    t0 = time.time()
+    def mock_clock():
+        return t0 + (len(calls) * 0.1)
+    monkeypatch.setattr("ground_station.service.campaign_fly._clock", mock_clock)
+
+    res = wait_txn("base", "123", timeout_s=2.0)
+    assert res == "applied"
+
+def test_preapply_exp_id_writes_and_resets(tmp_path, monkeypatch):
+    import json
+    from ground_station.service.campaign_fly import preapply_exp_id, fly_loop
+
+    scen = tmp_path / "test.yaml"
+    from ground_station.service.campaign_schema import Campaign, Experiment
+    from ground_station.service.scenario_schema import Scenario, Step
+
+    # We mock load_campaign
+    c = Campaign(
+            campaign="test",
+            objective="test",
+            controller="pid",
+            packs=("type1",),
+            max_flights=10,
+            envelope={},
+            experiments=(Experiment(
+            name="e1",
+            shape="",
+            params={},
+            profile=None,
+            capture="",
+            repeats=1,
+            scenario=Scenario(name="s1", hover_z_m=0.5, steps=(Step(kind="exp", args={"id": 4}),))
+        ),)
+    )
+    def mock_load(path):
+        return c
+    monkeypatch.setattr("ground_station.service.campaign_schema.load_campaign", mock_load)
+    scen = tmp_path / "test.yaml"
+    scen.touch()
+
+    written = []
+    def mock_post(url, json, timeout):
+        written.append(json)
+    monkeypatch.setattr("requests.post", mock_post)
+
+    val = preapply_exp_id("base", str(scen))
+    assert val == 4.0
+    assert written == [{"index": 50, "value": 4.0, "author": "fly:pre_exp"}]
+
+def test_debrief_lines_traj_preset():
+    from ground_station.service.campaign_fly import debrief_lines
+    samples = [
+        {"t": 0.0, "g_wfb_status.prim_state": 2.0, "Ctrler.locxPID.FB": 0.0, "Ctrler.locyPID.FB": 0.0, "Ctrler.locxPID.Des": 0.0, "Ctrler.locyPID.Des": 0.0, "Ctrler.Z_posPID.FB": 0.0, "Ctrler.Z_posPID.Des": 0.0},
+        {"t": 0.2, "g_wfb_status.prim_state": 2.0, "Ctrler.locxPID.FB": 0.0, "Ctrler.locyPID.FB": 0.0, "Ctrler.locxPID.Des": 0.0, "Ctrler.locyPID.Des": 0.0, "Ctrler.Z_posPID.FB": 0.0, "Ctrler.Z_posPID.Des": 0.0},
+        {"t": 0.4, "g_wfb_status.prim_state": 2.0, "Ctrler.locxPID.FB": 1.0, "Ctrler.locyPID.FB": 0.0, "Ctrler.locxPID.Des": 1.0, "Ctrler.locyPID.Des": 0.0, "Ctrler.Z_posPID.FB": 0.0, "Ctrler.Z_posPID.Des": 0.0},
+    ]
+    st = {"status": "done", "flights": []}
+    lines = debrief_lines(samples, st, "f/01")
+    assert any("TRAJ   x/y/z error cm" in ln for ln in lines)
+    assert any("HOVER  x/y/z error cm" in ln for ln in lines)
+
+
+def test_fly_one_logs_aborted(monkeypatch):
+    from ground_station.service.campaign_fly import fly_one
+    import ground_station.service.campaign_fly as cf
+
+    class MockEvents:
+        def __init__(self):
+            self.logged = []
+        def log(self, name, **kwargs):
+            self.logged.append((name, kwargs))
+
+    mock_events = MockEvents()
+    monkeypatch.setattr(cf, "events", mock_events)
+
+    def mock_call(base, route, payload, timeout):
+        return 200, {}
+    monkeypatch.setattr(cf, "call", mock_call)
+
+    def mock_watch(*args, **kwargs):
+        return {"status": "aborted", "flights": [{"abort_reason": "test abort"}]}, []
+    monkeypatch.setattr(cf, "watch", mock_watch)
+
+    def mock_camera_landing(*args, **kwargs):
+        return None
+    monkeypatch.setattr(cf, "camera_landing", mock_camera_landing)
+
+    monkeypatch.setattr(cf, "write_samples", lambda p, s: None)
+
+    monkeypatch.setattr("shutil.copy2", lambda src, dst: None)
+
+    fly_one("base", "launch", "src", "name", "pack")
+
+    debrief_log = next(kwargs for name, kwargs in mock_events.logged if name == "debrief")
+    assert debrief_log["aborted"] is True
+    assert debrief_log["abort_reason"] == "test abort"
