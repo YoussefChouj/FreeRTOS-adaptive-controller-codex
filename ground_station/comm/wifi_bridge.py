@@ -72,6 +72,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from .lag_histogram import LagHistogram
 from .boot_default_layout import (
     BOOT_DEFAULT_VARS,
     BOOT_DEFAULT_DIVIDER,
@@ -270,6 +271,7 @@ class WifiBridge:
         self._ingest_q: queue.Queue = queue.Queue(maxsize=INGEST_QUEUE_MAX)
         self.ingest_dropped = 0  # frames dropped because the ingest thread fell INGEST_QUEUE_MAX behind
         self.ingest_lag_ns = 0  # age of the frame the ingest thread finished last (receive stamp to done)
+        self.ingest_lag_hist = LagHistogram()  # every frame's ingest_lag_ns, served at /health/ingest_lag
         self._last_reply_rx = 0.0  # monotonic arrival of the last command reply (link_health)
         # Subscribe watchdog. The FC keeps its slots in RAM, so a power cycle
         # drops them: it comes back sending only its fallback frames, and every
@@ -1623,6 +1625,7 @@ class WifiBridge:
             now = time.time_ns()
             lag = now - t_ns
             self.ingest_lag_ns = lag
+            self.ingest_lag_hist.add(lag, now)
             max_lag_ns = max(max_lag_ns, lag)
             if now - last_report_ns >= 1_000_000_000:
                 dropped = self.ingest_dropped
