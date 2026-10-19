@@ -489,7 +489,8 @@ class Soak:
             raise SystemExit("less than 3 GB free: a soak day writes about 0.5 GB of recordings")
         self.out.mkdir(parents=True, exist_ok=True)
         self.log(f"run folder {self.out}")
-        self.log(f"copied {copy_tree(self.tree)} files to the tree")
+        self.commit = _commit()   # what the tree copy is, read before the run (HEAD can move during it)
+        self.log(f"copied {copy_tree(self.tree)} files to the tree ({self.commit})")
         from ground_station.lab import symbol_image
         elf = symbol_image.build(symbol_image.DEFAULT_OUT, force=False).elf
         self.log(f"symbol image {elf}")
@@ -643,7 +644,7 @@ class Soak:
             total["max_ms"] = max([m for m in [total["max_ms"]] + [(f.lag or {}).get("max_ms") for d in days
                                                                   for f in d["flights"]] if m is not None],
                                   default=None)
-            run = {"stamp": self.stamp, "tree": self.tree, "port": self.port, "commit": _commit(),
+            run = {"stamp": self.stamp, "tree": self.tree, "port": self.port, "commit": self.commit,
                    "lag_total": total,
                    "stale_mentions": stale_mentions(self.events, self.out / "service.log"),
                    "instance_changed": (h["started_at"], self.service.pid) != self.instance
