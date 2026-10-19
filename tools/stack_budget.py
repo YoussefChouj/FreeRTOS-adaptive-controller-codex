@@ -135,6 +135,10 @@ def tasks():
 
 
 def main():
+    if not HTM.exists():   # gitignored Keil link output: absent in a fresh clone or worktree until Keil links there
+        print(f'SKIP stack-budget: {HTM.relative_to(ROOT).as_posix()} not present '
+              '(no Keil link in this tree; link in Keil, then rerun)')
+        return 0
     htm = read(HTM)
     stamp = re.search(r'Last Updated: ([^\n<]+)', htm)
     print('stack-budget: call graph %s (%s)' % (HTM.relative_to(ROOT).as_posix(), stamp.group(1) if stamp else '?'))
