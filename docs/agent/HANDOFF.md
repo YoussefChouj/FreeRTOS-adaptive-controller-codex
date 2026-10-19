@@ -14,8 +14,15 @@
 
 ## Root Causes Diagnosed (Ready to Implement / Verify)
 1. **Why Figure-8 Tracking Error Peaked (~36.5 cm) Near `y = -60 cm` & Tripped `L1 position_error` (Operator Approved Fix):**
-   - **Controller phase lag (primary):** In `TASK/AutoflyTask.c:328-341` (`AutoflyTask_CommitRef` `L137-174`), `g_traj_vff_x/y` (velocity feedforward) is NOT set for `figure8` (only set at `L819` for Keil presets), or `pos_ctrl` uses pure position error with $K_p = 0.8\text{ s}^{-1}$ (`API/pid.c:36`). At $v_{pk} = 0.38\text{ m/s}$, steady-state tracking lag is $e = v / K_p = 0.475\text{ m}$, tripping `AbortLimits.pos_err_m = 0.25\text{ m}` (`ground_station/service/abort_monitor.py:18`).
-   - **Camera lens / nadir proximity check:** Check `logs/video_truth/floor-1019/aruco.npz` and `logs/video_truth/mem2..mem6-*/fixes.csv` (`ground_station/analysis/live_tracker.py:111-114`, `video_truth.py:559-568`) for how close `(x=+0.30, y=-0.60, z=0.80)` is to the camera lens / frame edge and whether `TelHeight` parallax compensation (`\Delta xy = \frac{z}{c_z - z}(xy - c_{xy})`) or lens distortion near the camera edge contributes additional error at the `y = -0.60\text{ m}` lobe.
+   - **CORRECTED (2026-10-19 cloud session, `docs/lab/figure8-tracking-analysis-2026-10-19.md`):** not v/Kp lag.
+     - `mem2`..`mem6` flew the Keil `preset figure8`, whose VFF (`g_traj_vff_x/y`) was active and was added once (`g_xy_ctrl_kind=0`).
+     - The reference fits move_s 18 exactly. Its peak speed was 66 cm/s; without FF it would have lagged by 82 cm.
+     - The error is a growing overshoot at each x extreme: +5..17, -17..-25, +20..+50 cm. It peaks at θ≈270° on the y=-60 lobe. It is the same in the u0 and u100 arms.
+     - A VFF+P model with a first-order inner loop explains 12-15 cm of it.
+     - The rest is open: either inner-loop phase lag, or EKF fusion of the frozen camera fixes if `g_ext_pos_on>=2`, which is unknown from the cloud copies of the logs.
+     - The GS `circle`/`sinusoid`/`figure8_path` commands had no VFF. They now get it through `Traj_Commit` + `Traj_FFUpdate` in `TASK/AutoflyTask.c`.
+     - Recommended: an A/B figure-8 arm with the `ground_station/service/campaigns/lab_c_tuned.fly` gains (shift 0.31). Log `velocity_loops` + `camera_fusion` at 100 Hz.
+   - **Camera lens / nadir proximity check (DONE: no effect).** The pose maps to pixel (1377, 480). The height-parallax sensitivity there is 2.01 cm/cm, against 2.19 at the pad. Original note: check `logs/video_truth/floor-1019/aruco.npz` and `logs/video_truth/mem2..mem6-*/fixes.csv` (`ground_station/analysis/live_tracker.py:111-114`, `video_truth.py:559-568`) for how close `(x=+0.30, y=-0.60, z=0.80)` is to the camera lens / frame edge and whether `TelHeight` parallax compensation (`\Delta xy = \frac{z}{c_z - z}(xy - c_{xy})`) or lens distortion near the camera edge contributes additional error at the `y = -0.60\text{ m}` lobe.
    - **Why the drone returned/hovered and landed off-pad after abort:** L1 abort triggers `wfb_prim_land_in_place` (`API/wfb_prim.c:89-99, 230-234`), which freezes `target_x, target_y` at the abort position (`x≈+0.23, y≈-0.13..-0.20 m`) and descends there instead of returning to `(0, 0)`.
    - **Operator-approved fix:** Update `AbortLimits.pos_err_m = 0.50` m in `ground_station/service/abort_monitor.py` AND check/enable velocity feedforward for figure-8 so tracking error stays small.
 2. **Why Landing Performance Was ~25 cm Off-Pad Across All Flights (`mem2..mem6`, `z1`, `z2`) & How to Fix Near-0 cm Landing:**
