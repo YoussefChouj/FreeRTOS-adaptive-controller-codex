@@ -1653,7 +1653,8 @@ static void Exp_Poll(FlightState_t state)
 	knobs.lim_mode = &lim_mode;
 	knobs.mdec = &g_imu_mahony_yaw_decouple;
 
-	on_ground = Keil_OnGround(state);
+	on_ground = (uint8_t)(Keil_OnGround(state) ||
+	                      (flight_phase == FLIGHT_PHASE_GROUND_IDLE && g_wfb_status.prim_state == (float)WFB_PRIM_IDLE));
 	res = Exp_Step(exp_id, &s_exp_last, exp_active, on_ground,
 	               s_exp, (uint8_t)(sizeof(s_exp) / sizeof(s_exp[0])),
 	               &knobs, &xyrm);
