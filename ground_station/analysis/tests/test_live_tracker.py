@@ -671,3 +671,57 @@ def test_floor_scenery_is_cached_per_threshold_and_redone_after_a_rescan(tmp_pat
     os.utime(tmp_path / "cam.mkv", (png.stat().st_mtime + 10,) * 2)                  # floor run again here
     lt.floor_scenery(tmp_path)
     assert len(calls) == 2
+
+
+def test_floor_scenery_masks_the_start_frames_and_learning_recentres_on_the_pad():
+    """Lab 10-19: nothing masked the print next to the pad while the start frames were learned, so the first ~5 s of
+    dots sat on a guard corner and the ROI stayed there. The scenery masks them from frame 0, and when learning is
+    done the ROI is re-centred on the seed, so a ROI dragged off the drone finds it again."""
+    import cv2
+
+    from ground_station.analysis import video_truth as vt
+    from ground_station.analysis.live_tracker import CoralTracker
+    pad = (300, 260)
+    scenery = vt.coral_mask(cv2.cvtColor(_pad_frame(station=True, parked=True), cv2.COLOR_BGR2HSV)) > 0
+    old = CoralTracker(pad, learn_n=3, learn_every=1)
+    new = CoralTracker(pad, learn_n=3, learn_every=1, scenery=scenery)
+    uo, un = old.step(_pad_frame(drone=pad)), new.step(_pad_frame(drone=pad))
+    assert np.hypot(*(uo - pad)) > 10.0                          # the bug: frame 0 pulled off the drone
+    assert np.hypot(*(un - pad)) <= 1.0 and not new.learned
+    new.step(_pad_frame(drone=pad))
+    new.c = np.array([60.0, 60.0])                               # a ROI dragged off the drone: it misses there
+    uv = new.step(_pad_frame(drone=pad))                         # the 3rd start frame: learned, re-centred
+    assert new.learned and new.learn_n == 0
+    assert uv is not None and np.hypot(*(uv - pad)) <= 1.0
+
+
+class _LearningRing:
+    """A ring stub: the dot sits on a guard corner until the static is learned at frame `learn_at`."""
+
+    def __init__(self, learn_at: int):
+        self.k, self.learn_at, self.learned, self.active_zoom = 0, learn_at, False, 1.0
+
+    def step(self, frame):
+        self.k += 1
+        self.learned = self.k >= self.learn_at
+        return np.array([300.0 if self.learned else 340.0, 260.0])
+
+
+def test_run_source_restarts_the_pad_origin_and_trail_when_learned_and_clears_the_trail_at_take_off(tmp_path):
+    """Lab 10-19: the pre-learning corner dots stayed in the pad origin and in the trail (a corner-to-drone line)."""
+    import cv2
+
+    from ground_station.analysis.live_tracker import PadOrigin, Preview, ring_xy, run_source
+    p = str(tmp_path / "v.avi")
+    w = cv2.VideoWriter(p, cv2.VideoWriter_fourcc(*"MJPG"), 30.0, (640, 480))
+    for _ in range(26):
+        w.write(np.zeros((480, 640, 3), np.uint8))
+    w.release()
+    cam = {"K": [[500.0, 0, 320], [0, 500.0, 240], [0, 0, 1]], "dist": [0.0] * 5,
+           "R": [[1.0, 0, 0], [0, -1.0, 0], [0, 0, -1.0]], "t": [0.0, 0.0, 2.0]}
+    ring, pad, show = _LearningRing(learn_at=15), PadOrigin(n=20), Preview(headless=True, hz=1000.0)
+    run_source(p, cam, EarthAlign(), 0.05, ring=ring, pad=pad, ground=lambda: ring.k < 20, show=show)
+    assert pad.frozen and pad.xy == pytest.approx(ring_xy([300.0, 260.0], cam, 0.05))   # 14 corner dots dropped
+    assert len(show.uvs) == 7 and {u for _, u, _ in show.uvs} == {300.0}                # from the take-off on
+    show.clear_trail()
+    assert show.uvs == [] and show.trail == []
