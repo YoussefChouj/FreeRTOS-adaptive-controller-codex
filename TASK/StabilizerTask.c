@@ -2151,9 +2151,12 @@ static void Rc_FallbackStep(void)
 	}
 }
 
-/* xy position loops, then the velocity loops with the trajectory feed-forward. Armed only. */
-static void Pos_Compute(uint8_t airborne, uint8_t land_contact)
+/* xy position loops, then the velocity loops with the trajectory feed-forward. Armed only.
+ * land_contact: touchdown, no xy lean and the integrators cleared. land_xy_hold: landing below LAND_XY_HOLD_ALT,
+ * the loops stay closed with their integrators held and the lean clamped (API/land_profile.h, 2026-10-19). */
+static void Pos_Compute(uint8_t airborne, uint8_t land_contact, uint8_t land_xy_hold)
 {
+	uint8_t hold = (uint8_t)(land_contact | land_xy_hold);
 	uint8_t active = g_traj_ff_on && airborne && TWC.execute && g_wfb_status.traj_state == (float)WFB_TRAJ_EXECUTING && g_wfb_status.prim_state == (float)WFB_PRIM_TRAJ;
 	float vx, vy, ax, ay, vff_x, vff_y;
 	uint8_t xyc_on[2];
@@ -2169,8 +2172,8 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact)
 		float sx = g_traj_ff_shift_s * vff_x, sy = g_traj_ff_shift_s * vff_y;
 		Ctrler.locxPID.Des -= sx;
 		Ctrler.locyPID.Des -= sy;
-		ComputePID_GatedHold(&Ctrler.locxPID, airborne, land_contact);
-		ComputePID_GatedHold(&Ctrler.locyPID, airborne, land_contact);
+		ComputePID_GatedHold(&Ctrler.locxPID, airborne, hold);
+		ComputePID_GatedHold(&Ctrler.locyPID, airborne, hold);
 		Ctrler.locxPID.Des += sx;
 		Ctrler.locyPID.Des += sy;
 	}
@@ -2188,8 +2191,8 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact)
 			xy_ctrl_reset();
 		}
 	}
-	xyc_on[0] = s_xyc_kind && airborne && !land_contact && Ctrler.locxsPID.Des == Ctrler.locxPID.U;
-	xyc_on[1] = s_xyc_kind && airborne && !land_contact && Ctrler.locysPID.Des == Ctrler.locyPID.U;
+	xyc_on[0] = s_xyc_kind && airborne && !hold && Ctrler.locxsPID.Des == Ctrler.locxPID.U;
+	xyc_on[1] = s_xyc_kind && airborne && !hold && Ctrler.locysPID.Des == Ctrler.locyPID.U;
 
 	{
 		Ctrler.locxsPID.Des += vx;
@@ -2198,8 +2201,8 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact)
 			Ctrler.locxsPID.Des = fmaxf(-g_vxy_des_max, fminf(g_vxy_des_max, Ctrler.locxsPID.Des + g_traj_vff_x));
 			Ctrler.locysPID.Des = fmaxf(-g_vxy_des_max, fminf(g_vxy_des_max, Ctrler.locysPID.Des + g_traj_vff_y));
 		}
-		ComputePID_GatedHold(&Ctrler.locxsPID, airborne, land_contact);
-		ComputePID_GatedHold(&Ctrler.locysPID, airborne, land_contact);
+		ComputePID_GatedHold(&Ctrler.locxsPID, airborne, hold);
+		ComputePID_GatedHold(&Ctrler.locysPID, airborne, hold);
 		if (xyc_on[0]) {
 			float u = XyCtrl_Step(&s_xyc[0], s_xyc_kind, Ctrler.locxPID.Des, Ctrler.locxPID.FB, Ctrler.locxsPID.FB, vff_x);
 			if (isfinite(u)) Ctrler.locxsPID.U = u; else XyCtrl_Reset(&s_xyc[0]);
@@ -2216,6 +2219,10 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact)
 		mrac_xy_unom[1] = Ctrler.locysPID.U;
 		Ctrler.locxsPID.U = Controller_Update(CTRL_AXIS_X, Ctrler.locxsPID.U);
 		Ctrler.locysPID.U = Controller_Update(CTRL_AXIS_Y, Ctrler.locysPID.U);
+		if (land_xy_hold) {   /* low-authority hold to touchdown: bounds a false-velocity chase near the floor */
+			Ctrler.locxsPID.U = fmaxf(-LAND_XY_HOLD_UMAX, fminf(LAND_XY_HOLD_UMAX, Ctrler.locxsPID.U));
+			Ctrler.locysPID.U = fmaxf(-LAND_XY_HOLD_UMAX, fminf(LAND_XY_HOLD_UMAX, Ctrler.locysPID.U));
+		}
 	}
 
 	/* F8 2026-10-06, PX4 style (MulticopterPositionControl: on ground contact the xy setpoint is
@@ -2359,7 +2366,8 @@ void Compute_Motor(void)
 {
 	uint8_t airborne = (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING);
 	uint8_t land_contact = (uint8_t)(Land_ContactStep() | (s_land_spool != 0U));   /* spool = touchdown too */
-	land_contact |= LandProfile_XyFreeze(flight_phase == FLIGHT_PHASE_LANDING, Ctrler.Z_posPID.FB);   /* 10-15 D2 */
+	uint8_t land_xy_hold = LandProfile_XyHold(flight_phase == FLIGHT_PHASE_LANDING, Ctrler.Z_posPID.FB);   /* 10-19 */
+	land_contact |= LandProfile_XyFreeze(flight_phase == FLIGHT_PHASE_LANDING, Ctrler.Z_posPID.FB);   /* 10-15 D2, 0.04 m since 10-19 */
 
 	Rc_FallbackStep();
 	Z_Compute();
@@ -2377,7 +2385,7 @@ void Compute_Motor(void)
 		   while disarmed (otherwise cnt_loc grows unbounded and the gate fires
 		   every 256th tick on a uint8 wrap). */
 		if (DroneStatus.ARM_Status != 0U) {
-			Pos_Compute(airborne, land_contact);
+			Pos_Compute(airborne, land_contact, land_xy_hold);
 		}
 		else
 		{

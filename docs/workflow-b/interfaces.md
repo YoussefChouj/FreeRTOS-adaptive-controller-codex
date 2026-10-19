@@ -206,7 +206,7 @@ wfb_err_t wfb_prim_takeoff(wfb_prim_t *p);                 /* IDLE -> CLIMB */
 wfb_err_t wfb_prim_traj_begin(wfb_prim_t *p);              /* HOVER -> TRAJ */
 wfb_err_t wfb_prim_traj_end(wfb_prim_t *p, const wfb_prim_in_t *in);  /* TRAJ -> RETURN, hold after */
 wfb_err_t wfb_prim_land(wfb_prim_t *p, const wfb_prim_in_t *in);      /* any airborne state -> RETURN, land after */
-wfb_err_t wfb_prim_land_in_place(wfb_prim_t *p);           /* any airborne state -> DESCEND */
+wfb_err_t wfb_prim_land_in_place(wfb_prim_t *p);           /* any airborne state -> DESCEND where it is */
 void      wfb_prim_disarmed(wfb_prim_t *p);                /* -> IDLE */
 void      wfb_prim_step(wfb_prim_t *p, const wfb_prim_cfg_t *cfg, const wfb_prim_in_t *in, wfb_prim_out_t *out);
 void      wfb_prim_default_cfg(wfb_prim_cfg_t *out);       /* the section 1 constants, hover_z 0.5 m */
@@ -219,9 +219,19 @@ Behaviour. CLIMB: setpoint (0, 0, hover_z); -> HOVER after the settle condition 
 starts at the current position and moves toward (0, 0) at `xy_rate_mps` (the firmware has no XY ramp,
 `StabilizerTask.c:1271`), Z setpoint = hover_z; when the setpoint reaches (0, 0) -> SETTLE. SETTLE: settle
 condition met -> DESCEND if `land_after_return`, else HOVER. RETURN + SETTLE together longer than
-`return_timeout_s` -> DESCEND when `land_after_return`, else stay in SETTLE. DESCEND: `out->descend = 1`, XY
-setpoint frozen; the existing landing code (`StabilizerTask.c:1226-1242`, 694-735) does the rest. In TRAJ the
-module outputs nothing; the integration feeds `wfb_traj_sample` to the setpoints.
+`return_timeout_s` -> DESCEND when `land_after_return`, else stay in SETTLE; a timeout in SETTLE descends with
+the XY setpoint at (0, 0) (it froze at the vehicle position with the pad gate off before 2026-10-19). DESCEND:
+`out->descend = 1`, XY setpoint frozen; the existing landing code (`StabilizerTask.c:1226-1242`, 694-735) does the
+rest. `land_in_place` is the fence/ceiling and pilot-takeover action (`wfb_safety.c`) and never returns to the
+pad; a normal land and the GS aborts use `land`. In TRAJ the module outputs nothing; the integration feeds
+`wfb_traj_sample` to the setpoints.
+
+On the vehicle the DESCEND XY setpoint is not applied: the glue sets `setpoint_valid` only in CLIMB, HOVER, TRAJ,
+RETURN and SETTLE (`wfb_glue.c:423-428`), and LANDING clears `TWC.execute` every tick (`StabilizerTask.c:2517`),
+so `locx/yPID.Des` keeps the last applied setpoint: (0, 0) after SETTLE, the last RETURN setpoint after a RETURN
+timeout, the last TRAJ/HOVER/push setpoint after `land_in_place`. A RETURN timeout needs a start more than
+`xy_rate_mps * return_timeout_s` = 3 m from the pad, beyond the 1.6/2.0 m fence plus `fence_over_m`. The fake
+drone (`fake_drone.py`) flies the prim output instead.
 
 Defined behaviour. `land` and `land_in_place` are idempotent: `return_t` restarts only when landing is newly
 added; from DESCEND both return `WFB_ERR_NONE`; `land` from IDLE returns `WFB_ERR_STATE`. A non-finite position
