@@ -45,6 +45,12 @@ DEF(waypoint_spacing); DEF(ano_of); DEF(g_of_bias_capture_req); DEF(g_of_bias_mo
 DEF(g_of_full_tilt); DEF(g_ekf_of_vel_fb); DEF(g_of_bias_ema_freeze); DEF(g_of_bias_ema_tau_s);
 DEF(s_cal_trim); DEF(s_cal_hot); DEF(g_cal_health); DEF(g_estimator_ready); DEF(g_motor_idle_enabled);
 DEF(motor_test_active); DEF(motor_test_watchdog); DEF(motor_test_id); DEF(motor_test_ccr); DEF(g_wfb_status);
+/* Data globals from files this harness does not link. fw_trace.py would dummy them as empty functions in .text,
+ * and a firmware write to one of them then segfaults. */
+DEF(Acc_X_Real); DEF(Acc_Y_Real); DEF(Gyro_X_Real); DEF(Gyro_Y_Real); DEF(Gyro_Z_Real); DEF(Lin_Acc_X_body);
+DEF(Lin_Acc_Y_body); DEF(Lin_Acc_Z_body); DEF(TWC_arrived); DEF(g_ext_pos_delay_ms); DEF(g_ext_pos_on);
+DEF(g_ext_pos_post); DEF(g_of_hold_active); DEF(g_send_prof); DEF(imu_data); DEF(mrac_config_x); DEF(mrac_config_y);
+DEF(mrac_inj); DEF(real_voltage); DEF(s_of_bias_x); DEF(s_of_bias_y); DEF(sbus_lost);
 float Cos_Yaw = 1.0f, Sin_Yaw = 0.0f;   /* API/SINS.c, read by API/pid.c */
 
 static FlightState_t g_fsm = FLIGHT_STATE_DISARMED;

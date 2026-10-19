@@ -56,6 +56,9 @@ extern volatile uint8_t traj_active;   /* AutoflyTask.c: id of the running Keil 
  */
 unsigned char cnt_h,cnt_loc;
 float Throttle_out,u_gyrox,u_gyroy,u_gyroz;
+/* Rate-loop output c, sysid torque add d and mixer input u = c + d per axis, [0] pitch [1] roll [2] yaw (SysID_Axis_e),
+ * mixer units, before the pitch sign flip. Written by Mix_Compute, streamed in g_tlm.sysid_cdu. */
+static float s_sysid_c[3], s_sysid_d[3], s_sysid_u[3];
 short Throttle_th = 2200;
 
 /* ---- Constants --------------------------------------------------------------------------------- */
@@ -2219,7 +2222,8 @@ static void Att_Compute(uint8_t airborne)
 	// excitation onto the active axis's RATE setpoint with += (closed-loop SysID). The outer
 	// angle/position cascade stays live, so position hold keeps the drone on station (it wiggles in
 	// place instead of translating open-loop and walking out of the green zone). Pitch/roll/yaw here;
-	// Z is injected at the Z_ratePID.Des site. No-op while the FSM is IDLE.
+	// Z is not injected (SysID_Start rejects Z, ADR-0004 #1). sysid_target 1 skips this add (SysID_IsAxisActive
+	// returns 0) and adds the excitation to the rate-loop output in Mix_Compute instead. No-op while the FSM is IDLE.
 	// NOTE: the rate setpoint now = outer-loop output + dither, so the logged `r`/`u` are closed-loop
 	// signals. Plant ID is done offline with the direct method (Phi_xu/Phi_uu) on u_nom+u_ad -> x.
 	SysID_Update();
@@ -2257,9 +2261,22 @@ static void Mix_Compute(void)
 	Throttle_out = Controller_Update(CTRL_AXIS_Z, Ctrler.Z_ratePID.U) + Throttle_th;
 	if (s_land_spool != 0U)
 		Throttle_out = s_land_spool_thr;   /* touchdown spool: collective held, see Land_Step */
-	u_gyrox      = Controller_Update(CTRL_AXIS_ROLL, Ctrler.gyroxPID.U);
-	u_gyroy      = -Controller_Update(CTRL_AXIS_PITCH, Ctrler.gyroyPID.U); // Motor mixer needs gyroy reversed
-	u_gyroz      = Controller_Update(CTRL_AXIS_YAW, Ctrler.gyrozPID.U);
+	// Sysid torque target (sysid_target 1): u = c + d, d = 0 unless a run is active on that axis and the drone is
+	// FLYING (sysid.c SysID_GetTorque; an abort/RECOVERY or a land gives 0). d == 0 leaves u = c bit-exact.
+	{
+		uint8_t flying = (flight_phase == FLIGHT_PHASE_FLYING) ? 1U : 0U;
+		uint8_t k;
+		s_sysid_c[SYSID_AXIS_ROLL]  = Controller_Update(CTRL_AXIS_ROLL, Ctrler.gyroxPID.U);   /* call order as before */
+		s_sysid_c[SYSID_AXIS_PITCH] = Controller_Update(CTRL_AXIS_PITCH, Ctrler.gyroyPID.U);
+		s_sysid_c[SYSID_AXIS_YAW]   = Controller_Update(CTRL_AXIS_YAW, Ctrler.gyrozPID.U);
+		for (k = 0U; k < 3U; k++) {
+			s_sysid_d[k] = SysID_GetTorque((SysID_Axis_e)k, flying);
+			s_sysid_u[k] = (s_sysid_d[k] != 0.0f) ? (s_sysid_c[k] + s_sysid_d[k]) : s_sysid_c[k];
+		}
+	}
+	u_gyrox      = s_sysid_u[SYSID_AXIS_ROLL];
+	u_gyroy      = -s_sysid_u[SYSID_AXIS_PITCH]; // Motor mixer needs gyroy reversed
+	u_gyroz      = s_sysid_u[SYSID_AXIS_YAW];
 	{
 		float pwm_lo = PWM_PCT_BASE + gs_throttle_min_pct * PWM_PCT_SPAN;
 		float pwm_hi = PWM_PCT_BASE + gs_throttle_max_pct * PWM_PCT_SPAN;
