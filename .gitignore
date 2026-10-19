@@ -82,3 +82,5 @@ logs/
 .agent-ops/*-out/
 docs/flights/plots/
 sim/bench/results/
+# ad-hoc root probes and outputs (moved to scratch/root-scripts-2026-10/)
+/_*
