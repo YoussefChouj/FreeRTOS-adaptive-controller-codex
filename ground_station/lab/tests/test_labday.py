@@ -456,3 +456,34 @@ def test_note_is_the_fly_files_first_comment_and_its_steps():
     assert about.startswith("M: gate-memory premise")
     assert steps == "takeoff 0.8 mrac_injection=1 -> hold 28 -> preset figure8 f8_type=1 f8_a_cm=60 f8_laps=2 -> hold 28 -> land"
     assert labday.note({"fly": "no_such_flight"}) == ("", "")
+
+
+def test_score_line_after_each_flight_and_day_report(tmp_path, monkeypatch, capsys):
+    """The real scorecard on the flight folder the debrief event names; a resumed day reports every flown flight;
+    a scorecard crash prints a line and the day goes on."""
+    (tmp_path / "f").mkdir()
+    (tmp_path / "f" / "debrief.txt").write_text("complete  air 20.0 s  1 flight(s)  10 live samples\n"
+                                                "landing offset x +3 y +4 cm from the takeoff point (5 cm)\n"
+                                                "outputs -  flight folder f\n", encoding="utf-8")
+    monkeypatch.setattr(labday, "ROOT", tmp_path)
+    monkeypatch.setattr(labday, "REPORT_DIR", tmp_path / "days")
+    flights = [{"id": "A", "fly": "lab_c_robust", "pass": "lands on the pad"},
+               {"id": "B", "fly": "lab_c_lqr", "pass": "lands on the pad"}]
+    assert _player(tmp_path, monkeypatch, _Fake(["", "q"]), flights).go() == 0
+    out = capsys.readouterr().out
+    assert "score A: pass pass (PROPOSED); land offset 5 cm; aborts 0" in out
+    assert out.index("--- A done") < out.index("score A:")
+    md = (tmp_path / "days" / "2099-01-01-report.md").read_text(encoding="utf-8")
+    assert "| A |" in md and "| B |" not in md
+    assert _player(tmp_path, monkeypatch, _Fake(["", "q"]), flights).go() == 0     # resume: B only, report has both
+    md = (tmp_path / "days" / "2099-01-01-report.md").read_text(encoding="utf-8")
+    assert "| A |" in md and "| B |" in md
+    from ground_station.analysis import scorecard
+
+    def boom(*a, **k):
+        raise RuntimeError("bad log")
+    monkeypatch.setattr(scorecard, "score_flight", boom)
+    (tmp_path / "state.json").unlink()
+    capsys.readouterr()
+    assert _player(tmp_path, monkeypatch, _Fake(["", "q"]), flights).go() == 0
+    assert "score A: scorecard failed (RuntimeError: bad log)" in capsys.readouterr().out
