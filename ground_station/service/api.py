@@ -2689,12 +2689,15 @@ class ApiServer:
             
         # The co-pilot needs the agent manager's state and say hooks, so it can
         # only be built once the manager exists. Without this nothing ever
-        # built it and operator messages went unanswered.
+        # built it and operator messages went unanswered. Its key lookup reads
+        # \\wsl.localhost, which boots WSL when it is stopped (6.75 s of an
+        # 11.6 s start on 2026-10-19, ahead of the bind), so it is built in a
+        # thread after the bind; notes queue on the agent until it is attached.
+        self.copilot_ready = threading.Event()
         if copilot is None:
-            copilot = build_copilot(agent_state_fn=self._copilot_state,
-                                    say_fn=self.agent.add_agent_message)
-            self.copilot = copilot
-            self.agent.copilot = copilot
+            self.agent.expect_copilot()
+        else:
+            self.copilot_ready.set()
         self.hub = StateHub()
         # Bug 1 (AUDIT_2026-09-21 §Bug 1): the hub cache was refreshed only
         # on command results, so any hub consumer saw a frozen view after
@@ -2715,6 +2718,24 @@ class ApiServer:
         self._poll_thread = None
         self.thread = threading.Thread(target=self.server.serve_forever,
                                        name="ground_station_api", daemon=True)
+        if not self.copilot_ready.is_set():
+            threading.Thread(target=self._build_copilot, name="copilot_init",
+                             daemon=True).start()
+
+    def _build_copilot(self) -> None:
+        """Build the co-pilot off the bind path, then hand it to the agent."""
+        t0 = time.monotonic()
+        copilot = None
+        try:
+            copilot = build_copilot(agent_state_fn=self._copilot_state,
+                                    say_fn=self.agent.add_agent_message)
+        except Exception as exc:  # noqa: BLE001 - the service runs on without it
+            print(f"[service] co-pilot build failed: {type(exc).__name__}", flush=True)
+        self.copilot = copilot
+        self.agent.attach_copilot(copilot)
+        self.copilot_ready.set()
+        print(f"[service] co-pilot {'on' if copilot is not None else 'off'} "
+              f"(key lookup {time.monotonic() - t0:.2f} s, after the bind)", flush=True)
 
     # Telemetry keys the co-pilot sees on every turn; enough to answer "is it
     # armed / linked / healthy" without pulling the whole snapshot.

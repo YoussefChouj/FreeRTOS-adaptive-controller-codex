@@ -566,6 +566,7 @@ def test_api_server_builds_the_copilot(service, monkeypatch):
     monkeypatch.setattr(copilot_mod, "OpenAILLM", lambda **kw: FakeLLM("pong"))
     api = ApiServer(service, port=0)
     try:
+        assert api.copilot_ready.wait(5)
         assert api.agent.copilot is not None
         state = api._copilot_state()
         assert "telemetry" in state
@@ -581,10 +582,69 @@ def test_copilot_off_says_so_once(service, monkeypatch):
     monkeypatch.setenv("COPILOT_KEY_FILE", "")
     api = ApiServer(service, port=0)
     try:
+        assert api.copilot_ready.wait(5)
         api.agent.receive_operator_note("hello", "note", "operator")
         api.agent.receive_operator_note("again", "note", "operator")
         agent_msgs = [n for n in api.agent.notes_since(0) if n.get("kind") == "agent"]
         assert len(agent_msgs) == 1
         assert "Co-pilot is off" in agent_msgs[0]["text"]
     finally:
+        api.server.server_close()
+
+
+def _gated_build(monkeypatch, make):
+    """Hold ApiServer's background copilot build until the returned event is set."""
+    from ground_station.service import api as api_mod
+
+    gate = threading.Event()
+
+    def slow_build(agent_state_fn, say_fn):
+        assert gate.wait(5)
+        return make(agent_state_fn, say_fn)
+
+    monkeypatch.setattr(api_mod, "build_copilot", slow_build)
+    return api_mod.ApiServer, gate
+
+
+def test_api_server_binds_before_the_copilot_key_lookup(service, monkeypatch):
+    """A slow key lookup (cold WSL) no longer holds the bind; a note sent
+    meanwhile is answered once the copilot arrives, with no "off" message."""
+    llm = FakeLLM(reply="pong")
+    ApiServer, gate = _gated_build(
+        monkeypatch, lambda state_fn, say_fn: Copilot(llm, state_fn, say_fn))
+    api = ApiServer(service, port=0)
+    api.agent.start()
+    try:
+        assert api.server.server_address[1] != 0  # bound while the build waits
+        assert not api.copilot_ready.is_set()
+        api.agent.receive_operator_note("hello", "note", "operator")
+        assert not any("Co-pilot is off" in n.get("text", "")
+                       for n in api.agent.notes_since(0))
+        gate.set()
+        assert api.copilot_ready.wait(5)
+        deadline = time.monotonic() + 5
+        while llm.call_count == 0 and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert llm.call_count == 1
+        assert api.copilot is api.agent.copilot is not None
+    finally:
+        gate.set()
+        api.agent.stop()
+        api.server.server_close()
+
+
+def test_note_during_a_keyless_copilot_build_says_off_once(service, monkeypatch):
+    """A note that waited for a build that found no key gets the one explanation."""
+    ApiServer, gate = _gated_build(monkeypatch, lambda state_fn, say_fn: None)
+    api = ApiServer(service, port=0)
+    try:
+        api.agent.receive_operator_note("hello", "note", "operator")
+        gate.set()
+        assert api.copilot_ready.wait(5)
+        api.agent.receive_operator_note("again", "note", "operator")
+        agent_msgs = [n for n in api.agent.notes_since(0) if n.get("kind") == "agent"]
+        assert len(agent_msgs) == 1
+        assert "Co-pilot is off" in agent_msgs[0]["text"]
+    finally:
+        gate.set()
         api.server.server_close()
