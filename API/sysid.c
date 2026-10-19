@@ -90,6 +90,8 @@ typedef struct {
     float amp_max;      // [mixer units] |d| clamp
 } sysid_torque_t;
 
+/* SYSID_TORQUE_ROW fields (PROPOSED, not flown):
+   @amp_max  mixer  [0, 100]  |d| clamp per axis, mixer units (checker range, PROPOSED) */
 #define SYSID_TORQUE_ROW(amp_max)     { (amp_max) }
 
 static const sysid_torque_t s_torque[3] = {   /* indexed by SysID_Axis_e, P/R/Y only (Start rejects Z) */

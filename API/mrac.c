@@ -644,14 +644,11 @@ static void MRAC_Vp12Step(uint8_t hold, uint8_t arm_edge)
  *
  * MRAC_Z_FEAT_ROW fields (all PROPOSED, not measured on the rig):
  *   @h0_m          m    [0.02, 0.5]   ground-effect reference height (feature is 1 at and below it)
- *   @h_min_m       m    (0, h0]       height floor of the 1/h^2 term
+ *   @h_min_m       m    [0.005, 0.5]  height floor of the 1/h^2 term (keep it below h0_m)
  *   @h_max_m       m    [1, 10]       heights above this are out of range (feature 0)
  *   @vz_ref_mps    m/s  [0.2, 5]      climb rate where the drag feature reaches 1
  *   @vz_max_mps    m/s  [1, 10]       climb rates above this are out of range (feature 0)
- *   @tilt_max_deg  deg  [5, 45]       tilt clamp of the tilt-loss feature (own value, not the prearm limit)
- * MRAC_Z_SLOT_ROW fields, one row per feature in bit order (all PROPOSED):
- *   @gamma         -    [0, 10]       adaptation gain of the slot (MRAC_SetRow)
- *   @lim_share     -    [0, 0.3]      weight limit as a share of the Z u_max                              */
+ *   @tilt_max_deg  deg  [5, 45]       tilt clamp of the tilt-loss feature (own value, not the prearm limit) */
 typedef struct { float h0_m, h_min_m, h_max_m, vz_ref_mps, vz_max_mps, tilt_max_deg; } mrac_zfeat_t;
 #define MRAC_Z_FEAT_ROW(h0_m, h_min_m, h_max_m, vz_ref_mps, vz_max_mps, tilt_max_deg) \
     { (h0_m), (h_min_m), (h_max_m), (vz_ref_mps), (vz_max_mps), (tilt_max_deg) }
@@ -659,6 +656,9 @@ static const mrac_zfeat_t s_zfeat =
 /*              h0_m   h_min_m h_max_m vz_ref_mps vz_max_mps tilt_max_deg */
     MRAC_Z_FEAT_ROW(0.10f, 0.02f,  4.0f,   1.0f,      5.0f,      30.0f);    /* PROPOSED */
 
+/* MRAC_Z_SLOT_ROW fields, one row per feature in bit order (all PROPOSED):
+ *   @gamma         -    [0, 10]       adaptation gain of the slot (MRAC_SetRow)
+ *   @lim_share     -    [0, 0.3]      weight limit as a share of the Z u_max                              */
 typedef struct { float gamma, lim_share; } mrac_zslot_t;
 #define MRAC_Z_SLOT_ROW(gamma, lim_share) { (gamma), (lim_share) }
 static const mrac_zslot_t s_zslot[MRAC_ZFEAT_N] = {
