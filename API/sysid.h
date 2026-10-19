@@ -54,6 +54,16 @@ uint8_t SysID_IsAxisActive(SysID_Axis_e axis);
 // The rate setpoint (deg/s) to apply to the active axis when SysID_IsAxisActive() is true.
 float SysID_GetRateSetpoint(SysID_Axis_e axis);
 
+// Excitation target, VAR_WRITE 55 (u8 0..1), latched at SysID_Start; a write while the FSM is not IDLE is
+// refused with VAR_WRITE_REJECT_BUSY. 0 = rate setpoint injection (above). 1 = torque: the excitation d is
+// added to the rate-loop output c before the mixer (u = c + d, Mix_Compute) and SysID_IsAxisActive returns 0.
+extern volatile uint8_t sysid_target;
+
+// d for a target-1 run (mixer units): the excitation on the run's axis while RAMP_IN/RUNNING/RAMP_OUT and
+// flying != 0 (flight_phase FLYING), clamped to the SYSID_TORQUE_ROW amp_max; 0 otherwise (target 0, other
+// axis, not flying, IDLE, RECOVERY after an abort, non-finite).
+float SysID_GetTorque(SysID_Axis_e axis, uint8_t flying);
+
 // The current raw excitation/dither value (axis native unit; 0 when IDLE/RECOVERY). Logged in the
 // 0x03 ID frame as the EXOGENOUS instrument for closed-loop identification: unlike the rate
 // setpoint `r` (which also carries the outer-loop output), the dither is uncorrelated with plant/

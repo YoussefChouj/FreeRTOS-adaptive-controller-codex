@@ -46,6 +46,7 @@ HOST_TESTS = [
     ("mrac_inputs",      ["API/tests/test_mrac_inputs.c", "{src}/mrac.c", "{src}/mrac_math.c"], ["-std=c99", *W, "-msse2", "-mfpmath=sse", "-I{src}", "-IAPI/tests/stubs"]),
     ("mrac_inputs_rbf",  ["API/tests/test_mrac_inputs.c", "{src}/mrac.c", "{src}/mrac_math.c"], ["-std=c99", *W, "-msse2", "-mfpmath=sse", "-DMRAC_VARIANT=1", "-I{src}", "-IAPI/tests/stubs"]),
     ("mrac_inputs_multi", ["API/tests/test_mrac_inputs.c", "{src}/mrac.c", "{src}/mrac_math.c"], ["-std=c99", *W, "-msse2", "-mfpmath=sse", "-DMRAC_VARIANT=2", "-I{src}", "-IAPI/tests/stubs"]),
+    ("mrac_z_feat", ["API/tests/test_mrac_z_feat.c", "{src}/mrac.c", "{src}/mrac_math.c"], ["-std=c99", *W, "-msse2", "-mfpmath=sse", "-DMRAC_VARIANT=2", "-I{src}", "-IAPI/tests/stubs"]),
     ("mrac_sizeof",      ["API/tests/mrac_sizeof.c"],                                            ["-std=c99", *STUBS]),
     ("fw_controller",    ["tests/firmware_host/test_controller.c", "API/controller.c"],          ["-std=c99", "-Wall", "-Werror", *FWH]),
     ("mixer",            ["API/tests/test_mixer.c", "API/controller.c"],                         ["-std=c99", *W, "-msse2", "-mfpmath=sse", *FWH]),
@@ -65,11 +66,12 @@ HOST_TESTS = [
                                                                                                  ["-std=c99", *W, "-Werror", "-Wdeclaration-after-statement", "-Wvla", "-IAPI"]),
     ("fw_prearm",        ["tests/firmware_host/test_prearm.c", "API/prearm.c"],                  ["-std=c99", *W, "-Werror", "-Wdeclaration-after-statement", "-IAPI"]),
     ("fw_health",        ["tests/firmware_host/test_fw_health.c", "API/fw_health.c"],            ["-std=c99", *W, "-Werror", "-Wdeclaration-after-statement", "-IAPI"]),
+    ("sysid_torque",     ["API/tests/test_sysid_torque.c"],                                      ["-std=c99", *W, "-Werror", "-Wdeclaration-after-statement", "-IGlobal_file", "-lm"]),
     ("fw_pid_fallback",  ["tests/firmware_host/test_pid_fallback.c"],                           ["-std=c99", "-Wall", "-Werror", *FWH]),
     ("fw_exp_row",       ["tests/firmware_host/test_exp_row.c"],                              ["-std=c99", *W, "-Werror", "-IAPI"]),
     ("mrac_xy_nofight",  ["tests/firmware_host/test_mrac_xy_nofight.c", "API/xy_ctrl.c", "{src}/mrac.c", "{src}/mrac_math.c"],
                          ["-std=c99", *W, "-msse2", "-mfpmath=sse", "-I{src}", "-IAPI/tests/stubs", "-IAPI", "-lm"]),
-];
+]
 
 
 def _tail(text: str, n: int = 12) -> str:

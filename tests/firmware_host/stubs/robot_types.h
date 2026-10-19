@@ -15,7 +15,8 @@ typedef struct {
     StubPID_t gyroyPID;
     StubPID_t gyrozPID;
     StubPID_t Z_ratePID;
-    StubPID_t locxsPID;   /* x/y velocity loops, cm/s (6-axis MRAC 2026-10-10) */
+    StubPID_t Z_posPID;   /* height, m: MRAC Z ground-effect feature (mrac_in_h) */
+    StubPID_t locxsPID;  /* x/y velocity loops, cm/s (6-axis MRAC 2026-10-10) */
     StubPID_t locysPID;
 } CtrlerTypeDef;
 

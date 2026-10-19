@@ -15,6 +15,7 @@ typedef struct {
     StubPID_t gyroyPID;
     StubPID_t gyrozPID;
     StubPID_t Z_ratePID;
+    StubPID_t Z_posPID;   /* height loop, FB = ToF height in m (Z MRAC features) */
     StubPID_t locxsPID;   /* x/y velocity loops, cm/s (6-axis MRAC 2026-10-10) */
     StubPID_t locysPID;
 } CtrlerTypeDef;

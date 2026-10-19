@@ -2,14 +2,16 @@
  * @module     sysid.c
  * @subsystem  control
  * @owner      Stabilizer_Task (TASK/StabilizerTask.c): SysID_Update each 200 Hz tick, SysID_IsAxisActive/
- *             SysID_GetRateSetpoint to override the excited axis's rate setpoint. Send_Task (send_data.c): SysID_Start/
+ *             SysID_GetRateSetpoint to override the excited axis's rate setpoint (sysid_target 0), Mix_Compute
+ *             SysID_GetTorque to add d to the rate-loop output (sysid_target 1). Send_Task (send_data.c): SysID_Start/
  *             SysID_Abort/SysID_SetGeofence from CMD 0x14, SysID_GetDither/GetState/GetAxis for telemetry.
  * @purpose    Automated system-identification excitation (ADR-0004): a log chirp or a Schroeder-phased multisine on one
  *             rate axis, with cosine ramps, firmware-checked start preconditions, continuous abort guards (arm, mode, RC
  *             dead-man, altitude band, green-zone geofence, attitude) and a RECOVERY return to the captured centre.
  * @inputs     axis, signal, f0/f1 [Hz], amplitude (deg/s, m/s for Z), duration [s] (Start); DroneStatus, Ctrler FB
  *             values, RC activity (guards).
- * @outputs    rate setpoint override for the active axis, mrac_flags.id_frame_on, Ctrler loc/Z Des on recovery.
+ * @outputs    rate setpoint override for the active axis (target 0) or a torque add d before the mixer (target 1,
+ *             u = c + d, FLYING only), mrac_flags.id_frame_on, Ctrler loc/Z Des on recovery.
  */
 
 #include "sysid.h"
@@ -81,7 +83,27 @@ static float sysid_amp_max(SysID_Axis_e a)
     }
 }
 
+// Torque target (sysid_target 1): per-axis clamp on d, added to the rate-loop output c before the mixer
+// (u = c + d, StabilizerTask.c Mix_Compute). Unit = mixer units (the Controller_Update output that feeds
+// u_gyrox/u_gyroy/u_gyroz). Also the Start amplitude clamp for a target-1 run. PROPOSED, not flown.
+typedef struct {
+    float amp_max;      // [mixer units] |d| clamp
+} sysid_torque_t;
+
+/* SYSID_TORQUE_ROW fields (PROPOSED, not flown):
+   @amp_max  mixer  [0, 100]  |d| clamp per axis, mixer units (checker range, PROPOSED) */
+#define SYSID_TORQUE_ROW(amp_max)     { (amp_max) }
+
+static const sysid_torque_t s_torque[3] = {   /* indexed by SysID_Axis_e, P/R/Y only (Start rejects Z) */
+/*                  amp_max */
+    SYSID_TORQUE_ROW(50.0f),   /* pitch, PROPOSED */
+    SYSID_TORQUE_ROW(50.0f),   /* roll,  PROPOSED */
+    SYSID_TORQUE_ROW(40.0f),   /* yaw,   PROPOSED */
+};
+
 // ---- Module state -------------------------------------------------------------------
+volatile uint8_t sysid_target = 0;   // VAR_WRITE 55: 0 = rate setpoint injection, 1 = torque add before the mixer
+static uint8_t s_target;             // sysid_target latched at SysID_Start (a write while not IDLE is refused BUSY)
 static SysID_State_e s_state = SYSID_IDLE;
 static SysID_Axis_e  s_axis;
 static SysID_Signal_e s_sig;
@@ -214,6 +236,7 @@ static void sysid_design_multisine(float f0, float f1, float duration)
 uint8_t SysID_Start(SysID_Axis_e axis, SysID_Signal_e sig, float f0, float f1, float amp, float duration)
 {
     float amax;
+    uint8_t tgt;
 
     if (s_state != SYSID_IDLE) return 0;          // a run is already active
     if ((uint32_t)axis > (uint32_t)SYSID_AXIS_Z) return 0;    // also a "negative" id (PITCH is 0)
@@ -234,13 +257,14 @@ uint8_t SysID_Start(SysID_Axis_e axis, SysID_Signal_e sig, float f0, float f1, f
     // Sanitize parameters.
     if (f0 < s_shape.f0_min_hz) f0 = s_shape.f0_min_hz;
     if (f1 < f0)   f1 = f0;
-    amax = sysid_amp_max(axis);
+    tgt = (sysid_target != 0U) ? 1U : 0U;
+    amax = tgt ? s_torque[axis].amp_max : sysid_amp_max(axis);   // axis is P/R/Y here
     if (amp < 0.0f) amp = -amp;
     if (amp > amax) amp = amax;
     if (duration < s_shape.dur_min_s) duration = s_shape.dur_min_s;
     if (duration > s_shape.dur_max_s) duration = s_shape.dur_max_s;
 
-    s_axis = axis; s_sig = sig;
+    s_axis = axis; s_sig = sig; s_target = tgt;
     s_f0 = f0; s_f1 = f1; s_amp = amp; s_duration = duration;
     s_t_sig = 0.0f; s_phase = 0.0f; s_rate_cmd = 0.0f;
 
@@ -296,8 +320,23 @@ void SysID_Update(void)
 
 uint8_t SysID_IsAxisActive(SysID_Axis_e axis)
 {
+    if (s_target != 0U) return 0;   // torque run: the excitation goes in through SysID_GetTorque, not the setpoint
     if (axis != s_axis) return 0;
     return (s_state == SYSID_RAMP_IN || s_state == SYSID_RUNNING || s_state == SYSID_RAMP_OUT) ? 1U : 0U;
+}
+
+float SysID_GetTorque(SysID_Axis_e axis, uint8_t flying)
+{
+    float d;
+
+    if (s_target == 0U || axis != s_axis || flying == 0U) return 0.0f;
+    if (s_state != SYSID_RAMP_IN && s_state != SYSID_RUNNING && s_state != SYSID_RAMP_OUT) return 0.0f;
+    if ((uint32_t)axis > (uint32_t)SYSID_AXIS_YAW) return 0.0f;
+    d = s_rate_cmd;
+    if (!isfinite(d)) return 0.0f;
+    if (d >  s_torque[axis].amp_max) d =  s_torque[axis].amp_max;
+    if (d < -s_torque[axis].amp_max) d = -s_torque[axis].amp_max;
+    return d;
 }
 
 float SysID_GetRateSetpoint(SysID_Axis_e axis)

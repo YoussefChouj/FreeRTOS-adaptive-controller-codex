@@ -40,10 +40,11 @@ def test_groups_match_the_header():
 
 
 def test_block_fits_one_range():
-    assert TOTAL_FLOATS == 74
+    assert TOTAL_FLOATS == 93
     assert TOTAL_FLOATS * VALUE_SIZE <= SUBSCRIBE_STREAM_MAX_BYTES
     assert len(GROUPS) <= SUBSCRIBE_MAX_RANGES
-    assert offset_floats("hlth") + group("hlth").float_count == TOTAL_FLOATS
+    assert offset_floats("sysid_cdu") + group("sysid_cdu").float_count == TOTAL_FLOATS
+    assert offset_floats("mrac_z") == 74   # appended after hlth: older groups keep their offsets
 
 
 def test_symbols_are_unique_paths_into_g_tlm():

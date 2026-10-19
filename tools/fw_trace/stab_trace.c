@@ -52,6 +52,11 @@ DEF(Lin_Acc_X_body); DEF(Lin_Acc_Y_body); DEF(Lin_Acc_Z_body); DEF(motor_test_ac
 DEF(motor_test_id); DEF(motor_test_watchdog); DEF(mrac_in_armed); DEF(mrac_in_phase); DEF(mymotor);
 DEF(sbus_channel); DEF(sbus_flyup_trigger); DEF(sbus_lost); DEF(sbus_path_trigger); DEF(SDK_DelayWakeFlag);
 DEF(TWC_arrived);
+/* Data globals from files this harness does not link. fw_trace.py would dummy them as empty functions in .text,
+ * and the firmware's write (StabilizerTask.c: mrac_in_vbat = real_voltage) then segfaults. */
+DEF(Acc_X_Real); DEF(Acc_Y_Real); DEF(GS_KeySDKflag); DEF(g_imu_mahony_yaw_decouple); DEF(g_land_gate_enable);
+DEF(g_prearm_block_mask); DEF(g_prearm_fail_mask); DEF(g_rtos_budget); DEF(mrac_config_x); DEF(mrac_config_y);
+DEF(mrac_g_gamma); DEF(mrac_in_acc); DEF(mrac_in_vbat); DEF(mrac_xy_unom);
 float Cos_Yaw = 1.0f, Sin_Yaw = 0.0f;   /* API/SINS.c, read by API/pid.c */
 /* API/controller.c (linked for the mixer table) refers to these; its renamed entry points never run here */
 DEF(mrac_state); DEF(mrac_flags); DEF(mrac_config_pitch); DEF(mrac_config_roll); DEF(mrac_config_yaw);
@@ -144,6 +149,20 @@ void Set_Zero_Motors(void) { call(31); MIXV(mymotor); }
 void SysID_Update(void) { call(32); }
 uint8_t SysID_IsAxisActive(SysID_Axis_e axis) { call(33); MIXV(axis); return axis < 3 ? g_sysid_act[axis] : 0U; }
 float SysID_GetRateSetpoint(SysID_Axis_e axis) { call(34); MIXV(axis); return fr(&g_st, -30.0f, 30.0f); }
+/* sysid_target 1 torque add (Mix_Compute): 0 here, so u = c as before; not traced so a target-0 build that calls
+ * it hashes like one that does not. */
+float SysID_GetTorque(SysID_Axis_e axis, uint8_t flying) { (void)axis; (void)flying; return 0.0f; }
+/* Telemetry-only reads (Tlm_Snapshot mrac_z / sysid_cdu groups), not traced. mrac.c is not linked, so the Z
+ * feature read-out gives distinct per-slot values from this tick's state for check_tlm to compare. */
+DEF(mrac_z_feat_mask); DEF(sysid_target);
+void MRAC_ZFeatOut(float feat[MRAC_ZFEAT_N], float w[MRAC_ZFEAT_N])
+{
+    int k;
+    for (k = 0; k < MRAC_ZFEAT_N; k++) {
+        feat[k] = Ctrler.Z_ratePID.FB + (float)k;
+        w[k] = Ctrler.Z_posPID.FB - (float)k;
+    }
+}
 
 void ThrustEst_Update(const float pwm[4], const uint16_t rpm[4], float acc_z, float pitch_deg, float roll_deg)
 {
@@ -296,6 +315,9 @@ static void mix_state(void)
  * version without g_tlm still prints the same hashes; a mismatch exits 3. */
 static void check_tlm(void)
 {
+    float zf[MRAC_ZFEAT_N], zw[MRAC_ZFEAT_N];
+    MRAC_ZFeatOut(zf, zw);
+    {
     const float want[] = {
         Ctrler.rollPID.FB, -Ctrler.pitchPID.FB, -Ctrler.yawPID.FB, Ctrler.gyroxPID.FB, Ctrler.gyroyPID.FB,
         Ctrler.gyrozPID.FB,
@@ -306,9 +328,12 @@ static void check_tlm(void)
         Ctrler.Z_ratePID.FB,
         Throttle_out, u_gyrox, u_gyroy, u_gyroz, (float)mymotor.motor1, (float)mymotor.motor2,
         (float)mymotor.motor3, (float)mymotor.motor4,
-        mrac_state.pitch.e, mrac_state.roll.e, mrac_state.yaw.e, mrac_state.z_rate.e,
+        mrac_state.pitch.e, mrac_state.roll.e, mrac_state.yaw.e, mrac_state.z_rate.e, mrac_state.x_vel.e,
+        mrac_state.y_vel.e,
         mrac_state.pitch.u_nom, mrac_state.roll.u_nom, mrac_state.yaw.u_nom, mrac_state.z_rate.u_nom,
-        mrac_state.pitch.u_ad, mrac_state.roll.u_ad, mrac_state.yaw.u_ad, mrac_state.z_rate.u_ad, mrac_simplex.fade,
+        mrac_state.x_vel.u_nom, mrac_state.y_vel.u_nom,
+        mrac_state.pitch.u_ad, mrac_state.roll.u_ad, mrac_state.yaw.u_ad, mrac_state.z_rate.u_ad,
+        mrac_state.x_vel.u_ad, mrac_state.y_vel.u_ad, mrac_simplex.fade,
         s_ekf_of.x[0], s_ekf_of.x[3], s_ekf_of.x[1], s_ekf_of.x[4], s_ekf_of.x[2], s_ekf_of.x[5], s_of_bias_x,
         s_of_bias_y,
         real_voltage, g_thrust_est.imu_total, g_thrust_est.blade_element[0], g_thrust_est.blade_element[1],
@@ -318,10 +343,22 @@ static void check_tlm(void)
         (float)g_rtos_budget.stack_min_words, (float)g_rtos_budget.stack_min_task, g_rtos_budget.stab_cpu_pct,
         g_rtos_budget.loop_max_us, (float)g_rtos_budget.iwdg_on,
 #endif
+        zf[0], zf[1], zf[2], zf[3], zw[0], zw[1], zw[2], zw[3], (float)mrac_z_feat_mask,
+        s_sysid_c[SYSID_AXIS_PITCH], s_sysid_c[SYSID_AXIS_ROLL], s_sysid_c[SYSID_AXIS_YAW],
+        s_sysid_d[SYSID_AXIS_PITCH], s_sysid_d[SYSID_AXIS_ROLL], s_sysid_d[SYSID_AXIS_YAW],
+        s_sysid_u[SYSID_AXIS_PITCH], s_sysid_u[SYSID_AXIS_ROLL], s_sysid_u[SYSID_AXIS_YAW], (float)sysid_target,
     };
-    if (sizeof want != sizeof g_tlm || memcmp(want, &g_tlm, sizeof want) != 0) {
-        fprintf(stderr, "g_tlm differs from its sources at tick %lu\n", g_tick);
+    /* A base built before the mrac_z (9) and sysid_cdu (10) groups has exactly 19 floats less: check its prefix. */
+    const size_t nb = (sizeof g_tlm == sizeof want - 19U * sizeof want[0]) ? sizeof g_tlm : sizeof want;
+    if (sizeof g_tlm != nb || memcmp(want, &g_tlm, nb) != 0) {
+        const float *got = (const float *)&g_tlm;
+        size_t i, n = nb < sizeof g_tlm ? nb / sizeof want[0] : sizeof g_tlm / sizeof want[0];
+        for (i = 0; i < n && memcmp(&want[i], &got[i], sizeof want[0]) == 0; i++) { }
+        fprintf(stderr, "g_tlm differs from its sources at tick %lu: %u vs %u floats, first index %u (%g vs %g)\n",
+                g_tick, (unsigned)(nb / sizeof want[0]), (unsigned)(sizeof g_tlm / sizeof want[0]),
+                (unsigned)i, i < n ? (double)want[i] : 0.0, i < n ? (double)got[i] : 0.0);
         exit(3);
+    }
     }
 }
 #else

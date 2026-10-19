@@ -37,6 +37,7 @@ class RejectReason(IntEnum):
     QUEUE_FULL = 8
     UNKNOWN_VARIABLE = 0x40   # CMD 0x2D VAR_WRITE: no allowlist row with this id
     OUT_OF_RANGE = 0x41       # CMD 0x2D VAR_WRITE: outside the row's [min, max] or not integral for a u8 row
+    BUSY = 0x42               # CMD 0x2D VAR_WRITE: sysid_target written while a sysid run is not IDLE
 
 
 @dataclass(frozen=True)
