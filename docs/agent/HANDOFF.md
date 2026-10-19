@@ -71,7 +71,11 @@ All built inline. Jules is unreachable from the cloud and Claude subagents are r
    - **The fix.** `nn4_data` now defaults to target `rawof`: camera truth − `NN4_OF_SCALE` × raw OF (`ano_of.of2_dx/dy_fix`, read before the EKF at `TASK/StabilizerTask.c:846`), with `NN4_RAW_CH` features (13 channels, no fused channel). `nn4_track` scores raw OF + prediction. `nn4` adds a `rawof` baseline row and records `ext_pos_on` per flight (`ext N` in the CLI). Tests: `ground_station/analysis/tests/test_nn4_data.py` (includes a leak check: two fused flights with different camera-aided channels give identical data).
    - **10-19 evaluation: NOT RUN.** The cloud has no truth4 flights. The 10-19 flights were captured as campaign session `telemetry.csv`, while truth4 / `fixes_clock` / `nn4_data` read stream_log slot CSVs; a converter or a `read_slots` session branch is needed first. Steps and the enable gate are in the doc.
    - **Shadow / active enable: PROPOSED** (doc, "Enabling on the vehicle"). The firmware still runs no flow model; the MLP is 5314 params, 52 kMAC/s at 10 Hz.
-   - **Follow-ups:** `nn_io.seq` still uses the leaky `target="earth"`; regenerate `nn4_lofo.json` and the `truth4_score_nn4.json` files on the lab PC.
+   - **`nn_io.seq` — FIXED offline (`cfcd3f1`, doc "Follow-ups" item 1):** it now uses the `rawof` target and the `NN4_RAW_CH` features, and it scores on the `nn4_track` track. `NN4_CH` is unchanged, because campaign_capture uses it for the `nn4` log group. Test: `ground_station/analysis/tests/test_nn_io_seq.py` (torch-free).
+   - **Follow-ups (lab PC):**
+     - Regenerate `nn4_lofo.json` and the `truth4_score_nn4.json` files.
+     - Retrain the nn_io checkpoints. Old `NN4_CH` checkpoints fail the channel check.
+     - Regenerate `nnio*.json`, `nnio*_pred.npz`, `nnio_calib.json`, `nnio_sync.json` and any `NNIO_PACK` directory. The sync keys `earth*` are now `rawof*`.
 4. **Other 4 Bug Fixes — DONE (2026-10-19 cloud session; briefs in `.agent-ops/briefs/j-1019-*.md`; deviations are listed in each commit message):**
    - **Fix 1 (`j-1019-exp-gains`, `cd8326d`).**
      - Firmware (PROPOSED, not flashed): `Keil_PreTakeoff()` in `TASK/StabilizerTask.c` is true on the ground, or when armed at idle with no controller driving the motors. `Exp_Poll`, `Keil_PresetPoll`, `Limit_ModePoll` and `Keil_VariantPoll` latch on it. `API/mrac.c` gets 64-bit mask shifts.
