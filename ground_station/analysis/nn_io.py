@@ -8,20 +8,32 @@ quantity drift_score reports. Data: the truth4 flights (video truth), same pool 
 
   python -m ground_station.analysis.nn_io calib            per-flight scale/rotation of the EKF velocity error
   python -m ground_station.analysis.nn_io train [opts]     GRU/TCN drift-horizon model, hold-out + LOFO, tag _nnio*
+  python -m ground_station.analysis.nn_io pack [--out DIR]  pickle the flights + UTIL set; NNIO_PACK=DIR train runs
+                                                            off-site (no video) and saves nnio<tag>_pred.npz
+  python -m ground_station.analysis.nn_io score --tag TAG   drift_score that npz here, filling nnio<tag>.json
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import pickle
 from pathlib import Path
 
 import numpy as np
 
-from ground_station.analysis.video_truth import NN4_CH, NN4_HOLD, NN4_SUSPECT, drift_score, nn4_data, read_slots
+from ground_station.analysis.video_truth import (
+    NN4_CH,
+    NN4_HOLD,
+    NN4_SUSPECT,
+    drift_score,
+    nn4_data,
+)
 
 RATE_HZ = 20.0
 HORIZONS_S = (1.0, 5.0, 20.0, 60.0)
 V_COL = (12, 13)                       # s_ekf_of.x[1], x[4] (body velocity, m/s) in the NN4_CH feature order
+PACK = os.environ.get("NNIO_PACK", "")  # dir from `pack`: load_all / util_load read it, train skips drift_score
 
 
 def flights() -> list[str]:
@@ -37,14 +49,52 @@ def _bmean(t: np.ndarray, x: np.ndarray, ts: np.ndarray, w: float, total: bool =
     return s if total else np.where(n > 0, s / np.maximum(n, 1), x[np.clip(j[:, 1] - 1, 0, len(t) - 1)])
 
 
+def any_slot_loader(stem: str, ts: np.ndarray, rate_hz: float = RATE_HZ) -> np.ndarray:
+    """Find each NN4_CH channel by column name in whichever <stem>.slot<k>.csv has it (first match wins,
+    reports which slot and the measured rate per channel), keep the drone clock (t_src_ms), and build the
+    same causal 20 Hz block grid. Fails if missing channel or rate < 20 Hz."""
+    import pandas as pd
+    chans = [c for k, cols in NN4_CH.items() for c in cols]
+    slots_found = {}
+    F = []
+
+    for c in chans:
+        found = False
+        for k in range(1, 10):
+            if k not in slots_found:
+                p = Path(f"{stem}.slot{k}.csv")
+                if p.exists():
+                    df = pd.read_csv(p)
+                    slots_found[k] = df
+                else:
+                    slots_found[k] = None
+
+            df = slots_found[k]
+            if df is not None and c in df.columns:
+                t = df["t_src_ms"].values / 1000.0 if "t_src_ms" in df.columns else df["t"].values
+                dt = np.median(np.diff(t))
+                ch_rate = 1.0 / dt if dt > 0 else 0.0
+                if ch_rate < 20.0:
+                    raise ValueError(f"Channel {c} rate is {ch_rate:.1f} Hz < 20 Hz")
+
+                print(f"  {c} found in slot {k} at {ch_rate:.1f} Hz")
+                F.append(_bmean(t, np.nan_to_num(df[c].values), ts, 1.0 / rate_hz))
+                found = True
+                break
+        if not found:
+            raise ValueError(f"Channel {c} not found in any slot")
+
+    return np.c_[F].T
+
 def seq(name: str, rate_hz: float = RATE_HZ) -> dict:
     """One flight on a causal rate_hz grid: nn4_data with one block per step (F = block means of the NN4_CH channels,
     falling back to the last sample when a block is empty), plus R = truth - earth (truth4 frame, m) at ts."""
     d = nn4_data(name, rate_hz=rate_hz, win_s=1.0 / rate_hz, nblk=1)
-    S = read_slots(json.loads((Path(f"logs/video_truth/{name}") / "truth4.json").read_text())["stem"], (1, 2))
-    F = [_bmean(S[k]["t"], np.nan_to_num(S[k][c]), d["ts"], 1.0 / rate_hz) for k, chans in NN4_CH.items() for c in chans]
+    stem = json.loads((Path(f"logs/video_truth/{name}") / "truth4.json").read_text())["stem"]
+
+    d["F"] = any_slot_loader(stem, d["ts"], rate_hz)
+
     r = d["truth"] - d["earth"]
-    d["F"] = np.c_[F].T
     d["R"] = np.interp(d["ts"], d["t"], r.real) + 1j * np.interp(d["ts"], d["t"], r.imag)
     d["v"] = d["F"][:, V_COL[0]] + 1j * d["F"][:, V_COL[1]]
     return d
@@ -56,6 +106,8 @@ def split(names: list[str]) -> tuple[list[str], list[str]]:
 
 
 def load_all(rate_hz: float = RATE_HZ) -> tuple[dict, dict]:
+    if PACK:
+        return pickle.loads((Path(PACK) / "truth.pkl").read_bytes())
     data, skipped = {}, {}
     for n in flights():
         try:
@@ -237,6 +289,8 @@ def util_finish(raws: list[dict], coef: np.ndarray | None = None) -> tuple[list[
 
 
 def util_load(rate_hz: float = RATE_HZ, root: Path = UTIL_DIR) -> tuple[list[dict], dict]:
+    if PACK and Path(root) == UTIL_DIR:
+        return pickle.loads((Path(PACK) / "util.pkl").read_bytes())
     raws, skipped = [], {}
     for f in sorted(Path(root).glob("*/*.csv")):
         try:
@@ -480,6 +534,78 @@ def fit(train: list[dict], kind="gru", H=32, head="scale", layers=1, iters=1500,
     return net, mu, sd, feats
 
 
+def save_model(model, path: str | Path, meta: dict):
+    """Save model to a torch file format as specified."""
+    import hashlib
+    torch = _torch()
+    net, mu, sd, feats = model
+    state_dict = net.state_dict()
+    # Tensors, lists and plain values only, so load_model can use torch.load(weights_only=True) (no pickle code).
+    mu = np.ascontiguousarray(mu, dtype=np.float64)
+    sd = np.ascontiguousarray(sd, dtype=np.float64)
+    meta = json.loads(json.dumps(meta, default=lambda o: o.item() if hasattr(o, "item") else str(o)))
+
+    # Hash weights+norm arrays
+    h = hashlib.sha256()
+    for v in state_dict.values():
+        h.update(v.numpy().tobytes())
+    h.update(mu.tobytes())
+    h.update(sd.tobytes())
+
+    chans = [c for k, cols in NN4_CH.items() for c in cols]
+
+    payload = {
+        "format": "nnio-v1",
+        "state_dict": state_dict,
+        "cfg": meta,
+        "mu": torch.from_numpy(mu),
+        "sd": torch.from_numpy(sd),
+        "feats": [int(f) for f in feats],
+        "rate_hz": RATE_HZ,
+        "channels": chans,
+        "v_col": list(V_COL),
+        "sha256": h.hexdigest()
+    }
+    torch.save(payload, path)
+
+_CKPT_KEYS = frozenset({"format", "state_dict", "cfg", "mu", "sd", "feats", "channels", "sha256"})
+
+
+def load_model(path: str | Path):
+    """Load model from file, checking hash, format, and channel list."""
+    import hashlib
+    torch = _torch()
+    # weights_only: a checkpoint is data, never code. Every unreadable file becomes one ValueError for the callers.
+    try:
+        p = torch.load(path, map_location="cpu", weights_only=True)
+    except (OSError, EOFError, RuntimeError, pickle.UnpicklingError) as e:
+        raise ValueError(f"Unreadable checkpoint {path}: {e}") from e
+    missing = _CKPT_KEYS - set(p) if isinstance(p, dict) else _CKPT_KEYS
+    if missing:
+        raise ValueError(f"Not an nnio checkpoint, missing {sorted(missing)}")
+    if p["format"] != "nnio-v1":
+        raise ValueError(f"Invalid format: {p.get('format')}")
+
+    h = hashlib.sha256()
+    for v in p["state_dict"].values():
+        h.update(v.numpy().tobytes())
+    mu, sd = p["mu"].numpy(), p["sd"].numpy()
+    h.update(mu.tobytes())
+    h.update(sd.tobytes())
+    if h.hexdigest() != p["sha256"]:
+        raise ValueError("Hash mismatch in checkpoint")
+
+    expected_chans = [c for k, cols in NN4_CH.items() for c in cols]
+    if p.get("channels") != expected_chans:
+        raise ValueError(f"Channel list mismatch: expected {expected_chans}, got {p.get('channels')}")
+
+    cfg = p["cfg"]
+    net = build(len(p["feats"]), cfg.get("kind", "gru"), cfg.get("H", 32), cfg.get("head", "scale"), cfg.get("layers", 1), drop=0.0)
+    net.load_state_dict(p["state_dict"])
+    net.eval()
+
+    return (net, mu, sd, p["feats"])
+
 def predict(model, d: dict) -> np.ndarray:
     torch = _torch()
     net, mu, sd, feats = model
@@ -509,7 +635,7 @@ def _pretrain(kind, H, head, layers, pre_iters, seeds, eval_every, util_val, kw,
 
 
 def train(kind="gru", H=32, head="scale", layers=1, iters=1500, seeds=2, lofo=False, tag="", eval_every=0, exclude=(),
-          pre_iters=0, ft_lr=1e-3, util_val="const4", ft_only="", **kw) -> dict:
+          pre_iters=0, ft_lr=1e-3, util_val="const4", ft_only="", save="", **kw) -> dict:
     """Hold-out: train on the whole pool, score NN4_HOLD. lofo: also each pool flight with the pool minus it.
     eval_every: print the quick_d60 learning curve of each scored flight; exclude: name substrings dropped from the pool.
     pre_iters: first pretrain on UTIL (COMMON features), then fine-tune iters at ft_lr (scored flights: it 0 = zero-shot);
@@ -532,6 +658,7 @@ def train(kind="gru", H=32, head="scale", layers=1, iters=1500, seeds=2, lofo=Fa
             print(f"  seed {s} it {it}: " + " ".join(f"{n.split('_')[-2] if n.count('_') > 2 else n}={v}" for n, v in q.items()), flush=True)
         return cb
 
+    preds = {}
     for tr, names in groups:
         print("  earth quick_d60: " + " ".join(f"{n[:24]}={quick_d60(data[n]):.1f}" for n in names), flush=True)
         if bases:
@@ -544,12 +671,51 @@ def train(kind="gru", H=32, head="scale", layers=1, iters=1500, seeds=2, lofo=Fa
         for n in names:
             d = data[n]
             p = np.mean([predict(m, d) for m in models], 0)
-            r = drift_score(n, ests={"earth": np.c_[d["earth"].real, d["earth"].imag], "nn": corrected(d, p)}, tag=tag)
-            f = {k: round(e["drift60s_p90_cm"], 1) for k, e in r["est"].items() if "drift60s_p90_cm" in e}
-            out["flights"][n] = {"in_pool": n in pool, "d60s": f, "quick_nn": round(quick_d60(d, p), 1),
-                                 "rms_cm": {k: round(e["rms_cm"], 1) for k, e in r["est"].items()}}
-            print(f"{n[:27]:27s} pool={n in pool:d} earth {f.get('earth')} -> nn {f.get('nn')}", flush=True)
-    Path(f"logs/video_truth/nnio{tag}.json").write_text(json.dumps(out, indent=1))
+            out["flights"][n] = {"in_pool": n in pool, "quick_nn": round(quick_d60(d, p), 1)}
+            if PACK:
+                preds[n] = p
+                print(f"{n[:27]:27s} pool={n in pool:d} quick_d60 {quick_d60(d):.1f} -> {out['flights'][n]['quick_nn']}", flush=True)
+            else:
+                out["flights"][n].update(_score(n, d, p, tag, n in pool))
+    if save and models:  # the last fold's first seed (the only fold without --lofo)
+        save_model(models[0], save, out["cfg"])
+    vt = Path("logs/video_truth")
+    vt.mkdir(parents=True, exist_ok=True)
+    if PACK:
+        np.savez(vt / f"nnio{tag}_pred.npz", **preds)
+    (vt / f"nnio{tag}.json").write_text(json.dumps(out, indent=1))
+    return out
+
+
+def _score(n: str, d: dict, p: np.ndarray, tag: str, in_pool: bool) -> dict:
+    """drift_score of the earth track and the NN-corrected one (needs the flight's video truth on this machine)."""
+    r = drift_score(n, ests={"earth": np.c_[d["earth"].real, d["earth"].imag], "nn": corrected(d, p)}, tag=tag)
+    f = {k: round(e["drift60s_p90_cm"], 1) for k, e in r["est"].items() if "drift60s_p90_cm" in e}
+    print(f"{n[:27]:27s} pool={in_pool:d} earth {f.get('earth')} -> nn {f.get('nn')}", flush=True)
+    return {"d60s": f, "rms_cm": {k: round(e["rms_cm"], 1) for k, e in r["est"].items()}}
+
+
+def pack(out: str) -> None:
+    """out/truth.pkl = load_all(), out/util.pkl = util_load(): train with NNIO_PACK=out needs no video or CSV."""
+    assert not PACK, "unset NNIO_PACK to pack from the live files"
+    o = Path(out)
+    o.mkdir(parents=True, exist_ok=True)
+    for f, v in (("truth.pkl", load_all()), ("util.pkl", util_load())):
+        (o / f).write_bytes(pickle.dumps(v, protocol=4))
+        print(f"{o / f}: {(o / f).stat().st_size / 1e6:.1f} MB, {len(v[0])} items, {len(v[1])} skipped", flush=True)
+
+
+def score(tag: str) -> dict:
+    """Finish a packed train run: drift_score each flight of nnio{tag}_pred.npz here and fill nnio{tag}.json."""
+    vt = Path("logs/video_truth")
+    out = json.loads((vt / f"nnio{tag}.json").read_text())
+    with np.load(vt / f"nnio{tag}_pred.npz") as z:
+        for n in z.files:
+            try:
+                out["flights"][n].update(_score(n, seq(n), z[n], tag, out["flights"][n]["in_pool"]))
+            except (ValueError, KeyError, OSError) as e:  # no aruco.npz here: quick_nn is the only score
+                print(f"{n[:27]:27s} not scored: {e.__class__.__name__}", flush=True)
+    (vt / f"nnio{tag}.json").write_text(json.dumps(out, indent=1))
     return out
 
 
@@ -586,16 +752,25 @@ def main(argv=None):
     t.add_argument("--ft-lr", type=float, default=1e-3)
     t.add_argument("--util-val", default="const4")
     t.add_argument("--ft-only", default="", help="parameter-name prefixes (comma-separated) trained in the fine-tune, e.g. out (head only) or convs.4,out")
+    t.add_argument("--save", default="", help="Path to save the trained checkpoint")
+    pk = sub.add_parser("pack", help="pickle the flights + UTIL set for an off-site train (NNIO_PACK=DIR)")
+    pk.add_argument("--out", default="D:/datasets/nnio_pack")
+    sc = sub.add_parser("score", help="drift_score the predictions of a packed train run (same --tag)")
+    sc.add_argument("--tag", required=True)
     a = ap.parse_args(argv)
     if a.cmd == "calib":
         calib(chunk_s=a.chunk_s)
     elif a.cmd == "sync":
         sync_scan()
+    elif a.cmd == "pack":
+        pack(a.out)
+    elif a.cmd == "score":
+        score(a.tag)
     elif a.cmd == "airio":
         airio_eval(a.model, a.rate, a.util_val, airio_hz=a.airio_rate)
     else:
         train(a.kind, a.H, a.head, a.layers, a.iters, a.seeds, a.lofo, a.tag, a.eval_every,
-              tuple(x for x in a.exclude.split(",") if x), a.pre_iters, a.ft_lr, a.util_val, a.ft_only, crop_s=a.crop_s, lr=a.lr, wd=a.wd, drop=a.drop, vel_w=a.vel_w,
+              tuple(x for x in a.exclude.split(",") if x), a.pre_iters, a.ft_lr, a.util_val, a.ft_only, save=a.save, crop_s=a.crop_s, lr=a.lr, wd=a.wd, drop=a.drop, vel_w=a.vel_w,
               noise=a.noise, feats=[int(x) for x in a.feats.split(",")] if a.feats else None)
 
 

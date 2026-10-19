@@ -1,0 +1,15 @@
+# I: hover to empty, one pack from full to the 15.0 V beep, for the hover throttle model u_hov(V) = c0 + c1*(V0 - V).
+# The firmware airborne cap is 120 s (API/wfb_safety.c WFB_SAFETY_LIMITS_ROW, compiled, not VAR_WRITE-able) and stays.
+# So the drain is REPEATED sub-cap hovers on the same FULL pack: fly lab_i_hover_empty --once --pack <1|2>, land,
+# rerun at once (ground gap < 30 s so the rebound is small), until the 15.0 V beep (VBAT_LOW_BEEP_V, StabilizerTask.c)
+# or 14.6 V on the dashboard (PROPOSED cut): about 5-8 runs, UNVERIFIED count. Fusion 3 running. MRAC injection off
+# so the logged u is the PID + hover term only. Then: python -m ground_station.analysis.hover_fit <sessions> (PR #10).
+# Plan: docs/lab/run-sheet-2026-10-18.md
+campaign lab-i-hover-empty
+rate 100
+log thrust_model velocity_loops camera_fusion
+slow 25 ekf_states estimator_truth
+set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10
+takeoff 0.5 mrac_injection=0
+hold 85
+land

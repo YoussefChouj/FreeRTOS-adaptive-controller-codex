@@ -348,6 +348,19 @@ def video_size(video: str) -> tuple[int, int]:
     return int(cap.get(3)), int(cap.get(4))
 
 
+DRIVE_ROOT = Path("G:/My Drive/UAV_lab")  # where `lab end` / `lab archive` move old videos (docs/agent/video-archive.md)
+
+
+def video_file(video_dir, name: str = "cam.mkv") -> str:
+    """A logs/video_truth/<folder> video: the local file, else its Google Drive copy at
+    DRIVE_ROOT/<day>/<folder>/<name> (Drive downloads it on first read). The local path if neither exists."""
+    p = Path(video_dir) / name
+    if p.exists():
+        return str(p)
+    hits = sorted(DRIVE_ROOT.glob(f"*/{p.parent.name}/{name}")) if DRIVE_ROOT.is_dir() else []
+    return str(hits[-1] if hits else p)
+
+
 def floor_pose(K, dist, world_xy, pixel) -> tuple[np.ndarray, np.ndarray, float]:
     """Camera pose from floor marks (z = 0). Returns R, t (world -> camera) and the mean reprojection error in px."""
     cv2 = _cv2()
@@ -1229,7 +1242,7 @@ def plumb_check(stem: str, video_dir: str, cam, coral_step: int = 2, sync_s: flo
     cam = json.loads(Path(cam).read_text()) if not isinstance(cam, dict) else cam
     K, dist, vd = np.array(cam["K"]), np.array(cam["dist"]), Path(video_dir)
     sp = vd / "aruco.npz"
-    scan = dict(np.load(sp)) if sp.exists() else aruco_scan(str(vd / "cam.mkv"), step=5, out=str(sp))
+    scan = dict(np.load(sp)) if sp.exists() else aruco_scan(video_file(vd), step=5, out=str(sp))
     R, tw, mad0 = floor_from_marker(scan, cam)
     marks = {}
     for k in scan:
@@ -1241,7 +1254,7 @@ def plumb_check(stem: str, video_dir: str, cam, coral_step: int = 2, sync_s: flo
     cp = vd / "coral.npz"
     if not cp.exists():
         c0, _ = static_corners(scan["c0"])
-        track_coral(str(vd / "cam.mkv"), c0.mean(0), coral_static(str(vd / "cam.mkv")), step=coral_step, out=str(cp))
+        track_coral(video_file(vd), c0.mean(0), coral_static(video_file(vd)), step=coral_step, out=str(cp))
     tr = np.load(cp)
     ok = ~np.isnan(tr["uv"][:, 0])
     t_v, uv = tr["t"][ok], tr["uv"][ok]
@@ -1373,7 +1386,7 @@ def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: 
     cp = vd / "coral.npz"
     if not cp.exists():
         c0, _ = static_corners(scan["c0"])
-        track_coral(str(vd / "cam.mkv"), c0.mean(0), coral_static(str(vd / "cam.mkv")), step=coral_step, out=str(cp))
+        track_coral(video_file(vd), c0.mean(0), coral_static(video_file(vd)), step=coral_step, out=str(cp))
     tr = np.load(cp)
     ok = ~np.isnan(tr["uv"][:, 0])
     t_v, uv = tr["t"][ok], tr["uv"][ok]

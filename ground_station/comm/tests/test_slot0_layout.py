@@ -158,7 +158,7 @@ class TestBootDefaultLayoutModule(unittest.TestCase):
 
     def test_dashboard_divider_is_4(self):
         # 80/4 = 20 Hz measured in MIXED mode (MIXED cadence ~80 Hz,
-        # not the nominal 200 Hz SUBSCRIBE_SEND_TASK_HZ).
+        # not the nominal 100 Hz SUBSCRIBE_SEND_TASK_HZ).
         self.assertEqual(DASHBOARD_FRAME_A_DIVIDER, 4)
 
     def test_boot_default_divider_is_20(self):

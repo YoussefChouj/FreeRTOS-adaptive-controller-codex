@@ -270,9 +270,13 @@ typedef enum {
  * (the legacy Frame A/B/C UART4 DMA busy-wait steals ~3 ms from the
  * 5 ms task floor, pacing the loop to ~80 Hz). SUBSCRIBE_TELEMETRY_
  * SUBSCRIBE_ONLY skips the DMA path and runs at the nominal 200 Hz.
- * The budget must cover the faster SUBSCRIBE_ONLY mode, so it uses the
- * nominal 200 Hz ceiling. Host reporting keeps a separate measured 80 Hz
- * constant for MIXED-mode divider estimates.
+ * The budget prices the stream tick, not the task loop: Subscribe_StreamTick
+ * paces itself to SUBSCRIBE_SEND_TASK_HZ (100 Hz, the normal 10 ms branch)
+ * and skips calls that come sooner than SUBSCRIBE_STREAM_TICK_MIN_MS after
+ * the last tick, so the 5 ms SysID branch (main.c, id/of frame on) cannot
+ * double a slot's rate. Pricing that branch at 200 Hz used to waste half the
+ * link. Host reporting keeps a separate measured 80 Hz constant for
+ * MIXED-mode divider estimates.
  *
  * Link-budget guard. USART3 owns the link while a stream is active
  * (usart3_send() is suppressed), so its budget is the wire ceiling:
@@ -280,7 +284,9 @@ typedef enum {
  * UART5 is not empty: frames A/B/C already measure 8569 B/s = 74% of
  * its 11520 B/s capacity, so its guard sits at 20%. The last 5% of
  * USART3 is deliberately unallocatable, not an oversight. */
-#define SUBSCRIBE_SEND_TASK_HZ       200U
+#define SUBSCRIBE_SEND_TASK_HZ       100U
+/* 10 ms period minus 2 ms of preemption jitter in the 100 Hz branch. */
+#define SUBSCRIBE_STREAM_TICK_MIN_MS 8U
 #define SUBSCRIBE_BUDGET_PCT_USART3  95U
 #define SUBSCRIBE_BUDGET_PCT_UART5   20U
 /* Mirrors BSP/usart5.c:55. Only the budget guard reads it, and a stale value

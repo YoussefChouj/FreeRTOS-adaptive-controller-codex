@@ -12,6 +12,7 @@ void IMU_Update_Mahony(_imu_st *imu,float dt);
 /* Estimator warmup / convergence (A1-A2). */
 uint8_t IMU_EstimatorReady(void);      /* 1 = converged or timeout, ready to arm */
 extern float g_imu_settle_metric;      /* Keil-watchable innovation-LPF for tuning */
+extern volatile uint8_t g_imu_mahony_yaw_decouple; /* 1 = zero Mahony ez/ezInt so xy accel cannot corrupt gyroz */
 
 /* Gravity-removed body-frame linear acceleration (mg) — computed each update from
  * the fresh Mahony gravity direction. ADR-0011 Phase 3 reads these to drive the

@@ -1,5 +1,6 @@
 """campaign_fly --record-only: log plan on the slots, record, stop; never a drone command."""
 
+import json
 import time
 
 from ground_station.livewatch.campaign_capture import MAX_SLOTS
@@ -223,7 +224,7 @@ def test_resolve_campaign_fly_file_name_and_launch_copy(tmp_path):
     launch, src = campaign_fly.resolve_campaign(str(SAMPLE), "type2", **kw)
     assert src == SAMPLE and launch.parent == tmp_path / "launch"
     by_name, src2 = campaign_fly.resolve_campaign("preset_tour", "type2", **kw)
-    assert src2 == SAMPLE and by_name.parent == tmp_path / "launch"
+    assert src2.resolve() == SAMPLE.resolve() and by_name.parent == tmp_path / "launch"
     assert campaign_fly.resolve_campaign(str(launch), "other", **kw) == (launch, launch)
     with pytest.raises(LaunchError, match="preset_tour"):
         campaign_fly.resolve_campaign("no_such_campaign", "type2", **kw)
@@ -392,3 +393,458 @@ def test_watch_ctrl_c_leaves_while_the_service_is_down(monkeypatch):
     st, _ = campaign_fly.watch("http://h", term=term, key=key)
     assert st == {"status": "service_down"} and rig.t < 7.0
     assert any("leaving fly" in e for e in term.events) and not any("FAILED" in e for e in term.events)
+
+
+def test_write_gains_refuses_when_not_disarmed(monkeypatch, capsys):
+    monkeypatch.setattr(campaign_fly, "_vitals", lambda base: {"arm": {"state": "armed"}})
+    ok = campaign_fly.write_gains("http://h", "c2")
+    assert ok is False
+    out = capsys.readouterr().out
+    assert "REFUSED: drone is not disarmed" in out
+
+
+def test_write_gains_operator_cancellation(monkeypatch, capsys):
+    monkeypatch.setattr(campaign_fly, "_vitals", lambda base: {"arm": {"state": "disarmed"}})
+    ok = campaign_fly.write_gains("http://h", "c2", ask_fn=lambda p: "n")
+    assert ok is False
+    out = capsys.readouterr().out
+    assert "Gain write cancelled." in out
+
+
+def test_write_gains_success_and_table(monkeypatch, capsys):
+    vitals_data = {
+        "arm": {"state": "disarmed"},
+        "g_wfb_status.yaw_kp": 2.0,
+        "g_wfb_status.yaw_ki": 0.0,
+        "g_wfb_status.yaw_kd": 0.0,
+    }
+    monkeypatch.setattr(campaign_fly, "_vitals", lambda base: vitals_data)
+    posted = []
+
+    def fake_call(base, route, body=None, timeout=10):
+        posted.append((route, body))
+        return 200, {"ok": True, "command_id": 0x01, "status": "applied"}
+
+    monkeypatch.setattr(campaign_fly, "call", fake_call)
+    test_gains = {0: 2.5, 1: 0.1}
+    ok = campaign_fly.write_gains("http://h", test_gains, why="unit test", yes=True)
+    assert ok is True
+    out = capsys.readouterr().out
+    assert "Why: unit test" in out
+    assert "| Axis" in out and "| idx" in out and "| Old" in out and "| New" in out and "| ACK" in out
+    assert "2/2 ACK" in out
+    cmd_posts = [p for p in posted if p[0] == "/commands"]
+    assert len(cmd_posts) == 2
+
+
+def test_write_gains_defaults_preset(monkeypatch, capsys):
+    vitals_data = {"arm": {"state": "disarmed"}}
+    monkeypatch.setattr(campaign_fly, "_vitals", lambda base: vitals_data)
+    posted = []
+
+    def fake_call(base, route, body=None, timeout=10):
+        posted.append((route, body))
+        return 200, {"ok": True, "command_id": 0x01, "status": "applied"}
+
+    monkeypatch.setattr(campaign_fly, "call", fake_call)
+    ok = campaign_fly.write_gains("http://h", "defaults", yes=True)
+    assert ok is True
+    out = capsys.readouterr().out
+    assert "12/12 ACK" in out
+    cmd_posts = [p for p in posted if p[0] == "/commands"]
+    assert len(cmd_posts) == 12
+
+
+def test_debrief_lines_never_airborne():
+    # Friction B14: air <= 0 or max_z < 0.25 -> "landing offset: no landing (never airborne)"
+    samples_air_zero = [_sample(0.0, 0, 10.0, 0.0, 0.0, air=0.0)]
+    lines = campaign_fly.debrief_lines(samples_air_zero, {"status": "done"}, "f/01")
+    assert "landing offset: no landing (never airborne)" in lines
+
+    # Even if air > 0, if max_z < 0.25, report never airborne
+    samples_low_z = [_sample(0.0, 0, 10.0, 0.0, 0.1, air=1.0)]
+    lines2 = campaign_fly.debrief_lines(samples_low_z, {"status": "done"}, "f/01")
+    assert "landing offset: no landing (never airborne)" in lines2
+
+
+def test_quiet_preflight_waits_for_position_streaming(monkeypatch, capsys):
+    # Fix 4: first poll fails ONLY on position not streaming -> retries up to 1.5s
+    attempts = [0]
+
+    def fake_call(base, route, body=None, timeout=10):
+        attempts[0] += 1
+        if attempts[0] == 1:
+            return 200, {
+                "ok": False,
+                "checks": [{"name": "position", "value": "position not streaming", "pass": False}],
+            }
+        return 200, {"ok": True, "checks": [{"name": "position", "value": "streaming at 50 Hz", "pass": True}]}
+
+    slept = []
+    monkeypatch.setattr(campaign_fly, "call", fake_call)
+    monkeypatch.setattr(campaign_fly, "_sleep", lambda s: slept.append(s))
+    events_logged = []
+    monkeypatch.setattr(campaign_fly.events, "log", lambda ev, **kw: events_logged.append((ev, kw)))
+
+    ok, fails = campaign_fly.quiet_preflight("http://h", "test_camp", "type2", shown=None)
+    assert ok is True
+    assert fails == ()
+    assert slept == [0.5]
+    assert attempts[0] == 2
+    assert "preflight OK: arm by RC to fly" in capsys.readouterr().out
+
+
+def test_upload_preload(tmp_path, monkeypatch):
+    class DummyRunner:
+        called = False
+        def upload_preload(self):
+            self.called = True
+            return True
+
+    r = DummyRunner()
+    assert campaign_fly.upload_preload("http://h", runner=r) is True
+    assert r.called is True
+
+    # Empty launch path returns True
+    assert campaign_fly.upload_preload("http://h", launch_path=None) is True
+
+    # Campaign yaml without upload steps returns True
+    c_yaml = tmp_path / "c_no_upload.yaml"
+    c_yaml.write_text(YAML, encoding="utf-8")
+    assert campaign_fly.upload_preload("http://h", launch_path=str(c_yaml)) is True
+
+    # Campaign with goto upload step executes upload
+    from unittest.mock import Mock
+    c_traj_yaml = tmp_path / "c_traj.yaml"
+    traj_text = """campaign: t-goto
+objective: test
+controller: pid
+mode: fly
+packs: [type2]
+max_flights: 1
+experiments:
+  - name: f01
+    scenario:
+      scenario: circle
+      steps:
+        - takeoff: {z: 0.5}
+        - goto: {x: 1.0, y: 0.5, z: 0.5}
+        - land
+    capture: campaign
+    repeats: 1
+abort: {}
+"""
+    c_traj_yaml.write_text(traj_text, encoding="utf-8")
+    res_obj = Mock(ok=True, error=None)
+    monkeypatch.setattr("ground_station.platform.trajectory_upload.upload", lambda pts, client: res_obj)
+    monkeypatch.setattr(campaign_fly, "HttpWfbClient", lambda base: Mock())
+    assert campaign_fly.upload_preload("http://h", launch_path=str(c_traj_yaml)) is True
+
+
+def test_extract_fly_directives(tmp_path):
+    fly = tmp_path / "test.fly"
+    fly.write_text("# gains: c3\n# why: test robust gains\ncampaign test\ntakeoff 0.5\nland\n", encoding="utf-8")
+    preset, why = campaign_fly.extract_fly_directives(fly)
+    assert preset == "c3"
+    assert why == "test robust gains"
+
+    fly2 = tmp_path / "test2.fly"
+    fly2.write_text("# gains: DEFAULTS\ncampaign test2\n", encoding="utf-8")
+    preset2, why2 = campaign_fly.extract_fly_directives(fly2)
+    assert preset2 == "defaults"
+    assert why2 is None
+
+    fly3 = tmp_path / "test3.fly"
+    fly3.write_text("campaign test3\n", encoding="utf-8")
+    preset3, why3 = campaign_fly.extract_fly_directives(fly3)
+    assert preset3 is None
+    assert why3 is None
+
+
+def test_fly_loop_directive_and_no_gains(tmp_path, monkeypatch):
+    launch = tmp_path / "c.yaml"
+    launch.write_text(YAML, encoding="utf-8")
+    fly_src = tmp_path / "c.fly"
+    fly_src.write_text("# gains: c3\n# why: robust\ncampaign t-carry\n", encoding="utf-8")
+
+    monkeypatch.setattr(campaign_fly, "resolve_campaign", lambda arg, pack, rate=None: (launch, fly_src))
+    monkeypatch.setattr(campaign_fly, "upload_preload", lambda base, path: True)
+    monkeypatch.setattr(campaign_fly, "wait_for_arm", lambda *args, **kwargs: "quit")
+
+    gains_written = []
+
+    def fake_write_gains(base, preset, why=None, yes=False, force_livetune=False, livetune_path=None):
+        gains_written.append((preset, why))
+        return True
+
+    monkeypatch.setattr(campaign_fly, "write_gains", fake_write_gains)
+
+    # 1. Automatic directive gains
+    assert campaign_fly.fly_loop("http://h", "c", "P9", once=True, yes=True) == 0
+    assert len(gains_written) == 1
+    assert gains_written[0] == ("c3", "robust")
+
+    # 2. --no-gains skips directive
+    gains_written.clear()
+    assert campaign_fly.fly_loop("http://h", "c", "P9", once=True, yes=True, no_gains=True) == 0
+    assert len(gains_written) == 0
+
+    # 3. CLI --gains overrides directive
+    gains_written.clear()
+    assert campaign_fly.fly_loop("http://h", "c", "P9", once=True, yes=True, gains="c2") == 0
+    assert len(gains_written) == 1
+    assert gains_written[0][0] == "c2"
+
+
+def test_livetune_best_save_merge_and_load(tmp_path):
+    best_file = tmp_path / "livetune_best.json"
+
+    # F2: rate summary
+    rate_summary = {
+        "status": "budget",
+        "loop": "rate",
+        "baseline": {"Kp": 5.0, "Ki": 0.01, "Kd": 10.0},
+        "baseline_J": {"roll": 1.25, "pitch": 1.15},
+        "best": {"Kp": 4.8, "Ki": 0.009, "Kd": 9.2},
+        "best_rel": 0.82,
+        "recommended": {"Kp": 4.8, "Ki": 0.009, "Kd": 9.2},
+        "candidates": 8,
+        "generations": 2,
+        "evals": [{"gains": {"Kp": 4.8, "Ki": 0.009, "Kd": 9.2}, "J": 0.984}],
+    }
+    campaign_fly.save_livetune_result(rate_summary, path=best_file)
+
+    # Verify rate is saved
+    data = json.loads(best_file.read_text(encoding="utf-8"))
+    assert "rate" in data
+    assert data["rate"]["best"]["Kp"] == 4.8
+    assert data["rate"]["best_j"] == 0.984
+    assert data["rate"]["base_j"] == 1.2
+
+    # F3: pos summary
+    pos_summary = {
+        "status": "budget",
+        "loop": "pos",
+        "baseline": {"out.Kp": 0.8, "out.Kd": 4.0, "in.Kp": 3.0, "in.Kd": 6.0},
+        "baseline_J": {"x": 0.50, "y": 0.50},
+        "best": {"out.Kp": 0.72, "out.Kd": 4.4, "in.Kp": 3.1, "in.Kd": 5.7},
+        "best_rel": 0.78,
+        "recommended": {"out.Kp": 0.72, "out.Kd": 4.4, "in.Kp": 3.1, "in.Kd": 5.7},
+        "candidates": 6,
+        "generations": 1,
+        "evals": [{"gains": {"out.Kp": 0.72, "out.Kd": 4.4, "in.Kp": 3.1, "in.Kd": 5.7}, "J": 0.39}],
+    }
+    campaign_fly.save_livetune_result(pos_summary, path=best_file)
+
+    # Verify merged JSON contains both rate and pos
+    merged = json.loads(best_file.read_text(encoding="utf-8"))
+    assert "rate" in merged and "pos" in merged
+
+    # Test load_livetune_gains
+    gains, why, err = campaign_fly.load_livetune_gains(path=best_file)
+    assert err is None
+    assert "rate J 0.984 vs base 1.2" in why
+    assert "pos J 0.39 vs base 0.5" in why
+
+    # Check gain indices:
+    # Rate: 9-11 (gyrox), 12-14 (gyroy)
+    assert gains[9] == 4.8 and gains[10] == 0.009 and gains[11] == 9.2
+    assert gains[12] == 4.8 and gains[13] == 0.009 and gains[14] == 9.2
+    # Pos: outer Kp/Kd (24, 26, 27, 29), inner Kp/Kd (30, 32, 33, 35), Ki defaults (25, 28, 31, 34)
+    assert gains[24] == 0.72 and gains[26] == 4.4
+    assert gains[27] == 0.72 and gains[29] == 4.4
+    assert gains[30] == 3.1 and gains[32] == 5.7
+    assert gains[33] == 3.1 and gains[35] == 5.7
+    assert gains[25] == campaign_fly.PID_DEFAULTS[25][1]
+    assert gains[31] == campaign_fly.PID_DEFAULTS[31][1]
+    assert len(gains) == 18
+
+
+def test_write_gains_livetune_preset_and_force(tmp_path, monkeypatch, capsys):
+    best_file = tmp_path / "livetune_best.json"
+    unrec_data = {
+        "rate": {
+            "loop": "rate",
+            "best": {"Kp": 5.1, "Ki": 0.01, "Kd": 10.2},
+            "best_j": 1.15,
+            "base_j": 1.20,
+            "best_rel": 0.96,
+            "recommended": None,  # Did not beat by 5%
+        }
+    }
+    best_file.write_text(json.dumps(unrec_data), encoding="utf-8")
+
+    monkeypatch.setattr(campaign_fly, "_vitals", lambda base: {"arm": {"state": "disarmed"}})
+    posted = []
+
+    def fake_call(base, route, body=None, timeout=10):
+        posted.append((route, body))
+        return 200, {"ok": True, "command_id": 0x01, "status": "applied"}
+
+    monkeypatch.setattr(campaign_fly, "call", fake_call)
+
+    # Without force: unrecommended gains are refused
+    ok = campaign_fly.write_gains("http://h", "livetune", yes=True, livetune_path=best_file)
+    assert ok is False
+    out = capsys.readouterr().out
+    assert "neither rate nor pos was recommended" in out
+
+    # With force: unrecommended gains are accepted
+    ok_force = campaign_fly.write_gains("http://h", "livetune", yes=True, force_livetune=True, livetune_path=best_file)
+    assert ok_force is True
+    out_force = capsys.readouterr().out
+    assert "6/6 ACK" in out_force
+
+
+def test_write_gains_journal_verification(monkeypatch, capsys):
+    monkeypatch.setattr(campaign_fly, "_vitals", lambda base: {"arm": {"state": "disarmed"}})
+    txn_status = "applied"
+
+    def fake_call(base, route, body=None, timeout=10):
+        if route == "/commands":
+            return 200, {"ok": True, "transaction_id": 42}
+        if route == "/api/actions":
+            return 200, {"actions": [{"transaction_id": 42, "lifecycle": "applied"}]}
+        if route == "/api/diagnostics/bundle":
+            return 200, {"commands": {"results": [{"transaction_id": 42, "status": txn_status}]}}
+        return 200, {}
+
+    monkeypatch.setattr(campaign_fly, "call", fake_call)
+
+    # 1. Applied in journal -> success and confirmation message
+    ok = campaign_fly.write_gains("http://h", {0: 3.5}, yes=True)
+    assert ok is True
+    out = capsys.readouterr().out
+    assert "1/1 ACK (applied & verified in 8081 journal)" in out
+
+    # 2. Not applied in journal -> aborts
+    txn_status = "timed_out"
+    ok_fail = campaign_fly.write_gains("http://h", {0: 3.5}, yes=True)
+    assert ok_fail is False
+    out_fail = capsys.readouterr().out
+    assert "some transactions not confirmed as 'applied' in 8081 journal" in out_fail
+
+
+def test_check_and_persist_livetune(tmp_path):
+    target_path = tmp_path / "livetune_best.json"
+    st = {
+        "status": "done",
+        "flights": [
+            {
+                "steps": [
+                    {
+                        "kind": "livetune",
+                        "livetune": {
+                            "loop": "rate",
+                            "baseline": {"Kp": 5.0, "Ki": 0.01, "Kd": 10.0},
+                            "baseline_J": {"roll": 1.1},
+                            "best": {"Kp": 4.9, "Ki": 0.009, "Kd": 9.8},
+                            "best_rel": 0.85,
+                            "recommended": {"Kp": 4.9, "Ki": 0.009, "Kd": 9.8},
+                        },
+                    }
+                ]
+            }
+        ],
+    }
+    saved = campaign_fly.check_and_persist_livetune(st, path=target_path)
+    assert len(saved) == 1
+    assert saved[0]["loop"] == "rate"
+    assert target_path.is_file()
+    data = json.loads(target_path.read_text(encoding="utf-8"))
+    assert "rate" in data
+    assert data["rate"]["best"]["Kp"] == 4.9
+
+
+def test_list_gains(capsys, tmp_path):
+    rc = campaign_fly.main(["--list-gains"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "=== Preset: c3 ===" in out
+    assert "=== Preset: c2 ===" in out
+    assert "=== Preset: defaults ===" in out
+    assert "=== Preset: livetune ===" in out
+    assert "| Axis           | idx  | Default  | Target   |" in out
+    assert "0.3214" in out
+    assert "0.67" in out
+
+    # Test with livetune_best.json present
+    lt_json = tmp_path / "livetune_best.json"
+    lt_json.write_text(json.dumps({
+        "rate": {
+            "recommended": {"Kp": 4.5, "Ki": 0.015, "Kd": 9.0},
+            "best": {"Kp": 4.5, "Ki": 0.015, "Kd": 9.0},
+            "best_j": 0.08,
+            "base_j": 0.12,
+        }
+    }), encoding="utf-8")
+    campaign_fly.list_gain_presets(livetune_path=lt_json)
+    out2 = capsys.readouterr().out
+    assert "4.5" in out2
+    assert "rate J 0.08 vs base 0.12 (-33.3%)" in out2
+
+
+def test_dry_run_scenario(capsys):
+    rc = campaign_fly.main(["lab_c_robust", "--dry-run"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "=== DRY RUN: lab-c-robust ===" in out
+    assert "Ground gain preset: c3" in out
+    assert "| Axis           | idx  | Default  | Target   |" in out
+    assert "Preload step: goto" in out
+    assert "CRC=0x848956AB" in out
+    assert "< 2 s for 4-point goto" in out
+    assert "Scenario Plan" in out
+    assert "takeoff" in out
+    assert "land" in out
+
+
+def test_dry_run_post_takeoff_gains(capsys):
+    rc = campaign_fly.main(["lab_c_robust", "--dry-run", "--gains", "defaults", "--post-takeoff-gains", "c3"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Ground gain preset: defaults" in out
+    assert "Post-takeoff gain preset: c3 (applied after takeoff in HOVER)" in out
+    assert "0.3214" in out
+
+
+def test_extract_fly_directives_post_takeoff(tmp_path):
+    fly = tmp_path / "post_test.fly"
+    fly.write_text("# gains: defaults\n# post_takeoff_gains: c3\n# why: climb on defaults then switch\ncampaign test\ntakeoff 0.5\nland\n", encoding="utf-8")
+    res = campaign_fly.extract_fly_directives(fly)
+    # 2-tuple unpacking backward compatibility
+    preset, why = res
+    assert preset == "defaults"
+    assert why == "climb on defaults then switch"
+    # post_takeoff attribute
+    assert res.post_takeoff == "c3"
+
+
+def test_write_gains_in_flight(capsys, monkeypatch):
+    # Drone is armed: normal write_gains should REFUSE, in_flight should PASS without prompt
+    monkeypatch.setattr(campaign_fly, "_vitals", lambda base: {"arm": {"state": "armed"}})
+    txn_status = "applied"
+
+    def fake_call(base, route, body=None, timeout=10):
+        if route == "/commands":
+            return 200, {"ok": True, "transaction_id": 99}
+        if route == "/api/actions":
+            return 200, {"actions": [{"transaction_id": 99, "lifecycle": "applied"}]}
+        if route == "/api/diagnostics/bundle":
+            return 200, {"commands": {"results": [{"transaction_id": 99, "status": txn_status}]}}
+        return 200, {}
+
+    monkeypatch.setattr(campaign_fly, "call", fake_call)
+
+    # Normal write while armed is refused
+    assert campaign_fly.write_gains("http://h", {24: 0.3214}) is False
+    assert "Gain write REFUSED: drone is not disarmed" in capsys.readouterr().out
+
+    # In-flight write while armed succeeds
+    assert campaign_fly.write_gains("http://h", {24: 0.3214}, in_flight=True) is True
+    out = capsys.readouterr().out
+    assert "[In-flight]" in out
+    assert "1/1 ACK (applied & verified in 8081 journal)" in out
+
+
+

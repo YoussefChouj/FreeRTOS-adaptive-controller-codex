@@ -1,0 +1,20 @@
+# H: speed ladder rung 0: flat Gerono a60 at lim_mode 0 (trajv cap 80 cm/s), PID xy, fusion 3
+# Ladder l0 -> l1 -> l2 raises speed and limits together; each rung repeats the previous rung's top speed
+# (laps 2 at lim 0 and 1, laps 3 at lim 1 and 2) so the limit set and the speed can be told apart.
+# move_s 18 (not 16): at 16, laps 3 = 115 > 110 and laps 4 = 153 > 150 cm/s would be refused 0xEE.
+# Check first: python -m ground_station.analysis.traj_metrics check ground_station/service/campaigns/lab_h_speed_ladder_l0.fly
+# yaw_follow=0 holds heading: the tangent turns 143-285 deg/s, over the 90 deg/s follow rate, and yaw would confound speed.
+# Fly it: fly lab_h_speed_ladder_l0 --once at >= 15.8 V resting. UNVERIFIED: never flown.
+campaign lab-h-speed-ladder-l0
+rate 100
+log velocity_loops camera_fusion
+slow 25 nn4 xy_ctrl mrac_3l ekf_states estimator_truth
+set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10 lim_mode=0
+takeoff 0.5
+hold 3
+set traj_p.move_s=18 traj_p.ret_s=3 traj_p.hold_s=1 traj_p.ramp_s=2 traj_p.yaw_follow=0
+preset figure8 f8_type=1 f8_a_cm=60 f8_laps=2
+hold 1
+preset figure8 f8_type=1 f8_a_cm=60 f8_laps=2
+hold 2
+land

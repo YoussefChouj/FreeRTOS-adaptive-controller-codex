@@ -74,7 +74,7 @@ fusion)
   # 8081 up (`fly` flights): it owns the link, relays the fixes (--relay-port 47800) and logs; the tracker reads
   # height from it. 8081 down: stream_log owns the link, relays and logs, as before.
   if up; then link=8081; tel=(--tel-url "$api"); else link=sl; tel=(--tel-csv "logs/$name.slot1.csv"); endlive; fi
-  mkdir -p "$vid" logs; rm -f "$vid/stop" "$vid/video_only"; echo "$mode" > "$vid/fusion"
+  mkdir -p "$vid" logs; touch "$vid/stream_log.out" "$vid/tracker.out"; rm -f "$vid/stop" "$vid/video_only"; echo "$mode" > "$vid/fusion"
   if [ "$link" = sl ]; then                         # `fly` sets up VOFA+/PJ itself (key p)
   VOFA=${VOFA-127.0.0.1:1347}                       # flight view to VOFA+ (UDP FireWater, named tabs); VOFA= turns it off
   PLOT=${PLOT-}                                     # PlotJuggler opt-in (every slot): PLOT=127.0.0.1:9870
@@ -137,5 +137,5 @@ check)
   for f in logs/vofa/"$name".slot*.csv logs/"$name".slot*.csv; do [ -f "$f" ] && echo "$f rows $(($(wc -l < "$f") - 1))"; done
   ls -la "$vid"/cam*.mkv 2>/dev/null || echo "no video yet"; { grep -c restart "$vid/scrcpy.log" 2>/dev/null || true; } | sed "s/^/restarts /"; tail -2 "$vid/scrcpy.log" 2>/dev/null
   { [ -f "$vid/fusion" ] && grep -m1 " ready " "$vid/tracker.out"; } || true   # grab size: 1920x1080 = full camera px
-  [ -f "$vid/fusion" ] && { echo "fixes $(($(wc -l < "$vid/fixes.csv" 2>/dev/null || echo 1) - 1))"; tail -3 "$vid/tracker.out"; tail -2 "$vid/stream_log.out"; } || true ;;
+  [ -f "$vid/fusion" ] && { echo "fixes $(($(wc -l < "$vid/fixes.csv" 2>/dev/null || echo 1) - 1))"; [ -f "$vid/tracker.out" ] && tail -3 "$vid/tracker.out"; [ -f "$vid/stream_log.out" ] && tail -2 "$vid/stream_log.out"; } || true ;;
 esac

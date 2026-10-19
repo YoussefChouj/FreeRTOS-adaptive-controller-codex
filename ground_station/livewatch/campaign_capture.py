@@ -36,9 +36,10 @@ from ground_station.livewatch.stream import (
 # --- limits and budget -------------------------------------------------------------------------------
 
 VARS_PER_SLOT = min(MAX_STREAM_RANGES, STREAM_MAX_BYTES // DEFAULT_VALUE_BYTES)  # 62 ranges bind first
-# The firmware budget guard prices a slot as if Send_Task ran at 200 Hz (API/subscribe.h:271,
-# subscribe.c:592), although it really runs at SEND_TASK_HZ = 100. A plan must pass the guard.
-GUARD_SEND_HZ = 200
+# The firmware budget guard prices a slot at SUBSCRIBE_SEND_TASK_HZ / divider (API/subscribe.c guard).
+# Since stream ladder step A (2026-10-17) that is 100 Hz, the real Send_Task rate, and the stream-tick
+# pacer keeps the 5 ms SysID branch to it. A plan must pass the guard of the firmware it flies on.
+GUARD_SEND_HZ = 100
 RADIO_BUDGET_BPS = 87552  # USART3 radio share: 95 % of 92160 B/s (livewatch/log_frames.md:73)
 PLANNING_BUDGET_BPS = 0.8 * RADIO_BUDGET_BPS  # 20 % headroom for retries and the command channel
 PROBE_RATES_HZ = (200, 100, 50, 25)
@@ -81,8 +82,9 @@ WFB_STATUS_FIELDS: tuple[str, ...] = (
 )
 WFB_STATUS: tuple[str, ...] = tuple(f"g_wfb_status.{f}" for f in WFB_STATUS_FIELDS)
 KF_HEALTH = "g_ekf_of_health"
-# Keil preset status (TASK/AutoflyTask.c): the runner's preset step waits on traj_status
-PRESET_STATUS: tuple[str, ...] = ("traj_status",)
+# Keil preset status (TASK/AutoflyTask.c): the runner's preset step waits on traj_status; its exp check reads
+# exp_active (TASK/StabilizerTask.c:163, campaign_runner.py:376) and refuses the flight when it is not streamed
+PRESET_STATUS: tuple[str, ...] = ("traj_status", "exp_active")
 
 MRAC_AXES = ("pitch", "roll", "yaw", "z_rate")
 def _mrac_n_features() -> int:
@@ -182,6 +184,21 @@ CAMERA_FUSION: tuple[str, ...] = (
     "g_ext_pos_on", "g_ext_pos.e_x", "g_ext_pos.e_y", "g_ext_pos.n_ok", "g_ext_pos.n_rej",
     "g_ext_pos.age_ms", "g_ext_pos.stale", "g_ext_pos.c_x", "g_ext_pos.c_y",
 )
+# ADRC / LQR / MPC xy outer loops (StabilizerTask.c s_xyc[2], x then y): the kind that ran, the PID fallback, the
+# predictor delay and per axis the plant lag a_est, the error integral z, the ADRC ESO z1/z2/z3 (position,
+# velocity, total disturbance) and the last applied command u_prev.
+XY_CTRL: tuple[str, ...] = (
+    ("s_xyc_kind", "g_xy_ctrl_kind", "g_ctrl_pid_fallback_active", "g_xyc_delay_ticks")
+    + tuple(f"s_xyc[{k}].{m}" for m in ("a_est", "z", "z1", "z2", "z3", "u_prev") for k in (0, 1))
+)
+# Every input of the camera-off drift net (video_truth.NN4_CH, slot 1 then slot 2), so each flight is training
+# data and a shadow test. It overlaps estimator_truth, optical_flow and ekf_states; plan_capture records a
+# variable once.
+NN4: tuple[str, ...] = (
+    "Acc_X_Real", "Acc_Y_Real", "Acc_Z_Real", "Gyro_X_Real", "Gyro_Y_Real", "Gyro_Z_Real", "imu_data.rol",
+    "imu_data.pit", "ano_of.of2_dx_fix", "ano_of.of2_dy_fix", "ano_of.of1_dx", "ano_of.of1_dy",
+    "s_ekf_of.x[1]", "s_ekf_of.x[4]", "ano_of.of_alt_cm", "s_ekf_of.innov_x", "s_ekf_of.innov_y",
+)
 LOG_GROUPS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "mrac_shadow": MRAC_SHADOW,
     "mrac_3l": MRAC_3L,
@@ -192,10 +209,16 @@ LOG_GROUPS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "thrust_model": THRUST_MODEL,
     "ekf_states": EKF_STATES,
     "camera_fusion": CAMERA_FUSION,
+    "xy_ctrl": XY_CTRL,
+    "nn4": NN4,
 })
-LOG_PLAN_KEYS = ("rate_hz", "groups")
-# PROPOSED default: 50 Hz is the rate the 10 s stream_log check carried with 0 dropped after the last flash.
-DEFAULT_LOG_PLAN: Mapping[str, Any] = MappingProxyType({"rate_hz": 50, "groups": ()})
+# Two speeds: `groups` ride with the core set at rate_hz (the control lane); `slow` groups get slots of their own
+# at slow_hz (never above rate_hz). The firmware guard charges each slot at its own divider (API/subscribe.c:592),
+# so a 25 Hz slot costs a quarter of a 100 Hz one.
+LOG_PLAN_KEYS = ("rate_hz", "groups", "slow_hz", "slow")
+# PROPOSED defaults: 50 Hz is the rate the 10 s stream_log check carried with 0 dropped after the last flash;
+# 25 Hz (divider 4) for estimator, drift and fit variables that change slower than the control loop.
+DEFAULT_LOG_PLAN: Mapping[str, Any] = MappingProxyType({"rate_hz": 50, "groups": (), "slow_hz": 25, "slow": ()})
 
 
 class CaptureError(RuntimeError):
@@ -249,6 +272,29 @@ def slots_for(
     return slots, list(optional[kept:])
 
 
+def _slow_slots(
+    candidates: Sequence[str], rate_hz: float, first_slot: int, used_bps: float, budget_bps: float,
+) -> tuple[list[dict], list[str]]:
+    """The slow lane: ``candidates`` packed into slots ``first_slot``, ``first_slot + 1``, ... at ``rate_hz``,
+    trimmed from the end until they fit MAX_SLOTS and ``used_bps`` plus their cost fits ``budget_bps``."""
+    divider = max(1, int(SEND_TASK_HZ / rate_hz))
+    kept = len(candidates)
+    while kept and (first_slot + math.ceil(kept / VARS_PER_SLOT) > MAX_SLOTS
+                    or used_bps + _guard_bps(kept, divider) > budget_bps):
+        kept -= 1
+    slots = [
+        {"slot": first_slot + i, "hz": SEND_TASK_HZ / divider, "vars": list(candidates[start:min(kept, start + VARS_PER_SLOT)])}
+        for i, start in enumerate(range(0, kept, VARS_PER_SLOT))
+    ]
+    return slots, list(candidates[kept:])
+
+
+def plan_bps(slots: Sequence[Mapping[str, Any]]) -> float:
+    """What the firmware guard charges for these slots, each at its own divider (API/subscribe.c:592)."""
+    return sum((FRAME_OVERHEAD + len(s["vars"]) * DEFAULT_VALUE_BYTES) * GUARD_SEND_HZ
+               / max(1, round(SEND_TASK_HZ / s["hz"])) for s in slots)
+
+
 def _guard_bps(n_vars: int, divider: int) -> float:
     """What the firmware guard charges for ``n_vars`` packed into full slots (API/subscribe.c:592)."""
     n_slots = math.ceil(n_vars / VARS_PER_SLOT)
@@ -279,21 +325,28 @@ def probe_max_rate(
 
 
 def check_log_plan(log_plan: Any) -> list[str]:
-    """Problems with an experiment's ``log_plan`` (``{rate_hz, groups}``, both optional); empty if valid."""
+    """Problems with an experiment's ``log_plan`` (``{rate_hz, groups, slow_hz, slow}``, all optional); empty if
+    valid."""
     if not isinstance(log_plan, Mapping):
         return ["must be a mapping"]
     problems = [f"unknown key {k!r} (allowed: {', '.join(LOG_PLAN_KEYS)})" for k in log_plan if k not in LOG_PLAN_KEYS]
-    rate = log_plan.get("rate_hz", DEFAULT_LOG_PLAN["rate_hz"])
-    if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not 0 < rate <= SEND_TASK_HZ:
-        problems.append(f"rate_hz: must be a number in (0, {SEND_TASK_HZ}] (got {rate!r})")
-    groups = log_plan.get("groups", ())
-    if not isinstance(groups, (list, tuple)) or not all(isinstance(g, str) for g in groups):
-        problems.append("groups: must be a list of group names")
-    else:
-        problems += [f"groups: unknown group {g!r} (known: {', '.join(LOG_GROUPS)})"
+    for key in ("rate_hz", "slow_hz"):
+        rate = log_plan.get(key, DEFAULT_LOG_PLAN[key])
+        if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not 0 < rate <= SEND_TASK_HZ:
+            problems.append(f"{key}: must be a number in (0, {SEND_TASK_HZ}] (got {rate!r})")
+    lanes = []
+    for key in ("groups", "slow"):
+        groups = log_plan.get(key, ())
+        if not isinstance(groups, (list, tuple)) or not all(isinstance(g, str) for g in groups):
+            problems.append(f"{key}: must be a list of group names")
+            continue
+        problems += [f"{key}: unknown group {g!r} (known: {', '.join(LOG_GROUPS)})"
                      for g in groups if g not in LOG_GROUPS]
         if len(set(groups)) != len(groups):
-            problems.append("groups: a group is listed twice")
+            problems.append(f"{key}: a group is listed twice")
+        lanes.append(set(groups))
+    if len(lanes) == 2 and lanes[0] & lanes[1]:
+        problems.append(f"slow: {', '.join(sorted(lanes[0] & lanes[1]))} also in groups (a group rides one lane)")
     return problems
 
 
@@ -303,11 +356,15 @@ def plan_capture(
     max_rate_hz: float | None = None,
     budget_bps: float = PLANNING_BUDGET_BPS,
 ) -> dict[str, Any]:
-    """One experiment's capture: the always-on needed set, then the log_plan groups in their order.
+    """One experiment's capture: the always-on needed set, then the log_plan groups in their order, then the
+    slow groups in slots of their own.
 
-    The rate is the log_plan ``rate_hz`` capped at ``max_rate_hz`` (probe_max_rate on the live link).
-    Returns ``{"rate_hz", "requested_hz", "groups", "slots", "dropped"}``; ``rate_hz`` is what the
-    drone emits after the Send_Task divider. Raises CaptureError on an invalid log_plan.
+    The rate is the log_plan ``rate_hz`` capped at ``max_rate_hz`` (probe_max_rate on the live link); the slow
+    rate is ``slow_hz`` capped at that rate. A variable in several groups is recorded once, in the first lane
+    that has it (fast before slow). The fast lane takes the budget first, the slow lane the slots and bytes left.
+    Returns ``{"rate_hz", "requested_hz", "groups", "slow_hz", "slow", "slots", "dropped"}``; the rates are what
+    the drone emits after the Send_Task divider (``slow_hz`` is None with no slow slot). Raises CaptureError on
+    an invalid log_plan.
     """
     plan = {**DEFAULT_LOG_PLAN, **(log_plan or {})}
     problems = check_log_plan(plan)
@@ -315,25 +372,41 @@ def plan_capture(
         raise CaptureError("log_plan: " + "; ".join(problems))
     requested = float(plan["rate_hz"])
     rate = min(requested, float(max_rate_hz)) if max_rate_hz else requested
-    groups = list(plan["groups"])
-    slots, dropped = slots_for(rate, budget_bps=budget_bps, optional=[v for g in groups for v in LOG_GROUPS[g]])
-    return {"rate_hz": slots[0]["hz"], "requested_hz": requested, "groups": groups, "slots": slots,
+    groups, slow = list(plan["groups"]), list(plan["slow"])
+    needed = set(CAMPAIGN_SET["needed"])
+    fast_vars = [v for v in dict.fromkeys(v for g in groups for v in LOG_GROUPS[g]) if v not in needed]
+    slots, dropped = slots_for(rate, budget_bps=budget_bps, optional=fast_vars)
+    fast_hz = slots[0]["hz"]
+    recorded = {v for s in slots for v in s["vars"]}
+    slow_vars = [v for v in dict.fromkeys(v for g in slow for v in LOG_GROUPS[g]) if v not in recorded]
+    slow_slots: list[dict] = []
+    if slow_vars:
+        slow_slots, slow_dropped = _slow_slots(slow_vars, min(float(plan["slow_hz"]), fast_hz), len(slots),
+                                               plan_bps(slots), budget_bps)
+        dropped = [v for v in dropped if v not in slow_vars] + slow_dropped
+    return {"rate_hz": fast_hz, "requested_hz": requested, "groups": groups,
+            "slow_hz": slow_slots[0]["hz"] if slow_slots else None, "slow": slow, "slots": slots + slow_slots,
             "dropped": dropped}
 
 
 def log_plan_table(plan: Mapping[str, Any]) -> str:
     """Markdown table of a plan_capture() plan for the operator's launch approval (launch Q3)."""
-    recorded = {v for s in plan["slots"] for v in s["vars"]}
-    hz = plan["rate_hz"]
-    rows = [("core (always on)", CAMPAIGN_SET["needed"])] + [(g, LOG_GROUPS[g]) for g in plan["groups"]]
+    hz_of = {v: s["hz"] for s in plan["slots"] for v in s["vars"]}
+    hz, slow_hz = plan["rate_hz"], plan.get("slow_hz")
+    rows = ([("core (always on)", CAMPAIGN_SET["needed"], hz)] + [(g, LOG_GROUPS[g], hz) for g in plan["groups"]]
+            + [(g, LOG_GROUPS[g], slow_hz) for g in plan.get("slow", ())])
     lines = ["| group | vars recorded | rate Hz | note |", "|---|---|---|---|"]
-    for name, group_vars in rows:
-        kept = sum(v in recorded for v in group_vars)
-        note = f"{len(group_vars) - kept} dropped (link budget)" if kept < len(group_vars) else ""
-        lines.append(f"| {name} | {kept}/{len(group_vars)} | {hz:g} | {note} |")
+    for name, group_vars, lane_hz in rows:
+        kept = sum(v in hz_of for v in group_vars)
+        notes = [f"{len(group_vars) - kept} dropped (link budget)"] if kept < len(group_vars) else []
+        faster = sum(lane_hz is not None and hz_of.get(v, 0) > lane_hz for v in group_vars)
+        if faster:
+            notes.append(f"{faster} at {hz:g} Hz (in a fast group)")
+        rate = "-" if lane_hz is None else f"{lane_hz:g}"
+        lines.append(f"| {name} | {kept}/{len(group_vars)} | {rate} | {'; '.join(notes)} |")
     capped = f", requested {plan['requested_hz']:g} Hz" if plan["requested_hz"] != hz else ""
-    bps = _guard_bps(len(recorded), max(1, round(SEND_TASK_HZ / hz)))
-    lines.append(f"{len(plan['slots'])} slot(s){capped}, {bps:.0f} of {PLANNING_BUDGET_BPS:.0f} B/s planning budget")
+    lines.append(f"{len(plan['slots'])} slot(s){capped}, {plan_bps(plan['slots']):.0f} of "
+                 f"{PLANNING_BUDGET_BPS:.0f} B/s planning budget")
     return "\n".join(lines)
 
 

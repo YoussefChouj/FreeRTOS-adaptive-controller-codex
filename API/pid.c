@@ -24,11 +24,11 @@ CtrlerTypeDef Ctrler={
        Ki 0.02 -> wn 0.32 Hz, zeta 0.75. */
     PID_ROW(3.0,  0.02,   8,    200,  200,   26,    10,    1300,    10    ), /* pitchPID     pitch angle */ /* F1x: Ui 26 / SumE 1300 / EMin 10 so the lean is carried (WP-10) */
     PID_ROW(3.0,  0.02,   8,    200,  200,   26,    10,    1300,    10    ), /* rollPID      roll angle */  /* F1x: Ui 26 / SumE 1300 / EMin 10 so the lean is carried (WP-10) */
-    PID_ROW(6.0,  0.04,  0,    160,  160,   2,     10,    50,      2     ), /* yawPID       yaw angle */
+    PID_ROW(6.0,  0.04,  0.20,  160,  160,   15,    10,    300,     25    ), /* yawPID       yaw angle */
 
     PID_ROW(5,    0.01,   10,   300,  300,   160,   100,   16000,   50    ), /* gyroxPID     roll rate  (inner) */ /* F1x */
     PID_ROW(5,    0.01,   10,   300,  300,   160,   100,   16000,   50    ), /* gyroyPID     pitch rate (inner) */ /* F1x */
-    PID_ROW(8.0,  0.005, 0.02, 650,  650,   500,   10,    100000,  1000  ), /* gyrozPID     yaw rate   (inner) */
+    PID_ROW(8.0,  0.005, 0.02,  650,  650,   200,   10,    20000,   1000  ), /* gyrozPID     yaw rate   (inner) */
 
     PID_ROW(0.7,  0.005, 0.1,  1.0,  0.9,   0.3,   0.3,   30,      0.3   ), /* Z_posPID     altitude */
     PID_ROW(400,  0.435, 0,    300,  300,   100,   60,    250,     10    ), /* Z_ratePID    climb rate (inner) */
@@ -48,6 +48,9 @@ CtrlerTypeDef Ctrler={
 typedef char pid_table_rows_match_ctrler[(sizeof(CtrlerTypeDef) == PID_TABLE_ROWS * sizeof(PIDTypeDef)) ? 1 : -1];
 
 /* Change history (newest first)
+ * Yaw controller overhaul (2026-10-16, PROPOSED)
+ *   yaw: Kd 0->0.20, UiMax 2->15, SumEMax 50->300, EMin 2->25 (outer damping + integral capture range)
+ *   gyroz: UiMax 500->200, SumEMax 100000->20000 (cap rate integral windup to 100 PWM at Ki 0.005)
  * WP-13 F1x+F3+F5w+F6a integration (2026-10-01)
  *   pitch, roll: UiMax 10->26, SumEMax 120->1300, EMin 3->10 (F1x carry lean)
  *   gyrox, gyroy: UiMax 20->160, SumEMax 1000->16000, EMin 2->50 (F1x)
@@ -325,7 +328,12 @@ void ComputeYawPID(PIDTypeDef *pPID)
 	pPID->Up = pPID->Kp * pPID->E;
 	value_limit( pPID->Up , -pPID->UpMax , pPID->UpMax );
 	
-	pPID->Ud = pPID->Kd * ( pPID->E - pPID->PreE );
+	{   /* wrap dE too: E jumps 360 when the error crosses +-180, which would kick Ud (Kd 0.20) */
+		float dE = pPID->E - pPID->PreE;
+		if (dE > PID_YAW_HALF_TURN_DEG) dE -= PID_YAW_TURN_DEG;
+		else if (dE < -PID_YAW_HALF_TURN_DEG) dE += PID_YAW_TURN_DEG;
+		pPID->Ud = pPID->Kd * dE;
+	}
 	value_limit( pPID->Ud , -pPID->UdMax , pPID->UdMax );
 	
 	pPID->U = pPID->Up + pPID->Ui + pPID->Ud;/*λ��ʽPID���㹫ʽ*/

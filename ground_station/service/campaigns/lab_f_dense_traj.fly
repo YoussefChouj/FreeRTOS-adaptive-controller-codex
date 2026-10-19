@@ -1,0 +1,19 @@
+# F: dense preset trajectories back to back (trajectory-following main scenario), PID xy, lim_mode 0, fusion 3
+# Fly it: fly lab_f_dense_traj --once at >= 15.8 V resting. Check first (traj_go refusals + accel/yaw caps):
+#   python -m ground_station.analysis.traj_metrics check ground_station/service/campaigns/lab_f_dense_traj.fly
+# Score: along/cross RMSE + discrete Frechet per preset (traj_metrics). Each preset writes all of traj_p (ground
+# boot values, f8 tilt 0) + its own fields; 3 presets fit the 120 s airborne cap. UNVERIFIED: never flown.
+campaign lab-f-dense-traj
+rate 100
+log velocity_loops camera_fusion
+set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10
+takeoff 0.5
+hold 3
+set traj_p.move_s=16 traj_p.ret_s=3 traj_p.hold_s=1 traj_p.ramp_s=2
+preset circle circ_r_cm=40 circ_laps=2
+hold 1
+preset figure8 f8_type=1 f8_a_cm=60 f8_laps=2
+hold 1
+preset figure8 f8_type=1 f8_a_cm=60 f8_laps=2 f8_tilt_deg=30
+hold 2
+land

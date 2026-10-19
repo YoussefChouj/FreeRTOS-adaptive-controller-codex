@@ -64,6 +64,7 @@ static uint8_t s_settled   = 0U;
 
 float   g_imu_settle_metric = 1.0f;  /* Keil-watchable LPF value for tuning     */
 uint8_t g_estimator_ready   = 0U;    /* A3: published to telemetry / arm gate   */
+volatile uint8_t g_imu_mahony_yaw_decouple = 1U; /* 1 = decouple 6-axis Mahony xy-accel yaw error ez/ezInt */
 
 static float q0 = 1.0f;
 static float q1 = 0.0f;
@@ -139,6 +140,10 @@ static void s_accel_correction(float kp_eff, float ki_eff, float dt)
 		ex = (nor_acc[Y] * veczZ - nor_acc[Z] * vecyZ);
 		ey = (nor_acc[Z] * vecxZ - nor_acc[X] * veczZ);
 		ez = (nor_acc[X] * vecyZ - nor_acc[Y] * vecxZ);
+		if (g_imu_mahony_yaw_decouple != 0U) {
+			ez = 0.0f;
+			ezInt = 0.0f;
+		}
 
 		/* integral term */
 		exInt += ki_eff * ex * dt ;

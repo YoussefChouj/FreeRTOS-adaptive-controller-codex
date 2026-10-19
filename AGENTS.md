@@ -137,6 +137,13 @@ If two rules conflict, the stricter one wins until the operator says otherwise.
 - Ship at ship points only (end of a work package, before compact, before a flash or lab step, session end):
   `ship.sh --push ...`, overwrite the stream page (goal, facts, next 3 actions, do-nots), `ah refresh`.
 - `logs/`, `OBJ/` and run output are git-ignored: commit a capture on purpose with `git add -f <path>`.
+- Old camera videos (`logs/video_truth/*/cam.mkv` etc.) live on Google Drive `G:/My Drive/UAV_lab/<day>/<folder>/`;
+  the CSVs and floor scans stay on D:. Open videos with `video_truth.video_file()`, index `docs/lab/video-archive.csv`,
+  rules `docs/agent/video-archive.md`. A missing local `cam.mkv` is archived, not lost.
+- GPU jobs run on Google Colab (free T4, CLI in WSL): read `docs/agent/colab.md` first. Never run `colab pay` or buy
+  units (Ultra only, no spend), always stop VMs, nothing on C:.
+- Free worker lane = Google Jules (300 tasks/day, no Claude tokens, opens a PR from the pushed branch):
+  `.agent-ops/jules.ps1`, guide `docs/agent/jules.md`. Python, host tests and docs only; the CEO reviews every PR.
 - Continuing elsewhere (other account, Cursor, Codex, agy): `ah start <stream> --as <harness> --takeover`, or paste
   the output of `ah prompt <stream> --for <harness>`. Do not resume the old transcript.
 - Durable lessons go to `docs/agent/memory/` (`env.md` facts, `rules.md` behavior), not only to harness-private memory.

@@ -175,10 +175,18 @@ def test_ui_step_succeeds_with_ack(api):
     assert detail["steps"][0]["status"] == "done"
 
 
-# ── approvals ──────────────────────────────────────────────────────────────
-def _mock_gateway(service):
+def _mock_gateway(service, auto_ack=True):
     m = MagicMock()
     m.submit.return_value = 42
+    if auto_ack:
+        from ground_station.platform.transactions import Result, Outcome, RejectReason
+        def _submit(command_id, index=0, value=0.0, flags=0):
+            service.record_command_result(Result(
+                transaction_id=42, command_id=command_id, index=index,
+                outcome=Outcome.APPLIED, reason=RejectReason.NONE, detail=""
+            ))
+            return 42
+        m.submit.side_effect = _submit
     service.gateway = m
     return m
 
@@ -664,4 +672,53 @@ def test_wide_mrac_param_is_critical_and_tier0(service, api):
     assert len(approvals) == 1
     assert approvals[0]["why_critical"] == WHY_CRITICAL_PARAM
     assert approvals[0]["tier"] == 0
+
+
+def test_command_step_timeout_marks_failed(service, api):
+    """Friction A7: A command step that receives no ACK times out and marks the step/plan failed."""
+    _mock_gateway(service, auto_ack=False)
+    _, base = api
+    _post(base + "/api/agent/control", {"mode": "autonomous", "source": "operator"})
+    _post(base + "/api/agent/control", {"tier0_access": "full", "source": "operator"})
+    status, created = _post(base + "/api/agent/plans", {
+        "title": "timeout-test", "source": "agent:test",
+        "steps": [{"action": "command", "args": {"command_id": 0x02, "timeout_s": 0.05}}],
+    })
+    assert status == 201
+    pid = created["plan_id"]
+    detail = _wait_detail(base, pid, lambda d: d["status"] in ("failed", "done"), timeout=3.0)
+    assert detail is not None and detail["status"] == "failed"
+    step = detail["steps"][0]
+    assert step["status"] == "failed"
+    assert "timed out" in (step.get("error") or "")
+
+
+def test_command_step_nak_marks_failed(service, api):
+    """Friction A7: A command step that receives NAK/rejection marks the step/plan failed."""
+    m = _mock_gateway(service, auto_ack=False)
+    from ground_station.platform.transactions import Result, Outcome, RejectReason
+
+    def _submit_nak(command_id, index=0, value=0.0, flags=0):
+        service.record_command_result(Result(
+            transaction_id=42, command_id=command_id, index=index,
+            outcome=Outcome.REJECTED, reason=RejectReason.OUT_OF_RANGE, detail="out of bounds"
+        ))
+        return 42
+
+    m.submit.side_effect = _submit_nak
+    _, base = api
+    _post(base + "/api/agent/control", {"mode": "autonomous", "source": "operator"})
+    _post(base + "/api/agent/control", {"tier0_access": "full", "source": "operator"})
+    status, created = _post(base + "/api/agent/plans", {
+        "title": "nak-test", "source": "agent:test",
+        "steps": [{"action": "command", "args": {"command_id": 0x02, "timeout_s": 1.0}}],
+    })
+    assert status == 201
+    pid = created["plan_id"]
+    detail = _wait_detail(base, pid, lambda d: d["status"] in ("failed", "done"), timeout=3.0)
+    assert detail is not None and detail["status"] == "failed"
+    step = detail["steps"][0]
+    assert step["status"] == "failed"
+    assert "rejected" in (step.get("error") or "")
+
 

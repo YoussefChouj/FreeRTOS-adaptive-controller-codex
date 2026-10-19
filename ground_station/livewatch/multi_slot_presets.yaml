@@ -132,6 +132,10 @@ presets:
   # the ELF (capture --elf), so this preset follows the build with no edit.
   # Budget at N=6: 4*6 floats -> 108 B/frame per slot; one contiguous range
   # per axis. A four-axis slot stays under the 2032 B frame payload up to N=127.
+  # Wire (computed, manifest.compute_multi_slot_budget): frame = 12 + 16*N B.
+  # Two such slots at 25 Hz plus sync stay under HOST_SAFE_WIRE_PCT (80 %) up to
+  # N=90 (N=46 build: 37800 B/s, 41 %). At 50 Hz the limit is N=45, so the
+  # N=46 build overran it (75200 B/s, 82 %).
   # -------------------------------------------------------------------------
   mrac_theta_phi:
     description: "MRAC Theta and Phi, all 4 axes, all N features (N read from the ELF)"
@@ -141,7 +145,7 @@ presets:
         hz: 10
       - slot: 1
         manifest: mrac_theta
-        hz: 50
+        hz: 25
       - slot: 2
         manifest: mrac_phi
-        hz: 50
+        hz: 25

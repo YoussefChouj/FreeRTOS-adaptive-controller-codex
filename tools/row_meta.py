@@ -27,7 +27,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 # assignment-form table -> (leading key arguments, legend per row named by the first argument)
-ASSIGN = {"MRAC_SET": (1, True), "MRAC_BASIS": (2, False), "VAR_WRITE_ROW": (2, False)}
+ASSIGN = {"MRAC_SET": (1, True), "MRAC_BASIS": (2, False), "VAR_WRITE_ROW": (2, False), "EXP_ROW": (1, False)}
 DEFINE = re.compile(r"#define\s+(\w+_ROW|%s)\(([^)]*)\)" % "|".join(ASSIGN))
 CONST = re.compile(r"^[ \t]*#define[ \t]+(\w+)[ \t]+([-+.\w*/() \t]+?)[ \t]*(?://.*|/\*.*)?$", re.M)
 COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)

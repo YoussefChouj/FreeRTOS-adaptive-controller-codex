@@ -26,6 +26,7 @@ import statistics
 import subprocess
 import sys
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1934,7 +1935,6 @@ def generate_compare_report(
         controller_labels: Labels for each session (default: derived from dir name).
         payload_labels: Payload labels for each session.
     """
-    import uuid
     if out_dir is None:
         out_dir = Path("logs/flight_tests/compare") / f"compare_{uuid.uuid4().hex[:8]}"
     else:
@@ -2004,6 +2004,29 @@ def main(argv: list[str] | None = None) -> None:
     """CLI entry point for flight report generation."""
     if argv is None:
         argv = sys.argv[1:]
+
+    if "--league" in argv:
+        idx = argv.index("--league")
+        league_args = argv[idx+1:]
+        dirs = []
+        out_dir = Path("logs/flight_tests/compare") / f"league_{uuid.uuid4().hex[:8]}"
+
+        i = 0
+        while i < len(league_args):
+            if league_args[i] == "--out" and i + 1 < len(league_args):
+                out_dir = Path(league_args[i + 1])
+                i += 2
+            elif league_args[i].startswith("--"):
+                break
+            else:
+                dirs.append(league_args[i])
+                i += 1
+
+        # Local on purpose: the single-flight report must run without the flightlab package.
+        from ground_station.analysis.flightlab.compare import league
+        result_dir = league(dirs, out_dir)
+        print(f"League report generated in: {result_dir}")
+        sys.exit(0)
 
     if "--compare" in argv:
         # Compare mode

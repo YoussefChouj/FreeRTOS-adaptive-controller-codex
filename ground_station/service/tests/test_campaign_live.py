@@ -326,3 +326,36 @@ def test_takeoff_z_ramp_does_not_count_as_position_error():
     svc.stream(g_wfb_status__prim_state=2)
     s = live_sample(svc, 1.0, sat=(3995.0, 2005.0), now_ns=lambda: NOW_NS)
     assert s.ref_m[2] == pytest.approx(0.5)   # HOVER: z error counts again
+
+
+def test_ground_commands_do_not_send_heartbeat_before_prim():
+    """Friction B8 fix: ground commands before PRIM starts do not emit CMD 0x1A idx 2 heartbeats."""
+    svc = FakeService(mode="applied")
+    client, clock = _client(svc)
+
+    # Send multiple gain writes on the ground
+    for val in (1.0, 2.0, 3.0):
+        assert client.var_write("kp_id", val) is True
+
+    # None of the calls should be heartbeats (CMD_PRIM, PrimIdx.HEARTBEAT)
+    hbs = [call for call in svc.calls if (call[0], call[1]) == (CMD_PRIM, PrimIdx.HEARTBEAT)]
+    assert len(hbs) == 0
+    assert len(svc.calls) == 3
+
+
+def test_heartbeat_stops_when_consecutive_commands_time_out():
+    """Friction B13 fix: heartbeats stop flooding when consecutive commands time out / link is dead."""
+    svc = FakeService(mode="none")
+    client, clock = _client(svc)
+
+    # Two commands time out in a row
+    assert client.takeoff() is False
+    assert client.land() is False
+    assert client._consecutive_timeouts >= 2
+
+    # After consecutive timeouts, calling heartbeat() does NOT submit any further frames
+    calls_before = len(svc.calls)
+    clock.sleep(0.5)
+    assert client.heartbeat() is False
+    assert len(svc.calls) == calls_before
+

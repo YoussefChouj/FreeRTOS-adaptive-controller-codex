@@ -1,0 +1,5 @@
+# Research: how Colab charges a running session (web only)
+
+Context: the user bought Google Colab compute units themselves. `colab usage` (google-colab-cli 0.7.4) shows 100.00 units, 0 active, on 2026-10-17. They will not buy more or add a card anywhere, so the units must give the most value. Do NOT spawn subagents; use at most 8 web fetches. Give each claim as: claim, URL, quote under 15 words, source date. Prefer official Google pages and 2025-2026 sources. Mark anything unsourced UNVERIFIED. Answer in at most 30 lines.
+
+Questions: (1) Is a connected but idle runtime charged at its full rate? (2) Does disconnecting stop the charge, or only deleting/terminating the runtime? (3) Idle timeout and maximum session length for Pro and Pay As You Go; is background execution Pro+ only? (4) When the balance hits 0, is a running VM killed, and does the account fall back to the free tier? (5) With units above 0, is a T4 still free, or does every GPU session draw from the balance? End with a one-line verdict: the rule that stops units leaking.

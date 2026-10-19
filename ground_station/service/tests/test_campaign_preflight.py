@@ -271,3 +271,68 @@ def test_arm_state_prefers_the_firmware_variable():
     assert svc.arm_state() == "armed" and [s["key"] for s in svc.arm_sources()] == ["status.arm"]
     svc._streams = {}
     assert svc.arm_state() == "unknown" and svc.arm_sources() == []
+
+
+def test_axf_flash_stamp_rebuilt_fails(elf):
+    from ground_station.service.campaign_preflight import _axf_flash_row
+    stamp_file = elf.parent / ".last_flashed_axf.json"
+    try:
+        stamp_file.write_text(json.dumps({
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+            "size": 12345,
+            "mtime": 1000.0,
+        }), encoding="utf-8")
+        row = _axf_flash_row(elf)
+        assert row["pass"] is False
+        assert "axf rebuilt since last flash" in row["value"]
+
+        # Run through preflight _firmware_row
+        res = _run(FakeService(), elf)
+        fw = _row(res, "firmware")
+        assert fw["pass"] is False
+        assert "axf rebuilt since last flash" in fw["value"]
+    finally:
+        stamp_file.unlink(missing_ok=True)
+
+
+def test_axf_flash_stamp_matching_passes(elf):
+    import hashlib
+    from ground_station.service.campaign_preflight import _axf_flash_row
+    stamp_file = elf.parent / ".last_flashed_axf.json"
+    try:
+        stamp_file.write_text(json.dumps({
+            "sha256": hashlib.sha256(elf.read_bytes()).hexdigest(),
+            "size": elf.stat().st_size,
+            "mtime": elf.stat().st_mtime,
+        }), encoding="utf-8")
+        row = _axf_flash_row(elf)
+        assert row["pass"] is True
+        assert "matches last flash stamp" in row["value"]
+    finally:
+        stamp_file.unlink(missing_ok=True)
+
+
+def test_arm_reports_stale_symbol_mismatch_on_bogus_motors(elf):
+    # Armed with bogus motor counts (> 10000)
+    bogus_svc = FakeService(
+        values={**READY, "mymotor.motor1": 15000.0, "mymotor.motor2": 15000.0},
+        sources=[{"key": "DroneStatus.ARM_Status", "slot": 0, "value": 1.0, "age_s": 0.1}],
+    )
+    bogus_svc.arm_state = lambda: "armed"
+    res = _run(bogus_svc, elf)
+    arm = _row(res, "arm_state")
+    assert arm["pass"] is False
+    assert "possible stale AXF symbol mismatch" in arm["value"]
+
+
+def test_arm_reports_stale_symbol_mismatch_on_bogus_voltage(elf):
+    # Armed with bogus battery voltage (99.0 V)
+    bogus_svc = FakeService(
+        values={**READY, "real_voltage": 99.0},
+        sources=[{"key": "DroneStatus.ARM_Status", "slot": 0, "value": 1.0, "age_s": 0.1}],
+    )
+    bogus_svc.arm_state = lambda: "armed"
+    res = _run(bogus_svc, elf)
+    arm = _row(res, "arm_state")
+    assert arm["pass"] is False
+    assert "possible stale AXF symbol mismatch" in arm["value"]

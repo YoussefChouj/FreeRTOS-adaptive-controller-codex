@@ -198,3 +198,54 @@ def test_program_step_fails_closed_without_preview(monkeypatch):
 
     monkeypatch.setattr(scenario_schema, "preview", no_gcc)
     assert any("preview unavailable" in p for p in _problems(_program()))
+
+
+def test_goto_minimal_corner_waypoints():
+    from ground_station.service.scenario_schema import goto_points
+    from ground_station.service.trajectory_pipeline import Profile
+
+    profile = Profile(v_cruise_mps=0.3, a_max_mps2=0.2, ds_m=0.05, hover_z_m=0.8, yaw_deg=0.0)
+    target = (0.5, 0.3, 1.0)
+    dwell_s = 2.0
+
+    # Default ds_m is None -> exactly 4 corner waypoints (hover, reach, dwell, return) = 20 floats
+    pts_default = goto_points(target, dwell_s, profile)
+    assert len(pts_default) == 4
+    assert (pts_default[0].x, pts_default[0].y, pts_default[0].z) == (0.0, 0.0, 0.8)
+    assert (pts_default[1].x, pts_default[1].y, pts_default[1].z) == target
+    assert (pts_default[2].x, pts_default[2].y, pts_default[2].z) == target
+    assert (pts_default[3].x, pts_default[3].y, pts_default[3].z) == (0.0, 0.0, 0.8)
+    assert pts_default[2].t - pts_default[1].t == pytest.approx(dwell_s)
+
+    # Explicit ds_m=0.05 -> resamples along the line (> 4 points)
+    pts_resampled = goto_points(target, dwell_s, profile, ds_m=0.05)
+    assert len(pts_resampled) > 20
+
+
+def test_preset_start_z_defaults_to_hover_z():
+    # Friction B3 fix: Preset inherits hover_z instead of firmware boot default 0.85m
+    scenario_data = {
+        "scenario": "preset_circle_test",
+        "steps": [
+            {"takeoff": {"z": 0.50}},
+            {"preset": {"name": "circle"}},
+            "land",
+        ],
+    }
+    s = parse_scenario(scenario_data)
+    preset_step = s.steps[1]
+    assert preset_step.kind == "preset"
+    assert preset_step.args["params"]["traj_p.start_z_m"] == 0.50
+
+    # Explicit override in preset body is preserved
+    scenario_override = {
+        "scenario": "preset_override_test",
+        "steps": [
+            {"takeoff": {"z": 0.50}},
+            {"preset": {"name": "circle", "start_z_m": 0.70}},
+            "land",
+        ],
+    }
+    s2 = parse_scenario(scenario_override)
+    assert s2.steps[1].args["params"]["traj_p.start_z_m"] == 0.70
+

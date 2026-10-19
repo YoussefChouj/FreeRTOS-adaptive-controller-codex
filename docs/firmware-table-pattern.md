@@ -158,3 +158,5 @@ Done in WP-37: `mrac_simplex` got a per-field comment (single instance, so no ro
 became `MIX_ROW` in `API/controller.c` (third reference: a `const` 2-D table read by `Mix_Motor`, every cell +-1).
 Dispatch tables that are not tunables (`k_gs_cmds` in `TASK/send_data.c`) use `GS_CMD_ENTRY`, not a `_ROW`
 name, so `tools/row_meta.py` does not ask them for unit and range lines.
+Done in WP-46: `s_exp` in `TASK/StabilizerTask.c` (`EXP_ROW`, experiment matrix for outer loop, MRAC variant, and limits);
+`s_xyrm` in `TASK/StabilizerTask.c` (`XYRM_ROW`, outer-loop reference model bandwidth and gains per xy controller kind).

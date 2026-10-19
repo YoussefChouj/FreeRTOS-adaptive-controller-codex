@@ -1,0 +1,81 @@
+# Lab day 2026-10-17: fly it with `.\labday 2026-10-17 --pack <1|2>` (ground_station/lab/labday.py).
+# `.\labday 2026-10-17 --sheet` prints the run sheet made from this file; `--list` shows what is flown.
+# Each flight is `.\fly <fly> --once <args>`; `stop: true` = analysis stop after it. Pass marks are PROPOSED.
+# ON HOLD (user, 10-17 08:55): no flights until the stream ladder is bench-measured (docs/agent/HANDOFF.md).
+day: 2026-10-17
+title: new yaw code, 3-layer experiment matrix, speed ladder, then the 10-16 tune flights
+camera:                       # camera_truth.sh fusion <id-fly> <mode> <args>, CT_FLOOR=logs/video_truth/<floor>
+  floor: floor-2026-10-17     # scan it at bring-up: bash ground_station/lab/camera_truth.sh floor floor-2026-10-17
+  mode: 3
+  args: [--yaw-deg, "94"]
+before:
+  - "Reflash disarmed (86fe9470 PID fallback, 37ecf87e yaw dE wrap + Mahony decouple, d29ada99 exp rows): `python ground_station/flashtool/rebuild_and_flash.py --yes`"
+  - "Restart 8081 (`python -m ground_station.service --port 8081`); check `arm 0`, motors at about 3050, `exp_active` streamed"
+  - "Floor scan: `bash ground_station/lab/camera_truth.sh floor floor-2026-10-17`"
+flights:
+  - id: F1
+    fly: lab_c_robust
+    why: 10-16 F1 C3 PID, first flight of the new yaw code
+    pass: heading steady (land if it swings); overshoot < 16 cm, settle < 2.4 s
+    stop: true
+  - id: E1
+    fly: lab_e_exp_matrix
+    why: "pid_3l: PID xy + 3-layer MRAC vp 16, hover + figure-8 a30"
+    pass: exp read-back OK; figure-8 completes
+  - id: E2
+    fly: lab_e_exp_adrc_3l
+    why: adrc_3l
+    pass: exp read-back OK; figure-8 completes
+  - id: E3
+    fly: lab_e_exp_lqr_3l
+    why: lqr_3l
+    pass: exp read-back OK; figure-8 completes
+  - id: E4
+    fly: lab_e_exp_mpc_3l
+    why: mpc_3l
+    pass: exp read-back OK; figure-8 completes
+    stop: true
+  - id: H0
+    fly: lab_h_speed_ladder_l0
+    why: Gerono a60, lim 0, peak 67 cm/s
+    pass: no tilt trip, no fence stop
+  - id: H1
+    fly: lab_h_speed_ladder_l1
+    why: lim 1, laps 2 then 3 (67 then 100 cm/s)
+    pass: the 67 rung matches H0
+  - id: H2
+    fly: lab_h_speed_ladder_l2
+    why: lim 2, laps 3 then 4 (100 then 134 cm/s)
+    pass: the 100 rung matches H1
+    stop: true
+  - id: F2
+    fly: lab_d_livetune_rate
+    why: "ES tune: rate loops (# gains: defaults)"
+    pass: livetune ends on budget/evals, saves livetune_best.json
+  - id: F3
+    fly: lab_d_livetune_pos
+    why: "ES tune: xy position (# gains: defaults)"
+    pass: merges pos into livetune_best.json, recommended true
+    stop: true
+  - id: F4
+    fly: lab_c_autotune
+    why: "ES auto-tuned PID (# gains: livetune, F2 rate + F3 pos)"
+    pass: compared with F1, F5, F6
+  - id: F5
+    fly: lab_c_lqr
+    why: LQR (VAR 47 = 12 in the script)
+    pass: no 2 Hz roll cycle (1-4 Hz fraction < 20%, was 42%)
+  - id: F6
+    fly: lab_c_mpc
+    why: MPC (VAR 47 = 12 in the script)
+    pass: same as F5 (was 19%)
+branches:
+  - {when: Flash exits non-zero, do: "Stop; no `--force`"}
+  - {when: F1 heading swings or drifts, do: Land; no more flights on this image}
+  - {when: E1-E4 refuse at exp read-back, do: "`exp_active` not streamed: not flashed or 8081 not restarted"}
+  - {when: Ladder rung refused 0xEE, do: Skip that rung}
+  - {when: Tilt trip or fence stop on a rung, do: "That rung is today's limit; skip the next rung (s at its prompt)"}
+  - {when: F1 takeoff drift, do: "`.\\fly lab_c_robust --gains c2 --once` or `--post-takeoff-gains c3`"}
+  - {when: '"NO FIX SENT"', do: "Land, check the tracker, re-fly (r at the auto-stop prompt)"}
+  - {when: F5 still shows the 2 Hz cycle, do: "Re-fly with VAR 47 = 8, then 16 (`g_xyc_delay_ticks` in `lab_c_lqr.fly`)"}
+  - {when: "Pack at the packs.yaml gate (gate_soc_pct, post-flight, ground only)", do: "Swap before the next flight; give the new type when fly asks"}

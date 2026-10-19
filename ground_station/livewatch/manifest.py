@@ -327,7 +327,7 @@ class MultiSlotBudget:
 def compute_multi_slot_budget(
     slot_configs: list[dict],
     store: ManifestStore | None = None,
-    send_task_hz: int = 200,
+    send_task_hz: int = 100,
     value_bytes: int = DEFAULT_VALUE_BYTES,
 ) -> MultiSlotBudget:
     """Compute wire budget for multiple subscribe slots.
@@ -348,12 +348,11 @@ def compute_multi_slot_budget(
     Emission rate = SEND_TASK_HZ / divider. The host builds
     ``divider = int(send_task_hz / hz)``, so the firmware's budget guard
     sees ``bps = frame_size * send_task_hz / int(send_task_hz / hz)``.
-    ``send_task_hz`` defaults to 200 (matches ``SUBSCRIBE_SEND_TASK_HZ``
-    in API/subscribe.h). Note: the firmware constant is the *nominal*
-    rate; the actual MIXED-mode Send_Task cadence is ~80 Hz (see the
-    2026-09-12-wire-budget investigation). The host's 200 Hz figure is
-    what the budget guard reasons against -- it errs toward rejecting
-    early, which is the safe direction for the wire check.
+    ``send_task_hz`` defaults to 100 (matches ``SUBSCRIBE_SEND_TASK_HZ``
+    in API/subscribe.h since stream ladder step A, 2026-10-17; it was
+    200 before). Note: the actual MIXED-mode Send_Task cadence is ~80 Hz
+    (see the 2026-09-12-wire-budget investigation), so the guard still
+    errs toward rejecting early, the safe direction for the wire check.
 
     Args:
         slot_configs: List of dicts with keys:
@@ -363,7 +362,7 @@ def compute_multi_slot_budget(
             - hz: float (required if enabled)
         store: ManifestStore instance (defaults to global manifests.yaml)
         send_task_hz: firmware Send_Task rate the budget arithmetic mirrors.
-            Defaults to 200 (matches API/subscribe.h constant).
+            Defaults to 100 (matches API/subscribe.h constant).
         value_bytes: assumed bytes per value cell. Defaults to 4 (float32),
             which is what every shipped manifest uses.
 

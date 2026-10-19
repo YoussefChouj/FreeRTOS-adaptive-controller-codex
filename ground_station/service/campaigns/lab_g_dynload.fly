@@ -1,0 +1,19 @@
+# G: dynamic load (suspended rope payload or offset mass) on a dense track, PID xy nominal, lim_mode 0, fusion 3
+# Fly it twice per load: ch8 off (nominal only), then ch8 on (adaptive augmentation). Until WP-46 merges, the MRAC row is
+# picked in Keil watch (vp_id); after it, add `exp pid_3l` here. Mount the load before arming; >= 15.8 V resting.
+# Check: python -m ground_station.analysis.traj_metrics check ground_station/service/campaigns/lab_g_dynload.fly
+# Score: along/cross RMSE + Frechet, ch8 on vs off on the same load. UNVERIFIED: never flown.
+campaign lab-g-dynload
+rate 100
+log velocity_loops camera_fusion
+set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10
+takeoff 0.5
+hold 3
+set traj_p.move_s=16 traj_p.ret_s=3 traj_p.hold_s=1 traj_p.ramp_s=2
+preset step axis=0 step_cm=40
+hold 1
+preset circle circ_r_cm=30 circ_laps=1
+hold 1
+preset figure8 f8_type=0 f8_a_cm=50 f8_laps=2
+hold 2
+land

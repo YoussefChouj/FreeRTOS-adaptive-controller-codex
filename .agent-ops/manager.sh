@@ -1,4 +1,6 @@
 #!/bin/bash
+# DISABLED 2026-10-17 (user): Claude manager lanes are off. The CEO builds inline; research goes to .agent-ops/argon.ps1.
+case "$1" in run|cte|research) [ "${MANAGER_ENABLE:-0}" = 1 ] || { echo "manager.sh $1: disabled since 2026-10-17; use .agent-ops/argon.ps1"; exit 1; };; esac
 # Headless account-B roles (B = the `claude` CLI login; the desktop app keeps account A), one work package
 # each. Spec: docs/agent/ceo-manager-architecture.md. Rules: docs/agent/{MANAGER,CTE,RESEARCHER}.md.
 #   manager.sh run <id> [effort] [base]        MANAGER: brief docs/agent/briefs/WP-<id>.md; worktree ../wt-wp<id>

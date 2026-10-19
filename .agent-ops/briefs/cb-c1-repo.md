@@ -1,0 +1,5 @@
+# Research: how the drift net trains today (this repo only, no web)
+
+Context: the user bought Google Colab compute units themselves. `colab usage` (google-colab-cli 0.7.4) shows 100.00 units, 0 active, on 2026-10-17. They will not buy more or add a card anywhere, so the units must give the most value. Do NOT spawn subagents; use at most 8 web fetches. Give each claim as: claim, URL, quote under 15 words, source date. Prefer official Google pages and 2025-2026 sources. Mark anything unsourced UNVERIFIED. Answer in at most 30 lines.
+
+Read ground_station/analysis/nn_io.py around build(), fit(), train(), seq(), load_all(), util_load() and the CLI train command. Report with file:line: batch size and how a batch is built, whether a step uses one flight or many, the loop over folds and seeds (serial?), device handling (cuda/.to(device)?), iters, and how big UTIL_DIR data is if the code says. Estimate the work in one full `train` run. End with a one-line verdict: is this job GPU-bound, Python-loop-bound or data-bound, and the one change that would let a GPU help.
