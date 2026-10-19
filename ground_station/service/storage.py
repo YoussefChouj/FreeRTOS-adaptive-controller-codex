@@ -27,6 +27,9 @@ NOTES_BUFFER_MAX = 50
 # Unbounded, every live frame stayed in RAM: ~20 MB/min, 1.7 GB after 2 h.
 # Durable recording is CsvRecorder's job; this store only backs paged reads.
 MEMORY_MAX_ROWS = 10_000
+# Batch size/age for telemetry and raw-frame commits (see SessionStore.__init__).
+COMMIT_EVERY = 50
+COMMIT_AFTER_S = 0.1
 
 
 class SessionStore:
@@ -40,6 +43,13 @@ class SessionStore:
             MEMORY_MAX_ROWS if self.path == ":memory:" else None)
         self._prune_every = min(1000, self.max_rows) if self.max_rows else 0
         self._inserts = {"telemetry": 0, "raw_frames": 0}
+        # Telemetry/raw rows are committed in batches (COMMIT_EVERY rows or
+        # COMMIT_AFTER_S), not per frame: ~100 commits/s cost the ingest thread
+        # time while it competes with the rx thread (lab 10-19 stale abort).
+        # Reads use this same connection, so they see uncommitted rows; every
+        # other write and close() commit the pending batch too.
+        self._uncommitted = 0
+        self._last_commit = time.monotonic()
         self._db = sqlite3.connect(self.path, check_same_thread=False)
         self._lock = threading.RLock()
         self._db.row_factory = sqlite3.Row
@@ -91,14 +101,14 @@ class SessionStore:
                 (sid, time.time_ns(), schema_id, source,
                  json.dumps(metadata or {}, sort_keys=True)),
             )
-            self._db.commit()
+            self._commit()
             return sid
 
     def end_session(self, session_id: str) -> None:
         with self._lock:
             self._db.execute("UPDATE sessions SET ended_ns=? WHERE id=?",
                              (time.time_ns(), session_id))
-            self._db.commit()
+            self._commit()
 
     def append_event(self, session_id: str, kind: str, payload: dict[str, Any],
                      time_ns: int | None = None) -> int:
@@ -108,7 +118,7 @@ class SessionStore:
                 (session_id, time_ns or time.time_ns(), kind,
                  json.dumps(payload, sort_keys=True, separators=(",", ":"))),
             )
-            self._db.commit()
+            self._commit()
             return int(cur.lastrowid)
 
     def append_telemetry(self, session_id: str, stream_id: int, sequence: int,
@@ -123,7 +133,7 @@ class SessionStore:
                                             separators=(",", ":"))),
             )
             self._prune("telemetry", cur.lastrowid)
-            self._db.commit()
+            self._commit_soon()
             return int(cur.lastrowid)
 
     def append_raw_frame(self, session_id: str, direction: str, data: bytes,
@@ -134,8 +144,21 @@ class SessionStore:
                 (session_id, time_ns or time.time_ns(), direction, sqlite3.Binary(data)),
             )
             self._prune("raw_frames", cur.lastrowid)
-            self._db.commit()
+            self._commit_soon()
             return int(cur.lastrowid)
+
+    def _commit(self) -> None:
+        """Commit now, pending telemetry/raw rows included (caller holds the lock)."""
+        self._db.commit()
+        self._uncommitted = 0
+        self._last_commit = time.monotonic()
+
+    def _commit_soon(self) -> None:
+        """Commit every COMMIT_EVERY rows or COMMIT_AFTER_S (caller holds the lock)."""
+        self._uncommitted += 1
+        if (self._uncommitted >= COMMIT_EVERY
+                or time.monotonic() - self._last_commit >= COMMIT_AFTER_S):
+            self._commit()
 
     def _prune(self, table: str, last_id: int) -> None:
         """Drop rows older than the newest ``max_rows`` (caller holds the lock)."""
@@ -188,6 +211,7 @@ class SessionStore:
 
     def close(self) -> None:
         with self._lock:
+            self._commit()
             self._db.close()
 
 

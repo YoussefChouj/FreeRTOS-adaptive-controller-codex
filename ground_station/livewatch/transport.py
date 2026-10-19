@@ -32,6 +32,7 @@ UART5 never falls back to SWD: a missing or malformed reply raises
 """
 from __future__ import annotations
 
+import binascii
 import socket
 import struct
 import time
@@ -62,13 +63,12 @@ def crc16_ccitt(data: bytes) -> int:
     """XModem parameters: poly 0x1021, init 0x0000, no reflection, no final XOR.
 
     Same as Frame C's checksum and ``Crc16Ccitt`` in ``API/subscribe.c``.
+    ``binascii.crc_hqx`` is this CRC in C (check value 0x31C3 for b"123456789").
+    The bit-by-bit Python loop it replaces took about a fifth of 8081's rx thread
+    at 100 Hz (py-spy, lab 10-19), which starved the ingest thread into a
+    stale-telemetry abort.
     """
-    crc = 0
-    for byte in data:
-        crc ^= byte << 8
-        for _ in range(8):
-            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
-    return crc
+    return binascii.crc_hqx(bytes(data), 0)
 
 
 def crc32_mpeg2(data: bytes) -> int:
