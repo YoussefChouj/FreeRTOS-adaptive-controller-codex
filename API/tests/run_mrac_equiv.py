@@ -34,8 +34,12 @@ CFLAGS = [
 COV_NAMES = ["u_ad_sat", "e_freeze", "theta_upper_entry", "theta_lower_entry", "simplex_trips"]
 
 
+DEFAULT_BASE = "7801baa3"   # the build flown as vp15 arm300 flight 1 (elf 2026-10-09 21:09); see main()
+
+
 def extract_base_tree(base_rev: str, target_dir: Path, repo_root: Path):
-    cmd = ["git", "ls-tree", "-r", "--name-only", base_rev, "API/"]
+    """API/mrac*.c/h of base_rev, top level only (as copy_working_tree): API/tests/mrac_sizeof.c has its own main."""
+    cmd = ["git", "ls-tree", "--name-only", base_rev, "API/"]
     res = subprocess.run(
         cmd,
         cwd=str(repo_root),
@@ -71,6 +75,14 @@ def copy_working_tree(target_dir: Path, repo_root: Path):
     if not copied:
         raise RuntimeError(f"No MRAC files found in {api_dir}")
     return copied
+
+
+def gate_defs(tree_dir: Path) -> list:
+    """-DMRAC_EQUIV_NEW_TREE (the driver opens the WP-11 armed/injection gate) when the tree has that gate; trees
+    before WP-11 (e.g. 4458435) lack mrac_in_armed and are built without it."""
+    has_gate = any("mrac_in_armed" in p.read_text(encoding="utf-8", errors="replace")
+                   for p in tree_dir.glob("mrac*.h"))
+    return ["-DMRAC_EQUIV_NEW_TREE"] if has_gate else []
 
 
 def build_binary(tree_dir: Path, driver_path: Path, stubs_dir: Path, out_bin: Path, extra_flags=None) -> Path:
@@ -173,6 +185,7 @@ def compare_streams(ref_bin: Path, new_bin: Path):
                 r_parts = r_line.split()
                 n_parts = n_line.split()
                 tag = r_parts[0] if r_parts else "<empty>"
+                n_tag = n_parts[0] if n_parts else "<empty>"
                 r_hex = r_parts[1] if len(r_parts) > 1 else ""
                 n_hex = n_parts[1] if len(n_parts) > 1 else ""
                 try:
@@ -186,6 +199,7 @@ def compare_streams(ref_bin: Path, new_bin: Path):
                 mismatch_info = {
                     "line_no": line_no,
                     "tag": tag,
+                    "new_tag": n_tag,
                     "ref_hex": r_hex,
                     "new_hex": n_hex,
                     "ref_flt": r_flt,
@@ -224,7 +238,7 @@ def run_self_test(base_rev: str, repo_root: Path, driver_path: Path, stubs_dir: 
         extract_base_tree(base_rev, base_dir, repo_root)
 
         bin_base = tmp_dir / "bin_base"
-        bin_base = build_binary(base_dir, driver_path, stubs_dir, bin_base)
+        bin_base = build_binary(base_dir, driver_path, stubs_dir, bin_base, gate_defs(base_dir))
 
         # Perturbation (a): replace first 0.0174533f with 0.0174534f in mrac.c
         pert_a_dir = tmp_dir / "pert_a"
@@ -241,7 +255,7 @@ def run_self_test(base_rev: str, repo_root: Path, driver_path: Path, stubs_dir: 
             f.write(code_a)
 
         bin_pert_a = tmp_dir / "bin_pert_a"
-        bin_pert_a = build_binary(pert_a_dir, driver_path, stubs_dir, bin_pert_a)
+        bin_pert_a = build_binary(pert_a_dir, driver_path, stubs_dir, bin_pert_a, gate_defs(base_dir))
         _, _, mismatch_a = compare_streams(bin_base, bin_pert_a)
         if mismatch_a is None:
             print("Self-test failed: perturbation (a) did not fail comparison against base", file=sys.stderr)
@@ -262,7 +276,7 @@ def run_self_test(base_rev: str, repo_root: Path, driver_path: Path, stubs_dir: 
             f.write(code_b)
 
         bin_pert_b = tmp_dir / "bin_pert_b"
-        bin_pert_b = build_binary(pert_b_dir, driver_path, stubs_dir, bin_pert_b)
+        bin_pert_b = build_binary(pert_b_dir, driver_path, stubs_dir, bin_pert_b, gate_defs(base_dir))
         _, _, mismatch_b = compare_streams(bin_base, bin_pert_b)
         if mismatch_b is None:
             print("Self-test failed: perturbation (b) did not fail comparison against base", file=sys.stderr)
@@ -274,7 +288,10 @@ def run_self_test(base_rev: str, repo_root: Path, driver_path: Path, stubs_dir: 
 
 def main():
     parser = argparse.ArgumentParser(description="Host bit-exact equivalence test for MRAC firmware")
-    parser.add_argument("--base", default="4458435", help="Base git commit revision (default: 4458435)")
+    # The reference is the flown build 7801baa3 (MULTI default, 46 features, pitch/roll rate bound [-0.05, 0.05]).
+    # The old default 4458435 (2026-09-26) predates 4adff87 (rate bound) and 7801baa3 (MULTI): an intended change
+    # is not a refactor, so move the base to the next flown build when one lands.
+    parser.add_argument("--base", default=DEFAULT_BASE, help=f"Base git commit revision (default: {DEFAULT_BASE})")
     parser.add_argument("--self-test", action="store_true", help="Run self-test with intentional perturbations")
     parser.add_argument("--define", action="append", default=[], metavar="NAME=VAL",
                         help="Extra -D for the new-tree builds only (the base tree predates e.g. MRAC_CAPACITY)")
@@ -298,14 +315,15 @@ def main():
         new_dir.mkdir()
         copy_working_tree(new_dir, repo_root)
 
-        new_defs = ["-D" + d for d in args.define] + ["-DMRAC_EQUIV_NEW_TREE"]
+        new_defs = ["-D" + d for d in args.define] + gate_defs(new_dir)
+        ref_defs = gate_defs(ref_dir)
 
         # The four builds are independent, and so are the two compares (each runs its two binaries): run them at
         # once. Results are reported in the old order, plain first.
         builds = {
-            "ref_plain": (ref_dir, []),
+            "ref_plain": (ref_dir, ref_defs),
             "new_plain": (new_dir, new_defs),
-            "ref_sigma": (ref_dir, ["-DMRAC_ENABLE_SIGMA_PRIOR"]),
+            "ref_sigma": (ref_dir, ["-DMRAC_ENABLE_SIGMA_PRIOR"] + ref_defs),
             "new_sigma": (new_dir, ["-DMRAC_ENABLE_SIGMA_PRIOR"] + new_defs),
         }
         with ThreadPoolExecutor(max_workers=len(builds)) as pool:
@@ -319,8 +337,11 @@ def main():
         lines = []
         for n_lines, cov, info in results:
             if info is not None:
+                tag = f"tag '{info['tag']}'"
+                if info.get("new_tag", info["tag"]) != info["tag"]:     # the dumps are out of step: name both lines
+                    tag = f"tags differ, ref '{info['tag']}' / new '{info['new_tag']}' (dumps out of step)"
                 print(
-                    f"Mismatch at line {info['line_no']}: tag '{info['tag']}' ref={info['ref_hex']} ({info['ref_flt']:.6e}) != new={info['new_hex']} ({info['new_flt']:.6e})",
+                    f"Mismatch at line {info['line_no']}: {tag} ref={info['ref_hex']} ({info['ref_flt']:.6e}) != new={info['new_hex']} ({info['new_flt']:.6e})",
                     file=sys.stderr,
                 )
                 sys.exit(1)
