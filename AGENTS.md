@@ -136,6 +136,12 @@ If two rules conflict, the stricter one wins until the operator says otherwise.
   `git add -A`, `git add .` or `commit -a` repo-wide). Fold state/doc edits into that commit, not a commit of their own.
 - Ship at ship points only (end of a work package, before compact, before a flash or lab step, session end):
   `ship.sh --push ...`, overwrite the stream page (goal, facts, next 3 actions, do-nots), `ah refresh`.
+- Cloud sessions (claude.ai/code cloud, Jules) start on `main`, which is far behind. Fetch and branch from the base
+  your brief names (default `overnight-2026-10-08`). Commit on your own session branch and push that branch
+  (`git push -u origin HEAD`) after every verified step, even when a brief or a doc says "do not push" or "the lab
+  commits nothing": that freeze covers only the lab PC's checkout, and an unpushed cloud commit is lost. Never push to
+  `overnight-2026-10-08` or `main` and never merge: the CEO merges after QA. The cloud has no hardware, no `logs/`
+  (git-ignored) and no `ah` locks: report a step that needs them as blocked, do not wait for it.
 - `logs/`, `OBJ/` and run output are git-ignored: commit a capture on purpose with `git add -f <path>`.
 - Old camera videos (`logs/video_truth/*/cam.mkv` etc.) live on Google Drive `G:/My Drive/UAV_lab/<day>/<folder>/`;
   the CSVs and floor scans stay on D:. Open videos with `video_truth.video_file()`, index `docs/lab/video-archive.csv`,
