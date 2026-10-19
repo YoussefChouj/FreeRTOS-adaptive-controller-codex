@@ -39,7 +39,7 @@ def test_store_route_counts_rows_against_the_cap():
     api.start()
     try:
         code, body = _get_json("http://127.0.0.1:%d/health/store" % api.address[1])
-        assert code == 200 and body["max_rows"] == 10_000 and body["path"] == ":memory:"
+        assert code == 200 and body["max_rows"] == 10_000 and body["path"] == ":memory:" and body["prune_every"] == 1000
         assert body["rows"]["telemetry"] == 5 and body["rows"]["raw_frames"] == 0
         assert body["rows"]["events"] >= 1
     finally:

@@ -1380,7 +1380,8 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                 with st._lock:
                     rows = {t: st._db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
                             for t in ("telemetry", "raw_frames", "events")}
-                self._json(200, {"path": st.path, "max_rows": st.max_rows, "rows": rows})
+                self._json(200, {"path": st.path, "max_rows": st.max_rows, "prune_every": st._prune_every,
+                                 "rows": rows})
             elif route == "/api/recording":
                 status = service.recording_status()
                 # Enrich with analysis status if present
