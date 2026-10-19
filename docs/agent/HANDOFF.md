@@ -15,6 +15,8 @@ History: `docs/agent/ledger/` (grep, never read whole). Desktop session is CEO: 
 - Cloud: main was fast-forwarded to the lab branch on 10-19, so cloud sessions start from current code. The AGENTS.md cloud
   rule is merged (036e7d84). At every ship point, push both `overnight-2026-10-08` and `overnight-2026-10-08:main`.
 
+- Lab commands by hand (labday, cam/video tracking, fusion modes 0-3, fly, 8081, flash, fake drone): `docs/lab/COMMANDS.md`
+  (drift test `ground_station/lab/tests/test_commands_doc.py`; AGENTS.md Conventions rule).
 - Full 10-19 handoff (camera tape vs scan, stream ladder A-E status, waiting branches, open work): `docs/agent/handoff-2026-10-19.md`.
 
 - 10-18 post-lab fixes, all committed: relay bind retry 5e0e545c; labday starts 8081 before the camera + endlive 7ffb9ff0; stale-telemetry trip only after 0.3 s f51d3de3 (operator OK); bridge re-pushes slots after 3 s silence a0d15173; dry run once per unchanged flight + width-safe cooldown line 6cfd8a85; one camera loop + run-HHMMSS dirs + CR in tracker PIDs 056eb0c3; landing zoom off d2879e1d; 8081 log to `logs/service/<port>-<ts>.log` + QuickEdit off 9b7046d3; abort link snapshot a2efc3ad; 1 Hz `link` events d4c653c6.

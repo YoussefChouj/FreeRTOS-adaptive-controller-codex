@@ -166,6 +166,10 @@ If two rules conflict, the stricter one wins until the operator says otherwise.
 - Tunable parameter sets (PID loops, MRAC axes, filter/estimator gains): one aligned row per
   instance under a single column header, via a `<THING>_ROW(...)` macro, with history below
   the table. Follow `docs/firmware-table-pattern.md` (reference: `API/pid.c`).
+- Lab commands (labday, fly, cam/video tracking, fusion modes, 8081, flash, fake drone) live in
+  `docs/lab/COMMANDS.md`, written to be typed by hand. Look there first. A commit that adds or changes a lab
+  command, flag, subcommand, tracker key or output file updates that doc in the same commit;
+  `ground_station/lab/tests/test_commands_doc.py` fails when the doc names something the code lacks.
 
 ## Code navigation protocol
 
