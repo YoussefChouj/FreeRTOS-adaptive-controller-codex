@@ -1,8 +1,9 @@
 """Host build of the firmware controller code for the SIL: API/pid.c, API/mrac*.c, API/controller.c, API/wfb_*.c +
 csrc/sil_server.c.
 
-Not a ctypes shared library: the only gcc here is 32-bit MinGW (`gcc -dumpmachine` = mingw32) and Python is 64-bit,
-so a DLL from it cannot be loaded (the same reason ground_station/research/sim/_ccore/build.py builds an executable).
+Not a ctypes shared library: the desktop's only gcc is 32-bit MinGW (`gcc -dumpmachine` = mingw32) and Python is
+64-bit, so a DLL from it cannot be loaded (the same reason ground_station/research/sim/_ccore/build.py builds an
+executable). On Linux (CI) the host gcc builds the same executable; sil_server.c guards its Windows-only calls.
 The server is an executable stepped over binary pipes (fw.py); one process per simulated row also gives every row its
 own copy of the firmware globals (Ctrler, mrac_state).
 
@@ -29,8 +30,8 @@ FIRMWARE = ["pid.c", "pid.h", "mrac.c", "mrac.h", "mrac_math.c", "mrac_math.h", 
             "controller.c", "controller.h",
             # Workflow B safety glue (pure C, no firmware headers), driven by sim/sil/faults.py
             "wfb_glue.c", "wfb_glue.h", "wfb_traj.c", "wfb_traj.h", "wfb_safety.c", "wfb_safety.h", "wfb_prim.c",
-            "wfb_prim.h", "wfb_types.h"]
-WFB_C = ["wfb_glue.c", "wfb_traj.c", "wfb_safety.c", "wfb_prim.c"]
+            "wfb_prim.h", "wfb_prog.c", "wfb_prog.h", "wfb_types.h", "land_xy_gate.h"]   # wfb_prim.c: LAND_XY_GATE_* only
+WFB_C = ["wfb_glue.c", "wfb_traj.c", "wfb_safety.c", "wfb_prim.c", "wfb_prog.c"]
 CFLAGS = ["-std=gnu99", "-O2", "-msse2", "-mfpmath=sse", "-ffp-contract=off", "-fno-fast-math", "-Wall", "-Wextra"]
 # pre-existing firmware warnings (PID_ROW leaves aw_mode/Kt to zero-init; the unused MRAC_InverseMixer stub)
 FW_QUIET = ["-Wno-missing-field-initializers", "-Wno-unused-parameter", "-Wno-unused-function"]
