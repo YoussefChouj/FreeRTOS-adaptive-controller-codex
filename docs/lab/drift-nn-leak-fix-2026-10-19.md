@@ -13,9 +13,10 @@ The camera-off drift model (`python -m ground_station.analysis.video_truth nn4`,
 - **The fix (this commit).** The target is now camera truth − raw optical flow, and the inputs no longer include anything the fusion writes. Raw OF (`ano_of.of2_dx/dy_fix`) enters the firmware before the EKF and is never written by the fusion (`TASK/StabilizerTask.c:846`). The track is raw OF plus the prediction. `ext_pos_on` is reported per flight. A new `rawof` row is the baseline a model has to beat.
 - **10-19 evaluation: not run.**
   - The cloud copy of the repo has no truth4 flights and no 10-19 telemetry.
-  - The 10-19 flights were captured as campaign session `telemetry.csv`. truth4 and `nn4_data` read stream_log slot CSVs.
-  - The steps and the format gap are under "Evaluating on 10-19".
-- **Shadow and active enable: PROPOSED.** The firmware runs no flow model today. The plan and its cost are below. Nothing was flashed or flown.
+  - The 10-19 flights were captured as campaign session `telemetry.csv`. truth4, `fixes_clock` and `nn4_data` now read that file directly (follow-up 2, done).
+  - The steps are under "Evaluating on 10-19".
+- **Shadow and active enable of this model: PROPOSED.** The plan and its cost are below. Nothing was flashed or flown.
+- **The firmware already has a different shadow model.** `NN/drift_nn_task.c` runs a 23-input TCN at 20 Hz into `g_drift_nn` (header: "PROPOSED, not flown"; weights `NN/drift_nn_weights.h`, trained on 15 flights, no hold-out). It rescales the EKF velocity and reads `s_ekf_of.x[1]/x[4]` and `innov_x/y`, so on a mode-3 flight its inputs carry the camera. Nothing reads its output, and no capture group logs `g_drift_nn`.
 
 ## How the camera got into the old target
 
@@ -78,28 +79,24 @@ Not run: this needs files that only exist on the lab PC.
 - Whether the firmware applied them (`g_ext_pos_on` ≥ 2) is in the session telemetry only.
 - The floor scan for the 10-19 phone pose is `logs/video_truth/floor-1019/aruco.npz`.
 
-**Format gap.** The 10-19 flights were captured by the campaign runner, not stream_log. Each flight is a session `telemetry.csv` under `logs/campaigns/<campaign>_<stamp>/` on the lab PC (flight 01: `lab-m-memory-u100_20261019-151725`):
-- long rows `received_ns,key,value`;
-- the `nn4` group at 50 Hz, `camera_fusion` at 100 Hz.
+**Session format.** The 10-19 flights were captured by the campaign runner, not stream_log. Each flight is a session `telemetry.csv` under `logs/campaigns/<campaign>_<stamp>/` on the lab PC (flight 01: `lab-m-memory-u100_20261019-151725`): long rows `received_ns,slot,key,value`, the `nn4` group at 50 Hz, `camera_fusion` at 100 Hz. `read_slots` takes that dir (or its `telemetry.csv`) as the stem (`_session_csv`, `_session_series`, `_HeldSlot` in `video_truth.py`):
+- **Clock.** The bridge writes each frame's variables as `slot<k>.<var>`, followed by its `slot<k>.t_ms` (the drone's `t_src_ms`). Every variable gets its own frame's drone time, as in the slot CSVs. A session with no `t_ms` falls back to `xTickCount` (`log_corpus._timebase(..., absolute=True)`), one time per received batch.
+- **Aliases.** The bare names and spec keys (`status.arm`, ...) that `telemetry_adapter` adds are skipped; only the `slot<k>.` rows are read.
+- **Slots.** Slot k's `t` is the frame times of its reference variable (`SESSION_SLOT_REF`). Every other variable is held onto them (last sample at or before t), so a variable from another capture lane lags by up to one of its own frames (40 ms at 25 Hz).
+- **Earth.** The campaign groups capture the position-loop feedback, not `ano_of.earth_x/y`. It is rebuilt from it (`Ext_Pos_SetFb`: locx FB = earth_y, locy FB = -earth_x). The `ekf` estimate is skipped when `s_ekf_of.x[0]` was not captured.
+- **`fixes_clock`.** No session has `g_ext_pos.n_old`; it is taken as 0, so an old fix counts as lost, and the refine step and the lock shift absorb it. The counters start at the first logged value, which assumes the tracker started after the recording.
+- **Tests.** `ground_station/analysis/tests/test_session_slots.py`: the same synthetic flight written as slot CSVs and as a session (interleaved or lane-grouped batches) gives the same `read_slots`, `fixes_clock`, `r4_truth` and `nn4_data` output.
 
-truth4 (`r4_truth`), `fixes_clock` and `nn4_data` all go through `read_slots`. That reads `<stem>.slot<k>.csv` on the drone clock (`t_src_ms`). A session `telemetry.csv` differs in three ways:
-- it has only the host clock;
-- it has no `g_ext_pos.n_old` (`fixes_clock` counts `n_ok + n_rej + n_old`);
-- it has no slot split.
-
-So truth4 cannot be built from it as is. Two ways to close the gap (follow-up 2):
-- a converter that writes slot CSVs from a session `telemetry.csv`;
-- a `read_slots` branch built on `log_corpus._load_session` + `hold`, as `read_livewatch` already does for the run/overlay path, with `fixes_clock` matched on the host clock.
-
-**Local steps once the gap is closed.** Run from the repo root on the lab PC:
+**Local steps.** Run from the repo root on the lab PC, once per flight for truth4 (`<name>` is the video dir, e.g. `mem1-lab-...`; `<session>` is its campaign dir):
 
 ```
-python -m ground_station.analysis.video_truth truth4 <name> --stem <slot-csv stem> --floor logs/video_truth/floor-1019 --fixes --no-reflect
+python -m ground_station.analysis.video_truth truth4 <name> --stem logs/campaigns/<session> --floor logs/video_truth/floor-1019 --fixes --no-reflect
 python -m ground_station.analysis.video_truth nn4
 python -m ground_station.analysis.video_truth report4 -
 ```
 
 Notes on these steps:
+- Check `lock_shift`, `n_recv` and `lost_end` under `fixes` in `truth4.json`. A tracker started before the recording breaks the counter assumption above (shifts the clock by whole fix periods, which the lock shift does not catch); `.\cam fusion` before `.\fly` is that order, so compare `offset_s` (fixes) with `offset_takeoff_s` (lift-off) in `truth4.json`: a gap of seconds means one of the two anchors slipped.
 - `--no-reflect` is required: `nn4_data` rejects a reflected earth fit.
 - Delete the old `logs/video_truth/nn4_lofo.json` and every `truth4_score_nn4.json` first. They came from the leaky pipeline.
 - `nn4` with no names scores every truth4 flight, so the r4/r6/r7 flights and the 10-19 flights pool together.
@@ -114,7 +111,7 @@ The 10-12 report's honest number was 47 cm held out against a 10 cm budget. A mo
 
 ## Enabling on the vehicle (PROPOSED)
 
-The firmware runs no flow model today. The only learned weights on board are the MRAC RBF (`API/mrac_variant.h:28`).
+This rawof model is not on board. The firmware carries the MRAC RBF (`API/mrac_variant.h:28`) and the older shadow TCN (`NN/drift_nn_task.c`, see the summary); the shadow steps below would add a second, separate task.
 
 | Model | Params | MAC / step | At 10 Hz |
 |---|---|---|---|
@@ -140,5 +137,5 @@ What shadow tests: the on-board features match the logged ones (float order, sca
 ## Follow-ups
 
 1. **`nn_io.seq` is still leaky** (`ground_station/analysis/nn_io.py`). It uses target "earth" with the EKF channels. Move it to the rawof target and `NN4_RAW_CH` before training any sequence model on fused flights.
-2. **Session `telemetry.csv` → truth4 / nn4** (see "Format gap"). Needed before the 10-19 flights can be scored.
+2. ~~**Session `telemetry.csv` → truth4 / nn4.**~~ Done: `read_slots` reads the session (see "Session format").
 3. **Regenerate the stored scores.** `nn4_lofo.json` and the `truth4_score_nn4.json` files on the lab PC predate this fix.

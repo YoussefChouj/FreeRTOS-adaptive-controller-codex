@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import functools
 import json
 import re
 from pathlib import Path
@@ -934,12 +935,118 @@ def read_livewatch(path: str, names) -> dict:
 
 
 EXTPOS_SLOTS = {1: 0, 2: 1}     # r5_extpos_frames.md (fusion sessions): R4 slot1 (IMU/flow) and slot2 (EKF/earth) columns
+# campaign-runner session telemetry.csv (logs/campaigns/<campaign>_<stamp>/): every frame is written as `slotN.<var>`
+# rows, then its link stats SESSION_META (slotN.t_ms = the frame's t_src_ms); the capture lanes are not the R4 slots,
+# so R4 slot k is rebuilt on the frame times of its first SESSION_SLOT_REF variable present
+SESSION_META = ("t_ms", "seq", "received", "dropped", "crc_errors", "bytes_received", "loss_pct")
+SESSION_SLOT_REF = {0: ("DroneStatus.ARM_Status",), 1: ("ano_of.of2_dx_fix", "imu_data.yaw"),
+                    2: ("ano_of.earth_x", "Ctrler.locxPID.FB", "s_ekf_of.x[1]"), 3: ("Ctrler.locxPID.Des",)}
+
+
+def _session_csv(stem) -> Path | None:
+    """The session telemetry.csv a stem names (the session dir or the file itself), else None (a slot-CSV stem)."""
+    if not stem:
+        return None
+    p = Path(stem)
+    p = p / "telemetry.csv" if p.is_dir() else p
+    if not p.is_file():
+        return None
+    with p.open() as f:
+        return p if f.readline().startswith("received_ns") else None
+
+
+def _session_series(path) -> dict:
+    """{var: (t s on the drone clock, sorted; values)} of a session telemetry.csv, cached per file version (shared:
+    do not modify the arrays in place)."""
+    p = Path(path).resolve()
+    return _session_series_cached(str(p), p.stat().st_mtime_ns)
+
+
+@functools.lru_cache(maxsize=2)
+def _session_series_cached(path: str, mtime_ns: int) -> dict:
+    """Frame rows (`slotN.<var>`) are timed by their own frame's slotN.t_ms / 1000, the slot CSVs' t exactly. The
+    un-prefixed rows (telemetry_adapter's dashboard aliases: bare names and spec keys) are skipped. A frame's rows
+    are consecutive and share received_ns, but one batch can hold several frames of a slot, so the k-th row of a var
+    in a run of one (received_ns, slot) is the k-th frame of that run. A session without t_ms falls back to the host
+    clock mapped onto xTickCount (log_corpus._timebase), which is only as good as the WiFi batching."""
+    import pandas as pd
+    from ground_station.analysis import log_corpus
+    df = pd.read_csv(path, usecols=["received_ns", "key", "value"], on_bad_lines="skip",
+                     dtype={"received_ns": "category", "key": "category", "value": str})
+    sk = pd.Series(df["key"].cat.categories).str.extract(r"^slot(\d+)\.(.+)$")
+    kc = df["key"].cat.codes.to_numpy()
+    wire = kc >= 0
+    wire[wire] = sk[0].notna().to_numpy()[kc[wire]]
+    if not (sk[1] == "t_ms").any():
+        raw = log_corpus._load_session(Path(path))
+        tb = log_corpus._timebase(raw, absolute=True)
+        out = {}
+        for k, (t, v) in raw.items():
+            if k not in SESSION_META:
+                t = tb(t)
+                o = np.argsort(t, kind="stable")
+                out[k] = (t[o], v[o])
+        return out
+    kc, ns = kc[wire], df["received_ns"].cat.codes.to_numpy()[wire]
+    slot, name = sk[0].to_numpy()[kc], sk[1].to_numpy()[kc]
+    run = np.cumsum(np.r_[True, (ns[1:] != ns[:-1]) | (slot[1:] != slot[:-1])])
+    occ = pd.DataFrame({"r": run, "k": kc}).groupby(["r", "k"]).cumcount().to_numpy()
+    fid = run * (int(occ.max()) + 1) + occ
+    v = pd.to_numeric(df["value"].to_numpy()[wire], errors="coerce")
+    it = name == "t_ms"
+    tm = pd.Series(v[it] / 1e3, index=fid[it])
+    t = tm[~tm.index.duplicated()].reindex(fid).to_numpy(float)
+    ok = np.isfinite(t) & np.isfinite(v) & ~np.isin(name, SESSION_META)
+    code, names = pd.factorize(name[ok])
+    t, v = t[ok], v[ok]
+    o = np.lexsort((t, code))
+    cut = np.flatnonzero(np.diff(code[o])) + 1
+    return {str(names[code[a[0]]]): (t[a], v[a]) for a in np.split(o, cut) if len(a)}
+
+
+class _HeldSlot(dict):
+    """read_slots' slot from a session: "t" (and t_src_ms) are the frame times of the slot's reference variable;
+    any other variable of the session is held (last sample at or before each t) onto them on first use. A variable
+    captured in another lane than the reference so lags it by up to one of its own frames (40 ms at 25 Hz)."""
+
+    def __init__(self, series: dict, t: np.ndarray):
+        super().__init__(t=t, t_src_ms=t * 1e3)
+        self._series = series
+
+    def __missing__(self, key):
+        if key not in self._series:
+            raise KeyError(key)
+        from ground_station.analysis.log_corpus import hold
+        self[key] = hold(self._series, key, self["t"])
+        return self[key]
+
+    def __contains__(self, key):
+        return dict.__contains__(self, key) or key in self._series
+
+    def get(self, key, default=None):
+        return self[key] if key in self else default
 
 
 def read_slots(stem: str, slots=(0, 1, 2, 3)) -> dict:
     """stream_log slot CSVs `<stem>.slot<k>.csv` (R4 presets): {k: {"t": s on the drone clock (t_src_ms / 1000),
     column: array}}. Every slot shares that clock, so slots at different rates line up by "t". A fusion-session log
-    (slot1 carries g_ext_pos_on) is read through EXTPOS_SLOTS, so k keeps its R4 meaning; it has no R4 slot 0 or 3."""
+    (slot1 carries g_ext_pos_on) is read through EXTPOS_SLOTS, so k keeps its R4 meaning; it has no R4 slot 0 or 3.
+    A campaign session (stem = its dir or telemetry.csv, see _session_csv) gives slot k on the frame times of its
+    SESSION_SLOT_REF variable with every session variable held onto them (_HeldSlot); without ano_of.earth_x/y it
+    is rebuilt from the position-loop feedback (Ext_Pos_SetFb, TASK/StabilizerTask.c: locx FB = earth_y, locy FB =
+    -earth_x). Slot k is left out when none of its reference variables was captured."""
+    csv_path = _session_csv(stem)
+    if csv_path is not None:
+        series = dict(_session_series(csv_path))
+        if "ano_of.earth_x" not in series and X_CM in series and Y_CM in series:
+            series["ano_of.earth_x"] = (series[Y_CM][0], -series[Y_CM][1])
+            series["ano_of.earth_y"] = series[X_CM]
+        out = {}
+        for k in slots:
+            ref = next((r for r in SESSION_SLOT_REF.get(k, ()) if r in series), None)
+            if ref is not None:
+                out[k] = _HeldSlot(series, np.unique(series[ref][0]))
+        return out
     import pandas as pd
     s1 = Path(f"{stem}.slot1.csv")
     ext = s1.exists() and "g_ext_pos_on" in s1.open().readline().split(",")
@@ -1344,17 +1451,35 @@ def fixes_clock(stem: str, fixes_csv) -> dict:
     N-th sent fix arrived at t_src - age_ms: c = sent[N-1] - arrival. Each lost packet makes the count lag one fix
     (c falls a fix period), so c starts as the first-quartile median and is refined by matching each arrival to its
     nearest sent fix. c absorbs the WiFi latency, so t_tel is the arrival-equivalent capture time.
-    Returns c, the arrival residual spread, the counts and the fixes (t_tel s, pad xy m)."""
+    A campaign session (_session_csv) is read on the frame times of g_ext_pos.n_ok. n_old is optional (the campaign
+    capture groups leave it out): a fix it would count then looks like a lost packet, which the refine and lock
+    shift below already absorb. Returns c, the arrival residual spread, the counts and the fixes (t_tel s, pad xy m)."""
     import pandas as pd
     fx = pd.read_csv(fixes_csv)
     sent = fx["t_send"][fx["frame_hex"].notna()].to_numpy(float)
     g = "g_ext_pos."
-    s = pd.read_csv(f"{stem}.slot2.csv", usecols=["t_src_ms"] + [g + k for k in ("n_ok", "n_rej", "n_old", "age_ms")])
-    n = np.nan_to_num((s[g + "n_ok"] + s[g + "n_rej"] + s[g + "n_old"]).to_numpy(float)).astype(int)
+    cols = [g + k for k in ("n_ok", "n_rej", "n_old", "age_ms")]
+    csv_path = _session_csv(stem)
+    if csv_path is not None:
+        from ground_station.analysis.log_corpus import hold
+        series = _session_series(csv_path)
+        if g + "n_ok" not in series:
+            raise SystemExit(f"{csv_path}: no {g}n_ok (log the camera_fusion group to sync the fixes)")
+        ts = np.unique(series[g + "n_ok"][0])
+        s = {c: hold(series, c, ts, default=0.0 if c == g + "n_old" else np.nan) for c in cols}
+        s["t_src_ms"] = ts * 1e3
+    else:
+        p = Path(f"{stem}.slot2.csv")
+        hdr = p.open().readline().strip().split(",")
+        s = pd.read_csv(p, usecols=["t_src_ms"] + [c for c in cols if c in hdr])
+        if g + "n_old" not in s:
+            s[g + "n_old"] = 0.0
+    n = np.nan_to_num(np.asarray(s[g + "n_ok"] + s[g + "n_rej"] + s[g + "n_old"], float)).astype(int)
     # without a reboot the counters carry earlier flights (r7_f5: 9838 at log start); the tracker sends its first
-    # fix only after the log's slot1 CSV exists, so the first logged count is this session's zero
+    # fix only after the log (slot1 CSV, or a session's recording) has started, so the first logged count is this
+    # session's zero (a tracker started earlier shifts c by whole fix periods: check lock_shift, n_recv, lost_end)
     n = n - n[0]
-    arr = (s["t_src_ms"].to_numpy(float) - s[g + "age_ms"].to_numpy(float)) / 1e3
+    arr = (np.asarray(s["t_src_ms"], float) - np.asarray(s[g + "age_ms"], float)) / 1e3
     new = np.r_[n[0] > 0, np.diff(n) > 0] & (n > 0) & (n <= len(sent)) & np.isfinite(arr)
     a, cs = arr[new], sent[n[new] - 1] - arr[new]
 
@@ -1469,7 +1594,7 @@ def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: 
     tt = te[fly]
     truth = np.c_[np.interp(tt - o, t_v, xy[:, 0]), np.interp(tt - o, t_v, xy[:, 1])]
     rows = {"t_tel": tt, "truth_x": truth[:, 0], "truth_y": truth[:, 1], "z": z[fly] - z0}
-    summ = {"stem": stem, "h_ring_m": h, "id0_mad_px": mad0, "z0_m": z0, "takeoff_tel_s": to_tel,
+    summ = {"stem": stem, "floor": str(floor or ""), "h_ring_m": h, "id0_mad_px": mad0, "z0_m": z0, "takeoff_tel_s": to_tel,
             "takeoff_video_s": to_vid, "landing_tel_s": ld_tel, "landing_video_s": ld_vid,
             "offset_takeoff_s": o0, "offset_landing_s": ld_tel - ld_vid, "offset_refine_s": d, "offset_host_s": o_host, "offset_s": o,
             "sync_anchor": anchor if np.isfinite(ld_vid) or anchor in ("host", "fixes") else "takeoff-unverified",
@@ -1488,6 +1613,8 @@ def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: 
             "offset_takeoff_s": o0f, "offset_refine_s": d, "rot_deg": float(np.degrees(np.arctan2(q[1, 0], q[0, 0]))),
             "vs_truth_rms_cm": float(np.sqrt(np.mean(err ** 2)) * 100), "vs_truth_p90_cm": float(np.percentile(err, 90) * 100)}
     for name, (cx, cy, sc) in R4_EST.items():
+        if cx not in s2 or cy not in s2:                                    # not captured (campaign sessions: ekf)
+            continue
         e = np.c_[s2[cx], s2[cy]][fly] * sc
         e = e - e[0]
         q, refl = align(e, truth, int(np.searchsorted(tt, tt[0] + rot_s)) if rot_s else len(e), reflect)
@@ -1510,6 +1637,8 @@ def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: 
             seg = {"t0": float(tt[a]), "t1": float(tt[b]), "start_xy_m": truth[a].round(3).tolist(),
                    "end_xy_m": truth[b].round(3).tolist()}
             for name, (cx, cy, sc) in R4_EST.items():
+                if cx not in s2 or cy not in s2:
+                    continue
                 e = np.c_[s2[cx], s2[cy]][fly][a:b + 1] * sc
                 e = e - e[0]
                 q, refl = align(e, tr, int(np.searchsorted(tt[a:b + 1], tt[a] + rot_s)) if rot_s else len(e), reflect)
@@ -1585,12 +1714,12 @@ def drift_score(name: str, cam: str = "docs/video-truth/cam_r4_lenswave_2026-10-
     rows = np.genfromtxt(vd / "truth4.csv", delimiter=",", names=True)
     summ = json.loads((vd / "truth4.json").read_text())
     camd = json.loads(Path(cam).read_text())
-    R, tw, _ = floor_from_marker(dict(np.load(vd / "aruco.npz")), camd)
+    R, tw, _ = floor_from_marker(dict(np.load(Path(summ.get("floor") or vd) / "aruco.npz")), camd)
     c = -R.T @ tw
     u = -c[:2] / np.linalg.norm(c[:2])
     ax = np.c_[u, [-u[1], u[0]]]                                    # columns: along, across
     t, truth = rows["t_tel"], np.c_[rows["truth_x"], rows["truth_y"]]
-    S = read_slots(f"logs/vofa/{name}")
+    S = read_slots(summ["stem"] if _session_csv(summ["stem"]) else f"logs/vofa/{name}")
     s0, s3 = S[0], S[3]
     yaw = np.unwrap(np.radians(s0["imu_data.yaw"]))
     k = max(1, int(round(0.5 / np.median(np.diff(s0["t"])))))
@@ -2114,7 +2243,8 @@ def main(argv=None):
     r4 = sub.add_parser("truth4", help="R4 guard-ring truth for one flight: logs/vofa/<name> + logs/video_truth/<name>")
     r4.add_argument("name"); r4.add_argument("--cam", default="docs/video-truth/cam_r4_lenswave_2026-10-11.json")
     r4.add_argument("--refine", type=float, default=2.0)
-    r4.add_argument("--stem", default="", help="telemetry stem (default logs/vofa/<name>; fusion sessions: logs/<name>)")
+    r4.add_argument("--stem", default="", help="telemetry stem (default logs/vofa/<name>; fusion sessions: logs/<name>; campaign "
+                    "sessions: logs/campaigns/<campaign>_<stamp>, the dir or its telemetry.csv)")
     r4.add_argument("--floor", default="", help="video dir whose aruco.npz gives the floor (fusion: r5_marks_1)")
     r4.add_argument("--coral-step", type=int, default=2, help="track every Nth frame (2 = 15 Hz at 30 fps)")
     r4.add_argument("--fixes", action="store_true", help="sync on the tracker fixes.csv in the video dir (fusion sessions)")

@@ -150,6 +150,26 @@ python -m ground_station.analysis.live_tracker fit logs/r5_shadow_3 --auto
 - `replay` re-runs the online tracker and the fusion on recorded videos.
 - `fit` fits yaw, scale and offset of the camera path against the EKF path.
 
+### 2.8 Camera truth of a campaign flight (truth4, nn4)
+
+A campaign (`.\fly`) logs to `logs/campaigns/<campaign>_<stamp>/telemetry.csv`, not to stream_log slot CSVs.
+`--stem` takes that dir (or the csv) directly; there is no conversion step.
+
+```powershell
+python -m ground_station.analysis.video_truth truth4 <name> --stem logs/campaigns/<campaign>_<stamp> --floor logs/video_truth/floor-1019 --fixes --no-reflect
+python -m ground_station.analysis.video_truth nn4
+python -m ground_station.analysis.video_truth report4 -
+```
+
+- `<name>` is the video dir under `logs/video_truth/`; `--fixes` syncs on its `fixes.csv`.
+- In `truth4.json`, check `lock_shift`, `n_recv` and `lost_end` under `fixes`. The counter sync takes the first
+  logged fix count as zero, i.e. it assumes the tracker sent nothing before the campaign recording began. Fixes
+  sent earlier (`.\cam fusion` running before `.\fly`) shift the clock by whole fix periods; compare `offset_s`
+  (fixes) with `offset_takeoff_s` (lift-off) in `truth4.json` before using the flight: a gap of seconds means one
+  of the two anchors slipped.
+- The session must carry the `nn4` capture group for `nn4`; the drift NN doc is
+  `docs/lab/drift-nn-leak-fix-2026-10-19.md`.
+
 ## 3. Fusion modes
 
 The tracker puts the mode into its frames (`--mode`), and the drone applies it.
