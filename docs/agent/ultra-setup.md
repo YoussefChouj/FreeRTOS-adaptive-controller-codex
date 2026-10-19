@@ -45,8 +45,8 @@ CPU cores help, GPUs do not. GPU candidates: `sim/bench/ctrl_nn2.py`, `ctrl_p2_n
    $100 credit covers the usage (UNVERIFIED for credit-only accounts: check during activation). If the user will not
    add a card -> skip; Colab covers compute. If yes: gcloud in WSL, project `uav-sim`, budget alarm at $80 (alarms do not
    cap), hard cap per VM = spot + `--max-run-duration=4h --instance-termination-action=DELETE`,
-   `scripts/cloud_sweep.sh` (create a 32-core spot VM -> rsync sim/ -> N parallel shards -> pull results -> delete).
-   Needs a shard runner first (none exists).
+   a sweep script, PROPOSED as scripts/cloud_sweep.sh and not written (create a 32-core spot VM -> rsync sim/ -> N
+   parallel shards -> pull results -> delete). Needs a shard runner first (none exists).
 5. Skip: Veo/Flow/Genie (defense visuals only), Firebase Studio. Keep: NotebookLM (`.agent-ops/research/nb/`), Deep Research
    for thesis literature next to Argon.
 
