@@ -1,0 +1,7 @@
+complete  air 51.9 s  1 flight(s)  353 live samples
+ABORTED L1 f01_lab_m_memory_u100: position_error (the safety monitor landed it; the steps after that point never ran)
+HOVER  x/y/z error cm  rms 5/6/2  max 29/26/10  (42 s)
+TRAJ   no samples
+landing offset x +26 y -15 cm from the takeoff point (30 cm)
+camera landing x +25 y -17 cm from the pad (30 cm, mem5-lab-m-memory-u100, median of 15 fixes)
+outputs D:\projects\UAV_lab\FreeRTOS-adaptive-controller-codex\logs\campaigns\lab-m-memory-u100_20261019-205809  flight folder logs/flights/2026-10-19/05_lab-m-memory-u100

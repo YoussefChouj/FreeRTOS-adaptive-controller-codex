@@ -1,0 +1,7 @@
+complete  air 36.1 s  1 flight(s)  280 live samples
+ABORTED L1 f01_lab_z_vz_steps: position_error (the safety monitor landed it; the steps after that point never ran)
+HOVER  x/y/z error cm  rms 5/5/3  max 12/11/10  (17 s)
+TRAJ   x/y/z error cm  rms 9/12/11  max 16/29/16  (6 s)
+landing offset x +11 y -22 cm from the takeoff point (25 cm)
+camera landing x +23 y -12 cm from the pad (26 cm, z2-lab-z-vz-steps, median of 15 fixes)
+outputs D:\projects\UAV_lab\FreeRTOS-adaptive-controller-codex\logs\campaigns\lab-z-vz-steps_20261019-211020  flight folder logs/flights/2026-10-19/08_lab-z-vz-steps

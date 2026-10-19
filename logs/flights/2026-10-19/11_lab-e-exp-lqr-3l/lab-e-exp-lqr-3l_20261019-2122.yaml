@@ -1,0 +1,53 @@
+# launch copy of logs/campaigns/fly/lab-e-exp-lqr-3l.yaml for pack type1; written 20261019-2122 by campaign_launch. Fly this file, never the template.
+campaign: lab-e-exp-lqr-3l
+objective: 'E3/4 lqr_3l: 3-layer adaptive matrix, hover then figure-8. Flight order:
+  lab_e_exp_matrix (pid_3l),'
+controller: pid
+mode: fly
+packs:
+- type1
+max_flights: 1
+experiments:
+- name: f01_lab_e_exp_lqr_3l
+  scenario:
+    scenario: lab-e-exp-lqr-3l
+    description: 'E3/4 lqr_3l: 3-layer adaptive matrix, hover then figure-8. Flight
+      order: lab_e_exp_matrix (pid_3l),'
+    steps:
+    - takeoff:
+        z: 0.5
+        set:
+          exp_id: 6
+          g_traj_ff_shift_s: 0
+          g_land_xy_gate_cm: 10
+          g_xyc_delay_ticks: 12
+    - hold:
+        s: 3
+    - preset:
+        move_s: 12
+        hold_s: 1
+        name: figure8
+        f8_a_cm: 30
+    - hold:
+        s: 3
+    - land
+  capture: campaign
+  repeats: 1
+  log_plan:
+    rate_hz: 100
+    groups:
+    - velocity_loops
+    - camera_fusion
+    slow:
+    - nn4
+    - xy_ctrl
+    - mrac_3l
+    - mrac_theta
+    - ekf_states
+    - estimator_truth
+    - thrust_model
+    - optical_flow
+    - takeoff_gate
+    - mrac_shadow
+    slow_hz: 50
+abort: {}

@@ -1,0 +1,15 @@
+# Z: ground effect vs height, nominal PID only (mrac_injection=0). Hover 0.8 m, then z-only out-and-back legs that
+#   dwell 12 s at 0.3, 0.5 and 1.2 m. Fit: hover thrust ratio vs h, g(h) = (h0/h)^2 candidate for Z block 1, bit1.
+# Below 0.3 m, ground effect is seen only in the takeoff and slow-landing segments (DSL/fence gap: z >= 0.3).
+# Fly it: fly lab_z_ground_effect --once at >= 15.8 V resting. UNVERIFIED: never flown. Airborne ~75 s computed.
+campaign lab-z-ground-effect
+rate 100
+log velocity_loops camera_fusion thrust_model
+slow 25 mrac_3l ekf_states estimator_truth nn4 optical_flow mrac_theta takeoff_gate
+set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10
+takeoff 0.8 mrac_injection=0
+hold 12
+goto x=0 y=0 z=0.3 dwell_s=12
+goto x=0 y=0 z=0.5 dwell_s=12
+goto x=0 y=0 z=1.2 dwell_s=12
+land

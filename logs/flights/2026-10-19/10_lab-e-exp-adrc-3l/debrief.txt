@@ -1,0 +1,7 @@
+complete  air 0.0 s  1 flight(s)  114 live samples
+ABORTED L1 f01_lab_e_exp_adrc_3l: takeoff refused at set exp_id: exp adrc_3l: exp_active=4 (want 5) (the safety monitor landed it; the steps after that point never ran)
+HOVER  no samples
+TRAJ   no samples
+landing offset: no landing (never airborne)
+camera landing x +0 y +0 cm from the pad (0 cm, 1017-e2-lab-e-exp-adrc-3l, median of 15 fixes)
+outputs D:\projects\UAV_lab\FreeRTOS-adaptive-controller-codex\logs\campaigns\lab-e-exp-adrc-3l_20261019-212140  flight folder logs/flights/2026-10-19/10_lab-e-exp-adrc-3l

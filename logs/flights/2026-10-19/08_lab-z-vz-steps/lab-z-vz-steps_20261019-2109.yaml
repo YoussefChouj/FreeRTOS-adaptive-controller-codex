@@ -1,0 +1,68 @@
+# launch copy of logs/campaigns/fly/lab-z-vz-steps.yaml for pack type1; written 20261019-2109 by campaign_launch. Fly this file, never the template.
+campaign: lab-z-vz-steps
+objective: 'Z: vertical-speed steps outside ground effect, nominal PID only (mrac_injection=0).
+  From hover 1.0 m, z-only'
+controller: pid
+mode: fly
+packs:
+- type1
+max_flights: 1
+experiments:
+- name: f01_lab_z_vz_steps
+  scenario:
+    scenario: lab-z-vz-steps
+    description: 'Z: vertical-speed steps outside ground effect, nominal PID only
+      (mrac_injection=0). From hover 1.0 m, z-only'
+    steps:
+    - takeoff:
+        z: 1.0
+        mrac_injection: 0
+        set:
+          g_xy_ctrl_kind: 0
+          g_traj_ff_shift_s: 0
+          g_land_xy_gate_cm: 10
+    - hold:
+        s: 8
+    - goto:
+        x: 0
+        y: 0
+        z: 1.4
+        dwell_s: 3
+        v_cruise_mps: 0.2
+    - goto:
+        x: 0
+        y: 0
+        z: 0.6
+        dwell_s: 3
+        v_cruise_mps: 0.2
+    - goto:
+        x: 0
+        y: 0
+        z: 1.4
+        dwell_s: 3
+        v_cruise_mps: 0.4
+    - goto:
+        x: 0
+        y: 0
+        z: 0.6
+        dwell_s: 3
+        v_cruise_mps: 0.4
+    - land
+  capture: campaign
+  repeats: 1
+  log_plan:
+    rate_hz: 100
+    groups:
+    - velocity_loops
+    - camera_fusion
+    - thrust_model
+    slow:
+    - mrac_3l
+    - ekf_states
+    - estimator_truth
+    - nn4
+    - optical_flow
+    - mrac_theta
+    - takeoff_gate
+    slow_hz: 25
+abort: {}

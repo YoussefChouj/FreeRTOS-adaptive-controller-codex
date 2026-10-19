@@ -1,0 +1,18 @@
+# M: gate-memory premise, arm u100 (mrac_injection=1). A1 hover 28 s -> B Gerono a60 laps 2 (l1 settings) -> A3 hover 28 s.
+# Question: does today's MRAC forget A1 after flying B? Interleave u100, u0, u100, u0, u100, u0 (n=3 per arm).
+# Pre-registered rule (python -m ground_station.analysis.memory_premise): FORGETTING PRESENT if, in u100, A3 transient
+#   rms exceeds A1 steady rms by >= max(15%, 2 x spread) AND weight drift during B >= 10%, AND u0 does not show the
+#   same excess. Windows: A1 = last 10 s of the first hold, A3 = first 5 s of the last hold.
+# Airborne time: check with fly lab_m_memory_u100 --dry-run; target <= 100 s computed (120 s firmware cap).
+# Fly it: fly lab_m_memory_u100 --once at >= 15.8 V resting. UNVERIFIED: never flown.
+campaign lab-m-memory-u100
+rate 100
+log velocity_loops camera_fusion
+slow 50 nn4 xy_ctrl mrac_3l mrac_theta ekf_states estimator_truth thrust_model optical_flow takeoff_gate mrac_shadow
+set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10 lim_mode=1
+takeoff 0.8 mrac_injection=1
+hold 28
+set traj_p.move_s=18 traj_p.ret_s=3 traj_p.hold_s=1 traj_p.ramp_s=2 traj_p.yaw_follow=0
+preset figure8 f8_type=1 f8_a_cm=60 f8_laps=2
+hold 28
+land

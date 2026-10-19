@@ -1,0 +1,145 @@
+{
+ "flown": {
+  "mem1": {
+   "ok": false,
+   "rc": 0,
+   "why": "aborted L1: stale_telemetry",
+   "t": "15:17:46",
+   "status": "complete",
+   "folder": "logs/flights/2026-10-19/01_lab-m-memory-u100",
+   "camera": "mem1-lab-m-memory-u100"
+  },
+  "mem2": {
+   "ok": false,
+   "rc": 0,
+   "why": "aborted L1: position_error",
+   "t": "20:48:15",
+   "status": "complete",
+   "folder": "logs/flights/2026-10-19/02_lab-m-memory-u0",
+   "camera": "mem2-lab-m-memory-u0"
+  },
+  "mem3": {
+   "ok": false,
+   "rc": 0,
+   "why": "aborted L1: position_error",
+   "t": "20:51:35",
+   "status": "complete",
+   "folder": "logs/flights/2026-10-19/03_lab-m-memory-u100",
+   "camera": "mem3-lab-m-memory-u100"
+  },
+  "mem4": {
+   "ok": false,
+   "rc": 0,
+   "why": "aborted L1: position_error",
+   "t": "20:55:15",
+   "status": "complete",
+   "folder": "logs/flights/2026-10-19/04_lab-m-memory-u0",
+   "camera": "mem4-lab-m-memory-u0"
+  },
+  "mem5": {
+   "ok": false,
+   "rc": 0,
+   "why": "aborted L1: position_error",
+   "t": "20:58:18",
+   "status": "complete",
+   "folder": "logs/flights/2026-10-19/05_lab-m-memory-u100",
+   "camera": "mem5-lab-m-memory-u100"
+  },
+  "mem6": {
+   "ok": false,
+   "rc": 0,
+   "why": "aborted L1: position_error",
+   "t": "21:02:08",
+   "status": "complete",
+   "folder": "logs/flights/2026-10-19/06_lab-m-memory-u0",
+   "camera": "mem6-lab-m-memory-u0"
+  },
+  "z1": {
+   "ok": false,
+   "rc": 0,
+   "why": "aborted L1: stale_telemetry",
+   "t": "21:06:43",
+   "status": "complete",
+   "folder": "logs/flights/2026-10-19/07_lab-z-ground-effect",
+   "camera": "z1-lab-z-ground-effect"
+  },
+  "z2": {
+   "ok": false,
+   "rc": 0,
+   "why": "aborted L1: position_error",
+   "t": "21:10:32",
+   "status": "complete",
+   "folder": "logs/flights/2026-10-19/08_lab-z-vz-steps",
+   "camera": "z2-lab-z-vz-steps"
+  },
+  "1017-F1": {
+   "ok": false,
+   "rc": 1,
+   "why": "fly exited 1",
+   "t": "21:16:31",
+   "status": null,
+   "folder": null,
+   "camera": "1017-f1-lab-c-robust"
+  },
+  "1017-E1": {
+   "ok": false,
+   "rc": 0,
+   "why": "aborted L1: takeoff refused at set exp_id: exp 4_pid_2l_mrac_att: exp_active=255 (want 4)",
+   "t": "21:20:28",
+   "status": "complete",
+   "folder": "logs/flights/2026-10-19/09_lab-e-exp-matrix",
+   "camera": "1017-e1-lab-e-exp-matrix"
+  },
+  "1017-E2": {
+   "ok": false,
+   "rc": 0,
+   "why": "aborted L1: takeoff refused at set exp_id: exp 5_adrc_3l: exp_active=4 (want 5)",
+   "t": "21:21:51",
+   "status": "complete",
+   "folder": "logs/flights/2026-10-19/10_lab-e-exp-adrc-3l",
+   "camera": "1017-e2-lab-e-exp-adrc-3l"
+  },
+  "1017-E3": {
+   "ok": false,
+   "rc": 0,
+   "why": "aborted L1: takeoff refused at set exp_id: exp 6_lqr_3l: exp_active=5 (want 6)",
+   "t": "21:23:13",
+   "status": "complete",
+   "folder": "logs/flights/2026-10-19/11_lab-e-exp-lqr-3l",
+   "camera": "1017-e3-lab-e-exp-lqr-3l"
+  },
+  "1017-E4": {
+   "ok": false,
+   "rc": 0,
+   "why": "aborted L1: takeoff refused at set exp_id: exp 7_mpc_3l: exp_active=6 (want 7)",
+   "t": "21:25:48",
+   "status": "complete",
+   "folder": "logs/flights/2026-10-19/12_lab-e-exp-mpc-3l",
+   "camera": "1017-e4-lab-e-exp-mpc-3l"
+  }
+ },
+ "skipped": [],
+ "dry_ok": {
+  "mem1": "ffc991c838aaa5b24731c4a8fea0447ae69a911cf1892de47b5b3377a43159e0",
+  "mem2": "ff523cd9647417147ff20d6403220f2b53b3502d6e7facd6c4d9bbd1ebd008b9",
+  "mem3": "71b81d241ad05a0aa080c3914934effb1cf95bac27fc261c200c96d41b7b83fa",
+  "mem4": "ff523cd9647417147ff20d6403220f2b53b3502d6e7facd6c4d9bbd1ebd008b9",
+  "mem5": "71b81d241ad05a0aa080c3914934effb1cf95bac27fc261c200c96d41b7b83fa",
+  "mem6": "ff523cd9647417147ff20d6403220f2b53b3502d6e7facd6c4d9bbd1ebd008b9",
+  "z1": "ae5d8f8dd9469f4ef2991917dcdc2bf23344e87adf3e915ec0bc11892bba214e",
+  "z2": "489e0f0ef555ae1d1773997ac0114926af2651297bdf23aac62339fdcbe13397",
+  "1017-F1": "ee736d15e98881a2a75c25847f3de3a4c9442a32e9508ebfef2a338680aa5d23",
+  "1017-E1": "90f39825c0f9a30514dcdc522bb647208b4dcf91f5782b814b0917b0f40a7f63",
+  "1017-E2": "69648661735a7646fafece1066a596ef176f5fc1751c92f6aee10d1d1cad1d3b",
+  "1017-E3": "6ee5b5575ef473927ade7d63a328d355e239be8a0d74d9b5809267d1442d28b9",
+  "1017-E4": "3450702ecdb9aa693998fbba88d127a062652ff062357fe39f841aae2491da07",
+  "1017-H0": "2348835db2078d1248d22f3970b9fed7ee717a3b9cd3a205d97e9a40392e4c53",
+  "1017-H1": "8c8654cb06093043bcbba36dc419d2471da003f7dfb11d29fe2d81d20aa45e68",
+  "1017-H2": "fa025f92c75712c6f4dfc53b427206040f4e594ab65163aa3c92eadb70a94c78",
+  "1017-F2": "749429ba12366be4dd82195be81ad31be1d949d0c047f63fae86cd359b44e330",
+  "1017-F3": "9311244c6f1dbd6b0b9d2c391839556d67e5743811d5bd3710b6007e85907b0c",
+  "1017-F4": "8dce696f75cd73259602b8fb5cd0cde80de265ff1995949aacd3ff1a634d308b",
+  "1017-F5": "1b997f0345d11639c5dce2d71454be3d72a583213003bddbc99eb94f90531ca5",
+  "1017-F6": "a7ddf8d26e5e4f264cf79cb11117ad6413661d36309efbf7b372500079deba98"
+ }
+}

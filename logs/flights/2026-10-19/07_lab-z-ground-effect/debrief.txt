@@ -1,0 +1,7 @@
+complete  air 71.0 s  1 flight(s)  441 live samples
+ABORTED L1 f01_lab_z_ground_effect: stale_telemetry (the safety monitor landed it; the steps after that point never ran)
+HOVER  x/y/z error cm  rms 4/5/3  max 15/15/10  (48 s)
+TRAJ   x/y/z error cm  rms 3/4/8  max 11/9/24  (36 s)
+landing offset x +14 y -10 cm from the takeoff point (17 cm)
+camera landing x +13 y -11 cm from the pad (17 cm, z1-lab-z-ground-effect, median of 15 fixes)
+outputs D:\projects\UAV_lab\FreeRTOS-adaptive-controller-codex\logs\campaigns\lab-z-ground-effect_20261019-210626  flight folder logs/flights/2026-10-19/07_lab-z-ground-effect

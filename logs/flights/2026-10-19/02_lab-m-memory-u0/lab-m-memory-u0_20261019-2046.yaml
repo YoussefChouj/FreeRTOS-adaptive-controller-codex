@@ -1,0 +1,59 @@
+# launch copy of logs/campaigns/fly/lab-m-memory-u0.yaml for pack type1; written 20261019-2046 by campaign_launch. Fly this file, never the template.
+campaign: lab-m-memory-u0
+objective: 'M: gate-memory premise, arm u0 (mrac_injection=0). A1 hover 28 s -> B
+  Gerono a60 laps 2 (l1 settings) -> A3 hover 28 s.'
+controller: pid
+mode: fly
+packs:
+- type1
+max_flights: 1
+experiments:
+- name: f01_lab_m_memory_u0
+  scenario:
+    scenario: lab-m-memory-u0
+    description: 'M: gate-memory premise, arm u0 (mrac_injection=0). A1 hover 28 s
+      -> B Gerono a60 laps 2 (l1 settings) -> A3 hover 28 s.'
+    steps:
+    - takeoff:
+        z: 0.8
+        mrac_injection: 0
+        set:
+          g_xy_ctrl_kind: 0
+          g_traj_ff_shift_s: 0
+          g_land_xy_gate_cm: 10
+          lim_mode: 1
+    - hold:
+        s: 28
+    - preset:
+        move_s: 18
+        ret_s: 3
+        hold_s: 1
+        ramp_s: 2
+        yaw_follow: 0
+        name: figure8
+        f8_type: 1
+        f8_a_cm: 60
+        f8_laps: 2
+    - hold:
+        s: 28
+    - land
+  capture: campaign
+  repeats: 1
+  log_plan:
+    rate_hz: 100
+    groups:
+    - velocity_loops
+    - camera_fusion
+    slow:
+    - nn4
+    - xy_ctrl
+    - mrac_3l
+    - mrac_theta
+    - ekf_states
+    - estimator_truth
+    - thrust_model
+    - optical_flow
+    - takeoff_gate
+    - mrac_shadow
+    slow_hz: 50
+abort: {}
