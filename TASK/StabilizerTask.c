@@ -1374,6 +1374,18 @@ static uint8_t Keil_OnGround(FlightState_t state)
 	                 (flight_phase != FLIGHT_PHASE_LANDING));
 }
 
+/* Keil_OnGround, or RC-armed on the pad before the climb: GROUND_IDLE, no WFB primitive or TWC policy running
+ * and the throttle under the idle gate, so the motors sit at Set_IDLE_Motors and no controller drives them.
+ * Gates the exp row and the kp/vp/lim rows it writes. Lab 10-19: campaign_fly waits for the RC arm before it
+ * sets exp_id, so with Keil_OnGround alone exp_active trailed one flight (255 -> 4 -> 5 -> 6). */
+static uint8_t Keil_PreTakeoff(FlightState_t state)
+{
+	if (Keil_OnGround(state)) return 1U;
+	return (uint8_t)((state == FLIGHT_STATE_ARMED) && (flight_phase == FLIGHT_PHASE_GROUND_IDLE) &&
+	                 (g_wfb_status.prim_state == (float)WFB_PRIM_IDLE) && !TWC.execute &&
+	                 (RCInput_Get(RC_AXIS_THR) < THR_IDLE_MAX));
+}
+
 static void Keil_PresetPoll(FlightState_t state)
 {
 	uint8_t k, id = kp_id;
@@ -1382,7 +1394,7 @@ static void Keil_PresetPoll(FlightState_t state)
 		s_zboot_ok = 1U;
 	}
 	if (!kp_go && id == kp_active) return;
-	if (!Keil_OnGround(state)) return;
+	if (!Keil_PreTakeoff(state)) return;
 	kp_go = 0U;
 	if (id >= (uint8_t)(sizeof(s_kp) / sizeof(s_kp[0]))) { kp_id = kp_active; return; }
 	g_ekf_of1_on = s_kp[id].of1;
@@ -1421,7 +1433,7 @@ static void Limit_ModePoll(FlightState_t state)
 {
 	uint8_t id = lim_mode;
 	if (id == lim_active) return;
-	if (!Keil_OnGround(state)) return;
+	if (!Keil_PreTakeoff(state)) return;
 	if (id >= (uint8_t)(sizeof(s_lim) / sizeof(s_lim[0]))) { lim_mode = (lim_active < 3U) ? lim_active : 0U; return; }
 	gs_max_pitch_deg = s_lim[id].tilt_deg;
 	gs_max_roll_deg = s_lim[id].tilt_deg;
@@ -1557,7 +1569,7 @@ static void Keil_VariantPoll(FlightState_t state)
 {
 	uint8_t ok = 1U, id = vp_id;
 	const VariantPreset_t *r;
-	if (!Keil_OnGround(state) && mrac_flags.output_injection_on) return;
+	if (!Keil_PreTakeoff(state) && mrac_flags.output_injection_on) return;
 	if (vp_user_go) { vp_user_go = 0U; vp_id = id = VP_USER_ID; s_vp_last = 0xFFU; }
 	if (id == s_vp_last) return;
 	s_vp_last = id;
@@ -1653,7 +1665,7 @@ static void Exp_Poll(FlightState_t state)
 	knobs.lim_mode = &lim_mode;
 	knobs.mdec = &g_imu_mahony_yaw_decouple;
 
-	on_ground = Keil_OnGround(state);
+	on_ground = Keil_PreTakeoff(state);
 	res = Exp_Step(exp_id, &s_exp_last, exp_active, on_ground,
 	               s_exp, (uint8_t)(sizeof(s_exp) / sizeof(s_exp[0])),
 	               &knobs, &xyrm);
