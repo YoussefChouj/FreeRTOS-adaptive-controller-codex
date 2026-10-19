@@ -15,6 +15,8 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
 
+from ground_station.livewatch.symbols import firmware_elf
+
 from .instance_guard import INSTANCE_HEADER, INSTANCE_ID, ExclusiveThreadingHTTPServer
 from .agent import (
     AgentDisabledError,
@@ -588,7 +590,7 @@ def _service_symbol_resolver(service):
         return resolver, None
 
     try:
-        elf_path = Path(__file__).parents[2] / "OBJ" / "JX_FLY.axf"
+        elf_path = firmware_elf()
         if not elf_path.exists():
             return None, f"firmware ELF not found at {elf_path}"
         from ground_station.livewatch.symbols import shared_resolver
@@ -807,7 +809,7 @@ def _build_diagnostics_bundle(service) -> dict:
         "unavailable": [],
     }
     try:
-        elf_path = Path(__file__).parents[2] / "OBJ" / "JX_FLY.axf"
+        elf_path = firmware_elf()
         if elf_path.exists():
             elf_info["path"] = str(elf_path)
             elf_info["size_bytes"] = elf_path.stat().st_size

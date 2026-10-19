@@ -12,6 +12,7 @@ automatically - no hand-maintained tables to drift.
 from __future__ import annotations
 
 import io
+import os
 import struct
 import threading
 from dataclasses import dataclass
@@ -53,13 +54,26 @@ class Symbol:
 
 class _Type:
     """Minimal resolved-type view: total size, and how to interpret it."""
-    __slots__ = ("die", "size", "fmt", "kind")
+    __slots__ = ("die", "size", "fmt", "kind", "dim")
 
-    def __init__(self, die, size, fmt, kind):
+    def __init__(self, die, size, fmt, kind, dim=0):
         self.die = die      # underlying (typedef/qualifier-stripped) DIE, or None
         self.size = size    # total bytes
         self.fmt = fmt      # scalar format char, else None
         self.kind = kind    # 'scalar' | 'struct' | 'array' | 'pointer' | 'opaque'
+        self.dim = dim      # arrays: the subrange this view starts at (clang puts all of int[3][4] on one DIE)
+
+
+FIRMWARE_ELF_ENV = "LAB_FIRMWARE_ELF"
+
+
+def firmware_elf() -> Path:
+    """The firmware ELF the ground station names variables from: OBJ/JX_FLY.axf (Keil output), or $LAB_FIRMWARE_ELF.
+
+    The override is for hosts without Keil, where the committed axf can predate the sources: the soak points it at a
+    symbol image built from them (ground_station/lab/symbol_image.py). Every process of one lab run must agree on it,
+    so it is an environment variable that children inherit."""
+    return Path(os.environ.get(FIRMWARE_ELF_ENV) or Path(__file__).resolve().parents[2] / "OBJ" / "JX_FLY.axf")
 
 
 def firmware_key(elf_path: str | Path) -> tuple[int, int] | None:
@@ -154,7 +168,7 @@ class SymbolResolver:
                     out.append(m.attributes["DW_AT_name"].value.decode())
             return out
         if typ.kind == "array":
-            n = _array_count(typ.die)
+            n = _array_count(typ.die, typ.dim)
             return [f"[{i}]" for i in range(n)] if n is not None else []
         return []
 
@@ -243,7 +257,12 @@ class SymbolResolver:
         else:  # [index]
             if typ.kind != "array":
                 raise TypeError(f"{base}: '[{step}]' but current type is {typ.kind}")
-            elem = self._resolve_type(typ.die.get_DIE_from_attribute("DW_AT_type"))
+            counts = _subrange_counts(typ.die)
+            if typ.dim + 1 < len(counts):       # int[3][4] on one DIE: [i] gives the int[4] row
+                rows = counts[typ.dim] or 1
+                elem = _Type(typ.die, typ.size // rows, None, "array", typ.dim + 1)
+            else:
+                elem = self._resolve_type(typ.die.get_DIE_from_attribute("DW_AT_type"))
             return addr + step * elem.size, elem
 
 
@@ -317,27 +336,31 @@ def _find_member(struct_die, name):
     return None
 
 
-def _array_count(array_die):
+def _subrange_counts(array_die) -> list:
+    """Element count of each subrange, outermost first; None where the bound is not a constant."""
+    counts = []
     for c in array_die.iter_children():
         if c.tag == "DW_TAG_subrange_type":
+            n = None
             if "DW_AT_count" in c.attributes:
-                return c.attributes["DW_AT_count"].value
-            if "DW_AT_upper_bound" in c.attributes:
+                n = c.attributes["DW_AT_count"].value
+            elif "DW_AT_upper_bound" in c.attributes:
                 ub = c.attributes["DW_AT_upper_bound"].value
                 if isinstance(ub, int):
-                    return ub + 1
-    return None
+                    n = ub + 1
+            counts.append(n)
+    return counts
+
+
+def _array_count(array_die, dim=0):
+    counts = _subrange_counts(array_die)
+    return counts[dim] if dim < len(counts) else None
 
 
 def _array_size(array_die, resolver: SymbolResolver) -> int:
     elem = resolver._resolve_type(array_die.get_DIE_from_attribute("DW_AT_type"))
     total = elem.size
-    for c in array_die.iter_children():
-        if c.tag == "DW_TAG_subrange_type":
-            if "DW_AT_count" in c.attributes:
-                total *= c.attributes["DW_AT_count"].value
-            elif "DW_AT_upper_bound" in c.attributes:
-                ub = c.attributes["DW_AT_upper_bound"].value
-                if isinstance(ub, int):
-                    total *= ub + 1
+    for n in _subrange_counts(array_die):
+        if isinstance(n, int):
+            total *= n
     return total

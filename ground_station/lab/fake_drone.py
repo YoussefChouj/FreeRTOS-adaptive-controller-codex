@@ -18,6 +18,7 @@ Events (start, subscribe, rejects, control words, reboot, stop) go to the pipeli
 from __future__ import annotations
 
 import argparse
+import os
 import select
 import socket
 import struct
@@ -78,6 +79,10 @@ class FakeUdpDrone:
             resolver = shared_resolver(vcore.ELF)
         self.resolver = resolver
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Linux refuses 127.0.0.2:14550 next to the bridge's 0.0.0.0:14550 unless both set SO_REUSEADDR (the bridge
+        # does). Windows allows the pair as is, and there SO_REUSEADDR would let a socket take the port, so not there.
+        if os.name != "nt":
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind((host, port))
         self.ctl = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.ctl.bind((host, ctl_port))

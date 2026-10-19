@@ -22,9 +22,10 @@ from typing import Any, Callable
 from ground_station.livewatch.campaign_capture import POSITION_AXES
 from ground_station.service.campaign_live import VBAT_SYMS, check_live_ready
 from ground_station.service.instance_guard import INSTANCE_ID
+from ground_station.livewatch.symbols import firmware_elf
 
 ROOT = Path(__file__).resolve().parents[2]
-ELF_PATH = ROOT / "OBJ" / "JX_FLY.axf"
+ELF_PATH = firmware_elf()   # OBJ/JX_FLY.axf, or $LAB_FIRMWARE_ELF: the image the streams are named from
 CUSTODY_DIR = ".flashtool-cache"  # flashtool.artifact_custody: present = a build was not flashed
 
 FRESH_S = 2.0          # PROPOSED: older than this is "not streaming" (core.ARM_STALE_NS is also 2 s)

@@ -88,6 +88,7 @@ from .boot_default_layout import (
 # /subscribe/preview. FRAME_OVERHEAD mirrors SUBSCRIBE_STREAM_FRAME_OVERHEAD
 # in API/subscribe.h; the payload is the sum of resolved DWARF symbol sizes.
 from ground_station.livewatch.stream import FRAME_OVERHEAD  # noqa: E402
+from ground_station.livewatch.symbols import firmware_elf  # noqa: E402
 
 from ground_station.platform.firmware_contract import SUBSCRIBE_DATA_FRAMES, SUBSCRIBE_MAX_SLOTS
 from ground_station.platform.transactions import Command as TransactionCommand
@@ -178,7 +179,7 @@ def _rpm_scalar_keys(rpm_list: list) -> dict:
     return {f"motor.rpm_{i}": int(rpm_list[i]) for i in range(len(rpm_list))}
 
 
-_AXF_PATH = Path(__file__).parents[2] / "OBJ" / "JX_FLY.axf"
+_AXF_PATH = firmware_elf()     # OBJ/JX_FLY.axf, or $LAB_FIRMWARE_ELF
 
 
 def _axf_key() -> Optional[tuple]:
@@ -897,7 +898,7 @@ class WifiBridge:
             from ground_station.livewatch.stream import build_stream_request, StreamRange
 
             # Resolve DWARF addresses for the chosen slot-0 variables
-            elf_path = Path(__file__).parents[2] / "OBJ" / "JX_FLY.axf"
+            elf_path = _AXF_PATH
             if not elf_path.exists():
                 print(f"[wifi_bridge] Warning: {elf_path} not found, skipping {label} schema request",
                       file=sys.stderr, flush=True)
@@ -1130,7 +1131,7 @@ class WifiBridge:
     def _ensure_preset_resolver(self) -> None:
         """Point _preset_resolver at the process-wide resolver, reloaded when the axf changes (WP-22)."""
         from ground_station.livewatch.symbols import shared_resolver
-        elf_path = Path(__file__).parents[2] / "OBJ" / "JX_FLY.axf"
+        elf_path = _AXF_PATH
         if not elf_path.exists():
             return
         self._preset_resolver = shared_resolver(elf_path)
