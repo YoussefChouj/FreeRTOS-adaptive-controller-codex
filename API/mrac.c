@@ -603,7 +603,7 @@ static void MRAC_ApplyMask(MRAC_Axis_e axis, float *phi)
     uint64_t m = MRAC_Mask48(mrac_vp12.mask_act[axis]);
     int k;
     for (k = 0; k < MRAC_N_EXT; k++) {
-        if (!(m & (1ULL << k))) phi[k] = 0.0f;
+        if (!(m & ((uint64_t)1U << (unsigned)k))) phi[k] = 0.0f;
     }
 }
 
@@ -622,7 +622,7 @@ static void MRAC_Vp12Step(uint8_t hold, uint8_t arm_edge)
         req = MRAC_Mask48(mrac_vp12.mask[a]);
         off = MRAC_Mask48(mrac_vp12.mask_act[a]) & ~req;
         for (k = 0; k < MRAC_N_EXT; k++) {
-            if (off & (1ULL << k)) {
+            if (off & ((uint64_t)1U << (unsigned)k)) {
                 st[a]->Theta[MRAC_N_STRUCT + k] = 0.0f;
                 st[a]->Whatf[MRAC_N_STRUCT + k] = 0.0f;
             }
