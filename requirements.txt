@@ -3,11 +3,12 @@
 # ground_station/lab/tests/test_requirements.py fails when a lab command imports a package missing here.
 # Not listed: torch, only for NN training (ground_station/analysis/nn_io.py), CPU wheel:
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu
+# opencv-python < 5: OpenCV 5.0 dropped cv2.undistortPointsIter (video_truth.pixel_to_plane).
 jsonschema
 markdown
 matplotlib
 numpy
-opencv-python
+opencv-python<5
 pandas
 psutil
 pyelftools

@@ -3,6 +3,7 @@
 2026-10-19: campaign_fly needed psutil to start or check 8081 and no file listed it; a fresh PC failed at the first fly.
 """
 import ast
+import re
 import sys
 from pathlib import Path
 
@@ -59,7 +60,8 @@ def third_party() -> dict[str, str]:
 
 
 def test_lab_imports_are_in_requirements():
-    listed = {ln.strip().lower() for ln in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
+    listed = {re.split(r"[<>=!~;\[ ]", ln.strip(), maxsplit=1)[0].lower()   # name only: "opencv-python<5"
+              for ln in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
               if ln.strip() and not ln.startswith("#")}
     used = third_party()
     assert "psutil" in used and "numpy" in used  # the walk reaches campaign_fly and the analysis
