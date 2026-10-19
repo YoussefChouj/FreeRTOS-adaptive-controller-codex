@@ -240,3 +240,52 @@ def test_report_counts_the_block_frames_once():
     days = _days(over=1)
     text = soak.report(days, _run(days, over=3), soak.checks(days, _run(days, over=3)))
     assert "BLOCK: 3 frames over 200 ms; see lag_seconds.csv in the run folder." in text
+
+
+def test_report_lists_the_object_kinds_that_grew():
+    days = _days()
+    days[0]["end_health"]["top_types"] = {"dict": 1000, "tuple": 500, "Frame": 10}
+    days[2]["end_health"]["top_types"] = {"dict": 1300, "tuple": 400, "Frame": 60, "Event": 5}
+    assert soak.type_growth(days) == [("dict", 1000, 1300), ("Frame", 10, 60), ("Event", 0, 5)]
+    text = soak.report(days, _run(days), soak.checks(days, _run(days)))
+    assert "| dict | 1000 | 1300 | +300 |" in text and "tuple" not in text
+    assert soak.type_growth(_days()) == []
+
+
+def test_block_seconds_line_up_with_machine_stalls(tmp_path):
+    lag = tmp_path / "lag_seconds.csv"
+    lag.write_text("unix_s,max_ms,flight\n100,4.0,d1 mem1\n101,338.5,d1 mem2\n150,250.0,\n", encoding="utf-8")
+    stalls = tmp_path / "machine_stalls.csv"
+    stalls.write_text("unix_s,late_ms,steal_ms\n100.950,312,40\n101.200,60,0\n", encoding="utf-8")
+    blocks = soak.block_seconds(lag, stalls)
+    assert blocks == [{"s": 101, "max_ms": 338.5, "flight": "d1 mem2", "machine_ms": 312.0, "steal_ms": "40"},
+                      {"s": 150, "max_ms": 250.0, "flight": "", "machine_ms": None, "steal_ms": None}]
+    assert soak.block_seconds(lag, tmp_path / "missing.csv")[0]["machine_ms"] is None
+    days = _days(over=1)
+    run = dict(_run(days, over=2), blocks=blocks)
+    text = soak.report(days, run, soak.checks(days, run))
+    assert "1 of 2 line up with a machine stall" in text and "| 101 | 338.5 | d1 mem2 | 312 | 40 |" in text
+    assert "| 150 | 250 |  |  |  |" in text
+    assert "ingest lag <= 200 ms in every flight" in {n for n, ok, _ in soak.checks(days, run) if not ok}
+
+
+def test_stallmon_logs_only_late_wakeups(tmp_path, monkeypatch):
+    from ground_station.lab import stallmon
+    clock = iter([0.0, 0.010, 0.020, 0.350, 0.360])
+
+    def sleep(_):
+        if not ticks:
+            raise KeyboardInterrupt
+        ticks.pop()
+    ticks = [1, 1, 1, 1]
+    monkeypatch.setattr(stallmon.time, "perf_counter", lambda: next(clock))
+    monkeypatch.setattr(stallmon.time, "sleep", sleep)
+    monkeypatch.setattr(stallmon, "steal_ms", iter([0, 0, 0, 30, 30]).__next__)
+    out = tmp_path / "s.csv"
+    try:
+        stallmon.main([str(out)])
+    except KeyboardInterrupt:
+        pass
+    lines = out.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "unix_s,late_ms,steal_ms" and len(lines) == 2
+    assert lines[1].split(",")[1:] == ["320", "30"]

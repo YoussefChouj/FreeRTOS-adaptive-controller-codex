@@ -385,8 +385,8 @@ def checks(days: list[dict], run: dict) -> list[tuple[str, bool, str]]:
     out.append(("mid-day pack swap, then the day goes on", bool(swaps) and all(o for o, _ in swaps),
                 "; ".join(t for _, t in swaps)))
     out.append((f"{len(days)} days back to back on one service", all(d["day_done"] for d in days)
-                and not run["instance_changed"], f"days done {sum(d['day_done'] for d in days)} of {len(days)}, "
-                                                 f"service restarted: {run['instance_changed']}"))
+                and not run["instance_changed"], (f"days done {sum(d['day_done'] for d in days)} of {len(days)}, "
+                                                  f"service restarted: {run['instance_changed']}")))
     hs = [f.health for f in flights if f.health]
     q_bad = [h for h in hs if h.get("ingest_queue") is None or h["ingest_queue"] > QUEUE_MAX]
     drops = max((h.get("ingest_dropped") or 0 for h in hs), default=0)
@@ -411,12 +411,43 @@ def _n(v, fmt="{:g}"):
     return "-" if v is None else fmt.format(v)
 
 
+def block_seconds(lag_csv: Path, stalls_csv: Path) -> list[dict]:
+    """Every second in lag_seconds.csv over 200 ms, with the longest machine stall (stallmon) that ended in it or
+    the second before: a frame held up by a pause is published just after the pause ends."""
+    def rows(p: Path) -> list[list[str]]:
+        try:
+            return [ln.split(",") for ln in p.read_text(encoding="utf-8").splitlines()[1:] if ln.strip()]
+        except OSError:
+            return []
+    stalls = [(float(r[0]), float(r[1]), r[2] if len(r) > 2 else "") for r in rows(stalls_csv)]
+    out = []
+    for r in rows(lag_csv):
+        sec, ms = int(r[0]), float(r[1])
+        if ms <= lh.LIMIT_MS:
+            continue
+        near = [st for st in stalls if sec - 1 <= int(st[0]) <= sec]
+        top = max(near, key=lambda st: st[1]) if near else None
+        out.append({"s": sec, "max_ms": ms, "flight": r[2] if len(r) > 2 else "",
+                    "machine_ms": top[1] if top else None, "steal_ms": top[2] if top else None})
+    return out
+
+
+def type_growth(days: list[dict], n: int = 8) -> list[tuple[str, int, int]]:
+    """The n object types whose count grew most between the first and the last day's end ([] for one day)."""
+    tops = [d["end_health"].get("top_types") for d in days if d.get("end_health")]
+    if len(tops) < 2 or not tops[0] or not tops[-1]:
+        return []
+    a, b = tops[0], tops[-1]
+    rows = [(t, int(a.get(t, 0)), int(b.get(t, 0))) for t in set(a) | set(b)]
+    return sorted((r for r in rows if r[2] > r[1]), key=lambda r: r[1] - r[2])[:n]
+
+
 def report(days: list[dict], run: dict, result: list[tuple[str, bool, str]]) -> str:
     flights = [f for d in days for f in d["flights"]]
     lines = [f"# Soak {run.get('stamp', '')}", "",
              f"Tree {run.get('tree', '')}, service port {run.get('port', '')}, commit {run.get('commit', '')}.", "",
-             "| day | flight | fly | swap | debrief | done | abort | air s | frames | p50 ms | p99 ms | max ms | "
-             ">200 ms | rss MB | queue | dropped | telem rows | raw rows |",
+             ("| day | flight | fly | swap | debrief | done | abort | air s | frames | p50 ms | p99 ms | max ms | "
+              ">200 ms | rss MB | queue | dropped | telem rows | raw rows |"),
              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for f in flights:
         lag, h = f.lag or {}, f.health
@@ -428,9 +459,26 @@ def report(days: list[dict], run: dict, result: list[tuple[str, bool, str]]) -> 
             _n(lag.get("max_ms")), _n(lag.get("over_200ms")), _n(h.get("rss_mb")), _n(h.get("ingest_queue")),
             _n(h.get("ingest_dropped")), _n(rows.get("telemetry")), _n(rows.get("raw_frames")) + " |"]))
     lt = run["lag_total"]
-    lines += ["", f"Whole run: {lt['frames']} frames, p50 {_n(lt['p50_ms'])} ms, p99 {_n(lt['p99_ms'])} ms, "
-                  f"max {_n(lt['max_ms'])} ms, {lt['over_200ms']} over 200 ms.", "", "## Checks", ""]
+    lines += ["", (f"Whole run: {lt['frames']} frames, p50 {_n(lt['p50_ms'])} ms, p99 {_n(lt['p99_ms'])} ms, "
+                   f"max {_n(lt['max_ms'])} ms, {lt['over_200ms']} over 200 ms."), "", "## Checks", ""]
     lines += [f"- {'PASS' if ok else 'FAIL'} {name}: {detail}" for name, ok, detail in result]
+    blocks = run.get("blocks") or []
+    if blocks:
+        paused = sum(1 for b in blocks if b["machine_ms"] is not None)
+        lines += ["", "## Seconds over 200 ms", "",
+                  (f"{paused} of {len(blocks)} line up with a machine stall (machine_stalls.csv: a separate process "
+                   "woke late at the same time, so the whole machine paused)."), "",
+                  "| unix s | max ms | flight | machine stall ms | steal ms |", "|---|---|---|---|---|"]
+        for b in blocks:
+            machine = "" if b["machine_ms"] is None else f"{b['machine_ms']:g}"
+            lines.append(f"| {b['s']} | {b['max_ms']:g} | {b['flight']} | {machine} | {b['steal_ms'] or ''} |")
+    growth = type_growth(days)
+    if growth:
+        lines += ["", "## Memory", "",
+                  (f"Object kinds that grew most from the end of day 1 to the end of day {len(days)} "
+                   "(memory_d<n>.json in the run folder):"), "",
+                  "| type | day 1 | last day | growth |", "|---|---|---|---|"]
+        lines += [f"| {t} | {a} | {b} | {b - a:+d} |" for t, a, b in growth]
     notes = [f"d{f.day} {f.id}: {n}" for f in flights for n in f.notes]
     if notes:
         lines += ["", "## Notes", ""] + [f"- {n}" for n in notes]
@@ -463,7 +511,7 @@ class Soak:
             fh.write(line + "\n")
 
     def start(self, name: str, args: list[str]) -> subprocess.Popen:
-        fh = open(self.out / f"{name}.log", "w", encoding="utf-8")
+        fh = open(self.out / f"{name}.log", "w", encoding="utf-8")   # noqa: SIM115 - the child writes it until stop_all
         p = subprocess.Popen([sys.executable, "-u", *args], cwd=self.tree, env=self.env, stdout=fh,
                              stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
         self.procs.append(p)
@@ -498,6 +546,8 @@ class Soak:
         self.env = dict(os.environ, LAB_EVENTS_DIR=str(self.events), LAB_FIRMWARE_ELF=str(Path(elf).resolve()),
                         PYTHONUNBUFFERED="1")
         self.port = spare_port()
+        # first, so it watches the whole run: a stall it logs is the machine pausing, not a holder in the service
+        self.start("stallmon", ["-m", "ground_station.lab.stallmon", str(self.out / "machine_stalls.csv")])
         self.start("fake_drone", ["-m", "ground_station.lab.fake_drone", "--silent-s", f"{SILENT_S:g}",
                                   "--vbat", f"{FRESH_V:g}"])
         self.service = self.start("service", ["-m", "ground_station.service", "--port", str(self.port),
@@ -526,7 +576,7 @@ class Soak:
                 "ingest_queue": link.get("ingest_queue"), "ingest_dropped": link.get("ingest_dropped"),
                 "store": get_json(self.port, "/health/store")}
 
-    def save_seconds(self, flight: "Flight | None" = None) -> None:
+    def save_seconds(self, flight: Flight | None = None) -> None:
         """Append the per-second ingest-lag maxima since the last save to lag_seconds.csv (unix_s, max_ms, flight;
         flight is empty for ground time). The service keeps an hour of them, so this runs after every flight."""
         lag = get_json(self.port, f"/health/ingest_lag?since_s={self.sec_mark + 1}")
@@ -640,6 +690,12 @@ class Soak:
             f.debrief_status = (db.get(f.folder) or {}).get("status") if f.folder else None
             f.metrics = read_metrics(f.outputs)
         h = self.health()
+        try:            # object counts by type, so a growing RSS can be told apart from a growing object kind
+            mem = get_json(self.port, "/api/debug/memory", timeout=60.0)
+            (self.out / f"memory_d{n}.json").write_text(json.dumps(mem, indent=1), encoding="utf-8")
+            h["top_types"] = mem.get("top_types") or {}
+        except (OSError, ValueError) as e:
+            self.log(f"day {n}: /api/debug/memory failed: {e}")
         self.log(f"day {n} {'done' if drv.day_done else 'NOT done'}: labday rc {labday.returncode}, "
                  f"{len(drv.flights)} flights, {len(drv.failures)} failures, rss {h['rss_mb']} MB, "
                  f"store {h['store']['rows']}")
@@ -667,7 +723,8 @@ class Soak:
                    "stale_mentions": stale_mentions(self.events, self.out / "service.log"),
                    "instance_changed": (h["started_at"], self.service.pid) != self.instance
                    or self.service.poll() is not None,
-                   "rss_end": [d["end_health"]["rss_mb"] for d in days]}
+                   "rss_end": [d["end_health"]["rss_mb"] for d in days],
+                   "blocks": block_seconds(self.out / "lag_seconds.csv", self.out / "machine_stalls.csv")}
             result = checks(days, run)
             text = report(days, run, result)
             (self.out / "report.md").write_text(text, encoding="utf-8")
@@ -679,9 +736,10 @@ class Soak:
 
 
 def _commit() -> str:
-    r = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True, text=True)
+    r = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True, text=True,
+                       check=False)
     dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT, capture_output=True,
-                           text=True).stdout.strip()
+                           text=True, check=False).stdout.strip()
     return r.stdout.strip() + (" + local changes" if dirty else "")
 
 
