@@ -15,7 +15,7 @@ import math
 
 @dataclass(frozen=True)
 class AbortLimits:                      # PROPOSED = not yet validated on the bench or in flight
-    pos_err_m: float = 0.25             # PROPOSED: 3-D distance between position and reference
+    pos_err_m: float = 0.50             # operator OK 10-19: 3-D distance between position and reference (figure-8 lag 0.365 m tripped 0.25)
     pos_err_takeoff_m: float = 0.40     # operator OK 10-18: takeoff only (mem1 drifted 0.31 m sideways on lift-off)
     pos_err_hold_s: float = 0.3         # PROPOSED
     tilt_deg: float = 35.0              # PROPOSED: |roll| or |pitch|

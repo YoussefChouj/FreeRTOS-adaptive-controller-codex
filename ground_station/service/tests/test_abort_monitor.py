@@ -111,15 +111,15 @@ def test_tilt() -> None:
 
 
 def test_position_error() -> None:
-    # 3. Position error: 0.30 m off for the hold time -> level 1 "position_error";
+    # 3. Position error: 0.55 m off (> pos_err_m 0.50) for the hold time -> level 1 "position_error";
     # with ref_m None the same positions never trip; an error pulse shorter than the hold does not trip.
     mon = AbortMonitor()
     mon.begin_flight()
-    # 0.30 m off: pos (0.30, 0, 0.5) vs ref (0, 0, 0.5)
+    # 0.55 m off: pos (0.55, 0, 0.5) vs ref (0, 0, 0.5)
     for i in range(15):  # 0.00 to 0.28 (< 0.30 s hold)
         t = round(i * 0.02, 4)
-        assert mon.step(mk(t, pos_m=(0.30, 0.0, 0.5))) == NO_ABORT
-    dec = mon.step(mk(0.30, pos_m=(0.30, 0.0, 0.5)))
+        assert mon.step(mk(t, pos_m=(0.55, 0.0, 0.5))) == NO_ABORT
+    dec = mon.step(mk(0.30, pos_m=(0.55, 0.0, 0.5)))
     assert dec == AbortDecision(1, "position_error")
     assert mon.decision == AbortDecision(1, "position_error")
 
@@ -128,7 +128,7 @@ def test_position_error() -> None:
     mon_none.begin_flight()
     for i in range(30):
         t = round(i * 0.02, 4)
-        assert mon_none.step(mk(t, pos_m=(0.30, 0.0, 0.5), ref_m=None)) == NO_ABORT
+        assert mon_none.step(mk(t, pos_m=(0.55, 0.0, 0.5), ref_m=None)) == NO_ABORT
     assert mon_none.decision == NO_ABORT
 
     # Pulse shorter than hold does not trip
@@ -136,13 +136,19 @@ def test_position_error() -> None:
     mon_pulse.begin_flight()
     for i in range(10):  # 0.00 to 0.18 (< 0.30 s hold)
         t = round(i * 0.02, 4)
-        assert mon_pulse.step(mk(t, pos_m=(0.30, 0.0, 0.5))) == NO_ABORT
+        assert mon_pulse.step(mk(t, pos_m=(0.55, 0.0, 0.5))) == NO_ABORT
     # Error clears
     assert mon_pulse.step(mk(0.20, pos_m=(0.0, 0.0, 0.5))) == NO_ABORT
     for i in range(10):
         t = round(0.22 + i * 0.02, 4)
-        assert mon_pulse.step(mk(t, pos_m=(0.30, 0.0, 0.5))) == NO_ABORT
+        assert mon_pulse.step(mk(t, pos_m=(0.55, 0.0, 0.5))) == NO_ABORT
     assert mon_pulse.decision == NO_ABORT
+
+    # The 10-19 figure-8 lag (0.365 m) held for a full second stays under pos_err_m
+    mon_lag = AbortMonitor()
+    mon_lag.begin_flight()
+    for i in range(50):
+        assert mon_lag.step(mk(round(i * 0.02, 4), pos_m=(0.365, 0.0, 0.5))) == NO_ABORT
 
 
 @pytest.mark.parametrize("axis", [0, 1, 2])
