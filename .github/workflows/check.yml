@@ -1,4 +1,4 @@
-# The firmware gate (tools/check.sh) on every push and pull request. Not run yet: the repo has no remote CI history.
+# The firmware gate (tools/check.sh) on every push and pull request. No Keil here: stack SKIPs by name (exit 77).
 name: check
 on: [push, pull_request]
 jobs:
@@ -6,6 +6,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # run_mrac_equiv.py reads its --base tree from git history
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -13,6 +15,7 @@ jobs:
         # gcc-multilib: the subscribe harness builds with -m32 (the firmware assumes 32-bit pointers)
         run: sudo apt-get update && sudo apt-get install -y gcc gcc-multilib clang-tidy gcc-arm-none-eabi
       - name: Python packages
-        run: pip install pytest numpy scipy pandas pyyaml
+        # the one dependency list (test_requirements.py keeps it complete); a hand list here missed pyelftools
+        run: pip install pytest -r requirements.txt
       - name: Gate
         run: bash tools/check.sh

@@ -1,0 +1,17 @@
+# Python packages the lab commands need (labday, fly, lab, the 8081 service and the analysis they run):
+#   pip install -r requirements.txt
+# ground_station/lab/tests/test_requirements.py fails when a lab command imports a package missing here.
+# Not listed: torch, only for NN training (ground_station/analysis/nn_io.py), CPU wheel:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+jsonschema
+markdown
+matplotlib
+numpy
+opencv-python
+pandas
+psutil
+pyelftools
+pyocd
+pyserial
+pyyaml
+scipy

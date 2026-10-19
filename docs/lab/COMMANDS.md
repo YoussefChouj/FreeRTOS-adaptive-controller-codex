@@ -43,11 +43,18 @@ which has no adb, scrcpy or Windows python. Never use it for the camera. `.\cam`
 
 - Day file: `docs/lab/days/<date>.yaml`. Its `camera:` block sets the floor scan, the fusion mode and the tracker
   args for every flight (section 3).
-- Prompts: before a flight, Enter flies it (then arm by RC), `s` skips it, `q` quits. After a bad end, `r` flies it
-  again, Enter goes on, `q` quits. During the cooldown, Enter skips the rest.
+- Prompts: before a flight, Enter flies it (then arm by RC), `s` skips it, `f` rescans the floor, `q` quits. After a
+  bad end, `r` flies it again, Enter goes on, `q` quits; after an AUTO STOP, `f` rescans the floor and flies it again.
+  During the cooldown, Enter skips the rest.
 - The dry run is cached per flight (key = HEAD + `git diff HEAD -- ground_station`). It runs again only when the
   code changes.
-- labday stops before flying if the day's floor scan folder is missing. Make the scan first (section 2.1).
+- With the camera, every launch first scans the floor (drone out of view, Enter) or keeps the current scan (`k`).
+  A scan counts only when its folder holds the scenery mask and the landing pad is seen in at least half the frames.
+  New scans are `floor-<date>[-N]`.
+- Battery: before each flight, the resting volts and the predicted pack % after the flight against the 30% gate;
+  after each flight, the landing volts and the sag; the cooldown line shows live volts.
+- A failed gate says SWAP THE PACK: power off, swap, power on. labday waits for the link to drop and come back,
+  asks the pack type and goes on in the same run (8081 keeps running, the dry-run cache stays valid).
 
 ## 2. Video tracking pipeline (camera fusion)
 

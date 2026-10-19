@@ -198,7 +198,7 @@ def arm() -> int:
     exe = shutil.which("arm-none-eabi-gcc")
     if exe is None:
         print("SKIP arm-none-eabi-gcc: not installed (the Keil build is the target check)")
-        return 0
+        return 77  # tools/check.sh: SKIPPED
     return over_firmware("arm-none-eabi-gcc", lambda path, flags: [exe, *ARM, *flags, path])
 
 

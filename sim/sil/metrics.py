@@ -5,7 +5,7 @@ docs/analysis/controller-roadmap-2026-10-03.md:189-190:
 Interpretations (PROPOSED): |u_ad| and |u_nom| are 1 s moving RMS per axis of the injected correction
 (Controller_Update - u_nom, mixer units) and of u_nom, so a u_nom zero crossing is not an abort; "position error" is
 the 3-D distance to the reference in the navigation frame; a crash (plant.run rule) counts as an abort.
-host_us is the host CPU time of one firmware tick (QueryPerformanceCounter in sil_server.c), not STM32 cost: the
+host_us is the host CPU time of one firmware tick (host_us in sil_server.c), not STM32 cost: the
 flight cost is mrac_cyc (DWT cycles) on the target.
 """
 from __future__ import annotations

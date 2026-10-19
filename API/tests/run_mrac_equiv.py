@@ -35,7 +35,7 @@ COV_NAMES = ["u_ad_sat", "e_freeze", "theta_upper_entry", "theta_lower_entry", "
 
 
 def extract_base_tree(base_rev: str, target_dir: Path, repo_root: Path):
-    cmd = ["git", "ls-tree", "-r", "--name-only", base_rev, "API/"]
+    cmd = ["git", "ls-tree", "--name-only", base_rev, "API/"]  # top level only, as copy_working_tree
     res = subprocess.run(
         cmd,
         cwd=str(repo_root),
@@ -71,6 +71,11 @@ def copy_working_tree(target_dir: Path, repo_root: Path):
     if not copied:
         raise RuntimeError(f"No MRAC files found in {api_dir}")
     return copied
+
+
+def gate_defs(tree_dir: Path):
+    """A tree with the injection/learn gate (mrac_inj, 2026-10-01 on) needs the driver to open it, or nothing learns."""
+    return ["-DMRAC_EQUIV_NEW_TREE"] if "MRAC_Inj_t mrac_inj" in (tree_dir / "mrac.h").read_text() else []
 
 
 def build_binary(tree_dir: Path, driver_path: Path, stubs_dir: Path, out_bin: Path, extra_flags=None) -> Path:
@@ -224,7 +229,8 @@ def run_self_test(base_rev: str, repo_root: Path, driver_path: Path, stubs_dir: 
         extract_base_tree(base_rev, base_dir, repo_root)
 
         bin_base = tmp_dir / "bin_base"
-        bin_base = build_binary(base_dir, driver_path, stubs_dir, bin_base)
+        defs = gate_defs(base_dir)
+        bin_base = build_binary(base_dir, driver_path, stubs_dir, bin_base, defs)
 
         # Perturbation (a): replace first 0.0174533f with 0.0174534f in mrac.c
         pert_a_dir = tmp_dir / "pert_a"
@@ -241,7 +247,7 @@ def run_self_test(base_rev: str, repo_root: Path, driver_path: Path, stubs_dir: 
             f.write(code_a)
 
         bin_pert_a = tmp_dir / "bin_pert_a"
-        bin_pert_a = build_binary(pert_a_dir, driver_path, stubs_dir, bin_pert_a)
+        bin_pert_a = build_binary(pert_a_dir, driver_path, stubs_dir, bin_pert_a, defs)
         _, _, mismatch_a = compare_streams(bin_base, bin_pert_a)
         if mismatch_a is None:
             print("Self-test failed: perturbation (a) did not fail comparison against base", file=sys.stderr)
@@ -262,7 +268,7 @@ def run_self_test(base_rev: str, repo_root: Path, driver_path: Path, stubs_dir: 
             f.write(code_b)
 
         bin_pert_b = tmp_dir / "bin_pert_b"
-        bin_pert_b = build_binary(pert_b_dir, driver_path, stubs_dir, bin_pert_b)
+        bin_pert_b = build_binary(pert_b_dir, driver_path, stubs_dir, bin_pert_b, defs)
         _, _, mismatch_b = compare_streams(bin_base, bin_pert_b)
         if mismatch_b is None:
             print("Self-test failed: perturbation (b) did not fail comparison against base", file=sys.stderr)
@@ -274,7 +280,9 @@ def run_self_test(base_rev: str, repo_root: Path, driver_path: Path, stubs_dir: 
 
 def main():
     parser = argparse.ArgumentParser(description="Host bit-exact equivalence test for MRAC firmware")
-    parser.add_argument("--base", default="4458435", help="Base git commit revision (default: 4458435)")
+    # 91ce5287 is the last API/mrac* change (2026-10-13): the MULTI default and the 10-08 rate-weight retune. The old
+    # default 4458435 (2026-09-26) predates both, so it failed on intended law since 10-08.
+    parser.add_argument("--base", default="91ce5287", help="Base git commit revision (default: 91ce5287)")
     parser.add_argument("--self-test", action="store_true", help="Run self-test with intentional perturbations")
     parser.add_argument("--define", action="append", default=[], metavar="NAME=VAL",
                         help="Extra -D for the new-tree builds only (the base tree predates e.g. MRAC_CAPACITY)")
@@ -298,14 +306,15 @@ def main():
         new_dir.mkdir()
         copy_working_tree(new_dir, repo_root)
 
-        new_defs = ["-D" + d for d in args.define] + ["-DMRAC_EQUIV_NEW_TREE"]
+        new_defs = ["-D" + d for d in args.define] + gate_defs(new_dir)
+        ref_defs = gate_defs(ref_dir)
 
         # The four builds are independent, and so are the two compares (each runs its two binaries): run them at
         # once. Results are reported in the old order, plain first.
         builds = {
-            "ref_plain": (ref_dir, []),
+            "ref_plain": (ref_dir, ref_defs),
             "new_plain": (new_dir, new_defs),
-            "ref_sigma": (ref_dir, ["-DMRAC_ENABLE_SIGMA_PRIOR"]),
+            "ref_sigma": (ref_dir, ["-DMRAC_ENABLE_SIGMA_PRIOR"] + ref_defs),
             "new_sigma": (new_dir, ["-DMRAC_ENABLE_SIGMA_PRIOR"] + new_defs),
         }
         with ThreadPoolExecutor(max_workers=len(builds)) as pool:

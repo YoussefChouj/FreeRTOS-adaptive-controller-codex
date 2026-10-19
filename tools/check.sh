@@ -10,9 +10,9 @@
 #   float        no implicit float -> double promotion in those files (gcc -Werror=double-promotion)
 #   row-meta     units and [min, max] of every *_ROW tunable, every row value in range (tools/row_meta.py)
 #   fw-lint      firmware coding-standard ratchet (tools/fw_lint.py, allow-list shrinks only)
-#   stack        task and interrupt stack budget from the Keil call graph (tools/stack_budget.py)
+#   stack        task and interrupt stack budget from the Keil call graph (tools/stack_budget.py); SKIPPED without OBJ/JX_FLY.htm
 #   doc-paths    every repo path and file:line in the agent-facing docs exists (tools/doc_paths.py)
-#   arm-syntax   arm-none-eabi-gcc -fsyntax-only on the same files; skipped with a message if not installed
+#   arm-syntax   arm-none-eabi-gcc -fsyntax-only on the same files; SKIPPED if not installed
 # Subset while iterating: bash tools/check.sh doc-paths fw-lint (step names as above), or --fast for every step
 # except host-tests, mrac-equiv and sil-smoke (each prints its time). A subset ends with
 # "CHECK SUBSET PASS"; only a run with no arguments prints CHECK PASS, and that is the one a commit needs.
@@ -30,14 +30,21 @@ for want in $only; do
     [[ "$ALL" == *" $want "* ]] || { echo "check.sh: unknown step '$want' (steps:$ALL)" >&2; exit 2; }
 done
 
+# A step exits 77 when its input cannot exist on this machine (no Keil build, no ARM gcc): SKIPPED, named in the
+# verdict line, never silently OK.
 failed=()
+skipped=()
 step() {
-    local name=$1 t0=$SECONDS
+    local name=$1 t0=$SECONDS rc
     shift
     [ "$only" = "  " ] || [[ "$only" == *" $name "* ]] || return 0
     echo "== $name"
-    if "$@"; then
+    "$@"; rc=$?
+    if [ $rc -eq 0 ]; then
         echo "-- $name OK ($((SECONDS - t0)) s)"
+    elif [ $rc -eq 77 ]; then
+        echo "-- $name SKIPPED ($((SECONDS - t0)) s)"
+        skipped+=("$name")
     else
         echo "-- $name FAILED ($((SECONDS - t0)) s)"
         failed+=("$name")
@@ -84,4 +91,6 @@ if [ ${#failed[@]} -gt 0 ]; then
     echo "CHECK FAIL: ${failed[*]}"
     exit 1
 fi
-if [ "$only" = "  " ]; then echo "CHECK PASS"; else echo "CHECK SUBSET PASS:$only(not the full gate)"; fi
+note=""
+[ ${#skipped[@]} -gt 0 ] && note=" (skipped here: ${skipped[*]})"
+if [ "$only" = "  " ]; then echo "CHECK PASS$note"; else echo "CHECK SUBSET PASS:$only(not the full gate)$note"; fi
