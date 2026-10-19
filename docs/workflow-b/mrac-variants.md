@@ -5,11 +5,18 @@ Spec: `docs/analysis/controller-roadmap-2026-10-03.md` (Q1-Q4, test plan). Every
 (`python API/tests/run_mrac_equiv.py` -> EQUIV OK). Numbers below are PROPOSED unless the roadmap measured them.
 
 ## Switching: CMD 0x1D MRAC_VARIANT
-`idx = field << 2 | axis` (axis 0 pitch, 1 roll, 2 yaw, 3 z), value float32. Refused while airborne
-(FLYING/LANDING) and when out of range or non-finite (`MRAC_VariantParamSet`, `API/mrac.c`). Fields:
+Value float32; the idx byte has two ranges (`MRAC_VariantIdxSet`, `API/mrac.c`; Python `variant_idx` /
+`variant_split` in `ground_station/analysis/mrac_variants.py`):
+- idx < 0x80: `idx = field << 2 | axis`, axis 0 pitch, 1 roll, 2 yaw, 3 z (every sender before x/y).
+- idx >= 0x80: `idx = 0x80 | field << 1 | (axis - 4)`, axis 4 x, 5 y (fields 0-25 = 0x80-0xB3). X and Y run
+  the full MRAC law, so their fields matter in flight. The old decode read every idx >= 0x80 as field >= 32
+  and refused it, so no existing idx changed meaning.
+
+Refused while airborne (FLYING/LANDING) and when out of range or non-finite (`MRAC_VariantParamSet`). Fields:
 0 ref_type, 1 ref_delay_s, 2 drive_norm, 3 lam_edot, 4 kappa_pr, 5 crm_ell, 6 mu_sat, 7 lam_ang, 8 rbf_on,
 9 rbf_rate_scale, 10 rbf_ang_scale, 11 gamma_scale (all of `mrac_g_gamma[axis][*]`), 12 ref_model_bw;
-WP-33: 13 st_eps, 14 st_phi_max, 15 st_bar, 16 lf_gain, 17 sigma_lf, 18 gam_f (17-18 write the existing rows).
+WP-33: 13 st_eps, 14 st_phi_max, 15 st_bar, 16 lf_gain, 17 sigma_lf, 18 gam_f (17-18 write the existing rows);
+19 basis; 3L-v2: 20 gamma_c, 21 b_axis, 22 pe_delay, 23 wc_pe, 24 p_max, 25 p_forget.
 Ranges: `ground_station/analysis/mrac_variants.py` (a host test keeps it equal to the firmware table).
 Ground station: descriptors `ground_station/analysis/controllers/mrac_v1|v2|v3.yaml`; each has a preset per
 campaign plus `restore` (= every knob's firmware default). `campaign_presets(<campaign yaml>)` returns

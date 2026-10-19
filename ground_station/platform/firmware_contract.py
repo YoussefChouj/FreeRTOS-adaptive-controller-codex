@@ -522,10 +522,11 @@ COMMAND_TABLE: dict[int, CommandSpec] = {
     ),
     0x1D: CommandSpec(
         id=0x1D, name="MRAC_VARIANT",
-        description="WP-27 MRAC variant field on one axis: idx = field << 2 | axis (fields in "
-                    "ground_station/analysis/mrac_variants.py VARIANT_FIELDS). Out-of-range values are refused.",
+        description="WP-27 MRAC variant field on one axis: idx = field << 2 | axis for axes 0-3, "
+                    "0x80 | field << 1 | (axis - 4) for axes 4 x / 5 y (ground_station/analysis/mrac_variants.py "
+                    "variant_idx, VARIANT_FIELDS). Out-of-range values are refused.",
         params=(
-            CommandParam(0, "axis", "axis", 0, 3),
+            CommandParam(0, "axis", "axis", 0, 5),
             CommandParam(1, "field", "enum", 0, 25),
             CommandParam(2, "value", "float", None, None),
         ),
@@ -533,7 +534,8 @@ COMMAND_TABLE: dict[int, CommandSpec] = {
             description="Refused while airborne (FLYING/LANDING); selector writes snap xm to the plant.",
             danger_level="caution",
         ),
-        notes="MRAC_VariantParamSet (API/mrac.c); defaults are OFF. Docs: docs/workflow-b/mrac-variants.md.",
+        notes="MRAC_VariantIdxSet -> MRAC_VariantParamSet (API/mrac.c); defaults are OFF. "
+              "Docs: docs/workflow-b/mrac-variants.md.",
     ),
     0x1E: CommandSpec(
         id=0x1E, name="OF_BIAS_MODE",

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from ground_station.analysis.mrac_variants import VARIANT_FIELDS
+from ground_station.analysis.mrac_variants import AXES, VARIANT_FIELDS, variant_idx, variant_split
 from tools import exe_cache
 
 REPO = Path(__file__).resolve().parents[3]
@@ -135,12 +135,34 @@ def test_pr_filter_runs_when_learning_stops(build):
 
 def test_variant_set_rejects_out_of_range(build):
     exe = build(1)
-    bad = ["4:0:1", "0:19:1", "2:12:0.4", "0:0:3", "0:0:-2", "0:1:0.05", "0:5:51", "0:9:0", "0:4:nan", "0:6:-0.1",
-           "0:13:2.5", "0:14:0.5", "0:15:1.5", "0:16:11", "0:17:-1", "0:18:0.1"]
+    bad = ["6:0:1", "0:26:1", "2:12:0.4", "0:0:3", "0:0:-2", "0:1:0.05", "0:5:51", "0:9:0", "0:4:nan", "0:6:-0.1",
+           "0:13:2.5", "0:14:0.5", "0:15:1.5", "0:16:11", "0:17:-1", "0:18:0.1", "5:6:11"]
     good = ["0:0:-1", "3:0:2", "0:1:0.035", "0:5:50", "0:11:0.25", "0:8:1",
-            "0:13:2", "0:14:1", "0:15:1", "0:16:10", "0:17:5", "0:18:100"]
+            "0:13:2", "0:14:1", "0:15:1", "0:16:10", "0:17:5", "0:18:100", "4:0:1", "5:6:0.85"]
     r = run(exe, *bad, *good)
     assert r["set"] == [0] * len(bad) + [1] * len(good)
+
+
+def test_cmd_0x1d_idx_reaches_all_six_axes(build):
+    """The Python encoder and the firmware decode (MRAC_VariantIdxSet) agree on every idx byte: axes 0-3 keep
+    (field << 2) | axis, x/y use the 0x80 range, and everything else is refused."""
+    exe = build(1)
+    lo = {f: row[1] for f, row in enumerate(VARIANT_FIELDS)}    # in range on every build (basis hi is per build)
+    pairs = [(a, f) for a in range(len(AXES)) for f in range(len(VARIANT_FIELDS))]
+    idxs = [variant_idx(a, f) for a, f in pairs]
+    assert len(AXES) == 6 and len(set(idxs)) == len(idxs) and all(0 <= i <= 0xFF for i in idxs)
+    assert [variant_split(i) for i in idxs] == pairs
+    assert all(i == (f << 2) | a for (a, f), i in zip(pairs, idxs) if a < 4)   # old senders unchanged
+    # every byte, with the lower bound of the field the Python split names: accepted iff that field is in the table
+    want = [int(variant_split(i)[1] < len(VARIANT_FIELDS)) for i in range(256)]
+    r = run(exe, *[f"idx:{i}:{lo.get(variant_split(i)[1], 0.0)}" for i in range(256)])
+    assert r["set"] == want
+    assert sorted(i for i in range(256) if want[i]) == sorted(idxs)
+    # x/y idx bytes still bound-check the field (mu_sat 0..10); past the table and 0xFF are refused
+    r = run(exe, f"idx:{variant_idx(4, 6)}:11", f"idx:{variant_idx(5, 6)}:0.85", f"idx:{0x80 | (26 << 1)}:1", "idx:255:1")
+    assert r["set"] == [0, 1, 0, 0]
+    with pytest.raises(ValueError):
+        variant_idx(6, 0)
 
 
 def test_python_field_table_matches_firmware():

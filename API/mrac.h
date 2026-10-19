@@ -261,7 +261,8 @@ typedef struct {
 
 } MRAC_AxisConfig_t;
 
-// CMD 0x1D MRAC_VARIANT field ids: idx = (field << 2) | axis, value float32 (MRAC_VariantParamSet).
+// CMD 0x1D MRAC_VARIANT field ids, value float32. idx = (field << 2) | axis for axes 0-3,
+// idx = 0x80 | (field << 1) | (axis - 4) for axes 4 x / 5 y (MRAC_VariantIdxSet).
 typedef enum {
     MRAC_VF_REF_TYPE = 0,
     MRAC_VF_REF_DELAY_S,
@@ -422,9 +423,11 @@ extern volatile uint8_t mrac_in_phase;
 void MRAC_ResetWeights(void);
 void MRAC_GateStep(void);
 
-// CMD 0x1D: set one variant field on one axis (0..3). Returns 1 if applied, 0 if the field, axis or
+// CMD 0x1D: set one variant field on one axis (0..5). Returns 1 if applied, 0 if the field, axis or
 // value is out of range (non-finite values included). Selector writes snap the reference state.
 uint8_t MRAC_VariantParamSet(uint8_t axis, uint8_t field, float val);
+// CMD 0x1D wire index: decodes idx (see MRAC_VariantField_e above), then MRAC_VariantParamSet.
+uint8_t MRAC_VariantIdxSet(uint8_t idx, float val);
 
 // ------------------------------------------------------------------------------
 // 6. Simplex fallback (mode-based freeze + fade of u_ad injection)

@@ -14,11 +14,15 @@ def test_wire_target_decodes_field_and_axis():
     assert wire_target(MRAC_VARIANT_CMD, (11 << 2) | 2) == "mrac_g_gamma[2][*]"
     assert wire_target(MRAC_VARIANT_CMD, (12 << 2) | 2) == "mrac_config_yaw.ref_model_bw"
     assert wire_target(MRAC_VARIANT_CMD, len(VARIANT_FIELDS) << 2) is None
+    # x/y: 0x80 | (field << 1) | (axis - 4)
+    assert wire_target(MRAC_VARIANT_CMD, 0x80 | (6 << 1) | 1) == "mrac_config_y.mu_sat"
+    assert wire_target(MRAC_VARIANT_CMD, 0x80 | (11 << 1)) == "mrac_g_gamma[4][*]"
+    assert wire_target(MRAC_VARIANT_CMD, 0x80 | (len(VARIANT_FIELDS) << 1)) is None
 
 
 def test_contract_field_range_covers_the_table():
     axis, field, _ = COMMAND_TABLE[MRAC_VARIANT_CMD].params
-    assert (axis.min_val, axis.max_val) == (0, 3)
+    assert (axis.min_val, axis.max_val) == (0, 5)
     assert (field.min_val, field.max_val) == (0, len(VARIANT_FIELDS) - 1)
 
 

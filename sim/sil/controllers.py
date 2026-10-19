@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ground_station.analysis.controller_descriptor import CONTROLLERS_DIR, load
-from ground_station.analysis.mrac_variants import MRAC_VARIANT_CMD, VARIANT_FIELDS
+from ground_station.analysis.mrac_variants import MRAC_VARIANT_CMD, VARIANT_FIELDS, variant_idx
 
 CMD_PID, CMD_FLAGS, INJECT_IDX = 0x01, 0x0F, 10
 FIELD = {name: i for i, (name, _lo, _hi) in enumerate(VARIANT_FIELDS)}
@@ -47,7 +47,7 @@ def merged_cmds(*pairs: tuple[str, str]) -> tuple[tuple[int, int, float], ...]:
 
 
 def variant_cmds(axes: tuple[int, ...], **fields: float) -> tuple[tuple[int, int, float], ...]:
-    return tuple((MRAC_VARIANT_CMD, (FIELD[f] << 2) | a, float(v)) for a in axes for f, v in fields.items())
+    return tuple((MRAC_VARIANT_CMD, variant_idx(a, FIELD[f]), float(v)) for a in axes for f, v in fields.items())
 
 
 def registry(autotune_cmds: tuple[tuple[int, int, float], ...] | None = None) -> dict[str, ControllerSpec]:

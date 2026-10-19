@@ -34,7 +34,7 @@ PID_AXES = ("pitchPID", "rollPID", "yawPID", "gyroxPID", "gyroyPID", "gyrozPID",
 PID_GAINS = ("Kp", "Ki", "Kd")
 MRAC_ARRAY_CMDS = {0x02: "gamma", 0x05: "What_limit", 0x08: "What_tol"}  # idx = axis << 4 | elem
 MRAC_AXES = ("mrac_config_pitch", "mrac_config_roll", "mrac_config_yaw", "mrac_config_z")
-# 0x1D MRAC_VARIANT: idx = field << 2 | axis (ground_station/analysis/mrac_variants.py, WP-27)
+# 0x1D MRAC_VARIANT: idx = field << 2 | axis (axes 0-3), 0x80 | field << 1 | (axis - 4) (x/y): mrac_variants.py
 TUNING_CMDS = (PID_GAIN_CMD, *MRAC_ARRAY_CMDS, MRAC_VARIANT_CMD)
 
 _DESCRIPTOR_KEYS = ("name", "knobs", "shadow_outputs", "presets")
@@ -78,7 +78,7 @@ def wire_target(cmd_id: int, idx: int) -> str | None:
     """Return the firmware variable that command ``cmd_id`` writes for idx byte ``idx``.
 
     Decodes idx as the firmware does (TASK/send_data.c:1474-1519): 0x01 packs ``axis * 3 + gain``;
-    0x02/0x05/0x08 pack ``axis << 4 | elem``; 0x1D packs ``field << 2 | axis``. Returns None for a
+    0x02/0x05/0x08 pack ``axis << 4 | elem``; 0x1D as ``mrac_variants.variant_split``. Returns None for a
     non-tuning command or an idx whose axis or element lies outside the contract's range.
     """
     if cmd_id == MRAC_VARIANT_CMD:
