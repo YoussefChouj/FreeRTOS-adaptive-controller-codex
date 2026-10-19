@@ -291,9 +291,11 @@ static void mix_state(void)
     MIXV(sbus_path_trigger); MIXV(mrac_in_armed); MIXV(mrac_in_phase); MIXV(g_fsm);
 }
 
-#ifdef FLIGHT_TELEMETRY_H
+#if defined(FLIGHT_TELEMETRY_H) && !defined(FW_TRACE_BASE)
 /* WP-37 telemetry groups: g_tlm must equal its sources after every tick. Checked here, not hashed, so a
- * version without g_tlm still prints the same hashes; a mismatch exits 3. */
+ * version without g_tlm still prints the same hashes; a mismatch exits 3. The list follows the working tree's g_tlm
+ * layout, so tools/fw_trace.py builds the base version with -DFW_TRACE_BASE and the check runs on the new one only
+ * (an older base has another layout, or no x_vel/y_vel MRAC axes before 7d834715). */
 static void check_tlm(void)
 {
     const float want[] = {
