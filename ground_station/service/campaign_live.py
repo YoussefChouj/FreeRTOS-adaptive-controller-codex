@@ -453,9 +453,14 @@ def live_capture_hooks(service: Any, controller: str = "pid", max_rate_hz: float
         st = service.stop_recording()
         bridge = getattr(service, "bridge", None)
         if getattr(bridge, "lab_mode", False) and applied["steps"]:
-            # lab mode: plan slots off on the ground, so the next takeoff's writes get their replies
+            # lab mode: plan slots off on the ground, so the next takeoff's writes get their replies. Slot 0 goes
+            # back to the lab sidebar frame instead: it carries the arm flag the next flight waits on (soak 10-19:
+            # a 4-slot plan used slot 0, and stopping it left the next flight on NO ARM SIGNAL)
             for step in applied["steps"]:
-                bridge.subscribe_slot(slot=step["args"]["slot"], divider=0, ranges=[])
+                if step["args"]["slot"] == 0:
+                    bridge.restore_lab_slot0()
+                else:
+                    bridge.subscribe_slot(slot=step["args"]["slot"], divider=0, ranges=[])
             applied["steps"] = None
         return str(st.get("session_dir") or token or "")
 

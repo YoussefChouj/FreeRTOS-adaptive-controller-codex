@@ -886,6 +886,15 @@ class WifiBridge:
                 3, DASHBOARD_FLIGHT_POSITION_VARS,
                 DASHBOARD_FLIGHT_POSITION_DIVIDER, "dashboard-flight-position")
 
+    def restore_lab_slot0(self) -> None:
+        """Put slot 0 back on the lab sidebar frame (the arm flag the fly waits on) at LAB_SLOT0_DIVIDER.
+
+        Slot 0 only: unlike ``_request_slot0_schema("lab")`` it does not stop slots 1-3 again. A lab flight whose
+        plan fills all four slots used slot 0, and turning it off after the flight left the next flight on
+        NO ARM SIGNAL until 8081 restarted (soak 2026-10-19, the 10-18 mem1 symptom).
+        """
+        self._request_stream_schema(0, DASHBOARD_FRAME_A_VARS, self.LAB_SLOT0_DIVIDER, "lab-frame")
+
     def _request_stream_schema(self, slot: int, vars_tuple, divider: int,
                                label: str) -> None:
         """Send a 0x21 subscribe request for one slot's var tuple.

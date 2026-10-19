@@ -87,6 +87,32 @@ def test_lab_capture_caps_plan_and_stops_slots_after_flight(monkeypatch):
     assert sent and all(d == 0 for _, d in sent)
 
 
+def test_lab_capture_end_gives_slot0_back_to_the_arm_flag(monkeypatch):
+    """Soak 10-19: a plan filling all four slots used slot 0, end() stopped it, and the next flight hung on
+    NO ARM SIGNAL. end() now puts the lab sidebar frame back on slot 0 and stops only slots 1-3."""
+    from ground_station.service import campaign_live
+    sent = []
+    bridge = SimpleNamespace(lab_mode=True, subscribe_slot=lambda slot, divider, ranges: sent.append((slot, divider)),
+                             restore_lab_slot0=lambda: sent.append((0, "lab-frame")))
+    svc = SimpleNamespace(bridge=bridge, stop_recording=lambda: {"session_dir": "d"},
+                          start_recording=lambda **kw: {"recording": True, "session_dir": "d"})
+    monkeypatch.setattr(campaign_live, "wait_streams_named", lambda b, slots: None)
+    four = [{"args": {"slot": s, "divider": 4, "ranges": []}} for s in range(campaign_live.MAX_SLOTS)]
+    monkeypatch.setattr(campaign_live, "subscribe_steps", lambda plan: [dict(args=dict(s["args"])) for s in four])
+    begin, end = campaign_live.live_capture_hooks(svc, max_rate_hz=campaign_live.LAB_PLAN_MAX_HZ)
+    begin(SimpleNamespace(log_plan=None, name="x"), "f01")
+    assert sent == [(0, 4), (1, 4), (2, 4), (3, 4)]   # all four slots: slot 0 is the plan's here
+    sent.clear()
+    end("tok")
+    assert sent == [(0, "lab-frame"), (1, 0), (2, 0), (3, 0)]
+
+
+def test_restore_lab_slot0_requests_only_slot0_at_10hz():
+    b = _bridge(True)
+    b.restore_lab_slot0()
+    assert b.sent == [(0, 10, "lab-frame", len(DASHBOARD_FRAME_A_VARS))]
+
+
 def test_lab_status_prime_keeps_slot0_at_10hz():
     from ground_station.service import campaign_live
     sent = []
