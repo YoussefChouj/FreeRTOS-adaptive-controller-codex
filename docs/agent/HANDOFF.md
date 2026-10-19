@@ -5,6 +5,8 @@ History: `docs/agent/ledger/` (grep, never read whole). Desktop session is CEO: 
 
 ## Now: 2026-10-19 lab = redo of all 10-18 flights (`.\labday 2026-10-19`, day file `docs/lab/days/2026-10-19.yaml`)
 
+- Full 10-19 handoff (camera tape vs scan, stream ladder A-E status, waiting branches, open work): `docs/agent/handoff-2026-10-19.md`.
+
 - 10-18 post-lab fixes, all committed: relay bind retry 5e0e545c; labday starts 8081 before the camera + endlive 7ffb9ff0; stale-telemetry trip only after 0.3 s f51d3de3 (operator OK); bridge re-pushes slots after 3 s silence a0d15173; dry run once per unchanged flight + width-safe cooldown line 6cfd8a85; one camera loop + run-HHMMSS dirs + CR in tracker PIDs 056eb0c3; landing zoom off d2879e1d; 8081 log to `logs/service/<port>-<ts>.log` + QuickEdit off 9b7046d3; abort link snapshot a2efc3ad; 1 Hz `link` events d4c653c6.
 - Tracker bias (~30 cm fix offset on 10-18): the fire-station print on the mat sat in the keep disc and pulled the dot off the drone. Fixed 52784922 (floor-scan scenery mask, cached PNG in the floor dir). Floor = floor-1018; if the camera moved, re-scan (`camera_truth.sh floor floor-1019`, `--floor floor-1019`).
 - Takeoff link losses 220517/220919 (after P15): cause still UNKNOWN (WiFi vs host rx). The new service log + abort/link events will tell on the next one.

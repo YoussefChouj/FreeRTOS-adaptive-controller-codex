@@ -1,0 +1,12 @@
+{
+  "autocompact-160k": {
+    "enabled": true,
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "python hooks/autocompact.py",
+        "timeout": 10
+      }
+    ]
+  }
+}

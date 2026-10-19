@@ -1,0 +1,442 @@
+=== A1. CoralTracker & FixScheduler & TelHeight in live_tracker.py ===
+L126:     def __init__(self, seed_uv, static=None, roi: float = 140.0, min_px: int = 40,   # track_coral defaults
+L127:                  learn_n: int = 0, learn_every: int = 5, frac: float = 0.7, grow_px: int = 7,
+L129:         self.c, self.static, self.roi, self.min_px = np.asarray(seed_uv, float), static, float(roi), min_px
+L130:         self.r = self.roi
+L131:         self.seed0, self.learn_n, self.learn_every, self.frac, self.grow = self.c.copy(), learn_n, learn_every, frac, grow_px
+L132:         self.keep_r = 1.3 * self.roi if keep_r is None else float(keep_r)   # r6_f4 pad: drone coral to ~170 px of 1920
+L137:     def _learn(self, frame_bgr) -> None:
+L140:         if (self._i - 1) % self.learn_every:
+L144:         if self._k < self.learn_n:
+L148:         st[(xx - self.seed0[0]) ** 2 + (yy - self.seed0[1]) ** 2 <= self.keep_r ** 2] = 0
+L149:         learned = cv2.dilate(st, np.ones((self.grow, self.grow), np.uint8)) > 0
+L150:         self.static = learned if self.static is None else self.static | learned
+L151:         self.learn_n, self._acc = 0, None
+L152:         print(f"coral static learned: {int(learned.sum())} px from {self._k} frames", flush=True)
+L154:     def step(self, frame_bgr, z_agl: float | None = None) -> Optional[np.ndarray]:
+L156:         if self.learn_n:
+L157:             self._learn(frame_bgr)
+L172:             if self.static is not None:
+L173:                 st_crop = self.static[v0:v1, u0:u1]
+L179:             if len(uu) >= self.min_px * (z_eff * z_eff):
+L182:                 self.r = self.roi
+L189:     def recentre(self, uv) -> None:
+L190:         self.c, self.r = np.asarray(uv, float), self.roi
+L193: class JumpGate:
+L194:     """Velocity gate on detections (pad frame, m): one farther than v_max * dt + slack from the last accepted one
+L196:     long wrong lock does not open the gate by itself. n_reseed rejects in a row that agree with each other (all
+L197:     within cluster_m of their median) re-seed the gate there: the drone moved while it was lost. A static wrong
+L198:     blob agrees with itself too, so re-seeds are counted and reported. Thresholds PROPOSED, not tuned on flights."""
+L200:     def __init__(self, v_max: float = 1.5, slack_m: float = 0.05, dt_max: float = 0.5, n_reseed: int = 10,
+L202:         self.v_max, self.slack, self.dt_max, self.n_reseed, self.cluster = v_max, slack_m, dt_max, n_reseed, cluster_m
+L203:         self.lost_s = lost_s       # 2026-10-15 lab: a static wrong blob won 10 frames in a row and the track ping-ponged
+L206:         self.n_rej = self.reseeds = 0
+L208:     def check(self, t: float, xy, uv=None) -> bool:
+L216:         r = np.array(self.rej[-self.n_reseed:])
+L217:         if len(r) >= self.n_reseed and t - self.last[0] >= self.lost_s and np.all(np.linalg.norm(r - np.median(r, axis=0), axis=1) <= self.cluster):
+L218:             self.reseeds += 1
+L224: def fit_frame(frame: np.ndarray, size: tuple | None) -> np.ndarray:
+L225:     """Resize a grab to the size the run started with (K, seed and floor scale were set for it): a restore or a
+L226:     window resize mid-run would otherwise feed the tracker a different pixel scale."""
+L232: class WindowSource:
+L233:     """Live frames from a window's client area (the scrcpy mirror, e.g. `scrcpy --window-title cam`), Windows only:
+L234:     PrintWindow(PW_CLIENTONLY | PW_RENDERFULLCONTENT) copies the client area even under other windows (2026-10-13 on
+L236:     the raw mirror; mss (screen rectangle) is the fallback. The window must show the whole video at its aspect (no
+L239:     def __init__(self, title: str, wait_s: float = 30.0, size: tuple | None = None):
+L251:             raise RuntimeError(f"no window titled {title!r} after {wait_s:.0f} s")
+L263:     def _free(self) -> None:
+L269:     def _print(self, w: int, h: int):
+L287:     def _find(self, wait_s: float) -> int:
+L288:         """Wait up to wait_s for the window (scrcpy still starting, or restarting after Android dropped the camera)."""
+L296:     def rect(self) -> dict:
+L302:     def size(self) -> tuple:
+L306:     def read(self):
+L307:         t_end = time.monotonic() + 15.0                   # a live run survives a lost/zero-size window for 15 s
+L309:             if not self.u32.IsWindow(self.hwnd):          # scrcpy restarted into a new part: same title, new window
+L312:                 print(f"window {self.title!r} minimized, restoring", flush=True)
+L324:                 print(f"window {self.title!r} lost for 15 s", flush=True)
+L328:     def ready(self, wait_s: float = 30.0, min_mean: float = 8.0) -> tuple:
+L329:         """Wait until the window shows video (not minimized, not the black frame scrcpy opens with) and return its
+L336:                 print(f"window {self.title!r} ready {f.shape[1]}x{f.shape[0]}", flush=True)
+L339:                 raise RuntimeError(f"window {self.title!r} shows no video after {wait_s:.0f} s")
+L342:     def get(self, prop) -> float:
+L345:     def outer(self) -> dict:
+L350:     def release(self) -> None:
+L355: def floor_from_dir(video_dir, cam_path) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, dict]:
+L358:     the video width (to rescale pixels to the live window) and the scan's static corners {id: (4, 2) px}."""
+L363:     ref = {int(k[1:]): vt.static_corners(scan[k])[0] for k in scan if k.startswith("c")}
+L367: def floor_shift_px(frame_bgr, ref: dict, scale: float) -> tuple[float, int]:
+L368:     """Median corner shift (px, live window) of the markers seen now against the reference scan: the phone moved if
+L377: class TelHeight:
+L379:     returns ring_h + max(0, z), the truth4 plane. `ground` is z < z_min + ground_m, z_min the lowest z seen: r7_f2 read
+L380:     z 0.050 m on the pad (r7_f1 0.000), so an absolute z < ground_m never held, PadOrigin never set and 0 fixes were sent. Older than stale_s (or no row yet): the
+L384:     def __init__(self, path, key: str = "Ctrler.Z_posPID.FB", ring_h_m: float = 0.057, ground_m: float = 0.03,
+L387:         self.path, self.key, self.ring_h, self.ground_m = Path(path), key, ring_h_m, ground_m
+L392:     def poll(self) -> None:
+L419:     def fresh(self) -> bool:
+L423:     def ground(self) -> bool:
+L424:         return self.fresh and self.z < self.z_min + self.ground_m
+L426:     def vec(self, keys) -> np.ndarray | None:
+L427:         """The latest `extra` values (polled, fresh) as an array, else None."""
+L429:         return np.array([self.v[k] for k in keys]) if self.fresh and all(k in self.v for k in keys) else None
+L431:     def __call__(self, t_cap: float) -> float:
+L433:         if self.fresh:
+L438: class TelHeightHttp(TelHeight):
+L441:     z, ground and `extra` values; the sample age is the service's. Polled at most every min_dt_s."""
+L443:     def __init__(self, url: str, *args, min_dt_s: float = 0.02, timeout_s: float = 1.0, **kw):
+
+=== A2. camera_truth.sh ===
+L16: set -euo pipefail
+L17: cd "$(dirname "$0")/../.."
+L18: cmd=${1:?start|stop|check|fusion|video|floor|end}; name=${2:-}; [ "$cmd" = end ] || : "${name:?session name}"; preset=${3:-drift_rc}; api=http://127.0.0.1:8081; vid=logs/video_truth/$name
+L19: post() { curl -s --noproxy "*" -m 10 -X POST -H 'Content-Type: application/json' -d "$2" "$api$1"; echo; }
+L20: up() { curl -s --noproxy "*" -m 2 -o /dev/null -w '%{http_code}' "$api/health" | grep -q 200; }
+L24: bg() { python -m ground_station.lab.detach "$@" > /dev/null; }
+L25: alive() { local p; p=$(cat "$1" 2>/dev/null) || return 1; tasklist //FI "PID eq $p" //NH 2>/dev/null | grep -qi python; }
+L27: trackers() { powershell -NoProfile -Command 'Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "python.exe" -and $_.CommandLine -match "analysis.live_tracker" } | ForEach-Object { $_.ProcessId }' 2>/dev/null | tr -d '
+L28: '; }
+L31: reap() {
+L32:   local d i
+L33:   [ -n "$(trackers)" ] || return 0
+L34:   for d in logs/video_truth/*/; do [ -f "$d/tracker.pid" ] && [ ! -f "$d/stop" ] && touch "$d/stop"; done
+L35:   for i in $(seq 3); do [ -n "$(trackers)" ] || return 0; sleep 1; done
+L36:   for i in $(trackers); do echo "closing a leftover tracker (pid $i)"; taskkill //F //PID "$i" > /dev/null 2>&1 || true; done
+L37: }
+L41: camloops() { powershell -NoProfile -Command 'Get-CimInstance Win32_Process | Where-Object { $_.Name -in "bash.exe","sh.exe" -and $_.CommandLine -match "cam_loop\.sh" } | ForEach-Object { $_.ProcessId }' 2>/dev/null | tr -d '
+L42: '; }
+L43: camstop() {
+L44:   local i
+L45:   for i in $(camloops); do taskkill //F //PID "$i" > /dev/null 2>&1 || true; done
+L46:   taskkill //F //IM scrcpy.exe > /dev/null 2>&1 || true
+L47:   [ -z "$(camloops)" ] || { echo "a camera loop would not close (pids $(camloops | tr '\n' ' '))"; exit 1; }
+L48: }
+L50: keeprun() {
+L51:   local old f
+L52:   ls "$vid"/cam*.mkv > /dev/null 2>&1 || return 0
+L53:   old="$vid/run-$(date -r "$vid/scrcpy.log" +%H%M%S 2>/dev/null || date +%H%M%S)"; mkdir -p "$old"
+L54:   for f in "$vid"/cam*.mkv "$vid"/scrcpy_start_host_time*.txt "$vid"/scrcpy.log "$vid"/fixes.csv "$vid"/tracker.mp4 \
+L55:            "$vid"/tracker.out "$vid"/stream_log.out "$vid"/cam_loop.out; do [ -e "$f" ] && mv "$f" "$old/"; done
+L56:   echo "previous run of $name kept in $old"
+L57: }
+L58: cam() {                                           # CT_WIN: scrcpy window flags (default on top), CT_SIZE: WxH; loop: cam_loop.sh
+L59:   bg --log "$vid/cam_loop.out" --pid "$vid/cam_loop.pid" -- bash ground_station/lab/cam_loop.sh "$vid" "${CT_WIN---always-on-top}" "${CT_SIZE-1194x672}"
+L60: }
+L61: pj() {
+L62:   local layout=$1
+L63:   taskkill //F //IM plotjuggler.exe > /dev/null 2>&1 || pkill -f plotjuggler 2>/dev/null || true
+L64:   for cand in "${PJ_BIN:-}" "D:/PlotJuggler/plotjuggler.exe" "/mnt/d/PlotJuggler/plotjuggler.exe" "plotjuggler.exe" "plotjuggler"; do
+L65:     if [ -n "$cand" ] && { command -v "$cand" > /dev/null 2>&1 || [ -x "$cand" ] || [ -f "$cand" ]; }; then
+L66:       bg --log "$vid/plotjuggler.out" --pid "$vid/plotjuggler.pid" -- "$cand" -l "$layout" --start_streamer "UDP Server" --buffer_size 400 --nosplash
+L67:       break
+L68:     fi
+L69:   done
+L70: }
+L71: endlive() {                                         # a previous fusion's stream_log still streams to PlotJuggler: end it
+L72:   [ -f logs/plot_live.pid ] || return 0
+L73:   touch logs/plot_live.end
+L74:   for i in $(seq 10); do alive logs/plot_live.pid || break; sleep 1; done
+L75:   alive logs/plot_live.pid && taskkill //F //PID "$(cat logs/plot_live.pid)" > /dev/null 2>&1 || true; rm -f logs/plot_live.pid logs/plot_live.end
+L76: }
+L77: case $cmd in
+L78: start)
+L79:   mkdir -p "$vid"
+L80:   if ! up; then
+L81:     bg --log "$vid/service.log" -- python -m ground_station.service --port 8081
+L82:     for i in $(seq 30); do up && break; sleep 1; done; up || { echo "service did not come up, see $vid/service.log"; exit 1; }
+L83:   fi
+L84:   body=$(python -c "import json;p=json.load(open('ground_station/vofa_studio/presets/$preset.json'));print(json.dumps({'slots':[{'slot':i+1,'vars':s['vars'],'rate':s['rate'],'name':'$preset'} for i,s in enumerate(p['slots'])]}))")
+L85:   out=$(post /api/streams/apply "$body"); echo "${out:0:300}"; case "$out" in *'"ok": false'*|*'"error"'*) echo "ABORT: preset $preset refused by apply (slots unchanged)"; exit 1;; esac
+L86:   post /api/streams/log/start "{\"name\":\"$name\",\"mode\":\"unlimited\"}"
+L87:   post /api/recording/start "{\"requested_by\":\"operator\",\"label\":\"$name\",\"reason\":\"camera-truth session\"}"
+L88:   camstop; keeprun; rm -f "$vid/stop" "$vid/fusion" "$vid/video_only"
+L89:   cam
+L90:   sleep 5; "$0" check "$name" ;;
+L91: fusion)
+L92:   mode=${3:?mode 1 shadow, 2 offset, 3 in-EKF}; shift 3
+L93:   reap; camstop
+L96:   endlive                                           # a leftover logger holds udp 14550/47800 either way (lab 10-18)
+L97:   if up; then link=8081; tel=(--tel-url "$api"); else link=sl; tel=(--tel-csv "logs/$name.slot1.csv"); fi
+L98:   mkdir -p "$vid" logs; keeprun; touch "$vid/stream_log.out" "$vid/tracker.out"; rm -f "$vid/stop" "$vid/video_only"; echo "$mode" > "$vid/fusion"
+L99:   if [ "$link" = sl ]; then                         # `fly` sets up VOFA+/PJ itself (key p)
+L100:   VOFA=${VOFA-127.0.0.1:1347}                       # flight view to VOFA+ (UDP FireWater, named tabs); VOFA= turns it off
+L101:   PLOT=${PLOT-}                                     # PlotJuggler opt-in (every slot): PLOT=127.0.0.1:9870
+L102:   if [ -n "$VOFA" ]; then                           # writes C:/tmp/vofa import files only; VOFA+ is never closed or patched
+L103:     python -m ground_station.vofa_studio.vofa_config --frames ground_station/livewatch/r5_extpos_frames.md \
+L104:       || echo "VOFA+ view setup failed: flight goes on, VOFA+ shows raw channels"
+L105:   fi
+L106:   if [ -n "$PLOT" ]; then
+L107:     python -m ground_station.livewatch.pj_layout ground_station/livewatch/r5_extpos_frames.md --out "logs/$name.pj.xml"       && pj "logs/$name.pj.xml" || echo "PlotJuggler layout failed: flight goes on, open PJ by hand"
+L108:   fi
+L109:   ends=(--stop-file "$vid/stop")                   # with a live viewer: the stop file ends only the recording
+L110:   [ -n "$PLOT$VOFA" ] && ends=(--rec-stop-file "$vid/stop" --stop-file logs/plot_live.end)
+L111:   bg --log "$vid/stream_log.out" --pid "$vid/stream_log.pid" -- python -m ground_station.livewatch.stream_log --frames ground_station/livewatch/r5_extpos_frames.md     --relay-port 47800 ${PLOT:+--plot "$PLOT"} ${VOFA:+--vofa "$VOFA" --vofa-view} --seconds 86400 "${ends[@]}" --out "logs/$name.csv"
+L112:   [ -n "$PLOT$VOFA" ] && cp "$vid/stream_log.pid" logs/plot_live.pid
+L113:   fi
+L117:   CT_SIZE="${CT_SIZE-1920x1080}" CT_WIN="${CT_WIN---window-x=-3000 --window-y=0 --window-borderless}" cam
+L118:   sleep 4                                           # scrcpy window opens 256x256, final size after ~1.1 s (measured)
+L119:   dly=${DELAY_MS:-200}                              # camera delay: video_truth delay4 lag 0.21 s on r6_f4 + f4c (2026-10-13)
+L120:   al=()                                             # r6 flew modes 2/3 at --yaw-deg 0 vs ~90 deg measured: auto-fit it
+L121:   case " $* " in *" --yaw-deg"*|*" --align"*) ;; *) [ "$mode" -ge 2 ] && al=(--align auto) ;; esac
+L122:   bg --log "$vid/tracker.out" --pid "$vid/tracker.pid" -- python -m ground_station.analysis.live_tracker --source window:r5cam     --cam docs/video-truth/cam_r4_lenswave_2026-10-11.json --floor "${CT_FLOOR:-logs/video_truth/r5_marks_1}"     "${tel[@]}" --detector coral --gate --send udp:47800 --mode "$mode" --delay-ms "$dly"     --out "$vid/fixes.csv" --show --show-rec "$vid/tracker.mp4" --stop-file "$vid/stop" "${al[@]}" "$@"
+L123:   sleep 12; "$0" check "$name" ;;
+L124: video)                                              # video only (workflows A/B/C): the log stays theirs
+L125:   mkdir -p "$vid"; camstop; keeprun; rm -f "$vid/stop" "$vid/fusion"; touch "$vid/video_only"; cam
+L126:   sleep 5; "$0" check "$name" ;;
+L127: stop)
+L128:   touch "$vid/stop"
+L129:   if [ -f "$vid/fusion" ]; then                     # tracker exits; stream_log closes its CSVs (and streams on to PJ)
+L130:     for i in $(seq 20); do
+L131:       busy=0; alive "$vid/tracker.pid" && busy=1
+L132:       alive "$vid/stream_log.pid" && ! grep -q "recording stopped" "$vid/stream_log.out" && busy=1
+L133:       [ $busy = 0 ] && break; sleep 1
+L134:     done
+L135:     if alive "$vid/tracker.pid" && trackers | grep -qx "$(cat "$vid/tracker.pid")"; then   # 20 s and still up: close it
+L136:       echo "tracker did not stop, closing it"; taskkill //F //PID "$(cat "$vid/tracker.pid")" > /dev/null 2>&1 || true
+L137:     fi
+L138:   elif [ ! -f "$vid/video_only" ]; then
+L139:     post /api/recording/stop '{}'; post /api/streams/log/stop '{}'
+L140:   fi
+L141:   taskkill //F //IM scrcpy.exe > /dev/null 2>&1 || true; sleep 1; "$0" check "$name"   # PlotJuggler stays open for review
+L142:   [ -f logs/plot_live.pid ] && echo "VOFA+/PlotJuggler still streaming live: 'camera_truth.sh end' stops it" || true ;;
+L143: floor)                                              # floor pose of this placement: video, then the id0 scan
+L144:   mkdir -p "$vid"; rm -f "$vid/stop" "$vid/fusion"; touch "$vid/video_only"
+L145:   camstop
+L146:   [ -e "$vid/cam.mkv" ] && mv "$vid/cam.mkv" "$vid/cam.$(date +%H%M%S).mkv.bak"   # an older scan of this name is kept, not deleted
+L147:   cam; sleep "${FLOOR_S:-10}"; touch "$vid/stop"
+L148:   taskkill //IM scrcpy.exe > /dev/null 2>&1 || true; sleep 2; taskkill //F //IM scrcpy.exe > /dev/null 2>&1 || true; sleep 1
+L149:   [ -s "$vid/cam.mkv" ] || { echo "floor: no video, see $vid/scrcpy.log"; tail -3 "$vid/scrcpy.log" 2>/dev/null; exit 1; }
+L150:   out=$(python -m ground_station.analysis.video_truth aruco "$vid/cam.mkv" --out "$vid/aruco.npz" --step 5); echo "$out"
+L151:   n=$(echo "$out" | grep -o '^[0-9]* frames' | cut -d' ' -f1 || true); n0=$(echo "$out" | grep -o 'id0 [0-9]*' | cut -d' ' -f2 || true)  # id0 unseen: no word, grep fails
+L152:   if [ "${n0:-0}" -gt 0 ] && [ $((2 * ${n0:-0})) -ge "${n:-1}" ]; then
+L153:     echo "floor OK: pad marker id0 in ${n0} of ${n} frames. Fly with CT_FLOOR=$vid"
+L154:   else
+L155:     echo "floor NOT OK: pad marker id0 in ${n0:-0} of ${n:-0} frames (need half). Clear the pad marker's view, then run floor again"; exit 1
+L156:   fi ;;
+L157: end) endlive; echo "live stream ended" ;;
+L158: check)
+L159:   for f in logs/vofa/"$name".slot*.csv logs/"$name".slot*.csv; do [ -f "$f" ] && echo "$f rows $(($(wc -l < "$f") - 1))"; done
+L160:   ls -la "$vid"/cam*.mkv 2>/dev/null || echo "no video yet"; { grep -c restart "$vid/scrcpy.log" 2>/dev/null || true; } | sed "s/^/restarts /"; tail -2 "$vid/scrcpy.log" 2>/dev/null
+L161:   { [ -f "$vid/fusion" ] && grep -m1 " ready " "$vid/tracker.out"; } || true   # grab size: 1920x1080 = full camera px
+L162:   [ -f "$vid/fusion" ] && { echo "fixes $(($(wc -l < "$vid/fixes.csv" 2>/dev/null || echo 1) - 1))"; [ -f "$vid/tracker.out" ] && tail -3 "$vid/tracker.out"; [ -f "$vid/stream_log.out" ] && tail -2 "$vid/stream_log.out"; } || true ;;
+L163: esac
+
+=== A3. tracker.out for ALL target video_truth dirs ===
+[f1-robust] fixes=1701 t_send=[168844.4, 169112.8]
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 2.9 px
+  coral static learned: 21695 px from 30 frames
+  show: recorded logs/video_truth/f1-robust/tracker.mp4
+  {'frames': 1710, 'detections': 1709, 'fixes': 1701, 'skipped': 8, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 112.65080128651731, 'detect_ms': 3.8330529243562763, 'show_ms': 39.01439847956324, 'pad_xy': [-0.0735, 0.0051], 'align': 'fixed'}
+[f1b-robust] fixes=1394 t_send=[169321.8, 169553.8]
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 2.6 px
+  coral static learned: 21927 px from 30 frames
+  show: recorded logs/video_truth/f1b-robust/tracker.mp4
+  {'frames': 1410, 'detections': 1404, 'fixes': 1394, 'skipped': 15, 'gate_rej': 5, 'reseeds': 0, 'read_ms': 118.50941900687346, 'detect_ms': 4.205587163508922, 'show_ms': 40.51882453838277, 'pad_xy': [-0.1228, -0.0728], 'align': 'fixed'}
+[m1-u100] fixes=2634 t_send=[125140.8, 125648.6]
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 0.5 px
+  coral static learned: 29341 px from 30 frames
+  show: recorded logs/video_truth/m1-u100/tracker.mp4
+  {'frames': 2730, 'detections': 2727, 'fixes': 2634, 'skipped': 95, 'gate_rej': 2, 'reseeds': 0, 'read_ms': 112.05316505485706, 'detect_ms': 9.576256886652745, 'show_ms': 62.95491157507058, 'pad_xy': [-0.2509, -0.0982], 'align': 'fixed'}
+[mem1-lab-m-memory-u100] fixes=616 t_send=[141238.4, 141324.1]
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 1.2 px
+  coral static learned: 29025 px from 30 frames
+  show: recorded logs/video_truth/mem1-lab-m-memory-u100/tracker.mp4
+  {'frames': 750, 'detections': 749, 'fixes': 748, 'skipped': 1, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 97.59522600017954, 'detect_ms': 4.080942266484878, 'show_ms': 42.23903266662577, 'pad_xy': [-0.2226, -0.0504], 'align': 'fixed'}
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 1.9 px
+  coral static learned: 27424 px from 30 frames
+  show: recorded logs/video_truth/mem1-lab-m-memory-u100/tracker.mp4
+  {'frames': 160, 'detections': 159, 'fixes': 158, 'skipped': 1, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 92.60280500056979, 'detect_ms': 8.165590000317025, 'show_ms': 32.97359125072035, 'pad_xy': [-0.2132, -0.0412], 'align': 'fixed'}
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 1.1 px
+  coral static learned: 28828 px from 30 frames
+  show: recorded logs/video_truth/mem1-lab-m-memory-u100/tracker.mp4
+  {'frames': 470, 'detections': 469, 'fixes': 468, 'skipped': 1, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 102.89091531854827, 'detect_ms': 5.329852978831425, 'show_ms': 39.434846595519204, 'pad_xy': [-0.235, -0.0648], 'align': 'fixed'}
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 1.4 px
+  coral static learned: 27540 px from 30 frames
+  show: recorded logs/video_truth/mem1-lab-m-memory-u100/tracker.mp4
+  {'frames': 440, 'detections': 437, 'fixes': 438, 'skipped': 1, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 98.82643113590099, 'detect_ms': 4.885775228136811, 'show_ms': 38.15353568100942, 'pad_xy': [-0.2258, -0.0557], 'align': 'fixed'}
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 1.6 px
+  coral static learned: 26881 px from 30 frames
+  WARN no fix sent for 3 s: det 151/189 skipped 36 window 0.50 s; the drone flies on flow alone
+  WARN no fix sent for 3 s: det 185/244 skipped 57 window 0.46 s; the drone flies on flow alone
+  show: recorded logs/video_truth/mem1-lab-m-memory-u100/tracker.mp4
+  {'frames': 490, 'detections': 185, 'fixes': 185, 'skipped': 304, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 106.66864857140558, 'detect_ms': 4.851557142683305, 'show_ms': 42.46395163295068, 'pad_xy': [-0.232, -0.058], 'align': 'fixed'}
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 1.3 px
+  coral static learned: 28362 px from 30 frames
+  window 'r5cam' minimized, restoring
+  show: recorded logs/video_truth/mem1-lab-m-memory-u100/tracker.mp4
+  {'frames': 1040, 'detections': 1039, 'fixes': 1038, 'skipped': 1, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 86.26480942332888, 'detect_ms': 3.9219383649301913, 'show_ms': 42.85066086533614, 'pad_xy': [-0.217, -0.0329], 'align': 'fixed'}
+  window 'r5cam' ready 1920x1080
+  floor check: 0 markers, median shift nan px
+  window 'r5cam' lost for 15 s
+  show: recorded logs/video_truth/mem1-lab-m-memory-u100/tracker.mp4
+  {'frames': 14, 'detections': 13, 'fixes': 12, 'skipped': 1, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 87.50013572197142, 'detect_ms': 7.628935707284005, 'show_ms': 35.18837143201381, 'pad_xy': [-0.3729, -0.5317], 'align': 'fixed'}
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 2.0 px
+  coral static learned: 27308 px from 30 frames
+  show: recorded logs/video_truth/mem1-lab-m-memory-u100/tracker.mp4
+  {'frames': 510, 'detections': 509, 'fixes': 508, 'skipped': 1, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 88.88935725462586, 'detect_ms': 4.101609804452963, 'show_ms': 33.46192980408851, 'pad_xy': [-0.2074, -0.0229], 'align': 'fixed'}
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 1.5 px
+  coral static learned: 28442 px from 30 frames
+  show: recorded logs/video_truth/mem1-lab-m-memory-u100/tracker.mp4
+  {'frames': 490, 'detections': 489, 'fixes': 488, 'skipped': 1, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 108.16059612249718, 'detect_ms': 5.71455469316974, 'show_ms': 45.229214693749874, 'pad_xy': [-0.2139, -0.0275], 'align': 'fixed'}
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 1.7 px
+  coral static learned: 28365 px from 30 frames
+  show: recorded logs/video_truth/mem1-lab-m-memory-u100/tracker.mp4
+  {'frames': 370, 'detections': 346, 'fixes': 338, 'skipped': 31, 'gate_rej': 1, 'reseeds': 0, 'read_ms': 111.97799999987379, 'detect_ms': 7.510209459704472, 'show_ms': 46.019690271193234, 'pad_xy': [-0.2245, -0.0436], 'align': 'fixed'}
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 1.7 px
+  show: recorded logs/video_truth/mem1-lab-m-memory-u100/tracker.mp4
+  {'frames': 80, 'detections': 79, 'fixes': 78, 'skipped': 1, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 99.74400750106724, 'detect_ms': 16.291642498981673, 'show_ms': 37.116860002061, 'pad_xy': [-0.2472, -0.0913], 'align': 'fixed'}
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 1.6 px
+  coral static learned: 26238 px from 30 frames
+  WARN no fix sent for 3 s: det 148/171 skipped 23 window 0.50 s; the drone flies on flow alone
+  WARN no fix sent for 3 s: det 692/740 skipped 75 window 0.50 s; the drone flies on flow alone
+  show: recorded logs/video_truth/mem1-lab-m-memory-u100/tracker.mp4
+  {'frames': 750, 'detections': 696, 'fixes': 666, 'skipped': 83, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 97.87308160025471, 'detect_ms': 6.943915199682427, 'show_ms': 42.56087893387303, 'pad_xy': [-0.2727, -0.1231], 'align': 'fixed'}
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 1.5 px
+  WARN no fix sent for 3 s: det 103/130 skipped 24 window 0.40 s; the drone flies on flow alone
+  coral static learned: 27035 px from 30 frames
+  WARN no fix sent for 3 s: det 697/912 skipped 223 window 0.50 s; the drone flies on flow alone
+  show: recorded logs/video_truth/mem1-lab-m-memory-u100/tracker.mp4
+  {'frames': 920, 'detections': 702, 'fixes': 691, 'skipped': 228, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 98.80773184736229, 'detect_ms': 3.4469410871046735, 'show_ms': 43.41917369491294, 'pad_xy': [-0.2352, -0.1106], 'align': 'fixed'}
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 1.7 px
+  coral static learned: 25801 px from 30 frames
+  show: recorded logs/video_truth/mem1-lab-m-memory-u100/tracker.mp4
+  {'frames': 360, 'detections': 0, 'fixes': 0, 'skipped': 359, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 94.77628861196636, 'detect_ms': 4.549374443821661, 'show_ms': 26.437639445308985, 'pad_xy': None, 'align': 'fixed'}
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 2.4 px
+  coral static learned: 27546 px from 30 frames
+  show: recorded logs/video_truth/mem1-lab-m-memory-u100/tracker.mp4
+  {'frames': 280, 'detections': 0, 'fixes': 0, 'skipped': 279, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 98.43458678650288, 'detect_ms': 5.629377500008559, 'show_ms': 27.481178929156158, 'pad_xy': None, 'align': 'fixed'}
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 1.7 px
+  coral static learned: 29039 px from 30 frames
+  show: recorded logs/video_truth/mem1-lab-m-memory-u100/tracker.mp4
+  {'frames': 1370, 'detections': 1370, 'fixes': 1369, 'skipped': 0, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 93.66135116784245, 'detect_ms': 3.521835839696208, 'show_ms': 43.769456861102206, 'pad_xy': [-0.2109, -0.0221], 'align': 'fixed'}
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 1.8 px
+  coral static learned: 29301 px from 30 frames
+  WARN no fix sent for 3 s: det 639/664 skipped 46 window 0.42 s; the drone flies on flow alone
+  show: recorded logs/video_truth/mem1-lab-m-memory-u100/tracker.mp4
+  {'frames': 760, 'detections': 639, 'fixes': 616, 'skipped': 143, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 92.07507973758192, 'detect_ms': 3.538743025963317, 'show_ms': 38.40279828930905, 'pad_xy': [-0.22, -0.0397], 'align': 'fixed'}
+[mem2-lab-m-memory-u0] fixes=684 t_send=[141498.0, 141608.9]
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 1.4 px
+  WARN no fix sent for 3 s: det 72/97 skipped 23 window 0.50 s; the drone flies on flow alone
+  coral static learned: 28896 px from 30 frames
+  WARN no fix sent for 3 s: det 196/311 skipped 113 window 0.44 s; the drone flies on flow alone
+  show: recorded logs/video_truth/mem2-lab-m-memory-u0/tracker.mp4
+  {'frames': 490, 'detections': 196, 'fixes': 196, 'skipped': 293, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 96.3075100005324, 'detect_ms': 7.14628857047278, 'show_ms': 36.04238122364278, 'pad_xy': [-0.2445, -0.0808], 'align': 'fixed'}
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 2.2 px
+  coral static learned: 28701 px from 30 frames
+  show: recorded logs/video_truth/mem2-lab-m-memory-u0/tracker.mp4
+  {'frames': 330, 'detections': 317, 'fixes': 309, 'skipped': 20, 'gate_rej': 13, 'reseeds': 1, 'read_ms': 95.11832515047651, 'detect_ms': 10.25029121277233, 'show_ms': 41.809225454750106, 'pad_xy': [-0.2647, -0.1105], 'align': 'fixed'}
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 2.0 px
+  coral static learned: 27614 px from 30 frames
+  WARN no fix sent for 115 s: det 1/875 skipped 873 window 0.10 s; the drone flies on flow alone
+  WARN no fix sent for 3 s: det 709/1602 skipped 916 window 0.45 s; the drone flies on flow alone
+  show: recorded logs/video_truth/mem2-lab-m-memory-u0/tracker.mp4
+  {'frames': 1680, 'detections': 709, 'fixes': 684, 'skipped': 995, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 99.85217922625279, 'detect_ms': 2.880231547896983, 'show_ms': 40.282863929280126, 'pad_xy': [-0.2831, -0.164], 'align': 'fixed'}
+[mem3-lab-m-memory-u100] fixes=521 t_send=[141726.8, 141801.4]
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 2.5 px
+  coral static learned: 28700 px from 30 frames
+  WARN no fix sent for 69 s: det 1/515 skipped 513 window 0.10 s; the drone flies on flow alone
+  WARN no fix sent for 3 s: det 537/1074 skipped 551 window 0.43 s; the drone flies on flow alone
+  show: recorded logs/video_truth/mem3-lab-m-memory-u100/tracker.mp4
+  {'frames': 1150, 'detections': 537, 'fixes': 521, 'skipped': 628, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 94.50330104359992, 'detect_ms': 2.989306782837957, 'show_ms': 39.05781304375167, 'pad_xy': [-0.2863, -0.1746], 'align': 'fixed'}
+[mem4-lab-m-memory-u0] fixes=665 t_send=[141945.6, 142036.7]
+  window 'r5cam' ready 1920x1080
+  floor check: 6 markers, median shift 2.7 px
+  coral static learned: 28878 px from 30 frames
+  WARN no fix sent for 3 s: det 677/704 skipped 37 window 0.41 s; the drone flies on flow alone
+  show: recorded logs/video_truth/mem4-lab-m-memory-u0/tracker.mp4
+  {'frames': 790, 'detections': 677, 'fixes': 665, 'skipped': 124, 'gate_rej': 1, 'reseeds': 0, 'read_ms': 92.00579645476876, 'detect_ms': 3.447293291307538, 'show_ms': 38.766849999606336, 'pad_xy': [-0.2288, -0.0609], 'align': 'fixed'}
+[mem5-lab-m-memory-u100] fixes=487 t_send=[142146.9, 142217.2]
+  window 'r5cam' ready 1920x1080
+  floor check: 4 markers, median shift 2.0 px
+  coral static learned: 28282 px from 30 frames
+  WARN no fix sent for 63 s: det 1/472 skipped 470 window 0.10 s; the drone flies on flow alone
+  WARN no fix sent for 3 s: det 508/1005 skipped 516 window 0.41 s; the drone flies on flow alone
+  show: recorded logs/video_truth/mem5-lab-m-memory-u100/tracker.mp4
+  {'frames': 1090, 'detections': 508, 'fixes': 487, 'skipped': 602, 'gate_rej': 1, 'reseeds': 0, 'read_ms': 94.42338889925057, 'detect_ms': 3.0194224777456307, 'show_ms': 37.82788532072627, 'pad_xy': [-0.2797, -0.1623], 'align': 'fixed'}
+[mem6-lab-m-memory-u0] fixes=142 t_send=[142550.8, 142580.8]
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 2.9 px
+  coral static learned: 27790 px from 30 frames
+  WARN no fix sent for 56 s: det 1/431 skipped 429 window 0.10 s; the drone flies on flow alone
+  WARN no fix sent for 3 s: det 139/594 skipped 452 window 0.38 s; the drone flies on flow alone
+  WARN no fix sent for 69 s: det 139/1080 skipped 938 window 0.38 s; the drone flies on flow alone
+  WARN no fix sent for 115 s: det 139/1426 skipped 1284 window 0.38 s; the drone flies on flow alone
+  WARN no fix sent for 135 s: det 139/1533 skipped 1391 window 0.38 s; the drone flies on flow alone
+  show: recorded logs/video_truth/mem6-lab-m-memory-u0/tracker.mp4
+  {'frames': 1630, 'detections': 237, 'fixes': 237, 'skipped': 1392, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 97.39005386554764, 'detect_ms': 2.781375766781079, 'show_ms': 36.73332110431225, 'pad_xy': [-0.1955, 0.005], 'align': 'fixed'}
+  window 'r5cam' ready 1920x1080
+  floor check: 0 markers, median shift nan px
+  window 'r5cam' lost for 15 s
+  show: recorded logs/video_truth/mem6-lab-m-memory-u0/tracker.mp4
+  {'frames': 13, 'detections': 12, 'fixes': 11, 'skipped': 1, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 101.60694615646767, 'detect_ms': 8.343900000909343, 'show_ms': 31.97459231103914, 'pad_xy': [-0.3729, -0.5317], 'align': 'fixed'}
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 3.1 px
+  coral static learned: 27952 px from 30 frames
+  WARN no fix sent for 3 s: det 143/160 skipped 16 window 0.50 s; the drone flies on flow alone
+  show: recorded logs/video_truth/mem6-lab-m-memory-u0/tracker.mp4
+  {'frames': 250, 'detections': 143, 'fixes': 142, 'skipped': 107, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 138.42484800156672, 'detect_ms': 9.136021998361684, 'show_ms': 56.1327324003214, 'pad_xy': [-0.223, -0.0425], 'align': 'fixed'}
+[z1-lab-z-ground-effect] fixes=140 t_send=[142823.5, 142859.4]
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 2.2 px
+  show: recorded logs/video_truth/z1-lab-z-ground-effect/tracker.mp4
+  {'frames': 70, 'detections': 0, 'fixes': 0, 'skipped': 69, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 145.90634999913163, 'detect_ms': 12.774677145145168, 'show_ms': 45.43371714244131, 'pad_xy': None, 'align': 'fixed'}
+  window 'r5cam' ready 1920x1080
+  floor check: 6 markers, median shift 2.4 px
+
+=== B. Parse all 10-15 (f1/f1b) and 10-18 sessions & slot CSVs ===
+Floor floor-2026-10-15: c0_px=[1137.0, 688.0999755859375] xy(z=0.057)=[-0.0471, -0.066] xy(z=0)=[-0.0009, -0.0026]
+Floor floor-1018: c0_px=[1036.5999755859375, 512.0999755859375] xy(z=0.057)=[-0.048, -0.0654] xy(z=0)=[-0.0011, -0.0021]
+mem1 slot CSVs: slot0 cols=16, slot1 cols=78, slot2 cols=202
+  slot0 target cols: []
+  slot1 target cols: ['g_ext_pos_on', 'Ctrler.Z_posPID.FB', 'Ctrler.locxPID.FB', 'g_ext_pos.a_x', 'g_ext_pos.a_y', 'g_ext_pos.ok_run', 'g_ext_pos.n_disagree', 'ano_of.earth_x', 'ano_of.earth_y']
+  slot2 target cols: ['Ctrler.locxPID.Des', 'g_ext_pos.e_x', 'g_ext_pos.e_y', 'g_ext_pos.n_ok', 'g_ext_pos.n_rej', 'g_ext_pos.n_old', 'g_ext_pos.age_ms', 'g_ext_pos.rej_run', 'g_ext_pos.n_anchor', 'g_ext_pos.c_x', 'g_ext_pos.c_y', 'g_ext_pos.stale']
+  logs/mem1-lab-m-memory-u100.slot*.csv (GROUND ONLY, match=[]): dur=201.1s zmax=0.00m d_ok=1365 d_rej=0
+Err B: Traceback (most recent call last):
+  File "D:\projects\UAV_lab\FreeRTOS-adaptive-controller-codex\.agent-ops\research\nb\bias3\measure_bias3.py", line 201, in <module>
+    analyze_df(os.path.basename(sp), df_s)
+  File "D:\projects\UAV_lab\FreeRTOS-adaptive-controller-codex\.agent-ops\research\nb\bias3\measure_bias3.py", line 152, in analyze_df
+    earth = sub[["ano_of.earth_x", "ano_of.earth_y"]].to_numpy(float)
+            ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Acer\AppData\Local\Programs\Python\Python311\Lib\site-packages\pandas\core\frame.py", line 4384, in __getitem__
+    indexer = self.columns._get_indexer_strict(key, "columns")[1]
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Acer\AppData\Local\Programs\Python\Python311\Lib\site-packages\pandas\core\indexes\base.py", line 6302, in _get_indexer_strict
+    self._raise_if_missing(keyarr, indexer, axis_name)
+  File "C:\Users\Acer\AppData\Local\Programs\Python\Python311\Lib\site-packages\pandas\core\indexes\base.py", line 6352, in _raise_if_missing
+    raise KeyError(f"None of [{key}] are in the [{axis_name}]")
+KeyError: "None of [Index(['ano_of.earth_x', 'ano_of.earth_y'], dtype='str')] are in the [columns]"
+
+
+=== C. Inspect fixes.csv ground vs airborne & pad_xy vs id0 for each video_truth dir ===
+  f1-robust               : rows=1701 span= 268.4s gaps>1s=[] | first20 pad_m=[-0.009,-0.000] std=[0.025,0.007] | all pad_m ptp=[0.246,0.334] earth_cm range=[-28..6, -8..17]
+  f1b-robust              : rows=1394 span= 232.0s gaps>1s=[] | first20 pad_m=[+0.015,+0.014] std=[0.013,0.012] | all pad_m ptp=[0.967,0.141] earth_cm range=[-10..10, -57..40]
+  m1-u100                 : rows=2634 span= 507.9s gaps>1s=[1.3, 2.0, 1.5, 1.0, 2.0, 1.7] | first20 pad_m=[-0.001,-0.001] std=[0.001,0.001] | all pad_m ptp=[2.822,2.864] earth_cm range=[-157..128, -151..132]
+  mem1-lab-m-memory-u100  : rows= 616 span=  85.7s gaps>1s=[1.1] | first20 pad_m=[+0.000,+0.002] std=[0.002,0.002] | all pad_m ptp=[0.900,1.497] earth_cm range=[-80..70, -39..60]
+  mem2-lab-m-memory-u0    : rows= 684 span= 110.8s gaps>1s=[1.6, 1.5] | first20 pad_m=[+0.001,+0.000] std=[0.002,0.003] | all pad_m ptp=[0.994,1.061] earth_cm range=[-82..25, -60..40]
+  mem3-lab-m-memory-u100  : rows= 521 span=  74.6s gaps>1s=[] | first20 pad_m=[+0.002,+0.002] std=[0.003,0.004] | all pad_m ptp=[0.864,1.187] earth_cm range=[-85..35, -57..30]
+  mem4-lab-m-memory-u0    : rows= 665 span=  91.1s gaps>1s=[] | first20 pad_m=[-0.001,-0.000] std=[0.003,0.002] | all pad_m ptp=[0.574,1.024] earth_cm range=[-80..24, -21..38]
+  mem5-lab-m-memory-u100  : rows= 487 span=  70.3s gaps>1s=[1.6] | first20 pad_m=[+0.000,+0.001] std=[0.002,0.002] | all pad_m ptp=[1.073,1.629] earth_cm range=[-82..80, -52..63]
+  mem6-lab-m-memory-u0    : rows= 142 span=  30.0s gaps>1s=[] | first20 pad_m=[+0.002,+0.001] std=[0.002,0.002] | all pad_m ptp=[0.028,0.044] earth_cm range=[-1..3, -2..1]
+  z1-lab-z-ground-effect  : rows= 140 span=  35.9s gaps>1s=[8.5] | first20 pad_m=[+0.002,+0.001] std=[0.001,0.002] | all pad_m ptp=[0.037,0.047] earth_cm range=[-2..3, -2..2]

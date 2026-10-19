@@ -1,0 +1,10 @@
+15:09 MERGED main=236ba13
+15:09 TESTS drift=8PASS/0FAIL rpm=19passed PUSHED
+15:11 FLASH1 OK main=236ba13 verify=OK(0 mismatches) dropped=0
+15:14 WP14 spawned wp14-r2 lane=ark,agy:gemini-3.1-pro-high,qwen (VPS gemini weekly 2%)
+16:00 WP14 wp14-r2 ark TIMEOUT, 0 files changed -> local sonnet fallback
+16:01 WP14 spawned lane=local sonnet-5.5 (acct B) in wt-wp14
+16:20 WP14 MERGED night=dd2212f main=1acb811 (sonnet df7dff6; shadow 7/0, vps pytest 10 passed)
+16:20 FLASH2 SKIPPED HOLD_FLASH (operator 15:22: operator flashes manually); build-only check in wt-night
+16:20 BUILD2 (wt-night, build-only) FAIL rc=2 uVision GUI resident; not retried
+16:21 PARTIAL (report docs/agent/reports/WP-18.md 99c5f20; flash2 on HOLD, operator flashes 1acb811)

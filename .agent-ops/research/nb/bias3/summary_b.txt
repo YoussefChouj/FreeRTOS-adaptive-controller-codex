@@ -1,0 +1,38 @@
+=== 1. tracker.out for f1-robust, f1b-robust, m1-u100 ===
+[f1-robust]
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 2.9 px
+  coral static learned: 21695 px from 30 frames
+  show: recorded logs/video_truth/f1-robust/tracker.mp4
+  {'frames': 1710, 'detections': 1709, 'fixes': 1701, 'skipped': 8, 'gate_rej': 0, 'reseeds': 0, 'read_ms': 112.65080128651731, 'detect_ms': 3.8330529243562763, 'show_ms': 39.01439847956324, 'pad_xy': [-0.0735, 0.0051], 'align': 'fixed'}
+[f1b-robust]
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 2.6 px
+  coral static learned: 21927 px from 30 frames
+  show: recorded logs/video_truth/f1b-robust/tracker.mp4
+  {'frames': 1410, 'detections': 1404, 'fixes': 1394, 'skipped': 15, 'gate_rej': 5, 'reseeds': 0, 'read_ms': 118.50941900687346, 'detect_ms': 4.205587163508922, 'show_ms': 40.51882453838277, 'pad_xy': [-0.1228, -0.0728], 'align': 'fixed'}
+[m1-u100]
+  window 'r5cam' ready 1920x1080
+  floor check: 5 markers, median shift 0.5 px
+  coral static learned: 29341 px from 30 frames
+  show: recorded logs/video_truth/m1-u100/tracker.mp4
+  {'frames': 2730, 'detections': 2727, 'fixes': 2634, 'skipped': 95, 'gate_rej': 2, 'reseeds': 0, 'read_ms': 112.05316505485706, 'detect_ms': 9.576256886652745, 'show_ms': 62.95491157507058, 'pad_xy': [-0.2509, -0.0982], 'align': 'fixed'}
+
+=== 2. Session telemetry analysis (10-15 and 10-18) ===
+20261015-220301-lab-c-robust-001_f01_lab_c_robust  #1  7.3s z=0.62m | ok= 41 rej=  0 ( 0.0%)  5.6Hz(ok: 5.6) | |c| pre= 2.4 p50=16.5 p90=27.3 max=31.1 end=12.2cm | n=41 yaw=-47.5deg sc=0.91 rms=6.1cm off_mean=[-10.6,+13.6](|17.2|) off_init=[-3.6,+8.4](|9.1|) off_end=[-4.4,+11.4](|12.2|)
+  20261015-220904-lab-c-robust-001_f01_lab_c_robust (GROUND): dur=19.0s d_ok=119 d_rej=0
+  20261018-185058-lab-m-memory-u100-001_f01_lab_m_memory_u (GROUND): dur=13.9s d_ok=90 d_rej=0
+  20261018-185937-lab-m-memory-u100-001_f01_lab_m_memory_u (GROUND): dur=15.3s d_ok=100 d_rej=0
+  20261018-194210-lab-m-memory-u100-001_f01_lab_m_memory_u (GROUND): dur=7.1s d_ok=18 d_rej=0
+  20261018-194526-lab-m-memory-u0-001_f01_lab_m_memory_u0 (GROUND): dur=5.9s d_ok=10 d_rej=0
+20261018-205431-lab-m-memory-u100-001_f01_lab_m_memory_u #1  2.1s z=0.75m | ok= 13 rej=  0 ( 0.0%)  6.3Hz(ok: 6.3) | |c| pre= 0.0 p50= 8.1 p90=35.2 max=39.3 end=39.3cm | n=13 yaw=-61.7deg sc=0.99 rms=5.9cm off_mean=[-16.3,+13.8](|21.4|) off_init=[-0.1,+5.5](|5.5|) off_end=[-30.5,+20.7](|36.9|)
+20261018-211026-lab-m-memory-u100-001_f01_lab_m_memory_u #1 52.6s z=0.89m | ok=352 rej=  0 ( 0.0%)  6.7Hz(ok: 6.7) | |c| pre= 0.5 p50=36.4 p90=46.4 max=55.9 end=34.8cm | n=352 yaw=-2.6deg sc=1.01 rms=9.1cm off_mean=[-31.5,+17.5](|36.1|) off_init=[-19.1,+17.0](|25.6|) off_end=[-37.3,+2.7](|37.4|)
+20261018-211322-lab-m-memory-u0-001_f01_lab_m_memory_u0 #1  2.7s z=0.79m | ok=  1 rej= 14 (93.3%)  5.5Hz(ok: 0.4) | |c| pre= 0.0 p50= 0.6 p90=77.6 max=87.2 end=87.2cm | n=15 yaw=-34.8deg sc=0.87 rms=27.0cm off_mean=[+99.2,-46.9](|109.8|) off_init=[+69.0,-34.2](|77.0|) off_end=[+121.1,-59.8](|135.1|)
+20261018-212857-lab-m-memory-u100-001_f01_lab_m_memory_u #1 40.6s z=0.88m | ok=276 rej=  0 ( 0.0%)  6.8Hz(ok: 6.8) | |c| pre= 2.7 p50=43.9 p90=48.1 max=56.6 end=56.6cm | n=276 yaw=-8.2deg sc=0.99 rms=6.6cm off_mean=[-27.0,+33.4](|43.0|) off_init=[-16.8,+29.5](|33.9|) off_end=[-33.5,+38.7](|51.2|)
+20261018-214728-lab-m-memory-u100-001_f01_lab_m_memory_u #1 53.1s z=0.90m | ok=375 rej=  0 ( 0.0%)  7.1Hz(ok: 7.1) | |c| pre= 0.6 p50=41.2 p90=49.6 max=58.6 end=41.6cm | n=375 yaw=-4.0deg sc=1.07 rms=10.1cm off_mean=[-30.4,+25.6](|39.8|) off_init=[-1.0,+13.6](|13.7|) off_end=[-42.2,+23.2](|48.1|)
+20261018-215218-lab-m-memory-u0-001_f01_lab_m_memory_u0 #1 47.7s z=0.88m | ok=260 rej=  0 ( 0.0%)  5.4Hz(ok: 5.4) | |c| pre= 0.3 p50=58.6 p90=63.6 max=70.1 end=57.7cm | n=260 yaw=-14.2deg sc=1.09 rms=10.8cm off_mean=[-36.7,+39.9](|54.3|) off_init=[-9.2,+14.6](|17.2|) off_end=[-46.2,+40.2](|61.3|)
+20261018-215527-lab-m-memory-u100-001_f01_lab_m_memory_u #1 50.7s z=0.90m | ok=350 rej=  0 ( 0.0%)  6.9Hz(ok: 6.9) | |c| pre= 1.0 p50=50.6 p90=54.8 max=67.1 end=59.0cm | n=350 yaw=-14.2deg sc=1.24 rms=11.2cm off_mean=[-30.5,+37.8](|48.6|) off_init=[-10.2,+14.9](|18.1|) off_end=[-49.3,+36.5](|61.4|)
+20261018-215926-lab-m-memory-u0-001_f01_lab_m_memory_u0 #1 47.3s z=0.87m | ok=330 rej=  0 ( 0.0%)  7.0Hz(ok: 7.0) | |c| pre= 0.7 p50=34.9 p90=41.2 max=48.0 end=23.4cm | n=330 yaw=-12.5deg sc=1.18 rms=9.3cm off_mean=[-23.5,+24.7](|34.1|) off_init=[+2.0,+9.3](|9.5|) off_end=[-25.7,+12.0](|28.4|)
+20261018-220222-lab-m-memory-u100-001_f01_lab_m_memory_u #1 51.1s z=0.88m | ok=349 rej=  0 ( 0.0%)  6.8Hz(ok: 6.8) | |c| pre= 0.6 p50=43.9 p90=49.6 max=59.2 end=41.5cm | n=350 yaw=-7.8deg sc=1.02 rms=9.3cm off_mean=[-30.4,+30.0](|42.7|) off_init=[-11.1,+18.9](|21.9|) off_end=[-41.7,+21.5](|46.9|)
+  20261018-220517-lab-m-memory-u0-001_f01_lab_m_memory_u0 (GROUND): dur=4.5s d_ok=34 d_rej=0
+  20261018-220919-lab-m-memory-u0-001_f01_lab_m_memory_u0 (GROUND): dur=4.9s d_ok=23 d_rej=0

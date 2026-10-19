@@ -1,0 +1,6 @@
+{
+  "compaction": {
+    "tokenThreshold": 160000,
+    "token_threshold": 160000
+  }
+}

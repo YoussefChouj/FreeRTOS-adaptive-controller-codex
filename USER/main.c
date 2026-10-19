@@ -126,7 +126,7 @@ void vApplicationMallocFailedHook(void)
 volatile uint32_t g_reset_csr = 0U;
 
 int main(void)
-{ 
+ { 
     g_reset_csr = RCC->CSR;
     RCC_ClearFlag();
     PlatformRegistry_Init();
