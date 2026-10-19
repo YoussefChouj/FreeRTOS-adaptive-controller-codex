@@ -471,6 +471,23 @@ def test_8_heartbeat_timeout() -> None:
     assert drone.position[2] == 0.0
 
 
+def test_8b_heartbeat_clock_starts_at_takeoff() -> None:
+    """A long quiet wait on the ground (preflight, arm) does not trip HEARTBEAT at takeoff (wfb_glue hb_ref_ms);
+
+    the 1.0 s timeout then runs from the TAKEOFF accept.
+    """
+    drone = FakeDrone()
+    client = WfbClient(drone.send)
+    client.arm()
+    client.idle()
+    run(drone, client, 3.0, heartbeat=False)   # no flight yet: nothing to trip
+    client.takeoff()
+    run(drone, client, 0.5, heartbeat=False)
+    assert drone.status()["safety_trip"] == Trip.NONE
+    run(drone, client, 0.6, heartbeat=False)
+    assert drone.status()["safety_trip"] == Trip.HEARTBEAT
+
+
 def test_9_airborne_cap() -> None:
     """Hovering with heartbeats past the cap gives safety_trip AIRBORNE_CAP and a landing."""
     drone = FakeDrone(params=FakeParams(airborne_cap_s=3.0))

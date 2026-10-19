@@ -386,6 +386,7 @@ class FakeDrone:
             self._prim_state = PrimState.CLIMB
             self._prim_settle_t = 0.0
             self._gs_flight_active = 1
+            self._hb_age = 0.0   # wfb_glue: the heartbeat clock starts at TAKEOFF accept
             return int(Outcome.APPLIED)
 
         elif cmd.index == PrimIdx.LAND:
