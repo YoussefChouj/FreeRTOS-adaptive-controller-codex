@@ -9,15 +9,15 @@ each step prints its time) and named steps run alone (`bash tools/check.sh fw-li
 | Step | What | Command |
 |---|---|---|
 | host-tests | 14 host C tests (API/tests, tests/firmware_host), one table row each | `python tools/host_tests.py [name]` |
-| mrac-equiv | MRAC bit-exact vs the reference tree, plain + sigma-prior | `python API/tests/run_mrac_equiv.py` |
+| mrac-equiv | uncommitted `API/mrac*` edits bit-exact vs HEAD, plain + sigma-prior (`--base <rev>` for another reference; an intended change passes with `MRAC_EQUIV_EXPECT_DIFF="<why>"`, which still prints the first mismatch) | `python API/tests/run_mrac_equiv.py` |
 | c-pytest | pytest suites that compile firmware C (subscribe harness, MRAC variants) + tools tests | pytest |
 | sil-smoke | `sim/sil/test_sil.py` (firmware controllers closed-loop), minus its EQUIV case | pytest |
 | clang-tidy | `.clang-tidy` on every firmware file the host tests build (14 on 2026-10-05), with their flags | `python tools/host_tests.py --tidy` |
 | float | no implicit float -> double promotion in the same files (`gcc -msse2 -mfpmath=sse -Werror=double-promotion`; the M4 FPU is single precision) | `python tools/host_tests.py --float` |
 | row-meta | unit and [min, max] of every `*_ROW` tunable; every row value in range | `python tools/row_meta.py [--json]` |
 | fw-lint | ASCII-only, file header, no new double libm call; allow-list shrinks only | `python tools/fw_lint.py` |
-| stack | task stacks and nested MSP from the Keil call graph; ISR above the syscall ceiling calls no kernel code | `python tools/stack_budget.py` |
-| doc-paths | every repo path named in an agent-facing doc exists, no `file:line` past its end; allow-list shrinks only | `python tools/doc_paths.py` |
+| stack | task stacks and nested MSP from the Keil call graph; ISR above the syscall ceiling calls no kernel code; SKIP without a Keil build (CI), FAIL if `OBJ/JX_FLY.axf` has no .htm | `python tools/stack_budget.py` |
+| doc-paths | every repo path named in an agent-facing doc exists, no `file:line` past its end (Keil outputs `OBJ/*.axf/hex/map/htm` and `logs/` skipped); allow-list shrinks only | `python tools/doc_paths.py` |
 | arm-syntax | `arm-none-eabi-gcc -fsyntax-only`, Cortex-M4F flags, same files; SKIP if absent | `python tools/host_tests.py --arm` |
 
 clang-tidy checks: `bugprone-*`, `clang-analyzer-*`, `readability-non-const-parameter`, warnings are errors. Off:

@@ -6,7 +6,8 @@ project skills .claude/skills/*/SKILL.md. Reports, briefs, research notes and pl
 not checked.
 
 A path is a backtick span with a '/' and a file extension whose first segment is a top-level repo entry
-(`API/pid.c`, `docs/agent/HANDOFF.md:12`); run outputs under logs/ are skipped. A `:line` past the end of the
+(`API/pid.c`, `docs/agent/HANDOFF.md:12`); run outputs under logs/ and the gitignored Keil link outputs
+(`OBJ/JX_FLY.axf`, .hex, .map, .htm) are skipped: a fresh checkout or CI has neither. A `:line` past the end of the
 file fails too (the code moved, the doc did not). Known exceptions (a file that lives on a branch or in another
 repo) go in tools/doc_paths_allow.txt; that list shrinks only: an entry whose file now exists fails too.
 """
@@ -17,6 +18,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ALLOW = ROOT / 'tools' / 'doc_paths_allow.txt'
 RUN_OUTPUT = ('logs/',)          # written by a run, absent in a fresh checkout
+KEIL_OUTPUT = re.compile(r'OBJ/[^/]+\.(axf|hex|map|htm)')   # written by a Keil link (.gitignore); OBJ/ subdirs are tracked
 SCOPE = ['AGENTS.md', 'CLAUDE.md', 'docs/*.md', 'docs/agent/*.md', 'docs/skills/*.md', '.claude/skills/*/SKILL.md']
 PATH = re.compile(r'`([\w.][\w./-]*/[\w./-]*\.[A-Za-z]{1,8})(?::(\d+)(?:-(\d+))?)?`')
 
@@ -35,7 +37,7 @@ def missing():
         name = doc.relative_to(ROOT).as_posix()
         for m in PATH.finditer(text):
             path = m.group(1)
-            if path.split('/')[0] not in tops or path.startswith(RUN_OUTPUT):
+            if path.split('/')[0] not in tops or path.startswith(RUN_OUTPUT) or KEIL_OUTPUT.fullmatch(path):
                 continue
             if not (ROOT / path).exists():
                 yield name, path

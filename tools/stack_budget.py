@@ -13,6 +13,9 @@ Second check, the interrupt stack (MSP): every NVIC_Init call in BSP/*.c gives a
 priority. Handlers at the same priority do not nest, so the worst case is the deepest handler of each priority
 level stacked on each other, plus one exception frame per nested level. Also fails if a handler above the
 FreeRTOS syscall ceiling (priority number < configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY) reaches kernel code.
+
+A checkout with no Keil build (no OBJ/JX_FLY.axf, as in CI) skips with a message: the call graph exists only where
+Keil links. An .axf without its .htm fails (a link that wrote no call graph).
 """
 import pathlib
 import re
@@ -20,6 +23,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 HTM = ROOT / 'OBJ' / 'JX_FLY.htm'
+AXF = ROOT / 'OBJ' / 'JX_FLY.axf'      # gitignored like the .htm: both exist only after a Keil link
 TASK_H = ROOT / 'Global_file' / 'creat_task.h'
 MAIN_C = ROOT / 'USER' / 'main.c'
 CONFIG_H = ROOT / 'FreeRTOS' / 'include' / 'FreeRTOSConfig.h'
@@ -135,6 +139,13 @@ def tasks():
 
 
 def main():
+    if not HTM.exists():
+        if AXF.exists():
+            print('stack-budget: FAIL: %s exists but %s does not (Keil linked without the call graph?)'
+                  % (AXF.relative_to(ROOT).as_posix(), HTM.relative_to(ROOT).as_posix()))
+            return 1
+        print('SKIP stack-budget: no Keil build here (no OBJ/JX_FLY.axf or .htm); runs where Keil links')
+        return 0
     htm = read(HTM)
     stamp = re.search(r'Last Updated: ([^\n<]+)', htm)
     print('stack-budget: call graph %s (%s)' % (HTM.relative_to(ROOT).as_posix(), stamp.group(1) if stamp else '?'))

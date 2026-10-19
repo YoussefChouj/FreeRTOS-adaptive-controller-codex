@@ -2,6 +2,16 @@
 """
 Host bit-exact equivalence test runner for MRAC firmware.
 Compares a reference tree against a new tree across multiple control scenarios.
+
+Reference = API/mrac*.c/h at --base (default HEAD), new = the working tree's, both driven by the working tree's
+API/tests/test_mrac_equiv.c. With the default the gate reads "the uncommitted MRAC edits do not change any output
+bit": a refactor passes, a law or default change fails at its first differing line. Until 2026-10-19 the default
+was the fixed commit 4458435 (2026-09-24); later intended changes (MRAC_VARIANT_MULTI default 2026-10-10,
+What_lower_limit, ...) made every run fail there, and a shallow CI checkout does not have that commit.
+
+An intended change: MRAC_EQUIV_EXPECT_DIFF="<why>" python API/tests/run_mrac_equiv.py still prints the first
+mismatch, then "EQUIV DIFFERS ... (expected: <why>)" and exits 0 (the builds still have to pass; a stream that
+matches still has to meet the line and coverage minimums).
 """
 
 import argparse
@@ -44,7 +54,8 @@ def extract_base_tree(base_rev: str, target_dir: Path, repo_root: Path):
         text=True,
         check=True,
     )
-    files = [line.strip() for line in res.stdout.splitlines() if line.strip()]
+    # Top level of API/ only, as copy_working_tree: API/tests/mrac_sizeof.c has its own main()
+    files = [line.strip() for line in res.stdout.splitlines() if os.path.dirname(line.strip()) == "API"]
     extracted = []
     for f in files:
         basename = os.path.basename(f)
@@ -71,6 +82,13 @@ def copy_working_tree(target_dir: Path, repo_root: Path):
     if not copied:
         raise RuntimeError(f"No MRAC files found in {api_dir}")
     return copied
+
+
+def tree_defs(tree_dir: Path) -> list:
+    """-DMRAC_EQUIV_NEW_TREE for a tree with the injection gate (mrac_inj): the driver opens the gate so learning
+    runs as in the trees before it. Per tree, so a base of either age builds and compares like for like."""
+    header = tree_dir / "mrac.h"
+    return ["-DMRAC_EQUIV_NEW_TREE"] if header.exists() and "mrac_inj" in header.read_text(errors="replace") else []
 
 
 def build_binary(tree_dir: Path, driver_path: Path, stubs_dir: Path, out_bin: Path, extra_flags=None) -> Path:
@@ -223,8 +241,9 @@ def run_self_test(base_rev: str, repo_root: Path, driver_path: Path, stubs_dir: 
         base_dir.mkdir()
         extract_base_tree(base_rev, base_dir, repo_root)
 
+        defs = tree_defs(base_dir)
         bin_base = tmp_dir / "bin_base"
-        bin_base = build_binary(base_dir, driver_path, stubs_dir, bin_base)
+        bin_base = build_binary(base_dir, driver_path, stubs_dir, bin_base, defs)
 
         # Perturbation (a): replace first 0.0174533f with 0.0174534f in mrac.c
         pert_a_dir = tmp_dir / "pert_a"
@@ -241,7 +260,7 @@ def run_self_test(base_rev: str, repo_root: Path, driver_path: Path, stubs_dir: 
             f.write(code_a)
 
         bin_pert_a = tmp_dir / "bin_pert_a"
-        bin_pert_a = build_binary(pert_a_dir, driver_path, stubs_dir, bin_pert_a)
+        bin_pert_a = build_binary(pert_a_dir, driver_path, stubs_dir, bin_pert_a, defs)
         _, _, mismatch_a = compare_streams(bin_base, bin_pert_a)
         if mismatch_a is None:
             print("Self-test failed: perturbation (a) did not fail comparison against base", file=sys.stderr)
@@ -262,7 +281,7 @@ def run_self_test(base_rev: str, repo_root: Path, driver_path: Path, stubs_dir: 
             f.write(code_b)
 
         bin_pert_b = tmp_dir / "bin_pert_b"
-        bin_pert_b = build_binary(pert_b_dir, driver_path, stubs_dir, bin_pert_b)
+        bin_pert_b = build_binary(pert_b_dir, driver_path, stubs_dir, bin_pert_b, defs)
         _, _, mismatch_b = compare_streams(bin_base, bin_pert_b)
         if mismatch_b is None:
             print("Self-test failed: perturbation (b) did not fail comparison against base", file=sys.stderr)
@@ -274,7 +293,8 @@ def run_self_test(base_rev: str, repo_root: Path, driver_path: Path, stubs_dir: 
 
 def main():
     parser = argparse.ArgumentParser(description="Host bit-exact equivalence test for MRAC firmware")
-    parser.add_argument("--base", default="4458435", help="Base git commit revision (default: 4458435)")
+    parser.add_argument("--base", default="HEAD", help="Reference git revision (default: HEAD, i.e. the "
+                        "uncommitted MRAC edits; 4458435 = the 2026-09-24 reference of the first refactors)")
     parser.add_argument("--self-test", action="store_true", help="Run self-test with intentional perturbations")
     parser.add_argument("--define", action="append", default=[], metavar="NAME=VAL",
                         help="Extra -D for the new-tree builds only (the base tree predates e.g. MRAC_CAPACITY)")
@@ -298,14 +318,15 @@ def main():
         new_dir.mkdir()
         copy_working_tree(new_dir, repo_root)
 
-        new_defs = ["-D" + d for d in args.define] + ["-DMRAC_EQUIV_NEW_TREE"]
+        ref_defs = tree_defs(ref_dir)
+        new_defs = ["-D" + d for d in args.define] + tree_defs(new_dir)
 
         # The four builds are independent, and so are the two compares (each runs its two binaries): run them at
         # once. Results are reported in the old order, plain first.
         builds = {
-            "ref_plain": (ref_dir, []),
+            "ref_plain": (ref_dir, ref_defs),
             "new_plain": (new_dir, new_defs),
-            "ref_sigma": (ref_dir, ["-DMRAC_ENABLE_SIGMA_PRIOR"]),
+            "ref_sigma": (ref_dir, ["-DMRAC_ENABLE_SIGMA_PRIOR"] + ref_defs),
             "new_sigma": (new_dir, ["-DMRAC_ENABLE_SIGMA_PRIOR"] + new_defs),
         }
         with ThreadPoolExecutor(max_workers=len(builds)) as pool:
@@ -316,19 +337,28 @@ def main():
                     for v in ("plain", "sigma")]
             results = [run.result() for run in runs]
 
-        lines = []
-        for n_lines, cov, info in results:
+        expect = os.environ.get("MRAC_EQUIV_EXPECT_DIFF", "").strip()
+        lines, differs = [], []
+        for variant, (n_lines, cov, info) in zip(("plain", "sigma-prior"), results):
             if info is not None:
                 print(
                     f"Mismatch at line {info['line_no']}: tag '{info['tag']}' ref={info['ref_hex']} ({info['ref_flt']:.6e}) != new={info['new_hex']} ({info['new_flt']:.6e})",
                     file=sys.stderr,
                 )
-                sys.exit(1)
-            if not check_coverage_and_lines(n_lines, cov):
+                if not expect:
+                    print(f"EQUIV FAIL vs {args.base}: if the change is intended, rerun with "
+                          "MRAC_EQUIV_EXPECT_DIFF=\"<why>\"", file=sys.stderr)
+                    sys.exit(1)
+                differs.append(f"{variant} from line {info['line_no']}")
+                n_lines = info["line_no"] - 1
+            elif not check_coverage_and_lines(n_lines, cov):
                 sys.exit(1)
             lines.append(n_lines)
 
-        print(f"EQUIV OK: {lines[0]} lines identical (plain) + {lines[1]} (sigma-prior)")
+        if differs:
+            print(f"EQUIV DIFFERS vs {args.base}: {', '.join(differs)} (expected: {expect})")
+        else:
+            print(f"EQUIV OK vs {args.base}: {lines[0]} lines identical (plain) + {lines[1]} (sigma-prior)")
         sys.exit(0)
 
 

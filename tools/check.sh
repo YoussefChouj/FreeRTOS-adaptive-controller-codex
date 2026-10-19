@@ -2,7 +2,8 @@
 # One gate for the firmware and its host pipeline (WP-36). Run from anywhere: bash tools/check.sh
 # Every step runs even after a failure; exit 1 if any step failed. No Keil, no flash, no hardware.
 #   host-tests   every host C test of API/tests and tests/firmware_host (tools/host_tests.py)
-#   mrac-equiv   MRAC bit-exact equivalence vs the reference tree (API/tests/run_mrac_equiv.py)
+#   mrac-equiv   uncommitted API/mrac* edits bit-exact vs HEAD (API/tests/run_mrac_equiv.py; an intended change:
+#                MRAC_EQUIV_EXPECT_DIFF="<why>" bash tools/check.sh)
 #   c-pytest     pytest suites that compile firmware C (subscribe harness, MRAC variants) + tools tests
 #   sil-smoke    sim/sil/test_sil.py, the firmware controllers in the closed-loop SIL (its EQUIV case is mrac-equiv), and
 #                sim/sil/test_faults.py, wfb_safety trips on SIL faults; 4 pytest processes at once (sil_smoke)
@@ -10,7 +11,8 @@
 #   float        no implicit float -> double promotion in those files (gcc -Werror=double-promotion)
 #   row-meta     units and [min, max] of every *_ROW tunable, every row value in range (tools/row_meta.py)
 #   fw-lint      firmware coding-standard ratchet (tools/fw_lint.py, allow-list shrinks only)
-#   stack        task and interrupt stack budget from the Keil call graph (tools/stack_budget.py)
+#   stack        task and interrupt stack budget from the Keil call graph (tools/stack_budget.py); skipped with a
+#                message if this checkout has no Keil build (no OBJ/JX_FLY.axf)
 #   doc-paths    every repo path and file:line in the agent-facing docs exists (tools/doc_paths.py)
 #   arm-syntax   arm-none-eabi-gcc -fsyntax-only on the same files; skipped with a message if not installed
 # Subset while iterating: bash tools/check.sh doc-paths fw-lint (step names as above), or --fast for every step
