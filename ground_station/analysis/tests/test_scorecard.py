@@ -232,3 +232,72 @@ def test_day_report_trend_and_compare(lab, tmp_path):
     assert tab[1]["hold_rms_cm mean"] == "6.25" and tab[1]["hold_rms_cm sd"] == str(round(np.std([7.5, 5], ddof=1), 2))
     assert tab[0]["hold_rms_cm sd"] == "" and (tab[0]["fail"], tab[1]["pass"]) == ("1", "2")
     assert "| hold rms cm (EKF) | 5 | 6.25 (1.77) |" in md_c
+
+
+def _hover_frame(xd):
+    """A HOVER-only (prim 2) frame at 20 Hz over 20 s whose x target (m) is xd(t)."""
+    t = np.arange(0, 20, DT)
+    import pandas as pd
+    return pd.DataFrame({"g_wfb_status.prim_state": 2.0, "Ctrler.locxPID.Des": [xd(s) for s in t],
+                         "Ctrler.locyPID.Des": 0.0}, index=t)
+
+
+def test_preset_trajectory_in_hover_is_traj_and_a_static_target_stays_hold():
+    # `preset figure8` moves the target from AutoflyTask while the primitive stays HOVER: 0.3 m amplitude, 10 s
+    # period (peak 0.19 m/s) from t = 5 s to 15 s, static before and after
+    w = _hover_frame(lambda s: 0.3 * math.sin(2 * math.pi * (s - 5) / 10) if 5 <= s < 15 else 0.0)
+    m = sc.phase_masks(w)
+    t = w.index.to_numpy(float)
+    assert m["traj"] is not None and m["hold"] is not None
+    assert not m["traj"][t < 4.7].any() and not m["traj"][t > 15.3].any()
+    # the target crosses zero speed at the lobe tips (t = 7.5, 12.5 s): only those few rows fall back to hold
+    assert m["traj"][(t >= 5) & (t < 15)].mean() > 0.85
+    assert m["hold"][t < 4.7].all() and m["hold"][t > 15.3].all()
+    assert not (m["hold"] & m["traj"]).any()
+    # a static target, or one hold setpoint step (0.3 m at 10 s: 0.6 m/s for the 0.5 s the +-0.25 s window spans
+    # it, under PRESET_TRAJ_MIN_S), gives no traj rows
+    for xd in (lambda s: 0.0, lambda s: 0.3 * (s >= 10)):
+        m = sc.phase_masks(_hover_frame(xd))
+        assert m["traj"] is None and m["hold"].all()
+    # real TRAJ rows (prim 3) win: a moving HOVER target is then not counted as trajectory
+    w = _hover_frame(lambda s: 0.01 * s)
+    w.loc[w.index >= 15, "g_wfb_status.prim_state"] = 3.0
+    m = sc.phase_masks(w)
+    assert m["traj"].sum() == (w.index >= 15).sum() and m["hold"].sum() == (w.index < 15).sum()
+
+
+def test_day_cards_takes_ids_from_the_state_and_carried_flights_from_load_day(lab, tmp_path, monkeypatch):
+    from ground_station.lab import labday
+    root, _ = lab
+    days = tmp_path / "days"
+    days.mkdir()
+    (days / "2026-10-17.yaml").write_text("day: 2026-10-17\nflights:\n- {id: E1, fly: lab_m_memory_u0, pass: p-e1}\n",
+                                          encoding="utf-8")
+    (days / f"{DATE}.yaml").write_text(f"day: {DATE}\nflights:\n- {{id: mem1, fly: lab_m_memory_u100, pass: p-m1}}\n",
+                                       encoding="utf-8")
+    monkeypatch.setattr(labday, "LAB_DIR", tmp_path / "lab")      # no earlier state: E1 is carried as 1017-E1
+    seen = []
+    monkeypatch.setattr(sc, "score_flight", lambda folder, f, cam, root=None: seen.append(
+        (folder.name, (f or {}).get("id"), (f or {}).get("pass"), cam)) or {})
+    (root / "logs" / "video_truth" / "1017-e1-lab-m-memory-u0").mkdir(parents=True)
+    # no state file: both by .fly name, the carried flight included (the raw yaml has no 1017-E1)
+    sc.day_cards(DATE, root, days)
+    assert seen == [("01_lab-m-memory-u100", "mem1", "p-m1", None),
+                    ("02_lab-m-memory-u0", "1017-E1", "p-e1", "1017-e1-lab-m-memory-u0")]
+    # the state names the folder of each id and its camera: a re-fly (03) of mem1 takes the id, the first try (01)
+    # matches no unused entry and keeps its folder name
+    third = root / "logs" / "flights" / DATE / "03_lab-m-memory-u100"
+    third.mkdir()
+    (third / "lab_m_memory_u100.fly").write_text("takeoff 0.8\nland\n", encoding="utf-8")
+    (root / "logs" / "video_truth" / "cam-m1").mkdir()
+    st = root / "logs" / "lab" / DATE / "labday_state.json"
+    st.parent.mkdir(parents=True)
+    st.write_text(json.dumps({"flown": {
+        "mem1": {"ok": True, "folder": f"logs/flights/{DATE}/03_lab-m-memory-u100", "camera": "cam-m1"},
+        "1017-E1": {"ok": False, "folder": f"logs\\flights\\{DATE}\\02_lab-m-memory-u0", "camera": "gone"},
+        "1017-F1": {"ok": False, "folder": None}}, "skipped": []}), encoding="utf-8")
+    seen.clear()
+    sc.day_cards(DATE, root, days)
+    assert seen == [("01_lab-m-memory-u100", None, None, None),
+                    ("02_lab-m-memory-u0", "1017-E1", "p-e1", None),
+                    ("03_lab-m-memory-u100", "mem1", "p-m1", "cam-m1")]

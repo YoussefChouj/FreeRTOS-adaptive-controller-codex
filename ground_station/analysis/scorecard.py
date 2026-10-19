@@ -32,6 +32,9 @@ DAYS_DIR = ROOT / "docs" / "lab" / "days"
 PASS_LAND_CM = 15.0       # PROPOSED: "lands on the pad" = debrief landing offset at most this
 CAM_SYNC_R_MIN = 0.8      # PROPOSED: fixes.csv is used for tracking error only when the x cross-correlation reaches this
 PRIM_TRAJ = 3             # API/wfb_prim.h: IDLE CLIMB HOVER TRAJ ...
+PRESET_TRAJ_MPS = 0.02    # PROPOSED: a HOVER x/y target moving faster than this is a Keil preset trajectory
+REF_SPEED_HALF_S = 0.25   # half window (s) of the target speed estimate
+PRESET_TRAJ_MIN_S = 1.0   # target motion shorter than this (a hold setpoint step) is not a preset trajectory
 MRAC_INJ = (15, 10)       # command id, idx of mrac_injection (campaign_live command events)
 VOLT_KEYS = ("real_voltage", "status.vbat")
 BEHIND = re.compile(r"^(\d\d:\d\d:\d\d)\.\d+ .*ingest behind: max frame age (\d+) ms")
@@ -134,10 +137,42 @@ def _t0_epoch(session: Path) -> float | None:
 
 # ---------- metric groups ----------
 
+def ref_speed(w, half: float = REF_SPEED_HALF_S) -> np.ndarray:
+    """|d(x, y target)/dt| in m/s per row: the target displacement over +-half s, read by interpolation so the
+    irregular, forward-filled telemetry rows give no spikes. 0 where the target is unknown."""
+    t = w.index.to_numpy(float) if len(w) else np.array([])
+    xd, yd = lab_flights.col(w, "Ctrler.locxPID.Des"), lab_flights.col(w, "Ctrler.locyPID.Des")
+    ok = np.isfinite(t) & np.isfinite(xd) & np.isfinite(yd)
+    if ok.sum() < 2:
+        return np.zeros(len(t))
+    tk, xk, yk = t[ok], xd[ok], yd[ok]
+    dx = np.interp(t + half, tk, xk) - np.interp(t - half, tk, xk)
+    dy = np.interp(t + half, tk, yk) - np.interp(t - half, tk, yk)
+    return np.hypot(dx, dy) / (2 * half)
+
+
+def _drop_short_runs(m: np.ndarray, t: np.ndarray, min_s: float) -> np.ndarray:
+    """m with every run of True rows spanning less than min_s seconds set False."""
+    m = m.copy()
+    edges = np.flatnonzero(np.diff(np.r_[0, m.astype(np.int8), 0]))
+    for a, b in zip(edges[::2], edges[1::2]):
+        if t[b - 1] - t[a] < min_s:
+            m[a:b] = False
+    return m
+
+
 def phase_masks(w) -> dict:
-    """Per-row masks of the primitive state (HOVER = hold, TRAJ = trajectory) on the wide frame; None when absent."""
+    """Per-row masks of the primitive state (HOVER = hold, TRAJ = trajectory) on the wide frame; None when absent.
+    With no TRAJ rows, HOVER rows whose x/y target moves faster than PRESET_TRAJ_MPS for PRESET_TRAJ_MIN_S or more
+    are the trajectory: a Keil preset (`preset figure8`) moves the target from AutoflyTask while the primitive stays
+    HOVER."""
     ps = np.round(lab_flights.col(w, co.PRIM_STATE)) if len(w) else np.array([])
-    return {n: (m if m.any() else None) for n, m in (("hold", ps == co.PRIM_HOVER), ("traj", ps == PRIM_TRAJ))}
+    ts = np.round(lab_flights.col(w, "g_wfb_status.traj_state")) if len(w) else np.array([])
+    hold, traj = ps == co.PRIM_HOVER, (ps == PRIM_TRAJ) | (ts == PRIM_TRAJ)
+    if hold.any() and not traj.any():
+        traj = _drop_short_runs(hold & (ref_speed(w) > PRESET_TRAJ_MPS), w.index.to_numpy(float), PRESET_TRAJ_MIN_S)
+        hold = hold & ~traj
+    return {n: (m if m.any() else None) for n, m in (("hold", hold), ("traj", traj))}
 
 
 def ekf_tracking(w, win) -> dict:
@@ -540,23 +575,53 @@ def compare_configs(cards: list[dict]) -> tuple[str, str]:
 
 # ---------- day ----------
 
+def _day_plan(path: Path) -> list[dict]:
+    """The day file's flights plus those carried over from earlier days (labday.load_day: 1017-E1 ...), or the raw
+    file's flights when it fails labday's checks; [] without a readable file."""
+    from ground_station.lab import labday     # imported here: labday imports this module
+    try:
+        return labday.load_day(path)["flights"]
+    except Exception:
+        try:
+            return (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("flights") or []
+        except (OSError, yaml.YAMLError):
+            return []
+
+
+def _flown_by_folder(state_path: Path) -> dict:
+    """labday_state.json's flown flights as {flight folder name: (id, camera dir name or None)}."""
+    try:
+        flown = json.loads(state_path.read_text(encoding="utf-8")).get("flown") or {}
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return {str(r["folder"]).replace("\\", "/").rsplit("/", 1)[-1]: (fid, r.get("camera"))
+            for fid, r in flown.items() if isinstance(r, dict) and r.get("folder")}
+
+
 def day_cards(date: str, root: Path | None = None, days_dir: Path | None = None) -> list[dict]:
-    """Cards for every flight folder of the date, matched to the day file's entries by .fly name in flight order."""
+    """Cards for every flight folder of the date. A folder labday_state.json names gets that flight id and camera;
+    the others are matched to the plan (the day file plus carried flights) by .fly name in flight order."""
     root = Path(root or ROOT)
     days_dir = Path(days_dir or DAYS_DIR)
-    try:
-        plan = (yaml.safe_load((days_dir / f"{date}.yaml").read_text(encoding="utf-8")) or {}).get("flights") or []
-    except (OSError, yaml.YAMLError):
-        plan = []
-    cards, used = [], set()
+    plan = _day_plan(days_dir / f"{date}.yaml")
+    by_id = {str(p.get("id")): p for p in plan}
+    flown = _flown_by_folder(root / "logs" / "lab" / date / "labday_state.json")
+    used = {fid for fid, _ in flown.values()}
+    cards = []
     for folder in sorted((root / "logs" / "flights" / date).glob("*_*")):
         fly = next(iter(sorted(folder.glob("*.fly"))), None)
         stem = fly.stem.lower() if fly else ""
-        # the first planned entry of this .fly not yet matched (flight order; a re-fly shifts the later ids)
-        f = next((p for p in plan if str(p.get("fly", "")).lower() == stem and p["id"] not in used), None)
-        if f:
-            used.add(f["id"])
-        cam = f"{f['id']}-{f['fly']}".lower().replace("_", "-") if f else None
+        if folder.name in flown:
+            fid, cam = flown[folder.name]
+            f = by_id.get(fid) or {"id": fid, "fly": fly.stem if fly else None}
+        else:
+            # the first planned entry of this .fly not yet matched (flight order; a re-fly shifts the later ids)
+            f = next((p for p in plan if str(p.get("fly", "")).lower() == stem and str(p.get("id")) not in used), None)
+            cam = None
+            if f:
+                used.add(str(f["id"]))
+        if f and not cam and f.get("fly"):
+            cam = f"{f['id']}-{f['fly']}".lower().replace("_", "-")
         cards.append(score_flight(folder, f, cam if cam and (root / "logs" / "video_truth" / cam).is_dir() else None,
                                   root=root))
     return cards

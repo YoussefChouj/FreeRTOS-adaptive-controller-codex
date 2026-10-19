@@ -227,14 +227,40 @@ def todo(d, state, start=None):
     return [f for f in d["flights"] if f["id"] not in done]
 
 
+NEVER_AIRBORNE = "never airborne (0 s air)"
+
+
+def _debrief_lines(folder):
+    """The lines of <folder>/debrief.txt (folder relative to ROOT or absolute), [] when there is none."""
+    if not folder:
+        return []
+    try:
+        return (ROOT / folder / "debrief.txt").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+
+
 def bad_end(rc, ev):
-    """Why a flight ended badly, or None: fly's exit code, then the debrief status it logged."""
+    """Why a flight ended badly, or None: fly's exit code, the debrief status it logged, then a safety-monitor abort
+    or no air time (both still end `complete`: 2026-10-19 mem1..z2 aborted L1, 1017-E1..E4 never took off)."""
     if rc != 0:
         return f"fly exited {rc}"
     if not ev:
         return "no debrief logged (no flight: quit at the arm wait, or GO refused)"
     if ev.get("status") != NORMAL_END:
         return f"ended {ev.get('status')} in {ev.get('phase')}"
+    if ev.get("aborted") or ev.get("abort_reason"):
+        return f"aborted: {ev.get('abort_reason') or 'safety monitor'}"
+    for ln in _debrief_lines(ev.get("folder")):
+        if ln.startswith("ABORTED L"):
+            return ln.split(" (the safety", 1)[0]
+        if ln.startswith("landing offset: no landing (never airborne)"):
+            return NEVER_AIRBORNE
+    try:
+        if ev.get("air_s") is not None and float(ev["air_s"]) <= 0:
+            return NEVER_AIRBORNE
+    except (TypeError, ValueError):
+        pass
     return None
 
 
