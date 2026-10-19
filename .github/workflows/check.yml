@@ -1,4 +1,4 @@
-# The firmware gate (tools/check.sh) on every push and pull request. Not run yet: the repo has no remote CI history.
+# The firmware gate (tools/check.sh) on every push and pull request. No Keil here: stack SKIPs by name (exit 77).
 name: check
 on: [push, pull_request]
 jobs:
