@@ -80,6 +80,15 @@ only, divider 10) and stops only slots 1-3. The lab watchdog still never re-send
 Tests: `test_lab_capture_end_gives_slot0_back_to_the_arm_flag`,
 `test_restore_lab_slot0_requests_only_slot0_at_10hz` in `ground_station/service/tests/test_lab_mode.py`.
 
+## Found by the soak: the fake drone's heartbeat clock ran on the ground (fixed)
+
+Full soak 3 lost d2 z2 and d3 z1 to `firmware:HEARTBEAT` (operator_needed, L3) 0.2 s into the air with a healthy
+link. The fake drone aged its heartbeat through the whole ground wait and tripped the moment TAKEOFF set
+`gs_flight_active`. The firmware sets `hb_ref_ms = now` on TAKEOFF accept (`API/wfb_glue.c`), so its timeout runs
+from take-off. The fake drone now does the same (2b0093a); `hb_timeout_s` stays 1.0. A bug in the test drone, not
+in 8081 or the firmware. Test: `test_8b_heartbeat_clock_starts_at_takeoff` in
+`ground_station/service/tests/test_fake_drone.py`.
+
 ## Results
 
 (filled in from the runs below)
