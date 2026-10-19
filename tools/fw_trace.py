@@ -8,9 +8,12 @@ same state on every tick. Targets:
   stab  TASK/StabilizerTask.c, one control tick (tools/fw_trace/stab_trace.c)
   cmd   TASK/send_data.c, the ground-station command path (tools/fw_trace/cmd_trace.c)
   mrac  API/mrac.c, MRAC_Control with random flags and variant fields (tools/fw_trace/mrac_trace.c)
-Functions a file references but its harness never runs are linked as empty dummies (generated from the linker's
-undefined-reference list). `--cov` also builds the new version with gcov and prints the line coverage of the code
-the target exercises. Never touches OBJ/.
+Symbols a file references but its harness never provides are linked as dummies, generated from the linker's
+undefined-reference list: a function (one gcc's -aux-info lists for a compiled unit) becomes an empty function, and
+anything else (a variable) becomes a zeroed 64 KiB buffer, so reads give 0 and writes land in RAM, not in code.
+`--cov` also builds the new version with gcov and prints the line coverage of the code the target exercises. On a
+case-sensitive filesystem the GlobalUse_Basic_Function.h include resolves through the alias in tools/fw_equiv_stubs.
+Never touches OBJ/.
 
     python tools/fw_trace.py                          # stab vs HEAD, 4 seeds x 200000 ticks
     python tools/fw_trace.py cmd --base wp/36 --cov
@@ -60,13 +63,21 @@ def build(gcc: str, target: str, root: Path, exe: Path, cov: bool) -> None:
                       str(ctrl)], out)
         if res.returncode != 0:
             raise SystemExit(f"build {root} controller.c:\n{res.stderr[-3000:]}")
-    link = [gcc, *CFLAGS, *(["--coverage"] if cov else []), *fw_equiv.flags(root),
-            f'-D{macro}="{(root / rel).as_posix()}"', str(REPO / "tools" / "fw_trace" / harness),
+    units = [[f'-D{macro}="{(root / rel).as_posix()}"', str(REPO / "tools" / "fw_trace" / harness)],
+             *([str(root / e)] for e in extra if e != "ctrl"),
+             *([[*RENAME, str(root / "API" / "controller.c")]] if "ctrl" in extra else [])]
+    link = [gcc, *CFLAGS, *(["--coverage"] if cov else []), *fw_equiv.flags(root), *units[0],
             *(str(ctrl) if e == "ctrl" else str(root / e) for e in extra)]
     res = run_ok([*link, "-lm", "-o", str(exe)], out)
     missing = sorted(set(re.findall(r"undefined reference to `_?(\w+)'", res.stderr)))
     if res.returncode != 0 and missing:
-        dummy_c.write_text("".join(f"void {m}(void) {{ }}\n" for m in missing))
+        aux, funcs = out / "aux.txt", set()
+        for unit in units:   # -aux-info: every function a unit declares, implicit ones too; never a variable
+            aux.unlink(missing_ok=True)
+            run_ok([gcc, *CFLAGS, "-fsyntax-only", "-aux-info", str(aux), *fw_equiv.flags(root), *unit], out)
+            funcs |= set(re.findall(r"(\w+) \(", aux.read_text(errors="replace"))) if aux.exists() else set()
+        dummy_c.write_text("".join(f"void {m}(void) {{ }}\n" if m in funcs else
+                                   f"char {m}[65536] __attribute__((aligned(16)));\n" for m in missing))
         res = run_ok([gcc, *CFLAGS, "-c", str(dummy_c), "-o", str(dummy_o)], out)
         if res.returncode == 0:
             res = run_ok([*link, str(dummy_o), "-lm", "-o", str(exe)], out)
