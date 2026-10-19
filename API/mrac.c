@@ -1891,6 +1891,18 @@ uint8_t MRAC_VariantParamSet(uint8_t axis, uint8_t field, float val)
     return 1U;
 }
 
+/* CMD 0x1D idx -> (axis, field). idx < 0x80: (field << 2) | axis, axes 0-3 (every sender before x/y);
+ * idx >= 0x80: 0x80 | (field << 1) | (axis - 4), axes 4 x / 5 y. The old decode put every idx >= 0x80 at
+ * field >= 32 (always refused), so no existing sender changes meaning. */
+uint8_t MRAC_VariantIdxSet(uint8_t idx, float val)
+{
+    uint32_t i = (uint32_t)idx;
+    uint8_t axis = ((i & 0x80U) != 0U) ? (uint8_t)((uint32_t)MRAC_AXIS_X + (i & 0x01U)) : (uint8_t)(i & 0x03U);
+    uint8_t field = ((i & 0x80U) != 0U) ? (uint8_t)((i >> 1U) & 0x3FU) : (uint8_t)(i >> 2U);
+
+    return MRAC_VariantParamSet(axis, field, val);
+}
+
 void MRAC_Reset(void)
 {
     MRAC_ResetWeights();

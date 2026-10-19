@@ -1,7 +1,8 @@
 """WP-27 MRAC variant knobs: CMD 0x1D field table and the per-campaign start/restore presets.
 
-CMD 0x1D MRAC_VARIANT writes one per-axis variant field: idx = (field << 2) | axis, value float32
-(``MRAC_VariantParamSet`` in API/mrac.c; refused while airborne). ``VARIANT_FIELDS`` mirrors the firmware
+CMD 0x1D MRAC_VARIANT writes one per-axis variant field, value float32 (``MRAC_VariantIdxSet`` in API/mrac.c;
+refused while airborne). ``variant_idx`` packs the idx byte: (field << 2) | axis for axes 0-3, and
+0x80 | (field << 1) | (axis - 4) for axes 4 x / 5 y. ``VARIANT_FIELDS`` mirrors the firmware
 ``mrac_var_field`` table row for row (a host test compares them). Docs: docs/workflow-b/mrac-variants.md.
 
 Campaign presets live in the controller descriptor (``presets:``). ``campaign_presets`` returns what the
@@ -16,7 +17,7 @@ from pathlib import Path
 import yaml
 
 MRAC_VARIANT_CMD = 0x1D
-AXES = ("mrac_config_pitch", "mrac_config_roll", "mrac_config_yaw", "mrac_config_z")
+AXES = ("mrac_config_pitch", "mrac_config_roll", "mrac_config_yaw", "mrac_config_z", "mrac_config_x", "mrac_config_y")
 
 # (field, lo, hi) in MRAC_VariantField_e order; API/mrac.c mrac_var_field.
 VARIANT_FIELDS: tuple[tuple[str, float, float], ...] = (
@@ -51,9 +52,21 @@ VARIANT_FIELDS: tuple[tuple[str, float, float], ...] = (
 GAMMA_SCALE_FIELD = 11
 
 
+def variant_idx(axis: int, field: int) -> int:
+    """CMD 0x1D idx byte for (axis 0-5, field). Axes 0-3 keep the original (field << 2) | axis."""
+    if not 0 <= field < len(VARIANT_FIELDS) or not 0 <= axis < len(AXES):
+        raise ValueError(f"no CMD 0x1D idx for axis {axis} field {field}")
+    return (field << 2) | axis if axis < 4 else 0x80 | (field << 1) | (axis - 4)
+
+
+def variant_split(idx: int) -> tuple[int, int]:
+    """(axis, field) the firmware decodes from idx byte ``idx`` (MRAC_VariantIdxSet); field may be out of table."""
+    return (4 + (idx & 0x01), (idx >> 1) & 0x3F) if idx & 0x80 else (idx & 0x03, idx >> 2)
+
+
 def variant_symbol(idx: int) -> str | None:
     """Firmware variable CMD 0x1D writes for idx byte ``idx``, or None outside the table."""
-    axis, field = idx & 0x03, idx >> 2
+    axis, field = variant_split(idx)
     if field >= len(VARIANT_FIELDS):
         return None
     if field == GAMMA_SCALE_FIELD:
@@ -63,7 +76,7 @@ def variant_symbol(idx: int) -> str | None:
 
 def variant_bounds(idx: int) -> tuple[float, float] | None:
     """Firmware accept range [lo, hi] of the field behind ``idx``."""
-    field = idx >> 2
+    field = variant_split(idx)[1]
     return VARIANT_FIELDS[field][1:] if field < len(VARIANT_FIELDS) else None
 
 

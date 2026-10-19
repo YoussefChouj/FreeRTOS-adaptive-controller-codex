@@ -2,6 +2,7 @@
  *
  *   mrac_variants_host <steps> [axis:field:value ...] [nan_rate:<from>:<to>] [nan_ang:<from>:<to>] [udef:<value>]
  *                      [learn_off:<step>]   (adaptation_on = 0 from that step; "wf <ax> <max|Theta - Whatf|>" at the end)
+ *                      [idx:<idx>:<value>]  (a CMD 0x1D wire index through MRAC_VariantIdxSet, prints "set <ok>")
  *
  * Writes each axis:field:value through MRAC_VariantParamSet (prints "set <ok>"), then runs <steps> ticks of
  * a synthetic rate-tracking signal with the learn gate open and injection on (as API/tests/test_mrac_equiv.c).
@@ -18,6 +19,7 @@
 /* Repeated from mrac.h for tools that index this file against another tree's headers (gate clang-tidy).
  * mrac_var_id is not repeated: WP-33 widened it to uint16_t, so a copy would clash with an older mrac.h. */
 uint8_t MRAC_VariantParamSet(uint8_t axis, uint8_t field, float val);
+uint8_t MRAC_VariantIdxSet(uint8_t idx, float val);
 
 _imu_st imu_data = {0.0f, 0.0f};
 
@@ -55,6 +57,11 @@ int main(int argc, char **argv)
         long x, y;
         if (strncmp(s, "udef:", 5) == 0) { udef = strtof(s + 5, NULL); continue; }
         if (strncmp(s, "learn_off:", 10) == 0) { learn_off = (int)strtol(s + 10, NULL, 10); continue; }
+        if (strncmp(s, "idx:", 4) == 0) {
+            x = strtol(s + 4, &end, 10);
+            printf("set %d\n", (int)MRAC_VariantIdxSet((uint8_t)x, strstr(end + 1, "nan") ? NAN : strtof(end + 1, NULL)));
+            continue;
+        }
         if (strncmp(s, "nan_rate:", 9) == 0 || strncmp(s, "nan_ang:", 8) == 0) {
             int rate = (s[4] == 'r');
             x = strtol(strchr(s, ':') + 1, &end, 10);

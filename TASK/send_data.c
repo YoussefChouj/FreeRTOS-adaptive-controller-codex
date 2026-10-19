@@ -1693,14 +1693,15 @@ static void Cmd_RefModelType(GsCmd_t *c)
     }
 }
 
-/* CMD 0x1D - MRAC law variant field (WP-27, docs/workflow-b/mrac-variants.md).
- *   idx = (field << 2) | axis, field = MRAC_VariantField_e, axis 0 pitch 1 roll 2 yaw 3 z.
- *   Fields 0-12 WP-27; 13-18 WP-33 (st_eps, st_phi_max, st_bar, lf_gain, sigma_lf, gam_f), idx <= 75.
- *   MRAC_VariantParamSet bounds every field and refuses non-finite values; ignored while airborne. */
+/* CMD 0x1D - MRAC law variant field (WP-27, docs/workflow-b/mrac-variants.md), field = MRAC_VariantField_e.
+ *   idx < 0x80:  (field << 2) | axis, axis 0 pitch 1 roll 2 yaw 3 z.
+ *   idx >= 0x80: 0x80 | (field << 1) | (axis - 4), axis 4 x 5 y.
+ *   MRAC_VariantIdxSet decodes; MRAC_VariantParamSet bounds every field and refuses non-finite values.
+ *   Ignored while airborne. */
 static void Cmd_MracVariant(GsCmd_t *c)
 {
     if ((flight_phase != FLIGHT_PHASE_FLYING) && (flight_phase != FLIGHT_PHASE_LANDING)) {
-        (void)MRAC_VariantParamSet((uint8_t)((uint32_t)c->idx & 0x03U), (uint8_t)((uint32_t)c->idx >> 2U), c->val);
+        (void)MRAC_VariantIdxSet(c->idx, c->val);
     }
 }
 

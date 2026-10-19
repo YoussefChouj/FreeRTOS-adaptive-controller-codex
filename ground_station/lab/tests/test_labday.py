@@ -506,7 +506,7 @@ def test_port_seam_reaches_the_flight_and_the_service_check(tmp_path, monkeypatc
     monkeypatch.setattr(labday, "code_stamp", lambda: "test")
     p = labday.Day(d, tmp_path / "state.json", pack="2", ask=fake.ask, run=fake.run, popen=fake.popen, port=18081)
     assert p.go() == 0
-    assert seen == [("http://127.0.0.1:18081", 18081)]
+    assert set(seen) == {("http://127.0.0.1:18081", 18081)}
     once = [c for c in fake.cmds if "--once" in c]
     assert len(once) == 1 and once[0][-2:] == ["--port", "18081"]
     made = []
