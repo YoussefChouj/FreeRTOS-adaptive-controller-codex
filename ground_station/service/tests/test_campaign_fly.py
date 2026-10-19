@@ -908,7 +908,6 @@ def test_write_gains_in_flight(capsys, monkeypatch):
     assert "1/1 ACK (applied, 8081 journal)" in out
 
 
-<<<<<<< HEAD
 def _fake_service(monkeypatch, stale, safe):
     # ensure_service with a fake 8081: down after the kill, up once a new one is started
     log = {"kill": [], "popen": []}
@@ -1000,7 +999,6 @@ def test_ensure_service_ends_leftover_stream_log_first(monkeypatch, tmp_path, ca
     monkeypatch.setattr(campaign_fly.time, "sleep", lambda s: alive.clear())
     campaign_fly.ensure_service("http://x", 8081)
     assert log["kill"] == []
-=======
 def test_watch_warns_when_post_takeoff_gains_fail(monkeypatch):
     rig = Flight(monkeypatch)
     rig.go_t = 0.0
@@ -1013,4 +1011,3 @@ def test_watch_warns_when_post_takeoff_gains_fail(monkeypatch):
         close = staticmethod(lambda: None)
     campaign_fly.watch("http://h", term=T(), post_takeoff_gains="c3")
     assert any(s.startswith("POST-TAKEOFF GAINS FAILED (c3)") for s in said)
->>>>>>> 9863cb3e (Lab: warn on failed post-takeoff gains; heartbeat recovers from a slow link)

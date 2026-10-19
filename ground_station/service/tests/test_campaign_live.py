@@ -366,7 +366,6 @@ def test_heartbeat_stops_when_consecutive_commands_time_out():
 
 
 
-<<<<<<< HEAD
 def _all_fresh(svc: FakeService, t_ns: int) -> None:
     for sym in _FRESHNESS_SYMS:
         svc.values[sym] = (0.0, t_ns)
@@ -481,7 +480,6 @@ def test_link_watch_thread_starts_once_and_outlives_a_bad_reading(capsys):
     time.sleep(0.1)
     assert len(events) == n
     assert "[campaign] link watch: RuntimeError('netsh garbled')" in capsys.readouterr().err
-=======
 def _hbs(svc):
     return [c for c in svc.calls if (c[0], c[1]) == (CMD_PRIM, PrimIdx.HEARTBEAT)]
 
@@ -519,4 +517,3 @@ def test_heartbeat_probes_after_lockout_and_resumes_when_link_returns():
     clock.sleep(0.2)
     assert client.heartbeat() is True
     assert client._consecutive_timeouts == 0
->>>>>>> 9863cb3e (Lab: warn on failed post-takeoff gains; heartbeat recovers from a slow link)
