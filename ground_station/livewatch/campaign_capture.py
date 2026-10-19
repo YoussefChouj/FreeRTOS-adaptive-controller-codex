@@ -203,6 +203,15 @@ NN4: tuple[str, ...] = (
     "imu_data.pit", "ano_of.of2_dx_fix", "ano_of.of2_dy_fix", "ano_of.of1_dx", "ano_of.of1_dy",
     "s_ekf_of.x[1]", "s_ekf_of.x[4]", "ano_of.of_alt_cm", "s_ekf_of.innov_x", "s_ekf_of.innov_y",
 )
+# The onboard drift net's output (NN/drift_nn_task.h): the live switch, whether the flight loop applied the residual
+# this tick and why not (DRIFT_NN_WHY_*), the clamped residual it applied, the raw residual and the EKF velocity it
+# was added to, then the task's health. Shadow or live, nn_io scores vx/vy against camera truth; live_on splits a
+# flight into applied and not applied.
+DRIFT_NN: tuple[str, ...] = (
+    "g_drift_nn_live", "g_drift_nn.live_on", "g_drift_nn.live_why", "g_drift_nn.dvx", "g_drift_nn.dvy",
+    "g_drift_nn.vx", "g_drift_nn.vy", "g_drift_nn.v_in[0]", "g_drift_nn.v_in[1]", "g_drift_nn.steps",
+    "g_drift_nn.status", "g_drift_nn_clamp_mps", "g_drift_nn.alt_hold", "g_drift_nn.cyc_max",
+)
 LOG_GROUPS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "mrac_shadow": MRAC_SHADOW,
     "mrac_3l": MRAC_3L,
@@ -216,6 +225,7 @@ LOG_GROUPS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "camera_fusion": CAMERA_FUSION,
     "xy_ctrl": XY_CTRL,
     "nn4": NN4,
+    "drift_nn": DRIFT_NN,
 })
 # Two speeds: `groups` ride with the core set at rate_hz (the control lane); `slow` groups get slots of their own
 # at slow_hz (never above rate_hz). The firmware guard charges each slot at its own divider (API/subscribe.c:592),

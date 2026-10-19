@@ -1,7 +1,9 @@
-/* Shadow-mode drift NN task (PROPOSED, not flown).
+/* Drift NN task (PROPOSED, shadow by default).
  * 100 Hz sampling of the 23 model inputs, 50 ms block means, one model step every 5 samples (20 Hz),
  * the same binning the offline training uses (ground_station/analysis/nn_io.py, 50 ms block mean).
- * Priority 1: below every flight task, so it only uses idle time. It never writes a flight variable. */
+ * Priority 1: below every flight task, so it only uses idle time. It never writes a flight variable:
+ * it publishes the clamped residual dvx/dvy, and StabilizerTask.c decides per tick whether to apply it
+ * (g_drift_nn_live, Dnn_LiveGate). */
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -31,6 +33,15 @@
 extern EkfOf_t s_ekf_of;
 
 volatile DriftNn_t g_drift_nn;
+volatile uint8_t g_drift_nn_live = DRIFT_NN_LIVE_OFF;
+volatile float   g_drift_nn_clamp_mps = 0.10f;
+
+static float dnn_clamp(float x, float lim)
+{
+    if (x > lim) return lim;
+    if (x < -lim) return -lim;
+    return x;
+}
 
 static TaskHandle_t s_dnn_handle;
 
@@ -63,7 +74,8 @@ static void dnn_sample(float *f)
 
 static void drift_nn_task(void *arg)
 {
-    float sum[DRIFT_NN_IN], s[DRIFT_NN_IN], v[2], out[2];
+    float sum[DRIFT_NN_IN], s[DRIFT_NN_IN], v[2], out[2], lim;
+    int rc;
     float alt_last = drift_nn_mu(14);   /* training mean until the first valid altitude */
     uint32_t n = 0U, i, t0, dc;
     TickType_t wake = xTaskGetTickCount();
@@ -74,9 +86,12 @@ static void drift_nn_task(void *arg)
     for (;;) {
         vTaskDelayUntil(&wake, pdMS_TO_TICKS(DRIFT_NN_PERIOD_MS));
         if (g_drift_nn.reset_req) {
-            g_drift_nn.reset_req = 0U;
-            drift_nn_reset();
+            /* steps first, the flag last: the live gate holds WARMUP while either says so */
             g_drift_nn.steps = 0U;
+            drift_nn_reset();
+            for (i = 0U; i < DRIFT_NN_IN; i++) sum[i] = 0.0f;
+            n = 0U;
+            g_drift_nn.reset_req = 0U;
         }
         dnn_sample(s);
         for (i = 0U; i < DRIFT_NN_IN; i++) sum[i] += s[i];
@@ -97,7 +112,8 @@ static void drift_nn_task(void *arg)
         v[0] = s[12];
         v[1] = s[13];
         t0 = DNN_CYC_NOW();
-        if (drift_nn_step(s, v, out) < 0) g_drift_nn.status = DRIFT_NN_ST_BADSUM;
+        rc = drift_nn_step(s, v, out);
+        if (rc < 0) g_drift_nn.status = DRIFT_NN_ST_BADSUM;
         dc = DNN_CYC_NOW() - t0;
         g_drift_nn.cyc_last = dc;
         if (dc > g_drift_nn.cyc_max) g_drift_nn.cyc_max = dc;
@@ -105,6 +121,12 @@ static void drift_nn_task(void *arg)
         g_drift_nn.v_in[1] = v[1];
         g_drift_nn.vx = out[0];
         g_drift_nn.vy = out[1];
+        /* out is a residual (corrected = v + out); on a bad checksum it is a copy of v, never applied */
+        lim = g_drift_nn_clamp_mps;
+        if (!(lim > 0.0f)) lim = 0.0f;
+        g_drift_nn.dvx = (rc == 0) ? dnn_clamp(out[0], lim) : 0.0f;
+        g_drift_nn.dvy = (rc == 0) ? dnn_clamp(out[1], lim) : 0.0f;
+        g_drift_nn.step_ms = (uint32_t)xTaskGetTickCount() * (uint32_t)portTICK_PERIOD_MS;
         g_drift_nn.steps++;
     }
 }

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,7 @@ from ground_station.livewatch.manifest import REQUIRED_SYNC_VARS
 from ground_station.livewatch.stream import FRAME_OVERHEAD, MAX_SLOTS, MAX_STREAM_RANGES
 
 ELF = Path(__file__).resolve().parents[3] / "OBJ" / "JX_FLY.axf"
+DRIFT_NN_H = Path(__file__).resolve().parents[3] / "NN" / "drift_nn_task.h"
 CATALOG = Path(cc.__file__).with_name("symbol_catalog.json")
 NEEDED, OPTIONAL = CAMPAIGN_SET["needed"], CAMPAIGN_SET["optional"]
 ALL_VARS = NEEDED + OPTIONAL
@@ -58,7 +60,7 @@ def test_every_symbol_resolves_in_the_elf_as_one_scalar():
     from ground_station.livewatch.symbols import SymbolResolver
 
     resolver = SymbolResolver(ELF)
-    sizes = {v: resolver.resolve(v).size for v in ALL_VARS + cc.VELOCITY_LOOPS + cc.OPTICAL_FLOW + cc.XY_CTRL + cc.NN4}
+    sizes = {v: resolver.resolve(v).size for v in ALL_VARS + cc.VELOCITY_LOOPS + cc.OPTICAL_FLOW + cc.XY_CTRL + cc.NN4 + cc.DRIFT_NN}
     assert {v: s for v, s in sizes.items() if not 1 <= s <= 4} == {}
 
 
@@ -298,6 +300,39 @@ def test_two_speed_plan_fills_the_link_without_repeats():
     table = cc.log_plan_table(plan)
     assert f"| xy_ctrl | {len(cc.XY_CTRL)}/{len(cc.XY_CTRL)} | 25 |  |" in table
     assert f"{len(hz)} slot(s), {cc.plan_bps(plan['slots']):.0f} of 70042 B/s" in table.splitlines()[-1]
+
+
+def _drift_nn_header_paths() -> tuple[set[str], set[str]]:
+    """Scalar paths of DriftNn_t (v_in[2] -> v_in[0], v_in[1]) and the extern names, from NN/drift_nn_task.h."""
+    text = re.sub(r"/\*.*?\*/", "", DRIFT_NN_H.read_text(encoding="utf-8"), flags=re.S)
+    body = re.search(r"typedef struct \{(.*?)\} DriftNn_t;", text, re.S).group(1)
+    fields: set[str] = set()
+    for decl in filter(None, (d.replace("volatile", "").strip() for d in body.split(";"))):
+        for name in decl.split(None, 1)[1].split(","):
+            m = re.fullmatch(r"\s*(\w+)\s*(?:\[(\d+)\])?\s*", name)
+            fields |= {m[1]} if m[2] is None else {f"{m[1]}[{i}]" for i in range(int(m[2]))}
+    externs = set(re.findall(r"^extern volatile \w+\s+(\w+);", text, re.M))
+    return fields, externs
+
+
+def test_drift_nn_group_matches_the_firmware_header():
+    fields, externs = _drift_nn_header_paths()
+    assert {"g_drift_nn", "g_drift_nn_live", "g_drift_nn_clamp_mps"} <= externs
+    members = [v.split(".", 1)[1] for v in cc.DRIFT_NN if v.startswith("g_drift_nn.")]
+    assert [m for m in members if m not in fields] == []
+    assert {"live_on", "live_why", "dvx", "dvy", "vx", "vy", "steps", "status"} <= set(members)
+    assert {"g_drift_nn_live", "g_drift_nn_clamp_mps"} <= set(cc.DRIFT_NN)
+    assert len(set(cc.DRIFT_NN)) == len(cc.DRIFT_NN) and cc.LOG_GROUPS["drift_nn"] == cc.DRIFT_NN
+
+
+def test_lab_slow_lane_logs_the_net_and_its_inputs_without_drops():
+    # The 10-19 run sheet logs drift_nn + nn4 on every flight on top of the usual slow groups.
+    slow = ["nn4", "drift_nn", "xy_ctrl", "mrac_3l", "mrac_theta", "ekf_states", "estimator_truth"]
+    plan = cc.plan_capture({"rate_hz": 100, "groups": ["velocity_loops", "camera_fusion"], "slow": slow})
+    recorded = [v for s in plan["slots"] for v in s["vars"]]
+    assert set(cc.DRIFT_NN + cc.NN4) <= set(recorded) and plan["dropped"] == []
+    assert len(recorded) == len(set(recorded))
+    assert cc.plan_bps(plan["slots"]) <= cc.PLANNING_BUDGET_BPS
 
 
 def test_memory_plan_logs_the_live_mrac_weights():

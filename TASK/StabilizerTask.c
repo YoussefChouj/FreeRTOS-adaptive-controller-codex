@@ -25,6 +25,7 @@
 #include "xy_ctrl.h"        /* ADRC / LQR / MPC xy outer loops (g_xy_ctrl_kind) */
 #include "land_xy_gate.h"   /* camera pad gate for the land (g_land_xy_gate_cm) */
 #include "exp_row.h"
+#include "drift_nn_task.h"   /* g_drift_nn residual, g_drift_nn_live (shadow unless set) */
 extern volatile float g_land_xy_gate_cm;   /* defined with the xy_ctrl VARs below */
 extern volatile uint8_t g_xy_ctrl_kind;
 extern volatile uint8_t g_imu_mahony_yaw_decouple;
@@ -996,6 +997,44 @@ static void Ext_Pos_Tick(void)
 	ext_pos_stale_tick(&g_ext_pos, now_ms);
 }
 
+/* Drift NN live gate, once per tick before the position and velocity FB use it.
+ * The NN task publishes a clamped body-velocity residual (m/s, EKF x[1]/x[4] frame);
+ * it is applied only while live mode is set, the task is RUN with a fresh step and a
+ * full receptive field, the mode-2 EKF is healthy, the drone is FLYING and the camera
+ * is not in the loop (g_ext_pos_on 0 or 1: the NN must be judged against it). Any other
+ * state applies 0, i.e. the plain mode-2 EKF: the shadow default is unchanged.
+ * The edge into FLYING asks the task to clear its history (live or shadow): training
+ * sequences start at take-off with zero history, so ground samples must not fill the
+ * receptive field; live then starts after DRIFT_NN_WARM_STEPS of flight. */
+static float s_dnn_dvx, s_dnn_dvy;   /* m/s, 0 when not applied */
+static uint8_t s_dnn_was_flying;
+
+static void Dnn_LiveGate(void)
+{
+	uint32_t now_ms = (uint32_t)xTaskGetTickCount() * (uint32_t)portTICK_PERIOD_MS;
+	uint8_t flying = (uint8_t)(flight_phase == FLIGHT_PHASE_FLYING);
+	uint8_t why;
+	if (flying && !s_dnn_was_flying) g_drift_nn.reset_req = 1U;
+	s_dnn_was_flying = flying;
+	if (g_drift_nn_live == DRIFT_NN_LIVE_OFF)                         why = DRIFT_NN_WHY_OFF;
+	else if (g_drift_nn.status != DRIFT_NN_ST_RUN)                    why = DRIFT_NN_WHY_STATUS;
+	else if ((uint32_t)(now_ms - g_drift_nn.step_ms) > DRIFT_NN_STALE_MS) why = DRIFT_NN_WHY_STALE;
+	else if (g_drift_nn.reset_req || g_drift_nn.steps < DRIFT_NN_WARM_STEPS) why = DRIFT_NN_WHY_WARMUP;
+	else if (g_of_bias_mode != OF_BIAS_EKF || !g_ekf_of_health)       why = DRIFT_NN_WHY_EKF;
+	else if (!flying)                                                 why = DRIFT_NN_WHY_PHASE;
+	else if (g_ext_pos_on >= 2U)                                      why = DRIFT_NN_WHY_CAMERA;
+	else                                                              why = DRIFT_NN_WHY_ON;
+	if (why == DRIFT_NN_WHY_ON) {
+		s_dnn_dvx = g_drift_nn.dvx;
+		s_dnn_dvy = g_drift_nn.dvy;
+	} else {
+		s_dnn_dvx = 0.0f;
+		s_dnn_dvy = 0.0f;
+	}
+	g_drift_nn.live_on = (uint8_t)(why == DRIFT_NN_WHY_ON);
+	g_drift_nn.live_why = why;
+}
+
 /* ---- Position integration: Modes 0/1 use raw OF, Mode 2 uses KF ----
  * FIX 2026-09-26: one ground-hold gate for all modes (mode 2 used to
  * integrate on the ground, so armed-idle drift became a takeoff step).
@@ -1029,6 +1068,9 @@ static void Of_IntegratePosition(void)
 			ekf_dy *= g_of_scale;
 			/* WP-21 A: m/s * 100 * 0.005 s = cm/tick, same units as ekf_dx/dy */
 			if (g_of_full_tilt) of_full_tilt_delta(&ekf_dx, &ekf_dy, ano_of.of2_h_f2_v * OF_HRATE_TO_CM_TICK);
+			/* Drift NN live: body residual after scale, as nn_io.corrected adds it to earth (0 unless gated on) */
+			ekf_dx += s_dnn_dvx * CM_PER_M * STAB_DT_S;
+			ekf_dy += s_dnn_dvy * CM_PER_M * STAB_DT_S;
 			ano_of.earth_x += ekf_dx * Cos_Yaw_01 + ekf_dy * Sin_Yaw_01;
 			ano_of.earth_y += ekf_dy * Cos_Yaw_01 - ekf_dx * Sin_Yaw_01;
 		}
@@ -1133,6 +1175,7 @@ static void Of_UpdateVelocityFB(void)
 	 * debiased velocity the position loop integrates (modes 0/1/2). */
 	float fb_dx = (float)ano_of.of2_dx_fix - s_of_bias_x;
 	float fb_dy = (float)ano_of.of2_dy_fix - s_of_bias_y;
+	u8 nn_vel = 0U;
 	if (g_ekf_gate.ctrl_enable && g_ekf_gate.healthy) {
 		fb_dx = g_ekf_gate.vx_cms;
 		fb_dy = g_ekf_gate.vy_cms;
@@ -1143,9 +1186,14 @@ static void Of_UpdateVelocityFB(void)
 	if (g_ekf_of_vel_fb && g_of_bias_mode == OF_BIAS_EKF && g_ekf_of_health) {
 		fb_dx = s_ekf_of.x[1] * CM_PER_M;   /* vel_x body, cm/s */
 		fb_dy = s_ekf_of.x[4] * CM_PER_M;   /* vel_y body, cm/s */
+		nn_vel = (u8)(g_drift_nn_live == DRIFT_NN_LIVE_POSVEL);
 	}
 	fb_dx *= g_of_scale;   /* true cm/s, same scale as locx/locyPID.FB */
 	fb_dy *= g_of_scale;
+	if (nn_vel) {           /* drift NN live 2: same residual as the position track (0 unless gated on) */
+		fb_dx += s_dnn_dvx * CM_PER_M;
+		fb_dy += s_dnn_dvy * CM_PER_M;
+	}
 	Ctrler.locxsPID.FB= (fb_dy) *Cos_Yaw_01 +(-fb_dx)*Sin_Yaw_01;
 	Ctrler.locysPID.FB=  (-fb_dx) * Cos_Yaw_01 - (fb_dy)*Sin_Yaw_01;
 }
@@ -1262,6 +1310,7 @@ void Update_Data(void)
 			Of_TickKf(of_ok);
 		}
 	}
+	Dnn_LiveGate();
 	Of_IntegratePosition();
 	Ext_Pos_Tick();
 

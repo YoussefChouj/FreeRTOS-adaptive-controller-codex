@@ -26,6 +26,7 @@ which has no adb, scrcpy or Windows python. Never use it for the camera. `.\cam`
 | End the live VOFA+/PlotJuggler stream | `.\cam end` |
 | Start the ground service by hand | `python -m ground_station.service --port 8081` |
 | Flash the firmware | `python -m ground_station.flashtool.rebuild_and_flash --yes` |
+| Drift NN live for one flight | `.fly` line `set g_drift_nn_live=1 g_drift_nn_clamp_mps=0.05` (section 4.1) |
 
 ## 1. A lab day: `labday`
 
@@ -209,6 +210,44 @@ Alignment (camera to earth yaw):
   then asks for the pack type.
 - The pack gate predicts the pack % at the end of the flight and refuses below 30%. Only the operator may change
   that limit.
+
+### 4.1 Drift NN: shadow or live (needs the 10-19 build flashed)
+
+The onboard drift net (`NN/drift_nn_task.c`, PROPOSED weights) always runs and logs. Two VAR_WRITE rows decide
+whether the flight loop uses its output:
+
+| id | Variable | Range | Default | Meaning |
+|---|---|---|---|---|
+| 56 | `g_drift_nn_live` | 0..2 | 0 | 0 shadow (logged only), 1 residual added to the mode-2 position track, 2 also to the EKF velocity feedback |
+| 57 | `g_drift_nn_clamp_mps` | 0..0.30 | 0.10 | limit on each applied residual axis, m/s |
+
+In a `.fly` file, before `takeoff`:
+
+```text
+slow 50 drift_nn nn4 xy_ctrl ekf_states estimator_truth
+set g_drift_nn_live=1 g_drift_nn_clamp_mps=0.05
+```
+
+- Log `drift_nn` (and `nn4`, the net's inputs) on every flight, shadow or live, so every flight is NN data.
+- Live 2 acts only while the EKF velocity feedback is on (`g_ekf_of_vel_fb`, default 1, no VAR_WRITE row).
+- Run the camera at fusion mode 0 or 1 (`.\cam fusion <name> 1 --yaw-deg 94`, section 3). In mode 2 or 3
+  (`g_ext_pos_on` >= 2) the net is not applied, so the camera stays an independent truth.
+- The net restarts on every take-off and is applied only after 125 steps (6.25 s of flight).
+- `g_drift_nn.live_on` is 1 on the ticks where the residual was applied. `g_drift_nn.live_why` says why not:
+
+| live_why | Meaning |
+|---|---|
+| 0 | applied |
+| 1 | `g_drift_nn_live` = 0 (shadow) |
+| 2 | task not running (`g_drift_nn.status`: 2 low heap, 3 not created, 4 bad weight checksum) |
+| 3 | no new step for 200 ms |
+| 4 | warm-up: fewer than 125 steps since take-off |
+| 5 | not EKF bias mode 2, or the OF EKF is unhealthy |
+| 6 | not flying |
+| 7 | camera fusion in the loop (`g_ext_pos_on` >= 2) |
+
+- Score a flight with camera truth: `video_truth truth4` then `nn4` (section 2.8). The design notes are in
+  `docs/lab/drift-nn-leak-fix-2026-10-19.md`.
 
 ## 5. Ground service 8081
 

@@ -10,8 +10,9 @@
 void drift_nn_reset(void);
 
 /* One 20 Hz step. f: DNN_D raw features in the NN4_CH order (+ extra covariates), not normalised.
- * v: EKF velocity (x, y) the model rescales. out: corrected velocity (x, y), same frame as v.
- * Returns 0, or -1 if the weight checksum does not match (out is then a copy of v). */
+ * v: EKF velocity (x, y) the model rescales. out: body-velocity residual (x, y) in m/s, same frame as v:
+ * corrected velocity = v + out (nn_io.corrected integrates it onto the earth track).
+ * Returns 0, or -1 if the weight checksum does not match (out is then a copy of v, not a residual). */
 int drift_nn_step(const float *f, const float v[2], float out[2]);
 
 /* Training mean of feature i (0 <= i < DNN_D): the in-distribution value for a feature with no valid sample yet. */

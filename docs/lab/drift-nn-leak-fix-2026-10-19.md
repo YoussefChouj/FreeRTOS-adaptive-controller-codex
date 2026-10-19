@@ -16,7 +16,7 @@ The camera-off drift model (`python -m ground_station.analysis.video_truth nn4`,
   - The 10-19 flights were captured as campaign session `telemetry.csv`. truth4, `fixes_clock` and `nn4_data` now read that file directly (follow-up 2, done).
   - The steps are under "Evaluating on 10-19".
 - **Shadow and active enable of this model: PROPOSED.** The plan and its cost are below. Nothing was flashed or flown.
-- **The firmware already has a different shadow model.** `NN/drift_nn_task.c` runs a 23-input TCN at 20 Hz into `g_drift_nn` (header: "PROPOSED, not flown"; weights `NN/drift_nn_weights.h`, trained on 15 flights, no hold-out). It rescales the EKF velocity and reads `s_ekf_of.x[1]/x[4]` and `innov_x/y`, so on a mode-3 flight its inputs carry the camera. Nothing reads its output, and no capture group logs `g_drift_nn`.
+- **The firmware already has a different model, now with a live switch.** `NN/drift_nn_task.c` runs a 23-input TCN at 20 Hz into `g_drift_nn` (weights `NN/drift_nn_weights.h`, PROPOSED: trained on 15 flights, no hold-out). It reads `s_ekf_of.x[1]/x[4]` and `innov_x/y`, so on a mode-3 flight its inputs carry the camera. Shadow by default; the live modes and the `drift_nn` log group are in "Firmware TCN: shadow and live" below. Not built or flown yet.
 
 ## How the camera got into the old target
 
@@ -133,6 +133,33 @@ What shadow tests: the on-board features match the logged ones (float order, sca
 4. Fly a camera-off A/B (flag on/off, same preset). Score with truth4.
 
 **Fused flights in the pool.** A flight with `g_ext_pos_on` ≥ 2 trains fine under the new target, because raw OF and truth are both camera-free on the vehicle side. But its `earth` row is not a camera-off baseline.
+
+## Firmware TCN: shadow and live (2026-10-19, PROPOSED, needs a Keil build)
+
+The rawof plan above is for the offline MLP. The TCN that is already on board (`NN/drift_nn_task.c`) can now be applied in flight, so it can be tested live. Nothing here is built or flown.
+
+**Output.** `drift_nn_step` returns a body-velocity residual in m/s, in the frame of `s_ekf_of.x[1]/x[4]`: corrected velocity = EKF velocity + `(vx, vy)`. The task logs the raw residual (`vx/vy`), the EKF velocity it was fed (`v_in`), and the clamped residual `dvx/dvy` (±`g_drift_nn_clamp_mps`, default 0.10 m/s). On a bad weight checksum `dvx/dvy` stay 0.
+
+**Live modes** (`g_drift_nn_live`, VAR_WRITE id 56, default 0; clamp is id 57, 0..0.30 m/s):
+
+| Value | Effect |
+|---|---|
+| 0 | Shadow: computed and logged, never applied. |
+| 1 | `dvx/dvy` added to the mode-2 EKF position track (`Of_IntegratePosition`). |
+| 2 | Also added to the mode-2 EKF velocity feedback (only while `g_ekf_of_vel_fb` is 1, the default). |
+
+**Gate.** `Dnn_LiveGate` (`TASK/StabilizerTask.c`) runs once per tick and applies 0 unless every check passes. `g_drift_nn.live_why` names the first failing one: 0 applied, 1 live off, 2 task status not RUN, 3 no step for 200 ms, 4 warm-up, 5 not bias mode 2 or EKF unhealthy, 6 not FLYING, 7 camera in the loop (`g_ext_pos_on` ≥ 2). So a live flight must run the camera at fusion mode 0 or 1: in modes 2-3 the camera steers and the net is not applied.
+
+**Reset on take-off (changes shadow too).** The edge into FLYING clears the net's history (`reset_req`) in every mode, shadow included. Training sequences start at take-off with zero history, so ground samples no longer fill the receptive field. Live output then waits for 125 steps (6.25 s, the TCN receptive field). Shadow logs from before this build are not comparable over the first 6 s.
+
+**Logging.** The `drift_nn` stream-log group (`ground_station/livewatch/campaign_capture.py`) logs the switch, the clamp, `live_on/live_why`, `vx/vy`, `dvx/dvy`, `v_in`, `steps`, `status`, `alt_hold` and `cyc_max`. It fits the 100 Hz slow lane with `nn4` and `mrac_theta` with no drops (test `test_lab_slow_lane_logs_the_net_and_its_inputs_without_drops`). Log it on every flight: shadow flights are training data, live flights are the test.
+
+**Progression.**
+1. Shadow on every flight (`slow 50 drift_nn nn4 ...`), camera at fusion mode 1 so truth4 scores it.
+2. Live 1 at clamp 0.05, then 0.10. Only the position estimate moves, so a bad residual shows up as a slow position walk (at most the clamp, 5-10 cm/s); the velocity loop still sees the plain EKF velocity.
+3. Live 2 only after live 1 holds position at least as well as shadow on the camera.
+
+Before live, the weights are the weak point: 15 flights, no hold-out, and mode-3 flights fed camera-bent EKF inputs. Lab commands: `docs/lab/COMMANDS.md` 4.1.
 
 ## Follow-ups
 
