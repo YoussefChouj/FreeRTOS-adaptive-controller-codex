@@ -24,7 +24,8 @@ def test_nn_replay_writes_metrics(tmp_path, monkeypatch):
         n = 100
         t = np.arange(n)
         return {"ts": t, "t": t, "earth": np.ones(n, dtype=complex), "truth": np.ones(n, dtype=complex),
-                "back": np.ones(n, dtype=complex), "R": np.zeros(n, dtype=complex)}
+                "back": np.ones(n, dtype=complex), "R": np.zeros(n, dtype=complex),
+                "of": np.zeros(n, dtype=complex), "head": np.zeros(n, dtype=complex)}
 
     def mock_drift_score(name, ests):
         return {"est": {"earth": {"drift60s_p90_cm": 1.0}, "nn": {"drift60s_p90_cm": 0.5}}}

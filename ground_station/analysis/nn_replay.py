@@ -16,7 +16,7 @@ from ground_station.analysis.nn_io import (
     predict,
     seq,
 )
-from ground_station.analysis.video_truth import drift_score
+from ground_station.analysis.video_truth import NN4_OF_SCALE, drift_score
 
 
 def main(argv=None):
@@ -73,9 +73,9 @@ def main(argv=None):
                 "R": np.zeros(len(ts), dtype=complex), # no earth error
                 "F": F,
             }
-            # v_col from F
+            # v_col from F: raw OF in cm/s, x NN4_OF_SCALE = body m/s (nn4_data's "of")
             from ground_station.analysis.nn_io import V_COL
-            d["v"] = d["F"][:, V_COL[0]] + 1j * d["F"][:, V_COL[1]]
+            d["v"] = (d["F"][:, V_COL[0]] + 1j * d["F"][:, V_COL[1]]) * NN4_OF_SCALE
 
         except Exception as e:
             print(f"Error loading external flight: {e}", file=sys.stderr)

@@ -1,5 +1,7 @@
 """Synthetic checks for ground_station.analysis.nn_io (no flight logs needed)."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -17,11 +19,12 @@ def test_corrected_with_the_true_residual_rebuilds_truth():
     ts = np.arange(0, 20, 0.05)
     yaw = 0.3 * ts
     back = np.exp(-1j * yaw)
+    of = 0.2 * np.exp(0.5j * ts)                                # raw OF, body m/s
     vb = 0.1 * np.exp(1j * ts) * np.conj(back)                  # body-frame residual whose earth image is 0.1 e^{it}
-    truth = np.r_[0j, np.cumsum((vb * back)[1:] * 0.05)]
-    d = {"ts": ts, "t": ts, "back": back, "earth": np.zeros_like(truth)}
-    z = nn_io.corrected(d, np.c_[vb.real, vb.imag])
-    assert np.abs(z[:, 0] + 1j * z[:, 1] - truth).max() < 1e-12
+    truth = np.r_[0j, np.cumsum(((of + vb) * back)[1:] * 0.05)]
+    d = {"ts": ts, "t": ts, "back": back, "of": of, "head": np.zeros_like(truth), "earth": np.full_like(truth, 9.0)}
+    z = nn_io.corrected(d, np.c_[vb.real, vb.imag])             # starts at earth[0], ignores the rest of earth
+    assert np.abs(z[:, 0] + 1j * z[:, 1] - 9.0 - truth).max() < 1e-12
 
 
 def test_models_start_at_zero_and_drift_loss_is_zero_on_a_perfect_track():
@@ -116,11 +119,11 @@ def test_any_slot_loader_rate_invariance_and_fallback(tmp_path):
     import pandas as pd
 
     from ground_station.analysis.nn_io import RATE_HZ, any_slot_loader
-    from ground_station.analysis.video_truth import NN4_CH
+    from ground_station.analysis.video_truth import NN4_RAW_CH
 
     stem = str(tmp_path / "testflight")
     ts = np.arange(0.5, 3.0, 1.0 / RATE_HZ)
-    chans = [c for k, cols in NN4_CH.items() for c in cols]
+    chans = [c for k, cols in NN4_RAW_CH.items() for c in cols]
 
     def _create_slot(rate, k):
         t = np.arange(0.0, 4.0, 1.0 / rate)
@@ -177,7 +180,7 @@ def test_any_slot_loader_regression_matches_read_slots(tmp_path):
     import pandas as pd
 
     from ground_station.analysis.nn_io import RATE_HZ, _bmean, any_slot_loader
-    from ground_station.analysis.video_truth import NN4_CH
+    from ground_station.analysis.video_truth import NN4_RAW_CH
 
     stem = str(tmp_path / "regress_flight")
     ts = np.arange(0.5, 3.0, 1.0 / RATE_HZ)
@@ -189,9 +192,9 @@ def test_any_slot_loader_regression_matches_read_slots(tmp_path):
     df1 = pd.DataFrame({"t_src_ms": t * 1000})
     df2 = pd.DataFrame({"t_src_ms": t * 1000})
 
-    for c in NN4_CH[1]:
+    for c in NN4_RAW_CH[1]:
         df1[c] = np.random.randn(len(t))
-    for c in NN4_CH[2]:
+    for c in NN4_RAW_CH[2]:
         df2[c] = np.random.randn(len(t))
 
     df1.to_csv(f"{stem}.slot1.csv", index=False)
@@ -202,7 +205,7 @@ def test_any_slot_loader_regression_matches_read_slots(tmp_path):
 
     # Read via old logic equivalent
     F_old = []
-    for k, cols in NN4_CH.items():
+    for k, cols in NN4_RAW_CH.items():
         df = df1 if k == 1 else df2
         for c in cols:
             F_old.append(_bmean(df["t_src_ms"].values / 1000.0, df[c].values, ts, 1.0 / RATE_HZ))
@@ -216,11 +219,19 @@ def test_any_slot_loader_regression_matches_read_slots(tmp_path):
     # We should use read_slots instead of a manual loop to prove it.
     from ground_station.analysis.video_truth import read_slots
     S = read_slots(stem, (1, 2))
-    F_old_real = [_bmean(S[k]["t"], np.nan_to_num(S[k][c]), ts, 1.0 / RATE_HZ) for k, chans in NN4_CH.items() for c in chans]
+    F_old_real = [_bmean(S[k]["t"], np.nan_to_num(S[k][c]), ts, 1.0 / RATE_HZ) for k, chans in NN4_RAW_CH.items() for c in chans]
     F_old_real = np.c_[F_old_real].T
 
     assert np.array_equal(F_new, F_old_real)
     assert F_new.dtype == F_old_real.dtype
+    assert F_new.shape == (len(ts), 13)
+
+    # Fusion layout (g_ext_pos_on in the header): the IMU and flow move to slot0, the 50 Hz EKF/earth list to slot1.
+    for k in (1, 2):
+        Path(f"{stem}.slot{k}.csv").unlink()
+    df1.to_csv(f"{stem}.slot0.csv", index=False)
+    df2.assign(g_ext_pos_on=2.0).to_csv(f"{stem}.slot1.csv", index=False)
+    assert np.array_equal(any_slot_loader(stem, ts, RATE_HZ), F_new)
 
 
 def test_save_load_roundtrip_is_weights_only(tmp_path):

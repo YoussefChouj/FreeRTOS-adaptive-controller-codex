@@ -60,8 +60,8 @@ The yaw sense was also picked from the EKF velocity, which mode 3 also bends.
 `nn4_lofo.json` records `ext_pos_on` per flight (the highest `g_ext_pos_on` logged). The CLI prints it as `ext N`. `report4` has a "raw OF alone" bar.
 
 **Kept for compatibility.**
-- `NN4_CH` is unchanged. `ground_station/livewatch/campaign_capture.py` (the `nn4` log group) and `ground_station/analysis/nn_io.py` use it.
-- `nn_io.seq` calls `nn4_data(..., target="earth")` with the EKF channels, so it still has the leak on fused flights (follow-up 1).
+- `NN4_CH` is unchanged. `ground_station/livewatch/campaign_capture.py` uses it for the `nn4` log group.
+- `nn4_data(..., target="earth")` still gives the legacy residual. Nothing in the analysis uses it any more: `nn_io.seq` moved to the rawof target (follow-up 1).
 
 **Tests.** `ground_station/analysis/tests/test_nn4_data.py` has four tests on synthetic flights:
 1. The rawof target equals the body residual the raw OF misses (within 3 mm/s). `back` undoes rot + yaw.
@@ -139,6 +139,15 @@ What shadow tests: the on-board features match the logged ones (float order, sca
 
 ## Follow-ups
 
-1. **`nn_io.seq` is still leaky** (`ground_station/analysis/nn_io.py`). It uses target "earth" with the EKF channels. Move it to the rawof target and `NN4_RAW_CH` before training any sequence model on fused flights.
+1. **DONE: `nn_io.seq` is leak-free** (`ground_station/analysis/nn_io.py`). It used target "earth" with the EKF channels. Now:
+   - `seq` calls `nn4_data` with target "rawof". `F` is the `NN4_RAW_CH` block means, 13 columns.
+   - `R` = truth minus the raw-OF track (`nn4_track` with p = 0). `corrected(d, p)` is `nn4_track(d, p)`: the raw OF plus p, turned by `back`. So `quick_d60`, `drift_loss` and `drift_score` all score the same track as nn4.
+   - `v` is the raw OF in body m/s. `V_COL` is (8, 9), the `of2_dx/dy_fix` columns, times `NN4_OF_SCALE`; `nn_replay --external` applies that scale.
+   - The util `COMMON` columns are acc, gyro, rol, pit, raw OF x/y and `of_alt_cm` (0-7, 8, 9, 12).
+   - `calib`, `sync` and the train scores add a `rawof` estimate, the camera-off baseline. `earth` stays as a reference only. In `nnio_sync.json` the keys `earth0`, `earth_best` and `earth` are now `rawof0`, `rawof_best` and `rawof`.
+   - `any_slot_loader` now also searches slot0, where a fusion session keeps the IMU and flow.
+   - Old checkpoints were saved on `NN4_CH`, so `load_model` rejects them ("Channel list mismatch").
+   - Tests: `ground_station/analysis/tests/test_nn_io_seq.py` (torch-free) runs `seq` on the synthetic flights of `test_nn4_data.py`. Two fused flights with different camera tracks give identical `F`, `v`, `R`, `Y`. `R` and `corrected` match `nn4_track`.
+   - **On the lab PC:** retrain the nn_io models. Regenerate the `nnio*.json` and `nnio*_pred.npz` files, `nnio_calib.json`, `nnio_sync.json` and any `NNIO_PACK` directory (`truth.pkl`, `util.pkl`).
 2. **Session `telemetry.csv` → truth4 / nn4** (see "Format gap"). Needed before the 10-19 flights can be scored.
 3. **Regenerate the stored scores.** `nn4_lofo.json` and the `truth4_score_nn4.json` files on the lab PC predate this fix.

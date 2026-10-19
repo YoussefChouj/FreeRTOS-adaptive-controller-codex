@@ -2,11 +2,12 @@
 
 nn4 (video_truth.nn4) regressed the 10 Hz body-velocity residual and lost: the per-sample residual is mostly truth
 noise (vel r2 ~ 0) while the drift budget (10 cm per 60 s ~ 1.7 mm/s mean velocity error) lives at low frequency.
-This module trains on the drift itself: the predicted body residual is rotated to the truth4 earth frame,
-integrated, and the loss is the error of that corrected track over 1/5/20/60 s horizons (1 s means), the same
-quantity drift_score reports. Data: the truth4 flights (video truth), same pool / hold split as nn4.
+This module trains on the drift itself: the predicted body residual is added to the raw OF, rotated to the truth4
+earth frame, integrated, and the loss is the error of that corrected track over 1/5/20/60 s horizons (1 s means), the
+same quantity drift_score reports. Data: the truth4 flights (video truth), same pool / hold split as nn4, and the same
+leak-free target and features (nn4_data "rawof", NN4_RAW_CH: no EKF or camera-fused channel, 2026-10-19).
 
-  python -m ground_station.analysis.nn_io calib            per-flight scale/rotation of the EKF velocity error
+  python -m ground_station.analysis.nn_io calib            per-flight scale/rotation of the raw OF velocity error
   python -m ground_station.analysis.nn_io train [opts]     GRU/TCN drift-horizon model, hold-out + LOFO, tag _nnio*
   python -m ground_station.analysis.nn_io pack [--out DIR]  pickle the flights + UTIL set; NNIO_PACK=DIR train runs
                                                             off-site (no video) and saves nnio<tag>_pred.npz
@@ -23,16 +24,17 @@ from pathlib import Path
 import numpy as np
 
 from ground_station.analysis.video_truth import (
-    NN4_CH,
     NN4_HOLD,
+    NN4_RAW_CH,
     NN4_SUSPECT,
     drift_score,
     nn4_data,
+    nn4_track,
 )
 
 RATE_HZ = 20.0
 HORIZONS_S = (1.0, 5.0, 20.0, 60.0)
-V_COL = (12, 13)                       # s_ekf_of.x[1], x[4] (body velocity, m/s) in the NN4_CH feature order
+V_COL = (8, 9)                         # ano_of.of2_dx/dy_fix in NN4_RAW_CH order (raw OF, cm/s; x NN4_OF_SCALE = m/s)
 PACK = os.environ.get("NNIO_PACK", "")  # dir from `pack`: load_all / util_load read it, train skips drift_score
 
 
@@ -50,17 +52,18 @@ def _bmean(t: np.ndarray, x: np.ndarray, ts: np.ndarray, w: float, total: bool =
 
 
 def any_slot_loader(stem: str, ts: np.ndarray, rate_hz: float = RATE_HZ) -> np.ndarray:
-    """Find each NN4_CH channel by column name in whichever <stem>.slot<k>.csv has it (first match wins,
-    reports which slot and the measured rate per channel), keep the drone clock (t_src_ms), and build the
-    same causal 20 Hz block grid. Fails if missing channel or rate < 20 Hz."""
+    """Find each NN4_RAW_CH channel by column name in whichever <stem>.slot<k>.csv has it (slots 1-9, then 0: a
+    fusion session keeps the IMU and flow in slot0; first match wins, reports which slot and the measured rate per
+    channel), keep the drone clock (t_src_ms), and build the same causal 20 Hz block grid. Fails if missing channel
+    or rate < 20 Hz."""
     import pandas as pd
-    chans = [c for k, cols in NN4_CH.items() for c in cols]
+    chans = [c for k, cols in NN4_RAW_CH.items() for c in cols]
     slots_found = {}
     F = []
 
     for c in chans:
         found = False
-        for k in range(1, 10):
+        for k in (*range(1, 10), 0):
             if k not in slots_found:
                 p = Path(f"{stem}.slot{k}.csv")
                 if p.exists():
@@ -87,19 +90,20 @@ def any_slot_loader(stem: str, ts: np.ndarray, rate_hz: float = RATE_HZ) -> np.n
     return np.c_[F].T
 
 def seq(name: str, rate_hz: float = RATE_HZ) -> dict:
-    """One flight on a causal rate_hz grid: nn4_data with one block per step (F = block means of the NN4_CH channels,
-    falling back to the last sample when a block is empty), plus R = truth - earth (truth4 frame, m) at ts.
+    """One flight on a causal rate_hz grid: nn4_data (target "rawof") with one block per step (F = block means of the
+    NN4_RAW_CH channels, falling back to the last sample when a block is empty), plus R = truth - the raw-OF track
+    (nn4_track with p = 0; truth4 frame, m) at ts and v = the raw OF (body m/s, the step mean `of`).
 
-    Legacy target (nn4_data target="earth"): on camera-fused flights (g_ext_pos_on >= 2) earth and the EKF channels in
-    NN4_CH carry the camera, so R and F leak the label. nn4_data's default "rawof" target is the leak-free one."""
-    d = nn4_data(name, rate_hz=rate_hz, win_s=1.0 / rate_hz, nblk=1, target="earth")
+    Leak-free: no EKF channel and no earth_x/y, which carry the camera on a fused flight (g_ext_pos_on >= 2); the
+    raw OF is upstream of every camera fix. A residual p then corrects the same track nn4 scores (corrected)."""
+    d = nn4_data(name, rate_hz=rate_hz, win_s=1.0 / rate_hz, nblk=1)
     stem = json.loads((Path(f"logs/video_truth/{name}") / "truth4.json").read_text())["stem"]
 
     d["F"] = any_slot_loader(stem, d["ts"], rate_hz)
 
-    r = d["truth"] - d["earth"]
+    r = d["truth"] - nn4_track(d, np.zeros((len(d["ts"]), 2)))
     d["R"] = np.interp(d["ts"], d["t"], r.real) + 1j * np.interp(d["ts"], d["t"], r.imag)
-    d["v"] = d["F"][:, V_COL[0]] + 1j * d["F"][:, V_COL[1]]
+    d["v"] = d["of"]
     return d
 
 
@@ -121,17 +125,15 @@ def load_all(rate_hz: float = RATE_HZ) -> tuple[dict, dict]:
 
 
 def corrected(d: dict, p: np.ndarray) -> np.ndarray:
-    """earth + integral of the body residual p (N, 2) rotated to the truth4 frame, on the truth4 rows (N, 2) m."""
-    dts = np.diff(d["ts"], prepend=d["ts"][0])
-    c = np.cumsum((p[:, 0] + 1j * p[:, 1]) * d["back"] * dts)
-    c = np.interp(d["t"], d["ts"], c.real, left=0.0) + 1j * np.interp(d["t"], d["ts"], c.imag, left=0.0)
-    z = d["earth"] + c
+    """The raw OF plus the body residual p (N, 2), rotated to the truth4 frame and integrated (video_truth.nn4_track),
+    on the truth4 rows (N, 2) m. p = 0 is the raw-OF track."""
+    z = nn4_track(d, p)
     return np.c_[z.real, z.imag]
 
 
 def quick_d60(d: dict, p: np.ndarray | None = None, rate_hz: float = RATE_HZ) -> float:
-    """drift60s_p90 (cm) of earth + the body residual p on the rate_hz grid: fast, for learning curves (drift_score
-    on the truth4 rows is the reference)."""
+    """drift60s_p90 (cm) of the raw-OF track + the body residual p on the rate_hz grid: fast, for learning curves
+    (drift_score on the truth4 rows is the reference)."""
     dts = np.diff(d["ts"], prepend=d["ts"][0])
     c = 0.0 if p is None else np.cumsum((p[:, 0] + 1j * p[:, 1]) * d["back"] * dts)
     ks, h = int(rate_hz), int(60 * rate_hz)
@@ -147,9 +149,10 @@ def _cfit(v: np.ndarray, y: np.ndarray) -> tuple[complex, complex]:
 
 
 def calib(rate_hz: float = RATE_HZ, chunk_s: float = 20.0) -> dict:
-    """Is the EKF velocity error a scale/rotation? Per flight, fit the body residual Y = a v + b (v = EKF body
+    """Is the raw OF velocity error a scale/rotation? Per flight, fit the body residual Y = a v + b (v = raw OF body
     velocity); `self` integrates the in-flight fit (upper bound of a per-flight calibration), `lofo` the mean a, b of
-    the other pool flights (what one global calibration would give). Tag _nnio_cal."""
+    the other pool flights (what one global calibration would give); `rawof` is the uncorrected track and `earth`
+    (camera-fused on g_ext_pos_on >= 2 flights) a reference only. Tag _nnio_cal."""
     data, skipped = load_all(rate_hz)
     pool, hold = split(list(data))
     fits = {n: _cfit(d["v"], d["Y"][:, 0] + 1j * d["Y"][:, 1]) for n, d in data.items()}
@@ -158,7 +161,7 @@ def calib(rate_hz: float = RATE_HZ, chunk_s: float = 20.0) -> dict:
         a, b = fits[n]
         oth = [m for m in pool if m != n]
         ag, bg = np.mean([fits[m][0] for m in oth]), np.mean([fits[m][1] for m in oth])
-        ests = {"earth": np.c_[d["earth"].real, d["earth"].imag]}
+        ests = {"earth": np.c_[d["earth"].real, d["earth"].imag], "rawof": corrected(d, np.zeros((len(d["ts"]), 2)))}
         for k, (aa, bb) in {"self": (a, b), "lofo": (ag, bg), "self_a": (a, 0)}.items():
             p = aa * d["v"] + bb
             ests[k] = corrected(d, np.c_[p.real, p.imag])
@@ -208,31 +211,31 @@ def _iself(d: dict, R: np.ndarray) -> np.ndarray:
 
 def sync_scan(span_s: float = 3.0, step_s: float = 0.1, rate_hz: float = RATE_HZ) -> dict:
     """Is the truth4 time sync limiting? Per flight, shift the truth by dt in [-span_s, span_s] and report quick_d60
-    of earth and of the in-sample oracle (_iself): a minimum far from dt = 0 means the truth clock is off and every
-    learned/calibrated score on that flight is capped by it. Writes logs/video_truth/nnio_sync.json."""
+    of the raw-OF track and of the in-sample oracle (_iself): a minimum far from dt = 0 means the truth clock is off and
+    every learned/calibrated score on that flight is capped by it. Writes logs/video_truth/nnio_sync.json."""
     data, skipped = load_all(rate_hz)
     grid = np.round(np.arange(-span_s, span_s + step_s / 2, step_s), 3)
     out = {"skipped": skipped, "grid_s": grid.tolist(), "flights": {}}
     for n, d in data.items():
-        tr, ea = d["truth"], d["earth"]
+        tr, ro = d["truth"], nn4_track(d, np.zeros((len(d["ts"]), 2)))
         rows = []
         for dt in grid:
             R = (np.interp(d["ts"] + dt, d["t"], tr.real) + 1j * np.interp(d["ts"] + dt, d["t"], tr.imag)
-                 - np.interp(d["ts"], d["t"], ea.real) - 1j * np.interp(d["ts"], d["t"], ea.imag))
+                 - np.interp(d["ts"], d["t"], ro.real) - 1j * np.interp(d["ts"], d["t"], ro.imag))
             e = dict(d, R=R)
             rows.append((quick_d60(e), quick_d60(e, _iself(e, R))))
         rows = np.array(rows)
         i0, ie, io = int(np.argmin(np.abs(grid))), int(np.argmin(rows[:, 0])), int(np.argmin(rows[:, 1]))
-        f = {"earth0": round(rows[i0, 0], 1), "iself0": round(rows[i0, 1], 1), "earth_best": [float(grid[ie]), round(rows[ie, 0], 1)],
-             "iself_best": [float(grid[io]), round(rows[io, 1], 1)], "earth": rows[:, 0].round(1).tolist(), "iself": rows[:, 1].round(1).tolist()}
+        f = {"rawof0": round(rows[i0, 0], 1), "iself0": round(rows[i0, 1], 1), "rawof_best": [float(grid[ie]), round(rows[ie, 0], 1)],
+             "iself_best": [float(grid[io]), round(rows[io, 1], 1)], "rawof": rows[:, 0].round(1).tolist(), "iself": rows[:, 1].round(1).tolist()}
         out["flights"][n] = f
-        print(f"{n[:27]:27s} earth {f['earth0']:6.1f} best {f['earth_best']}  iself {f['iself0']:6.1f} best {f['iself_best']}", flush=True)
+        print(f"{n[:27]:27s} rawof {f['rawof0']:6.1f} best {f['rawof_best']}  iself {f['iself0']:6.1f} best {f['iself_best']}", flush=True)
     Path("logs/video_truth/nnio_sync.json").write_text(json.dumps(out, indent=1))
     return out
 
 
 UTIL_DIR = Path("D:/datasets/util_uwb/x/dataset/flight-dataset/csv-data")
-COMMON = list(range(8)) + [12, 13, 14]   # NN4_CH acc, gyro, rol, pit, EKF body vel x/y, of_alt: the util F columns
+COMMON = list(range(8)) + [8, 9, 12]     # NN4_RAW_CH acc, gyro, rol, pit, raw OF x/y, of_alt: the util F columns
 _UCOLS = ["t_acc", "acc_x", "acc_y", "acc_z", "t_gyro", "gyro_x", "gyro_y", "gyro_z", "t_tof", "tof", "t_flow",
           "deltaX", "deltaY", "t_pose", "pose_x", "pose_y", "pose_z", "pose_qx", "pose_qy", "pose_qz", "pose_qw"]
 
@@ -273,7 +276,7 @@ def util_raw(path, rate_hz: float = RATE_HZ, min_z: float = 0.3, min_s: float = 
 
 def util_finish(raws: list[dict], coef: np.ndarray | None = None) -> tuple[list[dict], np.ndarray]:
     """The naive flow odometry of every UTIL flight: body velocity v = Q coef (one global least-squares fit of the Vicon
-    body velocity, coef (4, 2), the analogue of our EKF velocity), F = F0 with the flow columns replaced by v,
+    body velocity, coef (4, 2), the analogue of our raw OF velocity), F = F0 with the flow columns replaced by v,
     R = Vicon - integral of v (earth frame, m), Y = Vicon body velocity - v. Same keys as seq()."""
     if coef is None:
         Q = np.vstack([r["Q"] for r in raws])
@@ -413,7 +416,7 @@ def airio_eval(model: str = "blackbird", rate_hz: float = 100.0, util_val: str =
 def build(D: int, kind: str = "gru", H: int = 32, head: str = "scale", layers: int = 1, k: int = 5, drop: float = 0.1):
     """kind gru: Linear(D,H)+tanh -> GRU(H,H) x layers; kind tcn: causal dilated Conv1d stack (dilations 1,2,4,...,
     receptive field ~ (k-1)*2^layers steps). head 'scale': out = a(x) * v + b(x) (complex a, b: a learned, input-
-    dependent calibration of the EKF velocity), head 'add': out = b(x)."""
+    dependent calibration of the raw OF velocity), head 'add': out = b(x)."""
     torch = _torch()
     nn = torch.nn
     nout = 4 if head == "scale" else 2
@@ -436,7 +439,7 @@ def build(D: int, kind: str = "gru", H: int = 32, head: str = "scale", layers: i
             nn.init.zeros_(self.out.weight)
             nn.init.zeros_(self.out.bias)
 
-        def forward(self, x, v):                     # x (B,T,D) normalised, v (B,T,2) EKF body velocity m/s
+        def forward(self, x, v):                     # x (B,T,D) normalised, v (B,T,2) raw OF body velocity m/s
             if self.kind == "gru":
                 h, _ = self.rnn(torch.tanh(self.inp(x)))
             else:
@@ -457,9 +460,9 @@ def build(D: int, kind: str = "gru", H: int = 32, head: str = "scale", layers: i
 
 
 def drift_loss(p, back, dt, R, steps: list[int], ks: int, vel_w: float = 0.0, Y=None):
-    """p (B,T,2) body residual; back (B,T,2) cos/sin to the truth4 frame; R (B,T,2) truth-earth (m). The corrected
-    track error e = cumsum(p rotated * dt) - (R - R0); loss = sum over horizons of mean |es(t+h) - es(t)|^2 in cm^2,
-    es = ks-step mean of e (drift_score's 1 s mean)."""
+    """p (B,T,2) body residual; back (B,T,2) cos/sin to the truth4 frame; R (B,T,2) truth - raw-OF track (m). The
+    corrected track error e = cumsum(p rotated * dt) - (R - R0); loss = sum over horizons of mean |es(t+h) - es(t)|^2
+    in cm^2, es = ks-step mean of e (drift_score's 1 s mean)."""
     torch = _torch()
     ex = p[..., 0] * back[..., 0] - p[..., 1] * back[..., 1]
     ey = p[..., 0] * back[..., 1] + p[..., 1] * back[..., 0]
@@ -487,10 +490,10 @@ def _arrays(d: dict, mu, sd):
 
 def fit(train: list[dict], kind="gru", H=32, head="scale", layers=1, iters=1500, crop_s=90.0, batch=16, lr=3e-3,
         wd=1e-4, drop=0.1, vel_w=0.0, seed=0, rate_hz=RATE_HZ, log_every=0, feats=None, noise=0.0, cb=None, cb_every=0, init=None, train_only=""):
-    """Train on random crop_s windows of the train flights (zero initial state, like a take-off). feats: NN4_CH column
-    subset; noise: Gaussian input noise (normalised units); cb(it, model) every cb_every iterations; init: a model to
-    fine-tune (its net is copied, mu/sd are refit on train: per-dataset normalisation); train_only: parameter-name
-    prefixes, comma-separated, others frozen (e.g. 'out' = the head only, 'convs.4,out' = last conv + head)."""
+    """Train on random crop_s windows of the train flights (zero initial state, like a take-off). feats: NN4_RAW_CH
+    column subset; noise: Gaussian input noise (normalised units); cb(it, model) every cb_every iterations; init: a
+    model to fine-tune (its net is copied, mu/sd are refit on train: per-dataset normalisation); train_only: parameter-
+    name prefixes, comma-separated, others frozen (e.g. 'out' = the head only, 'convs.4,out' = last conv + head)."""
     torch = _torch()
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
@@ -555,7 +558,7 @@ def save_model(model, path: str | Path, meta: dict):
     h.update(mu.tobytes())
     h.update(sd.tobytes())
 
-    chans = [c for k, cols in NN4_CH.items() for c in cols]
+    chans = [c for k, cols in NN4_RAW_CH.items() for c in cols]
 
     payload = {
         "format": "nnio-v1",
@@ -598,7 +601,7 @@ def load_model(path: str | Path):
     if h.hexdigest() != p["sha256"]:
         raise ValueError("Hash mismatch in checkpoint")
 
-    expected_chans = [c for k, cols in NN4_CH.items() for c in cols]
+    expected_chans = [c for k, cols in NN4_RAW_CH.items() for c in cols]
     if p.get("channels") != expected_chans:
         raise ValueError(f"Channel list mismatch: expected {expected_chans}, got {p.get('channels')}")
 
@@ -663,7 +666,7 @@ def train(kind="gru", H=32, head="scale", layers=1, iters=1500, seeds=2, lofo=Fa
 
     preds = {}
     for tr, names in groups:
-        print("  earth quick_d60: " + " ".join(f"{n[:24]}={quick_d60(data[n]):.1f}" for n in names), flush=True)
+        print("  rawof quick_d60: " + " ".join(f"{n[:24]}={quick_d60(data[n]):.1f}" for n in names), flush=True)
         if bases:
             Ftr = np.vstack([data[m]["F"] for m in tr])
             for s, b in enumerate(bases):
@@ -691,10 +694,14 @@ def train(kind="gru", H=32, head="scale", layers=1, iters=1500, seeds=2, lofo=Fa
 
 
 def _score(n: str, d: dict, p: np.ndarray, tag: str, in_pool: bool) -> dict:
-    """drift_score of the earth track and the NN-corrected one (needs the flight's video truth on this machine)."""
-    r = drift_score(n, ests={"earth": np.c_[d["earth"].real, d["earth"].imag], "nn": corrected(d, p)}, tag=tag)
+    """drift_score of the earth track (a reference: camera-fused on g_ext_pos_on >= 2 flights), the raw-OF track and the
+    NN-corrected one (needs the flight's video truth on this machine)."""
+    ests = {"earth": np.c_[d["earth"].real, d["earth"].imag], "rawof": corrected(d, np.zeros_like(p)),
+            "nn": corrected(d, p)}
+    r = drift_score(n, ests=ests, tag=tag)
     f = {k: round(e["drift60s_p90_cm"], 1) for k, e in r["est"].items() if "drift60s_p90_cm" in e}
-    print(f"{n[:27]:27s} pool={in_pool:d} earth {f.get('earth')} -> nn {f.get('nn')}", flush=True)
+    print(f"{n[:27]:27s} pool={in_pool:d} rawof {f.get('rawof')} -> nn {f.get('nn')} (earth {f.get('earth')})",
+          flush=True)
     return {"d60s": f, "rms_cm": {k: round(e["rms_cm"], 1) for k, e in r["est"].items()}}
 
 
@@ -727,7 +734,7 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("calib")
     c.add_argument("--chunk-s", type=float, default=20.0)
-    sub.add_parser("sync", help="truth time-shift scan of earth and the in-sample oracle")
+    sub.add_parser("sync", help="truth time-shift scan of the raw-OF track and the in-sample oracle")
     ai = sub.add_parser("airio", help="published AirIO net vs the UTIL flow model (velocity r2, naive drift)")
     ai.add_argument("--model", default="blackbird", choices=tuple(AIRIO))
     ai.add_argument("--rate", type=float, default=100.0)
@@ -749,7 +756,7 @@ def main(argv=None):
     t.add_argument("--tag", default="")
     t.add_argument("--eval-every", type=int, default=0)
     t.add_argument("--noise", type=float, default=0.0)
-    t.add_argument("--feats", default="", help="comma-separated NN4_CH column indices (default all)")
+    t.add_argument("--feats", default="", help="comma-separated NN4_RAW_CH column indices (default all)")
     t.add_argument("--exclude", default="", help="comma-separated name substrings dropped from the pool")
     t.add_argument("--pre-iters", type=int, default=0, help="UTIL pretraining iterations (0 = none)")
     t.add_argument("--ft-lr", type=float, default=1e-3)

@@ -1830,7 +1830,7 @@ def yaw4(names, est: str = "earth") -> list[dict]:
 # both carry the camera (g_ext_pos_on 2 ramps the fixes into ano_of.earth_x/y; 3 moves the EKF position, and through
 # its covariance the velocity and innovation, in EkfOf_UpdatePos), so the model was fed part of the answer. The
 # features are now NN4_RAW_CH (no s_ekf_of channel) and the target is built from raw OF, which no fix touches.
-# NN4_CH keeps the EKF channels for nn_io and the campaign capture list (livewatch/campaign_capture.py).
+# NN4_CH keeps the EKF channels for the campaign capture list (livewatch/campaign_capture.py); nn_io is on NN4_RAW_CH.
 NN4_HOLD = ("hover_r4_b17_v0_3g", "drift_rc_r4_b7_v19_4000", "drift_rc_r4_b10_v20")
 NN4_SUSPECT = ("drift_rc_r4_b8_v17", "drift_rc_r4_b12_v21", "r6_f4b_sysid_p5300")   # r6_f4b: truth4 sync suspect (2026-10-13)
 NN4_CH = {1: ("Acc_X_Real", "Acc_Y_Real", "Acc_Z_Real", "Gyro_X_Real", "Gyro_Y_Real", "Gyro_Z_Real", "imu_data.rol",
@@ -1858,7 +1858,7 @@ def nn4_data(name: str, rate_hz: float = 10.0, win_s: float = 1.0, nblk: int = 1
     target "rawof" (leak-free, default): Y = the body-frame truth velocity (0.5 s savgol derivative, truth4 rotation
     undone, turned by the yaw) minus the scaled raw OF `of` (m/s), both as means over the step (ts - 1/rate_hz, ts].
     The yaw sense `sign` is the one whose body-frame truth velocity best matches the raw OF (complex correlation
-    `corr`, checked per flight). target "earth" (before 2026-10-19; nn_io): Y = the body residual of truth - earth
+    `corr`, checked per flight). target "earth" (before 2026-10-19): Y = the body residual of truth - earth
     at ts, sign from the earth velocity vs the EKF one. It carries the camera on a fused flight (`ext_pos_on`, the
     highest g_ext_pos_on logged; 0 when the log has none). `back` turns body vectors at ts into the truth4 frame;
     `head` is the raw-OF track on the truth4 rows (truth4 frame, m, 0 at the first row)."""
