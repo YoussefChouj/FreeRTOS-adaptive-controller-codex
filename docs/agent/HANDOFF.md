@@ -1,62 +1,23 @@
 # HANDOFF - current state (overwrite at every task boundary, keep under 3 KB)
 
 Read order: `AGENTS.md` -> this file -> `docs/agent/memory/rules.md` -> `.claude_state.md` (newest entry first).
-History: `docs/agent/ledger/` (grep, never read whole). Desktop session is CEO: inline, no subagents.
+History: `docs/agent/ledger/` (grep, never read whole). Desktop session is CEO: delegates implementation to Jules workers.
 
-## Now: 2026-10-19 lab = redo of all 10-18 flights (`.\labday 2026-10-19`, day file `docs/lab/days/2026-10-19.yaml`)
+## Now: 2026-10-19 Lab Analysis Complete -> Prepare `.\labday 2026-10-20` (`docs/lab/days/2026-10-20.yaml`)
 
-- 10-19 so far (15:40): floor-1019 rescanned (the phone moved). mem1 hovered, then landed: stale_telemetry abort = the HOST ingest
-  fell behind (lag 0.82 s, queue 200; WiFi fine; not the tracker, whose snap was the normal coral-mask learning; not the drift gate).
-  Fix 94602c07: C checksum (`binascii.crc_hqx`) + store commits batched (50 rows / 0.1 s). 8081 restarted 15:37 while disarmed,
-  log `logs/service/8081-20261019-153710.log`; no "ingest behind" after start-up. Not explained: one ~2 s ingest block on the
-  ground at 15:23:16 (a `store._lock` holder such as an API `iter_records`, or a GIL hog). If a stale abort comes back: run
-  `py-spy dump --pid <8081 pid>` (py-spy 0.4.2, no admin needed) while it lags, and grep the service log for "ingest behind".
-- Pack: the gate predicted 29.6% < 30% after mem1, so swap before the next flight.
-- Cloud: main was fast-forwarded to the lab branch on 10-19, so cloud sessions start from current code. The AGENTS.md cloud
-  rule is merged (036e7d84). At every ship point, push both `overnight-2026-10-08` and `overnight-2026-10-08:main`.
-
-- Lab commands by hand (labday, cam/video tracking, fusion modes 0-3, fly, 8081, flash, fake drone): `docs/lab/COMMANDS.md`
-  (drift test `ground_station/lab/tests/test_commands_doc.py`; AGENTS.md Conventions rule).
-- Full 10-19 handoff (camera tape vs scan, stream ladder A-E status, waiting branches, open work): `docs/agent/handoff-2026-10-19.md`.
-
-- 10-18 post-lab fixes, all committed: relay bind retry 5e0e545c; labday starts 8081 before the camera + endlive 7ffb9ff0; stale-telemetry trip only after 0.3 s f51d3de3 (operator OK); bridge re-pushes slots after 3 s silence a0d15173; dry run once per unchanged flight + width-safe cooldown line 6cfd8a85; one camera loop + run-HHMMSS dirs + CR in tracker PIDs 056eb0c3; landing zoom off d2879e1d; 8081 log to `logs/service/<port>-<ts>.log` + QuickEdit off 9b7046d3; abort link snapshot a2efc3ad; 1 Hz `link` events d4c653c6.
-- Tracker bias (~30 cm fix offset on 10-18): the fire-station print on the mat sat in the keep disc and pulled the dot off the drone. Fixed 52784922 (floor-scan scenery mask, cached PNG in the floor dir). Floor = floor-1018; if the camera moved, re-scan (`camera_truth.sh floor floor-1019`, `--floor floor-1019`).
-- Takeoff link losses 220517/220919 (after P15): cause still UNKNOWN (WiFi vs host rx). The new service log + abort/link events will tell on the next one.
-- No firmware source change since the 10-18 flash: no reflash.
-- Claude manager DISABLED; Argon High researches + runs Jules loops, 160K cap. Thesis: memory `thesis-core-claim`.
+- **Cloud branches merged & pushed (`93d2e7fd` on `overnight-2026-10-08` and `main`):** all 2026-10-19 cloud branches (`elated-cartwright`, `loving-mccarthy`, `compassionate-rubin`, `kind-goldberg`, `clever-darwin`, `angry-saha`, `dazzling-cori`, plus cherry-picked `mrac` shift, `fw_trace`, `write_gains` `/api/actions`, `video_truth` ArUco, `drift_nn`) merged and verified (`tools/check.sh --fast` + 243 pytest pass).
+- **2026-10-19 Flight Results (`docs/lab/days/2026-10-19-report.md`, `logs/analysis/2026-10-19/memory_premise.json`):**
+  - **Camera-vs-EKF bias fix (`52784922`, `floor-1019`) verified:** `cam-EKF rms` is **2.8-4.6 cm** across all 7 airborne flights (down from ~30 cm on 10-18); camera vs onboard landing offsets agree within **0-2 cm** (`mem2` 26/27, `mem3` 38/37, `mem4` 39/41, `mem5` 30/30, `mem6` 34/34, `z1` 17/17, `z2` 25/26 cm).
+  - **Hover RMS (`u100` vs `u0`):** `u100` (`mem3` 8.2/9.0, `mem5` 7.9/8.4 cm) beat `u0` (`mem2` 9.4/9.9, `mem4` 8.1/8.9, `mem6` 10.0/10.3 cm) by ~1.1 cm in hold RMS; during ~10 s of figure-8 before abort, `u100` MRAC weights drifted 9.1% (`mem3`) and 11.5% (`mem5`).
+  - **Why flights aborted on 10-19 & Root Causes Fixed (4 Jules briefs in `.agent-ops/briefs/j-1019-*.md`):**
+    1. **Obs 1 (Tracker corner latch at start + jump line on arm):** `TrackCoral` left `self.static = None` for the first 30 frames (`static_n`) even when `floor_scenery` was loaded, and `Preview.uvs` never cleared after `static_n` or on arming (`live_tracker.py:L117-L200, L804`). Brief: `j-1019-tracker-center`.
+    2. **Obs 2 (`1017-F1` 12-gain write abort):** `/api/diagnostics/bundle` capped command results at 10 (evicting 2 of 12 gains); fixed via `/api/actions` in `faddfc85` + `wait_txn` grace deadline fix (`campaign_fly.py:L901`). Brief: `j-1019-exp-gains`.
+    3. **Obs 3 (`1017-E1..E4` `exp_active` 1-flight lag `255->4->5->6`):** `Keil_OnGround()` (`TASK/StabilizerTask.c:L1373`) required `state != FLIGHT_STATE_ARMED`, so `set exp_id` after RC arm on the pad never latched into `g_exp_active` until disarm after abort. Fixed in `StabilizerTask.c` (`flight_phase == FLIGHT_PHASE_IDLE`) AND pre-applied before `wait_for_arm` in `campaign_fly.py`. Brief: `j-1019-exp-gains`.
+    4. **Host `ingest_lag_s` spikes (0.52-1.34 s in `z1`/`mem1`):** synchronous SQLite commit/prune under `store._lock` on the real-time ingest thread (`storage.py:L124-L171`). Offloaded to background writer + WAL. Brief: `j-1019-ingest-lag`.
+    5. **`mem2..mem6` & `z2` `position_error` at figure-8 first turn (~45 s):** 60 cm Gerono figure-8 (`v_pk ~38 cm/s`) has 36.4-36.9 cm 3D phase lag (`z2` 29 cm) vs `AbortLimits.pos_err_m = 0.25` m (`abort_monitor.py:L18`, PROPOSED; `.yaml` campaigns use `0.50` m). Needs operator OK to raise `pos_err_m` (or add `pos_err_traj_m = 0.50`) for dynamic trajectories.
+    6. **`labday` `bad_end` & `scorecard` carried IDs:** `bad_end` now checks `aborted` / `debrief.txt` (`j-1019-labday-scorecard`).
 
 ## Next 3 actions
-1. Lab: swap the pack, then `.\labday 2026-10-19` (one fresh dry run per flight, because ground_station changed). Check with
-   `--list` whether mem1 counts as flown (UNVERIFIED); re-fly it if not. Check the dot sits on the parked drone first.
-2. During flights: watch the newest `logs/service/8081-*.log` for "ingest behind". After the mem1 redo: fixes vs optical flow, `link` events.
-3. Open: the 2 s ground ingest block; service bind takes ~41 s after start; Jules sessions j-sysid-torque / j-z-feat state UNVERIFIED.
-
-## Do not
-- Do not treat a missing `logs/video_truth/<folder>/cam.mkv` as lost: it is on Drive (`docs/agent/video-archive.md`).
-- Arm/spin outside an operator-opened workflow-B battery session; flash while armed or with `--force`.
-- Stage OBJ/ or USER/ or logs/; `git add -A`.
-- Start recording until the operator confirms preset, variable list and session name.
-- Write unmeasured numbers without PROPOSED/computed.
-- Run `lab end` on test or rehearsal state against the real catalog (it rewrites `docs/lab/catalog.yaml`).
-
-<!-- AUTO:BEGIN -->
-Refreshed: 2026-10-16 02:01 (mechanical, no LLM)
-- Tree: .; branch / HEAD: overnight-2026-10-08 @ 944aca05; unpushed commits: 5
-- Dirty paths outside OBJ/: 108
-  -  M .agent-ops/.ark-last-spawn
-  -  M .agent-ops/served/estimator-panel.js
-  -  M .agents/agents/codebase-scout/agent.md
-  -  M USER/JX_FLY.uvguix.Acer
-  -  M USER/JX_FLY.uvoptx
-  -  M USER/build_log.txt
-  -  M USER/main.c
-  -  M ground_station/analysis/live_tracker.py
-  - ... +100 more
-- Dashboard 8081: UP (HTTP 200)
-- Last commits:
-  - 944aca05 docs(handoff): complete 2026-10-15 autonomous lab overhaul (fixes 1-5, frictions A1-A7/B1-B16/C/D2, 207 pytest + 24 host C pass)
-  - 86fe9470 feat(fw,lab): RC/command PID fallback latch (Section C), measured B5 slot/ACK rates (99.92% ACK), ./fly --list-gains, --dry-run, and --post-takeoff-gains; 24/24 host C + 75 pytest pass
-  - 58c76c23 feat(lab): .fly # gains directives & livetune_best persistence (A1-A6), sim session filter (B15), AXF flash/symbol guard (B16), /api/streams lab layout (B6), cam touchdown offset (D2/B2), stream_log.out guard (B9); 69 tests pass
-  - 0fba18f6 feat(lab): native ./fly stop-and-wait gain writer (A1-A7), 4-pt goto & preset start_z_m (B1/B3/fix5), ground preload (fix2), preflight race (fix4), heartbeat backoff (B8/B13), events ms/--gaps (B7/B11/B14); 257 tests pass
-  - bed695d1 docs(lab): measured F1 takeoff drift replay (C3 Kp 0.3214 = 40.2% restoring vel vs 9 normal takeoffs 6.3-16.6 cm) and B3 flight-5 preset start_z_m 0.85m root cause
-<!-- AUTO:END -->
+1. Review and merge the 4 Jules worker PRs (`j-1019-exp-gains`, `j-1019-ingest-lag`, `j-1019-tracker-center`, `j-1019-labday-scorecard`), run `tools/check.sh --fast` + pytest, push `overnight-2026-10-08` and `main`.
+2. Operator decision before flying `.\labday 2026-10-20`: approve raising `AbortLimits.pos_err_m` (e.g. `0.50` m during trajectory/preset, matching `campaigns/*.yaml`) so 60 cm figure-8 (`36.9 cm` lag) and `vz_steps` (`29 cm` lag) complete without false `position_error` aborts.
+3. At lab on 2026-10-20: rebuild & flash if firmware changed, run `.\cam floor floor-1020`, then `.\labday 2026-10-20` (21 flights: `mem1..mem6`, `z1..z2`, `1017-F1`, `1017-E1..E4`, `1017-H0..H2`, `1017-F2..F6`).

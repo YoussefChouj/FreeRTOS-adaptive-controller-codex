@@ -1,0 +1,65 @@
+# Lab day 2026-10-20: fly it with `.\labday 2026-10-20` (add `--pack 2` once after a type-2 swap; ground_station/lab/labday.py).
+# `.\labday 2026-10-20 --list` shows what is flown; the same command again goes on from the first flight not flown.
+# Each flight is `.\fly <fly> --once <args>`; `stop: true` = analysis stop after it. Pass marks are PROPOSED.
+# Redo of 2026-10-19 incomplete flights:
+# - On 2026-10-19, camera-vs-EKF bias was fixed (2.8-4.6 cm RMS across all 7 airborne flights), but:
+#   * mem1 aborted in hover on stale_telemetry (before the 8081 CRC/batch fix),
+#   * mem2..mem6 hovered 28 s + entered figure-8 for ~10 s, then aborted on L1 position_error at the first lobe turn
+#     (3D tracking lag 36.4-36.9 cm > pos_err_m 25 cm),
+#   * z1 flew 71 s and aborted near the end on host SQLite ingest lag (fixed in storage.py),
+#   * z2 aborted at 36.1 s on L1 position_error (29 cm > 25 cm),
+#   * 1017-F1 aborted on 12-gain write journal check (fixed in campaign_fly.py),
+#   * 1017-E1..E4 refused takeoff at set exp_id due to exp_active 1-flight lag when armed on pad (fixed in campaign_fly.py + StabilizerTask.c).
+# - All 13 unflown/aborted 2026-10-17 flights (1017-F1, 1017-E1..E4, 1017-H0..H2, 1017-F2..F6) are carried automatically by load_day().
+day: 2026-10-20
+title: redo of 10-19 incomplete flights - gate-memory premise (MRAC u100 vs u0, n=3 per arm, interleaved), Z ground effect and v_z steps, plus carried 10-17 flights
+camera:                       # camera_truth.sh fusion <id-fly> <mode> <args>, CT_FLOOR=logs/video_truth/<floor>
+  floor: floor-1020           # scan at the lab with drone out of view: .\cam floor floor-1020
+  mode: 3
+  args: [--yaw-deg, "94"]
+before:
+  - "Reflash firmware if Keil build is updated (`UV4 -b -t JX_FLY -j0 JX_FLY.uvprojx` then `python -m ground_station.flashtool.rebuild_and_flash --yes`)"
+  - "Scan floor with drone out of view: `.\\cam floor floor-1020`"
+  - "8081 running, `arm 0`, landing pad clear, camera in the recording position"
+  - "Tracker window: the dot sits on the drone center while parked before arming (if not: land, `r`, tell me)"
+flights:
+  - id: mem1
+    fly: lab_m_memory_u100
+    why: "memory u100 #1 (A hold, B figure-8, A hold)"
+    pass: "figure-8 completes; the dot stays on the drone in the tracker window"
+    stop: true
+  - id: mem2
+    fly: lab_m_memory_u0
+    why: memory u0 #1 (MRAC injection 0, the control arm)
+    pass: figure-8 completes
+  - id: mem3
+    fly: lab_m_memory_u100
+    why: memory u100 #2
+    pass: figure-8 completes
+  - id: mem4
+    fly: lab_m_memory_u0
+    why: memory u0 #2
+    pass: figure-8 completes
+  - id: mem5
+    fly: lab_m_memory_u100
+    why: memory u100 #3
+    pass: figure-8 completes
+  - id: mem6
+    fly: lab_m_memory_u0
+    why: memory u0 #3 (n=3 per arm reached)
+    pass: figure-8 completes
+    stop: true
+  - id: z1
+    fly: lab_z_ground_effect
+    why: Z ground effect (thrust vs height near the pad)
+    pass: holds at each height; lands on the pad
+  - id: z2
+    fly: lab_z_vz_steps
+    why: Z vertical drag (v_z steps)
+    pass: steps complete; lands on the pad
+    stop: true
+branches:
+  - {when: '"NO FIX SENT" or the dot off the drone', do: "Land, check the tracker, re-fly (r at the auto-stop prompt)"}
+  - {when: Stale-telemetry abort at take-off, do: "Land; tell me (the abort event and logs/service/8081-*.log now say link vs host)"}
+  - {when: Tilt trip or fence stop, do: "Land; tell me before the next flight"}
+  - {when: "Pack at the packs.yaml gate (gate_soc_pct, post-flight, ground only)", do: "Swap before the next flight; give the new type when fly asks"}
