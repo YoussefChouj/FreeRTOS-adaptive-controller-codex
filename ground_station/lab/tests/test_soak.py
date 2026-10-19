@@ -214,3 +214,29 @@ def test_driver_ends_the_day_on_a_refused_go():
     d.feed("GO refused (409): campaign deps not ready: No module named 'bench'. Disarm by RC.\n")
     assert d.ended == "day 1: GO refused (409): campaign deps not ready: No module named 'bench'. Disarm by RC."
     assert d.failures == [d.ended]
+
+
+def test_save_seconds_appends_each_second_once_and_tags_the_flight(tmp_path, monkeypatch):
+    """lag_seconds.csv is where the BLOCK line sends the reader: every second once, in flight or on the ground."""
+    served = {"seconds": [[100, 3.0], [101, 250.5], [102, 4.0]]}
+    asked = []
+
+    def fake_get(port, path, timeout=5.0):
+        asked.append(path)
+        return served
+    monkeypatch.setattr(soak, "get_json", fake_get)
+    s = soak.Soak(type("A", (), {"out": str(tmp_path)})())
+    s.sec_mark = 99
+    s.save_seconds(soak.Flight(1, "mem2", 2, 8, start_s=100.4, end_s=101.9))
+    served["seconds"] = [[101, 250.5], [102, 4.0], [103, 5.0]]      # the service sends the overlap again
+    s.save_seconds()
+    assert asked == ["/health/ingest_lag?since_s=100", "/health/ingest_lag?since_s=103"]
+    assert (tmp_path / "lag_seconds.csv").read_text(encoding="utf-8") == (
+        "100,3.0,d1 mem2\n101,250.5,d1 mem2\n102,4.0,\n103,5.0,\n")
+
+
+def test_report_counts_the_block_frames_once():
+    """The whole-run window already holds every flight's frames: full4 printed 16 for 8."""
+    days = _days(over=1)
+    text = soak.report(days, _run(days, over=3), soak.checks(days, _run(days, over=3)))
+    assert "BLOCK: 3 frames over 200 ms; see lag_seconds.csv in the run folder." in text

@@ -434,9 +434,9 @@ def report(days: list[dict], run: dict, result: list[tuple[str, bool, str]]) -> 
     notes = [f"d{f.day} {f.id}: {n}" for f in flights for n in f.notes]
     if notes:
         lines += ["", "## Notes", ""] + [f"- {n}" for n in notes]
-    over = lt["over_200ms"] + sum((f.lag or {}).get("over_200ms", 0) for f in flights)
+    over = lt["over_200ms"]   # the whole run already holds every flight's frames
     sampled = sum(1 for f in flights if (f.lag or {}).get("frames"))
-    lines += ["", (f"BLOCK: {over} frames over 200 ms; see the per-second maxima in the run folder." if over
+    lines += ["", (f"BLOCK: {over} frames over 200 ms; see lag_seconds.csv in the run folder." if over
                    else f"No block over 200 ms reproduced in {sampled} flights ({lt['frames']} frames)."
                    + (f" {len(flights) - sampled} flights have no lag samples." if sampled < len(flights) else ""))]
     return "\n".join(lines) + "\n"
@@ -452,6 +452,7 @@ class Soak:
         self.tree = self.out / "tree"
         self.events = self.out / "events"
         self.procs: list[subprocess.Popen] = []
+        self.sec_mark = 0   # last second saved to lag_seconds.csv
         self.port = 0
         self.env = {}
 
@@ -525,6 +526,19 @@ class Soak:
                 "ingest_queue": link.get("ingest_queue"), "ingest_dropped": link.get("ingest_dropped"),
                 "store": get_json(self.port, "/health/store")}
 
+    def save_seconds(self, flight: "Flight | None" = None) -> None:
+        """Append the per-second ingest-lag maxima since the last save to lag_seconds.csv (unix_s, max_ms, flight;
+        flight is empty for ground time). The service keeps an hour of them, so this runs after every flight."""
+        lag = get_json(self.port, f"/health/ingest_lag?since_s={self.sec_mark + 1}")
+        rows = sorted((int(s), m) for s, m in lag.get("seconds") or [] if int(s) > self.sec_mark)
+        with open(self.out / "lag_seconds.csv", "a", encoding="utf-8") as fh:
+            for s, m in rows:
+                inside = (flight is not None and flight.start_s is not None
+                          and int(flight.start_s) <= s <= int(flight.end_s or s))
+                fh.write(f"{s},{m},{f'd{flight.day} {flight.id}' if inside else ''}\n")
+        if rows:
+            self.sec_mark = rows[-1][0]
+
     def ctl_until(self, word: str, ok: str, tries: int = 30) -> str:
         reply = ""
         for _ in range(tries):
@@ -554,6 +568,7 @@ class Soak:
         elif kind == "flight_done":
             after = get_json(self.port, f"/health/ingest_lag?since_s={int(arg.start_s)}")
             arg.lag = lh.window(arg.lag_before, after, arg.start_s, arg.end_s)
+            self.save_seconds(arg)
         elif kind == "disarm":
             r = self.ctl_until("disarm", "ok disarm")
             if not r.startswith("ok"):
@@ -636,8 +651,11 @@ class Soak:
             self.setup()
             t_run = time.time()
             base = get_json(self.port, f"/health/ingest_lag?since_s={int(t_run)}")
+            self.sec_mark = int(t_run) - 1
+            (self.out / "lag_seconds.csv").write_text("unix_s,max_ms,flight\n", encoding="utf-8")
             days = [self.day(n, Path(self.a.day_src)) for n in range(1, self.a.days + 1)]
             after = get_json(self.port, f"/health/ingest_lag?since_s={int(t_run)}")
+            self.save_seconds()
             h = self.health()
             total = lh.window(base, after, t_run, time.time())
             # the service keeps the last hour of per-second maxima; each flight took its own while it was fresh
