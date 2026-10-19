@@ -75,6 +75,8 @@ volatile uint8_t mrac_in_phase = 0;
 volatile float mrac_in_vbat = 0.0f;
 volatile float mrac_in_acc[2] = {0.0f, 0.0f};
 volatile float mrac_xy_unom[2] = {0.0f, 0.0f};   /* x/y PID accel cm/s^2 before u_ad (Pos_Compute, 100 Hz) */
+volatile float mrac_in_h = 0.0f;                  /* Z_posPID.FB, m (ToF height), for the Z features */
+volatile uint8_t mrac_z_feat_mask = 0;            /* Z feature bits, MRAC_ZFEAT_*; 0 = off (VAR_WRITE id 54) */
 MRAC_Vp12_t mrac_vp12 = {
     0.5f, 0.3f, 2.5f,       /* anf_f0, anf_fmin, anf_fmax Hz (exp12 swing 0.44-0.88 Hz, mostly 0.49) */
     0.3f,                   /* anf_zeta */
@@ -342,7 +344,7 @@ static int MRAC_BasisOf(MRAC_Axis_e axis)
     float b = 0.0f;
     if (axis == MRAC_AXIS_PITCH) b = mrac_config_pitch.basis;
     else if (axis == MRAC_AXIS_ROLL) b = mrac_config_roll.basis;
-    else if (axis == MRAC_AXIS_Z) b = mrac_config_z.basis;    /* vp 12: 0 or S10X (battery slot only) */
+    else if (axis == MRAC_AXIS_Z) b = mrac_config_z.basis;    /* vp 12: 0 or S10X (ext 6 battery, ext 0..3 mrac_z_feat_mask) */
     else if (axis == MRAC_AXIS_X) b = mrac_config_x.basis;    /* x/y: S6 only (GenExt adds nothing) */
     else if (axis == MRAC_AXIS_Y) b = mrac_config_y.basis;
     return (int)(b + 0.5f);
@@ -632,6 +634,71 @@ static void MRAC_Vp12Step(uint8_t hold, uint8_t arm_edge)
     }
 }
 
+/* Z features (ext 0..3 of the Z axis, basis S10X only), picked by mrac_z_feat_mask:
+ *   bit0 bias    1
+ *   bit1 ground  clamp((h0 / max(h, h_min))^2, 0, 1)        h = mrac_in_h (Z_posPID.FB, m)
+ *   bit2 drag    clamp(vz |vz| / vz_ref^2, -1, 1)            vz = Z_ratePID.FB (m/s), the Z bus x
+ *   bit3 tilt    1 / max(cos(rol) cos(pit), cos(tilt_max)) - 1, in [0, 1]   (imu_data deg)
+ * A NaN or out-of-range input gives 0 for that feature. Mask 0 leaves ext 0..3 at 0, as before the features.
+ * The applied vp 12 mask of Z (mrac_vp12.mask_act[Z], default all on) must keep bits 0..3 on.
+ *
+ * MRAC_Z_FEAT_ROW fields (all PROPOSED, not measured on the rig):
+ *   @h0_m          m    [0.02, 0.5]   ground-effect reference height (feature is 1 at and below it)
+ *   @h_min_m       m    (0, h0]       height floor of the 1/h^2 term
+ *   @h_max_m       m    [1, 10]       heights above this are out of range (feature 0)
+ *   @vz_ref_mps    m/s  [0.2, 5]      climb rate where the drag feature reaches 1
+ *   @vz_max_mps    m/s  [1, 10]       climb rates above this are out of range (feature 0)
+ *   @tilt_max_deg  deg  [5, 45]       tilt clamp of the tilt-loss feature (own value, not the prearm limit)
+ * MRAC_Z_SLOT_ROW fields, one row per feature in bit order (all PROPOSED):
+ *   @gamma         -    [0, 10]       adaptation gain of the slot (MRAC_SetRow)
+ *   @lim_share     -    [0, 0.3]      weight limit as a share of the Z u_max                              */
+typedef struct { float h0_m, h_min_m, h_max_m, vz_ref_mps, vz_max_mps, tilt_max_deg; } mrac_zfeat_t;
+#define MRAC_Z_FEAT_ROW(h0_m, h_min_m, h_max_m, vz_ref_mps, vz_max_mps, tilt_max_deg) \
+    { (h0_m), (h_min_m), (h_max_m), (vz_ref_mps), (vz_max_mps), (tilt_max_deg) }
+static const mrac_zfeat_t s_zfeat =
+/*              h0_m   h_min_m h_max_m vz_ref_mps vz_max_mps tilt_max_deg */
+    MRAC_Z_FEAT_ROW(0.10f, 0.02f,  4.0f,   1.0f,      5.0f,      30.0f);    /* PROPOSED */
+
+typedef struct { float gamma, lim_share; } mrac_zslot_t;
+#define MRAC_Z_SLOT_ROW(gamma, lim_share) { (gamma), (lim_share) }
+static const mrac_zslot_t s_zslot[MRAC_ZFEAT_N] = {
+/*                  gamma  lim_share */
+    MRAC_Z_SLOT_ROW(2.0f,  0.15f),     /* bias    PROPOSED */
+    MRAC_Z_SLOT_ROW(2.0f,  0.10f),     /* ground  PROPOSED */
+    MRAC_Z_SLOT_ROW(2.0f,  0.10f),     /* drag    PROPOSED */
+    MRAC_Z_SLOT_ROW(2.0f,  0.10f),     /* tilt    PROPOSED */
+};
+
+static float MRAC_Clamp(float v, float lo, float hi)
+{
+    return (v < lo) ? lo : (v > hi) ? hi : v;
+}
+
+/* Fills phi[0..3] (ext-relative) from the mask bits; the caller zeroed phi. */
+static void MRAC_ZFeat(float vz, float *phi)
+{
+    uint8_t m = mrac_z_feat_mask;
+    float h = mrac_in_h;
+    float rol = imu_data.rol;
+    float pit = imu_data.pit;
+    float hh, ct, ct_min;
+
+    if (m & MRAC_ZFEAT_BIAS) phi[0] = 1.0f;
+    if ((m & MRAC_ZFEAT_GROUND) && h - h == 0.0f && h >= 0.0f && h <= s_zfeat.h_max_m) {
+        hh = (h > s_zfeat.h_min_m) ? h : s_zfeat.h_min_m;
+        phi[1] = MRAC_Clamp((s_zfeat.h0_m / hh) * (s_zfeat.h0_m / hh), 0.0f, 1.0f);
+    }
+    if ((m & MRAC_ZFEAT_DRAG) && vz - vz == 0.0f && fabsf(vz) <= s_zfeat.vz_max_mps)
+        phi[2] = MRAC_Clamp(vz * fabsf(vz) / (s_zfeat.vz_ref_mps * s_zfeat.vz_ref_mps), -1.0f, 1.0f);
+    if ((m & MRAC_ZFEAT_TILT) && rol - rol == 0.0f && pit - pit == 0.0f
+        && fabsf(rol) <= 180.0f && fabsf(pit) <= 180.0f) {
+        ct = cosf(rol * MRAC_DEG2RAD) * cosf(pit * MRAC_DEG2RAD);
+        ct_min = cosf(s_zfeat.tilt_max_deg * MRAC_DEG2RAD);
+        if (ct < ct_min) ct = ct_min;
+        phi[3] = MRAC_Clamp(1.0f / ct - 1.0f, 0.0f, 1.0f);
+    }
+}
+
 static void MRAC_GenExt(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *phi)
 {
     const MRAC_AxisConfig_t *cfg = (axis == MRAC_AXIS_PITCH) ? &mrac_config_pitch
@@ -645,9 +712,10 @@ static void MRAC_GenExt(MRAC_Axis_e axis, const MRAC_Bus_t *bus, float *phi)
 
     for (i = 0; i < MRAC_N_EXT; i++) phi[i] = 0.0f;
     if (axis == MRAC_AXIS_Z) {
-        /* vp 12: Z gets the battery slot (ext 6) only */
+        /* vp 12: Z gets the battery slot (ext 6) and, with mrac_z_feat_mask set, the features in ext 0..3 */
         un = (cfg->u_max > 0.0f) ? bus->u_nom / cfg->u_max : 0.0f;
         if (MRAC_BasisOf(axis) == MRAC_BASIS_S10X && un - un == 0.0f) phi[6] = MRAC_SagPhi(un);
+        if (MRAC_BasisOf(axis) == MRAC_BASIS_S10X && mrac_z_feat_mask != 0U) MRAC_ZFeat(bus->x, phi);
         MRAC_ApplyMask(axis, phi);
         return;
     }
@@ -1813,6 +1881,9 @@ static void MRAC_Vp12Lims(uint8_t axis, MRAC_AxisConfig_t *c)
     } else if (axis == (uint8_t)MRAC_AXIS_Z) {
         if (on) MRAC_SetRow(c, MRAC_N_STRUCT + 6, 2.0f, 0.15f * u); /* battery sag 15 % */
         else MRAC_SetRow(c, MRAC_N_STRUCT + 6, 0.0f, 0.0f);
+        /* Z features ext 0..3 (MRAC_Z_SLOT_ROW); their phi stays 0 while mrac_z_feat_mask is 0 */
+        for (k = 0; k < MRAC_ZFEAT_N; k++)
+            MRAC_SetRow(c, MRAC_N_STRUCT + k, on ? s_zslot[k].gamma : 0.0f, on ? s_zslot[k].lim_share * u : 0.0f);
     }
 }
 #endif
@@ -1925,6 +1996,7 @@ void MRAC_Control(const CtrlerTypeDef* current_state)
     mrac_state.roll.x  = q_rate;
     mrac_state.yaw.x   = r_rate;
     mrac_state.z_rate.x = current_state->Z_ratePID.FB; // Z-axis velocity measurement from cascade
+    mrac_in_h = current_state->Z_posPID.FB;             /* m, ToF height, for the Z features */
     mrac_state.x_vel.x  = current_state->locxsPID.FB * 0.01f;  /* cm/s -> m/s (100 Hz signal) */
     mrac_state.y_vel.x  = current_state->locysPID.FB * 0.01f;
     
@@ -2035,3 +2107,18 @@ void MRAC_GetPrior(uint8_t axis, float *out_arr)
 }
 
 #endif /* MRAC_ENABLE_SIGMA_PRIOR */
+
+void MRAC_ZFeatOut(float feat[MRAC_ZFEAT_N], float w[MRAC_ZFEAT_N])
+{
+    int k;
+
+    for (k = 0; k < MRAC_ZFEAT_N; k++) {
+#if MRAC_VARIANT == MRAC_VARIANT_MULTI
+        feat[k] = mrac_state.z_rate.Phi[MRAC_N_STRUCT + k];
+        w[k] = mrac_state.z_rate.Theta[MRAC_N_STRUCT + k];
+#else
+        feat[k] = 0.0f;
+        w[k] = 0.0f;
+#endif
+    }
+}

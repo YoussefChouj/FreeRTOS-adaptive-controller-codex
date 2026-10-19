@@ -454,6 +454,7 @@ extern volatile uint8_t g_rc_pid_fallback_ch;                          /* Stabil
 extern volatile uint8_t g_ctrl_pid_fallback;                           /* StabilizerTask.c */
 extern volatile uint8_t exp_id, vp_id, lim_mode;                     /* StabilizerTask.c */
 extern volatile uint8_t g_imu_mahony_yaw_decouple;                   /* API/imu_update.h */
+extern volatile uint8_t mrac_z_feat_mask;                            /* API/mrac.h, MRAC_ZFEAT_* bits */
 
 static const VarWriteRow_t s_var_write[] = {
 /*                var                 type    id    min      max            range source */
@@ -501,7 +502,8 @@ static const VarWriteRow_t s_var_write[] = {
     VAR_WRITE_ROW(exp_id,              VW_U8, 50,  0,       7      ),  /* s_exp rows 0..7               */
     VAR_WRITE_ROW(vp_id,               VW_U8, 51,  0,       24     ),  /* s_vp rows 0..24               */
     VAR_WRITE_ROW(lim_mode,            VW_U8, 52,  0,       2      ),  /* s_lim rows 0..2               */
-    VAR_WRITE_ROW(g_imu_mahony_yaw_decouple, VW_U8, 53, 0,     1      )   /* bool                          */
+    VAR_WRITE_ROW(g_imu_mahony_yaw_decouple, VW_U8, 53, 0,     1      ),  /* bool                          */
+    VAR_WRITE_ROW(mrac_z_feat_mask,   VW_U8, 54,  0,       15     )   /* Z MRAC feature bits, mrac.h   */
 };
 
 /* GS CMD 0x2D: write row `id` = val. Returns 0 (written) or a VAR_WRITE_REJECT_* code (nothing written);

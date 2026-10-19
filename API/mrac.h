@@ -520,6 +520,18 @@ extern volatile float mrac_in_vbat;
 extern volatile float mrac_in_acc[2];
 extern volatile float mrac_xy_unom[2];   /* x/y PID accel (cm/s^2) before u_ad, set in Pos_Compute */
 
+/* Z features (MULTI build, Z basis S10X): ext slots 0..3 of the Z axis, one bit each in mrac_z_feat_mask
+ * (VAR_WRITE id 54, 0 = off and bit-exact with the build before them). Constants: MRAC_Z_FEAT_ROW in mrac.c. */
+#define MRAC_ZFEAT_BIAS   0x01U   /* ext 0: 1 */
+#define MRAC_ZFEAT_GROUND 0x02U   /* ext 1: ground effect (h0/h)^2 */
+#define MRAC_ZFEAT_DRAG   0x04U   /* ext 2: vz|vz| drag */
+#define MRAC_ZFEAT_TILT   0x08U   /* ext 3: 1/cos(tilt) - 1 thrust loss */
+#define MRAC_ZFEAT_N      4
+extern volatile float mrac_in_h;          /* Z_posPID.FB (m), copied in MRAC_Control */
+extern volatile uint8_t mrac_z_feat_mask;
+/* Z feature values and their weights (Theta) for g_tlm.mrac_z; zeros outside the MULTI build. */
+void MRAC_ZFeatOut(float feat[MRAC_ZFEAT_N], float w[MRAC_ZFEAT_N]);
+
 /* vp 12 (docs/workflow-b/vp12-design.md): basis 6 = S10 + swing in-phase / quadrature (per-axis adaptive notch
  * on body accel) + battery sag + motor lag in ext slots 4-7; Z gets the battery slot (ext 6). MULTI build only.
  * Every default below is PROPOSED. mask: 24-bit ext-slot mask per axis in one float (bit k = ext slot k on),
