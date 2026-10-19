@@ -8,7 +8,7 @@
 day: 2026-10-19
 title: redo of 10-18 - gate-memory premise (MRAC u100 vs u0, n=3 per arm, interleaved), then Z ground effect and v_z steps
 camera:                       # camera_truth.sh fusion <id-fly> <mode> <args>, CT_FLOOR=logs/video_truth/<floor>
-  floor: floor-1018           # camera moved since 10-18? scan first: bash ground_station/lab/camera_truth.sh floor floor-1019, then --floor floor-1019
+  floor: floor-1019           # the phone moved on the stand: scanned at the lab, drone out of view (bash ground_station/lab/camera_truth.sh floor floor-1019)
   mode: 3
   args: [--yaw-deg, "94"]
 before:

@@ -5,6 +5,16 @@ History: `docs/agent/ledger/` (grep, never read whole). Desktop session is CEO: 
 
 ## Now: 2026-10-19 lab = redo of all 10-18 flights (`.\labday 2026-10-19`, day file `docs/lab/days/2026-10-19.yaml`)
 
+- 10-19 so far (15:40): floor-1019 rescanned (the phone moved). mem1 hovered, then landed: stale_telemetry abort = the HOST ingest
+  fell behind (lag 0.82 s, queue 200; WiFi fine; not the tracker, whose snap was the normal coral-mask learning; not the drift gate).
+  Fix 94602c07: C checksum (`binascii.crc_hqx`) + store commits batched (50 rows / 0.1 s). 8081 restarted 15:37 while disarmed,
+  log `logs/service/8081-20261019-153710.log`; no "ingest behind" after start-up. Not explained: one ~2 s ingest block on the
+  ground at 15:23:16 (a `store._lock` holder such as an API `iter_records`, or a GIL hog). If a stale abort comes back: run
+  `py-spy dump --pid <8081 pid>` (py-spy 0.4.2, no admin needed) while it lags, and grep the service log for "ingest behind".
+- Pack: the gate predicted 29.6% < 30% after mem1, so swap before the next flight.
+- Cloud: main was fast-forwarded to the lab branch on 10-19, so cloud sessions start from current code. The AGENTS.md cloud
+  rule is merged (036e7d84). At every ship point, push both `overnight-2026-10-08` and `overnight-2026-10-08:main`.
+
 - Full 10-19 handoff (camera tape vs scan, stream ladder A-E status, waiting branches, open work): `docs/agent/handoff-2026-10-19.md`.
 
 - 10-18 post-lab fixes, all committed: relay bind retry 5e0e545c; labday starts 8081 before the camera + endlive 7ffb9ff0; stale-telemetry trip only after 0.3 s f51d3de3 (operator OK); bridge re-pushes slots after 3 s silence a0d15173; dry run once per unchanged flight + width-safe cooldown line 6cfd8a85; one camera loop + run-HHMMSS dirs + CR in tracker PIDs 056eb0c3; landing zoom off d2879e1d; 8081 log to `logs/service/<port>-<ts>.log` + QuickEdit off 9b7046d3; abort link snapshot a2efc3ad; 1 Hz `link` events d4c653c6.
@@ -14,9 +24,10 @@ History: `docs/agent/ledger/` (grep, never read whole). Desktop session is CEO: 
 - Claude manager DISABLED; Argon High researches + runs Jules loops, 160K cap. Thesis: memory `thesis-core-claim`.
 
 ## Next 3 actions
-1. Lab: `.\labday 2026-10-19` (it starts 8081, the camera and the cached dry run). Check the dot sits on the parked drone before mem1.
-2. After mem1 stop: check fixes vs optical flow (no steady offset) and the `link` events.
-3. Open: service bind takes ~41 s after start (look later); Jules sessions j-sysid-torque / j-z-feat state UNVERIFIED.
+1. Lab: swap the pack, then `.\labday 2026-10-19` (one fresh dry run per flight, because ground_station changed). Check with
+   `--list` whether mem1 counts as flown (UNVERIFIED); re-fly it if not. Check the dot sits on the parked drone first.
+2. During flights: watch the newest `logs/service/8081-*.log` for "ingest behind". After the mem1 redo: fixes vs optical flow, `link` events.
+3. Open: the 2 s ground ingest block; service bind takes ~41 s after start; Jules sessions j-sysid-torque / j-z-feat state UNVERIFIED.
 
 ## Do not
 - Do not treat a missing `logs/video_truth/<folder>/cam.mkv` as lost: it is on Drive (`docs/agent/video-archive.md`).
