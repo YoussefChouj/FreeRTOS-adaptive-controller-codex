@@ -17,6 +17,12 @@ day file's flights that were never flown well nor skipped, oldest day first, as 
 retires a carried flight for good. So a plan is written once and stays on the list until it is flown or skipped.
 
 Between flights a cooldown counts down from the landing (an analysis stop counts as rest; Enter skips it).
+
+With the camera, every launch first scans the floor (camera_truth.sh floor, drone out of view) or keeps the current
+scan (k); `f` at a flight prompt or an AUTO STOP scans again. A scan counts when its folder holds the scenery mask
+and the landing pad was found; new scans are floor-<date>[-N], kept in the state file. Before each flight prompt a
+line gives the resting volts and the pack gate after the flight (the preflight's 30%); a failed gate says SWAP THE
+PACK, waits for the drone to power off and on, asks the pack type and goes on in the same run.
 """
 from __future__ import annotations
 
@@ -34,12 +40,14 @@ from pathlib import Path
 import yaml
 
 from ground_station.lab import events
-from ground_station.lab.runner import CAMERA_SH, LAB_DIR, NORMAL_END, VIDEO_DIR, git_bash
+from ground_station.lab.runner import CAMERA_SH, LAB_DIR, LINK_WAIT_S, NORMAL_END, VIDEO_DIR, git_bash, volts
+from ground_station.service import campaign_fly
 from ground_station.service.campaign_launch import ROOT, rel
 
 DAYS_DIR = ROOT / "docs" / "lab" / "days"
 CAMPAIGNS = ROOT / "ground_station" / "service" / "campaigns"
 FLY = [sys.executable, "-m", "ground_station.service.campaign_fly"]
+BASE = "http://127.0.0.1:8081"
 
 
 def _read(path):
@@ -253,14 +261,17 @@ def flush_keys():
         msvcrt.getwch()
 
 
-def cooldown(seconds, key=key_pressed, clock=time.monotonic, sleep=time.sleep, flush=flush_keys):
-    """Count `seconds` down on one line; Enter ends it early. Returns the seconds it waited."""
+def cooldown(seconds, key=key_pressed, clock=time.monotonic, sleep=time.sleep, flush=flush_keys, battery=None):
+    """Count `seconds` down on one line; Enter ends it early. `battery()` (volts or None) is shown, read every 2 s.
+    Returns the seconds it waited."""
     flush()
     width = max(20, shutil.get_terminal_size((80, 20)).columns - 1)  # a wrapped line would print a new row per tick
-    t0 = clock()
+    t0, v, read = clock(), None, None
     while (left := seconds - (clock() - t0)) > 0:
-        text = (f"  cooldown {int(left) // 60}:{int(left) % 60:02d} before the next flight "
-                "(swap the pack now if due; Enter skips)")
+        if battery and (read is None or clock() - read >= 2.0):
+            v, read = battery(), clock()
+        text = (f"  cooldown {int(left) // 60}:{int(left) % 60:02d} before the next flight"
+                + (f", battery {v:.2f} V" if v else "") + " (swap the pack now if due; Enter skips)")
         print("\r" + text[:width].ljust(width), end="", flush=True)
         if key():
             break
@@ -297,24 +308,66 @@ def log_offsets():
     return out
 
 
-
 def ensure_8081():
     """Same 8081 as `fly` uses; also ends a leftover live logger (campaign_fly.reap_stream_logs)."""
-    from ground_station.service import campaign_fly
-    campaign_fly.ensure_service("http://127.0.0.1:8081", 8081)
+    campaign_fly.ensure_service(BASE, 8081)
+
+
+def floor_check(folder):
+    """(ok, text) for a floor scan folder, from what the scan left there, not its exit code: the scenery mask PNG
+    (written only after "floor OK") and the landing pad (ArUco id0) in at least half of aruco.npz's frames, as
+    camera_truth.sh floor asks. ok: the pad's pixel position; else why not."""
+    import numpy as np
+    from ground_station.analysis import video_truth as vt
+    folder = Path(folder)
+    png = folder / ("coral_scenery_" + "-".join(map(str, (*vt.CORAL_LO, *vt.CORAL_HI))) + ".png")   # floor_scenery's
+    if not png.is_file():
+        return False, f"no scenery mask {rel(png)}: the scan did not finish (see its output above)"
+    try:
+        with np.load(folder / "aruco.npz") as scan:
+            n, c0 = len(scan["t"]), scan["c0"] if "c0" in scan.files else None
+    except (OSError, ValueError, KeyError) as e:
+        return False, f"no readable {rel(folder / 'aruco.npz')} ({e})"
+    seen = 0 if c0 is None else int((~np.isnan(c0[:, 0, 0])).sum())
+    if not seen or seen * 2 < n:
+        return False, f"landing pad (marker id0) found in {seen} of {n} frames, needs half"
+    u, v = vt.static_corners(c0)[0].mean(0)
+    return True, f"pad (id0) at pixel ({u:.0f}, {v:.0f}), found in {seen} of {n} frames"
+
+
+def battery_gate(pack, v):
+    """(ok, why, line) for the next flight on `pack` resting at `v` volts: the preflight's own gate
+    (battery_model.next_flight_allowed with the registry's gate_soc_pct, as campaign_preflight._battery_row)."""
+    from ground_station.analysis.battery_model import PackRegistry
+    try:
+        reg = PackRegistry.load(None)
+    except Exception as e:
+        return True, "", f"  battery {v:.2f} V resting; packs.yaml: {e} (the preflight refuses)"
+    if pack not in reg.pack_ids():
+        return True, "", (f"  battery {v:.2f} V resting; " + (f"pack type '{pack}' unknown" if pack else "no pack type yet")
+                          + ", SoC not checked (fly asks)")
+    ok, why = reg.next_flight_allowed(pack, v, reg.min_rest_s)
+    now = reg.predict_soc(pack, v)
+    return ok, why, (f"  battery {v:.2f} V resting, pack {pack}: {now:.0f}% now, "
+                     f"{now - reg.expected_drop(pack):.1f}% after the flight (gate {reg.gate_soc_pct:g}%): "
+                     + ("ok" if ok else "SWAP"))
 
 
 class Day:
     """The interactive part: dry run, prompts, camera and the resume file around each `.\\fly --once`."""
 
     def __init__(self, d, state_path, pack=None, camera=True, ask=input, run=None, popen=None, cooldown_s=0,
-                 wait=cooldown, service=None):
+                 wait=cooldown, service=None, floor=None, vitals=None, clock=time.monotonic, sleep=time.sleep):
         self.d, self.state_path, self.pack = d, Path(state_path), pack
         self.cooldown_s, self.wait, self.landed = cooldown_s, wait, None
-        self.cam = (d.get("camera") or {}) if camera else {}
         self.ask, self.run, self.popen = ask, run or subprocess.run, popen or subprocess.Popen
         self.service = service or ensure_8081
+        self.vitals = vitals or (lambda: campaign_fly._vitals(BASE))   # {} when 8081 is down
+        self.clock, self.sleep, self.rest_v = clock, sleep, None
         self.state = load_state(self.state_path)
+        self.cam = dict(d.get("camera") or {}) if camera else {}
+        if self.cam:   # --floor, else the day's last good scan (labday made it), else the day file's
+            self.cam["floor"] = floor or self.state.get("floor") or self.cam.get("floor")
 
     def say(self, *lines):
         print("\n".join(lines), flush=True)
@@ -348,6 +401,97 @@ class Day:
     def camera(self, *args):
         env = {**os.environ, "CT_FLOOR": f"logs/video_truth/{self.cam.get('floor', '')}"}
         return self.run([git_bash(), CAMERA_SH, *args], cwd=ROOT, env=env, stdin=subprocess.DEVNULL).returncode
+
+    def floor_scan(self):
+        """The floor scan before the first flight and on `f`: scan (drone out of view) until floor_check passes, or k
+        keeps the current scan if it passes. A new scan is floor-<day>[-N], kept in the day state (the day yaml
+        stays as written). True, or False on q. No camera: nothing to do."""
+        if not self.cam.get("mode"):
+            return True
+        while True:
+            cur = self.cam.get("floor")
+            ok, text = floor_check(VIDEO_DIR / cur) if cur else (False, "none named")
+            self.say(f"  floor scan {cur or '-'}: " + (text if ok else "not usable, " + text))
+            a = self.ask("Take the drone out of the camera view, Enter scans the floor"
+                         + (f", k keeps {cur}" if ok else "") + ", q quits: ").strip().lower()
+            if a == "q":
+                return False
+            if a == "k" and ok:
+                return True
+            if a:
+                continue
+            name, n = f"floor-{self.d.get('day')}", 2
+            while (VIDEO_DIR / name).exists():
+                name, n = f"floor-{self.d.get('day')}-{n}", n + 1
+            rc = self.camera("floor", name)
+            ok, text = floor_check(VIDEO_DIR / name)
+            events.log("labday_floor", day=self.d.get("day"), name=name, rc=rc, ok=ok, text=text)
+            if not ok:
+                self.say(f"  floor scan {name} FAILED (exit code {rc}): {text}")
+                continue
+            self.cam["floor"] = self.state["floor"] = name
+            self.state.setdefault("floors", []).append(name)
+            self.save()
+            self.say(f"  floor scan {name} OK: {text}")
+            return True
+
+    def volts(self):
+        return volts(self.vitals())
+
+    def battery(self, pack):
+        """The battery line before a flight prompt: resting volts and the preflight's 30% gate after the flight. A
+        failed gate asks for a pack swap. Returns the pack to pass to the next `.\\fly` (None = the remembered one),
+        or False on q."""
+        while True:
+            self.rest_v = v = self.volts()
+            if v is None:
+                self.say("  battery: no voltage from the drone (the preflight checks the link)")
+                return pack
+            ok, why, line = battery_gate(campaign_fly.pack_id(pack or campaign_fly.remember_pack()), v)
+            self.say(line)
+            if ok:
+                return pack
+            pack = self.swap(why)
+            if pack is None:
+                return False
+
+    def link(self, up):
+        """Waits for the drone's link to come back (up) or drop (not up, no stream newer than fly's LINK_LOST_S).
+        True, or False on q after a LINK_WAIT_S timeout."""
+        while True:
+            t0 = self.clock()
+            while self.clock() - t0 < LINK_WAIT_S:
+                v = self.vitals()
+                if (volts(v) is not None) if up else (campaign_fly._link_age(v) > campaign_fly.LINK_LOST_S):
+                    return True
+                self.sleep(0.5)
+            if self.ask(f"No link {'back' if up else 'drop'} in {LINK_WAIT_S:.0f} s: Enter waits again, "
+                        "q quits: ").strip().lower() == "q":
+                return False
+
+    def swap(self, why):
+        """SWAP THE PACK in the same run: the drone powers off (link drops) and on (link back), then the pack type.
+        8081, labday and the dry-run cache stay as they are. The new pack, or None on q."""
+        self.say(f"\nSWAP THE PACK: {why}",
+                 "  Power the drone off, put a charged pack in, power it on.")
+        events.log("labday_swap", day=self.d.get("day"), why=why)
+        if not self.link(False):
+            return None
+        self.say("  link dropped: waiting for the drone to come back")
+        if not self.link(True):
+            return None
+        now = campaign_fly.remember_pack()
+        while True:
+            a = self.ask(f"Pack type now in the drone, 1 or 2 [Enter = {now or '?'}], q quits: ").strip()
+            if a.lower() == "q":
+                return None
+            said = campaign_fly.pack_id(a or now)
+            problem = campaign_fly.pack_problem(said)
+            if not problem:
+                campaign_fly.remember_pack(said)
+                events.log("labday_pack", day=self.d.get("day"), pack=said)
+                return said
+            self.say(f"  {problem}")
 
     def camera_start(self, name):
         """True running, False flying without it, None on q."""
@@ -403,6 +547,7 @@ class Day:
             t0 = time.monotonic()
             rc, ev = self.fly(f, pack)
             took = time.monotonic() - t0
+            v = self.volts()   # before the camera stop, which takes up to 20 s
             pack = None
             if cam:
                 self.camera_stop(name)
@@ -415,16 +560,23 @@ class Day:
             self.say(f"--- {f['id']} done {time.strftime('%H:%M')}: {'OK' if why is None else 'BAD, ' + why}; "
                      f"{int(took // 60)} min {int(took % 60):02d} s in fly; status {(ev or {}).get('status') or '-'}; "
                      f"log {(ev or {}).get('folder') or '-'}")
+            self.say(f"  battery after {f['id']}: " + (
+                "no voltage from the drone" if v is None else f"{v:.2f} V just after landing"
+                + (f", sag {self.rest_v - v:.2f} V from {self.rest_v:.2f} V resting" if self.rest_v else "")))
             if why is None:
                 return "stop" if f.get("stop") else "next"
             self.say(f"\nAUTO STOP: {f['id']} {why}.")
             self.branches()
-            a = self.ask("r flies it again, Enter goes on to the next flight, q quits (the same command resumes): ")
-            a = a.strip().lower()
-            if a == "q":
+            fkey = ", f rescans the floor and flies it again" if self.cam.get("mode") else ""
+            a = self.ask(f"r flies it again{fkey}, Enter goes on to the next flight, q quits "
+                         "(the same command resumes): ").strip().lower()
+            if a == "q" or (a == "f" and fkey and not self.floor_scan()):
                 return "quit"
-            if a != "r":
+            if a != "r" and not (a == "f" and fkey):
                 return "next"
+            pack = self.battery(pack)
+            if pack is False:
+                return "quit"
 
     def save(self):
         save_state(self.state_path, self.state)
@@ -434,16 +586,14 @@ class Day:
         if not flights:
             self.say(f"{self.d.get('day')}: every flight is flown or skipped ({rel(self.state_path)}).")
             return 0
-        floor = VIDEO_DIR / str(self.cam.get("floor") or "")
-        if self.cam.get("mode") and not (self.cam.get("floor") and floor.is_dir()):
-            self.say(f"No floor scan {rel(floor)}: run `bash {CAMERA_SH} floor {self.cam.get('floor') or '<name>'}` "
-                     "first (or pass --floor NAME, or --no-camera).")
-            return 1
         self.say(f"Ground dry run of {len(flights)} flights (no drone contact):")
         bad = self.dry_run(flights)
         if bad:
             self.say(f"Dry run failed for {', '.join(bad)}: fix the files, then run the same command again.")
             return 1
+        if not self.service_up() or not self.floor_scan():   # 8081 first: the battery lines read its vitals
+            return 0
+        fkey = ", f rescans the floor" if self.cam.get("mode") else ""
         pack = self.pack
         for i, f in enumerate(flights):
             nxt = flights[i + 1]["id"] if i + 1 < len(flights) else None
@@ -455,8 +605,16 @@ class Day:
             if self.landed is not None and self.cooldown_s > 0:
                 left = self.cooldown_s - (time.monotonic() - self.landed)   # an analysis stop counts as rest
                 if left > 0:
-                    self.wait(left)
-            a = self.ask("Enter flies it (then arm by RC), s skips it, q quits: ").strip().lower()
+                    self.wait(left, battery=self.volts)
+            while True:
+                pack = self.battery(pack)
+                if pack is False:
+                    return 0
+                a = self.ask(f"Enter flies it (then arm by RC), s skips it{fkey}, q quits: ").strip().lower()
+                if not (a == "f" and fkey):
+                    break
+                if not self.floor_scan():
+                    return 0
             if a == "q":
                 return 0
             if a == "s":
@@ -465,7 +623,7 @@ class Day:
                 continue
             r = self.one(f, pack)
             self.landed = time.monotonic()
-            pack = None   # fly remembers the pack; a swap mid-day is asked by fly itself
+            pack = None   # fly remembers the pack, and so does a swap here (self.pack stays: the dry-run cache key)
             if r == "quit":
                 return 0
             if r == "stop" and nxt:
@@ -507,7 +665,7 @@ def main(argv=None):
     if a.sheet:
         sys.stdout.write(sheet(d))
         return 0
-    day = Day(d, state_file(d.get("day") or a.day), pack=a.pack, camera=not a.no_camera,
+    day = Day(d, state_file(d.get("day") or a.day), pack=a.pack, camera=not a.no_camera, floor=a.floor,
               cooldown_s=a.cooldown if a.cooldown is not None else float(d.get("cooldown_s", COOLDOWN_S)))
     if a.list:
         print("\n".join(day.listing()))
