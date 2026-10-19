@@ -6,7 +6,8 @@ project skills .claude/skills/*/SKILL.md. Reports, briefs, research notes and pl
 not checked.
 
 A path is a backtick span with a '/' and a file extension whose first segment is a top-level repo entry
-(`API/pid.c`, `docs/agent/HANDOFF.md:12`); run outputs under logs/ are skipped. A `:line` past the end of the
+(`API/pid.c`, `docs/agent/HANDOFF.md:12`); run outputs under logs/ are skipped, and OBJ/ paths are skipped (with a
+SKIP line) when the tree has no Keil link output, as in a fresh clone or worktree. A `:line` past the end of the
 file fails too (the code moved, the doc did not). Known exceptions (a file that lives on a branch or in another
 repo) go in tools/doc_paths_allow.txt; that list shrinks only: an entry whose file now exists fails too.
 """
@@ -17,6 +18,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ALLOW = ROOT / 'tools' / 'doc_paths_allow.txt'
 RUN_OUTPUT = ('logs/',)          # written by a run, absent in a fresh checkout
+KEIL_OUT = 'OBJ/'                # JX_FLY.axf/.htm/.map: gitignored Keil link output, absent until Keil links here
 SCOPE = ['AGENTS.md', 'CLAUDE.md', 'docs/*.md', 'docs/agent/*.md', 'docs/skills/*.md', '.claude/skills/*/SKILL.md']
 PATH = re.compile(r'`([\w.][\w./-]*/[\w./-]*\.[A-Za-z]{1,8})(?::(\d+)(?:-(\d+))?)?`')
 
@@ -35,7 +37,7 @@ def missing():
         name = doc.relative_to(ROOT).as_posix()
         for m in PATH.finditer(text):
             path = m.group(1)
-            if path.split('/')[0] not in tops or path.startswith(RUN_OUTPUT):
+            if (path.split('/')[0] not in tops and not path.startswith(KEIL_OUT)) or path.startswith(RUN_OUTPUT):
                 continue
             if not (ROOT / path).exists():
                 yield name, path
@@ -52,6 +54,12 @@ def main():
         if line.strip() and not line.startswith('#'):
             allow.add(tuple(line.split()[:2]))
     found = set(missing())
+    if not (ROOT / 'OBJ' / 'JX_FLY.axf').exists():   # no Keil link in this tree: only its own outputs are skipped
+        keil = {f for f in found if f[1].startswith(KEIL_OUT)}
+        if keil:
+            print(f'SKIP doc-paths: {len(keil)} OBJ/ path(s) in {len({d for d, _ in keil})} doc(s) not checked '
+                  '(OBJ/JX_FLY.axf absent: no Keil link in this tree)')
+        found -= keil
     bad = 0
     for doc, path in sorted(found - allow):
         print('%s: `%s` %s' % (doc, path, 'is past the end of the file' if ':' in path else 'does not exist'))
