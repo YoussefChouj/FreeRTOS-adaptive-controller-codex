@@ -69,6 +69,13 @@ GROUPS: tuple[TlmGroup, ...] = (
              (("prearm_fail_mask", 1), ("prearm_block_mask", 1), ("reset_cause", 1), ("stack_min_words", 1),
               ("stack_min_task", 1), ("stab_cpu_pct", 1), ("loop_max_us", 1), ("iwdg_on", 1)),
              "pre-arm masks, reset cause, RTOS budget (1 Hz, API/prearm.h, API/fw_health.h)"),
+    TlmGroup("mrac_z", "TlmMracZ_t",
+             (("feat", 4), ("w", 4), ("mask", 1)),
+             "MRAC Z features in ext 0..3 (bias, ground, drag, tilt): value, weight; mrac_z_feat_mask"),
+    TlmGroup("sysid_cdu", "TlmSysidCdu_t",
+             (("c", 3), ("d", 3), ("u", 3), ("target", 1)),
+             "sysid torque target (pitch, roll, yaw): rate-loop output c, excitation d, u = c + d before the "
+             "mixer (mixer units); sysid_target"),
 )
 
 TOTAL_FLOATS = sum(g.float_count for g in GROUPS)

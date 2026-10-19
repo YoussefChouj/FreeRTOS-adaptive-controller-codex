@@ -152,6 +152,17 @@ float SysID_GetRateSetpoint(SysID_Axis_e axis) { call(34); MIXV(axis); return fr
 /* sysid_target 1 torque add (Mix_Compute): 0 here, so u = c as before; not traced so a target-0 build that calls
  * it hashes like one that does not. */
 float SysID_GetTorque(SysID_Axis_e axis, uint8_t flying) { (void)axis; (void)flying; return 0.0f; }
+/* Telemetry-only reads (Tlm_Snapshot mrac_z / sysid_cdu groups), not traced. mrac.c is not linked, so the Z
+ * feature read-out gives distinct per-slot values from this tick's state for check_tlm to compare. */
+DEF(mrac_z_feat_mask); DEF(sysid_target);
+void MRAC_ZFeatOut(float feat[MRAC_ZFEAT_N], float w[MRAC_ZFEAT_N])
+{
+    int k;
+    for (k = 0; k < MRAC_ZFEAT_N; k++) {
+        feat[k] = Ctrler.Z_ratePID.FB + (float)k;
+        w[k] = Ctrler.Z_posPID.FB - (float)k;
+    }
+}
 
 void ThrustEst_Update(const float pwm[4], const uint16_t rpm[4], float acc_z, float pitch_deg, float roll_deg)
 {
@@ -304,6 +315,9 @@ static void mix_state(void)
  * version without g_tlm still prints the same hashes; a mismatch exits 3. */
 static void check_tlm(void)
 {
+    float zf[MRAC_ZFEAT_N], zw[MRAC_ZFEAT_N];
+    MRAC_ZFeatOut(zf, zw);
+    {
     const float want[] = {
         Ctrler.rollPID.FB, -Ctrler.pitchPID.FB, -Ctrler.yawPID.FB, Ctrler.gyroxPID.FB, Ctrler.gyroyPID.FB,
         Ctrler.gyrozPID.FB,
@@ -329,15 +343,22 @@ static void check_tlm(void)
         (float)g_rtos_budget.stack_min_words, (float)g_rtos_budget.stack_min_task, g_rtos_budget.stab_cpu_pct,
         g_rtos_budget.loop_max_us, (float)g_rtos_budget.iwdg_on,
 #endif
+        zf[0], zf[1], zf[2], zf[3], zw[0], zw[1], zw[2], zw[3], (float)mrac_z_feat_mask,
+        s_sysid_c[SYSID_AXIS_PITCH], s_sysid_c[SYSID_AXIS_ROLL], s_sysid_c[SYSID_AXIS_YAW],
+        s_sysid_d[SYSID_AXIS_PITCH], s_sysid_d[SYSID_AXIS_ROLL], s_sysid_d[SYSID_AXIS_YAW],
+        s_sysid_u[SYSID_AXIS_PITCH], s_sysid_u[SYSID_AXIS_ROLL], s_sysid_u[SYSID_AXIS_YAW], (float)sysid_target,
     };
-    if (sizeof want != sizeof g_tlm || memcmp(want, &g_tlm, sizeof want) != 0) {
+    /* A base built before the mrac_z (9) and sysid_cdu (10) groups has exactly 19 floats less: check its prefix. */
+    const size_t nb = (sizeof g_tlm == sizeof want - 19U * sizeof want[0]) ? sizeof g_tlm : sizeof want;
+    if (sizeof g_tlm != nb || memcmp(want, &g_tlm, nb) != 0) {
         const float *got = (const float *)&g_tlm;
-        size_t i, n = sizeof want < sizeof g_tlm ? sizeof want / sizeof want[0] : sizeof g_tlm / sizeof want[0];
+        size_t i, n = nb < sizeof g_tlm ? nb / sizeof want[0] : sizeof g_tlm / sizeof want[0];
         for (i = 0; i < n && memcmp(&want[i], &got[i], sizeof want[0]) == 0; i++) { }
         fprintf(stderr, "g_tlm differs from its sources at tick %lu: %u vs %u floats, first index %u (%g vs %g)\n",
-                g_tick, (unsigned)(sizeof want / sizeof want[0]), (unsigned)(sizeof g_tlm / sizeof want[0]),
+                g_tick, (unsigned)(nb / sizeof want[0]), (unsigned)(sizeof g_tlm / sizeof want[0]),
                 (unsigned)i, i < n ? (double)want[i] : 0.0, i < n ? (double)got[i] : 0.0);
         exit(3);
+    }
     }
 }
 #else

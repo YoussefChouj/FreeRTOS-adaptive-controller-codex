@@ -557,6 +557,8 @@ FlightTelemetry_t g_tlm TLM_CCM;
  * stabilizer_Task; reads the sources only, so the control path is unchanged. */
 static void Tlm_Snapshot(void)
 {
+	float zf[MRAC_ZFEAT_N], zw[MRAC_ZFEAT_N];
+
 	g_tlm.att.roll_deg   =  Ctrler.rollPID.FB;
 	g_tlm.att.pitch_deg  = -Ctrler.pitchPID.FB;
 	g_tlm.att.yaw_deg    = -Ctrler.yawPID.FB;
@@ -638,6 +640,28 @@ static void Tlm_Snapshot(void)
 	g_tlm.hlth.stab_cpu_pct      = g_rtos_budget.stab_cpu_pct;
 	g_tlm.hlth.loop_max_us       = g_rtos_budget.loop_max_us;
 	g_tlm.hlth.iwdg_on           = (float)g_rtos_budget.iwdg_on;
+
+	MRAC_ZFeatOut(zf, zw);   /* slot k = ext k: bias, ground, drag, tilt (MRAC_ZFEAT_* are mask bits) */
+	g_tlm.mrac_z.feat[0] = zf[0];
+	g_tlm.mrac_z.feat[1] = zf[1];
+	g_tlm.mrac_z.feat[2] = zf[2];
+	g_tlm.mrac_z.feat[3] = zf[3];
+	g_tlm.mrac_z.w[0]    = zw[0];
+	g_tlm.mrac_z.w[1]    = zw[1];
+	g_tlm.mrac_z.w[2]    = zw[2];
+	g_tlm.mrac_z.w[3]    = zw[3];
+	g_tlm.mrac_z.mask    = (float)mrac_z_feat_mask;
+
+	g_tlm.sysid_cdu.c[0]   = s_sysid_c[SYSID_AXIS_PITCH];
+	g_tlm.sysid_cdu.c[1]   = s_sysid_c[SYSID_AXIS_ROLL];
+	g_tlm.sysid_cdu.c[2]   = s_sysid_c[SYSID_AXIS_YAW];
+	g_tlm.sysid_cdu.d[0]   = s_sysid_d[SYSID_AXIS_PITCH];
+	g_tlm.sysid_cdu.d[1]   = s_sysid_d[SYSID_AXIS_ROLL];
+	g_tlm.sysid_cdu.d[2]   = s_sysid_d[SYSID_AXIS_YAW];
+	g_tlm.sysid_cdu.u[0]   = s_sysid_u[SYSID_AXIS_PITCH];
+	g_tlm.sysid_cdu.u[1]   = s_sysid_u[SYSID_AXIS_ROLL];
+	g_tlm.sysid_cdu.u[2]   = s_sysid_u[SYSID_AXIS_YAW];
+	g_tlm.sysid_cdu.target = (float)sysid_target;
 }
 
 /* ==== The control tick ========================================================================== */

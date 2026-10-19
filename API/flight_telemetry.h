@@ -100,6 +100,19 @@ typedef struct {            /* pre-arm and RTOS health (WP-40), refreshed 1 Hz b
     float iwdg_on;          /* g_rtos_budget.iwdg_on */
 } TlmHealth_t;
 
+typedef struct {            /* MRAC Z features in ext 0..3 (MRAC_ZFeatOut, API/mrac.h): bias, ground, drag, tilt */
+    float feat[4];          /* mrac_state.z_rate.Phi[MRAC_N_STRUCT + k] */
+    float w[4];             /* mrac_state.z_rate.Theta[MRAC_N_STRUCT + k] */
+    float mask;             /* mrac_z_feat_mask (VAR_WRITE 54) */
+} TlmMracZ_t;
+
+typedef struct {            /* sysid torque target (API/sysid.h), axis order pitch, roll, yaw (SysID_Axis_e) */
+    float c[3];             /* rate-loop output: Controller_Update of gyroyPID/gyroxPID/gyrozPID .U, mixer units */
+    float d[3];             /* excitation SysID_GetTorque, 0 unless target 1 and a run is live while FLYING */
+    float u[3];             /* c + d, before the mixer's pitch sign flip (u_gyroy = -u[0]) */
+    float target;           /* sysid_target (VAR_WRITE 55): 0 rate setpoint, 1 torque */
+} TlmSysidCdu_t;
+
 typedef struct {
     TlmAttitude_t  att;
     TlmSetpoint_t  sp;
@@ -109,9 +122,11 @@ typedef struct {
     TlmEstimator_t est;
     TlmPower_t     pwr;
     TlmHealth_t    hlth;
+    TlmMracZ_t     mrac_z;
+    TlmSysidCdu_t  sysid_cdu;
 } FlightTelemetry_t;
 
-#define FLIGHT_TLM_FLOATS ((unsigned)(sizeof(FlightTelemetry_t) / sizeof(float)))   /* 74 */
+#define FLIGHT_TLM_FLOATS ((unsigned)(sizeof(FlightTelemetry_t) / sizeof(float)))   /* 93 */
 
 extern FlightTelemetry_t g_tlm;
 
