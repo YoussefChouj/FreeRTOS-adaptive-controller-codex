@@ -23,9 +23,23 @@
  */
 #include <stdio.h>
 #include <math.h>
+#ifdef _WIN32
 #include <io.h>
 #include <fcntl.h>
 #include <windows.h>
+#else
+/* POSIX host (Linux cloud session): stdio has no text mode, and CLOCK_MONOTONIC stands in for the performance
+ * counter, which only times O_HOST_US. The Windows (MinGW) build compiles the same code as before. */
+#include <time.h>
+typedef struct { long long QuadPart; } LARGE_INTEGER;
+static void QueryPerformanceFrequency(LARGE_INTEGER *f) { f->QuadPart = 1000000000LL; }
+static void QueryPerformanceCounter(LARGE_INTEGER *t)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	t->QuadPart = (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
+}
+#endif
 
 #include "pid.h"
 #include "mrac.h"
@@ -318,8 +332,10 @@ int main(void)
 {
 	float in[SIL_NIN], out[SIL_NOUT];
 	LARGE_INTEGER f, t0, t1;
+#ifdef _WIN32
 	_setmode(_fileno(stdin), _O_BINARY);
 	_setmode(_fileno(stdout), _O_BINARY);
+#endif
 	QueryPerformanceFrequency(&f);
 	Controller_Init();
 	wfb_glue_init();
