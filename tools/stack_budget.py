@@ -135,6 +135,9 @@ def tasks():
 
 
 def main():
+    if not HTM.exists():  # Keil output, gitignored: absent where Keil never built (the cloud)
+        print('SKIP stack-budget: %s not found, build with Keil first' % HTM.relative_to(ROOT).as_posix())
+        return 77  # tools/check.sh: SKIPPED
     htm = read(HTM)
     stamp = re.search(r'Last Updated: ([^\n<]+)', htm)
     print('stack-budget: call graph %s (%s)' % (HTM.relative_to(ROOT).as_posix(), stamp.group(1) if stamp else '?'))
