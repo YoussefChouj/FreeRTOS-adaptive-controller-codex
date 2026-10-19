@@ -38,6 +38,7 @@ from ground_station.lab.runner import CAMERA_SH, LAB_DIR, NORMAL_END, VIDEO_DIR,
 from ground_station.service.campaign_launch import ROOT, rel
 
 DAYS_DIR = ROOT / "docs" / "lab" / "days"
+REPORT_DIR = DAYS_DIR        # <date>-report.md/json written by the scorecard after each flight
 CAMPAIGNS = ROOT / "ground_station" / "service" / "campaigns"
 FLY = [sys.executable, "-m", "ground_station.service.campaign_fly"]
 
@@ -315,6 +316,7 @@ class Day:
         self.ask, self.run, self.popen = ask, run or subprocess.run, popen or subprocess.Popen
         self.service = service or ensure_8081
         self.state = load_state(self.state_path)
+        self.cards = {}
 
     def say(self, *lines):
         print("\n".join(lines), flush=True)
@@ -415,6 +417,7 @@ class Day:
             self.say(f"--- {f['id']} done {time.strftime('%H:%M')}: {'OK' if why is None else 'BAD, ' + why}; "
                      f"{int(took // 60)} min {int(took % 60):02d} s in fly; status {(ev or {}).get('status') or '-'}; "
                      f"log {(ev or {}).get('folder') or '-'}")
+            self.score(f)
             if why is None:
                 return "stop" if f.get("stop") else "next"
             self.say(f"\nAUTO STOP: {f['id']} {why}.")
@@ -425,6 +428,28 @@ class Day:
                 return "quit"
             if a != "r":
                 return "next"
+
+    def score(self, f):
+        """The one-line scorecard of the flight just flown, then docs/lab/days/<day>-report.md rebuilt from every
+        flown flight with a log folder (so a resumed day still reports all of them). Never stops the day."""
+        try:
+            from ground_station.analysis import scorecard
+            plan = {g["id"]: g for g in self.d["flights"]}
+            self.cards.pop(f["id"], None)
+            for fid, s in self.state["flown"].items():
+                folder = ROOT / s["folder"] if s.get("folder") else None
+                if fid not in self.cards and folder is not None and folder.is_dir():
+                    self.cards[fid] = scorecard.score_flight(folder, plan.get(fid, {"id": fid}),
+                                                             camera=s.get("camera"), events_dir=events.root())
+            if f["id"] not in self.cards:
+                self.say(f"score {f['id']}: no log folder, nothing to score")
+                return
+            self.say(scorecard.one_line(self.cards[f["id"]]))
+            if self.d.get("day"):
+                cards = [self.cards[g] for g in plan if g in self.cards]
+                self.say(f"report {rel(scorecard.write_day_report(str(self.d['day']), cards, REPORT_DIR))}")
+        except Exception as e:  # noqa: BLE001 - a scoring bug must not stop a lab day
+            self.say(f"score {f['id']}: scorecard failed ({type(e).__name__}: {e})")
 
     def save(self):
         save_state(self.state_path, self.state)
