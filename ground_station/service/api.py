@@ -15,6 +15,8 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
 
+from ground_station.livewatch.symbols import firmware_elf
+
 from .instance_guard import INSTANCE_HEADER, INSTANCE_ID, ExclusiveThreadingHTTPServer
 from .agent import (
     AgentDisabledError,
@@ -439,6 +441,8 @@ _ROUTE_MAP = {
     "GET": {
         "/health": "service liveness + bridge connection",
         "/health/slots": "per-slot seq/loss/samples",
+        "/health/ingest_lag": "ingest lag histogram + per-second max (?since_s=unix s) + link health",
+        "/health/store": "SessionStore row counts vs its cap",
         "/slots": "active subscribe slots",
         "/state": "full service state snapshot",
         "/sessions": "session list (?limit=N)",
@@ -588,7 +592,7 @@ def _service_symbol_resolver(service):
         return resolver, None
 
     try:
-        elf_path = Path(__file__).parents[2] / "OBJ" / "JX_FLY.axf"
+        elf_path = firmware_elf()
         if not elf_path.exists():
             return None, f"firmware ELF not found at {elf_path}"
         from ground_station.livewatch.symbols import shared_resolver
@@ -807,7 +811,7 @@ def _build_diagnostics_bundle(service) -> dict:
         "unavailable": [],
     }
     try:
-        elf_path = Path(__file__).parents[2] / "OBJ" / "JX_FLY.axf"
+        elf_path = firmware_elf()
         if elf_path.exists():
             elf_info["path"] = str(elf_path)
             elf_info["size_bytes"] = elf_path.stat().st_size
@@ -1355,6 +1359,29 @@ def make_handler(service, hub: StateHub | None = None, static_root: Path | None 
                         "stalled": False,
                     }
                 self._json(200, report)
+            elif route == "/health/ingest_lag":
+                # Every frame's ingest lag (receive stamp -> ingest done) as cumulative bucket counts plus exact
+                # per-second maxima from ?since_s=<unix s>: two snapshots around a flight give its histogram.
+                hist = getattr(service.bridge, "ingest_lag_hist", None)
+                if hist is None:
+                    self._json(200, {"bridge_available": False})
+                    return
+                qs = parse_qs(urlsplit(self.path).query)
+                try:
+                    since = float(qs["since_s"][0]) if "since_s" in qs else None
+                except ValueError:
+                    self._json(400, {"error": "since_s must be a number"})
+                    return
+                out = {"bridge_available": True, **hist.snapshot(since), "link": service.bridge.link_health()}
+                self._json(200, out)
+            elif route == "/health/store":
+                # Rows the in-memory SessionStore holds now, against its cap (a leak shows as rows past the cap).
+                st = service.store
+                with st._lock:
+                    rows = {t: st._db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                            for t in ("telemetry", "raw_frames", "events")}
+                self._json(200, {"path": st.path, "max_rows": st.max_rows, "prune_every": st._prune_every,
+                                 "rows": rows})
             elif route == "/api/recording":
                 status = service.recording_status()
                 # Enrich with analysis status if present

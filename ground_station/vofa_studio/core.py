@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 from ground_station.livewatch import stream
+from ground_station.livewatch.symbols import firmware_elf
 from ground_station.livewatch.stream import (
     BUDGET_PCT, MAX_SLOTS, SEND_TASK_MEASURED_HZ, TRANSPORT_USART3,
     _validate, apply_firmware_limits, coalesce_ranges,
@@ -27,7 +28,7 @@ from ground_station.livewatch.stream_log import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-ELF = ROOT / "OBJ" / "JX_FLY.axf"
+ELF = firmware_elf()        # OBJ/JX_FLY.axf, or $LAB_FIRMWARE_ELF
 PRESETS_DIR = Path(__file__).with_name("presets")
 LOG_DIR = ROOT / "logs" / "vofa"
 USART3_BAUD = 921600

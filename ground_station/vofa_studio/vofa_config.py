@@ -12,10 +12,14 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
-CONFIG = Path(os.path.expandvars(r"%LOCALAPPDATA%\vofa+\100\context\vofa+.config.json"))
+# Joined part by part: the one-string Windows form is a single relative name off Windows, where parents[2] (DATAS)
+# raised IndexError at import and stopped fly before its first flight (the Linux soak, docs/lab/soak.md).
+CONFIG = (Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+          / "vofa+" / "100" / "context" / "vofa+.config.json")
 TABVIEWS = CONFIG.with_name("vofa+.tabviews.json")
 # Last session's samples; VOFA+ reloads them on start and takes channel names from this header, not settings_ctx.
 DATAS = CONFIG.parents[2] / "vofa+.datas.csv"
@@ -254,7 +258,8 @@ def apply_view(view=FLIGHT_VIEW, monitor=MONITOR_ROW, available=None, relaunch=T
 
 
 TAB_TEMPLATE = Path(__file__).with_name("vofa_tab_template.tabviews.json")   # VOFA+'s own one-tab export
-EXPORT_DIR = Path(r"C:\tmp\vofa")
+# Off Windows "C:\tmp\vofa" is one relative name, which made a stray dir in the working directory.
+EXPORT_DIR = Path(r"C:\tmp\vofa") if os.name == "nt" else Path(tempfile.gettempdir()) / "vofa"
 
 
 def export_view(out_dir=EXPORT_DIR, view=FLIGHT_VIEW, monitor=MONITOR_ROW, available=None, template=TAB_TEMPLATE):

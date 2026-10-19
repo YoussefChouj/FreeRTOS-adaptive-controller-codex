@@ -487,3 +487,30 @@ def test_score_line_after_each_flight_and_day_report(tmp_path, monkeypatch, caps
     capsys.readouterr()
     assert _player(tmp_path, monkeypatch, _Fake(["", "q"]), flights).go() == 0
     assert "score A: scorecard failed (RuntimeError: bad log)" in capsys.readouterr().out
+
+
+def test_port_seam_reaches_the_flight_and_the_service_check(tmp_path, monkeypatch):
+    """The soak runs its own service on a spare port: every `fly --once` and the service check must use it, a dry
+    run (no service) stays unchanged, and 8081 stays the default with no extra argument."""
+    from ground_station.service import campaign_fly
+    f = {"id": "A", "fly": "lab_c_robust", "args": []}
+    assert "--port" not in labday.fly_cmd(f, "2")
+    assert labday.fly_cmd(f, "2", port=18081)[-2:] == ["--port", "18081"]
+    assert "--port" not in labday.fly_cmd(f, "2", dry=True, port=18081)
+    seen = []
+    monkeypatch.setattr(campaign_fly, "ensure_service", lambda base, port, **kw: seen.append((base, port)))
+    fake = _Fake([""])
+    d = _day(tmp_path, [{"id": "A", "fly": "lab_c_robust"}])
+    monkeypatch.setattr(labday, "debrief_event", lambda pid, since: {"status": "complete", "phase": "land",
+                                                                     "folder": "f"})
+    monkeypatch.setattr(labday, "code_stamp", lambda: "test")
+    p = labday.Day(d, tmp_path / "state.json", pack="2", ask=fake.ask, run=fake.run, popen=fake.popen, port=18081)
+    assert p.go() == 0
+    assert seen == [("http://127.0.0.1:18081", 18081)]
+    once = [c for c in fake.cmds if "--once" in c]
+    assert len(once) == 1 and once[0][-2:] == ["--port", "18081"]
+    made = []
+    monkeypatch.setattr(labday, "Day", lambda *a, **kw: made.append(kw) or SimpleNamespace(listing=lambda: []))
+    assert labday.main([str(tmp_path / "day.yaml"), "--list", "--port", "18081"]) == 0
+    assert labday.main([str(tmp_path / "day.yaml"), "--list"]) == 0
+    assert [kw["port"] for kw in made] == [18081, 8081]

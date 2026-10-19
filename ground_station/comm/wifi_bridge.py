@@ -72,6 +72,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from .lag_histogram import LagHistogram
 from .boot_default_layout import (
     BOOT_DEFAULT_VARS,
     BOOT_DEFAULT_DIVIDER,
@@ -88,6 +89,7 @@ from .boot_default_layout import (
 # /subscribe/preview. FRAME_OVERHEAD mirrors SUBSCRIBE_STREAM_FRAME_OVERHEAD
 # in API/subscribe.h; the payload is the sum of resolved DWARF symbol sizes.
 from ground_station.livewatch.stream import FRAME_OVERHEAD  # noqa: E402
+from ground_station.livewatch.symbols import firmware_elf  # noqa: E402
 
 from ground_station.platform.firmware_contract import SUBSCRIBE_DATA_FRAMES, SUBSCRIBE_MAX_SLOTS
 from ground_station.platform.transactions import Command as TransactionCommand
@@ -178,7 +180,7 @@ def _rpm_scalar_keys(rpm_list: list) -> dict:
     return {f"motor.rpm_{i}": int(rpm_list[i]) for i in range(len(rpm_list))}
 
 
-_AXF_PATH = Path(__file__).parents[2] / "OBJ" / "JX_FLY.axf"
+_AXF_PATH = firmware_elf()     # OBJ/JX_FLY.axf, or $LAB_FIRMWARE_ELF
 
 
 def _axf_key() -> Optional[tuple]:
@@ -269,6 +271,7 @@ class WifiBridge:
         self._ingest_q: queue.Queue = queue.Queue(maxsize=INGEST_QUEUE_MAX)
         self.ingest_dropped = 0  # frames dropped because the ingest thread fell INGEST_QUEUE_MAX behind
         self.ingest_lag_ns = 0  # age of the frame the ingest thread finished last (receive stamp to done)
+        self.ingest_lag_hist = LagHistogram()  # every frame's ingest_lag_ns, served at /health/ingest_lag
         self._last_reply_rx = 0.0  # monotonic arrival of the last command reply (link_health)
         # Subscribe watchdog. The FC keeps its slots in RAM, so a power cycle
         # drops them: it comes back sending only its fallback frames, and every
@@ -883,6 +886,15 @@ class WifiBridge:
                 3, DASHBOARD_FLIGHT_POSITION_VARS,
                 DASHBOARD_FLIGHT_POSITION_DIVIDER, "dashboard-flight-position")
 
+    def restore_lab_slot0(self) -> None:
+        """Put slot 0 back on the lab sidebar frame (the arm flag the fly waits on) at LAB_SLOT0_DIVIDER.
+
+        Slot 0 only: unlike ``_request_slot0_schema("lab")`` it does not stop slots 1-3 again. A lab flight whose
+        plan fills all four slots used slot 0, and turning it off after the flight left the next flight on
+        NO ARM SIGNAL until 8081 restarted (soak 2026-10-19, the 10-18 mem1 symptom).
+        """
+        self._request_stream_schema(0, DASHBOARD_FRAME_A_VARS, self.LAB_SLOT0_DIVIDER, "lab-frame")
+
     def _request_stream_schema(self, slot: int, vars_tuple, divider: int,
                                label: str) -> None:
         """Send a 0x21 subscribe request for one slot's var tuple.
@@ -897,7 +909,7 @@ class WifiBridge:
             from ground_station.livewatch.stream import build_stream_request, StreamRange
 
             # Resolve DWARF addresses for the chosen slot-0 variables
-            elf_path = Path(__file__).parents[2] / "OBJ" / "JX_FLY.axf"
+            elf_path = _AXF_PATH
             if not elf_path.exists():
                 print(f"[wifi_bridge] Warning: {elf_path} not found, skipping {label} schema request",
                       file=sys.stderr, flush=True)
@@ -1130,7 +1142,7 @@ class WifiBridge:
     def _ensure_preset_resolver(self) -> None:
         """Point _preset_resolver at the process-wide resolver, reloaded when the axf changes (WP-22)."""
         from ground_station.livewatch.symbols import shared_resolver
-        elf_path = Path(__file__).parents[2] / "OBJ" / "JX_FLY.axf"
+        elf_path = _AXF_PATH
         if not elf_path.exists():
             return
         self._preset_resolver = shared_resolver(elf_path)
@@ -1622,6 +1634,7 @@ class WifiBridge:
             now = time.time_ns()
             lag = now - t_ns
             self.ingest_lag_ns = lag
+            self.ingest_lag_hist.add(lag, now)
             max_lag_ns = max(max_lag_ns, lag)
             if now - last_report_ns >= 1_000_000_000:
                 dropped = self.ingest_dropped

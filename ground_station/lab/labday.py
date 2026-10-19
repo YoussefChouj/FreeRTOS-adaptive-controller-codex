@@ -133,8 +133,10 @@ def day_path(date):
     return p if p.suffix in (".yaml", ".yml") else DAYS_DIR / f"{date}.yaml"
 
 
-def fly_cmd(f, pack=None, dry=False):
-    return FLY + [f["fly"], "--dry-run" if dry else "--once"] + (["--pack", pack] if pack else []) + f["args"]
+def fly_cmd(f, pack=None, dry=False, port=8081):
+    """A dry run never talks to the service, so only a flight carries a non-default --port (the soak's spare port)."""
+    extra = ["--port", str(port)] if port != 8081 and not dry else []
+    return FLY + [f["fly"], "--dry-run" if dry else "--once"] + (["--pack", pack] if pack else []) + f["args"] + extra
 
 
 def code_stamp():
@@ -309,9 +311,10 @@ def log_offsets():
     return out
 
 
-def ensure_8081():
-    """Same 8081 as `fly` uses; also ends a leftover live logger (campaign_fly.reap_stream_logs)."""
-    campaign_fly.ensure_service(BASE, 8081)
+def ensure_8081(port=8081):
+    """Same 8081 as `fly` uses (another port only for the soak); also ends a leftover live logger
+    (campaign_fly.reap_stream_logs)."""
+    campaign_fly.ensure_service(f"http://127.0.0.1:{port}", port)
 
 
 def floor_check(folder):
@@ -358,12 +361,13 @@ class Day:
     """The interactive part: dry run, prompts, camera and the resume file around each `.\\fly --once`."""
 
     def __init__(self, d, state_path, pack=None, camera=True, ask=input, run=None, popen=None, cooldown_s=0,
-                 wait=cooldown, service=None, floor=None, vitals=None, clock=time.monotonic, sleep=time.sleep):
-        self.d, self.state_path, self.pack = d, Path(state_path), pack
+                 wait=cooldown, service=None, floor=None, vitals=None, clock=time.monotonic, sleep=time.sleep,
+                 port=8081):
+        self.d, self.state_path, self.pack, self.port = d, Path(state_path), pack, port
         self.cooldown_s, self.wait, self.landed = cooldown_s, wait, None
         self.ask, self.run, self.popen = ask, run or subprocess.run, popen or subprocess.Popen
-        self.service = service or ensure_8081
-        self.vitals = vitals or (lambda: campaign_fly._vitals(BASE))   # {} when 8081 is down
+        self.service = service or (lambda: ensure_8081(port))
+        self.vitals = vitals or (lambda: campaign_fly._vitals(f"http://127.0.0.1:{port}"))   # {} when 8081 is down
         self.clock, self.sleep, self.rest_v = clock, sleep, None
         self.state = load_state(self.state_path)
         self.cam = dict(d.get("camera") or {}) if camera else {}
@@ -528,7 +532,7 @@ class Day:
     def fly(self, f, pack):
         """One `.\\fly <name> --once`, stdin passed through: (exit code, its debrief event or None)."""
         since = log_offsets()
-        child = self.popen(fly_cmd(f, pack), cwd=ROOT)
+        child = self.popen(fly_cmd(f, pack, port=self.port), cwd=ROOT)
         rc = child.wait()
         return rc, debrief_event(child.pid, since)
 
@@ -680,6 +684,7 @@ def main(argv=None):
     ap.add_argument("--cooldown", type=float, metavar="S", help=f"rest between a landing and the next flight's "
                     f"prompt, Enter skips it (default: the day file's cooldown_s, else {COOLDOWN_S} s PROPOSED; 0 = off)")
     ap.add_argument("--floor", help="the floor scan folder under logs/video_truth (default: the day file's)")
+    ap.add_argument("--port", type=int, default=8081, help="the service port (default 8081; the soak uses a spare one)")
     a = ap.parse_args(argv)
     try:
         d = load_day(day_path(a.day))
@@ -691,7 +696,7 @@ def main(argv=None):
         sys.stdout.write(sheet(d))
         return 0
     day = Day(d, state_file(d.get("day") or a.day), pack=a.pack, camera=not a.no_camera, floor=a.floor,
-              cooldown_s=a.cooldown if a.cooldown is not None else float(d.get("cooldown_s", COOLDOWN_S)))
+              cooldown_s=a.cooldown if a.cooldown is not None else float(d.get("cooldown_s", COOLDOWN_S)), port=a.port)
     if a.list:
         print("\n".join(day.listing()))
         return 0
