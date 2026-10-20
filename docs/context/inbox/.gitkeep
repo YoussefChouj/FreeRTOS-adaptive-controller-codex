@@ -1,0 +1,10 @@
+Each agent drops here when it discovers something out-of-scope for the
+current task. The inbox is a dropbox, not a chat log. One file per task.
+Consolidate into the relevant shard on a ship point, then delete the file.
+
+Filename convention: `<task-id-or-branch-name>.md`. The first line is a
+header (`# Inbox item <task-id>`), the rest is bullets. Keep under 40 lines
+per file. Do not edit a teammate's file; if it needs more, add a
+`<task-id>.followup.md`.
+
+Example entries (see files for the live format):

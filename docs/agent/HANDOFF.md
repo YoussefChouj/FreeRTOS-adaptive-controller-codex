@@ -100,3 +100,11 @@ All built inline. Jules is unreachable from the cloud and Claude subagents are r
 - Never stage `USER/`, `OBJ/`, or `.mkv`/`.mp4` video files.
 - Before any commit: run `bash tools/check.sh --fast` and relevant pytest suites.
 - Never flash while armed. Flash only from stream `main` with the `hw` lock held.
+
+## Repo-architecture note (2026-10-20)
+
+The context map (this AGENTS.md, `docs/context/README.md` shards) is on
+`main`. The path-routed gate (pre-push guard, stream-page `Allowed-Paths:`,
+Tier-0 list, routed checks) is a separate PR under review on
+`claude/review-gate-2026-10-20`, not on `main`. Until it merges, the gate
+is `bash tools/check.sh` -> `CHECK PASS`, and CI runs it on every push.

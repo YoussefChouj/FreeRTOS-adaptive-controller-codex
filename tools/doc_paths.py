@@ -18,7 +18,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ALLOW = ROOT / 'tools' / 'doc_paths_allow.txt'
-SCOPE = ['AGENTS.md', 'CLAUDE.md', 'docs/*.md', 'docs/agent/*.md', 'docs/skills/*.md', '.claude/skills/*/SKILL.md']
+SCOPE = ['AGENTS.md', 'CLAUDE.md', 'docs/*.md', 'docs/agent/*.md', 'docs/skills/*.md', 'docs/context/*.md', '.claude/skills/*/SKILL.md']
 PATH = re.compile(r'`([\w.][\w./-]*/[\w./-]*\.[A-Za-z]{1,8})(?::(\d+)(?:-(\d+))?)?`')
 
 
@@ -55,8 +55,9 @@ def main():
     found = set(missing())
     # build and run outputs (gitignored) are absent until made: one git call for all of them
     paths = sorted({p for _d, p in found if ':' not in p})
-    ignored = set(subprocess.run(['git', 'check-ignore', '--stdin'], cwd=ROOT, input='\n'.join(paths), text=True,
-                                 capture_output=True).stdout.split())
+    # bytes, not text=True: on Windows a text pipe writes '\r\n', git reads 'x.axf\r' and nothing matches
+    ignored = set(subprocess.run(['git', 'check-ignore', '--stdin'], cwd=ROOT, input='\n'.join(paths).encode(),
+                                 capture_output=True).stdout.decode().split())
     found = {(d, p) for d, p in found if p not in ignored}
     bad = 0
     for doc, path in sorted(found - allow):

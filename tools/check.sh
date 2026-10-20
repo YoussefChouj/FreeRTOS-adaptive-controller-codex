@@ -13,6 +13,7 @@
 #   stack        task and interrupt stack budget from the Keil call graph (tools/stack_budget.py); SKIPPED without OBJ/JX_FLY.htm
 #   doc-paths    every repo path and file:line in the agent-facing docs exists (tools/doc_paths.py)
 #   arm-syntax   arm-none-eabi-gcc -fsyntax-only on the same files; SKIPPED if not installed
+#   doc-budget   AGENTS.md <= 170 lines, any context.md <= 120 (the router stays a router; detail goes to docs/context/)
 # Subset while iterating: bash tools/check.sh doc-paths fw-lint (step names as above), or --fast for every step
 # except host-tests, mrac-equiv and sil-smoke (each prints its time). A subset ends with
 # "CHECK SUBSET PASS"; only a run with no arguments prints CHECK PASS, and that is the one a commit needs.
@@ -23,9 +24,9 @@ PY=${PYTHON:-python}
 command -v "$PY" >/dev/null 2>&1 || PY=python3
 PYTEST=("$PY" -m pytest -q -p no:cacheprovider)
 
-ALL=" host-tests mrac-equiv c-pytest sil-smoke clang-tidy float row-meta fw-lint stack doc-paths arm-syntax "
+ALL=" host-tests mrac-equiv c-pytest sil-smoke clang-tidy float row-meta fw-lint stack doc-paths arm-syntax doc-budget "
 only=" $* "
-[ "$only" = " --fast " ] && only=" c-pytest clang-tidy float row-meta fw-lint stack doc-paths arm-syntax "
+[ "$only" = " --fast " ] && only=" c-pytest clang-tidy float row-meta fw-lint stack doc-paths arm-syntax doc-budget "
 for want in $only; do
     [[ "$ALL" == *" $want "* ]] || { echo "check.sh: unknown step '$want' (steps:$ALL)" >&2; exit 2; }
 done
@@ -74,6 +75,18 @@ sil_smoke() {
     return $rc
 }
 
+# doc-budget: over the cap, edit down; never raise the cap to fit.
+doc_budget() {
+    local bad=0 f lim lines
+    for f in AGENTS.md:170 context.md:120; do
+        lim=${f#*:} f=${f%%:*}
+        [ -f "$f" ] || continue
+        lines=$(wc -l < "$f")
+        if [ "$lines" -gt "$lim" ]; then echo "   doc-budget: $f is $lines lines (cap $lim)" >&2; bad=1; fi
+    done
+    return "$bad"
+}
+
 step host-tests "$PY" tools/host_tests.py
 step mrac-equiv "$PY" API/tests/run_mrac_equiv.py
 step c-pytest   "${PYTEST[@]}" ground_station/livewatch/tests/test_subscribe_c.py \
@@ -86,6 +99,7 @@ step fw-lint    "$PY" tools/fw_lint.py
 step stack      "$PY" tools/stack_budget.py
 step doc-paths  "$PY" tools/doc_paths.py
 step arm-syntax "$PY" tools/host_tests.py --arm
+step doc-budget doc_budget
 
 if [ ${#failed[@]} -gt 0 ]; then
     echo "CHECK FAIL: ${failed[*]}"
