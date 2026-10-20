@@ -156,3 +156,8 @@ not be read whole.
 
 `.agent_memory/frictions.jsonl`; proposals `.agent_state/friction-proposals/`;
 shard rule violations `docs/context/inbox/<task-id>.md`.
+
+## Flight names (operator, 2026-10-21)
+
+Deck flight ids are descriptive names (`lqr-plus-mrac`, `lqr-alone`, `memory-mrac-on-2`), never bare codes
+(E3, N3, F5). Replies, run sheets and docs name a flight by that id; a bare code is undecodable for the operator.

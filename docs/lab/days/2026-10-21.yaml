@@ -3,22 +3,22 @@
 # Each flight is `.\fly <fly> --once <args>`; `stop: true` = analysis stop after it. Pass marks are PROPOSED.
 # Reflow of every flight not yet flown well (2026-10-20 was not flown; this deck replaces it and the 10-17 carry):
 # - New firmware first. The built .axf is from 2026-10-18; ~15 firmware commits since (exp latch cd8326de, landing
-#   xy hold 868f4ba4, drift NN shadow task + live switch, x/y and Z MRAC rows) go on in one flash, so S0 is a 30 s
+#   xy hold 868f4ba4, drift NN shadow task + live switch, x/y and Z MRAC rows) go on in one flash, so smoke-hover is a 30 s
 #   smoke hover before any experiment. Keil compile-only build 2026-10-20: 0 errors, 4 old warnings.
-# - mem1..mem6, z1, z2 are the 10-20 plan unchanged. Their 10-19 aborts were L1 position_error at the first
+# - memory-mrac-on/off-1..3, z-ground-effect, z-vertical-drag are the 10-20 plan unchanged. Their 10-19 aborts were L1 position_error at the first
 #   figure-8 lobe (36.4-36.9 cm > 25 cm); the abort limit is now 50 cm (973b73c0). Tracking itself is unchanged.
-# - E1..E4 refused take-off on 10-19 (exp_active one-flight lag, fixed host + firmware in cd8326de: needs the flash).
+# - the four *-plus-mrac flights refused take-off on 10-19 (exp_active one-flight lag, fixed host + firmware in cd8326de: needs the flash).
 # - Below the CUT LINE: the rest of the 10-17 plan. Not flown today = carried to the next day automatically.
-# - N1..N4 (new): the E flights again with mrac_injection=0 (control arm, same exp row). Not "exp pid/adrc/lqr/mpc":
+# - the four *-alone flights (new): the *-plus-mrac flights again with mrac_injection=0 (control arm, same exp row). Not "exp pid/adrc/lqr/mpc":
 #   those rows keep MRAC on and only swap the rate-loop variant (vp 0 = S6 instead of vp 16 = 3Lv2).
-# - Below the cut (new): C1/C5 lab_c_pid (10-14 anchor, first and last = drift check), mem7..mem10 (n=5 per arm), F7.
+# - Below the cut (new): pid-track-start / pid-track-end lab_c_pid (10-14 anchor, first and last = drift check), memory pairs 4-5 (memory-mrac-on/off-4..5) (n=5 per arm), dense-trajectories.
 #   Left out: lab_d_excite needs fusion 2 and the camera mode is per day (3 today); lab_g_dynload needs a mounted load.
 # - Packs: 10-19 type1 dropped 4.4-8.6 % SoC per 52-71 s flight (mean 6.6 %, rest-V OCV, docs/lab/days/2026-10-19-report.md):
 #   about 9 flights per full type1 pack to the 30 % gate. 33 flights need about 4 full packs (type2 unmeasured).
 #   Operator (2026-10-21): 4 type1 + 1 type2 packs, 2-4 flights per pack before charging, charged in rotation, so packs are not the bottleneck.
-# - drift_nn logs in S0 only: the mem slow lane is already full (303 vars trimmed), adding it there would drop it.
+# - drift_nn logs in smoke-hover only: the mem slow lane is already full (303 vars trimmed), adding it there would drop it.
 day: 2026-10-21
-title: new-firmware smoke hover, then the gate-memory premise (MRAC u100 vs u0, n=3 per arm before the cut line, n=5 with mem7-mem10), Z ground effect and v_z steps, the exp matrix, and the rest of the 10-17 plan
+title: new-firmware smoke hover, then the gate-memory premise (MRAC u100 vs u0, n=3 per arm before the cut line, n=5 with memory pairs 4-5), Z ground effect and v_z steps, the exp matrix, and the rest of the 10-17 plan
 camera:                       # camera_truth.sh fusion <id-fly> <mode> <args>, CT_FLOOR=logs/video_truth/<floor>
   floor: floor-1021           # scan at the lab with drone out of view: .\cam floor floor-1021
   mode: 3
@@ -30,153 +30,153 @@ before:
   - "8081 running, `arm 0`, landing pad clear, camera in the recording position"
   - "Tracker window: the dot sits on the drone center while parked before arming (if not: land, `r`, tell me)"
 flights:
-  - id: S0
+  - id: smoke-hover
     fly: lab_s_smoke
     why: "new-firmware smoke hover 30 s: arms, holds, drift net logs in shadow, lands with the new landing xy hold"
     pass: "steady hover; drift_nn.steps passes 125 with live_on 0; camera landing line inside the 10 cm pad gate"
     stop: true
-  - id: mem1
+  - id: memory-mrac-on-1
     fly: lab_m_memory_u100
     why: "memory u100 #1 (A hold, B figure-8, A hold)"
     pass: "figure-8 completes; the dot stays on the drone in the tracker window"
     stop: true
-  - id: mem2
+  - id: memory-mrac-off-1
     fly: lab_m_memory_u0
     why: memory u0 #1 (MRAC injection 0, the control arm)
     pass: figure-8 completes
-  - id: mem3
+  - id: memory-mrac-on-2
     fly: lab_m_memory_u100
     why: memory u100 #2
     pass: figure-8 completes
-  - id: mem4
+  - id: memory-mrac-off-2
     fly: lab_m_memory_u0
     why: memory u0 #2
     pass: figure-8 completes
-  - id: mem5
+  - id: memory-mrac-on-3
     fly: lab_m_memory_u100
     why: memory u100 #3
     pass: figure-8 completes
-  - id: mem6
+  - id: memory-mrac-off-3
     fly: lab_m_memory_u0
     why: memory u0 #3 (n=3 per arm reached)
     pass: figure-8 completes
     stop: true
-  - id: z1
+  - id: z-ground-effect
     fly: lab_z_ground_effect
     why: Z ground effect (thrust vs height near the pad)
     pass: holds at each height; lands on the pad
-  - id: z2
+  - id: z-vertical-drag
     fly: lab_z_vz_steps
     why: Z vertical drag (v_z steps)
     pass: steps complete; lands on the pad
     stop: true
-  - id: E1
+  - id: pid-plus-mrac
     fly: lab_e_exp_matrix
     why: "exp matrix, PID + MRAC 3-loop row (pid_3l): thesis controller-agnostic claim"
     pass: "exp read-back OK; figure-8 completes"
-  - id: E2
+  - id: adrc-plus-mrac
     fly: lab_e_exp_adrc_3l
     why: "exp matrix, ADRC + MRAC row (adrc_3l)"
     pass: "exp read-back OK; figure-8 completes"
-  - id: E3
+  - id: lqr-plus-mrac
     fly: lab_e_exp_lqr_3l
     why: "exp matrix, LQR + MRAC row (lqr_3l)"
     pass: "exp read-back OK; figure-8 completes"
-  - id: E4
+  - id: mpc-plus-mrac
     fly: lab_e_exp_mpc_3l
     why: "exp matrix, MPC + MRAC row (mpc_3l)"
     pass: "exp read-back OK; figure-8 completes"
-  - id: N1
+  - id: pid-alone
     fly: lab_e_exp_pid_u0
-    why: "baseline-only twin of E1 (pid_3l row, MRAC output off): E1 vs N1 = what the adaptive layer adds on PID; N1 fits PID's own x/y bw"
+    why: "baseline-only twin of pid-plus-mrac (pid_3l row, MRAC output off): pid-plus-mrac vs pid-alone = what the adaptive layer adds on PID; pid-alone fits PID's own x/y bw"
     pass: "exp read-back OK; figure-8 completes"
-  - id: N2
+  - id: adrc-alone
     fly: lab_e_exp_adrc_u0
-    why: "baseline-only twin of E2 (adrc_3l row, MRAC output off): E2 vs N2 = what the adaptive layer adds on ADRC; N2 fits ADRC's own x/y bw"
+    why: "baseline-only twin of adrc-plus-mrac (adrc_3l row, MRAC output off): adrc-plus-mrac vs adrc-alone = what the adaptive layer adds on ADRC; adrc-alone fits ADRC's own x/y bw"
     pass: "exp read-back OK; figure-8 completes"
-  - id: N3
+  - id: lqr-alone
     fly: lab_e_exp_lqr_u0
-    why: "baseline-only twin of E3 (lqr_3l row, MRAC output off): E3 vs N3 = what the adaptive layer adds on LQR; N3 fits LQR's own x/y bw"
+    why: "baseline-only twin of lqr-plus-mrac (lqr_3l row, MRAC output off): lqr-plus-mrac vs lqr-alone = what the adaptive layer adds on LQR; lqr-alone fits LQR's own x/y bw"
     pass: "exp read-back OK; figure-8 completes"
-  - id: N4
+  - id: mpc-alone
     fly: lab_e_exp_mpc_u0
-    why: "baseline-only twin of E4 (mpc_3l row, MRAC output off): E4 vs N4 = what the adaptive layer adds on MPC; N4 fits MPC's own x/y bw"
+    why: "baseline-only twin of mpc-plus-mrac (mpc_3l row, MRAC output off): mpc-plus-mrac vs mpc-alone = what the adaptive layer adds on MPC; mpc-alone fits MPC's own x/y bw"
     pass: "exp read-back OK; figure-8 completes"
     stop: true
   # ---------------- CUT LINE: stop here if packs or time run out; the flights below carry to the next day ----------------
-  - id: C1
+  - id: pid-track-start
     fly: lab_c_pid
     why: "historic anchor: the 10-14 PID baseline (x step, circle, figure-8) on today's build, so 10-14..10-21 compare"
     pass: "step overshoot and xy rms within 20% of 10-14 (PROPOSED); pad landing"
-  - id: F1
+  - id: robust-step
     fly: lab_c_robust
     why: "robust baseline step response (10-19 abort was the 12-gain journal check, fixed fafba158)"
     pass: "heading steady (land if it swings); overshoot < 16 cm, settle < 2.4 s"
     stop: true
-  - id: H0
+  - id: speed-ladder-0
     fly: lab_h_speed_ladder_l0
     why: "speed ladder rung set 0"
     pass: "no tilt trip, no fence stop"
-  - id: H1
+  - id: speed-ladder-1
     fly: lab_h_speed_ladder_l1
     why: "speed ladder rung set 1"
-    pass: "the 67 rung matches H0"
-  - id: H2
+    pass: "the 67 rung matches speed-ladder-0"
+  - id: speed-ladder-2
     fly: lab_h_speed_ladder_l2
     why: "speed ladder rung set 2"
-    pass: "the 100 rung matches H1"
+    pass: "the 100 rung matches speed-ladder-1"
     stop: true
-  - id: F2
+  - id: live-tune-rate
     fly: lab_d_livetune_rate
     why: "live tune, rate loop"
     pass: "livetune ends on budget/evals, saves livetune_best.json"
-  - id: F3
+  - id: live-tune-position
     fly: lab_d_livetune_pos
     why: "live tune, position loop"
     pass: "merges pos into livetune_best.json, recommended true"
     stop: true
-  - id: F4
+  - id: autotune-pid-track
     fly: lab_c_autotune
     why: "auto-tuned PID"
-    pass: "compared with F1, F5, F6"
-  - id: F5
+    pass: "compared with robust-step, lqr-track, mpc-track"
+  - id: lqr-track
     fly: lab_c_lqr
     why: "LQR"
     pass: "no 2 Hz roll cycle (1-4 Hz fraction < 20%, was 42%)"
-  - id: F6
+  - id: mpc-track
     fly: lab_c_mpc
     why: "MPC"
-    pass: "same as F5 (was 19%)"
-  - id: mem7
+    pass: "same as lqr-track (was 19%)"
+  - id: memory-mrac-on-4
     fly: lab_m_memory_u100
-    why: "memory premise, arm u100: n=5 per arm with mem1-mem6 (n=3 gives no spread estimate)"
-    pass: "same as mem1-mem6; no L1 abort at 50 cm"
-  - id: mem8
+    why: "memory premise, arm u100: n=5 per arm with the first three memory pairs (n=3 gives no spread estimate)"
+    pass: "same as the first three memory pairs; no L1 abort at 50 cm"
+  - id: memory-mrac-off-4
     fly: lab_m_memory_u0
-    why: "memory premise, arm u0: n=5 per arm with mem1-mem6 (n=3 gives no spread estimate)"
-    pass: "same as mem1-mem6; no L1 abort at 50 cm"
-  - id: mem9
+    why: "memory premise, arm u0: n=5 per arm with the first three memory pairs (n=3 gives no spread estimate)"
+    pass: "same as the first three memory pairs; no L1 abort at 50 cm"
+  - id: memory-mrac-on-5
     fly: lab_m_memory_u100
-    why: "memory premise, arm u100: n=5 per arm with mem1-mem6 (n=3 gives no spread estimate)"
-    pass: "same as mem1-mem6; no L1 abort at 50 cm"
-  - id: mem10
+    why: "memory premise, arm u100: n=5 per arm with the first three memory pairs (n=3 gives no spread estimate)"
+    pass: "same as the first three memory pairs; no L1 abort at 50 cm"
+  - id: memory-mrac-off-5
     fly: lab_m_memory_u0
-    why: "memory premise, arm u0: n=5 per arm with mem1-mem6 (n=3 gives no spread estimate)"
-    pass: "same as mem1-mem6; no L1 abort at 50 cm"
-  - id: F7
+    why: "memory premise, arm u0: n=5 per arm with the first three memory pairs (n=3 gives no spread estimate)"
+    pass: "same as the first three memory pairs; no L1 abort at 50 cm"
+  - id: dense-trajectories
     fly: lab_f_dense_traj
     why: "dense preset trajectories back to back (main scenario); never flown"
     pass: "every traj_go accepted; along/cross RMSE per preset (traj_metrics); check WARNs yaw-follow 163/183 deg/s > 90 (figure-8)"
-  - id: C5
+  - id: pid-track-end
     fly: lab_c_pid
-    why: "PID again last: drift check against C1 (pack, temperature, props over the day)"
-    pass: "within 10% of C1 (PROPOSED)"
+    why: "PID again last: drift check against pid-track-start (pack, temperature, props over the day)"
+    pass: "within 10% of pid-track-start (PROPOSED)"
     stop: true
 branches:
   - {when: "Flash exits non-zero or `livewatch verify` fails", do: "Stop; do not fly the old build with today's host; tell me"}
-  - {when: "S0 lands outside the pad gate or drift_nn.steps stays 0", do: "Land; tell me before mem1 (landing hold or NN task not running)"}
+  - {when: "smoke-hover lands outside the pad gate or drift_nn.steps stays 0", do: "Land; tell me before memory-mrac-on-1 (landing hold or NN task not running)"}
   - {when: '"NO FIX SENT" or the dot off the drone', do: "Land, check the tracker, re-fly (r at the auto-stop prompt)"}
   - {when: Stale-telemetry abort at take-off, do: "Land; tell me (the abort event and logs/service/8081-*.log now say link vs host)"}
-  - {when: "E flight refuses take-off at set exp_id", do: "Land; the build is not the new one (cd8326de); re-check `livewatch verify`"}
+  - {when: "A *-plus-mrac flight refuses take-off at set exp_id", do: "Land; the build is not the new one (cd8326de); re-check `livewatch verify`"}
   - {when: Tilt trip or fence stop, do: "Land; tell me before the next flight"}
   - {when: "Pack at the packs.yaml gate (gate_soc_pct, post-flight, ground only)", do: "Swap before the next flight; give the new type when fly asks"}
