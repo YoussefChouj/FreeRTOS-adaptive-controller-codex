@@ -71,6 +71,7 @@ Only the rows below are granted; everything else is NOT authorized. Shrinks only
 | EKF in the control path, bias default fixed-at-boot | supervisor | firmware | operator 2026-09-26 | standing |
 | Arm, idle and fly | agent | inside an operator-opened battery session only: `allow_agent_arm` on, operator said "go", RC transmitter on (ch10 = hard kill) | operator 2026-09-29, workflow B | ends at 30% battery or any abort; each battery needs a new "go" |
 | Claude Code subagents (Agent tool) | nobody | REVOKED: outside workers only (agy, ark, oc) | operator 2026-09-30 14:20 | until re-granted |
+| Use the operator's GitHub token (`~/.config/agent-secrets/github.token`) | any agent | CI, branches, PRs, issues on this repo; never merge, `main`, rulesets, settings or secrets (`docs/agent/governance-zones.md`) | operator 2026-10-20 | standing |
 
 Hardware rows usable only by the session that holds stream `main` and
 the `hw` lock. Every grant is agent-agnostic (operator 2026-09-30). No

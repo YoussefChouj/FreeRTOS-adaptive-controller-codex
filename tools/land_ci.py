@@ -59,7 +59,7 @@ def classify(code: int, headers: dict[str, str], body: str, *, curl_error: str =
         return OK, ' '.join(str(p) for p in (run.get('status'), run.get('conclusion')) if p)
     msg = _message(body)
     if code == 401:
-        return STOP, f'GITHUB_TOKEN refused (401 {msg}): renew it, or unset it to poll unauthenticated'
+        return STOP, f'GITHUB_TOKEN refused (401 {msg}): expired or revoked: tell the operator; no other credential'
     if code in (403, 429) and (headers.get('x-ratelimit-remaining') == '0' or 'rate limit' in msg.lower()):
         if headers.get('retry-after', '').isdigit():
             until = now + int(headers['retry-after'])
@@ -67,7 +67,8 @@ def classify(code: int, headers: dict[str, str], body: str, *, curl_error: str =
             until = float(headers['x-ratelimit-reset'])
         else:
             until = now + 60
-        hint = '' if authed else '; set GITHUB_TOKEN (5000 requests/h instead of 60 per IP) and re-run'
+        hint = '' if authed else ('; no token: put it in ~/.config/agent-secrets/github.token or GITHUB_TOKEN'
+                                  ' (5000 requests/h, not 60) and re-run')
         return WAIT, f'GitHub API rate limit ({msg}) until {_clock(until)}{hint}'
     if code == 403:
         return STOP, f'GitHub API refused (403 {msg}): the token needs Actions: read on this repo'

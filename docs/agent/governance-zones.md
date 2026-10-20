@@ -23,3 +23,19 @@ an approval line in the committed diff is reviewed with the code it unlocks.
 1. Add the path to `tools/tier0.txt` (one path or `*`/`**` glob per line).
 2. Note the date and the operator instruction that prompted it in the same commit message. The prose in
    `AGENTS.md` is descriptive; `tools/tier0.txt` and this file are normative.
+
+## GitHub token
+
+The operator keeps a GitHub token for agents outside the repo, at `~/.config/agent-secrets/github.token` (Git Bash;
+WSL: `/mnt/c/Users/Acer/.config/agent-secrets/github.token`), so any agent on this repo can use it without asking
+(operator 2026-10-20). `tools/land.sh` reads it on its own (`GITHUB_TOKEN` in the environment wins;
+`GITHUB_TOKEN_FILE` points elsewhere). Anything else reads it into a variable, never onto the command line:
+`GH_TOKEN="$(tr -d '\r\n ' < ~/.config/agent-secrets/github.token)" gh ...`.
+
+- **Use it for** this repo's CI runs and logs, branches, pull requests, issues and comments.
+- **Never** print it, commit it, or copy it into a brief, log, prompt, PR or issue.
+- **Never use it**, whatever GitHub lets it do, to merge a pull request or move `main` (`land.sh` only, the operator's
+  call), or to change rulesets, branch protection, repository settings, secrets, collaborators, webhooks or deploy
+  keys, or to delete a branch, tag or release. Those are the operator's. The ruleset is the gate; the token must not
+  be the way around it.
+- A 401 means it expired or was revoked: tell the operator. Do not look for another credential.

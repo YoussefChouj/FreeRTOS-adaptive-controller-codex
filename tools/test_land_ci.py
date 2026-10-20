@@ -110,17 +110,19 @@ def test_cli_exit_code_is_the_verdict(tmp_path):
 
 
 FAKE_CURL = '''#!/usr/bin/env bash
+printf '%s\\n' "$@" > "$FAKE_REPLY/args"
 while [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift ;; -D) hdr=$2; shift ;; esac; shift; done
 cp "$FAKE_REPLY/hdr" "$hdr"; cp "$FAKE_REPLY/body" "$out"; cat "$FAKE_REPLY/code"
 '''
+NEEDS_BASH = pytest.mark.skipif(shutil.which('bash') is None or shutil.which('git') is None, reason='bash or git missing')
+CI_GREEN = _runs((1, '.github/workflows/check.yml', 'completed', 'success'))
+RATE_LIMITED = json.dumps({'message': 'API rate limit exceeded'})
 
 
-@pytest.mark.skipif(shutil.which('bash') is None or shutil.which('git') is None, reason='bash or git missing')
-@pytest.mark.parametrize('code, body, rc, needle', [
-    ('200', _runs((1, '.github/workflows/check.yml', 'completed', 'success')), 0, 'completed success'),
-    ('401', json.dumps({'message': 'Bad credentials'}), 3, 'GITHUB_TOKEN refused (401 Bad credentials)'),
-])
-def test_land_status_reports_the_api_answer(tmp_path, code, body, rc, needle):
+def _land_status(tmp_path: Path, code: str, body: str, **env_extra: str) -> tuple[subprocess.CompletedProcess[str], str]:
+    """Run land.sh --status in a throwaway repo against a fake curl; return the run and curl's arguments.
+
+    Hermetic: no GITHUB_TOKEN, and GITHUB_TOKEN_FILE points at a missing file unless env_extra says otherwise."""
     repo, reply, stub = tmp_path / 'repo', tmp_path / 'reply', tmp_path / 'bin'
     for d in (repo / 'tools', reply, stub):
         d.mkdir(parents=True)
@@ -135,10 +137,34 @@ def test_land_status_reports_the_api_answer(tmp_path, code, body, rc, needle):
     subprocess.run(['git', 'init', '-q', '-b', 'feat', str(repo)], check=True)
     subprocess.run([*git, 'add', '-A'], check=True)
     subprocess.run([*git, 'commit', '-qm', 'x'], check=True)
-    env = {k: v for k, v in os.environ.items() if k != 'GITHUB_TOKEN'}
+    env = {k: v for k, v in os.environ.items() if k not in ('GITHUB_TOKEN', 'GITHUB_TOKEN_FILE')}
     env.update(FAKE_REPLY=reply.as_posix(), PY=Path(sys.executable).as_posix(),
-               PATH=str(stub) + os.pathsep + env.get('PATH', ''))
+               PATH=str(stub) + os.pathsep + env.get('PATH', ''), GITHUB_TOKEN_FILE=(tmp_path / 'no-token').as_posix())
+    env.update(env_extra)
     res = subprocess.run([shutil.which('bash'), 'tools/land.sh', '--status', 'feat'], cwd=repo,
                          capture_output=True, text=True, env=env)
+    return res, (reply / 'args').read_text(encoding='utf-8')
+
+
+@NEEDS_BASH
+@pytest.mark.parametrize('code, body, rc, needle', [
+    ('200', CI_GREEN, 0, 'completed success'),
+    ('401', json.dumps({'message': 'Bad credentials'}), 3, 'GITHUB_TOKEN refused (401 Bad credentials)'),
+])
+def test_land_status_reports_the_api_answer(tmp_path, code, body, rc, needle):
+    res, args = _land_status(tmp_path, code, body)
     assert res.returncode == rc, res.stderr
-    assert needle in res.stdout
+    assert needle in res.stdout and 'Authorization' not in args
+
+
+@NEEDS_BASH
+def test_land_reads_the_token_file_and_the_environment_wins(tmp_path):
+    token = tmp_path / 'github.token'
+    token.write_bytes(b'tok-file\r\n')  # a token saved by a Windows editor
+    bare, args = _land_status(tmp_path / 'bare', '403', RATE_LIMITED)
+    assert bare.returncode == 2 and 'no token' in bare.stdout and 'Authorization' not in args
+    filed, args = _land_status(tmp_path / 'file', '403', RATE_LIMITED, GITHUB_TOKEN_FILE=token.as_posix())
+    assert filed.returncode == 2 and 'no token' not in filed.stdout  # land_ci.py sees the token too
+    assert 'Authorization: Bearer tok-file\n' in args
+    env, args = _land_status(tmp_path / 'env', '200', CI_GREEN, GITHUB_TOKEN_FILE=token.as_posix(), GITHUB_TOKEN='tok-env')
+    assert env.returncode == 0 and 'Authorization: Bearer tok-env\n' in args

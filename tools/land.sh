@@ -7,7 +7,9 @@
 # waiting is "unknown", not "failed": it says why and keeps waiting until LAND_TIMEOUT (default 1800 s). A refused
 # token or an unknown repo stops it at once. Each change of CI state prints one line. Run it in the background.
 # bash tools/land.sh --status <branch>: print the CI state of <branch>'s commit and exit (read-only: no push, no land).
-# GITHUB_TOKEN in the environment lifts the API limit from 60 requests/h per IP to 5000/h; it needs Actions: read.
+# A GitHub token lifts the API limit from 60 requests/h per IP to 5000/h (it needs Actions: read). land.sh reads the
+# operator's agent token from ~/.config/agent-secrets/github.token (GITHUB_TOKEN_FILE overrides the path; GITHUB_TOKEN
+# in the environment wins). Its rules: docs/agent/governance-zones.md, "GitHub token".
 # Landing is the operator's call (AGENTS.md: the CEO merges after QA); agents build branches, they do not land them.
 set -euo pipefail
 status_only=""; [ "${1:-}" = --status ] && { status_only=1; shift; }
@@ -17,6 +19,8 @@ timeout=${LAND_TIMEOUT:-1800}
 PY=${PY:-python}
 cd "$(git rev-parse --show-toplevel)"
 sha=$(git rev-parse --verify "refs/heads/$branch^{commit}")
+token_file=${GITHUB_TOKEN_FILE:-${HOME:-}/.config/agent-secrets/github.token}
+[ -z "${GITHUB_TOKEN:-}" ] && [ -r "$token_file" ] && { GITHUB_TOKEN=$(tr -d '\r\n ' < "$token_file"); export GITHUB_TOKEN; }
 auth=(); [ -n "${GITHUB_TOKEN:-}" ] && auth=(-H "Authorization: Bearer $GITHUB_TOKEN")
 # Relative paths: Windows Python cannot open the /tmp paths Git Bash's mktemp returns.
 tmp=.agent_state/land-$$; mkdir -p .agent_state; trap 'rm -f "$tmp".*' EXIT
