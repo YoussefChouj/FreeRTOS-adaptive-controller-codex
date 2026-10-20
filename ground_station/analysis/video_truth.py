@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import functools
 import json
 import re
 from pathlib import Path
@@ -934,12 +935,118 @@ def read_livewatch(path: str, names) -> dict:
 
 
 EXTPOS_SLOTS = {1: 0, 2: 1}     # r5_extpos_frames.md (fusion sessions): R4 slot1 (IMU/flow) and slot2 (EKF/earth) columns
+# campaign-runner session telemetry.csv (logs/campaigns/<campaign>_<stamp>/): every frame is written as `slotN.<var>`
+# rows, then its link stats SESSION_META (slotN.t_ms = the frame's t_src_ms); the capture lanes are not the R4 slots,
+# so R4 slot k is rebuilt on the frame times of its first SESSION_SLOT_REF variable present
+SESSION_META = ("t_ms", "seq", "received", "dropped", "crc_errors", "bytes_received", "loss_pct")
+SESSION_SLOT_REF = {0: ("DroneStatus.ARM_Status",), 1: ("ano_of.of2_dx_fix", "imu_data.yaw"),
+                    2: ("ano_of.earth_x", "Ctrler.locxPID.FB", "s_ekf_of.x[1]"), 3: ("Ctrler.locxPID.Des",)}
+
+
+def _session_csv(stem) -> Path | None:
+    """The session telemetry.csv a stem names (the session dir or the file itself), else None (a slot-CSV stem)."""
+    if not stem:
+        return None
+    p = Path(stem)
+    p = p / "telemetry.csv" if p.is_dir() else p
+    if not p.is_file():
+        return None
+    with p.open() as f:
+        return p if f.readline().startswith("received_ns") else None
+
+
+def _session_series(path) -> dict:
+    """{var: (t s on the drone clock, sorted; values)} of a session telemetry.csv, cached per file version (shared:
+    do not modify the arrays in place)."""
+    p = Path(path).resolve()
+    return _session_series_cached(str(p), p.stat().st_mtime_ns)
+
+
+@functools.lru_cache(maxsize=2)
+def _session_series_cached(path: str, mtime_ns: int) -> dict:
+    """Frame rows (`slotN.<var>`) are timed by their own frame's slotN.t_ms / 1000, the slot CSVs' t exactly. The
+    un-prefixed rows (telemetry_adapter's dashboard aliases: bare names and spec keys) are skipped. A frame's rows
+    are consecutive and share received_ns, but one batch can hold several frames of a slot, so the k-th row of a var
+    in a run of one (received_ns, slot) is the k-th frame of that run. A session without t_ms falls back to the host
+    clock mapped onto xTickCount (log_corpus._timebase), which is only as good as the WiFi batching."""
+    import pandas as pd
+    from ground_station.analysis import log_corpus
+    df = pd.read_csv(path, usecols=["received_ns", "key", "value"], on_bad_lines="skip",
+                     dtype={"received_ns": "category", "key": "category", "value": str})
+    sk = pd.Series(df["key"].cat.categories).str.extract(r"^slot(\d+)\.(.+)$")
+    kc = df["key"].cat.codes.to_numpy()
+    wire = kc >= 0
+    wire[wire] = sk[0].notna().to_numpy()[kc[wire]]
+    if not (sk[1] == "t_ms").any():
+        raw = log_corpus._load_session(Path(path))
+        tb = log_corpus._timebase(raw, absolute=True)
+        out = {}
+        for k, (t, v) in raw.items():
+            if k not in SESSION_META:
+                t = tb(t)
+                o = np.argsort(t, kind="stable")
+                out[k] = (t[o], v[o])
+        return out
+    kc, ns = kc[wire], df["received_ns"].cat.codes.to_numpy()[wire]
+    slot, name = sk[0].to_numpy()[kc], sk[1].to_numpy()[kc]
+    run = np.cumsum(np.r_[True, (ns[1:] != ns[:-1]) | (slot[1:] != slot[:-1])])
+    occ = pd.DataFrame({"r": run, "k": kc}).groupby(["r", "k"]).cumcount().to_numpy()
+    fid = run * (int(occ.max()) + 1) + occ
+    v = pd.to_numeric(df["value"].to_numpy()[wire], errors="coerce")
+    it = name == "t_ms"
+    tm = pd.Series(v[it] / 1e3, index=fid[it])
+    t = tm[~tm.index.duplicated()].reindex(fid).to_numpy(float)
+    ok = np.isfinite(t) & np.isfinite(v) & ~np.isin(name, SESSION_META)
+    code, names = pd.factorize(name[ok])
+    t, v = t[ok], v[ok]
+    o = np.lexsort((t, code))
+    cut = np.flatnonzero(np.diff(code[o])) + 1
+    return {str(names[code[a[0]]]): (t[a], v[a]) for a in np.split(o, cut) if len(a)}
+
+
+class _HeldSlot(dict):
+    """read_slots' slot from a session: "t" (and t_src_ms) are the frame times of the slot's reference variable;
+    any other variable of the session is held (last sample at or before each t) onto them on first use. A variable
+    captured in another lane than the reference so lags it by up to one of its own frames (40 ms at 25 Hz)."""
+
+    def __init__(self, series: dict, t: np.ndarray):
+        super().__init__(t=t, t_src_ms=t * 1e3)
+        self._series = series
+
+    def __missing__(self, key):
+        if key not in self._series:
+            raise KeyError(key)
+        from ground_station.analysis.log_corpus import hold
+        self[key] = hold(self._series, key, self["t"])
+        return self[key]
+
+    def __contains__(self, key):
+        return dict.__contains__(self, key) or key in self._series
+
+    def get(self, key, default=None):
+        return self[key] if key in self else default
 
 
 def read_slots(stem: str, slots=(0, 1, 2, 3)) -> dict:
     """stream_log slot CSVs `<stem>.slot<k>.csv` (R4 presets): {k: {"t": s on the drone clock (t_src_ms / 1000),
     column: array}}. Every slot shares that clock, so slots at different rates line up by "t". A fusion-session log
-    (slot1 carries g_ext_pos_on) is read through EXTPOS_SLOTS, so k keeps its R4 meaning; it has no R4 slot 0 or 3."""
+    (slot1 carries g_ext_pos_on) is read through EXTPOS_SLOTS, so k keeps its R4 meaning; it has no R4 slot 0 or 3.
+    A campaign session (stem = its dir or telemetry.csv, see _session_csv) gives slot k on the frame times of its
+    SESSION_SLOT_REF variable with every session variable held onto them (_HeldSlot); without ano_of.earth_x/y it
+    is rebuilt from the position-loop feedback (Ext_Pos_SetFb, TASK/StabilizerTask.c: locx FB = earth_y, locy FB =
+    -earth_x). Slot k is left out when none of its reference variables was captured."""
+    csv_path = _session_csv(stem)
+    if csv_path is not None:
+        series = dict(_session_series(csv_path))
+        if "ano_of.earth_x" not in series and X_CM in series and Y_CM in series:
+            series["ano_of.earth_x"] = (series[Y_CM][0], -series[Y_CM][1])
+            series["ano_of.earth_y"] = series[X_CM]
+        out = {}
+        for k in slots:
+            ref = next((r for r in SESSION_SLOT_REF.get(k, ()) if r in series), None)
+            if ref is not None:
+                out[k] = _HeldSlot(series, np.unique(series[ref][0]))
+        return out
     import pandas as pd
     s1 = Path(f"{stem}.slot1.csv")
     ext = s1.exists() and "g_ext_pos_on" in s1.open().readline().split(",")
@@ -1344,17 +1451,35 @@ def fixes_clock(stem: str, fixes_csv) -> dict:
     N-th sent fix arrived at t_src - age_ms: c = sent[N-1] - arrival. Each lost packet makes the count lag one fix
     (c falls a fix period), so c starts as the first-quartile median and is refined by matching each arrival to its
     nearest sent fix. c absorbs the WiFi latency, so t_tel is the arrival-equivalent capture time.
-    Returns c, the arrival residual spread, the counts and the fixes (t_tel s, pad xy m)."""
+    A campaign session (_session_csv) is read on the frame times of g_ext_pos.n_ok. n_old is optional (the campaign
+    capture groups leave it out): a fix it would count then looks like a lost packet, which the refine and lock
+    shift below already absorb. Returns c, the arrival residual spread, the counts and the fixes (t_tel s, pad xy m)."""
     import pandas as pd
     fx = pd.read_csv(fixes_csv)
     sent = fx["t_send"][fx["frame_hex"].notna()].to_numpy(float)
     g = "g_ext_pos."
-    s = pd.read_csv(f"{stem}.slot2.csv", usecols=["t_src_ms"] + [g + k for k in ("n_ok", "n_rej", "n_old", "age_ms")])
-    n = np.nan_to_num((s[g + "n_ok"] + s[g + "n_rej"] + s[g + "n_old"]).to_numpy(float)).astype(int)
+    cols = [g + k for k in ("n_ok", "n_rej", "n_old", "age_ms")]
+    csv_path = _session_csv(stem)
+    if csv_path is not None:
+        from ground_station.analysis.log_corpus import hold
+        series = _session_series(csv_path)
+        if g + "n_ok" not in series:
+            raise SystemExit(f"{csv_path}: no {g}n_ok (log the camera_fusion group to sync the fixes)")
+        ts = np.unique(series[g + "n_ok"][0])
+        s = {c: hold(series, c, ts, default=0.0 if c == g + "n_old" else np.nan) for c in cols}
+        s["t_src_ms"] = ts * 1e3
+    else:
+        p = Path(f"{stem}.slot2.csv")
+        hdr = p.open().readline().strip().split(",")
+        s = pd.read_csv(p, usecols=["t_src_ms"] + [c for c in cols if c in hdr])
+        if g + "n_old" not in s:
+            s[g + "n_old"] = 0.0
+    n = np.nan_to_num(np.asarray(s[g + "n_ok"] + s[g + "n_rej"] + s[g + "n_old"], float)).astype(int)
     # without a reboot the counters carry earlier flights (r7_f5: 9838 at log start); the tracker sends its first
-    # fix only after the log's slot1 CSV exists, so the first logged count is this session's zero
+    # fix only after the log (slot1 CSV, or a session's recording) has started, so the first logged count is this
+    # session's zero (a tracker started earlier shifts c by whole fix periods: check lock_shift, n_recv, lost_end)
     n = n - n[0]
-    arr = (s["t_src_ms"].to_numpy(float) - s[g + "age_ms"].to_numpy(float)) / 1e3
+    arr = (np.asarray(s["t_src_ms"], float) - np.asarray(s[g + "age_ms"], float)) / 1e3
     new = np.r_[n[0] > 0, np.diff(n) > 0] & (n > 0) & (n <= len(sent)) & np.isfinite(arr)
     a, cs = arr[new], sent[n[new] - 1] - arr[new]
 
@@ -1469,7 +1594,7 @@ def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: 
     tt = te[fly]
     truth = np.c_[np.interp(tt - o, t_v, xy[:, 0]), np.interp(tt - o, t_v, xy[:, 1])]
     rows = {"t_tel": tt, "truth_x": truth[:, 0], "truth_y": truth[:, 1], "z": z[fly] - z0}
-    summ = {"stem": stem, "h_ring_m": h, "id0_mad_px": mad0, "z0_m": z0, "takeoff_tel_s": to_tel,
+    summ = {"stem": stem, "floor": str(floor or ""), "h_ring_m": h, "id0_mad_px": mad0, "z0_m": z0, "takeoff_tel_s": to_tel,
             "takeoff_video_s": to_vid, "landing_tel_s": ld_tel, "landing_video_s": ld_vid,
             "offset_takeoff_s": o0, "offset_landing_s": ld_tel - ld_vid, "offset_refine_s": d, "offset_host_s": o_host, "offset_s": o,
             "sync_anchor": anchor if np.isfinite(ld_vid) or anchor in ("host", "fixes") else "takeoff-unverified",
@@ -1488,6 +1613,8 @@ def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: 
             "offset_takeoff_s": o0f, "offset_refine_s": d, "rot_deg": float(np.degrees(np.arctan2(q[1, 0], q[0, 0]))),
             "vs_truth_rms_cm": float(np.sqrt(np.mean(err ** 2)) * 100), "vs_truth_p90_cm": float(np.percentile(err, 90) * 100)}
     for name, (cx, cy, sc) in R4_EST.items():
+        if cx not in s2 or cy not in s2:                                    # not captured (campaign sessions: ekf)
+            continue
         e = np.c_[s2[cx], s2[cy]][fly] * sc
         e = e - e[0]
         q, refl = align(e, truth, int(np.searchsorted(tt, tt[0] + rot_s)) if rot_s else len(e), reflect)
@@ -1510,6 +1637,8 @@ def r4_truth(stem: str, video_dir: str, cam, refine_s: float = 2.0, coral_step: 
             seg = {"t0": float(tt[a]), "t1": float(tt[b]), "start_xy_m": truth[a].round(3).tolist(),
                    "end_xy_m": truth[b].round(3).tolist()}
             for name, (cx, cy, sc) in R4_EST.items():
+                if cx not in s2 or cy not in s2:
+                    continue
                 e = np.c_[s2[cx], s2[cy]][fly][a:b + 1] * sc
                 e = e - e[0]
                 q, refl = align(e, tr, int(np.searchsorted(tt[a:b + 1], tt[a] + rot_s)) if rot_s else len(e), reflect)
@@ -1585,12 +1714,12 @@ def drift_score(name: str, cam: str = "docs/video-truth/cam_r4_lenswave_2026-10-
     rows = np.genfromtxt(vd / "truth4.csv", delimiter=",", names=True)
     summ = json.loads((vd / "truth4.json").read_text())
     camd = json.loads(Path(cam).read_text())
-    R, tw, _ = floor_from_marker(dict(np.load(vd / "aruco.npz")), camd)
+    R, tw, _ = floor_from_marker(dict(np.load(Path(summ.get("floor") or vd) / "aruco.npz")), camd)
     c = -R.T @ tw
     u = -c[:2] / np.linalg.norm(c[:2])
     ax = np.c_[u, [-u[1], u[0]]]                                    # columns: along, across
     t, truth = rows["t_tel"], np.c_[rows["truth_x"], rows["truth_y"]]
-    S = read_slots(f"logs/vofa/{name}")
+    S = read_slots(summ["stem"] if _session_csv(summ["stem"]) else f"logs/vofa/{name}")
     s0, s3 = S[0], S[3]
     yaw = np.unwrap(np.radians(s0["imu_data.yaw"]))
     k = max(1, int(round(0.5 / np.median(np.diff(s0["t"])))))
@@ -1822,50 +1951,95 @@ def yaw4(names, est: str = "earth") -> list[dict]:
 
 
 # ---------------------------------------------------------------- R4: learned camera-off correction (Phase 3)
-# A small model learns the body-frame velocity the earth path misses (truth - earth, from truth4) from 1 s of
-# 100 Hz IMU/OF and 50 Hz EKF states; its integral corrects earth with the camera off. Leave-one-flight-out, and
-# the model never trains on NN4_HOLD (b17 hover; b7/b10 take-off-unverified sync) or NN4_SUSPECT (coral jumps).
+# A small model learns the body-frame velocity the raw optical flow misses (camera truth - scaled raw OF, from
+# truth4) from 1 s of 100 Hz IMU/OF and the OF height; raw OF plus the model, integrated from take-off, is the
+# camera-off track. Leave-one-flight-out, and the model never trains on NN4_HOLD (b17 hover; b7/b10
+# take-off-unverified sync) or NN4_SUSPECT (coral jumps).
+# 2026-10-19 leak fix: the target was truth - earth and the features held the EKF states. On a camera-fused flight
+# both carry the camera (g_ext_pos_on 2 ramps the fixes into ano_of.earth_x/y; 3 moves the EKF position, and through
+# its covariance the velocity and innovation, in EkfOf_UpdatePos), so the model was fed part of the answer. The
+# features are now NN4_RAW_CH (no s_ekf_of channel) and the target is built from raw OF, which no fix touches.
+# NN4_CH keeps the EKF channels for nn_io and the campaign capture list (livewatch/campaign_capture.py).
 NN4_HOLD = ("hover_r4_b17_v0_3g", "drift_rc_r4_b7_v19_4000", "drift_rc_r4_b10_v20")
 NN4_SUSPECT = ("drift_rc_r4_b8_v17", "drift_rc_r4_b12_v21", "r6_f4b_sysid_p5300")   # r6_f4b: truth4 sync suspect (2026-10-13)
 NN4_CH = {1: ("Acc_X_Real", "Acc_Y_Real", "Acc_Z_Real", "Gyro_X_Real", "Gyro_Y_Real", "Gyro_Z_Real", "imu_data.rol",
               "imu_data.pit", "ano_of.of2_dx_fix", "ano_of.of2_dy_fix", "ano_of.of1_dx", "ano_of.of1_dy"),
           2: ("s_ekf_of.x[1]", "s_ekf_of.x[4]", "ano_of.of_alt_cm", "s_ekf_of.innov_x", "s_ekf_of.innov_y")}
+NN4_RAW_CH = {1: NN4_CH[1], 2: ("ano_of.of_alt_cm",)}
+NN4_OF = ("ano_of.of2_dx_fix", "ano_of.of2_dy_fix")   # cm/s on the s_ekf_of.x[1]/x[4] axes (StabilizerTask ofx/ofy)
+NN4_OF_SCALE = 0.01 * 1.094                           # -> true m/s: M_PER_CM * g_of_scale; the bias trim is left to the model
 
 
-def nn4_data(name: str, rate_hz: float = 10.0, win_s: float = 1.0, nblk: int = 10) -> dict:
-    """One truth4 flight at rate_hz: features = nblk block means of NN4_CH over a causal win_s window; target Y =
-    body-frame velocity residual (truth - earth, 0.5 s savgol derivative; truth4 rotation undone, then turned by
-    the yaw). The yaw sense `sign` is the one whose body-frame earth velocity best matches the EKF body velocity
-    (complex correlation `corr`, checked per flight). `back` turns body vectors at ts into the truth4 frame."""
+def _bm(tk, x, edges):
+    """Mean of the samples x(tk) in each [edges[..., i], edges[..., i + 1]) (an empty block gives 0; x may be complex)."""
+    j = np.searchsorted(tk, edges)
+    cs = np.r_[0.0, np.cumsum(np.nan_to_num(x))]
+    return np.diff(cs[j], axis=-1) / np.maximum(np.diff(j, axis=-1), 1)
+
+
+def _cinterp(x, xp, z, **kw):
+    return np.interp(x, xp, z.real, **kw) + 1j * np.interp(x, xp, z.imag, **kw)
+
+
+def nn4_data(name: str, rate_hz: float = 10.0, win_s: float = 1.0, nblk: int = 10, features: dict = NN4_RAW_CH,
+             target: str = "rawof") -> dict:
+    """One truth4 flight at rate_hz: features F = nblk block means of `features` over a causal win_s window.
+    target "rawof" (leak-free, default): Y = the body-frame truth velocity (0.5 s savgol derivative, truth4 rotation
+    undone, turned by the yaw) minus the scaled raw OF `of` (m/s), both as means over the step (ts - 1/rate_hz, ts].
+    The yaw sense `sign` is the one whose body-frame truth velocity best matches the raw OF (complex correlation
+    `corr`, checked per flight). target "earth" (before 2026-10-19; nn_io): Y = the body residual of truth - earth
+    at ts, sign from the earth velocity vs the EKF one. It carries the camera on a fused flight (`ext_pos_on`, the
+    highest g_ext_pos_on logged; 0 when the log has none). `back` turns body vectors at ts into the truth4 frame;
+    `head` is the raw-OF track on the truth4 rows (truth4 frame, m, 0 at the first row)."""
     from scipy.signal import savgol_filter
     vd = Path(f"logs/video_truth/{name}")
     rows = np.genfromtxt(vd / "truth4.csv", delimiter=",", names=True)
     summ = json.loads((vd / "truth4.json").read_text())
     if summ["est"]["earth"]["reflect"]:
         raise ValueError(f"{name}: reflected earth fit, body frame undefined")
+    if target not in ("rawof", "earth"):
+        raise ValueError(f"target {target!r}: 'rawof' or 'earth'")
     S = read_slots(summ["stem"], (1, 2))
     t = rows["t_tel"]; dt = float(np.median(np.diff(t)))
     truth = rows["truth_x"] + 1j * rows["truth_y"]; earth = rows["earth_x"] + 1j * rows["earth_y"]
     unrot = np.exp(-1j * np.radians(summ["est"]["earth"]["rot_deg"]))
     yaw = np.interp(t, S[1]["t"], np.unwrap(np.radians(S[1]["imu_data.yaw"])))
     d = lambda z: savgol_filter(z.real, 25, 2, deriv=1, delta=dt) + 1j * savgol_filter(z.imag, 25, 2, deriv=1, delta=dt)
-    ekf = np.interp(t, S[2]["t"], S[2]["s_ekf_of.x[1]"]) + 1j * np.interp(t, S[2]["t"], S[2]["s_ekf_of.x[4]"])
-    ve = d(earth) * unrot
-    cc = {s: np.vdot(ve * np.exp(1j * s * yaw), ekf) / np.sqrt(np.vdot(ve, ve).real * np.vdot(ekf, ekf).real) for s in (1, -1)}
+    ofk = np.nan_to_num(S[1][NN4_OF[0]] + 1j * S[1][NN4_OF[1]]) * NN4_OF_SCALE        # raw OF, body m/s, slot rate
+    of_t = _cinterp(t, S[1]["t"], ofk)
+    if target == "rawof":
+        v, ref = d(truth) * unrot, of_t
+    else:
+        v, ref = d(earth) * unrot, _cinterp(t, S[2]["t"], S[2]["s_ekf_of.x[1]"] + 1j * S[2]["s_ekf_of.x[4]"])
+    cc = {s: np.vdot(v * np.exp(1j * s * yaw), ref) / np.sqrt(np.vdot(v, v).real * np.vdot(ref, ref).real) for s in (1, -1)}
     sign = max(cc, key=lambda s: abs(cc[s]))
-    vres = d(truth - earth) * unrot * np.exp(1j * sign * yaw)
+    body = unrot * np.exp(1j * sign * yaw)                                              # truth4 frame -> body
     ts = np.arange(t[0] + win_s, t[-1], 1.0 / rate_hz)
     edges = ts[:, None] - win_s + np.arange(nblk + 1)[None, :] * win_s / nblk
-    F = []
-    for k, chans in NN4_CH.items():
-        j = np.searchsorted(S[k]["t"], edges); n = np.maximum(np.diff(j, axis=1), 1)
-        for c in chans:
-            cs = np.r_[0.0, np.cumsum(np.nan_to_num(S[k][c]))]
-            F.append(np.diff(cs[j], axis=1) / n)
+    F = [_bm(S[k]["t"], S[k][c], edges) for k, chans in features.items() for c in chans]
+    step = np.c_[ts - 1.0 / rate_hz, ts]
+    of = _bm(S[1]["t"], ofk, step)[:, 0]
     i = np.searchsorted(t, ts)
-    return {"name": name, "t": t, "truth": truth, "earth": earth, "ts": ts, "F": np.hstack(F),
-            "Y": np.c_[vres[i].real, vres[i].imag], "back": np.exp(-1j * sign * yaw[i]) / unrot,
-            "sign": sign, "corr": complex(cc[sign])}
+    if target == "rawof":
+        y = _bm(t, d(truth) * body, step)[:, 0] - of
+    else:
+        y = (d(truth - earth) * body)[i]
+    back = 1.0 / (unrot * np.exp(1j * sign * np.interp(ts, t, yaw)))                  # body at ts -> truth4 frame
+    oe = of_t / body
+    ext = S.get(2, {}).get("g_ext_pos_on")
+    return {"name": name, "target": target, "t": t, "truth": truth, "earth": earth, "ts": ts, "F": np.hstack(F),
+            "Y": np.c_[y.real, y.imag], "of": of, "back": back, "sign": sign, "corr": complex(cc[sign]),
+            "head": np.r_[0.0, np.cumsum(0.5 * (oe[1:] + oe[:-1]) * np.diff(t))],
+            "ext_pos_on": int(np.nan_to_num(ext).max()) if ext is not None and len(ext) else 0}
+
+
+def nn4_track(d: dict, p) -> np.ndarray:
+    """Camera-off track of an nn4_data flight (complex, truth4 frame, m, on d["t"]): the raw OF plus the predicted
+    body residual p (rows of d["ts"], m/s), turned by `back` and integrated step by step from the first truth4 row
+    (d["head"], the raw OF alone, until the first full window)."""
+    c = np.cumsum((d["of"] + p[:, 0] + 1j * p[:, 1]) * d["back"] * np.diff(d["ts"], prepend=d["ts"][0]))
+    return (d["earth"][0] + _cinterp(np.minimum(d["t"], d["ts"][0]), d["t"], d["head"])
+            + _cinterp(d["t"], d["ts"], c, left=0.0))
 
 
 def _ridge(Xtr, Ytr, Xte, lam):
@@ -1903,9 +2077,12 @@ def _mlp(Xtr, Ytr, Xte, H=32, ep=60, lr=3e-3, wd=1e-3, seed=0):
 
 def nn4(names=None, lam: float = 300.0, H: int = 32, ep: int = 60, seeds: int = 2) -> dict:
     """LOFO camera-off correction on every truth4 flight: ridge and MLP trained on the pool (all flights minus
-    NN4_HOLD, NN4_SUSPECT and the scored one) predict the body velocity residual; its integral (from the first
-    sample, in the truth4 frame) is added to earth and scored by drift_score (tag _nn4). `oracle` integrates the
-    true residual (pipeline check: should land near truth). vel_r2 = residual variance explained, out of fold."""
+    NN4_HOLD, NN4_SUSPECT and the scored one) predict the body velocity the raw OF misses (nn4_data target "rawof").
+    Raw OF plus that, turned to the truth4 frame and integrated from the first row (`head` until the first full
+    window), is scored by drift_score (tag _nn4). `rawof` integrates the raw OF alone (the model's baseline),
+    `oracle` the true residual (pipeline check: should land near truth). `earth` is the logged track: camera-aided on
+    a fused flight (ext_pos_on >= 2), so a reference there, not a camera-off baseline. vel_r2 = residual variance
+    explained, out of fold."""
     allf, data, skipped = sorted(p.parent.name for p in Path("logs/video_truth").glob("*/truth4.json")), {}, {}
     for n in allf:
         try:
@@ -1915,25 +2092,23 @@ def nn4(names=None, lam: float = 300.0, H: int = 32, ep: int = 60, seeds: int = 
     allf = [n for n in allf if n in data]
     pool = [n for n in allf if n not in NN4_HOLD + NN4_SUSPECT]
     D = data[allf[0]]["F"].shape[1]
-    out = {"pool": pool, "hold": list(NN4_HOLD), "suspect": list(NN4_SUSPECT), "skipped": skipped, "features": D, "lam": lam, "H": H,
+    out = {"target": "camera truth - raw OF (2026-10-19)", "pool": pool, "hold": list(NN4_HOLD), "suspect": list(NN4_SUSPECT),
+           "skipped": skipped, "features": D, "lam": lam, "H": H,
            "params": {"ridge": 2 * (D + 1), "mlp": D * H + H + H * H + H + 2 * H + 2},
            "macs_per_step": {"ridge": 2 * D, "mlp": D * H + H * H + 2 * H}, "flights": {}}
     for n in names or allf:
         d = data[n]; tr = [m for m in pool if m != n]
         Xtr = np.vstack([data[m]["F"] for m in tr]); Ytr = np.vstack([data[m]["Y"] for m in tr])
-        pred = {"oracle": d["Y"], "ridge": _ridge(Xtr, Ytr, d["F"], lam),
+        pred = {"oracle": d["Y"], "rawof": np.zeros_like(d["Y"]), "ridge": _ridge(Xtr, Ytr, d["F"], lam),
                 "mlp": np.mean([_mlp(Xtr, Ytr, d["F"], H, ep, seed=s) for s in range(seeds)], 0)}
-        dts = np.diff(d["ts"], prepend=d["ts"][0])
         ests = {"earth": np.c_[d["earth"].real, d["earth"].imag]}
         r2 = {}
         for k, p in pred.items():
-            c = np.cumsum((p[:, 0] + 1j * p[:, 1]) * d["back"] * dts)
-            c = np.interp(d["t"], d["ts"], c.real, left=0.0) + 1j * np.interp(d["t"], d["ts"], c.imag, left=0.0)
-            z = d["earth"] + c
+            z = nn4_track(d, p)
             ests[k] = np.c_[z.real, z.imag]
             r2[k] = float(1 - np.sum((p - d["Y"]) ** 2) / np.sum((d["Y"] - d["Y"].mean(0)) ** 2))
         r = drift_score(n, ests=ests, tag="_nn4")
-        out["flights"][n] = {"in_pool": n in pool, "sign": d["sign"], "corr": round(abs(d["corr"]), 3),
+        out["flights"][n] = {"in_pool": n in pool, "ext_pos_on": d["ext_pos_on"], "sign": d["sign"], "corr": round(abs(d["corr"]), 3),
                              "corr_deg": round(float(np.degrees(np.angle(d["corr"]))), 1), "n_train": len(Ytr),
                              "vel_r2": r2, "est": {k: {q: e.get(q) for q in ("rms_cm", "drift60_p90_cm", "drift60s_p90_cm")}
                                                    for k, e in r["est"].items()}}
@@ -1942,7 +2117,8 @@ def nn4(names=None, lam: float = 300.0, H: int = 32, ep: int = 60, seeds: int = 
 
 
 REPORT4_EST = (("EKF alone", "truth4_score_fuse_300ms.json", "earth"), ("camera replay, 0.3 s", "truth4_score_fuse_300ms.json", "fused"),
-               ("live tracker, 0.3 s", "truth4_score_live_300ms.json", "fused"), ("camera-off MLP", "truth4_score_nn4.json", "mlp"))
+               ("live tracker, 0.3 s", "truth4_score_live_300ms.json", "fused"), ("raw OF alone", "truth4_score_nn4.json", "rawof"),
+               ("camera-off MLP", "truth4_score_nn4.json", "mlp"))
 
 
 def table4() -> str:
@@ -2067,7 +2243,8 @@ def main(argv=None):
     r4 = sub.add_parser("truth4", help="R4 guard-ring truth for one flight: logs/vofa/<name> + logs/video_truth/<name>")
     r4.add_argument("name"); r4.add_argument("--cam", default="docs/video-truth/cam_r4_lenswave_2026-10-11.json")
     r4.add_argument("--refine", type=float, default=2.0)
-    r4.add_argument("--stem", default="", help="telemetry stem (default logs/vofa/<name>; fusion sessions: logs/<name>)")
+    r4.add_argument("--stem", default="", help="telemetry stem (default logs/vofa/<name>; fusion sessions: logs/<name>; campaign "
+                    "sessions: logs/campaigns/<campaign>_<stamp>, the dir or its telemetry.csv)")
     r4.add_argument("--floor", default="", help="video dir whose aruco.npz gives the floor (fusion: r5_marks_1)")
     r4.add_argument("--coral-step", type=int, default=2, help="track every Nth frame (2 = 15 Hz at 30 fps)")
     r4.add_argument("--fixes", action="store_true", help="sync on the tracker fixes.csv in the video dir (fusion sessions)")
@@ -2156,7 +2333,7 @@ def main(argv=None):
         r = nn4(a.names or None, a.lam, a.hidden, a.epochs, a.seeds)
         print(f"pool {len(r['pool'])} flights, {r['features']} features, params {r['params']}, MACs/step {r['macs_per_step']}")
         for n, f in r["flights"].items():
-            print(f"{n:30s} {'pool' if f['in_pool'] else 'HELD'} sign {f['sign']:+d} corr {f['corr']:.2f}@{f['corr_deg']:+.0f} r2 "
+            print(f"{n:30s} {'pool' if f['in_pool'] else 'HELD'} ext {f['ext_pos_on']} sign {f['sign']:+d} corr {f['corr']:.2f}@{f['corr_deg']:+.0f} r2 "
                   + "/".join(f"{f['vel_r2'][k]:+.2f}" for k in ("ridge", "mlp")) + " | " + " ".join(
                       f"{k} {e['rms_cm']:5.1f}/{e['drift60s_p90_cm'] or float('nan'):5.1f}" for k, e in f["est"].items()))
     elif a.cmd == "handsoff4":

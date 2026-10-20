@@ -844,9 +844,11 @@ class FakeDrone:
 
             if (self._prim_state == PrimState.SETTLE and self._prim_land_after_return
                     and self._prim_return_t > self.params.return_timeout_s):
+                # out of time: descend aimed at the pad, the setpoint the vehicle holds (froze where it was before
+                # 2026-10-19)
                 self._prim_state = PrimState.DESCEND
-                self._prim_x_sp = self._x if math.isfinite(self._x) else self._prim_x_sp
-                self._prim_y_sp = self._y if math.isfinite(self._y) else self._prim_y_sp
+                self._prim_x_sp = 0.0
+                self._prim_y_sp = 0.0
                 self._prim_descend_frozen = 1
                 out_x_sp = self._prim_x_sp
                 out_y_sp = self._prim_y_sp

@@ -30,10 +30,24 @@ MEMORY_MAX_ROWS = 10_000
 # Batch size/age for telemetry and raw-frame commits (see SessionStore.__init__).
 COMMIT_EVERY = 50
 COMMIT_AFTER_S = 0.1
+# How long SessionStore.flush() waits for the writer thread by default.
+FLUSH_TIMEOUT_S = 2.0
+# Rows waiting for the writer; past this append_* waits for it (up to
+# FLUSH_TIMEOUT_S) instead of growing memory. Live telemetry is a few hundred
+# rows/s, so only a writer stalled for many seconds or a replay flood gets here.
+MAX_QUEUED_ROWS = 5_000
 
 
 class SessionStore:
-    """Thread-safe SQLite store for one or more ground-station sessions."""
+    """Thread-safe SQLite store for one or more ground-station sessions.
+
+    Telemetry and raw-frame rows are queued and inserted by one background
+    writer thread, so ``append_telemetry``/``append_raw_frame`` return in
+    microseconds and never wait on the store lock. Reads (``iter_records``)
+    and ``close()`` flush the queue first; other writes stay synchronous.
+    """
+
+    _STOP = object()
 
     def __init__(self, path: str | Path = ":memory:",
                  max_rows: int | None = None) -> None:
@@ -58,6 +72,17 @@ class SessionStore:
         self._db.execute("PRAGMA synchronous=NORMAL")
         self._db.execute("PRAGMA foreign_keys=ON")
         self._init_schema()
+        # The ingest thread used to insert, prune and commit under the lock
+        # that paged reads also hold: 0.5-1.3 s ingest lag and stale_telemetry
+        # aborts (z1, mem1, 1017-E1). It now only queues; the writer thread
+        # (started on the first append) does the SQL.
+        self._queue: queue.SimpleQueue = queue.SimpleQueue()
+        self._pending = 0          # rows queued but not yet inserted
+        self._drained = threading.Condition()
+        self._writer: threading.Thread | None = None
+        self._closed = False
+        self.write_errors = 0      # rows the writer could not insert
+        self.last_write_error: str | None = None
 
     def _init_schema(self) -> None:
         self._db.executescript(
@@ -123,29 +148,89 @@ class SessionStore:
 
     def append_telemetry(self, session_id: str, stream_id: int, sequence: int,
                          values: dict[str, Any], source_time_ms: int | None = None,
-                         time_ns: int | None = None) -> int:
-        with self._lock:
-            cur = self._db.execute(
-                """INSERT INTO telemetry(session_id,time_ns,stream_id,sequence,
-                   source_time_ms,values_json) VALUES(?,?,?,?,?,?)""",
-                (session_id, time_ns or time.time_ns(), stream_id, sequence,
-                 source_time_ms, json.dumps(values, sort_keys=True,
-                                            separators=(",", ":"))),
-            )
-            self._prune("telemetry", cur.lastrowid)
-            self._commit_soon()
-            return int(cur.lastrowid)
+                         time_ns: int | None = None) -> None:
+        """Queue one telemetry row for the writer thread and return at once."""
+        self._enqueue(
+            "telemetry",
+            """INSERT INTO telemetry(session_id,time_ns,stream_id,sequence,
+               source_time_ms,values_json) VALUES(?,?,?,?,?,?)""",
+            (session_id, time_ns or time.time_ns(), stream_id, sequence,
+             source_time_ms, json.dumps(values, sort_keys=True,
+                                        separators=(",", ":"))),
+        )
 
     def append_raw_frame(self, session_id: str, direction: str, data: bytes,
-                         time_ns: int | None = None) -> int:
-        with self._lock:
-            cur = self._db.execute(
-                "INSERT INTO raw_frames(session_id,time_ns,direction,data) VALUES(?,?,?,?)",
-                (session_id, time_ns or time.time_ns(), direction, sqlite3.Binary(data)),
-            )
-            self._prune("raw_frames", cur.lastrowid)
-            self._commit_soon()
-            return int(cur.lastrowid)
+                         time_ns: int | None = None) -> None:
+        """Queue one raw frame for the writer thread and return at once."""
+        self._enqueue(
+            "raw_frames",
+            "INSERT INTO raw_frames(session_id,time_ns,direction,data) VALUES(?,?,?,?)",
+            (session_id, time_ns or time.time_ns(), direction,
+             sqlite3.Binary(bytes(data))),
+        )
+
+    def _enqueue(self, table: str, sql: str, params: tuple[Any, ...]) -> None:
+        with self._drained:
+            if self._closed:
+                raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
+            if self._writer is None:
+                self._writer = threading.Thread(
+                    target=self._write_loop, name="session-store-writer", daemon=True)
+                self._writer.start()
+            if self._pending >= MAX_QUEUED_ROWS:
+                self._drained.wait_for(lambda: self._pending < MAX_QUEUED_ROWS,
+                                       FLUSH_TIMEOUT_S)
+            self._pending += 1
+            self._queue.put((table, sql, params))
+
+    def _write_loop(self) -> None:
+        """Insert queued rows in bursts of up to COMMIT_EVERY, one lock hold each."""
+        while True:
+            try:
+                item = self._queue.get(
+                    timeout=COMMIT_AFTER_S if self._uncommitted else None)
+            except queue.Empty:
+                with self._lock:   # the stream went quiet: commit the tail
+                    if self._uncommitted:
+                        self._commit()
+                continue
+            batch = [item]
+            while len(batch) < COMMIT_EVERY:
+                try:
+                    batch.append(self._queue.get_nowait())
+                except queue.Empty:
+                    break
+            rows = [it for it in batch if it is not self._STOP]
+            try:
+                with self._lock:
+                    for table, sql, params in rows:
+                        try:
+                            cur = self._db.execute(sql, params)
+                            self._prune(table, cur.lastrowid)
+                            self._commit_soon()
+                        except Exception as exc:   # keep the writer alive
+                            self.write_errors += 1
+                            self.last_write_error = f"{table}: {exc}"
+            finally:
+                with self._drained:
+                    self._pending -= len(rows)
+                    self._drained.notify_all()
+            if len(rows) < len(batch):
+                return
+
+    def flush(self, timeout: float = FLUSH_TIMEOUT_S) -> bool:
+        """Wait until every queued row is inserted, then commit.
+
+        Returns False if rows are still queued after ``timeout`` seconds.
+        Never call it while holding ``self._lock``: the writer needs it.
+        """
+        with self._drained:
+            done = self._drained.wait_for(lambda: self._pending == 0, timeout)
+        if done:
+            with self._lock:
+                if self._uncommitted:
+                    self._commit()
+        return done
 
     def _commit(self) -> None:
         """Commit now, pending telemetry/raw rows included (caller holds the lock)."""
@@ -184,7 +269,9 @@ class SessionStore:
 
         ``limit`` caps the row count and is pushed into SQL, so a long
         session is never materialised in full; ``None`` means every row.
+        Rows appended before the call are included (the queue is flushed).
         """
+        self.flush()
         sql = """SELECT time_ns,id,'event' AS type,kind,payload_json,NULL AS stream_id,
                       NULL AS sequence,NULL AS source_time_ms,NULL AS values_json
                  FROM events WHERE session_id=?
@@ -210,6 +297,15 @@ class SessionStore:
             yield item
 
     def close(self) -> None:
+        """Flush queued rows, stop the writer thread, commit and close."""
+        self.flush()
+        with self._drained:
+            self._closed = True
+            writer, self._writer = self._writer, None
+            if writer is not None:
+                self._queue.put(self._STOP)
+        if writer is not None:
+            writer.join(timeout=FLUSH_TIMEOUT_S)
         with self._lock:
             self._commit()
             self._db.close()

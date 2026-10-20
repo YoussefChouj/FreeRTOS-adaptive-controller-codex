@@ -125,7 +125,10 @@ class CoralTracker:
     `scenery` (coral with the pad clear: vt.coral_static of the floor scan's video, frame-sized) splits the keep disc: a
     pixel static at the start that is also scenery is learned static there too. Lab 10-18: the fire station printed on
     the mat next to the pad sat inside the keep disc and the ROI, pulled every ground dot ~55 px off the drone, and the
-    pad origin frozen from those dots turned it into a steady ~30 cm fix offset in flight."""
+    pad origin frozen from those dots turned it into a steady ~30 cm fix offset in flight.
+    While the start frames are learned the scenery masks the ROI too, and `learned` flips once they are done (the ROI is
+    then re-centred on the seed, keep_r wide). Lab 10-19: before that the print pulled the first ~5 s of dots onto a
+    guard corner, the ROI stayed there and the trail kept a line from the corner to the drone."""
 
     def __init__(self, seed_uv, static=None, roi: float = 140.0, min_px: int = 40,   # track_coral defaults
                  learn_n: int = 0, learn_every: int = 5, frac: float = 0.7, grow_px: int = 7,
@@ -136,7 +139,7 @@ class CoralTracker:
         self.seed0, self.learn_n, self.learn_every, self.frac, self.grow = self.c.copy(), learn_n, learn_every, frac, grow_px
         self.keep_r = 1.3 * self.roi if keep_r is None else float(keep_r)   # r6_f4 pad: drone coral to ~170 px of 1920
         self.zoom, self.land_zoom, self.land_z_m, self.active_zoom = float(zoom), float(land_zoom), float(land_z_m), 1.0
-        self.last_s, self.scenery = {}, scenery
+        self.last_s, self.scenery, self.learned = {}, scenery, False
         self._acc, self._k, self._i = None, 0, 0
 
     def _learn(self, frame_bgr) -> None:
@@ -160,7 +163,8 @@ class CoralTracker:
         st[keep] = 0
         learned = cv2.dilate(st, np.ones((self.grow, self.grow), np.uint8)) > 0
         self.static = learned if self.static is None else self.static | learned
-        self.learn_n, self._acc = 0, None
+        self.learn_n, self._acc, self.learned = 0, None, True
+        self.c, self.r = self.seed0.copy(), self.keep_r   # the drone is on the pad: drop a ROI the scenery dragged off
         print(f"coral static learned: {int(learned.sum())} px from {self._k} frames"
               + (f" ({kept} px near the pad kept as floor-scan scenery)" if self.scenery is not None else ""), flush=True)
 
@@ -182,8 +186,11 @@ class CoralTracker:
             t1 = time.perf_counter()
             self.last_s["crop"] = t1 - t0
             m = vt.coral_mask(cv2.cvtColor(crop, cv2.COLOR_BGR2HSV))
-            if self.static is not None:
-                st_crop = self.static[v0:v1, u0:u1]
+            st_crop = None if self.static is None else self.static[v0:v1, u0:u1]
+            if self.learn_n and self.scenery is not None and self.scenery.shape == (H, W):   # start frames: no static yet
+                sc = self.scenery[v0:v1, u0:u1]
+                st_crop = sc if st_crop is None else st_crop | sc
+            if st_crop is not None:
                 if z_eff > 1.01:
                     st_crop = cv2.resize(st_crop.astype(np.uint8), (m.shape[1], m.shape[0]),
                                          interpolation=cv2.INTER_NEAREST) > 0
@@ -785,7 +792,7 @@ class Preview:
         elif k == ord("a") and self.xy is not None:
             self.anchor, self.max_d = (now, *self.xy), 0.0
         elif k == ord("c"):
-            self.trail, self.uvs, self.z_max, self._center = [], [], 0.0, None
+            self.clear_trail()
         elif k == ord("v"):
             self.view_idx = (self.view_idx + 1) % len(self.VIEWS)
         elif k == ord("z"):
@@ -794,6 +801,10 @@ class Preview:
             self.full = not self.full
             cv2.setWindowProperty(self.title, cv2.WND_PROP_FULLSCREEN,
                                   cv2.WINDOW_FULLSCREEN if self.full else cv2.WINDOW_NORMAL)
+
+    def clear_trail(self) -> None:
+        """Drop both trails (key c; run_source when the coral static is learned and at the first take-off)."""
+        self.trail, self.uvs, self.z_max, self._center = [], [], 0.0, None
 
     def __call__(self, now: float, frame, uv, xy, lines, z: float | None = None, z_eff: float = 1.0) -> None:
         if z is not None and np.isfinite(z):
@@ -864,7 +875,7 @@ class Preview:
         if self.writer is not None:
             self.writer.release()
             print(f"show: recorded {self.rec}", flush=True)
-        if not self.closed:
+        if not self.closed and not self.headless:          # headless: no window to destroy (cv2 raises)
             self.cv2.destroyWindow(self.title)
 
 
@@ -1150,7 +1161,9 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
     (t_read, t_fix, frame bytes) per fix. `pad` makes the fixes pad-relative (`ground()`: telemetry on-ground flag,
     None = first detections); a NaN height (stale telemetry) gives no fix. `show` draws each frame (throttled).
     `auto` (--align auto): mode 1 is sent until it locks, fed each fix taken above `air_m` with a fresh `earth()`
-    (EKF cm); on lock the mode frame goes out at once."""
+    (EKF cm); on lock the mode frame goes out at once. When the ring learns its static on the ground, the pad origin
+    (not yet frozen) restarts and `show` drops its trails; the first take-off drops them again (lab 10-19: a line
+    from the pre-learning guard corner to the drone stayed in the trail and tracker.mp4)."""
     cv2 = vt._cv2()
     win = str(source).startswith("window:")
     cap = WindowSource(str(source)[7:], size=size) if win else cv2.VideoCapture(int(source) if str(source).isdigit() else source)
@@ -1175,6 +1188,7 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
     hello()
     t_hello = clock()
     nf_seen, t_nf, t_nf_warn = -1, 0.0, -1e9
+    learned, took_off = bool(getattr(ring, "learned", False)), False
     while True:
         if stop_file and n % 10 == 0 and Path(stop_file).exists():
             break
@@ -1203,8 +1217,21 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
             if ring is not None and hasattr(ring, "recentre") and gate.last[2] is not None:
                 ring.recentre(gate.last[2])
             xy = None
+        on_ground = ground() if ground else None
+        if not learned and getattr(ring, "learned", False):
+            learned = True
+            if on_ground is not False:
+                if pad is not None and not pad.frozen:
+                    pad.hist, pad.xy = [], None           # the origin from the static-learned dots only
+                if show is not None:
+                    show.clear_trail()
+                print(f"coral static learned at t {t_read:.1f} s: pad origin and trail restarted", flush=True)
+        if on_ground is False and not took_off:
+            took_off = True
+            if show is not None:
+                show.clear_trail()
         if xy is not None and pad is not None:
-            xy = pad.apply(xy, ground() if ground else None)
+            xy = pad.apply(xy, on_ground)
         t_rd, t_det = t_rd + (p1 - p0), t_det + (time.perf_counter() - p1)
         if sched.n_sent != nf_seen:                       # the 2026-10-15 window: a perfect track, 0 fixes sent
             nf_seen, t_nf = sched.n_sent, t_read

@@ -884,8 +884,10 @@ def wait_txn(base, txid, timeout_s=2.0):
     """Final lifecycle of one /commands transaction from the 8081 action journal: 'applied', 'rejected', ... .
 
     The firmware answers ACK, then APPLIED or REJECTED (TASK/send_data.c). 'applied'/'verified' and the failures
-    return at once; an action still 'acknowledged' ACK_GRACE_S after its ACK (or at the deadline) returns 'acknowledged' (an 8081 started before
-    the journal kept ACKed actions open never shows the final outcome); nothing at all returns 'timeout'."""
+    return at once; an action still 'acknowledged' ACK_GRACE_S after its ACK returns 'acknowledged' (an 8081 started before
+    the journal kept ACKed actions open never shows the final outcome); nothing at all returns 'timeout'. The first ACK
+    moves the deadline to ACK_GRACE_S after it, so an ACK late in timeout_s still waits the full grace for APPLIED
+    (10-19 1017-F1: a 12-gain write aborted on an ACK that came 0.1 s before its 2 s deadline)."""
     deadline = _clock() + timeout_s
     seen = "timeout"
     while True:
@@ -898,7 +900,7 @@ def wait_txn(base, txid, timeout_s=2.0):
             return lc
         if lc == "acknowledged" and seen != lc:
             seen = lc
-            deadline = min(deadline, _clock() + ACK_GRACE_S)
+            deadline = _clock() + ACK_GRACE_S
         if _clock() >= deadline:
             return seen
         _sleep(0.02)
@@ -1089,6 +1091,43 @@ class HttpWfbClient:
     def prog(self, idx: int, value: float) -> bool:
         return self._send_cmd(28, idx, float(value))
 
+    def var_write(self, name: str, value: float) -> bool:
+        """VAR_WRITE (CMD 0x2D) of one allowlisted row; VarWriteError when the firmware would refuse it."""
+        from ground_station.platform import wfb_var
+        return self._send_cmd(wfb_var.CMD_VAR_WRITE, wfb_var.check(name, value).id, float(value))
+
+
+def ground_exp_id(launch_path, flight=0):
+    """The exp_id the takeoff `set` of the campaign's flight `flight` (0-based) writes on the ground, None when it
+    writes none. Same queue as run_campaign: each experiment `repeats` times, in order."""
+    from ground_station.service.campaign_schema import load_campaign
+    queue = [e for e in load_campaign(launch_path).experiments for _ in range(e.repeats)]
+    sc = getattr(queue[flight % len(queue)], "scenario", None) if queue else None
+    for st in getattr(sc, "steps", None) or ():
+        if st.kind == "takeoff":
+            return next((float(v) for name, v in st.args.get("set", ()) if name == "exp_id"), None)
+    return None
+
+
+def preapply_exp_id(base, launch_path, flight=0, client=None):
+    """Write the flight's exp_id while the drone is still disarmed, before wait_for_arm: Exp_Poll latches an exp row
+    only on the ground, and firmware older than Keil_PreTakeoff refuses it once RC-armed on the pad, so the runner's
+    takeoff `set exp_id` left exp_active one flight behind (10-19 1017-E1..E4: 255 -> 4 -> 5 -> 6). The runner still
+    sends it and checks exp_active. Not reset after the flight: VAR_WRITE refuses 255 (row range 0-7), and the row's
+    knobs (kp/vp/lim/xy) stay written anyway. Returns the value written, None when none or on failure."""
+    try:
+        v = ground_exp_id(launch_path, flight)
+        if v is None:
+            return None
+        ok = (client or HttpWfbClient(base)).var_write("exp_id", v)
+    except Exception as e:
+        print(f"preapply exp_id: {e}", flush=True)
+        return None
+    events.log("exp_preapply", exp_id=int(v), ok=ok)
+    print(f"exp_id {int(v)} written on the ground before the arm" + ("." if ok else ": NOT applied (the runner retries)."),
+          flush=True)
+    return v if ok else None
+
 
 def upload_preload(base, launch_path=None, runner=None):
     """Run trajectory/program upload on the ground BEFORE wait_for_arm() (Fix 2)."""
@@ -1270,11 +1309,40 @@ def camera_landing(root=Path("logs/video_truth"), now=None, n=15, fresh_s=10.0):
     return med[0], med[1], d.name, len(xy)
 
 
+PRESET_TRAJ_CMPS = 2.0   # a HOVER x/y target moving faster (cm/s) is a Keil preset trajectory (scorecard PRESET_TRAJ_MPS)
+PRESET_TRAJ_MIN_S = 1.0  # target motion shorter than this (a hold setpoint step) is not one (scorecard PRESET_TRAJ_MIN_S)
+
+
+def _phases(samples):
+    """Phase per sample: the primitive name, but TRAJ while a trajectory executes (traj_state EXECUTING) or a Keil
+    preset (`preset figure8`) moves the x/y target from AutoflyTask while the primitive stays HOVER (10-19)."""
+    def name(s):
+        if _state_name(TRAJ_NAMES, s, "g_wfb_status.traj_state") == "EXECUTING":
+            return "TRAJ"
+        return _state_name(PRIM_NAMES, s, "g_wfb_status.prim_state")
+    out = [name(s) for s in samples]
+    moving = [False] * len(samples)
+    for i in range(1, len(samples)):
+        a, b = samples[i - 1], samples[i]
+        dt = b.get("t", 0.0) - a.get("t", 0.0)
+        d = [(b.get(f"Ctrler.{pid}.Des", math.nan) - a.get(f"Ctrler.{pid}.Des", math.nan)) * scale * 100
+             for _, pid, scale in AXES[:2]]
+        moving[i] = out[i - 1] == out[i] == "HOVER" and dt > 0 and math.hypot(*d) / dt > PRESET_TRAJ_CMPS
+    i = 0
+    while i < len(samples):
+        j = i
+        while j < len(samples) and moving[j]:
+            j += 1
+        if j > i and samples[j - 1].get("t", 0.0) - samples[i].get("t", 0.0) >= PRESET_TRAJ_MIN_S:
+            out[i:j] = ["TRAJ"] * (j - i)
+        i = j + 1
+    return out
+
+
 def debrief_lines(samples, st, folder, cam=None):
     """Five lines: result, HOVER and TRAJ error (RMS/max per axis in cm, from the live samples), landing offset from
     the takeoff point, where the files are. `cam` (camera_landing()) adds the camera's landing offset from the pad."""
-    def prim(s):
-        return _state_name(PRIM_NAMES, s, "g_wfb_status.prim_state")
+    phases = _phases(samples)
     air = max((s.get("g_wfb_status.airborne_t", 0.0) for s in samples), default=0.0)
     lines = [f"{st.get('status')} {st.get('reason') or ''}".strip()
              + f"  air {air:.1f} s  {len(st.get('flights') or [])} flight(s)  {len(samples)} live samples"]
@@ -1282,7 +1350,7 @@ def debrief_lines(samples, st, folder, cam=None):
     lines += [f"ABORTED L{f.get('abort_level') or '?'} {f.get('experiment') or 'flight'}: {f['abort_reason']} (the safety "
               "monitor landed it; the steps after that point never ran)" for f in st.get("flights") or [] if f.get("abort_reason")]
     for phase in ("HOVER", "TRAJ"):
-        part = [s for s in samples if prim(s) == phase]
+        part = [s for s, p in zip(samples, phases) if p == phase]
         errs = {ax: _err_cm(part, ax) for ax in "xyz"}
         if not any(errs.values()):
             lines.append(f"{phase:<6} no samples")
@@ -1290,7 +1358,7 @@ def debrief_lines(samples, st, folder, cam=None):
         rms = "/".join(f"{math.sqrt(sum(e * e for e in v) / len(v)):.0f}" if v else "-" for v in errs.values())
         mx = "/".join(f"{max(abs(e) for e in v):.0f}" if v else "-" for v in errs.values())
         lines.append(f"{phase:<6} x/y/z error cm  rms {rms}  max {mx}  ({part[-1]['t'] - part[0]['t']:.0f} s)")
-    pad = next((s for s in samples if prim(s) in ("IDLE", "CLIMB")), None)
+    pad = next((s for s, p in zip(samples, phases) if p in ("IDLE", "CLIMB")), None)
     end = samples[-1] if samples else None
     max_z = max((s.get("Ctrler.Z_posPID.FB", 0.0) for s in samples), default=0.0)
     if air <= 0 or max_z < 0.25:
@@ -1412,8 +1480,11 @@ def fly_one(base, launch, src, name, pack, post_takeoff_gains=None):
     cam = camera_landing()
     lines = debrief_lines(samples, st, rel(folder), cam=cam)
     print("\n".join(lines))
+    abort = next((f.get("abort_reason") for f in st.get("flights") or [] if f.get("abort_reason")), None)
+    air = max((s.get("g_wfb_status.airborne_t", 0.0) for s in samples), default=0.0)
     events.log("debrief", ms=round((_clock() - t_land) * 1000), folder=rel(folder), status=st.get("status"),
-               phase=st.get("phase"), samples=len(samples))
+               phase=st.get("phase"), samples=len(samples), aborted=abort is not None, abort_reason=abort,
+               air_s=round(air, 1))
     (folder / "debrief.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
     (folder / "outputs.txt").write_text(f"{st.get('outputs_dir') or ''}\n", encoding="utf-8")
     write_samples(folder / "live_5hz.csv", samples)
@@ -1433,6 +1504,7 @@ def fly_loop(base, arg, pack, rate=None, run=None, once=False, yes=False,
 
     print("Arming confirms the checklist:\n" + "\n".join(f"  [ ] {c}" for c in CHECKLIST))
     held = None   # the runner waits for the next flight of a multi-flight campaign: (launch, src, name, its pack)
+    next_i = 0    # campaign flight (0-based) the held flight is
     while True:
         if held:
             launch, src, name, go_pack = held
@@ -1472,6 +1544,7 @@ def fly_loop(base, arg, pack, rate=None, run=None, once=False, yes=False,
                   flush=True)
         # Fix 2: Trajectory preload on the ground BEFORE wait_for_arm
         upload_preload(base, str(launch))
+        preapply_exp_id(base, str(launch), flight=next_i if held else 0)
         t_wait = _clock()
         r = wait_for_arm(base, str(launch), go_pack, preflight=not held)
         events.log("arm_wait", result=r, campaign=name, pack=go_pack, s=round(_clock() - t_wait, 1))
@@ -1491,6 +1564,7 @@ def fly_loop(base, arg, pack, rate=None, run=None, once=False, yes=False,
                             "--run", run], cwd=ROOT)
         waiting = st.get("status") == "waiting_for_go" and st.get("waiting_pack")
         held = (launch, src, name, st["waiting_pack"]) if waiting else None
+        next_i = len(st.get("flights") or [])   # flights flown so far: the held one is the next
         if once and not held:
             return 0
         print("Disarm by RC; " + ("the next flight of this campaign" if held else f"then {rel(src)} is read again")

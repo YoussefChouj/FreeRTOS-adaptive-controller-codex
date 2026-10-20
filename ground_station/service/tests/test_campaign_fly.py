@@ -1011,3 +1011,129 @@ def test_watch_warns_when_post_takeoff_gains_fail(monkeypatch):
         close = staticmethod(lambda: None)
     campaign_fly.watch("http://h", term=T(), post_takeoff_gains="c3")
     assert any(s.startswith("POST-TAKEOFF GAINS FAILED (c3)") for s in said)
+
+
+# --- 10-19 exp-gains: late ACK grace, exp_id on the ground, preset figure-8 as TRAJ, abort in the debrief event ------
+
+def _journal(monkeypatch, lifecycle):
+    """Fake clock + /api/actions answering lifecycle(t) for transaction 7; returns the clock cell."""
+    t = [0.0]
+    monkeypatch.setattr(campaign_fly, "_clock", lambda: t[0])
+    monkeypatch.setattr(campaign_fly, "_sleep", lambda s: t.__setitem__(0, t[0] + s))
+    monkeypatch.setattr(campaign_fly, "call", lambda base, route, body=None, timeout=10:
+                        (200, {"actions": [{"transaction_id": 7, "lifecycle": lifecycle(t[0])}]}))
+    return t
+
+
+def test_wait_txn_late_ack_waits_the_full_grace_for_applied(monkeypatch):
+    """10-19 1017-F1: ACK 0.1 s before the 2 s deadline, APPLIED 1.6 s later: 'applied', not 'acknowledged'."""
+    t = _journal(monkeypatch, lambda t: "submitted" if t < 1.9 else "acknowledged" if t < 3.5 else "applied")
+    assert campaign_fly.wait_txn("http://h", 7, timeout_s=2.0) == "applied" and t[0] >= 3.5
+    t = _journal(monkeypatch, lambda t: "submitted" if t < 0.5 else "acknowledged")
+    assert campaign_fly.wait_txn("http://h", 7, timeout_s=2.0) == "acknowledged"
+    assert 0.5 + campaign_fly.ACK_GRACE_S <= t[0] < 0.6 + campaign_fly.ACK_GRACE_S   # grace counts from the ACK
+    t = _journal(monkeypatch, lambda t: "submitted")
+    assert campaign_fly.wait_txn("http://h", 7, timeout_s=2.0) == "timeout" and t[0] < 2.1
+
+
+EXP_YAML = YAML.replace("max_flights: 1", "max_flights: 3").replace(
+    "{takeoff: {z: 0.5}}", "{takeoff: {z: 0.5, set: {exp_id: 4}}}").replace("repeats: 1", "repeats: 2").replace(
+    "abort: {}\n", """\
+  - name: f02
+    scenario: {scenario: hover, steps: [{takeoff: {z: 0.5, set: {exp_id: 5}}}, {hold: {s: 5}}, land]}
+    capture: campaign
+    repeats: 1
+abort: {}
+""")
+
+
+def test_ground_exp_id_follows_the_runner_queue(tmp_path):
+    path = tmp_path / "c.yaml"
+    path.write_text(EXP_YAML, encoding="utf-8")
+    assert [campaign_fly.ground_exp_id(path, i) for i in range(4)] == [4.0, 4.0, 5.0, 4.0]   # f01 x2, f02, wrap
+    plain = tmp_path / "p.yaml"
+    plain.write_text(YAML, encoding="utf-8")
+    assert campaign_fly.ground_exp_id(plain) is None
+
+
+def test_preapply_exp_id_writes_var_write_on_the_ground_and_never_255(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "c.yaml"
+    path.write_text(EXP_YAML, encoding="utf-8")
+    sent, logged = [], []
+    monkeypatch.setattr(campaign_fly.events, "log", lambda ev, **kw: logged.append((ev, kw)))
+
+    def fake_call(base, route, body=None, timeout=10):
+        if route == "/commands":
+            sent.append(body)
+            return 202, {"transaction_id": 9}
+        assert route == "/api/actions", route
+        return 200, {"actions": [{"transaction_id": 9, "lifecycle": "applied"}]}
+
+    monkeypatch.setattr(campaign_fly, "call", fake_call)
+    assert campaign_fly.preapply_exp_id("http://h", path, flight=2) == 5.0
+    assert sent == [{"command_id": 45, "index": 50, "value": 5.0}]   # VAR_WRITE row exp_id
+    assert logged == [("exp_preapply", {"exp_id": 5, "ok": True})]
+    assert "exp_id 5 written on the ground before the arm." in capsys.readouterr().out
+    plain = tmp_path / "p.yaml"
+    plain.write_text(YAML, encoding="utf-8")
+    assert campaign_fly.preapply_exp_id("http://h", plain) is None and len(sent) == 1
+    with pytest.raises(Exception):   # the firmware refuses 255 (row 0-7): no post-flight reset can exist
+        campaign_fly.HttpWfbClient("http://h").var_write("exp_id", 255)
+    assert all(b["value"] != 255 for b in sent)
+
+
+def test_fly_loop_preapplies_exp_id_before_the_arm_wait(tmp_path, monkeypatch):
+    launch = tmp_path / "c.yaml"
+    launch.write_text(EXP_YAML, encoding="utf-8")
+    rig = Flight(monkeypatch)
+    seen = []
+    monkeypatch.setattr(campaign_fly, "resolve_campaign", lambda arg, pack, rate=None: (launch, launch))
+    monkeypatch.setattr(campaign_fly, "FLIGHTS_DIR", tmp_path / "flights")
+    monkeypatch.setattr(campaign_fly, "preapply_exp_id",
+                        lambda base, path, flight=0, client=None: seen.append((path, flight, len(rig.calls))))
+    assert campaign_fly.fly_loop("http://h", "c", "type2", once=True) == 0
+    assert seen == [(str(launch), 0, 0)]   # before the first /api/campaign/vitals of wait_for_arm
+
+
+def _figure8(lag=3.0):
+    """IDLE, 1 s HOVER at the start point, 2 s with the x/y target moving 5 cm/s (a Keil preset: prim stays HOVER),
+    1 s HOVER at the end, IDLE: 5 Hz like the live samples."""
+    out = [_sample(0.0, 0, 0.0, 0.0, 0.0)]
+    for k in range(1, 21):
+        t = k * 0.2
+        des = 0.0 if t <= 1.0 else min(t - 1.0, 2.0) * 5.0
+        moving = 1.0 < t <= 3.0
+        s = _sample(t, 2, des + (lag if moving else 0.0), 0.0, 0.5, dx=lag if moving else 0.0, air=t)
+        out.append(s)
+    out.append(_sample(4.2, 0, 10.0, 0.0, 0.0, air=4.2))
+    return out
+
+
+def test_debrief_lines_counts_a_preset_figure8_as_traj():
+    lines = campaign_fly.debrief_lines(_figure8(), {"status": "done", "flights": [{}]}, "f/01")
+    hover, traj = lines[1], lines[2]
+    assert hover.startswith("HOVER  x/y/z error cm  rms 0/0/0") and traj.startswith("TRAJ   x/y/z error cm  rms 3/0/0")
+    assert campaign_fly._phases(_figure8())[:6] == ["IDLE"] + ["HOVER"] * 5   # the CLIMB->HOVER target step is not TRAJ
+    step = [_sample(k * 0.2, 2, 0.0, 0.0, 0.5, dx=3.0 if k >= 8 else 0.0) for k in range(20)]
+    assert set(campaign_fly._phases(step)) == {"HOVER"}   # a 3 cm hold step (15 cm/s for one sample) is not one
+
+
+def test_fly_one_debrief_event_says_the_abort_and_air_time(tmp_path, monkeypatch):
+    class Aborted(Flight):
+        def call(self, base, route, body=None, timeout=10):
+            code, res = super().call(base, route, body, timeout)
+            if route == "/api/campaign/state":
+                res["flights"] = [{"abort_reason": "pos_err 0.62 m > 0.50 m", "abort_level": 2}]
+            return code, res
+
+    rig = Aborted(monkeypatch)
+    rig.t = 2.0
+    logged = []
+    monkeypatch.setattr(campaign_fly.events, "log", lambda ev, **kw: logged.append((ev, kw)))
+    monkeypatch.setattr(campaign_fly, "FLIGHTS_DIR", tmp_path / "flights")
+    monkeypatch.setattr(campaign_fly, "camera_landing", lambda: None)
+    launch = tmp_path / "c.yaml"
+    launch.write_text(YAML, encoding="utf-8")
+    campaign_fly.fly_one("http://h", launch, launch, "t-carry", "type2")
+    (kw,) = [kw for ev, kw in logged if ev == "debrief"]
+    assert kw["aborted"] is True and kw["abort_reason"] == "pos_err 0.62 m > 0.50 m" and kw["air_s"] == 0.0

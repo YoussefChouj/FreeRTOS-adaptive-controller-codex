@@ -25,8 +25,9 @@ Before trusting a table, run it locally on the real 10-18 and 10-19 days and com
   has no folder the line says `no log folder, nothing to score`. If the scorer throws, the line says
   `scorecard failed (...)` and the day goes on.
 - **By hand, for a whole day.** `python -m ground_station.analysis.scorecard <date>` scores every folder under
-  `logs/flights/<date>/`. It matches each folder to the day file's entries by `.fly` name, in flight order (a
-  re-fly shifts the later ids). Add `--compare` to also write `docs/lab/scorecard-compare.md` and `.csv` from
+  `logs/flights/<date>/`. A folder that `logs/lab/<date>/labday_state.json` names takes that flight's id and
+  camera. Any other folder is matched by `.fly` name, in flight order, to the plan entries no folder has claimed.
+  The plan is the day file plus the flights carried over from earlier days (`1017-E1`, as `labday` loads it). Add `--compare` to also write `docs/lab/scorecard-compare.md` and `.csv` from
   every day that has a report.
 
 ## Outputs
@@ -50,7 +51,10 @@ All of these come from the flight folder `logs/flights/<date>/<NN>_<campaign>/`:
 - The 8081 service logs under `logs/service/`, for the `ingest behind` lines.
 - The camera `fixes.csv` under `logs/video_truth/<id>-<fly>/`, when the camera ran.
 
-Phases come from the telemetry `prim_state`: HOVER is the hold and TRAJ is the trajectory.
+Phases come from the telemetry `prim_state`: HOVER is the hold and TRAJ is the trajectory. A Keil preset
+(`preset figure8`) moves the x/y target while the primitive stays HOVER. So when a flight has no TRAJ rows, any
+HOVER stretch whose target moves faster than 2 cm/s for at least 1 s counts as trajectory (PROPOSED). The speed
+is measured over +-0.25 s. A single hold setpoint step is shorter than 1 s, so it stays hold.
 
 ## Metrics
 

@@ -25,6 +25,7 @@
 #include "xy_ctrl.h"        /* ADRC / LQR / MPC xy outer loops (g_xy_ctrl_kind) */
 #include "land_xy_gate.h"   /* camera pad gate for the land (g_land_xy_gate_cm) */
 #include "exp_row.h"
+#include "drift_nn_task.h"   /* g_drift_nn residual, g_drift_nn_live (shadow unless set) */
 extern volatile float g_land_xy_gate_cm;   /* defined with the xy_ctrl VARs below */
 extern volatile uint8_t g_xy_ctrl_kind;
 extern volatile uint8_t g_imu_mahony_yaw_decouple;
@@ -996,6 +997,44 @@ static void Ext_Pos_Tick(void)
 	ext_pos_stale_tick(&g_ext_pos, now_ms);
 }
 
+/* Drift NN live gate, once per tick before the position and velocity FB use it.
+ * The NN task publishes a clamped body-velocity residual (m/s, EKF x[1]/x[4] frame);
+ * it is applied only while live mode is set, the task is RUN with a fresh step and a
+ * full receptive field, the mode-2 EKF is healthy, the drone is FLYING and the camera
+ * is not in the loop (g_ext_pos_on 0 or 1: the NN must be judged against it). Any other
+ * state applies 0, i.e. the plain mode-2 EKF: the shadow default is unchanged.
+ * The edge into FLYING asks the task to clear its history (live or shadow): training
+ * sequences start at take-off with zero history, so ground samples must not fill the
+ * receptive field; live then starts after DRIFT_NN_WARM_STEPS of flight. */
+static float s_dnn_dvx, s_dnn_dvy;   /* m/s, 0 when not applied */
+static uint8_t s_dnn_was_flying;
+
+static void Dnn_LiveGate(void)
+{
+	uint32_t now_ms = (uint32_t)xTaskGetTickCount() * (uint32_t)portTICK_PERIOD_MS;
+	uint8_t flying = (uint8_t)(flight_phase == FLIGHT_PHASE_FLYING);
+	uint8_t why;
+	if (flying && !s_dnn_was_flying) g_drift_nn.reset_req = 1U;
+	s_dnn_was_flying = flying;
+	if (g_drift_nn_live == DRIFT_NN_LIVE_OFF)                         why = DRIFT_NN_WHY_OFF;
+	else if (g_drift_nn.status != DRIFT_NN_ST_RUN)                    why = DRIFT_NN_WHY_STATUS;
+	else if ((uint32_t)(now_ms - g_drift_nn.step_ms) > DRIFT_NN_STALE_MS) why = DRIFT_NN_WHY_STALE;
+	else if (g_drift_nn.reset_req || g_drift_nn.steps < DRIFT_NN_WARM_STEPS) why = DRIFT_NN_WHY_WARMUP;
+	else if (g_of_bias_mode != OF_BIAS_EKF || !g_ekf_of_health)       why = DRIFT_NN_WHY_EKF;
+	else if (!flying)                                                 why = DRIFT_NN_WHY_PHASE;
+	else if (g_ext_pos_on >= 2U)                                      why = DRIFT_NN_WHY_CAMERA;
+	else                                                              why = DRIFT_NN_WHY_ON;
+	if (why == DRIFT_NN_WHY_ON) {
+		s_dnn_dvx = g_drift_nn.dvx;
+		s_dnn_dvy = g_drift_nn.dvy;
+	} else {
+		s_dnn_dvx = 0.0f;
+		s_dnn_dvy = 0.0f;
+	}
+	g_drift_nn.live_on = (uint8_t)(why == DRIFT_NN_WHY_ON);
+	g_drift_nn.live_why = why;
+}
+
 /* ---- Position integration: Modes 0/1 use raw OF, Mode 2 uses KF ----
  * FIX 2026-09-26: one ground-hold gate for all modes (mode 2 used to
  * integrate on the ground, so armed-idle drift became a takeoff step).
@@ -1029,6 +1068,9 @@ static void Of_IntegratePosition(void)
 			ekf_dy *= g_of_scale;
 			/* WP-21 A: m/s * 100 * 0.005 s = cm/tick, same units as ekf_dx/dy */
 			if (g_of_full_tilt) of_full_tilt_delta(&ekf_dx, &ekf_dy, ano_of.of2_h_f2_v * OF_HRATE_TO_CM_TICK);
+			/* Drift NN live: body residual after scale, as nn_io.corrected adds it to earth (0 unless gated on) */
+			ekf_dx += s_dnn_dvx * CM_PER_M * STAB_DT_S;
+			ekf_dy += s_dnn_dvy * CM_PER_M * STAB_DT_S;
 			ano_of.earth_x += ekf_dx * Cos_Yaw_01 + ekf_dy * Sin_Yaw_01;
 			ano_of.earth_y += ekf_dy * Cos_Yaw_01 - ekf_dx * Sin_Yaw_01;
 		}
@@ -1133,6 +1175,7 @@ static void Of_UpdateVelocityFB(void)
 	 * debiased velocity the position loop integrates (modes 0/1/2). */
 	float fb_dx = (float)ano_of.of2_dx_fix - s_of_bias_x;
 	float fb_dy = (float)ano_of.of2_dy_fix - s_of_bias_y;
+	u8 nn_vel = 0U;
 	if (g_ekf_gate.ctrl_enable && g_ekf_gate.healthy) {
 		fb_dx = g_ekf_gate.vx_cms;
 		fb_dy = g_ekf_gate.vy_cms;
@@ -1143,9 +1186,14 @@ static void Of_UpdateVelocityFB(void)
 	if (g_ekf_of_vel_fb && g_of_bias_mode == OF_BIAS_EKF && g_ekf_of_health) {
 		fb_dx = s_ekf_of.x[1] * CM_PER_M;   /* vel_x body, cm/s */
 		fb_dy = s_ekf_of.x[4] * CM_PER_M;   /* vel_y body, cm/s */
+		nn_vel = (u8)(g_drift_nn_live == DRIFT_NN_LIVE_POSVEL);
 	}
 	fb_dx *= g_of_scale;   /* true cm/s, same scale as locx/locyPID.FB */
 	fb_dy *= g_of_scale;
+	if (nn_vel) {           /* drift NN live 2: same residual as the position track (0 unless gated on) */
+		fb_dx += s_dnn_dvx * CM_PER_M;
+		fb_dy += s_dnn_dvy * CM_PER_M;
+	}
 	Ctrler.locxsPID.FB= (fb_dy) *Cos_Yaw_01 +(-fb_dx)*Sin_Yaw_01;
 	Ctrler.locysPID.FB=  (-fb_dx) * Cos_Yaw_01 - (fb_dy)*Sin_Yaw_01;
 }
@@ -1262,6 +1310,7 @@ void Update_Data(void)
 			Of_TickKf(of_ok);
 		}
 	}
+	Dnn_LiveGate();
 	Of_IntegratePosition();
 	Ext_Pos_Tick();
 
@@ -1374,6 +1423,18 @@ static uint8_t Keil_OnGround(FlightState_t state)
 	                 (flight_phase != FLIGHT_PHASE_LANDING));
 }
 
+/* Keil_OnGround, or RC-armed on the pad before the climb: GROUND_IDLE, no WFB primitive or TWC policy running
+ * and the throttle under the idle gate, so the motors sit at Set_IDLE_Motors and no controller drives them.
+ * Gates the exp row and the kp/vp/lim rows it writes. Lab 10-19: campaign_fly waits for the RC arm before it
+ * sets exp_id, so with Keil_OnGround alone exp_active trailed one flight (255 -> 4 -> 5 -> 6). */
+static uint8_t Keil_PreTakeoff(FlightState_t state)
+{
+	if (Keil_OnGround(state)) return 1U;
+	return (uint8_t)((state == FLIGHT_STATE_ARMED) && (flight_phase == FLIGHT_PHASE_GROUND_IDLE) &&
+	                 (g_wfb_status.prim_state == (float)WFB_PRIM_IDLE) && !TWC.execute &&
+	                 (RCInput_Get(RC_AXIS_THR) < THR_IDLE_MAX));
+}
+
 static void Keil_PresetPoll(FlightState_t state)
 {
 	uint8_t k, id = kp_id;
@@ -1382,7 +1443,7 @@ static void Keil_PresetPoll(FlightState_t state)
 		s_zboot_ok = 1U;
 	}
 	if (!kp_go && id == kp_active) return;
-	if (!Keil_OnGround(state)) return;
+	if (!Keil_PreTakeoff(state)) return;
 	kp_go = 0U;
 	if (id >= (uint8_t)(sizeof(s_kp) / sizeof(s_kp[0]))) { kp_id = kp_active; return; }
 	g_ekf_of1_on = s_kp[id].of1;
@@ -1421,7 +1482,7 @@ static void Limit_ModePoll(FlightState_t state)
 {
 	uint8_t id = lim_mode;
 	if (id == lim_active) return;
-	if (!Keil_OnGround(state)) return;
+	if (!Keil_PreTakeoff(state)) return;
 	if (id >= (uint8_t)(sizeof(s_lim) / sizeof(s_lim[0]))) { lim_mode = (lim_active < 3U) ? lim_active : 0U; return; }
 	gs_max_pitch_deg = s_lim[id].tilt_deg;
 	gs_max_roll_deg = s_lim[id].tilt_deg;
@@ -1557,7 +1618,7 @@ static void Keil_VariantPoll(FlightState_t state)
 {
 	uint8_t ok = 1U, id = vp_id;
 	const VariantPreset_t *r;
-	if (!Keil_OnGround(state) && mrac_flags.output_injection_on) return;
+	if (!Keil_PreTakeoff(state) && mrac_flags.output_injection_on) return;
 	if (vp_user_go) { vp_user_go = 0U; vp_id = id = VP_USER_ID; s_vp_last = 0xFFU; }
 	if (id == s_vp_last) return;
 	s_vp_last = id;
@@ -1653,7 +1714,7 @@ static void Exp_Poll(FlightState_t state)
 	knobs.lim_mode = &lim_mode;
 	knobs.mdec = &g_imu_mahony_yaw_decouple;
 
-	on_ground = Keil_OnGround(state);
+	on_ground = Keil_PreTakeoff(state);
 	res = Exp_Step(exp_id, &s_exp_last, exp_active, on_ground,
 	               s_exp, (uint8_t)(sizeof(s_exp) / sizeof(s_exp[0])),
 	               &knobs, &xyrm);
@@ -2139,9 +2200,12 @@ static void Rc_FallbackStep(void)
 	}
 }
 
-/* xy position loops, then the velocity loops with the trajectory feed-forward. Armed only. */
-static void Pos_Compute(uint8_t airborne, uint8_t land_contact)
+/* xy position loops, then the velocity loops with the trajectory feed-forward. Armed only.
+ * land_contact: touchdown, no xy lean and the integrators cleared. land_xy_hold: landing below LAND_XY_HOLD_ALT,
+ * the loops stay closed with their integrators held and the lean clamped (API/land_profile.h, 2026-10-19). */
+static void Pos_Compute(uint8_t airborne, uint8_t land_contact, uint8_t land_xy_hold)
 {
+	uint8_t hold = (uint8_t)(land_contact | land_xy_hold);
 	uint8_t active = g_traj_ff_on && airborne && TWC.execute && g_wfb_status.traj_state == (float)WFB_TRAJ_EXECUTING && g_wfb_status.prim_state == (float)WFB_PRIM_TRAJ;
 	float vx, vy, ax, ay, vff_x, vff_y;
 	uint8_t xyc_on[2];
@@ -2157,8 +2221,8 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact)
 		float sx = g_traj_ff_shift_s * vff_x, sy = g_traj_ff_shift_s * vff_y;
 		Ctrler.locxPID.Des -= sx;
 		Ctrler.locyPID.Des -= sy;
-		ComputePID_GatedHold(&Ctrler.locxPID, airborne, land_contact);
-		ComputePID_GatedHold(&Ctrler.locyPID, airborne, land_contact);
+		ComputePID_GatedHold(&Ctrler.locxPID, airborne, hold);
+		ComputePID_GatedHold(&Ctrler.locyPID, airborne, hold);
 		Ctrler.locxPID.Des += sx;
 		Ctrler.locyPID.Des += sy;
 	}
@@ -2176,8 +2240,8 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact)
 			xy_ctrl_reset();
 		}
 	}
-	xyc_on[0] = s_xyc_kind && airborne && !land_contact && Ctrler.locxsPID.Des == Ctrler.locxPID.U;
-	xyc_on[1] = s_xyc_kind && airborne && !land_contact && Ctrler.locysPID.Des == Ctrler.locyPID.U;
+	xyc_on[0] = s_xyc_kind && airborne && !hold && Ctrler.locxsPID.Des == Ctrler.locxPID.U;
+	xyc_on[1] = s_xyc_kind && airborne && !hold && Ctrler.locysPID.Des == Ctrler.locyPID.U;
 
 	{
 		Ctrler.locxsPID.Des += vx;
@@ -2186,8 +2250,8 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact)
 			Ctrler.locxsPID.Des = fmaxf(-g_vxy_des_max, fminf(g_vxy_des_max, Ctrler.locxsPID.Des + g_traj_vff_x));
 			Ctrler.locysPID.Des = fmaxf(-g_vxy_des_max, fminf(g_vxy_des_max, Ctrler.locysPID.Des + g_traj_vff_y));
 		}
-		ComputePID_GatedHold(&Ctrler.locxsPID, airborne, land_contact);
-		ComputePID_GatedHold(&Ctrler.locysPID, airborne, land_contact);
+		ComputePID_GatedHold(&Ctrler.locxsPID, airborne, hold);
+		ComputePID_GatedHold(&Ctrler.locysPID, airborne, hold);
 		if (xyc_on[0]) {
 			float u = XyCtrl_Step(&s_xyc[0], s_xyc_kind, Ctrler.locxPID.Des, Ctrler.locxPID.FB, Ctrler.locxsPID.FB, vff_x);
 			if (isfinite(u)) Ctrler.locxsPID.U = u; else XyCtrl_Reset(&s_xyc[0]);
@@ -2204,6 +2268,10 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact)
 		mrac_xy_unom[1] = Ctrler.locysPID.U;
 		Ctrler.locxsPID.U = Controller_Update(CTRL_AXIS_X, Ctrler.locxsPID.U);
 		Ctrler.locysPID.U = Controller_Update(CTRL_AXIS_Y, Ctrler.locysPID.U);
+		if (land_xy_hold) {   /* low-authority hold to touchdown: bounds a false-velocity chase near the floor */
+			Ctrler.locxsPID.U = fmaxf(-LAND_XY_HOLD_UMAX, fminf(LAND_XY_HOLD_UMAX, Ctrler.locxsPID.U));
+			Ctrler.locysPID.U = fmaxf(-LAND_XY_HOLD_UMAX, fminf(LAND_XY_HOLD_UMAX, Ctrler.locysPID.U));
+		}
 	}
 
 	/* F8 2026-10-06, PX4 style (MulticopterPositionControl: on ground contact the xy setpoint is
@@ -2347,7 +2415,8 @@ void Compute_Motor(void)
 {
 	uint8_t airborne = (flight_phase == FLIGHT_PHASE_FLYING || flight_phase == FLIGHT_PHASE_LANDING);
 	uint8_t land_contact = (uint8_t)(Land_ContactStep() | (s_land_spool != 0U));   /* spool = touchdown too */
-	land_contact |= LandProfile_XyFreeze(flight_phase == FLIGHT_PHASE_LANDING, Ctrler.Z_posPID.FB);   /* 10-15 D2 */
+	uint8_t land_xy_hold = LandProfile_XyHold(flight_phase == FLIGHT_PHASE_LANDING, Ctrler.Z_posPID.FB);   /* 10-19 */
+	land_contact |= LandProfile_XyFreeze(flight_phase == FLIGHT_PHASE_LANDING, Ctrler.Z_posPID.FB);   /* 10-15 D2, 0.04 m since 10-19 */
 
 	Rc_FallbackStep();
 	Z_Compute();
@@ -2365,7 +2434,7 @@ void Compute_Motor(void)
 		   while disarmed (otherwise cnt_loc grows unbounded and the gate fires
 		   every 256th tick on a uint8 wrap). */
 		if (DroneStatus.ARM_Status != 0U) {
-			Pos_Compute(airborne, land_contact);
+			Pos_Compute(airborne, land_contact, land_xy_hold);
 		}
 		else
 		{

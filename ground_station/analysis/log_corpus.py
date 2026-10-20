@@ -98,9 +98,10 @@ def load(ref: LogRef) -> Series:
     return out
 
 
-def _timebase(series: Series):
+def _timebase(series: Series, absolute: bool = False):
     """frf.timebase (host time -> xTickCount time) using only the xTickCount samples within 1 s of the median
-    host offset: some sessions carry torn xTickCount values that would stretch the time axis by 1e9 s."""
+    host offset: some sessions carry torn xTickCount values that would stretch the time axis by 1e9 s.
+    absolute keeps the board clock (xTickCount / 1000 s) instead of starting it at 0."""
     if "xTickCount" not in series:
         return lambda t: np.asarray(t, float)
     th, tick = series["xTickCount"]
@@ -109,7 +110,8 @@ def _timebase(series: Series):
     if ok.sum() < max(2, 0.9 * len(th)):
         return lambda t: np.asarray(t, float)
     th, tick_s = th[ok], tick[ok] / 1000.0
-    tick_s = tick_s - tick_s[0]
+    if not absolute:
+        tick_s = tick_s - tick_s[0]
 
     def tb(t):  # outside the xTickCount span, continue at host rate instead of clamping
         t = np.asarray(t, float)

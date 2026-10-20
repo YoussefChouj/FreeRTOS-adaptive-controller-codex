@@ -50,6 +50,7 @@ def query_telemetry(store: SessionStore, session_id: str,
         since_ns: Inclusive start timestamp in nanoseconds.
         until_ns: Exclusive end timestamp.
     """
+    store.flush()   # telemetry rows are inserted by the store's writer thread
     sql = "SELECT time_ns,stream_id,sequence,source_time_ms,values_json FROM telemetry WHERE session_id=?"
     params: list[Any] = [session_id]
     if stream_id is not None:

@@ -236,6 +236,8 @@ void AutoflyTask_StartFigure8(void)
 	figure8_path.active = 1U;
 }
 
+static void Traj_Commit(float x, float y, float z);   /* the GS paths feed the preset FF too (Traj_Tick) */
+
 void AutoflyTask_RunCircle(void)
 {
 	const float dt = AFLY_DT_S;
@@ -252,7 +254,7 @@ void AutoflyTask_RunCircle(void)
 	circle_path.t_elapsed += dt;
 	circle_path.theta += circle_path.angular_speed * dt;
 
-	AutoflyTask_CommitRef(
+	Traj_Commit(
 		circle_path.center_x + circle_path.radius * cosf(circle_path.theta),
 		circle_path.center_y + circle_path.radius * sinf(circle_path.theta),
 		circle_path.center_z);
@@ -294,7 +296,7 @@ void AutoflyTask_RunSinusoid(void)
 				case 2: cont_z = sinusoid_path.center_z + off; break;
 				default: break;
 			}
-			AutoflyTask_CommitRef(cont_x, cont_y, cont_z);
+			Traj_Commit(cont_x, cont_y, cont_z);
 		}
 	}
 
@@ -338,7 +340,7 @@ void AutoflyTask_RunFigure8(void)
 		cy = figure8_path.center_y + figure8_path.amplitude * s * c / denom;
 	}
 
-	AutoflyTask_CommitRef(cx, cy, figure8_path.center_z);
+	Traj_Commit(cx, cy, figure8_path.center_z);
 	Ctrler.yawPID.Des = path_yaw0;
 
 	if (figure8_path.duration > 0.0f &&
@@ -456,6 +458,8 @@ extern volatile uint8_t g_ctrl_pid_fallback;                           /* Stabil
 extern volatile uint8_t exp_id, vp_id, lim_mode;                     /* StabilizerTask.c */
 extern volatile uint8_t g_imu_mahony_yaw_decouple;                   /* API/imu_update.h */
 extern volatile uint8_t mrac_z_feat_mask;                            /* API/mrac.h, MRAC_ZFEAT_* bits */
+extern volatile uint8_t g_drift_nn_live;                             /* NN/drift_nn_task.h, DRIFT_NN_LIVE_* */
+extern volatile float g_drift_nn_clamp_mps;                          /* NN/drift_nn_task.h */
 
 static const VarWriteRow_t s_var_write[] = {
 /*                var                 type    id    min      max            range source */
@@ -505,7 +509,9 @@ static const VarWriteRow_t s_var_write[] = {
     VAR_WRITE_ROW(lim_mode,            VW_U8, 52,  0,       2      ),  /* s_lim rows 0..2               */
     VAR_WRITE_ROW(g_imu_mahony_yaw_decouple, VW_U8, 53, 0,     1      ),  /* bool                          */
     VAR_WRITE_ROW(mrac_z_feat_mask,   VW_U8, 54,  0,       15     ),  /* Z MRAC feature bits, mrac.h   */
-    VAR_WRITE_ROW(sysid_target,       VW_U8, 55,  0,       1      )   /* 0 setpoint, 1 torque; sysid.h */
+    VAR_WRITE_ROW(sysid_target,       VW_U8, 55,  0,       1      ),  /* 0 setpoint, 1 torque; sysid.h */
+    VAR_WRITE_ROW(g_drift_nn_live,    VW_U8, 56,  0,       2      ),  /* NN 0 shadow, 1 pos, 2 pos+vel */
+    VAR_WRITE_ROW(g_drift_nn_clamp_mps, VW_F32, 57, 0.0f,  0.30f  )   /* m/s, NN residual clamp        */
 };
 
 /* GS CMD 0x2D: write row `id` = val. Returns 0 (written) or a VAR_WRITE_REJECT_* code (nothing written);
@@ -786,9 +792,10 @@ static void Traj_SticksCentred(void)
 	RCInput_SetVirtualStick(RC_AXIS_YAW, 0.0f);
 }
 
-/* Reference rates for the stabilizer's feed-forward (g_traj_ff_preset). The preset path is a pure position
- * reference, so without these the P position loops trail the figure-8 by v / Kp. Finite difference of this
- * tick's continuous reference against the last one; 0 while no preset trajectory runs. */
+/* Reference rates for the stabilizer's feed-forward (g_traj_ff_preset). The preset and the GS circle / sinusoid /
+ * figure-8 paths are pure position references, so without these the P position loops trail them by v / Kp. Finite
+ * difference of this tick's continuous reference against the last one (before the waypoint_spacing hold); 0 while
+ * neither runs. The GS paths get no yaw-rate FF (the circle turns the nose through yawPID.Des alone). */
 float g_traj_vff_x = 0.0f, g_traj_vff_y = 0.0f;   /* cm/s, world      */
 float g_traj_vff_z = 0.0f;                        /* m/s              */
 float g_traj_vff_yaw = 0.0f;                      /* deg/s, yawPID frame */
@@ -939,7 +946,12 @@ static void Traj_Tick(void)
 	}
 	if (traj_active == 0U) {
 		traj_stop = 0U;
-		Traj_FFClear();
+		if (circle_path.active || sinusoid_path.active || figure8_path.active) {
+			Traj_FFUpdate();          /* the GS path's Traj_Commit of this tick (AutoflyTask runs it first) */
+			g_traj_vff_yaw = 0.0f;
+		} else {
+			Traj_FFClear();
+		}
 		return;
 	}
 

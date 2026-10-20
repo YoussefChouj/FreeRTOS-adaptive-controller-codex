@@ -443,6 +443,35 @@ def test_7_land_behavior() -> None:
     assert first_dec_h_dist <= drone2.params.settle_radius_m
 
 
+def test_7b_settle_timeout_descends_on_pad() -> None:
+    """LAND whose SETTLE runs out of time (held 0.4 m off the pad): DESCEND aims at (0, 0), the setpoint SETTLE
+    holds and the vehicle keeps through LANDING, so it touches down on the pad (it froze 0.4 m off before 2026-10-19)."""
+    drone = FakeDrone()
+    client = WfbClient(drone.send)
+    client.arm()
+    client.idle()
+    client.takeoff()
+    run(drone, client, 2.5, heartbeat=True)
+    assert client.land() is True
+
+    desc_h_dist: float | None = None
+    for step_i in range(2000):
+        if step_i % 10 == 0:
+            client.heartbeat()
+        if desc_h_dist is None:
+            if drone.status()["prim_state"] == PrimState.SETTLE:
+                drone._x = 0.4   # a gust holds it outside settle_radius_m until return_timeout_s
+        drone.step(0.02)
+        if desc_h_dist is None and drone.status()["prim_state"] == PrimState.DESCEND:
+            desc_h_dist = math.hypot(drone.position[0], drone.position[1])
+        if drone.position[2] == 0.0:
+            break
+
+    assert desc_h_dist is not None and desc_h_dist > 0.3
+    assert drone.position[2] == 0.0 and not drone.armed
+    assert math.hypot(drone.position[0], drone.position[1]) < 0.02
+
+
 def test_8_heartbeat_timeout() -> None:
     """With heartbeats every 0.2 s, 5 s of hover trips nothing;
 

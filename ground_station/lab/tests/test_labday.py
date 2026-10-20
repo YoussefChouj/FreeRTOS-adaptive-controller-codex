@@ -69,6 +69,29 @@ def test_bad_end():
     assert labday.bad_end(0, {"status": "complete"}) is None
 
 
+def test_bad_end_abort_or_no_air_is_bad_although_complete(tmp_path, monkeypatch):
+    """2026-10-19: every aborted flight and the four refused takeoffs ended `complete` and were marked OK."""
+    monkeypatch.setattr(labday, "ROOT", tmp_path)
+    assert labday.bad_end(0, {"status": "complete", "aborted": True}) == "aborted: safety monitor"
+    assert labday.bad_end(0, {"status": "complete", "abort_reason": "position_error"}) == "aborted: position_error"
+    assert labday.bad_end(0, {"status": "complete", "air_s": 0.0}) == "never airborne (0 s air)"
+    assert labday.bad_end(0, {"status": "complete", "air_s": 12.5}) is None
+    for name, text in (("ab", "complete  air 53.8 s  1 flight(s)  270 live samples\n"
+                              "ABORTED L1 f01_lab_m_memory_u0: position_error (the safety monitor landed it; the "
+                              "steps after that point never ran)\n"),
+                       ("na", "complete  air 0.0 s  1 flight(s)  120 live samples\n"
+                              "landing offset: no landing (never airborne)\n"),
+                       ("ok", "complete  air 20.0 s  1 flight(s)  10 live samples\n"
+                              "landing offset x +3 y +4 cm from the takeoff point (5 cm)\n")):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "debrief.txt").write_text(text, encoding="utf-8")
+    assert labday.bad_end(0, {"status": "complete", "folder": "ab"}) == \
+        "ABORTED L1 f01_lab_m_memory_u0: position_error"
+    assert labday.bad_end(0, {"status": "complete", "folder": "na"}) == "never airborne (0 s air)"
+    assert labday.bad_end(0, {"status": "complete", "folder": "ok"}) is None
+    assert labday.bad_end(0, {"status": "complete", "folder": "missing"}) is None
+
+
 def test_debrief_event_reads_only_the_child_after_offset(tmp_path):
     p = tmp_path / "e.jsonl"
     old = json.dumps({"event": "debrief", "pid": 7, "status": "old"}) + "\n"

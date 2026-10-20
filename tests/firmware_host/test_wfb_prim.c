@@ -300,15 +300,16 @@ static int test_11_pad_gate(void) {
     ASSERT(p.state == WFB_PRIM_DESCEND && out.descend == 1);
     ASSERT(out.x_sp_m == 0.0f && out.y_sp_m == 0.0f);
 
-    /* gate off: the old timeout freezes where it is */
+    /* gate off: the timeout also aims at the pad, the setpoint the vehicle holds (it froze where it was before
+     * 2026-10-19) */
     wfb_prim_init(&p);
     p.state = WFB_PRIM_SETTLE;
     p.land_after_return = 1;
     p.return_t = 9.9f;
     in.pad_gate = LAND_XY_GATE_OFF;
     wfb_prim_step(&p, &cfg, &in, &out);
-    ASSERT(p.state == WFB_PRIM_DESCEND);
-    ASSERT(fabsf(out.x_sp_m - 0.4f) < 1e-6f && fabsf(out.y_sp_m + 0.3f) < 1e-6f);
+    ASSERT(p.state == WFB_PRIM_DESCEND && out.descend == 1);
+    ASSERT(out.x_sp_m == 0.0f && out.y_sp_m == 0.0f);
     return 0;
 }
 

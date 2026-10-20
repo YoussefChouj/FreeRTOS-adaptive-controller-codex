@@ -86,6 +86,8 @@ wfb_err_t wfb_prim_land(wfb_prim_t *p, const wfb_prim_in_t *in) {
     return WFB_ERR_NONE;
 }
 
+/* The fence/ceiling and pilot-takeover action (wfb_safety.c): descend where it is, no return to the pad. A normal
+ * land and the GS aborts use wfb_prim_land (RETURN -> SETTLE -> DESCEND on the pad). */
 wfb_err_t wfb_prim_land_in_place(wfb_prim_t *p) {
     if (p->state == WFB_PRIM_IDLE) {
         return WFB_ERR_STATE;
@@ -210,15 +212,14 @@ void wfb_prim_step(wfb_prim_t *p, const wfb_prim_cfg_t *cfg, const wfb_prim_in_t
             p->settle_t = 0.0f;
         }
 
+        /* out of time (never inside settle_radius, or the pad gate never opened): descend aimed at the pad, the
+         * (0, 0) setpoint SETTLE already holds. The vehicle keeps that last applied setpoint through LANDING (the
+         * glue applies no DESCEND setpoint); before 2026-10-19 this model froze at the vehicle position with the
+         * pad gate off. */
         if (p->state == WFB_PRIM_SETTLE && p->land_after_return && p->return_t > cfg->return_timeout_s) {
             p->state = WFB_PRIM_DESCEND;
-            if (in->pad_gate != LAND_XY_GATE_OFF) {   /* gate on: keep pulling to the pad while it sinks */
-                p->x_sp_m = 0.0f;
-                p->y_sp_m = 0.0f;
-            } else {
-                p->x_sp_m = wfb_prim_finite_or(in->x_m, p->x_sp_m);
-                p->y_sp_m = wfb_prim_finite_or(in->y_m, p->y_sp_m);
-            }
+            p->x_sp_m = 0.0f;
+            p->y_sp_m = 0.0f;
             p->descend_frozen = 1;
             out->x_sp_m = p->x_sp_m;
             out->y_sp_m = p->y_sp_m;

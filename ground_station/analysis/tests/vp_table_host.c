@@ -11,6 +11,7 @@ _imu_st imu_data = {0.0f, 0.0f};
 volatile uint8_t vp_id = 0U, vp_active = 0U;
 static uint8_t s_vp_last = 0U;
 static uint8_t Keil_OnGround(FlightState_t s) { (void)s; return 1U; }
+static uint8_t Keil_PreTakeoff(FlightState_t s) { return Keil_OnGround(s); }
 
 #include "vp_rows.inc"
 
