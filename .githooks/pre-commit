@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Tracked pre-commit hook. Runs the fast subset of tools/check.sh so
+# committed code keeps its doc paths valid and its line-budget intact.
+# Failures abort the commit; bypass with `git commit --no-verify`.
+#
+# This hook fires only when the operator has activated tracked hooks
+# with: git config core.hooksPath .githooks
+set -e
+toplevel=$(git rev-parse --show-toplevel)
+exec bash "$toplevel/tools/check.sh" doc-paths fw-lint row-meta doc-budget float arm-syntax

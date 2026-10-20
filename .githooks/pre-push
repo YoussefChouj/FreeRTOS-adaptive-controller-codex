@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Tracked pre-push hook. Two responsibilities:
+#   1. Block direct pushes to origin/main. AGENTS.md says the CEO merges
+#      after QA; everything else stages on a feature branch.
+#   2. Defer to tools/agent_push_guard.py for the per-branch scope check
+#      (Allowed-Paths: from the stream page, plus tier-0 always-human).
+# Bypass with `git push --no-verify`. Refusing to bypass on origin/main
+# requires setting AGENT_PUSH_TO_MAIN=1 (intentionally not a flag you can
+# forget — it forces the operator to look at the diff).
+set -e
+toplevel=$(git rev-parse --show-toplevel)
+
+while read local_ref local_sha remote_ref remote_sha; do
+    if [ "$remote_ref" = "refs/heads/main" ]; then
+        if [ "${AGENT_PUSH_TO_MAIN:-0}" != "1" ]; then
+            echo "pre-push: direct pushes to origin/main are blocked."
+            echo "           open a PR or set AGENT_PUSH_TO_MAIN=1 after operator review."
+            exit 1
+        fi
+        echo "pre-push: AGENT_PUSH_TO_MAIN=1 active; proceed with caution."
+    fi
+done
+
+# Per-branch Allowed-Paths gate. agent_push_guard reads the stream page
+# for the current branch. If there is no stream page yet (brand-new
+# branch), it refuses; the operator must copy a HANDOFF template first.
+python "$toplevel/tools/agent_push_guard.py"

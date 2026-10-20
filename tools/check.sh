@@ -17,15 +17,16 @@
 # except host-tests, mrac-equiv and sil-smoke (each prints its time). A subset ends with
 # "CHECK SUBSET PASS"; only a run with no arguments prints CHECK PASS, and that is the one a commit needs.
 # Opt-in pre-commit hook that runs this script: bash tools/install-hooks.sh (WP-38).
+# doc-budget is auto-included; it enforces AGENTS.md ≤ 150 lines and any context.md ≤ 120 lines.
 set -u
 cd "$(dirname "$0")/.."
 PY=${PYTHON:-python}
 command -v "$PY" >/dev/null 2>&1 || PY=python3
 PYTEST=("$PY" -m pytest -q -p no:cacheprovider)
 
-ALL=" host-tests mrac-equiv c-pytest sil-smoke clang-tidy float row-meta fw-lint stack doc-paths arm-syntax "
+ALL=" host-tests mrac-equiv c-pytest sil-smoke clang-tidy float row-meta fw-lint stack doc-paths arm-syntax doc-budget "
 only=" $* "
-[ "$only" = " --fast " ] && only=" c-pytest clang-tidy float row-meta fw-lint stack doc-paths arm-syntax "
+[ "$only" = " --fast " ] && only=" c-pytest clang-tidy float row-meta fw-lint stack doc-paths arm-syntax doc-budget "
 for want in $only; do
     [[ "$ALL" == *" $want "* ]] || { echo "check.sh: unknown step '$want' (steps:$ALL)" >&2; exit 2; }
 done
@@ -74,6 +75,30 @@ sil_smoke() {
     return $rc
 }
 
+# doc-budget: AGENTS.md stays ≤ 170 lines; any context.md ≤ 120 lines. The cap
+# prevents context bloat / lost-in-the-middle failures. Detail moves to
+# docs/context/*.md, not here. To grow beyond the cap: edit, do not extend.
+doc_budget() {
+    local bad=0 lim file lines
+    if [ -f AGENTS.md ]; then
+        lim=170 file=AGENTS.md
+        lines=$(wc -l < "$file")
+        if [ "$lines" -gt "$lim" ]; then
+            echo "   doc-budget: $file is $lines lines (cap $lim)" >&2
+            bad=1
+        fi
+    fi
+    if [ -f context.md ]; then
+        lim=120 file=context.md
+        lines=$(wc -l < "$file")
+        if [ "$lines" -gt "$lim" ]; then
+            echo "   doc-budget: $file is $lines lines (cap $lim)" >&2
+            bad=1
+        fi
+    fi
+    return "$bad"
+}
+
 step host-tests "$PY" tools/host_tests.py
 step mrac-equiv "$PY" API/tests/run_mrac_equiv.py
 step c-pytest   "${PYTEST[@]}" ground_station/livewatch/tests/test_subscribe_c.py \
@@ -86,11 +111,28 @@ step fw-lint    "$PY" tools/fw_lint.py
 step stack      "$PY" tools/stack_budget.py
 step doc-paths  "$PY" tools/doc_paths.py
 step arm-syntax "$PY" tools/host_tests.py --arm
+step doc-budget doc_budget
 
 if [ ${#failed[@]} -gt 0 ]; then
+    # On failure, clear the recorded pass so the next push is blocked
+    # until a fresh passing run replaces it. We record only on success.
+    mkdir -p .agent_state
+    rm -f .agent_state/last_check
     echo "CHECK FAIL: ${failed[*]}"
     exit 1
 fi
 note=""
 [ ${#skipped[@]} -gt 0 ] && note=" (skipped here: ${skipped[*]})"
-if [ "$only" = "  " ]; then echo "CHECK PASS$note"; else echo "CHECK SUBSET PASS:$only(not the full gate)$note"; fi
+mkdir -p .agent_state
+# Always record a passing run, even subsets. The push guard reads this and
+# refuses to push without a recent passing run; full vs. subset is logged
+# for the operator to see at a glance. A subset is OK to commit locally;
+# a full pass is what AGENTS.md requires before merge.
+if [ "$only" = "  " ]; then
+    printf 'CHECK PASS %s scope=full\n' "$(date -u +%FT%TZ)" > .agent_state/last_check
+    echo "CHECK PASS$note"
+else
+    printf 'CHECK SUBSET PASS %s scope=%s\n' "$(date -u +%FT%TZ)" "${only// /}" \
+        > .agent_state/last_check
+    echo "CHECK SUBSET PASS:$only(not the full gate)$note"
+fi

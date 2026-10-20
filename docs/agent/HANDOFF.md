@@ -100,3 +100,15 @@ All built inline. Jules is unreachable from the cloud and Claude subagents are r
 - Never stage `USER/`, `OBJ/`, or `.mkv`/`.mp4` video files.
 - Before any commit: run `bash tools/check.sh --fast` and relevant pytest suites.
 - Never flash while armed. Flash only from stream `main` with the `hw` lock held.
+
+## Repo-architecture note (2026-10-20)
+
+A new pre-push gate exists on a feature branch
+(`claude/repo-architecture-2026-10-20`, not yet on `main`). After merge,
+any agent that pushes from a stream is expected to add an
+`Allowed-Paths:` line to its stream page (this one or
+`docs/agent/streams/<name>.md`); the pre-push guard refuses to push
+without one. See `docs/agent/governance-zones.md`, `tools/agent_push_guard.py`,
+`.githooks/pre-push`. Until that branch is merged to `main`, the guard
+is dormant (operators activate tracked hooks with one `git config`
+line).
