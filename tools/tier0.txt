@@ -1,0 +1,19 @@
+# Tier-0: flight-critical files. A branch that changes one is refused by tools/agent_push_guard.py unless its stream
+# page carries a line naming it:   Tier0-Approved: API/pid.c, API/mrac.c - operator 2026-10-21 "<their words>"
+# This file is the only copy of the list (docs/agent/governance-zones.md links here). One repo path or glob per line.
+API/pid.c
+API/mrac.c
+API/mrac_math.c
+API/ekf.c
+API/ekf_of.c
+API/rc_input.c
+API/land_profile.h
+API/land_gate.c
+API/land_xy_gate.c
+API/prearm.c
+API/flight_fsm.c
+API/wfb_safety.c
+API/controller.c
+TASK/StabilizerTask.c
+TASK/AutoflyTask.c
+TASK/RemoterTask.c

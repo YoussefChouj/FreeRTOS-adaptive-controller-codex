@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Tracked pre-commit hook: the fast steps of tools/check.sh that the STAGED files route to (tools/check_routes.txt),
+# so a doc-only commit pays ~2 s. The slow steps (host-tests, mrac-equiv, c-pytest, sil-smoke) are left to
+# `bash tools/check.sh --changed` before a push, which the pre-push guard demands, and to CI.
+# If the router fails, every fast step runs: a broken router never means fewer checks.
+# It never writes .agent_state/last_check (CHECK_NO_RECORD): a staged-files lint is not the gate.
+# Bypass with `git commit --no-verify`. Activate with `bash tools/install-hooks.sh --activate`.
+set -u
+cd "$(git rev-parse --show-toplevel)" || exit 1
+FAST=" clang-tidy float row-meta fw-lint stack doc-paths arm-syntax doc-budget "
+steps=""
+if routed=$(bash tools/check.sh --route-list --staged) && [ -n "$routed" ]; then
+    for s in $routed; do
+        [[ "$FAST" == *" $s "* ]] && steps="$steps $s"
+    done
+else
+    echo "pre-commit: router failed; running every fast step"
+fi
+[ -n "$steps" ] || steps=$FAST
+exec env CHECK_NO_RECORD=1 bash tools/check.sh --quiet $steps

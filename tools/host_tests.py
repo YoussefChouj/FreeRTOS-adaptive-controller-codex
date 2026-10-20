@@ -183,8 +183,8 @@ def over_firmware(tool: str, cmd, ident: str = "") -> int:
 def tidy() -> int:
     exe = find_tidy()
     if exe is None:
-        print("FAIL clang-tidy: not installed")
-        return 1
+        print("SKIP clang-tidy: not installed (opt-in: install LLVM clang-tidy to run this step)")
+        return 77  # tools/check.sh: SKIPPED
     sys_args = gcc_system_args()
     version = subprocess.run([exe, "--version"], capture_output=True, text=True).stdout
     ident = "\0".join([exe, version, (REPO / ".clang-tidy").read_text()])
@@ -210,8 +210,8 @@ def float_only() -> int:
     32-bit host gcc otherwise uses x87 excess precision under -std=c99, which hides the warning."""
     gcc = shutil.which("gcc")
     if gcc is None:
-        print("FAIL float: gcc not on PATH")
-        return 1
+        print("SKIP float: gcc not on PATH (install gcc to run this step)")
+        return 77  # tools/check.sh: SKIPPED
     return over_firmware("double-promotion", lambda path, flags: [
         gcc, "-fsyntax-only", "-msse2", "-mfpmath=sse", "-Werror=double-promotion", *flags, path])
 
@@ -225,8 +225,8 @@ def main(argv: list[str]) -> int:
         return float_only()
     gcc = shutil.which("gcc")
     if gcc is None:
-        print("FAIL host tests: gcc not on PATH")
-        return 1
+        print("SKIP host tests: gcc not on PATH (install gcc to run this step)")
+        return 77  # tools/check.sh: SKIPPED
     rows = [r for r in HOST_TESTS if not argv or any(a in r[0] for a in argv)]
     failed, n_built = [], 0
     with tempfile.TemporaryDirectory() as tmp, ThreadPoolExecutor(JOBS) as pool:

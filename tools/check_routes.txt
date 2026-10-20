@@ -1,0 +1,47 @@
+# Which check.sh steps a changed file requires. tools/check_routes.py reads this table; `bash tools/check.sh
+# --changed` prints the union for the branch's diff. One row per line: <git pathspec-glob> <steps...>.
+#
+# Rules that keep this honest (tools/test_check_routes.py fails the gate when broken):
+#   * Every step name must be one of check.sh's steps.
+#   * Every top-level directory with tracked files needs a row, so a new tree cannot ship unrouted.
+#   * A file matching no row runs doc-paths + doc-budget only. If you add a tree, add a row here first.
+#   * a/** matches that directory and everything under it; * matches one segment; *.c matches that extension.
+
+# --- Flight-critical firmware: compiled C. Anything here needs a compiler, so it needs the full C gate.
+API/**            host-tests float clang-tidy mrac-equiv row-meta fw-lint
+BSP/**            host-tests float clang-tidy row-meta fw-lint
+TASK/**           host-tests float clang-tidy row-meta fw-lint
+USER/**           host-tests float clang-tidy row-meta fw-lint
+Global_file/**    host-tests float clang-tidy row-meta fw-lint
+firmware/**       host-tests float clang-tidy row-meta fw-lint
+NN/**             host-tests float clang-tidy row-meta fw-lint
+API/tests/**      host-tests mrac-equiv
+
+# --- Host-side and offline: Python, SIL, ground station. No ARM toolchain needed.
+sim/**            c-pytest sil-smoke
+tests/**          c-pytest host-tests
+ground_station/** c-pytest doc-paths
+scripts/**        c-pytest
+
+# --- Agent state and scratch: recorded output, not a gate input, but a broken path there still breaks agents.
+registry/**       doc-paths
+logs/**           doc-paths
+scratch/**        doc-paths
+sessions_summary/** doc-paths
+.agent-ops/**     doc-paths
+
+# --- The gate itself and its rules: anything that decides what a passing run means must be re-checked, and
+# tools/ also holds the gate's own pytest suites, so a change here runs them.
+tools/**          c-pytest row-meta fw-lint doc-paths
+.githooks/**      c-pytest doc-paths
+
+# --- Docs and agent-facing state: cheap, and the doc lint is the whole point.
+docs/**           doc-paths doc-budget
+*.md              doc-paths doc-budget
+AGENTS.md         doc-paths doc-budget
+CLAUDE.md         doc-paths doc-budget
+
+# --- Vendor and generated: read-only to us, never gate on a change here.
+FreeRTOS/**
+stm32_lib/**
+OBJ/**

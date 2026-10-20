@@ -37,7 +37,12 @@ The machinery that turns friction into immunity:
 | Friction | Cure |
 | --- | --- |
 | a step fails because a tool is absent | exit 77 = SKIP (`tools/check.sh`) |
+| a subset run pushed uncompiled firmware | coverage rule in `tools/agent_push_guard.py` |
+| the full gate on a doc edit | `bash tools/check.sh --changed` (`tools/check_routes.txt`) |
+| verbose logs eating the context | `bash tools/check.sh --quiet` |
 | bash tripping over CRLF | `*.sh text eol=lf` in `.gitattributes` |
+| forgetting tracked hooks on a new clone | `bash tools/install-hooks.sh --activate` |
+| a pass from before the last edit covering a push | `tree=` in `.agent_state/last_check` |
 
 ## Rules
 
@@ -46,8 +51,9 @@ The machinery that turns friction into immunity:
 2. **Inbox only for out-of-scope.** In-task findings belong in
    `docs/agent/HANDOFF.md` (stream `main`) or `docs/agent/streams/<name>.md`
    (other streams). Cross-shard findings go in `inbox/<task-id>.md`.
-3. **Mechanical boundary enforcement.** Stream-page scope enforcement
-   arrives with the gate PR; until then scope is a review check. Tombstone sections and concept-to-artifact headers are
+3. **Mechanical boundary enforcement.** The `Allowed-Paths:` line in the
+   stream page + `.githooks/pre-push` (`tools/agent_push_guard.py`)
+   enforce scope. Tombstone sections and concept-to-artifact headers are
    verified by `tools/doc_paths.py` and never silently rot.
 4. **Never edit another shard's section.** Cross-cutting rules go in
    `AGENTS.md`; this directory only adds domain detail.

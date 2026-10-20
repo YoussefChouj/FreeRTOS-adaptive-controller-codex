@@ -100,5 +100,9 @@ def _gcc(cmd: list[str]) -> None:
 
 
 if __name__ == "__main__":
+    if shutil.which("gcc") is None:
+        # tools/check.sh reads rc 77 as SKIPPED (the step's input cannot exist on this machine), not FAILED.
+        print("SKIP sim/sil/build: gcc not on PATH (install gcc to build the SIL binaries)", file=sys.stderr)
+        sys.exit(77)
     for v in (0, 1):
         print(build(v))

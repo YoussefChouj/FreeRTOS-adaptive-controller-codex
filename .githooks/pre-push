@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Tracked pre-push hook.
+#   1. A push to main (or a delete of it) is always refused. main moves only through `bash tools/land.sh <branch>`,
+#      which waits for CI to pass on the exact commit and then pushes it with --no-verify, in plain sight.
+#   2. Every other branch goes through tools/agent_push_guard.py <branch> <sha> for the commit actually pushed:
+#      Allowed-Paths from its stream page, tier-0 approval, and a recorded check.sh pass that covers that commit.
+# Bypass with `git push --no-verify`; it shows in the command, unlike an environment variable.
+set -u
+toplevel=$(git rev-parse --show-toplevel)
+zero=0000000000000000000000000000000000000000
+rc=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+    if [ "$remote_ref" = "refs/heads/main" ]; then
+        echo "pre-push: pushes to main are refused; land a CI-green branch with: bash tools/land.sh <branch>"
+        rc=1
+        continue
+    fi
+    case "$remote_ref" in refs/heads/*) ;; *) continue ;; esac    # tags carry no stream page
+    [ "$local_sha" = "$zero" ] && continue                           # deleting a feature branch pushes no code
+    python "$toplevel/tools/agent_push_guard.py" "${remote_ref#refs/heads/}" "$local_sha" || rc=1
+done
+exit $rc

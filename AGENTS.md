@@ -116,9 +116,11 @@ Claude Code subagents ever.
   go in `docs/context/inbox/<task-id>.md`, not inline.
 - C for Keil ARMCC V5.06, built with `--C99` (no C11). Declarations at
   block top; no VLAs.
-- Commit needs `CHECK PASS` from `bash tools/check.sh` (`--fast` is fine
-  while iterating; the full gate is required before merge). CI runs the
-  full gate on every push; a local pass is not recorded or enforced yet.
+- Run `bash tools/check.sh --changed` (the steps your diff needs, per
+  `tools/check_routes.txt`); it records the pass and its tree in
+  `.agent_state/last_check`, and the pre-push guard refuses a push that
+  pass does not cover. CI runs the full gate; main moves only through
+  `bash tools/land.sh <branch>` (`docs/agent/governance-zones.md`).
 - Match surrounding style; minimum code; touch only the task.
 - Tunable parameter sets use the `<THING>_ROW(...)` macro, one aligned
   row per instance, history below the table. Pattern:
