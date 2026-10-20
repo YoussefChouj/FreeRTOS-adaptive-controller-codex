@@ -1,8 +1,30 @@
 # Handoff — stream `main`
 
-- **Updated:** 2026-10-19 23:55 +08:00
+- **Updated:** 2026-10-20 08:51 +08:00 (operator took a quota hit on the prior session at ~03:30 +08:00; this session resumed)
 - **Branch / Base:** `overnight-2026-10-08` (mirrored to `main`)
 - **Goal:** Complete all 2026-10-19 post-flight analyses and land/verify all fixes for the 2026-10-20 lab session (`docs/lab/days/2026-10-20.yaml`, 21 flights).
+
+## Stand-down note (operator 2026-10-20, applies to every agent in every harness or account)
+
+The operator hit the Claude "Individual quota reached" wall on the prior session and asked for two changes
+that apply project-wide, including to outside workers and to future supervisor sessions:
+
+1. **Always be strategic globally and tactical locally** (see `AGENTS.md` > Conventions, and
+   `docs/agent/memory/rules.md` > Operating principle). Persist every cross-agent truth to a file
+   other agents actually read (`docs/lab/`, `docs/agent/HANDOFF.md`, `docs/agent/memory/`); pick
+   the smallest, cheapest locally-verifiable step that advances the plan.
+2. **Survive quota hits** by saving at every subtask, mirroring artefacts to `origin/*`, and
+   dropping a `.agent_state/last-cutoff.md` resume file when the wall closes in
+   (`docs/agent/memory/rules.md` > Quota-hit survival).
+
+## Resume on `main` (this session, 2026-10-20 08:51 +08:00)
+- Pulled local `main` ff from `origin/main`: was 242 commits behind `c07f99a7` (the 160k
+  autocompaction PR), now at `90934b60` ("chore(handoff): commit 2026-10-19 flight CSV/truth logs
+  and cloud handoff state"), same tip as `origin/overnight-2026-10-08`. All 2026-10-19 cloud
+  agent merges (`d4898337`), the `nn_io.seq` rawof target move (`2889150a` / cherry-pick
+  `cfcd3f17`, 17 tests pass), the campaign-session telemetry reader (`69922e9f`), and the
+  2026-10-19 day YAML / report / 4 Jules briefs (`d4898337`) are now in the local checkout.
+
 
 ## Completed in 2026-10-19 Session
 1. **Merged & Pushed All Cloud Agent Branches (`d4898337`):**

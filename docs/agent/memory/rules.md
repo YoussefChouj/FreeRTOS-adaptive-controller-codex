@@ -3,6 +3,19 @@
 Migrated 2026-09-30 from the Claude-private memory (`~/.claude/projects/.../memory/`).
 Authorizations and their expiry live in `AGENTS.md` > Authorizations, not here.
 
+## Operating principle (operator, 2026-10-20)
+
+**Always be strategic globally and tactical locally.** Every agent in every harness or
+account working in this repo adopts this as the default stance.
+
+- *Strategic globally*: every commit / brief / doc is read by other agents and humans in
+  other sessions, accounts, tools, after compacts and after the current agent is gone.
+  Optimize for the next agent, not the next reply. Do not write anything that only the
+  current session can decode. Persistent truth beats local convenience.
+- *Tactical locally*: pick the smallest, cheapest, locally-verifiable step that advances
+  the global plan. One ship point at a time. Use the targeted tool (read, grep, glob)
+  before the wide one (cat, status, full diff). Stay under the per-subtask token budget.
+
 ## Verification
 - A worker's DONE, `rc=0` and self-reported model are claims. Read the raw `.out` log and re-check the
   artifact (`git diff --stat`, the tests, one targeted check). A worker once stubbed its own test and reported PASS.
@@ -50,6 +63,30 @@ Authorizations and their expiry live in `AGENTS.md` > Authorizations, not here.
   park the others (page written, claim released) and let outside workers carry them.
 - Never resume a long transcript in a new session or account: it re-sends the whole history uncached. Start fresh
   from the stream page.
+
+## Quota-hit survival (operator 2026-10-20)
+
+Sessions and subagents in this account run into the Claude "Individual quota reached" wall; the
+prior session ended there. Apply this as a global default so a quota hit never costs more than
+the last few seconds of work:
+
+- **Save to disk at every saved subtask, not at the limit.** Update HANDOFF (or the stream's
+  page) and `git commit` after each closed subtask, even a 1-line doc edit; never carry >1
+  unit of unsaved work into the next boundary. Operator 2026-10-20 re-states the standing
+  rule "commit and push at every verified task boundary".
+- **Externally mirror anything you'd want to recover.** Cloud sessions, the lab PC, and any
+  worker each push to `origin/<branch>` so the same artifact is reachable from the others.
+  Do not trust a single live session as the source of truth for an unpushed commit.
+- **At the wall, stop acting and write a state file.** Create `.agent_state/last-cutoff.md`
+  with: next 3 actions, the DO NOTs, the exact commands to resume (commit / push / ah
+  refresh). One file, short. The next session reads it and the stream page before doing
+  anything else.
+- **Compact-resistant facts go to files, not transcripts.** Anything that survives a quota
+  hit (decisions, measurement numbers, fallbacks) belongs in `docs/lab/`,
+  `docs/agent/memory/`, `docs/agent/HANDOFF.md`, or the relevant code/doc — not only in chat.
+- **Strategic decision rule (operator 2026-10-20): always be strategic globally and tactical
+  locally.** Persist every cross-agent truth to a file other agents actually read; pick the
+  smallest locally-verifiable step that advances the global plan.
 
 ## Handoff
 - Keep your stream page current at every task boundary, not at the session limit: at the limit the agent cannot

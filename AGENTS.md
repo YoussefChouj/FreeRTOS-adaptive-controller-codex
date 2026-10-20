@@ -156,6 +156,13 @@ If two rules conflict, the stricter one wins until the operator says otherwise.
 
 ## Conventions
 
+- **Standing rule (operator, 2026-10-20): always be strategic globally and tactical locally.**
+  Every agent in every harness or account working in this repo adopts this as the default
+  stance. Global = commit / brief / doc is read by other agents and humans in other sessions,
+  accounts, and tools after compacts and after the current agent is gone; persist cross-agent
+  truth to files other agents actually read (`docs/agent/HANDOFF.md`, `docs/agent/memory/`).
+  Local = smallest, cheapest, locally-verifiable step that advances the global plan, one ship
+  point at a time.
 - C for Keil ARMCC V5.06, project built with `--C99` (no C11: compile-time checks use the typedef form, coding
   standard rule 8b). Declarations at block top, no VLAs.
 - Before a commit: `bash tools/check.sh` (steps: `docs/firmware-quality.md`), no Keil or hardware needed. While
