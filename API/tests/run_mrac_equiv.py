@@ -288,6 +288,11 @@ def main():
                         help="Extra -D for the new-tree builds only (the base tree predates e.g. MRAC_CAPACITY)")
     args = parser.parse_args()
 
+    # tools/check.sh reads rc 77 as SKIPPED (the step's input cannot exist on this machine), not FAILED.
+    if shutil.which("gcc") is None:
+        print("SKIP mrac-equiv: gcc not on PATH (install gcc to run this step)", file=sys.stderr)
+        sys.exit(77)
+
     repo_root = Path(__file__).resolve().parent.parent.parent
     driver_path = repo_root / "API" / "tests" / "test_mrac_equiv.c"
     stubs_dir = repo_root / "API" / "tests" / "stubs"

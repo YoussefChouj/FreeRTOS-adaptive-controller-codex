@@ -11,7 +11,37 @@ and stay small (≤ 120 lines each).
 | `flash.md` | firmware, hardware, MRAC, EKF, safety, flight tuning |
 | `thesis.md` | the research thesis: claims, math, sim benchmarks, citations |
 | `learning.md` | meta-learning: mental models, Q&A notes, things worth keeping |
+| `inbox/friction-<slug>.md` | environment or workflow friction found mid-task (see below) |
 | `inbox/<task-id>.md` | discovered out-of-scope items filed mid-task (never edited in place after the task closes) |
+
+## Friction-to-immunity
+
+Friction is a first-class artifact here, not a footnote in a stream note. File it the moment it costs you a retry,
+in `docs/context/inbox/friction-<slug>.md`:
+
+```
+Trigger:       what failed or felt slow, verbatim enough to grep for
+Token/time:    how many tool calls or minutes it wasted
+Mechanical cure: the script, hook or config that must change so it cannot recur
+Cure status:   filed | done (with the commit)
+```
+
+Agent-discovered (a command failed for a non-logic reason: a missing tool, a
+path, a line ending) and operator-noticed (too many turns, wrong file,
+redundant questions) both count. The last line is the point: a friction file
+whose cure is still `filed` is an open item, and the cure is usually smaller
+than the retry loop it replaces.
+
+The machinery that turns friction into immunity:
+
+| Friction | Cure |
+| --- | --- |
+| a step fails because a tool is absent | exit 77 = SKIP (`tools/check.sh`) |
+| a subset run pushed uncompiled firmware | coverage rule in `tools/agent_push_guard.py` |
+| the full gate on a doc edit | `bash tools/check.sh --changed` (`tools/check_routes.txt`) |
+| verbose logs eating the context | `bash tools/check.sh --quiet` |
+| bash tripping over CRLF | `*.sh text eol=lf` in `.gitattributes` |
+| forgetting tracked hooks on a new clone | `bash tools/install-hooks.sh --activate` |
 
 ## Rules
 

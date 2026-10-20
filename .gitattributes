@@ -1,2 +1,19 @@
-# Shell scripts run in WSL bash: keep LF in every checkout, worktrees included.
-*.sh text eol=lf
+# bash is the only tool here that dies on CRLF: a \r after the shebang makes it run the next line as a command
+# (a temp script once cost a whole commit, exit 127). Everything else (Python, C, the Keil project) reads CRLF
+# fine, so those are NOT pinned: renormalising ~430 Python files would bury this change in a whitespace diff.
+# LF in every checkout, worktrees included.
+*.sh   text eol=lf
+*.bash text eol=lf
+
+# Keil builds from these and the project file carries Windows paths: never let git touch their line endings.
+*.uvprojx  -text
+*.uvoptx   -text
+*.sct      -text
+*.hex      -text
+*.bin      -text
+*.axf      -text
+
+# Vendored: keep out of any renormalise, so a mass-fix cannot rewrite them.
+FreeRTOS/**  -text
+stm32_lib/** -text
+OBJ/**       -text

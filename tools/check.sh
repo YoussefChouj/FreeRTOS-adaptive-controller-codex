@@ -16,31 +16,91 @@
 # Subset while iterating: bash tools/check.sh doc-paths fw-lint (step names as above), or --fast for every step
 # except host-tests, mrac-equiv and sil-smoke (each prints its time). A subset ends with
 # "CHECK SUBSET PASS"; only a run with no arguments prints CHECK PASS, and that is the one a commit needs.
+#   --changed       run only the steps this branch's diff requires (tools/check_routes.txt), the routed subset
+#   --quiet         one line per passing step; a failing step's last 20 lines here, full log in check_fail.log
+#   --route-list    print the steps --changed would run and exit (what .githooks/pre-commit uses)
+# CHECK_QUIET=1 makes --quiet the default. A step whose tool is absent returns 77 = SKIPPED, never FAILED.
 # Opt-in pre-commit hook that runs this script: bash tools/install-hooks.sh (WP-38).
 # doc-budget is auto-included; it enforces AGENTS.md ≤ 150 lines and any context.md ≤ 120 lines.
 set -u
 cd "$(dirname "$0")/.."
-PY=${PYTHON:-python}
+PY=${CHECK_PY:-${PYTHON:-python}}
 command -v "$PY" >/dev/null 2>&1 || PY=python3
+# A pytest step needs an interpreter that has pytest. WSL bash usually finds a python3 without it while the Windows
+# `python` has it, so probe the candidates once and take the first that works: that turns "No module named pytest"
+# into a real test run instead of a FAIL. If none has pytest, pytest-backed steps SKIP (77) rather than fail.
+has_pytest=0
+if "$PY" -c "import pytest" >/dev/null 2>&1; then
+    has_pytest=1
+else
+    for cand in python python3 python.exe py.exe /mnt/c/Windows/py.exe; do
+        if [ "$cand" != "$PY" ] && command -v "$cand" >/dev/null 2>&1 && "$cand" -c "import pytest" >/dev/null 2>&1; then
+            PY="$cand"; has_pytest=1; break
+        fi
+    done
+fi
 PYTEST=("$PY" -m pytest -q -p no:cacheprovider)
 
 ALL=" host-tests mrac-equiv c-pytest sil-smoke clang-tidy float row-meta fw-lint stack doc-paths arm-syntax doc-budget "
+
+# --changed: pick the steps the files in this branch's diff require, so an edit pays for its own verification and
+# not for the whole gate. The route table is tools/check_routes.txt (one row: <git pathspec> <steps>); a changed file
+# with no row adds nothing, and doc-paths/doc-budget always run (a broken path or a blown line cap fails everything).
+# --quiet: one line per passing step; a failing step's last 20 lines here, the full log in .agent_state/check_fail.log.
+# CHECK_QUIET=1 makes --quiet the default.
+routed=""
 only=" $* "
+route_only="0"
+case " $only " in
+    *" --changed "*) routed=1; only="  " ;;
+    *" --route-list "*) route_only=1; routed=1; only="  " ;;
+    *" --quiet "*)   only="${only/ --quiet / }" ;;
+esac
 [ "$only" = " --fast " ] && only=" c-pytest clang-tidy float row-meta fw-lint stack doc-paths arm-syntax doc-budget "
+if [ -n "${CHECK_QUIET:-}" ] && [[ "$only" != *" --quiet "* ]] && [ "$only" != " --fast " ]; then
+    only="${only} --quiet "
+fi
+if [ -n "$routed" ]; then
+    if [ "$route_only" = 1 ]; then
+        $PY tools/check_routes.py 2>/dev/null
+        exit $?
+    fi
+    only=" $($PY tools/check_routes.py 2>/dev/null) "
+    echo "== routed by changed files: ${only# }"
+fi
 for want in $only; do
+    case "$want" in
+        -*) continue ;;
+        --changed|--quiet|--route-list) continue ;;
+    esac
     [[ "$ALL" == *" $want "* ]] || { echo "check.sh: unknown step '$want' (steps:$ALL)" >&2; exit 2; }
 done
 
 # A step exits 77 when its input cannot exist on this machine (no Keil build, no ARM gcc): SKIPPED, named in the
 # verdict line, never silently OK.
+# Quiet mode: a passing step is one line; a failing step keeps its last 20 lines on stdout and the full log in
+# .agent_state/check_fail.log. Agents re-send every line of stdout on every later tool call, so a 300-line passing
+# test log costs thousands of tokens each time it is in the transcript.
 failed=()
 skipped=()
+ran=()
+QUIET=0
+[[ "$only" == *" --quiet "* ]] && QUIET=1
+FAILLOG=".agent_state/check_fail.log"
 step() {
-    local name=$1 t0=$SECONDS rc
+    local name=$1 t0=$SECONDS rc log=""
     shift
     [ "$only" = "  " ] || [[ "$only" == *" $name "* ]] || return 0
-    echo "== $name"
-    "$@"; rc=$?
+    ran+=("$name")
+    if [ "$QUIET" = 1 ]; then
+        log=$(mktemp); "$@" > "$log" 2>&1; rc=$?
+        mkdir -p .agent_state
+        if [ $rc -ne 0 ]; then cat "$log" > "$FAILLOG"; echo "   full log: $FAILLOG"; fi
+        printf '== %s\n' "$name"; cat "$log" | { [ $rc -eq 0 ] && { :; } || tail -n 20; }; rm -f "$log"
+    else
+        echo "== $name"
+        "$@"; rc=$?
+    fi
     if [ $rc -eq 0 ]; then
         echo "-- $name OK ($((SECONDS - t0)) s)"
     elif [ $rc -eq 77 ]; then
@@ -52,11 +112,25 @@ step() {
     fi
 }
 
+# A missing test runner is a fact about the machine, not a defect in the change under test: pytest-backed steps
+# exit 77 (SKIPPED) instead of failing with "No module named pytest". Set CHECK_PY to the interpreter that has it.
+pytest_step() {
+    if [ "$has_pytest" = 0 ]; then
+        echo "SKIP pytest: no python with pytest on this machine ($PY); install pytest or set CHECK_PY"
+        return 77
+    fi
+    "${PYTEST[@]}" "$@"
+}
+
 # sil-smoke as 4 pytest processes at once, one per -k group; each group excludes the earlier ones, so together they
 # run every test once (an empty group fails, rc 5). Balanced on measured call times (about 30 s each, 2026-10-05).
 # The SIL binaries are built first so the groups only read them. SIL_SMOKE_SERIAL=1 = one process.
 SIL=(sim/sil/test_sil.py sim/sil/test_faults.py --deselect sim/sil/test_sil.py::test_run_mrac_equiv_still_ok)
 sil_smoke() {
+    if [ "$has_pytest" = 0 ]; then
+        echo "SKIP sil-smoke: no python with pytest on this machine ($PY); install pytest or set CHECK_PY"
+        return 77
+    fi
     [ "${SIL_SMOKE_SERIAL:-0}" = 1 ] && { "${PYTEST[@]}" "${SIL[@]}"; return; }
     "$PY" -m sim.sil.build > /dev/null || return 1
     local groups=("replay_round_trip or deterministic" "presets" "cascade or abort_rules")
@@ -101,8 +175,9 @@ doc_budget() {
 
 step host-tests "$PY" tools/host_tests.py
 step mrac-equiv "$PY" API/tests/run_mrac_equiv.py
-step c-pytest   "${PYTEST[@]}" ground_station/livewatch/tests/test_subscribe_c.py \
-                ground_station/analysis/tests/test_mrac_variants_host.py tools/test_row_meta.py tools/test_install_hooks.py
+step c-pytest   pytest_step ground_station/livewatch/tests/test_subscribe_c.py \
+                ground_station/analysis/tests/test_mrac_variants_host.py tools/test_row_meta.py \
+                tools/test_install_hooks.py tools/test_check_routes.py
 step sil-smoke  sil_smoke
 step clang-tidy "$PY" tools/host_tests.py --tidy
 step float      "$PY" tools/host_tests.py --float
@@ -132,7 +207,10 @@ if [ "$only" = "  " ]; then
     printf 'CHECK PASS %s scope=full\n' "$(date -u +%FT%TZ)" > .agent_state/last_check
     echo "CHECK PASS$note"
 else
-    printf 'CHECK SUBSET PASS %s scope=%s\n' "$(date -u +%FT%TZ)" "${only// /}" \
+    # scope= lists the steps this run actually covered, so tools/agent_push_guard.py can compare it with what the
+    # diff requires. Built from the steps that ran (each `step()` call appends to `ran`), not from $only, so a flag
+    # never lands in the scope.
+    printf 'CHECK SUBSET PASS %s scope=%s\n' "$(date -u +%FT%TZ)" "${ran[*]}" \
         > .agent_state/last_check
     echo "CHECK SUBSET PASS:$only(not the full gate)$note"
 fi
