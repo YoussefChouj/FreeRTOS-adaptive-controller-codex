@@ -17,7 +17,7 @@
 #   about 9 flights per full type1 pack to the 30 % gate. 33 flights need about 4 full packs (type2 unmeasured).
 # - drift_nn logs in S0 only: the mem slow lane is already full (303 vars trimmed), adding it there would drop it.
 day: 2026-10-21
-title: new-firmware smoke hover, then the gate-memory premise (MRAC u100 vs u0, n=3 per arm), Z ground effect and v_z steps, the exp matrix, and the rest of the 10-17 plan
+title: new-firmware smoke hover, then the gate-memory premise (MRAC u100 vs u0, n=3 per arm before the cut line, n=5 with mem7-mem10), Z ground effect and v_z steps, the exp matrix, and the rest of the 10-17 plan
 camera:                       # camera_truth.sh fusion <id-fly> <mode> <args>, CT_FLOOR=logs/video_truth/<floor>
   floor: floor-1021           # scan at the lab with drone out of view: .\cam floor floor-1021
   mode: 3
