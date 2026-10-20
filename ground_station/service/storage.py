@@ -136,15 +136,20 @@ class SessionStore:
             self._commit()
 
     def append_event(self, session_id: str, kind: str, payload: dict[str, Any],
-                     time_ns: int | None = None) -> int:
-        with self._lock:
-            cur = self._db.execute(
-                "INSERT INTO events(session_id,time_ns,kind,payload_json) VALUES(?,?,?,?)",
-                (session_id, time_ns or time.time_ns(), kind,
-                 json.dumps(payload, sort_keys=True, separators=(",", ":"))),
-            )
-            self._commit()
-            return int(cur.lastrowid)
+                     time_ns: int | None = None) -> None:
+        """Queue one event row for the writer thread and return at once.
+
+        The ingest thread records events (command_verified on a readback), so
+        an insert + commit under ``_lock`` here waited out the writer's batch,
+        prune and WAL checkpoint (a 0.6 s writer hold gave 551 ms ingest lag
+        in test_ingest_schema_switch_lag). Readers flush first, so ordering and read-back are unchanged.
+        """
+        self._enqueue(
+            "events",
+            "INSERT INTO events(session_id,time_ns,kind,payload_json) VALUES(?,?,?,?)",
+            (session_id, time_ns or time.time_ns(), kind,
+             json.dumps(payload, sort_keys=True, separators=(",", ":"))),
+        )
 
     def append_telemetry(self, session_id: str, stream_id: int, sequence: int,
                          values: dict[str, Any], source_time_ms: int | None = None,
@@ -247,8 +252,8 @@ class SessionStore:
 
     def _prune(self, table: str, last_id: int) -> None:
         """Drop rows older than the newest ``max_rows`` (caller holds the lock)."""
-        if not self._prune_every:
-            return
+        if not self._prune_every or table not in self._inserts:
+            return   # events are never pruned
         self._inserts[table] += 1
         if self._inserts[table] % self._prune_every == 0:
             self._db.execute(f"DELETE FROM {table} WHERE id <= ?",

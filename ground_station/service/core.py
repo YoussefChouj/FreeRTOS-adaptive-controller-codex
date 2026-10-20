@@ -1264,6 +1264,7 @@ class GroundStationService:
             session_id = self.session_id
         if session_id is None:
             return []
+        self.store.flush()   # events are queued for the writer thread
         rows = self.store._db.execute(
             "SELECT time_ns, kind, payload_json FROM events "
             "WHERE session_id=? ORDER BY time_ns DESC LIMIT ?",
