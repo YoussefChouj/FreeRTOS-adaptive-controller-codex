@@ -61,6 +61,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import queue
 import socket
@@ -99,6 +100,8 @@ from ground_station.platform.transactions import parse_result_parts
 
 RX_SOCKET_BUFFER_BYTES = 8 << 20  # 8 MB, about 2 min of the heaviest plan
 INGEST_QUEUE_MAX = 200_000  # decoded frames held for the ingest thread before counting drops
+MIRROR_PERIOD_S = 0.01      # the mirror thread sends the queued per-frame dashboard messages this often
+MIRROR_QUEUE_MAX = 20_000   # per-frame mirror messages held for it; the oldest go first (the 100 ms full mirror stays)
 RELAY_RETRY_S = 1.0   # the relay port is re-tried this often until it binds
 
 INGEST_LAG_WARN_NS = 200_000_000  # PROPOSED: frame age that counts as "ingest behind" in the log (stale abort is 0.5 s)
@@ -335,6 +338,10 @@ class WifiBridge:
         self._last_telem: Dict[str, Any] = {}
         self._last_telem_t: float = 0.0
         self._telem_lock = threading.Lock()
+        # Per-frame mirror messages, sent by the mirror thread: a sendto on the ingest thread dropped the GIL on
+        # every frame, so any busy Python thread made ingest wait a switch interval per frame and fall behind
+        # (test_ingest_gil_convoy_lag: one busy thread at 100 Hz gave 435 ms frame age).
+        self._mirror_q: collections.deque = collections.deque(maxlen=MIRROR_QUEUE_MAX)
 
         # Socket used for both WiFi TX and RX
         self._wifi: Optional[socket.socket] = None
@@ -469,6 +476,7 @@ class WifiBridge:
         ingest.start()
         cmd = threading.Thread(target=self._cmd_loop, name="wifi_bridge_cmd", daemon=True)
         telem = threading.Thread(target=self._telem_loop, name="wifi_bridge_telem", daemon=True)
+        threading.Thread(target=self._mirror_loop, name="wifi_bridge_mirror", daemon=True).start()
 
         rx.start()
         cmd.start()
@@ -1803,11 +1811,24 @@ class WifiBridge:
             # Merge: same tag replaces its dict; other tags survive.
             self._last_telem[tag] = payload
             self._last_telem_t = t
-        try:
-            msg = json.dumps({tag: payload}, separators=(",", ":")).encode("utf-8")
-            self._telem_udp.sendto(msg, ("127.0.0.1", self._telem_udp_port))
-        except OSError:
-            pass
+        # Copied so a later change by the ingest callback cannot race the mirror thread's json.dumps.
+        self._mirror_q.append((tag, dict(payload)))
+
+    def _mirror_loop(self) -> None:
+        """Send the per-frame mirror messages ``_publish_telem`` queued, every MIRROR_PERIOD_S.
+
+        Same messages, same order, at most MIRROR_PERIOD_S later; the ingest thread no longer blocks in sendto.
+        """
+        q = self._mirror_q
+        while not self._stop.is_set():
+            time.sleep(MIRROR_PERIOD_S)
+            while q:
+                tag, payload = q.popleft()
+                try:
+                    msg = json.dumps({tag: payload}, separators=(",", ":")).encode("utf-8")
+                    self._telem_udp.sendto(msg, ("127.0.0.1", self._telem_udp_port))
+                except (OSError, TypeError, ValueError):
+                    pass
 
     @staticmethod
     def _slot0_to_sidebar(names, values):
