@@ -211,7 +211,8 @@ step host-tests "$PY" tools/host_tests.py
 step mrac-equiv "$PY" API/tests/run_mrac_equiv.py
 step c-pytest   pytest_step ground_station/livewatch/tests/test_subscribe_c.py \
                 ground_station/analysis/tests/test_mrac_variants_host.py tools/test_row_meta.py \
-                tools/test_install_hooks.py tools/test_check_routes.py tools/test_push_guard.py
+                tools/test_install_hooks.py tools/test_check_routes.py tools/test_push_guard.py \
+                tools/test_land_ci.py
 step sil-smoke  sil_smoke
 step clang-tidy "$PY" tools/host_tests.py --tidy
 step float      "$PY" tools/host_tests.py --float
