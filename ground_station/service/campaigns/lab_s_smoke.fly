@@ -1,0 +1,14 @@
+# S: post-flash smoke hover, the first flight after every reflash. One flash bundles ~15 firmware commits
+# (exp latch, landing xy hold 868f4ba4, drift NN shadow task + live switch, x/y and Z MRAC rows), so this
+# 30 s hover proves the new build arms, holds, logs the drift net in shadow (g_drift_nn_live=0) and lands
+# with the new landing hold (pad gate 10 cm, the mem flights' setting) before any experiment flies on it.
+# Fly it: fly lab_s_smoke --once (camera fusion mode 3). Pass (PROPOSED): steady hover; drift_nn.steps passes
+# 125 with live_on 0; camera landing line inside the 10 cm pad gate (10-19 landings were 17-41 cm off).
+campaign lab-s-smoke
+rate 100
+log velocity_loops camera_fusion
+slow 50 drift_nn nn4 xy_ctrl ekf_states estimator_truth takeoff_gate
+set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10 g_drift_nn_live=0
+takeoff 0.8
+hold 30
+land

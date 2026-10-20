@@ -1,0 +1,130 @@
+# Lab day 2026-10-21: fly it with `.\labday 2026-10-21` (add `--pack 2` once after a type-2 swap; ground_station/lab/labday.py).
+# `.\labday 2026-10-21 --list` shows what is flown; the same command again goes on from the first flight not flown.
+# Each flight is `.\fly <fly> --once <args>`; `stop: true` = analysis stop after it. Pass marks are PROPOSED.
+# Reflow of every flight not yet flown well (2026-10-20 was not flown; this deck replaces it and the 10-17 carry):
+# - New firmware first. The built .axf is from 2026-10-18; ~15 firmware commits since (exp latch cd8326de, landing
+#   xy hold 868f4ba4, drift NN shadow task + live switch, x/y and Z MRAC rows) go on in one flash, so S0 is a 30 s
+#   smoke hover before any experiment. Keil compile-only build 2026-10-20: 0 errors, 4 old warnings.
+# - mem1..mem6, z1, z2 are the 10-20 plan unchanged. Their 10-19 aborts were L1 position_error at the first
+#   figure-8 lobe (36.4-36.9 cm > 25 cm); the abort limit is now 50 cm (973b73c0). Tracking itself is unchanged.
+# - E1..E4 refused take-off on 10-19 (exp_active one-flight lag, fixed host + firmware in cd8326de: needs the flash).
+# - Below the CUT LINE: the rest of the 10-17 plan. Not flown today = carried to the next day automatically.
+# - drift_nn logs in S0 only: the mem slow lane is already full (303 vars trimmed), adding it there would drop it.
+day: 2026-10-21
+title: new-firmware smoke hover, then the gate-memory premise (MRAC u100 vs u0, n=3 per arm), Z ground effect and v_z steps, the exp matrix, and the rest of the 10-17 plan
+camera:                       # camera_truth.sh fusion <id-fly> <mode> <args>, CT_FLOOR=logs/video_truth/<floor>
+  floor: floor-1021           # scan at the lab with drone out of view: .\cam floor floor-1021
+  mode: 3
+  args: [--yaw-deg, "94"]
+before:
+  - "Probe plugged in, drone powered and DISARMED, 8081 stopped (it locks the .axf): `python -m ground_station.flashtool.rebuild_and_flash --yes` (never --force; stop on a non-zero exit)"
+  - "After the flash: `python -m ground_station.livewatch verify`, then `python -m pytest ground_station/livewatch/tests/test_campaign_capture.py -q` (the ELF-symbol test goes green only on the new .axf)"
+  - 'Scan floor with drone out of view: `.\cam floor floor-1021`'
+  - "8081 running, `arm 0`, landing pad clear, camera in the recording position"
+  - "Tracker window: the dot sits on the drone center while parked before arming (if not: land, `r`, tell me)"
+flights:
+  - id: S0
+    fly: lab_s_smoke
+    why: "new-firmware smoke hover 30 s: arms, holds, drift net logs in shadow, lands with the new landing xy hold"
+    pass: "steady hover; drift_nn.steps passes 125 with live_on 0; camera landing line inside the 10 cm pad gate"
+    stop: true
+  - id: mem1
+    fly: lab_m_memory_u100
+    why: "memory u100 #1 (A hold, B figure-8, A hold)"
+    pass: "figure-8 completes; the dot stays on the drone in the tracker window"
+    stop: true
+  - id: mem2
+    fly: lab_m_memory_u0
+    why: memory u0 #1 (MRAC injection 0, the control arm)
+    pass: figure-8 completes
+  - id: mem3
+    fly: lab_m_memory_u100
+    why: memory u100 #2
+    pass: figure-8 completes
+  - id: mem4
+    fly: lab_m_memory_u0
+    why: memory u0 #2
+    pass: figure-8 completes
+  - id: mem5
+    fly: lab_m_memory_u100
+    why: memory u100 #3
+    pass: figure-8 completes
+  - id: mem6
+    fly: lab_m_memory_u0
+    why: memory u0 #3 (n=3 per arm reached)
+    pass: figure-8 completes
+    stop: true
+  - id: z1
+    fly: lab_z_ground_effect
+    why: Z ground effect (thrust vs height near the pad)
+    pass: holds at each height; lands on the pad
+  - id: z2
+    fly: lab_z_vz_steps
+    why: Z vertical drag (v_z steps)
+    pass: steps complete; lands on the pad
+    stop: true
+  - id: E1
+    fly: lab_e_exp_matrix
+    why: "exp matrix, PID + MRAC 3-loop row (pid_3l): thesis controller-agnostic claim"
+    pass: "exp read-back OK; figure-8 completes"
+  - id: E2
+    fly: lab_e_exp_adrc_3l
+    why: "exp matrix, ADRC + MRAC row (adrc_3l)"
+    pass: "exp read-back OK; figure-8 completes"
+  - id: E3
+    fly: lab_e_exp_lqr_3l
+    why: "exp matrix, LQR + MRAC row (lqr_3l)"
+    pass: "exp read-back OK; figure-8 completes"
+  - id: E4
+    fly: lab_e_exp_mpc_3l
+    why: "exp matrix, MPC + MRAC row (mpc_3l)"
+    pass: "exp read-back OK; figure-8 completes"
+    stop: true
+  # ---------------- CUT LINE: stop here if packs or time run out; the flights below carry to the next day ----------------
+  - id: F1
+    fly: lab_c_robust
+    why: "robust baseline step response (10-19 abort was the 12-gain journal check, fixed fafba158)"
+    pass: "heading steady (land if it swings); overshoot < 16 cm, settle < 2.4 s"
+    stop: true
+  - id: H0
+    fly: lab_h_speed_ladder_l0
+    why: "speed ladder rung set 0"
+    pass: "no tilt trip, no fence stop"
+  - id: H1
+    fly: lab_h_speed_ladder_l1
+    why: "speed ladder rung set 1"
+    pass: "the 67 rung matches H0"
+  - id: H2
+    fly: lab_h_speed_ladder_l2
+    why: "speed ladder rung set 2"
+    pass: "the 100 rung matches H1"
+    stop: true
+  - id: F2
+    fly: lab_d_livetune_rate
+    why: "live tune, rate loop"
+    pass: "livetune ends on budget/evals, saves livetune_best.json"
+  - id: F3
+    fly: lab_d_livetune_pos
+    why: "live tune, position loop"
+    pass: "merges pos into livetune_best.json, recommended true"
+    stop: true
+  - id: F4
+    fly: lab_c_autotune
+    why: "auto-tuned PID"
+    pass: "compared with F1, F5, F6"
+  - id: F5
+    fly: lab_c_lqr
+    why: "LQR"
+    pass: "no 2 Hz roll cycle (1-4 Hz fraction < 20%, was 42%)"
+  - id: F6
+    fly: lab_c_mpc
+    why: "MPC"
+    pass: "same as F5 (was 19%)"
+branches:
+  - {when: "Flash exits non-zero or `livewatch verify` fails", do: "Stop; do not fly the old build with today's host; tell me"}
+  - {when: "S0 lands outside the pad gate or drift_nn.steps stays 0", do: "Land; tell me before mem1 (landing hold or NN task not running)"}
+  - {when: '"NO FIX SENT" or the dot off the drone', do: "Land, check the tracker, re-fly (r at the auto-stop prompt)"}
+  - {when: Stale-telemetry abort at take-off, do: "Land; tell me (the abort event and logs/service/8081-*.log now say link vs host)"}
+  - {when: "E flight refuses take-off at set exp_id", do: "Land; the build is not the new one (cd8326de); re-check `livewatch verify`"}
+  - {when: Tilt trip or fence stop, do: "Land; tell me before the next flight"}
+  - {when: "Pack at the packs.yaml gate (gate_soc_pct, post-flight, ground only)", do: "Swap before the next flight; give the new type when fly asks"}
