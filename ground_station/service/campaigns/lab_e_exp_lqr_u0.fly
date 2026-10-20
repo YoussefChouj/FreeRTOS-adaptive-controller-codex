@@ -1,0 +1,19 @@
+# N3/4 lqr_3l u0: baseline-only control arm for E3, hover then figure-8. Flight order: lab_e_exp_pid_u0,
+#   lab_e_exp_adrc_u0, lab_e_exp_lqr_u0, lab_e_exp_mpc_u0. Each is its E twin plus takeoff mrac_injection=0
+#   (same exp row; MRAC runs and logs but its output is not applied, as in lab_m_memory_u0).
+# Fly it: fly lab_e_exp_lqr_u0 --once at >= 15.8 V resting. UNVERIFIED: never flown.
+# Purpose: E vs N isolates the adaptive layer per baseline (thesis: controller-agnostic MRAC); N's position
+#   response gives each baseline's own closed-loop bw to replace the PROPOSED s_xyrm rows
+#   (TASK/StabilizerTask.c:1695-1701; only PID's 2.0 rad/s is measured).
+campaign lab-e-exp-lqr-3l-u0
+rate 100
+log velocity_loops camera_fusion
+slow 50 nn4 xy_ctrl mrac_3l mrac_theta ekf_states estimator_truth thrust_model optical_flow takeoff_gate mrac_shadow
+exp lqr_3l
+set g_traj_ff_shift_s=0 g_land_xy_gate_cm=10 g_xyc_delay_ticks=12
+takeoff 0.5 mrac_injection=0
+hold 3
+set traj_p.move_s=12 traj_p.hold_s=1
+preset figure8 f8_a_cm=30
+hold 3
+land

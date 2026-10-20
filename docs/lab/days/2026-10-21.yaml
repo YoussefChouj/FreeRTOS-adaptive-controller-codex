@@ -9,6 +9,12 @@
 #   figure-8 lobe (36.4-36.9 cm > 25 cm); the abort limit is now 50 cm (973b73c0). Tracking itself is unchanged.
 # - E1..E4 refused take-off on 10-19 (exp_active one-flight lag, fixed host + firmware in cd8326de: needs the flash).
 # - Below the CUT LINE: the rest of the 10-17 plan. Not flown today = carried to the next day automatically.
+# - N1..N4 (new): the E flights again with mrac_injection=0 (control arm, same exp row). Not "exp pid/adrc/lqr/mpc":
+#   those rows keep MRAC on and only swap the rate-loop variant (vp 0 = S6 instead of vp 16 = 3Lv2).
+# - Below the cut (new): C1/C5 lab_c_pid (10-14 anchor, first and last = drift check), mem7..mem10 (n=5 per arm), F7.
+#   Left out: lab_d_excite needs fusion 2 and the camera mode is per day (3 today); lab_g_dynload needs a mounted load.
+# - Packs: 10-19 type1 dropped 4.4-8.6 % SoC per 52-71 s flight (mean 6.6 %, rest-V OCV, docs/lab/days/2026-10-19-report.md):
+#   about 9 flights per full type1 pack to the 30 % gate. 33 flights need about 4 full packs (type2 unmeasured).
 # - drift_nn logs in S0 only: the mem slow lane is already full (303 vars trimmed), adding it there would drop it.
 day: 2026-10-21
 title: new-firmware smoke hover, then the gate-memory premise (MRAC u100 vs u0, n=3 per arm), Z ground effect and v_z steps, the exp matrix, and the rest of the 10-17 plan
@@ -79,8 +85,28 @@ flights:
     fly: lab_e_exp_mpc_3l
     why: "exp matrix, MPC + MRAC row (mpc_3l)"
     pass: "exp read-back OK; figure-8 completes"
+  - id: N1
+    fly: lab_e_exp_pid_u0
+    why: "baseline-only twin of E1 (pid_3l row, MRAC output off): E1 vs N1 = what the adaptive layer adds on PID; N1 fits PID's own x/y bw"
+    pass: "exp read-back OK; figure-8 completes"
+  - id: N2
+    fly: lab_e_exp_adrc_u0
+    why: "baseline-only twin of E2 (adrc_3l row, MRAC output off): E2 vs N2 = what the adaptive layer adds on ADRC; N2 fits ADRC's own x/y bw"
+    pass: "exp read-back OK; figure-8 completes"
+  - id: N3
+    fly: lab_e_exp_lqr_u0
+    why: "baseline-only twin of E3 (lqr_3l row, MRAC output off): E3 vs N3 = what the adaptive layer adds on LQR; N3 fits LQR's own x/y bw"
+    pass: "exp read-back OK; figure-8 completes"
+  - id: N4
+    fly: lab_e_exp_mpc_u0
+    why: "baseline-only twin of E4 (mpc_3l row, MRAC output off): E4 vs N4 = what the adaptive layer adds on MPC; N4 fits MPC's own x/y bw"
+    pass: "exp read-back OK; figure-8 completes"
     stop: true
   # ---------------- CUT LINE: stop here if packs or time run out; the flights below carry to the next day ----------------
+  - id: C1
+    fly: lab_c_pid
+    why: "historic anchor: the 10-14 PID baseline (x step, circle, figure-8) on today's build, so 10-14..10-21 compare"
+    pass: "step overshoot and xy rms within 20% of 10-14 (PROPOSED); pad landing"
   - id: F1
     fly: lab_c_robust
     why: "robust baseline step response (10-19 abort was the 12-gain journal check, fixed fafba158)"
@@ -120,6 +146,31 @@ flights:
     fly: lab_c_mpc
     why: "MPC"
     pass: "same as F5 (was 19%)"
+  - id: mem7
+    fly: lab_m_memory_u100
+    why: "memory premise, arm u100: n=5 per arm with mem1-mem6 (n=3 gives no spread estimate)"
+    pass: "same as mem1-mem6; no L1 abort at 50 cm"
+  - id: mem8
+    fly: lab_m_memory_u0
+    why: "memory premise, arm u0: n=5 per arm with mem1-mem6 (n=3 gives no spread estimate)"
+    pass: "same as mem1-mem6; no L1 abort at 50 cm"
+  - id: mem9
+    fly: lab_m_memory_u100
+    why: "memory premise, arm u100: n=5 per arm with mem1-mem6 (n=3 gives no spread estimate)"
+    pass: "same as mem1-mem6; no L1 abort at 50 cm"
+  - id: mem10
+    fly: lab_m_memory_u0
+    why: "memory premise, arm u0: n=5 per arm with mem1-mem6 (n=3 gives no spread estimate)"
+    pass: "same as mem1-mem6; no L1 abort at 50 cm"
+  - id: F7
+    fly: lab_f_dense_traj
+    why: "dense preset trajectories back to back (main scenario); never flown"
+    pass: "every traj_go accepted; along/cross RMSE per preset (traj_metrics); check WARNs yaw-follow 163/183 deg/s > 90 (figure-8)"
+  - id: C5
+    fly: lab_c_pid
+    why: "PID again last: drift check against C1 (pack, temperature, props over the day)"
+    pass: "within 10% of C1 (PROPOSED)"
+    stop: true
 branches:
   - {when: "Flash exits non-zero or `livewatch verify` fails", do: "Stop; do not fly the old build with today's host; tell me"}
   - {when: "S0 lands outside the pad gate or drift_nn.steps stays 0", do: "Land; tell me before mem1 (landing hold or NN task not running)"}

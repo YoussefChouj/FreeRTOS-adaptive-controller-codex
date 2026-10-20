@@ -49,19 +49,16 @@ that fits a "controller-agnostic" claim.
 | Layer | Reference model | P | Depends on the xy controller? |
 |---|---|---|---|
 | Rate axes (roll, pitch, yaw, z) | fixed 1st/2nd order, ref_model_bw 44 / 44 / 30 / 20 rad/s (API/mrac.c:1551) | closed form from bw, zeta (mrac.c:1004-1015); dropped when drive_norm is on (mrac.c:1021-1025) | No: the inner rate loop is the same under every xy controller |
-| Position x/y | 1st order, bw 2.0 rad/s, fitted to the PID closed loop on 5 figure-8 logs (mrac.c:1691) | scalar, from bw | Not in code: API/mrac.c never reads g_xy_ctrl_kind; StabilizerTask.c:2236 swaps PID/ADRC/LQR/MPC under it |
+| Position x/y | 1st order, bw per baseline when flown through an exp row: s_xyrm (TASK/StabilizerTask.c:1695-1701) PID 2.0 measured (5 figure-8 logs), ADRC 2.2, LQR 4.8, MPC 4.4 rad/s PROPOSED (SIL fits); default 2.0 (mrac.c:1691) otherwise | scalar, from bw | Yes, through the exp row only: Exp_Poll (StabilizerTask.c:1704-1735) writes the row picked by xyrm (-1 = follow the row's xy kind) into the X and Y variant params. mrac.c itself never reads g_xy_ctrl_kind |
 
-Consequence: with LQR / MPC / ADRC in the xy loop, the x/y MRAC still pulls the closed loop toward the
-PID's 2 rad/s fit. If the new baseline is faster, adaptation will slow it down (it fights the baseline).
-Per-variant rows at StabilizerTask.c:1725-1728 can set ref_type / bw per run, so a per-baseline fit is
-possible without new code: fit bw from each controller's own no-adaptation flight (E2-E4 with u0).
+Correction (2026-10-20, after reading StabilizerTask.c): an earlier draft said the x/y model is PID-only. It is per baseline, but only the PID bw is measured; the ADRC / LQR / MPC bw are SIL fits. Flights outside an exp row (lab_c_lqr, lab_c_mpc set g_xy_ctrl_kind directly) keep the default 2.0 rad/s, so there the x/y MRAC pulls a faster baseline toward the PID's 2 rad/s fit and can fight it. To measure each baseline's own bw: fly it with no x/y adaptation (exp rows pid / adrc / lqr / mpc, vp 0; deck 2026-10-21 N1-N4) and fit a first-order model to the position response, then replace the PROPOSED rows.
 
 ## 4. Thesis impact
 
 "Controller-agnostic MRAC" (memory: thesis-core-claim) holds only if one of these is true:
 1. the reference model is refit per baseline (closed-loop augmentation, section 1), and the thesis says so;
 2. the adaptive layer targets a plant model (section 2), and the baselines are designed on that model.
-Today's x/y layer is neither: its model is PID-specific. Decide before the E1-E4 matrix is analysed.
+Today's x/y layer is option 1 in code (s_xyrm rows), but 3 of the 4 rows are SIL fits, not flight fits. Decide before the E1-E4 matrix is analysed.
 
 ## Open (UNSOURCED until checked)
 
