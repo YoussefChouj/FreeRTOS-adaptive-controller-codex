@@ -15,6 +15,7 @@
 #   Left out: lab_d_excite needs fusion 2 and the camera mode is per day (3 today); lab_g_dynload needs a mounted load.
 # - Packs: 10-19 type1 dropped 4.4-8.6 % SoC per 52-71 s flight (mean 6.6 %, rest-V OCV, docs/lab/days/2026-10-19-report.md):
 #   about 9 flights per full type1 pack to the 30 % gate. 33 flights need about 4 full packs (type2 unmeasured).
+#   Operator (2026-10-21): 4 type1 + 1 type2 packs, 2-4 flights per pack before charging, charged in rotation, so packs are not the bottleneck.
 # - drift_nn logs in S0 only: the mem slow lane is already full (303 vars trimmed), adding it there would drop it.
 day: 2026-10-21
 title: new-firmware smoke hover, then the gate-memory premise (MRAC u100 vs u0, n=3 per arm before the cut line, n=5 with mem7-mem10), Z ground effect and v_z steps, the exp matrix, and the rest of the 10-17 plan
