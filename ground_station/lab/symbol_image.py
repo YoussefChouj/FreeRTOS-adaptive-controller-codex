@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -163,10 +164,14 @@ def project_sources(project: Path = PROJECT) -> tuple[list[Path], list[Path], li
     return list(dict.fromkeys(sources)), includes, defines
 
 
+_LLVM_WIN = r"C:\Program Files\LLVM\bin"  # the LLVM Windows installer does not add itself to PATH
+
+
 def _tool(name: str) -> str:
-    path = shutil.which(name)
+    path = shutil.which(name) or (os.name == "nt" and shutil.which(name, path=_LLVM_WIN))
     if not path:
-        raise RuntimeError(f"{name} not found: the symbol image needs clang and ld.lld (apt install clang lld)")
+        raise RuntimeError(f"{name} not found: the symbol image needs clang and ld.lld "
+                           f"(apt install clang lld, or LLVM for Windows in {_LLVM_WIN})")
     return path
 
 

@@ -112,6 +112,9 @@ Claude Code subagents ever.
   cross-agent truth to files other agents actually read
   (`docs/agent/HANDOFF.md`, `docs/agent/memory/`); local = smallest,
   cheapest, locally-verifiable step.
+- **Engineering rigor** (operator 2026-10-20): control/estimation/experiment
+  work runs the six gates in `docs/agent/engineering-rigor.md`, and every
+  agent coaches the operator in them (one gate question per reply).
 - **Always read the context shard before editing.** Shard rule violations
   go in `docs/context/inbox/<task-id>.md`, not inline.
 - C for Keil ARMCC V5.06, built with `--C99` (no C11). Declarations at
