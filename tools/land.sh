@@ -25,7 +25,7 @@ while :; do
     state=$(curl -fsS "${auth[@]}" "https://api.github.com/repos/$repo/actions/runs?head_sha=$sha&per_page=20" 2>/dev/null |
         "$PY" -c 'import json, sys
 runs = [r for r in json.load(sys.stdin).get("workflow_runs", []) if r.get("path", "").endswith("/check.yml")]
-print(f"{runs[0][\"status\"]} {runs[0][\"conclusion\"]}" if runs else "none")' 2>/dev/null) || state="unknown"
+print(*((runs[0]["status"], runs[0]["conclusion"]) if runs else ("none",)))' 2>/dev/null) || state="unknown"
     case "$state" in
         "completed success") break ;;
         completed*) echo "land: CI check finished '$state' on ${sha:0:12}; main not moved" >&2; exit 1 ;;
