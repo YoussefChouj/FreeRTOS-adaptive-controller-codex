@@ -205,6 +205,7 @@ class FakeDrone:
         # traj_status / traj_active as the firmware streams them; the preset holds the position, only its time runs.
         self.vars: dict[str, float] = {**wfb_var.traj_defaults(), "traj_id": 4.0}
         self.var_writes: list[tuple[str, float]] = []
+        self.exp_active: int = 255   # TASK/StabilizerTask.c Exp_Poll: no row latched at boot
         self._traj_status: int = 0
         self._traj_active: int = 0
         self._preset_t: float = 0.0
@@ -310,6 +311,8 @@ class FakeDrone:
         except wfb_var.VarWriteError:
             return int(Outcome.REJECTED)
         self.var_writes.append((row.name, float(cmd.value)))
+        if row.name == "exp_id" and self._prim_state == PrimState.IDLE:   # Exp_Poll latches a row only on the ground
+            self.exp_active = int(cmd.value)
         if row.name == "traj_go" and cmd.value == 1.0:
             preset = int(self.vars["traj_id"])
             if self._prim_state == PrimState.IDLE:
@@ -386,6 +389,7 @@ class FakeDrone:
             self._prim_state = PrimState.CLIMB
             self._prim_settle_t = 0.0
             self._gs_flight_active = 1
+            self._hb_age = 0.0   # API/wfb_glue.c:142 TAKEOFF accept resets hb_ref_ms
             return int(Outcome.APPLIED)
 
         elif cmd.index == PrimIdx.LAND:
@@ -645,7 +649,7 @@ class FakeDrone:
             raise ValueError(f"dt must be positive and finite, got {dt!r}")
 
         # 1. Timers
-        self._hb_age += dt
+        self._hb_age = self._hb_age + dt if self._gs_flight_active else 0.0   # wfb_glue.c:379 age is 0 off a GS flight
         airborne = (self._prim_state != PrimState.IDLE)
         if airborne:
             self._airborne_t += dt

@@ -198,8 +198,8 @@ class Driver:
             self.stale += 1
             return []
         if name == "GAINS":
-            f.notes.append("asked to write gains to RAM: answered N")
-            return [("write", "\n")]
+            f.notes.append("asked to write gains to RAM: answered y")   # run the gain-write path (10-19 F1 failed there)
+            return [("write", "y\n")]
         if name == "DONE" and m.group(1) == f.id:
             f.end_s = self.clock()
             f.done_ok = m.group(3)

@@ -103,8 +103,7 @@ All built inline. Jules is unreachable from the cloud and Claude subagents are r
 
 ## Repo-architecture note (2026-10-20)
 
-The context map (this AGENTS.md, `docs/context/README.md` shards) is on
-`main`. The path-routed gate (pre-push guard, stream-page `Allowed-Paths:`,
-Tier-0 list, routed checks) is a separate PR under review on
-`claude/review-gate-2026-10-20`, not on `main`. Until it merges, the gate
-is `bash tools/check.sh` -> `CHECK PASS`, and CI runs it on every push.
+The context map (AGENTS.md, `docs/context/README.md` shards) and the
+path-routed gate (4641a688: pre-push guard, routed checks, `tools/land.sh`)
+are both on `main`. Gate = `bash tools/check.sh --changed`; main moves only
+through `bash tools/land.sh <branch>` (`docs/agent/governance-zones.md`).

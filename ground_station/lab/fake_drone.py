@@ -141,7 +141,8 @@ class FakeUdpDrone:
         vals = {ARM_SYM: float(d.armed), "g_motor_idle_enabled": float(d.motors_idle),
                 "sbus_lost": float(not d.sbus_live), "s_authority": 0.0, "g_of_hold_active": float(self.ch6),
                 KF_HEALTH: 1.0, "xTickCount": float(self._t_ms()), VBAT_SYMS[0]: self.vbat,
-                "traj_status": st.get("traj_status", 0.0), "traj_active": st.get("traj_active", 0.0)}
+                "traj_status": st.get("traj_status", 0.0), "traj_active": st.get("traj_active", 0.0),
+                "exp_active": float(d.exp_active)}
         vals.update(zip(ATTITUDE, (getattr(d, "roll_deg", 0.0), getattr(d, "pitch_deg", 0.0), d.yaw_deg)))
         vals.update((f"g_wfb_status.{k}", st[k]) for k in WFB_STATUS_FIELDS if k in st)
         vals.update((m, MOTOR_STANDIN if d.armed else 0.0) for m in MOTORS)
