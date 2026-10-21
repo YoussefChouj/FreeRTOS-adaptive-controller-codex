@@ -118,3 +118,18 @@ N8  sysid: rate + position learners -> plant model for sim + tuning.
 N9  landing: bump at touchdown vs battery voltage (all landings of 10-21).
 N10 figure-8 preset: lobe size vs achievable accel; bigger preset for 10-22.
 N11 10-22 deck + fake-drone soak; morning briefing artifact.
+
+## DAY PLAN 2026-10-22 (operator 01:10: lab in ~4 h; keep going, no compaction prompts; resume here)
+Done overnight: N0, N1, N4a-e, N5 (built, not flashed). Lanes: VPS agy = web/academic research + repo review;
+local Ark/agy = log digging (logs are local only); Jules = code PRs into nightly-1022; CEO = firmware, fixes, deck.
+D1  exp controllers (LQR/MPC/ADRC +-MRAC) initial oscillation: root cause vs last good flights, FIX for today, sim-check.
+D2  research: MRAC wrapped around a non-PID nominal (reference model = nominal closed loop, so the law changes with
+    the nominal); outer-loop-only vs outer+inner augmentation; Neural-Fly pretrained weights; figure-8 accel limits.
+D3  MRAC-on-nominal breakage analysis (thesis): how LQR/MPC/ADRC + MRAC can break; per-nominal reference model.
+D4  outer-loop adaptive augmentation option (firmware): outer only / inner only / both, A/B flights in the deck.
+D5  drift-NN: data quality -> Kaggle training; Neural-Fly weights + fine-tune if licence/format allow; shadow eval.
+D6  thesis flights 10-21: effect sizes with uncertainty, what each variant confirms.
+D7  sysid model quality (fit, validation, residual whiteness); refit if weak; sim update.
+D8  high-speed drift not recovered + tight vs wide figure-8 (tilt/accel/thrust saturation check).
+D9  firmware + pipeline review: bugs and no-behaviour-change improvements (VPS review -> Jules/CEO fixes).
+D10 10-22 deck + fake-drone soak + briefing artifact (plots, evidence, checks, theory, six skills).
