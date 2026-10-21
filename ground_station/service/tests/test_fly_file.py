@@ -110,6 +110,10 @@ def test_compiled_sample_flies_on_the_fake_drone():
     assert drone.vars["traj_p.move_s"] == 12.0 and drone.vars["traj_p.f8_a_cm"] == 30.0
 
 
+# Smith-predictor delay (VAR 47) measured from the 10-21 exp flights (u_prev -> velocity fit, median).
+MEASURED_XY_DELAY_TICKS = 21
+
+
 @pytest.mark.parametrize("path", sorted(SAMPLE.parent.glob("lab_*.fly")), ids=lambda p: p.stem)
 def test_lab_scripts_compile_log_and_fly_on_the_fake_drone(path):
     from ground_station.livewatch.campaign_capture import check_log_plan
@@ -131,6 +135,8 @@ def test_lab_scripts_compile_log_and_fly_on_the_fake_drone(path):
         assert ground["g_drift_nn_live"] == 0
         want.add("g_drift_nn_live")
     assert set(ground) == want
+    if "g_xyc_delay_ticks" in ground:  # 10-21 logs: loop delay ~21 ticks; 12 rang LQR/MPC at 0.4-1.5 Hz
+        assert ground["g_xyc_delay_ticks"] == MEASURED_XY_DELAY_TICKS
     drone, _, deps = _rig()
     if "exp_id" in ground:
         orig_status = deps.status

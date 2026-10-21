@@ -7,7 +7,7 @@ campaign lab-c-lqr
 rate 100
 log velocity_loops camera_fusion
 slow 50 nn4 xy_ctrl mrac_3l mrac_theta ekf_states estimator_truth thrust_model optical_flow takeoff_gate mrac_shadow
-set g_xy_ctrl_kind=2 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10 g_xyc_delay_ticks=12
+set g_xy_ctrl_kind=2 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10 g_xyc_delay_ticks=21
 takeoff 0.5
 hold 3
 goto x=0.4 y=0 z=0.5 dwell_s=4
