@@ -71,6 +71,12 @@ typedef struct {
 
 static wfb_glue_state_t s_wfb MRAC_CCM;
 wfb_status_t g_wfb_status MRAC_CCM;
+/* Safety checks switched off (WFB_GATE_* bits), copied into the limits every step so a Keil watch or GS var write
+   takes effect at once. HEARTBEAT and AIRBORNE_CAP always stay on. Default: supervised flights, the pilot is the net
+   (operator 2026-10-21: "disable all the gates just leave the flight time gate and me as the manual overide
+   supervisor"). PROPOSED for 10-22: the flash waits for the operator's OK. WFB_GATES_ALL -> 0u restores every check.
+   Normal RAM, not CCM, so the initialiser holds. */
+volatile uint8_t g_wfb_safety_gates_off = (uint8_t)WFB_GATES_ALL;
 
 /* Milliseconds from ref to now as seconds; 0 when now is before ref (the command task and the
  * 200 Hz loop read the tick count at slightly different moments). */
@@ -387,6 +393,7 @@ void wfb_glue_tick(const wfb_glue_in_t *in, wfb_glue_out_t *out)
     sin.dt_s = dt_s;
     sin.airborne = s_wfb.gs_flight_active ? in->airborne : 0u;
     sin.gs_flight_active = gs_flying;
+    s_wfb.safety_lim.gates_off = (uint8_t)(g_wfb_safety_gates_off & WFB_GATES_ALL);
     action = (uint8_t)wfb_safety_step(&s_wfb.safety, &s_wfb.safety_lim, &sin);
     wfb_glue_apply_action(action, &pin);
 

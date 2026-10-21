@@ -731,6 +731,58 @@ static void test_10_same_step_ties(void)
     CHECK(s.trip == (uint8_t)WFB_TRIP_TILT);
 }
 
+/* 11. Supervised gates (gates_off = WFB_GATES_ALL): far outside the fence and ceiling, tilted past tilt_deg and under
+       low_v for 10 s, nothing trips and nothing is pushed; HEARTBEAT and AIRBORNE_CAP still land. Zero keeps all on. */
+static void test_11_gates_off(void)
+{
+    wfb_safety_t s;
+    wfb_safety_limits_t lim;
+    wfb_safety_in_t in;
+    wfb_action_t act;
+    int i;
+
+    wfb_safety_default_limits(&lim);
+    CHECK(lim.gates_off == 0u);
+    lim.gates_off = (uint8_t)WFB_GATES_ALL;
+    wfb_safety_init(&s);
+    init_nominal_in(&in);
+    in.x_m = 5.0f; in.y_m = -5.0f; in.z_m = 5.0f;
+    in.roll_deg = 90.0f; in.pitch_deg = -90.0f; in.vbat_v = 10.0f;
+    in.dt_s = 0.1f;
+    for (i = 0; i < 100; i++) {
+        act = wfb_safety_step(&s, &lim, &in);
+        CHECK(act == WFB_ACT_NONE);
+    }
+    CHECK(s.trip == (uint8_t)WFB_TRIP_NONE);
+    CHECK(s.push == 0u);
+    CHECK_FLOAT_EQ(s.tilt_t, 0.0f, 1e-6f);
+    CHECK_FLOAT_EQ(s.low_v_t, 0.0f, 1e-6f);
+
+    in.hb_age_s = 1.5f;
+    act = wfb_safety_step(&s, &lim, &in);
+    CHECK(act == WFB_ACT_LAND_VIA_HOVER);
+    CHECK(s.trip == (uint8_t)WFB_TRIP_HEARTBEAT);
+
+    wfb_safety_init(&s);
+    in.hb_age_s = 0.1f;
+    in.dt_s = 121.0f;
+    act = wfb_safety_step(&s, &lim, &in);
+    CHECK(act == WFB_ACT_LAND_VIA_HOVER);
+    CHECK(s.trip == (uint8_t)WFB_TRIP_AIRBORNE_CAP);
+
+    /* One gate off at a time: only that check goes quiet. */
+    wfb_safety_init(&s);
+    init_nominal_in(&in);
+    lim.gates_off = (uint8_t)WFB_GATE_CEILING;
+    in.z_m = 5.0f;
+    act = wfb_safety_step(&s, &lim, &in);
+    CHECK(act == WFB_ACT_NONE);
+    in.x_m = 5.0f;
+    act = wfb_safety_step(&s, &lim, &in);
+    CHECK(act == WFB_ACT_LAND_IN_PLACE);
+    CHECK(s.trip == (uint8_t)WFB_TRIP_FENCE);
+}
+
 int main(void)
 {
     test_1_airborne_zero();
@@ -744,6 +796,7 @@ int main(void)
     test_8_default_limits();
     test_9_fail_safe_on_bad_numbers();
     test_10_same_step_ties();
+    test_11_gates_off();
 
     if (s_fail_count == 0) {
         printf("PASS %d\n", s_check_count);

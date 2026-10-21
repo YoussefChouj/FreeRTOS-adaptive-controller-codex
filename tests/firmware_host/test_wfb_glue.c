@@ -41,7 +41,8 @@ static void check(int ok, const char *what, int line)
 /* Compare floats that are not exact binary values through CHECK_NEAR: 32-bit x87 gcc evaluates a
  * constant like 0.8f in long double (FLT_EVAL_METHOD 2), so == against a stored float fails. */
 #define CHECK_NEAR(a, b, tol) check(fabsf((a) - (b)) <= (tol), #a " ~= " #b, __LINE__)
-#define RUN(test)             do { s_test = #test; test(); } while (0)
+/* Every test runs with all safety checks on; test_supervised_gates_default covers the firmware default. */
+#define RUN(test)             do { s_test = #test; g_wfb_safety_gates_off = 0u; test(); } while (0)
 
 /* ---- helpers ------------------------------------------------------------------------ */
 
@@ -808,6 +809,29 @@ static void test_tilt_kills_motors(void)
     CHECK(out.land_req == 0u);
 }
 
+/* The firmware default switches tilt, fence, ceiling and low-voltage off for supervised flights: a 70 deg roll, a
+ * fence breach and a flat battery neither kill nor land, while heartbeat loss still lands. */
+static void test_supervised_gates_default(void)
+{
+    wfb_glue_in_t in;
+    wfb_glue_out_t out;
+
+    g_wfb_safety_gates_off = (uint8_t)WFB_GATES_ALL;
+    fly_to_hover(&in, &out);
+    in.roll_deg = 70.0f;
+    in.x_m = 1.7f;
+    in.z_m = 1.8f;
+    in.vbat_v = 9.0f;
+    run_ticks(&in, &out, 60, 1);
+    CHECK(out.motor_stop_req == 0u);
+    CHECK(out.land_req == 0u);
+    CHECK(g_wfb_status.safety_trip == 0.0f);
+    CHECK(g_wfb_status.fence_push == 0.0f);
+    CHECK(run_until_land_req(&in, &out, 2000, 0));
+    CHECK(out.motor_stop_req == 0u);
+    CHECK(g_wfb_status.hb_age > 1.0f);
+}
+
 int main(void)
 {
     RUN(test_boot_state);
@@ -831,6 +855,7 @@ int main(void)
     RUN(test_future_heartbeat_clamps_to_zero);
     RUN(test_malformed_commands_rejected);
     RUN(test_tilt_kills_motors);
+    RUN(test_supervised_gates_default);
 
     if (s_failures == 0) {
         printf("PASS %d\n", s_checks);

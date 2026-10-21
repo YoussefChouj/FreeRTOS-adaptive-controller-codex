@@ -89,6 +89,7 @@ typedef struct {
 } wfb_glue_out_t;
 
 extern wfb_status_t g_wfb_status;
+extern volatile uint8_t g_wfb_safety_gates_off; /* WFB_GATE_* bits switched off, see wfb_glue.c */
 
 void    wfb_glue_init(void);
 uint8_t wfb_glue_on_cmd(uint8_t cmd, uint8_t idx, float val, uint32_t now_ms); /* WFB_RESULT_* */

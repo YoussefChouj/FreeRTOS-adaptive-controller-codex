@@ -36,7 +36,15 @@ typedef struct {
     float fence_hold_s;   /* longest push-back outside the fence before LAND_IN_PLACE, s */
     float fence_over_m;   /* this far beyond the fence (or ceiling) -> LAND_IN_PLACE at once, m */
     float soft_margin_m;  /* push-back target: this far inside the fence (and ceiling), m */
+    uint8_t gates_off;    /* WFB_GATE_* bits of checks switched off; 0 (zero-init) keeps every check on */
 } wfb_safety_limits_t;
+
+/* wfb_safety_limits_t.gates_off bits. HEARTBEAT and AIRBORNE_CAP have no bit: they are always on. */
+#define WFB_GATE_TILT    1u
+#define WFB_GATE_FENCE   2u
+#define WFB_GATE_CEILING 4u
+#define WFB_GATE_LOW_V   8u
+#define WFB_GATES_ALL    (WFB_GATE_TILT | WFB_GATE_FENCE | WFB_GATE_CEILING | WFB_GATE_LOW_V)
 
 /* wfb_safety_t.push bits: axes outside the fence that the setpoint is pushing back on. */
 #define WFB_PUSH_X 1u

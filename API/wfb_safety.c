@@ -18,7 +18,7 @@
    @soft_margin_m   m    [0, 1]       push-back target this far inside the fence and ceiling
    2026-10-03 workflow-B launch grill: fence 1.6/2.0 and ceiling 1.7 around the ground-centre origin (operator);
    push-back instead of an immediate landing (operator: "too conservative"); hold/over/margin PROPOSED. */
-#define WFB_SAFETY_LIMITS_ROW(fence_x_m, fence_y_m, ceiling_m, low_v, low_v_hold_s,                               tilt_deg, tilt_hold_s, airborne_cap_s, hb_timeout_s,                               fence_hold_s, fence_over_m, soft_margin_m)     { (fence_x_m), (fence_y_m), (ceiling_m), (low_v), (low_v_hold_s),       (tilt_deg), (tilt_hold_s), (airborne_cap_s), (hb_timeout_s),       (fence_hold_s), (fence_over_m), (soft_margin_m) }
+#define WFB_SAFETY_LIMITS_ROW(fence_x_m, fence_y_m, ceiling_m, low_v, low_v_hold_s,                               tilt_deg, tilt_hold_s, airborne_cap_s, hb_timeout_s,                               fence_hold_s, fence_over_m, soft_margin_m)     { (fence_x_m), (fence_y_m), (ceiling_m), (low_v), (low_v_hold_s),       (tilt_deg), (tilt_hold_s), (airborne_cap_s), (hb_timeout_s),       (fence_hold_s), (fence_over_m), (soft_margin_m), 0u /* gates_off: every check on */ }
 
 static const wfb_safety_limits_t s_default_limits =
 /*                   fence_x fence_y ceiling low_v low_v_hold tilt tilt_hold cap    hb    f_hold f_over soft */
@@ -95,8 +95,8 @@ wfb_action_t wfb_safety_step(wfb_safety_t *s, const wfb_safety_limits_t *lim, co
        All comparisons use negated form so NaN trips fail-safe. */
 
     /* 1. TILT: |roll| or |pitch| over tilt_deg continuously for tilt_hold_s -> KILL, trip TILT. */
-    tilt_active = (!(fabsf(in->roll_deg) <= lim->tilt_deg) ||
-                   !(fabsf(in->pitch_deg) <= lim->tilt_deg));
+    tilt_active = (lim->gates_off & WFB_GATE_TILT) == 0u &&
+                  (!(fabsf(in->roll_deg) <= lim->tilt_deg) || !(fabsf(in->pitch_deg) <= lim->tilt_deg));
     if (tilt_active) {
         s->tilt_t += in->dt_s;
     } else {
@@ -112,7 +112,7 @@ wfb_action_t wfb_safety_step(wfb_safety_t *s, const wfb_safety_limits_t *lim, co
     /* 2-3. FENCE / CEILING. Outside |x| fence_x_m, |y| fence_y_m or z ceiling_m on a GS flight with no action:
        push back (s->push, see wfb_safety_push_sp) while fence_t counts. Still out after fence_hold_s, more than
        fence_over_m beyond, or no GS setpoint to push with (pilot takeover) -> LAND_IN_PLACE, trip FENCE for x/y
-       else CEILING. Back inside clears fence_t and the push. */
+       else CEILING. Back inside clears fence_t and the push. A gate in gates_off drops its axes from out and far. */
     out = 0u;
     far = 0u;
     if (!(fabsf(in->x_m) <= lim->fence_x_m)) { out |= WFB_PUSH_X; }
@@ -121,6 +121,8 @@ wfb_action_t wfb_safety_step(wfb_safety_t *s, const wfb_safety_limits_t *lim, co
     if (!(fabsf(in->x_m) <= lim->fence_x_m + lim->fence_over_m)) { far |= WFB_PUSH_X; }
     if (!(fabsf(in->y_m) <= lim->fence_y_m + lim->fence_over_m)) { far |= WFB_PUSH_Y; }
     if (!(in->z_m <= lim->ceiling_m + lim->fence_over_m))        { far |= WFB_PUSH_Z; }
+    if ((lim->gates_off & WFB_GATE_FENCE) != 0u)   { out &= (uint8_t)~(WFB_PUSH_X | WFB_PUSH_Y); far &= (uint8_t)~(WFB_PUSH_X | WFB_PUSH_Y); }
+    if ((lim->gates_off & WFB_GATE_CEILING) != 0u) { out &= (uint8_t)~WFB_PUSH_Z; far &= (uint8_t)~WFB_PUSH_Z; }
     if (out != 0u) {
         s->fence_t += in->dt_s;
     } else {
@@ -133,7 +135,7 @@ wfb_action_t wfb_safety_step(wfb_safety_t *s, const wfb_safety_limits_t *lim, co
     }
 
     /* 4. LOW_V: vbat_v under low_v continuously for low_v_hold_s -> LAND_VIA_HOVER, trip LOW_V. */
-    low_v_active = !(in->vbat_v >= lim->low_v);
+    low_v_active = (lim->gates_off & WFB_GATE_LOW_V) == 0u && !(in->vbat_v >= lim->low_v);
     if (low_v_active) {
         s->low_v_t += in->dt_s;
     } else {

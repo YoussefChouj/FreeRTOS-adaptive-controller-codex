@@ -33,10 +33,10 @@ CtrlerTypeDef Ctrler={
     PID_ROW(0.7,  0.005, 0.1,  1.0,  0.9,   0.3,   0.3,   30,      0.3   ), /* Z_posPID     altitude */
     PID_ROW(400,  0.435, 0,    300,  300,   100,   60,    250,     10    ), /* Z_ratePID    climb rate (inner) */
 
-    PID_ROW(0.8,  0.0013, 4.0,  300,  300,   5,     50,    3850,    10    ), /* locxPID      position x */ /* F3 */
-    PID_ROW(0.8,  0.0013, 4.0,  300,  300,   5,     50,    3850,    10    ), /* locyPID      position y */ /* F3 */
-    PID_ROW(3.0,  0.008,  6.0,  600,  600,   100,   100,   12500,   10    ), /* locxsPID     velocity x (inner) */ /* F3 */
-    PID_ROW(3.0,  0.008,  6.0,  600,  600,   100,   100,   12500,   10    ), /* locysPID     velocity y (inner) */ /* F3 */
+    PID_ROW(0.3214, 0.0001, 6.2937, 300, 300, 5,  50,    3850,    10    ), /* locxPID      position x */ /* C3 robust */
+    PID_ROW(0.3214, 0.0001, 6.2937, 300, 300, 5,  50,    3850,    10    ), /* locyPID      position y */ /* C3 robust */
+    PID_ROW(3.2242, 0.0157, 4.7283, 600, 600, 100, 100,   12500,   10    ), /* locxsPID     velocity x (inner) */ /* C3 robust */
+    PID_ROW(3.2242, 0.0157, 4.7283, 600, 600, 100, 100,   12500,   10    ), /* locysPID     velocity y (inner) */ /* C3 robust */
 
     PID_ROW(1.0,  0,     2.0,  40,   40,    0,     2,     2,       2     ), /* stree_yaw_speed */
     PID_ROW(0.6,  0,     0.0,  80,   70,    0,     5,     2,       2     )  /* stree_pitch_speed */
@@ -48,6 +48,11 @@ CtrlerTypeDef Ctrler={
 typedef char pid_table_rows_match_ctrler[(sizeof(CtrlerTypeDef) == PID_TABLE_ROWS * sizeof(PIDTypeDef)) ? 1 : -1];
 
 /* Change history (newest first)
+ * C3 robust position gains as the default (2026-10-22, PROPOSED: flash waits for the operator's OK)
+ *   locx, locy: Kp 0.8->0.3214, Ki 0.0013->0.0001, Kd 4->6.2937; locxs, locys: Kp 3->3.2242, Ki 0.008->0.0157,
+ *   Kd 6->4.7283. The c3 preset (campaign_fly.GAIN_PRESETS) flew best on 2026-10-21; operator: "make it the default
+ *   from now on". Limits unchanged (the preset wrote Kp Ki Kd only). Known cost: outer Kp 0.3214 gives 40% of the
+ *   old restoring authority against takeoff drift (docs/lab/f1-takeoff-drift-analysis-2026-10-15.md).
  * Yaw controller overhaul (2026-10-16, PROPOSED)
  *   yaw: Kd 0->0.20, UiMax 2->15, SumEMax 50->300, EMin 2->25 (outer damping + integral capture range)
  *   gyroz: UiMax 500->200, SumEMax 100000->20000 (cap rate integral windup to 100 PWM at Ki 0.005)
@@ -151,10 +156,10 @@ const float pid_cmd_max[PID_CMD_AXES][3] = {
     PID_CMD_ROW(200,  200,  200), /* 5     gyrozPID   8 / 0.005 / 0.02 */
     PID_CMD_ROW(800,  200,  200), /* 6     Z_ratePID  400 / 0.435 / 0 */
     PID_CMD_ROW(200,  200,  200), /* 7     Z_posPID   0.7 / 0.005 / 0.1 */
-    PID_CMD_ROW(200,  200,  200), /* 8     locxPID    0.8 / 0.0013 / 4 */
-    PID_CMD_ROW(200,  200,  200), /* 9     locyPID    0.8 / 0.0013 / 4 */
-    PID_CMD_ROW(200,  200,  200), /* 10    locxsPID   3 / 0.008 / 6 */
-    PID_CMD_ROW(200,  200,  200)  /* 11    locysPID   3 / 0.008 / 6 */
+    PID_CMD_ROW(200,  200,  200), /* 8     locxPID    0.3214 / 0.0001 / 6.2937 */
+    PID_CMD_ROW(200,  200,  200), /* 9     locyPID    0.3214 / 0.0001 / 6.2937 */
+    PID_CMD_ROW(200,  200,  200), /* 10    locxsPID   3.2242 / 0.0157 / 4.7283 */
+    PID_CMD_ROW(200,  200,  200)  /* 11    locysPID   3.2242 / 0.0157 / 4.7283 */
 };
 
 PIDTypeDef *PID_CmdLoop(uint8_t axis)

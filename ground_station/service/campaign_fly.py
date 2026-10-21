@@ -449,16 +449,17 @@ def _vitals(base):
 PID_DEFAULTS = {
     0: ("pitchPID.Kp", 3.0), 1: ("pitchPID.Ki", 0.02), 2: ("pitchPID.Kd", 8.0),
     3: ("rollPID.Kp", 3.0), 4: ("rollPID.Ki", 0.02), 5: ("rollPID.Kd", 8.0),
-    6: ("yawPID.Kp", 6.0), 7: ("yawPID.Ki", 0.04), 8: ("yawPID.Kd", 0.0),
+    6: ("yawPID.Kp", 6.0), 7: ("yawPID.Ki", 0.04), 8: ("yawPID.Kd", 0.20),
     9: ("gyroxPID.Kp", 5.0), 10: ("gyroxPID.Ki", 0.01), 11: ("gyroxPID.Kd", 10.0),
     12: ("gyroyPID.Kp", 5.0), 13: ("gyroyPID.Ki", 0.01), 14: ("gyroyPID.Kd", 10.0),
     15: ("gyrozPID.Kp", 8.0), 16: ("gyrozPID.Ki", 0.005), 17: ("gyrozPID.Kd", 0.02),
     18: ("Z_ratePID.Kp", 400.0), 19: ("Z_ratePID.Ki", 0.435), 20: ("Z_ratePID.Kd", 0.0),
     21: ("Z_posPID.Kp", 0.7), 22: ("Z_posPID.Ki", 0.005), 23: ("Z_posPID.Kd", 0.1),
-    24: ("locxPID.Kp", 0.8), 25: ("locxPID.Ki", 0.0013), 26: ("locxPID.Kd", 4.0),
-    27: ("locyPID.Kp", 0.8), 28: ("locyPID.Ki", 0.0013), 29: ("locyPID.Kd", 4.0),
-    30: ("locxsPID.Kp", 3.0), 31: ("locxsPID.Ki", 0.008), 32: ("locxsPID.Kd", 6.0),
-    33: ("locysPID.Kp", 3.0), 34: ("locysPID.Ki", 0.008), 35: ("locysPID.Kd", 6.0),
+    # 24-35: the c3 robust gains, the firmware default since 2026-10-22 (API/pid.c change history)
+    24: ("locxPID.Kp", 0.3214), 25: ("locxPID.Ki", 0.0001), 26: ("locxPID.Kd", 6.2937),
+    27: ("locyPID.Kp", 0.3214), 28: ("locyPID.Ki", 0.0001), 29: ("locyPID.Kd", 6.2937),
+    30: ("locxsPID.Kp", 3.2242), 31: ("locxsPID.Ki", 0.0157), 32: ("locxsPID.Kd", 4.7283),
+    33: ("locysPID.Kp", 3.2242), 34: ("locysPID.Ki", 0.0157), 35: ("locysPID.Kd", 4.7283),
 }
 
 GAIN_PRESETS = {
