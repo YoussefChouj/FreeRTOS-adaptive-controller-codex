@@ -170,7 +170,9 @@ PRIM_NAMES = ("IDLE", "CLIMB", "HOVER", "TRAJ", "RETURN", "SETTLE", "DESCEND")  
 TRAJ_NAMES = ("EMPTY", "LOADING", "READY", "EXECUTING", "DONE")                   # API/wfb_traj.h order
 TEL_NAMES = ("g_wfb_status.prim_state", "g_wfb_status.traj_state", "g_wfb_status.airborne_t",
              "Ctrler.locxPID.FB", "Ctrler.locxPID.Des", "Ctrler.locyPID.FB", "Ctrler.locyPID.Des",
-             "Ctrler.Z_posPID.FB", "Ctrler.Z_posPID.Des")
+             "Ctrler.Z_posPID.FB", "Ctrler.Z_posPID.Des",
+             # who ended the flight (pilot disarm / stick takeover / firmware trip), so the debrief CSV shows it (10-21)
+             "g_wfb_status.safety_trip", "status.arm", "status.rc_authority", "status.motor_idle")
 
 
 AXES = (("x", "locxPID", 0.01), ("y", "locyPID", 0.01), ("z", "Z_posPID", 1.0))  # loc PIDs in cm, Z_posPID in m
