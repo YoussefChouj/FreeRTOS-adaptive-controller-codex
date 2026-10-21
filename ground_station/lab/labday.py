@@ -140,9 +140,12 @@ def fly_cmd(f, pack=None, dry=False, port=8081):
 
 
 def code_stamp():
-    """The host code a dry run exercised: HEAD plus a hash of uncommitted ground_station changes (None = unknown)."""
+    """The host code a dry run exercised: the committed ground_station tree plus a hash of its uncommitted changes
+    (None = unknown). The tree hash, not HEAD, so a commit that leaves ground_station alone (docs, state, firmware)
+    keeps every cached pass."""
     try:
-        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True)
+        head = subprocess.run(["git", "rev-parse", "HEAD:ground_station"], cwd=ROOT, capture_output=True, text=True,
+                              check=True)
         diff = subprocess.run(["git", "diff", "HEAD", "--", "ground_station"], cwd=ROOT, capture_output=True,
                               check=True)
     except (OSError, subprocess.CalledProcessError):
@@ -420,6 +423,7 @@ class Day:
             self.say(f"  dry run {f['id']:<4} {f['fly']:<26} {'OK' if ok else 'FAILED'}")
             if ok and key is not None:
                 passed[f["id"]] = key
+                self.save()   # each pass now, so a Ctrl-C halfway keeps the passes already made
             if not ok:
                 passed.pop(f["id"], None)
                 bad.append(f["id"])

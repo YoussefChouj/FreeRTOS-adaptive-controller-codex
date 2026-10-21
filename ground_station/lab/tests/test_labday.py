@@ -273,6 +273,29 @@ def test_dry_run_reruns_only_what_changed(tmp_path, monkeypatch):
     assert dry() == 13                                                # host code unknown: never skipped
 
 
+def test_code_stamp_ignores_commits_outside_ground_station(tmp_path, monkeypatch):
+    def git(*a):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=tmp_path, check=True,
+                       capture_output=True)
+
+    (tmp_path / "ground_station").mkdir()
+    (tmp_path / "ground_station" / "m.py").write_text("a\n", encoding="utf-8")
+    (tmp_path / "notes.md").write_text("1\n", encoding="utf-8")
+    git("init", "-q")
+    git("add", "-A")
+    git("commit", "-qm", "c1")
+    monkeypatch.setattr(labday, "ROOT", tmp_path)
+    s1 = labday.code_stamp()
+    (tmp_path / "notes.md").write_text("2\n", encoding="utf-8")
+    git("commit", "-qam", "docs only")
+    assert labday.code_stamp() == s1 is not None                     # docs/state/firmware commit: passes kept
+    (tmp_path / "ground_station" / "m.py").write_text("b\n", encoding="utf-8")
+    s2 = labday.code_stamp()
+    assert s2 != s1                                                  # uncommitted host change: re-run
+    git("commit", "-qam", "host")
+    assert labday.code_stamp() not in (s1, s2)                       # committed host change: re-run
+
+
 def test_auto_stop_on_bad_end_then_refly(tmp_path, monkeypatch):
     fake = _Fake(["", "r"], fly_rc=[1, 0])   # fly A: exits 1 -> r flies again -> ok
     p = _player(tmp_path, monkeypatch, fake, [{"id": "A", "fly": "lab_c_robust"}])
