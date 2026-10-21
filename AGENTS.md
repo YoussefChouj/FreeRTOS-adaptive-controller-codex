@@ -161,3 +161,8 @@ shard rule violations `docs/context/inbox/<task-id>.md`.
 
 Deck flight ids are descriptive names (`lqr-plus-mrac`, `lqr-alone`, `memory-mrac-on-2`), never bare codes
 (E3, N3, F5). Replies, run sheets and docs name a flight by that id; a bare code is undecodable for the operator.
+
+## Lab open items (operator, 2026-10-21)
+
+While the operator is flying, an issue that does not block the flights goes into `docs/lab/open-items.md` and is
+fixed after the campaign. Do not offer to build it mid-lab. Only a blocking issue is fixed at the lab.

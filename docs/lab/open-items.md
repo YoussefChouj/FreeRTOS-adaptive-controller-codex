@@ -1,0 +1,24 @@
+# Lab open items
+
+Issues found at the lab that do NOT block the flights. Rule (operator, 2026-10-21): while the operator is
+flying, a non-blocking issue is logged here and fixed after the campaign ends. Only a blocking issue is fixed
+at the lab. Close an item by moving it to "Closed" with the commit that fixed it.
+
+| Item | Found | What happens | Why it does not block | Fix idea (after the campaign) |
+|---|---|---|---|---|
+| `yaw-compensated-alignment` | 2026-10-21 smoke-hover (session 20261021-110021) | `--yaw-deg 94` (pad to earth) assumes the drone's yaw reads ~0 on the pad. Yaw is gyro-only, so its zero is the power-on heading. A drone powered on away from the pad flies with its frame turned (95.5 deg today), and mode 3 spirals out. | Workaround: power the drone on while it sits on the pad, nose the usual way, and check that yaw reads ~0 before arming. | The tracker reads the on-pad `status.yaw_deg` before takeoff and adds it to `--yaw-deg`. Verify the sign on the 10-21 logs first. |
+| `labday-yaw-preflight` | 2026-10-21 smoke-hover | Nothing checks the on-pad yaw before a camera mode 2/3 flight. | Same workaround as above (manual dashboard check). | labday warns, or refuses the go, when the on-pad yaw is off 0 by more than a set limit (limit PROPOSED, ±10 deg) in camera mode 2/3 with a fixed `--yaw-deg`. |
+| `camera-heading-tracking` | 2026-10-21, operator | The camera tracks x/y only. In-flight yaw drift (2.5 deg within smoke-hover, larger on preset trajectories per the operator) rotates the drone's frame, and nothing corrects it. The AutoAlign `drift_deg` monitor measures it but does not apply it. | The drift is a few degrees per flight; the fixed alignment still holds. | Track the drone's heading in the video (marker pair or blob shape), then apply it to the alignment or send it to the EKF as a yaw fix. |
+| `auto-align-hover-lock` | 2026-10-21 | `--align auto` needs 80 cm of motion to lock (span 80 cm, rms < 20 cm), so a hover never locks and flies flow-only. The lock is not kept across flights. | Not used today: the day file pins mode 3 at `--yaw-deg 94`. | Keep the last good lock per day and setup, start the next flight from it. |
+| `fix-reacquire-after-abort` | 2026-10-21 smoke-hover | After the abort every camera fix was rejected (n_rej 1 to 38, innovation > 1 m) and the landing flew on flow only. | Happens only after the alignment is already wrong; with the right alignment the gate stays open. | Re-acquire when the innovation is large but steady over N fixes, instead of rejecting forever. |
+| `fusion-fit-from-session` | 2026-10-21 | `live_tracker fit <stem>` reads stream_log `<stem>.slot*.csv`; the labday fusion run left `stream_log.out` empty, so there was no stem to fit. | The fit is offline analysis; `scratchpad/rotcmp.py` did it from session telemetry.csv. | `fit` also accepts a session id and reads its long-format telemetry.csv. |
+| `keil-build-warnings` | 2026-10-20 build | 4 old warnings: `platform_registry_gen.c` #69 (never-sentinel), `gyro_filter.c` #186. | Warnings only; the build is 0 errors. | Fix the generator sentinel type and the gyro_filter comparison. |
+| `vff-sinusoid-two-tick-jump` | 2026-10-20 review | The sinusoid path commits its reference only on some ticks, so the finite-difference feed-forward can jump over 2 ticks. | Not seen in flight data yet. | Commit the reference every tick, or difference over the true dt. |
+| `handoff-stale-architecture-note` | 2026-10-20 review | `docs/agent/HANDOFF.md` repo-architecture note still says the gate PR 4641a688 is open; it is merged. | Docs only. | Refresh the note at the next ship point. |
+| `online-camera-delay-estimate` | 2026-10-21 operator, smoke-hover wobble | The camera delay is one fixed number: `DELAY_MS` 200 (from the 10-13 recording); the 10-21 screen-flash test measured photon to frame read median 328 ms (n 60, std 38). The camera pipeline delay can shift with lighting, phone heat, scrcpy settings and laptop load, and a fixed value then goes stale. | The screen-flash test gives a measured fixed value for today. | Estimate the delay live: sliding cross-correlation of camera velocity against the drone's flow velocity, hold the last value when the motion is too small to lock (prior art: Li & Mourikis 2014, Qin & Shen 2018 online temporal calibration). Keep the screen-flash test as the ground-truth check. |
+| `tracker-frame-rate` | 2026-10-21 delay test | The live tracker takes a frame every 133 ms (7.5 Hz, smoke-hover fixes.csv t_cap), though the camera runs at 30 fps. A frame waits 0-133 ms to be read, which adds delay and most of the delay spread. | Fusion works at 7.5 Hz; the delay setting covers the mean wait. | Profile read (PrintWindow at 1920x1080) vs detection time, then speed up the slow part (capture a smaller region, or read the video stream directly). |
+
+## Closed
+
+| Item | Found | Fixed by |
+|---|---|---|

@@ -21,8 +21,9 @@ day: 2026-10-21
 title: new-firmware smoke hover, then the gate-memory premise (MRAC u100 vs u0, n=3 per arm before the cut line, n=5 with memory pairs 4-5), Z ground effect and v_z steps, the exp matrix, and the rest of the 10-17 plan
 camera:                       # camera_truth.sh fusion <id-fly> <mode> <args>, CT_FLOOR=logs/video_truth/<floor>
   floor: floor-1021           # scan at the lab with drone out of view: .\cam floor floor-1021
-  mode: 3
-  args: [--yaw-deg, "94"]
+  mode: 3                     # in-EKF, as on 10-19
+  args: [--yaw-deg, "94", --delay-ms, "330"]  # yaw: valid only if the drone BOOTS on the pad facing its usual way (yaw ~0): yaw is gyro-only, zero = boot heading
+                              # delay: 10-21 screen-flash test photon->read median 328 ms + live read wait at 7.5 Hz (camera_truth.sh default 200 is the 10-13 value)
 before:
   - "Probe plugged in, drone powered and DISARMED, 8081 stopped (it locks the .axf): `python -m ground_station.flashtool.rebuild_and_flash --yes` (never --force; stop on a non-zero exit)"
   - "After the flash: `python -m ground_station.livewatch verify`, then `python -m pytest ground_station/livewatch/tests/test_campaign_capture.py -q` (the ELF-symbol test goes green only on the new .axf)"

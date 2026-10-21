@@ -2288,7 +2288,7 @@ def main(argv=None):
     if a.cmd == "aruco":
         r = aruco_scan(a.video, a.step, a.t0, a.t1, out=a.out)
         print(f"{len(r['t'])} frames {r['t'][0]:.2f}-{r['t'][-1]:.2f} s -> {a.out}; seen: "
-              + ", ".join(f"id{k[1:]} {int((~np.isnan(v[:, 0, 0])).sum())}" for k, v in r.items() if k != "t"))
+              + ", ".join(f"id{k[1:]} {int((~np.isnan(v[:, 0, 0])).sum())}" for k, v in r.items() if k[:1] == "c" and k[1:].isdigit()))
     elif a.cmd == "plumb4":
         r = plumb_check(f"logs/vofa/{a.name}", f"logs/video_truth/{a.name}", a.cam, a.coral_step, a.sync)
         print(json.dumps({k: v for k, v in r.items() if k != "holds"}))
