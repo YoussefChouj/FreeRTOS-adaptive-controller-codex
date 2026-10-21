@@ -64,3 +64,51 @@ PX4/Ardupilot behaviour is quoted from memory, so UNVERIFIED until checked again
 | D (firmware) | NIS gate with S instead of the fixed 0.061 m/s threshold | fewer false trips at speed | retune on the 10-21 logs first |
 
 Suggested order: A today (no flash), B as the next firmware change with a replay test on speed-ladder-2, D after that.
+
+## Tight vs wide figure-8: why the fast laps tracked so much worse
+
+Question (user, 10-22): the drone struggled on the tight figure-8 and not on the wide one; is it hitting the lean
+limits? All 10-21 figure-8s were the same Gerono a60 path (60 x 120 cm), so "tight" here means a shorter lap:
+the same shape flown faster. Measured per trajectory segment (`traj_status` = 1) with a scratchpad script on the
+session telemetry (commanded lean = hypot of `rollPID.Des`, `pitchPID.Des`; tilt cap from the `s_lim` table,
+`TASK/StabilizerTask.c:1476-1478`: 15 / 20 / 30 deg for limit modes 0 / 1 / 2). Closed-loop response H = position
+over desired position, projected on the dominant frequency of the desired path (FFT peak), ramps trimmed.
+
+| flight | cap | x lobe freq | H on x (gain, phase) | cmd lean p95 / max | time at >= 95 % of cap | rms err x / y (cm) |
+|---|---|---|---|---|---|---|
+| speed-ladder-0, slow lap | 15 deg | 0.25 Hz | 1.65, -23 deg | 9.0 / 13.8 | 0 % | 15.0 / 13.1 |
+| speed-ladder-1, slow lap | 20 deg | 0.25 Hz | 1.56, -27 deg | 9.9 / 12.2 | 0 % | 16.6 / 14.2 |
+| memory-u100 (memory on) | 20 deg | 0.25 Hz | 1.55, -11 deg | 9.2 / 12.2 | 0 % | 12.8 / 10.7 |
+| speed-ladder-1, mid lap | 20 deg | 0.37 Hz | 1.79, -63 deg | 20.3 / 21.1 | 13.1 % | 28.7 / 14.2 |
+| speed-ladder-2, mid lap | 30 deg | 0.37 Hz | 1.78, -65 deg | 21.1 / 25.9 | 0 % | 30.7 / 14.3 |
+| speed-ladder-2, fast lap | 30 deg | 0.50 Hz | 1.19, -107 deg | 30.4 / 32.4 | 17.2 % | 35.1 / 20.3 |
+
+1. **x is the hard axis.** On a Gerono figure-8 the short axis (x, 60 cm) runs at twice the frequency of the long
+   one (x crosses its mean 2x as often as y on every flight). Its acceleration demand is 4x per unit amplitude
+   (a = w^2 A). The y error stays 13-14 cm until the fastest lap; the x error doubles.
+2. **The lean cap is not the cause.** Same mid lap (0.37 Hz) flown with a 20 deg cap and a 30 deg cap: the 20 deg
+   flight rode the cap 13 % of the time, the 30 deg flight never did, and H on x (1.79 / -63 vs 1.78 / -65) and
+   the x error (28.7 vs 30.7 cm) are the same. Lifting the cap removed the saturation and changed nothing.
+3. **The x position loop runs out of bandwidth.** Phase lag on x grows -23 -> -63 -> -107 deg as the lobe frequency
+   goes 0.25 -> 0.37 -> 0.50 Hz, and the gain is above 1 (1.2-1.8: the drone overshoots the lobe amplitude).
+   The error this predicts, |1 - H| x 30 cm / sqrt(2), is 18 / 34 / 37 cm rms; the measured x error is 15-17 /
+   29-31 / 35 cm (the measured rms also includes the trimmed ramps). The frequency response explains the error.
+4. Gain above 1 at 0.25 Hz means the loop (PID xy + velocity feed-forward + the tuned lead `g_traj_ff_shift_s`)
+   is under-damped there. Which part (FF strength, lead time, outer-loop gains with the ~210 ms loop delay) makes the
+   peak is INFERENCE until a sim sweep or a frequency-sweep flight separates them.
+5. Memory on (memory-u100) kept the gain the same but cut the x phase lag from -23 to -11 deg on the slow lap and
+   the x error from 15-17 to 12.8 cm. One flight each, so this is a hint for the thesis A/B, not a result.
+
+Analogy: a car on a slalom. Widening the steering lock (the tilt cap) does not help if the driver reacts late;
+past a certain gate spacing every turn is taken late and too wide.
+
+What to do (none applied; the last two change flight behaviour):
+
+| option | change | why |
+|---|---|---|
+| fly within the bandwidth | keep the x lobe at or below 0.25 Hz (lap >= 8 s for a60), or widen x in proportion when flying faster | stays where H is near 1.6 / -20 deg |
+| sim first | sweep FF gain and `g_traj_ff_shift_s` in the sim against the 10-21 H values | finds what makes the gain-above-1 peak |
+| damp the peak | retune the x outer loop (or use LQR / MPC with the 21-tick predictor, D1) for less overshoot at 0.25-0.5 Hz | moves the bandwidth, not the cap |
+
+Dense-traj figure-8 (limit mode 0, 15 deg cap, `f8_tilt_deg` 30) used 15 deg of the cap for 5.6 % of its segment,
+with rms error x 12.0 / y 21.1 cm. Its segment is only 12 s, too short for a reliable H.
