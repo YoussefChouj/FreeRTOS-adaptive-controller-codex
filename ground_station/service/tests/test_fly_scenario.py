@@ -95,6 +95,29 @@ def test_firmware_landing_mid_hold_is_reported():
     assert out.decision.reason.startswith("firmware landing during hold")
 
 
+def _pilot_lands_at_12s(field):
+    """The rig of the firmware-landing test, plus status[field] 0 from the moment prim drops (RC takeover)."""
+    drone, clock, deps = _rig()
+    rc = WfbClient(drone.send, first_txid=500)
+    took = []
+    _hook_step(deps, clock, 12.0, lambda: (took.append(1), rc.land()))
+    inner = deps.status
+    deps.status = lambda: {**inner(), **({field: 0} if took else {})}
+    return fly_scenario(load_scenario("hover", {"z": 0.5}), deps)
+
+
+def test_stick_takeover_mid_hold_names_the_pilot_not_the_firmware():
+    out = _pilot_lands_at_12s("rc_authority")
+    assert out.aborted
+    assert out.decision.reason == "pilot took the sticks during hold (status.rc_authority 0)"
+
+
+def test_disarm_mid_hold_names_the_pilot_not_the_firmware():
+    out = _pilot_lands_at_12s("arm")
+    assert out.aborted
+    assert out.decision.reason == "pilot disarmed during hold (status.arm 0)"
+
+
 def test_takeoff_idles_on_the_ground_for_idle_s_first():
     """10-06: the operator wants the props at idle 10 s before TAKEOFF (hover.yaml idle_s default)."""
     drone, clock, deps = _rig()

@@ -278,6 +278,17 @@ class CampaignRunner:
                             injection=self.injection, runner=self)
 
 
+def _landing_reason(status: dict, phase: str) -> str:
+    """Who ended the flight when prim fell to DESCEND/IDLE uncommanded. A safety trip names the firmware; else a
+    disarm or a stick takeover names the pilot (10-21 flights 43, 48 and 49 read "firmware landing" with trip 0)."""
+    trip = int(status.get("safety_trip", 0))
+    if trip == 0 and status.get("arm") == 0:
+        return f"pilot disarmed during {phase} (status.arm 0)"
+    if trip == 0 and status.get("rc_authority") == 0:
+        return f"pilot took the sticks during {phase} (status.rc_authority 0)"
+    return f"firmware landing during {phase} (safety_trip {trip})"
+
+
 def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
                  injection: float | None = None, runner: 'CampaignRunner | None' = None) -> FlightOutcome:
     """Fly one scenario: takeoff, each step in order, land. Any abort -> traj_stop + land."""
@@ -349,8 +360,7 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
                 decision = AbortDecision(level=1, reason=f"timeout: {phase}")
                 return False
             if airborne and prim() in (PRIM_DESCEND, PRIM_IDLE):
-                trip = int(deps.status().get("safety_trip", 0))
-                decision = AbortDecision(level=1, reason=f"firmware landing during {phase} (safety_trip {trip})")
+                decision = AbortDecision(level=1, reason=_landing_reason(deps.status(), phase))
                 return False
             deps.client.heartbeat()
             deps.step(dt)

@@ -127,6 +127,9 @@ def test_lab_scripts_compile_log_and_fly_on_the_fake_drone(path):
         want.add("g_xy_ctrl_kind")
         if ground["g_xy_ctrl_kind"] in (2, 3):  # LQR/MPC also pin the predictor delay, VAR 47
             want.add("g_xyc_delay_ticks")
+    if "g_drift_nn_live" in ground:  # lab_s pins the drift net to shadow on the ground (a reboot clears it)
+        assert ground["g_drift_nn_live"] == 0
+        want.add("g_drift_nn_live")
     assert set(ground) == want
     drone, _, deps = _rig()
     if "exp_id" in ground:
