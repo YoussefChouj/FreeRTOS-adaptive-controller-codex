@@ -68,12 +68,35 @@ TRAJ_ACK_TIMEOUT_S = 3.0   # PROPOSED: 10-15 re-fly, traj BEGIN applied 1.55/1.7
 HEARTBEAT_PERIOD_S = 0.2   # PROPOSED: 5 Hz, interfaces.md "GS sends at 5 Hz"; firmware hb_timeout_s 1.0
 HEARTBEAT_LOCKOUT_S = 2.0  # PROPOSED: 2x firmware hb_timeout_s; oldest unanswered heartbeat this old -> stop flooding
 HEARTBEAT_PROBE_S = 1.0    # PROPOSED: while locked out, one probe heartbeat per second so a recovered link resumes
+HEARTBEAT_RX_FRESH_S = 1.0   # PROPOSED: firmware hb_timeout_s; a datagram this recent means the radio is alive
 STATUS_STALE_S = 1.0       # PROPOSED: factory refuses to start without g_wfb_status this fresh
 LIVE_DT_S = 0.1            # PROPOSED: runner tick
 GROUND_WAIT_S = 10.0       # decision 12: time on the ground after a fly-mode landing before the auto-next check
 DRIFT_BUDGET_M = 0.5       # PROPOSED: worst-case origin walk before the runner pauses for a pad re-seat
 KF_HEALTH_SYM = KF_HEALTH  # 1 healthy, 0 diverged
 _RESULT_POLL_S = 0.01
+
+
+def _get_rx_age_s(service: Any) -> float | None:
+    bridge = getattr(service, "bridge", None)
+    if bridge is None:
+        return None
+    health_fn = getattr(bridge, "link_health", None)
+    if not callable(health_fn):
+        return None
+    try:
+        health = health_fn()
+    except Exception:
+        return None
+    if not isinstance(health, dict):
+        return None
+    age = health.get("rx_age_s")
+    if age is None:
+        return None
+    try:
+        return float(age)
+    except (ValueError, TypeError):
+        return None
 
 
 class LiveWfbClient(WfbClient):
@@ -96,6 +119,7 @@ class LiveWfbClient(WfbClient):
         self._pending_hb_sent: list[float] = []   # submit time of each pending heartbeat, same order
         self._lock_t: float | None = None
         self._prim_active = False
+        self._excused_late = False
 
     @staticmethod
     def _no_raw_send(frame: bytes) -> int:
@@ -111,7 +135,24 @@ class LiveWfbClient(WfbClient):
         self._poll_heartbeats()
         if self._pending_hb_sent and now - self._pending_hb_sent[0] >= HEARTBEAT_LOCKOUT_S:
             self._consecutive_timeouts = max(self._consecutive_timeouts, 2)
-        locked = self._consecutive_timeouts >= 2
+
+        results_late = self._consecutive_timeouts >= 2
+        locked = False
+
+        if results_late:
+            rx_age_s = _get_rx_age_s(self._service)
+            if rx_age_s is not None and rx_age_s < HEARTBEAT_RX_FRESH_S:
+                locked = False
+                if not self._excused_late:
+                    self.last_error = f"heartbeat results late (radio fresh, rx_age {rx_age_s:.1f} s): host ingest backlog, not a link loss"
+                    self._excused_late = True
+            else:
+                locked = True
+                self._excused_late = False
+        else:
+            locked = False
+            self._excused_late = False
+
         if not locked:
             self._lock_t = None
             period, ref = self._hb_period_s, self._last_hb
