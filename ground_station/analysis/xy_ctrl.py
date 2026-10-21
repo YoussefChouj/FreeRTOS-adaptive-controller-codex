@@ -277,16 +277,21 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Write API/xy_ctrl_gains.h from xy_tune --ctrl result.json files.")
     ap.add_argument("--results", nargs="+", required=True, help="result.json files holding xy_ctrl adrc/lqr/mpc")
     ap.add_argument("--out", default="API/xy_ctrl_gains.h")
+    ap.add_argument("--adrc-wo", type=float, help="override the tuned ADRC observer bandwidth (rad/s); the tuner "
+                    "adds noise to velocity only, which ADRC never reads, so it drives wo to its bound")
     args = ap.parse_args(argv)
     logx, m = {}, None
     for p in args.results:
         for kind, r in json.loads(Path(p).read_text()).get("xy_ctrl", {}).items():
-            logx[kind], m = r["log10"], m or r["nominal"]
+            logx[kind], m = list(r["log10"]), m or r["nominal"]
     missing = {"adrc", "lqr", "mpc"} - set(logx)
     if missing:
         raise SystemExit(f"no tuned gains for {sorted(missing)}")
-    Path(args.out).write_text(fw_header(m, logx, " ".join(Path(p).as_posix() for p in args.results)),
-                              newline="\n")
+    source = " ".join(Path(p).as_posix() for p in args.results)
+    if args.adrc_wo:
+        logx["adrc"][1] = float(np.log10(args.adrc_wo))
+        source += f" + --adrc-wo {args.adrc_wo:g}"
+    Path(args.out).write_text(fw_header(m, logx, source), newline="\n")
     print(f"wrote {args.out}: d {m['d']} ticks, " + ", ".join(f"{k} {np.round(v, 3).tolist()}"
                                                             for k, v in sorted(logx.items())))
     return 0
