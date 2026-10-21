@@ -68,7 +68,7 @@ TRAJ_ACK_TIMEOUT_S = 3.0   # PROPOSED: 10-15 re-fly, traj BEGIN applied 1.55/1.7
 HEARTBEAT_PERIOD_S = 0.2   # PROPOSED: 5 Hz, interfaces.md "GS sends at 5 Hz"; firmware hb_timeout_s 1.0
 HEARTBEAT_LOCKOUT_S = 2.0  # PROPOSED: 2x firmware hb_timeout_s; oldest unanswered heartbeat this old -> stop flooding
 HEARTBEAT_PROBE_S = 1.0    # PROPOSED: while locked out, one probe heartbeat per second so a recovered link resumes
-HEARTBEAT_RX_FRESH_S = 1.0   # PROPOSED: firmware hb_timeout_s; a datagram this recent means the radio is alive
+HEARTBEAT_RX_FRESH_S = 1.0 # PROPOSED: firmware hb_timeout_s; a datagram this recent means the radio is alive
 STATUS_STALE_S = 1.0       # PROPOSED: factory refuses to start without g_wfb_status this fresh
 LIVE_DT_S = 0.1            # PROPOSED: runner tick
 GROUND_WAIT_S = 10.0       # decision 12: time on the ground after a fly-mode landing before the auto-next check
@@ -78,6 +78,7 @@ _RESULT_POLL_S = 0.01
 
 
 def _get_rx_age_s(service: Any) -> float | None:
+    """Seconds since the bridge last heard the drone, or None when unknown (no bridge, no data, error)."""
     bridge = getattr(service, "bridge", None)
     if bridge is None:
         return None
@@ -136,22 +137,16 @@ class LiveWfbClient(WfbClient):
         if self._pending_hb_sent and now - self._pending_hb_sent[0] >= HEARTBEAT_LOCKOUT_S:
             self._consecutive_timeouts = max(self._consecutive_timeouts, 2)
 
-        results_late = self._consecutive_timeouts >= 2
+        # late results lock out only when the radio is not known to be fresh: a datagram under
+        # HEARTBEAT_RX_FRESH_S old means the host ingest is behind, not that the link is dead (10-21)
         locked = False
-
-        if results_late:
+        if self._consecutive_timeouts >= 2:
             rx_age_s = _get_rx_age_s(self._service)
-            if rx_age_s is not None and rx_age_s < HEARTBEAT_RX_FRESH_S:
-                locked = False
-                if not self._excused_late:
-                    self.last_error = f"heartbeat results late (radio fresh, rx_age {rx_age_s:.1f} s): host ingest backlog, not a link loss"
-                    self._excused_late = True
-            else:
-                locked = True
-                self._excused_late = False
-        else:
-            locked = False
-            self._excused_late = False
+            locked = rx_age_s is None or rx_age_s >= HEARTBEAT_RX_FRESH_S
+            if not locked and not self._excused_late:
+                self.last_error = (f"heartbeat results late (radio fresh, rx_age {rx_age_s:.1f} s): "
+                                   "host ingest backlog, not a link loss")
+        self._excused_late = self._consecutive_timeouts >= 2 and not locked
 
         if not locked:
             self._lock_t = None
