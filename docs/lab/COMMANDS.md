@@ -21,7 +21,7 @@ which has no adb, scrcpy or Windows python. Never use it for the camera. `.\cam`
 | Start the camera fusion for one flight | `.\cam fusion f1` (mode 3, `--yaw-deg 94`) |
 | Same with another mode | `.\cam fusion f1 2 --yaw-deg 94` |
 | Fly one flight | `.\fly lab_m_memory_u100 --once` |
-| Stop the camera after landing | `.\cam stop f1` |
+| Stop the camera after landing | `.\cam stop` (newest running session) or `.\cam stop f1` |
 | Check rows, video, fixes | `.\cam check f1` |
 | End the live VOFA+/PlotJuggler stream | `.\cam end` |
 | Start the ground service by hand | `python -m ground_station.service --port 8081` |
@@ -84,7 +84,8 @@ Take the drone off the pad and out of view, with the pad marker (ArUco id0) full
 ```powershell
 .\cam fusion f1                       # default: mode 3 (in-EKF) --yaw-deg 94, floor = newest logs/video_truth/floor-*
 .\fly lab_m_memory_u100 --once        # arm by RC when it asks
-.\cam stop f1                         # after landing + disarm: ends the tracker, the recording and the video
+.\cam stop                            # after landing + disarm: ends the tracker, the recording and the video
+                                      # of the newest running session (`.\cam stop f1` names one)
 ```
 
 - `.\cam fusion <name> <mode> [tracker args]` sets the mode and the args yourself. Any extra arg goes to

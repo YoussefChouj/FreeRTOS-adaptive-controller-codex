@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Camera-truth session (R3 recipe): dashboard service + WiFi stream log (preset arg 3, default drift_rc) + phone camera video.
 #   bash ground_station/lab/camera_truth.sh start <name>   # drone DISARMED; operator confirmed preset + name first
-#   bash ground_station/lab/camera_truth.sh stop  <name>   # after landing + disarm
+#   bash ground_station/lab/camera_truth.sh stop [name]   # after landing + disarm; no name = newest running session
 #   bash ground_station/lab/camera_truth.sh check <name>   # rows per slot, video size
 #   bash ground_station/lab/camera_truth.sh fusion <name> <1|2|3> [tracker args]   # camera fusion, 1 shadow, 2 offset, 3 in-EKF:
 #     stream_log --relay-port 47800 (or, with 8081 up for `fly`, its relay + --tel-url) + scrcpy r5cam (record, off screen) + live_tracker --show (topmost,
@@ -15,7 +15,15 @@
 # WiFi only, never the SWD probe. Video: phone camera id 4, zoom 0.6, 1080p30 (the R3 calibration pose).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-cmd=${1:?start|stop|check|fusion|video|floor|end}; name=${2:-}; [ "$cmd" = end ] || : "${name:?session name}"; preset=${3:-drift_rc}; api=http://127.0.0.1:8081; vid=logs/video_truth/$name
+cmd=${1:?start|stop|check|fusion|video|floor|end}; name=${2:-}
+# `stop` with no name stops the newest session still running, same test as reap (10-21: `cam stop` died on "session name")
+if [ "$cmd" = stop ] && [ -z "$name" ]; then
+  for d in $(ls -td logs/video_truth/*/ 2> /dev/null); do
+    [ -f "$d/tracker.pid" ] || [ -f "$d/stream_log.pid" ] || continue; [ -f "$d/stop" ] && continue
+    name=$(basename "$d"); echo "stop: newest running session is $name"; break
+  done
+fi
+[ "$cmd" = end ] || : "${name:?session name (none running)}"; preset=${3:-drift_rc}; api=http://127.0.0.1:8081; vid=logs/video_truth/$name
 post() { curl -s --noproxy "*" -m 10 -X POST -H 'Content-Type: application/json' -d "$2" "$api$1"; echo; }
 up() { curl -s --noproxy "*" -m 2 -o /dev/null -w '%{http_code}' "$api/health" | grep -q 200; }
 # Lab processes start through ground_station.lab.detach: their own hidden console, no parent left, so they outlive
