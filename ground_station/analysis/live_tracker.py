@@ -1183,7 +1183,7 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
     f_out = open(out_csv, "w", newline="", buffering=1) if out_csv else None   # line-buffered: a killed run keeps its fixes
     w_out = csv.writer(f_out) if f_out else None
     if w_out:
-        w_out.writerow(["t_send", "t_cap", "pad_x_m", "pad_y_m", "earth_x_cm", "earth_y_cm", "frame_hex"])
+        w_out.writerow(["t_send", "t_cap", "pad_x_m", "pad_y_m", "earth_x_cm", "earth_y_cm", "frame_hex", "t_epoch"])
     t_rd = t_det = 0.0
     hello()
     t_hello = clock()
@@ -1269,7 +1269,7 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
             send(frame_b)
         if w_out:
             w_out.writerow([round(t_read, 3), round(t_fix, 3), round(med[0], 4), round(med[1], 4), round(e[0], 1),
-                            round(e[1], 1), frame_b.hex()])
+                            round(e[1], 1), frame_b.hex(), round(time.time(), 3)])
     cap.release()
     if show:
         show.close()

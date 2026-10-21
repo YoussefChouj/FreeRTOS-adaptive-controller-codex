@@ -1,12 +1,12 @@
 /* Landing descent profile (2026-10-15, lab-friction D2). Header only so the host test can compile it.
  *
- * Sink rate by height (Z_posPID.FB, m):
- *   above LAND_FAST_ALT              LAND_VZ_MPS       (F8 2026-10-06)
- *   LAND_SLOW_ALT .. LAND_FAST_ALT   LAND_VZ_FAST_MPS  (F8)
- *   below LAND_SLOW_ALT              LAND_VZ_SLOW_MPS  NEW: touchdown vz on 2026-10-15 was -0.5 (tuned)
- *                                    to -2.2 m/s (lqr), MEASURED. 0.25 is PROPOSED, not flown. The 10-02
- *                                    0.15 m/s stage floated in ground effect; the sink bias (Des_VHeight)
- *                                    still pushes through a float once Des reaches the floor.
+ * Sink rate by height (Z_posPID.FB, m), two stages since 2026-10-21 (operator style, PROPOSED, not flown):
+ *   above LAND_FAST_ALT              LAND_VZ_MPS       slow and steady while the drift is small
+ *   below LAND_FAST_ALT              LAND_VZ_FAST_MPS  fast through ground effect, then the rest gate cuts
+ * Why: on 2026-10-21 (camera mode 1) the manual-sticks landing drifted least; the operator speeds the descent up
+ * near the ground and it peaked at about 1.0 m/s down (1.2 m/s flow sensor) 0.5 s before touchdown, MEASURED.
+ * The auto profile did the opposite (0.65 / 0.50 / 0.25 m/s below 0.15 m) and drifted while it crept down.
+ * The ground reads about 0.07 m, so the fast stage covers the last ~23 cm. The 2026-10-15 0.25 m/s slow stage is gone.
  * XY near the ground (2026-10-19, PROPOSED, not flown):
  *   LAND_XY_FREEZE_ALT .. LAND_XY_HOLD_ALT   hold band: the xy loops stay closed (P + D), their integrators are
  *                                    held (no accumulation, no reset, so the trim they learned in hover stays),
@@ -22,11 +22,9 @@
 
 #include <stdint.h>
 
-#define LAND_VZ_MPS          0.65f    /* F8 2026-10-06: was 0.40 (F7 1.0->0.5 m took 1.34 s vs M8 0.69 s) */
-#define LAND_FAST_ALT        0.40f
-#define LAND_VZ_FAST_MPS     0.50f    /* F8: was 0.70; touchdown speed, impact energy goes with speed^2 */
-#define LAND_SLOW_ALT        0.15f    /* PROPOSED 2026-10-15 */
-#define LAND_VZ_SLOW_MPS     0.25f    /* PROPOSED 2026-10-15 */
+#define LAND_VZ_MPS          0.40f    /* PROPOSED 2026-10-21: was 0.65 (F8 2026-10-06) */
+#define LAND_FAST_ALT        0.30f    /* PROPOSED 2026-10-21: was 0.40 */
+#define LAND_VZ_FAST_MPS     0.90f    /* PROPOSED 2026-10-21: was 0.50; manual landing peaked ~1.0 m/s */
 #define LAND_XY_FREEZE_ALT   0.04f    /* PROPOSED 2026-10-19: touchdown; was 0.12 (2026-10-15) */
 #define LAND_XY_HOLD_ALT     0.12f    /* PROPOSED 2026-10-19 */
 #define LAND_XY_HOLD_UMAX    150.0f   /* PROPOSED 2026-10-19: cm/s^2, about 8.7 deg of lean (locxsPID UMax 600) */
@@ -34,7 +32,6 @@
 /* Sink rate (m/s, positive down) at height z. */
 static inline float LandProfile_SinkMps(float z)
 {
-	if (z < LAND_SLOW_ALT) return LAND_VZ_SLOW_MPS;
 	if (z < LAND_FAST_ALT) return LAND_VZ_FAST_MPS;
 	return LAND_VZ_MPS;
 }

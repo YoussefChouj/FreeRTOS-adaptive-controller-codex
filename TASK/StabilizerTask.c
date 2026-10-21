@@ -84,13 +84,13 @@ static void GsIdle_ReleaseOnDisarm(void);    /* below Des_Height: GS idle author
  * below 0.5 m, 0.3 -> 0.13 m in 0.28 s vs 0.86 s auto (F6). Des_Height still lowers
  * Z_posPID.Des at the same rate so the Des-at-floor touchdown gates keep working.
  * Touchdown detected by Z_ratePID.FB -> 0 on frame contact. */
-/* LAND_VZ_MPS / LAND_FAST_ALT / LAND_VZ_FAST_MPS and the 2026-10-15 slow stage live in land_profile.h. */
+/* LAND_VZ_MPS / LAND_FAST_ALT / LAND_VZ_FAST_MPS (two stages since 2026-10-21) live in land_profile.h. */
 #include "land_profile.h"
 #include "pid_fallback.h"
 #define LAND_TICK_S        0.005f   /* Des_Height runs every 200 Hz tick */
 /* Safety net: 3000 ticks at 200 Hz = 15 s max landing time before forced disarm
  * (was 10 s; kept for margin: rate-mode LAND from 2.5 m is about 5.7 s, arithmetic). */
-#define LAND_MAX_TICKS  500U
+#define LAND_MAX_TICKS  3000U   /* 41c9dea2 (2026-10-07) cut it to 500 (2.5 s) unexplained; restored 2026-10-21 */
 /* Touchdown ground evidence (2026-10-02b): FB within LAND_REST_MARGIN of the pre-takeoff
  * rest height, or the sink bias saturated at LAND_SINK_BIAS_MAX (see Update_Motor). */
 #define LAND_REST_MARGIN     0.03f

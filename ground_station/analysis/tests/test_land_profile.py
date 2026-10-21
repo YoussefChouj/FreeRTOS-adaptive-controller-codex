@@ -1,4 +1,4 @@
-"""API/land_profile.h on the host: the 3-stage sink schedule (2026-10-15 D2), the xy hold band below 0.12 m and
+"""API/land_profile.h on the host: the 2-stage sink schedule (2026-10-21, operator style: slow on top, fast below 0.30 m), the xy hold band below 0.12 m and
 the touchdown xy freeze below 0.04 m (2026-10-19)."""
 import shutil
 import subprocess
@@ -12,7 +12,7 @@ SRC = r"""#include <stdio.h>
 #include "land_profile.h"
 int main(void)
 {
-	const float z[] = {1.0f, 0.41f, 0.39f, 0.16f, 0.14f, 0.13f, 0.11f, 0.05f, 0.03f, 0.0f};
+	const float z[] = {1.0f, 0.31f, 0.29f, 0.16f, 0.14f, 0.13f, 0.11f, 0.05f, 0.03f, 0.0f};
 	for (unsigned i = 0; i < sizeof z / sizeof z[0]; i++)
 		printf("%.2f %u %u %u %u\n", LandProfile_SinkMps(z[i]), LandProfile_XyFreeze(1, z[i]), LandProfile_XyFreeze(0, z[i]),
 		       LandProfile_XyHold(1, z[i]), LandProfile_XyHold(0, z[i]));
@@ -29,7 +29,7 @@ def test_sink_schedule_xy_hold_and_freeze(tmp_path):
                          capture_output=True, text=True)
     assert res.returncode == 0 and "warning:" not in res.stderr, res.stderr
     rows = [ln.split() for ln in subprocess.run([str(exe)], capture_output=True, text=True).stdout.splitlines()]
-    assert [r[0] for r in rows] == ["0.65", "0.65", "0.50", "0.50", "0.25", "0.25", "0.25", "0.25", "0.25", "0.25"]
+    assert [r[0] for r in rows] == ["0.40", "0.40"] + ["0.90"] * 8
     assert [r[1] for r in rows] == ["0", "0", "0", "0", "0", "0", "0", "0", "1", "1"]   # landing, below 0.04 m only
     assert [r[3] for r in rows] == ["0", "0", "0", "0", "0", "0", "1", "1", "1", "1"]   # landing, below 0.12 m
     assert all(r[2] == "0" and r[4] == "0" for r in rows)                               # never outside LANDING

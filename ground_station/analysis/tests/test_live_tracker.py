@@ -292,6 +292,10 @@ def test_run_source_writes_fixes_as_it_goes_and_ends_on_the_stop_file(tmp_path):
     st = run_source(p, cam, EarthAlign(), 0.05, out_csv=str(out), ring=CoralTracker([300, 260]),
                     sched=FixScheduler(0.1, 3, window_s=0.2), stop_file=str(stop))
     assert st["fixes"] >= 10 and len(out.read_text().splitlines()) == 1 + st["fixes"]
+    # t_epoch (last column, 2026-10-21): wall clock, so fixes line up with telemetry received_ns without a fit.
+    import time
+    rows = [ln.split(",") for ln in out.read_text().splitlines()]
+    assert rows[0][-1] == "t_epoch" and all(abs(float(r[-1]) - time.time()) < 60 for r in rows[1:])
     stop.touch()
     st = run_source(p, cam, EarthAlign(), 0.05, out_csv=str(out), ring=CoralTracker([300, 260]), stop_file=str(stop))
     assert st["frames"] == 0 and out.read_text().splitlines()[0].startswith("t_send")
