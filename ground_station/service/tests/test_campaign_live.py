@@ -508,12 +508,119 @@ def test_heartbeat_probes_after_lockout_and_resumes_when_link_returns():
     assert client.heartbeat() is False          # B13: no frame right after the lockout
     assert len(_hbs(svc)) == before
     for _ in range(10):                         # 2 s locked: about one probe per second, not 5 Hz
-        clock.sleep(0.2)
+        clock.sleep(0.21)
         assert client.heartbeat() is False
     assert len(_hbs(svc)) - before == 2
     # the link comes back: the probe's result clears the lockout
     probe_txid = svc._txid
     svc.results[probe_txid] = {"transaction_id": probe_txid, "status": "applied"}
-    clock.sleep(0.2)
+    clock.sleep(0.21)
     assert client.heartbeat() is True
     assert client._consecutive_timeouts == 0
+
+class FakeBridgeWithAge:
+    def __init__(self, rx_age_s=None, raise_exc=False):
+        self.rx_age_s = rx_age_s
+        self.raise_exc = raise_exc
+
+    def link_health(self):
+        if self.raise_exc:
+            raise RuntimeError("bridge error")
+        return {"rx_age_s": self.rx_age_s}
+
+def test_heartbeat_late_results_fresh_radio():
+    svc = FakeService(mode="none")
+    svc.bridge = FakeBridgeWithAge(0.05)
+    client, clock = _client(svc)
+
+    # Send heartbeats for 3 seconds without answers (15 iterations)
+    for _ in range(15):
+        assert client.heartbeat() is True
+        clock.sleep(0.21)
+
+    hbs = _hbs(svc)
+    assert 14 <= len(hbs) <= 16
+    assert "heartbeat results late (radio fresh, rx_age 0.1 s): host ingest backlog" in client.last_error
+
+def test_heartbeat_late_results_stale_radio():
+    svc = FakeService(mode="none")
+    svc.bridge = FakeBridgeWithAge(3.0)
+    client, clock = _client(svc)
+
+    # Before lockout, heartbeats should still be sent normally for 2s
+    for _ in range(10):
+        assert client.heartbeat() is True
+        clock.sleep(0.21)
+
+    before_lockout = len(_hbs(svc))
+
+    # After lockout, probes at 1 Hz
+    for _ in range(10):  # 2 more seconds
+        clock.sleep(0.21)
+        assert client.heartbeat() is False
+
+    probes_sent = len(_hbs(svc)) - before_lockout
+    assert 1 <= probes_sent <= 3
+
+def test_heartbeat_radio_age_unknown():
+    svc = FakeService(mode="none")
+    svc.bridge = FakeBridgeWithAge(None)
+    client, clock = _client(svc)
+
+    for _ in range(10):
+        assert client.heartbeat() is True
+        clock.sleep(0.21)
+
+    before_lockout = len(_hbs(svc))
+
+    for _ in range(10):
+        clock.sleep(0.21)
+        assert client.heartbeat() is False
+
+    probes_sent = len(_hbs(svc)) - before_lockout
+    assert 1 <= probes_sent <= 3
+
+def test_heartbeat_two_timeouts_fresh_radio():
+    svc = FakeService(mode="none")
+    svc.bridge = FakeBridgeWithAge(0.05)
+    client, clock = _client(svc)
+
+    assert client.takeoff() is False
+    assert client.land() is False
+    assert client._consecutive_timeouts >= 2
+
+    assert client.heartbeat() is True
+    assert "heartbeat results late" in client.last_error
+
+def test_heartbeat_recovery():
+    svc = FakeService(mode="none")
+    svc.bridge = FakeBridgeWithAge(3.0)
+    client, clock = _client(svc)
+
+    for _ in range(10):
+        assert client.heartbeat() is True
+        clock.sleep(0.21)
+
+    assert client.heartbeat() is False
+
+    svc.bridge.rx_age_s = 0.05
+    clock.sleep(0.21)
+    assert client.heartbeat() is True
+
+def test_heartbeat_broken_bridge():
+    svc = FakeService(mode="none")
+    svc.bridge = FakeBridgeWithAge(raise_exc=True)
+    client, clock = _client(svc)
+
+    for _ in range(10):
+        assert client.heartbeat() is True
+        clock.sleep(0.21)
+
+    before_lockout = len(_hbs(svc))
+
+    for _ in range(10):
+        clock.sleep(0.21)
+        assert client.heartbeat() is False
+
+    probes_sent = len(_hbs(svc)) - before_lockout
+    assert 1 <= probes_sent <= 3
