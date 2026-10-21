@@ -219,14 +219,15 @@ def xy_metrics(w):
         ts = t[cross[0]]
         leave = np.where((t > ts + 2) & (np.abs(xd - 0.4) > 0.01))[0]
         te = min(t[leave[0]] if len(leave) else ts + 10, ts + 10)
-        m = (t >= ts - 0.5) & (t <= te)
-        fin = float(np.nanmedian(xd[(t > ts + 1) & (t < te)]))
-        x0 = float(np.nanmedian(x[(t > ts - 2) & (t < ts - 0.2)]))
-        out = np.where(m & (np.abs(x - fin) > 0.05))[0]
-        r.update(t_step=ts, step_end=te, overshoot_x_cm=100 * float(np.nanmax(x[m]) - fin),
-                 rise_s=float(t[m][np.argmax(x[m] >= x0 + 0.9 * (fin - x0))] - ts),
-                 settle5_s=float(t[out[-1]] - ts) if len(out) else 0.0,
-                 hold_x=osc(t, x - xd, ts + 4, te), hold_y=osc(t, y - yd, ts + 4, te))
+        m, hold, before = (t >= ts - 0.5) & (t <= te), (t > ts + 1) & (t < te), (t > ts - 2) & (t < ts - 0.2)
+        # no samples on one side of the crossing: no step to score (10-21 smoke and ground-effect, "Mean of empty slice")
+        if hold.any() and before.any():
+            fin, x0 = float(np.nanmedian(xd[hold])), float(np.nanmedian(x[before]))
+            out = np.where(m & (np.abs(x - fin) > 0.05))[0]
+            r.update(t_step=ts, step_end=te, overshoot_x_cm=100 * float(np.nanmax(x[m]) - fin),
+                     rise_s=float(t[m][np.argmax(x[m] >= x0 + 0.9 * (fin - x0))] - ts),
+                     settle5_s=float(t[out[-1]] - ts) if len(out) else 0.0,
+                     hold_x=osc(t, x - xd, ts + 4, te), hold_y=osc(t, y - yd, ts + 4, te))
         mv = np.where((t > te) & (t < W["t_land"]) & (W["spd"] > 0.02))[0]
         if len(mv):
             p0, p1 = t[mv[0]], t[mv[-1]]

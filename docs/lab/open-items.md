@@ -77,6 +77,8 @@ The nightly run builds and tests; it does NOT flash (flash at the next lab, oper
   right after the battery line, in the post-flight summary. Some metric averaged an empty window and is NaN.
   Candidates (UNVERIFIED): ground_station/analysis/lab_flights.py:186/236/299, video_truth.py:212. Find which field,
   guard the empty window and print "n/a" instead of a silent NaN.
+  FIXED 10-22 (nightly N4d): the warning came from flights 05 lab-s-smoke and 17 lab-z-ground-effect, not the speed
+  ladder: lab_flights.xy_metrics step hold window empty; guarded, regression test added.
 
 ## NIGHTLY PLAN 2026-10-21 -> 10-22 (operator away; CEO orchestrates; resume from here after every compaction)
 Operator debrief 21:30 (all 49 flights flown, logs/flights/2026-10-21/01..49):

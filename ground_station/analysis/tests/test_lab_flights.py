@@ -1,11 +1,12 @@
 """lab_flights on a synthetic recording: 40 cm x step with a known 5 cm overshoot, then a 1 s landing."""
 import numpy as np
+import pytest
 import pandas as pd
 
 from ground_station.analysis import lab_flights as L
 
 
-def _session(tmp_path):
+def _session(tmp_path, gap=None):
     tmp_path.mkdir(parents=True, exist_ok=True)
     t = np.arange(0, 30, 0.04)
     tau = t - 10
@@ -15,7 +16,8 @@ def _session(tmp_path):
     keys = {"Ctrler.locxPID.Des": xd, "Ctrler.locxPID.FB": x, "Ctrler.locyPID.Des": 0 * t,
             "Ctrler.locyPID.FB": 0 * t, "Ctrler.Z_posPID.Des": zd, "Ctrler.Z_posPID.FB": zd,
             "Ctrler.Z_ratePID.FB": np.gradient(zd, t)}
-    rows = [(int(ti * 1e9) + 1, 1, k, v[i]) for i, ti in enumerate(t) for k, v in keys.items()]
+    rows = [(int(ti * 1e9) + 1, 1, k, v[i]) for i, ti in enumerate(t) for k, v in keys.items()
+            if gap is None or not gap[0] < ti < gap[1]]
     pd.DataFrame(rows, columns=["received_ns", "slot", "key", "value"]).to_csv(tmp_path / "telemetry.csv", index=False)
     return tmp_path
 
@@ -29,6 +31,13 @@ def test_step_overshoot_and_landing(tmp_path):
     land = L.land_metrics(w)
     assert abs(land["descent_s"] - 0.9) < 0.15                        # z target leaves 0.47 m at 25.06 s, z < 6 cm at ~25.9 s
     assert land["err_at_touch_cm"] < 0.5 and land["target_xy_cm"][0] == 40
+
+
+@pytest.mark.filterwarnings("error::RuntimeWarning")
+def test_no_step_scored_across_a_telemetry_gap(tmp_path):
+    """10-21 smoke and ground-effect: no samples in the step hold window used to warn "Mean of empty slice"."""
+    r = L.xy_metrics(L.load(_session(tmp_path, gap=(10.3, 20.5))))
+    assert "overshoot_x_cm" not in r and abs(r["airborne_s"]) > 0
 
 
 def test_is_sim_detection(tmp_path):
