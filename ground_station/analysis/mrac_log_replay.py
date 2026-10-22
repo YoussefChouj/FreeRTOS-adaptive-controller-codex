@@ -23,7 +23,7 @@ import numpy as np
 from ground_station.analysis import adaptive_review as ar
 from ground_station.analysis import log_corpus as lc
 from ground_station.analysis.mrac_variants import AXES as VAR_AXES
-from ground_station.analysis.mrac_variants import GAMMA_SCALE_FIELD, VARIANT_FIELDS
+from ground_station.analysis.mrac_variants import GAMMA_SCALE_FIELD, L2G_MEMBERS, VARIANT_FIELDS
 from ground_station.research.sim.constants import MIXER_R_P, MIXER_YAW, MIXER_Z
 
 DT = 0.005                                  # MRAC_DT, API/mrac.h
@@ -60,6 +60,10 @@ def knob_args(params: dict[str, float]) -> list[str]:
     for sym, val in params.items():
         if sym.startswith("mrac_g_gamma["):
             out.append(f"{int(sym[13])}:{GAMMA_SCALE_FIELD}:{val}")
+        elif sym.startswith("mrac_l2g_cfg["):
+            member = sym.split(".")[1]
+            field = next(f for f, m in L2G_MEMBERS.items() if m == member)
+            out.append(f"{int(sym[13])}:{names.index(field)}:{val}")
         else:
             member, field = sym.split(".")
             out.append(f"{VAR_AXES.index(member)}:{names.index(field)}:{val}")

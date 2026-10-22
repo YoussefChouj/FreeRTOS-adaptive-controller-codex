@@ -160,6 +160,20 @@ extern float mrac_g_sigma[AXES][MRAC_N_GROUPS];
 extern float mrac_g_phi[AXES][MRAC_N_GROUPS];
 extern float mrac_u_ff[AXES];
 
+// L2 feature gating (docs/design/2026-10-22-mrac-experiment-stack.md section 2). Per feature, score
+// s_i = |EMA_tau(step_i)| of the signed per-tick weight step (zero-mean noise averages out); a feature
+// whose score stays below thr_off * max_j s_j for t_trap seconds is trapped, and revives above
+// thr_on * max_j s_j. mode 0 off (bit-identical), 1 gate (a trapped feature's weight is held),
+// 2 observe (flags update, weights untouched). Written through the CMD 0x1D fields l2_mode .. l2_t_trap.
+typedef struct {
+    uint8_t mode;
+    float tau_s, thr_off, thr_on, t_trap_s;
+} MRAC_L2G_Config_t;
+extern MRAC_L2G_Config_t mrac_l2g_cfg[AXES];
+extern float mrac_l2g_ema[AXES][MRAC_N_FEATURES];
+extern uint16_t mrac_l2g_trap_ticks[AXES][MRAC_N_FEATURES];
+extern uint8_t mrac_l2g_trapped[AXES][MRAC_N_FEATURES];
+
 // DWT cycles per layer of MRAC_UpdateAxis, read from the ELF as mrac_cyc. last = latest tick,
 // max = worst since reset (write 0 to clear). blocks = generators; law = L3 feedforward,
 // adaptive law and output; total = whole call. L2 is timed once per tick, not per axis.
@@ -290,6 +304,11 @@ typedef enum {
     MRAC_VF_WC_PE,
     MRAC_VF_P_MAX,              // 3L-v2 D
     MRAC_VF_P_FORGET,
+    MRAC_VF_L2_MODE,            // L2 feature gating from here (every build); writes mrac_l2g_cfg[axis]
+    MRAC_VF_L2_TAU,
+    MRAC_VF_L2_THR_OFF,
+    MRAC_VF_L2_THR_ON,
+    MRAC_VF_L2_T_TRAP,
     MRAC_VF_COUNT
 } MRAC_VariantField_e;
 

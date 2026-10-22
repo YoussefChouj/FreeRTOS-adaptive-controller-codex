@@ -809,8 +809,85 @@ float mrac_u_ff[AXES] MRAC_CCM;
 
 MRAC_Cyc_t mrac_cyc;
 
+// L2 feature gating (mrac.h). Defaults PROPOSED (spec section 2), mode 0 = off on every axis.
+/* MRAC_L2G_ROW legend
+   @tau_s     s  [0.05, 10]  score EMA time constant
+   @thr_off   -  [0, 1]      trap below thr_off * max score (relative to the axis' best feature)
+   @thr_on    -  [0, 1]      revive above thr_on * max score; > thr_off (hysteresis)
+   @t_trap_s  s  [0.05, 30]  time below thr_off before the feature is trapped */
+#define MRAC_L2G_ROW(tau_s, thr_off, thr_on, t_trap_s) { 0U, (tau_s), (thr_off), (thr_on), (t_trap_s) }
+MRAC_L2G_Config_t mrac_l2g_cfg[AXES] = {
+    MRAC_L2G_ROW(1.0f, 0.05f, 0.15f, 2.0f),   /* pitch */
+    MRAC_L2G_ROW(1.0f, 0.05f, 0.15f, 2.0f),   /* roll  */
+    MRAC_L2G_ROW(1.0f, 0.05f, 0.15f, 2.0f),   /* yaw   */
+    MRAC_L2G_ROW(1.0f, 0.05f, 0.15f, 2.0f),   /* z     */
+    MRAC_L2G_ROW(1.0f, 0.05f, 0.15f, 2.0f),   /* x     */
+    MRAC_L2G_ROW(1.0f, 0.05f, 0.15f, 2.0f)    /* y     */
+};
+float mrac_l2g_ema[AXES][MRAC_N_FEATURES] MRAC_CCM;
+uint16_t mrac_l2g_trap_ticks[AXES][MRAC_N_FEATURES] MRAC_CCM;
+uint8_t mrac_l2g_trapped[AXES][MRAC_N_FEATURES] MRAC_CCM;
+static float mrac_l2g_in[AXES][MRAC_N_FEATURES] MRAC_CCM;   // signed weight steps fed since the last update
+static uint8_t mrac_l2g_fed[AXES] MRAC_CCM;                 // features fed (the axis' n), 0 = not fed
+
+// Adds this tick's signed weight step of feature i (the excitation-driven part only) to the L2 score input.
+static void MRAC_L2G_Feed(MRAC_Axis_e axis, int i, int n, float step)
+{
+    mrac_l2g_in[axis][i] += step;
+    if (mrac_l2g_fed[axis] < (uint8_t)n) mrac_l2g_fed[axis] = (uint8_t)n;
+}
+
+// 1 when L2 holds feature i of this axis (mode 1 and trapped); mode 0 and 2 never hold.
+static int MRAC_L2G_Held(MRAC_Axis_e axis, int i)
+{
+    return mrac_l2g_cfg[axis].mode == 1U && mrac_l2g_trapped[axis][i] != 0U;
+}
+
+// Clears an axis' scores, traps and pending input (mode change, CMD 0x1D).
+static void MRAC_L2G_Reset(uint8_t axis)
+{
+    int i;
+    for (i = 0; i < MRAC_N_FEATURES; i++) {
+        mrac_l2g_ema[axis][i] = 0.0f;
+        mrac_l2g_trap_ticks[axis][i] = 0U;
+        mrac_l2g_trapped[axis][i] = 0U;
+        mrac_l2g_in[axis][i] = 0.0f;
+    }
+    mrac_l2g_fed[axis] = 0U;
+}
+
+// Once per tick, before the axis updates: scores last tick's steps, then traps or revives each feature.
 static void MRAC_L2_Update(void)
 {
+    int a, i, n;
+    float k, s, s_max;
+    uint32_t trap_ticks;
+    for (a = 0; a < AXES; a++) {
+        const MRAC_L2G_Config_t *c = &mrac_l2g_cfg[a];
+        n = (int)mrac_l2g_fed[a];
+        if (c->mode == 0U || n == 0) continue;
+        k = MRAC_DT / c->tau_s;
+        s_max = 0.0f;
+        for (i = 0; i < n; i++) {
+            mrac_l2g_ema[a][i] += k * (mrac_l2g_in[a][i] - mrac_l2g_ema[a][i]);
+            mrac_l2g_in[a][i] = 0.0f;
+            s = fabsf(mrac_l2g_ema[a][i]);
+            if (s > s_max) s_max = s;
+        }
+        mrac_l2g_fed[a] = 0U;
+        if (!(s_max > 0.0f)) continue;
+        trap_ticks = (uint32_t)(c->t_trap_s / MRAC_DT + 0.5f);
+        for (i = 0; i < n; i++) {
+            s = fabsf(mrac_l2g_ema[a][i]);
+            if (s < c->thr_off * s_max) {
+                if (mrac_l2g_trap_ticks[a][i] < 0xFFFFU) mrac_l2g_trap_ticks[a][i]++;
+                if (mrac_l2g_trap_ticks[a][i] >= trap_ticks) mrac_l2g_trapped[a][i] = 1U;
+            } else {
+                mrac_l2g_trap_ticks[a][i] = 0U;
+                if (s > c->thr_on * s_max) mrac_l2g_trapped[a][i] = 0U;
+            }
+        }
+    }
 }
 
 static float MRAC_L3_Feedforward(MRAC_Axis_e axis, const MRAC_Bus_t *bus)
@@ -1102,6 +1179,11 @@ static void MRAC_AdaptWeights(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, cons
         for (i = 0; i < n; i++) {
             grad[i] = (-s * state->Phi[i]) / denom;
         }
+        if (mrac_l2g_cfg[axis_id].mode != 0U) {   // L2 score input: this tick's gradient, without the per-feature
+            for (i = 0; i < n; i++) {             // gammas (they span 15x and would trap an excited low-gain feature)
+                MRAC_L2G_Feed(axis_id, i, n, MRAC_DT * grad[i] * theta_scale);
+            }
+        }
 
 #ifdef MRAC_ENABLE_SIGMA_PRIOR
         /* Opt-in prior attractor folded into the gradient BEFORE projection.
@@ -1146,7 +1228,7 @@ static void MRAC_AdaptWeights(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, cons
             if (config->lf_gain > 0.0f) y *= config->lf_gain;
 #endif
 
-            state->Theta[i] += MRAC_DT * y * theta_scale;
+            if (!MRAC_L2G_Held(axis_id, i)) state->Theta[i] += MRAC_DT * y * theta_scale;
 
 #ifdef MRAC_ENABLE_SIGMA_PRIOR
             /* Discrete-time safeguard: the band-scaling projection cannot
@@ -1290,6 +1372,8 @@ static void MRAC_CompositeStep(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, con
     if (!learn || mrac_simplex.tripped || mrac_simplex.variant == 1 || state->nan_hold != 0U) return;
     g = MRAC_DT * config->gamma_c * state->p_gain * state->pe / (1.0f + pf_sq);
     for (i = 0; i < n; i++) {
+        if (mrac_l2g_cfg[axis_id].mode != 0U) MRAC_L2G_Feed(axis_id, i, n, g * state->Phi_f[i]);
+        if (MRAC_L2G_Held(axis_id, i)) continue;
         state->Theta[i] += g * state->Phi_f[i];
         if (state->Theta[i] > config->What_limit[i]) {
             state->Theta[i] = config->What_limit[i];
@@ -1823,7 +1907,12 @@ static const struct { float lo; float hi; uint8_t snap; } mrac_var_field[MRAC_VF
     MRAC_VAR_FIELD( 0.0f,  7.0f,   0),   /* pe_delay        ticks, < MRAC_REF_BUF */
     MRAC_VAR_FIELD( 1.0f,  100.0f, 0),   /* wc_pe           rad/s */
     MRAC_VAR_FIELD( 0.0f,  20.0f,  0),   /* p_max           - (3L-v2 D) */
-    MRAC_VAR_FIELD( 0.0f,  5.0f,   0)    /* p_forget        1/s */
+    MRAC_VAR_FIELD( 0.0f,  5.0f,   0),   /* p_forget        1/s */
+    MRAC_VAR_FIELD( 0.0f,  2.0f,   0),   /* l2_mode         0 off, 1 gate, 2 observe */
+    MRAC_VAR_FIELD( 0.05f, 10.0f,  0),   /* l2_tau          s */
+    MRAC_VAR_FIELD( 0.0f,  1.0f,   0),   /* l2_thr_off      -, < l2_thr_on */
+    MRAC_VAR_FIELD( 0.0f,  1.0f,   0),   /* l2_thr_on       -, > l2_thr_off */
+    MRAC_VAR_FIELD( 0.05f, 30.0f,  0)    /* l2_t_trap       s */
 };
 
 #if MRAC_VARIANT == MRAC_VARIANT_MULTI
@@ -1952,6 +2041,21 @@ uint8_t MRAC_VariantParamSet(uint8_t axis, uint8_t field, float val)
         case MRAC_VF_P_MAX:    c->p_max = val;    st[axis]->p_gain = 1.0f; break;
         case MRAC_VF_P_FORGET: c->p_forget = val; break;
 #endif
+        // L2 gating: a mode write starts the scores fresh; the thresholds keep thr_off < thr_on (hysteresis)
+        case MRAC_VF_L2_MODE:
+            mrac_l2g_cfg[axis].mode = (uint8_t)(val + 0.5f);
+            MRAC_L2G_Reset(axis);
+            break;
+        case MRAC_VF_L2_TAU:     mrac_l2g_cfg[axis].tau_s = val; break;
+        case MRAC_VF_L2_THR_OFF:
+            if (!(val < mrac_l2g_cfg[axis].thr_on)) return 0U;
+            mrac_l2g_cfg[axis].thr_off = val;
+            break;
+        case MRAC_VF_L2_THR_ON:
+            if (!(val > mrac_l2g_cfg[axis].thr_off)) return 0U;
+            mrac_l2g_cfg[axis].thr_on = val;
+            break;
+        case MRAC_VF_L2_T_TRAP:  mrac_l2g_cfg[axis].t_trap_s = val; break;
         default: return 0U;
     }
     if (mrac_var_field[field].snap) {

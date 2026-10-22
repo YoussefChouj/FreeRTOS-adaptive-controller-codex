@@ -48,8 +48,16 @@ VARIANT_FIELDS: tuple[tuple[str, float, float], ...] = (
     ("wc_pe", 1.0, 100.0),          # 3L-v2 prediction-error LPF rad/s
     ("p_max", 0.0, 20.0),           # 3L-v2 D self-tuning gain bound (0 = off)
     ("p_forget", 0.0, 5.0),         # 3L-v2 D forgetting rate 1/s
+    ("l2_mode", 0.0, 2.0),          # L2 feature gating: 0 off, 1 gate, 2 observe (writes mrac_l2g_cfg[axis])
+    ("l2_tau", 0.05, 10.0),         # L2 score EMA time constant s
+    ("l2_thr_off", 0.0, 1.0),       # L2 trap below thr_off * max score; firmware refuses thr_off >= thr_on
+    ("l2_thr_on", 0.0, 1.0),        # L2 revive above thr_on * max score; firmware refuses thr_on <= thr_off
+    ("l2_t_trap", 0.05, 30.0),      # L2 time below thr_off before the trap s
 )
 GAMMA_SCALE_FIELD = 11
+# L2 gating fields write mrac_l2g_cfg[axis].<member>, not the axis config (API/mrac.h MRAC_L2G_Config_t)
+L2G_MEMBERS = {"l2_mode": "mode", "l2_tau": "tau_s", "l2_thr_off": "thr_off", "l2_thr_on": "thr_on",
+               "l2_t_trap": "t_trap_s"}
 
 
 def variant_idx(axis: int, field: int) -> int:
@@ -71,7 +79,10 @@ def variant_symbol(idx: int) -> str | None:
         return None
     if field == GAMMA_SCALE_FIELD:
         return f"mrac_g_gamma[{axis}][*]"
-    return f"{AXES[axis]}.{VARIANT_FIELDS[field][0]}"
+    name = VARIANT_FIELDS[field][0]
+    if name in L2G_MEMBERS:
+        return f"mrac_l2g_cfg[{axis}].{L2G_MEMBERS[name]}"
+    return f"{AXES[axis]}.{name}"
 
 
 def variant_bounds(idx: int) -> tuple[float, float] | None:

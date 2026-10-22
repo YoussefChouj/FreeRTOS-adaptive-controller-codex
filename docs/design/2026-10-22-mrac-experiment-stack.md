@@ -48,6 +48,13 @@ pre-registered thresholds, not measurements.
 - Gate multiplies the weight update only (not the output), so a trapped feature keeps its learned contribution.
 - Defaults PROPOSED: tau_s 1 s, thr_off 0.05, thr_on 0.15, t_trap 2 s. Mode: 0 off (default, bit-identical), 1 gate, 2 observe
   (scores and would-be gates logged, no effect).
+- As built (deviations found by API/tests/test_mrac_l2_gate.c, 10-22):
+  - Score is `s_i = |EMA(signed step_i)|`, not `EMA(|g_i|)`. A zero-mean noise feature averages out of a signed EMA and
+    traps; under `EMA(|g_i|)` its score stays high and it never traps (test A).
+  - The Lyapunov feed leaves out the per-feature gammas (`gamma[i]`, group `mrac_g_gamma`): the score is the gradient
+    `DT * grad_i * theta_scale`. With the gammas in, ext 0 at 30 deg (gamma 0.1, phi 0.5) scored 3.3 % of the bias feature
+    (gamma 1.5, phi 1) and trapped while excited (tests B, C failed). The composite feed already has one common gain.
+  - One-tick lag: MRAC_L2_Update runs before the axis updates, so it scores the previous tick's steps.
 
 ## 3. L3 prior
 
