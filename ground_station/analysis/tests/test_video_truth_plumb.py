@@ -55,11 +55,12 @@ def test_fixes_clock_recovers_the_offset_through_lost_packets(tmp_path):
     with open(tmp_path / "fixes.csv", "w") as f:
         f.write("t_send,t_cap,pad_x_m,pad_y_m,earth_x_cm,earth_y_cm,frame_hex\n")
         f.writelines(f"{s:.4f},{s - 0.03:.4f},0.1,0.2,0,0,ccdd\n" for s in sent)
-    t = np.arange(arr[0], arr[-1], 0.04)                                # 25 Hz slot2 rows
-    k = np.searchsorted(arr, t, side="right")
+    t = np.arange(arr[0] - 1.0, arr[-1], 0.04)                          # 25 Hz slot2 rows; the log starts first
+    k = np.searchsorted(arr, t, side="right")                           # (the first logged count is the zero)
     with open(tmp_path / "f.slot2.csv", "w") as f:
         f.write("t_src_ms,g_ext_pos.n_ok,g_ext_pos.n_rej,g_ext_pos.n_old,g_ext_pos.age_ms\n")
-        f.writelines(f"{ti * 1e3:.1f},{ki - 5},5,0,{(ti - arr[ki - 1]) * 1e3:.1f}\n" for ti, ki in zip(t, k) if ki > 5)
+        f.writelines(f"{ti * 1e3:.1f},{ki - min(ki, 5)},{min(ki, 5)},0,{(ti - arr[ki - 1]) * 1e3 if ki else 0:.1f}\n"
+                     for ti, ki in zip(t, k))
     fc = fixes_clock(str(tmp_path / "f"), tmp_path / "fixes.csv")
     assert abs(fc["c"] - (c_true - lat - 0.0015)) < 0.002              # c absorbs the mean latency
     assert fc["n_sent"] == 3000 and 2935 <= fc["n_recv"] <= 2940 and fc["lost_monotone_frac"] > 0.99 and fc["resid_p90_ms"] < 3.0
