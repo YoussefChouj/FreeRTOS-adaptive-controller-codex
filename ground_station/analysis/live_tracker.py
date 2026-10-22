@@ -116,8 +116,12 @@ def ring_xy(uv, cam: dict, z_m: float) -> np.ndarray:
 
 class CoralTracker:
     """video_truth.track_coral run online (the R4 truth tracker): coral guard-ring pixels (vt.coral_mask, minus the
-    `static` scenery mask from vt.coral_static) in a square ROI around the last fix; vt.guard_centre of them is the drone. A
-    miss grows the ROI 1.5x per frame up to the whole frame.
+    `static` scenery mask from vt.coral_static) in a square ROI around the last fix; on the pad vt.guard_centre of them is
+    the drone, in the air their median. A miss grows the ROI 1.5x per frame up to the whole frame.
+    "On the pad" = the height is known and has not yet passed pad_air_m (default 0.15 m, the airborne line of shadow_pairs
+    and --align-min-h-m); after that, or with no height, the median. 10-22 A/B on 4 x 10-21 videos: guard_centre held the
+    pad 3/4 steadier, but in the air the published fix was noisier on 4/4 (p99 4.6-7.4 -> 9.1-14.1 px), because
+    drone_centre switches formula as guards hide (operator decision A1, 10-22).
     Live there is no whole video to learn `static` from, so with learn_n > 0 it is learned from the start: coral in
     >= frac of learn_n frames taken every learn_every frames (drone on the pad; a keep_r disc, 1.3 roi by default, around
     the seed is the drone and stays out), grown by grow_px, as vt.coral_static does. Without it a coral-coloured object near
@@ -133,13 +137,14 @@ class CoralTracker:
     def __init__(self, seed_uv, static=None, roi: float = 140.0, min_px: int = 40,   # track_coral defaults
                  learn_n: int = 0, learn_every: int = 5, frac: float = 0.7, grow_px: int = 7,
                  keep_r: float | None = None, zoom: float = 1.0, land_zoom: float = 2.0, land_z_m: float = 0.30,
-                 scenery=None):
+                 scenery=None, pad_air_m: float = 0.15):
         self.c, self.static, self.roi, self.min_px = np.asarray(seed_uv, float), static, float(roi), min_px
         self.r = self.roi
         self.seed0, self.learn_n, self.learn_every, self.frac, self.grow = self.c.copy(), learn_n, learn_every, frac, grow_px
         self.keep_r = 1.3 * self.roi if keep_r is None else float(keep_r)   # r6_f4 pad: drone coral to ~170 px of 1920
         self.zoom, self.land_zoom, self.land_z_m, self.active_zoom = float(zoom), float(land_zoom), float(land_z_m), 1.0
         self.last_s, self.scenery, self.learned = {}, scenery, False
+        self.pad_air_m, self.flown = float(pad_air_m), False   # flown latches at the first height above pad_air_m
         self._acc, self._k, self._i = None, 0, 0
 
     def _learn(self, frame_bgr) -> None:
@@ -176,6 +181,9 @@ class CoralTracker:
         z_eff = self.land_zoom if (z_agl is not None and np.isfinite(z_agl) and 0.0 < z_agl <= self.land_z_m) else self.zoom
         z_eff = max(1.0, float(z_eff))
         self.active_zoom = z_eff
+        z_known = z_agl is not None and np.isfinite(z_agl)
+        self.flown |= bool(z_known and z_agl > self.pad_air_m)
+        on_pad = z_known and not self.flown
         u0, v0 = int(max(0, self.c[0] - self.r)), int(max(0, self.c[1] - self.r))
         u1, v1 = int(min(W, self.c[0] + self.r)), int(min(H, self.c[1] + self.r))
         if u1 > u0 and v1 > v0:
@@ -197,7 +205,8 @@ class CoralTracker:
                 m &= ~st_crop
             vv, uu = np.nonzero(m)
             if len(uu) >= self.min_px * (z_eff * z_eff):
-                g = vt.guard_centre(m, self.min_px / 4.0 * z_eff * z_eff, 5.0 * z_eff)
+                g = (vt.guard_centre(m, self.min_px / 4.0 * z_eff * z_eff, 5.0 * z_eff) if on_pad
+                     else np.array([np.median(uu), np.median(vv)]))
                 self.c = (g + 0.5) / z_eff - 0.5 + np.array([u0, v0])
                 self.r = self.roi
                 self.last_s["detect"] = time.perf_counter() - t1
@@ -1252,7 +1261,8 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
         z_agl = (max(0.0, float(z) - float(getattr(height_m, "ring_h", 0.0)))
                  if z is not None and np.isfinite(z) else 0.0)
         if ring is not None:
-            uv = ring.step(frame, z_agl) if isinstance(ring, CoralTracker) else ring.step(frame)
+            uv = (ring.step(frame, z_agl if z is not None and np.isfinite(z) else None) if isinstance(ring, CoralTracker)
+                  else ring.step(frame))
             if uv_log is not None:
                 uv_log.append((t_read, *(uv if uv is not None else (np.nan, np.nan))))
             xy = None if uv is None or not np.isfinite(z) else ring_xy(uv, cam, z)

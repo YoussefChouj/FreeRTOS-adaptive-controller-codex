@@ -149,11 +149,29 @@ def test_coral_tracker_weights_each_guard_the_same_so_a_partial_guard_cannot_lat
     from ground_station.analysis import video_truth as vt
     c = np.array([300.0, 260.0])
     f = _guards_frame(c, hide, half, cut)
-    uv = CoralTracker(c + 8).step(f)
+    uv = CoralTracker(c + 8).step(f, 0.0)                      # on the pad
     assert uv is not None and np.hypot(*(uv - c)) <= 3.0
     if hide or half:                                           # the old fix: the plain median of the same pixels
         vv, uu = np.nonzero(vt.coral_mask(cv2_hsv(f)))
         assert np.hypot(np.median(uu) - c[0], np.median(vv) - c[1]) > 8.0
+
+
+def test_coral_tracker_uses_the_median_in_the_air_and_guard_centre_only_on_the_pad():
+    """10-22 A/B (4 x 10-21 videos): guard_centre is steadier on the pad but noisier in flight on 4/4, so the operator
+    picked (A1) the old median in the air: above pad_air_m, after the first take-off, and with no height at all."""
+    from ground_station.analysis.live_tracker import CoralTracker
+    from ground_station.analysis import video_truth as vt
+    c = np.array([300.0, 260.0])
+    f = _guards_frame(c, half=(1,))
+    vv, uu = np.nonzero(vt.coral_mask(cv2_hsv(f)))
+    med = np.array([np.median(uu), np.median(vv)])
+    assert np.hypot(*(med - c)) > 8.0                          # the frame tells the two apart
+    tr = CoralTracker(c + 8)
+    assert np.hypot(*(tr.step(f, 0.05) - c)) <= 3.0            # pad: guard_centre
+    assert np.allclose(tr.step(f, 0.60), med, atol=0.5)         # air: median
+    assert np.allclose(tr.step(f, 0.05), med, atol=0.5)         # landed again: still median (latched at take-off)
+    assert np.allclose(CoralTracker(c + 8).step(f), med, atol=0.5)                  # no height: median
+    assert np.allclose(CoralTracker(c + 8).step(f, float("nan")), med, atol=0.5)
 
 
 def cv2_hsv(f):
