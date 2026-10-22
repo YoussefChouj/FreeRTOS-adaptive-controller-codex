@@ -209,10 +209,14 @@ void    ext_pos_stale_tick(ext_pos_stat_t *s, uint32_t now_ms);
 uint8_t ext_pos_take(ext_pos_stat_t *s, uint8_t res);
 uint8_t ext_pos_step(ext_pos_stat_t *s, uint8_t res, float *dx, float *dy);
 void    ext_pos_spread(ext_pos_stat_t *s, float *dx, float *dy);
+uint8_t ext_pos_path(uint8_t on, uint8_t ekf_ok);
 uint8_t ext_pos_decode(float val, float *x_cm, float *y_cm);
 #define EXT_POS_FIX_OK        0U
 #define EXT_POS_FIX_GATED     1U
 #define EXT_POS_FIX_OLD       2U
+#define EXT_POS_PATH_NONE     0U       /* ext_pos_path(): off or shadow */
+#define EXT_POS_PATH_OFFSET   2U       /* mode 2 offset outside the EKF */
+#define EXT_POS_PATH_EKF      3U       /* in-EKF fix */
 
 #endif /* __EKF_OF_H__ */
 

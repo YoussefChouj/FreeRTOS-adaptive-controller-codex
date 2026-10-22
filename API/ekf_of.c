@@ -521,6 +521,18 @@ void ext_pos_spread(ext_pos_stat_t *s, float *dx, float *dy)
     *dy = ey;
 }
 
+/* Which correction path a control tick runs for mode `on` (g_ext_pos_on) when the OF EKF is (ekf_ok) or is not
+ * running: EXT_POS_PATH_EKF (the fix is an EKF measurement), EXT_POS_PATH_OFFSET (mode 2: step c, spread a into
+ * earth_x/y) or EXT_POS_PATH_NONE (off / shadow). D8 fix B (2026-10-22): mode 3 without the EKF (a speed trip latches
+ * OF_BIAS_FIXED for the rest of the flight) runs the offset path, so the camera stays in the loop; it was shadow. */
+uint8_t ext_pos_path(uint8_t on, uint8_t ekf_ok)
+{
+    if (on == 3U && ekf_ok) {
+        return EXT_POS_PATH_EKF;
+    }
+    return (on == 2U || on == 3U) ? EXT_POS_PATH_OFFSET : EXT_POS_PATH_NONE;
+}
+
 /* Wire value: an exact integer code = (qx + 2048) * 4096 + (qy + 2048), q = round(cm / EXT_POS_Q_CM) in
  * [-2048, 2047]. An integer below 2^24 survives the float32 field bit-exact (no NaN patterns). 0 = bad code. */
 uint8_t ext_pos_decode(float val, float *x_cm, float *y_cm)

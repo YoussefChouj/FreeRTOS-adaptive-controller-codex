@@ -915,7 +915,7 @@ static void Of_TickKf(u8 of_ok)
  * fix against it at its capture time (g_ext_pos). Mode 1 shadow: telemetry only. Mode 2: ext_pos_step() moves the
  * target c by at most EXT_POS_SLEW_CM per fix, ext_pos_spread() ramps earth_x/y (so locx/locyPID.FB) toward it at
  * most EXT_POS_SLEW_CM / EXT_POS_SPREAD_N per tick; the EKF is not touched. Mode 3 (PROPOSED, needs the OF EKF,
- * else shadow): c follows a, so e = z - earth_past; Ext_Pos_Ekf() feeds the fix to the EKF as a position measurement.
+ * else the mode-2 path, ext_pos_path()): c follows a, so e = z - earth_past; Ext_Pos_Ekf() feeds the fix to the EKF as a position measurement.
  * Both closed modes re-derive the loc FB at once and shift PreE by the same jump (Ext_Pos_SetFb). */
 static void Ext_Pos_SetFb(void)
 {
@@ -963,8 +963,11 @@ static void Ext_Pos_Tick(void)
 {
 	uint32_t now_ms = (uint32_t)xTaskGetTickCount() * (uint32_t)portTICK_PERIOD_MS;
 	float dx, dy;
-	uint8_t ekf3 = (uint8_t)(g_ext_pos_on == 3U && g_of_bias_mode == OF_BIAS_EKF && s_ekf_of_inited);
-	if (g_ext_pos_on == 3U) {
+	/* c == a when mode 3 drops to the offset path (D8 fix B), so earth_x/y does not jump at the switch */
+	uint8_t path = ext_pos_path(g_ext_pos_on, (uint8_t)(g_of_bias_mode == OF_BIAS_EKF && s_ekf_of_inited));
+	uint8_t ekf3 = (uint8_t)(path == EXT_POS_PATH_EKF);
+	uint8_t m2 = (uint8_t)(path == EXT_POS_PATH_OFFSET);
+	if (ekf3) {
 		g_ext_pos.c_x = g_ext_pos.a_x;   /* the ring holds earth - a: e = z - earth_past */
 		g_ext_pos.c_y = g_ext_pos.a_y;
 	}
@@ -980,7 +983,7 @@ static void Ext_Pos_Tick(void)
 		taskEXIT_CRITICAL();
 		if (g_ext_pos_on) {
 			uint8_t res = ext_pos_fix(&g_ext_pos, &s_ext_pos_ring, t_meas, now_ms, zx, zy);
-			if (g_ext_pos_on == 2U) {
+			if (m2) {
 				(void)ext_pos_step(&g_ext_pos, res, &dx, &dy);
 			} else if (ekf3 && ext_pos_take(&g_ext_pos, res)) {
 				Ext_Pos_Ekf();
@@ -988,7 +991,7 @@ static void Ext_Pos_Tick(void)
 			}
 		}
 	}
-	if (g_ext_pos_on == 2U) {
+	if (m2) {
 		ext_pos_spread(&g_ext_pos, &dx, &dy);
 		ano_of.earth_x += dx;
 		ano_of.earth_y += dy;

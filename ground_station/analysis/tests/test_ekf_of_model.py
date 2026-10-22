@@ -76,7 +76,7 @@ def gcc_lib(tmp_path_factory):
             (tmp_dir / "math.h").write_text("#define sqrtf __builtin_sqrtf\n#define fabsf __builtin_fabsf\n")
             exports = [f"-Wl,-export:{n}" for n in ("EkfOf_Init", "EkfOf_Predict", "EkfOf_Update",
                        "EkfOf_UpdateRaw", "EkfOf_UpdateZeroVel", "EkfOf_ResetPos", "EkfOf_ResetBias",
-                       "EkfOf_UpdatePos")]
+                       "EkfOf_UpdatePos", "ext_pos_path")]
             subprocess.run([clang, "-std=c99", "-Wall", "-Wextra", "-Werror", "-fno-math-errno", "-shared",
                             "-nostdlib", "-Wl,-noentry", f"-I{tmp_dir}", *exports, str(src), str(shim), "-o", str(lib_path)],
                            check=True, capture_output=True, text=True)
@@ -616,3 +616,15 @@ def test_update_pos_gain_gate_release():
     m.update_pos(np.array([2.0]), np.array([0.0]), R, gate=5.0)
     assert m.x[0, 0] == pytest.approx(x0 + (2.0 - x0) * POS_P0 / (POS_P0 + R), rel=1e-6)
     assert m.pos_rej_run[0, 0] == 0
+
+
+def test_mode_3_without_the_ekf_runs_the_offset_path(gcc_lib):
+    # D8 (10-21): a speed trip latches OF_BIAS_FIXED, and mode 3 then fell to shadow for the rest of the flight, so
+    # the camera left the loop exactly on the fast rungs. Fix B: mode 3 without the EKF runs the mode-2 offset path.
+    lib = ctypes.CDLL(str(gcc_lib))
+    lib.ext_pos_path.restype = ctypes.c_uint8
+    lib.ext_pos_path.argtypes = [ctypes.c_uint8, ctypes.c_uint8]
+    NONE, OFFSET, EKF = 0, 2, 3
+    want = {(0, 0): NONE, (0, 1): NONE, (1, 0): NONE, (1, 1): NONE,
+            (2, 0): OFFSET, (2, 1): OFFSET, (3, 1): EKF, (3, 0): OFFSET, (4, 1): NONE}
+    assert {k: lib.ext_pos_path(*k) for k in want} == want
