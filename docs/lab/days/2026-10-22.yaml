@@ -1,0 +1,104 @@
+# Lab day 2026-10-22: fly it with `.\labday 2026-10-22` (add `--pack 2` once after a type-2 swap; ground_station/lab/labday.py).
+# `.\labday 2026-10-22 --list` shows what is flown; the same command again goes on from the first flight not flown.
+# Each flight is `.\fly <fly> --once <args>`; `stop: true` = analysis stop after it. Pass marks are PROPOSED.
+# What changed since 10-21 (docs/research/2026-10-22-d3/-d7/-d8, docs/lab/days/2026-10-21-report.md):
+# - Firmware: the 10-21 flash was 48700fcb. Not flashed yet: 82f4f250 (takeoff-gate mask, c3 robust xy gains default)
+#   and 5486a26b (ADRC observer bandwidth wo 19.36 -> 12, D1). One flash bundles both, so smoke-hover comes first.
+# - Smith delay: every exp script now writes g_xyc_delay_ticks (VAR 47) = 21, the measured loop delay (7c4d7e21).
+#   On 10-21 LQR / MPC ran on the header default XYC_D 33 (330 ms). A predictor longer than the real delay
+#   limit-cycles (2026-10-15 note in API/xy_ctrl.c). That this caused the 10-21 LQR / MPC oscillation is INFERENCE:
+#   the *-alone retests are the check.
+# - D3: the xy MRAC reference is the PID velocity demand for every controller kind, so around ADRC / LQR / MPC it
+#   fights the nominal controller (sim: ADRC hold error x1.8-3.2, up to 38 % saturated). The controller retests fly
+#   with MRAC injection OFF (learning and logging on). adrc-plus-mrac is kept once, as a labelled "mismatched
+#   reference" demo, only if adrc-alone-retest is clean.
+# - D8: at speed the OF EKF trips into FIXED and camera mode 3 then stops applying fixes for the rest of the flight.
+#   The fast speed-ladder rungs are in their own deck with camera mode 2 (camera mode is per day):
+#   `.\labday 2026-10-22-fast` (docs/lab/days/2026-10-22-fast.yaml), after this deck.
+# - Figure-8 bandwidth: the x lobe tracks at 0.25 Hz and runs out of bandwidth above it; no flight here goes faster
+#   except the speed-ladder rungs, which test the estimator, not tracking.
+# - Memory A/B: 10-21 has memory on n=5 / off n=3 (off-3, off-5 not flown). Today: 3 off + 2 on, interleaved, gives
+#   n=7 / n=6 if pooled. Pooling across the flash is valid only if 82f4f250 leaves the PID xy path unchanged
+#   (it changes the c3 robust default and the gate mask): check the diff before pooling, else analyse per day.
+# - carry: false. The 10-21 carry-over would add lqr-plus-mrac and mpc-plus-mrac (MRAC around a mismatched
+#   reference, D3: not flown until fix B) and lqr-track / dense-trajectories (no time today; next day's deck).
+day: 2026-10-22
+carry: false
+title: smoke hover on the new flash, memory MRAC on/off balance (3 off, 2 on), ADRC / LQR / MPC alone retests with the 21-tick delay and ADRC wo 12, then the PID reference arm and the controller A/Bs
+camera:                       # camera_truth.sh fusion <id-fly> <mode> <args>, CT_FLOOR=logs/video_truth/<floor>
+  floor: floor-1022           # scan at the lab with drone out of view: .\cam floor floor-1022
+  mode: 3                     # in-EKF, same as 10-21 so the memory A/B pools
+  args: [--yaw-deg, "94", --delay-ms, "330"]  # yaw valid only if the drone BOOTS on the pad facing its usual way; delay = 10-21 screen-flash test
+before:
+  - "Probe plugged in, drone powered and DISARMED, 8081 stopped (it locks the .axf): `python -m ground_station.flashtool.rebuild_and_flash --yes` (never --force; stop on a non-zero exit)"
+  - "After the flash: `python -m ground_station.livewatch verify`, then `python -m pytest ground_station/livewatch/tests/test_campaign_capture.py -q`"
+  - 'Scan floor with drone out of view: `.\cam floor floor-1022`'
+  - "8081 running, `arm 0`, landing pad clear, camera in the recording position"
+  - "Tracker window: the dot sits on the drone center while parked before arming (if not: land, `r`, tell me)"
+flights:
+  - id: smoke-hover
+    fly: lab_s_smoke
+    why: "First flight on the new flash (82f4f250 gate mask + 5486a26b ADRC wo 12): hover, the preset paths, land on the pad"
+    pass: "every traj_go accepted; lands inside the pad gate; drift_nn.steps > 0"
+  - id: memory-mrac-off-6
+    fly: lab_m_memory_u0
+    why: "Memory A/B balance: off arm is 2 short of the on arm after 10-21 (off n=3, on n=5)"
+    pass: "flies the full script without an L1 abort; position error logged for the A/B"
+  - id: memory-mrac-on-6
+    fly: lab_m_memory_u100
+    why: "Memory A/B, on arm, interleaved with off so pack and temperature drift hit both arms"
+    pass: "flies the full script without an L1 abort"
+  - id: memory-mrac-off-7
+    fly: lab_m_memory_u0
+    why: "Memory A/B, off arm"
+    pass: "flies the full script without an L1 abort"
+  - id: memory-mrac-on-7
+    fly: lab_m_memory_u100
+    why: "Memory A/B, on arm"
+    pass: "flies the full script without an L1 abort"
+  - id: memory-mrac-off-8
+    fly: lab_m_memory_u0
+    why: "Memory A/B, off arm (n=6 off / n=7 on if pooled with 10-21)"
+    pass: "flies the full script without an L1 abort"
+    stop: true
+  - id: adrc-alone-retest
+    fly: lab_e_exp_adrc_u0
+    why: "10-21 adrc-alone aborted at hold 0 (L1 oscillation). Retest with ADRC wo 12 (5486a26b) and VAR 47 = 21; MRAC learns, injection off"
+    pass: "3 s hold and the figure-8 without an L1 abort; rms error within 20 % of pid-alone-ref (PROPOSED)"
+  - id: lqr-alone-retest
+    fly: lab_e_exp_lqr_u0
+    why: "LQR with the Smith predictor at the measured 21 ticks (10-21 ran the header 33); MRAC injection off"
+    pass: "no sustained xy oscillation in the hold (peak-to-peak < 10 cm, PROPOSED); figure-8 completes"
+  - id: mpc-alone-retest
+    fly: lab_e_exp_mpc_u0
+    why: "10-21 mpc-alone aborted at hold 0 (L1 position_error). Retest with VAR 47 = 21; MRAC injection off"
+    pass: "3 s hold and the figure-8 without an L1 abort"
+  - id: pid-alone-ref
+    fly: lab_e_exp_pid_u0
+    why: "Same-day reference arm for the three retests (same exp script, PID xy, injection off)"
+    pass: "figure-8 completes; within 10 % of 10-21 pid-alone (PROPOSED)"
+    stop: true
+  # ---- CUT LINE: below here only if packs and time allow. Not flown today = carried to the next day automatically. ----
+  - id: pid-plus-mrac
+    fly: lab_e_exp_matrix
+    why: "PID + xy MRAC (the matched reference): repeat of 10-21 for n=2 against pid-alone-ref"
+    pass: "figure-8 completes; position error vs pid-alone-ref logged"
+  - id: adrc-plus-mrac-mismatched
+    fly: lab_e_exp_adrc_3l
+    why: "D3 demo: MRAC whose reference is the PID demand, around ADRC. Fly ONLY if adrc-alone-retest passed. Label in the thesis as a mismatched reference, not as ADRC + MRAC"
+    pass: "no pass mark: the sim predicts more saturation than adrc-alone-retest; abort limits stay as they are"
+  - id: pid-track
+    fly: lab_c_pid
+    why: "10-14 anchor: drift check for the day (pack, temperature, props)"
+    pass: "within 10 % of 10-21 pid-track-start (PROPOSED)"
+    stop: true
+branches:
+  - {when: "Flash exits non-zero or `livewatch verify` fails", do: "Stop; do not fly the old build with today's host; tell me"}
+  - {when: "smoke-hover lands outside the pad gate or drift_nn.steps stays 0", do: "Land; tell me before memory-mrac-off-6"}
+  - {when: '"NO FIX SENT" or the dot off the drone', do: "Land, check the tracker, re-fly (r at the auto-stop prompt)"}
+  - {when: "A preset or exp write ends `no result` (cmd 0x2D, 10-21 adrc-plus-mrac)", do: "Unknown outcome, not refused: re-fly the same flight (writes are idempotent)"}
+  - {when: Stale-telemetry abort at take-off, do: "Land; tell me (the abort event and logs/service/8081-*.log say link vs host)"}
+  - {when: "adrc-alone-retest oscillates or aborts again", do: "Skip adrc-plus-mrac-mismatched; go on with lqr-alone-retest; tell me (the cause is then not the observer bandwidth)"}
+  - {when: "lqr-alone-retest or mpc-alone-retest oscillates with VAR 47 = 21", do: "Land; go on with the next flight; the delay hypothesis is then wrong (D1 stays open)"}
+  - {when: Tilt trip or fence stop, do: "Land; tell me before the next flight"}
+  - {when: "Pack at the packs.yaml gate (gate_soc_pct, post-flight, ground only)", do: "Swap before the next flight; give the new type when fly asks"}
