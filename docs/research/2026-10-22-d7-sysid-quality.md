@@ -5,7 +5,7 @@ enough, and if not, refit it.
 
 Model (`ground_station/analysis/xy_tune.py`): a = first-order lag (tau) of the command delayed d samples,
 v' = k a - drag v + bias. Output-error fit, 1 s horizon from many starts, d tried 0..400 ms (free).
-Data: the three 10-21 sysid flights r6_f4_sysid, r6_f4b_sysid_p5300, r6_f4c_sysid_p4000 (closed loop, 50 Hz).
+Data: the three 10-12 sysid flights r6_f4_sysid, r6_f4b_sysid_p5300, r6_f4c_sysid_p4000 (closed loop, 50 Hz).
 Script: `tools/sysid_quality.py` (the fixed-delay hold-out is the same `fit`/`vaf` on `s[:cut]` / `s[cut:]` at d 10 and 11),
 run from the repo root: `PYTHONPATH=. python tools/sysid_quality.py`.
 All numbers below are measured from those runs.
