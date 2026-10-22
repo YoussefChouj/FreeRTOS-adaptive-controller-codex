@@ -1,7 +1,7 @@
 # Handoff — stream `main`
 
-- **Updated:** 2026-10-20 04:02 +03:00 (local), 2026-10-20 01:02 +03:00 (cloud session tip)
-- **Branch / Base:** `origin/main` (`d798315a`) after merging `claude/labday-1019-fixes` (`226ecd45`) + `claude/friendly-hypatia-3ln6o5` (`2889150a`). Both were NOT in `origin/main` before this session (13 + 2 commits ahead). Now fully merged and synced.
+- **Updated:** 2026-10-22 07:05 +03:00 (desktop CEO, overnight run 10-21 -> 10-22)
+- **Branch / Base:** local `main` is the work tip (`38943d0d`), mirrored to `origin/nightly-1022` at ship points (`git push origin main:nightly-1022`). `origin/main` moves only through `tools/land.sh`.
 
 ## Stand-down note (operator 2026-10-20, applies to every agent in every harness or account)
 
@@ -15,6 +15,30 @@ that apply project-wide, including to outside workers and to future supervisor s
 2. **Survive quota hits** by saving at every subtask, mirroring artefacts to `origin/*`, and
    dropping a `.agent_state/last-cutoff.md` resume file when the wall closes in
    (`docs/agent/memory/rules.md` > Quota-hit survival).
+
+## Overnight 2026-10-21 -> 10-22 (stream `nightly-1022`)
+
+Day plan: `docs/lab/open-items.md` > DAY PLAN 10-22 (D1-D10). Briefing: https://claude.ai/artifact/Sb6w1RVhUEdPnVst3pJGrj
+
+| item | result | commit |
+|---|---|---|
+| D1 oscillation (LQR / MPC / ADRC) | xy predictor delay VAR 47 12 -> 21 ticks in all exp scripts; ADRC observer 19.36 -> 12 rad/s (firmware). On 10-21 the predictor ran 12 ticks, 9 short of the measured 21 (not the header 33). Root cause is inference until the retests fly. | 7c4d7e21, 5486a26b |
+| D3 MRAC wrapped around ADRC | the wrap fights the PID reference model (sim + doc) | 889afab7 |
+| D7 sysid quality | delay unidentifiable from the data; fixed-delay refit; coloured residuals | 53a7957f |
+| D8 high-speed drift | OF health trip latches FIXED, so mode 3 stops applying camera fixes; tight vs wide figure-8 = x lobe bandwidth, not the tilt cap | 4d76df59, c2744df0 |
+| D9 firmware + pipeline review | xy kind switch, VAR 19 timeout, service threads | 9630ad62 |
+| N5 gate mask | supervised gate mask + c3 robust xy gains as default (firmware) | 82f4f250 |
+| D10 decks | main (13 flights) + fast (speed ladder, camera mode 2). Main deck fake-drone soak PASS 13/13, 9/9 checks (`logs/soak/deck22b/report.md`) | 3b910cb4 |
+| soak fix | soak refuses to start when another service holds UDP 14550; Windows-safe process cleanup | d20acfa7 |
+| not started | D4 outer/inner MRAC A/B, D5 drift NN (Kaggle, Neural-Fly), D6 thesis effect sizes | |
+
+Workers: Jules d9b failed; Argon quota 429 until about 10-24 01:30; colab-mcp CONNECT_TIMEOUT (Kaggle is the NN lane).
+
+## Next Steps (2026-10-22 lab)
+1. **One service per laptop.** The service binds UDP 14550 with SO_REUSEADDR, so a second service goes deaf without an error (open item `bridge-port-shared-silently`). The stale 8081 was stopped 10-22 06:30; let `labday` start a fresh one.
+2. **Flash** (bundles 82f4f250 gate mask + 5486a26b ADRC wo 12): `python -m ground_station.flashtool.rebuild_and_flash --yes`, then `python -m ground_station.livewatch verify`. The first flight after the flash is `smoke-hover`.
+3. **Fly** `docs/lab/days/2026-10-22.yaml` (13 flights; pack swap at `memory-mrac-on-7`), then `docs/lab/days/2026-10-22-fast.yaml` if time allows.
+4. **After the day:** `python -m ground_station.analysis.scorecard 2026-10-22`. Check the config column of the report: the 10-21 report shows `pid / gains default / mrac_injection 0` for every exp row (suspected bug, not yet checked).
 
 ## Repo sync log (2026-10-20 04:02 +03:00)
 
@@ -86,12 +110,8 @@ All built inline. Jules is unreachable from the cloud and Claude subagents are r
    - **Fix 3 (`j-1019-tracker-center`, `35653d1`).** `live_tracker.py`: floor scenery masks ROI during static learning; ROI re-centres on the pad once learned; trail and pad origin restart on take-off.
    - **Fix 4 (`j-1019-labday-scorecard`, `08cac16`).** `labday.py` `bad_end` marks aborted/never-airborne flights `ok: false`. `scorecard.py` matches carried IDs and scores preset figure-8 as TRAJ.
 
-## Next Steps (2026-10-20)
-1. **Flash** the merged firmware (`226ecd45` + `a5ffa3c` + `868f4ba`). Run `python -m ground_station.flashtool.rebuild_and_flash --yes` from `USER/`, then `python -m ground_station.livewatch verify`.
-2. **Fly** `docs/lab/days/2026-10-20.yaml` (21 flights): redo of 10-19 incomplete flights + carried 10-17 flights.
-3. **After each flight:** run the scorecard (`python -m ground_station.analysis.scorecard 2026-10-20`) to regenerate the report.
-4. **Evaluate** the drift NN shadow mode: log `drift_nn` group at 10 Hz for 2-3 flights, compare against camera truth.
-5. **Flash** the NN live switch only after shadow mode is evaluated and the operator approves the weights.
+## Next Steps (2026-10-20, superseded)
+Flown or rolled into the 10-21 and 10-22 decks.
 
 ## Active / Recent Sessions
 - No open cloud sessions. The four `j-1019-*` sessions were superseded by the inline work.
@@ -107,3 +127,5 @@ The context map (AGENTS.md, `docs/context/README.md` shards) and the
 path-routed gate (4641a688: pre-push guard, routed checks, `tools/land.sh`)
 are both on `main`. Gate = `bash tools/check.sh --changed`; main moves only
 through `bash tools/land.sh <branch>` (`docs/agent/governance-zones.md`).
+
+Overnight streams push `main:nightly-<date>`. The pre-push guard compares the changed files with the last `check.sh --changed` run, so run the check and the push back to back in one command.
