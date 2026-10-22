@@ -55,10 +55,11 @@ class Loop:
         s.pipe_eso, s.pipe_plant, s.head = np.zeros(DELAY), np.zeros(DELAY), 0
         s.a = s.v = s.p = 0.0
 
-    def nominal(s, t, des, vff):
+    def nominal(s, t, des, vff, vd_ad=0.0):
         n = (lambda sd: sd * s.rng.standard_normal()) if s.rng else (lambda sd: 0.0)
         pm, vm = s.p + n(0.9), s.v + n(2.0)
-        vd = s.px(des - pm) + vff                      # PID position loop: computed for every kind (locxsPID.Des)
+        s.pm = pm
+        vd = s.px(des - pm) + vff + vd_ad              # PID position loop: computed for every kind (locxsPID.Des); vd_ad = D4 outer MRAC
         if s.kind == "pid":
             u = float(np.clip(s.pv(vd - vm), -AMAX, AMAX))
         else:
@@ -110,13 +111,14 @@ step = lambda t: (40.0 if t > 1.0 else 0.0, 0.0)
 sine = lambda t: (30.0 * np.sin(2 * np.pi * 0.25 * t), 30.0 * 2 * np.pi * 0.25 * np.cos(2 * np.pi * 0.25 * t))
 wind = lambda t: 40.0 if t > 10.0 else 0.0           # 40 cm/s^2 gust from 10 s (~2.3 deg of lean)
 
-print("kind ref  eso   gam | scenario        | rms err  max err | rms cmd  sat% | rms u_ad  corr(u_ad,-z3)")
-for kind in ("pid", "adrc"):
-    for scen, path, ks, dist in (("step+wind", step, 1.0, wind), ("step+wind K.85", step, 0.85, wind),
-                                 ("sine.25Hz+wind", sine, 1.0, wind)):
-        cases = [("none", 0)] + [(r, g) for r in ("fw", "twin") for g in (1.0, 5.0)]
-        for ref, gam in cases:
-            for eso in (("final", "nom") if kind == "adrc" and ref != "none" else ("final",)):
-                r = run(kind, ref, gam, path, ks, dist, eso)
-                print(f"{kind:4} {ref:4} {eso:5} {gam:3.0f} | {scen:15} | {r[0]:7.2f} {r[1]:7.1f}  | {r[2]:7.1f} {r[3]:5.1f}"
-                      f" | {r[4]:7.3f}  {r[5]:+.2f}", flush=True)
+if __name__ == "__main__":
+    print("kind ref  eso   gam | scenario        | rms err  max err | rms cmd  sat% | rms u_ad  corr(u_ad,-z3)")
+    for kind in ("pid", "adrc"):
+        for scen, path, ks, dist in (("step+wind", step, 1.0, wind), ("step+wind K.85", step, 0.85, wind),
+                                     ("sine.25Hz+wind", sine, 1.0, wind)):
+            cases = [("none", 0)] + [(r, g) for r in ("fw", "twin") for g in (1.0, 5.0)]
+            for ref, gam in cases:
+                for eso in (("final", "nom") if kind == "adrc" and ref != "none" else ("final",)):
+                    r = run(kind, ref, gam, path, ks, dist, eso)
+                    print(f"{kind:4} {ref:4} {eso:5} {gam:3.0f} | {scen:15} | {r[0]:7.2f} {r[1]:7.1f}  | {r[2]:7.1f} {r[3]:5.1f}"
+                          f" | {r[4]:7.3f}  {r[5]:+.2f}", flush=True)
