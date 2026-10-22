@@ -124,6 +124,43 @@ def test_coral_tracker_follows_masks_static_and_grows_on_a_miss():
     assert tr.r == 140.0 and np.allclose(tr.c, [100, 100])
 
 
+def _guards_frame(c, hide=(), half=(), cut=()):
+    """4 guard rings (r 15 px, 6 px thick) on a 60 px square around c; `hide` drops a guard, `half` erases its right
+    half (a prop or the frame edge covers it), `cut` runs a 3 px dark line through it (a blade)."""
+    import cv2
+    f = np.zeros((480, 640, 3), np.uint8)
+    for k, (du, dv) in enumerate([(-30, -30), (30, -30), (30, 30), (-30, 30)]):
+        u, v = int(c[0] + du), int(c[1] + dv)
+        if k in hide:
+            continue
+        cv2.circle(f, (u, v), 15, _CORAL, 6)
+        if k in half:
+            f[v - 20:v + 21, u + 1:u + 21] = 0
+        if k in cut:
+            f[v - 1:v + 2, u - 20:u + 21] = 0
+    return f
+
+
+@pytest.mark.parametrize("hide, half, cut", [((), (1,), ()), ((1,), (), ()), ((), (), (0, 2)), ((), (0,), (2,))])
+def test_coral_tracker_weights_each_guard_the_same_so_a_partial_guard_cannot_latch_the_fix(hide, half, cut):
+    """Lab 10-21: fixes latched onto a guard corner. The pixel median of 4 guards in two columns sits in the gap only
+    while both columns hold the same pixel count; a guard showing fewer pixels moves it into the other column."""
+    from ground_station.analysis.live_tracker import CoralTracker
+    from ground_station.analysis import video_truth as vt
+    c = np.array([300.0, 260.0])
+    f = _guards_frame(c, hide, half, cut)
+    uv = CoralTracker(c + 8).step(f)
+    assert uv is not None and np.hypot(*(uv - c)) <= 3.0
+    if hide or half:                                           # the old fix: the plain median of the same pixels
+        vv, uu = np.nonzero(vt.coral_mask(cv2_hsv(f)))
+        assert np.hypot(np.median(uu) - c[0], np.median(vv) - c[1]) > 8.0
+
+
+def cv2_hsv(f):
+    import cv2
+    return cv2.cvtColor(f, cv2.COLOR_BGR2HSV)
+
+
 def test_jump_gate_reseeds_only_after_the_track_is_lost_for_lost_s():
     """2026-10-15 lab: a static wrong blob won 10 frames in a row and the track ping-ponged every few seconds."""
     from ground_station.analysis.live_tracker import JumpGate

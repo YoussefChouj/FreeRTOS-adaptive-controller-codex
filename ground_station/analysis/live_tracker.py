@@ -116,7 +116,7 @@ def ring_xy(uv, cam: dict, z_m: float) -> np.ndarray:
 
 class CoralTracker:
     """video_truth.track_coral run online (the R4 truth tracker): coral guard-ring pixels (vt.coral_mask, minus the
-    `static` scenery mask from vt.coral_static) in a square ROI around the last fix; their median is the drone. A
+    `static` scenery mask from vt.coral_static) in a square ROI around the last fix; vt.guard_centre of them is the drone. A
     miss grows the ROI 1.5x per frame up to the whole frame.
     Live there is no whole video to learn `static` from, so with learn_n > 0 it is learned from the start: coral in
     >= frac of learn_n frames taken every learn_every frames (drone on the pad; a keep_r disc, 1.3 roi by default, around
@@ -197,8 +197,8 @@ class CoralTracker:
                 m &= ~st_crop
             vv, uu = np.nonzero(m)
             if len(uu) >= self.min_px * (z_eff * z_eff):
-                self.c = np.array([(np.median(uu) + 0.5) / z_eff - 0.5 + u0,
-                                   (np.median(vv) + 0.5) / z_eff - 0.5 + v0])
+                g = vt.guard_centre(m, self.min_px / 4.0 * z_eff * z_eff, 5.0 * z_eff)
+                self.c = (g + 0.5) / z_eff - 0.5 + np.array([u0, v0])
                 self.r = self.roi
                 self.last_s["detect"] = time.perf_counter() - t1
                 return self.c.copy()

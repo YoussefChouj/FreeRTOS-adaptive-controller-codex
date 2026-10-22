@@ -657,6 +657,30 @@ def drone_centre(guards_xy: np.ndarray, areas=None):
     return None
 
 
+def guard_centre(m: np.ndarray, min_guard_px: float = 10.0, join_px: int = 5) -> "np.ndarray | None":
+    """Drone pixel (u, v), mask coordinates, from its guard rings with each guard weighted the same: coral components
+    (pieces closer than join_px joined, e.g. a ring a blade cuts) with >= min_guard_px pixels and >= 1/5 of the
+    largest one, the 4 largest centred as drone_centre does; one guard, or a pair drone_centre cannot read, falls back
+    to the pixel median. The plain median weights a guard by its pixel count, and the guards stand in two columns and
+    two rows: when one shows fewer pixels the median leaves the gap between them for the inside of the larger column
+    (lab 10-21, fixes latched onto a guard corner)."""
+    vv, uu = np.nonzero(m)
+    if not len(uu):
+        return None
+    cv2 = _cv2()
+    k = max(1, int(round(join_px))) | 1
+    n, lab = cv2.connectedComponents(cv2.dilate(m.astype(np.uint8), np.ones((k, k), np.uint8)))
+    lb = lab[vv, uu]
+    area = np.bincount(lb, minlength=n).astype(float)
+    keep = [i for i in np.argsort(-area, kind="stable") if area[i] >= max(min_guard_px, 0.2 * area.max())][:4]
+    if len(keep) >= 2:
+        g = np.c_[np.bincount(lb, uu, n)[keep], np.bincount(lb, vv, n)[keep]] / area[keep, None]
+        c = drone_centre(g, area[keep])
+        if c is not None:
+            return np.asarray(c, float)
+    return np.array([np.median(uu), np.median(vv)])
+
+
 def track(video: str, lo=HSV_LO, hi=HSV_HI, min_area=MIN_AREA, stride: int = 1, static=None):
     """Video time (s) and guard pixels (list of arrays) per kept frame."""
     cv2 = _cv2()
@@ -703,8 +727,8 @@ def coral_static(video: str, n: int = 30, frac: float = 0.7, grow_px: int = 7) -
 
 def track_coral(video: str, start_uv, static=None, roi: int = 140, min_px: int = 40, step: int = 1, out=None) -> dict:
     """Drone pixel per frame from its guard rings: coral pixels (minus `static` scenery) in a +-roi px box around
-    the last fix, their median (u, v) is the fix (robust to a ring the view hides; with 3 guards it sits off the
-    hub). A lost frame (< min_px pixels) is NaN and the box grows 1.5x per frame until the drone is found."""
+    the last fix, guard_centre of them is the fix (each guard weighted the same; a hidden guard falls back to the
+    diagonal pair). A lost frame (< min_px pixels) is NaN and the box grows 1.5x per frame until the drone is found."""
     cv2 = _cv2()
     cap = cv2.VideoCapture(video)
     W, H = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -723,7 +747,7 @@ def track_coral(video: str, start_uv, static=None, roi: int = 140, min_px: int =
         vv, uu = np.nonzero(m)
         npx.append(len(uu))
         if len(uu) >= min_px:
-            c, r = np.array([np.median(uu) + u0, np.median(vv) + v0]), float(roi)
+            c, r = guard_centre(m, min_px / 4.0) + np.array([u0, v0]), float(roi)
             uv.append(c.copy())
         else:
             uv.append((np.nan, np.nan))
