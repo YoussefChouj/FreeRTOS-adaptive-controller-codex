@@ -78,6 +78,18 @@ pre-registered thresholds, not measurements.
 - One CCM struct, int16 fields with fixed scales, subscribed as one contiguous range: pattern id + phase, per axis: e,
   u_ad, gate bits, per-group contribution EMA (theta_i * phi_i, summed by group). Onboard EMA so 100 Hz logging keeps the
   information of the 200 Hz loop.
+- As built (10-22, API/mrac.h `MRAC_Xt_t`, filled by `MRAC_XtUpdate` at the end of every `MRAC_Control`):
+  - 81 int16 words on the MULTI build: pat, phase, period, e[6], u_ad[6], trap[6][3], grp[6][8]; axes in MRAC order
+    (pitch, roll, yaw, z, x, y). Subscribe `--group "100:mrac_xt.pat:81"`; decode with `ground_station/analysis/mrac_xt.py`.
+  - e and u_ad x1000, grp x1000; rails +-32767, never wraps; NaN reads -32767 (low rail).
+  - grp = EMA of sum theta_i * phi_i * g_phi per group, tau 0.01 s (PROPOSED, anti-alias for 100 Hz logging).
+  - pat = (layer & 1) | (speed & 1) << 1 | running << 2 | (excite mask & 0x3F) << 3, mask in Excite_Axis_e order;
+    phase = tick inside the current pattern period, period = number of completed periods (`excite_phase`, `excite_period`).
+  - Measured in API/tests/test_mrac_xtlm.c (pitch, adaptation frozen): group words sum 1707 vs u_ad word 1708, within the
+    8 roundings; 3 groups non-zero.
+  - On a disabled axis u_ad reads 0 while grp can still hold a stale theta * phi contribution: read grp only where the
+    axis is enabled.
+  - Link cost (7 + 162) x 100 = 16.9 KB/s at 100 Hz; drop-free on WiFi is UNVERIFIED.
 
 ## 7. "Active" analysis tool
 

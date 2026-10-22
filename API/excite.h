@@ -49,6 +49,7 @@ extern volatile uint8_t excite_state;     /* Excite_State_e */
 extern volatile uint8_t excite_reason;    /* last Excite_Reason_e */
 extern volatile uint8_t excite_layer, excite_speed, excite_mask;
 extern volatile uint16_t excite_period;   /* index of the period being flown */
+extern volatile uint16_t excite_phase;    /* tick into that period (the phase of the sample just output) */
 extern volatile float excite_out[EXC_AXES];
 
 uint8_t Excite_Start(uint8_t layer, uint8_t speed, uint8_t mask, uint8_t n_periods);

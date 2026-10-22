@@ -174,6 +174,28 @@ extern float mrac_l2g_ema[AXES][MRAC_N_FEATURES];
 extern uint16_t mrac_l2g_trap_ticks[AXES][MRAC_N_FEATURES];
 extern uint8_t mrac_l2g_trapped[AXES][MRAC_N_FEATURES];
 
+// Experiment telemetry block (spec section 6): int16 only, so stream_log subscribes the whole block as one
+// range `mrac_xt.pat:<MRAC_XT_WORDS>` (81 words on the MULTI build). Filled at the end of every MRAC_Control,
+// read-only of the control state. Scales PROPOSED, every field saturates at +-32767.
+// grp = EMA (tau MRAC_XT_TAU_S, anti-alias for 100 Hz logging) of sum Theta_i * Phi_i * mrac_g_phi by feature
+// group, over the axis' features in use; the groups sum to u_ad before the PR term, guard, low-pass and clamp.
+#define MRAC_XT_E_SCALE    1000.0f   /* counts per rad/s (pitch, roll, yaw) or m/s (z, x, y) */
+#define MRAC_XT_U_SCALE    1000.0f   /* counts per Nm (pitch, roll, yaw) or N (z), raw u on x, y */
+#define MRAC_XT_TAU_S      0.01f     /* group contribution EMA, PROPOSED */
+#define MRAC_XT_TRAP_WORDS ((MRAC_N_FEATURES + 15) / 16)
+typedef struct {
+    int16_t pat;      /* pattern: bit 0 layer (1 inner), bit 1 speed (1 fast), bit 2 running, bits 3-8 axis mask */
+    int16_t phase;    /* ticks into the current base period */
+    int16_t period;   /* index of the period being flown */
+    int16_t e[AXES];
+    int16_t u_ad[AXES];
+    int16_t trap[AXES][MRAC_XT_TRAP_WORDS];   /* mrac_l2g_trapped, bit i%16 of word i/16 = feature i trapped */
+    int16_t grp[AXES][MRAC_N_GROUPS];
+} MRAC_Xt_t;
+#define MRAC_XT_WORDS ((int)(sizeof(MRAC_Xt_t) / sizeof(int16_t)))
+extern MRAC_Xt_t mrac_xt;
+void MRAC_XtSetPattern(uint16_t pat, uint16_t phase, uint16_t period);
+
 // DWT cycles per layer of MRAC_UpdateAxis, read from the ELF as mrac_cyc. last = latest tick,
 // max = worst since reset (write 0 to clear). blocks = generators; law = L3 feedforward,
 // adaptive law and output; total = whole call. L2 is timed once per tick, not per axis.

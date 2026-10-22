@@ -2476,6 +2476,9 @@ void Compute_Motor(void)
 	mrac_in_acc[0] = Acc_X_Real * 0.00980665f;   /* vp 12 swing tracker: body accel mg -> m/s^2 */
 	mrac_in_acc[1] = Acc_Y_Real * 0.00980665f;
 	mrac_in_phase = (uint8_t)flight_phase;
+	/* experiment telemetry pattern word (mrac.h MRAC_Xt_t.pat): layer, speed, running, axis mask */
+	MRAC_XtSetPattern((uint16_t)((excite_layer & 1U) | ((excite_speed & 1U) << 1)
+		| ((excite_state == EXC_RUNNING) ? 4U : 0U) | ((excite_mask & 0x3FU) << 3)), excite_phase, excite_period);
 	MRAC_Control(&Ctrler);
 
 	Mix_Compute();

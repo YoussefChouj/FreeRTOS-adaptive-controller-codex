@@ -285,6 +285,25 @@ steps:
   50 cm xy box, over the tilt limit, or during SysID. A land or abort sends the excite abort first.
 - Rehearse on the fake drone: `pytest -q ground_station/service/tests/test_pattern_step.py`.
 
+### 4.3 Experiment telemetry block (needs the item-6 build flashed, `mrac_xt`)
+
+One contiguous range of 81 int16 words (MULTI build): pattern word + phase + period, then per MRAC axis
+(pitch, roll, yaw, z, x, y) e and u_ad (x1000), L2 trap bits (3 words), and 8 group contributions
+(EMA of theta*phi by group, x1000). Log it in its own slot, then decode:
+
+```bash
+python -m ground_station.livewatch.stream_log --group "100:mrac_xt.pat:81" --seconds 60 --out logs/xt.csv
+```
+
+```bash
+python -m ground_station.analysis.mrac_xt logs/xt.slot0.csv
+```
+
+- Cost is (7 + 162) x 100 = 16.9 KB/s at 100 Hz on the WiFi link; drop-free at that rate is UNVERIFIED.
+- Run `python -m ground_station.livewatch verify` first: the ELF must match the flashed image.
+- Layout and pattern-word bits: `ground_station/analysis/mrac_xt.py` docstring; spec item 6 in
+  `docs/design/2026-10-22-mrac-experiment-stack.md`.
+
 ## 5. Ground service 8081
 
 ```powershell

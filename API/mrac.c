@@ -830,6 +830,10 @@ uint8_t mrac_l2g_trapped[AXES][MRAC_N_FEATURES] MRAC_CCM;
 static float mrac_l2g_in[AXES][MRAC_N_FEATURES] MRAC_CCM;   // signed weight steps fed since the last update
 static uint8_t mrac_l2g_fed[AXES] MRAC_CCM;                 // features fed (the axis' n), 0 = not fed
 
+// Experiment telemetry block (mrac.h, filled by MRAC_XtUpdate) and its float group EMA state.
+MRAC_Xt_t mrac_xt MRAC_CCM;
+static float mrac_xt_grp_f[AXES][MRAC_N_GROUPS] MRAC_CCM;
+
 // Adds this tick's signed weight step of feature i (the excitation-driven part only) to the L2 score input.
 static void MRAC_L2G_Feed(MRAC_Axis_e axis, int i, int n, float step)
 {
@@ -1780,11 +1784,13 @@ void MRAC_Init(void)
     for (i = 0; i < (int)AXES; i++) {
         mrac_u_ff[i] = 0.0f;
         for (j = 0; j < MRAC_N_GROUPS; j++) {
+            mrac_xt_grp_f[i][j] = 0.0f;
             mrac_g_gamma[i][j] = 1.0f;
             mrac_g_sigma[i][j] = 1.0f;
             mrac_g_phi[i][j] = 1.0f;
         }
     }
+    for (i = 0; i < MRAC_XT_WORDS; i++) ((int16_t *)&mrac_xt)[i] = 0;
 
     mrac_flags.adaptation_on      = ENABLE_MRAC_COMPUTATION;
     mrac_flags.projection_on      = ENABLE_PROJECTION_OPERATOR;
@@ -2083,6 +2089,52 @@ void MRAC_Reset(void)
     MRAC_ResetWeights();
 }
 
+// Experiment telemetry block (mrac.h). Pattern fields come from the task (MRAC_XtSetPattern), the rest is
+// filled here once per tick, after the axis updates.
+
+static int16_t MRAC_XtQ(float v, float scale)
+{
+    float q = v * scale;
+    if (!(q > -32767.0f)) return (int16_t)-32767;   /* NaN reads as the low rail */
+    if (q > 32767.0f) return (int16_t)32767;
+    return (int16_t)(q < 0.0f ? q - 0.5f : q + 0.5f);
+}
+
+void MRAC_XtSetPattern(uint16_t pat, uint16_t phase, uint16_t period)
+{
+    mrac_xt.pat = (int16_t)pat;
+    mrac_xt.phase = (int16_t)phase;
+    mrac_xt.period = (int16_t)period;
+}
+
+static void MRAC_XtUpdate(void)
+{
+    const float k = MRAC_DT / (MRAC_XT_TAU_S + MRAC_DT);
+    float sum[MRAC_N_GROUPS];
+    int a, g, i, n, w;
+    for (a = 0; a < AXES; a++) {
+        const MRAC_AxisState_t *st = mrac_st_of[a];
+        mrac_xt.e[a] = MRAC_XtQ(st->e, MRAC_XT_E_SCALE);
+        mrac_xt.u_ad[a] = MRAC_XtQ(st->u_ad, MRAC_XT_U_SCALE);
+        for (w = 0; w < MRAC_XT_TRAP_WORDS; w++) {
+            uint16_t bits = 0U;
+            for (i = 16 * w; i < 16 * w + 16 && i < MRAC_N_FEATURES; i++)
+                if (mrac_l2g_trapped[a][i] != 0U) bits |= (uint16_t)(1U << (unsigned)(i - 16 * w));
+            mrac_xt.trap[a][w] = (int16_t)bits;
+        }
+        for (g = 0; g < MRAC_N_GROUPS; g++) sum[g] = 0.0f;
+        (void)MRAC_FeatureCount(mrac_cfg_of[a], &n);
+        for (i = 0; i < n; i++) {
+            g = mrac_feature_desc[i].group;
+            sum[g] += st->Theta[i] * (st->Phi[i] * mrac_g_phi[a][g]);
+        }
+        for (g = 0; g < MRAC_N_GROUPS; g++) {
+            mrac_xt_grp_f[a][g] += k * (sum[g] - mrac_xt_grp_f[a][g]);
+            mrac_xt.grp[a][g] = MRAC_XtQ(mrac_xt_grp_f[a][g], MRAC_XT_U_SCALE);
+        }
+    }
+}
+
 void MRAC_Control(const CtrlerTypeDef* current_state)
 {
     float p_rate, q_rate, r_rate;
@@ -2170,7 +2222,7 @@ void MRAC_Control(const CtrlerTypeDef* current_state)
         mrac_state.y_vel.u_ad = 0.0f;
     }
 
-
+    MRAC_XtUpdate();
 }
 
 // ------------------------------------------------------------------------------

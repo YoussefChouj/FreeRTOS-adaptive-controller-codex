@@ -82,6 +82,7 @@ volatile uint8_t excite_state = EXC_IDLE;
 volatile uint8_t excite_reason = EXC_OK;
 volatile uint8_t excite_layer = 0U, excite_speed = 0U, excite_mask = 0U;
 volatile uint16_t excite_period = 0U;
+volatile uint16_t excite_phase = 0U;
 volatile float excite_out[EXC_AXES];
 
 static const ExciteRow_t *s_row[EXC_AXES];   /* row per excited axis, NULL when off */
@@ -178,6 +179,7 @@ uint8_t Excite_Start(uint8_t layer, uint8_t speed, uint8_t mask, uint8_t n_perio
     excite_speed = speed;
     excite_mask = mask;
     excite_period = 0U;
+    excite_phase = 0U;
     excite_reason = EXC_OK;
     excite_state = EXC_RUNNING;
     return EXC_OK;
@@ -214,6 +216,7 @@ void Excite_Update(uint8_t flying)
         excite_out[a] = u;
     }
     excite_period = (uint16_t)(s_n / s_n_period);
+    excite_phase = (uint16_t)(s_n % s_n_period);
     s_n++;
 }
 
