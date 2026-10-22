@@ -104,6 +104,16 @@ pre-registered thresholds, not measurements.
   different nominal/gains, a fault or abort in either flight, pattern not completed.
 - Falsification checks: planted dummy feature (pure noise) ends gated off; selectivity (an unexcited axis stays off);
   revival (re-excite -> back on); gated >= ungated on tracking (ABBA, ~10 pairs); ablation asymmetry.
+- As built (10-22, `ground_station/analysis/mrac_active.py`, tests `ground_station/analysis/tests/test_mrac_active.py`):
+  - Time base is the block's pattern clock `(period * n_period + phase) * 5 ms`, so dropped WiFi samples do not shift
+    the harmonics; only running samples count, and an unfinished last period is dropped.
+  - Step 1 uses the tracking error `e` (the block carries no reference or response): own-harmonic power / variance,
+    excited at share >= 0.30 (PROPOSED). Harmonic power is one joint least-squares fit (offset + cos/sin columns) on
+    the samples' own times; the test found that demeaning first leaks power across a gap.
+  - Step 2 uses the block's group EMA `grp` (demeaned energy share per axis), moving-block bootstrap with one pattern
+    period per block, 95 % CI; active / inactive / undecided against 0.10 (PROPOSED).
+  - Repeatability, invalid-repeat reasons, trapped-at-end, revival, selectivity and ABBA are helpers; step 3 and the
+    ablation need the SIL replay and are not built.
 
 ## Build order and tests
 

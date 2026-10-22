@@ -299,6 +299,12 @@ python -m ground_station.livewatch.stream_log --group "100:mrac_xt.pat:81" --sec
 python -m ground_station.analysis.mrac_xt logs/xt.slot0.csv
 ```
 
+Which axes the pattern excited and which feature groups were active (spec item 7, thresholds PROPOSED):
+
+```bash
+python -m ground_station.analysis.mrac_active logs/xt.slot0.csv
+```
+
 - Cost is (7 + 162) x 100 = 16.9 KB/s at 100 Hz on the WiFi link; drop-free at that rate is UNVERIFIED.
 - Run `python -m ground_station.livewatch verify` first: the ELF must match the flashed image.
 - Layout and pattern-word bits: `ground_station/analysis/mrac_xt.py` docstring; spec item 6 in
