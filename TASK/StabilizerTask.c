@@ -8,6 +8,7 @@
 #include "controller.h"
 #include "gyro_filter.h"
 #include "sysid.h"
+#include "excite.h"
 #include "rc_input.h"
 #include "flight_fsm.h"
 #include "calib.h"          /* ADR-0011 Phase 3 (acc-trim) + Phase 4 (gyro-hot) FSMs */
@@ -2041,7 +2042,10 @@ static void Z_Compute(void)
 		     cascade that feeds Z_ratePID.Des). */
 			float zp_sumE = Ctrler.Z_posPID.SumE;
 			float zp_Ui   = Ctrler.Z_posPID.Ui;
+			float ez = Excite_Get(EXC_Z, EXC_OUTER);   /* pattern library: Des is persistent, so add then undo */
+			Ctrler.Z_posPID.Des += ez;
 			ComputePID(&Ctrler.Z_posPID);
+			Ctrler.Z_posPID.Des -= ez;
 			if (!s_alt_valid_tick) { Ctrler.Z_posPID.SumE = zp_sumE; Ctrler.Z_posPID.Ui = zp_Ui; }
 		}
 		cnt_h=0;
@@ -2052,7 +2056,10 @@ static void Z_Compute(void)
 	     wind throttle up without bound (verdict: unbounded climb at >5 m AGL). */
 		float zr_sumE = Ctrler.Z_ratePID.SumE;
 		float zr_Ui   = Ctrler.Z_ratePID.Ui;
+		float evz = Excite_Get(EXC_Z, EXC_INNER);
+		Ctrler.Z_ratePID.Des += evz;
 		ComputePID(&Ctrler.Z_ratePID);
+		Ctrler.Z_ratePID.Des -= evz;
 		if (!s_alt_valid_tick) { Ctrler.Z_ratePID.SumE = zr_sumE; Ctrler.Z_ratePID.Ui = zr_Ui; }
 	}
 }
@@ -2222,6 +2229,8 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact, uint8_t land_xy_
 		/* FF lead (2026-10-14, xy_tune): the position loops compare with the reference g_traj_ff_shift_s ago,
 		 * so the velocity FF leads them by the plant lag instead of both pushing (0 = the loops before). */
 		float sx = g_traj_ff_shift_s * vff_x, sy = g_traj_ff_shift_s * vff_y;
+		sx -= Excite_Get(EXC_X, EXC_OUTER);   /* pattern library: rides the same add-then-undo as the FF lead */
+		sy -= Excite_Get(EXC_Y, EXC_OUTER);
 		Ctrler.locxPID.Des -= sx;
 		Ctrler.locyPID.Des -= sy;
 		ComputePID_GatedHold(&Ctrler.locxPID, airborne, hold);
@@ -2247,8 +2256,8 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact, uint8_t land_xy_
 	xyc_on[1] = s_xyc_kind && airborne && !hold && Ctrler.locysPID.Des == Ctrler.locyPID.U;
 
 	{
-		Ctrler.locxsPID.Des += vx;
-		Ctrler.locysPID.Des += vy;
+		Ctrler.locxsPID.Des += vx + Excite_Get(EXC_X, EXC_INNER);   /* inner pattern: PID path only (xy_ctrl sets U) */
+		Ctrler.locysPID.Des += vy + Excite_Get(EXC_Y, EXC_INNER);
 		if (g_traj_ff_preset && airborne) {
 			Ctrler.locxsPID.Des = fmaxf(-g_vxy_des_max, fminf(g_vxy_des_max, Ctrler.locxsPID.Des + g_traj_vff_x));
 			Ctrler.locysPID.Des = fmaxf(-g_vxy_des_max, fminf(g_vxy_des_max, Ctrler.locysPID.Des + g_traj_vff_y));
@@ -2256,11 +2265,11 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact, uint8_t land_xy_
 		ComputePID_GatedHold(&Ctrler.locxsPID, airborne, hold);
 		ComputePID_GatedHold(&Ctrler.locysPID, airborne, hold);
 		if (xyc_on[0]) {
-			float u = XyCtrl_Step(&s_xyc[0], s_xyc_kind, Ctrler.locxPID.Des, Ctrler.locxPID.FB, Ctrler.locxsPID.FB, vff_x);
+			float u = XyCtrl_Step(&s_xyc[0], s_xyc_kind, Ctrler.locxPID.Des + Excite_Get(EXC_X, EXC_OUTER), Ctrler.locxPID.FB, Ctrler.locxsPID.FB, vff_x);
 			if (isfinite(u)) Ctrler.locxsPID.U = u; else XyCtrl_Reset(&s_xyc[0]);
 		} else if (s_xyc_kind) XyCtrl_Track(&s_xyc[0], s_xyc_kind, Ctrler.locxPID.FB);
 		if (xyc_on[1]) {
-			float u = XyCtrl_Step(&s_xyc[1], s_xyc_kind, Ctrler.locyPID.Des, Ctrler.locyPID.FB, Ctrler.locysPID.FB, vff_y);
+			float u = XyCtrl_Step(&s_xyc[1], s_xyc_kind, Ctrler.locyPID.Des + Excite_Get(EXC_Y, EXC_OUTER), Ctrler.locyPID.FB, Ctrler.locysPID.FB, vff_y);
 			if (isfinite(u)) Ctrler.locysPID.U = u; else XyCtrl_Reset(&s_xyc[1]);
 		} else if (s_xyc_kind) XyCtrl_Track(&s_xyc[1], s_xyc_kind, Ctrler.locyPID.FB);
 		Ctrler.locxsPID.U += ax;
@@ -2302,12 +2311,20 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact, uint8_t land_xy_
 /* Angle loops (pitch/roll gated on airborne, yaw), rate setpoints + SysID dither, rate loops. */
 static void Att_Compute(uint8_t airborne)
 {
+	float ep = Excite_Get(EXC_PITCH, EXC_OUTER), er = Excite_Get(EXC_ROLL, EXC_OUTER), ey = Excite_Get(EXC_YAW, EXC_OUTER);
+
 	Update_Des(case_Update_pitrol_Des);   /* pitch/roll angle setpoints */
+	Ctrler.pitchPID.Des += ep;            /* pattern library (outer): add then undo, like the yaw below */
+	Ctrler.rollPID.Des  += er;
 	ComputePID_Gated(&Ctrler.pitchPID, airborne);
 	ComputePID_Gated(&Ctrler.rollPID, airborne);
+	Ctrler.pitchPID.Des -= ep;
+	Ctrler.rollPID.Des  -= er;
 
 	Update_Des(case_Update_yaw_Des);      /* yaw angle setpoint */
+	Ctrler.yawPID.Des += ey;              /* persistent heading Des: undo after the loop */
 	ComputeYawPID(&Ctrler.yawPID);
+	Ctrler.yawPID.Des -= ey;
 
 	Update_Des(case_Update_gyro_Des);     /* rate setpoints */
 
@@ -2325,6 +2342,9 @@ static void Att_Compute(uint8_t airborne)
 	if (SysID_IsAxisActive(SYSID_AXIS_PITCH)) Ctrler.gyroyPID.Des += SysID_GetRateSetpoint(SYSID_AXIS_PITCH);
 	if (SysID_IsAxisActive(SYSID_AXIS_ROLL))  Ctrler.gyroxPID.Des += SysID_GetRateSetpoint(SYSID_AXIS_ROLL);
 	if (SysID_IsAxisActive(SYSID_AXIS_YAW))   Ctrler.gyrozPID.Des += SysID_GetRateSetpoint(SYSID_AXIS_YAW);
+	Ctrler.gyroyPID.Des += Excite_Get(EXC_PITCH, EXC_INNER);   /* pattern library (inner), 0 unless running */
+	Ctrler.gyroxPID.Des += Excite_Get(EXC_ROLL, EXC_INNER);
+	Ctrler.gyrozPID.Des += Excite_Get(EXC_YAW, EXC_INNER);
 
 	/* FIX 2026-09-27: flight8 wound gyrozPID up to U=650 on the ground at idle
 	 * (heading-hold Des with the airframe unable to turn). Hold the yaw integrals
@@ -2422,6 +2442,7 @@ void Compute_Motor(void)
 	land_contact |= LandProfile_XyFreeze(flight_phase == FLIGHT_PHASE_LANDING, Ctrler.Z_posPID.FB);   /* 10-15 D2, 0.04 m since 10-19 */
 
 	Rc_FallbackStep();
+	Excite_Update(airborne);   /* pattern library: guards + this tick's outputs (no-op while IDLE) */
 	Z_Compute();
 
 	cnt_loc++;

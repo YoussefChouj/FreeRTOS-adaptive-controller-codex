@@ -31,6 +31,8 @@ ASSIGN = {"MRAC_SET": (1, True), "MRAC_BASIS": (2, False), "VAR_WRITE_ROW": (2, 
 DEFINE = re.compile(r"#define\s+(\w+_ROW|%s)\(([^)]*)\)" % "|".join(ASSIGN))
 CONST = re.compile(r"^[ \t]*#define[ \t]+(\w+)[ \t]+([-+.\w*/() \t]+?)[ \t]*(?://.*|/\*.*)?$", re.M)
 COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
+ENUM = re.compile(r"\benum\b[^{;]*\{([^}]*)\}")
+ENUMERATOR = re.compile(r"\b([A-Za-z_]\w*)\s*=\s*([-+]?\w+)\s*(?=,|$)")
 META = re.compile(r"^[ \t*]*@(\w+)\s+(\S+)\s+\[\s*([^,\]]+?)\s*,\s*([^\]]+?)\s*\]\s*(.*?)\s*(?:\*/)?$", re.M)
 SUFFIX = re.compile(r"(\d(?:\.\d*)?(?:[eE][-+]?\d+)?|\.\d+(?:[eE][-+]?\d+)?)[fFuUlL]+\b")
 OPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv,
@@ -77,12 +79,16 @@ def read(path: Path) -> str:
 
 
 def constants(path: Path, text: str) -> dict[str, list[str]]:
-    """Object-like #defines of the file and of the local headers it includes: name -> every definition."""
+    """Object-like #defines and explicitly valued enumerators (`NAME = 3`) of the file and of the local headers it
+    includes: name -> every definition."""
     out: dict[str, list[str]] = {}
     headers = [path.parent / h for h in re.findall(r'#include\s+"([^"]+)"', text)]
     for src in [text] + [read(h) for h in headers if h.exists()]:
         for name, expr in CONST.findall(src):
             out.setdefault(name, []).append(expr)
+        for body in ENUM.findall(COMMENT.sub(" ", src)):
+            for name, expr in ENUMERATOR.findall(body.strip()):
+                out.setdefault(name, []).append(expr)
     return out
 
 

@@ -550,6 +550,11 @@
               <FilePath>..\API\sysid.c</FilePath>
             </File>
             <File>
+              <FileName>excite.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\API\excite.c</FilePath>
+            </File>
+            <File>
               <FileName>gyro_filter.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\API\gyro_filter.c</FilePath>

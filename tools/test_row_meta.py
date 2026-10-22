@@ -44,6 +44,15 @@ def test_out_of_range(tmp_path, monkeypatch):
     assert len(errors) == 1 and "FOO_ROW.Kp = 12.0f outside [0, 10]" in errors[0]
 
 
+@pytest.mark.parametrize("value, n_err", [("K_ON", 0), ("K_BIG", 1), ("K_IMPLICIT", 1)])
+def test_enum_values_resolve_from_an_included_header(tmp_path, monkeypatch, value, n_err):
+    # Only explicitly valued enumerators count; K_IMPLICIT has no `= n` so it stays "not a constant".
+    (tmp_path / "t.h").write_text("typedef enum { K_OFF = 0, K_ON = 1, /* note */ K_BIG = 20 } K_e;\n"
+                                  "enum { K_IMPLICIT };\n")
+    errors, _ = _check(tmp_path, '#include "t.h"\n' + TABLE % value, monkeypatch)
+    assert len(errors) == n_err, errors
+
+
 def test_missing_legend_line(tmp_path, monkeypatch):
     errors, _ = _check(tmp_path, (TABLE % "1").replace("   @UMax U    [0, 1e3]  output limit */", "*/"), monkeypatch)
     assert len(errors) == 1 and "do not match" in errors[0]

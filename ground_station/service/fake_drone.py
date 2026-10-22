@@ -11,6 +11,7 @@ import struct
 from dataclasses import dataclass
 from enum import IntEnum
 
+from ground_station.analysis import excite_patterns as ep
 from ground_station.autotune import excitation as ex
 from ground_station.livewatch.transport import LiveTransportError
 from ground_station.platform.transactions import Command, Outcome, parse_command
@@ -29,7 +30,7 @@ from ground_station.platform.wfb_commands import (
 from ground_station.platform import wfb_program, wfb_var
 from ground_station.service.trajectory_pipeline import TrajLimits, TrajPoint, crc32, validate
 
-PARAM_CMDS = (0x01, 0x0F, 0x14)  # PID_GAIN, MRAC/telemetry flags, SysID control: the livetune step's writes
+PARAM_CMDS = (0x01, 0x0F, 0x14, 0x2E)  # PID_GAIN, MRAC/telemetry flags, SysID control: the livetune step's writes
 
 
 class PrimState(IntEnum):
@@ -200,6 +201,13 @@ class FakeDrone:
         self.sysid_starts: int = 0
         self._sysid_t: float = 0.0
         self.mrac_flags: dict[int, bool] = {}
+        # Excitation pattern library (CMD 0x2E); indices into ep.STATES / ep.REASONS
+        self.excite_state: int = ep.STATES.index("idle")
+        self.excite_reason: int = ep.REASONS.index("ok")
+        self.excite_params: dict[int, float] = {}
+        self.excite_starts: int = 0
+        self._excite_t: float = 0.0
+        self._excite_active_s: float = 0.0
 
         # CMD 0x2D VAR_WRITE rows (name -> value) and the Keil preset they start (TASK/AutoflyTask.c Traj_Start/Tick):
         # traj_status / traj_active as the firmware streams them; the preset holds the position, only its time runs.
@@ -260,6 +268,8 @@ class FakeDrone:
             return int(Outcome.APPLIED)
         elif cmd.command_id == ex.CMD_SYSID:
             return self._handle_sysid(cmd)
+        elif cmd.command_id == ep.CMD_EXCITE:
+            return self._handle_excite(cmd)
         elif cmd.command_id in PARAM_CMDS:
             return int(Outcome.APPLIED)
         else:
@@ -363,6 +373,59 @@ class FakeDrone:
         t = self._sysid_t
         self.sysid_state = (ex.STATE_RAMP_IN if t < ex.RAMP_T_S else ex.STATE_RUNNING if t < ex.RAMP_T_S + dur
                             else ex.STATE_RAMP_OUT if t < ex.active_s(dur) else ex.STATE_IDLE)
+
+    def _handle_excite(self, cmd: Command) -> int:
+        """CMD 0x2E as Cmd_ExciteControl (TASK/send_data.c): always applied; Excite_Start latches its refusal in
+        excite_reason and stays idle, so the host must read excite_state back."""
+        idle, running = ep.STATES.index("idle"), ep.STATES.index("running")
+        if cmd.index < ep.IDX_GO:
+            self.excite_params[int(cmd.index)] = float(cmd.value)
+        elif cmd.index == ep.IDX_GO and cmd.value >= 0.5:
+            self._excite_start()
+        elif cmd.index == ep.IDX_GO:
+            if self.excite_state == running:
+                self.excite_state, self.excite_reason = idle, ep.REASONS.index("cmd")
+        return int(Outcome.APPLIED)
+
+    def _excite_start(self) -> None:
+        idle, running = ep.STATES.index("idle"), ep.STATES.index("running")
+        if self.excite_state == running:           # a second start aborts the run, as Excite_Start does
+            self.excite_state, self.excite_reason = idle, ep.REASONS.index("cmd")
+            return
+        p = [int(round(self.excite_params.get(i, d))) for i, d in enumerate((0, 0, 0, 1))]
+        try:
+            ep.check_args(*p)
+        except ValueError:
+            self.excite_reason = ep.REASONS.index("args")
+            return
+        reason = self._excite_guard()
+        if reason != "ok":
+            self.excite_reason = ep.REASONS.index(reason)
+            return
+        self.excite_state, self.excite_reason = running, ep.REASONS.index("ok")
+        self._excite_t, self._excite_active_s = 0.0, ep.active_s(p[0], p[1], p[3])
+        self.excite_starts += 1
+
+    def _excite_guard(self) -> str:
+        if not self._armed:
+            return "disarmed"
+        if self._prim_state == PrimState.IDLE:
+            return "ground"
+        if not ep.ALT_BAND_M[0] <= self._z <= ep.ALT_BAND_M[1]:
+            return "alt"
+        if self.sysid_state != ex.STATE_IDLE:
+            return "sysid"
+        return "ok"
+
+    def _step_excite(self, dt: float) -> None:
+        if self.excite_state != ep.STATES.index("running"):
+            return
+        self._excite_t += dt
+        reason = self._excite_guard()
+        if reason == "ok" and self._excite_t >= self._excite_active_s:
+            reason = "done"
+        if reason != "ok":
+            self.excite_state, self.excite_reason = ep.STATES.index("idle"), ep.REASONS.index(reason)
 
     def _handle_kill(self, cmd: Command) -> int:
         if cmd.index != 0:
@@ -656,6 +719,7 @@ class FakeDrone:
         if self._traj_state == TrajState.EXECUTING:
             self._traj_t += dt
         self._step_sysid(dt)
+        self._step_excite(dt)
         if self._traj_active:
             self._preset_t += dt
             if self._prim_state != PrimState.HOVER:   # landing or a takeover: Traj_Tick aborts

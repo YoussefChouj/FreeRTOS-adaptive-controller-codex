@@ -9,6 +9,7 @@ Steps run in order:
                                  onboard preset program (CMD 0x1C): ground_station.platform.wfb_presets ops, closed
                                  with home; only the parameters fly, the firmware generates the setpoints
   excite  {axis, signal, f0, f1, amp, duration_s}
+  pattern {layer, speed, axes, periods}  firmware pattern library (API/excite.c, CMD 0x2E): outer|inner, slow|fast
                                  SysID run (CMD 0x14) on one rate loop; only right after a hold (see below)
   livetune {loop, axes, budget_s, ...}  hold the hover point while ground_station/livetune tunes gains for budget_s
   preset  {name, <traj_p field>: value, ...}
@@ -49,6 +50,7 @@ from typing import Any, Mapping
 
 import yaml
 
+from ground_station.analysis import excite_patterns as ep
 from ground_station.autotune import excitation as ex
 from ground_station.service.trajectory_pipeline import (
     SHAPES,
@@ -69,7 +71,7 @@ from ground_station.platform.wfb_program import Segment, preview
 
 SCENARIO_DIR = Path(__file__).resolve().parents[2] / "docs" / "workflow-b" / "scenarios"
 
-STEP_KINDS = ("takeoff", "hold", "goto", "path", "program", "excite", "livetune", "preset", "set", "land")
+STEP_KINDS = ("takeoff", "hold", "goto", "path", "program", "excite", "pattern", "livetune", "preset", "set", "land")
 TRAJ_KINDS = ("goto", "path")
 PROG_KINDS = ("program",)
 
@@ -105,6 +107,7 @@ _STEP_KEYS: Mapping[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "path": (("shape", "params"), tuple(DEFAULT_MOTION)),
     "program": (("ops",), tuple(sorted(MOTION_KEYS))),
     "excite": (("axis", "f0", "f1", "amp", "duration_s"), ("signal",)),
+    "pattern": (("layer", "speed", "axes"), ("periods",)),
     "livetune": (LIVETUNE_REQUIRED, LIVETUNE_OPTIONAL),
     "preset": (("name",), tuple(k.split(".", 1)[1] for k in wfb_var.traj_defaults())),
     "set": ((), ()),  # keys are VAR_WRITE rows, checked by _compile_set
@@ -136,6 +139,36 @@ def _compile_excite(body: dict, path: str, problems: list[str]) -> Step | None:
         return None
     args = {"axis": axis, "signal": sig, "f0": f0, "f1": f1, "amp": amp, "duration_s": dur}
     return Step("excite", args, (), ex.step_s(dur))
+
+
+PATTERN_SETTLE_S = 2.0   # after the run, before the next step (PROPOSED)
+
+
+def _compile_pattern(body: dict, path: str, problems: list[str], hover_z: float) -> Step | None:
+    n_before = len(problems)
+    layer, speed, axes, periods = body.get("layer"), body.get("speed"), body.get("axes"), body.get("periods", 1)
+    if layer not in ep.LAYERS:
+        problems.append(f"{path}.layer: must be one of {list(ep.LAYERS)} (got {layer!r})")
+    if speed not in ep.SPEEDS:
+        problems.append(f"{path}.speed: must be one of {list(ep.SPEEDS)} (got {speed!r})")
+    if (not isinstance(axes, list) or not axes or len(set(axes)) != len(axes)
+            or any(a not in ep.AXES for a in axes)):
+        problems.append(f"{path}.axes: must be a non-empty list of distinct axes from {list(ep.AXES)} (got {axes!r})")
+    if isinstance(periods, bool) or not isinstance(periods, int) or not 1 <= periods <= ep.MAX_PERIODS:
+        problems.append(f"{path}.periods: must be an integer in [1, {ep.MAX_PERIODS}] (got {periods!r})")
+    if len(problems) > n_before:
+        return None
+    li, si = ep.LAYERS.index(layer), ep.SPEEDS.index(speed)
+    if layer == "outer" and "z" in axes and math.isfinite(hover_z):
+        clamp = ep.find(ep.AXES.index("z"), li, si).clamp
+        lo, hi = ep.ALT_BAND_M
+        if not (lo + 0.1 <= hover_z - clamp and hover_z + clamp <= hi - 0.1):
+            problems.append(f"{path}: outer z pattern swings {hover_z} +- {clamp} m, outside the excite altitude "
+                            f"band [{lo}, {hi}] m less 0.1 m")
+            return None
+    args = {"layer": layer, "speed": speed, "axes": list(axes), "periods": periods,
+            "mask": ep.mask_of(axes)}
+    return Step("pattern", args, (), ep.active_s(li, si, periods) + PATTERN_SETTLE_S)
 
 
 @dataclass(frozen=True)
@@ -495,6 +528,16 @@ def parse_scenario(data: Any, args: Mapping[str, Any] | None = None) -> Scenario
                 problems.append(f"{path}.excite: takeoff z {hover_z} is below {EXCITE_Z_MIN_M:.2f} m, too close to "
                                 f"the sysid altitude floor {ex.ALT_BAND_M[0]} m")
             step = _compile_excite(body, f"{path}.excite", problems)
+            if step is not None:
+                steps.append(step)
+        elif kind == "pattern":
+            if kinds[i - 1] != "hold":
+                problems.append(f"{path}.pattern: must follow a hold step (the start latches the xy box centre "
+                                "at the current position, so the drone must be holding at the hover point)")
+            if math.isfinite(hover_z) and hover_z < EXCITE_Z_MIN_M:
+                problems.append(f"{path}.pattern: takeoff z {hover_z} is below {EXCITE_Z_MIN_M:.2f} m, too close to "
+                                f"the excite altitude floor {ep.ALT_BAND_M[0]} m")
+            step = _compile_pattern(body, f"{path}.pattern", problems, hover_z)
             if step is not None:
                 steps.append(step)
         elif kind == "hold":

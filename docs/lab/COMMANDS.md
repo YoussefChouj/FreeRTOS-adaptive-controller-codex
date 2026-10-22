@@ -260,6 +260,31 @@ set g_drift_nn_live=1 g_drift_nn_clamp_mps=0.05
 - Score a flight with camera truth: `video_truth truth4` then `nn4` (section 2.8). The design notes are in
   `docs/lab/drift-nn-leak-fix-2026-10-19.md`.
 
+### 4.2 Excitation pattern step (needs the excite build flashed, CMD 0x2E)
+
+A campaign scenario step that plays one of the 24 firmware multisine rows (`API/excite.c`, host mirror
+`ground_station/analysis/excite_patterns.py`) on one or more axes at once:
+
+```yaml
+steps:
+  - takeoff: {z: 0.8}
+  - hold: {s: 5}                       # required: the start latches the xy box centre where the drone holds
+  - pattern: {layer: inner, speed: slow, axes: [pitch, roll], periods: 2}
+  - land
+```
+
+| Key | Values | Meaning |
+|---|---|---|
+| `layer` | `outer`, `inner` | outer = setpoint (x/y cm, z m, yaw/pitch/roll deg), inner = rate (deg/s, z m/s) |
+| `speed` | `slow`, `fast` | disjoint harmonic sets of the same axis |
+| `axes` | any of `x y z yaw pitch roll`, no repeats | axes never share a harmonic, so several can run together |
+| `periods` | 1..10, default 1 | outer T = 40 s, inner T = 10 s per period (PROPOSED) |
+
+- Step time = periods x T + 2 s settle. Takeoff z must be at least 0.40 m; an outer z pattern must stay inside 0.40..1.40 m.
+- The firmware refuses (and latches `excite_reason`) when disarmed, on the ground, outside 0.30..1.50 m, beyond the
+  50 cm xy box, over the tilt limit, or during SysID. A land or abort sends the excite abort first.
+- Rehearse on the fake drone: `pytest -q ground_station/service/tests/test_pattern_step.py`.
+
 ## 5. Ground service 8081
 
 ```powershell

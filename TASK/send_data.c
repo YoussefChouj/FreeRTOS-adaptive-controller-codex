@@ -18,6 +18,7 @@
 #include "controller.h"  /* g_ctrl_select_req, g_ctrl_axis_mask (CMD 0x1F) */
 #include "gyro_filter.h"
 #include "sysid.h"
+#include "excite.h"
 #include "pid.h"
 #include "robot_types.h"
 #include "global_declare.h"
@@ -1238,9 +1239,10 @@ extern volatile uint8_t gs_cmd_tail;
 #define TXN_HISTORY_LEN         16U
 #define CMD_REJECT_UNKNOWN      4U   /* reason byte of a REJECTED transaction result (firmware_contract.py: 4 unknown, 6 interlock) */
 #define CMD_REJECT_INTERLOCK    6U
-#define CMD_ID_LAST_PLAIN       0x1FU  /* ids above this are unknown, except the MRAC element block, EXT_POS, VAR_WRITE */
+#define CMD_ID_LAST_PLAIN       0x1FU  /* ids above this are unknown, except the MRAC element block, EXT_POS, VAR_WRITE, EXCITE */
 #define EXT_POS_CMD_ID          0x2CU  /* first free id above MRAC_ELEM_CMD_LAST */
 #define VAR_WRITE_CMD_ID        0x2DU  /* one allowlisted variable (AutoflyTask.c s_var_write) */
+#define EXCITE_CMD_ID           0x2EU  /* pattern library start/abort (API/excite.c) */
 
 static uint8_t s_transaction_result_buf[64];
 static uint16_t s_transaction_history[TXN_HISTORY_LEN];
@@ -1304,7 +1306,7 @@ static void MracElemParamApply(uint8_t axis, uint8_t field, uint8_t elem, float 
 static uint8_t CommandSafetyReject(uint8_t id)
 {
     if ((id == 0U) || ((id > CMD_ID_LAST_PLAIN) && !MRAC_ELEM_CMD_IS(id) && (id != EXT_POS_CMD_ID) &&
-         (id != VAR_WRITE_CMD_ID))) {
+         (id != VAR_WRITE_CMD_ID) && (id != EXCITE_CMD_ID))) {
         return CMD_REJECT_UNKNOWN;
     }
     if ((id == 0x06U) && (DroneStatus.FlyMode != FlyMode_SDK)) {
@@ -1775,6 +1777,31 @@ static void Cmd_SysIdControl(GsCmd_t *c)
     }
 }
 
+/* CMD 0x2E — excitation pattern library (API/excite.c, docs/design/2026-10-22-mrac-experiment-stack.md).
+ *   idx 0 = layer (0 outer, 1 inner)   idx 1 = speed (0 slow, 1 fast)
+ *   idx 2 = axis mask (bit k = Excite_Axis_e k)   idx 3 = periods
+ *   idx 4 = val>=0.5 start with the staged values, else abort.
+ * Excite_Start refuses unless armed + SDK + flying + RC idle; the reason is latched in excite_reason,
+ * so the GS reads excite_state back instead of trusting the command result. */
+static void Cmd_ExciteControl(GsCmd_t *c)
+{
+    static uint8_t ex_layer = EXC_OUTER, ex_speed = EXC_SLOW, ex_mask = 0U, ex_periods = 1U;
+    switch (c->idx) {
+        case 0: ex_layer   = (uint8_t)(c->val + 0.5f); break;
+        case 1: ex_speed   = (uint8_t)(c->val + 0.5f); break;
+        case 2: ex_mask    = (uint8_t)(c->val + 0.5f); break;
+        case 3: ex_periods = (uint8_t)(c->val + 0.5f); break;
+        case 4:
+            if (((uint8_t)(c->val + 0.5f)) != 0U) {
+                (void)Excite_Start(ex_layer, ex_speed, ex_mask, ex_periods);
+            } else {
+                Excite_Abort(EXC_R_CMD);
+            }
+            break;
+        default: break;
+    }
+}
+
 /* CMD 0x15 — gyro low-pass filter (Phase 1, ADR-0004).
  *   idx 0 = enable (val>=0.5 ON, else pass-through)
  *   idx 1 = cutoff Hz (applied to pitch/roll/yaw)  */
@@ -2083,7 +2110,8 @@ static const GsCmdEntry_t k_gs_cmds[] = {
     GS_CMD_ENTRY(0x1F,                 0x1F,                 Cmd_CtrlSelect),         /* CTRL_SELECT */
     GS_CMD_ENTRY(MRAC_ELEM_CMD_BASE,   MRAC_ELEM_CMD_LAST,   Cmd_MracElem8),          /* MRAC element, 8-bit index */
     GS_CMD_ENTRY(EXT_POS_CMD_ID,       EXT_POS_CMD_ID,       Cmd_ExtPos),             /* EXT_POS */
-    GS_CMD_ENTRY(VAR_WRITE_CMD_ID,     VAR_WRITE_CMD_ID,     Cmd_VarWrite)            /* VAR_WRITE */
+    GS_CMD_ENTRY(VAR_WRITE_CMD_ID,     VAR_WRITE_CMD_ID,     Cmd_VarWrite),           /* VAR_WRITE */
+    GS_CMD_ENTRY(EXCITE_CMD_ID,        EXCITE_CMD_ID,        Cmd_ExciteControl)       /* EXCITE (pattern library) */
 };
 
 static void GsCmd_Dispatch(GsCmd_t *c)

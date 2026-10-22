@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Any
 from pathlib import Path
 
+from ground_station.analysis import excite_patterns as ep
 from ground_station.autotune import excitation as ex
 from ground_station.service.campaign_schema import load_campaign
 from ground_station.service.abort_monitor import AbortMonitor, AbortSample, AbortDecision
@@ -299,7 +300,7 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
     t_start = deps.clock()
     records: list[dict] = []
     ticks = 0
-    airborne = excite_sent = takeoff_sent = False
+    airborne = excite_sent = pattern_sent = takeoff_sent = False
     decision: AbortDecision | None = None
     uploads = [i for i, st in enumerate(steps) if st.kind in TRAJ_KINDS + PROG_KINDS]
     preload = uploads[0] if len(uploads) == 1 else None
@@ -500,6 +501,27 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
                     if ok:
                         deps.client._send_cmd(ex.CMD_SYSID, ex.IDX_START, 0.0)
                         ok = wait(lambda: deps.clock() - t_on >= ex.step_s(a["duration_s"]), "excite recovery")
+        elif st.kind == "pattern":
+            # Excite_Start latches the xy box centre where the drone is now, so start it only while holding.
+            if prim() != PRIM_HOVER:
+                decision = AbortDecision(level=1, reason="pattern: not holding (prim not HOVER)")
+                ok = False
+            else:
+                a = st.args
+                li, si = ep.LAYERS.index(a["layer"]), ep.SPEEDS.index(a["speed"])
+                pattern_sent = True
+                cmds = ep.start_commands(li, si, a["mask"], a["periods"])
+                if not all(deps.client._send_cmd(ep.CMD_EXCITE, idx, val) for idx, val in cmds):
+                    why = getattr(deps.client, "last_error", "") or "not applied"
+                    decision = AbortDecision(level=1, reason=f"pattern: excite command refused: {why}")
+                    ok = False
+                else:
+                    # The abort after the run is a no-op once the firmware reached DONE; then settle.
+                    t_on = deps.clock()
+                    ok = wait(lambda: deps.clock() - t_on >= ep.active_s(li, si, a["periods"]), "pattern")
+                    if ok:
+                        deps.client._send_cmd(ep.CMD_EXCITE, *ep.ABORT_COMMAND)
+                        ok = wait(lambda: deps.clock() - t_on >= st.duration_s, "pattern settle")
         elif st.kind == "livetune":
             lim = TrajLimits()
             cfg, errs = parse_livetune(st.args, (0.0, 0.0, scenario.hover_z_m), (lim.x_abs_m, lim.y_abs_m))
@@ -582,6 +604,8 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
             print(f"[campaign] on_abort failed: {e!r}", file=sys.stderr)
         if excite_sent:
             deps.client._send_cmd(ex.CMD_SYSID, ex.IDX_START, 0.0)  # SysID abort -> RECOVERY
+        if pattern_sent:
+            deps.client._send_cmd(ep.CMD_EXCITE, *ep.ABORT_COMMAND)  # Excite_Abort(EXC_R_CMD)
         if preset_sent:
             deps.client.var_write("traj_stop", 1)  # the preset flies back to its start point, then LAND
         deps.client.traj_stop()
