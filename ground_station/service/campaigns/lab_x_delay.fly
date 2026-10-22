@@ -1,0 +1,18 @@
+# X: xy delay flight, last in the 10-23 fast deck (camera fusion mode 2). Four 0.3 m xy steps at 0.6 m give the
+# camera and the drone's own xy the same moves (each goto flies out, dwells, and back); `python -m ground_station.analysis.camera_delay <session>` lines up
+# their velocities and prints how far the camera lags, next to the tracker's --delay-ms setting (330 ms on 10-21,
+# from the screen-flash test). It checks the in-flight delay; the screen-flash test stays the ground truth.
+# Fly it: fly lab_x_delay --once. Pass (PROPOSED): a sharp lag on x and y within 20 ms of the setting.
+campaign lab-x-delay
+rate 100
+log velocity_loops camera_fusion
+set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10
+takeoff 0.6
+hold 4
+goto x=0.3 y=0 z=0.6 dwell_s=4
+hold 4
+goto x=0 y=0.3 z=0.6 dwell_s=4
+hold 4
+goto x=0.3 y=0 z=0.6 dwell_s=4
+hold 4
+land

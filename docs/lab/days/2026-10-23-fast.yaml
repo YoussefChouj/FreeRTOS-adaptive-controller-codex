@@ -8,7 +8,7 @@
 # Not carried to other days (the file name is not a date). A rung not flown well stays on this list.
 day: 2026-10-23
 carry: false
-title: rate-loop sysID (roll, pitch multisine), then speed ladder rungs 0-2 with camera fusion mode 2, to check that the camera keeps correcting after an OF EKF trip
+title: rate-loop sysID (roll, pitch multisine), then speed ladder rungs 0-2 with camera fusion mode 2, to check that the camera keeps correcting after an OF EKF trip, then the xy camera delay flight
 camera:
   floor: floor-1023           # same scan as the main deck
   mode: 2                     # camera corrects ano_of.earth_x/y in any bias mode (D8 fix A)
@@ -34,6 +34,10 @@ flights:
     why: "Rung 2 tripped at 20-30 s on 10-21 and drifted to 118 cm"
     pass: "camera minus estimate stays inside the 40 cm gate after the trip (PROPOSED); LOW_V ends it early = re-fly on a full pack"
     stop: true
+  - id: xy-camera-delay-mode2
+    fly: lab_x_delay
+    why: "--delay-ms 330 is the 10-21 screen-flash median (n 60, std 38 ms), never checked in flight; four 0.3 m xy steps let camera_delay line up the camera's xy against the drone's own"
+    pass: "python -m ground_station.analysis.camera_delay <session> gives a sharp lag on x and y within 20 ms of the setting (PROPOSED); the lag excludes the telemetry link's one-way latency"
 branches:
   - {when: '"NO FIX SENT" or the dot off the drone', do: "Land, check the tracker, re-fly (r at the auto-stop prompt)"}
   - {when: "Camera minus estimate grows past 40 cm after a trip in mode 2", do: "Land; D8 fix A does not hold; tell me"}

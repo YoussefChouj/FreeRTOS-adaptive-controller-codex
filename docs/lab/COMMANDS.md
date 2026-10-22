@@ -145,7 +145,12 @@ Archived videos are on Drive: see `docs/agent/video-archive.md` before you call 
 python -m ground_station.analysis.live_tracker --source logs/video_truth/f1/cam.mkv --cam docs/video-truth/cam_r4_lenswave_2026-10-11.json --floor logs/video_truth/floor-1019 --detector coral --gate --height-m 0.5 --out logs/f1_dry_fixes.csv --show
 python -m ground_station.analysis.live_tracker replay r5_marks_1 --mode 3
 python -m ground_station.analysis.live_tracker fit logs/r5_shadow_3 --auto
+python -m ground_station.analysis.camera_delay logs/campaigns/<lab-x-delay session> --flight xy-camera-delay-mode2
 ```
+
+- `camera_delay` (after the xy delay flight, `lab_x_delay`): lines up the camera's xy velocity against the drone's own
+  and prints the camera lag next to the `--delay-ms` setting. The lag leaves out the telemetry link's one-way latency.
+  It says re-set when the gap passes 20 ms (PROPOSED, `--tol-ms`).
 
 - Without `--send`, the tracker sends nothing (a dry run). `--source` takes a video file, a capture index or
   `window:<title>`.
