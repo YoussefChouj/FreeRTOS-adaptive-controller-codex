@@ -74,7 +74,43 @@ volatile uint8_t mrac_in_armed = 0;
 volatile uint8_t mrac_in_phase = 0;
 volatile float mrac_in_vbat = 0.0f;
 volatile float mrac_in_acc[2] = {0.0f, 0.0f};
-volatile float mrac_xy_unom[2] = {0.0f, 0.0f};   /* x/y PID accel cm/s^2 before u_ad (Pos_Compute, 100 Hz) */
+volatile float mrac_xy_unom[2] = {0.0f, 0.0f};   /* x/y nominal accel cm/s^2 before u_ad (Pos_Compute, 100 Hz) */
+
+/* D3 (spec 2026-10-22 item 4, docs/research/2026-10-22-d3-mrac-wrap.md): the x/y reference model per nominal
+ * kind. MRAC_XyRefSelect applies a row to x and y when the operator's selection (g_xy_ctrl_kind, latched on the
+ * ground) changes; CMD 0x13 / 0x1D writes made after it stay until the next selection. The ADRC / LQR / MPC rows
+ * copy the PID row: PROPOSED, nothing measured. In the research sim, MRAC on the PID-demand reference made ADRC
+ * worse (1.70 -> 3.12 cm rms hold, gamma 1): fill those rows from the sim sweep before flying them.
+ *   @type   -      [0, 2]    reference model type (1 = first order: passthrough would learn the nominal lag)
+ *   @bw     rad/s  [0.5, 100]  bandwidth (wn on type 2). PID: measured, first-order fit of FB to Des, 5 figure-8 logs
+ *   @zeta   -      [0.1, 2]  damping (type 2 only)
+ *   @ticks  MRAC_DT [0, 7]   pure delay on r before the reference model (ref_delay_s = ticks * MRAC_DT)
+ */
+#define MRAC_XY_REF_ROW(type, bw, zeta, ticks) { (type), (bw), (zeta), (uint8_t)(ticks) }
+const MRAC_XyRefRow_t mrac_xy_ref_rows[MRAC_XY_REF_N] = {
+    /*               type  bw    zeta  ticks */
+    MRAC_XY_REF_ROW( 1.0f, 2.0f, 0.8f, 0),   /* XY_CTRL_PID  0: the boot values */
+    MRAC_XY_REF_ROW( 1.0f, 2.0f, 0.8f, 0),   /* XY_CTRL_ADRC 1: PROPOSED = PID row */
+    MRAC_XY_REF_ROW( 1.0f, 2.0f, 0.8f, 0),   /* XY_CTRL_LQR  2: PROPOSED = PID row */
+    MRAC_XY_REF_ROW( 1.0f, 2.0f, 0.8f, 0),   /* XY_CTRL_MPC  3: PROPOSED = PID row */
+};
+volatile uint8_t mrac_xy_ref_kind = 0U;
+
+void MRAC_XyRefSelect(uint8_t kind)
+{
+    const MRAC_XyRefRow_t *row;
+    if (kind >= MRAC_XY_REF_N || kind == mrac_xy_ref_kind) return;
+    row = &mrac_xy_ref_rows[kind];
+    mrac_config_x.ref_type       = row->type;
+    mrac_config_x.ref_model_bw   = row->bw;
+    mrac_config_x.ref_model_zeta = row->zeta;
+    mrac_config_x.ref_delay_s    = (float)row->delay_ticks * MRAC_DT;
+    mrac_config_y.ref_type       = row->type;
+    mrac_config_y.ref_model_bw   = row->bw;
+    mrac_config_y.ref_model_zeta = row->zeta;
+    mrac_config_y.ref_delay_s    = (float)row->delay_ticks * MRAC_DT;
+    mrac_xy_ref_kind = kind;
+}
 volatile float mrac_in_h = 0.0f;                  /* Z_posPID.FB, m (ToF height), for the Z features */
 volatile uint8_t mrac_z_feat_mask = 0;            /* Z feature bits, MRAC_ZFEAT_*; 0 = off (VAR_WRITE id 54) */
 MRAC_Vp12_t mrac_vp12 = {
@@ -1780,11 +1816,11 @@ void MRAC_Init(void)
     mrac_config_x.u_max         = 1.0f;     /* PROPOSED: about 5.8 deg of extra lean (computed atan(1/9.81)) */
     mrac_config_x.mrac_to_mixer = 100.0f;   /* exact: cm per m */
     mrac_config_x.J             = 1.0f;     /* unit mass: u is an acceleration */
-    mrac_config_x.ref_type      = 1.0f;     /* first-order reference model: passthrough would learn the PID lag */
-    mrac_config_x.ref_model_bw  = 2.0f;     /* measured: first-order fit of FB to Des, 5 figure-8 logs (operator OK) */
     mrac_config_x.omega_u       = 4.0f;     /* PROPOSED: same as pitch */
     mrac_config_x.What_lower_limit[0] = -mrac_config_x.What_limit[0];   /* bias: wind / payload sign unknown */
     mrac_config_y = mrac_config_x;
+    mrac_xy_ref_kind = 0xFFU;    /* forces the apply: reference model type / bw / zeta / delay from the PID row */
+    MRAC_XyRefSelect(0U);
 
     for (i = 0; i < (int)AXES; i++) {
         mrac_u_ff[i] = 0.0f;
@@ -2194,7 +2230,7 @@ void MRAC_Control(const CtrlerTypeDef* current_state)
     mrac_state.roll.u_nom   = current_state->gyroxPID.U / mrac_config_roll.mrac_to_mixer;
     mrac_state.yaw.u_nom    = current_state->gyrozPID.U / mrac_config_yaw.mrac_to_mixer;
     mrac_state.z_rate.u_nom = current_state->Z_ratePID.U / mrac_config_z.mrac_to_mixer;
-    mrac_state.x_vel.u_nom  = mrac_xy_unom[0] / mrac_config_x.mrac_to_mixer;   /* PID only, u_ad excluded */
+    mrac_state.x_vel.u_nom  = mrac_xy_unom[0] / mrac_config_x.mrac_to_mixer;   /* nominal (PID or xy_ctrl), no u_ad */
     mrac_state.y_vel.u_nom  = mrac_xy_unom[1] / mrac_config_y.mrac_to_mixer;
     
     // 4. Perform inverse mixing to measure actual actuation capabilities

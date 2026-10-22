@@ -77,6 +77,16 @@ pre-registered thresholds, not measurements.
 
 - One row per nominal controller kind (PID, LQR, MPC, ADRC): reference model type, wn, zeta, delay ticks. Selecting the
   nominal selects its row; CMD 0x13/0x1D overrides stay. Source of row values: docs/research/2026-10-22-d3-mrac-wrap.md.
+- As built (10-22, test `API/tests/test_mrac_xy_ref_row.c`):
+  - `mrac_xy_ref_rows[4]` (`MRAC_XY_REF_ROW(type, bw, zeta, ticks)`, API/mrac.c), indexed by `XY_CTRL_*`.
+    `MRAC_XyRefSelect(kind)` writes the row into `mrac_config_x` and `_y` when the kind changes; the readback is
+    `mrac_xy_ref_kind`. StabilizerTask calls it with `g_xy_ctrl_kind` in the ground latch only (`!airborne`), so it
+    never switches in flight. A CMD 0x1D write made after the select stays until another kind is selected.
+  - Row 0 = the old MRAC_Init values (type 1, 2 rad/s, zeta 0.8, no delay), so mode 0 is bit-identical (EQUIV OK).
+    The ADRC / LQR / MPC rows copy it: PROPOSED, nothing measured. The research sim says the PID-demand reference
+    hurts ADRC (1.70 -> 3.12 cm rms hold), so those rows need the sim sweep before they fly.
+  - Not built here: the research's nominal-twin reference and per-kind gamma (both need the sim sweep first).
+  - Comments that called the x/y `u_nom` "PID only" now say nominal (PID or xy_ctrl), which is what the code sends.
 
 ## 5. Outer xy layer (D4)
 

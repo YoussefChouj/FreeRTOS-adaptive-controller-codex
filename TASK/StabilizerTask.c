@@ -2248,6 +2248,8 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact, uint8_t land_xy_
 		s_xyc_kind = (g_xy_ctrl_kind <= XY_CTRL_MPC && !g_ctrl_pid_fallback_active) ? g_xy_ctrl_kind : XY_CTRL_PID;
 		if (!airborne && g_xyc_delay_ticks != XyCtrl_Delay())
 			XyCtrl_SetDelay(g_xyc_delay_ticks);
+		if (!airborne)
+			MRAC_XyRefSelect(g_xy_ctrl_kind);   /* item 4: the MRAC x/y reference row of the selected nominal */
 		if (!g_ctrl_pid_fallback_active) {
 			xy_ctrl_reset();
 		}
@@ -2274,7 +2276,7 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact, uint8_t land_xy_
 		} else if (s_xyc_kind) XyCtrl_Track(&s_xyc[1], s_xyc_kind, Ctrler.locyPID.FB);
 		Ctrler.locxsPID.U += ax;
 		Ctrler.locysPID.U += ay;
-		/* 6-axis MRAC (2026-10-10): keep the PID-only accel for the x/y layers' u_nom, then add u_ad. Off unless
+		/* 6-axis MRAC (2026-10-10): keep the nominal accel (PID or xy_ctrl) for the x/y layers' u_nom, then add u_ad. Off unless
 		 * axis_enable_x/y learns and g_ctrl_axis_mask bits 4/5 inject (both on at boot via kp row 7). */
 		mrac_xy_unom[0] = Ctrler.locxsPID.U;
 		mrac_xy_unom[1] = Ctrler.locysPID.U;

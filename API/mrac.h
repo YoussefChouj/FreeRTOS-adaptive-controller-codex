@@ -571,7 +571,14 @@ void MRAC_Control(const CtrlerTypeDef* current_state);
 /* vp 12 inputs, written by StabilizerTask before MRAC_Control: pack voltage (V), body accel x / y (m/s^2) */
 extern volatile float mrac_in_vbat;
 extern volatile float mrac_in_acc[2];
-extern volatile float mrac_xy_unom[2];   /* x/y PID accel (cm/s^2) before u_ad, set in Pos_Compute */
+extern volatile float mrac_xy_unom[2];   /* x/y nominal accel (cm/s^2, PID or XyCtrl_Step) before u_ad, Pos_Compute */
+
+/* D3 (spec 2026-10-22 item 4): the x/y reference model per nominal kind, rows indexed by XY_CTRL_* (xy_ctrl.h). */
+#define MRAC_XY_REF_N 4U
+typedef struct { float type, bw, zeta; uint8_t delay_ticks; } MRAC_XyRefRow_t;
+extern const MRAC_XyRefRow_t mrac_xy_ref_rows[MRAC_XY_REF_N];
+extern volatile uint8_t mrac_xy_ref_kind;   /* row now in mrac_config_x / _y (readback) */
+void MRAC_XyRefSelect(uint8_t kind);        /* applies row `kind` on a change; kind >= MRAC_XY_REF_N ignored */
 
 /* Z features (MULTI build, Z basis S10X): ext slots 0..3 of the Z axis, one bit each in mrac_z_feat_mask
  * (VAR_WRITE id 54, 0 = off and bit-exact with the build before them). Constants: MRAC_Z_FEAT_ROW in mrac.c. */
