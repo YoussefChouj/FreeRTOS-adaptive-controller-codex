@@ -196,6 +196,11 @@ Alignment (camera to earth yaw):
 - With no `--yaw-deg` and no `--align`, modes 2 and 3 get `--align auto`, which locks the yaw after an 80 cm camera
   path (`--align-span-cm`).
 
+Frame grab (2026-10-22): a live source (window, webcam) is grabbed on its own thread, so the grab overlaps detection
+and the preview; each fix keeps the clock stamp of its own grab. `--serial-grab` puts the grab back in the loop (A/B
+only). The tracker.out result dict shows `frames`, `grabs`, `read_ms` (threaded: the wait), `detect_ms`, `show_ms`.
+The faster read changes the true camera latency, so re-measure `--delay-ms` before trusting the old 330 ms.
+
 ## 4. One flight: `fly`
 
 ```powershell

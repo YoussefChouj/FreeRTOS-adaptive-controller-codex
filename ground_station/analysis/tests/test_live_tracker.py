@@ -788,3 +788,59 @@ def test_window_read_returns_its_own_bgr_frame_and_skips_black_grabs(monkeypatch
     assert ok and f.shape == (6, 8, 3) and f.flags["C_CONTIGUOUS"] and (f == 120).all() and ws.via == "print"
     ws.read()
     assert (f == 120).all()                                           # the second grab did not overwrite the first
+
+
+class _SlowCam:
+    """A live source whose read() takes `grab_s` and yields frames 1, 2, ... (each frame is its own number)."""
+
+    def __init__(self, grab_s, n):
+        self.grab_s, self.n, self.k, self.released = grab_s, n, 0, False
+
+    def read(self):
+        import time
+        time.sleep(self.grab_s)
+        if self.k >= self.n:
+            return False, None
+        self.k += 1
+        return True, np.full((2, 2, 3), self.k, np.uint8)
+
+    def release(self):
+        self.released = True
+
+
+def test_latest_frame_overlaps_the_grab_with_the_work_and_stamps_each_grab():
+    # 10-21: grab 113 ms + rest 58 ms in one loop, ~6 fps. On its own thread the grab runs while the loop works,
+    # so 15 frames of 40 ms grab + 40 ms work take ~15 x 40 ms, not 15 x 80 ms; each stamp is taken at its grab.
+    import time
+    from ground_station.analysis.live_tracker import LatestFrame
+    stamps = {}
+    def clock():
+        return time.perf_counter()
+    cam = _SlowCam(0.040, 100)
+    lf = LatestFrame(cam, clock)
+    t0, seen = time.perf_counter(), []
+    for _ in range(15):
+        ok, f, t = lf.read()
+        assert ok and t <= time.perf_counter()
+        seen.append(int(f[0, 0, 0]))
+        stamps[seen[-1]] = t
+        time.sleep(0.040)
+    took = time.perf_counter() - t0
+    lf.release()
+    assert took < 0.85 * 15 * 0.080, took                            # serial would be 1.2 s
+    assert seen == sorted(set(seen))                                  # newest first, never the same frame twice
+    assert all(stamps[a] < stamps[b] for a, b in zip(seen, seen[1:])) and cam.released
+
+
+def test_latest_frame_reports_the_end_of_the_source():
+    from ground_station.analysis.live_tracker import LatestFrame
+    import time
+    lf = LatestFrame(_SlowCam(0.001, 3), time.perf_counter)
+    got = []
+    while True:
+        ok, f, t = lf.read()
+        if not ok:
+            break
+        got.append(int(f[0, 0, 0]))
+    lf.release()
+    assert got and got[-1] == 3 and f is None and t is None

@@ -374,6 +374,47 @@ class WindowSource:
         self.sct.close()
 
 
+class LatestFrame:
+    """A live source read on its own thread: read() returns the newest frame not yet returned and the clock() stamp
+    taken right after its grab. The grab then overlaps detection and the preview, so a live run goes at
+    1 / max(grab, rest) instead of 1 / (grab + rest) (10-21: grab 113 + rest 58 ms, ~6 fps). Only for live sources:
+    a file must keep every frame. read() -> (ok, frame, t_grab); ok False once the source has ended."""
+
+    def __init__(self, cap, clock: Callable[[], float]):
+        self.cap, self.clock = cap, clock
+        self._cv = threading.Condition()
+        self._slot, self._stop, self._end = None, False, False
+        self.n_grab = 0                                   # grabs made; frames returned = run_source's n
+        self._th = threading.Thread(target=self._run, name="frame-grab", daemon=True)
+        self._th.start()
+
+    def _run(self) -> None:
+        while not self._stop:
+            ok, f = self.cap.read()
+            t = self.clock()
+            with self._cv:
+                if not ok:
+                    self._end = True
+                else:
+                    self._slot, self.n_grab = (f, t), self.n_grab + 1
+                self._cv.notify_all()
+            if not ok:
+                return
+
+    def read(self):
+        with self._cv:
+            self._cv.wait_for(lambda: self._slot is not None or self._end)
+            if self._slot is None:
+                return False, None, None
+            (f, t), self._slot = self._slot, None
+            return True, f, t
+
+    def release(self) -> None:
+        self._stop = True
+        self._th.join(timeout=20.0)                       # WindowSource.read retries a lost window for up to 15 s
+        self.cap.release()
+
+
 def floor_from_dir(video_dir, cam_path) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, dict]:
     """Floor pose of a fixed phone from an earlier capture with the same placement: id0 median pose in its aruco.npz
     (vt.floor_from_marker; R, t do not depend on the image scale). Returns R, t, the id0 centre (px of that video),
@@ -1154,7 +1195,7 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
                pad: PadOrigin | None = None, ground: Callable[[], bool] | None = None,
                show: Preview | None = None, stop_file: str | None = None, size: tuple | None = None,
                auto: AutoAlign | None = None, earth: Callable[[], np.ndarray | None] | None = None,
-               air_m: float = 0.15) -> dict:
+               air_m: float = 0.15, grab_thread: bool = True) -> dict:
     """Read frames from `source` (file, device index or window:<title>), emit fixes. For a file the capture time is
     the frame pts and the send time is that pts too (age = camera latency only); live, both come from `clock`.
     `ring`: a pixel tracker with .step(frame) -> uv (RingTracker, CoralTracker), else the guard detector with
@@ -1180,6 +1221,8 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
     while start_s and not live and cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0 < start_s and cap.grab():
         pass                                              # frame-exact; set(POS_MSEC) lands seconds off on scrcpy mkv
     clock = clock or time.monotonic
+    if live and grab_thread:
+        cap = LatestFrame(cap, clock)
     sched = sched or FixScheduler()
     n, n_det, uv = 0, 0, None
     f_out = open(out_csv, "w", newline="", buffering=1) if out_csv else None   # line-buffered: a killed run keeps its fixes
@@ -1195,12 +1238,12 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
         if stop_file and n % 10 == 0 and Path(stop_file).exists():
             break
         p0 = time.perf_counter()
-        ok, frame = cap.read()
+        ok, frame, *t_grab = cap.read()                   # LatestFrame adds the grab stamp
         p1 = time.perf_counter()
         if not ok or (max_frames and n >= max_frames):
             break
         n += 1
-        t_read = clock() if live else cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+        t_read = t_grab[0] if t_grab else clock() if live else cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
         if live and t_read - t_hello >= 2.0:
             hello()
             t_hello = t_read
@@ -1279,7 +1322,8 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
         f_out.close()
     return {"frames": n, "detections": n_det, "fixes": sched.n_sent, "skipped": sched.n_skip,
             "gate_rej": gate.n_rej if gate else 0, "reseeds": gate.reseeds if gate else 0,
-            "read_ms": 1000 * t_rd / max(n, 1), "detect_ms": 1000 * t_det / max(n, 1),
+            "read_ms": 1000 * t_rd / max(n, 1), "detect_ms": 1000 * t_det / max(n, 1),   # threaded: read = wait
+            "grabs": getattr(cap, "n_grab", n),
             "show_ms": show.ms / max(show.n, 1) if show else 0.0,
             "pad_xy": None if pad is None or pad.xy is None else [round(float(v), 4) for v in pad.xy],
             "align": auto.status if auto else "fixed"}
@@ -1633,6 +1677,7 @@ def main(argv=None) -> int:
     ap.add_argument("--no-pad-origin", action="store_true", help="send floor-frame xy (default: pad-relative)")
     ap.add_argument("--show", action="store_true", help="tracker window: frame + ring + trails | pad-frame map, topmost")
     ap.add_argument("--show-hz", type=float, default=30.0, help="--show redraw (and --show-rec fps) rate")
+    ap.add_argument("--serial-grab", action="store_true", help="grab in the tracking loop, not on its own thread (A/B)")
     ap.add_argument("--show-width", type=int, default=716,
                     help="--show frame width px (default 716 = 0.6 x the 1194 px r7 mirror); the tracker uses the full grab")
     ap.add_argument("--show-rec", help="record the --show window to this mp4 from the start (key r pauses/resumes)")
@@ -1704,7 +1749,7 @@ def main(argv=None) -> int:
                      ground=(lambda: tel.ground if tel.fresh else None) if tel else None, show=show,
                      stop_file=a.stop_file or None, size=size if a.source.startswith("window:") else None,
                      auto=auto, earth=(lambda: tel.vec(ek)) if auto else None,
-                     air_m=a.ring_h_m + a.align_min_h_m), flush=True)          # z there is the ring plane
+                     air_m=a.ring_h_m + a.align_min_h_m, grab_thread=not a.serial_grab), flush=True)   # z: ring plane
     return 0
 
 
