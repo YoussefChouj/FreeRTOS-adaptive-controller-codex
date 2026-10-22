@@ -8,7 +8,7 @@
 # Not carried to other days (the file name is not a date). A rung not flown well stays on this list.
 day: 2026-10-22
 carry: false
-title: speed ladder rungs 0-2 with camera fusion mode 2, to check that the camera keeps correcting after an OF EKF trip
+title: rate-loop sysID (roll, pitch multisine), then speed ladder rungs 0-2 with camera fusion mode 2, to check that the camera keeps correcting after an OF EKF trip
 camera:
   floor: floor-1022           # same scan as the main deck
   mode: 2                     # camera corrects ano_of.earth_x/y in any bias mode (D8 fix A)
@@ -17,6 +17,10 @@ before:
   - "Main deck 2026-10-22 done or stopped; 8081 running, `arm 0`, landing pad clear"
   - "Tracker window: the dot sits on the drone center while parked before arming"
 flights:
+  - id: rate-sysid-roll-pitch
+    fly: lab_d_excite
+    why: "Plan: sysID after the smoke hover. Roll then pitch rate-loop multisine (0.5-15 Hz, 60 deg/s, 30 s each), MRAC injection off. Needs camera mode 2 (each excite re-zeroes the flow origin; mode 3 pulls it back mid-run), so it sits in this deck"
+    pass: "both excites run to the end; then on the ground `python -m ground_station.autotune.cli <session> --axis roll` (and pitch) gives a fit (PROPOSED: fit and validation numbers are D7's to judge)"
   - id: speed-ladder-0-mode2
     fly: lab_h_speed_ladder_l0
     why: "Rung 0 (15 deg cap) never tripped on 10-21: the mode 2 baseline"
