@@ -13,7 +13,8 @@ def test_wire_target_decodes_field_and_axis():
     assert wire_target(MRAC_VARIANT_CMD, (6 << 2) | 1) == "mrac_config_roll.mu_sat"
     assert wire_target(MRAC_VARIANT_CMD, (11 << 2) | 2) == "mrac_g_gamma[2][*]"
     assert wire_target(MRAC_VARIANT_CMD, (12 << 2) | 2) == "mrac_config_yaw.ref_model_bw"
-    assert wire_target(MRAC_VARIANT_CMD, len(VARIANT_FIELDS) << 2) is None
+    assert wire_target(MRAC_VARIANT_CMD, (31 << 2) | 3) == "mrac_xy_layers"
+    assert len(VARIANT_FIELDS) <= 32   # axes 0-3 carry the field in 5 bits: (field << 2) | axis
     # x/y: 0x80 | (field << 1) | (axis - 4)
     assert wire_target(MRAC_VARIANT_CMD, 0x80 | (6 << 1) | 1) == "mrac_config_y.mu_sat"
     assert wire_target(MRAC_VARIANT_CMD, 0x80 | (11 << 1)) == "mrac_g_gamma[4][*]"

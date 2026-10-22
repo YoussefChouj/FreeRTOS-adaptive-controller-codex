@@ -331,6 +331,7 @@ typedef enum {
     MRAC_VF_L2_THR_OFF,
     MRAC_VF_L2_THR_ON,
     MRAC_VF_L2_T_TRAP,
+    MRAC_VF_XY_LAYERS,      /* 31: D4 x/y layers target, MRAC_XY_LAYER_* bits (any axis; latched on the ground) */
     MRAC_VF_COUNT
 } MRAC_VariantField_e;
 
@@ -579,6 +580,20 @@ typedef struct { float type, bw, zeta; uint8_t delay_ticks; } MRAC_XyRefRow_t;
 extern const MRAC_XyRefRow_t mrac_xy_ref_rows[MRAC_XY_REF_N];
 extern volatile uint8_t mrac_xy_ref_kind;   /* row now in mrac_config_x / _y (readback) */
 void MRAC_XyRefSelect(uint8_t kind);        /* applies row `kind` on a change; kind >= MRAC_XY_REF_N ignored */
+
+/* D4 (spec 2026-10-22 item 5): x/y MRAC layers. Inner = the x/y velocity MRAC (u_ad, m/s^2); outer = a position
+ * layer whose output (m/s) adds to the velocity demand on the PID path. */
+#define MRAC_XY_LAYER_INNER  0x01U
+#define MRAC_XY_LAYER_OUTER  0x02U
+#define MRAC_POS_DT          0.01f   /* Pos_Compute period s (StabilizerTask POS_LOOP_DIV 2 of the 200 Hz loop) */
+typedef struct { float W[3]; float p_m; float v_m; float e; float u; } MRAC_PosLayer_t;   /* phi = (1, p, vd); m, m/s */
+typedef struct { float gamma; float sigma; float w_max; float u_max; float bw; float zeta; } MRAC_PosConfig_t;
+extern volatile uint8_t mrac_xy_layers;       /* command target (CMD 0x1D field 31), boot INNER */
+extern volatile uint8_t mrac_xy_layers_live;  /* flying now: the target latched on the ground */
+extern MRAC_PosLayer_t mrac_pos[2];           /* 0 = x, 1 = y */
+extern MRAC_PosConfig_t mrac_pos_cfg;
+void MRAC_XyLayersLatch(void);                /* ground only: live = target, outer state reset */
+float MRAC_PosStep(uint8_t i, uint8_t on, float p_d, float p, float v, float vd);   /* m, m/s in; returns u m/s */
 
 /* Z features (MULTI build, Z basis S10X): ext slots 0..3 of the Z axis, one bit each in mrac_z_feat_mask
  * (VAR_WRITE id 54, 0 = off and bit-exact with the build before them). Constants: MRAC_Z_FEAT_ROW in mrac.c. */

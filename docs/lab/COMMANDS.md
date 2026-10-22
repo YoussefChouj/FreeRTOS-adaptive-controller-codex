@@ -328,6 +328,22 @@ failed = mrac_prior.send(HttpWfbClient("http://127.0.0.1:8081"), steps)   # [] =
 - Readback: the seeded Theta shows in the next flight's `mrac_state.<axis>.Theta[i]`, not in the reply.
 - `sigma=0.5` above is an example, not a tuned value (PROPOSED).
 
+### 4.5 MRAC x/y layers, D4 (needs the item-5 build flashed, CMD 0x1D field 31)
+
+Pick which x/y MRAC layers fly: 1 inner only (boot), 2 outer only, 3 both, 0 neither. Send it on the ground; it is
+a target, and the ground latch makes it live from the next takeoff (a reboot goes back to 1). No public sender or
+descriptor knob exists yet (open-items `xy-layers-sender`), so the raw frame, with the service on 8081:
+
+```python
+from ground_station.analysis.mrac_variants import variant_idx
+from ground_station.service.campaign_fly import HttpWfbClient
+ok = HttpWfbClient("http://127.0.0.1:8081")._send_cmd(0x1D, variant_idx(4, 31), 2.0)   # 0xBE, outer only; True = APPLIED
+```
+
+- Readback: `mrac_xy_layers` (target) and `mrac_xy_layers_live` (flying); the outer state is `mrac_pos[0..1]`.
+- Outer row values bw / zeta are PROPOSED (spec item 5): rerun the research sim before an outer flight.
+- This path is UNVERIFIED on the drone (host tests only).
+
 ## 5. Ground service 8081
 
 ```powershell

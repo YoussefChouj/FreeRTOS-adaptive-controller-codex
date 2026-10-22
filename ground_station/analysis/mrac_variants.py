@@ -53,6 +53,7 @@ VARIANT_FIELDS: tuple[tuple[str, float, float], ...] = (
     ("l2_thr_off", 0.0, 1.0),       # L2 trap below thr_off * max score; firmware refuses thr_off >= thr_on
     ("l2_thr_on", 0.0, 1.0),        # L2 revive above thr_on * max score; firmware refuses thr_on <= thr_off
     ("l2_t_trap", 0.05, 30.0),      # L2 time below thr_off before the trap s
+    ("xy_layers", 0.0, 3.0),        # D4 x/y MRAC layers bits 1 inner, 2 outer (writes mrac_xy_layers, any axis; ground latch)
 )
 GAMMA_SCALE_FIELD = 11
 # L2 gating fields write mrac_l2g_cfg[axis].<member>, not the axis config (API/mrac.h MRAC_L2G_Config_t)
@@ -80,6 +81,8 @@ def variant_symbol(idx: int) -> str | None:
     if field == GAMMA_SCALE_FIELD:
         return f"mrac_g_gamma[{axis}][*]"
     name = VARIANT_FIELDS[field][0]
+    if name == "xy_layers":
+        return "mrac_xy_layers"
     if name in L2G_MEMBERS:
         return f"mrac_l2g_cfg[{axis}].{L2G_MEMBERS[name]}"
     return f"{AXES[axis]}.{name}"

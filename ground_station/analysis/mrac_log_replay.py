@@ -64,6 +64,8 @@ def knob_args(params: dict[str, float]) -> list[str]:
             member = sym.split(".")[1]
             field = next(f for f, m in L2G_MEMBERS.items() if m == member)
             out.append(f"{int(sym[13])}:{names.index(field)}:{val}")
+        elif sym == "mrac_xy_layers":
+            out.append(f"4:{names.index('xy_layers')}:{val}")
         else:
             member, field = sym.split(".")
             out.append(f"{VAR_AXES.index(member)}:{names.index(field)}:{val}")

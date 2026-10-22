@@ -92,6 +92,26 @@ pre-registered thresholds, not measurements.
 
 - Option per flight: inner only / outer only / both (x/y velocity MRAC vs attitude MRAC). Source:
   docs/research/2026-10-22-d4-outer-inner.md.
+- As built (10-22, test `API/tests/test_mrac_pos_layer.c`, host_tests row `mrac_pos_layer`):
+  - Layers as the research sim models them: inner = the existing x/y velocity MRAC (`u_ad`, m/s^2); outer = a new
+    x/y position layer (`MRAC_PosStep`, `mrac_pos[2]`) whose output (m/s) adds to the velocity demand. The attitude
+    MRAC axes are not touched by this option.
+  - CMD 0x1D field 31 `xy_layers` (any axis, refused airborne like every 0x1D field): bits 1 inner (boot), 2 outer,
+    3 both, 0 neither. It sets a target; the ground latch in StabilizerTask (`MRAC_XyLayersLatch`, next to
+    `MRAC_XyRefSelect`) makes it live and clears the outer state, so a choice flies from the next takeoff.
+  - Inner gate: the x and y `MRAC_GuardedUpdate` calls run only with the inner bit live.
+  - Outer law: reference p_m'' = bw^2 (p_d - p_m) - 2 zeta bw p_m', e = p - p_m, phi = (1, p, vd),
+    W' = gamma (phi e - sigma |e| W), |W_k| <= w_max, u = -W.phi, |u| <= u_max. It learns on the PID path only
+    (airborne, not in hold, velocity demand = the position PID's); otherwise the model takes the plant, W freezes
+    and u = 0. A non-finite input resets the axis.
+  - Row `mrac_pos_cfg` = MRAC_POS_ROW(gamma 1, sigma 0.1, w_max 2, u_max 0.3 m/s, bw 1 rad/s, zeta 1). gamma to
+    u_max are the research sim's; the sim's reference was a noise-free PID twin, so bw / zeta are PROPOSED: rerun
+    the sim on this reference model before an outer flight.
+  - Mode 0 bit-identical: boot live = inner, so the inner gate is always open and the outer output is never added
+    (EQUIV OK plain + sigma-prior).
+  - No gamma wire field: 31 is the last field axes 0-3 can carry in `(field << 2) | axis`
+    (open-items `pos-gamma-wire-field`). The host contract range for field was 0-25 since item 2; now 0-31.
+  - Not flashed.
 
 ## 6. Experiment telemetry block
 

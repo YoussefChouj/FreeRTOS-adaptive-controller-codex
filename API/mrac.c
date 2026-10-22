@@ -111,6 +111,87 @@ void MRAC_XyRefSelect(uint8_t kind)
     mrac_config_y.ref_delay_s    = (float)row->delay_ticks * MRAC_DT;
     mrac_xy_ref_kind = kind;
 }
+
+/* D4 (spec 2026-10-22 item 5, docs/research/2026-10-22-d4-outer-inner.md): the outer x/y position layer.
+ * Reference model p_m'' = bw^2 (p_d - p_m) - 2 zeta bw p_m'; e = p - p_m; regressor phi = (1, p, vd);
+ * law W' = gamma (phi e - sigma |e| W), |W_k| <= w_max; u = -W.phi, |u| <= u_max m/s, added to the velocity
+ * demand (PID path only). Off at boot (mrac_xy_layers = INNER); CMD 0x1D field 31 sets the target, latched on
+ * the ground (MRAC_XyLayersLatch). gamma / sigma / w_max / u_max are the research sim's (gamma 1: sine 27.8 ->
+ * 17.8 cm, hold worse); the sim's reference was a noise-free PID twin, so bw / zeta are PROPOSED: rerun the sim
+ * on this model before flying it.
+ *   @gamma  -      [0, 20]    adaptation gain
+ *   @sigma  -      [0, 1]     e-modification leak
+ *   @w_max  -      [0, 10]    clamp per weight
+ *   @u_max  m/s    [0, 1]     output clamp
+ *   @bw     rad/s  [0.1, 10]  reference model natural frequency
+ *   @zeta   -      [0.1, 2]   reference model damping
+ */
+#define MRAC_POS_ROW(gamma, sigma, w_max, u_max, bw, zeta) { (gamma), (sigma), (w_max), (u_max), (bw), (zeta) }
+MRAC_PosConfig_t mrac_pos_cfg = MRAC_POS_ROW(1.0f, 0.1f, 2.0f, 0.3f, 1.0f, 1.0f);
+volatile uint8_t mrac_xy_layers = MRAC_XY_LAYER_INNER;
+volatile uint8_t mrac_xy_layers_live = MRAC_XY_LAYER_INNER;
+MRAC_PosLayer_t mrac_pos[2];
+
+static void MRAC_PosReset(MRAC_PosLayer_t *s)
+{
+    s->W[0] = 0.0f;
+    s->W[1] = 0.0f;
+    s->W[2] = 0.0f;
+    s->p_m = 0.0f;
+    s->v_m = 0.0f;
+    s->e = 0.0f;
+    s->u = 0.0f;
+}
+
+void MRAC_XyLayersLatch(void)
+{
+    mrac_xy_layers_live = (uint8_t)((unsigned)mrac_xy_layers & (MRAC_XY_LAYER_INNER | MRAC_XY_LAYER_OUTER));
+    MRAC_PosReset(&mrac_pos[0]);
+    MRAC_PosReset(&mrac_pos[1]);
+}
+
+/* One Pos_Compute tick of axis i. on = 0 (hold, xy_ctrl flying, not airborne) or outer not live: the model
+ * tracks the plant, W frozen, u = 0. A non-finite input resets the axis. */
+float MRAC_PosStep(uint8_t i, uint8_t on, float p_d, float p, float v, float vd)
+{
+    const MRAC_PosConfig_t *c = &mrac_pos_cfg;
+    MRAC_PosLayer_t *s;
+    float a, u, w, phi[3];
+    int k;
+
+    if (i > 1U) return 0.0f;
+    s = &mrac_pos[i];
+    if (!(p_d - p_d == 0.0f) || !(p - p == 0.0f) || !(v - v == 0.0f) || !(vd - vd == 0.0f)) {
+        MRAC_PosReset(s);
+        return 0.0f;
+    }
+    if (!on || ((unsigned)mrac_xy_layers_live & MRAC_XY_LAYER_OUTER) == 0U) {
+        s->p_m = p;
+        s->v_m = v;
+        s->e = 0.0f;
+        s->u = 0.0f;
+        return 0.0f;
+    }
+    a = c->bw * c->bw * (p_d - s->p_m) - 2.0f * c->zeta * c->bw * s->v_m;
+    s->p_m += s->v_m * MRAC_POS_DT;
+    s->v_m += a * MRAC_POS_DT;
+    s->e = p - s->p_m;
+    phi[0] = 1.0f;
+    phi[1] = p;
+    phi[2] = vd;
+    u = 0.0f;
+    for (k = 0; k < 3; k++) {
+        w = s->W[k] + MRAC_POS_DT * c->gamma * (phi[k] * s->e - c->sigma * fabsf(s->e) * s->W[k]);
+        if (w > c->w_max) w = c->w_max;
+        else if (w < -c->w_max) w = -c->w_max;
+        s->W[k] = w;
+        u -= w * phi[k];
+    }
+    if (u > c->u_max) u = c->u_max;
+    else if (u < -c->u_max) u = -c->u_max;
+    s->u = u;
+    return u;
+}
 volatile float mrac_in_h = 0.0f;                  /* Z_posPID.FB, m (ToF height), for the Z features */
 volatile uint8_t mrac_z_feat_mask = 0;            /* Z feature bits, MRAC_ZFEAT_*; 0 = off (VAR_WRITE id 54) */
 MRAC_Vp12_t mrac_vp12 = {
@@ -1821,6 +1902,8 @@ void MRAC_Init(void)
     mrac_config_y = mrac_config_x;
     mrac_xy_ref_kind = 0xFFU;    /* forces the apply: reference model type / bw / zeta / delay from the PID row */
     MRAC_XyRefSelect(0U);
+    mrac_xy_layers = MRAC_XY_LAYER_INNER;    /* D4: outer layer off at boot */
+    MRAC_XyLayersLatch();
 
     for (i = 0; i < (int)AXES; i++) {
         mrac_u_ff[i] = 0.0f;
@@ -1960,7 +2043,8 @@ static const struct { float lo; float hi; uint8_t snap; } mrac_var_field[MRAC_VF
     MRAC_VAR_FIELD( 0.05f, 10.0f,  0),   /* l2_tau          s */
     MRAC_VAR_FIELD( 0.0f,  1.0f,   0),   /* l2_thr_off      -, < l2_thr_on */
     MRAC_VAR_FIELD( 0.0f,  1.0f,   0),   /* l2_thr_on       -, > l2_thr_off */
-    MRAC_VAR_FIELD( 0.05f, 30.0f,  0)    /* l2_t_trap       s */
+    MRAC_VAR_FIELD( 0.05f, 30.0f,  0),   /* l2_t_trap       s */
+    MRAC_VAR_FIELD( 0.0f,  3.0f,   0)    /* xy_layers       bits, MRAC_XY_LAYER_* (any axis) */
 };
 
 #if MRAC_VARIANT == MRAC_VARIANT_MULTI
@@ -2104,6 +2188,7 @@ uint8_t MRAC_VariantParamSet(uint8_t axis, uint8_t field, float val)
             mrac_l2g_cfg[axis].thr_on = val;
             break;
         case MRAC_VF_L2_T_TRAP:  mrac_l2g_cfg[axis].t_trap_s = val; break;
+        case MRAC_VF_XY_LAYERS:  mrac_xy_layers = (uint8_t)(val + 0.5f); break;   /* flies after the ground latch */
         default: return 0U;
     }
     if (mrac_var_field[field].snap) {
@@ -2253,12 +2338,12 @@ void MRAC_Control(const CtrlerTypeDef* current_state)
         mrac_state.yaw.u_ad = 0.0f;
     }
     MRAC_GuardedUpdate(MRAC_AXIS_Z,     &mrac_state.z_rate,&mrac_config_z,     0.0f,        r_z);
-    if (mrac_flags.axis_enable_x) {
+    if (mrac_flags.axis_enable_x && ((unsigned)mrac_xy_layers_live & MRAC_XY_LAYER_INNER) != 0U) {
         MRAC_GuardedUpdate(MRAC_AXIS_X,   &mrac_state.x_vel, &mrac_config_x,     0.0f,        r_x);
     } else {
         mrac_state.x_vel.u_ad = 0.0f;
     }
-    if (mrac_flags.axis_enable_y) {
+    if (mrac_flags.axis_enable_y && ((unsigned)mrac_xy_layers_live & MRAC_XY_LAYER_INNER) != 0U) {
         MRAC_GuardedUpdate(MRAC_AXIS_Y,   &mrac_state.y_vel, &mrac_config_y,     0.0f,        r_y);
     } else {
         mrac_state.y_vel.u_ad = 0.0f;

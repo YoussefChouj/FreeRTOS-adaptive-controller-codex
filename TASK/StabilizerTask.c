@@ -2248,8 +2248,10 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact, uint8_t land_xy_
 		s_xyc_kind = (g_xy_ctrl_kind <= XY_CTRL_MPC && !g_ctrl_pid_fallback_active) ? g_xy_ctrl_kind : XY_CTRL_PID;
 		if (!airborne && g_xyc_delay_ticks != XyCtrl_Delay())
 			XyCtrl_SetDelay(g_xyc_delay_ticks);
-		if (!airborne)
+		if (!airborne) {
 			MRAC_XyRefSelect(g_xy_ctrl_kind);   /* item 4: the MRAC x/y reference row of the selected nominal */
+			MRAC_XyLayersLatch();               /* item 5: the x/y MRAC layers (CMD 0x1D field 31) fly from takeoff */
+		}
 		if (!g_ctrl_pid_fallback_active) {
 			xy_ctrl_reset();
 		}
@@ -2258,8 +2260,21 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact, uint8_t land_xy_
 	xyc_on[1] = s_xyc_kind && airborne && !hold && Ctrler.locysPID.Des == Ctrler.locyPID.U;
 
 	{
+		/* item 5: outer x/y MRAC position layer, cm/s (m and m/s inside). PID path only: it tracks while xy_ctrl
+		 * flies, in hold, or when the velocity demand is not the position PID's. Added only when OUTER is live. */
+		float pos_u[2];
+		pos_u[0] = 100.0f * MRAC_PosStep(0U, (uint8_t)(!xyc_on[0] && airborne && !hold && Ctrler.locxsPID.Des == Ctrler.locxPID.U),
+		                                 0.01f * Ctrler.locxPID.Des, 0.01f * Ctrler.locxPID.FB,
+		                                 0.01f * Ctrler.locxsPID.FB, 0.01f * Ctrler.locxsPID.Des);
+		pos_u[1] = 100.0f * MRAC_PosStep(1U, (uint8_t)(!xyc_on[1] && airborne && !hold && Ctrler.locysPID.Des == Ctrler.locyPID.U),
+		                                 0.01f * Ctrler.locyPID.Des, 0.01f * Ctrler.locyPID.FB,
+		                                 0.01f * Ctrler.locysPID.FB, 0.01f * Ctrler.locysPID.Des);
 		Ctrler.locxsPID.Des += vx + Excite_Get(EXC_X, EXC_INNER);   /* inner pattern: PID path only (xy_ctrl sets U) */
 		Ctrler.locysPID.Des += vy + Excite_Get(EXC_Y, EXC_INNER);
+		if (((unsigned)mrac_xy_layers_live & MRAC_XY_LAYER_OUTER) != 0U) {
+			Ctrler.locxsPID.Des += pos_u[0];
+			Ctrler.locysPID.Des += pos_u[1];
+		}
 		if (g_traj_ff_preset && airborne) {
 			Ctrler.locxsPID.Des = fmaxf(-g_vxy_des_max, fminf(g_vxy_des_max, Ctrler.locxsPID.Des + g_traj_vff_x));
 			Ctrler.locysPID.Des = fmaxf(-g_vxy_des_max, fminf(g_vxy_des_max, Ctrler.locysPID.Des + g_traj_vff_y));
