@@ -3,7 +3,13 @@ prompt, the RC arm at preflight, the mid-day pack swap), the fixture, the store 
 failing on the outcomes they read."""
 from __future__ import annotations
 
+import argparse
 import json
+import socket
+import subprocess
+import sys
+
+import pytest
 
 from ground_station.comm import lag_histogram as lh
 from ground_station.lab import soak
@@ -214,3 +220,33 @@ def test_driver_ends_the_day_on_a_refused_go():
     d.feed("GO refused (409): campaign deps not ready: No module named 'bench'. Disarm by RC.\n")
     assert d.ended == "day 1: GO refused (409): campaign deps not ready: No module named 'bench'. Disarm by RC."
     assert d.failures == [d.ended]
+
+
+def test_kill_tree_stops_a_child_started_in_its_own_session():
+    # 10-22: the stuck-day cleanup called os.killpg, which Windows lacks, and the soak died with a traceback
+    p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+    try:
+        soak.kill_tree(p)
+        assert p.wait(timeout=15) is not None
+    finally:
+        if p.poll() is None:
+            p.kill()
+
+
+def test_setup_refuses_when_another_service_holds_the_bridge_port(tmp_path, monkeypatch):
+    # 10-22: the lab's 8081 service still held 0.0.0.0:14550, took the fake drone's replies, and every soak flight
+    # died on "link lost". The soak must stop before it copies the tree or starts anything.
+    held = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    held.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)   # as the bridge binds it
+    try:
+        held.bind(("0.0.0.0", soak.DRONE_PORT))
+    except OSError:
+        pass                                                      # a real service holds it: the same condition
+    monkeypatch.setattr(soak, "copy_tree", lambda dst: pytest.fail("setup went past the port check"))
+    s = soak.Soak(argparse.Namespace(out=str(tmp_path / "run")))
+    try:
+        with pytest.raises(SystemExit, match="taken"):
+            s.setup()
+    finally:
+        held.close()
+    assert s.procs == []

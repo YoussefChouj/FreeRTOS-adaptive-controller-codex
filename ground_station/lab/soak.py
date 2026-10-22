@@ -296,6 +296,19 @@ def udp_free(host: str, port: int) -> bool:
         s.close()
 
 
+def kill_tree(p: subprocess.Popen) -> None:
+    """Stop a child and its own children: the process group on POSIX, taskkill /T on Windows (no os.killpg there)."""
+    if p.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True, timeout=15)
+        else:
+            os.killpg(p.pid, signal.SIGTERM)
+    except (OSError, subprocess.TimeoutExpired):
+        p.terminate()
+
+
 def get_json(port: int, path: str, timeout: float = 5.0) -> dict:
     with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
@@ -470,11 +483,7 @@ class Soak:
 
     def stop_all(self) -> None:
         for p in reversed(self.procs):
-            if p.poll() is None:
-                try:
-                    os.killpg(p.pid, signal.SIGTERM)
-                except (OSError, AttributeError):
-                    p.terminate()
+            kill_tree(p)
         for p in self.procs:
             try:
                 p.wait(timeout=10)
@@ -485,6 +494,12 @@ class Soak:
         for port in (DRONE_PORT, CTL_PORT):
             if not udp_free(DRONE_HOST, port):
                 raise SystemExit(f"udp {DRONE_HOST}:{port} is taken: another fake drone or soak runs here; stop it")
+        # The soak's service binds the bridge port 0.0.0.0:14550 with SO_REUSEADDR, so next to a running service
+        # (the lab's 8081) both sockets share it and Windows hands the fake drone's replies to the older one:
+        # the soak service hears nothing and every flight dies on "link lost" (10-22 deck soak).
+        if not udp_free("0.0.0.0", DRONE_PORT):
+            raise SystemExit(f"udp 0.0.0.0:{DRONE_PORT} is taken: a ground-station service (the 8081 one?) holds the "
+                             "bridge port and would take the fake drone's replies; stop it, labday restarts it")
         if shutil.disk_usage(ROOT).free < 3 * 2**30:
             raise SystemExit("less than 3 GB free: a soak day writes about 0.5 GB of recordings")
         self.out.mkdir(parents=True, exist_ok=True)
@@ -607,16 +622,16 @@ class Soak:
                         except (OSError, ValueError) as e:
                             drv.failures.append(f"day {n}: {action[0]} failed: {e}")
                     if drv.ended:                       # no key reads on a pipe: the fly would wait for an arm
-                        os.killpg(labday.pid, signal.SIGTERM)
+                        kill_tree(labday)
                         break
                 if now - last > IDLE_S or now - t0 > DAY_TIMEOUT_S:
                     drv.failures.append(f"day {n}: labday stuck (no output for {now - last:.0f} s); tail: "
                                         + drv.buf[-200:].replace("\n", " | "))
-                    os.killpg(labday.pid, signal.SIGTERM)
+                    kill_tree(labday)
                     break
                 if self.service.poll() is not None:
                     drv.failures.append(f"day {n}: the service exited {self.service.returncode}")
-                    os.killpg(labday.pid, signal.SIGTERM)
+                    kill_tree(labday)
                     break
         labday.wait(timeout=30)
         db = debriefs(self.events)
