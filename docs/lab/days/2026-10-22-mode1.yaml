@@ -1,0 +1,37 @@
+# Lab day 2026-10-22, camera mode 1 deck: fly it with `.\labday 2026-10-22-mode1`, after the main and fast decks.
+# Camera mode 1 logs every fix (g_ext_pos.e_x/e_y) without applying it, so the camera is a pure witness here:
+# - item (c) landing: the 10-21 open item landing-flow-xy-near-ground has the flow estimate and the camera 20-45 cm
+#   apart below 0.3 m. The redesign is based on recorded mode-1 landings, not on an xy freeze (the operator found the
+#   freeze worse). This deck records the auto landing; the RC landing switch and the manual-stick landing are flown
+#   after it by RC with a WiFi log (workflow A), same pack, so the three can be compared.
+# - item (b) drift NN active: the firmware CAMERA gate blocks the net while camera mode >= 2, so live flights fly here.
+# Not carried to other days (the file name is not a date).
+day: 2026-10-22
+carry: false
+title: camera mode 1 (witness only) - auto landing recorded for the landing redesign, then the drift NN live in the loop
+camera:
+  floor: floor-1022           # same scan as the main deck
+  mode: 1                     # fixes logged, not applied: the NN gate is open and the landing is recorded uncorrected
+  args: [--yaw-deg, "94", --delay-ms, "330"]
+before:
+  - "Main deck 2026-10-22 done or stopped; 8081 running, `arm 0`, landing pad clear"
+  - "Tracker window: the dot sits on the drone center while parked before arming"
+flights:
+  - id: landing-auto-mode1
+    fly: lab_b_land
+    why: "Item (c): the auto land profile from 0.5 m after an excursion, camera witness only; landing 1 of 3 for the comparison"
+    pass: "no pass mark: the record is the deliverable (flow estimate vs camera below 0.3 m, touchdown offset)"
+  - id: drift-nn-live-1
+    fly: lab_n_drift_nn_live
+    why: "Item (b): the drift net applied (position only, 0.10 m/s clamp) on the smoke-hover script"
+    pass: "no abort; drift_nn.live_on 1 the whole hold; camera minus estimate no worse than smoke-hover (PROPOSED)"
+  - id: drift-nn-live-2
+    fly: lab_n_drift_nn_live
+    why: "Item (b): a second live run, so one good or bad hover is not the whole story"
+    pass: "as drift-nn-live-1"
+    stop: true
+branches:
+  - {when: '"NO FIX SENT" or the dot off the drone', do: "Land, check the tracker, re-fly (r at the auto-stop prompt)"}
+  - {when: "drift-nn-live-1 drifts faster than smoke-hover or hits the clamp all the hold", do: "Land; skip drift-nn-live-2; tell me"}
+  - {when: Tilt trip or fence stop, do: "Land; tell me before the next flight"}
+  - {when: "Pack at the packs.yaml gate (gate_soc_pct, post-flight, ground only)", do: "Swap before the next flight; give the new type when fly asks"}
