@@ -766,3 +766,25 @@ def test_run_source_restarts_the_pad_origin_and_trail_when_learned_and_clears_th
     assert len(show.uvs) == 7 and {u for _, u, _ in show.uvs} == {300.0}                # from the take-off on
     show.clear_trail()
     assert show.uvs == [] and show.trail == []
+
+
+def test_window_read_returns_its_own_bgr_frame_and_skips_black_grabs(monkeypatch):
+    # PrintWindow fills one reused BGRA buffer. read() must hand the tracker a 3-channel contiguous copy (the next
+    # grab overwrites the buffer) and keep retrying past an all-black grab (2026-10-15: PrintWindow failed once).
+    from types import SimpleNamespace
+    from ground_station.analysis.live_tracker import WindowSource
+    buf = np.zeros((6, 8, 4), np.uint8)
+    grabs = iter([0, 120, 200])                                        # black, then two video frames
+    def _print(w, h):
+        buf[..., :3] = next(grabs)
+        buf[..., 3] = 255
+        return buf
+    ws = object.__new__(WindowSource)
+    ws.u32 = SimpleNamespace(IsWindow=lambda h: True, IsIconic=lambda h: False)
+    ws.hwnd, ws.title, ws.fixed, ws._print = 1, "cam", None, _print
+    ws.rect = lambda: {"left": 0, "top": 0, "width": 8, "height": 6}
+    monkeypatch.setattr("ground_station.analysis.live_tracker.time.sleep", lambda s: None)
+    ok, f = ws.read()
+    assert ok and f.shape == (6, 8, 3) and f.flags["C_CONTIGUOUS"] and (f == 120).all() and ws.via == "print"
+    ws.read()
+    assert (f == 120).all()                                           # the second grab did not overwrite the first

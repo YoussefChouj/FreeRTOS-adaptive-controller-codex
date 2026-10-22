@@ -302,7 +302,7 @@ class WindowSource:
             return None
         if self.g32.GetDIBits(mdc, bmp, 0, h, buf.ctypes.data, self._ct.byref(bi), 0) != h:
             return None
-        return buf[..., :3]
+        return buf                                        # BGRA, reused next call: read() converts it to a new BGR frame
 
     def _find(self, wait_s: float) -> int:
         """Wait up to wait_s for the window (scrcpy still starting, or restarting after Android dropped the camera)."""
@@ -337,9 +337,11 @@ class WindowSource:
                 f = self._print(r["width"], r["height"])
                 self.via = "mss" if f is None else "print"
                 if f is None and r.get("left", 0) >= 0:   # mss reads the screen: scrcpy parked off screen (x=-3000) is black there
-                    f = np.asarray(self.sct.grab(r))[..., :3]
-                if f is not None and float(f.mean()) > 2.0:   # 2026-10-15 lab: black frames when PrintWindow failed once
-                    return True, fit_frame(np.ascontiguousarray(f), self.fixed)
+                    f = np.asarray(self.sct.grab(r))
+                if f is not None:                         # BGRA -> a new contiguous BGR frame (buf is reused next read);
+                    f = cv2.cvtColor(f, cv2.COLOR_BGRA2BGR)   # 2026-10-22 bench, 1080p: 5.5 ms vs 45 ms for
+                    if sum(cv2.mean(f)[:3]) / 3 > 2.0:    # [..., :3].mean() + ascontiguousarray, same frame and mean.
+                        return True, fit_frame(f, self.fixed)   # 2026-10-15 lab: black frames when PrintWindow failed once
             if time.monotonic() >= t_end:
                 print(f"window {self.title!r} lost for 15 s", flush=True)
                 return False, None
