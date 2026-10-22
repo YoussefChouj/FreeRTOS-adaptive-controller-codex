@@ -507,13 +507,10 @@ extern MRAC_AxisConfig_t mrac_config_y;
 // ------------------------------------------------------------------------------
 // 5. Opt-in sigma-prior attractor (prior-D / ADR-0013 D5, D10)
 // ------------------------------------------------------------------------------
-// The default firmware build does NOT change: the terms below are guarded by
-// MRAC_ENABLE_SIGMA_PRIOR. When the flag is undefined, none of the symbols are
-// emitted and `mrac.c`'s object code is bit-identical to the pre-change build
-// (sil_gate parity test enforces this). The flag is OFF in the production
-// JX_FLY.uvprojx.
+// Always built (spec 2026-10-22 item 3); sigma_prior = 0 (the default) leaves the mrac.c update bit-identical
+// (run_mrac_equiv plain). MRAC_ENABLE_SIGMA_PRIOR only adds the parity driver's sigma-prior scenario.
 //
-// When the flag IS defined, the gradient update in `MRAC_UpdateAxis` gains a
+// With sigma_prior > 0, the gradient update in `MRAC_UpdateAxis` gains a
 // sibling σ-mod term that pulls the adaptive weights toward a scenario-
 // conditioned `Theta_prior` at rate `sigma_prior`:
 //
@@ -525,8 +522,8 @@ extern MRAC_AxisConfig_t mrac_config_y;
 // `Theta_prior` is zero-initialised via file-scope zero-init. `sigma_prior`
 // defaults to 0.0 (no effect). `MRAC_SetPrior` / `MRAC_GetPrior` provide a
 // critical-section-protected read/write path from the ground-station command
-// dispatch (NOT wired in this slice — see journal "Operator decision").
-#ifdef MRAC_ENABLE_SIGMA_PRIOR
+// dispatch (wired by CMD 0x2F..0x34, send_data.c Cmd_MracPrior, disarmed only).
+#define MRAC_PRIOR_ALL_AXES 0x3FU   /* mrac_prior_pull default: every axis pulls when sigma_prior > 0 */
 
 /* Scenario-conditioned prior per axis. Default zero-init. */
 extern float Theta_prior[AXES][MAX_NUM_BASIS];
@@ -542,7 +539,19 @@ void MRAC_SetPrior(uint8_t axis, const float *arr);
 /* Read `Theta_prior[axis][:]` into `out_arr[:MAX_NUM_BASIS]`. */
 void MRAC_GetPrior(uint8_t axis, float *out_arr);
 
-#endif /* MRAC_ENABLE_SIGMA_PRIOR */
+/* L3 prior (spec 2026-10-22 item 3). Bit = MRAC_Axis_e. pull: the sigma_prior attractor acts on that axis (default
+ * all). warm: MRAC_ResetWeights seeds Theta = Whatf = clamped Theta_prior there (default none). */
+extern uint8_t mrac_prior_pull;
+extern uint8_t mrac_prior_warm;
+/* Set by CMD 0x2F..0x34 after an accepted write; MRAC_GateStep clears it and calls MRAC_ResetWeights on the next
+ * disarmed tick (the GS task never writes Theta). */
+extern volatile uint8_t mrac_prior_reseed;
+
+/* Theta_prior[axis][idx] = v; 0 (nothing written) for a bad axis or idx >= MRAC_N_FEATURES or non-finite v, else 1. */
+int MRAC_SetPriorElem(uint8_t axis, uint8_t idx, float v);
+
+/* Theta = Whatf = clamp(Theta_prior) on the axes in mrac_prior_warm (MRAC_ResetWeights calls it after zeroing). */
+void MRAC_PriorWarmStart(void);
 
 #include "robot_types.h"
 

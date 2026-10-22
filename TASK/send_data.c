@@ -13,6 +13,7 @@
  *             and ground_station/platform/firmware_contract.py (COMMAND_TABLE ids = k_gs_cmds ids).
  */
 
+#include <math.h>        /* isfinite (Cmd_MracPrior) */
 #include "send_data.h"
 #include "mrac.h"
 #include "controller.h"  /* g_ctrl_select_req, g_ctrl_axis_mask (CMD 0x1F) */
@@ -1239,10 +1240,15 @@ extern volatile uint8_t gs_cmd_tail;
 #define TXN_HISTORY_LEN         16U
 #define CMD_REJECT_UNKNOWN      4U   /* reason byte of a REJECTED transaction result (firmware_contract.py: 4 unknown, 6 interlock) */
 #define CMD_REJECT_INTERLOCK    6U
-#define CMD_ID_LAST_PLAIN       0x1FU  /* ids above this are unknown, except the MRAC element block, EXT_POS, VAR_WRITE, EXCITE */
+#define CMD_ID_LAST_PLAIN       0x1FU  /* ids above this are unknown, except the MRAC element block, EXT_POS, VAR_WRITE, EXCITE, MRAC_PRIOR */
 #define EXT_POS_CMD_ID          0x2CU  /* first free id above MRAC_ELEM_CMD_LAST */
 #define VAR_WRITE_CMD_ID        0x2DU  /* one allowlisted variable (AutoflyTask.c s_var_write) */
 #define EXCITE_CMD_ID           0x2EU  /* pattern library start/abort (API/excite.c) */
+#define MRAC_PRIOR_CMD_BASE     0x2FU  /* L3 prior, one id per axis: 0x2F + MRAC_Axis_e (API/mrac.h) */
+#define MRAC_PRIOR_CMD_LAST     0x34U
+#define MRAC_PRIOR_IDX_SIGMA    0xF0U  /* idx < MRAC_N_FEATURES: Theta_prior element; these three: scalars */
+#define MRAC_PRIOR_IDX_PULL     0xF1U
+#define MRAC_PRIOR_IDX_WARM     0xF2U
 
 static uint8_t s_transaction_result_buf[64];
 static uint16_t s_transaction_history[TXN_HISTORY_LEN];
@@ -1306,7 +1312,8 @@ static void MracElemParamApply(uint8_t axis, uint8_t field, uint8_t elem, float 
 static uint8_t CommandSafetyReject(uint8_t id)
 {
     if ((id == 0U) || ((id > CMD_ID_LAST_PLAIN) && !MRAC_ELEM_CMD_IS(id) && (id != EXT_POS_CMD_ID) &&
-         (id != VAR_WRITE_CMD_ID) && (id != EXCITE_CMD_ID))) {
+         (id != VAR_WRITE_CMD_ID) && (id != EXCITE_CMD_ID) &&
+         ((id < MRAC_PRIOR_CMD_BASE) || (id > MRAC_PRIOR_CMD_LAST)))) {
         return CMD_REJECT_UNKNOWN;
     }
     if ((id == 0x06U) && (DroneStatus.FlyMode != FlyMode_SDK)) {
@@ -1324,6 +1331,9 @@ static uint8_t CommandSafetyReject(uint8_t id)
     if (((id == 0x1DU) || (id == 0x1FU)) &&
         ((flight_phase == FLIGHT_PHASE_FLYING) || (flight_phase == FLIGHT_PHASE_LANDING))) {
         return CMD_REJECT_INTERLOCK;   /* MRAC variants and the controller select switch on the ground only */
+    }
+    if ((id >= MRAC_PRIOR_CMD_BASE) && (id <= MRAC_PRIOR_CMD_LAST) && (DroneStatus.ARM_Status != DisArmed)) {
+        return CMD_REJECT_INTERLOCK;   /* the L3 prior is written disarmed only */
     }
     return 0U;
 }
@@ -1372,7 +1382,7 @@ typedef struct {
     uint32_t lease_now_ms;    /* WP-28 gain lease clock, ms */
     uint8_t  lease_airborne;
     uint8_t  wfb_res;         /* WFB_RESULT_* of a 0x1A/0x1B/0x1C; APPLIED for every other command */
-    uint8_t  reason;          /* nonzero: the handler refused (REJECTED with this reason); 0x2D only */
+    uint8_t  reason;          /* nonzero: the handler refused (REJECTED with this reason); 0x2D, 0x2F..0x34 */
     const char *detail;       /* APPLIED detail instead of "applied" (0x2D: the variable name) */
 } GsCmd_t;
 
@@ -1802,6 +1812,43 @@ static void Cmd_ExciteControl(GsCmd_t *c)
     }
 }
 
+/* CMD 0x2F..0x34 — L3 prior of one MRAC axis (axis = id - 0x2F = MRAC_Axis_e), spec 2026-10-22 item 3.
+ * DISARMED ONLY (CommandSafetyReject interlock, checked again here).  idx < MRAC_N_FEATURES: Theta_prior[axis][idx];
+ * 0xF0: sigma_prior = val (>= 0, one global rate); 0xF1: pull bit of this axis (val >= 0.5 set, else clear);
+ * 0xF2: warm bit of this axis.  A non-finite or out-of-range value, or an unknown idx, is REJECTED with
+ * VAR_WRITE_REJECT_RANGE and writes nothing.  Every accepted write asks MRAC_GateStep to re-seed
+ * (MRAC_ResetWeights -> MRAC_PriorWarmStart) on its next disarmed tick. */
+static void Cmd_MracPrior(GsCmd_t *c)
+{
+    uint8_t axis = (uint8_t)(c->id - MRAC_PRIOR_CMD_BASE);
+    unsigned bit = 1U << (unsigned)axis;
+    int ok = 0;
+
+    if ((DroneStatus.ARM_Status == DisArmed) && isfinite(c->val)) {
+        if (c->idx < (uint8_t)MRAC_N_FEATURES) {
+            ok = MRAC_SetPriorElem(axis, c->idx, c->val);
+        } else if ((c->idx == MRAC_PRIOR_IDX_SIGMA) && (c->val >= 0.0f)) {
+            sigma_prior = c->val;
+            ok = 1;
+        } else if (c->idx == MRAC_PRIOR_IDX_PULL) {
+            mrac_prior_pull = (uint8_t)((c->val >= 0.5f) ? ((unsigned)mrac_prior_pull | bit)
+                                                         : ((unsigned)mrac_prior_pull & ~bit));
+            ok = 1;
+        } else if (c->idx == MRAC_PRIOR_IDX_WARM) {
+            mrac_prior_warm = (uint8_t)((c->val >= 0.5f) ? ((unsigned)mrac_prior_warm | bit)
+                                                         : ((unsigned)mrac_prior_warm & ~bit));
+            ok = 1;
+        } else {
+            ok = 0;
+        }
+    }
+    if (ok != 0) {
+        mrac_prior_reseed = 1U;
+    } else {
+        c->reason = VAR_WRITE_REJECT_RANGE;
+    }
+}
+
 /* CMD 0x15 — gyro low-pass filter (Phase 1, ADR-0004).
  *   idx 0 = enable (val>=0.5 ON, else pass-through)
  *   idx 1 = cutoff Hz (applied to pitch/roll/yaw)  */
@@ -2111,7 +2158,8 @@ static const GsCmdEntry_t k_gs_cmds[] = {
     GS_CMD_ENTRY(MRAC_ELEM_CMD_BASE,   MRAC_ELEM_CMD_LAST,   Cmd_MracElem8),          /* MRAC element, 8-bit index */
     GS_CMD_ENTRY(EXT_POS_CMD_ID,       EXT_POS_CMD_ID,       Cmd_ExtPos),             /* EXT_POS */
     GS_CMD_ENTRY(VAR_WRITE_CMD_ID,     VAR_WRITE_CMD_ID,     Cmd_VarWrite),           /* VAR_WRITE */
-    GS_CMD_ENTRY(EXCITE_CMD_ID,        EXCITE_CMD_ID,        Cmd_ExciteControl)       /* EXCITE (pattern library) */
+    GS_CMD_ENTRY(EXCITE_CMD_ID,        EXCITE_CMD_ID,        Cmd_ExciteControl),      /* EXCITE (pattern library) */
+    GS_CMD_ENTRY(MRAC_PRIOR_CMD_BASE,  MRAC_PRIOR_CMD_LAST,  Cmd_MracPrior)           /* MRAC_PRIOR (L3 prior, one id per axis) */
 };
 
 static void GsCmd_Dispatch(GsCmd_t *c)
@@ -2200,7 +2248,7 @@ void Process_GroundStation_Command(void)
         }
         /* WFB END glue */
         if (cmd.reason != 0U) {
-            /* 0x2D refused (unknown row, out of range): nothing was written, so a retry with the same txid
+            /* 0x2D / 0x2F..0x34 refused (unknown row or idx, out of range): nothing was written, so a retry with the same txid
              * must execute again; it leaves the duplicate history like a rejected WFB command. */
             if (transaction_id != 0U) {
                 uint8_t last_slot = (uint8_t)((s_transaction_history_head + (TXN_HISTORY_LEN - 1U)) % TXN_HISTORY_LEN);

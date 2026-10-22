@@ -22,6 +22,8 @@ FIRMWARE_ONLY = {
     0x1B: "WFB_CMD_TRAJ, described in ground_station/platform/wfb_commands.py",
     0x1C: "WFB_CMD_PROG (onboard preset program), described in docs/workflow-c/onboard-preset-program.md",
     **{i: "MRAC element update, 8-bit index (0x20 + field*4 + axis)" for i in range(0x20, 0x2C)},
+    0x2D: "VAR_WRITE (one allowlisted variable), described in ground_station/platform/wfb_var.py",
+    0x2E: "EXCITE (pattern library start/abort), described in ground_station/analysis/excite_patterns.py",
 }
 # Described in COMMAND_TABLE without a firmware handler. Empty since WP-38 (0x19 SIMPLEX got its COMMAND_TABLE
 # entry, 0x1F CTRL_SELECT its Cmd_CtrlSelect handler): keep it empty.
@@ -52,6 +54,10 @@ def firmware_entries() -> list[tuple[int, int, str]]:
         "MRAC_ELEM_CMD_BASE": base,
         "MRAC_ELEM_CMD_LAST": base + (tol << 2) + 3,
         "EXT_POS_CMD_ID": _hex_define(text, "EXT_POS_CMD_ID"),
+        "VAR_WRITE_CMD_ID": _hex_define(text, "VAR_WRITE_CMD_ID"),
+        "EXCITE_CMD_ID": _hex_define(text, "EXCITE_CMD_ID"),
+        "MRAC_PRIOR_CMD_BASE": _hex_define(text, "MRAC_PRIOR_CMD_BASE"),
+        "MRAC_PRIOR_CMD_LAST": _hex_define(text, "MRAC_PRIOR_CMD_LAST"),
     }
     table = text[text.index("k_gs_cmds[] = {"):]
     table = table[: table.index("};")]
@@ -69,6 +75,7 @@ def test_table_parses():
     assert len(entries) >= 25
     assert (0x01, 0x01, "Cmd_PidGain") in entries
     assert (0x20, 0x2B, "Cmd_MracElem8") in entries
+    assert (0x2F, 0x34, "Cmd_MracPrior") in entries
 
 
 def test_no_id_is_claimed_twice():

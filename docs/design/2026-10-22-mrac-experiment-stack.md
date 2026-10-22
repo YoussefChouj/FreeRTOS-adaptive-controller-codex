@@ -62,6 +62,16 @@ pre-registered thresholds, not measurements.
   to load `Theta_prior` per axis from the ground station and to set `sigma_prior`; plus optional warm start (Theta = prior
   at arm).
 - Host tool builds a prior from a previous flight's final Theta (telemetry) per pattern/scenario.
+- As built (10-22, tests `API/tests/test_mrac_prior_l3.c`, `ground_station/platform/tests/test_mrac_prior.py`):
+  - One command id per axis, `0x2F + MRAC_Axis_e` (`Cmd_MracPrior`, TASK/send_data.c). idx 0..n_features-1 =
+    `Theta_prior[axis][idx]`, 0xF0 `sigma_prior` (shared), 0xF1 / 0xF2 this axis's bit of `mrac_prior_pull` /
+    `mrac_prior_warm`. Disarmed only (interlock 6); NaN, inf, sigma < 0 or a bad idx is REJECTED 0x41, nothing written.
+  - Every accepted write sets `mrac_prior_reseed`; the next disarmed `MRAC_GateStep` runs `MRAC_ResetWeights`, which
+    seeds Theta = Whatf = prior clamped to the projection set on the warm axes. So the host sends warm bits last.
+  - Boot: pull = all axes, warm = none, sigma_prior 0, so mode 0 is bit-identical. No upper bound on sigma_prior yet
+    (PROPOSED: pick one from the first flown prior).
+  - Host: `ground_station/platform/mrac_prior.py` (prior = median of the finite tail of each Theta column, `plan`,
+    `send`); `WfbClient.mrac_prior` and `HttpWfbClient.mrac_prior` check locally first. Commands: COMMANDS.md 4.4.
 
 ## 4. Per-nominal reference model row (D3)
 

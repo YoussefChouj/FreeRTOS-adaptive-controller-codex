@@ -174,9 +174,43 @@ def link_budget_uart5(frame_bytes: int, divider: int) -> float:
 #   0  = pass
 #   4  = unknown command
 #   6  = safety interlock
+# and by the handler itself (0x2D VAR_WRITE, 0x2F..0x34 MRAC_PRIOR; VAR_WRITE_REJECT_RANGE):
+#   0x41 = out of range (unknown row or idx, value outside its bounds): nothing was written
 
 # Path commands 0x0B/0x0C/0x11: the start command moves the centre (idx 0-2) to the current position.
 _PATH_CENTRE = "overwritten at start: the path begins at the current position (AutoflyTask_Start*)"
+
+# MRAC L3 prior: one id per axis, 0x2F + MRAC_Axis_e (API/mrac.h). Spec docs/design/2026-10-22-mrac-experiment-stack.md
+# item 3; host side ground_station/platform/mrac_prior.py.
+MRAC_PRIOR_CMD_BASE = 0x2F
+MRAC_PRIOR_AXES = ("pitch", "roll", "yaw", "z", "x", "y")
+
+
+def _mrac_prior_spec(axis: int, name: str) -> CommandSpec:
+    cmd = MRAC_PRIOR_CMD_BASE + axis
+    return CommandSpec(
+        id=cmd, name=f"MRAC_PRIOR_{name.upper()}",
+        description=f"MRAC L3 prior, {name} axis. idx 0..MRAC_N_FEATURES-1 (6/18/46 by build) = "
+                    f"Theta_prior[{axis}][idx], any finite value. idx 0xF0 sigma_prior (shared by all axes), "
+                    f"0xF1 / 0xF2 this axis's bit of mrac_prior_pull / mrac_prior_warm (value >= 0.5 sets it). "
+                    f"Every accepted write sets mrac_prior_reseed: the next disarmed MRAC_GateStep runs "
+                    f"MRAC_ResetWeights, which seeds Theta = Whatf = clamp(prior) on the warm axes.",
+        params=(
+            CommandParam(0xF0, "sigma_prior", "1/s", 0, None, description="Pull of Theta towards the prior "
+                         "(0 = off, the boot value). Shared by all axes.", symbol="sigma_prior"),
+            CommandParam(0xF1, "pull", "bool", 0, 1, description=f"Bit {axis} of mrac_prior_pull (boot: all set).",
+                         symbol="mrac_prior_pull"),
+            CommandParam(0xF2, "warm", "bool", 0, 1, description=f"Bit {axis} of mrac_prior_warm (boot: clear).",
+                         symbol="mrac_prior_warm"),
+        ),
+        safety=SafetyClass(requires_disarmed=True,
+                           description="Refused unless disarmed (CMD_REJECT_INTERLOCK 6). A bad idx or value "
+                                       "(NaN, inf, sigma < 0) is REJECTED 0x41 and nothing is written."),
+        notes="Handler Cmd_MracPrior (TASK/send_data.c); MRAC_SetPriorElem / MRAC_PriorWarmStart (API/mrac.c). "
+              "The firmware interlock is the disarmed authority; the seeded Theta reads back in the next "
+              "flight's telemetry.",
+    )
+
 
 COMMAND_TABLE: dict[int, CommandSpec] = {
     0x01: CommandSpec(
@@ -580,6 +614,7 @@ COMMAND_TABLE: dict[int, CommandSpec] = {
         notes="Handler Cmd_ExtPos (TASK/send_data.c); encoder ground_station/comm/ext_pos_encoder.py; "
               "design docs/video-truth/live_camera_fusion_design_2026-10-11.md. Bad codes are dropped.",
     ),
+    **{MRAC_PRIOR_CMD_BASE + a: _mrac_prior_spec(a, n) for a, n in enumerate(MRAC_PRIOR_AXES)},
 }
 
 

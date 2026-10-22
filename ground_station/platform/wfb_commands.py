@@ -99,6 +99,14 @@ class WfbClient:
         row = wfb_var.check(name, value)
         return self._send_cmd(wfb_var.CMD_VAR_WRITE, row.id, float(value))
 
+    def mrac_prior(self, axis: str, idx: int, value: float) -> bool:
+        """CMD 0x2F..0x34: one MRAC L3 prior write (mrac_prior, TASK/send_data.c Cmd_MracPrior), True when APPLIED.
+        Raises mrac_prior.PriorError (nothing sent) on a bad axis, idx or value; the firmware refuses it armed."""
+        from ground_station.platform import mrac_prior
+
+        cmd, idx, value = mrac_prior.check(axis, idx, value)
+        return self._send_cmd(cmd, idx, value)
+
     def arm(self) -> bool:
         """Arm the drone."""
         return self._send_cmd(CMD_ARM, ArmIdx.ARM, 1.0)

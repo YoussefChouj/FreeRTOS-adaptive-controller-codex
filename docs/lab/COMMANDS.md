@@ -310,6 +310,24 @@ python -m ground_station.analysis.mrac_active logs/xt.slot0.csv
 - Layout and pattern-word bits: `ground_station/analysis/mrac_xt.py` docstring; spec item 6 in
   `docs/design/2026-10-22-mrac-experiment-stack.md`.
 
+### 4.4 MRAC L3 prior (needs the item-3 build flashed, CMD 0x2F..0x34)
+
+Seed the next flight's MRAC weights from a previous flight's final Theta. Disarmed only (the firmware refuses it armed,
+interlock 6). Python, with the service on 8081 (`HttpWfbClient`) and a previous flight's log as a DataFrame `df`:
+
+```python
+from ground_station.platform import mrac_prior
+from ground_station.service.campaign_fly import HttpWfbClient
+prior = mrac_prior.prior_from_columns(df, last_n=500)      # median of the last 500 Theta samples per feature
+steps = mrac_prior.plan(prior, sigma=0.5, pull=("pitch", "roll"), warm=("pitch", "roll"))
+failed = mrac_prior.send(HttpWfbClient("http://127.0.0.1:8081"), steps)   # [] = every write APPLIED
+```
+
+- Warm bits go last: every accepted write re-seeds the warm axes at the next disarmed tick.
+- A failed (refused or unknown) write is safe to resend: the writes are idempotent.
+- Readback: the seeded Theta shows in the next flight's `mrac_state.<axis>.Theta[i]`, not in the reply.
+- `sigma=0.5` above is an example, not a tuned value (PROPOSED).
+
 ## 5. Ground service 8081
 
 ```powershell

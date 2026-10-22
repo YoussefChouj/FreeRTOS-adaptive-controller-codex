@@ -1099,6 +1099,11 @@ class HttpWfbClient:
         from ground_station.platform import wfb_var
         return self._send_cmd(wfb_var.CMD_VAR_WRITE, wfb_var.check(name, value).id, float(value))
 
+    def mrac_prior(self, axis: str, idx: int, value: float) -> bool:
+        """MRAC_PRIOR (CMD 0x2F..0x34) write; PriorError when the firmware would refuse it (nothing sent)."""
+        from ground_station.platform import mrac_prior
+        return self._send_cmd(*mrac_prior.check(axis, idx, value))
+
 
 def ground_exp_id(launch_path, flight=0):
     """The exp_id the takeoff `set` of the campaign's flight `flight` (0-based) writes on the ground, None when it

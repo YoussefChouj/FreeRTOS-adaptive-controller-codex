@@ -1137,3 +1137,22 @@ def test_fly_one_debrief_event_says_the_abort_and_air_time(tmp_path, monkeypatch
     campaign_fly.fly_one("http://h", launch, launch, "t-carry", "type2")
     (kw,) = [kw for ev, kw in logged if ev == "debrief"]
     assert kw["aborted"] is True and kw["abort_reason"] == "pos_err 0.62 m > 0.50 m" and kw["air_s"] == 0.0
+
+
+def test_http_client_mrac_prior_posts_the_axis_id_and_refuses_locally(monkeypatch):
+    from ground_station.platform import mrac_prior
+    sent = []
+
+    def fake_call(base, route, body=None, timeout=10):
+        if route == "/commands":
+            sent.append(body)
+            return 202, {"transaction_id": 4}
+        return 200, {"actions": [{"transaction_id": 4, "lifecycle": "applied"}]}
+
+    monkeypatch.setattr(campaign_fly, "call", fake_call)
+    client = campaign_fly.HttpWfbClient("http://h")
+    assert client.mrac_prior("z", 3, -0.5) is True
+    assert sent == [{"command_id": 0x32, "index": 3, "value": -0.5}]   # 0x2F + MRAC_AXIS_Z
+    with pytest.raises(mrac_prior.PriorError):
+        client.mrac_prior("x", mrac_prior.IDX_SIGMA, -1.0)
+    assert len(sent) == 1

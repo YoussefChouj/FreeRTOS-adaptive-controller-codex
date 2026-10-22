@@ -142,6 +142,12 @@ void MRAC_GateStep(void)
             mrac_inj.freeze_shadow = 0; // reset freeze on disarm
         }
     }
+    /* L3 prior written while disarmed (CMD 0x2F..0x34 sets the flag): re-seed here, in the control task, so the
+     * GS task never touches Theta and the next flight starts from the new prior (warm axes). */
+    if ((mrac_prior_reseed != 0U) && !mrac_in_armed) {
+        mrac_prior_reseed = 0U;
+        MRAC_ResetWeights();
+    }
 #if MRAC_VARIANT == MRAC_VARIANT_MULTI
     MRAC_Vp12Step((uint8_t)(mrac_flags.output_injection_on && is_flying),
                   (uint8_t)(!mrac_inj.prev_armed && mrac_in_armed));
@@ -200,17 +206,20 @@ void MRAC_GateStep(void)
 // ------------------------------------------------------------------------------
 // Opt-in sigma-prior attractor (prior-D / ADR-0013 D5, D10)
 // ------------------------------------------------------------------------------
-// Guarded by MRAC_ENABLE_SIGMA_PRIOR. Default build is byte-identical to the
-// pre-change build (sil_gate parity test enforces). When the flag is defined
-// the gradient update in MRAC_UpdateAxis pulls Theta toward Theta_prior at
-// rate sigma_prior. File-scope zero-init matches the existing convention.
+// Always built since the L3 prior (spec 2026-10-22 item 3). sigma_prior = 0 (the default) skips every prior term,
+// so the update is bit-identical to the build without them (run_mrac_equiv, plain). MRAC_ENABLE_SIGMA_PRIOR now only
+// adds the sigma-prior scenario to the parity driver. With sigma_prior > 0 the gradient update in MRAC_UpdateAxis
+// pulls Theta toward Theta_prior on the axes whose bit is set in mrac_prior_pull, and MRAC_ResetWeights seeds
+// Theta = Whatf = Theta_prior (clamped) on the axes whose bit is set in mrac_prior_warm. Written by CMD 0x2F..0x34
+// while disarmed (send_data.c Cmd_MracPrior).
 //
-// Axis-indexed storage: Theta_prior[MRAC_AXIS_*][:MAX_NUM_BASIS].
+// Axis-indexed storage: Theta_prior[MRAC_AXIS_*][:MAX_NUM_BASIS]. Mask bit = MRAC_Axis_e.
 // ---------------------------------------------------------------------------
-#ifdef MRAC_ENABLE_SIGMA_PRIOR
 float Theta_prior[AXES][MAX_NUM_BASIS];
 float sigma_prior = 0.0f;
-#endif
+uint8_t mrac_prior_pull = MRAC_PRIOR_ALL_AXES;
+uint8_t mrac_prior_warm = 0U;
+volatile uint8_t mrac_prior_reseed = 0U;
 
 // ------------------------------------------------------------------------------
 // Helper: Regressor Generator (Structured Physics-Based)
@@ -1189,17 +1198,15 @@ static void MRAC_AdaptWeights(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, cons
             }
         }
 
-#ifdef MRAC_ENABLE_SIGMA_PRIOR
         /* Opt-in prior attractor folded into the gradient BEFORE projection.
          * It is the gradient of (1/2)*sigma_prior*||Theta-Theta_prior||^2, so
          * projection must bound the combined gradient — otherwise a large
          * sigma_prior pushes Theta past What_limit (prior-D-fix). */
-        if (sigma_prior != 0.0f) {
+        if ((sigma_prior != 0.0f) && ((((unsigned)mrac_prior_pull >> (unsigned)axis_id) & 1U) != 0U)) {
             for (i = 0; i < n; i++) {
                 grad[i] -= sigma_prior * (state->Theta[i] - Theta_prior[axis_id][i]);
             }
         }
-#endif
 
         if (mrac_flags.projection_on) {
             MRAC_ProjectGradient(grad, state->Theta, n,
@@ -1234,20 +1241,18 @@ static void MRAC_AdaptWeights(MRAC_Axis_e axis_id, MRAC_AxisState_t* state, cons
 
             if (!MRAC_L2G_Held(axis_id, i)) state->Theta[i] += MRAC_DT * y * theta_scale;
 
-#ifdef MRAC_ENABLE_SIGMA_PRIOR
             /* Discrete-time safeguard: the band-scaling projection cannot
              * bound a single large sigma_prior-driven step (the gradient
              * magnitude can overshoot the band in one tick), so hard-bounds
              * Theta to the projection set after the update (prior-D-fix).
              * No-op when sigma_prior=0, keeping the baseline update exact. */
-            if (sigma_prior != 0.0f) {
+            if ((sigma_prior != 0.0f) && ((((unsigned)mrac_prior_pull >> (unsigned)axis_id) & 1U) != 0U)) {
                 if (state->Theta[i] > config->What_limit[i]) {
                     state->Theta[i] = config->What_limit[i];
                 } else if (state->Theta[i] < config->What_lower_limit[i]) {
                     state->Theta[i] = config->What_lower_limit[i];
                 }
             }
-#endif
 
             // L1-style low-frequency leakage: pull fast weights toward filtered copy.
             // PR (kappa_pr > 0) needs the filtered copy too, without the sigma_lf pull.
@@ -1833,7 +1838,8 @@ void MRAC_ResetWeights(void)
         mrac_state.x_vel.Whatf[i] = 0.0f;
         mrac_state.y_vel.Whatf[i] = 0.0f;
     }
-    
+    MRAC_PriorWarmStart();
+
     // Snap references to plant state (bumpless) and zero 2nd-order velocity states
     mrac_state.pitch.xm = mrac_state.pitch.x;   mrac_state.pitch.xm_dot  = 0.0f;
     mrac_state.roll.xm  = mrac_state.roll.x;    mrac_state.roll.xm_dot   = 0.0f;
@@ -2228,14 +2234,11 @@ void MRAC_Control(const CtrlerTypeDef* current_state)
 // ------------------------------------------------------------------------------
 // Opt-in sigma-prior accessors (prior-D / ADR-0013 D5, D10)
 // ------------------------------------------------------------------------------
-// Only emitted when MRAC_ENABLE_SIGMA_PRIOR is defined. Critical-section
-// protected against the 200 Hz task-context MRAC_UpdateAxis read of
+// Critical-section protected against the 200 Hz task-context MRAC_UpdateAxis read of
 // Theta_prior[axis_id][:]. The ground-station command dispatch is the
 // intended writer; MRAC_Control/UpdateAxis is the reader. A single-writer /
 // single-reader pair is race-free under a PRIMASK critical section.
 // ---------------------------------------------------------------------------
-#ifdef MRAC_ENABLE_SIGMA_PRIOR
-
 void MRAC_SetPrior(uint8_t axis, const float *arr)
 {
     uint32_t pri;
@@ -2274,7 +2277,49 @@ void MRAC_GetPrior(uint8_t axis, float *out_arr)
     __set_PRIMASK(pri);
 }
 
-#endif /* MRAC_ENABLE_SIGMA_PRIOR */
+/* One element of Theta_prior[axis][]; 0 (nothing written) for a bad axis or index or a non-finite value, else 1. */
+int MRAC_SetPriorElem(uint8_t axis, uint8_t idx, float v)
+{
+    uint32_t pri;
+
+    if ((axis >= (uint8_t)AXES) || (idx >= (uint8_t)MRAC_N_FEATURES) || !isfinite(v)) {
+        return 0;
+    }
+    pri = __get_PRIMASK();
+    __disable_irq();
+    Theta_prior[axis][idx] = v;
+    __set_PRIMASK(pri);
+    return 1;
+}
+
+/* Warm start: Theta = Whatf = Theta_prior, clamped to the projection set, on the axes in mrac_prior_warm, so the
+ * axis starts at the prior equilibrium (sigma_lf term and u_pr zero). Called from MRAC_ResetWeights after the zero
+ * loop (disarm edge, injection rising edge, MRAC_Reset); mrac_prior_warm = 0 (the default) leaves the zeroed weights. */
+void MRAC_PriorWarmStart(void)
+{
+    uint8_t axis;
+    int i;
+
+    for (axis = 0U; axis < (uint8_t)AXES; axis++) {
+        const MRAC_AxisConfig_t *cfg = mrac_cfg_of[axis];
+        MRAC_AxisState_t *st = mrac_st_of[axis];
+
+        if ((((unsigned)mrac_prior_warm >> (unsigned)axis) & 1U) == 0U) {
+            continue;
+        }
+        for (i = 0; i < MAX_NUM_BASIS; i++) {
+            float v = Theta_prior[axis][i];
+
+            if (v > cfg->What_limit[i]) {
+                v = cfg->What_limit[i];
+            } else if (v < cfg->What_lower_limit[i]) {
+                v = cfg->What_lower_limit[i];
+            }
+            st->Theta[i] = v;
+            st->Whatf[i] = v;
+        }
+    }
+}
 
 void MRAC_ZFeatOut(float feat[MRAC_ZFEAT_N], float w[MRAC_ZFEAT_N])
 {
