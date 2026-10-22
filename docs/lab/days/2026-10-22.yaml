@@ -67,7 +67,7 @@ flights:
     pass: "3 s hold and the figure-8 without an L1 abort; rms error within 20 % of pid-alone-ref (PROPOSED)"
   - id: lqr-alone-retest
     fly: lab_e_exp_lqr_u0
-    why: "LQR with the Smith predictor at the measured 21 ticks (10-21 ran the header 33); MRAC injection off"
+    why: "LQR with the Smith predictor at the measured 21 ticks (10-21 ran 12, 9 ticks short); MRAC injection off"
     pass: "no sustained xy oscillation in the hold (peak-to-peak < 10 cm, PROPOSED); figure-8 completes"
   - id: mpc-alone-retest
     fly: lab_e_exp_mpc_u0
