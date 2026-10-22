@@ -1,9 +1,15 @@
-# Lab day 2026-10-22: fly it with `.\labday 2026-10-22` (add `--pack 2` once after a type-2 swap; ground_station/lab/labday.py).
-# `.\labday 2026-10-22 --list` shows what is flown; the same command again goes on from the first flight not flown.
+# Lab day 2026-10-23: fly it with `.\labday 2026-10-23` (add `--pack 2` once after a type-2 swap; ground_station/lab/labday.py).
+# `.\labday 2026-10-23 --list` shows what is flown; the same command again goes on from the first flight not flown.
 # Each flight is `.\fly <fly> --once <args>`; `stop: true` = analysis stop after it. Pass marks are PROPOSED.
 # What changed since 10-21 (docs/research/2026-10-22-d3/-d7/-d8, docs/lab/days/2026-10-21-report.md):
-# - Firmware: the 10-21 flash was 48700fcb. Not flashed yet: 82f4f250 (takeoff-gate mask, c3 robust xy gains default)
-#   and 5486a26b (ADRC observer bandwidth wo 19.36 -> 12, D1). One flash bundles both, so smoke-hover comes first.
+# - Moved from 10-22 (no lab that day): same flights, decided 10-22 (A1-A6 in .claude_state.md).
+# - Firmware: the 10-21 flash was 48700fcb. Not flashed yet: 82f4f250 (takeoff-gate mask, c3 robust xy gains default),
+#   5486a26b (ADRC observer bandwidth wo 19.36 -> 12, D1) and 94aca11f (D8 fix B: mode 3 without the OF EKF runs the
+#   mode-2 camera offset path). One flash bundles all three (operator OK 10-22), so smoke-hover comes first.
+# - Tracker (host only, no flash): 7bea3a7b window grab 45 -> 5.5 ms per frame, 8d395d69 grab thread (fps gain
+#   UNMEASURED live). Both change the true camera latency, so --delay-ms 330 (10-21 screen-flash test) is stale:
+#   re-measure it before the first fusion flight and put the new number in camera.args of all three decks.
+#   Live fps A/B on the pad: one run with --serial-grab, one without; tracker.out has the fps.
 # - Smith delay: every exp script now writes g_xyc_delay_ticks (VAR 47) = 21, the measured loop delay (7c4d7e21).
 #   On 10-21 LQR / MPC ran on the header default XYC_D 33 (330 ms). A predictor longer than the real delay
 #   limit-cycles (2026-10-15 note in API/xy_ctrl.c). That this caused the 10-21 LQR / MPC oscillation is INFERENCE:
@@ -14,7 +20,7 @@
 #   reference" demo, only if adrc-alone-retest is clean.
 # - D8: at speed the OF EKF trips into FIXED and camera mode 3 then stops applying fixes for the rest of the flight.
 #   The fast speed-ladder rungs are in their own deck with camera mode 2 (camera mode is per day):
-#   `.\labday 2026-10-22-fast` (docs/lab/days/2026-10-22-fast.yaml), after this deck.
+#   `.\labday 2026-10-23-fast` (docs/lab/days/2026-10-23-fast.yaml), after this deck.
 # - Figure-8 bandwidth: the x lobe tracks at 0.25 Hz and runs out of bandwidth above it; no flight here goes faster
 #   except the speed-ladder rungs, which test the estimator, not tracking.
 # - Memory A/B: 10-21 has memory on n=5 / off n=3 (off-3, off-5 not flown). Today: 3 off + 2 on, interleaved, gives
@@ -22,19 +28,20 @@
 #   (it changes the c3 robust default and the gate mask): check the diff before pooling, else analyse per day.
 # - carry: false. The 10-21 carry-over would add lqr-plus-mrac and mpc-plus-mrac (MRAC around a mismatched
 #   reference, D3: not flown until fix B) and lqr-track / dense-trajectories (no time today; next day's deck).
-day: 2026-10-22
+day: 2026-10-23
 carry: false
 title: smoke hover on the new flash, memory MRAC on/off balance (3 off, 2 on), ADRC / LQR / MPC alone retests with the 21-tick delay and ADRC wo 12, then the PID reference arm and the controller A/Bs
 camera:                       # camera_truth.sh fusion <id-fly> <mode> <args>, CT_FLOOR=logs/video_truth/<floor>
-  floor: floor-1022           # scan at the lab with drone out of view: .\cam floor floor-1022
+  floor: floor-1023           # scan at the lab with drone out of view: .\cam floor floor-1023
   mode: 3                     # in-EKF, same as 10-21 so the memory A/B pools
   args: [--yaw-deg, "94", --delay-ms, "330"]  # yaw valid only if the drone BOOTS on the pad facing its usual way; delay = 10-21 screen-flash test
 before:
   - "Probe plugged in, drone powered and DISARMED, 8081 stopped (it locks the .axf): `python -m ground_station.flashtool.rebuild_and_flash --yes` (never --force; stop on a non-zero exit)"
   - "After the flash: `python -m ground_station.livewatch verify`, then `python -m pytest ground_station/livewatch/tests/test_campaign_capture.py -q`"
-  - 'Scan floor with drone out of view: `.\cam floor floor-1022`'
+  - 'Scan floor with drone out of view: `.\cam floor floor-1023`'
   - "8081 running, `arm 0`, landing pad clear, camera in the recording position"
   - "Tracker window: the dot sits on the drone center while parked before arming (if not: land, `r`, tell me)"
+  - "Camera delay re-measure (the tracker changed on 10-22): the 10-21 screen-flash test (photon -> tracker read, median of n 60, commit a772d620), once with --serial-grab and once without for the fps A/B; new median + read wait goes in camera.args --delay-ms of all three decks. After smoke-hover, cross-check offline with video_truth.tilt_delay"
 flights:
   - id: smoke-hover
     fly: lab_s_smoke

@@ -37,7 +37,7 @@ Workers: Jules d9b failed; Argon quota 429 until about 10-24 01:30; colab-mcp CO
 ## Next Steps (2026-10-22 lab)
 1. **One service per laptop.** The service binds UDP 14550 with SO_REUSEADDR, so a second service goes deaf without an error (open item `bridge-port-shared-silently`). The stale 8081 was stopped 10-22 06:30; let `labday` start a fresh one.
 2. **Flash** (bundles 82f4f250 gate mask + 5486a26b ADRC wo 12): `python -m ground_station.flashtool.rebuild_and_flash --yes`, then `python -m ground_station.livewatch verify`. The first flight after the flash is `smoke-hover`.
-3. **Fly** `docs/lab/days/2026-10-22.yaml` (13 flights; pack swap at `memory-mrac-on-7`), then `docs/lab/days/2026-10-22-fast.yaml` if time allows.
+3. **Fly** `docs/lab/days/2026-10-23.yaml` (13 flights; pack swap at `memory-mrac-on-7`), then `docs/lab/days/2026-10-23-fast.yaml` if time allows.
 4. **After the day:** `python -m ground_station.analysis.scorecard 2026-10-22`. Check the config column of the report: the 10-21 report shows `pid / gains default / mrac_injection 0` for every exp row (suspected bug, not yet checked).
 
 ## Repo sync log (2026-10-20 04:02 +03:00)
