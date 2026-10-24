@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -74,6 +75,14 @@ NEEDS_ALL_LOOP = "needs mrac-all-loops item 0"
 
 class GroundWriteError(ValueError):
     """A ground write the firmware would refuse, or one that cannot be built. Nothing was sent."""
+
+
+class InputNotReady(GroundWriteError):
+    """The input of a ground write comes from a flight or fit that has not happened yet.
+
+    labday dry-runs every flight before the day starts, so this compiles to a refuse write: the deck parses,
+    and the flight is refused before arming if the input is still missing when it flies. Typos stay errors.
+    """
 
 
 # --------------------------------------------------------------------------- the layer fields
@@ -237,7 +246,7 @@ def load_ref_fit(kind: str, root: str | Path = ".") -> dict[str, Any]:
     """
     path = ref_fit_path(kind, root)
     if not path.is_file():
-        raise GroundWriteError(
+        raise InputNotReady(
             f"mrac_ref from={kind}: no fitted reference at {path} (run: python -m "
             f"ground_station.analysis.mrac_ref_fit <session> --kind {kind})")
     try:
@@ -357,8 +366,31 @@ def prior_writes(session: str, root: str | Path = ".") -> list[dict[str, Any]]:
             for cmd, idx, value in steps]
 
 
+def _latest_session(campaign: str, root: str | Path = ".") -> Path:
+    """The newest logs/sessions dir of a campaign (`latest:<campaign>`): a deck names the prior of a flight that
+    flies earlier the same day, whose session id does not exist yet when the deck is written.
+
+    Session dirs start with the YYYYMMDD-HHMMSS stamp, so the name order is the time order.
+    """
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", campaign or ""):
+        raise GroundWriteError(f"mrac_prior from=latest:{campaign}: expected a campaign name (a-z, 0-9, -)")
+    slug = campaign.replace("_", "-")
+    base = Path(root) / "logs" / "sessions"
+    # <YYYYMMDD-HHMMSS>-<campaign>[-NNN][_fNN_<script>]: the exact campaign, never one that only starts with it.
+    name = re.compile(rf"\d{{8}}-\d{{6}}-(?:lab-[a-z]-)?{re.escape(slug)}(-\d{{3}})?(_.*)?")
+    dirs = base.iterdir() if base.is_dir() else ()
+    hits = sorted(d for d in dirs if name.fullmatch(d.name) and (d / "telemetry.csv").is_file())
+    if not hits:
+        raise InputNotReady(
+            f"mrac_prior from=latest:{campaign}: no session of campaign {campaign} with telemetry.csv in {base} "
+            f"(fly it first)")
+    return hits[-1]
+
+
 def _session_path(session: str, root: str | Path = ".") -> Path:
     """The session dir a session id names: logs/sessions/<id>, logs/campaigns/<id>, or the path as given."""
+    if session.startswith("latest:"):
+        return _latest_session(session[len("latest:"):], root)
     s = Path(session)
     if s.is_dir() and (s / "telemetry.csv").is_file():
         return s

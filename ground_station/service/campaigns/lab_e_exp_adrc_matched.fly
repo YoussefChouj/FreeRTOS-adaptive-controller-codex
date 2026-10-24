@@ -1,0 +1,18 @@
+# adrc_3l matched reference: 3-layer adaptive matrix with xy_layers=inner and mrac_ref from=adrc
+#   (fitted from adrc-alone-retest via `python -m ground_station.analysis.mrac_ref_fit <session> --kind adrc`).
+# Fly it: fly lab_e_exp_adrc_matched --once at >= 15.8 V resting.
+# exp adrc_3l = xy 1, kp 7, vp 16, lim 0, mdec 1, xyrm -1 (overridden by mrac_ref from=adrc).
+campaign lab-e-exp-adrc-matched
+rate 100
+log velocity_loops camera_fusion
+slow 50 nn4 xy_ctrl mrac_3l mrac_theta ekf_states estimator_truth thrust_model optical_flow takeoff_gate mrac_shadow
+exp adrc_3l
+set g_traj_ff_shift_s=0 g_land_xy_gate_cm=10 g_xyc_delay_ticks=21
+xy_layers inner
+mrac_ref from=adrc
+takeoff 0.5
+hold 3
+set traj_p.move_s=12 traj_p.hold_s=1
+preset figure8 f8_a_cm=30
+hold 3
+land

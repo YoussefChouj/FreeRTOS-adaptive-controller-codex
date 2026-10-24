@@ -1208,6 +1208,38 @@ def preapply_exp_id(base, launch_path, flight=0, client=None):
     return v if ok else None
 
 
+def ground_prior_writes(launch_path, flight=0):
+    """The disarmed-only prior writes (`mrac_prior`) of the campaign's flight `flight` (0-based) takeoff `ground`."""
+    from ground_station.service.campaign_schema import load_campaign
+    queue = [e for e in load_campaign(launch_path).experiments for _ in range(e.repeats)]
+    sc = getattr(queue[flight % len(queue)], "scenario", None) if queue else None
+    for st in getattr(sc, "steps", None) or ():
+        if st.kind == "takeoff":
+            return [w for w in st.args.get("ground", ()) if isinstance(w, dict) and w.get("kind") == "prior"]
+    return []
+
+
+def preapply_prior(base, launch_path, flight=0, client=None):
+    """Write the flight's mrac_prior (CMD 0x2F..0x34) while the drone is still disarmed, before wait_for_arm:
+    Cmd_MracPrior has interlock 6 (DISARMED ONLY) and MRAC_GateStep re-seeds Theta_hat on a disarmed tick."""
+    try:
+        from ground_station.service import ground_plan
+        writes = ground_prior_writes(launch_path, flight)
+        if not writes:
+            return True
+        cli = client or HttpWfbClient(base)
+        for w in writes:
+            if not ground_plan.send_write(cli, w):
+                print(f"preapply {ground_plan.write_label(w)}: NOT applied", flush=True)
+                return False
+    except Exception as e:
+        print(f"preapply mrac_prior: {e}", flush=True)
+        return False
+    events.log("prior_preapply", count=len(writes), ok=True)
+    print(f"mrac_prior ({len(writes)} writes) written on the ground before the arm.", flush=True)
+    return True
+
+
 def upload_preload(base, launch_path=None, runner=None):
     """Run trajectory/program upload on the ground BEFORE wait_for_arm() (Fix 2)."""
     if runner is not None:
@@ -1624,6 +1656,7 @@ def fly_loop(base, arg, pack, rate=None, run=None, once=False, yes=False,
         # Fix 2: Trajectory preload on the ground BEFORE wait_for_arm
         upload_preload(base, str(launch))
         preapply_exp_id(base, str(launch), flight=next_i if held else 0)
+        preapply_prior(base, str(launch), flight=next_i if held else 0)
         t_wait = _clock()
         r = wait_for_arm(base, str(launch), go_pack, preflight=not held)
         events.log("arm_wait", result=r, campaign=name, pack=go_pack, s=round(_clock() - t_wait, 1))

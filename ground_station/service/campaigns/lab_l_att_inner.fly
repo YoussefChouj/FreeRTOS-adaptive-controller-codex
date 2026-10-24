@@ -1,0 +1,13 @@
+# L-att (inner): roll multisine (0.5-15 Hz, 60 deg/s, 30 s, PROPOSED) with MRAC injection ON and
+#   `layers att inner` (rate, angle, or both; needs all-loop firmware). Base: lab_d_excite.
+# Fly it: fly lab_l_att_inner --once at >= 15.8 V resting.
+campaign lab-l-att-inner
+rate 200
+log velocity_loops camera_fusion thrust_model
+set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10
+layers att inner
+takeoff 0.5 mrac_injection=1
+hold 8
+excite axis=roll signal=multisine f0=0.5 f1=15 amp=60 duration_s=30
+hold 3
+land

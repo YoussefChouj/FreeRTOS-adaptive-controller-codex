@@ -137,11 +137,16 @@ def test_lab_scripts_compile_log_and_fly_on_the_fake_drone(path):
     assert set(ground) == want
     if "g_xyc_delay_ticks" in ground:  # 10-21 logs: loop delay ~21 ticks; 12 rang LQR/MPC at 0.4-1.5 Hz
         assert ground["g_xyc_delay_ticks"] == MEASURED_XY_DELAY_TICKS
-    drone, _, deps = _rig()
+    from ground_station.service.tests.test_fly_ground_verbs import _mrc_rig
+    drone, _, deps = _mrc_rig()
     if "exp_id" in ground:
         orig_status = deps.status
         deps.status = lambda: {**orig_status(), "exp_active": ground["exp_id"]}
     out = fly_scenario(parse_scenario(exp["scenario"]), deps)
-    assert not out.aborted and out.landed, out.decision
-    key = "exp_id" if "exp_id" in ground else "g_xy_ctrl_kind"
-    assert drone.vars[key] == ground[key]
+    ground_verbs = exp["scenario"]["steps"][0]["takeoff"].get("ground", ())
+    if any(w.get("kind") == "refuse" for w in ground_verbs):
+        assert out.aborted and out.decision.reason.startswith("takeoff refused at REFUSED "), out.decision
+    else:
+        assert not out.aborted and out.landed, out.decision
+        key = "exp_id" if "exp_id" in ground else "g_xy_ctrl_kind"
+        assert drone.vars[key] == ground[key]

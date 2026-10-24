@@ -276,6 +276,13 @@ def copy_tree(dst: Path) -> int:
         t.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(s, t)
         n += 1
+    ref_dir = ROOT / "logs" / "ref_fit"
+    if ref_dir.is_dir():
+        for s in sorted(ref_dir.glob("*.json")):
+            t = dst / "logs" / "ref_fit" / s.name
+            t.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(s, t)
+            n += 1
     return n
 
 

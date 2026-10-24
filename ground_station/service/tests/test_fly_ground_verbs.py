@@ -126,8 +126,21 @@ def test_mrac_ref_writes_the_fitted_x_y_reference_per_axis(tmp_path, monkeypatch
 
 def test_mrac_ref_without_a_fit_file_refuses_the_flight(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    with pytest.raises(fly_file.FlyFileError, match="no fitted reference"):
-        _scenario("mrac_ref from=lqr\nhold 3\n")
+    writes = _scenario("mrac_ref from=lqr\nhold 3\n")["steps"][0]["takeoff"]["ground"]
+    assert writes[0]["kind"] == "refuse"
+    assert writes[0]["field"] == "ref_fit:lqr"
+    assert "no fitted reference" in writes[0]["reason"]
+
+
+def test_mrac_ref_without_a_fit_file_refuses_at_run_time(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _, _, deps = _mrc_rig()
+    sent = []
+    deps.client.mrac_variant = lambda *a, **k: sent.append(a) or True
+    out = fly_scenario(parse_scenario(_scenario("mrac_ref from=lqr\nhold 2\n")), deps)
+    assert out.aborted
+    assert out.decision.reason.startswith("takeoff refused at REFUSED ref_fit:lqr")
+    assert sent == []
 
 
 def test_mrac_ref_refuses_a_value_outside_the_firmware_range(tmp_path, monkeypatch):
@@ -181,6 +194,46 @@ def test_mrac_prior_reads_the_theta_columns_of_a_session(tmp_path, monkeypatch):
     warm = [w for w in writes if w["idx"] == 0xF2 and w["axis"] == "pitch"]
     assert warm and warm[0]["value"] == 1.0
     assert writes.index(warm[0]) > 1
+
+
+def _session(root: Path, name: str, theta: float) -> None:
+    d = root / "logs" / "sessions" / name
+    d.mkdir(parents=True)
+    rows = ["received_ns,slot,key,value", f"0,1,mrac_state.pitch.Theta[0],{theta}"]
+    (d / "telemetry.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+
+def test_mrac_prior_latest_takes_the_newest_session_of_that_campaign(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _session(tmp_path, "20261024-101500-lab-p-pattern-learn-001_f05_lab_p_pattern_learn", 0.1)
+    _session(tmp_path, "20261024-113000-lab-p-pattern-learn-002_f09_lab_p_pattern_learn", 0.2)
+    # A longer campaign name that starts with the same words is a different campaign: never picked.
+    _session(tmp_path, "20261024-120000-lab-p-pattern-learn-x-001", 0.9)
+    (tmp_path / "logs" / "sessions" / "20261024-130000-lab-p-pattern-learn-003").mkdir()  # no telemetry.csv
+    writes = _scenario("mrac_prior from=latest:lab-p-pattern-learn\nhold 3\n")["steps"][0]["takeoff"]["ground"]
+    assert writes[0] == {"kind": "prior", "axis": "pitch", "idx": 0, "value": pytest.approx(0.2)}
+
+
+def test_mrac_prior_latest_without_a_flown_session_is_refused(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    writes = _scenario("mrac_prior from=latest:lab-p-pattern-learn\nhold 3\n")["steps"][0]["takeoff"]["ground"]
+    assert writes[0]["kind"] == "refuse"
+    assert writes[0]["field"] == "prior:latest:lab-p-pattern-learn"
+    assert "fly it first" in writes[0]["reason"]
+
+
+def test_mrac_prior_latest_needs_a_campaign_name(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(fly_file.FlyFileError, match="expected a campaign name"):
+        _scenario("mrac_prior from=latest:../x\nhold 3\n")
+
+
+# --------------------------------------------------------------------------- pattern
+
+
+def test_pattern_compiles_comma_separated_axes():
+    steps = _scenario("hold 3\npattern layer=outer speed=slow axes=x,y periods=1\n")["steps"]
+    assert steps[2]["pattern"] == {"layer": "outer", "speed": "slow", "axes": ["x", "y"], "periods": 1}
 
 
 # --------------------------------------------------------------------------- step

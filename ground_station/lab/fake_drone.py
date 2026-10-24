@@ -27,15 +27,15 @@ import time
 from dataclasses import dataclass
 
 from ground_station.lab import events
-from ground_station.livewatch.campaign_capture import ATTITUDE, KF_HEALTH, MOTORS, POSITION_AXES, WFB_STATUS_FIELDS
+from ground_station.livewatch.campaign_capture import ATTITUDE, KF_HEALTH, MOTORS, POSITION_AXES, SEND_TASK_HZ, WFB_STATUS_FIELDS
 from ground_station.livewatch.transport import crc16_ccitt
 from ground_station.platform.transactions import Command, Outcome, RejectReason, Result, build_command, build_result, parse_command
 from ground_station.platform.wfb_commands import CMD_ARM, ArmIdx
 from ground_station.service.campaign_live import VBAT_SYMS
-from ground_station.service.fake_drone import FakeDrone
+from ground_station.service.fake_drone_mrac import MrcFakeDrone as FakeDrone
 
-DT = 0.01                  # Send_Task period: SEND_TASK_MEASURED_HZ 100
-JUSTFLOAT_EVERY = 10       # ticks between fallback frames (10 Hz)
+DT = 1.0 / SEND_TASK_HZ    # Send_Task period: matches campaign_capture.SEND_TASK_HZ
+JUSTFLOAT_EVERY = SEND_TASK_HZ // 10  # ticks between fallback frames (10 Hz)
 SAG_V_PER_S = 0.005        # fake: about 0.65 V over a 130 s flight
 ARM_SYM = "DroneStatus.ARM_Status"
 MOTOR_STANDIN = 3000.0     # armed motor output: mid of the abort monitor's saturation band (2005, 3995); not a measured

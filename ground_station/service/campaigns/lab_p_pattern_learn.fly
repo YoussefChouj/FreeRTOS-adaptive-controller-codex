@@ -1,0 +1,16 @@
+# P1/3 pattern-learn: pid_3l with MRAC injection OFF (learning ON) during a slow outer x,y Schroeder pattern
+#   (CMD 0x2E, 1 period = excite_patterns default, PROPOSED), then figure-8. Seeds Theta for lab_p_prior_warm.
+# Fly it: fly lab_p_pattern_learn --once at >= 15.8 V resting.
+campaign lab-p-pattern-learn
+rate 100
+log velocity_loops camera_fusion
+slow 50 nn4 xy_ctrl mrac_3l mrac_theta ekf_states estimator_truth thrust_model optical_flow takeoff_gate mrac_shadow
+exp pid_3l
+set g_traj_ff_shift_s=0 g_land_xy_gate_cm=10 g_xyc_delay_ticks=21
+takeoff 0.5 mrac_injection=0
+hold 3
+pattern layer=outer speed=slow axes=x,y periods=1
+set traj_p.move_s=12 traj_p.hold_s=1
+preset figure8 f8_a_cm=30
+hold 3
+land

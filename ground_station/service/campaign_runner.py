@@ -421,8 +421,10 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
             for name, v in st.args.get("set", ()):
                 cmds.append((f"set {name}", lambda name=name, v=v: _send_set(name, v)))
             # The ground writes of the .fly verbs (layers, mrac_ref, mrac_prior): CMD 0x1D / 0x2F..0x34 on the ground,
-            # before the VAR_WRITEs, in the order the script wrote them.
+            # after the VAR_WRITEs (the exp row latches g_xy_ctrl_kind first; Gate W), in the order the script wrote them.
             for write in st.args.get("ground", ()):
+                if write.get("kind") == "prior" and not deps.agent_arms and deps.status().get("arm") == 1:
+                    continue  # Cmd_MracPrior is disarmed-only; campaign_fly.preapply_prior sent it before wait_for_arm
                 label = ground_plan.write_label(write)
                 cmds.append((label, lambda w=write: ground_plan.send_write(deps.client, w)))
             cmds.append(("set_hover_z", lambda: deps.client.set_hover_z(scenario.hover_z_m)))

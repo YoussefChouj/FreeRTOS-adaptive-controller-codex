@@ -42,7 +42,14 @@ from typing import Any
 import yaml
 
 from ground_station.service.campaign_launch import ROOT, write_launch_copy
-from ground_station.service.ground_plan import GroundWriteError, layer_write, prior_writes, ref_writes
+from ground_station.service.ground_plan import (
+    GroundWriteError,
+    InputNotReady,
+    layer_write,
+    prior_writes,
+    ref_writes,
+    refusing_write,
+)
 
 FLY_DIR = ROOT / "logs" / "campaigns" / "fly"  # compiled campaign yaml of each .fly file (the launch template)
 DEFAULT_TAKEOFF_Z = 0.5  # operator 2026-10-14: fly-up z stays 0.5 m
@@ -119,7 +126,10 @@ def _ground_verb(word: str, rest: list[str], where: str, problems: list[str]) ->
         if not isinstance(kind, str):
             problems.append(f"{where}: expected mrac_ref from=<kind>")
             return []
-        return ref_writes(kind)
+        try:
+            return ref_writes(kind)
+        except InputNotReady as e:
+            return [refusing_write(str(e), f"ref_fit:{kind}")]
     if word == "mrac_prior":
         fields = _pairs(rest, where, problems)
         session = fields.pop("from", None)
@@ -129,7 +139,10 @@ def _ground_verb(word: str, rest: list[str], where: str, problems: list[str]) ->
         if not isinstance(session, str):
             problems.append(f"{where}: expected mrac_prior from=<session>")
             return []
-        return prior_writes(session)
+        try:
+            return prior_writes(session)
+        except InputNotReady as e:
+            return [refusing_write(str(e), f"prior:{session}")]
     return []
 
 
@@ -222,6 +235,8 @@ def compile_fly(text: str, src: str = "<fly>") -> tuple[dict[str, Any], list[int
                 continue
         elif kind == "preset":
             fields = {**{k.split(".", 1)[1]: v for k, v in sticky.items()}, **fields}
+        elif kind in ("pattern", "livetune") and isinstance(fields.get("axes"), str):
+            fields["axes"] = [a.strip() for a in fields["axes"].split(",") if a.strip()]
         steps.append({kind: fields})
         lines.append(n)
 

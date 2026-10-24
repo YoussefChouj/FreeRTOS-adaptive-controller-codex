@@ -1,0 +1,17 @@
+# L-yaw (outer): heading setpoint steps (three 30 deg / 3 s steps, PROPOSED) from matrix hold with
+#   `layers yaw outer` (yaw rate, yaw angle, or both; needs all-loop firmware).
+# Fly it: fly lab_l_yaw_outer --once at >= 15.8 V resting.
+campaign lab-l-yaw-outer
+rate 100
+log velocity_loops camera_fusion
+slow 50 nn4 xy_ctrl mrac_3l mrac_theta ekf_states estimator_truth thrust_model optical_flow takeoff_gate mrac_shadow
+exp pid_3l
+set g_traj_ff_shift_s=0 g_land_xy_gate_cm=10 g_xyc_delay_ticks=21
+layers yaw outer
+takeoff 0.5
+hold 3
+step axis=yaw delta=30 hold=3
+step axis=yaw delta=-30 hold=3
+step axis=yaw delta=30 hold=3
+hold 3
+land

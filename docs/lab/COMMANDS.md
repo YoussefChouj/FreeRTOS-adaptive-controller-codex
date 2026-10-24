@@ -331,18 +331,48 @@ failed = mrac_prior.send(HttpWfbClient("http://127.0.0.1:8081"), steps)   # [] =
 ### 4.5 MRAC x/y layers, D4 (needs the item-5 build flashed, CMD 0x1D field 31)
 
 Pick which x/y MRAC layers fly: 1 inner only (boot), 2 outer only, 3 both, 0 neither. Send it on the ground; it is
-a target, and the ground latch makes it live from the next takeoff (a reboot goes back to 1). No public sender or
-descriptor knob exists yet (open-items `xy-layers-sender`), so the raw frame, with the service on 8081:
+a target, and the ground latch makes it live from the next takeoff (a reboot goes back to 1). With the service on 8081:
 
 ```python
-from ground_station.analysis.mrac_variants import variant_idx
 from ground_station.service.campaign_fly import HttpWfbClient
-ok = HttpWfbClient("http://127.0.0.1:8081")._send_cmd(0x1D, variant_idx(4, 31), 2.0)   # 0xBE, outer only; True = APPLIED
+c = HttpWfbClient("http://127.0.0.1:8081")
+c.mrac_xy_layers("outer")                                  # "none" / "inner" / "outer" / "both"; True = APPLIED
+c.mrac_variant("roll", "basis", 3)                         # any CMD 0x1D knob: axis name or 0..5, field name or number
 ```
 
+- A value the firmware would refuse raises `ValueError` before anything is sent; the firmware's own answer
+  (refused, or no reply) comes back as `False`.
 - Readback: `mrac_xy_layers` (target) and `mrac_xy_layers_live` (flying); the outer state is `mrac_pos[0..1]`.
 - Outer row values bw / zeta are PROPOSED (spec item 5): rerun the research sim before an outer flight.
-- This path is UNVERIFIED on the drone (host tests only).
+- The x/y layer target path is UNVERIFIED on the drone (host tests only).
+
+### 4.6 MRAC `.fly` ground verbs, reference fit and layer A/B (2026-10-24)
+
+In a `.fly` script (`ground_station/service/fly_file.py`), ground verbs go before `takeoff`:
+
+```text
+layers xy both                              # groups: xy, att, yaw, z; targets: inner, outer, both, off
+xy_layers inner                             # alias of `layers xy inner`
+mrac_ref from=lqr                           # loads logs/ref_fit/lqr.json (ref_type, ref_model_bw, ref_delay_s[, ref_model_zeta])
+mrac_prior from=latest:lab-p-pattern-learn  # seeds Theta from the newest session of that campaign (or an explicit session id)
+takeoff 0.5
+hold 3
+pattern layer=outer speed=slow axes=x,y periods=1
+step axis=z delta=0.15 hold=3               # CMD 0x1C onboard program step (axes: z in m, yaw in deg)
+land
+```
+
+Fit the x/y reference model from an alone-retest shadow session (`logs/ref_fit/<kind>.json`):
+
+```powershell
+python -m ground_station.analysis.mrac_ref_fit <session> --kind lqr
+```
+
+Compare MRAC layer arms against a reference arm on tracking, step response, control effort, multisine margins and hold oscillation:
+
+```powershell
+python -m ground_station.analysis.layer_ab 2026-10-24 --arms xy-layer-inner,xy-layer-outer,xy-layer-both --ref xy-layer-inner
+```
 
 ## 5. Ground service 8081
 
