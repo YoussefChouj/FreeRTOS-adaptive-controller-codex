@@ -3,6 +3,8 @@
 # Every step runs even after a failure; exit 1 if any step failed. No Keil, no flash, no hardware.
 #   host-tests   every host C test of API/tests and tests/firmware_host (tools/host_tests.py)
 #   mrac-equiv   MRAC bit-exact equivalence vs the reference tree (API/tests/run_mrac_equiv.py)
+#   all-loop-equiv  the all-loop MRAC layers off = today's output, bit for bit, in API/mrac.c and
+#                TASK/StabilizerTask.c (API/tests/run_all_loop_equiv.py; spec 2026-10-24 item 1)
 #   c-pytest     pytest suites that compile firmware C (subscribe harness, MRAC variants) + tools tests
 #   sil-smoke    sim/sil/test_sil.py, the firmware controllers in the closed-loop SIL (its EQUIV case is mrac-equiv), and
 #                sim/sil/test_faults.py, wfb_safety trips on SIL faults; 4 pytest processes at once (sil_smoke)
@@ -14,7 +16,7 @@
 #   doc-paths    every repo path and file:line in the agent-facing docs exists (tools/doc_paths.py)
 #   arm-syntax   arm-none-eabi-gcc -fsyntax-only on the same files; SKIPPED if not installed
 # Subset while iterating: bash tools/check.sh doc-paths fw-lint (step names as above), or --fast for every step
-# except host-tests, mrac-equiv and sil-smoke (each prints its time). A subset ends with
+# except host-tests, mrac-equiv, all-loop-equiv and sil-smoke (each prints its time). A subset ends with
 # "CHECK SUBSET PASS"; a run of every step (no arguments, or a routed set that is all of them) prints CHECK PASS,
 # and that is the one a merge needs.
 #   --changed       run only the steps this branch's diff requires (tools/check_routes.txt), the routed subset
@@ -44,7 +46,7 @@ else
 fi
 PYTEST=("$PY" -m pytest -q -p no:cacheprovider)
 
-ALL=" host-tests mrac-equiv c-pytest sil-smoke clang-tidy float row-meta fw-lint stack doc-paths arm-syntax doc-budget "
+ALL=" host-tests mrac-equiv all-loop-equiv c-pytest sil-smoke clang-tidy float row-meta fw-lint stack doc-paths arm-syntax doc-budget "
 
 # --changed: pick the steps the files in this branch's diff require, so an edit pays for its own verification and
 # not for the whole gate. The route table is tools/check_routes.txt (one row: <git pathspec> <steps>); a changed file
@@ -209,6 +211,7 @@ doc_budget() {
 
 step host-tests "$PY" tools/host_tests.py
 step mrac-equiv "$PY" API/tests/run_mrac_equiv.py
+step all-loop-equiv "$PY" API/tests/run_all_loop_equiv.py
 step c-pytest   pytest_step ground_station/livewatch/tests/test_subscribe_c.py \
                 ground_station/analysis/tests/test_mrac_variants_host.py tools/test_row_meta.py \
                 tools/test_install_hooks.py tools/test_check_routes.py tools/test_push_guard.py \

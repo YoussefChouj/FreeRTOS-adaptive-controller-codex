@@ -8,14 +8,14 @@
 #   * a/** matches that directory and everything under it; * matches one segment; *.c matches that extension.
 
 # --- Flight-critical firmware: compiled C. Anything here needs a compiler, so it needs the full C gate.
-API/**            host-tests float clang-tidy mrac-equiv row-meta fw-lint
+API/**            host-tests float clang-tidy mrac-equiv all-loop-equiv row-meta fw-lint
 BSP/**            host-tests float clang-tidy row-meta fw-lint
-TASK/**           host-tests float clang-tidy row-meta fw-lint
+TASK/**           host-tests float clang-tidy mrac-equiv all-loop-equiv row-meta fw-lint
 USER/**           host-tests float clang-tidy row-meta fw-lint
 Global_file/**    host-tests float clang-tidy row-meta fw-lint
 firmware/**       host-tests float clang-tidy row-meta fw-lint
 NN/**             host-tests float clang-tidy row-meta fw-lint
-API/tests/**      host-tests mrac-equiv
+API/tests/**      host-tests mrac-equiv all-loop-equiv
 
 # --- Host-side and offline: Python, SIL, ground station. No ARM toolchain needed.
 sim/**            c-pytest sil-smoke

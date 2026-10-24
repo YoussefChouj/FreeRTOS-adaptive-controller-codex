@@ -27,7 +27,7 @@ ROUTES = REPO / "tools" / "check_routes.txt"
 
 # Step order from check.sh's ALL; the union is emitted in this order, not in table order.
 STEP_ORDER = [
-    "host-tests", "mrac-equiv", "c-pytest", "sil-smoke", "clang-tidy", "float", "row-meta", "fw-lint",
+    "host-tests", "mrac-equiv", "all-loop-equiv", "c-pytest", "sil-smoke", "clang-tidy", "float", "row-meta", "fw-lint",
     "stack", "doc-paths", "arm-syntax", "doc-budget",
 ]
 ALWAYS = {"doc-paths", "doc-budget"}
