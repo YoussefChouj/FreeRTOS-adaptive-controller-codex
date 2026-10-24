@@ -224,6 +224,19 @@ def test_live_capture_applies_plan_once_and_records_per_flight():
     svc.bridge.subscribe_slot.assert_not_called()
 
 
+def test_live_capture_lab_cap_spares_excite_cards_only():
+    svc = FakeRecService(lab_mode=True)
+    begin, _ = live_capture_hooks(svc, max_rate_hz=25.0)
+    plan = {"rate_hz": 200, "groups": ["velocity_loops"]}
+    hover = SimpleNamespace(name="hover", log_plan=plan, scenario=SimpleNamespace(steps=[SimpleNamespace(kind="hold")]))
+    sysid = SimpleNamespace(name="sysid", log_plan=plan, scenario=SimpleNamespace(
+        steps=[SimpleNamespace(kind="takeoff"), SimpleNamespace(kind="excite")]))
+    begin(hover, "f-001")
+    begin(sysid, "f-002")
+    notes = [c[1]["notes"] for c in svc.calls if c[0] == "start"]
+    assert "rate 25 Hz" in notes[0] and "rate 200 Hz" in notes[1]
+
+
 def test_live_capture_lab_mode_stops_plan_slots_after_each_flight():
     svc = FakeRecService(lab_mode=True)
     begin, end = live_capture_hooks(svc)

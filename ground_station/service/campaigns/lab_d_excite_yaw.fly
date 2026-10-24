@@ -4,7 +4,7 @@
 # python -m ground_station.autotune.cli <session> --axis yaw. Plan: docs/lab/2026-10-24-prep-report.md
 campaign lab-d-excite-yaw
 # rate 200 = the ceiling: in SUBSCRIBE_ONLY the firmware stream ticks at 200 Hz (SEND_TASK_HZ, campaign_capture.py:353);
-# 13x the 15 Hz top line. The live probe may still lower it if the link loses frames. thrust_model adds
+# 13x the 15 Hz top line. Lab mode keeps it (campaign_live.keeps_full_rate); no live probe yet. thrust_model adds
 # u_gyrox/u_gyroy/u_gyroz (rate PID output = Uc for the frequency response); the core set has gyro PID .FB/.Des + motors.
 rate 200
 log velocity_loops camera_fusion thrust_model

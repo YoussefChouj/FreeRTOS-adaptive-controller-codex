@@ -513,6 +513,13 @@ LAB_PLAN_MAX_HZ = 25.0
 LAB_STATUS_HZ = 10.0       # = 100 Hz / WifiBridge.LAB_SLOT0_DIVIDER
 
 
+def keeps_full_rate(exp: Any) -> bool:
+    """An excite (sysid) card keeps its own plan rate in lab mode: 25 Hz is under Nyquist for its 15 Hz top line
+    (operator 10-24). Its command replies ride on the longer sysid wait + resends (ac41cce0) instead of the cap."""
+    steps = getattr(getattr(exp, "scenario", None), "steps", None) or ()
+    return any(getattr(st, "kind", "") == "excite" for st in steps)
+
+
 def live_capture_hooks(service: Any, controller: str = "pid", max_rate_hz: float | None = None,
                        ) -> tuple[Callable[[Any, str], Any], Callable[[Any], str]]:
     """RunnerDeps begin_capture / end_capture for the live link (decision 8).
@@ -525,7 +532,7 @@ def live_capture_hooks(service: Any, controller: str = "pid", max_rate_hz: float
     applied: dict[str, Any] = {"steps": None, "slots": MAX_SLOTS}
 
     def begin(exp: Any, flight_id: str) -> str:
-        plan = plan_capture(exp.log_plan or None, max_rate_hz=max_rate_hz)
+        plan = plan_capture(exp.log_plan or None, max_rate_hz=None if keeps_full_rate(exp) else max_rate_hz)
         steps = subscribe_steps(plan)
         if len(steps) < MAX_SLOTS:   # leave slot 0 to the bridge's dashboard auto-subscribe (its watchdog re-sends
             for step in steps:       # the dashboard layout there; xyz-f1 2026-10-13 died "slot 0: no schema yet")
