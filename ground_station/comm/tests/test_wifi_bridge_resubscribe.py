@@ -306,3 +306,32 @@ def test_first_datagram_is_not_a_link_back(bridge, monkeypatch):
     b, clock, resent = _link_back_bridge(bridge, monkeypatch)
     b._note_wifi_rx(clock[0])
     assert resent == []
+
+
+def test_resend_slot_restores_telemetry_mode_first(bridge, monkeypatch):
+    """10-24: after a pack swap the FC booted in its 100 Hz mixed mode; resend_slot sent only the slot,
+    so slot 0 (divider 20, sized for 200 Hz) streamed at 5 Hz and pattern-learn preflight starved."""
+    b, _sent, _clock = bridge
+    calls = []
+    mode = next(m for m, idx in b._TELEMETRY_MODE_INDEX.items() if idx == 102)
+    b._desired_telemetry_mode = mode
+    b._wifi = object()
+    b._slot_requests = {0: (10.0, b"req0", ())}
+    monkeypatch.setattr(b, "_request_is_stale", lambda slot: False)
+    monkeypatch.setattr(b, "_send_cmd_frame", lambda cmd, idx, val: calls.append(("mode", cmd, idx)))
+    monkeypatch.setattr(b, "_send_request_paced", lambda req: calls.append(("slot", req)))
+    assert b.resend_slot(0) is True
+    assert calls == [("mode", 0x0F, 102), ("slot", b"req0")]
+
+
+def test_resend_slot_without_a_desired_mode_sends_only_the_slot(bridge, monkeypatch):
+    b, _sent, _clock = bridge
+    calls = []
+    b._desired_telemetry_mode = None
+    b._wifi = object()
+    b._slot_requests = {0: (10.0, b"req0", ())}
+    monkeypatch.setattr(b, "_request_is_stale", lambda slot: False)
+    monkeypatch.setattr(b, "_send_cmd_frame", lambda *a: calls.append("mode"))
+    monkeypatch.setattr(b, "_send_request_paced", lambda req: calls.append(("slot", req)))
+    assert b.resend_slot(0) is True
+    assert calls == [("slot", b"req0")]

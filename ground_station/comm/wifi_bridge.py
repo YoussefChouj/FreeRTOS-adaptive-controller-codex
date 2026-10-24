@@ -670,6 +670,11 @@ class WifiBridge:
         if self._request_is_stale(slot):
             return self._heal_slot(slot, "resend asked for after an axf change")
         try:
+            if self._desired_telemetry_mode is not None and self._wifi is not None:
+                # A rebooted FC is back in its boot-default mode (100 Hz base, legacy frames on the
+                # same UART), so the slot's divider would give half rate. Same idempotent mode
+                # resend as the fresh-subscribe path (API/subscribe.c SetTelemetryMode keeps slots).
+                self._send_cmd_frame(0x0F, self._TELEMETRY_MODE_INDEX[self._desired_telemetry_mode], 0.0)
             self._send_request_paced(req_bytes)
         except OSError as e:
             print(f"[wifi_bridge] Warning: resend_slot({slot}) failed: {e}",
