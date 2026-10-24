@@ -874,6 +874,10 @@ def dry_run(campaign, pack=None, rate=None, gains=None, no_gains=False,
             else:
                 desc = f"args = {args}"
             print(f"  {i}. {st.kind:<8} : {desc}")
+            # Ground writes before arming, one line each, so a REFUSED one (missing firmware field) shows on the dry run.
+            from ground_station.service.ground_plan import write_label
+            for w in (args.get("ground") or []) if st.kind == "takeoff" else []:
+                print(f"       ground : {write_label(w)}")
     else:
         print("Scenario plan: empty")
 

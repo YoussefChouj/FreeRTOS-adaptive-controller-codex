@@ -10,6 +10,9 @@ Each write is one of:
       one CMD 0x1D MRAC_VARIANT write (the firmware refuses it while airborne).
   {"kind": "prior", "axis": <axis name>, "idx": <int>, "value": <float>}
       one CMD 0x2F..0x34 MRAC_PRIOR write (disarmed only).
+  {"kind": "refuse", "reason": <str>, "field": <field name>}
+      nothing is sent: the firmware lacks the field, so the flight is refused on the ground at run time, naming
+      the field. It passes the parse, so the rest of the deck still flies (never drop a flight).
 
 Where the field NUMBERS come from (never typed here):
 
@@ -173,31 +176,50 @@ def layer_fields() -> dict[str, int]:
     return out
 
 
-def layer_field(group: str) -> int:
-    """The CMD 0x1D field number of a layer group.
+def layer_field(group: str) -> int | None:
+    """The CMD 0x1D field number of a layer group, or None when the firmware contract does not carry it.
 
-    Raises GroundWriteError naming the field when the firmware does not have it yet: the all-loop build adds
-    the att / yaw / z fields, and until the contract carries them those groups are refused with the note
-    "needs mrac-all-loops item 0". The failure is loud (the flight does not take off) and it names the field,
-    so the deck can keep the flight and the operator knows what waits for it.
+    None is NOT an error: the all-loop build adds the att / yaw / z fields, and until the contract carries
+    them those groups are refused on the GROUND (layer_write), naming the field, so the flight stays in the
+    deck. An unknown group name is a typo in the .fly file and still raises.
     """
     g = LAYER_ALIASES.get(group, group)
     if g not in LAYER_GROUPS:
         raise GroundWriteError(f"unknown layer group {group!r} (known: {', '.join(LAYER_GROUPS)})")
-    fields = layer_fields()
-    if g not in fields:
-        raise GroundWriteError(
-            f"layers {g}: field {g}_layers is missing from the firmware contract ({NEEDS_ALL_LOOP})")
-    return fields[g]
+    return layer_fields().get(g)
 
 
 def layer_write(group: str, target: str) -> dict[str, Any]:
-    """The ground write that sets one layer group to inner/outer/both/off."""
+    """The ground write that sets one layer group to inner/outer/both/off.
+
+    A group whose field the firmware contract does not carry yet (the all-loop build adds att / yaw / z)
+    gives the refusing write: the flight stays in the deck and is refused on the ground, naming the field.
+    """
     t = str(target).strip().lower()
     if t not in LAYER_TARGETS:
         raise GroundWriteError(f"layers {group}: target must be one of {', '.join(sorted(set(LAYER_TARGETS)))}, "
                                f"got {target!r}")
-    return {"kind": "variant", "axis": 0, "field": layer_field(group), "value": float(LAYER_TARGETS[t])}
+    g = LAYER_ALIASES.get(group, group)
+    field = layer_field(group)
+    if field is None:
+        return refusing_write(
+            f"layers {g}: field {g}_layers is missing from the firmware contract ({NEEDS_ALL_LOOP})",
+            f"{g}_layers")
+    if field >= 32:
+        # Axis 0 packs the field in 5 bits of the idx byte (send_write), so field 32+ has no encoding there yet.
+        return refusing_write(
+            f"layers {g}: field {g}_layers = {field} has no CMD 0x1D encoding on axis 0 yet "
+            f"(needs the mrac-all-loops item 1 wire format)", f"{g}_layers")
+    return {"kind": "variant", "axis": 0, "field": field, "value": float(LAYER_TARGETS[t])}
+
+
+def refusing_write(reason: str, field: str) -> dict[str, Any]:
+    """A ground write the host refuses on the ground at run time: the flight stays in the deck, nothing is sent.
+
+    It passes the parse (check_write), so one missing firmware field never stops the whole deck. When the runner
+    reaches it, send_write returns False and the flight is refused before arming, with the field in the label.
+    """
+    return {"kind": "refuse", "reason": str(reason), "field": str(field)}
 
 
 # --------------------------------------------------------------------------- the fitted reference
@@ -408,6 +430,10 @@ def check_write(write: Mapping[str, Any]) -> None:
         from ground_station.platform import mrac_prior as mp
 
         mp.check(str(write.get("axis")), int(write.get("idx", -1)), float(write.get("value", 0.0)))
+    elif kind == "refuse":
+        # Valid at parse time on purpose (refusing_write): it is refused on the ground when the flight runs.
+        if not str(write.get("field") or "") or not str(write.get("reason") or ""):
+            raise GroundWriteError("refuse: needs a field and a reason")
     else:
         raise GroundWriteError(f"unknown ground write {kind!r}")
 
@@ -421,6 +447,8 @@ def write_label(write: Mapping[str, Any]) -> str:
         return f"variant {mv.AXES[axis]} {field_name(field)} = {write['value']:g}"
     if write.get("kind") == "prior":
         return f"prior {write.get('axis')} [{write.get('idx')}] = {write.get('value')}"
+    if write.get("kind") == "refuse":
+        return f"REFUSED {write.get('field')}: {write.get('reason')}"
     return str(write)
 
 
@@ -432,6 +460,9 @@ def send_write(client: Any, write: Mapping[str, Any], tries: int = 3) -> bool:
     from ground_station.analysis import mrac_variants as mv
 
     kind = write.get("kind")
+    if kind == "refuse":
+        # Nothing is sent: the runner aborts this flight on the ground, and its label (write_label) names the field.
+        return False
     for _ in range(max(1, tries)):
         if kind == "variant":
             axis, field = int(write["axis"]), int(write["field"])

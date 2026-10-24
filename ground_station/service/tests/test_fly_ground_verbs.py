@@ -66,11 +66,23 @@ def test_layers_targets_are_the_firmware_layer_bits(target, value):
 
 def test_layers_group_without_a_contract_field_is_refused_with_the_all_loop_hint():
     # att / yaw / z layer fields come with the all-loop firmware; the contract does not carry them yet.
-    # The refusal is loud and names the field: the flight stays in the deck, it does not take off.
-    with pytest.raises(fly_file.FlyFileError, match="needs mrac-all-loops item 0"):
-        _scenario("layers att both\nhold 3\n")
-    with pytest.raises(fly_file.FlyFileError, match="att_layers"):
-        _scenario("layers att both\nhold 3\n")
+    # The refusal is loud and names the field: the flight stays in the deck (it parses), it does not take off.
+    write = _scenario("layers att both\nhold 3\n")["steps"][0]["takeoff"]["ground"][0]
+    assert write["kind"] == "refuse"
+    assert write["field"] == "att_layers"
+    assert "needs mrac-all-loops item 0" in write["reason"]
+    assert ground_plan.write_label(write).startswith("REFUSED att_layers")
+
+
+def test_a_missing_field_refuses_only_its_flight_at_run_time():
+    # Never drop a flight: the deck parses, and on the fake drone the flight is refused on the ground, unsent.
+    _, _, deps = _mrc_rig()
+    sent = []
+    deps.client.mrac_variant = lambda *a, **k: sent.append(a) or True
+    out = fly_scenario(parse_scenario(_scenario("layers att both\nhold 2\n")), deps)
+    assert out.aborted
+    assert out.decision.reason.startswith("takeoff refused at REFUSED att_layers")
+    assert sent == []
 
 
 def test_layers_unknown_group_or_target_is_refused():
@@ -288,7 +300,8 @@ def test_a_contract_named_field_is_used_by_the_layers_verb(monkeypatch):
     fc = ground_plan._contract_module()
 
     monkeypatch.setattr(fc, "MRAC_LAYER_FIELDS", {"att_layers": 32}, raising=False)
-    steps = _scenario("layers att both\nhold 3\n")["steps"]
-    assert steps[0]["takeoff"]["ground"] == [
-        {"kind": "variant", "axis": 0, "field": 32, "value": 3.0}
-    ]
+    write = _scenario("layers att both\nhold 3\n")["steps"][0]["takeoff"]["ground"][0]
+    # Field 32+ has no CMD 0x1D idx encoding on axis 0 (5-bit field), so it is refused on the ground, not crashed
+    # inside send_write, until the mrac-all-loops item 1 wire format lands.
+    assert write["kind"] == "refuse" and write["field"] == "att_layers"
+    assert "item 1 wire format" in write["reason"]
