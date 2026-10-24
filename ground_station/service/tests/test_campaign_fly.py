@@ -1198,3 +1198,14 @@ def test_http_client_mrac_prior_posts_the_axis_id_and_refuses_locally(monkeypatc
     with pytest.raises(mrac_prior.PriorError):
         client.mrac_prior("x", mrac_prior.IDX_SIGMA, -1.0)
     assert len(sent) == 1
+
+
+def test_gates_off_sets_level1_false_and_keeps_other_abort_keys(tmp_path):
+    import yaml
+    p = tmp_path / "launch.yaml"
+    p.write_text(yaml.safe_dump({"campaign": "x", "abort": {"tilt_deg": 15.0}}), encoding="utf-8")
+    assert campaign_fly.gates_off(p) == p
+    assert yaml.safe_load(p.read_text(encoding="utf-8"))["abort"] == {"tilt_deg": 15.0, "level1": False}
+    q = tmp_path / "bare.yaml"
+    q.write_text(yaml.safe_dump({"campaign": "y"}), encoding="utf-8")
+    assert yaml.safe_load(campaign_fly.gates_off(q).read_text(encoding="utf-8"))["abort"] == {"level1": False}

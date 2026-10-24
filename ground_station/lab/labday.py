@@ -133,10 +133,11 @@ def day_path(date):
     return p if p.suffix in (".yaml", ".yml") else DAYS_DIR / f"{date}.yaml"
 
 
-def fly_cmd(f, pack=None, dry=False, port=8081, plain=False):
+def fly_cmd(f, pack=None, dry=False, port=8081, plain=False, no_gates=False):
     """A dry run never talks to the service, so only a flight carries a non-default --port (the soak's spare port)
     and --plain-service (the soak's service runs without --lab; fly must keep it, not restart it)."""
     extra = (["--port", str(port)] if port != 8081 and not dry else []) + (["--plain-service"] if plain and not dry else [])
+    extra += ["--no-gates"] if no_gates and not dry else []      # operator 10-24: battery + firmware trips + RC only
     return FLY + [f["fly"], "--dry-run" if dry else "--once"] + (["--pack", pack] if pack else []) + f["args"] + extra
 
 
@@ -393,9 +394,10 @@ class Day:
 
     def __init__(self, d, state_path, pack=None, camera=True, ask=input, run=None, popen=None, cooldown_s=0,
                  wait=cooldown, service=None, floor=None, vitals=None, clock=time.monotonic, sleep=time.sleep,
-                 port=8081, lab_service=True):
+                 port=8081, lab_service=True, no_gates=False):
         self.d, self.state_path, self.pack, self.port = d, Path(state_path), pack, port
         self.lab_service = lab_service
+        self.no_gates = no_gates
         self.cooldown_s, self.wait, self.landed = cooldown_s, wait, None
         self.ask, self.run, self.popen = ask, run or subprocess.run, popen or subprocess.Popen
         self.service = service or (lambda: ensure_8081(port, lab=lab_service))
@@ -565,7 +567,7 @@ class Day:
     def fly(self, f, pack):
         """One `.\\fly <name> --once`, stdin passed through: (exit code, its debrief event or None)."""
         since = log_offsets()
-        child = self.popen(fly_cmd(f, pack, port=self.port, plain=not self.lab_service), cwd=ROOT)
+        child = self.popen(fly_cmd(f, pack, port=self.port, plain=not self.lab_service, no_gates=self.no_gates), cwd=ROOT)
         rc = child.wait()
         return rc, debrief_event(child.pid, since)
 
@@ -660,7 +662,7 @@ class Day:
         for i, f in enumerate(flights):
             nxt = flights[i + 1]["id"] if i + 1 < len(flights) else None
             about, steps = note(f)
-            self.say("", f"=== {f['id']} ({i + 1} of {len(flights)}): {shown(f)}",
+            self.say("", f"=== {f['id']} ({i + 1} of {len(flights)}): {shown(f)}{' --no-gates' if self.no_gates else ''}",
                      *([f"    what: {about}"] if about else []), *([f"    steps: {steps}"] if steps else []),
                      *([f"    tests: {f['why']}"] if f.get("why") else []),
                      *([f"    pass (PROPOSED): {f['pass']}"] if f.get("pass") else []))
@@ -720,6 +722,8 @@ def main(argv=None):
     ap.add_argument("--port", type=int, default=8081, help="the service port (default 8081; the soak uses a spare one)")
     ap.add_argument("--plain-service", action="store_true",
                     help="soak only: keep the service on --port although it runs without --lab")
+    ap.add_argument("--no-gates", action="store_true", help="every flight with fly --no-gates: safety monitor gates off, "
+                    "keeps the low-battery stop, firmware trips and the RC kill/takeover")
     a = ap.parse_args(argv)
     try:
         d = load_day(day_path(a.day))
@@ -732,7 +736,7 @@ def main(argv=None):
         return 0
     day = Day(d, state_file(d.get("day") or a.day), pack=a.pack, camera=not a.no_camera, floor=a.floor,
               cooldown_s=a.cooldown if a.cooldown is not None else float(d.get("cooldown_s", COOLDOWN_S)), port=a.port,
-              lab_service=not a.plain_service)
+              lab_service=not a.plain_service, no_gates=a.no_gates)
     if a.list:
         print("\n".join(day.listing()))
         return 0

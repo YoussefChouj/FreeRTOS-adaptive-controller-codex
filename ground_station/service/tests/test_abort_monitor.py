@@ -503,3 +503,20 @@ def test_frozen_instances() -> None:
     decision = AbortDecision(1, "tilt")
     with pytest.raises(dataclasses.FrozenInstanceError):
         decision.level = 3  # type: ignore[misc]
+
+
+def test_gates_off_keeps_battery_and_firmware_only() -> None:
+    # fly --no-gates (operator 10-24): level-1 breaches pass, the battery and firmware trips still land it.
+    off = AbortLimits(level1=False)
+    mon = AbortMonitor(limits=off)
+    mon.begin_flight()
+    assert mon.step(mk(0.0, roll_deg=80.0, pos_m=(3.0, 0.0, 0.5), age_s=5.0, sat_frac=1.0)) == NO_ABORT
+    assert mon.step(mk(1.0, roll_deg=80.0, pitch_deg=float("nan"), age_s=5.0, sat_frac=1.0)) == NO_ABORT
+    assert mon.step(mk(2.0, soc_pct=29.9)) == AbortDecision(3, "battery")
+    fw = AbortMonitor(limits=off)
+    fw.begin_flight()
+    assert fw.step(mk(0.0, safety_trip=4)) == AbortDecision(3, "firmware:FENCE")
+    on = AbortMonitor()
+    on.begin_flight()
+    on.step(mk(0.0, roll_deg=80.0))
+    assert on.step(mk(1.0, roll_deg=80.0)).level == 1  # default keeps the tilt gate

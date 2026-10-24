@@ -581,3 +581,10 @@ def test_service_check_wants_lab_mode_unless_the_soak_keeps_its_plain_service(mo
     assert labday.main([str(tmp_path / "day.yaml"), "--list"]) == 0
     assert labday.main([str(tmp_path / "day.yaml"), "--list", "--port", "18081", "--plain-service"]) == 0
     assert [m["lab_service"] for m in made] == [True, False]
+
+
+def test_fly_cmd_passes_no_gates_to_flights_not_dry_runs():
+    f = {"fly": "card", "args": []}
+    assert "--no-gates" in labday.fly_cmd(f, no_gates=True)
+    assert "--no-gates" not in labday.fly_cmd(f, dry=True, no_gates=True)
+    assert "--no-gates" not in labday.fly_cmd(f)

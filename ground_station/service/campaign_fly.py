@@ -435,6 +435,19 @@ def resolve_campaign(arg, pack, rate=None, launch_dir=None, fly_dir=None):
     return write_launch_copy(p, pack, rate, launch_dir)[0], p
 
 
+def gates_off(launch):
+    """fly --no-gates (operator 10-24): the launch copy's abort.level1 set false, so the safety monitor runs only the
+    battery (soc_min_pct) and firmware-trip checks; the RC kill and stick takeover stay first. Returns `launch`."""
+    import yaml
+    launch = Path(launch)
+    data = yaml.safe_load(launch.read_text(encoding="utf-8")) or {}
+    abort = data.get("abort") if isinstance(data.get("abort"), dict) else {}
+    abort["level1"] = False
+    data["abort"] = abort
+    launch.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    return launch
+
+
 def pack_id(said):
     """The packs.yaml id for what the operator typed: '2', 't2', 'type 2' and 'Type2' are all 'type2' (2026-10-15:
     the lab knows two pack types, not single packs). Anything else comes back as typed, for pack_problem."""
@@ -1636,7 +1649,7 @@ def fly_one(base, launch, src, name, pack, post_takeoff_gains=None):
 
 def fly_loop(base, arg, pack, rate=None, run=None, once=False, yes=False,
              gains=None, no_gains=False, force_livetune=False, livetune_path=None,
-             post_takeoff_gains=None):
+             post_takeoff_gains=None, no_gates=False):
     """Compile -> wait for the RC arm -> go -> watch -> debrief, flight after flight until q."""
     from ground_station.service.campaign_launch import rel
     from ground_station.service.campaign_schema import load_campaign
@@ -1651,6 +1664,10 @@ def fly_loop(base, arg, pack, rate=None, run=None, once=False, yes=False,
         else:
             try:
                 launch, src = resolve_campaign(arg, pack, rate)
+                if no_gates:
+                    launch = gates_off(launch)
+                    print("GATES OFF: no position/tilt/oscillation/saturation/stale-link stops; low battery, firmware "
+                          "trips and the RC kill/takeover stay on", flush=True)
                 c = load_campaign(launch)
             except (ValueError, RuntimeError) as e:
                 print(f"{arg}: cannot fly it:\n  " + str(e).replace("\n", "\n  "))
@@ -1721,6 +1738,8 @@ def main(argv=None):
     ap.add_argument("--plain-service", action="store_true",
                     help="soak only: keep the service on --port although it runs without --lab")
     ap.add_argument("--once", action="store_true", help="one flight, then exit")
+    ap.add_argument("--no-gates", action="store_true", help="safety monitor gates off (position, tilt, oscillation, "
+                    "saturation, stale link); keeps the low-battery stop, firmware trips and the RC kill/takeover")
     ap.add_argument("--record-only", metavar="LABEL", help="no flight: record the log plan (drone disarmed, carried "
                                                             "by hand) until Enter; sends no drone command")
     ap.add_argument("--rate", type=float, help="override the log plan rate, Hz")
@@ -1775,7 +1794,7 @@ def main(argv=None):
     else:
         rc = fly_loop(base, a.campaign, pack, a.rate, a.run, a.once, yes=a.yes,
                       gains=a.gains, no_gains=a.no_gains, force_livetune=a.force_livetune,
-                      post_takeoff_gains=a.post_takeoff_gains)
+                      post_takeoff_gains=a.post_takeoff_gains, no_gates=a.no_gates)
     events.log("fly_end", rc=rc)
     print("Stop the video. The service window stays open; close it when you are done.")
     return rc

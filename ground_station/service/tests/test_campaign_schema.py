@@ -523,3 +523,14 @@ def test_10_asym_load_twins_fly_the_same_flights():
     assert pid.experiments == mrac.experiments
     assert [e.name for e in pid.experiments if e.go_before] == ["pad_hover", "arm_hover"]
     assert parse_campaign(pid.to_dict()) == pid
+
+
+def test_abort_level1_bool_reaches_limits():
+    # fly --no-gates writes abort.level1: false; a non-bool is refused.
+    data = _base_valid_data()
+    data["abort"] = {"level1": False}
+    assert parse_campaign(data).abort_limits.level1 is False
+    data["abort"] = {"level1": 0}
+    with pytest.raises(CampaignError) as e:
+        parse_campaign(data)
+    assert any(p.startswith("abort.level1:") for p in e.value.problems)

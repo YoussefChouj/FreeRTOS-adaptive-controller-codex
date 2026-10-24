@@ -492,6 +492,9 @@ def parse_campaign(data: dict) -> Campaign:
                 abort_path = f"abort.{ak}"
                 if ak not in allowed_abort_keys:
                     problems.append(f"{abort_path}: unknown key")
+                elif ak == "level1":
+                    if not isinstance(av, bool):
+                        problems.append(f"{abort_path}: must be true or false")
                 else:
                     if isinstance(av, bool) or not isinstance(av, (int, float)):
                         problems.append(f"{abort_path}: must be numeric")

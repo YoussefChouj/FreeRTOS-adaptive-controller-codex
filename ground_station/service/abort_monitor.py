@@ -28,6 +28,7 @@ class AbortLimits:                      # PROPOSED = not yet validated on the be
     stale_hold_s: float = 0.3           # operator OK 10-18: mem1 tripped 0.1 s after traj_go, telemetry max gap 0.11 s
     soc_min_pct: float = 30.0           # spec Q5, not PROPOSED
     max_consecutive_aborts: int = 2     # spec Q12, not PROPOSED
+    level1: bool = True                 # False (fly --no-gates, operator 10-24): only battery + firmware trips; RC stays first
 
 
 @dataclass(frozen=True)
@@ -157,6 +158,10 @@ class AbortMonitor:
         # 4. Not airborne: clear the hold timers and the windows, return the latched decision.
         if not sample.airborne:
             self._clear_holds_and_windows()
+            return self._decision
+
+        # 4b. Gates off (fly --no-gates): no level-1 checks; the battery and firmware trips above still land it.
+        if not self._limits.level1:
             return self._decision
 
         # If level 1 is already latched, later steps return it unchanged unless a level-3
