@@ -61,7 +61,7 @@ html, body {
 }
 
 .wrap {
-  max-width: 980px;
+  max-width: 1280px;
   margin: 0 auto;
   padding: 0 14px;
   width: 100%;
@@ -73,6 +73,15 @@ html, body {
   background: var(--panel);
   border-bottom: 1px solid var(--line);
   padding: 14px 0 0;
+}
+
+/* On a wide screen the tab bar stays in reach while the page scrolls. */
+@media (min-width: 760px) {
+  .site-header {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+  }
 }
 
 .site-header h1 {
@@ -95,6 +104,8 @@ html, body {
   gap: 4px;
 }
 
+/* The tabs are real links now, so they behave like links: underlined on
+   focus, pointer cursor, and the selected one is marked with aria-current. */
 .tab {
   appearance: none;
   border: 1px solid transparent;
@@ -107,11 +118,13 @@ html, body {
   border-radius: 8px 8px 0 0;
   cursor: pointer;
   white-space: nowrap;
+  text-decoration: none;
 }
 
 .tab:hover { background: var(--panel-2); color: var(--text); }
+.tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
-.tab[aria-selected="true"] {
+.tab[aria-current="page"] {
   background: var(--bg);
   border-color: var(--line);
   color: var(--text);
@@ -153,6 +166,12 @@ p { margin: 8px 0; }
   gap: 10px;
 }
 
+/* The lesson list reads as a column of cards on a phone and as a grid of
+   cards on a wide screen, so the extra width is used. */
+.lesson-grid { align-items: start; }
+.lesson-card { margin: 0; }
+.lesson-card .lesson-row { border-top: none; }
+
 .module-card h3 { margin: 0 0 2px; }
 .module-card .zh { color: var(--muted); font-size: .9rem; margin-bottom: 6px; }
 .module-card .goal { font-size: .88rem; margin: 4px 0; }
@@ -186,8 +205,10 @@ p { margin: 8px 0; }
   min-width: 42px;
 }
 .lesson-row .lname { flex: 1 1 160px; min-width: 0; }
-.lesson-row button {
+.lesson-row button,
+.open-link {
   appearance: none;
+  display: inline-block;
   border: 1px solid var(--accent);
   background: var(--accent-soft);
   color: var(--accent);
@@ -196,8 +217,12 @@ p { margin: 8px 0; }
   font-size: .78rem;
   padding: 1px 8px;
   cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
 }
-.lesson-row button:hover { filter: brightness(0.97); }
+.lesson-row button:hover,
+.open-link:hover { filter: brightness(0.97); }
+.open-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .chip {
   display: inline-block;
@@ -244,7 +269,8 @@ input[type="text"], input[type="search"], select {
 }
 label.check { display: flex; align-items: center; gap: 6px; font-size: .82rem; }
 
-button.btn {
+button.btn,
+a.btn {
   appearance: none;
   font: inherit;
   font-size: .85rem;
@@ -254,8 +280,12 @@ button.btn {
   background: var(--panel-2);
   color: var(--text);
   cursor: pointer;
+  text-decoration: none;
+  display: inline-block;
 }
-button.btn:hover { border-color: var(--accent); color: var(--accent); }
+button.btn:hover,
+a.btn:hover { border-color: var(--accent); color: var(--accent); }
+a.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 button.btn.primary:hover { filter: brightness(1.08); color: #fff; }
 button.btn:disabled { opacity: .5; cursor: not-allowed; }
@@ -362,6 +392,35 @@ tr:last-child td { border-bottom: none; }
 }
 .katex { font-size: 1.02em; }
 .katex-display { overflow-x: auto; overflow-y: hidden; padding: 2px 0; }
+
+/* ---------- wide screen: use the width, keep the measure readable ---------- */
+
+@media (min-width: 1000px) {
+  /* Prose is capped at a readable measure and centred; a lesson stretched
+     across 1280 px is hard to read and the sims get needlessly huge. */
+  .lesson-body { max-width: 78ch; margin: 0 auto; }
+
+  /* The glossary is a reference list: two columns read better than one
+     very long one. */
+  #glossary-rows {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 28px;
+  }
+  .gloss-row { border-bottom: 1px solid var(--line); }
+
+  /* The break points are cards, so they lay out as a grid. */
+  #view-breakpoints .card { margin: 0; }
+  #view-breakpoints .break-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 10px;
+    margin: 10px 0;
+  }
+
+  /* The sims sit side by side when there is room for both. */
+  #view-sims .sim-mount { min-width: 0; }
+}
 
 /* ---------- sims ---------- */
 

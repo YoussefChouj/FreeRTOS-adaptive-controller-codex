@@ -256,6 +256,10 @@ const state = {
   glossary: [],
   activeTab: lsGet(KEY_TAB, 'roadmap'),
   currentLesson: null,
+  loadingLesson: null,
+  // Where the reader was on each screen, so switching views returns them
+  // where they were instead of jumping to the top (SPEC section 3).
+  scrollByScreen: new Map(),
 };
 
 async function loadJson(path) {
@@ -287,29 +291,68 @@ function buildTabs() {
   const nav = $('#tabs');
   nav.innerHTML = '';
   for (const t of TABS) {
-    nav.appendChild(el('button', {
+    // A real link, not a button: the view is in the URL, so it can be
+    // bookmarked, shared, opened in a new tab and reached with Back.
+    nav.appendChild(el('a', {
       class: 'tab',
-      type: 'button',
-      role: 'tab',
+      href: `#${t.id}`,
       id: `tab-${t.id}`,
       'data-tab': t.id,
-      'aria-selected': 'false',
-      onclick: () => selectTab(t.id),
     }, [`${t.zh} ${t.en}`]));
   }
 }
 
-function selectTab(id) {
-  if (!TABS.some((t) => t.id === id)) id = 'roadmap';
-  state.activeTab = id;
-  lsSet(KEY_TAB, id);
+/** Read the route out of a URL hash: '#glossary' or '#lesson/L01'. */
+function parseHash(hash) {
+  const raw = String(hash == null ? (window.location.hash || '') : hash).replace(/^#/, '');
+  if (!raw) return { tab: null, lesson: null };
+  const m = raw.match(/^lesson\/(.+)$/);
+  if (m) return { tab: 'lessons', lesson: decodeURIComponent(m[1]) };
+  const id = raw.split('/')[0];
+  return { tab: TABS.some((t) => t.id === id) ? id : null, lesson: null };
+}
+
+/**
+ * Show the view the route points at and keep the reading position of each
+ * screen, so switching views returns the reader where they were.
+ *
+ * A screen is a view, plus the lesson open inside it: '#lessons' and
+ * '#lesson/L01' are two different places to come back to.
+ */
+function applyRoute(route) {
+  const tab = route.tab || 'roadmap';
+  const prevScreen = state.currentLesson && state.activeTab === 'lessons'
+    ? `lessons/${state.currentLesson}`
+    : state.activeTab;
+  if (prevScreen) state.scrollByScreen.set(prevScreen, window.scrollY);
+
+  state.activeTab = tab;
+  lsSet(KEY_TAB, tab);
+
   for (const t of TABS) {
-    const btn = $(`#tab-${t.id}`);
-    if (btn) btn.setAttribute('aria-selected', t.id === id ? 'true' : 'false');
+    const link = $(`#tab-${t.id}`);
+    if (link) {
+      if (t.id === tab) link.setAttribute('aria-current', 'page');
+      else link.removeAttribute('aria-current');
+    }
     const view = $(`#view-${t.id}`);
-    if (view) view.classList.toggle('active', t.id === id);
+    if (view) view.classList.toggle('active', t.id === tab);
   }
-  window.scrollTo({ top: 0, behavior: 'auto' });
+
+  const screen = route.lesson ? `lessons/${route.lesson}` : tab;
+  const saved = state.scrollByScreen.get(screen) || 0;
+
+  if (route.lesson) {
+    loadLesson(route.lesson, saved);
+    return;
+  }
+  if (tab === 'lessons' && state.currentLesson) {
+    // Back to the lesson list.
+    renderLessons();
+    window.scrollTo({ top: saved, behavior: 'auto' });
+    return;
+  }
+  window.scrollTo({ top: saved, behavior: 'auto' });
 }
 
 /* ------------------------------------------------------------------ */
@@ -354,7 +397,7 @@ function renderRoadmap() {
     const rows = lessons.map((l) => {
       const sc = scoreText(l.scores);
       const open = l.file
-        ? `<button type="button" data-lesson="${esc(l.id)}">打开 open</button>`
+        ? `<a class="open-link" href="#lesson/${encodeURIComponent(l.id)}">打开 open</a>`
         : '';
       return `<div class="lesson-row">
         <span class="lid">${esc(l.id)}</span>
@@ -376,9 +419,6 @@ function renderRoadmap() {
   parts.push('</div>');
 
   host.innerHTML = parts.join('');
-  $$('[data-lesson]', host).forEach((btn) => {
-    btn.addEventListener('click', () => openLesson(btn.dataset.lesson));
-  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -432,12 +472,27 @@ function lessonById(id) {
   return ((state.progress || {}).lessons || []).find((l) => l.id === id) || null;
 }
 
-async function openLesson(id) {
+/**
+ * Render one lesson into the lessons view. The route is already #lesson/<id>;
+ * this only fills the view.
+ *
+ * savedScroll is where the reader was the last time they read this lesson, so
+ * coming back to it lands them in the same place.
+ */
+async function loadLesson(id, savedScroll) {
   const lesson = lessonById(id);
-  if (!lesson) return;
+  if (!lesson) {
+    renderLessons();
+    return;
+  }
+  if (state.currentLesson === lesson.id && state.loadingLesson !== lesson.id) {
+    // Already showing it (e.g. the reader came back with Back).
+    if (savedScroll) window.scrollTo({ top: savedScroll, behavior: 'auto' });
+    return;
+  }
   const host = $('#view-lessons');
+  state.loadingLesson = lesson.id;
   host.innerHTML = '<h2>课程 · Lessons</h2><div class="card">载入中 loading…</div>';
-  selectTab('lessons');
   try {
     const md = await loadText(`data/${lesson.file}`);
     const body = el('div', { class: 'lesson-body' });
@@ -447,15 +502,18 @@ async function openLesson(id) {
     host.innerHTML = '';
     host.appendChild(el('h2', { text: `课程 · Lessons — ${lesson.id} ${lesson.en || ''}` }));
     host.appendChild(el('div', { class: 'toolbar' }, [
-      el('button', { class: 'btn', type: 'button', onclick: () => renderLessons() }, ['← 返回列表 list']),
+      el('a', { class: 'btn', href: '#lessons' }, ['← 返回列表 list']),
       el('span', { class: 'legend', text: `${lesson.zh || ''} · ${lesson.date || ''} · ${lesson.status || ''}` }),
     ]));
     host.appendChild(body);
     mountSimsIn(body);
     state.currentLesson = lesson.id;
+    if (savedScroll) window.scrollTo({ top: savedScroll, behavior: 'auto' });
   } catch (err) {
     console.error(err);
     host.innerHTML = `<h2>课程 · Lessons</h2><div class="error-box">无法载入 lesson ${esc(id)}: ${esc(err.message)}</div>`;
+  } finally {
+    state.loadingLesson = null;
   }
 }
 
@@ -464,11 +522,12 @@ function renderLessons() {
   const p = state.progress;
   const parts = ['<h2>课程 · Lessons</h2>'];
   if (!p) { host.innerHTML = parts.join(''); return; }
+  const rows = [];
   for (const l of p.lessons || []) {
     const open = l.file
-      ? `<button type="button" data-lesson="${esc(l.id)}">打开 open</button>`
+      ? `<a class="open-link" href="#lesson/${encodeURIComponent(l.id)}">打开 open</a>`
       : '<span class="legend">（未写 not written yet）</span>';
-    parts.push(`<div class="card">
+    rows.push(`<div class="card lesson-card">
       <div class="lesson-row">
         <span class="lid">${esc(l.id)}</span>
         <span class="lname"><strong>${esc(l.en || '')}</strong>${l.zh ? ` · ${esc(l.zh)}` : ''}</span>
@@ -478,10 +537,10 @@ function renderLessons() {
       </div>
     </div>`);
   }
+  // A grid on a wide screen, a plain list on a phone.
+  parts.push(`<div class="grid lesson-grid">${rows.join('')}</div>`);
   host.innerHTML = parts.join('');
-  $$('[data-lesson]', host).forEach((btn) => {
-    btn.addEventListener('click', () => openLesson(btn.dataset.lesson));
-  });
+  state.currentLesson = null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -787,8 +846,7 @@ function renderBreakpoints() {
 
   const parts = ['<h2>断点 · Break points</h2>'];
   if (!bps.length) parts.push('<p class="legend">暂无断点 no break points</p>');
-  for (const b of bps) {
-    parts.push(`<div class="card">
+  const bpCards = bps.map((b) => `<div class="card">
       <div class="lesson-row">
         <span class="lid">${esc(b.date || '')}</span>
         <span class="lname"><strong>${esc(b.topic || '')}</strong></span>
@@ -797,7 +855,7 @@ function renderBreakpoints() {
       </div>
       <p class="goal">${esc(b.gap || '')}</p>
     </div>`);
-  }
+  if (bpCards.length) parts.push(`<div class="break-grid">${bpCards.join('')}</div>`);
 
   parts.push('<h2>测验成绩 · Quiz scores</h2>');
   const scored = (p.lessons || []).filter((l) => l.scores && Object.keys(l.scores).length);
@@ -858,7 +916,7 @@ async function boot() {
     console.error(err);
     document.querySelector('main').innerHTML =
       `<div class="error-box">数据载入失败 failed to load data: ${esc(err.message)}</div>`;
-    selectTab('roadmap');
+    applyRoute({ tab: 'roadmap', lesson: null });
     return;
   }
 
@@ -868,7 +926,20 @@ async function boot() {
   renderFlashcards();
   renderBreakpoints();
   renderSims();
-  selectTab(state.activeTab);
+
+  // The hash is the route: it wins over the remembered tab, so a bookmarked
+  // or shared link opens the view it names.
+  const route = parseHash();
+  if (!route.tab && !route.lesson) {
+    const remembered = lsGet(KEY_TAB, 'roadmap');
+    if (TABS.some((t) => t.id === remembered)) route.tab = remembered;
+  }
+  applyRoute(route);
+
+  // Back and forward walk the views, because every view is a link.
+  window.addEventListener('hashchange', () => {
+    applyRoute(parseHash());
+  });
 }
 
 boot();

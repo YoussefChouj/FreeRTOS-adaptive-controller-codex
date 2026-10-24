@@ -23,10 +23,21 @@ tests/tilt_core.test.mjs  tests/zloop_core.test.mjs
   - marked **12.0.2**: `marked.min.js`
 - No three.js. W1 draws its 3D view on a 2D canvas with a simple projection.
 - Light and dark themes come from CSS variables on `:root`, plus `prefers-color-scheme`.
-- The layout must work at 375 px width with no horizontal scroll.
+- **Desktop browser first.** The page is read on a desktop browser, so the layout must use the width: a 1280 px content column, a sticky tab bar, and a readable prose measure (the lesson body is capped at 78ch and centred). The phone layout is the fallback, not the target.
+- The layout must still work at 375 px width with no horizontal scroll.
 - Wrap every `localStorage` read and write in try/catch. The page must still work when storage is unavailable.
 
-## 3. Views (tabs; remember the last tab in localStorage)
+## 3. Views (real links + hash routing)
+
+The view is in the URL, so a view can be bookmarked, shared, opened in a new tab and
+reached with the browser's Back and Forward buttons.
+
+- Each view is a link `<a href="#roadmap">`, not a button. The selected one carries `aria-current="page"`.
+- Routes: `#roadmap`, `#lessons`, `#glossary`, `#flashcards`, `#breakpoints`, `#sims`, and `#lesson/<id>` for one open lesson.
+- A `hashchange` handler applies the route. On boot the hash wins over the remembered tab, so a shared link opens the view it names; with no hash the last tab (from `localStorage`, key `lih.tab.v1`) is used.
+- Switching views must not lose the reading position: keep the scroll offset per screen (a view, plus the lesson open inside it) and restore it when the reader comes back. Do not jump to the top on every switch.
+- The `localStorage` key `lih.tab.v1` still remembers the last view for the next visit.
+
 1. **Roadmap**
    - Show `progress.modules` M0–M6 as cards, each with en/zh title, goal and JD keywords.
    - Under each module, list its `progress.lessons` with a status chip (planned / taught / quizzed / passed) and their scores.

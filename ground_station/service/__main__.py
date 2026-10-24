@@ -265,6 +265,18 @@ def main() -> None:
         print(f"[service] REFUSED: {exc}", file=sys.stderr, flush=True)
         sys.exit(2)
 
+    # ---- One service per laptop: refuse when another holder of the bridge port is alive ----
+    # The bridge binds 0.0.0.0:14550 with SO_REUSEADDR, so a second service shares the port without an
+    # error and Windows hands the drone's replies to the older socket: the new one gets no frames and
+    # every flight ends on "link lost" (open item bridge-port-shared-silently, lab 10-22).
+    from ground_station.comm.wifi_bridge import BRIDGE_PORT
+    from ground_station.service.instance_guard import BridgePortBusy, ensure_bridge_port_free
+    try:
+        ensure_bridge_port_free(BRIDGE_PORT)
+    except BridgePortBusy as exc:
+        print(f"[service] REFUSED: {exc}", file=sys.stderr, flush=True)
+        sys.exit(2)
+
     # ---- Console output also goes to logs/service/<port>-<stamp>.log (lab 10-18: lost with the window) ----
     # QuickEdit off: a click in this window would otherwise block every print, the ingest thread's included
     from ground_station.service.run_log import quickedit_off, tee_console

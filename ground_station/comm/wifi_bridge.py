@@ -63,6 +63,7 @@ from __future__ import annotations
 import argparse
 import collections
 import json
+import os
 import queue
 import socket
 import struct
@@ -105,6 +106,70 @@ MIRROR_QUEUE_MAX = 20_000   # per-frame mirror messages held for it; the oldest 
 RELAY_RETRY_S = 1.0   # the relay port is re-tried this often until it binds
 
 INGEST_LAG_WARN_NS = 200_000_000  # PROPOSED: frame age that counts as "ingest behind" in the log (stale abort is 0.5 s)
+
+BRIDGE_PORT = 14550              # the WiFi link port: the drone's replies come back to it
+
+
+def udp_port_holder(port: int = BRIDGE_PORT, exclude_pid: Optional[int] = None) -> list[str]:
+    """Who holds the wildcard UDP ``port``, [] when it is free.
+
+    The bridge binds 0.0.0.0:14550 with SO_REUSEADDR, so a second service started next to a running one
+    shares the port without an error, and Windows hands the drone's replies to the older socket: the new
+    service gets no frames and every flight ends on "link lost" (lab 10-22 deck soak, open item
+    ``bridge-port-shared-silently``).
+
+    Detection is a bind probe *without* SO_REUSEADDR: on Windows that fails with WSAEADDRINUSE when a
+    wildcard holder exists, while a wildcard + SO_REUSEADDR bind succeeds silently (verified on this
+    machine). The probe is closed again at once, so nothing is stolen.
+
+    Naming uses the process table (psutil) and is best effort: a holder whose pid cannot be read is still
+    reported, without a name. Only wildcard holders count: the fake drone binds 127.0.0.2:14550 next to the
+    bridge's 0.0.0.0:14550 in a soak, and that pair works.
+    """
+    if not _wildcard_udp_port_busy(port):
+        return []
+    return _name_udp_port_holders(port, exclude_pid=exclude_pid) or ["a process (pid unknown)"]
+
+
+def _wildcard_udp_port_busy(port: int) -> bool:
+    """True when 0.0.0.0:port is taken, without taking it."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.bind(("0.0.0.0", port))
+    except OSError:
+        return True
+    finally:
+        probe.close()
+    return False
+
+
+def _name_udp_port_holders(port: int, exclude_pid: Optional[int] = None) -> list[str]:
+    try:
+        import psutil
+    except ImportError:
+        return []
+    out: list[str] = []
+    try:
+        conns = psutil.net_connections(kind="udp")
+    except (psutil.AccessDenied, psutil.Error, OSError):
+        return []
+    for conn in conns:
+        laddr = getattr(conn, "laddr", None)
+        if not laddr or getattr(laddr, "port", None) != port:
+            continue
+        if getattr(laddr, "ip", "") not in ("0.0.0.0", "", "::"):
+            continue
+        pid = getattr(conn, "pid", None)
+        if pid is not None and exclude_pid is not None and pid == exclude_pid:
+            continue
+        name = ""
+        if pid:
+            try:
+                name = psutil.Process(pid).name()
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.Error):
+                name = ""
+        out.append(f"pid {pid} {name}".strip())
+    return out
 
 
 def _parse_simple_yaml(path: Path) -> Dict[str, Any]:
