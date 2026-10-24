@@ -1,4 +1,9 @@
-// Clash Verge profile script for VPN07.com (profile R8glH1bJTsOP). Rewritten 2026-10-18 by Claude Code.
+// Clash Verge GLOBAL script (Profiles > Global Extend Script = profiles/Script.js). It runs for whichever profile is
+// active, so switching between the two VPN07.com plans (R8glH1bJTsOP 256 GB, RBQDSDSOSEnW 64 GB) can no longer drop
+// it. 2026-10-24: moved from a per-profile script after the 64 GB plan was activated with Verge's empty default
+// script and AI-exit vanished ("profile script skipped"). Safe to run twice: it does nothing if AI-exit exists.
+// Install: copy this file over profiles/Script.js, then re-activate the profile in Verge (validate first with
+// clash-script-dryrun.js). Rewritten 2026-10-18 by Claude Code.
 // Previous version: sGvyrA9fCj9s.js.bak-2026-10-18 (JP/SG-only auto groups, no AI routing).
 //
 // What it does:
@@ -18,6 +23,7 @@ const OTHER_FILE = "./profiles/Rkhp8Dd5BhV7.yaml";
 const INFO_NODES = /剩余流量|距离下次重置|套餐到期|官网/;
 const CHECK_URL = "http://www.gstatic.com/generate_204";
 const AI_GROUP = "AI-exit";
+const MAIN = "VPN07.com"; // the subscription's main selector (other traffic); missing on non-VPN07 profiles
 const REGIONS = [
   ["US-auto", "\\bUS\\b|USA|United States|美国|洛杉矶|圣何塞|硅谷|西雅图|纽约|芝加哥|达拉斯"],
   ["JP-auto", "\\bJP\\b|Japan|日本|东京|大阪|Tokyo|Osaka"],
@@ -26,7 +32,7 @@ const REGIONS = [
 const JPSG = REGIONS[1][1] + "|" + REGIONS[2][1];
 const ALL_REGIONS = REGIONS.map((r) => r[1]).join("|");
 const AI_RULES = [
-  "DOMAIN-SUFFIX,googlevideo.com,VPN07.com", // YouTube video bytes: keep them off the AI exit
+  "DOMAIN-SUFFIX,googlevideo.com,@MAIN", // YouTube video bytes: keep them off the AI exit
   "DOMAIN-KEYWORD,google", // google.com, googleapis.com, *.google (Antigravity, Gemini, Jules, Colab)
   "DOMAIN-SUFFIX,gstatic.com",
   "DOMAIN-SUFFIX,kaggle.com",
@@ -42,6 +48,9 @@ const AI_RULES = [
   "DOMAIN-SUFFIX,oaistatic.com",
   "DOMAIN-SUFFIX,oaiusercontent.com",
 ].map((r) => (r.split(",").length === 2 ? r + "," + AI_GROUP : r));
+// Best-auto: fastest node of any of the three countries. Fine for other traffic; for AI-exit it can change the
+// country Google sees, so the tray labels it that way.
+const BEST = "Best-auto";
 
 function matching(names, pattern) {
   const re = new RegExp(pattern);
@@ -66,6 +75,8 @@ function autoGroup(name, pattern, names, interval, tolerance) {
 }
 
 function main(config, profileName) {
+  const existing = config["proxy-groups"] || [];
+  if (existing.some((g) => g.name === AI_GROUP)) return config; // a per-profile copy already ran
   const names = (config.proxies || []).map((p) => p.name);
   config["proxy-providers"] = Object.assign({}, config["proxy-providers"], {
     [OTHER]: {
@@ -80,6 +91,7 @@ function main(config, profileName) {
 
   const regionGroups = REGIONS.map(([name, pattern]) => autoGroup(name, pattern, names, 180, 150));
   regionGroups.push(autoGroup("JPSG-auto", JPSG, names, 180, 150));
+  regionGroups.push(autoGroup(BEST, ALL_REGIONS, names, 180, 150));
   const aiExit = {
     name: AI_GROUP,
     type: "select",
@@ -91,7 +103,7 @@ function main(config, profileName) {
 
   const groups = config["proxy-groups"] || [];
   for (const group of groups) {
-    if (!["VPN07.com", "自动选择", "故障转移"].includes(group.name)) continue;
+    if (![MAIN, "自动选择", "故障转移"].includes(group.name)) continue;
     group.use = (group.use || []).concat(OTHER);
     if (group.type === "select") {
       const regionNames = regionGroups.map((g) => g.name);
@@ -107,6 +119,7 @@ function main(config, profileName) {
     group.tolerance = 100;
   }
   config["proxy-groups"] = [aiExit].concat(regionGroups, groups);
-  config.rules = AI_RULES.concat(config.rules || []);
+  const mainSel = groups.some((g) => g.name === MAIN) ? MAIN : (groups.find((g) => g.type === "select") || {}).name;
+  config.rules = AI_RULES.map((r) => r.replace("@MAIN", mainSel || "DIRECT")).concat(config.rules || []);
   return config;
 }

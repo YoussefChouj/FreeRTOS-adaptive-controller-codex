@@ -18,7 +18,14 @@ hear about a dead one. It never switches anything by itself: only your menu clic
 
 Safety rules, because other Claude sessions share the proxy at 127.0.0.1:7897:
 - one instance only (named mutex): a second copy exits at once.
-- it never starts, stops or restarts any process, and never touches Clash Verge's files.
+- it never starts, stops or restarts any process, and never writes Clash Verge's files (it reads profiles.yaml).
+Added 2026-10-24:
+- revive: when an auto lane's exit node stops answering, and every 5 min anyway, it re-tests the whole country
+  group (GET /group/<g>/delay, the same as Verge's manual delay check), so the group moves to a live node of the
+  SAME country. It still never changes a selector by itself. "Test all nodes now" does it on demand.
+- plans: the menu lists each remote profile with GB left (read-only from profiles.yaml); it warns when the active
+  plan is under 5 GB or expired and names the plan with the most left.
+- Best-auto: fastest node in any country (auto only).
 - one controller request at a time (a lock), each with a hard deadline; the pipe handle is always closed.
 - it never closes connections.
 Without pystray it runs headless: it only logs. `--dry-run` logs the current state once and exits.
@@ -45,7 +52,12 @@ PIPE_TIMEOUT_S = 10
 DELAY_TIMEOUT_MS = 5000
 DELAY_URL = "https://www.gstatic.com/generate_204"
 LANES = (("AI-exit", "AI traffic (Argon, Jules, Claude)", "AI"), ("VPN07.com", "Other traffic", "Other"))
-COUNTRIES = (("US-auto", "USA"), ("JP-auto", "Japan"), ("SG-auto", "Singapore"), ("JPSG-auto", "Japan + Singapore"))
+COUNTRIES = (("US-auto", "USA"), ("JP-auto", "Japan"), ("SG-auto", "Singapore"), ("JPSG-auto", "Japan + Singapore"),
+             ("Best-auto", "Fastest, any country"))
+MULTI = {"JPSG-auto", "Best-auto"}       # span countries: auto-switch only (a pin would be one node in one country)
+REVIVE_INTERVAL_S = 300
+LOW_QUOTA_GB = 5
+PROFILES_YAML = Path(os.environ.get("APPDATA", "")) / "io.github.clash-verge-rev.clash-verge-rev" / "profiles.yaml"
 COUNTRY_NAMES = dict(COUNTRIES)
 JPSG_ALIASES = {"自动选择", "故障转移"}   # the subscription's own groups; the profile script filters them to JP/SG
 MUTEX_NAME = "Local\\vpn_monitor_clash_verge"
@@ -147,6 +159,57 @@ def lane_state(px, lane):
     country = next((g for g, _ in COUNTRIES[:3] if now in px.get(g, {}).get("all", [])), None)
     return country, False, now
 
+def plans():
+    """Remote profiles from Verge's profiles.yaml (read-only): name, uid, GB left, expiry, active. [] on any trouble."""
+    try:
+        import yaml
+        d = yaml.safe_load(PROFILES_YAML.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    out = []
+    for it in d.get("items") or []:
+        if it.get("type") != "remote":
+            continue
+        x = it.get("extra") or {}
+        left = (x.get("total", 0) - x.get("upload", 0) - x.get("download", 0)) / 1e9 if x.get("total") else None
+        out.append({"name": it.get("name") or it["uid"], "uid": it["uid"], "left_gb": left,
+                    "expire": x.get("expire") or None, "active": it["uid"] == d.get("current")})
+    return out
+
+def plan_label(pl):
+    left = "?" if pl["left_gb"] is None else f"{pl['left_gb']:.0f} GB left"
+    exp = time.strftime(", until %Y-%m-%d", time.localtime(pl["expire"])) if pl["expire"] else ""
+    return f"{'* ' if pl['active'] else ''}{pl['name']} ({pl['uid'][:4]}): {left}{exp}"
+
+def quota_warning(pls):
+    """Text when the active plan is low or expired, naming the plan with the most left; None when fine."""
+    now = time.time()
+    act = next((pl for pl in pls if pl["active"]), None)
+    if not act or act["left_gb"] is None:
+        return None
+    expired = bool(act["expire"]) and act["expire"] < now
+    if act["left_gb"] >= LOW_QUOTA_GB and not expired:
+        return None
+    others = [pl for pl in pls if not pl["active"] and (pl["left_gb"] or 0) >= LOW_QUOTA_GB
+              and not (pl["expire"] and pl["expire"] < now)]
+    best = max(others, key=lambda pl: pl["left_gb"], default=None)
+    why = "expired" if expired else f"{act['left_gb']:.1f} GB left"
+    tip = f" In Clash Verge > Profiles, activate {plan_label(best)}." if best else ""
+    return f"{act['name']} ({act['uid'][:4]}) {why}.{tip}"
+
+def revive(groups):
+    """Re-test every node of each group (Verge's manual delay check). Returns {group: live node count}."""
+    q = urllib.parse.urlencode({"url": DELAY_URL, "timeout": DELAY_TIMEOUT_MS})
+    out = {}
+    for g in groups:
+        try:
+            st, d = clash("GET", f"/group/{urllib.parse.quote(g)}/delay?{q}", timeout_s=DELAY_TIMEOUT_MS / 1000 + 15)
+            out[g] = sum(1 for v in (d or {}).values() if v) if st == 200 else 0
+        except Exception as e:
+            log(f"revive {g}: {e}")
+            out[g] = 0
+    return out
+
 def snapshot():
     """Read-only view of the state the tray shows. Never raises: trouble comes back as snap["problem"]."""
     try:
@@ -158,7 +221,9 @@ def snapshot():
         return {"problem": f"controller: {e}", "lanes": {}}
     px = d["proxies"]
     if LANES[0][0] not in px:
-        return {"problem": "profile script skipped: in Clash Verge, re-activate the VPN07.com profile", "lanes": {}}
+        act = next((plan_label(pl)[2:] for pl in plans() if pl["active"]), "the active profile")
+        return {"problem": f"AI-exit missing (script did not run): in Clash Verge > Profiles, re-activate {act}",
+                "lanes": {}}
     mode = (cfg or {}).get("mode", "rule").lower()
     problem = None if mode == "rule" else f"Clash Verge is in {mode} mode: switch it to Rule, or AI-exit is bypassed"
     return {"problem": problem, "lanes": {lane: lane_state(px, lane) for lane, _, _ in LANES if lane in px}}
@@ -235,12 +300,12 @@ def run_tray(wake):
             return snap["lanes"].get(lane, (None, False, None))
 
         def pick(group):
-            return lambda _icon, _item: act(lane, group, state()[1] or group == "JPSG-auto")
+            return lambda _icon, _item: act(lane, group, state()[1] or group in MULTI)
 
         items = [pystray.MenuItem(name, pick(group), radio=True,
                                   checked=lambda _item, g=group: state()[0] == g,
                                   enabled=lambda _item, g=group: lane in snap["lanes"] and (
-                                      g != "JPSG-auto" or state()[1]))
+                                      g not in MULTI or state()[1]))
                  for group, name in COUNTRIES]
         items += [pystray.Menu.SEPARATOR,
                   pystray.MenuItem("Auto-switch inside the country",
@@ -252,6 +317,17 @@ def run_tray(wake):
     def status(_icon, _item):
         icon.notify("\n".join(describe(snap, nodes=True)) or snap["problem"] or "no state yet", "VPN exit")
 
+    def test_all(_icon, _item):
+        def work():
+            live = revive([g for g, _ in COUNTRIES])
+            icon.notify(", ".join(f"{COUNTRY_NAMES[g]} {n}" for g, n in live.items()), "Live nodes per group")
+            wake.set()
+        threading.Thread(target=work, daemon=True).start()
+
+    def plan_items():
+        return [pystray.MenuItem(plan_label(pl), None, enabled=False) for pl in plans()] or \
+               [pystray.MenuItem("no remote profiles found", None, enabled=False)]
+
     def quit_monitor(_icon, _item):
         log("VPN monitor quit from the tray")
         icon.stop()
@@ -259,6 +335,8 @@ def run_tray(wake):
     icon = pystray.Icon("vpn_monitor", images["problem"], "VPN: starting", menu=pystray.Menu(
         pystray.MenuItem("Show exit nodes", status, default=True),
         *(pystray.MenuItem(label, lane_menu(lane)) for lane, label, _ in LANES),
+        pystray.MenuItem("Test all nodes now", test_all),
+        pystray.MenuItem("Plans (GB left)", pystray.Menu(plan_items)),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Open log", lambda _icon, _item: os.startfile(LOG_PATH)),
         pystray.MenuItem("Quit monitor", quit_monitor)))
@@ -269,7 +347,7 @@ def run_tray(wake):
 def monitor_loop(wake, show=None, notify=None):
     """Re-read the state every CHECK_INTERVAL_S (or when woken), log changes, warn once per problem or dead pin."""
     log(f"VPN monitor started (pid {os.getpid()}). Checking every {CHECK_INTERVAL_S}s; it never switches by itself.")
-    last_line, dead = None, set()
+    last_line, dead, last_revive, last_quota = None, set(), 0.0, None
     while True:
         try:
             snap = snapshot()
@@ -281,6 +359,24 @@ def monitor_loop(wake, show=None, notify=None):
                 if snap["problem"] and notify:
                     notify(snap["problem"], "VPN")
                 last_line = line
+            in_use = {g for g, auto, _ in snap["lanes"].values() if auto and g}
+            for g, auto, node in snap["lanes"].values():
+                if auto and g and node and not node_alive(node):   # stuck exit: re-test so the group can move
+                    live = revive([g]).get(g, 0)
+                    log(f"{g}: exit {node} does not answer; re-tested the group, {live} live nodes")
+                    if live == 0 and notify:
+                        notify(f"No {COUNTRY_NAMES.get(g, g)} node answers. Pick another country.", "VPN group down")
+                    last_revive = time.monotonic()
+            if in_use and time.monotonic() - last_revive > REVIVE_INTERVAL_S:
+                revive(sorted(in_use))
+                last_revive = time.monotonic()
+            quota = quota_warning(plans())
+            if quota != last_quota:
+                if quota:
+                    log(f"plan: {quota}")
+                    if notify:
+                        notify(quota, "VPN plan running out")
+                last_quota = quota
             pinned = {node for _, auto, node in snap["lanes"].values() if not auto and node}
             for node in pinned:
                 if node_alive(node):
