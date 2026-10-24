@@ -127,14 +127,37 @@ def reap_stream_logs(wait_s=10):
     return pids
 
 
+def _service_pid(base):
+    with urllib.request.urlopen(base + "/api/campaign/state", timeout=2) as r:
+        pid = (r.headers.get("X-GS-Instance") or "").partition("-")[0]
+    return int(pid) if pid.isdigit() else None
+
+
+def _service_lab_mode(base):
+    """The running service's lab mode (preflight lab_mode), None when it does not report one."""
+    _, pf = call(base, "/api/campaign/preflight", timeout=5)
+    v = pf.get("lab_mode")
+    return v if isinstance(v, bool) else None
+
+
 def ensure_service(base, port, wait_s=60, lab=False):
+    """lab=True: a running service must be in lab mode too. Lab 10-24: labday reused an 8081 started without --lab; its
+    uncapped plan and dashboard stream layer buried the command replies and takeoff failed at set_hover_z."""
     reap_stream_logs()
     try:
         stale = _service_stale(base)
-        if stale and _safe_to_restart(base):
-            print(f"service on {port} runs code older than {stale[1].relative_to(ROOT)}: restarting it (disarmed, idle)")
-            events.log("service_restart_stale", port=port, pid=stale[0], newest=str(stale[1].relative_to(ROOT)))
-            os.kill(stale[0], signal.SIGTERM)
+        wrong_mode = lab and _service_lab_mode(base) is False
+        if wrong_mode and not _safe_to_restart(base):
+            sys.exit(f"service on {port} runs without --lab and a flight may be on: land, then run this again")
+        if (stale or wrong_mode) and _safe_to_restart(base):
+            pid = stale[0] if stale else _service_pid(base)
+            if pid is None:
+                sys.exit(f"service on {port} runs without --lab and gives no pid: stop it, then run this again")
+            why = f"runs code older than {stale[1].relative_to(ROOT)}" if stale else "runs without --lab"
+            print(f"service on {port} {why}: restarting it (disarmed, idle)")
+            events.log("service_restart_stale" if stale else "service_restart_not_lab", port=port, pid=pid,
+                       newest=str(stale[1].relative_to(ROOT)) if stale else None)
+            os.kill(pid, signal.SIGTERM)
             for _ in range(20):
                 time.sleep(0.5)
                 try:
@@ -1718,12 +1741,12 @@ def main(argv=None):
         return 0
     base = f"http://127.0.0.1:{a.port}"
     if a.restore_defaults:
-        ensure_service(base, a.port)
+        ensure_service(base, a.port, lab=True)
         ok = write_gains(base, "defaults", yes=a.yes)
         return 0 if ok else 1
     if not a.campaign:
         if a.gains:
-            ensure_service(base, a.port)
+            ensure_service(base, a.port, lab=True)
             ok = write_gains(base, a.gains, yes=a.yes, force_livetune=a.force_livetune)
             return 0 if ok else 1
         ap.error("the following arguments are required: campaign")
@@ -1733,7 +1756,7 @@ def main(argv=None):
         sys.exit(why)
     remember_pack(pack)
     events.log("fly_start", campaign=a.campaign, pack=pack, record_only=a.record_only, once=a.once)
-    ensure_service(base, a.port)
+    ensure_service(base, a.port, lab=True)
     print("\n".join(vofa_setup(base)), flush=True)
     if a.record_only:
         try:

@@ -47,6 +47,13 @@ def _build_argparser() -> argparse.ArgumentParser:
         help="relay live_tracker camera fixes from udp 127.0.0.1:PORT to the drone (default 47800, 0 = off)",
     )
     p.add_argument(
+        "--local-port", type=int, default=14550,
+        help="PC-side UDP port of the drone link (default 14550). The drone answers the last sender, so a "
+             "soak uses a spare one to run next to the lab's 8081")
+    p.add_argument(
+        "--cmd-port", type=int, default=1349,
+        help="local command UDP port for the dashboard/tools (default 1349)")
+    p.add_argument(
         "--lab", action="store_true",
         help="lab mode: no dashboard stream layer. Slot 0 = sidebar frame at 10 Hz, slots 1-3 only from "
              "the card's log plan, an FC reboot gets back the last request per slot (lab up starts this)")
@@ -269,10 +276,9 @@ def main() -> None:
     # The bridge binds 0.0.0.0:14550 with SO_REUSEADDR, so a second service shares the port without an
     # error and Windows hands the drone's replies to the older socket: the new one gets no frames and
     # every flight ends on "link lost" (open item bridge-port-shared-silently, lab 10-22).
-    from ground_station.comm.wifi_bridge import BRIDGE_PORT
     from ground_station.service.instance_guard import BridgePortBusy, ensure_bridge_port_free
     try:
-        ensure_bridge_port_free(BRIDGE_PORT)
+        ensure_bridge_port_free(args.local_port)
     except BridgePortBusy as exc:
         print(f"[service] REFUSED: {exc}", file=sys.stderr, flush=True)
         sys.exit(2)
@@ -294,6 +300,8 @@ def main() -> None:
         wifi_host=args.wifi_host,
         wifi_port=args.wifi_port,
         relay_port=args.relay_port or None,
+        local_port=args.local_port,
+        cmd_udp_port=args.cmd_port,
         on_telemetry=None,  # set below after service exists
     )
     bridge.lab_mode = args.lab

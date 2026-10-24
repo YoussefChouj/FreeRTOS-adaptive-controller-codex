@@ -908,9 +908,10 @@ def test_write_gains_in_flight(capsys, monkeypatch):
     assert "1/1 ACK (applied, 8081 journal)" in out
 
 
-def _fake_service(monkeypatch, stale, safe):
+def _fake_service(monkeypatch, stale, safe, lab_mode=None):
     # ensure_service with a fake 8081: down after the kill, up once a new one is started
     log = {"kill": [], "popen": []}
+    monkeypatch.setattr(campaign_fly, "_service_pid", lambda base: 777)
     monkeypatch.setattr(campaign_fly, "_service_stale", lambda base: stale)
     monkeypatch.setattr(campaign_fly, "_safe_to_restart", lambda base: safe)
     monkeypatch.setattr(campaign_fly.os, "kill", lambda pid, sig: log["kill"].append(pid))
@@ -922,9 +923,33 @@ def _fake_service(monkeypatch, stale, safe):
     def call(base, path, timeout=None):
         if log["kill"] and not log["popen"]:
             raise OSError("down")
-        return 200, {}
+        return 200, ({"lab_mode": lab_mode} if path == "/api/campaign/preflight" and lab_mode is not None else {})
     monkeypatch.setattr(campaign_fly, "call", call)
     return log
+
+
+def test_ensure_service_restarts_a_non_lab_service_in_lab_mode_when_safe(monkeypatch, capsys):
+    # Lab 10-24: labday reused a hand-started 8081 without --lab; replies came back seconds late (sysid aborted)
+    log = _fake_service(monkeypatch, None, True, lab_mode=False)
+    campaign_fly.ensure_service("http://x", 8081, lab=True)
+    assert log["kill"] == [777]
+    assert log["popen"] and log["popen"][0][-3:] == ["--port", "8081", "--lab"]
+    assert "runs without --lab: restarting it" in capsys.readouterr().out
+
+
+def test_ensure_service_stops_on_a_non_lab_service_that_may_be_flying(monkeypatch):
+    log = _fake_service(monkeypatch, None, False, lab_mode=False)
+    with pytest.raises(SystemExit, match="land, then run this again"):
+        campaign_fly.ensure_service("http://x", 8081, lab=True)
+    assert log == {"kill": [], "popen": []}
+
+
+@pytest.mark.parametrize("lab,lab_mode", [(True, True), (True, None), (False, False)])
+def test_ensure_service_keeps_a_service_in_the_wanted_mode(monkeypatch, lab, lab_mode):
+    # already lab mode; an old service that does not report its mode; a caller that does not ask for lab mode
+    log = _fake_service(monkeypatch, None, True, lab_mode=lab_mode)
+    campaign_fly.ensure_service("http://x", 8081, lab=lab)
+    assert log == {"kill": [], "popen": []}
 
 
 def test_ensure_service_restarts_stale_code_when_safe(monkeypatch, capsys):

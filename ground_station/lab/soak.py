@@ -292,6 +292,15 @@ def spare_port() -> int:
         return s.getsockname()[1]
 
 
+def spare_udp_port() -> int:
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.bind(("0.0.0.0", 0))
+        return s.getsockname()[1]
+    finally:
+        s.close()
+
+
 def udp_free(host: str, port: int) -> bool:
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -501,12 +510,10 @@ class Soak:
         for port in (DRONE_PORT, CTL_PORT):
             if not udp_free(DRONE_HOST, port):
                 raise SystemExit(f"udp {DRONE_HOST}:{port} is taken: another fake drone or soak runs here; stop it")
-        # The soak's service binds the bridge port 0.0.0.0:14550 with SO_REUSEADDR, so next to a running service
-        # (the lab's 8081) both sockets share it and Windows hands the fake drone's replies to the older one:
-        # the soak service hears nothing and every flight dies on "link lost" (10-22 deck soak).
-        if not udp_free("0.0.0.0", DRONE_PORT):
-            raise SystemExit(f"udp 0.0.0.0:{DRONE_PORT} is taken: a ground-station service (the 8081 one?) holds the "
-                             "bridge port and would take the fake drone's replies; stop it, labday restarts it")
+        # The soak's service links from spare UDP ports, never the lab's 0.0.0.0:14550 / 1349: two sockets sharing
+        # 14550 make Windows hand the fake drone's replies to the older one (10-22 deck soak). The fake drone
+        # answers the last uplink sender, so a spare port works, and a soak can run next to the lab's 8081.
+        self.link_port, self.cmd_port = spare_udp_port(), spare_udp_port()
         if shutil.disk_usage(ROOT).free < 3 * 2**30:
             raise SystemExit("less than 3 GB free: a soak day writes about 0.5 GB of recordings")
         self.out.mkdir(parents=True, exist_ok=True)
@@ -521,7 +528,10 @@ class Soak:
         self.start("fake_drone", ["-m", "ground_station.lab.fake_drone", "--silent-s", f"{SILENT_S:g}",
                                   "--vbat", f"{FRESH_V:g}"])
         self.service = self.start("service", ["-m", "ground_station.service", "--port", str(self.port),
-                                              "--wifi-host", DRONE_HOST, "--lab", "--relay-port", "0"])
+                                              "--wifi-host", DRONE_HOST, "--relay-port", "0",
+                                              *([] if self.a.plain_service else ["--lab"]),
+                                              "--local-port", str(self.link_port),
+                                              "--cmd-port", str(self.cmd_port)])
         deadline = time.monotonic() + 90
         while True:
             if self.service.poll() is not None:
@@ -594,7 +604,8 @@ class Soak:
         drv = Driver(n, d["flights"], swap_id)
         self.log(f"day {n}: {len(d['flights'])} flights, pack swap at {swap_id}")
         labday = subprocess.Popen([sys.executable, "-u", "-m", "ground_station.lab.labday", str(day_file),
-                                   "--port", str(self.port), "--cooldown", "0", "--no-camera", "--pack", "1"],
+                                   "--port", str(self.port), "--cooldown", "0", "--no-camera", "--pack", "1",
+                                   *(["--plain-service"] if self.a.plain_service else [])],
                                   cwd=self.tree, env=self.env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=subprocess.STDOUT, start_new_session=True)
         self.procs.append(labday)
@@ -694,6 +705,8 @@ def main(argv=None) -> int:
     ap.add_argument("--flights", type=int, help="fly only the first N flights of each day (a quick check)")
     ap.add_argument("--day-src", default=str(DAY_SRC), help="the day file the fixture copies (default 2026-10-19)")
     ap.add_argument("--out", help="run folder (default logs/soak/<stamp>)")
+    ap.add_argument("--plain-service", action="store_true",
+                    help="run 8081 without --lab, as labday did on 2026-10-24 (replays the late-reply fault)")
     return Soak(ap.parse_args(argv)).run()
 
 

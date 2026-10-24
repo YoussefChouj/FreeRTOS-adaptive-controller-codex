@@ -110,6 +110,28 @@ INGEST_LAG_WARN_NS = 200_000_000  # PROPOSED: frame age that counts as "ingest b
 BRIDGE_PORT = 14550              # the WiFi link port: the drone's replies come back to it
 
 
+def socket_pending_bytes(sock) -> Optional[int]:
+    """Bytes waiting in the kernel receive buffer of `sock` (FIONREAD), None where it cannot be read.
+
+    This is the queue nobody sees: if the rx thread falls behind, datagrams pile up here (up to the 8 MB buffer) and
+    every reply arrives seconds late while the ingest queue looks empty. Windows reports the total queued bytes."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            n = ctypes.c_ulong(0)
+            # Python's socket.ioctl has no FIONREAD on Windows; call ioctlsocket directly.
+            rc = ctypes.windll.ws2_32.ioctlsocket(ctypes.c_size_t(sock.fileno()), 0x4004667F, ctypes.byref(n))
+            return int(n.value) if rc == 0 else None
+        import array
+        import fcntl
+        import termios
+        buf = array.array("i", [0])
+        fcntl.ioctl(sock.fileno(), termios.FIONREAD, buf, True)
+        return int(buf[0])
+    except Exception:
+        return None
+
+
 def udp_port_holder(port: int = BRIDGE_PORT, exclude_pid: Optional[int] = None) -> list[str]:
     """Who holds the wildcard UDP ``port``, [] when it is free.
 
@@ -322,8 +344,12 @@ class WifiBridge:
         # through the 14550 socket: the module sends its downlink to the last uplink sender, so a second host socket
         # would steal the stream (stream_log --relay-port does the same). None = off.
         relay_port: Optional[int] = None,
+        # The PC-side port of the link socket. The module (and the fake drone) send the downlink to the last
+        # uplink sender, so any free port works; a soak picks a spare one so it can run next to the lab's 8081.
+        local_port: int = BRIDGE_PORT,
     ):
         self._wifi_host = wifi_host
+        self._local_port = int(local_port)
         self._wifi_port = wifi_port
         self._cmd_udp_port = cmd_udp_port
         self._telem_udp_port = telem_udp_port
@@ -508,7 +534,7 @@ class WifiBridge:
             self._wifi.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, RX_SOCKET_BUFFER_BYTES)
         except OSError:
             pass
-        self._wifi.bind(("0.0.0.0", 14550))
+        self._wifi.bind(("0.0.0.0", self._local_port))
         self._wifi.settimeout(0.1)
 
         # Nudge on the same socket so MicoAir routes the response here.
@@ -668,7 +694,8 @@ class WifiBridge:
         age = lambda t: round(now - t, 3) if t else None   # None: nothing received yet
         return {"rx_age_s": age(self._last_wifi_rx), "reply_age_s": age(self._last_reply_rx),
                 "ingest_lag_s": round(self.ingest_lag_ns / 1e9, 3), "ingest_queue": self._ingest_q.qsize(),
-                "ingest_dropped": self.ingest_dropped}
+                "ingest_dropped": self.ingest_dropped,
+                "rx_pending_bytes": socket_pending_bytes(self._wifi) if getattr(self, "_wifi", None) else None}
 
     def _on_link_back(self, gap_s: float) -> None:
         """Re-send every live slot's last request after a whole-link silence (the FC came back with its boot default)."""

@@ -340,10 +340,11 @@ def log_offsets():
     return out
 
 
-def ensure_8081(port=8081):
+def ensure_8081(port=8081, lab=True):
     """Same 8081 as `fly` uses (another port only for the soak); also ends a leftover live logger
-    (campaign_fly.reap_stream_logs)."""
-    campaign_fly.ensure_service(f"http://127.0.0.1:{port}", port)
+    (campaign_fly.reap_stream_logs). lab=False only for the soak's plain service on spare link ports:
+    a lab restart there would start a second service on the lab's own link ports."""
+    campaign_fly.ensure_service(f"http://127.0.0.1:{port}", port, lab=lab)
 
 
 def floor_check(folder):
@@ -391,11 +392,11 @@ class Day:
 
     def __init__(self, d, state_path, pack=None, camera=True, ask=input, run=None, popen=None, cooldown_s=0,
                  wait=cooldown, service=None, floor=None, vitals=None, clock=time.monotonic, sleep=time.sleep,
-                 port=8081):
+                 port=8081, lab_service=True):
         self.d, self.state_path, self.pack, self.port = d, Path(state_path), pack, port
         self.cooldown_s, self.wait, self.landed = cooldown_s, wait, None
         self.ask, self.run, self.popen = ask, run or subprocess.run, popen or subprocess.Popen
-        self.service = service or (lambda: ensure_8081(port))
+        self.service = service or (lambda: ensure_8081(port, lab=lab_service))
         self.vitals = vitals or (lambda: campaign_fly._vitals(f"http://127.0.0.1:{port}"))   # {} when 8081 is down
         self.clock, self.sleep, self.rest_v = clock, sleep, None
         self.state = load_state(self.state_path)
@@ -715,6 +716,8 @@ def main(argv=None):
                     f"prompt, Enter skips it (default: the day file's cooldown_s, else {COOLDOWN_S} s PROPOSED; 0 = off)")
     ap.add_argument("--floor", help="the floor scan folder under logs/video_truth (default: the day file's)")
     ap.add_argument("--port", type=int, default=8081, help="the service port (default 8081; the soak uses a spare one)")
+    ap.add_argument("--plain-service", action="store_true",
+                    help="soak only: keep the service on --port although it runs without --lab")
     a = ap.parse_args(argv)
     try:
         d = load_day(day_path(a.day))
@@ -726,7 +729,8 @@ def main(argv=None):
         sys.stdout.write(sheet(d))
         return 0
     day = Day(d, state_file(d.get("day") or a.day), pack=a.pack, camera=not a.no_camera, floor=a.floor,
-              cooldown_s=a.cooldown if a.cooldown is not None else float(d.get("cooldown_s", COOLDOWN_S)), port=a.port)
+              cooldown_s=a.cooldown if a.cooldown is not None else float(d.get("cooldown_s", COOLDOWN_S)), port=a.port,
+              lab_service=not a.plain_service)
     if a.list:
         print("\n".join(day.listing()))
         return 0

@@ -233,20 +233,29 @@ def test_kill_tree_stops_a_child_started_in_its_own_session():
             p.kill()
 
 
-def test_setup_refuses_when_another_service_holds_the_bridge_port(tmp_path, monkeypatch):
-    # 10-22: the lab's 8081 service still held 0.0.0.0:14550, took the fake drone's replies, and every soak flight
-    # died on "link lost". The soak must stop before it copies the tree or starts anything.
+def test_setup_runs_next_to_a_service_that_holds_the_bridge_port(tmp_path, monkeypatch):
+    # 10-22: the lab's 8081 held 0.0.0.0:14550 and took the fake drone's replies, so the soak refused to start.
+    # 10-24: the soak's service now links from spare UDP ports (--local-port/--cmd-port), so it runs next to the
+    # lab's 8081 and needs no refusal: setup must go past the old port check.
     held = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     held.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)   # as the bridge binds it
     try:
         held.bind(("0.0.0.0", soak.DRONE_PORT))
     except OSError:
         pass                                                      # a real service holds it: the same condition
-    monkeypatch.setattr(soak, "copy_tree", lambda dst: pytest.fail("setup went past the port check"))
+
+    class Past(Exception):
+        pass
+
+    def copy_tree(dst):
+        raise Past
+
+    monkeypatch.setattr(soak, "copy_tree", copy_tree)
     s = soak.Soak(argparse.Namespace(out=str(tmp_path / "run")))
     try:
-        with pytest.raises(SystemExit, match="taken"):
+        with pytest.raises(Past):
             s.setup()
     finally:
         held.close()
     assert s.procs == []
+    assert soak.DRONE_PORT not in (s.link_port, s.cmd_port)

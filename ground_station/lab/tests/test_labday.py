@@ -560,3 +560,20 @@ def test_port_seam_reaches_the_flight_and_the_service_check(tmp_path, monkeypatc
     assert labday.main([str(tmp_path / "day.yaml"), "--list", "--port", "18081"]) == 0
     assert labday.main([str(tmp_path / "day.yaml"), "--list"]) == 0
     assert [kw["port"] for kw in made] == [18081, 8081]
+
+
+def test_service_check_wants_lab_mode_unless_the_soak_keeps_its_plain_service(monkeypatch, tmp_path):
+    """Lab 2026-10-24: labday flew on a hand-started 8081 without --lab, so the sysid card ran at stream rates the
+    link could not carry. The service check now asks for --lab. The soak's own plain service on spare link ports is
+    kept (--plain-service): a lab restart there would start a second service on the lab's link ports."""
+    seen = []
+    monkeypatch.setattr(campaign_fly, "ensure_service", lambda base, port, **kw: seen.append((port, kw.get("lab"))))
+    labday.ensure_8081()
+    labday.ensure_8081(18081, lab=False)
+    assert seen == [(8081, True), (18081, False)]
+    made = []
+    monkeypatch.setattr(labday, "Day", lambda *a, **kw: made.append(kw) or SimpleNamespace(listing=lambda: []))
+    _day(tmp_path, [{"id": "A", "fly": "lab_c_robust"}])
+    assert labday.main([str(tmp_path / "day.yaml"), "--list"]) == 0
+    assert labday.main([str(tmp_path / "day.yaml"), "--list", "--port", "18081", "--plain-service"]) == 0
+    assert [m["lab_service"] for m in made] == [True, False]
