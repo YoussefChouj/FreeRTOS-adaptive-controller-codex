@@ -20,7 +20,7 @@
 #   reference" demo, only if adrc-alone-retest is clean.
 # - D8: at speed the OF EKF trips into FIXED and camera mode 3 then stops applying fixes for the rest of the flight.
 #   The fast speed-ladder rungs are in their own deck with camera mode 2 (camera mode is per day):
-#   `.\labday 2026-10-23-fast` (docs/lab/days/2026-10-23-fast.yaml), after this deck.
+#   `.\labday 2026-10-23-fast` (docs/lab/days/2026-10-23-fast.yaml), flown BEFORE this deck (2026-10-24).
 # - Figure-8 bandwidth: the x lobe tracks at 0.25 Hz and runs out of bandwidth above it; no flight here goes faster
 #   except the speed-ladder rungs, which test the estimator, not tracking.
 # - Memory A/B: 10-21 has memory on n=5 / off n=3 (off-3, off-5 not flown). Today: 3 off + 2 on, interleaved, gives

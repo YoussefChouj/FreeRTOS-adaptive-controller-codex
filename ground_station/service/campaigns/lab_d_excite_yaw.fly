@@ -1,0 +1,18 @@
+# D-yaw: yaw rate-loop multisine, two 30 s passes (0.5-15 Hz, 60 deg/s = the yaw cap, excitation.AMP_MAX_DPS),
+# same set-up as lab_d_excite (MRAC injection off, default PID gains, fusion 2). Two passes give the repeat for the
+# coherence / variance check. All values PROPOSED, none measured. Then on the ground:
+# python -m ground_station.autotune.cli <session> --axis yaw. Plan: docs/lab/2026-10-24-prep-report.md
+campaign lab-d-excite-yaw
+# rate 100 = the ceiling: the firmware telemetry send task runs at 100 Hz (SEND_TASK_HZ, campaign_capture.py:351);
+# 6.7x the 15 Hz top line. The live probe may still lower it if the link loses frames. thrust_model adds
+# u_gyrox/u_gyroy/u_gyroz (rate PID output = Uc for the frequency response); the core set has gyro PID .FB/.Des + motors.
+rate 100
+log velocity_loops camera_fusion thrust_model
+set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10
+takeoff 0.5 mrac_injection=0
+hold 8
+excite axis=yaw signal=multisine f0=0.5 f1=15 amp=60 duration_s=30
+hold 3
+excite axis=yaw signal=multisine f0=0.5 f1=15 amp=60 duration_s=30
+hold 3
+land

@@ -1,4 +1,6 @@
-# Lab day 2026-10-23, fast deck: fly it with `.\labday 2026-10-23-fast`, AFTER `.\labday 2026-10-23` (camera mode is per deck).
+# Lab day 2026-10-23, fast deck: fly it with `.\labday 2026-10-23-fast`, FIRST, before `.\labday 2026-10-23` (camera mode is per deck).
+# 2026-10-24: the operator put this deck first so the sysID data comes on a fresh pack; as many sysID flights as
+# needed (roll+pitch twice for the repeat, then yaw). Plan: docs/lab/2026-10-24-prep-report.md
 # D8 (docs/research/2026-10-22-d8-drift-figure8.md): on 10-21 speed-ladder-1 and -2 the OF EKF health check tripped on a
 # fast lap and latched FIXED bias mode; camera mode 3 applies a fix only while the EKF is active
 # (TASK/StabilizerTask.c:966), so the camera stopped correcting and the drift grew to 118 cm. Mode 2 calls
@@ -8,19 +10,31 @@
 # Not carried to other days (the file name is not a date). A rung not flown well stays on this list.
 day: 2026-10-23
 carry: false
-title: rate-loop sysID (roll, pitch multisine), then speed ladder rungs 0-2 with camera fusion mode 2, to check that the camera keeps correcting after an OF EKF trip, then the xy camera delay flight
+title: smoke hover, rate-loop sysID (roll and pitch twice, then yaw), then speed ladder rungs 0-2 with camera fusion mode 2, to check that the camera keeps correcting after an OF EKF trip, then the xy camera delay flight
 camera:
   floor: floor-1023           # same scan as the main deck
   mode: 2                     # camera corrects ano_of.earth_x/y in any bias mode (D8 fix A)
   args: [--yaw-deg, "94", --delay-ms, "330"]
 before:
-  - "Main deck 2026-10-23 done or stopped; 8081 running, `arm 0`, landing pad clear"
+  - "Fly this deck FIRST, before the main deck 2026-10-23; 8081 running, `arm 0`, landing pad clear"
   - "Tracker window: the dot sits on the drone center while parked before arming"
 flights:
+  - id: smoke-hover-mode2
+    fly: lab_s_smoke
+    why: "First flight of the day, in camera mode 2: hover, the preset paths, land on the pad; checks the drone and the camera before the sysID flights"
+    pass: "every traj_go accepted; lands inside the pad gate; drift_nn.steps > 0"
   - id: rate-sysid-roll-pitch
     fly: lab_d_excite
     why: "Plan: sysID after the smoke hover. Roll then pitch rate-loop multisine (0.5-15 Hz, 60 deg/s, 30 s each), MRAC injection off. Needs camera mode 2 (each excite re-zeroes the flow origin; mode 3 pulls it back mid-run), so it sits in this deck"
     pass: "both excites run to the end; then on the ground `python -m ground_station.autotune.cli <session> --axis roll` (and pitch) gives a fit (PROPOSED: fit and validation numbers are D7's to judge)"
+  - id: rate-sysid-roll-pitch-2
+    fly: lab_d_excite
+    why: "Repeat of the roll and pitch sysID: two runs give the run-to-run spread of the frequency response, the check that one fit is not luck"
+    pass: "both excites run to the end; the roll and pitch fits agree with the first run (PROPOSED: gain within 2 dB at the crossover)"
+  - id: rate-sysid-yaw
+    fly: lab_d_excite_yaw
+    why: "Yaw rate-loop sysID, two 30 s passes (0.5-15 Hz, 60 deg/s = the yaw cap); yaw was never identified"
+    pass: "both excites run to the end; then `python -m ground_station.autotune.cli <session> --axis yaw` gives a fit"
   - id: speed-ladder-0-mode2
     fly: lab_h_speed_ladder_l0
     why: "Rung 0 (15 deg cap) never tripped on 10-21: the mode 2 baseline"
