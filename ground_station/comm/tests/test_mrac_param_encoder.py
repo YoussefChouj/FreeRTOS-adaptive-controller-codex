@@ -376,9 +376,11 @@ def test_drift_wide_decode(send_data):
 
 
 def test_drift_command_gate_admits_the_wide_block(send_data):
-    # WP-44 (41013a0e) admitted VAR_WRITE too; the MRAC element block must stay admitted
+    # WP-44 (41013a0e) admitted VAR_WRITE; EXCITE and the MRAC prior block came later.
+    # The MRAC element block must stay admitted.
     assert ("if ((id == 0U) || ((id > CMD_ID_LAST_PLAIN) && !MRAC_ELEM_CMD_IS(id) && (id != EXT_POS_CMD_ID) &&"
-            " (id != VAR_WRITE_CMD_ID))) {") in send_data
+            " (id != VAR_WRITE_CMD_ID) && (id != EXCITE_CMD_ID) &&"
+            " ((id < MRAC_PRIOR_CMD_BASE) || (id > MRAC_PRIOR_CMD_LAST)))) {") in send_data
     assert _c_int(_defines(send_data)["CMD_ID_LAST_PLAIN"], {}) == 0x1F   # 0x1F CTRL_SELECT since WP-38
 
 

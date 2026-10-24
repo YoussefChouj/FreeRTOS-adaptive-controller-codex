@@ -408,6 +408,13 @@ class WifiBridge:
         # (test_ingest_gil_convoy_lag: one busy thread at 100 Hz gave 435 ms frame age).
         self._mirror_q: collections.deque = collections.deque(maxlen=MIRROR_QUEUE_MAX)
 
+        # Stream tick the FC prices slots at (API/subscribe.c Subscribe_StreamTickHz):
+        # 200 Hz in SUBSCRIBE_ONLY, 100 Hz otherwise. set_telemetry_mode_now sets it.
+        self._stream_tick_hz: int = 100
+        # Mode last asked for. It is resent before each 0x21 request, so an FC that
+        # rebooted (boots MIXED, 100 Hz) is switched back before its slots are priced.
+        self._desired_telemetry_mode: Optional[str] = None
+
         # Socket used for both WiFi TX and RX
         self._wifi: Optional[socket.socket] = None
         self._wifi_send: Optional[socket.socket] = None
@@ -1510,6 +1517,9 @@ class WifiBridge:
             slot=slot,
         )
         self._slot_states[slot] = "sent"
+        if self._desired_telemetry_mode is not None and self._wifi is not None:
+            # Idempotent: a same-mode resend keeps the FC's slots (API/subscribe.c SetTelemetryMode).
+            self._send_cmd_frame(0x0F, self._TELEMETRY_MODE_INDEX[self._desired_telemetry_mode], 0.0)
         self._send_request_paced(request)
         
         rate_hz = self._expected_rate_for_slot(slot, divider)
@@ -1610,18 +1620,16 @@ class WifiBridge:
             "projected_bps": int(projected_bps),
         }
 
-    @staticmethod
-    def _expected_rate_for_slot(slot: int, divider: int) -> float:
-        """Expected on-wire rate: 100 Hz Send_Task contract / divider.
+    def _expected_rate_for_slot(self, slot: int, divider: int) -> float:
+        """Expected on-wire rate: stream tick / divider.
 
-        Uses the 100 Hz "by design" contract (rate_planner /
-        firmware_contract), matching this endpoint's baseline test;
-        the firmware header says 200 nominal (~80 measured MIXED).
+        The tick is 100 Hz in LEGACY / MIXED and 200 Hz in SUBSCRIBE_ONLY
+        (firmware_contract SUBSCRIBE_SEND_TASK_HZ*, API/subscribe.c).
         """
         if divider <= 0:
             return 0.0
-        SUBSCRIBE_SEND_TASK_HZ = 100
-        return min(SUBSCRIBE_SEND_TASK_HZ / divider, SUBSCRIBE_SEND_TASK_HZ)
+        tick = self._stream_tick_hz
+        return min(tick / divider, tick)
 
     def clear_manifest_schemas(self) -> None:
         """Drop all per-slot schemas (called when the operator stops a layout)."""
@@ -2493,8 +2501,10 @@ class WifiBridge:
     _TELEMETRY_MODE_INDEX = {
         "legacy":          100,   # always emit Frame A/B/C
         "mixed":           101,   # Frame A/B/C + subscribe (boot default)
-        "subscribe_only":  102,   # skip legacy path; Send_Task at 200 Hz
+        "subscribe_only":  102,   # skip legacy path; stream ticks at 200 Hz
     }
+    # Stream tick per mode (firmware_contract SUBSCRIBE_SEND_TASK_HZ*, 2026-10-24).
+    _STREAM_TICK_HZ = {"legacy": 100, "mixed": 100, "subscribe_only": 200}
 
     def set_telemetry_mode_now(self, mode: str) -> None:
         """Fire-and-forget FC telemetry-mode switch via CMD 0x0F.
@@ -2508,18 +2518,12 @@ class WifiBridge:
         Args:
             mode: ``"legacy"``, ``"mixed"``, or ``"subscribe_only"``.
 
-        Caveats (2026-09-09 subscribe-only-bug):
-            * ``"subscribe_only"`` skips the legacy Frame A/B/C path so
-              ``Send_Task`` runs at the nominal 200 Hz cadence instead of
-              being paced to ~80 Hz by the UART4 DMA busy-wait. BUT the
-              current firmware does NOT process 0x21 subscribe control-plane
-              requests in SUBSCRIBE_ONLY mode — 0x08 schema replies never
-              arrive. Until ``USER/main.c`` is refactored to extract the
-              control-plane handler out of ``Send_Groundstation_Telemetry_UART4``,
-              SUBSCRIBE_ONLY mode breaks new subscribe requests. Wire the
-              subscribe BEFORE switching to SUBSCRIBE_ONLY if you need to
-              (e.g. ``--no-auto-subscribe`` plus manual subscribe_preset
-              calls, then poke ``g_telemetry_mode`` to 2 via livewatch).
+        ``"subscribe_only"`` skips the legacy Frame A/B/C path and the
+        stream ticks every 5 ms cycle (200 Hz, 2026-10-24). 0x21 subscribe
+        requests are still served (USER/main.c calls
+        ``Uart5_Subscribe_HandleRequest`` every cycle). A switch that changes
+        the tick rate stops every slot on the FC; a same-mode resend keeps
+        them. The mode is remembered and resent before each 0x21 request.
         """
         if mode not in self._TELEMETRY_MODE_INDEX:
             raise ValueError(
@@ -2532,6 +2536,8 @@ class WifiBridge:
                 "set_telemetry_mode_now()"
             )
         idx = self._TELEMETRY_MODE_INDEX[mode]
+        self._desired_telemetry_mode = mode
+        self._stream_tick_hz = self._STREAM_TICK_HZ[mode]
         # Value is ignored for idx 100..102 (the FC only reads the index).
         self._send_cmd_frame(0x0F, idx, 0.0)
         print(f"[wifi_bridge] Sent telemetry-mode switch: {mode} (CMD 0x0F idx={idx})",

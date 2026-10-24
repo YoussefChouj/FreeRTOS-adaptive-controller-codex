@@ -47,8 +47,30 @@ static uint8_t err_truncate_tmp[241];
  * firmware boots; the host can flip to SUBSCRIBE_ONLY via ground command. */
 volatile uint8_t g_telemetry_mode = SUBSCRIBE_DEFAULT_TELEMETRY_MODE;
 
+static uint16_t TickHzForMode(uint8_t mode)
+{
+    return (mode == (uint8_t)SUBSCRIBE_TELEMETRY_SUBSCRIBE_ONLY)
+        ? (uint16_t)SUBSCRIBE_SEND_TASK_HZ_FAST
+        : (uint16_t)SUBSCRIBE_SEND_TASK_HZ;
+}
+
+uint16_t Subscribe_StreamTickHz(void)
+{
+    return TickHzForMode(g_telemetry_mode);
+}
+
+static void StopAllStreams(void);   /* defined after s_streams */
+
+/* Called from Process_GroundStation_Command in Send_Task, the same task that
+ * runs Subscribe_StreamTick, so stopping the slots here cannot race a tick.
+ * A change of tick rate stops every slot: each was budget-checked at the old
+ * rate, and at double the rate it could overrun the link. Re-sending the same
+ * mode (lossy-link retry) keeps the slots. */
 void SetTelemetryMode(uint8_t mode)
 {
+    if (TickHzForMode(mode) != TickHzForMode(g_telemetry_mode)) {
+        StopAllStreams();
+    }
     g_telemetry_mode = mode;
 }
 
@@ -391,6 +413,17 @@ static uint8_t s_rr;
 static uint32_t s_last_tick_ms;
 static uint8_t  s_tick_started;
 
+static void StopAllStreams(void)
+{
+    uint8_t i;
+    for (i = 0U; i < SUBSCRIBE_MAX_SLOTS; i++) {
+        s_streams[i].active = 0U;
+        s_streams[i].due    = 0U;
+        s_streams[i].phase  = 0U;
+    }
+    s_tick_started = 0U;
+}
+
 /* Parse target. A malformed request must NOT disturb a stream that is
  * already running, so parsing lands here and is copied into its slot only
  * after every range has validated. */
@@ -451,7 +484,7 @@ uint32_t Subscribe_StreamBps(const Subscribe_Stream_t* st)
         return 0U;
     }
     return (((uint32_t)SUBSCRIBE_STREAM_FRAME_OVERHEAD + (uint32_t)st->total_bytes) *
-            (uint32_t)SUBSCRIBE_SEND_TASK_HZ) / (uint32_t)st->divider;
+            (uint32_t)Subscribe_StreamTickHz()) / (uint32_t)st->divider;
 }
 
 uint8_t Subscribe_ParseStreamRequest(const uint8_t* buf, uint16_t len,
@@ -603,7 +636,7 @@ uint8_t Subscribe_ParseStreamRequest(const uint8_t* buf, uint16_t len,
      * `other_bps_*` carries what the other slots have already committed. */
     /* 6 header + 4 timestamp + values + 2 CRC16 */
     frame_bytes = (uint32_t)SUBSCRIBE_STREAM_FRAME_OVERHEAD + total;
-    bps = (frame_bytes * (uint32_t)SUBSCRIBE_SEND_TASK_HZ) / (uint32_t)divider;
+    bps = (frame_bytes * (uint32_t)Subscribe_StreamTickHz()) / (uint32_t)divider;
     if (transport == SUBSCRIBE_TRANSPORT_USART3) {
         cap = (uint32_t)USART3_BAUD / 10U;          /* 8N1 = 10 bits per byte */
         pct = (uint32_t)SUBSCRIBE_BUDGET_PCT_USART3;
@@ -748,14 +781,21 @@ void Subscribe_StreamTick(void)
     uint8_t served;
     uint32_t now_ms;
 
-    /* Pacer: the link guard prices every slot at SUBSCRIBE_SEND_TASK_HZ, but
-     * the SysID branch of Send_Task calls this every ~5 ms. A call that comes
-     * sooner than SUBSCRIBE_STREAM_TICK_MIN_MS after the last tick is skipped
-     * whole (no phase, no seq), so a divider means the same rate in both
-     * branches and a vTaskDelayUntil catch-up burst cannot flood the wire. */
+    uint32_t min_ms;
+
+    /* Pacer: the link guard prices every slot at Subscribe_StreamTickHz()
+     * (100 Hz, or 200 Hz in SUBSCRIBE_ONLY), but the SysID branch of
+     * Send_Task calls this every ~5 ms in every mode. A call that comes
+     * sooner than the mode's floor (SUBSCRIBE_STREAM_TICK_MIN_MS or its
+     * _FAST twin) after the last tick is skipped whole (no phase, no seq),
+     * so a divider means the priced rate in every branch and a
+     * vTaskDelayUntil catch-up burst cannot flood the wire. */
+    min_ms = (Subscribe_StreamTickHz() == (uint16_t)SUBSCRIBE_SEND_TASK_HZ_FAST)
+        ? (uint32_t)SUBSCRIBE_STREAM_TICK_MIN_MS_FAST
+        : (uint32_t)SUBSCRIBE_STREAM_TICK_MIN_MS;
     now_ms = Subscribe_TimeMs();
     if ((s_tick_started != 0U) &&
-        ((uint32_t)(now_ms - s_last_tick_ms) < (uint32_t)SUBSCRIBE_STREAM_TICK_MIN_MS)) {
+        ((uint32_t)(now_ms - s_last_tick_ms) < min_ms)) {
         return;
     }
     s_tick_started = 1U;

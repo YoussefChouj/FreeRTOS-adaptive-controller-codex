@@ -2,8 +2,9 @@
  * @module     send_data.c
  * @subsystem  comm
  * @owner      Send_Task (USER/main.c:269): Send_Groundstation_Telemetry_UART4, Process_GroundStation_Command,
- *             send_to_linux, usart3_send each cycle; 200 Hz nominal, about 80 Hz in MIXED telemetry mode
- *             (API/subscribe.h: the UART4 DMA wait paces it).
+ *             send_to_linux, usart3_send. 10 ms period, about 80 Hz in MIXED telemetry mode (the UART4
+ *             DMA wait paces it). SUBSCRIBE_ONLY: 5 ms period, streams every cycle (200 Hz), the rest every
+ *             2nd cycle (API/subscribe.h).
  * @purpose    Ground-station telemetry frames (legacy A/B/C, the 0x03 system-ID and 0x05 OF frames), the 9-state
  *             EKF step (s_ekf, g_ekf_gate), and the ground-station command handlers (k_gs_cmds table, one handler
  *             per command id).
@@ -541,42 +542,11 @@ extern float Lin_Acc_X_body, Lin_Acc_Y_body, Lin_Acc_Z_body;   /* gravity-remove
  * the golden replay inherits the mismatch rather than contradicting it. */
 #define OF_LSB_MPS  0.01f
 
-void Send_Groundstation_Telemetry_UART4(void)
+/* Parallel EKF step (ADR-0011). Its gate output g_ekf_gate feeds StabilizerTask, so it must run in every
+ * telemetry mode: the legacy UART5 path calls it in place, SUBSCRIBE_ONLY through the housekeeping call. */
+void Send_ParallelEkfStep(void)
 {
-    static uint8_t frame_counter = 0;
-    uint16_t len = 0;
-    uint8_t crc = 0;
-    int i;
-    uint8_t dma_busy = 0U;
-    /* Set to 1 when the built frame(s) already carry their own trailing checksum
-     * (Frame A closes its own CRC8 before Frame C is appended). When set, the
-     * shared XOR-CRC8 at the end of this function is skipped so it does not
-     * clobber the framing. Stays 0 for single-frame buffers (B / ID / bench / OF). */
-    uint8_t frame_self_crc = 0;
     uint32_t t_prof_sec;
-
-    PlatformObservability_Tick((uint16_t)((gs_cmd_head + 16U - gs_cmd_tail) % 16U),
-                               (uint16_t)(Usart3_Stream_Busy() != 0U));
-
-    /* Wait for the PREVIOUS UART5 transfer to drain BEFORE touching the buffer.
-     *
-     * DMA1_Stream7 reads Buf_Telemetry_UART4 asynchronously, so every write below
-     * lands in memory the hardware may still be transmitting. The drain-wait used to
-     * sit next to the DMA re-arm at the bottom of this function, ~580 lines after the
-     * first write here -- which is far too late to protect the buffer.
-     *
-     * Frame A (48 B) and the A+C burst (102 B) drain in 4-9 ms, inside the ~18 ms task
-     * period, so they were never hurt. Frame B is 305 B = 26.5 ms at 115200: still in
-     * flight when the next tick arrives. That tick rebuilt the buffer underneath it, so
-     * the DMA transmitted Frame B's head followed by the NEW frame's bytes, then sent
-     * that new frame again in full. Measured on the wire 2026-07-29: 33 of 34 Frame B
-     * were 407 bytes instead of 305 -- exactly 305 + 102 -- and 33/34 failed CRC, which
-     * is why the PID/position panels showed zeros and occasional absurd floats.
-     *
-     * Waiting here costs nothing when the previous frame has already drained (the common
-     * case) and simply paces this task to the link when it has not. */
-    /* Non-blocking check: if previous UART5 DMA transfer is still active, do not busy-wait */
-    dma_busy = ((DMA_GetCurrDataCounter(DMA1_Stream7) != 0U) || (DMA_GetCmdStatus(DMA1_Stream7) == ENABLE)) ? 1U : 0U;
 
     /* EKF step: runs every Send_Task tick, unconditionally — independent of which
      * telemetry frame this tick happens to emit. NOTE the tick is 100 Hz in normal
@@ -658,6 +628,55 @@ void Send_Groundstation_Telemetry_UART4(void)
     Ekf9_GateStep(&s_ekf, &g_ekf_gate,
                   (uint8_t)((FlightFSM_GetState() == FLIGHT_STATE_ARMED && g_motor_idle_enabled) ? 1U : 0U));
     SendProf_Record(&g_send_prof.sec_ekf, t_prof_sec);
+}
+
+/* SUBSCRIBE_ONLY skips Send_Groundstation_Telemetry_UART4, so main.c calls this at 100 Hz to keep the
+ * jobs that function does besides the UART5 frames: the observability tick and the parallel EKF. */
+void Send_SubscribeOnlyHousekeeping(void)
+{
+    PlatformObservability_Tick((uint16_t)((gs_cmd_head + 16U - gs_cmd_tail) % 16U),
+                               (uint16_t)(Usart3_Stream_Busy() != 0U));
+    Send_ParallelEkfStep();
+}
+
+void Send_Groundstation_Telemetry_UART4(void)
+{
+    static uint8_t frame_counter = 0;
+    uint16_t len = 0;
+    uint8_t crc = 0;
+    int i;
+    uint8_t dma_busy = 0U;
+    /* Set to 1 when the built frame(s) already carry their own trailing checksum
+     * (Frame A closes its own CRC8 before Frame C is appended). When set, the
+     * shared XOR-CRC8 at the end of this function is skipped so it does not
+     * clobber the framing. Stays 0 for single-frame buffers (B / ID / bench / OF). */
+    uint8_t frame_self_crc = 0;
+    uint32_t t_prof_sec;
+
+    PlatformObservability_Tick((uint16_t)((gs_cmd_head + 16U - gs_cmd_tail) % 16U),
+                               (uint16_t)(Usart3_Stream_Busy() != 0U));
+
+    /* Wait for the PREVIOUS UART5 transfer to drain BEFORE touching the buffer.
+     *
+     * DMA1_Stream7 reads Buf_Telemetry_UART4 asynchronously, so every write below
+     * lands in memory the hardware may still be transmitting. The drain-wait used to
+     * sit next to the DMA re-arm at the bottom of this function, ~580 lines after the
+     * first write here -- which is far too late to protect the buffer.
+     *
+     * Frame A (48 B) and the A+C burst (102 B) drain in 4-9 ms, inside the ~18 ms task
+     * period, so they were never hurt. Frame B is 305 B = 26.5 ms at 115200: still in
+     * flight when the next tick arrives. That tick rebuilt the buffer underneath it, so
+     * the DMA transmitted Frame B's head followed by the NEW frame's bytes, then sent
+     * that new frame again in full. Measured on the wire 2026-07-29: 33 of 34 Frame B
+     * were 407 bytes instead of 305 -- exactly 305 + 102 -- and 33/34 failed CRC, which
+     * is why the PID/position panels showed zeros and occasional absurd floats.
+     *
+     * Waiting here costs nothing when the previous frame has already drained (the common
+     * case) and simply paces this task to the link when it has not. */
+    /* Non-blocking check: if previous UART5 DMA transfer is still active, do not busy-wait */
+    dma_busy = ((DMA_GetCurrDataCounter(DMA1_Stream7) != 0U) || (DMA_GetCmdStatus(DMA1_Stream7) == ENABLE)) ? 1U : 0U;
+
+    Send_ParallelEkfStep();
 
     /* UART5 still draining the previous burst: skip this tick's A/B frame
      * instead of spinning. A staged subscribe request stays pending
@@ -1683,8 +1702,9 @@ static void Cmd_MultiplexFlags(GsCmd_t *c)
     } else if ((c->idx >= CMD_0F_TELEM_MODE_BASE) && (c->idx <= 102U)) {
         /* idx 100=LEGACY 101=MIXED 102=SUBSCRIBE_ONLY. Val ignored.
          * Default at boot is MIXED (SUBSCRIBE_DEFAULT_TELEMETRY_MODE).
-         * SUBSCRIBE_ONLY skips the UART4 DMA busy-wait so Send_Task runs at
-         * nominal 200 Hz instead of being paced to ~80 Hz by the 3.7 ms wait. */
+         * SUBSCRIBE_ONLY skips the UART4 DMA busy-wait: Send_Task runs a 5 ms
+         * period and ticks the streams at 200 Hz. A change of stream tick rate
+         * stops every slot (SetTelemetryMode); the host subscribes again. */
         SetTelemetryMode((uint8_t)(c->idx - CMD_0F_TELEM_MODE_BASE));
     }
 }

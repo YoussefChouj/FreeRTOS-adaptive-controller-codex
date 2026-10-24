@@ -71,30 +71,13 @@ SUBSCRIBE_MAX_FRAMES_PER_TICK = 4
 # Mirrors SUBSCRIBE_STREAM_FRAME_OVERHEAD in API/subscribe.h.
 FRAME_OVERHEAD = 12
 
-# Two different Send_Task rates, on purpose.
-#   SEND_TASK_HZ  — the NOMINAL 200 Hz Send_Task cycles at (USER/main.c
-#                   Send_Task: 5 ms vTaskDelay floor). Used ONLY for the
-#                   budget check, where over-estimating the rate makes the
-#                   guard reject early -- which is the safe direction.
-#                   Post-throughput-fix (TASK_ID=telemetry-throughput-2026-09-08)
-#                   the busy-wait on UART4 DMA is gone and the measured
-#                   cadence on a powered drone is ~200 Hz in SUBSCRIBE_ONLY
-#                   mode but only ~80 Hz in MIXED mode (legacy Frame A/B/C
-#                   still goes out, stealing ~3 ms per cycle from
-#                   Send_Task's 5 ms floor).
-#   SEND_TASK_MEASURED_HZ — what Send_Task actually cycles at in MIXED mode
-#                   steady-state on a powered drone. The 2026-09-12 cold-boot
-#                   4-slot capture fit ``effective_hz = 80 / divider`` across
-#                   all four slots (slot 0 4.0 Hz @ div=20, slot 1 40 Hz @
-#                   div=2, slots 2/3 20 Hz @ div=4) -- see
-#                   ``.agent_contracts/2026-09-12-wire-budget/journal.md``.
-#                   Use this constant for the divider arithmetic and the Hz
-#                   reported back to the user, so "--rate 1" means 1 cycle
-#                   ~ every 12.5 ms until a fresh on-drone measurement in
-#                   SUBSCRIBE_ONLY confirms 200 Hz is safe. That is the safe
-#                   direction: under-reporting cadence makes the user's
-#                   scheduler over-budget, never under.
+# Send_Task stream-tick rates (API/subscribe.c Subscribe_StreamTickHz, 2026-10-24).
+#   SEND_TASK_HZ               -- LEGACY / MIXED: the stream ticks at 100 Hz (UART5 DMA wait paces the task).
+#   SEND_TASK_HZ_SUBSCRIBE_ONLY -- SUBSCRIBE_ONLY: 5 ms period, the stream ticks every cycle, 200 Hz.
+# The firmware guard prices a slot at tick_hz / divider, and the lab service runs SUBSCRIBE_ONLY
+# (service/__main__.py), so lab plans use the 200 Hz value. Registry field 18 reports the live tick.
 SEND_TASK_HZ = 100
+SEND_TASK_HZ_SUBSCRIBE_ONLY = 200
 SEND_TASK_MEASURED_HZ = 100.0
 
 TRANSPORT_UART5 = 0

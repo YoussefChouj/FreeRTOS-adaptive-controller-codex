@@ -16,7 +16,7 @@ import sys
 import time
 from pathlib import Path
 
-from ground_station.platform.firmware_contract import SUBSCRIBE_SEND_TASK_HZ
+from ground_station.platform.firmware_contract import SUBSCRIBE_SEND_TASK_HZ_SUBSCRIBE_ONLY as SUBSCRIBE_SEND_TASK_HZ
 
 # Ensure repo root is on sys.path so `from ground_station import ...` works
 # regardless of where the user invokes from.
@@ -182,9 +182,9 @@ def apply_startup_preset(service, preset_name: str, *,
         slot = int(slot_spec["slot"])
         manifest_name = slot_spec["manifest"]
         requested_hz = int(slot_spec["hz"])
-        # Send_Task cadence is 100 Hz (measured 2026-09-26: dividers 2/1/1/4
-        # gave 50/100/100/25 Hz frames), same as capture_preset.py's
-        # int(100 / hz). The old int(80 / hz) doubled 50 Hz slots to 100 Hz.
+        # The service runs the FC in SUBSCRIBE_ONLY, where the stream ticks at
+        # 200 Hz (API/subscribe.c Subscribe_StreamTickHz, 2026-10-24), so the
+        # divider is int(200 / hz). LEGACY / MIXED tick at 100 Hz.
         divider = max(1, int(SUBSCRIBE_SEND_TASK_HZ / requested_hz))
         try:
             mvars = store.get(manifest_name).vars
@@ -322,7 +322,8 @@ def main() -> None:
     bridge._on_telemetry = _ingest
 
     # ---- Start session + bridge ----
-    service.start(auto_subscribe=not args.no_auto_subscribe)
+    # SUBSCRIBE_ONLY: the WiFi stream ticks at 200 Hz (legacy frames go out wired only).
+    service.start(auto_subscribe=not args.no_auto_subscribe, telemetry_mode="subscribe_only")
 
     # ---- Multi-slot preset auto-load (optional, off by default) ----
     # Reuses the proven CLI pipeline from `capture_preset.py` so the

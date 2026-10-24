@@ -267,7 +267,7 @@ void SystemMonitor_Task(void *pvParameters)
 
 /*--------------------------------------------------------
 Function: Wireless serial port task
-// Frame rate: 100 Hz normal flight; 200 Hz during a SysID run (id_frame_on) for clean high-rate ID.
+// Period: 5 ms (200 Hz) in SUBSCRIBE_ONLY and during a SysID run (id_frame_on); 10 ms in LEGACY / MIXED.
 ----------------------------------------------------------*/
 void Send_Task(void *pvParameters)
 {
@@ -306,6 +306,7 @@ void Send_Task(void *pvParameters)
             if (g_telemetry_mode != SUBSCRIBE_TELEMETRY_SUBSCRIBE_ONLY) {
                 Send_Groundstation_Telemetry_UART4(); // single-axis ID frame (0x03) or OF-cal frame (0x05) -> UART5 (DMA1_Stream7)
             } else {
+                Send_SubscribeOnlyHousekeeping(); // observability tick + parallel EKF (MIXED runs them in the legacy call)
                 t_sec = DWT->CYCCNT;
                 Subscribe_StreamTick();                // 0x0A stream frames on USART3 (WiFi) for active slots
                 SendProf_Record(&g_send_prof.sec_subscribe_tick, t_sec);
@@ -326,17 +327,12 @@ void Send_Task(void *pvParameters)
             vTaskDelay(pdMS_TO_TICKS(5));          // hard 5 ms floor = stable ~200 Hz, no runaway
             PreviousWakeTime = xTaskGetTickCount(); // re-base so the 100 Hz path resumes cleanly after a run
         } else {
-            t_sec = DWT->CYCCNT;
-            send_to_linux(); // Send data to Linux companion computer (if present)
-            SendProf_Record(&g_send_prof.sec_send_to_linux, t_sec);
 #if SUBSCRIBE_BUILD_DEFAULT_SUBSCRIBE
-            /* Same gate as the SysID branch above: in SUBSCRIBE_ONLY the
-             * 3.7 ms legacy DMA busy-wait goes away and Send_Task runs at
-             * the measured 200 Hz post-fix. MIXED (default) preserves the
-             * legacy Frame A/B/C stream the dashboard depends on. */
-            if (g_telemetry_mode != SUBSCRIBE_TELEMETRY_SUBSCRIBE_ONLY) {
-                Send_Groundstation_Telemetry_UART4(); // Send telemetry to Ground Station
-            } else {
+            if (g_telemetry_mode == SUBSCRIBE_TELEMETRY_SUBSCRIBE_ONLY) {
+                /* SUBSCRIBE_ONLY: no UART5 legacy frames pace this task, so it runs a 5 ms (200 Hz) period and
+                 * the WiFi 0x0A stream ticks every period. The other jobs keep 100 Hz (every 2nd period),
+                 * including the observability tick and the parallel EKF that MIXED runs inside the legacy call. */
+                static uint8_t s_half_tick = 0U;
                 t_sec = DWT->CYCCNT;
                 Subscribe_StreamTick();                // 0x0A stream frames on USART3 (WiFi) for active slots
                 SendProf_Record(&g_send_prof.sec_subscribe_tick, t_sec);
@@ -345,20 +341,39 @@ void Send_Task(void *pvParameters)
                     Uart5_Subscribe_HandleRequest();
                     SendProf_Record(&g_send_prof.sec_uart5_request, t_sec);
                 }
-            }
-#else
-            Send_Groundstation_Telemetry_UART4(); // Send telemetry to Ground Station
+                s_half_tick ^= 1U;
+                if (s_half_tick != 0U) {
+                    t_sec = DWT->CYCCNT;
+                    send_to_linux();
+                    SendProf_Record(&g_send_prof.sec_send_to_linux, t_sec);
+                    Send_SubscribeOnlyHousekeeping();
+                    t_sec = DWT->CYCCNT;
+                    Process_GroundStation_Command();
+                    SendProf_Record(&g_send_prof.sec_process_cmd, t_sec);
+                    t_sec = DWT->CYCCNT;
+                    usart3_send();
+                    SendProf_Record(&g_send_prof.sec_usart3_send, t_sec);
+                }
+                SendProf_TaskEnd(t_start);
+                vTaskDelayUntil(&PreviousWakeTime, pdMS_TO_TICKS(5)); // 5 ms = 200 Hz
+            } else
 #endif
-            t_sec = DWT->CYCCNT;
-            Process_GroundStation_Command(); // Process received commands
-            SendProf_Record(&g_send_prof.sec_process_cmd, t_sec);
-
-            t_sec = DWT->CYCCNT;
-            usart3_send();// - "UART3 send task" - transmit data via UART3 peripheral
-            SendProf_Record(&g_send_prof.sec_usart3_send, t_sec);
-
-            SendProf_TaskEnd(t_start);
-            vTaskDelayUntil(&PreviousWakeTime, pdMS_TO_TICKS(10)); // 10ms = 100 Hz
+            {
+                /* LEGACY / MIXED: the legacy call sends the UART5 Frame A/B/C stream the dashboard reads, ticks
+                 * the WiFi stream and steps the parallel EKF. Its UART5 DMA wait paces this loop (about 80 Hz). */
+                t_sec = DWT->CYCCNT;
+                send_to_linux(); // Send data to Linux companion computer (if present)
+                SendProf_Record(&g_send_prof.sec_send_to_linux, t_sec);
+                Send_Groundstation_Telemetry_UART4(); // Send telemetry to Ground Station
+                t_sec = DWT->CYCCNT;
+                Process_GroundStation_Command(); // Process received commands
+                SendProf_Record(&g_send_prof.sec_process_cmd, t_sec);
+                t_sec = DWT->CYCCNT;
+                usart3_send();// - "UART3 send task" - transmit data via UART3 peripheral
+                SendProf_Record(&g_send_prof.sec_usart3_send, t_sec);
+                SendProf_TaskEnd(t_start);
+                vTaskDelayUntil(&PreviousWakeTime, pdMS_TO_TICKS(10)); // 10ms = 100 Hz
+            }
         }
         system_monitor.USART2_task_cnt++; // Increment task execution counter (for monitoring task health)
   }

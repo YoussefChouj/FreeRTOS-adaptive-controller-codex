@@ -105,7 +105,8 @@ SUBSCRIBE_DATA_FRAMES = range(SUBSCRIBE_DATA_FRAME_BASE, SUBSCRIBE_DATA_FRAME_BA
 SUBSCRIBE_MAX_RANGES = 62        # per-slot range tuple limit
 SUBSCRIBE_STREAM_MAX_BYTES = 2032  # max data-frame payload (API/subscribe.h)
 SUBSCRIBE_STREAM_FRAME_OVERHEAD = 12  # non-value bytes in a data frame
-SUBSCRIBE_SEND_TASK_HZ = 100     # nominal Send_Task rate (Hz) (100 Hz by design)
+SUBSCRIBE_SEND_TASK_HZ = 100     # stream tick (Hz) in LEGACY / MIXED
+SUBSCRIBE_SEND_TASK_HZ_SUBSCRIBE_ONLY = 200  # stream tick (Hz) in SUBSCRIBE_ONLY (2026-10-24)
 SUBSCRIBE_BUDGET_PCT_USART3 = 95  # fraction of USART3 wire usable by subscribe
 SUBSCRIBE_BUDGET_PCT_UART5 = 20   # fraction of UART5 wire usable by subscribe
 

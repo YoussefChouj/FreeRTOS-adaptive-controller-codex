@@ -93,7 +93,7 @@ uint8_t PlatformRegistry_BuildDiscovery(uint8_t* out, uint16_t out_cap, uint16_t
     PutU16Le(out, &idx, SUBSCRIBE_MAX_STREAM_RANGES);
     PutU16Le(out, &idx, SUBSCRIBE_MAX_SLOTS);
     PutU16Le(out, &idx, SUBSCRIBE_STREAM_MAX_BYTES);
-    PutU16Le(out, &idx, SUBSCRIBE_SEND_TASK_HZ);
+    PutU16Le(out, &idx, Subscribe_StreamTickHz());   /* 100, or 200 in SUBSCRIBE_ONLY */
     PutU16Le(out, &idx, PLATFORM_DESCRIPTOR_COUNT);
     FinishFrame(out, &idx, out_len);
     return 1U;

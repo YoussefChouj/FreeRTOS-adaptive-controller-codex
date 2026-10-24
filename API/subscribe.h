@@ -266,17 +266,22 @@ typedef enum {
 #define SUBSCRIBE_DEFAULT_TELEMETRY_MODE  SUBSCRIBE_TELEMETRY_MIXED
 #endif
 
-/* Send_Task's measured cadence is 80.4 Hz in SUBSCRIBE_TELEMETRY_MIXED
- * (the legacy Frame A/B/C UART4 DMA busy-wait steals ~3 ms from the
- * 5 ms task floor, pacing the loop to ~80 Hz). SUBSCRIBE_TELEMETRY_
- * SUBSCRIBE_ONLY skips the DMA path and runs at the nominal 200 Hz.
- * The budget prices the stream tick, not the task loop: Subscribe_StreamTick
- * paces itself to SUBSCRIBE_SEND_TASK_HZ (100 Hz, the normal 10 ms branch)
- * and skips calls that come sooner than SUBSCRIBE_STREAM_TICK_MIN_MS after
- * the last tick, so the 5 ms SysID branch (main.c, id/of frame on) cannot
- * double a slot's rate. Pricing that branch at 200 Hz used to waste half the
- * link. Host reporting keeps a separate measured 80 Hz constant for
- * MIXED-mode divider estimates.
+/* Stream tick rate depends on the telemetry mode (2026-10-24):
+ *  - MIXED / LEGACY: Send_Task runs a 10 ms period and the stream tick runs
+ *    inside the legacy UART4 call, whose DMA busy-wait paces it to a measured
+ *    ~80 Hz. The tick is priced at SUBSCRIBE_SEND_TASK_HZ (100 Hz) with an
+ *    8 ms pacer floor. Host reporting keeps a measured 80 Hz constant for
+ *    MIXED-mode divider estimates.
+ *  - SUBSCRIBE_ONLY: no UART4 DMA wait. Send_Task runs a 5 ms period and
+ *    ticks the streams every cycle, so divider 1 is 200 Hz. The tick is
+ *    priced at SUBSCRIBE_SEND_TASK_HZ_FAST with a 4 ms pacer floor.
+ * Subscribe_StreamTickHz() returns the rate for the current mode. Every
+ * price (StreamBps, the link guard, the platform registry) goes through it.
+ * The pacer skips a call that comes sooner than the floor after the last
+ * tick, so a vTaskDelayUntil catch-up burst cannot flood the wire and the
+ * 5 ms SysID branch in MIXED cannot double a slot's rate.
+ * A mode change that changes the tick rate stops every slot, because each
+ * was budget-checked at the old rate; the host subscribes again.
  *
  * Link-budget guard. USART3 owns the link while a stream is active
  * (usart3_send() is suppressed), so its budget is the wire ceiling:
@@ -287,6 +292,9 @@ typedef enum {
 #define SUBSCRIBE_SEND_TASK_HZ       100U
 /* 10 ms period minus 2 ms of preemption jitter in the 100 Hz branch. */
 #define SUBSCRIBE_STREAM_TICK_MIN_MS 8U
+/* SUBSCRIBE_ONLY: 5 ms period, 4 ms floor (1 ms of jitter at a 1 ms tick). */
+#define SUBSCRIBE_SEND_TASK_HZ_FAST       200U
+#define SUBSCRIBE_STREAM_TICK_MIN_MS_FAST 4U
 #define SUBSCRIBE_BUDGET_PCT_USART3  95U
 #define SUBSCRIBE_BUDGET_PCT_UART5   20U
 /* Mirrors BSP/usart5.c:55. Only the budget guard reads it, and a stale value
@@ -369,8 +377,12 @@ uint8_t Subscribe_BuildError(const char* msg, uint8_t count,
 uint8_t Subscribe_ValidateRange(uint32_t address, uint16_t size, uint16_t count,
                                 char* err_out, uint16_t err_cap);
 
-/* Bytes per second this subscription puts on its transport, at the nominal
- * Send_Task rate. 0 when inactive. */
+/* Stream tick rate for the current telemetry mode: SUBSCRIBE_SEND_TASK_HZ_FAST
+ * (200) in SUBSCRIBE_ONLY, SUBSCRIBE_SEND_TASK_HZ (100) otherwise. */
+uint16_t Subscribe_StreamTickHz(void);
+
+/* Bytes per second this subscription puts on its transport, at
+ * Subscribe_StreamTickHz(). 0 when inactive. */
 uint32_t Subscribe_StreamBps(const Subscribe_Stream_t* st);
 
 /* Parse a host->FC 0x21 stream-subscribe request into `st`. Validates every

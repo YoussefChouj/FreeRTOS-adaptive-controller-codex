@@ -68,7 +68,7 @@ def test_every_symbol_resolves_in_the_elf_as_one_scalar():
 
 def _guard_bps(slots: list[dict]) -> float:
     """Firmware guard price, by hand: (12 + 4 B per var) per frame, at GUARD_SEND_HZ / divider."""
-    return sum((FRAME_OVERHEAD + 4 * len(s["vars"])) * cc.GUARD_SEND_HZ * s["hz"] / 100 for s in slots)
+    return sum((FRAME_OVERHEAD + 4 * len(s["vars"])) * cc.GUARD_SEND_HZ * s["hz"] / cc.SEND_TASK_HZ for s in slots)
 
 
 @pytest.mark.parametrize("rate", [200, 100, 60, 50, 25, 10, 1])
@@ -98,21 +98,21 @@ def test_100hz_drops_the_optional_past_the_budget():
 
 
 def test_divider_truncates_like_the_live_host():
-    # int(100 / 60) = 1, so the drone emits 100 Hz (capture_preset.py:329); rounding would give 50 Hz.
-    assert {s["hz"] for s in slots_for(60)[0]} == {100.0}
+    # int(200 / 120) = 1, so the drone emits 200 Hz (capture_preset.py:329); rounding would give 100 Hz.
+    assert {s["hz"] for s in slots_for(120)[0]} == {200.0}
 
 
 def test_tiny_budget_drops_optional_before_needed():
     needed_only = (FRAME_OVERHEAD + 4 * len(NEEDED)) * cc.GUARD_SEND_HZ
-    slots, dropped = slots_for(100, budget_bps=needed_only)
+    slots, dropped = slots_for(cc.SEND_TASK_HZ, budget_bps=needed_only)
     assert [s["vars"] for s in slots] == [list(NEEDED)] and dropped == list(OPTIONAL)
-    slots, dropped = slots_for(100, budget_bps=needed_only + 3 * 4 * cc.GUARD_SEND_HZ)
+    slots, dropped = slots_for(cc.SEND_TASK_HZ, budget_bps=needed_only + 3 * 4 * cc.GUARD_SEND_HZ)
     assert slots[0]["vars"] == list(NEEDED + OPTIONAL[:3]) and dropped == list(OPTIONAL[3:])
 
 
 def test_needed_that_cannot_fit_raises():
     with pytest.raises(CaptureError, match="needed"):
-        slots_for(100, budget_bps=(FRAME_OVERHEAD + 4 * len(NEEDED)) * cc.GUARD_SEND_HZ - 1)
+        slots_for(cc.SEND_TASK_HZ, budget_bps=(FRAME_OVERHEAD + 4 * len(NEEDED)) * cc.GUARD_SEND_HZ - 1)
 
 
 @pytest.mark.parametrize("rate", [0, -50, float("nan"), float("inf")])
@@ -237,7 +237,7 @@ def test_log_groups_are_disjoint_from_needed_and_each_other():
     ([], "must be a mapping"),
     ({"rate": 50}, "unknown key 'rate'"),
     ({"rate_hz": 0}, "rate_hz"),
-    ({"rate_hz": 150}, "rate_hz"),
+    ({"rate_hz": 250}, "rate_hz"),
     ({"rate_hz": True}, "rate_hz"),
     ({"rate_hz": "50"}, "rate_hz"),
     ({"groups": "optical_flow"}, "list of group names"),
@@ -348,7 +348,7 @@ def test_memory_plan_logs_the_live_mrac_weights():
 
 def test_slow_lane_skips_fast_vars_and_trims_to_the_budget():
     core_bps = cc.plan_bps(cc.plan_capture()["slots"])
-    five_at_25 = (cc.FRAME_OVERHEAD + 5 * cc.DEFAULT_VALUE_BYTES) * cc.GUARD_SEND_HZ / 4
+    five_at_25 = (cc.FRAME_OVERHEAD + 5 * cc.DEFAULT_VALUE_BYTES) * cc.GUARD_SEND_HZ / (cc.SEND_TASK_HZ // 25)
     plan = cc.plan_capture({"slow": ["nn4"]}, budget_bps=core_bps + five_at_25)
     slow_vars = [v for v in cc.NN4 if v not in NEEDED]
     assert plan["slots"][1] == {"slot": 1, "hz": 25.0, "vars": slow_vars[:5]}

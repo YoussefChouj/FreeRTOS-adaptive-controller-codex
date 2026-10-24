@@ -29,17 +29,20 @@ from ground_station.livewatch.stream import (
     FRAME_OVERHEAD,
     MAX_SLOTS,
     MAX_STREAM_RANGES,
-    SEND_TASK_HZ,
+    SEND_TASK_HZ_SUBSCRIBE_ONLY,
     STREAM_MAX_BYTES,
 )
+
+# The lab service runs the FC in SUBSCRIBE_ONLY (service/__main__.py), where the stream ticks at 200 Hz.
+SEND_TASK_HZ = SEND_TASK_HZ_SUBSCRIBE_ONLY
 
 # --- limits and budget -------------------------------------------------------------------------------
 
 VARS_PER_SLOT = min(MAX_STREAM_RANGES, STREAM_MAX_BYTES // DEFAULT_VALUE_BYTES)  # 62 ranges bind first
-# The firmware budget guard prices a slot at SUBSCRIBE_SEND_TASK_HZ / divider (API/subscribe.c guard).
-# Since stream ladder step A (2026-10-17) that is 100 Hz, the real Send_Task rate, and the stream-tick
-# pacer keeps the 5 ms SysID branch to it. A plan must pass the guard of the firmware it flies on.
-GUARD_SEND_HZ = 100
+# The firmware budget guard prices a slot at tick_hz / divider (API/subscribe.c Subscribe_StreamTickHz).
+# In SUBSCRIBE_ONLY, the mode the lab service runs, the stream ticks every 5 ms cycle: 200 Hz (2026-10-24).
+# A plan must pass the guard of the firmware it flies on.
+GUARD_SEND_HZ = SEND_TASK_HZ
 RADIO_BUDGET_BPS = 87552  # USART3 radio share: 95 % of 92160 B/s (livewatch/log_frames.md:73)
 PLANNING_BUDGET_BPS = 0.8 * RADIO_BUDGET_BPS  # 20 % headroom for retries and the command channel
 PROBE_RATES_HZ = (200, 100, 50, 25)

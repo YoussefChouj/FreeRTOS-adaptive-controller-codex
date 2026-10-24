@@ -14,7 +14,7 @@ import struct
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -189,3 +189,50 @@ class TestBootDefaultLayoutModule(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _mode_bridge(mode=None) -> wb.WifiBridge:
+    b = wb.WifiBridge(vofa_enabled=False)
+    b._wifi = MagicMock(spec=socket.socket)
+    b._wifi_send = b._wifi
+    if mode is not None:
+        b.set_telemetry_mode_now(mode)
+    return b
+
+
+class TestStreamTickPerMode(unittest.TestCase):
+    """The FC stream ticks at 200 Hz in SUBSCRIBE_ONLY, 100 Hz otherwise (API/subscribe.c, 2026-10-24)."""
+
+    def test_default_tick_is_100(self):
+        b = _mode_bridge()
+        self.assertEqual(b._expected_rate_for_slot(1, 1), 100.0)
+        self.assertEqual(b._expected_rate_for_slot(1, 4), 25.0)
+
+    def test_subscribe_only_ticks_at_200(self):
+        b = _mode_bridge("subscribe_only")
+        self.assertEqual(b._expected_rate_for_slot(1, 1), 200.0)
+        self.assertEqual(b._expected_rate_for_slot(1, 2), 100.0)
+        self.assertEqual(b._expected_rate_for_slot(1, 8), 25.0)
+
+    def test_back_to_mixed_ticks_at_100(self):
+        b = _mode_bridge("subscribe_only")
+        b.set_telemetry_mode_now("mixed")
+        self.assertEqual(b._expected_rate_for_slot(1, 1), 100.0)
+
+    def _send(self, b):
+        parent = MagicMock()
+        b._send_cmd_frame = parent.cmd
+        b._send_request_paced = parent.req
+        with patch("ground_station.livewatch.stream.build_stream_request", return_value=b"REQ"):
+            b._send_subscribe_bytes(1, 2, [])
+        return parent.mock_calls
+
+    def test_mode_resent_before_each_request(self):
+        # An FC that rebooted boots MIXED; the resend puts it back in SUBSCRIBE_ONLY before the slot is priced.
+        b = _mode_bridge("subscribe_only")
+        self.assertEqual(self._send(b), [call.cmd(0x0F, 102, 0.0), call.req(b"REQ")])
+        self.assertEqual(b._slot_requests[1][0], 100.0)
+
+    def test_no_resend_when_mode_never_set(self):
+        b = _mode_bridge()
+        self.assertEqual(self._send(b), [call.req(b"REQ")])

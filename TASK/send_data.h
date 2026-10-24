@@ -13,6 +13,8 @@
 
 void send_to_linux(void);
 void Send_Groundstation_Telemetry_UART4(void);
+void Send_ParallelEkfStep(void);
+void Send_SubscribeOnlyHousekeeping(void);
 void Process_GroundStation_Command(void);
 extern _linux_flag stm32_to_linux_flag;
 extern UCHAR8 str_USART[16];

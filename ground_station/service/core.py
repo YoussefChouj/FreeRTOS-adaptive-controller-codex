@@ -345,7 +345,8 @@ class GroundStationService:
         self._listeners.append(callback)
 
     def start(self, *, metadata: dict[str, Any] | None = None,
-              auto_subscribe: bool = True) -> str:
+              auto_subscribe: bool = True,
+              telemetry_mode: str | None = None) -> str:
         if self.session_id is not None:
             return self.session_id
         self.session_id = self.store.start_session(self.schema.schema_id, self.source, metadata)
@@ -358,7 +359,11 @@ class GroundStationService:
         self._started_at_ns = time.time_ns()
         self._connected = self.bridge is not None
         if self.bridge:
-            self.bridge.start(auto_subscribe_boot_default=auto_subscribe)
+            if telemetry_mode is None:
+                self.bridge.start(auto_subscribe_boot_default=auto_subscribe)
+            else:
+                self.bridge.start(auto_subscribe_boot_default=auto_subscribe,
+                                  initial_telemetry_mode=telemetry_mode)
         self._record_event("service_started", {"schema_id": self.schema.schema_id})
         # The recorder is OPT-IN. It only starts here when GS_RECORD=1 was set
         # at boot (auto-start). Otherwise it stays stopped and no session

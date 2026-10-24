@@ -17,6 +17,8 @@
 #include "usart3.h"
 #include "usart5.h"
 
+void SetTelemetryMode(uint8_t mode);   /* Global_file/global_declare.h */
+
 uint8_t  UA5RxSubscribeBuf[USART5_SUBSCRIBE_RX_LEN];
 volatile uint16_t UA5RxSubscribeLen;
 volatile uint8_t UA5RxSubscribePending;
@@ -350,6 +352,54 @@ int main(void)
     g_ticks += 1U;
     Subscribe_StreamTick();
     okv("MIN_MS later is served", cap_n, 2);
+
+    /* ---- 9b. SUBSCRIBE_ONLY ticks at 200 Hz (2026-10-24) ------------------- */
+    /* Send_Task runs a 5 ms period in SUBSCRIBE_ONLY and ticks every cycle, so the
+     * tick is priced at SUBSCRIBE_SEND_TASK_HZ_FAST with a 4 ms floor. A mode change
+     * that changes the tick rate stops every slot: each was budget-checked at the
+     * old rate. A resend of the same mode keeps them. */
+    SetTelemetryMode((uint8_t)SUBSCRIBE_TELEMETRY_SUBSCRIBE_ONLY);
+    okv("SUBSCRIBE_ONLY ticks at 200 Hz", Subscribe_StreamTickHz(), 200);
+    cap_n = 0;
+    g_ticks += 100U;
+    for (i = 0; i < 4; i++) { Subscribe_StreamTick(); g_ticks += 5U; }
+    okv("the 100 -> 200 Hz switch stopped the slot", cap_n, 0);
+    subscribe(0, 1, SUBSCRIBE_TRANSPORT_USART3, a, s, c, 1);
+    okv("36 B at 200 Hz (7200 B/s) fits USART3", cap_type[0], SUBSCRIBE_FRAME_TYPE_SCHEMA);
+    cap_n = 0;
+    g_ticks += 100U;
+    for (i = 0; i < 20; i++) { Subscribe_StreamTick(); g_ticks += 5U; }
+    okv("20 calls 5 ms apart serve 20 frames (200 Hz)", cap_n, 20);
+    bad = 0;
+    for (i = 1; i < cap_n; i++) { if ((uint8_t)(cap_seq[i] - cap_seq[i - 1]) != 1U) { bad++; } }
+    okv("200 Hz leaves no SEQ gap", bad, 0);
+    cap_n = 0;
+    g_ticks += 10U;
+    for (i = 0; i < 5; i++) { Subscribe_StreamTick(); }
+    okv("a catch-up burst still serves 1 frame", cap_n, 1);
+    g_ticks += (uint32_t)SUBSCRIBE_STREAM_TICK_MIN_MS_FAST - 1U;
+    Subscribe_StreamTick();
+    okv("MIN_MS_FAST - 1 later is skipped", cap_n, 1);
+    g_ticks += 1U;
+    Subscribe_StreamTick();
+    okv("MIN_MS_FAST later is served", cap_n, 2);
+    SetTelemetryMode((uint8_t)SUBSCRIBE_TELEMETRY_SUBSCRIBE_ONLY);
+    cap_n = 0;
+    g_ticks += 5U;
+    Subscribe_StreamTick();
+    okv("a resend of the same mode keeps the slot", cap_n, 1);
+    stop_all();
+    a[0] = (uint32_t)(uintptr_t)g_theta; s[0] = 4; c[0] = 6;
+    subscribe(0, 2, SUBSCRIBE_TRANSPORT_UART5, a, s, c, 1);
+    okv("36 B at divider 2 is 3600 B/s at 200 Hz: over UART5's 2304, refused",
+        cap_type[0], SUBSCRIBE_FRAME_TYPE_ERROR);
+    subscribe(0, 1, SUBSCRIBE_TRANSPORT_USART3, a, s, c, 1);
+    SetTelemetryMode((uint8_t)SUBSCRIBE_TELEMETRY_MIXED);
+    okv("MIXED ticks at 100 Hz again", Subscribe_StreamTickHz(), 100);
+    cap_n = 0;
+    g_ticks += 100U;
+    for (i = 0; i < 4; i++) { Subscribe_StreamTick(); g_ticks += 5U; }
+    okv("the 200 -> 100 Hz switch stopped the slot", cap_n, 0);
 
     printf("slots %u, sizeof(Subscribe_Stream_t) %u B, slot table + staging %u B\n",
            (unsigned)SUBSCRIBE_MAX_SLOTS, (unsigned)sizeof(Subscribe_Stream_t),
