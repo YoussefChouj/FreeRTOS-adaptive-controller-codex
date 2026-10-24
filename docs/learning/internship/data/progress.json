@@ -123,7 +123,8 @@
         "G6": 5,
         "G7": 6,
         "G8": 3,
-        "G9": 7
+        "G9": 7,
+        "OW": 6
       },
       "sims": [
         "tilt",
@@ -369,6 +370,41 @@
       "lesson": "L01",
       "topic": "cascade in characters",
       "gap": "Grill Q8: wrote the chain in English and skipped the A是B的C sentences. Still open from L01 Q4.",
+      "status": "open"
+    },
+    {
+      "date": "2026-10-24",
+      "lesson": "L01",
+      "topic": "velocity loop output",
+      "gap": "Own-words: said the velocity loop differentiates the setpoint. It runs PID on velocity error (desired - measured) and its output is the desired acceleration.",
+      "status": "open"
+    },
+    {
+      "date": "2026-10-24",
+      "lesson": "L01",
+      "topic": "yaw mixing",
+      "gap": "Own-words: described yaw as 'orthogonal axes'. Diagonal pairs spin the same way; speeding up one pair turns the body the opposite way (reaction torque); total thrust unchanged.",
+      "status": "open"
+    },
+    {
+      "date": "2026-10-24",
+      "lesson": "L01",
+      "topic": "mixer inputs and thrust path",
+      "gap": "Own-words: did not say the rate loop outputs 3 torques, or that total thrust T goes from the acceleration step straight to the mixer (4 inputs -> 4 motors).",
+      "status": "open"
+    },
+    {
+      "date": "2026-10-24",
+      "lesson": "L01",
+      "topic": "phi vs heading",
+      "gap": "Own-words: called the lean direction phi the 'heading'. Heading is yaw psi. Standard notation phi/theta/psi = roll/pitch/yaw clashes with the lesson's theta/phi.",
+      "status": "open"
+    },
+    {
+      "date": "2026-10-24",
+      "lesson": "L01",
+      "topic": "controller vs physics direction",
+      "gap": "Own-words: summary ran thrust -> tilt -> acceleration. The controller computes T and tilt both from the desired acceleration; physics runs the other way. Also squared az+g in the atan2.",
       "status": "open"
     }
   ]

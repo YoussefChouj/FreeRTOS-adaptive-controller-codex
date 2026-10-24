@@ -31,3 +31,6 @@ Skill numbers: 1 formulation, 2 constraints, 3 anti-patterns, 4 coupling, 5 mode
 | 2026-10-24 | 5 | intern L01 grill Q2: degrees→radians | 40° = 0.698 rad, g·θ = 6.85 m/s² (wrote 2.81). g·tanθ 8.23 right. | open, 2026-10-24 |
 | 2026-10-24 | 3 | intern L01 grill Q6c/Q7: why I holds, velocity sensor | No reason why I holds at e = 0 (stored sum). Velocity not from laser: GNSS/RTK+IMU, optical flow, camera. | open, 2026-10-24 |
 | 2026-10-24 | - | intern L01 grill Q8: cascade in characters | Wrote English, skipped A是B的C. Still open. | open, 2026-10-24 |
+| 2026-10-24 | - | intern L01 own words: velocity loop | Said it differentiates the setpoint; it is PID on velocity error -> desired acceleration. | open, 2026-10-24 |
+| 2026-10-24 | - | intern L01 own words: mixer + yaw | No torques out of rate loop, no T path to mixer; yaw framed as orthogonal axes (diagonal pairs, reaction torque). | open, 2026-10-24 |
+| 2026-10-24 | - | intern L01 own words: phi vs heading, flow direction | Called phi the heading (heading = yaw psi); summary ran T -> tilt -> a (controller computes both from a). | open, 2026-10-24 |
