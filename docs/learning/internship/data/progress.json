@@ -1,38 +1,317 @@
 {
   "updated": "2026-10-24",
-  "target": {"company": "Lead-Intelligent", "role": "Drone Algorithm Intern (无人机算法实习生)", "language": "Chinese", "start": null},
+  "target": {
+    "company": "Lead-Intelligent",
+    "role": "Drone Algorithm Intern (无人机算法实习生)",
+    "language": "Chinese",
+    "start": "2026-10-31",
+    "ready_by": "2026-10-27"
+  },
   "modules": [
-    {"id": "M0", "en": "Math and coordinate frames", "zh": "坐标系与姿态表示", "goal": "rotate vectors; read Euler angles and quaternions", "jd": ["rotation matrix", "quaternion", "Euler angles"]},
-    {"id": "M1", "en": "Drone physics", "zh": "飞行动力学", "goal": "explain thrust, torque and tilt-to-move", "jd": ["dynamics", "thrust", "mixer"]},
-    {"id": "M2", "en": "Flight control", "zh": "飞行控制", "goal": "cascaded PID, state-space, LQR, MPC", "jd": ["PID", "state-space", "MPC", "trajectory tracking"]},
-    {"id": "M3", "en": "Estimation and navigation", "zh": "状态估计与组合导航", "goal": "IMU, GNSS/RTK, Kalman filter, EKF", "jd": ["KF/EKF", "IMU", "GNSS", "RTK"]},
-    {"id": "M4", "en": "Perception", "zh": "环境感知", "goal": "detection, depth, point clouds, LiDAR and radar", "jd": ["PyTorch", "TensorFlow", "OpenCV", "PCL", "LiDAR", "mmWave radar"]},
-    {"id": "M5", "en": "Planning", "zh": "决策与规划", "goal": "A*, RRT, trajectory optimization, obstacle avoidance", "jd": ["A*", "RRT", "trajectory optimization", "obstacle avoidance"]},
-    {"id": "M6", "en": "Tools", "zh": "仿真与验证", "goal": "ROS, Gazebo, PX4, SITL, reading flight logs", "jd": ["MATLAB/Simulink", "Python/C++", "ROS", "Gazebo", "PX4", "ArduPilot"]}
+    {
+      "id": "M0",
+      "en": "Math and coordinate frames",
+      "zh": "坐标系与姿态表示",
+      "goal": "rotate vectors; read Euler angles and quaternions",
+      "jd": [
+        "rotation matrix",
+        "quaternion",
+        "Euler angles"
+      ]
+    },
+    {
+      "id": "M1",
+      "en": "Drone physics",
+      "zh": "飞行动力学",
+      "goal": "explain thrust, torque and tilt-to-move",
+      "jd": [
+        "dynamics",
+        "thrust",
+        "mixer"
+      ]
+    },
+    {
+      "id": "M2",
+      "en": "Flight control",
+      "zh": "飞行控制",
+      "goal": "cascaded PID, state-space, LQR, MPC",
+      "jd": [
+        "PID",
+        "state-space",
+        "MPC",
+        "trajectory tracking"
+      ]
+    },
+    {
+      "id": "M3",
+      "en": "Estimation and navigation",
+      "zh": "状态估计与组合导航",
+      "goal": "IMU, GNSS/RTK, Kalman filter, EKF",
+      "jd": [
+        "KF/EKF",
+        "IMU",
+        "GNSS",
+        "RTK"
+      ]
+    },
+    {
+      "id": "M4",
+      "en": "Perception",
+      "zh": "环境感知",
+      "goal": "detection, depth, point clouds, LiDAR and radar",
+      "jd": [
+        "PyTorch",
+        "TensorFlow",
+        "OpenCV",
+        "PCL",
+        "LiDAR",
+        "mmWave radar"
+      ]
+    },
+    {
+      "id": "M5",
+      "en": "Planning",
+      "zh": "决策与规划",
+      "goal": "A*, RRT, trajectory optimization, obstacle avoidance",
+      "jd": [
+        "A*",
+        "RRT",
+        "trajectory optimization",
+        "obstacle avoidance"
+      ]
+    },
+    {
+      "id": "M6",
+      "en": "Tools",
+      "zh": "仿真与验证",
+      "goal": "ROS, Gazebo, PX4, SITL, reading flight logs",
+      "jd": [
+        "MATLAB/Simulink",
+        "Python/C++",
+        "ROS",
+        "Gazebo",
+        "PX4",
+        "ArduPilot"
+      ]
+    }
   ],
   "lessons": [
-    {"id": "L01", "module": "M1", "en": "How a quadrotor flies", "zh": "四旋翼怎么飞", "date": "2026-10-24", "status": "quizzed", "file": "lessons/L01.md", "scores": {"Q1": 5, "Q2": 9, "Q3": 3, "Q4": 4}, "sims": ["tilt", "zloop"]},
-    {"id": "L01R", "module": "M1", "en": "L01 review: combining accelerations in x, y, z", "zh": "推力矢量与加速度合成", "date": "2026-10-24", "status": "taught", "file": "lessons/L01.md", "scores": {}, "sims": ["tilt"]},
-    {"id": "L02", "module": "M2", "en": "One PID loop and the integral term", "zh": "PID 与积分项", "status": "planned", "scores": {}, "sims": ["zloop"]},
-    {"id": "L03", "module": "M0", "en": "Frames and rotations: thrust vector to attitude", "zh": "坐标变换与旋转矩阵", "status": "planned", "scores": {}},
-    {"id": "L04", "module": "M2", "en": "Tuning the cascade (PX4 style)", "zh": "串级 PID 调参", "status": "planned", "scores": {}},
-    {"id": "L05", "module": "M2", "en": "State-space and LQR", "zh": "状态空间与 LQR", "status": "planned", "scores": {}},
-    {"id": "L06", "module": "M2", "en": "MPC and trajectory tracking", "zh": "模型预测控制与轨迹跟踪", "status": "planned", "scores": {}},
-    {"id": "L07", "module": "M3", "en": "IMU: gyro, accelerometer, magnetometer", "zh": "惯性测量单元", "status": "planned", "scores": {}},
-    {"id": "L08", "module": "M3", "en": "Kalman filter in 1D", "zh": "卡尔曼滤波", "status": "planned", "scores": {}},
-    {"id": "L09", "module": "M3", "en": "EKF with GNSS/RTK fusion", "zh": "扩展卡尔曼滤波与组合导航", "status": "planned", "scores": {}},
-    {"id": "L10", "module": "M5", "en": "Search planners: A*", "zh": "A* 路径搜索", "status": "planned", "scores": {}},
-    {"id": "L11", "module": "M5", "en": "RRT and trajectory optimization", "zh": "RRT 与轨迹优化", "status": "planned", "scores": {}},
-    {"id": "L12", "module": "M4", "en": "Vision: detection and depth", "zh": "视觉检测与深度估计", "status": "planned", "scores": {}},
-    {"id": "L13", "module": "M4", "en": "LiDAR, radar and point clouds", "zh": "激光雷达与点云", "status": "planned", "scores": {}},
-    {"id": "L14", "module": "M6", "en": "ROS 2, Gazebo and PX4 SITL", "zh": "ROS、Gazebo 与 PX4 软件在环仿真", "status": "planned", "scores": {}}
+    {
+      "id": "L01",
+      "module": "M1",
+      "en": "How a quadrotor flies",
+      "zh": "四旋翼怎么飞",
+      "date": "2026-10-24",
+      "status": "quizzed",
+      "file": "lessons/L01.md",
+      "scores": {
+        "Q1": 5,
+        "Q2": 9,
+        "Q3": 3,
+        "Q4": 4,
+        "R1": 10,
+        "R2": 7,
+        "R3": 7,
+        "R4": 5,
+        "R5": 7,
+        "R6": 6
+      },
+      "sims": [
+        "tilt",
+        "zloop"
+      ]
+    },
+    {
+      "id": "L01R",
+      "module": "M1",
+      "en": "L01 review: combining accelerations in x, y, z",
+      "zh": "推力矢量与加速度合成",
+      "date": "2026-10-24",
+      "status": "taught",
+      "file": "lessons/L01.md",
+      "scores": {},
+      "sims": [
+        "tilt"
+      ]
+    },
+    {
+      "id": "L02",
+      "module": "M2",
+      "en": "One PID loop and the integral term",
+      "zh": "PID 与积分项",
+      "status": "planned",
+      "scores": {},
+      "sims": [
+        "zloop"
+      ]
+    },
+    {
+      "id": "L03",
+      "module": "M0",
+      "en": "Frames and rotations: thrust vector to attitude",
+      "zh": "坐标变换与旋转矩阵",
+      "status": "planned",
+      "scores": {}
+    },
+    {
+      "id": "L04",
+      "module": "M2",
+      "en": "Tuning the cascade (PX4 style)",
+      "zh": "串级 PID 调参",
+      "status": "planned",
+      "scores": {}
+    },
+    {
+      "id": "L05",
+      "module": "M2",
+      "en": "State-space and LQR",
+      "zh": "状态空间与 LQR",
+      "status": "planned",
+      "scores": {}
+    },
+    {
+      "id": "L06",
+      "module": "M2",
+      "en": "MPC and trajectory tracking",
+      "zh": "模型预测控制与轨迹跟踪",
+      "status": "planned",
+      "scores": {}
+    },
+    {
+      "id": "L07",
+      "module": "M3",
+      "en": "IMU: gyro, accelerometer, magnetometer",
+      "zh": "惯性测量单元",
+      "status": "planned",
+      "scores": {}
+    },
+    {
+      "id": "L08",
+      "module": "M3",
+      "en": "Kalman filter in 1D",
+      "zh": "卡尔曼滤波",
+      "status": "planned",
+      "scores": {}
+    },
+    {
+      "id": "L09",
+      "module": "M3",
+      "en": "EKF with GNSS/RTK fusion",
+      "zh": "扩展卡尔曼滤波与组合导航",
+      "status": "planned",
+      "scores": {}
+    },
+    {
+      "id": "L10",
+      "module": "M5",
+      "en": "Search planners: A*",
+      "zh": "A* 路径搜索",
+      "status": "planned",
+      "scores": {}
+    },
+    {
+      "id": "L11",
+      "module": "M5",
+      "en": "RRT and trajectory optimization",
+      "zh": "RRT 与轨迹优化",
+      "status": "planned",
+      "scores": {}
+    },
+    {
+      "id": "L12",
+      "module": "M4",
+      "en": "Vision: detection and depth",
+      "zh": "视觉检测与深度估计",
+      "status": "planned",
+      "scores": {}
+    },
+    {
+      "id": "L13",
+      "module": "M4",
+      "en": "LiDAR, radar and point clouds",
+      "zh": "激光雷达与点云",
+      "status": "planned",
+      "scores": {}
+    },
+    {
+      "id": "L14",
+      "module": "M6",
+      "en": "ROS 2, Gazebo and PX4 SITL",
+      "zh": "ROS、Gazebo 与 PX4 软件在环仿真",
+      "status": "planned",
+      "scores": {}
+    }
   ],
   "breakpoints": [
-    {"date": "2026-10-24", "lesson": "L01", "topic": "components of a tilted thrust", "gap": "Wrote the sideways part as T·cosθ. Vertical = T·cosθ, horizontal = T·sinθ.", "status": "open"},
-    {"date": "2026-10-24", "lesson": "L01", "topic": "tilt-to-move formula", "gap": "Wrote a = g × θ. It is a = g·tanθ (g·θ only for small angles in radians).", "status": "open"},
-    {"date": "2026-10-24", "lesson": "L01", "topic": "underactuated", "gap": "Did not define it: 4 motor inputs, 6 degrees of freedom, so sideways force needs a tilt first.", "status": "open"},
-    {"date": "2026-10-24", "lesson": "L01", "topic": "units of acceleration", "gap": "Did not know the unit: m/s² (velocity in m/s, changing every second).", "status": "open"},
-    {"date": "2026-10-24", "lesson": "L01", "topic": "constant disturbance (payload)", "gap": "Said raise position gains. A constant extra weight leaves a steady sag under P; higher gains shrink it but never remove it. The integral term of the vertical velocity loop removes it.", "status": "open"},
-    {"date": "2026-10-24", "lesson": "L01", "topic": "Chinese: A 是 B 的 C", "gap": "Reversed the order (内环的速度环) and used wrong characters (自胎换, 内魂). Correct: 姿态环是速度环的内环。", "status": "open"}
+    {
+      "date": "2026-10-24",
+      "lesson": "L01",
+      "topic": "components of a tilted thrust",
+      "gap": "Wrote the sideways part as T·cosθ. Vertical = T·cosθ, horizontal = T·sinθ.",
+      "status": "retested"
+    },
+    {
+      "date": "2026-10-24",
+      "lesson": "L01",
+      "topic": "tilt-to-move formula",
+      "gap": "Wrote a = g × θ. It is a = g·tanθ (g·θ only for small angles in radians).",
+      "status": "retested"
+    },
+    {
+      "date": "2026-10-24",
+      "lesson": "L01",
+      "topic": "underactuated",
+      "gap": "Did not define it: 4 motor inputs, 6 degrees of freedom, so sideways force needs a tilt first.",
+      "status": "retested"
+    },
+    {
+      "date": "2026-10-24",
+      "lesson": "L01",
+      "topic": "units of acceleration",
+      "gap": "Did not know the unit: m/s² (velocity in m/s, changing every second).",
+      "status": "retested"
+    },
+    {
+      "date": "2026-10-24",
+      "lesson": "L01",
+      "topic": "constant disturbance (payload)",
+      "gap": "Said raise position gains. A constant extra weight leaves a steady sag under P; higher gains shrink it but never remove it. The integral term of the vertical velocity loop removes it.",
+      "status": "retested"
+    },
+    {
+      "date": "2026-10-24",
+      "lesson": "L01",
+      "topic": "Chinese: A 是 B 的 C",
+      "gap": "Reversed the order (内环的速度环) and used wrong characters (自胎换, 内魂). Correct: 姿态环是速度环的内环。",
+      "status": "retested"
+    },
+    {
+      "date": "2026-10-24",
+      "lesson": "L01R",
+      "topic": "thrust size with gravity",
+      "gap": "For a=(0,2,0) wrote T=3*2=6 N. Gravity must be added first: T=m*sqrt(ax^2+ay^2+(az+g)^2)=30.04 N.",
+      "status": "open"
+    },
+    {
+      "date": "2026-10-24",
+      "lesson": "L01R",
+      "topic": "tilt theta vs roll/pitch",
+      "gap": "Thought theta/phi are pitch/roll. theta = total lean from vertical, phi = lean direction; roll and pitch split that lean into two axes.",
+      "status": "open"
+    },
+    {
+      "date": "2026-10-24",
+      "lesson": "L01",
+      "topic": "Chinese: 速度环 vs 角速度环",
+      "gap": "Rate loop is 角速度环 (angular rate), 速度环 is the velocity loop. Order A是B的C now correct.",
+      "status": "open"
+    },
+    {
+      "date": "2026-10-24",
+      "lesson": "L01",
+      "topic": "giving the number",
+      "gap": "Wrote formulas without computing (g*tan25 = 4.57 m/s^2, theta = 11.5 deg, phi = 90 deg). Always finish with number + unit.",
+      "status": "open"
+    }
   ]
 }
