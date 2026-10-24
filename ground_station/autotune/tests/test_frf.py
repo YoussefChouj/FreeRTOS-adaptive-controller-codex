@@ -1,6 +1,7 @@
 """frf.py on synthetic flights with a known plant (synth.simulate)."""
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from ground_station.autotune import excitation as ex
@@ -77,3 +78,22 @@ def test_wide_csv_is_accepted(tmp_path):
     (tmp_path / "w.csv").write_text("t,a\n" + "\n".join(f"{x},{2 * x}" for x in t), encoding="utf-8")
     s = fr.load_series(tmp_path / "w.csv")
     assert np.allclose(s["a"][1], 2 * t)
+
+def test_duplicate_timestamps_are_tolerated(tmp_path):
+    df = synth.simulate("roll", seed=0)
+    df2 = df.copy()
+    df2["slot"] = df2["slot"] + 10
+    df_dup = pd.concat([df, df2]).sort_values("received_ns", kind="stable")
+
+    path = synth.write_session(tmp_path, df_dup)
+    series = fr.load_series(path)
+
+    t0, corr, grid, r, x, fs = fr.find_start(series, "roll", ex.ID_EXCITE)
+
+    # Check if find_start returns same t0/fs as single-slot version
+    path_single = synth.write_session(tmp_path / "single", df)
+    series_single = fr.load_series(path_single)
+    t0_s, corr_s, grid_s, r_s, x_s, fs_s = fr.find_start(series_single, "roll", ex.ID_EXCITE)
+
+    assert abs(t0 - t0_s) <= 1.0/fs
+    assert fs == fs_s
