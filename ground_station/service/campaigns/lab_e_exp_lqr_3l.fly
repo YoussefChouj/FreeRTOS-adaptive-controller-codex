@@ -12,7 +12,7 @@ exp lqr_3l
 set g_traj_ff_shift_s=0 g_land_xy_gate_cm=10 g_xyc_delay_ticks=21
 takeoff 0.5
 hold 3
-set traj_p.move_s=12 traj_p.hold_s=1
+set traj_p.move_s=18 traj_p.ret_s=3 traj_p.hold_s=1 traj_p.profile=1 traj_p.ramp_s=2 traj_p.yaw_follow=0
 preset figure8 f8_a_cm=30
 hold 3
 land
