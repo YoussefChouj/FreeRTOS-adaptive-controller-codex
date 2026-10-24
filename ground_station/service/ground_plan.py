@@ -28,7 +28,7 @@ contract does not name yet. The contract is read, never written: the firmware ag
 
 The contract may name its layer fields in any of these shapes, all of which are read:
 
-  - a module-level dict ``MRAC_LAYER_FIELDS`` or ``LAYER_FIELDS``: {"att": 32, "yaw": 33, "z": 34};
+  - a module-level dict ``MRAC_LAYER_FIELDS`` or ``LAYER_FIELDS``: {"att": 33, "yaw": 34, "z": 35};
   - a mapping attribute on the contract object: ``mrac_layer_fields`` or ``layer_fields``;
   - a parameter of the 0x1D MRAC_VARIANT command spec named ``<group>_layers`` whose index is the field number.
 """
@@ -163,15 +163,16 @@ def contract_layer_fields() -> dict[str, int]:
 
 
 def layer_fields() -> dict[str, int]:
-    """Every layer group's CMD 0x1D field number: the contract's, plus the x/y one of the host mirror.
+    """Every layer group's CMD 0x1D field number: the host mirror's ``<group>_layers`` rows, then the contract's.
 
-    The x/y group is already in the firmware table (API/mrac.c MRAC_VF_XY_LAYERS, field 31), so it comes from
-    the host mirror; the all-loop groups come from the contract.
+    The host mirror (VARIANT_FIELDS) travels with the firmware table it mirrors (API/mrac.c mrac_var_field):
+    x/y is field 31, and the all-loop build adds att / yaw / z as 33 / 34 / 35. A field the contract names
+    overrides the mirror's number.
     """
     from ground_station.analysis import mrac_variants as mv
 
     names = [name for name, _lo, _hi in mv.VARIANT_FIELDS]
-    out = {"xy": names.index("xy_layers")} if "xy_layers" in names else {}
+    out = {g: names.index(f"{g}_layers") for g in LAYER_GROUPS if f"{g}_layers" in names}
     out.update(contract_layer_fields())
     return out
 
@@ -205,12 +206,10 @@ def layer_write(group: str, target: str) -> dict[str, Any]:
         return refusing_write(
             f"layers {g}: field {g}_layers is missing from the firmware contract ({NEEDS_ALL_LOOP})",
             f"{g}_layers")
-    if field >= 32:
-        # Axis 0 packs the field in 5 bits of the idx byte (send_write), so field 32+ has no encoding there yet.
-        return refusing_write(
-            f"layers {g}: field {g}_layers = {field} has no CMD 0x1D encoding on axis 0 yet "
-            f"(needs the mrac-all-loops item 1 wire format)", f"{g}_layers")
-    return {"kind": "variant", "axis": 0, "field": field, "value": float(LAYER_TARGETS[t])}
+    # The layer fields are global (any axis sets them). Axes 0-3 pack the field in 5 bits of the idx byte, so
+    # field 32+ goes on axis x: idx 0x80 | (field << 1), e.g. att_layers 33 -> 0xC2 (API/mrac.c MRAC_VariantIdxSet).
+    axis = 4 if field >= 32 else 0
+    return {"kind": "variant", "axis": axis, "field": field, "value": float(LAYER_TARGETS[t])}
 
 
 def refusing_write(reason: str, field: str) -> dict[str, Any]:

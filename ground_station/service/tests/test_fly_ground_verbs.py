@@ -301,7 +301,46 @@ def test_a_contract_named_field_is_used_by_the_layers_verb(monkeypatch):
 
     monkeypatch.setattr(fc, "MRAC_LAYER_FIELDS", {"att_layers": 32}, raising=False)
     write = _scenario("layers att both\nhold 3\n")["steps"][0]["takeoff"]["ground"][0]
-    # Field 32+ has no CMD 0x1D idx encoding on axis 0 (5-bit field), so it is refused on the ground, not crashed
-    # inside send_write, until the mrac-all-loops item 1 wire format lands.
-    assert write["kind"] == "refuse" and write["field"] == "att_layers"
-    assert "item 1 wire format" in write["reason"]
+    # Field 32+ does not fit the 5-bit field of axes 0-3, so the layer write goes on axis x (idx 0x80 | field << 1).
+    assert write == {"kind": "variant", "axis": 4, "field": 32, "value": 3.0}
+
+
+class _RecordingClient:
+    """A client that records the raw CMD 0x1D sends and applies each one."""
+
+    last_error = ""
+
+    def __init__(self):
+        self.sent = []
+
+    def _send_cmd(self, cmd, idx, value):
+        self.sent.append((cmd, idx, value))
+        return True
+
+
+def test_a_field_beyond_the_mirror_is_sent_with_the_axis_x_idx(monkeypatch):
+    # att / yaw / z layers (33 / 34 / 35) reach the firmware as idx 0xC2 / 0xC4 / 0xC6 (API/mrac.c MRAC_VariantIdxSet).
+    fc = ground_plan._contract_module()
+    monkeypatch.setattr(fc, "MRAC_LAYER_FIELDS", {"att_layers": 33, "yaw_layers": 34, "z_layers": 35}, raising=False)
+    client = _RecordingClient()
+    for group, idx in (("att", 0xC2), ("yaw", 0xC4), ("z", 0xC6)):
+        write = ground_plan.layer_write(group, "both")
+        assert write == {"kind": "variant", "axis": 4, "field": ground_plan.layer_field(group), "value": 3.0}
+        assert ground_plan.send_write(client, write) is True
+        assert client.sent[-1] == (0x1D, idx, 3.0)
+
+
+def test_the_layer_fields_come_from_the_host_mirror_rows(monkeypatch):
+    # After the all-loop merge the host mirror carries att / yaw / z_layers at 33 / 34 / 35; no contract entry needed.
+    from ground_station.analysis import mrac_variants as mv
+
+    fc = ground_plan._contract_module()
+    monkeypatch.setattr(fc, "MRAC_LAYER_FIELDS", {}, raising=False)
+    rows = list(mv.VARIANT_FIELDS)
+    while len(rows) < 33:
+        rows.append((f"pad_{len(rows)}", 0.0, 1.0))
+    rows += [("att_layers", 0.0, 3.0), ("yaw_layers", 0.0, 3.0), ("z_layers", 0.0, 3.0)]
+    monkeypatch.setattr(mv, "VARIANT_FIELDS", rows)
+    assert ground_plan.layer_fields()["att"] == 33
+    assert ground_plan.layer_fields()["z"] == 35
+    assert ground_plan.layer_write("yaw", "outer") == {"kind": "variant", "axis": 4, "field": 34, "value": 2.0}
