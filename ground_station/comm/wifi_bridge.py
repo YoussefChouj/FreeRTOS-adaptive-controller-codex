@@ -103,6 +103,19 @@ RX_SOCKET_BUFFER_BYTES = 8 << 20  # 8 MB, about 2 min of the heaviest plan
 INGEST_QUEUE_MAX = 200_000  # decoded frames held for the ingest thread before counting drops
 MIRROR_PERIOD_S = 0.01      # the mirror thread sends the queued per-frame dashboard messages this often
 MIRROR_QUEUE_MAX = 20_000   # per-frame mirror messages held for it; the oldest go first (the 100 ms full mirror stays)
+VOFA_QUEUE_MAX = 20_000     # VOFA+ frames held for the VOFA sender thread; the oldest go first
+# GIL switch interval for any process that runs the bridge. Each datagram costs the rx thread one GIL handoff after
+# recvfrom; at the 5 ms default a busy thread (ingest json, CSV writer, mirror) held it so long that rx fell below
+# the armed sysid rate (~450 frames/s) and the backlog sat in the kernel buffer (lab 10-24, py-spy: rx 73% waiting
+# for the GIL). PROPOSED 0.5 ms; the soak's fw->host lag check is the proof.
+RX_SWITCH_INTERVAL_S = 0.0005
+
+
+def apply_rx_switch_interval() -> float:
+    """Lower the process GIL switch interval to RX_SWITCH_INTERVAL_S (never raise it); return the value in force."""
+    if sys.getswitchinterval() > RX_SWITCH_INTERVAL_S:
+        sys.setswitchinterval(RX_SWITCH_INTERVAL_S)
+    return sys.getswitchinterval()
 RELAY_RETRY_S = 1.0   # the relay port is re-tried this often until it binds
 
 INGEST_LAG_WARN_NS = 200_000_000  # PROPOSED: frame age that counts as "ingest behind" in the log (stale abort is 0.5 s)
@@ -433,6 +446,9 @@ class WifiBridge:
         # every frame, so any busy Python thread made ingest wait a switch interval per frame and fall behind
         # (test_ingest_gil_convoy_lag: one busy thread at 100 Hz gave 435 ms frame age).
         self._mirror_q: collections.deque = collections.deque(maxlen=MIRROR_QUEUE_MAX)
+        # VOFA+ frames, sent by the VOFA thread: the sendto on the rx thread was a second GIL handoff per datagram
+        # (py-spy lab 10-24: 16% of rx wall time), so the rx thread only appends here.
+        self._vofa_q: collections.deque = collections.deque(maxlen=VOFA_QUEUE_MAX)
 
         # Stream tick the FC prices slots at (API/subscribe.c Subscribe_StreamTickHz):
         # 200 Hz in SUBSCRIBE_ONLY, 100 Hz otherwise. set_telemetry_mode_now sets it.
@@ -569,12 +585,15 @@ class WifiBridge:
         if initial_telemetry_mode is not None:
             self.set_telemetry_mode_now(initial_telemetry_mode)
 
+        apply_rx_switch_interval()
         rx = threading.Thread(target=self._rx_loop, name="wifi_bridge_rx", daemon=True)
         ingest = threading.Thread(target=self._ingest_loop, name="wifi_bridge_ingest", daemon=True)
         ingest.start()
         cmd = threading.Thread(target=self._cmd_loop, name="wifi_bridge_cmd", daemon=True)
         telem = threading.Thread(target=self._telem_loop, name="wifi_bridge_telem", daemon=True)
         threading.Thread(target=self._mirror_loop, name="wifi_bridge_mirror", daemon=True).start()
+        if self._vofa_enabled:
+            threading.Thread(target=self._vofa_loop, name="wifi_bridge_vofa", daemon=True).start()
 
         rx.start()
         cmd.start()
@@ -2885,11 +2904,25 @@ class WifiBridge:
             dest_port = self._vofa_port_b
         else:
             return
-        try:
-            payload = struct.pack(f"<{len(values)}f", *values) + b"\x00\x00\x80\x7f"
-            self._udp_send.sendto(payload, (self._vofa_host, dest_port))
-        except OSError:
-            pass
+        # Called on the rx thread: queue only, the VOFA thread packs and sends (no GIL handoff per datagram).
+        self._vofa_q.append((dest_port, values))
+
+    def _vofa_loop(self) -> None:
+        """Send the VOFA+ frames ``_forward_vofa`` queued, every MIRROR_PERIOD_S, in order."""
+        while not self._stop.is_set():
+            time.sleep(MIRROR_PERIOD_S)
+            self._send_vofa_queued()
+
+    def _send_vofa_queued(self) -> None:
+        """Pack and send every queued VOFA+ frame (JustFloat: LE float32 values + 00 00 80 7f tail)."""
+        q = self._vofa_q
+        while q:
+            dest_port, values = q.popleft()
+            try:
+                payload = struct.pack(f"<{len(values)}f", *values) + b"\x00\x00\x80\x7f"
+                self._udp_send.sendto(payload, (self._vofa_host, dest_port))
+            except (OSError, struct.error, TypeError, AttributeError):
+                pass
 
 
 # ------------------------------------------------------------------

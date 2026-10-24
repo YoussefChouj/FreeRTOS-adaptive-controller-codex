@@ -140,6 +140,9 @@ class TestForwardVofa(unittest.TestCase):
 
     def test_slot1_goes_to_port_a(self):
         self.bridge._forward_vofa(1, [0.5, 0.25])
+        # The rx thread only queues; the VOFA thread sends (no GIL handoff per datagram on rx, lab 10-24).
+        self.bridge._udp_send.sendto.assert_not_called()
+        self.bridge._send_vofa_queued()
         self.bridge._udp_send.sendto.assert_called_once()
         args = self.bridge._udp_send.sendto.call_args[0]
         payload, dest = args
@@ -154,17 +157,20 @@ class TestForwardVofa(unittest.TestCase):
 
     def test_slot2_goes_to_port_b(self):
         self.bridge._forward_vofa(2, [1.0])
+        self.bridge._send_vofa_queued()
         self.bridge._udp_send.sendto.assert_called_once()
         _, dest = self.bridge._udp_send.sendto.call_args[0]
         self.assertEqual(dest, ("127.0.0.1", 1348))
 
     def test_slot3_is_dropped(self):
         self.bridge._forward_vofa(3, [1.0])
+        self.bridge._send_vofa_queued()
         self.bridge._udp_send.sendto.assert_not_called()
 
     def test_disabled_bridge_does_nothing(self):
         self.bridge._vofa_enabled = False
         self.bridge._forward_vofa(1, [1.0])
+        self.bridge._send_vofa_queued()
         self.bridge._udp_send.sendto.assert_not_called()
 
 
