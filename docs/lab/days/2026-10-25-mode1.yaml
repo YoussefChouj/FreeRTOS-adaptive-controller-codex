@@ -1,0 +1,36 @@
+# Lab day 2026-10-25, camera mode 1 deck: fly it with `.\labday 2026-10-25-mode1`, after block 6 of the main deck.
+# Camera mode 1 logs every fix (g_ext_pos.e_x/e_y) without applying it (ext_pos_on 1; the main deck flies mode 3).
+# Question: does the 10-24 xy limit cycle (0.25-0.63 Hz, argon-n25-osc.md) need the camera in the loop?
+# Same three alone-retests as main-deck block 6, same scripts; only the camera mode changes
+# (camera mode sets ext_pos_on, docs/lab/COMMANDS.md:260). Oscillates in both modes = not the camera loop.
+# Not carried to other days (the file name is not a date). Pass marks are PROPOSED.
+day: 2026-10-25
+carry: false
+title: camera mode 1 (witness only) - LQR/MPC/ADRC alone-retests, ext_pos_on 1 vs 3 A/B of the xy limit cycle
+camera:
+  floor: floor-2026-10-24
+  mode: 1                          # witness: log fixes, do not apply them
+  args: [--yaw-deg, "94", --delay-ms, "330"]
+before:
+  - "Main deck 2026-10-25 block 6 flown (mode 3 retests) or main deck stopped; 8081 running, `arm 0`, landing pad clear"
+  - "Tracker window: the dot sits on the drone center while parked before arming"
+  - "Check pack resting volts >= 15.8V before first flight (source docs/lab/run-sheet-2026-10-14.md:63)"
+flights:
+  - id: lqr-alone-retest-mode1
+    fly: lab_e_exp_lqr_u0_d12
+    why: "LQR alone, VAR47=12, camera witness only; pairs with lqr-alone-retest (mode 3)"
+    pass: "no xy oscillation in 0.25-0.63 Hz above 10 cm amplitude (PROPOSED); camera-vs-flow xy gap logged"
+
+  - id: mpc-alone-retest-mode1
+    fly: lab_e_exp_mpc_u0_d12
+    why: "MPC alone, VAR47=12, camera witness only; pairs with mpc-alone-retest (mode 3)"
+    pass: "no xy oscillation in 0.25-0.63 Hz above 10 cm amplitude (PROPOSED); camera-vs-flow xy gap logged"
+
+  - id: adrc-alone-retest-mode1
+    fly: lab_e_exp_adrc_u0
+    why: "ADRC alone (VAR47 does not reach ADRC), camera witness only; pairs with adrc-alone-retest (mode 3); ADRC oscillation cause is OPEN"
+    pass: "no xy oscillation in 0.25-0.63 Hz above 10 cm amplitude (PROPOSED); camera-vs-flow xy gap logged"
+    stop: true
+branches:
+  - {when: "Mode 1 clean but mode 3 oscillated", do: "Land, tell me: the camera loop (delay/fusion) drives the limit cycle"}
+  - {when: "Both modes oscillate", do: "Land, tell me: the cause is in the controller or the flow estimate, not the camera"}

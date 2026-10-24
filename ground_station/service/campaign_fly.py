@@ -524,10 +524,21 @@ GAIN_PRESETS = {
             33: 4.70, 34: 0.0031, 35: 0.0,
         },
     },
+    "rate35": {
+        "why": "rate35 (PROPOSED): roll/pitch rate Kp3.5 Kd13, Ki unchanged; autotune on the 10-24 rate-sysid fits "
+               "(logs 213634, 214336) predicts phase margin roll 21.4 -> 34.4 deg, pitch 28-30 -> 43-46 deg "
+               "(docs/lab/days/2026-10-25.yaml block 5).",
+        "gains": {9: 3.5, 10: 0.01, 11: 13.0, 12: 3.5, 13: 0.01, 14: 13.0},
+    },
+    "yaw104": {
+        "why": "yaw104 (PROPOSED): yaw rate Kp10.4 Kd0.014, Ki unchanged; autotune on the 10-24 yaw fit (log 215247). "
+               "Current yaw PM is 81.7 deg, so this is optional (docs/lab/days/2026-10-25.yaml block 5).",
+        "gains": {15: 10.4, 16: 0.005, 17: 0.014},
+    },
     "defaults": {
         "why": "defaults: restore API/pid.c firmware default gains without requiring power-cycle (docs/agent/lab-friction-2026-10-15.md A6).",
-        # rate loops (9-14) too: F4 livetune writes them and RAM gains outlive the flight
-        "gains": {idx: PID_DEFAULTS[idx][1] for idx in [*range(9, 15), *range(24, 36)]},
+        # rate loops (9-17) too: F4 livetune writes 9-14, yaw104 writes 15-17, and RAM gains outlive the flight
+        "gains": {idx: PID_DEFAULTS[idx][1] for idx in [*range(9, 18), *range(24, 36)]},
     },
 }
 

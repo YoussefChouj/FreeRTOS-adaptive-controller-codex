@@ -1,0 +1,321 @@
+# Lab day 2026-10-25: MRAC thesis variants, adaptive layers, all-loop layers, baseline fix, rate sysid, pattern-learn
+# `.\labday 2026-10-25 --list` shows what is flown; the same command goes on from the first flight not flown.
+# Camera A/B (ext_pos_on 1 vs 3) for the alone-retests is a second deck: `.\labday 2026-10-25-mode1`.
+# Carried tail (labday adds it after block 9; earlier flights whose state is not ok): 1021-lqr-track,
+# 1021-dense-trajectories, 1024-smoke-hover, 1024-pid-track, 1024-z/yaw-layer-outer x2, and
+# 1024-lqr/mpc-alone-retest = the VAR47=21 scripts: same-day A/B partners of the block-6 _d12 retests (21 vs 12).
+# Each flight: `.\fly <fly> --once <args>`; `stop: true` = analysis stop; `gate:` = condition the operator checks first.
+# PASS MARKS: most are PROPOSED; the source is cited where one exists.
+#
+# Order = operator priorities (voice note 10-25): 1 thesis data, 2 adaptive-layer variants, 3 outer+inner
+# combinations, 4 baseline fix. Blocks: 1 MRAC thesis, 2-3 xy layers (+ reversed), 4 att/z/yaw/all layers,
+# 5 rate-gain A/B (gated Q1), 6 alone-retests, 7 MRAC around LQR/MPC/ADRC (gated on 6), 8 rate sysid,
+# 9 pattern-learn + prior cold/warm. Unflown flights of earlier decks are carried in (carry: true).
+# Two faults behind the 10-24 oscillations (rate fit: .agent-ops/research/rate-fit-1025/<axis>-<log>.log l.25-27):
+#   high-freq = under-damped RATE loop (roll PM 21.4 deg, pitch 28-30 deg), shared by every controller;
+#   low-freq  = outer xy limit cycle 0.25-0.63 Hz (argon-n25-osc.md).
+#
+# OPEN QUESTIONS FOR THE OPERATOR (answer before flying):
+# Q1: Adopt new rate gains (roll/pitch Kp3.5 Kd13, PROPOSED: roll PM 34.4, pitch 43-46 deg) BEFORE the thesis
+#     blocks (better margin, but a different inner loop from the 10-21..10-24 thesis data) or AFTER (consistent
+#     with the old data)? BEFORE = fly block 5 first. Not decided here.
+# Q2: Pass threshold for the rate-gain A/B (all marks there are PROPOSED); it decides which inner loop the
+#     mrac_ref_fit references of block 7 are fitted on.
+# Q3: VAR47 (12 vs 21) reaches LQR/MPC only (Smith predictor, TASK/StabilizerTask.c:2001-2003; 12 is itself
+#     PROPOSED from xy_delay_sim). The ADRC oscillation cause is OPEN; the mode-1 deck tests the camera loop.
+
+day: 2026-10-25
+carry: true                        # pull earlier unflown flights (ground_station/lab/labday.py:81, 96-128)
+title: MRAC thesis variants, xy/att/z/yaw layer A/B, rate-gain A/B, alone-retests (VAR47=12 for LQR/MPC), MRAC around LQR/MPC/ADRC, rate sysid re-fly, pattern-learn + prior cold/warm
+camera:
+  floor: floor-2026-10-24          # scan at lab with drone out of view: .\cam floor floor-2026-10-24
+  mode: 3                          # in-EKF
+  args: [--yaw-deg, "94", --delay-ms, "330"]
+before:
+  - "RESTART 8081 (link fix d7fdfa1e was committed; 8081 restart clears stale subscribe state)"
+  - 'Floor scan: .\cam floor floor-2026-10-24 (must produce aruco.npz for d5_truth4)'
+  - "Run offline ground-truth: python -m ground_station.analysis.d5_truth4_batch --day 2026-10-24 --run"
+  - "8081 running, arm 0, landing pad clear, camera in recording position"
+  - "Tracker dot on drone center before arming"
+  - "Check pack resting volts >= 15.8V before first flight (source docs/lab/run-sheet-2026-10-14.md:63)"
+
+flights:
+  # ======== BLOCK 1: MRAC THESIS VARIANTS ========
+  # Memory A/B (thesis: adaptive layer is controller-agnostic, wraps PID/LQR/MPC/ADRC)
+  # MRAC injection ON, xy_layers=inner (matching 10-21 design)
+
+  - id: memory-mrac-off
+    fly: lab_m_memory_u0
+    why: "Memory A/B: off arm (n+1 of off series); MRAC runs and logs but output not applied"
+    pass: "flies full script without L1 abort; position error logged for A/B comparison"
+
+  - id: memory-mrac-on
+    fly: lab_m_memory_u100
+    why: "Memory A/B: on arm (n+1 of on series); interleaved with off so pack/temp drift hit both"
+    pass: "flies full script without L1 abort"
+
+  - id: pid-plus-mrac
+    fly: lab_e_exp_matrix
+    why: "PID + xy MRAC (matched reference): repeat of 10-21 for n=2 against pid-alone-ref"
+    pass: "figure-8 completes; position error vs pid-alone-ref logged (PROPOSED)"
+    notes: "Ground step before matched flights: mrac_ref_fit on pid-alone-ref session --kind pid"
+
+  # ======== BLOCK 2: ADAPTIVE-LAYER VARIANTS ========
+  # Layer A/B (inner/outer/both) with PID as base controller
+
+  - id: xy-layer-inner
+    fly: lab_e_xyl_inner
+    why: "XY layer: velocity loop only adapts (inner)"
+    pass: "figure-8 completes; within 10% of pid-alone-ref (PROPOSED)"
+
+  - id: xy-layer-outer
+    fly: lab_e_xyl_outer
+    why: "XY layer: position loop only adapts (outer)"
+    pass: "figure-8 completes; within 10% of pid-alone-ref (PROPOSED)"
+
+  - id: xy-layer-both
+    fly: lab_e_xyl_both
+    why: "XY layer: both position and velocity loops adapt"
+    pass: "figure-8 completes; beats xy-layer-inner on layer_ab control metrics (PROPOSED)"
+
+  # ======== BLOCK 3: LAYER AB ANALYSIS ========
+  # Repeat layers in reversed order for pack drift interleaving
+
+  - id: xy-layer-both-rev
+    fly: lab_e_xyl_both
+    why: "XY layer both: reversed order (A B C C B A) so pack drift hits every arm"
+    pass: "figure-8 completes; same-arm spread logged (PROPOSED)"
+
+  - id: xy-layer-outer-rev
+    fly: lab_e_xyl_outer
+    why: "XY layer outer: reversed order"
+    pass: "figure-8 completes; same-arm spread logged (PROPOSED)"
+
+  - id: xy-layer-inner-rev
+    fly: lab_e_xyl_inner
+    why: "XY layer inner: reversed order"
+    pass: "figure-8 completes; run layer_ab analysis (PROPOSED)"
+    stop: true
+
+  # ======== BLOCK 4: ATTITUDE / ALTITUDE / YAW / ALL-LAYERS ========
+  # Every var these flights set exists in the firmware var table; all lab_l_*.fly compile (10-25 check)
+  # Multi-time-scale MRAC: thesis claim is controller-agnostic adaptive layer
+
+  - id: att-layer-inner
+    fly: lab_l_att_inner
+    why: "Attitude layer: MRAC on rate loop only (roll multisine A B C C B A)"
+    pass: "multisine completes; gain/phase margin inside band on layer_ab (PROPOSED)"
+
+  - id: att-layer-outer
+    fly: lab_l_att_outer
+    why: "Attitude layer: MRAC on angle loop only (roll)"
+    pass: "multisine completes (PROPOSED)"
+
+  - id: att-layer-both
+    fly: lab_l_att_both
+    why: "Attitude layer: MRAC on both rate and angle loops"
+    pass: "multisine completes (PROPOSED)"
+
+  - id: z-layer-inner
+    fly: lab_l_z_inner
+    why: "Altitude layer: MRAC on z velocity only (z steps with ground effect guard)"
+    pass: "three z steps complete inside fence (PROPOSED)"
+
+  - id: z-layer-both
+    fly: lab_l_z_both
+    why: "Altitude layer: MRAC on both z velocity and z position"
+    pass: "three z steps complete inside fence (PROPOSED)"
+
+  - id: yaw-layer-inner
+    fly: lab_l_yaw_inner
+    why: "Heading layer: MRAC on yaw rate only (yaw steps)"
+    pass: "three yaw steps complete (PROPOSED)"
+
+  - id: yaw-layer-both
+    fly: lab_l_yaw_both
+    why: "Heading layer: MRAC on both yaw rate and yaw angle"
+    pass: "three yaw steps complete (PROPOSED)"
+
+  - id: all-layers-off
+    fly: lab_l_all_off
+    why: "Full multi-time-scale stack: all MRAC layers OFF across figure-8 + roll multisine + z/yaw steps"
+    pass: "full script completes without L1 abort (PROPOSED)"
+
+  - id: all-layers-both
+    fly: lab_l_all_both
+    why: "Full multi-time-scale stack: all MRAC layers ON (xy, att, yaw, z) both inner and outer"
+    pass: "full script completes; beats all-layers-off on layer_ab metrics (PROPOSED)"
+
+  # ======== BLOCK 5: RATE-GAIN A/B (baseline fix, gated Q1) ========
+  # Rate gains are written only after the operator's chat OK, via `.\fly <fly> --once --gains <preset>`
+  # (docs/lab/COMMANDS.md:218); never as a .fly `set`. Presets (ground_station/service/campaign_fly.py GAIN_PRESETS):
+  # defaults = pid.c gains (roll/pitch Kp5 Kd10, yaw Kp8 Kd0.02), rate35 = roll/pitch Kp3.5 Kd13 (PROPOSED),
+  # yaw104 = yaw Kp10.4 Kd0.014 (PROPOSED). RAM gains outlive the flight: unless Q1 adopts rate35, the first flight
+  # after this block runs with `--gains defaults` (branch below).
+
+  - id: rate-gain-pid-current-hover
+    fly: lab_a_hover
+    args: [--gains, defaults]
+    gate: "Q1 - operator decides: fly FIRST if adopting new rate gains before thesis blocks, else fly after the combination block"
+    why: "Baseline: hover with CURRENT PID rate gains (Kp5 Kd10), ROLL PM=21.4deg, wc=22.0rad/s"
+    pass: "steady hover; no 1.7-5.3Hz oscillation in gyro PSD (PROPOSED: gx peak < 5 dps, gy peak < 5 dps)"
+    notes: "Roll PM=21.4deg GM=12.1dB wc=22.0rad/s Smax=2.96 from CLI rate-fit table (CEO re-derived roll: wc=21.9 rad/s PM=21.7 deg)"
+
+  - id: rate-gain-pid-current-figure8
+    fly: lab_c_pid
+    args: [--gains, defaults]
+    gate: "Q1 - operator decides: fly FIRST if adopting new rate gains before thesis blocks, else fly after the combination block"
+    why: "Preset trajectory with CURRENT PID rate gains (hover + circle + figure8, move_s=18 yaw_follow=0)"
+    pass: "figure-8 completes; max pos error < 25 cm; yaw span < 5 deg; no 15 deg tilt saturation (PROPOSED)"
+    notes: "Same preset as 10-24 pid-track but move_s=18 (was 12 on old presets causing overshoot)"
+
+  - id: rate-gain-pid-proposed-hover
+    fly: lab_a_hover
+    args: [--gains, rate35]
+    gate: "Q1 - operator decides: fly FIRST if adopting new rate gains before thesis blocks, else fly after the combination block"
+    why: "PROPOSED rate gains: hover with Kp3.5 Kd13 roll, ROLL PM=34.4deg wc=18.3rad/s Smax=1.91"
+    pass: "steady hover; gx peak < 3 dps, gy peak < 3 dps (PROPOSED: reduced 1.7-5.3Hz oscillation)"
+    notes: "Roll PM=34.4deg GM=18.2dB wc=18.3rad/s Smax=1.91 (CLI proposed Kp3.5 Kd13, +-30% step)"
+
+  - id: rate-gain-pid-proposed-figure8
+    fly: lab_c_pid
+    args: [--gains, rate35]
+    gate: "Q1 - operator decides: fly FIRST if adopting new rate gains before thesis blocks, else fly after the combination block"
+    why: "Preset trajectory with PROPOSED PID rate gains (Kp3.5 Kd13 roll, Kp3.5 Kd13 pitch)"
+    pass: "figure-8 completes; max pos error < 20 cm; yaw span < 5 deg; no tilt saturation (PROPOSED)"
+    notes: "Pitch PM=45.8deg/43.2deg GM=14.6-14.9dB wc=17rad/s Smax=1.65-1.70 (CLI proposed)"
+
+  - id: yaw-gain-check
+    fly: lab_a_hover
+    args: [--gains, yaw104]
+    gate: "Q1 - operator decides: fly FIRST if adopting new rate gains before thesis blocks, else fly after the combination block"
+    why: "Yaw gain check: proposed Kp10.4 Kd0.014 vs current Kp8 Kd0.02 (compare with rate-gain-pid-proposed-hover; optional, yaw PM=81.7deg is good). Roll/pitch stay as the previous flight left them (rate35)"
+    pass: "hover yaw span < 5 deg, no yaw-rate PSD peak (PROPOSED)"
+    notes: "Yaw PM=81.7deg GM=21.6dB wc=10.0rad/s Smax=1.12 (current is already healthy)"
+
+  # ======== BLOCK 6: BASELINE ALONE-RETESTS (VAR47=12 for LQR/MPC, camera mode 3) ========
+  # 10-24 alone-retests: xy limit cycle 0.25-0.63 Hz (argon-n25-osc.md). VAR47 = g_xyc_delay_ticks is the LQR/MPC
+  # Smith-predictor delay ONLY (TASK/StabilizerTask.c:2001-2003); 12 = firmware default (StabilizerTask.c:2004),
+  # itself PROPOSED from xy_delay_sim, not measured. ADRC/PID ignore VAR47: the ADRC oscillation cause is OPEN.
+  # ext_pos_on 1-vs-3 A/B: docs/lab/days/2026-10-25-mode1.yaml (camera mode sets ext_pos_on, docs/lab/COMMANDS.md:260).
+
+  - id: lqr-alone-retest-fix
+    fly: lab_e_exp_lqr_u0_d12
+    why: "Retest LQR alone with VAR47=12 (21 on 10-24: 0.50-0.63Hz xy oscillation); camera mode 3 as on 10-24"
+    pass: "no sustained xy oscillation in hold (peak-to-peak < 10cm, PROPOSED); figure-8 completes"
+
+  - id: mpc-alone-retest-fix
+    fly: lab_e_exp_mpc_u0_d12
+    why: "Retest MPC alone with VAR47=12 (21 on 10-24: 0.50Hz, A=26.7cm); camera mode 3 as on 10-24"
+    pass: "no sustained xy oscillation in hold (peak-to-peak < 10cm, PROPOSED); figure-8 completes"
+
+  - id: adrc-alone-retest-fix
+    fly: lab_e_exp_adrc_u0
+    why: "Retest ADRC alone, same script as 10-24 (VAR47 does not reach ADRC); 0.25Hz (A=28.9cm) on 10-24, cause OPEN"
+    pass: "no sustained oscillation; rms error within 20% of pid-alone-ref (PROPOSED)"
+
+  - id: pid-alone-ref-fix
+    fly: lab_e_exp_pid_u0
+    why: "Same-day PID reference for the three retests (same exp script, PID xy, injection off)"
+    pass: "figure-8 completes; within 10% of 10-24 pid-alone-ref (PROPOSED)"
+    notes: "10-24 pid-alone-ref was better (0.25-0.38Hz, A=2.7-6.1cm) but still had outer-loop offset"
+
+  # ======== BLOCK 7: MRAC AROUND LQR / MPC / ADRC (conditional on block 6) ========
+  # Per pair: fly only after the matching alone-retest passes; matched flights need logs/ref_fit/<kind>.json first.
+  - id: adrc-plus-mrac-mismatched
+    fly: lab_e_exp_adrc_3l
+    gate: "after the matching alone-retest passes; run mrac_ref_fit on its log first"
+    why: "D3 demo: MRAC whose reference is the PID demand, around ADRC. Fly ONLY if adrc-alone-retest passed. Label in the thesis as a mismatched reference, not as ADRC + MRAC"
+    pass: "no pass mark: the sim predicts more saturation than adrc-alone-retest; abort limits stay as they are"
+
+  - id: lqr-plus-mrac
+    fly: lab_e_exp_lqr_3l
+    gate: "after the matching alone-retest passes; run mrac_ref_fit on its log first"
+    why: "Unmatched LQR + 3-layer MRAC sibling immediately before lqr-plus-mrac-matched"
+    pass: "figure-8 completes without an L1 abort (PROPOSED)"
+
+  - id: lqr-plus-mrac-matched
+    fly: lab_e_exp_lqr_matched
+    gate: "after the matching alone-retest passes; run mrac_ref_fit on its log first"
+    why: "MRAC with LQR's own fitted reference (logs/ref_fit/lqr.json from lqr-alone-retest)"
+    pass: "figure-8 completes; lower tracking error and saturation than lqr-plus-mrac (PROPOSED)"
+
+  - id: mpc-plus-mrac
+    fly: lab_e_exp_mpc_3l
+    gate: "after the matching alone-retest passes; run mrac_ref_fit on its log first"
+    why: "Unmatched MPC + 3-layer MRAC sibling immediately before mpc-plus-mrac-matched (different kind after LQR)"
+    pass: "figure-8 completes without an L1 abort (PROPOSED)"
+
+  - id: mpc-plus-mrac-matched
+    fly: lab_e_exp_mpc_matched
+    gate: "after the matching alone-retest passes; run mrac_ref_fit on its log first"
+    why: "MRAC with MPC's own fitted reference (logs/ref_fit/mpc.json from mpc-alone-retest)"
+    pass: "figure-8 completes; lower tracking error and saturation than mpc-plus-mrac (PROPOSED)"
+
+  - id: adrc-plus-mrac-matched
+    fly: lab_e_exp_adrc_matched
+    gate: "after the matching alone-retest passes; run mrac_ref_fit on its log first"
+    why: "MRAC with ADRC's own fitted reference (logs/ref_fit/adrc.json from adrc-alone-retest); pairs with adrc-plus-mrac-mismatched (different kind after MPC)"
+    pass: "figure-8 completes; lower saturation and hold error than adrc-plus-mrac-mismatched (PROPOSED)"
+    stop: true
+
+  # ======== BLOCK 8: RATE SYSID RE-FLY ========
+  # roll (log 213634 refused, residual 0.36) and yaw (214954 too short)
+  # No new firmware needed: rate targets 0/1 flew on 10-24 (logs 213634, 214336, 214954, 215247)
+
+  - id: rate-sysid-roll
+    fly: lab_d_excite
+    why: "Roll rate sysid re-fly: 10-24 log 213634 refused, residual 0.36 (autotune dup-slot bug)"
+    pass: "excite completes; autotune fits; gain at crossover within 2dB of fit (PROPOSED)"
+
+  - id: rate-sysid-yaw
+    fly: lab_d_excite_yaw
+    why: "Yaw rate sysid re-fly: 10-24 log 214954 too short (only partial data)"
+    pass: "excite completes with sufficient period count; fit quality R^2 > 0.9 (PROPOSED)"
+  # Outer-loop sysid (targets 2 angle / 3 velocity): gate "only if the sysid-outer firmware (Jules PR) is flashed";
+  # no .fly exists yet, so no entry today; it joins the next deck once that firmware is in.
+
+  # ======== BLOCK 9: PATTERN-LEARN + PRIOR COLD/WARM ========
+  # pattern-learn was BLOCKED on 10-24 (link starvation: slot 0 4-5Hz, 82-84% drops)
+  # Fix d7fdfa1e is committed; 8081 restart clears stale state
+
+  - id: pattern-learn
+    fly: lab_p_pattern_learn
+    why: "Learn Theta from slow outer x,y Schroeder pattern (MRAC injection OFF), then figure-8"
+    pass: "pattern and figure-8 complete without L1 abort; mrac_theta logged for prior-warm (PROPOSED)"
+
+  - id: prior-cold
+    fly: lab_p_prior_cold
+    why: "Prior A/B baseline (run 1): MRAC starts from zero Theta"
+    pass: "figure-8 completes; initial transient error logged vs pid-alone-ref (PROPOSED)"
+
+  - id: prior-warm
+    fly: lab_p_prior_warm
+    why: "Prior A/B warm arm (run 1): MRAC starts from latest:lab-p-pattern-learn Theta"
+    pass: "figure-8 completes; faster convergence than prior-cold (PROPOSED)"
+
+  - id: prior-cold-2
+    fly: lab_p_prior_cold
+    why: "Prior A/B baseline repeat (n=2, interleaved)"
+    pass: "figure-8 completes (PROPOSED)"
+
+  - id: prior-warm-2
+    fly: lab_p_prior_warm
+    why: "Prior A/B warm arm repeat (n=2, interleaved)"
+    pass: "figure-8 completes; beats prior-cold beyond same-arm spread (PROPOSED)"
+    stop: true
+
+branches:
+  - {when: "Flash exits non-zero or livewatch verify fails", do: "Stop; do not fly the old build; tell me"}
+  - {when: "smoke-hover lands outside pad gate or drift_nn.steps stays 0", do: "Land; tell me before memory-mrac-off"}
+  - {when: "NO FIX SENT or dot off the drone", do: "Land, check tracker, re-fly (r at auto-stop prompt)"}
+  - {when: "A flight refuses with no fitted reference file (matched flights)", do: "Run mrac_ref_fit on the ground (1 min), then re-fly"}
+  - {when: "An alone-retest oscillates or aborts", do: "Land, tell me. LQR/MPC: confirm the flown script was the _d12 one (set g_xyc_delay_ticks=12). ADRC/PID: VAR47 does not apply; compare with the mode-1 deck. Re-fly"}
+  - {when: "Tilt trip or fence stop", do: "Land; tell me before next flight"}
+  - {when: "Pack at packs.yaml gate", do: "Swap before next flight; give new type when fly asks"}
+  - {when: "Rate gain change causes immediate oscillation", do: "Land; revert gain to current; report to operator"}
+  - {when: "pattern-learn preflight: slot 0 < 8Hz", do: "Restart 8081, power-cycle drone FC, retry; if still failing, skip to prior-cold"}
+  - {when: "A block-7 gate fails (matching alone-retest did not pass)", do: "Skip that pair today; it carries to the next deck (never dropped)"}
+  - {when: "Sysid-outer firmware not flashed", do: "Skip the outer-loop sysid flights only; everything else flies"}
+  - {when: "Block 5 done and Q1 did not adopt rate35", do: "Fly the next flight with --gains defaults (restores roll/pitch/yaw rate gains; RAM gains outlive the flight)"}
+  - {when: "Q1 adopts rate35", do: "Fly the next flight with --gains rate35, and say so in the thesis: data before and after use different inner loops"}
