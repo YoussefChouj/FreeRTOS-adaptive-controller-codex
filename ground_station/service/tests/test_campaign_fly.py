@@ -937,6 +937,23 @@ def test_ensure_service_restarts_a_non_lab_service_in_lab_mode_when_safe(monkeyp
     assert "runs without --lab: restarting it" in capsys.readouterr().out
 
 
+def test_ensure_service_never_restarts_a_non_lab_service_off_8081(monkeypatch):
+    # Soak 10-25: a restart would drop the soak service's own link ports; stop with a reason instead
+    log = _fake_service(monkeypatch, None, True, lab_mode=False)
+    with pytest.raises(SystemExit, match="not the lab's 8081"):
+        campaign_fly.ensure_service("http://x", 56333, lab=True)
+    assert log == {"kill": [], "popen": []}
+
+
+@pytest.mark.parametrize("argv,lab", [([], True), (["--plain-service"], False)])
+def test_fly_asks_for_lab_mode_unless_plain_service(monkeypatch, argv, lab):
+    seen = []
+    monkeypatch.setattr(campaign_fly, "ensure_service", lambda base, port, **kw: seen.append(kw["lab"]))
+    monkeypatch.setattr(campaign_fly, "write_gains", lambda *a, **k: True)
+    assert campaign_fly.main(["--gains", "c2", "--port", "56333"] + argv) == 0
+    assert seen == [lab]
+
+
 def test_ensure_service_stops_on_a_non_lab_service_that_may_be_flying(monkeypatch):
     log = _fake_service(monkeypatch, None, False, lab_mode=False)
     with pytest.raises(SystemExit, match="land, then run this again"):

@@ -133,9 +133,10 @@ def day_path(date):
     return p if p.suffix in (".yaml", ".yml") else DAYS_DIR / f"{date}.yaml"
 
 
-def fly_cmd(f, pack=None, dry=False, port=8081):
-    """A dry run never talks to the service, so only a flight carries a non-default --port (the soak's spare port)."""
-    extra = ["--port", str(port)] if port != 8081 and not dry else []
+def fly_cmd(f, pack=None, dry=False, port=8081, plain=False):
+    """A dry run never talks to the service, so only a flight carries a non-default --port (the soak's spare port)
+    and --plain-service (the soak's service runs without --lab; fly must keep it, not restart it)."""
+    extra = (["--port", str(port)] if port != 8081 and not dry else []) + (["--plain-service"] if plain and not dry else [])
     return FLY + [f["fly"], "--dry-run" if dry else "--once"] + (["--pack", pack] if pack else []) + f["args"] + extra
 
 
@@ -394,6 +395,7 @@ class Day:
                  wait=cooldown, service=None, floor=None, vitals=None, clock=time.monotonic, sleep=time.sleep,
                  port=8081, lab_service=True):
         self.d, self.state_path, self.pack, self.port = d, Path(state_path), pack, port
+        self.lab_service = lab_service
         self.cooldown_s, self.wait, self.landed = cooldown_s, wait, None
         self.ask, self.run, self.popen = ask, run or subprocess.run, popen or subprocess.Popen
         self.service = service or (lambda: ensure_8081(port, lab=lab_service))
@@ -563,7 +565,7 @@ class Day:
     def fly(self, f, pack):
         """One `.\\fly <name> --once`, stdin passed through: (exit code, its debrief event or None)."""
         since = log_offsets()
-        child = self.popen(fly_cmd(f, pack, port=self.port), cwd=ROOT)
+        child = self.popen(fly_cmd(f, pack, port=self.port, plain=not self.lab_service), cwd=ROOT)
         rc = child.wait()
         return rc, debrief_event(child.pid, since)
 

@@ -147,6 +147,11 @@ def ensure_service(base, port, wait_s=60, lab=False):
     try:
         stale = _service_stale(base)
         wrong_mode = lab and _service_lab_mode(base) is False
+        if wrong_mode and port != 8081:
+            # Soak 10-25: fly restarted the soak's plain service on its spare port; the restart lost the service's
+            # own link ports and the soak died. Only the lab's 8081 is restarted in lab mode.
+            sys.exit(f"service on {port} runs without --lab and is not the lab's 8081: it is not restarted here "
+                     "(it may run on its own link ports; the soak passes --plain-service)")
         if wrong_mode and not _safe_to_restart(base):
             sys.exit(f"service on {port} runs without --lab and a flight may be on: land, then run this again")
         if (stale or wrong_mode) and _safe_to_restart(base):
@@ -1713,6 +1718,8 @@ def main(argv=None):
                                     "logs/campaigns/fly/last_pack.txt)")
     ap.add_argument("--run", help="workflow-c run folder: flight_debrief after each landing")
     ap.add_argument("--port", type=int, default=8081)
+    ap.add_argument("--plain-service", action="store_true",
+                    help="soak only: keep the service on --port although it runs without --lab")
     ap.add_argument("--once", action="store_true", help="one flight, then exit")
     ap.add_argument("--record-only", metavar="LABEL", help="no flight: record the log plan (drone disarmed, carried "
                                                             "by hand) until Enter; sends no drone command")
@@ -1741,12 +1748,12 @@ def main(argv=None):
         return 0
     base = f"http://127.0.0.1:{a.port}"
     if a.restore_defaults:
-        ensure_service(base, a.port, lab=True)
+        ensure_service(base, a.port, lab=not a.plain_service)
         ok = write_gains(base, "defaults", yes=a.yes)
         return 0 if ok else 1
     if not a.campaign:
         if a.gains:
-            ensure_service(base, a.port, lab=True)
+            ensure_service(base, a.port, lab=not a.plain_service)
             ok = write_gains(base, a.gains, yes=a.yes, force_livetune=a.force_livetune)
             return 0 if ok else 1
         ap.error("the following arguments are required: campaign")
@@ -1756,7 +1763,7 @@ def main(argv=None):
         sys.exit(why)
     remember_pack(pack)
     events.log("fly_start", campaign=a.campaign, pack=pack, record_only=a.record_only, once=a.once)
-    ensure_service(base, a.port, lab=True)
+    ensure_service(base, a.port, lab=not a.plain_service)
     print("\n".join(vofa_setup(base)), flush=True)
     if a.record_only:
         try:

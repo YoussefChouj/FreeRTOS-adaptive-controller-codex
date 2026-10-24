@@ -543,6 +543,10 @@ def test_port_seam_reaches_the_flight_and_the_service_check(tmp_path, monkeypatc
     assert "--port" not in labday.fly_cmd(f, "2")
     assert labday.fly_cmd(f, "2", port=18081)[-2:] == ["--port", "18081"]
     assert "--port" not in labday.fly_cmd(f, "2", dry=True, port=18081)
+    # Soak 10-25: fly restarted the soak's plain service; the flight must carry --plain-service, a dry run never
+    assert labday.fly_cmd(f, "2", port=18081, plain=True)[-3:] == ["--port", "18081", "--plain-service"]
+    assert "--plain-service" not in labday.fly_cmd(f, "2", dry=True, port=18081, plain=True)
+    assert "--plain-service" not in labday.fly_cmd(f, "2")
     seen = []
     monkeypatch.setattr(campaign_fly, "ensure_service", lambda base, port, **kw: seen.append((base, port)))
     fake = _Fake([""])
