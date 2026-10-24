@@ -2044,6 +2044,7 @@ static void Z_Compute(void)
 		cnt_h=0;
 	}
 	Update_Des(case_Update_v_h_Des);
+	if (SysID_IsAxisActive(SYSID_AXIS_Z)) Ctrler.Z_ratePID.Des += SysID_GetVelSetpoint(SYSID_AXIS_Z);
 	{   /* P0 Finding 2: ToF out of range - freeze the Z-rate integrator while
 	     still running P/D on the held FB, so the manual height-rate loop cannot
 	     wind throttle up without bound (verdict: unbounded climb at >5 m AGL). */
@@ -2229,6 +2230,8 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact, uint8_t land_xy_
 
 	Update_Des(case_Update_v_loc_Des);
 	SDK_Set_V_Loc();   /* SDK velocity override (AutoflyTask) */
+	if (SysID_IsAxisActive(SYSID_AXIS_PITCH)) Ctrler.locysPID.Des += SysID_GetVelSetpoint(SYSID_AXIS_PITCH);
+	if (SysID_IsAxisActive(SYSID_AXIS_ROLL))  Ctrler.locxsPID.Des += SysID_GetVelSetpoint(SYSID_AXIS_ROLL);
 	/* xy_ctrl flies an axis only while its velocity setpoint is the position loop's own output (not the RC stick,
 	 * an SDK velocity, or the VXY clamp); otherwise the PID flies and xy_ctrl tracks. Kind latched on the ground;
 	 * the RC fallback forces the PID in flight (the PID cascade runs every tick, so it is warm). */
@@ -2300,6 +2303,8 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact, uint8_t land_xy_
 static void Att_Compute(uint8_t airborne)
 {
 	Update_Des(case_Update_pitrol_Des);   /* pitch/roll angle setpoints */
+	if (SysID_IsAxisActive(SYSID_AXIS_PITCH)) Ctrler.pitchPID.Des += SysID_GetAngleSetpoint(SYSID_AXIS_PITCH);
+	if (SysID_IsAxisActive(SYSID_AXIS_ROLL))  Ctrler.rollPID.Des += SysID_GetAngleSetpoint(SYSID_AXIS_ROLL);
 	ComputePID_Gated(&Ctrler.pitchPID, airborne);
 	ComputePID_Gated(&Ctrler.rollPID, airborne);
 
