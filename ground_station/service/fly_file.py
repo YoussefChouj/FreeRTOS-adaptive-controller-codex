@@ -7,12 +7,17 @@ fly-mode campaign (campaign_schema) and checked with the same scenario rules as 
     log estimator_truth velocity_loops                <- log_plan groups
     slow 25 nn4 xy_ctrl                               <- slow lane: groups in their own slots, Hz optional (25)
     set g_xy_ctrl_kind=2                              <- set rows before takeoff: VAR_WRITE on the ground, before IDLE
+    layers xy both                                   <- CMD 0x1D layer target, latched on the ground (xy|att|yaw|z)
+    mrac_ref from=lqr                                <- the fitted x/y reference of a controller (logs/ref_fit/<kind>.json)
+    mrac_prior from=20261021-193653-lab-e-exp-lqr-3l <- the MRAC prior (Theta) of an earlier session
     takeoff 0.5                                      <- optional, default takeoff 0.5; land is added when missing
     hold 3
     set traj_p.move_s=12                              <- traj_p.* fields are sticky for every later preset line
     preset circle circ_r_cm=30                        <- `run` is the same; own fields beat sticky ones
     set kp_id=3                                       <- any other row is a set step: VAR_WRITE in order, in flight
     preset figure8
+    pattern layer=outer speed=slow axes=x,y periods=3  <- CMD 0x2E excitation pattern; must follow a hold
+    step axis=z delta=0.15 hold=4                      <- a setpoint step through the onboard program (CMD 0x1C)
     program profile=scurve v=0.3                      <- indented lines are the ops of the step above
       goto x=0.5 dwell=3
     land
@@ -20,7 +25,11 @@ fly-mode campaign (campaign_schema) and checked with the same scenario rules as 
 One line = one step: `kind [positional] key=value ...`; values are YAML scalars (`params="{r: 0.3}"` for a mapping,
 quoted for spaces). Positional values: takeoff z, hold s, preset/run name, path shape. Header lines: campaign,
 controller, rate, log, motion k=v, pack. Steps follow scenario_schema (takeoff, hold, goto, path, program, excite,
-livetune, preset, set, land); a schema problem is reported with the line it came from.
+pattern, step, livetune, preset, set, land); a schema problem is reported with the line it came from.
+
+The ground verbs (layers / xy_layers, mrac_ref, mrac_prior) are written on the ground, before takeoff, and land in
+the takeoff's `ground` list (the same list the `set` rows before the takeoff use). Every write is idempotent and
+absolute, so the runner can resend one whose reply was lost.
 """
 
 from __future__ import annotations
@@ -33,6 +42,7 @@ from typing import Any
 import yaml
 
 from ground_station.service.campaign_launch import ROOT, write_launch_copy
+from ground_station.service.ground_plan import GroundWriteError, layer_write, prior_writes, ref_writes
 
 FLY_DIR = ROOT / "logs" / "campaigns" / "fly"  # compiled campaign yaml of each .fly file (the launch template)
 DEFAULT_TAKEOFF_Z = 0.5  # operator 2026-10-14: fly-up z stays 0.5 m
@@ -41,6 +51,8 @@ DEFAULT_LOG = ("estimator_truth", "optical_flow", "velocity_loops", "takeoff_gat
 POSITIONAL = {"takeoff": "z", "hold": "s", "preset": "name", "path": "shape"}
 ALIASES = {"run": "preset"}
 HEADERS = ("campaign", "controller", "rate", "log", "slow", "motion", "pack")
+# The verbs that write on the ground, before the takeoff: they become ground writes, not scenario steps.
+GROUND_VERBS = ("layers", "xy_layers", "mrac_ref", "mrac_prior")
 _NAME_RE = re.compile(r"^[a-z0-9_-]{1,40}$")
 _STEPS_RE = re.compile(r"\bsteps\.(\d+)\b")
 
@@ -78,6 +90,49 @@ def _default_name(src: str) -> str:
     return name or "fly"
 
 
+def _ground_verb(word: str, rest: list[str], where: str, problems: list[str]) -> list[dict[str, Any]]:
+    """The ground writes of one ground verb line.
+
+    layers <group> <inner|outer|both|off>   one CMD 0x1D layer target
+    xy_layers <inner|outer|both|off>        the historical alias of `layers xy` (one argument)
+    mrac_ref from=<kind>                    the fitted x/y reference of a controller (logs/ref_fit/<kind>.json)
+    mrac_prior from=<session>               the MRAC prior (Theta) of an earlier session
+    """
+    if word == "layers":
+        if len(rest) != 2:
+            problems.append(f"{where}: expected layers <group> inner|outer|both|off "
+                            f"(groups: xy, att, yaw, z)")
+            return []
+        return [layer_write(rest[0], rest[1])]
+    if word == "xy_layers":
+        # The alias of `layers xy`: one argument, the target.
+        if len(rest) != 1:
+            problems.append(f"{where}: expected xy_layers inner|outer|both|off")
+            return []
+        return [layer_write("xy", rest[0])]
+    if word == "mrac_ref":
+        fields = _pairs(rest, where, problems)
+        kind = fields.pop("from", None)
+        if fields:
+            problems.append(f"{where}: mrac_ref takes only from=<kind> (got {', '.join(fields)})")
+            return []
+        if not isinstance(kind, str):
+            problems.append(f"{where}: expected mrac_ref from=<kind>")
+            return []
+        return ref_writes(kind)
+    if word == "mrac_prior":
+        fields = _pairs(rest, where, problems)
+        session = fields.pop("from", None)
+        if fields:
+            problems.append(f"{where}: mrac_prior takes only from=<session> (got {', '.join(fields)})")
+            return []
+        if not isinstance(session, str):
+            problems.append(f"{where}: expected mrac_prior from=<session>")
+            return []
+        return prior_writes(session)
+    return []
+
+
 def compile_fly(text: str, src: str = "<fly>") -> tuple[dict[str, Any], list[int]]:
     """(campaign data, source line of each scenario step). Raises FlyFileError with every problem found."""
     problems: list[str] = []
@@ -87,6 +142,7 @@ def compile_fly(text: str, src: str = "<fly>") -> tuple[dict[str, Any], list[int
     lines: list[int] = []
     sticky: dict[str, Any] = {}
     exp_target: tuple[str, int] | None = None
+    ground_writes: list[dict[str, Any]] = []
     for n, raw in enumerate(text.splitlines(), 1):
         where = f"{src}:{n}"
         body = raw.split("#", 1)[0].rstrip()
@@ -123,6 +179,13 @@ def compile_fly(text: str, src: str = "<fly>") -> tuple[dict[str, Any], list[int
                     problems.append(f"{where}: unknown exp {rest[0]!r}; valid: {', '.join(valid)}")
                 else:
                     exp_target = (row.name, row.id)
+            continue
+        verb = ALIASES.get(word, word)
+        if verb in GROUND_VERBS:
+            try:
+                ground_writes += _ground_verb(verb, rest, where, problems)
+            except GroundWriteError as e:
+                problems.append(f"{where}: {e}")
             continue
         if word in HEADERS:
             if steps:
@@ -174,14 +237,19 @@ def compile_fly(text: str, src: str = "<fly>") -> tuple[dict[str, Any], list[int
     elif not steps and exp_target is not None:
         steps.insert(0, {"takeoff": {"z": DEFAULT_TAKEOFF_Z}})
         lines.insert(0, 0)
-    if steps and (ground or exp_target is not None):
+    if steps and (ground or exp_target is not None or ground_writes):
         combined = {}
         if exp_target is not None:
             combined["exp_id"] = exp_target[1]
         combined.update(ground)
         if "set" in steps[0]["takeoff"]:
             combined.update(steps[0]["takeoff"]["set"])
-        steps[0]["takeoff"]["set"] = combined
+        if combined:
+            steps[0]["takeoff"]["set"] = combined
+        if ground_writes:
+            # The ground writes go before the VAR_WRITEs: the layer target and the reference are what the exp row
+            # and the set rows then build on (an exp row writes the reference row of its own kind).
+            steps[0]["takeoff"]["ground"] = ground_writes
     if steps and steps[-1] != "land":
         steps.append("land")
         lines.append(0)

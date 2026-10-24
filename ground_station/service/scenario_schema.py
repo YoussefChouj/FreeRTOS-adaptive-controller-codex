@@ -11,6 +11,8 @@ Steps run in order:
   excite  {axis, signal, f0, f1, amp, duration_s}
   pattern {layer, speed, axes, periods}  firmware pattern library (API/excite.c, CMD 0x2E): outer|inner, slow|fast
                                  SysID run (CMD 0x14) on one rate loop; only right after a hold (see below)
+  step    {axis, delta, hold}     a setpoint step through the onboard program (CMD 0x1C): axis z (m) or yaw (deg),
+                                 delta the size of the step, hold the dwell at the new setpoint
   livetune {loop, axes, budget_s, ...}  hold the hover point while ground_station/livetune tunes gains for budget_s
   preset  {name, <traj_p field>: value, ...}
                                  Keil trajectory preset (TASK/AutoflyTask.c traj_id/traj_go), started over VAR_WRITE
@@ -71,7 +73,7 @@ from ground_station.platform.wfb_program import Segment, preview
 
 SCENARIO_DIR = Path(__file__).resolve().parents[2] / "docs" / "workflow-b" / "scenarios"
 
-STEP_KINDS = ("takeoff", "hold", "goto", "path", "program", "excite", "pattern", "livetune", "preset", "set", "land")
+STEP_KINDS = ("takeoff", "hold", "goto", "path", "program", "excite", "pattern", "step", "livetune", "preset", "set", "land")
 TRAJ_KINDS = ("goto", "path")
 PROG_KINDS = ("program",)
 
@@ -101,13 +103,14 @@ _ARG_RE = re.compile(r"^\$([a-z_][a-z0-9_]*)$")
 _TOP_KEYS = {"scenario", "description", "args", "motion", "steps"}
 _STEP_KEYS: Mapping[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     # kind: (required keys, optional keys)
-    "takeoff": (("z",), ("mrac_injection", "idle_s", "set")),
+    "takeoff": (("z",), ("mrac_injection", "idle_s", "set", "ground")),
     "hold": (("s",), ()),
     "goto": (("x", "y", "z"), ("dwell_s",) + tuple(DEFAULT_MOTION)),
     "path": (("shape", "params"), tuple(DEFAULT_MOTION)),
     "program": (("ops",), tuple(sorted(MOTION_KEYS))),
     "excite": (("axis", "f0", "f1", "amp", "duration_s"), ("signal",)),
     "pattern": (("layer", "speed", "axes"), ("periods",)),
+    "step": (("axis", "delta", "hold"), ()),
     "livetune": (LIVETUNE_REQUIRED, LIVETUNE_OPTIONAL),
     "preset": (("name",), tuple(k.split(".", 1)[1] for k in wfb_var.traj_defaults())),
     "set": ((), ()),  # keys are VAR_WRITE rows, checked by _compile_set
@@ -142,6 +145,68 @@ def _compile_excite(body: dict, path: str, problems: list[str]) -> Step | None:
 
 
 PATTERN_SETTLE_S = 2.0   # after the run, before the next step (PROPOSED)
+
+# The `step` verb: a setpoint step through the onboard program (CMD 0x1C). z is a height in m, yaw an angle in
+# deg. The firmware's own program evaluator checks the path, the speeds and the fence (wfb_program.preview runs
+# API/wfb_prog.c), so the limits below only keep the step inside what the program can express at all.
+STEP_AXES = ("z", "yaw")
+# The z step stays inside the fence the firmware allows for a program point (TrajLimits.z_min_m..z_max_m); the yaw
+# step stays inside the heading limit. Both are the firmware's own numbers (trajectory_pipeline.TrajLimits).
+STEP_DELTA_LIMITS: Mapping[str, tuple[float, float]] = {
+    "z": (-0.3, 0.3),      # m, the soft-fence z band around the hover point
+    "yaw": (-45.0, 45.0),  # deg
+}
+STEP_HOLD_MAX_S = 30.0   # s, the dwell at the new setpoint
+
+
+def _compile_step(body: dict, hover_z: float, path: str, problems: list[str]) -> Step | None:
+    """One setpoint step, as an onboard program: out to the new setpoint, dwell, back to the hover point."""
+    axis = body.get("axis")
+    delta = body.get("delta")
+    hold = body.get("hold")
+    n_before = len(problems)
+    if axis not in STEP_AXES:
+        problems.append(f"{path}.step.axis: must be one of {', '.join(STEP_AXES)} (got {axis!r})")
+    if not _num(delta):
+        problems.append(f"{path}.step.delta: must be a finite number")
+    if not _num(hold) or not hold > 0.0:
+        problems.append(f"{path}.step.hold: must be a finite number > 0 (got {hold!r})")
+    if len(problems) > n_before:
+        return None
+    lo, hi = STEP_DELTA_LIMITS[axis]
+    if not lo <= float(delta) <= hi:
+        problems.append(f"{path}.step.delta: must be in [{lo}, {hi}] (got {delta})")
+        return None
+    if float(hold) > STEP_HOLD_MAX_S:
+        problems.append(f"{path}.step.hold: must be <= {STEP_HOLD_MAX_S} s (got {hold})")
+        return None
+    # z is measured from the hover point; yaw turns about the current heading (the program's own origin).
+    if axis == "z":
+        target_z = hover_z + float(delta)
+        if not math.isfinite(hover_z) or not TrajLimits().z_min_m <= target_z <= TrajLimits().z_max_m:
+            problems.append(f"{path}.step: the z step lands at {target_z} m, outside the firmware z band "
+                            f"[{TrajLimits().z_min_m}, {TrajLimits().z_max_m}] m")
+            return None
+        # The firmware's program evaluator wants the program to END where it started (API/wfb_prog.c WFB_ERR_ENDPOINT),
+    # so the step goes out, dwells, and comes back: `close=True` appends the home op.
+    ops = [{"move": {"dz": float(delta)}}, {"hold": {"s": float(hold)}}] if axis == "z" else \
+        [{"turn": {"by": float(delta)}}, {"hold": {"s": float(hold)}}]
+    try:
+        motion = wfb_presets.Motion()
+        segs = wfb_presets.build(ops, hover_z, motion, close=True)
+    except (TypeError, ValueError) as e:
+        problems.append(f"{path}.step: {e}")
+        return None
+    try:
+        pv = preview(segs, hover_z)
+    except RuntimeError as e:
+        problems.append(f"{path}.step: preview unavailable, cannot check the step: {e}")
+        return None
+    if not pv.ok:
+        problems.append(f"{path}.step: the firmware would reject it at COMMIT: {pv.error}")
+        return None
+    args = {"axis": axis, "delta": float(delta), "hold": float(hold)}
+    return Step("step", args, (), pv.t_total_s, tuple(segs))
 
 
 def _compile_pattern(body: dict, path: str, problems: list[str], hover_z: float) -> Step | None:
@@ -197,7 +262,7 @@ class Scenario:
     @property
     def budget_s(self) -> float:
         """Estimated airborne time: steps + one settle per trajectory, program or preset + climb/landing overhead."""
-        n_traj = sum(1 for s in self.steps if s.kind in TRAJ_KINDS + PROG_KINDS + ("preset",))
+        n_traj = sum(1 for s in self.steps if s.kind in TRAJ_KINDS + PROG_KINDS + ("preset", "step"))
         return self.step_time_s + n_traj * WFB_SETTLE_S + WFB_FLIGHT_OVERHEAD_S
 
     def summary(self) -> list[dict[str, Any]]:
@@ -289,6 +354,30 @@ def _compile_set(body: dict, path: str, problems: list[str]) -> Step | None:
     if len(problems) > n0:
         return None
     return Step("set", {"writes": writes}, (), 0.0)
+
+
+def _compile_ground(body: Any, path: str, problems: list[str]) -> list[dict[str, Any]]:
+    """The ground writes of the .fly verbs (layers / mrac_ref / mrac_prior), each checked against the firmware.
+
+    The writes are absolute and idempotent, so the runner may resend one whose reply was lost.
+    """
+    from ground_station.service import ground_plan
+
+    if not isinstance(body, list) or not body:
+        problems.append(f"{path}: must be a non-empty list of ground writes")
+        return []
+    out: list[dict[str, Any]] = []
+    for i, w in enumerate(body):
+        if not isinstance(w, dict):
+            problems.append(f"{path}[{i}]: must be a mapping")
+            continue
+        try:
+            ground_plan.check_write(w)
+        except ground_plan.GroundWriteError as e:
+            problems.append(f"{path}[{i}]: {e}")
+            continue
+        out.append(dict(w))
+    return out if len(out) == len(body) else []
 
 
 def _subst(value: Any, args: Mapping[str, Any], path: str, problems: list[str]) -> Any:
@@ -517,6 +606,14 @@ def parse_scenario(data: Any, args: Mapping[str, Any] | None = None) -> Scenario
             if "set" in args:
                 ground = _compile_set(args["set"] if isinstance(args["set"], dict) else {}, f"{path}.takeoff.set", problems)
                 args["set"] = ground.args["writes"] if ground is not None else []
+                if not args["set"]:
+                    del args["set"]
+            if "ground" in args:
+                writes = _compile_ground(args["ground"], f"{path}.takeoff.ground", problems)
+                if writes:
+                    args["ground"] = writes
+                else:
+                    del args["ground"]
             steps.append(Step("takeoff", args))
         elif kind == "land":
             steps.append(Step("land", {}))
@@ -546,6 +643,10 @@ def parse_scenario(data: Any, args: Mapping[str, Any] | None = None) -> Scenario
                 problems.append(f"{path}.hold.s: must be a finite number > 0 (got {s!r})")
             else:
                 steps.append(Step("hold", dict(body), (), float(s)))
+        elif kind == "step":
+            step = _compile_step(body, hover_z, f"{path}.step", problems)
+            if step is not None:
+                steps.append(step)
         elif kind == "livetune":
             if math.isfinite(hover_z):
                 lim = TrajLimits()

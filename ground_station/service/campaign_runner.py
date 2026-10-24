@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ground_station.analysis import excite_patterns as ep
 from ground_station.autotune import excitation as ex
+from ground_station.service import ground_plan
 from ground_station.service.campaign_schema import load_campaign
 from ground_station.service.abort_monitor import AbortMonitor, AbortSample, AbortDecision
 from ground_station.service.scenario_schema import PROG_KINDS, TRAJ_KINDS, WFB_SETTLE_S, Scenario, Step
@@ -302,7 +303,7 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
     ticks = 0
     airborne = excite_sent = pattern_sent = takeoff_sent = False
     decision: AbortDecision | None = None
-    uploads = [i for i, st in enumerate(steps) if st.kind in TRAJ_KINDS + PROG_KINDS]
+    uploads = [i for i, st in enumerate(steps) if st.kind in TRAJ_KINDS + PROG_KINDS or st.kind == "step"]
     preload = uploads[0] if len(uploads) == 1 else None
     preload_err = ""
     presets = [i for i, st in enumerate(steps) if st.kind == "preset"]
@@ -310,7 +311,8 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
     preset_sent = False
 
     def upload_step(st: Step) -> tuple[bool, str]:
-        if st.kind in PROG_KINDS:
+        if st.kind in PROG_KINDS or st.kind == "step":
+            # A `step` carries its compiled segments in the same field as a program.
             res = wfb_program.upload(st.program, deps.client)
             seg = "" if res.ok else f" (prog_err_seg {deps.status().get('prog_err_seg', 'n/a')})"  # COMMIT names it
         else:
@@ -418,6 +420,11 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
 
             for name, v in st.args.get("set", ()):
                 cmds.append((f"set {name}", lambda name=name, v=v: _send_set(name, v)))
+            # The ground writes of the .fly verbs (layers, mrac_ref, mrac_prior): CMD 0x1D / 0x2F..0x34 on the ground,
+            # before the VAR_WRITEs, in the order the script wrote them.
+            for write in st.args.get("ground", ()):
+                label = ground_plan.write_label(write)
+                cmds.append((label, lambda w=write: ground_plan.send_write(deps.client, w)))
             cmds.append(("set_hover_z", lambda: deps.client.set_hover_z(scenario.hover_z_m)))
             preload_already_done = runner._preload_uploaded if runner is not None else False
             if preload is not None and not preload_already_done:
@@ -461,8 +468,9 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
         elif st.kind == "hold":
             t_hold = deps.clock()
             ok = wait(lambda: deps.clock() - t_hold >= st.duration_s, "hold", skippable=True)
-        elif st.kind in TRAJ_KINDS + PROG_KINDS:
+        elif st.kind in TRAJ_KINDS + PROG_KINDS or st.kind == "step":
             # A program (CMD 0x1C) runs like a trajectory: same START, same traj_state DONE, generated onboard.
+            # A `step` is a one-segment program (the compiled setpoint step), so it runs the same way.
             t_settle = deps.clock()
             ok = wait(lambda: deps.clock() - t_settle >= WFB_SETTLE_S and prim() == PRIM_HOVER, f"{st.kind} settle")
             if ok:

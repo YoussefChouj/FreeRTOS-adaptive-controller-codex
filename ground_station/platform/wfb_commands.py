@@ -99,6 +99,43 @@ class WfbClient:
         row = wfb_var.check(name, value)
         return self._send_cmd(wfb_var.CMD_VAR_WRITE, row.id, float(value))
 
+    def mrac_variant(self, axis: str | int, field: str | int, value: float) -> bool:
+        """CMD 0x1D MRAC_VARIANT: write one variant field on one axis (WP-27 knobs, the D4 x/y layer target).
+
+        axis: "pitch" / "roll" / "yaw" / "z" / "x" / "y" or 0..5 (the firmware axis order).
+        field: the knob name ("xy_layers", "basis", ...) or its number in VARIANT_FIELDS.
+        The firmware refuses 0x1D while airborne, so write on the ground. Raises ValueError before sending
+        anything when the axis, the field or the value is outside what the firmware accepts.
+        """
+        from ground_station.analysis.mrac_variants import AXES, VARIANT_FIELDS, variant_idx
+
+        if isinstance(axis, str):
+            names = {"pitch": 0, "roll": 1, "yaw": 2, "z": 3, "x": 4, "y": 5}
+            if axis not in names:
+                raise ValueError(f"unknown MRAC axis {axis!r} (known: {', '.join(AXES)})")
+            a = names[axis]
+        elif isinstance(axis, int) and not isinstance(axis, bool) and 0 <= axis < len(AXES):
+            a = axis
+        else:
+            raise ValueError(f"unknown MRAC axis {axis!r} (known: {', '.join(AXES)})")
+        if isinstance(field, str):
+            fields = [name for name, _lo, _hi in VARIANT_FIELDS]
+            if field not in fields:
+                raise ValueError(f"unknown MRAC variant field {field!r} (known: {', '.join(fields)})")
+            f = fields.index(field)
+        elif isinstance(field, int) and not isinstance(field, bool) and 0 <= field < len(VARIANT_FIELDS):
+            f = field
+        else:
+            raise ValueError(f"unknown MRAC variant field {field!r}")
+        lo, hi = VARIANT_FIELDS[f][1:]
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"MRAC variant {VARIANT_FIELDS[f][0]}: value {value!r} is not a number") from None
+        if not lo <= v <= hi:
+            raise ValueError(f"MRAC variant {VARIANT_FIELDS[f][0]} on axis {a}: value {v} outside [{lo}, {hi}]")
+        return self._send_cmd(0x1D, variant_idx(a, f), v)
+
     def mrac_prior(self, axis: str, idx: int, value: float) -> bool:
         """CMD 0x2F..0x34: one MRAC L3 prior write (mrac_prior, TASK/send_data.c Cmd_MracPrior), True when APPLIED.
         Raises mrac_prior.PriorError (nothing sent) on a bad axis, idx or value; the firmware refuses it armed."""

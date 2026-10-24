@@ -1104,6 +1104,73 @@ class HttpWfbClient:
         from ground_station.platform import mrac_prior
         return self._send_cmd(*mrac_prior.check(axis, idx, value))
 
+    # -- CMD 0x1D MRAC_VARIANT (WP-27 knobs, D4 x/y layers) ------------------
+    # axis: "pitch" / "roll" / "yaw" / "z" / "x" / "y" or 0..5 (firmware order).
+    # field: the knob name ("xy_layers", "basis", "st_eps", ...) or its number in VARIANT_FIELDS.
+    # The firmware refuses 0x1D while airborne, so write on the ground.
+
+    def mrac_variant(self, axis: str | int, field: str | int, value: float) -> bool:
+        """CMD 0x1D MRAC_VARIANT: write one variant field on one axis.
+
+        Returns True when the firmware APPLIED the write. Raises ValueError before sending anything when the
+        axis, the field or the value is outside what the firmware would accept (nothing sent).
+
+            client.mrac_variant("x", "xy_layers", 2)   # outer x/y layer only
+            client.mrac_variant(1, "basis", 3)         # roll axis, RBF12 basis
+        """
+        from ground_station.analysis.mrac_variants import VARIANT_FIELDS, variant_idx, variant_bounds
+
+        a = self._variant_axis(axis)
+        f = self._variant_field(field)
+        idx = variant_idx(a, f)
+        lo, hi = variant_bounds(idx)
+        value = float(value)
+        if not (lo <= value <= hi):
+            raise ValueError(f"MRAC variant {VARIANT_FIELDS[f][0]} on axis {a}: value {value} outside "
+                             f"[{lo}, {hi}]")
+        return self._send_cmd(0x1D, idx, value)
+
+    def mrac_xy_layers(self, target: int | str) -> bool:
+        """The D4 x/y layer target (CMD 0x1D field 31): "inner" (1), "outer" (2), "both" (3), "none" (0).
+
+        It is a target: the ground latch makes it live from the next takeoff (a reboot goes back to inner).
+        """
+        bits = {"none": 0, "inner": 1, "outer": 2, "both": 3}
+        if isinstance(target, str):
+            key = target.strip().lower()
+            if key not in bits:
+                raise ValueError(f"xy layer target {target!r} is not one of {', '.join(bits)}")
+            target = bits[key]
+        return self.mrac_variant("x", "xy_layers", target)
+
+    @staticmethod
+    def _variant_axis(axis: str | int) -> int:
+        from ground_station.analysis.mrac_variants import AXES
+
+        if isinstance(axis, str):
+            names = ("pitch", "roll", "yaw", "z", "x", "y")
+            key = axis.strip().lower()
+            if key not in names:
+                raise ValueError(f"MRAC axis {axis!r} is not one of {', '.join(names)}")
+            return names.index(key)
+        if not 0 <= axis < len(AXES):
+            raise ValueError(f"MRAC axis {axis} out of range 0..{len(AXES) - 1}")
+        return int(axis)
+
+    @staticmethod
+    def _variant_field(field: str | int) -> int:
+        from ground_station.analysis.mrac_variants import VARIANT_FIELDS
+
+        if isinstance(field, str):
+            names = [row[0] for row in VARIANT_FIELDS]
+            key = field.strip()
+            if key not in names:
+                raise ValueError(f"MRAC variant field {field!r} is not one of {', '.join(names)}")
+            return names.index(key)
+        if not 0 <= field < len(VARIANT_FIELDS):
+            raise ValueError(f"MRAC variant field {field} out of range 0..{len(VARIANT_FIELDS) - 1}")
+        return int(field)
+
 
 def ground_exp_id(launch_path, flight=0):
     """The exp_id the takeoff `set` of the campaign's flight `flight` (0-based) writes on the ground, None when it
