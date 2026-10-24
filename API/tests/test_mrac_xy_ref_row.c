@@ -130,6 +130,33 @@ int main(void)
     ok("gate W: a write after the latch survives the next latch", mrac_config_y.ref_model_bw == (float)7.5f);
     ok("gate W: the other axis takes the row", mrac_config_x.ref_model_bw == mrac_xy_ref_rows[2].bw);
 
+    /* Gate W: the record is per axis AND per field. A write of the bandwidth on x does not stop the row from
+     * filling the damping on x, and a write on x does not stop the row from filling anything on y. */
+    MRAC_Init();
+    ok("gate W: per axis and field: bw on x accepted", MRAC_VariantParamSet((uint8_t)MRAC_AXIS_X,
+                                                                            MRAC_VF_REF_MODEL_BW, 8.5f) == 1U);
+    MRAC_XyRefSelect(1U);
+    ok("gate W: per axis and field: the x damping still takes the row",
+       mrac_config_x.ref_model_zeta == mrac_xy_ref_rows[1].zeta);
+    ok("gate W: per axis and field: the x type still takes the row",
+       mrac_config_x.ref_type == mrac_xy_ref_rows[1].type);
+    ok("gate W: per axis and field: y takes the whole row", mrac_config_y.ref_model_bw == mrac_xy_ref_rows[1].bw
+        && mrac_config_y.ref_model_zeta == mrac_xy_ref_rows[1].zeta);
+
+    /* Gate W: the record covers one ground window. When it ends (the disarm edge), the next flight starts from
+     * the nominal row again, so a reference fitted for one flight never leaks into the next one. The edge is the
+     * real one: MRAC_GateStep sees prev_armed = 1 and armed = 0. */
+    MRAC_Init();
+    ok("gate W: window: a write is accepted", MRAC_VariantParamSet((uint8_t)MRAC_AXIS_X,
+                                                                     MRAC_VF_REF_MODEL_BW, 9.5f) == 1U);
+    MRAC_XyRefSelect(1U);
+    ok("gate W: window: the write survives inside the window", mrac_config_x.ref_model_bw == (float)9.5f);
+    mrac_inj.prev_armed = 1;               /* armed last tick */
+    mrac_in_armed = 0;                    /* disarmed now: the disarm edge */
+    MRAC_GateStep();
+    MRAC_XyRefSelect(2U);                 /* the next flight's latch */
+    ok("gate W: window: the next flight starts from the row", mrac_config_x.ref_model_bw == mrac_xy_ref_rows[2].bw);
+
     /* a fresh boot drops the record: the row applies again */
     MRAC_Init();
     ok("gate W: a boot applies the row", on_row(&mrac_config_x, &mrac_xy_ref_rows[0]));
