@@ -160,6 +160,12 @@ void MRAC_XyRefSelect(uint8_t kind)
 MRAC_PosConfig_t mrac_pos_cfg = MRAC_POS_ROW(1.0f, 0.1f, 2.0f, 0.3f, 1.0f, 1.0f);
 volatile uint8_t mrac_xy_layers = MRAC_XY_LAYER_INNER;
 volatile uint8_t mrac_xy_layers_live = MRAC_XY_LAYER_INNER;
+volatile uint8_t mrac_att_layers = MRAC_LAYER_INNER;       /* CMD 0x1D field 33 target */
+volatile uint8_t mrac_att_layers_live = MRAC_LAYER_INNER;
+volatile uint8_t mrac_yaw_layers = MRAC_LAYER_INNER;       /* CMD 0x1D field 34 target */
+volatile uint8_t mrac_yaw_layers_live = MRAC_LAYER_INNER;
+volatile uint8_t mrac_z_layers = MRAC_LAYER_INNER;         /* CMD 0x1D field 35 target */
+volatile uint8_t mrac_z_layers_live = MRAC_LAYER_INNER;
 MRAC_PosLayer_t mrac_pos[2];
 
 static void MRAC_PosReset(MRAC_PosLayer_t *s)
@@ -178,6 +184,16 @@ void MRAC_XyLayersLatch(void)
     mrac_xy_layers_live = (uint8_t)((unsigned)mrac_xy_layers & (MRAC_XY_LAYER_INNER | MRAC_XY_LAYER_OUTER));
     MRAC_PosReset(&mrac_pos[0]);
     MRAC_PosReset(&mrac_pos[1]);
+}
+
+/* Ground only (next to MRAC_XyLayersLatch): the three new loop groups fly the selection that was on the pad.
+ * Only the INNER / OUTER bits survive; 0 = off. The outer layers of items 2-4 read the _live values. */
+void MRAC_GroupLayersLatch(void)
+{
+    const unsigned m = (unsigned)(MRAC_LAYER_INNER | MRAC_LAYER_OUTER);
+    mrac_att_layers_live = (uint8_t)((unsigned)mrac_att_layers & m);
+    mrac_yaw_layers_live = (uint8_t)((unsigned)mrac_yaw_layers & m);
+    mrac_z_layers_live = (uint8_t)((unsigned)mrac_z_layers & m);
 }
 
 /* One Pos_Compute tick of axis i. on = 0 (hold, xy_ctrl flying, not airborne) or outer not live: the model
@@ -1937,6 +1953,10 @@ void MRAC_Init(void)
     MRAC_XyRefSelect(0U);
     mrac_xy_layers = MRAC_XY_LAYER_INNER;    /* D4: outer layer off at boot */
     MRAC_XyLayersLatch();
+    mrac_att_layers = MRAC_LAYER_INNER;      /* item 1: the new groups boot as today (inner only) */
+    mrac_yaw_layers = MRAC_LAYER_INNER;
+    mrac_z_layers = MRAC_LAYER_INNER;
+    MRAC_GroupLayersLatch();
 
     for (i = 0; i < (int)AXES; i++) {
         mrac_u_ff[i] = 0.0f;
@@ -2078,7 +2098,10 @@ static const struct { float lo; float hi; uint8_t snap; } mrac_var_field[MRAC_VF
     MRAC_VAR_FIELD( 0.0f,  1.0f,   0),   /* l2_thr_on       -, > l2_thr_off */
     MRAC_VAR_FIELD( 0.05f, 30.0f,  0),   /* l2_t_trap       s */
     MRAC_VAR_FIELD( 0.0f,  3.0f,   0),   /* xy_layers       bits, MRAC_XY_LAYER_* (any axis) */
-    MRAC_VAR_FIELD( 0.3f,  1.5f,   1)    /* ref_zeta        -, the 2nd-order reference damping (type 2 only) */
+    MRAC_VAR_FIELD( 0.3f,  1.5f,   1),   /* ref_zeta        -, the 2nd-order reference damping (type 2 only) */
+    MRAC_VAR_FIELD( 0.0f,  3.0f,   0),   /* att_layers      bits, MRAC_LAYER_* (any axis; ground latch) */
+    MRAC_VAR_FIELD( 0.0f,  3.0f,   0),   /* yaw_layers      bits, MRAC_LAYER_* (any axis; ground latch) */
+    MRAC_VAR_FIELD( 0.0f,  3.0f,   0)    /* z_layers        bits, MRAC_LAYER_* (any axis; ground latch) */
 };
 
 #if MRAC_VARIANT == MRAC_VARIANT_MULTI
@@ -2224,6 +2247,9 @@ uint8_t MRAC_VariantParamSet(uint8_t axis, uint8_t field, float val)
         case MRAC_VF_L2_T_TRAP:  mrac_l2g_cfg[axis].t_trap_s = val; break;
         case MRAC_VF_XY_LAYERS:  mrac_xy_layers = (uint8_t)(val + 0.5f); break;   /* flies after the ground latch */
         case MRAC_VF_REF_ZETA:   c->ref_model_zeta = val; break;
+        case MRAC_VF_ATT_LAYERS: mrac_att_layers = (uint8_t)(val + 0.5f); break;   /* fly after the ground latch */
+        case MRAC_VF_YAW_LAYERS: mrac_yaw_layers = (uint8_t)(val + 0.5f); break;
+        case MRAC_VF_Z_LAYERS:   mrac_z_layers = (uint8_t)(val + 0.5f); break;
         default: return 0U;
     }
     /* Gate W: remember an explicit write of a reference field on the x / y axes, so the row selection on the

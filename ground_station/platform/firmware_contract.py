@@ -561,10 +561,13 @@ COMMAND_TABLE: dict[int, CommandSpec] = {
                     "variant_idx, VARIANT_FIELDS). Out-of-range values are refused. Field 31 xy_layers (D4, "
                     "any axis) fills the 5-bit field of axes 0-3; it is a target the ground latch flies. "
                     "Fields from 32 on have no axes 0-3 encoding (the field number needs 5 bits there) and are "
-                    "reachable on the x / y axes only: field 32 ref_zeta writes the 2nd-order reference damping.",
+                    "reachable on the x / y axes only: field 32 ref_zeta writes the 2nd-order reference damping. "
+                    "Fields 33 att_layers / 34 yaw_layers / 35 z_layers (all-loop item 1) are global layer "
+                    "selectors (0 off, 1 inner, 2 outer, 3 both), sent on axis x (idx 0xC2 / 0xC4 / 0xC6); "
+                    "targets the ground latch flies, like field 31.",
         params=(
             CommandParam(0, "axis", "axis", 0, 5),
-            CommandParam(1, "field", "enum", 0, 32),
+            CommandParam(1, "field", "enum", 0, 35),
             CommandParam(2, "value", "float", None, None),
         ),
         safety=SafetyClass(

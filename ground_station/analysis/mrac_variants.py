@@ -55,6 +55,9 @@ VARIANT_FIELDS: tuple[tuple[str, float, float], ...] = (
     ("l2_t_trap", 0.05, 30.0),      # L2 time below thr_off before the trap s
     ("xy_layers", 0.0, 3.0),        # D4 x/y MRAC layers bits 1 inner, 2 outer (writes mrac_xy_layers, any axis; ground latch)
     ("ref_zeta", 0.3, 1.5),         # the 2nd-order reference damping (writes ref_model_zeta; PROPOSED bounds)
+    ("att_layers", 0.0, 3.0),       # all-loop item 1: attitude MRAC layers bits 1 inner, 2 outer (global; ground latch)
+    ("yaw_layers", 0.0, 3.0),       # all-loop item 1: yaw MRAC layers (global; ground latch)
+    ("z_layers", 0.0, 3.0),         # all-loop item 1: z MRAC layers (global; ground latch)
 )
 GAMMA_SCALE_FIELD = 11
 # L2 gating fields write mrac_l2g_cfg[axis].<member>, not the axis config (API/mrac.h MRAC_L2G_Config_t)
@@ -92,8 +95,8 @@ def variant_symbol(idx: int) -> str | None:
     if field == GAMMA_SCALE_FIELD:
         return f"mrac_g_gamma[{axis}][*]"
     name = VARIANT_FIELDS[field][0]
-    if name == "xy_layers":
-        return "mrac_xy_layers"
+    if name in ("xy_layers", "att_layers", "yaw_layers", "z_layers"):
+        return f"mrac_{name}"
     if name in L2G_MEMBERS:
         return f"mrac_l2g_cfg[{axis}].{L2G_MEMBERS[name]}"
     return f"{AXES[axis]}.{FIELD_MEMBERS.get(name, name)}"

@@ -3,7 +3,7 @@
     "commands": {
       "0x01": {
         "applied_async": true,
-        "description": "Update PID gain (Kp/Ki/Kd) for one of 7 control axes.",
+        "description": "Update PID gain (Kp/Ki/Kd) for one of 12 control axes (7-11: Z_pos, locx, locy, locxs, locys).",
         "id": 1,
         "id_hex": "0x01",
         "name": "PID_GAIN",
@@ -12,12 +12,12 @@
           {
             "description": "",
             "index": 0,
-            "max_val": 6,
+            "max_val": 11,
             "min_val": 0,
             "name": "axis",
             "range": [
               0,
-              6
+              11
             ],
             "symbol": null,
             "unit": "axis"
@@ -995,6 +995,32 @@
           },
           {
             "description": "",
+            "index": 13,
+            "max_val": 1,
+            "min_val": 0,
+            "name": "axis_enable_x",
+            "range": [
+              0,
+              1
+            ],
+            "symbol": null,
+            "unit": "bool"
+          },
+          {
+            "description": "",
+            "index": 14,
+            "max_val": 1,
+            "min_val": 0,
+            "name": "axis_enable_y",
+            "range": [
+              0,
+              1
+            ],
+            "symbol": null,
+            "unit": "bool"
+          },
+          {
+            "description": "",
             "index": 100,
             "max_val": 0,
             "min_val": 0,
@@ -1653,21 +1679,21 @@
       },
       "0x1D": {
         "applied_async": true,
-        "description": "WP-27 MRAC variant field on one axis: idx = field << 2 | axis (fields in ground_station/analysis/mrac_variants.py VARIANT_FIELDS). Out-of-range values are refused.",
+        "description": "WP-27 MRAC variant field on one axis: idx = field << 2 | axis for axes 0-3, 0x80 | field << 1 | (axis - 4) for axes 4 x / 5 y (ground_station/analysis/mrac_variants.py variant_idx, VARIANT_FIELDS). Out-of-range values are refused. Field 31 xy_layers (D4, any axis) fills the 5-bit field of axes 0-3; it is a target the ground latch flies. Fields from 32 on have no axes 0-3 encoding (the field number needs 5 bits there) and are reachable on the x / y axes only: field 32 ref_zeta writes the 2nd-order reference damping. Fields 33 att_layers / 34 yaw_layers / 35 z_layers (all-loop item 1) are global layer selectors (0 off, 1 inner, 2 outer, 3 both), sent on axis x (idx 0xC2 / 0xC4 / 0xC6); targets the ground latch flies, like field 31.",
         "id": 29,
         "id_hex": "0x1D",
         "name": "MRAC_VARIANT",
-        "notes": "MRAC_VariantParamSet (API/mrac.c); defaults are OFF. Docs: docs/workflow-b/mrac-variants.md.",
+        "notes": "MRAC_VariantIdxSet -> MRAC_VariantParamSet (API/mrac.c); defaults are OFF. Docs: docs/workflow-b/mrac-variants.md.",
         "parameters": [
           {
             "description": "",
             "index": 0,
-            "max_val": 3,
+            "max_val": 5,
             "min_val": 0,
             "name": "axis",
             "range": [
               0,
-              3
+              5
             ],
             "symbol": null,
             "unit": "axis"
@@ -1675,12 +1701,12 @@
           {
             "description": "",
             "index": 1,
-            "max_val": 18,
+            "max_val": 35,
             "min_val": 0,
             "name": "field",
             "range": [
               0,
-              18
+              35
             ],
             "symbol": null,
             "unit": "enum"
@@ -1831,12 +1857,12 @@
           {
             "description": "",
             "index": 1,
-            "max_val": 15,
+            "max_val": 63,
             "min_val": 0,
             "name": "axis_mask",
             "range": [
               0,
-              15
+              63
             ],
             "symbol": "g_ctrl_axis_mask",
             "unit": "int"
@@ -1853,9 +1879,416 @@
           "danger_level": "safe",
           "description": "Changes controller structure. Refused while airborne (FLYING/LANDING), like 0x1D; ctrl_id applies at the next disarmed tick (Controller_CheckSwitch), axis_mask at once."
         }
+      },
+      "0x2C": {
+        "applied_async": true,
+        "description": "Camera position fix (live camera fusion, shadow mode: innovation logged in g_ext_pos, no state write). idx 0..253 = a fix, idx = age in 10 ms units, value = exact integer code (qx+2048)*4096+(qy+2048), q = round(cm/0.5), EKF earth frame (ano_of.earth_x/y).",
+        "id": 44,
+        "id_hex": "0x2C",
+        "name": "EXT_POS",
+        "notes": "Handler Cmd_ExtPos (TASK/send_data.c); encoder ground_station/comm/ext_pos_encoder.py; design docs/video-truth/live_camera_fusion_design_2026-10-11.md. Bad codes are dropped.",
+        "parameters": [
+          {
+            "description": "Fixed link delay subtracted from each fix time.",
+            "index": 254,
+            "max_val": 1000,
+            "min_val": 0,
+            "name": "delay_ms",
+            "range": [
+              0,
+              1000
+            ],
+            "symbol": "g_ext_pos_delay_ms",
+            "unit": "ms"
+          },
+          {
+            "description": "Fusion mode: 0 off (boot; fixes dropped), 1 shadow, 2 offset outside the EKF, 3 in-EKF fix (needs the OF EKF).",
+            "index": 255,
+            "max_val": 3,
+            "min_val": 0,
+            "name": "on",
+            "range": [
+              0,
+              3
+            ],
+            "symbol": "g_ext_pos_on",
+            "unit": "enum"
+          }
+        ],
+        "preconditions": {
+          "requires_armed": false,
+          "requires_disarmed": false,
+          "requires_ground_idle": false,
+          "requires_sdk_mode": false
+        },
+        "returns_ack": true,
+        "safety_class": {
+          "danger_level": "safe",
+          "description": "Safe at runtime: shadow mode only logs the innovation."
+        }
+      },
+      "0x2F": {
+        "applied_async": true,
+        "description": "MRAC L3 prior, pitch axis. idx 0..MRAC_N_FEATURES-1 (6/18/46 by build) = Theta_prior[0][idx], any finite value. idx 0xF0 sigma_prior (shared by all axes), 0xF1 / 0xF2 this axis's bit of mrac_prior_pull / mrac_prior_warm (value >= 0.5 sets it). Every accepted write sets mrac_prior_reseed: the next disarmed MRAC_GateStep runs MRAC_ResetWeights, which seeds Theta = Whatf = clamp(prior) on the warm axes.",
+        "id": 47,
+        "id_hex": "0x2F",
+        "name": "MRAC_PRIOR_PITCH",
+        "notes": "Handler Cmd_MracPrior (TASK/send_data.c); MRAC_SetPriorElem / MRAC_PriorWarmStart (API/mrac.c). The firmware interlock is the disarmed authority; the seeded Theta reads back in the next flight's telemetry.",
+        "parameters": [
+          {
+            "description": "Pull of Theta towards the prior (0 = off, the boot value). Shared by all axes.",
+            "index": 240,
+            "max_val": null,
+            "min_val": 0,
+            "name": "sigma_prior",
+            "range": [
+              0,
+              null
+            ],
+            "symbol": "sigma_prior",
+            "unit": "1/s"
+          },
+          {
+            "description": "Bit 0 of mrac_prior_pull (boot: all set).",
+            "index": 241,
+            "max_val": 1,
+            "min_val": 0,
+            "name": "pull",
+            "range": [
+              0,
+              1
+            ],
+            "symbol": "mrac_prior_pull",
+            "unit": "bool"
+          },
+          {
+            "description": "Bit 0 of mrac_prior_warm (boot: clear).",
+            "index": 242,
+            "max_val": 1,
+            "min_val": 0,
+            "name": "warm",
+            "range": [
+              0,
+              1
+            ],
+            "symbol": "mrac_prior_warm",
+            "unit": "bool"
+          }
+        ],
+        "preconditions": {
+          "requires_armed": false,
+          "requires_disarmed": true,
+          "requires_ground_idle": false,
+          "requires_sdk_mode": false
+        },
+        "returns_ack": true,
+        "safety_class": {
+          "danger_level": "safe",
+          "description": "Refused unless disarmed (CMD_REJECT_INTERLOCK 6). A bad idx or value (NaN, inf, sigma < 0) is REJECTED 0x41 and nothing is written."
+        }
+      },
+      "0x30": {
+        "applied_async": true,
+        "description": "MRAC L3 prior, roll axis. idx 0..MRAC_N_FEATURES-1 (6/18/46 by build) = Theta_prior[1][idx], any finite value. idx 0xF0 sigma_prior (shared by all axes), 0xF1 / 0xF2 this axis's bit of mrac_prior_pull / mrac_prior_warm (value >= 0.5 sets it). Every accepted write sets mrac_prior_reseed: the next disarmed MRAC_GateStep runs MRAC_ResetWeights, which seeds Theta = Whatf = clamp(prior) on the warm axes.",
+        "id": 48,
+        "id_hex": "0x30",
+        "name": "MRAC_PRIOR_ROLL",
+        "notes": "Handler Cmd_MracPrior (TASK/send_data.c); MRAC_SetPriorElem / MRAC_PriorWarmStart (API/mrac.c). The firmware interlock is the disarmed authority; the seeded Theta reads back in the next flight's telemetry.",
+        "parameters": [
+          {
+            "description": "Pull of Theta towards the prior (0 = off, the boot value). Shared by all axes.",
+            "index": 240,
+            "max_val": null,
+            "min_val": 0,
+            "name": "sigma_prior",
+            "range": [
+              0,
+              null
+            ],
+            "symbol": "sigma_prior",
+            "unit": "1/s"
+          },
+          {
+            "description": "Bit 1 of mrac_prior_pull (boot: all set).",
+            "index": 241,
+            "max_val": 1,
+            "min_val": 0,
+            "name": "pull",
+            "range": [
+              0,
+              1
+            ],
+            "symbol": "mrac_prior_pull",
+            "unit": "bool"
+          },
+          {
+            "description": "Bit 1 of mrac_prior_warm (boot: clear).",
+            "index": 242,
+            "max_val": 1,
+            "min_val": 0,
+            "name": "warm",
+            "range": [
+              0,
+              1
+            ],
+            "symbol": "mrac_prior_warm",
+            "unit": "bool"
+          }
+        ],
+        "preconditions": {
+          "requires_armed": false,
+          "requires_disarmed": true,
+          "requires_ground_idle": false,
+          "requires_sdk_mode": false
+        },
+        "returns_ack": true,
+        "safety_class": {
+          "danger_level": "safe",
+          "description": "Refused unless disarmed (CMD_REJECT_INTERLOCK 6). A bad idx or value (NaN, inf, sigma < 0) is REJECTED 0x41 and nothing is written."
+        }
+      },
+      "0x31": {
+        "applied_async": true,
+        "description": "MRAC L3 prior, yaw axis. idx 0..MRAC_N_FEATURES-1 (6/18/46 by build) = Theta_prior[2][idx], any finite value. idx 0xF0 sigma_prior (shared by all axes), 0xF1 / 0xF2 this axis's bit of mrac_prior_pull / mrac_prior_warm (value >= 0.5 sets it). Every accepted write sets mrac_prior_reseed: the next disarmed MRAC_GateStep runs MRAC_ResetWeights, which seeds Theta = Whatf = clamp(prior) on the warm axes.",
+        "id": 49,
+        "id_hex": "0x31",
+        "name": "MRAC_PRIOR_YAW",
+        "notes": "Handler Cmd_MracPrior (TASK/send_data.c); MRAC_SetPriorElem / MRAC_PriorWarmStart (API/mrac.c). The firmware interlock is the disarmed authority; the seeded Theta reads back in the next flight's telemetry.",
+        "parameters": [
+          {
+            "description": "Pull of Theta towards the prior (0 = off, the boot value). Shared by all axes.",
+            "index": 240,
+            "max_val": null,
+            "min_val": 0,
+            "name": "sigma_prior",
+            "range": [
+              0,
+              null
+            ],
+            "symbol": "sigma_prior",
+            "unit": "1/s"
+          },
+          {
+            "description": "Bit 2 of mrac_prior_pull (boot: all set).",
+            "index": 241,
+            "max_val": 1,
+            "min_val": 0,
+            "name": "pull",
+            "range": [
+              0,
+              1
+            ],
+            "symbol": "mrac_prior_pull",
+            "unit": "bool"
+          },
+          {
+            "description": "Bit 2 of mrac_prior_warm (boot: clear).",
+            "index": 242,
+            "max_val": 1,
+            "min_val": 0,
+            "name": "warm",
+            "range": [
+              0,
+              1
+            ],
+            "symbol": "mrac_prior_warm",
+            "unit": "bool"
+          }
+        ],
+        "preconditions": {
+          "requires_armed": false,
+          "requires_disarmed": true,
+          "requires_ground_idle": false,
+          "requires_sdk_mode": false
+        },
+        "returns_ack": true,
+        "safety_class": {
+          "danger_level": "safe",
+          "description": "Refused unless disarmed (CMD_REJECT_INTERLOCK 6). A bad idx or value (NaN, inf, sigma < 0) is REJECTED 0x41 and nothing is written."
+        }
+      },
+      "0x32": {
+        "applied_async": true,
+        "description": "MRAC L3 prior, z axis. idx 0..MRAC_N_FEATURES-1 (6/18/46 by build) = Theta_prior[3][idx], any finite value. idx 0xF0 sigma_prior (shared by all axes), 0xF1 / 0xF2 this axis's bit of mrac_prior_pull / mrac_prior_warm (value >= 0.5 sets it). Every accepted write sets mrac_prior_reseed: the next disarmed MRAC_GateStep runs MRAC_ResetWeights, which seeds Theta = Whatf = clamp(prior) on the warm axes.",
+        "id": 50,
+        "id_hex": "0x32",
+        "name": "MRAC_PRIOR_Z",
+        "notes": "Handler Cmd_MracPrior (TASK/send_data.c); MRAC_SetPriorElem / MRAC_PriorWarmStart (API/mrac.c). The firmware interlock is the disarmed authority; the seeded Theta reads back in the next flight's telemetry.",
+        "parameters": [
+          {
+            "description": "Pull of Theta towards the prior (0 = off, the boot value). Shared by all axes.",
+            "index": 240,
+            "max_val": null,
+            "min_val": 0,
+            "name": "sigma_prior",
+            "range": [
+              0,
+              null
+            ],
+            "symbol": "sigma_prior",
+            "unit": "1/s"
+          },
+          {
+            "description": "Bit 3 of mrac_prior_pull (boot: all set).",
+            "index": 241,
+            "max_val": 1,
+            "min_val": 0,
+            "name": "pull",
+            "range": [
+              0,
+              1
+            ],
+            "symbol": "mrac_prior_pull",
+            "unit": "bool"
+          },
+          {
+            "description": "Bit 3 of mrac_prior_warm (boot: clear).",
+            "index": 242,
+            "max_val": 1,
+            "min_val": 0,
+            "name": "warm",
+            "range": [
+              0,
+              1
+            ],
+            "symbol": "mrac_prior_warm",
+            "unit": "bool"
+          }
+        ],
+        "preconditions": {
+          "requires_armed": false,
+          "requires_disarmed": true,
+          "requires_ground_idle": false,
+          "requires_sdk_mode": false
+        },
+        "returns_ack": true,
+        "safety_class": {
+          "danger_level": "safe",
+          "description": "Refused unless disarmed (CMD_REJECT_INTERLOCK 6). A bad idx or value (NaN, inf, sigma < 0) is REJECTED 0x41 and nothing is written."
+        }
+      },
+      "0x33": {
+        "applied_async": true,
+        "description": "MRAC L3 prior, x axis. idx 0..MRAC_N_FEATURES-1 (6/18/46 by build) = Theta_prior[4][idx], any finite value. idx 0xF0 sigma_prior (shared by all axes), 0xF1 / 0xF2 this axis's bit of mrac_prior_pull / mrac_prior_warm (value >= 0.5 sets it). Every accepted write sets mrac_prior_reseed: the next disarmed MRAC_GateStep runs MRAC_ResetWeights, which seeds Theta = Whatf = clamp(prior) on the warm axes.",
+        "id": 51,
+        "id_hex": "0x33",
+        "name": "MRAC_PRIOR_X",
+        "notes": "Handler Cmd_MracPrior (TASK/send_data.c); MRAC_SetPriorElem / MRAC_PriorWarmStart (API/mrac.c). The firmware interlock is the disarmed authority; the seeded Theta reads back in the next flight's telemetry.",
+        "parameters": [
+          {
+            "description": "Pull of Theta towards the prior (0 = off, the boot value). Shared by all axes.",
+            "index": 240,
+            "max_val": null,
+            "min_val": 0,
+            "name": "sigma_prior",
+            "range": [
+              0,
+              null
+            ],
+            "symbol": "sigma_prior",
+            "unit": "1/s"
+          },
+          {
+            "description": "Bit 4 of mrac_prior_pull (boot: all set).",
+            "index": 241,
+            "max_val": 1,
+            "min_val": 0,
+            "name": "pull",
+            "range": [
+              0,
+              1
+            ],
+            "symbol": "mrac_prior_pull",
+            "unit": "bool"
+          },
+          {
+            "description": "Bit 4 of mrac_prior_warm (boot: clear).",
+            "index": 242,
+            "max_val": 1,
+            "min_val": 0,
+            "name": "warm",
+            "range": [
+              0,
+              1
+            ],
+            "symbol": "mrac_prior_warm",
+            "unit": "bool"
+          }
+        ],
+        "preconditions": {
+          "requires_armed": false,
+          "requires_disarmed": true,
+          "requires_ground_idle": false,
+          "requires_sdk_mode": false
+        },
+        "returns_ack": true,
+        "safety_class": {
+          "danger_level": "safe",
+          "description": "Refused unless disarmed (CMD_REJECT_INTERLOCK 6). A bad idx or value (NaN, inf, sigma < 0) is REJECTED 0x41 and nothing is written."
+        }
+      },
+      "0x34": {
+        "applied_async": true,
+        "description": "MRAC L3 prior, y axis. idx 0..MRAC_N_FEATURES-1 (6/18/46 by build) = Theta_prior[5][idx], any finite value. idx 0xF0 sigma_prior (shared by all axes), 0xF1 / 0xF2 this axis's bit of mrac_prior_pull / mrac_prior_warm (value >= 0.5 sets it). Every accepted write sets mrac_prior_reseed: the next disarmed MRAC_GateStep runs MRAC_ResetWeights, which seeds Theta = Whatf = clamp(prior) on the warm axes.",
+        "id": 52,
+        "id_hex": "0x34",
+        "name": "MRAC_PRIOR_Y",
+        "notes": "Handler Cmd_MracPrior (TASK/send_data.c); MRAC_SetPriorElem / MRAC_PriorWarmStart (API/mrac.c). The firmware interlock is the disarmed authority; the seeded Theta reads back in the next flight's telemetry.",
+        "parameters": [
+          {
+            "description": "Pull of Theta towards the prior (0 = off, the boot value). Shared by all axes.",
+            "index": 240,
+            "max_val": null,
+            "min_val": 0,
+            "name": "sigma_prior",
+            "range": [
+              0,
+              null
+            ],
+            "symbol": "sigma_prior",
+            "unit": "1/s"
+          },
+          {
+            "description": "Bit 5 of mrac_prior_pull (boot: all set).",
+            "index": 241,
+            "max_val": 1,
+            "min_val": 0,
+            "name": "pull",
+            "range": [
+              0,
+              1
+            ],
+            "symbol": "mrac_prior_pull",
+            "unit": "bool"
+          },
+          {
+            "description": "Bit 5 of mrac_prior_warm (boot: clear).",
+            "index": 242,
+            "max_val": 1,
+            "min_val": 0,
+            "name": "warm",
+            "range": [
+              0,
+              1
+            ],
+            "symbol": "mrac_prior_warm",
+            "unit": "bool"
+          }
+        ],
+        "preconditions": {
+          "requires_armed": false,
+          "requires_disarmed": true,
+          "requires_ground_idle": false,
+          "requires_sdk_mode": false
+        },
+        "returns_ack": true,
+        "safety_class": {
+          "danger_level": "safe",
+          "description": "Refused unless disarmed (CMD_REJECT_INTERLOCK 6). A bad idx or value (NaN, inf, sigma < 0) is REJECTED 0x41 and nothing is written."
+        }
       }
     },
-    "count": 28,
+    "count": 35,
     "source": "ground_station/platform/firmware_contract.py"
   },
   "elf_identity": {
@@ -2771,12 +3204,15 @@
       "/api/streams/presets/<name>": "one preset: notes, slots [{rate, vars}], vofa channels (GET)",
       "/api/symbols": "DWARF symbol names from the firmware ELF (?prefix=N&parent=P&limit=N; default/max limit 100/1000)",
       "/api/terminal/ws": "terminal PTY WebSocket (?token= required, 401 without)",
+      "/api/values": "newest value per symbol across all streams ?names=a,b - {values: {name: {value, age_s}}}; unseen names left out (live_tracker --tel-url height)",
       "/api/view-model": "browser-renderable state for agents; ?stats=1 adds session_stats (full-session scan, slow on long sessions)",
       "/artifacts": "stored artifacts",
       "/experiments": "active experiment runs (503 without runtime)",
       "/experiments/<name>": "one experiment",
       "/health": "service liveness + bridge connection",
+      "/health/ingest_lag": "ingest lag histogram + per-second max (?since_s=unix s) + link health",
       "/health/slots": "per-slot seq/loss/samples",
+      "/health/store": "SessionStore row counts vs its cap",
       "/llms.txt": "Markdown map of what an agent should read first (text/markdown)",
       "/replay/<id>": "stored records for replay (?limit=N&offset=N, default 1000, limit=0 = all)",
       "/sessions": "session list (?limit=N)",
@@ -2796,7 +3232,9 @@
       "/api/campaign/abort": "level-1 traj_stop + land now, then status operator_needed",
       "/api/campaign/go": "per-battery go {campaign_path, pack_id, checklist, source, confirmation} (403 agent: source without the operator's chat confirmation quote, 409 unticked checklist, busy or deps not ready, 503 no runner deps)",
       "/api/campaign/land": "level-1 traj_stop + land now, then stop (operator_stop)",
+      "/api/campaign/next": "fly key n: end the current hold/preset (traj_stop) and go on to the next step",
       "/api/campaign/pause": "finish the current flight, then stop (operator_stop)",
+      "/api/campaign/stop": "fly key s: end the current hold/preset (traj_stop) and hold the hover point until next",
       "/api/presets/apply": "{name}: switch the live subscription to a preset (disarmed only; background, ~6-10 s telemetry gap)",
       "/api/recording/start": "start recording {reason?, requested_by?, label?}",
       "/api/recording/stop": "stop recording",
@@ -2806,6 +3244,7 @@
       "/api/streams/log/start": "{name?,mode:timed|rolling|unlimited,seconds?,window_s?} per-slot CSV under logs/vofa (no flight command)",
       "/api/streams/log/stop": "stop the stream log",
       "/api/streams/plan": "{slots:[{rate,vars}]} -> link budget and per-slot errors (read-only)",
+      "/api/streams/plot": "{enable,addr?} every streamed slot as PlotJuggler UDP Server JSON (default 127.0.0.1:9870)",
       "/api/streams/presets": "save a VOFA Studio slot preset {name, notes?, slots:[{rate,vars}], vofa?}",
       "/api/streams/presets/delete": "{name} delete a slot preset",
       "/api/streams/restore": "{slots:[n..]|\"all\"} put slots back on the dashboard layout; refused unless disarmed",
@@ -3552,8 +3991,8 @@
         ]
       },
       {
-        "doc": "MRAC per axis (pitch, roll, yaw, z): error, PID output, adaptive correction; simplex fade",
-        "floats": 13,
+        "doc": "MRAC per axis (pitch, roll, yaw, z, x, y): error, PID output, adaptive correction; simplex fade",
+        "floats": 19,
         "name": "mrac",
         "offset_floats": 32,
         "symbols": [
@@ -3561,14 +4000,20 @@
           "g_tlm.mrac.e[1]",
           "g_tlm.mrac.e[2]",
           "g_tlm.mrac.e[3]",
+          "g_tlm.mrac.e[4]",
+          "g_tlm.mrac.e[5]",
           "g_tlm.mrac.u_nom[0]",
           "g_tlm.mrac.u_nom[1]",
           "g_tlm.mrac.u_nom[2]",
           "g_tlm.mrac.u_nom[3]",
+          "g_tlm.mrac.u_nom[4]",
+          "g_tlm.mrac.u_nom[5]",
           "g_tlm.mrac.u_ad[0]",
           "g_tlm.mrac.u_ad[1]",
           "g_tlm.mrac.u_ad[2]",
           "g_tlm.mrac.u_ad[3]",
+          "g_tlm.mrac.u_ad[4]",
+          "g_tlm.mrac.u_ad[5]",
           "g_tlm.mrac.fade"
         ]
       },
@@ -3576,7 +4021,7 @@
         "doc": "optical-flow KF state and the OF bias",
         "floats": 8,
         "name": "est",
-        "offset_floats": 45,
+        "offset_floats": 51,
         "symbols": [
           "g_tlm.est.kf_x_m",
           "g_tlm.est.kf_y_m",
@@ -3592,7 +4037,7 @@
         "doc": "battery voltage and thrust estimates",
         "floats": 7,
         "name": "pwr",
-        "offset_floats": 53,
+        "offset_floats": 59,
         "symbols": [
           "g_tlm.pwr.vbat_v",
           "g_tlm.pwr.thrust_imu_n",
@@ -3607,7 +4052,7 @@
         "doc": "pre-arm masks, reset cause, RTOS budget (1 Hz, API/prearm.h, API/fw_health.h)",
         "floats": 8,
         "name": "hlth",
-        "offset_floats": 60,
+        "offset_floats": 66,
         "symbols": [
           "g_tlm.hlth.prearm_fail_mask",
           "g_tlm.hlth.prearm_block_mask",
@@ -3618,11 +4063,46 @@
           "g_tlm.hlth.loop_max_us",
           "g_tlm.hlth.iwdg_on"
         ]
+      },
+      {
+        "doc": "MRAC Z features in ext 0..3 (bias, ground, drag, tilt): value, weight; mrac_z_feat_mask",
+        "floats": 9,
+        "name": "mrac_z",
+        "offset_floats": 74,
+        "symbols": [
+          "g_tlm.mrac_z.feat[0]",
+          "g_tlm.mrac_z.feat[1]",
+          "g_tlm.mrac_z.feat[2]",
+          "g_tlm.mrac_z.feat[3]",
+          "g_tlm.mrac_z.w[0]",
+          "g_tlm.mrac_z.w[1]",
+          "g_tlm.mrac_z.w[2]",
+          "g_tlm.mrac_z.w[3]",
+          "g_tlm.mrac_z.mask"
+        ]
+      },
+      {
+        "doc": "sysid torque target (pitch, roll, yaw): rate-loop output c, excitation d, u = c + d before the mixer (mixer units); sysid_target",
+        "floats": 10,
+        "name": "sysid_cdu",
+        "offset_floats": 83,
+        "symbols": [
+          "g_tlm.sysid_cdu.c[0]",
+          "g_tlm.sysid_cdu.c[1]",
+          "g_tlm.sysid_cdu.c[2]",
+          "g_tlm.sysid_cdu.d[0]",
+          "g_tlm.sysid_cdu.d[1]",
+          "g_tlm.sysid_cdu.d[2]",
+          "g_tlm.sysid_cdu.u[0]",
+          "g_tlm.sysid_cdu.u[1]",
+          "g_tlm.sysid_cdu.u[2]",
+          "g_tlm.sysid_cdu.target"
+        ]
       }
     ],
     "source": "API/flight_telemetry.h (written by Tlm_Snapshot, TASK/StabilizerTask.c, 200 Hz)",
     "symbol": "g_tlm",
-    "total_floats": 68,
+    "total_floats": 93,
     "value_size": 4
   }
 }

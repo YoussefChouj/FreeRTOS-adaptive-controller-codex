@@ -15,7 +15,12 @@ def test_wire_target_decodes_field_and_axis():
     assert wire_target(MRAC_VARIANT_CMD, (12 << 2) | 2) == "mrac_config_yaw.ref_model_bw"
     assert wire_target(MRAC_VARIANT_CMD, (31 << 2) | 3) == "mrac_xy_layers"
     # axes 0-3 carry the field in 5 bits: (field << 2) | axis, so the last field they can carry is 31
-    assert len(VARIANT_FIELDS) - 1 == 32
+    assert len(VARIANT_FIELDS) - 1 == 35
+    # all-loop item 1: global layer selectors 33-35, sent on axis x
+    assert wire_target(MRAC_VARIANT_CMD, 0xC2) == "mrac_att_layers"
+    assert wire_target(MRAC_VARIANT_CMD, 0xC4) == "mrac_yaw_layers"
+    assert wire_target(MRAC_VARIANT_CMD, 0xC6) == "mrac_z_layers"
+    assert wire_target(MRAC_VARIANT_CMD, 0xC3) == "mrac_att_layers"
     assert [i for i, (n, _lo, _hi) in enumerate(VARIANT_FIELDS) if n == "ref_zeta"] == [32]
     # x/y: 0x80 | (field << 1) | (axis - 4)
     assert wire_target(MRAC_VARIANT_CMD, 0x80 | (6 << 1) | 1) == "mrac_config_y.mu_sat"

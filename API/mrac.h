@@ -333,6 +333,9 @@ typedef enum {
     MRAC_VF_L2_T_TRAP,
     MRAC_VF_XY_LAYERS,      /* 31: D4 x/y layers target, MRAC_XY_LAYER_* bits (any axis; latched on the ground) */
     MRAC_VF_REF_ZETA,       /* 32: writes ref_model_zeta (the 2nd-order reference damping, type 2 only) */
+    MRAC_VF_ATT_LAYERS,     /* 33: attitude (roll / pitch) MRAC layers, MRAC_LAYER_* bits (any axis; ground latch) */
+    MRAC_VF_YAW_LAYERS,     /* 34: yaw MRAC layers, MRAC_LAYER_* bits (any axis; ground latch) */
+    MRAC_VF_Z_LAYERS,       /* 35: z (height) MRAC layers, MRAC_LAYER_* bits (any axis; ground latch) */
     MRAC_VF_COUNT
 } MRAC_VariantField_e;
 
@@ -591,6 +594,28 @@ typedef struct { float W[3]; float p_m; float v_m; float e; float u; } MRAC_PosL
 typedef struct { float gamma; float sigma; float w_max; float u_max; float bw; float zeta; } MRAC_PosConfig_t;
 extern volatile uint8_t mrac_xy_layers;       /* command target (CMD 0x1D field 31), boot INNER */
 extern volatile uint8_t mrac_xy_layers_live;  /* flying now: the target latched on the ground */
+
+/* Item 1: the layer targets of the three new loop groups. attitude = the roll / pitch angle loop, yaw = the yaw
+ * angle loop, z = the height (z position) loop. The target is what the operator wrote (CMD 0x1D fields 33/34/35);
+ * the live value is the target latched on the ground, so a flight always starts from the selection on the pad.
+ * INNER = today's behaviour (the MRAC layer on the inner loop), OUTER = the new outer layer, BOTH = the two.
+ * The fields are global (one target per group), so they are written on the x / y axes: a field from 32 on has no
+ * axes 0-3 encoding (the field number needs 5 bits there), see MRAC_VariantIdxSet. */
+extern volatile uint8_t mrac_att_layers;       /* command target (CMD 0x1D field 33), boot INNER */
+extern volatile uint8_t mrac_att_layers_live;  /* flying now: the target latched on the ground */
+extern volatile uint8_t mrac_yaw_layers;       /* command target (CMD 0x1D field 34), boot INNER */
+extern volatile uint8_t mrac_yaw_layers_live;  /* flying now: the target latched on the ground */
+extern volatile uint8_t mrac_z_layers;         /* command target (CMD 0x1D field 35), boot INNER */
+extern volatile uint8_t mrac_z_layers_live;    /* flying now: the target latched on the ground */
+void MRAC_GroupLayersLatch(void);               /* ground only: live = target for the three new groups */
+
+/* The layer bits of every loop group (the layer-select fields of CMD 0x1D, fields 31/33/34/35).
+ * INNER = today's behaviour (the MRAC layer on the inner loop), OUTER = the new outer layer, BOTH = the two.
+ * The target is what the operator wrote; the live value is the target latched on the ground, so a flight
+ * always starts from the selection that was on the pad. The x / y group has its own names (MRAC_XY_LAYER_*). */
+#define MRAC_LAYER_INNER  MRAC_XY_LAYER_INNER
+#define MRAC_LAYER_OUTER  MRAC_XY_LAYER_OUTER
+#define MRAC_LAYER_BOTH   (MRAC_LAYER_INNER | MRAC_LAYER_OUTER)
 extern MRAC_PosLayer_t mrac_pos[2];           /* 0 = x, 1 = y */
 extern MRAC_PosConfig_t mrac_pos_cfg;
 void MRAC_XyLayersLatch(void);                /* ground only: live = target, outer state reset */

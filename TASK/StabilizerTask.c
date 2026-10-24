@@ -2251,6 +2251,7 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact, uint8_t land_xy_
 		if (!airborne) {
 			MRAC_XyRefSelect(g_xy_ctrl_kind);   /* item 4: the MRAC x/y reference row of the selected nominal */
 			MRAC_XyLayersLatch();               /* item 5: the x/y MRAC layers (CMD 0x1D field 31) fly from takeoff */
+			MRAC_GroupLayersLatch();            /* all-loop item 1: att / yaw / z layers (fields 33-35) */
 		}
 		if (!g_ctrl_pid_fallback_active) {
 			xy_ctrl_reset();

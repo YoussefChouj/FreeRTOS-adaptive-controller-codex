@@ -26,12 +26,20 @@ they must be at most the inner closed-loop bandwidth / 3, and the inner bandwidt
 | Item | What | Commit | State |
 |---|---|---|---|
 | 0 | `MRAC_VF_REF_ZETA` (CMD 0x1D field 32, bounds 0.3..1.5) + the Gate W write order | `8e1de8ff`, `7f4218d8` | done |
-| 1 | equivalence test first, then `att_layers` / `yaw_layers` / `z_layers` (CMD 0x1D fields 33/34/35) | - | in progress |
+| 1 | equivalence test first, then `att_layers` / `yaw_layers` / `z_layers` (CMD 0x1D fields 33/34/35) | this commit (`git log -- API/tests/test_mrac_group_layers.c`) | done: firmware + host table; the selectors latch but no outer layer reads them yet (items 2-4) |
 | 2 | z position outer layer | - | not started |
 | 3 | yaw angle outer layer | - | not started |
 | 4 | roll/pitch angle outer layer | - | not started |
 | 5 | prior / warm start for the new axes | - | not started |
 | 6 | the rules every outer layer obeys (clamp rows, K_SEP, no windup) | - | not started |
+
+Item 1 checks (2026-10-24, all measured):
+
+| Check | Result |
+|---|---|
+| `python API/tests/run_all_loop_equiv.py` vs base `a7891b70` | EQUIV OK: mrac half 21968848 lines identical (plain) and 24280848 (sigma-prior); StabilizerTask hash identical, seeds 1 and 2 |
+| `python tools/host_tests.py mrac` | 13/13 pass; new row `mrac_group_layers`: 45 checks, 0 fails |
+| `pytest ground_station/analysis/tests ground_station/platform` | pass, except the 2 capability-manifest tests, which need a built `OBJ/JX_FLY.axf` (the worktree has none). Regenerate the manifest in main after the build. |
 | 7 | logging (Theta, reference error, correction) + contract / fake drone / mrac_active | - | not started |
 
 ### Item 0 in detail
