@@ -1,0 +1,5 @@
+logs/
+OBJ/
+.cache/
+node_modules/
+.agent_state/
