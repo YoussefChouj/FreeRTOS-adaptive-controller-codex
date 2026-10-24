@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -115,7 +116,54 @@ cp "$FAKE_REPLY/hdr" "$hdr"; cp "$FAKE_REPLY/body" "$out"; cat "$FAKE_REPLY/code
 '''
 
 
-@pytest.mark.skipif(shutil.which('bash') is None or shutil.which('git') is None, reason='bash or git missing')
+def _bash() -> str:
+    """Git Bash, never WSL's, because the script under test is run by bash and only this one has `python`.
+
+    shutil.which('bash') finds C:/Windows/System32/bash.exe (WSL) here, and that bash has no `python` and does not
+    inherit the Windows environment, so land.sh died with "python: command not found" (ground_station/lab/runner.py
+    git_bash() hit the same on 2026-10-15). WSL also rebuilds PATH from its own list, so a stub on it is never seen.
+    """
+    for p in (Path(os.environ.get('ProgramFiles', 'C:/Program Files')) / 'Git' / 'bin' / 'bash.exe',
+              Path('C:/Program Files/Git/bin/bash.exe')):
+        if p.is_file():
+            return str(p)
+    found = shutil.which('bash') or 'bash'
+    return 'bash' if re.search(r'system32|windowsapps', found, re.I) else found
+
+
+def bash_path(path: Path) -> str:
+    """The path as bash reaches it: Git Bash resolves `/c/...`, never `C:/...`."""
+    if os.name != 'nt':
+        return str(path)
+    drive, rest = os.path.splitdrive(str(path))
+    return '/' + drive[0].lower() + rest.replace('\\', '/')
+
+
+def _sh(path: Path) -> str:
+    """`path` in the POSIX form bash expands as a command word.
+
+    Unquoted on purpose: the stub is passed as CURL and land.sh expands "$CURL" itself, so bash resolves it. A
+    `/c/...` string arriving as an already-quoted argv value is not re-expanded, and then bash reports
+    "No such file or directory" for a file that is really there.
+    """
+    return bash_path(path)
+
+
+def _stub_env(stub: Path, reply: Path) -> dict[str, str]:
+    """`env` for a bash child that must answer GitHub's API from `stub/curl`, never the network.
+
+    PATH cannot do this on Windows: WSL bash rebuilds PATH from its own list, and Git Bash prepends its
+    /mingw64/bin ahead of anything passed in, so /mingw64/bin/curl (the real one) always answers first -- which
+    is how a unit test that looked stubbed was really calling api.github.com and comparing live replies. land.sh
+    takes CURL by absolute path instead, which no PATH rewriting can override.
+    """
+    env = {k: v for k, v in os.environ.items() if k != 'GITHUB_TOKEN'}
+    env.update(FAKE_REPLY=bash_path(reply), PY=_sh(Path(sys.executable)),
+               CURL=_sh(stub / 'curl'))
+    return env
+
+
+@pytest.mark.skipif(shutil.which('git') is None, reason='git missing')
 @pytest.mark.parametrize('code, body, rc, needle', [
     ('200', _runs((1, '.github/workflows/check.yml', 'completed', 'success')), 0, 'completed success'),
     ('401', json.dumps({'message': 'Bad credentials'}), 3, 'GITHUB_TOKEN refused (401 Bad credentials)'),
@@ -135,10 +183,8 @@ def test_land_status_reports_the_api_answer(tmp_path, code, body, rc, needle):
     subprocess.run(['git', 'init', '-q', '-b', 'feat', str(repo)], check=True)
     subprocess.run([*git, 'add', '-A'], check=True)
     subprocess.run([*git, 'commit', '-qm', 'x'], check=True)
-    env = {k: v for k, v in os.environ.items() if k != 'GITHUB_TOKEN'}
-    env.update(FAKE_REPLY=reply.as_posix(), PY=Path(sys.executable).as_posix(),
-               PATH=str(stub) + os.pathsep + env.get('PATH', ''))
-    res = subprocess.run([shutil.which('bash'), 'tools/land.sh', '--status', 'feat'], cwd=repo,
+    env = _stub_env(stub, reply)
+    res = subprocess.run([_bash(), 'tools/land.sh', '--status', 'feat'], cwd=repo,
                          capture_output=True, text=True, env=env)
     assert res.returncode == rc, res.stderr
     assert needle in res.stdout
