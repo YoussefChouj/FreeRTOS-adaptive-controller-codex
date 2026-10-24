@@ -54,6 +54,12 @@ uint8_t SysID_IsAxisActive(SysID_Axis_e axis);
 // The rate setpoint (deg/s) to apply to the active axis when SysID_IsAxisActive() is true.
 float SysID_GetRateSetpoint(SysID_Axis_e axis);
 
+// Angle setpoint (deg) to apply when SysID_IsAxisActive() is true and sysid_target == 2.
+float SysID_GetAngleSetpoint(SysID_Axis_e axis);
+
+// Velocity setpoint (cm/s, m/s for Z) to apply when SysID_IsAxisActive() is true and sysid_target == 3.
+float SysID_GetVelSetpoint(SysID_Axis_e axis);
+
 // Excitation target, VAR_WRITE 55 (u8 0..1), latched at SysID_Start; a write while the FSM is not IDLE is
 // refused with VAR_WRITE_REJECT_BUSY. 0 = rate setpoint injection (above). 1 = torque: the excitation d is
 // added to the rate-loop output c before the mixer (u = c + d, Mix_Compute) and SysID_IsAxisActive returns 0.

@@ -45,6 +45,8 @@ def sanitize(axis: str, f0: float, f1: float, amp: float, duration_s: float) -> 
     """The firmware clamps of SysID_Start (sysid.c:178-185)."""
     f0 = max(f0, 0.1)
     f1 = max(f1, f0)
+    # Note: autotune currently uses this clamp for angle/vel as well since it doesn't know the target.
+    # Using AMP_MAX_DPS is a safe upper bound proxy for angle/vel maxes which are similar (90 vs 30/100).
     amp = min(abs(amp), AMP_MAX_DPS[axis])
     return f0, f1, amp, min(max(duration_s, 1.0), 60.0)
 

@@ -198,6 +198,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--signal", choices=sorted(ex.SIGNALS))
     for k in ("f0", "f1", "amp", "duration"):
         ap.add_argument(f"--{k}", type=float, help="excite parameter, default the campaign's")
+    ap.add_argument("--target", choices=("rate", "angle", "vel"), default="rate", help="sysid_target to extract (determines instrument scaling)")
     ap.add_argument("--out", help="JSON path (default next to the first log)")
     args = ap.parse_args(argv)
     excite = dict(ex.VERIFY_EXCITE if args.verify else ex.ID_EXCITE)

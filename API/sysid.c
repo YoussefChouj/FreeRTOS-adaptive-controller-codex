@@ -101,6 +101,24 @@ static const sysid_torque_t s_torque[3] = {   /* indexed by SysID_Axis_e, P/R/Y 
     SYSID_TORQUE_ROW(40.0f),   /* yaw,   PROPOSED */
 };
 
+typedef struct {
+    float amp_max_angle; // [deg] |d| clamp for angle injection
+    float amp_max_vel;   // [cm/s, or m/s for Z] |d| clamp for velocity injection
+} sysid_outer_t;
+
+/* SYSID_OUTER_ROW fields (PROPOSED - not flight-validated):
+   @amp_max_angle deg    [0, 90]  |d| clamp for angle injection
+   @amp_max_vel   cm/s   [0, 300] |d| clamp for velocity injection (m/s for Z) */
+#define SYSID_OUTER_ROW(amp_max_angle, amp_max_vel)     { (amp_max_angle), (amp_max_vel) }
+
+static const sysid_outer_t s_outer[4] = {   /* indexed by SysID_Axis_e */
+/*                   amp_max_angle  amp_max_vel */
+    SYSID_OUTER_ROW( 30.0f,         100.0f ),   /* pitch, PROPOSED */
+    SYSID_OUTER_ROW( 30.0f,         100.0f ),   /* roll,  PROPOSED */
+    SYSID_OUTER_ROW( 30.0f,         100.0f ),   /* yaw,   PROPOSED */
+    SYSID_OUTER_ROW(  0.0f,           0.5f ),   /* Z,     PROPOSED */
+};
+
 // ---- Module state -------------------------------------------------------------------
 volatile uint8_t sysid_target = 0;   // VAR_WRITE 55: 0 = rate setpoint injection, 1 = torque add before the mixer
 static uint8_t s_target;             // sysid_target latched at SysID_Start (a write while not IDLE is refused BUSY)
@@ -240,11 +258,10 @@ uint8_t SysID_Start(SysID_Axis_e axis, SysID_Signal_e sig, float f0, float f1, f
 
     if (s_state != SYSID_IDLE) return 0;          // a run is already active
     if ((uint32_t)axis > (uint32_t)SYSID_AXIS_Z) return 0;    // also a "negative" id (PITCH is 0)
-    // Z-axis excitation is not yet wired: Compute_Motor only overrides the P/R/Y rate
-    // setpoints (StabilizerTask.c), there is no Z_ratePID.Des injection, and Z lacks its
-    // own altitude/ground-effect abort guards. Reject Z so a run can't report "active"
-    // while doing nothing. Full Z wiring is follow-up (ADR-0004 finding #1).
-    if (axis == SYSID_AXIS_Z) return 0;
+
+    // Z-axis excitation is allowed only for velocity setpoint injection (sysid_target 3).
+    tgt = (sysid_target != 0U && sysid_target <= 3U) ? sysid_target : 0U;
+    if (axis == SYSID_AXIS_Z && tgt != 3U) return 0;
 
     // Preconditions (firmware-checkable gates).
     if (DroneStatus.ARM_Status == 0) return 0;
@@ -257,8 +274,11 @@ uint8_t SysID_Start(SysID_Axis_e axis, SysID_Signal_e sig, float f0, float f1, f
     // Sanitize parameters.
     if (f0 < s_shape.f0_min_hz) f0 = s_shape.f0_min_hz;
     if (f1 < f0)   f1 = f0;
-    tgt = (sysid_target != 0U) ? 1U : 0U;
-    amax = tgt ? s_torque[axis].amp_max : sysid_amp_max(axis);   // axis is P/R/Y here
+    // sysid_target is already sanitized to tgt in the Z-axis check above
+    if (tgt == 1U) amax = s_torque[axis].amp_max;
+    else if (tgt == 2U) amax = s_outer[axis].amp_max_angle;
+    else if (tgt == 3U) amax = s_outer[axis].amp_max_vel;
+    else amax = sysid_amp_max(axis);
     if (amp < 0.0f) amp = -amp;
     if (amp > amax) amp = amax;
     if (duration < s_shape.dur_min_s) duration = s_shape.dur_min_s;
@@ -329,7 +349,7 @@ float SysID_GetTorque(SysID_Axis_e axis, uint8_t flying)
 {
     float d;
 
-    if (s_target == 0U || axis != s_axis || flying == 0U) return 0.0f;
+    if (s_target != 1U || axis != s_axis || flying == 0U) return 0.0f;
     if (s_state != SYSID_RAMP_IN && s_state != SYSID_RUNNING && s_state != SYSID_RAMP_OUT) return 0.0f;
     if ((uint32_t)axis > (uint32_t)SYSID_AXIS_YAW) return 0.0f;
     d = s_rate_cmd;
@@ -342,7 +362,29 @@ float SysID_GetTorque(SysID_Axis_e axis, uint8_t flying)
 float SysID_GetRateSetpoint(SysID_Axis_e axis)
 {
     (void)axis;
-    return s_rate_cmd;
+    return (s_target == 0U) ? s_rate_cmd : 0.0f;
+}
+
+float SysID_GetAngleSetpoint(SysID_Axis_e axis)
+{
+    float d;
+    if (s_target != 2U || axis != s_axis) return 0.0f;
+    d = s_rate_cmd;
+    if (!isfinite(d)) return 0.0f;
+    if (d > s_outer[axis].amp_max_angle) d = s_outer[axis].amp_max_angle;
+    if (d < -s_outer[axis].amp_max_angle) d = -s_outer[axis].amp_max_angle;
+    return d;
+}
+
+float SysID_GetVelSetpoint(SysID_Axis_e axis)
+{
+    float d;
+    if (s_target != 3U || axis != s_axis) return 0.0f;
+    d = s_rate_cmd;
+    if (!isfinite(d)) return 0.0f;
+    if (d > s_outer[axis].amp_max_vel) d = s_outer[axis].amp_max_vel;
+    if (d < -s_outer[axis].amp_max_vel) d = -s_outer[axis].amp_max_vel;
+    return d;
 }
 
 float SysID_GetDither(void)
