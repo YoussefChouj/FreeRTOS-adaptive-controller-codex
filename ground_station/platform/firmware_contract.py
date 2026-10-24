@@ -559,10 +559,12 @@ COMMAND_TABLE: dict[int, CommandSpec] = {
         description="WP-27 MRAC variant field on one axis: idx = field << 2 | axis for axes 0-3, "
                     "0x80 | field << 1 | (axis - 4) for axes 4 x / 5 y (ground_station/analysis/mrac_variants.py "
                     "variant_idx, VARIANT_FIELDS). Out-of-range values are refused. Field 31 xy_layers (D4, "
-                    "any axis) fills the 5-bit field of axes 0-3; it is a target the ground latch flies.",
+                    "any axis) fills the 5-bit field of axes 0-3; it is a target the ground latch flies. "
+                    "Fields from 32 on have no axes 0-3 encoding (the field number needs 5 bits there) and are "
+                    "reachable on the x / y axes only: field 32 ref_zeta writes the 2nd-order reference damping.",
         params=(
             CommandParam(0, "axis", "axis", 0, 5),
-            CommandParam(1, "field", "enum", 0, 31),
+            CommandParam(1, "field", "enum", 0, 32),
             CommandParam(2, "value", "float", None, None),
         ),
         safety=SafetyClass(

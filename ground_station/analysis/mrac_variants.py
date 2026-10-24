@@ -54,17 +54,28 @@ VARIANT_FIELDS: tuple[tuple[str, float, float], ...] = (
     ("l2_thr_on", 0.0, 1.0),        # L2 revive above thr_on * max score; firmware refuses thr_on <= thr_off
     ("l2_t_trap", 0.05, 30.0),      # L2 time below thr_off before the trap s
     ("xy_layers", 0.0, 3.0),        # D4 x/y MRAC layers bits 1 inner, 2 outer (writes mrac_xy_layers, any axis; ground latch)
+    ("ref_zeta", 0.3, 1.5),         # the 2nd-order reference damping (writes ref_model_zeta; PROPOSED bounds)
 )
 GAMMA_SCALE_FIELD = 11
 # L2 gating fields write mrac_l2g_cfg[axis].<member>, not the axis config (API/mrac.h MRAC_L2G_Config_t)
 L2G_MEMBERS = {"l2_mode": "mode", "l2_tau": "tau_s", "l2_thr_off": "thr_off", "l2_thr_on": "thr_on",
                "l2_t_trap": "t_trap_s"}
+# Fields whose host name differs from the firmware member they write.
+FIELD_MEMBERS = {"ref_zeta": "ref_model_zeta"}
 
 
 def variant_idx(axis: int, field: int) -> int:
-    """CMD 0x1D idx byte for (axis 0-5, field). Axes 0-3 keep the original (field << 2) | axis."""
+    """CMD 0x1D idx byte for (axis 0-5, field). Axes 0-3 keep the original (field << 2) | axis.
+
+    A field >= 32 has no axes 0-3 encoding: (field << 2) | axis would run into the 0x80 range the firmware reads
+    as the x / y space (MRAC_VariantIdxSet). Those fields are therefore reachable on the x / y axes only, and
+    asking for one on an axis 0-3 raises ValueError.
+    """
     if not 0 <= field < len(VARIANT_FIELDS) or not 0 <= axis < len(AXES):
         raise ValueError(f"no CMD 0x1D idx for axis {axis} field {field}")
+    if axis < 4 and field >= 32:
+        raise ValueError(f"MRAC variant field {field} ({VARIANT_FIELDS[field][0]}) has no encoding on axes 0-3 "
+                         f"(the field number needs 5 bits there); it is reachable on the x / y axes only")
     return (field << 2) | axis if axis < 4 else 0x80 | (field << 1) | (axis - 4)
 
 
@@ -85,7 +96,7 @@ def variant_symbol(idx: int) -> str | None:
         return "mrac_xy_layers"
     if name in L2G_MEMBERS:
         return f"mrac_l2g_cfg[{axis}].{L2G_MEMBERS[name]}"
-    return f"{AXES[axis]}.{name}"
+    return f"{AXES[axis]}.{FIELD_MEMBERS.get(name, name)}"
 
 
 def variant_bounds(idx: int) -> tuple[float, float] | None:

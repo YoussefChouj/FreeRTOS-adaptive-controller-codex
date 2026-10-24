@@ -332,6 +332,7 @@ typedef enum {
     MRAC_VF_L2_THR_ON,
     MRAC_VF_L2_T_TRAP,
     MRAC_VF_XY_LAYERS,      /* 31: D4 x/y layers target, MRAC_XY_LAYER_* bits (any axis; latched on the ground) */
+    MRAC_VF_REF_ZETA,       /* 32: writes ref_model_zeta (the 2nd-order reference damping, type 2 only) */
     MRAC_VF_COUNT
 } MRAC_VariantField_e;
 

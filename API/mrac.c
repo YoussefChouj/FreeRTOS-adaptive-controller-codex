@@ -96,19 +96,41 @@ const MRAC_XyRefRow_t mrac_xy_ref_rows[MRAC_XY_REF_N] = {
 };
 volatile uint8_t mrac_xy_ref_kind = 0U;
 
+/* Gate W (spec 2026-10-24 item 0): an explicit CMD 0x1D write of a reference field wins over the row default.
+ * The bits below say which fields of the x / y reference the operator has written since the last MRAC_XyRefSelect,
+ * so the row selection (which runs on the ground latch) fills only the fields still at their default. A write that
+ * comes after the selection and a write that comes before it in the same ground window both survive.
+ *   MRAC_XY_REF_W_TYPE  ref_type        MRAC_XY_REF_W_BW   ref_model_bw
+ *   MRAC_XY_REF_W_ZETA  ref_model_zeta  MRAC_XY_REF_W_DELAY ref_delay_s */
+#define MRAC_XY_REF_W_TYPE  0x01U
+#define MRAC_XY_REF_W_BW    0x02U
+#define MRAC_XY_REF_W_ZETA  0x04U
+#define MRAC_XY_REF_W_DELAY 0x08U
+static volatile uint8_t mrac_xy_ref_written = 0U;   /* the x / y axes only */
+
 void MRAC_XyRefSelect(uint8_t kind)
 {
     const MRAC_XyRefRow_t *row;
+    uint8_t w;
     if (kind >= MRAC_XY_REF_N || kind == mrac_xy_ref_kind) return;
     row = &mrac_xy_ref_rows[kind];
-    mrac_config_x.ref_type       = row->type;
-    mrac_config_x.ref_model_bw   = row->bw;
-    mrac_config_x.ref_model_zeta = row->zeta;
-    mrac_config_x.ref_delay_s    = (float)row->delay_ticks * MRAC_DT;
-    mrac_config_y.ref_type       = row->type;
-    mrac_config_y.ref_model_bw   = row->bw;
-    mrac_config_y.ref_model_zeta = row->zeta;
-    mrac_config_y.ref_delay_s    = (float)row->delay_ticks * MRAC_DT;
+    w = mrac_xy_ref_written;
+    if ((w & MRAC_XY_REF_W_TYPE) == 0U) {
+        mrac_config_x.ref_type = row->type;
+        mrac_config_y.ref_type = row->type;
+    }
+    if ((w & MRAC_XY_REF_W_BW) == 0U) {
+        mrac_config_x.ref_model_bw = row->bw;
+        mrac_config_y.ref_model_bw = row->bw;
+    }
+    if ((w & MRAC_XY_REF_W_ZETA) == 0U) {
+        mrac_config_x.ref_model_zeta = row->zeta;
+        mrac_config_y.ref_model_zeta = row->zeta;
+    }
+    if ((w & MRAC_XY_REF_W_DELAY) == 0U) {
+        mrac_config_x.ref_delay_s = (float)row->delay_ticks * MRAC_DT;
+        mrac_config_y.ref_delay_s = (float)row->delay_ticks * MRAC_DT;
+    }
     mrac_xy_ref_kind = kind;
 }
 
@@ -1901,6 +1923,7 @@ void MRAC_Init(void)
     mrac_config_x.What_lower_limit[0] = -mrac_config_x.What_limit[0];   /* bias: wind / payload sign unknown */
     mrac_config_y = mrac_config_x;
     mrac_xy_ref_kind = 0xFFU;    /* forces the apply: reference model type / bw / zeta / delay from the PID row */
+    mrac_xy_ref_written = 0U;    /* no explicit write yet, so the row fills every reference field */
     MRAC_XyRefSelect(0U);
     mrac_xy_layers = MRAC_XY_LAYER_INNER;    /* D4: outer layer off at boot */
     MRAC_XyLayersLatch();
@@ -2044,7 +2067,8 @@ static const struct { float lo; float hi; uint8_t snap; } mrac_var_field[MRAC_VF
     MRAC_VAR_FIELD( 0.0f,  1.0f,   0),   /* l2_thr_off      -, < l2_thr_on */
     MRAC_VAR_FIELD( 0.0f,  1.0f,   0),   /* l2_thr_on       -, > l2_thr_off */
     MRAC_VAR_FIELD( 0.05f, 30.0f,  0),   /* l2_t_trap       s */
-    MRAC_VAR_FIELD( 0.0f,  3.0f,   0)    /* xy_layers       bits, MRAC_XY_LAYER_* (any axis) */
+    MRAC_VAR_FIELD( 0.0f,  3.0f,   0),   /* xy_layers       bits, MRAC_XY_LAYER_* (any axis) */
+    MRAC_VAR_FIELD( 0.3f,  1.5f,   1)    /* ref_zeta        -, the 2nd-order reference damping (type 2 only) */
 };
 
 #if MRAC_VARIANT == MRAC_VARIANT_MULTI
@@ -2189,7 +2213,21 @@ uint8_t MRAC_VariantParamSet(uint8_t axis, uint8_t field, float val)
             break;
         case MRAC_VF_L2_T_TRAP:  mrac_l2g_cfg[axis].t_trap_s = val; break;
         case MRAC_VF_XY_LAYERS:  mrac_xy_layers = (uint8_t)(val + 0.5f); break;   /* flies after the ground latch */
+        case MRAC_VF_REF_ZETA:   c->ref_model_zeta = val; break;
         default: return 0U;
+    }
+    /* Gate W: remember an explicit write of a reference field on the x / y axes, so the row selection on the
+     * ground latch does not overwrite it. The bit is per field, not per axis: the row fills both axes at once. */
+    if (axis == (uint8_t)MRAC_AXIS_X || axis == (uint8_t)MRAC_AXIS_Y) {
+        uint8_t bit = 0U;
+        switch (field) {
+            case MRAC_VF_REF_TYPE:     bit = MRAC_XY_REF_W_TYPE;  break;
+            case MRAC_VF_REF_MODEL_BW: bit = MRAC_XY_REF_W_BW;    break;
+            case MRAC_VF_REF_ZETA:     bit = MRAC_XY_REF_W_ZETA;  break;
+            case MRAC_VF_REF_DELAY_S:  bit = MRAC_XY_REF_W_DELAY; break;
+            default: break;
+        }
+        if (bit != 0U) mrac_xy_ref_written = (uint8_t)(mrac_xy_ref_written | bit);
     }
     if (mrac_var_field[field].snap) {
         st[axis]->xm = st[axis]->x;

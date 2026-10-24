@@ -711,3 +711,57 @@ def test_fence_far_lands_at_once() -> None:
     run(drone, client, 0.02)
     assert drone.status()["safety_trip"] == Trip.CEILING
     assert drone.status()["prim_state"] == PrimState.DESCEND
+
+
+def test_mrac_variant_write_mirrors_the_firmware() -> None:
+    """CMD 0x1D MRAC_VARIANT: the fake drone decodes the idx byte and bounds the value like the firmware.
+
+    The firmware (MRAC_VariantIdxSet -> MRAC_VariantParamSet) refuses a field outside its table, an axis
+    outside 0-5 and a value outside the field's range; the fake drone does the same, and records the accepted
+    writes so a test can see what the campaign asked for.
+    """
+    from ground_station.analysis.mrac_variants import VARIANT_FIELDS, variant_idx
+
+    drone = FakeDrone()
+
+    def variant(idx: int, value: float) -> bool:
+        frame = encode(0x1D, idx, value, 1)
+        return drone.send(frame) == Outcome.APPLIED
+
+    # x / y (the axes 4 and 5) carry the field in the 0x80 range: ref_zeta (field 32) lives there
+    zeta = [i for i, (name, _lo, _hi) in enumerate(VARIANT_FIELDS) if name == "ref_zeta"][0]
+    assert variant(variant_idx(4, zeta), 0.9) is True
+    assert variant(variant_idx(5, zeta), 1.2) is True
+    # the wire carries float32, so the recorded value is the rounded one
+    assert drone.mrac_variant_writes[0][:3] == (4, zeta, "ref_zeta")
+    assert drone.mrac_variant_writes[1][:3] == (5, zeta, "ref_zeta")
+    assert drone.mrac_variant_writes[0][3] == pytest.approx(0.9)
+    assert drone.mrac_variant_writes[1][3] == pytest.approx(1.2)
+
+    # a value outside the field's range is refused, and nothing is recorded
+    assert variant(variant_idx(4, zeta), 0.2) is False     # below the 0.3 bound
+    assert variant(variant_idx(5, zeta), 1.6) is False     # above the 1.5 bound
+    assert len(drone.mrac_variant_writes) == 2
+
+    # a field outside the table is refused too (the firmware has no row for it)
+    assert variant(0x80 | (len(VARIANT_FIELDS) << 1), 1.0) is False
+    assert len(drone.mrac_variant_writes) == 2
+
+
+def test_mrac_variant_write_is_refused_in_flight() -> None:
+    """The firmware ignores CMD 0x1D while it flies (TASK/send_data.c Cmd_MracVariant)."""
+    from ground_station.analysis.mrac_variants import VARIANT_FIELDS, variant_idx
+
+    drone = FakeDrone()
+    client = WfbClient(drone.send)
+    zeta = [i for i, (name, _lo, _hi) in enumerate(VARIANT_FIELDS) if name == "ref_zeta"][0]
+
+    def variant(idx: int, value: float) -> bool:
+        return drone.send(encode(0x1D, idx, value, 1)) == Outcome.APPLIED
+
+    assert variant(variant_idx(4, zeta), 0.9) is True          # on the ground: applied
+    assert client.arm() is True and client.idle() is True and client.takeoff() is True
+    run(drone, client, 0.5)
+    assert drone.status()["prim_state"] != PrimState.IDLE      # airborne
+    assert variant(variant_idx(4, zeta), 1.1) is False         # in flight: refused
+    assert len(drone.mrac_variant_writes) == 1
