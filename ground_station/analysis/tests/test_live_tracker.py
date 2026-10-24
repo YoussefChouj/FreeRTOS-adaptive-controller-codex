@@ -1,11 +1,13 @@
 """live_tracker: earth alignment fit, fix scheduler (median, spread, period), frame packing."""
 import shutil
 import struct
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from ground_station.analysis.live_tracker import EarthAlign, FixScheduler
+from ground_station.analysis import video_truth as vt
 from ground_station.comm.ext_pos_encoder import ext_pos_decode
 
 
@@ -384,6 +386,81 @@ def test_shadow_pairs_rebuild_the_sent_fix_from_the_firmware_innovation(tmp_path
     assert set(run) == {1} and ts.min() > 2.0 and ts.max() < 18.0
     f = EarthAlign.fit(cam, earth)
     assert np.degrees(np.angle(f.a)) == pytest.approx(100, abs=0.1) and not f.mirror and f.rms_cm < 0.1
+
+
+def test_fit_reads_a_session_id_when_the_stream_log_left_no_stem(tmp_path, monkeypatch):
+    """Open item `fusion-fit-from-session` (2026-10-21): the labday fusion run left stream_log.out empty, so there
+    was no slot-CSV stem to fit. The same pairing must come out of the session's own telemetry.csv."""
+    from ground_station.analysis import live_tracker as lt
+
+    t1 = np.arange(0, 20000, 20.0)                                    # device ms, 50 Hz
+    air = (t1 > 2000) & (t1 < 18000)
+    ex, ey = 100 * np.sin(t1 / 3000), 80 * np.cos(t1 / 2000)           # EKF earth, cm
+    a = np.exp(1j * np.radians(-100))                                  # sent fix = earth rotated back by the pad yaw
+    t2 = t1[::2]
+    z = a * (ex[::2] + 1j * ey[::2])
+    cols = {vt.Z_M: np.where(air, 0.8, 0.0), "ano_of.earth_x": ex, "ano_of.earth_y": ey}
+    fix = {"g_ext_pos.e_x": z.real - ex[::2], "g_ext_pos.e_y": z.imag - ey[::2],
+           "g_ext_pos.c_x": 0.0, "g_ext_pos.c_y": 0.0, "g_ext_pos.n_ok": np.arange(len(t2)), "g_ext_pos.n_rej": 0.0}
+    _write_session(tmp_path / "logs" / "sessions" / "20261021-110021" / "telemetry.csv",
+                   [(t1, cols), (t2, fix)])
+    monkeypatch.chdir(tmp_path)
+
+    for stem in ("20261021-110021", "logs/sessions/20261021-110021", "logs/sessions/20261021-110021/telemetry.csv"):
+        ts, cam, earth, run = lt.shadow_pairs(stem)
+        assert set(run) == {1.0} and ts.min() > 2.0 and ts.max() < 18.0
+        f = EarthAlign.fit(cam, earth)
+        assert np.degrees(np.angle(f.a)) == pytest.approx(100, abs=0.1) and f.rms_cm < 0.1
+
+
+def test_fit_rebuilds_the_earth_path_from_the_position_feedback(tmp_path, monkeypatch):
+    """A session that captured no ano_of.earth_x/y: the firmware's own locx/locy feedback is the same path."""
+    from ground_station.analysis import live_tracker as lt
+
+    t = np.arange(0, 20000, 20.0)
+    air = (t > 2000) & (t < 18000)
+    ex, ey = 100 * np.sin(t / 3000), 80 * np.cos(t / 2000)           # EKF earth, cm
+    z = np.exp(1j * np.radians(-100)) * (ex + 1j * ey)
+    _write_session(tmp_path / "telemetry.csv",
+                   [(t, {vt.X_CM: ey, vt.Y_CM: -ex, vt.Z_M: np.where(air, 0.8, 0.0),
+                         "g_ext_pos.e_x": z.real - ex, "g_ext_pos.e_y": z.imag - ey,
+                         "g_ext_pos.c_x": 0.0, "g_ext_pos.c_y": 0.0,
+                         "g_ext_pos.n_ok": np.arange(len(t)), "g_ext_pos.n_rej": 0.0})])
+    monkeypatch.chdir(tmp_path)
+    _ts, cam, earth, run = lt.shadow_pairs(str(tmp_path / "telemetry.csv"))
+    f = EarthAlign.fit(cam, earth)
+    assert set(run) == {1.0}
+    assert np.degrees(np.angle(f.a)) == pytest.approx(100, abs=0.1) and f.rms_cm < 0.1
+
+
+def test_fit_says_what_a_session_without_the_fusion_vars_is_missing(tmp_path, monkeypatch):
+    from ground_station.analysis import live_tracker as lt
+
+    _write_session(tmp_path / "telemetry.csv", [(np.arange(0, 4000, 20.0), {vt.Z_M: np.zeros(200)})])
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        lt.shadow_pairs(str(tmp_path))
+    assert "camera_fusion" in str(exc.value)
+
+
+def _write_session(path: Path, lanes: list[tuple[np.ndarray, dict]]) -> None:
+    """lanes [(t_ms, {var: values})] as a campaign telemetry.csv: every lane in its own capture slot, frames in
+    drone-time order, two frames per WiFi batch. A scalar value is written on every frame of its lane."""
+    T0 = 1_760_000_000_000_000_000
+    lanes = [(np.asarray(ts, float), {c: np.broadcast_to(np.asarray(v, float), (len(ts),))
+                                      for c, v in cols.items()}) for ts, cols in lanes]
+    frames = sorted((int(ts[i]), k, i, cols) for k, (ts, cols) in enumerate(lanes) for i in range(len(ts)))
+    lines = ["received_ns,slot,key,value"]
+    for b in range(0, len(frames), 2):
+        for ti, k, i, cols in frames[b:b + 2]:
+            ns = T0 + int((ti + 30) * 1e6) + b
+            row = [(f"slot{k}.{c}", repr(float(cols[c][i]))) for c in cols]
+            row += [(f"slot{k}.{m}", v) for m, v in (("t_ms", str(ti)), ("seq", str(i)), ("received", str(i)),
+                                                       ("dropped", "0"), ("crc_errors", "0"),
+                                                       ("bytes_received", "64"), ("loss_pct", "0.0"))]
+            lines += [f"{ns},{k},{key},{v}" for key, v in row]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n")
 
 
 def test_fit_frame_rescales_a_resized_window_grab_to_the_start_size():

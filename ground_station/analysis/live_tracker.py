@@ -1045,7 +1045,17 @@ def shadow_pairs(stem: str, min_h_m: float = 0.15):
     keeps e = z - (p + c) with p = ano_of.earth_x - a_x, so z = e + earth + (c - a) ~ e + earth is the fix as sent
     (cm), paired with the raw EKF path earth - c (a, the applied offset, is not logged; it trails c by <= 0.5 cm per
     tick). In shadow c = a = 0. Device clock only: no host sync. run numbers the airborne stretches (Z FB > min_h_m).
-    On a live log the fit reads the residual rotation/scale left after --yaw-deg (0 deg, 1.0 if aligned)."""
+    On a live log the fit reads the residual rotation/scale left after --yaw-deg (0 deg, 1.0 if aligned).
+
+    `stem` is a stream_log stem (`<stem>.slot1.csv` / `.slot2.csv`) or a session: its dir, its telemetry.csv, or a
+    bare session id under logs/sessions (open item `fusion-fit-from-session`). A session's variables are found by
+    name in any lane and held onto the lane that carries the fixes, so the columns need not sit in the R4 slots.
+    """
+    from ground_station.analysis import video_truth as vt
+
+    csv_path = vt._session_csv(_session_path(stem))
+    if csv_path is not None:
+        return _session_shadow_pairs(csv_path, min_h_m)
     import pandas as pd
     s1 = pd.read_csv(f"{stem}.slot1.csv", usecols=["t_src_ms", "ano_of.earth_x", "ano_of.earth_y", "Ctrler.Z_posPID.FB"])
     s2 = pd.read_csv(f"{stem}.slot2.csv", usecols=["t_src_ms", "g_ext_pos.e_x", "g_ext_pos.e_y", "g_ext_pos.c_x",
@@ -1060,6 +1070,59 @@ def shadow_pairs(stem: str, min_h_m: float = 0.15):
     z = s2[["g_ext_pos.e_x", "g_ext_pos.e_y"]].to_numpy(float) + earth
     raw = earth - s2[["g_ext_pos.c_x", "g_ext_pos.c_y"]].to_numpy(float)
     return t2[k] / 1000.0, z[k] / 100.0, raw[k], run[k]
+
+
+def _session_path(stem: str) -> Path:
+    """The session dir / telemetry.csv a stem or a bare session id names, else the stem itself."""
+    p = Path(stem)
+    if p.is_dir() or p.suffix == ".csv":
+        return p
+    for root in (Path("logs/sessions"), Path("logs/campaigns")):
+        hit = root / stem
+        if (hit / "telemetry.csv").is_file():
+            return hit
+    return p
+
+
+def _session_shadow_pairs(csv_path: Path, min_h_m: float = 0.15):
+    """shadow_pairs from a session telemetry.csv: the same pairing, with every variable found by name.
+
+    The session's own vars have no `slot` prefix (video_truth._session_series strips it), and ano_of.earth_x/y may be
+    absent from a session that only captured the position-loop feedback; then earth is rebuilt from it as
+    read_slots does (locx FB = earth_y, locy FB = -earth_x, cm), which is what the firmware itself uses.
+    """
+    from ground_station.analysis import video_truth as vt
+
+    series = dict(vt._session_series(csv_path))
+    fix_names = ("g_ext_pos.e_x", "g_ext_pos.e_y", "g_ext_pos.c_x", "g_ext_pos.c_y")
+    missing = [n for n in (*fix_names, "g_ext_pos.n_ok", vt.Z_M) if n not in series]
+    if missing:
+        raise SystemExit(f"{csv_path}: no {', '.join(missing)}: fit needs a camera_fusion log plan "
+                         f"(campaign_capture.CAMERA_FUSION) at a rate that carries the fixes")
+    if "ano_of.earth_x" not in series:
+        if vt.X_CM not in series or vt.Y_CM not in series:
+            raise SystemExit(f"{csv_path}: neither ano_of.earth_x/y nor the position feedback "
+                             f"({vt.X_CM}/{vt.Y_CM}) was logged")
+        series["ano_of.earth_x"] = (series[vt.Y_CM][0], -series[vt.Y_CM][1])
+        series["ano_of.earth_y"] = series[vt.X_CM]
+    t2 = series[fix_names[0]][0]
+    h = _hold(series, vt.Z_M, t2)
+    air = h > min_h_m
+    lab = np.cumsum(np.r_[air[0], air[1:] & ~air[:-1]]) * air
+    run = lab.astype(float)
+    n = _hold(series, "g_ext_pos.n_ok", t2) + _hold(series, "g_ext_pos.n_rej", t2)
+    k = np.r_[False, np.diff(n) > 0] & (run > 0)
+    earth = np.column_stack([_hold(series, "ano_of.earth_x", t2), _hold(series, "ano_of.earth_y", t2)])
+    z = np.column_stack([_hold(series, fix_names[0], t2), _hold(series, fix_names[1], t2)]) + earth
+    raw = earth - np.column_stack([_hold(series, fix_names[2], t2), _hold(series, fix_names[3], t2)])
+    return t2[k], z[k] / 100.0, raw[k], run[k]
+
+
+def _hold(series: dict, key: str, t: np.ndarray) -> np.ndarray:
+    """Zero-order hold of one session variable on t (log_corpus.hold, imported here to keep the fit standalone)."""
+    from ground_station.analysis.log_corpus import hold
+
+    return hold(series, key, t)
 
 
 def offset_noise(t_s, z_cm, y_cm, dt_fix: float = 0.04):
@@ -1082,7 +1145,8 @@ def offset_noise(t_s, z_cm, y_cm, dt_fix: float = 0.04):
 def fit_main(argv) -> int:
     ap = argparse.ArgumentParser(prog="live_tracker fit", description="Shadow run (sent at --yaw-deg 0) -> "
                                  "--yaw-deg/--mirror per airborne stretch, from the firmware's own innovations")
-    ap.add_argument("stem", help="stream_log stem, e.g. logs/r5_shadow_3")
+    ap.add_argument("stem", help="stream_log stem (e.g. logs/r5_shadow_3), or a session: its dir, its telemetry.csv, "
+                                 "or a bare session id under logs/sessions")
     ap.add_argument("--fit-s", type=float, default=30.0, help="also fit the first s of each stretch (EKF drift grows)")
     ap.add_argument("--min-h-m", type=float, default=0.15)
     ap.add_argument("--window-s", type=float, default=0.0, help="also fit back-to-back windows of s (yaw drift)")
