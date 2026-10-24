@@ -81,7 +81,7 @@ def test_lab_capture_caps_plan_and_stops_slots_after_flight(monkeypatch):
     except Exception:
         pass                                     # recording start details are not under test
     on = [s for s in sent if s[1] > 0]
-    assert on and all(d == 4 for _, d in on)     # 100 Hz / 4 = 25 Hz, not 50
+    assert on and all(d == 8 for _, d in on)     # 200 Hz tick / 8 = 25 Hz, not 50
     sent.clear()
     end("tok")
     assert sent and all(d == 0 for _, d in sent)
@@ -119,7 +119,7 @@ def test_lab_status_prime_keeps_slot0_at_10hz():
     bridge = SimpleNamespace(lab_mode=True, subscribe_slot=lambda slot, divider, ranges: sent.append((slot, divider)))
     svc = SimpleNamespace(bridge=bridge, latest_values=lambda names: {})
     campaign_live.prime_status_stream(svc, wait_s=0, sleep=lambda s: None)
-    assert sent == [(0, 10)]                     # 2026-10-15: was divider 2 (50 Hz) over the lab sidebar frame
+    assert sent == [(0, 20)]                     # 10 Hz at the 200 Hz tick; 2026-10-15: was divider 2 (50 Hz) over the lab sidebar frame
 
 
 def test_api_streams_shows_real_lab_layout_in_lab_mode():

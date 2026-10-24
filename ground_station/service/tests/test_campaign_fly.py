@@ -54,7 +54,7 @@ def test_record_only_subscribes_records_and_stops(tmp_path, monkeypatch, capsys)
     subs = [b for r, b in calls if r == "/subscribe"]
     assert sorted(b["slot"] for b in subs) == list(range(MAX_SLOTS))
     used = [b for b in subs if b["divider"]]
-    assert used and all(b["divider"] == 1 for b in used)  # 100 Hz override = every 100 Hz send-task tick
+    assert used and all(b["divider"] == 2 for b in used)  # 100 Hz override = every 2nd 200 Hz send-task tick
     start = dict(calls)["/api/recording/start"]
     assert start["requested_by"] == "operator" and start["label"] == "carry" and "100 Hz" in start["notes"]
 
