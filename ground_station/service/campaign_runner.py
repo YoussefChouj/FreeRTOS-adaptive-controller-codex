@@ -138,6 +138,22 @@ def _send_retry(client, cmd, idx, value, tries=3):
             return False
     return False
 
+def _call_retry(client, send, tries=3):
+    """send() again while its reply is lost; only for an absolute-value command (set_hover_z, 10-24 refused at 1.0 s)."""
+    for _ in range(tries):
+        if send():
+            return True
+        if "no result in" not in str(getattr(client, "last_error", "") or ""):
+            return False
+    return False
+
+def _send_sysid(client, idx, value):
+    """A CMD 0x14 parameter is an absolute write, so a lost reply is sent again (10-24 soak: refused at idx 0).
+    START is sent once: sysid.c SysID_Start refuses a second start while a run is active."""
+    if idx == ex.IDX_START:
+        return client._send_cmd(ex.CMD_SYSID, idx, value)
+    return _send_retry(client, ex.CMD_SYSID, idx, value)
+
 def _var_write_retry(client, name, value, tries=3):
     """VAR_WRITE sets an absolute value, so a lost reply is sent again like _send_retry
     (mem1 2026-10-18: one lost reply to traj_p.yaw_follow refused the takeoff)."""
@@ -427,7 +443,7 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
                     continue  # Cmd_MracPrior is disarmed-only; campaign_fly.preapply_prior sent it before wait_for_arm
                 label = ground_plan.write_label(write)
                 cmds.append((label, lambda w=write: ground_plan.send_write(deps.client, w)))
-            cmds.append(("set_hover_z", lambda: deps.client.set_hover_z(scenario.hover_z_m)))
+            cmds.append(("set_hover_z", lambda: _call_retry(deps.client, lambda: deps.client.set_hover_z(scenario.hover_z_m))))
             preload_already_done = runner._preload_uploaded if runner is not None else False
             if preload is not None and not preload_already_done:
                 cmds.append((f"{steps[preload].kind} upload", preload_send))
@@ -500,7 +516,7 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
                 a = st.args
                 excite_sent = True
                 cmds = ex.start_commands(a["axis"], a["signal"], a["f0"], a["f1"], a["amp"], a["duration_s"])
-                if not all(deps.client._send_cmd(ex.CMD_SYSID, idx, val) for idx, val in cmds):
+                if not all(_send_sysid(deps.client, idx, val) for idx, val in cmds):
                     why = getattr(deps.client, "last_error", "") or "not applied"
                     decision = AbortDecision(level=1, reason=f"excite: sysid command refused: {why}")
                     ok = False
