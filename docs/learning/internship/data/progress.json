@@ -114,7 +114,16 @@
         "R3": 7,
         "R4": 5,
         "R5": 7,
-        "R6": 6
+        "R6": 6,
+        "G1": 4,
+        "G2": 6,
+        "G3": 7,
+        "G4": 3,
+        "G5": 7,
+        "G6": 5,
+        "G7": 6,
+        "G8": 3,
+        "G9": 7
       },
       "sims": [
         "tilt",
@@ -311,6 +320,55 @@
       "lesson": "L01",
       "topic": "giving the number",
       "gap": "Wrote formulas without computing (g*tan25 = 4.57 m/s^2, theta = 11.5 deg, phi = 90 deg). Always finish with number + unit.",
+      "status": "open"
+    },
+    {
+      "date": "2026-10-24",
+      "lesson": "L01",
+      "topic": "force vs acceleration units",
+      "gap": "Grill Q1/Q6: labelled 15.66 N as m/s^2 and 4.905 N as metres. Carry units: N / (N/m) = m, so sag = 4.905/6 = 0.82 m.",
+      "status": "open"
+    },
+    {
+      "date": "2026-10-24",
+      "lesson": "L01",
+      "topic": "sanity check before finishing",
+      "gap": "Grill Q1: fed T into the 3-D formula (27.71 N). Holding height means vertical part = weight = 14.72 N; correct T 15.66 N, horizontal 5.36 N, a 3.57 m/s^2.",
+      "status": "open"
+    },
+    {
+      "date": "2026-10-24",
+      "lesson": "L01",
+      "topic": "atan2 argument order",
+      "gap": "Grill Q4: phi = atan2(ay, ax) = atan2(0, -1) = 180 deg (all pitch, backward), not -90. T also wrong: 22.71 N, not 12.35.",
+      "status": "open"
+    },
+    {
+      "date": "2026-10-24",
+      "lesson": "L01",
+      "topic": "degrees to radians",
+      "gap": "Grill Q2: 40 deg = 0.698 rad (x pi/180), so g*theta = 6.85 m/s^2, not 2.81.",
+      "status": "open"
+    },
+    {
+      "date": "2026-10-24",
+      "lesson": "L01",
+      "topic": "why the integral holds at zero error",
+      "gap": "Grill Q6c: named the I term but not why: its output is the stored sum of past error, so it stays put when e = 0.",
+      "status": "open"
+    },
+    {
+      "date": "2026-10-24",
+      "lesson": "L01",
+      "topic": "velocity sensor",
+      "gap": "Grill Q7: velocity is not from a laser (laser rangefinder = height only). It is estimated: GNSS/RTK + IMU, optical flow or camera. Units m/s vs rad/s missing.",
+      "status": "open"
+    },
+    {
+      "date": "2026-10-24",
+      "lesson": "L01",
+      "topic": "cascade in characters",
+      "gap": "Grill Q8: wrote the chain in English and skipped the A是B的C sentences. Still open from L01 Q4.",
       "status": "open"
     }
   ]

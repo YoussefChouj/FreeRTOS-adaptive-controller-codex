@@ -25,3 +25,9 @@ Skill numbers: 1 formulation, 2 constraints, 3 anti-patterns, 4 coupling, 5 mode
 | 2026-10-24 | 1 | intern L01 retry: tilt θ vs roll/pitch | Thought θ = pitch and φ = roll. θ = how far it leans from vertical, φ = which way; roll and pitch split that lean onto two body axes (φ = 0° → all pitch, φ = 90° → all roll). | open, 2026-10-24 |
 | 2026-10-24 | - | intern L01 retry R6: 速度环 vs 角速度环 | Wrote 速度环 (velocity loop) for the rate loop. Rate loop = 角速度环. Order A是B的C now right: 角速度环是姿态环的内环。 | open, 2026-10-24 |
 | 2026-10-24 | 5 | intern L01 retry R2/R4: stop at the formula | Gave formulas, no numbers (g·tan25° = 4.57 m/s², θ = 11.5°, φ = 90°). Always finish with number + unit. | open, 2026-10-24 |
+| 2026-10-24 | 5 | intern L01 grill Q1/Q6: units | Wrote 15.66 N as m/s² and 4.905 N as metres. Carry units through: N ÷ (N/m) = m → sag 0.82 m. | open, 2026-10-24 |
+| 2026-10-24 | 5 | intern L01 grill Q1: sanity check | Pushed T into the 3-D formula (27.71 N). Holding height ⇒ vertical part = weight 14.72 N; T 15.66 N. | open, 2026-10-24 |
+| 2026-10-24 | 5 | intern L01 grill Q4: atan2 order + 3-D T | φ = atan2(ay, ax) = 180° not −90°; T = 22.71 N not 12.35. θ 5° right. | open, 2026-10-24 |
+| 2026-10-24 | 5 | intern L01 grill Q2: degrees→radians | 40° = 0.698 rad, g·θ = 6.85 m/s² (wrote 2.81). g·tanθ 8.23 right. | open, 2026-10-24 |
+| 2026-10-24 | 3 | intern L01 grill Q6c/Q7: why I holds, velocity sensor | No reason why I holds at e = 0 (stored sum). Velocity not from laser: GNSS/RTK+IMU, optical flow, camera. | open, 2026-10-24 |
+| 2026-10-24 | - | intern L01 grill Q8: cascade in characters | Wrote English, skipped A是B的C. Still open. | open, 2026-10-24 |
