@@ -66,6 +66,9 @@ _ALIASES = {s: a for s in SAMPLE_SYMS if (a := _REGISTRY.resolve(s)) and a != s}
 
 ACK_TIMEOUT_S = 1.0        # PROPOSED: step A 10-07 ack latency max 0.72 s at a 97 % full link; 0.5 s restarted every upload
 TRAJ_ACK_TIMEOUT_S = 3.0   # PROPOSED: 10-15 re-fly, traj BEGIN applied 1.55/1.70 s late on a loaded link -> refused
+GROUND_ACK_TIMEOUT_S = 3.0 # PROPOSED: 10-24 rate-sysid, g_land_xy_gate_cm applied 1.32/1.32/1.78 s late under the 200 Hz
+                           # capture -> takeoff refused at 1.0 s; only writes before takeoff wait this long
+_LATE_TXIDS_MAX = 4        # earlier tries of one write still watched for a late APPLIED
 HEARTBEAT_PERIOD_S = 0.2   # PROPOSED: 5 Hz, interfaces.md "GS sends at 5 Hz"; firmware hb_timeout_s 1.0
 HEARTBEAT_LOCKOUT_S = 2.0  # PROPOSED: 2x firmware hb_timeout_s; oldest unanswered heartbeat this old -> stop flooding
 HEARTBEAT_PROBE_S = 1.0    # PROPOSED: while locked out, one probe heartbeat per second so a recovered link resumes
@@ -106,11 +109,14 @@ class LiveWfbClient(WfbClient):
 
     def __init__(self, service: Any, ack_timeout_s: float = ACK_TIMEOUT_S,
                  traj_ack_timeout_s: float = TRAJ_ACK_TIMEOUT_S, heartbeat_period_s: float = HEARTBEAT_PERIOD_S,
+                 ground_ack_timeout_s: float = GROUND_ACK_TIMEOUT_S,
                  clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep) -> None:
         super().__init__(send=self._no_raw_send)
         self._service = service
         self._ack_timeout_s = ack_timeout_s
         self._traj_ack_timeout_s = traj_ack_timeout_s
+        self._ground_ack_timeout_s = ground_ack_timeout_s
+        self._late_txids: dict[tuple[int, int, float], list[int]] = {}   # timed-out tries of one idempotent write
         self._hb_period_s = heartbeat_period_s
         self._clock = clock
         self._sleep = sleep
@@ -178,18 +184,45 @@ class LiveWfbClient(WfbClient):
         self._pending_hb_txids.clear()
         self._pending_hb_sent.clear()
 
+    def _late_applied(self, key: tuple[int, int, float]) -> bool:
+        """True when an earlier timed-out try of this write has since come back APPLIED."""
+        for old in self._late_txids.get(key, []):
+            res = self._service.command_result(old, pop=True)
+            if res is not None and res.get("status") == "applied":
+                self._late_txids.pop(key, None)
+                self._consecutive_timeouts = 0
+                return True
+        return False
+
     def _send_cmd(self, cmd: int, idx: int, value: float) -> bool:
         # B8 fix: Do not heartbeat before every command (especially before PRIM starts).
         if cmd == CMD_PRIM and idx == PrimIdx.TAKEOFF:
             self._prim_active = True
+        # A write (not PRIM, not TRAJ) sets an absolute value, so a late APPLIED from an earlier try of the same
+        # write means it is applied (2026-10-24: three tries all applied 1.3-1.8 s late, host gave up on each).
+        key = (cmd, idx, float(value)) if cmd not in (CMD_PRIM, CMD_TRAJ) else None
+        if key is not None:
+            for k in [k for k in self._late_txids if k[:2] == key[:2] and k != key]:
+                del self._late_txids[k]   # a different value was sent since: those old tries no longer count
+            if self._late_applied(key):
+                return True
         txid = self._service.submit_command(cmd, idx, float(value))
-        timeout_s = self._traj_ack_timeout_s if cmd == CMD_TRAJ else self._ack_timeout_s   # uploads are on the ground
+        if cmd == CMD_TRAJ:
+            timeout_s = self._traj_ack_timeout_s                  # uploads are on the ground
+        elif key is not None and not self._prim_active:
+            timeout_s = self._ground_ack_timeout_s                # writes before takeoff
+        else:
+            timeout_s = self._ack_timeout_s
         deadline = self._clock() + timeout_s
         acked = False
         while True:
             res = self._service.command_result(txid, pop=True)
+            if res is None and key is not None and self._late_applied(key):
+                res = {"status": "applied"}
             if res is not None:
                 status = res.get("status")
+                if key is not None and status in ("applied", "rejected"):
+                    self._late_txids.pop(key, None)
                 if status == "applied":
                     self._consecutive_timeouts = 0
                     self._clear_pending_hb()
@@ -209,6 +242,8 @@ class LiveWfbClient(WfbClient):
                     self._clear_pending_hb()
                     return True
                 self._consecutive_timeouts += 1
+                if key is not None:
+                    self._late_txids[key] = (self._late_txids.get(key, []) + [txid])[-_LATE_TXIDS_MAX:]
                 self.last_error = f"cmd 0x{cmd:02X} idx {idx}: no result in {timeout_s} s"
                 return False
             # Only heartbeat while waiting if PRIM is active or sending a flight primitive (B8/B13)

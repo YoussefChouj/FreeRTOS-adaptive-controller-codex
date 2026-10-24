@@ -134,6 +134,42 @@ def test_upload_survives_late_results():
     res = upload([TrajPoint(0, 0, 0.5, 0, 0), TrajPoint(0.3, 0, 0.5, 0, 3)], client)
     assert res.ok and res.attempts == 1, res
 
+
+def test_ground_write_waits_for_a_late_reply():
+    """2026-10-24 rate-sysid: g_land_xy_gate_cm applied 1.32-1.78 s late under the 200 Hz capture; 1.0 s refused it."""
+    clock = FakeClock()
+    svc = LateService(clock, delay_s=1.8)
+    client = LiveWfbClient(svc, clock=clock, sleep=clock.sleep)   # production deadlines
+    assert client.var_write("kp_id", 2.0) is True
+    assert len(svc.calls) == 1 and 1.8 <= clock() < 3.0
+
+
+def test_retry_accepts_a_late_applied_from_the_earlier_try():
+    clock = FakeClock()
+    svc = LateService(clock, delay_s=1.8)
+    client = LiveWfbClient(svc, ground_ack_timeout_s=1.0, clock=clock, sleep=clock.sleep)
+    assert client.var_write("kp_id", 2.0) is False                # try 1 gives up at 1.0 s
+    assert client.var_write("kp_id", 2.0) is True                 # try 1's APPLIED lands at 1.8 s
+    assert clock() < 2.8                                          # did not wait for try 2's own reply
+    assert client._consecutive_timeouts == 0
+
+
+def test_late_applied_of_an_old_value_does_not_count():
+    clock = FakeClock()
+    svc = LateService(clock, delay_s=1.8)
+    client = LiveWfbClient(svc, ground_ack_timeout_s=1.0, clock=clock, sleep=clock.sleep)
+    assert client.var_write("kp_id", 2.0) is False
+    assert client.var_write("kp_id", 3.0) is False                # other value: the 2.0 reply is not its answer
+    assert client._late_txids == {(svc.calls[1][0], svc.calls[1][1], 3.0): [2]}
+
+
+def test_writes_after_takeoff_keep_the_short_deadline():
+    clock = FakeClock()
+    svc = LateService(clock, delay_s=1.6)
+    client = LiveWfbClient(svc, clock=clock, sleep=clock.sleep)
+    client.takeoff()
+    assert client.var_write("kp_id", 2.0) is False and "no result in 1.0 s" in client.last_error
+
 def test_live_status_and_staleness():
     svc = FakeService()
     with pytest.raises(RuntimeError, match="not streaming"):
