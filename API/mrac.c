@@ -96,19 +96,49 @@ const MRAC_XyRefRow_t mrac_xy_ref_rows[MRAC_XY_REF_N] = {
 };
 volatile uint8_t mrac_xy_ref_kind = 0U;
 
+/* Gate W (spec 2026-10-24 item 0): an explicit CMD 0x1D write of a reference field wins over the row default.
+ * The two bytes below say which fields of the x (byte 0) and of the y (byte 1) reference the operator has written
+ * in the current ground window, so the row selection (which runs on the ground latch) fills only the fields still
+ * at their default. A write that comes after the selection and a write that comes before it in the same ground
+ * window both survive. The record is per axis and per field: a write on x never stops the row from filling y.
+ * The ground window ends at the disarm edge (MRAC_XyRefWindowEnd), so a reference fitted for one flight does not
+ * leak into the next one.
+ *   MRAC_XY_REF_W_TYPE  ref_type        MRAC_XY_REF_W_BW   ref_model_bw
+ *   MRAC_XY_REF_W_ZETA  ref_model_zeta  MRAC_XY_REF_W_DELAY ref_delay_s */
+#define MRAC_XY_REF_W_TYPE  0x01U
+#define MRAC_XY_REF_W_BW    0x02U
+#define MRAC_XY_REF_W_ZETA  0x04U
+#define MRAC_XY_REF_W_DELAY 0x08U
+#define MRAC_XY_REF_W_X     0U    /* the index of the x axis in the record below */
+#define MRAC_XY_REF_W_Y     1U    /* the index of the y axis in the record below */
+static volatile uint8_t mrac_xy_ref_written[2] = {0U, 0U};
+
+/* The ground window is over (the drone landed): drop the record of the explicit writes and arm the row to apply
+ * again, so the next flight starts from the nominal row unless the operator writes a new reference in its own
+ * ground window. MRAC_XyRefSelect (the ground latch) then fills the row. */
+static void MRAC_XyRefWindowEnd(void)
+{
+    mrac_xy_ref_written[MRAC_XY_REF_W_X] = 0U;
+    mrac_xy_ref_written[MRAC_XY_REF_W_Y] = 0U;
+    mrac_xy_ref_kind = 0xFFU;    /* forces the apply: the next MRAC_XyRefSelect fills the row again */
+}
+
 void MRAC_XyRefSelect(uint8_t kind)
 {
     const MRAC_XyRefRow_t *row;
     if (kind >= MRAC_XY_REF_N || kind == mrac_xy_ref_kind) return;
     row = &mrac_xy_ref_rows[kind];
-    mrac_config_x.ref_type       = row->type;
-    mrac_config_x.ref_model_bw   = row->bw;
-    mrac_config_x.ref_model_zeta = row->zeta;
-    mrac_config_x.ref_delay_s    = (float)row->delay_ticks * MRAC_DT;
-    mrac_config_y.ref_type       = row->type;
-    mrac_config_y.ref_model_bw   = row->bw;
-    mrac_config_y.ref_model_zeta = row->zeta;
-    mrac_config_y.ref_delay_s    = (float)row->delay_ticks * MRAC_DT;
+    /* Per axis: a field written on one axis is not written on the other one. */
+    if ((mrac_xy_ref_written[MRAC_XY_REF_W_X] & MRAC_XY_REF_W_TYPE) == 0U) mrac_config_x.ref_type = row->type;
+    if ((mrac_xy_ref_written[MRAC_XY_REF_W_Y] & MRAC_XY_REF_W_TYPE) == 0U) mrac_config_y.ref_type = row->type;
+    if ((mrac_xy_ref_written[MRAC_XY_REF_W_X] & MRAC_XY_REF_W_BW) == 0U) mrac_config_x.ref_model_bw = row->bw;
+    if ((mrac_xy_ref_written[MRAC_XY_REF_W_Y] & MRAC_XY_REF_W_BW) == 0U) mrac_config_y.ref_model_bw = row->bw;
+    if ((mrac_xy_ref_written[MRAC_XY_REF_W_X] & MRAC_XY_REF_W_ZETA) == 0U) mrac_config_x.ref_model_zeta = row->zeta;
+    if ((mrac_xy_ref_written[MRAC_XY_REF_W_Y] & MRAC_XY_REF_W_ZETA) == 0U) mrac_config_y.ref_model_zeta = row->zeta;
+    if ((mrac_xy_ref_written[MRAC_XY_REF_W_X] & MRAC_XY_REF_W_DELAY) == 0U)
+        mrac_config_x.ref_delay_s = (float)row->delay_ticks * MRAC_DT;
+    if ((mrac_xy_ref_written[MRAC_XY_REF_W_Y] & MRAC_XY_REF_W_DELAY) == 0U)
+        mrac_config_y.ref_delay_s = (float)row->delay_ticks * MRAC_DT;
     mrac_xy_ref_kind = kind;
 }
 
@@ -130,6 +160,12 @@ void MRAC_XyRefSelect(uint8_t kind)
 MRAC_PosConfig_t mrac_pos_cfg = MRAC_POS_ROW(1.0f, 0.1f, 2.0f, 0.3f, 1.0f, 1.0f);
 volatile uint8_t mrac_xy_layers = MRAC_XY_LAYER_INNER;
 volatile uint8_t mrac_xy_layers_live = MRAC_XY_LAYER_INNER;
+volatile uint8_t mrac_att_layers = MRAC_LAYER_INNER;       /* CMD 0x1D field 33 target */
+volatile uint8_t mrac_att_layers_live = MRAC_LAYER_INNER;
+volatile uint8_t mrac_yaw_layers = MRAC_LAYER_INNER;       /* CMD 0x1D field 34 target */
+volatile uint8_t mrac_yaw_layers_live = MRAC_LAYER_INNER;
+volatile uint8_t mrac_z_layers = MRAC_LAYER_INNER;         /* CMD 0x1D field 35 target */
+volatile uint8_t mrac_z_layers_live = MRAC_LAYER_INNER;
 MRAC_PosLayer_t mrac_pos[2];
 
 static void MRAC_PosReset(MRAC_PosLayer_t *s)
@@ -148,6 +184,16 @@ void MRAC_XyLayersLatch(void)
     mrac_xy_layers_live = (uint8_t)((unsigned)mrac_xy_layers & (MRAC_XY_LAYER_INNER | MRAC_XY_LAYER_OUTER));
     MRAC_PosReset(&mrac_pos[0]);
     MRAC_PosReset(&mrac_pos[1]);
+}
+
+/* Ground only (next to MRAC_XyLayersLatch): the three new loop groups fly the selection that was on the pad.
+ * Only the INNER / OUTER bits survive; 0 = off. The outer layers of items 2-4 read the _live values. */
+void MRAC_GroupLayersLatch(void)
+{
+    const unsigned m = (unsigned)(MRAC_LAYER_INNER | MRAC_LAYER_OUTER);
+    mrac_att_layers_live = (uint8_t)((unsigned)mrac_att_layers & m);
+    mrac_yaw_layers_live = (uint8_t)((unsigned)mrac_yaw_layers & m);
+    mrac_z_layers_live = (uint8_t)((unsigned)mrac_z_layers & m);
 }
 
 /* One Pos_Compute tick of axis i. on = 0 (hold, xy_ctrl flying, not airborne) or outer not live: the model
@@ -257,6 +303,7 @@ void MRAC_GateStep(void)
         if (disarm_edge) {
             MRAC_ResetWeights();
             mrac_inj.freeze_shadow = 0; // reset freeze on disarm
+            MRAC_XyRefWindowEnd();  // Gate W: the ground window is over, the next flight starts from the row
         }
     }
     /* L3 prior written while disarmed (CMD 0x2F..0x34 sets the flag): re-seed here, in the control task, so the
@@ -1901,9 +1948,15 @@ void MRAC_Init(void)
     mrac_config_x.What_lower_limit[0] = -mrac_config_x.What_limit[0];   /* bias: wind / payload sign unknown */
     mrac_config_y = mrac_config_x;
     mrac_xy_ref_kind = 0xFFU;    /* forces the apply: reference model type / bw / zeta / delay from the PID row */
+    mrac_xy_ref_written[MRAC_XY_REF_W_X] = 0U;   /* no explicit write yet, so the row fills every reference field */
+    mrac_xy_ref_written[MRAC_XY_REF_W_Y] = 0U;
     MRAC_XyRefSelect(0U);
     mrac_xy_layers = MRAC_XY_LAYER_INNER;    /* D4: outer layer off at boot */
     MRAC_XyLayersLatch();
+    mrac_att_layers = MRAC_LAYER_INNER;      /* item 1: the new groups boot as today (inner only) */
+    mrac_yaw_layers = MRAC_LAYER_INNER;
+    mrac_z_layers = MRAC_LAYER_INNER;
+    MRAC_GroupLayersLatch();
 
     for (i = 0; i < (int)AXES; i++) {
         mrac_u_ff[i] = 0.0f;
@@ -2044,7 +2097,11 @@ static const struct { float lo; float hi; uint8_t snap; } mrac_var_field[MRAC_VF
     MRAC_VAR_FIELD( 0.0f,  1.0f,   0),   /* l2_thr_off      -, < l2_thr_on */
     MRAC_VAR_FIELD( 0.0f,  1.0f,   0),   /* l2_thr_on       -, > l2_thr_off */
     MRAC_VAR_FIELD( 0.05f, 30.0f,  0),   /* l2_t_trap       s */
-    MRAC_VAR_FIELD( 0.0f,  3.0f,   0)    /* xy_layers       bits, MRAC_XY_LAYER_* (any axis) */
+    MRAC_VAR_FIELD( 0.0f,  3.0f,   0),   /* xy_layers       bits, MRAC_XY_LAYER_* (any axis) */
+    MRAC_VAR_FIELD( 0.3f,  1.5f,   1),   /* ref_zeta        -, the 2nd-order reference damping (type 2 only) */
+    MRAC_VAR_FIELD( 0.0f,  3.0f,   0),   /* att_layers      bits, MRAC_LAYER_* (any axis; ground latch) */
+    MRAC_VAR_FIELD( 0.0f,  3.0f,   0),   /* yaw_layers      bits, MRAC_LAYER_* (any axis; ground latch) */
+    MRAC_VAR_FIELD( 0.0f,  3.0f,   0)    /* z_layers        bits, MRAC_LAYER_* (any axis; ground latch) */
 };
 
 #if MRAC_VARIANT == MRAC_VARIANT_MULTI
@@ -2189,7 +2246,28 @@ uint8_t MRAC_VariantParamSet(uint8_t axis, uint8_t field, float val)
             break;
         case MRAC_VF_L2_T_TRAP:  mrac_l2g_cfg[axis].t_trap_s = val; break;
         case MRAC_VF_XY_LAYERS:  mrac_xy_layers = (uint8_t)(val + 0.5f); break;   /* flies after the ground latch */
+        case MRAC_VF_REF_ZETA:   c->ref_model_zeta = val; break;
+        case MRAC_VF_ATT_LAYERS: mrac_att_layers = (uint8_t)(val + 0.5f); break;   /* fly after the ground latch */
+        case MRAC_VF_YAW_LAYERS: mrac_yaw_layers = (uint8_t)(val + 0.5f); break;
+        case MRAC_VF_Z_LAYERS:   mrac_z_layers = (uint8_t)(val + 0.5f); break;
         default: return 0U;
+    }
+    /* Gate W: remember an explicit write of a reference field on the x / y axes, so the row selection on the
+     * ground latch does not overwrite it. The record is per axis AND per field: a write on x never stops the row
+     * from filling y, and a write of the bandwidth never stops the row from filling the damping. */
+    if (axis == (uint8_t)MRAC_AXIS_X || axis == (uint8_t)MRAC_AXIS_Y) {
+        uint8_t bit = 0U;
+        switch (field) {
+            case MRAC_VF_REF_TYPE:     bit = MRAC_XY_REF_W_TYPE;  break;
+            case MRAC_VF_REF_MODEL_BW: bit = MRAC_XY_REF_W_BW;    break;
+            case MRAC_VF_REF_ZETA:     bit = MRAC_XY_REF_W_ZETA;  break;
+            case MRAC_VF_REF_DELAY_S:  bit = MRAC_XY_REF_W_DELAY; break;
+            default: break;
+        }
+        if (bit != 0U) {
+            uint8_t slot = (axis == (uint8_t)MRAC_AXIS_X) ? (uint8_t)MRAC_XY_REF_W_X : (uint8_t)MRAC_XY_REF_W_Y;
+            mrac_xy_ref_written[slot] = (uint8_t)(mrac_xy_ref_written[slot] | bit);
+        }
     }
     if (mrac_var_field[field].snap) {
         st[axis]->xm = st[axis]->x;

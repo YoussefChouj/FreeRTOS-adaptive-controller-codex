@@ -31,6 +31,7 @@ from ground_station.platform import wfb_program, wfb_var
 from ground_station.service.trajectory_pipeline import TrajLimits, TrajPoint, crc32, validate
 
 PARAM_CMDS = (0x01, 0x0F, 0x14, 0x2E)  # PID_GAIN, MRAC/telemetry flags, SysID control: the livetune step's writes
+CMD_MRAC_VARIANT = 0x1D  # MRAC_VARIANT: one variant field on one axis (the host mirror of the firmware table)
 
 
 class PrimState(IntEnum):
@@ -187,6 +188,8 @@ class FakeDrone:
 
         # (cmd, idx, value) of every accepted PARAM_CMDS frame, in order
         self.param_writes: list[tuple[int, int, float]] = []
+        # (axis, field, field name, value) of every accepted CMD 0x1D frame, in order
+        self.mrac_variant_writes: list[tuple[int, int, str, float]] = []
         self.origin_resets = 0   # CMD 0x10 idx 0 (the takeoff sends one on the pad)
 
         # Trajectory storage
@@ -258,6 +261,8 @@ class FakeDrone:
             return self._handle_prog(cmd)
         elif cmd.command_id == wfb_var.CMD_VAR_WRITE:
             return self._handle_var(cmd)
+        elif cmd.command_id == CMD_MRAC_VARIANT:
+            return self._handle_mrac_variant(cmd)
         elif cmd.command_id == CMD_RESET_ORIGIN and cmd.index == 0:
             self.origin_resets += 1
             return int(Outcome.APPLIED)
@@ -310,6 +315,32 @@ class FakeDrone:
                 return int(Outcome.APPLIED)
 
         return int(Outcome.REJECTED)
+
+    def _handle_mrac_variant(self, cmd: Command) -> int:
+        """CMD 0x1D MRAC_VARIANT: one variant field on one axis.
+
+        The firmware decodes the idx byte (MRAC_VariantIdxSet) and refuses a field, an axis or a value outside the
+        table (API/mrac.c mrac_var_field). The fake drone mirrors that: same decode, same bounds, same refusal.
+        The accepted writes are recorded, so a test can see what the campaign asked for.
+
+        The firmware ignores the command while it flies (TASK/send_data.c Cmd_MracVariant: FLYING and LANDING),
+        so the fake drone refuses it then too: the write is refused, not silently dropped.
+        """
+        from ground_station.analysis.mrac_variants import VARIANT_FIELDS, variant_bounds, variant_split
+
+        if self._prim_state != PrimState.IDLE:
+            return int(Outcome.REJECTED)
+        axis, field = variant_split(cmd.index)
+        bounds = variant_bounds(cmd.index)
+        if bounds is None or axis >= 6:
+            return int(Outcome.REJECTED)
+        lo, hi = bounds
+        value = float(cmd.value)
+        if not (lo <= value <= hi) or value != value:      # the NaN check: NaN fails every comparison
+            return int(Outcome.REJECTED)
+        self.param_writes.append((cmd.command_id, cmd.index, value))
+        self.mrac_variant_writes.append((axis, field, VARIANT_FIELDS[field][0], value))
+        return int(Outcome.APPLIED)
 
     def _handle_var(self, cmd: Command) -> int:
         """CMD 0x2D: the row id names the variable; traj_go 1 starts traj_id like Traj_Start, traj_stop 1 ends it."""

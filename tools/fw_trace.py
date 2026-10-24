@@ -74,9 +74,9 @@ def build(gcc: str, target: str, root: Path, exe: Path, cov: bool, base: bool) -
     res = run_ok([*link, "-lm", "-o", str(exe)], out)
     missing = sorted(set(re.findall(r"undefined reference to `_?(\w+)'", res.stderr)))
     if res.returncode != 0 and missing:
-        aux, funcs = out / "aux.txt", set()
+        aux, funcs = out / "auxinfo.txt", set()
         for unit in units:   # -aux-info: every function a unit declares, implicit ones too; never a variable
-            aux.unlink(missing_ok=True)
+            aux.write_text("")
             run_ok([gcc, *CFLAGS, "-fsyntax-only", "-aux-info", str(aux), *fw_equiv.flags(root), *unit], out)
             funcs |= set(re.findall(r"(\w+) \(", aux.read_text(errors="replace"))) if aux.exists() else set()
         dummy_c.write_text("".join(f"void {m}(void) {{ }}\n" if m in funcs else

@@ -135,24 +135,33 @@ def test_pr_filter_runs_when_learning_stops(build):
 
 def test_variant_set_rejects_out_of_range(build):
     exe = build(1)
-    bad = ["6:0:1", "0:19:1", "0:31:4", "4:32:1", "2:12:0.4", "0:0:3", "0:0:-2", "0:1:0.05", "0:5:51", "0:9:0", "0:4:nan", "0:6:-0.1",
+    bad = ["6:0:1", "0:19:1", "0:31:4", "2:12:0.4", "0:0:3", "0:0:-2", "0:1:0.05", "0:5:51", "0:9:0", "0:4:nan", "0:6:-0.1",
            "0:13:2.5", "0:14:0.5", "0:15:1.5", "0:16:11", "0:17:-1", "0:18:0.1", "5:6:11",
            # L2 gating: bounds, then thr_off < thr_on both ways (defaults 0.05 / 0.15)
-           "0:26:3", "0:27:0.01", "0:30:31", "0:28:0.15", "0:29:0.05"]
+           "0:26:3", "0:27:0.01", "0:30:31", "0:28:0.15", "0:29:0.05",
+           # ref_zeta (field 32) is bounded on every axis: 0.2 is below 0.3, 1.6 above 1.5
+           "4:32:0.2", "5:32:1.6"]
     good = ["0:0:-1", "3:0:2", "5:0:2", "0:1:0.035", "0:5:50", "0:11:0.25", "0:8:1",
             "0:13:2", "0:14:1", "0:15:1", "0:16:10", "0:17:5", "0:18:100", "4:0:1", "5:6:0.85",
-            "0:26:2", "0:27:0.5", "0:30:1", "0:28:0.1", "0:29:0.5", "0:31:3", "4:31:0"]
+            "0:26:2", "0:27:0.5", "0:30:1", "0:28:0.1", "0:29:0.5", "0:31:3", "4:31:0",
+            # field 32 on axes 0-3: the firmware API takes the axis and the field apart, so it accepts them.
+            # The wire byte is a different story: (field << 2) | axis does not fit a field of 32 there, so the
+            # host encoder refuses to build that byte (test_a_field_from_32_on_is_x_y_only).
+            "0:32:1.0", "1:32:1.0", "2:32:1.0", "3:32:1.0", "4:32:0.9", "5:32:1.0"]
     r = run(exe, *bad, *good)
     assert r["set"] == [0] * len(bad) + [1] * len(good)
 
 
 def test_cmd_0x1d_idx_reaches_all_six_axes(build):
     """The Python encoder and the firmware decode (MRAC_VariantIdxSet) agree on every idx byte: axes 0-3 keep
-    (field << 2) | axis, x/y use the 0x80 range, and everything else is refused."""
+    (field << 2) | axis, x/y use the 0x80 range, and everything else is refused.
+
+    A field from 32 on has no axes 0-3 encoding (the field number would need 5 bits plus 2 for the axis), so those
+    fields live in the x / y space only, where the field has 6 bits (0..63)."""
     exe = build(1)
     lo = {f: row[1] for f, row in enumerate(VARIANT_FIELDS)}    # in range on every build (basis hi is per build)
     lo[FIELD["l2_thr_on"]] = 1.0      # thr_on must stay above thr_off (written to its lower bound 0 just before)
-    pairs = [(a, f) for a in range(len(AXES)) for f in range(len(VARIANT_FIELDS))]
+    pairs = [(a, f) for a in range(len(AXES)) for f in range(len(VARIANT_FIELDS)) if not (a < 4 and f >= 32)]
     idxs = [variant_idx(a, f) for a, f in pairs]
     assert len(AXES) == 6 and len(set(idxs)) == len(idxs) and all(0 <= i <= 0xFF for i in idxs)
     assert [variant_split(i) for i in idxs] == pairs
@@ -167,6 +176,25 @@ def test_cmd_0x1d_idx_reaches_all_six_axes(build):
     assert r["set"] == [0, 1, 0, 0]
     with pytest.raises(ValueError):
         variant_idx(6, 0)
+
+
+def test_a_field_from_32_on_is_x_y_only(build):
+    """A field number of 32 or more has no axes 0-3 encoding: (field << 2) | axis runs into the 0x80 range the
+    firmware reads as the x / y space. The encoder refuses it there and uses the x / y encoding instead, so a
+    field is never silently sent to the wrong axis."""
+    zeta = FIELD["ref_zeta"]
+    assert zeta >= 32
+    for axis in range(4):
+        with pytest.raises(ValueError):
+            variant_idx(axis, zeta)
+    for axis in (4, 5):
+        idx = variant_idx(axis, zeta)
+        assert idx >= 0x80 and variant_split(idx) == (axis, zeta)
+    # and the firmware agrees: the same idx byte reaches the same axis and field
+    exe = build(1)
+    lo = {f: row[1] for f, row in enumerate(VARIANT_FIELDS)}
+    r = run(exe, f"idx:{variant_idx(4, zeta)}:{lo[zeta]}", f"idx:{variant_idx(5, zeta)}:{lo[zeta]}")
+    assert r["set"] == [1, 1]
 
 
 def test_python_field_table_matches_firmware():

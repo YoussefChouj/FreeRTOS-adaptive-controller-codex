@@ -29,9 +29,9 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-DIRS = ["USER", "stm32_lib", "TASK", "Global_file", "BSP", "API", "firmware", "FreeRTOS/include",
+DIRS = ["USER", "stm32_lib", "TASK", "Global_file", "BSP", "API", "firmware", "NN", "FreeRTOS/include",
         "FreeRTOS/portable/RVDS/ARM_CM4F"]                          # uvprojx IncludePath, same order
-ARCHIVE = ["USER", "TASK", "Global_file", "BSP", "API", "firmware"]  # the project's own headers and sources
+ARCHIVE = ["USER", "TASK", "Global_file", "BSP", "API", "firmware", "NN"]  # the project's own headers and sources
 DEFS = ["-DSTM32F40_41xxx", "-DUSE_STDPERIPH_DRIVER"]
 CFLAGS = ["-std=gnu99", "-O2", "-fno-strict-aliasing", "-ffunction-sections", "-fdata-sections",
           "-fno-asynchronous-unwind-tables", "-w"]

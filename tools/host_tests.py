@@ -51,6 +51,7 @@ HOST_TESTS = [
     ("mrac_z_feat", ["API/tests/test_mrac_z_feat.c", "{src}/mrac.c", "{src}/mrac_math.c"], ["-std=c99", *W, "-msse2", "-mfpmath=sse", "-DMRAC_VARIANT=2", "-I{src}", "-IAPI/tests/stubs"]),
     ("mrac_l2_gate", ["API/tests/test_mrac_l2_gate.c", "{src}/mrac.c", "{src}/mrac_math.c"], ["-std=c99", *W, "-msse2", "-mfpmath=sse", "-DMRAC_VARIANT=2", "-I{src}", "-IAPI/tests/stubs"]),
     ("mrac_pos_layer", ["API/tests/test_mrac_pos_layer.c", "{src}/mrac.c", "{src}/mrac_math.c"], ["-std=c99", *W, "-msse2", "-mfpmath=sse", "-DMRAC_VARIANT=2", "-I{src}", "-IAPI/tests/stubs"]),
+    ("mrac_group_layers", ["API/tests/test_mrac_group_layers.c", "{src}/mrac.c", "{src}/mrac_math.c"], ["-std=c99", *W, "-msse2", "-mfpmath=sse", "-DMRAC_VARIANT=2", "-I{src}", "-IAPI/tests/stubs"]),
     ("mrac_xtlm", ["API/tests/test_mrac_xtlm.c", "{src}/mrac.c", "{src}/mrac_math.c"], ["-std=c99", *W, "-msse2", "-mfpmath=sse", "-DMRAC_VARIANT=2", "-I{src}", "-IAPI/tests/stubs"]),
     ("mrac_sizeof",      ["API/tests/mrac_sizeof.c"],                                            ["-std=c99", *STUBS]),
     ("fw_controller",    ["tests/firmware_host/test_controller.c", "API/controller.c"],          ["-std=c99", "-Wall", "-Werror", *FWH]),

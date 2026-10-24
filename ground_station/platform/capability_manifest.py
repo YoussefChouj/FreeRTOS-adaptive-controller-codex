@@ -39,7 +39,7 @@ def get_elf_identity() -> dict[str, Any]:
     """Inspect OBJ/JX_FLY.axf to record its build identity."""
     if not ELF_PATH.exists():
         return {
-            "elf_path": str(ELF_PATH.relative_to(ROOT)),
+            "elf_path": ELF_PATH.relative_to(ROOT).as_posix(),
             "exists": False,
             "elf_sha256": None,
             "size_bytes": 0,
