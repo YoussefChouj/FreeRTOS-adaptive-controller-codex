@@ -132,10 +132,26 @@ def find_start(series: Series, axis: str, excite: Mapping[str, Any]) -> tuple[fl
     if des not in series or fb not in series:
         raise IdError(f"log has neither the 0x03 ID frame (id.{axis}.*) nor {des} / {fb}")
     tb = timebase(series)
-    tr, tx = tb(series[des][0]), tb(series[fb][0])
+
+    def clean_series(t: np.ndarray, v: np.ndarray, name: str) -> tuple[np.ndarray, np.ndarray]:
+        if len(t) == 0:
+            raise IdError(f"series {name} has no samples")
+        order = np.argsort(t, kind="stable")
+        t_s, v_s = t[order], v[order]
+        keep = np.r_[True, np.diff(t_s) > 0]
+        t_c, v_c = t_s[keep], v_s[keep]
+        if len(t_c) < 2:
+            raise IdError(f"series {name} has fewer than 2 unique time samples")
+        return t_c, v_c
+
+    tr, vr = clean_series(tb(series[des][0]), series[des][1], des)
+    tx, vx = clean_series(tb(series[fb][0]), series[fb][1], fb)
+
     fs = float(round(1.0 / np.median(np.diff(tr))))
+    if fs <= 0 or not np.isfinite(fs):
+        raise IdError(f"invalid sample rate {fs} Hz for {des}")
     grid = np.arange(tr[0], tr[-1], 1.0 / fs)
-    r, x = np.interp(grid, tr, series[des][1]), np.interp(grid, tx, series[fb][1])
+    r, x = np.interp(grid, tr, vr), np.interp(grid, tx, vx)
     tmpl = ex.dither(np.arange(0.0, ex.active_s(excite["duration_s"]), 1.0 / fs), excite["signal"], excite["f0"],
                      excite["f1"], excite["amp"], excite["duration_s"])
     n_ma = max(1, int(2.0 * fs))
