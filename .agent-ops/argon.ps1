@@ -8,10 +8,14 @@
 # after ~640 s, and the work was lost (2026-10-17: 3 runs). Now the wrapper waits for the proxy first (net-wait.ps1),
 # and after a network ERROR it waits again and resumes the SAME conversation (--conversation), up to NetRetries times.
 # TimeoutMin counts agy run time only, not network waits; the cap counts the tokens of every attempt.
-# Exit: 0 answered, 1 agy ERROR, 2 killed (over time), 3 no JSON, 7 no network.
+# TimeoutMin must exceed agy's own subagent wait: an idle root agent prints "waiting up to 30m0s for 1 background
+# task(s)" (argon-n25-sim.err, 2026-10-25), and the old 20 min killed those runs mid-wait. 60 is a chosen value (PROPOSED).
+# Google answers "User location is not supported" when the VPN exit is in a region it rejects (3 runs, 2026-10-25
+# 01:23-01:43); that is not a network drop, so no retry: exit 8, fix the Clash AI-exit node.
+# Exit: 0 answered, 1 agy ERROR, 2 killed (over time), 3 no JSON, 7 no network, 8 VPN exit region rejected.
 # Example: powershell -File .agent-ops/argon.ps1 -Id res-lqr -Brief .agent-ops/briefs/res-lqr.md
 param([Parameter(Mandatory=$true)][string]$Id, [Parameter(Mandatory=$true)][string]$Brief,
-      [int]$CapK = 160, [int]$TimeoutMin = 20, [int]$NetRetries = 3, [double]$NetMaxMin = 30)
+      [int]$CapK = 160, [int]$TimeoutMin = 60, [int]$NetRetries = 3, [double]$NetMaxMin = 30)
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot "net-wait.ps1")
 $out = Join-Path $root ".agent-ops\out\argon-$Id"
@@ -37,6 +41,8 @@ for ($n = 0; ; $n++) {
   try { $j = Get-Content "$f.json" -Raw -Encoding utf8 | ConvertFrom-Json } catch { }
   $errText = if ($j) { "$($j.error)" } else { (Get-Content "$f.err" -Raw -ErrorAction SilentlyContinue) + "" }
   $isNet = ((-not $j) -or $j.status -eq "ERROR") -and $errText -match $netErr
+  if ($errText -match "location is not supported") {
+    "$Id GEO-BLOCK: Google rejected the VPN exit region, pin Clash AI-exit to a tested node, see $f.err"; exit 8 }
   if (-not $j -and -not $isNet) { "$Id no JSON, see $f.err"; exit 3 }
   if ($j) {
     $u = $j.usage
