@@ -382,9 +382,32 @@ def video_file(video_dir, name: str = "cam.mkv") -> str:
     DRIVE_ROOT/<day>/<folder>/<name> (Drive downloads it on first read). The local path if neither exists."""
     p = Path(video_dir) / name
     if p.exists():
-        return str(p)
+        part = restart_part(video_dir) if name == "cam.mkv" else None
+        return str(part[0] if part else p)
     hits = sorted(DRIVE_ROOT.glob(f"*/{p.parent.name}/{name}")) if DRIVE_ROOT.is_dir() else []
     return str(hits[-1] if hits else p)
+
+
+def restart_part(video_dir):
+    """(cam_k.mkv, scrcpy_start_host_time_k.txt) when scrcpy crashed and cam_loop.sh restarted it with cam.mkv left
+    empty (10-24 memory-mrac-on-7: segfault, 0-byte cam.mkv, the flight in cam_2.mkv): the largest restarted part that
+    has its own start file. None when cam.mkv is missing or has bytes, or no part qualifies."""
+    vd = Path(video_dir)
+    p = vd / "cam.mkv"
+    if not p.exists() or p.stat().st_size:
+        return None
+    parts = [(q.stat().st_size, q) for q in vd.glob("cam_*.mkv") if q.stem[4:].isdigit() and q.stat().st_size
+             and (vd / f"scrcpy_start_host_time_{q.stem[4:]}.txt").exists()]
+    if not parts:
+        return None
+    q = max(parts)[1]
+    return q, vd / f"scrcpy_start_host_time_{q.stem[4:]}.txt"
+
+
+def start_file(video_dir) -> Path:
+    """The scrcpy start stamp of the video video_file() returns: the restarted part's own stamp when there is one."""
+    part = restart_part(video_dir)
+    return part[1] if part else Path(video_dir) / "scrcpy_start_host_time.txt"
 
 
 def floor_pose(K, dist, world_xy, pixel) -> tuple[np.ndarray, np.ndarray, float]:
@@ -1422,7 +1445,7 @@ def plumb_check(stem: str, video_dir: str, cam, coral_step: int = 2, sync_s: flo
     ts, th = s1["t_src_ms"].to_numpy(float), meta["started"] + s1["t_host_s"].to_numpy(float)
     t_z = np.polyval(np.polyfit(ts - ts[0], th, 1), ts - ts[0])
     z = np.nan_to_num(s1["Ctrler.Z_posPID.FB"].to_numpy(float))
-    v0 = float((vd / "scrcpy_start_host_time.txt").read_text().split()[0])
+    v0 = float(start_file(vd).read_text().split()[0])
     tv_h = v0 + t_v
     sm = lambda x, n: np.convolve(x, np.ones(n) / n, "same")
     sv = sm(np.r_[0, np.linalg.norm(np.diff(uv, axis=0), axis=1) / np.diff(t_v)], 5)
@@ -1460,7 +1483,7 @@ def host_clock_offset(stem: str, video_dir: str) -> float:
     """Telemetry s minus video s from the host clocks (nan without meta.json / scrcpy_start_host_time.txt): device ms
     line-fitted onto the logger's host stamps (WiFi batches repeat them, as plumb_check), video t0 = scrcpy start."""
     import pandas as pd
-    mp, vp = Path(f"{stem}.meta.json"), Path(video_dir) / "scrcpy_start_host_time.txt"
+    mp, vp = Path(f"{stem}.meta.json"), start_file(video_dir)
     if not (mp.exists() and vp.exists() and Path(f"{stem}.slot1.csv").exists()):
         return float("nan")
     s1 = pd.read_csv(f"{stem}.slot1.csv", usecols=["t_src_ms", "t_host_s"])

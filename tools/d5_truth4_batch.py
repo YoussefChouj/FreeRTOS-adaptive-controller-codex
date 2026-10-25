@@ -7,6 +7,8 @@ e-exp-pid-u0, their sessions e-exp-pid-3l-u0). Session stamps are in the frame o
 scrcpy_start_host_time.txt, not localtime(epoch) (5 h apart on this laptop). The floor is the last floor-<DAY>* scan whose
 cam.mkv ended before the camera epoch; a scan that never saw the origin marker 0 (10-21: -6, -11) is replaced by the
 latest earlier scan that did, only when their shared markers moved under MAX_SHIFT_PX (the camera did not move).
+A day whose only scan came after its flights (10-24) uses that scan only when the static markers in the first HEAD_S s
+of each flight's own video sit within MAX_SHIFT_PX of where the scan saw them (cached as <flight>/aruco_head.npz).
 Run from the repo root: PYTHONPATH=. python tools/d5_truth4_batch.py [--day 2026-10-21] [--run]   (no --run = print the map)
 """
 import argparse
@@ -21,27 +23,55 @@ from pathlib import Path
 
 import numpy as np
 
-from ground_station.analysis.video_truth import static_corners
+from ground_station.analysis.video_truth import aruco_scan, start_file, static_corners, video_file
 
 MAX_SHIFT_PX = 3.0
+HEAD_S = 20.0            # flight video head scanned for static markers: the drone is still parked
+HEAD_MAX_MAD_PX = 1.0    # a marker counts as static in that head when its corners jitter under this (PROPOSED)
 
 
-def corners(d):
-    z = np.load(f"{d}/aruco.npz")
+def corners(d, npz="aruco.npz", max_mad=np.inf):
+    z = np.load(f"{d}/{npz}")
     out = {}
     for k in z.files:
         if k[:1] == "c" and k[1:].isdigit():
-            c, _ = static_corners(z[k])
-            if c is not None:
+            c, mad = static_corners(z[k])
+            if c is not None and mad <= max_mad:
                 out[k] = c
     return out
 
 
-def pick_floor(floors, t0):
-    """(floor dir, note): the last scan before t0, or the latest earlier one with marker 0 if the camera held still."""
+def head_corners(vd):
+    """Markers that held still in the first HEAD_S s of a flight video (drone parked), cached as aruco_head.npz."""
+    if not os.path.exists(f"{vd}/aruco_head.npz"):
+        aruco_scan(video_file(vd), step=5, t1=HEAD_S, out=f"{vd}/aruco_head.npz")
+    return corners(vd, "aruco_head.npz", HEAD_MAX_MAD_PX)
+
+
+def after_floor(floors, t0, vd):
+    """(floor dir, note) when every scan came after the flight (10-24): the earliest later scan with marker 0, only
+    if the static markers of this flight's own video sit where that scan saw them (the camera did not move)."""
+    for d in [d for t, d in floors if t > t0]:
+        c = corners(d)
+        if "c0" not in c:
+            continue
+        v = head_corners(vd)
+        shared = sorted(set(c) & set(v))
+        if len(shared) < 2:
+            return None, f"no scan before the camera; only {len(shared)} static marker shared with {Path(d).name}"
+        shift = float(np.median([np.linalg.norm(c[k] - v[k], axis=-1) for k in shared]))
+        if shift > MAX_SHIFT_PX:
+            return None, f"no scan before the camera; camera moved {shift:.1f} px before {Path(d).name}"
+        return d, f"later scan {Path(d).name}: {len(shared)} static markers of this video moved {shift:.1f} px"
+    return None, "no scan before the camera and no later scan has marker 0"
+
+
+def pick_floor(floors, t0, vd=None):
+    """(floor dir, note): the last scan before t0, or the latest earlier one with marker 0 if the camera held still;
+    with no scan before t0, a later one if the flight video proves the camera held still (after_floor)."""
     before = [d for t, d in floors if t <= t0]
     if not before:
-        return None, "no scan before the camera"
+        return after_floor(floors, t0, vd) if vd else (None, "no scan before the camera")
     last = corners(before[-1])
     if "c0" in last:
         return before[-1], ""
@@ -76,14 +106,14 @@ def plan(day):
             continue
         if Path(vd, "truth4.json").exists():
             continue
-        ep, iso = st.read_text().split()[:2]
+        ep, iso = start_file(vd).read_text().split()[:2]   # a restarted part (cam_k.mkv) has its own start stamp
         t0, d0 = float(ep), datetime.fromisoformat(iso)
         if d0.strftime("%Y-%m-%d") != day:
             continue
         toks = set(name.split("-lab-", 1)[1].split("-"))
         stem = next((s for t, s in sess if d0 - timedelta(seconds=60) <= t <= d0 + timedelta(minutes=15)
                      and toks <= set(Path(s).name.split("_")[0].split("-"))), None)
-        floor, note = pick_floor(floors, t0)
+        floor, note = pick_floor(floors, t0, vd)
         out.append((name, stem, floor, d0, note))
     return out
 
