@@ -1,0 +1,144 @@
+{
+  "id": "chat_internship_l01",
+  "title": "L01 · How a quadrotor flies (四旋翼怎么飞)",
+  "topic": "How a quadrotor flies (四旋翼怎么飞)",
+  "goal": "Master L01 for Chinese UAV algorithm interview",
+  "track": "internship",
+  "status": "open",
+  "kind": "teach",
+  "version": 1,
+  "createdAt": "2026-10-24T09:00:00.000Z",
+  "updatedAt": "2026-10-24T10:00:00.000Z",
+  "links": [
+    "chat_internship_l01r",
+    "chat_internship_l02"
+  ],
+  "cards": [
+    {
+      "id": "card_l01_1",
+      "kind": "check",
+      "step": "s2_tilt",
+      "confidence": 75,
+      "think1": "Vertical component holds weight mg = T cos(theta); horizontal component accelerates mass m a = T sin(theta).",
+      "q1": "a = g tan(theta) in m/s^2",
+      "score": 8,
+      "feedback": "Good derivation of lateral acceleration from tilt angle.",
+      "timestamp": "2026-10-24T10:00:00.000Z"
+    }
+  ],
+  "openQuestions": [
+    "Chinese: 速度环 vs 角速度环: Rate loop is 角速度环 (angular rate), 速度环 is the velocity loop. Order A是B的C now correct.",
+    "giving the number: Wrote formulas without computing (g*tan25 = 4.57 m/s^2, theta = 11.5 deg, phi = 90 deg). Always finish with number + unit.",
+    "force vs acceleration units: Grill Q1/Q6: labelled 15.66 N as m/s^2 and 4.905 N as metres. Carry units: N / (N/m) = m, so sag = 4.905/6 = 0.82 m.",
+    "sanity check before finishing: Grill Q1: fed T into the 3-D formula (27.71 N). Holding height means vertical part = weight = 14.72 N; correct T 15.66 N, horizontal 5.36 N, a 3.57 m/s^2."
+  ],
+  "messages": [
+    {
+      "id": "msg_l01_1",
+      "role": "user",
+      "timestamp": 1792836000000,
+      "content": "Imported internship lesson L01: How a quadrotor flies (四旋翼怎么飞)"
+    },
+    {
+      "id": "msg_l01_2",
+      "role": "assistant",
+      "timestamp": 1792836000500,
+      "content": [
+        {
+          "type": "text",
+          "text": "Lesson L01 (四旋翼怎么飞): focus on thrust vector decomposition, cascade PID inner/outer loops, and integral steady-state error removal."
+        }
+      ]
+    }
+  ],
+  "settings": {
+    "model": {
+      "provider": "claude-code",
+      "id": "claude-desktop"
+    },
+    "thinkingLevel": "low"
+  },
+  "turns": [],
+  "tree": {
+    "nodes": [
+      {
+        "id": "s1_physics",
+        "title": "Rotor thrust and hover balance (T = mg)",
+        "deps": [],
+        "status": "done"
+      },
+      {
+        "id": "s2_tilt",
+        "title": "Tilted thrust components (T cos theta, T sin theta, a = g tan theta)",
+        "deps": [
+          "s1_physics"
+        ],
+        "status": "done"
+      },
+      {
+        "id": "s3_cascade",
+        "title": "Cascade control loops (位置环 -> 速度环 -> 姿态环 -> 角速度环)",
+        "deps": [
+          "s2_tilt"
+        ],
+        "status": "done"
+      },
+      {
+        "id": "s4_integral",
+        "title": "Payload disturbance and integral term (积分项消除稳态误差)",
+        "deps": [
+          "s3_cascade"
+        ],
+        "status": "current"
+      }
+    ],
+    "steps": [
+      {
+        "id": "s1_physics",
+        "title": "Rotor thrust and hover balance (T = mg)",
+        "deps": [],
+        "status": "done"
+      },
+      {
+        "id": "s2_tilt",
+        "title": "Tilted thrust components (T cos theta, T sin theta, a = g tan theta)",
+        "deps": [
+          "s1_physics"
+        ],
+        "status": "done"
+      },
+      {
+        "id": "s3_cascade",
+        "title": "Cascade control loops (位置环 -> 速度环 -> 姿态环 -> 角速度环)",
+        "deps": [
+          "s2_tilt"
+        ],
+        "status": "done"
+      },
+      {
+        "id": "s4_integral",
+        "title": "Payload disturbance and integral term (积分项消除稳态误差)",
+        "deps": [
+          "s3_cascade"
+        ],
+        "status": "current"
+      }
+    ],
+    "edges": [
+      {
+        "from": "s1_physics",
+        "to": "s2_tilt"
+      },
+      {
+        "from": "s2_tilt",
+        "to": "s3_cascade"
+      },
+      {
+        "from": "s3_cascade",
+        "to": "s4_integral"
+      }
+    ],
+    "currentStep": "s4_integral",
+    "version": 1
+  }
+}

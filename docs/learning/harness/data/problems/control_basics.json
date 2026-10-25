@@ -1,0 +1,81 @@
+[
+  {
+    "id": "prob_uav_tilt_01",
+    "title": "Underactuated Thrust Decomposition & Horizontal Acceleration (欠驱动推力分解)",
+    "statement": "A quadrotor (四旋翼 `sì xuán yì`) with mass $m = 1.5\\text{ kg}$ maintains constant altitude while pitching forward by $\\theta = 25^\\circ$ ($g = 9.81\\text{ m/s}^2$). (1) Why must an underactuated (欠驱动 `qiàn qū dòng`) quadrotor tilt to accelerate horizontally? (2) Compute the required total thrust $T$ (in $\\text{N}$) and horizontal acceleration $a_h$ (in $\\text{m/s}^2$), and compare $g\\tan\\theta$ against the small-angle approximation $g\\theta$.",
+    "nodes": [
+      "n_underactuated_6dof",
+      "n_thrust_decomp",
+      "n_tilt_tan_theta"
+    ],
+    "ideas_combined": 2,
+    "cue_familiarity": 0,
+    "difficulty": 2,
+    "hints": [
+      "Count the independent rotor thrust inputs vs. the 6 rigid-body degrees of freedom.",
+      "Because all 4 propellers point along body +z, vertical equilibrium requires T * cos(theta) = m * g while horizontal push is T * sin(theta).",
+      "Divide horizontal force by vertical force to obtain a_h = g * tan(25 deg), and convert 25 deg = 0.4363 rad for the small-angle comparison."
+    ],
+    "solution": "(1) A quadrotor has 4 control inputs but 6 degrees of freedom (欠驱动 `qiàn qū dòng`), with all rotor thrust aligned with the body $z$-axis; thus it must tilt its body $z$-axis to project a horizontal force component $T\\sin\\theta$. (2) Holding altitude gives $T\\cos 25^\\circ = mg = 1.5 \\times 9.81 = 14.715\\text{ N} \\Rightarrow T = 16.24\\text{ N}$. Horizontal acceleration is $a_h = g\\tan 25^\\circ = 9.81 \\times 0.4663 = 4.57\\text{ m/s}^2$ (whereas small-angle $g\\theta = 9.81 \\times 0.4363 = 4.28\\text{ m/s}^2$, a $6.3\\%$ underestimate).",
+    "track": "internship"
+  },
+  {
+    "id": "prob_uav_payload_sag_02",
+    "title": "Unknown Payload Altitude Sag & Integral Action (未知载荷稳态下沉与积分作用)",
+    "statement": "A $2.0\\text{ kg}$ quadrotor picks up an unmodeled $\\Delta m = 0.5\\text{ kg}$ payload while hovering under a P-only vertical position/velocity controller with effective vertical stiffness $K_p = 6.0\\text{ N/m}$ ($g = 9.81\\text{ m/s}^2$). (1) Compute the extra weight force $\\Delta F$ and the resulting steady-state altitude sag $e_{\\text{ss}}$ (with units). (2) Why does doubling $K_p$ never reduce $e_{\\text{ss}}$ to zero, and which PID term (积分项 `jī fēn xiàng`) eliminates the sag completely?",
+    "nodes": [
+      "n_p_steady_state_error",
+      "n_integral_payload_rejection"
+    ],
+    "ideas_combined": 2,
+    "cue_familiarity": 1,
+    "difficulty": 3,
+    "hints": [
+      "Compute the extra downward gravity force dF = dm * g in Newtons first.",
+      "At steady hover under a P-only loop, the controller only produces extra thrust K_p * e_ss when a nonzero altitude error e_ss exists.",
+      "Check the units: N divided by (N/m) yields meters. Then consider what happens to an accumulated integral sum when error reaches zero."
+    ],
+    "solution": "(1) Extra weight: $\\Delta F = \\Delta m \\cdot g = 0.5\\text{ kg} \\times 9.81\\text{ m/s}^2 = 4.905\\text{ N}$. Steady-state balance requires $K_p e_{\\text{ss}} = \\Delta F \\Rightarrow e_{\\text{ss}} = 4.905\\text{ N} / (6.0\\text{ N/m}) = 0.8175\\text{ m} \\approx 0.82\\text{ m}$. (2) A P-only term outputs $u_P = K_p e$, which vanishes if $e = 0$; doubling $K_p$ halves the sag to $0.41\\text{ m}$ but cannot hold $4.905\\text{ N}$ at $e = 0$. Adding integral action $K_i \\int e\\,dt$ (积分项 `jī fēn xiàng`) stores the accumulated error history so it continues outputting $+4.905\\text{ N}$ after $e \\to 0\\text{ m}$.",
+    "track": "internship"
+  },
+  {
+    "id": "prob_uav_cascade_bandwidth_03",
+    "title": "Cascaded PID Loop Hierarchy & Tuning Order (串级PID内外环关系与整定顺序)",
+    "statement": "In the quadrotor cascaded flight controller (`StabilizerTask.c`), four nested loops run from outer to inner: position (位置环 `wèi zhì huán`), velocity (速度环 `sù dù huán`), attitude (姿态环 `zī tài huán`), and angular rate (角速度环 `jiǎo sù dù huán`). (1) Write the exact Chinese hierarchy sentences connecting rate, attitude, and velocity loops using the `A是B的C` pattern. (2) If the inner attitude loop has a $0.27\\text{ s}$ phase lag while the outer velocity loop aggressively commands tilt on a figure-8 path, what flight signature appears and which loop must be tuned first?",
+    "nodes": [
+      "n_cascade_hierarchy",
+      "n_inner_loop_lag_overshoot",
+      "n_chinese_loop_grammar"
+    ],
+    "ideas_combined": 3,
+    "cue_familiarity": 1,
+    "difficulty": 4,
+    "hints": [
+      "In Chinese `A是B的内环` means A is the inner loop of B (do not reverse into 内环的B).",
+      "Rate (角速度环) sits inside attitude (姿态环), which sits inside velocity (速度环).",
+      "When the inner loop lags the outer command by 0.27 s near the figure-8 lobe frequency, the delay erodes phase margin and amplifies the trajectory (overshoot)."
+    ],
+    "solution": "(1) Chinese hierarchy: **角速度环是姿态环的内环，姿态环是速度环的内环。先调内环，后调外环。** (2) Because the outer velocity loop relies on the inner attitude/rate loops to realize commanded tilt angles almost instantaneously ($\\tau_{\\text{inner}} \\ll \\tau_{\\text{outer}}$), a $0.27\\text{ s}$ inner attitude lag causes late push and phase-lag amplification (flying the figure-8 lobes $17\\text{–}28\\%$ too wide with overshoot). You must always tune from the innermost loop outward (先调角速度环，再调姿态环，最后调速度环和位置环).",
+    "track": "internship"
+  },
+  {
+    "id": "prob_uav_ff_vs_mrac_04",
+    "title": "2-DOF Feed-Forward vs. MRAC Reference Model Bandwidth (前馈控制与模型参考自适应带宽)",
+    "statement": "A quadrotor tracks a figure-8 trajectory where $x(t)$ oscillates at $2\\omega$ and $y(t)$ at $\\omega$. (1) Why does scaling a velocity feed-forward (前馈 `qián kuì`) gain by $1.2\\times$ worsen RMS tracking error when the real issue is inner-loop phase lag, and what does a model-inverse feed-forward $u_{\\text{ff}} = r + (2\\zeta/\\omega_n)\\dot{r} + \\ddot{r}/\\omega_n^2$ do instead? (2) In `lqr-track`, if the baseline LQR closes the loop at $\\omega_{\\text{LQR}} \\approx 4.8\\text{ rad/s}$ but the MRAC reference model is left at $\\omega_m = 2.0\\text{ rad/s}$, how does MRAC react and what distinguishes $\\omega_m$ from the adaptation rate $\\Gamma$?",
+    "nodes": [
+      "n_feedforward_vs_feedback",
+      "n_model_inverse_ff",
+      "n_mrac_ref_bandwidth_vs_gamma"
+    ],
+    "ideas_combined": 3,
+    "cue_familiarity": 2,
+    "difficulty": 5,
+    "hints": [
+      "Separate amplitude scaling from timing/phase lead: multiplying velocity FF by 1.2 changes size, not the phase delay.",
+      "Model-inverse FF supplies the derivatives (velocity + acceleration) needed to cancel the nominal plant's phase lag at every instant.",
+      "In MRAC, the tracking error is e = x - x_ref. If the baseline LQR (4.8 rad/s) responds faster than x_ref (2.0 rad/s), what sign does e have, and what does MRAC adapt toward?"
+    ],
+    "solution": "(1) Scaling velocity FF gain by $1.2\\times$ inflates command amplitude without fixing timing lag, increasing figure-8 RMS error. Model-inverse 2-DOF feed-forward ($r + (2\\zeta/\\omega_n)\\dot{r} + \\ddot{r}/\\omega_n^2$, i.e., position + velocity + acceleration FF) provides the phase lead required by the nominal plant dynamics so feedback only handles disturbances and model mismatch. (2) In MRAC, $\\omega_m$ defines the **target reference trajectory** $x_{\\text{ref}}(t)$, whereas $\\Gamma$ sets the **adaptation speed** (learning rate). When $\\omega_m = 2.0\\text{ rad/s} < \\omega_{\\text{LQR}} \\approx 4.8\\text{ rad/s}$, the plant responds faster than $x_{\\text{ref}}$, creating a nonzero error $e = x - x_{\\text{ref}}$ that causes MRAC to actively fight LQR and slow the closed-loop response down toward $2.0\\text{ rad/s}$ (fixed in `lqr-plus-mrac` by matching $\\omega_m = 4.8\\text{ rad/s}$).",
+    "track": "thesis"
+  }
+]

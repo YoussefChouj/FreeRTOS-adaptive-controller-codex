@@ -1,0 +1,138 @@
+{
+  "id": "chat_internship_l02",
+  "title": "L02 · One PID loop and the integral term (PID 与积分项)",
+  "topic": "One PID loop and the integral term (PID 与积分项)",
+  "goal": "Master L02 for Chinese UAV algorithm interview",
+  "track": "internship",
+  "status": "open",
+  "kind": "teach",
+  "version": 1,
+  "createdAt": "2026-10-24T09:02:00.000Z",
+  "updatedAt": "2026-10-24T10:02:00.000Z",
+  "links": [
+    "chat_internship_l01"
+  ],
+  "cards": [
+    {
+      "id": "card_l02_1",
+      "kind": "check",
+      "step": "s2_tilt",
+      "confidence": 75,
+      "think1": "Vertical component holds weight mg = T cos(theta); horizontal component accelerates mass m a = T sin(theta).",
+      "q1": "a = g tan(theta) in m/s^2",
+      "score": 8,
+      "feedback": "Good derivation of lateral acceleration from tilt angle.",
+      "timestamp": "2026-10-24T10:02:00.000Z"
+    }
+  ],
+  "openQuestions": [],
+  "messages": [
+    {
+      "id": "msg_l02_1",
+      "role": "user",
+      "timestamp": 1792836002000,
+      "content": "Imported internship lesson L02: One PID loop and the integral term (PID 与积分项)"
+    },
+    {
+      "id": "msg_l02_2",
+      "role": "assistant",
+      "timestamp": 1792836002500,
+      "content": [
+        {
+          "type": "text",
+          "text": "Lesson L02 (PID 与积分项): focus on thrust vector decomposition, cascade PID inner/outer loops, and integral steady-state error removal."
+        }
+      ]
+    }
+  ],
+  "settings": {
+    "model": {
+      "provider": "claude-code",
+      "id": "claude-desktop"
+    },
+    "thinkingLevel": "low"
+  },
+  "turns": [],
+  "tree": {
+    "nodes": [
+      {
+        "id": "s1_physics",
+        "title": "Rotor thrust and hover balance (T = mg)",
+        "deps": [],
+        "status": "current"
+      },
+      {
+        "id": "s2_tilt",
+        "title": "Tilted thrust components (T cos theta, T sin theta, a = g tan theta)",
+        "deps": [
+          "s1_physics"
+        ],
+        "status": "todo"
+      },
+      {
+        "id": "s3_cascade",
+        "title": "Cascade control loops (位置环 -> 速度环 -> 姿态环 -> 角速度环)",
+        "deps": [
+          "s2_tilt"
+        ],
+        "status": "todo"
+      },
+      {
+        "id": "s4_integral",
+        "title": "Payload disturbance and integral term (积分项消除稳态误差)",
+        "deps": [
+          "s3_cascade"
+        ],
+        "status": "todo"
+      }
+    ],
+    "steps": [
+      {
+        "id": "s1_physics",
+        "title": "Rotor thrust and hover balance (T = mg)",
+        "deps": [],
+        "status": "current"
+      },
+      {
+        "id": "s2_tilt",
+        "title": "Tilted thrust components (T cos theta, T sin theta, a = g tan theta)",
+        "deps": [
+          "s1_physics"
+        ],
+        "status": "todo"
+      },
+      {
+        "id": "s3_cascade",
+        "title": "Cascade control loops (位置环 -> 速度环 -> 姿态环 -> 角速度环)",
+        "deps": [
+          "s2_tilt"
+        ],
+        "status": "todo"
+      },
+      {
+        "id": "s4_integral",
+        "title": "Payload disturbance and integral term (积分项消除稳态误差)",
+        "deps": [
+          "s3_cascade"
+        ],
+        "status": "todo"
+      }
+    ],
+    "edges": [
+      {
+        "from": "s1_physics",
+        "to": "s2_tilt"
+      },
+      {
+        "from": "s2_tilt",
+        "to": "s3_cascade"
+      },
+      {
+        "from": "s3_cascade",
+        "to": "s4_integral"
+      }
+    ],
+    "currentStep": "s1_physics",
+    "version": 1
+  }
+}

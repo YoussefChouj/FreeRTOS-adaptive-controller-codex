@@ -1,0 +1,141 @@
+{
+  "id": "chat_internship_l01r",
+  "title": "L01R · L01 review: combining accelerations in x, y, z (推力矢量与加速度合成)",
+  "topic": "L01 review: combining accelerations in x, y, z (推力矢量与加速度合成)",
+  "goal": "Master L01R for Chinese UAV algorithm interview",
+  "track": "internship",
+  "status": "open",
+  "kind": "teach",
+  "version": 1,
+  "createdAt": "2026-10-24T09:01:00.000Z",
+  "updatedAt": "2026-10-24T10:01:00.000Z",
+  "links": [
+    "chat_internship_l01"
+  ],
+  "cards": [
+    {
+      "id": "card_l01r_1",
+      "kind": "check",
+      "step": "s2_tilt",
+      "confidence": 75,
+      "think1": "Vertical component holds weight mg = T cos(theta); horizontal component accelerates mass m a = T sin(theta).",
+      "q1": "a = g tan(theta) in m/s^2",
+      "score": 8,
+      "feedback": "Good derivation of lateral acceleration from tilt angle.",
+      "timestamp": "2026-10-24T10:01:00.000Z"
+    }
+  ],
+  "openQuestions": [
+    "thrust size with gravity: For a=(0,2,0) wrote T=3*2=6 N. Gravity must be added first: T=m*sqrt(ax^2+ay^2+(az+g)^2)=30.04 N.",
+    "tilt theta vs roll/pitch: Thought theta/phi are pitch/roll. theta = total lean from vertical, phi = lean direction; roll and pitch split that lean into two axes."
+  ],
+  "messages": [
+    {
+      "id": "msg_l01r_1",
+      "role": "user",
+      "timestamp": 1792836001000,
+      "content": "Imported internship lesson L01R: L01 review: combining accelerations in x, y, z (推力矢量与加速度合成)"
+    },
+    {
+      "id": "msg_l01r_2",
+      "role": "assistant",
+      "timestamp": 1792836001500,
+      "content": [
+        {
+          "type": "text",
+          "text": "Lesson L01R (推力矢量与加速度合成): focus on thrust vector decomposition, cascade PID inner/outer loops, and integral steady-state error removal."
+        }
+      ]
+    }
+  ],
+  "settings": {
+    "model": {
+      "provider": "claude-code",
+      "id": "claude-desktop"
+    },
+    "thinkingLevel": "low"
+  },
+  "turns": [],
+  "tree": {
+    "nodes": [
+      {
+        "id": "s1_physics",
+        "title": "Rotor thrust and hover balance (T = mg)",
+        "deps": [],
+        "status": "done"
+      },
+      {
+        "id": "s2_tilt",
+        "title": "Tilted thrust components (T cos theta, T sin theta, a = g tan theta)",
+        "deps": [
+          "s1_physics"
+        ],
+        "status": "current"
+      },
+      {
+        "id": "s3_cascade",
+        "title": "Cascade control loops (位置环 -> 速度环 -> 姿态环 -> 角速度环)",
+        "deps": [
+          "s2_tilt"
+        ],
+        "status": "todo"
+      },
+      {
+        "id": "s4_integral",
+        "title": "Payload disturbance and integral term (积分项消除稳态误差)",
+        "deps": [
+          "s3_cascade"
+        ],
+        "status": "todo"
+      }
+    ],
+    "steps": [
+      {
+        "id": "s1_physics",
+        "title": "Rotor thrust and hover balance (T = mg)",
+        "deps": [],
+        "status": "done"
+      },
+      {
+        "id": "s2_tilt",
+        "title": "Tilted thrust components (T cos theta, T sin theta, a = g tan theta)",
+        "deps": [
+          "s1_physics"
+        ],
+        "status": "current"
+      },
+      {
+        "id": "s3_cascade",
+        "title": "Cascade control loops (位置环 -> 速度环 -> 姿态环 -> 角速度环)",
+        "deps": [
+          "s2_tilt"
+        ],
+        "status": "todo"
+      },
+      {
+        "id": "s4_integral",
+        "title": "Payload disturbance and integral term (积分项消除稳态误差)",
+        "deps": [
+          "s3_cascade"
+        ],
+        "status": "todo"
+      }
+    ],
+    "edges": [
+      {
+        "from": "s1_physics",
+        "to": "s2_tilt"
+      },
+      {
+        "from": "s2_tilt",
+        "to": "s3_cascade"
+      },
+      {
+        "from": "s3_cascade",
+        "to": "s4_integral"
+      }
+    ],
+    "currentStep": "s2_tilt",
+    "version": 1
+  }
+}
