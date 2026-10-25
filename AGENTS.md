@@ -70,7 +70,8 @@ Only the rows below are granted; everything else is NOT authorized. Shrinks only
 | Commit and push at every verified task boundary, no asking | any agent | repo `origin` | operator 2026-09-23 | standing |
 | EKF in the control path, bias default fixed-at-boot | supervisor | firmware | operator 2026-09-26 | standing |
 | Arm, idle and fly | agent | inside an operator-opened battery session only: `allow_agent_arm` on, operator said "go", RC transmitter on (ch10 = hard kill) | operator 2026-09-29, workflow B | ends at 30% battery or any abort; each battery needs a new "go" |
-| Claude Code subagents (Agent tool) | nobody | REVOKED: outside workers only (agy, ark, oc) | operator 2026-09-30 14:20 | until re-granted |
+| Claude Code subagents (Agent tool) | nobody | REVOKED | operator 2026-09-30 14:20 | until re-granted |
+| Outside worker dispatch (Argon/agy, Jules, oc, ark, VPS) | nobody | REVOKED: the supervisor does all work inline. Huge workload: the supervisor writes a spec with acceptance tests (`.agent-ops/briefs/<id>.md`) plus one copy-paste prompt per independent piece, and the operator runs other agents by hand; the supervisor reviews and merges what comes back | operator 2026-10-25 | until re-granted |
 
 Hardware rows usable only by the session that holds stream `main` and
 the `hw` lock. Every grant is agent-agnostic (operator 2026-09-30). No
@@ -84,7 +85,7 @@ Claude Code subagents ever.
    never widens a grant. **Stricter rule wins.**
 - **supervisor** — operator-started session on a stream; verifies and
   integrates that stream. Role follows how the session was started.
-- **worker** — delegated agent. Edits only its named checkout; never
+- **worker** — an agent the operator starts by hand from a supervisor prompt. Edits only its named checkout; never
   flashes; never contacts 8081 or the probe.
 
 ## Session handoff

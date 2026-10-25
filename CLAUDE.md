@@ -3,8 +3,9 @@
 The project rules are in `AGENTS.md` (single source, shared by all harnesses). Read it, then `docs/agent/HANDOFF.md`.
 The global token-budget rules in `~/.claude/CLAUDE.md` still apply on top.
 
-Desktop sessions are the CEO and build everything inline (Claude manager DISABLED 2026-10-17; research and second
-opinions go to Gemini 4 Argon High via `.agent-ops/argon.ps1`, 160K cap; since 2026-10-17 Argon also runs the Jules PR review loops, while the CEO writes the
-spec + acceptance tests, does final QA and merges). See the "Default workflow" section of the global CLAUDE.md and
-`docs/agent/ceo-manager-architecture.md`. A headless manager (prompt starts with "# Manager rules") does
-not read AGENTS.md or HANDOFF.md: `docs/agent/MANAGER.md` is its whole rule set.
+Desktop sessions are the CEO and do all work inline (operator 2026-10-25: no outside workers; Argon, Jules, oc,
+ark and VPS dispatches are revoked, see the Authorizations table in `AGENTS.md`). When the workload is huge, the CEO
+writes a spec with acceptance tests (`.agent-ops/briefs/<id>.md`) and gives the operator one copy-paste prompt per
+independent piece; the operator runs other agents by hand, and the CEO reviews and merges what comes back.
+A headless manager (prompt starts with "# Manager rules") does not read AGENTS.md or HANDOFF.md:
+`docs/agent/MANAGER.md` is its whole rule set.
