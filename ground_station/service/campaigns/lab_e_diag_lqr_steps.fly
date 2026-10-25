@@ -1,0 +1,18 @@
+# Diagnosis ladder 1/3 (2026-10-25): LQR alone (VAR47=12), xy steps instead of the figure-8.
+# Question: how lightly damped is the closed xy loop, and does an x move pull y (coupling)?
+# Each goto is a short ramped move (default motion), then a 5 s dwell: overshoot and ringing in the dwell give the
+# damping; y motion during the x steps (and x during y) gives the coupling. Same exp row and sets as
+# lab_e_exp_lqr_u0_d12.fly, so it compares 1:1 with that flight. UNVERIFIED: never flown.
+campaign lab-e-diag-lqr-steps
+rate 100
+log velocity_loops camera_fusion
+slow 50 nn4 xy_ctrl mrac_3l mrac_theta ekf_states estimator_truth thrust_model optical_flow takeoff_gate mrac_shadow
+exp lqr_3l
+set g_traj_ff_shift_s=0 g_land_xy_gate_cm=10 g_xyc_delay_ticks=12
+takeoff 0.5 mrac_injection=0
+hold 3
+goto x=0.3 y=0 z=0.5 dwell_s=5
+hold 5
+goto x=0 y=0.3 z=0.5 dwell_s=5
+hold 5
+land

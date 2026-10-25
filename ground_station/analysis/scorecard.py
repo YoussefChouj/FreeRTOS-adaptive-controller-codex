@@ -35,14 +35,19 @@ PRIM_TRAJ = 3             # API/wfb_prim.h: IDLE CLIMB HOVER TRAJ ...
 PRESET_TRAJ_MPS = 0.02    # PROPOSED: a HOVER x/y target moving faster than this is a Keil preset trajectory
 REF_SPEED_HALF_S = 0.25   # half window (s) of the target speed estimate
 PRESET_TRAJ_MIN_S = 1.0   # target motion shorter than this (a hold setpoint step) is not a preset trajectory
+TRAJ_AMP_MAX = 1.3        # PROPOSED: a figure-8 fails when the EKF position swings wider than the target by more than this
+TRAJ_AMP_MIN_REF_M = 0.05  # an axis whose target moves less than this peak-to-peak is left out of traj_amp_ratio
+OPERATOR_CHECK = ("operator verdict", "manual", "operator's call from the flight (a takeover is a fail)")
 MRAC_INJ = (15, 10)       # command id, idx of mrac_injection (campaign_live command events)
 VOLT_KEYS = ("real_voltage", "status.vbat")
 BEHIND = re.compile(r"^(\d\d:\d\d:\d\d)\.\d+ .*ingest behind: max frame age (\d+) ms")
 
 # (key, column header): the order of the day table, the trend and the comparison
 METRICS = [("status", "status"), ("air_s", "air s"), ("hold_s", "hold s"),
-           ("hold_rms_cm", "hold rms cm (EKF)"), ("cam_hold_rms_cm", "hold rms cm (cam)"),
+           ("hold_rms_cm", "hold rms cm (EKF)"), ("hold_pp_cm", "hold p-p cm (EKF)"),
+           ("cam_hold_rms_cm", "hold rms cm (cam)"),
            ("cam_hold_drift_cm", "hold drift cm (cam)"), ("traj_rms_cm", "traj rms cm (EKF)"),
+           ("traj_amp_ratio", "traj amp ratio (EKF)"),
            ("cam_traj_rms_cm", "traj rms cm (cam)"), ("cam_ekf_rms_cm", "cam-EKF rms cm"),
            ("takeoff_osc_cm", "takeoff osc cm"), ("land_err_cm", "touch err cm"), ("land_vz_cms", "touch vz cm/s"),
            ("land_offset_cm", "land offset cm"), ("cam_land_cm", "cam land cm"),
@@ -176,15 +181,37 @@ def phase_masks(w) -> dict:
 
 
 def ekf_tracking(w, win) -> dict:
-    """EKF position minus the x/y target over the HOVER and TRAJ rows."""
-    ex = lab_flights.col(w, "Ctrler.locxPID.FB") - lab_flights.col(w, "Ctrler.locxPID.Des")
-    ey = lab_flights.col(w, "Ctrler.locyPID.FB") - lab_flights.col(w, "Ctrler.locyPID.Des")
+    """EKF position minus the x/y target over the HOVER and TRAJ rows. hold_pp_cm: the larger axis peak-to-peak of the
+    hold error (how far the drone wandered). traj_amp_ratio: over the TRAJ rows, the larger axis ratio of the EKF
+    position's peak-to-peak to the target's; above 1 the drone swings wider than the path (overshoot, not lag)."""
+    xd, xf = lab_flights.col(w, "Ctrler.locxPID.Des"), lab_flights.col(w, "Ctrler.locxPID.FB")
+    yd, yf = lab_flights.col(w, "Ctrler.locyPID.Des"), lab_flights.col(w, "Ctrler.locyPID.FB")
+    ex, ey = xf - xd, yf - yd
     r = {}
     for name in ("hold", "traj"):
         if win[name] is not None:
             m = win[name]
             r[f"{name}_rms_cm"] = _rms_cm(ex[m], ey[m])
+    if win["hold"] is not None:
+        pps = [_pp(e[win["hold"]]) for e in (ex, ey)]
+        pps = [p for p in pps if p is not None]
+        r["hold_pp_cm"] = _r(100 * max(pps)) if pps else None
+    if win["traj"] is not None:
+        m = win["traj"]
+        ratios = []
+        for d, f in ((xd, xf), (yd, yf)):
+            pd_, pf = _pp(d[m]), _pp(f[m])
+            if pd_ is not None and pf is not None and pd_ > TRAJ_AMP_MIN_REF_M:
+                ratios.append(pf / pd_)
+        r["traj_amp_ratio"] = _r(max(ratios), 2) if ratios else None
     return r
+
+
+def _pp(v):
+    """Peak-to-peak of the finite samples, None under 5 samples."""
+    v = np.asarray(v, float)
+    v = v[np.isfinite(v)]
+    return float(v.max() - v.min()) if v.size >= 5 else None
 
 
 def camera_tracking(w, win, fixes: Path | None) -> dict:
@@ -357,23 +384,34 @@ def config(out_dir: Path | None, session: Path | None, fly: Path | None) -> dict
 
 def verdict(pass_text: str | None, card: dict) -> dict:
     """PROPOSED mapping of the day file's pass text to checks on this card. Clauses split on ';'; a clause the
-    mapping does not know stays manual."""
+    mapping does not know stays manual. The operator's verdict is always a manual check, so a flight is never a bare
+    "pass" from the logs alone (10-24: lqr-alone scored "pass" while the operator saw it fail)."""
     checks = []
     for clause in [s.strip() for s in (pass_text or "").split(";") if s.strip()]:
         low = clause.lower()
-        if "figure-8" in low or "complete" in low:
-            ok = card.get("status") == "complete" and not card.get("aborts") and bool(card.get("traj_s"))
+        if "peak-to-peak" in low:
+            m = re.search(r"<\s*(\d+(?:\.\d+)?)\s*cm", low)
+            pp = card.get("hold_pp_cm")
+            res = "manual" if m is None or pp is None else "pass" if pp < float(m.group(1)) else "fail"
+            checks.append((clause, res, f"hold p-p {pp} cm" + (f" vs {m.group(1)} cm" if m else "")))
+        elif "figure-8" in low or "complete" in low:
+            amp = card.get("traj_amp_ratio")
+            ok = card.get("status") == "complete" and not card.get("aborts") and bool(card.get("traj_s")) \
+                and (amp is None or amp <= TRAJ_AMP_MAX)
             checks.append((clause, "pass" if ok else "fail",
-                           f"status {card.get('status')}, aborts {card.get('aborts') or 0}, TRAJ {card.get('traj_s') or 0} s"))
+                           f"status {card.get('status')}, aborts {card.get('aborts') or 0}, TRAJ {card.get('traj_s') or 0} s, "
+                           f"amp ratio {amp} vs {TRAJ_AMP_MAX} (PROPOSED)"))
         elif "pad" in low and "land" in low:
             lo = card.get("land_offset_cm")
             checks.append((clause, "manual" if lo is None else "pass" if lo <= PASS_LAND_CM else "fail",
                            f"land offset {lo} cm vs {PASS_LAND_CM} (PROPOSED)"))
         elif "hold" in low or "hover" in low:
             ok = bool(card.get("hold_s")) and not card.get("aborts")
-            checks.append((clause, "pass" if ok else "fail", f"hold {card.get('hold_s')} s"))
+            checks.append((clause, "pass" if ok else "fail",
+                           f"hold {card.get('hold_s')} s, p-p {card.get('hold_pp_cm')} cm"))
         else:
             checks.append((clause, "manual", "not checked from the logs"))
+    checks.append(OPERATOR_CHECK)
     res = [c[1] for c in checks]
     v = "fail" if "fail" in res else "manual" if not res or set(res) == {"manual"} else \
         "pass+manual" if "manual" in res else "pass"
@@ -458,12 +496,15 @@ def _f(v):
 
 def one_line(card: dict) -> str:
     """The labday line after '--- <id> done': the few numbers worth a glance, then where the full card is."""
-    parts = [f"score {card['id']}: pass {card.get('verdict')} (PROPOSED)"]
+    parts = [f"score {card['id']}: {card.get('verdict')} (PROPOSED checks; your call from the flight decides)"]
     for k, label in (("cam_hold_rms_cm", "hold cam rms"), ("hold_rms_cm", "hold EKF rms"),
+                     ("hold_pp_cm", "hold EKF p-p"),
                      ("cam_traj_rms_cm", "traj cam rms"), ("traj_rms_cm", "traj EKF rms"),
                      ("land_offset_cm", "land offset")):
         if card.get(k) is not None:
             parts.append(f"{label} {_f(card[k])} cm")
+    if card.get("traj_amp_ratio") is not None:
+        parts.append(f"path swing x{_f(card['traj_amp_ratio'])}")
     parts.append(f"aborts {card.get('aborts') or 0}")
     if card.get("ingest_lag_max_s") is not None:
         parts.append(f"ingest lag max {_f(card['ingest_lag_max_s'])} s")

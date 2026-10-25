@@ -14,6 +14,12 @@
 # Two faults behind the 10-24 oscillations (rate fit: .agent-ops/research/rate-fit-1025/<axis>-<log>.log l.25-27):
 #   high-freq = under-damped RATE loop (roll PM 21.4 deg, pitch 28-30 deg), shared by every controller;
 #   low-freq  = outer xy limit cycle 0.25-0.63 Hz (argon-n25-osc.md).
+# 10-24 verdict (operator, 10-25): EVERY xy controller FAILED, LQR included (lower wobble, still failed; re-score:
+#   hold p-p 49.6 cm, path swing 3.6x). Figure-8 aborts = the drone overshot/drifted off the path (some crashed), so the
+#   operator took over; the takeover is the EFFECT, not the cause. Measured on lqr-alone (zero crossings): path x ~0.36 Hz,
+#   y ~0.18 Hz, ~40 cm/s, ~6 deg tilt (gentle), but the response swung at its own ~0.45-0.50 Hz in both axes = the hold
+#   wobble carried through the path. Two hypotheses: (a) the xy loop is lightly damped / limit-cycling (ours);
+#   (b) the path is too coupled or too hard to follow (operator's). The DIAGNOSIS LADDER (block 5b) separates them.
 #
 # OPEN QUESTIONS FOR THE OPERATOR (answer before flying):
 # Q1: Adopt new rate gains (roll/pitch Kp3.5 Kd13, PROPOSED: roll PM 34.4, pitch 43-46 deg) BEFORE the thesis
@@ -34,7 +40,7 @@ camera:
 before:
   - "RESTART 8081 (picks up RC authority + raw stick logging b132d2e5; clears stale subscribe state)"
   - "Floor scan: labday does it at launch (drone out of view); keep the camera still all day"
-  - "HANDS OFF THE STICKS during every trajectory: a stick move > 0.05 in 10 ms = RC takeover = trajectory abort (10-24: 3 of 5 figure-8 aborts had no arm, mode or state change, so RC takeover is the likely cause; not logged then)"
+  - "HANDS OFF THE STICKS during every trajectory: a stick move > 0.05 in 10 ms = RC takeover = trajectory abort (10-24 aborts: the drone diverged from the path and the operator took over to save it; a takeover = that flight FAILED)"
   - "8081 running, arm 0, landing pad clear, camera in recording position"
   - "Tracker dot on drone center before arming"
   - "Check pack resting volts >= 15.8V before first flight (source docs/lab/run-sheet-2026-10-14.md:63)"
@@ -62,7 +68,7 @@ flights:
   - id: pid-plus-mrac
     fly: lab_e_exp_matrix
     why: "PID + xy MRAC (matched reference): repeat of 10-21 for n=2 against pid-alone-ref"
-    pass: "figure-8 completes; position error vs pid-alone-ref logged (PROPOSED)"
+    pass: "figure-8 completes; position error vs pid-alone-ref logged (PROPOSED); operator verdict agrees (takeover = fail)"
     notes: "Ground step before matched flights: mrac_ref_fit on pid-alone-ref session --kind pid"
 
   # ======== BLOCK 2: ADAPTIVE-LAYER VARIANTS ========
@@ -71,17 +77,17 @@ flights:
   - id: xy-layer-inner
     fly: lab_e_xyl_inner
     why: "XY layer: velocity loop only adapts (inner)"
-    pass: "figure-8 completes; within 10% of pid-alone-ref (PROPOSED)"
+    pass: "figure-8 completes; within 10% of pid-alone-ref (PROPOSED); operator verdict agrees (takeover = fail)"
 
   - id: xy-layer-outer
     fly: lab_e_xyl_outer
     why: "XY layer: position loop only adapts (outer)"
-    pass: "figure-8 completes; within 10% of pid-alone-ref (PROPOSED)"
+    pass: "figure-8 completes; within 10% of pid-alone-ref (PROPOSED); operator verdict agrees (takeover = fail)"
 
   - id: xy-layer-both
     fly: lab_e_xyl_both
     why: "XY layer: both position and velocity loops adapt"
-    pass: "figure-8 completes; beats xy-layer-inner on layer_ab control metrics (PROPOSED)"
+    pass: "figure-8 completes; beats xy-layer-inner on layer_ab control metrics (PROPOSED); operator verdict agrees (takeover = fail)"
 
   # ======== BLOCK 3: LAYER AB ANALYSIS ========
   # Repeat layers in reversed order for pack drift interleaving
@@ -89,17 +95,17 @@ flights:
   - id: xy-layer-both-rev
     fly: lab_e_xyl_both
     why: "XY layer both: reversed order (A B C C B A) so pack drift hits every arm"
-    pass: "figure-8 completes; same-arm spread logged (PROPOSED)"
+    pass: "figure-8 completes; same-arm spread logged (PROPOSED); operator verdict agrees (takeover = fail)"
 
   - id: xy-layer-outer-rev
     fly: lab_e_xyl_outer
     why: "XY layer outer: reversed order"
-    pass: "figure-8 completes; same-arm spread logged (PROPOSED)"
+    pass: "figure-8 completes; same-arm spread logged (PROPOSED); operator verdict agrees (takeover = fail)"
 
   - id: xy-layer-inner-rev
     fly: lab_e_xyl_inner
     why: "XY layer inner: reversed order"
-    pass: "figure-8 completes; run layer_ab analysis (PROPOSED)"
+    pass: "figure-8 completes; run layer_ab analysis (PROPOSED); operator verdict agrees (takeover = fail)"
     stop: true
 
   # ======== BLOCK 4: ATTITUDE / ALTITUDE / YAW / ALL-LAYERS ========
@@ -171,7 +177,7 @@ flights:
     args: [--gains, defaults]
     gate: "Q1 - operator decides: fly FIRST if adopting new rate gains before thesis blocks, else fly after the combination block"
     why: "Preset trajectory with CURRENT PID rate gains (hover + circle + figure8, move_s=18 yaw_follow=0)"
-    pass: "figure-8 completes; max pos error < 25 cm; yaw span < 5 deg; no 15 deg tilt saturation (PROPOSED)"
+    pass: "figure-8 completes; max pos error < 25 cm; yaw span < 5 deg; no 15 deg tilt saturation (PROPOSED); operator verdict agrees (takeover = fail)"
     notes: "Same preset as 10-24 pid-track but move_s=18 (was 12 on old presets causing overshoot)"
 
   - id: rate-gain-pid-proposed-hover
@@ -187,7 +193,7 @@ flights:
     args: [--gains, rate35]
     gate: "Q1 - operator decides: fly FIRST if adopting new rate gains before thesis blocks, else fly after the combination block"
     why: "Preset trajectory with PROPOSED PID rate gains (Kp3.5 Kd13 roll, Kp3.5 Kd13 pitch)"
-    pass: "figure-8 completes; max pos error < 20 cm; yaw span < 5 deg; no tilt saturation (PROPOSED)"
+    pass: "figure-8 completes; max pos error < 20 cm; yaw span < 5 deg; no tilt saturation (PROPOSED); operator verdict agrees (takeover = fail)"
     notes: "Pitch PM=45.8deg/43.2deg GM=14.6-14.9dB wc=17rad/s Smax=1.65-1.70 (CLI proposed)"
 
   - id: yaw-gain-check
@@ -198,6 +204,30 @@ flights:
     pass: "hover yaw span < 5 deg, no yaw-rate PSD peak (PROPOSED)"
     notes: "Yaw PM=81.7deg GM=21.6dB wc=10.0rad/s Smax=1.12 (current is already healthy)"
 
+  # ======== BLOCK 5b: DIAGNOSIS LADDER (figure-8 divergence: the loop or the path?) ========
+  # 10-24: every xy controller failed the figure-8 (drone drifted/overshot, operator took over, some crashed).
+  # lqr-alone path x ~0.36 Hz, y ~0.18 Hz, ~40 cm/s, ~6 deg tilt; response swung at its own ~0.45-0.50 Hz in both
+  # axes (= the hold wobble), response p-p 1.7-4.2x path p-p per axis across controllers. Fly 1 -> 3 in order,
+  # before the block 6 retests; one variable changes per flight. Every number below is PROPOSED.
+
+  - id: diag-xy-steps-lqr
+    fly: lab_e_diag_lqr_steps
+    why: "LQR alone (VAR47=12), four 30 cm xy steps with 5 s dwell, no path: measures the xy loop's own damping and whether an x step moves y (coupling)"
+    pass: "overshoot < 20%; cross-axis motion < 5 cm; no sustained ringing in the dwell (PROPOSED); operator verdict agrees (takeover = fail)"
+    notes: "Read: ringing at ~0.5 Hz after each step = the loop itself is lightly damped (fix the loop before any path); an x step that moves y > 5 cm = x-y coupling (operator's hypothesis)"
+
+  - id: diag-figure8-half-speed-lqr
+    fly: lab_e_diag_lqr_fig8_half
+    why: "Same LQR figure-8 as 10-24 at HALF speed (f8_laps=1 instead of 2, the only change): is the failure the path speed or the loop?"
+    pass: "figure-8 completes; scorecard swing (traj_amp_ratio) < 1.3x (PROPOSED); operator verdict agrees (takeover = fail)"
+    notes: "Read: wobble still ~0.5 Hz and about as big = the loop (path speed is not the cause); swing falls toward 1x = path speed or coupling drives it. 10-24 lqr-alone full speed: scorecard swing 3.6x"
+
+  - id: diag-figure8-half-speed-pid
+    fly: lab_e_diag_pid_fig8_half
+    why: "PID at the same half speed: PID had the smallest 10-24 hold wobble (A=2.7-6.1 cm) yet went 130-160 cm p-p in the figure-8, so the path matters most here"
+    pass: "figure-8 completes; scorecard swing < 1.3x (PROPOSED); operator verdict agrees (takeover = fail)"
+    notes: "Read as diag-figure8-half-speed-lqr. Small hold wobble + big figure-8 swing that shrinks at half speed = the path/coupling (operator's hypothesis) for PID"
+
   # ======== BLOCK 6: BASELINE ALONE-RETESTS (VAR47=12 for LQR/MPC, camera mode 3) ========
   # 10-24 alone-retests: xy limit cycle 0.25-0.63 Hz (argon-n25-osc.md). VAR47 = g_xyc_delay_ticks is the LQR/MPC
   # Smith-predictor delay ONLY (TASK/StabilizerTask.c:2001-2003); 12 = firmware default (StabilizerTask.c:2004),
@@ -207,12 +237,12 @@ flights:
   - id: lqr-alone-retest-fix
     fly: lab_e_exp_lqr_u0_d12
     why: "Retest LQR alone with VAR47=12 (21 on 10-24: 0.50-0.63Hz xy oscillation); camera mode 3 as on 10-24"
-    pass: "no sustained xy oscillation in hold (peak-to-peak < 10cm, PROPOSED); figure-8 completes"
+    pass: "no sustained xy oscillation in hold (peak-to-peak < 10cm, PROPOSED); figure-8 completes; operator verdict agrees (takeover = fail)"
 
   - id: mpc-alone-retest-fix
     fly: lab_e_exp_mpc_u0_d12
     why: "Retest MPC alone with VAR47=12 (21 on 10-24: 0.50Hz, A=26.7cm); camera mode 3 as on 10-24"
-    pass: "no sustained xy oscillation in hold (peak-to-peak < 10cm, PROPOSED); figure-8 completes"
+    pass: "no sustained xy oscillation in hold (peak-to-peak < 10cm, PROPOSED); figure-8 completes; operator verdict agrees (takeover = fail)"
 
   - id: adrc-alone-retest-fix
     fly: lab_e_exp_adrc_u0
@@ -222,7 +252,7 @@ flights:
   - id: pid-alone-ref-fix
     fly: lab_e_exp_pid_u0
     why: "Same-day PID reference for the three retests (same exp script, PID xy, injection off)"
-    pass: "figure-8 completes; within 10% of 10-24 pid-alone-ref (PROPOSED)"
+    pass: "figure-8 completes; within 10% of 10-24 pid-alone-ref (PROPOSED); operator verdict agrees (takeover = fail)"
     notes: "10-24 pid-alone-ref was better (0.25-0.38Hz, A=2.7-6.1cm) but still had outer-loop offset"
 
   # ======== BLOCK 7: MRAC AROUND LQR / MPC / ADRC (conditional on block 6) ========
@@ -237,31 +267,31 @@ flights:
     fly: lab_e_exp_lqr_3l
     gate: "after the matching alone-retest passes; run mrac_ref_fit on its log first"
     why: "Unmatched LQR + 3-layer MRAC sibling immediately before lqr-plus-mrac-matched"
-    pass: "figure-8 completes without an L1 abort (PROPOSED)"
+    pass: "figure-8 completes without an L1 abort (PROPOSED); operator verdict agrees (takeover = fail)"
 
   - id: lqr-plus-mrac-matched
     fly: lab_e_exp_lqr_matched
     gate: "after the matching alone-retest passes; run mrac_ref_fit on its log first"
     why: "MRAC with LQR's own fitted reference (logs/ref_fit/lqr.json from lqr-alone-retest)"
-    pass: "figure-8 completes; lower tracking error and saturation than lqr-plus-mrac (PROPOSED)"
+    pass: "figure-8 completes; lower tracking error and saturation than lqr-plus-mrac (PROPOSED); operator verdict agrees (takeover = fail)"
 
   - id: mpc-plus-mrac
     fly: lab_e_exp_mpc_3l
     gate: "after the matching alone-retest passes; run mrac_ref_fit on its log first"
     why: "Unmatched MPC + 3-layer MRAC sibling immediately before mpc-plus-mrac-matched (different kind after LQR)"
-    pass: "figure-8 completes without an L1 abort (PROPOSED)"
+    pass: "figure-8 completes without an L1 abort (PROPOSED); operator verdict agrees (takeover = fail)"
 
   - id: mpc-plus-mrac-matched
     fly: lab_e_exp_mpc_matched
     gate: "after the matching alone-retest passes; run mrac_ref_fit on its log first"
     why: "MRAC with MPC's own fitted reference (logs/ref_fit/mpc.json from mpc-alone-retest)"
-    pass: "figure-8 completes; lower tracking error and saturation than mpc-plus-mrac (PROPOSED)"
+    pass: "figure-8 completes; lower tracking error and saturation than mpc-plus-mrac (PROPOSED); operator verdict agrees (takeover = fail)"
 
   - id: adrc-plus-mrac-matched
     fly: lab_e_exp_adrc_matched
     gate: "after the matching alone-retest passes; run mrac_ref_fit on its log first"
     why: "MRAC with ADRC's own fitted reference (logs/ref_fit/adrc.json from adrc-alone-retest); pairs with adrc-plus-mrac-mismatched (different kind after MPC)"
-    pass: "figure-8 completes; lower saturation and hold error than adrc-plus-mrac-mismatched (PROPOSED)"
+    pass: "figure-8 completes; lower saturation and hold error than adrc-plus-mrac-mismatched (PROPOSED); operator verdict agrees (takeover = fail)"
     stop: true
 
   # ======== BLOCK 8: RATE SYSID RE-FLY ========
@@ -287,27 +317,27 @@ flights:
   - id: pattern-learn
     fly: lab_p_pattern_learn
     why: "Learn Theta from slow outer x,y Schroeder pattern (MRAC injection OFF), then figure-8"
-    pass: "pattern and figure-8 complete without L1 abort; mrac_theta logged for prior-warm (PROPOSED)"
+    pass: "pattern and figure-8 complete without L1 abort; mrac_theta logged for prior-warm (PROPOSED); operator verdict agrees (takeover = fail)"
 
   - id: prior-cold
     fly: lab_p_prior_cold
     why: "Prior A/B baseline (run 1): MRAC starts from zero Theta"
-    pass: "figure-8 completes; initial transient error logged vs pid-alone-ref (PROPOSED)"
+    pass: "figure-8 completes; initial transient error logged vs pid-alone-ref (PROPOSED); operator verdict agrees (takeover = fail)"
 
   - id: prior-warm
     fly: lab_p_prior_warm
     why: "Prior A/B warm arm (run 1): MRAC starts from latest:lab-p-pattern-learn Theta"
-    pass: "figure-8 completes; faster convergence than prior-cold (PROPOSED)"
+    pass: "figure-8 completes; faster convergence than prior-cold (PROPOSED); operator verdict agrees (takeover = fail)"
 
   - id: prior-cold-2
     fly: lab_p_prior_cold
     why: "Prior A/B baseline repeat (n=2, interleaved)"
-    pass: "figure-8 completes (PROPOSED)"
+    pass: "figure-8 completes (PROPOSED); operator verdict agrees (takeover = fail)"
 
   - id: prior-warm-2
     fly: lab_p_prior_warm
     why: "Prior A/B warm arm repeat (n=2, interleaved)"
-    pass: "figure-8 completes; beats prior-cold beyond same-arm spread (PROPOSED)"
+    pass: "figure-8 completes; beats prior-cold beyond same-arm spread (PROPOSED); operator verdict agrees (takeover = fail)"
     stop: true
 
 branches:

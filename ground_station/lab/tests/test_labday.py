@@ -517,7 +517,7 @@ def test_score_line_after_each_flight_and_day_report(tmp_path, monkeypatch, caps
                {"id": "B", "fly": "lab_c_lqr", "pass": "lands on the pad"}]
     assert _player(tmp_path, monkeypatch, _Fake(["", "q"]), flights).go() == 0
     out = capsys.readouterr().out
-    assert "score A: pass pass (PROPOSED); land offset 5 cm; aborts 0" in out
+    assert "score A: pass+manual (PROPOSED checks; your call from the flight decides); land offset 5 cm; aborts 0" in out
     assert out.index("--- A done") < out.index("score A:")
     md = (tmp_path / "days" / "2099-01-01-report.md").read_text(encoding="utf-8")
     assert "| A |" in md and "| B |" not in md

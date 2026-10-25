@@ -170,9 +170,9 @@ def test_score_flight_numbers_match_the_fixture(lab):
     assert c["config"]["key"] == "pid_cascade / gains lab_soft / mrac_injection 1" and c["config"]["arm"] == "adaptive"
     # pass: figure-8 clause checked (complete, no abort, TRAJ samples), tracker clause manual
     assert c["verdict"] == "pass+manual"
-    assert [r for _, r, _ in c["checks"]] == ["pass", "manual"]
+    assert [r for _, r, _ in c["checks"]] == ["pass", "manual", "manual"]      # last: operator verdict
     line = sc.one_line(c)
-    assert line.startswith("score mem1: pass pass+manual (PROPOSED); hold cam rms ")
+    assert line.startswith("score mem1: pass+manual (PROPOSED checks; your call from the flight decides); hold cam rms ")
     assert "aborts 0" in line and "ingest lag max 0.4 s" in line and "sag 0.8 V" in line and "Wh (PROPOSED)" in line
 
 
@@ -183,7 +183,7 @@ def test_aborted_baseline_flight(lab):
     assert c["config"]["arm"] == "baseline" and c["config"]["key"].endswith("mrac_injection 0")
     assert c["link_lost"] is None and c["pack"] is None and c.get("wh_used") is None    # no go event for this folder
     assert c["stalls"] == 0
-    assert c["verdict"] == "fail" and [r for _, r, _ in c["checks"]] == ["fail", "fail"]
+    assert c["verdict"] == "fail" and [r for _, r, _ in c["checks"]] == ["fail", "fail", "manual"]
 
 
 def test_missing_data_gives_none_not_numbers(tmp_path):
@@ -198,7 +198,7 @@ def test_missing_data_gives_none_not_numbers(tmp_path):
 
 def test_verdict_mapping():
     ok = {"status": "complete", "aborts": 0, "traj_s": 9.0, "land_offset_cm": 12.0, "hold_s": 5.0}
-    assert sc.verdict("figure-8 completes", ok)["verdict"] == "pass"
+    assert sc.verdict("figure-8 completes", ok)["verdict"] == "pass+manual"     # never a bare pass
     assert sc.verdict("lands on the pad", {**ok, "land_offset_cm": 16.0})["verdict"] == "fail"
     assert sc.verdict("lands on the pad", {**ok, "land_offset_cm": None})["verdict"] == "manual"
     assert sc.verdict("hover 10 s; bounce under 5 cm", ok)["verdict"] == "pass+manual"
@@ -301,3 +301,30 @@ def test_day_cards_takes_ids_from_the_state_and_carried_flights_from_load_day(la
     assert seen == [("01_lab-m-memory-u100", None, None, None),
                     ("02_lab-m-memory-u0", "1017-E1", "p-e1", None),
                     ("03_lab-m-memory-u100", "mem1", "p-m1", "cam-m1")]
+
+
+def test_verdict_checks_hold_peak_to_peak_and_path_swing():
+    # 10-24 lqr-alone: completed, but wandered 29 cm in hold and swung 1.75x the path; the operator saw it fail
+    lqr = {"status": "complete", "aborts": 0, "traj_s": 9.0, "hold_s": 29.3, "hold_pp_cm": 29.0, "traj_amp_ratio": 1.75}
+    v = sc.verdict("no sustained xy oscillation in hold (peak-to-peak < 10cm, PROPOSED); figure-8 completes", lqr)
+    assert v["verdict"] == "fail" and [r for _, r, _ in v["checks"]] == ["fail", "fail", "manual"]
+    good = {**lqr, "hold_pp_cm": 8.0, "traj_amp_ratio": 1.1}
+    v = sc.verdict("hold peak-to-peak < 10 cm; figure-8 completes", good)
+    assert v["verdict"] == "pass+manual" and [r for _, r, _ in v["checks"]] == ["pass", "pass", "manual"]
+    assert sc.verdict("hold peak-to-peak small", good)["checks"][0][1] == "manual"          # no number to check
+    assert sc.verdict("hold peak-to-peak < 10 cm", {**good, "hold_pp_cm": None})["verdict"] == "manual"
+    assert sc.verdict("figure-8 completes", {**good, "traj_amp_ratio": None})["verdict"] == "pass+manual"
+
+
+def test_ekf_tracking_peak_to_peak_and_amp_ratio():
+    import pandas as pd
+    t = np.arange(200) * 0.04
+    ref = 0.15 * np.sin(1.37 * t)                                     # path: 30 cm peak-to-peak on x
+    w = pd.DataFrame({"Ctrler.locxPID.Des": ref, "Ctrler.locxPID.FB": 2.0 * ref,      # drone swings 2x the path
+                      "Ctrler.locyPID.Des": np.zeros_like(t), "Ctrler.locyPID.FB": 0.01 * np.sin(3 * t)})
+    hold, traj = t < 2.0, t >= 2.0
+    r = sc.ekf_tracking(w, {"hold": hold, "traj": traj})
+    assert r["traj_amp_ratio"] == 2.0                                 # y target is still: left out of the ratio
+    exp = 100 * max(np.ptp((2.0 * ref - ref)[hold]), np.ptp((0.01 * np.sin(3 * t))[hold]))
+    assert r["hold_pp_cm"] == round(exp, 1)
+    assert sc.ekf_tracking(w, {"hold": None, "traj": None}) == {}
