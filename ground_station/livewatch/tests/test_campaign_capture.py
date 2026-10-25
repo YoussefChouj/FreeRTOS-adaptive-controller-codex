@@ -28,13 +28,13 @@ ALL_VARS = NEEDED + OPTIONAL
 # Resolved by the host from DWARF, not in the firmware's on-board symbol table.
 # Slot and drop counts below are sized for the STRUCT6 build (6 features); a MULTI ELF (30) grows mrac_shadow to 260.
 STRUCT6_ONLY = pytest.mark.skipif(cc.MRAC_N_FEATURES != 6, reason="sized for the STRUCT6 build; local ELF has %d features" % cc.MRAC_N_FEATURES)
-DWARF_ONLY = {"real_voltage", "flight_phase", cc.KF_HEALTH, *cc.WFB_STATUS, *cc.PRESET_STATUS}
+DWARF_ONLY = {"real_voltage", "flight_phase", cc.KF_HEALTH, *cc.WFB_STATUS, *cc.PRESET_STATUS, *cc.RC_AUTHORITY}
 
 
 # ---- the campaign set ---------------------------------------------------------------------------------
 
 def test_set_sizes_and_order():
-    assert len(NEEDED) == 43 and len(OPTIONAL) == 20 + 8 * cc.MRAC_N_FEATURES   # 68 STRUCT6, 260 MULTI
+    assert len(NEEDED) == 50 and len(OPTIONAL) == 20 + 8 * cc.MRAC_N_FEATURES   # 68 STRUCT6, 260 MULTI
     assert NEEDED[:len(REQUIRED_SYNC_VARS)] == REQUIRED_SYNC_VARS
     scoring = [n for a in cc.POSITION_AXES for n in (a.feedback, a.reference)] + list(cc.MOTORS)
     assert set(scoring) <= set(NEEDED)
@@ -94,7 +94,7 @@ def test_100hz_drops_the_optional_past_the_budget():
     slots, dropped = slots_for(100)
     assert [(s["hz"], len(s["vars"])) for s in slots] == [(100.0, 62), (100.0, 62), (100.0, 42)]
     assert _guard_bps(slots) == 2 * 26000 + 18000  # one more var would cost 70400 > 70041.6
-    assert dropped == list(OPTIONAL[123:])  # 166 vars fit: 43 core + 123 optional
+    assert dropped == list(OPTIONAL[116:])  # 166 vars fit: 50 core + 116 optional
 
 
 def test_divider_truncates_like_the_live_host():
@@ -291,7 +291,9 @@ def test_two_speed_plan_fills_the_link_without_repeats():
     slow = ["nn4", "xy_ctrl", "mrac_3l", "ekf_states", "estimator_truth"]
     plan = cc.plan_capture({"rate_hz": 100, "groups": ["velocity_loops", "camera_fusion"], "slow": slow})
     hz = [s["hz"] for s in plan["slots"]]
-    assert hz[0] == 100.0 and len(hz) >= 2 and set(hz[1:]) == {25.0} and plan["slow_hz"] == 25.0
+    # core + velocity_loops + camera_fusion is 68 vars, so the fast set takes two 100 Hz slots before the slow ones
+    n_fast = hz.count(100.0)
+    assert hz[0] == 100.0 and set(hz[n_fast:]) == {25.0} and len(hz) > n_fast and plan["slow_hz"] == 25.0
     assert [s["slot"] for s in plan["slots"]] == list(range(len(hz)))
     recorded = [v for s in plan["slots"] for v in s["vars"]]
     assert len(recorded) == len(set(recorded)) and plan["dropped"] == []
@@ -366,7 +368,7 @@ def test_slow_lane_never_runs_faster_than_the_fast_lane():
 
 def test_log_plan_table_notes_a_capped_rate():
     table = cc.log_plan_table(cc.plan_capture({"rate_hz": 100}, max_rate_hz=25))
-    assert "| core (always on) | 43/43 | 25 |  |" in table
+    assert f"| core (always on) | {len(NEEDED)}/{len(NEEDED)} | 25 |  |" in table
     assert "requested 100 Hz" in table.splitlines()[-1]
 
 

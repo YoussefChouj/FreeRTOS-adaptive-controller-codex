@@ -7,7 +7,7 @@ from pathlib import Path
 
 import yaml
 
-from ground_station.livewatch.campaign_capture import CAMPAIGN_SET, OPTICAL_FLOW, VELOCITY_LOOPS
+from ground_station.livewatch.campaign_capture import CAMPAIGN_SET, OPTICAL_FLOW, SEND_TASK_HZ, VELOCITY_LOOPS
 from ground_station.service.campaign_logplan import main
 from ground_station.service.campaign_schema import load_campaign
 
@@ -31,8 +31,10 @@ def test_cli_prints_one_table_per_experiment_and_writes_json(tmp_path, capsys):
     assert data["max_rate_hz"] == 25 and len(data["experiments"]) == 3
     first = data["experiments"][0]
     assert first["plan"]["rate_hz"] == 25.0
-    assert first["subscribe_steps"][0]["args"]["divider"] == 4
-    assert first["subscribe_steps"][0]["args"]["ranges"] == list(CAMPAIGN_SET["needed"] + VELOCITY_LOOPS + OPTICAL_FLOW)
+    # the send task runs at SEND_TASK_HZ (200 Hz subscribe-only), so 25 Hz is divider 8 on every slot
+    assert {s["args"]["divider"] for s in first["subscribe_steps"]} == {round(SEND_TASK_HZ / 25)}
+    recorded = [v for s in first["subscribe_steps"] for v in s["args"]["ranges"]]
+    assert recorded == list(CAMPAIGN_SET["needed"] + VELOCITY_LOOPS + OPTICAL_FLOW)
 
 
 def test_cli_reports_a_bad_log_plan(tmp_path, capsys):

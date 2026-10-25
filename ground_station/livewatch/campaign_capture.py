@@ -88,6 +88,11 @@ KF_HEALTH = "g_ekf_of_health"
 # Keil preset status (TASK/AutoflyTask.c): the runner's preset step waits on traj_status; its exp check reads
 # exp_active (TASK/StabilizerTask.c:163, campaign_runner.py:376) and refuses the flight when it is not streamed
 PRESET_STATUS: tuple[str, ...] = ("traj_status", "exp_active")
+# Who holds the sticks (API/rc_input.c): a traj abort with no arm/mode/prim change is RCInput_GetAuthority() == 0,
+# from a physical stick moving > 0.05 per 10 ms tick (pilot takeover) or a CMD 0x06 heartbeat gap > 500 ms. On 10-24
+# four figure-8 aborts could not be told apart because none of these was logged.
+RC_AUTHORITY: tuple[str, ...] = ("s_authority", "s_heartbeat_lost", "GS_KeySDKflag", "Remoter.RolCtrler",
+                                 "Remoter.PitCtrler", "Remoter.ThrCtrler", "Remoter.YawCtrler")
 
 MRAC_AXES = ("pitch", "roll", "yaw", "z_rate")
 def _mrac_n_features() -> int:
@@ -124,6 +129,7 @@ CAMPAIGN_SET: Mapping[str, tuple[str, ...]] = MappingProxyType({
         + WFB_STATUS
         + (KF_HEALTH,)
         + PRESET_STATUS
+        + RC_AUTHORITY
     ),
     "optional": MRAC_SHADOW,
 })
