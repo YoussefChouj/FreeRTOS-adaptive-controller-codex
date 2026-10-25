@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "learn-viewer",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["tools/learn/learn.py", "serve", "--port", "8770"],
+      "args": ["tools/learn/learn.py", "serve", "--port", "8770"],
+      "port": 8770
+    }
+  ]
+}

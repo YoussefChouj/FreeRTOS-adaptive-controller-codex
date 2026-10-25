@@ -1,0 +1,134 @@
+<!-- Adapted from amosblomqvist/learnharness (AGPL-3.0) - src/agent/prompts/teacher/28-predictions.md -->
+<div class="lh-card" id="lh-predict-card" data-session="{{SESSION_ID}}" data-step="{{STEP_ID}}" data-kind="predict">
+  <style>
+    .lh-card {
+      background: transparent;
+      color: var(--text-primary, #e6edf3);
+      font-family: var(--font-sans, system-ui, -apple-system, sans-serif);
+      padding: 4px 0;
+    }
+    .lh-box {
+      background: var(--bg-card, #1e222a);
+      border: 1px solid var(--border-color, #333a47);
+      border-left: 4px solid var(--accent, #4f8cff);
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+    .lh-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      color: var(--text-muted, #9ba3b0);
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .lh-badge {
+      background: rgba(79, 140, 255, 0.16);
+      color: var(--accent, #4f8cff);
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-weight: 600;
+    }
+    .lh-context {
+      font-size: 13px;
+      color: var(--text-muted, #9ba3b0);
+      margin-bottom: 8px;
+    }
+    .lh-question {
+      font-size: 15px;
+      font-weight: 600;
+      line-height: 1.45;
+      margin-bottom: 12px;
+    }
+    .lh-field {
+      margin-bottom: 10px;
+    }
+    .lh-field label {
+      display: block;
+      font-size: 12px;
+      color: var(--text-muted, #9ba3b0);
+      margin-bottom: 4px;
+    }
+    .lh-field textarea {
+      width: 100%;
+      box-sizing: border-box;
+      background: var(--bg-input, #14171d);
+      color: var(--text-primary, #e6edf3);
+      border: 1px solid var(--border-color, #333a47);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 13px;
+      font-family: inherit;
+      resize: vertical;
+      min-height: 54px;
+    }
+    .lh-footer {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border-color, #333a47);
+    }
+    .lh-conf {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+    }
+    .lh-btn {
+      background: var(--accent, #4f8cff);
+      color: #ffffff;
+      border: none;
+      border-radius: 6px;
+      padding: 7px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+  </style>
+  <div class="lh-box">
+    <div class="lh-header">
+      <span class="lh-badge">Predict Next Step</span>
+      <span>Session {{SESSION_ID}} &middot; Step {{STEP_ID}}</span>
+    </div>
+    <div class="lh-context">{{CONTEXT}}</div>
+    <div class="lh-question">{{QUESTION}}</div>
+    <div class="lh-field">
+      <label for="lh-predict-think1">{{THINK1_LABEL}} (Stream of consciousness / intuition)</label>
+      <textarea id="lh-predict-think1" placeholder="Type your raw reasoning before the step is explained..."></textarea>
+    </div>
+    <div class="lh-field">
+      <label for="lh-predict-q1">Your Prediction (q1)</label>
+      <textarea id="lh-predict-q1" placeholder="What do you predict happens next or solves this limitation?"></textarea>
+    </div>
+    <div class="lh-footer">
+      <div class="lh-conf">
+        <label for="lh-predict-conf">Confidence:</label>
+        <input type="range" id="lh-predict-conf" min="0" max="100" value="50" oninput="document.getElementById('lh-predict-conf-val').textContent=this.value+'%'" />
+        <strong id="lh-predict-conf-val">50%</strong>
+      </div>
+      <button type="button" class="lh-btn" id="lh-predict-submit" onclick="window.lhSubmitPredict()">Submit Prediction</button>
+    </div>
+  </div>
+  <script>
+    window.lhSubmitPredict = function () {
+      var root = document.getElementById('lh-predict-card');
+      var session = root.getAttribute('data-session') || 's0';
+      var step = root.getAttribute('data-step') || '1';
+      var conf = document.getElementById('lh-predict-conf').value;
+      var think1 = document.getElementById('lh-predict-think1').value.trim().replace(/\r?\n+/g, ' ');
+      var q1 = document.getElementById('lh-predict-q1').value.trim().replace(/\r?\n+/g, ' ');
+      var lines = ['[learn] session=' + session + ' step=' + step + ' kind=predict confidence=' + conf];
+      if (think1) lines.push('think1: ' + think1);
+      if (q1) lines.push('q1: ' + q1);
+      var payload = lines.join('\n');
+      if (typeof window.sendPrompt === 'function') window.sendPrompt(payload);
+      return payload;
+    };
+  </script>
+</div>
