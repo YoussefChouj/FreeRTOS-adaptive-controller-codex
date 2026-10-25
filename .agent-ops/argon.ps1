@@ -18,6 +18,18 @@ param([Parameter(Mandatory=$true)][string]$Id, [Parameter(Mandatory=$true)][stri
       [int]$CapK = 160, [int]$TimeoutMin = 60, [int]$NetRetries = 3, [double]$NetMaxMin = 30)
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot "net-wait.ps1")
+# Exit-node log (2026-10-25): the Clash AI-exit node each run used, read from the last "AI:" line of the vpn_monitor
+# log (one line a minute). exit=8 rows name nodes Google rejected, exit=0 rows nodes it accepted.
+$monLog = Join-Path $env:USERPROFILE ".vpn_monitor.log"
+function Get-AiNode {
+  $m = Get-Content $monLog -Tail 5 -Encoding utf8 -ErrorAction SilentlyContinue | Select-String "AI: .*?-> (.+?) \|" |
+    Select-Object -Last 1
+  if ($m) { $m.Matches[0].Groups[1].Value } else { "unknown" } }
+$node0 = Get-AiNode
+function Fin([int]$code) {
+  "$(Get-Date -Format 'yyyy-MM-dd HH:mm') $Id exit=$code start=$node0 end=$(Get-AiNode)" |
+    Out-File (Join-Path $root ".agent-ops\outrgon-nodes.log") -Append -Encoding utf8
+  exit $code }
 $out = Join-Path $root ".agent-ops\out\argon-$Id"
 $prompt = "Read the brief $Brief and answer it. Read-only: do not edit files or commit. Token ceiling: $CapK K tokens in " +
   "total for you and every subagent you spawn; before you reach it, stop and answer with what you have. Answer in at most " +
@@ -26,7 +38,7 @@ $resume = "The network dropped during your last turn. Continue the same brief ($
   "the same rules and token ceiling, and give the final answer."
 # agy's own wording, plus the Node and gRPC codes a dropped proxy surfaces as
 $netErr = "network issue|ECONN|ETIMEDOUT|EAI_AGAIN|fetch failed|socket hang up|UNAVAILABLE|deadline exceeded"
-if (-not (Wait-Net -MaxMin $NetMaxMin -Tag $Id)) { "$Id NO-NET: no network for $NetMaxMin min, agy not started"; exit 7 }
+if (-not (Wait-Net -MaxMin $NetMaxMin -Tag $Id)) { "$Id NO-NET: no network for $NetMaxMin min, agy not started"; Fin 7 }
 $agyArgs = @("-p", "`"$prompt`"", "--output-format", "json")
 $runMs = 0; $in = 0; $cache = 0; $outTok = 0; $think = 0; $turns = 0; $secs = 0
 for ($n = 0; ; $n++) {
@@ -35,15 +47,15 @@ for ($n = 0; ; $n++) {
   $p = Start-Process -FilePath "D:\Tools\agy\bin\agy.exe" -WorkingDirectory $root -WindowStyle Hidden -PassThru `
     -RedirectStandardOutput "$f.json" -RedirectStandardError "$f.err" -ArgumentList $agyArgs
   if (-not $p.WaitForExit([Math]::Max(0, $TimeoutMin * 60000 - $runMs))) {
-    $p.Kill(); "$Id KILLED after $TimeoutMin min of agy run time (over time = over budget)"; exit 2 }
+    $p.Kill(); "$Id KILLED after $TimeoutMin min of agy run time (over time = over budget)"; Fin 2 }
   $runMs += $sw.ElapsedMilliseconds
   $j = $null
   try { $j = Get-Content "$f.json" -Raw -Encoding utf8 | ConvertFrom-Json } catch { }
   $errText = if ($j) { "$($j.error)" } else { (Get-Content "$f.err" -Raw -ErrorAction SilentlyContinue) + "" }
   $isNet = ((-not $j) -or $j.status -eq "ERROR") -and $errText -match $netErr
   if ($errText -match "location is not supported") {
-    "$Id GEO-BLOCK: Google rejected the VPN exit region, pin Clash AI-exit to a tested node, see $f.err"; exit 8 }
-  if (-not $j -and -not $isNet) { "$Id no JSON, see $f.err"; exit 3 }
+    "$Id GEO-BLOCK: Google rejected the VPN exit region, pin Clash AI-exit to a tested node, see $f.err"; Fin 8 }
+  if (-not $j -and -not $isNet) { "$Id no JSON, see $f.err"; Fin 3 }
   if ($j) {
     $u = $j.usage
     $in += [int]$u.input_tokens; $cache += [int]$u.cache_read_tokens; $outTok += [int]$u.output_tokens
@@ -56,11 +68,11 @@ for ($n = 0; ; $n++) {
   $agyArgs = if ($j -and $j.conversation_id) {
     @("-p", "`"$resume`"", "--conversation", $j.conversation_id, "--output-format", "json") } else { $agyArgs }
 }
-if (-not $j) { "$Id NO-NET: agy lost the network $($n + 1) times without a reply, see $f.err"; exit 7 }
+if (-not $j) { "$Id NO-NET: agy lost the network $($n + 1) times without a reply, see $f.err"; Fin 7 }
 # the cap counts fresh tokens; cache reads (the re-sent prefix) are shown but not counted
 $used = $in + $outTok + $think
 $flag = if ($used -gt $CapK * 1000) { "OVER-CAP" } else { "ok" }
 $j.response | Out-File "$out.md" -Encoding utf8
 "$Id $($j.status) $flag used=$used (in $in cache $cache out $outTok) turns=$turns ${secs}s net-retries=$n " +
   "conv=$($j.conversation_id) -> $out.md"
-if ($isNet) { exit 7 } elseif ($j.status -ne "SUCCESS") { exit 1 } else { exit 0 }
+if ($isNet) { Fin 7 } elseif ($j.status -ne "SUCCESS") { Fin 1 } else { Fin 0 }

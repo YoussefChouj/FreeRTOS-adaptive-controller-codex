@@ -10,7 +10,9 @@
 //  1. Pools the 月神云 nodes (file provider) into every group, as before.
 //  2. One auto-switching group per country (US-auto, JP-auto, SG-auto, JPSG-auto). Each one only ever
 //     switches between nodes of its own country, so the exit country (and Google's view of it) never changes.
-//  3. "AI-exit" is the country picker: a selector whose default is US-auto. Google (Gemini/Argon/Jules/Kaggle/
+//  3. "AI-exit" is the country picker: a selector whose default is AI-safe (2026-10-25: US-auto hopped onto US
+//     nodes Argon refused, 01:23-01:43). AI-safe = fallback over the only two nodes Google placed in Japan in
+//     the 2026-10-25 sweep (日本2/日本1 [超高速]; most relay nodes read as CHN); 日本2 passed an Argon ping. Google (Gemini/Argon/Jules/Kaggle/
 //     Colab), Anthropic (Claude) and OpenAI traffic is routed to it by rules prepended in front of the
 //     subscription's rules. Pick another country there and the auto-switching follows that country.
 //  4. 自动选择 / 故障转移 (all other traffic) stay JP/SG only, which is the user's general preference.
@@ -92,10 +94,23 @@ function main(config, profileName) {
   const regionGroups = REGIONS.map(([name, pattern]) => autoGroup(name, pattern, names, 180, 150));
   regionGroups.push(autoGroup("JPSG-auto", JPSG, names, 180, 150));
   regionGroups.push(autoGroup(BEST, ALL_REGIONS, names, 180, 150));
+  const AI_SAFE_NODES = ["[Japan] 日本2 [超高速]", "[Japan] 日本1 [超高速]"]; // sweep 2026-10-25: Google sees JPN
+  const aiSafe = {
+    name: "AI-safe",
+    type: "fallback", // first live node in order; never hops to another country or a relay that reads as China
+    proxies: AI_SAFE_NODES.filter((n) => names.includes(n)),
+    use: [OTHER],
+    filter: "日本[12] \\[超高速\\]",
+    url: CHECK_URL,
+    interval: 60,
+    timeout: 3000,
+    lazy: false,
+    "max-failed-times": 2,
+  };
   const aiExit = {
     name: AI_GROUP,
     type: "select",
-    proxies: regionGroups.map((g) => g.name).concat(matching(names, ALL_REGIONS)),
+    proxies: ["AI-safe"].concat(regionGroups.map((g) => g.name), matching(names, ALL_REGIONS)),
     use: [OTHER],
     filter: ALL_REGIONS, // fixed nodes of all three countries: the vpn_monitor tray pins one when auto-switch is off
     "exclude-filter": INFO_NODES.source,
@@ -118,7 +133,7 @@ function main(config, profileName) {
     group.interval = 300;
     group.tolerance = 100;
   }
-  config["proxy-groups"] = [aiExit].concat(regionGroups, groups);
+  config["proxy-groups"] = [aiExit, aiSafe].concat(regionGroups, groups);
   const mainSel = groups.some((g) => g.name === MAIN) ? MAIN : (groups.find((g) => g.type === "select") || {}).name;
   config.rules = AI_RULES.map((r) => r.replace("@MAIN", mainSel || "DIRECT")).concat(config.rules || []);
   return config;

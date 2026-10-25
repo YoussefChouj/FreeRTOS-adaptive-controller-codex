@@ -28,6 +28,14 @@ Added 2026-10-24:
 - Best-auto: fastest node in any country (auto only).
 - one controller request at a time (a lock), each with a hard deadline; the pipe handle is always closed.
 - it never closes connections.
+Added 2026-10-25:
+- geo check: every GEO_INTERVAL_S it loads gemini.google.com through the proxy (AI rules send it to AI-exit) and
+  reads the 3-letter country Google places the exit in (pattern from github.com/lmc999/RegionRestrictionCheck;
+  its "served" marker is gone from the page, 2026-10-25 sweep). mihomo's health check reads only the status
+  code, so it cannot see this. Logs "geo: Google sees <CC> via <node>" when it changes and warns on CHN/HKG/MAC
+  (relay nodes that land in China). A non-China country is NOT proof Argon accepts the node: 美国 [超高速] read
+  USA and Argon refused it at 01:43; only an Argon ping proves a node. It never switches by itself.
+- AI-safe (profile script): fallback of the two nodes Google placed in Japan on 2026-10-25, the AI-exit default.
 Without pystray it runs headless: it only logs. `--dry-run` logs the current state once and exits.
 """
 import ctypes
@@ -39,6 +47,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import urllib.request
 from ctypes import wintypes
 from pathlib import Path
 
@@ -53,9 +62,14 @@ DELAY_TIMEOUT_MS = 5000
 DELAY_URL = "https://www.gstatic.com/generate_204"
 LANES = (("AI-exit", "AI traffic (Argon, Jules, Claude)", "AI"), ("VPN07.com", "Other traffic", "Other"))
 COUNTRIES = (("US-auto", "USA"), ("JP-auto", "Japan"), ("SG-auto", "Singapore"), ("JPSG-auto", "Japan + Singapore"),
-             ("Best-auto", "Fastest, any country"))
-MULTI = {"JPSG-auto", "Best-auto"}       # span countries: auto-switch only (a pin would be one node in one country)
+             ("Best-auto", "Fastest, any country"), ("AI-safe", "Japan, Google-checked (AI only)"))
+MULTI = {"JPSG-auto", "Best-auto", "AI-safe"}       # span countries: auto-switch only (a pin would be one node in one country)
 REVIVE_INTERVAL_S = 300
+GEO_INTERVAL_S = 600                 # PROPOSED: one gemini.google.com page load every 10 min
+GEO_URL = "https://gemini.google.com"
+GEO_BLOCKED = {"CHN", "HKG", "MAC"}   # countries Google refuses Gemini in that our relay nodes land in
+GEO_PROXY = "http://127.0.0.1:7897"
+GEO_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
 LOW_QUOTA_GB = 5
 PROFILES_YAML = Path(os.environ.get("APPDATA", "")) / "io.github.clash-verge-rev.clash-verge-rev" / "profiles.yaml"
 COUNTRY_NAMES = dict(COUNTRIES)
@@ -250,6 +264,17 @@ def choose(lane, group, auto):
         raise RuntimeError(f"{lane} -> {target}: HTTP {st} {(body or {}).get('message', '')}".strip())
     log(f"tray: {lane} -> {target}")
 
+def google_geo():
+    """3-letter country Google places the AI lane's exit in, "no answer" or "unknown" (pattern not in the page)."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({"https": GEO_PROXY, "http": GEO_PROXY}))
+    try:
+        req = urllib.request.Request(GEO_URL, headers={"User-Agent": GEO_UA})
+        body = opener.open(req, timeout=20).read().decode("utf-8", "replace")
+    except Exception:
+        return "no answer"
+    cc = re.search(r',2,1,200,"([A-Z]{3})"', body)
+    return cc.group(1) if cc else "unknown"
+
 def node_alive(node):
     q = urllib.parse.urlencode({"url": DELAY_URL, "timeout": DELAY_TIMEOUT_MS})
     st, d = clash("GET", f"/proxies/{urllib.parse.quote(node)}/delay?{q}", timeout_s=DELAY_TIMEOUT_MS / 1000 + 10)
@@ -306,7 +331,7 @@ def run_tray(wake):
                                   checked=lambda _item, g=group: state()[0] == g,
                                   enabled=lambda _item, g=group: lane in snap["lanes"] and (
                                       g not in MULTI or state()[1]))
-                 for group, name in COUNTRIES]
+                 for group, name in COUNTRIES if group != "AI-safe" or lane == LANES[0][0]]
         items += [pystray.Menu.SEPARATOR,
                   pystray.MenuItem("Auto-switch inside the country",
                                    lambda _icon, _item: act(lane, state()[0], not state()[1]),
@@ -348,6 +373,7 @@ def monitor_loop(wake, show=None, notify=None):
     """Re-read the state every CHECK_INTERVAL_S (or when woken), log changes, warn once per problem or dead pin."""
     log(f"VPN monitor started (pid {os.getpid()}). Checking every {CHECK_INTERVAL_S}s; it never switches by itself.")
     last_line, dead, last_revive, last_quota = None, set(), 0.0, None
+    last_geo, geo_at = None, -GEO_INTERVAL_S
     while True:
         try:
             snap = snapshot()
@@ -370,6 +396,15 @@ def monitor_loop(wake, show=None, notify=None):
             if in_use and time.monotonic() - last_revive > REVIVE_INTERVAL_S:
                 revive(sorted(in_use))
                 last_revive = time.monotonic()
+            ai = snap["lanes"].get(LANES[0][0])
+            if ai and time.monotonic() - geo_at >= GEO_INTERVAL_S:
+                geo_at = time.monotonic()
+                cc = google_geo()
+                if (cc, ai[2]) != last_geo:
+                    log(f"geo: Google sees {cc} via {ai[2]}")
+                    if cc in GEO_BLOCKED and notify:
+                        notify(f"Google places {ai[2]} in {cc}: Argon will refuse it. Pick AI-safe.", "VPN geo-block")
+                    last_geo = (cc, ai[2])
             quota = quota_warning(plans())
             if quota != last_quota:
                 if quota:
