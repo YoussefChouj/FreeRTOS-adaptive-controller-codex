@@ -28,13 +28,13 @@ day: 2026-10-25
 carry: true                        # pull earlier unflown flights (ground_station/lab/labday.py:81, 96-128)
 title: MRAC thesis variants, xy/att/z/yaw layer A/B, rate-gain A/B, alone-retests (VAR47=12 for LQR/MPC), MRAC around LQR/MPC/ADRC, rate sysid re-fly, pattern-learn + prior cold/warm
 camera:
-  floor: floor-2026-10-24          # scan at lab with drone out of view: .\cam floor floor-2026-10-24
+  floor: floor-2026-10-24          # fallback only: labday scans floor-<date>[-N] itself at launch (drone out of view)
   mode: 3                          # in-EKF
   args: [--yaw-deg, "94", --delay-ms, "330"]
 before:
-  - "RESTART 8081 (link fix d7fdfa1e was committed; 8081 restart clears stale subscribe state)"
-  - 'Floor scan: .\cam floor floor-2026-10-24 (must produce aruco.npz for d5_truth4)'
-  - "Run offline ground-truth: python -m ground_station.analysis.d5_truth4_batch --day 2026-10-24 --run"
+  - "RESTART 8081 (picks up RC authority + raw stick logging b132d2e5; clears stale subscribe state)"
+  - "Floor scan: labday does it at launch (drone out of view); keep the camera still all day"
+  - "HANDS OFF THE STICKS during every trajectory: a stick move > 0.05 in 10 ms = RC takeover = trajectory abort (10-24: 3 of 5 figure-8 aborts had no arm, mode or state change, so RC takeover is the likely cause; not logged then)"
   - "8081 running, arm 0, landing pad clear, camera in recording position"
   - "Tracker dot on drone center before arming"
   - "Check pack resting volts >= 15.8V before first flight (source docs/lab/run-sheet-2026-10-14.md:63)"
@@ -43,6 +43,11 @@ flights:
   # ======== BLOCK 1: MRAC THESIS VARIANTS ========
   # Memory A/B (thesis: adaptive layer is controller-agnostic, wraps PID/LQR/MPC/ADRC)
   # MRAC injection ON, xy_layers=inner (matching 10-21 design)
+
+  - id: smoke-hover
+    fly: lab_s_smoke
+    why: "First flight of the day: hover, the preset paths, land on the pad; checks the link and the new RC authority log columns"
+    pass: "every traj_go accepted; lands inside the pad gate; drift_nn.steps > 0; s_authority stays 1 in the log"
 
   - id: memory-mrac-off
     fly: lab_m_memory_u0
@@ -312,6 +317,8 @@ branches:
   - {when: "A flight refuses with no fitted reference file (matched flights)", do: "Run mrac_ref_fit on the ground (1 min), then re-fly"}
   - {when: "An alone-retest oscillates or aborts", do: "Land, tell me. LQR/MPC: confirm the flown script was the _d12 one (set g_xyc_delay_ticks=12). ADRC/PID: VAR47 does not apply; compare with the mode-1 deck. Re-fly"}
   - {when: "Tilt trip or fence stop", do: "Land; tell me before next flight"}
+  - {when: "Trajectory aborts (traj_status 3) and the log shows s_authority 0 or a stick move", do: "RC takeover, not the controller: land, hands off the sticks, re-fly the same flight (r)"}
+  - {when: "Host guard position_error (more than 0.50 m off the path for 0.3 s) returns the drone", do: "A real excursion (10-24 memory-mrac-off-6): land, note it, re-fly once; a second trip = stop that flight and tell me"}
   - {when: "Pack at packs.yaml gate", do: "Swap before next flight; give new type when fly asks"}
   - {when: "Rate gain change causes immediate oscillation", do: "Land; revert gain to current; report to operator"}
   - {when: "pattern-learn preflight: slot 0 < 8Hz", do: "Restart 8081, power-cycle drone FC, retry; if still failing, skip to prior-cold"}
