@@ -1249,7 +1249,15 @@ class Day:
         since = log_offsets()
         child = self.popen(fly_cmd(f, pack, port=self.port, plain=not self.lab_service, no_gates=self.no_gates,
                                    gains=self.gains_arg()), cwd=ROOT)
-        rc = child.wait()
+        while True:
+            try:
+                # Bounded waits let Windows deliver Ctrl+C while fly owns land/abort.
+                rc = child.wait(timeout=0.5)
+                break
+            except subprocess.TimeoutExpired:
+                continue
+            except KeyboardInterrupt:
+                events.log("labday_ctrl_c", day=self.day, id=f["id"], pid=child.pid)
         return rc, debrief_event(child.pid, since)
 
     def branches(self):
@@ -1890,14 +1898,16 @@ class Day:
                 cam = self.camera_start(name)
                 if cam is None:
                     return "quit"
-                self.say(f"--- FLYING {f['id']}: {f.get('why') or note(f)[0] or f['fly']}")
-                t0 = time.monotonic()
-                rc, ev = self.fly(f, pack)
-                took = time.monotonic() - t0
-                v = self.volts()   # before the camera stop, which takes up to 20 s
-                pack = None
-                if cam:
-                    self.camera_stop(name)
+                try:
+                    self.say(f"--- FLYING {f['id']}: {f.get('why') or note(f)[0] or f['fly']}")
+                    t0 = time.monotonic()
+                    rc, ev = self.fly(f, pack)
+                    took = time.monotonic() - t0
+                    v = self.volts()   # before the camera stop, which takes up to 20 s
+                    pack = None
+                finally:
+                    if cam:
+                        self.camera_stop(name)
                 why = bad_end(rc, ev)
                 folder = (ev or {}).get("folder")
                 self.state["flown"][f["id"]] = {"ok": why is None, "rc": rc, "why": why, "t": time.strftime("%H:%M:%S"),

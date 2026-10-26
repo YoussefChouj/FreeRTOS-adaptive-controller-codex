@@ -347,6 +347,46 @@ def test_camera_around_each_flight_after_the_launch_floor_scan(tmp_path, monkeyp
             for c in fake.cmds[:5]] == ["8081", "floor", "8081", "fusion", "fly"]
 
 
+def test_fly_ctrl_c_keeps_waiting_for_child(tmp_path, monkeypatch):
+    fake = _Fake([])
+    p = _player(tmp_path, monkeypatch, fake, [{"id": "smoke-hover", "fly": "lab_c_robust"}])
+    calls = []
+    logged = []
+
+    def wait(timeout=None):
+        calls.append(timeout)
+        if len(calls) == 1:
+            raise KeyboardInterrupt
+        return 0
+
+    monkeypatch.setattr(p, "popen", lambda *a, **kw: SimpleNamespace(pid=4242, wait=wait))
+    monkeypatch.setattr(labday, "log_offsets", lambda: {})
+    monkeypatch.setattr(labday.events, "log", lambda event, **kw: logged.append((event, kw)))
+    rc, ev = p.fly(p.d["flights"][0], None)
+    assert rc == 0 and ev["status"] == "complete"
+    assert len(calls) == 2 and all(timeout is not None for timeout in calls)
+    assert [event for event, _ in logged] == ["labday_ctrl_c"]
+    assert logged[0][1]["id"] == "smoke-hover"
+
+
+@pytest.mark.parametrize("error", [KeyboardInterrupt, RuntimeError])
+def test_flight_exception_stops_camera_exactly_once(tmp_path, monkeypatch, error):
+    fake = _Fake([])
+    p = _player(tmp_path, monkeypatch, fake, [{"id": "smoke-hover", "fly": "lab_c_robust"}])
+    stopped = []
+    monkeypatch.setattr(p, "service_up", lambda: True)
+    monkeypatch.setattr(p, "camera_start", lambda name: True)
+    monkeypatch.setattr(p, "camera_stop", stopped.append)
+
+    def fly(*args):
+        raise error
+
+    monkeypatch.setattr(p, "fly", fly)
+    with pytest.raises(error):
+        p.one(p.d["flights"][0], None)
+    assert stopped == ["smoke-hover-lab-c-robust"]
+
+
 def test_floor_check_reads_what_the_scan_left(tmp_path):
     assert _scan(tmp_path / "ok", 8) == 0
     ok, text = labday.floor_check(tmp_path / "ok")
