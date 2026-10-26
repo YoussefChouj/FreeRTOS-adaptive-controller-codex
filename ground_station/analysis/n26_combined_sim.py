@@ -145,7 +145,7 @@ class XyCtrl1DWrap:
             np.array([vel_cms]),
             np.array([vff_cms]),
             aff=np.array([aff_cms2]),
-            future_ref=future_ref,
+            fut_ref=future_ref,
         )
         return float(np.asarray(u).ravel()[0])
 
