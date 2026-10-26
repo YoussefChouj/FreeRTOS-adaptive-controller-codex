@@ -472,11 +472,6 @@ void TrajFF_Step(TrajFF_t *s, uint8_t active, float tx_cm, float ty_cm, float dt
         *aff_x = s_preset_aff_x;
         *aff_y = s_preset_aff_y;
         return;
-        *vff_x = 0.0f;
-        *vff_y = 0.0f;
-        *aff_x = 0.0f;
-        *aff_y = 0.0f;
-        return;
     }
 
     if (!s->primed) {

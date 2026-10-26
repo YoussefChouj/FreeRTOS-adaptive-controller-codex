@@ -921,7 +921,6 @@ static void Traj_FFUpdate(void)
 	s_ff_y = s_c_y;
 	s_ff_z = s_c_z;
 	s_ff_yaw = s_yaw_cmd;
-	s_ff_yaw = s_yaw_cmd;
 	s_ff_have = 1U;
 	g_traj_aff_x = 0.0f;
 	g_traj_aff_y = 0.0f;
@@ -934,9 +933,15 @@ static void Traj_FFUpdate(void)
 		float pos_p[3], vel_p[3], acc_p[3];
 		TrajShape_WarpDerivs(s_tp.profile, s_tph, s_tp.move_s, s_tp.ramp_s, &w, &dw, &ddw);
 		TrajShape_Derivs(&s_shape, s_om * w, s_om * dw, s_om * ddw, pos_p, vel_p, acc_p);
-		TrajShape_ScaleFF(s_slow_s, s_slow_ds_dt, vel_p[0], vel_p[1], acc_p[0], acc_p[1],
-		TrajShape_ScaleFF(s_slow_s, s_slow_ds_dt, vel_p[0], vel_p[1], acc_p[0], acc_p[1],
-		                  &g_traj_vff_x, &g_traj_vff_y, &g_traj_aff_x, &g_traj_aff_y);
+		{
+			float vfx = 0.0f, vfy = 0.0f, afx = 0.0f, afy = 0.0f;
+			TrajShape_ScaleFF(s_slow_s, s_slow_ds_dt, vel_p[0], vel_p[1], acc_p[0], acc_p[1],
+			                  &vfx, &vfy, &afx, &afy);
+			g_traj_vff_x = vfx;
+			g_traj_vff_y = vfy;
+			g_traj_aff_x = afx;
+			g_traj_aff_y = afy;
+		}
 		if (g_traj_ff_preset != 0U && g_xy_ctrl_kind == 0U) {
 			TrajFF_SetPresetAcc(g_traj_aff_x, g_traj_aff_y);
 		}
