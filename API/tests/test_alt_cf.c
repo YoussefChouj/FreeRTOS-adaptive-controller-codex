@@ -1498,6 +1498,78 @@ static void test_a2_outlier_and_latch(void)
     check_cond("A2 disarmed sample flag latches", s_alt_sample_mode == ALT_TOF_SAMPLE_LEGACY);
 }
 
+/* A3 fidelity: PROPOSED 40 ms sensor latency, 1 Hz / 8 cm sine,
+ * exact acceleration, cm quantization; no motors, vibration or control plant. */
+static void test_a3_delayed_sine(void)
+{
+    int mode, tick;
+    float h_phase[2], v_phase[2];
+    const float omega = 6.28318530718f;
+    for (mode = 0; mode < 2; mode++) {
+        double hs = 0.0, hc = 0.0, vs = 0.0, vc = 0.0;
+        reset_env(ALT_VZ_MODE_CF, 100U);
+        s_alt_delay_ticks = (uint8_t)(mode * 8);
+        for (tick = 1; tick <= 10000; tick++) {
+            float t = (float)tick * STAB_DT_S;
+            float sn = sinf(omega * t), cs = cosf(omega * t);
+            Lin_Acc_Z_body = -0.08f * omega * omega * sn / MG_TO_MPS2;
+            if (tick % 10 == 0) {
+                ano_of.of_alt_cm = (uint32_t)(100.0f + 8.0f * sinf(omega * (t - 0.04f)) + 0.5f);
+                ano_of.alt_update_cnt++;
+            }
+            Alt_UpdateFB();
+            if (tick > 6000) {
+                hs += (alt_cf.h - 1.0f) * sn;
+                hc += (alt_cf.h - 1.0f) * cs;
+                vs += alt_cf.vz * sn;
+                vc += alt_cf.vz * cs;
+            }
+        }
+        h_phase[mode] = (float)(atan2(hc, hs) * 180.0 / 3.141592653589793);
+        v_phase[mode] = (float)(atan2(-vs, vc) * 180.0 / 3.141592653589793);
+        printf("A3 PROPOSED 40ms sine d=%d: h phase=%.4f deg vz phase=%.4f deg (host)\n",
+               mode * 8, (double)h_phase[mode], (double)v_phase[mode]);
+    }
+    check_cond("A3 matched delay h phase error below 5 degrees", fabsf(h_phase[1]) < 5.0f);
+    check_cond("A3 matched delay vz phase error below 5 degrees", fabsf(v_phase[1]) < 5.0f);
+    check_cond("A3 matched delay improves h phase", fabsf(h_phase[1]) < fabsf(h_phase[0]));
+}
+
+static void test_a3_history_and_latch(void)
+{
+    int age, index, repeat;
+    float before[ALT_CF_HISTORY_LEN][3];
+    reset_env(ALT_VZ_MODE_CF, 100U);
+    for (age = 0; age < 40; age++) Alt_CfHistoryPush();
+    memcpy(before, s_alt_cf_history, sizeof(before));
+    for (repeat = 1; repeat <= 2; repeat++) {
+        Alt_CfHistoryCorrect(8U, 0.01f, 0.02f, 0.03f);
+        for (age = 0; age < (int)ALT_CF_HISTORY_LEN; age++) {
+            float t = (float)(8 - age) * STAB_DT_S;
+            float dh = (age <= 8) ? 0.01f + 0.02f * t - 0.5f * 0.03f * t * t : 0.0f;
+            float dv = (age <= 8) ? 0.02f - 0.03f * t : 0.0f;
+            float db = (age <= 8) ? 0.03f : 0.0f;
+            index = (s_alt_cf_head + ALT_CF_HISTORY_LEN - age) % ALT_CF_HISTORY_LEN;
+            check_cond("A3 repeated history h transport", fabsf(s_alt_cf_history[index][0] - before[index][0] - repeat * dh) < 3e-7f);
+            check_cond("A3 repeated history vz transport", fabsf(s_alt_cf_history[index][1] - before[index][1] - repeat * dv) < 3e-7f);
+            check_cond("A3 repeated history bias transport", fabsf(s_alt_cf_history[index][2] - before[index][2] - repeat * db) < 3e-7f);
+        }
+    }
+    g_alt_tof_delay_ticks = 8U;
+    Alt_UpdateFB();
+    check_cond("A3 delay cannot latch while armed", s_alt_delay_ticks == 0U);
+    Flight_Control_Lock = 0U;
+    Alt_UpdateFB();
+    check_cond("A3 delay latches while disarmed", s_alt_delay_ticks == 8U);
+    g_alt_tof_delay_ticks = 255U;
+    Alt_UpdateFB();
+    check_cond("A3 invalid delay clamps to ring capacity", s_alt_delay_ticks == 31U);
+    Alt_CfReset(1.25f, 1U);
+    check_cond("A3 reset seeds one consistent state", s_alt_cf_history_n == 1U
+               && s_alt_cf_history[0][0] == alt_cf.h && s_alt_cf_history[0][1] == alt_cf.vz
+               && s_alt_cf_history[0][2] == alt_cf.b_az);
+}
+
 int main(void)
 {
     test_u1_fd_bit_exact_on_213634_trace();
@@ -1515,11 +1587,13 @@ int main(void)
     test_u13_next_arm_latch();
     test_a1_stale_arrival();
     test_a2_outlier_and_latch();
+    test_a3_delayed_sine();
+    test_a3_history_and_latch();
 
     if (g_fail_count != 0) {
         printf("FAILED: %d checks failed (%d passed)\n", g_fail_count, g_pass_count);
         return 1;
     }
-    printf("ALL ALT_CF TESTS PASSED (U1-U13, A1-A2) (%d checks)\n", g_pass_count);
+    printf("ALL ALT_CF TESTS PASSED (U1-U13, A1-A3) (%d checks)\n", g_pass_count);
     return 0;
 }

@@ -1254,6 +1254,11 @@ static uint8_t  s_alt_vz_mode_prev = ALT_VZ_MODE_DEFAULT;
 static uint8_t  s_alt_armed_prev   = 0U;
 static uint16_t s_alt_cf_steps     = 0U;
 static uint8_t s_alt_sample_mode = ALT_TOF_SAMPLE_NEWEST;
+static uint8_t s_alt_delay_ticks = 0U;
+/* Ring entries are posterior states; current predicted state is pushed before fusion. */
+static float s_alt_cf_history[ALT_CF_HISTORY_LEN][3];
+static uint8_t s_alt_cf_head = 0U;
+static uint8_t s_alt_cf_history_n = 1U;
 
 /* Altitude complementary filter, one row per gain set; runtime state starts at 0.
    @k1      -        [0, 1]     height correction per ToF sample
@@ -1276,7 +1281,45 @@ static const AltCfGains s_alt_cf_gains[] = {
 volatile uint8_t g_alt_vz_mode = ALT_VZ_MODE_DEFAULT;
 volatile uint8_t g_alt_cf_rate_mode = ALT_CF_RATE_LEGACY;
 volatile uint8_t g_alt_tof_sample_mode = ALT_TOF_SAMPLE_NEWEST;
+volatile uint8_t g_alt_tof_delay_ticks = 0U;
 AltCfState_t     alt_cf;
+
+static void Alt_CfHistoryReset(void)
+{
+    s_alt_cf_head = 0U;
+    s_alt_cf_history_n = 1U;
+    s_alt_cf_history[0][0] = alt_cf.h;
+    s_alt_cf_history[0][1] = alt_cf.vz;
+    s_alt_cf_history[0][2] = alt_cf.b_az;
+}
+
+static void Alt_CfHistoryPush(void)
+{
+    s_alt_cf_head = (uint8_t)((s_alt_cf_head + 1U) % ALT_CF_HISTORY_LEN);
+    if (s_alt_cf_history_n < ALT_CF_HISTORY_LEN) s_alt_cf_history_n++;
+    s_alt_cf_history[s_alt_cf_head][0] = alt_cf.h;
+    s_alt_cf_history[s_alt_cf_head][1] = alt_cf.vz;
+    s_alt_cf_history[s_alt_cf_head][2] = alt_cf.b_az;
+}
+
+/* Transport a horizon correction through the same constant-acceleration model.
+ * db is the actual bias change AFTER clamping, so propagation stays consistent.
+ * States older than the fusion horizon precede the correction and stay unchanged. */
+static void Alt_CfHistoryCorrect(uint8_t delay, float dh, float dv, float db)
+{
+    uint8_t age, index;
+    float t;
+    for (age = 0U; age <= delay; age++) {
+        index = (uint8_t)((s_alt_cf_head + ALT_CF_HISTORY_LEN - age) % ALT_CF_HISTORY_LEN);
+        t = (float)(delay - age) * STAB_DT_S;
+        s_alt_cf_history[index][0] += dh + dv * t - 0.5f * db * t * t;
+        s_alt_cf_history[index][1] += dv - db * t;
+        s_alt_cf_history[index][2] += db;
+    }
+    alt_cf.h = s_alt_cf_history[s_alt_cf_head][0];
+    alt_cf.vz = s_alt_cf_history[s_alt_cf_head][1];
+    alt_cf.b_az = s_alt_cf_history[s_alt_cf_head][2];
+}
 
 void Alt_CfReset(float h_init, uint8_t zero_bias)
 {
@@ -1293,6 +1336,7 @@ void Alt_CfReset(float h_init, uint8_t zero_bias)
 	}
 	s_alt_cf_inited = (h_init > 0.0f) ? 1U : 0U;
 	s_alt_vz_mode_prev = g_alt_vz_mode;
+	Alt_CfHistoryReset();
 }
 
 /* Altitude sanity gate (of_alt_cm is cm, u32; clamped to u16 below). Three layers (ADR-0011 Z-gate),
@@ -1327,6 +1371,8 @@ void Alt_UpdateFB(void)
 	armed = ALT_IS_ARMED();
 	if (!armed) s_alt_sample_mode = (g_alt_tof_sample_mode == ALT_TOF_SAMPLE_LEGACY)
 	                              ? ALT_TOF_SAMPLE_LEGACY : ALT_TOF_SAMPLE_NEWEST;
+	if (!armed) s_alt_delay_ticks = (g_alt_tof_delay_ticks < ALT_CF_HISTORY_LEN)
+	                               ? g_alt_tof_delay_ticks : ALT_CF_HISTORY_LEN - 1U;
 	newest = (uint8_t)(g_alt_vz_mode == ALT_VZ_MODE_CF && s_alt_sample_mode == ALT_TOF_SAMPLE_NEWEST);
 	cnt_changed = (uint8_t)(ano_of.alt_update_cnt != s_alt_cnt_prev);
 	s_alt_cnt_prev = ano_of.alt_update_cnt;
@@ -1451,6 +1497,7 @@ void Alt_UpdateFB(void)
 		alt_cf.dt_c = STAB_DT_S;
 		alt_cf.y_corr = ano_of.of2_h;
 		s_alt_cf_steps = 0U;
+		Alt_CfHistoryReset();
 	} else if (!s_alt_cf_inited) {
 		/* 2026-10-26 smoke hover: hold armed-pad height until range initialization. */
 		alt_cf.h = ano_of.of2_h;
@@ -1462,13 +1509,21 @@ void Alt_UpdateFB(void)
 		if (s_alt_cf_steps < 65535U) s_alt_cf_steps++;
 		alt_cf.h  += alt_cf.vz * STAB_DT_S + 0.5f * alt_cf.a_up * STAB_DT_S * STAB_DT_S;
 		alt_cf.vz += alt_cf.a_up * STAB_DT_S;
+		Alt_CfHistoryPush();
 		if (sample_accepted) {
+			uint8_t delay = s_alt_delay_ticks;
+			uint8_t index;
+			float before_h = alt_cf.h;
+			float before_v = alt_cf.vz;
+			float before_b = alt_cf.b_az;
+			if (delay >= s_alt_cf_history_n) delay = s_alt_cf_history_n - 1U;
+			index = (uint8_t)((s_alt_cf_head + ALT_CF_HISTORY_LEN - delay) % ALT_CF_HISTORY_LEN);
 			alt_cf.dt_c = (float)s_alt_cf_steps * STAB_DT_S;
 			if (alt_cf.dt_c < STAB_DT_S) alt_cf.dt_c = STAB_DT_S;
 			else if (alt_cf.dt_c > ALT_CF_DTC_MAX) alt_cf.dt_c = ALT_CF_DTC_MAX;
 			alt_cf.y_corr = ano_of.of2_h;
 			s_alt_cf_steps = 0U;
-			alt_cf.e     = ano_of.of2_h - alt_cf.h;
+			alt_cf.e     = ano_of.of2_h - ((delay == 0U) ? alt_cf.h : s_alt_cf_history[index][0]);
 			if (alt_cf.mode == ALT_CF_RATE_SCALED) {
 				float k1_eff = g->k1 * alt_cf.dt_c / ALT_CF_TS_DESIGN;
 				float k2_eff = g->k2 * alt_cf.dt_c / ALT_CF_TS_DESIGN;
@@ -1484,6 +1539,17 @@ void Alt_UpdateFB(void)
 			}
 			if (alt_cf.b_az > ALT_CF_BAZ_MAX) alt_cf.b_az = ALT_CF_BAZ_MAX;
 			else if (alt_cf.b_az < -ALT_CF_BAZ_MAX) alt_cf.b_az = -ALT_CF_BAZ_MAX;
+			if (delay != 0U) {
+				float dh = alt_cf.h - before_h;
+				float dv = alt_cf.vz - before_v;
+				float db = alt_cf.b_az - before_b;
+				Alt_CfHistoryCorrect(delay, dh, dv, db);
+			} else {
+				/* Preserve delay=0 arithmetic exactly, including bias clamp. */
+				s_alt_cf_history[s_alt_cf_head][0] = alt_cf.h;
+				s_alt_cf_history[s_alt_cf_head][1] = alt_cf.vz;
+				s_alt_cf_history[s_alt_cf_head][2] = alt_cf.b_az;
+			}
 			alt_cf.n_corr++;
 		} else if (resynced) {
 			alt_cf.e = ano_of.of2_h - alt_cf.h;
@@ -1491,6 +1557,8 @@ void Alt_UpdateFB(void)
 			s_alt_cf_inited = 1U;
 		}
 	}
+
+	if (!armed || !s_alt_cf_inited || resynced) Alt_CfHistoryReset();
 
 	if (g_alt_vz_mode == ALT_VZ_MODE_CF) {
 		Ctrler.Z_posPID.FB  = alt_cf.h;
@@ -1519,6 +1587,8 @@ void Alt_TestResetAll(void)
 	g_alt_cf_rate_mode = ALT_CF_RATE_LEGACY;
 	g_alt_tof_sample_mode = ALT_TOF_SAMPLE_NEWEST;
 	s_alt_sample_mode = ALT_TOF_SAMPLE_NEWEST;
+	g_alt_tof_delay_ticks = 0U;
+	s_alt_delay_ticks = 0U;
 	alt_cf.mode = ALT_CF_RATE_LEGACY;
 	s_alt_vz_mode_prev = ALT_VZ_MODE_DEFAULT;
 	s_alt_cf_inited = 0U;

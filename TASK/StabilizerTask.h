@@ -83,6 +83,7 @@ extern volatile uint8_t g_rc_fallback;
 #define ALT_CF_RATE_SCALED  1U
 #define ALT_TOF_SAMPLE_LEGACY 0U
 #define ALT_TOF_SAMPLE_NEWEST 1U
+#define ALT_CF_HISTORY_LEN 32U /* 155 ms maximum age at 200 Hz; PROPOSED capacity */
 
 #ifndef ALT_CF_ACC_SIGN
 #define ALT_CF_ACC_SIGN     1.0f
@@ -118,6 +119,7 @@ typedef struct {
 extern volatile uint8_t g_alt_vz_mode;
 extern volatile uint8_t g_alt_cf_rate_mode; /* VAR 59; pending until next arm */
 extern volatile uint8_t g_alt_tof_sample_mode; /* 0 old tick median, 1 newest (default); disarmed latch */
+extern volatile uint8_t g_alt_tof_delay_ticks; /* 0 default; 0..31 ticks, disarmed latch */
 extern AltCfState_t     alt_cf;
 
 void Alt_UpdateFB(void);
