@@ -435,11 +435,14 @@ class StreamSchema:
     total_bytes: int
     ranges: tuple
     slot: int = 0
+    # The 0x08 reply contains only a divider; its clock comes from telemetry mode.
+    # Default preserves the LEGACY/MIXED callers; SUBSCRIBE_ONLY supplies 200 Hz.
+    tick_hz: float = SEND_TASK_MEASURED_HZ
 
     @property
     def hz(self) -> float:
-        """Expected data-frame rate, from the MEASURED Send_Task cadence."""
-        return SEND_TASK_MEASURED_HZ / self.divider if self.divider else 0.0
+        """Expected data-frame rate for the subscription's telemetry-mode clock."""
+        return self.tick_hz / self.divider if self.divider else 0.0
 
     @property
     def frame_bytes(self) -> int:
@@ -452,7 +455,7 @@ class StreamSchema:
 
     @property
     def bps(self) -> int:
-        return stream_bps(self.total_bytes, self.divider)
+        return int(self.frame_bytes * self.hz)
 
 
 def decode_schema(n_ranges: int, payload: bytes, requested=()) -> StreamSchema:

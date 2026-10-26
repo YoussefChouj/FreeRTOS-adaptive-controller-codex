@@ -291,10 +291,9 @@ DATA_FRAME_OVERHEAD_B = 12
 # rework comment); 80% is the host "leave headroom for jitter" threshold.
 HOST_SAFE_WIRE_PCT = 80.0
 
-# Host assumes 4-byte (float32) value cells. Every shipped manifest uses
-# float32 throughout; if a future manifest mixes uint16/float32 the budget
-# will over-estimate slightly, which is the safe direction. Set False for
-# any var where the firmware data-frame payload per range is not size*count.
+# Planning conservatively prices every scalar as four bytes. This is a wire
+# budget assumption, not a decoder type: the bridge keeps each DWARF format,
+# including mixed integer/float ranges. Smaller integer cells cost less live.
 DEFAULT_VALUE_BYTES = 4
 
 
@@ -363,8 +362,8 @@ def compute_multi_slot_budget(
         store: ManifestStore instance (defaults to global manifests.yaml)
         send_task_hz: firmware Send_Task rate the budget arithmetic mirrors.
             Defaults to 100 (matches API/subscribe.h constant).
-        value_bytes: assumed bytes per value cell. Defaults to 4 (float32),
-            which is what every shipped manifest uses.
+        value_bytes: planning bytes per scalar cell, default 4 (upper bound
+            for the supported 1/2/4-byte subscribe cells, regardless of type).
 
     Returns:
         MultiSlotBudget with per-slot breakdown and total wire %.

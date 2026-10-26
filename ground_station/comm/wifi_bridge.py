@@ -2645,6 +2645,7 @@ class WifiBridge:
                         address=address, size=size, count=count,
                         name=hint.name, fmt=hint.fmt,
                         _names=hint._names if hasattr(hint, "_names") else None,
+                        _fmts=getattr(hint, "_fmts", None),
                     ))
                 else:
                     ranges.append(StreamRange(
@@ -2662,7 +2663,8 @@ class WifiBridge:
                 transport=transport,
                 total_bytes=total_bytes,
                 ranges=tuple(ranges),
-                slot=slot
+                slot=slot,
+                tick_hz=self._stream_tick_hz,
             )
 
             # Count named ranges BEFORE locking so we know whether to pop.
@@ -2729,8 +2731,8 @@ class WifiBridge:
             payload_len = (frame[3] << 8) | frame[4]
             if len(frame) != 6 + payload_len + 2:
                 return None
-            if payload_len < 4 + 2:
-                return None  # not enough for [T_MS_LE_4][CRC]
+            if payload_len < 4:
+                return None  # T_MS is in payload; the CRC is outside LEN.
             values_len = payload_len - 4
 
             # CRC16-CCITT over [TYPE..last value byte]; bad CRC frames are
@@ -2757,8 +2759,9 @@ class WifiBridge:
                 offset = 10
                 _SIZE_FMT = {1: "b", 2: "h", 4: "f", 8: "d"}
                 for rng in schema.ranges:
+                    fmts = getattr(rng, "_fmts", None)
                     code = rng.fmt or _SIZE_FMT.get(rng.size, "f")
-                    fmt_str = f"<{rng.count}{code}"
+                    fmt_str = "<" + "".join(fmts) if fmts else f"<{rng.count}{code}"
                     try:
                         unpacked = struct.unpack_from(fmt_str, frame, offset)
                         values_list.extend(unpacked)
@@ -2821,7 +2824,7 @@ class WifiBridge:
                     flush=True,
                 )
 
-        json_payload = {f"slot{slot}.{name}": round(float(v), 6)
+        json_payload = {f"slot{slot}.{name}": v if isinstance(v, int) else round(float(v), 6)
                         for name, v in zip(names, values)}
         with self._stream_lock:
             stats = self._stream_stats.setdefault(
