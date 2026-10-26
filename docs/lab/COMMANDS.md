@@ -91,6 +91,16 @@ resets or acceleration clipping prevent a faithful-replay claim. The historical 
 cannot supply those missing inputs. `estimator is still not understood` means the replay gate
 has not passed; it does not claim a successful estimator model.
 
+Offline four-recording Z root-cause analysis (reads the source logs without modifying them):
+
+```powershell
+python tools/analyze_z_cf_b1.py --logs-root D:/Projects/UAV_lab/FreeRTOS-adaptive-controller-codex/logs --output-dir docs/lab/assets/z-cf-rootcause
+```
+
+Produces measured spectra, relative lags, cadence, bias/throttle correlation and a figure.
+The short 25 Hz records cannot identify true sensor latency or hidden correction steps;
+search-boundary spectral peaks are unresolved slow variation, not precise periods.
+
 CF correction-rate ABBA experiment (PROPOSED): after the reviewed firmware is flashed and
 verified, copy the two preset sources next to the saved day gains. The copies preserve the
 saved attitude gains and explicitly set the measured Z position PID to 0.7/0.001/0.1 and
