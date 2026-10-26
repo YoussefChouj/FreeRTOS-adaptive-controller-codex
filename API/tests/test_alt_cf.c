@@ -1,5 +1,5 @@
 /*
- * Host unit tests U1-U6 for the Z altitude / climb-rate complementary filter (z-vz-cf).
+ * Host unit tests U1-U9 for the Z altitude / climb-rate complementary filter (z-vz-cf).
  *
  * Build+run command:
  *   gcc -std=c99 -Wall -Wextra -Werror -Wdeclaration-after-statement -Wvla -ITASK API/tests/test_alt_cf.c -lm -o test_alt_cf && ./test_alt_cf
@@ -943,6 +943,68 @@ static void test_u7_disarmed_hold(void)
            (double)h_max);
 }
 
+/* Synthetic smoke hover regression; inputs and acceptance limits are PROPOSED. */
+static void test_armed_pad_hold(float pad_h, const char *label, int climb)
+{
+    int tick;
+    int cm;
+    float h_max = 0.0f;
+    float climb_max = 0.0f;
+    uint32_t n_corr;
+
+    reset_env(ALT_VZ_MODE_CF, 0U);
+    Flight_Control_Lock = 0U;
+    ano_of.of2_raw_h = pad_h;
+    ano_of.of2_h = pad_h;
+    for (tick = 0; tick < 3; tick++) Alt_UpdateFB();
+    alt_cf.b_az = 0.03f;
+    Lin_Acc_Z_body = (0.12f + alt_cf.b_az) / (ALT_CF_ACC_SIGN * MG_TO_MPS2);
+    Flight_Control_Lock = 1U;
+    for (tick = 0; tick < 2000; tick++) {
+        Alt_UpdateFB();
+        if (fabsf(alt_cf.h - pad_h) > h_max) h_max = fabsf(alt_cf.h - pad_h);
+        check_cond("armed pad: vz stays zero", alt_cf.vz == 0.0f);
+        check_cond("armed pad: published height holds", fabsf(Ctrler.Z_posPID.FB - pad_h) < 1e-3f);
+        check_cond("armed pad: published rate stays zero", Ctrler.Z_ratePID.FB == 0.0f);
+        check_cond("armed pad: innovation stays zero", alt_cf.e == 0.0f);
+        check_cond("armed pad: learned bias is preserved", fabsf(alt_cf.b_az - 0.03f) < 1e-7f);
+        check_cond("armed pad: waits for range initialization", s_alt_cf_inited == 0U);
+    }
+    check_cond("armed pad: height stays on rangefinder", h_max < 1e-3f);
+    if (climb) {
+        n_corr = alt_cf.n_corr;
+        Ctrler.Z_ratePID.Des = 0.30f;  /* PROPOSED climb command widens the unchanged jump gate. */
+        ano_of.of_alt_cm = 6U;
+        for (tick = 0; tick < 3 && alt_cf.n_corr == n_corr; tick++) {
+            ano_of.alt_update_cnt++;
+            Alt_UpdateFB();
+        }
+        check_cond("U8: first accepted sample corrects", alt_cf.n_corr > n_corr);
+        check_cond("U8: first accepted sample initializes height", fabsf(alt_cf.h - ano_of.of2_h) < 1e-3f);
+        for (cm = 6; cm <= 30; cm++) {
+            ano_of.of_alt_cm = (uint32_t)cm;
+            for (tick = 0; tick < 4; tick++) {
+                ano_of.alt_update_cnt++;
+                Alt_UpdateFB();
+                if (fabsf(alt_cf.h - ano_of.of2_h) > climb_max) climb_max = fabsf(alt_cf.h - ano_of.of2_h);
+            }
+        }
+        check_cond("U8: initialized filter tracks climbing samples", climb_max < 0.05f);
+    }
+    printf("%s PASS: armed-pad |h-pad|max=%.6f m, climbing error max=%.6f m\n",
+           label, (double)h_max, (double)climb_max);
+}
+
+static void test_u8_first_arm_pad_hold(void)
+{
+    test_armed_pad_hold(0.0f, "U8", 1);
+}
+
+static void test_u9_rearm_pad_hold(void)
+{
+    test_armed_pad_hold(0.05f, "U9", 0);
+}
+
 int main(void)
 {
     test_u1_fd_bit_exact_on_213634_trace();
@@ -952,11 +1014,13 @@ int main(void)
     test_u5_rejected_samples_then_resync();
     test_u6_baz_clamp();
     test_u7_disarmed_hold();
+    test_u8_first_arm_pad_hold();
+    test_u9_rearm_pad_hold();
 
     if (g_fail_count != 0) {
         printf("FAILED: %d checks failed (%d passed)\n", g_fail_count, g_pass_count);
         return 1;
     }
-    printf("ALL 7 TESTS PASSED (U1-U7) (%d checks)\n", g_pass_count);
+    printf("ALL 9 TESTS PASSED (U1-U9) (%d checks)\n", g_pass_count);
     return 0;
 }
