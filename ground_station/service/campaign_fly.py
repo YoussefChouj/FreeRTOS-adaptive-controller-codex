@@ -858,6 +858,17 @@ for _idx, (_sym, _) in PID_DEFAULTS.items():
     _GAIN_ALIASES[_sym.lower().replace(".", "_")] = _idx
 
 
+_CMD_0X1D_BY_KEY = {
+    "cmd_0x1d.gamma.roll": 1000, "cmd_0x1d.gamma.pitch": 1001, "cmd_0x1d.gamma.yaw": 1002,
+    "cmd_0x1d.gamma.x": 1003, "cmd_0x1d.gamma.y": 1004, "cmd_0x1d.gamma.z": 1005,
+    "cmd_0x1d.sigma.roll": 1006, "cmd_0x1d.sigma.pitch": 1007, "cmd_0x1d.sigma.x": 1008, "cmd_0x1d.sigma.y": 1009,
+    "cmd_0x1d.wc.roll": 1010, "cmd_0x1d.wc.pitch": 1011, "cmd_0x1d.wc.x": 1012, "cmd_0x1d.wc.y": 1013,
+    "cmd_0x1d.w0.roll": 1014, "cmd_0x1d.w0.pitch": 1015, "cmd_0x1d.w0.x": 1016, "cmd_0x1d.w0.y": 1017,
+    "cmd_0x1d.b0.roll": 1018, "cmd_0x1d.b0.pitch": 1019, "cmd_0x1d.b0.x": 1020, "cmd_0x1d.b0.y": 1021,
+}
+_CMD_0X1D_BY_IDX = {v: k for k, v in _CMD_0X1D_BY_KEY.items()}
+
+
 def _resolve_gain_key(k):
     """Resolve an int, stringified int ('9'), PID symbol ('gyroxPID.Kp'), alias ('roll_rate_kp'), or VAR name ('g_xyc_lqr_k0') to int index."""
     if isinstance(k, bool):
@@ -871,13 +882,23 @@ def _resolve_gain_key(k):
         low = s.lower()
         if low.startswith("idx_") and low[4:].isdigit():
             return int(low[4:])
+        if low.startswith("var."):
+            return _resolve_gain_key(s[4:])
         if low.startswith("var") and low[3:].lstrip("_ ").isdigit():
             return int(low[3:].lstrip("_ "))
+        if low.startswith("cmd_0x1d.") or low.startswith("0x1d."):
+            norm = low if low.startswith("cmd_0x1d.") else f"cmd_{low}"
+            if norm not in _CMD_0X1D_BY_KEY:
+                nxt = max(_CMD_0X1D_BY_IDX.keys(), default=999) + 1
+                _CMD_0X1D_BY_KEY[norm] = nxt
+                _CMD_0X1D_BY_IDX[nxt] = norm
+            return _CMD_0X1D_BY_KEY[norm]
         if low in _GAIN_ALIASES:
             return _GAIN_ALIASES[low]
         try:
             from ground_station.platform import wfb_var
-            row = wfb_var.rows().get(s)
+            rows = wfb_var.rows()
+            row = rows.get(s) or next((r for name, r in rows.items() if name.lower() == low), None)
             if row is not None:
                 return row.id
         except Exception:
@@ -893,6 +914,8 @@ def _gain_meta(idx):
     if idx in _XY_VAR_META:
         name, def_val = _XY_VAR_META[idx]
         return name, def_val, 0x2D
+    if idx in _CMD_0X1D_BY_IDX or idx >= 1000:
+        return _CMD_0X1D_BY_IDX.get(idx, f"cmd_0x1d.{idx - 1000}"), 0.0, 0x1D
     if idx >= 40:
         try:
             from ground_station.platform import wfb_var
@@ -1155,10 +1178,11 @@ def wait_txn(base, txid, timeout_s=2.0):
     while True:
         try:
             _, res = call(base, "/api/actions", timeout=timeout_s)
-            lc = next((a.get("lifecycle", "") for a in res.get("actions", []) if a.get("transaction_id") == txid), "")
+            act = next((a for a in res.get("actions", []) if a.get("transaction_id") == txid), None)
+            lc = (act.get("lifecycle") or act.get("outcome") or "") if isinstance(act, dict) else ""
         except Exception:
             lc = ""
-        if lc in TXN_DONE or lc in TXN_FAILED:
+        if lc in TXN_DONE or lc in TXN_FAILED or lc == "unknown":
             return lc
         if lc == "acknowledged" and seen != lc:
             seen = lc
@@ -1206,7 +1230,7 @@ def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeou
     try:
         _, act_res = call(base, "/api/actions", timeout=5)
         for a in act_res.get("actions", []):
-            if int(a.get("command_id", 0)) in (1, 45) and int(a.get("index", -1)) in gains:
+            if int(a.get("command_id", 0)) in (1, 45, 0x1D) and int(a.get("index", -1)) in gains:
                 idx = int(a["index"])
                 if idx not in old_gains:
                     old_gains[idx] = float(a.get("value", 0.0))
@@ -1245,6 +1269,7 @@ def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeou
         ms = 0
         retries = 0
         current_txid = None
+        last_outcome = "unknown"
 
         for attempt in range(3):  # initial + up to 2 retries
             retries = attempt
@@ -1252,13 +1277,21 @@ def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeou
             try:
                 code, res = call(base, "/commands", {"command_id": cmd_id, "index": idx, "value": float(new_val)}, timeout=timeout_s)
             except Exception:
+                last_outcome = "unknown"
                 _sleep(0.05)
                 continue
             if code not in (200, 202):
+                last_outcome = "refused" if code in (400, 403, 409, 422) else "unknown"
+                if last_outcome == "refused":
+                    break
                 _sleep(0.05)
                 continue
-            txid = res.get("transaction_id")
-            outcome = "applied" if txid is None else wait_txn(base, txid, timeout_s)
+            txid = res.get("transaction_id") if isinstance(res, dict) else None
+            if isinstance(res, dict) and (res.get("outcome") == "unknown" or res.get("lifecycle") == "unknown" or res.get("status") == "unknown"):
+                outcome = "unknown"
+            else:
+                outcome = "applied" if txid is None else wait_txn(base, txid, timeout_s)
+            last_outcome = outcome
             if outcome in TXN_DONE or outcome == "acknowledged":
                 acked = True
                 ms = round((_clock() - t0) * 1000)
@@ -1267,15 +1300,21 @@ def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeou
                     if outcome == "acknowledged":
                         ack_only.append(idx)
                 break
-            if outcome == "rejected":
+            if outcome in ("rejected", "refused"):
                 break  # the firmware refused this value: a retry sends the same value again
+            if outcome == "unknown":
+                continue
         if acked:
             total_ack += 1
             if current_txid is not None:
                 txids.append(current_txid)
             rows.append((axis, idx, old_val, new_val, "ACK", ms, retries))
         else:
-            rows.append((axis, idx, old_val, new_val, "FAIL", round((_clock() - t0) * 1000), retries))
+            if last_outcome in ("unknown", "timeout", "timed_out"):
+                print(f"write_gains: {axis} (VAR {idx}) unknown after 3 tries", flush=True)
+                rows.append((axis, idx, old_val, new_val, "UNKNOWN", round((_clock() - t0) * 1000), retries))
+            else:
+                rows.append((axis, idx, old_val, new_val, "FAIL", round((_clock() - t0) * 1000), retries))
             all_ok = False
             break
 
@@ -1287,17 +1326,25 @@ def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeou
         print(f"| {axis:<14} | {idx:<4} | {old_v:<8.4g} | {new_v:<8.4g} | {ack_str:<4} | {ms_val:<4} | {ret_val:<7} |")
 
     journal_ok = not ack_only
-    if all_ok and ground_only_hit:
+    if all_ok:
         try:
             _, rb_res = call(base, "/api/actions", timeout=timeout_s)
             rb_actions = rb_res.get("actions", []) if isinstance(rb_res, dict) else []
-            for idx in ground_only_hit:
+            for idx in sorted(gains.keys()):
+                cmd_id_expect = _gain_meta(idx)[2]
                 matched = [
                     a for a in rb_actions
-                    if int(a.get("command_id", 0)) == 0x2D and int(a.get("index", -1)) == idx
+                    if int(a.get("command_id", 0)) == cmd_id_expect
+                    and int(a.get("index", -1)) == idx
+                    and (not txids or a.get("transaction_id") in txids)
                 ]
-                if matched and "value" in matched[0]:
-                    rb_val = float(matched[0]["value"])
+                if not matched:
+                    matched = [
+                        a for a in rb_actions
+                        if int(a.get("command_id", 0)) == cmd_id_expect and int(a.get("index", -1)) == idx
+                    ]
+                if matched and "value" in matched[-1]:
+                    rb_val = float(matched[-1]["value"])
                     if abs(rb_val - float(gains[idx])) > 1e-4:
                         print(f"Gain write REFUSED: read-back mismatch for {_gain_meta(idx)[0]} (VAR {idx}): "
                               f"wrote {gains[idx]:g}, read back {rb_val:g}", flush=True)

@@ -134,7 +134,6 @@ flights:
   - id: adapt-angle-shadow-hover
     fly: lab_l_adapt_angle_shadow
     optional: true
-    args: [--gains, rate35y104]
     gate: "TERMINAL GATE: after shadow hover, labday shows `adapt_gate` verdict (`OK` / `TOO SLOW` / `TOO FAST`) and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains)"
     why: "Optional 40 s shadow hover for attitude angle + 3L MRAC (`layers att both`, `g_ctrl_axis_mask=3`, `mrac_injection=0`)"
     pass: "weights converge over last 30% of hover; no saturation or >0.5x BW oscillation (PROPOSED)"
@@ -143,7 +142,6 @@ flights:
   - id: adapt-angle-live-verify
     fly: lab_l_adapt_angle_live
     optional: true
-    args: [--gains, rate35y104]
     gate: "TERMINAL GATE: labday compares live vs `adapt-angle-shadow-hover` (`OK` / `TOO SLOW` / `TOO FAST` / `DISABLE`) and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains and `u` = undo on failed verify hover)"
     why: "Optional 40 s live verification hover for attitude angle + 3L MRAC (`mrac_injection=1`) with approved gamma"
     pass: "live tracking error <= shadow baseline; `adapt_gate` verdict OK (PROPOSED)"
@@ -152,7 +150,6 @@ flights:
   - id: adapt-vel-shadow-hover
     fly: lab_l_adapt_vel_shadow
     optional: true
-    args: [--gains, rate35y104]
     gate: "TERMINAL GATE: after shadow hover, labday shows `adapt_gate` verdict (`OK` / `TOO SLOW` / `TOO FAST`) and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains)"
     why: "Optional 40 s shadow hover for inner velocity MRAC (`layers xy inner`, `g_ctrl_axis_mask=56`, `mrac_injection=0`)"
     pass: "weights converge over last 30% of hover; no saturation or >0.5x BW oscillation (PROPOSED)"
@@ -161,7 +158,6 @@ flights:
   - id: adapt-vel-live-verify
     fly: lab_l_adapt_vel_live
     optional: true
-    args: [--gains, rate35y104]
     gate: "TERMINAL GATE: labday compares live vs `adapt-vel-shadow-hover` (`OK` / `TOO SLOW` / `TOO FAST` / `DISABLE`) and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains and `u` = undo on failed verify hover)"
     why: "Optional 40 s live verification hover for inner velocity MRAC (`mrac_injection=1`) with approved gamma"
     pass: "live tracking error <= shadow baseline; `adapt_gate` verdict OK (PROPOSED)"
@@ -170,7 +166,6 @@ flights:
   - id: adapt-pos-shadow-hover
     fly: lab_l_adapt_pos_shadow
     optional: true
-    args: [--gains, rate35y104]
     gate: "TERMINAL GATE: after shadow hover, labday shows `adapt_gate` verdict (`OK` / `TOO SLOW` / `TOO FAST`) and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains)"
     why: "Optional 40 s shadow hover for outer XY position MRAC (`layers xy both`, `mrac_injection=0`)"
     pass: "weights converge over last 30% of hover; no saturation or >0.5x BW oscillation (PROPOSED)"
@@ -179,7 +174,6 @@ flights:
   - id: adapt-pos-live-verify
     fly: lab_l_adapt_pos_live
     optional: true
-    args: [--gains, rate35y104]
     gate: "TERMINAL GATE: labday compares live vs `adapt-pos-shadow-hover` (`OK` / `TOO SLOW` / `TOO FAST` / `DISABLE`) and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains and `u` = undo on failed verify hover)"
     why: "Optional 40 s live verification hover for outer XY position MRAC (`layers xy both`, `mrac_injection=1`)"
     pass: "live tracking error <= shadow baseline; `adapt_gate` verdict OK (PROPOSED)"
@@ -188,7 +182,6 @@ flights:
   - id: adapt-z-slots-shadow-hover
     fly: lab_l_adapt_z_slots_shadow
     optional: true
-    args: [--gains, rate35y104]
     gate: "TERMINAL GATE: after shadow hover, labday shows `adapt_gate` verdict (`OK` / `TOO SLOW` / `TOO FAST`) and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains)"
     why: "Optional 40 s shadow hover for Z physics feature slots (`mrac_z_feat_mask=15`, `mrac_injection=0`)"
     pass: "Z slot weights converge over last 30% of hover; no saturation or >0.5x BW oscillation (PROPOSED)"
@@ -197,7 +190,6 @@ flights:
   - id: adapt-z-slots-live-verify
     fly: lab_l_adapt_z_slots_live
     optional: true
-    args: [--gains, rate35y104]
     gate: "TERMINAL GATE: labday compares live vs `adapt-z-slots-shadow-hover` (`OK` / `TOO SLOW` / `TOO FAST` / `DISABLE`) and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains and `u` = undo on failed verify hover)"
     why: "Optional 40 s live verification hover for Z physics feature slots (`mrac_z_feat_mask=15`, `mrac_injection=1`)"
     pass: "altitude hold error <= shadow baseline; `adapt_gate` verdict OK (PROPOSED)"
@@ -206,7 +198,6 @@ flights:
   - id: adapt-xy-ref-shadow-hover
     fly: lab_l_adapt_xy_ref_shadow
     optional: true
-    args: [--gains, rate35y104]
     gate: "TERMINAL GATE: after shadow hover, labday shows `adapt_gate` verdict (`OK` / `TOO SLOW` / `TOO FAST`) and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains)"
     why: "Optional 40 s shadow hover for controller-matched XY reference model (`mrac_ref from=lqr`, `mrac_injection=0`)"
     pass: "XY velocity weights converge under fitted LQR reference model (PROPOSED)"
@@ -215,7 +206,6 @@ flights:
   - id: adapt-xy-ref-live-verify
     fly: lab_l_adapt_xy_ref_live
     optional: true
-    args: [--gains, rate35y104]
     gate: "TERMINAL GATE: labday compares live vs `adapt-xy-ref-shadow-hover` (`OK` / `TOO SLOW` / `TOO FAST` / `DISABLE`) and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains and `u` = undo on failed verify hover)"
     why: "Optional 40 s live verification hover for controller-matched XY reference model (`mrac_ref from=lqr`, `mrac_injection=1`)"
     pass: "live tracking error <= shadow baseline; `adapt_gate` verdict OK (PROPOSED)"
