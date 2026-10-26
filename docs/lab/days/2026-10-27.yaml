@@ -1,7 +1,9 @@
 # Lab day 2026-10-27: Inner-to-outer SysID chain (rate -> angle -> vel -> pos), 10-25 diagnosis ladder, one-variable fix tests, and model-based PID / LQR / MPC / ADRC validation
 # `.\labday 2026-10-27 --list` shows what is flown; the same command resumes from the first flight not flown.
 # Each block identifies one loop from inside out, fits plant + margins via `python -m ground_station.autotune.cli --loop <loop>`,
-# writes/verifies gains with a hover check, and only then moves to the next outer loop (3-5x bandwidth separation).
+# runs a disarmed TERMINAL GATE in `labday` (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights,
+# `q` = stop the day; plus post-flight `v` = revert gains and `u` = undo on failed verify hover), verifies with a hover check,
+# and only then moves to the next outer loop (3-5x bandwidth separation).
 # Every pass threshold and gain target below is PROPOSED unless cited to a measured 10-24 log.
 
 day: 2026-10-27
@@ -21,199 +23,303 @@ before:
   - "Automatic safe exit active on all trajectory flights: host AbortMonitor (`|pos_err| > 50 cm` for 3 samples -> `abort_land`) + firmware slow-clock freeze (`|pos_err| > e_hi = 45 cm` PROPOSED)"
 
 flights:
-  # ======== BLOCK 0: RATE GAINS CHAT-APPROVAL GATE & PRE-FLIGHT SMOKE ========
-  # Rate gains are written only after the operator's chat OK (the operator's pick in chat is the approval; the CEO
-  # sends it with their words), disarmed only, via `.\fly <fly> --once --gains <preset>`; never as a .fly `set`.
+  # ======== BLOCK 0: RATE GAINS TERMINAL GATE & PRE-FLIGHT SMOKE ========
+  # Rate gains are seeded into `logs/lab/2026-10-27/gains.yaml` (`base: rate35y104`) and written disarmed via
+  # `--gains logs/lab/2026-10-27/gains.yaml`; never as a .fly `set`.
   # rate35y104 = rate35 (roll/pitch Kp3.5 Kd13) + yaw104 (yaw Kp10.4 Kd0.014), both PROPOSED from the 10-24 fits.
-  # RAM gains outlive the flight but not a reboot, so every later flight re-writes them with --gains rate35y104.
+  # At every TERMINAL GATE, labday shows the fitted gains/margins table and prompts (`y` = write now disarmed,
+  # `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains, `u` = undo on failed verify hover).
   - id: rate-gains-apply
-    fly: lab_a_hover_verify
-    gate: "CHAT APPROVAL: fly only after the operator OKs rate35 + yaw104 in chat; written while disarmed. If declined, run Blocks 1-5 with --gains defaults"
+    fly: lab_a_hover_verify
+    gate: "TERMINAL GATE: labday shows `rate35y104` vs firmware defaults and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains and `u` = undo on failed verify hover)"
     why: "Block 0 apply rate35 (roll PM 21.4 -> 34.4 deg, pitch 28 -> 43 deg; removes ~95 ms inner group delay, R2 Fix 3) + yaw104 first before any sysid, so Block 1 identifies the plant under the gains we will fly"
     pass: "steady hover; gx/gy PSD peak < 3 dps in 1.7-5.3 Hz; yaw span < 5 deg; lands inside 10 cm pad gate (PROPOSED)"
     stop: true
 
   - id: smoke-hover
-    fly: lab_s_smoke
-    gate: "CHAT APPROVAL: confirm rate-gains-apply passed with operator chat OK (written while disarmed; or --gains defaults if declined)"
+    fly: lab_s_smoke
+    gate: "TERMINAL GATE: confirm `rate-gains-apply` hover check passed (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains, `u` = undo on failed verify hover)"
     why: "Block 0 pre-flight & smoke: verify 100/50 Hz 4-slot subscribe link (< 1% drops), camera truth fusion, RC authority logging, and landing pad gate"
     pass: "every traj_go accepted; lands inside 10 cm pad gate; subscribe drop rate < 1%; s_authority stays 1 (PROPOSED)"
     stop: true
 
   # ======== BLOCK 1: INNER RATE LOOP SYSID (sysid_target=0, 0.2-40 Hz split low/high @ 200 Hz) ========
   - id: rate-sysid-roll-wide
-    fly: lab_d_sysid_rate_roll
+    fly: lab_d_sysid_rate_roll
     why: "Block 1 roll rate sysid: low band 0.2-5 Hz (45 deg/s, 30 s, >=4 Welch averages at 0.2 Hz) + high band 2-40 Hz (60 deg/s, 30 s) at 200 Hz"
     pass: "both multisine bands complete; `python -m ground_station.autotune.cli <session> --loop rate --axis roll --correct-zoh` fits with residual <= 0.35 and coverage >= 50% (PROPOSED)"
     notes: "10-24 roll rate 214336 (0.5-15 Hz): k=9.456, tau=90.0 ms, delay=13.2 ms, PM 21.4 -> 34.4 deg with rate35 (Kp=3.5, Kd=13)"
 
   - id: rate-sysid-pitch-wide
-    fly: lab_d_sysid_rate_pitch
+    fly: lab_d_sysid_rate_pitch
     why: "Block 1 pitch rate sysid: low band 0.2-5 Hz (45 deg/s, 30 s) + high band 2-40 Hz (60 deg/s, 30 s) at 200 Hz"
     pass: "both multisine bands complete; `python -m ground_station.autotune.cli <session> --loop rate --axis pitch --correct-zoh` fits with residual <= 0.35 (PROPOSED)"
     notes: "10-24 pitch rate 214336 (0.5-15 Hz): k=6.492, tau=58.0 ms, delay=18.1 ms, PM 28.0 -> 43.2 deg with rate35"
 
   - id: rate-sysid-yaw-wide
-    fly: lab_d_sysid_rate_yaw
+    fly: lab_d_sysid_rate_yaw
     why: "Block 1 yaw rate sysid: low band 0.2-5 Hz (45 deg/s, 30 s) + high band 2-40 Hz (60 deg/s, 30 s) at 200 Hz"
     pass: "both multisine bands complete; `python -m ground_station.autotune.cli <session> --loop rate --axis yaw --correct-zoh` fits with residual <= 0.35 (PROPOSED)"
     notes: "10-24 yaw rate 215247 (0.5-15 Hz): k=1.253, tau=1.0 ms, delay=12.1 ms, PM 81.7 deg"
+    tune: {kind: pid, loop: rate, axes: [roll, pitch, yaw], from: [rate-sysid-roll-wide, rate-sysid-pitch-wide, rate-sysid-yaw-wide]}
 
   - id: rate-gain-verify-hover
-    fly: lab_a_hover_verify
-    gate: "CHAT APPROVAL: Run `autotune.cli --loop rate` on the Block 1 logs; it prints PROPOSED gain-write commands and never sends them. Keep rate35y104 if PM >= 34 deg and max|S| <= 2.0; any new rate gains need the operator's chat OK first and are written while disarmed"
+    fly: lab_a_hover_verify
+    gate: "TERMINAL GATE: labday runs `autotune.cli --loop rate` on Block 1 logs, shows old -> new Kp/Ki/Kd, wc, PM, GM, max|S|, residual, coherence coverage, and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains and `u` = undo on failed verify hover)"
     why: "Block 1 verification hover with fitted inner rate gains (rate35: roll/pitch Kp=3.5, Kd=13) before locking inner loop for Block 2"
     pass: "steady hover; gyrox/gyroy RMS < 3.5 deg/s; no high-frequency motor chatter (PROPOSED)"
     stop: true
 
   # ======== BLOCK 2: ATTITUDE ANGLE LOOP SYSID (sysid_target=2, 0.2-6 Hz, 6 deg) ========
   - id: angle-sysid-roll-pitch
-    fly: lab_d_sysid_angle
+    fly: lab_d_sysid_angle
     gate: "Block 1 rate-gain-verify-hover passed; inner rate loop gains locked"
     why: "Block 2 attitude angle sysid (`sysid_target=2`): 0.2-6 Hz multisine (6 deg, 30 s each) on roll and pitch with locked inner rate gains"
     pass: "excite completes; `python -m ground_station.autotune.cli <session> --loop angle --axis roll --inner-model model_rate_roll.json` (and pitch) fits with PM >= 45 deg and inner/outer wc separation >= 3x (PROPOSED)"
+    tune: {kind: pid, loop: angle, axes: [roll, pitch], from: [angle-sysid-roll-pitch]}
 
   - id: angle-gain-verify-hover
-    fly: lab_a_hover_verify
-    gate: "CHAT APPROVAL: Run `autotune.cli --loop angle` on roll and pitch; verify separation ratio >= 3.0x vs inner rate wc; any angle gain change requires the operator's chat OK first and is written while disarmed"
+    fly: lab_a_hover_verify
+    gate: "TERMINAL GATE: labday runs `autotune.cli --loop angle` on roll and pitch, shows separation ratio >= 3.0x vs inner rate wc and old -> new angle PID gains, and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains and `u` = undo on failed verify hover)"
     why: "Block 2 verification hover with fitted attitude angle gains before locking attitude loop for Block 3"
     pass: "steady hover; roll/pitch error RMS < 1.5 deg; lands inside pad gate (PROPOSED)"
     stop: true
 
   # ======== BLOCK 3: VELOCITY LOOP SYSID (sysid_target=3, 0.15-3 Hz, x/y 25 cm/s, z 0.25 m/s) ========
   - id: vel-sysid-xy
-    fly: lab_d_sysid_vel_xy
+    fly: lab_d_sysid_vel_xy
     gate: "Block 2 angle-gain-verify-hover passed; inner rate + angle loops locked"
     why: "Block 3 horizontal velocity sysid (`sysid_target=3`): 0.15-3 Hz multisine (25 cm/s, 30 s each) on vx (pitch) and vy (roll)"
     pass: "excite completes inside fence; `python -m ground_station.autotune.cli <session> --loop vel --axis x --inner-model model_angle_pitch.json` (and y) fits with PM >= 45 deg and separation >= 3x (PROPOSED)"
+    tune: {kind: pid, loop: vel, axes: [x, y], from: [vel-sysid-xy]}
 
   - id: vel-sysid-z
-    fly: lab_d_sysid_vel_z
+    fly: lab_d_sysid_vel_z
     gate: "Block 2 angle-gain-verify-hover passed"
     why: "Block 3 vertical velocity sysid (`sysid_target=3`, `axis=z`): two 30 s passes of 0.15-3 Hz multisine at 0.25 m/s on `highdtsPID.Des`"
     pass: "excite completes keeping altitude within [0.25, 0.85] m; `python -m ground_station.autotune.cli <session> --loop vel --axis z` fits with residual <= 0.35 (PROPOSED)"
+    tune: {kind: pid, loop: vel, axes: [z], from: [vel-sysid-z]}
 
   - id: vel-gain-verify-hover
-    fly: lab_a_hover_verify
-    gate: "CHAT APPROVAL: Run `autotune.cli --loop vel` on x, y, z; verify separation ratio >= 3.0x vs angle wc; any velocity gain change requires the operator's chat OK first and is written while disarmed"
+    fly: lab_a_hover_verify
+    gate: "TERMINAL GATE: labday runs `autotune.cli --loop vel` on x, y, z, shows separation ratio >= 3.0x vs angle wc and old -> new velocity PID gains, and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains and `u` = undo on failed verify hover)"
     why: "Block 3 verification hover with fitted velocity loop gains before locking velocity loop for Block 4"
     pass: "steady hover; horizontal velocity RMS < 8 cm/s; altitude hold error < 5 cm (PROPOSED)"
     stop: true
 
   # ======== BLOCK 4: POSITION LOOP SYSID (sysid_target=4, 0.1-1.5 Hz, x/y 15 cm, z 0.15 m) ========
   - id: pos-sysid-xy
-    fly: lab_d_sysid_pos_xy
+    fly: lab_d_sysid_pos_xy
     gate: "Block 3 vel-gain-verify-hover passed; inner rate + angle + velocity loops locked"
     why: "Block 4 horizontal position sysid (`sysid_target=4`): 0.1-1.5 Hz multisine (15 cm, 30 s each) on x (pitch) and y (roll) across the 0.25-0.63 Hz wobble band"
     pass: "excite completes inside fence; `python -m ground_station.autotune.cli <session> --loop pos --axis x --inner-model model_vel_x.json` (and y) fits with PM >= 45 deg and separation >= 3x (PROPOSED)"
+    tune: {kind: pid, loop: pos, axes: [x, y], from: [pos-sysid-xy]}
 
   - id: pos-sysid-z
-    fly: lab_d_sysid_pos_z
+    fly: lab_d_sysid_pos_z
     gate: "Block 3 vel-gain-verify-hover passed"
     why: "Block 4 vertical position sysid (`sysid_target=4`, `axis=z`): two 30 s passes of 0.1-1.5 Hz multisine at 0.15 m on `highPID.Des`"
     pass: "excite completes; `python -m ground_station.autotune.cli <session> --loop pos --axis z` fits with residual <= 0.35 (PROPOSED)"
+    tune: {kind: pid, loop: pos, axes: [z], from: [pos-sysid-z]}
 
   - id: pos-gain-verify-hover
-    fly: lab_a_hover_verify
-    gate: "CHAT APPROVAL: Run `autotune.cli --loop pos` on x, y, z and regenerate candidate gains for LQR/MPC/ADRC; any position or candidate gain change requires the operator's chat OK first and is written while disarmed"
-    why: "Block 4 verification hover with full identified cascade (rate + angle + vel + pos) before Block 4b diagnosis ladder and Block 4c one-variable fix tests"
+    fly: lab_a_hover_verify
+    gate: "TERMINAL GATE: labday runs `autotune.cli --loop pos` and `xy_model` synthesis (VAR 75-83 for LQR/MPC/ADRC + `logs/ref_fit/<kind>.json`), shows old -> new position and xy_model gains, and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains and `u` = undo on failed verify hover)"
+    why: "Block 4 verification hover with full identified cascade (rate + angle + vel + pos) and synthesized xy_model gains before optional Block 4a adaptation hovers, Block 4b diagnosis ladder, and Block 4c one-variable fix tests"
     pass: "steady hover; hold p-p < 10 cm (vs 49.6 cm on 10-24 lqr-alone); lands inside 10 cm pad gate (PROPOSED)"
+    tune: {kind: xy_model, loop: pos, axes: [x, y], from: [vel-sysid-xy, pos-sysid-xy]}
     stop: true
+
+  # ======== BLOCK 4a (OPTIONAL): ADAPTATION-LAYER SHADOW -> GATE -> LIVE VERIFY HOVERS ========
+  - id: adapt-angle-shadow-hover
+    fly: lab_l_adapt_angle_shadow
+    optional: true
+    args: [--gains, rate35y104]
+    gate: "TERMINAL GATE: after shadow hover, labday shows `adapt_gate` verdict (`OK` / `TOO SLOW` / `TOO FAST`) and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains)"
+    why: "Optional 40 s shadow hover for attitude angle + 3L MRAC (`layers att both`, `g_ctrl_axis_mask=3`, `mrac_injection=0`)"
+    pass: "weights converge over last 30% of hover; no saturation or >0.5x BW oscillation (PROPOSED)"
+    tune: {kind: adapt, layer: angle_att, mode: shadow}
+
+  - id: adapt-angle-live-verify
+    fly: lab_l_adapt_angle_live
+    optional: true
+    args: [--gains, rate35y104]
+    gate: "TERMINAL GATE: labday compares live vs `adapt-angle-shadow-hover` (`OK` / `TOO SLOW` / `TOO FAST` / `DISABLE`) and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains and `u` = undo on failed verify hover)"
+    why: "Optional 40 s live verification hover for attitude angle + 3L MRAC (`mrac_injection=1`) with approved gamma"
+    pass: "live tracking error <= shadow baseline; `adapt_gate` verdict OK (PROPOSED)"
+    tune: {kind: adapt, layer: angle_att, mode: live, baseline: adapt-angle-shadow-hover}
+
+  - id: adapt-vel-shadow-hover
+    fly: lab_l_adapt_vel_shadow
+    optional: true
+    args: [--gains, rate35y104]
+    gate: "TERMINAL GATE: after shadow hover, labday shows `adapt_gate` verdict (`OK` / `TOO SLOW` / `TOO FAST`) and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains)"
+    why: "Optional 40 s shadow hover for inner velocity MRAC (`layers xy inner`, `g_ctrl_axis_mask=56`, `mrac_injection=0`)"
+    pass: "weights converge over last 30% of hover; no saturation or >0.5x BW oscillation (PROPOSED)"
+    tune: {kind: adapt, layer: vel_xy, mode: shadow}
+
+  - id: adapt-vel-live-verify
+    fly: lab_l_adapt_vel_live
+    optional: true
+    args: [--gains, rate35y104]
+    gate: "TERMINAL GATE: labday compares live vs `adapt-vel-shadow-hover` (`OK` / `TOO SLOW` / `TOO FAST` / `DISABLE`) and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains and `u` = undo on failed verify hover)"
+    why: "Optional 40 s live verification hover for inner velocity MRAC (`mrac_injection=1`) with approved gamma"
+    pass: "live tracking error <= shadow baseline; `adapt_gate` verdict OK (PROPOSED)"
+    tune: {kind: adapt, layer: vel_xy, mode: live, baseline: adapt-vel-shadow-hover}
+
+  - id: adapt-pos-shadow-hover
+    fly: lab_l_adapt_pos_shadow
+    optional: true
+    args: [--gains, rate35y104]
+    gate: "TERMINAL GATE: after shadow hover, labday shows `adapt_gate` verdict (`OK` / `TOO SLOW` / `TOO FAST`) and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains)"
+    why: "Optional 40 s shadow hover for outer XY position MRAC (`layers xy both`, `mrac_injection=0`)"
+    pass: "weights converge over last 30% of hover; no saturation or >0.5x BW oscillation (PROPOSED)"
+    tune: {kind: adapt, layer: pos_xy, mode: shadow}
+
+  - id: adapt-pos-live-verify
+    fly: lab_l_adapt_pos_live
+    optional: true
+    args: [--gains, rate35y104]
+    gate: "TERMINAL GATE: labday compares live vs `adapt-pos-shadow-hover` (`OK` / `TOO SLOW` / `TOO FAST` / `DISABLE`) and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains and `u` = undo on failed verify hover)"
+    why: "Optional 40 s live verification hover for outer XY position MRAC (`layers xy both`, `mrac_injection=1`)"
+    pass: "live tracking error <= shadow baseline; `adapt_gate` verdict OK (PROPOSED)"
+    tune: {kind: adapt, layer: pos_xy, mode: live, baseline: adapt-pos-shadow-hover}
+
+  - id: adapt-z-slots-shadow-hover
+    fly: lab_l_adapt_z_slots_shadow
+    optional: true
+    args: [--gains, rate35y104]
+    gate: "TERMINAL GATE: after shadow hover, labday shows `adapt_gate` verdict (`OK` / `TOO SLOW` / `TOO FAST`) and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains)"
+    why: "Optional 40 s shadow hover for Z physics feature slots (`mrac_z_feat_mask=15`, `mrac_injection=0`)"
+    pass: "Z slot weights converge over last 30% of hover; no saturation or >0.5x BW oscillation (PROPOSED)"
+    tune: {kind: adapt, layer: z_slots, mode: shadow}
+
+  - id: adapt-z-slots-live-verify
+    fly: lab_l_adapt_z_slots_live
+    optional: true
+    args: [--gains, rate35y104]
+    gate: "TERMINAL GATE: labday compares live vs `adapt-z-slots-shadow-hover` (`OK` / `TOO SLOW` / `TOO FAST` / `DISABLE`) and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains and `u` = undo on failed verify hover)"
+    why: "Optional 40 s live verification hover for Z physics feature slots (`mrac_z_feat_mask=15`, `mrac_injection=1`)"
+    pass: "altitude hold error <= shadow baseline; `adapt_gate` verdict OK (PROPOSED)"
+    tune: {kind: adapt, layer: z_slots, mode: live, baseline: adapt-z-slots-shadow-hover}
+
+  - id: adapt-xy-ref-shadow-hover
+    fly: lab_l_adapt_xy_ref_shadow
+    optional: true
+    args: [--gains, rate35y104]
+    gate: "TERMINAL GATE: after shadow hover, labday shows `adapt_gate` verdict (`OK` / `TOO SLOW` / `TOO FAST`) and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains)"
+    why: "Optional 40 s shadow hover for controller-matched XY reference model (`mrac_ref from=lqr`, `mrac_injection=0`)"
+    pass: "XY velocity weights converge under fitted LQR reference model (PROPOSED)"
+    tune: {kind: adapt, layer: xy_ref, mode: shadow}
+
+  - id: adapt-xy-ref-live-verify
+    fly: lab_l_adapt_xy_ref_live
+    optional: true
+    args: [--gains, rate35y104]
+    gate: "TERMINAL GATE: labday compares live vs `adapt-xy-ref-shadow-hover` (`OK` / `TOO SLOW` / `TOO FAST` / `DISABLE`) and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains and `u` = undo on failed verify hover)"
+    why: "Optional 40 s live verification hover for controller-matched XY reference model (`mrac_ref from=lqr`, `mrac_injection=1`)"
+    pass: "live tracking error <= shadow baseline; `adapt_gate` verdict OK (PROPOSED)"
+    tune: {kind: adapt, layer: xy_ref, mode: live, baseline: adapt-xy-ref-shadow-hover}
 
   # ======== BLOCK 4b: 10-25 DIAGNOSIS LADDER (unflown on 10-25: stationary step damping vs half-speed path baselines) ========
   - id: diag-xy-steps-lqr
-    fly: lab_e_diag_lqr_steps
-    gate: "Block 4 pos-gain-verify-hover passed"
-    why: "10-25 diagnosis ladder 1/3 (unflown on 10-25): LQR alone (VAR47=12), four 30 cm xy steps with 5 s dwell, no path: measures xy loop damping and x-to-y cross-coupling"
+    fly: lab_e_diag_lqr_steps
+    gate: "Block 4 pos-gain-verify-hover passed (flies sysid xy gains written at the pos `xy_model` TERMINAL GATE)"
+    why: "10-25 diagnosis ladder 1/3 (unflown on 10-25): LQR alone (VAR47=12), four 30 cm xy steps with 5 s dwell, no path: measures xy loop damping and x-to-y cross-coupling under sysid xy gains"
     pass: "overshoot < 20%; cross-axis motion < 5 cm; no sustained ~0.5 Hz ringing in the dwell (PROPOSED); host AbortMonitor safe exit at |pos err| > 50 cm (PROPOSED 45 cm); no RC takeover"
+    tune: {kind: adapt, layer: lqr_3l, mode: live}
 
   - id: diag-figure8-half-speed-lqr
-    fly: lab_e_diag_lqr_fig8_half
+    fly: lab_e_diag_lqr_fig8_half
     gate: "diag-xy-steps-lqr completed"
     why: "10-25 diagnosis ladder 2/3 (unflown on 10-25, SAME-ARM BASELINE for Block 4c): LQR figure-8 at HALF speed (f8_laps=1, move_s=18, d=12, profile=1, slow_on=0): separates path speed from loop limit cycle"
     pass: "figure-8 completes without abort (host AbortMonitor safe exit at |pos err| > 50 cm, PROPOSED 45 cm); scorecard swing < 1.3x (PROPOSED); no RC takeover"
 
   - id: diag-figure8-half-speed-pid
-    fly: lab_e_diag_pid_fig8_half
+    fly: lab_e_diag_pid_fig8_half
     gate: "diag-figure8-half-speed-lqr completed"
     why: "10-25 diagnosis ladder 3/3 (unflown on 10-25): PID figure-8 at HALF speed (f8_laps=1, move_s=18): tests whether PID's 130-160 cm p-p 10-24 swing shrinks at half speed (R2.3 predicts RMSE 38.6 -> 7.9 cm)"
     pass: "figure-8 completes without abort (host AbortMonitor safe exit at |pos err| > 50 cm, PROPOSED 45 cm); scorecard swing < 1.3x (PROPOSED); no RC takeover"
+    tune: {kind: adapt, layer: pid_3l, mode: live}
     stop: true
 
   # ======== BLOCK 4c: ONE-VARIABLE FIX TESTS (each vs diag-figure8-half-speed-lqr same-arm baseline) ========
   - id: fix-slow-clock-lqr-half-speed
-    fly: lab_e_fix_slow_clock_lqr_half
+    fly: lab_e_fix_slow_clock_lqr_half
     gate: "Block 4b diag-figure8-half-speed-lqr baseline completed"
     why: "One-variable fix 1/4 vs diag-figure8-half-speed-lqr: enable ONLY slow-clock phase gating (VAR 70-73: g_traj_slow_on=1, elo=20 cm, ehi=45 cm, arrive_r=15 cm; R2 Fix 4 clock gate, Causes b+e)"
     pass: "no reference clock runaway when |pos err| > 20 cm; half-speed figure-8 p-p drops from 179.9 cm baseline toward <= 150 cm (PROPOSED from R2.3); safe exit at |pos err| > 50 cm (PROPOSED 45 cm); no RC takeover"
 
   - id: fix-min-jerk-lqr-half-speed
-    fly: lab_e_fix_min_jerk_lqr_half
+    fly: lab_e_fix_min_jerk_lqr_half
     gate: "fix-slow-clock-lqr-half-speed completed"
     why: "One-variable fix 2/4 vs diag-figure8-half-speed-lqr: enable ONLY min-jerk trajectory profile (traj_p.profile=2, R2 Fix 4 entry/exit kinematics, Cause b turnaround jerk)"
     pass: "entry/exit turnaround tilt spikes reduced vs profile=1 baseline; figure-8 completes without abort (safe exit at |pos err| > 50 cm, PROPOSED 45 cm); no RC takeover"
 
   - id: fix-predictor-lqr-half-speed
-    fly: lab_e_fix_predictor_lqr_half
+    fly: lab_e_fix_predictor_lqr_half
     gate: "fix-min-jerk-lqr-half-speed completed"
     why: "One-variable fix 3/4 vs diag-figure8-half-speed-lqr: enable ONLY Smith predictor delay alignment + velocity lead (g_xyc_delay_ticks=18, g_xyc_pred_lead=1; R2 Rank 2 Fix 1, Cause h)"
     pass: "stationary hold p-p drops from 49.8 cm toward <= 22 cm (R2.3: PM 5.2 -> 19.7 deg); figure-8 completes without abort (safe exit at |pos err| > 50 cm, PROPOSED 45 cm); no RC takeover"
 
   - id: fix-candidate-gains-lqr-half-speed
-    fly: lab_e_fix_cand_gains_lqr_half
-    gate: "CHAT APPROVAL: Write candidate LQR XY gains (VAR 75-83 from API/xy_ctrl_gains_candidate.h, R2 Rank 1 Fix 2) while disarmed only after operator chat OK; never as a .fly set"
-    why: "One-variable fix 4/4 vs diag-figure8-half-speed-lqr: enable ONLY candidate LQR XY gains (VAR 75-83, R2 Rank 1 Fix 2, Cause a stiff outer gains; R2.3 predicts half-speed RMSE 35.9 -> 5.6 cm and hold p-p 49.8 -> 17.9 cm)"
+    fly: lab_e_fix_cand_gains_lqr_half
+    gate: "TERMINAL GATE: Reverse A/B rung (W3.4) that temporarily flies the pre-sysid `API/xy_ctrl_gains_candidate.h` set (VAR 75-83) for this one flight while all other diag/fix/model flights fly the sysid xy gains written at the pos `xy_model` gate (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains and `u` = undo on failed verify hover)"
+    why: "One-variable fix 4/4 (reverse A/B rung vs `diag-figure8-half-speed-lqr` sysid xy gains): temporarily substitute the pre-sysid candidate LQR XY gains (`API/xy_ctrl_gains_candidate.h`, VAR 75-83) on this flight only, then restore sysid `xy_model` gains for Block 5"
     pass: "hold p-p < 20 cm; half-speed figure-8 RMSE < 10 cm and swing ratio < 1.25x (PROPOSED from R2.3: 5.64 cm RMSE, 117.1 cm p-p); safe exit at |pos err| > 50 cm (PROPOSED 45 cm); no RC takeover"
+    notes: "W3.4 reverse A/B rung: all other Block 4b/4c/5a/5b flights fly the sysid xy gains approved at `pos-gain-verify-hover` (`tune: {kind: xy_model}`); this flight temporarily tests the pre-sysid `xy_ctrl_gains_candidate.h` set for direct A/B comparison"
     stop: true
 
   # ======== BLOCK 5a: COMBINED FIX VALIDATION AT HALF SPEED (all 4 controllers: hold -> 30 cm steps -> half-speed figure-8) ========
   - id: model-based-pid
-    fly: lab_e_model_pid
-    gate: "CHAT APPROVAL: Blocks 1-4 sysid chain and Block 4c one-variable fixes passed; model-based PID gains approved by operator in chat and written while disarmed"
+    fly: lab_e_model_pid
+    gate: "TERMINAL GATE: Blocks 1-4 sysid chain and Block 4c one-variable fixes passed; labday shows active sysid PID gains in `gains.yaml` (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains and `u` = undo on failed verify hover)"
     why: "Block 5a combined-fix HALF-SPEED PID validation (Fix 1+2+3+4): 4 s hold -> 30 cm X step -> 30 cm Y step -> half-speed figure-8 (f8_laps=1, move_s=18, profile=2, slow_on=1; R2.3 predicts hold 11.7 cm, RMSE 4.41 cm)"
     pass: "hold p-p < 15 cm; 30 cm step overshoot < 25%; half-speed figure-8 swing ratio < 1.25x and RMSE < 10 cm (PROPOSED); safe exit at |pos err| > 50 cm (PROPOSED 45 cm); no RC takeover"
 
   - id: model-based-lqr
-    fly: lab_e_model_lqr
-    gate: "CHAT APPROVAL: Blocks 1-4 sysid chain and Block 4c one-variable fixes passed; candidate LQR gains (`API/xy_ctrl_gains_candidate.h`, VAR 75-83) approved by operator in chat and written while disarmed"
+    fly: lab_e_model_lqr
+    gate: "TERMINAL GATE: Blocks 1-4 sysid chain and Block 4c one-variable fixes passed; labday shows active sysid LQR gains (VAR 75-83 from the pos `xy_model` gate) and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains and `u` = undo on failed verify hover)"
     why: "Block 5a combined-fix HALF-SPEED LQR validation (Fix 1+2+3+4): 4 s hold -> 30 cm X step -> 30 cm Y step -> half-speed figure-8 (f8_laps=1, d=18, pred_lead=1, profile=2, slow_on=1; R2.3 predicts PM 49.7 deg, hold 11.0 cm, RMSE 6.45 cm)"
     pass: "hold p-p < 15 cm; 30 cm step overshoot < 25%; half-speed figure-8 swing ratio < 1.25x and RMSE < 10 cm (PROPOSED); safe exit at |pos err| > 50 cm (PROPOSED 45 cm); no RC takeover"
 
   - id: model-based-mpc
-    fly: lab_e_model_mpc
-    gate: "CHAT APPROVAL: Blocks 1-4 sysid chain and Block 4c one-variable fixes passed; candidate MPC gains (`API/xy_ctrl_gains_candidate.h`, VAR 75-83) approved by operator in chat and written while disarmed"
+    fly: lab_e_model_mpc
+    gate: "TERMINAL GATE: Blocks 1-4 sysid chain and Block 4c one-variable fixes passed; labday shows active sysid MPC gains (VAR 75-83 from the pos `xy_model` gate) and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains and `u` = undo on failed verify hover)"
     why: "Block 5a combined-fix HALF-SPEED MPC validation (Fix 1+2+3+4): 4 s hold -> 30 cm X step -> 30 cm Y step -> half-speed figure-8 (f8_laps=1, d=18, pred_lead=1, profile=2, slow_on=1; R2.3 predicts PM 50.4 deg, hold 12.4 cm, RMSE 6.77 cm)"
     pass: "hold p-p < 15 cm; 30 cm step overshoot < 25%; half-speed figure-8 swing ratio < 1.25x and RMSE < 10 cm (PROPOSED); safe exit at |pos err| > 50 cm (PROPOSED 45 cm); no RC takeover"
+    tune: {kind: adapt, layer: mpc_3l, mode: live}
 
   - id: model-based-adrc
-    fly: lab_e_model_adrc
-    gate: "CHAT APPROVAL: Blocks 1-4 sysid chain and Block 4c one-variable fixes passed; candidate ADRC ESO/controller gains (`API/xy_ctrl_gains_candidate.h`, VAR 79-83) approved by operator in chat and written while disarmed"
+    fly: lab_e_model_adrc
+    gate: "TERMINAL GATE: Blocks 1-4 sysid chain and Block 4c one-variable fixes passed; labday shows active sysid ADRC ESO/controller gains (VAR 79-83 from the pos `xy_model` gate) and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains and `u` = undo on failed verify hover)"
     why: "Block 5a combined-fix HALF-SPEED ADRC validation (Fix 1+2+3+4): 4 s hold -> 30 cm X step -> 30 cm Y step -> half-speed figure-8 (f8_laps=1, d=18, pred_lead=1, profile=2, slow_on=1; R2.3 predicts PM 49.7 deg, hold 12.2 cm)"
     pass: "hold p-p < 15 cm; 30 cm step overshoot < 25%; half-speed figure-8 swing ratio < 1.3x and max_z3x < 150 cm/s^2 (PROPOSED); safe exit at |pos err| > 50 cm (PROPOSED 45 cm); no RC takeover"
+    tune: {kind: adapt, layer: adrc_3l, mode: live}
     stop: true
 
   # ======== BLOCK 5b: FULL-SPEED FIGURE-8 VALIDATION (GATED ONLY AFTER HALF-SPEED PASSES) ========
   - id: model-pid-figure8-full-speed
-    fly: lab_e_model_pid_full
-    gate: "CHAT APPROVAL: Fly FULL-SPEED figure-8 (f8_laps=2) ONLY after Block 5a half-speed `model-based-pid` passes all criteria (hold < 15 cm, swing < 1.25x, zero abort) and operator approves in chat while disarmed"
+    fly: lab_e_model_pid_full
+    gate: "TERMINAL GATE: Fly FULL-SPEED figure-8 (f8_laps=2) ONLY after Block 5a half-speed `model-based-pid` passes all criteria (hold < 15 cm, swing < 1.25x, zero abort); labday prompts while disarmed (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains)"
     why: "Block 5b combined-fix FULL-SPEED PID figure-8 (f8_laps=2, move_s=18, profile=2, slow_on=1): verifies full-speed tracking under slow-clock protection after half-speed passes"
     pass: "full-speed figure-8 completes without tilt blowup or crash; slow-clock regulates speed when |pos err| > 20 cm; safe exit at |pos err| > 50 cm (PROPOSED 45 cm); no RC takeover"
 
   - id: model-lqr-figure8-full-speed
-    fly: lab_e_model_lqr_full
-    gate: "CHAT APPROVAL: Fly FULL-SPEED figure-8 (f8_laps=2) ONLY after Block 5a half-speed `model-based-lqr` passes all criteria (hold < 15 cm, swing < 1.25x, zero abort) and operator approves candidate LQR gains in chat while disarmed"
+    fly: lab_e_model_lqr_full
+    gate: "TERMINAL GATE: Fly FULL-SPEED figure-8 (f8_laps=2) ONLY after Block 5a half-speed `model-based-lqr` passes all criteria (hold < 15 cm, swing < 1.25x, zero abort); labday prompts while disarmed (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains)"
     why: "Block 5b combined-fix FULL-SPEED LQR figure-8 (f8_laps=2, d=18, pred_lead=1, profile=2, slow_on=1): verifies full-speed LQR tracking after half-speed passes"
     pass: "full-speed figure-8 completes without abort; swing ratio < 1.5x (PROPOSED); safe exit at |pos err| > 50 cm (PROPOSED 45 cm); no RC takeover"
 
   - id: model-mpc-figure8-full-speed
-    fly: lab_e_model_mpc_full
-    gate: "CHAT APPROVAL: Fly FULL-SPEED figure-8 (f8_laps=2) ONLY after Block 5a half-speed `model-based-mpc` passes all criteria (hold < 15 cm, swing < 1.25x, zero abort) and operator approves candidate MPC gains in chat while disarmed"
+    fly: lab_e_model_mpc_full
+    gate: "TERMINAL GATE: Fly FULL-SPEED figure-8 (f8_laps=2) ONLY after Block 5a half-speed `model-based-mpc` passes all criteria (hold < 15 cm, swing < 1.25x, zero abort); labday prompts while disarmed (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains)"
     why: "Block 5b combined-fix FULL-SPEED MPC figure-8 (f8_laps=2, d=18, pred_lead=1, profile=2, slow_on=1): verifies full-speed MPC tracking after half-speed passes"
     pass: "full-speed figure-8 completes without attitude blowup (max tilt < 18 deg vs 37.7 deg on 10-24); safe exit at |pos err| > 50 cm (PROPOSED 45 cm); no RC takeover"
 
   - id: model-adrc-figure8-full-speed
-    fly: lab_e_model_adrc_full
-    gate: "CHAT APPROVAL: Fly FULL-SPEED figure-8 (f8_laps=2) ONLY after Block 5a half-speed `model-based-adrc` passes all criteria (hold < 15 cm, swing < 1.3x, zero abort) and operator approves candidate ADRC gains in chat while disarmed"
+    fly: lab_e_model_adrc_full
+    gate: "TERMINAL GATE: Fly FULL-SPEED figure-8 (f8_laps=2) ONLY after Block 5a half-speed `model-based-adrc` passes all criteria (hold < 15 cm, swing < 1.3x, zero abort); labday prompts while disarmed (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert gains)"
     why: "Block 5b combined-fix FULL-SPEED ADRC figure-8 (f8_laps=2, d=18, pred_lead=1, profile=2, slow_on=1): verifies full-speed ADRC tracking after half-speed passes"
     pass: "full-speed figure-8 completes without ESO windup (max_z3x < 200 cm/s^2 vs 582.2 cm/s^2 on 10-24); safe exit at |pos err| > 50 cm (PROPOSED 45 cm); no RC takeover"
     stop: true
@@ -221,9 +327,10 @@ flights:
 branches:
   - {when: "Flash exits non-zero or livewatch verify fails", do: "Stop; do not fly the old build; tell the operator"}
   - {when: "200 Hz subscribe drop rate > 2% in smoke-hover", do: "Restart 8081 with `--lab`, power-cycle WiFi/FC, re-verify before Block 1"}
-  - {when: "autotune.cli refuses a fit (residual > 0.35 or coherence coverage < 50%)", do: "Inspect FRF + PSD diagnostic plot in `--plot-dir`; do not apply gains from a refused fit; re-fly or keep prior loop gains"}
+  - {when: "autotune.cli refuses a fit (residual > 0.35 or coherence coverage < 50%)", do: "Inspect FRF + PSD diagnostic plot in `--plot-dir`; do not apply gains from a refused fit; re-fly (`r`) or keep prior loop gains (`n`)"}
   - {when: "Outer-loop bandwidth separation ratio < 3.0x vs inner loop", do: "Reduce outer Kp/wc until separation >= 3.0x before flying verification hover"}
+  - {when: "Verify hover fails after a `y` gain write", do: "Press `u` at the post-verify prompt (or `v` / `--revert <gate>`) to restore the pre-gate snapshot from `snapshots` in `logs/lab/2026-10-27/gains.yaml`"}
   - {when: "Position error exceeds 45 cm (PROPOSED) / 50 cm host AbortMonitor threshold on any figure-8", do: "Automatic safe exit: firmware slow-clock freezes path progression at e_hi=45 cm and host AbortMonitor triggers abort_land at 50 cm for 3 samples; do not advance to full-speed Block 5b until half-speed Block 5a passes"}
   - {when: "Step response or figure-8 exhibits ~0.45-0.5 Hz ringing > 15 cm p-p", do: "Land; check `g_xyc_delay_ticks=18`, `g_xyc_pred_lead=1`, and inner rate gains (`--gains rate35y104`); do not proceed to Block 5b full-speed until half-speed passes"}
   - {when: "Trajectory aborts (traj_status 3) with s_authority 0 or stick move", do: "RC takeover: land, hands off sticks, re-fly (`r`)"}
-  - {when: "Pack resting voltage reaches packs.yaml gate", do: "Swap battery pack and re-write `--gains rate35y104` after reboot"}
+  - {when: "Pack resting voltage reaches packs.yaml gate", do: "Swap battery pack; `labday` automatically re-writes `logs/lab/2026-10-27/gains.yaml` after reboot"}
