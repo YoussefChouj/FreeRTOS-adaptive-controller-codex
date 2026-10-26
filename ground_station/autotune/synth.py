@@ -1,9 +1,9 @@
 """Synthetic excite-flight log for the autotune tests and a cli demo (not flight data).
 
 One axis of the cascade at the firmware rates: angle PID -> rate PID (API/pid.c form and clamps, 200 Hz) ->
-known plant k e^{-sT} / (s (tau s + 1)) integrated at 1 ms, with a torque disturbance, gyro noise, a wandering
-angle setpoint (the position loop) and the SysID dither added to the rate setpoint (StabilizerTask.c:1337-1340).
-The log is a session telemetry.csv (received_ns,slot,key,value) with the core symbols the cli reads, at 100 Hz
+known plant k e^{-sT} / ((s + drag) (tau s + 1)) integrated at 1 ms, with a torque disturbance, sensor noise, a wandering
+outer setpoint and the SysID dither added to the target loop's setpoint (rate, angle, vel, or pos).
+The log is a session telemetry.csv (received_ns,slot,key,value) with the core symbols the cli reads, at 100 or 200 Hz
 with host jitter; id_frame=True adds the 0x03 ID frame keys at 200 Hz during the run.
 
     python -m ground_station.autotune.synth <out_dir> [--axis roll] [--amp 60] [--noise 2]
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import math
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -21,7 +22,7 @@ import pandas as pd
 
 from ground_station.autotune import excitation as ex
 from ground_station.autotune.design import Plant, PidRow, read_pid_rows
-from ground_station.autotune.frf import ANGLE_PID, RATE_PID
+from ground_station.autotune.frf import ANGLE_PID, RATE_PID, loop_dt, pid_member
 
 DEMO_PLANT = Plant(k=8.5, tau_s=0.03, delay_s=0.01)  # made up for the demo, near research/sim/cascade.py tests
 
@@ -75,6 +76,64 @@ def simulate(axis: str = "roll", plant: Plant = DEMO_PLANT, rate: PidRow | None 
             ang += w * h
         log[i] = des, fb, ang
     return _rows(axis, t, log, t_ex, excite, rng, id_frame, d)
+
+
+def simulate_loop(loop: str, axis: str, plant: Plant, pid_row: PidRow | None = None,
+                  excite: Mapping[str, Any] | None = None, pre_s: float = 8.0, post_s: float = 4.0,
+                  noise_std: float = 0.01, seed: int = 0, log_hz: int = 200,
+                  tick_jitter_ms: float = 0.25) -> pd.DataFrame:
+    """Synthetic closed-loop excitation run for any loop (rate, angle, vel, pos) with 200 Hz sampling,
+    tick jitter and delay, in the linear regime (no clamp saturation)."""
+    rows = read_pid_rows()
+    member = pid_member(loop, axis)
+    base_row = pid_row or rows[member]
+    lin_row = replace(base_row, umax=1e9, upmax=1e9, uimax=1e9, udmax=1e9, sumemax=1e9, emin=1e9)
+    dt_ctrl = loop_dt(loop, axis)
+    excite = dict(excite or ex.LOOP_EXCITE.get(loop, ex.ID_EXCITE))
+    rng = np.random.default_rng(seed)
+    t_ex = 1.0 + pre_s
+    dt_sim = dt_ctrl if loop in ("vel", "pos") else (1.0 / log_hz)
+    n = int(round((t_ex + ex.step_s(excite["duration_s"]) + post_s) / dt_sim))
+    sub = 20
+    h = dt_sim / sub
+    nd = int(round(plant.delay_s / h))
+    buf = np.zeros(nd + 1)
+    j = 0
+    a = 1.0 - math.exp(-h / max(plant.tau_s, 1e-4))
+    al_drag = math.exp(-plant.drag * h) if plant.drag > 0 else 1.0
+    t = np.arange(n) * dt_sim
+    d = ex.dither(t - t_ex, excite["signal"], excite["f0"], excite["f1"], excite["amp"], excite["duration_s"])
+    pid_c = _Pid(lin_row)
+    v = x = 0.0
+    log = np.zeros((n, 2))
+    for i in range(n):
+        fb = x + noise_std * rng.standard_normal()
+        des = d[i]
+        u = pid_c(des - fb)
+        log[i] = des, fb
+        for _ in range(sub):
+            buf[j] = u
+            j = (j + 1) % (nd + 1)
+            u_del = buf[j]
+            v_next = v + a * (u_del - v)
+            v_mid = 0.5 * (v + v_next)
+            if plant.drag > 0:
+                x = al_drag * x + (1.0 - al_drag) / plant.drag * (plant.k * v_mid)
+            else:
+                x = x + plant.k * v_mid * h
+            v = v_next
+    host_ns = (t * 1e9 + np.maximum.accumulate(rng.uniform(0, 5e6, len(t)))).astype(np.int64)
+    # Integer millisecond xTickCount with occasional +-1 ms tick jitter, monotonically increasing
+    tick_ms = np.round(t * 1000.0)
+    if tick_jitter_ms > 0:
+        jitter = np.where(rng.random(len(t)) < 0.05, rng.choice([-1.0, 1.0], len(t)), 0.0)
+        tick_ms = np.maximum.accumulate(tick_ms + jitter * min(tick_jitter_ms, 0.4))
+    prim = np.where(t < 1.0, 1.0, 2.0)
+    cols = {"xTickCount": tick_ms, f"Ctrler.{member}.Des": log[:, 0], f"Ctrler.{member}.FB": log[:, 1],
+            "g_wfb_status.prim_state": prim}
+    frames = [pd.DataFrame({"received_ns": host_ns, "slot": 0, "key": f"slot0.{key}", "value": val})
+              for key, val in cols.items()]
+    return pd.concat(frames).sort_values("received_ns", kind="stable")
 
 
 def _rows(axis: str, t: np.ndarray, log: np.ndarray, t_ex: float, excite: Mapping[str, Any],

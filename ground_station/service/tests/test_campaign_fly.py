@@ -460,11 +460,11 @@ def test_write_gains_defaults_preset(monkeypatch, capsys):
     ok = campaign_fly.write_gains("http://h", "defaults", yes=True)
     assert ok is True
     out = capsys.readouterr().out
-    assert "18/18 ACK" in out
+    assert "21/21 ACK" in out
     cmd_posts = [p for p in posted if p[0] == "/commands"]
-    assert len(cmd_posts) == 18
+    assert len(cmd_posts) == 21
     # rate loops 9-14 are reset too (F4 livetune writes them and RAM gains persist)
-    assert sorted(b["index"] for _, b in cmd_posts) == [*range(9, 15), *range(24, 36)]
+    assert sorted(b["index"] for _, b in cmd_posts) == [*range(9, 18), *range(24, 36)]
 
 
 def test_debrief_lines_names_the_abort():

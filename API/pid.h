@@ -32,6 +32,8 @@ typedef struct {
 } TrajFF_t;
 
 void TrajFF_Reset(TrajFF_t *s);
+void TrajFF_SetPresetAcc(float ax_cms2, float ay_cms2);
+void TrajFF_Scale(float s, float ds_dt, float *vff_x, float *vff_y, float *aff_x, float *aff_y);
 void TrajFF_Step(TrajFF_t *s, uint8_t active, float tx_cm, float ty_cm, float dt_s, float tau_s, float vmax_cms,
                  float *vff_x, float *vff_y, float *aff_x, float *aff_y);
 

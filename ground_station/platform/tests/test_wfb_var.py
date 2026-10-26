@@ -57,7 +57,7 @@ def test_every_c_row_parses() -> None:
     """Every VAR_WRITE_ROW line of the table parses (load_rows refuses repeated names and ids)."""
     lines = re.findall(r"^[ \t]*VAR_WRITE_ROW\(", C, re.M)
     rows = wfb_var.load_rows()
-    assert len(rows) == len(lines) == 48
+    assert len(rows) == len(lines) == 62
     assert all(1 <= r.id <= 254 and r.min <= r.max for r in rows.values())
 
 

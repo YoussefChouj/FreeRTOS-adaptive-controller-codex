@@ -2221,7 +2221,7 @@ static void Z_Compute(void)
 		     cascade that feeds Z_ratePID.Des). */
 			float zp_sumE = Ctrler.Z_posPID.SumE;
 			float zp_Ui   = Ctrler.Z_posPID.Ui;
-			float ez = Excite_Get(EXC_Z, EXC_OUTER);   /* pattern library: Des is persistent, so add then undo */
+			float ez = SysID_GetPosSetpoint(SYSID_AXIS_Z, Excite_Get(EXC_Z, EXC_OUTER));   /* pattern library + sysid target 4: add then undo */
 			Ctrler.Z_posPID.Des += ez;
 			ComputePID(&Ctrler.Z_posPID);
 			Ctrler.Z_posPID.Des -= ez;
@@ -2236,7 +2236,7 @@ static void Z_Compute(void)
 		float zr_sumE = Ctrler.Z_ratePID.SumE;
 		float zr_Ui   = Ctrler.Z_ratePID.Ui;
 		float evz = Excite_Get(EXC_Z, EXC_INNER);
-		Ctrler.Z_ratePID.Des += evz;
+		Ctrler.Z_ratePID.Des = SysID_GetVelSetpoint(SYSID_AXIS_Z, Ctrler.Z_ratePID.Des) + evz;
 		ComputePID(&Ctrler.Z_ratePID);
 		Ctrler.Z_ratePID.Des -= evz;
 		if (!s_alt_valid_tick) { Ctrler.Z_ratePID.SumE = zr_sumE; Ctrler.Z_ratePID.Ui = zr_Ui; }
@@ -2408,8 +2408,8 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact, uint8_t land_xy_
 		/* FF lead (2026-10-14, xy_tune): the position loops compare with the reference g_traj_ff_shift_s ago,
 		 * so the velocity FF leads them by the plant lag instead of both pushing (0 = the loops before). */
 		float sx = g_traj_ff_shift_s * vff_x, sy = g_traj_ff_shift_s * vff_y;
-		sx -= Excite_Get(EXC_X, EXC_OUTER);   /* pattern library: rides the same add-then-undo as the FF lead */
-		sy -= Excite_Get(EXC_Y, EXC_OUTER);
+		sx -= SysID_GetPosSetpoint(SYSID_AXIS_X, Excite_Get(EXC_X, EXC_OUTER));   /* pattern library + sysid target 4: add then undo */
+		sy -= SysID_GetPosSetpoint(SYSID_AXIS_Y, Excite_Get(EXC_Y, EXC_OUTER));
 		Ctrler.locxPID.Des -= sx;
 		Ctrler.locyPID.Des -= sy;
 		ComputePID_GatedHold(&Ctrler.locxPID, airborne, hold);
@@ -2449,8 +2449,8 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact, uint8_t land_xy_
 		pos_u[1] = 100.0f * MRAC_PosStep(1U, (uint8_t)(!xyc_on[1] && airborne && !hold && Ctrler.locysPID.Des == Ctrler.locyPID.U),
 		                                 0.01f * Ctrler.locyPID.Des, 0.01f * Ctrler.locyPID.FB,
 		                                 0.01f * Ctrler.locysPID.FB, 0.01f * Ctrler.locysPID.Des);
-		Ctrler.locxsPID.Des += vx + Excite_Get(EXC_X, EXC_INNER);   /* inner pattern: PID path only (xy_ctrl sets U) */
-		Ctrler.locysPID.Des += vy + Excite_Get(EXC_Y, EXC_INNER);
+		Ctrler.locxsPID.Des = SysID_GetVelSetpoint(SYSID_AXIS_X, Ctrler.locxsPID.Des + vx + Excite_Get(EXC_X, EXC_INNER));   /* inner pattern + sysid target 3 */
+		Ctrler.locysPID.Des = SysID_GetVelSetpoint(SYSID_AXIS_Y, Ctrler.locysPID.Des + vy + Excite_Get(EXC_Y, EXC_INNER));
 		if (((unsigned)mrac_xy_layers_live & MRAC_XY_LAYER_OUTER) != 0U) {
 			Ctrler.locxsPID.Des += pos_u[0];
 			Ctrler.locysPID.Des += pos_u[1];
@@ -2462,11 +2462,11 @@ static void Pos_Compute(uint8_t airborne, uint8_t land_contact, uint8_t land_xy_
 		ComputePID_GatedHold(&Ctrler.locxsPID, airborne, hold);
 		ComputePID_GatedHold(&Ctrler.locysPID, airborne, hold);
 		if (xyc_on[0]) {
-			float u = XyCtrl_Step(&s_xyc[0], s_xyc_kind, Ctrler.locxPID.Des + Excite_Get(EXC_X, EXC_OUTER), Ctrler.locxPID.FB, Ctrler.locxsPID.FB, vff_x);
+			float u = XyCtrl_Step(&s_xyc[0], s_xyc_kind, SysID_GetPosSetpoint(SYSID_AXIS_X, Ctrler.locxPID.Des + Excite_Get(EXC_X, EXC_OUTER)), Ctrler.locxPID.FB, Ctrler.locxsPID.FB, vff_x);
 			if (isfinite(u)) Ctrler.locxsPID.U = u; else XyCtrl_Reset(&s_xyc[0]);
 		} else if (s_xyc_kind) XyCtrl_Track(&s_xyc[0], s_xyc_kind, Ctrler.locxPID.FB);
 		if (xyc_on[1]) {
-			float u = XyCtrl_Step(&s_xyc[1], s_xyc_kind, Ctrler.locyPID.Des + Excite_Get(EXC_Y, EXC_OUTER), Ctrler.locyPID.FB, Ctrler.locysPID.FB, vff_y);
+			float u = XyCtrl_Step(&s_xyc[1], s_xyc_kind, SysID_GetPosSetpoint(SYSID_AXIS_Y, Ctrler.locyPID.Des + Excite_Get(EXC_Y, EXC_OUTER)), Ctrler.locyPID.FB, Ctrler.locysPID.FB, vff_y);
 			if (isfinite(u)) Ctrler.locysPID.U = u; else XyCtrl_Reset(&s_xyc[1]);
 		} else if (s_xyc_kind) XyCtrl_Track(&s_xyc[1], s_xyc_kind, Ctrler.locyPID.FB);
 		Ctrler.locxsPID.U += ax;
@@ -2511,8 +2511,8 @@ static void Att_Compute(uint8_t airborne)
 	float ep = Excite_Get(EXC_PITCH, EXC_OUTER), er = Excite_Get(EXC_ROLL, EXC_OUTER), ey = Excite_Get(EXC_YAW, EXC_OUTER);
 
 	Update_Des(case_Update_pitrol_Des);   /* pitch/roll angle setpoints */
-	Ctrler.pitchPID.Des += ep;            /* pattern library (outer): add then undo, like the yaw below */
-	Ctrler.rollPID.Des  += er;
+	Ctrler.pitchPID.Des = SysID_GetAngleSetpoint(SYSID_AXIS_PITCH, Ctrler.pitchPID.Des) + ep;   /* pattern library + sysid target 2 */
+	Ctrler.rollPID.Des  = SysID_GetAngleSetpoint(SYSID_AXIS_ROLL,  Ctrler.rollPID.Des)  + er;
 	ComputePID_Gated(&Ctrler.pitchPID, airborne);
 	ComputePID_Gated(&Ctrler.rollPID, airborne);
 	Ctrler.pitchPID.Des -= ep;

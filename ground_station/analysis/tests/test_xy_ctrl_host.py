@@ -91,3 +91,85 @@ def test_track_keeps_the_predictor_warm(exe):
     rows = [f"t 2 0 {pos} {vel} 0 {float(u)!r}" for u in u_hist] + [f"s 2 {des} {pos} {vel} 0 {u_py!r}"]
     u_c = _run_c(exe, rows)
     assert u_c[-1] == pytest.approx(u_py, abs=0.05)
+
+
+def test_default_vars_bit_identical_on_recorded_reference(exe):
+    """With every new VAR at its default (pred_lead=0, aff=0, header gains), C output is bit-identical to the
+    baseline step path on a recorded figure-8 reference."""
+    n = 400
+    t = np.arange(n) * xc.DT
+    des = 35.0 * np.sin(2.0 * np.pi * 0.36 * t)
+    vff = 35.0 * 2.0 * np.pi * 0.36 * np.cos(2.0 * np.pi * 0.36 * t)
+    for kind in ("adrc", "lqr", "mpc"):
+        code = xc.KIND_CODE[kind]
+        tape = _Tape(xc.factory(kind, M, xc.X0[kind])(1))
+        xt.simulate(tape, xt.plant_arrays([NOM]), des, vff=vff)
+        rows_s = ["r"] + [f"s {code} {r!r} {p!r} {v!r} {f!r} {u!r}" for r, p, v, f, u in tape.rows]
+        rows_x = ["r", "w 0 74 0"] + [f"x {code} {r!r} {p!r} {v!r} {f!r} 0.0 {u!r}" for r, p, v, f, u in tape.rows]
+        u_s = _run_c(exe, rows_s)
+        u_x = _run_c(exe, rows_x)[1:]   # skip the '0' return code of 'w 0 74 0'
+        assert np.array_equal(u_s, u_x)
+
+
+def test_predictor_fix_zero_error_on_perfectly_tracked_ramp(exe):
+    """On a perfectly tracked constant-velocity ramp (pos == des, vel == vff, pipe filled with uff = drag*vff/k),
+    the old predictor reports +d*dt*vff error whereas with predictor lead (VAR 74 = 1) predicted error == 0."""
+    vff = 25.0
+    des = 50.0
+    uff = M["drag"] * vff / M["k"]
+    d = M["d"]
+    # Warm up the pipe and lag state for 200 ticks at steady uff so a_est -> uff
+    warm = ["r"] + [f"t 2 {des!r} {des!r} {vff!r} {vff!r} {uff!r}" for _ in range(250)]
+    # 1. With pred_lead = 0 (default): x[0] is +d * DT * vff (~8.5 cm)
+    res_off = _run_c(exe, warm + [f"e {des!r} {des!r} {vff!r} {vff!r} 0.0"])
+    x_off = res_off[-4:]
+    assert x_off[0] == pytest.approx(d * xc.DT * vff, abs=1e-2)
+    # 2. With pred_lead = 1 (VAR 74): x[0..3] == 0
+    res_on = _run_c(exe, warm + ["w 0 74 1", f"e {des!r} {des!r} {vff!r} {vff!r} 0.0"])
+    x_on = res_on[-4:]
+    assert np.allclose(x_on, 0.0, atol=1e-3)
+
+
+def test_runtime_gain_writes_armed_refusal_next_tick_and_parity(exe):
+    """Runtime gain writes (VAR 75..83, 47): refused while armed (return -1, output unchanged); take effect on the
+    very next tick when disarmed (return 0); C output matches Python controller with the updated gains & model."""
+    des, pos, vel, vff = 30.0, 10.0, -5.0, 15.0
+    # 1. Armed writes are refused (-1) and do not alter the next-tick command
+    base_cmd = _run_c(exe, ["r", f"s 2 {des} {pos} {vel} {vff} 0.0"])[-1]
+    armed_res = _run_c(exe, [
+        "r",
+        "w 1 75 99.0",   # LQR K0 while armed -> refused (-1)
+        "w 1 79 5.0",    # ADRC wc while armed -> refused (-1)
+        "w 1 81 1.5",    # model k while armed -> refused (-1)
+        "w 1 47 15",     # delay ticks while armed -> refused (-1)
+        f"s 2 {des} {pos} {vel} {vff} 0.0",
+    ])
+    assert list(armed_res[:4]) == [-1.0, -1.0, -1.0, -1.0]
+    assert armed_res[4] == base_cmd
+
+    # 2. Disarmed writes succeed (0), take effect on the very next tick, and match Python LQR & ADRC
+    new_k = [18.5, 7.2, 0.25, 1.1]
+    new_m = {"k": 0.75, "al": 0.82, "drag": 0.38, "d": 20}
+    py_lqr = xc.Lqr(new_m, np.array(new_k), 1)
+    py_adrc = xc.Adrc(new_m, 1.8, 10.0 ** xc.X0["adrc"][1], 0.65, 1)
+
+    c_lqr = _run_c(exe, [
+        "r",
+        f"w 0 75 {new_k[0]}", f"w 0 76 {new_k[1]}", f"w 0 77 {new_k[2]}", f"w 0 78 {new_k[3]}",
+        f"w 0 81 {new_m['k']}", f"w 0 82 {new_m['al']}", f"w 0 83 {new_m['drag']}", f"w 0 47 {new_m['d']}",
+        f"s 2 {des} {pos} {vel} {vff} 0.0",
+    ])
+    assert all(v == 0.0 for v in c_lqr[:8])
+    u_py_lqr = float(py_lqr.step(np.array([des]), np.array([pos]), np.array([vel]), vff=vff)[0])
+    assert c_lqr[-1] != base_cmd
+    assert c_lqr[-1] == pytest.approx(u_py_lqr, abs=0.05)
+
+    c_adrc = _run_c(exe, [
+        "r",
+        f"w 0 47 {new_m['d']}",
+        "w 0 79 1.8", "w 0 80 0.65",
+        f"s 1 {des} {pos} {vel} {vff} 0.0",
+    ])
+    assert all(v == 0.0 for v in c_adrc[:3])
+    u_py_adrc = float(py_adrc.step(np.array([des]), np.array([pos]), np.array([vel]), vff=vff)[0])
+    assert c_adrc[-1] == pytest.approx(u_py_adrc, abs=0.05)

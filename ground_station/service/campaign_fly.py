@@ -535,6 +535,11 @@ GAIN_PRESETS = {
                "Current yaw PM is 81.7 deg, so this is optional (docs/lab/days/2026-10-25.yaml block 5).",
         "gains": {15: 10.4, 16: 0.005, 17: 0.014},
     },
+    "rate35y104": {
+        "why": "rate35y104 (PROPOSED): rate35 roll/pitch Kp3.5 Kd13 plus yaw104 yaw Kp10.4 Kd0.014 in one write, so every "
+               "flight re-writes all nine rate gains after a reboot (docs/lab/days/2026-10-27.yaml block 0).",
+        "gains": {9: 3.5, 10: 0.01, 11: 13.0, 12: 3.5, 13: 0.01, 14: 13.0, 15: 10.4, 16: 0.005, 17: 0.014},
+    },
     "defaults": {
         "why": "defaults: restore API/pid.c firmware default gains without requiring power-cycle (docs/agent/lab-friction-2026-10-15.md A6).",
         # rate loops (9-17) too: F4 livetune writes 9-14, yaw104 writes 15-17, and RAM gains outlive the flight

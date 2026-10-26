@@ -1,0 +1,17 @@
+# D-angle: attitude angle-loop multisine (sysid_target=2, roll then pitch, 0.2-6 Hz, 6 deg, 30 s each, 200 Hz stream).
+# Identifies the closed-loop rate + attitude plant from rollPID/pitchPID output to attitude angle with >=3-5x separation from inner rate wc.
+# Ground analysis: python -m ground_station.autotune.cli <session> --loop angle --axis roll (and --axis pitch). All values PROPOSED.
+campaign lab-d-sysid-angle
+rate 200
+log velocity_loops camera_fusion
+slow 25 thrust_model xy_ctrl ekf_states estimator_truth optical_flow takeoff_gate nn4 drift_nn mrac_3l mrac_theta mrac_shadow
+set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10
+takeoff 0.5 mrac_injection=0
+set sysid_target=2
+hold 8
+excite target=angle axis=roll signal=multisine f0=0.2 f1=6 amp=6 duration_s=30
+hold 3
+excite target=angle axis=pitch signal=multisine f0=0.2 f1=6 amp=6 duration_s=30
+set sysid_target=0
+hold 3
+land

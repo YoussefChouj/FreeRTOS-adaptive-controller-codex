@@ -1,0 +1,17 @@
+# D-pos-xy: outer position-loop multisine (sysid_target=4, pitch->x then roll->y, 0.1-1.5 Hz, 15 cm, 30 s each, 200 Hz stream).
+# Identifies closed-loop velocity + position plant (locxPID/locyPID) covering the 0.25-0.63 Hz wobble band with >=3-5x separation from vel wc.
+# Ground analysis: python -m ground_station.autotune.cli <session> --loop pos --axis x (and --axis y). All values PROPOSED.
+campaign lab-d-sysid-pos-xy
+rate 200
+log velocity_loops camera_fusion
+slow 25 thrust_model xy_ctrl ekf_states estimator_truth optical_flow takeoff_gate nn4 drift_nn mrac_3l mrac_theta mrac_shadow
+set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10
+takeoff 0.5 mrac_injection=0
+set sysid_target=4
+hold 8
+excite target=pos axis=pitch signal=multisine f0=0.1 f1=1.5 amp=15 duration_s=30
+hold 3
+excite target=pos axis=roll signal=multisine f0=0.1 f1=1.5 amp=15 duration_s=30
+set sysid_target=0
+hold 3
+land

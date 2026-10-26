@@ -1,0 +1,15 @@
+# D-rate-pitch: wide-band pitch rate-loop multisine (low 0.2-5 Hz @ 45 deg/s + high 2-40 Hz @ 60 deg/s, 30 s each, 200 Hz stream).
+# Captures both the 0.2-0.5 Hz wobble band (>=4 Welch averages) and the 15-40 Hz phase roll-off / motor lag.
+# Ground analysis: python -m ground_station.autotune.cli <session> --loop rate --axis pitch --correct-zoh. All values PROPOSED.
+campaign lab-d-sysid-rate-pitch
+rate 200
+log velocity_loops camera_fusion
+slow 25 thrust_model xy_ctrl ekf_states estimator_truth optical_flow takeoff_gate nn4 drift_nn mrac_3l mrac_theta mrac_shadow
+set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10
+takeoff 0.5 mrac_injection=0
+hold 8
+excite axis=pitch signal=multisine f0=0.2 f1=5 amp=45 duration_s=30
+hold 3
+excite axis=pitch signal=multisine f0=2 f1=40 amp=60 duration_s=30
+hold 3
+land

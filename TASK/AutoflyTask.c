@@ -21,6 +21,7 @@
 #include "wfb_prim.h"
 #include "wfb_glue.h"      /* g_wfb_status: a WFB hover hold yields to a preset */
 #include "traj_shape.h"
+#include "xy_ctrl.h"
 #include "sysid.h"         /* sysid_target (VAR_WRITE 55), SysID_GetState for its BUSY guard */
 
 /* ------------------------------------------------------------------
@@ -462,6 +463,22 @@ extern volatile uint8_t g_drift_nn_live;                             /* NN/drift
 extern volatile float g_drift_nn_clamp_mps;                          /* NN/drift_nn_task.h */
 extern volatile uint8_t g_alt_vz_mode;                               /* StabilizerTask.c, ALT_VZ_MODE_* */
 
+/* n26-B: slow clock, arrival radius, predictor lead, and runtime xy gains (VAR 70..83) */
+volatile uint8_t g_traj_slow_on     = 0U;          /* 0 off (default), 1 slow clock when behind */
+volatile float   g_traj_slow_elo_cm = 15.0f;       /* cm, s = 1 below e_lo (PROPOSED) */
+volatile float   g_traj_slow_ehi_cm = 45.0f;       /* cm, s = 0 at/above e_hi (PROPOSED) */
+volatile float   g_traj_arrive_r_cm = 15.0f;       /* cm, waypoint arrival radius (PROPOSED) */
+volatile uint8_t g_xyc_pred_lead    = 0U;          /* 0 current ref (default), 1 lead ref d ticks + aff */
+volatile float   g_xyc_lqr_k0       = 29.7682778f; /* XYC_LQR_K[0] default */
+volatile float   g_xyc_lqr_k1       = 10.0523956f; /* XYC_LQR_K[1] default */
+volatile float   g_xyc_lqr_k2       = 0.35933145f; /* XYC_LQR_K[2] default */
+volatile float   g_xyc_lqr_k3       = 2.2333094f;  /* XYC_LQR_K[3] default */
+volatile float   g_xyc_adrc_wc      = 1.34060242f; /* XYC_ADRC_WC default */
+volatile float   g_xyc_adrc_b0      = 0.572712305f;/* XYC_ADRC_B0 default */
+volatile float   g_xyc_model_k      = 0.674429432f;/* XYC_K default */
+volatile float   g_xyc_model_al     = 0.862128296f;/* XYC_AL default */
+volatile float   g_xyc_model_drag   = 0.42558222f; /* XYC_DRAG default */
+
 static const VarWriteRow_t s_var_write[] = {
 /*                var                 type    id    min      max            range source */
     VAR_WRITE_ROW(traj_id,            VW_U8,   1,   1,       4      ),  /* 1 step .. 4 figure-8          */
@@ -469,7 +486,7 @@ static const VarWriteRow_t s_var_write[] = {
     VAR_WRITE_ROW(traj_stop,          VW_U8,   3,   0,       1      ),  /* bool                          */
     VAR_WRITE_ROW(traj_fence_off,     VW_U8,   4,   0,       1      ),  /* bool                          */
 
-    VAR_WRITE_ROW(traj_p.profile,     VW_U8,  10,   0,       1      ),  /* enum 0 hard, 1 smooth         */
+    VAR_WRITE_ROW(traj_p.profile,     VW_U8,  10,   0,       2      ),  /* enum 0 hard, 1 smooth, 2 min-jerk */
     VAR_WRITE_ROW(traj_p.axis,        VW_U8,  11,   0,       2      ),  /* enum 0 x, 1 y, 2 z            */
     VAR_WRITE_ROW(traj_p.zz_shape,    VW_U8,  12,   0,       1      ),  /* enum triangle, sine           */
     VAR_WRITE_ROW(traj_p.f8_type,     VW_U8,  13,   0,       1      ),  /* enum Bernoulli, Gerono        */
@@ -510,10 +527,24 @@ static const VarWriteRow_t s_var_write[] = {
     VAR_WRITE_ROW(lim_mode,            VW_U8, 52,  0,       2      ),  /* s_lim rows 0..2               */
     VAR_WRITE_ROW(g_imu_mahony_yaw_decouple, VW_U8, 53, 0,     1      ),  /* bool                          */
     VAR_WRITE_ROW(mrac_z_feat_mask,   VW_U8, 54,  0,       15     ),  /* Z MRAC feature bits, mrac.h   */
-    VAR_WRITE_ROW(sysid_target,       VW_U8, 55,  0,       1      ),  /* 0 setpoint, 1 torque; sysid.h */
+    VAR_WRITE_ROW(sysid_target,       VW_U8, 55,  0,       4      ),  /* 0 rate, 1 torque, 2 angle, 3 vel, 4 pos; sysid.h */
     VAR_WRITE_ROW(g_drift_nn_live,    VW_U8, 56,  0,       2      ),  /* NN 0 shadow, 1 pos, 2 pos+vel */
     VAR_WRITE_ROW(g_drift_nn_clamp_mps, VW_F32, 57, 0.0f,  0.30f  ),  /* m/s, NN residual clamp        */
-    VAR_WRITE_ROW(g_alt_vz_mode,      VW_U8, 58,  0,       1      )   /* altitude vz mode: 0=FD, 1=CF  */
+    VAR_WRITE_ROW(g_alt_vz_mode,      VW_U8, 58,  0,       1      ),  /* altitude vz mode: 0=FD, 1=CF  */
+    VAR_WRITE_ROW(g_traj_slow_on,     VW_U8,  70,   0,       1      ),  /* bool: slow clock when behind  */
+    VAR_WRITE_ROW(g_traj_slow_elo_cm, VW_F32, 71,   1.0f,  200.0f   ),  /* cm, slow clock e_lo PROPOSED  */
+    VAR_WRITE_ROW(g_traj_slow_ehi_cm, VW_F32, 72,   5.0f,  300.0f   ),  /* cm, slow clock e_hi PROPOSED  */
+    VAR_WRITE_ROW(g_traj_arrive_r_cm, VW_F32, 73,   1.0f,  100.0f   ),  /* cm, wp arrival r PROPOSED     */
+    VAR_WRITE_ROW(g_xyc_pred_lead,    VW_U8,  74,   0,       1      ),  /* bool: predictor ref lead+aff  */
+    VAR_WRITE_ROW(g_xyc_lqr_k0,       VW_F32, 75,   0.0f,  200.0f   ),  /* LQR K[0] pos; ground only     */
+    VAR_WRITE_ROW(g_xyc_lqr_k1,       VW_F32, 76,   0.0f,  100.0f   ),  /* LQR K[1] vel; ground only     */
+    VAR_WRITE_ROW(g_xyc_lqr_k2,       VW_F32, 77, -10.0f,   50.0f   ),  /* LQR K[2] acc; ground only     */
+    VAR_WRITE_ROW(g_xyc_lqr_k3,       VW_F32, 78,   0.0f,   50.0f   ),  /* LQR K[3] int; ground only     */
+    VAR_WRITE_ROW(g_xyc_adrc_wc,      VW_F32, 79,   0.1f,   20.0f   ),  /* ADRC wc rad/s; ground only    */
+    VAR_WRITE_ROW(g_xyc_adrc_b0,      VW_F32, 80,   0.05f,  10.0f   ),  /* ADRC b0; ground only          */
+    VAR_WRITE_ROW(g_xyc_model_k,      VW_F32, 81,   0.05f,   5.0f   ),  /* xy plant k; ground only       */
+    VAR_WRITE_ROW(g_xyc_model_al,     VW_F32, 82,   0.01f,   0.999f ),  /* xy plant al; ground only      */
+    VAR_WRITE_ROW(g_xyc_model_drag,   VW_F32, 83,   0.0f,    5.0f   )   /* xy plant drag; ground only    */
 };
 
 /* GS CMD 0x2D: write row `id` = val. Returns 0 (written) or a VAR_WRITE_REJECT_* code (nothing written);
@@ -539,9 +570,22 @@ uint8_t VarWrite_Apply(uint8_t id, float val, const char **name)
 				if (r->addr == (volatile void *)&sysid_target && SysID_GetState() != (uint8_t)SYSID_IDLE) {
 					return VAR_WRITE_REJECT_BUSY;
 				}
+				if (r->id == 47U && (FlightFSM_GetState() == FLIGHT_STATE_ARMED || DroneStatus.ARM_Status == Armed)) {
+					return VAR_WRITE_REJECT_BUSY;
+				}
 				*(volatile uint8_t *)r->addr = u;
+				if (r->id == 47U || r->id == 74U) {
+					(void)XyCtrl_WriteParam(0U, r->id, val);
+				}
 			} else {
+				if ((r->id >= 75U && r->id <= 83U) &&
+				    (FlightFSM_GetState() == FLIGHT_STATE_ARMED || DroneStatus.ARM_Status == Armed)) {
+					return VAR_WRITE_REJECT_BUSY;
+				}
 				*(volatile float *)r->addr = val;
+				if (r->id >= 75U && r->id <= 83U) {
+					(void)XyCtrl_WriteParam(0U, r->id, val);
+				}
 			}
 			return 0U;
 		}
@@ -585,6 +629,11 @@ static float Traj_Warp(float t)
 {
 	float T = s_tp.move_s;
 	float R = s_tp.ramp_s;
+	if (s_tp.profile == 2U) {
+		float w = 0.0f;
+		TrajShape_WarpDerivs(2U, t, T, R, &w, NULL, NULL);
+		return w;
+	}
 
 	if (s_tp.profile == 0U) {
 		return t;
@@ -622,6 +671,12 @@ static void Traj_Offset(float t, float *dx, float *dy, float *dz)
 	*dz = 0.0f;
 	if (traj_active == 1U) {
 		/* step: out for the first half of move_s, back for the second half */
+		if (s_tp.profile == 2U) {
+			float p_up = 0.0f, p_dn = 0.0f;
+			TrajShape_Quintic1D(t, s_tp.ramp_s, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, &p_up, NULL, NULL);
+			TrajShape_Quintic1D(t - 0.5f * s_tp.move_s, s_tp.ramp_s, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, &p_dn, NULL, NULL);
+			a = s_tp.step_cm * (p_up - p_dn);
+		} else
 		if (s_tp.profile == 0U) {
 			a = (t < 0.5f * s_tp.move_s) ? s_tp.step_cm : 0.0f;
 		} else {
@@ -661,7 +716,7 @@ static uint8_t Traj_Check(void)
 	float x0 = 0.0f, x1 = 0.0f, y0 = 0.0f, y1 = 0.0f, z0 = 0.0f, z1 = 0.0f; /* offset box [cm]     */
 	float v = 0.0f;                                      /* peak reference speed [cm/s]                 */
 	float xm = 0.0f, ym = 0.0f;                          /* farthest |corner| of the box on x, y [cm]  */
-	float path_s = s_tp.move_s - ((s_tp.profile == 1U) ? s_tp.ramp_s : 0.0f);
+	float path_s = s_tp.move_s - ((s_tp.profile != 0U) ? s_tp.ramp_s : 0.0f);
 	float zt;                                            /* ceiling of the box on z [cm]               */
 	wfb_safety_limits_t lim;
 
@@ -670,8 +725,8 @@ static uint8_t Traj_Check(void)
 	}
 	if (s_tp.move_s < 5.0f || s_tp.ret_s < 3.0f || s_tp.ret_s > 10.0f || s_tp.hold_s < 0.0f ||
 	    s_tp.hold_s > 5.0f || s_tp.move_s + s_tp.ret_s + s_tp.hold_s > TRAJ_TOTAL_MAX_S + 0.001f ||
-	    s_tp.profile > 1U || s_tp.axis > 2U ||
-	    (s_tp.profile == 1U && (s_tp.ramp_s < 0.5f || s_tp.ramp_s > 0.25f * s_tp.move_s))) {
+	    s_tp.profile > 2U || s_tp.axis > 2U ||
+	    (s_tp.profile != 0U && (s_tp.ramp_s < 0.5f || s_tp.ramp_s > 0.25f * s_tp.move_s))) {
 		return 0xEEU;
 	}
 	if (s_tp.yaw_follow > 1U || s_tp.yaw_rate_dps < 10.0f || s_tp.yaw_rate_dps > 180.0f ||
@@ -690,7 +745,9 @@ static uint8_t Traj_Check(void)
 		if (s_tp.step_cm == 0.0f || fabsf(s_tp.step_cm) > ((s_tp.profile == 0U) ? 50.0f : 100.0f)) {
 			return 0xEEU;   /* a hard step (profile 0) is limited to 50 cm */
 		}
-		if (s_tp.profile == 1U) {
+		if (s_tp.profile == 2U) {
+			v = 1.875f * fabsf(s_tp.step_cm) / s_tp.ramp_s;
+		} else if (s_tp.profile == 1U) {
 			v = 0.5f * TRAJ_PI * fabsf(s_tp.step_cm) / s_tp.ramp_s;
 		}
 		lo = (s_tp.step_cm < 0.0f) ? s_tp.step_cm : 0.0f;
@@ -801,6 +858,25 @@ static void Traj_SticksCentred(void)
 float g_traj_vff_x = 0.0f, g_traj_vff_y = 0.0f;   /* cm/s, world      */
 float g_traj_vff_z = 0.0f;                        /* m/s              */
 float g_traj_vff_yaw = 0.0f;                      /* deg/s, yawPID frame */
+float g_traj_aff_x = 0.0f, g_traj_aff_y = 0.0f;   /* cm/s^2, world    */
+float g_traj_aff_z = 0.0f;                        /* m/s^2            */
+float g_traj_fut_x[3] = { 0.0f, 0.0f, 0.0f };     /* [des_d, vff_d, aff_d] at t + d*dt */
+float g_traj_fut_y[3] = { 0.0f, 0.0f, 0.0f };
+uint8_t g_traj_fut_valid = 0U;
+volatile float   g_traj_slow_s = 1.0f;            /* active slow-clock scale s(t) in [0, 1] */
+volatile uint8_t g_traj_wp_seq = 0U;              /* increments once per waypoint arrival */
+volatile uint8_t g_traj_wp_last_idx = 0U;
+volatile float   g_traj_wp_t_plan_s = 0.0f;
+volatile float   g_traj_wp_t_actual_s = 0.0f;
+volatile float   g_traj_wp_peak_err_cm = 0.0f;
+volatile float   g_traj_wp_time_lost_s = 0.0f;
+static float s_slow_s = 1.0f, s_slow_ds_dt = 0.0f;
+static traj_wp_tracker_t s_wp_trk;
+
+const traj_wp_tracker_t *Traj_GetWpTracker(void)
+{
+	return &s_wp_trk;
+}
 static uint8_t s_ff_have = 0U;
 static float s_ff_x, s_ff_y, s_ff_z, s_ff_yaw;   /* last tick's reference */
 static float s_c_x, s_c_y, s_c_z;                /* this tick's reference */
@@ -819,6 +895,11 @@ static void Traj_FFClear(void)
 	g_traj_vff_y = 0.0f;
 	g_traj_vff_z = 0.0f;
 	g_traj_vff_yaw = 0.0f;
+	g_traj_aff_x = 0.0f;
+	g_traj_aff_y = 0.0f;
+	g_traj_aff_z = 0.0f;
+	g_traj_fut_valid = 0U;
+	TrajFF_SetPresetAcc(0.0f, 0.0f);
 	s_ff_have = 0U;
 }
 
@@ -840,6 +921,47 @@ static void Traj_FFUpdate(void)
 	s_ff_z = s_c_z;
 	s_ff_yaw = s_yaw_cmd;
 	s_ff_have = 1U;
+	g_traj_aff_x = 0.0f;
+	g_traj_aff_y = 0.0f;
+	g_traj_aff_z = 0.0f;
+	g_traj_fut_valid = 0U;
+	TrajFF_SetPresetAcc(0.0f, 0.0f);
+	if ((traj_active == 3U || traj_active == 4U) && traj_phase == 1U &&
+	    (s_tp.profile == 2U || g_xyc_pred_lead != 0U || g_traj_slow_on != 0U)) {
+		float w = 0.0f, dw = 0.0f, ddw = 0.0f;
+		float pos_p[3], vel_p[3], acc_p[3];
+		TrajShape_WarpDerivs(s_tp.profile, s_tph, s_tp.move_s, s_tp.ramp_s, &w, &dw, &ddw);
+		TrajShape_Derivs(&s_shape, s_om * w, s_om * dw, s_om * ddw, pos_p, vel_p, acc_p);
+		{
+			float vfx = 0.0f, vfy = 0.0f, afx = 0.0f, afy = 0.0f;
+			TrajShape_ScaleFF(s_slow_s, s_slow_ds_dt, vel_p[0], vel_p[1], acc_p[0], acc_p[1],
+			                  &vfx, &vfy, &afx, &afy);
+			g_traj_vff_x = vfx;
+			g_traj_vff_y = vfy;
+			g_traj_aff_x = afx;
+			g_traj_aff_y = afy;
+		}
+		if (g_traj_ff_preset != 0U && g_xy_ctrl_kind == 0U) {
+			TrajFF_SetPresetAcc(g_traj_aff_x, g_traj_aff_y);
+		}
+		if (g_xyc_pred_lead != 0U) {
+			float dt_lead = s_slow_s * (float)XyCtrl_Delay() * 0.01f;
+			float t_fut = s_tph + dt_lead;
+			float wf = 0.0f, dwf = 0.0f, ddwf = 0.0f;
+			float pf[3], vf[3], af[3], vfx = 0.0f, vfy = 0.0f, afx = 0.0f, afy = 0.0f;
+			if (t_fut > s_tp.move_s) t_fut = s_tp.move_s;
+			TrajShape_WarpDerivs(s_tp.profile, t_fut, s_tp.move_s, s_tp.ramp_s, &wf, &dwf, &ddwf);
+			TrajShape_Derivs(&s_shape, s_om * wf, s_om * dwf, s_om * ddwf, pf, vf, af);
+			TrajShape_ScaleFF(s_slow_s, 0.0f, vf[0], vf[1], af[0], af[1], &vfx, &vfy, &afx, &afy);
+			g_traj_fut_x[0] = traj_home_x + pf[0];
+			g_traj_fut_x[1] = vfx;
+			g_traj_fut_x[2] = afx;
+			g_traj_fut_y[0] = traj_home_y + pf[1];
+			g_traj_fut_y[1] = vfy;
+			g_traj_fut_y[2] = afy;
+			g_traj_fut_valid = 1U;
+		}
+	}
 }
 
 static void Traj_End(uint8_t status)
@@ -929,6 +1051,12 @@ static void Traj_Start(void)
 	traj_stop = 0U;
 	traj_active = traj_id;
 	traj_phase = (s_tp.start_fixed == 1U) ? 4U : 1U;
+	s_slow_s = 1.0f;
+	s_slow_ds_dt = 0.0f;
+	g_traj_slow_s = 1.0f;
+	TrajWp_InitPreset(&s_wp_trk, &s_shape, s_tp.profile, s_tp.move_s, s_tp.ramp_s,
+	                  (traj_id == 3U) ? s_tp.circ_laps : s_tp.f8_laps,
+	                  s_tp.step_cm, s_tp.axis, g_traj_arrive_r_cm);
 	traj_status = 1U;
 }
 
@@ -970,7 +1098,20 @@ static void Traj_Tick(void)
 	TWC.execute = 0;   /* a WFB hover tick that ran before the glue saw traj_active */
 	taskEXIT_CRITICAL();
 
-	s_tph += AFLY_DT_S;
+	if (traj_phase == 1U && g_traj_slow_on != 0U) {
+		float ex = s_c_x - Ctrler.locxPID.FB;
+		float ey = s_c_y - Ctrler.locyPID.FB;
+		float err_cm = sqrtf(ex * ex + ey * ey);
+		s_slow_s = TrajShape_SlowClockStep(s_slow_s, err_cm, g_traj_slow_elo_cm, g_traj_slow_ehi_cm,
+		                                   TRAJ_SLOW_RECOVER_PER_S, AFLY_DT_S, &s_slow_ds_dt);
+		g_traj_slow_s = s_slow_s;
+		s_tph += s_slow_s * AFLY_DT_S;
+	} else {
+		s_slow_s = 1.0f;
+		s_slow_ds_dt = 0.0f;
+		g_traj_slow_s = 1.0f;
+		s_tph += AFLY_DT_S;
+	}
 	traj_t += AFLY_DT_S;
 
 	/* traj_stop before the move: finish the flight to the start point, then hold and end there */
@@ -1014,6 +1155,19 @@ static void Traj_Tick(void)
 			s_ref_y = traj_home_y + dy;
 			s_ref_z = traj_home_z + 0.01f * dz;
 			Traj_Commit(s_ref_x, s_ref_y, s_ref_z);
+			{
+				uint8_t wp_i = 0U;
+				if (TrajWp_Tick(&s_wp_trk, AFLY_DT_S, s_slow_s,
+				                Ctrler.locxPID.FB - traj_home_x, Ctrler.locyPID.FB - traj_home_y,
+				                s_ref_x - traj_home_x, s_ref_y - traj_home_y, &wp_i) != 0U) {
+					g_traj_wp_seq++;
+					g_traj_wp_last_idx = wp_i;
+					g_traj_wp_t_plan_s = s_wp_trk.entries[wp_i].t_plan_s;
+					g_traj_wp_t_actual_s = s_wp_trk.entries[wp_i].t_actual_s;
+					g_traj_wp_peak_err_cm = s_wp_trk.entries[wp_i].peak_err_cm;
+					g_traj_wp_time_lost_s = s_wp_trk.entries[wp_i].time_lost_s;
+				}
+			}
 		}
 	}
 	if (traj_phase == 2U) {

@@ -113,6 +113,16 @@ def test_compiled_sample_flies_on_the_fake_drone():
 # Smith-predictor delay (VAR 47) measured from the 10-21 exp flights (u_prev -> velocity fit, median).
 MEASURED_XY_DELAY_TICKS = 21
 
+# 10-27 figure-8 fix ladder + model flights set the n26 VARs (47, 70..74) on the ground, exactly these values.
+N26_SLOW = {"g_traj_slow_on": 1, "g_traj_slow_elo_cm": 20, "g_traj_slow_ehi_cm": 45, "g_traj_arrive_r_cm": 15}
+N26_FIX_GROUND = {
+    "lab_e_fix_cand_gains_lqr_half": {"g_xyc_delay_ticks": 12, "g_xyc_pred_lead": 0, "g_traj_slow_on": 0},
+    "lab_e_fix_min_jerk_lqr_half": {"g_xyc_delay_ticks": 12, "g_traj_slow_on": 0},
+    "lab_e_fix_predictor_lqr_half": {"g_xyc_delay_ticks": 18, "g_xyc_pred_lead": 1, "g_traj_slow_on": 0},
+    "lab_e_fix_slow_clock_lqr_half": {"g_xyc_delay_ticks": 12, **N26_SLOW},
+}
+N26_MODEL_GROUND = {"g_xyc_delay_ticks": 18, "g_xyc_pred_lead": 1, **N26_SLOW}
+
 
 @pytest.mark.parametrize("path", sorted(SAMPLE.parent.glob("lab_*.fly")), ids=lambda p: p.stem)
 def test_lab_scripts_compile_log_and_fly_on_the_fake_drone(path):
@@ -134,9 +144,14 @@ def test_lab_scripts_compile_log_and_fly_on_the_fake_drone(path):
     if "g_drift_nn_live" in ground:  # lab_s pins the drift net to shadow on the ground, lab_n puts it in the loop
         assert ground["g_drift_nn_live"] == (1 if path.stem.startswith("lab_n_") else 0)
         want.add("g_drift_nn_live")
+    n26 = N26_FIX_GROUND.get(path.stem) or (N26_MODEL_GROUND if path.stem.startswith("lab_e_model_") else None)
+    if n26 is not None:
+        assert {k: ground.get(k) for k in n26} == n26
+        want |= set(n26)
+    if "g_xyc_delay_ticks" in ground and n26 is None:  # 10-21 logs: loop delay ~21 ticks; _d12 / diag_lqr / model test VAR47=12..18
+        want_delay = 12 if (path.stem.endswith("_d12") or path.stem.startswith("lab_e_diag_lqr_")) else MEASURED_XY_DELAY_TICKS
+        assert ground["g_xyc_delay_ticks"] == want_delay
     assert set(ground) == want
-    if "g_xyc_delay_ticks" in ground:  # 10-21 logs: loop delay ~21 ticks; 12 rang LQR/MPC at 0.4-1.5 Hz
-        assert ground["g_xyc_delay_ticks"] == MEASURED_XY_DELAY_TICKS
     from ground_station.service.tests.test_fly_ground_verbs import _mrc_rig
     drone, _, deps = _mrc_rig()
     if "exp_id" in ground:

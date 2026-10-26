@@ -101,8 +101,41 @@ static const sysid_torque_t s_torque[3] = {   /* indexed by SysID_Axis_e, P/R/Y 
     SYSID_TORQUE_ROW(40.0f),   /* yaw,   PROPOSED */
 };
 
+// Outer-loop targets (sysid_target 2 = angle, 3 = velocity, 4 = position): per-target amplitude caps,
+// duration limit, attitude tilt abort limit, position/angle error abort limit, and minimum Z altitude.
+// Native PID setpoint units at StabilizerTask summing points: angle in deg (pitchPID/rollPID.Des),
+// XY velocity in cm/s (locxsPID/locysPID.Des), Z velocity in m/s (Z_ratePID.Des), XY position in cm
+// (locxPID/locyPID.Des), Z position in m (Z_posPID.Des). PROPOSED - not flight-validated.
+typedef struct {
+    float amp_max_xy;
+    float amp_max_z;
+    float dur_max_s;
+    float tilt_lim_deg;
+    float err_lim_xy;
+    float err_lim_z;
+    float z_min_alt_m;
+} sysid_target_limits_t;
+
+/* SYSID_TARGET_LIMITS_ROW fields (PROPOSED - not flight-validated):
+   @amp_max_xy    unit  [1.0, 50.0]   max amplitude on pitch/roll (deg) or X/Y (cm/s for vel, cm for pos) (PROPOSED)
+   @amp_max_z     unit  [0.0, 1.0]    max amplitude on Z (m/s for vel, m for pos; 0 = Z refused) (PROPOSED)
+   @dur_max_s     s     [5.0, 120.0]  max RUNNING duration (PROPOSED)
+   @tilt_lim_deg  deg   [10.0, 35.0]  attitude tilt abort limit on pitch/roll (PROPOSED)
+   @err_lim_xy    unit  [5.0, 100.0]  max tracking/station error on pitch/roll (deg) or X/Y (cm) before abort (PROPOSED)
+   @err_lim_z     unit  [0.0, 1.0]    max altitude deviation |Z - cz| (m) before abort (PROPOSED)
+   @z_min_alt_m   m     [0.30, 1.0]   minimum Z altitude (m) for Z-axis start and mid-run abort (PROPOSED) */
+#define SYSID_TARGET_LIMITS_ROW(amp_max_xy, amp_max_z, dur_max_s, tilt_lim_deg, err_lim_xy, err_lim_z, z_min_alt_m) \
+    { (amp_max_xy), (amp_max_z), (dur_max_s), (tilt_lim_deg), (err_lim_xy), (err_lim_z), (z_min_alt_m) }
+
+static const sysid_target_limits_t s_outer_limits[3] = {   /* indexed by (sysid_target - 2) for targets 2..4 */
+/*                           amp_max_xy amp_max_z dur_max_s tilt_lim_deg err_lim_xy err_lim_z z_min_alt_m */
+    SYSID_TARGET_LIMITS_ROW( 10.0f,     0.0f,     60.0f,    25.0f,       20.0f,     0.0f,     SYSID_Z_MIN_ALT_M ), /* 2 angle (deg)        PROPOSED - not flight-validated */
+    SYSID_TARGET_LIMITS_ROW( 30.0f,     0.40f,    60.0f,    25.0f,       50.0f,     0.40f,    SYSID_Z_MIN_ALT_M ), /* 3 vel (cm/s, m/s)    PROPOSED - not flight-validated */
+    SYSID_TARGET_LIMITS_ROW( 30.0f,     0.25f,    60.0f,    25.0f,       50.0f,     0.35f,    SYSID_Z_MIN_ALT_M ), /* 4 pos (cm, m)        PROPOSED - not flight-validated */
+};
+
 // ---- Module state -------------------------------------------------------------------
-volatile uint8_t sysid_target = 0;   // VAR_WRITE 55: 0 = rate setpoint injection, 1 = torque add before the mixer
+volatile uint8_t sysid_target = 0;   // VAR_WRITE 55: 0 rate, 1 torque, 2 angle, 3 vel, 4 pos
 static uint8_t s_target;             // sysid_target latched at SysID_Start (a write while not IDLE is refused BUSY)
 static SysID_State_e s_state = SYSID_IDLE;
 static SysID_Axis_e  s_axis;
@@ -157,6 +190,23 @@ static int sysid_abort_condition(void)
     // Attitude runaway (any axis).
     if (fabsf(Ctrler.pitchPID.FB) > s_safe.angle_lim_deg) return 1;
     if (fabsf(Ctrler.rollPID.FB)  > s_safe.angle_lim_deg) return 1;
+    // Outer-loop target guards (targets 2..4).
+    if (s_target >= (uint8_t)SYSID_TARGET_ANGLE && s_target <= (uint8_t)SYSID_TARGET_POS) {
+        const sysid_target_limits_t *lim = &s_outer_limits[s_target - 2U];
+        if (fabsf(Ctrler.pitchPID.FB) > lim->tilt_lim_deg) return 1;
+        if (fabsf(Ctrler.rollPID.FB)  > lim->tilt_lim_deg) return 1;
+        if (s_axis == SYSID_AXIS_Z) {
+            if (RCInput_IsActive(RC_AXIS_THR)) return 1;
+            if (Ctrler.Z_posPID.FB < lim->z_min_alt_m) return 1;
+            if (fabsf(Ctrler.Z_posPID.FB - s_cz) > lim->err_lim_z) return 1;
+        } else if (s_target == (uint8_t)SYSID_TARGET_ANGLE) {
+            if (fabsf(Ctrler.pitchPID.Des - Ctrler.pitchPID.FB) > lim->err_lim_xy) return 1;
+            if (fabsf(Ctrler.rollPID.Des  - Ctrler.rollPID.FB)  > lim->err_lim_xy) return 1;
+        } else {
+            if (fabsf(Ctrler.locxPID.FB - s_cx) > lim->err_lim_xy) return 1;
+            if (fabsf(Ctrler.locyPID.FB - s_cy) > lim->err_lim_xy) return 1;
+        }
+    }
     return 0;
 }
 
@@ -240,11 +290,18 @@ uint8_t SysID_Start(SysID_Axis_e axis, SysID_Signal_e sig, float f0, float f1, f
 
     if (s_state != SYSID_IDLE) return 0;          // a run is already active
     if ((uint32_t)axis > (uint32_t)SYSID_AXIS_Z) return 0;    // also a "negative" id (PITCH is 0)
-    // Z-axis excitation is not yet wired: Compute_Motor only overrides the P/R/Y rate
-    // setpoints (StabilizerTask.c), there is no Z_ratePID.Des injection, and Z lacks its
-    // own altitude/ground-effect abort guards. Reject Z so a run can't report "active"
-    // while doing nothing. Full Z wiring is follow-up (ADR-0004 finding #1).
-    if (axis == SYSID_AXIS_Z) return 0;
+    tgt = sysid_target;
+    if (tgt > (uint8_t)SYSID_TARGET_POS) return 0;
+    if (tgt <= (uint8_t)SYSID_TARGET_TORQUE) {
+        // Rate (0) and torque (1) targets: P/R/Y only; Z is rejected (ADR-0004 finding #1).
+        if (axis == SYSID_AXIS_Z) return 0;
+    } else if (tgt == (uint8_t)SYSID_TARGET_ANGLE) {
+        // Angle target (2): pitch (0) and roll (1) only; refuse yaw (2) and Z (3).
+        if (axis != SYSID_AXIS_PITCH && axis != SYSID_AXIS_ROLL) return 0;
+    } else {
+        // Velocity (3) and position (4) targets: X (0), Y (1), Z (3); refuse yaw (2).
+        if (axis == SYSID_AXIS_YAW) return 0;
+    }
 
     // Preconditions (firmware-checkable gates).
     if (DroneStatus.ARM_Status == 0) return 0;
@@ -254,15 +311,25 @@ uint8_t SysID_Start(SysID_Axis_e axis, SysID_Signal_e sig, float f0, float f1, f
     if (s_geofence_en &&
         (fabsf(Ctrler.locxPID.FB) > s_safe.soft_xy_cm || fabsf(Ctrler.locyPID.FB) > s_safe.soft_xy_cm)) return 0;
 
-    // Sanitize parameters.
-    if (f0 < s_shape.f0_min_hz) f0 = s_shape.f0_min_hz;
-    if (f1 < f0)   f1 = f0;
-    tgt = (sysid_target != 0U) ? 1U : 0U;
-    amax = tgt ? s_torque[axis].amp_max : sysid_amp_max(axis);   // axis is P/R/Y here
-    if (amp < 0.0f) amp = -amp;
-    if (amp > amax) amp = amax;
-    if (duration < s_shape.dur_min_s) duration = s_shape.dur_min_s;
-    if (duration > s_shape.dur_max_s) duration = s_shape.dur_max_s;
+    if (tgt >= (uint8_t)SYSID_TARGET_ANGLE) {
+        const sysid_target_limits_t *lim = &s_outer_limits[tgt - 2U];
+        if (axis == SYSID_AXIS_Z && Ctrler.Z_posPID.FB < lim->z_min_alt_m) return 0;
+        if (fabsf(Ctrler.pitchPID.FB) > lim->tilt_lim_deg || fabsf(Ctrler.rollPID.FB) > lim->tilt_lim_deg) return 0;
+        amax = (axis == SYSID_AXIS_Z) ? lim->amp_max_z : lim->amp_max_xy;
+        if (!(amp > 0.0f && amp <= amax)) return 0;
+        if (!(duration >= s_shape.dur_min_s && duration <= lim->dur_max_s)) return 0;
+        if (f0 < s_shape.f0_min_hz) f0 = s_shape.f0_min_hz;
+        if (f1 < f0)   f1 = f0;
+    } else {
+        // Sanitize parameters.
+        if (f0 < s_shape.f0_min_hz) f0 = s_shape.f0_min_hz;
+        if (f1 < f0)   f1 = f0;
+        amax = tgt ? s_torque[axis].amp_max : sysid_amp_max(axis);   // axis is P/R/Y here
+        if (amp < 0.0f) amp = -amp;
+        if (amp > amax) amp = amax;
+        if (duration < s_shape.dur_min_s) duration = s_shape.dur_min_s;
+        if (duration > s_shape.dur_max_s) duration = s_shape.dur_max_s;
+    }
 
     s_axis = axis; s_sig = sig; s_target = tgt;
     s_f0 = f0; s_f1 = f1; s_amp = amp; s_duration = duration;
@@ -329,7 +396,7 @@ float SysID_GetTorque(SysID_Axis_e axis, uint8_t flying)
 {
     float d;
 
-    if (s_target == 0U || axis != s_axis || flying == 0U) return 0.0f;
+    if (s_target != (uint8_t)SYSID_TARGET_TORQUE || axis != s_axis || flying == 0U) return 0.0f;
     if (s_state != SYSID_RAMP_IN && s_state != SYSID_RUNNING && s_state != SYSID_RAMP_OUT) return 0.0f;
     if ((uint32_t)axis > (uint32_t)SYSID_AXIS_YAW) return 0.0f;
     d = s_rate_cmd;
@@ -337,6 +404,46 @@ float SysID_GetTorque(SysID_Axis_e axis, uint8_t flying)
     if (d >  s_torque[axis].amp_max) d =  s_torque[axis].amp_max;
     if (d < -s_torque[axis].amp_max) d = -s_torque[axis].amp_max;
     return d;
+}
+
+static float sysid_outer_delta(uint8_t want_target, uint8_t axis)
+{
+    const sysid_target_limits_t *lim;
+    float amax, d;
+
+    if (s_target != want_target || axis != (uint8_t)s_axis) return 0.0f;
+    if (s_state != SYSID_RAMP_IN && s_state != SYSID_RUNNING && s_state != SYSID_RAMP_OUT) return 0.0f;
+    if (DroneStatus.ARM_Status == 0U || DroneStatus.FlyMode != FlyMode_SDK) return 0.0f;
+    if (want_target == (uint8_t)SYSID_TARGET_ANGLE) {
+        if (axis != (uint8_t)SYSID_AXIS_PITCH && axis != (uint8_t)SYSID_AXIS_ROLL) return 0.0f;
+    } else {
+        if (axis != (uint8_t)SYSID_AXIS_X && axis != (uint8_t)SYSID_AXIS_Y && axis != (uint8_t)SYSID_AXIS_Z) return 0.0f;
+    }
+    d = s_rate_cmd;
+    if (!isfinite(d)) return 0.0f;
+    lim = &s_outer_limits[want_target - 2U];
+    amax = (axis == (uint8_t)SYSID_AXIS_Z) ? lim->amp_max_z : lim->amp_max_xy;
+    if (d >  amax) d =  amax;
+    if (d < -amax) d = -amax;
+    return d;
+}
+
+float SysID_GetAngleSetpoint(uint8_t axis, float des_deg)
+{
+    float d = sysid_outer_delta((uint8_t)SYSID_TARGET_ANGLE, axis);
+    return (d != 0.0f) ? (des_deg + d) : des_deg;
+}
+
+float SysID_GetVelSetpoint(uint8_t axis, float des_vel)
+{
+    float d = sysid_outer_delta((uint8_t)SYSID_TARGET_VEL, axis);
+    return (d != 0.0f) ? (des_vel + d) : des_vel;
+}
+
+float SysID_GetPosSetpoint(uint8_t axis, float des_pos)
+{
+    float d = sysid_outer_delta((uint8_t)SYSID_TARGET_POS, axis);
+    return (d != 0.0f) ? (des_pos + d) : des_pos;
 }
 
 float SysID_GetRateSetpoint(SysID_Axis_e axis)
