@@ -1391,6 +1391,8 @@ void Alt_UpdateFB(void)
 	}
 	if (armed != s_alt_armed_prev) {
 		Alt_CfReset(ano_of.of2_h, 0U);
+		/* 2026-10-26 smoke hover: every arm waits for a real range reading. */
+		if (armed) s_alt_cf_inited = 0U;
 		s_alt_armed_prev = armed;
 	}
 
@@ -1414,6 +1416,12 @@ void Alt_UpdateFB(void)
 		alt_cf.e = 0.0f;
 		s_alt_cf_inited = 1U;
 		alt_cf.n_corr++;
+	} else if (!s_alt_cf_inited) {
+		/* 2026-10-26 smoke hover: hold armed-pad height until range initialization. */
+		alt_cf.h = ano_of.of2_h;
+		alt_cf.vz = 0.0f;
+		alt_cf.e = 0.0f;
+		if (resynced) s_alt_cf_inited = 1U;
 	} else {
 		alt_cf.h  += alt_cf.vz * STAB_DT_S + 0.5f * alt_cf.a_up * STAB_DT_S * STAB_DT_S;
 		alt_cf.vz += alt_cf.a_up * STAB_DT_S;
