@@ -117,6 +117,113 @@ int main(void)
     CHECK(NEAR(TrajShape_YawStep(0.0f, 90.0f, 0.45f), 0.45f, 1e-6f));
     CHECK(NEAR(TrajShape_YawStep(10.0f, 10.2f, 0.45f), 10.2f, 1e-6f));
 
+    /* --- n26-B: 1. Slow clock continuity, rate limit, hold at s=0, and FF scaling --- */
+    {
+        float s = 1.0f, ds_dt = 0.0f, dt = 0.01f, t_ref = 5.0f;
+        float vff_x = 0.0f, vff_y = 0.0f, aff_x = 0.0f, aff_y = 0.0f;
+        int k;
+        /* Below e_lo (15 cm): s = 1 */
+        s = TrajShape_SlowClockStep(s, 10.0f, 15.0f, 45.0f, 1.0f, dt, &ds_dt);
+        CHECK(NEAR(s, 1.0f, 1e-6f) && NEAR(ds_dt, 0.0f, 1e-5f));
+        /* Midpoint (30 cm): smoothstep u=0.5 -> s = 0.5 */
+        s = TrajShape_SlowClockStep(1.0f, 30.0f, 15.0f, 45.0f, 1.0f, dt, &ds_dt);
+        CHECK(NEAR(s, 0.5f, 1e-5f));
+        /* At/above e_hi (45 cm): s = 0 and reference holds */
+        s = TrajShape_SlowClockStep(s, 50.0f, 15.0f, 45.0f, 1.0f, dt, &ds_dt);
+        CHECK(s == 0.0f);
+        for (k = 0; k < 20; k++) {
+            s = TrajShape_SlowClockStep(s, 60.0f, 15.0f, 45.0f, 1.0f, dt, &ds_dt);
+            t_ref += s * dt;
+        }
+        CHECK(s == 0.0f && t_ref == 5.0f);   /* reference holds where it is at s = 0 */
+        TrajShape_ScaleFF(s, ds_dt, 40.0f, -25.0f, 120.0f, -80.0f, &vff_x, &vff_y, &aff_x, &aff_y);
+        CHECK(vff_x == 0.0f && vff_y == 0.0f && aff_x == 0.0f && aff_y == 0.0f);
+        /* Recovery when error drops to 0: rate-limited at 1.0 /s (0.01 per tick), continuous */
+        for (k = 0; k < 50; k++) {
+            float s_prev = s;
+            s = TrajShape_SlowClockStep(s, 0.0f, 15.0f, 45.0f, 1.0f, dt, &ds_dt);
+            CHECK(s >= s_prev && (s - s_prev) <= 1.0f * dt + 1e-6f);
+            CHECK(NEAR(ds_dt, 1.0f, 1e-4f));
+        }
+        CHECK(NEAR(s, 0.5f, 1e-4f));
+        TrajShape_ScaleFF(0.5f, 1.0f, 40.0f, -20.0f, 100.0f, -60.0f, &vff_x, &vff_y, &aff_x, &aff_y);
+        CHECK(NEAR(vff_x, 20.0f, 1e-4f) && NEAR(vff_y, -10.0f, 1e-4f));
+        CHECK(NEAR(aff_x, 0.25f * 100.0f + 1.0f * 40.0f, 1e-4f));
+        CHECK(NEAR(aff_y, 0.25f * (-60.0f) + 1.0f * (-20.0f), 1e-4f));
+    }
+
+    /* --- n26-B: 2. Minimum-jerk quintic boundary conditions within 1e-4 --- */
+    {
+        float p0[3] = { -15.0f, 25.0f, 80.0f };
+        float v0[3] = { 12.0f, -8.0f, 3.0f };
+        float a0[3] = { -30.0f, 15.0f, -5.0f };
+        float p1[3] = { 45.0f, -35.0f, 95.0f };
+        float v1[3] = { -5.0f, 20.0f, 0.0f };
+        float a1[3] = { 10.0f, -25.0f, 4.0f };
+        float pos[3], vel[3], acc[3];
+        int k;
+        TrajShape_QuinticSegment3D(0.0f, 2.5f, p0, v0, a0, p1, v1, a1, pos, vel, acc);
+        for (k = 0; k < 3; k++) {
+            CHECK(NEAR(pos[k], p0[k], 1e-4f));
+            CHECK(NEAR(vel[k], v0[k], 1e-4f));
+            CHECK(NEAR(acc[k], a0[k], 1e-4f));
+        }
+        TrajShape_QuinticSegment3D(2.5f, 2.5f, p0, v0, a0, p1, v1, a1, pos, vel, acc);
+        for (k = 0; k < 3; k++) {
+            CHECK(NEAR(pos[k], p1[k], 1e-4f));
+            CHECK(NEAR(vel[k], v1[k], 1e-4f));
+            CHECK(NEAR(acc[k], a1[k], 1e-4f));
+        }
+        /* Analytic figure-8 derivatives match central differences */
+        {
+            float th = 0.7f, dth = 0.65f, ddth = -0.2f, eps = 1e-3f;
+            float p_c[3], v_c[3], a_c[3], p_m[3], p_p[3], v_m[3], v_p[3];
+            TrajShape_Derivs(&g, th, dth, ddth, p_c, v_c, a_c);
+            TrajShape_Derivs(&g, th - eps * dth, dth - eps * ddth, ddth, p_m, v_m, NULL);
+            TrajShape_Derivs(&g, th + eps * dth, dth + eps * ddth, ddth, p_p, v_p, NULL);
+            CHECK(NEAR(v_c[0], (p_p[0] - p_m[0]) / (2.0f * eps), 5e-2f));
+            CHECK(NEAR(v_c[1], (p_p[1] - p_m[1]) / (2.0f * eps), 5e-2f));
+            CHECK(NEAR(a_c[0], (v_p[0] - v_m[0]) / (2.0f * eps), 1e-1f));
+            CHECK(NEAR(a_c[1], (v_p[1] - v_m[1]) / (2.0f * eps), 1e-1f));
+        }
+    }
+
+    /* --- n26-B: 3. Waypoint arrival events fire once per waypoint --- */
+    {
+        static const float sq_wps[4][4] = {
+            { 40.0f,  0.0f, 0.0f, 2.0f },
+            { 40.0f, 40.0f, 0.0f, 4.0f },
+            {  0.0f, 40.0f, 0.0f, 6.0f },
+            {  0.0f,  0.0f, 0.0f, 8.0f }
+        };
+        traj_wp_tracker_t trk;
+        int fired_counts[4] = { 0, 0, 0, 0 };
+        int step;
+        TrajWp_Init(&trk, 10.0f, 4U, sq_wps);
+        for (step = 1; step <= 900; step++) {
+            float t = 0.01f * (float)step;
+            /* Simulated drone lags planned square by 0.4 s */
+            float t_lag = (t > 0.4f) ? (t - 0.4f) : 0.0f;
+            float px = 0.0f, py = 0.0f;
+            uint8_t idx = 99U;
+            if (t_lag < 2.0f) { px = 20.0f * t_lag; py = 0.0f; }
+            else if (t_lag < 4.0f) { px = 40.0f; py = 20.0f * (t_lag - 2.0f); }
+            else if (t_lag < 6.0f) { px = 40.0f - 20.0f * (t_lag - 4.0f); py = 40.0f; }
+            else if (t_lag < 8.0f) { px = 0.0f; py = 40.0f - 20.0f * (t_lag - 6.0f); }
+            if (TrajWp_Tick(&trk, 0.01f, 0.9f, px, py, px + 5.0f, py, &idx) != 0U) {
+                CHECK(idx < 4U);
+                if (idx < 4U) fired_counts[idx]++;
+            }
+        }
+        for (i = 0; i < 4; i++) {
+            CHECK(fired_counts[i] == 1);
+            CHECK(trk.entries[i].arrived == 1U);
+            CHECK(trk.entries[i].t_actual_s > trk.entries[i].t_plan_s - 0.6f);
+            CHECK(NEAR(trk.entries[i].peak_err_cm, 5.0f, 1e-3f));
+            CHECK(trk.entries[i].time_lost_s > 0.0f);
+        }
+    }
+
     if (s_fail_count == 0) {
         printf("test_traj_shape: all passed (%d checks)\n", s_check_count);
         return 0;

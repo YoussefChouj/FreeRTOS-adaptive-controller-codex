@@ -431,6 +431,26 @@ float AttTrim_Apply(float des_deg, float trim_deg, float lim_deg, uint8_t flying
     return des_deg;
 }
 
+static float s_preset_aff_x = 0.0f, s_preset_aff_y = 0.0f;
+
+void TrajFF_SetPresetAcc(float ax_cms2, float ay_cms2)
+{
+    s_preset_aff_x = ax_cms2;
+    s_preset_aff_y = ay_cms2;
+}
+
+void TrajFF_Scale(float s, float ds_dt, float *vff_x, float *vff_y, float *aff_x, float *aff_y)
+{
+    float vx = (vff_x != 0) ? *vff_x : 0.0f;
+    float vy = (vff_y != 0) ? *vff_y : 0.0f;
+    float ax = (aff_x != 0) ? *aff_x : 0.0f;
+    float ay = (aff_y != 0) ? *aff_y : 0.0f;
+    if (vff_x != 0) *vff_x = s * vx;
+    if (vff_y != 0) *vff_y = s * vy;
+    if (aff_x != 0) *aff_x = s * s * ax + ds_dt * vx;
+    if (aff_y != 0) *aff_y = s * s * ay + ds_dt * vy;
+}
+
 void TrajFF_Reset(TrajFF_t *s)
 {
     s->prev_x = 0;
@@ -449,8 +469,8 @@ void TrajFF_Step(TrajFF_t *s, uint8_t active, float tx_cm, float ty_cm, float dt
         TrajFF_Reset(s);
         *vff_x = 0.0f;
         *vff_y = 0.0f;
-        *aff_x = 0.0f;
-        *aff_y = 0.0f;
+        *aff_x = s_preset_aff_x;
+        *aff_y = s_preset_aff_y;
         return;
     }
 

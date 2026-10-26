@@ -66,14 +66,25 @@ def load_limits(path: Path = STAB_SRC) -> list[LimitMode]:
 
 def path_seconds(p: dict) -> float:
     """Time over which the full phase runs at cruise rate: the two cosine ramps together cost one ramp_s."""
-    return p["move_s"] - (p["ramp_s"] if int(p["profile"]) == 1 else 0.0)
+    return p["move_s"] - (p["ramp_s"] if int(p["profile"]) in (1, 2) else 0.0)
 
 
 def phase(t: np.ndarray, p: dict, laps: float) -> np.ndarray:
     """theta(t): cruise rate 2 pi laps / path_s, rate ramped by half cosines over ramp_s at both ends (profile 1)."""
     om = 2.0 * math.pi * laps / path_seconds(p)
     move, ramp = p["move_s"], p["ramp_s"]
-    if int(p["profile"]) != 1:
+    prof = int(p["profile"])
+    if prof == 0:
+        return om * t
+    if prof == 2:
+        t = np.clip(t, 0.0, move)
+        tau_up = np.clip(t / ramp, 0.0, 1.0)
+        w_up = ramp * (tau_up ** 4) * (2.5 - 3.0 * tau_up + tau_up ** 2)
+        w = np.where(t < ramp, w_up, 0.5 * ramp + (t - ramp))
+        u_dn = np.clip((move - t) / ramp, 0.0, 1.0)
+        w_dn = (move - ramp) - ramp * (u_dn ** 4) * (2.5 - 3.0 * u_dn + u_dn ** 2)
+        return om * np.where(t > move - ramp, w_dn, w)
+    if prof != 1:
         return om * t
     t = np.clip(t, 0.0, move)
     up = 0.5 * om * (t - ramp / math.pi * np.sin(math.pi * np.minimum(t, ramp) / ramp))
@@ -117,7 +128,8 @@ def kinematics(p: dict, traj_id: int, dt: float = 0.005) -> Kinematics:
     refuse = ""
     if (p["move_s"] < 5.0 or not 3.0 <= p["ret_s"] <= 10.0 or not 0.0 <= p["hold_s"] <= 5.0
             or p["move_s"] + p["ret_s"] + p["hold_s"] > TRAJ_TOTAL_MAX_S + 1e-3
-            or (int(p["profile"]) == 1 and not 0.5 <= p["ramp_s"] <= 0.25 * p["move_s"])):
+            or int(p["profile"]) not in (0, 1, 2)
+            or (int(p["profile"]) in (1, 2) and not 0.5 <= p["ramp_s"] <= 0.25 * p["move_s"])):
         refuse = "0xEE timing (move>=5, ret 3-10, hold 0-5, sum<=25, ramp 0.5..move/4)"
     if int(p["yaw_follow"]) == 1 and p["ret_s"] + p["hold_s"] < 180.0 / p["yaw_rate_dps"]:
         refuse = refuse or "0xEE ret_s+hold_s too short for the yaw swing back"
@@ -125,8 +137,13 @@ def kinematics(p: dict, traj_id: int, dt: float = 0.005) -> Kinematics:
     x0 = x1 = y0 = y1 = z0 = z1 = 0.0
     if traj_id == 1:
         step = p["step_cm"]
-        v = 0.5 * math.pi * abs(step) / p["ramp_s"]
-        a_xy = 0.5 * math.pi ** 2 * abs(step) / p["ramp_s"] ** 2
+        if int(p["profile"]) == 2:
+            v = 1.875 * abs(step) / p["ramp_s"]
+            a_xy = (10.0 / math.sqrt(3.0)) * abs(step) / p["ramp_s"] ** 2
+        else:
+            v = 0.5 * math.pi * abs(step) / p["ramp_s"]
+        if int(p["profile"]) != 2:
+            a_xy = 0.5 * math.pi ** 2 * abs(step) / p["ramp_s"] ** 2
         lo, hi = min(step, 0.0), max(step, 0.0)
     elif traj_id == 2:
         amp, hz = p["zz_amp_cm"], p["zz_hz"]
@@ -276,6 +293,136 @@ def _sets(step: dict) -> dict:
     return {}
 
 
+@dataclass(frozen=True)
+class WaypointArrival:
+    wp_idx: int
+    wx_cm: float
+    wy_cm: float
+    t_plan_s: float
+    t_actual_s: float
+    lag_s: float
+    peak_err_cm: float
+    time_lost_s: float
+    int_s_s: float
+    arrived: bool
+
+
+def slow_clock_step(s_prev: float, err_cm: float, e_lo_cm: float = 15.0, e_hi_cm: float = 45.0,
+                    recover_rate: float = 1.0, dt: float = 0.01) -> tuple[float, float]:
+    """Host mirror of API/traj_shape.c TrajShape_SlowClockStep -> (s_new, ds_dt)."""
+    s_prev = float(np.clip(s_prev, 0.0, 1.0))
+    if e_hi_cm <= e_lo_cm or err_cm <= e_lo_cm:
+        s_raw = 1.0
+    elif err_cm >= e_hi_cm:
+        s_raw = 0.0
+    else:
+        u = (err_cm - e_lo_cm) / (e_hi_cm - e_lo_cm)
+        s_raw = float(np.clip(1.0 - (u ** 3) * (10.0 + u * (-15.0 + 6.0 * u)), 0.0, 1.0))
+    if s_raw <= s_prev:
+        s_new = s_raw
+    else:
+        max_up = recover_rate * dt if (recover_rate > 0.0 and dt > 0.0) else 1.0
+        s_new = min(s_raw, s_prev + max_up)
+    s_new = float(np.clip(s_new, 0.0, 1.0))
+    ds_dt = (s_new - s_prev) / dt if dt > 0.0 else 0.0
+    return s_new, ds_dt
+
+
+def quintic_segment(t: np.ndarray | float, T: float, p0, v0, a0, p1, v1, a1):
+    """Host mirror of TrajShape_Quintic1D/3D -> (pos, vel, acc)."""
+    t_arr = np.asarray(t, float)
+    p0, v0, a0 = np.asarray(p0, float), np.asarray(v0, float), np.asarray(a0, float)
+    p1, v1, a1 = np.asarray(p1, float), np.asarray(v1, float), np.asarray(a1, float)
+    if T <= 1e-6:
+        return p1, v1, a1
+    tau = np.clip(t_arr / T, 0.0, 1.0)
+    if p0.ndim > 0 and tau.ndim > 0:
+        tau = tau[..., None]
+    c0, c1, c2 = p0, v0 * T, 0.5 * a0 * (T ** 2)
+    dp = p1 - (p0 + v0 * T + 0.5 * a0 * (T ** 2))
+    dv = (v1 - v0) * T - a0 * (T ** 2)
+    da = (a1 - a0) * (T ** 2)
+    c3 = 10.0 * dp - 4.0 * dv + 0.5 * da
+    c4 = -15.0 * dp + 7.0 * dv - da
+    c5 = 6.0 * dp - 3.0 * dv + 0.5 * da
+    pos = c0 + c1 * tau + c2 * (tau ** 2) + c3 * (tau ** 3) + c4 * (tau ** 4) + c5 * (tau ** 5)
+    vel = (c1 + 2.0 * c2 * tau + 3.0 * c3 * (tau ** 2) + 4.0 * c4 * (tau ** 3) + 5.0 * c5 * (tau ** 4)) / T
+    acc = (2.0 * c2 + 6.0 * c3 * tau + 12.0 * c4 * (tau ** 2) + 20.0 * c5 * (tau ** 3)) / (T ** 2)
+    return pos, vel, acc
+
+
+def parse_waypoint_arrivals(
+    t: np.ndarray,
+    pos_xy_cm: np.ndarray,
+    ref_xy_cm: np.ndarray,
+    waypoints: list[tuple[float, float, float]],
+    r_cm: float = 15.0,
+    s_trace: np.ndarray | None = None,
+) -> list[WaypointArrival]:
+    """Parse waypoint arrivals from a flight/sim log against planned waypoints [(wx_cm, wy_cm, t_plan_s), ...]."""
+    t = np.asarray(t, float)
+    pos = np.asarray(pos_xy_cm, float)[:, :2]
+    ref = np.asarray(ref_xy_cm, float)[:, :2]
+    s_arr = np.ones_like(t) if s_trace is None else np.asarray(s_trace, float)
+    dt = float(np.median(np.diff(t))) if len(t) > 1 else 0.01
+
+    out: list[WaypointArrival] = []
+    k = 0
+    n_wp = len(waypoints)
+    int_s_acc = 0.0
+    lost_acc = 0.0
+    seg_peak = 0.0
+    rec: dict[int, WaypointArrival] = {}
+
+    for i in range(len(t)):
+        ti = float(t[i])
+        si = float(s_arr[i])
+        int_s_acc += si * dt
+        lost_acc += (1.0 - si) * dt
+        err = float(np.hypot(pos[i, 0] - ref[i, 0], pos[i, 1] - ref[i, 1]))
+        if err > seg_peak:
+            seg_peak = err
+        if k < n_wp:
+            wx, wy, t_plan = waypoints[k]
+            dist = float(np.hypot(pos[i, 0] - wx, pos[i, 1] - wy))
+            prev_plan = waypoints[k - 1][2] if k > 0 else 0.0
+            min_t = prev_plan + 0.25 * (t_plan - prev_plan)
+            same_pt = k > 0 and (abs(wx - waypoints[k - 1][0]) + abs(wy - waypoints[k - 1][1]) <= 2.0 * r_cm)
+            if dist <= r_cm and (not same_pt or int_s_acc >= min_t):
+                rec[k] = WaypointArrival(
+                    wp_idx=k, wx_cm=float(wx), wy_cm=float(wy),
+                    t_plan_s=float(t_plan), t_actual_s=ti, lag_s=ti - float(t_plan),
+                    peak_err_cm=seg_peak, time_lost_s=lost_acc, int_s_s=int_s_acc, arrived=True,
+                )
+                seg_peak = 0.0
+                k += 1
+
+    for idx, (wx, wy, t_plan) in enumerate(waypoints):
+        if idx in rec:
+            out.append(rec[idx])
+        else:
+            out.append(WaypointArrival(
+                wp_idx=idx, wx_cm=float(wx), wy_cm=float(wy),
+                t_plan_s=float(t_plan), t_actual_s=float("nan"), lag_s=float("nan"),
+                peak_err_cm=seg_peak, time_lost_s=lost_acc, int_s_s=int_s_acc, arrived=False,
+            ))
+    return out
+
+
+def format_arrival_table(arrivals: list[WaypointArrival]) -> str:
+    """Format a per-flight markdown/ASCII table of planned vs actual arrival, lag, peak error, and time lost."""
+    lines = ["wp | wx_cm | wy_cm | t_plan_s | t_actual_s | lag_s  | peak_err_cm | time_lost_s | arrived"]
+    lines.append("---|-------|-------|----------|------------|--------|-------------|-------------|--------")
+    for a in arrivals:
+        act = f"{a.t_actual_s:10.2f}" if math.isfinite(a.t_actual_s) else "       ---"
+        lag = f"{a.lag_s:+6.2f}" if math.isfinite(a.lag_s) else "   ---"
+        lines.append(
+            f"{a.wp_idx:2d} | {a.wx_cm:5.1f} | {a.wy_cm:5.1f} | {a.t_plan_s:8.2f} | {act} | {lag} | "
+            f"{a.peak_err_cm:11.1f} | {a.time_lost_s:11.2f} | {'yes' if a.arrived else 'no'}"
+        )
+    return "\n".join(lines)
+
+
 def check_fly(path: Path, lim_mode: int | None = None, k: float = K_ACCEL) -> list[dict]:
     """Every preset of a .fly file, with the firmware's sticky traj_p state and the lim_mode in force."""
     from ground_station.platform.wfb_var import traj_defaults   # read-only use
@@ -303,6 +450,10 @@ def check_fly(path: Path, lim_mode: int | None = None, k: float = K_ACCEL) -> li
             pr = dict(step["preset"])
             name = pr.pop("name")
             tp = dict(base, start_z_m=hz)
+            if pr.pop("min_jerk", 0) in (1, True) or pr.get("profile") in ("min_jerk", "quintic"):
+                pr["profile"] = 2
+            for extra_k in ("slow_clock", "slow_on", "e_lo", "e_hi", "arrive_r_cm", "arrival_radius_cm"):
+                pr.pop(extra_k, None)
             tp.update(pr)           # fly_file has already folded the sticky `set traj_p.*` lines into pr
             mode = lm if lim_mode is None else lim_mode
             st = (tp["start_x_cm"] / 100, tp["start_y_cm"] / 100, tp["start_z_m"]) if tp["start_fixed"] else home
