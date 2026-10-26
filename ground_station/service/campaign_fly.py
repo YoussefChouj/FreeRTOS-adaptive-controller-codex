@@ -1644,6 +1644,21 @@ def _link_age(v):
     return min(ages) if ages else math.inf
 
 
+def pad_height_error(base):
+    """Recheck height at GO: disarmed preflight cannot see armed-pad CF drift."""
+    try:
+        code, res = call(base, "/api/values?names=Ctrler.Z_posPID.FB", timeout=2)
+        row = res.get("values", {}).get("Ctrler.Z_posPID.FB", {})
+        height, age = float(row["value"]), float(row["age_s"])
+        if code != 200 or not math.isfinite(age) or not 0.0 <= age <= 1.0:  # PROPOSED maximum age, seconds
+            return "height telemetry is stale"
+        if not math.isfinite(height) or abs(height) > 0.2:  # PROPOSED pad-height limit, metres
+            return f"armed-pad height {height:.3f} m exceeds +/-0.2 m (PROPOSED limit)"
+    except (OSError, ValueError, TypeError, KeyError):
+        return "height telemetry is unavailable"
+    return None
+
+
 def wait_for_arm(base, campaign, pack, key=None, poll_s=0.25, preflight=True):
     """'go' after an RC arm held for COUNTDOWN_S with the preflight passing, 'quit' on q or on Ctrl+C outside the
     countdown, 'link' when the link comes back after LINK_LOST_S of silence (a pack swap). Only a disarmed -> armed
@@ -1701,6 +1716,12 @@ def wait_for_arm(base, campaign, pack, key=None, poll_s=0.25, preflight=True):
             else:
                 left = COUNTDOWN_S - (now - armed_t)
                 if left <= 0:
+                    height_error = pad_height_error(base)
+                    if height_error:
+                        print(f"GO REFUSED: {height_error}. Disarm by RC; check range and firmware before retrying.",
+                              flush=True)
+                        events.log("go_height_refused", reason=height_error)
+                        return "quit"
                     return "go"
                 if math.ceil(left) != count:
                     count = math.ceil(left)

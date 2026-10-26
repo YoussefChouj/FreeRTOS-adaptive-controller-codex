@@ -53,6 +53,10 @@ which has no adb, scrcpy or Windows python. Never use it for the camera. `.\cam`
 - The dry run is cached per flight (key = HEAD + `git diff HEAD -- ground_station`). It runs again only when the
   code changes.
 - With the camera, every launch first scans the floor (drone out of view, Enter) or keeps the current scan (`k`).
+- Before GO, `fly` rechecks fresh height telemetry after the RC-arm countdown. Missing/stale height or pad height
+  outside +/-0.2 m (PROPOSED) refuses GO; disarm by RC and fix the range/firmware before retrying. `--no-gates`
+  does not bypass this check. Camera fixes are withheld while startup scenery is learned or height is outside the
+  calibrated floor-to-camera interval; `HEIGHT INVALID` identifies the bad input rather than drawing false drift.
   A scan counts only when its folder holds the scenery mask and the landing pad is seen in at least half the frames.
   New scans are `floor-<date>[-N]`.
 - Battery: before each flight, the resting volts and the predicted pack % after the flight against the 30% gate;

@@ -114,6 +114,16 @@ def ring_xy(uv, cam: dict, z_m: float) -> np.ndarray:
     return np.asarray(vt.pixel_to_plane(np.asarray(uv, float)[None, :], K, dist, R, t, z_m)[0], float)[:2]
 
 
+def valid_height(cam: dict, z_m: float) -> bool:
+    """The ring plane must be above the floor and below the calibrated camera.
+
+    A plane above the camera intersects its downward rays behind the lens and
+    turns height drift into a reversed, fictitious XY correction (smoke-hover).
+    """
+    camera_z = float((-np.asarray(cam["R"], float).T @ np.asarray(cam["t"], float).reshape(3))[2])
+    return bool(np.isfinite(z_m) and 0.0 <= z_m < camera_z)
+
+
 class CoralTracker:
     """video_truth.track_coral run online (the R4 truth tracker): coral guard-ring pixels (vt.coral_mask, minus the
     `static` scenery mask from vt.coral_static) in a square ROI around the last fix; on the pad vt.guard_centre of them is
@@ -1306,6 +1316,7 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
     hello()
     t_hello = clock()
     nf_seen, t_nf, t_nf_warn = -1, 0.0, -1e9
+    t_height_warn = -1e9
     learned, took_off = bool(getattr(ring, "learned", False)), False
     while True:
         if stop_file and n % 10 == 0 and Path(stop_file).exists():
@@ -1322,16 +1333,23 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
             t_hello = t_read
         t_cap = t_read - cam_latency_s
         z = height_m(t_cap) if callable(height_m) else height_m
+        height_ok = z is not None and valid_height(cam, z)
+        if not height_ok and t_read - t_height_warn >= 5.0:
+            print(f"HEIGHT INVALID {z!r} m: outside floor/camera geometry; no camera fix sent. Check range and firmware.",
+                  flush=True)
+            t_height_warn = t_read
         z_agl = (max(0.0, float(z) - float(getattr(height_m, "ring_h", 0.0)))
-                 if z is not None and np.isfinite(z) else 0.0)
+                 if height_ok else 0.0)
         if ring is not None:
-            uv = (ring.step(frame, z_agl if z is not None and np.isfinite(z) else None) if isinstance(ring, CoralTracker)
+            uv = (ring.step(frame, z_agl if height_ok else None) if isinstance(ring, CoralTracker)
                   else ring.step(frame))
             if uv_log is not None:
                 uv_log.append((t_read, *(uv if uv is not None else (np.nan, np.nan))))
-            xy = None if uv is None or not np.isfinite(z) else ring_xy(uv, cam, z)
+            xy = None if uv is None or not height_ok or getattr(ring, "learn_n", 0) else ring_xy(uv, cam, z)
         else:
-            xy = detect_xy(frame, cam, z, static) if np.isfinite(z) else None
+            xy = detect_xy(frame, cam, z, static) if height_ok else None
+        if not height_ok or getattr(ring, "learn_n", 0):
+            sched.buf.clear()                           # never send an earlier valid fix through an invalid plane
         if xy is not None and gate is not None and not gate.check(t_cap, xy, uv):
             if ring is not None and hasattr(ring, "recentre") and gate.last[2] is not None:
                 ring.recentre(gate.last[2])
@@ -1339,6 +1357,9 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
         on_ground = ground() if ground else None
         if not learned and getattr(ring, "learned", False):
             learned = True
+            sched.buf.clear()                           # pre-learning coordinates belong to a different origin
+            if gate is not None:
+                gate.last, gate.rej = None, []
             if on_ground is not False:
                 if pad is not None and not pad.frozen:
                     pad.hist, pad.xy = [], None           # the origin from the static-learned dots only
@@ -1361,6 +1382,7 @@ def run_source(source, cam: dict, align: EarthAlign, height_m: float | Callable[
                   f"window {sched.window_s():.2f} s; the drone flies on flow alone", flush=True)
         if show is not None:
             show(t_read, frame, uv, xy, ([f"NO FIX SENT {t_read - t_nf:.0f} s - FLOW ONLY"] if no_fix else []) +
+                 ([] if height_ok else [f"HEIGHT INVALID {z!r} m - NO CAMERA FIX"]) +
                  [f"mode {auto.mode if auto else mode}  z {z:.2f} m  fixes {sched.n_sent}  det {n_det}/{n}",
                                          f"gate rej {gate.n_rej if gate else 0}  pad {'set' if pad is None or pad.xy is not None else 'WAIT'}"
                                          f"{' frozen' if pad is not None and pad.frozen else ''}"]

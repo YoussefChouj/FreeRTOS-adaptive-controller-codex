@@ -939,3 +939,42 @@ def test_latest_frame_reports_the_end_of_the_source():
         got.append(int(f[0, 0, 0]))
     lf.release()
     assert got and got[-1] == 3 and f is None and t is None
+
+@pytest.mark.parametrize("bad_height", [float("nan"), -0.1, 2.0, 10.4098])
+def test_run_source_stops_fixes_when_projection_plane_is_invalid(tmp_path, bad_height):
+    """Synthetic PROPOSED geometry; 10.4098 m is the failed smoke-hover's measured height."""
+    import cv2
+    from ground_station.analysis.live_tracker import CoralTracker, run_source
+
+    p = str(tmp_path / "bad_height.avi")
+    w = cv2.VideoWriter(p, cv2.VideoWriter_fourcc(*"MJPG"), 30.0, (640, 480))
+    for _ in range(40):
+        w.write(_coral_frame((300, 260)))
+    w.release()
+    cam = {"K": [[500.0, 0, 320], [0, 500.0, 240], [0, 0, 1]], "dist": [0.0] * 5,
+           "R": [[1.0, 0, 0], [0, -1.0, 0], [0, 0, -1.0]], "t": [0.0, 0.0, 2.0]}
+    fixes = []
+    run_source(p, cam, EarthAlign(), lambda t: 0.05 if t < 0.5 else bad_height,
+               ring=CoralTracker([300, 260]), sched=FixScheduler(0.05, 2, window_s=0.2), fix_log=fixes)
+    assert fixes
+    assert all(t_read < 0.5 for t_read, _, _ in fixes)  # no stale buffered fixes leak after height becomes invalid
+
+
+def test_run_source_does_not_publish_startup_learning_dots(tmp_path):
+    """The origin and external fixes must both use the learned detector, never its startup dots."""
+    import cv2
+    from ground_station.analysis.live_tracker import CoralTracker, PadOrigin, run_source
+
+    p = str(tmp_path / "learning.avi")
+    w = cv2.VideoWriter(p, cv2.VideoWriter_fourcc(*"MJPG"), 30.0, (640, 480))
+    for _ in range(30):
+        w.write(_coral_frame((300, 260)))
+    w.release()
+    cam = {"K": [[500.0, 0, 320], [0, 500.0, 240], [0, 0, 1]], "dist": [0.0] * 5,
+           "R": [[1.0, 0, 0], [0, -1.0, 0], [0, 0, -1.0]], "t": [0.0, 0.0, 2.0]}
+    ring = CoralTracker([300, 260], learn_n=15, learn_every=1)
+    fixes = []
+    run_source(p, cam, EarthAlign(), 0.05, ring=ring, pad=PadOrigin(), ground=lambda: True,
+               sched=FixScheduler(0.05, 2, window_s=0.2), fix_log=fixes)
+    assert ring.learned and fixes
+    assert all(t_read >= 14 / 30 for t_read, _, _ in fixes)

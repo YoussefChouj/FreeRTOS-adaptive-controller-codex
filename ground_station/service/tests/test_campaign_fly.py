@@ -124,6 +124,8 @@ class Rig:
             self.preflights += 1
             return 200, {"ok": self.pf_ok, "checks": [] if self.pf_ok else
                          [{"name": "battery", "value": "3.50 V/cell", "pass": False, "fix": "charge the pack"}]}
+        if route == "/api/values?names=Ctrler.Z_posPID.FB":
+            return 200, {"values": {"Ctrler.Z_posPID.FB": {"value": 0.05, "age_s": 0.1}}}
         raise AssertionError(route)
 
 
@@ -258,7 +260,7 @@ class Flight(Rig):
             return 200, {"status": "running" if running else "done", "phase": "HOVER", "outputs_dir": "logs/o"}
         if route.startswith("/api/values"):
             return 200, {"values": {k: {"value": v, "age_s": 0.1} for k, v in
-                                    _sample(0, 2, 10.0, 0.0, 0.5).items() if k != "t"}}
+                                    _sample(0, 2, 10.0, 0.0, 0.05 if self.go_t is None else 0.5).items() if k != "t"}}
         if route in ("/api/campaign/stop", "/api/campaign/next", "/api/campaign/land", "/api/campaign/abort"):
             self.calls.append((route, body))
             return 200, {}
@@ -1209,3 +1211,27 @@ def test_gates_off_sets_level1_false_and_keeps_other_abort_keys(tmp_path):
     q = tmp_path / "bare.yaml"
     q.write_text(yaml.safe_dump({"campaign": "y"}), encoding="utf-8")
     assert yaml.safe_load(campaign_fly.gates_off(q).read_text(encoding="utf-8"))["abort"] == {"level1": False}
+
+
+def test_go_rechecks_armed_pad_height_after_the_countdown(monkeypatch, capsys):
+    rig = Rig(monkeypatch, lambda t: "armed" if t >= 1.0 else "disarmed")
+    normal_call = rig.call
+    def call(base, route, body=None, timeout=10):
+        if route == "/api/values?names=Ctrler.Z_posPID.FB":
+            return 200, {"values": {"Ctrler.Z_posPID.FB": {"value": 5.7166, "age_s": 0.02}}}
+        return normal_call(base, route, body, timeout)
+    monkeypatch.setattr(campaign_fly, "call", call)
+    assert _wait(rig) == "quit"
+    assert rig.t >= 1.0 + campaign_fly.COUNTDOWN_S
+    assert "GO REFUSED" in capsys.readouterr().out
+    assert all(route != "/api/campaign/go" for route, _ in rig.calls)
+
+
+def test_pad_height_guard_rejects_missing_stale_and_nonfinite_height(monkeypatch):
+    for row in ({}, {"value": 0.0, "age_s": 2.0}, {"value": float("nan"), "age_s": 0.01},
+                {"value": -0.657, "age_s": 0.01}, {"value": 0.0, "age_s": float("nan")}):
+        monkeypatch.setattr(campaign_fly, "call", lambda *a, **k: (200, {"values": {"Ctrler.Z_posPID.FB": row}}))
+        assert campaign_fly.pad_height_error("http://h") is not None
+    monkeypatch.setattr(campaign_fly, "call", lambda *a, **k: (200, {"values": {
+        "Ctrler.Z_posPID.FB": {"value": 0.05, "age_s": 0.02}}}))
+    assert campaign_fly.pad_height_error("http://h") is None
