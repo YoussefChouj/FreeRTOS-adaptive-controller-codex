@@ -376,6 +376,23 @@ Compare MRAC layer arms against a reference arm on tracking, step response, cont
 python -m ground_station.analysis.layer_ab 2026-10-24 --arms xy-layer-inner,xy-layer-outer,xy-layer-both --ref xy-layer-inner
 ```
 
+### 4.7 Inner-to-outer SysID chain and model-based gain design (2026-10-27)
+
+Identify each cascaded loop from inside out (`rate` -> `angle` -> `vel` -> `pos`), save `model_<loop>_<axis>.json` and diagnostic FRF/PSD/margin plots, and print the PROPOSED gain-write command (never sent automatically):
+
+```powershell
+python -m ground_station.autotune.cli <session> --loop rate --axis roll --correct-zoh --plot-dir logs/autotune --stem rate_roll --print-gain-write
+python -m ground_station.autotune.cli <session> --loop angle --axis roll --inner-model logs/autotune/model_rate_roll.json --out logs/autotune
+python -m ground_station.autotune.cli <session> --loop vel --axis x --inner-model logs/autotune/model_angle_pitch.json --out logs/autotune
+python -m ground_station.autotune.cli <session> --loop pos --axis x --inner-model logs/autotune/model_vel_x.json --out logs/autotune
+```
+
+Replay the 10-24 rate logs, compute excitation/subscribe link math, write `API/xy_ctrl_gains_candidate.h`, and run the PID/LQR/MPC/ADRC chain simulations (`docs/lab/days/2026-10-27.yaml`):
+
+```powershell
+python -m ground_station.analysis.sysid_chain_sim --sim-only
+```
+
 ## 5. Ground service 8081
 
 ```powershell

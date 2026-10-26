@@ -135,8 +135,9 @@ def test_lab_scripts_compile_log_and_fly_on_the_fake_drone(path):
         assert ground["g_drift_nn_live"] == (1 if path.stem.startswith("lab_n_") else 0)
         want.add("g_drift_nn_live")
     assert set(ground) == want
-    if "g_xyc_delay_ticks" in ground:  # 10-21 logs: loop delay ~21 ticks; 12 rang LQR/MPC at 0.4-1.5 Hz
-        assert ground["g_xyc_delay_ticks"] == MEASURED_XY_DELAY_TICKS
+    if "g_xyc_delay_ticks" in ground:  # 10-21 logs: loop delay ~21 ticks; _d12 / diag_lqr / model test VAR47=12..18
+        want_delay = 12 if (path.stem.endswith("_d12") or path.stem.startswith("lab_e_diag_lqr_")) else MEASURED_XY_DELAY_TICKS
+        assert ground["g_xyc_delay_ticks"] == want_delay
     from ground_station.service.tests.test_fly_ground_verbs import _mrc_rig
     drone, _, deps = _mrc_rig()
     if "exp_id" in ground:

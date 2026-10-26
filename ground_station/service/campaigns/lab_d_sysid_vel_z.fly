@@ -1,0 +1,16 @@
+# D-vel-z: vertical velocity-loop multisine (sysid_target=3, axis=z -> highdtsPID.Des, 0.15-3 Hz, 0.25 m/s, two 30 s passes, 200 Hz stream).
+# Identifies vertical velocity loop plant from highdtsPID output to vertical velocity.
+# Ground analysis: python -m ground_station.autotune.cli <session> --loop vel --axis z. All values PROPOSED.
+campaign lab-d-sysid-vel-z
+rate 200
+log velocity_loops camera_fusion thrust_model
+set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10
+takeoff 0.5 mrac_injection=0
+set sysid_target=3
+hold 8
+excite target=vel axis=z signal=multisine f0=0.15 f1=3 amp=0.25 duration_s=30
+hold 3
+excite target=vel axis=z signal=multisine f0=0.15 f1=3 amp=0.25 duration_s=30
+set sysid_target=0
+hold 3
+land

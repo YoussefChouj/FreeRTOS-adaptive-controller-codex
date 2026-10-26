@@ -1,0 +1,14 @@
+# D-rate-yaw: wide-band yaw rate-loop multisine (low 0.2-5 Hz @ 45 deg/s + high 2-40 Hz @ 60 deg/s, 30 s each, 200 Hz stream).
+# Captures both the low-frequency yaw drift band and the high-frequency phase roll-off.
+# Ground analysis: python -m ground_station.autotune.cli <session> --loop rate --axis yaw --correct-zoh. All values PROPOSED.
+campaign lab-d-sysid-rate-yaw
+rate 200
+log velocity_loops camera_fusion thrust_model
+set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10
+takeoff 0.5 mrac_injection=0
+hold 8
+excite axis=yaw signal=multisine f0=0.2 f1=5 amp=45 duration_s=30
+hold 3
+excite axis=yaw signal=multisine f0=2 f1=40 amp=60 duration_s=30
+hold 3
+land

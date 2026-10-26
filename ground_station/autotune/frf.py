@@ -1,15 +1,14 @@
-"""Rate-plant frequency response from a logged excitation (IV estimate), and its integrator+lag+delay fit.
+"""Rate and outer-loop plant frequency response from a logged excitation (IV estimate), and its integrator/lag+delay fit.
 
 Log sources, in order of preference:
   1. 0x03 ID frame keys as decoded by serial_bridge.py:903-933: id.<axis>.r / .x (rad/s), id.dither (deg/s),
      id.sample_counter (200 Hz), id.sysid_state. The run window is sysid_state RUNNING.
-  2. The campaign core streams: Ctrler.gyro?PID.Des / .FB (deg/s) with xTickCount (ms) as the time base. The dither
+  2. The campaign core streams: Ctrler.<pid>.Des / .FB with xTickCount (ms) as the time base. The dither
      is rebuilt from the excite parameters (excitation.dither) and aligned to Des by cross-correlation.
 
-T = Phi_xd / Phi_rd is the closed rate loop r -> x with the dither d as the instrument, and the plant is
+T = Phi_xd / Phi_rd is the closed loop r -> x with the dither d as the instrument, and the plant is
 P = T / (C (1 - T)), C the firmware PID that flew (design.pid_frf). That equals Phi_xd / Phi_ud for u = C (r - x)
-(WP-25 step 3) without logging gyro?PID.U or the u_nom scale. It assumes MRAC injection off and no clamping.
-The fit is fit_rate_plant's model (research/sim/cascade.py:432) fitted on the complex FRF instead of in time.
+(WP-25 step 3) without logging PID.U or the u_nom scale. It assumes MRAC injection off and no clamping.
 """
 
 from __future__ import annotations
@@ -24,10 +23,27 @@ import pandas as pd
 from scipy import optimize, signal
 
 from ground_station.autotune import excitation as ex
-from ground_station.autotune.design import Plant, PidRow, pid_frf
+from ground_station.autotune.design import DT_S, Plant, PidRow, pid_frf
 
 RATE_PID: Mapping[str, str] = {"roll": "gyroxPID", "pitch": "gyroyPID", "yaw": "gyrozPID"}
 ANGLE_PID: Mapping[str, str] = {"roll": "rollPID", "pitch": "pitchPID", "yaw": "yawPID"}
+VEL_PID: Mapping[str, str] = {"x": "locxsPID", "y": "locysPID", "z": "Z_ratePID",
+                              "pitch": "locxsPID", "roll": "locysPID"}
+POS_PID: Mapping[str, str] = {"x": "locxPID", "y": "locyPID", "z": "Z_posPID",
+                              "pitch": "locxPID", "roll": "locyPID"}
+LOOP_PID: Mapping[str, Mapping[str, str]] = {
+    "rate": RATE_PID,
+    "angle": ANGLE_PID,
+    "vel": VEL_PID,
+    "pos": POS_PID,
+}
+LOOP_DT: Mapping[str, Mapping[str, float]] = {
+    "rate": {"roll": 0.005, "pitch": 0.005, "yaw": 0.005},
+    "angle": {"roll": 0.005, "pitch": 0.005, "yaw": 0.005},
+    "vel": {"x": 0.01, "y": 0.01, "z": 0.005, "pitch": 0.01, "roll": 0.01},
+    "pos": {"x": 0.01, "y": 0.01, "z": 0.01, "pitch": 0.01, "roll": 0.01},
+}
+ALL_AXES = ("roll", "pitch", "yaw", "x", "y", "z")
 PRIM_STATE, PRIM_HOVER = "g_wfb_status.prim_state", 2
 RAD2DEG = 180.0 / math.pi
 
@@ -47,7 +63,7 @@ class IdError(ValueError):
 
 @dataclass(frozen=True)
 class IdRun:
-    """One excitation window, uniformly sampled: dither d, rate setpoint r, rate x (deg/s)."""
+    """One excitation window, uniformly sampled: dither d, setpoint r, feedback x."""
 
     fs: float
     d: np.ndarray
@@ -73,6 +89,40 @@ class PlantFit:
     plant: Plant
     rel_residual: float
     n_bins: int
+
+
+def pid_member(loop: str, axis: str) -> str:
+    table = LOOP_PID.get(loop, RATE_PID)
+    if axis not in table:
+        raise IdError(f"axis {axis!r} is not valid for loop {loop!r} (valid: {sorted(table)})")
+    return table[axis]
+
+
+def loop_dt(loop: str, axis: str) -> float:
+    return LOOP_DT.get(loop, {}).get(axis, DT_S)
+
+
+def zoh_correction(f_hz: np.ndarray, fs: float) -> np.ndarray:
+    """Zero-order hold / sample-and-hold frequency response sinc(f/fs) * exp(-j pi f / fs)."""
+    x = np.asarray(f_hz, float) / max(fs, 1e-6)
+    return np.sinc(x) * np.exp(-1j * np.pi * x)
+
+
+def zoh_info(fs: float, delay_s: float, f_ref_hz: float = 40.0) -> dict[str, float]:
+    """Sample-and-hold phase lag and delay breakdown at sampling rate fs."""
+    zoh_delay_s = 0.5 / max(fs, 1e-6)
+    pure_delay_s = max(0.0, delay_s - zoh_delay_s)
+    phase_lag_deg = -180.0 * f_ref_hz / max(fs, 1e-6)
+    mag_droop_db = 20.0 * math.log10(max(float(np.sinc(f_ref_hz / max(fs, 1e-6))), 1e-6))
+    return {
+        "fs_hz": round(float(fs), 2),
+        "zoh_delay_ms": round(zoh_delay_s * 1000.0, 3),
+        "pure_delay_ms": round(pure_delay_s * 1000.0, 3),
+        "total_delay_ms": round(delay_s * 1000.0, 3),
+        "f_ref_hz": float(f_ref_hz),
+        "zoh_phase_lag_deg_at_f_ref": round(phase_lag_deg, 2),
+        "zoh_mag_droop_db_at_f_ref": round(mag_droop_db, 3),
+    }
 
 
 def load_series(src: str | Path) -> Series:
@@ -125,25 +175,26 @@ def _from_id_frame(series: Series, axis: str) -> IdRun:
                  float(timebase(series)(t_host[first : first + 1])[0]), "0x03 ID frame")
 
 
-def find_start(series: Series, axis: str, excite: Mapping[str, Any]) -> tuple[float, float, np.ndarray,
-                                                                                  np.ndarray, np.ndarray, float]:
-    """Align the rebuilt dither with Ctrler.<rate>.Des. Returns (t0_s, corr, grid, r, x, fs) on the time base."""
-    des, fb = (f"Ctrler.{RATE_PID[axis]}.{s}" for s in ("Des", "FB"))
+def clean_series(t: np.ndarray, v: np.ndarray, name: str) -> tuple[np.ndarray, np.ndarray]:
+    if len(t) == 0:
+        raise IdError(f"series {name} has no samples")
+    order = np.argsort(t, kind="stable")
+    t_s, v_s = t[order], v[order]
+    keep = np.r_[True, np.diff(t_s) > 0]
+    t_c, v_c = t_s[keep], v_s[keep]
+    if len(t_c) < 2:
+        raise IdError(f"series {name} has fewer than 2 unique time samples")
+    return t_c, v_c
+
+
+def find_start(series: Series, axis: str, excite: Mapping[str, Any],
+               loop: str = "rate") -> tuple[float, float, np.ndarray, np.ndarray, np.ndarray, float]:
+    """Align the rebuilt dither with Ctrler.<pid>.Des. Returns (t0_s, corr, grid, r, x, fs) on the time base."""
+    member = pid_member(loop, axis)
+    des, fb = (f"Ctrler.{member}.{s}" for s in ("Des", "FB"))
     if des not in series or fb not in series:
         raise IdError(f"log has neither the 0x03 ID frame (id.{axis}.*) nor {des} / {fb}")
     tb = timebase(series)
-
-    def clean_series(t: np.ndarray, v: np.ndarray, name: str) -> tuple[np.ndarray, np.ndarray]:
-        if len(t) == 0:
-            raise IdError(f"series {name} has no samples")
-        order = np.argsort(t, kind="stable")
-        t_s, v_s = t[order], v[order]
-        keep = np.r_[True, np.diff(t_s) > 0]
-        t_c, v_c = t_s[keep], v_s[keep]
-        if len(t_c) < 2:
-            raise IdError(f"series {name} has fewer than 2 unique time samples")
-        return t_c, v_c
-
     tr, vr = clean_series(tb(series[des][0]), series[des][1], des)
     tx, vx = clean_series(tb(series[fb][0]), series[fb][1], fb)
 
@@ -165,20 +216,22 @@ def find_start(series: Series, axis: str, excite: Mapping[str, Any]) -> tuple[fl
     return float(grid[lag]), corr, grid, r, x, fs
 
 
-def extract(series: Series, axis: str, excite: Mapping[str, Any]) -> IdRun:
+def extract(series: Series, axis: str, excite: Mapping[str, Any], loop: str = "rate") -> IdRun:
     """The excitation run for one axis from either log source (see module doc)."""
-    if f"id.{axis}.x" in series and "id.dither" in series and "id.sample_counter" in series:
+    if loop == "rate" and f"id.{axis}.x" in series and "id.dither" in series and "id.sample_counter" in series:
         return _from_id_frame(series, axis)
-    t0, corr, grid, r, x, fs = find_start(series, axis, excite)
+    member = pid_member(loop, axis)
+    t0, corr, grid, r, x, fs = find_start(series, axis, excite, loop=loop)
     if corr < ALIGN_MIN_CORR:
-        raise IdError(f"no {excite['signal']} found in Ctrler.{RATE_PID[axis]}.Des (best correlation {corr:.2f} < "
+        raise IdError(f"no {excite['signal']} found in Ctrler.{member}.Des (best correlation {corr:.2f} < "
                       f"{ALIGN_MIN_CORR}): did the excite step run, with these f0/f1/duration?")
     w = (grid >= t0 + ex.RAMP_T_S) & (grid < t0 + ex.RAMP_T_S + excite["duration_s"])
     d = ex.dither(grid[w] - t0, excite["signal"], excite["f0"], excite["f1"], excite["amp"], excite["duration_s"])
     return IdRun(fs, d, r[w], x[w], t0, "core streams, dither rebuilt")
 
 
-def plant_frf(runs: list[IdRun], flown: PidRow, band: tuple[float, float], coh_min: float = COH_MIN) -> Frf:
+def plant_frf(runs: list[IdRun], flown: PidRow, band: tuple[float, float], coh_min: float = COH_MIN,
+              dt: float = DT_S, correct_zoh: bool = False) -> Frf:
     """IV plant FRF averaged over runs (cross-spectra summed by Welch segment count)."""
     fs = runs[0].fs
     if any(abs(r.fs - fs) > 1e-6 for r in runs):
@@ -186,7 +239,8 @@ def plant_frf(runs: list[IdRun], flown: PidRow, band: tuple[float, float], coh_m
     n = min(len(r.d) for r in runs)
     if n < 64:
         raise IdError(f"excitation window has {n} samples, need >= 64")
-    nper = int(max(64, 2 ** math.floor(math.log2(n / 4.5))))
+    div = 2.6 if band[0] < 0.4 else 4.5
+    nper = int(max(64, 2 ** math.floor(math.log2(n / div))))
     acc: dict[str, Any] = {}
     n_avg = 0
     for run in runs:
@@ -200,7 +254,9 @@ def plant_frf(runs: list[IdRun], flown: PidRow, band: tuple[float, float], coh_m
         t = acc["dx"] / acc["dr"]
         coh = np.minimum(np.abs(acc["dx"]) ** 2 / (acc["dd"].real * acc["xx"].real),
                          np.abs(acc["dr"]) ** 2 / (acc["dd"].real * acc["rr"].real))
-        p = t / (pid_frf(flown, 2 * math.pi * f) * (1.0 - t))
+        p = t / (pid_frf(flown, 2 * math.pi * f, dt=dt) * (1.0 - t))
+        if correct_zoh:
+            p = p / zoh_correction(f, 1.0 / dt)
     coh = np.nan_to_num(coh)
     keep = (f >= band[0]) & (f <= band[1]) & (f > 0) & (coh >= coh_min) & np.isfinite(p)
     edges = np.geomspace(band[0], band[1], N_BANDS + 1)
@@ -208,35 +264,58 @@ def plant_frf(runs: list[IdRun], flown: PidRow, band: tuple[float, float], coh_m
     return Frf(f, p, coh, keep, band, float(cover), n_avg)
 
 
-def fit_plant(frf: Frf) -> PlantFit:
-    """Weighted relative least squares of k e^{-sT} / (s (tau s + 1)) on the kept bins: grid over (T, tau) with k
-    closed-form, then a local refine."""
+def fit_plant(frf: Frf, allow_drag: bool = False) -> PlantFit:
+    """Weighted relative least squares of k e^{-sT} / ((s + drag) (tau s + 1)) on the kept bins: grid over
+    (T, tau[, drag]) with k closed-form, then a local refine."""
     f, g, coh = frf.f_hz[frf.keep], frf.plant[frf.keep], frf.coh[frf.keep]
     if len(f) < 4:
         raise IdError(f"only {len(f)} coherent bins in {frf.band[0]:g}-{frf.band[1]:g} Hz, need >= 4 to fit")
     s, wgt = 2j * math.pi * f, np.minimum(coh / np.maximum(1.0 - coh, 1e-3), 50.0)
     y = g / np.abs(g)
 
-    def k_res(tau: float, delay: float) -> tuple[float, float]:
-        b = np.exp(-s * delay) / (s * (tau * s + 1.0)) / np.abs(g)
+    if not allow_drag:
+        def k_res(tau: float, delay: float) -> tuple[float, float]:
+            b = np.exp(-s * delay) / (s * (tau * s + 1.0)) / np.abs(g)
+            k = float(np.sum(wgt * np.real(np.conj(b) * y)) / np.sum(wgt * np.abs(b) ** 2))
+            return k, float(np.sum(wgt * np.abs(y - k * b) ** 2) / np.sum(wgt))
+
+        grid = [(tau, dl) for tau in np.geomspace(0.003, 0.3, 40) for dl in np.arange(0.0, 0.0605, 0.0025)]
+        tau0, dl0 = min(grid, key=lambda p: k_res(*p)[1])
+
+        def resid(q: np.ndarray) -> np.ndarray:
+            b = np.exp(q[0]) * np.exp(-s * q[2]) / (s * (np.exp(q[1]) * s + 1.0))
+            e = np.sqrt(wgt / np.sum(wgt)) * (g - b) / np.abs(g)
+            return np.r_[e.real, e.imag]
+
+        k0 = k_res(tau0, dl0)[0]
+        if k0 <= 0:  # wrong sign: report it, design_rate refuses a non-positive k
+            return PlantFit(Plant(k0, tau0, dl0), math.sqrt(k_res(tau0, dl0)[1]), len(f))
+        q0 = np.array([math.log(k0), math.log(tau0), dl0])
+        q = optimize.least_squares(resid, q0, bounds=([-30, math.log(1e-3), 0.0], [30, math.log(2.0), 0.25])).x
+        return PlantFit(Plant(float(math.exp(q[0])), float(math.exp(q[1])), float(q[2])),
+                        float(np.sqrt(np.sum(resid(q) ** 2))), len(f))
+
+    def k_res_d(tau: float, delay: float, drag: float) -> tuple[float, float]:
+        b = np.exp(-s * delay) / ((s + drag) * (tau * s + 1.0)) / np.abs(g)
         k = float(np.sum(wgt * np.real(np.conj(b) * y)) / np.sum(wgt * np.abs(b) ** 2))
         return k, float(np.sum(wgt * np.abs(y - k * b) ** 2) / np.sum(wgt))
 
-    grid = [(tau, dl) for tau in np.geomspace(0.003, 0.3, 40) for dl in np.arange(0.0, 0.0605, 0.0025)]
-    tau0, dl0 = min(grid, key=lambda p: k_res(*p)[1])
+    grid_d = [(tau, dl, dr) for tau in np.geomspace(0.01, 0.5, 20)
+              for dl in np.arange(0.0, 0.16, 0.01) for dr in np.linspace(0.0, 1.5, 16)]
+    tau0, dl0, dr0 = min(grid_d, key=lambda p: k_res_d(*p)[1])
+    k0 = k_res_d(tau0, dl0, dr0)[0]
+    if k0 <= 0:
+        return PlantFit(Plant(k0, tau0, dl0, dr0), math.sqrt(k_res_d(tau0, dl0, dr0)[1]), len(f))
 
-    def resid(q: np.ndarray) -> np.ndarray:
-        b = np.exp(q[0]) * np.exp(-s * q[2]) / (s * (np.exp(q[1]) * s + 1.0))
+    def resid_d(q: np.ndarray) -> np.ndarray:
+        b = np.exp(q[0]) * np.exp(-s * q[2]) / ((s + q[3]) * (np.exp(q[1]) * s + 1.0))
         e = np.sqrt(wgt / np.sum(wgt)) * (g - b) / np.abs(g)
         return np.r_[e.real, e.imag]
 
-    k0 = k_res(tau0, dl0)[0]
-    if k0 <= 0:  # wrong sign: report it, design_rate refuses a non-positive k
-        return PlantFit(Plant(k0, tau0, dl0), math.sqrt(k_res(tau0, dl0)[1]), len(f))
-    q0 = np.array([math.log(k0), math.log(tau0), dl0])
-    q = optimize.least_squares(resid, q0, bounds=([-30, math.log(1e-3), 0.0], [30, math.log(1.0), 0.1])).x
-    return PlantFit(Plant(float(math.exp(q[0])), float(math.exp(q[1])), float(q[2])),
-                    float(np.sqrt(np.sum(resid(q) ** 2))), len(f))
+    q0 = np.array([math.log(k0), math.log(tau0), dl0, dr0])
+    q = optimize.least_squares(resid_d, q0, bounds=([-30, math.log(1e-3), 0.0, 0.0], [30, math.log(2.0), 0.35, 3.0])).x
+    return PlantFit(Plant(float(math.exp(q[0])), float(math.exp(q[1])), float(q[2]), float(q[3])),
+                    float(np.sqrt(np.sum(resid_d(q) ** 2))), len(f))
 
 
 def quality_problem(frf: Frf, fit: PlantFit | None) -> str:
@@ -252,10 +331,12 @@ def quality_problem(frf: Frf, fit: PlantFit | None) -> str:
     return ""
 
 
-def hover_rate_rms(series: Series, axis: str, t_end_s: float | None, skip_s: float = 2.0) -> float | None:
-    """RMS of Des - FB on the rate loop in prim HOVER, from skip_s after HOVER is reached to 0.5 s before t_end_s
+def hover_rate_rms(series: Series, axis: str, t_end_s: float | None, skip_s: float = 2.0,
+                   loop: str = "rate") -> float | None:
+    """RMS of Des - FB on the loop in prim HOVER, from skip_s after HOVER is reached to 0.5 s before t_end_s
     (the first excitation start). None when the log has no such window."""
-    des, fb = (f"Ctrler.{RATE_PID[axis]}.{s}" for s in ("Des", "FB"))
+    member = pid_member(loop, axis)
+    des, fb = (f"Ctrler.{member}.{s}" for s in ("Des", "FB"))
     if PRIM_STATE not in series or des not in series or fb not in series:
         return None
     tb = timebase(series)
@@ -268,3 +349,46 @@ def hover_rate_rms(series: Series, axis: str, t_end_s: float | None, skip_s: flo
     if t_end_s is not None:
         m &= t < t_end_s - 0.5
     return float(np.sqrt(np.mean(e[m] ** 2))) if m.sum() >= 10 else None
+
+
+def psd_check(series: Series, axis: str, loop: str = "rate",
+              band: tuple[float, float] = (0.5, 15.0)) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    """Welch PSD up to Nyquist (100 Hz for 200 Hz logs) to check for motor-vibration aliasing."""
+    member = pid_member(loop, axis)
+    fb_key = f"Ctrler.{member}.FB"
+    if fb_key not in series:
+        return np.zeros(0), np.zeros(0), {"available": False}
+    tb = timebase(series)
+    tx, vx = clean_series(tb(series[fb_key][0]), series[fb_key][1], fb_key)
+    fs = float(round(1.0 / np.median(np.diff(tx))))
+    if fs <= 0 or not np.isfinite(fs) or len(tx) < 32:
+        return np.zeros(0), np.zeros(0), {"available": False}
+    grid = np.arange(tx[0], tx[-1], 1.0 / fs)
+    x = np.interp(grid, tx, vx) - np.mean(vx)
+    nper = min(len(x), 512)
+    f, pxx = signal.welch(x, fs=fs, nperseg=nper)
+    df = float(f[1] - f[0]) if len(f) > 1 else 1.0
+    in_mask = (f >= band[0]) & (f <= band[1])
+    hf_mask = f > 40.0
+    in_rms = float(np.sqrt(np.sum(pxx[in_mask]) * df)) if np.any(in_mask) else 0.0
+    hf_rms = float(np.sqrt(np.sum(pxx[hf_mask]) * df)) if np.any(hf_mask) else 0.0
+    ratio = hf_rms / max(in_rms, 1e-6)
+    if np.any(hf_mask):
+        idx_hf = int(np.argmax(pxx[hf_mask]))
+        peak_f = float(f[hf_mask][idx_hf])
+        peak_p = float(pxx[hf_mask][idx_hf])
+    else:
+        peak_f, peak_p = 0.0, 0.0
+    info = {
+        "available": True,
+        "fs_hz": round(fs, 2),
+        "nyquist_hz": round(0.5 * fs, 2),
+        "duration_s": round(float(grid[-1] - grid[0]), 2),
+        "inband_rms": round(in_rms, 3),
+        "hf_40_100_rms": round(hf_rms, 3),
+        "hf_to_inband_ratio": round(ratio, 3),
+        "peak_hf_freq_hz": round(peak_f, 2),
+        "peak_hf_psd": round(peak_p, 4),
+        "aliasing_clean": bool(ratio < 0.5),
+    }
+    return f, pxx, info
