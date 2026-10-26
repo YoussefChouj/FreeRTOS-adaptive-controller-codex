@@ -152,6 +152,9 @@ float SysID_GetRateSetpoint(SysID_Axis_e axis) { call(34); MIXV(axis); return fr
 /* sysid_target 1 torque add (Mix_Compute): 0 here, so u = c as before; not traced so a target-0 build that calls
  * it hashes like one that does not. */
 float SysID_GetTorque(SysID_Axis_e axis, uint8_t flying) { (void)axis; (void)flying; return 0.0f; }
+float SysID_GetAngleSetpoint(uint8_t axis, float des_deg) { (void)axis; return des_deg; }
+float SysID_GetVelSetpoint(uint8_t axis, float des_vel) { (void)axis; return des_vel; }
+float SysID_GetPosSetpoint(uint8_t axis, float des_pos) { (void)axis; return des_pos; }
 /* Telemetry-only reads (Tlm_Snapshot mrac_z / sysid_cdu groups), not traced. mrac.c is not linked, so the Z
  * feature read-out gives distinct per-slot values from this tick's state for check_tlm to compare. */
 DEF(mrac_z_feat_mask); DEF(sysid_target);

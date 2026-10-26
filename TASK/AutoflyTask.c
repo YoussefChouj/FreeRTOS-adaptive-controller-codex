@@ -509,7 +509,7 @@ static const VarWriteRow_t s_var_write[] = {
     VAR_WRITE_ROW(lim_mode,            VW_U8, 52,  0,       2      ),  /* s_lim rows 0..2               */
     VAR_WRITE_ROW(g_imu_mahony_yaw_decouple, VW_U8, 53, 0,     1      ),  /* bool                          */
     VAR_WRITE_ROW(mrac_z_feat_mask,   VW_U8, 54,  0,       15     ),  /* Z MRAC feature bits, mrac.h   */
-    VAR_WRITE_ROW(sysid_target,       VW_U8, 55,  0,       1      ),  /* 0 setpoint, 1 torque; sysid.h */
+    VAR_WRITE_ROW(sysid_target,       VW_U8, 55,  0,       4      ),  /* 0 rate, 1 torque, 2 angle, 3 vel, 4 pos; sysid.h */
     VAR_WRITE_ROW(g_drift_nn_live,    VW_U8, 56,  0,       2      ),  /* NN 0 shadow, 1 pos, 2 pos+vel */
     VAR_WRITE_ROW(g_drift_nn_clamp_mps, VW_F32, 57, 0.0f,  0.30f  )   /* m/s, NN residual clamp        */
 };

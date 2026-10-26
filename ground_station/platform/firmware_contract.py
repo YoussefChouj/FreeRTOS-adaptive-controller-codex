@@ -477,19 +477,19 @@ COMMAND_TABLE: dict[int, CommandSpec] = {
     ),
     0x14: CommandSpec(
         id=0x14, name="SYSID_CONTROL",
-        description="Configure and start/stop system identification excitation.",
+        description="Configure and start/stop system identification excitation (target in VAR_WRITE 55 sysid_target: 0 rate, 1 torque, 2 angle, 3 vel, 4 pos).",
         params=(
-            CommandParam(0, "axis", "enum", 0, 3),
+            CommandParam(0, "axis", "enum", 0, 3, "0 pitch/x, 1 roll/y, 2 yaw (rate/torque only), 3 z (vel/pos only)"),
             CommandParam(1, "signal", "enum", 0, 1),
             CommandParam(2, "f0_Hz", "Hz", None, None),
             CommandParam(3, "f1_Hz", "Hz", None, None),
-            CommandParam(4, "amplitude", "deg/s", None, None),
+            CommandParam(4, "amplitude", "deg/s", None, None, "Target native unit: deg/s (0), mixer (1), deg (2), cm/s or m/s (3), cm or m (4)"),
             CommandParam(5, "duration_s", "s", None, None),
             CommandParam(6, "start", "bool", 0, 1),
             CommandParam(7, "geofence_enable", "bool", 0, 1),
         ),
         safety=SafetyClass(
-            description="System identification: chirp or multisine excitation.",
+            description="System identification: chirp or multisine excitation across rate, torque, angle, velocity, or position targets.",
             danger_level="caution",
         ),
     ),
