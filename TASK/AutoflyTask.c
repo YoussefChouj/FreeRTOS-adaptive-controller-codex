@@ -460,6 +460,7 @@ extern volatile uint8_t g_imu_mahony_yaw_decouple;                   /* API/imu_
 extern volatile uint8_t mrac_z_feat_mask;                            /* API/mrac.h, MRAC_ZFEAT_* bits */
 extern volatile uint8_t g_drift_nn_live;                             /* NN/drift_nn_task.h, DRIFT_NN_LIVE_* */
 extern volatile float g_drift_nn_clamp_mps;                          /* NN/drift_nn_task.h */
+extern volatile uint8_t g_alt_vz_mode;                               /* StabilizerTask.c, ALT_VZ_MODE_* */
 
 static const VarWriteRow_t s_var_write[] = {
 /*                var                 type    id    min      max            range source */
@@ -511,7 +512,8 @@ static const VarWriteRow_t s_var_write[] = {
     VAR_WRITE_ROW(mrac_z_feat_mask,   VW_U8, 54,  0,       15     ),  /* Z MRAC feature bits, mrac.h   */
     VAR_WRITE_ROW(sysid_target,       VW_U8, 55,  0,       1      ),  /* 0 setpoint, 1 torque; sysid.h */
     VAR_WRITE_ROW(g_drift_nn_live,    VW_U8, 56,  0,       2      ),  /* NN 0 shadow, 1 pos, 2 pos+vel */
-    VAR_WRITE_ROW(g_drift_nn_clamp_mps, VW_F32, 57, 0.0f,  0.30f  )   /* m/s, NN residual clamp        */
+    VAR_WRITE_ROW(g_drift_nn_clamp_mps, VW_F32, 57, 0.0f,  0.30f  ),  /* m/s, NN residual clamp        */
+    VAR_WRITE_ROW(g_alt_vz_mode,      VW_U8, 58,  0,       1      )   /* altitude vz mode: 0=FD, 1=CF  */
 };
 
 /* GS CMD 0x2D: write row `id` = val. Returns 0 (written) or a VAR_WRITE_REJECT_* code (nothing written);
