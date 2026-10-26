@@ -80,6 +80,10 @@ extern volatile uint8_t g_rc_fallback;
 #define ALT_CF_ACC_SIGN     1.0f
 #endif
 
+#ifndef ALT_CF_BAZ_MAX
+#define ALT_CF_BAZ_MAX      1.0f   /* m/s^2, clamp on the accel-bias state b_az */
+#endif
+
 #ifndef MG_TO_MPS2
 #define MG_TO_MPS2          9.80665e-3f
 #endif

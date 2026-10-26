@@ -1415,6 +1415,8 @@ void Alt_UpdateFB(void)
 			alt_cf.h    += g->k1 * alt_cf.e;
 			alt_cf.vz   += g->k2 * alt_cf.e;
 			alt_cf.b_az -= g->k3 * alt_cf.e;
+			if (alt_cf.b_az > ALT_CF_BAZ_MAX) alt_cf.b_az = ALT_CF_BAZ_MAX;
+			else if (alt_cf.b_az < -ALT_CF_BAZ_MAX) alt_cf.b_az = -ALT_CF_BAZ_MAX;
 			alt_cf.n_corr++;
 		} else if (resynced) {
 			alt_cf.e = ano_of.of2_h - alt_cf.h;

@@ -256,3 +256,31 @@ CHECK SUBSET PASS: host-tests mrac-equiv all-loop-equiv c-pytest clang-tidy floa
 ### 5.3 Open Questions for the Operator Before Reflash & Bench `A1`–`A3`
 1. **Bias integrator gain `k3` for initial bench/hover bring-up**: Both `k3 = 0.0f` (2-state CF) and `k3 = 0.10f` (3-state CF with accelerometer bias estimation, currently set in `ALT_CF_ROW` as `PROPOSED`) pass the `abs(dU)` kick reduction gate (`>= 5x`), and `k3 = 0.10f` eliminates the steady-state velocity offset under a `0.1 m/s^2` accelerometer bias so 2% step settling matches FD (`-0.7%`). Do you want to keep `k3 = 0.10f` (`PROPOSED`) as the compiled row for `A1`–`A3` and `F1`, or start `F1` with `k3 = 0.0f` if `A2` measures stationary `|a_up| <= 0.05 m/s^2`?
 2. **Scheduling Bench `A1`–`A3`**: Once `z-vz-cf` is merged to `main` and flashed by the supervisor while disarmed (props off), are you ready to run the 60 s bench capture (`A1`–`A3`: 30 s stationary + 30 s hand lift/motion) to verify `ano_of.alt_update_cnt` rate and `ALT_CF_ACC_SIGN`?
+
+## Update 2026-10-26 (CEO): b_az clamp + settle with noise over 20 seeds
+
+- Firmware: `b_az` clamped to +-`ALT_CF_BAZ_MAX` = 1.0 m/s^2 (StabilizerTask.h/.c); host test U6 drives a 3 m/s^2 accel offset and checks the clamp holds (alt_cf 6/6, host_tests 35/35).
+- Sim mirrors the clamp (`BAZ_MAX`). With the assumed 0.1 m/s^2 bias it never binds, so the old numbers stand.
+- The old settle table used a noise-free step. The table below runs each CF config over seeds 1-20 with accel noise on.
+  10.00 s means it did not stay in band for 1 s within the 10 s window after the step.
+
+### Step settle WITH IMU noise, 20 seeds (noisy_step=True, b_az clamp +-1.0 m/s^2; sim ToF has NO noise, so FD has no noise here)
+| Configuration | runs | settle 5% median / p90 (s) | settle 2% median / p90 (s) | end offset mean / sd (cm) | hover wander sd median (cm) |
+|---|---|---|---|---|---|
+| Mode 0: FD + LPF (baseline) | 1 | 6.29 / 6.29 | 6.80 / 6.80 | -1.4 / 0.0 | 0.0 |
+| CF (k3=0.00, sigma=0.3 m/s^2) | 20 | 5.80 / 6.62 | 10.00 / 10.00 | -2.2 / 1.0 | 0.5 |
+| CF (k3=0.00, sigma=1.0 m/s^2) | 20 | 6.69 / 10.00 | 10.00 / 10.00 | -1.8 / 3.4 | 1.6 |
+| CF (k3=0.00, sigma=3.0 m/s^2) | 20 | 9.91 / 10.00 | 10.00 / 10.00 | -1.3 / 10.1 | 4.7 |
+| CF (k3=0.02, sigma=0.3 m/s^2) | 20 | 6.03 / 6.42 | 9.11 / 10.00 | -1.3 / 1.0 | 0.5 |
+| CF (k3=0.02, sigma=1.0 m/s^2) | 20 | 6.80 / 10.00 | 10.00 / 10.00 | -1.0 / 3.4 | 1.6 |
+| CF (k3=0.02, sigma=3.0 m/s^2) | 20 | 10.00 / 10.00 | 10.00 / 10.00 | +0.2 / 10.2 | 4.7 |
+| CF (k3=0.10, sigma=0.3 m/s^2) | 20 | 6.11 / 6.48 | 9.24 / 10.00 | -1.1 / 1.0 | 0.5 |
+| CF (k3=0.10, sigma=1.0 m/s^2) [NOMINAL] | 20 | 6.88 / 10.00 | 10.00 / 10.00 | -0.5 / 3.5 | 1.7 |
+| CF (k3=0.10, sigma=3.0 m/s^2) | 20 | 10.00 / 10.00 | 10.00 / 10.00 | +1.3 / 10.3 | 4.9 |
+
+Reading:
+- 5 % band (2.5 cm): nominal CF (sigma 1) median 6.88 s vs FD 6.29 s (+9 %); p90 hits the 10 s cap, so about 1 run in 10 never settles.
+- 2 % band (1 cm): CF almost never settles because the height wanders (hover sd 1.7 cm at sigma 1) more than the band. The noise-free -47 % "2 % settle" row was an artefact of no noise.
+- At sigma 0.3 the wander is 0.5 cm and 5 % settle is 6.1 s (p90 6.5 s), close to FD.
+- The sim ToF has NO noise, so FD shows zero wander here; FD vs CF hover wander is not comparable in sim.
+- The decisive unknown is the real IMU accel noise sigma. Flight F1 must measure hover height sd in both modes before CF is adopted.

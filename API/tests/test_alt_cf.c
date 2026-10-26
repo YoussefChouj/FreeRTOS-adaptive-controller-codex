@@ -1,5 +1,5 @@
 /*
- * Host unit tests U1-U5 for the Z altitude / climb-rate complementary filter (z-vz-cf).
+ * Host unit tests U1-U6 for the Z altitude / climb-rate complementary filter (z-vz-cf).
  *
  * Build+run command:
  *   gcc -std=c99 -Wall -Wextra -Werror -Wdeclaration-after-statement -Wvla -ITASK API/tests/test_alt_cf.c -lm -o test_alt_cf && ./test_alt_cf
@@ -887,6 +887,32 @@ static void test_u5_rejected_samples_then_resync(void)
            reject_streak, (unsigned)n_corr_base, (double)alt_cf.h, (double)vz_at_resync);
 }
 
+/*
+ * U6: b_az clamp: a 3 m/s^2 accel bias (beyond the clamp) holds b_az at +ALT_CF_BAZ_MAX, never above
+ */
+static void test_u6_baz_clamp(void)
+{
+    int tick;
+    float b_max = 0.0f;
+
+    reset_env(ALT_VZ_MODE_CF, 50U);
+    Gravity_Body_Z = 1.0f;
+    Lin_Acc_Z_body = 3.0f / (ALT_CF_ACC_SIGN * MG_TO_MPS2);
+    for (tick = 1; tick <= 4000; tick++) {
+        if ((tick % 10) == 0) {
+            ano_of.alt_update_cnt++;
+        }
+        Alt_UpdateFB();
+        if (alt_cf.b_az > b_max) {
+            b_max = alt_cf.b_az;
+        }
+    }
+    check_cond("U6: b_az never exceeds ALT_CF_BAZ_MAX", b_max <= ALT_CF_BAZ_MAX);
+    check_cond("U6: b_az saturates at +ALT_CF_BAZ_MAX under a 3 m/s^2 bias", fabsf(alt_cf.b_az - ALT_CF_BAZ_MAX) < 1e-6f);
+    printf("U6 PASS: 3 m/s^2 bias -> b_az held at %.3f (max %.3f, clamp %.1f m/s^2)\n",
+           (double)alt_cf.b_az, (double)b_max, (double)ALT_CF_BAZ_MAX);
+}
+
 int main(void)
 {
     test_u1_fd_bit_exact_on_213634_trace();
@@ -894,11 +920,12 @@ int main(void)
     test_u3_accel_only_step_tof_frozen();
     test_u4_constant_accel_bias();
     test_u5_rejected_samples_then_resync();
+    test_u6_baz_clamp();
 
     if (g_fail_count != 0) {
         printf("FAILED: %d checks failed (%d passed)\n", g_fail_count, g_pass_count);
         return 1;
     }
-    printf("ALL 5 TESTS PASSED (U1-U5) (%d checks)\n", g_pass_count);
+    printf("ALL 6 TESTS PASSED (U1-U6) (%d checks)\n", g_pass_count);
     return 0;
 }

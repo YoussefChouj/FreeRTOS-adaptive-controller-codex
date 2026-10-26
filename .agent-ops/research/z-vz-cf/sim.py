@@ -37,6 +37,7 @@ K1_PROP = 0.21
 K2_PROP = 0.45
 K3_PROP = 0.10
 ACC_MAX_PROP = 20.0
+BAZ_MAX = 1.0  # m/s^2, mirrors firmware ALT_CF_BAZ_MAX clamp on b_az
 
 
 class FirmwarePID:
@@ -166,6 +167,7 @@ def cf_open_loop(k1, k2, k3, sig, bias=0.1, seed=1):
             h += k1 * er
             v += k2 * er
             bz -= k3 * er
+            bz = float(np.clip(bz, -BAZ_MAX, BAZ_MAX))
         out[i] = v
     return out
 
@@ -258,6 +260,7 @@ def sim_closed_loop_step(mode, k1=K1_PROP, k2=K2_PROP, k3=K3_PROP, sigma=1.0, bi
                 h_cf += k1 * er
                 vz_cf += k2 * er
                 b_az -= k3 * er
+                b_az = float(np.clip(b_az, -BAZ_MAX, BAZ_MAX))
             z_pos.FB = h_cf
             z_rate.FB = vz_cf
 
@@ -355,6 +358,7 @@ def sim_closed_loop_tracking(mode, k1=K1_PROP, k2=K2_PROP, k3=K3_PROP, sigma=1.0
                 h_cf += k1 * er
                 vz_cf += k2 * er
                 b_az -= k3 * er
+                b_az = float(np.clip(b_az, -BAZ_MAX, BAZ_MAX))
             z_pos.FB = h_cf
             z_rate.FB = vz_cf
 
@@ -408,6 +412,8 @@ cl_sweep_configs = [
     ('CF (k3=0.10, sigma=3.0 m/s^2)', 'CF', K1_PROP, K2_PROP, 0.10, 3.0),
 ]
 
+N_SEEDS = 20
+noisy_rows = []
 cl_results = []
 saved_runs = {}
 for label, mode, k1, k2, k3, sig in cl_sweep_configs:
@@ -417,6 +423,14 @@ for label, mode, k1, k2, k3, sig in cl_sweep_configs:
     else:
         st_res = sim_closed_loop_step('CF', k1, k2, k3, sigma=sig, bias=0.1, noisy_step=False)
         tr_res = sim_closed_loop_tracking('CF', k1, k2, k3, sigma=sig, bias=0.1)
+    if mode == 'CF':
+        seeds = [sim_closed_loop_step('CF', k1, k2, k3, sigma=sig, bias=0.1, seed=sd, noisy_step=True) for sd in range(1, N_SEEDS + 1)]
+    else:
+        seeds = [step_fd]  # FD does not use the accelerometer, so IMU noise does not change it
+    t5s = np.array([q['t_settle_5'] for q in seeds]); t2s = np.array([q['t_settle_2'] for q in seeds])
+    ends = np.array([np.mean(q['H_true'][-200:]) - 1.0 for q in seeds])
+    hov = np.array([np.std(q['H_true'][q['idx_step'] - 400:q['idx_step']]) for q in seeds])
+    noisy_rows.append((label, len(seeds), np.median(t5s), np.percentile(t5s, 90), np.median(t2s), np.percentile(t2s, 90), 100 * np.mean(ends), 100 * np.std(ends), 100 * np.median(hov)))
     saved_runs[label] = (st_res, tr_res)
     p90_ratio = trk_fd['dU_p90'] / tr_res['dU_p90']
     p99_ratio = trk_fd['dU_p99'] / tr_res['dU_p99']
@@ -468,6 +482,13 @@ for r in cl_results:
         f"{r['t_settle_2']:.3f}s ({r['t2_diff_pct']:+.1f}%) | "
         f"{r['z_rms_step']:.4f} / {r['z_rms']:.4f} | {r['vz_rms']:.4f} |"
     )
+
+txt += [
+    '',
+    '# Step settle WITH IMU noise, %d seeds (noisy_step=True, b_az clamp +-%.1f m/s^2; sim ToF has NO noise, so FD has no noise here)' % (N_SEEDS, BAZ_MAX),
+    '| Configuration | runs | settle 5% median / p90 (s) | settle 2% median / p90 (s) | end offset mean / sd (cm) | hover wander sd median (cm) |',
+    '|---|---|---|---|---|---|'
+] + ['| %s | %d | %.2f / %.2f | %.2f / %.2f | %+.1f / %.1f | %.1f |' % r for r in noisy_rows]
 
 os.makedirs('.agent-ops/research/z-vz-cf', exist_ok=True)
 os.makedirs('.agent-ops/out/z-vz-cf', exist_ok=True)
