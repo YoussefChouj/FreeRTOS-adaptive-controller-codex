@@ -1,4 +1,4 @@
-# Lab day 2026-10-27: Inner-to-outer SysID chain (rate -> angle -> vel -> pos) and model-based PID / LQR / MPC / ADRC validation
+# Lab day 2026-10-27: Inner-to-outer SysID chain (rate -> angle -> vel -> pos), 10-25 diagnosis ladder, one-variable fix tests, and model-based PID / LQR / MPC / ADRC validation
 # `.\labday 2026-10-27 --list` shows what is flown; the same command resumes from the first flight not flown.
 # Each block identifies one loop from inside out, fits plant + margins via `python -m ground_station.autotune.cli --loop <loop>`,
 # writes/verifies gains with a hover check, and only then moves to the next outer loop (3-5x bandwidth separation).
@@ -6,7 +6,7 @@
 
 day: 2026-10-27
 carry: false
-title: Inner-to-outer SysID chain (rate 0.2-40 Hz -> angle 0.2-6 Hz -> vel 0.15-3 Hz -> pos 0.1-1.5 Hz) + model-based PID/LQR/MPC/ADRC validation
+title: Inner-to-outer SysID chain (rate 0.2-40 Hz -> angle 0.2-6 Hz -> vel 0.15-3 Hz -> pos 0.1-1.5 Hz) + one-variable fix ladder + model-based PID/LQR/MPC/ADRC validation
 camera:
   floor: floor-2026-10-27
   mode: 3
@@ -17,6 +17,7 @@ before:
   - "Floor scan: labday scans `floor-2026-10-27` at launch (drone out of view); keep the camera fixed all day"
   - "HANDS OFF THE STICKS during every excitation and trajectory (stick move > 0.05 in 10 ms = RC takeover = abort)"
   - "Tracker dot centered on drone before arming; resting battery >= 15.8V before first flight"
+  - "Automatic safe exit active on all trajectory flights: host AbortMonitor (`|pos_err| > 50 cm` for 3 samples -> `abort_land`) + firmware slow-clock freeze (`|pos_err| > e_hi = 45 cm` PROPOSED)"
 
 flights:
   # ======== BLOCK 0: RATE GAINS CHAT-APPROVAL GATE & PRE-FLIGHT SMOKE ========
@@ -28,7 +29,7 @@ flights:
     fly: lab_a_hover_verify
     args: [--gains, rate35y104]
     gate: "CHAT APPROVAL: fly only after the operator OKs rate35 + yaw104 in chat; written while disarmed. If declined, run Blocks 1-5 with --gains defaults"
-    why: "Block 0 apply rate35 (roll PM 21.4 -> 34.4 deg, pitch 28 -> 43 deg) + yaw104 first before any sysid, so Block 1 identifies the plant under the gains we will fly"
+    why: "Block 0 apply rate35 (roll PM 21.4 -> 34.4 deg, pitch 28 -> 43 deg; removes ~95 ms inner group delay, R2 Fix 3) + yaw104 first before any sysid, so Block 1 identifies the plant under the gains we will fly"
     pass: "steady hover; gx/gy PSD peak < 3 dps in 1.7-5.3 Hz; yaw span < 5 deg; lands inside 10 cm pad gate (PROPOSED)"
     stop: true
 
@@ -128,61 +129,121 @@ flights:
     fly: lab_a_hover_verify
     args: [--gains, rate35y104]
     gate: "CHAT APPROVAL: Run `autotune.cli --loop pos` on x, y, z and regenerate candidate gains for LQR/MPC/ADRC; any position or candidate gain change requires the operator's chat OK first and is written while disarmed"
-    why: "Block 4 verification hover with full identified cascade (rate + angle + vel + pos) before Block 4b diagnosis ladder and Block 5 controller comparison"
+    why: "Block 4 verification hover with full identified cascade (rate + angle + vel + pos) before Block 4b diagnosis ladder and Block 4c one-variable fix tests"
     pass: "steady hover; hold p-p < 10 cm (vs 49.6 cm on 10-24 lqr-alone); lands inside 10 cm pad gate (PROPOSED)"
     stop: true
 
-  # ======== BLOCK 4b: 10-25 DIAGNOSIS LADDER (not flown on 10-25: loop damping vs path speed/coupling) ========
+  # ======== BLOCK 4b: 10-25 DIAGNOSIS LADDER (unflown on 10-25: stationary step damping vs half-speed path baselines) ========
   - id: diag-xy-steps-lqr
     fly: lab_e_diag_lqr_steps
     args: [--gains, rate35y104]
     gate: "Block 4 pos-gain-verify-hover passed"
     why: "10-25 diagnosis ladder 1/3 (unflown on 10-25): LQR alone (VAR47=12), four 30 cm xy steps with 5 s dwell, no path: measures xy loop damping and x-to-y cross-coupling"
-    pass: "overshoot < 20%; cross-axis motion < 5 cm; no sustained ~0.5 Hz ringing in the dwell (PROPOSED); no RC takeover"
+    pass: "overshoot < 20%; cross-axis motion < 5 cm; no sustained ~0.5 Hz ringing in the dwell (PROPOSED); host AbortMonitor safe exit at |pos err| > 50 cm (PROPOSED 45 cm); no RC takeover"
 
   - id: diag-figure8-half-speed-lqr
     fly: lab_e_diag_lqr_fig8_half
     args: [--gains, rate35y104]
     gate: "diag-xy-steps-lqr completed"
-    why: "10-25 diagnosis ladder 2/3 (unflown on 10-25): LQR figure-8 at HALF speed (f8_laps=1, move_s=18): separates path speed from loop limit cycle"
+    why: "10-25 diagnosis ladder 2/3 (unflown on 10-25, SAME-ARM BASELINE for Block 4c): LQR figure-8 at HALF speed (f8_laps=1, move_s=18, d=12, profile=1, slow_on=0): separates path speed from loop limit cycle"
     pass: "figure-8 completes without abort (host AbortMonitor safe exit at |pos err| > 50 cm, PROPOSED 45 cm); scorecard swing < 1.3x (PROPOSED); no RC takeover"
 
   - id: diag-figure8-half-speed-pid
     fly: lab_e_diag_pid_fig8_half
     args: [--gains, rate35y104]
     gate: "diag-figure8-half-speed-lqr completed"
-    why: "10-25 diagnosis ladder 3/3 (unflown on 10-25): PID figure-8 at HALF speed (f8_laps=1, move_s=18): tests whether PID's 130-160 cm p-p 10-24 swing shrinks at half speed"
-    pass: "figure-8 completes without abort; scorecard swing < 1.3x (PROPOSED); no RC takeover"
+    why: "10-25 diagnosis ladder 3/3 (unflown on 10-25): PID figure-8 at HALF speed (f8_laps=1, move_s=18): tests whether PID's 130-160 cm p-p 10-24 swing shrinks at half speed (R2.3 predicts RMSE 38.6 -> 7.9 cm)"
+    pass: "figure-8 completes without abort (host AbortMonitor safe exit at |pos err| > 50 cm, PROPOSED 45 cm); scorecard swing < 1.3x (PROPOSED); no RC takeover"
     stop: true
 
-  # ======== BLOCK 5: ALL FOUR CONTROLLERS WITH MODEL-BASED GAINS (hold -> 30 cm x/y steps -> figure-8) ========
+  # ======== BLOCK 4c: ONE-VARIABLE FIX TESTS (each vs diag-figure8-half-speed-lqr same-arm baseline) ========
+  - id: fix-slow-clock-lqr-half-speed
+    fly: lab_e_fix_slow_clock_lqr_half
+    args: [--gains, rate35y104]
+    gate: "Block 4b diag-figure8-half-speed-lqr baseline completed"
+    why: "One-variable fix 1/4 vs diag-figure8-half-speed-lqr: enable ONLY slow-clock phase gating (VAR 70-73: g_traj_slow_on=1, elo=20 cm, ehi=45 cm, arrive_r=15 cm; R2 Fix 4 clock gate, Causes b+e)"
+    pass: "no reference clock runaway when |pos err| > 20 cm; half-speed figure-8 p-p drops from 179.9 cm baseline toward <= 150 cm (PROPOSED from R2.3); safe exit at |pos err| > 50 cm (PROPOSED 45 cm); no RC takeover"
+
+  - id: fix-min-jerk-lqr-half-speed
+    fly: lab_e_fix_min_jerk_lqr_half
+    args: [--gains, rate35y104]
+    gate: "fix-slow-clock-lqr-half-speed completed"
+    why: "One-variable fix 2/4 vs diag-figure8-half-speed-lqr: enable ONLY min-jerk trajectory profile (traj_p.profile=2, R2 Fix 4 entry/exit kinematics, Cause b turnaround jerk)"
+    pass: "entry/exit turnaround tilt spikes reduced vs profile=1 baseline; figure-8 completes without abort (safe exit at |pos err| > 50 cm, PROPOSED 45 cm); no RC takeover"
+
+  - id: fix-predictor-lqr-half-speed
+    fly: lab_e_fix_predictor_lqr_half
+    args: [--gains, rate35y104]
+    gate: "fix-min-jerk-lqr-half-speed completed"
+    why: "One-variable fix 3/4 vs diag-figure8-half-speed-lqr: enable ONLY Smith predictor delay alignment + velocity lead (g_xyc_delay_ticks=18, g_xyc_pred_lead=1; R2 Rank 2 Fix 1, Cause h)"
+    pass: "stationary hold p-p drops from 49.8 cm toward <= 22 cm (R2.3: PM 5.2 -> 19.7 deg); figure-8 completes without abort (safe exit at |pos err| > 50 cm, PROPOSED 45 cm); no RC takeover"
+
+  - id: fix-candidate-gains-lqr-half-speed
+    fly: lab_e_fix_cand_gains_lqr_half
+    args: [--gains, rate35y104]
+    gate: "CHAT APPROVAL: Write candidate LQR XY gains (VAR 75-83 from API/xy_ctrl_gains_candidate.h, R2 Rank 1 Fix 2) while disarmed only after operator chat OK; never as a .fly set"
+    why: "One-variable fix 4/4 vs diag-figure8-half-speed-lqr: enable ONLY candidate LQR XY gains (VAR 75-83, R2 Rank 1 Fix 2, Cause a stiff outer gains; R2.3 predicts half-speed RMSE 35.9 -> 5.6 cm and hold p-p 49.8 -> 17.9 cm)"
+    pass: "hold p-p < 20 cm; half-speed figure-8 RMSE < 10 cm and swing ratio < 1.25x (PROPOSED from R2.3: 5.64 cm RMSE, 117.1 cm p-p); safe exit at |pos err| > 50 cm (PROPOSED 45 cm); no RC takeover"
+    stop: true
+
+  # ======== BLOCK 5a: COMBINED FIX VALIDATION AT HALF SPEED (all 4 controllers: hold -> 30 cm steps -> half-speed figure-8) ========
   - id: model-based-pid
     fly: lab_e_model_pid
     args: [--gains, rate35y104]
-    gate: "CHAT APPROVAL: Blocks 1-4 sysid chain and Block 4b half-speed diagnosis passed; model-based PID gains approved by operator in chat and written while disarmed"
-    why: "Block 5 PID validation on the identified chain: 4 s hold -> 30 cm X step -> 30 cm Y step -> figure-8 (move_s=18, f8_a_cm=30)"
-    pass: "hold p-p < 10 cm; 30 cm step overshoot < 20%; figure-8 completes with swing ratio < 1.3x and no RC takeover (PROPOSED)"
+    gate: "CHAT APPROVAL: Blocks 1-4 sysid chain and Block 4c one-variable fixes passed; model-based PID gains approved by operator in chat and written while disarmed"
+    why: "Block 5a combined-fix HALF-SPEED PID validation (Fix 1+2+3+4): 4 s hold -> 30 cm X step -> 30 cm Y step -> half-speed figure-8 (f8_laps=1, move_s=18, profile=2, slow_on=1; R2.3 predicts hold 11.7 cm, RMSE 4.41 cm)"
+    pass: "hold p-p < 15 cm; 30 cm step overshoot < 25%; half-speed figure-8 swing ratio < 1.25x and RMSE < 10 cm (PROPOSED); safe exit at |pos err| > 50 cm (PROPOSED 45 cm); no RC takeover"
 
   - id: model-based-lqr
     fly: lab_e_model_lqr
     args: [--gains, rate35y104]
-    gate: "CHAT APPROVAL: Blocks 1-4 sysid chain and Block 4b half-speed diagnosis passed; candidate LQR gains (`API/xy_ctrl_gains_candidate.h`) and identified delay (`VAR47=18`) approved by operator in chat and written while disarmed"
-    why: "Block 5 LQR validation on the identified chain: 4 s hold -> 30 cm X step -> 30 cm Y step -> figure-8 (10-24 baseline: hold p-p 49.6 cm, swing 3.6x)"
-    pass: "hold p-p < 10 cm; 30 cm step overshoot < 25%; figure-8 completes with swing ratio < 1.3x and no RC takeover (PROPOSED)"
+    gate: "CHAT APPROVAL: Blocks 1-4 sysid chain and Block 4c one-variable fixes passed; candidate LQR gains (`API/xy_ctrl_gains_candidate.h`, VAR 75-83) approved by operator in chat and written while disarmed"
+    why: "Block 5a combined-fix HALF-SPEED LQR validation (Fix 1+2+3+4): 4 s hold -> 30 cm X step -> 30 cm Y step -> half-speed figure-8 (f8_laps=1, d=18, pred_lead=1, profile=2, slow_on=1; R2.3 predicts PM 49.7 deg, hold 11.0 cm, RMSE 6.45 cm)"
+    pass: "hold p-p < 15 cm; 30 cm step overshoot < 25%; half-speed figure-8 swing ratio < 1.25x and RMSE < 10 cm (PROPOSED); safe exit at |pos err| > 50 cm (PROPOSED 45 cm); no RC takeover"
 
   - id: model-based-mpc
     fly: lab_e_model_mpc
     args: [--gains, rate35y104]
-    gate: "CHAT APPROVAL: Blocks 1-4 sysid chain and Block 4b half-speed diagnosis passed; candidate MPC gains (`API/xy_ctrl_gains_candidate.h`) and identified delay (`VAR47=18`) approved by operator in chat and written while disarmed"
-    why: "Block 5 MPC validation on the identified chain: 4 s hold -> 30 cm X step -> 30 cm Y step -> figure-8"
-    pass: "hold p-p < 10 cm; 30 cm step overshoot < 20%; figure-8 completes with swing ratio < 1.3x and no RC takeover (PROPOSED)"
+    gate: "CHAT APPROVAL: Blocks 1-4 sysid chain and Block 4c one-variable fixes passed; candidate MPC gains (`API/xy_ctrl_gains_candidate.h`, VAR 75-83) approved by operator in chat and written while disarmed"
+    why: "Block 5a combined-fix HALF-SPEED MPC validation (Fix 1+2+3+4): 4 s hold -> 30 cm X step -> 30 cm Y step -> half-speed figure-8 (f8_laps=1, d=18, pred_lead=1, profile=2, slow_on=1; R2.3 predicts PM 50.4 deg, hold 12.4 cm, RMSE 6.77 cm)"
+    pass: "hold p-p < 15 cm; 30 cm step overshoot < 25%; half-speed figure-8 swing ratio < 1.25x and RMSE < 10 cm (PROPOSED); safe exit at |pos err| > 50 cm (PROPOSED 45 cm); no RC takeover"
 
   - id: model-based-adrc
     fly: lab_e_model_adrc
     args: [--gains, rate35y104]
-    gate: "CHAT APPROVAL: Blocks 1-4 sysid chain and Block 4b half-speed diagnosis passed; candidate ADRC ESO/controller gains (`API/xy_ctrl_gains_candidate.h`) approved by operator in chat and written while disarmed"
-    why: "Block 5 ADRC validation on the identified chain: 4 s hold -> 30 cm X step -> 30 cm Y step -> figure-8"
-    pass: "hold p-p < 10 cm; 30 cm step overshoot < 20%; figure-8 completes with swing ratio < 1.3x and no RC takeover (PROPOSED)"
+    gate: "CHAT APPROVAL: Blocks 1-4 sysid chain and Block 4c one-variable fixes passed; candidate ADRC ESO/controller gains (`API/xy_ctrl_gains_candidate.h`, VAR 79-83) approved by operator in chat and written while disarmed"
+    why: "Block 5a combined-fix HALF-SPEED ADRC validation (Fix 1+2+3+4): 4 s hold -> 30 cm X step -> 30 cm Y step -> half-speed figure-8 (f8_laps=1, d=18, pred_lead=1, profile=2, slow_on=1; R2.3 predicts PM 49.7 deg, hold 12.2 cm)"
+    pass: "hold p-p < 15 cm; 30 cm step overshoot < 25%; half-speed figure-8 swing ratio < 1.3x and max_z3x < 150 cm/s^2 (PROPOSED); safe exit at |pos err| > 50 cm (PROPOSED 45 cm); no RC takeover"
+    stop: true
+
+  # ======== BLOCK 5b: FULL-SPEED FIGURE-8 VALIDATION (GATED ONLY AFTER HALF-SPEED PASSES) ========
+  - id: model-pid-figure8-full-speed
+    fly: lab_e_model_pid_full
+    args: [--gains, rate35y104]
+    gate: "CHAT APPROVAL: Fly FULL-SPEED figure-8 (f8_laps=2) ONLY after Block 5a half-speed `model-based-pid` passes all criteria (hold < 15 cm, swing < 1.25x, zero abort) and operator approves in chat while disarmed"
+    why: "Block 5b combined-fix FULL-SPEED PID figure-8 (f8_laps=2, move_s=18, profile=2, slow_on=1): verifies full-speed tracking under slow-clock protection after half-speed passes"
+    pass: "full-speed figure-8 completes without tilt blowup or crash; slow-clock regulates speed when |pos err| > 20 cm; safe exit at |pos err| > 50 cm (PROPOSED 45 cm); no RC takeover"
+
+  - id: model-lqr-figure8-full-speed
+    fly: lab_e_model_lqr_full
+    args: [--gains, rate35y104]
+    gate: "CHAT APPROVAL: Fly FULL-SPEED figure-8 (f8_laps=2) ONLY after Block 5a half-speed `model-based-lqr` passes all criteria (hold < 15 cm, swing < 1.25x, zero abort) and operator approves candidate LQR gains in chat while disarmed"
+    why: "Block 5b combined-fix FULL-SPEED LQR figure-8 (f8_laps=2, d=18, pred_lead=1, profile=2, slow_on=1): verifies full-speed LQR tracking after half-speed passes"
+    pass: "full-speed figure-8 completes without abort; swing ratio < 1.5x (PROPOSED); safe exit at |pos err| > 50 cm (PROPOSED 45 cm); no RC takeover"
+
+  - id: model-mpc-figure8-full-speed
+    fly: lab_e_model_mpc_full
+    args: [--gains, rate35y104]
+    gate: "CHAT APPROVAL: Fly FULL-SPEED figure-8 (f8_laps=2) ONLY after Block 5a half-speed `model-based-mpc` passes all criteria (hold < 15 cm, swing < 1.25x, zero abort) and operator approves candidate MPC gains in chat while disarmed"
+    why: "Block 5b combined-fix FULL-SPEED MPC figure-8 (f8_laps=2, d=18, pred_lead=1, profile=2, slow_on=1): verifies full-speed MPC tracking after half-speed passes"
+    pass: "full-speed figure-8 completes without attitude blowup (max tilt < 18 deg vs 37.7 deg on 10-24); safe exit at |pos err| > 50 cm (PROPOSED 45 cm); no RC takeover"
+
+  - id: model-adrc-figure8-full-speed
+    fly: lab_e_model_adrc_full
+    args: [--gains, rate35y104]
+    gate: "CHAT APPROVAL: Fly FULL-SPEED figure-8 (f8_laps=2) ONLY after Block 5a half-speed `model-based-adrc` passes all criteria (hold < 15 cm, swing < 1.3x, zero abort) and operator approves candidate ADRC gains in chat while disarmed"
+    why: "Block 5b combined-fix FULL-SPEED ADRC figure-8 (f8_laps=2, d=18, pred_lead=1, profile=2, slow_on=1): verifies full-speed ADRC tracking after half-speed passes"
+    pass: "full-speed figure-8 completes without ESO windup (max_z3x < 200 cm/s^2 vs 582.2 cm/s^2 on 10-24); safe exit at |pos err| > 50 cm (PROPOSED 45 cm); no RC takeover"
     stop: true
 
 branches:
@@ -190,6 +251,7 @@ branches:
   - {when: "200 Hz subscribe drop rate > 2% in smoke-hover", do: "Restart 8081 with `--lab`, power-cycle WiFi/FC, re-verify before Block 1"}
   - {when: "autotune.cli refuses a fit (residual > 0.35 or coherence coverage < 50%)", do: "Inspect FRF + PSD diagnostic plot in `--plot-dir`; do not apply gains from a refused fit; re-fly or keep prior loop gains"}
   - {when: "Outer-loop bandwidth separation ratio < 3.0x vs inner loop", do: "Reduce outer Kp/wc until separation >= 3.0x before flying verification hover"}
-  - {when: "Step response or figure-8 exhibits ~0.45-0.5 Hz ringing > 15 cm p-p", do: "Land; check `g_xyc_delay_ticks` and inner rate gains (`--gains rate35y104`); do not proceed to MRAC wrapping until baseline passes"}
+  - {when: "Position error exceeds 45 cm (PROPOSED) / 50 cm host AbortMonitor threshold on any figure-8", do: "Automatic safe exit: firmware slow-clock freezes path progression at e_hi=45 cm and host AbortMonitor triggers abort_land at 50 cm for 3 samples; do not advance to full-speed Block 5b until half-speed Block 5a passes"}
+  - {when: "Step response or figure-8 exhibits ~0.45-0.5 Hz ringing > 15 cm p-p", do: "Land; check `g_xyc_delay_ticks=18`, `g_xyc_pred_lead=1`, and inner rate gains (`--gains rate35y104`); do not proceed to Block 5b full-speed until half-speed passes"}
   - {when: "Trajectory aborts (traj_status 3) with s_authority 0 or stick move", do: "RC takeover: land, hands off sticks, re-fly (`r`)"}
   - {when: "Pack resting voltage reaches packs.yaml gate", do: "Swap battery pack and re-write `--gains rate35y104` after reboot"}
