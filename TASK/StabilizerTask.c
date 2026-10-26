@@ -1,4 +1,6 @@
 #include "StabilizerTask.h"
+#ifndef ALT_CF_HOST_TEST
+#include "imu_update.h"
 #include "ekf_of.h"         /* 8-state OF position+velocity-bias+accel-bias KF (Mode 2 bias estimation) */
 #include "ekf.h"            /* g_ekf_gate: EKF body velocity for the x/y velocity loops */
 #include "math.h"
@@ -345,11 +347,6 @@ volatile uint8_t g_of_bias_capture_req = 0;
  * still reports quality 255 but its velocity is not usable. */
 #define OF_HANDHELD_MIN_ALT_CM      10U
 
-/* P0 Finding 2 (docs/p0-verdicts.md): per-tick ToF validity flag. 1 = this tick's
- * sample passed the band+jump gates in Update_Data. While 0 (out of range, e.g.
- * above the 5 m band ceiling or a 0xFFFF no-reading) the Z loops hold their last
- * valid FB and their integrators are frozen in Compute_Motor. */
-static uint8_t s_alt_valid_tick = 0U;
 
 /* ADR-0011 Phase 3 (CAL_AIRBORNE_HOVER_TRIM) + Phase 4 (CAL_HOT_HOVER).
  * Initialised once at boot by CalTrim_Init / CalHot_Init, ticked each control
@@ -1202,6 +1199,101 @@ static void Of_UpdateVelocityFB(void)
 	Ctrler.locysPID.FB=  (-fb_dx) * Cos_Yaw_01 - (fb_dy)*Sin_Yaw_01;
 }
 
+#endif /* !ALT_CF_HOST_TEST */
+
+#ifdef ALT_CF_HOST_TEST
+#include <math.h>
+#ifndef STAB_DT_S
+#define STAB_DT_S              0.005f
+#endif
+#ifndef M_PER_CM
+#define M_PER_CM               0.01f
+#endif
+#ifndef ALT_BAND_MIN_CM
+#define ALT_BAND_MIN_CM        5U
+#endif
+#ifndef ALT_BAND_MAX_CM
+#define ALT_BAND_MAX_CM        500U
+#endif
+#ifndef ALT_JUMP_BASE_M
+#define ALT_JUMP_BASE_M        0.05f
+#endif
+#ifndef ALT_JUMP_PER_VZ
+#define ALT_JUMP_PER_VZ        0.15f
+#endif
+#ifndef ALT_JUMP_MAX_M
+#define ALT_JUMP_MAX_M         0.20f
+#endif
+#ifndef ALT_RESYNC_REJECTS
+#define ALT_RESYNC_REJECTS     20U
+#endif
+#ifndef ALT_RATE_LPF_OLD
+#define ALT_RATE_LPF_OLD       0.9f
+#endif
+#ifndef ALT_RATE_LPF_NEW
+#define ALT_RATE_LPF_NEW       0.1f
+#endif
+#ifndef ALT_IS_ARMED
+#define ALT_IS_ARMED()         0U
+#endif
+#else
+#define ALT_IS_ARMED()         ((DroneStatus.ARM_Status == Armed) ? 1U : 0U)
+#endif
+
+/* P0 Finding 2 (docs/p0-verdicts.md): per-tick ToF validity flag. 1 = this tick's
+ * sample passed the band+jump gates in Update_Data. While 0 (out of range, e.g.
+ * above the 5 m band ceiling or a 0xFFFF no-reading) the Z loops hold their last
+ * valid FB and their integrators are frozen in Compute_Motor. */
+static uint8_t  s_alt_valid_tick   = 0U;
+static uint16_t s_alt_reject_cnt   = 0U;
+static uint16_t s_alt_hist[3]      = {0U, 0U, 0U};
+static uint8_t  s_alt_hist_n       = 0U;
+static uint8_t  s_alt_cnt_prev     = 0U;
+static uint8_t  s_alt_cf_inited    = 0U;
+static uint8_t  s_alt_vz_mode_prev = ALT_VZ_MODE_DEFAULT;
+static uint8_t  s_alt_armed_prev   = 0U;
+
+/* Altitude complementary filter, one row per gain set; runtime state starts at 0.
+   @k1      -        [0, 1]     height correction per ToF sample
+   @k2      1/s      [0, 50]    climb-rate correction per ToF sample, per m of error
+   @k3      1/s^2    [0, 5]     accel-bias correction per ToF sample (0 = off)
+   @AccMax  m/s^2    [0, 30]    clamp on world-up linear accel */
+#define ALT_CF_ROW(k1, k2, k3, AccMax) \
+    { k1, k2, k3, AccMax }
+
+static const AltCfGains s_alt_cf_gains[] = {
+/*             k1     k2     k3     AccMax    set */
+    ALT_CF_ROW(0.21f, 0.45f, 0.1f,  20.0f)  /* nominal  PROPOSED, S1 closed-loop sim */
+};
+
+/* Change history (newest first)
+ * nominal
+ *   2026-10-26 k1=0.21, k2=0.45, k3=0.1, AccMax=20.0: PROPOSED from S1 closed-loop sim (wn=3 rad/s, zeta=0.7 at Ts=0.05 s; poles |z|=0.894, 0.894, 0.988; dU p99 19.9x lower than FD)
+ */
+
+volatile uint8_t g_alt_vz_mode = ALT_VZ_MODE_DEFAULT;
+AltCfState_t     alt_cf;
+
+void Alt_CfReset(float h_init, uint8_t zero_bias)
+{
+	alt_cf.h = h_init;
+	alt_cf.vz = 0.0f;
+	alt_cf.e = 0.0f;
+	alt_cf.a_up = 0.0f;
+	if (zero_bias) {
+		alt_cf.b_az = 0.0f;
+		alt_cf.n_corr = 0U;
+	}
+	s_alt_reject_cnt = 0U;
+	if (h_init > 0.0f && ano_of.of2_raw_h == 0.0f) {
+		ano_of.of2_raw_h = h_init;
+		ano_of.of2_h = h_init;
+		ano_of.of2_last_h = h_init;
+	}
+	s_alt_cf_inited = (h_init > 0.0f) ? 1U : 0U;
+	s_alt_vz_mode_prev = g_alt_vz_mode;
+}
+
 /* Altitude sanity gate (of_alt_cm is cm, u32; clamped to u16 below). Three layers (ADR-0011 Z-gate),
  * mirroring PX4/DJI altitude filtering:
  *   1. median-of-3 on the raw sample — a lone spike (in-band or the 0xFFFF
@@ -1216,19 +1308,26 @@ static void Of_UpdateVelocityFB(void)
  *      so a genuine sustained level change is not locked out.
  * Then the Z FB: Z_posPID.FB = height (m), Z_ratePID.FB = low-passed climb rate (m/s), both held
  * on a rejected tick (s_alt_valid_tick = 0, P0 Finding 2). */
-static void Alt_UpdateFB(void)
+void Alt_UpdateFB(void)
 {
+	uint8_t cnt_changed;
+	uint8_t sample_accepted = 0U;
+	uint8_t resynced = 0U;
+	uint8_t armed;
+	float a_up;
+	const AltCfGains *g = &s_alt_cf_gains[0];
+
+	cnt_changed = (uint8_t)(ano_of.alt_update_cnt != s_alt_cnt_prev);
+	s_alt_cnt_prev = ano_of.alt_update_cnt;
+
 	{
-		static u16 s_alt_reject_cnt = 0U;
-		static u16 s_alt_hist[3] = {0U, 0U, 0U};
-		static uint8_t s_alt_hist_n = 0U;
-		u16 a0, a1, a2, alt_med;
+		uint16_t a0, a1, a2, alt_med;
 
 		/* Layer 1: median-of-3. */
 		s_alt_hist[2] = s_alt_hist[1];
 		s_alt_hist[1] = s_alt_hist[0];
 		/* of_alt_cm is u32: clamp, a bare cast aliases 65536+x to x cm */
-		s_alt_hist[0] = (ano_of.of_alt_cm > 0xFFFFU) ? 0xFFFFU : (u16)ano_of.of_alt_cm;
+		s_alt_hist[0] = (ano_of.of_alt_cm > 0xFFFFU) ? 0xFFFFU : (uint16_t)ano_of.of_alt_cm;
 		if (s_alt_hist_n < 3U) s_alt_hist_n++;
 		if (s_alt_hist_n >= 3U)
 		{
@@ -1247,12 +1346,19 @@ static void Alt_UpdateFB(void)
 			float h_new = alt_med*M_PER_CM*Cos_roll_01*Cos_pitch_01;
 			/* Layer 3: rate-aware jump gate. */
 			float gate = ALT_JUMP_BASE_M + ALT_JUMP_PER_VZ * fabsf(Ctrler.Z_ratePID.Des);
+			uint8_t jump_ok;
 			if (gate > ALT_JUMP_MAX_M) gate = ALT_JUMP_MAX_M;
-			if( fabsf(h_new - ano_of.of2_raw_h) < gate || s_alt_reject_cnt >= ALT_RESYNC_REJECTS )
+			jump_ok = (uint8_t)(fabsf(h_new - ano_of.of2_raw_h) < gate);
+			if( jump_ok || s_alt_reject_cnt >= ALT_RESYNC_REJECTS )
 			{
 				ano_of.of2_raw_h = h_new;
 				s_alt_reject_cnt = 0U;
 				s_alt_valid_tick = 1U;   /* P0 Finding 2: sample accepted this tick */
+				if (jump_ok) {
+					if (cnt_changed) sample_accepted = 1U;
+				} else {
+					resynced = 1U;
+				}
 			}
 			else
 			{
@@ -1276,7 +1382,84 @@ static void Alt_UpdateFB(void)
 		Ctrler.Z_posPID.FB =  ano_of.of2_h;
 		Ctrler.Z_ratePID.FB = ano_of.of2_h_f2_v ;
 	}
+
+	armed = ALT_IS_ARMED();
+	if (g_alt_vz_mode > ALT_VZ_MODE_CF) {
+		g_alt_vz_mode = s_alt_vz_mode_prev;
+	}
+	if (armed && g_alt_vz_mode != s_alt_vz_mode_prev) {
+		g_alt_vz_mode = s_alt_vz_mode_prev;
+	} else if (!armed && g_alt_vz_mode != s_alt_vz_mode_prev) {
+		if (s_alt_vz_mode_prev == ALT_VZ_MODE_FD && g_alt_vz_mode == ALT_VZ_MODE_CF) {
+			Alt_CfReset(ano_of.of2_h, 0U);
+		}
+		s_alt_vz_mode_prev = g_alt_vz_mode;
+	}
+	if (armed != s_alt_armed_prev) {
+		Alt_CfReset(ano_of.of2_h, 0U);
+		s_alt_armed_prev = armed;
+	}
+
+	a_up = ALT_CF_ACC_SIGN * (Lin_Acc_X_body * Gravity_Body_X
+	       + Lin_Acc_Y_body * Gravity_Body_Y
+	       + Lin_Acc_Z_body * Gravity_Body_Z) * MG_TO_MPS2 - alt_cf.b_az;
+	if (a_up > g->AccMax) a_up = g->AccMax;
+	else if (a_up < -g->AccMax) a_up = -g->AccMax;
+	alt_cf.a_up = a_up;
+
+	if (!s_alt_cf_inited && sample_accepted) {
+		alt_cf.h = ano_of.of2_h;
+		alt_cf.vz = 0.0f;
+		alt_cf.e = 0.0f;
+		s_alt_cf_inited = 1U;
+		alt_cf.n_corr++;
+	} else {
+		alt_cf.h  += alt_cf.vz * STAB_DT_S + 0.5f * alt_cf.a_up * STAB_DT_S * STAB_DT_S;
+		alt_cf.vz += alt_cf.a_up * STAB_DT_S;
+		if (sample_accepted) {
+			alt_cf.e     = ano_of.of2_h - alt_cf.h;
+			alt_cf.h    += g->k1 * alt_cf.e;
+			alt_cf.vz   += g->k2 * alt_cf.e;
+			alt_cf.b_az -= g->k3 * alt_cf.e;
+			alt_cf.n_corr++;
+		} else if (resynced) {
+			alt_cf.e = ano_of.of2_h - alt_cf.h;
+			alt_cf.h = ano_of.of2_h;
+			s_alt_cf_inited = 1U;
+		}
+	}
+
+	if (g_alt_vz_mode == ALT_VZ_MODE_CF) {
+		Ctrler.Z_posPID.FB  = alt_cf.h;
+		Ctrler.Z_ratePID.FB = alt_cf.vz;
+	}
 }
+
+#ifdef ALT_CF_HOST_TEST
+void Alt_TestResetAll(void)
+{
+	int i;
+	ano_of.of_alt_cm = 0U;
+	ano_of.alt_update_cnt = 0U;
+	ano_of.of2_raw_h = 0.0f;
+	ano_of.of2_h = 0.0f;
+	ano_of.of2_h_v = 0.0f;
+	ano_of.of2_h_f2_v = 0.0f;
+	ano_of.of2_last_h = 0.0f;
+	s_alt_valid_tick = 0U;
+	s_alt_reject_cnt = 0U;
+	for (i = 0; i < 3; i++) s_alt_hist[i] = 0U;
+	s_alt_hist_n = 0U;
+	s_alt_cnt_prev = 0U;
+	s_alt_armed_prev = 0U;
+	g_alt_vz_mode = ALT_VZ_MODE_DEFAULT;
+	s_alt_vz_mode_prev = ALT_VZ_MODE_DEFAULT;
+	s_alt_cf_inited = 0U;
+	Alt_CfReset(0.0f, 1U);
+	s_alt_cf_inited = 0U;
+}
+#endif
+#ifndef ALT_CF_HOST_TEST
 
 /* Angle FB from imu_data (one critical section, so the three angles are one sample) and rate FB. */
 static void Att_UpdateFB(void)
@@ -2891,3 +3074,4 @@ void Get_Voltage(void)
 
 	}
 }
+#endif /* !ALT_CF_HOST_TEST */

@@ -1,6 +1,7 @@
 #ifndef _STABILIZERTASK__H_
 #define _STABILIZERTASK__H_
 
+#ifndef ALT_CF_HOST_TEST
 #include "algorithm.h"
 #include "robot_types.h"
 #include "pid.h"
@@ -15,6 +16,9 @@
 #include "SINS.h"
 #include "usart4.h"
 #include "GPS.h"
+#else
+#include <stdint.h>
+#endif
 
 #define case_Update_loc_Des          1
 #define case_Update_v_loc_Des        2
@@ -66,6 +70,41 @@ extern volatile uint8_t g_rc_pid_fallback_ch;
 extern volatile uint8_t g_ctrl_pid_fallback;
 extern volatile uint8_t g_ctrl_pid_fallback_active;
 extern volatile uint8_t g_rc_fallback;
+
+/* Altitude complementary filter (Alt_UpdateFB, z-vz-cf) */
+#define ALT_VZ_MODE_FD      0
+#define ALT_VZ_MODE_CF      1
+#define ALT_VZ_MODE_DEFAULT ALT_VZ_MODE_FD
+
+#ifndef ALT_CF_ACC_SIGN
+#define ALT_CF_ACC_SIGN     1.0f
+#endif
+
+#ifndef MG_TO_MPS2
+#define MG_TO_MPS2          9.80665e-3f
+#endif
+
+typedef struct {
+    float k1;
+    float k2;
+    float k3;
+    float AccMax;
+} AltCfGains;
+
+typedef struct {
+    float    h;
+    float    vz;
+    float    b_az;
+    float    e;
+    float    a_up;
+    uint32_t n_corr;
+} AltCfState_t;
+
+extern volatile uint8_t g_alt_vz_mode;
+extern AltCfState_t     alt_cf;
+
+void Alt_UpdateFB(void);
+void Alt_CfReset(float h_init, uint8_t zero_bias);
 
 #endif
 
