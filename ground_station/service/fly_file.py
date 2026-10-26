@@ -233,6 +233,21 @@ def compile_fly(text: str, src: str = "<fly>") -> tuple[dict[str, Any], list[int
             fields = {k: v for k, v in fields.items() if k not in traj}
             if not fields:
                 continue
+        elif kind == "slow_clock":
+            sc_map = {
+                "on": "g_traj_slow_on", "e_lo": "g_traj_slow_elo_cm", "e_hi": "g_traj_slow_ehi_cm",
+                "arrive_r_cm": "g_traj_arrive_r_cm", "arrival_radius_cm": "g_traj_arrive_r_cm",
+            }
+            sc_writes: dict[str, Any] = {}
+            for sk, sv in fields.items():
+                if sk in sc_map:
+                    sc_writes[sc_map[sk]] = int(sv) if isinstance(sv, bool) else sv
+                else:
+                    problems.append(f"{where}: slow_clock unknown key {sk!r}")
+            if sc_writes:
+                steps.append({"set": sc_writes})
+                lines.append(n)
+            continue
         elif kind == "preset":
             fields = {**{k.split(".", 1)[1]: v for k, v in sticky.items()}, **fields}
         elif kind in ("pattern", "livetune") and isinstance(fields.get("axes"), str):

@@ -42,7 +42,7 @@ def nominal(plants) -> dict:
 
 def model_ad(m: dict) -> tuple[np.ndarray, np.ndarray]:
     """One 10 ms tick of [pos, vel, a] (xy_tune.simulate order: a, then v with the new a, then pos)."""
-    al, k, dr = math.exp(-DT / m["tau"]), m["k"], m["drag"]
+    al, k, dr = (float(m["al"]) if "al" in m else math.exp(-DT / m["tau"])), m["k"], m["drag"]
     a = np.array([[1.0, DT * (1 - dr * DT), DT * DT * k * al],
                   [0.0, 1 - dr * DT, DT * k * al],
                   [0.0, 0.0, al]])
@@ -55,7 +55,7 @@ class Predictor:
 
     def __init__(self, m: dict, b: int):
         self.m, self.d = m, m["d"]
-        self.al = math.exp(-DT / m["tau"])
+        self.al = float(m["al"]) if "al" in m else math.exp(-DT / m["tau"])
         self.a_mat, self.b_vec = model_ad(m)
         self.hist = np.zeros((max(self.d, 1), b))    # hist[0] = oldest (acts next), hist[-1] = newest
         self.a_est = np.zeros(b)
@@ -80,9 +80,17 @@ class Predictor:
             self.hist[-1] = u
 
 
-def _err_state(x, des, vff, z, m):
-    """[e_pos, e_vel, a - a_ff, integral] with a_ff = drag vff / k (the accel that holds vff against drag)."""
-    return np.vstack([x[0] - des, x[1] - vff, x[2] - m["drag"] * vff / m["k"], z])
+def _err_state(x, des, vff, z, m, aff=0.0, pred_lead: bool = False, fut_ref=None):
+    """[e_pos, e_vel, a - a_ff, integral] with a_ff = (aff + drag vff) / k; leads reference by d*dt when pred_lead."""
+    des_r, vff_r, aff_r = des, vff, aff
+    if pred_lead:
+        if fut_ref is not None:
+            des_r, vff_r, aff_r = fut_ref[0], fut_ref[1], fut_ref[2]
+        else:
+            tau_d = m["d"] * DT
+            des_r = des + tau_d * vff + 0.5 * tau_d * tau_d * aff
+            vff_r = vff + tau_d * aff
+    return np.vstack([x[0] - des_r, x[1] - vff_r, x[2] - (aff_r + m["drag"] * vff_r) / m["k"], z])
 
 
 def aug_ad(m: dict) -> tuple[np.ndarray, np.ndarray]:
@@ -105,12 +113,32 @@ class Lqr:
     def __init__(self, m: dict, kgain: np.ndarray, b: int):
         self.m, self.k, self.pred = m, np.asarray(kgain, float), Predictor(m, b)
         self.z = np.zeros(b)
+        self.pred_lead = False
 
-    def step(self, des, pos, vel, vff=0.0):
+    def set_gains(self, kgain, armed: bool = False) -> int:
+        if armed:
+            return -1
+        self.k = np.asarray(kgain, float)
+        return 0
+
+    def set_model(self, m: dict, armed: bool = False) -> int:
+        if armed:
+            return -1
+        b = len(self.z)
+        a_est, hist = self.pred.a_est.copy(), self.pred.hist.copy()
+        self.m, self.pred = dict(m), Predictor(dict(m), b)
+        self.pred.a_est = a_est
+        n_copy = min(len(hist), len(self.pred.hist))
+        self.pred.hist[:n_copy] = hist[:n_copy]
+        return 0
+
+    def step(self, des, pos, vel, vff=0.0, aff=0.0, fut_ref=None):
         vff = np.broadcast_to(vff, np.shape(pos))
+        aff = np.broadcast_to(aff, np.shape(pos))
         self.z = _integrate(self.z, pos, des)
-        x = _err_state(self.pred.predict(pos, vel), des, vff, self.z, self.m)
-        u = np.clip(self.m["drag"] * vff / self.m["k"] - self.k @ x, -AMAX, AMAX)
+        x = _err_state(self.pred.predict(pos, vel), des, vff, self.z, self.m, aff=aff,
+                       pred_lead=self.pred_lead, fut_ref=fut_ref)
+        u = np.clip((aff + self.m["drag"] * vff) / self.m["k"] - self.k @ x, -AMAX, AMAX)
         self.pred.push(u)
         return u
 
@@ -122,8 +150,15 @@ class Adrc:
         self.z1, self.z2, self.z3 = np.zeros(b), np.zeros(b), np.zeros(b)
         self.hist = np.zeros((max(self.d, 1), b))
         self.init = False
+        self.pred_lead = False
 
-    def step(self, des, pos, vel, vff=0.0):
+    def set_gains(self, wc: float, b0: float, armed: bool = False) -> int:
+        if armed or wc <= 0 or b0 <= 0:
+            return -1
+        self.wc, self.b0 = float(wc), float(b0)
+        return 0
+
+    def step(self, des, pos, vel, vff=0.0, aff=0.0, fut_ref=None):
         if not self.init:
             self.z1, self.init = np.array(pos, float), True
         u_del = self.hist[0] if self.d else 0.0
@@ -132,7 +167,7 @@ class Adrc:
         self.z1 = self.z1 + DT * (self.z2 - b1 * e)
         self.z2 = self.z2 + DT * (self.z3 - b2 * e + self.b0 * u_del)
         self.z3 = self.z3 + DT * (-b3 * e)
-        u0 = self.wc ** 2 * (des - self.z1) + 2 * self.wc * (vff - self.z2)
+        u0 = self.wc ** 2 * (des - self.z1) + 2 * self.wc * (vff - self.z2) + aff
         u = np.clip((u0 - self.z3) / self.b0, -AMAX, AMAX)
         if self.d:
             self.hist = np.roll(self.hist, -1, 0)
@@ -175,12 +210,15 @@ class Mpc:
         self.u = np.zeros((n, b))
         self.z = np.zeros(b)
         self.u_prev = np.zeros(b)
+        self.pred_lead = False
 
-    def step(self, des, pos, vel, vff=0.0):
+    def step(self, des, pos, vel, vff=0.0, aff=0.0, fut_ref=None):
         vff = np.broadcast_to(vff, np.shape(pos))
+        aff = np.broadcast_to(aff, np.shape(pos))
         self.z = _integrate(self.z, pos, des)
-        x = _err_state(self.pred.predict(pos, vel), des, vff, self.z, self.m)
-        uff = self.m["drag"] * vff / self.m["k"]
+        x = _err_state(self.pred.predict(pos, vel), des, vff, self.z, self.m, aff=aff,
+                       pred_lead=self.pred_lead, fut_ref=fut_ref)
+        uff = (aff + self.m["drag"] * vff) / self.m["k"]
         lin = self.f @ x + np.outer(self.g, self.u_prev - uff)   # in deviation from u_ff
         u = y = self.u                                            # warm start: last plan (blocks >> 1 tick)
         t = 1.0

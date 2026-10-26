@@ -105,14 +105,16 @@ _STEP_KEYS: Mapping[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     # kind: (required keys, optional keys)
     "takeoff": (("z",), ("mrac_injection", "idle_s", "set", "ground")),
     "hold": (("s",), ()),
-    "goto": (("x", "y", "z"), ("dwell_s",) + tuple(DEFAULT_MOTION)),
-    "path": (("shape", "params"), tuple(DEFAULT_MOTION)),
+    "goto": (("x", "y", "z"), ("dwell_s", "min_jerk", "arrive_r_cm", "arrival_radius_cm", "slow_clock") + tuple(DEFAULT_MOTION)),
+    "path": (("shape", "params"), ("min_jerk", "arrive_r_cm", "arrival_radius_cm", "slow_clock") + tuple(DEFAULT_MOTION)),
     "program": (("ops",), tuple(sorted(MOTION_KEYS))),
     "excite": (("axis", "f0", "f1", "amp", "duration_s"), ("signal",)),
     "pattern": (("layer", "speed", "axes"), ("periods",)),
     "step": (("axis", "delta", "hold"), ()),
     "livetune": (LIVETUNE_REQUIRED, LIVETUNE_OPTIONAL),
-    "preset": (("name",), tuple(k.split(".", 1)[1] for k in wfb_var.traj_defaults())),
+    "preset": (("name",), tuple(k.split(".", 1)[1] for k in wfb_var.traj_defaults()) + (
+        "min_jerk", "slow_clock", "slow_on", "e_lo", "e_hi", "arrive_r_cm", "arrival_radius_cm",
+    )),
     "set": ((), ()),  # keys are VAR_WRITE rows, checked by _compile_set
     "land": ((), ()),
 }
@@ -298,6 +300,7 @@ def _compile_preset(body: dict, hover_z: float, path: str, problems: list[str]) 
         problems.append(f"{path}.name: must be one of {', '.join(wfb_var.PRESETS)} (got {name!r})")
         return None
     params, n0 = wfb_var.traj_defaults(), len(problems)
+    extra_writes: dict[str, float] = {}
     if math.isfinite(hover_z):
         try:
             wfb_var.check("traj_p.start_z_m", hover_z)
@@ -305,6 +308,52 @@ def _compile_preset(body: dict, hover_z: float, path: str, problems: list[str]) 
         except wfb_var.VarWriteError as e:
             problems.append(f"{path}.start_z_m: hover_z {hover_z} violates start_z_m: {e}")
     for k, v in body.items():
+        if k == "min_jerk":
+            if v in (0, 1, True, False):
+                if int(v) == 1:
+                    params["traj_p.profile"] = 2.0
+            else:
+                problems.append(f"{path}.min_jerk: must be 0 or 1 (got {v!r})")
+            continue
+        if k == "profile" and v in ("min_jerk", "quintic"):
+            params["traj_p.profile"] = 2.0
+            continue
+        if k == "slow_clock":
+            if isinstance(v, dict):
+                sc_map = {"on": "g_traj_slow_on", "e_lo": "g_traj_slow_elo_cm", "e_hi": "g_traj_slow_ehi_cm"}
+                for sk, sv in v.items():
+                    if sk not in sc_map or not _num(sv if not isinstance(sv, bool) else int(sv)):
+                        problems.append(f"{path}.slow_clock.{sk}: invalid slow_clock field")
+                        continue
+                    fval = float(int(sv) if isinstance(sv, bool) else sv)
+                    try:
+                        wfb_var.check(sc_map[sk], fval)
+                        extra_writes[sc_map[sk]] = fval
+                    except wfb_var.VarWriteError as e:
+                        problems.append(f"{path}.slow_clock.{sk}: {e}")
+            elif v in (0, 1, True, False):
+                extra_writes["g_traj_slow_on"] = float(int(v))
+            else:
+                problems.append(f"{path}.slow_clock: must be 0/1 or mapping {{on, e_lo, e_hi}} (got {v!r})")
+            continue
+        if k in ("slow_on", "e_lo", "e_hi", "arrive_r_cm", "arrival_radius_cm"):
+            var_map = {
+                "slow_on": "g_traj_slow_on",
+                "e_lo": "g_traj_slow_elo_cm",
+                "e_hi": "g_traj_slow_ehi_cm",
+                "arrive_r_cm": "g_traj_arrive_r_cm",
+                "arrival_radius_cm": "g_traj_arrive_r_cm",
+            }
+            fval = float(int(v)) if isinstance(v, bool) and k == "slow_on" else v
+            if not _num(fval):
+                problems.append(f"{path}.{k}: must be a finite number (got {v!r})")
+                continue
+            try:
+                wfb_var.check(var_map[k], float(fval))
+                extra_writes[var_map[k]] = float(fval)
+            except wfb_var.VarWriteError as e:
+                problems.append(f"{path}.{k}: {e}")
+            continue
         if k == "name":
             continue
         if not _num(v):
@@ -320,9 +369,15 @@ def _compile_preset(body: dict, hover_z: float, path: str, problems: list[str]) 
                   wfb_var.traj_total_max_s())
     if total > cap:
         problems.append(f"{path}: move_s + ret_s + hold_s = {total:g} s exceeds TRAJ_TOTAL_MAX_S {cap:g} s")
+    if ("g_traj_slow_elo_cm" in extra_writes and "g_traj_slow_ehi_cm" in extra_writes
+            and extra_writes["g_traj_slow_elo_cm"] >= extra_writes["g_traj_slow_ehi_cm"]):
+        problems.append(f"{path}.slow_clock: e_lo must be < e_hi")
     if len(problems) > n0:
         return None
-    return Step("preset", {"name": name, "id": wfb_var.PRESETS[name], "params": params}, (),
+    step_args: dict[str, Any] = {"name": name, "id": wfb_var.PRESETS[name], "params": params}
+    if extra_writes:
+        step_args["var_writes"] = extra_writes
+    return Step("preset", step_args, (),
                 wfb_var.preset_duration_s(params))
 
 

@@ -114,3 +114,70 @@ def test_check_fly_preset_fields_do_not_carry_over():
     assert flat.box[5] - flat.box[4] < 1.0        # tilt 0: the ground writes its boot values, not lab_stage 1
     assert tilted.box[5] - tilted.box[4] > 20.0   # f8_tilt_deg=30 on that preset only
     assert not [n for r in rows for n in r["notes"] if n[0] == "REFUSE"]
+
+
+def test_quintic_min_jerk_boundary_conditions():
+    """Minimum-jerk quintic segment meets pos/vel/acc boundary conditions within 1e-4."""
+    p0, v0, a0 = np.array([-20.0, 15.0, 0.0]), np.array([10.0, -5.0, 0.0]), np.array([-15.0, 8.0, 0.0])
+    p1, v1, a1 = np.array([35.0, -25.0, 10.0]), np.array([-4.0, 12.0, 0.0]), np.array([6.0, -10.0, 0.0])
+    pos0, vel0, acc0 = tm.quintic_segment(0.0, 2.5, p0, v0, a0, p1, v1, a1)
+    pos1, vel1, acc1 = tm.quintic_segment(2.5, 2.5, p0, v0, a0, p1, v1, a1)
+    assert np.max(np.abs(pos0 - p0)) < 1e-4
+    assert np.max(np.abs(vel0 - v0)) < 1e-4
+    assert np.max(np.abs(acc0 - a0)) < 1e-4
+    assert np.max(np.abs(pos1 - p1)) < 1e-4
+    assert np.max(np.abs(vel1 - v1)) < 1e-4
+    assert np.max(np.abs(acc1 - a1)) < 1e-4
+
+
+def test_slow_clock_and_waypoint_arrival_parser():
+    """Slow clock scales s in [0,1] with rate-limited recovery; arrival parser fires once per waypoint."""
+    s = 1.0
+    for _ in range(10):
+        s, ds = tm.slow_clock_step(s, 50.0, e_lo_cm=15.0, e_hi_cm=45.0, recover_rate=1.0, dt=0.01)
+    assert s == 0.0
+    for _ in range(40):
+        s_prev = s
+        s, ds = tm.slow_clock_step(s, 5.0, e_lo_cm=15.0, e_hi_cm=45.0, recover_rate=1.0, dt=0.01)
+        assert 0.0 <= s - s_prev <= 0.01 + 1e-9
+    assert s == pytest.approx(0.4, abs=1e-6)
+
+    t = np.arange(0.0, 9.0, 0.01)
+    wps = [(40.0, 0.0, 2.0), (40.0, 40.0, 4.0), (0.0, 40.0, 6.0), (0.0, 0.0, 8.0)]
+    t_lag = np.maximum(t - 0.35, 0.0)
+    px = np.select([t_lag < 2, t_lag < 4, t_lag < 6, t_lag < 8],
+                   [20 * t_lag, 40.0, 40 - 20 * (t_lag - 4), 0.0], default=0.0)
+    py = np.select([t_lag < 2, t_lag < 4, t_lag < 6, t_lag < 8],
+                   [0.0, 20 * (t_lag - 2), 40.0, 40 - 20 * (t_lag - 6)], default=0.0)
+    pos = np.column_stack([px, py])
+    ref = np.column_stack([px + 4.0, py])
+    arrivals = tm.parse_waypoint_arrivals(t, pos, ref, wps, r_cm=10.0, s_trace=np.full_like(t, 0.9))
+    assert len(arrivals) == 4 and all(a.arrived for a in arrivals)
+    assert all(a.peak_err_cm == pytest.approx(4.0, abs=1e-3) for a in arrivals)
+    table = tm.format_arrival_table(arrivals)
+    assert "t_plan_s" in table and "time_lost_s" in table
+
+
+def test_fly_options_slow_clock_arrival_radius_and_min_jerk(tmp_path):
+    """New .fly options (slow_clock on/e_lo/e_hi, arrive_r_cm, min_jerk / profile=2) compile and pass dry-run check."""
+    from ground_station.service.fly_file import compile_fly
+    fly_txt = "\n".join([
+        "# n26-B slow clock + min-jerk figure-8 test",
+        "campaign n26-b-test",
+        "set g_xy_ctrl_kind=2 g_xyc_pred_lead=1",
+        "slow_clock on=1 e_lo=15 e_hi=45 arrive_r_cm=15",
+        "takeoff 0.85",
+        "hold 2",
+        "preset figure8 f8_a_cm=50 f8_laps=2 move_s=18 min_jerk=1 slow_on=1 e_lo=15 e_hi=45 arrive_r_cm=15",
+        "land",
+    ])
+    f = tmp_path / "n26_b_test.fly"
+    f.write_text(fly_txt, encoding="utf-8")
+    camp, _ = compile_fly(fly_txt, str(f))
+    exp = camp["experiments"][0]
+    preset_step = [s for s in exp["scenario"]["steps"] if isinstance(s, dict) and "preset" in s][0]["preset"]
+    assert preset_step["min_jerk"] == 1
+    rows = tm.check_fly(f)
+    assert len(rows) == 1
+    assert rows[0]["preset"] == "figure8"
+    assert not [n for r in rows for n in r["notes"] if n[0] == "REFUSE"]
