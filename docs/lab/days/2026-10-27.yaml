@@ -7,6 +7,19 @@
 # Every pass threshold and gain target below is PROPOSED unless cited to a measured 10-24 log.
 
 day: 2026-10-27
+# Standalone CF ABBA plan, PROPOSED; operator-run outside the automatic deck.
+# Requires reviewed flashed firmware and identical PID preset files copied per COMMANDS.md.
+# cf-legacy-hover:
+# .\fly lab_z_cf_hover --once --gains logs/lab/2026-10-27/2026-10-27-cf-legacy.json
+# cf-rate-scaled-hover:
+# .\fly lab_z_cf_hover --once --gains logs/lab/2026-10-27/2026-10-27-cf-rate-scaled.json
+# cf-rate-scaled-hover-repeat:
+# .\fly lab_z_cf_hover --once --gains logs/lab/2026-10-27/2026-10-27-cf-rate-scaled.json
+# cf-legacy-hover-repeat:
+# .\fly lab_z_cf_hover --once --gains logs/lab/2026-10-27/2026-10-27-cf-legacy.json
+# First fast capture must achieve PROPOSED replay correlation >=0.95 without hidden-input issues.
+# Both B vs both A: PROPOSED phase improvement >=15deg at0.5-0.9Hz, geo>=0.75, range std no worse.
+# Otherwise falsified; next suspect range latency. Preserve all existing day flights below.
 carry: false
 gains: rate35y104
 title: Inner-to-outer SysID chain (rate 0.2-40 Hz -> angle 0.2-6 Hz -> vel 0.15-3 Hz -> pos 0.1-1.5 Hz) + one-variable fix ladder + model-based PID/LQR/MPC/ADRC validation

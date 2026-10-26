@@ -74,6 +74,42 @@ resets or acceleration clipping prevent a faithful-replay claim. The historical 
 cannot supply those missing inputs. `estimator is still not understood` means the replay gate
 has not passed; it does not claim a successful estimator model.
 
+CF correction-rate ABBA experiment (PROPOSED): after the reviewed firmware is flashed and
+verified, copy the two preset sources next to the saved day gains. The copies preserve the
+saved attitude gains and explicitly set the measured Z position PID to 0.7/0.001/0.1 and
+velocity PID to 400/0.435/0. The variants differ only in `g_alt_cf_rate_mode` (legacy versus
+rate-scaled); both select CF velocity feedback. Source PID defaults are unchanged.
+
+```powershell
+New-Item -ItemType Directory -Force logs/lab/2026-10-27 | Out-Null
+Copy-Item docs/lab/gains/2026-10-27-cf-legacy.json logs/lab/2026-10-27/
+Copy-Item docs/lab/gains/2026-10-27-cf-rate-scaled.json logs/lab/2026-10-27/
+# cf-legacy-hover (A)
+.\fly lab_z_cf_hover --once --gains logs/lab/2026-10-27/2026-10-27-cf-legacy.json
+# cf-rate-scaled-hover (B)
+.\fly lab_z_cf_hover --once --gains logs/lab/2026-10-27/2026-10-27-cf-rate-scaled.json
+# cf-rate-scaled-hover-repeat (B)
+.\fly lab_z_cf_hover --once --gains logs/lab/2026-10-27/2026-10-27-cf-rate-scaled.json
+# cf-legacy-hover-repeat (A)
+.\fly lab_z_cf_hover --once --gains logs/lab/2026-10-27/2026-10-27-cf-legacy.json
+```
+
+These descriptive names label the ABBA sequence; standalone recordings retain campaign
+name `z-cf-hover` with unique session timestamps. Record which session belongs to each label.
+Disarm between flights: mode writes latch on the next arm edge. Keep the same camera setup
+and use the same hover-window selection. Run `cf_vz_check` on the first fast-slot capture
+before continuing: PROPOSED minimum matching-mode replay correlation is 0.95, with no
+hidden-input issues. Without this the report must say the estimator is still not understood.
+A first operator capture is needed to validate replay; it cannot be validated on a capture
+that does not yet exist. Existing RC authority and flight gates remain active.
+
+Decision rule (all thresholds PROPOSED): each of both rate-scaled flights must beat each
+of both legacy flights: velocity/range-derivative phase lag at 0.5–0.9 Hz shrinks by at least
+15 degrees, geometric gain is at least 0.75, and hover `of2_h` standard deviation is no worse.
+Otherwise the rate-scaling hypothesis is falsified; investigate range latency using the
+fast replay rather than tuning PID gains. The experiment is operator-run, not added to the
+automatic day deck; the same standalone commands are recorded in the day YAML comments.
+
 One-change follow-up after the diagnostic with measured Z position gains 0.7/0.001/0.1:
 
 ```powershell
