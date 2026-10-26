@@ -1,0 +1,4 @@
+{
+  "why": "Restore measured diagnostic baseline Z_posPID.Kp=0.7; changes only index21, preserving the other active gains.",
+  "values": {"21": 0.7}
+}

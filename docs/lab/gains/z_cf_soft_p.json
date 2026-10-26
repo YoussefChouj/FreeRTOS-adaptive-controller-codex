@@ -1,0 +1,4 @@
+{
+  "why": "PROPOSED single-change diagnostic trial: Z_posPID.Kp 0.7 -> 0.45 to soften outer-loop demand. Previous hover measured 0.054 m height RMS with Ki=0.001. Only index21 changes; keep the existing Ki=0.001, Kd=0.1 and rate gains400/0.435/0. This is not a fix for CF velocity bias and may slow recovery. Repeat lab_z_cf_hover; rollback is z_cf_soft_p_rollback.json. RAM only, no flash.",
+  "values": {"21": 0.45}
+}

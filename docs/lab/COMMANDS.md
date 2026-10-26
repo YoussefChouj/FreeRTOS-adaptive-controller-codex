@@ -46,6 +46,20 @@ and the achieved rate. Results go to `logs/flights/<date>/<NN>_z-cf-hover/` and 
 existing calibrated camera session running if using it. RC arm and normal abort gates apply.
 Keep the same gains for this diagnostic; a hover identifies symptoms, not full stability margins.
 
+One-change follow-up after the diagnostic with measured Z position gains 0.7/0.001/0.1:
+
+```powershell
+.\fly lab_z_cf_hover --once --gains docs/lab/gains/z_cf_soft_p.json
+.\fly --gains docs/lab/gains/z_cf_soft_p_rollback.json
+```
+
+The trial changes only position Kp to 0.45 (PROPOSED); Ki, Kd, velocity and attitude gains
+retain their current RAM values. Use in the same powered session as the baseline hover;
+after a power cycle, first restore the saved day gains. Expected tradeoff: slower height
+recovery. No CF coefficients change, and this does not resolve possible velocity-estimator
+bias. Compare hover RMS and peak error; land if worse. The second command restores the
+measured Kp=0.7 while disarmed, without flying. These presets do not update the day file.
+
 ```powershell
 .\labday 2026-10-19                 # dry run each flight once, then fly them in order (8081 + camera started for you)
 .\labday 2026-10-19 --list          # plan + what is flown, then exit
