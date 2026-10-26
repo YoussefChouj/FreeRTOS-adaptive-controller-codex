@@ -241,7 +241,19 @@ Alignment (camera to earth yaw):
 Frame grab (2026-10-22): a live source (window, webcam) is grabbed on its own thread, so the grab overlaps detection
 and the preview; each fix keeps the clock stamp of its own grab. `--serial-grab` puts the grab back in the loop (A/B
 only). The tracker.out result dict shows `frames`, `grabs`, `read_ms` (threaded: the wait), `detect_ms`, `show_ms`.
-The faster read changes the true camera latency, so re-measure `--delay-ms` before trusting the old 330 ms.
+Camera delay (`--delay-ms`, the screen-flash test). The value is sent to the firmware (0xFE frame) to back-date each
+fix; the tracker itself does not use it. Lay the laptop under the phone camera, screen up, start scrcpy (`r5cam`, the
+fusion settings), then run (the screen flashes black/white fullscreen for ~70 s; Esc stops):
+
+```powershell
+python -X utf8 -m ground_station.lab.camlat 60 r5cam logs/camlat/<date>
+```
+
+It prints `LATENCY photon->frame read: ... median N ms` and saves `camlat.png` (drawn vs seen, histogram, ROI).
+`--delay-ms` = that median + the tracker's read->send time (median of `t_send - t_cap` in a recent `fixes.csv`).
+The link from the laptop to the firmware is not in either number. Measured 2026-10-26 after the 10-22 speed-up:
+266 ms photon->read (n 60/60, std 24; was 328 on 10-21) + 31 ms read->send = **297 ms** (10-27 deck).
+Re-measure when the phone, zoom, scrcpy size or tracker read path changes.
 
 ## 4. One flight: `fly`
 
