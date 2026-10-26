@@ -144,7 +144,8 @@ def test_lab_scripts_compile_log_and_fly_on_the_fake_drone(path):
 
     data, _ = fly_file.compile_fly(path.read_text(encoding="utf-8"), path.name)
     exp = data["experiments"][0]
-    assert check_log_plan(exp["log_plan"]) == [] and "camera_fusion" in exp["log_plan"]["groups"]
+    assert check_log_plan(exp["log_plan"]) == []
+    assert "camera_fusion" in exp["log_plan"]["groups"] + exp["log_plan"].get("slow", [])
     ground = exp["scenario"]["steps"][0]["takeoff"]["set"]
     want = {"g_traj_ff_shift_s", "g_land_xy_gate_cm"}  # a pack swap reboots
     if "lim_mode" in ground:  # lab_h speed ladder picks its s_lim row on the ground, VAR 52

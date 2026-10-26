@@ -1,0 +1,11 @@
+# PROPOSED diagnostic hover: 0.8 m, 30 s. No excitation and no gain/filter changes.
+# Fast lane requests 200 Hz; fly probes the usable link rate before takeoff.
+# Both Z loops stay nominal PID; use the saved day gains to reproduce the current candidate.
+campaign z-cf-hover
+rate 200
+log z_cf
+slow 25 z_pid_gains camera_fusion takeoff_gate
+set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10 g_drift_nn_live=0
+takeoff 0.8 mrac_injection=0
+hold 30
+land

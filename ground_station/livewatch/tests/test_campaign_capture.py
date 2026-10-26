@@ -60,7 +60,7 @@ def test_every_symbol_resolves_in_the_elf_as_one_scalar():
     from ground_station.livewatch.symbols import SymbolResolver
 
     resolver = SymbolResolver(ELF)
-    sizes = {v: resolver.resolve(v).size for v in ALL_VARS + cc.VELOCITY_LOOPS + cc.OPTICAL_FLOW + cc.XY_CTRL + cc.NN4 + cc.DRIFT_NN}
+    sizes = {v: resolver.resolve(v).size for v in ALL_VARS + cc.VELOCITY_LOOPS + cc.OPTICAL_FLOW + cc.XY_CTRL + cc.NN4 + cc.DRIFT_NN + cc.Z_CF + cc.Z_PID_GAINS}
     assert {v: s for v, s in sizes.items() if not 1 <= s <= 4} == {}
 
 
@@ -221,11 +221,31 @@ def test_read_rejects_non_json(tmp_path):
 
 # ---- per-experiment log plan ---------------------------------------------------------------------------
 
+@pytest.mark.parametrize("max_rate", [200, 100, 50, 25])
+def test_z_cf_hover_keeps_diagnostics_when_link_rate_is_capped(max_rate):
+    from ground_station.service.fly_file import compile_fly
+
+    card = Path(__file__).resolve().parents[2] / "service/campaigns/lab_z_cf_hover.fly"
+    data, _ = compile_fly(card.read_text(encoding="utf-8"), str(card))
+    experiment = data["experiments"][0]
+    plan = cc.plan_capture(experiment["log_plan"], max_rate_hz=max_rate)
+    rates = {v: slot["hz"] for slot in plan["slots"] for v in slot["vars"]}
+    assert not plan["dropped"]
+    assert len(plan["slots"]) <= cc.MAX_SLOTS
+    assert _guard_bps(plan["slots"]) <= cc.PLANNING_BUDGET_BPS
+    assert all(rates[v] == max_rate for v in cc.Z_CF)
+    assert all(v in rates for v in cc.Z_PID_GAINS)
+    steps = experiment["scenario"]["steps"]
+    assert steps[0]["takeoff"]["mrac_injection"] == 0
+    assert [list(s)[0] if isinstance(s, dict) else s for s in steps] == ["takeoff", "hold", "land"]
+
+
 def test_log_groups_are_disjoint_from_needed_and_each_other():
     # nn4 is the drift net's input list and mrac_theta the live 6 of mrac_shadow's weights, so both overlap on
     # purpose; plan_capture records a variable once.
     assert set(cc.LOG_GROUPS["mrac_theta"]) <= set(cc.LOG_GROUPS["mrac_shadow"])
-    group_vars = [v for name, g in cc.LOG_GROUPS.items() if name not in ("nn4", "mrac_theta") for v in g]
+    # z_cf intentionally combines range, thrust and estimator signals for one diagnostic capture.
+    group_vars = [v for name, g in cc.LOG_GROUPS.items() if name not in ("nn4", "mrac_theta", "z_cf", "z_pid_gains") for v in g]
     assert len(set(group_vars)) == len(group_vars)
     assert not set(group_vars) & set(NEEDED)
     assert cc.LOG_GROUPS["mrac_shadow"] == OPTIONAL

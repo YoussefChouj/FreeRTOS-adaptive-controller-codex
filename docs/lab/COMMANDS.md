@@ -31,6 +31,21 @@ which has no adb, scrcpy or Windows python. Never use it for the camera. `.\cam`
 
 ## 1. A lab day: `labday`
 
+Standalone altitude diagnosis (PROPOSED 0.8 m / 30 s hover, nominal PID, no gain sweep):
+
+```powershell
+.\fly lab_z_cf_hover --once --gains logs/lab/2026-10-27/2026-10-27-gains.json
+```
+
+This requests 200 Hz for CF height/velocity, acceleration, bias, residual and correction count;
+range arrivals/rejections; both Z loops' P/I/D/output terms; collective and the core motor,
+attitude, reference/feedback and battery signals. Actual gains/limits and camera inputs use
+the slow lane. The link probe may lower the rate: check the printed capture table for drops
+and the achieved rate. Results go to `logs/flights/<date>/<NN>_z-cf-hover/` and the referenced
+`logs/sessions/` recording. This standalone command does not launch camera fusion; keep the
+existing calibrated camera session running if using it. RC arm and normal abort gates apply.
+Keep the same gains for this diagnostic; a hover identifies symptoms, not full stability margins.
+
 ```powershell
 .\labday 2026-10-19                 # dry run each flight once, then fly them in order (8081 + camera started for you)
 .\labday 2026-10-19 --list          # plan + what is flown, then exit

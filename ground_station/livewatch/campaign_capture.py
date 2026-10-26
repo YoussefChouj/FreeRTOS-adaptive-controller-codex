@@ -221,7 +221,24 @@ DRIFT_NN: tuple[str, ...] = (
     "g_drift_nn.vx", "g_drift_nn.vy", "g_drift_nn.v_in[0]", "g_drift_nn.v_in[1]", "g_drift_nn.steps",
     "g_drift_nn.status", "g_drift_nn_clamp_mps", "g_drift_nn.alt_hold", "g_drift_nn.cyc_max",
 )
+# Dedicated vertical diagnosis: keep filter state and PID terms together on the fast lane.
+# Shared motor/attitude/setpoint signals are already in the always-on core.
+Z_CF: tuple[str, ...] = (
+    tuple(f"alt_cf.{f}" for f in ("h", "vz", "b_az", "e", "a_up", "n_corr"))
+    + ("g_alt_vz_mode", "ano_of.alt_update_cnt", "ano_of.of_alt_cm", "ano_of.of2_h",
+       "ano_of.of2_h_f2_v", "s_alt_valid_tick", "s_alt_reject_cnt", "s_alt_cf_inited")
+    + tuple(f"Ctrler.{loop}.{f}" for loop in ("Z_posPID", "Z_ratePID")
+            for f in ("Up", "Ui", "Ud", "U"))
+    + ("Throttle_out", "Throttle_th", "Acc_Z_Real")
+)
+Z_PID_GAINS: tuple[str, ...] = tuple(
+    f"Ctrler.{loop}.{f}" for loop in ("Z_posPID", "Z_ratePID")
+    for f in ("Kp", "Ki", "Kd", "UMax", "UiMax", "SumEMax")
+) + ("mrac_flags.output_injection_on",)
+
 LOG_GROUPS: Mapping[str, tuple[str, ...]] = MappingProxyType({
+    "z_cf": Z_CF,
+    "z_pid_gains": Z_PID_GAINS,
     "mrac_shadow": MRAC_SHADOW,
     "mrac_3l": MRAC_3L,
     "mrac_theta": MRAC_THETA,
