@@ -1,5 +1,5 @@
 /*
- * Host unit tests U1-U9 for the Z altitude / climb-rate complementary filter (z-vz-cf).
+ * Host unit tests U1-U13 for the Z altitude / climb-rate complementary filter (z-vz-cf).
  *
  * Build+run command:
  *   gcc -std=c99 -Wall -Wextra -Werror -Wdeclaration-after-statement -Wvla -ITASK API/tests/test_alt_cf.c -lm -o test_alt_cf && ./test_alt_cf
@@ -95,6 +95,275 @@ u8 Flight_Control_Lock;
 #define ALT_IS_ARMED() ((uint8_t)(Flight_Control_Lock ? 1U : 0U))
 #include "../TASK/StabilizerTask.h"
 #include "../TASK/StabilizerTask.c"
+
+
+/* Frozen pre-change CF implementation (main 21033c55), golden oracle for U10.
+ * Only identifier aliases isolate its state; function bodies below are unchanged. */
+static _ano_of_st legacy_ano_of;
+static MockCtrler_t legacy_Ctrler;
+#define ano_of legacy_ano_of
+#define Ctrler legacy_Ctrler
+#define s_alt_valid_tick legacy_s_alt_valid_tick
+#define s_alt_reject_cnt legacy_s_alt_reject_cnt
+#define s_alt_hist legacy_s_alt_hist
+#define s_alt_hist_n legacy_s_alt_hist_n
+#define s_alt_cnt_prev legacy_s_alt_cnt_prev
+#define s_alt_cf_inited legacy_s_alt_cf_inited
+#define s_alt_vz_mode_prev legacy_s_alt_vz_mode_prev
+#define s_alt_armed_prev legacy_s_alt_armed_prev
+#define s_alt_cf_gains legacy_s_alt_cf_gains
+#define g_alt_vz_mode legacy_g_alt_vz_mode
+#define alt_cf legacy_alt_cf
+#define Alt_CfReset legacy_Alt_CfReset
+#define Alt_UpdateFB legacy_Alt_UpdateFB
+#define Alt_TestResetAll legacy_Alt_TestResetAll
+/* P0 Finding 2 (docs/p0-verdicts.md): per-tick ToF validity flag. 1 = this tick's
+ * sample passed the band+jump gates in Update_Data. While 0 (out of range, e.g.
+ * above the 5 m band ceiling or a 0xFFFF no-reading) the Z loops hold their last
+ * valid FB and their integrators are frozen in Compute_Motor. */
+static uint8_t  s_alt_valid_tick   = 0U;
+static uint16_t s_alt_reject_cnt   = 0U;
+static uint16_t s_alt_hist[3]      = {0U, 0U, 0U};
+static uint8_t  s_alt_hist_n       = 0U;
+static uint8_t  s_alt_cnt_prev     = 0U;
+static uint8_t  s_alt_cf_inited    = 0U;
+static uint8_t  s_alt_vz_mode_prev = ALT_VZ_MODE_DEFAULT;
+static uint8_t  s_alt_armed_prev   = 0U;
+
+/* Altitude complementary filter, one row per gain set; runtime state starts at 0.
+   @k1      -        [0, 1]     height correction per ToF sample
+   @k2      1/s      [0, 50]    climb-rate correction per ToF sample, per m of error
+   @k3      1/s^2    [0, 5]     accel-bias correction per ToF sample (0 = off)
+   @AccMax  m/s^2    [0, 30]    clamp on world-up linear accel */
+#define ALT_CF_ROW(k1, k2, k3, AccMax) \
+    { k1, k2, k3, AccMax }
+
+static const AltCfGains s_alt_cf_gains[] = {
+/*             k1     k2     k3     AccMax    set */
+    ALT_CF_ROW(0.21f, 0.45f, 0.1f,  20.0f)  /* nominal  PROPOSED, S1 closed-loop sim */
+};
+
+/* Change history (newest first)
+ * nominal
+ *   2026-10-26 k1=0.21, k2=0.45, k3=0.1, AccMax=20.0: PROPOSED from S1 closed-loop sim (wn=3 rad/s, zeta=0.7 at Ts=0.05 s; poles |z|=0.894, 0.894, 0.988; dU p99 19.9x lower than FD)
+ */
+
+volatile uint8_t g_alt_vz_mode = ALT_VZ_MODE_DEFAULT;
+AltCfState_t     alt_cf;
+
+void Alt_CfReset(float h_init, uint8_t zero_bias)
+{
+	alt_cf.h = h_init;
+	alt_cf.vz = 0.0f;
+	alt_cf.e = 0.0f;
+	alt_cf.a_up = 0.0f;
+	if (zero_bias) {
+		alt_cf.b_az = 0.0f;
+		alt_cf.n_corr = 0U;
+	}
+	s_alt_cf_inited = (h_init > 0.0f) ? 1U : 0U;
+	s_alt_vz_mode_prev = g_alt_vz_mode;
+}
+
+/* Altitude sanity gate (of_alt_cm is cm, u32; clamped to u16 below). Three layers (ADR-0011 Z-gate),
+ * mirroring PX4/DJI altitude filtering:
+ *   1. median-of-3 on the raw sample — a lone spike (in-band or the 0xFFFF
+ *      no-reading) is never the median of three, so it is dropped before the
+ *      band/jump gates ever see it.
+ *   2. band gate — 5..500 cm (the 500 upper bound rejects 65535 no-reading;
+ *      the 5 cm floor rejects sub-band 1 cm dropouts).
+ *   3. rate-aware per-tick jump gate — baseline 0.05 m/tick (=10 m/s, still
+ *      ~10x this drone's ~1 m/s climb), widened by the commanded vertical rate
+ *      so legit fast ascents are not clipped: gate = 0.05 + 0.15*|Z_ratePID.Des|,
+ *      capped at 0.20 m/tick. The 20-reject (100 ms) force-resync escape is kept
+ *      so a genuine sustained level change is not locked out.
+ * Then the Z FB: Z_posPID.FB = height (m), Z_ratePID.FB = low-passed climb rate (m/s), both held
+ * on a rejected tick (s_alt_valid_tick = 0, P0 Finding 2). */
+void Alt_UpdateFB(void)
+{
+	uint8_t cnt_changed;
+	uint8_t sample_accepted = 0U;
+	uint8_t resynced = 0U;
+	uint8_t armed;
+	float a_up;
+	const AltCfGains *g = &s_alt_cf_gains[0];
+
+	cnt_changed = (uint8_t)(ano_of.alt_update_cnt != s_alt_cnt_prev);
+	s_alt_cnt_prev = ano_of.alt_update_cnt;
+
+	{
+		uint16_t a0, a1, a2, alt_med;
+
+		/* Layer 1: median-of-3. */
+		s_alt_hist[2] = s_alt_hist[1];
+		s_alt_hist[1] = s_alt_hist[0];
+		/* of_alt_cm is u32: clamp, a bare cast aliases 65536+x to x cm */
+		s_alt_hist[0] = (ano_of.of_alt_cm > 0xFFFFU) ? 0xFFFFU : (uint16_t)ano_of.of_alt_cm;
+		if (s_alt_hist_n < 3U) s_alt_hist_n++;
+		if (s_alt_hist_n >= 3U)
+		{
+			a0 = s_alt_hist[0]; a1 = s_alt_hist[1]; a2 = s_alt_hist[2];
+			alt_med = (a0 > a1) ? ((a1 > a2) ? a1 : ((a0 > a2) ? a2 : a0))
+			                    : ((a0 > a2) ? a0 : ((a1 > a2) ? a2 : a1));
+		}
+		else
+		{
+			alt_med = s_alt_hist[0];  /* warmup: not enough history yet */
+		}
+
+		/* Layer 2: band gate. */
+		if( alt_med >= ALT_BAND_MIN_CM && alt_med <= ALT_BAND_MAX_CM )
+		{
+			float h_new = alt_med*M_PER_CM*Cos_roll_01*Cos_pitch_01;
+			/* Layer 3: rate-aware jump gate. */
+			float gate = ALT_JUMP_BASE_M + ALT_JUMP_PER_VZ * fabsf(Ctrler.Z_ratePID.Des);
+			uint8_t jump_ok;
+			if (gate > ALT_JUMP_MAX_M) gate = ALT_JUMP_MAX_M;
+			jump_ok = (uint8_t)(fabsf(h_new - ano_of.of2_raw_h) < gate);
+			if( jump_ok || s_alt_reject_cnt >= ALT_RESYNC_REJECTS )
+			{
+				ano_of.of2_raw_h = h_new;
+				s_alt_reject_cnt = 0U;
+				s_alt_valid_tick = 1U;   /* P0 Finding 2: sample accepted this tick */
+				if (jump_ok) {
+					if (cnt_changed) sample_accepted = 1U;
+				} else {
+					resynced = 1U;
+				}
+			}
+			else
+			{
+				s_alt_reject_cnt++;
+				s_alt_valid_tick = 0U;   /* P0 Finding 2: jump-rejected - hold */
+			}
+		}
+		else
+		{
+			s_alt_valid_tick = 0U;   /* P0 Finding 2: out of band (>5 m / 0xFFFF) - hold */
+		}
+	}
+
+	ano_of.of2_h =ano_of.of2_raw_h;
+	if (s_alt_valid_tick) { /* P0 Finding 2: valid sample - else hold last FB */
+	                        /* and never publish the fake-zero d(frozen h)/dt.  */
+		ano_of.of2_h_v = (ano_of.of2_h - ano_of.of2_last_h )/(STAB_DT_S);  /* one tick, 5 ms */
+		ano_of.of2_last_h = ano_of.of2_h;
+		ano_of.of2_h_f2_v  = ano_of.of2_h_f2_v  *ALT_RATE_LPF_OLD +ano_of.of2_h_v *ALT_RATE_LPF_NEW;
+
+		Ctrler.Z_posPID.FB =  ano_of.of2_h;
+		Ctrler.Z_ratePID.FB = ano_of.of2_h_f2_v ;
+	}
+
+	armed = ALT_IS_ARMED();
+	if (g_alt_vz_mode > ALT_VZ_MODE_CF) {
+		g_alt_vz_mode = s_alt_vz_mode_prev;
+	}
+	if (armed && g_alt_vz_mode != s_alt_vz_mode_prev) {
+		g_alt_vz_mode = s_alt_vz_mode_prev;
+	} else if (!armed && g_alt_vz_mode != s_alt_vz_mode_prev) {
+		if (s_alt_vz_mode_prev == ALT_VZ_MODE_FD && g_alt_vz_mode == ALT_VZ_MODE_CF) {
+			Alt_CfReset(ano_of.of2_h, 0U);
+		}
+		s_alt_vz_mode_prev = g_alt_vz_mode;
+	}
+	if (armed != s_alt_armed_prev) {
+		Alt_CfReset(ano_of.of2_h, 0U);
+		/* 2026-10-26 smoke hover: every arm waits for a real range reading. */
+		if (armed) s_alt_cf_inited = 0U;
+		s_alt_armed_prev = armed;
+	}
+
+	a_up = ALT_CF_ACC_SIGN * (Lin_Acc_X_body * Gravity_Body_X
+	       + Lin_Acc_Y_body * Gravity_Body_Y
+	       + Lin_Acc_Z_body * Gravity_Body_Z) * MG_TO_MPS2 - alt_cf.b_az;
+	if (a_up > g->AccMax) a_up = g->AccMax;
+	else if (a_up < -g->AccMax) a_up = -g->AccMax;
+	alt_cf.a_up = a_up;
+
+	if (!armed) {
+		/* Disarmed = on the ground: pin h to the rangefinder, no velocity, no bias update.
+		 * Free integration on the pad (no valid sample) drifted h to 110 m on 2026-10-26, and the
+		 * camera tracker, which projects pixels at this height, rejected every fix. */
+		alt_cf.h = ano_of.of2_h;
+		alt_cf.vz = 0.0f;
+		alt_cf.e = 0.0f;
+	} else if (!s_alt_cf_inited && sample_accepted) {
+		alt_cf.h = ano_of.of2_h;
+		alt_cf.vz = 0.0f;
+		alt_cf.e = 0.0f;
+		s_alt_cf_inited = 1U;
+		alt_cf.n_corr++;
+	} else if (!s_alt_cf_inited) {
+		/* 2026-10-26 smoke hover: hold armed-pad height until range initialization. */
+		alt_cf.h = ano_of.of2_h;
+		alt_cf.vz = 0.0f;
+		alt_cf.e = 0.0f;
+		if (resynced) s_alt_cf_inited = 1U;
+	} else {
+		alt_cf.h  += alt_cf.vz * STAB_DT_S + 0.5f * alt_cf.a_up * STAB_DT_S * STAB_DT_S;
+		alt_cf.vz += alt_cf.a_up * STAB_DT_S;
+		if (sample_accepted) {
+			alt_cf.e     = ano_of.of2_h - alt_cf.h;
+			alt_cf.h    += g->k1 * alt_cf.e;
+			alt_cf.vz   += g->k2 * alt_cf.e;
+			alt_cf.b_az -= g->k3 * alt_cf.e;
+			if (alt_cf.b_az > ALT_CF_BAZ_MAX) alt_cf.b_az = ALT_CF_BAZ_MAX;
+			else if (alt_cf.b_az < -ALT_CF_BAZ_MAX) alt_cf.b_az = -ALT_CF_BAZ_MAX;
+			alt_cf.n_corr++;
+		} else if (resynced) {
+			alt_cf.e = ano_of.of2_h - alt_cf.h;
+			alt_cf.h = ano_of.of2_h;
+			s_alt_cf_inited = 1U;
+		}
+	}
+
+	if (g_alt_vz_mode == ALT_VZ_MODE_CF) {
+		Ctrler.Z_posPID.FB  = alt_cf.h;
+		Ctrler.Z_ratePID.FB = alt_cf.vz;
+	}
+}
+
+#ifdef ALT_CF_HOST_TEST
+void Alt_TestResetAll(void)
+{
+	int i;
+	ano_of.of_alt_cm = 0U;
+	ano_of.alt_update_cnt = 0U;
+	ano_of.of2_raw_h = 0.0f;
+	ano_of.of2_h = 0.0f;
+	ano_of.of2_h_v = 0.0f;
+	ano_of.of2_h_f2_v = 0.0f;
+	ano_of.of2_last_h = 0.0f;
+	s_alt_valid_tick = 0U;
+	s_alt_reject_cnt = 0U;
+	for (i = 0; i < 3; i++) s_alt_hist[i] = 0U;
+	s_alt_hist_n = 0U;
+	s_alt_cnt_prev = 0U;
+	s_alt_armed_prev = 0U;
+	g_alt_vz_mode = ALT_VZ_MODE_DEFAULT;
+	s_alt_vz_mode_prev = ALT_VZ_MODE_DEFAULT;
+	s_alt_cf_inited = 0U;
+	Alt_CfReset(0.0f, 1U);
+	s_alt_cf_inited = 0U;
+}
+#endif
+#undef ano_of
+#undef Ctrler
+#undef s_alt_valid_tick
+#undef s_alt_reject_cnt
+#undef s_alt_hist
+#undef s_alt_hist_n
+#undef s_alt_cnt_prev
+#undef s_alt_cf_inited
+#undef s_alt_vz_mode_prev
+#undef s_alt_armed_prev
+#undef s_alt_cf_gains
+#undef g_alt_vz_mode
+#undef alt_cf
+#undef Alt_CfReset
+#undef Alt_UpdateFB
+#undef Alt_TestResetAll
+
 
 static int g_fail_count = 0;
 static int g_pass_count = 0;
@@ -1005,6 +1274,168 @@ static void test_u9_rearm_pad_hold(void)
     test_armed_pad_hold(0.05f, "U9", 0);
 }
 
+
+/* Synthetic tests below model the estimator and accepted range cadence, not airframe dynamics. */
+static void start_cf_rate_mode(uint8_t mode)
+{
+    reset_env(ALT_VZ_MODE_CF, 100U);
+    Flight_Control_Lock = 0U;
+    Alt_UpdateFB();
+    g_alt_cf_rate_mode = mode;
+    Flight_Control_Lock = 1U;
+    ano_of.alt_update_cnt++;
+    Alt_UpdateFB();
+    check_cond("CF rate mode latches at arm", alt_cf.mode == mode);
+    check_cond("CF range initialized", s_alt_cf_inited == 1U);
+}
+
+static void copy_legacy_state(void)
+{
+    legacy_Alt_TestResetAll();
+    legacy_ano_of = ano_of;
+    legacy_Ctrler = Ctrler;
+    legacy_s_alt_valid_tick = s_alt_valid_tick;
+    legacy_s_alt_reject_cnt = s_alt_reject_cnt;
+    memcpy(legacy_s_alt_hist, s_alt_hist, sizeof(s_alt_hist));
+    legacy_s_alt_hist_n = s_alt_hist_n;
+    legacy_s_alt_cnt_prev = s_alt_cnt_prev;
+    legacy_s_alt_cf_inited = s_alt_cf_inited;
+    legacy_s_alt_vz_mode_prev = s_alt_vz_mode_prev;
+    legacy_s_alt_armed_prev = s_alt_armed_prev;
+    legacy_g_alt_vz_mode = g_alt_vz_mode;
+    legacy_alt_cf = alt_cf;
+}
+
+static void synthetic_input(int tick, int *phase, int rate)
+{
+    float time_s = (float)tick * STAB_DT_S;
+    float omega = 2.0f * 3.14159265358979323846f * 0.7f;
+    float noise = 0.003f * sinf(17.0f * time_s) + 0.001f * cosf(43.0f * time_s);
+    float height = 1.0f + 0.06f * sinf(omega * time_s) + noise;
+    *phase += rate;
+    if (*phase >= 200) {
+        *phase -= 200;
+        ano_of.alt_update_cnt++;
+        ano_of.of_alt_cm = (uint32_t)(height * 100.0f + 0.5f);
+    }
+    Lin_Acc_Z_body = (-0.06f * omega * omega * sinf(omega * time_s) + 0.08f)
+                    / (ALT_CF_ACC_SIGN * MG_TO_MPS2);
+}
+
+static void test_u10_legacy_golden(void)
+{
+    int tick, phase = 0;
+    int matches = 1;
+    start_cf_rate_mode(ALT_CF_RATE_LEGACY);
+    copy_legacy_state();
+    for (tick = 1; tick <= 6000; tick++) {
+        synthetic_input(tick, &phase, 70);
+        legacy_ano_of.of_alt_cm = ano_of.of_alt_cm;
+        legacy_ano_of.alt_update_cnt = ano_of.alt_update_cnt;
+        Alt_UpdateFB();
+        legacy_Alt_UpdateFB();
+        if (memcmp(&alt_cf.h, &legacy_alt_cf.h, sizeof(float)) != 0 ||
+            memcmp(&alt_cf.vz, &legacy_alt_cf.vz, sizeof(float)) != 0 ||
+            memcmp(&alt_cf.b_az, &legacy_alt_cf.b_az, sizeof(float)) != 0) matches = 0;
+    }
+    check_cond("U10: legacy h/vz/b_az bit-identical to frozen pre-change code", matches);
+    printf("U10: 6000 ticks, 30 s, 70 Hz noisy 0.7 Hz motion: bit-identical=%d\n", matches);
+}
+
+static void test_u11_design_cadence(void)
+{
+    static float baseline[6000][3];
+    int mode, tick, phase;
+    float max_error = 0.0f;
+    for (mode = 0; mode <= 1; mode++) {
+        start_cf_rate_mode((uint8_t)mode);
+        phase = 0;
+        for (tick = 1; tick <= 6000; tick++) {
+            float dh, dv, db;
+            synthetic_input(tick, &phase, 20);
+            Alt_UpdateFB();
+            if (!mode) {
+                baseline[tick - 1][0] = alt_cf.h;
+                baseline[tick - 1][1] = alt_cf.vz;
+                baseline[tick - 1][2] = alt_cf.b_az;
+            } else {
+                dh = fabsf(alt_cf.h - baseline[tick - 1][0]);
+                dv = fabsf(alt_cf.vz - baseline[tick - 1][1]);
+                db = fabsf(alt_cf.b_az - baseline[tick - 1][2]);
+                if (dh > max_error) max_error = dh;
+                if (dv > max_error) max_error = dv;
+                if (db > max_error) max_error = db;
+            }
+        }
+    }
+    check_cond("U11: 20 Hz correction cadence mode parity within 1e-6", max_error <= 1e-6f);
+    printf("U11: max h/vz/b_az difference at 20 Hz = %.9g\n", (double)max_error);
+}
+
+static float settling_37(uint8_t mode, int rate)
+{
+    int tick, phase = 0;
+    start_cf_rate_mode(mode);
+    alt_cf.h = 1.10f;
+    for (tick = 1; tick < 2000; tick++) {
+        phase += rate;
+        if (phase >= 200) {
+            phase -= 200;
+            ano_of.alt_update_cnt++;
+        }
+        Alt_UpdateFB();
+        if (fabsf(alt_cf.h - 1.0f) <= 0.037f) return (float)tick * STAB_DT_S;
+    }
+    return 10.0f;
+}
+
+static void test_u12_rate_independence(void)
+{
+    float scaled20 = settling_37(ALT_CF_RATE_SCALED, 20);
+    float scaled70 = settling_37(ALT_CF_RATE_SCALED, 70);
+    float legacy20 = settling_37(ALT_CF_RATE_LEGACY, 20);
+    float legacy70 = settling_37(ALT_CF_RATE_LEGACY, 70);
+    float relative = fabsf(scaled20 - scaled70) / scaled20;
+    check_cond("U12: mode 1 settling differs by <=15 percent", relative <= 0.15f);
+    check_cond("U12: legacy settling differs by >2x (sensitivity control)", legacy20 > 2.0f * legacy70);
+    printf("U12: 37%% height-error time: scaled20=%.3f scaled70=%.3f relative=%.4f; legacy20=%.3f legacy70=%.3f ratio=%.4f\n",
+           (double)scaled20, (double)scaled70, (double)relative,
+           (double)legacy20, (double)legacy70, (double)(legacy20 / legacy70));
+}
+
+static void test_u13_next_arm_latch(void)
+{
+    int tick, phase = 0;
+    int same = 1;
+    start_cf_rate_mode(ALT_CF_RATE_LEGACY);
+    copy_legacy_state();
+    g_alt_cf_rate_mode = ALT_CF_RATE_SCALED;
+    for (tick = 1; tick <= 400; tick++) {
+        synthetic_input(tick, &phase, 70);
+        legacy_ano_of.of_alt_cm = ano_of.of_alt_cm;
+        legacy_ano_of.alt_update_cnt = ano_of.alt_update_cnt;
+        Alt_UpdateFB();
+        legacy_Alt_UpdateFB();
+        if (alt_cf.mode != ALT_CF_RATE_LEGACY || alt_cf.h != legacy_alt_cf.h ||
+            alt_cf.vz != legacy_alt_cf.vz || alt_cf.b_az != legacy_alt_cf.b_az) same = 0;
+    }
+    check_cond("U13: armed mode write leaves legacy trajectory unchanged", same);
+    check_cond("U13: pending write retained for next arm", g_alt_cf_rate_mode == ALT_CF_RATE_SCALED);
+    Flight_Control_Lock = 0U;
+    Alt_UpdateFB();
+    check_cond("U13: disarm does not latch pending mode", alt_cf.mode == ALT_CF_RATE_LEGACY);
+    Flight_Control_Lock = 1U;
+    ano_of.alt_update_cnt++;
+    Alt_UpdateFB();
+    check_cond("U13: next arm applies pending mode", alt_cf.mode == ALT_CF_RATE_SCALED);
+    for (tick = 0; tick < 3; tick++) {
+        ano_of.alt_update_cnt++;
+        Alt_UpdateFB();
+    }
+    check_cond("U13: scaled interval uses actual ticks", fabsf(alt_cf.dt_c - STAB_DT_S) < 1e-7f);
+    printf("U13: armed legacy trajectory unchanged=%d; pending mode applied only on next arm\n", same);
+}
+
 int main(void)
 {
     test_u1_fd_bit_exact_on_213634_trace();
@@ -1016,11 +1447,15 @@ int main(void)
     test_u7_disarmed_hold();
     test_u8_first_arm_pad_hold();
     test_u9_rearm_pad_hold();
+    test_u10_legacy_golden();
+    test_u11_design_cadence();
+    test_u12_rate_independence();
+    test_u13_next_arm_latch();
 
     if (g_fail_count != 0) {
         printf("FAILED: %d checks failed (%d passed)\n", g_fail_count, g_pass_count);
         return 1;
     }
-    printf("ALL 9 TESTS PASSED (U1-U9) (%d checks)\n", g_pass_count);
+    printf("ALL 13 TESTS PASSED (U1-U13) (%d checks)\n", g_pass_count);
     return 0;
 }
