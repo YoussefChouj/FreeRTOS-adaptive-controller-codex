@@ -408,7 +408,8 @@ def plan_capture(
     that has it (fast before slow). The fast lane takes the budget first, the slow lane the slots and bytes left.
     Returns ``{"rate_hz", "requested_hz", "groups", "slow_hz", "slow", "slots", "dropped"}``; the rates are what
     the drone emits after the Send_Task divider (``slow_hz`` is None with no slow slot). Raises CaptureError on
-    an invalid log_plan.
+    an invalid log_plan. CF replay is special: one direct slot at the full prediction
+    rate, with slow fields promoted and actual typed budget validation before sending.
     """
     plan = {**DEFAULT_LOG_PLAN, **(log_plan or {})}
     problems = check_log_plan(plan)
@@ -417,23 +418,21 @@ def plan_capture(
     requested = float(plan["rate_hz"])
     rate = min(requested, float(max_rate_hz)) if max_rate_hz else requested
     groups, slow = list(plan["groups"]), list(plan["slow"])
+    if "z_cf" in groups:
+        # Direct single-slot capture: every diagnostic shares one firmware clock.
+        # Scalar count is not wire-range count: the bridge coalesces adjacent
+        # DWARF ranges. Validate actual typed bytes before sending, never trim.
+        if requested != 200.0 or rate != 200.0:
+            raise CaptureError("CF single-slot replay requires PROPOSED 200 Hz; refusing a capped plan")
+        variables = list(dict.fromkeys((*Z_CF_FAST, *CAMPAIGN_SET["needed"],
+                         *(v for g in (*groups, *slow) for v in LOG_GROUPS[g]))))
+        return {"rate_hz": rate, "requested_hz": requested, "groups": groups,
+                "slow_hz": rate if slow else None, "slow": slow,
+                "slots": [{"slot": 0, "hz": rate, "vars": variables}], "dropped": [],
+                "single_slot": True, "typed_budget_pending": True, "budget_bps": budget_bps}
     needed = set(CAMPAIGN_SET["needed"])
     fast_vars = [v for v in dict.fromkeys(v for g in groups for v in LOG_GROUPS[g]) if v not in needed]
-    if "z_cf" in groups:
-        # Reserve one coherent input frame for replay. Fill its spare capacity with
-        # the existing Z diagnostics rather than duplicating clocks across slots.
-        dedicated = list(Z_CF_FAST)
-        remaining = [v for v in (*CAMPAIGN_SET["needed"], *fast_vars) if v not in dedicated]
-        divider = max(1, int(SEND_TASK_HZ / rate))
-        slots = [{"slot": 0, "hz": SEND_TASK_HZ / divider, "vars": dedicated}]
-        slots += [{"slot": i + 1, "hz": SEND_TASK_HZ / divider,
-                   "vars": remaining[start:start + VARS_PER_SLOT]}
-                  for i, start in enumerate(range(0, len(remaining), VARS_PER_SLOT))]
-        if len(dedicated) > VARS_PER_SLOT or len(slots) > MAX_SLOTS or plan_bps(slots) > budget_bps:
-            raise CaptureError("z_cf fast capture exceeds slot/byte budget; no signals were removed or slowed")
-        dropped = []
-    else:
-        slots, dropped = slots_for(rate, budget_bps=budget_bps, optional=fast_vars)
+    slots, dropped = slots_for(rate, budget_bps=budget_bps, optional=fast_vars)
     fast_hz = slots[0]["hz"]
     recorded = {v for s in slots for v in s["vars"]}
     slow_vars = [v for v in dict.fromkeys(v for g in slow for v in LOG_GROUPS[g]) if v not in recorded]
@@ -442,8 +441,6 @@ def plan_capture(
         slow_slots, slow_dropped = _slow_slots(slow_vars, min(float(plan["slow_hz"]), fast_hz), len(slots),
                                                plan_bps(slots), budget_bps)
         dropped = [v for v in dropped if v not in slow_vars] + slow_dropped
-    if "z_cf" in groups and dropped:
-        raise CaptureError("z_cf capture exceeds the remaining slow-slot budget; queued: " + ", ".join(dropped))
     return {"rate_hz": fast_hz, "requested_hz": requested, "groups": groups,
             "slow_hz": slow_slots[0]["hz"] if slow_slots else None, "slow": slow, "slots": slots + slow_slots,
             "dropped": dropped}
@@ -465,9 +462,27 @@ def log_plan_table(plan: Mapping[str, Any]) -> str:
         rate = "-" if lane_hz is None else f"{lane_hz:g}"
         lines.append(f"| {name} | {kept}/{len(group_vars)} | {rate} | {'; '.join(notes)} |")
     capped = f", requested {plan['requested_hz']:g} Hz" if plan["requested_hz"] != hz else ""
-    lines.append(f"{len(plan['slots'])} slot(s){capped}, {plan_bps(plan['slots']):.0f} of "
-                 f"{PLANNING_BUDGET_BPS:.0f} B/s planning budget")
+    if plan.get("typed_budget_pending"):
+        lines.append("1 direct single slot; actual DWARF byte-budget validation required before subscribe")
+    else:
+        lines.append(f"{len(plan['slots'])} slot(s){capped}, {plan_bps(plan['slots']):.0f} of "
+                     f"{PLANNING_BUDGET_BPS:.0f} B/s planning budget")
     return "\n".join(lines)
+
+
+def validate_cf_single_preview(plan: Mapping[str, Any], preview: Mapping[str, Any]) -> None:
+    """Fail closed on missing fields, mode/clock mismatch or actual wire budget."""
+    wanted = plan["slots"][0]["vars"]
+    if (preview.get("unresolved") or preview.get("var_count") != len(wanted)
+            or set(preview.get("ranges", ())) != set(wanted)):
+        raise CaptureError("CF single-slot has unresolved/missing fields; no variables may be removed")
+    payload = preview.get("payload_bytes", 0)
+    if preview.get("expected_rate_hz") != 200.0 or payload <= 0 or payload > STREAM_MAX_BYTES:
+        raise CaptureError("CF single-slot requires SUBSCRIBE_ONLY 200 Hz and a valid typed payload")
+    bps = (FRAME_OVERHEAD + payload) * 200.0
+    if bps > plan["budget_bps"]:
+        raise CaptureError(f"CF single-slot needs {bps:.0f} B/s, budget {plan['budget_bps']:.0f}; "
+                           "no variables were removed or slowed")
 
 
 def subscribe_steps(plan: Mapping[str, Any]) -> list[dict[str, Any]]:

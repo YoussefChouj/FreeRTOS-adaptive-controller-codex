@@ -384,10 +384,13 @@ def record_only(base, campaign, rate_hz=None, label="handheld", settle_s=3.0, wa
     if rate_hz:
         log_plan["rate_hz"] = rate_hz
     plan = plan_capture(log_plan or None)
+    if plan.get("single_slot"):
+        return _record_cf_single(base, plan, label, settle_s, wait)
     print(log_plan_table(plan))
     steps = subscribe_steps(plan)
+    first = steps[0]["args"]["slot"] if steps else 0
     for args in [s["args"] for s in steps] + [{"slot": k, "divider": 0, "ranges": []}
-                                               for k in range(len(steps), MAX_SLOTS)]:
+                                               for k in range(first + len(steps), MAX_SLOTS)]:
         code, res = call(base, "/subscribe", args)
         if code != 202:
             sys.exit(f"subscribe slot {args['slot']} refused ({code}): {res.get('error', res)}")
@@ -413,6 +416,89 @@ def record_only(base, campaign, rate_hz=None, label="handheld", settle_s=3.0, wa
     for line in link_lines(before, after, [s["args"]["slot"] for s in steps]):
         print(line)
     return str(st.get("session_dir") or "")
+
+
+def _record_cf_single(base, plan, label, settle_s, wait):
+    """Verify the direct CF frame on the ground; always restore the arm/status frame."""
+    import numpy as np
+    from ground_station.comm.wifi_bridge import DASHBOARD_FRAME_A_VARS, WifiBridge
+    from ground_station.lab.cf_vz_check import read_fast_slot
+    from ground_station.livewatch.campaign_capture import (
+        MAX_SLOTS, log_plan_table, subscribe_steps, validate_cf_single_preview,
+    )
+
+    code, preflight = call(base, "/api/campaign/preflight")
+    rows = {r.get("name"): r for r in preflight.get("checks", [])}
+    arm, runner = rows.get("arm_state", {}), rows.get("runner", {})
+    if code != 200 or arm.get("pass") is not True or not str(arm.get("value", "")).startswith("disarmed"):
+        sys.exit("CF ground capture requires confirmed disarmed telemetry")
+    if runner.get("pass") is not True or str(runner.get("value", "")).startswith("paused"):
+        sys.exit("CF ground capture requires an idle campaign runner")
+    code, recording = call(base, "/api/recording")
+    if code != 200 or recording.get("recording") is not False:
+        sys.exit("Stop the existing recording before the CF ground capture")
+    args = subscribe_steps(plan)[0]["args"]
+    code, preview = call(base, "/subscribe/preview", args)
+    if code != 200:
+        sys.exit(f"CF single-slot preview refused ({code}): {preview}")
+    validate_cf_single_preview(plan, preview)
+    print(log_plan_table(plan))
+    print(f"Typed frame: {preview['payload_bytes']} payload bytes; calculated "
+          f"{preview['projected_bps']} B/s. Direct slot 0 only.")
+    attempted_recording = False
+    session = ""
+    try:
+        for sub in ([{"slot": k, "divider": 0, "ranges": []} for k in range(1, MAX_SLOTS)] + [args]):
+            code, result = call(base, "/subscribe", sub)
+            if code != 202:
+                sys.exit(f"subscribe slot {sub['slot']} refused ({code}): {result}")
+        time.sleep(settle_s)
+        before = slot_counts(base)
+        attempted_recording = True
+        code, state = call(base, "/api/recording/start", {
+            "requested_by": "operator", "label": label, "reason": "disarmed CF single-slot cadence check",
+            "notes": "PROPOSED 200 Hz, direct slot 0; all CF/core/gain/camera variables in one frame"})
+        if code != 202 or not state.get("recording") or not state.get("session_dir"):
+            sys.exit(f"recording did not start ({code}): {state}")
+        session = str(state["session_dir"])
+        print(f"RECORDING -> {session}")
+        try:
+            wait("Keep DISARMED; record PROPOSED 10 seconds. Enter or Ctrl+C stops: ")
+        except (KeyboardInterrupt, EOFError):
+            print()
+        after = slot_counts(base)
+        for line in link_lines(before, after, [0]):
+            print(line)
+    finally:
+        # Restore even when subscribing, recording or waiting fails. Never hide a
+        # failed cleanup behind a successful cadence message.
+        failed = []
+        if attempted_recording:
+            try:
+                code, state = call(base, "/api/recording/stop", {})
+                if code not in (200, 202) or state.get("recording") is not False:
+                    failed.append(f"recording stop: {code} {state}")
+            except Exception as exc:
+                failed.append(f"recording stop: {exc}")
+        status_vars = [v[0] if isinstance(v, tuple) else v for v in DASHBOARD_FRAME_A_VARS]
+        try:
+            code, state = call(base, "/subscribe", {
+                "slot": 0, "divider": WifiBridge.LAB_SLOT0_DIVIDER, "ranges": status_vars})
+            if code != 202:
+                failed.append(f"status restore: {code} {state}")
+        except Exception as exc:
+            failed.append(f"status restore: {exc}")
+        if failed:
+            raise RuntimeError("CF cleanup failed: " + "; ".join(failed))
+    t, _, slot = read_fast_slot(Path(session))
+    gaps = int(np.sum(np.abs(np.diff(t) - 0.005) >= 0.0005))
+    span = t[-1] - t[0]
+    hz = (len(t) - 1) / span
+    print(f"CF ground capture: slot {slot}, {hz:.2f} Hz, {gaps} non-5-ms intervals; {session}")
+    if slot != 0 or span < 8.0 or gaps or abs(hz - 200.0) > 0.1:
+        sys.exit("CF capture NOT READY: require PROPOSED >=8 s of consecutive 5 ms snapshots; do not fly yet")
+    print("CF capture cadence PASS (armed-flight replay remains a separate check)")
+    return session
 
 
 def resolve_campaign(arg, pack, rate=None, launch_dir=None, fly_dir=None):

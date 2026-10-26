@@ -26,7 +26,7 @@ from typing import Any, Callable
 from ground_station.analysis.battery_model import PackRegistry
 from ground_station.livewatch.campaign_capture import (
     ATTITUDE, KF_HEALTH, MAX_SLOTS, MOTORS, POSITION_AXES, RATE_LOOPS, WFB_STATUS_FIELDS, plan_capture,
-    subscribe_steps,
+    subscribe_steps, validate_cf_single_preview,
 )
 from ground_station.platform.wfb_commands import CMD_PRIM, CMD_TRAJ, PrimIdx, WfbClient
 from ground_station.service.abort_monitor import AbortLimits, AbortMonitor, AbortSample
@@ -514,10 +514,44 @@ LAB_STATUS_HZ = 10.0       # = 100 Hz / WifiBridge.LAB_SLOT0_DIVIDER
 
 
 def keeps_full_rate(exp: Any) -> bool:
-    """An excite (sysid) card keeps its own plan rate in lab mode: 25 Hz is under Nyquist for its 15 Hz top line
-    (operator 10-24). Its command replies ride on the longer sysid wait + resends (ac41cce0) instead of the cap."""
+    """SysID excitation and per-tick CF diagnostics cannot use the ordinary lab cap."""
+    if "z_cf" in (getattr(exp, "log_plan", None) or {}).get("groups", ()):
+        return True
     steps = getattr(getattr(exp, "scenario", None), "steps", None) or ()
     return any(getattr(st, "kind", "") == "excite" for st in steps)
+
+
+def check_cf_capture_rate(bridge: Any, slots: list[int], window_s: float = 2.0) -> None:
+    """PROPOSED ground gate: >=190 received Hz and zero sequence drops per fast slot.
+
+    This detects a cap/overloaded link before takeoff; a saved capture must still
+    prove consecutive firmware prediction ticks for faithful offline replay.
+    """
+    lock = getattr(bridge, "_stream_lock", None)
+    stats = getattr(bridge, "_stream_stats", None)
+    if not slots or lock is None or not isinstance(stats, dict):
+        raise RuntimeError("CF capture rate cannot be verified: no stream counters")
+
+    def counts():
+        with lock:
+            return {s: (stats.get(s, {}).get("received", 0),
+                        stats.get(s, {}).get("dropped", 0)) for s in slots}
+
+    before = counts()
+    start = time.monotonic()
+    time.sleep(window_s)
+    elapsed = time.monotonic() - start
+    after = counts()
+    problems = []
+    for slot in slots:
+        received = after[slot][0] - before[slot][0]
+        dropped = after[slot][1] - before[slot][1]
+        hz = received / elapsed
+        if hz < 190.0 or dropped != 0:
+            problems.append(f"slot {slot}: {hz:.1f} Hz, {dropped} drops")
+    if problems:
+        raise RuntimeError("CF capture not ready; no takeoff: " + "; ".join(problems)
+                           + ". Required PROPOSED >=190 Hz with zero drops; check the ground capture.")
 
 
 def live_capture_hooks(service: Any, controller: str = "pid", max_rate_hz: float | None = None,
@@ -531,10 +565,11 @@ def live_capture_hooks(service: Any, controller: str = "pid", max_rate_hz: float
     """
     applied: dict[str, Any] = {"steps": None, "slots": MAX_SLOTS}
 
-    def begin(exp: Any, flight_id: str) -> str:
+    def begin_impl(exp: Any, flight_id: str) -> str:
         plan = plan_capture(exp.log_plan or None, max_rate_hz=None if keeps_full_rate(exp) else max_rate_hz)
         steps = subscribe_steps(plan)
-        if len(steps) < MAX_SLOTS:   # leave slot 0 to the bridge's dashboard auto-subscribe (its watchdog re-sends
+        single_cf = bool(plan.get("single_slot"))
+        if not single_cf and len(steps) < MAX_SLOTS:   # leave slot 0 to the bridge's dashboard auto-subscribe (its watchdog re-sends
             for step in steps:       # the dashboard layout there; xyz-f1 2026-10-13 died "slot 0: no schema yet")
                 step["args"]["slot"] += 1
         first = steps[0]["args"]["slot"] if steps else 0
@@ -542,12 +577,19 @@ def live_capture_hooks(service: Any, controller: str = "pid", max_rate_hz: float
             bridge = getattr(service, "bridge", None)
             if bridge is None:
                 raise RuntimeError("bridge unavailable: cannot apply the log plan")
+            if single_cf:
+                validate_cf_single_preview(plan, bridge.subscribe_preview(**steps[0]["args"]))
+                # Stop competing streams before starting the full single frame.
+                for slot in range(1, MAX_SLOTS):
+                    bridge.subscribe_slot(slot=slot, divider=0, ranges=[])
             for step in steps:
                 bridge.subscribe_slot(**step["args"])
-            for slot in range(first + len(steps), applied["slots"]):
+            for slot in range(first + len(steps), 1 if single_cf else applied["slots"]):
                 bridge.subscribe_slot(slot=slot, divider=0, ranges=[])
-            applied.update(steps=steps, slots=first + len(steps))
+            applied.update(steps=steps, slots=first + len(steps), single_cf=single_cf)
         wait_streams_named(getattr(service, "bridge", None), [step["args"]["slot"] for step in steps])
+        if "z_cf" in plan["groups"]:
+            check_cf_capture_rate(service.bridge, [0])
         service.stop_recording()
         st = service.start_recording(
             label=f"{flight_id}_{exp.name}", requested_by="agent:campaign",
@@ -557,10 +599,30 @@ def live_capture_hooks(service: Any, controller: str = "pid", max_rate_hz: float
             raise RuntimeError("recording did not start (recorder disabled?)")
         return str(st.get("session_dir") or "")
 
+    def begin(exp: Any, flight_id: str) -> str:
+        try:
+            return begin_impl(exp, flight_id)
+        except BaseException:
+            if "z_cf" in (getattr(exp, "log_plan", None) or {}).get("groups", ()):
+                bridge = getattr(service, "bridge", None)
+                if bridge is not None:
+                    try:
+                        service.stop_recording()
+                    finally:
+                        bridge.restore_lab_slot0()
+                applied["steps"] = None
+            raise
+
     def end(token: Any) -> str:
-        st = service.stop_recording()
+        try:
+            st = service.stop_recording()
+        finally:
+            restore_plan()
+        return str(st.get("session_dir") or token or "")
+
+    def restore_plan() -> None:
         bridge = getattr(service, "bridge", None)
-        if getattr(bridge, "lab_mode", False) and applied["steps"]:
+        if (getattr(bridge, "lab_mode", False) or applied.get("single_cf")) and applied["steps"]:
             # lab mode: plan slots off on the ground, so the next takeoff's writes get their replies. Slot 0 goes
             # back to the lab sidebar frame instead: it carries the arm flag the next flight waits on (soak 10-19:
             # a 4-slot plan used slot 0, and stopping it left the next flight on NO ARM SIGNAL)
@@ -570,7 +632,6 @@ def live_capture_hooks(service: Any, controller: str = "pid", max_rate_hz: float
                 else:
                     bridge.subscribe_slot(slot=step["args"]["slot"], divider=0, ranges=[])
             applied["steps"] = None
-        return str(st.get("session_dir") or token or "")
 
     return begin, end
 

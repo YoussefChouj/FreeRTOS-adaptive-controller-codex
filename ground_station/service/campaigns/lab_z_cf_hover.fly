@@ -1,6 +1,6 @@
 # PROPOSED diagnostic hover: 0.8 m, 30 s. No excitation and no gain/filter changes.
-# Dedicated coherent CF slot requests PROPOSED 200 Hz; fly probes the usable link rate before takeoff.
-# Retains every prior diagnostic/core signal at its prior lane rate; failed budget plans stop with a queue.
+# Direct slot 0 requests PROPOSED 200 Hz; slots 1-3 are stopped and actual rate gates takeoff.
+# CF capture promotes slow groups into the same frame; typed budget failure stops without trimming.
 # Both Z loops stay nominal PID; use the saved day gains to reproduce the current candidate.
 campaign z-cf-hover
 rate 200

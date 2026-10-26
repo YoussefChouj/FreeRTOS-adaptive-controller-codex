@@ -4,6 +4,9 @@ import json
 import time
 from pathlib import Path
 
+import numpy as np
+import pytest
+
 from ground_station.livewatch.campaign_capture import MAX_SLOTS
 from ground_station.service import campaign_fly
 
@@ -75,6 +78,90 @@ def test_record_only_stops_on_ctrl_c(tmp_path, monkeypatch):
     monkeypatch.setattr(campaign_fly.time, "sleep", lambda s: None)
     campaign_fly.record_only("http://h", str(path), wait=interrupt)
     assert routes[-1] == "/api/recording/stop"
+
+
+@pytest.fixture
+def cf_ground(tmp_path, monkeypatch):
+    from ground_station.lab import cf_vz_check
+    path = tmp_path / "cf.yaml"
+    path.write_text(YAML.replace("rate_hz: 50, groups: [estimator_truth, optical_flow]",
+                                 "rate_hz: 200, groups: [z_cf]"), encoding="utf-8")
+    calls = []
+    options = {"arm": "disarmed", "runner": True, "start": True, "subscribe_fail": False}
+    def fake_call(base, route, body=None, timeout=10):
+        calls.append((route, body))
+        if route == "/api/campaign/preflight":
+            return 200, {"checks": [{"name": "arm_state", "pass": options["arm"] == "disarmed",
+                                     "value": options["arm"]},
+                                    {"name": "runner", "pass": options["runner"], "value": "idle"}]}
+        if route == "/api/recording":
+            return 200, {"recording": False}
+        if route == "/subscribe/preview":
+            return 200, {**body, "var_count": len(body["ranges"]), "unresolved": [],
+                         "expected_rate_hz": 200, "payload_bytes": 325, "projected_bps": 67400}
+        if route == "/subscribe":
+            return (400 if options["subscribe_fail"] and body["divider"] == 1 else 202), body
+        if route == "/api/recording/start":
+            return 202, {"recording": options["start"], "session_dir": str(tmp_path)}
+        if route == "/api/recording/stop":
+            return 200, {"recording": False, "session_dir": str(tmp_path)}
+        if route == "/api/diagnostics/bundle":
+            return 200, {"transport": {"active_slots": []}}
+        raise AssertionError(f"unexpected route {route}")
+    monkeypatch.setattr(campaign_fly, "call", fake_call)
+    monkeypatch.setattr(campaign_fly.time, "sleep", lambda _: None)
+    monkeypatch.setattr(cf_vz_check, "read_fast_slot", lambda _: (np.arange(2001) * .005, {}, 0))
+    return path, calls, options
+
+
+def test_cf_ground_records_one_direct_frame_then_restores_status(cf_ground, capsys):
+    from ground_station.comm.wifi_bridge import WifiBridge
+    path, calls, _ = cf_ground
+    result = campaign_fly.record_only("http://h", path, wait=lambda _: "")
+    assert result == str(path.parent)
+    assert "CF capture cadence PASS" in capsys.readouterr().out
+    subs = [body for route, body in calls if route == "/subscribe"]
+    assert [(s["slot"], s["divider"]) for s in subs] == [
+        (1, 0), (2, 0), (3, 0), (0, 1), (0, WifiBridge.LAB_SLOT0_DIVIDER)]
+    assert "alt_cf.dt_c" in subs[3]["ranges"]
+    assert not any(route.startswith("/command") for route, _ in calls)
+    assert [route for route, _ in calls].index("/api/recording/stop") < len(calls) - 1
+
+
+@pytest.mark.parametrize("field,value", [("arm", "armed"), ("runner", False)])
+def test_cf_ground_rejects_unsafe_state_before_subscribe(cf_ground, field, value):
+    path, calls, options = cf_ground
+    options[field] = value
+    with pytest.raises(SystemExit):
+        campaign_fly.record_only("http://h", path)
+    assert not any(route == "/subscribe" for route, _ in calls)
+
+
+@pytest.mark.parametrize("failure", ["subscribe_fail", "start", "wait"])
+def test_cf_ground_restores_status_after_failure(cf_ground, failure):
+    path, calls, options = cf_ground
+    if failure != "wait":
+        options[failure] = failure == "subscribe_fail"
+    def wait(_):
+        raise RuntimeError("wait failed")
+    with pytest.raises((SystemExit, RuntimeError)):
+        campaign_fly.record_only("http://h", path, wait=wait)
+    assert calls[-1][0] == "/subscribe" and calls[-1][1]["slot"] == 0
+    assert calls[-1][1]["divider"] > 1
+    if failure != "subscribe_fail":
+        assert any(route == "/api/recording/stop" for route, _ in calls)
+
+
+@pytest.mark.parametrize("ticks", [np.arange(251) * .04, np.arange(401) * .005,
+                                  np.delete(np.arange(2001) * .005, 500)])
+def test_cf_ground_rejects_capped_short_or_gapped_saved_capture(cf_ground, monkeypatch, ticks, capsys):
+    from ground_station.lab import cf_vz_check
+    path, calls, _ = cf_ground
+    monkeypatch.setattr(cf_vz_check, "read_fast_slot", lambda _: (ticks, {}, 0))
+    with pytest.raises(SystemExit, match="CF capture NOT READY"):
+        campaign_fly.record_only("http://h", path, wait=lambda _: "")
+    assert "CF capture cadence PASS" not in capsys.readouterr().out
+    assert calls[-1][0] == "/subscribe"  # cleaned up before validation fails
 
 
 def test_tel_line_names_states_scales_cm_and_drops_stale(monkeypatch):

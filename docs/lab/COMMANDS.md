@@ -39,23 +39,40 @@ Standalone altitude diagnosis (PROPOSED 0.8 m / 30 s hover, nominal PID, no gain
 
 This requests PROPOSED 200 Hz for CF height/velocity, acceleration, bias, residual and correction count;
 range arrivals/rejections; both Z loops' P/I/D/output terms; collective and the core motor,
-attitude, reference/feedback and battery signals. Actual gains/limits and camera inputs use
-the slow lane. The link probe may lower the rate: check the printed capture table for drops
-and the achieved rate. Results go to `logs/flights/<date>/<NN>_z-cf-hover/` and the referenced
+attitude, reference/feedback and battery signals. Actual gains/limits and camera inputs share
+the same direct slot at that rate. A lower-rate CF replay plan is refused. Results go to
+`logs/flights/<date>/<NN>_z-cf-hover/` and the referenced
 `logs/sessions/` recording. This standalone command does not launch camera fusion; keep the
 existing calibrated camera session running if using it. RC arm and normal abort gates apply.
 Keep the same gains for this diagnostic; a hover identifies symptoms, not full stability margins.
 
-The CF diagnostic has a dedicated coherent slot including `dt_c`, `y_corr`, latched `mode`,
-range inputs and `xTickCount`. All existing diagnostics remain at their original lane rates.
-Calculated upper-bound plan (PROPOSED until the link is measured): fast slots have 29 and 49
-scalar ranges at 200 Hz; the slow slot has 24 at 25 Hz. With the stream frame overhead of
-12 bytes and conservative 4 bytes per scalar, the dedicated slot costs 25,600 B/s; both fast
-slots cost 67,200 B/s, and the whole plan costs 69,900 B/s against the 70,041.6 B/s planning
-budget. Integer widths can reduce actual wire use. No variables are trimmed for this plan:
-an insufficient byte/slot budget fails explicitly and lists queued slow variables.
-The normal link probe may cap the whole plan; a lower achieved rate is reported and cannot
-establish a faithful per-tick replay. No sustainable live rate has been measured for this plan.
+The CF diagnostic uses **one direct subscription, slot 0, divider 1** including `dt_c`,
+`y_corr`, latched `mode`, range inputs and `xTickCount`. Slots 1–3 are stopped first;
+there is no parallel dashboard stream. Core/arm/status fields are in the same CF frame.
+Formerly slow diagnostics are promoted to the same rate; no variables are removed.
+Offline DWARF sizing against the current AXF resolves all 102 scalars into 48 coalesced
+ranges, with a 325-byte payload. Calculated wire use is (325 + 12) * 200 = 67,400 B/s
+against the 70,041.6 B/s planning budget. This is sizing evidence, not measured throughput.
+The live typed preview must resolve every field at the requested clock and fit the budget.
+CF diagnostics bypass the ordinary lab 25 Hz cap. Before recording a flight, slot 0
+must deliver PROPOSED >=190 Hz with zero sequence drops over a PROPOSED 2 s window;
+otherwise takeoff is refused and the normal arm/status frame is restored. This rate gate does not
+replace checking every saved firmware tick for replay.
+
+First verify the same slot layout on the ground, with the drone disarmed. Wait PROPOSED
+10 seconds, then press Enter to stop. This command checks for consecutive 5 ms snapshots
+and prints `CF capture cadence PASS` only when no prediction snapshots are missing:
+
+```powershell
+.\fly lab_z_cf_hover --record-only cf-ground-rate --rate 200
+```
+
+This requires confirmed disarmed telemetry, an idle runner and no existing recording.
+It uses the same single-slot frame as the flight, writes no PID gains and sends no arm/takeoff
+commands. It restores the normal arm/status frame on exit, including failure. A pass requires
+PROPOSED >=8 seconds of saved, consecutive 5 ms snapshots in slot 0. A cadence failure
+requires fixing capture before another flight; do not compensate by changing the filter or gains.
+The current resumption checklist is `docs/lab/cf-resume-2026-10-27.md`.
 
 After recording, choose the hover interval using firmware seconds after the first complete
 fast-slot frame (the bounds below are PROPOSED examples; select the actual plateau):

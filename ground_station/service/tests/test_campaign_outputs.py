@@ -192,6 +192,9 @@ def test_runner_refuses_to_fly_unlogged(tmp_path):
 class FakeRecService:
     def __init__(self, recording=True, lab_mode=False):
         self.bridge = Mock(lab_mode=lab_mode)   # a bare Mock's lab_mode is a truthy Mock
+        self.bridge.subscribe_preview.side_effect = lambda **kw: {
+            **kw, "var_count": len(kw["ranges"]), "unresolved": [],
+            "expected_rate_hz": 200, "payload_bytes": 325}
         self.recording_ok = recording
         self.calls = []
 
@@ -224,7 +227,7 @@ def test_live_capture_applies_plan_once_and_records_per_flight():
     svc.bridge.subscribe_slot.assert_not_called()
 
 
-def test_live_capture_lab_cap_spares_excite_cards_only():
+def test_live_capture_lab_cap_spares_excite_cards():
     svc = FakeRecService(lab_mode=True)
     begin, _ = live_capture_hooks(svc, max_rate_hz=25.0)
     plan = {"rate_hz": 200, "groups": ["velocity_loops"]}
@@ -235,6 +238,76 @@ def test_live_capture_lab_cap_spares_excite_cards_only():
     begin(sysid, "f-002")
     notes = [c[1]["notes"] for c in svc.calls if c[0] == "start"]
     assert "rate 25 Hz" in notes[0] and "rate 200 Hz" in notes[1]
+
+
+def test_cf_live_capture_bypasses_lab_cap_and_uses_only_direct_slot_zero(monkeypatch):
+    from ground_station.service import campaign_live as cl
+    svc = FakeRecService(lab_mode=True)
+    check = Mock()
+    monkeypatch.setattr(cl, "check_cf_capture_rate", check)
+    begin, end = live_capture_hooks(svc, max_rate_hz=25.0)
+    begin(_exp(log_plan={"rate_hz": 200, "groups": ["z_cf"],
+                         "slow_hz": 25, "slow": ["z_pid_gains", "camera_fusion", "takeoff_gate"]}), "cf")
+    sent = [c.kwargs for c in svc.bridge.subscribe_slot.call_args_list]
+    assert [(s["slot"], s["divider"]) for s in sent] == [(1, 0), (2, 0), (3, 0), (0, 1)]
+    check.assert_called_once_with(svc.bridge, [0])
+    assert "rate 200 Hz" in svc.calls[1][1]["notes"]
+    end("tok")
+    svc.bridge.restore_lab_slot0.assert_called_once()
+
+
+def test_cf_live_capture_rejects_bad_cadence_before_recording_and_stops_slots(monkeypatch):
+    from ground_station.service import campaign_live as cl
+    svc = FakeRecService(lab_mode=True)
+    monkeypatch.setattr(cl, "check_cf_capture_rate", Mock(side_effect=RuntimeError("CF capture not ready")))
+    begin, _ = live_capture_hooks(svc, max_rate_hz=25.0)
+    with pytest.raises(RuntimeError, match="CF capture not ready"):
+        begin(_exp(log_plan={"rate_hz": 200, "groups": ["z_cf"]}), "cf")
+    assert svc.calls == ["stop"]
+    stops = [c.kwargs for c in svc.bridge.subscribe_slot.call_args_list if not c.kwargs["divider"]]
+    assert {s["slot"] for s in stops} == {1, 2, 3}
+    svc.bridge.restore_lab_slot0.assert_called_once()
+
+
+def test_cf_failed_recording_start_restores_status(monkeypatch):
+    from ground_station.service import campaign_live as cl
+    svc = FakeRecService(recording=False, lab_mode=True)
+    monkeypatch.setattr(cl, "check_cf_capture_rate", Mock())
+    begin, _ = live_capture_hooks(svc)
+    with pytest.raises(RuntimeError, match="recording did not start"):
+        begin(_exp(log_plan={"rate_hz": 200, "groups": ["z_cf"]}), "cf")
+    svc.bridge.restore_lab_slot0.assert_called_once()
+    assert svc.calls[-1] == "stop"
+
+
+def test_cf_recording_stop_exception_still_restores_status(monkeypatch):
+    from ground_station.service import campaign_live as cl
+    svc = FakeRecService(lab_mode=True)
+    monkeypatch.setattr(cl, "check_cf_capture_rate", Mock())
+    begin, end = live_capture_hooks(svc)
+    begin(_exp(log_plan={"rate_hz": 200, "groups": ["z_cf"]}), "cf")
+    svc.stop_recording = Mock(side_effect=OSError("disk failure"))
+    with pytest.raises(OSError, match="disk failure"):
+        end("tok")
+    svc.bridge.restore_lab_slot0.assert_called_once()
+
+
+@pytest.mark.parametrize("hz,drops,passes", [(200, 0, True), (25, 0, False), (200, 1, False)])
+def test_cf_rate_gate_measures_counts_and_loss(monkeypatch, hz, drops, passes):
+    import threading
+    from ground_station.service import campaign_live as cl
+    stats = {1: {"received": 100, "dropped": 0}}
+    bridge = SimpleNamespace(_stream_lock=threading.Lock(), _stream_stats=stats)
+    times = iter([0.0, 2.0])
+    monkeypatch.setattr(cl.time, "monotonic", lambda: next(times))
+    def advance(_):
+        stats[1] = {"received": 100 + 2 * hz, "dropped": drops}
+    monkeypatch.setattr(cl.time, "sleep", advance)
+    if passes:
+        cl.check_cf_capture_rate(bridge, [1])
+    else:
+        with pytest.raises(RuntimeError, match="CF capture not ready"):
+            cl.check_cf_capture_rate(bridge, [1])
 
 
 def test_live_capture_lab_mode_stops_plan_slots_after_each_flight():

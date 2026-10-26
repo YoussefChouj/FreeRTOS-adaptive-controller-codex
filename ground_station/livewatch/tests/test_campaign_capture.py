@@ -222,38 +222,51 @@ def test_read_rejects_non_json(tmp_path):
 
 # ---- per-experiment log plan ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("max_rate", [200, 100, 50, 25])
-def test_z_cf_hover_keeps_diagnostics_when_link_rate_is_capped(max_rate):
+def test_z_cf_hover_uses_one_direct_slot_with_all_diagnostics():
     from ground_station.service.fly_file import compile_fly
 
     card = Path(__file__).resolve().parents[2] / "service/campaigns/lab_z_cf_hover.fly"
     data, _ = compile_fly(card.read_text(encoding="utf-8"), str(card))
     experiment = data["experiments"][0]
-    plan = cc.plan_capture(experiment["log_plan"], max_rate_hz=max_rate)
+    plan = cc.plan_capture(experiment["log_plan"])
     rates = {v: slot["hz"] for slot in plan["slots"] for v in slot["vars"]}
     assert not plan["dropped"]
-    assert len(plan["slots"]) <= cc.MAX_SLOTS
-    assert _guard_bps(plan["slots"]) <= cc.PLANNING_BUDGET_BPS
-    assert all(rates[v] == max_rate for v in cc.Z_CF)
+    assert plan["single_slot"] and plan["typed_budget_pending"]
+    assert all(rate == 200 for rate in rates.values())
     assert all(v in rates for v in cc.Z_PID_GAINS)
     dedicated = plan["slots"][0]
-    assert set(cc.Z_CF_FAST) == set(dedicated["vars"])
-    assert len(dedicated["vars"]) == 29
-    assert len(plan["slots"]) == 3
-    assert [len(s["vars"]) for s in plan["slots"]] == [29, 49, 24]
+    assert set(cc.Z_CF_FAST) <= set(dedicated["vars"])
+    assert dedicated["slot"] == 0 and len(plan["slots"]) == 1
+    for group in (*plan["groups"], *plan["slow"]):
+        assert set(cc.LOG_GROUPS[group]) <= set(dedicated["vars"])
     assert len(rates) == sum(len(s["vars"]) for s in plan["slots"])
-    assert cc.plan_bps(plan["slots"]) == (336 * max_rate + 108 * min(max_rate, 25))
+    assert cc.subscribe_steps(plan) == [{"action": "subscribe", "args": {
+        "slot": 0, "divider": 1, "ranges": dedicated["vars"]}}]
     steps = experiment["scenario"]["steps"]
     assert steps[0]["takeoff"]["mrac_injection"] == 0
     assert [list(s)[0] if isinstance(s, dict) else s for s in steps] == ["takeoff", "hold", "land"]
 
 
-def test_z_cf_never_silently_trims_existing_signals():
-    with pytest.raises(CaptureError, match="no signals were removed or slowed"):
-        cc.plan_capture({"rate_hz": 200, "groups": ["z_cf"]}, budget_bps=65000)
-    with pytest.raises(CaptureError, match="queued:"):
-        cc.plan_capture({"rate_hz": 200, "groups": ["z_cf"], "slow_hz": 25,
-                         "slow": ["z_pid_gains", "camera_fusion", "takeoff_gate"]}, budget_bps=68000)
+@pytest.mark.parametrize("max_rate", [100, 50, 25])
+def test_z_cf_refuses_a_capped_replay_plan(max_rate):
+    with pytest.raises(CaptureError, match="refusing a capped plan"):
+        cc.plan_capture({"rate_hz": 200, "groups": ["z_cf"]}, max_rate_hz=max_rate)
+
+
+@pytest.mark.parametrize("mutation,error", [({}, None), ({"payload_bytes": 400}, "budget"),
+    ({"expected_rate_hz": 100}, "SUBSCRIBE_ONLY"), ({"unresolved": ["alt_cf.vz"]}, "missing fields"),
+    ({"ranges": []}, "missing fields"), ({"payload_bytes": 0}, "valid typed payload")])
+def test_z_cf_validates_actual_typed_frame_without_trimming(mutation, error):
+    plan = cc.plan_capture({"rate_hz": 200, "groups": ["z_cf"]})
+    names = plan["slots"][0]["vars"]
+    preview = {"ranges": names, "var_count": len(names), "unresolved": [],
+               "expected_rate_hz": 200, "payload_bytes": 325, **mutation}
+    if error:
+        with pytest.raises(CaptureError, match=error):
+            cc.validate_cf_single_preview(plan, preview)
+    else:
+        cc.validate_cf_single_preview(plan, preview)
+    assert not plan["dropped"]
 
 
 def test_log_groups_are_disjoint_from_needed_and_each_other():
