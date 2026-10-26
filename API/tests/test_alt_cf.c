@@ -1436,6 +1436,44 @@ static void test_u13_next_arm_latch(void)
     printf("U13: armed legacy trajectory unchanged=%d; pending mode applied only on next arm\n", same);
 }
 
+/* A1 host evidence: PROPOSED 20 Hz sensor, quantized ramp/sine, no plant. */
+static void test_a1_stale_arrival(void)
+{
+    int shape, tick, sample, events, stale;
+    uint32_t previous_cm;
+    unsigned corrections;
+    float expected;
+    for (shape = 0; shape < 2; shape++) {
+        reset_env(ALT_VZ_MODE_CF, 100U);
+        previous_cm = 100U;
+        events = 0;
+        stale = 0;
+        for (tick = 1; tick <= 400; tick++) {
+            if (tick % 10 == 0) {
+                sample = tick / 10;
+                ano_of.of_alt_cm = (shape == 0) ? (uint32_t)(100 + sample)
+                    : (uint32_t)(100.0f + 8.0f * sinf(0.314159265f * (float)sample) + 0.5f);
+                ano_of.alt_update_cnt++;
+            }
+            corrections = (unsigned)alt_cf.n_corr;
+            Alt_UpdateFB();
+            if (tick % 10 == 0) {
+                expected = (float)previous_cm * M_PER_CM;
+                if (alt_cf.n_corr > corrections && fabsf(alt_cf.y_corr - expected) < 1e-6f) stale++;
+                events++;
+                printf("A1 %s sample=%d newest=%.3f used=%.3f previous=%.3f\n",
+                       shape == 0 ? "ramp" : "sine", tick / 10,
+                       (double)((float)ano_of.of_alt_cm * M_PER_CM),
+                       (double)alt_cf.y_corr, (double)expected);
+                previous_cm = ano_of.of_alt_cm;
+            }
+        }
+        check_cond("A1 baseline: every arrival corrects with previous frame", stale == events);
+        printf("A1 baseline %s: previous-frame corrections %d/%d (expected defect)\n",
+               shape == 0 ? "ramp" : "sine", stale, events);
+    }
+}
+
 int main(void)
 {
     test_u1_fd_bit_exact_on_213634_trace();
@@ -1451,6 +1489,7 @@ int main(void)
     test_u11_design_cadence();
     test_u12_rate_independence();
     test_u13_next_arm_latch();
+    test_a1_stale_arrival();
 
     if (g_fail_count != 0) {
         printf("FAILED: %d checks failed (%d passed)\n", g_fail_count, g_pass_count);
