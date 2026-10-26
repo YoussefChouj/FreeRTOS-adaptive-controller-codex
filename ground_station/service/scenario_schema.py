@@ -108,7 +108,7 @@ _STEP_KEYS: Mapping[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "goto": (("x", "y", "z"), ("dwell_s", "min_jerk", "arrive_r_cm", "arrival_radius_cm", "slow_clock") + tuple(DEFAULT_MOTION)),
     "path": (("shape", "params"), ("min_jerk", "arrive_r_cm", "arrival_radius_cm", "slow_clock") + tuple(DEFAULT_MOTION)),
     "program": (("ops",), tuple(sorted(MOTION_KEYS))),
-    "excite": (("axis", "f0", "f1", "amp", "duration_s"), ("signal",)),
+    "excite": (("axis", "f0", "f1", "amp", "duration_s"), ("signal", "target")),
     "pattern": (("layer", "speed", "axes"), ("periods",)),
     "step": (("axis", "delta", "hold"), ()),
     "livetune": (LIVETUNE_REQUIRED, LIVETUNE_OPTIONAL),
@@ -122,9 +122,12 @@ _STEP_KEYS: Mapping[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
 
 def _compile_excite(body: dict, path: str, problems: list[str]) -> Step | None:
     n_before = len(problems)
-    axis, sig = body.get("axis"), body.get("signal", "multisine")
-    if axis not in ex.AXES:
-        problems.append(f"{path}.axis: must be one of {sorted(ex.AXES)} (got {axis!r})")
+    axis, sig, target = body.get("axis"), body.get("signal", "multisine"), body.get("target")
+    if target is not None and target not in ex.TARGETS:
+        problems.append(f"{path}.target: must be one of {sorted(ex.TARGETS)} (got {target!r})")
+    valid_axes = ex.TARGET_AXES.get(target, ex.AXES) if target else ex.AXES
+    if axis not in valid_axes:
+        problems.append(f"{path}.axis: must be one of {sorted(valid_axes)} (got {axis!r})")
     if sig not in ex.SIGNALS:
         problems.append(f"{path}.signal: must be one of {sorted(ex.SIGNALS)} (got {sig!r})")
     for k in ("f0", "f1", "amp", "duration_s"):
@@ -135,7 +138,10 @@ def _compile_excite(body: dict, path: str, problems: list[str]) -> Step | None:
     f0, f1, amp, dur = (float(body[k]) for k in ("f0", "f1", "amp", "duration_s"))
     if not 0.1 <= f0 < f1 <= EXCITE_F_MAX_HZ:
         problems.append(f"{path}: need 0.1 <= f0 < f1 <= {EXCITE_F_MAX_HZ} Hz (got f0 {f0}, f1 {f1})")
-    amp_max = min(EXCITE_AMP_MAX_DPS, ex.AMP_MAX_DPS.get(axis, 0.0))
+    if target and target in ex.TARGET_AMP_MAX:
+        amp_max = float(ex.TARGET_AMP_MAX[target].get(axis, 0.0))
+    else:
+        amp_max = min(EXCITE_AMP_MAX_DPS, ex.AMP_MAX_DPS.get(axis, 0.0))
     if not 0.0 < amp <= amp_max:
         problems.append(f"{path}.amp: must be in (0, {amp_max}] deg/s (got {amp})")
     if not 1.0 <= dur <= 60.0:
@@ -143,6 +149,8 @@ def _compile_excite(body: dict, path: str, problems: list[str]) -> Step | None:
     if len(problems) > n_before:
         return None
     args = {"axis": axis, "signal": sig, "f0": f0, "f1": f1, "amp": amp, "duration_s": dur}
+    if target is not None:
+        args["target"] = target
     return Step("excite", args, (), ex.step_s(dur))
 
 

@@ -568,9 +568,6 @@ uint8_t VarWrite_Apply(uint8_t id, float val, const char **name)
 				if (r->addr == (volatile void *)&sysid_target && SysID_GetState() != (uint8_t)SYSID_IDLE) {
 					return VAR_WRITE_REJECT_BUSY;
 				}
-				if (r->addr == (volatile void *)&sysid_target && SysID_GetState() != (uint8_t)SYSID_IDLE) {
-					return VAR_WRITE_REJECT_BUSY;
-				}
 				if (r->id == 47U && (FlightFSM_GetState() == FLIGHT_STATE_ARMED || DroneStatus.ARM_Status == Armed)) {
 					return VAR_WRITE_REJECT_BUSY;
 				}
