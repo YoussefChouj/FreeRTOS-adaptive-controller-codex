@@ -545,6 +545,51 @@ GAIN_PRESETS = {
         # rate loops (9-17) too: F4 livetune writes 9-14, yaw104 writes 15-17, and RAM gains outlive the flight
         "gains": {idx: PID_DEFAULTS[idx][1] for idx in [*range(9, 18), *range(24, 36)]},
     },
+    "xy_candidate": {
+        "why": "xy_candidate (PROPOSED): API/xy_ctrl_gains_candidate.h pre-sysid ladder base for VAR 75-83 (LQR k0-k3, ADRC wc/b0, model k/al/drag).",
+        "gains": {
+            75: 6.57910454,
+            76: 5.13574747,
+            77: 0.477461929,
+            78: 0.539490884,
+            79: 1.25,
+            80: 2.304,
+            81: 0.72,
+            82: 0.94119394,
+            83: 0.38,
+        },
+    },
+}
+
+# Candidate xy controller & model defaults from API/xy_ctrl_gains_candidate.h (PROPOSED ladder base for VAR 75-83)
+CANDIDATE_XY_GAINS = {
+    "g_xyc_lqr_k0": 6.57910454,
+    "g_xyc_lqr_k1": 5.13574747,
+    "g_xyc_lqr_k2": 0.477461929,
+    "g_xyc_lqr_k3": 0.539490884,
+    "g_xyc_adrc_wc": 1.25,
+    "g_xyc_adrc_b0": 2.304,
+    "g_xyc_model_k": 0.72,
+    "g_xyc_model_al": 0.94119394,
+    "g_xyc_model_drag": 0.38,
+}
+
+# Ground-only (disarmed-only) wfb_var IDs enforced by TASK/AutoflyTask.c:573,581
+XY_GROUND_ONLY_VARS = frozenset({44, 47, *range(75, 84)})
+
+_XY_VAR_META = {
+    44: ("g_xy_ctrl_kind", 0.0),
+    47: ("g_xyc_delay_ticks", 12.0),
+    74: ("g_xyc_pred_lead", 0.0),
+    75: ("g_xyc_lqr_k0", 6.57910454),
+    76: ("g_xyc_lqr_k1", 5.13574747),
+    77: ("g_xyc_lqr_k2", 0.477461929),
+    78: ("g_xyc_lqr_k3", 0.539490884),
+    79: ("g_xyc_adrc_wc", 1.25),
+    80: ("g_xyc_adrc_b0", 2.304),
+    81: ("g_xyc_model_k", 0.72),
+    82: ("g_xyc_model_al", 0.94119394),
+    83: ("g_xyc_model_drag", 0.38),
 }
 
 
@@ -795,6 +840,18 @@ _GAIN_ALIASES = {
     "y_vel_kp": 33, "y_vel_ki": 34, "y_vel_kd": 35,
     "vel_y_kp": 33, "vel_y_ki": 34, "vel_y_kd": 35,
     "locys_kp": 33, "locys_ki": 34, "locys_kd": 35,
+    "g_xy_ctrl_kind": 44, "xy_ctrl_kind": 44,
+    "g_xyc_delay_ticks": 47, "xyc_delay_ticks": 47, "delay_ticks": 47,
+    "g_xyc_pred_lead": 74, "xyc_pred_lead": 74, "pred_lead": 74,
+    "g_xyc_lqr_k0": 75, "xyc_lqr_k0": 75, "lqr_k0": 75,
+    "g_xyc_lqr_k1": 76, "xyc_lqr_k1": 76, "lqr_k1": 76,
+    "g_xyc_lqr_k2": 77, "xyc_lqr_k2": 77, "lqr_k2": 77,
+    "g_xyc_lqr_k3": 78, "xyc_lqr_k3": 78, "lqr_k3": 78,
+    "g_xyc_adrc_wc": 79, "xyc_adrc_wc": 79, "adrc_wc": 79,
+    "g_xyc_adrc_b0": 80, "xyc_adrc_b0": 80, "adrc_b0": 80,
+    "g_xyc_model_k": 81, "xyc_model_k": 81, "model_k": 81,
+    "g_xyc_model_al": 82, "xyc_model_al": 82, "model_al": 82,
+    "g_xyc_model_drag": 83, "xyc_model_drag": 83, "model_drag": 83,
 }
 for _idx, (_sym, _) in PID_DEFAULTS.items():
     _GAIN_ALIASES[_sym.lower()] = _idx
@@ -833,6 +890,9 @@ def _gain_meta(idx):
     if idx in PID_DEFAULTS:
         name, def_val = PID_DEFAULTS[idx]
         return name, def_val, 1
+    if idx in _XY_VAR_META:
+        name, def_val = _XY_VAR_META[idx]
+        return name, def_val, 0x2D
     if idx >= 40:
         try:
             from ground_station.platform import wfb_var
@@ -1117,6 +1177,8 @@ def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeou
     if not in_flight:
         v = _vitals(base)
         arm_state = (v.get("arm") or {}).get("state")
+        if arm_state is None and isinstance(v.get("armed"), bool):
+            arm_state = "armed" if v["armed"] else "disarmed"
         if arm_state is not None and arm_state != "disarmed":
             print(f"Gain write REFUSED: drone is not disarmed (arm state: {arm_state!r}). Disarm by RC first.", flush=True)
             return False
@@ -1131,6 +1193,13 @@ def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeou
     if not gains:
         print("no gains to write", flush=True)
         return True
+
+    # 2b. Ground-only VARs (44, 47, 75-83) are disarmed-only in firmware (TASK/AutoflyTask.c:573,581)
+    ground_only_hit = sorted(idx for idx in gains if idx in XY_GROUND_ONLY_VARS)
+    if ground_only_hit and in_flight:
+        names = ", ".join(_gain_meta(i)[0] for i in ground_only_hit)
+        print(f"Gain write REFUSED: {names} (VAR {ground_only_hit}) are ground-only (disarmed only); cannot write in_flight.", flush=True)
+        return False
 
     # 3. Retrieve "Old" gains from actions journal or pid.c defaults
     old_gains = {}
@@ -1218,6 +1287,24 @@ def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeou
         print(f"| {axis:<14} | {idx:<4} | {old_v:<8.4g} | {new_v:<8.4g} | {ack_str:<4} | {ms_val:<4} | {ret_val:<7} |")
 
     journal_ok = not ack_only
+    if all_ok and ground_only_hit:
+        try:
+            _, rb_res = call(base, "/api/actions", timeout=timeout_s)
+            rb_actions = rb_res.get("actions", []) if isinstance(rb_res, dict) else []
+            for idx in ground_only_hit:
+                matched = [
+                    a for a in rb_actions
+                    if int(a.get("command_id", 0)) == 0x2D and int(a.get("index", -1)) == idx
+                ]
+                if matched and "value" in matched[0]:
+                    rb_val = float(matched[0]["value"])
+                    if abs(rb_val - float(gains[idx])) > 1e-4:
+                        print(f"Gain write REFUSED: read-back mismatch for {_gain_meta(idx)[0]} (VAR {idx}): "
+                              f"wrote {gains[idx]:g}, read back {rb_val:g}", flush=True)
+                        all_ok = False
+                        break
+        except Exception:
+            pass
     if all_ok and ack_only:
         print(f"note: idx {ack_only} ACKed but APPLIED not seen in the 8081 journal: restart 8081 on this branch", flush=True)
     ver_suffix = " (applied, 8081 journal)" if (all_ok and journal_ok) else ""
