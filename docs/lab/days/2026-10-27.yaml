@@ -26,29 +26,44 @@ flights:
     pass: "every traj_go accepted; lands inside 10 cm pad gate; subscribe drop rate < 1%; s_authority stays 1 (PROPOSED)"
     stop: true
 
+  # Rate gains are written only after the operator's chat OK (the operator's pick in chat is the approval; the CEO
+  # sends it with their words), disarmed only, via `.\fly <fly> --once --gains <preset>`; never as a .fly `set`.
+  # rate35y104 = rate35 (roll/pitch Kp3.5 Kd13) + yaw104 (yaw Kp10.4 Kd0.014), both PROPOSED from the 10-24 fits.
+  # RAM gains outlive the flight but not a reboot, so every later flight re-writes them with --gains rate35y104.
+  - id: rate-gains-apply
+    fly: lab_a_hover
+    args: [--gains, rate35y104]
+    gate: "CHAT APPROVAL: fly only after the operator OKs rate35 + yaw104 in chat; written disarmed. If declined, run Blocks 1-5 with --gains defaults"
+    why: "Block 0 apply rate35 (roll PM 21.4 -> 34.4 deg, pitch 28 -> 43 deg) + yaw104 before any sysid, so Block 1 identifies the plant under the gains we will fly"
+    pass: "steady hover; gx/gy PSD peak < 3 dps in 1.7-5.3 Hz; yaw span < 5 deg; lands inside 10 cm pad gate (PROPOSED)"
+    stop: true
+
   # ======== BLOCK 1: INNER RATE LOOP SYSID (sysid_target=0, 0.2-40 Hz split low/high @ 200 Hz) ========
   - id: rate-sysid-roll-wide
     fly: lab_d_sysid_rate_roll
+    args: [--gains, rate35y104]
     why: "Block 1 roll rate sysid: low band 0.2-5 Hz (45 deg/s, 30 s, >=4 Welch averages at 0.2 Hz) + high band 2-40 Hz (60 deg/s, 30 s) at 200 Hz"
     pass: "both multisine bands complete; `python -m ground_station.autotune.cli <session> --loop rate --axis roll --correct-zoh` fits with residual <= 0.35 and coverage >= 50% (PROPOSED)"
     notes: "10-24 roll rate 214336 (0.5-15 Hz): k=9.456, tau=90.0 ms, delay=13.2 ms, PM 21.4 -> 34.4 deg with rate35 (Kp=3.5, Kd=13)"
 
   - id: rate-sysid-pitch-wide
     fly: lab_d_sysid_rate_pitch
+    args: [--gains, rate35y104]
     why: "Block 1 pitch rate sysid: low band 0.2-5 Hz (45 deg/s, 30 s) + high band 2-40 Hz (60 deg/s, 30 s) at 200 Hz"
     pass: "both multisine bands complete; `python -m ground_station.autotune.cli <session> --loop rate --axis pitch --correct-zoh` fits with residual <= 0.35 (PROPOSED)"
     notes: "10-24 pitch rate 214336 (0.5-15 Hz): k=6.492, tau=58.0 ms, delay=18.1 ms, PM 28.0 -> 43.2 deg with rate35"
 
   - id: rate-sysid-yaw-wide
     fly: lab_d_sysid_rate_yaw
+    args: [--gains, rate35y104]
     why: "Block 1 yaw rate sysid: low band 0.2-5 Hz (45 deg/s, 30 s) + high band 2-40 Hz (60 deg/s, 30 s) at 200 Hz"
     pass: "both multisine bands complete; `python -m ground_station.autotune.cli <session> --loop rate --axis yaw --correct-zoh` fits with residual <= 0.35 (PROPOSED)"
     notes: "10-24 yaw rate 215247 (0.5-15 Hz): k=1.253, tau=1.0 ms, delay=12.1 ms, PM 81.7 deg"
 
   - id: rate-gain-verify-hover
     fly: lab_a_hover
-    args: [--gains, rate35]
-    gate: "Run `autotune.cli --loop rate` on roll/pitch/yaw logs first; verify PM >= 34 deg and max|S| <= 2.0 before writing rate gains"
+    args: [--gains, rate35y104]
+    gate: "Run `autotune.cli --loop rate` on the Block 1 logs; it prints PROPOSED gain-write commands and never sends them. Keep rate35y104 if PM >= 34 deg and max|S| <= 2.0; any new rate gains need the operator's chat OK first"
     why: "Block 1 verification hover with fitted inner rate gains (rate35: roll/pitch Kp=3.5, Kd=13) before locking inner loop for Block 2"
     pass: "steady hover; gyrox/gyroy RMS < 3.5 deg/s; no high-frequency motor chatter (PROPOSED)"
     stop: true
@@ -56,14 +71,14 @@ flights:
   # ======== BLOCK 2: ATTITUDE ANGLE LOOP SYSID (sysid_target=2, 0.2-6 Hz, 6 deg) ========
   - id: angle-sysid-roll-pitch
     fly: lab_d_sysid_angle
-    args: [--gains, rate35]
+    args: [--gains, rate35y104]
     gate: "Block 1 rate-gain-verify-hover passed; inner rate loop gains locked"
     why: "Block 2 attitude angle sysid (`sysid_target=2`): 0.2-6 Hz multisine (6 deg, 30 s each) on roll and pitch with locked inner rate gains"
     pass: "excite completes; `python -m ground_station.autotune.cli <session> --loop angle --axis roll --inner-model model_rate_roll.json` (and pitch) fits with PM >= 45 deg and inner/outer wc separation >= 3x (PROPOSED)"
 
   - id: angle-gain-verify-hover
     fly: lab_a_hover
-    args: [--gains, rate35]
+    args: [--gains, rate35y104]
     gate: "Run `autotune.cli --loop angle` on roll and pitch; verify separation ratio >= 3.0x vs inner rate wc"
     why: "Block 2 verification hover with fitted attitude angle gains before locking attitude loop for Block 3"
     pass: "steady hover; roll/pitch error RMS < 1.5 deg; lands inside pad gate (PROPOSED)"
@@ -72,21 +87,21 @@ flights:
   # ======== BLOCK 3: VELOCITY LOOP SYSID (sysid_target=3, 0.15-3 Hz, x/y 25 cm/s, z 0.25 m/s) ========
   - id: vel-sysid-xy
     fly: lab_d_sysid_vel_xy
-    args: [--gains, rate35]
+    args: [--gains, rate35y104]
     gate: "Block 2 angle-gain-verify-hover passed; inner rate + angle loops locked"
     why: "Block 3 horizontal velocity sysid (`sysid_target=3`): 0.15-3 Hz multisine (25 cm/s, 30 s each) on vx (pitch) and vy (roll)"
     pass: "excite completes inside fence; `python -m ground_station.autotune.cli <session> --loop vel --axis x --inner-model model_angle_pitch.json` (and y) fits with PM >= 45 deg and separation >= 3x (PROPOSED)"
 
   - id: vel-sysid-z
     fly: lab_d_sysid_vel_z
-    args: [--gains, rate35]
+    args: [--gains, rate35y104]
     gate: "Block 2 angle-gain-verify-hover passed"
     why: "Block 3 vertical velocity sysid (`sysid_target=3`, `axis=z`): two 30 s passes of 0.15-3 Hz multisine at 0.25 m/s on `highdtsPID.Des`"
     pass: "excite completes keeping altitude within [0.25, 0.85] m; `python -m ground_station.autotune.cli <session> --loop vel --axis z` fits with residual <= 0.35 (PROPOSED)"
 
   - id: vel-gain-verify-hover
     fly: lab_a_hover
-    args: [--gains, rate35]
+    args: [--gains, rate35y104]
     gate: "Run `autotune.cli --loop vel` on x, y, z; verify separation ratio >= 3.0x vs angle wc"
     why: "Block 3 verification hover with fitted velocity loop gains before locking velocity loop for Block 4"
     pass: "steady hover; horizontal velocity RMS < 8 cm/s; altitude hold error < 5 cm (PROPOSED)"
@@ -95,21 +110,21 @@ flights:
   # ======== BLOCK 4: POSITION LOOP SYSID (sysid_target=4, 0.1-1.5 Hz, x/y 15 cm, z 0.15 m) ========
   - id: pos-sysid-xy
     fly: lab_d_sysid_pos_xy
-    args: [--gains, rate35]
+    args: [--gains, rate35y104]
     gate: "Block 3 vel-gain-verify-hover passed; inner rate + angle + velocity loops locked"
     why: "Block 4 horizontal position sysid (`sysid_target=4`): 0.1-1.5 Hz multisine (15 cm, 30 s each) on x (pitch) and y (roll) across the 0.25-0.63 Hz wobble band"
     pass: "excite completes inside fence; `python -m ground_station.autotune.cli <session> --loop pos --axis x --inner-model model_vel_x.json` (and y) fits with PM >= 45 deg and separation >= 3x (PROPOSED)"
 
   - id: pos-sysid-z
     fly: lab_d_sysid_pos_z
-    args: [--gains, rate35]
+    args: [--gains, rate35y104]
     gate: "Block 3 vel-gain-verify-hover passed"
     why: "Block 4 vertical position sysid (`sysid_target=4`, `axis=z`): two 30 s passes of 0.1-1.5 Hz multisine at 0.15 m on `highPID.Des`"
     pass: "excite completes; `python -m ground_station.autotune.cli <session> --loop pos --axis z` fits with residual <= 0.35 (PROPOSED)"
 
   - id: pos-gain-verify-hover
     fly: lab_a_hover
-    args: [--gains, rate35]
+    args: [--gains, rate35y104]
     gate: "Run `autotune.cli --loop pos` on x, y, z and regenerate candidate gains for LQR/MPC/ADRC"
     why: "Block 4 verification hover with full identified cascade (rate + angle + vel + pos) before Block 5 controller comparison"
     pass: "steady hover; hold p-p < 10 cm (vs 49.6 cm on 10-24 lqr-alone); lands inside 10 cm pad gate (PROPOSED)"
@@ -118,28 +133,28 @@ flights:
   # ======== BLOCK 5: ALL FOUR CONTROLLERS WITH MODEL-BASED GAINS (hold -> 30 cm x/y steps -> figure-8) ========
   - id: model-based-pid
     fly: lab_e_model_pid
-    args: [--gains, rate35]
+    args: [--gains, rate35y104]
     gate: "Blocks 1-4 sysid chain verified; model-based PID gains active"
     why: "Block 5 PID validation on the identified chain: 4 s hold -> 30 cm X step -> 30 cm Y step -> figure-8 (move_s=18, f8_a_cm=30)"
     pass: "hold p-p < 10 cm; 30 cm step overshoot < 20%; figure-8 completes with swing ratio < 1.3x and no RC takeover (PROPOSED)"
 
   - id: model-based-lqr
     fly: lab_e_model_lqr
-    args: [--gains, rate35]
+    args: [--gains, rate35y104]
     gate: "Blocks 1-4 sysid chain verified; candidate LQR gains (`API/xy_ctrl_gains_candidate.h`) and identified delay (`VAR47=18`) active"
     why: "Block 5 LQR validation on the identified chain: 4 s hold -> 30 cm X step -> 30 cm Y step -> figure-8 (10-24 baseline: hold p-p 49.6 cm, swing 3.6x)"
     pass: "hold p-p < 10 cm; 30 cm step overshoot < 25%; figure-8 completes with swing ratio < 1.3x and no RC takeover (PROPOSED)"
 
   - id: model-based-mpc
     fly: lab_e_model_mpc
-    args: [--gains, rate35]
+    args: [--gains, rate35y104]
     gate: "Blocks 1-4 sysid chain verified; candidate MPC gains (`API/xy_ctrl_gains_candidate.h`) and identified delay (`VAR47=18`) active"
     why: "Block 5 MPC validation on the identified chain: 4 s hold -> 30 cm X step -> 30 cm Y step -> figure-8"
     pass: "hold p-p < 10 cm; 30 cm step overshoot < 20%; figure-8 completes with swing ratio < 1.3x and no RC takeover (PROPOSED)"
 
   - id: model-based-adrc
     fly: lab_e_model_adrc
-    args: [--gains, rate35]
+    args: [--gains, rate35y104]
     gate: "Blocks 1-4 sysid chain verified; candidate ADRC ESO/controller gains (`API/xy_ctrl_gains_candidate.h`) active"
     why: "Block 5 ADRC validation on the identified chain: 4 s hold -> 30 cm X step -> 30 cm Y step -> figure-8"
     pass: "hold p-p < 10 cm; 30 cm step overshoot < 20%; figure-8 completes with swing ratio < 1.3x and no RC takeover (PROPOSED)"
@@ -150,6 +165,6 @@ branches:
   - {when: "200 Hz subscribe drop rate > 2% in smoke-hover", do: "Restart 8081 with `--lab`, power-cycle WiFi/FC, re-verify before Block 1"}
   - {when: "autotune.cli refuses a fit (residual > 0.35 or coherence coverage < 50%)", do: "Inspect FRF + PSD diagnostic plot in `--plot-dir`; do not apply gains from a refused fit; re-fly or keep prior loop gains"}
   - {when: "Outer-loop bandwidth separation ratio < 3.0x vs inner loop", do: "Reduce outer Kp/wc until separation >= 3.0x before flying verification hover"}
-  - {when: "Step response or figure-8 exhibits ~0.45-0.5 Hz ringing > 15 cm p-p", do: "Land; check `g_xyc_delay_ticks` and inner rate gains (`--gains rate35`); do not proceed to MRAC wrapping until baseline passes"}
+  - {when: "Step response or figure-8 exhibits ~0.45-0.5 Hz ringing > 15 cm p-p", do: "Land; check `g_xyc_delay_ticks` and inner rate gains (`--gains rate35y104`); do not proceed to MRAC wrapping until baseline passes"}
   - {when: "Trajectory aborts (traj_status 3) with s_authority 0 or stick move", do: "RC takeover: land, hands off sticks, re-fly (`r`)"}
-  - {when: "Pack resting voltage reaches packs.yaml gate", do: "Swap battery pack and re-verify `--gains rate35` after reboot"}
+  - {when: "Pack resting voltage reaches packs.yaml gate", do: "Swap battery pack and re-write `--gains rate35y104` after reboot"}
