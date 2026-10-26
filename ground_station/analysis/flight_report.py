@@ -17,11 +17,13 @@ the ``__main__`` block handles CLI dispatch.
 """
 from __future__ import annotations
 
+import bisect
 import csv
 import hashlib
 import json
 import math
 import os
+import re
 import statistics
 import subprocess
 import sys
@@ -76,9 +78,9 @@ DEFAULT_SIGNALS: dict[str, list[str]] = {
     "gyro_x_sp": ["gyro_x_sp", "gyrox_sp"],
     "gyro_y_sp": ["gyro_y_sp", "gyroy_sp"],
     "gyro_z_sp": ["gyro_z_sp", "gyroz_sp"],
-    "pid_out_roll": ["pid.gyrox.U", "pid.gyrox.FB"],
-    "pid_out_pitch": ["pid.gyroy.U", "pid.gyroy.FB"],
-    "pid_out_yaw": ["pid.gyroz.U", "pid.gyroz.FB"],
+    "pid_out_roll": ["pid.gyrox.U"],
+    "pid_out_pitch": ["pid.gyroy.U"],
+    "pid_out_yaw": ["pid.gyroz.U"],
     "mrac_active": ["mrac_state"],
     "theta_roll": ["mrac.roll.theta_0", "mrac.roll.theta_1", "mrac.roll.theta_2",
                    "mrac.roll.theta_3", "mrac.roll.theta_4", "mrac.roll.theta_5"],
@@ -96,13 +98,13 @@ DEFAULT_SIGNALS: dict[str, list[str]] = {
     "motor2": [],
     "motor3": [],
     "motor4": [],
-    "throttle": ["c.altitude_cm", "gs_throttle_max_pct"],
+    "throttle": ["Throttle_out"],
     "vbat": ["real_voltage", "status.vbat", "vbat"],
     "arm": ["arm", "slot0.DroneStatus.ARM_Status", "s_state"],
     "flymode": ["flymode", "slot0.DroneStatus.FlyMode", "flight_phase"],
-    "pos_x": ["pos_x", "ekf.vel_x"],
-    "pos_y": ["pos_y", "ekf.vel_y"],
-    "pos_z": ["pos_z", "ekf.vel_z"],
+    "pos_x": ["pos_x"],
+    "pos_y": ["pos_y"],
+    "pos_z": ["pos_z"],
     "pos_x_sp": [],
     "pos_y_sp": [],
     "pos_z_sp": [],
@@ -115,6 +117,66 @@ DEFAULT_SIGNALS: dict[str, list[str]] = {
     "rpm_edges3": ["slot2.rpm_dbg_edges[2]"],
     "rpm_edges4": ["slot2.rpm_dbg_edges[3]"],
 }
+
+
+# Recorder aliases and subscribe layouts can move the same firmware symbol between slots.
+for _axis, _gyro, _att in (("roll", "x", "rol"), ("pitch", "y", "pit"), ("yaw", "z", "yaw")):
+    for _role, _names in {
+        _axis: [f"imu_data.{_att}"],
+        f"{_axis}_sp": [f"Ctrler.{_axis}PID.Des"],
+        f"gyro_{_gyro}": [f"Ctrler.gyro{_gyro}PID.FB", f"pid.gyro{_gyro}.FB"],
+        f"gyro_{_gyro}_sp": [f"Ctrler.gyro{_gyro}PID.Des"],
+        f"control_out_{_axis}": [f"u_gyro{_gyro}"],
+    }.items():
+        DEFAULT_SIGNALS[_role] = _names + DEFAULT_SIGNALS.get(_role, [])
+for _i in range(1, 5):
+    DEFAULT_SIGNALS[f"motor{_i}"] = [f"mymotor.motor{_i}"]
+
+
+def _resolve_signal_map(signal_map, pivoted):
+    """Resolve configured fallbacks once for metrics and plots; never guess between slots."""
+    by_symbol = {}
+    for key in pivoted:
+        by_symbol.setdefault(re.sub(r"^slot\d+\.", "", key), []).append(key)
+    result = {}
+    for role, candidates in signal_map.items():
+        found = next((k for k in candidates if k in pivoted), None)
+        if found is None:
+            for key in candidates:
+                symbol = re.sub(r"^slot\d+\.", "", key)
+                matches = by_symbol.get(symbol, [])
+                if symbol in pivoted:
+                    found = symbol
+                elif len(matches) == 1:
+                    found = matches[0]
+                if found is not None:
+                    break
+        result[role] = [found or ""]
+    return result
+
+
+def _aligned_tracking(pivoted, measured, reference):
+    """Compare asynchronous streams by timestamp, within their shared recorded interval."""
+    mt, mv = pivoted.get(measured, ([], []))
+    st, sv = pivoted.get(reference, ([], []))
+    times, actual, desired = [], [], []
+    if not st:
+        return times, actual, desired
+    for t, v in zip(mt, mv):
+        if t < st[0] or t > st[-1]:
+            continue
+        j = bisect.bisect_left(st, t)
+        if st[j] == t:
+            ref = sv[j]
+        elif st[j] - st[j - 1] <= 1_000_000_000:
+            fraction = (t - st[j - 1]) / (st[j] - st[j - 1])
+            ref = sv[j - 1] + fraction * (sv[j] - sv[j - 1])
+        else:
+            continue
+        times.append(t)
+        actual.append(v)
+        desired.append(ref)
+    return times, actual, desired
 
 
 def _load_signal_map(session_dir: Path) -> dict[str, list[str]]:
@@ -136,7 +198,7 @@ def _load_signal_map(session_dir: Path) -> dict[str, list[str]]:
     if yaml_path.exists():
         data = _read_yaml_file(yaml_path)
         if data is not None:
-            return _normalize_signal_map(data)
+            return {**DEFAULT_SIGNALS, **_normalize_signal_map(data)}
 
     # 2. project-level preset (ground_station/analysis/flight_signals.yaml)
     #    Only when the session is under the same project root.
@@ -144,13 +206,13 @@ def _load_signal_map(session_dir: Path) -> dict[str, list[str]]:
     project_yaml = pkg_dir / "flight_signals.yaml"
     if project_yaml.exists():
         # Check if session_dir is under the same project root
-        project_root = pkg_dir.parents[2]  # analysis/ground_station/<root>
+        project_root = pkg_dir.parents[1]  # analysis/ground_station/<root>
         try:
             session_dir.resolve().relative_to(project_root.resolve())
             # Session is under project root — use the project-level preset
             data = _read_yaml_file(project_yaml)
             if data is not None:
-                return _normalize_signal_map(data)
+                return {**DEFAULT_SIGNALS, **_normalize_signal_map(data)}
         except ValueError:
             # Session is outside the project root — skip project-level preset
             pass
@@ -175,6 +237,9 @@ def _normalize_signal_map(data: dict[str, Any]) -> dict[str, list[str]]:
     """Convert every value in the signal map to a list of strings."""
     result: dict[str, list[str]] = {}
     for role, val in data.items():
+        for axis, gyro in (("roll", "x"), ("pitch", "y"), ("yaw", "z")):
+            role = {f"gyro_{axis}": f"gyro_{gyro}",
+                    f"{axis}_rate_sp": f"gyro_{gyro}_sp"}.get(role, role)
         if isinstance(val, list):
             result[role] = [str(v) for v in val]
         elif isinstance(val, str):
@@ -463,6 +528,8 @@ def compute_metrics(
         "missing_signals": [],
     }
 
+    signal_map = _resolve_signal_map(signal_map, pivoted)
+
     # Resolve which signals are actually available
     available_signals: dict[str, str | None] = {}
     for role, keys in signal_map.items():
@@ -484,18 +551,8 @@ def compute_metrics(
         sp_ts, sp_vals = pivoted[sp_key]
         me_ts, me_vals = pivoted[me_key]
 
-        # Align by time (simple: use whichever has fewer samples, match by nearest)
-        aligned_errors = []
-        for i, mts in enumerate(me_ts):
-            best_j = None
-            best_dt = float("inf")
-            for j, sts in enumerate(sp_ts):
-                dt = abs(mts - sts)
-                if dt < best_dt:
-                    best_dt = dt
-                    best_j = j
-            if best_j is not None and best_dt < 1e9:  # 1 second tolerance
-                aligned_errors.append(me_vals[i] - sp_vals[best_j])
+        aligned_ts, aligned_me, aligned_sp = _aligned_tracking(pivoted, me_key, sp_key)
+        aligned_errors = [a - b for a, b in zip(aligned_me, aligned_sp)]
 
         if not aligned_errors:
             continue
@@ -530,24 +587,15 @@ def compute_metrics(
 
     # Rate tracking (gyro_x, gyro_y, gyro_z)
     for axis_idx, axis_name in enumerate(("roll", "pitch", "yaw")):
-        gyro_key = available_signals.get(f"gyro_{axis_idx+1 if axis_idx < 2 else 'z'}") or available_signals.get(f"gyro_{axis_name}")
-        gyro_sp_key = available_signals.get(f"gyro_{axis_name}_sp")
+        gyro_key = available_signals.get(f"gyro_{'xyz'[axis_idx]}")
+        gyro_sp_key = available_signals.get(f"gyro_{'xyz'[axis_idx]}_sp")
         if gyro_key is None or gyro_sp_key is None:
             continue
         g_ts, g_vals = pivoted[gyro_key]
         s_ts, s_vals = pivoted[gyro_sp_key]
 
-        aligned_errors = []
-        for i, gts in enumerate(g_ts):
-            best_j = None
-            best_dt = float("inf")
-            for j, sts in enumerate(s_ts):
-                dt = abs(gts - sts)
-                if dt < best_dt:
-                    best_dt = dt
-                    best_j = j
-            if best_j is not None and best_dt < 1e9:
-                aligned_errors.append(g_vals[i] - s_vals[best_j])
+        _, actual, desired = _aligned_tracking(pivoted, gyro_key, gyro_sp_key)
+        aligned_errors = [a - b for a, b in zip(actual, desired)]
 
         if not aligned_errors:
             continue
@@ -925,20 +973,18 @@ def plot_attitude_tracking(
             if sp_key and sp_key in pivoted:
                 sp_ts, sp_vals = pivoted[sp_key]
                 if sp_ts:
-                    # Simple alignment: use first N samples matching length
-                    min_len = min(len(t_norm), len(sp_vals))
-                    if min_len > 0:
-                        ax.plot(t_norm[:min_len], sp_vals[:min_len], color=colors[i+1],
-                                label="setpoint", linestyle="--", alpha=0.8)
+                    sp_norm = [(t - t0) / 1e9 for t in sp_ts]
+                    ax.plot(sp_norm, sp_vals, color=colors[i+1],
+                            label="setpoint", linestyle="--", alpha=0.8)
 
             # Error subplot
             if sp_key and sp_key in pivoted:
-                sp_ts, sp_vals = pivoted[sp_key]
-                min_len = min(len(t_norm), len(sp_vals))
-                if min_len > 0:
-                    errors = [me_vals[j] - sp_vals[j] for j in range(min_len)]
+                et, actual, desired = _aligned_tracking(pivoted, me_key, sp_key)
+                if et:
+                    errors = [a - b for a, b in zip(actual, desired)]
                     ax2 = ax.twinx()
-                    ax2.plot(t_norm[:min_len], errors, color=colors[3], label="error", alpha=0.6)
+                    ax2.plot([(t - t0) / 1e9 for t in et], errors,
+                             color=colors[3], label="error", alpha=0.6)
                     ax2.set_ylabel(f"{axis} error (deg)")
 
             ax.set_ylabel(f"{axis} (deg)")
@@ -1023,7 +1069,7 @@ def plot_control_effort(
     # PID outputs
     pid_outputs = []
     for suffix, idx in [("roll", 0), ("pitch", 1), ("yaw", 2)]:
-        u_key = signal_map.get(f"pid_out_{suffix}", [])[0]
+        u_key = signal_map.get(f"control_out_{suffix}", [""])[0] or signal_map.get(f"pid_out_{suffix}", [""])[0]
         if u_key and u_key in pivoted:
             pid_outputs.append((u_key, pivoted[u_key], colors[idx]))
 
@@ -1033,7 +1079,7 @@ def plot_control_effort(
             t0 = ts[0]
             t_norm = [(t - t0) / 1e9 for t in ts]
             ax0.plot(t_norm, vals, color=c, label=name, alpha=0.8)
-    ax0.set_ylabel("PID output")
+    ax0.set_ylabel("Axis command / PID output")
     ax0.legend(loc="best", fontsize=7)
 
     # Motors
@@ -1145,13 +1191,11 @@ def plot_error_distribution(
                     ha="center", va="center")
             continue
 
-        me_ts, me_vals = pivoted[me_key]
-        sp_ts, sp_vals = pivoted[sp_key]
-        min_len = min(len(me_vals), len(sp_vals))
-        if min_len < 10:
+        _, actual, desired = _aligned_tracking(pivoted, me_key, sp_key)
+        errors = [a - b for a, b in zip(actual, desired)]
+        if len(errors) < 10:
             continue
 
-        errors = [me_vals[j] - sp_vals[j] for j in range(min_len)]
         ax.hist(errors, bins=40, color=colors[i], alpha=0.7, edgecolor="white")
         ax.set_xlabel(f"{axis} error (deg)")
         ax.set_ylabel("Count")
@@ -1200,18 +1244,17 @@ def plot_psd(
                     ha="center", va="center")
             continue
         if not sp_key or sp_key not in pivoted:
-            continue
-
-        me_ts, me_vals = pivoted[me_key]
-        sp_ts, sp_vals = pivoted[sp_key]
-        min_len = min(len(me_vals), len(sp_vals))
-
-        if min_len < 2:
-            ax.text(0.5, 0.5, "insufficient data", transform=ax.transAxes,
+            ax.text(0.5, 0.5, f"{axis}: setpoint missing", transform=ax.transAxes,
                     ha="center", va="center")
             continue
 
-        errors = [me_vals[j] - sp_vals[j] for j in range(min_len)]
+        me_ts, actual, desired = _aligned_tracking(pivoted, me_key, sp_key)
+        errors = [a - b for a, b in zip(actual, desired)]
+        min_len = len(errors)
+        if min_len < 2:
+            ax.text(0.5, 0.5, "insufficient overlapping data", transform=ax.transAxes,
+                    ha="center", va="center")
+            continue
 
         if HAS_SCIPY and HAS_NP:
             try:
@@ -1224,11 +1267,11 @@ def plot_psd(
                     ) if min_len > 1 else 1.0
                     if dt > 0 and min_len >= 16:
                         fs = 1.0 / dt
-                        from scipy.fft import fft
-                        f_fft = np.linspace(0, fs/2, min_len//2+1)
-                        fft_vals = fft(errors)
-                        psd = (2.0 / (min_len * fs)) * np.abs(fft_vals[:min_len//2+1])**2
-                        ax.semilogy(f_fft, psd, color=colors[i], alpha=0.8)
+                        from scipy.signal import welch
+                        uniform = np.arange(t_norm[0], t_norm[-1], dt)
+                        resampled = np.interp(uniform, t_norm, errors)
+                        f_fft, psd = welch(resampled, fs=fs, nperseg=min(256, len(resampled)))
+                        ax.semilogy(f_fft, np.maximum(psd, np.finfo(float).tiny), color=colors[i], alpha=0.8)
                         ax.set_ylabel(f"{axis} PSD")
                     else:
                         ax.text(0.5, 0.5, "not enough data for PSD",
@@ -1780,6 +1823,7 @@ def generate_report(
     manifest = read_manifest(session_dir)
     signal_map = _load_signal_map(session_dir)
     pivoted = pivot(telemetry)
+    signal_map = _resolve_signal_map(signal_map, pivoted)
 
     # Segmentation
     segmentation = segment_telemetry(telemetry, pivoted)

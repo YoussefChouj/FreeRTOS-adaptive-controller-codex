@@ -576,8 +576,9 @@ def _save_fallback_png(path, title, subtitle=""):
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"  plots warning: {path.name}: NO DATA: plot inputs unavailable", flush=True)
     fig, ax = plt.subplots(figsize=(6, 3.5), dpi=120)
-    ax.plot([0.0, 1.0], [0.0, 0.0], color="#1f77b4", lw=1.2)
+    ax.text(0.5, 0.5, "NO DATA: plot inputs unavailable", ha="center", va="center", transform=ax.transAxes)
     ax.set_title(title, fontsize=10)
     if subtitle:
         ax.set_xlabel(subtitle, fontsize=8)
@@ -643,18 +644,18 @@ def generate_flight_plots(folder, flight_id="", fly_name="", root=None):
         try:
             from ground_station.analysis import flight_report
             flight_report.generate_report(session, out_dir=folder)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            print(f"  plots warning: flight report: {exc}", flush=True)
         try:
             from ground_station.analysis import flight_debrief
             from ground_station.service.campaign_outputs import hold_window, plot_flight, read_telemetry
             series = read_telemetry(session)
-            if getattr(series, "samples", None):
+            if series:
                 plot_flight(series, plots_dir / "tracking.png", f"{flight_id or folder.name}", hold_window(series))
                 m = flight_debrief.measure(series, None, None)
                 flight_debrief.plot_analysis(series, m, plots_dir / "analysis.png", None)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            print(f"  plots warning: telemetry plots: {exc}", flush=True)
 
     if not (plots_dir / "tracking.png").is_file():
         _save_fallback_png(plots_dir / "tracking.png", f"Tracking: {flight_id or folder.name}", "t (s)")
@@ -2060,6 +2061,12 @@ class Day:
                     reason = err.splitlines()[-1] if err else f"exit code {rc}"
                     self.say(f"  plots failed: {reason}")
                     return
+                stream = getattr(proc, "stdout", None)
+                if stream is not None:
+                    output = stream.read() if hasattr(stream, "read") else str(stream)
+                    for line in output.splitlines():
+                        if "plots warning:" in line:
+                            self.say(line)
                 n = getattr(proc, "plot_files", None)
                 if n is None:
                     n = len(list(plots_dir.glob("*.png"))) if plots_dir.is_dir() else 0
