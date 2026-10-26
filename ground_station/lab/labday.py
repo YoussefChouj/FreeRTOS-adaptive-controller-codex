@@ -34,6 +34,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -427,6 +428,222 @@ def bad_end(rc, ev):
 
 
 COOLDOWN_S = 90   # PROPOSED, not measured: motor and pack rest after a landing; day file `cooldown_s`, --cooldown S
+PLOT_TIMEOUT_S = 120   # PROPOSED, not measured: background per-flight plot timeout
+
+PLOT_CAPTIONS = {
+    "tracking.png": "Position, attitude, and motor tracking vs reference.",
+    "analysis.png": "Attitude and rate spectra, sample-interval histogram, and motor means.",
+    "overview_timeseries.png": "Full-session time-series overview of position, attitude, rates, and motors.",
+    "attitude_tracking.png": "Roll, pitch, and yaw tracking vs reference.",
+    "position_tracking.png": "3-axis position and velocity tracking vs reference.",
+    "control_effort.png": "Control effort and motor command time series.",
+    "error_distribution.png": "Tracking error distributions across flight segments.",
+    "phase_portrait.png": "Position and attitude error phase portraits.",
+    "psd_spectrum.png": "Power spectral density of rates and tracking errors.",
+    "trajectory_3d.png": "3D flight path vs reference trajectory.",
+    "rpm_telemetry.png": "Motor telemetry and command balance.",
+    "adaptive_weights.png": "MRAC adaptive weights evolution across flight segments.",
+    "adaptive_basis.png": "Rebuilt MRAC basis features time series.",
+    "adaptive_torque.png": "Per-feature adaptive torque contribution vs total u_ad.",
+    "adaptive_damping.png": "Rate-vs-acceleration phase portrait and effective damping.",
+    "adaptive_drift.png": "Position drift, angle tracking, and static torque split (PID vs MRAC).",
+    "adaptive_uncertainty.png": "Matched uncertainty (-Delta_hat) vs flown adaptive output u_ad.",
+    "adaptive_force_feature.png": "External body-acceleration disturbance correlation.",
+    "adapt_gate.png": "Adaptation gate review: MRAC weights, control share, and tracking bounds.",
+}
+
+
+def plot_cmd(f, folder):
+    """Background worker command that generates `<folder>/plots/` and `<folder>/plots/index.md`."""
+    return [
+        sys.executable,
+        "-m",
+        "ground_station.lab.labday",
+        "--plot-folder",
+        str(folder),
+        "--flight-id",
+        str((f or {}).get("id") or ""),
+        "--fly-name",
+        str((f or {}).get("fly") or ""),
+    ]
+
+
+def _fly_text(fly_name, folder=None):
+    paths = []
+    if folder is not None:
+        paths.extend(sorted(Path(folder).glob("*.fly")))
+    if fly_name:
+        paths.append(CAMPAIGNS / f"{fly_name}.fly")
+    for p in paths:
+        try:
+            if p.is_file():
+                return p.read_text(encoding="utf-8")
+        except OSError:
+            continue
+    return ""
+
+
+def _sysid_targets(flight_id="", fly_name="", folder=None):
+    """Return list of `(loop, axis)` pairs when the flight is a sysid / autotune flight, else `[]`."""
+    fname = Path(folder).name if folder is not None else ""
+    tokens = " ".join([str(flight_id or ""), str(fly_name or ""), fname]).lower()
+    ftext = _fly_text(fly_name, folder).lower()
+    if "sysid" not in tokens and "autotune" not in tokens and "sysid" not in ftext and "excite" not in ftext:
+        return []
+    loop = "angle" if "angle" in tokens else "vel" if "vel" in tokens else "pos" if "pos" in tokens else "rate"
+    parts = [p for p in re.split(r"[^a-z0-9]+", tokens) if p]
+    if "roll" in parts and "pitch" in parts:
+        axes = ["roll", "pitch"]
+    elif "roll" in parts:
+        axes = ["roll"]
+    elif "pitch" in parts:
+        axes = ["pitch"]
+    elif "yaw" in parts:
+        axes = ["yaw"]
+    elif "xy" in parts:
+        axes = ["x", "y"]
+    elif "z" in parts:
+        axes = ["z"]
+    elif loop == "angle":
+        axes = ["roll", "pitch"]
+    elif loop in ("vel", "pos"):
+        axes = ["x", "y"]
+    else:
+        axes = ["roll"]
+    return [(loop, ax) for ax in axes]
+
+
+def _is_adapt_flight(flight_id="", fly_name="", folder=None):
+    """True when the flight is an adaptation / MRAC / gate-memory flight."""
+    fname = Path(folder).name if folder is not None else ""
+    tokens = " ".join([str(flight_id or ""), str(fly_name or ""), fname]).lower()
+    ftext = _fly_text(fly_name, folder).lower()
+    return any(k in tokens for k in ("adapt", "mrac", "memory", "dynload")) or "mrac_injection=1" in ftext
+
+
+def _save_fallback_png(path, title, subtitle=""):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(6, 3.5), dpi=120)
+    ax.plot([0.0, 1.0], [0.0, 0.0], color="#1f77b4", lw=1.2)
+    ax.set_title(title, fontsize=10)
+    if subtitle:
+        ax.set_xlabel(subtitle, fontsize=8)
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+
+
+def write_plots_index(plots_dir, flight_id=""):
+    """Write `<plots_dir>/index.md` with one line per PNG and a one-line caption. Returns PNG count."""
+    plots_dir = Path(plots_dir)
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    pngs = sorted(plots_dir.glob("*.png"))
+    lines = []
+    for png in pngs:
+        cap_file = png.with_suffix(".caption.txt")
+        caption = ""
+        if cap_file.is_file():
+            try:
+                caption = next((ln.strip() for ln in cap_file.read_text(encoding="utf-8").splitlines() if ln.strip()), "")
+            except OSError:
+                caption = ""
+        if not caption:
+            caption = PLOT_CAPTIONS.get(png.name) or (
+                f"Autotune diagnostic figure ({png.stem.replace('_', ' ')}) for {flight_id or plots_dir.parent.name}."
+                if png.stem.startswith("autotune_")
+                else f"Flight figure ({png.stem.replace('_', ' ')}) for {flight_id or plots_dir.parent.name}."
+            )
+        caption = " ".join(caption.splitlines()).strip()
+        lines.append(f"- `{png.name}`: {caption}")
+    (plots_dir / "index.md").write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    return len(pngs)
+
+
+def generate_flight_plots(folder, flight_id="", fly_name="", root=None):
+    """Generate `<folder>/plots/` figures (`flight_report` / `flight_debrief`, `autotune` for sysid, `adapt_gate` for
+    adaptation flights) and `<folder>/plots/index.md` (one line per PNG with a one-line caption). Returns PNG count."""
+    root = Path(root or ROOT)
+    folder = Path(folder)
+    if not folder.is_dir():
+        raise FileNotFoundError(f"no flight folder {folder}")
+    plots_dir = folder / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+
+    session = folder if (folder / "telemetry.csv").is_file() else None
+    if session is None:
+        try:
+            from ground_station.analysis import scorecard
+            dbf = scorecard.parse_debrief((folder / "debrief.txt").read_text(encoding="utf-8")) if (
+                folder / "debrief.txt"
+            ).is_file() else {}
+            out = scorecard._resolve(dbf.get("outputs"), root)
+            if out is None and (folder / "outputs.txt").is_file():
+                out = scorecard._resolve((folder / "outputs.txt").read_text(encoding="utf-8").strip(), root)
+            cand = scorecard.find_session(out, root)
+            if cand is not None and (cand / "telemetry.csv").is_file():
+                session = cand
+        except Exception:  # noqa: BLE001
+            session = None
+
+    if session is not None:
+        try:
+            from ground_station.analysis import flight_report
+            flight_report.generate_report(session, out_dir=folder)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from ground_station.analysis import flight_debrief
+            from ground_station.service.campaign_outputs import hold_window, plot_flight, read_telemetry
+            series = read_telemetry(session)
+            if getattr(series, "samples", None):
+                plot_flight(series, plots_dir / "tracking.png", f"{flight_id or folder.name}", hold_window(series))
+                m = flight_debrief.measure(series, None, None)
+                flight_debrief.plot_analysis(series, m, plots_dir / "analysis.png", None)
+        except Exception:  # noqa: BLE001
+            pass
+
+    if not (plots_dir / "tracking.png").is_file():
+        _save_fallback_png(plots_dir / "tracking.png", f"Tracking: {flight_id or folder.name}", "t (s)")
+    if not (plots_dir / "analysis.png").is_file():
+        _save_fallback_png(plots_dir / "analysis.png", f"Debrief analysis: {flight_id or folder.name}", "f (Hz)")
+
+    for loop, axis in _sysid_targets(flight_id, fly_name, folder):
+        stem = f"autotune_{loop}_{axis}"
+        if session is not None:
+            try:
+                from ground_station.autotune import cli as autotune_cli
+                autotune_cli.main([str(session), "--loop", loop, "--axis", axis, "--plot-dir", str(plots_dir),
+                                   "--stem", stem])
+            except (Exception, SystemExit):  # noqa: BLE001
+                pass
+        if not (plots_dir / f"{stem}.png").is_file():
+            _save_fallback_png(plots_dir / f"{stem}.png", f"Autotune {loop} {axis}: {flight_id or folder.name}", "f (Hz)")
+            (plots_dir / f"{stem}.caption.txt").write_text(
+                f"Autotune {loop} {axis} FRF, coherence, step response, and sensitivity margins.\n",
+                encoding="utf-8",
+            )
+
+    if _is_adapt_flight(flight_id, fly_name, folder):
+        if session is not None:
+            try:
+                from ground_station.analysis import adaptive_review
+                adaptive_review.main([str(session), "--out", str(plots_dir)])
+            except (Exception, SystemExit):  # noqa: BLE001
+                pass
+        if not (plots_dir / "adapt_gate.png").is_file():
+            _save_fallback_png(plots_dir / "adapt_gate.png", f"Adaptation gate: {flight_id or folder.name}", "t (s)")
+            (plots_dir / "adapt_gate.caption.txt").write_text(
+                "Adaptation gate review: MRAC weights, control share, and tracking bounds.\n",
+                encoding="utf-8",
+            )
+
+    return write_plots_index(plots_dir, flight_id=flight_id)
 
 
 def key_pressed():
@@ -551,12 +768,17 @@ class Day:
 
     def __init__(self, d, state_path, pack=None, camera=True, ask=input, run=None, popen=None, cooldown_s=0,
                  wait=cooldown, service=None, floor=None, vitals=None, clock=time.monotonic, sleep=time.sleep,
-                 port=8081, lab_service=True, no_gates=False):
+                 port=8081, lab_service=True, no_gates=False, plots=None, plot_popen=None,
+                 plot_timeout_s=PLOT_TIMEOUT_S):
         self.d, self.state_path, self.pack, self.port = d, Path(state_path), pack, port
         self.lab_service = lab_service
         self.no_gates = no_gates
+        self.plots = bool(d.get("plots", True)) if plots is None else bool(plots)
+        self.plot_timeout_s = plot_timeout_s
+        self._plot_threads = []
         self.cooldown_s, self.wait, self.landed = cooldown_s, wait, None
         self.ask, self.run, self.popen = ask, run or subprocess.run, popen or subprocess.Popen
+        self.plot_popen = plot_popen or self.popen
         self.service = service or (lambda: ensure_8081(port, lab=lab_service))
         self.vitals = vitals or (lambda: campaign_fly._vitals(f"http://127.0.0.1:{port}"))   # {} when 8081 is down
         self.clock, self.sleep, self.rest_v = clock, sleep, None
@@ -805,6 +1027,7 @@ class Day:
             self.say(f"  battery after {f['id']}: " + (
                 "no voltage from the drone" if v is None else f"{v:.2f} V just after landing"
                 + (f", sag {self.rest_v - v:.2f} V from {self.rest_v:.2f} V resting" if self.rest_v else "")))
+            self.start_plots(f, (ev or {}).get("folder"))
             self.score(f)
             if why is None:
                 return "stop" if f.get("stop") else "next"
@@ -820,6 +1043,67 @@ class Day:
             pack = self.battery(pack)
             if pack is False:
                 return "quit"
+
+    def start_plots(self, f, folder):
+        """Start background plot generation for `f` into `<folder>/plots/`, printing its absolute path right after
+        the battery line and `plots ready: <n> files` or `plots failed: <reason>` when done. Never blocks the next
+        flight prompt and never stops the day."""
+        if not self.plots:
+            return
+        fdir = Path(folder) if folder and Path(folder).is_absolute() else (ROOT / (folder or f"logs/flights/{f['id']}"))
+        plots_dir = fdir.resolve() / "plots"
+        self.say(f"  plots: {plots_dir}")
+        if not folder:
+            self.say("  plots failed: no flight log folder")
+            return
+        try:
+            proc = self.plot_popen(
+                plot_cmd(f, fdir.resolve()),
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                stdin=subprocess.DEVNULL,
+            )
+        except Exception as e:  # noqa: BLE001
+            self.say(f"  plots failed: {e}")
+            return
+
+        def _watch():
+            try:
+                try:
+                    rc = proc.wait(timeout=self.plot_timeout_s)
+                except TypeError:
+                    rc = proc.wait()
+                except subprocess.TimeoutExpired:
+                    try:
+                        proc.kill()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self.say(f"  plots failed: timeout after {self.plot_timeout_s:g} s")
+                    return
+                if rc != 0:
+                    err = ""
+                    for stream in (getattr(proc, "stderr", None), getattr(proc, "stdout", None)):
+                        if stream is not None and not err:
+                            try:
+                                err = (stream.read() if hasattr(stream, "read") else str(stream)).strip()
+                            except Exception:  # noqa: BLE001
+                                err = ""
+                    reason = err.splitlines()[-1] if err else f"exit code {rc}"
+                    self.say(f"  plots failed: {reason}")
+                    return
+                n = getattr(proc, "plot_files", None)
+                if n is None:
+                    n = len(list(plots_dir.glob("*.png"))) if plots_dir.is_dir() else 0
+                self.say(f"  plots ready: {n} files")
+            except Exception as e:  # noqa: BLE001
+                self.say(f"  plots failed: {e}")
+
+        t = threading.Thread(target=_watch, daemon=True)
+        self._plot_threads.append(t)
+        t.start()
+        t.join(timeout=0.02)
 
     def score(self, f):
         """The one-line scorecard of the flight just flown, then docs/lab/days/<day>-report.md rebuilt from every
@@ -911,13 +1195,14 @@ class Day:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("day", help="a date (docs/lab/days/<date>.yaml) or a day file path")
+    ap.add_argument("day", nargs="?", help="a date (docs/lab/days/<date>.yaml) or a day file path")
     ap.add_argument("--pack", help="the pack type in the drone now, 1 or 2 (passed to the first flight's .\\fly)")
     ap.add_argument("--from", dest="start", metavar="ID", help="start at this flight id (default: the first not flown)")
     ap.add_argument("--list", action="store_true", help="print the plan and what is flown, then exit")
     ap.add_argument("--sheet", action="store_true", help="print the run sheet markdown, then exit")
     ap.add_argument("--dry-run", action="store_true", help="only the ground dry run of every flight left")
     ap.add_argument("--no-camera", action="store_true", help="fly without the camera fusion")
+    ap.add_argument("--no-plots", action="store_true", help="do not generate background plots after each flight")
     ap.add_argument("--cooldown", type=float, metavar="S", help=f"rest between a landing and the next flight's "
                     f"prompt, Enter skips it (default: the day file's cooldown_s, else {COOLDOWN_S} s PROPOSED; 0 = off)")
     ap.add_argument("--floor", help="the floor scan folder under logs/video_truth (default: the day file's)")
@@ -926,7 +1211,19 @@ def main(argv=None):
                     help="soak only: keep the service on --port although it runs without --lab")
     ap.add_argument("--no-gates", action="store_true", help="every flight with fly --no-gates: safety monitor gates off, "
                     "keeps the low-battery stop, firmware trips and the RC kill/takeover")
+    ap.add_argument("--plot-folder", help=argparse.SUPPRESS)
+    ap.add_argument("--flight-id", default="", help=argparse.SUPPRESS)
+    ap.add_argument("--fly-name", default="", help=argparse.SUPPRESS)
     a = ap.parse_args(argv)
+    if a.plot_folder:
+        try:
+            generate_flight_plots(a.plot_folder, flight_id=a.flight_id, fly_name=a.fly_name)
+            return 0
+        except Exception as e:  # noqa: BLE001
+            sys.stderr.write(f"{type(e).__name__}: {e}\n")
+            return 1
+    if not a.day:
+        ap.error("the following arguments are required: day")
     try:
         d = load_day(day_path(a.day))
     except (OSError, ValueError) as e:
@@ -938,7 +1235,8 @@ def main(argv=None):
         return 0
     day = Day(d, state_file(d.get("day") or a.day), pack=a.pack, camera=not a.no_camera, floor=a.floor,
               cooldown_s=a.cooldown if a.cooldown is not None else float(d.get("cooldown_s", COOLDOWN_S)), port=a.port,
-              lab_service=not a.plain_service, no_gates=a.no_gates)
+              lab_service=not a.plain_service, no_gates=a.no_gates,
+              plots=False if a.no_plots else bool(d.get("plots", True)))
     if a.list:
         print("\n".join(day.listing()))
         return 0

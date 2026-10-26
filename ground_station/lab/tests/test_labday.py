@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -151,10 +152,13 @@ class _Fake:
 
     def popen(self, cmd, **kw):
         self.cmds.append(cmd)
+        if "--plot-folder" in cmd:
+            rc = self.plot_rc.pop(0) if getattr(self, "plot_rc", None) else 0
+            return SimpleNamespace(pid=4243, wait=lambda timeout=None: rc, stderr="", stdout="")
         if "--pack" in cmd:   # fly remembers the pack it was given
             campaign_fly.remember_pack(campaign_fly.pack_id(cmd[cmd.index("--pack") + 1]))
         rc = self.fly_rc.pop(0) if self.fly_rc else 0
-        return SimpleNamespace(pid=4242, wait=lambda: rc)
+        return SimpleNamespace(pid=4242, wait=lambda timeout=None: rc)
 
 
 def _player(tmp_path, monkeypatch, fake, flights, status="complete", camera=None, pack="2"):
@@ -723,3 +727,158 @@ def test_a1_day_gains_carry_forward_and_restart_persistence(tmp_path, monkeypatc
     assert p2.gains["values"]["3"] == pytest.approx(3.0)
     assert p2.gains["values"]["75"] == pytest.approx(0.0)
     assert p2.gains["history"][-1]["decision"] == "revert"
+
+
+def test_a9_plots_after_flight_path_ready_and_index_md(tmp_path, monkeypatch, capsys):
+    """A9: After each flight, labday prints `plots: <absolute path>` right after the battery line, writes
+    flight_report/flight_debrief, autotune (sysid), and adapt_gate (adaptation) figures to `<flight folder>/plots/`
+    plus `plots/index.md` (one line per PNG with a one-line caption), and prints `plots ready: <n> files`."""
+    monkeypatch.setattr(labday, "ROOT", tmp_path)
+    monkeypatch.setattr(labday, "REPORT_DIR", tmp_path / "days")
+    flight_dir = tmp_path / "f"
+    flight_dir.mkdir()
+    (flight_dir / "debrief.txt").write_text(
+        "complete  air 20.0 s  1 flight(s)  10 live samples\n"
+        "landing offset x +3 y +4 cm from the takeoff point (5 cm)\n"
+        "outputs -  flight folder f\n",
+        encoding="utf-8",
+    )
+
+    def real_plot_popen(cmd, **kw):
+        rc = labday.main(cmd[cmd.index("ground_station.lab.labday") + 1 :])
+        return SimpleNamespace(pid=4243, wait=lambda timeout=None: rc, stderr="", stdout="")
+
+    fake = _Fake(["", "q"])
+    p = _player(
+        tmp_path,
+        monkeypatch,
+        fake,
+        [{"id": "rate-sysid-roll-wide", "fly": "lab_d_sysid_rate_roll"}, {"id": "B", "fly": "lab_c_lqr"}],
+    )
+    p.plot_popen = real_plot_popen
+    assert p.go() == 0
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    bat_idx = next(i for i, ln in enumerate(lines) if ln.startswith("  battery after rate-sysid-roll-wide:"))
+    assert lines[bat_idx + 1].startswith("  plots: ")
+    plots_path_str = lines[bat_idx + 1].split("  plots: ", 1)[1].strip()
+    assert Path(plots_path_str).is_absolute()
+    assert Path(plots_path_str) == (flight_dir / "plots").resolve()
+    assert "  plots ready: 3 files" in out
+
+    plots_dir = flight_dir / "plots"
+    assert (plots_dir / "tracking.png").is_file()
+    assert (plots_dir / "analysis.png").is_file()
+    assert (plots_dir / "autotune_rate_roll.png").is_file()
+    idx_lines = (plots_dir / "index.md").read_text(encoding="utf-8").strip().splitlines()
+    pngs = sorted(plots_dir.glob("*.png"))
+    assert len(idx_lines) == len(pngs) == 3
+    for ln, png in zip(idx_lines, pngs):
+        assert f"`{png.name}`:" in ln and len(ln.split(":", 1)[1].strip()) > 5
+
+    # Adaptation flight also writes adapt_gate.png and updates index.md
+    adapt_dir = tmp_path / "f_adapt"
+    adapt_dir.mkdir()
+    n_adapt = labday.generate_flight_plots(adapt_dir, flight_id="memory-mrac-on-2", fly_name="lab_m_memory_u100", root=tmp_path)
+    assert n_adapt >= 3
+    assert (adapt_dir / "plots" / "adapt_gate.png").is_file()
+    adapt_idx = (adapt_dir / "plots" / "index.md").read_text(encoding="utf-8").strip().splitlines()
+    assert len(adapt_idx) == len(list((adapt_dir / "plots").glob("*.png")))
+    assert any("`adapt_gate.png`:" in ln for ln in adapt_idx)
+
+
+def test_a9_plots_crash_or_timeout_never_blocks_next_prompt(tmp_path, monkeypatch, capsys):
+    """A9: Plotting runs in the background with PLOT_TIMEOUT_S = 120 (PROPOSED). A plotting crash or timeout prints
+    `plots failed: <reason>` and the next-flight prompt still appears with no delay and never stops the day."""
+    import threading
+    import time
+
+    assert labday.PLOT_TIMEOUT_S == 120
+    monkeypatch.setattr(labday, "ROOT", tmp_path)
+    flights = [{"id": "A", "fly": "lab_c_robust"}, {"id": "B", "fly": "lab_c_lqr"}]
+
+    # 1. Crash case: non-zero exit with stderr reason
+    fake_crash = _Fake(["", ""])
+    p_crash = _player(tmp_path, monkeypatch, fake_crash, flights)
+    p_crash.plot_popen = lambda cmd, **kw: SimpleNamespace(
+        pid=4243, wait=lambda timeout=None: 1, stderr="RuntimeError: corrupt csv\n", stdout=""
+    )
+    assert p_crash.go() == 0
+    out_crash = capsys.readouterr().out
+    assert "  plots: " in out_crash
+    assert "  plots failed: RuntimeError: corrupt csv" in out_crash
+    assert _flown(fake_crash) == ["lab_c_robust", "lab_c_lqr"]
+
+    # 2. Timeout + non-blocking prompt case: slow background worker times out while next-flight prompt is already shown
+    (tmp_path / "state.json").unlink()
+    prompt_seen_before_timeout = []
+    release = threading.Event()
+
+    def slow_timeout_wait(timeout=None):
+        release.wait(timeout=0.5)
+        raise subprocess.TimeoutExpired(cmd=["plot"], timeout=timeout or 120)
+
+    fake_to = _Fake(["", "q"])
+    orig_ask = fake_to.ask
+
+    def timed_ask(prompt):
+        if len(fake_to.prompts) == 1:   # B's flight prompt right after A finishes
+            prompt_seen_before_timeout.append(not release.is_set())
+            release.set()
+            time.sleep(0.05)
+        return orig_ask(prompt)
+
+    fake_to.ask = timed_ask
+    p_to = _player(tmp_path, monkeypatch, fake_to, flights)
+    p_to.plot_popen = lambda cmd, **kw: SimpleNamespace(
+        pid=4244, wait=slow_timeout_wait, kill=lambda: None, stderr="", stdout=""
+    )
+    t0 = time.monotonic()
+    assert p_to.go() == 0
+    elapsed = time.monotonic() - t0
+    for t in p_to._plot_threads:
+        t.join(timeout=1.0)
+    out_to = capsys.readouterr().out
+    assert prompt_seen_before_timeout == [True]
+    assert elapsed < 0.4
+    assert "  plots failed: timeout after 120 s" in out_to
+
+
+def test_a9_no_plots_flag_and_day_header_print_nothing_and_start_no_process(tmp_path, monkeypatch, capsys):
+    """A9: `--no-plots` and day-file header `plots: false` turn plotting off: print nothing and start no process."""
+    monkeypatch.setattr(labday, "ROOT", tmp_path)
+    flights = [{"id": "A", "fly": "lab_c_robust"}]
+
+    # 1. Day(..., plots=False) / --no-plots
+    fake = _Fake([""])
+    p = _player(tmp_path, monkeypatch, fake, flights)
+    p.plots = False
+    assert p.go() == 0
+    out = capsys.readouterr().out
+    assert "plots:" not in out and "plots ready" not in out and "plots failed" not in out
+    assert not [c for c in fake.cmds if "--plot-folder" in c]
+
+    # 2. Day file header `plots: false` + CLI `--no-plots`
+    day_yaml = tmp_path / "day_no_plots.yaml"
+    day_yaml.write_text(
+        json.dumps({"day": "2099-01-02", "plots": False, "flights": flights, "branches": []}),
+        encoding="utf-8",
+    )
+    d = labday.load_day(day_yaml)
+    fake2 = _Fake([""])
+    p2 = labday.Day(
+        d, tmp_path / "state2.json", pack="2", ask=fake2.ask, run=fake2.run, popen=fake2.popen,
+        service=fake2.service, vitals=fake2.vitals, clock=lambda: fake2.now, sleep=fake2.sleep,
+    )
+    assert p2.plots is False
+    assert p2.go() == 0
+    out2 = capsys.readouterr().out
+    assert "plots:" not in out2
+    assert not [c for c in fake2.cmds if "--plot-folder" in c]
+
+    made = []
+    monkeypatch.setattr(labday, "Day", lambda *a, **kw: made.append(kw) or SimpleNamespace(listing=lambda: []))
+    assert labday.main([str(tmp_path / "day.yaml"), "--list", "--no-plots"]) == 0
+    assert labday.main([str(day_yaml), "--list"]) == 0
+    assert [kw["plots"] for kw in made] == [False, False]
+
