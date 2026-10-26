@@ -1284,12 +1284,6 @@ void Alt_CfReset(float h_init, uint8_t zero_bias)
 		alt_cf.b_az = 0.0f;
 		alt_cf.n_corr = 0U;
 	}
-	s_alt_reject_cnt = 0U;
-	if (h_init > 0.0f && ano_of.of2_raw_h == 0.0f) {
-		ano_of.of2_raw_h = h_init;
-		ano_of.of2_h = h_init;
-		ano_of.of2_last_h = h_init;
-	}
 	s_alt_cf_inited = (h_init > 0.0f) ? 1U : 0U;
 	s_alt_vz_mode_prev = g_alt_vz_mode;
 }
