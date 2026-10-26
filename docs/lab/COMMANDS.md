@@ -463,6 +463,11 @@ python -m ground_station.flashtool.rebuild_and_flash --yes
 ```
 
 - Stop 8081 first (it locks the .axf), and only flash with the drone disarmed.
+- Lab mode suppresses legacy UART5 frames. If UART5 is silent after stopping 8081, the flash tool verifies the
+  previous ELF and requires clean, unanimous disarmed SWD votes before requesting MIXED telemetry over the lab
+  WiFi link. The WiFi port must be free; UART5 power and telemetry arm checks must then pass normally. No
+  telemetry still means refusal; it does not by itself prove the drone is unpowered. Service startup restores
+  SUBSCRIBE_ONLY for the flight streams.
 - Never use `--force`. Stop on a non-zero exit.
 
 ## 7. Night rehearsal on the fake drone

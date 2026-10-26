@@ -217,6 +217,40 @@ def target_alive(seconds: float = 1.5, port: str = "COM6") -> bool:
     return powered_from_sample(sample(port, seconds))
 
 
+def restore_uart5_telemetry(elf: Path) -> bool:
+    """Restore MIXED after lab mode, without bypassing the serial flash gates.
+
+    SUBSCRIBE_ONLY suppresses UART5 even after 8081 exits. Only send the
+    telemetry-mode command with a matching ELF, unanimous disarmed SWD reads,
+    and exclusive ownership of the lab WiFi port. Actual UART5 frames must
+    still pass the normal power/arm checks afterwards.
+    """
+    import socket
+    from ground_station.comm.mrac_param_encoder import build_command_frame
+
+    try:
+        if not elf.exists() or not elf_matches_target(elf):
+            _say("cannot restore UART5: the previous ELF is not verified")
+            return False
+        status, ok_n, err_n = arm_status(elf)
+        if status != DISARMED or ok_n != 9 or err_n != 0:
+            _say("cannot restore UART5: disarmed SWD vote is not clean and unanimous")
+            return False
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as link:
+            if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                link.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            link.bind(("0.0.0.0", 14550))  # lab bridge must be stopped; never steal its socket
+            frame = build_command_frame(0x0F, 101, 0.0)  # MIXED restores legacy UART5 frames
+            for _ in range(2):
+                link.sendto(frame, ("192.168.4.1", 14550))
+                time.sleep(0.05)
+        _say("requested MIXED telemetry; rechecking actual UART5 power and arm frames")
+        return True
+    except Exception as exc:
+        _say("cannot restore UART5 telemetry: %s" % exc)
+        return False
+
+
 def arm_status(elf: Path, votes: int = 9):
     """Read ARM_Status through the given ELF, releasing SWD afterwards.
 
@@ -439,7 +473,10 @@ def main(argv=None) -> int:
     else:
         try:
             if not target_alive(port=args.port):
-                return _refuse("REFUSING to flash: the target is dark.", 5)
+                _say("UART5 is silent; checking the lab SUBSCRIBE_ONLY telemetry handoff")
+                if not restore_uart5_telemetry(SNAPSHOT / "JX_FLY.axf") or not target_alive(port=args.port):
+                    return _refuse("REFUSING to flash: no UART5 telemetry after the mode handoff; "
+                                   "check power, telemetry mode and serial connection.", 5)
         except PortUnavailable as exc:
             return _refuse("REFUSING to flash: cannot read %s" % exc, 5)
 

@@ -1,4 +1,4 @@
-"""Is the flight controller powered right now? Listen, don't guess.
+"""Check for legacy UART5 telemetry without opening SWD.
 
 Build and flash want *opposite* power states, and getting it wrong is not a
 recoverable mistake:
@@ -10,11 +10,12 @@ recoverable mistake:
   self-recovered.
 * **Flash** needs the target ON, obviously.
 
-So this is a gate, not a diagnostic. It answers the question by *listening* to
-UART5's virtual COM port: the flight controller pushes ``0xAA 0xBB`` telemetry
-frames continuously and unprompted, so their presence means a running core and
-their absence means a dark one. Nothing here opens SWD, so running the check
-cannot itself disturb the target.
+UART5's virtual COM port carries unsolicited ``0xAA 0xBB`` frames in MIXED
+mode. Their presence proves a running core; silence is ambiguous: lab
+SUBSCRIBE_ONLY mode deliberately suppresses UART5 and persists after 8081
+exits. The legacy off result means no telemetry detected, not proven power
+off. Use rebuild_and_flash's probe-neutralized build and guarded telemetry
+handoff for the lab workflow. Nothing here opens SWD.
 
     python -m ground_station.flashtool.target_power              # report
     python -m ground_station.flashtool.target_power --require off  # gate a build

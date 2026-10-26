@@ -21,6 +21,7 @@ def rig(monkeypatch, tmp_path):
     monkeypatch.setattr(rf, "archive_artifact",
                         lambda: calls.__setitem__("archived", calls["archived"] + 1))
     monkeypatch.setattr(rf, "target_alive", lambda *a, **k: True)
+    monkeypatch.setattr(rf, "restore_uart5_telemetry", lambda elf: False)
     # Both arm oracles must be stubbed. arm_status_from_telemetry opens a real
     # serial port, so leaving it live makes the suite read the actual drone.
     monkeypatch.setattr(rf, "arm_status",
@@ -252,3 +253,28 @@ def test_flash_gives_up_rather_than_looping_forever(monkeypatch):
     monkeypatch.setattr(rf.time, "sleep", lambda *a: None)
     ok, _ = rf.flash(attempts=3)
     assert ok is False
+
+
+def test_subscribe_only_handoff_still_requires_real_uart5(rig, monkeypatch):
+    monkeypatch.setattr(rf, 'target_alive', lambda **kw: False)
+    monkeypatch.setattr(rf, 'restore_uart5_telemetry', lambda elf: True)
+    assert rf.main(['--yes']) == 5
+    assert rig['flashed'] == 0 and rig['restored'] == 1
+
+
+@pytest.mark.parametrize('arm', [1, None])
+def test_handoff_cannot_bypass_primary_arm_gate(rig, monkeypatch, arm):
+    power = iter([False, True])
+    monkeypatch.setattr(rf, 'target_alive', lambda **kw: next(power))
+    monkeypatch.setattr(rf, 'restore_uart5_telemetry', lambda elf: True)
+    monkeypatch.setattr(rf, 'arm_status_from_telemetry', lambda *a: (arm, 128))
+    assert rf.main(['--yes']) == 6
+    assert rig['flashed'] == 0 and rig['restored'] == 1
+
+
+def test_subscribe_only_handoff_then_normal_gates_and_flash(rig, monkeypatch):
+    power = iter([False, True, True])
+    monkeypatch.setattr(rf, 'target_alive', lambda **kw: next(power))
+    monkeypatch.setattr(rf, 'restore_uart5_telemetry', lambda elf: True)
+    assert rf.main(['--yes']) == 0
+    assert rig['flashed'] == 1
