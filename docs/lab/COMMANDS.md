@@ -17,7 +17,7 @@ which has no adb, scrcpy or Windows python. Never use it for the camera. `.\cam`
 |---|---|
 | Fly the whole day | `.\labday 2026-10-19` |
 | See what is flown / the plan | `.\labday 2026-10-19 --list` |
-| Gates off (battery + firmware trips + RC only) | `.\labday 2026-10-19 --no-gates` or `.ly <card> --once --no-gates` (restart 8081 after the 10-24 commit) |
+| Gates off (battery + firmware trips + RC only) | `.\labday 2026-10-19 --no-gates` or `.\fly <card> --once --no-gates` (restart 8081 after the 10-24 commit) |
 | Scan the floor (new phone placement, drone out of view) | `.\cam floor floor-1019` |
 | Start the camera fusion for one flight | `.\cam fusion f1` (mode 3, `--yaw-deg 94`) |
 | Same with another mode | `.\cam fusion f1 2 --yaw-deg 94` |

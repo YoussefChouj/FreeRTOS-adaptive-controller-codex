@@ -12,30 +12,32 @@ camera:
   mode: 3
   args: [--yaw-deg, "94", --delay-ms, "330"]
 before:
-  - "Flash sysid-chain firmware (`rebuild_and_flash --yes`) and verify with `python -m ground_station.livewatch verify`"
+  - "Flash sysid-chain firmware (`python -m ground_station.flashtool.rebuild_and_flash --yes`) and verify with `python -m ground_station.livewatch verify`"
   - "RESTART 8081 in `--lab` mode so 200 Hz subscribe streaming keeps full rate (`< 1%` frame drops)"
   - "Floor scan: labday scans `floor-2026-10-27` at launch (drone out of view); keep the camera fixed all day"
   - "HANDS OFF THE STICKS during every excitation and trajectory (stick move > 0.05 in 10 ms = RC takeover = abort)"
   - "Tracker dot centered on drone before arming; resting battery >= 15.8V before first flight"
 
 flights:
-  # ======== BLOCK 0: PRE-FLIGHT & SMOKE ========
-  - id: smoke-hover
-    fly: lab_s_smoke
-    why: "Block 0 pre-flight & smoke: verify 200 Hz subscribe link (< 1% drops), camera truth fusion, RC authority logging, and landing pad gate"
-    pass: "every traj_go accepted; lands inside 10 cm pad gate; subscribe drop rate < 1%; s_authority stays 1 (PROPOSED)"
-    stop: true
-
+  # ======== BLOCK 0: RATE GAINS CHAT-APPROVAL GATE & PRE-FLIGHT SMOKE ========
   # Rate gains are written only after the operator's chat OK (the operator's pick in chat is the approval; the CEO
   # sends it with their words), disarmed only, via `.\fly <fly> --once --gains <preset>`; never as a .fly `set`.
   # rate35y104 = rate35 (roll/pitch Kp3.5 Kd13) + yaw104 (yaw Kp10.4 Kd0.014), both PROPOSED from the 10-24 fits.
   # RAM gains outlive the flight but not a reboot, so every later flight re-writes them with --gains rate35y104.
   - id: rate-gains-apply
-    fly: lab_a_hover
+    fly: lab_a_hover_verify
     args: [--gains, rate35y104]
-    gate: "CHAT APPROVAL: fly only after the operator OKs rate35 + yaw104 in chat; written disarmed. If declined, run Blocks 1-5 with --gains defaults"
-    why: "Block 0 apply rate35 (roll PM 21.4 -> 34.4 deg, pitch 28 -> 43 deg) + yaw104 before any sysid, so Block 1 identifies the plant under the gains we will fly"
+    gate: "CHAT APPROVAL: fly only after the operator OKs rate35 + yaw104 in chat; written while disarmed. If declined, run Blocks 1-5 with --gains defaults"
+    why: "Block 0 apply rate35 (roll PM 21.4 -> 34.4 deg, pitch 28 -> 43 deg) + yaw104 first before any sysid, so Block 1 identifies the plant under the gains we will fly"
     pass: "steady hover; gx/gy PSD peak < 3 dps in 1.7-5.3 Hz; yaw span < 5 deg; lands inside 10 cm pad gate (PROPOSED)"
+    stop: true
+
+  - id: smoke-hover
+    fly: lab_s_smoke
+    args: [--gains, rate35y104]
+    gate: "CHAT APPROVAL: confirm rate-gains-apply passed with operator chat OK (written while disarmed; or --gains defaults if declined)"
+    why: "Block 0 pre-flight & smoke: verify 100/50 Hz 4-slot subscribe link (< 1% drops), camera truth fusion, RC authority logging, and landing pad gate"
+    pass: "every traj_go accepted; lands inside 10 cm pad gate; subscribe drop rate < 1%; s_authority stays 1 (PROPOSED)"
     stop: true
 
   # ======== BLOCK 1: INNER RATE LOOP SYSID (sysid_target=0, 0.2-40 Hz split low/high @ 200 Hz) ========
@@ -61,9 +63,9 @@ flights:
     notes: "10-24 yaw rate 215247 (0.5-15 Hz): k=1.253, tau=1.0 ms, delay=12.1 ms, PM 81.7 deg"
 
   - id: rate-gain-verify-hover
-    fly: lab_a_hover
+    fly: lab_a_hover_verify
     args: [--gains, rate35y104]
-    gate: "Run `autotune.cli --loop rate` on the Block 1 logs; it prints PROPOSED gain-write commands and never sends them. Keep rate35y104 if PM >= 34 deg and max|S| <= 2.0; any new rate gains need the operator's chat OK first"
+    gate: "CHAT APPROVAL: Run `autotune.cli --loop rate` on the Block 1 logs; it prints PROPOSED gain-write commands and never sends them. Keep rate35y104 if PM >= 34 deg and max|S| <= 2.0; any new rate gains need the operator's chat OK first and are written while disarmed"
     why: "Block 1 verification hover with fitted inner rate gains (rate35: roll/pitch Kp=3.5, Kd=13) before locking inner loop for Block 2"
     pass: "steady hover; gyrox/gyroy RMS < 3.5 deg/s; no high-frequency motor chatter (PROPOSED)"
     stop: true
@@ -77,9 +79,9 @@ flights:
     pass: "excite completes; `python -m ground_station.autotune.cli <session> --loop angle --axis roll --inner-model model_rate_roll.json` (and pitch) fits with PM >= 45 deg and inner/outer wc separation >= 3x (PROPOSED)"
 
   - id: angle-gain-verify-hover
-    fly: lab_a_hover
+    fly: lab_a_hover_verify
     args: [--gains, rate35y104]
-    gate: "Run `autotune.cli --loop angle` on roll and pitch; verify separation ratio >= 3.0x vs inner rate wc"
+    gate: "CHAT APPROVAL: Run `autotune.cli --loop angle` on roll and pitch; verify separation ratio >= 3.0x vs inner rate wc; any angle gain change requires the operator's chat OK first and is written while disarmed"
     why: "Block 2 verification hover with fitted attitude angle gains before locking attitude loop for Block 3"
     pass: "steady hover; roll/pitch error RMS < 1.5 deg; lands inside pad gate (PROPOSED)"
     stop: true
@@ -100,9 +102,9 @@ flights:
     pass: "excite completes keeping altitude within [0.25, 0.85] m; `python -m ground_station.autotune.cli <session> --loop vel --axis z` fits with residual <= 0.35 (PROPOSED)"
 
   - id: vel-gain-verify-hover
-    fly: lab_a_hover
+    fly: lab_a_hover_verify
     args: [--gains, rate35y104]
-    gate: "Run `autotune.cli --loop vel` on x, y, z; verify separation ratio >= 3.0x vs angle wc"
+    gate: "CHAT APPROVAL: Run `autotune.cli --loop vel` on x, y, z; verify separation ratio >= 3.0x vs angle wc; any velocity gain change requires the operator's chat OK first and is written while disarmed"
     why: "Block 3 verification hover with fitted velocity loop gains before locking velocity loop for Block 4"
     pass: "steady hover; horizontal velocity RMS < 8 cm/s; altitude hold error < 5 cm (PROPOSED)"
     stop: true
@@ -123,39 +125,62 @@ flights:
     pass: "excite completes; `python -m ground_station.autotune.cli <session> --loop pos --axis z` fits with residual <= 0.35 (PROPOSED)"
 
   - id: pos-gain-verify-hover
-    fly: lab_a_hover
+    fly: lab_a_hover_verify
     args: [--gains, rate35y104]
-    gate: "Run `autotune.cli --loop pos` on x, y, z and regenerate candidate gains for LQR/MPC/ADRC"
-    why: "Block 4 verification hover with full identified cascade (rate + angle + vel + pos) before Block 5 controller comparison"
+    gate: "CHAT APPROVAL: Run `autotune.cli --loop pos` on x, y, z and regenerate candidate gains for LQR/MPC/ADRC; any position or candidate gain change requires the operator's chat OK first and is written while disarmed"
+    why: "Block 4 verification hover with full identified cascade (rate + angle + vel + pos) before Block 4b diagnosis ladder and Block 5 controller comparison"
     pass: "steady hover; hold p-p < 10 cm (vs 49.6 cm on 10-24 lqr-alone); lands inside 10 cm pad gate (PROPOSED)"
+    stop: true
+
+  # ======== BLOCK 4b: 10-25 DIAGNOSIS LADDER (not flown on 10-25: loop damping vs path speed/coupling) ========
+  - id: diag-xy-steps-lqr
+    fly: lab_e_diag_lqr_steps
+    args: [--gains, rate35y104]
+    gate: "Block 4 pos-gain-verify-hover passed"
+    why: "10-25 diagnosis ladder 1/3 (unflown on 10-25): LQR alone (VAR47=12), four 30 cm xy steps with 5 s dwell, no path: measures xy loop damping and x-to-y cross-coupling"
+    pass: "overshoot < 20%; cross-axis motion < 5 cm; no sustained ~0.5 Hz ringing in the dwell (PROPOSED); no RC takeover"
+
+  - id: diag-figure8-half-speed-lqr
+    fly: lab_e_diag_lqr_fig8_half
+    args: [--gains, rate35y104]
+    gate: "diag-xy-steps-lqr completed"
+    why: "10-25 diagnosis ladder 2/3 (unflown on 10-25): LQR figure-8 at HALF speed (f8_laps=1, move_s=18): separates path speed from loop limit cycle"
+    pass: "figure-8 completes without abort (host AbortMonitor safe exit at |pos err| > 50 cm, PROPOSED 45 cm); scorecard swing < 1.3x (PROPOSED); no RC takeover"
+
+  - id: diag-figure8-half-speed-pid
+    fly: lab_e_diag_pid_fig8_half
+    args: [--gains, rate35y104]
+    gate: "diag-figure8-half-speed-lqr completed"
+    why: "10-25 diagnosis ladder 3/3 (unflown on 10-25): PID figure-8 at HALF speed (f8_laps=1, move_s=18): tests whether PID's 130-160 cm p-p 10-24 swing shrinks at half speed"
+    pass: "figure-8 completes without abort; scorecard swing < 1.3x (PROPOSED); no RC takeover"
     stop: true
 
   # ======== BLOCK 5: ALL FOUR CONTROLLERS WITH MODEL-BASED GAINS (hold -> 30 cm x/y steps -> figure-8) ========
   - id: model-based-pid
     fly: lab_e_model_pid
     args: [--gains, rate35y104]
-    gate: "Blocks 1-4 sysid chain verified; model-based PID gains active"
+    gate: "CHAT APPROVAL: Blocks 1-4 sysid chain and Block 4b half-speed diagnosis passed; model-based PID gains approved by operator in chat and written while disarmed"
     why: "Block 5 PID validation on the identified chain: 4 s hold -> 30 cm X step -> 30 cm Y step -> figure-8 (move_s=18, f8_a_cm=30)"
     pass: "hold p-p < 10 cm; 30 cm step overshoot < 20%; figure-8 completes with swing ratio < 1.3x and no RC takeover (PROPOSED)"
 
   - id: model-based-lqr
     fly: lab_e_model_lqr
     args: [--gains, rate35y104]
-    gate: "Blocks 1-4 sysid chain verified; candidate LQR gains (`API/xy_ctrl_gains_candidate.h`) and identified delay (`VAR47=18`) active"
+    gate: "CHAT APPROVAL: Blocks 1-4 sysid chain and Block 4b half-speed diagnosis passed; candidate LQR gains (`API/xy_ctrl_gains_candidate.h`) and identified delay (`VAR47=18`) approved by operator in chat and written while disarmed"
     why: "Block 5 LQR validation on the identified chain: 4 s hold -> 30 cm X step -> 30 cm Y step -> figure-8 (10-24 baseline: hold p-p 49.6 cm, swing 3.6x)"
     pass: "hold p-p < 10 cm; 30 cm step overshoot < 25%; figure-8 completes with swing ratio < 1.3x and no RC takeover (PROPOSED)"
 
   - id: model-based-mpc
     fly: lab_e_model_mpc
     args: [--gains, rate35y104]
-    gate: "Blocks 1-4 sysid chain verified; candidate MPC gains (`API/xy_ctrl_gains_candidate.h`) and identified delay (`VAR47=18`) active"
+    gate: "CHAT APPROVAL: Blocks 1-4 sysid chain and Block 4b half-speed diagnosis passed; candidate MPC gains (`API/xy_ctrl_gains_candidate.h`) and identified delay (`VAR47=18`) approved by operator in chat and written while disarmed"
     why: "Block 5 MPC validation on the identified chain: 4 s hold -> 30 cm X step -> 30 cm Y step -> figure-8"
     pass: "hold p-p < 10 cm; 30 cm step overshoot < 20%; figure-8 completes with swing ratio < 1.3x and no RC takeover (PROPOSED)"
 
   - id: model-based-adrc
     fly: lab_e_model_adrc
     args: [--gains, rate35y104]
-    gate: "Blocks 1-4 sysid chain verified; candidate ADRC ESO/controller gains (`API/xy_ctrl_gains_candidate.h`) active"
+    gate: "CHAT APPROVAL: Blocks 1-4 sysid chain and Block 4b half-speed diagnosis passed; candidate ADRC ESO/controller gains (`API/xy_ctrl_gains_candidate.h`) approved by operator in chat and written while disarmed"
     why: "Block 5 ADRC validation on the identified chain: 4 s hold -> 30 cm X step -> 30 cm Y step -> figure-8"
     pass: "hold p-p < 10 cm; 30 cm step overshoot < 20%; figure-8 completes with swing ratio < 1.3x and no RC takeover (PROPOSED)"
     stop: true

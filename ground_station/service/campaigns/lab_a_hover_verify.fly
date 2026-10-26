@@ -1,0 +1,10 @@
+# A-verify: 70 s verification hover at 0.5 m with 10 cm landing pad gate and full 4-slot telemetry.
+# Fly it: .\fly lab_a_hover_verify --once --gains rate35y104 (after operator chat OK, disarmed). All marks PROPOSED.
+campaign lab-a-hover-verify
+rate 100
+log velocity_loops camera_fusion thrust_model xy_ctrl ekf_states optical_flow
+slow 50 estimator_truth takeoff_gate nn4 drift_nn mrac_3l mrac_theta mrac_shadow
+set g_xy_ctrl_kind=0 g_traj_ff_shift_s=0 g_land_xy_gate_cm=10
+takeoff 0.5
+hold 70
+land
