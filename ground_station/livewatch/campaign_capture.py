@@ -224,13 +224,16 @@ DRIFT_NN: tuple[str, ...] = (
 # Dedicated vertical diagnosis: keep filter state and PID terms together on the fast lane.
 # Shared motor/attitude/setpoint signals are already in the always-on core.
 Z_CF: tuple[str, ...] = (
-    tuple(f"alt_cf.{f}" for f in ("h", "vz", "b_az", "e", "a_up", "n_corr"))
+    tuple(f"alt_cf.{f}" for f in ("h", "vz", "b_az", "e", "a_up", "n_corr", "dt_c", "y_corr", "mode"))
     + ("g_alt_vz_mode", "ano_of.alt_update_cnt", "ano_of.of_alt_cm", "ano_of.of2_h",
        "ano_of.of2_h_f2_v", "s_alt_valid_tick", "s_alt_reject_cnt", "s_alt_cf_inited")
     + tuple(f"Ctrler.{loop}.{f}" for loop in ("Z_posPID", "Z_ratePID")
             for f in ("Up", "Ui", "Ud", "U"))
     + ("Throttle_out", "Throttle_th", "Acc_Z_Real")
 )
+# Keep the entire vertical diagnostic in one frame, including its firmware clock.
+# The remaining always-on core occupies a separate fast slot; no signal loses rate.
+Z_CF_FAST = Z_CF + ("xTickCount",)
 Z_PID_GAINS: tuple[str, ...] = tuple(
     f"Ctrler.{loop}.{f}" for loop in ("Z_posPID", "Z_ratePID")
     for f in ("Kp", "Ki", "Kd", "UMax", "UiMax", "SumEMax")
@@ -416,7 +419,21 @@ def plan_capture(
     groups, slow = list(plan["groups"]), list(plan["slow"])
     needed = set(CAMPAIGN_SET["needed"])
     fast_vars = [v for v in dict.fromkeys(v for g in groups for v in LOG_GROUPS[g]) if v not in needed]
-    slots, dropped = slots_for(rate, budget_bps=budget_bps, optional=fast_vars)
+    if "z_cf" in groups:
+        # Reserve one coherent input frame for replay. Fill its spare capacity with
+        # the existing Z diagnostics rather than duplicating clocks across slots.
+        dedicated = list(Z_CF_FAST)
+        remaining = [v for v in (*CAMPAIGN_SET["needed"], *fast_vars) if v not in dedicated]
+        divider = max(1, int(SEND_TASK_HZ / rate))
+        slots = [{"slot": 0, "hz": SEND_TASK_HZ / divider, "vars": dedicated}]
+        slots += [{"slot": i + 1, "hz": SEND_TASK_HZ / divider,
+                   "vars": remaining[start:start + VARS_PER_SLOT]}
+                  for i, start in enumerate(range(0, len(remaining), VARS_PER_SLOT))]
+        if len(dedicated) > VARS_PER_SLOT or len(slots) > MAX_SLOTS or plan_bps(slots) > budget_bps:
+            raise CaptureError("z_cf fast capture exceeds slot/byte budget; no signals were removed or slowed")
+        dropped = []
+    else:
+        slots, dropped = slots_for(rate, budget_bps=budget_bps, optional=fast_vars)
     fast_hz = slots[0]["hz"]
     recorded = {v for s in slots for v in s["vars"]}
     slow_vars = [v for v in dict.fromkeys(v for g in slow for v in LOG_GROUPS[g]) if v not in recorded]
@@ -425,6 +442,8 @@ def plan_capture(
         slow_slots, slow_dropped = _slow_slots(slow_vars, min(float(plan["slow_hz"]), fast_hz), len(slots),
                                                plan_bps(slots), budget_bps)
         dropped = [v for v in dropped if v not in slow_vars] + slow_dropped
+    if "z_cf" in groups and dropped:
+        raise CaptureError("z_cf capture exceeds the remaining slow-slot budget; queued: " + ", ".join(dropped))
     return {"rate_hz": fast_hz, "requested_hz": requested, "groups": groups,
             "slow_hz": slow_slots[0]["hz"] if slow_slots else None, "slow": slow, "slots": slots + slow_slots,
             "dropped": dropped}

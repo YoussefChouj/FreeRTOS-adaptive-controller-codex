@@ -85,16 +85,17 @@ def test_plan_respects_slot_limits_and_budget(rate):
 @STRUCT6_ONLY
 def test_50hz_records_everything():
     slots, dropped = slots_for(50)
-    assert [(s["hz"], len(s["vars"])) for s in slots] == [(50.0, 62), (50.0, 49)]
-    assert dropped == [] and _guard_bps(slots) == 46800
+    assert [(s["hz"], len(s["vars"])) for s in slots] == [(50.0, 62), (50.0, 56)]
+    assert dropped == [] and _guard_bps(slots) == 24800
 
 
 def test_100hz_drops_the_optional_past_the_budget():
     # Priced at 100 Hz (step A), so twice the vars of the old 200 Hz guard fit.
-    slots, dropped = slots_for(100)
+    optional = tuple(f"test_optional_{i}" for i in range(200))
+    slots, dropped = slots_for(100, optional=optional)
     assert [(s["hz"], len(s["vars"])) for s in slots] == [(100.0, 62), (100.0, 62), (100.0, 42)]
     assert _guard_bps(slots) == 2 * 26000 + 18000  # one more var would cost 70400 > 70041.6
-    assert dropped == list(OPTIONAL[116:])  # 166 vars fit: 50 core + 116 optional
+    assert dropped == list(optional[116:])  # 166 vars fit: 50 core + 116 optional
 
 
 def test_divider_truncates_like_the_live_host():
@@ -235,9 +236,24 @@ def test_z_cf_hover_keeps_diagnostics_when_link_rate_is_capped(max_rate):
     assert _guard_bps(plan["slots"]) <= cc.PLANNING_BUDGET_BPS
     assert all(rates[v] == max_rate for v in cc.Z_CF)
     assert all(v in rates for v in cc.Z_PID_GAINS)
+    dedicated = plan["slots"][0]
+    assert set(cc.Z_CF_FAST) == set(dedicated["vars"])
+    assert len(dedicated["vars"]) == 29
+    assert len(plan["slots"]) == 3
+    assert [len(s["vars"]) for s in plan["slots"]] == [29, 49, 24]
+    assert len(rates) == sum(len(s["vars"]) for s in plan["slots"])
+    assert cc.plan_bps(plan["slots"]) == (336 * max_rate + 108 * min(max_rate, 25))
     steps = experiment["scenario"]["steps"]
     assert steps[0]["takeoff"]["mrac_injection"] == 0
     assert [list(s)[0] if isinstance(s, dict) else s for s in steps] == ["takeoff", "hold", "land"]
+
+
+def test_z_cf_never_silently_trims_existing_signals():
+    with pytest.raises(CaptureError, match="no signals were removed or slowed"):
+        cc.plan_capture({"rate_hz": 200, "groups": ["z_cf"]}, budget_bps=65000)
+    with pytest.raises(CaptureError, match="queued:"):
+        cc.plan_capture({"rate_hz": 200, "groups": ["z_cf"], "slow_hz": 25,
+                         "slow": ["z_pid_gains", "camera_fusion", "takeoff_gate"]}, budget_bps=68000)
 
 
 def test_log_groups_are_disjoint_from_needed_and_each_other():
@@ -298,13 +314,13 @@ def test_plan_capture_keeps_group_order_and_caps_at_the_probed_rate():
 
 @STRUCT6_ONLY
 def test_plan_capture_drops_group_tail_at_100hz():
-    plan = cc.plan_capture({"rate_hz": 100, "groups": ["optical_flow", "mrac_shadow"]})
-    assert plan["dropped"] == list(OPTIONAL[33:])  # 81 vars fit at 100 Hz: 43 core + 5 flow + 33 shadow
+    plan = cc.plan_capture({"rate_hz": 100, "groups": ["optical_flow", "mrac_shadow"]}, budget_bps=35000)
+    assert plan["dropped"] == list(OPTIONAL[26:])  # 81 vars: 50 core + 5 flow + 26 shadow
     table = cc.log_plan_table(plan)
-    assert "| core (always on) | 43/43 | 100 |  |" in table
+    assert "| core (always on) | 50/50 | 100 |  |" in table
     assert "| optical_flow | 5/5 | 100 |  |" in table
-    assert "| mrac_shadow | 33/68 | 100 | 35 dropped (link budget) |" in table
-    assert table.splitlines()[-1].startswith("2 slot(s), 69600 of 70042 B/s")
+    assert "| mrac_shadow | 26/68 | 100 | 42 dropped (link budget) |" in table
+    assert table.splitlines()[-1].startswith("2 slot(s), 34800 of 70042 B/s")
 
 
 def test_two_speed_plan_fills_the_link_without_repeats():
@@ -397,5 +413,5 @@ def test_subscribe_steps_match_the_agent_subscribe_action():
     plan = cc.plan_capture({"rate_hz": 50, "groups": ["mrac_shadow"]})
     steps = cc.subscribe_steps(plan)
     assert [s["action"] for s in steps] == ["subscribe", "subscribe"]
-    assert [(s["args"]["slot"], s["args"]["divider"]) for s in steps] == [(0, 2), (1, 2)]
+    assert [(s["args"]["slot"], s["args"]["divider"]) for s in steps] == [(0, 4), (1, 4)]
     assert [s["args"]["ranges"] for s in steps] == [s["vars"] for s in plan["slots"]]

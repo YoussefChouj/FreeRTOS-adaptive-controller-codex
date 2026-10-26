@@ -37,7 +37,7 @@ Standalone altitude diagnosis (PROPOSED 0.8 m / 30 s hover, nominal PID, no gain
 .\fly lab_z_cf_hover --once --gains logs/lab/2026-10-27/2026-10-27-gains.json
 ```
 
-This requests 200 Hz for CF height/velocity, acceleration, bias, residual and correction count;
+This requests PROPOSED 200 Hz for CF height/velocity, acceleration, bias, residual and correction count;
 range arrivals/rejections; both Z loops' P/I/D/output terms; collective and the core motor,
 attitude, reference/feedback and battery signals. Actual gains/limits and camera inputs use
 the slow lane. The link probe may lower the rate: check the printed capture table for drops
@@ -45,6 +45,34 @@ and the achieved rate. Results go to `logs/flights/<date>/<NN>_z-cf-hover/` and 
 `logs/sessions/` recording. This standalone command does not launch camera fusion; keep the
 existing calibrated camera session running if using it. RC arm and normal abort gates apply.
 Keep the same gains for this diagnostic; a hover identifies symptoms, not full stability margins.
+
+The CF diagnostic has a dedicated coherent slot including `dt_c`, `y_corr`, latched `mode`,
+range inputs and `xTickCount`. All existing diagnostics remain at their original lane rates.
+Calculated upper-bound plan (PROPOSED until the link is measured): fast slots have 29 and 49
+scalar ranges at 200 Hz; the slow slot has 24 at 25 Hz. With the stream frame overhead of
+12 bytes and conservative 4 bytes per scalar, the dedicated slot costs 25,600 B/s; both fast
+slots cost 67,200 B/s, and the whole plan costs 69,900 B/s against the 70,041.6 B/s planning
+budget. Integer widths can reduce actual wire use. No variables are trimmed for this plan:
+an insufficient byte/slot budget fails explicitly and lists queued slow variables.
+The normal link probe may cap the whole plan; a lower achieved rate is reported and cannot
+establish a faithful per-tick replay. No sustainable live rate has been measured for this plan.
+
+After recording, choose the hover interval using firmware seconds after the first complete
+fast-slot frame (the bounds below are PROPOSED examples; select the actual plateau):
+
+```powershell
+python -m ground_station.lab.cf_vz_check logs/sessions/SESSION_ID 7.5 36.5
+```
+
+This writes `cf_vz_check.json` and `cf_vz_check.png` into that session. It reports H1/H2/geometric
+gain, phase and coherence for velocity/range derivative, acceleration/range second derivative,
+and height/range; broadband and individual frequency bands, hover range standard deviation,
+correction/arrival rates, and both-mode offline replay correlation. The range reference shares
+the sensor with the filter; it is not independent truth. Replay requires every prediction tick,
+an initialized armed segment, and all new fast fields. Missing ticks, hidden corrections,
+resets or acceleration clipping prevent a faithful-replay claim. The historical slow capture
+cannot supply those missing inputs. `estimator is still not understood` means the replay gate
+has not passed; it does not claim a successful estimator model.
 
 One-change follow-up after the diagnostic with measured Z position gains 0.7/0.001/0.1:
 
