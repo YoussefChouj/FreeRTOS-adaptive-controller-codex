@@ -375,6 +375,13 @@ int main(int argc, char **argv)
     unsigned long ticks = argc > 1 ? strtoul(argv[1], 0, 10) : 100000ul;
     unsigned seed = argc > 2 ? (unsigned)strtoul(argv[2], 0, 10) : 1u;
     unsigned long every = argc > 3 ? strtoul(argv[3], 0, 10) : 1000ul;
+#ifdef ALT_TOF_SAMPLE_LEGACY
+    /* Opt in to pre-A2 gate for whole-loop parity; defaults still trace the fix. */
+    if (getenv("ALT_TOF_LEGACY")) {
+        g_alt_tof_sample_mode = ALT_TOF_SAMPLE_LEGACY;
+        s_alt_sample_mode = ALT_TOF_SAMPLE_LEGACY;
+    }
+#endif
     g_in = 2463534242u ^ (seed * 2654435761u);
     g_st = 88675123u ^ (seed * 40503u);
     gs_max_pitch_deg = 15.0f; gs_max_roll_deg = 15.0f; gs_throttle_min_pct = 0.0f; gs_throttle_max_pct = 1.0f;

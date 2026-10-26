@@ -1253,6 +1253,7 @@ static uint8_t  s_alt_cf_inited    = 0U;
 static uint8_t  s_alt_vz_mode_prev = ALT_VZ_MODE_DEFAULT;
 static uint8_t  s_alt_armed_prev   = 0U;
 static uint16_t s_alt_cf_steps     = 0U;
+static uint8_t s_alt_sample_mode = ALT_TOF_SAMPLE_NEWEST;
 
 /* Altitude complementary filter, one row per gain set; runtime state starts at 0.
    @k1      -        [0, 1]     height correction per ToF sample
@@ -1274,6 +1275,7 @@ static const AltCfGains s_alt_cf_gains[] = {
 
 volatile uint8_t g_alt_vz_mode = ALT_VZ_MODE_DEFAULT;
 volatile uint8_t g_alt_cf_rate_mode = ALT_CF_RATE_LEGACY;
+volatile uint8_t g_alt_tof_sample_mode = ALT_TOF_SAMPLE_NEWEST;
 AltCfState_t     alt_cf;
 
 void Alt_CfReset(float h_init, uint8_t zero_bias)
@@ -1297,7 +1299,8 @@ void Alt_CfReset(float h_init, uint8_t zero_bias)
  * mirroring PX4/DJI altitude filtering:
  *   1. median-of-3 on the raw sample — a lone spike (in-band or the 0xFFFF
  *      no-reading) is never the median of three, so it is dropped before the
- *      band/jump gates ever see it.
+ *      band/jump gates ever see it. Fixed CF instead uses the per-frame median
+ *      as an outlier reference and fuses newest raw data (legacy selectable).
  *   2. band gate — 5..500 cm (the 500 upper bound rejects 65535 no-reading;
  *      the 5 cm floor rejects sub-band 1 cm dropouts).
  *   3. rate-aware per-tick jump gate — baseline 0.05 m/tick (=10 m/s, still
@@ -1313,21 +1316,32 @@ void Alt_UpdateFB(void)
 	uint8_t sample_accepted = 0U;
 	uint8_t resynced = 0U;
 	uint8_t armed;
+	uint8_t newest;
+	uint8_t median_ok = 1U;
 	float a_up;
 	const AltCfGains *g = &s_alt_cf_gains[0];
 
+	/* Pending writes are latched only while disarmed. FD retains its original gate.
+	 * alt_update_cnt counts decoded ANOOF_FN_ALT frames, not sensor conversions;
+	 * equal quantized cm values are still frame events (H6). */
+	armed = ALT_IS_ARMED();
+	if (!armed) s_alt_sample_mode = (g_alt_tof_sample_mode == ALT_TOF_SAMPLE_LEGACY)
+	                              ? ALT_TOF_SAMPLE_LEGACY : ALT_TOF_SAMPLE_NEWEST;
+	newest = (uint8_t)(g_alt_vz_mode == ALT_VZ_MODE_CF && s_alt_sample_mode == ALT_TOF_SAMPLE_NEWEST);
 	cnt_changed = (uint8_t)(ano_of.alt_update_cnt != s_alt_cnt_prev);
 	s_alt_cnt_prev = ano_of.alt_update_cnt;
 
 	{
 		uint16_t a0, a1, a2, alt_med;
 
-		/* Layer 1: median-of-3. */
-		s_alt_hist[2] = s_alt_hist[1];
-		s_alt_hist[1] = s_alt_hist[0];
-		/* of_alt_cm is u32: clamp, a bare cast aliases 65536+x to x cm */
-		s_alt_hist[0] = (ano_of.of_alt_cm > 0xFFFFU) ? 0xFFFFU : (uint16_t)ano_of.of_alt_cm;
-		if (s_alt_hist_n < 3U) s_alt_hist_n++;
+		/* Legacy shifts per tick; fixed CF shifts once per decoded altitude frame. */
+		if (!newest || cnt_changed) {
+			s_alt_hist[2] = s_alt_hist[1];
+			s_alt_hist[1] = s_alt_hist[0];
+			/* of_alt_cm is u32: clamp, a bare cast aliases 65536+x to x cm */
+			s_alt_hist[0] = (ano_of.of_alt_cm > 0xFFFFU) ? 0xFFFFU : (uint16_t)ano_of.of_alt_cm;
+			if (s_alt_hist_n < 3U) s_alt_hist_n++;
+		}
 		if (s_alt_hist_n >= 3U)
 		{
 			a0 = s_alt_hist[0]; a1 = s_alt_hist[1]; a2 = s_alt_hist[2];
@@ -1339,8 +1353,17 @@ void Alt_UpdateFB(void)
 			alt_med = s_alt_hist[0];  /* warmup: not enough history yet */
 		}
 
+		if (newest) {
+			float gate = ALT_JUMP_BASE_M + ALT_JUMP_PER_VZ * fabsf(Ctrler.Z_ratePID.Des);
+			if (gate > ALT_JUMP_MAX_M) gate = ALT_JUMP_MAX_M;
+			/* Fusing a causal median would still delay a ramp by one frame.
+			 * Use it as an outlier reference, then fuse the newest valid raw frame.
+			 * Re-evaluate held frames without shifting history: one outlier stays rejected. */
+			median_ok = (uint8_t)(fabsf((float)s_alt_hist[0] - (float)alt_med) * M_PER_CM < gate);
+			alt_med = s_alt_hist[0];
+		}
 		/* Layer 2: band gate. */
-		if( alt_med >= ALT_BAND_MIN_CM && alt_med <= ALT_BAND_MAX_CM )
+		if( median_ok && alt_med >= ALT_BAND_MIN_CM && alt_med <= ALT_BAND_MAX_CM )
 		{
 			float h_new = alt_med*M_PER_CM*Cos_roll_01*Cos_pitch_01;
 			/* Layer 3: rate-aware jump gate. */
@@ -1494,6 +1517,8 @@ void Alt_TestResetAll(void)
 	s_alt_armed_prev = 0U;
 	g_alt_vz_mode = ALT_VZ_MODE_DEFAULT;
 	g_alt_cf_rate_mode = ALT_CF_RATE_LEGACY;
+	g_alt_tof_sample_mode = ALT_TOF_SAMPLE_NEWEST;
+	s_alt_sample_mode = ALT_TOF_SAMPLE_NEWEST;
 	alt_cf.mode = ALT_CF_RATE_LEGACY;
 	s_alt_vz_mode_prev = ALT_VZ_MODE_DEFAULT;
 	s_alt_cf_inited = 0U;

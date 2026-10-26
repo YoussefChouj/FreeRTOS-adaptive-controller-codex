@@ -1327,6 +1327,7 @@ static void test_u10_legacy_golden(void)
     int tick, phase = 0;
     int matches = 1;
     start_cf_rate_mode(ALT_CF_RATE_LEGACY);
+    s_alt_sample_mode = ALT_TOF_SAMPLE_LEGACY; /* frozen pre-A2 golden path */
     copy_legacy_state();
     for (tick = 1; tick <= 6000; tick++) {
         synthetic_input(tick, &phase, 70);
@@ -1408,6 +1409,7 @@ static void test_u13_next_arm_latch(void)
     int tick, phase = 0;
     int same = 1;
     start_cf_rate_mode(ALT_CF_RATE_LEGACY);
+    s_alt_sample_mode = ALT_TOF_SAMPLE_LEGACY; /* frozen pre-A2 golden path */
     copy_legacy_state();
     g_alt_cf_rate_mode = ALT_CF_RATE_SCALED;
     for (tick = 1; tick <= 400; tick++) {
@@ -1440,12 +1442,10 @@ static void test_u13_next_arm_latch(void)
 static void test_a1_stale_arrival(void)
 {
     int shape, tick, sample, events, stale;
-    uint32_t previous_cm;
     unsigned corrections;
     float expected;
     for (shape = 0; shape < 2; shape++) {
         reset_env(ALT_VZ_MODE_CF, 100U);
-        previous_cm = 100U;
         events = 0;
         stale = 0;
         for (tick = 1; tick <= 400; tick++) {
@@ -1458,20 +1458,44 @@ static void test_a1_stale_arrival(void)
             corrections = (unsigned)alt_cf.n_corr;
             Alt_UpdateFB();
             if (tick % 10 == 0) {
-                expected = (float)previous_cm * M_PER_CM;
+                expected = (float)ano_of.of_alt_cm * M_PER_CM;
                 if (alt_cf.n_corr > corrections && fabsf(alt_cf.y_corr - expected) < 1e-6f) stale++;
                 events++;
-                printf("A1 %s sample=%d newest=%.3f used=%.3f previous=%.3f\n",
+                printf("A1 %s sample=%d newest=%.3f used=%.3f expected=%.3f\n",
                        shape == 0 ? "ramp" : "sine", tick / 10,
                        (double)((float)ano_of.of_alt_cm * M_PER_CM),
                        (double)alt_cf.y_corr, (double)expected);
-                previous_cm = ano_of.of_alt_cm;
             }
         }
-        check_cond("A1 baseline: every arrival corrects with previous frame", stale == events);
-        printf("A1 baseline %s: previous-frame corrections %d/%d (expected defect)\n",
+        check_cond("A1 fixed: every arrival corrects with newest frame", stale == events);
+        printf("A1 fixed %s: newest-frame corrections %d/%d\n",
                shape == 0 ? "ramp" : "sine", stale, events);
     }
+}
+
+/* PROPOSED in-band outlier and armed latch stress, estimator only. */
+static void test_a2_outlier_and_latch(void)
+{
+    int tick;
+    uint32_t corrections;
+    reset_env(ALT_VZ_MODE_CF, 100U);
+    corrections = alt_cf.n_corr;
+    ano_of.of_alt_cm = 120U;
+    ano_of.alt_update_cnt++;
+    for (tick = 0; tick < 10; tick++) Alt_UpdateFB();
+    check_cond("A2 single held in-band outlier never corrects", alt_cf.n_corr == corrections);
+    check_cond("A2 outlier does not enter height", fabsf(ano_of.of2_h - 1.0f) < 1e-6f);
+    ano_of.of_alt_cm = 101U;
+    ano_of.alt_update_cnt++;
+    Alt_UpdateFB();
+    check_cond("A2 following newest valid frame corrects immediately", alt_cf.n_corr == corrections + 1U
+               && fabsf(alt_cf.y_corr - 1.01f) < 1e-6f);
+    g_alt_tof_sample_mode = ALT_TOF_SAMPLE_LEGACY;
+    Alt_UpdateFB();
+    check_cond("A2 armed pending sample flag cannot latch", s_alt_sample_mode == ALT_TOF_SAMPLE_NEWEST);
+    Flight_Control_Lock = 0U;
+    Alt_UpdateFB();
+    check_cond("A2 disarmed sample flag latches", s_alt_sample_mode == ALT_TOF_SAMPLE_LEGACY);
 }
 
 int main(void)
@@ -1490,11 +1514,12 @@ int main(void)
     test_u12_rate_independence();
     test_u13_next_arm_latch();
     test_a1_stale_arrival();
+    test_a2_outlier_and_latch();
 
     if (g_fail_count != 0) {
         printf("FAILED: %d checks failed (%d passed)\n", g_fail_count, g_pass_count);
         return 1;
     }
-    printf("ALL 13 TESTS PASSED (U1-U13) (%d checks)\n", g_pass_count);
+    printf("ALL ALT_CF TESTS PASSED (U1-U13, A1-A2) (%d checks)\n", g_pass_count);
     return 0;
 }
