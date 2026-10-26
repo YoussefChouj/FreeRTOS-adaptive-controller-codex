@@ -1252,6 +1252,7 @@ static uint8_t  s_alt_cnt_prev     = 0U;
 static uint8_t  s_alt_cf_inited    = 0U;
 static uint8_t  s_alt_vz_mode_prev = ALT_VZ_MODE_DEFAULT;
 static uint8_t  s_alt_armed_prev   = 0U;
+static uint16_t s_alt_cf_steps     = 0U;
 
 /* Altitude complementary filter, one row per gain set; runtime state starts at 0.
    @k1      -        [0, 1]     height correction per ToF sample
@@ -1272,6 +1273,7 @@ static const AltCfGains s_alt_cf_gains[] = {
  */
 
 volatile uint8_t g_alt_vz_mode = ALT_VZ_MODE_DEFAULT;
+volatile uint8_t g_alt_cf_rate_mode = ALT_CF_RATE_LEGACY;
 AltCfState_t     alt_cf;
 
 void Alt_CfReset(float h_init, uint8_t zero_bias)
@@ -1280,6 +1282,9 @@ void Alt_CfReset(float h_init, uint8_t zero_bias)
 	alt_cf.vz = 0.0f;
 	alt_cf.e = 0.0f;
 	alt_cf.a_up = 0.0f;
+	alt_cf.dt_c = 0.0f;
+	alt_cf.y_corr = h_init;
+	s_alt_cf_steps = 0U;
 	if (zero_bias) {
 		alt_cf.b_az = 0.0f;
 		alt_cf.n_corr = 0U;
@@ -1392,7 +1397,11 @@ void Alt_UpdateFB(void)
 	if (armed != s_alt_armed_prev) {
 		Alt_CfReset(ano_of.of2_h, 0U);
 		/* 2026-10-26 smoke hover: every arm waits for a real range reading. */
-		if (armed) s_alt_cf_inited = 0U;
+		if (armed) {
+			s_alt_cf_inited = 0U;
+			alt_cf.mode = (g_alt_cf_rate_mode == ALT_CF_RATE_SCALED)
+			              ? ALT_CF_RATE_SCALED : ALT_CF_RATE_LEGACY;
+		}
 		s_alt_armed_prev = armed;
 	}
 
@@ -1416,6 +1425,9 @@ void Alt_UpdateFB(void)
 		alt_cf.e = 0.0f;
 		s_alt_cf_inited = 1U;
 		alt_cf.n_corr++;
+		alt_cf.dt_c = STAB_DT_S;
+		alt_cf.y_corr = ano_of.of2_h;
+		s_alt_cf_steps = 0U;
 	} else if (!s_alt_cf_inited) {
 		/* 2026-10-26 smoke hover: hold armed-pad height until range initialization. */
 		alt_cf.h = ano_of.of2_h;
@@ -1423,13 +1435,30 @@ void Alt_UpdateFB(void)
 		alt_cf.e = 0.0f;
 		if (resynced) s_alt_cf_inited = 1U;
 	} else {
+		/* Saturation avoids wrap on prolonged range dropout; dt_c is clamped below. */
+		if (s_alt_cf_steps < 65535U) s_alt_cf_steps++;
 		alt_cf.h  += alt_cf.vz * STAB_DT_S + 0.5f * alt_cf.a_up * STAB_DT_S * STAB_DT_S;
 		alt_cf.vz += alt_cf.a_up * STAB_DT_S;
 		if (sample_accepted) {
+			alt_cf.dt_c = (float)s_alt_cf_steps * STAB_DT_S;
+			if (alt_cf.dt_c < STAB_DT_S) alt_cf.dt_c = STAB_DT_S;
+			else if (alt_cf.dt_c > ALT_CF_DTC_MAX) alt_cf.dt_c = ALT_CF_DTC_MAX;
+			alt_cf.y_corr = ano_of.of2_h;
+			s_alt_cf_steps = 0U;
 			alt_cf.e     = ano_of.of2_h - alt_cf.h;
-			alt_cf.h    += g->k1 * alt_cf.e;
-			alt_cf.vz   += g->k2 * alt_cf.e;
-			alt_cf.b_az -= g->k3 * alt_cf.e;
+			if (alt_cf.mode == ALT_CF_RATE_SCALED) {
+				float k1_eff = g->k1 * alt_cf.dt_c / ALT_CF_TS_DESIGN;
+				float k2_eff = g->k2 * alt_cf.dt_c / ALT_CF_TS_DESIGN;
+				float k3_eff = g->k3 * alt_cf.dt_c / ALT_CF_TS_DESIGN;
+				alt_cf.h    += k1_eff * alt_cf.e;
+				alt_cf.vz   += k2_eff * alt_cf.e;
+				alt_cf.b_az -= k3_eff * alt_cf.e;
+			} else {
+				/* Keep legacy evaluation order unchanged. */
+				alt_cf.h    += g->k1 * alt_cf.e;
+				alt_cf.vz   += g->k2 * alt_cf.e;
+				alt_cf.b_az -= g->k3 * alt_cf.e;
+			}
 			if (alt_cf.b_az > ALT_CF_BAZ_MAX) alt_cf.b_az = ALT_CF_BAZ_MAX;
 			else if (alt_cf.b_az < -ALT_CF_BAZ_MAX) alt_cf.b_az = -ALT_CF_BAZ_MAX;
 			alt_cf.n_corr++;
@@ -1464,6 +1493,8 @@ void Alt_TestResetAll(void)
 	s_alt_cnt_prev = 0U;
 	s_alt_armed_prev = 0U;
 	g_alt_vz_mode = ALT_VZ_MODE_DEFAULT;
+	g_alt_cf_rate_mode = ALT_CF_RATE_LEGACY;
+	alt_cf.mode = ALT_CF_RATE_LEGACY;
 	s_alt_vz_mode_prev = ALT_VZ_MODE_DEFAULT;
 	s_alt_cf_inited = 0U;
 	Alt_CfReset(0.0f, 1U);

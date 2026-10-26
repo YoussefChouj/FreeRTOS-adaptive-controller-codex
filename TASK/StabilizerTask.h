@@ -76,6 +76,12 @@ extern volatile uint8_t g_rc_fallback;
 #define ALT_VZ_MODE_CF      1
 #define ALT_VZ_MODE_DEFAULT ALT_VZ_MODE_CF  /* 2026-10-26 operator: CF on by default (was FD); VAR 58 = 0 disarmed reverts */
 
+/* Rate-scaling design constants, PROPOSED; seconds. Mode 0 preserves legacy gains. */
+#define ALT_CF_TS_DESIGN    0.05f
+#define ALT_CF_DTC_MAX      0.10f
+#define ALT_CF_RATE_LEGACY  0U
+#define ALT_CF_RATE_SCALED  1U
+
 #ifndef ALT_CF_ACC_SIGN
 #define ALT_CF_ACC_SIGN     1.0f
 #endif
@@ -102,9 +108,13 @@ typedef struct {
     float    e;
     float    a_up;
     uint32_t n_corr;
+    float    dt_c;    /* s, last accepted correction interval */
+    float    y_corr;  /* m, range used at the last accepted correction */
+    uint8_t  mode;    /* ALT_CF_RATE_*, latched on arm rising edge */
 } AltCfState_t;
 
 extern volatile uint8_t g_alt_vz_mode;
+extern volatile uint8_t g_alt_cf_rate_mode; /* VAR 59; pending until next arm */
 extern AltCfState_t     alt_cf;
 
 void Alt_UpdateFB(void);
