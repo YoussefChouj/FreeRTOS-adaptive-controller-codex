@@ -133,12 +133,27 @@ def day_path(date):
     return p if p.suffix in (".yaml", ".yml") else DAYS_DIR / f"{date}.yaml"
 
 
-def fly_cmd(f, pack=None, dry=False, port=8081, plain=False, no_gates=False):
+def _args_with_gains(args, gains=None):
+    args = list(args or [])
+    if not gains:
+        return args
+    if "--gains" in args:
+        i = args.index("--gains")
+        if i + 1 < len(args):
+            args[i + 1] = str(gains)
+        else:
+            args.append(str(gains))
+        return args
+    return args + ["--gains", str(gains)]
+
+
+def fly_cmd(f, pack=None, dry=False, port=8081, plain=False, no_gates=False, gains=None):
     """A dry run never talks to the service, so only a flight carries a non-default --port (the soak's spare port)
     and --plain-service (the soak's service runs without --lab; fly must keep it, not restart it)."""
     extra = (["--port", str(port)] if port != 8081 and not dry else []) + (["--plain-service"] if plain and not dry else [])
     extra += ["--no-gates"] if no_gates and not dry else []      # operator 10-24: battery + firmware trips + RC only
-    return FLY + [f["fly"], "--dry-run" if dry else "--once"] + (["--pack", pack] if pack else []) + f["args"] + extra
+    args = _args_with_gains(f.get("args"), gains)
+    return FLY + [f["fly"], "--dry-run" if dry else "--once"] + (["--pack", pack] if pack else []) + args + extra
 
 
 def code_stamp():
@@ -155,7 +170,7 @@ def code_stamp():
     return head.stdout.strip() + ":" + hashlib.sha256(diff.stdout).hexdigest()[:16]
 
 
-def dry_key(f, pack, stamp):
+def dry_key(f, pack, stamp, gains=None):
     """What a passed dry run proves: the exact command, the .fly text and the host code (None = never cached)."""
     if stamp is None:
         return None
@@ -163,12 +178,12 @@ def dry_key(f, pack, stamp):
         text = (CAMPAIGNS / f"{f['fly']}.fly").read_bytes()
     except OSError:
         return None
-    h = hashlib.sha256(json.dumps(fly_cmd(f, pack, dry=True)).encode() + b"\0" + text + b"\0" + stamp.encode())
+    h = hashlib.sha256(json.dumps(fly_cmd(f, pack, dry=True, gains=gains)).encode() + b"\0" + text + b"\0" + stamp.encode())
     return h.hexdigest()
 
 
-def shown(f):
-    return " ".join([".\\fly", f["fly"], "--once"] + f["args"])
+def shown(f, gains=None):
+    return " ".join([".\\fly", f["fly"], "--once"] + _args_with_gains(f.get("args"), gains))
 
 
 HEADER_WORDS = ("campaign", "rate", "log", "slow", "set")
@@ -194,9 +209,10 @@ def sheet(d):
     if d.get("before"):
         out += ["## Before the first flight", ""] + [f"{i}. {s}" for i, s in enumerate(d["before"], 1)] + [""]
     out += ["## Flights", "", "| # | Command | What it tests | Pass | Stop after |", "|---|---|---|---|---|"]
+    day_gains = d.get("gains")
     for f in d["flights"]:
         why, ok = (str(f.get(k) or "").replace("|", "\\|").strip() for k in ("why", "pass"))
-        out.append(f"| {f['id']} | `{shown(f)}` | {why} | {ok} | {'yes' if f.get('stop') else ''} |")
+        out.append(f"| {f['id']} | `{shown(f, day_gains)}` | {why} | {ok} | {'yes' if f.get('stop') else ''} |")
     if d.get("carry_note"):
         out += ["", "Carried over from earlier days (ids <MMDD>-<id>): " + "; ".join(d["carry_note"]) + "."]
     if d["branches"]:
@@ -207,6 +223,147 @@ def sheet(d):
 
 def state_file(day):
     return LAB_DIR / str(day) / "labday_state.json"
+
+
+def gains_file(day, state_path=None):
+    """Day-gains file next to the labday state file: <state dir>/<day>-gains.json."""
+    base_dir = Path(state_path).parent if state_path is not None else state_file(day).parent
+    return base_dir / f"{day}-gains.json"
+
+
+def _var_key(var):
+    idx = campaign_fly._resolve_gain_key(var)
+    return str(idx) if idx is not None else str(var)
+
+
+def default_day_gains(base="rate35y104"):
+    """Create the initial day-gains schema from the day's base preset."""
+    values = {}
+    if base:
+        gains_dict, _, err = campaign_fly.resolve_preset_gains(str(base))
+        if err:
+            raise ValueError(err)
+        values = {str(k): float(v) for k, v in sorted(gains_dict.items())}
+    return {"base": str(base or ""), "values": values, "staged": {}, "history": []}
+
+
+def save_day_gains(path, data):
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return p
+
+
+def load_day_gains(path, base=None):
+    """Load <state dir>/<day>-gains.json if it exists, else initialize from `base` (saving if `base` is given)."""
+    p = Path(path)
+    if p.is_file():
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                raw.setdefault("base", str(base or ""))
+                raw.setdefault("values", {})
+                raw.setdefault("staged", {})
+                raw.setdefault("history", [])
+                return raw
+        except (OSError, ValueError):
+            pass
+    data = default_day_gains(base)
+    if base is not None:
+        save_day_gains(p, data)
+    return data
+
+
+def init_day_gains(path, base="rate35y104", overwrite=False):
+    """Ensure <state dir>/<day>-gains.json exists on disk, keeping approved gains across restarts unless overwrite=True."""
+    p = Path(path)
+    if p.is_file() and not overwrite:
+        return load_day_gains(p, base=base)
+    data = default_day_gains(base)
+    save_day_gains(p, data)
+    return data
+
+
+def stage_day_gains(path_or_data, updates, save=True):
+    """Stage proposed {<var>: <value>} updates into day-gains `staged`."""
+    is_path = isinstance(path_or_data, (str, Path))
+    data = load_day_gains(path_or_data) if is_path else path_or_data
+    staged = data.setdefault("staged", {})
+    for k, v in (updates or {}).items():
+        staged[_var_key(k)] = float(v)
+    if is_path and save:
+        save_day_gains(path_or_data, data)
+    return data
+
+
+def record_gain_decision(data, var, old_val, new_val, decision, gate="", why="", t=None):
+    """Append one gate decision record to day-gains `history`."""
+    entry = {
+        "t": t or time.strftime("%H:%M:%S"),
+        "gate": str(gate),
+        "var": _var_key(var),
+        "old": old_val,
+        "new": new_val,
+        "decision": str(decision),
+        "why": str(why),
+    }
+    data.setdefault("history", []).append(entry)
+    return entry
+
+
+def apply_day_gains(path_or_data, updates=None, gate="", decision="y", why="", t=None, save=True):
+    """Apply (or record declined) gain updates to `values` and `history`, clearing `staged`."""
+    is_path = isinstance(path_or_data, (str, Path))
+    data = load_day_gains(path_or_data) if is_path else path_or_data
+    values = data.setdefault("values", {})
+    staged = data.setdefault("staged", {})
+    src = dict(staged if updates is None else updates)
+    approved = str(decision).strip().lower() in ("y", "yes", "approved", "apply", "edit")
+    for k, v in src.items():
+        vk = _var_key(k)
+        new_f = float(v)
+        old_val = values.get(vk)
+        if old_val is None:
+            idx = campaign_fly._resolve_gain_key(vk)
+            old_val = campaign_fly._gain_meta(idx)[1] if idx is not None else None
+        if approved:
+            values[vk] = new_f
+        record_gain_decision(data, vk, old_val, new_f, decision, gate=gate, why=why, t=t)
+        staged.pop(vk, None)
+    if is_path and save:
+        save_day_gains(path_or_data, data)
+    return data
+
+
+def revert_last_gains(path_or_data, gate="", why="revert", t=None, save=True):
+    """Revert the most recent approved gate changes in `history` back to their `old` values."""
+    is_path = isinstance(path_or_data, (str, Path))
+    data = load_day_gains(path_or_data) if is_path else path_or_data
+    history = data.setdefault("history", [])
+    values = data.setdefault("values", {})
+    approved_entries = [h for h in history if str(h.get("decision", "")).lower() in ("y", "yes", "approved", "apply", "edit")]
+    if not approved_entries:
+        return data
+    target_gate = gate or approved_entries[-1].get("gate", "")
+    # Walk backwards to revert the last contiguous block for target_gate (or the last entry if gate is empty)
+    to_revert = []
+    for h in reversed(approved_entries):
+        if h.get("gate", "") == target_gate:
+            to_revert.append(h)
+        elif to_revert:
+            break
+    for h in to_revert:
+        vk = _var_key(h["var"])
+        cur_val = values.get(vk)
+        old_val = h.get("old")
+        if old_val is None:
+            values.pop(vk, None)
+        else:
+            values[vk] = float(old_val)
+        record_gain_decision(data, vk, cur_val, old_val, "revert", gate=target_gate, why=why, t=t)
+    if is_path and save:
+        save_day_gains(path_or_data, data)
+    return data
 
 
 def load_state(path):
@@ -404,10 +561,52 @@ class Day:
         self.vitals = vitals or (lambda: campaign_fly._vitals(f"http://127.0.0.1:{port}"))   # {} when 8081 is down
         self.clock, self.sleep, self.rest_v = clock, sleep, None
         self.state = load_state(self.state_path)
+        self.day = str(d.get("day") or self.state_path.stem)
+        self.gains_path = gains_file(self.day, self.state_path)
+        if self.gains_path.is_file():
+            self.gains = load_day_gains(self.gains_path, base=d.get("gains"))
+        elif d.get("gains"):
+            self.gains = init_day_gains(self.gains_path, str(d["gains"]))
+        else:
+            self.gains = None
         self.cam = dict(d.get("camera") or {}) if camera else {}
         if self.cam:   # --floor, else the day's last good scan (labday made it), else the day file's
             self.cam["floor"] = floor or self.state.get("floor") or self.cam.get("floor")
         self.cards = {}
+
+    def gains_arg(self):
+        """Path string to <state dir>/<day>-gains.json when active for this day, else None."""
+        if self.gains is not None or self.gains_path.is_file():
+            return str(self.gains_path)
+        return None
+
+    def load_gains(self):
+        self.gains = load_day_gains(self.gains_path, base=self.d.get("gains"))
+        return self.gains
+
+    def save_gains(self):
+        if self.gains is None:
+            self.gains = default_day_gains(self.d.get("gains") or "rate35y104")
+        save_day_gains(self.gains_path, self.gains)
+        return self.gains
+
+    def stage_gains(self, updates):
+        if self.gains is None:
+            self.gains = load_day_gains(self.gains_path, base=self.d.get("gains") or "rate35y104")
+        stage_day_gains(self.gains, updates, save=False)
+        return self.save_gains()
+
+    def apply_gains(self, updates=None, gate="", decision="y", why="", t=None):
+        if self.gains is None:
+            self.gains = load_day_gains(self.gains_path, base=self.d.get("gains") or "rate35y104")
+        apply_day_gains(self.gains, updates=updates, gate=gate, decision=decision, why=why, t=t, save=False)
+        return self.save_gains()
+
+    def revert_gains(self, gate="", why="revert", t=None):
+        if self.gains is None:
+            self.gains = load_day_gains(self.gains_path, base=self.d.get("gains") or "rate35y104")
+        revert_last_gains(self.gains, gate=gate, why=why, t=t, save=False)
+        return self.save_gains()
 
     def say(self, *lines):
         print("\n".join(lines), flush=True)
@@ -417,12 +616,13 @@ class Day:
         .fly file and host code are unchanged since its last pass is not run again."""
         bad, passed, same = [], self.state.setdefault("dry_ok", {}), 0
         stamp = code_stamp()
+        gains = self.gains_arg()
         for f in flights:
-            key = dry_key(f, self.pack, stamp)
+            key = dry_key(f, self.pack, stamp, gains=gains)
             if key is not None and passed.get(f["id"]) == key:
                 same += 1
                 continue
-            r = self.run(fly_cmd(f, self.pack, dry=True), cwd=ROOT, capture_output=True, text=True,
+            r = self.run(fly_cmd(f, self.pack, dry=True, gains=gains), cwd=ROOT, capture_output=True, text=True,
                          stdin=subprocess.DEVNULL)
             ok = r.returncode == 0
             self.say(f"  dry run {f['id']:<4} {f['fly']:<26} {'OK' if ok else 'FAILED'}")
@@ -567,7 +767,8 @@ class Day:
     def fly(self, f, pack):
         """One `.\\fly <name> --once`, stdin passed through: (exit code, its debrief event or None)."""
         since = log_offsets()
-        child = self.popen(fly_cmd(f, pack, port=self.port, plain=not self.lab_service, no_gates=self.no_gates), cwd=ROOT)
+        child = self.popen(fly_cmd(f, pack, port=self.port, plain=not self.lab_service, no_gates=self.no_gates,
+                                   gains=self.gains_arg()), cwd=ROOT)
         rc = child.wait()
         return rc, debrief_event(child.pid, since)
 
@@ -662,7 +863,7 @@ class Day:
         for i, f in enumerate(flights):
             nxt = flights[i + 1]["id"] if i + 1 < len(flights) else None
             about, steps = note(f)
-            self.say("", f"=== {f['id']} ({i + 1} of {len(flights)}): {shown(f)}{' --no-gates' if self.no_gates else ''}",
+            self.say("", f"=== {f['id']} ({i + 1} of {len(flights)}): {shown(f, self.gains_arg())}{' --no-gates' if self.no_gates else ''}",
                      *([f"    what: {about}"] if about else []), *([f"    steps: {steps}"] if steps else []),
                      *([f"    tests: {f['why']}"] if f.get("why") else []),
                      *([f"    pass (PROPOSED): {f['pass']}"] if f.get("pass") else []))
@@ -699,11 +900,12 @@ class Day:
 
     def listing(self):
         out, w = [], max(4, *(len(f["id"]) for f in self.d["flights"]))
+        gains = self.gains_arg()
         for f in self.d["flights"]:
             r = self.state["flown"].get(f["id"])
             mark = "skipped" if f["id"] in self.state["skipped"] else (
                 ("OK " if r["ok"] else "BAD ") + f"{r['t']} {r.get('why') or r.get('status') or ''}" if r else "-")
-            out.append(f"  {f['id']:<{w}} {shown(f):<48} {mark}")
+            out.append(f"  {f['id']:<{w}} {shown(f, gains):<48} {mark}")
         return out + [f"  carry-over: {n}" for n in self.d.get("carry_note") or []]
 
 

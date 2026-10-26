@@ -755,38 +755,176 @@ class DirectivesTuple(tuple):
         return inst
 
 
+_GAIN_ALIASES = {
+    "pitch_angle_kp": 0, "pitch_angle_ki": 1, "pitch_angle_kd": 2,
+    "angle_pitch_kp": 0, "angle_pitch_ki": 1, "angle_pitch_kd": 2,
+    "pitch_kp": 0, "pitch_ki": 1, "pitch_kd": 2,
+    "roll_angle_kp": 3, "roll_angle_ki": 4, "roll_angle_kd": 5,
+    "angle_roll_kp": 3, "angle_roll_ki": 4, "angle_roll_kd": 5,
+    "roll_kp": 3, "roll_ki": 4, "roll_kd": 5,
+    "yaw_angle_kp": 6, "yaw_angle_ki": 7, "yaw_angle_kd": 8,
+    "angle_yaw_kp": 6, "angle_yaw_ki": 7, "angle_yaw_kd": 8,
+    "yaw_kp": 6, "yaw_ki": 7, "yaw_kd": 8,
+    "roll_rate_kp": 9, "roll_rate_ki": 10, "roll_rate_kd": 11,
+    "rate_roll_kp": 9, "rate_roll_ki": 10, "rate_roll_kd": 11,
+    "gyrox_kp": 9, "gyrox_ki": 10, "gyrox_kd": 11,
+    "pitch_rate_kp": 12, "pitch_rate_ki": 13, "pitch_rate_kd": 14,
+    "rate_pitch_kp": 12, "rate_pitch_ki": 13, "rate_pitch_kd": 14,
+    "gyroy_kp": 12, "gyroy_ki": 13, "gyroy_kd": 14,
+    "yaw_rate_kp": 15, "yaw_rate_ki": 16, "yaw_rate_kd": 17,
+    "rate_yaw_kp": 15, "rate_yaw_ki": 16, "rate_yaw_kd": 17,
+    "gyroz_kp": 15, "gyroz_ki": 16, "gyroz_kd": 17,
+    "z_rate_kp": 18, "z_rate_ki": 19, "z_rate_kd": 20,
+    "z_vel_kp": 18, "z_vel_ki": 19, "z_vel_kd": 20,
+    "vel_z_kp": 18, "vel_z_ki": 19, "vel_z_kd": 20,
+    "highdts_kp": 18, "highdts_ki": 19, "highdts_kd": 20,
+    "highdtspid.kp": 18, "highdtspid.ki": 19, "highdtspid.kd": 20,
+    "z_pos_kp": 21, "z_pos_ki": 22, "z_pos_kd": 23,
+    "pos_z_kp": 21, "pos_z_ki": 22, "pos_z_kd": 23,
+    "high_kp": 21, "high_ki": 22, "high_kd": 23,
+    "highpid.kp": 21, "highpid.ki": 22, "highpid.kd": 23,
+    "x_pos_kp": 24, "x_pos_ki": 25, "x_pos_kd": 26,
+    "pos_x_kp": 24, "pos_x_ki": 25, "pos_x_kd": 26,
+    "locx_kp": 24, "locx_ki": 25, "locx_kd": 26,
+    "y_pos_kp": 27, "y_pos_ki": 28, "y_pos_kd": 29,
+    "pos_y_kp": 27, "pos_y_ki": 28, "pos_y_kd": 29,
+    "locy_kp": 27, "locy_ki": 28, "locy_kd": 29,
+    "x_vel_kp": 30, "x_vel_ki": 31, "x_vel_kd": 32,
+    "vel_x_kp": 30, "vel_x_ki": 31, "vel_x_kd": 32,
+    "locxs_kp": 30, "locxs_ki": 31, "locxs_kd": 32,
+    "y_vel_kp": 33, "y_vel_ki": 34, "y_vel_kd": 35,
+    "vel_y_kp": 33, "vel_y_ki": 34, "vel_y_kd": 35,
+    "locys_kp": 33, "locys_ki": 34, "locys_kd": 35,
+}
+for _idx, (_sym, _) in PID_DEFAULTS.items():
+    _GAIN_ALIASES[_sym.lower()] = _idx
+    _GAIN_ALIASES[_sym.lower().replace(".", "_")] = _idx
+
+
+def _resolve_gain_key(k):
+    """Resolve an int, stringified int ('9'), PID symbol ('gyroxPID.Kp'), alias ('roll_rate_kp'), or VAR name ('g_xyc_lqr_k0') to int index."""
+    if isinstance(k, bool):
+        return None
+    if isinstance(k, int):
+        return k
+    if isinstance(k, str):
+        s = k.strip()
+        if s.isdigit() or (s.startswith("-") and s[1:].isdigit()):
+            return int(s)
+        low = s.lower()
+        if low.startswith("idx_") and low[4:].isdigit():
+            return int(low[4:])
+        if low.startswith("var") and low[3:].lstrip("_ ").isdigit():
+            return int(low[3:].lstrip("_ "))
+        if low in _GAIN_ALIASES:
+            return _GAIN_ALIASES[low]
+        try:
+            from ground_station.platform import wfb_var
+            row = wfb_var.rows().get(s)
+            if row is not None:
+                return row.id
+        except Exception:
+            pass
+    return None
+
+
+def _gain_meta(idx):
+    """Return (axis_name, default_val, cmd_id) for a PID gain index (0..35, cmd 1) or wfb_var row id (>=40, cmd 0x2D)."""
+    if idx in PID_DEFAULTS:
+        name, def_val = PID_DEFAULTS[idx]
+        return name, def_val, 1
+    if idx >= 40:
+        try:
+            from ground_station.platform import wfb_var
+            row = next((r for r in wfb_var.rows().values() if r.id == idx), None)
+            if row is not None:
+                return row.name, 0.0, wfb_var.CMD_VAR_WRITE
+        except Exception:
+            pass
+    return f"idx_{idx}", 0.0, 1
+
+
 def format_gain_table(gains, old_gains=None, col_old="Old", col_new="New"):
     lines = [
         f"| {'Axis':<14} | {'idx':<4} | {col_old:<8} | {col_new:<8} |",
         f"|{'-'*16}|{'-'*6}|{'-'*10}|{'-'*10}|",
     ]
     for idx, new_val in sorted(gains.items()):
-        axis = PID_DEFAULTS.get(idx, (f"idx_{idx}", 0.0))[0]
-        old_val = (old_gains.get(idx, PID_DEFAULTS.get(idx, ("", 0.0))[1]) if old_gains is not None
-                   else PID_DEFAULTS.get(idx, ("", 0.0))[1])
+        axis, def_val, _ = _gain_meta(idx)
+        old_val = old_gains.get(idx, def_val) if old_gains is not None else def_val
         lines.append(f"| {axis:<14} | {idx:<4} | {old_val:<8.4g} | {new_val:<8.4g} |")
     return "\n".join(lines)
 
 
+def _resolve_gain_mapping(mapping, why=None, force_livetune=False, livetune_path=None, source_label=None):
+    """Resolve a day-gains dict {'base': ..., 'values': {...}} or flat {<var>: <value>} dict into (gains_dict, why_text, err_msg)."""
+    if "values" in mapping and isinstance(mapping["values"], dict):
+        raw_items = mapping["values"].items()
+        base_name = mapping.get("base")
+        if not mapping["values"] and base_name and "values" not in mapping:
+            return resolve_preset_gains(base_name, why=why, force_livetune=force_livetune, livetune_path=livetune_path)
+        default_why = mapping.get("why") or (
+            f"{source_label} (base {base_name})" if source_label and base_name else
+            source_label or (f"day gains (base {base_name})" if base_name else "")
+        )
+    elif "base" in mapping and "values" not in mapping and len(mapping) <= 4:
+        return resolve_preset_gains(mapping["base"], why=why or mapping.get("why"),
+                                    force_livetune=force_livetune, livetune_path=livetune_path)
+    else:
+        raw_items = mapping.items()
+        default_why = source_label or ""
+    out = {}
+    for k, v in raw_items:
+        idx = _resolve_gain_key(k)
+        if idx is None:
+            return None, None, f"unknown gain key {k!r}"
+        try:
+            out[idx] = float(v)
+        except (TypeError, ValueError) as exc:
+            return None, None, f"invalid gain value for {k!r}: {exc}"
+    return dict(sorted(out.items())), why if why is not None else default_why, None
+
+
 def resolve_preset_gains(preset_or_gains, why=None, force_livetune=False, livetune_path=None):
-    """Resolve preset name, dict, or list into (gains_dict, why_text, err_msg)."""
+    """Resolve preset name, .json file path, dict, or list into (gains_dict, why_text, err_msg)."""
+    if isinstance(preset_or_gains, Path):
+        p = preset_or_gains
+        if not p.is_file():
+            return None, None, f"gains file not found: {p}"
+        try:
+            loaded = json.loads(p.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return None, None, f"failed to read gains file {p}: {exc}"
+        if isinstance(loaded, dict):
+            return _resolve_gain_mapping(loaded, why=why, force_livetune=force_livetune,
+                                         livetune_path=livetune_path, source_label=f"day gains from {p.name}")
+        return resolve_preset_gains(loaded, why=why, force_livetune=force_livetune, livetune_path=livetune_path)
     if isinstance(preset_or_gains, str):
-        key = preset_or_gains.strip().lower()
+        raw_str = preset_or_gains.strip()
+        key = raw_str.lower()
         key = {"robust": "c3", "tuned": "c2", "default": "defaults", "pid": "defaults", "pid.c": "defaults"}.get(key, key)
         if key == "livetune":
             gains, why_str, err = load_livetune_gains(path=livetune_path, force=force_livetune)
             if err:
                 return None, None, err
             return gains, why or why_str, None
-        elif key not in GAIN_PRESETS:
-            return None, None, f"unknown gain preset {preset_or_gains!r}: available presets are {', '.join(GAIN_PRESETS.keys())}, livetune"
-        else:
+        elif key in GAIN_PRESETS:
             preset = GAIN_PRESETS[key]
             return dict(preset["gains"]), why or preset.get("why", ""), None
+        elif key.endswith(".json") or "/" in raw_str or "\\" in raw_str or Path(raw_str).is_file():
+            return resolve_preset_gains(Path(raw_str), why=why, force_livetune=force_livetune, livetune_path=livetune_path)
+        else:
+            return None, None, f"unknown gain preset {preset_or_gains!r}: available presets are {', '.join(GAIN_PRESETS.keys())}, livetune"
     elif isinstance(preset_or_gains, dict):
-        return dict(preset_or_gains), why or "", None
+        return _resolve_gain_mapping(preset_or_gains, why=why, force_livetune=force_livetune, livetune_path=livetune_path)
     elif isinstance(preset_or_gains, (list, tuple)):
-        return {idx: val for idx, val in preset_or_gains}, why or "", None
+        out = {}
+        for k, v in preset_or_gains:
+            idx = _resolve_gain_key(k)
+            if idx is None:
+                return None, None, f"unknown gain key {k!r}"
+            out[idx] = float(v)
+        return dict(sorted(out.items())), why or "", None
     else:
         return None, None, f"invalid gains specification: {type(preset_or_gains)}"
 
@@ -999,7 +1137,7 @@ def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeou
     try:
         _, act_res = call(base, "/api/actions", timeout=5)
         for a in act_res.get("actions", []):
-            if int(a.get("command_id", 0)) == 1 and int(a.get("index", -1)) in gains:
+            if int(a.get("command_id", 0)) in (1, 45) and int(a.get("index", -1)) in gains:
                 idx = int(a["index"])
                 if idx not in old_gains:
                     old_gains[idx] = float(a.get("value", 0.0))
@@ -1007,7 +1145,7 @@ def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeou
         pass
     for idx in gains:
         if idx not in old_gains:
-            old_gains[idx] = PID_DEFAULTS.get(idx, ("", 0.0))[1]
+            old_gains[idx] = _gain_meta(idx)[1]
 
     # 4. Print Why rationale and proposed table (A4)
     tag = "[In-flight] " if in_flight else ""
@@ -1032,7 +1170,7 @@ def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeou
     ack_only = []  # ACKed, final APPLIED not seen (8081 started before the journal kept ACKed actions open)
 
     for idx, new_val in sorted(gains.items()):
-        axis = PID_DEFAULTS.get(idx, (f"idx_{idx}", 0.0))[0]
+        axis, _, cmd_id = _gain_meta(idx)
         old_val = old_gains.get(idx, 0.0)
         acked = False
         ms = 0
@@ -1043,7 +1181,7 @@ def write_gains(base, preset_or_gains, why=None, yes=False, ask_fn=input, timeou
             retries = attempt
             t0 = _clock()
             try:
-                code, res = call(base, "/commands", {"command_id": 1, "index": idx, "value": float(new_val)}, timeout=timeout_s)
+                code, res = call(base, "/commands", {"command_id": cmd_id, "index": idx, "value": float(new_val)}, timeout=timeout_s)
             except Exception:
                 _sleep(0.05)
                 continue

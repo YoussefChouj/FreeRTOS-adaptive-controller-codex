@@ -588,3 +588,138 @@ def test_fly_cmd_passes_no_gates_to_flights_not_dry_runs():
     assert "--no-gates" in labday.fly_cmd(f, no_gates=True)
     assert "--no-gates" not in labday.fly_cmd(f, dry=True, no_gates=True)
     assert "--no-gates" not in labday.fly_cmd(f)
+
+
+def test_2026_10_27_has_single_header_gains_and_no_per_flight_copies():
+    d = labday.load_day(labday.day_path("2026-10-27"))
+    assert d.get("gains") == "rate35y104"
+    assert len(d["flights"]) == 29
+    for f in d["flights"]:
+        assert "--gains" not in f["args"], f"{f['id']} still has per-flight --gains"
+
+
+def test_a1_day_gains_carry_forward_and_restart_persistence(tmp_path, monkeypatch):
+    """A1: Carry-forward: after a y gate, the next flight's fly_cmd carries --gains <day-gains.json>, and the FakeDrone
+    ground write sends the approved values. A restarted labday (same state) still carries them."""
+    from ground_station.platform.transactions import Outcome
+    from ground_station.platform.wfb_commands import encode
+    from ground_station.service.fake_drone import FakeDrone
+
+    drone = FakeDrone()
+    tx_seq = [0]
+    actions = []
+
+    def fake_call(base, route, body=None, timeout=10):
+        if route == "/api/actions":
+            return 200, {"actions": actions}
+        if route == "/commands":
+            tx_seq[0] += 1
+            txid = tx_seq[0]
+            out = Outcome(drone.send(encode(int(body["command_id"]), int(body["index"]), float(body["value"]), txid)))
+            lc = "applied" if out == Outcome.APPLIED else "rejected"
+            actions.append({
+                "transaction_id": txid,
+                "command_id": int(body["command_id"]),
+                "index": int(body["index"]),
+                "value": float(body["value"]),
+                "lifecycle": lc,
+            })
+            return 200, {"ok": out == Outcome.APPLIED, "transaction_id": txid}
+        return 200, {}
+
+    monkeypatch.setattr(campaign_fly, "_vitals", lambda base: {"arm": {"state": "disarmed"}})
+    monkeypatch.setattr(campaign_fly, "call", fake_call)
+
+    # 1. Start day with base preset rate35y104; fly flight A, then stop after flight A for gate
+    day_yaml = tmp_path / "2026-10-27.yaml"
+    flights = [
+        {"id": "rate-gains-apply", "fly": "lab_a_hover_verify", "stop": True},
+        {"id": "angle-gain-verify-hover", "fly": "lab_a_hover_verify", "stop": True},
+        {"id": "pos-gain-verify-hover", "fly": "lab_a_hover_verify"},
+    ]
+    day_yaml.write_text(json.dumps({
+        "day": "2026-10-27",
+        "carry": False,
+        "gains": "rate35y104",
+        "flights": flights,
+        "branches": [],
+    }), encoding="utf-8")
+    d = labday.load_day(day_yaml)
+
+    def make_player(fake):
+        monkeypatch.setattr(labday, "debrief_event", lambda pid, since: {"status": "complete", "phase": "land", "folder": "f"})
+        monkeypatch.setattr(labday, "code_stamp", lambda: "test")
+        monkeypatch.setattr(campaign_fly, "PACK_FILE", tmp_path / "last_pack.txt")
+        return labday.Day(d, tmp_path / "labday_state.json", pack="2", camera=False,
+                          ask=fake.ask, run=fake.run, popen=fake.popen,
+                          service=fake.service, vitals=fake.vitals, clock=lambda: fake.now, sleep=fake.sleep)
+
+    # Flight 1 flies and stops at analysis stop; we quit ('q') at the stop to simulate gate + restart
+    fake1 = _Fake(["", "q"])
+    p1 = make_player(fake1)
+    expected_gains_path = tmp_path / "2026-10-27-gains.json"
+    assert p1.gains_path == expected_gains_path
+    assert expected_gains_path.is_file()
+
+    raw_init = json.loads(expected_gains_path.read_text(encoding="utf-8"))
+    assert raw_init["base"] == "rate35y104"
+    assert raw_init["staged"] == {}
+    assert raw_init["history"] == []
+    assert float(raw_init["values"]["9"]) == pytest.approx(3.5)
+    assert float(raw_init["values"]["15"]) == pytest.approx(10.4)
+
+    assert p1.go() == 0
+    once1 = [c for c in fake1.cmds if "--once" in c]
+    assert len(once1) == 1
+    assert "--gains" in once1[0]
+    assert once1[0][once1[0].index("--gains") + 1] == str(expected_gains_path)
+
+    # Simulate y gate approving new roll/pitch rate & angle gains + LQR k0 (VAR 75)
+    p1.stage_gains({"gyroxPID.Kp": 3.8, "roll_angle_kp": 3.4, "g_xyc_lqr_k0": 12.5})
+    assert p1.gains["staged"] == {"9": 3.8, "3": 3.4, "75": 12.5}
+    p1.apply_gains(gate="angle-gain-verify-hover", decision="y", why="autotune fit approved", t="14:00:00")
+    assert p1.gains["staged"] == {}
+    assert len(p1.gains["history"]) == 3
+    assert p1.gains["history"][0] == {
+        "t": "14:00:00",
+        "gate": "angle-gain-verify-hover",
+        "var": "9",
+        "old": 3.5,
+        "new": 3.8,
+        "decision": "y",
+        "why": "autotune fit approved",
+    }
+
+    # 2. Restart labday on the same state directory; verify approved gains persist and are passed to flight 2
+    fake2 = _Fake(["", "q"])
+    p2 = make_player(fake2)
+    assert [f["id"] for f in labday.todo(p2.d, p2.state)] == ["angle-gain-verify-hover", "pos-gain-verify-hover"]
+    assert p2.gains["values"]["9"] == pytest.approx(3.8)
+    assert p2.gains["values"]["3"] == pytest.approx(3.4)
+    assert p2.gains["values"]["75"] == pytest.approx(12.5)
+    assert len(p2.gains["history"]) == 3
+
+    assert p2.go() == 0
+    once2 = [c for c in fake2.cmds if "--once" in c]
+    assert len(once2) == 1
+    gains_arg = once2[0][once2[0].index("--gains") + 1]
+    assert gains_arg == str(expected_gains_path)
+
+    # 3. Execute fly ground write with `--gains <day-gains.json>` against FakeDrone and verify FakeDrone receives all approved values
+    drone.param_writes.clear()
+    drone.var_writes.clear()
+    assert campaign_fly.write_gains("http://h", gains_arg, yes=True) is True
+
+    pid_written = {idx: val for cmd_id, idx, val in drone.param_writes if cmd_id == 0x01}
+    assert pid_written[9] == pytest.approx(3.8)
+    assert pid_written[3] == pytest.approx(3.4)
+    assert pid_written[11] == pytest.approx(13.0)
+    assert pid_written[15] == pytest.approx(10.4)
+    assert ("g_xyc_lqr_k0", pytest.approx(12.5)) in drone.var_writes
+
+    # 4. Revert last gate and verify values restore to old
+    p2.revert_gains(gate="angle-gain-verify-hover", why="revert test", t="14:05:00")
+    assert p2.gains["values"]["9"] == pytest.approx(3.5)
+    assert p2.gains["values"]["3"] == pytest.approx(3.0)
+    assert p2.gains["values"]["75"] == pytest.approx(0.0)
+    assert p2.gains["history"][-1]["decision"] == "revert"
