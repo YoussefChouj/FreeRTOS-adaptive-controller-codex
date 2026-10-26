@@ -89,6 +89,22 @@ When a day file sets `gains: <preset>` (e.g. `gains: rate35y104` in `docs/lab/da
 - Every flight also writes a per-flight `<flight folder>/gains.json` snapshot recording the exact active gains, source file/preset, and gate history at takeoff.
 - Rollback: press `v` at a post-flight prompt, press `u` after a failed verify hover, or invoke `.\labday <date>` with `--revert xy|pid|all|<gate>` to restore a saved snapshot from `snapshots` while disarmed.
 
+Temporary CF/Z smoke-hover candidate: `docs/lab/gains/z_cf_soft_i.json` changes only
+`Z_posPID.Ki` from measured 0.005 to 0.001 (PROPOSED), reducing height-integral carry.
+The climb-rate gains and CF coefficients stay unchanged; offset recovery may be slower.
+The candidate is RAM only and needs a repeated smoke-hover before continuing the deck.
+When applied to the day gains, save the prior value under gate `z-cf-soft-i` so every
+subsequent flight records the candidate and the existing revert command can restore it:
+
+```powershell
+.\labday 2026-10-27 --from smoke-hover
+.\labday 2026-10-27 --revert z-cf-soft-i
+```
+
+The standalone rollback mapping is `docs/lab/gains/z_cf_soft_i_rollback.json`.
+The height-only preset does not contain the day's attitude gains; keep the merged day
+gains file for the campaign. A power cycle alone does not remove the day-file override.
+
 ### 1.3 Plots after each flight
 
 After each flight lands, `.\labday` launches a background plot worker into `<flight folder>/plots/` (`PLOT_TIMEOUT_S = 120` s PROPOSED) without delaying the next flight prompt:

@@ -1,0 +1,6 @@
+{
+  "why": "PROPOSED smoke-hover Z retune: reduce height integral carry after CF velocity change. Only Z_posPID.Ki changes, from measured 0.005 to PROPOSED 0.001. Rate gains and CF coefficients stay unchanged. Validate smoke-hover before continuing the deck; slower offset recovery is expected. RAM only; rollback is z_cf_soft_i_rollback.json.",
+  "values": {
+    "22": 0.001
+  }
+}

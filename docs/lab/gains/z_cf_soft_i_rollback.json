@@ -1,0 +1,6 @@
+{
+  "why": "Restore Z_posPID.Ki to 0.005, measured by verified SWD before the temporary z-cf-soft-i retune. Changes only the height integral gain.",
+  "values": {
+    "22": 0.005
+  }
+}
