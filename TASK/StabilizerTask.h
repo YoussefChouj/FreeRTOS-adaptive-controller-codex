@@ -74,7 +74,7 @@ extern volatile uint8_t g_rc_fallback;
 /* Altitude complementary filter (Alt_UpdateFB, z-vz-cf) */
 #define ALT_VZ_MODE_FD      0
 #define ALT_VZ_MODE_CF      1
-#define ALT_VZ_MODE_DEFAULT ALT_VZ_MODE_FD
+#define ALT_VZ_MODE_DEFAULT ALT_VZ_MODE_CF  /* 2026-10-26 operator: CF on by default (was FD); VAR 58 = 0 disarmed reverts */
 
 #ifndef ALT_CF_ACC_SIGN
 #define ALT_CF_ACC_SIGN     1.0f
