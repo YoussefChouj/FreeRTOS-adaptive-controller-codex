@@ -92,6 +92,7 @@ MockCtrler_t Ctrler;
 u8 Flight_Control_Lock;
 
 #define ALT_CF_HOST_TEST 1
+#define ALT_IS_ARMED() ((uint8_t)(Flight_Control_Lock ? 1U : 0U))
 #include "../TASK/StabilizerTask.h"
 #include "../TASK/StabilizerTask.c"
 
@@ -137,6 +138,7 @@ static void reset_env(uint8_t mode, uint16_t init_cm)
     }
     Alt_CfReset(h_init, 1U);
     Flight_Control_Lock = 1U;
+    s_alt_armed_prev = 1U;  /* start airborne: no arm-edge reset on the first tick */
 }
 
 /* ---- Recorded 2000-tick airborne trace from session 20261024-213634 (ticks 4800..6799) ---- */
@@ -913,6 +915,34 @@ static void test_u6_baz_clamp(void)
            (double)alt_cf.b_az, (double)b_max, (double)ALT_CF_BAZ_MAX);
 }
 
+/* U7: disarmed on the pad the rangefinder gives no valid sample (of2_h 0). The filter must hold the
+ * rangefinder height, not integrate the accel bias (2026-10-26: h drifted to 110 m, tracker lost every fix). */
+static void test_u7_disarmed_hold(void)
+{
+    int tick;
+    float h_max = 0.0f;
+
+    reset_env(ALT_VZ_MODE_CF, 0U);
+    Flight_Control_Lock = 0U;
+    ano_of.of2_h = 0.0f;
+    Gravity_Body_Z = 1.0f;
+    Lin_Acc_Z_body = 0.2f / (ALT_CF_ACC_SIGN * MG_TO_MPS2);
+    for (tick = 1; tick <= 4000; tick++) {  /* 20 s on the pad, no rangefinder samples */
+        Alt_UpdateFB();
+        if (fabsf(alt_cf.h) > h_max) {
+            h_max = fabsf(alt_cf.h);
+        }
+    }
+    check_cond("U7: disarmed h stays on the rangefinder height", h_max < 1e-6f);
+    check_cond("U7: disarmed vz is 0", alt_cf.vz == 0.0f);
+    check_cond("U7: disarmed Z_posPID.FB is the rangefinder height", fabsf(Ctrler.Z_posPID.FB) < 1e-6f);
+    Flight_Control_Lock = 1U;
+    Alt_UpdateFB();
+    check_cond("U7: arm starts from the rangefinder height", fabsf(alt_cf.h) < 1e-3f);
+    printf("U7 PASS: 20 s disarmed with 0.2 m/s^2 accel bias -> |h|max=%.6f m (free integration would give 40 m)\n",
+           (double)h_max);
+}
+
 int main(void)
 {
     test_u1_fd_bit_exact_on_213634_trace();
@@ -921,11 +951,12 @@ int main(void)
     test_u4_constant_accel_bias();
     test_u5_rejected_samples_then_resync();
     test_u6_baz_clamp();
+    test_u7_disarmed_hold();
 
     if (g_fail_count != 0) {
         printf("FAILED: %d checks failed (%d passed)\n", g_fail_count, g_pass_count);
         return 1;
     }
-    printf("ALL 6 TESTS PASSED (U1-U6) (%d checks)\n", g_pass_count);
+    printf("ALL 7 TESTS PASSED (U1-U7) (%d checks)\n", g_pass_count);
     return 0;
 }

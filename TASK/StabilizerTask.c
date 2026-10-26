@@ -1401,7 +1401,14 @@ void Alt_UpdateFB(void)
 	else if (a_up < -g->AccMax) a_up = -g->AccMax;
 	alt_cf.a_up = a_up;
 
-	if (!s_alt_cf_inited && sample_accepted) {
+	if (!armed) {
+		/* Disarmed = on the ground: pin h to the rangefinder, no velocity, no bias update.
+		 * Free integration on the pad (no valid sample) drifted h to 110 m on 2026-10-26, and the
+		 * camera tracker, which projects pixels at this height, rejected every fix. */
+		alt_cf.h = ano_of.of2_h;
+		alt_cf.vz = 0.0f;
+		alt_cf.e = 0.0f;
+	} else if (!s_alt_cf_inited && sample_accepted) {
 		alt_cf.h = ano_of.of2_h;
 		alt_cf.vz = 0.0f;
 		alt_cf.e = 0.0f;
