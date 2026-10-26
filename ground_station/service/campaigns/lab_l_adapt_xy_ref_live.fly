@@ -1,0 +1,13 @@
+# Adapt-xy-ref (live): 40 s verification hover at 0.5 m with controller-matched XY reference model (`mrac_ref from=lqr`) injected (`mrac_injection=1`).
+# Follows `lab_l_adapt_xy_ref_shadow` after the W2/W4 `adapt` gate (optional: true). All marks PROPOSED.
+campaign lab-l-adapt-xy-ref-live
+rate 100
+log velocity_loops camera_fusion thrust_model xy_ctrl ekf_states optical_flow
+slow 50 estimator_truth takeoff_gate nn4 drift_nn mrac_3l mrac_theta mrac_shadow
+exp lqr_3l
+set g_traj_ff_shift_s=0 g_land_xy_gate_cm=10 g_xyc_delay_ticks=18
+xy_layers inner
+mrac_ref from=lqr
+takeoff 0.5 mrac_injection=1
+hold 40
+land

@@ -123,6 +123,20 @@ N26_FIX_GROUND = {
 }
 N26_MODEL_GROUND = {"g_xyc_delay_ticks": 18, "g_xyc_pred_lead": 1, **N26_SLOW}
 
+# n28 W4 optional adaptation-layer shadow/live hover pairs (40 s each): exact ground `set` dicts (all PROPOSED).
+N28_ADAPT_GROUND = {
+    "lab_l_adapt_angle_shadow": {"exp_id": 4, "g_traj_ff_shift_s": 0, "g_land_xy_gate_cm": 10, "g_xyc_delay_ticks": 18},
+    "lab_l_adapt_angle_live": {"exp_id": 4, "g_traj_ff_shift_s": 0, "g_land_xy_gate_cm": 10, "g_xyc_delay_ticks": 18},
+    "lab_l_adapt_vel_shadow": {"exp_id": 4, "g_traj_ff_shift_s": 0, "g_land_xy_gate_cm": 10, "g_xyc_delay_ticks": 18},
+    "lab_l_adapt_vel_live": {"exp_id": 4, "g_traj_ff_shift_s": 0, "g_land_xy_gate_cm": 10, "g_xyc_delay_ticks": 18},
+    "lab_l_adapt_pos_shadow": {"exp_id": 4, "g_traj_ff_shift_s": 0, "g_land_xy_gate_cm": 10, "g_xyc_delay_ticks": 18},
+    "lab_l_adapt_pos_live": {"exp_id": 4, "g_traj_ff_shift_s": 0, "g_land_xy_gate_cm": 10, "g_xyc_delay_ticks": 18},
+    "lab_l_adapt_z_slots_shadow": {"exp_id": 4, "g_traj_ff_shift_s": 0, "g_land_xy_gate_cm": 10, "g_xyc_delay_ticks": 18, "mrac_z_feat_mask": 15},
+    "lab_l_adapt_z_slots_live": {"exp_id": 4, "g_traj_ff_shift_s": 0, "g_land_xy_gate_cm": 10, "g_xyc_delay_ticks": 18, "mrac_z_feat_mask": 15},
+    "lab_l_adapt_xy_ref_shadow": {"exp_id": 6, "g_traj_ff_shift_s": 0, "g_land_xy_gate_cm": 10, "g_xyc_delay_ticks": 18},
+    "lab_l_adapt_xy_ref_live": {"exp_id": 6, "g_traj_ff_shift_s": 0, "g_land_xy_gate_cm": 10, "g_xyc_delay_ticks": 18},
+}
+
 
 @pytest.mark.parametrize("path", sorted(SAMPLE.parent.glob("lab_*.fly")), ids=lambda p: p.stem)
 def test_lab_scripts_compile_log_and_fly_on_the_fake_drone(path):
@@ -144,7 +158,11 @@ def test_lab_scripts_compile_log_and_fly_on_the_fake_drone(path):
     if "g_drift_nn_live" in ground:  # lab_s pins the drift net to shadow on the ground, lab_n puts it in the loop
         assert ground["g_drift_nn_live"] == (1 if path.stem.startswith("lab_n_") else 0)
         want.add("g_drift_nn_live")
-    n26 = N26_FIX_GROUND.get(path.stem) or (N26_MODEL_GROUND if path.stem.startswith("lab_e_model_") else None)
+    n26 = (
+        N26_FIX_GROUND.get(path.stem)
+        or N28_ADAPT_GROUND.get(path.stem)
+        or (N26_MODEL_GROUND if path.stem.startswith("lab_e_model_") else None)
+    )
     if n26 is not None:
         assert {k: ground.get(k) for k in n26} == n26
         want |= set(n26)
@@ -152,6 +170,10 @@ def test_lab_scripts_compile_log_and_fly_on_the_fake_drone(path):
         want_delay = 12 if (path.stem.endswith("_d12") or path.stem.startswith("lab_e_diag_lqr_")) else MEASURED_XY_DELAY_TICKS
         assert ground["g_xyc_delay_ticks"] == want_delay
     assert set(ground) == want
+    if path.stem in N28_ADAPT_GROUND:
+        takeoff = exp["scenario"]["steps"][0]["takeoff"]
+        assert takeoff.get("mrac_injection") == (0 if path.stem.endswith("_shadow") else 1)
+        assert exp["scenario"]["steps"][1] == {"hold": {"s": 40}}
     from ground_station.service.tests.test_fly_ground_verbs import _mrc_rig
     drone, _, deps = _mrc_rig()
     if "exp_id" in ground:

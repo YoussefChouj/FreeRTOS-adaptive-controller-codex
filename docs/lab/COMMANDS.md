@@ -40,6 +40,7 @@ which has no adb, scrcpy or Windows python. Never use it for the camera. `.\cam`
 .\labday 2026-10-19 --pack 2        # the pack type in the drone now (1 or 2), once after a swap to the other type
 .\labday 2026-10-19 --dry-run       # only the ground dry runs of the flights left
 .\labday 2026-10-19 --no-camera     # fly without the camera fusion
+.\labday 2026-10-19 --no-plots      # do not generate background plots after each flight
 .\labday 2026-10-19 --floor floor-1019   # floor scan folder under logs/video_truth (default: the day file's)
 .\labday 2026-10-19 --cooldown 120  # rest between a landing and the next flight, s
 ```
@@ -58,6 +59,40 @@ which has no adb, scrcpy or Windows python. Never use it for the camera. `.\cam`
   after each flight, the landing volts and the sag; the cooldown line shows live volts.
 - A failed gate says SWAP THE PACK: power off, swap, power on. labday waits for the link to drop and come back,
   asks the pack type and goes on in the same run (8081 keeps running, the dry-run cache stays valid).
+
+### 1.1 Terminal tuning gates
+
+A flight in `docs/lab/days/2026-10-27.yaml` with a `tune:` block opens an interactive **terminal tuning gate** in `.\labday` after landing (drone disarmed):
+
+- `tune: {kind: pid, loop: rate|angle|vel|pos, axes: [...], from: [...]}` — runs `python -m ground_station.autotune.cli` on the `from` flight logs and shows old -> new `Kp`/`Ki`/`Kd`, crossover `wc`, `PM`, `GM`, `max|S|`, fit residual, coherence coverage, and outer/inner bandwidth separation (`>= 3.0x`).
+- `tune: {kind: xy_model, loop: pos, axes: [x, y], from: [...]}` — synthesizes model-based LQR/MPC/ADRC gains (`VAR 75..83`) and reference models (`logs/ref_fit/<kind>.json`) from the identified cascade.
+- `tune: {kind: adapt, layer: <layer>, mode: shadow|live, baseline: <id>}` — runs `ground_station/analysis/adapt_gate.py` and shows the verdict (`OK`, `TOO SLOW` -> `gamma x2`, `TOO FAST` -> `gamma x0.5`, or `DISABLE` when live tracking error exceeds the shadow baseline) plus the single proposed knob change.
+
+| Key | Where | Does |
+|---|---|---|
+| `y` | terminal tuning gate | write proposed gains now while disarmed (saves pre-gate snapshot, updates day gains file, writes via 8081) |
+| `n` | terminal tuning gate | keep old gains and record the declined decision in history |
+| `r` | terminal tuning gate | re-fly the `from` flight(s) before deciding |
+| `q` | terminal tuning gate | stop the day (resumable with the same `.\labday` command) |
+| `v` | post-flight prompt | revert gains (`xy`, `pid`, `all`, or `<gate>`) from `snapshots` while disarmed |
+| `u` | failed verify hover | undo the preceding gate's gain write immediately and restore the pre-gate snapshot |
+
+### 1.2 Day gains file
+
+When a day file sets `gains: <preset>` (e.g. `gains: rate35y104` in `docs/lab/days/2026-10-27.yaml`), `.\labday` maintains the persistent day gains file (`logs/lab/<date>/gains.yaml` and `logs/lab/<date>/<date>-gains.json`) and passes it via `--gains` to every flight:
+
+- Keys in the day gains file: `base` (initial preset name), `values` (active PID / `VAR` / MRAC map written before each flight), `staged` (candidate changes awaiting gate approval), `snapshots` (pre-gate value snapshots keyed by gate id and `xy`/`pid`/`all` scopes), and `history` (audit log of `t`, `gate`, `var`, `old`, `new`, `decision`, `why`).
+- Every flight also writes a per-flight `<flight folder>/gains.json` snapshot recording the exact active gains, source file/preset, and gate history at takeoff.
+- Rollback: press `v` at a post-flight prompt, press `u` after a failed verify hover, or invoke `.\labday <date>` with `--revert xy|pid|all|<gate>` to restore a saved snapshot from `snapshots` while disarmed.
+
+### 1.3 Plots after each flight
+
+After each flight lands, `.\labday` launches a background plot worker into `<flight folder>/plots/` (`PLOT_TIMEOUT_S = 120` s PROPOSED) without delaying the next flight prompt:
+
+- Prints `plots: <absolute path to <flight folder>/plots>` right after the post-flight battery line.
+- Generates `tracking.png`, `analysis.png`, `autotune_<loop>_<axis>.png` (SysID flights), `adapt_gate.png` (adaptation flights), and `<flight folder>/plots/index.md` (one line per PNG with a one-line caption).
+- Prints `plots ready: <n> files` when finished, or `plots failed: <reason>` if the worker exits non-zero or times out (never stops the day).
+- Turn plotting off with `.\labday 2026-10-19 --no-plots` or by setting `plots: false` in the day file header (`docs/lab/days/<date>.yaml`).
 
 ## 2. Video tracking pipeline (camera fusion)
 
