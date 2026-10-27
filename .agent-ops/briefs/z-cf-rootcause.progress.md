@@ -247,3 +247,23 @@ df7199a5 feat(capture): C2 budget coherent root-cause telemetry and preserve old
 660303b4 test(lab): validate quoted flags and labelled ABBA commands
 
 The final evidence/handoff commit follows these item commits. Feature-branch publication uses normal hooks only; never main, no bypass and no expansion to the prohibited broad test gate.
+
+## Publication result
+
+Evidence/handoff commit: 7976f9bb. Normal feature-branch push (`git -c credential.interactive=never push -u origin z-cf-rootcause`) was rejected by the repository pre-push guard; no main push or merge was attempted. Raw log: .agent_state/z-cf-rootcause/feature-push.log.
+
+```text
+agent_push_guard: tier-0 flight-critical files in the diff without operator approval:
+  - API/ekf_of.c
+  - API/land_profile.h
+  - API/mrac.c
+  - API/pid.c
+  - API/wfb_safety.c
+Approval is a committed line in docs/agent/streams/z-cf-rootcause.md:
+  Tier0-Approved: <file>, <file> - operator <YYYY-MM-DD> "<the operator's words>"
+error: failed to push some refs to 'https://github.com/YoussefChouj/FreeRTOS-adaptive-controller-codex.git'
+```
+
+The guard compares origin/main...HEAD. Required local-main base ef56fe57 already contains196 commits beyond origin/main; the five flagged tier-0 files are inherited from that base and were not edited by this task. The branch has382 changed paths against origin/main before final evidence files. Do not manufacture approval, widen unrelated scope, bypass the guard or run the prohibited broad gate to force publication. Feature branch remains local for authorized integration/review. After the inherited authorization problem, full routed-gate coverage would also need resolution under a separate authorization because this brief permits scoped tests only.
+
+Offline work and tests are complete; publication is blocked. This final publication-record commit follows7976f9bb and the item commits listed above.

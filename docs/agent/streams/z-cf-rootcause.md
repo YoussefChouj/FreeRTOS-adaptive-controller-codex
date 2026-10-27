@@ -15,6 +15,8 @@ C2 wire calculation65800B/s with provisional new addresses; actual new image lay
 Progress, per-item commits/test tails, full A5 table, findings and CEO questions: `.agent-ops/briefs/z-cf-rootcause.progress.md`.
 Original main dirty edits preserved; runtime Ki0.001 versus committed default0.005 documented. One task navigation-friction log and supplied reference file remain unstaged.
 
+Publication: normal feature push rejected by tier-0 guard on five files inherited from local-main base (196 commits ahead of origin/main); task did not edit them. Branch remains local. No bypass or broader approval. Raw feature-push.log and details in progress.
+
 ## Next actions
 1. CEO review offline reports and resolve old-image hand-test and0.8->1.0m campaign prerequisites.
 2. Authorized main session alone: reviewed build/identity/capture verification and target cost measurement.
@@ -24,20 +26,17 @@ Original main dirty edits preserved; runtime Ki0.001 versus committed default0.0
 No flash, probe,8081,drone,Keil,main merge/main push in this stream. No unreviewed flight or campaign amendment. No broad tests or push-guard bypass. Stage explicit paths only.
 
 <!-- AUTO:BEGIN -->
-Refreshed: 2026-10-27 13:13 (mechanical, no LLM)
-- Tree: .worktrees/z-cf-rootcause; branch / HEAD: z-cf-rootcause @ 660303b4; unpushed commits: no upstream (never pushed)
-- Dirty paths outside OBJ/: 7
+Refreshed: 2026-10-27 13:14 (mechanical, no LLM)
+- Tree: .worktrees/z-cf-rootcause; branch / HEAD: z-cf-rootcause @ 7976f9bb; unpushed commits: no upstream (never pushed)
+- Dirty paths outside OBJ/: 4
+  -  M .agent-ops/briefs/z-cf-rootcause.progress.md
   -  M .agent_memory/frictions.jsonl
-  -  M docs/lab/z-cf-rootcause-A5.md
+  -  M docs/agent/streams/z-cf-rootcause.md
   - ?? .agent-ops/briefs/cf-rate-scaled-gains.cfvz_ref.py
-  - ?? .agent-ops/briefs/z-cf-rootcause-prompt.md
-  - ?? .agent-ops/briefs/z-cf-rootcause.md
-  - ?? .agent-ops/briefs/z-cf-rootcause.progress.md
-  - ?? docs/agent/streams/z-cf-rootcause.md
 - Last commits:
+  - 7976f9bb docs(altitude): record root-cause evidence and completed agent handoff
   - 660303b4 test(lab): validate quoted flags and labelled ABBA commands
   - 1abbb602 docs(altitude): C3 order estimator bench and flight comparisons with explicit prerequisites
   - df7199a5 feat(capture): C2 budget coherent root-cause telemetry and preserve old-image capture
   - 43242837 fix(analysis): require effective timing evidence before certifying replay
-  - 7204e4eb docs(altitude): A6 assess filter choice against proposed-model evidence
 <!-- AUTO:END -->
