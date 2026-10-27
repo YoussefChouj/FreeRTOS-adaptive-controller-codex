@@ -1,0 +1,137 @@
+# Lab day 2026-10-28: final thesis MRAC flights + PID / LQR baselines on the new rate gains, then the sysid refly.
+# `.\labday 2026-10-28 --list` shows what is flown; the same command resumes from the first flight not flown.
+# Why this order (docs/lab/2026-10-28-verdicts.md): every 10-27/28 flight wobbles at 2.3-2.9 Hz = the rate-loop crossover
+# with PM 40-45 deg, and live MRAC doubles it. So: rate step first (one variable: roll/pitch only, yaw kept), hover check,
+# then the thesis MRAC shadow/live pairs, then the PID and LQR baselines on the same rate gains, then the sysid flights
+# that failed on 10-28 (pos excitation needs the sysid_u firmware; vel-z needs highdtsPID.Des logged).
+# Every pass threshold below is PROPOSED unless cited to a measured log.
+
+day: 2026-10-28
+carry: false
+gains: rate32d169y104
+title: Final thesis MRAC flights + PID/LQR baselines on rate32d169 (PM 40-45 -> 50 deg), sysid refly
+camera:
+  floor: floor-2026-10-28
+  mode: 3
+  # --delay-ms 297 = screen-flash test 2026-10-26 (266 photon->read) + 31 read->send (10-24 fixes.csv median)
+  args: [--yaw-deg, "94", --delay-ms, "297"]
+before:
+  - "FLASH FIRST (COM6 must be present): `python -m ground_station.flashtool.rebuild_and_flash --yes`, stop on a non-zero exit; then `python -m ground_station.livewatch verify`. Needed for VAR 47 default 33 (LQR/MPC predictor) and the sysid_u / sysid_state mirrors (pos sysid)"
+  - "RESTART 8081 in `--lab` mode after the flash so 200 Hz subscribe streaming keeps full rate (`< 1%` frame drops)"
+  - "Floor scan: labday scans `floor-2026-10-28` at launch (drone out of view); keep the camera fixed all day"
+  - "HANDS OFF THE STICKS during every excitation and trajectory (stick move > 0.05 in 10 ms = RC takeover = abort)"
+  - "Tracker dot centered on drone before arming; resting battery >= 15.8V before first flight"
+  - "Camera start-up gap on the pad (HEIGHT INVALID / learning the pad) is harmless; an in-flight `WARN no fix sent` > 1 s goes to docs/lab/open-items.md"
+
+flights:
+  # ======== BLOCK 0: RATE STEP (terminal gate) + SMOKE ========
+  # rate32d169y104 = roll/pitch Kp3.2 Ki0.01 Kd16.9 (autotune on 10-27 roll #27/#21, pitch #28/#25: PM 40-45 -> 50 deg,
+  # wc 18-19 rad/s kept) + yaw104 unchanged. Seeded into logs/lab/2026-10-28/gains.yaml and written disarmed via --gains.
+  - id: rate-gains-apply
+    fly: lab_a_hover_verify
+    gate: "TERMINAL GATE: labday shows `rate32d169y104` vs the gains on the drone and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly `from` flights, `q` = stop the day; post-flight `v` = revert, `u` = undo on a failed hover)"
+    why: "Rate roll/pitch step against the 2.3-2.9 Hz wobble (rate crossover, PM 40-45 deg on the 10-27 fits); every later flight flies on it"
+    pass: "steady hover; gx/gy PSD peak in 1.7-5.3 Hz below the 10-27 baseline (gyro std in the air < 4.3 deg/s); lands inside 10 cm pad gate (PROPOSED)"
+    stop: true
+
+  - id: smoke-hover
+    fly: lab_s_smoke
+    gate: "TERMINAL GATE: confirm `rate-gains-apply` hover check passed (`y` = continue, `n` = keep old gains, `r` = re-fly, `q` = stop the day)"
+    why: "Pre-flight smoke: 100/50 Hz subscribe link (< 1% drops), camera fusion, RC authority logging, pad landing"
+    pass: "every traj_go accepted; lands inside 10 cm pad gate; subscribe drop rate < 1%; s_authority stays 1 (PROPOSED)"
+    stop: true
+
+  # ======== BLOCK 1: THESIS MRAC (shadow, then live, per layer) ========
+  - id: adapt-angle-shadow-hover
+    fly: lab_l_adapt_angle_shadow
+    gate: "TERMINAL GATE: after shadow hover, labday shows `adapt_gate` verdict (`OK` / `TOO SLOW` / `TOO FAST`) and prompts (`y` = write now disarmed, `n` = keep old gains, `r` = re-fly, `q` = stop the day)"
+    why: "Thesis: 40 s shadow hover for attitude angle + 3L MRAC (`layers att both`, `mrac_injection=0`) on the new rate gains"
+    pass: "weights converge over last 30% of hover; no saturation or >0.5x BW oscillation (PROPOSED)"
+    tune: {kind: adapt, layer: angle_att, mode: shadow}
+
+  - id: adapt-angle-live-verify
+    fly: lab_l_adapt_angle_live
+    gate: "TERMINAL GATE: labday compares live vs `adapt-angle-shadow-hover` (`OK` / `TOO SLOW` / `TOO FAST` / `DISABLE`) and prompts (`y` / `n` / `r` / `q`)"
+    why: "Thesis: 40 s live hover for attitude angle + 3L MRAC (`mrac_injection=1`); on 10-28 live doubled the wobble (gyro std 8.8 vs 4.4 deg/s) on the PM 43 rate loop"
+    pass: "live tracking error <= shadow baseline; gyro std in the air <= 1.2x shadow; `adapt_gate` verdict OK (PROPOSED)"
+    tune: {kind: adapt, layer: angle_att, mode: live, baseline: adapt-angle-shadow-hover}
+
+  - id: adapt-vel-shadow-hover
+    fly: lab_l_adapt_vel_shadow
+    gate: "TERMINAL GATE: after shadow hover, labday shows `adapt_gate` verdict and prompts (`y` / `n` / `r` / `q`)"
+    why: "Thesis: 40 s shadow hover for inner velocity MRAC (`layers xy inner`, `mrac_injection=0`)"
+    pass: "weights converge over last 30% of hover; no saturation or >0.5x BW oscillation (PROPOSED)"
+    tune: {kind: adapt, layer: vel_xy, mode: shadow}
+
+  - id: adapt-vel-live-verify
+    fly: lab_l_adapt_vel_live
+    gate: "TERMINAL GATE: labday compares live vs `adapt-vel-shadow-hover` and prompts (`y` / `n` / `r` / `q`)"
+    why: "Thesis: 40 s live hover for inner velocity MRAC (`mrac_injection=1`); 10-28 gyro std 8.2 deg/s on the old rate gains"
+    pass: "live tracking error <= shadow baseline; gyro std in the air <= 1.2x shadow; `adapt_gate` verdict OK (PROPOSED)"
+    tune: {kind: adapt, layer: vel_xy, mode: live, baseline: adapt-vel-shadow-hover}
+
+  - id: adapt-pos-shadow-hover
+    fly: lab_l_adapt_pos_shadow
+    gate: "TERMINAL GATE: after shadow hover, labday shows `adapt_gate` verdict and prompts (`y` / `n` / `r` / `q`)"
+    why: "Thesis: 40 s shadow hover for outer XY position MRAC (`layers xy both`, `mrac_injection=0`)"
+    pass: "weights converge over last 30% of hover; no saturation or >0.5x BW oscillation (PROPOSED)"
+    tune: {kind: adapt, layer: pos_xy, mode: shadow}
+
+  - id: adapt-pos-live-verify
+    fly: lab_l_adapt_pos_live
+    gate: "TERMINAL GATE: labday compares live vs `adapt-pos-shadow-hover` and prompts (`y` / `n` / `r` / `q`)"
+    why: "Thesis: 40 s live hover for outer XY position MRAC (`layers xy both`, `mrac_injection=1`)"
+    pass: "live tracking error <= shadow baseline; `adapt_gate` verdict OK (PROPOSED)"
+    tune: {kind: adapt, layer: pos_xy, mode: live, baseline: adapt-pos-shadow-hover}
+
+  # ======== BLOCK 2: BASELINES on the same rate gains (0.4 m x step, circle r30, figure-8 a30) ========
+  # labday's --gains (day json) overrides lab_c_lqr's `# gains: defaults` header, so both fly on rate32d169y104.
+  - id: pid-track
+    fly: lab_c_pid
+    why: "Baseline: cascaded PID on the step / circle / figure-8 track"
+    pass: "step overshoot and circle + figure-8 xy rms recorded; lands inside 10 cm pad gate (PROPOSED)"
+
+  - id: lqr-track
+    fly: lab_c_lqr
+    why: "Baseline: LQR with the Smith-predictor delay back to 33 ticks (VAR 47), the delay the gains were designed for and the one good LQR flight (10-15, hover rms 4/3 cm) used"
+    pass: "no abort; hover xy rms <= 6 cm; step overshoot and circle + figure-8 xy rms vs `pid-track` (PROPOSED)"
+
+  # ======== BLOCK 3: SYSID REFLY (failed on 10-28) ========
+  - id: vel-sysid-z
+    camera_mode: 0  # record tracking; disable camera corrections for identification
+    fly: lab_d_sysid_vel_z
+    why: "Vertical velocity sysid (`sysid_target=3`, `axis=z`): 0.15-3 Hz multisine at 0.25 m/s on `highdtsPID.Des`; 10-28 #15 had no coherent bins and no highdtsPID.Des in the log"
+    pass: "excite completes keeping altitude within [0.25, 0.85] m; `python -m ground_station.autotune.cli <session> --loop vel --axis z` fits with residual <= 0.35 (PROPOSED)"
+    tune: {kind: pid, loop: vel, axes: [z], from: [vel-sysid-z]}
+
+  - id: pos-sysid-z
+    camera_mode: 0  # record tracking; disable camera corrections for identification
+    fly: lab_d_sysid_pos_z
+    gate: "the flashed firmware logs sysid_u (`python -m ground_station.livewatch verify` passed)"
+    why: "Vertical position sysid (`sysid_target=4`, `axis=z`): 0.1-1.5 Hz multisine at 0.15 m; 10-28 #16 was refused because the excitation never shows in Des without sysid_u"
+    pass: "excite completes; `python -m ground_station.autotune.cli <session> --loop pos --axis z` fits with residual <= 0.35 (PROPOSED)"
+    tune: {kind: pid, loop: pos, axes: [z], from: [pos-sysid-z]}
+
+  - id: pos-sysid-xy
+    camera_mode: 0  # record tracking; disable camera corrections for identification
+    fly: lab_d_sysid_pos_xy
+    gate: "the flashed firmware logs sysid_u"
+    why: "Horizontal position sysid (`sysid_target=4`): 0.1-1.5 Hz multisine (15 cm, 30 s each) on x and y; 10-28 #17 refused for the same reason as pos-z"
+    pass: "excite completes inside fence; `python -m ground_station.autotune.cli <session> --loop pos --axis x` (and y) fits with residual <= 0.35 (PROPOSED)"
+    tune: {kind: pid, loop: pos, axes: [x, y], from: [pos-sysid-xy]}
+
+  # ======== OPTIONAL: xy reference-model MRAC (needs logs/ref_fit/lqr.json) ========
+  # Make it first: `python -m ground_station.analysis.mrac_ref_fit <lqr-track session> --kind lqr` after a good lqr-track.
+  - id: adapt-xy-ref-shadow-hover
+    fly: lab_l_adapt_xy_ref_shadow
+    optional: true
+    gate: "logs/ref_fit/lqr.json exists (10-28 #22-24 never left the pad without it)"
+    why: "Thesis, optional: shadow hover for the xy reference-model MRAC layer"
+    pass: "weights converge over last 30% of hover; no saturation (PROPOSED)"
+
+  - id: adapt-xy-ref-live-verify
+    fly: lab_l_adapt_xy_ref_live
+    optional: true
+    gate: "adapt-xy-ref-shadow-hover passed"
+    why: "Thesis, optional: live hover for the xy reference-model MRAC layer"
+    pass: "live tracking error <= shadow baseline (PROPOSED)"

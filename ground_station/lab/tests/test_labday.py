@@ -683,6 +683,19 @@ def test_2026_10_27_has_single_header_gains_and_no_per_flight_copies():
         assert "--gains" not in f["args"], f"{f['id']} still has per-flight --gains"
 
 
+def test_2026_10_28_flies_the_rate_step_first_and_the_thesis_pairs_before_baselines():
+    d = labday.load_day(labday.day_path("2026-10-28"))
+    assert d.get("gains") == "rate32d169y104" and d.get("carry") is False
+    gains, _, err = labday.campaign_fly.resolve_preset_gains("rate32d169y104")
+    assert not err and gains[11] == gains[14] == 16.9 and gains[15] == 10.4   # roll/pitch step, yaw kept
+    ids = [f["id"] for f in d["flights"]]
+    assert ids[:2] == ["rate-gains-apply", "smoke-hover"]
+    assert ids.index("adapt-pos-live-verify") < ids.index("pid-track") < ids.index("lqr-track")
+    assert "flash" in d["before"][0].lower()
+    for f in d["flights"]:
+        assert "--gains" not in f["args"], f"{f['id']} still has per-flight --gains"
+
+
 def test_a1_day_gains_carry_forward_and_restart_persistence(tmp_path, monkeypatch):
     """A1: Carry-forward: after a y gate, the next flight's fly_cmd carries --gains <day-gains.json>, and the FakeDrone
     ground write sends the approved values. A restarted labday (same state) still carries them."""

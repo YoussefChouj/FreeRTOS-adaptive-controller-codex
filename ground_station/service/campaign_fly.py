@@ -626,6 +626,12 @@ GAIN_PRESETS = {
                "flight re-writes all nine rate gains after a reboot (docs/lab/days/2026-10-27.yaml block 0).",
         "gains": {9: 3.5, 10: 0.01, 11: 13.0, 12: 3.5, 13: 0.01, 14: 13.0, 15: 10.4, 16: 0.005, 17: 0.014},
     },
+    "rate32d169y104": {
+        "why": "rate32d169y104 (PROPOSED): roll/pitch rate Kp3.2 Kd16.9, Ki and yaw104 unchanged; autotune on the 10-27 "
+               "rate-sysid fits (roll #27/#21, pitch #28/#25) predicts PM 40-45 -> 50 deg at wc 18-19 rad/s, against the "
+               "2.3-2.9 Hz wobble every 10-27/28 flight shows (docs/lab/2026-10-28-verdicts.md).",
+        "gains": {9: 3.2, 10: 0.01, 11: 16.9, 12: 3.2, 13: 0.01, 14: 16.9, 15: 10.4, 16: 0.005, 17: 0.014},
+    },
     "defaults": {
         "why": "defaults: restore API/pid.c firmware default gains without requiring power-cycle (docs/agent/lab-friction-2026-10-15.md A6).",
         # rate loops (9-17) too: F4 livetune writes 9-14, yaw104 writes 15-17, and RAM gains outlive the flight
