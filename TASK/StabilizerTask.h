@@ -114,12 +114,16 @@ typedef struct {
     float    dt_c;    /* s, last accepted correction interval */
     float    y_corr;  /* m, range used at the last accepted correction */
     uint8_t  mode;    /* ALT_CF_RATE_*, latched on arm rising edge */
+    uint8_t  sample_mode; /* effective gate selection (FD always uses legacy gate) */
+    uint8_t  delay_ticks; /* effective fusion delay, latched while disarmed */
+    uint8_t  spread_mode; /* effective correction spreading, latched while disarmed */
 } AltCfState_t;
 
 extern volatile uint8_t g_alt_vz_mode;
 extern volatile uint8_t g_alt_cf_rate_mode; /* VAR 59; pending until next arm */
 extern volatile uint8_t g_alt_tof_sample_mode; /* 0 old tick median, 1 newest (default); disarmed latch */
 extern volatile uint8_t g_alt_tof_delay_ticks; /* 0 default; 0..31 ticks, disarmed latch */
+extern volatile uint8_t g_alt_cf_spread_mode; /* 0 default, 1 spread; disarmed latch */
 extern AltCfState_t     alt_cf;
 
 void Alt_UpdateFB(void);

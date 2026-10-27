@@ -1570,6 +1570,106 @@ static void test_a3_history_and_latch(void)
                && s_alt_cf_history[0][2] == alt_cf.b_az);
 }
 
+/* A4 host-only hover quantization stress; exact zero acceleration, no plant. */
+static void test_a4_hover_steps(void)
+{
+    int mode, tick;
+    float max_h[2] = {0.0f, 0.0f}, max_v[2] = {0.0f, 0.0f};
+    float final_h[2], final_v[2];
+    for (mode = 0; mode < 2; mode++) {
+        reset_env(ALT_VZ_MODE_CF, 100U);
+        s_alt_spread_mode = (uint8_t)mode;
+        for (tick = 1; tick <= 6000; tick++) {
+            float h = alt_cf.h, v = alt_cf.vz;
+            if (tick % 10 == 0) {
+                ano_of.of_alt_cm = (tick < 1000) ? (uint32_t)(100 + ((tick / 10) % 2 ? 1 : -1)) : 100U;
+                ano_of.alt_update_cnt++;
+            }
+            Alt_UpdateFB();
+            if (fabsf(alt_cf.h - h) > max_h[mode]) max_h[mode] = fabsf(alt_cf.h - h);
+            if (fabsf(alt_cf.vz - v) > max_v[mode]) max_v[mode] = fabsf(alt_cf.vz - v);
+        }
+        final_h[mode] = alt_cf.h;
+        final_v[mode] = alt_cf.vz;
+        printf("A4 hover spread=%d max dh=%.8f m max dv=%.8f m/s final h=%.8f v=%.8f (host)\n",
+               mode, (double)max_h[mode], (double)max_v[mode], (double)final_h[mode], (double)final_v[mode]);
+    }
+    check_cond("A4 spread reduces max h step", max_h[1] < max_h[0]);
+    check_cond("A4 spread reduces max vz step", max_v[1] < max_v[0]);
+    check_cond("A4 equal steady height", fabsf(final_h[1] - final_h[0]) < 1e-5f);
+    check_cond("A4 equal steady velocity", fabsf(final_v[1] - final_v[0]) < 1e-5f);
+}
+
+static void test_a4_packets_and_clamp(void)
+{
+    int tick, i, active, peak = 0;
+    float ref_h = 1.0f, ref_v = 0.0f, ref_b = 0.0f;
+    reset_env(ALT_VZ_MODE_CF, 100U);
+    for (i = 0; i < 31; i++) Alt_CfHistoryPush();
+    for (tick = 0; tick < 35; tick++) {
+        if (tick > 0) {
+            alt_cf.h += alt_cf.vz * STAB_DT_S - 0.5f * alt_cf.b_az * STAB_DT_S * STAB_DT_S;
+            alt_cf.vz -= alt_cf.b_az * STAB_DT_S;
+            ref_h += ref_v * STAB_DT_S - 0.5f * ref_b * STAB_DT_S * STAB_DT_S;
+            ref_v -= ref_b * STAB_DT_S;
+            Alt_CfSpreadPredict();
+            Alt_CfHistoryPush();
+        }
+        if (tick == 0 || tick == 3 || tick == 15) {
+            float dh = (tick == 0) ? 0.01f : ((tick == 3) ? 0.02f : -0.01f);
+            float dv = (tick == 0) ? 0.02f : ((tick == 3) ? -0.01f : 0.01f);
+            float db = (tick == 0) ? 0.03f : ((tick == 3) ? -0.02f : 0.02f);
+            uint8_t delay = (tick == 3) ? 4U : 8U;
+            float t = (float)delay * STAB_DT_S;
+            alt_cf.dt_c = (tick == 3) ? 0.015f : 0.05f;
+            Alt_CfSpreadQueue(delay, dh, dv, db);
+            ref_h += dh + dv * t - 0.5f * db * t * t;
+            ref_v += dv - db * t;
+            ref_b += db;
+        }
+        Alt_CfSpreadApply();
+        check_cond("A4 current h equals ring after packet", alt_cf.h == s_alt_cf_history[s_alt_cf_head][0]);
+        check_cond("A4 current bias equals ring after packet", alt_cf.b_az == s_alt_cf_history[s_alt_cf_head][2]);
+    }
+    check_cond("A4 early/late packet residual drains to full correction h", fabsf(alt_cf.h - ref_h) < 2e-6f);
+    check_cond("A4 early/late packet residual drains to full correction v", fabsf(alt_cf.vz - ref_v) < 2e-6f);
+    check_cond("A4 early/late packet residual drains to full correction bias", fabsf(alt_cf.b_az - ref_b) < 2e-6f);
+    for (i = 0; i < (int)ALT_CF_SPREAD_PACKETS; i++) check_cond("A4 all residual packets drained", s_alt_cf_packets[i].remaining == 0U);
+    Alt_CfReset(1.0f, 1U);
+    alt_cf.dt_c = 0.05f;
+    Alt_CfSpreadQueue(0U, 0.0f, 0.0f, 3.0f);
+    for (tick = 0; tick < 10; tick++) {
+        Alt_CfSpreadApply();
+        check_cond("A4 applied bias clamp", fabsf(alt_cf.b_az) <= ALT_CF_BAZ_MAX);
+        check_cond("A4 clamped ACTUAL bias matches ring", alt_cf.b_az == s_alt_cf_history[s_alt_cf_head][2]);
+    }
+    check_cond("A4 bias saturates and residual is discarded", alt_cf.b_az == ALT_CF_BAZ_MAX);
+    Alt_CfReset(1.0f, 1U);
+    alt_cf.dt_c = 0.1f;
+    for (tick = 0; tick < 60; tick++) {
+        Alt_CfSpreadQueue(0U, 0.0f, 0.0f, 0.0f);
+        active = 0;
+        for (i = 0; i < (int)ALT_CF_SPREAD_PACKETS; i++) if (s_alt_cf_packets[i].remaining) active++;
+        if (active > peak) peak = active;
+        Alt_CfSpreadApply();
+    }
+    check_cond("A4 worst-case packet capacity reaches bounded 20", peak == (int)ALT_CF_SPREAD_PACKETS);
+    Alt_CfReset(1.0f, 1U);
+    for (i = 0; i < (int)ALT_CF_SPREAD_PACKETS; i++) check_cond("A4 reset clears residual packets", s_alt_cf_packets[i].remaining == 0U);
+    g_alt_cf_spread_mode = 1U;
+    g_alt_tof_delay_ticks = 8U;
+    g_alt_tof_sample_mode = ALT_TOF_SAMPLE_LEGACY;
+    Alt_UpdateFB();
+    check_cond("A4 published effective flags reject airborne pending writes", alt_cf.spread_mode == 0U
+               && alt_cf.delay_ticks == 0U && alt_cf.sample_mode == ALT_TOF_SAMPLE_NEWEST);
+    Flight_Control_Lock = 0U;
+    Alt_UpdateFB();
+    check_cond("A4 published effective flags latch disarmed", alt_cf.spread_mode == 1U
+               && alt_cf.delay_ticks == 8U && alt_cf.sample_mode == ALT_TOF_SAMPLE_LEGACY);
+    printf("A4 packets early/late drain; bias clamp; peak=%d/%u; sizeof packets=%u bytes (host)\n",
+           peak, (unsigned)ALT_CF_SPREAD_PACKETS, (unsigned)sizeof(s_alt_cf_packets));
+}
+
 int main(void)
 {
     test_u1_fd_bit_exact_on_213634_trace();
@@ -1589,11 +1689,13 @@ int main(void)
     test_a2_outlier_and_latch();
     test_a3_delayed_sine();
     test_a3_history_and_latch();
+    test_a4_hover_steps();
+    test_a4_packets_and_clamp();
 
     if (g_fail_count != 0) {
         printf("FAILED: %d checks failed (%d passed)\n", g_fail_count, g_pass_count);
         return 1;
     }
-    printf("ALL ALT_CF TESTS PASSED (U1-U13, A1-A3) (%d checks)\n", g_pass_count);
+    printf("ALL ALT_CF TESTS PASSED (U1-U13, A1-A4) (%d checks)\n", g_pass_count);
     return 0;
 }

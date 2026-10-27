@@ -1255,6 +1255,16 @@ static uint8_t  s_alt_armed_prev   = 0U;
 static uint16_t s_alt_cf_steps     = 0U;
 static uint8_t s_alt_sample_mode = ALT_TOF_SAMPLE_NEWEST;
 static uint8_t s_alt_delay_ticks = 0U;
+static uint8_t s_alt_spread_mode = 0U;
+/* At most one packet starts per tick; each lives at most 20 ticks (100 ms).
+ * PROPOSED capacity, 320 bytes on targets with 4-byte float/struct alignment.
+ * Hardware CPU/stack cost is unmeasured: up to 20 x 32 ring updates per tick. */
+#define ALT_CF_SPREAD_PACKETS 20U
+typedef struct {
+    float dh, dv, db;
+    uint8_t age, remaining;
+} AltCfPacket;
+static AltCfPacket s_alt_cf_packets[ALT_CF_SPREAD_PACKETS];
 /* Ring entries are posterior states; current predicted state is pushed before fusion. */
 static float s_alt_cf_history[ALT_CF_HISTORY_LEN][3];
 static uint8_t s_alt_cf_head = 0U;
@@ -1273,7 +1283,14 @@ static const AltCfGains s_alt_cf_gains[] = {
     ALT_CF_ROW(0.21f, 0.45f, 0.1f,  20.0f)  /* nominal  PROPOSED, S1 closed-loop sim */
 };
 
-/* Change history (newest first)
+/* Continuous observer derivation (design 20 Hz, PROPOSED model):
+ * hdot=v+L1*(y-h), vdot=a-b+L2*(y-h), bdot=-L3*(y-h).
+ * det(sI-A)=s^3+L1*s^2+L2*s+L3, L=[k1,k2,k3]/Ts.
+ * Here s^3+4.2*s^2+9*s+2: roots -1.9752204 +/- 2.0279634j,
+ * -0.2495592 1/s; pair wn=2.8309241 rad/s, zeta=0.6977299,
+ * bias tau=4.0070656 s. These are model poles, not flown measurements;
+ * packet spreading and sampled fusion have additional discrete dynamics.
+ * Change history (newest first)
  * nominal
  *   2026-10-26 k1=0.21, k2=0.45, k3=0.1, AccMax=20.0: PROPOSED from S1 closed-loop sim (wn=3 rad/s, zeta=0.7 at Ts=0.05 s; poles |z|=0.894, 0.894, 0.988; dU p99 19.9x lower than FD)
  */
@@ -1282,10 +1299,13 @@ volatile uint8_t g_alt_vz_mode = ALT_VZ_MODE_DEFAULT;
 volatile uint8_t g_alt_cf_rate_mode = ALT_CF_RATE_LEGACY;
 volatile uint8_t g_alt_tof_sample_mode = ALT_TOF_SAMPLE_NEWEST;
 volatile uint8_t g_alt_tof_delay_ticks = 0U;
+volatile uint8_t g_alt_cf_spread_mode = 0U;
 AltCfState_t     alt_cf;
 
 static void Alt_CfHistoryReset(void)
 {
+    uint8_t i;
+    for (i = 0U; i < ALT_CF_SPREAD_PACKETS; i++) s_alt_cf_packets[i].remaining = 0U;
     s_alt_cf_head = 0U;
     s_alt_cf_history_n = 1U;
     s_alt_cf_history[0][0] = alt_cf.h;
@@ -1321,6 +1341,84 @@ static void Alt_CfHistoryCorrect(uint8_t delay, float dh, float dv, float db)
     alt_cf.b_az = s_alt_cf_history[s_alt_cf_head][2];
 }
 
+/* Apply a CURRENT-time correction backwards only to states at/after its horizon.
+ * F(-t): dh_old=dh-dv*t-db*t*t/2, dv_old=dv+db*t. */
+static void Alt_CfSpreadPart(uint8_t horizon_age, float dh, float dv, float db)
+{
+    uint8_t age, index;
+    float t;
+    for (age = 0U; age <= horizon_age && age < s_alt_cf_history_n; age++) {
+        index = (uint8_t)((s_alt_cf_head + ALT_CF_HISTORY_LEN - age) % ALT_CF_HISTORY_LEN);
+        t = (float)age * STAB_DT_S;
+        s_alt_cf_history[index][0] += dh - dv * t - 0.5f * db * t * t;
+        s_alt_cf_history[index][1] += dv + db * t;
+        s_alt_cf_history[index][2] += db;
+    }
+    alt_cf.h = s_alt_cf_history[s_alt_cf_head][0];
+    alt_cf.vz = s_alt_cf_history[s_alt_cf_head][1];
+    alt_cf.b_az = s_alt_cf_history[s_alt_cf_head][2];
+}
+
+static void Alt_CfSpreadPredict(void)
+{
+    uint8_t i;
+    for (i = 0U; i < ALT_CF_SPREAD_PACKETS; i++) {
+        AltCfPacket *p = &s_alt_cf_packets[i];
+        if (p->remaining) {
+            p->dh += p->dv * STAB_DT_S - 0.5f * p->db * STAB_DT_S * STAB_DT_S;
+            p->dv -= p->db * STAB_DT_S;
+            if (p->age < ALT_CF_HISTORY_LEN - 1U) p->age++;
+        }
+    }
+}
+
+static void Alt_CfSpreadQueue(uint8_t delay, float dh, float dv, float db)
+{
+    uint8_t i, ticks;
+    float t = (float)delay * STAB_DT_S;
+    ticks = (uint8_t)(alt_cf.dt_c / STAB_DT_S + 0.5f);
+    if (ticks < 1U) ticks = 1U;
+    else if (ticks > ALT_CF_SPREAD_PACKETS) ticks = ALT_CF_SPREAD_PACKETS;
+    for (i = 0U; i < ALT_CF_SPREAD_PACKETS; i++) {
+        AltCfPacket *p = &s_alt_cf_packets[i];
+        if (!p->remaining) {
+            p->dh = dh + dv * t - 0.5f * db * t * t;
+            p->dv = dv - db * t;
+            p->db = db;
+            p->age = delay;
+            p->remaining = ticks;
+            return;
+        }
+    }
+    /* Unreachable with one enqueue/tick and <=20-tick packet lifetime.
+     * Guard against future cadence changes: apply rather than lose a correction. */
+    Alt_CfHistoryCorrect(delay, dh, dv, db);
+}
+
+static void Alt_CfSpreadApply(void)
+{
+    uint8_t i;
+    for (i = 0U; i < ALT_CF_SPREAD_PACKETS; i++) {
+        AltCfPacket *p = &s_alt_cf_packets[i];
+        if (p->remaining) {
+            float dh = p->dh / (float)p->remaining;
+            float dv = p->dv / (float)p->remaining;
+            float requested_db = p->db / (float)p->remaining;
+            float target_b = alt_cf.b_az + requested_db;
+            float db;
+            if (target_b > ALT_CF_BAZ_MAX) target_b = ALT_CF_BAZ_MAX;
+            else if (target_b < -ALT_CF_BAZ_MAX) target_b = -ALT_CF_BAZ_MAX;
+            db = target_b - alt_cf.b_az;
+            /* Anti-windup discards clipped bias; history receives ACTUAL db. */
+            Alt_CfSpreadPart(p->age, dh, dv, db);
+            p->dh -= dh;
+            p->dv -= dv;
+            p->db -= requested_db;
+            p->remaining--;
+        }
+    }
+}
+
 void Alt_CfReset(float h_init, uint8_t zero_bias)
 {
 	alt_cf.h = h_init;
@@ -1330,6 +1428,9 @@ void Alt_CfReset(float h_init, uint8_t zero_bias)
 	alt_cf.dt_c = 0.0f;
 	alt_cf.y_corr = h_init;
 	s_alt_cf_steps = 0U;
+	alt_cf.sample_mode = s_alt_sample_mode;
+	alt_cf.delay_ticks = s_alt_delay_ticks;
+	alt_cf.spread_mode = s_alt_spread_mode;
 	if (zero_bias) {
 		alt_cf.b_az = 0.0f;
 		alt_cf.n_corr = 0U;
@@ -1371,8 +1472,12 @@ void Alt_UpdateFB(void)
 	armed = ALT_IS_ARMED();
 	if (!armed) s_alt_sample_mode = (g_alt_tof_sample_mode == ALT_TOF_SAMPLE_LEGACY)
 	                              ? ALT_TOF_SAMPLE_LEGACY : ALT_TOF_SAMPLE_NEWEST;
+	if (!armed) s_alt_spread_mode = (g_alt_cf_spread_mode == 1U) ? 1U : 0U;
 	if (!armed) s_alt_delay_ticks = (g_alt_tof_delay_ticks < ALT_CF_HISTORY_LEN)
 	                               ? g_alt_tof_delay_ticks : ALT_CF_HISTORY_LEN - 1U;
+	alt_cf.sample_mode = s_alt_sample_mode;
+	alt_cf.delay_ticks = s_alt_delay_ticks;
+	alt_cf.spread_mode = s_alt_spread_mode;
 	newest = (uint8_t)(g_alt_vz_mode == ALT_VZ_MODE_CF && s_alt_sample_mode == ALT_TOF_SAMPLE_NEWEST);
 	cnt_changed = (uint8_t)(ano_of.alt_update_cnt != s_alt_cnt_prev);
 	s_alt_cnt_prev = ano_of.alt_update_cnt;
@@ -1509,6 +1614,7 @@ void Alt_UpdateFB(void)
 		if (s_alt_cf_steps < 65535U) s_alt_cf_steps++;
 		alt_cf.h  += alt_cf.vz * STAB_DT_S + 0.5f * alt_cf.a_up * STAB_DT_S * STAB_DT_S;
 		alt_cf.vz += alt_cf.a_up * STAB_DT_S;
+		if (s_alt_spread_mode) Alt_CfSpreadPredict();
 		Alt_CfHistoryPush();
 		if (sample_accepted) {
 			uint8_t delay = s_alt_delay_ticks;
@@ -1539,7 +1645,15 @@ void Alt_UpdateFB(void)
 			}
 			if (alt_cf.b_az > ALT_CF_BAZ_MAX) alt_cf.b_az = ALT_CF_BAZ_MAX;
 			else if (alt_cf.b_az < -ALT_CF_BAZ_MAX) alt_cf.b_az = -ALT_CF_BAZ_MAX;
-			if (delay != 0U) {
+			if (s_alt_spread_mode) {
+				float dh = alt_cf.h - before_h;
+				float dv = alt_cf.vz - before_v;
+				float db = alt_cf.b_az - before_b;
+				alt_cf.h = before_h;
+				alt_cf.vz = before_v;
+				alt_cf.b_az = before_b;
+				Alt_CfSpreadQueue(delay, dh, dv, db);
+			} else if (delay != 0U) {
 				float dh = alt_cf.h - before_h;
 				float dv = alt_cf.vz - before_v;
 				float db = alt_cf.b_az - before_b;
@@ -1559,6 +1673,7 @@ void Alt_UpdateFB(void)
 	}
 
 	if (!armed || !s_alt_cf_inited || resynced) Alt_CfHistoryReset();
+	else if (s_alt_spread_mode) Alt_CfSpreadApply();
 
 	if (g_alt_vz_mode == ALT_VZ_MODE_CF) {
 		Ctrler.Z_posPID.FB  = alt_cf.h;
@@ -1589,6 +1704,8 @@ void Alt_TestResetAll(void)
 	s_alt_sample_mode = ALT_TOF_SAMPLE_NEWEST;
 	g_alt_tof_delay_ticks = 0U;
 	s_alt_delay_ticks = 0U;
+	g_alt_cf_spread_mode = 0U;
+	s_alt_spread_mode = 0U;
 	alt_cf.mode = ALT_CF_RATE_LEGACY;
 	s_alt_vz_mode_prev = ALT_VZ_MODE_DEFAULT;
 	s_alt_cf_inited = 0U;
