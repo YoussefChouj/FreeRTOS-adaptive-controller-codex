@@ -82,6 +82,13 @@ def check(name: str, value: float, table: dict[str, VarRow] | None = None) -> Va
     return row
 
 
+def armed_locked(name: str, table: dict[str, VarRow] | None = None) -> bool:
+    """True when VarWrite_Apply refuses `name` while armed (REJECT_BUSY): u8 ids 47 and 60-63, f32 ids 75-83
+    (TASK/AutoflyTask.c). These are written on the ground before the RC arm (campaign_fly.preapply_armed_locked)."""
+    row = (rows() if table is None else table).get(name)
+    return row is not None and (row.id == 47 or 60 <= row.id <= 63 or 75 <= row.id <= 83)
+
+
 def _strip_comments(text: str) -> str:
     return re.sub(r"/\*.*?\*/", "", text, flags=re.S)
 

@@ -65,10 +65,10 @@ _REGISTRY = SchemaRegistry.builtin_dashboard()
 _ALIASES = {s: a for s in SAMPLE_SYMS if (a := _REGISTRY.resolve(s)) and a != s}
 
 ACK_TIMEOUT_S = 1.0        # PROPOSED: step A 10-07 ack latency max 0.72 s at a 97 % full link; 0.5 s restarted every upload
-TRAJ_ACK_TIMEOUT_S = 3.0   # PROPOSED: 10-15 re-fly, traj BEGIN applied 1.55/1.70 s late on a loaded link -> refused
-GROUND_ACK_TIMEOUT_S = 3.0 # PROPOSED: 10-24 rate-sysid, g_land_xy_gate_cm applied 1.32/1.32/1.78 s late under the 200 Hz
+TRAJ_ACK_TIMEOUT_S = 20.0  # PROPOSED: 10-15 re-fly, traj BEGIN applied 1.55/1.70 s late on a loaded link -> refused
+GROUND_ACK_TIMEOUT_S = 20.0# PROPOSED: 10-24 rate-sysid, g_land_xy_gate_cm applied 1.32/1.32/1.78 s late under the 200 Hz
                            # capture -> takeoff refused at 1.0 s; only writes before takeoff wait this long
-SYSID_ACK_TIMEOUT_S = 3.0 # PROPOSED: 10-24 soak, sysid CMD 0x14 'no result' at 1.0 s under the 200 Hz capture (late replies,
+SYSID_ACK_TIMEOUT_S = 20.0# PROPOSED: 10-24 soak, sysid CMD 0x14 'no result' at 1.0 s under the 200 Hz capture (late replies,
                            # GIL convoy); waiting is safe: the drone holds hover while the host waits
 _CMD_SYSID = 0x14
 _LATE_TXIDS_MAX = 4        # earlier tries of one write still watched for a late APPLIED

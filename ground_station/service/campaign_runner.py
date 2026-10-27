@@ -15,15 +15,18 @@ from ground_station.service.scenario_schema import PROG_KINDS, TRAJ_KINDS, WFB_S
 from ground_station.livetune.loop import OK_STATUSES as LIVETUNE_OK, LiveTuneSession, parse_step as parse_livetune
 from ground_station.service.trajectory_pipeline import TrajLimits
 from ground_station.platform.trajectory_upload import upload
-from ground_station.platform import wfb_program
+from ground_station.platform import wfb_program, wfb_var
 
 # firmware enums (docs/workflow-b/interfaces.md): prim_state IDLE 0 / HOVER 2 / DESCEND 6, traj_state DONE 4
 PRIM_IDLE = 0
+PRIM_TAKEOFF = 1
 PRIM_HOVER = 2
 PRIM_DESCEND = 6
 TRAJ_DONE = 4
 # PROPOSED: time for status.motor_idle to read 1 after the IDLE command (stream at >= 10 Hz plus the ack)
 IDLE_CONFIRM_S = 1.5
+# PROPOSED: TAKEOFF reply lost -> watch prim_state this long (10-27 ingest lag max 2.2 s under the 200 Hz capture)
+TAKEOFF_READBACK_S = 3.0
 # cooldown passed to the pack gate for a pack that has not flown in this campaign: any min_rest_s passes
 PACK_RESTED_S = 1e6
 BATTERY_GRACE_S = 5.0  # PROPOSED: wait this long for real_voltage to stream (8081 just started, link reconnect) before giving up
@@ -338,7 +341,22 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
     def send_takeoff() -> bool:
         nonlocal takeoff_sent
         takeoff_sent = True  # a timed-out TAKEOFF may still have reached the drone (late acks, 2026-10-15)
-        return deps.client.takeoff()
+        if deps.client.takeoff():
+            return True
+        # No result is unknown, not refused: read back prim_state (10-27 f16: applied, climbed to 0.54 m, reply lost at
+        # 1.0 s, host landed it). TAKEOFF is a trigger, so it is never resent.
+        if "no result" not in (getattr(deps.client, "last_error", "") or ""):
+            return False
+        hb = getattr(deps.client, "heartbeat", None)
+        started = lambda: int(deps.status().get("prim_state") or 0) in (PRIM_TAKEOFF, PRIM_HOVER)
+        t0 = deps.clock()
+        while deps.clock() - t0 < TAKEOFF_READBACK_S:
+            if started():
+                return True
+            if hb:
+                hb()
+            deps.sleep(deps.dt_s)
+        return started()
 
     def preload_send() -> bool:
         nonlocal preload_err
@@ -435,6 +453,8 @@ def fly_scenario(scenario: Scenario, deps: RunnerDeps, hover_only: bool = False,
                 return True
 
             for name, v in st.args.get("set", ()):
+                if wfb_var.armed_locked(name) and not deps.agent_arms and deps.status().get("arm") == 1:
+                    continue  # VarWrite_Apply answers BUSY once armed; campaign_fly.preapply_armed_locked sent it before wait_for_arm
                 cmds.append((f"set {name}", lambda name=name, v=v: _send_set(name, v)))
             # The ground writes of the .fly verbs (layers, mrac_ref, mrac_prior): CMD 0x1D / 0x2F..0x34 on the ground,
             # after the VAR_WRITEs (the exp row latches g_xy_ctrl_kind first; Gate W), in the order the script wrote them.

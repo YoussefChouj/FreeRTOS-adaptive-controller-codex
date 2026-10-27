@@ -1623,6 +1623,44 @@ def preapply_exp_id(base, launch_path, flight=0, client=None):
     return v if ok else None
 
 
+def ground_armed_locked_sets(launch_path, flight=0):
+    """The takeoff `set` pairs of flight `flight` (0-based) that the firmware refuses once armed (wfb_var.armed_locked)."""
+    from ground_station.platform import wfb_var
+    from ground_station.service.campaign_schema import load_campaign
+    queue = [e for e in load_campaign(launch_path).experiments for _ in range(e.repeats)]
+    sc = getattr(queue[flight % len(queue)], "scenario", None) if queue else None
+    for st in getattr(sc, "steps", None) or ():
+        if st.kind == "takeoff":
+            return [(name, float(v)) for name, v in st.args.get("set", ()) if wfb_var.armed_locked(name)]
+    return []
+
+
+def preapply_armed_locked(base, launch_path, flight=0, client=None):
+    """Write the flight's armed-locked takeoff `set` vars (g_xyc_delay_ticks, ...) while still disarmed, before
+    wait_for_arm: VarWrite_Apply answers BUSY to them once RC-armed (10-28 adapt-angle-live refused at takeoff), so
+    the runner skips them when armed. False when one is not applied (the caller refuses the flight)."""
+    try:
+        sets = ground_armed_locked_sets(launch_path, flight)
+        if not sets:
+            return True
+        cli = client or HttpWfbClient(base)
+        for name, v in sets:
+            ok = False
+            for _ in range(3):  # idempotent: resend only a lost reply, never a refusal
+                ok = cli.var_write(name, v)
+                if ok or "no result in" not in (getattr(cli, "last_error", "") or ""):
+                    break
+            if not ok:
+                print(f"preapply {name}={v:g}: NOT applied ({getattr(cli, 'last_error', '')})", flush=True)
+                return False
+    except Exception as e:
+        print(f"preapply armed-locked set: {e}", flush=True)
+        return False
+    events.log("locked_set_preapply", count=len(sets), ok=True)
+    print(f"{', '.join(f'{n}={v:g}' for n, v in sets)} written on the ground before the arm.", flush=True)
+    return True
+
+
 def ground_prior_writes(launch_path, flight=0):
     """The disarmed-only prior writes (`mrac_prior`) of the campaign's flight `flight` (0-based) takeoff `ground`."""
     from ground_station.service.campaign_schema import load_campaign
@@ -2097,6 +2135,10 @@ def fly_loop(base, arg, pack, rate=None, run=None, once=False, yes=False,
         upload_preload(base, str(launch))
         preapply_exp_id(base, str(launch), flight=next_i if held else 0)
         preapply_prior(base, str(launch), flight=next_i if held else 0)
+        if not preapply_armed_locked(base, str(launch), flight=next_i if held else 0):
+            print("Not flying: an armed-locked var was not written on the ground (the firmware refuses it once armed).",
+                  flush=True)
+            return 1
         t_wait = _clock()
         r = wait_for_arm(base, str(launch), go_pack, preflight=not held)
         events.log("arm_wait", result=r, campaign=name, pack=go_pack, s=round(_clock() - t_wait, 1))

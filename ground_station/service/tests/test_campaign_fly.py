@@ -1322,3 +1322,29 @@ def test_pad_height_guard_rejects_missing_stale_and_nonfinite_height(monkeypatch
     monkeypatch.setattr(campaign_fly, "call", lambda *a, **k: (200, {"values": {
         "Ctrler.Z_posPID.FB": {"value": 0.05, "age_s": 0.02}}}))
     assert campaign_fly.pad_height_error("http://h") is None
+
+
+def test_preapply_armed_locked_writes_var_47_before_the_arm_and_refuses_on_busy(tmp_path, monkeypatch):
+    path = tmp_path / "c.yaml"
+    path.write_text(YAML.replace("{takeoff: {z: 0.5}}",
+                                 "{takeoff: {z: 0.5, set: {g_xyc_delay_ticks: 18, g_land_xy_gate_cm: 10}}}"),
+                    encoding="utf-8")
+    monkeypatch.setattr(campaign_fly.events, "log", lambda ev, **kw: None)
+    assert campaign_fly.ground_armed_locked_sets(path) == [("g_xyc_delay_ticks", 18.0)]  # gate cm is not locked
+
+    class C:
+        def __init__(self, oks, err=""):
+            self.oks, self.err, self.sent, self.last_error = oks, err, [], ""
+        def var_write(self, name, v):
+            self.sent.append((name, v))
+            ok = self.oks.pop(0)
+            self.last_error = "" if ok else self.err
+            return ok
+
+    lost = C([False, True], "cmd 0x2D idx 47: no result in 20.0 s")
+    assert campaign_fly.preapply_armed_locked("http://h", path, client=lost) and len(lost.sent) == 2
+    busy = C([False, True], "cmd 0x2D idx 47 rejected: BUSY")
+    assert not campaign_fly.preapply_armed_locked("http://h", path, client=busy) and len(busy.sent) == 1
+    plain = tmp_path / "p.yaml"
+    plain.write_text(YAML, encoding="utf-8")
+    assert campaign_fly.preapply_armed_locked("http://h", plain, client=C([]))
