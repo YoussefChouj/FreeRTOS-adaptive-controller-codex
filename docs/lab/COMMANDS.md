@@ -27,6 +27,7 @@ which has no adb, scrcpy or Windows python. Never use it for the camera. `.\cam`
 | End the live VOFA+/PlotJuggler stream | `.\cam end` |
 | Start the ground service by hand | `python -m ground_station.service --port 8081` |
 | Flash the firmware | `python -m ground_station.flashtool.rebuild_and_flash --yes` |
+| Every flight ever flown, one table per day | `python -m ground_station.lab.flight_index` -> `logs/flights/INDEX.md` + `index.csv` (labday refreshes it after each scored flight; `--grep lqr` prints matching rows) |
 | Drift NN live for one flight | `.fly` line `set g_drift_nn_live=1 g_drift_nn_clamp_mps=0.05` (section 4.1) |
 
 ## 1. A lab day: `labday`

@@ -2205,6 +2205,8 @@ class Day:
                 if self.d.get("day"):
                     cards = [self.cards[g] for g in plan if g in self.cards]
                     self.say(f"report {rel(scorecard.write_day_report(str(self.d['day']), cards, REPORT_DIR))}")
+                from ground_station.lab import flight_index   # cross-day history, after the card cache is written
+                flight_index.write()
             except Exception as e:  # noqa: BLE001 - a scoring bug must not stop a lab day
                 self.say(f"score {f['id']}: scorecard failed ({type(e).__name__}: {e})")
 
