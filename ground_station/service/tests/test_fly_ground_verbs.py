@@ -64,9 +64,19 @@ def test_layers_targets_are_the_firmware_layer_bits(target, value):
     assert steps[0]["takeoff"]["ground"][0]["value"] == value
 
 
-def test_layers_group_without_a_contract_field_is_refused_with_the_all_loop_hint():
-    # att / yaw / z layer fields come with the all-loop firmware; the contract does not carry them yet.
-    # The refusal is loud and names the field: the flight stays in the deck (it parses), it does not take off.
+def _without_layer_fields(monkeypatch):
+    # A build that predates the all-loop merge: neither the contract nor the host mirror names att / yaw / z_layers.
+    from ground_station.analysis import mrac_variants as mv
+
+    monkeypatch.setattr(ground_plan._contract_module(), "MRAC_LAYER_FIELDS", {}, raising=False)
+    rows = [r for r in mv.VARIANT_FIELDS if r[0] not in ("att_layers", "yaw_layers", "z_layers")]
+    monkeypatch.setattr(mv, "VARIANT_FIELDS", rows)
+
+
+def test_layers_group_without_a_contract_field_is_refused_with_the_all_loop_hint(monkeypatch):
+    # On a build without the att / yaw / z layer fields the refusal is loud and names the field: the flight stays
+    # in the deck (it parses), it does not take off.
+    _without_layer_fields(monkeypatch)
     write = _scenario("layers att both\nhold 3\n")["steps"][0]["takeoff"]["ground"][0]
     assert write["kind"] == "refuse"
     assert write["field"] == "att_layers"
@@ -74,8 +84,9 @@ def test_layers_group_without_a_contract_field_is_refused_with_the_all_loop_hint
     assert ground_plan.write_label(write).startswith("REFUSED att_layers")
 
 
-def test_a_missing_field_refuses_only_its_flight_at_run_time():
+def test_a_missing_field_refuses_only_its_flight_at_run_time(monkeypatch):
     # Never drop a flight: the deck parses, and on the fake drone the flight is refused on the ground, unsent.
+    _without_layer_fields(monkeypatch)
     _, _, deps = _mrc_rig()
     sent = []
     deps.client.mrac_variant = lambda *a, **k: sent.append(a) or True
@@ -352,10 +363,12 @@ def test_the_field_numbers_come_from_the_contract_by_name(monkeypatch):
 def test_a_contract_named_field_is_used_by_the_layers_verb(monkeypatch):
     fc = ground_plan._contract_module()
 
-    monkeypatch.setattr(fc, "MRAC_LAYER_FIELDS", {"att_layers": 32}, raising=False)
+    # 34 is not the mirror's att_layers row (33), so the write proves the contract number wins; it is a layer row
+    # (0-3), so the value passes the bounds check.
+    monkeypatch.setattr(fc, "MRAC_LAYER_FIELDS", {"att_layers": 34}, raising=False)
     write = _scenario("layers att both\nhold 3\n")["steps"][0]["takeoff"]["ground"][0]
     # Field 32+ does not fit the 5-bit field of axes 0-3, so the layer write goes on axis x (idx 0x80 | field << 1).
-    assert write == {"kind": "variant", "axis": 4, "field": 32, "value": 3.0}
+    assert write == {"kind": "variant", "axis": 4, "field": 34, "value": 3.0}
 
 
 class _RecordingClient:
@@ -369,6 +382,12 @@ class _RecordingClient:
     def _send_cmd(self, cmd, idx, value):
         self.sent.append((cmd, idx, value))
         return True
+
+    def mrac_variant(self, axis, field, value):
+        # The HttpWfbClient packing (campaign_fly.py mrac_variant), for a field the host mirror knows.
+        from ground_station.analysis.mrac_variants import variant_idx
+
+        return self._send_cmd(0x1D, variant_idx(axis, field), float(value))
 
 
 def test_a_field_beyond_the_mirror_is_sent_with_the_axis_x_idx(monkeypatch):
