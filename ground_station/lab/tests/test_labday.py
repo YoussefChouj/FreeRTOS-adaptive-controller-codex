@@ -353,6 +353,16 @@ def test_oct27_sysid_camera_off_other_flights_keep_mode3():
     assert all(f.get("camera_mode", 3) == 3 for f in d["flights"] if f not in sysid)
 
 
+def test_oct27_restart_roll_repeats_sequence_even_when_previously_flown():
+    d = labday.load_day(labday.day_path("2026-10-27"))
+    state = {"flown": {f["id"]: {"ok": True} for f in d["flights"]}, "skipped": []}
+    queue = labday.todo(d, state, "rate-sysid-roll-wide")
+    assert [f["id"] for f in queue[:4]] == [
+        "rate-sysid-roll-wide", "rate-sysid-pitch-wide", "rate-sysid-yaw-wide", "rate-gain-verify-hover"]
+    assert [f["camera_mode"] for f in queue[:3]] == [0, 0, 0]
+    assert queue[2]["tune"]["from"] == [f["id"] for f in queue[:3]]
+
+
 def test_camera_around_each_flight_after_the_launch_floor_scan(tmp_path, monkeypatch):
     fake = _Fake(["q"])
     p = _player(tmp_path, monkeypatch, fake, [{"id": "A", "fly": "lab_c_robust"}], camera=CAM)
@@ -1096,7 +1106,7 @@ def test_a3_gate_n_keeps_old_r_reflies_from_and_q_stops_day(tmp_path, monkeypatc
     [
         (
             {"proposals": {9: 4.0}, "coherence": 0.45, "residual": 0.15, "bw_sep": 4.0},
-            "refused: median in-band coherence 0.45 < 0.6 (PROPOSED)",
+                "refused: fit-bin coherence 0.45 < 0.6 (PROPOSED)",
         ),
         (
             {"proposals": {9: 4.0}, "coherence": 0.85, "residual": 0.42, "bw_sep": 4.0},

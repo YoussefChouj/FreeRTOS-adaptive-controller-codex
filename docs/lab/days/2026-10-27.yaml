@@ -81,6 +81,8 @@ flights:
     stop: true
 
   # ======== BLOCK 1: INNER RATE LOOP SYSID (sysid_target=0, 0.2-40 Hz split low/high @ 200 Hz) ========
+  # Restart the full sequence with .\labday 2026-10-27 --from rate-sysid-roll-wide.
+  # Roll -> pitch -> yaw all send mode 0; yaw runs the combined recorded-data tuning gate.
   - id: rate-sysid-roll-wide
     camera_mode: 0  # record tracking; disable camera corrections for identification
     fly: lab_d_sysid_rate_roll

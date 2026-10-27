@@ -1,18 +1,21 @@
 # Handoff — stream `main`
 
-## Current task: 2026-10-27 SysID camera isolation (Codex, inline)
+## Current task: 2026-10-27 SysID gate repair and roll restart (Codex, inline)
 
-- Goal: unblock rate-sysid-pitch-wide after the takeoff position_error; smallest host-only mitigation.
-- Facts: 74 scoped tests passed. All eight 10-27 SysID cards explicitly send camera mode 0 with tracker/video
-  recording; other cards inherit mode 3. Abort event: ingest lag 5 ms, dropped 0; camera innovation jumped
-  (-111.9,+50.4) cm and sideways feedback rose to ~72 cm. Camera reacquisition/height projection remains a hypothesis.
-- Constraints/gates: no controller, estimator, excitation, rate or safety-limit changes. Mode 0 gives up camera
-  drift correction. Offline tests validate configuration/launch only; flight performance remains unverified.
-- Next 3 actions: (1) quit/restart labday and resume rate-sysid-pitch-wide; (2) confirm mode-0 takeoff reaches hover,
-  stop on another abort; (3) after lab inspect lift-off fixes/video/height timing per open-items.
+- Goal: repeat roll -> pitch -> yaw in deck camera mode 0, then use the recorded-data PID gate.
+- Facts: pitch/yaw mode-0 flights 19/20 completed without abort. Original tuning gate imported nonexistent
+  ground_station.analysis.autotune and used obsolete arguments, flight-folder inputs and result keys.
+  Repair resolves recorded telemetry, saved excitation bands and flown gains; recomputes fits and reads
+  nested results. Saved pitch two-band replay reaches fitting: 58 coherent bins, 80% coverage, residual
+  0.492 > 0.35, so it legitimately refuses. Low-band-only residual 0.172 is not a wide-band validation.
+- Constraints/gates: no controller, estimator, excitation, rate or safety-limit changes; no gains applied.
+  Synthetic contract checks validate software only. Mode 0 gives up camera drift correction.
+- Next 3 actions: (1) quit/restart labday from rate-sysid-roll-wide; (2) fly mode-0 roll/pitch/yaw and inspect
+  gate refusals before accepting any PROPOSED gain; (3) after lab investigate wide-band model quality,
+  SysID scorecard semantics, background fit defaults and complete effective gain snapshots per open-items.
 - Do-nots: no flash for this fix, no relaxed abort limits, no outside workers, preserve the unrelated dirty work.
 - Broader checks: command-doc suite already fails on cfab launcher mapping; deferred in open-items.
-- Resume: `.\labday 2026-10-27 --from rate-sysid-pitch-wide` (new process; 8081 may stay up).
+- Resume: `.\labday 2026-10-27 --from rate-sysid-roll-wide` (new process; 8081 may stay up).
 
 
 - **Updated:** 2026-10-22 07:05 +03:00 (desktop CEO, overnight run 10-21 -> 10-22)

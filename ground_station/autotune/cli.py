@@ -59,7 +59,11 @@ def _identify(args: argparse.Namespace, flown: PidRow, excite: Mapping[str, Any]
     """Load logs, IV FRF, fit. Returns {'series', 'runs', 'frf', 'fit', 'problem', 'baseline', 'psd', 'zoh'}."""
     all_series = [fr.load_series(src) for src in args.logs]
     dt = fr.loop_dt(id_loop, args.axis)
-    runs = [fr.extract(s, args.axis, excite, loop=id_loop) for s in all_series]
+    excitations = getattr(args, "excitations", None) or [excite]
+    # The ID-frame reader selects one contiguous run. Align each saved band independently
+    # against core streams when a flight contains multiple different excitations.
+    extract_series = [{k: v for k, v in s.items() if not k.startswith("id.")} for s in all_series] if len(excitations) > 1 else all_series
+    runs = [fr.extract(s, args.axis, cfg, loop=id_loop) for s in extract_series for cfg in excitations]
     use_zoh = bool(getattr(args, "correct_zoh", False)) or (id_loop != "rate") or (excite["f1"] > 20.0)
     frf = fr.plant_frf(runs, flown, (excite["f0"], excite["f1"]), dt=dt, correct_zoh=use_zoh)
     fit = None
@@ -72,7 +76,7 @@ def _identify(args: argparse.Namespace, flown: PidRow, excite: Mapping[str, Any]
     starts = []
     for axis in (fr.RATE_PID if id_loop == "rate" else [args.axis]):
         try:
-            t0, corr, *_ = fr.find_start(all_series[0], axis, excite, loop=id_loop)
+            t0, corr, *_ = fr.find_start(all_series[0], axis, excitations[0], loop=id_loop)
         except fr.IdError:
             continue
         if corr >= fr.ALIGN_MIN_CORR:
@@ -103,7 +107,10 @@ def _id_dict(args: argparse.Namespace, ident: Mapping[str, Any], excite: Mapping
     return {"axis": args.axis, "loop": args.loop, "logs": [str(p) for p in args.logs], "excite": dict(excite),
             "source": ident["runs"][0].source, "starts_s": [r.t0_s for r in ident["runs"]],
             "frf": {"bins": int(ident["frf"].keep.sum()), "coverage": ident["frf"].coverage,
-                    "n_avg": ident["frf"].n_avg},
+                    "n_avg": ident["frf"].n_avg,
+                    "median_fit_coherence": float(fr.np.median(ident["frf"].coh[ident["frf"].keep]))
+                    if ident["frf"].keep.any() else 0.0},
+            "excitations": list(getattr(args, "excitations", None) or [dict(excite)]),
             "fit": fit_d,
             "zoh": ident.get("zoh"),
             "psd_check": ident["psd"][2] if ident.get("psd") else None,
@@ -289,6 +296,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--loop", choices=("rate", "angle", "vel", "pos"), default="rate")
     ap.add_argument("--rate-gains", help="Kp,Ki_fw,Kd_fw of the PID that flew (default API/pid.c)")
     ap.add_argument("--angle-gains", help="Kp,Ki_fw,Kd_fw of the current angle PID (default API/pid.c)")
+    ap.add_argument("--flight-file", type=Path, help="saved .fly file: use its matching excitation band(s)")
     ap.add_argument("--inner-model", nargs="*", help="inner-loop model_<loop>_<axis>.json file(s) measured on")
     ap.add_argument("--verify", metavar="PROPOSAL_JSON", help="verify a proposal on this (verify-flight) log")
     ap.add_argument("--signal", choices=sorted(ex.SIGNALS))
@@ -304,6 +312,22 @@ def main(argv: list[str] | None = None) -> int:
     excite = dict(default_ex)
     excite.update({k: v for k, v in (("signal", args.signal), ("f0", args.f0), ("f1", args.f1), ("amp", args.amp),
                                      ("duration_s", args.duration)) if v is not None})
+    if args.flight_file:
+        from ground_station.service.fly_file import compile_fly
+        campaign, _ = compile_fly(args.flight_file.read_text(encoding="utf-8"))
+        axis = {"x": "pitch", "y": "roll"}.get(args.axis, args.axis)
+        args.excitations = []
+        for experiment in campaign["experiments"]:
+            for step in experiment["scenario"]["steps"]:
+                cfg = step.get("excite") if isinstance(step, dict) else None
+                if cfg and cfg.get("axis") == axis and cfg.get("target", "rate") == args.loop:
+                    params = {k: cfg[k] for k in ("signal", "f0", "f1", "amp", "duration_s")}
+                    if params not in args.excitations:
+                        args.excitations.append(params)
+        if not args.excitations:
+            ap.error(f"no {args.loop}/{args.axis} excitation in {args.flight_file}")
+        excite = dict(args.excitations[0])
+        excite.update(f0=min(c["f0"] for c in args.excitations), f1=max(c["f1"] for c in args.excitations))
     rows = read_pid_rows()
     return verify(args, rows, excite) if args.verify else propose(args, rows, excite)
 

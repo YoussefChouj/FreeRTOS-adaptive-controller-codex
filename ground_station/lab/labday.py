@@ -814,6 +814,28 @@ def battery_gate(pack, v):
                      + ("ok" if ok else "SWAP"))
 
 
+def _pid_gate_argv(fdir, axis, loop, out_json, plots_dir):
+    """Use the recording and gain/excitation snapshots, never today's firmware defaults."""
+    session = fdir
+    if not (session / "telemetry.csv").is_file():
+        meta = json.loads((fdir / "metadata.json").read_text(encoding="utf-8"))
+        session = ROOT / "logs" / "sessions" / meta["session_id"]
+    if not (session / "telemetry.csv").is_file():
+        raise ValueError(f"recorded telemetry missing: {session}")
+    snapshots = sorted(fdir.glob("*.fly"))
+    if len(snapshots) != 1:
+        raise ValueError(f"expected one saved .fly file in {fdir}")
+    values = json.loads((fdir / "gains.json").read_text(encoding="utf-8"))["values"]
+    argv = [str(session), "--axis", axis, "--loop", loop, "--out", str(out_json),
+            "--flight-file", str(snapshots[0]), "--correct-zoh", "--plot-dir", str(plots_dir)]
+    triplet = _LOOP_AXIS_PID_VARS[(loop, axis)]
+    flag = "--angle-gains" if loop == "angle" else "--rate-gains"
+    argv += [flag, ",".join(str(values[str(idx)]) for idx in triplet)]
+    if loop == "angle":
+        argv += ["--rate-gains", ",".join(str(values[str(idx)]) for idx in _LOOP_AXIS_PID_VARS[("rate", axis)])]
+    return argv
+
+
 def analyze_tune_gate(day, f, tune_spec, from_folders):
     """Run offline analysis for a terminal tuning gate (`pid`, `xy_model`, `adapt`, or `preset`)."""
     kind = str(tune_spec.get("kind") or "pid").lower()
@@ -850,13 +872,7 @@ def analyze_tune_gate(day, f, tune_spec, from_folders):
             data = None
             if fdir is not None and Path(fdir).is_dir():
                 fdir = Path(fdir)
-                for cand in (fdir / f"autotune_{axis}_{loop}.json", fdir / f"autotune_{loop}_{axis}.json", fdir / "autotune.json"):
-                    if cand.is_file():
-                        try:
-                            data = json.loads(cand.read_text(encoding="utf-8"))
-                            break
-                        except Exception:
-                            pass
+                # Recompute from this flight's snapshots; old cached fits may use default gains/excitation.
                 if data is None:
                     out_json = fdir / f"autotune_{axis}_{loop}.json"
                     model_json = fdir / f"model_{loop}_{axis}.json"
@@ -865,17 +881,16 @@ def analyze_tune_gate(day, f, tune_spec, from_folders):
                     inner_key = inner_map.get(loop)
                     inner_model = (day.gains or {}).get("models", {}).get(inner_key) if inner_key else None
                     try:
-                        from ground_station.analysis.autotune import cli as autotune_cli
-                        argv = ["propose", str(fdir), "--axis", axis, "--loop", loop, "--out", str(out_json),
-                                "--save-model", str(model_json), "--plot-dir", str(plots_dir)]
+                        from ground_station.autotune import cli as autotune_cli
+                        argv = _pid_gate_argv(fdir, axis, loop, out_json, plots_dir)
                         if inner_model and Path(inner_model).is_file():
                             argv += ["--inner-model", str(inner_model)]
-                        autotune_cli.main(argv)
-                        if out_json.is_file():
+                        rc = autotune_cli.main(argv)
+                        if rc in (0, 2) and out_json.is_file():
                             data = json.loads(out_json.read_text(encoding="utf-8"))
                         if model_json.is_file():
                             models_saved[f"{loop}_{axis}"] = str(model_json)
-                    except Exception as exc:
+                    except (Exception, SystemExit) as exc:
                         refusal_reasons.append(f"refused: autotune {loop}/{axis} failed ({exc}) (PROPOSED)")
             if isinstance(data, dict):
                 var_triplet = _LOOP_AXIS_PID_VARS.get((loop, axis))
@@ -886,21 +901,24 @@ def analyze_tune_gate(day, f, tune_spec, from_folders):
                         if val is not None:
                             proposals[var_id] = float(val)
                 m = data.get("margins") or data
+                m = m.get("proposed") or m.get("current") or m
                 if isinstance(m, dict):
                     for mk, tk in (("pm_deg", "pm_deg"), ("phase_margin_deg", "pm_deg"), ("PM", "pm_deg"),
                                    ("gm_db", "gm_db"), ("gain_margin_db", "gm_db"), ("GM", "gm_db"),
-                                   ("crossover_rad_s", "crossover_rad_s"), ("crossover", "crossover_rad_s"), ("wc_rad_s", "crossover_rad_s")):
-                        if m.get(mk) is not None and margins[tk] is None:
-                            margins[tk] = float(m[mk])
+                                   ("crossover_rad_s", "crossover_rad_s"), ("crossover", "crossover_rad_s"),
+                                   ("wc_rad_s", "crossover_rad_s"), ("wc_rps", "crossover_rad_s")):
+                        if m.get(mk) is not None:
+                            val = float(m[mk])
+                            margins[tk] = min(margins[tk], val) if margins[tk] is not None else val
                 fq = data.get("fit_quality") or data.get("fit") or data
                 if isinstance(fq, dict):
-                    c_val = fq.get("coherence", fq.get("median_coherence"))
+                    c_val = fq.get("coherence", fq.get("median_coherence", (data.get("frf") or {}).get("median_fit_coherence")))
                     if c_val is not None:
                         coherence_vals.append(float(c_val))
-                    r_val = fq.get("residual", fq.get("fit_residual", fq.get("nrmse")))
+                    r_val = fq.get("residual", fq.get("fit_residual", fq.get("nrmse", fq.get("rel_residual"))))
                     if r_val is not None:
                         residual_vals.append(float(r_val))
-                bw_val = data.get("bw_sep", data.get("bandwidth_separation"))
+                bw_val = data.get("bw_sep", data.get("bandwidth_separation", data.get("separation_ratio")))
                 if bw_val is not None:
                     bw_sep_vals.append(float(bw_val))
                 if data.get("refused") or str(data.get("status", "")).lower() == "refused":
@@ -1456,7 +1474,7 @@ class Day:
 
         if coherence is not None and float(coherence) < TUNE_MIN_COHERENCE:
             refusal_reasons.append(
-                f"refused: median in-band coherence {float(coherence):.2f} < {TUNE_MIN_COHERENCE} (PROPOSED)"
+                f"refused: fit-bin coherence {float(coherence):.2f} < {TUNE_MIN_COHERENCE} (PROPOSED)"
             )
         if residual is not None and float(residual) > TUNE_MAX_RESIDUAL:
             refusal_reasons.append(

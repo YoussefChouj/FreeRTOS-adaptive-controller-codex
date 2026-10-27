@@ -32,7 +32,9 @@ which has no adb, scrcpy or Windows python. Never use it for the camera. `.\cam`
 ## 1. A lab day: `labday`
 
 For the 2026-10-27 deck, restart the labday process and resume with
-`.\labday 2026-10-27 --from rate-sysid-pitch-wide`. Each SysID card specifies
+`.\labday 2026-10-27 --from rate-sysid-roll-wide`. This repeats roll, pitch, yaw,
+then the rate tuning gate and verification hover, even if those cards were already flown.
+Each SysID card specifies
 `camera_mode: 0`: the camera/tracker still records, and sends mode 0 (corrections off).
 Every other card inherits the day's mode 3, including verification hovers. A card may
 override `camera_mode` with integer 0, 1 (shadow), 2 (offset corrections), or 3 (in-EKF).
@@ -645,10 +647,19 @@ Identify each cascaded loop from inside out (`rate` -> `angle` -> `vel` -> `pos`
 
 ```powershell
 python -m ground_station.autotune.cli <session> --loop rate --axis roll --correct-zoh --plot-dir logs/autotune --stem rate_roll --print-gain-write
+python -m ground_station.autotune.cli <session> --loop rate --axis roll --flight-file <saved-flight.fly> --rate-gains 3.5,0.01,13 --correct-zoh --out logs/autotune
 python -m ground_station.autotune.cli <session> --loop angle --axis roll --inner-model logs/autotune/model_rate_roll.json --out logs/autotune
 python -m ground_station.autotune.cli <session> --loop vel --axis x --inner-model logs/autotune/model_angle_pitch.json --out logs/autotune
 python -m ground_station.autotune.cli <session> --loop pos --axis x --inner-model logs/autotune/model_vel_x.json --out logs/autotune
 ```
+
+`--flight-file` reads the matching loop/axis excitation settings from the saved flight;
+split low/high bands are aligned separately and combined through the existing cross-spectrum estimator.
+`--rate-gains` above is an example: use that recording's flown gain snapshot.
+The deck gate resolves the session from the flight metadata, supplies these snapshots automatically,
+and recomputes cached fits. It reads nested proposed margins, fit-bin coherence, fit residual and bandwidth
+separation. The existing coverage/residual/margin refusals remain active; a software repair does not
+make a poor measured fit acceptable. Missing snapshots refuse instead of guessing flown parameters.
 
 Replay the 10-24 rate logs, compute excitation/subscribe link math, write `API/xy_ctrl_gains_candidate.h`, and run the PID/LQR/MPC/ADRC chain simulations (`docs/lab/days/2026-10-27.yaml`):
 
