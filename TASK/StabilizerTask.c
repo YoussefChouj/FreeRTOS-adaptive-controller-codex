@@ -1300,6 +1300,8 @@ volatile uint8_t g_alt_cf_rate_mode = ALT_CF_RATE_LEGACY;
 volatile uint8_t g_alt_tof_sample_mode = ALT_TOF_SAMPLE_NEWEST;
 volatile uint8_t g_alt_tof_delay_ticks = 0U;
 volatile uint8_t g_alt_cf_spread_mode = 0U;
+volatile uint8_t g_alt_cf_disarmed_test = 0U;
+static uint8_t s_alt_disarmed_test_prev = 0U;
 AltCfState_t     alt_cf;
 
 static void Alt_CfHistoryReset(void)
@@ -1463,6 +1465,7 @@ void Alt_UpdateFB(void)
 	uint8_t armed;
 	uint8_t newest;
 	uint8_t median_ok = 1U;
+	uint8_t diagnostic;
 	float a_up;
 	const AltCfGains *g = &s_alt_cf_gains[0];
 
@@ -1470,6 +1473,16 @@ void Alt_UpdateFB(void)
 	 * alt_update_cnt counts decoded ANOOF_FN_ALT frames, not sensor conversions;
 	 * equal quantized cm values are still frame events (H6). */
 	armed = ALT_IS_ARMED();
+	if (armed) g_alt_cf_disarmed_test = 0U;
+	diagnostic = (uint8_t)(!armed && g_alt_cf_disarmed_test == 1U);
+	if (diagnostic != s_alt_disarmed_test_prev) {
+		/* Bench estimates never survive into an arm or ordinary pad operation. */
+		Alt_CfReset(ano_of.of2_h, 1U);
+		s_alt_cf_inited = 0U;
+		if (diagnostic) alt_cf.mode = (g_alt_cf_rate_mode == ALT_CF_RATE_SCALED)
+		                              ? ALT_CF_RATE_SCALED : ALT_CF_RATE_LEGACY;
+		s_alt_disarmed_test_prev = diagnostic;
+	}
 	if (!armed) s_alt_sample_mode = (g_alt_tof_sample_mode == ALT_TOF_SAMPLE_LEGACY)
 	                              ? ALT_TOF_SAMPLE_LEGACY : ALT_TOF_SAMPLE_NEWEST;
 	if (!armed) s_alt_spread_mode = (g_alt_cf_spread_mode == 1U) ? 1U : 0U;
@@ -1586,7 +1599,7 @@ void Alt_UpdateFB(void)
 	else if (a_up < -g->AccMax) a_up = -g->AccMax;
 	alt_cf.a_up = a_up;
 
-	if (!armed) {
+	if (!armed && !diagnostic) {
 		/* Disarmed = on the ground: pin h to the rangefinder, no velocity, no bias update.
 		 * Free integration on the pad (no valid sample) drifted h to 110 m on 2026-10-26, and the
 		 * camera tracker, which projects pixels at this height, rejected every fix. */
@@ -1672,10 +1685,14 @@ void Alt_UpdateFB(void)
 		}
 	}
 
-	if (!armed || !s_alt_cf_inited || resynced) Alt_CfHistoryReset();
+	if ((!armed && !diagnostic) || !s_alt_cf_inited || resynced) Alt_CfHistoryReset();
 	else if (s_alt_spread_mode) Alt_CfSpreadApply();
 
-	if (g_alt_vz_mode == ALT_VZ_MODE_CF) {
+	if (diagnostic) {
+		/* Diagnostic state is telemetry only: keep controller FB on the range/FD path. */
+		Ctrler.Z_posPID.FB = ano_of.of2_h;
+		Ctrler.Z_ratePID.FB = ano_of.of2_h_f2_v;
+	} else if (g_alt_vz_mode == ALT_VZ_MODE_CF) {
 		Ctrler.Z_posPID.FB  = alt_cf.h;
 		Ctrler.Z_ratePID.FB = alt_cf.vz;
 	}
@@ -1706,6 +1723,8 @@ void Alt_TestResetAll(void)
 	s_alt_delay_ticks = 0U;
 	g_alt_cf_spread_mode = 0U;
 	s_alt_spread_mode = 0U;
+	g_alt_cf_disarmed_test = 0U;
+	s_alt_disarmed_test_prev = 0U;
 	alt_cf.mode = ALT_CF_RATE_LEGACY;
 	s_alt_vz_mode_prev = ALT_VZ_MODE_DEFAULT;
 	s_alt_cf_inited = 0U;

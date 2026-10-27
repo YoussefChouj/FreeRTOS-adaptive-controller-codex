@@ -123,6 +123,12 @@ The model uses the actual 100 Hz altitude / 200 Hz climb PID schedule. Its avera
 sample/hold margins and assumed thrust slope are simulation evidence only; hover
 throttle alone cannot identify mass or thrust response.
 
+Motors-off estimator diagnostic: g_alt_cf_disarmed_test is a runtime boolean,
+default 0. While disarmed, 1 runs CF predict/correct for the hand test and keeps
+its outputs isolated from Z controller feedback. It clears on arm; diagnostic
+toggles and the arm transition reset estimator history/bias. The disarmed diagnostic
+uses the selected CF rate mode. Firmware lacking this flag cannot perform this test.
+
 CF correction-rate ABBA experiment (PROPOSED): after the reviewed firmware is flashed and
 verified, copy the two preset sources next to the saved day gains. The copies preserve the
 saved attitude gains and explicitly set the measured Z position PID to 0.7/0.001/0.1 and

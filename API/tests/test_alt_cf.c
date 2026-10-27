@@ -1670,6 +1670,54 @@ static void test_a4_packets_and_clamp(void)
            peak, (unsigned)ALT_CF_SPREAD_PACKETS, (unsigned)sizeof(s_alt_cf_packets));
 }
 
+/* C1 synthetic diagnostic isolation; acceleration and durations are PROPOSED test inputs. */
+static void test_c1_disarmed_diagnostic(void)
+{
+    int tick;
+    uint32_t before;
+    reset_env(ALT_VZ_MODE_CF, 0U);
+    Flight_Control_Lock = 0U;
+    check_cond("C1 default off", g_alt_cf_disarmed_test == 0U);
+    ano_of.of_alt_cm = 80U;
+    ano_of.alt_update_cnt++;
+    Alt_UpdateFB();
+    g_alt_cf_disarmed_test = 1U;
+    for (tick = 0; tick < 50; tick++) {
+        if (tick % 10 == 0) ano_of.alt_update_cnt++;
+        Alt_UpdateFB();
+    }
+    before = alt_cf.n_corr;
+    Lin_Acc_Z_body = 0.5f / (ALT_CF_ACC_SIGN * MG_TO_MPS2);
+    for (tick = 0; tick < 20; tick++) {
+        Alt_UpdateFB();
+        check_cond("C1 position feedback isolated", Ctrler.Z_posPID.FB == ano_of.of2_h);
+        check_cond("C1 velocity feedback isolated", Ctrler.Z_ratePID.FB == ano_of.of2_h_f2_v);
+    }
+    check_cond("C1 disarmed estimator predicts", alt_cf.vz > 0.04f);
+    ano_of.alt_update_cnt++;
+    Alt_UpdateFB();
+    check_cond("C1 disarmed estimator corrects", alt_cf.n_corr > before);
+    alt_cf.b_az = 0.25f;
+    Flight_Control_Lock = 1U;
+    Alt_UpdateFB();
+    check_cond("C1 arm clears flag", g_alt_cf_disarmed_test == 0U);
+    check_cond("C1 arm clears diagnostic bias", alt_cf.b_az == 0.0f);
+    check_cond("C1 arm starts zero velocity", alt_cf.vz == 0.0f);
+    check_cond("C1 arm clears history", s_alt_cf_history_n == 1U);
+    Flight_Control_Lock = 0U;
+    Alt_UpdateFB();
+    check_cond("C1 stays disabled after disarm", g_alt_cf_disarmed_test == 0U);
+    g_alt_cf_disarmed_test = 1U;
+    Alt_UpdateFB();
+    alt_cf.vz = 0.2f;
+    alt_cf.b_az = 0.1f;
+    g_alt_cf_disarmed_test = 0U;
+    Alt_UpdateFB();
+    check_cond("C1 disabling restores pad hold", alt_cf.h == ano_of.of2_h && alt_cf.vz == 0.0f);
+    check_cond("C1 disabling clears bias", alt_cf.b_az == 0.0f);
+    printf("C1 PASS: disarmed predict/correct, controller isolation, arm/reset and default-off guard\n");
+}
+
 int main(void)
 {
     test_u1_fd_bit_exact_on_213634_trace();
@@ -1679,6 +1727,7 @@ int main(void)
     test_u5_rejected_samples_then_resync();
     test_u6_baz_clamp();
     test_u7_disarmed_hold();
+    test_c1_disarmed_diagnostic();
     test_u8_first_arm_pad_hold();
     test_u9_rearm_pad_hold();
     test_u10_legacy_golden();
