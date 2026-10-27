@@ -462,6 +462,10 @@ extern volatile uint8_t mrac_z_feat_mask;                            /* API/mrac
 extern volatile uint8_t g_drift_nn_live;                             /* NN/drift_nn_task.h, DRIFT_NN_LIVE_* */
 extern volatile float g_drift_nn_clamp_mps;                          /* NN/drift_nn_task.h */
 extern volatile uint8_t g_alt_cf_rate_mode;                           /* StabilizerTask.c, next-arm latch */
+extern volatile uint8_t g_alt_tof_sample_mode; /* 0 legacy, 1 newest; disarmed only */
+extern volatile uint8_t g_alt_tof_delay_ticks; /* 0..31; disarmed only */
+extern volatile uint8_t g_alt_cf_spread_mode; /* bool; disarmed only */
+extern volatile uint8_t g_alt_cf_disarmed_test; /* bool; cleared on arm */
 extern volatile uint8_t g_alt_vz_mode;                               /* StabilizerTask.c, ALT_VZ_MODE_* */
 
 /* n26-B: slow clock, arrival radius, predictor lead, and runtime xy gains (VAR 70..83) */
@@ -533,6 +537,10 @@ static const VarWriteRow_t s_var_write[] = {
     VAR_WRITE_ROW(g_drift_nn_clamp_mps, VW_F32, 57, 0.0f,  0.30f  ),  /* m/s, NN residual clamp        */
     VAR_WRITE_ROW(g_alt_vz_mode,      VW_U8, 58,  0,       1      ),  /* altitude vz mode: 0=FD, 1=CF  */
     VAR_WRITE_ROW(g_alt_cf_rate_mode, VW_U8, 59,  0,       1      ),  /* CF 0 legacy, 1 scaled; next arm */
+    VAR_WRITE_ROW(g_alt_tof_sample_mode, VW_U8, 60, 0,      1      ),  /* 0 legacy, 1 newest; disarmed */
+    VAR_WRITE_ROW(g_alt_tof_delay_ticks, VW_U8, 61, 0,      31     ),  /* ticks at 200 Hz; disarmed */
+    VAR_WRITE_ROW(g_alt_cf_spread_mode, VW_U8, 62, 0,       1      ),  /* bool; disarmed only */
+    VAR_WRITE_ROW(g_alt_cf_disarmed_test, VW_U8, 63, 0,     1      ),  /* bool; telemetry only */
     VAR_WRITE_ROW(g_traj_slow_on,     VW_U8,  70,   0,       1      ),  /* bool: slow clock when behind  */
     VAR_WRITE_ROW(g_traj_slow_elo_cm, VW_F32, 71,   1.0f,  200.0f   ),  /* cm, slow clock e_lo PROPOSED  */
     VAR_WRITE_ROW(g_traj_slow_ehi_cm, VW_F32, 72,   5.0f,  300.0f   ),  /* cm, slow clock e_hi PROPOSED  */
@@ -572,7 +580,7 @@ uint8_t VarWrite_Apply(uint8_t id, float val, const char **name)
 				if (r->addr == (volatile void *)&sysid_target && SysID_GetState() != (uint8_t)SYSID_IDLE) {
 					return VAR_WRITE_REJECT_BUSY;
 				}
-				if (r->id == 47U && (FlightFSM_GetState() == FLIGHT_STATE_ARMED || DroneStatus.ARM_Status == Armed)) {
+				if ((r->id == 47U || (r->id >= 60U && r->id <= 63U)) && (FlightFSM_GetState() == FLIGHT_STATE_ARMED || DroneStatus.ARM_Status == Armed)) {
 					return VAR_WRITE_REJECT_BUSY;
 				}
 				*(volatile uint8_t *)r->addr = u;

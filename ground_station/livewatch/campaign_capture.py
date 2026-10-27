@@ -223,7 +223,7 @@ DRIFT_NN: tuple[str, ...] = (
 )
 # Dedicated vertical diagnosis: keep filter state and PID terms together on the fast lane.
 # Shared motor/attitude/setpoint signals are already in the always-on core.
-Z_CF: tuple[str, ...] = (
+Z_CF_LEGACY: tuple[str, ...] = (
     tuple(f"alt_cf.{f}" for f in ("h", "vz", "b_az", "e", "a_up", "n_corr", "dt_c", "y_corr", "mode"))
     + ("g_alt_vz_mode", "ano_of.alt_update_cnt", "ano_of.of_alt_cm", "ano_of.of2_h",
        "ano_of.of2_h_f2_v", "s_alt_valid_tick", "s_alt_reject_cnt", "s_alt_cf_inited")
@@ -231,8 +231,11 @@ Z_CF: tuple[str, ...] = (
             for f in ("Up", "Ui", "Ud", "U"))
     + ("Throttle_out", "Throttle_th", "Acc_Z_Real")
 )
-# Keep the entire vertical diagnostic in one frame, including its firmware clock.
-# The remaining always-on core occupies a separate fast slot; no signal loses rate.
+# New firmware inputs and effective (latched) flags: pending globals are not replay truth.
+Z_CF = Z_CF_LEGACY + ("Lin_Acc_X_body", "Lin_Acc_Y_body", "Lin_Acc_Z_body",
+                          "alt_cf.sample_mode", "alt_cf.delay_ticks", "alt_cf.spread_mode",
+                          "g_alt_cf_disarmed_test")
+# All diagnostics and core share direct slot 0 and its firmware clock.
 Z_CF_FAST = Z_CF + ("xTickCount",)
 Z_PID_GAINS: tuple[str, ...] = tuple(
     f"Ctrler.{loop}.{f}" for loop in ("Z_posPID", "Z_ratePID")
@@ -241,6 +244,7 @@ Z_PID_GAINS: tuple[str, ...] = tuple(
 
 LOG_GROUPS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "z_cf": Z_CF,
+    "z_cf_legacy": Z_CF_LEGACY,
     "z_pid_gains": Z_PID_GAINS,
     "mrac_shadow": MRAC_SHADOW,
     "mrac_3l": MRAC_3L,
@@ -418,13 +422,14 @@ def plan_capture(
     requested = float(plan["rate_hz"])
     rate = min(requested, float(max_rate_hz)) if max_rate_hz else requested
     groups, slow = list(plan["groups"]), list(plan["slow"])
-    if "z_cf" in groups:
+    if "z_cf" in groups or "z_cf_legacy" in groups:
         # Direct single-slot capture: every diagnostic shares one firmware clock.
         # Scalar count is not wire-range count: the bridge coalesces adjacent
         # DWARF ranges. Validate actual typed bytes before sending, never trim.
         if requested != 200.0 or rate != 200.0:
             raise CaptureError("CF single-slot replay requires PROPOSED 200 Hz; refusing a capped plan")
-        variables = list(dict.fromkeys((*Z_CF_FAST, *CAMPAIGN_SET["needed"],
+        cf_vars = Z_CF_FAST if "z_cf" in groups else Z_CF_LEGACY + ("xTickCount",)
+        variables = list(dict.fromkeys((*cf_vars, *CAMPAIGN_SET["needed"],
                          *(v for g in (*groups, *slow) for v in LOG_GROUPS[g]))))
         return {"rate_hz": rate, "requested_hz": requested, "groups": groups,
                 "slow_hz": rate if slow else None, "slow": slow,
