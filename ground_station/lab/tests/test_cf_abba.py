@@ -33,5 +33,8 @@ def test_abba_order_and_commands_are_saved_in_both_operator_documents():
         text = (ROOT / document).read_text(encoding="utf-8")
         positions = [text.index(label) for label in labels]
         assert positions == sorted(positions)
-        assert text.count("--gains logs/lab/2026-10-27/2026-10-27-cf-legacy.json") == 2
-        assert text.count("--gains logs/lab/2026-10-27/2026-10-27-cf-rate-scaled.json") == 2
+        # Other baseline examples may reuse the preset; verify the four labelled flights.
+        for position, mode in zip(positions, ("legacy", "rate-scaled", "rate-scaled", "legacy")):
+            command = text[position:].splitlines()[1].lstrip("# ")
+            assert command == (r".\fly lab_z_cf_hover --once --gains "
+                               f"logs/lab/2026-10-27/2026-10-27-cf-{mode}.json")
