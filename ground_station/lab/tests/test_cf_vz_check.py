@@ -44,6 +44,8 @@ def _firmware_capture(mode):
     f = np.float32
     t = np.arange(0, 30, 0.005)
     values = _fields(t)
+    values["alt_cf.delay_ticks"] = np.zeros(len(t))
+    values["alt_cf.spread_mode"] = np.zeros(len(t))
     h, v, b = f(0.8), f(0), f(0.02)
     n_corr, sensor_count, steps = (1 << 32) - 11, 250, 0
     last_dt, y_corr, error = f(0.005), f(0.8), f(0)
@@ -213,6 +215,10 @@ def test_intermittent_range_fields_cannot_form_one_trace(tmp_path):
 @pytest.mark.parametrize("field", check.REPLAY_MODE_FIELDS)
 def test_delay_or_spread_mode_cannot_claim_baseline_replay_faithful(field):
     t, values = _firmware_capture(0)
+    # Exercise the selected fallback itself, with higher-priority evidence absent.
+    group = next(group for group in check.REPLAY_MODE_GROUPS if field in group)
+    for higher_priority in group[:group.index(field)]:
+        values.pop(higher_priority, None)
     # Even a perfect baseline signal match cannot validate unsupported modes.
     values[field] = np.ones(len(t))
     report, _ = check.analyze(t, values)
@@ -223,8 +229,11 @@ def test_delay_or_spread_mode_cannot_claim_baseline_replay_faithful(field):
 
 def test_unlogged_effective_modes_are_explicit_assumptions():
     t, values = _firmware_capture(0)
+    del values["alt_cf.delay_ticks"]
+    del values["alt_cf.spread_mode"]
     report, _ = check.analyze(t, values)
-    assert report["replay_faithful"]
+    assert not report["replay_faithful"]
+    assert report["baseline_matches_under_assumptions"]
     assert report["replay_assumptions"]
     assert "unverified" in report["estimator_status"]
 
@@ -239,5 +248,6 @@ def test_effective_modes_take_precedence_over_pending_requests(tmp_path):
     captured_t, captured, _ = check.read_fast_slot(tmp_path)
     report, _ = check.analyze(captured_t, captured)
     assert report["replay_faithful"]
+    assert not report["baseline_matches_under_assumptions"]
     assert not report["replay_assumptions"]
     assert report["estimator_status"] == "replay validated on this capture"

@@ -1,21 +1,21 @@
-# A5 — offline vertical closed-loop study (simulation only)
+# A5 â€” offline vertical closed-loop study (simulation only)
 
-The simulated CF variants do **not** reproduce the operator-reported +/-10–15 cm wobble under the primary PROPOSED plant. This is a failed reproduction, not a falsification of H1, H2 or H6: neither thrust response nor sensor latency/conversion timing has been measured. The exact existing code defect is covered by A1/A2 host tests, independently of this plant study. No hardware was contacted.
+The simulated CF variants do **not** reproduce the operator-reported +/-10â€“15 cm wobble under the primary PROPOSED plant. This is a failed reproduction, not a falsification of H1, H2 or H6: neither thrust response nor sensor latency/conversion timing has been measured. The exact existing code defect is covered by A1/A2 host tests, independently of this plant study. No hardware was contacted.
 
 ## Model fidelity and six gates
 
 1. **Problem/falsifier:** reproduce the reported 0.8 m hover oscillation (brief: four `logs/campaigns/z-cf-hover_20261026-*` recordings). If corrected timing substantially changes margins/RMS in the same assumed plant, timing is a candidate mechanism. Failure to reproduce rejects this assumed model as a sufficient explanation; it does not identify a flown cause.
 2. **Constraints/tradeoffs:** host-only; all physical parameters below are **PROPOSED**, not measured. No gain, firmware, flight or operating-limit recommendation follows automatically.
 3. **Anti-patterns:** integration and D use firmware units per call, not continuous-time gains. Saturation, individual term limits and integral separation are retained in nonlinear runs. The margins locally disable gates/clamps/quantization; they do not justify operation under saturation.
-4. **Coupling:** altitude PID -> climb-rate PID -> pure-PID collective -> motor lag -> rigid vertical motion -> ToF/acceleration estimator -> both feedback signals. Attitude/rate controllers, adaptive Z injection, tilt, battery sag, contact and aerodynamic coupling are absent. The altitude and climb loops are coupled; this study does not certify the 3–5x bandwidth separation or other axes.
-5. **Fidelity:** vertical linear thrust slope, first-order motor, 20 Hz range sample-and-hold, 200 Hz acceleration, additive range/acceleration noise, 1 cm quantization, constant acceleration bias and thrust-correlated acceleration error. No mass or thrust curve can be identified from one hover CCR value. The coded free-flight offset 3050 CCR is used only as an offset. Assumed slope **0.020 m/s²/CCR**, motor 20/40/60 ms, range noise SD 5 mm, acceleration noise SD 0.15 m/s² per tick, constant bias +0.08 m/s², thrust-correlated error +0.08 times true acceleration. These errors are PROPOSED. The KF covariance is also PROPOSED (bias random walk 0.02 m/s²/sqrt(s)). No float32 or whole-firmware parity claim is made.
-6. **V-model stage:** deterministic nonlinear nominal/stress simulation and isolated Python tests only. A1–A4 C host verification is separate; no bench/flight evidence or mass identification is supplied here.
+4. **Coupling:** altitude PID -> climb-rate PID -> pure-PID collective -> motor lag -> rigid vertical motion -> ToF/acceleration estimator -> both feedback signals. Attitude/rate controllers, adaptive Z injection, tilt, battery sag, contact and aerodynamic coupling are absent. The altitude and climb loops are coupled; this study does not certify the 3â€“5x bandwidth separation or other axes.
+5. **Fidelity:** vertical linear thrust slope, first-order motor, 20 Hz range sample-and-hold, 200 Hz acceleration, additive range/acceleration noise, 1 cm quantization, constant acceleration bias and thrust-correlated acceleration error. No mass or thrust curve can be identified from one hover CCR value. The coded free-flight offset 3050 CCR is used only as an offset. Assumed slope **0.020 m/sÂ²/CCR**, motor 20/40/60 ms, range noise SD 5 mm, acceleration noise SD 0.15 m/sÂ² per tick, constant bias +0.08 m/sÂ², thrust-correlated error +0.08 times true acceleration. These errors are PROPOSED. The KF covariance is also PROPOSED (bias random walk 0.02 m/sÂ²/sqrt(s)). No float32 or whole-firmware parity claim is made.
+6. **V-model stage:** deterministic nonlinear nominal/stress simulation and isolated Python tests only. A1â€“A4 C host verification is separate; no bench/flight evidence or mass identification is supplied here.
 
 ## Controller fidelity and timing discrepancy
 
 `API/pid.c` rows specify position `(Kp,Ki,Kd)=(0.7,0.005,0.1)` and climb `(400,0.435,0)`. The brief's position `Ki=0.001` is the documented ABBA runtime preset in `docs/lab/COMMANDS.md`; it is the primary scenario, and the committed `0.005` row is a sensitivity. The source is not edited by this study.
 
-`ComputePID` uses `E=Des-FB`, adds `E` per invocation (no dt), and `Ud=Kd*(E-PreE)` (no division by dt). Thus this is D on **error**, including setpoint kick; the brief's “D on height” description is incomplete. Position limits `(U,P,I,D,SumE,EMin)=(1,.9,.3,.3,30,.3)` and rate limits `(300,300,100,60,250,10)` are retained; `|E|<EMin` is strict and the previous output participates in the legacy integration gate. Finite-state reset guards are included.
+`ComputePID` uses `E=Des-FB`, adds `E` per invocation (no dt), and `Ud=Kd*(E-PreE)` (no division by dt). Thus this is D on **error**, including setpoint kick; the brief's â€œD on heightâ€ description is incomplete. Position limits `(U,P,I,D,SumE,EMin)=(1,.9,.3,.3,30,.3)` and rate limits `(300,300,100,60,250,10)` are retained; `|E|<EMin` is strict and the previous output participates in the legacy integration gate. Finite-state reset guards are included.
 
 `Z_Compute` runs height every `POS_LOOP_DIV=2` ticks (**100 Hz**), climb every tick (200 Hz), and `Update_Des` precedes the new position calculation: the rate setpoint sees the prior position output. Both cadence and that one-tick scheduling delay are modeled. Running both integrators at 200 Hz would double effective outer integral gain. Pure-PID Z output is added to 3050 CCR, constrained to assumed full throttle window [2000,4000], with zero attitude torque. Runtime narrower windows, trajectory slew, MRAC, experiment headroom overrides and flight-phase logic are excluded. Rejected-sample integrator-freeze details and tick-based resynchronization are simplified; the simulation is an algorithm study rather than a complete flight-task execution.
 
@@ -27,20 +27,20 @@ The primary sweep is **6 estimators x 5 latencies {0,25,50,75,100} ms x 3 motor 
 
 ## Metrics and margins
 
-Hover RMS is true-height error about 0.8 m over [5,15) s; half peak-to-peak uses the same window. Step overshoot is true height above 1.0 m after 15 s. Settle is the first time after which all remaining samples stay within **2% of the 0.2 m step (4 mm)** through 40 s. `>25` means it did not settle within that observation window. “Period” is the largest **detrended** hover spectral component in 0.1–3 Hz; a 10 s value is the finite-window lower edge, not proof of a sustained oscillator. RMS/period do not use estimator error as a substitute for true motion.
+Hover RMS is true-height error about 0.8 m over [5,15) s; half peak-to-peak uses the same window. Step overshoot is true height above 1.0 m after 15 s. Settle is the first time after which all remaining samples stay within **2% of the 0.2 m step (4 mm)** through 40 s. `>25` means it did not settle within that observation window. â€œPeriodâ€ is the largest **detrended** hover spectral component in 0.1â€“3 Hz; a 10 s value is the finite-window lower edge, not proof of a sustained oscillator. RMS/period do not use estimator error as a substitute for true motion.
 
-For margins the estimator is driven by complex height/consistent acceleration at 180 frequencies 0.025–12 Hz, retaining its 200/20 Hz predict/correct clock and history updates. After 60 s transient, the fundamental response is averaged for 20 s. The scalar return ratio is `L=C_rate * (C_pos*H_height + H_velocity) * P_height`, with discrete per-call PID transfer functions, exact ZOH motor/double-integrator plant, outer 100 Hz controller and its average two-tick hold plus scheduling delay. Noise, constant bias, thrust-error slope and nonlinear gates are omitted from this nominal linearization. This **fundamental-harmonic/averaged sample-hold approximation is not an exact lifted multirate or Floquet stability margin**; alias coupling is discarded. A blank upper gain margin means no downward -180° crossing within the scanned band, not infinite proven robustness. The low-frequency upward crossing supplies a separate *lower* gain boundary; treating that negative dB value as an upper gain margin would be wrong.
+For margins the estimator is driven by complex height/consistent acceleration at 180 frequencies 0.025â€“12 Hz, retaining its 200/20 Hz predict/correct clock and history updates. After 60 s transient, the fundamental response is averaged for 20 s. The scalar return ratio is `L=C_rate * (C_pos*H_height + H_velocity) * P_height`, with discrete per-call PID transfer functions, exact ZOH motor/double-integrator plant, outer 100 Hz controller and its average two-tick hold plus scheduling delay. Noise, constant bias, thrust-error slope and nonlinear gates are omitted from this nominal linearization. This **fundamental-harmonic/averaged sample-hold approximation is not an exact lifted multirate or Floquet stability margin**; alias coupling is discarded. A blank upper gain margin means no downward -180Â° crossing within the scanned band, not infinite proven robustness. The low-frequency upward crossing supplies a separate *lower* gain boundary; treating that negative dB value as an upper gain margin would be wrong.
 
-Primary example: **50 ms range latency, 40 ms motor, Ki=0.001**, all proposed errors enabled. Upper GM `—` has the limited meaning above.
+Primary example: **50 ms range latency, 40 ms motor, Ki=0.001**, all proposed errors enabled. Upper GM `â€”` has the limited meaning above.
 
 | Estimator | PM deg | Upper GM dB | Lower gain boundary dB | Overshoot cm | Settle s | Hover RMS cm | Half pp cm | Dominant period s |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | FD+LPF | 12.95 | 2.08 | -27.59 | 3.63 | 24.95 | 0.50 | 1.27 | 0.83 |
-| Current CF | 76.44 | — | -27.23 | 3.40 | >25 | 1.16 | 2.05 | 10.00 |
-| CF+A2 | 71.32 | — | -27.68 | 3.43 | 24.09 | 1.14 | 2.08 | 10.00 |
-| CF+A2+A3 | 66.36 | — | -28.10 | 3.68 | 24.09 | 1.26 | 2.28 | 10.00 |
-| CF+A2+A3+A4 | 66.37 | — | -28.10 | 3.75 | 24.30 | 1.32 | 2.27 | 10.00 |
-| Delayed 3-state KF | 66.53 | — | -28.10 | 2.78 | >25 | 0.42 | 0.53 | 2.00 |
+| Current CF | 76.44 | â€” | -27.23 | 3.40 | >25 | 1.16 | 2.05 | 10.00 |
+| CF+A2 | 71.32 | â€” | -27.68 | 3.43 | 24.09 | 1.14 | 2.08 | 10.00 |
+| CF+A2+A3 | 66.36 | â€” | -28.10 | 3.68 | 24.09 | 1.26 | 2.28 | 10.00 |
+| CF+A2+A3+A4 | 66.37 | â€” | -28.10 | 3.75 | 24.30 | 1.32 | 2.27 | 10.00 |
+| Delayed 3-state KF | 66.53 | â€” | -28.10 | 2.78 | >25 | 0.42 | 0.53 | 2.00 |
 
 Committed-default Ki=0.005 sensitivity at the same latency/motor/errors:
 
@@ -53,7 +53,7 @@ Committed-default Ki=0.005 sensitivity at the same latency/motor/errors:
 | CF+A2+A3+A4 | 66.40 | 0.95 | 7.56 |
 | Delayed 3-state KF | 66.57 | 0.37 | 7.86 |
 
-Across all latency/motor/Ki values, every CF/KF case remains within the model domain; the largest CF half peak-to-peak is 2.59 cm, far below 10–15 cm. Corrected timing alone is therefore insufficient to reproduce the reported CF wobble in this plant. FD at 100 ms latency with 40/60 ms motor lag has negative approximate PM (down to -12.57 deg) and diverges outside the 5 cm–5 m range model. Those rows have `model_domain_exceeded=True`; their enormous unclipped trajectory metrics are numerical instability evidence, not predicted physical flight heights. Sensor/plant delay can destabilize this assumed FD loop, but this is not a reproduction of a CF wobble.
+Across all latency/motor/Ki values, every CF/KF case remains within the model domain; the largest CF half peak-to-peak is 2.59 cm, far below 10â€“15 cm. Corrected timing alone is therefore insufficient to reproduce the reported CF wobble in this plant. FD at 100 ms latency with 40/60 ms motor lag has negative approximate PM (down to -12.57 deg) and diverges outside the 5 cmâ€“5 m range model. Those rows have `model_domain_exceeded=True`; their enormous unclipped trajectory metrics are numerical instability evidence, not predicted physical flight heights. Sensor/plant delay can destabilize this assumed FD loop, but this is not a reproduction of a CF wobble.
 
 Factor isolation at 50/40 ms and Ki=0.001 (true-height hover RMS cm):
 

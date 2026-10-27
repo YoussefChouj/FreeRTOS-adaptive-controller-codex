@@ -109,7 +109,7 @@ correction residuals. Raw of_alt_cm/100 is preferred, with of2_h fallback. At
 snapshots are required. Missing replay diagnostics yield unavailable metrics;
 large gaps are rejected. Effective alt_cf.delay_ticks or alt_cf.spread_mode nonzero
 disables baseline replay certification. Pending requests are only a fallback;
-unlogged effective modes remain explicit unverified assumptions. All-tick residuals
+unlogged effective modes prevent certification even when the baseline traces match. All-tick residuals
 include smoothing between arrivals; arrival-tick residuals are reported separately.
 
 Offline vertical closed-loop simulation (all physical parameters are PROPOSED):

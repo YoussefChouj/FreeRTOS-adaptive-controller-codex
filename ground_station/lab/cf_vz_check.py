@@ -297,7 +297,8 @@ def analyze(t: np.ndarray, values: dict[str, np.ndarray], t0=None, t1=None) -> t
                              "rms_vz_error_mps": float(np.sqrt(np.mean((rv - values["alt_cf.vz"]) ** 2)))}
         traces["replay_" + str(mode)] = rv
     mode = str(int(values["alt_cf.mode"][0])) if "alt_cf.mode" in values else "unknown"
-    faithful = not issues and replay.get(mode, {}).get("correlation_vz") is not None and replay[mode]["correlation_vz"] >= 0.95
+    baseline_matches = not issues and replay.get(mode, {}).get("correlation_vz") is not None and replay[mode]["correlation_vz"] >= 0.95
+    faithful = baseline_matches and not assumptions
     report = {"window_s": [float(t[0]), float(t[-1])], "frames": len(t), "firmware_sample_hz": float(fs),
               "of2_h_std_m": float(np.std(values["ano_of.of2_h"])) if "ano_of.of2_h" in values else None,
               "n_corr_hz": float(np.sum(corr_delta) / elapsed) if corr_delta is not None else None,
@@ -311,7 +312,10 @@ def analyze(t: np.ndarray, values: dict[str, np.ndarray], t0=None, t1=None) -> t
                                   "note": "25 Hz snapshots alias content above 12.5 Hz; cannot resolve 5 ms corrections or unknown sensor latency; interpolation adds no information"},
               "transfers": transfers, "replay": replay, "replay_issues": issues, "replay_assumptions": assumptions,
               "replay_faithful": faithful,
-              "estimator_status": ("replay matches baseline under unverified delay/spread assumptions" if assumptions else "replay validated on this capture") if faithful else "estimator is still not understood",
+              "baseline_matches_under_assumptions": bool(baseline_matches and assumptions),
+              "estimator_status": ("replay validated on this capture" if faithful else
+                                   "replay matches baseline under unverified delay/spread assumptions" if baseline_matches else
+                                   "estimator is still not understood"),
               "decision_threshold": "PROPOSED replay correlation >= 0.95; other-mode replay is counterfactual, not flight evidence",
               "limitations": "range-derived reference shares sensor input; replay models initialized armed branch, not gate/reset logic"}
     traces.update(t=t, range_h=values[range_key] / (100.0 if range_key.endswith("_cm") else 1.0), logged_vz=values["alt_cf.vz"])
